@@ -21,7 +21,8 @@
 # Intrarile se valideaza (fail-closed, cod 2): exact un GLOBAL, VALIDARE ok, FOTOGRAFIE aceeasi, 3 randuri CONTEXT,
 #   numarul randurilor RAND = numarul din GLOBAL (citire cu --lista), nicio linie nerecunoscuta in afara sectiunii
 #   scriptului migrarii, etichete unice; cu sectiunea migrarii: exact un rand MOMENT, iar valoarea lui nu mai apare in
-#   sectiune (inlocuita de citire).
+#   campul antetului standard (randul de dupa linia "baza | sistem | versiune | la", ultimul camp: il inlocuieste
+#   citirea); in alte randuri acelasi sir e o valoare reala si se compara.
 # Coduri: 0 identice / COMPARABIL / partea revizuita identica | 2 argumente / intrare invalida | 6 NECOMPARABIL /
 #   partea revizuita difera | 7 difera (fara optiuni).
 # Fiecare regula are pe linia ei un marcaj "# M_<regula>" (testul scripts/test_l15_compara_liste.sh o scoate = mutant).
@@ -51,10 +52,12 @@ parse() {
   : >"$2.rand"; : >"$2.ctx"; : >"$2.rev"; : >"$2.mig"
   tr -d '\r' <"$1" | awk -F'\t' -v p="$2" '
     function md5ok(x) { return length(x) == 32 && x ~ /^[0-9a-f]+$/ }
-    BEGIN { mig = 0; nb = 0; ne = 0; ng = 0; nv = 0; nf = 0; nc = 0; nr = 0; gn = -1; nrau = 0; nm = 0; mom = ""; nl = 0 }
-    index($0, "=== scriptul de amprente al migrarii ") == 1 { if (mig || nb) prob("marcaj de inceput repetat"); mig = 1; nb++; print > (p ".mig"); next }
+    BEGIN { mig = 0; nb = 0; ne = 0; ng = 0; nv = 0; nf = 0; nc = 0; nr = 0; gn = -1; nrau = 0; nm = 0; mom = ""; nl = 0; dupa = 0
+            ant = "baza | sistem | versiune | la" }
+    index($0, "=== scriptul de amprente al migrarii ") == 1 { if (mig || nb) prob("marcaj de inceput repetat"); mig = 1; nb++; dupa = 0; print > (p ".mig"); next }
     $0 == "=== sfarsit scriptul de amprente al migrarii ===" { if (!mig) prob("marcaj de sfarsit fara inceput"); mig = 0; ne++; print > (p ".mig"); next }
-    mig { print > (p ".mig"); ml[++nl] = $0; next }
+    # ml = randurile de date de imediat dupa antetul standard (campul momentului: ultimul, dupa " | ")
+    mig { print > (p ".mig"); if (dupa) ml[++nl] = $0; dupa = ($0 == ant); next }
     # MOMENT: momentul fotografiei, in afara partii revizuite (nu intra in .rev / .mig)
     $1 == "MOMENT" && NF == 5 { nm++; mom = $4; if (mom == "") prob("MOMENT gol"); next }   # M_MOMENT
     $1 == "RAND" && NF >= 5 {
@@ -78,8 +81,12 @@ parse() {
       if (nr != gn) prob("RAND: " nr " randuri, GLOBAL anunta " gn " (citire fara --lista sau incompleta)")
       if (nrau > 3) prob("linii nerecunoscute: " nrau)
       if (nm > 1 || (nb > 0 && nm != 1)) prob("MOMENT: " nm " randuri (asteptat exact 1 cand exista sectiunea scriptului migrarii)")
-      # citirea inlocuieste momentul in sectiunea migrarii; daca il mai gasim acolo, iesirea nu e a citirii (fail-closed)
-      if (mom != "") for (i = 1; i <= nl; i++) if (index(ml[i], mom)) { prob("momentul fotografiei apare neinlocuit in sectiunea migrarii"); break }
+      # citirea inlocuieste momentul in campul antetului standard; daca il mai gasim ACOLO, iesirea nu e a citirii (fail-closed).
+      # In alte randuri acelasi sir poate fi o valoare reala (ramane, se compara).
+      if (mom != "") for (i = 1; i <= nl; i++) {
+        s = " | " mom
+        if (length(ml[i]) > length(s) && substr(ml[i], length(ml[i]) - length(s) + 1) == s) { prob("momentul fotografiei apare neinlocuit in antetul standard al sectiunii migrarii"); break }
+      }
     }'
 }
 for x in a b; do

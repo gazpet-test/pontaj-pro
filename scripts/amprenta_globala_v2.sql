@@ -2,14 +2,16 @@
 -- prin scripts/livrare_amprenta.sh), citirea coordonatorului (scripts/amprenta_globala_citire.sh), generatorul de manifest
 -- (scripts/livrare_l15_manifest.sh) si testele. Nu se ruleaza direct: blocurile dintre marcaje se extrag exact.
 -- Ce aduce v2 (istoria versiunilor: docs/LIVRARE_L15_V2.md, "Versionare"): grantorul in fiecare ACL; dependentele OWNED BY /
--- identity ale secventelor; schemele de sistem (obiectele create dupa initdb prin ACELEASI familii, plasa sistem_initdb pe
--- functiile de la initdb, acl_sistem); server_version_num in baza; obiectele mari cate un rand pe obiect.
+-- identity ale secventelor; schemele de sistem (obiectele create dupa initdb si randurile atasate dupa initdb unui parinte de
+-- la initdb prin ACELEASI familii, plasa sistem_initdb pe functiile + agregatele si relatiile de la initdb, acl_sistem);
+-- server_version_num in baza; obiectele mari cate un rand pe obiect.
 --
--- Doua blocuri, fiecare = O interogare (fara ";"), coloanele (familie, eticheta, amprenta, detaliu):
+-- Doua blocuri, fiecare = O interogare (fara ";"), coloanele (familie, eticheta, amprenta, detaliu) + inceputul blocului
+-- catalogului, AG_PLASA v2 (CTE-urile pana la ag_plasa inclusiv), folosit de citirea --detalii-plasa:
 --   AG_SESIUNE v2  profilul scurt al sesiunii de livrare; se evalueaza in contextul APELANTULUI (inaintea fixarii GUC-urilor),
 --                  scris fara operatori si cu nume calificate, deci nu depinde de search_path. NU dovedeste configuratia
 --                  sesiunilor PostgREST (aceea e in familiile setare_rol + rol.rolconfig).
---   AG_CATALOG v2  toate obiectele cu cod executabil sau drepturi din perimetru (mai jos) + plasa pe functiile de la initdb +
+--   AG_CATALOG v2  toate obiectele cu cod executabil sau drepturi din perimetru (mai jos) + plasa pe obiectele de la initdb +
 --                  ACL-urile explicite din schemele de sistem; se evalueaza DOAR in
 --                  contextul canonic (garda ag_garda refuza altfel): search_path = pg_catalog, pg_temp; TimeZone UTC;
 --                  DateStyle ISO, YMD; IntervalStyle postgres; extra_float_digits 1; bytea_output hex;
@@ -29,10 +31,15 @@
 --   exclusa); obiectele temporare (relpersistence t, schemele temporare) nu intra. Cataloagele fara schema (roluri, membri,
 --   limbaje, cast-uri, metode de acces, extensii, triggere de eveniment, publicatii, acl implicite, tablespace-uri,
 --   parametri) intra INTREGI; baza = doar baza curenta.
---   Obiectele de la initdb din schemele de sistem (oid < 16384) NU sunt in perimetru: din ele intra doar functiile, AGREGAT
---   (sistem_initdb: un rand, md5 peste campurile brute din pg_proc), ACL-urile explicite (acl_sistem, si pg_toast), proprietarul
---   celor trei scheme si server_version_num (baza). Definitiile lor de relatii, coloane, tipuri, operatori, clase,
---   colatii etc. nu intra (un ALTER facut pe ele de superuserul platformei nu se vede; limita declarata in document).
+-- Randurile ATASATE (rand de catalog cu OID propriu legat de un parinte: trigger, regula, politica, constrangere pe tabel
+--   sau pe domeniu, valoarea implicita a unei coloane, membrii amop / amproc ai familiilor de operatori), regula definita O
+--   DATA (CTE-ul ag_par): intra daca PARINTELE e in perimetru SAU (parintele e intr-o schema de sistem SI randul atasat e
+--   creat dupa initdb). Mostenirea (pg_inherits, fara OID): perechea intra daca ORICARE capat e in perimetru.
+--   Obiectele de la initdb din schemele de sistem (oid < 16384) NU sunt in perimetru: din ele intra functiile + agregatele si
+--   relatiile, ca PLASA (sistem_initdb: un rand pe plasa, md5 peste cate un rand pe obiect, CTE-ul ag_plasa, reprezentare
+--   independenta de build), ACL-urile explicite (acl_sistem, si pg_toast), proprietarul celor trei scheme si
+--   server_version_num (baza). Corpul vederilor, coloanele (dincolo de numarul lor), tipurile, operatorii, clasele,
+--   colatiile, conversiile, configuratiile de cautare de la initdb modificate PE LOC nu intra (limita declarata in document).
 -- Familii (v2): schema relatie coloana constrangere trigger regula politica functie tip operator familie_operatori
 --   clasa_operatori amop amproc metoda_acces cast limbaj transformare conversie colatie ts_parser ts_sablon ts_dictionar
 --   ts_config extensie trigger_eveniment mostenire acl_implicit baza parametru_acl tablespace rol membru setare_rol fdw
@@ -50,6 +57,9 @@ SELECT 'sesiune'::pg_catalog.text AS familie,
 -- <<< AG_SESIUNE v2
 
 -- >>> AG_CATALOG v2
+-- >>> AG_PLASA v2
+-- (blocul AG_PLASA = inceputul blocului AG_CATALOG, pana la CTE-ul ag_plasa inclusiv: citirea --detalii-plasa il foloseste
+-- ca atare, cu un SELECT pe ag_plasa, deci randurile de detaliu si randurile plasei vin din ACEEASI definitie)
 WITH
 ag_garda AS (
   -- search_path: aceeasi cale si in forma cu ghilimele (o scrie SET-ul cand quote_all_identifiers era on la momentul lui)
@@ -102,6 +112,21 @@ ag_tsp AS (SELECT pr.oid, s.q FROM pg_ts_parser pr JOIN ag_per s ON s.oid = pr.p
 ag_tst AS (SELECT tm.oid, s.q FROM pg_ts_template tm JOIN ag_per s ON s.oid = tm.tmplnamespace WHERE tm.oid >= s.prag),
 ag_tsd AS (SELECT dc.oid, s.q FROM pg_ts_dict dc JOIN ag_per s ON s.oid = dc.dictnamespace WHERE dc.oid >= s.prag),
 ag_tsc AS (SELECT cf.oid, s.q FROM pg_ts_config cf JOIN ag_per s ON s.oid = cf.cfgnamespace WHERE cf.oid >= s.prag),
+-- RANDURILE ATASATE (singura definitie a regulii lor): parintii posibili - relatiile (coloana rel), domeniile (dom),
+-- familiile de operatori (opf) - din schemele lui ag_per, fiecare cu PRAGUL randurilor atasate lui: 0 daca parintele e in
+-- perimetru (oid >= pragul schemei), altfel pragul schemei (16384: doar randurile atasate create dupa initdb). Un rand
+-- atasat intra daca parintele e in perimetru SAU (parintele e intr-o schema de sistem SI randul e creat dupa initdb).
+-- Familiile atasate (constrangere, trigger, regula, politica, coloana prin pg_attrdef, amop, amproc) folosesc DOAR forma
+-- "JOIN ag_par pa ON pa.<rel | dom | opf> = <parinte> ... <rand>.oid >= pa.prag". Parintii din pg_toast / schemele
+-- temporare nu sunt in ag_per, deci nici randurile lor atasate. (Un tip de parinte = o coloana, nu un filtru pe o eticheta:
+-- un filtru constant pe CTE ar strica estimarea planificatorului.)
+ag_par AS (
+  SELECT x.rel, x.dom, x.opf, x.relkind, CAST(CASE WHEN x.oid >= x.prag_schema THEN 0 ELSE x.prag_schema END AS oid) AS prag
+    FROM (SELECT c.oid, c.oid AS rel, NULL::oid AS dom, NULL::oid AS opf, c.relkind, s.prag AS prag_schema
+            FROM pg_class c JOIN ag_per s ON s.oid = c.relnamespace WHERE c.relpersistence <> 't'
+          UNION ALL SELECT t.oid, NULL, t.oid, NULL, NULL, s.prag FROM pg_type t JOIN ag_per s ON s.oid = t.typnamespace WHERE t.typtype = 'd'
+          UNION ALL SELECT f.oid, NULL, NULL, f.oid, NULL, s.prag FROM pg_opfamily f JOIN ag_per s ON s.oid = f.opfnamespace) x
+),
 -- etichetele familiilor / claselor de operatori (si din pg_catalog, pentru referinte)
 ag_opf AS (
   SELECT f.oid, f.opfnamespace, quote_ident(n.nspname) || '.' || quote_ident(f.opfname) || ' ' || quote_ident(a.amname) AS et
@@ -111,7 +136,52 @@ ag_opc AS (
   SELECT c.oid, c.opcnamespace, quote_ident(n.nspname) || '.' || quote_ident(c.opcname) || ' ' || quote_ident(a.amname) AS et
     FROM pg_opclass c JOIN pg_namespace n ON n.oid = c.opcnamespace JOIN pg_am a ON a.oid = c.opcmethod
 ),
-ag_rand(familie, eticheta, d) AS (
+-- PLASA pe obiectele de la initdb din schemele de sistem (schema in ag_per, oid < prag = complementul perimetrului), cate un
+-- rand pe obiect: (plasa, identitate, campuri = textul randului). Randurile familiei sistem_initdb (unul pe plasa) se
+-- calculeaza DIN aceste randuri (ag_rand: md5 peste campuri, in ordinea identitatii), iar citirea --detalii-plasa le
+-- tipareste pe acestea (+ md5(campuri)), in aceeasi fotografie.
+-- Reprezentare INDEPENDENTA de build: schema dupa nume; corpul BEGIN ATOMIC si argumentele implicite deparsate (doar unde
+-- exista: arborele brut contine pozitii din textul sursa si OID-uri ale obiectelor create la initdb prin SQL); celelalte
+-- campuri OID ale functiilor / agregatelor de la initdb (limbaj, proprietar, tipuri, functia suport, functiile si tipurile
+-- agregatului) au valori atribuite la compilare (< 12000, aceleasi pe aceeasi versiune: verificat de testul PGlite).
+--   functii: identitate schema.nume(tipurile argumentelor); kind, limbaj, proprietar, DEFINER, STRICT, volatilitate, LEAKPROOF,
+--     PARALLEL, SETOF, rezultat, VARIADIC, argumentele (tipuri, moduri, nume), proconfig, implicitele (numar + deparsate),
+--     md5(prosrc), probin, md5(BEGIN ATOMIC deparsat), functia suport + campurile pg_aggregate ale agregatelor (CREATE OR
+--     REPLACE AGGREGATE pastreaza pg_proc);
+--   relatii: identitate schema.nume; kind, proprietar (nume), persistenta, relnatts, relchecks, RLS, FORCE RLS, replica
+--     identity, partitie, reloptions + NUMARUL randurilor atasate din cataloage (triggere, reguli, politici, constrangeri,
+--     valori implicite, indecsi, mostenire in ambele sensuri, statistici extinse, publicatii). NU steagurile lenese ale
+--     relatiei (le stinge VACUUM) si nimic din statistici / stocare (lista exacta: documentul, sectiunea 2).
+ag_plasa(plasa, identitate, campuri) AS (
+    SELECT 'functii' AS plasa, s.q || '.' || p.proname || '(' || p.proargtypes::text || ')' AS identitate,
+           ROW(s.q, p.proname, p.proargtypes, p.prokind, p.prolang, p.proowner, p.prosecdef, p.proisstrict, p.provolatile,
+               p.proleakproof, p.proparallel, p.proretset, p.prorettype, p.provariadic, p.proallargtypes, p.proargmodes,
+               p.proargnames, p.proconfig, p.pronargdefaults,
+               CASE WHEN p.proargdefaults IS NOT NULL THEN pg_get_expr(p.proargdefaults, 0) END, md5(p.prosrc), p.probin,
+               CASE WHEN p.prosqlbody IS NOT NULL THEN md5(pg_get_function_sqlbody(p.oid)) END, p.prosupport::oid,
+               CASE WHEN p.prokind = 'a' THEN (
+                 SELECT ROW(g.aggkind, g.aggnumdirectargs, g.aggtransfn::oid, g.aggfinalfn::oid, g.aggcombinefn::oid, g.aggserialfn::oid,
+                            g.aggdeserialfn::oid, g.aggmtransfn::oid, g.aggminvtransfn::oid, g.aggmfinalfn::oid, g.aggfinalextra,
+                            g.aggmfinalextra, g.aggfinalmodify, g.aggmfinalmodify, g.aggsortop, g.aggtranstype, g.aggtransspace,
+                            g.aggmtranstype, g.aggmtransspace, g.agginitval, g.aggminitval)::text
+                   FROM pg_aggregate g WHERE g.aggfnoid = p.oid) END)::text AS campuri
+      FROM pg_proc p JOIN ag_per s ON s.oid = p.pronamespace
+     WHERE p.oid < s.prag
+    UNION ALL
+    SELECT 'relatii', s.q || '.' || c.relname,
+           ROW(s.q, c.relname, c.relkind, c.relowner::regrole::text, c.relpersistence, c.relnatts, c.relchecks, c.relrowsecurity,
+               c.relforcerowsecurity, c.relreplident, c.relispartition, c.reloptions,
+               (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = c.oid), (SELECT count(*) FROM pg_rewrite rw WHERE rw.ev_class = c.oid),
+               (SELECT count(*) FROM pg_policy po WHERE po.polrelid = c.oid), (SELECT count(*) FROM pg_constraint co WHERE co.conrelid = c.oid),
+               (SELECT count(*) FROM pg_attrdef ad WHERE ad.adrelid = c.oid), (SELECT count(*) FROM pg_index i WHERE i.indrelid = c.oid),
+               (SELECT count(*) FROM pg_inherits ih WHERE ih.inhrelid = c.oid), (SELECT count(*) FROM pg_inherits ih WHERE ih.inhparent = c.oid),
+               (SELECT count(*) FROM pg_statistic_ext st WHERE st.stxrelid = c.oid),
+               (SELECT count(*) FROM pg_publication_rel pr WHERE pr.prrelid = c.oid))::text
+      FROM pg_class c JOIN ag_per s ON s.oid = c.relnamespace
+     WHERE c.oid < s.prag
+)
+-- <<< AG_PLASA v2
+, ag_rand(familie, eticheta, d) AS (
   -- schema: proprietar, ACL
   SELECT 'schema', 'schema ' || s.q,
          jsonb_build_array(n.nspowner::regrole::text,
@@ -158,19 +228,29 @@ ag_rand(familie, eticheta, d) AS (
   UNION ALL
   -- coloana (fara cele sterse): pozitia = rangul printre coloanele vii (invariant la dump / restore), tip, colatie,
   -- NOT NULL, identity, generata, valoarea implicita / expresia generata, ACL pe coloana, stocare, mostenire, optiuni FDW (md5)
-  SELECT 'coloana', 'coloana ' || c.oid::regclass::text || '.' || quote_ident(a.attname),
-         jsonb_build_array(row_number() OVER (PARTITION BY a.attrelid ORDER BY a.attnum), format_type(a.atttypid, a.atttypmod),
+  -- Coloana nu are OID; valoarea ei implicita (pg_attrdef) e un rand ATASAT: coloanele unei relatii din perimetru intra
+  -- toate (pa.prag = 0), ale unei relatii de la initdb doar cele cu valoarea implicita atasata dupa initdb. Pozitia se
+  -- calculeaza INAINTE de filtru (peste toate coloanele vii ale relatiei); sursa: doar relatiile din perimetru si cele de la
+  -- initdb care au o valoare implicita atasata dupa initdb (altfel nimic in plus de calculat).
+  SELECT 'coloana', 'coloana ' || a.attrelid::regclass::text || '.' || quote_ident(a.attname),
+         jsonb_build_array(a.poz, format_type(a.atttypid, a.atttypmod),
            CASE WHEN a.attcollation <> 0 THEN a.attcollation::regcollation::text END, a.attnotnull, a.attidentity::text,
-           a.attgenerated::text, pg_get_expr(ad.adbin, ad.adrelid),
+           a.attgenerated::text, pg_get_expr(a.adbin, a.adrelid),
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
               SELECT jsonb_build_array(CASE WHEN x.grantee = 0 THEN NULL ELSE x.grantee::regrole::text END, x.privilege_type, x.is_grantable, x.grantor::regrole::text) AS v
                 FROM aclexplode(a.attacl) x) z),
            a.attstorage::text, a.attcompression::text, a.attislocal, a.attinhcount,
            (SELECT md5(jsonb_agg(o ORDER BY o COLLATE "C")::text) FROM unnest(a.attfdwoptions) o))
-    FROM ag_rel r JOIN pg_class c ON c.oid = r.oid
-    JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-    LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
-   WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'c')
+    FROM (SELECT at.attrelid, at.attname, at.atttypid, at.atttypmod, at.attcollation, at.attnotnull, at.attidentity, at.attgenerated,
+                 at.attacl, at.attstorage, at.attcompression, at.attislocal, at.attinhcount, at.attfdwoptions,
+                 ad.oid AS ad_oid, ad.adbin, ad.adrelid, pa.prag,
+                 row_number() OVER (PARTITION BY at.attrelid ORDER BY at.attnum) AS poz
+            FROM ag_par pa
+            JOIN pg_attribute at ON at.attrelid = pa.rel AND at.attnum > 0 AND NOT at.attisdropped
+            LEFT JOIN pg_attrdef ad ON ad.adrelid = at.attrelid AND ad.adnum = at.attnum
+           WHERE pa.relkind IN ('r', 'p', 'v', 'm', 'f', 'c')
+             AND (pa.prag = 0 OR EXISTS (SELECT 1 FROM pg_attrdef d WHERE d.adrelid = pa.rel AND d.oid >= pa.prag))) a
+   WHERE coalesce(a.ad_oid, 0) >= a.prag
   UNION ALL
   -- constrangere: TOATE (CHECK, NOT NULL in PG18, PK, UNIQUE, FK, EXCLUDE, trigger) pe tabele si pe domenii
   SELECT 'constrangere', 'constrangere '
@@ -179,7 +259,9 @@ ag_rand(familie, eticheta, d) AS (
          jsonb_build_array(co.contype::text, co.condeferrable, co.condeferred, co.convalidated, co.conislocal, co.coninhcount,
            co.connoinherit, pg_get_constraintdef(co.oid), CASE WHEN co.conindid <> 0 THEN co.conindid::regclass::text END)
     FROM pg_constraint co
-   WHERE co.conrelid IN (SELECT r.oid FROM ag_rel r) OR co.contypid IN (SELECT t.oid FROM ag_typ t)
+    JOIN ag_par pa ON coalesce(pa.rel, pa.dom) = CASE WHEN co.conrelid <> 0 THEN co.conrelid ELSE co.contypid END
+                  AND (pa.rel IS NOT NULL) = (co.conrelid <> 0)
+   WHERE co.oid >= pa.prag
   UNION ALL
   -- trigger: TOATE, si cele interne (FK). Numele celor interne contine un OID => eticheta lor = constrangerea + functia + tipul.
   SELECT 'trigger', 'trigger ' || t.tgrelid::regclass::text
@@ -189,14 +271,17 @@ ag_rand(familie, eticheta, d) AS (
          jsonb_build_array(t.tgisinternal, t.tgenabled::text, t.tgfoid::regprocedure::text, t.tgtype, t.tgdeferrable, t.tginitdeferred,
            CASE WHEN t.tgconstrrelid <> 0 THEN t.tgconstrrelid::regclass::text END, co.conname::text, t.tgnargs,
            CASE WHEN NOT t.tgisinternal THEN pg_get_triggerdef(t.oid) END)
-    FROM pg_trigger t JOIN ag_rel r ON r.oid = t.tgrelid
+    FROM pg_trigger t JOIN ag_par pa ON pa.rel = t.tgrelid
     LEFT JOIN pg_constraint co ON co.oid = t.tgconstraint
+   WHERE t.oid >= pa.prag
   UNION ALL
-  -- regula: tipul, ev_enabled, INSTEAD, definitia (regula _RETURN a unei vederi = definitia vederii, deja in relatie)
+  -- regula: tipul, ev_enabled, INSTEAD, definitia (regula _RETURN a unei vederi = definitia vederii, deja in relatie; regula
+  -- _RETURN a unei vederi de la initdb are OID < 16384 si ramane in afara: corpul vederilor de la initdb, limita declarata)
   SELECT 'regula', 'regula ' || rw.ev_class::regclass::text || '.' || quote_ident(rw.rulename),
          jsonb_build_array(rw.ev_type::text, rw.ev_enabled::text, rw.is_instead,
-           CASE WHEN NOT (rw.rulename = '_RETURN' AND r.relkind IN ('v', 'm')) THEN pg_get_ruledef(rw.oid) END)
-    FROM pg_rewrite rw JOIN ag_rel r ON r.oid = rw.ev_class
+           CASE WHEN NOT (rw.rulename = '_RETURN' AND pa.relkind IN ('v', 'm')) THEN pg_get_ruledef(rw.oid) END)
+    FROM pg_rewrite rw JOIN ag_par pa ON pa.rel = rw.ev_class
+   WHERE rw.oid >= pa.prag
   UNION ALL
   -- politica: comanda, PERMISSIVE / RESTRICTIVE, rolurile (null = PUBLIC), USING, WITH CHECK (null = lipsa)
   SELECT 'politica', 'politica ' || p.polrelid::regclass::text || '.' || quote_ident(p.polname),
@@ -204,7 +289,8 @@ ag_rand(familie, eticheta, d) AS (
            (SELECT jsonb_agg(z.n ORDER BY z.n COLLATE "C" NULLS FIRST) FROM (
               SELECT CASE WHEN ro = 0 THEN NULL ELSE ro::regrole::text END AS n FROM unnest(p.polroles) ro) z),
            pg_get_expr(p.polqual, p.polrelid), pg_get_expr(p.polwithcheck, p.polrelid))
-    FROM pg_policy p JOIN ag_rel r ON r.oid = p.polrelid
+    FROM pg_policy p JOIN ag_par pa ON pa.rel = p.polrelid
+   WHERE p.oid >= pa.prag
   UNION ALL
   -- functie: tot ce schimba comportamentul sau dreptul (corpul ca md5, inclusiv probin = biblioteca C, BEGIN ATOMIC deparsat)
   SELECT 'functie', 'functie ' || p.oid::regprocedure::text,
@@ -264,18 +350,20 @@ ag_rand(familie, eticheta, d) AS (
            pc.opcdefault, CASE WHEN pc.opckeytype <> 0 THEN pc.opckeytype::regtype::text END)
     FROM ag_opc_p x JOIN ag_opc c ON c.oid = x.oid JOIN pg_opclass pc ON pc.oid = c.oid
   UNION ALL
-  -- membrii familiilor: ai familiilor din perimetru SI membrii (pg_amop / pg_amproc) adaugati dupa initdb la familiile de
-  -- la initdb (de ex. de extensii; oid-ul randului de membru >= 16384)
+  -- membrii familiilor (randuri atasate familiei): ai familiilor din perimetru SI membrii adaugati dupa initdb la familiile
+  -- de la initdb (de ex. de extensii)
   SELECT 'amop', 'amop ' || f.et || ' ' || ao.amoplefttype::regtype::text || ',' || ao.amoprighttype::regtype::text || ' ' || ao.amopstrategy,
          jsonb_build_array(ao.amoppurpose::text, ao.amopopr::regoperator::text,
            (SELECT f2.et FROM ag_opf f2 WHERE f2.oid = ao.amopsortfamily), (SELECT quote_ident(m.amname) FROM pg_am m WHERE m.oid = ao.amopmethod))
-    FROM pg_amop ao JOIN ag_opf f ON f.oid = ao.amopfamily
-   WHERE f.oid IN (SELECT x.oid FROM ag_opf_p x) OR ao.oid >= 16384
+    FROM pg_amop ao JOIN ag_par pa ON pa.opf = ao.amopfamily
+    JOIN ag_opf f ON f.oid = ao.amopfamily
+   WHERE ao.oid >= pa.prag
   UNION ALL
   SELECT 'amproc', 'amproc ' || f.et || ' ' || ap.amproclefttype::regtype::text || ',' || ap.amprocrighttype::regtype::text || ' ' || ap.amprocnum,
          jsonb_build_array(ap.amproc::oid::regprocedure::text)
-    FROM pg_amproc ap JOIN ag_opf f ON f.oid = ap.amprocfamily
-   WHERE f.oid IN (SELECT x.oid FROM ag_opf_p x) OR ap.oid >= 16384
+    FROM pg_amproc ap JOIN ag_par pa ON pa.opf = ap.amprocfamily
+    JOIN ag_opf f ON f.oid = ap.amprocfamily
+   WHERE ap.oid >= pa.prag
   UNION ALL
   SELECT 'metoda_acces', 'metoda_acces ' || quote_ident(m.amname), jsonb_build_array(m.amtype::text, m.amhandler::oid::regprocedure::text)
     FROM pg_am m
@@ -340,9 +428,12 @@ ag_rand(familie, eticheta, d) AS (
            (SELECT jsonb_agg(x ORDER BY x COLLATE "C") FROM unnest(et.evttags) x))
     FROM pg_event_trigger et
   UNION ALL
+  -- mostenire (pg_inherits nu are OID): perechea intra daca ORICARE capat e in perimetru (si un tabel de la initdb care
+  -- mosteneste un tabel al aplicatiei, si invers)
   SELECT 'mostenire', 'mostenire ' || ih.inhrelid::regclass::text || ' <- ' || ih.inhparent::regclass::text,
          jsonb_build_array(ih.inhseqno, ih.inhdetachpending)
-    FROM pg_inherits ih JOIN ag_rel r ON r.oid = ih.inhrelid
+    FROM pg_inherits ih
+   WHERE ih.inhrelid IN (SELECT r.oid FROM ag_rel r) OR ih.inhparent IN (SELECT r.oid FROM ag_rel r)
   UNION ALL
   SELECT 'acl_implicit', 'acl_implicit ' || da.defaclrole::regrole::text || ' '
            || CASE WHEN da.defaclnamespace = 0 THEN '*' ELSE da.defaclnamespace::regnamespace::text END || ' ' || da.defaclobjtype::text,
@@ -445,20 +536,12 @@ ag_rand(familie, eticheta, d) AS (
     FROM pg_seclabels sl LEFT JOIN ag_per s ON s.oid = sl.objnamespace
    WHERE sl.objnamespace IS NULL OR sl.objoid >= s.prag
   UNION ALL
-  -- sistem_initdb: PLASA pe functiile de la initdb din schemele de sistem (schema in ag_per, oid < prag = in afara
-  -- perimetrului). UN rand [numar, md5] peste campurile BRUTE din pg_proc care le hotarasc comportamentul, fara functii de
-  -- deparsare (cost fix, nu creste cu aplicatia). Identitatea = schema (oid) + nume + tipurile argumentelor (oidvector):
-  -- pentru obiectele de la initdb OID-urile sunt fixate la initdb (server_version_num e in baza). Ordinea: schema, numele
-  -- COLLATE "C", tipurile argumentelor (unica in pg_proc).
-  SELECT 'sistem_initdb', 'sistem_initdb functii',
-         jsonb_build_array(count(*), md5(string_agg(
-           ROW(p.pronamespace, p.proname, p.proargtypes, p.prokind, p.prolang, p.proowner, p.prosecdef, p.proisstrict,
-               p.provolatile, p.proleakproof, p.proparallel, p.proretset, p.prorettype, p.provariadic, p.proallargtypes,
-               p.proargmodes, p.proargnames, p.proconfig, p.pronargdefaults, p.proargdefaults, md5(p.prosrc), p.probin,
-               md5(p.prosqlbody::text), p.prosupport::oid)::text,
-           chr(10) ORDER BY p.pronamespace, p.proname COLLATE "C", p.proargtypes)))
-    FROM pg_proc p JOIN ag_per s ON s.oid = p.pronamespace
-   WHERE p.oid < s.prag
+  -- sistem_initdb: PLASA pe obiectele de la initdb (ag_plasa): un rand pe plasa (functii, relatii), [numar, md5 peste
+  -- campurile fiecarui obiect, in ordinea identitatii COLLATE "C", unite cu LF] - recalculabil din detaliul citirii
+  SELECT 'sistem_initdb', 'sistem_initdb ' || x.plasa,
+         jsonb_build_array(count(*), md5(string_agg(x.campuri, chr(10) ORDER BY x.identitate COLLATE "C")))
+    FROM ag_plasa x
+   GROUP BY x.plasa
   UNION ALL
   -- acl_sistem: proprietarul + ACL-ul celor trei scheme de sistem si fiecare obiect din ele cu ACL EXPLICIT (relacl / attacl /
   -- proacl / typacl nenul), cu grantor; relatiile TOAST etichetate dupa tabelul-parinte. Tinta: obiectele de la initdb si

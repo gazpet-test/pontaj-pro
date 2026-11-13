@@ -7,12 +7,18 @@
 #      se ruleaza o COPIE din care se scot exact linia "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;" si
 #      linia "ROLLBACK;" (fiecare trebuie sa apara EXACT o data, altfel refuz) => ruleaza in tranzactia de aici; iesirea lui
 #      (format nealiniat, separator " | ") sta intre liniile "=== scriptul de amprente al migrarii ..." si
-#      "=== sfarsit scriptul de amprente al migrarii ==="; momentul fotografiei (now(), randul MOMENT, tiparit o data) e
-#      inlocuit in ea, EXACT acel sir, cu marcajul fix "<momentul fotografiei>" (doua citiri fara DDL = sectiuni identice);
+#      "=== sfarsit scriptul de amprente al migrarii ==="; momentul fotografiei (now(), randul MOMENT, tiparit o data) se
+#      inlocuieste cu marcajul fix "<momentul fotografiei>" DOAR in campul identificat al ANTETULUI STANDARD: randul de date
+#      de imediat dupa linia exacta "baza | sistem | versiune | la", ultimul camp, si numai daca e EXACT momentul. Orice alta
+#      aparitie ramane cum e; antet absent / in alt format = nimic normalizat (--recitire arata diferenta);
 #   3. contextul canonic (SET LOCAL, ca functia runnerului), apoi GLOBAL + numarul de randuri + md5 pe familii + validarea
 #      (etichete unice, randuri valide) [+ --lista: toate randurile familie / eticheta / amprenta, pentru
 #      scripts/l15_compara_liste.sh];
 #   4. CONTEXT: server_version_num, current_user, session_user;
+#      [--detalii-plasa <fisier nou>] (cere --lista): in ACEEASI fotografie, detaliul plasei sistem_initdb - cate un rand pe
+#      obiect de la initdb: plasa TAB identitate TAB md5(campuri) TAB campuri (blocul AG_PLASA v2, aceeasi definitie ca
+#      randurile plasei). Verificat inainte de scriere: forma, identitati unice, iar md5 peste campuri (in ordinea
+#      identitatii, LC_ALL=C, unite cu LF) reproduce randul RAND sistem_initdb al plasei (altfel cod 1, fisier nescris);
 #   5. [--radacina <functie(argumente)> ...] SEMNALELE pentru review pe lantul portilor (cel mai bun efort, lexical +
 #      pg_depend, prin vederi): functii cu EXECUTE dinamic, vederi citite, functii in alt limbaj decat sql / plpgsql, si
 #      calea (search_path) fiecarei functii SECURITY DEFINER din lant, clasificata "sigura" sau "nesigura: <motiv>".
@@ -38,14 +44,15 @@
 # Utilizare (parola DOAR din ~/.pgpass / PGPASSFILE; PSQL_BIN = psql-ul folosit la livrare):
 #   bash scripts/amprenta_globala_citire.sh --tinta-host <H> --tinta-port <P> --tinta-db <D> --tinta-sistem <system_identifier> \
 #        --user <U> [--amprente-migrare scripts/<x>_amprente.sql] [--radacina 'public.fn(bigint)' ...] [--lista] \
-#        [--rol-de-incredere <rol> ...] [--definer-verificat 'public.fn(bigint)=<md5>' ...] [--doar-genereaza <dosar_nou>] > citire.txt
+#        [--detalii-plasa <fisier_nou>] [--rol-de-incredere <rol> ...] [--definer-verificat 'public.fn(bigint)=<md5>' ...] \
+#        [--doar-genereaza <dosar_nou>] > citire.txt
 # Iesire (stdout): sectiunea scriptului migrarii (daca e dat), apoi, separate prin TAB:
 #   TINTA - - 1 - | MOMENT - - <now() al fotografiei> - | GLOBAL - - <md5> <randuri> | FAMILIE <familie> - <md5> <randuri> |
 #   VALIDARE - - ok|<problema> <n>
 #   [RAND <familie> <eticheta> <amprenta> -] | CONTEXT <nume> - <valoare> -
 #   [LANT <tip> <obiect> <detalii> - - | INCREDERE <schema> <rol> <motiv> - - | SEMNALE <executie_dinamica> <vederi>
 #    <limbaj_altul> <definer_nesigure> <definer_acceptate>] | FOTOGRAFIE - - aceeasi -
-# Coduri: 0 citit | 1 psql / interogare esuata | 2 argumente (si rol de incredere inexistent) | 3 local (fisier, generare) |
+# Coduri: 0 citit | 1 psql / interogare esuata / detaliul plasei invalid sau nereproductibil | 2 argumente (si rol de incredere inexistent) | 3 local (fisier, generare) |
 #   4 REFUZ: DEFINER cu cale nesigura in lant / acceptare invalida | 5 validare esuata (dubluri / randuri invalide) |
 #   22 tinta neconfirmata | 40 doar generat.
 # ============================================================================
@@ -56,13 +63,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=livrare_amprenta.sh
 . "$ROOT/scripts/livrare_amprenta.sh"
 
-H="" P="" D="" SIS="" U="" AMP_MIG="" LISTA=0 GEN="" RAD=() INCR=() ACC=()
+H="" P="" D="" SIS="" U="" AMP_MIG="" LISTA=0 GEN="" DPL="" RAD=() INCR=() ACC=()
 while [ $# -gt 0 ]; do
   case "$1" in --lista) LISTA=1; shift; continue ;; esac
   [ $# -ge 2 ] || refuz 2 "optiunea $1 fara valoare"
   case "$1" in
     --tinta-host) H="$2" ;; --tinta-port) P="$2" ;; --tinta-db) D="$2" ;; --tinta-sistem) SIS="$2" ;; --user) U="$2" ;;
-    --amprente-migrare) AMP_MIG="$2" ;; --radacina) RAD+=("$2") ;; --doar-genereaza) GEN="$2" ;;
+    --amprente-migrare) AMP_MIG="$2" ;; --radacina) RAD+=("$2") ;; --doar-genereaza) GEN="$2" ;; --detalii-plasa) DPL="$2" ;;
     --rol-de-incredere) INCR+=("$2") ;; --definer-verificat) ACC+=("$2") ;;
     *) refuz 2 "optiune nepermisa: $1" ;;
   esac
@@ -95,6 +102,10 @@ fi
 if [ -n "$GEN" ]; then
   [ ! -e "$GEN" ] && [ -d "$(dirname "$GEN")" ] || refuz 2 "--doar-genereaza: dosarul trebuie sa fie NOU: $GEN"
 fi
+if [ -n "$DPL" ]; then
+  [ "$LISTA" = 1 ] || refuz 2 "--detalii-plasa cere --lista (verificarea detaliului fata de randurile RAND sistem_initdb)"
+  [ ! -e "$DPL" ] && [ -d "$(dirname "$DPL")" ] || refuz 2 "--detalii-plasa: fisierul trebuie sa fie NOU, intr-un dosar existent: $DPL"
+fi
 
 W="$(mktemp -d)"; trap 'chmod -R u+w "$W" 2>/dev/null; rm -rf "$W"' EXIT
 chmod 700 "$W"
@@ -111,6 +122,7 @@ if [ -n "$AMP_MIG" ]; then
 fi
 SES="$(ag_bloc 'AG_SESIUNE v2')" || refuz 3 "blocul AG_SESIUNE v2"
 CAT="$(ag_bloc 'AG_CATALOG v2')" || refuz 3 "blocul AG_CATALOG v2"
+PLA="$(ag_bloc 'AG_PLASA v2')" || refuz 3 "blocul AG_PLASA v2"
 RAND_SQL=""
 [ "$LISTA" = 0 ] || RAND_SQL="  UNION ALL SELECT 3, 'RAND', a.familie, a.eticheta, a.amprenta, '-' FROM ag_tot a"
 # listele VALUES (literal SQL; valorile sunt validate mai sus, fara apostrof)
@@ -192,6 +204,18 @@ SELECT 'CONTEXT', x.n, '-', x.v, '-'
 -- <<< AG_CITIRE context
 ;
 SQL
+  if [ -n "$DPL" ]; then
+    # detaliul plasei: in fisierul plasa.txt din dosarul de lucru (verificat si copiat dupa citire), nu pe stdout
+    printf '%s\n' '\o plasa.txt'
+    cat <<SQL
+-- >>> AG_CITIRE plasa
+$PLA
+SELECT x.plasa, x.identitate, md5(x.campuri) AS h, x.campuri FROM ag_plasa x ORDER BY x.plasa COLLATE "C", x.identitate COLLATE "C"
+-- <<< AG_CITIRE plasa
+;
+SQL
+    printf '%s\n' '\o'
+  fi
   if [ ${#RAD[@]} -gt 0 ]; then
     cat <<SQL
 -- >>> AG_CITIRE semnale
@@ -356,17 +380,22 @@ if [ "$RC" != 0 ]; then
   echo "[x] citirea a esuat (psql $RC), nimic schimbat (tranzactie READ ONLY)" >&2; exit 1
 fi
 # Momentul fotografiei (now() al tranzactiei unice, in forma text a sesiunii) se tipareste O DATA, pe randul MOMENT (in afara
-# partii revizuite). In sectiunea scriptului migrarii EXACT acest sir se inlocuieste cu marcajul fix "<momentul fotografiei>"
-# (scripturile *_amprente.sql existente tiparesc now() in antet); nimic altceva nu se normalizeaza.
+# partii revizuite). In sectiunea scriptului migrarii se inlocuieste cu marcajul fix "<momentul fotografiei>" DOAR campul
+# identificat al antetului standard (forma ceruta scripturilor de amprente: primul SELECT = current_database() AS baza,
+# system_identifier AS sistem, version() AS versiune, now() AS la): randul de date de IMEDIAT dupa linia exacta
+# "baza | sistem | versiune | la", ultimul camp (dupa ultimul separator " | "), numai daca e EXACT momentul. Orice alta
+# aparitie a aceluiasi sir ramane (o valoare reala egala intamplator cu momentul nu devine marcaj); nimic altceva nu se
+# normalizeaza (de ex. to_char(statement_timestamp(), ...) din scripturile mai vechi ramane cum e).
 tr -d '\r' <"$W/iesire.txt" >"$W/iesire_lf.txt"
 [ "$(grep -c $'^MOMENT\t' "$W/iesire_lf.txt" || true)" = 1 ] || { cat "$W/iesire_lf.txt"; echo "[x] randul MOMENT lipsa / repetat" >&2; exit 1; }
 AG_MOMENT="$(awk -F'\t' '$1 == "MOMENT" { print $4 }' "$W/iesire_lf.txt")"
 [ -n "$AG_MOMENT" ] || { cat "$W/iesire_lf.txt"; echo "[x] randul MOMENT gol" >&2; exit 1; }
 AG_MOMENT="$AG_MOMENT" AG_NR="$W/nr_moment" awk '
-  BEGIN { m = ENVIRON["AG_MOMENT"]; mk = "<momentul fotografiei>"; mig = 0; n = 0 }
-  index($0, "=== scriptul de amprente al migrarii ") == 1 { mig = 1; print; next }
-  $0 == "=== sfarsit scriptul de amprente al migrarii ===" { mig = 0; print; next }
-  mig { s = $0; o = ""; while ((i = index(s, m)) > 0) { o = o substr(s, 1, i - 1) mk; s = substr(s, i + length(m)); n++ }; $0 = o s }   # M_CIT_MOMENT
+  BEGIN { m = ENVIRON["AG_MOMENT"]; mk = "<momentul fotografiei>"; suf = " | " m; ls = length(suf); ant = "baza | sistem | versiune | la"; mig = 0; dupa = 0; n = 0 }
+  index($0, "=== scriptul de amprente al migrarii ") == 1 { mig = 1; dupa = 0; print; next }
+  $0 == "=== sfarsit scriptul de amprente al migrarii ===" { mig = 0; dupa = 0; print; next }
+  mig && dupa && length($0) > ls && substr($0, length($0) - ls + 1) == suf { $0 = substr($0, 1, length($0) - ls) " | " mk; n++ }   # M_CIT_MOMENT
+  mig { dupa = ($0 == ant) }
   { print }
   END { print n > ENVIRON["AG_NR"] }
 ' "$W/iesire_lf.txt" >"$W/iesire_norm.txt"
@@ -393,5 +422,27 @@ if [ ${#RAD[@]} -gt 0 ]; then
     echo "[x] REFUZ: $S_NES functie(i) SECURITY DEFINER din lant cu search_path nesigur (L15) - nu se face baseline (sau --definer-verificat dupa verificarea corpului)" >&2; exit 4
   fi
 fi
-echo "[ok] citit intr-o singura fotografie (REPEATABLE READ READ ONLY): $(grep -E $'^GLOBAL\t' <<<"$OUT" | cut -f4,5 | tr '\t' ' ') randuri; $(grep -E $'^CONTEXT\t' <<<"$OUT" | cut -f2,4 | tr '\t\n' '= ')MOMENT $AG_MOMENT (inlocuit in sectiunea scriptului migrarii de $(cat "$W/nr_moment" 2>/dev/null || echo '?') ori)" >&2
+if [ -n "$DPL" ]; then
+  # detaliul plasei: forma, identitati unice, apoi recalcularea fiecarui rand RAND sistem_initdb din el (o implementare
+  # separata a aceleiasi reguli: md5 peste campuri, in ordinea identitatii, unite cu LF; amprenta = md5 de [numar, "md5"])
+  [ -f "$W/plasa.txt" ] || { echo "[x] --detalii-plasa: detaliul lipseste din iesirea citirii" >&2; exit 1; }
+  tr -d '\r' <"$W/plasa.txt" >"$W/plasa_lf.txt"
+  PROB="$(awk -F'\t' 'NF != 4 || $1 !~ /^(functii|relatii)$/ || $2 == "" || $3 !~ /^[0-9a-f]+$/ || length($3) != 32 { print NR; exit }' "$W/plasa_lf.txt")"
+  [ -z "$PROB" ] || { echo "[x] --detalii-plasa: linia $PROB nu are forma plasa TAB identitate TAB md5 TAB campuri - fisier nescris" >&2; exit 1; }
+  DUPL="$(cut -f1,2 "$W/plasa_lf.txt" | LC_ALL=C sort | uniq -d | head -n 1)"
+  [ -z "$DUPL" ] || { echo "[x] --detalii-plasa: identitate dubla ($DUPL) - fisier nescris" >&2; exit 1; }
+  REZ_PL=""
+  for pl in functii relatii; do
+    awk -F'\t' -v p="$pl" '$1 == p' "$W/plasa_lf.txt" | LC_ALL=C sort -t $'\t' -k2,2 >"$W/plasa_$pl.txt"
+    N_PL="$(grep -c . "$W/plasa_$pl.txt" || true)"
+    M_PL="$(awk -F'\t' 'NR > 1 { printf "\n" } { printf "%s", $4 }' "$W/plasa_$pl.txt" | md5sum | cut -d' ' -f1)"
+    A_PL="$(printf '[%s, "%s"]' "$N_PL" "$M_PL" | md5sum | cut -d' ' -f1)"
+    R_PL="$(awk -F'\t' -v e="sistem_initdb $pl" '$1 == "RAND" && $2 == "sistem_initdb" && $3 == e { print $4 }' <<<"$OUT")"
+    if [ "$N_PL" -gt 0 ] && [ -n "$R_PL" ] && [ "$R_PL" = "$A_PL" ]; then :; else echo "[x] --detalii-plasa: detaliul plasei $pl ($N_PL obiecte) NU reproduce randul RAND sistem_initdb $pl (${R_PL:-lipsa} / $A_PL) - fisier nescris" >&2; exit 1; fi   # M_CIT_PLASA
+    REZ_PL="$REZ_PL $pl=$N_PL"
+  done
+  cp -- "$W/plasa_lf.txt" "$DPL" && chmod 600 "$DPL" || { echo "[x] --detalii-plasa: scrierea $DPL" >&2; exit 3; }
+  echo "[ok] detaliul plasei scris in $DPL (${REZ_PL# }); reproduce randurile RAND sistem_initdb" >&2
+fi
+echo "[ok] citit intr-o singura fotografie (REPEATABLE READ READ ONLY):$(grep -E $'^GLOBAL\t' <<<"$OUT" | cut -f4,5 | tr '\t' ' ') randuri; $(grep -E $'^CONTEXT\t' <<<"$OUT" | cut -f2,4 | tr '\t\n' '= ')MOMENT $AG_MOMENT (inlocuit in sectiunea scriptului migrarii de $(cat "$W/nr_moment" 2>/dev/null || echo '?') ori)" >&2
 exit 0

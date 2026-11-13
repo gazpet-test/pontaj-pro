@@ -25,7 +25,14 @@
 #   j  contraexemplul grantorului pe PG17, prin runner: dreptul transferat de la g1 la g2 DUPA citire => refuz la „inainte”
 #      (AMPRENTA_GLOBALA_INAINTE, familia relatie), NEAPLICAT (10);
 #   k  (r3) doua citiri reale consecutive cu --amprente-migrare scripts/meteo_xweather_amprente.sql (tipareste now()), fara DDL
-#      intre ele => l15_compara_liste.sh --recitire 0.
+#      intre ele => l15_compara_liste.sh --recitire 0;
+#   l  (r4) triggerul recenzentului pe un tabel de la initdb (information_schema.sql_features), creat intre doua citiri reale:
+#      INSERT ... RETURNING intoarce 1, apoi 0 randuri; GLOBAL difera, familia trigger difera; apoi RLS pornit pe acelasi
+#      tabel => GLOBAL difera (familia sistem_initdb, plasa relatiilor);
+#   m  (r4) VACUUM + ANALYZE intre doua citiri, dupa un trigger creat si sters (steagul lenes relhastriggers ramas aprins,
+#      stins de VACUUM) => GLOBAL identic;
+#   n  (r4) --detalii-plasa pe doua citiri reale, inainte / dupa ALTER FUNCTION pg_catalog.quote_nullable(text) STRICT:
+#      citirea reproduce randurile plasei din detaliu (cod 0), iar diferenta celor doua detalii arata exact acea functie.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SLOT="${1:-0}"; [[ "$SLOT" =~ ^[0-9]$ ]] || { echo 'MEDIU: slot 0-9'; exit 2; }
@@ -245,6 +252,47 @@ asteapta 'k recitire' 0 "$TMP/k.log" bash "$ROOT/scripts/l15_compara_liste.sh" -
 grep -qF '[ok] partea revizuita IDENTICA' "$TMP/k.log" || { cat "$TMP/k.log"; fail 'k: mesajul recitirii'; }
 echo 'L15_K: doua citiri reale consecutive cu meteo_xweather_amprente.sql => --recitire 0 (momentul in afara partii revizuite)'
 
+# l. r4 (P1): triggerul recenzentului pe un tabel de la initdb, creat intre doua citiri reale; apoi RLS pe acelasi tabel.
+fam_md5() { awk -F'\t' -v f="$2" '$1 == "FAMILIE" && $2 == f { print $4 }' "$TMP/citire_$1.txt"; }
+ins_l15() { qa "WITH i AS (INSERT INTO information_schema.sql_features (feature_id, feature_name, sub_feature_id, sub_feature_name, is_supported) VALUES ('$1', 'x', '', '', 'NO') RETURNING feature_id) SELECT count(*) FROM i"; }
+q "CREATE FUNCTION public.l15_refuza_insert() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END'" >/dev/null
+G_L0="$(citeste l0)"
+[[ "$(ins_l15 L15A)" == 1 ]] || fail 'l: INSERT ... RETURNING inainte de trigger'
+qa 'CREATE TRIGGER l15_refuza BEFORE INSERT ON information_schema.sql_features FOR EACH ROW EXECUTE FUNCTION public.l15_refuza_insert()' >/dev/null
+[[ "$(ins_l15 L15B)" == 0 ]] || fail 'l: triggerul nu opreste INSERT-ul (proba nu dovedeste nimic)'
+G_L1="$(citeste l1)"
+[[ "$G_L1" != "$G_L0" ]] || fail 'l: GLOBAL identic dupa triggerul pe un tabel de la initdb (P1)'
+[[ "$(fam_md5 l0 trigger)" != "$(fam_md5 l1 trigger)" ]] || fail 'l: familia trigger nu s-a schimbat'
+qa 'ALTER TABLE information_schema.sql_features ENABLE ROW LEVEL SECURITY' >/dev/null
+G_L2="$(citeste l2)"
+[[ "$G_L2" != "$G_L1" && "$(fam_md5 l1 sistem_initdb)" != "$(fam_md5 l2 sistem_initdb)" ]] || fail 'l: RLS pe un tabel de la initdb nu se vede (plasa relatiilor)'
+qa 'ALTER TABLE information_schema.sql_features DISABLE ROW LEVEL SECURITY' >/dev/null
+qa 'DROP TRIGGER l15_refuza ON information_schema.sql_features' >/dev/null
+echo 'L15_L: trigger pe information_schema.sql_features (INSERT RETURNING 1 -> 0) => GLOBAL difera (familia trigger); RLS pe acelasi tabel => GLOBAL difera (sistem_initdb)'
+
+# m. r4: VACUUM / ANALYZE intre doua citiri nu schimba GLOBAL (steagurile lenese relhas* nu intra).
+qa 'CREATE TRIGGER l15_tmp BEFORE UPDATE ON information_schema.sql_features FOR EACH ROW EXECUTE FUNCTION public.l15_refuza_insert()' >/dev/null
+qa 'DROP TRIGGER l15_tmp ON information_schema.sql_features' >/dev/null
+[[ "$(qa "SELECT relhastriggers FROM pg_class WHERE oid = 'information_schema.sql_features'::regclass")" == t ]] || fail 'm: steagul relhastriggers nu e aprins (proba nu dovedeste nimic)'
+G_M0="$(citeste m0)"
+qa 'VACUUM information_schema.sql_features' >/dev/null; qa 'ANALYZE information_schema.sql_features' >/dev/null; qa 'ANALYZE' >/dev/null
+[[ "$(qa "SELECT relhastriggers FROM pg_class WHERE oid = 'information_schema.sql_features'::regclass")" == f ]] || fail 'm: VACUUM nu a stins steagul (proba nu dovedeste nimic)'
+[[ "$(citeste m1)" == "$G_M0" ]] || fail 'm: GLOBAL schimbat de VACUUM / ANALYZE (refuz fals)'
+echo 'L15_M: VACUUM + ANALYZE intre doua citiri (relhastriggers t -> f) => GLOBAL identic'
+
+# n. r4: --detalii-plasa pe citiri reale: detaliul reproduce randurile plasei; diferenta a doua detalii = obiectul schimbat.
+citeste_pl() { PSQL_BIN="$PG_BIN/psql" bash "$ROOT/scripts/amprenta_globala_citire.sh" "${CONN_OPT[@]}" --lista --detalii-plasa "$1" >"$1.out" 2>"$1.err" \
+  || { cat "$1.out" "$1.err"; fail "n: citirea cu --detalii-plasa $1"; }; }
+citeste_pl "$TMP/n1.tsv"
+qa 'ALTER FUNCTION pg_catalog.quote_nullable(text) STRICT' >/dev/null
+citeste_pl "$TMP/n2.tsv"
+qa 'ALTER FUNCTION pg_catalog.quote_nullable(text) CALLED ON NULL INPUT' >/dev/null
+grep -qF '[ok] detaliul plasei scris' "$TMP/n1.tsv.err" || { cat "$TMP/n1.tsv.err"; fail 'n: mesajul detaliului'; }
+DIF_N="$(diff <(cut -f1-3 "$TMP/n1.tsv") <(cut -f1-3 "$TMP/n2.tsv") | grep '^[<>]' || true)"
+[[ "$(printf '%s\n' "$DIF_N" | grep -c .)" == 2 && "$(printf '%s\n' "$DIF_N" | grep -c 'functii.pg_catalog.quote_nullable(25)')" == 2 ]] \
+  || { printf '%s\n' "$DIF_N"; fail 'n: diferenta detaliilor trebuia sa arate exact pg_catalog.quote_nullable(25)'; }
+echo "L15_N: --detalii-plasa: $(grep -c . "$TMP/n1.tsv") obiecte, reproduce randurile plasei; diferenta = pg_catalog.quote_nullable(25)"
+
 # j. Contraexemplul grantorului pe PG17, prin runner: transferul g1 -> g2 dupa citire => refuz la „inainte”.
 qa "CREATE ROLE g1; CREATE ROLE g2; CREATE ROLE r_gr; CREATE TABLE public.t_gr (id int); ALTER TABLE public.t_gr OWNER TO postgres;
 GRANT SELECT ON public.t_gr TO g1, g2 WITH GRANT OPTION; SET ROLE g1; GRANT SELECT ON public.t_gr TO r_gr; RESET ROLE;" >/dev/null
@@ -280,4 +328,4 @@ timp() { # $1 eticheta, $2 numele migrarii, $3 versiunea
 }
 timp rece 20990204a_l15_timp_rece 20990204000001
 timp cald 20990204b_l15_timp_cald 20990204000002
-echo 'PASS test_livrare_l15_v2: a contraexemplul vederii (inainte), b DDL concurent cu bariera (dupa, cu si fara plafon), c manifest gresit, d drumul bun, e fara optiuni, g proba --compara-cu, h --detalii, i DEFINER nesigur / acceptat, j grantorul, k recitirea reala, f timpii (mai sus)'
+echo 'PASS test_livrare_l15_v2: a contraexemplul vederii (inainte), b DDL concurent cu bariera (dupa, cu si fara plafon), c manifest gresit, d drumul bun, e fara optiuni, g proba --compara-cu, h --detalii, i DEFINER nesigur / acceptat, j grantorul, k recitirea reala, l triggerul / RLS pe un tabel de la initdb, m VACUUM / ANALYZE, n detaliul plasei, f timpii (mai sus)'

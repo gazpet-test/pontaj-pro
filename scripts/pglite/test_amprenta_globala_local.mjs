@@ -42,7 +42,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const TMP = mkdtempSync(join(tmpdir(), 'ag_v2_'))
@@ -611,13 +611,14 @@ SET ROLE g1; GRANT SELECT ON public.t_gr TO r_gr; GRANT UPDATE (c) ON public.t_g
     // D. server_version_num in baza (nu se poate schimba in PGlite: doar prezenta)
     const bz = (await catalogIn(db)).d.find(r => r.familie === 'baza')
     ok(bz && JSON.parse(bz.detaliu)[0] === String(ver), `baza: primul camp = server_version_num (${bz && JSON.parse(bz.detaliu)[0]})`)
-    // E. catalogul de baza: niciun obiect din pg_catalog creat dupa initdb (nicio eticheta necalificata in afara celor de
-    // sistem), iar plasa sistem_initdb are un singur rand, peste toate functiile de la initdb
+    // E. catalogul de baza: plasa sistem_initdb are doua randuri (r4): functiile (+ agregatele) si relatiile de la initdb
     const bz2 = await catalogIn(db)
     const si = bz2.d.filter(r => r.familie === 'sistem_initdb')
     const nFn = Number((await db.query("SELECT count(*) AS n FROM pg_proc WHERE pronamespace IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace) AND oid < 16384")).rows[0].n)
-    ok(si.length === 1 && si[0].eticheta === 'sistem_initdb functii' && JSON.parse(si[0].detaliu)[0] === nFn && nFn > 2000,
-      `sistem_initdb: un rand, ${si[0] && JSON.parse(si[0].detaliu)[0]} functii (catalogul are ${nFn} functii de la initdb in schemele de sistem)`)
+    const nRel = Number((await db.query("SELECT count(*) AS n FROM pg_class WHERE relnamespace IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace) AND oid < 16384")).rows[0].n)
+    const siF = si.find(r => r.eticheta === 'sistem_initdb functii'), siR = si.find(r => r.eticheta === 'sistem_initdb relatii')
+    ok(si.length === 2 && siF && siR && JSON.parse(siF.detaliu)[0] === nFn && nFn > 2000 && JSON.parse(siR.detaliu)[0] === nRel && nRel > 200,
+      `sistem_initdb: doua randuri, ${siF && JSON.parse(siF.detaliu)[0]} functii / ${siR && JSON.parse(siR.detaliu)[0]} relatii (catalogul: ${nFn} / ${nRel} de la initdb in schemele de sistem)`)
     ok(!bz2.d.some(r => r.familie === 'sistem_adaugat'), 'familia sumara sistem_adaugat nu mai exista')
   }
 
@@ -675,7 +676,7 @@ CREATE TYPE pg_catalog.l15_e AS ENUM ('a'); CREATE OPERATOR pg_catalog.=== (LEFT
       const a = await cuPorti('', poarta), b = await cuPorti('ALTER FUNCTION pg_catalog.quote_nullable(text) STRICT', poarta)
       const sch = familiiSchimbate(a, b)
       // MUTANT: plasa fara campul strict
-      const faraStrict = CAT.split(' p.prosecdef, p.proisstrict,\n').join(' p.prosecdef,\n')
+      const faraStrict = CAT.split('p.proowner, p.prosecdef, p.proisstrict, p.provolatile,').join('p.proowner, p.prosecdef, p.provolatile,')
       if (faraStrict === CAT) throw new Error('mutantul plasei: campul proisstrict nu s-a gasit')
       const ma = await catalogIn(db, '', faraStrict), mb = await catalogIn(db, 'ALTER FUNCTION pg_catalog.quote_nullable(text) STRICT', faraStrict)
       ok(a.porti[0] === 'false' && b.porti[0] === 'true' && a.global !== b.global && sch.join() === 'sistem_initdb' && ma.global === mb.global,
@@ -691,11 +692,188 @@ CREATE TYPE pg_catalog.l15_e AS ENUM ('a'); CREATE OPERATOR pg_catalog.=== (LEFT
         ok(familiiSchimbate(a, x).join() === 'sistem_initdb', `plasa, ${nume}: familia [${familiiSchimbate(a, x)}]`)
       }
     }
-    // relatiile / coloanele / tipurile de la initdb: definitiile NU intra (limita declarata), doar ACL-ul explicit
+    // coloanele relatiilor de la initdb: definitia lor (dincolo de numar) NU intra (limita declarata); r4: valoarea implicita
+    // atasata DUPA initdb intra (sectiunea 13), redenumirea unei coloane ramane in afara
     {
       const oidT = Number((await db.query("SELECT 'information_schema.sql_features'::regclass::oid AS o")).rows[0].o)
-      const a = await catalogIn(db), b = await catalogIn(db, "ALTER TABLE information_schema.sql_features ALTER COLUMN comments SET DEFAULT 'x'")
-      ok(oidT < 16384 && a.global === b.global, `limita declarata: un ALTER pe definitia unei relatii de la initdb (oid ${oidT}) nu se vede (GLOBAL neschimbat)`)
+      const a = await catalogIn(db), b = await catalogIn(db, 'ALTER TABLE information_schema.sql_features RENAME COLUMN comments TO comentarii')
+      ok(oidT < 16384 && a.global === b.global, `limita declarata: redenumirea unei coloane a unei relatii de la initdb (oid ${oidT}) nu se vede (GLOBAL neschimbat)`)
+    }
+  }
+
+  console.log('13. r4: randurile ATASATE dupa initdb unui parinte de la initdb (regula unica ag_par); plasa functii + agregate si relatii; detaliul plasei')
+  {
+    const md5 = (s) => createHash('md5').update(s, 'utf8').digest('hex')
+    // MUTANTUL regulii: ag_par fara ramura „rand atasat creat dupa initdb” (pragul unui parinte din afara perimetrului = de neatins)
+    const DEF = 'CAST(CASE WHEN x.oid >= x.prag_schema THEN 0 ELSE x.prag_schema END AS oid) AS prag'
+    if (CAT.split(DEF).length !== 2) throw new Error('mutantul regulii atasate: definitia din ag_par nu apare exact o data')
+    const faraAtasat = CAT.split(DEF).join('CAST(CASE WHEN x.oid >= x.prag_schema THEN 0 ELSE 4294967295 END AS oid) AS prag')
+    // MUTANTUL plasei relatiilor: ramura relatii fara niciun rand (ca sa se vada ca nimic altceva nu prinde)
+    const REL_W = "     WHERE c.oid < s.prag\n)"
+    if (CAT.split(REL_W).length !== 2) throw new Error('mutantul plasei relatiilor: WHERE-ul ramurii nu apare exact o data')
+    const faraRelatii = (c) => c.split(REL_W).join("     WHERE c.oid < s.prag AND false\n)")
+    // mostenirea: perechea, cate un capat (mutantii fiecarui sens)
+    const MOS = '   WHERE ih.inhrelid IN (SELECT r.oid FROM ag_rel r) OR ih.inhparent IN (SELECT r.oid FROM ag_rel r)'
+    if (CAT.split(MOS).length !== 2) throw new Error('mutantul mostenirii: conditia nu apare exact o data')
+    const doarCopil = CAT.split(MOS).join('   WHERE ih.inhrelid IN (SELECT r.oid FROM ag_rel r)')
+    const doarParinte = CAT.split(MOS).join('   WHERE ih.inhparent IN (SELECT r.oid FROM ag_rel r)')
+    // mutantul perimetrului din r3 (pentru indexul nou: obiect cu schema proprie, nu rand atasat)
+    const PER = "WHERE g.ok = 1 AND n.nspname <> 'pg_toast' AND n.nspname !~ '^pg_(toast_)?temp_[0-9]+$'"
+    const faraRamura = CAT.split(PER).join(PER + " AND n.nspname NOT IN ('pg_catalog', 'information_schema')")
+    // poarta: o instructiune (pre) + o interogare (q) in tranzactia testului; eroarea = valoarea 'eroare'
+    const poarta = async (p) => {
+      await db.exec('SAVEPOINT p')
+      try { if (p.pre) await db.exec(p.pre); const v = (await db.query(p.q)).rows[0].v; await db.exec('RELEASE SAVEPOINT p'); return v === null ? null : String(v) }
+      catch (e) { await db.exec('ROLLBACK TO SAVEPOINT p'); return 'eroare' }
+    }
+    const cuPoarta = async (sql, p) => {
+      const c = await catalogIn(db, sql)
+      if (!p) return { ...c, v: undefined }
+      await db.exec('BEGIN')
+      try { if (sql) await db.exec(sql); return { ...c, v: await poarta(p) } } finally { await db.exec('ROLLBACK') }
+    }
+    const INS = "INSERT INTO information_schema.sql_features (feature_id, feature_name, sub_feature_id, sub_feature_name, is_supported) VALUES ('L15', 'x', '', '', 'NO')"
+    const P_INS = { pre: INS, q: "SELECT count(*)::text AS v FROM information_schema.sql_features WHERE feature_id = 'L15'" }
+    const FN = "CREATE FUNCTION public.l15_refuza_insert() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END';"
+    const OPF = "CREATE FUNCTION public.l15_lt(oid, int4) RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT $1::int8 < $2';" +
+      " CREATE OPERATOR public.<<< (LEFTARG = oid, RIGHTARG = int4, FUNCTION = public.l15_lt);" +
+      " CREATE FUNCTION public.l15_cmp(oid, int4) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT 0';"
+    // [nume, baza (exista la baseline), schimbarea, familia asteptata, mutantul care trebuie sa o rateze, poarta, valorile portii]
+    const CAZURI = [
+      ['trigger (contraexemplul recenzentului)', FN, 'CREATE TRIGGER l15_refuza BEFORE INSERT ON information_schema.sql_features FOR EACH ROW EXECUTE FUNCTION public.l15_refuza_insert()',
+        'trigger', faraAtasat, P_INS, ['1', '0']],
+      ['regula', '', 'CREATE RULE l15_r AS ON INSERT TO information_schema.sql_features DO INSTEAD NOTHING', 'regula', faraAtasat, P_INS, ['1', '0']],
+      ['politica', '', 'CREATE POLICY l15_p ON information_schema.sql_features USING (false)', 'politica', faraAtasat, null, null],
+      ['constrangere pe tabel', '', "ALTER TABLE information_schema.sql_features ADD CONSTRAINT l15_c CHECK (feature_id <> 'L15') NOT VALID",
+        'constrangere', faraAtasat, P_INS, ['1', 'eroare']],
+      ['constrangere pe domeniu', '', 'ALTER DOMAIN information_schema.cardinal_number ADD CONSTRAINT l15_d CHECK (VALUE < 100) NOT VALID',
+        'constrangere', faraAtasat, { q: 'SELECT (150::information_schema.cardinal_number)::text AS v' }, ['150', 'eroare']],
+      ['valoare implicita', '', "ALTER TABLE information_schema.sql_features ALTER COLUMN comments SET DEFAULT 'x'", 'coloana', faraAtasat,
+        { pre: INS, q: "SELECT comments::text AS v FROM information_schema.sql_features WHERE feature_id = 'L15'" }, [null, 'x']],
+      ['amop pe o familie de la initdb', OPF, 'ALTER OPERATOR FAMILY pg_catalog.oid_ops USING btree ADD OPERATOR 1 public.<<< (oid, int4)', 'amop', faraAtasat, null, null],
+      ['amproc pe o familie de la initdb', OPF, 'ALTER OPERATOR FAMILY pg_catalog.oid_ops USING btree ADD FUNCTION 1 (oid, int4) public.l15_cmp(oid, int4)', 'amproc', faraAtasat, null, null],
+      ['index nou (obiect cu schema: perimetrul din r3)', '', 'CREATE INDEX l15_i ON information_schema.sql_features (feature_id)', 'relatie', faraRamura, null, null],
+      ['mostenire: tabelul de la initdb mosteneste unul al aplicatiei', 'CREATE TABLE public.l15_mama ();', 'ALTER TABLE information_schema.sql_features INHERIT public.l15_mama',
+        'mostenire', doarCopil, { q: 'SELECT (count(*) > 0)::text AS v FROM public.l15_mama' }, ['false', 'true']],
+      // (copilul e in perimetru: si coloanele lui isi schimba mostenirea - attinhcount)
+      ['mostenire: un tabel al aplicatiei mosteneste unul de la initdb', 'CREATE TABLE public.l15_copil (LIKE information_schema.sql_features);',
+        'ALTER TABLE public.l15_copil INHERIT information_schema.sql_features', 'mostenire', doarParinte, null, null, ['coloana']],
+    ]
+    for (const [nume, baza, schimbare, fam, mut, p, v, inPlus = []] of CAZURI) {
+      let a, b
+      try { a = await cuPoarta(baza, p); b = await cuPoarta(baza + '\n' + schimbare, p) } catch (e) { ok(false, `${nume}: ${String(e.message).slice(0, 100)}`); continue }
+      const sch = familiiSchimbate(a, b)
+      const ma = await catalogIn(db, baza, mut), mb = await catalogIn(db, baza + '\n' + schimbare, mut)
+      const schM = familiiSchimbate(ma, mb)
+      const portiOk = !p || (a.v === v[0] && b.v === v[1])
+      ok(portiOk && a.global !== b.global && sch.includes(fam) && sch.every(f => f === fam || f === 'sistem_initdb' || inPlus.includes(f)) && !schM.includes(fam),
+        `${nume}: ${p ? `poarta ${a.v} -> ${b.v}; ` : ''}GLOBAL schimbat, familii [${sch}] (asteptat ${fam}${sch.includes('sistem_initdb') ? ' + plasa relatiilor' : ''}); mutantul: familia ${fam} ${schM.includes(fam) ? 'TOT schimbata' : 'neschimbata (pica)'}`)
+    }
+    {
+      // contraexemplul recenzentului, mutant dublu: fara ramura „atasat dupa initdb” SI fara plasa relatiilor => GLOBAL identic
+      // (asa era in r3: nimic nu prindea triggerul)
+      const T_SQL = 'CREATE TRIGGER l15_refuza BEFORE INSERT ON information_schema.sql_features FOR EACH ROW EXECUTE FUNCTION public.l15_refuza_insert()'
+      const m2 = faraRelatii(faraAtasat)
+      const x = await catalogIn(db, FN, m2), y = await catalogIn(db, FN + '\n' + T_SQL, m2)
+      ok(x.global === y.global, `trigger, mutant dublu (fara ramura atasata si fara plasa relatiilor): GLOBAL ${x.global === y.global ? 'identic (gaura din r3)' : 'TOT schimbat'}`)
+      // detaliul triggerului si pozitia coloanei cu valoarea implicita (rangul printre coloanele vii, calculat inaintea filtrului)
+      const c = await catalogIn(db, FN + '\n' + T_SQL + ";\nALTER TABLE information_schema.sql_features ALTER COLUMN comments SET DEFAULT 'x'")
+      const tr = c.d.find(r => r.eticheta === 'trigger information_schema.sql_features.l15_refuza')
+      const co = c.d.find(r => r.eticheta === 'coloana information_schema.sql_features.comments')
+      const nCol = c.d.filter(r => r.eticheta.startsWith('coloana information_schema.sql_features.')).length
+      ok(tr && tr.detaliu.includes('l15_refuza_insert()') && co && JSON.parse(co.detaliu)[0] === 7 && String(JSON.parse(co.detaliu)[6]).startsWith("'x'::") && nCol === 1,
+        `etichetele: trigger information_schema.sql_features.l15_refuza; coloana ...comments pozitia ${co && JSON.parse(co.detaliu)[0]} (asteptat 7), implicita ${co && JSON.parse(co.detaliu)[6]}; doar coloana cu implicita atasata intra (${nCol})`)
+    }
+    {
+      // plasa relatiilor: RLS pornit pe un tabel de la initdb (schimbare pe loc, fara obiect nou) => doar sistem_initdb; mutant
+      const a = await catalogIn(db), b = await catalogIn(db, 'ALTER TABLE information_schema.sql_features ENABLE ROW LEVEL SECURITY')
+      const faraRls = CAT.split('c.relchecks, c.relrowsecurity,').join('c.relchecks,')
+      if (faraRls === CAT) throw new Error('mutantul RLS: campul nu s-a gasit')
+      const ma = await catalogIn(db, '', faraRls), mb = await catalogIn(db, 'ALTER TABLE information_schema.sql_features ENABLE ROW LEVEL SECURITY', faraRls)
+      ok(a.global !== b.global && familiiSchimbate(a, b).join() === 'sistem_initdb' && ma.global === mb.global,
+        `RLS pe information_schema.sql_features: familia [${familiiSchimbate(a, b)}]; mutant fara relrowsecurity: GLOBAL ${ma.global === mb.global ? 'neschimbat (pica)' : 'TOT schimbat'}`)
+    }
+    {
+      // VACUUM / ANALYZE intre doua citiri: steagurile lenese relhas* (stinse de VACUUM) NU intra => GLOBAL identic
+      await db.exec('CREATE TRIGGER l15_tmp BEFORE UPDATE ON information_schema.sql_features FOR EACH ROW EXECUTE FUNCTION public.trg_fn(); DROP TRIGGER l15_tmp ON information_schema.sql_features;')
+      const f0 = (await db.query("SELECT relhastriggers::text AS v FROM pg_class WHERE oid = 'information_schema.sql_features'::regclass")).rows[0].v
+      const a = await citeste(db)
+      await db.exec('VACUUM information_schema.sql_features'); await db.exec('ANALYZE information_schema.sql_features'); await db.exec('ANALYZE')
+      const f1 = (await db.query("SELECT relhastriggers::text AS v FROM pg_class WHERE oid = 'information_schema.sql_features'::regclass")).rows[0].v
+      const b = await citeste(db)
+      ok(a.global === b.global, `VACUUM + ANALYZE intre doua citiri: GLOBAL identic (relhastriggers ${f0} -> ${f1}: steag lenes, nefolosit)`)
+    }
+    {
+      // agregatele de la initdb: CREATE OR REPLACE AGGREGATE pastreaza pg_proc, schimba doar pg_aggregate (poarta: bool_and pe zero randuri)
+      const AGG = `CREATE OR REPLACE AGGREGATE pg_catalog.bool_and(boolean) (SFUNC = booland_statefunc, STYPE = boolean, COMBINEFUNC = booland_statefunc,
+        MSFUNC = bool_accum, MINVFUNC = bool_accum_inv, MSTYPE = internal, MSSPACE = 16, MFINALFUNC = bool_alltrue, SORTOP = <, PARALLEL = SAFE, INITCOND = 'true')`
+      const P = { q: 'SELECT bool_and(x)::text AS v FROM (SELECT true WHERE false) t(x)' }
+      const RP = "SELECT ROW(p.*)::text AS r FROM pg_proc p WHERE p.oid = 'pg_catalog.bool_and(boolean)'::regprocedure"
+      await db.exec('BEGIN'); const rp0 = (await db.query(RP)).rows[0].r; await db.exec(AGG); const rp1 = (await db.query(RP)).rows[0].r; await db.exec('ROLLBACK')
+      const a = await cuPoarta('', P), b = await cuPoarta(AGG, P)
+      const faraAgg = CAT.split('g.aggmtranstype, g.aggmtransspace, g.agginitval, g.aggminitval)').join('g.aggmtranstype, g.aggmtransspace, g.aggminitval)')
+      if (faraAgg === CAT) throw new Error('mutantul agregatului: campul nu s-a gasit')
+      const ma = await catalogIn(db, '', faraAgg), mb = await catalogIn(db, AGG, faraAgg)
+      ok(rp0 === rp1 && a.v === null && b.v === 'true' && familiiSchimbate(a, b).join() === 'sistem_initdb' && ma.global === mb.global,
+        `CREATE OR REPLACE AGGREGATE bool_and (INITCOND): pg_proc ${rp0 === rp1 ? 'identic' : 'SCHIMBAT'}, poarta ${a.v} -> ${b.v}, familia [${familiiSchimbate(a, b)}]; mutant fara agginitval: GLOBAL ${ma.global === mb.global ? 'neschimbat (pica)' : 'TOT schimbat'}`)
+    }
+    {
+      // reprezentarea independenta de build: in afara schemei (dupa nume), campurile OID ale functiilor / agregatelor de la
+      // initdb au valori atribuite la compilare (< 12000); schema information_schema are OID >= 12000 (atribuit la initdb)
+      const q = `SELECT count(*) AS n FROM pg_proc p WHERE p.pronamespace IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace) AND p.oid < 16384 AND (
+        p.prolang >= 12000 OR p.proowner >= 12000 OR p.prorettype >= 12000 OR p.provariadic >= 12000 OR p.prosupport::oid >= 12000
+        OR EXISTS (SELECT 1 FROM unnest(p.proargtypes::oid[]) x WHERE x >= 12000) OR EXISTS (SELECT 1 FROM unnest(p.proallargtypes) x WHERE x >= 12000)
+        OR EXISTS (SELECT 1 FROM pg_aggregate g WHERE g.aggfnoid = p.oid AND (g.aggtransfn::oid >= 12000 OR g.aggfinalfn::oid >= 12000
+          OR g.aggcombinefn::oid >= 12000 OR g.aggserialfn::oid >= 12000 OR g.aggdeserialfn::oid >= 12000 OR g.aggmtransfn::oid >= 12000
+          OR g.aggminvtransfn::oid >= 12000 OR g.aggmfinalfn::oid >= 12000 OR g.aggsortop >= 12000 OR g.aggtranstype >= 12000 OR g.aggmtranstype >= 12000)))`
+      const n = Number((await db.query(q)).rows[0].n)
+      const ns = Number((await db.query("SELECT 'information_schema'::regnamespace::oid AS o")).rows[0].o)
+      ok(n === 0 && ns >= 12000, `campurile OID ale plasei functiilor: ${n} functii de la initdb cu OID atribuit la initdb (>= 12000) in afara schemei; schema information_schema = ${ns} (>= 12000 => se scrie dupa nume)`)
+      const nDef = Number((await db.query("SELECT count(*) AS n FROM pg_proc p WHERE p.pronamespace IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace) AND p.oid < 16384 AND p.proargdefaults IS NOT NULL")).rows[0].n)
+      const nBody = Number((await db.query("SELECT count(*) AS n FROM pg_proc p WHERE p.pronamespace IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace) AND p.oid < 16384 AND p.prosqlbody IS NOT NULL")).rows[0].n)
+      ok(nDef > 0 && nBody > 0, `deparsate doar unde exista: ${nDef} functii cu argumente implicite, ${nBody} cu BEGIN ATOMIC`)
+      // auditul randurilor atasate: niciun tip enum de la initdb (pg_enum ar fi un rand atasat fara familie pe un parinte de la
+      // initdb); domeniile de la initdb exista (parintii constrangerilor de domeniu, in ag_par)
+      const tt = (await db.query("SELECT t.typtype::text AS k, count(*)::int AS n FROM pg_type t WHERE t.typnamespace IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace) AND t.oid < 16384 AND t.typtype IN ('e', 'd') GROUP BY 1")).rows
+      const nE = (tt.find(x => x.k === 'e') || { n: 0 }).n, nD = (tt.find(x => x.k === 'd') || { n: 0 }).n
+      ok(nE === 0 && nD > 0, `tipuri de la initdb: ${nE} enum (asteptat 0), ${nD} domenii (parinti in ag_par)`)
+    }
+    {
+      // detaliul plasei (citirea --detalii-plasa): aceeasi definitie (blocul AG_PLASA), aceeasi fotografie; recalculat aici
+      // (independent: md5 din Node) = randurile sistem_initdb; doua liste diferite => se vede obiectul
+      const s = genCitire(['--detalii-plasa', join(TMP, 'plasa_nu_exista.tsv')])('plasa')
+      const lista = async (sql = '') => {
+        await db.exec('BEGIN')
+        try {
+          if (sql) await db.exec(sql)
+          await db.exec(GUC)
+          const r = (await db.query(s, [], { rowMode: 'array' })).rows
+          const c = (await db.query(`SELECT r.eticheta, md5(r.detaliu) AS a FROM (${CAT}) r WHERE r.familie = 'sistem_initdb'`)).rows
+          return { r, c: Object.fromEntries(c.map(x => [x.eticheta, x.a])) }
+        } finally { await db.exec('ROLLBACK') }
+      }
+      const L0 = await lista()
+      let bune = 0, reprodus = 0
+      for (const pl of ['functii', 'relatii']) {
+        const rr = L0.r.filter(x => x[0] === pl)
+        for (const x of rr) if (md5(x[3]) === x[2]) bune++
+        const ord = [...rr].sort((u, v) => (Buffer.compare(Buffer.from(u[1]), Buffer.from(v[1]))))
+        const am = md5(`[${rr.length}, "${md5(ord.map(x => x[3]).join('\n'))}"]`)
+        if (am === L0.c[`sistem_initdb ${pl}`]) reprodus++
+      }
+      const tab = L0.r.filter(x => /[\t\r\n]/.test(x[1] + x[3])).length
+      ok(L0.r.length > 3000 && bune === L0.r.length && reprodus === 2 && tab === 0,
+        `detaliul plasei: ${L0.r.length} randuri, md5(campuri) corect pe ${bune}; recalculat din detaliu = randul plasei pe ${reprodus} / 2; TAB / LF in randuri: ${tab}`)
+      const L1 = await lista('ALTER FUNCTION pg_catalog.quote_nullable(text) STRICT; ALTER TABLE information_schema.sql_features ENABLE ROW LEVEL SECURITY')
+      const m0 = new Map(L0.r.map(x => [x[0] + ' ' + x[1], x[2]])), m1 = new Map(L1.r.map(x => [x[0] + ' ' + x[1], x[2]]))
+      const dif = [...new Set([...m0.keys(), ...m1.keys()])].filter(k => m0.get(k) !== m1.get(k)).sort()
+      ok(dif.join() === 'functii pg_catalog.quote_nullable(25),relatii information_schema.sql_features',
+        `doua liste de detaliu: difera exact obiectele [${dif.join('; ')}]`)
+      // MUTANT: citirea care ar tipari randurile altei definitii (de ex. fara plasa relatiilor) nu reproduce randul plasei
+      const sm = faraRelatii(s)
+      if (sm === s) throw new Error('mutantul detaliului: textul plasei nu s-a schimbat')
+      await db.exec('BEGIN'); await db.exec(GUC); const rm = (await db.query(sm, [], { rowMode: 'array' })).rows; await db.exec('ROLLBACK')
+      ok(rm.filter(x => x[0] === 'relatii').length === 0, 'detaliul cu alta definitie (fara relatii) nu poate reproduce randul relatii (verificarea citirii il refuza)')
     }
   }
 

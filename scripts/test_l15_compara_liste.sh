@@ -192,8 +192,8 @@ echo "   ok: doar RAND => 0 cu lista; scriptul migrarii / LANT / SEMNALE / INCRE
 
 echo '5. MOMENT: momentul fotografiei e in afara partii revizuite (r3, P2)'
 # sectiunea migrarii asa cum o lasa citirea: momentul inlocuit cu marcajul fix
-MIGM=' baza | la
- postgres | <momentul fotografiei>
+MIGM='baza | sistem | versiune | la
+postgres | 1 | PostgreSQL 17 | <momentul fotografiei>
 (1 row)'
 citire "$TMP/ma" "$R0" '' "$EXTRA" "$MIGM" '2026-11-13 20:12:16.123456+00'
 citire "$TMP/mb" "$R0" '' "$EXTRA" "$MIGM" '2026-11-14 07:00:01.5+00'
@@ -204,7 +204,7 @@ MM="$TMP/mutant_MOMENT_rev.sh"
 sed 's/{ nm++; mom = \$4;/{ print > (p ".rev"); nm++; mom = $4;/' "$CMP" >"$MM"
 ! cmp -s "$MM" "$CMP" || fail 'mutantul MOMENT nu a schimbat comparatorul'
 ruleaza "$MM" 6 'mutant: MOMENT in partea revizuita' --a "$TMP/ma" --b "$TMP/mb" --recitire
-citire "$TMP/mc" "$R0" '' "$EXTRA" "$(printf '%s\n' "$MIGM" | sed 's/postgres |/alta_baza |/')" '2026-11-14 07:00:01.5+00'
+citire "$TMP/mc" "$R0" '' "$EXTRA" "$(printf '%s\n' "$MIGM" | sed 's/^postgres |/alta_baza |/')" '2026-11-14 07:00:01.5+00'
 ruleaza "$CMP" 6 'MOMENT diferit SI sectiunea migrarii diferita' --a "$TMP/ma" --b "$TMP/mc" --recitire
 grep -v '^MOMENT' "$TMP/ma" >"$TMP/m_fara"
 ruleaza "$CMP" 2 'sectiunea migrarii fara MOMENT' --a "$TMP/m_fara" --b "$TMP/mb" --recitire
@@ -218,17 +218,35 @@ echo '6. citirea cu psql simulat: momentul inlocuit EXACT in sectiunea scriptulu
 FP="$TMP/psql_simulat"
 cat >"$FP" <<'EOF'
 #!/usr/bin/env bash
-# psql simulat: iesirea unei citiri --lista --amprente-migrare (formatul nealiniat al sectiunii), momentul din SIM_MOMENT
+# psql simulat: iesirea unei citiri --lista --amprente-migrare (formatul nealiniat al sectiunii), momentul din SIM_MOMENT;
+# SIM_ANTET = linia de antet (implicit cea standard), SIM_MIG = restul sectiunii (@M@ = momentul, @MT@ = momentul in forma
+# to_char(..., 'YYYY-MM-DD HH24:MI:SS TZ')); cu "\o plasa.txt" in citire.sql scrie si detaliul plasei (SIM_PLASA_ALT = alt
+# obiect schimbat, SIM_PLASA_RAU = randul RAND nu corespunde detaliului)
 grep -qF "\\pset fieldsep ' | '" citire.sql || { echo 'citire.sql fara formatul nealiniat al sectiunii migrarii' >&2; exit 3; }
 grep -qF "SELECT 'MOMENT', '-', '-', pg_catalog.now()::pg_catalog.text, '-'" citire.sql || { echo 'citire.sql fara MOMENT' >&2; exit 3; }
-m="$SIM_MOMENT"; h=0123456789abcdef0123456789abcdef
+m="$SIM_MOMENT"; h=0123456789abcdef0123456789abcdef; mt="${m:0:19} UTC"
+mig="${SIM_MIG:-eticheta | amprenta}"; mig="${mig//@MT@/$mt}"; mig="${mig//@M@/$m}"
 printf 'TINTA\t-\t-\t1\t-\n'
 printf 'MOMENT\t-\t-\t%s\t-\n' "$m"
 printf '%s\n' '=== scriptul de amprente al migrarii (meteo_xweather_amprente.sql), in aceeasi tranzactie ===' \
-  'baza | sistem | versiune | la' "postgres | 1 | PostgreSQL 17 | $m" '(1 row)' '' "${SIM_MIG:-eticheta | amprenta}" \
+  "${SIM_ANTET:-baza | sistem | versiune | la}" "postgres | 1 | PostgreSQL 17 | $m" '(1 row)' '' "$mig" \
   '=== sfarsit scriptul de amprente al migrarii ==='
-printf 'GLOBAL\t-\t-\t%s\t1\nFAMILIE\trelatie\t-\t%s\t1\nVALIDARE\t-\t-\tok\t0\n' "$h" "$h"
+# plasa: doua functii si o relatie de la initdb; randurile RAND calculate dupa regula (md5 peste campuri in ordinea identitatii)
+st=t; [ -z "${SIM_PLASA_ALT:-}" ] || st=f
+c1='(pg_catalog,abs,20,f,12,10,f,t,i,f,s,f,20,0,,,,,0,,abc,,,,)'
+c2="(pg_catalog,abs,21,f,12,10,f,$st,i,f,s,f,21,0,,,,,0,,abd,,,,)"
+c3='(information_schema,sql_features,r,supabase_admin,p,7,0,f,f,n,f,,0,0,0,0,0,0,0,0,0,0)'
+md() { printf '%s' "$1" | md5sum | cut -d' ' -f1; }
+fn="$(md "$(printf '[2, "%s"]' "$(md "$c1"$'\n'"$c2")")")"; rl="$(md "$(printf '[1, "%s"]' "$(md "$c3")")")"
+[ -z "${SIM_PLASA_RAU:-}" ] || fn="$h"
+if grep -qxF '\o plasa.txt' citire.sql; then
+  grep -qF 'FROM ag_plasa x ORDER BY x.plasa COLLATE "C", x.identitate COLLATE "C"' citire.sql || { echo 'citire.sql fara sectiunea plasei' >&2; exit 3; }
+  printf 'functii\tpg_catalog.abs(21)\t%s\t%s\nfunctii\tpg_catalog.abs(20)\t%s\t%s\nrelatii\tinformation_schema.sql_features\t%s\t%s\n' \
+    "$(md "$c2")" "$c2" "$(md "$c1")" "$c1" "$(md "$c3")" "$c3" >plasa.txt
+fi
+printf 'GLOBAL\t-\t-\t%s\t3\nFAMILIE\trelatie\t-\t%s\t1\nVALIDARE\t-\t-\tok\t0\n' "$h" "$h"
 printf 'RAND\trelatie\trelatie public.sites\t%s\t-\n' "$h"
+printf 'RAND\tsistem_initdb\tsistem_initdb functii\t%s\t-\nRAND\tsistem_initdb\tsistem_initdb relatii\t%s\t-\n' "$fn" "$rl"
 printf 'CONTEXT\tserver_version_num\t-\t170101\t-\nCONTEXT\tcurrent_user\t-\tpostgres\t-\nCONTEXT\tsession_user\t-\tpostgres\t-\n'
 printf 'FOTOGRAFIE\t-\t-\taceeasi\t-\n'
 EOF
@@ -238,9 +256,9 @@ mkdir -p "$TMP/mutcit/scripts"
 cp "$ROOT/scripts/livrare_amprenta.sh" "$ROOT/scripts/amprenta_globala_v2.sql" "$TMP/mutcit/scripts/"
 [ "$(grep -c '# M_CIT_MOMENT$' "$ROOT/scripts/amprenta_globala_citire.sh")" = 1 ] || fail 'marcajul M_CIT_MOMENT nu apare exact o data'
 grep -v '# M_CIT_MOMENT$' "$ROOT/scripts/amprenta_globala_citire.sh" >"$TMP/mutcit/scripts/amprenta_globala_citire.sh"
-cit() { # <script> <iesire> <moment> [sectiune] => codul citirii
+cit() { # <script> <iesire> <moment> [sectiune] [antet] => codul citirii
   local rc=0
-  PSQL_BIN="$FP" SIM_MOMENT="$3" SIM_MIG="${4:-}" bash "$1" --tinta-host h --tinta-port 5432 --tinta-db postgres --tinta-sistem 1 \
+  PSQL_BIN="$FP" SIM_MOMENT="$3" SIM_MIG="${4:-}" SIM_ANTET="${5:-}" bash "$1" --tinta-host h --tinta-port 5432 --tinta-db postgres --tinta-sistem 1 \
     --user postgres --lista --amprente-migrare "$ROOT/scripts/meteo_xweather_amprente.sql" >"$2" 2>"$2.err" || rc=$?
   [ "$rc" = 0 ] || { cat "$2" "$2.err"; fail "citirea simulata: cod $rc"; }
 }
@@ -258,4 +276,83 @@ cit "$TMP/mutcit/scripts/amprenta_globala_citire.sh" "$TMP/m2" "$C2"
 ruleaza "$CMP" 2 'mutant: citirea fara inlocuire => intrare refuzata' --a "$TMP/m1" --b "$TMP/m2" --recitire
 grep -q 'momentul fotografiei apare neinlocuit' "$TMP/out" || { cat "$TMP/out"; fail 'mutantul citirii: motivul'; }
 echo "   ok: citire reala x2 => 0; alta iesire a scriptului => 6; MUTANT fara inlocuire => 2 (refuz)"
+
+echo '6b. r4 (P2): inlocuirea DOAR in campul antetului standard'
+# (a) coliziune: o valoare REALA egala cu momentul propriei fotografii, intr-un rand de date: ramane; doua citiri in care
+#     acea valoare difera (odata cu momentul) => partea revizuita difera (6). Inlocuirea globala (forma r3) le facea identice.
+cit "$ROOT/scripts/amprenta_globala_citire.sh" "$TMP/k1" "$C1" 'ultima_actualizare | @M@'
+cit "$ROOT/scripts/amprenta_globala_citire.sh" "$TMP/k2" "$C2" 'ultima_actualizare | @M@'
+grep -qx "ultima_actualizare | $C1" "$TMP/k1" && grep -qx "postgres | 1 | PostgreSQL 17 | <momentul fotografiei>" "$TMP/k1" \
+  && grep -q 'inlocuit in sectiunea scriptului migrarii de 1 ori' "$TMP/k1.err" || { cat "$TMP/k1" "$TMP/k1.err"; fail 'coliziune: randul de date trebuia sa ramana, antetul inlocuit'; }
+ruleaza "$CMP" 6 'coliziune: valoarea reala = momentul, diferita intre citiri' --a "$TMP/k1" --b "$TMP/k2" --recitire
+grep -q "ultima_actualizare | $C2" "$TMP/out" || { cat "$TMP/out"; fail 'coliziune: diferenta nu arata randul de date'; }
+# MUTANT: inlocuirea globala din r3 (toate aparitiile din sectiune) => cele doua sectiuni ies identice => 0 (diferenta ratata)
+GLOB='  mig { s = $0; o = ""; while ((i = index(s, m)) > 0) { o = o substr(s, 1, i - 1) mk; s = substr(s, i + length(m)); n++ }; $0 = o s }   # M_CIT_MOMENT'
+mkdir -p "$TMP/mutglob/scripts"
+cp "$ROOT/scripts/livrare_amprenta.sh" "$ROOT/scripts/amprenta_globala_v2.sql" "$TMP/mutglob/scripts/"
+awk -v r="$GLOB" '/# M_CIT_MOMENT$/ { print r; next } { print }' "$ROOT/scripts/amprenta_globala_citire.sh" >"$TMP/mutglob/scripts/amprenta_globala_citire.sh"
+! cmp -s "$TMP/mutglob/scripts/amprenta_globala_citire.sh" "$ROOT/scripts/amprenta_globala_citire.sh" || fail 'mutantul inlocuirii globale nu a schimbat citirea'
+cit "$TMP/mutglob/scripts/amprenta_globala_citire.sh" "$TMP/g1" "$C1" 'ultima_actualizare | @M@'
+cit "$TMP/mutglob/scripts/amprenta_globala_citire.sh" "$TMP/g2" "$C2" 'ultima_actualizare | @M@'
+ruleaza "$CMP" 0 'mutant (inlocuirea globala): coliziunea trece nevazuta - de aceea pica' --a "$TMP/g1" --b "$TMP/g2" --recitire
+# (b) momentul tiparit in ALT format (to_char(statement_timestamp(), ...) ca in doua scripturi mai vechi): nenormalizat,
+#     diferenta aratata
+cit "$ROOT/scripts/amprenta_globala_citire.sh" "$TMP/f1" "$C1" '-- moment: @MT@'
+cit "$ROOT/scripts/amprenta_globala_citire.sh" "$TMP/f2" "$C2" '-- moment: @MT@'
+ruleaza "$CMP" 6 'momentul in alt format: nenormalizat' --a "$TMP/f1" --b "$TMP/f2" --recitire
+grep -qF -- "-- moment: ${C1:0:19} UTC" "$TMP/out" || { cat "$TMP/out"; fail 'alt format: diferenta nu e aratata'; }
+# (c) antet in alt format (alt nume de coloana): nimic normalizat, diferenta aratata, comparatorul nu refuza intrarea
+cit "$ROOT/scripts/amprenta_globala_citire.sh" "$TMP/a1" "$C1" '' 'baza | sistem | versiune | moment'
+cit "$ROOT/scripts/amprenta_globala_citire.sh" "$TMP/a2" "$C2" '' 'baza | sistem | versiune | moment'
+grep -q 'inlocuit in sectiunea scriptului migrarii de 0 ori' "$TMP/a1.err" && grep -qx "postgres | 1 | PostgreSQL 17 | $C1" "$TMP/a1" \
+  || { cat "$TMP/a1" "$TMP/a1.err"; fail 'antet in alt format: trebuia sa nu se inlocuiasca nimic'; }
+ruleaza "$CMP" 6 'antet in alt format: nenormalizat' --a "$TMP/a1" --b "$TMP/a2" --recitire
+echo "   ok: coliziune => 6 (MUTANT inlocuirea globala => 0); alt format al momentului / alt antet => nenormalizat, 6"
+
+echo '7. --detalii-plasa: detaliul plasei sistem_initdb, in aceeasi fotografie, verificat fata de randurile RAND'
+citp() { # <script> <iesire> <fisier detaliu> [VAR=valoare ...] [-- optiuni] => codul pe stdout
+  local s="$1" o="$2" d="$3" rc=0; shift 3
+  local ev=() op=()
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do ev+=("$1"); shift; done
+  [ $# = 0 ] || { shift; op=("$@"); }
+  env PSQL_BIN="$FP" SIM_MOMENT="$C1" ${ev[@]+"${ev[@]}"} bash "$s" --tinta-host h --tinta-port 5432 --tinta-db postgres --tinta-sistem 1 \
+    --user postgres --amprente-migrare "$ROOT/scripts/meteo_xweather_amprente.sql" --detalii-plasa "$d" ${op[@]+"${op[@]}"} >"$o" 2>"$o.err" || rc=$?
+  echo "$rc"
+}
+CITR="$ROOT/scripts/amprenta_globala_citire.sh"
+rc="$(citp "$CITR" "$TMP/p1" "$TMP/d1.tsv" -- --lista)"
+[ "$rc" = 0 ] && [ "$(grep -c . "$TMP/d1.tsv")" = 3 ] && grep -qF '[ok] detaliul plasei scris' "$TMP/p1.err" \
+  || { cat "$TMP/p1" "$TMP/p1.err"; fail "detalii-plasa: cod $rc / fisier"; }
+# recalculare in test (din fisier): md5 peste campuri in ordinea identitatii = randul RAND; fiecare h = md5(campuri)
+for pl in functii relatii; do
+  n="$(awk -F'\t' -v p="$pl" '$1 == p' "$TMP/d1.tsv" | grep -c .)"
+  mm="$(awk -F'\t' -v p="$pl" '$1 == p' "$TMP/d1.tsv" | LC_ALL=C sort -t "$T" -k2,2 | cut -f4 | awk 'NR > 1 { printf "\n" } { printf "%s", $0 }' | md5sum | cut -d' ' -f1)"
+  am="$(printf '[%s, "%s"]' "$n" "$mm" | md5sum | cut -d' ' -f1)"
+  grep -qx "RAND${T}sistem_initdb${T}sistem_initdb $pl${T}$am${T}-" "$TMP/p1" || fail "detalii-plasa: recalcularea $pl nu da randul RAND"
+done
+while IFS="$T" read -r _ _ hh cc; do [ "$(printf '%s' "$cc" | md5sum | cut -d' ' -f1)" = "$hh" ] || fail "detalii-plasa: md5(campuri) != coloana a treia"; done <"$TMP/d1.tsv"
+# doua liste de detaliu diferite => se vede obiectul care difera (comanda din document)
+rc="$(citp "$CITR" "$TMP/p2" "$TMP/d2.tsv" SIM_PLASA_ALT=1 -- --lista)"
+[ "$rc" = 0 ] || { cat "$TMP/p2.err"; fail "detalii-plasa (alt obiect): cod $rc"; }
+DIF="$(diff <(cut -f1-3 "$TMP/d1.tsv") <(cut -f1-3 "$TMP/d2.tsv") | grep '^[<>]' || true)"
+[ "$(printf '%s\n' "$DIF" | grep -c .)" = 2 ] && [ "$(printf '%s\n' "$DIF" | grep -c 'pg_catalog.abs(21)')" = 2 ] \
+  || { printf '%s\n' "$DIF"; fail 'detalii-plasa: diferenta trebuia sa arate exact obiectul pg_catalog.abs(21)'; }
+# detaliul care NU reproduce randul RAND => 1, fisier nescris; MUTANTUL fara verificare (M_CIT_PLASA) => 0
+rc="$(citp "$CITR" "$TMP/p3" "$TMP/d3.tsv" SIM_PLASA_RAU=1 -- --lista)"
+[ "$rc" = 1 ] && [ ! -e "$TMP/d3.tsv" ] && grep -q 'NU reproduce randul RAND sistem_initdb functii' "$TMP/p3.err" \
+  || { cat "$TMP/p3.err"; fail "detalii-plasa nereproductibil: cod $rc (asteptat 1, fisier nescris)"; }
+mkdir -p "$TMP/mutpl/scripts"
+cp "$ROOT/scripts/livrare_amprenta.sh" "$ROOT/scripts/amprenta_globala_v2.sql" "$TMP/mutpl/scripts/"
+[ "$(grep -c '# M_CIT_PLASA$' "$CITR")" = 1 ] || fail 'marcajul M_CIT_PLASA nu apare exact o data'
+grep -v '# M_CIT_PLASA$' "$CITR" >"$TMP/mutpl/scripts/amprenta_globala_citire.sh"
+rc="$(citp "$TMP/mutpl/scripts/amprenta_globala_citire.sh" "$TMP/p4" "$TMP/d4.tsv" SIM_PLASA_RAU=1 -- --lista)"
+[ "$rc" = 0 ] || { cat "$TMP/p4.err"; fail "mutantul fara verificarea plasei: cod $rc (asteptat 0 = mutantul trece, deci regula conteaza)"; }
+# argumente: fara --lista => 2; fisier existent => 2
+rc="$(citp "$CITR" "$TMP/p5" "$TMP/d5.tsv")"; [ "$rc" = 2 ] || fail "detalii-plasa fara --lista: cod $rc"
+rc="$(citp "$CITR" "$TMP/p6" "$TMP/d1.tsv" -- --lista)"; [ "$rc" = 2 ] || fail "detalii-plasa cu fisier existent: cod $rc"
+# fara optiune: iesirea citirii nu are nimic in plus fata de forma veche (nicio sectiune a plasei in citire.sql)
+rc=0; PSQL_BIN="$FP" SIM_MOMENT="$C1" bash "$CITR" --tinta-host h --tinta-port 5432 --tinta-db postgres --tinta-sistem 1 --user postgres --lista \
+  --amprente-migrare "$ROOT/scripts/meteo_xweather_amprente.sql" --doar-genereaza "$TMP/gen_fara" >/dev/null 2>&1 || rc=$?
+[ "$rc" = 40 ] && ! grep -q 'AG_CITIRE plasa\|plasa.txt' "$TMP/gen_fara/citire.sql" || fail 'fara --detalii-plasa citirea are sectiunea plasei'
+echo "   ok: detaliul scris si recalculat (= RAND); alt obiect => diferenta arata obiectul; nereproductibil => 1 (MUTANT => 0); argumente => 2"
 echo "PASS test_l15_compara_liste ($N rulari)"

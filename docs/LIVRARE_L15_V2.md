@@ -1,8 +1,10 @@
 # Livrarea migrărilor — L15 v2: amprenta GLOBALĂ verificată de runner, înainte și după, în aceeași tranzacție
 
 Versiune: AMPRENTA_GLOBALA **v2** (13.11.2026). Decizie: propunerea coordonatorului + ACCEPT CU CONDIȚII de la recenzent (6 condiții),
-apoi runda 2 după review (grantorii ACL, regula DEFINER, schemele de sistem, comparabilitatea clonă ↔ țintă) și runda 3 (obiectele
-create în schemele de sistem prin familiile obișnuite, plasa pe funcțiile de la initdb, momentul fotografiei la recitire).
+apoi runda 2 după review (grantorii ACL, regula DEFINER, schemele de sistem, comparabilitatea clonă ↔ țintă), runda 3 (obiectele
+create în schemele de sistem prin familiile obișnuite, plasa pe funcțiile de la initdb, momentul fotografiei la recitire) și runda 4
+(rândurile atașate după initdb unui părinte de la initdb, plasa independentă de build pe funcții + agregate și relații, detaliul
+plasei, momentul înlocuit doar în antetul standard).
 Fișiere: blocul unic `scripts/amprenta_globala_v2.sql` (L19), pașii runnerului `scripts/livrare_amprenta.sh` (+ CLI `scripts/livrare_amprenta_gen.sh`),
 runnerul `scripts/livrare_migrare.sh` (runda 15), citirea `scripts/amprenta_globala_citire.sh`, comparatorul de liste
 `scripts/l15_compara_liste.sh`, manifestul și proba pe țintă `scripts/livrare_l15_manifest.sh`, proba pe producție
@@ -39,31 +41,62 @@ doar filtrează, nu se serializează). Schemele din perimetru: toate, în afară
 `graphql` …). Cataloagele fără schemă intră întregi; baza = doar baza curentă. Obiectele temporare (schemele temporare,
 `relpersistence = t`) nu intră — nici cele ale migrării, nici cele ale runnerului.
 
+**Rândurile atașate** (regulă definită O DATĂ în bloc: CTE-ul `ag_par`, L19). Un rând de catalog cu OID propriu legat de un părinte —
+trigger, regulă, politică, constrângere (pe tabel sau pe domeniu), valoarea implicită a unei coloane (`pg_attrdef`), membrii `amop` /
+`amproc` ai familiilor de operatori — intră dacă **părintele e în perimetru SAU (părintele e într-o schemă de sistem ȘI rândul atașat e
+creat după initdb, `oid >= 16384`)**. `ag_par` dă fiecărui părinte posibil (relație, domeniu, familie de operatori) pragul rândurilor
+atașate lui (0 dacă părintele e în perimetru, altfel 16384); toate familiile atașate folosesc doar forma „părintele prin `ag_par`, rândul
+prin `oid >= prag`”. Coloanele nu au OID: ale unei relații din perimetru intră toate; ale unei relații de la initdb intră doar cele cu o
+valoare implicită atașată după initdb (cu poziția calculată printre toate coloanele vii). **Moștenirea** (`pg_inherits`, fără OID):
+perechea intră dacă ORICARE capăt e în perimetru (un tabel de la initdb care moștenește unul al aplicației schimbă ce întoarce tabelul
+aplicației). Contraexemplul recenzentului din runda 3 — un trigger `BEFORE INSERT` creat după baseline pe
+`information_schema.sql_features`, cu o funcție existentă — e acum văzut (familia `trigger`, plus plasa relațiilor).
+
 **Schemele de sistem.** Un obiect creat în `pg_catalog` e găsit ÎNAINTEA celui din schema aplicației la orice apel necalificat, iar un
 `GRANT` pe o funcție de sistem sau pe un tabel TOAST e tot un drept. Ce intră, exact:
-- **obiectele create după initdb** în `pg_catalog` / `information_schema` (funcții, relații cu coloanele, constrângerile, triggerele,
-  regulile, politicile și moștenirea lor, tipuri, operatori, clase / familii de operatori, colații, conversii, căutare text): **integral**,
-  prin ACELEAȘI familii și ACELEAȘI expresii ca obiectele aplicației (`functie`, `relatie`, `coloana`, `tip`, `operator` …). Runda 3 a
-  desființat reprezentarea lor sumară separată (`sistem_adaugat`, care omitea de ex. argumentele implicite și STRICT — contraexemplul
-  recenzentului: o poartă care cheamă un auxiliar din `pg_catalog` își schimba rezultatul cu GLOBAL identic). Eticheta lor e cea obișnuită,
-  necalificată (de ex. `functie l15_helper(boolean)`), pentru că `pg_catalog` e pe calea canonică;
-- **funcțiile de la initdb** (`oid < 16384`), **agregat**: familia `sistem_initdb`, UN rând `[număr, md5]` peste câmpurile BRUTE din
-  `pg_proc` care le hotărăsc comportamentul — identitatea (schema, numele, tipurile argumentelor), kind, limbaj, proprietar, SECURITY
-  DEFINER, STRICT, volatilitate, LEAKPROOF, PARALLEL, SETOF, rezultatul, VARIADIC, argumentele (toate tipurile, modurile, numele),
-  `proconfig`, numărul și expresiile argumentelor implicite, md5(`prosrc`), `probin`, md5(corpul BEGIN ATOMIC), funcția suport —, fără
-  funcții de deparsare, ordonat (schema, nume `COLLATE "C"`, tipurile argumentelor). Prinde de ex. `ALTER FUNCTION
-  pg_catalog.quote_nullable(text) STRICT` (contraexemplul recenzentului). La refuz arată doar „funcțiile de la initdb diferă”, nu care:
-  diagnosticul se face cu o interogare pe `pg_proc` (comparat cu o clonă de aceeași versiune). Pe aceeași bază (înainte / după, citire /
-  recitire) rândul e stabil; între clonă și țintă poate diferi (câmpurile brute conțin OID-uri ale obiectelor create la initdb prin SQL —
-  `information_schema`, `plpgsql` — și depind de versiunea exactă), deci apare la diferențele rămase din PR-ul de baseline, nu în manifest;
-- **ACL-urile explicite** (`acl_sistem`): proprietarul + ACL-ul celor trei scheme de sistem (`pg_catalog`, `information_schema`,
-  `pg_toast`) și fiecare obiect din ele cu ACL **explicit** (`relacl` / `attacl` / `proacl` / `typacl` nenul), cu grantor; relațiile
-  TOAST se etichetează după tabelul-părinte (numele lor conține un OID). Un obiect creat după initdb cu ACL explicit apare și aici (redundant);
-- `server_version_num` (familia `baza`).
+- **(i) tot ce are OID propriu ≥ 16384 intră integral** — obiect cu schemă creat după initdb în `pg_catalog` / `information_schema`
+  (funcții, relații cu coloanele, tipuri, operatori, clase / familii de operatori, colații, conversii, căutare text) SAU rând atașat după
+  initdb unui părinte de la initdb (regula de mai sus) —, prin ACELEAȘI familii și ACELEAȘI expresii ca obiectele aplicației (`functie`,
+  `relatie`, `coloana`, `trigger`, `constrangere` …), cu etichetele obișnuite (de ex. `functie l15_helper(boolean)`, `trigger
+  information_schema.sql_features.l15_refuza`). Singura excepție: **statisticile extinse** (`pg_statistic_ext`) nu sunt familie nici
+  pentru aplicație (doar planificatorul le folosește; nu schimbă rezultatul niciunei interogări) — pe tabelele de la initdb sunt numărate
+  în plasa relațiilor. Runda 3 a desființat reprezentarea sumară separată (`sistem_adaugat`); runda 4 a închis rândurile atașate;
+- **(ii) din obiectele de la initdb** (`oid < 16384`) intră, ca **PLASĂ** (familia `sistem_initdb`, CTE-ul `ag_plasa`: câte un rând pe
+  obiect, din care se calculează un rând `[număr, md5]` pe plasă), într-o reprezentare **independentă de build**:
+  - `sistem_initdb functii` — funcțiile + agregatele: identitatea (schema DUPĂ NUME, numele, tipurile argumentelor), kind, limbaj,
+    proprietar, SECURITY DEFINER, STRICT, volatilitate, LEAKPROOF, PARALLEL, SETOF, rezultatul, VARIADIC, argumentele (toate tipurile,
+    modurile, numele), `proconfig`, numărul argumentelor implicite + expresiile lor **deparsate** (`pg_get_expr`, doar unde există),
+    md5(`prosrc`), `probin`, md5(corpul BEGIN ATOMIC **deparsat**, doar unde există), funcția suport, iar la agregate câmpurile din
+    `pg_aggregate` (funcțiile de tranziție / finală / combinare / serializare și varianta „moving”, extra / modify, operatorul de sortare,
+    tipurile și spațiul de stare, valorile inițiale — `CREATE OR REPLACE AGGREGATE` păstrează rândul din `pg_proc`). Celelalte câmpuri
+    OID (limbaj, proprietar, tipuri, funcția suport, câmpurile agregatului) au la funcțiile de la initdb valori atribuite la compilare
+    (sub 12000, aceleași pe aceeași versiune — verificat de proba PGlite); doar schema `information_schema` primește OID la initdb (depinde
+    de câte colații importă initdb pe acel sistem), de aceea e scrisă după nume. Prinde de ex. `ALTER FUNCTION
+    pg_catalog.quote_nullable(text) STRICT` și `CREATE OR REPLACE AGGREGATE pg_catalog.bool_and(boolean) (… INITCOND = 'true')`;
+  - `sistem_initdb relatii` — relațiile din `pg_catalog` / `information_schema`: identitatea (schema.nume), kind, proprietar (după nume),
+    persistență, `relnatts`, `relchecks`, RLS, FORCE RLS, replica identity, partiție, `reloptions` + **numărul rândurilor atașate**,
+    calculat din cataloage: triggere, reguli, politici, constrângeri, valori implicite, indecși, moștenire (ca copil și ca părinte),
+    statistici extinse, publicații. NU intră steagurile leneșe `relhasindex` / `relhasrules` / `relhastriggers` / `relhassubclass` (le
+    stinge VACUUM — ar da refuz fals, L20) și nimic din statistici / stocare (`relpages`, `reltuples`, `relallvisible`, `relfrozenxid`,
+    `relminmxid`, `relfilenode`). Prinde o schimbare PE LOC (de ex. `ENABLE ROW LEVEL SECURITY` pe un tabel de la initdb, fără obiect nou)
+    și e plasa de siguranță pentru orice clasă de rând atașat scăpată de regula de mai sus (numărul se schimbă);
+  - plus **ACL-urile explicite** (`acl_sistem`): proprietarul + ACL-ul celor trei scheme de sistem (`pg_catalog`, `information_schema`,
+    `pg_toast`) și fiecare obiect din ele cu ACL **explicit** (`relacl` / `attacl` / `proacl` / `typacl` nenul), cu grantor; relațiile
+    TOAST se etichetează după tabelul-părinte (numele lor conține un OID). Un obiect creat după initdb cu ACL explicit apare și aici
+    (redundant); și `server_version_num` (familia `baza`);
+- **(iii) ce NU intră, exact** — modificabile doar de superuserul platformei, nu doar cu versiunea serverului: **corpul vederilor de la
+  initdb** (regula `_RETURN` a unei vederi de la initdb are OID < 16384; `CREATE OR REPLACE VIEW` o rescrie pe loc); **coloanele relațiilor
+  de la initdb** dincolo de numărul lor (nume, tip, NOT NULL, stocare — de ex. o redenumire nu se vede; o valoare implicită nouă se vede);
+  **tipurile, operatorii, clasele / familiile de operatori, colațiile, conversiile și configurațiile de căutare text de la initdb modificate
+  PE LOC** (de ex. o mapare nouă într-o configurație de căutare de la initdb); **comentariile** (pentru niciun obiect); tot `pg_toast` în
+  afara ACL-urilor explicite (limita 15). Limita 10.
 
-**Ce NU intră, exact:** definițiile celorlalte obiecte de la initdb — relații, coloane, constrângeri, tipuri, operatori, clase / familii de
-operatori, colații, conversii, căutare text din `pg_catalog` / `information_schema` (și tot `pg_toast`, în afara ACL-urilor explicite).
-Sunt metadate modificabile prin DDL (de superuserul platformei), nu doar cu versiunea serverului: un `ALTER` pe ele nu se vede (limita 10).
+**Detaliul plasei** (`scripts/amprenta_globala_citire.sh --lista --detalii-plasa <fișier nou>`): în ACEEAȘI fotografie, câte un rând pe
+obiect de la initdb — `plasa TAB identitate TAB md5(campuri) TAB campuri` — din ACEEAȘI definiție (blocul `AG_PLASA v2` = începutul
+blocului catalogului, până la `ag_plasa` inclusiv). Citirea verifică, înainte să scrie fișierul, că detaliul **reproduce** rândurile
+`RAND sistem_initdb …`: md5 peste coloana `campuri`, în ordinea identității (`LC_ALL=C`), unite cu LF ⇒ `md5` din `[număr, "md5"]` =
+amprenta rândului plasei (altfel cod 1, fișier nescris). Două detalii (clonă / țintă, sau înainte / după) se compară cu
+`diff <(cut -f1-3 a.tsv) <(cut -f1-3 b.tsv)`: liniile diferite numesc obiectul, iar coloana `campuri` arată câmpul.
 
 | Familie | Catalog | Câmpuri (pe lângă etichetă) |
 |---|---|---|
@@ -77,14 +110,14 @@ Sunt metadate modificabile prin DDL (de superuserul platformei), nu doar cu vers
 | functie | pg_proc (+ pg_aggregate, pg_language) | kind, limbaj, proprietar, SECURITY DEFINER, volatilitate, STRICT, LEAKPROOF, PARALLEL, SETOF, cost, rows, VARIADIC, funcția suport, argumentele cu moduri, nume și **valori implicite**, rezultatul, `proconfig`, **`probin`**, md5(`prosrc`), md5(corpul BEGIN ATOMIC deparsat), transformările, ACL; agregate: toate funcțiile, operatorul de sortare, tipurile și valorile inițiale |
 | tip | pg_type (+ pg_enum, pg_range) | TOATE tipurile din perimetru (de bază, compuse / rândul tabelelor, domenii, enum, range, multirange, tablouri): typtype, categorie, preferat, proprietar, ACL, lungime, byval, aliniere, stocare, delimitator, NOT NULL, tipul de bază + typmod, colație, valoarea implicită, funcțiile input / output / receive / send / typmodin / typmodout / analyze / subscript, elementul, relația; enum: etichetele în ordine; range: subtip, colație, opclass, canonical, subdiff, multirange |
 | operator | pg_operator | proprietar, kind, merge, hash, rezultat, funcțiile code / rest / join, comutator, negator |
-| familie_operatori, clasa_operatori, amop, amproc, metoda_acces | pg_opfamily, pg_opclass, pg_amop, pg_amproc, pg_am | proprietar; clasa: familia, tipul, implicită, tipul cheii; amop: scop, operator, familia de sortare, metoda; amproc: funcția; membrii adăugați de extensii la familiile sistemului (oid ≥ 16384) intră și ei; pg_am: tip, handler (toate) |
+| familie_operatori, clasa_operatori, amop, amproc, metoda_acces | pg_opfamily, pg_opclass, pg_amop, pg_amproc, pg_am | proprietar; clasa: familia, tipul, implicită, tipul cheii; amop: scop, operator, familia de sortare, metoda; amproc: funcția; membrii = rânduri atașate familiei (regula `ag_par`: și cei adăugați după initdb la familiile de la initdb); pg_am: tip, handler (toate) |
 | cast | pg_cast | TOATE: funcția, contextul, metoda |
 | limbaj, transformare | pg_language, pg_transform | proprietar, PL, trusted, handler, inline, validator, ACL; transformările: funcțiile from / to |
 | conversie, colatie | pg_conversion, pg_collation | proprietar, codificări, funcția, implicită; provider, determinist, collate, ctype, locale, ICU rules |
 | ts_parser, ts_sablon, ts_dictionar, ts_config | pg_ts_parser, pg_ts_template, pg_ts_dict, pg_ts_config, pg_ts_config_map | funcțiile, șablonul, opțiunile, parserul, mapările |
 | extensie | pg_extension | proprietar, schema, relocatable, versiunea, extconfig, extcondition |
 | trigger_eveniment | pg_event_trigger | evenimentul, proprietar, funcția, starea, tag-urile |
-| mostenire | pg_inherits | ordinea, detach pending |
+| mostenire | pg_inherits | ordinea, detach pending; perechea intră dacă ORICARE capăt e în perimetru |
 | acl_implicit | pg_default_acl | ACL-ul pe (rol, schemă, tip de obiect) |
 | baza, parametru_acl, tablespace | pg_database (doar cea curentă), pg_parameter_acl, pg_tablespace | **`server_version_num`**, proprietar, codificare, locale / provider, template, allowconn, connlimit, ACL; ACL pe parametri; tablespace: proprietar, ACL, opțiuni |
 | rol, membru, setare_rol | pg_roles, pg_auth_members, pg_db_role_setting | toate atributele (super, inherit, createrole, createdb, login, replication, bypassrls, connlimit, valid until) + rolconfig (valorile ca md5); membru: admin / inherit / set + grantor; setările pe rol / bază (valorile ca md5) |
@@ -92,17 +125,20 @@ Sunt metadate modificabile prin DDL (de superuserul platformei), nu doar cu vers
 | publicatie, publicatie_tabel, publicatie_schema | pg_publication, pg_publication_rel, pg_publication_namespace | proprietar, all tables, operațiile, via root; filtrul de rânduri și coloanele; schemele |
 | obiect_mare | pg_largeobject_metadata | **câte un rând pe obiect**, etichetat cu identificatorul lui (`loid` — numele public al obiectului mare; singura excepție declarată de la „fără OID-uri”): proprietar, ACL |
 | eticheta_securitate | pg_seclabels | furnizorul, obiectul, eticheta |
-| sistem_initdb | pg_proc — funcțiile de la initdb din `pg_catalog` / `information_schema` (`oid < 16384`, complementul perimetrului) | UN rând: numărul + md5 peste câmpurile brute (identitate, kind, limbaj, proprietar, DEFINER, STRICT, volatilitate, LEAKPROOF, PARALLEL, SETOF, rezultat, VARIADIC, argumente cu tipuri / moduri / nume, `proconfig`, argumentele implicite, md5(`prosrc`), `probin`, md5(BEGIN ATOMIC), funcția suport) |
+| sistem_initdb | pg_proc + pg_aggregate, pg_class (+ numărul rândurilor atașate) — obiectele de la initdb din `pg_catalog` / `information_schema` (`oid < 16384`, complementul perimetrului) | DOUĂ rânduri (`functii`, `relatii`), fiecare `[număr, md5 peste câmpurile fiecărui obiect, în ordinea identității]`, calculate din CTE-ul `ag_plasa` (detaliul: `--detalii-plasa`); câmpurile: secțiunea 2, (ii) |
 | acl_sistem | pg_namespace, pg_class, pg_attribute, pg_proc, pg_type — `pg_catalog`, `information_schema`, `pg_toast` | schemele: proprietar + ACL; obiectele cu ACL explicit: ACL-ul (cu grantor), la relații și funcții și proprietarul; TOAST după tabelul-părinte |
-
-Obiectele create după initdb în `pg_catalog` / `information_schema` nu au familie proprie: intră în familiile de mai sus (`functie`,
-`relatie`, `coloana`, `constrangere`, `trigger`, `regula`, `politica`, `mostenire`, `tip`, `operator`, `familie_operatori`,
-`clasa_operatori`, `amop`, `amproc`, `colatie`, `conversie`, `ts_*`), cu aceleași câmpuri.
 | sesiune | profilul sesiunii de livrare | `DateStyle`, `TimeZone`, `row_security`, `search_path`, `session_replication_role` (citite o dată, „înainte”) |
 
+Obiectele create după initdb în `pg_catalog` / `information_schema` și rândurile atașate după initdb unui părinte de la initdb nu au
+familie proprie: intră în familiile de mai sus (`functie`, `relatie`, `coloana`, `constrangere`, `trigger`, `regula`, `politica`,
+`mostenire`, `tip`, `operator`, `familie_operatori`, `clasa_operatori`, `amop`, `amproc`, `colatie`, `conversie`, `ts_*`), cu aceleași
+câmpuri. Familiile atașate (`constrangere`, `trigger`, `regula`, `politica`, valoarea implicită din `coloana`, `amop`, `amproc`) își iau
+părintele prin `ag_par` (regula rândurilor atașate).
+
 **NU intră:** statistici (`reltuples`, `relpages`, pg_statistic, contoare de vacuum / freeze), `relfilenode`, valoarea curentă a secvențelor,
-datele din tabele, `attstattarget` / `attoptions` / `attmissingval`, `collversion`, statisticile extinse, `relhas*` (derivate, actualizate
-leneș), OID-urile (în afară de identificatorul obiectelor mari) și numerele de coloană. Din `pg_depend` intră DOAR legătura secvențelor cu
+datele din tabele, `attstattarget` / `attoptions` / `attmissingval`, `collversion`, statisticile extinse (ca familie; pe tabelele de la
+initdb doar numărul lor, în plasă), `relhas*` (derivate, actualizate leneș), OID-urile (în afară de identificatorul obiectelor mari) și
+numerele de coloană. Din `pg_depend` intră DOAR legătura secvențelor cu
 coloanele; celelalte fapte care stau numai acolo (apartenența obiectelor la extensii, obiectele „pin”) nu sunt acoperite.
 
 **Canonicalizare (condiția 2):** blocul se evaluează DOAR în contextul canonic — `search_path = pg_catalog, pg_temp`, `TimeZone = UTC`,
@@ -118,13 +154,19 @@ fiecare calcul: `AMPRENTA_GLOBALA_DUBLURA` = refuz).
 **altă versiune** (alt fișier, alt marcaj, alt cod de gardă), cu motiv: de atunci pot exista valori aprobate (manifeste, GLOBAL-uri din
 jurnale) calculate cu ea, iar o formă schimbată sub același nume le-ar face incomparabile în tăcere. Rundele de review ale unui PR **nu**
 sunt versiuni: formele lor n-au fost folosite niciodată la o livrare (nicio valoare aprobată nu există cu ele). Pentru acest PR: **v1** =
-prima ciornă, respinsă la review, nefolosită; forma care intră pe main este **v2** — cea de după runda 3, iar valorile calculate cu ciornele
-rundelor 1–2 (de ex. probele coordonatorului pe clonă) nu se folosesc ca baseline (se recitesc). Schimbările față de v1:
+prima ciornă, respinsă la review, nefolosită; forma care intră pe main este **v2** — cea de după ultima rundă de review a acestui PR, iar
+valorile calculate cu ciornele rundelor anterioare (de ex. probele coordonatorului pe clonă cu forma rundei 3) nu se folosesc ca baseline
+(se recitesc). Schimbările față de v1:
 - runda 2: grantorul în toate ACL-urile; dependențele OWNED BY / identity ale secvențelor; schemele de sistem (atunci: familia sumară
   `sistem_adaugat` + `acl_sistem`); `server_version_num` în `baza`; obiectele mari câte un rând;
 - runda 3: perimetrul definit o dată (`ag_per` + CTE-urile de perimetru) și obiectele create după initdb în schemele de sistem prin
   familiile obișnuite (`sistem_adaugat` desființată); familia nouă `sistem_initdb` (plasa pe funcțiile de la initdb); `eticheta_securitate`
-  urmează același perimetru. Lista: 45 de familii (`sistem_adaugat` ieșită, `sistem_initdb` intrată).
+  urmează același perimetru. Lista: 45 de familii (`sistem_adaugat` ieșită, `sistem_initdb` intrată);
+- runda 4: regula rândurilor atașate, definită o dată (`ag_par`), folosită de `constrangere`, `trigger`, `regula`, `politica`, `coloana`
+  (valoarea implicită), `amop`, `amproc` (care înainte aveau propria condiție pe 16384); moștenirea pe pereche (oricare capăt);
+  `sistem_initdb` are două rânduri (`functii` — reprezentare independentă de build, plus agregatele — și `relatii` — nou), calculate din
+  CTE-ul `ag_plasa`, iar blocul `AG_PLASA v2` (începutul blocului catalogului) dă detaliul plasei în citire (`--detalii-plasa`). Lista de
+  familii nu se schimbă (45). În citire: momentul fotografiei se înlocuiește doar în antetul standard (secțiunea 6).
 O excepție (de ex. o schemă de platformă care se schimbă singură) se face DOAR așa, explicit, ca reducere declarată a garanției.
 
 ## 3. Ce NU acoperă (limite declarate)
@@ -147,11 +189,14 @@ O excepție (de ex. o schemă de platformă care se schimbă singură) se face D
    amestec de stări ar da cel mai probabil o valoare care nu se potrivește la livrare (refuz, recitire), dar asta nu e demonstrat.
 9. **Opțiunile maparilor de utilizator** sunt vizibile doar proprietarului serverului (altfel `null`); parolele rolurilor nu intră;
    `pg_subscription` nu e citibil de `postgres` pe Supabase; etichetele de securitate cer un furnizor.
-10. **Schemele de sistem, obiectele de la initdb:** se văd doar funcțiile lor, agregat (`sistem_initdb`), ACL-ul lor explicit
-    (`acl_sistem`), proprietarul celor trei scheme și `server_version_num`. Definițiile relațiilor, coloanelor, constrângerilor, tipurilor,
-    operatorilor, claselor / familiilor de operatori, colațiilor, conversiilor și configurațiilor de căutare text de la initdb NU intră:
-    un `ALTER` pe ele făcut de superuserul platformei nu se vede (proba PGlite o arată pe o coloană din `information_schema`).
-    Cast-urile, metodele de acces, limbajele intră integral. Obiectele create după initdb în aceste scheme intră integral (secțiunea 2).
+10. **Schemele de sistem, obiectele de la initdb:** se văd funcțiile + agregatele și relațiile lor, ca plasă (`sistem_initdb`, câmpurile
+    din secțiunea 2, (ii)), ACL-ul lor explicit (`acl_sistem`), proprietarul celor trei scheme și `server_version_num`. NU se văd
+    (secțiunea 2, (iii)): corpul vederilor de la initdb, coloanele relațiilor de la initdb dincolo de numărul lor, tipurile / operatorii /
+    clasele / familiile de operatori / colațiile / conversiile / configurațiile de căutare text de la initdb modificate PE LOC,
+    comentariile — un astfel de `ALTER`, făcut de superuserul platformei, nu se vede (proba PGlite o arată pe redenumirea unei coloane din
+    `information_schema`). Cast-urile, metodele de acces, limbajele intră integral. Tot ce are OID propriu ≥ 16384 în aceste scheme
+    (obiect creat după initdb SAU rând atașat după initdb unui părinte de la initdb) intră integral, prin familiile obișnuite (secțiunea 2,
+    (i)); excepție: statisticile extinse (nu sunt familie).
 11. **Coordonarea:** lock-ul consultativ al runnerului serializează DOAR livrările care trec prin el. Dashboard-ul Supabase, un `psql` direct
     sau platforma nu-l respectă: o schimbare a lor în timpul livrării apare ca diferență nedeclarată ⇒ refuz (nimic comis) — **în afara**
     ferestrei finale (pct. 5) și a schimbării urmate de revenire (pct. 6), care nu se văd.
@@ -220,8 +265,9 @@ extensiile, versiunea serverului (și cea minoră: deparsarea). Pentru obiectele
    rândurile `CONTEXT` sunt egale; familia `sesiune` e egală; privilegiile implicite ale **rolului de livrare** (rândurile
    `acl_implicit <current_user> …`) sunt egale; fiecare rând `schimbat` /
    `sters` din manifest există în ambele liste cu ACEEAȘI amprentă; fiecare rând `creat` lipsește din ambele. Altfel `NECOMPARABIL`
-   (cod 6) cu lista. Diferențele din `extensie`, `colatie`, `limbaj`, `rol`, `membru`, `schema`, `sistem_initdb` (rândul agregat al
-   funcțiilor de la initdb diferă când clona și ținta rulează alt build al serverului) și privilegiile implicite ale ALTOR
+   (cod 6) cu lista. Diferențele din `extensie`, `colatie`, `limbaj`, `rol`, `membru`, `schema`, `sistem_initdb` (cu plasa independentă
+   de build, rândurile `sistem_initdb` sunt de așteptat IDENTICE între clonă și țintă pe aceeași versiune de server; o diferență rămâne
+   totuși `DE_EXPLICAT` și se explică NOMINAL, cu detaliul plasei: obiectul și câmpul, nu „alt build”) și privilegiile implicite ale ALTOR
    creatori (rolurile platformei, în schemele lor — o clonă fără schemele platformei nu le are) se tipăresc ca `DE_EXPLICAT` (nu schimbă
    codul; coordonatorul le explică în PR-ul de baseline). Dacă numele rolului de livrare nu e un identificator simplu, regula e cea
    strictă: orice rând `acl_implicit` diferit = `NECOMPARABIL`. Fără opțiuni scriptul doar listează diferențele (doar în A / doar în B /
@@ -245,14 +291,23 @@ extensiile, versiunea serverului (și cea minoră: deparsarea). Pentru obiectele
 1. profilul sesiunii + ținta (db, system_identifier, `in_recovery = false`);
 2. `--amprente-migrare scripts/<x>_amprente.sql`: **scriptul existent al migrării, nerescris** — rulează o copie din care se scot exact
    linia `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;` și linia `ROLLBACK;` (fiecare trebuie să apară exact o dată — toate
-   cele 6 scripturi `*_amprente.sql` existente au forma asta) ⇒ rulează în fotografia comună; ieșirea lui (format nealiniat, separator
+   cele 7 scripturi `*_amprente.sql` existente au forma asta) ⇒ rulează în fotografia comună; ieșirea lui (format nealiniat, separator
    ` | `) e delimitată de liniile `=== scriptul de amprente al migrarii …` / `=== sfarsit scriptul de amprente al migrarii ===`.
    **Momentul fotografiei** (`now()` al tranzacției unice, în forma text a sesiunii) se tipărește O DATĂ, pe rândul `MOMENT` (în afara
-   părții revizuite), iar în secțiunea scriptului migrării EXACT acel șir e înlocuit cu marcajul fix `<momentul fotografiei>` (scripturile
-   existente, nerescrise, tipăresc `now()` în antet; fără înlocuire două citiri fără niciun DDL difereau). Nimic altceva nu se normalizează:
-   un alt timestamp din detaliile obiectelor rămâne cum e. Formatul nealiniat e necesar: în cel aliniat lățimea coloanei depinde de
-   lungimea momentului (zerourile finale ale fracțiunii de secundă nu se tipăresc), deci și antetul / separatorul s-ar schimba;
-3. `GLOBAL` + rânduri + md5 pe familii + validarea (`--lista`: toate rândurile); rândurile `CONTEXT`;
+   părții revizuite). În secțiunea scriptului migrării se înlocuiește cu marcajul fix `<momentul fotografiei>` **DOAR câmpul identificat
+   al antetului standard**: rândul de date de imediat după linia exactă `baza | sistem | versiune | la` (formatul nealiniat al citirii),
+   ultimul câmp, și numai dacă e EXACT momentul. Orice altă apariție a aceluiași șir rămâne (o valoare reală egală întâmplător cu momentul
+   nu devine marcaj: două valori reale diferite nu mai pot da secțiuni normalizate identice); antet absent sau în alt format ⇒ nimic nu se
+   normalizează, iar `--recitire` arată diferența (partea sigură). Comparatorul refuză intrarea (cod 2) doar dacă momentul a rămas
+   neînlocuit în acel câmp. **Forma de antet cerută scripturilor de amprente ale migrărilor viitoare**: prima interogare după `SET LOCAL
+   search_path`, exact `SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_system()) AS sistem, version() AS
+   versiune, now() AS la;`. Dintre scripturile existente, cinci au această formă (testul static le numără); **două nu**:
+   `scripts/ofertare_inchidere_garda_amprente.sql` și `scripts/intrebari_cercetare_amprente.sql` tipăresc
+   `to_char(statement_timestamp(), …)`, pe care mecanismul NU îl normalizează (sunt ale unor migrări deja livrate; o recitire cu ele arată
+   momentul ca diferență, de explicat în jurnal). Formatul nealiniat e necesar: în cel aliniat lățimea coloanei depinde de lungimea
+   momentului (zerourile finale ale fracțiunii de secundă nu se tipăresc), deci și antetul / separatorul s-ar schimba;
+3. `GLOBAL` + rânduri + md5 pe familii + validarea (`--lista`: toate rândurile); rândurile `CONTEXT`; cu `--detalii-plasa <fișier nou>`
+   (cere `--lista`) și detaliul plasei `sistem_initdb`, verificat față de rândurile `RAND` (secțiunea 2);
 4. `--radacina 'schema.functie(argumente)' …`: lanțul porților (cel mai bun efort: lexical + `pg_depend`, prin vederi), rândurile `LANT`,
    `INCREDERE` și **SEMNALE** (`EXECUTE dinamic`, vederi citite, alt limbaj, DEFINER nesigure, DEFINER acceptate explicit);
 5. verificarea că toate au rulat în aceeași tranzacție; ROLLBACK.
@@ -296,8 +351,9 @@ Celelalte **semnale** (EXECUTE dinamic, vederi, alt limbaj) nu sunt refuz automa
      semnal (secțiunea 6);
    - explicația **nominală** a fiecărei linii `DE_EXPLICAT`: privilegiile implicite ale altor creatori (care rol, ce schemă) și faptul că
      migrarea nu creează nimic sub ei (creare directă, fără SECURITY DEFINER care creează); fiecare diferență de extensii (care, ce
-     versiune); fiecare diferență de scheme; rândul `sistem_initdb`, dacă diferă (alt build al serverului: același `server_version_num`,
-     alte funcții de la initdb); ce lipsește din clonă (de ex. stub-uri, tabele ale platformei, politici absente);
+     versiune); fiecare diferență de scheme; fiecare rând `sistem_initdb` care diferă — **nominal**: citirile clonei și a țintei cu
+     `--detalii-plasa`, apoi `diff <(cut -f1-3 clona.tsv) <(cut -f1-3 tinta.tsv)` dă obiectele, iar coloana `campuri` câmpul (un hash
+     diferit singur nu dovedește cauza); ce lipsește din clonă (de ex. stub-uri, tabele ale platformei, politici absente);
    - diferențele rămase între liste, **grupate** (pe familii / scheme), fiecare grup cu motivul pentru care nu atinge traseul migrării;
    - proba integrală proprie pe clonă (cu concurență pe tabelele pe care migrarea le blochează) și criteriile de timp / concurență pentru
      proba pe țintă (pasul 7).
@@ -345,6 +401,16 @@ rundei 2 ~510–550 ms pe calcul (garda finală a livrării `20261221a` la ~1.08
 (perimetrul nou nu crește timpul); plasa `sistem_initdb` singură ~10 ms (~3.400 de funcții de la initdb; cost **fix**, nu crește cu
 aplicația); runda 3 completă ~160–163 ms, adică **+5–7% pe catalogul sintetic**. Pe producție (calcul de ~3,5 ori mai mare) costul fix
 estimat e **≤ ~2%** din calcul, dacă PostgreSQL nativ nu e mai lent decât PGlite (de obicei e mai rapid) — de confirmat la proba pe țintă.
+**Runda 4, pe PGlite, același catalog sintetic, 24 de rulări alternate (mediane):** runda 3 ~160 ms; runda 4 ~175 ms (**+9%**), din care:
+regula rândurilor atașate (`ag_par`, crește cu aplicația) ~+3–5 ms (~2–3%, în trei serii de măsurători); plasa funcțiilor în forma
+independentă de build, cu agregatele, ~12,4 ms față de ~9,5 ms (cost fix); plasa relațiilor ~5,5–7,7 ms (cost fix, ~340 de relații de la
+initdb; numărarea rândurilor atașate prin căutări pe index, deci nu crește cu aplicația). Forma rândurilor atașate a fost aleasă după
+plan: un filtru constant pe CTE strica estimarea și ducea la bucle imbricate (`ag_par` are o coloană pe tip de părinte). Ideea celor
+două plase (schema după nume, corpul și implicitele deparsate; relațiile cu numărul rândurilor atașate) a fost verificată de coordonator
+la mărimea reală, pe interogări de probă (aceeași valoare pe clonă și pe producție); forma finală din bloc (cu agregatele și detaliul)
+se reverifică la citirea de baseline (rândurile `sistem_initdb` identice clonă ↔ țintă). Cifra reală a costului total o dă proba
+cu ROLLBACK pe țintă (pasul 7) și `scripts/test_livrare_l15_v2.sh` (cazul f). Costul rundei 4 trece de pragul de ~2% pe catalogul
+sintetic: **folosirea lui cere acordul coordonatorului** (variantele de reducere sunt în raportul rundei).
 
 **Recomandare:** pentru livrările cu amprentă globală plafonul rămâne parametrul runnerului; 2000 ms ajunge doar dacă proba pe țintă arată
 `PLAFON_TIMP` ≤ ~1.500 ms (marjă pentru rețea și lock-uri). **20261221a** cere exact `2000/session` (nu se schimbă): calculul „înainte”
@@ -399,9 +465,10 @@ bash scripts/livrare_migrare.sh --migrare supabase/migrations/20261221a_meteo_xw
 | Probă | Unde | Cine |
 |---|---|---|
 | Blocul + pașii pe PGlite: garda; paritate citire ↔ runner; independența de sesiune; etichete unice; temporare / date / nextval / ANALYZE fără efect; **o schimbare minimă pe fiecare familie** (inclusiv obiecte noi în `pg_catalog` — funcție, tabel, operator — prinse de familiile lor; `sistem_initdb`: `quote_nullable … STRICT`; `acl_sistem`: GRANT / REVOKE pe funcții, relații, coloane, tipuri, schema de sistem, tabelul TOAST al unui catalog) + **mutantul** fiecărei familii; **r3:** contraexemplele recenzentului (auxiliar din `pg_catalog` cu DEFAULT schimbat și cu STRICT: poarta își schimbă rezultatul ⇒ GLOBAL diferă, familia `functie`), câte o schimbare minimă pe un tabel, o coloană, un tip și un operator create în `pg_catalog` (familiile lor), **mutantul perimetrului** (fără ramura „creat după initdb” ⇒ nimic prins), plasa pe `quote_nullable … STRICT` (poarta `false → true`, familia `sistem_initdb`) + mutantul plasei fără STRICT, volatilitate / DEFINER / `proconfig` / proprietar pe funcții de la initdb, limita declarată (ALTER pe o relație de la initdb nevăzut); secretele nu apar; contraexemplul vederii; manifestul scris de mână = diferența reală + detaliile (md5(detaliu) = amprenta) + contextul antetului; drumul bun; manifest cu rând lipsă / în plus / altă amprentă / altă operație; DDL nedeclarat; **regula DEFINER** (contraexemplul `pg_temp, public` chiar funcționează; fără `pg_temp` / dublu / `""`; `"$user"`; schemă inexistentă; CREATE direct / prin PUBLIC / prin apartenență; nume între ghilimele; `public, pg_temp` legitim; `--rol-de-incredere`; acceptarea cu md5 corect / greșit / după schimbarea căii / pentru funcție sigură, din afara lanțului, ne-DEFINER, inexistentă) cu **mutant pe fiecare regulă**; **grantorul** pe tabel și pe coloană (+ mutantul fără grantor); OWNED BY (+ mutant); obiectele mari (permutarea ACL); timpi. Nu se pot rula aici: o versiune minoră nouă (`server_version_num`), etichetele de securitate (fără furnizor) | `node scripts/pglite/test_amprenta_globala_local.mjs` | rulat la livrare (PASS) |
-| Comparatorul de liste: fără opțiuni, `--manifest`, `--recitire`, intrări invalide, eticheta cu TAB; mutant pe fiecare regulă; **r3:** două fotografii care diferă doar prin `MOMENT` ⇒ 0 (mutantul cu `MOMENT` în partea revizuită ⇒ 6), și secțiunea diferă ⇒ 6, `MOMENT` lipsă / dublu / neînlocuit ⇒ 2; citirea reală cu un psql simulat (momente de lungimi diferite) ⇒ secțiunea cu marcajul, `--recitire` 0; mutantul citirii fără înlocuire ⇒ refuz | `bash scripts/test_l15_compara_liste.sh` (doar bash; rulat și de vitest) | CI + livrare |
+| **r4, pe PGlite:** contraexemplul recenzentului (trigger `BEFORE INSERT` pe `information_schema.sql_features` cu o funcție existentă: `INSERT` întoarce 1 → 0 rânduri ⇒ GLOBAL diferă, familiile `trigger` + `sistem_initdb`); câte un caz minim pe un părinte de la initdb pentru regulă, politică, constrângere pe tabel, constrângere pe domeniu (`information_schema.cardinal_number`), valoare implicită (poziția corectă printre coloane), `amop` / `amproc` pe o familie de la initdb, index nou, moștenire în ambele sensuri — cu poarta reală acolo unde există; **mutantul regulii** (`ag_par` fără ramura „rând atașat după initdb”) ⇒ familia nu se mai schimbă, pe FIECARE caz (indexul: mutantul perimetrului; moștenirea: mutantul fiecărui capăt); mutantul dublu (și fără plasa relațiilor) ⇒ GLOBAL identic, ca în r3; plasa relațiilor: RLS pe un tabel de la initdb ⇒ doar `sistem_initdb` (+ mutant), VACUUM + ANALYZE între citiri (cu `relhastriggers` stins) ⇒ GLOBAL identic; agregatele: `CREATE OR REPLACE AGGREGATE bool_and … INITCOND` (pg_proc identic, poarta null → true) ⇒ `sistem_initdb` (+ mutant); câmpurile OID ale plasei funcțiilor sub 12000 în afara schemei; detaliul plasei recalculat independent = rândurile plasei, două detalii diferite ⇒ exact obiectele schimbate; limita declarată (redenumirea unei coloane de la initdb nevăzută) | `node scripts/pglite/test_amprenta_globala_local.mjs` (secțiunile 11 și 13) | rulat la livrare (PASS) |
+| Comparatorul de liste: fără opțiuni, `--manifest`, `--recitire`, intrări invalide, eticheta cu TAB; mutant pe fiecare regulă; **r3:** două fotografii care diferă doar prin `MOMENT` ⇒ 0 (mutantul cu `MOMENT` în partea revizuită ⇒ 6), și secțiunea diferă ⇒ 6, `MOMENT` lipsă / dublu / neînlocuit ⇒ 2; citirea reală cu un psql simulat (momente de lungimi diferite) ⇒ secțiunea cu marcajul, `--recitire` 0; mutantul citirii fără înlocuire ⇒ refuz; **r4:** coliziunea (aceeași valoare și într-un rând de date ⇒ rămâne; două citiri în care ea diferă ⇒ 6; mutantul cu înlocuirea globală ⇒ 0), momentul în alt format și antetul în alt format ⇒ nenormalizate, 6; `--detalii-plasa`: detaliul scris și recalculat = `RAND`, alt obiect ⇒ diferența îl numește, detaliu nereproductibil ⇒ 1 (mutantul fără verificare ⇒ 0), fără `--lista` / fișier existent ⇒ 2, fără opțiune nimic în plus | `bash scripts/test_l15_compara_liste.sh` (doar bash; rulat și de vitest) | CI + livrare |
 | Forma runnerului fără PostgreSQL: argumente, `--aprobare`, mesajul unic cu `--l15`, forma fără plafon, `--genereaza-in`, fără opțiuni | `bash scripts/test_livrare_l15_forma.sh` | coordonatorul (cere python3) |
 | Paritatea căii vechi cu main: aceleași fișiere generate, octet cu octet, cu și fără plafon, cu `--aprobare` | `bash scripts/test_livrare_l15_paritate.sh [<ref>]` | coordonatorul (cere python3) |
-| PostgreSQL 17 real: (a) contraexemplul vederii, (b) DDL concurent cu barieră (cu și fără plafon) + control, (c) manifest greșit, (d) drumul bun, (e) fără opțiuni, (f) timpi rece / cald, (g) `--compara-cu`, (h) `--detalii`, (i) DEFINER nesigur / acceptat, (j) grantorul prin runner, **(k) r3: două citiri reale consecutive cu `--amprente-migrare scripts/meteo_xweather_amprente.sql` ⇒ `--recitire` 0** | `bash scripts/test_livrare_l15_v2.sh <slot>` (WSL, ca postgres) | coordonatorul pe clonă |
+| PostgreSQL 17 real: (a) contraexemplul vederii, (b) DDL concurent cu barieră (cu și fără plafon) + control, (c) manifest greșit, (d) drumul bun, (e) fără opțiuni, (f) timpi rece / cald, (g) `--compara-cu`, (h) `--detalii`, (i) DEFINER nesigur / acceptat, (j) grantorul prin runner, **(k) r3: două citiri reale consecutive cu `--amprente-migrare scripts/meteo_xweather_amprente.sql` ⇒ `--recitire` 0**, **(l) r4: triggerul recenzentului creat între două citiri reale ⇒ GLOBAL diferă (familia `trigger`), apoi RLS pe același tabel ⇒ `sistem_initdb`; (m) VACUUM + ANALYZE între două citiri ⇒ GLOBAL identic; (n) `--detalii-plasa` pe două citiri reale, înainte / după `quote_nullable … STRICT` ⇒ diferența = acea funcție** | `bash scripts/test_livrare_l15_v2.sh <slot>` (WSL, ca postgres) | coordonatorul pe clonă |
 | Regresiile runnerului (neschimbate) | `test_livrare_forma_fin.sh`, `test_livrare_plafon.sh`, `test_portal_e1.sh` (PASS în mediul coordonatorului); `test_sec_rsvti.sh` = regresie **PARȚIALĂ** în mediul coordonatorului: verificarea statică a fluxurilor CI din harness e depășită pe main, iar pasul cu ceasul fix cere o bibliotecă lipsă (n-a rulat) — nu e PASS integral; problemele sunt preexistente, nereparate aici | coordonatorul |
-| Static (CI): bloc ASCII fără backslash, marcaje v2, familii = document, **nicio serializare ACL fără grantor**, perimetrul de sistem, regula DEFINER în citire, opțiunile manifestului, marcajele de mutant, L15 în LECTII | `src/amprentaGlobalaL15v2.test.js` (vitest) | CI |
+| Static (CI): bloc ASCII fără backslash, marcaje v2, familii = document, **nicio serializare ACL fără grantor**, perimetrul de sistem, **r4:** regula rândurilor atașate definită o dată (`ag_par`) și folosită de exact cele 7 familii atașate, plasa (câmpurile, independența de build, rândurile din `ag_plasa`, blocul `AG_PLASA` = începutul catalogului), antetul standard același în citire și comparator, cele 5 scripturi cu antet standard / cele 2 fără, `--detalii-plasa`; regula DEFINER în citire, opțiunile manifestului, marcajele de mutant, L15 în LECTII | `src/amprentaGlobalaL15v2.test.js` (vitest) | CI |
