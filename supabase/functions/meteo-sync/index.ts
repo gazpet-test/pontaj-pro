@@ -18,6 +18,10 @@
 //    conditions/summary / observations/summary, nicio citire din tabelul nou) — funcția se poate publica înaintea migrării 20261221a;
 //  - XW_AER_PE_ZI (0..4, implicit 4 = ca înainte): câte dintre rulările complete cer și airquality (cost 5).
 //
+// r6: TOATE așteptările (corpul cererii, autentificarea, credențialele, citirile / scrierile, fetch-ul și corpul răspunsurilor) trec prin
+// cuTermen / cerereRetea; depășirea înaintea primului pas = 504 „termen depășit la <ce>”. Coada zilnică are două părți (ieri / restanțe,
+// partiCoada). Pasul zilnic raportează restante_vechi (zilele cu raport și fără vreme ieșite din fereastră). cota.aer_pe_zi_sursa.
+//
 // Istoricul meteo zilnic (migrarea 20261206a → public.meteo_istoric_zilnic), în ACEEAȘI funcție și în ACELAȘI cron (fără automatizare nouă):
 //  - pasul zilnic: la rularea cron de la 04:05 UTC (o dată pe zi), pentru site-urile active cu meteo_activ și coordonate, se reiau ultimele
 //    ZILE_REFACERE zile până ieri din arhiva Open-Meteo (fără cheie; cu OPEN_METEO_API_KEY dacă e setat) și se scriu cu upsert pe (site_id, data);
@@ -44,7 +48,7 @@ import { planCitire, intervale, urlArhiva, randuriDinRaspuns, ieriBucuresti, est
 import { planXweather, procesZi, clasificaRaspuns, valoriDinConditii, cerereConditii, cerereObservatii, cuCredentiale, ieriBuc,
   continuaPana, zConfirmata, PRIMA_ZI_XW, MAX_ZILE_APEL, VALORI, STATIE_EXTRA,
   motivNesalvat, rezultatLot, statusHttpXweather, type Nesalvata,
-  fereastraZilnica, rotesteCoada, poateIncepeZi, motivOprire, MAX_UNITATI_XW_APEL, BUGET_XW_ZILNIC_MS, BUGET_XW_APEL_MS, MIN_TIMP_ZI_MS,
+  fereastraZilnica, rotesteCoada, partiCoada, esteIeri, poateIncepeZi, motivOprire, MAX_UNITATI_XW_APEL, BUGET_XW_ZILNIC_MS, BUGET_XW_APEL_MS, MIN_TIMP_ZI_MS,
 } from './xweather_zilnic_logica.ts';
 import { contorNou, inregistreaza, depasire, motivDepasire, endpointDin, blocCota, totalPrudent, costZiSantier, gardaCota, incapeInCota,
   aerPeZi, cereAer, zilnicActiv, ORE_COMPLETE_UTC, MAX_UNITATI_XW_RULARE, type Contor,
@@ -62,16 +66,45 @@ const MIN_TIMP_CERERE_MS = 2_000;         // o cerere nouă (Xweather / Open-Met
 const MIN_TIMP_PAS_MS = 5_000;            // un site / un pas nou începe doar dacă mai sunt cel puțin 5 s
 const NEAJUNS_TERMEN = 'neajuns (termen)';
 
-// o promisiune (citire / scriere BD) așteptată cel mult până la termen: după el handlerul nu o mai așteaptă (eroare „termen depășit”)
-async function cuTermen<T>(p: PromiseLike<T>, termen: number, ce: string): Promise<T> {
+// r6: eroarea de termen e distinctă de erorile BD / rețea; ajunsă până la handler (înaintea primului pas: corpul cererii, autentificarea,
+// credențialele) devine răspunsul 504 „termen depășit la <ce>”, sub cele 120 s ale cronului
+class TermenDepasit extends Error {
+  constructor(ce: string) { super(`termen depășit la ${ce}`); }
+}
+// r6: tipul minim al răspunsului bazei ({ data, error }); clientul din funcțiile de mai jos e declarat `any`, iar fără tipul implicit
+// rezultatul lui cuTermen ar rămâne `unknown` (deno check)
+type EroareBd = { message: string; code?: string };
+// deno-lint-ignore no-explicit-any
+type RezBd<D = any> = { data: D | null; error: EroareBd | null };
+type Creds = { client_id?: string | null; client_secret?: string | null };
+// SINGURUL ajutător de termen: o promisiune / un „thenable” (builderul bazei e leneș: fiecare consumare = o cerere) e consumat O SINGURĂ dată
+// (Promise.resolve) și așteptat cel mult până la termen; după el handlerul nu îl mai așteaptă (TermenDepasit). Termen trecut = nici nu se consumă.
+async function cuTermen<T = RezBd>(p: PromiseLike<T>, termen: number, ce: string): Promise<T> {
   const ms = termen - Date.now();
-  if (ms <= 0) throw new Error(`${NEAJUNS_TERMEN}: ${ce}`);
+  if (ms <= 0) throw new TermenDepasit(ce);
   let t: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([Promise.resolve(p), new Promise<never>((_, rej) => { t = setTimeout(() => rej(new Error(`termen depășit: ${ce}`)), ms); })]);
+    return await Promise.race([Promise.resolve(p), new Promise<never>((_, rej) => { t = setTimeout(() => rej(new TermenDepasit(ce)), ms); })]);
   } finally { clearTimeout(t); }
 }
 const dormi = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+// r6: SINGURUL loc prin care pleacă o cerere de rețea (Xweather și Open-Meteo). Timpul ei = min(TIMP_CERERE_MS, termen − acum); cererea și
+// citirea corpului sunt așteptate prin cuTermen (nimic nu mai e așteptat după termen), iar la depășire cererea e anulată (abort).
+// Corpul ilizibil / tăiat la termen → json: undefined, cu statusul și antetele primite (costul din antete rămâne în contor).
+type RaspunsRetea = { status: number; antete: Headers; json: unknown };
+async function cerereRetea(url: string, termen: number, ce: string): Promise<RaspunsRetea> {
+  const lim = Math.min(Date.now() + TIMP_CERERE_MS, termen);
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), Math.max(0, lim - Date.now()));
+  try {
+    let r: Response;
+    try { r = await cuTermen(fetch(url, { signal: ctl.signal }), lim, ce); }
+    catch (e) { ctl.abort(); throw e; }
+    try { return { status: r.status, antete: r.headers, json: await cuTermen(r.json(), lim, ce) }; }
+    catch { ctl.abort(); return { status: r.status, antete: r.headers, json: undefined }; }
+  } finally { clearTimeout(t); }
+}
 
 // ── r5: SINGURUL loc prin care pleacă cererile Xweather (vremea curentă, pasul zilnic, comanda owner-ului) ──
 // Credențialele doar în URL-ul cererii (niciodată în mesaje / tabel / contor). Fiecare cerere TRIMISĂ intră în contor (costul din antete sau
@@ -83,16 +116,13 @@ function clientXweather(cid: string, csec: string, contor: Contor) {
     const endpoint = endpointDin(cerere);
     for (;;) {
       if (contor.oprit) return { status: 0, json: null, cerere, netrimisa: 'oprit: ' + contor.oprit };
-      const ms = Math.min(TIMP_CERERE_MS, termen - Date.now());
-      if (ms < MIN_TIMP_CERERE_MS) return { status: 0, json: null, cerere, netrimisa: NEAJUNS_TERMEN };
-      const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), ms);
+      if (termen - Date.now() < MIN_TIMP_CERERE_MS) return { status: 0, json: null, cerere, netrimisa: NEAJUNS_TERMEN };
+      // deno-lint-ignore no-explicit-any
       let status = 0, json: any = null, antete: Headers | null = null;
       try {
-        const r = await fetch(`${API}/${cuCredentiale(cerere, cid, csec)}`, { signal: ctl.signal });
-        status = r.status; antete = r.headers;
-        json = await r.json().catch(() => null);
-      } catch { status = 0; } finally { clearTimeout(t); }
+        const r = await cerereRetea(`${API}/${cuCredentiale(cerere, cid, csec)}`, termen, 'cererea Xweather');
+        status = r.status; antete = r.antete; json = r.json ?? null;
+      } catch { status = 0; }
       inregistreaza(contor, endpoint, status, antete, Date.now());
       const d = depasire(status, json);
       if (d === 'minut' && contor.asteptari_minut === 0) {
@@ -142,16 +172,11 @@ async function sincronizeazaIstoric(db: any, { mod, deLa, siteId, termen }: { mo
     if (termen - Date.now() < MIN_TIMP_PAS_MS) { r.ok = false; r.complet = false; r.eroare = NEAJUNS_TERMEN; neajunse++; rez.push(r); continue; }
     try {
       for (const [de, pana] of intervale(p.de, p.pana)) {
-        const ms = Math.min(TIMP_CERERE_MS, termen - Date.now());
-        if (ms < MIN_TIMP_CERERE_MS) throw new Error(NEAJUNS_TERMEN);
-        const ctl = new AbortController();
-        const t = setTimeout(() => ctl.abort(), ms);
-        let j: unknown;
-        try {
-          const resp = await fetch(urlArhiva({ lat: p.lat, lng: p.lng, de, pana, cheie }), { signal: ctl.signal });
-          if (!resp.ok) throw new Error(`arhiva Open-Meteo ${resp.status}`);
-          j = await resp.json();
-        } finally { clearTimeout(t); }
+        if (termen - Date.now() < MIN_TIMP_CERERE_MS) throw new Error(NEAJUNS_TERMEN);
+        const resp = await cerereRetea(urlArhiva({ lat: p.lat, lng: p.lng, de, pana, cheie }), termen, 'arhiva Open-Meteo');
+        if (resp.status < 200 || resp.status > 299) throw new Error(`arhiva Open-Meteo ${resp.status}`);
+        if (resp.json === undefined) throw new Error('arhiva Open-Meteo: răspuns ilizibil sau tăiat la termen');
+        const j = resp.json;
         const { randuri, lipsa, respinse, absente } = randuriDinRaspuns(j, { site_id: p.site_id, lat: p.lat, lng: p.lng, de, pana, preluatLa: new Date().toISOString() });
         r.lipsa += lipsa; r.respinse += respinse; r.absente += absente;
         for (let i = 0; i < randuri.length; i += LOT_UPSERT) {
@@ -218,6 +243,36 @@ async function zileCuRaport(db: any, siteIds: number[], de: string, termen: numb
   return out;
 }
 
+// r6 (P2, L12): restanțele IEȘITE din fereastră = zilele-șantier cu raport zilnic și fără vreme, mai vechi decât fereastra pasului automat
+// (le mai poate face doar comanda owner-ului). Semnal operațional, doar la pasul zilnic (întrerupătorul pornit): două citiri mărginite, câte
+// O pagină (rapoartele dinaintea ferestrei, de la cea mai veche; vremea salvată pe aceleași zile), fără paginare și fără cereri la furnizor.
+// Pagină plină = cifra e un minim (`exact: false`). Fără timp → „neajuns (termen)” (nu zero); eroarea de citire → { eroare } (L18).
+const LIMITA_RESTANTE = 1000;
+// deno-lint-ignore no-explicit-any
+async function restanteVechi(db: any, siteIds: number[], de: string, termen: number) {
+  if (termen - Date.now() < MIN_TIMP_PAS_MS) return NEAJUNS_TERMEN;
+  const gol = { numar: 0, exact: true, cea_mai_veche: null as string | null, exemple: [] as { site_id: number; zi: string }[], inainte_de: de };
+  if (!siteIds.length || de <= PRIMA_ZI_XW) return gol;
+  try {
+    const { data: rap, error: er } = await cuTermen<RezBd<{ site_id: number; data: string }[]>>(db.from('rapoarte_zilnice').select('site_id, data')
+      .in('site_id', siteIds).gte('data', PRIMA_ZI_XW).lt('data', de).order('data', { ascending: true }).limit(LIMITA_RESTANTE), termen, 'restanțele vechi (rapoarte)');
+    if (er) return { eroare: 'restanțele vechi: rapoartele nu se pot citi: ' + er.message };
+    const zile = new Map<string, { site_id: number; zi: string }>();
+    for (const r of rap || []) if (esteZi(String(r.data))) zile.set(`${r.site_id}|${r.data}`, { site_id: Number(r.site_id), zi: String(r.data) });
+    if (!zile.size) return gol;
+    const ord = [...zile.values()].sort((a, b) => (a.zi < b.zi ? -1 : a.zi > b.zi ? 1 : a.site_id - b.site_id));
+    const { data: vr, error: ev } = await cuTermen<RezBd<{ site_id: number; data: string }[]>>(db.from('v_meteo_zilnic_xweather').select('site_id, data')
+      .in('site_id', siteIds).gte('data', ord[0].zi).lt('data', de).order('data', { ascending: true }).limit(LIMITA_RESTANTE), termen, 'restanțele vechi (vremea)');
+    if (ev) return { eroare: 'restanțele vechi: vremea salvată nu se poate citi: ' + ev.message };
+    for (const v of vr || []) zile.delete(`${v.site_id}|${v.data}`);
+    const rest = ord.filter(x => zile.has(`${x.site_id}|${x.zi}`));
+    return { numar: rest.length, exact: (rap || []).length < LIMITA_RESTANTE && (vr || []).length < LIMITA_RESTANTE,
+      cea_mai_veche: rest[0]?.zi ?? null, exemple: rest.slice(0, 10), inainte_de: de };
+  } catch (e) {
+    return e instanceof TermenDepasit ? NEAJUNS_TERMEN : { eroare: 'restanțele vechi: ' + (e as Error).message };
+  }
+}
+
 // țintele vremii curente (aceeași regulă ca bucla ei): coordonate sau localitate, și sediu / raport zilnic necesar (sau `toate`)
 const tinteCurente = (sites: any[], toate: boolean) =>
   (sites || []).filter(s => (s.lat && s.lng) || s.localitate_meteo).filter(s => s.tip_locatie === 'sediu' || s.raport_zilnic_necesar || toate);
@@ -271,10 +326,13 @@ async function sincronizeazaXweather(db: any, xw: ClientXw, contor: Contor,
     pl = planXweather(tinte, existente, start, { mod, ieri, deLa, pana, maxZile, reverifica, rapoarte });
   } catch (e) { return { ok: false, complet: false, eroare: (e as Error).message }; }
 
+  // r6 (P2): restanțele ieșite din fereastră, citite DUPĂ zilele servite (au prioritate), sub termenul global
+  const cuCoord = tinte.filter((s: any) => coordValide(s.lat, s.lng)).map((s: any) => s.id);
+  const restante = () => restanteVechi(db, cuCoord, fereastraZilnica(ieri), termenGlobal);
   // r5 (P2): nimic de făcut (toate țintele ferestrei au vreme) → nicio cerere, nicio unitate
   if (mod === 'zilnic' && !pl.sarcini.length) {
     return { ...rezultatLot([], []), mod, ieri, sarcini: 0, nimic_de_facut: true, accese_xweather: 0, unitati_xweather: 0,
-      sarite: pl.sarite, santiere_active: pl.activi, durata_ms: Date.now() - t0 };
+      sarite: pl.sarite, santiere_active: pl.activi, restante_vechi: await restante(), durata_ms: Date.now() - t0 };
   }
   // garda de cotă și plafonul rulării (în unități): zilnic = min(MAX_UNITATI_XW_RULARE, disponibilul de după rezerva vremii curente), sau
   // plafonul mic dacă cota e necunoscută; comanda owner-ului = MAX_UNITATI_XW_APEL (garda pe zi se aplică din antetele primite)
@@ -282,7 +340,9 @@ async function sincronizeazaXweather(db: any, xw: ClientXw, contor: Contor,
   const plafon = mod === 'zilnic' ? garda.plafon : MAX_UNITATI_XW_APEL;
   // ordinea parcurgerii (zilnic): rotită cu ziua calendaristică, pas = zilele-șantier care încap sigur în plafon
   const pas = Math.max(1, Math.floor(plafon / costZiSantier(contor)));
+  // r6 (P1): când există și „ieri” și restanțe, cel puțin o treime din locuri e rezervată restanțelor (partiCoada), restul lui „ieri”
   const rot = mod === 'zilnic' ? rotesteCoada(pl.sarcini, ieri, pas) : { sarcini: pl.sarcini, pornire: 0 };
+  const parti = mod === 'zilnic' ? partiCoada(pl.sarcini.filter(x => esteIeri(x, ieri)).length, pl.sarcini.filter(x => !esteIeri(x, ieri)).length, pas, ieri) : null;
 
   const r = { scrise: 0, versiuni_noi: 0, neschimbate: 0, deja: 0, lipsa: 0, respinse: 0, tranzitorii: 0, neajunse: 0, oprite: 0,
     reverificari_incomplete: 0, statii_pastrate: 0, erori: [] as string[] };
@@ -349,9 +409,9 @@ async function sincronizeazaXweather(db: any, xw: ClientXw, contor: Contor,
     reverificari_incomplete_lista: incomplete.slice(0, 62), aliasuri_folosite: aliasuri, zile_fara_date: faraDate.slice(0, 62),
     sarite: pl.sarite, ramase: pl.ramase, continua_pana: cursor,
     accese_xweather: contor.cereri - c0, unitati_xweather: unitati(), plafon_unitati: plafon, cost_zi_santier: costZiSantier(contor),
-    garda_cota: garda, cota_necunoscuta: !garda.cunoscuta, rotatie: { pornire: rot.pornire, pas }, buget_ms: buget, durata_ms: Date.now() - t0, oprit,
-    sarcini_pe_tinta: { activ: pl.sarcini.filter(x => x.tinta === 'activ').length, raport: pl.sarcini.filter(x => x.tinta === 'raport').length },
-    santiere_active: pl.activi };
+    garda_cota: garda, cota_necunoscuta: !garda.cunoscuta, rotatie: { pornire: rot.pornire, pas, ...(parti ? { parti } : {}) }, buget_ms: buget,
+    oprit, sarcini_pe_tinta: { activ: pl.sarcini.filter(x => x.tinta === 'activ').length, raport: pl.sarcini.filter(x => x.tinta === 'raport').length },
+    santiere_active: pl.activi, ...(mod === 'zilnic' ? { restante_vechi: await restante() } : {}), durata_ms: Date.now() - t0 };
 }
 
 // ── vremea curentă (meteo_cache): neschimbată ca regulă; r5 = prin clientul unic (cost + cotă), sub termen, aerul după XW_AER_PE_ZI ──
@@ -421,30 +481,45 @@ const CORS: Record<string, string> = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+type Json = (b: unknown, status?: number) => Response;
 Deno.serve(async (req: Request) => {
   // r5: termenul global se socotește de la INTRAREA în handler
   const t0 = Date.now();
   const termen = t0 + TERMEN_HANDLER_MS;
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
-  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
+  const json: Json = (b, status = 200) => new Response(JSON.stringify(b), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
+  // r6: TOATE așteptările handlerului (corpul cererii, autentificarea, credențialele, citirile / scrierile, rețeaua) trec prin cuTermen /
+  // cerereRetea. Pașii își prind singuri depășirea (o raportează și merg mai departe); cea care ajunge aici e dinaintea primului pas → 504.
+  try {
+    return await proceseaza(req, t0, termen, json);
+  } catch (e) {
+    if (e instanceof TermenDepasit) return json({ ok: false, error: e.message, termen: { ms: TERMEN_HANDLER_MS, durata_ms: Date.now() - t0 } }, 504);
+    throw e;
+  }
+});
+
+async function proceseaza(req: Request, t0: number, termen: number, json: Json): Promise<Response> {
   const SUPA_URL = Deno.env.get('SUPABASE_URL')!;
   const db = createClient(SUPA_URL, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-  let body: any = {}; try { body = await req.json(); } catch { /* gol */ }
+  // deno-lint-ignore no-explicit-any
+  let body: any = {};
+  try { body = await cuTermen(req.json(), termen, 'corpul cererii'); } catch (e) { if (e instanceof TermenDepasit) throw e; /* gol */ }
 
   // autentificare: secret cron sau JWT user
   const sec = req.headers.get('x-meteo-secret') || '';
   let esteOwner = false;
   if (sec) {
-    const { data: cs } = await db.rpc('meteo_cron_secret');
+    const { data: cs } = await cuTermen<RezBd<string>>(db.rpc('meteo_cron_secret'), termen, 'secretul cronului');
     if (!cs || cs !== sec) return json({ error: 'secret invalid' }, 401);
   } else {
     const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
     if (!jwt) return json({ error: 'fără autentificare' }, 401);
     const uc = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } });
-    const { data } = await uc.auth.getUser();
+    const { data } = await cuTermen(uc.auth.getUser(), termen, 'verificarea utilizatorului');
     if (!data?.user) return json({ error: 'token invalid' }, 401);
     // rolul se verifică în cod (verify_jwt nu ajunge: cheia anon e și ea un JWT valid)
-    const { data: pr } = await db.from('profiles').select('is_owner').eq('id', data.user.id).maybeSingle();
+    const { data: pr } = await cuTermen<RezBd<{ is_owner: boolean | null }>>(db.from('profiles').select('is_owner').eq('id', data.user.id).maybeSingle(),
+      termen, 'profilul utilizatorului');
     esteOwner = pr?.is_owner === true;
   }
 
@@ -452,7 +527,7 @@ Deno.serve(async (req: Request) => {
   const zilnicPornit = zilnicActiv(Deno.env.get('XW_ZILNIC_ACTIV'));
   const aer = aerPeZi(Deno.env.get('XW_AER_PE_ZI'));
   const contor = contorNou();
-  const cota = () => ({ ...blocCota(contor), aer_pe_zi: aer.n, aer_pe_zi_invalid: aer.invalid, pas_zilnic_activ: zilnicPornit });
+  const cota = () => ({ ...blocCota(contor), aer_pe_zi: aer.n, aer_pe_zi_invalid: aer.invalid, aer_pe_zi_sursa: aer.sursa, pas_zilnic_activ: zilnicPornit });
   const OPRIT_CONFIG = 'pas zilnic oprit (configurare)';
 
   // ── istoricul meteo zilnic (20261206a) ──
@@ -478,7 +553,7 @@ Deno.serve(async (req: Request) => {
     if (!Number.isInteger(maxZile) || maxZile < 1 || maxZile > MAX_ZILE_APEL) return json({ error: `max_zile între 1 și ${MAX_ZILE_APEL}` }, 400);
     if (body.reverifica != null && typeof body.reverifica !== 'boolean') return json({ error: 'reverifica: true / false' }, 400);
     const reverifica = body.reverifica === true;
-    const { data: cr } = await db.rpc('meteo_xweather_creds');
+    const { data: cr } = await cuTermen<RezBd<Creds>>(db.rpc('meteo_xweather_creds'), termen, 'credențialele Xweather');
     if (!cr?.client_id || !cr?.client_secret) return json({ error: 'XWEATHER_CLIENT_ID / XWEATHER_CLIENT_SECRET lipsă în Vault' }, 500);
     const xw = await sincronizeazaXweather(db, clientXweather(cr.client_id, cr.client_secret, contor), contor,
       { mod: 'backfill', siteId, deLa, pana, maxZile, reverifica, termenGlobal: termen, aer: aer.n });
@@ -488,7 +563,7 @@ Deno.serve(async (req: Request) => {
 
   // o dată pe zi din cron; la cerere doar owner-ul (pașii scriu date preluate din exterior)
   const pasZilnic = !!sec && new Date().getUTCHours() === ORA_ISTORIC_UTC;
-  const { data: creds } = await db.rpc('meteo_xweather_creds');
+  const { data: creds } = await cuTermen<RezBd<Creds>>(db.rpc('meteo_xweather_creds'), termen, 'credențialele Xweather');
   const cid = creds?.client_id, csec = creds?.client_secret;
   const xwc = cid && csec ? clientXweather(cid, csec, contor) : null;
 
@@ -504,10 +579,12 @@ Deno.serve(async (req: Request) => {
   if (!xwc) return json({ error: 'XWEATHER_CLIENT_ID / XWEATHER_CLIENT_SECRET lipsă în Vault', istoric }, 500);
 
   // 3) rezumatul zilnic Xweather: o dată pe zi din cron; la cerere doar owner-ul; DOAR cu XW_ZILNIC_ACTIV=1
+  // deno-lint-ignore no-explicit-any
   let xweather: any = null;
   if (pasZilnic || (body.xweather_zilnic && (sec || esteOwner))) {
     if (!zilnicPornit) xweather = { activ: false, motiv: OPRIT_CONFIG };
-    else if (termen - Date.now() < MIN_TIMP_ZI_MS) xweather = { ok: false, complet: false, neajuns: NEAJUNS_TERMEN, accese_xweather: 0, unitati_xweather: 0 };
+    else if (termen - Date.now() < MIN_TIMP_ZI_MS) xweather = { ok: false, complet: false, neajuns: NEAJUNS_TERMEN, accese_xweather: 0, unitati_xweather: 0,
+      restante_vechi: NEAJUNS_TERMEN };
     else xweather = await sincronizeazaXweather(db, xwc, contor, { mod: 'zilnic', termenGlobal: termen, aer: aer.n });
   }
 
@@ -521,4 +598,4 @@ Deno.serve(async (req: Request) => {
   return json({ ok: true, n: rez.length, rez, eroare_curente: curent?.eroare ?? null, istoric, xweather, xweather_ok: xwOk, accese_xweather: xwAccese,
     cota: cota(), termen: { ms: TERMEN_HANDLER_MS, durata_ms: Date.now() - t0 } },
     statusHttpXweather(xwRulat ? xweather : null));
-});
+}

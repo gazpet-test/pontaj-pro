@@ -54,6 +54,19 @@ function stare({ sites, rapoarte = [], vreme = [], profiles = [], useri = {} }) 
     tabele: { sites, executie_proiecte: [], rapoarte_zilnice: rapoarte.map((r, i) => ({ id: i + 1, ...r })), v_meteo_zilnic_xweather: vreme, profiles },
     scrise: {}, citite: [], useri, zilnic: [], curente: 0, curenteEp: [], openMeteo: 0, timpi: [],
     rpc: { meteo_cron_secret: SECRET, meteo_xweather_creds: { client_id: 'ID', client_secret: 'SEC' } },
+    // r6: fiecare „thenable” al bazei (builder / rpc / auth) își numără consumările; agata(eticheta, nr) = acel apel nu se mai termină
+    consumari: [], apeluri: {}, agata: null,
+  }
+}
+// r6: un „thenable” leneș ca builderul supabase-js: fiecare `then` = o cerere (consumare); agățat = nu se termină niciodată
+function thenable(st, eticheta, exec) {
+  const nr = (st.apeluri[eticheta] = (st.apeluri[eticheta] || 0) + 1)
+  const c = { eticheta, n: 0 }
+  st.consumari.push(c)
+  return (ok, err) => {
+    c.n++
+    if (st.agata?.(eticheta, nr)) return new Promise(() => {})
+    return Promise.resolve().then(exec).then(ok, err)
   }
 }
 function clientSimulat(st) {
@@ -61,7 +74,7 @@ function clientSimulat(st) {
     const tok = (opt?.global?.headers?.Authorization || '').replace(/^Bearer /, '')
     const from = (nume) => {
       const filtre = []
-      let ordine = null, limita = null, unic = false, scriere = null
+      let ordine = null, limita = null, unic = false, scriere = null, then = null
       const exec = () => {
         if (scriere) { (st.scrise[nume] ||= []).push(...[].concat(scriere)); return { data: null, error: null } }
         st.citite.push(nume)
@@ -76,19 +89,22 @@ function clientSimulat(st) {
         gte: (c, v) => (filtre.push(r => r[c] >= v), q),
         lte: (c, v) => (filtre.push(r => r[c] <= v), q),
         gt: (c, v) => (filtre.push(r => r[c] > v), q),
+        lt: (c, v) => (filtre.push(r => r[c] < v), q),
         in: (c, vs) => (filtre.push(r => vs.includes(r[c])), q),
         order: (c, o = {}) => ((ordine = [c, o.ascending !== false]), q),
         limit: (k) => ((limita = k), q),
         maybeSingle: () => ((unic = true), q),
         insert: (row) => ((scriere = row), q),
         upsert: (row) => ((scriere = row), q),
-        then: (ok, err) => Promise.resolve().then(exec).then(ok, err),
+        // eticheta se fixează la prima consumare: „scrie:<tabel>” sau „from:<tabel>”
+        then: (ok, err) => (then ||= thenable(st, (scriere ? 'scrie:' : 'from:') + nume, exec))(ok, err),
       }
       return q
     }
+    const rpc = (f) => ({ then: thenable(st, 'rpc:' + f, () => ({ data: st.rpc[f] ?? null, error: null })) })
     return {
-      from, rpc: async (f) => ({ data: st.rpc[f] ?? null, error: null }),
-      auth: { getUser: async () => ({ data: { user: st.useri[tok] ? { id: st.useri[tok] } : null } }) },
+      from, rpc,
+      auth: { getUser: () => ({ then: thenable(st, 'auth:getUser', () => ({ data: { user: st.useri[tok] ? { id: st.useri[tok] } : null } })) }) },
     }
   }
 }
@@ -111,14 +127,30 @@ const curentOk = { success: true, error: null, response: [{ periods: [{ tempC: 5
 const epCurent = (c) => /^([a-z]+)\//.exec(c)[1]
 // raspuns({ ep, site, zi }) → 'ok' | 'retea' | { status, json, antete? } (vremea zilei); curent({ ep }) → idem (vremea curentă);
 // pasMs / curentPasMs / omPasMs = cât „durează” o cerere (ceasul simulat avansează)
-function retea(st, siteDupaLat, { raspuns = () => 'ok', pasMs = 0, antete = anteteImplicite, curent = () => 'ok', curentPasMs = 0, omPasMs = 0 } = {}) {
+// r6: agataRetea(url) = 'cerere' (fetch-ul nu se mai termină) | 'corp' (antetele vin, corpul nu se mai termină) | null; omOk = arhiva
+// Open-Meteo răspunde valid (altfel 503)
+const corpAgatat = (status, antete = {}) => new Response(new ReadableStream({ start() {} }), { status, headers: antete })
+function arhivaOk(u) {
+  const q = new URL(u).searchParams
+  const zile = []
+  for (let d = q.get('start_date'); d <= q.get('end_date'); d = new Date(Date.parse(d + 'T12:00:00Z') + 864e5).toISOString().slice(0, 10)) zile.push(d)
+  const v = (x) => zile.map(() => x)
+  return { latitude: 44, longitude: 26, elevation: 100,
+    daily_units: { precipitation_sum: 'mm', rain_sum: 'mm', snowfall_sum: 'cm', temperature_2m_min: '°C', temperature_2m_max: '°C', wind_speed_10m_max: 'km/h', wind_gusts_10m_max: 'km/h', weather_code: 'wmo code' },
+    daily: { time: zile, precipitation_sum: v(1), rain_sum: v(1), snowfall_sum: v(0), temperature_2m_min: v(1), temperature_2m_max: v(5), wind_speed_10m_max: v(10), wind_gusts_10m_max: v(20), weather_code: v(3) } }
+}
+function retea(st, siteDupaLat, { raspuns = () => 'ok', pasMs = 0, antete = anteteImplicite, curent = () => 'ok', curentPasMs = 0, omPasMs = 0, agataRetea = () => null, omOk = false } = {}) {
   globalThis.fetch = async (url) => {
     const u = String(url)
+    const ag = agataRetea(u)
+    if (ag === 'cerere') return new Promise(() => {})
     if (u.includes('open-meteo.com')) {
       st.openMeteo++; st.timpi.push(Date.now())
       if (omPasMs) vi.setSystemTime(Date.now() + omPasMs)
-      return json({}, 503)
+      if (ag === 'corp') return corpAgatat(200)
+      return omOk ? json(arhivaOk(u), 200) : json({}, 503)
     }
+    if (ag === 'corp') return corpAgatat(200, cota())
     if (!u.startsWith(XW)) throw new Error('rețea neașteptată: ' + u)
     const c = u.slice(XW.length)
     if (!/[?&]client_id=ID&client_secret=SEC$/.test(c)) throw new Error('credențiale lipsă în cerere')
@@ -169,6 +201,23 @@ async function ruleaza(st, { index, logica, cota: cotaTs, env, cerere, ...net } 
   return { status: res.status, body: await res.json() }
 }
 const cereriCond = (st) => st.zilnic.filter(x => x.ep === 'conditions').map(x => `${x.site}:${x.zi}`)
+// r6: rularea cu CEAS SIMULAT complet (Date + setTimeout): un apel agățat nu se termină niciodată, ceasul avansează în pași de 250 ms până
+// la 130 s; întoarce dacă a plecat răspunsul și după cât timp (cronul așteaptă 120 s)
+async function ruleazaCuCeas(st, { index, logica, cota: cotaTs, env, cerere, ...net } = {}) {
+  globalThis.__xwSupabase = { createClient: clientSimulat(st) }
+  retea(st, new Map(st.tabele.sites.map(s => [s.lat, s.id])), net)
+  const h = await incarcaHandler({ index, logica, cota: cotaTs, env })
+  const acum = Date.now()
+  // (useFakeTimers peste ceasul deja simulat din beforeEach nu reinstalează nimic: întâi ceasul real, apoi ceasul complet)
+  vi.useRealTimers()
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+  vi.setSystemTime(acum)
+  const req = cerere || new Request('http://functie.test/meteo-sync', { method: 'POST', headers: { 'x-meteo-secret': SECRET }, body: '{}' })
+  let gata = null
+  h(req).then(async (r) => { const ms = Date.now() - acum; gata = { status: r.status, body: await r.json(), ms } }, (e) => { gata = { exceptie: e } })
+  for (let i = 0; i < 520 && !gata; i++) await vi.advanceTimersByTimeAsync(250)
+  return gata ? { raspuns: true, ...gata } : { raspuns: false, ms: Date.now() - acum }
+}
 
 // scenariul țintelor: 1 = raport acum 13 zile (activ); 2 = raport acum 15 zile (inactiv, ziua lui fără vreme); 3 = raport cu vreme;
 // 4 = fără rapoarte; 5 = sediul (vremea curentă, fără rapoarte)
@@ -656,5 +705,251 @@ describe('mutanții pică (L25)', () => {
     const st = stare({ sites: [santier(1)], rapoarte: [{ site_id: 1, data: '2026-11-10' }], vreme: zileInapoi('2026-11-12', 7).map(z => vremeZi(1, z)) })
     await ruleaza(st, { logica: mutant(LOGICA, [["          if (ex.has(d) || d < PRIMA_ZI_XW", "          if (d < PRIMA_ZI_XW"]]) })
     expect(st.zilnic.length).toBeGreaterThan(0)
+  })
+})
+
+// ═══════════════════════════════════════════ r6 ═══════════════════════════════════════════
+const OWNER = { profiles: [{ id: 'u-owner', is_owner: true }], useri: { 'tok-owner': 'u-owner' } }
+const caOwner = (body) => new Request('http://functie.test/meteo-sync', { method: 'POST', headers: { Authorization: 'Bearer tok-owner' }, body: JSON.stringify(body) })
+// scenariul complet al rulării de la 04:05: sediul 9 (vremea curentă), șantierul 1 activ cu proiect (raport 11.11) + zile vechi fără vreme
+// (ieșite din fereastră: 01.10, 12.10), ca TOATE punctele de așteptare să fie atinse
+const stareToate = (o = {}) => {
+  const st = stare({ sites: [santier(1, { proiect_id: 7 }), sediu(9)], rapoarte: [{ site_id: 1, data: '2026-11-11' }, { site_id: 1, data: '2026-10-12' }, { site_id: 1, data: '2026-10-01' }], ...OWNER, ...o })
+  st.tabele.executie_proiecte = [{ id: 7, data_start: '2026-09-01' }]
+  return st
+}
+const ag = (eticheta, nr = null) => (e, n) => e === eticheta && (nr == null || n === nr)
+
+describe('r6 P1 — termenul global acoperă TOATE așteptările (ceas simulat: apelul agățat nu se mai termină)', () => {
+  // [ce, pregătire] → răspunsul pleacă la cel mult 100 s (sub cele 120 s ale cronului), iar mesajul arată ce s-a agățat
+  const CAZURI = [
+    // înaintea primului pas: 504 „termen depășit la <ce>”
+    ['corpul cererii', { cerere: () => new Request('http://functie.test/meteo-sync', { method: 'POST', headers: { 'x-meteo-secret': SECRET }, body: new ReadableStream({ start() {} }), duplex: 'half' }) }, 504, 'termen depășit la corpul cererii'],
+    ['secretul cronului', { agata: ag('rpc:meteo_cron_secret') }, 504, 'termen depășit la secretul cronului'],
+    ['verificarea utilizatorului (JWT)', { agata: ag('auth:getUser'), cerere: () => caOwner({}) }, 504, 'termen depășit la verificarea utilizatorului'],
+    ['profilul (rolul) utilizatorului', { agata: ag('from:profiles'), cerere: () => caOwner({}) }, 504, 'termen depășit la profilul utilizatorului'],
+    ['credențialele Xweather (cron)', { agata: ag('rpc:meteo_xweather_creds') }, 504, 'termen depășit la credențialele Xweather'],
+    ['credențialele Xweather (comanda owner-ului)', { agata: ag('rpc:meteo_xweather_creds'), cerere: () => caOwner({ xweather_backfill: true, site_id: 1, de_la: '2026-10-01', pana: '2026-10-03' }) }, 504, 'termen depășit la credențialele Xweather'],
+    // în pași: pasul raportează, răspunsul pleacă
+    // (vremea curentă agățată până la 100 s: istoricul și pasul zilnic rămân „neajuns (termen)” → 207)
+    ['vremea curentă: site-urile', { agata: ag('from:sites', 1) }, 207, 'termen depășit la site-urile'],
+    ['vremea curentă: scrierea', { agata: ag('scrie:meteo_cache') }, 207, 'termen depășit la scrierea vremii curente'],
+    // (fără antete de cotă de la vremea curentă: plafonul mic 10 = 5 din cele 7 zile ale șantierului activ → 207)
+    ['vremea curentă: cererea Xweather', { agataRetea: (u) => (!/summary/.test(u) && u.includes('xweather') ? 'cerere' : null) }, 207, 'Xweather 0'],
+    ['vremea curentă: corpul răspunsului Xweather', { agataRetea: (u) => (u.includes('xweather.com/conditions/') && !/summary/.test(u) ? 'corp' : null) }, 200, 'Xweather 200'],
+    ['istoricul: site-urile', { agata: ag('from:sites', 2) }, 200, 'termen depășit la site-urile'],
+    ['istoricul: cererea Open-Meteo', { agataRetea: (u) => (u.includes('open-meteo') ? 'cerere' : null) }, 200, 'termen depășit la arhiva Open-Meteo'],
+    ['istoricul: corpul răspunsului Open-Meteo', { agataRetea: (u) => (u.includes('open-meteo') ? 'corp' : null) }, 200, 'răspuns ilizibil sau tăiat la termen'],
+    ['istoricul: scrierea', { omOk: true, agata: ag('scrie:meteo_istoric_zilnic') }, 200, 'termen depășit la scrierea istoricului'],
+    ['istoricul (owner): proiectele', { agata: ag('from:executie_proiecte'), cerere: () => caOwner({ istoric_backfill: true }) }, 200, 'termen depășit la proiectele'],
+    ['pasul zilnic: site-urile', { agata: ag('from:sites', 3) }, 207, 'termen depășit la site-urile'],
+    ['pasul zilnic: proiectele', { agata: ag('from:executie_proiecte') }, 207, 'termen depășit la proiectele'],
+    ['pasul zilnic: rapoartele zilnice', { agata: ag('from:rapoarte_zilnice', 1) }, 207, 'termen depășit la rapoartele zilnice'],
+    ['pasul zilnic: zilele existente', { agata: ag('from:v_meteo_zilnic_xweather', 1) }, 207, 'termen depășit la zilele Xweather existente'],
+    ['pasul zilnic: scrierea zilei', { agata: ag('scrie:meteo_zilnic_xweather') }, 207, 'termen depășit la scrierea zilei'],
+    ['pasul zilnic: cererea Xweather', { agataRetea: (u) => (/summary/.test(u) ? 'cerere' : null) }, 207, 'conditions rețea / timp depășit'],
+    ['pasul zilnic: corpul răspunsului Xweather', { agataRetea: (u) => (/conditions\/summary/.test(u) ? 'corp' : null) }, 207, 'site 1 2026-11-12'],
+    // (rapoartele din fereastră: pagina 1 + pagina goală = apelurile 1 și 2; restanțele = al 3-lea)
+    ['restanțele vechi: rapoartele', { agata: ag('from:rapoarte_zilnice', 3) }, 200, '"restante_vechi":"neajuns (termen)"'],
+    ['restanțele vechi: vremea salvată', { agata: ag('from:v_meteo_zilnic_xweather', 2) }, 200, '"restante_vechi":"neajuns (termen)"'],
+  ]
+  for (const [ce, { cerere, agata, ...net }, status, mesaj] of CAZURI) {
+    it(`${ce}: răspunsul pleacă la ≤ 100 s, cu „${mesaj.slice(0, 50)}”`, async () => {
+      const st = stareToate()
+      st.agata = agata ?? null
+      const r = await ruleazaCuCeas(st, { cerere: cerere?.(), ...net })
+      expect(r.raspuns).toBe(true)
+      expect(r.ms).toBeLessThanOrEqual(100_000)
+      expect(r.ms).toBeLessThan(120_000)
+      expect(r.status).toBe(status)
+      expect(JSON.stringify(r.body)).toContain(mesaj)
+      if (r.body.termen) expect(r.body.termen.durata_ms).toBeLessThanOrEqual(100_000)
+    })
+  }
+  it('controlul: fără nimic agățat, aceeași stare răspunde 200 imediat (agățarea e cea care se vede mai sus)', async () => {
+    const r = await ruleazaCuCeas(stareToate())
+    expect(r).toMatchObject({ raspuns: true, status: 200 })
+    expect(r.ms).toBeLessThan(1000)
+    expect(JSON.stringify(r.body)).not.toContain('termen depășit')
+  })
+  it('mutant: autentificarea fără termen (await direct pe rpc) → la 130 s răspunsul tot n-a plecat', async () => {
+    const st = stareToate()
+    st.agata = ag('rpc:meteo_cron_secret')
+    const idx = mutant(INDEX, [["await cuTermen<RezBd<string>>(db.rpc('meteo_cron_secret'), termen, 'secretul cronului')", "await db.rpc('meteo_cron_secret')"]])
+    const r = await ruleazaCuCeas(st, { index: idx })
+    expect(r.raspuns).toBe(false)
+    expect(r.ms).toBeGreaterThan(120_000)
+  })
+  it('mutant: corpul cererii fără termen → nu răspunde în 130 s', async () => {
+    const idx = mutant(INDEX, [["body = await cuTermen(req.json(), termen, 'corpul cererii');", 'body = await req.json();']])
+    const cerere = new Request('http://functie.test/meteo-sync', { method: 'POST', headers: { 'x-meteo-secret': SECRET }, body: new ReadableStream({ start() {} }), duplex: 'half' })
+    const r = await ruleazaCuCeas(stareToate(), { index: idx, cerere })
+    expect(r.raspuns).toBe(false)
+  })
+})
+
+// ── testul static: nicio așteptare în afara ajutătoarelor de termen ──
+function scoateFunctie(text, antet) {
+  const i = text.indexOf(antet)
+  if (i < 0) throw new Error('lipsește ' + antet)
+  // corpul începe cu acolada de la sfârșitul liniei antetului
+  let j = text.lastIndexOf('{', text.indexOf('\n', i)), ad = 0
+  if (j < i) throw new Error('antet fără acoladă: ' + antet)
+  for (let k = j; k < text.length; k++) {
+    if (text[k] === '{') ad++
+    else if (text[k] === '}' && --ad === 0) return text.slice(0, i) + text.slice(k + 1)
+  }
+  throw new Error('acoladă neînchisă')
+}
+// așteptările permise: cele două ajutătoare de termen, clientul Xweather (trece prin cerereRetea), pauza mărginită și funcțiile interne
+// (verificate mai jos că sunt definite în fișier și că ele însele respectă regula)
+const PERMISE = ['cuTermen', 'cerereRetea', 'xw', 'dormi', 'Promise.all', 'sincronizeazaIstoric', 'sincronizeazaXweather', 'vremeaCurenta',
+  'zileCuRaport', 'zileXweatherExistente', 'restanteVechi', 'restante', 'proceseaza']
+// doar corpul lui cuTermen e scos (singurul `await` „brut”, pe cursa cu termenul); cerereRetea rămâne în analiză: și fetch-ul, și corpul
+// răspunsului trebuie așteptate prin cuTermen
+function asteptariNeacoperite(text) {
+  const fara = scoateFunctie(text, 'async function cuTermen<')
+  return [...fara.matchAll(/\bawait\s+([\w.]+)(<[^(]*>)?\(/g)].map(m => m[1]).filter(n => !PERMISE.includes(n))
+    .concat([...fara.matchAll(/\bawait\s+(?![\w.]+(<[^(]*>)?\()([^;\n]{0,40})/g)].map(m => 'neidentificat: ' + m[2]))
+}
+describe('r6 P1 — testul static al așteptărilor (index.ts)', () => {
+  it('în handler nu rămâne niciun await pe client / rețea în afara ajutătorului de termen', () => {
+    expect(asteptariNeacoperite(INDEX)).toEqual([])
+    // funcțiile interne permise există în fișier; nimic nu consumă builderul cu .then( direct
+    for (const f of ['sincronizeazaIstoric', 'sincronizeazaXweather', 'vremeaCurenta', 'zileCuRaport', 'zileXweatherExistente', 'restanteVechi', 'proceseaza'])
+      expect(INDEX).toMatch(new RegExp(`async function ${f}\\(`))
+    expect(INDEX).toContain('const restante = () => restanteVechi(')
+    expect(INDEX).not.toMatch(/\.then\(/)
+    // un singur fetch, în cerereRetea, așteptat prin cuTermen
+    expect(INDEX.match(/\bfetch\(/g)).toHaveLength(1)
+    expect(INDEX).toContain('await cuTermen(fetch(url, { signal: ctl.signal }), lim, ce)')
+  })
+  for (const [nume, din, in_] of [
+    ['autentificarea cronului', "await cuTermen<RezBd<string>>(db.rpc('meteo_cron_secret'), termen, 'secretul cronului')", "await db.rpc('meteo_cron_secret')"],
+    ['utilizatorul', "await cuTermen(uc.auth.getUser(), termen, 'verificarea utilizatorului')", 'await uc.auth.getUser()'],
+    ['credențialele', "await cuTermen<RezBd<Creds>>(db.rpc('meteo_xweather_creds'), termen, 'credențialele Xweather');\n  const cid", "await db.rpc('meteo_xweather_creds');\n  const cid"],
+    ['scrierea zilei', "await cuTermen(db.from('meteo_zilnic_xweather').insert(z.rand), termenGlobal, 'scrierea zilei')", "await db.from('meteo_zilnic_xweather').insert(z.rand)"],
+    ['fetch-ul', 'await cuTermen(fetch(url, { signal: ctl.signal }), lim, ce)', 'await fetch(url, { signal: ctl.signal })'],
+    ['corpul răspunsului', 'await cuTermen(r.json(), lim, ce)', 'await r.json()'],
+    ['corpul cererii', "await cuTermen(req.json(), termen, 'corpul cererii')", 'await req.json()'],
+    ['restanțele vechi', "await cuTermen<RezBd<{ site_id: number; data: string }[]>>(db.from('rapoarte_zilnice')", "await (db.from('rapoarte_zilnice')"],
+  ]) {
+    it(`mutant: ${nume} fără termen → testul static pică`, () => {
+      expect(asteptariNeacoperite(mutant(INDEX, [[din, in_]])).length).toBeGreaterThan(0)
+    })
+  }
+})
+
+describe('r6 P1 — ajutătorul de termen consumă fiecare „thenable” O SINGURĂ dată (o consumare = o cerere)', () => {
+  it('rularea completă: fiecare builder / rpc / auth consumat exact o dată', async () => {
+    const st = stareToate()
+    const { body } = await ruleaza(st)
+    expect(body.ok).toBe(true)
+    expect(st.consumari.length).toBeGreaterThan(8)
+    expect(st.consumari.filter(c => c.n !== 1)).toEqual([])
+  })
+  it('mutant: cuTermen care consumă de două ori (Promise.resolve(p) dublat) → fiecare cerere ar pleca de două ori', async () => {
+    const st = stareToate()
+    await ruleaza(st, { index: mutant(INDEX, [['Promise.race([Promise.resolve(p), ', 'Promise.race([Promise.resolve(p), Promise.resolve(p), ']]) })
+    expect(st.consumari.some(c => c.n === 2)).toBe(true)
+  })
+})
+
+describe('r6 P1 — restanțele au partea lor din plafon (contraexemplul recenzentului, în handler)', () => {
+  // cota necunoscută (fără antete de cotă) → plafon 10 = pas 5; șantierele 1..10 active, cu vreme pe 06..11.11 → doar „ieri” (12.11) lipsește;
+  // șantierul 11, inactiv, are 10 zile cu raport și fără vreme (20..29.10) = restanțele
+  const fara = ({ ep, status }) => (status >= 200 && status < 300 ? { 'X-Cost-Tokens': String(COST_DOC[ep]) } : {})
+  const stareRecenzent = () => stare({
+    sites: Array.from({ length: 11 }, (_, i) => santier(i + 1)),
+    rapoarte: [...Array.from({ length: 10 }, (_, i) => ({ site_id: i + 1, data: '2026-11-11' })), ...zileInapoi('2026-10-29', 10).map(data => ({ site_id: 11, data }))],
+    vreme: Array.from({ length: 10 }, (_, i) => zileInapoi('2026-11-11', 6).map(z => vremeZi(i + 1, z))).flat(),
+  })
+  it('plafon 10: 3 zile „ieri” + 2 restanțe (nu 5 + 0); părțile în rezultat', async () => {
+    const st = stareRecenzent()
+    const { body } = await ruleaza(st, { antete: fara })
+    const c = cereriCond(st)
+    expect(c).toHaveLength(5)
+    expect(c.filter(x => x.endsWith(':2026-11-12'))).toHaveLength(3)
+    expect(c.filter(x => x.startsWith('11:'))).toHaveLength(2)
+    expect(body.xweather.rotatie).toMatchObject({ pas: 5, parti: { pas: 5, rezervat_restante: 2, rezervat_ieri: 3, ieri: 3, restante: 2 } })
+    expect(body.xweather).toMatchObject({ scrise: 5, unitati_xweather: 10, neajunse: 15 })
+  })
+  it('mutant: prioritatea fixă „ieri” (nicio rezervă) → 5 „ieri”, 0 restanțe (reproduce contraexemplul)', async () => {
+    const st = stareRecenzent()
+    await ruleaza(st, { antete: fara, logica: mutant(LOGICA, [['p >= 2 ? Math.min(p - 1, Math.max(1, Math.ceil(p / PARTE_RESTANTE))) : indexZi(ieri) % 2', '0']]) })
+    expect(cereriCond(st).filter(x => x.startsWith('11:'))).toHaveLength(0)
+  })
+})
+
+describe('r6 P2 — restanțele ieșite din fereastră (restante_vechi), doar la pasul zilnic cu întrerupătorul pornit', () => {
+  // fereastra începe la 13.10 (ieri 12.11 − 30); 12.10 și 01.10 au raport fără vreme; 15.09 are raport ȘI vreme (completată de owner)
+  const stareVechi = () => stare({ sites: [santier(1)], rapoarte: ['2026-10-12', '2026-10-01', '2026-09-15'].map(data => ({ site_id: 1, data })),
+    vreme: [vremeZi(1, '2026-09-15')] })
+  it('numărul, cea mai veche zi, exemplele; nicio cerere către furnizor pentru ele', async () => {
+    const st = stareVechi()
+    const { body, status } = await ruleaza(st)
+    expect(body.xweather.restante_vechi).toEqual({ numar: 2, exact: true, cea_mai_veche: '2026-10-01', inainte_de: '2026-10-13',
+      exemple: [{ site_id: 1, zi: '2026-10-01' }, { site_id: 1, zi: '2026-10-12' }] })
+    expect(body.xweather.nimic_de_facut).toBe(true)
+    expect(st.zilnic).toHaveLength(0)
+    expect(status).toBe(200)
+  })
+  it('cel mult 10 exemple; pagina plină (1000 de rapoarte) = cifra e un minim (exact: false)', async () => {
+    const zile = Array.from({ length: 1001 }, (_, i) => new Date(Date.parse('2023-01-01T12:00:00Z') + i * 864e5).toISOString().slice(0, 10))
+    const st = stare({ sites: [santier(1)], rapoarte: zile.map(data => ({ site_id: 1, data })) })
+    const { body } = await ruleaza(st)
+    expect(body.xweather.restante_vechi).toMatchObject({ numar: 1000, exact: false, cea_mai_veche: '2023-01-01' })
+    expect(body.xweather.restante_vechi.exemple).toHaveLength(10)
+  })
+  it('fără timp rămas: „neajuns (termen)”, nu zero', async () => {
+    // vremea curentă durează 62 s → pasul zilnic are termenul global (100 s); zilele de 6 s pornesc la 62..92 s, la 98 s rămân 2 s < 5 s
+    const st = stare({ sites: [santier(1), sediu(9)], rapoarte: [...zileInapoi('2026-10-29', 10), '2026-10-01'].map(data => ({ site_id: 1, data })) })
+    const { body } = await ruleaza(st, { curentPasMs: 62_000, pasMs: 3000 })
+    expect(cereriCond(st)).toHaveLength(6)
+    expect(body.xweather.restante_vechi).toBe('neajuns (termen)')
+    expect(body.termen.durata_ms).toBeLessThanOrEqual(100_000)
+  })
+  it('întrerupătorul oprit: nicio citire (nici rapoarte, nici vremea), niciun câmp', async () => {
+    const st = stareVechi()
+    const { body } = await ruleaza(st, { env: { XW_ZILNIC_ACTIV: undefined } })
+    expect(st.citite).not.toContain('rapoarte_zilnice')
+    expect(st.citite).not.toContain('v_meteo_zilnic_xweather')
+    expect(JSON.stringify(body)).not.toContain('restante_vechi')
+  })
+  it('mutant: lipsa timpului raportată ca zero → testul „neajuns (termen)” pică', async () => {
+    const st = stare({ sites: [santier(1), sediu(9)], rapoarte: [...zileInapoi('2026-10-29', 10), '2026-10-01'].map(data => ({ site_id: 1, data })) })
+    const idx = mutant(INDEX, [['  if (termen - Date.now() < MIN_TIMP_PAS_MS) return NEAJUNS_TERMEN;\n  const gol', '  const gol'],
+      ['    return e instanceof TermenDepasit ? NEAJUNS_TERMEN :', '    return e instanceof TermenDepasit ? { numar: 0 } :']])
+    const { body } = await ruleaza(st, { curentPasMs: 62_000, pasMs: 3000, index: idx })
+    expect(body.xweather.restante_vechi).not.toBe('neajuns (termen)')
+  })
+  it('mutant: fără limita ferestrei la citire → numără și zilele din fereastră', async () => {
+    const st = stare({ sites: [santier(1)], rapoarte: ['2026-10-20', '2026-10-01'].map(data => ({ site_id: 1, data })) })
+    const idx = mutant(INDEX, [[".lt('data', de).order('data', { ascending: true }).limit(LIMITA_RESTANTE), termen, 'restanțele vechi (rapoarte)')",
+      ".order('data', { ascending: true }).limit(LIMITA_RESTANTE), termen, 'restanțele vechi (rapoarte)')"]])
+    const { body } = await ruleaza(st, { index: idx })
+    expect(body.xweather.restante_vechi.numar).not.toBe(1)
+    const { body: b2 } = await ruleaza(stare({ sites: [santier(1)], rapoarte: ['2026-10-20', '2026-10-01'].map(data => ({ site_id: 1, data })) }))
+    expect(b2.xweather.restante_vechi.numar).toBe(1)
+  })
+})
+
+describe('r6 — XW_AER_PE_ZI: rezultatul spune de unde vine valoarea', () => {
+  const sursa = async (v) => {
+    const st = stare({ sites: [sediu(5)] })
+    const { body } = await ruleaza(st, { env: { XW_AER_PE_ZI: v } })
+    return body.cota
+  }
+  it('setată / implicită (lipsă) / invalidă → implicită (inclusiv șirul gol)', async () => {
+    expect(await sursa('2')).toMatchObject({ aer_pe_zi: 2, aer_pe_zi_sursa: 'setata', aer_pe_zi_invalid: null })
+    expect(await sursa(undefined)).toMatchObject({ aer_pe_zi: 4, aer_pe_zi_sursa: 'implicita', aer_pe_zi_invalid: null })
+    expect(await sursa('')).toMatchObject({ aer_pe_zi: 4, aer_pe_zi_sursa: 'invalida', aer_pe_zi_invalid: '' })
+    expect(await sursa('x')).toMatchObject({ aer_pe_zi: 4, aer_pe_zi_sursa: 'invalida', aer_pe_zi_invalid: 'x' })
+  })
+  it('mutant: șirul gol tratat ca lipsă (comportamentul r5) → sursa nu mai e „invalida”', async () => {
+    const st = stare({ sites: [sediu(5)] })
+    const { body } = await ruleaza(st, { env: { XW_AER_PE_ZI: '' }, cota: mutant(COTA, [["  if (v == null) return { n: AER_PE_ZI_IMPLICIT, invalid: null, sursa: 'implicita' }",
+      "  if (v == null || v === '') return { n: AER_PE_ZI_IMPLICIT, invalid: null, sursa: 'implicita' }"]]) })
+    expect(body.cota.aer_pe_zi_sursa).not.toBe('invalida')
   })
 })

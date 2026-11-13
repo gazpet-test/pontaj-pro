@@ -168,9 +168,12 @@ export const AER_PE_ZI_IMPLICIT = 4
 export const ORE_COMPLETE_UTC = [4, 10, 16, 22]
 const ORE_AER: Record<number, number[]> = { 0: [], 1: [4], 2: [4, 16], 3: [4, 10, 16], 4: [4, 10, 16, 22] }
 // XW_AER_PE_ZI: exact '0'..'4'; lipsă = 4 (ca până acum); altă valoare = 4 + semnalată în rezultat
-export function aerPeZi(v: string | null | undefined): { n: number; invalid: string | null } {
-  if (v == null || v === '') return { n: AER_PE_ZI_IMPLICIT, invalid: null }
-  return /^[0-4]$/.test(v) ? { n: Number(v), invalid: null } : { n: AER_PE_ZI_IMPLICIT, invalid: String(v).slice(0, 20) }
+// r6: rezultatul spune și de unde vine valoarea: 'setata' (0..4), 'implicita' (variabila lipsește), 'invalida' (orice altceva, INCLUSIV
+// șirul gol: o variabilă pusă greșit nu mai trece neobservată) → implicita 4, cu valoarea primită în `invalid`
+export type SursaAer = 'setata' | 'implicita' | 'invalida'
+export function aerPeZi(v: string | null | undefined): { n: number; invalid: string | null; sursa: SursaAer } {
+  if (v == null) return { n: AER_PE_ZI_IMPLICIT, invalid: null, sursa: 'implicita' }
+  return /^[0-4]$/.test(v) ? { n: Number(v), invalid: null, sursa: 'setata' } : { n: AER_PE_ZI_IMPLICIT, invalid: String(v).slice(0, 20), sursa: 'invalida' }
 }
 // rularea completă de la ora UTC dată cere aerul? La reîmprospătarea manuală (complet / forta, în afara orelor): da, dacă n ≥ 1.
 export const cereAer = (n: number, oraUtc: number, manual: boolean) => (manual ? n >= 1 : (ORE_AER[n] || []).includes(oraUtc))

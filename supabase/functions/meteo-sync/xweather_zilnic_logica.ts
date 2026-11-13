@@ -377,22 +377,52 @@ export function planXweather(
 }
 
 // ── r5: coada nu se mai poate înfometa ─────────────────────────────────────────────────────────────────────────────
-// Prioritatea rămâne „ieri” pe șantierele active (ziua nouă, mereu prima). Restul cozii (zilele lipsă ale șantierelor active + zilele cu raport
-// din fereastră, cele mai noi întâi) se parcurge circular dintr-un punct de pornire care se mută determinist cu ziua calendaristică:
+// „Ieri” pe șantierele active are partea lui (r6: nu mai e prioritate fixă, vezi partiCoada mai jos). Restul cozii (zilele lipsă ale șantierelor
+// active + zilele cu raport din fereastră, cele mai noi întâi) se parcurge circular dintr-un punct de pornire care se mută determinist cu ziua calendaristică:
 //   pornire = ⌊ fracția(indexul zilei `ieri` × φ) × lungimea cozii ⌋, φ = (√5 − 1) / 2 (șirul lui Weyl / raportul de aur).
 // Fracțiile succesive acoperă uniform [0, 1) oricât s-ar scurta coada între rulări (zilele servite ies din ea), deci zilele care eșuează mereu
 // („furnizorul nu are date”, coordonate greșite) nu mai pot ocupa plafonul în fiecare zi înaintea celorlalte. O pornire „(index × pas) mod
 // lungime” s-a dovedit mai slabă în simulare: se decalează când coada se scurtează (plafon 10: 70 de rulări în cel mai rău caz, față de 26).
 // Dacă toată coada încape sigur în rulare (≤ pas = plafon / costul unei zile), ordinea rămâne „cele mai noi întâi” (nu e nimic de împărțit).
+//
+// r6 (P1 r5: prioritatea fixă „ieri” putea înfometa complet restanțele — plafon 10, zece șantiere active cu câte o zi nouă pe zi → cele 5
+// locuri luate mereu de „ieri”, zero restanțe în 31 de rulări): coada are acum DOUĂ PĂRȚI, „ieri” (ziua nouă a șantierelor active) și
+// „restanțe” (tot restul). Când există amândouă, partiCoada rezervă restanțelor cel puțin o treime din locurile rulării (⌈pas / 3⌉, minimum
+// o zi-șantier), iar restul rămâne lui „ieri”; partea nefolosită a uneia trece celeilalte. Plafon 10 (pas 5): 2 restanțe + 3 ieri; plafon 60
+// (pas 30): 10 + 20. La pas 1 locul alternează după paritatea zilei. Rotația (φ) rămâne în interiorul fiecărei părți, iar cele două părți se
+// împletesc uniform (Bresenham): în orice prefix al cozii, restanțele au partea lor, deci o tăiere la termen / cost mai mare le atinge pe
+// amândouă proporțional, nu doar pe cea de la coadă.
 export const indexZi = (zi: string) => Math.round(Date.parse(zi + 'T00:00:00Z') / 864e5)
 const PHI = (Math.sqrt(5) - 1) / 2
+export const esteIeri = (s: { tinta?: string; zi: string }, ieri: string) => s.tinta === 'activ' && s.zi === ieri
+export const PARTE_RESTANTE = 3            // restanțele: cel puțin ⌈pas / 3⌉ locuri pe rulare (minimum 1) când există și „ieri”
+export function partiCoada(nIeri: number, nRest: number, pas: number, ieri: string) {
+  const p = Math.max(1, Math.floor(pas))
+  const rezRest = !nRest ? 0 : !nIeri ? p : p >= 2 ? Math.min(p - 1, Math.max(1, Math.ceil(p / PARTE_RESTANTE))) : indexZi(ieri) % 2
+  const rezIeri = p - rezRest
+  return { pas: p, rezervat_restante: rezRest, rezervat_ieri: rezIeri,
+    ieri: Math.min(nIeri, rezIeri + Math.max(0, rezRest - nRest)), restante: Math.min(nRest, rezRest + Math.max(0, rezIeri - nIeri)) }
+}
 export function rotesteCoada(sarcini: Sarcina[], ieri: string, pas: number): { sarcini: Sarcina[]; pornire: number } {
   if (!esteZi(ieri)) throw new Error('ieri invalid')
-  const prime = sarcini.filter(s => s.tinta === 'activ' && s.zi === ieri)
-  const rest = sarcini.filter(s => !(s.tinta === 'activ' && s.zi === ieri))
-  if (rest.length <= Math.max(1, Math.floor(pas))) return { sarcini: [...prime, ...rest], pornire: 0 }
-  const pornire = Math.min(rest.length - 1, Math.floor(((indexZi(ieri) * PHI) % 1) * rest.length))
-  return { sarcini: [...prime, ...rest.slice(pornire), ...rest.slice(0, pornire)], pornire }
+  const prime = sarcini.filter(s => esteIeri(s, ieri))
+  const rest = sarcini.filter(s => !esteIeri(s, ieri))
+  // totul încape: ordinea „ieri, apoi cele mai noi întâi” (nu e nimic de împărțit)
+  if (prime.length + rest.length <= Math.max(1, Math.floor(pas))) return { sarcini: [...prime, ...rest], pornire: 0 }
+  const pt = partiCoada(prime.length, rest.length, pas, ieri)
+  const f = (indexZi(ieri) * PHI) % 1
+  const roteste = (q: Sarcina[], locuri: number) => {
+    const o = q.length > locuri ? Math.min(q.length - 1, Math.floor(f * q.length)) : 0
+    return { q: [...q.slice(o), ...q.slice(0, o)], o }
+  }
+  const R = roteste(rest, pt.restante), I = roteste(prime, pt.ieri)
+  const tot = pt.ieri + pt.restante
+  const out: Sarcina[] = []
+  for (let k = 0, i = 0, r = 0; i < I.q.length || r < R.q.length; k++) {
+    const vreaRest = Math.floor((k + 1) * pt.restante / tot) > Math.floor(k * pt.restante / tot)
+    if ((vreaRest && r < R.q.length) || i >= I.q.length) out.push(R.q[r++]); else out.push(I.q[i++])
+  }
+  return { sarcini: out, pornire: R.o }
 }
 
 // ── plafonul de unități, termenul și oprirea rulării (aplicate de bucla din index.ts) ─────────────────────────────────

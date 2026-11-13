@@ -112,11 +112,12 @@ describe('contorul rulării și blocul `cota`', () => {
 
 describe('configurarea', () => {
   it('XW_AER_PE_ZI: 0..4; lipsă = 4; altceva = 4 + semnalat', () => {
-    for (const v of ['0', '1', '2', '3', '4']) expect(aerPeZi(v)).toEqual({ n: Number(v), invalid: null })
-    expect(aerPeZi(undefined)).toEqual({ n: 4, invalid: null })
-    expect(aerPeZi('')).toEqual({ n: 4, invalid: null })
-    expect(aerPeZi('5')).toEqual({ n: 4, invalid: '5' })
-    expect(aerPeZi(' 1')).toEqual({ n: 4, invalid: ' 1' })
+    for (const v of ['0', '1', '2', '3', '4']) expect(aerPeZi(v)).toEqual({ n: Number(v), invalid: null, sursa: 'setata' })
+    expect(aerPeZi(undefined)).toEqual({ n: 4, invalid: null, sursa: 'implicita' })
+    // r6: șirul gol nu mai trece neobservat (verdictul r5): invalid → implicita, cu sursa spusă
+    expect(aerPeZi('')).toEqual({ n: 4, invalid: '', sursa: 'invalida' })
+    expect(aerPeZi('5')).toEqual({ n: 4, invalid: '5', sursa: 'invalida' })
+    expect(aerPeZi(' 1')).toEqual({ n: 4, invalid: ' 1', sursa: 'invalida' })
   })
   it('orele aerului: 4 → 04/10/16/22; 2 → 04/16; 1 → 04; 0 → niciodată; manual: dacă n ≥ 1', () => {
     expect([4, 10, 16, 22].map(o => cereAer(4, o, false))).toEqual([true, true, true, true])
