@@ -26,8 +26,12 @@ const ACCES = citeste('supabase/migrations/20261209a_executie_acces_proiect.sql'
 const MIG = citeste('supabase/migrations/20261221a_meteo_xweather_zilnic.sql')
 const REV = citeste('supabase/revenire/20261221a_meteo_xweather_zilnic_ROLLBACK.sql')
 const SCRIPT = citeste('scripts/meteo_xweather_amprente.sql')
-const PLACEHOLDER = "    ('DE_COMPLETAT', 'DE_COMPLETAT')"
-if (!MIG.includes(PLACEHOLDER)) { console.error('migrarea nu mai are rândul DE_COMPLETAT (baseline lipit?)'); process.exit(1) }
+// conținutul blocului BASELINE, oricare ar fi (DE_COMPLETAT sau valorile de producție lipite): se înlocuiește cu baseline-ul schemei false
+const BL_A = '  SELECT v.eticheta, v.amprenta FROM (VALUES\n', BL_B = '\n  ) v(eticheta, amprenta)'
+const PLACEHOLDER = (() => { const i0 = MIG.indexOf('-- >>> BASELINE 20261221a'), i = MIG.indexOf(BL_A, i0) + BL_A.length; return MIG.slice(i, MIG.indexOf(BL_B, i)) })()
+if (!PLACEHOLDER.trim()) { console.error('blocul BASELINE 20261221a nu se găsește'); process.exit(1) }
+// „baseline necompletat” se probează pe forma de livrare inițială (rândul DE_COMPLETAT)
+const MIG_NECOMPLETAT = MIG.split(PLACEHOLDER).join("    ('DE_COMPLETAT', 'DE_COMPLETAT')")
 
 // funcțiile de drept, EXACT din 20261209a (corpul până la $f$;), apoi drepturile lor ca acolo
 const functie = (marcaj) => {
@@ -219,7 +223,7 @@ for (const [nume, fn, re] of [
   ['fără marcajul runnerului', (db) => aplicaMig(db, MIG_B, { marcaj: false }), /garda start invalida/],
   ['fără plafon', (db) => aplicaMig(db, MIG_B, { plafon: 0, marcajPlafon: false }), /PLAFON_TRANZACTIE lipsa/],
   ['plafon fără marcaj', (db) => aplicaMig(db, MIG_B, { marcajPlafon: false }), /PLAFON_TRANZACTIE lipsa/],
-  ['baseline necompletat', (db) => aplicaMig(db, MIG), /baseline L15 necompletat/],
+  ['baseline necompletat', (db) => aplicaMig(db, MIG_NECOMPLETAT), /baseline L15 necompletat/],
   ['dependență schimbată înainte', async (db) => {
     await db.exec(`CREATE OR REPLACE FUNCTION public.fn_raport_santier_drept(p_site bigint) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;`)
     return aplicaMig(db, MIG_B)
