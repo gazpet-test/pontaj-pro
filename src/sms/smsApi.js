@@ -19,8 +19,17 @@ export const smsApi = {
   loturi: async () => date(await supabase.rpc('fn_sms_loturi_lista', { p_limit: 50 })) || [],
   mesaje: async lotId => (date(await supabase.rpc('fn_sms_lot_destinatari', { p_lot_id: lotId })) || {}).destinatari || [],
   optout: async () => date(await supabase.from('sms_optout').select('telefon, activ, motiv, actualizat_la').order('actualizat_la', { ascending: false })) || [],
-  creeazaIntern: async ({ text, p_departamente, p_angajati, preview }) =>
-    date(await supabase.rpc('fn_sms_lot_intern_creeaza', { p_text: text, p_departamente, p_angajati, p_doar_preview: preview })),
+  // 20261220a: p_numere_serviciu doar la selecția manuală, doar când e bifat vreunul (altfel apelul e identic cu cel de dinainte)
+  creeazaIntern: async ({ text, p_departamente, p_angajati, p_numere_serviciu, preview }) =>
+    date(await supabase.rpc('fn_sms_lot_intern_creeaza', { p_text: text, p_departamente, p_angajati, p_doar_preview: preview,
+      ...(Array.isArray(p_numere_serviciu) && p_numere_serviciu.length ? { p_numere_serviciu } : {}) })),
+  // 20261220a: numerele de serviciu — lista pentru „Compune” (orice nivel SMS) și administrarea (doar owner; BD-ul refuză pe ceilalți)
+  numereServiciu: async () => date(await supabase.rpc('fn_sms_numere_serviciu_lista')) || [],
+  numereServiciuAdmin: async () => date(await supabase.rpc('fn_sms_numere_serviciu_admin')) || [],
+  salveazaNumarServiciu: async ({ id, denumire, telefon, responsabilId, nota, versiune }) =>
+    date(await supabase.rpc('fn_sms_numar_serviciu_salveaza', { p_id: id ?? null, p_denumire: denumire, p_telefon: telefon || null,
+      p_responsabil_employee_id: responsabilId ?? null, p_nota: nota || null, p_versiune: versiune ?? null })),
+  dezactiveazaNumarServiciu: async (id, versiune) => date(await supabase.rpc('fn_sms_numar_serviciu_dezactiveaza', { p_id: id, p_versiune: versiune })),
   // 20261130c: Redări doar din șablonul fix, pe un UAT. Textul îl face BD-ul; la creare trimitem textul afișat și set_hash-ul listei din
   // previzualizare, iar BD-ul refuză (40001) dacă între timp s-a schimbat oricare. Previzualizarea nu trimite nimic din ele.
   // Textul liber (fn_sms_lot_redari_creeaza) nu mai e o cale a aplicației.

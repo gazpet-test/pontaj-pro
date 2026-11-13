@@ -8,12 +8,17 @@
 // segmente, cost) și se aprobă exact versiunea afișată; dacă lotul s-a schimbat → 40001 în BD, lista se reîncarcă. Copilot r1 P2-01: lotul
 // nu are stare „trimis” — „coada golită”, iar rezultatul real e pe mesaje (livrat / eșuat / necunoscut / anulat).
 // SMS-ul NU înlocuiește convocarea scrisă din Redări — e doar informare.
-import { useCallback, useEffect, useMemo, useState } from 'react'
+// 20261220a (cererea owner-ului, 13.11.2026): NUMERELE DE SERVICIU (telefoane ale firmei, ex. „Gazpet Redări”) apar SEPARAT de angajați,
+// doar la „Selecție manuală” (grupul „📞 Numere de serviciu”, deasupra angajaților; căutarea și contorul le prind); la „Toți angajații” /
+// „Pe departament” nu intră (și BD-ul le refuză acolo). Le administrează doar owner-ul, din ⚙ Setări. În lista de aprobat și în
+// „Mesajele lotului” apar cu denumirea lor.
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { smsApi, mesajEroare } from './smsApi.js'
 import {
   STARI_LOT, STARI_MESAJ, motivTrimitere, contorText, argumenteIntern, departamente, filtreazaAngajati, zileLaPlafon,
   poateAproba, poateTrimite, poateAnula, valideazaAutorizare, valideazaPlafoane, fmtEur, fmtData, mascheazaTelefon,
   rezumatMesaje, mesajAnulare, poateActiona, notaNivel, areModulSms, NIVELURI, MAX_TEST, textSold,
+  filtreazaNumereServiciu, numarSelectati, valideazaNumarServiciu, mesajDezactivare,
 } from './smsLogica.js'
 
 const G = { bg: '#F1F5F9', surface: '#FFFFFF', border: '#E2E8EF', text: '#263642', muted: '#617282', blue: '#24778B', green: '#38765A', red: '#B74D55', yellow: '#946B20' }
@@ -86,39 +91,61 @@ function StarePanou({ panou, soldInitial }) {
 }
 
 // ── Compune: text + destinatari → previzualizare din BD → lot draft ────────────────────────────────────────────────────────
-function Compune({ panou, onCreat, setMesaj }) {
+// *Initial*: doar pentru teste (randare fără rețea)
+export function Compune({ panou, onCreat, setMesaj, angajatiInitiali = null, numereInitiale = null, modInitial = null, selectatiInitiali = null,
+  numereAleseInitiale = null, cautaInitial = '', eroareNumereInitiala = '' }) {
   const test = panou?.nivel === 'test'
   const [text, setText] = useState('')
-  const [mod, setMod] = useState(test ? 'selectie' : 'toti')
-  const [angajati, setAngajati] = useState(null)
+  const [mod, setMod] = useState(modInitial || (test ? 'selectie' : 'toti'))
+  const [angajati, setAngajati] = useState(angajatiInitiali)
+  // 20261220a: numerele de serviciu (null = se încarcă; eroarea afișată separat, nu ca listă goală — L18)
+  const [numere, setNumere] = useState(numereInitiale)
+  const [eroareNumere, setEroareNumere] = useState(eroareNumereInitiala)
   const [depAlese, setDepAlese] = useState([])
-  const [selectati, setSelectati] = useState(() => new Set())
+  const [selectati, setSelectati] = useState(() => new Set(selectatiInitiali || []))
+  const [numereAlese, setNumereAlese] = useState(() => new Set(numereAleseInitiale || []))
   const [filtruDep, setFiltruDep] = useState('')
-  const [cauta, setCauta] = useState('')
+  const [cauta, setCauta] = useState(cautaInitial)
   const [preview, setPreview] = useState(null)
   const [lucru, setLucru] = useState(false)
   const c = contorText(text)
 
   useEffect(() => {
+    if (angajatiInitiali) return
     let activ = true
     smsApi.angajati().then(l => { if (activ) setAngajati(l) }).catch(e => { if (activ) { setAngajati([]); setMesaj({ tip: 'eroare', text: 'Angajați: ' + mesajEroare(e) }) } })
     return () => { activ = false }
-  }, [setMesaj])
+  }, [setMesaj, angajatiInitiali])
+  const incarcaNumere = useCallback(() => {
+    let activ = true
+    smsApi.numereServiciu().then(l => { if (activ) { setNumere(l); setEroareNumere('') } })
+      .catch(e => { if (activ) { setNumere([]); setEroareNumere(mesajEroare(e)) } })
+    return () => { activ = false }
+  }, [])
+  useEffect(() => { if (!numereInitiale) return incarcaNumere() }, [numereInitiale, incarcaNumere])
   // orice schimbare de text / destinatari invalidează previzualizarea (lotul se creează exact din ce s-a văzut)
-  useEffect(() => { setPreview(null) }, [text, mod, depAlese, selectati])
+  useEffect(() => { setPreview(null) }, [text, mod, depAlese, selectati, numereAlese])
 
   const listaDep = useMemo(() => departamente(angajati), [angajati])
   const vizibili = useMemo(() => filtreazaAngajati(angajati, { departament: filtruDep, cauta }), [angajati, filtruDep, cauta])
+  const numereVizibile = useMemo(() => filtreazaNumereServiciu(numere, { departament: filtruDep, cauta }), [numere, filtruDep, cauta])
+  const areNumere = (numere || []).length > 0
   const cuMobil = (angajati || []).filter(a => a.telefon_mascat && !a.optout).length
-  // contul de test: cel mult MAX_TEST bifați (BD-ul refuză oricum un lot mai mare, la creare, aprobare și trimitere)
-  const plin = test && selectati.size >= MAX_TEST
+  // contul de test: cel mult MAX_TEST bifați în total, angajați + numere de serviciu (BD-ul refuză oricum un lot mai mare)
+  const nSelectati = numarSelectati(selectati, numereAlese)
+  const plin = test && nSelectati >= MAX_TEST
   const comuta = id => setSelectati(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
-  const args = () => ({ text, ...argumenteIntern(mod, { departamente: depAlese, selectati: [...selectati] }) })
+  const comutaNumar = id => setNumereAlese(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const args = () => ({ text, ...argumenteIntern(mod, { departamente: depAlese, selectati: [...selectati], numereServiciu: [...numereAlese] }) })
 
   const previzualizeaza = async () => {
     setLucru(true); setMesaj(null)
     try { setPreview(await smsApi.creeazaIntern({ ...args(), preview: true })) }
-    catch (e) { setPreview(null); setMesaj({ tip: 'eroare', text: mesajEroare(e) }) }
+    catch (e) {
+      setPreview(null); setMesaj({ tip: 'eroare', text: mesajEroare(e) })
+      // un număr de serviciu dezactivat între timp: lista se reîncarcă (bifa lui rămâne vizibilă doar dacă mai e activ)
+      if (/numar de serviciu/.test(mesajEroare(e))) incarcaNumere()
+    }
     finally { setLucru(false) }
   }
   const creeaza = async () => {
@@ -128,7 +155,7 @@ function Compune({ panou, onCreat, setMesaj }) {
     try {
       const j = await smsApi.creeazaIntern({ ...args(), preview: false })
       setMesaj({ tip: 'ok', text: `Lot creat (draft): ${j.nr_destinatari} destinatari. Verifică lista fixată în lot și aprobă-l.` })
-      setText(''); setPreview(null); setSelectati(new Set())
+      setText(''); setPreview(null); setSelectati(new Set()); setNumereAlese(new Set())
       onCreat?.(j.lot_id)
     } catch (e) { setMesaj({ tip: 'eroare', text: mesajEroare(e) }) }
     finally { setLucru(false) }
@@ -148,11 +175,13 @@ function Compune({ panou, onCreat, setMesaj }) {
     </div>
     <div style={S.panel}>
       <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>Destinatari</div>
-      {test && <p style={{ ...S.small, color: G.yellow, margin: '0 0 8px' }}>Cont de test: maximum {MAX_TEST} destinatari într-un lot, doar angajați (fără Redări).</p>}
+      {test && <p style={{ ...S.small, color: G.yellow, margin: '0 0 8px' }}>Cont de test: maximum {MAX_TEST} destinatari într-un lot, în total (angajați și numere de serviciu), doar intern (fără Redări).</p>}
       <div role="radiogroup" aria-label="Destinatari" style={S.row}>
         {[['toti', `Toți angajații activi cu mobil (${angajati ? cuMobil : '…'})`], ['departament', 'Pe departament'], ['selectie', 'Selecție manuală']].map(([k, l]) =>
           <label key={k} style={{ ...S.row, gap: 6, fontSize: 13 }}><input type="radio" name="sms-mod" checked={mod === k} onChange={() => setMod(k)} />{l}</label>)}
       </div>
+      {areNumere && <p role="note" style={{ ...S.small, margin: '8px 0 0' }}>📞 Numerele de serviciu ({numere.length}) se aleg doar la „Selecție manuală”; la „Toți angajații” și „Pe departament” nu intră.{mod !== 'selectie' && numereAlese.size ? ` Cele ${numereAlese.size} bifate nu se trimit în acest mod.` : ''}</p>}
+      {eroareNumere && <p role="alert" style={{ ...S.small, color: G.red, margin: '8px 0 0' }}>Numerele de serviciu nu s-au putut citi: {eroareNumere}</p>}
       {mod === 'departament' && <div style={{ ...S.row, marginTop: 10 }}>
         {listaDep.map(d => <label key={d} style={{ ...S.row, gap: 6, fontSize: 13 }}><input type="checkbox" checked={depAlese.includes(d)}
           onChange={() => setDepAlese(v => v.includes(d) ? v.filter(x => x !== d) : [...v, d])} />{d}</label>)}
@@ -160,13 +189,23 @@ function Compune({ panou, onCreat, setMesaj }) {
       </div>}
       {mod === 'selectie' && <div style={{ marginTop: 10 }}>
         <div style={S.row}>
-          <input aria-label="Caută angajat" value={cauta} onChange={e => setCauta(e.target.value)} placeholder="Caută după nume…" style={{ ...S.input, minWidth: 220 }} />
+          <input aria-label="Caută angajat sau număr de serviciu" value={cauta} onChange={e => setCauta(e.target.value)} placeholder="Caută după nume…" style={{ ...S.input, minWidth: 220 }} />
           <select aria-label="Filtru departament" value={filtruDep} onChange={e => setFiltruDep(e.target.value)} style={S.input}>
             <option value="">Toate departamentele</option>{listaDep.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
-          <span style={S.small}>{selectati.size} selectați</span>
+          <span style={S.small}>{nSelectati} selectați{numereAlese.size ? ` (${selectati.size} angajați + ${numereAlese.size} numere de serviciu)` : ''}</span>
         </div>
-        <div style={{ maxHeight: 280, overflow: 'auto', marginTop: 8, border: `1px solid ${G.border}`, borderRadius: 7 }}>
+        <div style={{ maxHeight: 320, overflow: 'auto', marginTop: 8, border: `1px solid ${G.border}`, borderRadius: 7 }}>
+          {areNumere && <>
+            <div style={{ padding: '6px 10px', background: G.bg, fontSize: 12, fontWeight: 600, color: G.blue }}>📞 Numere de serviciu</div>
+            {numereVizibile.map(n => <label key={'serviciu-' + n.id} style={{ ...S.row, gap: 8, padding: '6px 10px', borderBottom: `1px solid ${G.border}`, fontSize: 13, opacity: n.optout ? 0.5 : 1 }}>
+              <input type="checkbox" aria-label={`Număr de serviciu: ${n.denumire}`} disabled={n.optout || (plin && !numereAlese.has(n.id))} checked={numereAlese.has(n.id)} onChange={() => comutaNumar(n.id)} />
+              <span style={{ flex: 1 }}>{n.denumire}</span><span style={S.small}>număr de serviciu</span>
+              <span style={S.small}>{n.optout ? 'opt-out' : n.telefon_mascat}</span>
+            </label>)}
+            {!numereVizibile.length && <p style={{ ...S.small, padding: '6px 10px', margin: 0 }}>{filtruDep ? 'Numerele de serviciu nu țin de un departament (alege „Toate departamentele”).' : 'Niciun număr de serviciu în filtru.'}</p>}
+            <div style={{ padding: '6px 10px', background: G.bg, fontSize: 12, fontWeight: 600, color: G.muted }}>👷 Angajați</div>
+          </>}
           {vizibili.map(a => <label key={a.id} style={{ ...S.row, gap: 8, padding: '6px 10px', borderBottom: `1px solid ${G.border}`, fontSize: 13, opacity: a.telefon_mascat && !a.optout ? 1 : 0.5 }}>
             <input type="checkbox" disabled={!a.telefon_mascat || a.optout || (plin && !selectati.has(a.id))} checked={selectati.has(a.id)} onChange={() => comuta(a.id)} />
             <span style={{ flex: 1 }}>{a.nume}</span><span style={S.small}>{a.departament}</span>
@@ -183,8 +222,9 @@ function Compune({ panou, onCreat, setMesaj }) {
     </div>
     {preview && <div style={{ ...S.panel, borderColor: G.blue }} aria-live="polite">
       <div style={{ fontWeight: 600, marginBottom: 6 }}>Previzualizare</div>
-      <p style={{ margin: '4px 0', fontSize: 13 }}><b>{preview.nr_destinatari}</b> destinatari · {preview.segmente} SMS fiecare · cost estimat <b>{fmtEur(preview.cost_estimat_eur)}</b> (0,049 EUR/SMS, fără TVA)</p>
-      <p style={{ ...S.small, margin: '4px 0' }}>Excluși: {preview.excluse_fara_mobil} fără mobil RO valid · {preview.excluse_optout} cu opt-out · {preview.excluse_duplicat} telefon dublat (din {preview.candidati} angajați în selecție)</p>
+      <p style={{ margin: '4px 0', fontSize: 13 }}><b>{preview.nr_destinatari}</b> destinatari{preview.numere_serviciu ? ` (dintre care ${preview.numere_serviciu} numere de serviciu)` : ''} · {preview.segmente} SMS fiecare · cost estimat <b>{fmtEur(preview.cost_estimat_eur)}</b> (0,049 EUR/SMS, fără TVA)</p>
+      <p style={{ ...S.small, margin: '4px 0' }}>Excluși: {preview.excluse_fara_mobil} fără mobil RO valid · {preview.excluse_optout} cu opt-out · {preview.excluse_duplicat} telefon dublat (din {preview.candidati_serviciu
+        ? `${preview.candidati - preview.candidati_serviciu} angajați + ${preview.candidati_serviciu} numere de serviciu` : `${preview.candidati} angajați`} în selecție; la același telefon pleacă un singur SMS)</p>
       {preview.depaseste_plafon_zi && (preview.plafon_zi != null
         ? <p style={{ ...S.small, color: G.yellow, margin: '4px 0' }}>Peste plafonul zilnic ({preview.plafon_zi}): lotul pleacă în ~{zileLaPlafon(preview.nr_destinatari, preview.plafon_zi)} zile, dacă nu mărești plafonul.</p>
         : <p style={{ ...S.small, color: G.yellow, margin: '4px 0' }}>Peste plafonul zilnic: lotul pleacă în mai multe zile (plafonul îl stabilește owner-ul).</p>)}
@@ -226,7 +266,9 @@ export function RevizieLot({ lotId, onAprobat, onInchide, detaliiInitiale = null
     {lista.length !== det.nr_destinatari && <p style={{ ...S.small, color: G.red }}>Lista are {lista.length} mesaje, lotul declară {det.nr_destinatari}: aprobarea va fi refuzată — anulează lotul.</p>}
     <div style={{ maxHeight: 300, overflow: 'auto', border: `1px solid ${G.border}`, borderRadius: 7, margin: '8px 0' }}>
       {lista.map(d => <div key={d.mesaj_id} style={{ ...S.row, gap: 8, padding: '5px 10px', borderBottom: `1px solid ${G.border}`, fontSize: 13 }}>
-        <span style={{ flex: 1 }}>{d.nume}</span><span style={S.small}>{d.telefon_mascat}</span>
+        <span style={{ flex: 1 }}>{d.nume}</span>
+        {d.destinatar_tip === 'serviciu' && <Badge color={G.blue}>📞 număr de serviciu</Badge>}
+        <span style={S.small}>{d.telefon_mascat}</span>
         {d.stare !== 'in_coada' && <span style={{ ...S.small, color: G.yellow }}>{STARI_MESAJ[d.stare] || d.stare}</span>}
       </div>)}
     </div>
@@ -308,6 +350,7 @@ function Istoric({ panou, reincarcaPanou, evidentiat, setMesaj }) {
         {revizie === l.id && permis && poateAproba(l) && <RevizieLot lotId={l.id} onAprobat={dupaAprobare} onInchide={() => setRevizie(null)} />}
         {deschis === l.id && <div style={{ marginTop: 8, maxHeight: 260, overflow: 'auto', background: G.bg, borderRadius: 7, padding: 8 }}>
           {!mesaje ? <span style={S.small}>Se încarcă…</span> : mesaje.map(m => <div key={m.mesaj_id} style={{ ...S.row, fontSize: 12, padding: '3px 0' }}>
+            <span style={{ minWidth: 170 }}>{m.nume}{m.destinatar_tip === 'serviciu' ? ' 📞' : ''}</span>
             <span style={{ minWidth: 110 }}>{m.telefon_mascat}</span><span style={{ minWidth: 170 }}>{STARI_MESAJ[m.stare] || m.stare}</span>
             <span style={S.small}>{m.cod_eroare || ''} {m.livrat_la ? `livrat ${fmtData(m.livrat_la)}` : m.trimis_la ? `trimis ${fmtData(m.trimis_la)}` : ''}</span>
           </div>)}
@@ -376,7 +419,85 @@ function Setari({ panou, reincarcaPanou, setMesaj }) {
         </div>
       </>}
     </div>
+    <NumereServiciu setMesaj={setMesaj} />
   </section>
+}
+
+// ── 20261220a: Numere de serviciu (⚙ Setări, doar owner — și în BD: fn_sms_cere_owner) ──────────────────────────────────────
+const FORM_NUMAR = { id: null, denumire: '', telefon: '', responsabilId: '', nota: '', versiune: null }
+// *Initial*: doar pentru teste (randare fără rețea)
+export function NumereServiciu({ setMesaj, listaInitiala = null, angajatiInitiali = null, formInitial = null }) {
+  const [lista, setLista] = useState(listaInitiala)
+  const [eroare, setEroare] = useState('')
+  const [angajati, setAngajati] = useState(angajatiInitiali)
+  const [form, setForm] = useState(formInitial || FORM_NUMAR)
+  const [lucru, setLucru] = useState(false)
+  const gen = useRef(0)
+  // L24: doar ultimul răspuns se aplică (o reîncărcare după acțiune nu e suprascrisă de una mai veche)
+  const incarca = useCallback(async () => {
+    const g = ++gen.current
+    try { const l = await smsApi.numereServiciuAdmin(); if (g === gen.current) { setLista(l); setEroare('') } }
+    catch (e) { if (g === gen.current) setEroare(mesajEroare(e)) }
+  }, [])
+  useEffect(() => { if (!listaInitiala) incarca() }, [incarca, listaInitiala])
+  useEffect(() => {
+    if (angajatiInitiali) return
+    let activ = true
+    smsApi.angajati().then(l => { if (activ) setAngajati(l) }).catch(() => { if (activ) setAngajati([]) })
+    return () => { activ = false }
+  }, [angajatiInitiali])
+  const nou = !form.id
+  const probleme = valideazaNumarServiciu(form, { nou })
+  const atins = !!(form.denumire || form.telefon || form.nota)
+  const camp = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
+  const salveaza = async () => {
+    if (probleme.length) { setMesaj({ tip: 'eroare', text: probleme.join(' ') }); return }
+    setLucru(true); setMesaj(null)
+    try {
+      const r = await smsApi.salveazaNumarServiciu({ ...form, responsabilId: form.responsabilId === '' ? null : Number(form.responsabilId) })
+      setMesaj({ tip: 'ok', text: nou ? `Număr de serviciu adăugat: „${r.denumire}” (${r.telefon_mascat}). Apare în „Compune” → „Selecție manuală”.` : `Salvat: „${r.denumire}” (${r.telefon_mascat}).` })
+      setForm(FORM_NUMAR)
+    } catch (e) {
+      setMesaj({ tip: 'eroare', text: e?.code === '40001' ? 'Numărul s-a schimbat între timp: am reîncărcat lista — reia modificarea.' : mesajEroare(e) })
+      if (e?.code === '40001') setForm(FORM_NUMAR)
+    } finally { setLucru(false); incarca() }
+  }
+  const dezactiveaza = async n => {
+    if (!window.confirm(`Dezactivez numărul de serviciu „${n.denumire}” (${n.telefon_mascat})?\n\nNu mai apare în „Compune”. Loturile deja create îl păstrează (le anulezi din Istoric, dacă e cazul). Nu se șterge: istoricul îi păstrează denumirea.`)) return
+    setLucru(true); setMesaj(null)
+    try { setMesaj({ tip: 'ok', text: mesajDezactivare(await smsApi.dezactiveazaNumarServiciu(n.id, n.versiune)) }); if (form.id === n.id) setForm(FORM_NUMAR) }
+    catch (e) { setMesaj({ tip: 'eroare', text: e?.code === '40001' ? 'Numărul s-a schimbat între timp: am reîncărcat lista.' : mesajEroare(e) }) }
+    finally { setLucru(false); incarca() }
+  }
+  const editeaza = n => setForm({ id: n.id, denumire: n.denumire, telefon: '', responsabilId: n.responsabil_employee_id == null ? '' : String(n.responsabil_employee_id), nota: n.nota || '', versiune: n.versiune })
+  const activiAngajati = (angajati || [])
+  return <div style={S.panel} aria-label="Numere de serviciu">
+    <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>📞 Numere de serviciu</div>
+    <p style={{ ...S.small, margin: '0 0 8px' }}>Telefoane ale firmei care nu sunt ale unui angajat (ex. „Gazpet Redări”). Apar separat în „Compune” → „Selecție manuală”, cu denumirea lor; colegul care ține telefonul rămâne în listă cu numărul lui din fișă. La „Toți angajații” și „Pe departament” nu intră.</p>
+    <div style={S.row}>
+      <input aria-label="Denumirea numărului de serviciu" value={form.denumire} onChange={camp('denumire')} placeholder="Denumire (ex. Gazpet Redări)" maxLength={60} style={{ ...S.input, minWidth: 200 }} />
+      <input aria-label="Telefonul numărului de serviciu" value={form.telefon} onChange={camp('telefon')} placeholder={nou ? '07xx xxx xxx' : 'Telefon nou (gol = rămâne)'} style={{ ...S.input, minWidth: 160 }} />
+      <select aria-label="Cine ține telefonul" value={form.responsabilId} onChange={camp('responsabilId')} style={S.input}>
+        <option value="">Fără responsabil</option>{activiAngajati.map(a => <option key={a.id} value={String(a.id)}>{a.nume}</option>)}
+      </select>
+      <input aria-label="Notă număr de serviciu" value={form.nota} onChange={camp('nota')} placeholder="Notă (opțional)" maxLength={300} style={{ ...S.input, minWidth: 180 }} />
+      <button type="button" style={{ ...S.primar, opacity: probleme.length ? 0.5 : 1 }} disabled={lucru || probleme.length > 0} onClick={salveaza}>{nou ? '＋ Adaugă numărul' : `✔ Salvează (versiunea ${form.versiune})`}</button>
+      {!nou && <button type="button" style={S.button} disabled={lucru} onClick={() => setForm(FORM_NUMAR)}>Renunță</button>}
+    </div>
+    {atins && probleme.length > 0 && <p style={{ ...S.small, color: G.yellow, margin: '6px 0 0' }}>{probleme.join(' ')}</p>}
+    {eroare && <p role="alert" style={{ ...S.small, color: G.red, margin: '8px 0 0' }}>Lista numerelor de serviciu nu s-a putut citi: {eroare}</p>}
+    <div style={{ marginTop: 10, border: `1px solid ${G.border}`, borderRadius: 7 }}>
+      {!lista ? <p style={{ ...S.small, padding: 10, margin: 0 }}>{eroare ? '—' : 'Se încarcă…'}</p> : !lista.length ? <p style={{ ...S.small, padding: 10, margin: 0 }}>Niciun număr de serviciu încă.</p> : lista.map(n =>
+        <div key={n.id} style={{ ...S.row, justifyContent: 'space-between', padding: '8px 10px', borderBottom: `1px solid ${G.border}`, opacity: n.activ ? 1 : 0.6 }}>
+          <span style={{ fontSize: 13 }}><b>{n.denumire}</b> · {n.telefon_mascat} {n.activ ? <Badge color={G.green}>activ</Badge> : <Badge>dezactivat</Badge>}{n.optout ? <> <Badge color={G.red}>opt-out</Badge></> : null}</span>
+          <span style={S.small}>{n.responsabil_nume ? `ține telefonul: ${n.responsabil_nume}` : 'fără responsabil'}{n.nota ? ` · ${n.nota}` : ''}</span>
+          {n.activ && <span style={S.row}>
+            <button type="button" style={S.button} disabled={lucru} onClick={() => editeaza(n)}>Modifică</button>
+            <button type="button" style={{ ...S.button, color: G.red }} disabled={lucru} onClick={() => dezactiveaza(n)}>Dezactivează</button>
+          </span>}
+        </div>)}
+    </div>
+  </div>
 }
 
 // ── Opt-out ─────────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 // Regulile de text / telefon / cost vin din modulul comun cu edge-ul (supabase/functions/_shared/smsText.mjs), oglindit în BD
 // (fn_sms_text_final, fn_sms_tel_normalizat). Sursa de adevăr rămâne BD-ul: previzualizarea finală o face RPC-ul, nu UI-ul.
 export { verificaText, costEstimat, mascheazaTelefon, normalizeazaTelefon, MAX_GSM, TARIF_EUR } from '../../supabase/functions/_shared/smsText.mjs'
-import { verificaText } from '../../supabase/functions/_shared/smsText.mjs'
+import { verificaText, normalizeazaTelefon } from '../../supabase/functions/_shared/smsText.mjs'
 
 export const STARI_LOT = {
   draft: ['Draft — așteaptă aprobarea', '#946B20'],
@@ -99,11 +99,47 @@ export function contorText(text) {
   return { ...v, eticheta: `${v.lungime}/160 caractere GSM-7 · ${v.segmente || 0} SMS`, avertismente }
 }
 
-/** Destinatarii aleși în UI → argumentele RPC-ului fn_sms_lot_intern_creeaza. */
-export function argumenteIntern(mod, { departamente = [], selectati = [] } = {}) {
+/** Destinatarii aleși în UI → argumentele RPC-ului fn_sms_lot_intern_creeaza.
+ *  20261220a: numerele de serviciu (p_numere_serviciu) DOAR la selecția manuală și doar dacă e bifat vreunul (cheia lipsește altfel, ca
+ *  apelul să rămână identic cu cel de dinainte); „toți” / „pe departament” nu le trimit niciodată (și BD-ul le refuză acolo). */
+export function argumenteIntern(mod, { departamente = [], selectati = [], numereServiciu = [] } = {}) {
   if (mod === 'departament') return { p_departamente: departamente.length ? departamente : ['__niciunul__'], p_angajati: null }
-  if (mod === 'selectie') return { p_departamente: null, p_angajati: selectati.length ? selectati.map(Number) : [-1] }
+  if (mod === 'selectie') {
+    const a = { p_departamente: null, p_angajati: selectati.length ? selectati.map(Number) : [-1] }
+    return numereServiciu.length ? { ...a, p_numere_serviciu: numereServiciu.map(Number) } : a
+  }
   return { p_departamente: null, p_angajati: null }
+}
+
+/** 20261220a: numerele de serviciu din „Selecție manuală”, filtrate ca angajații: căutarea după denumire le prinde; un filtru de
+ *  departament le ascunde (nu sunt ale niciunui departament). */
+export function filtreazaNumereServiciu(lista, { departament = '', cauta = '' } = {}) {
+  if (departament) return []
+  const q = cauta.trim().toLowerCase()
+  return (lista || []).filter(n => !q || String(n.denumire || '').toLowerCase().includes(q))
+}
+
+/** Contorul „N selectați”: angajații bifați + numerele de serviciu bifate. */
+export const numarSelectati = (angajati, numere) => (angajati?.size || 0) + (numere?.size || 0)
+
+/** Formularul „Numere de serviciu” (⚙ Setări, owner): denumire 2–60, telefon mobil RO (obligatoriu la adăugare; la modificare gol =
+ *  rămâne cel salvat), nota max 300. Întoarce lista de probleme (BD-ul verifică oricum aceleași reguli). */
+export function valideazaNumarServiciu({ denumire, telefon, nota } = {}, { nou = true } = {}) {
+  const p = []
+  const d = String(denumire ?? '').replace(/\s+/g, ' ').trim()
+  if (d.length < 2 || d.length > 60) p.push('Denumirea are între 2 și 60 de caractere.')
+  const t = String(telefon ?? '').trim()
+  if (nou && !t) p.push('Telefonul e obligatoriu.')
+  else if (t && !normalizeazaTelefon(t)) p.push('Telefonul nu e un mobil românesc valid (07xx xxx xxx).')
+  if (String(nota ?? '').trim().length > 300) p.push('Nota are maximum 300 de caractere.')
+  return p
+}
+
+/** Mesajul de după dezactivare: loturile deja create îl păstrează (lista e fixată la creare). */
+export function mesajDezactivare(r) {
+  const n = Number(r?.loturi_active) || 0
+  const baza = `„${r?.denumire || 'Numărul'}” e dezactivat: nu mai apare în „Compune”.`
+  return n ? `${baza} ${n === 1 ? 'Un lot activ îl mai are' : `${n} loturi active îl mai au`} în coadă — anulează-l din Istoric dacă nu mai trebuie să plece.` : baza
 }
 
 export function departamente(lista) {
