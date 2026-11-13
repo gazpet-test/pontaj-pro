@@ -76,19 +76,23 @@ lanțul, semnalele și contextul sunt identice cu ale producției**, iar plasa o
   - un scriitor eliberat înainte de termen (la ≈ 0,65 s): proba `IDENTIC`, garda la ≈ 1,1 s; prin runner: lock-ul luat la 0,68 s
     (6 încercări), aplicat, garda la ≈ 1,1 s.
 
-  Cât ține migrarea lock-ul: de la luarea lui până la COMMIT (pe clonă ≈ 0,4 s). În acest interval scrierile pe `sites` așteaptă;
-  citirile trec.
+  Cât ține migrarea lock-ul: de la luarea lui până la COMMIT. Pe clonă sunt ≈ 0,4 s între mesajul de luare a lock-ului și garda finală
+  — o aproximare, nu durata exactă până la COMMIT (pe aceea o dă, la proba pe țintă, observatorul de lock-uri). În acest interval
+  scrierile pe `sites` așteaptă; citirile trec.
 - **Triggerele de eveniment ale platformei** (șase): patru pornesc doar la crearea / ștergerea unei extensii — migrarea nu creează și nu
   șterge extensii; două (`pgrst_ddl_watch`, `pgrst_drop_watch`) pornesc la orice comandă de schemă și fac un singur lucru:
   `NOTIFY pgrst, 'reload schema'`. Nu scriu în catalog. Notificarea e tranzacțională; verificat pe clonă, cu o sesiune care ascultă
-  canalul: la proba cu ROLLBACK nicio notificare, la aplicare una, la revenire una. Deci proba cu ROLLBACK pe țintă nu are efect extern.
+  canalul: la proba cu ROLLBACK nicio notificare, la aplicare una, la revenire una. Deci proba cu ROLLBACK pe țintă nu trimite
+  notificarea către serviciul REST; efectul ei asupra traficului rămâne așteptarea scrierilor pe `sites` cât e ținut lock-ul.
 
 ## 4. Ce rămâne
 
 Cu acordul owner-ului, după criteriile din `docs/LIVRARE_L15_V2.md`: recitirea din ziua livrării (comparată și clasificată), trei probe
 consecutive cu ROLLBACK pe țintă — toate `IDENTIC`, garda finală cel mult 1,5 s, verificarea „înainte” raportată separat, lock-ul în
 jurnal (momentul, încercările, durata; proba tipărește doar rândurile runnerului, deci se păstrează ieșirea întreagă a sesiunii și se
-pornește un observator doar-citire al lock-ului) —, o recitire comparată imediat înaintea aplicării, apoi aplicarea. La un refuz
+pornește un observator doar-citire al lock-ului, legat de sesiunea livrării, nu de orice sesiune care ține același lock; un jurnal
+incomplet = probă neacceptată) —, o recitire comparată imediat înaintea aplicării, apoi aplicarea. Durata lock-ului pe `sites` se
+acceptă explicit pentru scrierile reale, iar în acel interval se verifică și că o citire obișnuită trece. La un refuz
 „BUGET_LOCK”: se confirmă că n-a rămas nimic, se caută cine ținea tabelul, se reia manual și seria de trei reîncepe.
 
 Separat de migrare, înaintea pornirii pasului zilnic: garda de cotă a pasului socotește azi 12 rulări pe zi ale vremii curente — se

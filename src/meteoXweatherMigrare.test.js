@@ -205,6 +205,26 @@ describe('20261221a — manifestul diferențelor (L15 v2)', () => {
     // nimic din drepturile implicite, scheme, roluri, extensii
     expect(randuri.filter(r => ['acl_implicit', 'schema', 'rol', 'extensie'].includes(r[0]))).toEqual([])
   })
+  it('numărări independente, din textul migrării: coloanele tabelului și ale vederii, constrângerile', () => {
+    // fără asta, o coloană scoasă din manifest (cu numărul din antet actualizat) ar trece verificările de formă de mai sus
+    const i = MIG.indexOf('CREATE TABLE public.meteo_zilnic_xweather (')
+    const tabel = MIG.slice(i, MIG.indexOf('\n);', i)).replace(/--[^\n]*/g, '')
+    const colT = [...tabel.matchAll(/^  ([a-z_]+) (?:bigint|date|smallint|numeric|text|jsonb|timestamptz)\b/gm)].map(m => m[1])
+    expect(colT).toHaveLength(27)
+    const dinManifest = rel => randuri.filter(r => r[0] === 'coloana' && r[1].startsWith(`coloana public.${rel}.`)).map(r => r[1].slice(`coloana public.${rel}.`.length)).sort()
+    expect(dinManifest('meteo_zilnic_xweather')).toEqual([...colT].sort())
+    // vederea: coloanele tabelului fără răspunsurile brute, plus cele trei calculate
+    const colV = colT.filter(c => !['raspuns_conditii', 'raspuns_observatii'].includes(c)).concat(['prima_preluare_la', 'sursa', 'versiuni']).sort()
+    expect(dinManifest('v_meteo_zilnic_xweather')).toEqual(colV)
+    expect(randuri.filter(r => r[0] === 'coloana')).toHaveLength(colT.length + colV.length)
+    // constrângerile: fiecare CHECK din definiția tabelului + cheia primară + cheia străină
+    const nCheck = (tabel.match(/\bCHECK \(/g) || []).length
+    expect(nCheck).toBe(32)
+    expect(nr(tabel, 'PRIMARY KEY (')).toBe(1)
+    expect(nr(tabel, ' REFERENCES public.sites(id)')).toBe(1)
+    expect(randuri.filter(r => r[0] === 'constrangere')).toHaveLength(nCheck + 2)
+    expect(randuri).toHaveLength(108)
+  })
   it('documentul livrării: acceptările pe nume, manifestul, probele', () => {
     const DOC = citeste('docs/METEO_XWEATHER_LIVRARE_20261221a.md')
     expect(DOC).toContain('**SEMNALE acceptate: EXECUTE dinamic 0 · vederi 0 · alt limbaj 0 · DEFINER acceptate 0')
