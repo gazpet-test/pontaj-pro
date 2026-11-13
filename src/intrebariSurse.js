@@ -15,7 +15,7 @@ dupa fara intre sub peste cum cand daca acest aceasta aceste acestui acesta cel 
 am ne va vor iar deci doar tot toate fie unde cine cat cate the of and or for to is are be pe`.split(/\s+/))
 export const GENERICE = new Set(`verdict depinde este sunt fie face fac facut facute aplica aplic aplicat aplicabil aplicabila cere cerut ceruta
 cer exista poate pot alt alta alte altul altei acel acea aceea astfel privind referitor caz cazul orice toti fiecare art articol
-articolul articolului alin alineat alineatul pct punct punctul lit litera anexa sursa sursei sursele`.split(/\s+/))
+articolul articolului alin alineat alineatul pct punct punctul lit litera anexa sursa sursei sursele citat citatul citate`.split(/\s+/))
 const FARA_SURSA = 'nu am gasit sursa oficiala'
 
 export const normalizeaza = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')

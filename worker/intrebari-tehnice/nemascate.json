@@ -1,0 +1,24 @@
+{
+  "_decizie": "Entitățile care NU se maschează în „❓ Întreabă echipa”. Decizia owner-ului, 13.11.2026 (după review-ul PR #1086): operatorii de rețea, firmele / instituțiile publice și Gazpet rămân vizibile — cerințele lor sunt chiar subiectul întrebărilor. Listă ÎNCHISĂ, un singur loc (citită DOAR de motorul unic src/intrebariMascare.js — ecranul și workerul, prin motor_cli.mjs). Orice adăugare = decizia owner-ului, prin coordonator, cu categoria și motivul. NU intră: furnizori, subcontractori, clienți privați, persoane.",
+  "_potrivire": "Se compară NUMELE ÎNTREG al entității (fără forma juridică SRL / SA …, inițialele S.N.T.G.N. lipite = sntgn), niciodată un cuvânt din el: „Transgaz Construct SRL” se maschează. `forme` = formele canonice (minuscule, fără diacritice, cuvintele separate de un spațiu).",
+  "categorii": {
+    "operator_retea": "operator de rețea (gaze, energie electrică, apă): avizele și cerințele lui tehnice sunt subiectul întrebărilor",
+    "companie_publica": "societate cu capital majoritar de stat: cerințele ei sunt publice și sunt subiectul întrebărilor",
+    "institutie_publica": "autoritate / instituție publică: reglementări și avize publice",
+    "societatea_noastra": "Gazpet Instal (societatea care pune întrebarea)"
+  },
+  "entitati": [
+    {"nume": "SNTGN Transgaz SA", "categorie": "operator_retea", "forme": ["transgaz", "sntgn transgaz"]},
+    {"nume": "Delgaz Grid SA (fost E.ON Distribuție)", "categorie": "operator_retea", "forme": ["delgaz", "delgaz grid", "e on", "eon"]},
+    {"nume": "Distrigaz Sud Rețele SRL", "categorie": "operator_retea", "forme": ["distrigaz", "distrigaz sud retele"]},
+    {"nume": "Engie România SA", "categorie": "operator_retea", "forme": ["engie", "engie romania"]},
+    {"nume": "Premier Energy", "categorie": "operator_retea", "forme": ["premier energy"]},
+    {"nume": "CNTEE Transelectrica SA", "categorie": "operator_retea", "forme": ["transelectrica"]},
+    {"nume": "Electrica SA", "categorie": "operator_retea", "forme": ["electrica"]},
+    {"nume": "Apa Nova București SA", "categorie": "operator_retea", "forme": ["apa nova", "apa nova bucuresti"]},
+    {"nume": "SNGN Romgaz SA", "categorie": "companie_publica", "forme": ["romgaz", "sngn romgaz"]},
+    {"nume": "Hidroelectrica SA", "categorie": "companie_publica", "forme": ["hidroelectrica"]},
+    {"nume": "ANRE", "categorie": "institutie_publica", "forme": ["anre"]},
+    {"nume": "Gazpet Instal SRL", "categorie": "societatea_noastra", "forme": ["gazpet", "gazpet instal"]}
+  ]
+}
