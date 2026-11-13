@@ -285,12 +285,14 @@ async function zileCuRaport(db: any, siteIds: number[], de: string, termen: numb
 //  1) o pagină mărginită de rapoarte (cele mai vechi, ordine (data, id)) = zilele-șantier VERIFICATE;
 //  2) pentru fiecare șantier din pagină, vremea salvată pe intervalul zilelor lui din pagină, citită PÂNĂ LA CAPĂT (cheie = data, până la
 //     pagina goală; L23), sub termen. Nu se poate termina → „neajuns (termen)”, niciodată o cifră.
-// Sensul: `numar` = restanțe CONFIRMATE printre cele `verificate`; `exact: false` doar când pagina de rapoarte a fost plină (au rămas rapoarte
-// neverificate) → `numar` e un minim adevărat. Fiecare exemplu = o zi-șantier verificată complet (raport prezent, vreme absentă).
+// Sensul: `numar` = restanțe CONFIRMATE printre cele `verificate`; `exact: false` doar când pagina de rapoarte a fost plină (POATE să fi rămas
+// rapoarte neverificate; la exact 1.000 nu e sigur) → `numar` e un minim adevărat. Cost: 1 + cel puțin 2 interogări pe șantier din pagină
+// (pagina cu vreme + pagina goală), plus una la fiecare 1.000 de zile cu vreme pe interval; secvențiale, după zilele servite, sub termen. Fiecare exemplu = o zi-șantier verificată complet (raport prezent, vreme absentă).
 // Eroarea de citire → { eroare } (L18).
 const LIMITA_RESTANTE = 1000;
-const SENS_RESTANTE = 'numar = restanțe confirmate (raport fără vreme) printre zilele-șantier verificate; exact:false = au rămas rapoarte '
-  + 'neverificate (pagina plină), numar e un minim';
+// r8: la exact 1.000 de rapoarte pagina e plină fără să existe neapărat altele → exact:false = „posibil incomplet”, nu „sigur mai sunt”
+const SENS_RESTANTE = 'numar = restanțe confirmate (raport fără vreme) printre zilele-șantier verificate; exact:false = pagina de rapoarte '
+  + 'a fost plină (1.000), pot exista rapoarte neverificate (posibil incomplet), numar e un minim';
 // deno-lint-ignore no-explicit-any
 async function restanteVechi(db: any, siteIds: number[], de: string, termen: number) {
   if (termen - Date.now() < MIN_TIMP_PAS_MS) return NEAJUNS_TERMEN;

@@ -106,9 +106,55 @@ describe('r7 — oprire după k poziții: părțile servite proporțional în or
     return max
   }
   const CAZURI = []
-  for (const pas of [1, 2, 3, 5, 7, 10, 30]) for (const nI of [0, 1, 2, 3, 10, 20]) for (const nR of [0, 1, 2, 5, 13, 50]) CAZURI.push([pas, nI, nR])
-  it(`oricare k = 1..n, ${CAZURI.length} combinații (pas, ieri, restanțe), două zile de pornire: abaterea ≤ ½ poziție (cerința: ≤ 1)`, () => {
-    for (const ieri of [IERI0, zi(1)]) for (const [pas, nI, nR] of CAZURI) expect(abatereMax(rotesteCoada, nI, nR, pas, ieri), `${pas}/${nI}/${nR}`).toBeLessThanOrEqual(0.5)
+  for (const pas of [1, 2, 3, 4, 5, 7, 10, 30]) for (const nI of [0, 1, 2, 3, 10, 20]) for (const nR of [0, 1, 2, 4, 5, 10, 13, 50]) CAZURI.push([pas, nI, nR])
+  // r8: garanția exactă — în orice prefix de k ≥ 1 poziții numărul de restanțe e ⌊așteptat⌋ sau ⌈așteptat⌉ (abatere < 1 poziție), iar când
+  // „ieri” are loc în rulare (pt.ieri ≥ 1) prima poziție e „ieri”
+  function verificaGarantia(roteste, nI, nR, pas, ieri) {
+    const o = roteste(coada(nI, nR, ieri), ieri, pas).sarcini
+    if (nI + nR <= pas) return nI ? esteIeri(o[0], ieri) : true
+    const pt = partiCoada(nI, nR, pas, ieri)
+    if (pt.ieri >= 1 && !esteIeri(o[0], ieri)) return false
+    const p = pt.restante / (pt.ieri + pt.restante)
+    let rest = 0
+    for (let k = 1; k <= o.length; k++) {
+      if (!esteIeri(o[k - 1], ieri)) rest++
+      const asteptat = Math.min(nR, k, Math.max(k - nI, 0, k * p))
+      if (rest < Math.floor(asteptat + 1e-9) || rest > Math.ceil(asteptat - 1e-9)) return false
+    }
+    return true
+  }
+  it(`oricare k = 1..n, ${CAZURI.length} combinații (pas, ieri, restanțe), două zile de pornire: „ieri” primul când are loc; restanțele ⌊…⌋ sau ⌈…⌉ (abatere < 1)`, () => {
+    for (const ieri of [IERI0, zi(1)]) for (const [pas, nI, nR] of CAZURI) {
+      expect(verificaGarantia(rotesteCoada, nI, nR, pas, ieri), `${pas}/${nI}/${nR}`).toBe(true)
+      expect(abatereMax(rotesteCoada, nI, nR, pas, ieri), `${pas}/${nI}/${nR}`).toBeLessThan(1)
+    }
+  })
+  it('pas 1: „ieri” primul doar în zilele în care locul e al lui (paritatea zilei); altfel restanța', () => {
+    for (const ieri of [IERI0, zi(1)]) {
+      const pt = partiCoada(3, 3, 1, ieri), o = rotesteCoada(coada(3, 3, ieri), ieri, 1).sarcini
+      expect(esteIeri(o[0], ieri)).toBe(pt.ieri === 1)
+    }
+  })
+  it('r8 — contraexemplul recenzentului: plafon 10 (pas 5), 1 ieri + 10 restanțe → împărțirea 1 + 4, ordinea „IRRRR” (în r7: „RRIRR”)', () => {
+    const pt = partiCoada(1, 10, 5, IERI0)
+    expect(pt).toMatchObject({ ieri: 1, restante: 4 })
+    // restanțe în primele m poziții = min(round(4m / 5), m − 1): m = 1..5 → min(1, 0), min(2, 1), min(2, 2), min(3, 3), min(4, 4) (de mână)
+    expect(rotesteCoada(coada(1, 10), IERI0, 5).sarcini.slice(0, 5).map(x => (esteIeri(x, IERI0) ? 'I' : 'R')).join('')).toBe('IRRRR')
+  })
+  it('r8 — mutant (prima poziție lăsată restanțelor = formula r7 fără limita m − 1): „RRIRR”, garanția pică', () => {
+    const rotesteR7 = (sarcini, ieri, pas) => {
+      const I = sarcini.filter(x => esteIeri(x, ieri)), R = sarcini.filter(x => !esteIeri(x, ieri))
+      if (I.length + R.length <= pas) return { sarcini: [...I, ...R] }
+      const pt = partiCoada(I.length, R.length, pas, ieri), tot = pt.ieri + pt.restante, out = []
+      const pana = (m) => Math.floor((2 * m * pt.restante + tot) / (2 * tot))
+      for (let k = 0, i = 0, r = 0; i < I.length || r < R.length; k++) {
+        if ((pana(k + 1) > pana(k) && r < R.length) || i >= I.length) out.push(R[r++]); else out.push(I[i++])
+      }
+      return { sarcini: out }
+    }
+    expect(rotesteR7(coada(1, 10), IERI0, 5).sarcini.slice(0, 5).map(x => (esteIeri(x, IERI0) ? 'I' : 'R')).join('')).toBe('RRIRR')
+    expect(verificaGarantia(rotesteR7, 1, 10, 5, IERI0)).toBe(false)
+    expect(CAZURI.filter(([pas, nI, nR]) => !verificaGarantia(rotesteR7, nI, nR, pas, IERI0)).length).toBeGreaterThan(0)
   })
   it('cazul recenzentului: plafon 10 (pas 5, 3 + 2), oprire după 2 poziții → deja o restanță servită (în r6: zero)', () => {
     const o = rotesteCoada(coada(10, 10), IERI0, 5).sarcini.slice(0, 2)

@@ -941,6 +941,39 @@ describe('r6 P1 — restanțele au partea lor din plafon (contraexemplul recenze
   })
 })
 
+describe('r8 P2 — „ieri” începe rularea: o oprire de timp după restanțe nu-l mai lasă neservit (contraexemplul recenzentului r7, în handler)', () => {
+  // cota necunoscută → plafon 10 = pas 5; șantierul 1 activ, cu vreme pe 06..11.11 → doar „ieri” (12.11) lipsește; șantierul 2, inactiv,
+  // are 10 zile cu raport și fără vreme (20..29.10) → împărțirea 1 ieri + 4 restanțe. Fiecare zi servită durează 18 s (9 s pe cerere,
+  // sub limita de 25 s a unei cereri); pasul are 40 s → încap 2 zile (0 → 18 → 36; la 36 s mai sunt 4 s < 5 s, a treia nu mai începe)
+  const fara = ({ ep, status }) => (status >= 200 && status < 300 ? { 'X-Cost-Tokens': String(COST_DOC[ep]) } : {})
+  const stareR8 = () => stare({
+    sites: [santier(1), santier(2)],
+    rapoarte: [{ site_id: 1, data: '2026-11-11' }, ...zileInapoi('2026-10-29', 10).map(data => ({ site_id: 2, data }))],
+    vreme: zileInapoi('2026-11-11', 6).map(z => vremeZi(1, z)),
+  })
+  it('1 ieri + 10 restanțe, 18 s pe zi, pas de 40 s: „ieri” servit primul, apoi o restanță; restul „neajunsă (bugetul de timp)”', async () => {
+    const st = stareR8()
+    const { status, body } = await ruleaza(st, { antete: fara, pasMs: 9000 })
+    const c = cereriCond(st)
+    expect(c).toHaveLength(2)
+    expect(c[0]).toBe('1:2026-11-12')
+    expect(c[1].startsWith('2:')).toBe(true)
+    expect(body.xweather.rotatie).toMatchObject({ pas: 5, parti: { ieri: 1, restante: 4 } })
+    expect(body.xweather).toMatchObject({ scrise: 2 })
+    expect(body.xweather.zile_nesalvate).toHaveLength(9)
+    expect(body.xweather.zile_nesalvate.filter(x => x.site_id === 1)).toHaveLength(0)
+    expect(body.xweather.zile_nesalvate.every(x => x.motiv === 'neajunsă (bugetul de timp)')).toBe(true)
+    expect(status).toBe(207)
+  })
+  it('mutant: prima poziție lăsată restanțelor (limita m − 1 scoasă, ca în r7) → două restanțe, zero „ieri” (reproduce contraexemplul)', async () => {
+    const st = stareR8()
+    await ruleaza(st, { antete: fara, pasMs: 9000, logica: mutant(LOGICA, [['return pt.ieri >= 1 ? Math.min(c, Math.max(0, m - 1)) : c', 'return c']]) })
+    const c = cereriCond(st)
+    expect(c).toHaveLength(2)
+    expect(c.filter(x => x.startsWith('1:'))).toHaveLength(0)
+  })
+})
+
 describe('r6 P2 — restanțele ieșite din fereastră (restante_vechi), doar la pasul zilnic cu întrerupătorul pornit', () => {
   // fereastra începe la 13.10 (ieri 12.11 − 30); 12.10 și 01.10 au raport fără vreme; 15.09 are raport ȘI vreme (completată de owner)
   const stareVechi = () => stare({ sites: [santier(1)], rapoarte: ['2026-10-12', '2026-10-01', '2026-09-15'].map(data => ({ site_id: 1, data })),

@@ -393,6 +393,7 @@ export function planXweather(
 // împletesc uniform în ORDINEA DE EXECUȚIE (r7: rotunjire, nu ⌊…⌋): în orice prefix al cozii fiecare parte e la cel mult ½ poziție de
 // proporția planificată, deci o oprire după oricâte poziții (gardă de cotă actualizată, termen, cost mai mare) le atinge pe amândouă
 // proporțional, nu doar pe cea de la coadă. (Nu garantează partea ÎNTREAGĂ: o oprire după 2 poziții servește 1 + 1, nu 3 + 2.)
+// r8: când „ieri” are loc în rulare, el începe rularea (prioritatea cerută de owner); restul se împletește ca în r7, cu abatere < 1 poziție.
 export const indexZi = (zi: string) => Math.round(Date.parse(zi + 'T00:00:00Z') / 864e5)
 const PHI = (Math.sqrt(5) - 1) / 2
 export const esteIeri = (s: { tinta?: string; zi: string }, ieri: string) => s.tinta === 'activ' && s.zi === ieri
@@ -422,7 +423,15 @@ export function rotesteCoada(sarcini: Sarcina[], ieri: string, pas: number): { s
   // r7: restanțele din primele m poziții = round(m × restante / tot) (nu ⌊…⌋): în ORICE prefix (o oprire după k poziții, de gardă /
   // termen / cost) fiecare parte e la cel mult ½ poziție de proporția planificată. Cu ⌊…⌋ restanțele erau mereu în urmă (pas 5, 3 + 2:
   // „IIRIR” — o oprire după 2 poziții le lăsa la zero); acum „IRIRI”. La pas întreg, aceleași 2 + 3 (round(tot × r / tot) = r).
-  const pana = (m: number) => Math.floor((2 * m * pt.restante + tot) / (2 * tot))
+  // r8 (re-review r7: plafon 10, 1 ieri + 4 restanțe dădea „R R I…”; cu 18 s pe zi și pasul de 40 s, „ieri” rămânea neajunsă): când „ieri”
+  // are cel puțin un loc în rulare (pt.ieri ≥ 1), PRIMA poziție e a lui „ieri” → restanțele din primele m poziții = min(round(…), m − 1).
+  // Garanția, în orice prefix de m ≥ 1 poziții (până se epuizează o parte): numărul de restanțe e ⌊m × r / tot⌋ sau ⌈m × r / tot⌉, deci
+  // fiecare parte e la MAI PUȚIN de o poziție de proporția planificată (½ cât timp limita m − 1 nu lucrează). Exemple: 3 + 2 → „IRIRI”
+  // (neschimbat), 1 + 4 → „IRRRR”, 1 + 3 → „IRRR”.
+  const pana = (m: number) => {
+    const c = Math.floor((2 * m * pt.restante + tot) / (2 * tot))
+    return pt.ieri >= 1 ? Math.min(c, Math.max(0, m - 1)) : c
+  }
   for (let k = 0, i = 0, r = 0; i < I.q.length || r < R.q.length; k++) {
     const vreaRest = pana(k + 1) > pana(k)
     if ((vreaRest && r < R.q.length) || i >= I.q.length) out.push(R.q[r++]); else out.push(I.q[i++])

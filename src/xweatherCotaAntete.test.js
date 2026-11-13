@@ -173,17 +173,19 @@ describe('rotația cozii (P1: coada nu se mai poate înfometa)', () => {
   it('indexul zilei: 12.11.2026 = 20.769 de zile de la 01.01.1970 (calculat de mână: 56 × 365 + 14 bisecte + 315)', () => {
     expect(indexZi(IERI)).toBe(20769)
   })
-  // r7: „ieri” nu mai e „mereu primul” (r5); din r6 are partea lui în primele `pas` poziții, iar din r7 părțile sunt împletite cu rotunjire
-  // în ordinea de execuție (re-review r6, punctul 3)
-  it('coada care încape în pas nu se rotește (ordinea „cele mai noi întâi” rămâne); „ieri” are locul lui în primele `pas` poziții', () => {
+  // din r6 „ieri” are partea lui în primele `pas` poziții, din r7 părțile sunt împletite cu rotunjire în ordinea de execuție; r8 (re-review
+  // r7): garanția „ieri începe rularea când are loc” e repusă (în r7 testul fusese relaxat la „R R I R”, iar o oprire de timp după două
+  // restanțe lăsa „ieri” neservit)
+  it('coada care încape în pas nu se rotește (ordinea „cele mai noi întâi” rămâne); „ieri” începe rularea când are loc', () => {
     const q = [s(0, 'activ', IERI), ...Array.from({ length: 10 }, (_, i) => s(i))]
     expect(rotesteCoada(q, IERI, 30)).toEqual({ sarcini: q, pornire: 0 })
     const r = rotesteCoada(q, IERI, 4)
     // rest 10 > 4 → pornire = ⌊fracția(20769 × 0,6180339887…) × 10⌋ = ⌊0,94791… × 10⌋ = 9 (calculat separat de cod)
     expect(r.pornire).toBe(9)
-    // părțile la pas 4: 1 ieri + 3 restanțe (rezerva 2 + locul nefolosit de „ieri”); restanțe în primele m poziții = round(3m / 4):
-    // m = 1..4 → 1, 2, 2, 3 (0,75 / 1,5 / 2,25 / 3, calculat de mână) → R R I R, apoi restul restanțelor
-    expect(r.sarcini).toEqual([q[10], q[1], q[0], ...q.slice(2, 10)])
+    // părțile la pas 4: 1 ieri + 3 restanțe (rezerva 2 + locul nefolosit de „ieri”); restanțe în primele m poziții = min(round(3m / 4), m − 1):
+    // m = 1..4 → min(1, 0), min(2, 1), min(2, 2), min(3, 3) = 0, 1, 2, 3 (calculat de mână) → I R R R, apoi restul restanțelor
+    expect(r.sarcini[0]).toBe(q[0])
+    expect(r.sarcini).toEqual([q[0], q[10], ...q.slice(1, 10)])
   })
   // teorema celor trei goluri: pentru 21 ≤ n < 34 puncte {kφ}, golul maxim ≤ ‖13φ‖ + ‖21φ‖ ≈ 0,0344 + 0,0213 = 0,0557 → × 80 ≈ 4,5 → ≤ 5 poziții
   it('punctul de pornire se mută în fiecare zi și acoperă coada (30 de zile consecutive, coadă de 80: golul maxim ≤ 5 poziții)', () => {
