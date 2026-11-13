@@ -9,7 +9,9 @@
 //   (b) forma normalizată a ieșirii nu conține componenta distinctivă;
 //   (c) demascarea dă textul inițial (restaurare exactă);
 //   (d) cazurile NEGATIVE rămân neschimbate;
-//   (e) r6: la persoanele DIFERITE alăturate, fiecare interval are eticheta altei entități.
+//   (e) r6: la persoanele DIFERITE alăturate, fiecare interval are eticheta altei entități;
+//   (f) r7: identitățile așteptate, calculate AICI din contract (impartireAsteptata / identitateAsteptata, B1–B5): două intervale au
+//       aceeași entitate DACĂ ȘI NUMAI DACĂ au aceeași identitate așteptată (nume incluse, forme ambigue, punți, titlu + persoane).
 // Toate numele sunt INVENTATE. Mărimea unui lot: cel mult LOT_MAX cazuri; numărul loturilor nu e plafonat.
 
 export const LOT_MAX = 100000
@@ -44,6 +46,24 @@ export const FIRME = [
 ]
 // conflictul cu excepțiile: firma privată care începe cu numele unei entități publice (familia „conflict_entitate_publica”)
 export const FIRMA_PUBLICA = { id: 'F6', comp: [P('Transgaz', 'Transgaz', false), P('Construct', 'Construct', false, true)] }
+
+// ─── r7 (review r6 P2-1 / P2-2): al doilea dicționar — nume INCLUSE unul în altul (familiile care îl folosesc au `dictionar: 'incluse'`) ───
+export const DICTIONAR_INCLUSE = {
+  persoane: ['VLĂDESCU ANA', 'VLĂDESCU ANA MARIA', 'ȘERBĂNESCU OLGA', 'ȘERBĂNESCU OLGA ELENA', 'MARE ION'],
+  firme: [], cui: [], localitati: [],
+}
+/** Dicționarul unei familii (forma răspunsului „nume” al edge-ului). */
+export const dictionarFamilie = nume => FAMILII.find(f => f.nume === nume)?.dictionar === 'incluse' ? DICTIONAR_INCLUSE : DICTIONAR
+// numele lui DICTIONAR_INCLUSE, scrise aici de mână (componentele normalizate), pentru oracolul împărțirii
+const NUME_INCLUSE = [
+  { id: 'VA', comp: ['vladescu', 'ana'] }, { id: 'VAM', comp: ['vladescu', 'ana', 'maria'] },
+  { id: 'SO', comp: ['serbanescu', 'olga'] }, { id: 'SOE', comp: ['serbanescu', 'olga', 'elena'] }, { id: 'MI', comp: ['mare', 'ion'] },
+]
+// numele lui DICTIONAR (familiile vechi), pentru oracolul împărțirii din familiile cu titlu
+const NUME_DICTIONAR = [
+  { id: 'P1', comp: ['vladescu', 'ana'] }, { id: 'P2', comp: ['zamfirescu', 'maria'] }, { id: 'P3', comp: ['serbanescu', 'olga'] },
+  { id: 'P4', comp: ['crangasu', 'viorel'] }, { id: 'P5', comp: ['mare', 'ion'] }, { id: 'P6', comp: ['dumbraveanu', 'andreea', 'ioana'] },
+]
 
 // ─── Valorile dimensiunilor (domeniul publicat) ───
 export const MAJUSCULE = ['T', 'U', 'L', 'M']          // ca în listă (Titlu) / MAJUSCULE / litere mici / mIXT (prima mică, restul mari)
@@ -146,6 +166,91 @@ function caz(poz, regiuni, distinctive, extra = {}) {
   return { t, spatii, distinctive, ...extra }
 }
 const plat = s => s.normalize('NFKD').replace(/[\p{M}\p{Cf}]/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+
+// ─── r7: oracolul împărțirii în persoane (contractul B1–B5, scris AICI, separat de motor) ───
+const cheieMultime = a => [...new Set(a)].sort().join(' ')
+/** Identitatea unei mulțimi de componente (B1–B3): numele cu mulțimea EXACTĂ (unul → el; mai multe → ambiguă), altfel singurul nume care
+ *  o include, altfel ambiguă proprie („A:” + mulțimea). */
+export function identitateAsteptata(comp, nume) {
+  const k = cheieMultime(comp)
+  const ex = nume.filter(n => cheieMultime(n.comp) === k)
+  if (ex.length) return { id: ex.length === 1 ? ex[0].id : 'A:' + k, exact: true }
+  const sup = nume.filter(n => comp.every(c => n.comp.includes(c)))
+  return { id: sup.length === 1 ? sup[0].id : 'A:' + k, exact: false }
+}
+/** Împărțirea așteptată a unui șir de cuvinte ALĂTURATE (componentele lor, `ks`), toate ascunse: grup = cuvinte consecutive cu
+ *  componente distincte, toate ale aceluiași nume. Se enumeră TOATE împărțirile; câștigă cele mai puține grupuri, apoi cele mai multe
+ *  nume exacte (B5). La egalitate: porțiunile dintre granițele comune tuturor împărțirilor optime în care împărțirile diferă devin UN
+ *  grup cu entitate ambiguă („A=” + mulțimea), dacă dau identități diferite aceluiași cuvânt; dacă dau aceleași identități cu granițe
+ *  diferite, contractul nu decide intervalul → null (cazul se exclude). [{i, j, id}] */
+export function impartireAsteptata(ks, nume) {
+  const n = ks.length, toate = []                 // ks[k] = componentele cuvântului k (un cuvânt cu cratimă poate avea mai multe)
+  const valid = (i, j) => { const s = ks.slice(i, j + 1).flat(); return new Set(s).size === s.length && nume.some(m => s.every(c => m.comp.includes(c))) }
+  const rec = (i, acc) => { if (i === n) { toate.push(acc); return } for (let j = i; j < n; j++) if (valid(i, j)) rec(j + 1, [...acc, [i, j]]) }
+  rec(0, [])
+  const id = ([i, j]) => identitateAsteptata(ks.slice(i, j + 1).flat(), nume)
+  const cost = p => [p.length, -p.filter(g => id(g).exact).length]
+  const mai = (a, b) => a[0] - b[0] || a[1] - b[1]
+  let best = null
+  for (const p of toate) if (!best || mai(cost(p), best) < 0) best = cost(p)
+  const opt = toate.filter(p => mai(cost(p), best) === 0)
+  const peCuvant = p => { const r = []; for (const g of p) for (let k = g[0]; k <= g[1]; k++) r[k] = id(g).id; return r }
+  const taieturi = [0]
+  for (let q = 1; q < n; q++) if (opt.every(p => p.some(([i]) => i === q))) taieturi.push(q)
+  taieturi.push(n)
+  const out = []
+  for (let t = 0; t + 1 < taieturi.length; t++) {
+    const [a, b] = [taieturi[t], taieturi[t + 1]]
+    const v = opt.map(p => JSON.stringify(p.filter(([i]) => i >= a && i < b)))
+    if (v.every(x => x === v[0])) { for (const g of JSON.parse(v[0])) out.push({ i: g[0], j: g[1], id: id(g).id }); continue }
+    const ids = opt.map(p => peCuvant(p).slice(a, b).join('|'))
+    if (ids.every(x => x === ids[0])) return null
+    out.push({ i: a, j: b - 1, id: 'A=' + cheieMultime(ks.slice(a, b).flat()) })
+  }
+  return out
+}
+// separatoarele dintre două nume: „alăturate” (cuvintele formează un singur șir — contract: spații, virgulă) sau nu (un cuvânt între ele)
+const ALATURAT = new Set([' ', NBSP, ', ', ','])
+/** Cazul dintr-un șir de bucăți: {cuv, k} (cuvânt de persoană din listă, componenta k), {nec, id} (persoană necunoscută: intervalul
+ *  ei, entitate proprie), {vizibil} (text care trebuie să rămână: titlul, componenta comună fără context), {sep} (separator). Șirurile de
+ *  cuvinte de persoană alăturate se împart cu impartireAsteptata; null = caz exclus (contractul nu decide). */
+function cazBucati(poz, bucati, nume, distinctive, extra = {}) {
+  const [pre, , post] = SABLON[poz]('')
+  let t = pre
+  const elem = []                                  // {a, b, k | nec | vizibil}
+  let alaturat = false
+  for (const x of bucati) {
+    if ('sep' in x) { alaturat = ALATURAT.has(x.sep); t += x.sep; continue }
+    const a = t.length
+    t += x.cuv ?? x.nec ?? x.vizibil
+    elem.push({ ...x, a, b: t.length, alaturat })
+    alaturat = false
+  }
+  t += post
+  const spatii = [], entitati = []
+  for (let i = 0; i < elem.length;) {
+    const x = elem[i]
+    if ('vizibil' in x) { i++; continue }
+    if ('nec' in x) { spatii.push([x.a, x.b]); entitati.push(x.id); i++; continue }
+    let j = i
+    while (j + 1 < elem.length && 'cuv' in elem[j + 1] && elem[j + 1].alaturat) j++
+    const imp = impartireAsteptata(elem.slice(i, j + 1).map(y => y.k), nume)
+    if (!imp) return null
+    for (const g of imp) { spatii.push([elem[i + g.i].a, elem[i + g.j].b]); entitati.push(g.id) }
+    i = j + 1
+  }
+  return { t, spatii, distinctive, entitati, ...extra }
+}
+const cuvinteNume = (comps, m, d) => comps.map(p => ({ cuv: majuscule(d === 'fara' ? p.f : p.c, m), k: p.f.split('-').map(plat) }))
+const intre = (lista, sep) => lista.flatMap((x, i) => i ? [{ sep }, x] : [x])
+const permutari = a => a.length <= 1 ? [a] : a.flatMap((x, i) => permutari([...a.slice(0, i), ...a.slice(i + 1)]).map(r => [x, ...r]))
+// componentele familiilor r7 (formele scrise; „distinctivă” = ascunsă și singură, în orice scriere — contract)
+const V = P('Vlădescu', 'Vladescu', true), A_ = P('Ana', 'Ana', false), M_ = P('Maria', 'Maria', true), S_ = P('Șerbănescu', 'Serbanescu', true),
+  O_ = P('Olga', 'Olga', true), E_ = P('Elena', 'Elena', true)
+const PERECHI_INCLUSE = [{ scurt: [V, A_], lung: [V, A_, M_] }, { scurt: [S_, O_], lung: [S_, O_, E_] }]
+const distinctiveDin = comps => [...new Set(comps.filter(p => p.dist).map(p => plat(p.f)))]
+export const TITLURI_TEST = ['dl. ', 'Dl. ', 'ing. ', 'dna ', 'colegul ']
+const NECUNOSCUTI = ['Popovici', 'Tudorache', 'Iordache']
 
 // ─── Familiile (fiecare = produsul complet al dimensiunilor ei) ───
 // Prima dimensiune a familiilor mari e lista EXPLICITĂ a variantelor aplicabile ale entității (ex. firma × diacritice × separator: o
@@ -327,6 +432,74 @@ export const FAMILII = [
     aplicabil: () => true,
     construieste([x, poz]) { return caz(poz, [{ r: x.r, nume: x.nume }], x.nume ? ['12345678'] : []) },
   },
+  {
+    // r7 (review r6 P2-1, A1–A2): după titlu, două persoane DIFERITE alăturate se delimitează ca fără titlu
+    nume: 'titlu_persoane_alaturate',
+    descriere: '(perechea ordonată de persoane diferite × ordinea fiecăreia × diacritice) × titlu × majuscule × separatorul dintre ele × poziție',
+    dims: () => [
+      variante(PERSOANE.flatMap(a => PERSOANE.filter(b => b !== a).map(b => [a, b])), () => ORDINI, () => ORDINI,
+        ([a, b]) => areDiacritice([a.nume, a.prenume, b.nume, b.prenume]) ? DIACRITICE : ['cu']),
+      TITLURI_TEST, MAJUSCULE, [' ', ', ', NBSP], POZITII],
+    aplicabil: () => true,
+    construieste([[[a, b], oa, ob, d], tit, m, sep, poz]) {
+      const scrie = (x, o) => intre(cuvinteNume(o === 'NP' ? [x.nume, x.prenume] : [x.prenume, x.nume], m, d), ' ')
+      const dist = [a, b].flatMap(x => [x.nume, x.prenume]).filter(p => p.dist).map(p => plat(p.f.split('-')[0]))
+      return cazBucati(poz, [{ vizibil: tit.trim() }, { sep: ' ' }, ...scrie(a, oa), { sep }, ...scrie(b, ob)], NUME_DICTIONAR, dist, { diferite: true })
+    },
+  },
+  {
+    // r7 (review r6 P2-1, A3–A4): persoana NECUNOSCUTĂ de după titlu se oprește înaintea componentelor cunoscute; contextul titlului
+    // DOAR pentru primul grup (componenta comună lipită de titlu se ascunde; după o persoană, rămâne)
+    nume: 'titlu_necunoscut_si_lista',
+    descriere: 'titlu × cuvinte necunoscute (0–3) × ce urmează (o persoană din listă în fiecare ordine, componenta comună, persoană + componentă comună, nimic) × majusculele necunoscuților × majusculele persoanei × poziție',
+    dims: () => [TITLURI_TEST, [0, 1, 2, 3], [...PERSOANE.flatMap(x => ORDINI.map(o => ({ pers: x, o }))), { comun: PERSOANE[4].nume }, { comun: PERSOANE[4].prenume },
+      { pers: PERSOANE[0], o: 'NP', comun: PERSOANE[4].nume }, { pers: PERSOANE[1], o: 'PN', comun: PERSOANE[4].prenume },
+      { pers: PERSOANE[3], o: 'NP', comun: PERSOANE[4].nume }, {}], ['T', 'U'], ['T', 'U'], POZITII],
+    aplicabil: ([, k, u, mn]) => (k > 0 || mn === 'T') && (k > 0 || u.pers || u.comun),
+    construieste([tit, k, u, mn, mp, poz]) {
+      const b = [{ vizibil: tit.trim() }]
+      const nec = NECUNOSCUTI.slice(0, k).map(w => majuscule(w, mn))
+      if (k) b.push({ sep: ' ' }, { nec: nec.join(' '), id: 'U:' + nec.join(' ').toLowerCase() })
+      if (u.pers) b.push({ sep: ' ' }, ...intre(cuvinteNume(u.o === 'NP' ? [u.pers.nume, u.pers.prenume] : [u.pers.prenume, u.pers.nume], mp, 'cu'), ' '))
+      if (u.comun) {
+        const w = majuscule(u.comun.c, mp)
+        // contextul titlului: DOAR dacă e primul grup de după titlu (nimic înainte); altfel componenta comună singură rămâne vizibilă
+        b.push({ sep: ' ' }, k === 0 && !u.pers ? { cuv: w, k: [plat(u.comun.f)] } : { vizibil: w })
+      }
+      const dist = [...nec.map(plat), ...(u.pers ? [u.pers.nume, u.pers.prenume].filter(p => p.dist).map(p => plat(p.f.split('-')[0])) : [])]
+      return cazBucati(poz, b, NUME_DICTIONAR, dist)
+    },
+  },
+  {
+    // r7 (review r6 P2-2, B1 + B5): două nume complete, unul INCLUS în celălalt, în orice ordine a componentelor, alăturate sau despărțite
+    nume: 'nume_incluse_alaturate',
+    dictionar: 'incluse',
+    descriere: '(perechea de nume incluse × care e primul × ordinea componentelor numelui scurt × a celui lung) × diacritice × majuscule (T, U, L) × separatorul dintre ele (spațiu, „, ”, NBSP, „ și ”) × titlu (fără, „dl.”) × poziție',
+    dims: () => [variante(PERECHI_INCLUSE, () => ['SL', 'LS'], x => permutari(x.scurt), x => permutari(x.lung)), DIACRITICE, ['T', 'U', 'L'],
+      [' ', ', ', NBSP, ' și '], ['', 'dl. '], POZITII],
+    aplicabil: () => true,
+    construieste([[x, ord, ps, pl], d, m, sep, tit, poz]) {
+      const [p1, p2] = ord === 'SL' ? [ps, pl] : [pl, ps]
+      const b = [...(tit ? [{ vizibil: tit.trim() }, { sep: ' ' }] : []), ...intre(cuvinteNume(p1, m, d), ' '), { sep }, ...intre(cuvinteNume(p2, m, d), ' ')]
+      return cazBucati(poz, b, NUME_INCLUSE, distinctiveDin(x.lung))
+    },
+  },
+  {
+    // r7 (review r6 P2-2, B3–B4): forma AMBIGUĂ (inclusă în ambele nume) lângă cele două nume complete, în toate ordinile (învățarea în
+    // ambele ordini, puntea tranzitivă prin forma comună), cu / fără pre-trecere — trei entități, niciodată unite
+    nume: 'forme_ambigue_si_punti',
+    dictionar: 'incluse',
+    descriere: '(perechea de nume incluse × forma ambiguă × ordinea componentelor numelui scurt × a celui lung) × ordinea celor trei bucăți × diacritice × majuscule (T, U, L) × separatorul dintre bucăți („; apoi ”, „ și ”, „, ”) × pre-trecere × poziție',
+    dims: () => [variante(PERECHI_INCLUSE.map((p, ix) => ({ ...p, ix })), x => x.ix === 0 ? [[V, ''], [V, 'ului'], [A_, '']] : [[S_, ''], [O_, '']],
+      x => permutari(x.scurt), x => permutari(x.lung)), permutari(['S', 'L', 'G']), DIACRITICE, ['T', 'U', 'L'], ['; apoi ', ' și ', ', '], [false, true], POZITII],
+    // „ana” scrisă mic și singură nu e componentă distinctivă (contract): rămâne vizibilă — în afara familiei
+    aplicabil: ([[, [g]], , , m]) => !(m === 'L' && !g.dist),
+    construieste([[x, [g, flex], ps, pl], ord, d, m, sep, inv, poz]) {
+      const reg = { S: intre(cuvinteNume(ps, m, d), ' '), L: intre(cuvinteNume(pl, m, d), ' '),
+        G: [{ cuv: majuscule((d === 'fara' ? g.f : g.c) + flex, m), k: [plat(g.f)] }] }
+      return cazBucati(poz, intre(ord.map(r => reg[r]), sep).flatMap(r => Array.isArray(r) ? r : [r]), NUME_INCLUSE, distinctiveDin(x.lung), inv ? { invata: true } : {})
+    },
+  },
 ]
 
 // ─── Enumerarea: produsul complet, indexat în bază mixtă; loturi de cel mult LOT_MAX ───
@@ -368,7 +541,7 @@ export function rezumat() {
 // ─── Oracolul (scris separat de motor) ───
 const ETICHETA = /^\[(?:PERSOANA|FIRMA|CNP|CUI|TELEFON|EMAIL|IBAN|NR_AUTO|ASCUNS)_[1-9][0-9]{0,3}(?:_F[1-9][0-9]{0,2})?\]/
 /** null = cazul trece; altfel motivul: 'restaurare', 'negativ_schimbat', 'in_afara_intervalului', 'interval_nemascat',
- *  'aceeasi_entitate' (r6), 'scurgere:<x>'. */
+ *  'aceeasi_entitate' (r6), 'entitati_separate' (r7), 'scurgere:<x>'. */
 export function verifica(c, iesire, restaurat) {
   if (restaurat !== c.t) return 'restaurare'
   if (!c.spatii.length) return iesire === c.t ? null : 'negativ_schimbat'
@@ -387,6 +560,10 @@ export function verifica(c, iesire, restaurat) {
   if (iesire.slice(p) !== c.t.slice(q)) return 'in_afara_intervalului'
   // r6: intervalele unor persoane DIFERITE au etichete de entități diferite (nu „o persoană” făcută din două)
   if (c.diferite && new Set(entitati).size !== entitati.length) return 'aceeasi_entitate'
+  // (f) r7: identitățile așteptate (oracolul împărțirii, B1–B5): aceeași identitate ⇔ aceeași entitate — nume diferite / forme ambigue
+  // nu se unesc, iar formele aceluiași nume rămân o entitate
+  if (c.entitati) for (let i = 0; i < entitati.length; i++) for (let j = i + 1; j < entitati.length; j++)
+    if ((entitati[i] === entitati[j]) !== (c.entitati[i] === c.entitati[j])) return entitati[i] === entitati[j] ? 'aceeasi_entitate' : 'entitati_separate'
   // (b) pe cuvintele ieșirii, fără etichete (o etichetă „[PERSOANA_1]” conține și ea litere), după normalizare
   const cuvinte = iesire.replace(new RegExp(ETICHETA.source.slice(1), 'g'), ' ').normalize('NFKD').replace(/[\p{M}\p{Cf}]/gu, '')
     .toLowerCase().split(/[^\p{L}\p{N}]+/u)

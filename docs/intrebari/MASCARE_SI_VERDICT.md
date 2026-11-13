@@ -106,14 +106,53 @@ se ascunde întreg, `Transgaz` singur rămâne (un cuvânt al unei entități pu
 
 **Componentele comune cer context.** Un cuvânt din listă care e și cuvânt obișnuit rămâne vizibil când apare singur, fără context
 identificator: „Alfa este coeficientul, gamma este radiația”, „Mare parte din lucrare”, „ion e un atom” rămân, deși `Alfa SRL`,
-`Gamma SRL`, `MARE ION` sunt în listă. Context = formă juridică alături, „SC” în față, un titlu („dl.”), o altă componentă a
-**aceluiași** nume din listă lipită de el sau **numele întreg apărut în aceeași întrebare**. r6: numele ALTEI persoane lipit de el nu e
+`Gamma SRL`, `MARE ION` sunt în listă. Context = formă juridică alături, „SC” în față, un titlu („dl.”; r7: doar pentru cuvântul
+lipit de titlu — vezi mai jos), o altă componentă a **aceluiași** nume din listă lipită de el sau **numele întreg apărut în aceeași
+întrebare**. r6: numele ALTEI persoane lipit de el nu e
 context („Ana Vlădescu Mare a venit” → „[PERSOANA_1] Mare a venit”, dacă „Mare” e doar componenta comună a lui `MARE ION`). **Compromisul declarat și testat:** după ce numele întreg a apărut,
 propagarea ascunde și cuvântul comun scris cu majusculă („Alfa SRL a livrat. Alfa a facturat” → ambele ascunse); la persoane, din
 r5, și scris mic („Ion Mare a venit; mare parte e gata” → „mare” ascuns); la firme, cuvântul comun scris mic rămâne („alfa e
 coeficientul”). **Excesul conservator declarat:** motorul nu decide dacă un cuvânt e „obișnuit” — decide lista. Un nume din listă care
 nu e în lista de cuvinte comune se ascunde și ca substantiv („busuioc pentru grădină”, dacă `Busuioc` e o persoană din listă);
 „pădure” și „munte” sunt în listă și rămân.
+
+### Persoanele: o singură delimitare și identitatea din listă (r7, review r6 P2-1 / P2-2)
+Ce e testat (cazurile scrise de mână din `teste_motor.json`, rândurile „r7”, dicționarele numite `incluse`, `egalitate`, `trei`; familiile
+r7 ale matricei; mutanții r7) — nimic în plus:
+- **O singură delimitare.** Toate căile care construiesc, extind sau reunesc o persoană — lista, titlul, propagarea, componenta +
+  context — trec prin ACEEAȘI funcție (`Mascare.delimiteaza`): ea împarte cuvintele alăturate în grupuri și dă fiecărui grup
+  identitatea. Titlul și propagarea doar MARCHEAZĂ cuvintele (context, persoană necunoscută); singurul loc care adaugă un interval
+  de persoană e `emitePersoane`, care dă mai departe grupurile neschimbate. Inventarul ÎNCHIS al acestor locuri (cine marchează, cine
+  delimitează, cine scrie, unde apare categoria `PERSOANA`) e verificat pe arborele sintactic al motorului, cu contraexemple (un titlu
+  care adaugă singur o persoană, o categorie calculată, un interval extins, o listă făcută de mână, o unire în `entitate()`).
+- **După un titlu** („dl.”, „ing.”, „dna”, „colegul” … — `TITLURI`), cuvintele se împart CA ȘI CUM titlul n-ar fi; titlul dă context
+  DOAR primului grup (cel care începe cu cuvântul lipit de el): `dl. Ana Vladescu Ion Mare a venit.` → `dl. [PERSOANA_1] [PERSOANA_2]
+  a venit.`; `dl. Mare a semnat.` → ascuns; `dl. Ana Vladescu Mare a plecat.` → „Mare” rămâne (contextul nu trece peste o persoană
+  deja delimitată).
+- **Persoana necunoscută de după titlu**: cuvintele cu majusculă necunoscute listei („Ca Titlu” sau integral mari, de cel puțin 6
+  litere), despărțite prin spații, în fereastra titlului. **Limita declarată: cel mult TREI cuvinte necunoscute** — o regulă de tipar,
+  nu o garanție că orice nume necunoscut e ascuns întreg. Persoana necunoscută se oprește înaintea oricărei componente cunoscute
+  (deci și înaintea unui nume complet din listă), iar componenta revine delimitării comune: `dl. Popescu Ana Vladescu a venit.` →
+  două persoane; `dl. Popescu Mare a sunat.` → `dl. [PERSOANA_1] Mare a sunat.` („Mare” nu e primul grup, deci fără context).
+  Decizie (r7, spusă aici ca să poată fi întoarsă): un cuvânt necunoscut din fereastra titlului DUPĂ un nume din listă e altă persoană,
+  ascunsă, cu entitate proprie (`dl. Ana Vladescu Popescu` → două etichete); al doilea prenume între două componente ale aceluiași nume
+  rămâne în nume (`dl. Ana Gheorghe Vladescu` → o persoană).
+- **Identitatea unui grup** (mulțimea G a componentelor lui din listă) o dă DOAR dicționarul, înaintea oricărei învățări din speță —
+  deci nu depinde de ordinea textelor: (B1) există o singură intrare din listă cu mulțimea exact G → acea persoană, chiar dacă G e inclusă
+  și în alt nume (`ANA VLADESCU` și `ANA MARIA VLADESCU` = două persoane: `Ana Vladescu Ana Maria Vladescu` → două etichete); două
+  intrări cu aceeași mulțime (`PETRESCU OLGA` și `OLGA PETRESCU`) → entitate ambiguă; (B2) altfel, G inclusă într-un singur nume →
+  forma prescurtată a lui (`Maria` → `ANA MARIA VLADESCU`); (B3) altfel (inclusă în două sau mai multe nume — `Vladescu` singur — sau
+  în niciunul) → **entitate ambiguă proprie**: ascunsă, cu eticheta ei, și NICIODATĂ unită cu alta — nici după submulțime, nici prin
+  propagare, nici prin ordinea învățării, nici tranzitiv (`Ana Vladescu, Vladescu și Ana Maria Vladescu` → trei etichete). Învățarea
+  din speță hotărăște doar CE cuvinte se mai ascund (propagarea), nu identitatea lor.
+- **Împărțirea** unui șir de cuvinte alăturate (B5): se evaluează toate împărțirile (nu se oprește la primul nume complet:
+  `Ana Vladescu Maria` = numele lung în altă ordine); câștigă cea cu cele mai puține cuvinte vizibile, apoi cele mai puține grupuri,
+  apoi cele mai multe nume EXACTE din listă. La egalitate între împărțiri care dau aceluiași cuvânt identități diferite, porțiunea în
+  care diferă devine UN grup cu entitate ambiguă proprie (ascuns). Al doilea prenume nu poate repeta o componentă a aceluiași nume
+  (găsit de matricea r7).
+- **Consecința practică:** aceeași persoană trecută în platformă în două ordini (ex. angajat „NUME PRENUME” și contact „Prenume Nume”)
+  = două intrări cu aceeași mulțime → entitate ambiguă (tot ascunsă, aceeași etichetă la fiecare apariție a ei); formele ei prescurtate
+  sunt și ele ambigue.
 
 ### Listele închise (versionate, în fișiere din manifest)
 O componentă e „comună” (cere context) sau ne-distinctivă dacă e în una dintre listele de mai jos; orice altă componentă de cel puțin
@@ -132,7 +171,7 @@ O componentă e „comună” (cere context) sau ne-distinctivă dacă e în una
 alfabete, litere despărțite prin spații („N u m e”), diminutive, un cuvânt al unei firme scris integral cu litere mici fără numele
 întreg al firmei în întrebare (și fără formă juridică / „SC” lângă el), un cuvânt obișnuit care e și nume scris singur, fără numele
 întreg în întrebare, nume pe care platforma nu le cunoaște (nu le cunoaște = nu sunt în lista ei; se prind doar cu un titlu în față
-— „dl.”, „ing.”, „colegul” și ceilalți din `TITLURI` — sau cu SRL / SA după), adrese, numere de contract / carte funciară, un CUI
+— „dl.”, „ing.”, „colegul” și ceilalți din `TITLURI`, cel mult trei cuvinte, r7 — sau cu SRL / SA după), adrese, numere de contract / carte funciară, un CUI
 necunoscut platformei scris fără „RO” / „CUI”. **Acoperite din r5** (cu teste): literele late și celelalte forme de compatibilitate,
 numele scrise cu litere mici (regulile de mai sus), CUI-ul cunoscut scris cu spații sau cu puncte / cratime între grupe de cifre
 („2345 6789”, „2345.6789”, „23-456-789”; intervalul ascuns merge de la prima la ultima cifră, iar „RO” lipit sau despărțit printr-un
@@ -144,7 +183,9 @@ textului nemascat la o eroare (vezi fail-closed).
 
 ## Ce mai prinde mascarea (tipare, fără listă)
 - **Nume după un titlu**: „dl.”, „dna”, „ing.”, „arh.”, „dr.”, „colegul”, „șeful”, „dirigintele”, „maistrul”, „sudorul”, „șoferul”
-  și celelalte forme din `TITLURI` (și când numele e un cuvânt obișnuit: „dl. Ion”).
+  și celelalte forme din `TITLURI` (și când numele e un cuvânt obișnuit: „dl. Ion”). r7: cel mult trei cuvinte necunoscute listei,
+  oprite înaintea oricărei componente cunoscute; persoanele din listă de după titlu se delimitează ca fără titlu (secțiunea
+  „Persoanele: o singură delimitare”).
 - **Firme necunoscute cu formă juridică**: orice nume cu majusculă urmat de SRL / SA / PFA / II / IF / SNC / SCS.
 - **Date personale**: CNP (cu cifra de control), CUI cu „RO” / „CUI” / „cod fiscal” în față sau cunoscut platformei, telefoane
   românești, e-mailuri, IBAN (cu verificarea de control), numere de înmatriculare.
@@ -287,9 +328,16 @@ O coloană lipsă se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea.
      dintre condiții:
      - după spațiile și ghilimelele de deschidere (`„` `“` `"` `«` `‚` `‘` `'` `` ` ``), paragraful începe cu un șir de litere / cifre
        Unicode (orice capitalizare, cifre romane incluse) urmat de `)`, sau de `.` / `:` urmat de spațiu, de sfârșit sau direct de o
-       **literă** (`B) `, `12345) `, `iv. `, `IV) `, `Art. `, `B.Executarea`, `1.Executarea`); r6: `.` urmat de o **cifră** nu e
-       marcaj — `6.5 bar reprezinta presiunea maxima admisa pentru proba conductelor.` rămâne paragraf autonom (dacă nu e după un
-       paragraf terminat în `:` / `;`);
+       **literă** (`B) `, `12345) `, `iv. `, `IV) `, `Art. `, `B.Executarea`, `1.Executarea`);
+     - r7 (review r6 P2-3) — **numerotarea compusă**, pe reprezentarea comună a textului (cifrele / literele late și spațiile speciale
+       devin obișnuite), cu majusculele verificate ÎNAINTEA trecerii la litere mici: (C1) litere + `.` + cifre (`A.1 text`,
+       `A.1.text`, `B.2) text`, `a.2 text`); (C2–C5) `cifre.cifre` la început (`1.1.Executarea`, `1.2.3 text`, `1.1. text`,
+       `1.1) text`, `1.1 Executarea`, `1.1 executarea`, `1.1Executarea`) — cu O SINGURĂ excepție, ÎNCHISĂ (C4): `cifre.cifre` +
+       spații + unitatea EXACTĂ `bar` sau `m`, scrisă mic, cu limită de cuvânt = cantitate zecimală, paragraful rămâne autonom
+       (`6.5 bar reprezinta presiunea maxima admisa pentru proba conductelor.`, `0.5 m …`). **Costurile declarate:** `2.5 MPa …`,
+       `6.5 BAR …`, `6.5bar …`, `6.5 bari …` și orice altă unitate după un număr zecimal cu punct dau „Incert”; `1.1 m …` e citit ca
+       cantitate (ambiguu textual). Celelalte indicii de listă (paragraful precedent / propriul sfârșit în `:` / `;`) prevalează asupra
+       excepției. Virgula zecimală (`6,5 bar …`) nu e atinsă (C6). Marcajele blochează și „Da”, și „Nu”;
      - începe cu `(` + litere / cifre + `)` (`(b)`, `(12)`);
      - începe cu un semn de listă: U+2022 `•`, U+2023 `‣`, U+2043 `⁃`, U+2219 `∙`, U+25AA `▪`, U+25AB `▫`, U+25A0 `■`, U+25A1 `□`,
        U+25CF `●`, U+25CB `○`, U+25E6 `◦`, U+25B8 `▸`, U+25BA `►`, U+00B7 `·` (punctul median), `*`, `+`, U+2212 `−`, `§`, sau
@@ -360,16 +408,29 @@ O coloană lipsă se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea.
   motiv: etichetele emise, regula B, ecranul), plus verificarea că etapele de recunoaștere sunt apelate doar din `detecteaza`, iar
   `detecteaza` primește doar reprezentarea; **invarianța la reprezentare**: fiecare caz scris de mână, rescris cu litere late sau
   descompus (NFD), dă aceeași mascare.
+- r7 (review r6): cazurile recenzentului și contraexemplele contractului (titlu + persoane alăturate, persoana necunoscută care se
+  oprește, contextul doar primului grup, nume incluse, forme ambigue izolate, învățarea în ambele ordini, puntea tranzitivă, egalitatea
+  cu identități incompatibile, două intrări cu aceeași mulțime, numerotările compuse C1–C5 cu „Da” și cu „Nu”, excepția închisă C4 și
+  virgula zecimală păstrate); mutanți: contextul titlului pe toată fereastra, titlul care construiește singur intervalul, fără
+  potrivirea exactă (B1), forma ambiguă legată de primul nume (B3), fără departajarea după numele exacte, prima împărțire la egalitate,
+  oprirea la primul nume complet, al doilea prenume care repetă o componentă, fără C1, fără C2–C5, excepția C4 lărgită / scoasă / fără
+  majuscule / fără limita de cuvânt, numerotarea pe textul brut; **inventarul închis al căilor de persoane** (A1) cu contraexemple;
+  identitatea din dicționar (B1–B3) testată direct, independentă de ordinea intrărilor din listă și stabilă la schimbarea ordinii de
+  învățare (aceleași clase de forme în orice ordine a textelor).
 
 ### Matricea generativă (criteriul de acceptare L25)
 `worker/intrebari-tehnice/generativ.mjs` — fără niciun import și fără funcțiile motorului — generează PRODUSUL COMPLET al
 dimensiunilor de mai jos. Pentru fiecare caz știe intervalul exact al numelui în text, iar oracolul cere: (a) intervalul așteptat e
 înlocuit INTEGRAL de o etichetă validă și restul textului e neatins; (b) forma normalizată a ieșirii nu conține componenta
 distinctivă; (c) demascarea dă textul inițial; (d) cazurile negative rămân neschimbate; (e) r6: la persoanele diferite alăturate,
-fiecare interval are eticheta altei entități. Fără (a), „AlfaSRL” (fără componentă distinctivă) ar trece nemascat.
+fiecare interval are eticheta altei entități; (f) r7: identitățile așteptate — calculate în generator, din contract (B1–B5: toate
+împărțirile șirului de cuvinte alăturate, identitatea fiecărui grup din dicționarul de test, egalitatea cu identități diferite =
+un grup ambiguu), fără funcțiile motorului — două intervale au aceeași entitate DACĂ ȘI NUMAI DACĂ au aceeași identitate așteptată
+(la forma ambiguă: ascunsă și cu altă entitate decât numele complete). Cazurile în care contractul nu decide intervalul (aceleași
+identități, granițe diferite) se exclud și se numără — în domeniul de mai jos: zero. Fără (a), „AlfaSRL” (fără componentă distinctivă) ar trece nemascat.
 `src/intrebariMascare.generativ.test.js` rulează ACELEAȘI loturi pe fire de lucru din vitest și în procese Node cu flagurile din
 `motor.py`, cere zero eșecuri în ambele și aceeași amprentă sha256 a ieșirilor pe fiecare lot; loturi de cel mult 100.000 de
-cazuri, fără plafon total (toate loturile rulează; r6: ≈ 4–5 minute pe serverul AI, 8 fire + 8 procese). Testul verifică și că
+cazuri, fără plafon total (toate loturile rulează; r7: ≈ 5,3 minute pe serverul AI, 8 fire + 8 procese). Testul verifică și că
 tabelul de mai jos are exact cifrele generatorului.
 
 **Domeniul publicat** (dicționarul de test: persoanele VLĂDESCU ANA, ZAMFIRESCU MARIA, ȘERBĂNESCU OLGA, CRÂNGAȘU VIOREL, MARE ION,
@@ -393,7 +454,17 @@ Transgaz Construct SRL — începe cu o entitate publică; CUI 12345678; localit
 - flexiuni: niciuna și fiecare din cele 11 sufixe (doar pe o bază de cel puțin 4 litere), plus genitivul feminin la prenumele în -a;
 - invizibile: niciunul, U+034F (M) și U+200B (Cf), fiecare la începutul, mijlocul și sfârșitul componentei distinctive — 7;
 - poziții în propoziție: început, interior, sfârșit — 3; ordinea persoanelor: Nume Prenume / Prenume Nume; cratimele prenumelui
-  compus: `-`, U+2010, U+2011.
+  compus: `-`, U+2010, U+2011;
+- r7 — titluri: „dl. ”, „Dl. ”, „ing. ”, „dna ”, „colegul ” — 5; separatorul dintre două persoane după titlu: spațiu, „, ”, NBSP — 3;
+  cuvintele necunoscute de după titlu: 0–3 din Popovici, Tudorache, Iordache, „Ca Titlu” sau MAJUSCULE; ce urmează după ele: fiecare
+  persoană în fiecare ordine (12), componenta comună Mare / Ion singură (2), persoană + componentă comună (3), nimic (1);
+- r7 — al doilea dicționar de test, cu nume INCLUSE (familiile `nume_incluse_alaturate`, `forme_ambigue_si_punti`): VLĂDESCU ANA ⊂
+  VLĂDESCU ANA MARIA, ȘERBĂNESCU OLGA ⊂ ȘERBĂNESCU OLGA ELENA, MARE ION; toate ordinile componentelor fiecărui nume (2 și 6); care nume
+  e primul (2); separatorul dintre nume: spațiu, „, ”, NBSP, „ și ” — 4; titlul: fără, „dl.” — 2; formele ambigue (în ambele nume):
+  `Vlădescu`, `Vlădescului`, `Ana` / `Șerbănescu`, `Olga`; ordinea celor trei bucăți (numele scurt, cel lung, forma ambiguă): toate 6;
+  separatorul dintre bucăți: „; apoi ”, „ și ”, „, ” — 3; cu / fără pre-trecere (învățarea) — 2; majuscule: ca în listă, MAJUSCULE,
+  litere mici — 3 (`ana` scrisă mic și singură nu e componentă distinctivă: rămâne vizibilă, deci în afara familiei — 2.592 de
+  combinații numărate ca neaplicabile).
 
 | Familia | Dimensiuni (numărul de valori) | Produs | Loturi |
 |---|---|---|---|
@@ -408,14 +479,25 @@ Transgaz Construct SRL — începe cu o entitate publică; CUI 12345678; localit
 | `persoana_si_componenta_comuna` | (persoana, alta decât MARE ION × ordine: 10) × componenta comună Mare / Ion 2 × înainte / după 2 × majuscule 4 × separator 2 × poziție 3 | 960 | 1 |
 | `context_si_propagare` | 9 perechi (componenta singură scrisă mic / comună + numele întreg) × înainte / după × flexiune 3 × poziție 3 (24 de combinații neaplicabile: flexiune pe o bază sub 4 litere → 138 de cazuri) | 162 | 1 |
 | `exceptii` | 26 de cazuri (entități publice, localitate, componente generice și comune singure, CUI fragmentat și negative; r6: și cu litere late) × poziție 3 | 78 | 1 |
-| **Total** | | **32.862.408** | **337** |
+| `titlu_persoane_alaturate` | r7: (perechea ordonată de persoane diferite × ordinea fiecăreia × diacritice: 232) × titlu 5 × majuscule 4 × separatorul dintre ele 3 × poziție 3 | 41.760 | 1 |
+| `titlu_necunoscut_si_lista` | r7: titlu 5 × cuvinte necunoscute 0–3 (4) × ce urmează 18 × majusculele necunoscuților 2 × majusculele persoanei 2 × poziție 3 (570 neaplicabile: fără cuvinte necunoscute, variantele lor de majuscule și „nimic” → 3.750 de cazuri) | 4.320 | 1 |
+| `nume_incluse_alaturate` | r7: (perechea de nume incluse × care e primul × ordinea componentelor scurt 2 × lung 6: 48) × diacritice 2 × majuscule 3 × separator 4 × titlu 2 × poziție 3 | 6.912 | 1 |
+| `forme_ambigue_si_punti` | r7: (perechea × forma ambiguă × ordinea componentelor scurt × lung: 60) × ordinea bucăților 6 × diacritice 2 × majuscule 3 × separator 3 × pre-trecere 2 × poziție 3 (2.592 neaplicabile: `ana` scrisă mic și singură → 36.288 de cazuri) | 38.880 | 1 |
+| **Total** | | **32.954.280** | **341** |
+
+**r7 — familiile noi, rulate pe motorul r6 (`ade7b3c3`) înainte de reparație** (fiecare familie are un singur lot, lotul 0): toate
+pică pe clasele raportate — `titlu_persoane_alaturate` 8.040 de eșecuri (`dl. Vlădescu Ana Zamfirescu Maria` → titlul lua trei
+cuvinte), `titlu_necunoscut_si_lista` 1.350 (`dl. Vlădescu Ana Mare` → „Mare” absorbit; `dl. Popovici Vlădescu Ana` → o persoană),
+`nume_incluse_alaturate` 6.696 (`Vlădescu Ana Vlădescu Ana Maria` → aceeași entitate), `forme_ambigue_si_punti` 36.288 (forma
+ambiguă unită cu un nume complet). Pe r7: zero eșecuri, zero cazuri nedecise de contract.
 
 **Tăietura declarată (r6).** Produsul complet al TUTUROR dimensiunilor într-o singură familie de firme (122 × 3 reprezentări × 4 × 37 ×
 5 × 12 × 7 × 3 = 68.251.680 de cazuri, ≈ 9–10 minute pe rulare) nu se rulează: reprezentarea (L, F) e încrucișată complet cu
 majusculele, formele juridice, „SC”, flexiunile, invizibilele și pozițiile, dar doar cu 4 separatoare (spațiu, U+3000, `,`, `/`), nu
 cu toate 30; cele 30 de separatoare sunt încrucișate complet cu restul în reprezentarea N. La persoane: perechile și tripletele de
 persoane alăturate nu au flexiuni și caractere invizibile (acestea sunt încrucișate în `persoane_nume_intreg`), iar `persoane_trei`
-e doar în reprezentarea N, cu diacritice.
+e doar în reprezentarea N, cu diacritice. r7: familiile cu titlu și cu nume incluse sunt în reprezentarea N, fără flexiuni (afară de
+`Vlădescului`) și fără caractere invizibile — acestea sunt încrucișate în familiile vechi, pe aceeași delimitare.
 
 Ce NU acoperă matricea: combinațiile în afara domeniului de mai sus (alte nume, alte caractere, alte poziții); pentru ele rămân
 contractul, cazurile scrise de mână și mutanții. Matricea e dovada pentru combinațiile enumerate, nu o demonstrație universală.

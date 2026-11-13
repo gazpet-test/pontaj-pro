@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import * as E from './intrebariMascare.js'
-import { ruleazaCazuri, randuriContract, inlocuiesteInvizibile } from '../worker/intrebari-tehnice/motor_cazuri.mjs'
+import { ruleazaCazuri, randuriContract, inlocuiesteInvizibile, dictionarCaz } from '../worker/intrebari-tehnice/motor_cazuri.mjs'
 import { trateaza, creeazaSesiune, OPERATII } from '../worker/intrebari-tehnice/motor_protocol.mjs'
 import { manifest, FISIERE as FISIERE_GENERATOR, INTRARE } from '../scripts/intrebari/manifest_motor.mjs'
 import { NUME_MAX_LISTA as NUME_MAX_EDGE } from '../supabase/functions/intrebari-tehnice-worker/logic.js'
@@ -42,7 +42,10 @@ describe('motorul unic — cazurile comune (contractul de acoperire, regresiile 
   it('previzualizarea și workerul: același obiect Mascare (o etichetă dată în titlu e stabilă în speță)', () => {
     const p = E.previzualizare({ titlu: 'Mare a cerut avizul', intrebare: 'Cine semnează?', context: 'Ion Mare, diriginte' }, DICT)
     expect(p.titlu).toBe('[PERSOANA_1] a cerut avizul')
-    expect(p.context).toBe('[PERSOANA_1_F2], diriginte')
+    // r7 (B3): „Mare” e în DOUĂ nume din dicționarul de test (MARE VASILE, MARE ION) → ascuns, dar entitate ambiguă proprie
+    expect(p.context).toBe('[PERSOANA_2], diriginte')
+    const q = E.previzualizare({ titlu: 'Ion a cerut avizul', intrebare: 'Cine semnează?', context: 'Ion Mare, diriginte' }, DICT)
+    expect([q.titlu, q.context]).toEqual(['[PERSOANA_1] a cerut avizul', '[PERSOANA_1_F2], diriginte'])   // „Ion”: un singur nume (B2)
   })
   it('regula B după curățarea răspunsului: un verdict ferm fără citat nu poate rămâne Da', () => {
     const s = [{ id: 'C1', titlu: 'PT C9', extras: 'Responsabilul tehnic cu sudura este atestat de ISCIR.', inceput_sigur: true, sfarsit_sigur: true }]
@@ -73,8 +76,9 @@ const INVENTAR_RECUNOASTERE = {
   'Mascare.detecteaza': REPREZENTARE, 'Mascare.cuiLista': REPREZENTARE, 'Mascare.variante': REPREZENTARE,
   'Mascare.potrivireFirma': REPREZENTARE, 'Mascare.prefixSC': REPREZENTARE, 'Mascare.firmeComponente': REPREZENTARE,
   'Mascare.localitatiMarcate': REPREZENTARE, 'Mascare.publice': REPREZENTARE, 'Mascare.firmeForma': REPREZENTARE,
-  'Mascare.persoaneTitlu': REPREZENTARE, 'Mascare.persoaneLista.spatiu': REPREZENTARE, 'Mascare.persoaneLista.vecinPereche': REPREZENTARE,
-  'Mascare.persoaneLista.grup': REPREZENTARE, 'Mascare.invataDin': 'cheile normalizate ale numelor deja găsite (norm)',
+  'Mascare.persoane': REPREZENTARE, 'Mascare.persoane.vecinPereche': REPREZENTARE, 'Mascare.delimiteaza.spatiu': REPREZENTARE,
+  'Mascare.delimiteaza.sep': REPREZENTARE, 'Mascare.invataDin': 'cheile normalizate ale numelor deja găsite (norm)',
+  'marcajCompus': 'regula B (r7): numerotarea compusă, pe reprezentarea comună (curata), cu majusculele păstrate — apelată cu curata(text).s',
   'Mascare.demascheaza': ETICHETE, 'Mascare.demascheazaSigur': ETICHETE, 'Mascare.emiseIn': ETICHETE, 'bucatiMascate': ETICHETE,
   'areDinLista': REGULA_B, 'inClasa': REGULA_B, 'ultimulSemn': REGULA_B, 'formaCitat': REGULA_B, 'paragrafeText': REGULA_B,
   'motivParagraf': REGULA_B, 'verdict': REGULA_B, 'tipVerdict': REGULA_B, 'marcaje': REGULA_B, 'citatSustinut': REGULA_B,
@@ -129,7 +133,8 @@ describe('r6 (review r5 P1): o singură reprezentare a textului pentru toate eta
     const { apelanti, detecteaza } = analizaMotor(SURSA)
     // etapele lui detecteaza (și cele care nu aplică direct o expresie, dar dau mai departe textul)
     const etape = ['detecteaza', 'cuiLista', 'variante', 'potrivireFirma', 'prefixSC', 'firmeDictionar', 'firmeComponente', 'firmeFlexionate',
-      'localitatiMarcate', 'publice', 'firmeForma', 'componenteToken', 'persoaneTitlu', 'persoaneLista', 'invataDin', 'propaga'].map(x => `Mascare.${x}`)
+      'localitatiMarcate', 'publice', 'firmeForma', 'componenteToken', 'persoane', 'delimiteaza', 'emitePersoane', 'internaToken', 'invataDin',
+      'propaga'].map(x => `Mascare.${x}`)
     for (const k of Object.keys(INVENTAR_RECUNOASTERE).filter(x => x.startsWith('Mascare.') && INVENTAR_RECUNOASTERE[x] === REPREZENTARE))
       expect(etape, k).toContain(k.split('.').slice(0, 2).join('.'))
     for (const k of etape.filter(x => x !== 'Mascare.detecteaza')) {
@@ -150,7 +155,7 @@ describe('r6 (review r5 P1): o singură reprezentare a textului pentru toate eta
     const T2 = inlocuiesteInvizibile(T)
     let n = 0
     for (const c of [...T2.contract, ...T2.cazuri]) {
-      const dict = c.dictionar === 'gol' ? new E.Dictionar() : E.Dictionar.dinRaspuns(c.dictionar === 'fara_localitati' ? { ...T2.dictionar, localitati: [] } : T2.dictionar)
+      const dict = dictionarCaz(E, T2, c.dictionar)
       const ruleaza = f => {
         const m = new E.Mascare(dict)
         if (c.invata) m.invata(...c.texte.map(f))
@@ -166,6 +171,155 @@ describe('r6 (review r5 P1): o singură reprezentare a textului pentru toate eta
       }
     }
     expect(n).toBeGreaterThan(100)
+  })
+})
+
+// ── r7 (review r6 P2-1, A1): inventarul ÎNCHIS al locurilor care construiesc, EXTIND sau REUNESC un interval / o entitate de persoană ──
+// Pe arborele sintactic al motorului. Regulile:
+//   (a) literalul 'PERSOANA' apare DOAR în funcțiile din INVENTAR_PERSOANE (o cale nouă de persoane pică până e clasificată);
+//   (b) orice apel adauga(…) are categoria SCRISĂ (literal sau null) — o categorie calculată ar ocoli (a); 'PERSOANA' doar în emitePersoane;
+//   (c) emitePersoane e apelată DOAR cu rezultatul lui this.delimiteaza(…), iar delimiteaza DOAR din persoane / propaga;
+//   (d) emitePersoane dă mai departe intervalul grupului NESCHIMBAT (g.s, g.e) — fără extindere;
+//   (e) out / luate (rezultatul lui detecteaza) se scriu DOAR în adauga, care refuză suprapunerile;
+//   (f) entitate() nu unește nimic: singurele apeluri sunt căutarea după cheie și adăugarea unei entități noi;
+//   (g) identitatea (Dictionar.identitate) e calculată DOAR în delimiteaza.
+const INVENTAR_PERSOANE = {          // (a) funcțiile în care apare literalul 'PERSOANA'
+  '(modul)': 'lista categoriilor (CATEGORII) — fără intervale',
+  'Mascare.emitePersoane': 'SINGURUL apel adauga(…, \'PERSOANA\', …): grupurile lui delimiteaza, neschimbate',
+  'Mascare.entitate': 'identitate → entitate: egalitate de cheie, fără unire (B3–B4)',
+  'Mascare.invataDin': 'învață ce cuvinte se propagă — nici intervale, nici identități',
+}
+const INVENTAR_CAI_PERSOANE = {      // (c) / (e): cine marchează, cine delimitează, cine scrie
+  'Mascare.persoane': 'lista + titlul: DOAR marcaje (componente, context = ctx, persoană necunoscută = nec), apoi delimiteaza → emitePersoane',
+  'Mascare.propaga': 'propagarea: DOAR marcaje (prop = context, nec), apoi delimiteaza → emitePersoane',
+  'Mascare.delimiteaza': 'O SINGURĂ delimitare: grupurile (grup = extinderea, doar aici), identitatea B1–B3, împărțirea B5',
+  'Mascare.detecteaza.adauga': 'SINGURUL care scrie un interval (out / luate); refuză suprapunerile, nu extinde',
+  'Mascare.mascheaza': 'EXCEPȚIE: intervalul găsit e pus înapoi pe textul original (inapoi) și tăiat la caracterul descompus deja folosit — nu adaugă cuvinte',
+}
+function analizaPersoane(sursa) {
+  const ast = parseAst(sursa)
+  const literal = new Set(), adauga = [], emite = [], delim = new Set(), scrieri = [], entitate = [], identitate = new Set()
+  const viz = (n, fn, cls) => {
+    if (!n || typeof n.type !== 'string') return
+    if (n.type === 'ClassDeclaration') cls = n.id.name
+    if (n.type === 'FunctionDeclaration') fn = n.id.name
+    if (n.type === 'MethodDefinition') fn = `${cls}.${n.key.name}`
+    if (n.type === 'VariableDeclarator' && /FunctionExpression$/.test(n.init?.type || '')) fn = fn === '(modul)' ? n.id.name : `${fn}.${n.id.name}`
+    if (n.type === 'Literal' && n.value === 'PERSOANA') literal.add(fn)
+    if (n.type === 'CallExpression') {
+      const c = n.callee
+      if (c.type === 'Identifier' && c.name === 'adauga') {
+        const a = n.arguments[2]
+        adauga.push({ fn, cat: a?.type === 'Literal' ? a.value : '(calculat)', s: sursa.slice(n.arguments[0].start, n.arguments[0].end),
+          e: sursa.slice(n.arguments[1].start, n.arguments[1].end) })
+      }
+      if (c.type === 'MemberExpression' && c.object.type === 'ThisExpression' && c.property.name === 'emitePersoane') {
+        const a = n.arguments[0]
+        emite.push(a?.type === 'CallExpression' && a.callee.type === 'MemberExpression' && a.callee.object.type === 'ThisExpression'
+          && a.callee.property.name === 'delimiteaza' ? fn : `${fn}: argument „${sursa.slice(a.start, a.end)}”`)
+      }
+      if (c.type === 'MemberExpression' && c.property.name === 'delimiteaza') delim.add(fn)
+      if (c.type === 'MemberExpression' && c.property.name === 'identitate') identitate.add(fn)
+      if (c.type === 'MemberExpression' && c.property.name === 'push' && c.object.type === 'Identifier' && ['out', 'luate'].includes(c.object.name)
+          && fn.startsWith('Mascare.detecteaza')) scrieri.push(fn)
+      if (fn === 'Mascare.entitate') entitate.push(sursa.slice(c.start, c.end))
+    }
+    for (const [k, v] of Object.entries(n)) {
+      if (k === 'parent') continue
+      if (Array.isArray(v)) v.forEach(x => viz(x, fn, cls)); else if (v && typeof v === 'object' && typeof v.type === 'string') viz(v, fn, cls)
+    }
+  }
+  viz(ast, '(modul)', null)
+  return { literal, adauga, emite, delim, scrieri, entitate, identitate }
+}
+function incalcariPersoane(sursa) {
+  const a = analizaPersoane(sursa), out = []
+  for (const f of a.literal) if (!Object.hasOwn(INVENTAR_PERSOANE, f)) out.push(`(a) 'PERSOANA' în ${f}`)
+  for (const x of a.adauga) {
+    if (x.cat === '(calculat)') out.push(`(b) categorie calculată în ${x.fn}`)
+    if (x.cat === 'PERSOANA' && x.fn !== 'Mascare.emitePersoane') out.push(`(b) adauga PERSOANA în ${x.fn}`)
+    if (x.cat === 'PERSOANA' && (x.s !== 'g.s' || x.e !== 'g.e')) out.push(`(d) interval schimbat: ${x.s}, ${x.e}`)
+  }
+  for (const f of a.emite) if (!['Mascare.persoane', 'Mascare.propaga'].includes(f)) out.push(`(c) emitePersoane din ${f}`)
+  for (const f of a.delim) if (!['Mascare.persoane', 'Mascare.propaga'].includes(f)) out.push(`(c) delimiteaza din ${f}`)
+  for (const f of a.scrieri) if (f !== 'Mascare.detecteaza.adauga') out.push(`(e) scriere în rezultat din ${f}`)
+  for (const c of a.entitate) if (!['lista.find', 'lista.push'].includes(c)) out.push(`(f) entitate apelează ${c}`)
+  for (const f of a.identitate) if (f !== 'Mascare.delimiteaza') out.push(`(g) identitate din ${f}`)
+  return out
+}
+
+describe('r7 (review r6 P2-1, A1): o singură delimitare pentru TOATE căile care construiesc / extind / reunesc persoane', () => {
+  const SURSA = readFileSync('src/intrebariMascare.js', 'utf8').replace(/\r\n/g, '\n')
+  it('inventarul ÎNCHIS e respectat: (a) literalul PERSOANA, (b) categoriile scrise, (c) emitePersoane ← delimiteaza ← persoane / propaga, (d) fără extindere, (e) un singur scriitor, (f) fără unire, (g) identitatea doar în delimiteaza', () => {
+    expect(incalcariPersoane(SURSA)).toEqual([])
+    const a = analizaPersoane(SURSA)
+    expect([...a.literal].sort()).toEqual(Object.keys(INVENTAR_PERSOANE).sort())
+    expect(a.emite.sort()).toEqual(['Mascare.persoane', 'Mascare.propaga'])
+    expect([...a.delim].sort()).toEqual(['Mascare.persoane', 'Mascare.propaga'])
+    expect([...new Set(a.scrieri)]).toEqual(['Mascare.detecteaza.adauga'])
+    expect(a.adauga.filter(x => x.cat === 'PERSOANA').length).toBe(1)
+    // căile vechi (titlul care construia singur intervalul, lista cu gruparea ei, unirea după submulțime) nu mai există
+    for (const x of ['persoaneTitlu', 'persoaneLista', 'subset(']) expect(SURSA, x).not.toContain(x)
+  })
+  it('contraexemplele inventarului sunt prinse: titlul care adaugă singur o persoană, categoria calculată, extinderea intervalului, emiterea unei liste făcute de mână, unirea în entitate()', () => {
+    const titlu = '    this.emitePersoane(this.delimiteaza(t, info), adauga)\n  }\n\n  /** r7 (review r6 P2-1 / P2-2, A1'
+    expect(SURSA).toContain(titlu)
+    const mut = [
+      SURSA.replace(titlu, "    adauga(info[0].s, info[1].e, 'PERSOANA', { id: 'x', comp: [] })\n" + titlu),                 // (a)(b)
+      SURSA.replace(titlu, "    const cat = ['PER', 'SOANA'].join(''); adauga(info[0].s, info[1].e, cat, { id: 'x', comp: [] })\n" + titlu),  // (b)
+      SURSA.replace("adauga(g.s, g.e, 'PERSOANA'", "adauga(g.s, g.e + 4, 'PERSOANA'"),                                            // (d)
+      SURSA.replace(titlu, '    this.emitePersoane([{ s: 0, e: 9, id: \'x\', comp: [] }], adauga)\n' + titlu),                    // (c)
+      SURSA.replace('    if (gasit) return gasit\n', '    if (gasit) return gasit\n    const cand = lista.filter(x => x.k.length > 0)\n'),  // (f)
+      SURSA.replace(titlu, '    this.d.identitate([])\n' + titlu),                                                            // (g)
+    ]
+    for (const m of mut) { expect(m).not.toBe(SURSA); expect(incalcariPersoane(m).length).toBeGreaterThan(0) }
+  })
+})
+
+describe('r7 (review r6 P2-2, B1–B5): identitatea persoanelor — DOAR din dicționar, stabilă la ordinea învățării', () => {
+  const T2 = inlocuiesteInvizibile(T)
+  it('Dictionar.identitate: B1 (exact, unic / mai multe), B2 (inclus într-un singur nume), B3 (în mai multe / în niciunul)', () => {
+    const D = dictionarCaz(E, T2, 'incluse')        // 0 = ANA VLADESCU, 1 = ANA MARIA VLADESCU, 2 = ION MARE
+    expect(D.identitate(['vladescu', 'ana'])).toEqual({ id: 'N:0', exact: true })          // B1, deși e inclus și în ANA MARIA VLADESCU
+    expect(D.identitate(['ana', 'maria', 'vladescu'])).toEqual({ id: 'N:1', exact: true })
+    expect(D.identitate(['maria'])).toEqual({ id: 'N:1', exact: false })                  // B2
+    expect(D.identitate(['mare'])).toEqual({ id: 'N:2', exact: false })
+    expect(D.identitate(['vladescu']).id.startsWith('A:')).toBe(true)                     // B3: în două nume
+    expect(D.identitate(['ana']).id.startsWith('A:')).toBe(true)
+    expect(D.identitate(['vladescu', 'mare']).id.startsWith('A:')).toBe(true)             // în niciun nume (componente din nume diferite)
+    const G = dictionarCaz(E, T2, 'egalitate')       // PETRESCU OLGA și OLGA PETRESCU: aceeași mulțime, două identități
+    expect(G.identitate(['olga', 'petrescu'])).toMatchObject({ exact: true })
+    expect(G.identitate(['olga', 'petrescu']).id.startsWith('A:')).toBe(true)              // B1: mai multe → ambiguă
+    // aceeași intrare scrisă de două ori = o singură identitate
+    expect(E.Dictionar.dinRaspuns({ persoane: ['ANA VLADESCU', 'Ana Vlădescu'.toUpperCase()], firme: [], cui: [] }).identitate(['ana', 'vladescu']).id).toBe('N:0')
+  })
+  it('identitatea nu depinde de ordinea intrărilor din listă (aceleași clase de nume)', () => {
+    const r = T2.dictionare.incluse, inv = { ...r, persoane: [...r.persoane].reverse() }
+    const a = E.Dictionar.dinRaspuns(r), b = E.Dictionar.dinRaspuns(inv)
+    const nume = (D, id) => id.startsWith('N:') ? [...D.nume[Number(id.slice(2))]].sort().join(' ') : id
+    for (const g of [['ana', 'vladescu'], ['ana', 'maria', 'vladescu'], ['maria'], ['vladescu'], ['ana'], ['mare'], ['ion', 'mare']])
+      expect(nume(b, b.identitate(g).id), g.join(' ')).toBe(nume(a, a.identitate(g).id))
+  })
+  it('identitățile sunt STABILE la schimbarea ordinii de învățare (aceleași clase de forme, în orice ordine a textelor)', () => {
+    const D = dictionarCaz(E, T2, 'incluse')
+    const texte = ['Vladescu a cerut avizul; Mare a sunat.', 'Ana Vladescu și Ana Maria Vladescu au semnat.', 'Vladescului i s-a spus; Ion Mare a plecat; Maria a venit.',
+      'dl. Ana Vladescu Ion Mare a venit; dl. Popescu Mare a sunat.']
+    const clase = ordine => {
+      const m = new E.Mascare(D)
+      m.invata(...ordine)
+      const o = ordine.map(t => m.mascheaza(t, false))
+      const ent = new Map()
+      for (const x of o) for (const b of E.bucatiMascate(x)) if (b.t === 'eticheta') {
+        const k = b.v.replace(/_F[0-9]+\]$/, ']')
+        if (!ent.has(k)) ent.set(k, new Set())
+        ent.get(k).add(m.demascheaza(b.v))
+      }
+      return [...ent.values()].map(s => [...s].sort().join(' | ')).sort()
+    }
+    const baza = clase(texte)
+    expect(baza).toContain('Ana Vladescu')
+    expect(baza).toContain('Vladescu | Vladescului')
+    for (const ord of [[...texte].reverse(), [texte[2], texte[0], texte[3], texte[1]], [texte[1], texte[3], texte[0], texte[2]]]) expect(clase(ord)).toEqual(baza)
   })
 })
 
@@ -202,7 +356,40 @@ const MUTANTI = [
   ['exceptii (firma privată după fragmentul public)', '[exceptii]',
     '    this.firmeDictionar(t, simpli, adauga)          // 10.', '    this.publice(t, simpli, adauga); this.firmeDictionar(t, simpli, adauga) // 10.'],
   ['exceptii (firmă comună fără context)', '[exceptii]', 'if (this.d.firmaComuna(tup) && !r.context) continue', ''],
-  ['exceptii (persoană comună fără context)', '[exceptii]', 'if (j > i || !info[i].c.comun || g.intreg)', 'if (true)'],
+  ['exceptii (persoană comună fără context)', '[exceptii]', 'const vizibil = i === j && w.c.comun && !g.intreg && !w.ctx && !w.prop ? 1 : 0',
+    'const vizibil = 0'],
+  // r7 (review r6 P2-1): titlul — contextul DOAR primului grup; persoana necunoscută se oprește înaintea componentelor cunoscute
+  ['r7 (A4): contextul titlului pe TOATE cuvintele ferestrei', 'r7 (A4)', 'if (k === i) w.ctx = true', 'w.ctx = true'],
+  // titlul construiește singur intervalul din cel mult trei cuvinte, cunoscute sau nu (= motorul r6): „dl. Ana Vladescu Ion Mare” →
+  // „dl. [PERSOANA_1] Mare” (cazul recenzentului) și „dl. Popescu Ana Vladescu” → o singură persoană
+  ['r7 (A1–A3): titlul construiește singur intervalul (persoana necunoscută absoarbe și componentele cunoscute)', 'r7 (review r6 P2-1, A1–A2)',
+    '        if (!w.c) {                                  // necunoscut listei', '        if (true) {                                  // necunoscut listei'],
+  ['r7 (A3): idem — cazul „dl. Popescu Ana Vladescu”', 'r7 (review r6 P2-1, A3)',
+    '        if (!w.c) {                                  // necunoscut listei', '        if (true) {                                  // necunoscut listei'],
+  // r7 (review r6 P2-2): identitatea — B1–B5
+  ['r7 (B1): fără potrivirea exactă (doar includerea)', 'r7 (B5, departajarea', 'if (ex.length) r = {', 'if (false) r = {'],
+  ['r7 (B3): forma inclusă în mai multe nume se leagă de primul (ca unirea după submulțime din r6)', 'r7 (B3',
+    "r = { id: sup.length === 1 ? `N:${sup[0]}` : `A:${k}`, exact: false }", "r = { id: sup.length >= 1 ? `N:${sup[0]}` : `A:${k}`, exact: false }"],
+  ['r7 (B5): fără departajarea după numele exacte', 'r7 (B5', 'const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]',
+    'const cmp = (a, b) => a[0] - b[0] || a[1] - b[1]'],
+  ['r7 (B5): la egalitate cu identități incompatibile se alege prima împărțire (nu entitatea ambiguă)', 'r7 (B5)',
+    'if ([...pe.values()].every(v => v.size === 1)) {', 'if (true) {'],
+  ['r7 (B5): oprirea la primul nume complet (nu se evaluează toate împărțirile)', 'r7 (B1 + B5)',
+    'if (info[k + 1].c && sep(k, k + 1) && this.d.acelasiNume([...cunoscute, ...info[k + 1].c.chei]))',
+    'if (info[k + 1].c && sep(k, k + 1) && !this.d.exacte.has(cheiePers(cunoscute)) && this.d.acelasiNume([...cunoscute, ...info[k + 1].c.chei]))'],
+  ['r7 (găsit de matricea r7): al doilea prenume poate repeta o componentă a aceluiași nume', 'r7 (găsit de matricea r7)',
+    '(mij.c ? !mij.c.chei.some(x => cunoscute.includes(x) || info[k + 2].c.chei.includes(x)) : !COMUN.has(norm(mij.tok)))',
+    '(mij.c || !COMUN.has(norm(mij.tok)))'],
+  // r7 (review r6 P2-3): numerotările compuse
+  ['r7 (C1): fără „litere.cifre”', 'r7 (C1)', 'const marcajCompus = s => MARCAJ_LITERA_CIFRA.test(s) ||', 'const marcajCompus = s => false ||'],
+  ['r7 (C2–C5): fără „cifre.cifre”', 'r7 (C3)', '(MARCAJ_NUMEROTARE.test(s) && !CANTITATE_ZECIMALA.test(s))', 'false'],
+  ['r7 (C4): excepția lărgită la orice cuvânt scris mic', 'r7 (C4)', '+ +(?:bar|m)(?![', '+ +(?:\\p{Ll}+)(?!['],
+  ['r7 (C4): fără excepție (și „6.5 bar” / „0.5 m” devin marcaj — L20)', 'r7 (C4, L20)', '&& !CANTITATE_ZECIMALA.test(s)', '&& true'],
+  ['r7 (C4): unitatea fără deosebire de majuscule', 'r7 (C4, unitatea', '(?![\\p{L}\\p{N}_])/u\nconst marcajCompus', '(?![\\p{L}\\p{N}_])/iu\nconst marcajCompus'],
+  ['r7 (C4): fără limita de cuvânt după unitate', 'r7 (C4, limita', '+ +(?:bar|m)(?![\\p{L}\\p{N}_])/u', '+ +(?:bar|m)/u'],
+  ['r7: numerotarea compusă pe textul brut (nu pe reprezentarea comună) — cifrele și punctul late', 'r7: cifrele late', 'marcajCompus(curata(text).s.replace(DESCHIDERE',
+    'marcajCompus(text.replace(DESCHIDERE'],
+  ['r7: numerotarea compusă pe textul brut — spațiul neîntrerupt nu mai e spațiu (pozitivul „6.5 bar” pică, L20)', 'cu spațiu neîntrerupt', 'marcajCompus(curata(text).s.replace(DESCHIDERE', 'marcajCompus(text.replace(DESCHIDERE'],
   ['exceptii (r5: cuvântul unei entități publice ar deveni componentă distinctivă)', '[exceptii]', ' && !CUVINTE_PUBLICE.has(c)', ''],
   // r6 (review r5 P2): fără delimitarea persoanelor (orice componente alăturate formează un nume) — enumerările și persoanele alăturate pică
   ['separatoare (r6: componentele unor persoane diferite se combină)', 'r6 (review r5 P2)', '  acelasiNume(chei) {\n',
@@ -579,11 +766,15 @@ describe('ecranul: previzualizare ORIENTATIVĂ (review r3 P2-5)', () => {
   it('ecranul spune ce e în afara contractului (aceleași clase ca în document; r5: lista la zi + limitele F4 distinct)', () => {
     const doc = readFileSync('docs/intrebari/MASCARE_SI_VERDICT.md', 'utf8').replace(/\s+/g, ' ')
     for (const x of ['porecle', 'greșeli de scriere', 'alte alfabete', 'litere despărțite prin spații', 'diminutive',
-      'integral cu litere mici fără numele întreg', 'nu le cunoaște', 'literele late', 'CUI-ul cunoscut scris cu spații']) {
+      'integral cu litere mici fără numele întreg', 'nu le cunoaște', 'literele late', 'CUI-ul cunoscut scris cu spații',
+      'cel mult trei cuvinte']) {
       expect(jsx, x).toContain(x)
       expect(doc, x).toContain(x)
     }
     expect(jsx).not.toContain('nume de persoane scrise doar cu litere mici')          // r4: nu mai e o limită
+    // r7 (B3): forma ambiguă — ascunsă, dar ca persoană separată (ecranul) = entitate ambiguă proprie (documentul)
+    expect(jsx).toContain('se ascunde, dar ca persoană separată')
+    expect(doc).toContain('entitate ambiguă proprie')
   })
   it('ecranul și documentul spun exact garanția „fără rețea”: o proprietate a codului, nu o izolare a procesului', () => {
     const doc = readFileSync('docs/intrebari/MASCARE_SI_VERDICT.md', 'utf8').replace(/\s+/g, ' ')

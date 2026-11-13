@@ -4,6 +4,8 @@
 //   - normalizarea (curata / norm — O SINGURĂ funcție pentru caracterele invizibile, de combinare și formele de compatibilitate;
 //     r6: și O SINGURĂ reprezentare a textului pe care rulează TOATE etapele de recunoaștere);
 //   - mascarea numelor (dicționarul platformei + tipare), învățarea / propagarea în speță, etichetele, demascarea strictă;
+//     r7: O SINGURĂ delimitare a persoanelor (Mascare.delimiteaza) pentru listă, titlu, propagare, componentă + context, și identitatea
+//     persoanelor decisă DOAR de dicționar (Dictionar.identitate: nume exact / formă prescurtată unică / entitate ambiguă proprie);
 //   - regula B STRUCTURALĂ (r5): paragrafele sursei, paragraful dintr-o singură propoziție, elementul de listă, citatul = paragraful
 //     întreg.
 // NU stau aici (r5, granița declarată): validarea răspunsului — susținerea afirmațiilor de către surse, polaritatea regulii,
@@ -28,7 +30,7 @@ import NEMASCATE_JSON from '../worker/intrebari-tehnice/nemascate.json' with { t
 import VOCABULAR_JSON from '../worker/intrebari-tehnice/vocabular_web.json' with { type: 'json' }
 import COMUNE_JSON from '../worker/intrebari-tehnice/cuvinte_comune.json' with { type: 'json' }
 
-export const MOTOR_VERSIUNE = '6.0.0'
+export const MOTOR_VERSIUNE = '7.0.0'
 export const NUME_MAX_LISTA = 200000      // = NUME_MAX_LISTA din supabase/functions/intrebari-tehnice-worker/logic.js (test)
 const U = (...c) => String.fromCharCode(...c)
 const NBSP = U(0xa0)
@@ -324,9 +326,13 @@ export class Dictionar {
       }
     this.persoane = new Set()
     this.perechi = new Set()          // două componente ale ACELUIAȘI nume din listă („vladescu” + „ana”)
-    // r6 (review r5 P2): numele din listă, fiecare ca mulțimea componentelor lui, și componenta → numele în care apare
+    // r6 (review r5 P2): numele din listă, fiecare ca mulțimea componentelor lui, și componenta → numele în care apare.
+    // r7 (review r6 P2-2): fiecare INTRARE distinctă din listă (componentele normalizate, în ordinea ei) = o IDENTITATE: „ION MARIN” și
+    // „MARIN ION” sunt două identități cu aceeași mulțime (B1 → entitate ambiguă); aceeași intrare scrisă de două ori = una.
     this.nume = []
     this.numeDe = new Map()
+    this.exacte = new Map()           // mulțimea (cheiePers) → identitățile cu EXACT acea mulțime
+    this.identitati = new Map()       // cache: mulțimea → {id, exact}
     const vazut = new Set()
     for (const nume of persoane) {
       const comp = new Set()
@@ -339,12 +345,15 @@ export class Dictionar {
       for (const n of comp) this.persoane.add(n)
       const c = [...comp]
       for (let i = 0; i < c.length; i++) for (let j = i + 1; j < c.length; j++) this.perechi.add(cheiePereche(c[i], c[j]))
-      const k = cheiePers(comp)
+      const k = c.join(U(1))
       if (vazut.has(k)) continue
       vazut.add(k)
       const id = this.nume.length
       this.nume.push(comp)
       for (const n of comp) { if (!this.numeDe.has(n)) this.numeDe.set(n, []); this.numeDe.get(n).push(id) }
+      const kp = cheiePers(comp)
+      if (!this.exacte.has(kp)) this.exacte.set(kp, [])
+      this.exacte.get(kp).push(id)
     }
     const index = new Map()
     this.firmeCuContext = 0
@@ -380,6 +389,27 @@ export class Dictionar {
     if (new Set(chei).size !== chei.length) return false
     const cand = this.numeDe.get(chei[0])
     return !!cand && cand.some(id => chei.every(c => this.nume[id].has(c)))
+  }
+  /** r7 (review r6 P2-2) — IDENTITATEA unui grup delimitat cu mulțimea de componente G (din listă), decisă EXCLUSIV de dicționar
+   *  (aceeași normalizare, înaintea oricărei învățări din speță — nu depinde de ordinea textelor):
+   *   B1. există O SINGURĂ identitate cu mulțimea EXACT G → ea (chiar dacă G e inclusă și în alt nume); mai multe → ambiguă;
+   *   B2. altfel, G e inclusă în EXACT O identitate → ea (forma prescurtată);
+   *   B3. altfel (inclusă în două sau mai multe, sau în niciuna — componente din nume diferite într-un cuvânt cu cratimă) → entitate
+   *       AMBIGUĂ proprie, cheia = mulțimea G; nu se unește niciodată cu altă entitate (entitate() compară doar cheia).
+   *  {id: 'N:<identitate>' | 'A:<mulțime>', exact: G e mulțimea exactă a cel puțin unui nume (B5)}. */
+  identitate(chei) {
+    const g = [...new Set(chei)]
+    const k = cheiePers(g)
+    if (this.identitati.has(k)) return this.identitati.get(k)
+    const ex = this.exacte.get(k) || []
+    let r
+    if (ex.length) r = { id: ex.length === 1 ? `N:${ex[0]}` : `A:${k}`, exact: true }
+    else {
+      const sup = g.length ? (this.numeDe.get(g[0]) || []).filter(id => g.every(c => this.nume[id].has(c))) : []
+      r = { id: sup.length === 1 ? `N:${sup[0]}` : `A:${k}`, exact: false }
+    }
+    this.identitati.set(k, r)
+    return r
   }
   /** O firmă dintr-un singur cuvânt comun / scurt / numeric / localitate cere context (formă juridică, „SC”, numele întreg văzut). */
   firmaComuna(tup) { return tup.length === 1 && (this.comun(tup[0]) || tup[0].length < 4 || /^[0-9]+$/.test(tup[0])) }
@@ -443,7 +473,6 @@ function prefixNorm(tok, c) {
 
 // ─── 9. Mascarea unei spețe ─────────────────────────────────────────────────────────────────────────────────────
 const cheiePers = set => [...set].sort().join(U(1))
-const subset = (a, b) => [...a].every(x => b.has(x))
 // cuvintele de dinaintea formei juridice, pentru firmele NECUNOSCUTE platformei (tipar: „[SC] Nume Firmă SRL”)
 const FORMA_CS = `(?<![\\p{L}\\p{N}_.])(S\\.R\\.L\\.?|S\\.A\\.?|P\\.F\\.A\\.?|I\\.I\\.?|I\\.F\\.?|S\\.N\\.C\\.?|S\\.C\\.S\\.?|SRL|Srl|srl|SA|PFA|II|IF|SNC|SCS)(?![\\p{L}\\p{N}_])`
 const FORMA = new RegExp(FORMA_CS, 'gu')
@@ -463,22 +492,23 @@ export class Mascare {
     this.ent = Object.fromEntries(CATEGORII.map(c => [c, []]))
     this.inlocuiri = 0
     this.asemOm = new Set(); this.asemMasina = new Set()     // etichetele ASCUNS puse pe „aproape etichete” din textul omului / al mașinii
-    this.vazute = new Map()                                  // componentă recunoscută în speță → [categorie, cheie]
+    this.vazute = new Map()                                  // componentă de FIRMĂ recunoscută în speță → [categorie, cheie]
     this.vazuteMici = new Set()                              // r5: componentele care se propagă și scrise cu litere mici (numele întreg văzut)
+    // r7: persoanele învățate în speță — DOAR ce cuvinte se propagă, nu identitatea lor (identitatea o dă dicționarul, B1–B3)
+    this.vazutePers = new Set()                              // componente din listă văzute într-o persoană
+    this.vazuteNec = new Map()                               // cuvânt necunoscut listei (persoana de după titlu) → identitățile în care a apărut
   }
   contoare() { return Object.fromEntries(CATEGORII.filter(c => this.ent[c].length).map(c => [c, this.ent[c].length])) }
   total() { return CATEGORII.reduce((s, c) => s + this.ent[c].length, 0) }
 
+  /** Entitatea unei chei. r7 (review r6 P2-2, B3–B4): NICIO unire — persoanele se compară DOAR după identitate (cheie.id, decisă
+   *  de delimiteaza prin B1–B3), firmele după cheie; două identități diferite = două entități, direct sau tranzitiv. */
   entitate(cat, cheie) {
     const lista = this.ent[cat]
-    const egal = x => cat === 'PERSOANA' ? cheiePers(x.cheie) === cheiePers(cheie) : x.cheie === cheie
-    const gasit = lista.find(egal)
+    const k = cat === 'PERSOANA' ? cheie.id : cheie
+    const gasit = lista.find(x => x.k === k)
     if (gasit) return gasit
-    if (cat === 'PERSOANA') {   // „Popescu” și „Ion Popescu”: aceeași persoană dacă potrivirea e unică
-      const cand = lista.filter(x => subset(x.cheie, cheie) || subset(cheie, x.cheie))
-      if (cand.length === 1) { cand[0].cheie = new Set([...cand[0].cheie, ...cheie]); return cand[0] }
-    }
-    const x = { n: lista.length + 1, cheie, forme: new Map() }
+    const x = { n: lista.length + 1, k, forme: new Map() }
     lista.push(x)
     return x
   }
@@ -531,10 +561,9 @@ export class Mascare {
     this.localitatiMarcate(t, cuv, adauga)          // 11. „comuna Berceni” rămâne
     this.firmeForma(t, at, adauga)                  // 12. firme NECUNOSCUTE, după forma juridică (tipar; numele întreg public rămâne)
     this.publice(t, simpli, adauga)                 // 13. entitățile publice (nume întreg) rămân
-    this.persoaneTitlu(t, cuv, adauga, ocupat)      // 14. „dl. X”, „ing. Y”
-    this.persoaneLista(t, cuv, adauga, ocupat)      // 15. persoanele din dicționar
+    this.persoane(t, cuv, adauga, ocupat)           // 14–15. persoanele: din dicționar + după titlu („dl. X”), O SINGURĂ delimitare
     this.invataDin([...out].sort((a, b) => a[0] - b[0]))
-    this.propaga(t, cuv, adauga)                    // 16. același nume, în toată speța
+    this.propaga(t, cuv, adauga, ocupat)            // 16. același nume, în toată speța (aceeași delimitare)
     return out.sort((a, b) => a[0] - b[0])
   }
 
@@ -761,127 +790,215 @@ export class Mascare {
     return chei.length ? { chei, comun, mare, distinct } : null
   }
 
-  /** După „dl.”, „ing.”, „colegul” …: 1–3 cuvinte cu majusculă (și necunoscute platformei — tipar). */
-  persoaneTitlu(t, cuv, adauga, ocupat) {
-    const dupaStart = new Map(cuv.map((c, i) => [c[0], i]))
-    for (const m of toate(TITLU, t)) {
-      let i = dupaStart.get(m.index + m[0].length)
-      const luat = []
-      while (i !== undefined && i < cuv.length && luat.length < 3) {
-        const [s, e, tok] = cuv[i]
-        if (ocupat(s, e)) break
-        const n = norm(tok), k = this.componenteToken(tok)
-        if (!(majuscula(tok) && !OPRIRE.has(n) && !NEMASCATE_UN_CUVANT.has(n) && (titluCaz(tok) || k !== null || (toateMari(tok) && tok.length >= 6)))) break
-        luat.push([s, e, k ? k.chei : [n]])
-        if (i + 1 >= cuv.length || !potriveste(SPATIU, t, e, cuv[i + 1][0])) break
-        i++
-      }
-      if (luat.length) adauga(luat[0][0], luat[luat.length - 1][1], 'PERSOANA', new Set(luat.flatMap(x => x[2])))
-    }
-  }
-
-  /** Persoanele din dicționar (contract: forma uzuală și integral cu majuscule, diacritice, flexiuni, cratimă, ambele ordini).
-   *  r6: cuvintele cunoscute alăturate (spațiile și celelalte separatoare ale contractului: virgulă, ghilimele, paranteze, &, +, /)
-   *  formează un nume DOAR dacă toate componentele lor sunt ale ACELUIAȘI nume din listă („Vlădescu, Ana”); persoane diferite
-   *  alăturate („ana maria vladescu ion mare”, „Ana Vlădescu, Maria Zamfirescu”) primesc etichete diferite. Cel mult un cuvânt
-   *  „Ca Titlu” ÎNTRE două componente ale aceluiași nume (al doilea prenume: necunoscut sau componentă a altui nume). O componentă
-   *  COMUNĂ singură, fără context, rămâne vizibilă. */
-  persoaneLista(t, cuv, adauga, ocupat) {
+  /** r7 (review r6 P2-1, A1–A4) — persoanele: din dicționar și după titlu („dl.”, „ing.”, „colegul” …), ÎMPREUNĂ. Funcția NU
+   *  construiește intervale: marchează cuvintele, apoi O SINGURĂ funcție (delimiteaza) le împarte în grupuri și decide identitatea
+   *  (B1–B3), iar emitePersoane le adaugă neschimbate. Marcajele:
+   *   - componenta din listă (componenteToken), în orice scriere (r5); un cuvânt scris integral mic care nu e componentă distinctivă e
+   *     nume DOAR lângă o altă componentă a ACELEIAȘI persoane din listă (numele întreg, în orice scriere: „zamfirescu maria”,
+   *     „mare ion”; altfel e un cuvânt obișnuit: „mare parte”, „ion”), și în interiorul aceluiași cuvânt cu cratimă („mare-ion”);
+   *   - titlul: cuvintele de după el se împart CA ȘI CUM titlul n-ar fi (A2); titlul dă context (o componentă comună singură se
+   *     ascunde) DOAR primului grup — cel care începe cu cuvântul lipit de titlu (A4: contextul nu trece peste o persoană delimitată);
+   *     cuvintele NECUNOSCUTE listei din fereastra titlului (cuvinte cu majusculă despărțite prin spații, „Ca Titlu” sau integral mari de
+   *     ≥ 6 litere, cel mult TREI — limita declarată) sunt persoană necunoscută; o componentă cunoscută nu intră niciodată în ea (A3):
+   *     persoana necunoscută se oprește înaintea ei, iar componenta revine delimitării comune. */
+  persoane(t, cuv, adauga, ocupat) {
     const info = cuv.map(([s, e, tok]) => {
       const liber = !ocupat(s, e)
-      return { s, e, tok, liber, c: liber ? this.componenteToken(tok) : null }
+      return { s, e, tok, liber, c: liber ? this.componenteToken(tok) : null, nec: false, necId: null, necComp: null, ctx: false, prop: false }
     })
     const n = info.length
+    const interna = c => this.internaToken(c)
     const pereche = (a, b) => !!(info[a].c && info[b].c) && info[a].c.chei.some(x => info[b].c.chei.some(y => this.d.pereche(x, y)))
-    const spatiu = (a, b) => potriveste(SPATIU, t, info[a].e, info[b].s)
-    // r5: un cuvânt scris integral mic, care nu e componentă distinctivă, e nume DOAR lângă o altă componentă a ACELEIAȘI persoane din
-    // listă (numele întreg, în orice scriere: „zamfirescu maria”, „mare ion”); altfel e un cuvânt obișnuit („mare parte”, „ion”)
-    // (și în interiorul aceluiași cuvânt cu cratimă: „mare-ion”)
-    const interna = c => c.chei.some((x, a) => c.chei.some((y, b) => b > a && this.d.pereche(x, y)))
     const vecinPereche = k => (k > 0 && potriveste(SEP_PERS, t, info[k - 1].e, info[k].s) && pereche(k - 1, k))
       || (k + 1 < n && potriveste(SEP_PERS, t, info[k].e, info[k + 1].s) && pereche(k, k + 1))
     const fara = []
     for (let k = 0; k < n; k++) { const c = info[k].c; if (c && !c.mare && !c.distinct && !interna(c) && !vecinPereche(k)) fara.push(k) }
     for (const k of fara) info[k].c = null
-    // r6 (review r5 P2): persoanele se DELIMITEAZĂ înaintea grupării. Un grup = cuvinte cunoscute alăturate (plus cel mult un cuvânt
-    // necunoscut între două cunoscute — al doilea prenume) ale căror componente aparțin TOATE aceluiași nume din listă, fiecare o
-    // singură dată (deci cel mult atâtea cuvinte câte componente are numele); după un nume complet începe alt grup. Un cuvânt
-    // singur e mereu un grup (componentele lui pot fi ale unor nume diferite: „Popescu-Ionescu”). Împărțirea unui șir de cuvinte
-    // cunoscute în grupuri: cea care lasă cele mai puține cuvinte vizibile (o componentă comună singură, fără context, rămâne
-    // vizibilă), apoi cea cu cele mai puține grupuri.
-    const grup = (i, j) => {               // [i..j] e un grup valid? → {chei, intreg} sau null
+    const dupaStart = new Map(cuv.map((c, i) => [c[0], i]))
+    for (const m of toate(TITLU, t)) {
+      const i = dupaStart.get(m.index + m[0].length)
+      if (i === undefined) continue
+      let necunoscute = 0
+      for (let k = i; k < n; k++) {
+        const w = info[k], nn = norm(w.tok)
+        if (!w.liber || !majuscula(w.tok) || OPRIRE.has(nn) || NEMASCATE_UN_CUVANT.has(nn)) break
+        if (!w.c) {                                  // necunoscut listei: „Ca Titlu” sau integral mare (≥ 6 litere), cel mult trei
+          if (!(titluCaz(w.tok) || (toateMari(w.tok) && w.tok.length >= 6)) || necunoscute === 3) break
+          w.nec = true; w.necComp = nn; necunoscute++
+        }
+        if (k === i) w.ctx = true                    // contextul titlului: DOAR cuvântul lipit de el (primul grup)
+        if (k + 1 >= n || !potriveste(SPATIU, t, w.e, info[k + 1].s)) break
+      }
+    }
+    this.emitePersoane(this.delimiteaza(t, info), adauga)
+  }
+
+  /** r7 (review r6 P2-1 / P2-2, A1 + B1–B5) — O SINGURĂ delimitare a persoanelor: împarte cuvintele marcate în grupuri și dă fiecăruia
+   *  identitatea. TOATE căile trec prin ea: lista și titlul (persoane), propagarea (propaga), componenta + context (`ctx` / `prop`).
+   *  `info[k]` = {s, e, tok, liber, c (componenteToken), nec / necId / necComp (persoană necunoscută listei), ctx, prop}. Un grup:
+   *   - din listă: cuvinte alăturate (separatoarele contractului: spații, virgulă, ghilimele, paranteze, &, +, /) ale căror componente
+   *     aparțin TOATE aceluiași nume din listă, fiecare o dată, plus cel mult un al doilea prenume „Ca Titlu” ÎNTRE două componente
+   *     (necunoscut și necomun, sau componenta altui nume); identitatea = Dictionar.identitate(componentele din listă) — B1–B3;
+   *   - persoana necunoscută: cuvintele `nec` alăturate; identitatea = cea învățată, dacă e aceeași pentru toate, altfel mulțimea lor.
+   *  Împărțirea (B5): se evaluează TOATE împărțirile (nu se oprește la primul nume complet); câștigă cea cu cele mai puține cuvinte
+   *  vizibile (o componentă comună singură, fără context, rămâne vizibilă), apoi cele mai puține grupuri, apoi cele mai multe grupuri
+   *  care sunt nume EXACTE din listă. La egalitate finală: dacă împărțirile optime dau aceluiași cuvânt identități (sau vizibilități)
+   *  diferite, porțiunea în care diferă devine UN grup cu entitate AMBIGUĂ proprie (ascuns); altfel, prima împărțire.
+   *  Întoarce [{s, e, id, comp, vizibil, fel}]. */
+  delimiteaza(t, info) {
+    const n = info.length
+    const spatiu = (a, b) => potriveste(SPATIU, t, info[a].e, info[b].s)
+    const sep = (a, b) => potriveste(SEP_PERS, t, info[a].e, info[b].s)
+    const interna = c => this.internaToken(c)
+    const grup = (i, j) => {               // [i..j] e un grup din listă? → {chei, cunoscute, intreg} sau null
       if (!info[i].c || !info[j].c) return null
       const chei = [...info[i].c.chei], cunoscute = [...info[i].c.chei]
       let mijloc = false
       for (let k = i; k < j;) {
-        if (info[k + 1].c && potriveste(SEP_PERS, t, info[k].e, info[k + 1].s) && this.d.acelasiNume([...cunoscute, ...info[k + 1].c.chei])) { k++; chei.push(...info[k].c.chei); cunoscute.push(...info[k].c.chei); continue }
-        // al doilea prenume: un cuvânt scris „Ca Titlu” între două componente ale aceluiași nume, despărțit prin spații — necunoscut
-        // (și necomun) sau componentă a ALTUI nume din listă („Ana Gheorghe Vlădescu”, cu „Gheorghe” din alt nume)
+        if (info[k + 1].c && sep(k, k + 1) && this.d.acelasiNume([...cunoscute, ...info[k + 1].c.chei])) { k++; chei.push(...info[k].c.chei); cunoscute.push(...info[k].c.chei); continue }
+        // al doilea prenume: un cuvânt „Ca Titlu” între două componente ale aceluiași nume, despărțit prin spații — necunoscut (și
+        // necomun) sau componentă a ALTUI nume din listă („Ana Gheorghe Vlădescu”); nu intră în identitate. r7 (găsit de matricea r7): NU o
+        // componentă care se repetă în același nume („Vlădescu, Ana Vlădescu Maria” = două grupuri, nu un nume cu „Vlădescu” de două ori)
         const mij = info[k + 1]
         if (!mijloc && k + 2 <= j && mij.liber && info[k + 2].c && spatiu(k, k + 1) && spatiu(k + 1, k + 2) && titluCaz(mij.tok)
-            && !OPRIRE.has(norm(mij.tok)) && (mij.c || !COMUN.has(norm(mij.tok)))) {
+            && !OPRIRE.has(norm(mij.tok)) && (mij.c ? !mij.c.chei.some(x => cunoscute.includes(x) || info[k + 2].c.chei.includes(x)) : !COMUN.has(norm(mij.tok)))) {
           mijloc = true
           chei.push(...(mij.c ? mij.c.chei : [norm(mij.tok)]), ...info[k + 2].c.chei); cunoscute.push(...info[k + 2].c.chei); k += 2; continue
         }
         return null
       }
-      if (i === j) return { chei, intreg: interna(info[i].c) }
-      return this.d.acelasiNume(cunoscute) ? { chei, intreg: true } : null
+      if (i === j) return { chei, cunoscute, intreg: interna(info[i].c) }
+      return this.d.acelasiNume(cunoscute) ? { chei, cunoscute, intreg: true } : null
     }
     const MAX = 6                          // cuvinte într-un grup (componentele unui nume + cuvântul din mijloc)
-    const cost = new Array(n + 1).fill(null)
-    const alege = new Array(n).fill(null)
-    cost[n] = [0, 0]
-    for (let i = n - 1; i >= 0; i--) {
-      if (!info[i].c) { cost[i] = cost[i + 1]; continue }
-      let best = null
-      for (let j = i; j < Math.min(n, i + MAX); j++) {
+    const optiuni = info.map((w, i) => {
+      if (w.nec) {                           // persoana necunoscută: tot segmentul de cuvinte necunoscute alăturate
+        let j = i
+        while (j + 1 < n && info[j + 1].nec && spatiu(j, j + 1)) j++
+        const ws = info.slice(i, j + 1), ids = ws.map(x => x.necId)
+        const id = ids.every(x => x !== null && x === ids[0]) ? ids[0] : `U:${cheiePers(ws.map(x => x.necComp))}`
+        return [{ i, j, id, comp: ws.map(x => x.necComp), vizibil: 0, exact: 0, fel: null }]
+      }
+      const o = []
+      if (w.c) for (let j = i; j < Math.min(n, i + MAX); j++) {
         const g = grup(i, j)
         if (!g) continue
-        const vizibil = i === j && info[i].c.comun && !g.intreg ? 1 : 0
-        const c = [vizibil + cost[j + 1][0], 1 + cost[j + 1][1]]
-        if (!best || c[0] < best.c[0] || (c[0] === best.c[0] && c[1] < best.c[1])) best = { c, j, g }
+        const idt = this.d.identitate(g.cunoscute)
+        const vizibil = i === j && w.c.comun && !g.intreg && !w.ctx && !w.prop ? 1 : 0
+        o.push({ i, j, id: idt.id, comp: g.chei, vizibil, exact: idt.exact ? 1 : 0, fel: g.intreg ? 'nume_intreg' : null })
       }
-      cost[i] = best.c; alege[i] = best
+      return o
+    })
+    // cost[i] = [cuvinte vizibile, grupuri, −nume exacte] al celei mai bune împărțiri a cuvintelor i..n−1 (B5)
+    const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]
+    const cost = new Array(n + 1)
+    cost[n] = [0, 0, 0]
+    const val = x => { const r = cost[x.j + 1]; return [x.vizibil + r[0], 1 + r[1], r[2] - x.exact] }
+    const optime = new Array(n)
+    for (let i = n - 1; i >= 0; i--) {
+      if (!optiuni[i].length) { cost[i] = cost[i + 1]; optime[i] = []; continue }
+      let best = null
+      for (const x of optiuni[i]) { const v = val(x); if (!best || cmp(v, best) < 0) best = v }
+      cost[i] = best
+      optime[i] = optiuni[i].filter(x => cmp(val(x), best) === 0)
     }
+    // pozițiile atinse de o împărțire optimă și granițele sărite de un grup optim (o graniță nesărită = comună tuturor împărțirilor)
+    const atins = new Array(n + 1).fill(false), sarit = new Array(n + 1).fill(false)
+    atins[0] = true
+    for (let i = 0; i < n; i++) {
+      if (!atins[i]) continue
+      if (!optime[i].length) { atins[i + 1] = true; continue }
+      for (const x of optime[i]) { atins[x.j + 1] = true; for (let p = i + 1; p <= x.j; p++) sarit[p] = true }
+    }
+    const out = []
     for (let i = 0; i < n;) {
-      if (!info[i].c) { i++; continue }
-      const { j, g } = alege[i]
-      if (j > i || !info[i].c.comun || g.intreg) adauga(info[i].s, info[j].e, 'PERSOANA', new Set(g.chei), false, g.intreg ? 'nume_intreg' : null)
-      i = j + 1
+      if (!optime[i].length) { i++; continue }
+      let q = i + 1
+      while (q < n && sarit[q]) q++                // [i, q) = porțiunea până la următoarea graniță comună
+      const pe = new Map()                         // cuvântul → variantele lui (identitate + vizibilitate) în împărțirile optime
+      const pune = (k, v) => { if (!pe.has(k)) pe.set(k, new Set()); pe.get(k).add(v) }
+      let ultim = i
+      const comp = []
+      for (let k = i; k < q; k++) {
+        if (!atins[k]) continue
+        if (!optime[k].length) { pune(k, ''); continue }
+        for (const x of optime[k]) { for (let y = x.i; y <= x.j; y++) pune(y, x.id + U(2) + x.vizibil); ultim = Math.max(ultim, x.j); comp.push(...x.comp) }
+      }
+      if ([...pe.values()].every(v => v.size === 1)) {
+        for (let k = i; k < q;) {
+          if (!optime[k].length) { k++; continue }
+          const x = optime[k][0]
+          out.push({ s: info[x.i].s, e: info[x.j].e, id: x.id, comp: x.comp, vizibil: x.vizibil, fel: x.fel })
+          k = x.j + 1
+        }
+      } else out.push({ s: info[i].s, e: info[ultim].e, id: `A=${cheiePers(new Set(comp))}`, comp: [...new Set(comp)], vizibil: 0, fel: null })
+      i = q
+    }
+    return out
+  }
+
+  /** r7 (A1) — SINGURUL loc care adaugă un interval de persoană: grupurile date de delimiteaza, NESCHIMBATE (fără extindere sau
+   *  reunire); cele vizibile (componenta comună singură, fără context) rămân text. */
+  emitePersoane(grupuri, adauga) {
+    for (const g of grupuri) if (!g.vizibil) adauga(g.s, g.e, 'PERSOANA', { id: g.id, comp: g.comp }, false, g.fel)
+  }
+
+  /** Două componente ale ACELUIAȘI nume din listă în același cuvânt cu cratimă („mare-ion”). */
+  internaToken(c) { return c.chei.some((x, a) => c.chei.some((y, b) => b > a && this.d.pereche(x, y))) }
+
+  /** Componentele numelor recunoscute devin „văzute” pentru restul spețe. Nu se învață: sub 3 litere, OPRIRE, cuvinte generice de
+   *  firmă, forme juridice, cifre, cuvintele-entitate publice. r7 (B3–B4): la persoane se învață DOAR ce cuvinte se propagă (nu
+   *  identitatea lor — pe aceea o dă dicționarul, la fiecare apariție); un cuvânt necunoscut listei ține minte persoanele necunoscute
+   *  în care a apărut. La firme, o componentă din două firme diferite primește cheia doar a ei. */
+  invataDin(gasite) {
+    for (const [, , cat, cheie, , fel] of gasite) {
+      if (cat === 'PERSOANA') {
+        for (const c of cheie.comp) {
+          if (c.length < 3 || OPRIRE.has(c) || NEMASCATE_UN_CUVANT.has(c)) continue
+          // r5: și scrisă mic se propagă orice componentă a numelui ÎNTREG văzut (și cele comune) și orice componentă distinctivă
+          if (fel === 'nume_intreg' || (this.d.persoane.has(c) && this.d.distinctivPersoana(c))) this.vazuteMici.add(c)
+          if (this.d.persoane.has(c)) { this.vazutePers.add(c); continue }
+          if (!this.vazuteNec.has(c)) this.vazuteNec.set(c, new Set())
+          this.vazuteNec.get(c).add(cheie.id.startsWith('U:') ? cheie.id : '')
+        }
+        continue
+      }
+      if (cat !== 'FIRMA') continue
+      for (const c of cheie.split(' ').filter(x => !/^[0-9]+$/.test(x) && !GENERICE_FIRMA.has(x) && !FORME_JURIDICE.has(x))) {
+        if (c.length < 3 || OPRIRE.has(c) || NEMASCATE_UN_CUVANT.has(c)) continue
+        if (fel === 'firma_lista' && this.d.componenteFirma.has(c)) this.vazuteMici.add(c)
+        if (!this.vazute.has(c)) this.vazute.set(c, ['FIRMA', cheie])
+        else if (this.vazute.get(c)[1] !== cheie) this.vazute.set(c, ['FIRMA', c])
+      }
     }
   }
 
-  /** Componentele numelor recunoscute (persoane și firme) devin „văzute” pentru restul spețe. Nu se învață: sub 3 litere,
-   *  OPRIRE, cuvinte generice de firmă, forme juridice, cifre, cuvintele-entitate publice. O componentă din două nume diferite
-   *  primește cheia doar a ei. */
-  invataDin(gasite) {
-    const aceeasi = (a, b) => a[0] === b[0] && (a[0] === 'PERSOANA' ? cheiePers(a[1]) === cheiePers(b[1]) : a[1] === b[1])
-    for (const [, , cat, cheie, , fel] of gasite) {
-      let comp
-      if (cat === 'PERSOANA') comp = [...cheie].sort()
-      else if (cat === 'FIRMA') comp = cheie.split(' ').filter(x => !/^[0-9]+$/.test(x) && !GENERICE_FIRMA.has(x) && !FORME_JURIDICE.has(x))
-      else continue
-      for (const c of comp) {
-        if (c.length < 3 || OPRIRE.has(c) || NEMASCATE_UN_CUVANT.has(c)) continue
-        // r5: și scrisă mic se propagă — la persoane, orice componentă a numelui ÎNTREG văzut (și cele comune) și orice componentă
-        // distinctivă; la firme, componentele distinctive ale firmei ÎNTREGI din listă
-        if ((cat === 'PERSOANA' && (fel === 'nume_intreg' || (this.d.persoane.has(c) && this.d.distinctivPersoana(c))))
-            || (cat === 'FIRMA' && fel === 'firma_lista' && this.d.componenteFirma.has(c))) this.vazuteMici.add(c)
-        const v = [cat, cheie]
-        if (!this.vazute.has(c)) this.vazute.set(c, v)
-        else if (!aceeasi(this.vazute.get(c), v)) {
-          const cat0 = this.vazute.get(c)[0]
-          this.vazute.set(c, [cat0, cat0 === 'PERSOANA' ? new Set([c]) : c])
+  /** Același nume în toată speța: orice cuvânt cu MAJUSCULĂ care e (după regula tulpinii) o componentă deja văzută se ascunde —
+   *  chiar dacă singur ar fi cuvânt comun (compromisul declarat). r5: scris integral MIC, doar componentele din `vazuteMici`.
+   *  Excepție: localitățile cunoscute. r7 (A1, B3): la persoane, cuvintele propagate trec prin ACEEAȘI delimitare (`prop` = context),
+   *  iar identitatea lor e cea din dicționar (B1–B3), nu cea a numelui lângă care au fost învățate. */
+  propaga(t, cuv, adauga, ocupat) {
+    if (!this.vazute.size && !this.vazutePers.size && !this.vazuteNec.size) return
+    const info = cuv.map(([s, e, tok]) => {
+      const w = { s, e, tok, liber: !ocupat(s, e), c: null, nec: false, necId: null, necComp: null, ctx: false, prop: true }
+      if (!w.liber) return w
+      const chei = []
+      let mare = false
+      for (const p of parti(tok)) {
+        const n = norm(p)
+        if (this.d.localitati.has(n)) continue
+        const c = componenta(n, this.vazutePers)
+        if (c !== null && !this.d.localitati.has(c) && (areMajuscula(p) || this.vazuteMici.has(c))) { chei.push(c); mare = mare || areMajuscula(p); continue }
+        const x = componenta(n, this.vazuteNec)
+        if (x !== null && !w.nec && (areMajuscula(p) || this.vazuteMici.has(x))) {
+          const ids = [...this.vazuteNec.get(x)]
+          w.nec = true; w.necComp = x; w.necId = ids.length === 1 && ids[0] ? ids[0] : null
         }
       }
-    }
-  }
-
-  /** Același nume în toată speța: orice cuvânt cu MAJUSCULĂ care e (după regula tulpinii) o componentă deja văzută se ascunde, cu
-   *  cheia numelui întreg — chiar dacă singur ar fi cuvânt comun (compromisul declarat). r5: scris integral MIC, doar componentele
-   *  din `vazuteMici` (vezi invataDin). Excepție: localitățile cunoscute. */
-  propaga(t, cuv, adauga) {
+      if (chei.length) { w.c = { chei, comun: false, mare, distinct: false }; w.nec = false }
+      return w
+    })
+    this.emitePersoane(this.delimiteaza(t, info), adauga)
     if (!this.vazute.size) return
     for (const [s, e, tok] of cuv) {
       for (const p of parti(tok)) {
@@ -889,8 +1006,7 @@ export class Mascare {
         if (this.d.localitati.has(n)) continue
         const c = componenta(n, this.vazute)
         if (c === null || this.d.localitati.has(c) || (!areMajuscula(p) && !this.vazuteMici.has(c))) continue
-        const [cat, cheie] = this.vazute.get(c)
-        adauga(s, e, cat, cheie)
+        adauga(s, e, 'FIRMA', this.vazute.get(c)[1])
         break
       }
     }
@@ -1009,7 +1125,7 @@ function areDinLista(text, set, expresii) {
 // („ “ " « ‚ ‘ ' `), paragraful începe cu
 //   - un șir de litere / cifre Unicode (orice capitalizare, cifre romane incluse, fără plafon de lungime) urmat de „)”, sau de „.” /
 //     „:” urmat de spațiu, de sfârșit sau DIRECT de o literă: „B) ”, „12345) ”, „iv. ”, „Art. ”, „B.Executarea”, „1.Executarea”
-//     (r6: NU și de o cifră — „6.5 bar …” nu e marcaj);
+//     (r6: NU și de o cifră — „6.5 bar …” nu e marcaj; r7: numerotările compuse „A.1”, „1.1 …” le prinde marcajCompus, mai jos);
 //   - „(” + litere / cifre + „)”: „(b)”, „(12)”;
 //   - un semn de listă: U+2022 •, U+2023 ‣, U+2043 ⁃, U+2219 ∙, U+25AA ▪, U+25AB ▫, U+25A0 ■, U+25A1 □, U+25CF ●, U+25CB ○,
 //     U+25E6 ◦, U+25B8 ▸, U+25BA ►, U+00B7 · (punctul median), „*”, „+”, U+2212 − (minus), „§”, ORICE caracter din categoria
@@ -1018,6 +1134,17 @@ export const SEMNE_LISTA = U(0x2022, 0x2023, 0x2043, 0x2219, 0x25aa, 0x25ab, 0x2
 const inClasa = s => s.replace(/[\\\]\[\-^*+()]/g, '\\$&')        // caractere puse într-o clasă de caractere
 const DESCHIDERE = new RegExp(`^[\\s${inClasa(U(0x201e, 0x201c, 0x22, 0xab, 0x201a, 0x2018, 0x27, 0x60))}]*`, 'u')
 const MARCAJ_ELEMENT = new RegExp(`^(?:[\\p{L}\\p{M}\\p{N}]+(?:\\)|[.:](?=[\\s\\p{L}]|$))|\\([\\p{L}\\p{M}\\p{N}]+\\)|[\\p{Pd}${inClasa(SEMNE_LISTA)}])`, 'u')
+// r7 (review r6 P2-3) — numerotările COMPUSE, pe reprezentarea comună (curata: cifrele / literele late și NBSP devin obișnuite),
+// cu majusculele PĂSTRATE (verificate înaintea literelor mici):
+//   C1. litere + „.” + cifre („A.1 text”, „A.1.text”, „B.2) text”) → marcaj;
+//   C2–C5. „cifre.cifre” la început („1.1 Executarea”, „1.1.Executarea”, „1.2.3 text”, „1.1) text”, „1.1Executarea”, „6.5bar”,
+//          „2.5 MPa”) → marcaj, cu O SINGURĂ excepție, ÎNCHISĂ (C4): „cifre.cifre” + spații + unitatea EXACTĂ „bar” sau „m”, scrisă mic,
+//          cu limită de cuvânt („6.5 bar …”, „0.5 m …”) = cantitate zecimală. Celelalte indicii de listă (paragraful precedent terminat
+//          în „:” / „;”, propriul sfârșit în „:” / „;”) se verifică separat și prevalează. Virgula zecimală („6,5 bar”) nu e atinsă (C6).
+const MARCAJ_LITERA_CIFRA = /^\p{L}+\.\p{N}/u
+const MARCAJ_NUMEROTARE = /^\p{N}+\.\p{N}/u
+const CANTITATE_ZECIMALA = /^\p{N}+\.\p{N}+ +(?:bar|m)(?![\p{L}\p{N}_])/u
+const marcajCompus = s => MARCAJ_LITERA_CIFRA.test(s) || (MARCAJ_NUMEROTARE.test(s) && !CANTITATE_ZECIMALA.test(s))
 // sfârșitul unui paragraf, fără spațiile, ghilimelele / parantezele de închidere și semnele de evidențiere de după el
 const INCHIDERE = new RegExp(`[\\s${inClasa(U(0x201d, 0x201c, 0x22, 0xbb, 0x2019, 0x27, 0x29, 0x5d, 0x2a, 0x5f, 0x60))}]*$`, 'u')
 const ultimulSemn = s => String(s ?? '').replace(INCHIDERE, '').slice(-1)
@@ -1044,8 +1171,8 @@ export function paragrafeText(text) {
  *  - 'context_taiat': paragraful e la o margine a extrasului care nu e margine de paragraf în sursă, sau are „…” / „...”;
  *  - 'context_necunoscut': paragraful precedent din sursă nu se cunoaște;
  *  - 'tabel': are „|” sau tab;
- *  - 'element_lista': începe cu un marcaj de element (MARCAJ_ELEMENT), paragraful precedent se termină cu „:” sau „;”, sau el însuși
- *    se termină cu „:” sau „;”;
+ *  - 'element_lista': începe cu un marcaj de element (MARCAJ_ELEMENT) sau cu o numerotare compusă (marcajCompus, r7), paragraful
+ *    precedent se termină cu „:” sau „;”, sau el însuși se termină cu „:” sau „;”;
  *  - 'mai_multe_propozitii': are o graniță de propoziție (GRANITA) în interior;
  *  - 'trimitere' / 'exceptie': un cuvânt sau o expresie din listele închise TRIMITERI / EXCEPTII;
  *  - 'fragment': nu începe cu majusculă sau cifră; 'fara_sfarsit': nu se termină cu „.”, „!” sau „?”. */
@@ -1054,7 +1181,8 @@ export function motivParagraf(p, { taiat = false, precedent = '' } = {}) {
   if (taiat || /…|\.\.\./.test(text)) return 'context_taiat'
   if (typeof precedent !== 'string') return 'context_necunoscut'
   if (/[|\t]/.test(text)) return 'tabel'
-  if (MARCAJ_ELEMENT.test(text.replace(DESCHIDERE, '')) || /[:;]/.test(ultimulSemn(precedent)) || /[:;]/.test(ultimulSemn(text))) return 'element_lista'
+  if (MARCAJ_ELEMENT.test(text.replace(DESCHIDERE, '')) || marcajCompus(curata(text).s.replace(DESCHIDERE, ''))
+      || /[:;]/.test(ultimulSemn(precedent)) || /[:;]/.test(ultimulSemn(text))) return 'element_lista'
   if (GRANITA.test(text)) return 'mai_multe_propozitii'
   if (areDinLista(text, SET_TRIMITERI, TRIMITERI_EXPRESII)) return 'trimitere'
   if (areDinLista(text, SET_EXCEPTII, EXCEPTII_EXPRESII)) return 'exceptie'

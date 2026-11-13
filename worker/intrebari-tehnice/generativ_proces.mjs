@@ -11,13 +11,15 @@ import { isMainThread, parentPort, workerData } from 'node:worker_threads'
 
 const E = await import('../../src/intrebariMascare.js')
 const G = await import('./generativ.mjs')
-const D = E.Dictionar.dinRaspuns(G.DICTIONAR)
+const DICT = new Map()                    // r7: dicționarul fiecărei familii (G.dictionarFamilie), construit o dată
+const dictionar = familie => { const r = G.dictionarFamilie(familie); if (!DICT.has(r)) DICT.set(r, E.Dictionar.dinRaspuns(r)); return DICT.get(r) }
 const S1 = String.fromCharCode(1), S2 = String.fromCharCode(2)
 
 export function ruleaza(indici) {
   const toate = G.loturi()
   return indici.map(i => {
     const l = toate[i]
+    const D = dictionar(l.familie)
     const { cazuri, excluse } = G.cazuriLot(l)
     const h = createHash('sha256')
     const esecuri = []

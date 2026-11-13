@@ -21,11 +21,18 @@ export function canonic(x) {
   return JSON.stringify(x === undefined ? null : x)
 }
 
-/** Dicționarul unui caz: „complet” (implicit), „fara_localitati” (previzualizarea), „gol” (fără dicționar — doar ecranul). */
+/** Răspunsul „nume” al unui caz: „complet” (implicit), „fara_localitati” (previzualizarea), r7: un dicționar numit din `dictionare`
+ *  („incluse”, „egalitate” — nume incluse unul în altul / identități cu aceeași mulțime). null = „gol” (fără dicționar — doar ecranul). */
+export function raspunsCaz(T, fel) {
+  if (fel === 'gol') return null
+  if (fel === 'fara_localitati') return { ...T.dictionar, localitati: [] }
+  if (fel) { if (!Object.hasOwn(T.dictionare || {}, fel)) throw new Error(`dicționar necunoscut: ${fel}`); return T.dictionare[fel] }
+  return T.dictionar
+}
+/** Dicționarul unui caz (vezi raspunsCaz). */
 export function dictionarCaz(E, T, fel) {
-  if (fel === 'gol') return new E.Dictionar()
-  if (fel === 'fara_localitati') return E.Dictionar.dinRaspuns({ ...T.dictionar, localitati: [] })
-  return E.Dictionar.dinRaspuns(T.dictionar)
+  const r = raspunsCaz(T, fel)
+  return r ? E.Dictionar.dinRaspuns(r) : new E.Dictionar()
 }
 
 /** Toate cazurile → lista eșecurilor [{caz, ce, asteptat, primit}] (goală = totul trece). `E` = modulul motorului. */

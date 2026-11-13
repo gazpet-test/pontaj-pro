@@ -71,7 +71,10 @@ class MotorDefect:
 # ─── 1. Cazurile comune, prin procesul real ────────────────────────────────────────────────────────────────────────────
 class CazuriComune(unittest.TestCase):
     def dictionarul(self, c):
-        return dict(NUME, localitati=[]) if c.get('dictionar') == 'fara_localitati' else NUME
+        fel = c.get('dictionar')
+        if fel == 'fara_localitati': return dict(NUME, localitati=[])
+        if fel: return T['dictionare'][fel]                    # r7: dicționarele numite (nume incluse, identități cu aceeași mulțime)
+        return NUME
 
     def test_contractul_si_regresiile(self):
         for c in T['contract'] + T['cazuri']:

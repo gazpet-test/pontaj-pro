@@ -580,6 +580,76 @@ class Flux(unittest.TestCase):
         self.assertTrue(r.startswith(C.INCERT), r)
         self.assertNotEqual(self.jurnalul()[-1]['regula_b'], 'citat')
 
+    # ── r7 (review r6): cazurile recenzentului pe traseul complet (motorul real, furnizorul simulat) ──
+    NUME_R7 = {'persoane': ['ANA VLADESCU', 'ANA MARIA VLADESCU', 'ION MARE'], 'firme': [], 'cui': []}
+    INTREBARE_R7 = ('dl. Ana Vladescu Ion Mare a venit; dl. Popescu Ana Vladescu a plecat; dl. Popescu Mare a sunat; '
+                    'Ana Vladescu Ana Maria Vladescu au semnat.')
+
+    def test_r7_persoanele_dupa_titlu_si_numele_incluse_textul_efectiv_trimis(self):
+        """P2-1: după titlu, persoanele alăturate se delimitează ca fără titlu („dl. Ana Vladescu Ion Mare” → două entități, complet
+        ascunse); persoana necunoscută se oprește înaintea numelui din listă și nu absoarbe componenta comună („dl. Popescu Mare”:
+        „Mare” e altă entitate — aici ascunsă prin propagare, fiindcă „Ion Mare” apare întreg în aceeași întrebare). P2-2: nume incluse
+        unul în altul = două entități; forma ambiguă („Vladescu” singur, în context) = entitate proprie. Nimic din nume în textul
+        EFECTIV trimis furnizorului; răspunsul publicat are numele puse la loc exact."""
+        q = dict(Q, titlu='Aviz montaj', context='Vladescu a cerut avizul.', intrebare=self.INTREBARE_R7)
+        self.raspuns = ('Incert — de verificat: lipsește avizul.\nNu am găsit sursa oficială pentru [PERSOANA_1], [PERSOANA_2], '
+                        '[PERSOANA_4] și [PERSOANA_5].')
+        W.proceseaza('s', 'k', q, CORPUS, VOC, MOTOR, self.NUME_R7)
+        self.assertTrue(self.apeluri)
+        for corp in self.apeluri:
+            for s in siruri(corp):
+                for x in ('vladescu', 'popescu', 'ion mare', 'maria'): self.assertNotIn(x, s.lower())
+        trimis = [a for a in self.apeluri if a['system'] is C.SISTEM_RASPUNS][0]['messages'][0]['content']
+        self.assertIn('dl. [PERSOANA_1] [PERSOANA_2] a venit; dl. [PERSOANA_3] [PERSOANA_1] a plecat; dl. [PERSOANA_3] [PERSOANA_2_F2] a sunat; '
+                      '[PERSOANA_1] [PERSOANA_4] au semnat.', trimis)
+        self.assertIn('[PERSOANA_5] a cerut avizul.', trimis)
+        self.assertIn('pentru Ana Vladescu, Ion Mare, Ana Maria Vladescu și Vladescu.', self.raspunsul()['raspuns_md'])
+
+    def test_r7_identitatile_nu_depind_de_ordinea_campurilor(self):
+        """B3–B4 pe traseul complet: forma ambiguă învățată ÎNAINTEA numelor complete (în titlu) sau DUPĂ ele (în context) — aceeași
+        împărțire în entități: „Vladescu” nu se unește niciodată cu „Ana Vladescu” sau cu „Ana Maria Vladescu”."""
+        def entitati(q):
+            self.apeluri.clear(); self.scrieri.clear()
+            W.proceseaza('s', 'k', q, CORPUS, VOC, MOTOR, self.NUME_R7)
+            return [a for a in self.apeluri if a['system'] is C.SISTEM_RASPUNS][0]['messages'][0]['content']
+        inainte = entitati(dict(Q, titlu='Vladescu a cerut avizul', intrebare='Ana Vladescu și Ana Maria Vladescu au semnat.', context=''))
+        dupa = entitati(dict(Q, titlu='Aviz', intrebare='Ana Vladescu și Ana Maria Vladescu au semnat.', context='Vladescu a cerut avizul.'))
+        self.assertIn('[PERSOANA_1] a cerut avizul', inainte)
+        self.assertIn('[PERSOANA_2] și [PERSOANA_3] au semnat.', inainte)
+        self.assertIn('[PERSOANA_1] și [PERSOANA_2] au semnat.', dupa)
+        self.assertIn('[PERSOANA_3] a cerut avizul.', dupa)
+
+    def test_r7_numerotarile_compuse_nu_publica_da_sau_nu(self):
+        """P2-3 pe traseul complet: „1.1.Executarea …” și „A.1 Executarea …” (cazurile recenzentului), paragraf întreg citat identic,
+        precedentul terminat cu „.” → nici „Da”, nici „Nu” publicat (la „Da”: refuzul e al regulii B, aceeași afirmație fără marcaj
+        rămâne „Da”); excepția închisă „0.5 m …” rămâne „Da” (L20)."""
+        q = dict(Q, titlu='Montaj', intrebare='Cine poate executa lucrarile de montaj?', context='')
+        baza = 'Executarea lucrarilor de montaj este permisa personalului autorizat.'
+        def ruleaza(verdict, text):
+            self.apeluri.clear(); self.scrieri.clear()
+            self.raspuns = f'{verdict} — executarea lucrarilor de montaj este permisa personalului autorizat [C1].\nCitat [C1]: „{text}”'
+            self.proceseaza_r5(self.corpus_r5('Prevederi pentru montajul conductelor.\n\n' + text), q=q)
+            return self.raspunsul()['raspuns_md'], self.jurnalul()[-1]['regula_b']
+        r, b = ruleaza('Da', baza)                                                  # martorul: fără marcaj → „Da”
+        self.assertTrue(r.startswith('Da — executarea lucrarilor de montaj'), r)
+        self.assertEqual(b, 'citat')
+        for text in ('1.1.' + baza, 'A.1 ' + baza):
+            with self.subTest(text=text):
+                r, b = ruleaza('Da', text)
+                self.assertTrue(r.startswith(C.INCERT), r)
+                self.assertEqual(b, 'fara_citat')                                  # refuzul regulii B (marcajul)
+                r, b = ruleaza('Nu', text)
+                self.assertTrue(r.startswith(C.INCERT), r)
+                self.assertNotEqual(b, 'citat')
+        cantitate = '0.5 m reprezinta adancimea minima de pozare a conductelor in teren agricol.'
+        self.apeluri.clear(); self.scrieri.clear()
+        self.raspuns = f'Da — 0.5 m reprezinta adancimea minima de pozare a conductelor in teren agricol [C1].\nCitat [C1]: „{cantitate}”'
+        self.proceseaza_r5(self.corpus_r5('Prevederi pentru pozarea conductelor.\n\n' + cantitate),
+                           q=dict(Q, titlu='Pozare', intrebare='Care e adancimea minima de pozare in teren agricol?', context=''))
+        r = self.raspunsul()['raspuns_md']
+        self.assertTrue(r.startswith('Da — 0.5 m reprezinta adancimea minima'), r)
+        self.assertEqual(self.jurnalul()[-1]['regula_b'], 'citat')
+
     # ── decizia B: Da / Nu doar cu citat ──
     def test_da_ferm_fara_citat_cere_reparare_apoi_devine_incert_cu_sursele_alaturate(self):
         self.raspuns = 'Da — RTS atestat ISCIR [C1].\n- Responsabilul tehnic cu sudura (RTS) e atestat ISCIR, art. 12 [C1].'

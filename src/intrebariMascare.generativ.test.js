@@ -44,7 +44,7 @@ describe('matricea generativă r5 (L25): produsul complet al dimensiunilor contr
     const r = G.rezumat()
     expect(r.map(x => x.familie)).toEqual(['firme_nume_intreg', 'firme_reprezentare', 'conflict_entitate_publica', 'firme_componenta_singura',
       'persoane_nume_intreg', 'persoane_componenta_singura', 'persoane_alaturate', 'persoane_trei', 'persoana_si_componenta_comuna',
-      'context_si_propagare', 'exceptii'])
+      'context_si_propagare', 'exceptii', 'titlu_persoane_alaturate', 'titlu_necunoscut_si_lista', 'nume_incluse_alaturate', 'forme_ambigue_si_punti'])
     for (const f of r) {
       const loturi = LOTURI.filter(l => l.familie === f.familie)
       expect(loturi.length, f.familie).toBe(f.loturi)
@@ -113,10 +113,10 @@ describe('matricea generativă r5 (L25): produsul complet al dimensiunilor contr
   })
 
   it('eșantion direct pe modulul importat de vitest (fiecare al 97-lea caz din fiecare lot): zero eșecuri', () => {
-    const D = E.Dictionar.dinRaspuns(G.DICTIONAR)
     const esecuri = []
     let n = 0
     for (const l of LOTURI) {
+      const D = E.Dictionar.dinRaspuns(G.dictionarFamilie(l.familie))
       const { cazuri } = G.cazuriLot(l)
       for (let i = 0; i < cazuri.length; i += 97) {
         const c = cazuri[i], m = new E.Mascare(D)

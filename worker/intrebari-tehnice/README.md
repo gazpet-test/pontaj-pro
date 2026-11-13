@@ -12,7 +12,7 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
 | Cercetare (06.11.2026) | `cercetare.py` (corpus, web oficial, validare); index: `scripts/intrebari/construieste_corpus.mjs` → `corpus_index.json` |
 | Surse + `de_verificat` + reluare | `supabase/migrations/20261131e_intrebari_cercetare_surse.sql` (edge v2 o cere) |
 | Ecran | `src/IntrebariTehnice.jsx` + `src/intrebariSurse.js`, cheia de modul `intrebari_tehnice` |
-| Mascarea numelor + regula „Da / Nu / Incert” (13.11.2026; r4 motorul unic, r5 regula B structurală) | `src/intrebariMascare.js` = MOTORUL UNIC al mascării și al regulii B (ecranul îl importă, workerul îl cheamă prin `motor.py` → procesul Node `motor_cli.mjs`, verificat cu `motor_manifest.json`); validarea răspunsului rămâne în `cercetare.py` + `src/intrebariSurse.js`; edge v3 (acțiunea `nume`). Pentru owner: `docs/intrebari/MASCARE_SI_VERDICT.md` |
+| Mascarea numelor + regula „Da / Nu / Incert” (13.11.2026; r4 motorul unic, r5 regula B structurală; r7 o singură delimitare a persoanelor, identitatea din listă, numerotările compuse) | `src/intrebariMascare.js` = MOTORUL UNIC al mascării și al regulii B (ecranul îl importă, workerul îl cheamă prin `motor.py` → procesul Node `motor_cli.mjs`, verificat cu `motor_manifest.json`); validarea răspunsului rămâne în `cercetare.py` + `src/intrebariSurse.js`; edge v3 (acțiunea `nume`). Pentru owner: `docs/intrebari/MASCARE_SI_VERDICT.md` |
 
 ## Răspuns din cercetare (cerere Silviu + Răzvan, 06.11.2026)
 1. **Corpus intern** — `scripts/intrebari/corpus.mjs` (`CORPUS`): cercetarea normativă din `docs/cercetare` (baza normativă,
