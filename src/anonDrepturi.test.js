@@ -168,25 +168,43 @@ describe('r2 — revenirea pe coloane (review #1081 P1)', () => {
 
 describe('r2 — citirea: SIMULARE pe valori, CONTROL pentru RAMANE', () => {
   const t = citeste(CIT)
-  it('SIMULARE citește valorile (nu EXISTS) și separă cele patru clase; așteptarea = 0 cu date citibile', () => {
-    expect(t).not.toContain('SELECT EXISTS (SELECT 1 FROM')
-    for (const s of ['GOL', 'AGREGAT_FARA_DATE', 'DATE_CITIBILE', 'EROARE', 'to_jsonb(anon_sim_q.*)', 'has_column_privilege(r.oid, a.attnum, \'SELECT\')',
-      'relatii cu date citibile', 'Concluzia „zero date citibile” cere 0 DATE_CITIBILE, 0 AMBIGUU neconfirmate și 0 erori necunoscute']) expect(t, s).toContain(s)
+  it('SIMULARE citește valorile (nu EXISTS) și separă clasele; așteptarea = 0 cu date citibile', () => {
+    // relația însăși se citește pe valori; EXISTS doar pe tabelele de bază din închidere (r5)
+    expect(t).not.toContain("'SELECT EXISTS (SELECT 1 FROM ' || r.nume")
+    expect(t.split('SELECT EXISTS (SELECT 1 FROM').length - 1).toBe(1)
+    for (const s of ['GOL', 'FARA_DATE_LA_SURSA', 'CONSTANTA', 'DATE_CITIBILE', 'EROARE', 'to_jsonb(anon_sim_q.*)', 'has_column_privilege(r.oid, a.attnum, \'SELECT\')',
+      'relatii cu date citibile', 'Concluzia „zero date citibile” cere 0 DATE_CITIBILE, 0 AMBIGUU și 0 erori necunoscute']) expect(t, s).toContain(s)
   })
-  it('r4 (review r3 P2): „un rând, doar zero / NULL” = AMBIGUU, confirmat din definiția vederii; concluzia cere 0 date + 0 ambigue', () => {
-    const i = t.indexOf("v_clasa := 'DATE_CITIBILE';")
+  it('r5 (review r4): „un rând doar NULL / zero” se dovedește la SURSĂ (închidere + citire efectivă ca anon), nu după forma vederii', () => {
+    const i = t.indexOf('DO $simulare$'), j = t.indexOf('END $simulare$;'), corp = t.slice(i, j)
     expect(i).toBeGreaterThan(0)
-    for (const s of ["IF r.tip = 'v' THEN", "rw.rulename = '_RETURN'", "v_clasa := 'AMBIGUU';", "v_clasa := 'AGREGAT_FARA_DATE';", "position(' :hasAggs true ' IN v_sus) > 0",
-      "position(' :groupClause <> ' IN v_sus) > 0", "position(' :groupingSets <> ' IN v_sus) > 0", "position(' :havingQual <> ' IN v_sus) > 0",
-      "position(' :setOperations <> ' IN v_sus) > 0", "position(' :hasTargetSRFs false ' IN v_sus) > 0", 'chr(92)'])
-      expect(t.indexOf(s, i), s).toBeGreaterThan(i)
+    // clasa veche, după formă, a dispărut (nu mai e dovadă)
+    expect(t).not.toContain('AGREGAT_FARA_DATE')
+    expect(corp).not.toContain(':hasAggs')
+    for (const s of ['WITH RECURSIVE inchidere(cls, obj)', "dp.classid = 'pg_catalog.pg_rewrite'::regclass", 'IF d.invoker IS NOT TRUE THEN',
+      "EXECUTE 'SELECT EXISTS (SELECT 1 FROM ' || d.rel_nume || ')' INTO v_ex;", 'WHEN insufficient_privilege THEN v_fara_drept := v_fara_drept + 1;',
+      'ELSIF d.prosecdef THEN', "d.pro_schema = 'auth' AND d.proname IN ('uid', 'role', 'jwt') AND d.pronargs = 0",
+      "v_scheme text[] := ARRAY['public']", 'p.prosqlbody IS NOT NULL'])
+      expect(corp, s).toContain(s)
+    // DEFINER se verifică ÎNAINTEA excepțiilor (pg_catalog, auth, corp analizat)
+    expect(corp.indexOf('ELSIF d.prosecdef THEN')).toBeLessThan(corp.indexOf("ELSIF d.pro_schema = 'pg_catalog' THEN"))
     expect(t).toContain("WHEN v_date = 0 AND v_ambiguu = 0 AND v_err_necunoscut = 0 THEN 'ZERO date citibile")
     // fără deparsare și fără backslash literal în citire
-    expect(t.slice(i, t.indexOf('END $simulare$;'))).not.toMatch(/pg_get_viewdef|pg_get_ruledef/)
+    expect(corp).not.toMatch(/pg_get_viewdef|pg_get_ruledef/)
     expect(t).not.toContain('\\')
   })
   it('r4: STATISTICI sărită = LIPSĂ DE DOVADĂ, nu zero apeluri', () => {
     expect(t.split('LIPSA DE DOVADA (nu inseamna zero apeluri ca anon)').length - 1).toBe(2)
+  })
+  it('r5: STATISTICI cu queryid și linia-rezumat de comparat (directe, apeluri, resetare, evacuări, texte ascunse)', () => {
+    expect(t).toContain("RAISE NOTICE 'STATISTICI anon: queryid % | % apeluri | %'")
+    expect(t).toContain("'STATISTICI rezumat anon | directe: % interogari, % apeluri | rpc: % interogari, % apeluri | resetare: % | evacuari: % | ascunse: % | dovada: %'")
+    expect(t).toContain("'<insufficient privilege>'")
+  })
+  it('r5: CONTROL POLITICI_ANON = politicile pentru anon / PUBLIC pe relații fără niciun drept pentru anon', () => {
+    expect(t).toContain("SELECT 'CONTROL', 2, 5, 'POLITICI_ANON'")
+    expect(t).toContain("AND NOT has_table_privilege(a.oid, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')")
+    expect(t).toContain("AND NOT has_any_column_privilege(a.oid, c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')) p")
   })
   it('CONTROL = amprenta RAMANE; BASELINE doar T1 / T2 / T3', () => {
     expect(t).toContain("SELECT 'CONTROL', 2, 4, a.treapta")
