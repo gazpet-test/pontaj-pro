@@ -1,5 +1,5 @@
 -- Version 20261220120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 2000 (DOAR cu plafon; marcajul gazpet.livrare_migrare legat de txid).
--- r4: pe PRODUCȚIE DOAR prin runnerul cu amprenta GLOBALĂ L15 v2 (când va exista) + manifestul 20261220a_sms_numere_serviciu.l15.tsv (îl adaugă coordonatorul).
+-- r4: pe PRODUCȚIE DOAR prin runnerul cu amprenta GLOBALĂ L15 v2 (când va exista) + manifestul 20261220a_sms_numere_serviciu.l15.tsv (îl adaugă coordonatorul). Pașii: docs/sms/LIVRARE_20261220a_NUMERE_SERVICIU.md.
 -- 20261220a_sms_numere_serviciu — SMS intern: NUMERE DE SERVICIU (telefoane ale firmei care nu sunt ale unui angajat, ex. „Gazpet Redări”),
 --   afișate SEPARAT de angajați în „Selecție manuală” (cererea owner-ului, 13.11.2026). Fără angajați fictivi în employees (ar intra în
 --   pontaj, HR, salarii, numărători) și fără al doilea telefon pe fișa angajatului.
@@ -50,11 +50,10 @@
 --   fn_sms_cere_nivel, normalizarea, textul, coada de test, accesul pe lot, auth.uid — cu lanțul lor), comparată cu BASELINE-ul din producție
 --   ÎNAINTE și DUPĂ. r3 (P1, tiparul 20261221a): ÎNCHIDEREA tranzitivă se CALCULEAZĂ în migrare din catalog (blocul INCHIDERE_L15, identic
 --   cu cel din script; lanțul = blocul din 20261221a, octet cu octet), independent de baseline, și baseline-ul trebuie s-o aibă EXACT (o
---   funcție lipsă sau în plus = refuz); EXECUTE dinamic / limbaj neanalizabil ORIUNDE în lanț = REFUZ (nu doar semnalat: ce cheamă un
---   EXECUTE nu se vede în text, deci nu se poate amprenta); [r3: postcondiția „funcțiile noi cheamă doar lista FOLOSITE și nimic
---   dinamic” — SCOASĂ în r4, vezi mai jos]. Lista FOLOSITE trebuie să fie în baseline (testul static o compară cu apelurile din corpuri). Valorile le scoate coordonatorul
---   cu scripts/sms_numere_serviciu_amprente.sql (tranzacție READ ONLY) în blocul marcat; necompletat = refuz; scriptul arată separat și
---   „funcții cu SQL dinamic în lanț: N” (N > 0 = migrarea va refuza). Excepțiile „după” (EXACT trei, toate verificate de postcondiții):
+--   funcție lipsă sau în plus = refuz); [r3: SQL dinamic în lanț = refuz — SCOS în r5, vezi mai jos; r3: postcondiția „funcțiile noi
+--   cheamă doar lista FOLOSITE” — SCOASĂ în r4]. Lista FOLOSITE trebuie să fie în baseline (testul static o compară cu apelurile din
+--   corpuri). Valorile le scoate coordonatorul cu scripts/sms_numere_serviciu_amprente.sql în blocul marcat (citit în ACEEAȘI fotografie
+--   cu amprenta GLOBALĂ: docs/sms/LIVRARE_20261220a_NUMERE_SERVICIU.md); necompletat = refuz. Excepțiile „după” (EXACT trei, toate verificate de postcondiții):
 --   'functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)' (ștearsă), 'functie fn_sms_lot_intern_creeaza(text,text[],integer[],
 --   boolean,integer[])' (varianta nouă: corp, drepturi) și 'functie fn_sms_lot_destinatari(uuid)' (corp nou).
 -- r4 (review r3) — L15 v2: LIVRARE DOAR PRIN RUNNERUL CU AMPRENTA GLOBALĂ. Închiderea calculată aici NU urmărește funcțiile chemate prin
@@ -63,10 +62,18 @@
 --   traversarea vederilor): lanțul calculat e VIZIBILITATE pentru review, nu garanția completă. Garanția vine din runner: amprenta GLOBALĂ a
 --   tuturor cataloagelor cu cod / drepturi, verificată înainte și după migrare, în aceeași tranzacție (L15 v2, livrată separat). De aceea
 --   20261220a se aplică DOAR prin acel runner, când va exista; manifestul diferențelor declarate (20261220a_sms_numere_serviciu.l15.tsv)
---   îl adaugă atunci coordonatorul. Contraexemplul cu vederea e test DOCUMENTAT al limitei (S44: migrarea singură îl acceptă). Refuzuri
---   păstrate aici, independente de baseline: DEFINER din lanț fără search_path propriu; SQL dinamic / limbaj neanalizabil în lanț (regula
---   20261221a). Postcondiția lexicală „funcțiile noi cheamă doar FOLOSITE” e scoasă (L20: respingea o migrare corectă); numele din corpurile
+--   îl adaugă atunci coordonatorul. Contraexemplul cu vederea e test DOCUMENTAT al limitei (S44: migrarea singură îl acceptă).
+--   Postcondiția lexicală „funcțiile noi cheamă doar FOLOSITE” e scoasă (L20: respingea o migrare corectă); numele din corpurile
 --   noi potrivite cu funcții din afara listei sunt SEMNAL în scriptul coordonatorului (secțiunea 2), examinat și acceptat explicit în review.
+-- r5 (review r4, L20) — REGULA: migrarea REFUZĂ, independent de baseline, DOAR (a) o funcție SECURITY DEFINER din lanț fără search_path
+--   propriu și (b) o funcție din lanț într-un limbaj neanalizabil (altul decât sql / plpgsql; internal / c = frunze). SQL-ul DINAMIC
+--   (EXECUTE) din lanț NU mai e refuz: căutarea cuvântului era lexicală și prindea comentariile (un „-- EXECUTE …” în poarta owner, cu
+--   baseline-ul regenerat corect, respingea migrarea). E SEMNAL în scriptul coordonatorului (secțiunea 2: numărul + funcțiile, cu schema;
+--   supra-aproximare, prinde și comentariile), examinat și acceptat NOMINAL în PR-ul de baseline, cu țintele lui. Deriva (ținta SQL-ului
+--   dinamic, un auxiliar al porții schimbat după citire) o refuză runnerul, la „înainte”, prin amprenta GLOBALĂ — nu migrarea (S39 =
+--   limita documentată, ca S44). (a) e PLASĂ MINIMĂ: „are search_path propriu” NU dovedește rezolvarea sigură a numelor; aceea (cale
+--   proprie, pg_temp explicit ULTIMUL, nicio schemă din cale cu CREATE pentru roluri din afara celor de încredere) se verifică la citirea
+--   coordonatorului, după regula DEFINER din docs/LIVRARE_L15_V2.md. Aplicarea fără amprenta GLOBALĂ NU e acceptată.
 --
 -- Livrare: DOAR cu plafon — scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000 (fără plafon = refuz în $pre$). Lock-uri (după
 --   verificările de catalog, NOWAIT, reîncercate la 50 ms până la 1 s de la BEGIN; peste = 55P03, nimic schimbat): sms_loturi SHARE UPDATE
@@ -164,7 +171,7 @@ amp_tabele(oid) AS (VALUES ('public.sms_loturi'::regclass::oid), ('public.sms_me
 --   pg_catalog / information_schema) al cărei nume apare ca apel „nume(” în corpul unei funcții sql / plpgsql din lanț (supra-aproximare:
 --   un nume potrivit în plus doar intră în amprentă), numele neobișnuite prin căutare de text, plus dependențele din pg_depend (corpurile
 --   BEGIN ATOMIC); fără limită de adâncime (UNION oprește ciclurile). BASELINE-ul trebuie să aibă EXACT această mulțime (o funcție lipsă
---   sau în plus = refuz). EXECUTE dinamic / limbaj neanalizabil în lanț = refuz (amp_verifica).
+--   sau în plus = refuz). Limbaj neanalizabil în lanț = refuz; SQL dinamic = semnal în script (r5; amp_verifica, secțiunea 2).
 amp_pornire(oid) AS (VALUES (to_regprocedure('public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean)')::oid),
                             (to_regprocedure('public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean, integer[])')::oid),
                             (to_regprocedure('public.fn_sms_lot_destinatari(uuid)')::oid), (to_regprocedure('public.fn_sms_angajati_lista()')::oid),
@@ -296,7 +303,7 @@ $fo$;
 -- r3 (tiparul 20261221a): amprenta se calculează O DATĂ pe apel (tabel temporar), apoi se compară cu baseline-ul și se verifică lanțul.
 CREATE FUNCTION pg_temp.amp_verifica_20261220a(p_moment text) RETURNS void
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $vf$
-DECLARE v_dif text; v_exec text;
+DECLARE v_dif text; v_limbaj text;
 BEGIN
   CREATE TEMP TABLE amp_rez_20261220a ON COMMIT DROP AS SELECT * FROM pg_temp.amp_calc_20261220a();
   IF NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261220a())
@@ -337,22 +344,24 @@ BEGIN
   IF v_dif IS NOT NULL THEN
     RAISE EXCEPTION '20261220a: starea de acces (%) difera de baseline-ul L15 revizuit: %', p_moment, v_dif;
   END IF;
-  -- independent de baseline: o funcție SECURITY DEFINER din lanț fără search_path propriu = refuz (L15)
+  -- independent de baseline: o funcție SECURITY DEFINER din lanț fără search_path propriu = refuz (L15). r5: PLASĂ MINIMĂ, NU dovada
+  -- rezolvării sigure a numelor (cale proprie, pg_temp explicit ULTIMUL, nicio schemă din cale cu CREATE pentru roluri din afara celor de
+  -- încredere): aceea se verifică la citirea coordonatorului (regula DEFINER din L15 v2, docs/sms/LIVRARE_20261220a_NUMERE_SERVICIU.md)
   IF EXISTS (SELECT 1 FROM amp_rez_20261220a c
               WHERE c.eticheta LIKE 'functie %' AND c.detaliu LIKE '%definer=true%' AND c.detaliu LIKE '%config=(mostenit)%') THEN
     RAISE EXCEPTION '20261220a: o functie SECURITY DEFINER din lantul de acces nu are search_path propriu';
   END IF;
-  -- independent de baseline: ce nu se poate amprenta static = REFUZ (nu doar semnalat): EXECUTE în corpul unei funcții sql / plpgsql din lanț
-  -- (SQL dinamic: ce cheamă nu se vede în text; șirul 'EXECUTE' ca argument, ex. la has_function_privilege, nu contează) sau un limbaj al
-  -- cărui corp nu se poate citi (în afara sql / plpgsql; internal / c sunt frunze: nu cheamă funcții SQL după nume)
+  -- independent de baseline: o funcție din lanț într-un limbaj al cărui corp nu se poate citi (în afara sql / plpgsql; internal / c sunt
+  -- frunze: nu cheamă funcții SQL după nume) = REFUZ. r5 (review r4, L20): SQL-ul dinamic (EXECUTE) NU se mai refuză aici — căutarea
+  -- cuvântului prindea și comentariile (refuz fals); e SEMNAL în scripts/sms_numere_serviciu_amprente.sql (secțiunea 2: numărul și
+  -- funcțiile, cu schema), examinat și acceptat explicit în review; schimbarea țintei lui după citire o refuză amprenta GLOBALĂ a runnerului
   SELECT string_agg(p.oid::regprocedure::text || ' (' || l.lanname || ')', ', ' ORDER BY p.oid::regprocedure::text COLLATE "C")
-    INTO v_exec
+    INTO v_limbaj
     FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
    WHERE p.oid IN (SELECT to_regprocedure(substr(c.eticheta, 9))::oid FROM amp_rez_20261220a c WHERE c.eticheta LIKE 'functie %')
-     AND (l.lanname NOT IN ('sql', 'plpgsql', 'internal', 'c')
-          OR (l.lanname IN ('sql', 'plpgsql') AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '\mexecute\M'));
-  IF v_exec IS NOT NULL THEN
-    RAISE EXCEPTION '20261220a: lantul de acces are EXECUTE dinamic / limbaj neanalizabil (amprenta statica imposibila): %', v_exec;
+     AND l.lanname NOT IN ('sql', 'plpgsql', 'internal', 'c');
+  IF v_limbaj IS NOT NULL THEN
+    RAISE EXCEPTION '20261220a: lantul de acces are o functie intr-un limbaj neanalizabil (amprenta statica imposibila): %', v_limbaj;
   END IF;
   DROP TABLE amp_rez_20261220a;
 END $vf$;
