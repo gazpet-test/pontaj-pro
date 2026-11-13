@@ -2,7 +2,11 @@
 // citirea e probată pe un server FALS care aplică filtrele ca PostgREST și taie la max-rows = 1000 (ca Supabase), indiferent de .limit().
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { esteZiLucrataCuSantier, ultimulSantierDinRanduri, santierImplicit, incarcaUltimulSantier } from './pontajSantierImplicit.js'
+import {
+  esteZiLucrataCuSantier, ultimulSantierDinRanduri, santierImplicit, incarcaUltimulSantier,
+  stareZiInitiala, reducerZi, cheiaListei, raspunsAplicabil, randulZilei, stareIstoric, propuneSantier, verificaSalvare,
+  randPentruSalvare, treceFiltrulSantier, nealocati, incarcaRanduriZi, incarcaIstoricZi, salveazaRand, alocaSantierZi,
+} from './pontajSantierImplicit.js'
 
 // ── serverul fals: in / lt / not is null / or(check_in.not.is.null,norma.is.null) / order / limit, plafon de server 1000 ──
 function serverFals(randuri, { maxRows = 1000, strica = null } = {}) {
@@ -140,22 +144,298 @@ describe('citirea din BD: exactă și paginată', () => {
   })
 })
 
-// legătura cu ecranul: aceeași regulă la afișare, la select, la filtrul pe șantier și la salvare
-describe('PontajPage folosește regula', () => {
+// ══ r2 (review #1091): comportamentul paginii, pe aceleași funcții pe care le cheamă PontajPage ══
+// „Pagina” de test = starea din reducerZi (ca useReducer: fiecare dispatch se aplică pe starea CURENTĂ, în ordinea sosirii) +
+// pașii asincroni exportați, cu promisiuni pe care testul le rezolvă în ordinea aleasă de el.
+function amanat() {
+  let rezolva, respinge
+  const p = new Promise((a, b) => { rezolva = a; respinge = b })
+  return { p, rezolva, respinge }
+}
+const asteapta = () => new Promise(res => setTimeout(res, 0))
+function pagina(ziInit, emps) {
+  const pg = { st: stareZiInitiala(ziInit), emps, ziRef: ziInit, scrieri: [] }
+  pg.dispatch = (a) => { pg.st = reducerZi(pg.st, a) }
+  pg.cheie = () => cheiaListei(pg.emps)
+  pg.schimbaZiua = (zi) => { pg.ziRef = zi; pg.dispatch({ tip: 'zi', zi }) }
+  // pornește citirile zilei afișate (ca efectele paginii); întoarce promisiunile amânate, rezolvate de test
+  pg.pornesteCitirile = () => {
+    const zi = pg.st.zi, cheie = pg.cheie(), ids = pg.emps.map(e => e.id)
+    const randuri = amanat(), istoric = amanat()
+    const pr = incarcaRanduriZi({ zi, ids, dispatch: pg.dispatch, citeste: () => randuri.p })
+    const pi = incarcaIstoricZi({ zi, cheie, ids, dispatch: pg.dispatch, citeste: () => istoric.p })
+    return { randuri, istoric, gata: Promise.all([pr, pi]) }
+  }
+  pg.prop = (emp) => propuneSantier({ st: pg.st, cheie: pg.cheie(), emp })
+  // salvarea: ca saveRecord (starea din momentul apăsării); scrie() = promisiune controlată sau răspuns imediat (ecoul rândului)
+  pg.salveaza = (emp, fields, scrie) => salveazaRand({
+    st: pg.st, cheie: pg.cheie(), emp, fields, dispatch: pg.dispatch, ziAfisata: () => pg.ziRef,
+    uid: async () => 'u1', acum: () => 'T', scrie: (rand) => { pg.scrieri.push(rand); return scrie ? scrie(rand) : Promise.resolve({ data: { id: 900, ...rand }, error: null }) },
+  })
+  return pg
+}
+const ore = (zi) => ({ check_in: `${zi}T05:00:00Z`, check_out: `${zi}T14:00:00Z`, norma: null, lunch_break: true, diurna: false, meal_supplement: false })
+const A = 20, B = 30
+
+describe('(a) schimbarea zilei cu istoric întârziat + rând cu șantier NULL (P1-1)', () => {
+  it('salvarea e refuzată cât istoricul zilei noi nu e citit, apoi trece cu șantierul CORECT (B), nu cu al zilei vechi (A)', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const pg = pagina('2026-11-13', [emp])
+    const c13 = pg.pornesteCitirile()
+    c13.randuri.rezolva({ data: [], error: null })
+    c13.istoric.rezolva(new Map([[1, { site_id: A, date: '2026-11-12' }]]))
+    await c13.gata
+    expect(pg.prop(emp)).toEqual({ site_id: A, sursa: 'precedent', data: '2026-11-12' })
+
+    // treci la 12.11: există un rând cu ore și șantier NULL; rândurile sosesc ÎNAINTEA istoricului
+    pg.schimbaZiua('2026-11-12')
+    const c12 = pg.pornesteCitirile()
+    expect(pg.prop(emp).sursa).toBe('incarc') // nici rândurile nu sunt încă citite: nu se arată A
+    c12.randuri.rezolva({ data: [{ id: 5, employee_id: 1, date: '2026-11-12', site_id: null, ...ore('2026-11-12') }], error: null })
+    await asteapta()
+    expect(pg.prop(emp)).toEqual({ site_id: null, sursa: 'incarc', data: null, asteapta: 'istoric' })
+    const refuz = await pg.salveaza(emp, ore('2026-11-12'))
+    expect(refuz.ok).toBe(false)
+    expect(refuz.motiv).toMatch(/ultimul șantier pontat/)
+    expect(pg.scrieri.length).toBe(0) // nimic scris pe A
+
+    // istoricul corect al zilei 12 dă B
+    c12.istoric.rezolva(new Map([[1, { site_id: B, date: '2026-11-10' }]]))
+    await c12.gata
+    expect(pg.prop(emp)).toEqual({ site_id: B, sursa: 'precedent', data: '2026-11-10' })
+    const ok = await pg.salveaza(emp, ore('2026-11-12'))
+    expect(ok.ok).toBe(true)
+    expect(pg.scrieri).toHaveLength(1)
+    expect(pg.scrieri[0]).toMatchObject({ employee_id: 1, date: '2026-11-12', site_id: B })
+  })
+  it('salvarea „doar diurnă” (trimite tot rândul vechi, cu site_id NULL) nu scrie NULL peste șantierul afișat și nici altă zi', async () => {
+    const emp = { id: 1, site_id: null }
+    const pg = pagina('2026-11-12', [emp])
+    const c = pg.pornesteCitirile()
+    const rand = { id: 5, employee_id: 1, date: '2026-11-12', site_id: null, check_in: null, check_out: null, norma: null }
+    c.randuri.rezolva({ data: [rand], error: null })
+    c.istoric.rezolva(new Map([[1, { site_id: B, date: '2026-11-10' }]]))
+    await c.gata
+    await pg.salveaza(emp, { ...rand, date: '2026-11-11', diurna: true, meal_supplement: false })
+    expect(pg.scrieri[0]).toMatchObject({ employee_id: 1, date: '2026-11-12', site_id: B, diurna: true })
+  })
+  it('rândul zilei CU șantier nu depinde de istoric: se salvează și cât istoricul se citește', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const pg = pagina('2026-11-12', [emp])
+    const c = pg.pornesteCitirile()
+    c.randuri.rezolva({ data: [{ id: 5, employee_id: 1, date: '2026-11-12', site_id: 77, ...ore('2026-11-12') }], error: null })
+    await asteapta()
+    expect(stareIstoric(pg.st, pg.cheie())).toBe('incarc')
+    const r = await pg.salveaza(emp, ore('2026-11-12'))
+    expect(r.ok).toBe(true)
+    expect(pg.scrieri[0].site_id).toBe(77)
+  })
+  it('rândurile zilei necitite (sau citirea lor eșuată) = salvare refuzată, nu „fără rând”', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const pg = pagina('2026-11-12', [emp])
+    const c = pg.pornesteCitirile()
+    c.istoric.rezolva(new Map([[1, { site_id: A, date: '2026-11-11' }]]))
+    c.randuri.rezolva({ data: null, error: { message: 'timeout' } })
+    await c.gata
+    expect(pg.st.recsErr).toBe('timeout')
+    const r = await pg.salveaza(emp, ore('2026-11-12'))
+    expect(r.ok).toBe(false)
+    expect(r.motiv).toMatch(/pontajul zilei/)
+    expect(pg.scrieri.length).toBe(0)
+  })
+})
+
+describe('(b) răspunsul unei salvări sosit după schimbarea zilei (P1-2)', () => {
+  it('scrierea rămâne pe ziua de plecare; starea zilei noi nu e atinsă; pagina află că s-a salvat pe altă zi', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const pg = pagina('2026-11-13', [emp])
+    const c13 = pg.pornesteCitirile()
+    c13.randuri.rezolva({ data: [], error: null })
+    c13.istoric.rezolva(new Map([[1, { site_id: A, date: '2026-11-12' }]]))
+    await c13.gata
+
+    const scriere = amanat()
+    const pending = pg.salveaza(emp, ore('2026-11-13'), () => scriere.p)
+    await asteapta()
+    expect(pg.scrieri[0]).toMatchObject({ date: '2026-11-13', site_id: A })
+
+    pg.schimbaZiua('2026-11-14')
+    const c14 = pg.pornesteCitirile()
+    c14.randuri.rezolva({ data: [], error: null })
+    c14.istoric.rezolva(new Map([[1, { site_id: B, date: '2026-11-13' }]]))
+    await c14.gata
+    const inainte = pg.st
+
+    scriere.rezolva({ data: { id: 901, employee_id: 1, date: '2026-11-13', site_id: A, ...ore('2026-11-13') }, error: null })
+    const r = await pending
+    expect(r).toMatchObject({ ok: true, zi: '2026-11-13', altaZi: true })
+    expect(pg.st).toBe(inainte) // nimic aplicat
+    expect(pg.st.recs[1]).toBeUndefined()
+    // următoarea salvare pe 14.11 nu preia șantierul rândului din 13.11
+    expect(pg.prop(emp).site_id).toBe(B)
+    await pg.salveaza(emp, ore('2026-11-14'))
+    expect(pg.scrieri[1]).toMatchObject({ date: '2026-11-14', site_id: B })
+  })
+  it('alocarea sosită după schimbarea zilei: la fel (scrisă pe ziua ei, ignorată în ziua nouă)', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const pg = pagina('2026-11-13', [emp])
+    const scriere = amanat()
+    const pending = alocaSantierZi({ zi: '2026-11-13', emp, siteId: A, dispatch: pg.dispatch, ziAfisata: () => pg.ziRef, uid: async () => 'u1', scrie: () => scriere.p })
+    pg.schimbaZiua('2026-11-14')
+    scriere.rezolva({ data: { id: 902, employee_id: 1, date: '2026-11-13', site_id: A }, error: null })
+    expect(await pending).toMatchObject({ ok: true, zi: '2026-11-13', altaZi: true })
+    expect(pg.st.recs[1]).toBeUndefined()
+  })
+  it('un rând cu altă dată nu intră niciodată în ziua afișată (nici prin salvare, nici prin citire)', () => {
+    let st = stareZiInitiala('2026-11-14')
+    st = reducerZi(st, { tip: 'randSalvat', zi: '2026-11-14', rand: { employee_id: 1, date: '2026-11-13', site_id: A } })
+    expect(st.recs[1]).toBeUndefined()
+    st = reducerZi(st, { tip: 'randuri', zi: '2026-11-14', rows: [{ employee_id: 1, date: '2026-11-13', site_id: A }] })
+    expect(st.recs[1]).toBeUndefined()
+    // și dacă ar ajunge totuși (stare construită de mână), regula nu-l folosește
+    const st2 = { ...st, recs: { 1: { employee_id: 1, date: '2026-11-13', site_id: A } } }
+    expect(randulZilei(st2, 1)).toBe(null)
+    expect(propuneSantier({ st: { ...st2, ist: { zi: '2026-11-14', cheie: '1', stare: 'gata', harta: new Map(), err: null } }, cheie: '1', emp: { id: 1, site_id: 10 } }).site_id).toBe(10)
+  })
+  it('răspunsul unei citiri a rândurilor pentru ziua părăsită nu înlocuiește rândurile zilei afișate', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const pg = pagina('2026-11-13', [emp])
+    const c13 = pg.pornesteCitirile()
+    pg.schimbaZiua('2026-11-14')
+    const c14 = pg.pornesteCitirile()
+    c14.randuri.rezolva({ data: [{ id: 7, employee_id: 1, date: '2026-11-14', site_id: 44 }], error: null })
+    await asteapta()
+    c13.randuri.rezolva({ data: [{ id: 6, employee_id: 1, date: '2026-11-13', site_id: A }], error: null })
+    c13.istoric.rezolva(new Map())
+    await asteapta()
+    expect(pg.st.recs[1].site_id).toBe(44)
+    expect(pg.st.recsZi).toBe('2026-11-14')
+  })
+})
+
+describe('(c) două schimbări rapide de zi: contează doar ultima', () => {
+  it('istoricele sosite în orice ordine: doar cel al zilei afișate intră', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const pg = pagina('2026-11-13', [emp])
+    pg.schimbaZiua('2026-11-14'); const c14 = pg.pornesteCitirile()
+    pg.schimbaZiua('2026-11-15'); const c15 = pg.pornesteCitirile()
+    c15.randuri.rezolva({ data: [], error: null })
+    c14.randuri.rezolva({ data: [], error: null })
+    // al zilei 14 sosește primul: ignorat (ziua afișată e 15)
+    c14.istoric.rezolva(new Map([[1, { site_id: A, date: '2026-11-13' }]]))
+    await asteapta()
+    expect(pg.prop(emp).sursa).toBe('incarc')
+    c15.istoric.rezolva(new Map([[1, { site_id: B, date: '2026-11-14' }]]))
+    await asteapta()
+    expect(pg.prop(emp)).toEqual({ site_id: B, sursa: 'precedent', data: '2026-11-14' })
+  })
+  it('și invers: istoricul zilei vechi sosit DUPĂ cel al zilei afișate nu-l suprascrie', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const pg = pagina('2026-11-13', [emp])
+    pg.schimbaZiua('2026-11-14'); const c14 = pg.pornesteCitirile()
+    pg.schimbaZiua('2026-11-15'); const c15 = pg.pornesteCitirile()
+    c15.randuri.rezolva({ data: [], error: null }); c14.randuri.rezolva({ data: [], error: null })
+    c15.istoric.rezolva(new Map([[1, { site_id: B, date: '2026-11-14' }]]))
+    await asteapta()
+    c14.istoric.respinge(new Error('târziu')) // nici eroarea zilei vechi nu strică ziua afișată
+    await asteapta()
+    expect(pg.prop(emp).site_id).toBe(B)
+    expect(stareIstoric(pg.st, pg.cheie())).toBe('gata')
+  })
+  it('aceeași zi, lista de angajați schimbată: doar istoricul ultimei liste contează (cel vechi nu blochează și nu se folosește)', async () => {
+    const e1 = { id: 1, site_id: 10 }, e2 = { id: 2, site_id: null }
+    const pg = pagina('2026-11-13', [e1])
+    const c1 = pg.pornesteCitirile()
+    pg.emps = [e1, e2]
+    const c2 = pg.pornesteCitirile()
+    c2.randuri.rezolva({ data: [], error: null }); c1.randuri.rezolva({ data: [], error: null })
+    c2.istoric.rezolva(new Map([[1, { site_id: B, date: '2026-11-12' }], [2, { site_id: A, date: '2026-11-11' }]]))
+    await asteapta()
+    c1.istoric.rezolva(new Map([[1, { site_id: 99, date: '2026-11-12' }]]))
+    await asteapta()
+    expect(pg.prop(e1).site_id).toBe(B)
+    expect(pg.prop(e2).site_id).toBe(A)
+  })
+})
+
+describe('(d) istoric cu eroare: avertisment + fișa (comportamentul păstrat)', () => {
+  it('eroarea se vede (stare „eroare” + mesaj), propunerea e fișa marcată, salvarea pe fișă e permisă', async () => {
+    const emp = { id: 1, site_id: 10 }, faraFisa = { id: 2, site_id: null }
+    const pg = pagina('2026-11-13', [emp, faraFisa])
+    const c = pg.pornesteCitirile()
+    c.randuri.rezolva({ data: [], error: null })
+    c.istoric.respinge(new Error('timeout'))
+    await c.gata
+    expect(stareIstoric(pg.st, pg.cheie())).toBe('eroare')
+    expect(pg.st.ist.err).toBe('timeout')
+    expect(pg.prop(emp)).toEqual({ site_id: 10, sursa: 'fisa', data: null, istoricEroare: true })
+    expect(pg.prop(faraFisa)).toEqual({ site_id: null, sursa: null, data: null, istoricEroare: true })
+    const r = await pg.salveaza(emp, ore('2026-11-13'))
+    expect(r.ok).toBe(true)
+    expect(pg.scrieri[0].site_id).toBe(10)
+    const r2 = await pg.salveaza(faraFisa, ore('2026-11-13'))
+    expect(r2).toMatchObject({ ok: false, motiv: 'Șantierul este obligatoriu pentru ore!' })
+  })
+})
+
+describe('(e) „Nealocate” după regula nouă (P2) și filtrul pe șantier', () => {
+  it('nealocat = fără rând cu șantier pe zi, fără zi lucrată anterioară, fără fișă; cât se încarcă, nu se dă lista', async () => {
+    const precedent = { id: 1, name: 'P', site_id: null }   // fără fișă, dar a lucrat pe A
+    const nimic = { id: 2, name: 'N', site_id: null }        // nimic nicăieri
+    const randZi = { id: 3, name: 'R', site_id: null }       // rând cu șantier azi
+    const fisa = { id: 4, name: 'F', site_id: 10 }           // doar fișa
+    const randNull = { id: 5, name: 'Z', site_id: null }     // rând azi fără șantier, nimic altceva
+    const emps = [precedent, nimic, randZi, fisa, randNull]
+    const pg = pagina('2026-11-13', emps)
+    const c = pg.pornesteCitirile()
+    expect(nealocati({ st: pg.st, cheie: pg.cheie(), emps })).toEqual({ lista: [], inAsteptare: 5 })
+    c.randuri.rezolva({ data: [{ id: 8, employee_id: 3, date: '2026-11-13', site_id: B }, { id: 9, employee_id: 5, date: '2026-11-13', site_id: null, norma: 'CO', check_in: null }], error: null })
+    await asteapta()
+    expect(nealocati({ st: pg.st, cheie: pg.cheie(), emps }).inAsteptare).toBe(4) // doar cel cu rând cu șantier e sigur
+    c.istoric.rezolva(new Map([[1, { site_id: A, date: '2026-11-12' }]]))
+    await c.gata
+    const n = nealocati({ st: pg.st, cheie: pg.cheie(), emps })
+    expect(n.inAsteptare).toBe(0)
+    expect(n.lista.map(e => e.id)).toEqual([2, 5])
+  })
+  it('filtrul pe șantier: același șantier ca rândul; „se încarcă” rămâne vizibil', () => {
+    expect(treceFiltrulSantier({ site_id: A, sursa: 'precedent' }, String(A))).toBe(true)
+    expect(treceFiltrulSantier({ site_id: A, sursa: 'precedent' }, String(B))).toBe(false)
+    expect(treceFiltrulSantier({ site_id: null, sursa: 'incarc' }, String(B))).toBe(true)
+    expect(treceFiltrulSantier({ site_id: null, sursa: null }, String(B))).toBe(false)
+    expect(treceFiltrulSantier({ site_id: null, sursa: null }, 'Toate')).toBe(true)
+  })
+})
+
+describe('reguli mici', () => {
+  it('verificaSalvare: „se încarcă” = refuz; ore fără șantier = refuz; absență fără șantier = permisă', () => {
+    expect(verificaSalvare({ site_id: null, sursa: 'incarc', asteapta: 'istoric' }, ore('2026-11-13')).ok).toBe(false)
+    expect(verificaSalvare({ site_id: null, sursa: 'incarc', asteapta: 'istoric' }, { norma: 'CO' }).ok).toBe(false)
+    expect(verificaSalvare({ site_id: null, sursa: null }, ore('2026-11-13')).ok).toBe(false)
+    expect(verificaSalvare({ site_id: null, sursa: null }, { norma: 'CO' })).toEqual({ ok: true, site_id: null })
+    expect(verificaSalvare({ site_id: A, sursa: 'precedent' }, ore('2026-11-13'))).toEqual({ ok: true, site_id: A })
+  })
+  it('randPentruSalvare: angajatul, ziua și șantierul decise nu pot fi suprascrise de câmpuri; restul câmpurilor trec', () => {
+    expect(randPentruSalvare({ empId: 1, zi: '2026-11-13', siteId: A, uid: 'u', acum: 'T', fields: { employee_id: 9, date: '2026-01-01', site_id: null, diurna: true, created_by: 'vechi' } }))
+      .toEqual({ employee_id: 1, date: '2026-11-13', site_id: A, created_by: 'vechi', updated_by: 'u', updated_at: 'T', diurna: true })
+  })
+  it('raspunsAplicabil: doar aceeași zi', () => {
+    expect(raspunsAplicabil('2026-11-13', '2026-11-13')).toBe(true)
+    expect(raspunsAplicabil('2026-11-13', '2026-11-14')).toBe(false)
+    expect(raspunsAplicabil(null, null)).toBe(false)
+  })
+})
+
+// legătura minimă cu ecranul: pagina chiar cheamă funcțiile probate mai sus (comportamentul e testat pe ele, nu pe text)
+describe('PontajPage folosește funcțiile probate', () => {
   const APP = readFileSync(new URL('./App.jsx', import.meta.url), 'utf8').replace(/\r/g, '')
-  it('salvarea ia șantierul din regula unică, nu din fișă', () => {
-    expect(APP).toContain('const recSiteId = santierPentru(emp).site_id')
-    expect(APP).not.toContain('const recSiteId = recs[emp.id]?.site_id ?? emp.site_id ?? null')
-  })
-  it('rândul afișează și propune șantierul din regulă; filtrul pe șantier folosește același șantier', () => {
-    expect(APP).toContain('santierImpl={santierPentru(emp)}')
-    expect(APP).toContain("value={santierImpl.site_id??''}")
-    expect(APP).toContain('String(santierPentru(e).site_id)===String(siteF)')
-  })
-  it('citirea: la schimbarea zilei / listei, cu token de generație (L24); eroarea se arată, salvarea așteaptă citirea', () => {
-    expect(APP).toContain('incarcaUltimulSantier(supabase, emps.map(e=>e.id), d)')
-    expect(APP).toContain('if(g!==genUltimRef.current) return')
-    expect(APP).toContain('Nu am putut citi ultimul șantier pontat')
-    expect(APP).toContain("if(!recs[emp.id]&&ultimStare==='incarc')")
+  const start = APP.indexOf('function PontajPage()')
+  const PAG = APP.slice(start, APP.indexOf('\nfunction ', start + 10))
+  it('starea zilei prin reducer; nicio scriere directă în rânduri; toate căile prin funcțiile modulului', () => {
+    expect(PAG).toContain('useReducer(reducerZi')
+    expect(PAG).not.toContain('setRecs')
+    for (const f of ['incarcaRanduriZi(', 'incarcaIstoricZi(', 'salveazaRand(', 'alocaSantierZi(', 'propuneSantier(', 'nealocati(', 'treceFiltrulSantier(', 'randulZilei(stZi,emp.id)'])
+      expect(PAG).toContain(f)
+    expect(PAG).not.toContain('emps.filter(e=>!e.site_id)')
   })
 })

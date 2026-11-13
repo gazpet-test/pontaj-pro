@@ -1,11 +1,11 @@
 import { employeeFieldRead, EMPLOYEES_PUBLIC_COLUMNS, withEmployeePersonal, employeePersonalWrite } from './employeesPersonal.js'
-import { useState, useEffect, useCallback, createContext, useContext, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useCallback, createContext, useContext, useRef, useReducer, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { tintaRedirectHostPublic } from './redari/domeniuPublic.js'
 import { supabase } from './lib/supabase.js'
 import { pornestePolling, eEroareSesiune } from './lib/sesiuneCereri.js'
 import { logoutProtejat } from './lib/izoLogoutBrowser.js'
-import { incarcaUltimulSantier, santierImplicit } from './pontajSantierImplicit.js'
+import { incarcaUltimulSantier, stareZiInitiala, reducerZi, cheiaListei, raspunsAplicabil, randulZilei, stareIstoric, propuneSantier, treceFiltrulSantier, nealocati, incarcaRanduriZi, incarcaIstoricZi, salveazaRand, alocaSantierZi } from './pontajSantierImplicit.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
 import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
@@ -1772,11 +1772,12 @@ function PontajRow({ emp, rec, santierImpl, sites, selectedDate, onSave, onAlloc
           </div>
         </div>
 
-        {/* Santier — TKT-2026-0360: rândul zilei > ultima zi lucrată > fișa (src/pontajSantierImplicit.js) */}
+        {/* Santier — TKT-2026-0360: rândul zilei > ultima zi lucrată > fișa (src/pontajSantierImplicit.js); „se încarcă” cât ziua nu e citită */}
         <div style={{minWidth:130}}>
-          {santierImpl.site_id!=null?<span className="badge bs" title={santierImpl.sursa==='precedent'?`Ultimul șantier pontat (${String(santierImpl.data).split('-').reverse().join('.')}); se salvează așa dacă nu alegi altul`:santierImpl.sursa==='fisa'?'Șantierul din fișa angajatului (fără pontaj anterior)':undefined} style={{fontSize:10,display:'block',marginBottom:3}}>{santierImpl.sursa==='precedent'?'↺ ':''}{sites.find(s=>s.id===santierImpl.site_id)?.name||(santierImpl.site_id===emp.site_id?emp.sites?.name:null)||'Șantier'}</span>
+          {santierImpl.sursa==='incarc'?<span style={{fontSize:10,color:G.muted,display:'block',marginBottom:3}} title="Se citesc pontajul zilei și ultimul șantier pontat">⏳ se încarcă…</span>
+          :santierImpl.site_id!=null?<span className="badge bs" title={santierImpl.sursa==='precedent'?`Ultimul șantier pontat (${String(santierImpl.data).split('-').reverse().join('.')}); se salvează așa dacă nu alegi altul`:santierImpl.sursa==='fisa'?(santierImpl.istoricEroare?'Șantierul din fișă — ultimul șantier pontat nu s-a putut citi; verifică-l':'Șantierul din fișa angajatului (fără pontaj anterior)'):undefined} style={{fontSize:10,display:'block',marginBottom:3}}>{santierImpl.sursa==='precedent'?'↺ ':''}{sites.find(s=>s.id===santierImpl.site_id)?.name||(santierImpl.site_id===emp.site_id?emp.sites?.name:null)||'Șantier'}</span>
           :<span style={{fontSize:10,color:G.red,fontWeight:700,display:'block',marginBottom:3}}>⚠ Nealocate</span>}
-          {isAdmin&&<select value={santierImpl.site_id??''} onChange={e=>onAllocate(emp,e.target.value?Number(e.target.value):null)} style={{padding:'2px 5px',fontSize:10,width:'100%'}}>
+          {isAdmin&&santierImpl.sursa!=='incarc'&&<select value={santierImpl.site_id??''} onChange={e=>onAllocate(emp,e.target.value?Number(e.target.value):null)} style={{padding:'2px 5px',fontSize:10,width:'100%'}}>
             <option value="">— fără —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
           </select>}
         </div>
@@ -1871,10 +1872,16 @@ function PontajRow({ emp, rec, santierImpl, sites, selectedDate, onSave, onAlloc
 // ─── Pontaj Page ──────────────────────────────────────────────────────────────
 function PontajPage() {
   const { profile } = useAuth()
-  const [emps,setEmps]=useState([]); const [recs,setRecs]=useState({}); const [sites,setSites]=useState([])
+  const [emps,setEmps]=useState([]); const [sites,setSites]=useState([])
+  // TKT-2026-0360 r2: ziua afișată, rândurile ei și istoricul (ultimul șantier pontat) stau într-o singură stare, legate de ziua lor
+  // (src/pontajSantierImplicit.js, reducerZi). Orice răspuns asincron pentru altă zi decât cea afișată e ignorat de reducer (L24).
+  const [stZi,dispatchZi]=useReducer(reducerZi,null,()=>stareZiInitiala(todayStr()))
+  const date=stZi.zi; const recs=stZi.recs
+  const ziRef=useRef(date) // ziua afișată ACUM (pentru răspunsurile care sosesc după o schimbare de zi)
+  const setDate=(d)=>{ ziRef.current=d; dispatchZi({tip:'zi',zi:d}) }
   const [search,setSearch]=useState(''); const [deptF,setDeptF]=useState('Toate'); const [siteF,setSiteF]=useState('Toate')
   const [onlyDiurna,setOnlyDiurna]=useState(false)
-  const [date,setDate]=useState(todayStr()); const [load,setLoad]=useState(true); const [saving,setSaving]=useState(null)
+  const [load,setLoad]=useState(true); const [saving,setSaving]=useState(null)
   const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15); const [toast,showToast]=useToast()
   // Password gate pe zile deja exportate ca diurna_payments (Razvan 22.05.2026)
   const [isDateExported,setIsDateExported]=useState(false)
@@ -1909,9 +1916,11 @@ function PontajPage() {
   // Verific dacă data afișată e în interiorul unei perioade exportate ca plată
   // Folosesc RPC SECURITY DEFINER ca să funcționeze pentru orice user authenticated (RLS bypass controlat)
   useEffect(() => {
-    (async () => {
+    let curent = true // L24: răspunsul pentru o zi părăsită între timp nu mai scrie starea zilei afișate
+    ;(async () => {
       const { data } = await supabase
         .rpc('fn_get_export_period_for_date', { p_date: date })
+      if (!curent) return
       if (data && data.length > 0) {
         setIsDateExported(true)
         setExportPeriodInfo(data[0])
@@ -1920,6 +1929,7 @@ function PontajPage() {
         setExportPeriodInfo(null)
       }
     })()
+    return () => { curent = false }
   }, [date])
   const loadSettings=async()=>{ const {data}=await supabase.from('settings').select('*'); const d=data?.find(s=>s.key==='diurna_amount'); if(d) setDiurnaAmt(Number(d.value)); const s=data?.find(x=>x.key==='meal_supplement_amount'); if(s) setSuplAmt(Number(s.value)) }
   const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
@@ -1943,25 +1953,22 @@ function PontajPage() {
   // silent=true → refresh în fundal (poll/focus): NU aprind spinnerul, altfel lista se
   // demontează și pierzi ce ai tastat. Păstrez și identitatea obiectelor nemodificate,
   // ca PontajRow să nu-și reseteze state-ul local pe rândurile neatinse de alții.
-  const loadRecs=async(silent=false)=>{ if(!silent) setLoad(true); const ids=emps.map(e=>e.id); if(!ids.length){setLoad(false);return}; const {data}=await supabase.from('pontaj_records').select('*').eq('date',date).in('employee_id',ids); setRecs(prev=>{ const m={}; (data||[]).forEach(r=>{ const old=prev[r.employee_id]; m[r.employee_id]=(old&&JSON.stringify(old)===JSON.stringify(r))?old:r }); return m }); setLoad(false) }
-  // TKT-2026-0360: ultimul șantier pontat efectiv (zilele ANTERIOARE celei afișate), pentru angajații fără rând în ziua afișată.
-  // Citire exactă, paginată (src/pontajSantierImplicit.js). Token de generație (L24): un răspuns pentru altă zi / altă listă se ignoră.
-  // Eroare ≠ „fără pontaj anterior” (L18): se spune pe ecran că implicitul e fișa.
-  const [ultimSantier,setUltimSantier]=useState(()=>new Map())
-  const [ultimStare,setUltimStare]=useState('incarc') // incarc | gata | eroare
-  const [ultimErr,setUltimErr]=useState(null)
-  const genUltimRef=useRef(0)
+  // TKT-2026-0360 r2: rândurile intră în stare prin reducer, legate de ziua cererii (răspunsul pentru o zi părăsită se ignoră);
+  // eroarea la citire nu golește pontajul afișat (≠ „fără rânduri”, L18) și, la prima citire a zilei, oprește salvările.
+  const loadRecs=async(silent=false)=>{ const zi=date; if(!silent) setLoad(true); const ids=emps.map(e=>e.id); if(!ids.length){setLoad(false);return}
+    await incarcaRanduriZi({ zi, ids, silent, dispatch:dispatchZi, citeste:(z,i)=>supabase.from('pontaj_records').select('*').eq('date',z).in('employee_id',i) })
+    if(raspunsAplicabil(zi,ziRef.current)) setLoad(false) }
+  // TKT-2026-0360: ultimul șantier pontat efectiv (zilele ANTERIOARE celei afișate), pentru angajații fără rând cu șantier în ziua afișată.
+  // Citire exactă, paginată (src/pontajSantierImplicit.js). Istoricul e legat de ziua ȘI de lista pentru care a fost citit; doar răspunsul
+  // ultimei cereri pentru ziua afișată intră în stare. Eroare ≠ „fără pontaj anterior” (L18): se spune pe ecran că implicitul e fișa.
+  const cheieEmps=cheiaListei(emps)
   useEffect(()=>{
-    const g=++genUltimRef.current
-    if(!emps.length){ setUltimSantier(new Map()); setUltimStare('gata'); setUltimErr(null); return }
-    const d=date
-    setUltimStare('incarc')
-    incarcaUltimulSantier(supabase, emps.map(e=>e.id), d)
-      .then(m=>{ if(g!==genUltimRef.current) return; setUltimSantier(m); setUltimErr(null); setUltimStare('gata') })
-      .catch(e=>{ if(g!==genUltimRef.current) return; setUltimSantier(new Map()); setUltimErr(e?.message||String(e)); setUltimStare('eroare') })
-  },[emps,date])
-  // regula unică (afișare, select, filtru, salvare): rândul zilei > ultima zi lucrată > fișa
-  const santierPentru=(emp)=>santierImplicit({ rec: recs[emp.id], ultim: ultimSantier.get(emp.id), emp })
+    incarcaIstoricZi({ zi:date, cheie:cheieEmps, ids:emps.map(e=>e.id), dispatch:dispatchZi, citeste:(ids,z)=>incarcaUltimulSantier(supabase, ids, z) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[cheieEmps,date])
+  // regula unică (afișare, select, filtru, „Nealocate”, salvare): rândul zilei > ultima zi lucrată > fișa; „se încarcă” cât nu se știe
+  const santierPentru=(emp)=>propuneSantier({ st:stZi, cheie:cheieEmps, emp })
+  const stareIst=stareIstoric(stZi,cheieEmps)
 
   // Helper: cere parolă pentru zile exportate (Razvan 22.05.2026 - parolă per modificare)
   // Gate de permisiune: doar Razvan + Marilena (is_owner) + Natalia Udrea (can_modify_employees)
@@ -2042,15 +2049,16 @@ function PontajPage() {
       showToast('Modificare anulată — parolă necesară pentru zi plătită', 'warn')
       return
     }
-    // TKT-2026-0360: fără rând pe zi, implicitul vine din ziua precedentă lucrată; cât se citește, nu salvăm pe un implicit provizoriu
-    if(!recs[emp.id]&&ultimStare==='incarc'){ showToast('Se citește ultimul șantier pontat — reîncearcă într-o secundă','warn'); return }
+    // TKT-2026-0360 r2 (src/pontajSantierImplicit.js, salveazaRand): șantierul = aceeași regulă ca pe ecran, decisă pe starea zilei
+    // în care ai apăsat (stZi din această randare = ziua `date` a cererii). Salvarea al cărei șantier ar veni din istoric (rând lipsă SAU
+    // rând fără șantier) e refuzată cât rândurile / istoricul zilei nu sunt citite. Răspunsul intră în stare doar dacă ziua e tot aceea.
     setSaving(emp.id)
-    // site_id: rândul zilei > ultima zi lucrată > fișa (aceeași regulă ca pe ecran)
-    const recSiteId = santierPentru(emp).site_id
-    if (!fields.norma && !recSiteId) { showToast('Șantierul este obligatoriu pentru ore!','error'); setSaving(null); return }
-    const uid=(await supabase.auth.getUser()).data.user?.id
-    const {data,error}=await supabase.from('pontaj_records').upsert({employee_id:emp.id,date,site_id:recSiteId,created_by:uid,updated_by:uid,updated_at:new Date().toISOString(),...fields},{onConflict:'employee_id,date'}).select().single()
-    if(!error){setRecs(prev=>({...prev,[emp.id]:data}));showToast(`✓ Salvat: ${emp.name}`); await noteazaCorectura(emp, Object.keys(fields), tichet)} else showToast('Eroare la salvare','error')
+    const r = await salveazaRand({ st:stZi, cheie:cheieEmps, emp, fields, dispatch:dispatchZi, ziAfisata:()=>ziRef.current,
+      uid:async()=>(await supabase.auth.getUser()).data.user?.id,
+      scrie:rand=>supabase.from('pontaj_records').upsert(rand,{onConflict:'employee_id,date'}).select().single() })
+    if(!r.ok){ showToast(r.motiv, r.nivel); setSaving(null); return }
+    showToast(r.altaZi?`✓ Salvat pe ${String(r.zi).split('-').reverse().join('.')}: ${emp.name} (ziua afișată s-a schimbat între timp)`:`✓ Salvat: ${emp.name}`, r.altaZi?'warn':undefined)
+    await noteazaCorectura(emp, Object.keys(fields), tichet)
     setSaving(null)
   }
   const allocate = async (emp, siteId) => {
@@ -2061,17 +2069,19 @@ function PontajPage() {
       return
     }
     // Salvam site_id in pontaj_records pentru ziua selectata (nu global pe angajat)
-    const uid=(await supabase.auth.getUser()).data.user?.id
-    const {data:rec}=await supabase.from('pontaj_records')
-      .upsert({employee_id:emp.id,date,site_id:siteId||null,updated_by:uid,updated_at:new Date().toISOString()},{onConflict:'employee_id,date'})
-      .select().single()
-    if(rec){ setRecs(prev=>({...prev,[emp.id]:rec})); await noteazaCorectura(emp, ['site_id'], tichet) }
+    // TKT-2026-0360 r2: scrierea pe ziua în care ai ales; răspunsul intră în stare doar dacă ziua e tot aceea; eroarea se spune (nu „✓”)
+    const r = await alocaSantierZi({ zi:date, emp, siteId, dispatch:dispatchZi, ziAfisata:()=>ziRef.current,
+      uid:async()=>(await supabase.auth.getUser()).data.user?.id,
+      scrie:rand=>supabase.from('pontaj_records').upsert(rand,{onConflict:'employee_id,date'}).select().single() })
+    if(!r.ok){ showToast(`Eroare la alocare: ${r.motiv}`,'error'); return }
+    await noteazaCorectura(emp, ['site_id'], tichet)
     // Daca angajatul nu are niciun santier default, setam si pe employee (scoate din "nealocati")
     if(!emp.site_id&&siteId){
       await supabase.from('employees').update({site_id:siteId}).eq('id',emp.id)
       setEmps(prev=>prev.map(e=>e.id===emp.id?{...e,site_id:siteId,sites:sites.find(s=>s.id===siteId)||null}:e))
     }
-    showToast(siteId?`✓ ${emp.name} → ${sites.find(s=>s.id===siteId)?.name} (doar ${date})`:'Dezalocat zi','warn')
+    const alta=r.altaZi?' — ziua afișată s-a schimbat între timp':''
+    showToast(siteId?`✓ ${emp.name} → ${sites.find(s=>s.id===siteId)?.name} (doar ${r.zi})${alta}`:`Dezalocat zi (${r.zi})${alta}`,'warn')
   }
   const filtered=emps.filter(e=>{
     if(e.hire_date&&e.hire_date>date) return false
@@ -2079,12 +2089,15 @@ function PontajPage() {
     if(!e.active&&e.termination_date&&e.termination_date<monthStart) return false
     const ms=e.name.toLowerCase().includes(search.toLowerCase())
     const md=deptF==='Toate'||e.department===deptF
-    const ms2=siteF==='Toate'||String(santierPentru(e).site_id)===String(siteF)
+    const ms2=treceFiltrulSantier(santierPentru(e),siteF)
     const md2=!onlyDiurna||recs[e.id]?.diurna
     return ms&&md&&ms2&&md2
   })
   const nrPlanificate = numaraPlanificate(recs, date)
-  const unalloc=emps.filter(e=>!e.site_id)
+  // TKT-2026-0360 r2: „Nealocate” = aceeași regulă ca rândul (fără rând cu șantier pe zi, fără zi lucrată anterioară, fără fișă);
+  // cât rândurile / istoricul zilei se citesc, lista nu se arată (nu se știe încă)
+  const nealoc=nealocati({ st:stZi, cheie:cheieEmps, emps })
+  const unalloc=nealoc.inAsteptare>0?[]:nealoc.lista
   return (
     <Layout>
       <Toast toast={toast}/>
@@ -2148,19 +2161,24 @@ function PontajPage() {
         </div>
       </div>}
       {unalloc.length>0&&<div style={{background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red}}>
-        <div style={{fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ {unalloc.length} angajați nealocați pe niciun șantier:</div>
+        <div style={{fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ {unalloc.length} angajați nealocați pe niciun șantier (nici în ziua asta, nici în pontajul anterior, nici în fișă):</div>
         <div style={{fontSize:11,lineHeight:1.7,flexWrap:'wrap',display:'flex',gap:'4px 10px'}}>
           {unalloc.map(e=><span key={e.id} style={{whiteSpace:'nowrap'}}>• {e.name}</span>)}
         </div>
       </div>}
       {/* TKT-2026-0360: dacă ziua precedentă nu s-a putut citi, se spune — implicitul devine (temporar) fișa */}
-      {ultimStare==='eroare'&&<div style={{background:G.redDim,border:`1px solid ${G.red}44`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red}}>
-        <div style={{fontSize:11,fontWeight:700}}>⚠️ Nu am putut citi ultimul șantier pontat al angajaților ({ultimErr})</div>
+      {stareIst==='eroare'&&<div style={{background:G.redDim,border:`1px solid ${G.red}44`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red}}>
+        <div style={{fontSize:11,fontWeight:700}}>⚠️ Nu am putut citi ultimul șantier pontat al angajaților ({stZi.ist.err})</div>
         <div style={{fontSize:11,color:G.text,marginTop:3}}>Până la reîncărcarea paginii, șantierul propus e cel din fișă — verifică-l înainte de salvare.</div>
+      </div>}
+      {/* TKT-2026-0360 r2: rândurile zilei nu s-au putut citi — nu le arătăm ca „fără pontaj” și nu salvăm peste ele */}
+      {stZi.recsErr&&<div style={{background:G.redDim,border:`1px solid ${G.red}44`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red}}>
+        <div style={{fontSize:11,fontWeight:700}}>⚠️ Nu am putut citi pontajul zilei ({stZi.recsErr})</div>
+        <div style={{fontSize:11,color:G.text,marginTop:3}}>{stZi.recsZi===date?'Se afișează ultima citire reușită; reîncarcă pagina pentru date la zi.':'Nu se știe ce e deja pontat: salvările sunt oprite până la reîncărcarea paginii.'}</div>
       </div>}
       {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
       :<div style={{display:'flex',flexDirection:'column',gap:5}}>
-        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} santierImpl={santierPentru(emp)} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast} isDateExported={isDateExported} onDirty={markDirty}/>)}
+        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={randulZilei(stZi,emp.id)} santierImpl={santierPentru(emp)} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast} isDateExported={isDateExported} onDirty={markDirty}/>)}
         {!filtered.length&&<div style={{textAlign:'center',color:G.muted,padding:'50px 0',fontSize:12}}>Niciun angajat găsit</div>}
       </div>}
       {passwordPrompt && (
