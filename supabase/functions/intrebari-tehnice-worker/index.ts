@@ -22,9 +22,9 @@
 //   v3 r3: răspunsul „nume” are și `localitati: string[]` (denumirile UAT + satele programate din red_uat, tabel deja citit) —
 //   workerul NU ascunde un cuvânt care e și localitate cunoscută, scris singur (decizia owner-ului: localitățile rămân vizibile).
 //   index.ts și logic.js se publică ÎMPREUNĂ.
-//   v4 (14.11.2026, fără migrare): { "actiune": "coada" } → 200 { de_preluat: boolean } sau 500 — DOAR CITIRE (patru numărători
-//   pe intrebari_tehnice / intrebari_preluari, aceleași condiții ca fn_intrebari_preia: expirate, plafon, 'noua'); nu preia, nu
-//   scrie, niciun conținut de întrebare. Workerul nou o întreabă înaintea listei de nume și sare peste nume doar la
+//   v4 (14.11.2026, fără migrare; r2 15.11.2026): { "actiune": "coada" } → 200 { de_preluat: boolean } sau 500 — DOAR CITIRE (O
+//   SINGURĂ numărătoare pe intrebari_tehnice: 'noua' SAU 'in_lucru' expirată, fără plafon și fără dată); nu preia, nu scrie,
+//   niciun conținut de întrebare. Garanția: nicio întrebare existentă la momentul citirii nu e sărită (detaliile în logic.js). Workerul nou o întreabă înaintea listei de nume și sare peste nume doar la
 //   200 { de_preluat: false }; edge-ul VECHI răspunde 400 „Acțiune necunoscută” → workerul nou merge pe fluxul de azi.
 //   Logica și testele: logic.js (coadaDePreluat), logic.test.js.
 //
@@ -33,7 +33,7 @@
 //  (b) scrie DOAR răspunsul/eroarea pe rândul „în lucru” (fn_intrebari_raspunde) + notificarea autorului; emite URL-uri semnate de citire
 //      (300 s) doar pentru atașamentele întrebării preluate (v3: workerul nu le mai descarcă); v3: CITEȘTE numele angajaților și ale
 //      terților din tabelele din logic.js SURSE_NUME (doar coloanele de nume / CUI, niciodată telefon / e-mail / CNP / IBAN) și le dă
-//      DOAR workerului, pentru mascare; v4: „coada” NUMĂRĂ rânduri (intrebari_tehnice / intrebari_preluari, fără conținut) și
+//      DOAR workerului, pentru mascare; v4: „coada” NUMĂRĂ rânduri (intrebari_tehnice, fără conținut) și
 //      răspunde doar cu un boolean; fără mail, bani sau drepturi;
 //  (c) service_role: apelantul (serverul AI) n-are cont Supabase; RPC-urile și createSignedUrl îl cer;
 //  (d) cine pornește: doar deținătorul INTREBARI_WORKER_SECRET (fn_verifica_secret, fail closed);
@@ -100,17 +100,12 @@ function paginaNume(sb: ReturnType<typeof createClient>) {
   }
 }
 
-// v4: o numărătoare pentru acțiunea „coada” — doar HEAD cu count exact (niciun rând nu se întoarce); filtrele vin din logic.js
-// (interogariCoada), pe lista albă eq / lt / gte.
+// v4 r2: numărătoarea acțiunii „coada” — O SINGURĂ cerere HEAD cu count exact (niciun rând nu se întoarce), un singur SELECT în
+// BD (un instantaneu). Tabelul e fixat aici; filtrul `or` vine din logic.js (filtruOrPostgrest, lista albă eq / lt).
 function numaraCoada(sb: ReturnType<typeof createClient>) {
-  return async (tabel: string, filtre: [string, string, string][]) => {
-    // deno-lint-ignore no-explicit-any
-    let q: any = sb.from(tabel).select('id', { count: 'exact', head: true })
-    for (const [op, col, val] of filtre) {
-      if (op !== 'eq' && op !== 'lt' && op !== 'gte') return { count: null, error: { message: 'filtru' } }
-      q = q[op](col, val)
-    }
-    const { count, error } = await q
+  return async ({ tabel, or }: { tabel: string; or: string }) => {
+    if (tabel !== 'intrebari_tehnice' || typeof or !== 'string' || !or) return { count: null, error: { message: 'filtru' } }
+    const { count, error } = await sb.from('intrebari_tehnice').select('id', { count: 'exact', head: true }).or(or)
     return { count, error }
   }
 }

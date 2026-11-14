@@ -2,7 +2,7 @@
 rulează MEREU, iar mascarea / regula B rulează în MOTORUL UNIC real (procesul Node, r4). Rulare (Node 24 în PATH):
 python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py". Date INVENTATE.
 """
-import ast, hashlib, json, os, pathlib, re, sys, tempfile, types, unittest
+import ast, hashlib, json, os, pathlib, re, sys, tempfile, time, types, unittest, unittest.mock
 
 AICI = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(AICI))
@@ -741,6 +741,83 @@ class Pornire(unittest.TestCase):
         self.assertEqual(W.main(), 0)
         self.assertEqual([j['stare'] for j in self.randuri_jurnal()], ['coada_goala', 'coada_goala'])
         self.assertEqual(set(self.randuri_jurnal()[0]), {'la', 'stare'})  # doar data și starea
+
+    # ── r2 (review PR #1104, P2): marcajul ÎNAINTE de rând — niciodată două rânduri „viu” în aceeași oră ──
+    def test_coada_goala_marcajul_nu_se_poate_scrie_niciun_rand(self):
+        """touch() eșuează (disc plin / drept lipsă): niciun rând, la nicio rulare (altfel s-ar scrie unul la fiecare 2 minute)."""
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': False}))
+        def pica(*a, **k): raise PermissionError('marcaj')
+        with unittest.mock.patch.object(pathlib.Path, 'touch', pica):
+            for _ in range(4):
+                self.assertEqual(W.main(), 0)
+        self.assertEqual(self.actiuni(), ['coada'] * 4)
+        self.assertEqual(self.randuri_jurnal(), [])
+        self.assertFalse((W.DIR / W.VIU_FILE_NUME).exists())
+
+    def test_coada_goala_marcajul_vechi_care_nu_se_actualizeaza_niciun_rand(self):
+        """touch() „reușește” dar data marcajului rămâne veche: rularea următoare l-ar socoti tot vechi → niciun rând acum."""
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': False}))
+        m = W.DIR / W.VIU_FILE_NUME
+        m.write_bytes(b'')
+        t = time.time() - W.VIU_SEC - 10
+        os.utime(m, (t, t))
+        with unittest.mock.patch.object(pathlib.Path, 'touch', lambda *a, **k: None):
+            for _ in range(3):
+                self.assertEqual(W.main(), 0)
+        self.assertEqual(self.randuri_jurnal(), [])
+
+    def test_coada_goala_intrerupere_intre_marcaj_si_rand(self):
+        """Procesul se oprește după marcaj și înaintea rândului: în ora aceea niciun rând (nici la rulările următoare); după o oră,
+        exact un rând. Un rând dublat în aceeași oră nu e posibil."""
+        class Oprit(BaseException): pass   # ca o oprire a procesului: nu e prinsă de `except Exception` din main
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': False}))
+        jurnal_real = W.jurnal
+        def jurnal_oprit(**k):
+            if k.get('stare') == 'coada_goala': raise Oprit()
+            return jurnal_real(**k)
+        W.jurnal = jurnal_oprit
+        try:
+            with self.assertRaises(Oprit):
+                W.main()
+        finally:
+            W.jurnal = jurnal_real
+        m = W.DIR / W.VIU_FILE_NUME
+        self.assertTrue(m.exists())                                      # marcajul e pus, rândul nu
+        self.assertEqual(self.randuri_jurnal(), [])
+        for _ in range(3):                                               # repornirile din aceeași oră: tot niciun rând
+            self.assertEqual(W.main(), 0)
+        self.assertEqual(self.randuri_jurnal(), [])
+        t = m.stat().st_mtime - W.VIU_SEC - 1                            # după o oră: exact un rând
+        os.utime(m, (t, t))
+        self.assertEqual(W.main(), 0)
+        self.assertEqual(W.main(), 0)
+        self.assertEqual([j['stare'] for j in self.randuri_jurnal()], ['coada_goala'])
+
+    def test_coada_goala_randul_esuat_dupa_marcaj_nu_se_reia_in_aceeasi_ora(self):
+        """Scrierea rândului eșuează (OSError) după marcaj: rularea se încheie normal, fără rând, și nu se reîncearcă în ora aceea."""
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': False}))
+        jurnal_real = W.jurnal
+        def jurnal_pica(**k):
+            if k.get('stare') == 'coada_goala': raise OSError('jurnal')
+            return jurnal_real(**k)
+        W.jurnal = jurnal_pica
+        try:
+            self.assertEqual(W.main(), 0)
+        finally:
+            W.jurnal = jurnal_real
+        self.assertEqual(W.main(), 0)
+        self.assertEqual(self.randuri_jurnal(), [])
+
+    def test_coada_goala_marcaj_cu_data_din_viitor_se_pune_din_nou(self):
+        """Ceas mutat: un marcaj cu data peste o oră în viitor nu blochează rândul la nesfârșit."""
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': False}))
+        m = W.DIR / W.VIU_FILE_NUME
+        m.write_bytes(b'')
+        t = time.time() + 3600
+        os.utime(m, (t, t))
+        self.assertEqual(W.main(), 0)
+        self.assertEqual([j['stare'] for j in self.randuri_jurnal()], ['coada_goala'])
+        self.assertLess(abs(time.time() - m.stat().st_mtime), 60)
 
     def test_coada_cu_ceva_fluxul_de_azi(self):
         self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': True}))
