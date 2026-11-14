@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { poateIntreba, caleAtasament, verificaFisier, totalPreaMare, blocuriMd, bucatiRand, ETICHETA_STARE, MAX_ATASAMENTE, MAX_MB } from './intrebariUtil.js'
-import { imparteRaspuns, surseAfisabile, interogariAfisabile, lipsesteMigrarea, actiuniIntrebare, prezentareRaspuns } from './intrebariSurse.js'
+import { imparteRaspuns, surseAfisabile, interogariAfisabile, lipsesteMigrarea, actiuniIntrebare, prezentareRaspuns, mesajEroareIntrebare } from './intrebariSurse.js'
 import { previzualizare, bucatiMascate, ascundeSelectia, dictionarDinRanduri } from './intrebariMascare.js'
 import { paginareKeyset } from './hrDeciziiUtil.js'
 
@@ -338,7 +338,7 @@ export default function IntrebariTehnice({ profile }) {
                   ⚑ Marcat ca neclar — așteaptă verificarea.</div>}
                 {pr.v2 ? <Raspuns q={q} owner={!!profile.is_owner}/> : <Markdown md={q.raspuns_md}/>}
               </> : q.stare === 'eroare' ? <>
-                <div style={{ color:G.red }}>Nu s-a putut răspunde: {q.eroare || 'eroare'}. Poți pune întrebarea din nou.</div>
+                <div style={{ color:G.red }}>{mesajEroareIntrebare(q.eroare)}</div>
                 {pr.v2 && profile.is_owner && <Interogari lista={interogariAfisabile(q.interogari_web)}/>}
               </> : <div style={{ color:G.muted }}>{ETICHETA_STARE[q.stare]?.t} Pagina se actualizează singură.</div>}
             </div>
