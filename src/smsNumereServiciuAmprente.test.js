@@ -399,6 +399,39 @@ describe('20261220a r5 — documentul livrării (docs/sms/LIVRARE_20261220a_NUME
     expect(DOC).toContain('**SEMNALE acceptate: EXECUTE dinamic 0 · vederi 0 · alt limbaj 4')
     for (const s of ['nume_care', 'vederi_care', 'sql_dinamic_care', 'limbaj_care']) expect(DOC.slice(DOC.indexOf('### 6.2'))).toContain(`\`${s}\``)
   })
+  // 14.11.2026 — derogarea punctuală (secțiunea 7): pe producție amprenta globală nu încape în plafonul migrării, deci verificarea globală
+  // se face în afara tranzacției. Documentul trebuie s-o spună EXPLICIT (antetul migrării, fixat prin sha256, spune în continuare contrariul),
+  // doar pentru artefactul din acest PR, cu riscurile, condițiile și uneltele ei — nu ca relaxare a regulii.
+  it('derogarea „calea A”: explicită, doar pentru migrarea și manifestul din acest PR, cu riscuri, condiții, repetiție și unelte fixate', () => {
+    const inceput = DOC.slice(0, DOC.indexOf('## 1.'))
+    expect(inceput).toContain('**Excepție — o singură dată, doar pentru acest artefact: derogarea din secțiunea 7')
+    expect(inceput).toContain('Nu e o relaxare generală a L15 v2.')
+    const i7 = DOC.indexOf('\n## 7. Derogarea punctuală de la L15 v2')
+    expect(i7).toBeGreaterThan(DOC.indexOf('## 6. Baseline-ul'))
+    const d7 = DOC.slice(i7)
+    expect(d7).toContain('derogă **explicit** de la această interdicție, **doar pentru acest artefact**')
+    expect(d7).toContain('**Nu e o relaxare generală a L15 v2**')
+    // artefactul = EXACT migrarea și manifestul din repo (primele 8 și ultimele 4 cifre ale sha256-ului fiecăruia)
+    const scurt = t => { const h = createHash('sha256').update(t, 'utf8').digest('hex'); return `\`${h.slice(0, 8)}…${h.slice(-4)}\`` }
+    expect(d7).toContain('migrarea cu sha256 ' + scurt(MIG))
+    expect(d7).toContain('manifestul cu\nsha256 ' + scurt(citeste('supabase/migrations/20261220a_sms_numere_serviciu.l15.tsv')))
+    const titluri = ['### 7.1 De ce: ce s-a măsurat pe producție', '### 7.2 Ce se face în loc', '### 7.3 Ce se pierde față de L15 v2 (riscuri acceptate)',
+      '### 7.4 Repetiția pe clonă', '### 7.5 Uneltele coordonatorului', '### 7.6 Jurnalul livrării', '### 7.7 Acordul și verdictul', '### 7.8 În afara acestei derogări']
+    let j = -1
+    for (const t of titluri) { const k = d7.indexOf('\n' + t); expect(k, t).toBeGreaterThan(j); j = k }
+    // ce rămâne obligatoriu: verificările migrării în tranzacție, mulțimea exactă (nu numărul), „aplicat, neverificat” fără reluare,
+    // fereastra fără activitate SMS, o probă cu ROLLBACK pe calea simplă, acordul explicit al owner-ului
+    for (const t of ['cele 53 de rânduri de baseline „înainte” și „după”', '**exact mulțimea** din manifest', 'Numărul singur (32) nu ajunge',
+      '**„aplicat, neverificat”**: migrarea NU se reia', 'fără trimiteri de SMS din ecranul vechi', '**O probă cu ROLLBACK pe producție, pe calea simplă**',
+      'garda finală cel mult 1.500 ms', '**octet cu octet** cea clasificată', 'doar cu „da”-ul lui explicit, pe manual']) expect(d7, t).toContain(t)
+    // riscurile acceptate, toate patru
+    for (const t of ['**Refuzul atomic.**', '**Atribuirea sub concurență.**', '**Schimbarea temporară.**', '**Revenirea repară doar ce prevede ea.**']) expect(d7, t).toContain(t)
+    // uneltele: cinci amprente sha256 întregi; nicio cale de server
+    expect((d7.slice(d7.indexOf('### 7.5'), d7.indexOf('### 7.6')).match(/`[0-9a-f]{64}`/g) || []).length).toBe(5)
+    expect(DOC).not.toMatch(/[A-Za-z]:[\\/](Users|ProgramData)[\\/]/)
+    // pașii 5 și 6 din secțiunea 4 trimit la derogare (fără să dispară)
+    expect(nr(pasi, '*(Pentru acest artefact: înlocuit de secțiunea 7')).toBe(2)
+  })
   it('pașii 1–8 în ordine: citirea într-o SINGURĂ fotografie (script + GLOBAL + rădăcini), acceptarea nominală, manifestul, clona, ROLLBACK, aplicarea, REST, merge', () => {
     const titluri = ['**Citirea pe producție, într-o SINGURĂ fotografie.**', '**PR-ul de baseline: acceptarea NOMINALĂ a semnalelor.**', '**Manifestul**',
       '**Pe clonă, cu runnerul nou:**', '**Proba cu ROLLBACK pe țintă**', '**Aplicarea pe producție prin runner**', "După COMMIT: `NOTIFY pgrst, 'reload schema';`", '**Merge**']

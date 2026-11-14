@@ -1,10 +1,16 @@
 # Livrarea migrării 20261220a — SMS: numere de serviciu (PR #1084)
 
-**Stare: NEAPLICATĂ.** Pe producție se aplică **DOAR prin runnerul cu amprenta GLOBALĂ L15 v2**, cu plafonul de 2000 ms, după review
-și „da”-ul owner-ului. **Aplicarea fără amprenta globală NU e acceptată.** Runnerul L15 v2 e pe
-`main`; baseline-ul citit pe producție, acceptările și manifestul sunt în acest PR (pașii 1–4, secțiunea 6). Rămân pașii 5–8. Comenzile
-exacte (opțiuni, fișiere, coduri de ieșire) stau în `docs/LIVRARE_L15_V2.md`; aici sunt doar pașii acestei migrări și ce e specific ei.
-Nu se copiază comenzile de acolo.
+**Stare: NEAPLICATĂ.** Regula migrării: pe producție se aplică **DOAR prin runnerul cu amprenta GLOBALĂ L15 v2**, cu plafonul de
+2000 ms, după review și „da”-ul owner-ului. **Aplicarea fără amprenta globală NU e acceptată.**
+
+**Excepție — o singură dată, doar pentru acest artefact: derogarea din secțiunea 7 („calea A”, 14.11.2026).** Pe producție calculul
+amprentei globale nu încape în plafonul de 2000 ms cerut de migrare (măsurat, secțiunea 7.1). Verificarea globală se face de aceea
+**în afara tranzacției**, cu două citiri lipite de aplicare, iar migrarea rulează prin același runner, pe calea simplă cu plafon.
+Secțiunea 7 înlocuiește pașii 5–6 din secțiunea 4; pașii 1–4, 7 și 8 rămân. Nu e o relaxare generală a L15 v2.
+
+Runnerul L15 v2 e pe `main`; baseline-ul citit pe producție, acceptările și manifestul sunt în acest PR (pașii 1–4, secțiunea 6).
+Comenzile exacte (opțiuni, fișiere, coduri de ieșire) stau în `docs/LIVRARE_L15_V2.md`; aici sunt doar pașii acestei migrări și ce e
+specific ei. Nu se copiază comenzile de acolo.
 
 ## 1. Cine refuză ce
 
@@ -80,7 +86,9 @@ de baseline.
    porți schimbat după citire ⇒ refuz la «înainte»”** (ex.: o funcție chemată de poarta owner, schimbată după citire — runnerul trebuie
    să refuze cu amprenta globală înainte de orice schimbare).
 5. **Proba cu ROLLBACK pe țintă**: manifestul obținut pe țintă = cel din repo (identic), timpul sub plafonul de 2000 ms cerut de migrare.
+   *(Pentru acest artefact: înlocuit de secțiunea 7 — pe producție proba în această formă nu încape în plafon.)*
 6. **Aplicarea pe producție prin runner**, cu GLOBAL verificat înainte și după, în aceeași tranzacție cu migrarea; după „da”-ul owner-ului.
+   *(Pentru acest artefact: înlocuit de secțiunea 7 — verificarea globală în afara tranzacției, cu două citiri lipite de aplicare.)*
 7. După COMMIT: `NOTIFY pgrst, 'reload schema';`. Apoi probele REST cu un JWT real de cont de test, doar previzualizare: apelul VECHI
    `fn_sms_lot_intern_creeaza` cu 4 parametri și apelul NOU cu 5 (ambele 200, nimic creat); `p_numere_serviciu: [0]` → **HTTP 400 și
    SQLSTATE 22023**; `fn_sms_numere_serviciu_lista` → `{total, numere}`.
@@ -222,3 +230,112 @@ mai mari.
 și pornește alături un observator doar-citire al lock-urilor, legat de sesiunea livrării — nu de orice sesiune care ține același
 lock — (când au fost văzute acordate și când au dispărut); un jurnal incomplet = probă neacceptată. Probat pe clonă:
 lock-urile luate la ≈ 0,48 s de la BEGIN, o încercare, ținute ≈ 0,48 s până la ROLLBACK; la aplicare ≈ 0,44 s până la COMMIT.
+
+## 7. Derogarea punctuală de la L15 v2 (14.11.2026): verificarea globală în afara tranzacției („calea A”)
+
+**Ce derogă.** Antetul migrării și începutul acestui document spun „Aplicarea fără amprenta GLOBALĂ NU e acceptată”. Secțiunea de
+față derogă **explicit** de la această interdicție, **doar pentru acest artefact** (migrarea cu sha256 `a290bf3c…94d5`, manifestul cu
+sha256 `c1709506…6123`), cu acordul owner-ului și cu verdictul recenzentului (7.7). Fișierul migrării rămâne neschimbat (e fixat
+prin sha256; un comentariu schimbat ar cere baseline, teste și review de la capăt). **Nu e o relaxare generală a L15 v2**: pentru
+orice altă migrare regula rămâne, iar unealta se reface separat (7.8).
+
+### 7.1 De ce: ce s-a măsurat pe producție
+- Prima probă cu ROLLBACK pe producție, pe calea L15 v2, s-a oprit sigur: calculul amprentei globale „înainte” a durat 1.731 ms și
+  s-a încheiat la 1.927 ms de la BEGIN; verificarea „înainte” a migrării a fost oprită de plafon. Nimic comis: observatorul nu a
+  văzut niciun lock luat, tabelul nou nu există, istoricul are 0 rânduri, amprenta globală recitită e cea dinainte.
+- Măsurat apoi doar-citire: calculul amprentei globale durează pe producție 2,26–2,34 s din unealta de citire (șase rulări, sesiune
+  nouă și aceeași sesiune, fără diferență rece / cald) și ~1,7 s în tranzacție; pe clone, 0,4–0,5 s. Interogarea de amprente a
+  migrării (cele 53 de rânduri): 146–167 ms pe producție, 35–40 ms pe clonă. Tot corpul migrării pe clonă: ~100 ms.
+- Calea L15 v2 ar cere ~1,7 s („înainte”) + corpul + ~1,7 s („după”), iar migrarea cere exact plafonul `2000/session`. Nu încape.
+- Lecția: timpul amprentei globale se măsoară **doar-citire pe țintă** înaintea oricărei probe. Pe clone a fost de ~4 ori mai mic.
+
+### 7.2 Ce se face în loc
+Aceeași migrare, același commit, același runner — pe calea simplă cu plafon (fără amprenta globală în tranzacție). În tranzacție rămân
+**toate** verificările migrării: garda de start, cele 53 de rânduri de baseline „înainte” și „după”, lock-urile cu buget,
+postcondițiile obiectelor noi, înregistrarea în istoric cu sha256, garda de timp; după COMMIT, controlul permanent al funcțiilor expuse.
+Verificarea globală se mută în afară:
+1. **Citirea din ziua livrării** (doar citire, o singură fotografie), comparată cu citirea revizuită: partea revizuită identică, iar
+   **fiecare** rând diferit din lista globală e explicat în jurnal (lista clasificată).
+2. **Fereastra**: fără alte livrări și fără DDL administrativ; fără trimiteri de SMS din ecranul vechi, fără administrarea numerelor și
+   fără apeluri noi până la închiderea verificărilor (și pe durata unei eventuale reveniri). Înaintea probei și a aplicării, o
+   verificare doar-citire refuză pornirea dacă există activitate SMS în ultimele 15 minute sau o altă sesiune pe tabelele SMS.
+3. **O probă cu ROLLBACK pe producție, pe calea simplă** (o singură dată; cerută de recenzent): exact textul livrării (fișierele
+   runnerului, aceeași bibliotecă a formei „un mesaj”), cu ROLLBACK în locul COMMIT-ului. Criterii: garda finală cel mult 1.500 ms;
+   baseline-ul și postcondițiile trecute; lock-urile văzute de observator, cu apariție și dispariție; ieșirea întreagă păstrată; după
+   ROLLBACK istoricul e gol și o citire nouă e identică rând cu rând cu cea dinainte. Proba nu dovedește manifestul unei aplicări
+   comise. La eșec: stop, reconciliere, analiză — fără reîncercare automată.
+4. **Aplicarea**, în aceeași fereastră, automat și cu refuz la orice abatere:
+   - R1 = citire proaspătă; partea revizuită trebuie să fie identică, iar lista diferențelor față de citirea revizuită trebuie să fie
+     **octet cu octet** cea clasificată la pasul 1 — altfel nu se trimite nimic;
+   - runnerul, pe calea simplă cu plafonul de 2000 ms, cu observatorul de lock-uri alături;
+   - la COMIS: R2 = citire proaspătă, pornită de la rădăcinile stării noi (crearea lotului are 5 parametri), și **verificatorul**:
+     diferența dintre R1 și R2 trebuie să fie **exact mulțimea** din manifest — aceeași cheie (familie + etichetă), aceeași operație,
+     aceeași amprentă finală; „schimbat” înseamnă amprente efectiv diferite. Numărul singur (32) nu ajunge.
+5. **Citirile se validează întregi** înaintea comparației: ținta (baza și identificatorul sistemului), fotografia unică, validarea
+   uneltei, cheile unice, numărul rândurilor și amprentele globală și pe familii **recalculate din rânduri**; contextul (versiunea
+   serverului, rolul) egal între cele două; R2 mai nouă decât R1. O citire trunchiată, alterată sau de pe alt sistem e refuzată.
+6. **Ce înseamnă fiecare rezultat:** neaplicat (confirmat de runner) = stop, nimic altceva. R2 sau verificatorul eșuate după COMMIT =
+   **„aplicat, neverificat”**: migrarea NU se reia, se recitește manual. „Deja înregistrat” = această rulare nu a aplicat nimic; cele
+   două fotografii nu dovedesc o aplicare. Diferență în plus (de pildă partiția zilnică a platformei apărută în fereastră) =
+   verificatorul rămâne pe eroare; clasificarea și acceptarea se consemnează explicit, de om.
+7. După verificarea curată: pașii 7 și 8 din secțiunea 4 (notificarea serviciului REST, probele REST, apoi merge-ul).
+
+### 7.3 Ce se pierde față de L15 v2 (riscuri acceptate)
+- **Refuzul atomic.** O diferență nedeclarată se vede după COMMIT (fereastra R1 → R2: zeci de secunde), nu înaintea lui; remediul
+  devine revenirea, nu ROLLBACK-ul.
+- **Atribuirea sub concurență.** Un DDL străin din fereastră apare ca diferență nedeclarată (se oprește și se clasifică).
+- **Schimbarea temporară.** Ceva introdus și anulat între R1 și R2 nu se vede; egalitatea finală nu dovedește că n-a existat.
+- **Revenirea repară doar ce prevede ea.** Nu anulează un drept dat de altcineva, efecte externe sau operații SMS deja executate și
+  poate refuza dacă starea obiectelor a derivat. În acest caz nu se forțează și nu se șterge nimic: se raportează owner-ului.
+
+Ce rămâne: migrarea e un script determinist; pe clonă (aceeași versiune de server, aceleași triggere de eveniment ale platformei,
+aceleași 53 de rânduri de baseline) diferența globală a fost de fiecare dată exact manifestul, iar pe producție aceleași 53 de rânduri
+sunt cerute de migrare în tranzacție, înainte și după.
+
+### 7.4 Repetiția pe clonă (14.11.2026), cu uneltele finale
+- **Proba simplă cu ROLLBACK:** garda finală la ≈ 0,1 s, lock-urile ținute ≈ 0,05 s, istoric gol, citirea de după identică.
+- **Aplicarea:** COMIS, diferența R1 → R2 = exact manifestul (32 de rânduri); la fel după revenire și reaplicare.
+- **Revenirea:** citirea de după = citirea dinaintea aplicării; istoricul revenirii rămâne consemnat (pe clonă se șterge doar ca
+  migrarea să poată fi reaplicată).
+- **Mutanții verificatorului** (20 din 20 refuzați cu codul așteptat): un rând scos din manifest (nedeclarat), un rând inventat
+  (absent), amprenta finală greșită și operația greșită (altfel), „schimbat” pe o cheie neschimbată, cheie dublă în manifest;
+  citire fără un rând, tăiată, fără rândul fotografiei, fără rândul validării sau cu validarea eșuată, cu o amprentă alterată de
+  mână, cu o cheie dublă, de pe alt sistem, cu alt rol, cu o linie necunoscută; ordinea inversată; o citire validă cu un obiect
+  străin în plus și una cu un obiect existent schimbat de altcineva.
+- **Porțile dinaintea tranzacției:** obiecte apărute după clasificare ⇒ refuz, nimic trimis; o altă sesiune pe tabelele SMS ⇒ refuz
+  înaintea citirii, nimic trimis.
+- **Mutantul viu** (limitele S39 și S44 din secțiunea 1): o funcție auxiliară, o vedere și un drept pe alt tabel, schimbate între R1
+  și tranzacție. Migrarea singură comite (cum e documentat), iar verificatorul le numește pe toate trei ca nedeclarate.
+- **Găsit la repetiție și corectat înaintea producției:** citirea de după aplicare pornea de la rădăcina veche (crearea lotului cu 4
+  parametri, ștearsă de migrare), deci unealta de citire o refuza, iar aplicarea rămânea „aplicat, neverificat”. Citirea de după
+  pornește acum de la varianta cu 5 parametri și de la cele cinci funcții noi.
+
+### 7.5 Uneltele coordonatorului (în afara repo-ului, fixate prin sha256)
+Nu fac parte din livrare și nu rulează în tranzacție; se verifică înaintea producției față de aceste amprente:
+
+| Unealtă | sha256 |
+|---|---|
+| wrapperul căii A (citire / probă / aplicare, cu jurnal) | `fbde4c8a198f92c6f43904700847387f2c0232d0c3d372c38619df8d35222dcf` |
+| verificatorul celor două citiri față de manifest | `73aef96b95b246668da1a18be1c61e2c3d1e32467ad14ec50dd14059de9acb82` |
+| observatorul doar-citire al lock-urilor | `1a2dcb15b5c0ae3e72a97c59d18b5970255ae93cb725264b437b32da97473da0` |
+| scriptul de citire al migrării (rădăcinile „înainte” / „după”) | `abe19af34043cee3587f2c13be33efbb9d920bd088fa2bc36139b228341a2c0f` |
+| verificarea ferestrei (doar citire) | `158a9e8e90cb91b4c57e8d1e4dca5ccfb782725ed6f8d892d71fbad7c9da3ae6` |
+
+Uneltele de livrare din repo folosite de ele (runnerul, biblioteca formei „un mesaj”, unealta de citire, comparatorul, validatorul,
+controlul funcțiilor expuse) trebuie să fie identice cu cele revizuite în PR-ul runnerului L15 v2; wrapperul refuză altfel.
+
+### 7.6 Jurnalul livrării
+Pentru fiecare rulare (citire, probă, aplicare): fișierele celor două citiri cu sha256-urile lor, lista clasificată, ieșirea întreagă
+a sesiunii, observatorul, rezultatul verificatorului și lista diferențelor observate. La o diferență în plus: clasificarea fiecărui
+rând și decizia owner-ului.
+
+### 7.7 Acordul și verdictul
+- **Owner-ul** a ales calea A pe 14.11.2026. Proba și aplicarea pe producție se fac doar cu „da”-ul lui explicit, pe manual.
+- **Recenzentul**: derogarea acceptată exclusiv pentru acest artefact (commitul și cele două sha256 de mai sus), cu condițiile din
+  7.2–7.3: fereastra fără altă activitate, o probă simplă cu ROLLBACK pe producție, repetiția pe clonă cu mutanții de mai sus,
+  uneltele finale inspectate și fixate prin sha256.
+
+### 7.8 În afara acestei derogări
+`20261221a` (vremea zilei) are aceeași problemă de timp și rămâne neaplicată până la refacerea uneltei. Refacerea se proiectează și
+se revizuiește separat: un filtru simplu pe rândurile de catalog scrise de tranzacția curentă nu poate înlocui amprenta globală
+(rândurile șterse nu se mai văd, subtranzacțiile au identificatori proprii, deriva de dinainte a obiectelor neatinse rămâne nevăzută).
