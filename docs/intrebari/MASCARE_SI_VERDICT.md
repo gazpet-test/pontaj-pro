@@ -604,9 +604,10 @@ periodică încă dezactivată. Ordinea:
    genitiv, o localitate, un nume cu un caracter invizibil copiat, un nume scris cu litere mici). Se pornește workerul **o singură
    dată, de mână**; se verifică: răspunsul afișat are numele la loc și nicio etichetă; jurnalul are `nume_incarcate` (doar numere),
    apoi `mascate`, `inlocuiri`, `regula_b` — fără valori; niciun proces `motor_cli.mjs` rămas (verificarea din pasul 1). Orice
-   abatere: stop, se raportează. În jurnal, `scriere` trebuie să fie 200: `scriere: 500` = funcția edge n-a putut scrie în bază
-   (vezi pasul 0), iar `http: 401` cu `authentication_error` = cheia API a furnizorului nu mai e validă. O rulare de probă cu coada
-   goală (înaintea întrebării de test) verifică motorul, lista de nume și jurnalul, dar NU scrierea răspunsului și nici cheia API.
+   abatere: stop, se raportează. La răspuns reușit, jurnalul are `stare: "raspuns"`; pe căile care emit `scriere`, valoarea 200
+   confirmă scrierea. `scriere: 500` sau `stare: "scriere_500"` indică eșecul scrierii — funcția edge n-a putut scrie în bază (vezi
+   pasul 0). `http: 401` cu `authentication_error` = cheia API a furnizorului nu mai e validă. O rulare de probă cu coada goală
+   (înaintea întrebării de test) verifică motorul, lista de nume și jurnalul, dar NU scrierea răspunsului și nici cheia API.
 10. Abia acum se reactivează rularea periodică: `schtasks /Change /TN "Intrebari tehnice worker (Gazpet)" /ENABLE` → `Ready`.
 11. Registrul: rândul de mai jos în `registru_automatizari` și în `public.automatizari` (fără valori de secrete).
 
