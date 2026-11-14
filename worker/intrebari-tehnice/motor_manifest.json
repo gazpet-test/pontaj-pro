@@ -1,0 +1,17 @@
+{
+  "_despre": "Generat de scripts/intrebari/manifest_motor.mjs — NU se editează de mână. Verificat de worker/intrebari-tehnice/motor.py la pornire.",
+  "versiune": 1,
+  "protocol": 1,
+  "motor": "7.0.0",
+  "node_major": 24,
+  "unicode": "17.0",
+  "intrare": "worker/intrebari-tehnice/motor_cli.mjs",
+  "fisiere": {
+    "src/intrebariMascare.js": "9b433bbad073c306c161068def8da8206dc4b776930972f3d057b8e68095c17a",
+    "worker/intrebari-tehnice/motor_protocol.mjs": "92d1125ef972c1fa8981d4cc218e4a0df3276263d59210c0cd317dab5bb2873e",
+    "worker/intrebari-tehnice/motor_cli.mjs": "31253087259c0195c027528d41ee92788449f8822b0a56d0ee11d3e550b6514a",
+    "worker/intrebari-tehnice/nemascate.json": "ac3806f0a84b69b7999f869d693debd1af4635d6adcc99635596a4739f8a19ef",
+    "worker/intrebari-tehnice/vocabular_web.json": "fbf0810a8e52ec463dd7451289928a109af65003920062c9fe757ae6beb4b4c6",
+    "worker/intrebari-tehnice/cuvinte_comune.json": "246d74be7a5e4f9792d15ed2028ad91dcbf74487572bee943e73fe21124ccfef"
+  }
+}

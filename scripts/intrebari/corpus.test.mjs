@@ -27,6 +27,19 @@ describe('corpusul pentru Întreabă echipa', () => {
     expect(b[3].text).toContain('# nu e titlu')
     expect(b.every(x => x.cale === 'docs/cercetare/x.md')).toBe(true)
   })
+  it('r5 (regula B): fiecare bucată are paragraful PRECEDENT din fișier — titlul e paragraf, începutul fișierului = „”, felia = necunoscut', () => {
+    const md = 'Primul paragraf.\n\n## Nu se admit:\nExecutarea sudurilor pe conductele active.\n\nAl doilea.\n## Gol\n## Altul\nText.'
+    const b = bucatiMd('docs/cercetare/x.md', md)
+    expect(b.map(x => [x.text, x.precedent])).toEqual([
+      ['Primul paragraf.', ''],
+      ['Executarea sudurilor pe conductele active.\n\nAl doilea.', '## Nu se admit:'],
+      ['Text.', '## Altul'],
+    ])
+    const lung = bucatiMd('docs/cercetare/y.md', ['a'.repeat(900), 'b'.repeat(900), 'c'.repeat(3200), 'd.'].join('\n\n'))
+    expect(lung.map(x => x.precedent)).toEqual(['', 'a'.repeat(900), 'b'.repeat(900), null, null, 'c'.repeat(3200)])
+    expect(lung.map(x => x.text)).toEqual(taie(['a'.repeat(900), 'b'.repeat(900), 'c'.repeat(3200), 'd.'].join('\n\n')))
+    expect(bucatiJson('docs/cercetare/r.json', [{ id: 'X', a: 'b' }])[0].precedent).toBe(null)
+  })
   it('JSON: o bucată pe înregistrare, titlu din id + locator', () => {
     const b = bucatiJson('docs/cercetare/registru_cerinte.json', [
       { requirement_id: 'REQ-1', locator: 'art. 160 alin. (1)', cerinta: 'Clarificări până la termen', evidenta_ceruta: ['SEAP'], snapshot_sha256: 'abc', prag: null },

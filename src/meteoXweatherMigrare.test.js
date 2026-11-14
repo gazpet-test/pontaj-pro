@@ -166,3 +166,72 @@ describe('edge fn meteo-sync: credențialele nu ies din apel', () => {
     expect(EDGE).toContain("if (body.reverifica != null && typeof body.reverifica !== 'boolean')")
   })
 })
+
+// PR-ul de baseline L15 v2 (docs/METEO_XWEATHER_LIVRARE_20261221a.md): manifestul stă lângă migrare și e legat de ea prin sha256
+describe('20261221a — manifestul diferențelor (L15 v2)', () => {
+  const MAN = citeste('supabase/migrations/20261221a_meteo_xweather_zilnic.l15.tsv')
+  const antet = MAN.split('\n').filter(l => l.startsWith('#'))
+  const randuri = MAN.split('\n').filter(l => l && !l.startsWith('#')).map(l => l.split('\t'))
+  it('generat cu EXACT migrarea din repo; forma rândurilor; doar creări', () => {
+    expect(antet[0]).toContain('manifestul diferentelor pentru 20261221a_meteo_xweather_zilnic (AMPRENTA_GLOBALA v2)')
+    // o migrare schimbată după generarea manifestului = test picat: manifestul se regenerează pe clonă
+    expect(antet[1]).toContain('migrarea sha256 ' + createHash('sha256').update(MIG, 'utf8').digest('hex'))
+    expect(antet[antet.length - 1]).toContain(`; ${randuri.length} obiecte`)
+    for (const r of randuri) {
+      expect(r).toHaveLength(4)
+      expect(r[1].startsWith(r[0] + ' ')).toBe(true)
+      expect(r[2]).toBe('creat')                       // migrarea nu schimbă și nu șterge nimic existent
+      expect(r[3]).toMatch(/^[0-9a-f]{32}$/)
+    }
+    expect(new Set(randuri.map(r => r[1])).size).toBe(randuri.length)
+  })
+  it('doar tabelul nou, vederea lui și funcțiile lor; pe `sites` doar cele două triggere interne ale cheii străine', () => {
+    const peSites = randuri.filter(r => r[1].includes('public.sites'))
+    expect(peSites.map(r => r[1]).sort()).toEqual([
+      'trigger public.sites intern meteo_zilnic_xweather_site_id_fkey "RI_FKey_noaction_del"() 9',
+      'trigger public.sites intern meteo_zilnic_xweather_site_id_fkey "RI_FKey_noaction_upd"() 17',
+    ])
+    for (const r of randuri.filter(x => !peSites.includes(x))) {
+      // numele exact (indexul cheii primare e singurul cu sufix); nimic altceva din `public`
+      expect(r[1]).toMatch(/\bpublic\.(meteo_zilnic_xweather(_pkey)?|v_meteo_zilnic_xweather|fn_meteo_vede_site|fn_meteo_xw_inserare|fn_meteo_xw_nemodificabil)(?![A-Za-z0-9_])/)
+    }
+    const nrFam = f => randuri.filter(r => r[0] === f).length
+    expect(nrFam('relatie')).toBe(3)                   // tabelul, indexul cheii primare, vederea
+    expect(nrFam('functie')).toBe(3)
+    expect(nrFam('politica')).toBe(1)
+    expect(nrFam('regula')).toBe(1)                    // regula vederii
+    expect(nrFam('tip')).toBe(4)                       // tipul rând + tipul tablou, pentru tabel și pentru vedere
+    expect(nrFam('trigger')).toBe(7)                   // 3 proprii + 2 interne pe tabelul nou + 2 interne pe sites
+    // nimic din drepturile implicite, scheme, roluri, extensii
+    expect(randuri.filter(r => ['acl_implicit', 'schema', 'rol', 'extensie'].includes(r[0]))).toEqual([])
+  })
+  it('numărări independente, din textul migrării: coloanele tabelului și ale vederii, constrângerile', () => {
+    // fără asta, o coloană scoasă din manifest (cu numărul din antet actualizat) ar trece verificările de formă de mai sus
+    const i = MIG.indexOf('CREATE TABLE public.meteo_zilnic_xweather (')
+    const tabel = MIG.slice(i, MIG.indexOf('\n);', i)).replace(/--[^\n]*/g, '')
+    const colT = [...tabel.matchAll(/^  ([a-z_]+) (?:bigint|date|smallint|numeric|text|jsonb|timestamptz)\b/gm)].map(m => m[1])
+    expect(colT).toHaveLength(27)
+    const dinManifest = rel => randuri.filter(r => r[0] === 'coloana' && r[1].startsWith(`coloana public.${rel}.`)).map(r => r[1].slice(`coloana public.${rel}.`.length)).sort()
+    expect(dinManifest('meteo_zilnic_xweather')).toEqual([...colT].sort())
+    // vederea: coloanele tabelului fără răspunsurile brute, plus cele trei calculate
+    const colV = colT.filter(c => !['raspuns_conditii', 'raspuns_observatii'].includes(c)).concat(['prima_preluare_la', 'sursa', 'versiuni']).sort()
+    expect(dinManifest('v_meteo_zilnic_xweather')).toEqual(colV)
+    expect(randuri.filter(r => r[0] === 'coloana')).toHaveLength(colT.length + colV.length)
+    // constrângerile: fiecare CHECK din definiția tabelului + cheia primară + cheia străină
+    const nCheck = (tabel.match(/\bCHECK \(/g) || []).length
+    expect(nCheck).toBe(32)
+    expect(nr(tabel, 'PRIMARY KEY (')).toBe(1)
+    expect(nr(tabel, ' REFERENCES public.sites(id)')).toBe(1)
+    expect(randuri.filter(r => r[0] === 'constrangere')).toHaveLength(nCheck + 2)
+    expect(randuri).toHaveLength(108)
+  })
+  it('documentul livrării: acceptările pe nume, manifestul, probele', () => {
+    const DOC = citeste('docs/METEO_XWEATHER_LIVRARE_20261221a.md')
+    expect(DOC).toContain('**SEMNALE acceptate: EXECUTE dinamic 0 · vederi 0 · alt limbaj 0 · DEFINER acceptate 0')
+    expect(DOC).toContain(`**${randuri.length} de obiecte**`)
+    expect(DOC).toContain('docs/LIVRARE_L15_V2.md')
+    expect(citeste('docs/METEO_XWEATHER_COTA.md')).toContain('docs/METEO_XWEATHER_LIVRARE_20261221a.md')
+    // fără căi de server, fără nume de persoane sau de modele
+    expect(DOC).not.toMatch(/[A-Z]:\\|paw-data|Users[\\/]/)
+  })
+})

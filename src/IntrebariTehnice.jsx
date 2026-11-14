@@ -4,11 +4,18 @@
 // (și ownerul) și e marcat „AI, neverificat” — decizia de a-l folosi e a colegului. Acces: owner sau cheia 'intrebari_tehnice'.
 // Limita: 5 întrebări pe zi (owner 20), verificată în BD.
 // ════════════════════════════════════════════════════════════════
-import { useEffect, useRef, useState } from 'react'
+// 13.11.2026 (deciziile owner-ului): (A) numele de persoane / firme și datele personale se ASCUND înainte de trimiterea la AI —
+// mascarea reală o face workerul, cu MOTORUL UNIC src/intrebariMascare.js (r4: același modul pe care îl folosește și acest ecran);
+// ecranul arată o previzualizare ORIENTATIVĂ (lista de nume pe care o poate citi contul, fără localități), iar colegul poate ascunde
+// manual un cuvânt; atașamentele NU se mai trimit la AI. (B) „Da” / „Nu” doar cu un citat identic cu un paragraf întreg, dintr-o
+// singură propoziție și de sine stătător, al unei surse (r5); altfel „Incert”, cu sursele alăturate.
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { poateIntreba, caleAtasament, verificaFisier, totalPreaMare, blocuriMd, bucatiRand, ETICHETA_STARE, MAX_ATASAMENTE, MAX_MB } from './intrebariUtil.js'
 import { imparteRaspuns, surseAfisabile, interogariAfisabile, lipsesteMigrarea, actiuniIntrebare, prezentareRaspuns } from './intrebariSurse.js'
+import { previzualizare, bucatiMascate, ascundeSelectia, dictionarDinRanduri } from './intrebariMascare.js'
+import { paginareKeyset } from './hrDeciziiUtil.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', text:'#E6EDF3', muted:'#8B949E', border:'#30363D', blue:'#1F6FEB', green:'#2EA043', yellow:'#D29922', red:'#F85149', acc:'#56D4DD' }
 const S = {
@@ -37,16 +44,29 @@ function Markdown({ md }) {
 }
 
 // Răspunsul din cercetare (20261131e): verdictul evidențiat, apoi textul, apoi sursele (web doar pe domeniile oficiale).
+// Regula B: la „Incert” sursele vin IMEDIAT sub verdict („alăturate”) — omul le citește; la „Da” / „Nu” rămân după text.
 function Raspuns({ q, owner }) {
   const { verdict, rest, incert } = imparteRaspuns(q.raspuns_md)
   const surse = surseAfisabile(q.surse)
   const interogari = owner ? interogariAfisabile(q.interogari_web) : []
+  const lista = surse.length > 0 && <Surse surse={surse} alaturate={incert}/>
   return <>
     {verdict && <div style={{ background:G.bg, border:`2px solid ${incert ? G.yellow : G.acc}`, borderRadius:10, padding:'10px 14px', margin:'4px 0 10px', fontSize:16, fontWeight:700 }}>
       <Rand text={verdict}/></div>}
+    {incert && lista}
     <Markdown md={verdict ? rest : q.raspuns_md}/>
-    {surse.length > 0 && <div style={{ marginTop:14, borderTop:`1px solid ${G.border}`, paddingTop:10 }}>
-      <div style={{ fontWeight:700, fontSize:14, marginBottom:6 }}>Surse</div>
+    {!incert && lista}
+    {!surse.length && <div style={{ fontSize:12, color:G.muted, marginTop:10 }}>Răspunsul nu are surse salvate (întrebare de dinainte de cercetare sau fără temei găsit).</div>}
+    {owner && <Interogari lista={interogari}/>}
+  </>
+}
+
+function Surse({ surse, alaturate }) {
+  return <div style={{ margin: alaturate ? '0 0 12px' : '14px 0 0', borderTop:`1px solid ${G.border}`, paddingTop:10,
+                       ...(alaturate ? { border:`1px solid ${G.yellow}`, borderRadius:8, padding:10 } : {}) }}>
+      <div style={{ fontWeight:700, fontSize:14, marginBottom:6 }}>{alaturate ? 'Surse alăturate — citește-le tu' : 'Surse'}</div>
+      {alaturate && <div style={{ fontSize:12, color:G.muted, marginBottom:6 }}>
+        Niciun citat nu reproduce exact un paragraf întreg și de sine stătător dintr-o sursă, deci nu există un „Da” sau „Nu” sigur. Acestea sunt sursele consultate.</div>}
       <ol style={{ margin:0, paddingLeft:0, listStyle:'none', fontSize:13 }}>{surse.map(s => (
         <li key={s.id} style={{ margin:'0 0 8px' }}>
           <span style={{ color:G.acc, fontWeight:700, marginRight:6 }}>[{s.id}]</span>
@@ -56,10 +76,46 @@ function Raspuns({ q, owner }) {
           {s.tip === 'web' && <span style={{ color:G.muted }}> · {new URL(s.url).hostname}</span>}
           {s.extras && <div style={{ color:G.muted, fontSize:12, marginTop:2, whiteSpace:'pre-wrap', maxHeight:90, overflow:'hidden' }}>{s.extras.slice(0, 400)}</div>}
         </li>))}</ol>
-    </div>}
-    {!surse.length && <div style={{ fontSize:12, color:G.muted, marginTop:10 }}>Răspunsul nu are surse salvate (întrebare de dinainte de cercetare sau fără temei găsit).</div>}
-    {owner && <Interogari lista={interogari}/>}
-  </>
+    </div>
+}
+
+// Decizia A — previzualizare ORIENTATIVĂ (r4, review r3 P2-5): textul mascat cu lista de nume pe care o poate citi contul, câte nume
+// / date s-au ascuns, ce NU prinde mascarea și cum ascunzi manual un cuvânt. Mascarea reală o face workerul cu același motor, dar cu
+// lista completă din platformă și cu localitățile cunoscute — rezultatul poate diferi în ambele sensuri (textul de mai jos o spune).
+export const AVERTISMENT_PREVIZUALIZARE = 'Serverul folosește lista completă din platformă și poate ascunde nume suplimentare. Localitățile cunoscute rămân vizibile pe server, chiar dacă aici apar ascunse. Mascarea automată nu garantează eliminarea tuturor numelor.'
+// r5: lista „Nu prinde” la zi (numele scrise cu litere mici nu mai sunt integral în afara contractului) + limitele F4, separat;
+// r7: limita celor trei cuvinte după titlu și forma ambiguă (ascunsă, entitate proprie)
+export const IN_AFARA_CONTRACTULUI = 'Nu prinde: porecle, greșeli de scriere sau de citire automată, litere asemănătoare din alte alfabete, litere despărțite prin spații („N u m e”), diminutive, un cuvânt al unei firme scris integral cu litere mici fără numele întreg al firmei în întrebare, un cuvânt obișnuit care e și nume („Ion”, „Mare”, „Alfa”) scris singur, fără numele întreg în întrebare, nume pe care platforma nu le cunoaște (fără „dl.”, „ing.”, „colegul” în față — după titlu, cel mult trei cuvinte — sau SRL / SA după), un CUI necunoscut platformei scris fără „RO” / „CUI”, adrese. Prinde și: literele late („ＮＵＭＥ”), numele scrise cu litere mici, CUI-ul cunoscut scris cu spații („2345 6789”). Un nume scurt care se potrivește cu mai multe persoane din listă (de exemplu doar numele de familie) se ascunde, dar ca persoană separată: nu se spune cu care dintre ele e aceeași.'
+// r5 (review r4 P2): formularea EXACTĂ a garanției „fără rețea” — o proprietate a codului, nu o izolare a procesului
+export const GARANTIE_RETEA = 'Pe server, mascarea rulează local, într-un proces separat; codul ei, fixat prin amprente, nu conține apeluri de rețea (verificare a codului, nu o izolare a procesului).'
+function Previzualizare({ prev, nume, cuAtasamente }) {
+  const faraLista = nume.stare === 'eroare' || (nume.stare === 'ok' && !nume.angajati)
+  return <div style={{ marginTop:12, background:G.bg, border:`1px dashed ${G.yellow}`, borderRadius:8, padding:10, fontSize:13 }}>
+    <div style={{ fontWeight:700, marginBottom:4 }}>🙈 Previzualizare orientativă — verifică înainte de trimitere</div>
+    <div style={{ color:G.text, fontSize:12, marginBottom:6 }}><strong>Previzualizare orientativă.</strong> {AVERTISMENT_PREVIZUALIZARE}</div>
+    <div style={{ color: prev.total ? G.yellow : G.muted, fontSize:12, marginBottom:8 }}>
+      {prev.total ? `Am ascuns ${prev.total} ${prev.total === 1 ? 'nume / dată' : 'nume și date'} (${prev.rezumat}).` : 'Nu am găsit nume sau date de ascuns.'}
+      {' '}Ce nu e ascuns aici pleacă așa. Ca să ascunzi un cuvânt: selectează-l și apasă „Ascunde selecția”, sau scrie-l între [[ și ]].</div>
+    {prev.titlu && <div><span style={{ color:G.muted }}>Titlu: </span><Mascat text={prev.titlu}/></div>}
+    {prev.context && <div><span style={{ color:G.muted }}>Context: </span><Mascat text={prev.context}/></div>}
+    {prev.intrebare && <div style={{ marginTop:4 }}><span style={{ color:G.muted }}>Speța: </span><Mascat text={prev.intrebare}/></div>}
+    <div style={{ color:G.muted, fontSize:12, marginTop:8 }}>
+      {nume.stare === 'incarca' ? 'Se încarcă lista de nume din platformă… ' : faraLista
+        ? 'Lista de nume din platformă nu se poate citi din contul tău: aici se ascund doar tiparele și ce marchezi tu. '
+        : ''}
+      {IN_AFARA_CONTRACTULUI} Rămân vizibile intenționat: localitățile, operatorii de rețea și instituțiile publice (Transgaz, Delgaz, ANRE …) și Gazpet.
+      {' '}{GARANTIE_RETEA}
+    </div>
+    {cuAtasamente && <div style={{ color:G.yellow, fontSize:12, marginTop:6 }}>
+      📎 Atașamentele rămân în ERP pentru colegi, dar NU se trimit la AI: numele din ele nu pot fi ascunse sigur. Scrie în speță ce e important din ele.</div>}
+  </div>
+}
+
+// Textul mascat, cu etichetele evidențiate (previzualizarea orientativă).
+function Mascat({ text }) {
+  return <span style={{ whiteSpace:'pre-wrap' }}>{bucatiMascate(text).map((b, i) => b.t === 'eticheta'
+    ? <span key={i} style={{ background:'#3D2E00', color:G.yellow, borderRadius:4, padding:'0 3px', fontFamily:'monospace', fontSize:12 }}>{b.v}</span>
+    : <span key={i}>{b.v}</span>)}</span>
 }
 
 // Audit (doar ownerul): exact ce s-a trimis la căutarea web — speța nu intră în acel apel, doar interogări compuse din vocabularul aprobat.
@@ -100,6 +156,41 @@ export default function IntrebariTehnice({ profile }) {
   const [lucruRand, setLucruRand] = useState(null)   // id-ul întrebării cu acțiune în curs (una singură odată)
   const [mesajRand, setMesajRand] = useState(null)   // { id, ok, text } — se afișează DOAR sub întrebarea cu acel id
   const actGen = useRef(0)                           // generația acțiunii: rezultatul uneia vechi nu suprascrie mesajul uneia noi
+
+  // Decizia A — previzualizarea mascării: numele din platformă pe care contul curent le poate citi (angajați, terți), paginat pe id
+  // (L23). Eroare ≠ listă goală (L18): o tabelă care dă eroare sau 0 rânduri (fără drept de citire) e spusă în ecran; pe server
+  // mascarea folosește oricum lista completă. Rezultatul se aplică doar dacă ecranul e încă montat pe același utilizator (L24).
+  const [nume, setNume] = useState({ stare: 'incarca', d: null, angajati: 0, terti: 0, eroare: '' })
+  const acces = poateIntreba(profile)
+  useEffect(() => {
+    if (!acces) return
+    let viu = true
+    const pag = (tabel, col) => paginareKeyset((dupa, pas) => {
+      let q = supabase.from(tabel).select(col).order('id', { ascending: true }).limit(pas)
+      if (dupa != null) q = q.gt('id', dupa)
+      return q
+    })
+    Promise.allSettled([pag('employees', 'id, name'), pag('beneficiari', 'id, nume, contact_nume, cif')]).then(([a, t]) => {
+      if (!viu) return
+      const ang = a.status === 'fulfilled' ? a.value : [], ter = t.status === 'fulfilled' ? t.value : []
+      const erori = [a, t].filter(x => x.status === 'rejected').map(x => x.reason?.message || String(x.reason))
+      setNume({ stare: erori.length ? 'eroare' : 'ok', d: dictionarDinRanduri(ang, ter), angajati: ang.length, terti: ter.length, eroare: erori.join(' · ') })
+    })
+    return () => { viu = false }
+  }, [acces, profile?.id])
+  const prev = useMemo(() => previzualizare({ titlu, intrebare, context }, nume.d), [titlu, intrebare, context, nume.d])
+  const refCamp = { titlu: useRef(null), context: useRef(null), intrebare: useRef(null) }
+  const ultimCamp = useRef('intrebare')
+  const MAX_CAMP = { titlu: 200, context: 2000, intrebare: 12000 }
+  function ascunde() {
+    const camp = ultimCamp.current, el = refCamp[camp].current
+    const val = { titlu, context, intrebare }[camp]
+    const r = el ? ascundeSelectia(val, el.selectionStart ?? 0, el.selectionEnd ?? 0) : null
+    if (!r) return setErr('Selectează întâi, în titlu, context sau speță, cuvântul de ascuns (fără rând nou, max 200 de caractere).')
+    if (r.text.length > MAX_CAMP[camp]) return setErr('Textul ar depăși lungimea maximă a câmpului.')
+    ;({ titlu: setTitlu, context: setContext, intrebare: setIntrebare })[camp](r.text)
+    setErr('')
+  }
 
   async function incarca() {
     const g = ++gen.current
@@ -163,7 +254,7 @@ export default function IntrebariTehnice({ profile }) {
     return () => clearInterval(t)
   }, [asteapta, selectat])   // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!poateIntreba(profile)) {
+  if (!acces) {
     return <div style={{ minHeight:'100vh', background:G.bg, color:G.text, padding:24 }}>Nu ai acces la Întreabă echipa. <Link to="/" style={{ color:G.blue }}>← Acasă</Link></div>
   }
 
@@ -218,9 +309,11 @@ export default function IntrebariTehnice({ profile }) {
         </div>
         <div style={{ ...S.card, borderColor:G.yellow, marginBottom:14, fontSize:13, color:G.muted }}>
           Răspunsurile sunt date de AI și sunt <strong style={{ color:G.yellow }}>informative</strong>. Le vezi doar tu.
+          {' '}Numele de persoane și firme și datele personale se ascund înainte de trimiterea la AI (vezi previzualizarea de sub speță); atașamentele nu se trimit.
           {v2 === true ? <>
             {' '}Fiecare temei are un marcaj de sursă ([C…] = document intern de cercetare, [W…] = site oficial) — deschide sursa înainte să te bazezi pe ea.
-            Ce n-a fost găsit apare ca „Nu am găsit sursa oficială”; un verdict fără temei în surse apare ca „Incert — de verificat”.
+            „Da” sau „Nu” apar doar când răspunsul citează exact o propoziție întreagă dintr-o sursă (citatul e în răspuns); altfel verdictul e „Incert”, cu sursele alăturate.
+            Ce n-a fost găsit apare ca „Nu am găsit sursa oficială”.
             La răspunsurile mai vechi, fără surse, verifică temeiurile marcate „[DE VERIFICAT]”. Decizia e a ta.
           </> : <>
             {' '}Verifică temeiurile marcate „[DE VERIFICAT]” înainte să te bazezi pe ele. Decizia e a ta.
@@ -265,12 +358,17 @@ export default function IntrebariTehnice({ profile }) {
         ) : !selectat && <>
           <div style={{ ...S.card, marginBottom:16 }}>
             <label style={S.lbl}>Titlu</label>
-            <input style={S.inp} value={titlu} maxLength={200} onChange={e => setTitlu(e.target.value)} placeholder="ex. Distanța minimă față de canalizare la subtraversare"/>
+            <input ref={refCamp.titlu} onFocus={() => { ultimCamp.current = 'titlu' }} style={S.inp} value={titlu} maxLength={200} onChange={e => setTitlu(e.target.value)} placeholder="ex. Distanța minimă față de canalizare la subtraversare"/>
             <label style={S.lbl}>Context (opțional: proiect, licitație, localitate)</label>
-            <input style={S.inp} value={context} maxLength={2000} onChange={e => setContext(e.target.value)} placeholder="ex. Rețea PE100 Dn 110, Mânăstirea, CL"/>
+            <input ref={refCamp.context} onFocus={() => { ultimCamp.current = 'context' }} style={S.inp} value={context} maxLength={2000} onChange={e => setContext(e.target.value)} placeholder="ex. Rețea PE100 Dn 110, Mânăstirea, CL"/>
             <label style={S.lbl}>Speța</label>
-            <textarea style={{ ...S.inp, minHeight:150, resize:'vertical' }} value={intrebare} maxLength={12000} onChange={e => setIntrebare(e.target.value)}
+            <textarea ref={refCamp.intrebare} onFocus={() => { ultimCamp.current = 'intrebare' }} style={{ ...S.inp, minHeight:150, resize:'vertical' }} value={intrebare} maxLength={12000} onChange={e => setIntrebare(e.target.value)}
               placeholder="Descrie situația, ce ai deja (avize, proiect, ce cere beneficiarul) și ce anume vrei să afli."/>
+            <div style={{ marginTop:6 }}>
+              <button style={S.btnS} onMouseDown={e => e.preventDefault()} onClick={ascunde}
+                title="Selectează un cuvânt în titlu, context sau speță, apoi apasă: cuvântul nu va pleca la AI.">🙈 Ascunde selecția</button>
+            </div>
+            {(titlu.trim() || intrebare.trim() || context.trim()) && <Previzualizare prev={prev} nume={nume} cuAtasamente={fisiere.length > 0}/>}
             <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginTop:10 }}>
               <input ref={fileRef} type="file" multiple accept="application/pdf,image/jpeg,image/png,image/webp" style={{ display:'none' }} onChange={alegeFisiere}/>
               <button style={S.btnS} disabled={fisiere.length >= MAX_ATASAMENTE} onClick={() => fileRef.current?.click()}>📎 Atașează PDF / poze ({fisiere.length}/{MAX_ATASAMENTE})</button>
