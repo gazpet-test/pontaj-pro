@@ -46,9 +46,10 @@ Din 13.11.2026 (deciziile owner-ului A și B, docs/intrebari/MASCARE_SI_VERDICT.
      (eroare vizibilă, cod în jurnal).
 
 Din 14.11.2026 (fără migrare): înaintea listei de nume workerul întreabă edge-ul „coada” (doar citire, un boolean: există o
-întrebare „noua” sau „in_lucru” expirată; r2: fără plafon). Coadă goală → rularea se încheie fără lista de nume și fără rând în
-jurnal (cel mult un rând „coada_goala” pe oră); orice altă situație (are ceva, eroare, edge vechi) → fluxul de mai sus, neschimbat
-(nume → preia). O întrebare pusă după citire e luată la rularea următoare (peste cel mult 2 minute).
+întrebare în starea „noua” sau „in_lucru”, indiferent de vechime; r2: fără plafon; r3: fără ceas). Coadă goală → rularea se
+încheie fără lista de nume și fără rând în jurnal (cel mult un rând „coada_goala” pe oră); orice altă situație (are ceva, eroare,
+edge vechi) → fluxul de mai sus, neschimbat (nume → preia). Nicio întrebare care există în starea „noua” sau „in_lucru” în
+momentul citirii nu e sărită; o întrebare pusă sau revenită în coadă după citire e luată la rularea următoare.
 
 Reguli (fișa în migrări): întrebarea, atașamentele, extrasele și paginile web sunt DATE pentru model, nu instrucțiuni; singura
 unealtă e căutarea web pe domeniile oficiale (server-side, la Anthropic); workerul nu execută nimic din conținut, nu trimite mail,

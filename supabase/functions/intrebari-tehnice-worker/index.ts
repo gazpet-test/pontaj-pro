@@ -22,9 +22,11 @@
 //   v3 r3: răspunsul „nume” are și `localitati: string[]` (denumirile UAT + satele programate din red_uat, tabel deja citit) —
 //   workerul NU ascunde un cuvânt care e și localitate cunoscută, scris singur (decizia owner-ului: localitățile rămân vizibile).
 //   index.ts și logic.js se publică ÎMPREUNĂ.
-//   v4 (14.11.2026, fără migrare; r2 15.11.2026): { "actiune": "coada" } → 200 { de_preluat: boolean } sau 500 — DOAR CITIRE (O
-//   SINGURĂ numărătoare pe intrebari_tehnice: 'noua' SAU 'in_lucru' expirată, fără plafon și fără dată); nu preia, nu scrie,
-//   niciun conținut de întrebare. Garanția: nicio întrebare existentă la momentul citirii nu e sărită (detaliile în logic.js). Workerul nou o întreabă înaintea listei de nume și sare peste nume doar la
+//   v4 (14.11.2026, fără migrare; r3 15.11.2026): { "actiune": "coada" } → 200 { de_preluat: boolean } sau 500 — DOAR CITIRE (O
+//   SINGURĂ numărătoare pe intrebari_tehnice: stare 'noua' SAU 'in_lucru', fără niciun ceas, prag, plafon sau dată); nu preia,
+//   nu scrie, niciun conținut de întrebare. Garanția: nicio întrebare care există în starea 'noua' sau 'in_lucru' în momentul
+//   citirii nu e sărită; una pusă sau revenită în coadă după citire e luată la rularea următoare (detaliile în logic.js).
+//   Workerul nou o întreabă înaintea listei de nume și sare peste nume doar la
 //   200 { de_preluat: false }; edge-ul VECHI răspunde 400 „Acțiune necunoscută” → workerul nou merge pe fluxul de azi.
 //   Logica și testele: logic.js (coadaDePreluat), logic.test.js.
 //
@@ -100,8 +102,8 @@ function paginaNume(sb: ReturnType<typeof createClient>) {
   }
 }
 
-// v4 r2: numărătoarea acțiunii „coada” — O SINGURĂ cerere HEAD cu count exact (niciun rând nu se întoarce), un singur SELECT în
-// BD (un instantaneu). Tabelul e fixat aici; filtrul `or` vine din logic.js (filtruOrPostgrest, lista albă eq / lt).
+// v4 r3: numărătoarea acțiunii „coada” — O SINGURĂ cerere HEAD cu count exact (niciun rând nu se întoarce), un singur SELECT în
+// BD (un instantaneu). Tabelul e fixat aici; filtrul `or` vine din logic.js (filtruOrPostgrest, lista albă eq, fără timp).
 function numaraCoada(sb: ReturnType<typeof createClient>) {
   return async ({ tabel, or }: { tabel: string; or: string }) => {
     if (tabel !== 'intrebari_tehnice' || typeof or !== 'string' || !or) return { count: null, error: { message: 'filtru' } }
@@ -148,7 +150,7 @@ Deno.serve(async (req: Request) => {
   }
 
   if (corp.actiune === 'coada') {
-    const r = await raspunsCoada(numaraCoada(sb), new Date())
+    const r = await raspunsCoada(numaraCoada(sb))
     return raspuns(r.status, r.corp)
   }
 

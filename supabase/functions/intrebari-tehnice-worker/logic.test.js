@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { autorizat, numeDinPlatforma, toateRandurile, coloane, SURSE_NUME, NUME_MAX_TABEL,
-         interogareCoada, filtruOrPostgrest, coadaDePreluat, raspunsCoada, COADA_EXPIRARE_MIN, COADA_MARJA_SEC } from './logic.js'
-import { CAZURI_COADA, CAZ_PESTE_MARJA } from '../../../scripts/intrebari/coada_cazuri.mjs'
+         interogareCoada, filtruOrPostgrest, coadaDePreluat, raspunsCoada, COADA_STARI } from './logic.js'
+import { CAZURI_COADA } from '../../../scripts/intrebari/coada_cazuri.mjs'
 
 // intrebari-tehnice-worker (r2, review PR #1086): poarta acțiunii „nume” și sursele de nume. Date INVENTATE.
 const SECRET = 'a'.repeat(64)
@@ -162,14 +162,16 @@ describe('sursele de nume (review P1-1: furnizorii și ceilalți terți lipseau)
   })
 })
 
-// ─── acțiunea „coada” (14.11.2026; r2 15.11.2026): doar citire, un boolean, O SINGURĂ citire, fără plafon și fără dată ───
-// Ceasul BD fix: 15.07.2026 11:00 la București (vară, UTC+3). Ceasul edge-ului = ceasul BD + `caz.ceas` secunde.
+// ─── acțiunea „coada” (14.11.2026; r3 15.11.2026): doar citire, un boolean, O SINGURĂ citire, fără ceas / prag / plafon / dată ───
+// Ceasul BD fix: 15.07.2026 11:00 la București (vară, UTC+3). Ceasul edge-ului = ceasul BD + `caz.ceas` secunde (r3: fără efect;
+// testele îl pun totuși ca ceas de sistem, ca să se vadă că nu schimbă nimic).
 const ACUM = new Date('2026-07-15T08:00:00Z')
 const MIEZ = Date.parse('2026-07-14T21:00:00Z')   // miezul nopții local al zilei lui ACUM (doar pentru rândurile din preluări)
-const edgeAcum = (caz, db = ACUM) => new Date(db.getTime() + (caz.ceas ?? 0) * 1e3)
+const ceasEdge = ms => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(ms)) }
+afterEach(() => { vi.useRealTimers() })
 
-// Filtrul `or=` evaluat INDEPENDENT de logic.js (alt cod, aceeași gramatică PostgREST): virgulele de pe primul nivel = OR,
-// and(...) = AND, condiția `col.op."valoare"` cu op eq (egal exact) / lt (timestamptz; NULL nu trece). Orice altă formă = excepție.
+// Filtrul `or=` evaluat INDEPENDENT de logic.js (alt cod, aceeași gramatică PostgREST): virgulele de pe primul nivel = OR, condiția
+// `col.eq."valoare"` = egal exact. Orice altă formă (and(...), lt, gt, valori fără ghilimele) = excepție.
 function desparte(s) {
   const r = []; let d = 0, q = false, cur = ''
   for (const ch of s) {
@@ -183,22 +185,18 @@ function desparte(s) {
   return r
 }
 function potrivesteCond(c, x) {
-  const m = /^([a-z_]+)\.(eq|lt)\."([^"]*)"$/.exec(c)
+  const m = /^([a-z_]+)\.eq\."([^"]*)"$/.exec(c)
   if (!m) throw new Error('filtru necunoscut: ' + c)
-  const [, col, op, v] = m
-  if (op === 'eq') return x[col] === v
-  if (x[col] === null || x[col] === undefined) return false
-  return Date.parse(x[col]) < Date.parse(v)
+  return x[m[1]] === m[2]
 }
-const potrivesteOr = (s, x) => desparte(s).some(p => (p.startsWith('and(') && p.endsWith(')')
-  ? desparte(p.slice(4, -1)).every(c => potrivesteCond(c, x)) : potrivesteCond(p, x)))
+const potrivesteOr = (s, x) => desparte(s).some(p => potrivesteCond(p, x))
 
 // Bază falsă: ambele tabele există (preluările doar ca să se vadă că NU sunt citite); număr ca `count: 'exact', head: true`.
-function bazaCoada(caz, db = ACUM, { eroare = false, count = null } = {}) {
+function bazaCoada(caz, { eroare = false, count = null } = {}) {
   const iso = ms => new Date(ms).toISOString()
   const tabele = {
     intrebari_tehnice: caz.intrebari.map((q, i) => ({ id: i + 1, stare: q.stare,
-      preluat_la: q.min === undefined ? null : iso(db.getTime() - Math.round(q.min * 60e3)) })),
+      preluat_la: q.min === undefined ? null : iso(ACUM.getTime() - Math.round(q.min * 60e3)) })),
     intrebari_preluari: (caz.preluari || []).map((p, i) => ({ id: i + 1, rezultat: p.rezultat, preluat_la: iso(MIEZ + p.zi * 60e3) })),
   }
   const cereri = []
@@ -211,111 +209,109 @@ function bazaCoada(caz, db = ACUM, { eroare = false, count = null } = {}) {
   return { numara, cereri, tabele }
 }
 
-describe('coada: există ceva ce `preia` ar atinge? (cazurile comune cu proba PGlite)', () => {
+describe('coada: e vreo întrebare în „noua” sau „in_lucru”? (cazurile comune cu proba PGlite)', () => {
   for (const caz of CAZURI_COADA) {
     it(caz.nume, async () => {
+      ceasEdge(ACUM.getTime() + (caz.ceas ?? 0) * 1e3)
       const { numara } = bazaCoada(caz)
-      expect(await coadaDePreluat(numara, edgeAcum(caz))).toBe(caz.asteptat)
-      expect(await raspunsCoada(numara, edgeAcum(caz))).toEqual({ status: 200, corp: { de_preluat: caz.asteptat } })
+      expect(await coadaDePreluat(numara)).toBe(caz.asteptat)
+      expect(await raspunsCoada(numara)).toEqual({ status: 200, corp: { de_preluat: caz.asteptat } })
     })
   }
   it('tabelul de cazuri: acoperă ce cere sarcina și nu are NICIUN caz „goală” când `preia` are de lucru', () => {
     const nume = CAZURI_COADA.map(c => c.nume).join(' | ')
-    for (const x of ['coada goală', 'o întrebare nouă', 'amânată', 'nescadentă', 'plafon atins', 'marginea marjei', 'ceasul edge-ului', 'IERI'])
+    for (const x of ['coada goală', 'o întrebare nouă', 'amânată', 'în lucru de 1 secundă', 'exact 30 de minute', '30 min + 1 s',
+                     'ceasuri diferite', 'plafon atins', 'IERI'])
       expect(nume, x).toContain(x)
     expect(new Set(CAZURI_COADA.map(c => c.asteptat))).toEqual(new Set([true, false]))
     expect(CAZURI_COADA.filter(c => c.asteptat === false && c.preia === true)).toEqual([])
-    // plafon atins + întrebare nouă → „are ceva” (r2: plafonul a ieșit din „coada”)
+    // cazul reprodus în review-ul r2 (edge cu 61 s în urmă, întrebare expirată de 1 s) și un decalaj mare constant: acum „are ceva”
+    expect(CAZURI_COADA.filter(c => c.ceas !== undefined).map(c => c.ceas).sort((a, b) => a - b)).toEqual([-7200, -600, -61, 7200])
+    for (const c of CAZURI_COADA.filter(c => c.ceas !== undefined && c.intrebari.length)) expect(c.asteptat, c.nume).toBe(true)
+    // în lucru de 1 secundă = „are ceva” (r3: fără prag de vechime)
+    expect(CAZURI_COADA.find(c => c.nume.startsWith('în lucru de 1 secundă')).asteptat).toBe(true)
     expect(CAZURI_COADA.find(c => c.nume.startsWith('plafon atins (40 azi) + o întrebare nouă')).asteptat).toBe(true)
   })
-  it('condiția exactă: o singură interogare, OR pe „noua” / „in_lucru” expirată (30 min − marja de 60 s), fără dată', () => {
-    expect(interogareCoada(ACUM)).toEqual({
-      tabel: 'intrebari_tehnice',
-      oricare: [[['eq', 'stare', 'noua']], [['eq', 'stare', 'in_lucru'], ['lt', 'preluat_la', '2026-07-15T07:31:00.000Z']]],
-    })
-    expect(filtruOrPostgrest(interogareCoada(ACUM).oricare))
-      .toBe('stare.eq."noua",and(stare.eq."in_lucru",preluat_la.lt."2026-07-15T07:31:00.000Z")')
-    for (const x of [new Date('nu'), null, undefined, '2026-07-15', 1784102400000]) expect(interogareCoada(x), String(x)).toBe(null)
+  it('condiția exactă: o singură interogare, OR pe stările „noua” / „in_lucru”, fără nicio coloană de timp', () => {
+    expect(COADA_STARI).toEqual(['noua', 'in_lucru'])
+    expect(interogareCoada()).toEqual({ tabel: 'intrebari_tehnice', oricare: [['eq', 'stare', 'noua'], ['eq', 'stare', 'in_lucru']] })
+    expect(filtruOrPostgrest(interogareCoada().oricare)).toBe('stare.eq."noua",stare.eq."in_lucru"')
   })
-  it('filtruOrPostgrest: lista albă (op eq / lt, coloană [a-z_], valoare fără caractere rezervate) — altfel null, nu un filtru tăiat', () => {
-    expect(filtruOrPostgrest([[['eq', 'stare', 'noua']]])).toBe('stare.eq."noua"')
-    for (const g of [[], null, 'x', [[]], [[['gte', 'preluat_la', '2026-01-01']]], [[['neq', 'stare', 'noua']]],
-                     [[['eq', 'stare.x', 'noua']]], [[['eq', 'Stare', 'noua']]], [[['eq', 'stare', 'noua,in_lucru']]],
-                     [[['eq', 'stare', 'a"b']]], [[['eq', 'stare', 'a)b']]], [[['eq', 'stare', 'a b']]], [[['eq', 'stare', '']]],
-                     [[['eq', 'stare', 1]]], [[['eq', 'stare']]], [[['eq', 'stare', 'noua']], [['lt', 'preluat_la', '(x)']]]]) {
+  it('fără ceas: aceeași condiție la orice oră a edge-ului (1970, miezul nopții local, 2100, ±61 s) și niciun timp în cod', async () => {
+    const ref = filtruOrPostgrest(interogareCoada().oricare)
+    for (const t of [0, Date.parse('2026-07-14T20:59:59.900Z'), Date.parse('2026-07-14T21:00:00.100Z'), Date.parse('2100-01-01T00:00:00Z'),
+                     ACUM.getTime() - 61e3, ACUM.getTime() + 61e3]) {
+      ceasEdge(t)
+      expect(filtruOrPostgrest(interogareCoada().oricare), new Date(t).toISOString()).toBe(ref)
+      const b = bazaCoada({ intrebari: [{ stare: 'in_lucru', min: 30 + 1 / 60 }], preluari: [] })
+      expect(await coadaDePreluat(b.numara), new Date(t).toISOString()).toBe(true)
+      expect(b.cereri[0].or).toBe(ref)
+    }
+    expect([interogareCoada.length, coadaDePreluat.length, raspunsCoada.length]).toEqual([0, 1, 1])
+    const src = readFileSync('supabase/functions/intrebari-tehnice-worker/logic.js', 'utf8').replace(/\r/g, '')
+    const sect = src.slice(src.indexOf('// ─── 4. Acțiunea „coada”'))
+    expect(sect.length).toBeGreaterThan(100)
+    const cod = sect.split('\n').filter(l => !/^\s*(\/\/|\/\*\*|\*)/.test(l)).join('\n')   // fără comentarii
+    for (const x of ['Date', 'now', 'getTime', 'preluat_la', 'Europe/Bucharest', 'intrebari_preluari', 'PLAFON', 'MARJA', 'EXPIRARE', 'acum'])
+      expect(cod, x).not.toContain(x)
+  })
+  it('filtruOrPostgrest: lista albă (op eq, coloană și valoare [a-z_]) — altfel null, nu un filtru tăiat', () => {
+    expect(filtruOrPostgrest([['eq', 'stare', 'noua']])).toBe('stare.eq."noua"')
+    for (const g of [[], null, 'x', [[]], [['lt', 'preluat_la', 'x']], [['gte', 'stare', 'noua']], [['neq', 'stare', 'noua']],
+                     [['eq', 'stare.x', 'noua']], [['eq', 'Stare', 'noua']], [['eq', 'stare', 'noua,in_lucru']], [['eq', 'stare', 'a"b']],
+                     [['eq', 'stare', 'a)b']], [['eq', 'stare', 'a b']], [['eq', 'stare', '']], [['eq', 'stare', 1]], [['eq', 'stare']],
+                     [['eq', 'stare', 'Noua']], [['eq', 'stare', '2026-07-15T07:31:00.000Z']], [[['eq', 'stare', 'noua']]],
+                     [['eq', 'stare', 'noua'], ['lt', 'preluat_la', '2026-01-01T00:00:00Z']]]) {
       expect(filtruOrPostgrest(g), JSON.stringify(g)).toBe(null)
     }
   })
   it('O SINGURĂ citire, doar pe intrebari_tehnice (nicio numărătoare de preluări, deci nicio intercalare între citiri)', async () => {
     for (const caz of CAZURI_COADA) {
       const b = bazaCoada(caz)
-      await coadaDePreluat(b.numara, edgeAcum(caz))
+      await coadaDePreluat(b.numara)
       expect(b.cereri.length, caz.nume).toBe(1)
       expect(b.cereri[0].tabel, caz.nume).toBe('intrebari_tehnice')
     }
   })
-  it('schimbarea zilei nu are niciun efect: 23:59:59,900 și 00:00:00,100 local dau același răspuns, pragul e doar „acum − 29 min”', async () => {
-    const inainte = new Date('2026-07-14T20:59:59.900Z'), dupa = new Date('2026-07-14T21:00:00.100Z')   // miezul nopții la București
-    expect(interogareCoada(inainte).oricare[1][1][2]).toBe('2026-07-14T20:30:59.900Z')
-    expect(interogareCoada(dupa).oricare[1][1][2]).toBe('2026-07-14T20:31:00.100Z')
-    const plin = { intrebari: [{ stare: 'noua' }], preluari: Array.from({ length: 40 }, () => ({ zi: -1, rezultat: 'raspuns' })) }
-    for (const t of [inainte, dupa]) {
-      expect(await coadaDePreluat(bazaCoada(plin, t).numara, t), t.toISOString()).toBe(true)
-      expect(await coadaDePreluat(bazaCoada({ intrebari: [], preluari: plin.preluari }, t).numara, t), t.toISOString()).toBe(false)
-    }
-    const src = readFileSync('supabase/functions/intrebari-tehnice-worker/logic.js', 'utf8')
-    const sect = src.slice(src.indexOf('// ─── 4. Acțiunea „coada”'))
-    expect(sect.length).toBeGreaterThan(100)
-    for (const x of ['Europe/Bucharest', 'intrebari_preluari', 'PLAFON', 'DateTimeFormat']) expect(sect, x).not.toContain(x)
+  it('cursa care rămâne (documentată): o întrebare pusă / revenită în coadă DUPĂ citire e luată la rularea următoare', async () => {
+    const b = bazaCoada({ intrebari: [{ stare: 'raspuns' }], preluari: [] })
+    expect(await coadaDePreluat(b.numara)).toBe(false)
+    b.tabele.intrebari_tehnice.push({ id: 9, stare: 'noua', preluat_la: null })      // o întrebare pusă după citire
+    expect(await coadaDePreluat(b.numara)).toBe(true)
+    b.tabele.intrebari_tehnice[1].stare = 'in_lucru'                                  // preluată: tot „are ceva”, la orice vechime
+    b.tabele.intrebari_tehnice[1].preluat_la = ACUM.toISOString()
+    expect(await coadaDePreluat(b.numara)).toBe(true)
+    b.tabele.intrebari_tehnice[1].stare = 'eroare'                                    // închisă (răspuns / eroare / expirată)
+    expect(await coadaDePreluat(b.numara)).toBe(false)
+    b.tabele.intrebari_tehnice[1].stare = 'noua'                                      // reluată de owner după citire
+    expect(await coadaDePreluat(b.numara)).toBe(true)
   })
-  it('ceasul edge-ului: marja de 60 s acoperă un edge în urmă cu ≤ 60 s; peste marjă = întârziere de o rulare, nu pierdere', async () => {
-    const c = CAZ_PESTE_MARJA
-    expect(c.asteptat).toBe(false)
-    expect(c.preia).toBe(true)
-    expect(await coadaDePreluat(bazaCoada(c).numara, edgeAcum(c))).toBe(false)
-    const urm = new Date(ACUM.getTime() + c.rulareUrmatoareSec * 1e3)   // rularea următoare: ambele ceasuri au înaintat 2 minute
-    expect(await coadaDePreluat(bazaCoada(c, ACUM).numara, edgeAcum(c, urm))).toBe(c.asteptatUrmator)
-    // marginea exactă: edge în urmă cu exact 60 s, întrebarea expirată de 1 ms → încă „are ceva”
-    const ms = { intrebari: [{ stare: 'in_lucru', min: 30 + 1 / 60e3 }], preluari: [] }
-    expect(await coadaDePreluat(bazaCoada(ms).numara, new Date(ACUM.getTime() - 60e3))).toBe(true)
-  })
-  it('cursa care rămâne (documentată): o întrebare pusă / amânată DUPĂ citire e văzută la rularea următoare', async () => {
-    const b = bazaCoada({ intrebari: [{ stare: 'in_lucru', min: 3 }], preluari: [] })
-    expect(await coadaDePreluat(b.numara, ACUM)).toBe(false)
-    b.tabele.intrebari_tehnice[0].stare = 'noua'               // fn_intrebari_amana confirmată după citire
-    b.tabele.intrebari_tehnice[0].preluat_la = null
-    expect(await coadaDePreluat(b.numara, new Date(ACUM.getTime() + 120e3))).toBe(true)
-    b.tabele.intrebari_tehnice[0].stare = 'raspuns'
-    b.tabele.intrebari_tehnice.push({ id: 9, stare: 'noua', preluat_la: null })   // o întrebare pusă după citire
-    expect(await coadaDePreluat(b.numara, new Date(ACUM.getTime() + 240e3))).toBe(true)
-  })
-  it('L18: eroarea nu e „coadă goală” — citire eșuată / număr invalid / excepție / „acum” invalid → 500, nu false', async () => {
+  it('L18: eroarea nu e „coadă goală” — citire eșuată / număr invalid / excepție → 500, nu false', async () => {
     const caz = { intrebari: [], preluari: [] }
-    expect(await coadaDePreluat(bazaCoada(caz, ACUM, { eroare: true }).numara, ACUM)).toBe(null)
-    expect(await raspunsCoada(bazaCoada(caz, ACUM, { eroare: true }).numara, ACUM)).toEqual({ status: 500, corp: { error: 'Eroare internă' } })
+    expect(await coadaDePreluat(bazaCoada(caz, { eroare: true }).numara)).toBe(null)
+    expect(await raspunsCoada(bazaCoada(caz, { eroare: true }).numara)).toEqual({ status: 500, corp: { error: 'Eroare internă' } })
     for (const c of [null, undefined, NaN, -1, 1.5, '0', Infinity]) {
-      expect(await coadaDePreluat(async () => ({ count: c, error: null }), ACUM), String(c)).toBe(null)
+      expect(await coadaDePreluat(async () => ({ count: c, error: null })), String(c)).toBe(null)
     }
-    expect(await coadaDePreluat(async () => { throw new Error('retea') }, ACUM)).toBe(null)
-    expect(await coadaDePreluat(async () => null, ACUM)).toBe(null)
-    expect(await coadaDePreluat(bazaCoada(caz).numara, new Date('nu'))).toBe(null)
-    expect(await raspunsCoada(bazaCoada(caz).numara, new Date('nu'))).toEqual({ status: 500, corp: { error: 'Eroare internă' } })
+    expect(await coadaDePreluat(async () => { throw new Error('retea') })).toBe(null)
+    expect(await coadaDePreluat(async () => null)).toBe(null)
+    expect(await raspunsCoada(async () => { throw new Error('retea') })).toEqual({ status: 500, corp: { error: 'Eroare internă' } })
   })
   it('răspunsul are DOAR `de_preluat` (boolean) — niciun număr, id sau conținut de întrebare', async () => {
-    const r = await raspunsCoada(bazaCoada({ intrebari: [{ stare: 'noua' }], preluari: [] }).numara, ACUM)
+    const r = await raspunsCoada(bazaCoada({ intrebari: [{ stare: 'noua' }], preluari: [] }).numara)
     expect(Object.keys(r.corp)).toEqual(['de_preluat'])
     expect(typeof r.corp.de_preluat).toBe('boolean')
   })
-  it('index.ts: „coada” = o singură cerere HEAD cu count exact și `or` pe intrebari_tehnice; nu cheamă RPC-uri și nu scrie', () => {
+  it('index.ts: „coada” = o singură cerere HEAD cu count exact și `or` pe intrebari_tehnice; fără ceas, fără RPC-uri, nu scrie', () => {
     const src = readFileSync('supabase/functions/intrebari-tehnice-worker/index.ts', 'utf8').replace(/\r/g, '')
     const ramura = src.slice(src.indexOf("if (corp.actiune === 'coada')"), src.indexOf("if (corp.actiune === 'nume')"))
-    expect(ramura).toContain('raspunsCoada(numaraCoada(sb), new Date())')
-    expect(ramura).not.toMatch(/\.rpc\(|\.insert\(|\.update\(|\.delete\(|\.upsert\(|storage/)
+    expect(ramura).toContain('raspunsCoada(numaraCoada(sb))')
+    expect(ramura).not.toMatch(/Date|now\(|\.rpc\(|\.insert\(|\.update\(|\.delete\(|\.upsert\(|storage/)
     const fn = src.slice(src.indexOf('function numaraCoada('), src.indexOf('Deno.serve('))
     expect(fn).toContain("sb.from('intrebari_tehnice').select('id', { count: 'exact', head: true }).or(or)")
     expect(fn).toContain("if (tabel !== 'intrebari_tehnice' || typeof or !== 'string' || !or) return")
     expect(fn.match(/sb\.from\(/g)).toHaveLength(1)
-    expect(fn).not.toMatch(/\.rpc\(|\.insert\(|\.update\(|\.delete\(|\.upsert\(|intrebari_preluari/)
+    expect(fn).not.toMatch(/Date|now\(|preluat_la|\.rpc\(|\.insert\(|\.update\(|\.delete\(|\.upsert\(|intrebari_preluari/)
   })
   it('poarta: fără secret / cu JWT / secret greșit → refuz ÎNAINTE de „coada” (aceeași poartă pentru toate acțiunile)', async () => {
     for (const antet of ['', ANON_JWT, 'b'.repeat(64)]) expect(await autorizat(antet, verifica)).toBe(false)
@@ -323,21 +319,22 @@ describe('coada: există ceva ce `preia` ar atinge? (cazurile comune cu proba PG
     const src = readFileSync('supabase/functions/intrebari-tehnice-worker/index.ts', 'utf8')
     expect(src.indexOf("corp.actiune === 'coada'")).toBeGreaterThan(src.indexOf('await autorizat('))
   })
-  it('aceleași stări și același prag ca fn_intrebari_preia din ULTIMA migrare care o definește (altfel „coada” trebuie revăzută)', () => {
+  it('aceleași stări ca fn_intrebari_preia din ULTIMA migrare care o definește (altfel „coada” trebuie revăzută)', () => {
     const dir = 'supabase/migrations'
     const cu = readdirSync(dir).filter(f => f.endsWith('.sql')).sort()
       .filter(f => /FUNCTION public\.fn_intrebari_preia\(\)/.test(readFileSync(`${dir}/${f}`, 'utf8')))
     expect(cu.at(-1)).toBe('20261131e_intrebari_cercetare_surse.sql')
     const m = readFileSync(`${dir}/${cu.at(-1)}`, 'utf8').replace(/\r/g, '')
     const corp = m.slice(m.indexOf('CREATE OR REPLACE FUNCTION public.fn_intrebari_preia()'), m.indexOf('CREATE OR REPLACE FUNCTION public.fn_intrebari_amana('))
-    expect(corp).toContain(`WHERE t.stare = 'in_lucru' AND t.preluat_la < now() - interval '${COADA_EXPIRARE_MIN} minutes'`)
-    expect(corp).toContain("SELECT * INTO r FROM public.intrebari_tehnice WHERE stare = 'noua' ORDER BY creat_la LIMIT 1 FOR UPDATE SKIP LOCKED;")
-    // stările pe care preia le CITEȘTE (WHERE / AND), nu cele pe care le scrie (SET): exact „in_lucru” și „noua”
+    // stările pe care preia le CITEȘTE (WHERE / AND), nu cele pe care le scrie (SET): exact cele din „coada”, nimic altceva
     const citite = [...corp.matchAll(/(?:WHERE|AND) (?:t\.)?stare = '([a-z_]+)'/g)].map(x => x[1])
-    expect([...new Set(citite)].sort()).toEqual(['in_lucru', 'noua'])
-    // amânarea readuce întrebarea în „noua” (nu există o stare de amânare)
+    expect([...new Set(citite)].sort()).toEqual([...COADA_STARI].sort())
+    expect(corp).not.toMatch(/stare\s*(?:IN\b|<>|!=|IS\b|~|LIKE)/i)
+    // expirarea o decide `preia`, în bază, cu ceasul bazei (now()) — „coada” nu o mai copiază
+    expect(corp).toContain("WHERE t.stare = 'in_lucru' AND t.preluat_la < now() - interval '30 minutes'")
+    // amânarea readuce întrebarea în „noua” sau o închide în „eroare” (pe care preia n-o mai atinge); nu există stare de amânare
     const amana = m.slice(m.indexOf('CREATE OR REPLACE FUNCTION public.fn_intrebari_amana('), m.indexOf('-- ─── worker: răspunsul vine'))
     expect(amana).toContain("SET stare = CASE WHEN incercari >= 3 THEN 'eroare' ELSE 'noua' END")
-    expect(COADA_MARJA_SEC).toBe(60)
+    expect(m).toContain("CHECK (stare IN ('noua', 'in_lucru', 'raspuns', 'eroare', 'de_verificat'))")
   })
 })

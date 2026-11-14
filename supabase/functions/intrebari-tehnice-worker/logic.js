@@ -110,66 +110,47 @@ export async function numeDinPlatforma(pagina, surse = SURSE_NUME) {
   return { persoane: [...persoane], firme: [...firme], cui: [...cui], localitati: [...localitati] }
 }
 
-// ─── 4. Acțiunea „coada” (14.11.2026, fără migrare; r2 15.11.2026): DOAR CITIRE — există ceva ce `preia` ar atinge? ───
+// ─── 4. Acțiunea „coada” (14.11.2026, fără migrare; r3 15.11.2026): DOAR CITIRE — e vreo întrebare în „noua” sau „in_lucru”? ───
 // Workerul o întreabă la fiecare rulare, înaintea listei de nume: coada goală → nu mai încarcă numele (21 de tabele) degeaba.
 // Răspunsul e doar un boolean, niciun conținut de întrebare. Nu preia, nu scrie, nu ia lock-uri.
-// Condiția (r2, decizia coordonatorului după review-ul PR #1104): „are ceva” = există cel puțin o întrebare într-o stare pe care
-// fn_intrebari_preia (ultima versiune: migrarea 20261131e) o atinge:
-//   - 'noua' (inclusiv una amânată: amânarea o readuce imediat în 'noua', schema n-are stare / termen de amânare), SAU
-//   - 'in_lucru' preluată de peste 30 de minute (`preia` o închide cu eroare + notificarea autorului).
+// Condiția (r3, decizia coordonatorului după review-ul PR #1104): „are ceva” = există cel puțin o întrebare în starea 'noua' SAU
+// în starea 'in_lucru', indiferent de vechime. Sunt exact stările pe care fn_intrebari_preia (ultima versiune: migrarea 20261131e)
+// le citește: 'noua' (inclusiv una amânată sau reluată — amânarea și reluarea o readuc în 'noua') și 'in_lucru' (pe cea expirată o
+// închide). „coada” NU are niciun ceas, nicio marjă și niciun prag: dacă o întrebare „în lucru” a expirat decide DOAR `preia`,
+// în bază, cu ceasul bazei. Costul acceptat: cât o întrebare e „în lucru” (cel mult 30 de minute), rularea încarcă numele și
+// `preia` nu face nimic — fluxul de dinainte de „coada”; workerul are lock, deci în timpul procesării nu pornește altă rulare.
 // FĂRĂ plafonul zilnic și fără nicio dată calendaristică: cu plafonul atins și întrebări în așteptare „coada” spune „are ceva”,
-// workerul încarcă numele și `preia` refuză — exact fluxul de dinainte de „coada” (economia lipsește doar în zilele cu plafon atins).
-// O SINGURĂ citire: un singur SELECT count(*) cu OR pe cele două condiții (PostgREST HEAD + `or=`), deci un singur instantaneu al
-// bazei — nu există intercalări între citiri.
-// GARANȚIA (și numai ea): nicio întrebare EXISTENTĂ la momentul citirii nu e sărită. NU e „echivalent cu o preluare ulterioară”:
-// o întrebare pusă sau readusă în coadă (amânare) DUPĂ citire e luată la rularea următoare, peste cel mult 2 minute — la fel ca
-// o întrebare pusă la o secundă după o rulare de dinainte de „coada”. Asta nu e pierdere și nu se „repară”.
-// Ceasul: pragul de expirare se calculează cu ceasul EDGE-ului (PostgREST nu poate compara cu now() din BD fără o funcție nouă),
-// iar `preia` folosește now() din BD. Marja de 60 s mută pragul spre „are ceva” mai devreme: cu ceasul edge-ului în urmă cu cel mult
-// 60 s, orice rând pe care `preia` l-ar închide e văzut. Cu o abatere mai mare, rândul e văzut la o rulare ulterioară (pragul
-// înaintează odată cu ceasul) — întârziere, nu pierdere; testul `ceasul edge-ului` (logic.test.js) arată marginea.
-// Ce e diferit de `preia`: nu sare rândurile blocate (SKIP LOCKED) și nu ține cont de plafon — ambele dau doar „are ceva” în plus.
-// Testul `coada: aceleași stări și același prag ca fn_intrebari_preia` (logic.test.js) pică dacă migrarea schimbă pragul / stările.
-export const COADA_EXPIRARE_MIN = 30      // ca `preluat_la < now() - interval '30 minutes'`
-export const COADA_MARJA_SEC = 60         // ceasul edge-ului poate fi în urma BD: spunem „are ceva” cu un minut mai devreme
-const OP_COADA = new Set(['eq', 'lt'])
+// workerul încarcă numele și `preia` refuză — tot fluxul de dinainte de „coada”.
+// O SINGURĂ citire: un singur SELECT count(*) cu OR pe cele două stări (PostgREST HEAD + `or=`), deci un singur instantaneu al bazei.
+// GARANȚIA (și numai ea): nicio întrebare care există în starea 'noua' sau 'in_lucru' în momentul citirii nu e sărită; o întrebare
+// pusă sau revenită în coadă după citire e luată la rularea următoare.
+// Ce e diferit de `preia`: nu sare rândurile blocate (SKIP LOCKED), nu ține cont de plafon și nici de vechimea preluării — toate
+// dau doar „are ceva” în plus, niciodată „goală” în plus.
+// Testul `coada: aceleași stări ca fn_intrebari_preia` (logic.test.js) pică dacă migrarea schimbă stările citite de `preia`.
+export const COADA_STARI = Object.freeze(['noua', 'in_lucru'])
+const OP_COADA = new Set(['eq'])
 
-/** Condiția „coada”, ca date: tabel + `oricare` = listă de grupuri (OR), fiecare grup = condiții [op, coloană, valoare] legate
- *  prin AND. null dacă `acum` e invalid. */
-export function interogareCoada(acum) {
-  if (!(acum instanceof Date) || !Number.isFinite(acum.getTime())) return null
-  const prag = new Date(acum.getTime() - COADA_EXPIRARE_MIN * 60e3 + COADA_MARJA_SEC * 1e3).toISOString()
-  return {
-    tabel: 'intrebari_tehnice',
-    oricare: [
-      [['eq', 'stare', 'noua']],
-      [['eq', 'stare', 'in_lucru'], ['lt', 'preluat_la', prag]],
-    ],
-  }
+/** Condiția „coada”, ca date: tabel + `oricare` = listă de condiții [op, coloană, valoare] legate prin OR. Fără niciun timp. */
+export function interogareCoada() {
+  return { tabel: 'intrebari_tehnice', oricare: COADA_STARI.map(s => ['eq', 'stare', s]) }
 }
 
-/** Filtrul PostgREST `or=(...)` pentru `oricare` (fără parantezele exterioare, cum le cere supabase-js `.or()`): grup cu o condiție
- *  → `col.op."val"`, grup cu mai multe → `and(...)`. Valorile se pun mereu între ghilimele (data are „.” și „:”, caractere rezervate
- *  în `or=`). Lista albă: op ∈ eq / lt, coloana [a-z_]+, valoarea [A-Za-z0-9_:.-]+; altfel null (L13: fără continuare tăcută). */
+/** Filtrul PostgREST `or=(...)` pentru `oricare` (fără parantezele exterioare, cum le cere supabase-js `.or()`): fiecare condiție
+ *  → `col.op."val"`, legate prin virgulă (OR). Valorile se pun mereu între ghilimele. Lista albă: op = eq, coloana [a-z_]+,
+ *  valoarea [a-z_]+; altfel null (L13: fără continuare tăcută). */
 export function filtruOrPostgrest(oricare) {
   if (!Array.isArray(oricare) || !oricare.length) return null
   const cond = c => (Array.isArray(c) && c.length === 3 && OP_COADA.has(c[0]) && /^[a-z_]+$/.test(c[1]) &&
-                     typeof c[2] === 'string' && /^[A-Za-z0-9_:.-]+$/.test(c[2]) ? `${c[1]}.${c[0]}."${c[2]}"` : null)
-  const grupuri = oricare.map(g => {
-    if (!Array.isArray(g) || !g.length) return null
-    const p = g.map(cond)
-    if (p.includes(null)) return null
-    return p.length === 1 ? p[0] : `and(${p.join(',')})`
-  })
-  return grupuri.includes(null) ? null : grupuri.join(',')
+                     typeof c[2] === 'string' && /^[a-z_]+$/.test(c[2]) ? `${c[1]}.${c[0]}."${c[2]}"` : null)
+  const p = oricare.map(cond)
+  return p.includes(null) ? null : p.join(',')
 }
 
-/** true = există cel puțin o întrebare pe care `preia` ar atinge-o (vezi sus); false = niciuna la momentul citirii; null = nu se
- *  știe (eroare de citire, număr invalid, `acum` invalid) — edge-ul răspunde atunci 500, iar workerul merge pe fluxul de azi (L18).
+/** true = există cel puțin o întrebare în 'noua' / 'in_lucru' (vezi sus); false = niciuna în momentul citirii; null = nu se știe
+ *  (eroare de citire, număr invalid, excepție) — edge-ul răspunde atunci 500, iar workerul merge pe fluxul de azi (L18).
  *  `numara({ tabel, oricare, or })` → { count, error } — O SINGURĂ chemare (index.ts folosește `or`, proba PGlite `oricare`). */
-export async function coadaDePreluat(numara, acum) {
-  const q = interogareCoada(acum)
-  if (!q) return null
+export async function coadaDePreluat(numara) {
+  const q = interogareCoada()
   const or = filtruOrPostgrest(q.oricare)
   if (!or) return null
   try {
@@ -180,7 +161,7 @@ export async function coadaDePreluat(numara, acum) {
 }
 
 /** Răspunsul acțiunii „coada”: 200 { de_preluat: boolean } sau 500 — fără alt conținut. */
-export async function raspunsCoada(numara, acum) {
-  const r = await coadaDePreluat(numara, acum)
+export async function raspunsCoada(numara) {
+  const r = await coadaDePreluat(numara)
   return typeof r === 'boolean' ? { status: 200, corp: { de_preluat: r } } : { status: 500, corp: { error: 'Eroare internă' } }
 }

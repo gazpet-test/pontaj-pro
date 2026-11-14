@@ -616,8 +616,8 @@ versiunea anterioară (edge-ul poate rămâne: lista de nume e aceeași).
 
 ### Actualizarea „coada” (14.11.2026) — lista de nume se încarcă doar când e ceva de preluat
 **Ce se schimbă:** funcția edge are o acțiune nouă, `coada`, DOAR CITIRE: o singură numărătoare pe `intrebari_tehnice` — există
-o întrebare `noua` (inclusiv una amânată: amânarea o readuce în `noua`) SAU una `in_lucru` preluată de peste 30 de minute (pe care
-preluarea o închide)? — și răspunde doar `{"de_preluat": true | false}`. Workerul o întreabă înaintea listei de nume: la `false`
+o întrebare în starea `noua` (inclusiv una amânată sau reluată: amânarea și reluarea o readuc în `noua`) SAU în starea `in_lucru`,
+indiferent de vechime? — și răspunde doar `{"de_preluat": true | false}`. Workerul o întreabă înaintea listei de nume: la `false`
 rularea se încheie fără lista de nume și fără rând în jurnal (cel mult un rând `coada_goala` pe oră, ca să se vadă că workerul
 merge); la orice altceva (are ceva, eroare, funcție edge veche) — fluxul de azi, neschimbat: nume → preia. Fără migrare, fără
 secrete noi; mascarea, cercetarea, regula „Da / Nu / Incert”, plafoanele și sursele de nume NU se schimbă.
@@ -627,19 +627,20 @@ ceva”, workerul încarcă numele și preluarea refuză — exact ce se întâm
 plafonul atins; în schimb `coada` nu are nicio dată calendaristică (schimbarea zilei nu o afectează) și nicio numărătoare de
 preluări (o amânare confirmată între două citiri nu mai e posibilă: e o singură citire, deci un singur instantaneu al bazei).
 
-**Ce garantează `coada` (și ce nu):** nicio întrebare care EXISTĂ la momentul citirii nu e sărită. NU garantează că o preluare
-făcută imediat după ar da același rezultat: o întrebare pusă (sau readusă în coadă de o amânare) DUPĂ citire e luată la rularea
-următoare, peste cel mult 2 minute — la fel ca o întrebare pusă la o secundă după o rulare de dinainte de `coada`. Asta nu e
-pierdere. Ceasul: pragul de 30 de minute se calculează cu ceasul funcției edge, iar preluarea folosește ceasul bazei; `coada` spune
-„are ceva” cu 60 de secunde mai devreme, deci o abatere de ceas de până la un minut nu întârzie nimic, iar una mai mare întârzie
-închiderea unei preluări expirate cu cel mult atât (rularea următoare o vede).
+**Fără ceas (runda 3, după review):** `coada` nu are niciun ceas, nicio marjă și niciun prag de vechime. O întrebare `in_lucru`
+contează ca „are ceva” indiferent de când a fost preluată; dacă e expirată (peste 30 de minute) decide doar preluarea, în bază,
+cu ceasul bazei. Costul acceptat: cât timp o întrebare e „în lucru”, rulările încarcă lista de nume, iar preluarea nu face nimic
+(fluxul de dinainte de `coada`). Workerul are lock, deci în timpul procesării nu pornește a doua rulare.
+
+**Ce garantează `coada` (și numai atât):** nicio întrebare care există în starea `noua` sau `in_lucru` în momentul citirii nu e
+sărită; o întrebare pusă sau revenită în coadă după citire e luată la rularea următoare.
 
 **Ordinea de publicare: oricare e sigură; recomandată funcția edge ÎNTÂI, apoi workerul.**
 - Funcția edge nouă + workerul vechi: workerul vechi nu cheamă `coada`; celelalte acțiuni sunt neschimbate → nimic nu se schimbă.
 - Workerul nou + funcția edge veche: `coada` primește 400 „Acțiune necunoscută” → workerul face fluxul de azi (nume → preia) →
   nimic nu se pierde, doar economia lipsește până la publicarea funcției.
-- În nicio combinație workerul nu sare peste o întrebare existentă la momentul citirii: sare peste listă DOAR la răspunsul exact
-  200 `{"de_preluat": false}`.
+- În orice combinație workerul sare peste listă DOAR la răspunsul exact 200 `{"de_preluat": false}`; garanția de mai sus rămâne
+  aceeași.
 
 Pașii (cu „da”-ul lui Răzvan):
 1. Workerul oprit și verificat oprit (pasul 1 de mai sus). Tehnic nu e obligatoriu aici (vezi ordinea), dar regula casei rămâne.
@@ -649,8 +650,8 @@ Pașii (cu „da”-ul lui Răzvan):
 4. Verificarea FĂRĂ worker: cu secretul, `{"actiune": "coada"}` → **200** cu exact `{"de_preluat": false}` (sau `true` dacă e o
    întrebare în coadă); fără antet / cu cheia anon / cu un JWT de cont obișnuit / cu un secret greșit → **401**. Tot cu secretul,
    `{"actiune": "nume"}` → 200 ca înainte. Un 500 la `coada` = citirea a eșuat (de exemplu filtrul nu e acceptat de PostgREST
-   sau un drept lipsă pe `intrebari_tehnice`): workerul ar merge atunci pe fluxul de azi, dar se raportează. Filtrul are mereu
-   ambele condiții (inclusiv data pentru „in_lucru” expirată), deci un filtru greșit dă 500 la ORICE apel, nu doar cu coada plină.
+   sau un drept lipsă pe `intrebari_tehnice`): workerul ar merge atunci pe fluxul de azi, dar se raportează. Filtrul e mereu
+   același (cele două stări, fără dată), deci un filtru greșit dă 500 la ORICE apel, nu doar cu coada plină.
 5. Copierea lui `intrebari_worker.py` din `main` în folderul workerului (doar el se schimbă; motorul, manifestele și indexul
    corpusului rămân aceleași).
 6. Testele pe `main`: `npx vitest run supabase/functions/intrebari-tehnice-worker/logic.test.js` și
@@ -660,7 +661,8 @@ Pașii (cu „da”-ul lui Răzvan):
    jurnal ca înainte (`nume_incarcate`, apoi `raspuns`).
 8. Reactivarea rulării periodice (pasul 10 de mai sus).
 
-**Ce se vede altfel în jurnal:** `nume_incarcate` apare doar la rulările cu ceva de preluat (nu la fiecare 2 minute); semnul că
+**Ce se vede altfel în jurnal:** `nume_incarcate` apare doar la rulările cu o întrebare `noua` sau `in_lucru` (nu la fiecare 2
+minute; cât o întrebare e în lucru, rulările îl scriu în continuare, iar preluarea nu face nimic); semnul că
 workerul merge cu coada goală e `coada_goala`, cel mult o dată pe oră (marcajul orei se pune înaintea rândului: o oprire între ele
 sau un marcaj care nu se poate scrie lasă ora fără rând, niciodată cu două). Un jurnal fără niciun rând nou de peste două ore
 înseamnă că workerul nu mai rulează sau că marcajul `coada_viu` nu se poate scrie în folderul workerului — se verifică (dacă
