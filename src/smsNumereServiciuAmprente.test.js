@@ -440,6 +440,12 @@ describe('20261220a r5 — documentul livrării (docs/sms/LIVRARE_20261220a_NUME
     for (const t of ['**Configurația obligatorie.**', '**Verificatorul nu e un validator strict pentru orice fișier.**',
       '**Codul 0 al wrapperului nu certifică singur observatorul și controlul funcțiilor expuse.**',
       'livrarea se încheie doar cu diferența exact manifestul **și** controlul\n  funcțiilor expuse curat']) expect(d75 + d7.slice(d7.indexOf('### 7.7')), t).toContain(t)
+    // după livrare: starea de la începutul documentului și rezultatele producției în 7.7 (proba, aplicarea, diferența = manifestul, REST)
+    expect(inceput).toContain('**Stare: APLICATĂ pe producție pe 14.11.2026, pe calea din secțiunea 7 (rezultatele: 7.7).**')
+    const d77 = d7.slice(d7.indexOf('### 7.7'), d7.indexOf('### 7.8'))
+    for (const t of ['**proba cu ROLLBACK, pe calea simplă', 'criteriu: 1.500 ms', 'istoricul e gol, iar citirea e identică rând cu rând',
+      '**diferența dintre citirea dinainte și cea de după = exact manifestul** (32 de rânduri: 29 create,\n    2 schimbate, 1 șters)',
+      'controlul\n    funcțiilor expuse curat', 'probele REST 5 din 5', 'numărul loturilor\n    și al mesajelor e neschimbat']) expect(d77, t).toContain(t)
     const d64 = DOC.slice(DOC.indexOf('### 6.4'), i7)
     expect(d64).toContain('seria de **trei probe consecutive** — e\nînlocuit de secțiunea 7')
     expect(d64).toContain('se face **o singură** probă cu ROLLBACK, pe calea simplă')

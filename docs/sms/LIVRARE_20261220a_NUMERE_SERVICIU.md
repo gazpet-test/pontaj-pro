@@ -1,7 +1,8 @@
 # Livrarea migrării 20261220a — SMS: numere de serviciu (PR #1084)
 
-**Stare: NEAPLICATĂ.** Regula migrării: pe producție se aplică **DOAR prin runnerul cu amprenta GLOBALĂ L15 v2**, cu plafonul de
-2000 ms, după review și „da”-ul owner-ului. **Aplicarea fără amprenta globală NU e acceptată.**
+**Stare: APLICATĂ pe producție pe 14.11.2026, pe calea din secțiunea 7 (rezultatele: 7.7).** Regula migrării, scrisă și în antetul
+ei: pe producție se aplică **DOAR prin runnerul cu amprenta GLOBALĂ L15 v2**, cu plafonul de 2000 ms, după review și „da”-ul
+owner-ului. **Aplicarea fără amprenta globală NU e acceptată.**
 
 **Excepție — o singură dată, doar pentru acest artefact: derogarea din secțiunea 7 („calea A”, 14.11.2026).** Pe producție calculul
 amprentei globale nu încape în plafonul de 2000 ms cerut de migrare (măsurat, secțiunea 7.1). Verificarea globală se face de aceea
@@ -361,7 +362,20 @@ rând și decizia owner-ului.
   de mai sus, uneltele finale inspectate și fixate prin sha256. La inspecția uneltelor finale: acceptate pentru această operațiune cu
   configurația obligatorie și controlul suplimentar din 7.5; livrarea se încheie doar cu diferența exact manifestul **și** controlul
   funcțiilor expuse curat.
-- **Rezultatele de pe producție** (proba, aplicarea, probele REST) se trec aici după livrare, înaintea merge-ului.
+- **Rezultatele de pe producție (14.11.2026, cu „da”-ul explicit al owner-ului pentru probă și aplicare):**
+  - **citirea din ziua livrării:** partea revizuită identică; 42 de rânduri diferite față de citirea revizuită, toate partiția zilnică
+    a platformei pentru `realtime.messages` (21 șterse, 21 create), clasificate în jurnal; aceeași listă, octet cu octet, la citirile
+    de dinaintea probei și a aplicării;
+  - **proba cu ROLLBACK, pe calea simplă (17:09 UTC):** fereastra liberă; lock-urile luate la 251 ms de la BEGIN (o încercare); garda
+    finală la **687 ms** (criteriu: 1.500 ms); lock-urile ținute ≈ 0,43 s (observatorul: 2 din 2, cu apariție și dispariție); după
+    ROLLBACK istoricul e gol, iar citirea e identică rând cu rând cu cea dinainte (27.555 de rânduri); controlul suplimentar trecut;
+  - **aplicarea (17:10 UTC):** lock-urile la 185 ms, garda finală la **374 ms**, ținute ≈ 0,19 s; aplicat și înregistrat, controlul
+    funcțiilor expuse curat; **diferența dintre citirea dinainte și cea de după = exact manifestul** (32 de rânduri: 29 create,
+    2 schimbate, 1 șters); controlul suplimentar trecut;
+  - **după:** probele REST 5 din 5 (cele două apeluri vechi cu 4 parametri răspund ca înainte; apelul nou cu 5 parametri — 200;
+    numărul de serviciu inexistent — 400 cu SQLSTATE 22023; lista — `{numere, total}`), toate doar previzualizare: numărul loturilor
+    și al mesajelor e neschimbat, tabelul nou e gol;
+  - aceeași migrare a fost aplicată apoi pe clonă, cu același rezultat (diferența = exact manifestul).
 
 ### 7.8 În afara acestei derogări
 `20261221a` (vremea zilei) are aceeași problemă de timp și rămâne neaplicată până la refacerea uneltei. Refacerea se proiectează și
