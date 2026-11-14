@@ -225,6 +225,10 @@ ajunge pentru aplicare: se cer trei probe consecutive acceptate (prima rămâne 
 caută cine ținea tabelele, se reia manual după eliberare și seria de trei reîncepe; refuzurile repetate cer altă fereastră, nu bugete
 mai mari.
 
+*(Pentru acest artefact, pe producție, paragraful de mai sus — criteriile probei L15 v2 și seria de **trei probe consecutive** — e
+înlocuit de secțiunea 7: proba în forma L15 v2 nu încape în plafon; se face **o singură** probă cu ROLLBACK, pe calea simplă, cu
+criteriile din 7.2. Regula pentru un refuz de lock rămâne: stop, reconciliere, analiză, fără reîncercare automată.)*
+
 **Cum ajung lock-urile în jurnal.** Proba „diferența = manifestul” tipărește doar rândurile runnerului, nu și mesajele migrării
 (momentul luării lock-urilor și numărul de încercări). De aceea, la proba pe țintă, coordonatorul păstrează ieșirea întreagă a sesiunii
 și pornește alături un observator doar-citire al lock-urilor, legat de sesiunea livrării — nu de orice sesiune care ține același
@@ -235,7 +239,9 @@ lock-urile luate la ≈ 0,48 s de la BEGIN, o încercare, ținute ≈ 0,48 s pâ
 
 **Ce derogă.** Antetul migrării și începutul acestui document spun „Aplicarea fără amprenta GLOBALĂ NU e acceptată”. Secțiunea de
 față derogă **explicit** de la această interdicție, **doar pentru acest artefact** (migrarea cu sha256 `a290bf3c…94d5`, manifestul cu
-sha256 `c1709506…6123`), cu acordul owner-ului și cu verdictul recenzentului (7.7). Fișierul migrării rămâne neschimbat (e fixat
+sha256 `c1709506…6123`), cu acordul owner-ului și cu verdictul recenzentului (7.7). **Commitul livrat** — cel repetat pe clonă — este
+`b6075c67c1008575921004fe9005c408af717ef5`; capul acestui PR e mai nou (aduce `main` și acest document), cu migrarea, manifestul,
+revenirea, scriptul de amprente și uneltele de livrare identice. Jurnalul livrării le ține separat. Fișierul migrării rămâne neschimbat (e fixat
 prin sha256; un comentariu schimbat ar cere baseline, teste și review de la capăt). **Nu e o relaxare generală a L15 v2**: pentru
 orice altă migrare regula rămâne, iar unealta se reface separat (7.8).
 
@@ -293,11 +299,13 @@ aceleași 53 de rânduri de baseline) diferența globală a fost de fiecare dat�
 sunt cerute de migrare în tranzacție, înainte și după.
 
 ### 7.4 Repetiția pe clonă (14.11.2026), cu uneltele finale
+Jurnalul repetiției finale: `repetitie_a_r3.log`, sha256 `d4c8b9945ab8b5ba804732308870173395238b99cf04b0e27dcca77726f99d4d` (în
+jurnalul livrării, cu jurnalele fiecărei rulări).
 - **Proba simplă cu ROLLBACK:** garda finală la ≈ 0,1 s, lock-urile ținute ≈ 0,05 s, istoric gol, citirea de după identică.
 - **Aplicarea:** COMIS, diferența R1 → R2 = exact manifestul (32 de rânduri); la fel după revenire și reaplicare.
 - **Revenirea:** citirea de după = citirea dinaintea aplicării; istoricul revenirii rămâne consemnat (pe clonă se șterge doar ca
   migrarea să poată fi reaplicată).
-- **Mutanții verificatorului** (20 din 20 refuzați cu codul așteptat): un rând scos din manifest (nedeclarat), un rând inventat
+- **Mutanții verificatorului** (20 de cazuri: un martor nealterat, acceptat, și 19 mutanți, toți refuzați cu codul așteptat): un rând scos din manifest (nedeclarat), un rând inventat
   (absent), amprenta finală greșită și operația greșită (altfel), „schimbat” pe o cheie neschimbată, cheie dublă în manifest;
   citire fără un rând, tăiată, fără rândul fotografiei, fără rândul validării sau cu validarea eșuată, cu o amprentă alterată de
   mână, cu o cheie dublă, de pe alt sistem, cu alt rol, cu o linie necunoscută; ordinea inversată; o citire validă cu un obiect
@@ -324,6 +332,23 @@ Nu fac parte din livrare și nu rulează în tranzacție; se verifică înaintea
 Uneltele de livrare din repo folosite de ele (runnerul, biblioteca formei „un mesaj”, unealta de citire, comparatorul, validatorul,
 controlul funcțiilor expuse) trebuie să fie identice cu cele revizuite în PR-ul runnerului L15 v2; wrapperul refuză altfel.
 
+**Limitele uneltelor fixate, găsite la inspecție, și cum se acoperă la această livrare:**
+- **Configurația obligatorie.** În wrapper, verificarea ferestrei și observatorul de lock-uri se pornesc prin variabile de mediu, deci
+  pot lipsi fără ca wrapperul să refuze. Proba și aplicarea se pornesc de aceea printr-un lansator care verifică amprentele de mai
+  sus, pune explicit ținta, verificarea ferestrei și cele două lock-uri urmărite și nu admite nicio comandă între R1 și tranzacție.
+- **Verificatorul nu e un validator strict pentru orice fișier.** Nu verifică marcajul de închidere al secțiunii scriptului migrării
+  și compară momentele celor două citiri ca text. Pentru fiecare pereche R1 / R2, un control suplimentar verifică separat: secțiunea
+  închisă de marcajul ei chiar înaintea rândului global, momentele valide și în ordine, în aceeași fereastră, amprentele fișierelor
+  egale cu cele din jurnal.
+- **Codul 0 al wrapperului nu certifică singur observatorul și controlul funcțiilor expuse.** La aplicare, un observator incomplet dă
+  doar avertisment, iar un control al funcțiilor expuse nereușit lasă livrarea neîncheiată chiar dacă diferența e exact manifestul.
+  Ambele se verifică separat în jurnal (același control suplimentar).
+
+| Unealtă suplimentară | sha256 |
+|---|---|
+| lansatorul cu configurația obligatorie | `f749d88bff18a66d8f6050135a2323eb2b7e9f3b663f38d1519aec2359d85275` |
+| controlul suplimentar al citirilor, al observatorului și al controlului funcțiilor expuse | `7c85b5a08ff6eb7a94ceddd692b4acf8e9837630b195290ec743c103fdd932d2` |
+
 ### 7.6 Jurnalul livrării
 Pentru fiecare rulare (citire, probă, aplicare): fișierele celor două citiri cu sha256-urile lor, lista clasificată, ieșirea întreagă
 a sesiunii, observatorul, rezultatul verificatorului și lista diferențelor observate. La o diferență în plus: clasificarea fiecărui
@@ -331,9 +356,12 @@ rând și decizia owner-ului.
 
 ### 7.7 Acordul și verdictul
 - **Owner-ul** a ales calea A pe 14.11.2026. Proba și aplicarea pe producție se fac doar cu „da”-ul lui explicit, pe manual.
-- **Recenzentul**: derogarea acceptată exclusiv pentru acest artefact (commitul și cele două sha256 de mai sus), cu condițiile din
-  7.2–7.3: fereastra fără altă activitate, o probă simplă cu ROLLBACK pe producție, repetiția pe clonă cu mutanții de mai sus,
-  uneltele finale inspectate și fixate prin sha256.
+- **Recenzentul**: derogarea acceptată exclusiv pentru acest artefact (commitul livrat și cele două sha256 de la începutul secțiunii),
+  cu condițiile din 7.2–7.3: fereastra fără altă activitate, o probă simplă cu ROLLBACK pe producție, repetiția pe clonă cu mutanții
+  de mai sus, uneltele finale inspectate și fixate prin sha256. La inspecția uneltelor finale: acceptate pentru această operațiune cu
+  configurația obligatorie și controlul suplimentar din 7.5; livrarea se încheie doar cu diferența exact manifestul **și** controlul
+  funcțiilor expuse curat.
+- **Rezultatele de pe producție** (proba, aplicarea, probele REST) se trec aici după livrare, înaintea merge-ului.
 
 ### 7.8 În afara acestei derogări
 `20261221a` (vremea zilei) are aceeași problemă de timp și rămâne neaplicată până la refacerea uneltei. Refacerea se proiectează și

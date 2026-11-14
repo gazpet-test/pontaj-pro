@@ -426,9 +426,23 @@ describe('20261220a r5 — documentul livrării (docs/sms/LIVRARE_20261220a_NUME
       'garda finală cel mult 1.500 ms', '**octet cu octet** cea clasificată', 'doar cu „da”-ul lui explicit, pe manual']) expect(d7, t).toContain(t)
     // riscurile acceptate, toate patru
     for (const t of ['**Refuzul atomic.**', '**Atribuirea sub concurență.**', '**Schimbarea temporară.**', '**Revenirea repară doar ce prevede ea.**']) expect(d7, t).toContain(t)
-    // uneltele: cinci amprente sha256 întregi; nicio cale de server
-    expect((d7.slice(d7.indexOf('### 7.5'), d7.indexOf('### 7.6')).match(/`[0-9a-f]{64}`/g) || []).length).toBe(5)
+    // uneltele: cinci amprente sha256 întregi ale uneltelor inspectate + două ale celor suplimentare (lansatorul, controlul); nicio cale de server
+    const d75 = d7.slice(d7.indexOf('### 7.5'), d7.indexOf('### 7.6'))
+    expect((d75.match(/`[0-9a-f]{64}`/g) || []).length).toBe(7)
+    expect(new Set(d75.match(/`[0-9a-f]{64}`/g)).size).toBe(7)
     expect(DOC).not.toMatch(/[A-Za-z]:[\\/](Users|ProgramData)[\\/]/)
+    // după inspecția uneltelor finale: commitul livrat e numit (40 de cifre) și deosebit de capul PR-ului; jurnalul repetiției e identificat
+    // prin sha256; numărătoarea mutanților e cea reală (un martor + 19 mutanți); limitele uneltelor și felul în care se acoperă sunt scrise;
+    // seria veche de trei probe e înlocuită explicit, nu lăsată alături
+    expect(d7).toMatch(/\*\*Commitul livrat\*\* — cel repetat pe clonă — este\s+`[0-9a-f]{40}`/)
+    expect(d7).toMatch(/`repetitie_a_r3\.log`, sha256 `[0-9a-f]{64}`/)
+    expect(d7).toContain('un martor nealterat, acceptat, și 19 mutanți, toți refuzați cu codul așteptat')
+    for (const t of ['**Configurația obligatorie.**', '**Verificatorul nu e un validator strict pentru orice fișier.**',
+      '**Codul 0 al wrapperului nu certifică singur observatorul și controlul funcțiilor expuse.**',
+      'livrarea se încheie doar cu diferența exact manifestul **și** controlul\n  funcțiilor expuse curat']) expect(d75 + d7.slice(d7.indexOf('### 7.7')), t).toContain(t)
+    const d64 = DOC.slice(DOC.indexOf('### 6.4'), i7)
+    expect(d64).toContain('seria de **trei probe consecutive** — e\nînlocuit de secțiunea 7')
+    expect(d64).toContain('se face **o singură** probă cu ROLLBACK, pe calea simplă')
     // pașii 5 și 6 din secțiunea 4 trimit la derogare (fără să dispară)
     expect(nr(pasi, '*(Pentru acest artefact: înlocuit de secțiunea 7')).toBe(2)
   })
