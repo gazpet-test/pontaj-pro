@@ -319,7 +319,7 @@ extensiile, versiunea serverului (și cea minoră: deparsarea). Pentru obiectele
 1. profilul sesiunii + ținta (db, system_identifier, `in_recovery = false`);
 2. `--amprente-migrare scripts/<x>_amprente.sql`: **scriptul existent al migrării, nerescris** — rulează o copie din care se scot exact
    linia `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;` și linia `ROLLBACK;` (fiecare trebuie să apară exact o dată — toate
-   cele 7 scripturi `*_amprente.sql` existente au forma asta) ⇒ rulează în fotografia comună; ieșirea lui (format nealiniat, separator
+   scripturile `*_amprente.sql` existente au forma asta) ⇒ rulează în fotografia comună; ieșirea lui (format nealiniat, separator
    ` | `) e delimitată de liniile `=== scriptul de amprente al migrarii …` / `=== sfarsit scriptul de amprente al migrarii ===`.
    **Momentul fotografiei** (`now()` al tranzacției unice, în forma text a sesiunii) se tipărește O DATĂ, pe rândul `MOMENT` (în afara
    părții revizuite). În secțiunea scriptului migrării se înlocuiește cu marcajul fix `<momentul fotografiei>` **DOAR câmpul identificat
@@ -334,8 +334,8 @@ extensiile, versiunea serverului (și cea minoră: deparsarea). Pentru obiectele
    amprente ale migrărilor viitoare**: antetul de sesiune se tipărește ÎNAINTEA oricărei alte ieșiri de date — prima interogare după `SET
    LOCAL search_path`, exact `SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_system()) AS sistem, version()
    AS versiune, now() AS la;` (un script care ar tipări altceva înainte cu aceleași nume de coloane și-ar normaliza alt rând; testul static
-   verifică ordinea în cele existente). Dintre scripturile existente, cinci au această formă (testul static le numără și verifică că
-   antetul e prima lor ieșire); **două nu**:
+   verifică ordinea în cele existente). Scripturile existente au toate această formă (testul static verifică la fiecare că antetul
+   e prima lui ieșire; scriptul unei migrări noi intră singur în verificare), **în afară de două**:
    `scripts/ofertare_inchidere_garda_amprente.sql` și `scripts/intrebari_cercetare_amprente.sql` tipăresc
    `to_char(statement_timestamp(), …)`, pe care mecanismul NU îl normalizează (sunt ale unor migrări deja livrate; o recitire cu ele arată
    momentul ca diferență, de explicat în jurnal). Formatul nealiniat e necesar: în cel aliniat lățimea coloanei depinde de lungimea

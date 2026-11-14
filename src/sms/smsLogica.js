@@ -2,7 +2,7 @@
 // Regulile de text / telefon / cost vin din modulul comun cu edge-ul (supabase/functions/_shared/smsText.mjs), oglindit în BD
 // (fn_sms_text_final, fn_sms_tel_normalizat). Sursa de adevăr rămâne BD-ul: previzualizarea finală o face RPC-ul, nu UI-ul.
 export { verificaText, costEstimat, mascheazaTelefon, normalizeazaTelefon, MAX_GSM, TARIF_EUR } from '../../supabase/functions/_shared/smsText.mjs'
-import { verificaText } from '../../supabase/functions/_shared/smsText.mjs'
+import { verificaText, normalizeazaTelefon } from '../../supabase/functions/_shared/smsText.mjs'
 
 export const STARI_LOT = {
   draft: ['Draft — așteaptă aprobarea', '#946B20'],
@@ -99,11 +99,140 @@ export function contorText(text) {
   return { ...v, eticheta: `${v.lungime}/160 caractere GSM-7 · ${v.segmente || 0} SMS`, avertismente }
 }
 
-/** Destinatarii aleși în UI → argumentele RPC-ului fn_sms_lot_intern_creeaza. */
-export function argumenteIntern(mod, { departamente = [], selectati = [] } = {}) {
+/** Destinatarii aleși în UI → argumentele RPC-ului fn_sms_lot_intern_creeaza.
+ *  20261220a: numerele de serviciu (p_numere_serviciu) DOAR la selecția manuală și doar dacă e bifat vreunul (cheia lipsește altfel, ca
+ *  apelul să rămână identic cu cel de dinainte); „toți” / „pe departament” nu le trimit niciodată (și BD-ul le refuză acolo). */
+export function argumenteIntern(mod, { departamente = [], selectati = [], numereServiciu = [] } = {}) {
   if (mod === 'departament') return { p_departamente: departamente.length ? departamente : ['__niciunul__'], p_angajati: null }
-  if (mod === 'selectie') return { p_departamente: null, p_angajati: selectati.length ? selectati.map(Number) : [-1] }
+  if (mod === 'selectie') {
+    const a = { p_departamente: null, p_angajati: selectati.length ? selectati.map(Number) : [-1] }
+    return numereServiciu.length ? { ...a, p_numere_serviciu: numereServiciu.map(Number) } : a
+  }
   return { p_departamente: null, p_angajati: null }
+}
+
+/** 20261220a: numerele de serviciu din „Selecție manuală”, filtrate ca angajații: căutarea după denumire le prinde; un filtru de
+ *  departament le ascunde (nu sunt ale niciunui departament). */
+export function filtreazaNumereServiciu(lista, { departament = '', cauta = '' } = {}) {
+  if (departament) return []
+  const q = cauta.trim().toLowerCase()
+  return (lista || []).filter(n => !q || String(n.denumire || '').toLowerCase().includes(q))
+}
+
+/** Contorul „N selectați”: angajații bifați + numerele de serviciu bifate. */
+export const numarSelectati = (angajati, numere) => (angajati?.size || 0) + (numere?.size || 0)
+
+/** Formularul „Numere de serviciu” (⚙ Setări, owner): denumire 2–60, telefon mobil RO (obligatoriu la adăugare; la modificare gol =
+ *  rămâne cel salvat), nota max 300. Întoarce lista de probleme (BD-ul verifică oricum aceleași reguli). */
+export function valideazaNumarServiciu({ denumire, telefon, nota } = {}, { nou = true } = {}) {
+  const p = []
+  const d = String(denumire ?? '').replace(/\s+/g, ' ').trim()
+  if (d.length < 2 || d.length > 60) p.push('Denumirea are între 2 și 60 de caractere.')
+  const t = String(telefon ?? '').trim()
+  if (nou && !t) p.push('Telefonul e obligatoriu.')
+  else if (t && !normalizeazaTelefon(t)) p.push('Telefonul nu e un mobil românesc valid (07xx xxx xxx).')
+  if (String(nota ?? '').trim().length > 300) p.push('Nota are maximum 300 de caractere.')
+  return p
+}
+
+/** 20261220a r2 (L23): maximum de numere de serviciu ACTIVE (aceeași limită ca fn_sms_numar_serviciu_salveaza). */
+export const MAX_NUMERE_SERVICIU = 100
+
+// funcțiile 20261220a pe care le cheamă direct ecranul (cele noi; crearea lotului există și înainte, cu 4 parametri)
+const RPC_NUMERE = /\b(fn_sms_numere_serviciu_lista|fn_sms_numere_serviciu_admin|fn_sms_numar_serviciu_salveaza|fn_sms_numar_serviciu_dezactiveaza)\b/
+
+/** r2 (P1): migrarea 20261220a nu e (încă) aplicată sau cache-ul PostgREST nu o vede: funcția NOASTRĂ lipsește (PGRST202 / 42883).
+ *  Orice altă eroare (drepturi, rețea, alt obiect) rămâne eroare (L18); PGRST202 cu „Perhaps you meant” către aceeași funcție =
+ *  funcția există, argumentele nu se potrivesc (nepotrivire de contract, se arată ca eroare). Tiparul: lipsaReceptie (izoDocumenteLogica). */
+export function lipsaRpcNumereServiciu(error) {
+  if (!error || typeof error !== 'object') return false
+  const cod = String(error.code || '')
+  if (cod !== 'PGRST202' && cod !== '42883') return false
+  const mesaj = String(error.message || '')
+  if (!RPC_NUMERE.test(mesaj)) return false
+  // „Perhaps you meant … fn_sms_numer…”: o funcție 20261220a EXISTĂ (migrarea e acolo, contractul diferă) = eroare, nu „lipsă”
+  if (RPC_NUMERE.test(String(error.hint || ''))) return false
+  return /could not find the function|does not exist/i.test(mesaj)
+}
+
+/** r2 (L23 / L18): răspunsul fn_sms_numere_serviciu_lista = {total, numere}; numere.length ≠ total = trunchiere → eroare, nu listă scurtă. */
+export function listaNumereDinRaspuns(r) {
+  const total = Number(r?.total)
+  if (!r || !Array.isArray(r.numere) || !Number.isInteger(total) || total < 0) throw new Error('Lista numerelor de serviciu are o formă neașteptată (reîncarcă pagina).')
+  if (r.numere.length !== total) throw new Error(`Lista numerelor de serviciu e incompletă (${r.numere.length} din ${total}); reîncarcă pagina.`)
+  return r.numere
+}
+
+/** r3 (P2): capabilitatea „numere de serviciu” (migrarea 20261220a e aplicată?) ținută la nivelul PAGINII, nu al tabului (taburile își
+ *  demontează componentele): stare 'necunoscut' | 'exista' | 'lipsa'. O SINGURĂ sondă pe încărcarea paginii: prima cerere cu starea
+ *  'necunoscut' e sonda; o cerere pornită cât sonda e în curs o așteaptă (nu sondează a doua oară). 'lipsa' = nicio cerere nouă către
+ *  funcțiile 20261220a (ecranul merge ca înainte); 'exista' = o lipsă ulterioară e EROARE (L18), nu se mai ascunde nimic. O sondă picată
+ *  din alt motiv (rețea, drepturi) lasă starea 'necunoscut' (nu s-a aflat nimic) și se arată ca eroare. */
+export function capabilitateNumere(stareInitiala = 'necunoscut') {
+  if (!['necunoscut', 'exista', 'lipsa'].includes(stareInitiala)) throw new Error('capabilitateNumere: stare invalidă ' + stareInitiala)
+  let stare = stareInitiala, sonda = null
+  const cap = {
+    get stare() { return stare },
+    /** fn = apelul RPC (întoarce o promisiune); rezultatul: { stare: 'da' | 'lipsa' | 'eroare', valoare, err }. Nu aruncă. */
+    async cere(fn) {
+      while (stare === 'necunoscut' && sonda) await sonda
+      if (stare === 'lipsa') return { stare: 'lipsa', valoare: null, err: null }
+      const eSonda = stare === 'necunoscut'
+      const p = (async () => {
+        try { const valoare = await fn(); stare = 'exista'; return { stare: 'da', valoare, err: null } }
+        catch (e) {
+          if (eSonda && stare === 'necunoscut' && lipsaRpcNumereServiciu(e)) { stare = 'lipsa'; return { stare: 'lipsa', valoare: null, err: null } }
+          return { stare: 'eroare', valoare: null, err: e }
+        }
+      })()
+      if (eSonda) { sonda = p; p.then(() => { if (sonda === p) sonda = null }) }
+      return p
+    },
+  }
+  return cap
+}
+
+/** r2 (P1) / r3 (P2): încărcarea listei pentru „Compune”, prin capabilitatea paginii: 'da' (lista), 'lipsa' (migrarea neaplicată: ecranul
+ *  merge ca înainte, fără grup și fără eroare), 'eroare' (afișată, L18; `err` = eroarea brută). „Lipsa” se acceptă DOAR la sonda paginii:
+ *  după o listă primită (în orice tab), funcția care dispare e eroare. Nu aruncă. */
+export async function incarcaNumereServiciu(api, cap = capabilitateNumere()) {
+  const r = await cap.cere(() => api.numereServiciu())
+  if (r.stare === 'da') return { stare: 'da', numere: r.valoare, err: null }
+  if (r.stare === 'lipsa') return { stare: 'lipsa', numere: [], err: null }
+  return { stare: 'eroare', numere: null, err: r.err }
+}
+
+/** r2 (P2): după o reîncărcare a listei, selecția păstrează DOAR numerele încă active și fără opt-out (altfel o bifă dispărută / blocată
+ *  ar rămâne în selecție și BD-ul ar refuza previzualizarea fără ca omul să o poată debifa). Întoarce selecția nouă + ce s-a scos (cu
+ *  denumirea din lista de dinainte). */
+export function reconciliazaNumereAlese(alese, listaNoua, listaVeche = []) {
+  const noi = new Map((listaNoua || []).map(n => [n.id, n]))
+  const vechi = new Map((listaVeche || []).map(n => [n.id, n]))
+  const pastrate = new Set(), scoase = []
+  for (const id of alese || []) {
+    const n = noi.get(id)
+    if (n && !n.optout) { pastrate.add(id); continue }
+    scoase.push({ id, denumire: (n || vechi.get(id))?.denumire || `numărul #${id}`, motiv: n ? 'optout' : 'inactiv' })
+  }
+  return { alese: pastrate, scoase }
+}
+
+/** Mesajul pentru omul care avea bifate numerele scoase din selecție. */
+export function mesajScoaseDinSelectie(scoase) {
+  const lista = l => l.map(s => `„${s.denumire}”`).join(', ')
+  const inactive = (scoase || []).filter(s => s.motiv === 'inactiv'), opt = (scoase || []).filter(s => s.motiv === 'optout')
+  const p = []
+  if (inactive.length === 1) p.push(`Numărul de serviciu ${lista(inactive)} nu mai e activ și a fost scos din selecție.`)
+  else if (inactive.length) p.push(`Numerele de serviciu ${lista(inactive)} nu mai sunt active și au fost scoase din selecție.`)
+  if (opt.length) p.push(`${lista(opt)} ${opt.length === 1 ? 'are' : 'au'} opt-out și ${opt.length === 1 ? 'a fost scos' : 'au fost scoase'} din selecție.`)
+  return p.length ? p.join(' ') + ' Verifică destinatarii și previzualizează din nou.' : ''
+}
+
+/** Mesajul de după dezactivare: loturile deja create îl păstrează (lista e fixată la creare). */
+export function mesajDezactivare(r) {
+  const n = Number(r?.loturi_active) || 0
+  const baza = `„${r?.denumire || 'Numărul'}” e dezactivat: nu mai apare în „Compune”.`
+  return n ? `${baza} ${n === 1 ? 'Un lot activ îl mai are' : `${n} loturi active îl mai au`} în coadă — anulează-l din Istoric dacă nu mai trebuie să plece.` : baza
 }
 
 export function departamente(lista) {

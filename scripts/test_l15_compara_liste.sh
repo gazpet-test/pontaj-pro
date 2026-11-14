@@ -337,11 +337,13 @@ awk -v r='    mig { print > (p ".mig"); if (dupa) ml[++nl] = $0; dupa = ($0 == a
   '/# M_CMP_ANTET_UNIC$/ { print r; next } { print }' "$CMP" >"$TMP/mutant_cmp_antet.sh"
 ! cmp -s "$TMP/mutant_cmp_antet.sh" "$CMP" || fail 'mutantul comparatorului nu a schimbat nimic'
 ruleaza "$TMP/mutant_cmp_antet.sh" 2 'mutant comparator (rearmarea la fiecare antet): refuz fals al citirii reale' --a "$TMP/u1" --b "$TMP/u2" --recitire
-# cele 5 scripturi de amprente cu antetul standard: doua citiri (simulate) cu fiecare => --recitire 0, o inlocuire
+# scripturile de amprente cu antetul standard (TOATE, in afara celor doua vechi, numite): doua citiri (simulate) cu fiecare =>
+# --recitire 0, o inlocuire. Fara numar fix: un script nou al unei migrari noi intra singur in proba (si trebuie sa aiba antetul standard).
 STD='SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_system()) AS sistem, version() AS versiune, now() AS la;'
-N5=0
+N5=0; NT=0; VECHI=''
 for f in "$ROOT"/scripts/*_amprente.sql; do
-  grep -qxF "$STD" "$f" || continue
+  NT=$((NT + 1))
+  grep -qxF "$STD" "$f" || { VECHI="$VECHI $(basename "$f")"; continue; }
   N5=$((N5 + 1)); b="$(basename "$f" .sql)"
   for i in 1 2; do
     mm="$C1"; [ "$i" = 1 ] || mm="$C2"; rc=0
@@ -351,8 +353,9 @@ for f in "$ROOT"/scripts/*_amprente.sql; do
   done
   ruleaza "$CMP" 0 "$b: doua citiri" --a "$TMP/s5_${b}_1" --b "$TMP/s5_${b}_2" --recitire
 done
-[ "$N5" = 5 ] || fail "scripturile cu antetul standard: $N5 (asteptat 5)"
-echo "   ok: antet repetat in date => ramane, 6 (MUTANT citire => 0; MUTANT comparator => 2); cele $N5 scripturi cu antet standard => 0"
+[ "$VECHI" = ' intrebari_cercetare_amprente.sql ofertare_inchidere_garda_amprente.sql' ] || fail "scripturi fara antetul standard:$VECHI (asteptat: doar cele doua vechi)"
+[ "$N5" -ge 5 ] && [ "$N5" = $((NT - 2)) ] || fail "scripturile cu antetul standard: $N5 din $NT (asteptat: toate fara cele doua vechi, cel putin 5)"
+echo "   ok: antet repetat in date => ramane, 6 (MUTANT citire => 0; MUTANT comparator => 2); cele $N5 scripturi cu antet standard (din $NT) => 0"
 
 echo '7. --detalii-plasa: detaliul plasei sistem_initdb, in aceeasi fotografie, verificat fata de randurile RAND'
 citp() { # <script> <iesire> <fisier detaliu> [VAR=valoare ...] [-- optiuni] => codul pe stdout

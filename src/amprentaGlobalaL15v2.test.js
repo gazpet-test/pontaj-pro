@@ -254,14 +254,16 @@ describe('citirea coordonatorului — regula DEFINER si CONTEXT', () => {
     expect(CMP.split('\n').find(l => l.endsWith('# M_CMP_ANTET_UNIC'))).toContain('if (dupa) ml[++nl] = $0; dupa = (!va && $0 == ant); if (dupa) va = 1; next }')
     expect((CMP.match(/# M_CMP_ANTET_UNIC$/gm) || []).length).toBe(1)
     expect(CMP).toContain('mig = 1; nb++; dupa = 0; va = 0;')
-    // scripturile de amprente existente: cinci cu antetul standard (normalizat), doua cu to_char(statement_timestamp()) (nu)
+    // scripturile de amprente existente: TOATE au antetul standard (normalizat), in afara celor doua vechi, numite mai jos, cu
+    // to_char(statement_timestamp()) (nu). Fara numar fix: scriptul unei migrari noi intra singur in verificare (si trebuie sa fie standard).
     const STD = 'SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_system()) AS sistem, version() AS versiune, now() AS la;'
     const dir = fileURLToPath(new URL('../scripts/', import.meta.url))
     const toate = readdirSync(dir).filter(f => f.endsWith('_amprente.sql')).sort()
     const std = toate.filter(f => citeste('scripts/' + f).split('\n').includes(STD))
     const vechi = toate.filter(f => !std.includes(f))
-    expect(std.length).toBe(5)
-    // r5: in cele 5, antetul e PRIMA iesire de date (inaintea lui doar comentarii, \set, BEGIN, SET LOCAL) si apare o data
+    expect(std.length).toBeGreaterThanOrEqual(5)
+    expect(std.length).toBe(toate.length - 2)
+    // r5: in cele standard, antetul e PRIMA iesire de date (inaintea lui doar comentarii, \set, BEGIN, SET LOCAL) si apare o data
     const INAINTE = ['\\set ON_ERROR_STOP 1', 'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;', 'SET LOCAL search_path = public, pg_temp;']
     for (const f of std) {
       const ls = citeste('scripts/' + f).split('\n').map(l => l.replace(/\r$/, ''))

@@ -1,0 +1,36 @@
+# L15 v2 - manifestul diferentelor pentru 20261220a_sms_numere_serviciu (AMPRENTA_GLOBALA v2); familie TAB eticheta TAB operatie TAB amprenta
+# generat pe clona cu scripts/livrare_l15_manifest.sh (ROLLBACK, nimic comis); migrarea sha256 a290bf3c6cc2bbbe0664fbf2d540a80f61846dee8b881ef100ef32d5338194d5
+# clona: server_version_num 170006, rol postgres
+# clona: GLOBAL inainte 14dfa03488fe782dbf98b1777fd51702 (26150 randuri), dupa 059c956f07ab17222a6201fbb830b343 (26178 randuri); 32 obiecte
+coloana	coloana public.sms_numere_serviciu.activ	creat	d52478660c55605ce2aea2824df741f0
+coloana	coloana public.sms_numere_serviciu.creat_de	creat	79018454964c1ef38d38cbae39265d11
+coloana	coloana public.sms_numere_serviciu.creat_la	creat	7f110a98f3c179d7aeefca49900a0d10
+coloana	coloana public.sms_numere_serviciu.denumire	creat	dcbde2d43a53aaaef7d62c5deaac6b4a
+coloana	coloana public.sms_numere_serviciu.id	creat	26f7e5a306b06cb5f1db3d3022c20854
+coloana	coloana public.sms_numere_serviciu.modificat_de	creat	266bf78fc70b132a6ff1839d4e09b3ee
+coloana	coloana public.sms_numere_serviciu.modificat_la	creat	72d380623ab3069563e65879624c1e3f
+coloana	coloana public.sms_numere_serviciu.nota	creat	1de451de4a925a808b9c32bc72409c62
+coloana	coloana public.sms_numere_serviciu.responsabil_employee_id	creat	bde5a2d33d0ce3fd5ed07a6a6e185a4c
+coloana	coloana public.sms_numere_serviciu.telefon	creat	26ca0d89ad2bfb1cbc578cf567ba90b2
+coloana	coloana public.sms_numere_serviciu.versiune	creat	5a5ec4a981f55681e7884bd295e8289e
+constrangere	constrangere tabel public.sms_mesaje.sms_mesaje_destinatar_tip_check	schimbat	e7bd7a90ac021be9093dbbfffdc84323
+constrangere	constrangere tabel public.sms_numere_serviciu.sms_numere_serviciu_denumire_ck	creat	cf39a884e7e5e237c711b8301646cf8b
+constrangere	constrangere tabel public.sms_numere_serviciu.sms_numere_serviciu_nota_ck	creat	db89bddd8427b8330fe82cf39412d526
+constrangere	constrangere tabel public.sms_numere_serviciu.sms_numere_serviciu_pkey	creat	ad89ce33f6c1cee2adf174f3f659bcdd
+constrangere	constrangere tabel public.sms_numere_serviciu.sms_numere_serviciu_telefon_ck	creat	25f3b483e1320e87f75397f221e8f6fd
+functie	functie public.fn_sms_lot_destinatari(uuid)	schimbat	0cbbf58b045811a1ca97ff1707db6de9
+functie	functie public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)	sters	-
+functie	functie public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean,integer[])	creat	8b8aac9d1300422ed01aa55d61aef44d
+functie	functie public.fn_sms_numar_serviciu_dezactiveaza(integer,integer)	creat	d405f9e36bc5e3be34030d0b2a005d9d
+functie	functie public.fn_sms_numar_serviciu_salveaza(integer,text,text,integer,text,integer)	creat	a4990209d8ac5ae0b2028505e3df0a17
+functie	functie public.fn_sms_numere_serviciu_admin()	creat	5896a3e4cde4386524ab5962e13e432a
+functie	functie public.fn_sms_numere_serviciu_lista()	creat	4b1090be640e49a58e551351c81bd08e
+functie	functie public.fn_sms_numere_serviciu_reguli()	creat	816b39c3d8410a4005f9c56ea04567b8
+relatie	relatie public.sms_numere_serviciu	creat	e9137aeeea4036e7982c58fc4ad00017
+relatie	relatie public.sms_numere_serviciu_id_seq	creat	6c399898ab4a053e2f352a3d829cdd33
+relatie	relatie public.sms_numere_serviciu_pkey	creat	ee4cc6d56d76502de6cedaa3437c9a61
+relatie	relatie public.ux_sms_numere_serviciu_denumire	creat	083cd6edaa1783b0b48b2e5faf4cbf93
+relatie	relatie public.ux_sms_numere_serviciu_telefon	creat	67869315d346b7d0d63265138923d35e
+tip	tip public.sms_numere_serviciu	creat	86674ecd87e1c90efb18dcff67235efd
+tip	tip public.sms_numere_serviciu[]	creat	395061941a482c2e36b92a40a9f60255
+trigger	trigger public.sms_numere_serviciu.trg_sms_numere_serviciu_reguli	creat	19492e9bb5f328a13ca0ff5611d734c6
