@@ -519,6 +519,12 @@ toată livrarea; testul de fum se face cu rularea periodică încă dezactivată
 4. Dacă edge-ul `intrebari-tehnice-worker` nu e încă publicat cu acțiunea `nume` (verdictul r3: „GO cu condiții”): deploy cu
    workerul oprit, **`index.ts` și `logic.js` împreună**, `verify_jwt = false`, aceleași setări (`SUPABASE_URL`,
    `SUPABASE_SERVICE_ROLE_KEY`, secretul din Vault `INTREBARI_WORKER_SECRET`).
+   **Găsit la pornire (14.11.2026):** publicarea se face prin workflow-ul manual de deploy, iar acolo `verify_jwt = false` îl primesc
+   doar funcțiile din lista `NO_JWT`. Funcția rula deja cu `verify_jwt = false` (publicată pe 06.11.2026 în afara workflow-ului), dar
+   nu era în listă: un deploy din workflow ar fi pus `verify_jwt = true`, iar workerul — care trimite doar antetul
+   `x-intrebari-secret` — ar fi fost oprit de platformă înaintea codului. Slug-ul e acum în listă. Verificarea fără nicio cheie,
+   înainte și după deploy: o cerere POST fără antete de autentificare trebuie să primească **401 cu răspunsul funcției**
+   (`{"error":"Neautorizat"}`), nu refuzul platformei pentru antetul de autorizare lipsă.
 5. Verificarea acțiunii `nume` FĂRĂ worker: cu secretul → **200** cu `persoane`, `firme`, `cui` nevide și `localitati` (doar numărul
    lor se notează); fără antet / cu cheia anon / cu un JWT de cont obișnuit / cu un secret greșit → **401**. Altfel: stop.
 6. **Node, Python și drepturile pe server (r5: rezultatele acceptate sunt scrise; la orice neconformitate workerul NU pornește):**
@@ -534,6 +540,19 @@ toată livrarea; testul de fum se face cu rularea periodică încă dezactivată
      cont sau grup cu drept de scriere (`Everyone`, `BUILTIN\Users`, `Authenticated Users`, alt utilizator) → stop: workerul nu
      pornește până când ACL-ul e corectat (decizia coordonatorului, cu „da”-ul lui Răzvan). Instantaneul nu e imutabil absolut (vezi
      „Cum e păzit procesul motorului”), de aceea contează cine poate scrie acolo.
+     **Găsit la pornire (14.11.2026) și felul în care s-a rezolvat:** dosarul workerului moștenea din dosarul public drept de
+     modificare pentru grupurile de sesiune ale sistemului (sesiuni interactive, servicii, sarcini planificate) — moștenirea a fost
+     scoasă, au rămas doar cele trei conturi acceptate. Dosarul temporar al contului e folosit și de alte unelte de pe server (un grup
+     de izolare al lor are drept de modificare acolo), deci ACL-ul lui **nu** s-a schimbat: workerul are **dosarul lui temporar**,
+     subdosarul `tmp\` al dosarului workerului (moștenește ACL-ul acceptat), dat prin variabila `TMPDIR`. Task Scheduler nu poate
+     pune variabile de mediu, iar un interpretor de comenzi intermediar ar deschide o fereastră la fiecare rulare, așa că acțiunea
+     task-ului pornește workerul din același proces Python:
+     `pythonw -B -c "import os, sys, runpy; d = r'<dosarul workerului>'; os.environ['TMPDIR'] = d + r'\tmp'; os.environ['INTREBARI_NODE'] = r'<calea completă a lui node.exe>'; sys.path[0] = d; runpy.run_path(d + r'\intrebari_worker.py', run_name='__main__')"`,
+     cu dosarul de lucru = dosarul workerului. Probat cu un script de probă în locul workerului: `__name__`, `__file__`,
+     `sys.argv[0]`, `sys.path[0]`, importul modulelor de lângă script și codul de ieșire sunt ca la pornirea directă;
+     `tempfile.gettempdir()` = dosarul `tmp\`; dosarul creat de `tempfile.mkdtemp` (Python 3.13) are drepturi doar pentru proprietar,
+     `SYSTEM` și `Administrators`, fără moștenire. `INTREBARI_NODE` fixează binarul lui Node (scris doar de administratori), în loc
+     de căutarea în PATH. Testul de fum (pasul 9) pornește workerul cu EXACT acțiunea task-ului, citită din task.
 7. Pe serverul AI, cu workerul oprit, copierea fișierelor din `main` în folderul workerului (`C:\Users\Public\intrebari_worker\`):
    - lângă script: `intrebari_worker.py`, `cercetare.py`, **`motor.py`**, `corpus_manifest.json`, **`motor_manifest.json`**,
      `vocabular_web.json` (din `worker/intrebari-tehnice/`);
