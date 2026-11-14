@@ -6,7 +6,8 @@
 // 2. SURSE_NUME: de unde ia acțiunea „nume” numele pentru mascare (r2, review P1-1 — lista era doar angajați + beneficiari).
 //    Fiecare sursă: tabelul, tipul cheii (keyset pe id: 'int' sau 'uuid'), coloanele de PERSOANE / FIRME / CUI și de unde e
 //    verificat numele coloanelor ('migrare' = DDL din supabase/migrations; 'cod' = select-uri din src / fixture copiat din
-//    producție — de confirmat în information_schema ÎNAINTE de deploy, interogarea e în docs/intrebari/MASCARE_SI_VERDICT.md).
+//    producție — de confirmat ÎNAINTE de deploy cu interogarea din docs/intrebari/MASCARE_SI_VERDICT.md: coloana există ȘI
+//    rolul cu care citește funcția (service_role) are drept de SELECT pe ea).
 //    Doar coloane de NUME / CUI: niciodată telefon, e-mail, CNP, IBAN, adresă. Ce NU intră și de ce: în același document.
 //    r3 (decizia owner-ului: localitățile rămân vizibile): `localitati` (opțional) = coloanele cu denumiri de localități din
 //    tabelele DEJA citite — doar red_uat (numele UAT-ului și satele programate); fără tabele noi. Workerul le folosește ca să NU
@@ -39,7 +40,11 @@ export const SURSE_NUME = [
   { tabel: 'facturi_emise', cheie: 'int', persoane: ['contact_nume', 'delegat_nume'], firme: ['beneficiar_nume'], cui: ['beneficiar_cif'], verificat: 'cod' },
   { tabel: 'logistica_transporturi', cheie: 'int', persoane: ['sofer_extern_nume'], firme: [], cui: [], verificat: 'cod' },
   { tabel: 'eip_intrari', cheie: 'int', persoane: [], firme: ['furnizor_nume'], cui: ['furnizor_cui'], verificat: 'migrare' },
-  { tabel: 'izo_documente_intrare', cheie: 'int', persoane: [], firme: ['furnizor'], cui: ['furnizor_cif'], verificat: 'migrare' },
+  // 14.11.2026 — `izo_documente_intrare` (furnizor, furnizor_cif) a fost SCOS: tabelele modulului de izometrii sunt închise
+  // intenționat pentru service_role (fără niciun drept), deci funcția nu le poate citi, iar o sursă necitibilă oprește lista
+  // întreagă (acțiunea „nume” răspundea 500 la pornire). Nu se dă drept nou pentru o funcție de mascare. Denumirile și CUI-ul
+  // aflate doar acolo pierd acoperirea prin listă: tiparele le pot masca în formele recunoscute (formă juridică după nume, „RO” /
+  // „CUI” în fața codului); fără ele pot rămâne vizibile. Vezi „Ce NU intră și de ce” din documentul de mai sus.
 ]
 
 export const NUME_MAX_TABEL = 100000      // rânduri pe tabel; peste → null (fără tăiere tăcută)

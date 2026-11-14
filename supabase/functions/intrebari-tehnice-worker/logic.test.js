@@ -90,6 +90,51 @@ describe('sursele de nume (review P1-1: furnizorii și ceilalți terți lipseau)
     for (const x of t) expect(doc, x).toContain('`' + x + '`')
     expect(new Set(t).size).toBe(t.length)
   })
+  // 14.11.2026 (găsit la pornire): acțiunea „nume” răspundea 500 pentru că o sursă nu putea fi citită de rolul funcției, iar
+  // verificarea de dinaintea publicării se uita doar la existența coloanelor. De aceea: (1) tabelul documentat, interogarea de
+  // verificare și SURSE_NUME sunt ACEEAȘI listă; (2) interogarea cere și dreptul de SELECT al lui service_role, și pe `id`;
+  // (3) sursa necitibilă e scoasă și trecută la „Ce NU intră și de ce”, nu lăsată în listă.
+  it('documentul, interogarea de verificare și SURSE_NUME sunt aceeași listă; verificarea cere și dreptul de citire al rolului funcției', () => {
+    const doc = readFileSync('docs/intrebari/MASCARE_SI_VERDICT.md', 'utf8').replace(/\r/g, '')
+    const dinCod = SURSE_NUME.flatMap(s => [...new Set([...s.persoane, ...s.firme, ...s.cui, ...(s.localitati || [])])].map(c => `${s.tabel}.${c}`)).sort()
+    const q = (doc.match(/```sql\n(WITH t\(tabel, coloana\) AS \(VALUES[\s\S]*?)\n```/) || [])[1]
+    expect(q, 'interogarea de verificare din document').toBeTruthy()
+    const dinInterogare = [...q.matchAll(/\('([a-z_]+)','([a-z_0-9]+)'\)/g)].map(m => `${m[1]}.${m[2]}`).sort()
+    expect(dinInterogare).toEqual(dinCod)
+    expect(new Set(dinInterogare).size).toBe(dinInterogare.length)
+    expect(q).toContain("UNION SELECT DISTINCT tabel, 'id' FROM t")
+    expect(q).toContain("has_column_privilege('service_role', ('public.' || quote_ident(a.tabel))::regclass, a.coloana, 'SELECT')")
+    expect(q).toMatch(/WHERE CASE WHEN c\.column_name IS NULL THEN true\s+ELSE NOT has_column_privilege/)
+    // tabelul din document: câte un rând pentru fiecare sursă, cu exact coloanele ei pe cele trei coloane (și localitățile la red_uat)
+    const sectiune = doc.slice(doc.indexOf('## De unde vin numele din platformă'), doc.indexOf('**Ce NU intră și de ce:**'))
+    // un rând = „| `tabel` | persoane | firme | cui | verificat în |” (celulele goale sunt un singur spațiu)
+    const randuri = sectiune.split('\n').filter(l => /^\| `[a-z_]+` \|/.test(l)).map(l => {
+      const c = l.split('|').slice(1, -1).map(x => x.trim())
+      expect(c.length, l).toBe(5)
+      return [l, c[0].replace(/`/g, ''), c[1], c[2], c[3], c[4]]
+    })
+    expect(randuri.map(r => r[1])).toEqual(SURSE_NUME.map(s => s.tabel))
+    const lista = x => x.split(',').map(v => v.trim()).filter(Boolean)
+    for (const r of randuri) {
+      const s = SURSE_NUME.find(x => x.tabel === r[1])
+      expect(lista(r[2]), r[1]).toEqual(s.persoane)
+      expect(lista(r[3]), r[1]).toEqual(s.firme)
+      expect(lista(r[4]), r[1]).toEqual(s.cui)
+      for (const c of s.localitati || []) expect(r[5], r[1]).toContain('`' + c + '`')
+    }
+    // sursa scoasă: nu mai e în listă și e explicată, cu ce se pierde
+    expect(SURSE_NUME.map(s => s.tabel)).not.toContain('izo_documente_intrare')
+    const nuIntra = doc.slice(doc.indexOf('**Ce NU intră și de ce:**'), doc.indexOf('**Înainte de publicarea funcției edge**'))
+    expect(nuIntra).toContain('`izo_documente_intrare` (`furnizor`, `furnizor_cif`) — **scos pe 14.11.2026, la pornire**')
+    expect(nuIntra).toContain('închise intenționat pentru `service_role`')
+    expect(nuIntra).toContain('Nu se dă un drept nou pe acele tabele pentru o funcție de mascare.')
+    expect(nuIntra).toContain('3 furnizori și 1 CUI care se găsesc **doar** acolo')
+    // pierderea e spusă fără garanții: lista nu-i mai acoperă, tiparele doar în formele recunoscute
+    expect(nuIntra.replace(/\s+/g, ' ')).toContain('**Cele 3 denumiri și 1 CUI pierd acoperirea prin listă. Tiparele le pot masca în formele recunoscute; denumirile fără formă juridică și CUI-ul fără prefix pot rămâne vizibile.**')
+    expect(nuIntra).not.toMatch(/rămân acoperiți de tipare/)
+    expect(doc.replace(/\s+/g, ' ')).toContain('**Zero rânduri nu garantează citirea efectivă**')
+    expect(doc).toContain('O coloană lipsă **sau necitibilă de `service_role`** se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea.')
+  })
   it('paginare keyset până la pagina goală, și pe id întreg, și pe uuid (peste 1000 de rânduri)', async () => {
     const mult = Array.from({ length: 2500 }, (_, i) => ({ id: uuid(i + 1), nume: `NUME${i}` }))
     const { pagina, cereri } = bazaFalsa({ red_detinatori: mult })

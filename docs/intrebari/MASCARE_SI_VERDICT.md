@@ -254,9 +254,16 @@ oprește lista întreagă → workerul nu preia nimic (fail closed).
 | `facturi_emise` | contact_nume, delegat_nume | beneficiar_nume | beneficiar_cif | cod |
 | `logistica_transporturi` | sofer_extern_nume | | | cod |
 | `eip_intrari` | | furnizor_nume | furnizor_cui | migrare 20261110a |
-| `izo_documente_intrare` | | furnizor | furnizor_cif | migrare 20261103b |
 
-**Ce NU intră și de ce:** `profiles` (conturile de aplicație = angajații, deja din `employees`, plus conturi de serviciu);
+**Ce NU intră și de ce:** `izo_documente_intrare` (`furnizor`, `furnizor_cif`) — **scos pe 14.11.2026, la pornire**: tabelele
+modulului de izometrii sunt închise intenționat pentru `service_role` (rolul cu care citește funcția nu are niciun drept pe ele), deci
+acțiunea `nume` răspundea 500 și workerul n-ar fi preluat nimic. Nu se dă un drept nou pe acele tabele pentru o funcție de mascare.
+Ce se pierde, măsurat atunci (doar numărări): 3 furnizori și 1 CUI care se găsesc **doar** acolo. **Cele 3 denumiri și 1 CUI pierd
+acoperirea prin listă. Tiparele le pot masca în formele recunoscute; denumirile fără formă juridică și CUI-ul fără prefix pot rămâne
+vizibile.** (Probat pe motor cu exemple inventate: denumirea simplă și codul numeric rămân vizibile; cu `SRL`, respectiv cu `RO`, sunt
+ascunse.) Readucerea lor = decizia owner-ului (trecerea furnizorilor în registrul de furnizori sau o cale de citire acceptată de
+modul), printr-un PR.
+`profiles` (conturile de aplicație = angajații, deja din `employees`, plus conturi de serviciu);
 `firma_profil` (e Gazpet — rămâne vizibilă); `red_detinatori_contact`, `red_corespondenta`, `red_mail_*`, `sms_mesaje` (doar
 adrese / telefoane / e-mailuri, tiparele le prind); `polite_*`, `ofertare_organigrama` (numele stau în JSON, nu în coloane);
 `ofertare_participari`, `ofertare_licitatii.autoritate`, `cnsc_decizii`, `hr_autorizatii.emitent` (autorități contractante,
@@ -266,10 +273,11 @@ cu nume de furnizori (`productie_facturi`, `logistica_achizitii_vrac`, `logistic
 `locatii_*`, `ctc_*`, `ofertare_rfq_*`, `izo_avize_iesire`, `probe_oferte`) — aceiași furnizori / clienți sunt deja în registrele de
 mai sus; se pot adăuga printr-un PR mic dacă apar goluri.
 
-**Înainte de publicarea funcției edge**, coordonatorul confirmă că toate coloanele din tabel există (doar citire, fără date):
+**Înainte de publicarea funcției edge**, coordonatorul confirmă că toate coloanele din tabel există **și că rolul cu care citește
+funcția (`service_role`) are drept de SELECT pe fiecare, inclusiv pe `id`** (doar citire, fără date). 14.11.2026: verificarea de
+dinainte se uita doar la existența coloanelor, așa că un tabel fără drept de citire a trecut de ea și a oprit lista abia după publicare.
 ```sql
-SELECT t.tabel, t.coloana
-FROM (VALUES
+WITH t(tabel, coloana) AS (VALUES
   ('employees','name'),('beneficiari','nume'),('beneficiari','contact_nume'),('beneficiari','cif'),
   ('logistica_furnizori','nume'),('logistica_furnizori','persoana_contact'),('logistica_furnizori','cui'),
   ('logistica_subcontractori','nume_scurt'),('logistica_subcontractori','denumire_legala'),('logistica_subcontractori','contact_nume'),
@@ -282,17 +290,25 @@ FROM (VALUES
   ('red_uat','sate_zi2'),('red_uat','sate_zi3'),('ofertare_oferte_furnizori','furnizor'),
   ('ofertare_preturi_materiale','furnizor'),('contracte_subcontract_facturi','furnizor_text'),('executie_tura_subcontractori','firma_text'),
   ('facturi_emise','contact_nume'),('facturi_emise','delegat_nume'),('facturi_emise','beneficiar_nume'),('facturi_emise','beneficiar_cif'),
-  ('logistica_transporturi','sofer_extern_nume'),('eip_intrari','furnizor_nume'),('eip_intrari','furnizor_cui'),
-  ('izo_documente_intrare','furnizor'),('izo_documente_intrare','furnizor_cif')
-) AS t(tabel, coloana)
-LEFT JOIN information_schema.columns c ON c.table_schema = 'public' AND c.table_name = t.tabel AND c.column_name = t.coloana
-WHERE c.column_name IS NULL;   -- trebuie să întoarcă 0 rânduri
+  ('logistica_transporturi','sofer_extern_nume'),('eip_intrari','furnizor_nume'),('eip_intrari','furnizor_cui')
+), toate AS (SELECT tabel, coloana FROM t UNION SELECT DISTINCT tabel, 'id' FROM t)
+SELECT a.tabel, a.coloana,
+       CASE WHEN c.column_name IS NULL THEN 'coloana lipseste' ELSE 'service_role nu are SELECT' END AS problema
+  FROM toate a
+  LEFT JOIN information_schema.columns c ON c.table_schema = 'public' AND c.table_name = a.tabel AND c.column_name = a.coloana
+ WHERE CASE WHEN c.column_name IS NULL THEN true
+            ELSE NOT has_column_privilege('service_role', ('public.' || quote_ident(a.tabel))::regclass, a.coloana, 'SELECT') END
+ ORDER BY 1, 2;   -- trebuie să întoarcă 0 rânduri
 ```
 r3: lista are 4 coloane noi, toate din `red_uat` (`nume`, `sate_zi1`, `sate_zi2`, `sate_zi3`, din migrarea 20261126a) — interogarea
 se rulează din nou pe lista de mai sus, chiar dacă cea din r2 a întors 0.
 Plus tipul cheii `id` (întreg pentru toate, `uuid` pentru `red_*`):
 `SELECT table_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'id' AND table_name IN (<tabelele de mai sus>)`.
-O coloană lipsă se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea.
+O coloană lipsă **sau necitibilă de `service_role`** se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea. Lista din
+interogare e aceeași cu `SURSE_NUME` (un test le compară). **Zero rânduri nu garantează citirea efectivă**: interogarea verifică
+existența coloanelor și drepturile pe ele, nu și dreptul pe schemă, dependențele unei vederi, configurarea serviciului REST sau
+paginile de după prima. De aceea, după publicare, pasul 5 din „Pașii de pornire” rămâne obligatoriu și e proba reală: cu workerul
+oprit, acțiunea `nume` cu secretul trebuie să răspundă 200 cu listele cerute nevide, iar cazurile neautorizate 401.
 
 ## Garda (verificată în cod, nu prin convenție)
 - Există un singur drum spre furnizor. Fiecare mesaj trece prin motor chiar în funcția care construiește cererea.
