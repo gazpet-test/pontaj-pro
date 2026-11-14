@@ -42,8 +42,9 @@ export const SURSE_NUME = [
   { tabel: 'eip_intrari', cheie: 'int', persoane: [], firme: ['furnizor_nume'], cui: ['furnizor_cui'], verificat: 'migrare' },
   // 14.11.2026 — `izo_documente_intrare` (furnizor, furnizor_cif) a fost SCOS: tabelele modulului de izometrii sunt închise
   // intenționat pentru service_role (fără niciun drept), deci funcția nu le poate citi, iar o sursă necitibilă oprește lista
-  // întreagă (acțiunea „nume” răspundea 500 la pornire). Nu se dă drept nou pentru o funcție de mascare. Furnizorii aflați doar
-  // acolo rămân acoperiți de tipare (formă juridică după nume, „RO” / „CUI” în fața codului). Vezi „Ce NU intră și de ce”.
+  // întreagă (acțiunea „nume” răspundea 500 la pornire). Nu se dă drept nou pentru o funcție de mascare. Denumirile și CUI-ul
+  // aflate doar acolo pierd acoperirea prin listă: tiparele le pot masca în formele recunoscute (formă juridică după nume, „RO” /
+  // „CUI” în fața codului); fără ele pot rămâne vizibile. Vezi „Ce NU intră și de ce” din documentul de mai sus.
 ]
 
 export const NUME_MAX_TABEL = 100000      // rânduri pe tabel; peste → null (fără tăiere tăcută)

@@ -129,6 +129,10 @@ describe('sursele de nume (review P1-1: furnizorii și ceilalți terți lipseau)
     expect(nuIntra).toContain('închise intenționat pentru `service_role`')
     expect(nuIntra).toContain('Nu se dă un drept nou pe acele tabele pentru o funcție de mascare.')
     expect(nuIntra).toContain('3 furnizori și 1 CUI care se găsesc **doar** acolo')
+    // pierderea e spusă fără garanții: lista nu-i mai acoperă, tiparele doar în formele recunoscute
+    expect(nuIntra.replace(/\s+/g, ' ')).toContain('**Cele 3 denumiri și 1 CUI pierd acoperirea prin listă. Tiparele le pot masca în formele recunoscute; denumirile fără formă juridică și CUI-ul fără prefix pot rămâne vizibile.**')
+    expect(nuIntra).not.toMatch(/rămân acoperiți de tipare/)
+    expect(doc.replace(/\s+/g, ' ')).toContain('**Zero rânduri nu garantează citirea efectivă**')
     expect(doc).toContain('O coloană lipsă **sau necitibilă de `service_role`** se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea.')
   })
   it('paginare keyset până la pagina goală, și pe id întreg, și pe uuid (peste 1000 de rânduri)', async () => {

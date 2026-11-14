@@ -258,9 +258,11 @@ oprește lista întreagă → workerul nu preia nimic (fail closed).
 **Ce NU intră și de ce:** `izo_documente_intrare` (`furnizor`, `furnizor_cif`) — **scos pe 14.11.2026, la pornire**: tabelele
 modulului de izometrii sunt închise intenționat pentru `service_role` (rolul cu care citește funcția nu are niciun drept pe ele), deci
 acțiunea `nume` răspundea 500 și workerul n-ar fi preluat nimic. Nu se dă un drept nou pe acele tabele pentru o funcție de mascare.
-Ce se pierde, măsurat atunci (doar numărări): 3 furnizori și 1 CUI care se găsesc **doar** acolo; ei rămân acoperiți de tipare (un
-nume urmat de formă juridică, un cod cu „RO” / „CUI” în față), nu de listă. Readucerea lor = decizia owner-ului (trecerea furnizorilor
-în registrul de furnizori sau o cale de citire acceptată de modul), printr-un PR.
+Ce se pierde, măsurat atunci (doar numărări): 3 furnizori și 1 CUI care se găsesc **doar** acolo. **Cele 3 denumiri și 1 CUI pierd
+acoperirea prin listă. Tiparele le pot masca în formele recunoscute; denumirile fără formă juridică și CUI-ul fără prefix pot rămâne
+vizibile.** (Probat pe motor cu exemple inventate: denumirea simplă și codul numeric rămân vizibile; cu `SRL`, respectiv cu `RO`, sunt
+ascunse.) Readucerea lor = decizia owner-ului (trecerea furnizorilor în registrul de furnizori sau o cale de citire acceptată de
+modul), printr-un PR.
 `profiles` (conturile de aplicație = angajații, deja din `employees`, plus conturi de serviciu);
 `firma_profil` (e Gazpet — rămâne vizibilă); `red_detinatori_contact`, `red_corespondenta`, `red_mail_*`, `sms_mesaje` (doar
 adrese / telefoane / e-mailuri, tiparele le prind); `polite_*`, `ofertare_organigrama` (numele stau în JSON, nu în coloane);
@@ -303,8 +305,10 @@ se rulează din nou pe lista de mai sus, chiar dacă cea din r2 a întors 0.
 Plus tipul cheii `id` (întreg pentru toate, `uuid` pentru `red_*`):
 `SELECT table_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'id' AND table_name IN (<tabelele de mai sus>)`.
 O coloană lipsă **sau necitibilă de `service_role`** se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea. Lista din
-interogare e aceeași cu `SURSE_NUME` (un test le compară). După publicare, pasul 5 din „Pașii de pornire” e proba reală: acțiunea
-`nume` cu secretul trebuie să răspundă 200.
+interogare e aceeași cu `SURSE_NUME` (un test le compară). **Zero rânduri nu garantează citirea efectivă**: interogarea verifică
+existența coloanelor și drepturile pe ele, nu și dreptul pe schemă, dependențele unei vederi, configurarea serviciului REST sau
+paginile de după prima. De aceea, după publicare, pasul 5 din „Pașii de pornire” rămâne obligatoriu și e proba reală: cu workerul
+oprit, acțiunea `nume` cu secretul trebuie să răspundă 200 cu listele cerute nevide, iar cazurile neautorizate 401.
 
 ## Garda (verificată în cod, nu prin convenție)
 - Există un singur drum spre furnizor. Fiecare mesaj trece prin motor chiar în funcția care construiește cererea.
