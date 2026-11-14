@@ -50,8 +50,17 @@ console.log('server:', (await db.query('SHOW server_version')).rows[0].server_ve
 await db.exec(SCHELET)
 ok(await incearca(db, `BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261105a_intrebari_tehnice:' || txid_current(), true);\n${BAZA}\nCOMMIT;`) === 'ok', '20261105a aplicată pe schema falsă')
 
-// 1) migrarea necompletată refuză (fail-closed)
-const necompletat = await incearca(db, `BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261131e_intrebari_cercetare_surse:' || txid_current(), true);\n${MIG}\nCOMMIT;`)
+// 1) fail-closed în ambele forme ale blocului. Din 12.11.2026 blocul din repo e COMPLETAT cu valorile producției (testul cerea încă
+//    forma necompletată și pica de atunci — găsit pe 14.11.2026, la recitirea baseline-ului): (a) migrarea din repo, pe schema falsă
+//    de aici (altă schemă decât baseline-ul producției), refuză cu „difera de baseline-ul revizuit”; (b) cu o valoare readusă la
+//    marcajul de completat, refuză cu „nu sunt completate”, înaintea oricărei comparații.
+const dinRepo = await incearca(db, `BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261131e_intrebari_cercetare_surse:' || txid_current(), true);\n${MIG}\nCOMMIT;`)
+ok(/amprentele schemei difera de baseline-ul revizuit/.test(dinRepo), 'migrarea din repo (baseline-ul producției) refuză pe altă schemă: ' + dinRepo.slice(0, 90))
+const blocRepo = intre(MIG, '  -- >>> AMPRENTE BASELINE', '  -- <<< AMPRENTE BASELINE')
+ok(/"[a-z]+:[^"]+": "[0-9a-f]{32}"/.test(blocRepo) && !blocRepo.includes('__DE_COMPLETAT__'), 'blocul din repo e completat (md5-uri, fără marcajul de completat)')
+const MIG0 = MIG.replace(blocRepo, () => blocRepo.replace(/"[0-9a-f]{32}"/, '"__DE_COMPLETAT__"'))
+ok(MIG0 !== MIG, 'forma necompletată s-a construit (o valoare readusă la marcaj)')
+const necompletat = await incearca(db, `BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261131e_intrebari_cercetare_surse:' || txid_current(), true);\n${MIG0}\nCOMMIT;`)
 ok(/amprentele baseline nu sunt completate/.test(necompletat), 'migrarea cu blocul necompletat refuză: ' + necompletat.slice(0, 90))
 
 // 2) amprentele baseline cu interogarea din scriptul coordonatorului (același search_path)
