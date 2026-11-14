@@ -254,9 +254,16 @@ oprește lista întreagă → workerul nu preia nimic (fail closed).
 | `facturi_emise` | contact_nume, delegat_nume | beneficiar_nume | beneficiar_cif | cod |
 | `logistica_transporturi` | sofer_extern_nume | | | cod |
 | `eip_intrari` | | furnizor_nume | furnizor_cui | migrare 20261110a |
-| `izo_documente_intrare` | | furnizor | furnizor_cif | migrare 20261103b |
 
-**Ce NU intră și de ce:** `profiles` (conturile de aplicație = angajații, deja din `employees`, plus conturi de serviciu);
+**Ce NU intră și de ce:** `izo_documente_intrare` (`furnizor`, `furnizor_cif`) — **scos pe 14.11.2026, la pornire**: tabelele
+modulului de izometrii sunt închise intenționat pentru `service_role` (rolul cu care citește funcția nu are niciun drept pe ele), deci
+acțiunea `nume` răspundea 500 și workerul n-ar fi preluat nimic. Nu se dă un drept nou pe acele tabele pentru o funcție de mascare.
+Ce se pierde, măsurat atunci (doar numărări): 3 furnizori și 1 CUI care se găsesc **doar** acolo. **Cele 3 denumiri și 1 CUI pierd
+acoperirea prin listă. Tiparele le pot masca în formele recunoscute; denumirile fără formă juridică și CUI-ul fără prefix pot rămâne
+vizibile.** (Probat pe motor cu exemple inventate: denumirea simplă și codul numeric rămân vizibile; cu `SRL`, respectiv cu `RO`, sunt
+ascunse.) Readucerea lor = decizia owner-ului (trecerea furnizorilor în registrul de furnizori sau o cale de citire acceptată de
+modul), printr-un PR.
+`profiles` (conturile de aplicație = angajații, deja din `employees`, plus conturi de serviciu);
 `firma_profil` (e Gazpet — rămâne vizibilă); `red_detinatori_contact`, `red_corespondenta`, `red_mail_*`, `sms_mesaje` (doar
 adrese / telefoane / e-mailuri, tiparele le prind); `polite_*`, `ofertare_organigrama` (numele stau în JSON, nu în coloane);
 `ofertare_participari`, `ofertare_licitatii.autoritate`, `cnsc_decizii`, `hr_autorizatii.emitent` (autorități contractante,
@@ -266,10 +273,11 @@ cu nume de furnizori (`productie_facturi`, `logistica_achizitii_vrac`, `logistic
 `locatii_*`, `ctc_*`, `ofertare_rfq_*`, `izo_avize_iesire`, `probe_oferte`) — aceiași furnizori / clienți sunt deja în registrele de
 mai sus; se pot adăuga printr-un PR mic dacă apar goluri.
 
-**Înainte de publicarea funcției edge**, coordonatorul confirmă că toate coloanele din tabel există (doar citire, fără date):
+**Înainte de publicarea funcției edge**, coordonatorul confirmă că toate coloanele din tabel există **și că rolul cu care citește
+funcția (`service_role`) are drept de SELECT pe fiecare, inclusiv pe `id`** (doar citire, fără date). 14.11.2026: verificarea de
+dinainte se uita doar la existența coloanelor, așa că un tabel fără drept de citire a trecut de ea și a oprit lista abia după publicare.
 ```sql
-SELECT t.tabel, t.coloana
-FROM (VALUES
+WITH t(tabel, coloana) AS (VALUES
   ('employees','name'),('beneficiari','nume'),('beneficiari','contact_nume'),('beneficiari','cif'),
   ('logistica_furnizori','nume'),('logistica_furnizori','persoana_contact'),('logistica_furnizori','cui'),
   ('logistica_subcontractori','nume_scurt'),('logistica_subcontractori','denumire_legala'),('logistica_subcontractori','contact_nume'),
@@ -282,17 +290,25 @@ FROM (VALUES
   ('red_uat','sate_zi2'),('red_uat','sate_zi3'),('ofertare_oferte_furnizori','furnizor'),
   ('ofertare_preturi_materiale','furnizor'),('contracte_subcontract_facturi','furnizor_text'),('executie_tura_subcontractori','firma_text'),
   ('facturi_emise','contact_nume'),('facturi_emise','delegat_nume'),('facturi_emise','beneficiar_nume'),('facturi_emise','beneficiar_cif'),
-  ('logistica_transporturi','sofer_extern_nume'),('eip_intrari','furnizor_nume'),('eip_intrari','furnizor_cui'),
-  ('izo_documente_intrare','furnizor'),('izo_documente_intrare','furnizor_cif')
-) AS t(tabel, coloana)
-LEFT JOIN information_schema.columns c ON c.table_schema = 'public' AND c.table_name = t.tabel AND c.column_name = t.coloana
-WHERE c.column_name IS NULL;   -- trebuie să întoarcă 0 rânduri
+  ('logistica_transporturi','sofer_extern_nume'),('eip_intrari','furnizor_nume'),('eip_intrari','furnizor_cui')
+), toate AS (SELECT tabel, coloana FROM t UNION SELECT DISTINCT tabel, 'id' FROM t)
+SELECT a.tabel, a.coloana,
+       CASE WHEN c.column_name IS NULL THEN 'coloana lipseste' ELSE 'service_role nu are SELECT' END AS problema
+  FROM toate a
+  LEFT JOIN information_schema.columns c ON c.table_schema = 'public' AND c.table_name = a.tabel AND c.column_name = a.coloana
+ WHERE CASE WHEN c.column_name IS NULL THEN true
+            ELSE NOT has_column_privilege('service_role', ('public.' || quote_ident(a.tabel))::regclass, a.coloana, 'SELECT') END
+ ORDER BY 1, 2;   -- trebuie să întoarcă 0 rânduri
 ```
 r3: lista are 4 coloane noi, toate din `red_uat` (`nume`, `sate_zi1`, `sate_zi2`, `sate_zi3`, din migrarea 20261126a) — interogarea
 se rulează din nou pe lista de mai sus, chiar dacă cea din r2 a întors 0.
 Plus tipul cheii `id` (întreg pentru toate, `uuid` pentru `red_*`):
 `SELECT table_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'id' AND table_name IN (<tabelele de mai sus>)`.
-O coloană lipsă se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea.
+O coloană lipsă **sau necitibilă de `service_role`** se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea. Lista din
+interogare e aceeași cu `SURSE_NUME` (un test le compară). **Zero rânduri nu garantează citirea efectivă**: interogarea verifică
+existența coloanelor și drepturile pe ele, nu și dreptul pe schemă, dependențele unei vederi, configurarea serviciului REST sau
+paginile de după prima. De aceea, după publicare, pasul 5 din „Pașii de pornire” rămâne obligatoriu și e proba reală: cu workerul
+oprit, acțiunea `nume` cu secretul trebuie să răspundă 200 cu listele cerute nevide, iar cazurile neautorizate 401.
 
 ## Garda (verificată în cod, nu prin convenție)
 - Există un singur drum spre furnizor. Fiecare mesaj trece prin motor chiar în funcția care construiește cererea.
@@ -503,8 +519,17 @@ Ce NU acoperă matricea: combinațiile în afara domeniului de mai sus (alte num
 contractul, cazurile scrise de mână și mutanții. Matricea e dovada pentru combinațiile enumerate, nu o demonstrație universală.
 
 ## Pașii de pornire (pentru coordonator — după review și „da”-ul lui Răzvan)
-Nu e nevoie de migrare și nici de secrete noi. **Merge-ul NU publică funcția edge și NU pornește workerul.** Workerul stă OPRIT pe
-toată livrarea; testul de fum se face cu rularea periodică încă dezactivată. Ordinea:
+Nu e nevoie de o migrare NOUĂ și nici de secrete noi — **dar migrarea `20261131e` (răspunsurile din cercetare) trebuie să fie deja
+aplicată.** Funcția edge de pe `main` scrie răspunsul cu parametrii adăugați de ea (`p_surse`, `p_interogari`): ordinea e migrarea →
+funcția edge → workerul. **Găsit la pornire (14.11.2026):** aici scria „nu e nevoie de migrare”, iar `20261131e` nu fusese aplicată
+niciodată. Funcția edge a fost publicată înaintea ei, iar la testul de fum workerul a ascuns numele, dar n-a putut scrie nici
+răspunsul, nici eroarea (500 la scriere). De aceea pasul 0 de mai jos.
+**Merge-ul NU publică funcția edge și NU pornește workerul.** Workerul stă OPRIT pe toată livrarea; testul de fum se face cu rularea
+periodică încă dezactivată. Ordinea:
+0. **Baza de date e la versiunea cerută de funcția edge** (doar citire): `20261131e_intrebari_cercetare_surse` apare în istoricul
+   migrărilor, iar `fn_intrebari_raspunde` are 8 parametri (cu `p_surse` și `p_interogari`). Altfel: stop — întâi se aplică migrarea,
+   prin runner, cu acordul owner-ului; funcția edge NU se publică înaintea ei. Tot aici: cheia API a furnizorului e validă (o cerere
+   de listare a modelelor cu ea răspunde 200) — altfel workerul preia întrebarea și o închide cu eroare.
 1. **Workerul e oprit — dovedit, nu presupus.** Pe serverul AI, în PowerShell (se notează rezultatul fiecăreia):
    - task-ul planificat e dezactivat: `schtasks /Change /TN "Intrebari tehnice worker (Gazpet)" /DISABLE`, apoi
      `(Get-ScheduledTask -TaskName "Intrebari tehnice worker (Gazpet)").State` → `Disabled`;
@@ -519,6 +544,12 @@ toată livrarea; testul de fum se face cu rularea periodică încă dezactivată
 4. Dacă edge-ul `intrebari-tehnice-worker` nu e încă publicat cu acțiunea `nume` (verdictul r3: „GO cu condiții”): deploy cu
    workerul oprit, **`index.ts` și `logic.js` împreună**, `verify_jwt = false`, aceleași setări (`SUPABASE_URL`,
    `SUPABASE_SERVICE_ROLE_KEY`, secretul din Vault `INTREBARI_WORKER_SECRET`).
+   **Găsit la pornire (14.11.2026):** publicarea se face prin workflow-ul manual de deploy, iar acolo `verify_jwt = false` îl primesc
+   doar funcțiile din lista `NO_JWT`. Funcția rula deja cu `verify_jwt = false` (publicată pe 06.11.2026 în afara workflow-ului), dar
+   nu era în listă: un deploy din workflow ar fi pus `verify_jwt = true`, iar workerul — care trimite doar antetul
+   `x-intrebari-secret` — ar fi fost oprit de platformă înaintea codului. Slug-ul e acum în listă. Verificarea fără nicio cheie,
+   înainte și după deploy: o cerere POST fără antete de autentificare trebuie să primească **401 cu răspunsul funcției**
+   (`{"error":"Neautorizat"}`), nu refuzul platformei pentru antetul de autorizare lipsă.
 5. Verificarea acțiunii `nume` FĂRĂ worker: cu secretul → **200** cu `persoane`, `firme`, `cui` nevide și `localitati` (doar numărul
    lor se notează); fără antet / cu cheia anon / cu un JWT de cont obișnuit / cu un secret greșit → **401**. Altfel: stop.
 6. **Node, Python și drepturile pe server (r5: rezultatele acceptate sunt scrise; la orice neconformitate workerul NU pornește):**
@@ -528,12 +559,29 @@ toată livrarea; testul de fum se face cu rularea periodică încă dezactivată
      task-ul, se setează `INTREBARI_NODE` (calea completă) în acțiunea task-ului;
    - Python-ul task-ului (calea din acțiunea task-ului) `--version` → `3.12.x` sau `3.13.x` (cel cu care au trecut testele de la
      pasul 8). Altă versiune: stop, până se rulează testele cu ea;
-   - ACL-ul dosarului workerului și al subdosarului lui `motor\` (`icacls` pe fiecare) și al dosarului temporar al contului
-     task-ului (unde se face instantaneul: `icacls $env:TEMP`, rulat ca acel cont) → **acceptat**:
-     drept de scriere (`F`, `M` sau `W`) DOAR pentru contul task-ului, `NT AUTHORITY\SYSTEM` și `BUILTIN\Administrators`. Orice alt
-     cont sau grup cu drept de scriere (`Everyone`, `BUILTIN\Users`, `Authenticated Users`, alt utilizator) → stop: workerul nu
-     pornește până când ACL-ul e corectat (decizia coordonatorului, cu „da”-ul lui Răzvan). Instantaneul nu e imutabil absolut (vezi
-     „Cum e păzit procesul motorului”), de aceea contează cine poate scrie acolo.
+   - ACL-ul dosarului workerului, al subdosarului lui `motor\` și al **dosarului temporar folosit EFECTIV de worker** (acolo se face
+     instantaneul; `icacls` pe fiecare) → **acceptat**: drept de scriere (`F`, `M` sau `W`) DOAR pentru contul task-ului,
+     `NT AUTHORITY\SYSTEM` și `BUILTIN\Administrators`. Orice alt cont sau grup cu drept de scriere (`Everyone`, `BUILTIN\Users`,
+     `Authenticated Users`, alt utilizator) → stop: workerul nu pornește până când ACL-ul e corectat (decizia coordonatorului, cu
+     „da”-ul lui Răzvan). Instantaneul nu e imutabil absolut (vezi „Cum e păzit procesul motorului”), de aceea contează cine poate
+     scrie acolo.
+     **Care e dosarul temporar efectiv** (14.11.2026): cel întors de `tempfile.gettempdir()` în procesul workerului, pornit cu EXACT
+     acțiunea task-ului — nu neapărat `$env:TEMP` al contului. Dacă dosarul temporar al contului e acceptat, se poate folosi el. Pe
+     serverul AI nu e (un grup de izolare al altor unelte are drept de modificare acolo) și nu se schimbă, ca să nu strice acele
+     unelte: workerul are **dosarul lui temporar**, subdosarul `tmp\` al dosarului workerului (moștenește ACL-ul acceptat), dat prin
+     variabila `TMPDIR`. Task Scheduler nu poate pune variabile de mediu, așa că ele se pun **în același proces Python**, înaintea
+     încărcării workerului, iar pornirea e **refuzată** dacă `tempfile` n-a ales dosarul dedicat (lipsește sau nu se poate scrie în
+     el — altfel `tempfile` ar trece în tăcere la următorul dosar din lista lui, adică la cel al contului):
+     `pythonw -B -c "import os, sys, runpy, tempfile; d = r'<dosarul workerului>'; t = d + r'\tmp'; os.environ['TMPDIR'] = t; os.environ['INTREBARI_NODE'] = r'<calea completă a lui node.exe>'; sys.path[0] = d; os.path.normcase(tempfile.gettempdir()) == os.path.normcase(t) or sys.exit(3); runpy.run_path(d + r'\intrebari_worker.py', run_name='__main__')"`,
+     cu dosarul de lucru = dosarul workerului. `INTREBARI_NODE` fixează binarul lui Node (scris doar de administratori), în loc de
+     căutarea în PATH.
+     Probat cu un script de probă în locul workerului, cu aceeași acțiune: `__name__`, `__file__`, `sys.argv[0]`, `sys.path[0]`,
+     importul modulelor de lângă script și codul de ieșire sunt ca la pornirea directă; `tempfile.gettempdir()` = dosarul `tmp\`;
+     dosarul creat de `tempfile.mkdtemp` (Python 3.13) are drepturi doar pentru `OWNER RIGHTS`, `SYSTEM` și `Administrators`, fără
+     moștenire; cu dosarul dedicat lipsă, procesul iese cu codul 3 și scriptul nu rulează. Tot la pornire s-a găsit că dosarul
+     workerului moștenea din dosarul public drept de modificare pentru grupurile de sesiune ale sistemului (sesiuni interactive,
+     servicii, sarcini planificate): moștenirea a fost scoasă, au rămas doar cele trei conturi acceptate.
+     Testul de fum (pasul 9) pornește workerul cu EXACT acțiunea task-ului, citită din task.
 7. Pe serverul AI, cu workerul oprit, copierea fișierelor din `main` în folderul workerului (`C:\Users\Public\intrebari_worker\`):
    - lângă script: `intrebari_worker.py`, `cercetare.py`, **`motor.py`**, `corpus_manifest.json`, **`motor_manifest.json`**,
      `vocabular_web.json` (din `worker/intrebari-tehnice/`);
@@ -556,7 +604,10 @@ toată livrarea; testul de fum se face cu rularea periodică încă dezactivată
    genitiv, o localitate, un nume cu un caracter invizibil copiat, un nume scris cu litere mici). Se pornește workerul **o singură
    dată, de mână**; se verifică: răspunsul afișat are numele la loc și nicio etichetă; jurnalul are `nume_incarcate` (doar numere),
    apoi `mascate`, `inlocuiri`, `regula_b` — fără valori; niciun proces `motor_cli.mjs` rămas (verificarea din pasul 1). Orice
-   abatere: stop, se raportează.
+   abatere: stop, se raportează. La răspuns reușit, jurnalul are `stare: "raspuns"`; pe căile care emit `scriere`, valoarea 200
+   confirmă scrierea. `scriere: 500` sau `stare: "scriere_500"` indică eșecul scrierii — funcția edge n-a putut scrie în bază (vezi
+   pasul 0). `http: 401` cu `authentication_error` = cheia API a furnizorului nu mai e validă. O rulare de probă cu coada goală
+   (înaintea întrebării de test) verifică motorul, lista de nume și jurnalul, dar NU scrierea răspunsului și nici cheia API.
 10. Abia acum se reactivează rularea periodică: `schtasks /Change /TN "Intrebari tehnice worker (Gazpet)" /ENABLE` → `Ready`.
 11. Registrul: rândul de mai jos în `registru_automatizari` și în `public.automatizari` (fără valori de secrete).
 
