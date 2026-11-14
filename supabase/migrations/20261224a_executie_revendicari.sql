@@ -1,9 +1,16 @@
 -- Version 20261224120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 2000 (DOAR cu plafon; marcajul gazpet.livrare_migrare legat de txid;
---   amprenta globală L15 v2 a runnerului, --amprenta-globala + --diferente-globale, manifestul generat pe clonă de coordonator).
+--   amprenta globală L15 v2 a runnerului, --amprenta-globala + --diferente-globale).
+-- CE NU E ÎNCĂ PROBAT (L15, runda 2): manifestul diferențelor supabase/migrations/20261224a_executie_revendicari.l15.tsv NU e în acest PR:
+--   îl generează coordonatorul pe clonă (docs/LIVRARE_L15_V2.md §7, pașii 3–4), apoi proba cu ROLLBACK pe țintă (pasul 7). Până atunci
+--   amprenta globală a livrării e NEPROBATĂ; ce probează migrarea singură sunt postcondițiile §9 pe DEFINIȚIA EXACTĂ a obiectelor ei
+--   (expresia normalizată a fiecărei politici, amprenta md5 a corpului fiecărei funcții, funcția / evenimentul / condiția fiecărui trigger,
+--   un index pe fiecare cheie străină spre alt tabel), nu și ce se schimbă în restul bazei.
 -- 20261224a_executie_revendicari — Execuție → dosarul de revendicare (pașii 1–2 din consultarea de arhitectură, 15.11.2026). Specificația:
 --   docs/executie/REVENDICARI_SPEC.md (fluxul, matricea de acces, declanșatorii, cazurile de calcul, alegerile owner-ului presupuse).
 --
--- Ce face (DOAR obiecte noi; niciun obiect existent modificat, nicio dată, niciun drept pe alte tabele):
+-- Ce face (DOAR obiecte noi, nicio dată, niciun drept pe alte tabele; PRECIZARE: cheile străine noi spre 6 tabele existente adaugă pe
+--   acestea trigger-ele referențiale interne ale PostgreSQL, iau la aplicare SHARE ROW EXCLUSIVE pe ele și schimbă un comportament: un rând
+--   referit nu se mai poate șterge, vezi „Efect asupra altor module”):
 --   * 9 tabele: executie_revendicari (dosarul), executie_revendicare_repere (legături dosar–reper din fișa contractului, cu confirmarea pe
 --     versiune), _acte (notificare, detalieri, răspunsuri, dezacord, acord; stare separată de etapa dosarului), _comunicari (transmitere /
 --     primire pe destinatar, cu dovada), _termene (regulă, declanșator, sursă, zile, dată propusă de server, dată confirmată de om), _dovezi
@@ -24,13 +31,18 @@
 --   * „Decăzut” nu se setează automat: singura scriere a riscului 'decadere_constatata' e RPC-ul fn_executie_revendicare_risc, la nivel
 --     administrare, cu motiv (postcondiție: niciun alt corp nu conține valoarea). La depășire, termenul apare „depasit_risc_decadere”.
 -- Ordinea lock-urilor (L06), aceeași în toate RPC-urile: (1) lock consultativ pe cheia intenției -> (2) dosarul FOR UPDATE (proiectul
---   citit și dreptul verificat ÎNAINTE de lock, reverificate după) -> (3) rândul-copil FOR UPDATE (actul, apoi comunicarea; termenul;
+--   citit și dreptul verificat ÎNAINTE de lock; DUPĂ lock, într-o instrucțiune nouă = instantaneu nou, se reverifică proiectul ȘI dreptul,
+--   L01: o desemnare / permisiune retrasă cât apelul aștepta = refuz) -> (3) rândul-copil FOR UPDATE (actul, apoi comunicarea; termenul;
 --   legătura; dovada) -> (4) rândurile ALTOR module (reper din fișa contractului, document, ordin, raport + șantier) FOR SHARE NOWAIT, la
 --   final (ocupat = 55P03, nimic scris; proiectul lor comparat înainte de lock, ca un rând ocupat al altui proiect să dea același refuz)
 --   -> (5) scrierea, jurnalul (trigger) și cheia. Trigger-ele nu iau alte lock-uri decât FK-urile implicite (KEY SHARE pe părinți).
 --   Revenirea: aceleași tabele, aceeași ordine, ACCESS EXCLUSIVE NOWAIT.
--- Efect asupra altor module (de aprobat): un document / ordin / raport legat ca dovadă (sau ca exemplar semnat / dovadă a comunicării)
---   nu mai poate fi șters din modulul lui cât timp e legat (FK fără CASCADE: protecția probei).
+-- Efect asupra altor module (de aprobat; ALEGERE DE ARHIVARE, spec §5): un document / ordin / raport legat O DATĂ ca dovadă (sau ca
+--   exemplar semnat / dovadă a comunicării) nu se mai poate șterge NICIODATĂ din modulul lui (FK fără CASCADE). Blocarea e PERMANENTĂ:
+--   „scoaterea” dovezii doar o dezactivează, anularea comunicării / actului și închiderea dosarului păstrează referința, iar dezlegarea
+--   reală nu există (niciun RPC, nicio scriere directă). Varianta alternativă (decizia owner-ului): dezlegare reală de către administrare,
+--   cu motiv, DOAR înainte să fie transmis vreun act care citează dovada. Fiecare cheie străină spre alt tabel are index (postcondiție),
+--   ca verificarea ei la ștergerea sursei să nu scaneze tabelul.
 -- Ce NU face: ecran, DOCX, cron, import, AI; nu atinge executie_contract_repere, executie_proiecte, inventarul din 20261209a (tabelele noi
 --   au propriul predicat, care include restricția pe proiect — clasa „drept”; adăugarea în inventar e o migrare separată).
 -- Revenire: supabase/revenire/20261224a_executie_revendicari_ROLLBACK.sql. Probe: scripts/pglite/test_executie_revendicari_local.mjs.
@@ -54,7 +66,7 @@ BEGIN
     RAISE EXCEPTION '20261224a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 2000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 2000)',
       coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa');
   END IF;
-  -- FK-urile noi iau SHARE ROW EXCLUSIVE pe 7 tabele existente: ocupat = refuz rapid (se reia), nu coadă în spatele aplicației
+  -- FK-urile noi iau SHARE ROW EXCLUSIVE pe 6 tabele existente (proiecte, repere, documente, ordine, rapoarte, profiles): ocupat = refuz rapid (se reia), nu coadă în spatele aplicației
   PERFORM set_config('lock_timeout', '300ms', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- reaplicare = refuz
@@ -123,8 +135,10 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   SELECT nullif(lower(regexp_replace(p, '[[:space:]]+', '', 'g')), '')
 $f$;
 -- starea calculată a unui termen (L19: O SINGURĂ definiție, pentru vedere, cron și UI). „Decăzut” NU există: depășirea = risc.
--- Priorități: anulat; îndeplinit (tardiv / termen necunoscut / fără transmitere neanulată); sursa de reverificat; fără dată confirmată
--- (necunoscut / neconfirmat / neconfirmat depășit); cu dată confirmată (în termen / scadent azi / depășit, risc de decădere).
+-- Priorități: anulat; sursa de reverificat (ÎNAINTEA îndeplinirii, runda 2: o sursă invalidă face nesigură și data față de care se
+-- judecă îndeplinirea); îndeplinit (tardiv / termen necunoscut / îndeplinire nevalabilă: p_indeplinit_la NULL = actul nu mai e compatibil,
+-- transmis / primit și neanulat, vezi fn_executie_revendicare_indeplinire_la); fără dată confirmată (necunoscut / neconfirmat / neconfirmat
+-- depășit); cu dată confirmată (în termen / scadent azi / depășit, risc de decădere).
 CREATE FUNCTION public.fn_executie_revendicare_termen_stare(p_stare text, p_mod text, p_intrari_valide boolean, p_data_propusa date,
                                                             p_data_confirmata date, p_indeplinit_la date, p_azi date) RETURNS text
 LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $f$
@@ -133,13 +147,13 @@ BEGIN
     RAISE EXCEPTION 'revendicari: starea termenului cere ziua, starea si modul' USING ERRCODE = '22023';
   END IF;
   IF p_stare = 'anulat' THEN RETURN 'anulat'; END IF;
+  IF p_stare NOT IN ('deschis', 'indeplinit') THEN RAISE EXCEPTION 'revendicari: stare de termen necunoscuta' USING ERRCODE = '22023'; END IF;
+  IF p_intrari_valide IS NOT TRUE THEN RETURN 'sursa_de_reverificat'; END IF;
   IF p_stare = 'indeplinit' THEN
     IF p_indeplinit_la IS NULL THEN RETURN 'indeplinit_de_verificat'; END IF;
     IF p_data_confirmata IS NULL THEN RETURN 'indeplinit_termen_necunoscut'; END IF;
     RETURN CASE WHEN p_indeplinit_la > p_data_confirmata THEN 'indeplinit_tardiv' ELSE 'indeplinit' END;
   END IF;
-  IF p_stare IS DISTINCT FROM 'deschis' THEN RAISE EXCEPTION 'revendicari: stare de termen necunoscuta' USING ERRCODE = '22023'; END IF;
-  IF p_intrari_valide IS NOT TRUE THEN RETURN 'sursa_de_reverificat'; END IF;
   IF p_data_confirmata IS NULL THEN
     IF p_data_propusa IS NULL THEN RETURN 'necunoscut'; END IF;
     RETURN CASE WHEN p_azi > p_data_propusa THEN 'neconfirmat_depasit' ELSE 'neconfirmat' END;
@@ -203,6 +217,26 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
     ('intrare', 'ciorna', 'anulat', 'scriere', true),
     ('intrare', 'primit', 'anulat', 'administrare', true)
   ) t(sens, din, spre, nivel, cere_motiv)
+$f$;
+-- compatibilitatea obligație – act (runda 2, L19: O SINGURĂ listă, folosită de RPC-ul „îndeplinit” și de vedere prin
+-- fn_executie_revendicare_indeplinire_la; CHECK-ul coloanei tip_obligatie e generat din ea, L20). Obligațiile noastre se îndeplinesc cu
+-- actul de ieșire de ACELAȘI tip, transmis; termenele beneficiarului (răspunsuri) cu actul lui de intrare, primit. Nicio altă pereche:
+-- o notificare nu închide termenul detalierii finale.
+CREATE FUNCTION public.fn_executie_revendicare_obligatie_acte()
+RETURNS TABLE (tip_obligatie text, tip_act text, sens text)
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
+  SELECT * FROM (VALUES
+    ('notificare', 'notificare', 'iesire'),
+    ('detaliere_initiala', 'detaliere_initiala', 'iesire'),
+    ('detaliere_interimara', 'detaliere_interimara', 'iesire'),
+    ('detaliere_finala', 'detaliere_finala', 'iesire'),
+    ('dezacord', 'dezacord', 'iesire'),
+    ('raspuns_prelungire', 'raspuns_prelungire', 'intrare'),
+    ('raspuns_principiu', 'raspuns_beneficiar', 'intrare'),
+    ('raspuns_principiu', 'decizie', 'intrare'),
+    ('alt', 'alt', 'iesire'),
+    ('alt', 'alt', 'intrare')
+  ) t(tip_obligatie, tip_act, sens)
 $f$;
 
 -- ── 1. dreptul: O SINGURĂ definiție (L19), boolean despre APELANT (inexistent = fără drept = fals) ────────────────────────────────────────
@@ -277,6 +311,7 @@ CREATE TABLE public.executie_revendicare_repere (
 );
 CREATE UNIQUE INDEX executie_revendicare_repere_uq ON public.executie_revendicare_repere (dosar_id, reper_id, rol) WHERE activ;
 CREATE INDEX executie_revendicare_repere_reper_idx ON public.executie_revendicare_repere (reper_id);
+CREATE INDEX executie_revendicare_repere_proiect_idx ON public.executie_revendicare_repere (proiect_id);
 
 -- actele dosarului. Conținutul se editează DOAR în ciornă; aprobarea fixează revizia + amprenta conținutului; „transmis” / „primit” vin
 -- DOAR din comunicări. Numerele (alegerea 3, varianta A): manuale; nr_iesire unic în toată firma, nr_beneficiar unic pe proiect și sens
@@ -308,6 +343,8 @@ CREATE TABLE public.executie_revendicare_acte (
   cuantificare_confirmata_de uuid, cuantificare_confirmata_la timestamptz,
   observatii text CHECK (observatii IS NULL OR (length(observatii) <= 4000 AND observatii ~ '[^[:space:]]')),
   aprobat_de uuid, aprobat_la timestamptz, aprobat_revizie integer, aprobat_amprenta text CHECK (aprobat_amprenta ~ '^[0-9a-f]{32}$'),
+  -- runda 2: amprenta SURSELOR aprobate (legăturile „temei” active ale dosarului, cu versiunea și amprenta confirmate ale reperelor)
+  aprobat_surse_amprenta text CHECK (aprobat_surse_amprenta ~ '^[0-9a-f]{32}$'),
   fisier_semnat_doc_id bigint REFERENCES public.documente_proiect(id),
   fisier_semnat_sha256 text CHECK (fisier_semnat_sha256 ~ '^[0-9a-f]{64}$'),
   semnat_inregistrat_de uuid, semnat_la timestamptz,
@@ -323,14 +360,17 @@ CREATE TABLE public.executie_revendicare_acte (
   CONSTRAINT executie_revendicare_acte_moneda CHECK ((suma_a IS NULL AND suma_b IS NULL AND suma_c IS NULL) OR moneda IS NOT NULL),
   CONSTRAINT executie_revendicare_acte_cuantificare CHECK ((cuantificare_confirmata_la IS NULL) = (cuantificare_confirmata_de IS NULL)),
   CONSTRAINT executie_revendicare_acte_aprobare CHECK (
-    (aprobat_la IS NULL AND aprobat_de IS NULL AND aprobat_revizie IS NULL AND aprobat_amprenta IS NULL)
-    OR (aprobat_la IS NOT NULL AND aprobat_de IS NOT NULL AND aprobat_revizie IS NOT NULL AND aprobat_amprenta IS NOT NULL)),
+    (aprobat_la IS NULL AND aprobat_de IS NULL AND aprobat_revizie IS NULL AND aprobat_amprenta IS NULL AND aprobat_surse_amprenta IS NULL)
+    OR (aprobat_la IS NOT NULL AND aprobat_de IS NOT NULL AND aprobat_revizie IS NOT NULL AND aprobat_amprenta IS NOT NULL
+        AND aprobat_surse_amprenta IS NOT NULL)),
   CONSTRAINT executie_revendicare_acte_semnat CHECK (
     stare NOT IN ('semnat', 'transmis') OR sens <> 'iesire' OR (fisier_semnat_doc_id IS NOT NULL AND fisier_semnat_sha256 IS NOT NULL AND aprobat_la IS NOT NULL)),
   CONSTRAINT executie_revendicare_acte_anulat CHECK (stare <> 'anulat' OR stare_motiv IS NOT NULL),
   CONSTRAINT executie_revendicare_acte_anterior CHECK (act_anterior_id IS DISTINCT FROM id)
 );
 CREATE INDEX executie_revendicare_acte_dosar_idx ON public.executie_revendicare_acte (dosar_id, id);
+CREATE INDEX executie_revendicare_acte_proiect_idx ON public.executie_revendicare_acte (proiect_id);
+CREATE INDEX executie_revendicare_acte_semnat_doc_idx ON public.executie_revendicare_acte (fisier_semnat_doc_id);
 CREATE UNIQUE INDEX executie_revendicare_acte_nr_iesire_uq ON public.executie_revendicare_acte (public.fn_executie_revendicare_nr_canonic(nr_iesire))
   WHERE nr_iesire IS NOT NULL AND stare <> 'anulat';
 CREATE UNIQUE INDEX executie_revendicare_acte_nr_benef_uq ON public.executie_revendicare_acte (proiect_id, sens, public.fn_executie_revendicare_nr_canonic(nr_beneficiar))
@@ -360,6 +400,8 @@ CREATE TABLE public.executie_revendicare_comunicari (
   CONSTRAINT executie_revendicare_comunicari_anulat CHECK (NOT anulat OR anulat_motiv IS NOT NULL)
 );
 CREATE INDEX executie_revendicare_comunicari_act_idx ON public.executie_revendicare_comunicari (act_id, id);
+CREATE INDEX executie_revendicare_comunicari_proiect_idx ON public.executie_revendicare_comunicari (proiect_id);
+CREATE INDEX executie_revendicare_comunicari_dovada_doc_idx ON public.executie_revendicare_comunicari (dovada_doc_id);
 
 -- termenele. Regula (mod, obligație, declanșator, zile, legătura cu reperul) o confirmă administrarea; declanșatorul îl confirmă cine scrie
 -- (MP-ul confirmă faptele); data propusă o pune DOAR trigger-ul; data confirmată: la regulă = data propusă, la manual = administrare +
@@ -368,8 +410,7 @@ CREATE TABLE public.executie_revendicare_termene (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   dosar_id bigint NOT NULL REFERENCES public.executie_revendicari(id),
   proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id),
-  tip_obligatie text NOT NULL CHECK (tip_obligatie IN ('notificare', 'detaliere_initiala', 'detaliere_interimara', 'detaliere_finala',
-                                                       'raspuns_prelungire', 'raspuns_principiu', 'dezacord', 'alt')),
+  tip_obligatie text NOT NULL,   -- CHECK generat din fn_executie_revendicare_obligatie_acte() (blocul $chk$)
   mod text NOT NULL CHECK (mod IN ('regula', 'manual')),
   reper_legatura_id bigint REFERENCES public.executie_revendicare_repere(id),
   regula_reper_versiune integer,
@@ -402,6 +443,7 @@ CREATE TABLE public.executie_revendicare_termene (
   CONSTRAINT executie_revendicare_termene_manual CHECK (mod <> 'manual' OR data_confirmata IS NULL OR justificare IS NOT NULL)
 );
 CREATE INDEX executie_revendicare_termene_dosar_idx ON public.executie_revendicare_termene (dosar_id, id);
+CREATE INDEX executie_revendicare_termene_proiect_idx ON public.executie_revendicare_termene (proiect_id);
 
 -- dovezile: EXACT o țintă (document / ordin de sistare / raport zilnic), a proiectului dosarului; amprenta rândului-țintă la legare
 CREATE TABLE public.executie_revendicare_dovezi (
@@ -425,6 +467,11 @@ CREATE TABLE public.executie_revendicare_dovezi (
 CREATE UNIQUE INDEX executie_revendicare_dovezi_doc_uq ON public.executie_revendicare_dovezi (dosar_id, document_id) WHERE activ AND document_id IS NOT NULL;
 CREATE UNIQUE INDEX executie_revendicare_dovezi_ordin_uq ON public.executie_revendicare_dovezi (dosar_id, ordin_id) WHERE activ AND ordin_id IS NOT NULL;
 CREATE UNIQUE INDEX executie_revendicare_dovezi_raport_uq ON public.executie_revendicare_dovezi (dosar_id, raport_id) WHERE activ AND raport_id IS NOT NULL;
+-- runda 2 (P2): verificarea cheii străine la ștergerea sursei caută TOATE rândurile (și cele scoase), nu doar cele active: index complet
+CREATE INDEX executie_revendicare_dovezi_document_idx ON public.executie_revendicare_dovezi (document_id);
+CREATE INDEX executie_revendicare_dovezi_ordin_idx ON public.executie_revendicare_dovezi (ordin_id);
+CREATE INDEX executie_revendicare_dovezi_raport_idx ON public.executie_revendicare_dovezi (raport_id);
+CREATE INDEX executie_revendicare_dovezi_proiect_idx ON public.executie_revendicare_dovezi (proiect_id);
 
 -- jurnalul: un rând pentru fiecare scriere pe tabelele dosarului (trigger AFTER, aceeași tranzacție, orice cale). Nemodificabil.
 CREATE TABLE public.executie_revendicare_jurnal (
@@ -441,6 +488,7 @@ CREATE TABLE public.executie_revendicare_jurnal (
   la timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX executie_revendicare_jurnal_dosar_idx ON public.executie_revendicare_jurnal (dosar_id, id);
+CREATE INDEX executie_revendicare_jurnal_proiect_idx ON public.executie_revendicare_jurnal (proiect_id);
 
 -- alertele interne (pasul 4 le scrie, cu cronul; aici doar structura și cheia de deduplicare)
 CREATE TABLE public.executie_revendicare_alerte (
@@ -456,6 +504,8 @@ CREATE TABLE public.executie_revendicare_alerte (
   creat_la timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT executie_revendicare_alerte_uq UNIQUE (termen_id, termen_versiune, prag, destinatar, zi)
 );
+CREATE INDEX executie_revendicare_alerte_proiect_idx ON public.executie_revendicare_alerte (proiect_id);
+CREATE INDEX executie_revendicare_alerte_destinatar_idx ON public.executie_revendicare_alerte (destinatar);
 
 -- cheile de idempotență (L04): o cheie = o intenție; rezultatul (tabel + id) se reîntoarce la reluare. Fără niciun drept din aplicație.
 CREATE TABLE public.executie_revendicare_chei (
@@ -471,8 +521,10 @@ CREATE TABLE public.executie_revendicare_chei (
 
 -- CHECK-urile stărilor, GENERATE din listele tranzițiilor (L20: o singură sursă)
 DO $chk$
-DECLARE v_etape text; v_stari text;
+DECLARE v_etape text; v_stari text; v_oblig text;
 BEGIN
+  SELECT string_agg(DISTINCT quote_literal(o.tip_obligatie), ', ') INTO v_oblig FROM public.fn_executie_revendicare_obligatie_acte() o;
+  EXECUTE format('ALTER TABLE public.executie_revendicare_termene ADD CONSTRAINT executie_revendicare_termene_obligatie CHECK (tip_obligatie IN (%s))', v_oblig);
   SELECT string_agg(quote_literal(s), ', ' ORDER BY s) INTO v_etape
     FROM (SELECT din AS s FROM public.fn_executie_revendicare_tranzitii() UNION SELECT spre FROM public.fn_executie_revendicare_tranzitii()) x;
   SELECT string_agg(quote_literal(s), ', ' ORDER BY s) INTO v_stari
@@ -488,14 +540,30 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
   SELECT md5(jsonb_build_array(a.tip, a.sens, a.act_anterior_id, a.revizie, a.titlu, a.rezumat, a.cronologie, a.temei, a.argumentare,
                                a.nr_iesire, a.nr_beneficiar, a.data_document, a.zile_solicitate, a.suma_a, a.suma_b, a.suma_c, a.moneda)::text)
 $f$;
--- prima transmitere / primire NEANULATĂ a unui act (NULL = niciuna)
+-- prima transmitere / primire NEANULATĂ a unui act NEANULAT (NULL = niciuna; runda 2: actul anulat nu mai dă nicio dată)
 CREATE FUNCTION public.fn_executie_revendicare_act_transmis_la(p_act bigint) RETURNS date
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
-  SELECT min(c.data_transmitere) FROM public.executie_revendicare_comunicari c WHERE c.act_id = p_act AND NOT c.anulat
+  SELECT min(c.data_transmitere) FROM public.executie_revendicare_comunicari c JOIN public.executie_revendicare_acte a ON a.id = c.act_id
+   WHERE c.act_id = p_act AND NOT c.anulat AND a.stare <> 'anulat'
 $f$;
 CREATE FUNCTION public.fn_executie_revendicare_act_primit_la(p_act bigint) RETURNS date
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
-  SELECT min(c.data_primire) FROM public.executie_revendicare_comunicari c WHERE c.act_id = p_act AND NOT c.anulat
+  SELECT min(c.data_primire) FROM public.executie_revendicare_comunicari c JOIN public.executie_revendicare_acte a ON a.id = c.act_id
+   WHERE c.act_id = p_act AND NOT c.anulat AND a.stare <> 'anulat'
+$f$;
+-- îndeplinirea unei obligații de către un act (L19: O SINGURĂ definiție, în RPC-ul „îndeplinit” și în vedere): data comunicării actului
+-- dacă actul e al ACELUIAȘI dosar, compatibil cu obligația (fn_executie_revendicare_obligatie_acte), neanulat și în starea comunicată
+-- (ieșire: transmis, data primei transmiteri neanulate; intrare: primit, data primei primiri neanulate). Altfel NULL = îndeplinire
+-- nevalabilă (refuz în RPC, „indeplinit_de_verificat” în vedere).
+CREATE FUNCTION public.fn_executie_revendicare_indeplinire_la(p_tip_obligatie text, p_dosar bigint, p_act bigint) RETURNS date
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  SELECT CASE a.sens WHEN 'iesire' THEN public.fn_executie_revendicare_act_transmis_la(a.id)
+                     ELSE public.fn_executie_revendicare_act_primit_la(a.id) END
+    FROM public.executie_revendicare_acte a
+   WHERE a.id = p_act AND a.dosar_id = p_dosar
+     AND a.stare = CASE a.sens WHEN 'iesire' THEN 'transmis' ELSE 'primit' END
+     AND EXISTS (SELECT 1 FROM public.fn_executie_revendicare_obligatie_acte() o
+                  WHERE o.tip_obligatie = p_tip_obligatie AND o.tip_act = a.tip AND o.sens = a.sens)
 $f$;
 -- amprenta conținutului unui reper din fișa contractului (aceeași la confirmare și la verificare, L19)
 CREATE FUNCTION public.fn_executie_revendicare_reper_amprenta(p_reper bigint) RETURNS text
@@ -510,6 +578,30 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
                   WHERE l.id = p_legatura AND l.activ AND l.confirmat_la IS NOT NULL AND r.activ AND r.proiect_id = l.proiect_id
                     AND r.versiune = l.reper_versiune_confirmata
                     AND public.fn_executie_revendicare_reper_amprenta(r.id) = l.reper_amprenta_confirmata)
+$f$;
+-- runda 2 (P1): SURSELE contractuale ale actelor dosarului = legăturile „temei” ACTIVE. Amprenta lor (setul concret: legătura, reperul,
+-- versiunea și amprenta confirmate) se fixează la aprobare; orice schimbare a setului sau a confirmării unui reper o schimbă.
+CREATE FUNCTION public.fn_executie_revendicare_surse_amprenta(p_dosar bigint) RETURNS text
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  SELECT md5(coalesce(jsonb_agg(jsonb_build_array(l.id, l.reper_id, l.reper_versiune_confirmata, l.reper_amprenta_confirmata) ORDER BY l.id),
+                      '[]'::jsonb)::text)
+    FROM public.executie_revendicare_repere l WHERE l.dosar_id = p_dosar AND l.rol = 'temei' AND l.activ
+$f$;
+-- sursele sunt utilizabile: cel puțin un temei activ și TOATE temeiurile active confirmate și încă valabile (nu „măcar unul”)
+CREATE FUNCTION public.fn_executie_revendicare_surse_valide(p_dosar bigint) RETURNS boolean
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  SELECT EXISTS (SELECT 1 FROM public.executie_revendicare_repere l WHERE l.dosar_id = p_dosar AND l.rol = 'temei' AND l.activ)
+     AND NOT EXISTS (SELECT 1 FROM public.executie_revendicare_repere l WHERE l.dosar_id = p_dosar AND l.rol = 'temei' AND l.activ
+                      AND NOT public.fn_executie_revendicare_legatura_valida(l.id))
+$f$;
+-- aprobarea actului e încă valabilă (L19: aceeași funcție la semnare și în vedere): aceeași revizie, același conținut, ACELEAȘI surse
+-- (amprenta setului de la aprobare) și sursele încă valabile
+CREATE FUNCTION public.fn_executie_revendicare_act_aprobare_valida(a public.executie_revendicare_acte) RETURNS boolean
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  SELECT a.aprobat_la IS NOT NULL AND a.aprobat_revizie IS NOT DISTINCT FROM a.revizie
+     AND a.aprobat_amprenta IS NOT DISTINCT FROM public.fn_executie_revendicare_act_amprenta(a)
+     AND a.aprobat_surse_amprenta IS NOT DISTINCT FROM public.fn_executie_revendicare_surse_amprenta(a.dosar_id)
+     AND public.fn_executie_revendicare_surse_valide(a.dosar_id)
 $f$;
 -- data de ACUM a sursei declanșatorului unui termen (NULL = necunoscută)
 CREATE FUNCTION public.fn_executie_revendicare_declansator_data(p_termen bigint) RETURNS date
@@ -527,9 +619,9 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
     FROM public.executie_revendicare_termene t JOIN public.executie_revendicari d ON d.id = t.dosar_id
    WHERE t.id = p_termen
 $f$;
--- ce s-a confirmat e încă adevărat: regula (legătura valabilă, aceeași versiune) și declanșatorul (aceeași dată ca sursa). Un termen
--- manual nu are regulă de reverificat. Termen invizibil / inexistent = NULL.
-CREATE FUNCTION public.fn_executie_revendicare_termen_intrari_valide(p_termen bigint) RETURNS boolean
+-- LOCAL: ce s-a confirmat PE ACEST termen e încă adevărat: regula (legătura valabilă, aceeași versiune) și declanșatorul (aceeași dată ca
+-- sursa). Un termen manual nu are regulă de reverificat. Termen invizibil / inexistent = NULL. Lanțul: fn_executie_revendicare_termen_lant_valid.
+CREATE FUNCTION public.fn_executie_revendicare_termen_intrari_locale(p_termen bigint) RETURNS boolean
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
   SELECT t.mod = 'manual'
          OR ((t.regula_confirmata_la IS NULL
@@ -539,6 +631,39 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
              AND (t.declansator_confirmat_la IS NULL
                   OR public.fn_executie_revendicare_declansator_data(t.id) IS NOT DISTINCT FROM t.declansator_data))
     FROM public.executie_revendicare_termene t WHERE t.id = p_termen
+$f$;
+-- runda 2 (P1): LANȚUL dependențelor. Un termen „regulă” cu declanșatorul expirare_termen ia data confirmată a termenului precedent: acesta
+-- (și precedentul lui, recursiv) trebuie să existe în ACELAȘI dosar, să nu fie anulat și să aibă intrările locale valabile. Lanțul se
+-- urmează doar prin termenele „regulă” (data unui termen manual e asumată de administrare, nu derivată). Un ciclu (refuzat la scriere de
+-- trigger, pe orice cale; aici apărare în adâncime: calea e reținută, deci parcurgerea se termină) = invalid. Inexistent = NULL.
+CREATE FUNCTION public.fn_executie_revendicare_termen_lant_valid(p_termen bigint) RETURNS boolean
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  WITH RECURSIVE lant(id, adancime, cale, ciclu) AS (
+    SELECT t.id, 0, ARRAY[t.id], false FROM public.executie_revendicare_termene t WHERE t.id = p_termen
+    UNION ALL
+    SELECT u.id, l.adancime + 1, l.cale || u.id, u.id = ANY (l.cale)
+      FROM lant l
+      JOIN public.executie_revendicare_termene t ON t.id = l.id
+      JOIN public.executie_revendicare_termene u ON u.id = t.declansator_termen_id AND u.dosar_id = t.dosar_id
+     WHERE NOT l.ciclu AND t.mod = 'regula' AND t.declansator_tip = 'expirare_termen'
+  )
+  SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM lant) THEN NULL ELSE
+           NOT EXISTS (SELECT 1 FROM lant WHERE ciclu)
+           -- fiecare verigă „regulă” cu expirare_termen are precedentul în același dosar
+           AND NOT EXISTS (SELECT 1 FROM lant l JOIN public.executie_revendicare_termene t ON t.id = l.id
+                            WHERE t.mod = 'regula' AND t.declansator_tip = 'expirare_termen'
+                              AND NOT EXISTS (SELECT 1 FROM public.executie_revendicare_termene u
+                                               WHERE u.id = t.declansator_termen_id AND u.dosar_id = t.dosar_id))
+           -- fiecare precedent: neanulat, cu intrările locale valabile
+           AND NOT EXISTS (SELECT 1 FROM lant l JOIN public.executie_revendicare_termene u ON u.id = l.id
+                            WHERE l.adancime > 0
+                              AND (u.stare = 'anulat' OR public.fn_executie_revendicare_termen_intrari_locale(u.id) IS NOT TRUE))
+         END
+$f$;
+-- ce s-a confirmat e încă adevărat, pe termen ȘI pe tot lanțul lui (folosită de vedere, de confirmarea datei și de viitorul cron, L19)
+CREATE FUNCTION public.fn_executie_revendicare_termen_intrari_valide(p_termen bigint) RETURNS boolean
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  SELECT public.fn_executie_revendicare_termen_intrari_locale(p_termen) AND public.fn_executie_revendicare_termen_lant_valid(p_termen)
 $f$;
 
 -- ── 4. auxiliare interne ale RPC-urilor (fără EXECUTE pentru clienți) ──────────────────────────────────────────────────────────────────────
@@ -625,7 +750,9 @@ RETURNS void LANGUAGE sql VOLATILE SET search_path = public, pg_temp AS $f$
   VALUES (p_cheie, p_operatie, p_amprenta, p_dosar, p_tabel, p_id, auth.uid())
 $f$;
 -- (2) dosarul: proiectul citit și dreptul verificat ÎNAINTE de lock (un dosar străin ocupat nu ține apelantul în așteptare), apoi
--- FOR UPDATE și reverificare (proiectul e imuabil). Inexistent = fără drept = același refuz (42501).
+-- FOR UPDATE și reverificare: proiectul (imuabil) ȘI dreptul (runda 2, L01): instrucțiunea de după lock are instantaneu nou (READ
+-- COMMITTED, funcție VOLATILE), deci vede o desemnare / permisiune retrasă cât apelul aștepta lock-ul. Inexistent = fără drept = același
+-- refuz (42501).
 CREATE FUNCTION public.fn_executie_revendicare_dosar_blocheaza(p_dosar bigint, p_nivel text) RETURNS public.executie_revendicari
 LANGUAGE plpgsql VOLATILE SET search_path = public, pg_temp AS $f$
 DECLARE v_proiect bigint; r public.executie_revendicari;
@@ -636,6 +763,9 @@ BEGIN
   END IF;
   SELECT * INTO r FROM public.executie_revendicari d WHERE d.id = p_dosar FOR UPDATE;
   IF NOT FOUND OR r.proiect_id IS DISTINCT FROM v_proiect THEN
+    RAISE EXCEPTION 'revendicari: dosarul nu exista sau nu ai drept' USING ERRCODE = '42501';
+  END IF;
+  IF NOT public.fn_executie_revendicare_drept(r.proiect_id, p_nivel) THEN
     RAISE EXCEPTION 'revendicari: dosarul nu exista sau nu ai drept' USING ERRCODE = '42501';
   END IF;
   RETURN r;
@@ -703,6 +833,27 @@ END $f$;
 CREATE FUNCTION public.fn_executie_revendicare_termen_calc() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
 BEGIN
+  -- runda 2 (P1), pe orice cale: termenul / actul declanșator sunt ai ACELUIAȘI dosar, iar lanțul termenelor precedente nu se închide
+  -- în cerc (urmat din precedent, cu calea reținută: parcurgerea se termină și pe un ciclu deja existent). Fără lock-uri noi: rândurile
+  -- dosarului sunt deja serializate de lock-ul dosarului din RPC.
+  IF NEW.declansator_act_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.executie_revendicare_acte a
+                                                         WHERE a.id = NEW.declansator_act_id AND a.dosar_id = NEW.dosar_id) THEN
+    RAISE EXCEPTION 'revendicari: actul declansator nu e in dosar' USING ERRCODE = '23514';
+  END IF;
+  IF NEW.declansator_termen_id IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM public.executie_revendicare_termene u WHERE u.id = NEW.declansator_termen_id AND u.dosar_id = NEW.dosar_id) THEN
+      RAISE EXCEPTION 'revendicari: termenul precedent nu e in dosar' USING ERRCODE = '23514';
+    END IF;
+    IF EXISTS (WITH RECURSIVE lant(id, cale) AS (
+                 SELECT u.id, ARRAY[u.id] FROM public.executie_revendicare_termene u WHERE u.id = NEW.declansator_termen_id
+                 UNION ALL
+                 SELECT u.declansator_termen_id, l.cale || u.declansator_termen_id
+                   FROM lant l JOIN public.executie_revendicare_termene u ON u.id = l.id
+                  WHERE u.declansator_termen_id IS NOT NULL AND l.id <> NEW.id AND NOT (u.declansator_termen_id = ANY (l.cale)))
+               SELECT 1 FROM lant WHERE lant.id = NEW.id) THEN
+      RAISE EXCEPTION 'revendicari: termenele precedente formeaza un ciclu' USING ERRCODE = '23514';
+    END IF;
+  END IF;
   IF TG_OP = 'INSERT' THEN
     -- un termen nou nu vine confirmat (confirmările au RPC-ul lor) și nu vine îndeplinit / anulat
     NEW.regula_confirmata_la := NULL; NEW.regula_confirmata_de := NULL; NEW.regula_reper_versiune := NULL;
@@ -893,6 +1044,7 @@ BEGIN
   v_amp := md5(jsonb_build_array('risc', p_id, p_versiune, p_risc, p_motiv)::text);
   v_rez := public.fn_executie_revendicare_cheie_citeste(p_cheie, 'risc', v_amp);
   IF v_rez IS NOT NULL THEN RETURN v_rez; END IF;
+  IF v_d.etapa IN ('inchis', 'retras') THEN RAISE EXCEPTION 'revendicari: dosarul e inchis' USING ERRCODE = '22023'; END IF;
   IF v_d.versiune IS DISTINCT FROM p_versiune THEN RETURN jsonb_build_object('ok', false, 'motiv', 'conflict', 'rand', to_jsonb(v_d)); END IF;
   IF p_risc = v_d.risc_juridic THEN RAISE EXCEPTION 'revendicari: riscul e deja %', p_risc USING ERRCODE = '22023'; END IF;
   IF (p_risc = 'decadere_constatata' OR v_d.risc_juridic = 'decadere_constatata') THEN
@@ -1049,8 +1201,10 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'duplicat', false, 'rand', to_jsonb(v_a));
 END $f$;
 
--- 6.6 starea actului, pe fn_executie_revendicare_act_tranzitii() (fără tranzițiile 'comunicare'). Aprobarea (owner) cere temeiul
--- confirmat și valabil; semnarea cere exemplarul semnat (document al proiectului, cu SHA-256) și aprobarea încă valabilă.
+-- 6.6 starea actului, pe fn_executie_revendicare_act_tranzitii() (fără tranzițiile 'comunicare'). Aprobarea (owner) cere TOATE temeiurile
+-- confirmate și valabile și fixează amprenta lor; semnarea cere exemplarul semnat (document al proiectului, cu SHA-256) și aprobarea încă
+-- valabilă (fn_executie_revendicare_act_aprobare_valida: conținut + surse). Înregistrarea transmiterii (6.7) NU cere aprobarea valabilă:
+-- e un fapt deja petrecut; vederea arată aprobare_valida = false.
 CREATE FUNCTION public.fn_executie_revendicare_act_stare(p_act bigint, p_versiune integer, p_stare text, p_date jsonb, p_cheie uuid)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE v_uid uuid := auth.uid(); v_d public.executie_revendicari; v_a public.executie_revendicare_acte; v_t record; v_amp text; v_rez jsonb;
@@ -1077,22 +1231,27 @@ BEGIN
   v_motiv := public.fn_executie_revendicare_txt(coalesce(p_date, '{}'::jsonb), 'motiv');
   IF v_t.cere_motiv AND v_motiv IS NULL THEN RAISE EXCEPTION 'revendicari: tranzitia cere motiv' USING ERRCODE = '22023'; END IF;
   IF p_stare IN ('aprobat', 'semnat') THEN
-    -- alegerea 5 (varianta A): doar sursele confirmate alimentează un document; reperele „temei” se țin FOR SHARE NOWAIT (alt modul, la final)
+    -- alegerea 5 (varianta A): doar sursele confirmate alimentează un document; reperele „temei” se țin FOR SHARE NOWAIT (alt modul, la final).
+    -- Legăturile „temei” se schimbă doar sub lock-ul dosarului (ținut aici), deci setul citit mai jos e cel aprobat / semnat.
     PERFORM 1 FROM public.executie_contract_repere r
      WHERE r.id IN (SELECT l.reper_id FROM public.executie_revendicare_repere l WHERE l.dosar_id = v_d.id AND l.rol = 'temei' AND l.activ)
      ORDER BY r.id FOR SHARE NOWAIT;                                                                  -- (4)
-    IF NOT EXISTS (SELECT 1 FROM public.executie_revendicare_repere l
-                    WHERE l.dosar_id = v_d.id AND l.rol = 'temei' AND l.activ AND public.fn_executie_revendicare_legatura_valida(l.id)) THEN
-      RAISE EXCEPTION 'revendicari: dosarul nu are un temei confirmat si valabil din fisa contractului' USING ERRCODE = '22023';
+    -- runda 2 (P1): TOATE temeiurile active confirmate și valabile, nu „măcar unul”
+    IF public.fn_executie_revendicare_surse_valide(v_d.id) IS NOT TRUE THEN
+      RAISE EXCEPTION 'revendicari: temeiurile dosarului nu sunt toate confirmate si valabile in fisa contractului' USING ERRCODE = '22023';
     END IF;
   END IF;
   IF p_stare = 'aprobat' THEN
+    -- aprobarea fixează revizia, conținutul ȘI setul concret de surse (legături + versiunile / amprentele reperelor confirmate)
     UPDATE public.executie_revendicare_acte SET stare = 'aprobat', aprobat_de = v_uid, aprobat_la = now(), aprobat_revizie = v_a.revizie,
-           aprobat_amprenta = public.fn_executie_revendicare_act_amprenta(v_a), stare_motiv = NULL
+           aprobat_amprenta = public.fn_executie_revendicare_act_amprenta(v_a),
+           aprobat_surse_amprenta = public.fn_executie_revendicare_surse_amprenta(v_d.id), stare_motiv = NULL
      WHERE id = v_a.id RETURNING * INTO v_a;
   ELSIF p_stare = 'semnat' THEN
-    IF v_a.aprobat_revizie IS DISTINCT FROM v_a.revizie OR v_a.aprobat_amprenta IS DISTINCT FROM public.fn_executie_revendicare_act_amprenta(v_a) THEN
-      RAISE EXCEPTION 'revendicari: aprobarea nu mai corespunde continutului actului' USING ERRCODE = '22023';
+    -- aceeași definiție ca vederea (L19): conținut, revizie, surse neschimbate și valabile; o sursă schimbată (chiar reconfirmată) cere
+    -- reaprobarea: aprobat -> ciornă (revizia crește) -> de aprobat -> aprobat
+    IF public.fn_executie_revendicare_act_aprobare_valida(v_a) IS NOT TRUE THEN
+      RAISE EXCEPTION 'revendicari: aprobarea nu mai corespunde continutului sau surselor actului' USING ERRCODE = '22023';
     END IF;
     v_doc := (p_date->>'fisier_semnat_doc_id')::bigint;
     IF v_doc IS NULL THEN RAISE EXCEPTION 'revendicari: semnarea cere exemplarul semnat' USING ERRCODE = '22023'; END IF;
@@ -1106,7 +1265,7 @@ BEGIN
   ELSIF p_stare = 'ciorna' THEN
     -- aprobarea nu se transferă pe o versiune nouă: ieșirea din „aprobat” crește revizia
     UPDATE public.executie_revendicare_acte SET stare = 'ciorna', aprobat_de = NULL, aprobat_la = NULL, aprobat_revizie = NULL, aprobat_amprenta = NULL,
-           revizie = CASE WHEN v_a.stare = 'aprobat' THEN v_a.revizie + 1 ELSE v_a.revizie END
+           aprobat_surse_amprenta = NULL, revizie = CASE WHEN v_a.stare = 'aprobat' THEN v_a.revizie + 1 ELSE v_a.revizie END
      WHERE id = v_a.id RETURNING * INTO v_a;
   ELSE
     UPDATE public.executie_revendicare_acte SET stare = p_stare, stare_motiv = v_motiv WHERE id = v_a.id RETURNING * INTO v_a;
@@ -1258,8 +1417,9 @@ BEGIN
 END $f$;
 
 -- 6.9 confirmările termenului: 'regula' (administrare; legătura cu reperul confirmată și valabilă, zile cunoscute), 'declansator'
--- (scriere; data = sursa ei de acum), 'data' (regulă: scriere, DOAR data propusă; manual: administrare + justificare), 'indeplinit'
--- (scriere; act de ieșire transmis al dosarului), 'anulat' / 'redeschide' (administrare + motiv).
+-- (scriere; data = sursa ei de acum și lanțul precedentelor valabil), 'data' (regulă: scriere, DOAR data propusă, intrări + lanț
+-- valabile; manual: administrare + justificare), 'indeplinit' (scriere; fn_executie_revendicare_indeplinire_la: actul compatibil al
+-- dosarului, transmis / primit, neanulat), 'anulat' / 'redeschide' (administrare + motiv).
 CREATE FUNCTION public.fn_executie_revendicare_termen_confirma(p_termen bigint, p_versiune integer, p_ce text, p_date jsonb, p_cheie uuid)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE v_uid uuid := auth.uid(); v_d public.executie_revendicari; v_t public.executie_revendicare_termene; v_amp text; v_rez jsonb;
@@ -1316,6 +1476,10 @@ BEGIN
       IF v_sursa IS DISTINCT FROM v_t.declansator_data THEN
         RAISE EXCEPTION 'revendicari: data declansatorului difera de sursa ei (%)', coalesce(v_sursa::text, 'necunoscuta') USING ERRCODE = '22023';
       END IF;
+      -- runda 2 (P1): data unui termen precedent e sursă doar dacă tot lanțul lui e valabil (nu doar „data păstrată”)
+      IF public.fn_executie_revendicare_termen_lant_valid(v_t.id) IS NOT TRUE THEN
+        RAISE EXCEPTION 'revendicari: termenul precedent e anulat sau sursa lui trebuie reverificata' USING ERRCODE = '22023';
+      END IF;
       UPDATE public.executie_revendicare_termene SET declansator_confirmat_la = now() WHERE id = v_t.id RETURNING * INTO v_t;
     ELSIF p_ce = 'data' THEN
       v_data := (p_date->>'data')::date; v_just := public.fn_executie_revendicare_txt(coalesce(p_date, '{}'::jsonb), 'justificare');
@@ -1339,10 +1503,10 @@ BEGIN
         UPDATE public.executie_revendicare_termene SET data_confirmata = v_data, justificare = v_just WHERE id = v_t.id RETURNING * INTO v_t;
       END IF;
     ELSE   -- indeplinit
+      -- runda 2 (P1): predicatul comun cu vederea (L19): actul dosarului, compatibil cu obligația, neanulat, transmis / primit
       v_act := (p_date->>'act_id')::bigint;
-      IF v_act IS NULL OR NOT EXISTS (SELECT 1 FROM public.executie_revendicare_acte a
-                                       WHERE a.id = v_act AND a.dosar_id = v_d.id AND a.sens = 'iesire' AND a.stare = 'transmis') THEN
-        RAISE EXCEPTION 'revendicari: termenul se indeplineste cu un act de iesire transmis al dosarului' USING ERRCODE = '22023';
+      IF v_act IS NULL OR public.fn_executie_revendicare_indeplinire_la(v_t.tip_obligatie, v_d.id, v_act) IS NULL THEN
+        RAISE EXCEPTION 'revendicari: termenul se indeplineste doar cu actul compatibil al dosarului, transmis / primit si neanulat' USING ERRCODE = '22023';
       END IF;
       UPDATE public.executie_revendicare_termene SET stare = 'indeplinit', indeplinit_act_id = v_act, stare_motiv = NULL WHERE id = v_t.id RETURNING * INTO v_t;
     END IF;
@@ -1406,10 +1570,10 @@ SELECT t.*, x.azi, x.intrari_valide, x.indeplinit_la,
   FROM public.executie_revendicare_termene t
  CROSS JOIN LATERAL (SELECT public.fn_executie_revendicare_azi() AS azi,
                             public.fn_executie_revendicare_termen_intrari_valide(t.id) AS intrari_valide,
-                            public.fn_executie_revendicare_act_transmis_la(t.indeplinit_act_id) AS indeplinit_la) x;
+                            public.fn_executie_revendicare_indeplinire_la(t.tip_obligatie, t.dosar_id, t.indeplinit_act_id) AS indeplinit_la) x;
 CREATE VIEW public.v_executie_revendicare_acte WITH (security_invoker = on) AS
 SELECT a.*, public.fn_executie_revendicare_act_transmis_la(a.id) AS transmis_la, public.fn_executie_revendicare_act_primit_la(a.id) AS primit_la,
-       (a.aprobat_la IS NOT NULL AND a.aprobat_revizie = a.revizie AND a.aprobat_amprenta = public.fn_executie_revendicare_act_amprenta(a)) AS aprobare_valida
+       public.fn_executie_revendicare_act_aprobare_valida(a) AS aprobare_valida
   FROM public.executie_revendicare_acte a;
 
 -- ── 8. RLS + privilegii (L07): doar citire pentru aplicație, prin predicatul unic; scrierea DOAR prin RPC-uri ──────────────────────────────
@@ -1465,29 +1629,24 @@ GRANT EXECUTE ON FUNCTION public.fn_executie_revendicare_zi(timestamptz), public
   public.fn_executie_revendicare_act_amprenta(public.executie_revendicare_acte),
   public.fn_executie_revendicare_act_transmis_la(bigint), public.fn_executie_revendicare_act_primit_la(bigint),
   public.fn_executie_revendicare_reper_amprenta(bigint), public.fn_executie_revendicare_legatura_valida(bigint),
-  public.fn_executie_revendicare_declansator_data(bigint), public.fn_executie_revendicare_termen_intrari_valide(bigint) TO authenticated;
+  public.fn_executie_revendicare_declansator_data(bigint), public.fn_executie_revendicare_termen_intrari_valide(bigint),
+  public.fn_executie_revendicare_obligatie_acte(), public.fn_executie_revendicare_indeplinire_la(text, bigint, bigint),
+  public.fn_executie_revendicare_surse_amprenta(bigint), public.fn_executie_revendicare_surse_valide(bigint),
+  public.fn_executie_revendicare_act_aprobare_valida(public.executie_revendicare_acte),
+  public.fn_executie_revendicare_termen_intrari_locale(bigint), public.fn_executie_revendicare_termen_lant_valid(bigint) TO authenticated;
 
--- ── 9. postcondiții ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+-- ── 9. postcondiții (runda 2, L15: pe DEFINIȚIA EXACTĂ a fiecărui obiect, nu pe potrivire de text sau pe numărătoare) ────────────────────
+-- Politici: expresia normalizată din catalog (search_path-ul fixat în preflight) comparată exact; o politică „predicat OR true” nu trece.
+-- Funcții: semnătura, rezultatul, limbajul, volatilitatea, clasa (DEFINER / client / internă) și amprenta md5 a corpului (fără CR), pe
+--   lista EXACTĂ (FULL JOIN: nimic în plus, nimic lipsă). Amprentele = corpurile din acest fișier; proba PGlite le recalculează din text.
+-- Trigger-e: tabel, nume, funcție, eveniment / moment / nivel (tgtype), fără condiție, fără argumente, fără coloane, neamânabile, active.
+-- Chei străine spre ALT tabel: fiecare cu index complet (nu parțial) care începe cu coloana ei.
 DO $post$
 DECLARE
   v_tab constant text[] := ARRAY['executie_revendicari', 'executie_revendicare_repere', 'executie_revendicare_acte', 'executie_revendicare_comunicari',
                                  'executie_revendicare_termene', 'executie_revendicare_dovezi', 'executie_revendicare_jurnal', 'executie_revendicare_alerte',
                                  'executie_revendicare_chei'];
-  v_definer constant text[] := ARRAY['fn_executie_revendicare_drept', 'fn_executie_revendicare_salveaza_dosar', 'fn_executie_revendicare_etapa',
-                                     'fn_executie_revendicare_risc', 'fn_executie_revendicare_reper', 'fn_executie_revendicare_act',
-                                     'fn_executie_revendicare_act_stare', 'fn_executie_revendicare_comunicare', 'fn_executie_revendicare_termen',
-                                     'fn_executie_revendicare_termen_confirma', 'fn_executie_revendicare_dovada'];
-  v_invoker_client constant text[] := ARRAY['fn_executie_revendicare_zi', 'fn_executie_revendicare_azi', 'fn_executie_revendicare_nr_canonic',
-                                            'fn_executie_revendicare_termen_stare', 'fn_executie_revendicare_tranzitii', 'fn_executie_revendicare_act_tranzitii',
-                                            'fn_executie_revendicare_act_amprenta', 'fn_executie_revendicare_act_transmis_la',
-                                            'fn_executie_revendicare_act_primit_la', 'fn_executie_revendicare_reper_amprenta',
-                                            'fn_executie_revendicare_legatura_valida', 'fn_executie_revendicare_declansator_data',
-                                            'fn_executie_revendicare_termen_intrari_valide'];
-  v_interne constant text[] := ARRAY['fn_executie_revendicare_valideaza', 'fn_executie_revendicare_txt', 'fn_executie_revendicare_cheie_blocheaza',
-                                     'fn_executie_revendicare_rand', 'fn_executie_revendicare_cheie_citeste', 'fn_executie_revendicare_cheie_scrie',
-                                     'fn_executie_revendicare_dosar_blocheaza', 'fn_executie_revendicare_tinta', 'fn_executie_revendicare_prov',
-                                     'fn_executie_revendicare_termen_calc', 'fn_executie_revendicare_jurnal_scrie', 'fn_executie_revendicare_jurnal_imuabil'];
-  t text; v_rel oid;
+  t text; v_rel oid; v_lista text;
 BEGIN
   -- exact 9 tabele + 2 vederi noi, fără alte obiecte cu prefixul
   IF (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -1508,17 +1667,28 @@ BEGIN
        OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = v_rel AND attnum > 0 AND attacl IS NOT NULL) THEN
       RAISE EXCEPTION '20261224a post: privilegii pe %', t;
     END IF;
-    IF t <> 'executie_revendicare_chei' AND EXISTS (SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) r
-                                                     WHERE has_sequence_privilege(r, pg_get_serial_sequence('public.' || t, 'id'), 'USAGE,SELECT,UPDATE')) THEN
+    IF t <> 'executie_revendicare_chei' AND EXISTS (SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) r, unnest(ARRAY['USAGE', 'SELECT', 'UPDATE']) p
+                                                     WHERE has_sequence_privilege(r, pg_get_serial_sequence('public.' || t, 'id'), p)) THEN
       RAISE EXCEPTION '20261224a post: secventa lui %', t;
     END IF;
-    -- politicile: exact una, SELECT pentru authenticated, permisivă, cu predicatul unic; cheile: niciuna
-    IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = t) <> (CASE WHEN t = 'executie_revendicare_chei' THEN 0 ELSE 1 END)
-       OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = t
-                   AND (cmd <> 'SELECT' OR roles <> '{authenticated}' OR permissive <> 'PERMISSIVE' OR qual NOT LIKE '%fn_executie_revendicare_drept(proiect_id, ''citire''::text)%')) THEN
-      RAISE EXCEPTION '20261224a post: politicile lui %', t;
-    END IF;
   END LOOP;
+  -- politicile: EXACT setul așteptat; cheile: niciuna (lipsesc din listă, deci orice politică pe ele = în plus)
+  SELECT string_agg(coalesce(a.tabel, p.tablename) || '.' || coalesce(a.nume, p.policyname), ', ' ORDER BY coalesce(a.tabel, p.tablename)) INTO v_lista
+    FROM (VALUES
+      ('executie_revendicari', 'executie_revendicari_citire', 'fn_executie_revendicare_drept(proiect_id, ''citire''::text)'),
+      ('executie_revendicare_repere', 'executie_revendicare_repere_citire', 'fn_executie_revendicare_drept(proiect_id, ''citire''::text)'),
+      ('executie_revendicare_acte', 'executie_revendicare_acte_citire', 'fn_executie_revendicare_drept(proiect_id, ''citire''::text)'),
+      ('executie_revendicare_comunicari', 'executie_revendicare_comunicari_citire', 'fn_executie_revendicare_drept(proiect_id, ''citire''::text)'),
+      ('executie_revendicare_termene', 'executie_revendicare_termene_citire', 'fn_executie_revendicare_drept(proiect_id, ''citire''::text)'),
+      ('executie_revendicare_dovezi', 'executie_revendicare_dovezi_citire', 'fn_executie_revendicare_drept(proiect_id, ''citire''::text)'),
+      ('executie_revendicare_jurnal', 'executie_revendicare_jurnal_citire', 'fn_executie_revendicare_drept(proiect_id, ''citire''::text)'),
+      ('executie_revendicare_alerte', 'executie_revendicare_alerte_citire',
+       '(fn_executie_revendicare_drept(proiect_id, ''citire''::text) AND ((destinatar = auth.uid()) OR fn_executie_revendicare_drept(proiect_id, ''administrare''::text)))')
+    ) a(tabel, nume, qual)
+    FULL JOIN (SELECT * FROM pg_policies WHERE schemaname = 'public' AND tablename ~ '^executie_revendicar') p ON p.tablename = a.tabel AND p.policyname = a.nume
+   WHERE a.tabel IS NULL OR p.tablename IS NULL OR p.cmd IS DISTINCT FROM 'SELECT' OR p.roles IS DISTINCT FROM '{authenticated}'::name[]
+      OR p.permissive IS DISTINCT FROM 'PERMISSIVE' OR p.qual IS DISTINCT FROM a.qual OR p.with_check IS NOT NULL;
+  IF v_lista IS NOT NULL THEN RAISE EXCEPTION '20261224a post: politicile (definitia exacta): %', v_lista; END IF;
   IF EXISTS (SELECT 1 FROM unnest(ARRAY['public.v_executie_revendicare_termene', 'public.v_executie_revendicare_acte']) v
               WHERE NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = v::regclass AND c.reloptions @> ARRAY['security_invoker=on'])
                  OR has_table_privilege('anon', v::regclass, 'SELECT')
@@ -1526,34 +1696,114 @@ BEGIN
                              WHERE has_table_privilege(r, v::regclass, p))) THEN
     RAISE EXCEPTION '20261224a post: vederile (security_invoker / privilegii)';
   END IF;
-  -- funcțiile: exact listele de mai sus; search_path fix; DEFINER doar cele 11; EXECUTE doar unde trebuie; nimic pentru anon / service_role
-  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_revendicare\_%')
-       <> cardinality(v_definer) + cardinality(v_invoker_client) + cardinality(v_interne)
-     OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                 WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_revendicare\_%'
-                   AND (NOT (p.proname = ANY (v_definer || v_invoker_client || v_interne))
-                        OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
-                        OR p.prosecdef IS DISTINCT FROM (p.proname = ANY (v_definer))
-                        OR has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('service_role', p.oid, 'EXECUTE')
-                        OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM (p.proname = ANY (v_definer || v_invoker_client))
-                        OR p.proowner IS DISTINCT FROM (SELECT oid FROM pg_roles WHERE rolname = current_user))) THEN
-    RAISE EXCEPTION '20261224a post: functii (lista / definer / search_path / EXECUTE)';
-  END IF;
   -- „decăzut” nu se scrie automat: valoarea apare DOAR în RPC-ul riscului (și în CHECK-ul coloanei)
   IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = 'public' AND p.prosrc LIKE '%decadere\_constatata%' AND p.proname <> 'fn_executie_revendicare_risc') THEN
     RAISE EXCEPTION '20261224a post: alta functie scrie decaderea';
   END IF;
-  -- trigger-ele: proveniența + jurnalul pe cele 6 tabele de lucru, calculul pe termene, imuabilitatea jurnalului; nimic altceva
-  IF (SELECT count(*) FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname = 'public' AND c.relname ~ '^executie_revendicar' AND NOT g.tgisinternal AND g.tgenabled = 'O') <> 15
-     OR EXISTS (SELECT 1 FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-                 WHERE n.nspname = 'public' AND c.relname ~ '^executie_revendicar' AND NOT g.tgisinternal AND g.tgenabled <> 'O') THEN
-    RAISE EXCEPTION '20261224a post: trigger-e';
-  END IF;
-  -- CHECK-urile stărilor = listele tranzițiilor (L20)
+  -- funcțiile: lista EXACTĂ, cu definiția (clasa: definer = SECURITY DEFINER + EXECUTE authenticated; client = INVOKER + EXECUTE
+  -- authenticated; intern = INVOKER, fără EXECUTE pentru clienți); search_path fix; proprietarul = cel care aplică; nimic pentru anon /
+  -- service_role
+  SELECT string_agg(coalesce(a.semnatura, p.sem), ', ' ORDER BY coalesce(a.semnatura, p.sem)) INTO v_lista
+    FROM (VALUES
+      ('fn_executie_revendicare_zi(timestamp with time zone)', 'date', 'sql', 's', 'client', 'fabee26f16ccb0b2d9cbda3cc8b600c4'),
+      ('fn_executie_revendicare_azi()', 'date', 'sql', 's', 'client', '1460a20a194179c79d6230166519c441'),
+      ('fn_executie_revendicare_nr_canonic(text)', 'text', 'sql', 'i', 'client', '366c4d9b48d8a8c993c90f47c961bd6a'),
+      ('fn_executie_revendicare_termen_stare(text,text,boolean,date,date,date,date)', 'text', 'plpgsql', 'i', 'client', '33b6da18dc61655ef1a231d8110269c0'),
+      ('fn_executie_revendicare_tranzitii()', 'TABLE(din text, spre text, nivel text, cere_tip text, cere_sens text, cere_motiv boolean)', 'sql', 'i', 'client', '883e05c3ca72dd2bc9bdb6fe4f13780c'),
+      ('fn_executie_revendicare_act_tranzitii()', 'TABLE(sens text, din text, spre text, nivel text, cere_motiv boolean)', 'sql', 'i', 'client', '73851e76f18ac7806992f678f7d1f461'),
+      ('fn_executie_revendicare_obligatie_acte()', 'TABLE(tip_obligatie text, tip_act text, sens text)', 'sql', 'i', 'client', 'db5019980da93ab4147825941ebcaee5'),
+      ('fn_executie_revendicare_drept(bigint,text)', 'boolean', 'sql', 's', 'definer', 'cad86a78d103866d6996b243abe8f4fb'),
+      ('fn_executie_revendicare_act_amprenta(executie_revendicare_acte)', 'text', 'sql', 's', 'client', 'f2ae02bac1fa20dc25503e3bb294bb64'),
+      ('fn_executie_revendicare_act_transmis_la(bigint)', 'date', 'sql', 's', 'client', 'd14a645deb56e1f7b007546cfc0b7294'),
+      ('fn_executie_revendicare_act_primit_la(bigint)', 'date', 'sql', 's', 'client', '993bdba27d2993d57f02ec4a94cbf708'),
+      ('fn_executie_revendicare_indeplinire_la(text,bigint,bigint)', 'date', 'sql', 's', 'client', '7455751a07e108fea5ccc13bd87162d2'),
+      ('fn_executie_revendicare_reper_amprenta(bigint)', 'text', 'sql', 's', 'client', 'ffa268ef15479da60b4d5bcb46b37ca0'),
+      ('fn_executie_revendicare_legatura_valida(bigint)', 'boolean', 'sql', 's', 'client', '7549aef9283210b225a7bb9a0f260937'),
+      ('fn_executie_revendicare_surse_amprenta(bigint)', 'text', 'sql', 's', 'client', 'de060c21f1810c7d068839f55f427c8e'),
+      ('fn_executie_revendicare_surse_valide(bigint)', 'boolean', 'sql', 's', 'client', '3d28dc082ba843eb8a743df38c7948f9'),
+      ('fn_executie_revendicare_act_aprobare_valida(executie_revendicare_acte)', 'boolean', 'sql', 's', 'client', 'fce796efea33637f00e709c62a386ae7'),
+      ('fn_executie_revendicare_declansator_data(bigint)', 'date', 'sql', 's', 'client', '457945b0a7b3474cb2006c9cd1361eb0'),
+      ('fn_executie_revendicare_termen_intrari_locale(bigint)', 'boolean', 'sql', 's', 'client', '7ffad7c2b95bfefb4b29e8c86f5cec7f'),
+      ('fn_executie_revendicare_termen_lant_valid(bigint)', 'boolean', 'sql', 's', 'client', 'f71091bc629e03e9bd9a6de4a43193d2'),
+      ('fn_executie_revendicare_termen_intrari_valide(bigint)', 'boolean', 'sql', 's', 'client', '627489516892c1facefb6eebffaab96b'),
+      ('fn_executie_revendicare_valideaza(jsonb,jsonb)', 'void', 'plpgsql', 's', 'intern', '1e3be5c18cbd20a5f708e0dddd3ad40a'),
+      ('fn_executie_revendicare_txt(jsonb,text)', 'text', 'sql', 'i', 'intern', 'b091c3c84fc7f10e97237da95b6eead5'),
+      ('fn_executie_revendicare_cheie_blocheaza(uuid)', 'void', 'sql', 'v', 'intern', '3ba36428893ebd0cbdbb02311978adca'),
+      ('fn_executie_revendicare_rand(text,bigint)', 'jsonb', 'sql', 's', 'intern', '96f2b51c9335eeb8a919ca2519a342ac'),
+      ('fn_executie_revendicare_cheie_citeste(uuid,text,text)', 'jsonb', 'plpgsql', 's', 'intern', '11f57deb3b5bc88cb73cfd5ae3a41ad5'),
+      ('fn_executie_revendicare_cheie_scrie(uuid,text,text,bigint,text,bigint)', 'void', 'sql', 'v', 'intern', '5bae70caa26b1f80d616385747f91fdd'),
+      ('fn_executie_revendicare_dosar_blocheaza(bigint,text)', 'executie_revendicari', 'plpgsql', 'v', 'intern', '246c4feb9b37e8a6485c0183cfbf01fe'),
+      ('fn_executie_revendicare_tinta(text,bigint,bigint)', 'jsonb', 'plpgsql', 'v', 'intern', '28df543d00b191cfd2b9844356b9facc'),
+      ('fn_executie_revendicare_prov()', 'trigger', 'plpgsql', 'v', 'intern', '56be2ba108821abede0f7bb15c2b8502'),
+      ('fn_executie_revendicare_termen_calc()', 'trigger', 'plpgsql', 'v', 'intern', 'fa70cb3af7f2f8b2dc68ec496f90e429'),
+      ('fn_executie_revendicare_jurnal_scrie()', 'trigger', 'plpgsql', 'v', 'intern', '9f0491fc3a1675796ce1a95e01d5c0e5'),
+      ('fn_executie_revendicare_jurnal_imuabil()', 'trigger', 'plpgsql', 'v', 'intern', '69bf91f3de76b1992a35130a3fe631a2'),
+      ('fn_executie_revendicare_salveaza_dosar(bigint,bigint,integer,jsonb,uuid)', 'jsonb', 'plpgsql', 'v', 'definer', 'c9c5c39339d1447404b744dd42193b2e'),
+      ('fn_executie_revendicare_etapa(bigint,integer,text,text,uuid)', 'jsonb', 'plpgsql', 'v', 'definer', '9beb15876cd09e2547a73df547fa772a'),
+      ('fn_executie_revendicare_risc(bigint,integer,text,text,uuid)', 'jsonb', 'plpgsql', 'v', 'definer', 'ebe3995c3f1f383d7d6db826acc0b9e1'),
+      ('fn_executie_revendicare_reper(bigint,text,bigint,integer,jsonb,uuid)', 'jsonb', 'plpgsql', 'v', 'definer', 'fab8c10c02cfa0357244be4f9f6e45f9'),
+      ('fn_executie_revendicare_act(bigint,bigint,integer,jsonb,uuid)', 'jsonb', 'plpgsql', 'v', 'definer', '4612b1c84dec099dcc3241738bea09fe'),
+      ('fn_executie_revendicare_act_stare(bigint,integer,text,jsonb,uuid)', 'jsonb', 'plpgsql', 'v', 'definer', '70281889352c40e96fcd8ffbb1cefdce'),
+      ('fn_executie_revendicare_comunicare(bigint,bigint,integer,jsonb,uuid)', 'jsonb', 'plpgsql', 'v', 'definer', '323634276ef6cf00c3f893cbe10081a8'),
+      ('fn_executie_revendicare_termen(bigint,bigint,integer,jsonb,uuid)', 'jsonb', 'plpgsql', 'v', 'definer', 'a7432d2bb3240a06b6fbbf3dd0514d56'),
+      ('fn_executie_revendicare_termen_confirma(bigint,integer,text,jsonb,uuid)', 'jsonb', 'plpgsql', 'v', 'definer', '63511c2dc5c944c07dabf92b72bd27b8'),
+      ('fn_executie_revendicare_dovada(bigint,bigint,integer,jsonb,uuid)', 'jsonb', 'plpgsql', 'v', 'definer', 'e847d569e1a972b3a137fccb9c8b58f6')
+    ) a(semnatura, rezultat, limbaj, vol, clasa, corp_md5)
+    FULL JOIN (SELECT p.oid, p.oid::regprocedure::text AS sem, pg_get_function_result(p.oid) AS rez, l.lanname, p.provolatile::text AS vol,
+                      p.prosecdef, p.proconfig, p.proowner, md5(replace(p.prosrc, chr(13), '')) AS corp_md5
+                 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace JOIN pg_language l ON l.oid = p.prolang
+                WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_revendicare\_%') p ON p.sem = a.semnatura
+   WHERE a.semnatura IS NULL OR p.sem IS NULL OR p.rez IS DISTINCT FROM a.rezultat OR p.lanname IS DISTINCT FROM a.limbaj
+      OR p.vol IS DISTINCT FROM a.vol OR p.corp_md5 IS DISTINCT FROM a.corp_md5
+      OR p.prosecdef IS DISTINCT FROM (a.clasa = 'definer') OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
+      OR p.proowner IS DISTINCT FROM (SELECT oid FROM pg_roles WHERE rolname = current_user)
+      OR has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('service_role', p.oid, 'EXECUTE')
+      OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM (a.clasa IN ('definer', 'client'));
+  IF v_lista IS NOT NULL THEN RAISE EXCEPTION '20261224a post: functii (definitia exacta / drepturi): %', v_lista; END IF;
+  -- trigger-ele: EXACT setul (pe tabelele noi ȘI oriunde e folosită o funcție a migrării). tgtype: 1 rând, 2 BEFORE, 4 INSERT, 8 DELETE,
+  -- 16 UPDATE, 32 TRUNCATE -> 23 = BEFORE INSERT OR UPDATE pe rând; 29 = AFTER INSERT OR UPDATE OR DELETE pe rând; 27 = BEFORE UPDATE OR
+  -- DELETE pe rând; 34 = BEFORE TRUNCATE pe instrucțiune
+  SELECT string_agg(coalesce(a.tabel || '.' || a.nume, x.relname || '.' || x.tgname), ', ' ORDER BY coalesce(a.tabel, x.relname)) INTO v_lista
+    FROM (VALUES
+      ('executie_revendicari', 'trg_a_executie_revendicare_prov', 'fn_executie_revendicare_prov()', 23),
+      ('executie_revendicari', 'trg_z_executie_revendicare_jurnal', 'fn_executie_revendicare_jurnal_scrie()', 29),
+      ('executie_revendicare_repere', 'trg_a_executie_revendicare_prov', 'fn_executie_revendicare_prov()', 23),
+      ('executie_revendicare_repere', 'trg_z_executie_revendicare_jurnal', 'fn_executie_revendicare_jurnal_scrie()', 29),
+      ('executie_revendicare_acte', 'trg_a_executie_revendicare_prov', 'fn_executie_revendicare_prov()', 23),
+      ('executie_revendicare_acte', 'trg_z_executie_revendicare_jurnal', 'fn_executie_revendicare_jurnal_scrie()', 29),
+      ('executie_revendicare_comunicari', 'trg_a_executie_revendicare_prov', 'fn_executie_revendicare_prov()', 23),
+      ('executie_revendicare_comunicari', 'trg_z_executie_revendicare_jurnal', 'fn_executie_revendicare_jurnal_scrie()', 29),
+      ('executie_revendicare_termene', 'trg_a_executie_revendicare_prov', 'fn_executie_revendicare_prov()', 23),
+      ('executie_revendicare_termene', 'trg_b_executie_revendicare_termen_calc', 'fn_executie_revendicare_termen_calc()', 23),
+      ('executie_revendicare_termene', 'trg_z_executie_revendicare_jurnal', 'fn_executie_revendicare_jurnal_scrie()', 29),
+      ('executie_revendicare_dovezi', 'trg_a_executie_revendicare_prov', 'fn_executie_revendicare_prov()', 23),
+      ('executie_revendicare_dovezi', 'trg_z_executie_revendicare_jurnal', 'fn_executie_revendicare_jurnal_scrie()', 29),
+      ('executie_revendicare_jurnal', 'trg_executie_revendicare_jurnal_imuabil', 'fn_executie_revendicare_jurnal_imuabil()', 27),
+      ('executie_revendicare_jurnal', 'trg_executie_revendicare_jurnal_fara_truncate', 'fn_executie_revendicare_jurnal_imuabil()', 34)
+    ) a(tabel, nume, functie, tip)
+    FULL JOIN (SELECT c.relname, g.tgname, g.tgfoid, g.tgtype, g.tgenabled, g.tgqual, g.tgnargs, g.tgdeferrable, g.tginitdeferred, g.tgattr, g.tgconstraint
+                 FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE NOT g.tgisinternal
+                  AND ((n.nspname = 'public' AND c.relname ~ '^executie_revendicar')
+                       OR g.tgfoid IN (SELECT p.oid FROM pg_proc p WHERE p.proname LIKE 'fn\_executie\_revendicare\_%'))) x
+      ON x.relname = a.tabel AND x.tgname = a.nume
+   WHERE a.tabel IS NULL OR x.relname IS NULL OR x.tgfoid::regprocedure::text IS DISTINCT FROM a.functie OR x.tgtype IS DISTINCT FROM a.tip::int2
+      OR x.tgenabled IS DISTINCT FROM 'O' OR x.tgqual IS NOT NULL OR x.tgnargs <> 0 OR x.tgdeferrable OR x.tginitdeferred
+      OR cardinality(x.tgattr::int2[]) <> 0 OR x.tgconstraint <> 0;
+  IF v_lista IS NOT NULL THEN RAISE EXCEPTION '20261224a post: trigger-e (definitia exacta): %', v_lista; END IF;
+  -- cheile străine spre ALT tabel: fiecare cu index complet care începe cu coloana ei (verificarea la ștergerea sursei nu scanează)
+  SELECT string_agg(k.conrelid::regclass::text || '.' || a.attname, ', ' ORDER BY 1) INTO v_lista
+    FROM pg_constraint k JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = k.conkey[1]
+   WHERE k.contype = 'f' AND k.conrelid IN (SELECT ('public.' || x)::regclass::oid FROM unnest(v_tab) x)
+     AND k.confrelid NOT IN (SELECT ('public.' || x)::regclass::oid FROM unnest(v_tab) x)
+     AND (cardinality(k.conkey) <> 1
+          OR NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = k.conrelid AND i.indkey[0] = k.conkey[1] AND i.indpred IS NULL AND i.indisvalid));
+  IF v_lista IS NOT NULL THEN RAISE EXCEPTION '20261224a post: chei straine fara index: %', v_lista; END IF;
+  -- CHECK-urile stărilor = listele (L20)
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'executie_revendicari_etapa' AND conrelid = 'public.executie_revendicari'::regclass)
-     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'executie_revendicare_acte_stare' AND conrelid = 'public.executie_revendicare_acte'::regclass) THEN
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'executie_revendicare_acte_stare' AND conrelid = 'public.executie_revendicare_acte'::regclass)
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'executie_revendicare_termene_obligatie' AND conrelid = 'public.executie_revendicare_termene'::regclass) THEN
     RAISE EXCEPTION '20261224a post: CHECK-urile starilor';
   END IF;
   -- nicio dată

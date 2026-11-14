@@ -1,6 +1,6 @@
 # Execuție — dosarul de revendicare: specificație (pașii 1 și 2)
 
-Stare: **PROPUNERE**. Schema e în `supabase/migrations/20261224a_executie_revendicari.sql`, **NEAPLICATĂ**. Activarea în producție (schemă +
+Stare: **PROPUNERE** (runda 2 după review, 15.11.2026). Schema e în `supabase/migrations/20261224a_executie_revendicari.sql`, **NEAPLICATĂ**. Activarea în producție (schemă +
 drepturi) cere aprobarea owner-ului. Nimic din acest pas nu trimite documente, nu generează fișiere și nu atinge date.
 
 Ce acoperă: dosarul de revendicare pornit de managerul de proiect (MP) când apare o problemă pe șantier, actele succesive (notificare,
@@ -59,7 +59,8 @@ coloanei `etapa` e generat din ea (L20). O tranziție cu „act cerut” trece d
 | asteapta_raspuns / raspuns_primit / dezacord / acord | inchis | administrare | – | da |
 | detaliere_* / asteapta_raspuns / raspuns_primit / dezacord | retras | administrare | – | da |
 
-`inchis` și `retras` sunt finale (un dosar închis nu se mai editează; redeschiderea ar fi o tranziție nouă, de decis).
+`inchis` și `retras` sunt finale: un dosar închis nu se mai modifică prin NICIUN RPC (dosar, risc — inclusiv decăderea —, legături,
+acte, stări, comunicări, termene, confirmări, dovezi); redeschiderea ar fi o tranziție nouă, de decis.
 Detalierile interimare repetate nu schimbă etapa: fiecare e un act nou, cu termenul ei.
 
 **Riscul juridic** (`risc_juridic`): `neevaluat` → `scazut` / `mediu` / `ridicat` (scriere, motiv opțional) și `decadere_constatata`
@@ -74,9 +75,9 @@ dezacord (ieșire); raspuns_beneficiar, raspuns_prelungire, decizie (intrare); a
 |---|---|---|---|---|
 | ieșire | ciorna | de_aprobat | scriere | – |
 | ieșire | de_aprobat | ciorna | scriere | – |
-| ieșire | de_aprobat | aprobat | **aprobare** | dosarul are un reper „temei” confirmat și valabil |
+| ieșire | de_aprobat | aprobat | **aprobare** | dosarul are cel puțin un reper „temei” activ și **toate** temeiurile active sunt confirmate și valabile; aprobarea fixează revizia, conținutul și **setul de surse** (vezi mai jos) |
 | ieșire | aprobat | ciorna | scriere | aprobarea cade, revizia crește |
-| ieșire | aprobat | semnat | scriere | exemplarul semnat (document din proiect, cu SHA-256); aprobarea încă valabilă pe revizia și conținutul aprobate |
+| ieșire | aprobat | semnat | scriere | exemplarul semnat (document din proiect, cu SHA-256); aprobarea încă valabilă: aceeași revizie, același conținut, aceleași surse, încă valabile |
 | ieșire | semnat → transmis, transmis → transmis | – | scriere | DOAR prin înregistrarea unei comunicări (destinatar, canal, data transmiterii ≤ azi) |
 | intrare | ciorna → primit, primit → primit | – | scriere | DOAR prin comunicare (data primirii ≤ azi) |
 | oricare | ciorna / de_aprobat → anulat | – | scriere | motiv |
@@ -85,6 +86,15 @@ dezacord (ieșire); raspuns_beneficiar, raspuns_prelungire, decizie (intrare); a
 Conținutul (titlu, rezumat, cronologie, temei, argumentare, zile solicitate, sume a/b/c, monedă, numere) se editează DOAR în ciornă.
 Ieșirea din „aprobat” spre ciornă crește revizia și șterge aprobarea: aprobarea nu se transferă pe altă versiune. Cuantificarea
 (zile, sume) are confirmarea ei, care se pierde la orice salvare fără bifă.
+
+**Sursele aprobate (runda 2).** Sursele contractuale ale actelor unui dosar = legăturile „temei” active ale dosarului. La aprobare se
+fixează amprenta setului concret (`aprobat_surse_amprenta`: fiecare legătură, reperul ei, versiunea și amprenta conținutului reperului
+confirmate de administrare). Aprobarea rămâne valabilă (`fn_executie_revendicare_act_aprobare_valida`, aceeași funcție la semnare și
+în vedere, coloana `aprobare_valida`) doar cât revizia, conținutul și amprenta setului sunt cele aprobate și toate temeiurile sunt încă
+valabile. Orice schimbare a surselor — reper modificat în fișă (chiar dacă administrarea îl reconfirmă), temei adăugat, scos sau
+reconfirmat pe altă versiune — cere **reaprobarea**: ciornă (revizia crește) → de aprobat → aprobat. Doar legăturile „temei” intră în
+set (nu și cele „termen”, „procedură” etc., care alimentează termenele, nu textul actului). Înregistrarea transmiterii unui act deja
+semnat NU e blocată de o sursă schimbată (transmiterea e un fapt petrecut); vederea arată `aprobare_valida = false`.
 
 **Comunicările** (`executie_revendicare_comunicari`) țin separat, pe fiecare destinatar: data transmiterii, data primirii (dacă se
 cunoaște), numărul de înregistrare, dovada. Se completează doar câmpurile goale; o corectură = anulare (administrare, motiv) + comunicare
@@ -125,10 +135,10 @@ Un termen (`executie_revendicare_termene`) are:
 | obligația | `tip_obligatie` (notificare, detaliere_*, raspuns_prelungire, raspuns_principiu, dezacord, alt) | scriere |
 | modul | `mod` = `regula` (calculat) / `manual` (dată introdusă, etichetată manual) | scriere |
 | regula | `reper_legatura_id` (clauza din fișa contractului), `nr_zile` (1–3650 sau NULL = necunoscut), `declansator_tip` | scriere; **confirmarea regulii: administrare**, doar dacă legătura cu reperul e confirmată și valabilă |
-| declanșatorul | `declansator_tip`, `declansator_data`, `declansator_act_id` / `declansator_termen_id` | scriere; confirmarea: scriere, doar dacă data e egală cu sursa ei de acum |
+| declanșatorul | `declansator_tip`, `declansator_data`, `declansator_act_id` / `declansator_termen_id` | scriere; confirmarea: scriere, doar dacă data e egală cu sursa ei de acum și (la `expirare_termen`) lanțul precedentelor e valabil |
 | data propusă | `data_propusa` | **doar serverul** (trigger): `declansator_data + nr_zile` când regula și declanșatorul sunt confirmate și ambele valori cunoscute; altfel NULL |
 | data confirmată | `data_confirmata`, `confirmat_de`, `confirmat_la`, `justificare` | regulă: scriere, DOAR egală cu data propusă; manual: **administrare**, justificare obligatorie |
-| starea | `stare` (deschis / indeplinit / anulat), `indeplinit_act_id`, `stare_motiv` | îndeplinit: scriere (act transmis al dosarului); anulat / redeschis: administrare + motiv |
+| starea | `stare` (deschis / indeplinit / anulat), `indeplinit_act_id`, `stare_motiv` | îndeplinit: scriere, doar cu actul **compatibil** al dosarului, transmis / primit și neanulat (tabelul de mai jos); anulat / redeschis: administrare + motiv |
 
 Declanșatoarele (nu toate pornesc din data evenimentului):
 
@@ -137,13 +147,37 @@ Declanșatoarele (nu toate pornesc din data evenimentului):
 | `data_eveniment` / `data_constatare` / `data_incetare` | câmpul respectiv al dosarului |
 | `transmitere_act` | prima transmitere neanulată a actului (`declansator_act_id`) |
 | `primire_act` | prima primire neanulată a actului |
-| `expirare_termen` | data confirmată a altui termen al dosarului (ex.: dezacordul după expirarea termenului de răspuns) |
+| `expirare_termen` | data confirmată a altui termen al dosarului (ex.: dezacordul după expirarea termenului de răspuns), **cu tot lanțul lui valabil** |
 | `alt` | data introdusă (confirmarea o asumă omul) |
 
 Invalidări automate (trigger, pe orice cale de scriere): schimbarea regulii (mod, obligație, declanșator, zile, legătura) → cade confirmarea
 regulii; schimbarea declanșatorului → cade confirmarea declanșatorului; data propusă schimbată → cade data confirmată; la termenul manual,
 schimbarea justificării → cade data confirmată. La citire (vederea `v_executie_revendicare_termene`), un termen „regulă” a cărui sursă s-a
 schimbat (reperul din fișă la altă versiune, legătura scoasă, data declanșatorului diferită de sursă) apare „sursa_de_reverificat”.
+
+**Lanțul termenelor (runda 2).** Un termen „regulă” cu declanșatorul `expirare_termen` depinde de termenul precedent, iar acesta poate
+depinde, la rândul lui, de altul. Validitatea (`fn_executie_revendicare_termen_intrari_valide`) = intrările locale ale termenului
+(`…_intrari_locale`) **și** tot lanțul (`…_lant_valid`): fiecare precedent e în același dosar, neanulat și cu intrările locale valabile.
+Lanțul se urmează doar prin termenele „regulă” (data unui termen manual e asumată de administrare). Consecințe: un precedent cu sursa
+schimbată face și dependentul „sursa_de_reverificat”, chiar dacă precedentul își păstrează data confirmată; confirmarea declanșatorului
+pe un precedent invalid sau anulat e refuzată; confirmarea datei cere tot lanțul valabil. **Ciclurile** (A depinde de B, B de A, oricât
+de lung) și precedentul din alt dosar sunt refuzate de trigger pe orice cale de scriere; un ciclu creat ocolind trigger-ul (administratorul
+bazei) dă „invalid”, iar parcurgerea se termină.
+
+**Îndeplinirea (runda 2).** O singură listă a compatibilităților obligație – act (`fn_executie_revendicare_obligatie_acte`, din care e
+generat și CHECK-ul coloanei `tip_obligatie`) și o singură funcție a îndeplinirii (`fn_executie_revendicare_indeplinire_la`), folosite de
+RPC-ul „îndeplinit” și de vedere:
+
+| Obligația | Se îndeplinește cu |
+|---|---|
+| notificare / detaliere_initiala / detaliere_interimara / detaliere_finala / dezacord | actul de ieșire de **același tip**, transmis |
+| raspuns_prelungire (al beneficiarului) | actul de intrare `raspuns_prelungire`, primit |
+| raspuns_principiu (al beneficiarului) | actul de intrare `raspuns_beneficiar` sau `decizie`, primit |
+| alt | actul `alt` (ieșire transmis / intrare primit) |
+
+Data îndeplinirii = prima transmitere (ieșire) / primire (intrare) neanulată a unui act neanulat, în starea transmis / primit. Dacă actul
+e anulat, toate comunicările lui sunt anulate sau perechea nu mai e compatibilă, data e NULL și termenul apare „indeplinit_de_verificat”.
+Un act anulat nu mai dă nici data de transmitere / primire (nici pentru declanșatori).
 
 Calendarul candidat (de confirmat pe contractul aplicabil; **nu e implicit în schemă**, fiecare termen se configurează):
 
@@ -158,9 +192,10 @@ Calendarul candidat (de confirmat pe contractul aplicabil; **nu e implicit în s
 | Dezacord | respingerea / expirarea răspunsului / decizia | 10 |
 
 Starea calculată (o singură funcție, `fn_executie_revendicare_termen_stare`, folosită de vedere, de viitorul cron și de UI, L19), în
-ordinea priorității: `anulat`; `indeplinit` / `indeplinit_tardiv` / `indeplinit_termen_necunoscut` / `indeplinit_de_verificat`
-(actul nu mai are transmitere neanulată); `sursa_de_reverificat`; fără dată confirmată: `necunoscut` / `neconfirmat` /
-`neconfirmat_depasit`; cu dată confirmată: `in_termen` / `scadent_azi` / `depasit_risc_decadere`. **Nu există starea „decăzut”.**
+ordinea priorității: `anulat`; `sursa_de_reverificat` (runda 2: ÎNAINTEA îndeplinirii — o sursă invalidă face nesigură și data față de
+care se judecă îndeplinirea); `indeplinit` / `indeplinit_tardiv` / `indeplinit_termen_necunoscut` / `indeplinit_de_verificat`
+(îndeplinire nevalabilă, vezi mai sus); fără dată confirmată: `necunoscut` / `neconfirmat` / `neconfirmat_depasit`; cu dată confirmată:
+`in_termen` / `scadent_azi` / `depasit_risc_decadere`. **Nu există starea „decăzut”.**
 
 „Azi” = data calendaristică din `Europe/Bucharest` (`fn_executie_revendicare_zi(moment)`), nu `CURRENT_DATE` în UTC. Un termen cu data
 D e „scadent azi” până la 23:59:59 ora României din ziua D și „depășit” de la 00:00 a zilei D+1. Regula de numărare folosită: termenul
@@ -191,6 +226,13 @@ nu șterge depășirea: termenul apare „indeplinit_tardiv”.
 | C15 | manual 2026-05-05 cu justificare, azi 2026-05-05 | `scadent_azi`, mod `manual` |
 | C16 | reperul din fișă modificat după confirmare | `sursa_de_reverificat` |
 | C17 | confirmarea unei date diferite de cea propusă (2026-04-10 față de 2026-04-09) | refuz |
+| C18 | expirarea termenului T0 confirmat 2026-04-09, 10 zile | 2026-04-19 |
+| C19 | C18, apoi sursa lui T0 schimbată (T0 își păstrează data 2026-04-09) | T0 și dependentul: `sursa_de_reverificat`; declanșatorul unui termen nou pe data lui T0: refuz |
+| C20 | transmiterea notificării înregistrată 2026-03-20 (prin comunicare), 30 zile | 2026-04-19 |
+| C21 | primirea răspunsului înregistrată 2026-03-25, 10 zile | 2026-04-04 |
+| C22 | termen al notificării 2026-04-09, îndeplinit de notificarea transmisă 2026-03-20; apoi notificarea anulată | `indeplinit`; apoi `indeplinit_de_verificat` |
+| C23 | termen de răspuns al beneficiarului 2026-03-24, răspuns primit 2026-03-25 | `indeplinit_tardiv` |
+| C24 | termenul detaliere finale „îndeplinit” cu o notificare | refuz |
 
 ## 5. Dovezi, jurnal, alerte, idempotență
 
@@ -198,15 +240,31 @@ nu șterge depășirea: termenul apare „indeplinit_tardiv”.
   dosarului, cu rolul probator și amprenta rândului-țintă la momentul legării (o schimbare ulterioară a țintei se vede la comparare).
   Scoaterea = `activ = false` + motiv (nimic nu se șterge). Rapoartele ERP sunt dovezi operaționale; echivalența lor cu jurnalul de
   șantier contractual e **neverificată**.
+- **Retenția țintelor = alegere de ARHIVARE (alegerea 7, varianta A presupusă; runda 2).** Cheile străine spre documente, ordine de
+  sistare și rapoarte nu au CASCADE și nu există nicio cale de dezlegare. Efectul exact: un document / ordin / raport legat **o dată**
+  ca dovadă, ca exemplar semnat al unui act sau ca dovadă a unei comunicări **nu se mai poate șterge niciodată** din modulul lui
+  (eroare de cheie străină). Blocarea rămâne și după scoaterea dovezii (`activ = false`), după anularea comunicării sau a actului și după
+  închiderea / retragerea dosarului — rândul dovezii rămâne, cu motivul scoaterii, ca istoric. Ștergerea unui astfel de fișier devine o
+  decizie separată a owner-ului (preview → „da” → operație pe bază). Varianta B: dezlegare reală (rândul dovezii șters / referința
+  golită) de către administrare, cu motiv în jurnal, permisă DOAR înainte să fie transmis vreun act al dosarului care citează dovada; după
+  transmitere, retenția rămâne permanentă. B cere un RPC nou și o regulă „actul citează dovada” (azi actele nu au legătură explicită cu
+  dovezile). Fiecare cheie străină spre alt tabel are index complet (postcondiție), ca verificarea ei la ștergerea sursei să nu scaneze
+  tabelele dosarului (inclusiv rândurile scoase).
 - **Jurnal** (`executie_revendicare_jurnal`): un rând pentru fiecare INSERT / UPDATE / DELETE pe tabelele dosarului (trigger AFTER, în
   aceeași tranzacție, pe orice cale), cu rândul înainte / după, autorul (`auth.uid()`) și tranzacția. UPDATE / DELETE / TRUNCATE pe jurnal
-  = refuz.
+  = refuz, inclusiv pentru proprietarul tabelelor. **Limită:** nu e imuabilitate față de administratorul bazei — el poate dezactiva
+  trigger-ele (scriptul de concurență chiar face asta, în tranzacția de curățenie a datelor sintetice de pe clonă).
+- **Confidențialitatea fișierelor:** RLS-ul dosarului protejează rândurile dosarului, nu fișierele legate. Documentele (`documente_proiect`
+  și bucketurile lor) rămân protejate DOAR de politicile modulului lor; cine le vede acolo le vede și fără dosar. Exemplarul semnat în
+  Storage cu politica dosarului vine la pasul 5.
 - **Alerte** (`executie_revendicare_alerte`): doar structura (pasul 4 o umple, cu cronul): termen + versiunea lui, prag (7z / 3z / 1z /
   scadent / depășit / neconfirmat), destinatar, zi; cheie unică de deduplicare. Destinatarul își vede alertele doar dacă mai are acces.
 - **Idempotență** (L04/L05): fiecare RPC primește cheia UUID a intenției. Aceeași cheie + același conținut + același cont = rezultatul
   de data trecută (`duplicat: true`, cu rândul de acum); altă operație / alt conținut / alt cont = refuz. Conflictul de versiune (CAS)
   nu consumă cheia. Cheile stau durabil în `executie_revendicare_chei` (fără drepturi pentru aplicație).
-- **Ordinea lock-urilor** (L06), aceeași în toate RPC-urile: (1) lock consultativ pe cheie → (2) dosarul `FOR UPDATE` → (3) rândul-copil
+- **Ordinea lock-urilor** (L06), aceeași în toate RPC-urile: (1) lock consultativ pe cheie → (2) dosarul `FOR UPDATE` (dreptul verificat
+  înainte ȘI reverificat după lock, L01: o desemnare / permisiune retrasă cât apelul aștepta = refuz 42501; proba: K4 din
+  `scripts/executie_revendicari_concurenta.sh`, pe clonă) → (3) rândul-copil
   `FOR UPDATE` (act, apoi comunicare / termen / legătură / dovadă) → (4) la final, rândurile ALTOR module (reper, document, ordin, raport,
   șantier) `FOR SHARE NOWAIT` (ocupat = 55P03, nimic scris) → (5) scrierea + jurnalul + cheia. Revenirea: aceleași tabele, în aceeași
   ordine, `ACCESS EXCLUSIVE NOWAIT`.
@@ -221,6 +279,7 @@ nu șterge depășirea: termenul apare „indeplinit_tardiv”.
 | 4 | Timp și bani | zile + sume a/b/c introduse și confirmate manual, NULL = necunoscut | doar timp: UI-ul ascunde sumele; schema neschimbată | calcul detaliat: tabele noi de linii, legate de act; coloanele actuale rămân totalurile |
 | 5 | Sursa contractuală | doar repere confirmate (legătura confirmată de administrare, pe versiune) alimentează termenul și aprobarea | documentația de atribuire validată de avocat: alt tip de reper în fișă, aceeași confirmare | doar dosare și ciorne: tranziția `de_aprobat → aprobat` scoasă din listă (o linie) |
 | 6 | Validare și semnare | owner-ul aprobă fiecare document; exemplarul semnat se încarcă; aprobarea / exportul ≠ transmitere | reprezentant delegat nominal: nivelul `aprobare` din funcția de drept primește lista delegaților | avocatul verifică fiecare document: o stare în plus (`verificat_juridic`) în lista tranzițiilor actelor |
+| 7 | Retenția dovezilor (runda 2) | arhivare: o țintă legată o dată nu se mai șterge din modulul ei (§5) | dezlegare reală de către administrare, cu motiv, doar înainte de transmiterea unui act care citează dovada: RPC nou + legătura act – dovadă | – |
 
 ## 7. Ce rămâne în afara schemei (pașii 3–6)
 
@@ -232,8 +291,11 @@ nu șterge depășirea: termenul apare „indeplinit_tardiv”.
 - Inventarul accesului pe proiect din 20261209a (`fn_executie_acces_inventar`) nu cunoaște tabelele noi: scriptul de catalog le va
   lista ca neclasificate. Tabelele noi au propriul predicat, care include restricția pe proiect (clasa „drept”); adăugarea lor în
   inventar = migrare separată.
-- Legătura FK spre `documente_proiect`, `executie_ordine_sistare`, `rapoarte_zilnice`: un rând folosit ca dovadă / exemplar semnat nu mai
-  poate fi șters din modulul lui cât timp e legat (protecția probei). Efect asupra altor module, de aprobat.
+- Legătura FK spre `documente_proiect`, `executie_ordine_sistare`, `rapoarte_zilnice`: un rând folosit O DATĂ ca dovadă / exemplar semnat
+  / dovadă a comunicării nu mai poate fi șters NICIODATĂ din modulul lui (alegerea 7, §5). Efect asupra altor module, de aprobat; mesajul
+  de eroare din tabul Documente va fi cel brut al cheii străine până la ecran.
+- Livrarea: manifestul L15 v2 (`20261224a_executie_revendicari.l15.tsv`) îl generează coordonatorul pe clonă; până atunci amprenta
+  globală e neprobată (antetul migrării spune ce probează postcondițiile și ce nu).
 
 ## 8. Necunoscute
 

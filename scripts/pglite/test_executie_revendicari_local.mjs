@@ -5,7 +5,12 @@
 //    MP restrâns, editor Execuție (nu MP), cont fără modul, MP fără modul, anonim — pe acces direct la tabele și prin RPC; cazurile de calcul
 //    din docs/executie/REVENDICARI_SPEC.md §4 (valori LITERALE, scrise de mână acolo); idempotența (aceeași cheie, alt conținut, alt cont);
 //    CAS; referințele pe proiect; jurnalul; lock-urile ținute de RPC (xmax + advisory); „decăzut” niciodată automat.
-// 2. MUTANȚI: migrarea stricată intenționat; fiecare TREBUIE să pice la verificarea lui (L25), altfel suita nu dovedește nimic.
+//    Runda 2 (verdictul NO-GO pe PR #1106): S15 lanțul termenelor + ciclurile, S16 aprobarea legată de surse, S17 îndeplinirea (compatibilitate,
+//    anulări), S18 dosarul final pe TOATE RPC-urile, S19 declanșatorii prin comunicări reale, S20 rolurile pe fiecare RPC, S21 retenția +
+//    regresia modulului Documente; S12u corectat (aștepta greșit „indeplinit” după schimbarea sursei). `--doar-suita <migrare>` rulează doar
+//    suita pe altă migrare (dovada că testele noi pică pe runda 1).
+// 2. MUTANȚI: migrarea stricată intenționat; fiecare TREBUIE să pice la verificarea lui (L25), altfel suita nu dovedește nimic. Fiecare
+//    mutant e re-amprentat (0b), ca să-l prindă verificarea lui, nu amprenta corpurilor; mutanții de livrare P6–P11 = definițiile exacte (§9).
 // 3. SCENARII: refuzurile migrării (plafon, reaplicare, restricția 20261209a schimbată), aplicare -> revenire -> reaplicare, revenirea refuză
 //    cu date.
 // Limită: PGlite are o singură conexiune — concurența REALĂ (două sesiuni psql pe același dosar, aceeași cheie) o rulează pe clonă
@@ -19,9 +24,15 @@ import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const citeste = (rel) => readFileSync(join(ROOT, rel), 'utf8').replace(/\r/g, '')
+const citeste = (rel) => readFileSync(resolve(ROOT, rel), 'utf8').replace(/\r/g, '')
 const md5 = (s) => createHash('md5').update(s, 'utf8').digest('hex')
-const MIG = citeste('supabase/migrations/20261224a_executie_revendicari.sql')
+// `--doar-suita <fișierul migrării>`: doar suita, pe ALTĂ migrare (ex. cea din runda 1), cu lista verificărilor picate — dovada că testele
+// noi pică pe codul vechi (fără verificările de amprentă, mutanți și scenarii)
+const iDS = process.argv.indexOf('--doar-suita')
+const DOAR_SUITA = iDS > 0
+const MIG_CALE = DOAR_SUITA ? process.argv[iDS + 1] : 'supabase/migrations/20261224a_executie_revendicari.sql'
+if (DOAR_SUITA && !MIG_CALE) { console.error('utilizare: --doar-suita <fișierul migrării>'); process.exit(2) }
+const MIG = citeste(MIG_CALE)
 const REV = citeste('supabase/revenire/20261224a_executie_revendicari_ROLLBACK.sql')
 const SCHELET = citeste('supabase/tests/20261224a_executie_revendicari_schelet.sql')
 const M09 = citeste('supabase/migrations/20261209a_executie_acces_proiect.sql')
@@ -53,6 +64,33 @@ const CONTRACT_DREPT = functie(M09, 'CREATE OR REPLACE FUNCTION public.fn_execut
     if (!inMig || inMig[1] !== real) rau = true
   }
   if (rau) { console.error('preflight-ul migrării are alte amprente decât corpurile din 20261209a'); process.exit(1) }
+}
+
+// 0b. (runda 2, L15) amprentele corpurilor din postcondițiile §9 = corpurile din TEXTUL migrării (sursă independentă de BD). Mutanții sunt
+//     re-amprentați (ca și cum ar fi fost revizuiți), ca fiecare să fie prins de verificarea LUI, nu de amprentă; mutanții de livrare care
+//     schimbă un corp DUPĂ creare (CREATE OR REPLACE) rămân cu amprenta originalului și trebuie prinși de §9.
+function amprenteCorpuri(text) {
+  const m = new Map(), re = /CREATE FUNCTION public\.(fn_executie_revendicare_[a-z_]+)\(/g
+  let x
+  while ((x = re.exec(text))) {
+    if (m.has(x[1])) throw new Error('funcție creată de două ori: ' + x[1])
+    const a = text.indexOf('$f$', x.index), b = text.indexOf('$f$', a + 3)
+    m.set(x[1], md5(text.slice(a + 3, b)))
+  }
+  return m
+}
+const RE_POST_FN = /\('(fn_executie_revendicare_[a-z_]+)\([^']*\)', '[^']*', '[a-z]+', '[siv]', '(?:definer|client|intern)', '([0-9a-f]{32})'\)/g
+const reamprenteaza = (text) => { const m = amprenteCorpuri(text); return text.replace(RE_POST_FN, (s, nume, v) => (m.has(nume) ? s.replace(v, m.get(nume)) : s)) }
+if (!DOAR_SUITA) {
+  const m = amprenteCorpuri(MIG)
+  let rau = false, n = 0
+  for (const x of MIG.matchAll(RE_POST_FN)) {
+    n++
+    if (m.get(x[1]) !== x[2]) { rau = true; console.error(`amprenta ${x[1]}: postcondiția ${x[2]}, corpul din text ${m.get(x[1])}`) }
+  }
+  if (n !== m.size) { rau = true; console.error(`postcondiția are ${n} funcții, textul ${m.size}`) }
+  if (rau) process.exit(1)
+  console.log(`amprentele corpurilor din §9: ${n} funcții, identice cu textul migrării`)
 }
 
 function aplica(text, lista) {
@@ -268,8 +306,8 @@ async function suita(db, picate) {
   await refuz('S7g C17: altă dată decât cea propusă', '22023', async () => rpc(db, 'mp1', 'termen_confirma', T1, await vT(T1), 'data', { data: '2026-04-10' }, K()), /difera de cea propusa \(2026-04-09\)/)
   const tc = await rpc(db, 'mp1', 'termen_confirma', T1, await vT(T1), 'data', { data: '2026-04-09' }, K())
   ok('S7h confirmarea datei propuse', tc.ok && tc.rand.data_confirmata === '2026-04-09' && tc.rand.confirmat_de === U.mp1)
-  const vt = async (id, cine = 'mp1') => (await ca(db, cine, `SELECT stare_calcul, intrari_valide, data_propusa::text AS dp, data_confirmata::text AS dc, mod, azi::text AS azi
-                                                              FROM public.v_executie_revendicare_termene WHERE id = $1`, [id]))[0]
+  const vt = async (id, cine = 'mp1') => (await ca(db, cine, `SELECT stare_calcul, intrari_valide, data_propusa::text AS dp, data_confirmata::text AS dc, mod, azi::text AS azi,
+                                                                     indeplinit_la::text AS il FROM public.v_executie_revendicare_termene WHERE id = $1`, [id]))[0]
   const azi = (await pg(`SELECT public.fn_executie_revendicare_azi()::text AS a`))[0].a
   const s1 = await vt(T1)
   ok('S7i depășit = „risc de decădere”, nu „decăzut”', s1 && s1.stare_calcul === (azi > '2026-04-09' ? 'depasit_risc_decadere' : azi === '2026-04-09' ? 'scadent_azi' : 'in_termen'), JSON.stringify(s1))
@@ -350,6 +388,7 @@ async function suita(db, picate) {
     ['în termen', ['deschis', 'regula', true, '2026-04-09', '2026-04-09', null, '2026-04-08'], 'in_termen'],
     ['îndeplinit fără termen', ['indeplinit', 'manual', true, null, null, '2026-04-09', '2026-05-01'], 'indeplinit_termen_necunoscut'],
     ['îndeplinit, comunicarea anulată', ['indeplinit', 'regula', true, '2026-04-09', '2026-04-09', null, '2026-05-01'], 'indeplinit_de_verificat'],
+    ['îndeplinit, sursa schimbată (runda 2: sursa înaintea îndeplinirii)', ['indeplinit', 'regula', false, '2026-04-09', '2026-04-09', '2026-04-01', '2026-05-01'], 'sursa_de_reverificat'],
     ['anulat', ['anulat', 'regula', true, null, null, null, '2026-05-01'], 'anulat']]) {
     const s = await st(...args)
     ok(`S9 ${id}`, s === astept, s)
@@ -383,7 +422,7 @@ async function suita(db, picate) {
   await refuz('S12f MP-ul nu aprobă', '42501', async () => rpc(db, 'mp1', 'act_stare', A1, await vA(A1), 'aprobat', {}, K()))
   // temeiul invalidat (reperul schimbat iar) blochează aprobarea
   await pg(`UPDATE public.executie_contract_repere SET citat = 'iar modificat' WHERE id = $1`, [reperP1])
-  await refuz('S12g fără temei confirmat și valabil nu se aprobă', '22023', async () => rpc(db, 'owner', 'act_stare', A1, await vA(A1), 'aprobat', {}, K()), /temei confirmat/)
+  await refuz('S12g fără temei confirmat și valabil nu se aprobă', '22023', async () => rpc(db, 'owner', 'act_stare', A1, await vA(A1), 'aprobat', {}, K()), /temeiurile dosarului nu sunt toate confirmate/)
   await rpc(db, 'admin', 'reper', D1, 'confirma', L1, (await pg(`SELECT versiune FROM public.executie_revendicare_repere WHERE id = $1`, [L1]))[0].versiune, { reper_versiune: 3 }, K())
   const ap = await rpc(db, 'owner', 'act_stare', A1, await vA(A1), 'aprobat', {}, K())
   ok('S12h owner-ul aprobă (revizia și amprenta fixate)', ap.ok && ap.rand.stare === 'aprobat' && ap.rand.aprobat_de === U.owner && ap.rand.aprobat_revizie === 1)
@@ -405,9 +444,19 @@ async function suita(db, picate) {
     rpc(db, 'mp1', 'comunicare', A1, cm.rand.id, cm.rand.versiune + 1, { data_primire: '2026-03-22' }, K())), /deja completat/)
   await refuz('S12t MP-ul nu anulează o comunicare', '42501', async () => rpc(db, 'mp1', 'comunicare', A1, cm.rand.id,
     (await pg(`SELECT versiune FROM public.executie_revendicare_comunicari WHERE id = $1`, [cm.rand.id]))[0].versiune, { anulat: true, motiv: 'gresit' }, K()))
-  // termenul C1 îndeplinit cu actul transmis la 2026-03-20 (înainte de 04-09)
+  // termenul C1 îndeplinit cu actul transmis la 2026-03-20 (înainte de 04-09). Runda 2 (verdict P1-3): reperul s-a schimbat la S12g și
+  // legătura a fost reconfirmată pe versiunea 3, dar regula termenului e încă pe versiunea 2 -> sursa termenului e de reverificat, deci
+  // „îndeplinit” NU se poate afișa (runda 1 aștepta greșit „indeplinit” aici).
   const ti = await rpc(db, 'mp1', 'termen_confirma', T1, await vT(T1), 'indeplinit', { act_id: A1 }, K())
-  ok('S12u termen îndeplinit la timp', ti.ok && (await vt(T1)).stare_calcul === 'indeplinit', JSON.stringify(await vt(T1)))
+  ok('S12u termen îndeplinit, dar sursa lui schimbată = „sursa_de_reverificat”, nu „indeplinit”', ti.ok && (await vt(T1)).stare_calcul === 'sursa_de_reverificat',
+     JSON.stringify(await vt(T1)))
+  // redeschis (administrare), regula reconfirmată pe versiunea 3, data reconfirmată, îndeplinit din nou -> „indeplinit”
+  await rpc(db, 'admin', 'termen_confirma', T1, await vT(T1), 'redeschide', { motiv: 'sursa reconfirmata' }, K())
+  await rpc(db, 'admin', 'termen_confirma', T1, await vT(T1), 'regula', {}, K())
+  await rpc(db, 'mp1', 'termen_confirma', T1, await vT(T1), 'data', { data: '2026-04-09' }, K())
+  const ti2 = await rpc(db, 'mp1', 'termen_confirma', T1, await vT(T1), 'indeplinit', { act_id: A1 }, K())
+  ok('S12u2 sursa reconfirmată + îndeplinit cu actul transmis 2026-03-20 = „indeplinit”', ti2.ok && (await vt(T1)).stare_calcul === 'indeplinit',
+     JSON.stringify(await vt(T1)))
   // anularea comunicării (administrare): actul revine la semnat, termenul îndeplinit devine „de verificat”
   const an = await rpc(db, 'admin', 'comunicare', A1, cm.rand.id, (await pg(`SELECT versiune FROM public.executie_revendicare_comunicari WHERE id = $1`, [cm.rand.id]))[0].versiune,
                        { anulat: true, motiv: 'inregistrata gresit' }, K())
@@ -428,10 +477,250 @@ async function suita(db, picate) {
                         SELECT versiune > 1 AS v, modificat_de IS NULL AS m FROM u`, [D1, U.owner]))[0]
   ok('S13g versiunea și autorul le pune trigger-ul', pv.v === true && pv.m === true, JSON.stringify(pv))
 
-  // S14 dosarul închis nu se mai scrie; vizibilitatea copiilor urmează proiectul
+  // S14 vizibilitatea copiilor urmează proiectul (dosarul final: S18)
   ok('S14a MP-ul altui proiect nu vede actele / termenele / dovezile P1', (await n('mp2', 'executie_revendicare_acte')) === 0
      && (await n('mp2', 'v_executie_revendicare_termene')) === 0 && (await n('mp2', 'executie_revendicare_dovezi')) === 0)
   ok('S14b editorul Execuție (nu MP) nu vede nimic', (await n('editor', 'v_executie_revendicare_acte')) === 0 && (await n('editor', 'executie_revendicare_repere')) === 0)
+
+  // ── runda 2: fiecare secțiune își prinde excepțiile (pe codul din runda 1 un pas refuzat nu oprește restul listei) ──────────────────────
+  const sectiune = async (nume, fn) => { try { await fn() } catch (e) { picate.push(`${nume}: EXCEPTIE ${e.code || ''} ${e.message}`) } }
+  const vD = async (id) => (await pg(`SELECT versiune FROM public.executie_revendicari WHERE id = $1`, [id]))[0].versiune
+  const vRep = async (id) => (await pg(`SELECT versiune FROM public.executie_contract_repere WHERE id = $1`, [id]))[0].versiune
+  const vLeg = async (id) => (await pg(`SELECT versiune FROM public.executie_revendicare_repere WHERE id = $1`, [id]))[0].versiune
+  const confirmaLeg = async (D, l, rp) => rpc(db, 'admin', 'reper', D, 'confirma', l, await vLeg(l), { reper_versiune: await vRep(rp) }, K())
+  const apv = async (id) => (await ca(db, 'mp1', `SELECT aprobare_valida FROM public.v_executie_revendicare_acte WHERE id = $1`, [id]))[0].aprobare_valida
+  const reperB = (await pg(`INSERT INTO public.executie_contract_repere (proiect_id, sectiune, cod, titlu, citat)
+                            VALUES (1, 'clauza', 'C2', 'Clauza de detaliere', 'text generic 2') RETURNING id::int AS id`))[0].id
+  // act de ieșire dus până la „transmis” prin RPC-urile reale (aprobare owner, exemplar semnat, comunicare)
+  const transmite = async (D, tip, nr, data) => {
+    const id = (await rpc(db, 'mp1', 'act', D, null, null, { tip, sens: 'iesire', titlu: 'Act ' + tip, nr_iesire: nr }, K())).rand.id
+    await rpc(db, 'mp1', 'act_stare', id, await vA(id), 'de_aprobat', {}, K())
+    await rpc(db, 'owner', 'act_stare', id, await vA(id), 'aprobat', {}, K())
+    await rpc(db, 'mp1', 'act_stare', id, await vA(id), 'semnat', { fisier_semnat_doc_id: doc1 }, K())
+    const c = await rpc(db, 'mp1', 'comunicare', id, null, await vA(id), { destinatar: 'Beneficiar', canal: 'registratura', data_transmitere: data }, K())
+    return { id, com: c.rand.id }
+  }
+
+  // S15 (verdict P1-1) lanțul termenelor, prin RPC, pe secvența din verdict. Valori: eveniment 2026-03-10 + 30 = 2026-04-09 (T0);
+  //     expirarea lui T0 2026-04-09 + 10 = 2026-04-19 (TB)
+  let D3, T0, TB, TC, L3
+  await sectiune('S15', async () => {
+    D3 = (await dosar('mp1', 1, 'Lant termene', { data_eveniment: '2026-03-10' })).rand.id
+    L3 = (await rpc(db, 'mp1', 'reper', D3, 'leaga', null, null, { reper_id: reperP1, rol: 'termen' }, K())).rand.id
+    await confirmaLeg(D3, L3, reperP1)
+    T0 = (await rpc(db, 'mp1', 'termen', D3, null, null, { tip_obligatie: 'alt', mod: 'regula', declansator_tip: 'data_eveniment',
+                                                           declansator_data: '2026-03-10', nr_zile: 30, reper_legatura_id: L3 }, K())).rand.id
+    await rpc(db, 'admin', 'termen_confirma', T0, await vT(T0), 'regula', {}, K())
+    await rpc(db, 'mp1', 'termen_confirma', T0, await vT(T0), 'declansator', {}, K())
+    await rpc(db, 'mp1', 'termen_confirma', T0, await vT(T0), 'data', { data: '2026-04-09' }, K())
+    TB = (await rpc(db, 'mp1', 'termen', D3, null, null, { tip_obligatie: 'dezacord', mod: 'regula', declansator_tip: 'expirare_termen', declansator_termen_id: T0,
+                                                           declansator_data: '2026-04-09', nr_zile: 10, reper_legatura_id: L3 }, K())).rand.id
+    await rpc(db, 'admin', 'termen_confirma', TB, await vT(TB), 'regula', {}, K())
+    await rpc(db, 'mp1', 'termen_confirma', TB, await vT(TB), 'declansator', {}, K())
+    const tbd = await rpc(db, 'mp1', 'termen_confirma', TB, await vT(TB), 'data', { data: '2026-04-19' }, K())
+    ok('S15a expirarea lui T0 (2026-04-09) + 10 = 2026-04-19, confirmat cât T0 e valabil', tbd.ok && tbd.rand.data_confirmata === '2026-04-19'
+       && (await vt(TB)).intrari_valide === true, JSON.stringify(await vt(TB)))
+    // data evenimentului schimbată: T0 își păstrează data confirmată, dar e de reverificat
+    await rpc(db, 'mp1', 'salveaza_dosar', 1, D3, await vD(D3), { titlu: 'Lant termene', data_eveniment: '2026-03-12' }, K())
+    const s0 = await vt(T0), sB = await vt(TB)
+    ok('S15b T0 cu sursa schimbată: data 2026-04-09 păstrată, „sursa_de_reverificat”', s0.stare_calcul === 'sursa_de_reverificat' && s0.dc === '2026-04-09', JSON.stringify(s0))
+    ok('S15c termenul alimentat de T0 = „sursa_de_reverificat” (runda 1: rămânea valabil)', sB.stare_calcul === 'sursa_de_reverificat' && sB.intrari_valide === false, JSON.stringify(sB))
+    // secvența exactă din verdict: termen NOU pe data veche a lui T0 -> declanșatorul nu se mai confirmă
+    TC = (await rpc(db, 'mp1', 'termen', D3, null, null, { tip_obligatie: 'dezacord', mod: 'regula', declansator_tip: 'expirare_termen', declansator_termen_id: T0,
+                                                           declansator_data: '2026-04-09', nr_zile: 10, reper_legatura_id: L3 }, K())).rand.id
+    await rpc(db, 'admin', 'termen_confirma', TC, await vT(TC), 'regula', {}, K())
+    await refuz('S15d declanșatorul pe data unui termen cu sursa invalidă = refuz', '22023',
+      async () => rpc(db, 'mp1', 'termen_confirma', TC, await vT(TC), 'declansator', {}, K()), /termenul precedent e anulat sau sursa lui trebuie reverificata/)
+    // data lui TB nu se mai reconfirmă cât lanțul e invalid (data confirmată scoasă pe calea server, ca în S7l)
+    await pg(`UPDATE public.executie_revendicare_termene SET data_confirmata = NULL WHERE id = $1`, [TB])
+    await refuz('S15e confirmarea datei cere tot lanțul valabil', '22023', async () => rpc(db, 'mp1', 'termen_confirma', TB, await vT(TB), 'data', { data: '2026-04-19' }, K()), /reverificata/)
+    // sursa lui T0 refăcută -> lanțul valabil din nou
+    await rpc(db, 'mp1', 'salveaza_dosar', 1, D3, await vD(D3), { titlu: 'Lant termene', data_eveniment: '2026-03-10' }, K())
+    await rpc(db, 'mp1', 'termen_confirma', TB, await vT(TB), 'data', { data: '2026-04-19' }, K())
+    const sB2 = await vt(TB)
+    ok('S15f sursa refăcută: TB valabil, 2026-04-19', sB2.intrari_valide === true && sB2.dc === '2026-04-19', JSON.stringify(sB2))
+    // anularea precedentului -> dependentul de reverificat
+    await rpc(db, 'admin', 'termen_confirma', TC, await vT(TC), 'anulat', { motiv: 'dublura' }, K())
+    // ciclurile: T0 -> TB (TB depinde de T0) refuzat prin RPC și pe calea server
+    await refuz('S15g ciclu prin RPC = refuz', '23514', async () => rpc(db, 'mp1', 'termen', D3, T0, await vT(T0), { tip_obligatie: 'alt', mod: 'regula',
+      declansator_tip: 'expirare_termen', declansator_termen_id: TB, declansator_data: '2026-04-19', nr_zile: 30, reper_legatura_id: L3 }, K()), /ciclu/)
+    await refuz('S15h ciclu pe calea server = refuz', '23514', () => pg(`UPDATE public.executie_revendicare_termene SET declansator_tip = 'expirare_termen',
+      declansator_termen_id = $2, declansator_data = NULL WHERE id = $1`, [T0, TB]), /ciclu/)
+    await refuz('S15i precedentul din alt dosar (calea server) = refuz', '23514', () => pg(`UPDATE public.executie_revendicare_termene SET declansator_tip = 'expirare_termen',
+      declansator_termen_id = $2, declansator_data = NULL WHERE id = $1`, [TB, T1]), /nu e in dosar/)
+    // un ciclu deja existent (trigger-ul ocolit de administratorul bazei): parcurgerea se termină, lanțul = invalid
+    await pg(`ALTER TABLE public.executie_revendicare_termene DISABLE TRIGGER trg_b_executie_revendicare_termen_calc`)
+    try {
+      await pg(`UPDATE public.executie_revendicare_termene SET declansator_tip = 'expirare_termen', declansator_termen_id = $2 WHERE id = $1`, [T0, TB])
+    } finally { await pg(`ALTER TABLE public.executie_revendicare_termene ENABLE TRIGGER trg_b_executie_revendicare_termen_calc`) }
+    const sc = await vt(TB)
+    ok('S15j ciclu existent = invalid, fără buclă infinită', sc.intrari_valide === false && sc.stare_calcul === 'sursa_de_reverificat', JSON.stringify(sc))
+  })
+
+  // S16 (verdict P1-2) aprobarea leagă setul concret de surse: două temeiuri, A = reperul P1, B = reperul nou
+  await sectiune('S16', async () => {
+    const D4 = (await dosar('mp1', 1, 'Aprobare pe surse')).rand.id
+    const la = (await rpc(db, 'mp1', 'reper', D4, 'leaga', null, null, { reper_id: reperP1, rol: 'temei' }, K())).rand.id
+    const lb = (await rpc(db, 'mp1', 'reper', D4, 'leaga', null, null, { reper_id: reperB, rol: 'temei' }, K())).rand.id
+    await confirmaLeg(D4, la, reperP1)
+    await confirmaLeg(D4, lb, reperB)
+    const a4 = (await rpc(db, 'mp1', 'act', D4, null, null, { tip: 'notificare', sens: 'iesire', titlu: 'Notificare D4', nr_iesire: 'NR 4/2026' }, K())).rand.id
+    await rpc(db, 'mp1', 'act_stare', a4, await vA(a4), 'de_aprobat', {}, K())
+    // un temei schimbat, celălalt valabil: runda 1 aproba („măcar un temei”). Pe un act separat, ca restul secțiunii să ruleze oricum.
+    const a4x = (await rpc(db, 'mp1', 'act', D4, null, null, { tip: 'dezacord', sens: 'iesire', titlu: 'Dezacord D4' }, K())).rand.id
+    await rpc(db, 'mp1', 'act_stare', a4x, await vA(a4x), 'de_aprobat', {}, K())
+    await pg(`UPDATE public.executie_contract_repere SET citat = 'text generic 2 modificat' WHERE id = $1`, [reperB])
+    await refuz('S16a un temei schimbat (celălalt valabil) = aprobarea refuzată', '22023',
+      async () => rpc(db, 'owner', 'act_stare', a4x, await vA(a4x), 'aprobat', {}, K()), /temeiurile dosarului nu sunt toate confirmate/)
+    await confirmaLeg(D4, lb, reperB)
+    const ap4 = await rpc(db, 'owner', 'act_stare', a4, await vA(a4), 'aprobat', {}, K())
+    ok('S16b ambele temeiuri valabile: aprobat, cu amprenta surselor', ap4.ok && /^[0-9a-f]{32}$/.test(ap4.rand.aprobat_surse_amprenta || ''), JSON.stringify(ap4.rand))
+    ok('S16c vederea: aprobare valabilă', (await apv(a4)) === true)
+    // după aprobare: reperul A schimbat, apoi reconfirmat de administrare
+    await pg(`UPDATE public.executie_contract_repere SET citat = 'text generic schimbat dupa aprobare' WHERE id = $1`, [reperP1])
+    ok('S16d reperul schimbat: aprobarea nevalabilă', (await apv(a4)) === false)
+    await confirmaLeg(D4, la, reperP1)
+    ok('S16e reperul reconfirmat după aprobare: aprobarea TOT nevalabilă (runda 1: redevenea valabilă)', (await apv(a4)) === false)
+    await refuz('S16f semnarea pe surse schimbate (chiar reconfirmate) = refuz', '22023',
+      async () => rpc(db, 'mp1', 'act_stare', a4, await vA(a4), 'semnat', { fisier_semnat_doc_id: doc1 }, K()), /aprobarea nu mai corespunde/)
+    // reaprobarea: ciornă (revizia crește) -> de aprobat -> aprobat -> semnat
+    await rpc(db, 'mp1', 'act_stare', a4, await vA(a4), 'ciorna', {}, K())
+    await rpc(db, 'mp1', 'act_stare', a4, await vA(a4), 'de_aprobat', {}, K())
+    await rpc(db, 'owner', 'act_stare', a4, await vA(a4), 'aprobat', {}, K())
+    const sm4 = await rpc(db, 'mp1', 'act_stare', a4, await vA(a4), 'semnat', { fisier_semnat_doc_id: doc1 }, K())
+    ok('S16g reaprobat pe sursele noi: revizia 2, semnat, aprobare valabilă', sm4.ok && sm4.rand.stare === 'semnat' && sm4.rand.revizie === 2
+       && (await apv(a4)) === true, JSON.stringify(sm4.rand))
+    // un temei scos după semnare: setul s-a schimbat
+    await rpc(db, 'mp1', 'reper', D4, 'scoate', lb, await vLeg(lb), { motiv: 'nu se mai aplica' }, K())
+    ok('S16h temei scos după semnare: aprobarea nevalabilă', (await apv(a4)) === false)
+  })
+
+  // S17 (verdict P1-3) îndeplinirea: compatibilitatea obligație – act și valabilitatea după anulări (termene manuale: sursa nu intervine)
+  let D5, N5
+  await sectiune('S17', async () => {
+    D5 = (await dosar('mp1', 1, 'Indeplinire')).rand.id
+    const l5 = (await rpc(db, 'mp1', 'reper', D5, 'leaga', null, null, { reper_id: reperB, rol: 'temei' }, K())).rand.id
+    await confirmaLeg(D5, l5, reperB)
+    N5 = await transmite(D5, 'notificare', 'NR 5/2026', '2026-03-20')
+    const manual = async (oblig, data) => {
+      const id = (await rpc(db, 'mp1', 'termen', D5, null, null, { tip_obligatie: oblig, mod: 'manual', declansator_tip: 'alt' }, K())).rand.id
+      await rpc(db, 'admin', 'termen_confirma', id, await vT(id), 'data', { data, justificare: 'stabilit manual' }, K())
+      return id
+    }
+    const tf = await manual('detaliere_finala', '2026-04-30')
+    await refuz('S17a o notificare nu închide termenul detalierii finale', '22023',
+      async () => rpc(db, 'mp1', 'termen_confirma', tf, await vT(tf), 'indeplinit', { act_id: N5.id }, K()), /actul compatibil/)
+    const tn = await manual('notificare', '2026-04-09')
+    await rpc(db, 'mp1', 'termen_confirma', tn, await vT(tn), 'indeplinit', { act_id: N5.id }, K())
+    const s1 = await vt(tn)
+    ok('S17b notificarea transmisă 2026-03-20 îndeplinește termenul notificării (2026-04-09)', s1.stare_calcul === 'indeplinit' && s1.il === '2026-03-20', JSON.stringify(s1))
+    // actul anulat (administrare) după îndeplinire; comunicarea lui rămâne neanulată
+    await rpc(db, 'admin', 'act_stare', N5.id, await vA(N5.id), 'anulat', { motiv: 'retras' }, K())
+    const s2 = await vt(tn)
+    ok('S17c actul anulat: termenul „indeplinit_de_verificat” (runda 1: rămânea „indeplinit”)', s2.stare_calcul === 'indeplinit_de_verificat' && s2.il === null, JSON.stringify(s2))
+    const tv = (await ca(db, 'mp1', `SELECT transmis_la::text AS t FROM public.v_executie_revendicare_acte WHERE id = $1`, [N5.id]))[0]
+    ok('S17d actul anulat nu mai are dată de transmitere', tv.t === null, JSON.stringify(tv))
+    const tn2 = await manual('notificare', '2026-04-09')
+    await refuz('S17e un act anulat nu mai îndeplinește nimic', '22023',
+      async () => rpc(db, 'mp1', 'termen_confirma', tn2, await vT(tn2), 'indeplinit', { act_id: N5.id }, K()), /actul compatibil/)
+    // termenul beneficiarului: îndeplinit de actul LUI, primit (2026-03-25 > 2026-03-24 = tardiv)
+    const rb = (await rpc(db, 'mp1', 'act', D5, null, null, { tip: 'raspuns_beneficiar', sens: 'intrare', titlu: 'Raspuns', nr_beneficiar: 'B 1' }, K())).rand.id
+    await rpc(db, 'mp1', 'comunicare', rb, null, await vA(rb), { destinatar: 'Societatea', canal: 'registratura', data_primire: '2026-03-25' }, K())
+    const trp = await manual('raspuns_principiu', '2026-03-24')
+    const N6 = await transmite(D5, 'notificare', 'NR 6/2026', '2026-03-22')
+    await refuz('S17f notificarea noastră (transmisă, neanulată) nu închide termenul de răspuns al beneficiarului', '22023',
+      async () => rpc(db, 'mp1', 'termen_confirma', trp, await vT(trp), 'indeplinit', { act_id: N6.id }, K()), /actul compatibil/)
+    await rpc(db, 'mp1', 'termen_confirma', trp, await vT(trp), 'indeplinit', { act_id: rb }, K())
+    const s3 = await vt(trp)
+    ok('S17g răspunsul primit 2026-03-25 îndeplinește termenul din 2026-03-24, tardiv', s3.stare_calcul === 'indeplinit_tardiv' && s3.il === '2026-03-25', JSON.stringify(s3))
+  })
+
+  // S18 (verdict P3) dosarul final (retras) nu se mai modifică prin NICIUN RPC, inclusiv riscul
+  await sectiune('S18', async () => {
+    const D6 = (await dosar('mp1', 1, 'Dosar retras')).rand.id
+    const a6 = (await rpc(db, 'mp1', 'act', D6, null, null, { tip: 'notificare', sens: 'iesire', titlu: 'Act D6' }, K())).rand.id
+    const t6 = (await rpc(db, 'mp1', 'termen', D6, null, null, { tip_obligatie: 'alt', mod: 'manual', declansator_tip: 'alt' }, K())).rand.id
+    const l6 = (await rpc(db, 'mp1', 'reper', D6, 'leaga', null, null, { reper_id: reperB, rol: 'sursa' }, K())).rand.id
+    const v6 = (await rpc(db, 'mp1', 'dovada', D6, null, null, { tip: 'ordin', tinta_id: ord1, rol: 'fapt' }, K())).rand.id
+    const et6 = await rpc(db, 'mp1', 'etapa', D6, await vD(D6), 'retras', 'deschis din greseala', K())
+    ok('S18a dosarul retras', et6.ok && et6.rand.etapa === 'retras')
+    const inchis = /dosarul e inchis/
+    for (const [nume, fn] of [
+      ['riscul (runda 1: trecea)', async () => rpc(db, 'mp1', 'risc', D6, await vD(D6), 'ridicat', null, K())],
+      ['decăderea, de administrare', async () => rpc(db, 'admin', 'risc', D6, await vD(D6), 'decadere_constatata', 'motiv', K())],
+      ['salvarea dosarului', async () => rpc(db, 'mp1', 'salveaza_dosar', 1, D6, await vD(D6), { titlu: 'Dosar retras' }, K())],
+      ['legarea unui reper', async () => rpc(db, 'mp1', 'reper', D6, 'leaga', null, null, { reper_id: reperP1, rol: 'temei' }, K())],
+      ['confirmarea legăturii', async () => confirmaLeg(D6, l6, reperB)],
+      ['act nou', async () => rpc(db, 'mp1', 'act', D6, null, null, { tip: 'dezacord', sens: 'iesire', titlu: 'x' }, K())],
+      ['starea actului', async () => rpc(db, 'mp1', 'act_stare', a6, await vA(a6), 'de_aprobat', {}, K())],
+      ['comunicarea', async () => rpc(db, 'mp1', 'comunicare', a6, null, await vA(a6), { destinatar: 'Beneficiar', canal: 'posta', data_transmitere: '2026-03-20' }, K())],
+      ['termen nou', async () => rpc(db, 'mp1', 'termen', D6, null, null, { tip_obligatie: 'alt', mod: 'manual', declansator_tip: 'alt' }, K())],
+      ['confirmarea termenului', async () => rpc(db, 'admin', 'termen_confirma', t6, await vT(t6), 'data', { data: '2026-05-05', justificare: 'x' }, K())],
+      ['dovadă nouă', async () => rpc(db, 'mp1', 'dovada', D6, null, null, { tip: 'raport', tinta_id: rap1, rol: 'fapt' }, K())],
+      ['scoaterea dovezii', async () => rpc(db, 'mp1', 'dovada', D6, v6, (await pg(`SELECT versiune FROM public.executie_revendicare_dovezi WHERE id = $1`, [v6]))[0].versiune, { motiv: 'x' }, K())],
+    ]) await refuz(`S18b dosar retras, ${nume}`, '22023', fn, inchis)
+    await refuz('S18c dosar retras, etapa (nicio tranziție din „retras”)', '22023', async () => rpc(db, 'mp1', 'etapa', D6, await vD(D6), 'notificat', null, K()), /tranzitie nepermisa/)
+    const rr = (await pg(`SELECT risc_juridic FROM public.executie_revendicari WHERE id = $1`, [D6]))[0].risc_juridic
+    ok('S18d riscul dosarului retras neschimbat', rr === 'neevaluat', rr)
+  })
+
+  // S19 (verdict, teste) fluxurile REALE ale declanșatorilor: transmiterea și primirea înregistrate prin comunicare, nu prin UPDATE
+  await sectiune('S19', async () => {
+    const l7 = (await pg(`SELECT id::int AS id FROM public.executie_revendicare_repere WHERE dosar_id = $1 AND rol = 'temei' AND activ`, [D5]))[0].id
+    const N7 = await transmite(D5, 'notificare', 'NR 7/2026', '2026-03-20')
+    const regula = async (oblig, decl, extra, data, zile) => {
+      const id = (await rpc(db, 'mp1', 'termen', D5, null, null, { tip_obligatie: oblig, mod: 'regula', declansator_tip: decl, declansator_data: data,
+                                                                   nr_zile: zile, reper_legatura_id: l7, ...extra }, K())).rand.id
+      await rpc(db, 'admin', 'termen_confirma', id, await vT(id), 'regula', {}, K())
+      return (await rpc(db, 'mp1', 'termen_confirma', id, await vT(id), 'declansator', {}, K())).rand
+    }
+    const tt = await regula('detaliere_initiala', 'transmitere_act', { declansator_act_id: N7.id }, '2026-03-20', 30)
+    ok('S19a transmiterea notificării 2026-03-20 + 30 = 2026-04-19 (prin comunicare)', tt.data_propusa === '2026-04-19', JSON.stringify(tt))
+    await refuz('S19b declanșatorul cu altă dată decât transmiterea reală = refuz', '22023', async () => {
+      const id = (await rpc(db, 'mp1', 'termen', D5, null, null, { tip_obligatie: 'detaliere_initiala', mod: 'regula', declansator_tip: 'transmitere_act',
+                                                                   declansator_act_id: N7.id, declansator_data: '2026-03-21', nr_zile: 30, reper_legatura_id: l7 }, K())).rand.id
+      return rpc(db, 'mp1', 'termen_confirma', id, await vT(id), 'declansator', {}, K())
+    }, /difera de sursa ei \(2026-03-20\)/)
+    const rb = (await pg(`SELECT id::int AS id FROM public.executie_revendicare_acte WHERE dosar_id = $1 AND tip = 'raspuns_beneficiar'`, [D5]))[0].id
+    const tp = await regula('dezacord', 'primire_act', { declansator_act_id: rb }, '2026-03-25', 10)
+    ok('S19c primirea răspunsului 2026-03-25 + 10 = 2026-04-04 (prin comunicare)', tp.data_propusa === '2026-04-04', JSON.stringify(tp))
+    // anularea comunicării notificării (administrare): actul revine la semnat, termenul alimentat de transmitere e de reverificat
+    await rpc(db, 'admin', 'comunicare', N7.id, N7.com, (await pg(`SELECT versiune FROM public.executie_revendicare_comunicari WHERE id = $1`, [N7.com]))[0].versiune,
+              { anulat: true, motiv: 'inregistrata gresit' }, K())
+    const s = await vt(tt.id)
+    ok('S19d transmiterea anulată: termenul „sursa_de_reverificat”', s.stare_calcul === 'sursa_de_reverificat', JSON.stringify(s))
+  })
+
+  // S20 (verdict, teste) rolurile pe FIECARE RPC: editorul Execuție care nu e MP, MP-ul altui proiect, MP-ul restrâns = același refuz 42501
+  await sectiune('S20', async () => {
+    const comA1 = (await pg(`SELECT id::int AS id, versiune FROM public.executie_revendicare_comunicari WHERE act_id = $1 ORDER BY id LIMIT 1`, [A1]))[0]
+    for (const cine of ['editor', 'mp2', 'mpR']) {
+      for (const [nume, fn] of [
+        ['salveaza_dosar', async () => rpc(db, cine, 'salveaza_dosar', 1, D1, await vD1(), { titlu: 'x' }, K())],
+        ['etapa', async () => rpc(db, cine, 'etapa', D1, await vD1(), 'retras', 'x', K())],
+        ['risc', async () => rpc(db, cine, 'risc', D1, await vD1(), 'scazut', null, K())],
+        ['reper', async () => rpc(db, cine, 'reper', D1, 'leaga', null, null, { reper_id: reperB, rol: 'sursa' }, K())],
+        ['act', async () => rpc(db, cine, 'act', D1, null, null, { tip: 'dezacord', sens: 'iesire', titlu: 'x' }, K())],
+        ['act_stare', async () => rpc(db, cine, 'act_stare', A1, await vA(A1), 'anulat', { motiv: 'x' }, K())],
+        ['comunicare', async () => rpc(db, cine, 'comunicare', A1, comA1.id, comA1.versiune, { anulat: true, motiv: 'x' }, K())],
+        ['termen', async () => rpc(db, cine, 'termen', D1, null, null, { tip_obligatie: 'alt', mod: 'manual', declansator_tip: 'alt' }, K())],
+        ['termen_confirma', async () => rpc(db, cine, 'termen_confirma', T1, await vT(T1), 'anulat', { motiv: 'x' }, K())],
+        ['dovada', async () => rpc(db, cine, 'dovada', D1, null, null, { tip: 'document', tinta_id: docFaraHash, rol: 'fapt' }, K())],
+      ]) await refuz(`S20 ${cine} pe ${nume}`, '42501', fn, /dosarul nu exista sau nu ai drept/)
+    }
+  })
+
+  // S21 (verdict P2-5) regresia modulului Documente și retenția: un document nelegat se șterge ca înainte; o dovadă SCOASĂ tot blochează
+  //     ștergerea țintei (alegerea de arhivare, spec §5)
+  await sectiune('S21', async () => {
+    const docNou = (await pg(`INSERT INTO public.documente_proiect (proiect_id, nume_fisier, storage_path, hash_sha256) VALUES (1, 'nelegat.pdf', 'p1/nelegat.pdf', NULL)
+                              RETURNING id::int AS id`))[0].id
+    const del = await eroare(() => pg(`DELETE FROM public.documente_proiect WHERE id = $1`, [docNou]))
+    ok('S21a un document nelegat se șterge ca înainte', del === null, JSON.stringify(del))
+    const vr = (await pg(`SELECT id::int AS id, versiune FROM public.executie_revendicare_dovezi WHERE dosar_id = $1 AND raport_id = $2 AND activ`, [D1, rap1]))[0]
+    await rpc(db, 'mp1', 'dovada', D1, vr.id, vr.versiune, { motiv: 'nu e relevant' }, K())
+    await refuz('S21b dovada scoasă blochează în continuare ștergerea raportului (retenție permanentă)', '23503', () => pg(`DELETE FROM public.rapoarte_zilnice WHERE id = $1`, [rap1]))
+  })
 }
 
 // ── rulare: suita pe migrarea reală ────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -444,8 +733,13 @@ async function ruleazaSuita(text) {
   return picate
 }
 const real = await ruleazaSuita(MIG)
+if (DOAR_SUITA) {
+  console.log(`DOAR SUITA pe ${MIG_CALE}: ${real.length} verificări picate`)
+  for (const p of real) console.log('  PICAT ' + p)
+  process.exit(0)
+}
 if (real.length) { console.error('SUITA PICATĂ pe migrarea reală:\n  ' + real.join('\n  ')); process.exit(1) }
-console.log('suita: OK pe migrarea reală (toate verificările S1–S14)')
+console.log('suita: OK pe migrarea reală (toate verificările S1–S21)')
 
 // ── 2. mutanții: fiecare trebuie prins de verificarea lui ─────────────────────────────────────────────────────────────────────────────────
 const mutanti = [
@@ -462,32 +756,65 @@ const mutanti = [
   ['M9 cheia fără contul care a creat-o', /^S4c /, [['  IF c.operatie = p_operatie AND c.amprenta = p_amprenta AND c.creat_de = auth.uid() THEN', '  IF c.operatie = p_operatie AND c.amprenta = p_amprenta THEN']]],
   ['M10 data confirmată diferită acceptată', /^S7g /, [['        IF v_data IS DISTINCT FROM v_t.data_propusa THEN', '        IF false THEN'], ["  IF NEW.data_confirmata IS NOT NULL AND NEW.mod = 'regula' AND NEW.data_confirmata IS DISTINCT FROM NEW.data_propusa THEN", '  IF false THEN']]],
   ['M11 aprobarea la nivel administrare', /^S12e /, [["    ('iesire', 'de_aprobat', 'aprobat', 'aprobare', false),", "    ('iesire', 'de_aprobat', 'aprobat', 'administrare', false),"]]],
-  ['M12 aprobarea fără temei confirmat', /^S12g /, [["    IF NOT EXISTS (SELECT 1 FROM public.executie_revendicare_repere l\n                    WHERE l.dosar_id = v_d.id AND l.rol = 'temei' AND l.activ AND public.fn_executie_revendicare_legatura_valida(l.id)) THEN",
-                                                    "    IF false THEN"]]],
+  ['M12 aprobarea fără temei confirmat', /^S12g /, [['    IF public.fn_executie_revendicare_surse_valide(v_d.id) IS NOT TRUE THEN', '    IF false THEN']]],
   ['M13 etapa fără actul cerut', /^S12n /, [["  IF v_t.cere_tip IS NOT NULL AND NOT EXISTS (", "  IF false AND NOT EXISTS ("]]],
   ['M14 legătura fără verificarea versiunii reperului', /^S7p /, [['                    AND r.versiune = l.reper_versiune_confirmata\n                    AND public.fn_executie_revendicare_reper_amprenta(r.id) = l.reper_amprenta_confirmata)', '                    )']]],
   ['M15 decăderea constatată de MP', /^S11a /, [["    IF NOT public.fn_executie_revendicare_drept(v_d.proiect_id, 'administrare') THEN\n      RAISE EXCEPTION 'revendicari: constatarea decaderii", "    IF false THEN\n      RAISE EXCEPTION 'revendicari: constatarea decaderii"]]],
-  ['M16 jurnalul modificabil', /^S13c /, [['CREATE TRIGGER trg_executie_revendicare_jurnal_imuabil BEFORE UPDATE OR DELETE', 'CREATE TRIGGER trg_executie_revendicare_jurnal_imuabil BEFORE DELETE']]],
   ['M17 comunicarea viitoare acceptată', /^S12o /, [['  IF v_dt > v_azi OR v_dp > v_azi THEN', '  IF false THEN']]],
+  // runda 2
+  ['M18 validitatea fără lanțul precedentelor', /^S15c /, [['  SELECT public.fn_executie_revendicare_termen_intrari_locale(p_termen) AND public.fn_executie_revendicare_termen_lant_valid(p_termen)',
+                                                          '  SELECT public.fn_executie_revendicare_termen_intrari_locale(p_termen)']]],
+  ['M19 declanșatorul confirmat fără lanțul valabil', /^S15d /, [['      IF public.fn_executie_revendicare_termen_lant_valid(v_t.id) IS NOT TRUE THEN', '      IF false THEN']]],
+  ['M20 ciclul permis', /^S15g /, [['               SELECT 1 FROM lant WHERE lant.id = NEW.id) THEN', '               SELECT 1 FROM lant WHERE false) THEN']]],
+  ['M21 aprobarea cu „măcar un temei”', /^S16a /, [["     AND NOT EXISTS (SELECT 1 FROM public.executie_revendicare_repere l WHERE l.dosar_id = p_dosar AND l.rol = 'temei' AND l.activ\n                      AND NOT public.fn_executie_revendicare_legatura_valida(l.id))",
+                                                   "     AND EXISTS (SELECT 1 FROM public.executie_revendicare_repere l WHERE l.dosar_id = p_dosar AND l.rol = 'temei' AND l.activ\n                      AND public.fn_executie_revendicare_legatura_valida(l.id))"]]],
+  ['M22 aprobarea fără sursele fixate', /^S16[ef] /, [['     AND a.aprobat_surse_amprenta IS NOT DISTINCT FROM public.fn_executie_revendicare_surse_amprenta(a.dosar_id)\n', '']]],
+  ['M23 îndeplinirea cu orice act', /^S17a /, [['                  WHERE o.tip_obligatie = p_tip_obligatie AND o.tip_act = a.tip AND o.sens = a.sens)', '                  WHERE true)']]],
+  ['M24 actul anulat contează', /^S17c /, [["AND NOT c.anulat AND a.stare <> 'anulat'", 'AND NOT c.anulat'],
+                                         ["     AND a.stare = CASE a.sens WHEN 'iesire' THEN 'transmis' ELSE 'primit' END\n", '']]],
+  ['M25 „îndeplinit” înaintea sursei', /^S12u |^S9 îndeplinit, sursa/, [["  IF p_intrari_valide IS NOT TRUE THEN RETURN 'sursa_de_reverificat'; END IF;\n  IF p_stare = 'indeplinit' THEN",
+                                                                         "  IF p_stare = 'deschis' AND p_intrari_valide IS NOT TRUE THEN RETURN 'sursa_de_reverificat'; END IF;\n  IF p_stare = 'indeplinit' THEN"]]],
+  ['M26 riscul pe dosarul final', /^S18b dosar retras, riscul/, [["  IF v_d.etapa IN ('inchis', 'retras') THEN RAISE EXCEPTION 'revendicari: dosarul e inchis' USING ERRCODE = '22023'; END IF;\n  IF v_d.versiune IS DISTINCT FROM p_versiune THEN RETURN jsonb_build_object('ok', false, 'motiv', 'conflict', 'rand', to_jsonb(v_d)); END IF;\n  IF p_risc",
+                                                                  "  IF v_d.versiune IS DISTINCT FROM p_versiune THEN RETURN jsonb_build_object('ok', false, 'motiv', 'conflict', 'rand', to_jsonb(v_d)); END IF;\n  IF p_risc"]]],
+  ['M27 îndeplinirea ignoră actul de intrare (termenul beneficiarului închis de actul nostru)', /^S17f /, [["    ('raspuns_principiu', 'raspuns_beneficiar', 'intrare'),", "    ('raspuns_principiu', 'notificare', 'iesire'),\n    ('raspuns_principiu', 'raspuns_beneficiar', 'intrare'),"]]],
 ]
+// NU se poate prinde în PGlite (o singură conexiune): reverificarea dreptului DUPĂ lock (P2-4). Proba: K4 din
+// scripts/executie_revendicari_concurenta.sh, pe clonă.
 for (const [nume, test, inl] of mutanti) {
   let picate
-  try { picate = await ruleazaSuita(aplica(MIG, inl)) } catch (e) { picate = ['APLICARE: ' + e.message] }
+  try { picate = await ruleazaSuita(reamprenteaza(aplica(MIG, inl))) } catch (e) { picate = ['APLICARE: ' + e.message] }
   const prins = picate.some((p) => test.test(p))
   if (!prins) rau++
   console.log(`${prins ? 'prins ' : 'SCĂPAT'} ${nume}${prins ? '' : ' — picate: ' + (picate.slice(0, 4).join(' | ') || 'nimic')}`)
 }
 // mutanții prinși de POSTCONDIȚIILE migrării (aplicarea refuză)
 for (const [nume, motiv, inl] of [
-  ['P1 politica USING (true)', /post: politicile lui executie_revendicari/, [["      EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (public.fn_executie_revendicare_drept(proiect_id, ''citire''))', t || '_citire', t);",
+  ['P1 politica USING (true)', /post: politicile \(definitia exacta\): .*executie_revendicari\.executie_revendicari_citire/, [["      EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (public.fn_executie_revendicare_drept(proiect_id, ''citire''))', t || '_citire', t);",
                                                                               "      EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (true)', t || '_citire', t);"]]],
+  // runda 2 (verdict P2-6): definițiile exacte
+  ['P6 politica „predicat OR true” (păstrează fragmentul căutat în runda 1)', /post: politicile \(definitia exacta\): .*executie_revendicare_acte\.executie_revendicare_acte_citire/,
+   [["      EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (public.fn_executie_revendicare_drept(proiect_id, ''citire''))', t || '_citire', t);",
+     "      EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (public.fn_executie_revendicare_drept(proiect_id, ''citire'') OR true)', t || '_citire', t);"]]],
+  ['P7 trigger-ul calculului doar la INSERT (același număr de trigger-e)', /post: trigger-e \(definitia exacta\): executie_revendicare_termene\.trg_b_executie_revendicare_termen_calc/,
+   [['CREATE TRIGGER trg_b_executie_revendicare_termen_calc BEFORE INSERT OR UPDATE ON public.executie_revendicare_termene',
+     'CREATE TRIGGER trg_b_executie_revendicare_termen_calc BEFORE INSERT ON public.executie_revendicare_termene']]],
+  ['P8 trigger-ul jurnalului cu condiție WHEN (false)', /post: trigger-e \(definitia exacta\): executie_revendicare_jurnal\.trg_executie_revendicare_jurnal_imuabil/,
+   [['CREATE TRIGGER trg_executie_revendicare_jurnal_imuabil BEFORE UPDATE OR DELETE ON public.executie_revendicare_jurnal\n  FOR EACH ROW EXECUTE',
+     'CREATE TRIGGER trg_executie_revendicare_jurnal_imuabil BEFORE UPDATE OR DELETE ON public.executie_revendicare_jurnal\n  FOR EACH ROW WHEN (false) EXECUTE']]],
+  ['P9 corpul dreptului înlocuit după creare (aceleași atribute, alt corp)', /post: functii \(definitia exacta \/ drepturi\): fn_executie_revendicare_drept\(bigint,text\)$/,
+   [['-- ── 9. postcondiții', "CREATE OR REPLACE FUNCTION public.fn_executie_revendicare_drept(p_proiect bigint, p_nivel text) RETURNS boolean\nLANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;\n-- ── 9. postcondiții"]]],
+  // fostul M16: din runda 2 îl prinde întâi postcondiția exactă a trigger-elor (comportamentul: S13c pe migrarea reală)
+  ['P11 (fost M16) jurnalul modificabil: trigger-ul imuabilității doar la DELETE', /post: trigger-e \(definitia exacta\): executie_revendicare_jurnal\.trg_executie_revendicare_jurnal_imuabil$/,
+   [['CREATE TRIGGER trg_executie_revendicare_jurnal_imuabil BEFORE UPDATE OR DELETE', 'CREATE TRIGGER trg_executie_revendicare_jurnal_imuabil BEFORE DELETE']]],
+  ['P10 cheia străină spre documente fără index', /post: chei straine fara index: executie_revendicare_dovezi\.document_id$/,
+   [['CREATE INDEX executie_revendicare_dovezi_document_idx ON public.executie_revendicare_dovezi (document_id);\n', '']]],
   ['P2 EXECUTE lăsat la anon (implicit Supabase)', /post: functii/, [["    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated, service_role', r.sem);", "    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', r.sem);"]]],
   ['P3 INSERT direct lăsat (implicit Supabase)', /post: privilegii pe executie_revendicari/, [["    EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC, anon, authenticated, service_role', t);", "    EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC', t);"]]],
   ['P4 altă funcție scrie decăderea', /post: alta functie scrie decaderea/, [["  IF p_stare = 'anulat' THEN RETURN 'anulat'; END IF;", "  IF p_stare = 'anulat' THEN RETURN 'anulat'; END IF;\n  IF p_stare = 'x' THEN RETURN 'decadere_constatata'; END IF;"]]],
   ['P5 vedere fără security_invoker', /post: vederile/, [['CREATE VIEW public.v_executie_revendicare_acte WITH (security_invoker = on) AS', 'CREATE VIEW public.v_executie_revendicare_acte AS']]],
 ]) {
   const db = await bazaNoua()
-  const e = await eroare(() => aplicaMig(db, aplica(MIG, inl)))
+  const e = await eroare(() => aplicaMig(db, reamprenteaza(aplica(MIG, inl))))
   await db.close()
   const bine = e && motiv.test(e.message)
   if (!bine) rau++

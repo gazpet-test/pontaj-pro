@@ -1,6 +1,6 @@
 -- Revenire 20261224a_executie_revendicari. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a owner-ului (supabase/revenire/README.md).
 -- Scoate tot ce a creat migrarea: cele 9 tabele executie_revendicar* (cu trigger-ele, politicile și indexurile lor), cele 2 vederi
--- v_executie_revendicare_* și cele 36 de funcții fn_executie_revendicare_*.
+-- v_executie_revendicare_* și cele 43 de funcții fn_executie_revendicare_* (runda 2: +7, lanțul termenelor, îndeplinirea, sursele aprobate).
 -- REFUZĂ dacă oricare tabel are rânduri (dosare, jurnal, chei, alerte...): nimic din dosarele de revendicare nu se șterge de aici. Golirea e o
 -- decizie separată (preview -> „da” owner -> apply, cu export înainte).
 -- Gestionarul tranzacției e runnerul (livrare_migrare.sh --plafon-tranzactie-ms 2000, același ca la migrare) sau operatorul. Un singur string:
@@ -45,7 +45,7 @@ BEGIN
      OR (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
           WHERE n.nspname = 'public' AND c.relkind = 'v' AND c.relname IN ('v_executie_revendicare_termene', 'v_executie_revendicare_acte')) <> 2
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_revendicare\_%') <> 36
+          WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_revendicare\_%') <> 43
      OR (SELECT count(*) FROM pg_trigger g WHERE g.tgrelid IN (SELECT ('public.' || x)::regclass FROM unnest(v_tab) x) AND NOT g.tgisinternal) <> 15 THEN
     RAISE EXCEPTION '20261224a revenire: starea nu e cea din 20261224a';
   END IF;
@@ -74,6 +74,7 @@ BEGIN
   -- apoi restul funcțiilor
   DROP VIEW public.v_executie_revendicare_termene;
   DROP VIEW public.v_executie_revendicare_acte;
+  DROP FUNCTION public.fn_executie_revendicare_act_aprobare_valida(public.executie_revendicare_acte);
   DROP FUNCTION public.fn_executie_revendicare_act_amprenta(public.executie_revendicare_acte);
   DROP FUNCTION public.fn_executie_revendicare_dosar_blocheaza(bigint, text);
   DROP TABLE public.executie_revendicare_chei;
