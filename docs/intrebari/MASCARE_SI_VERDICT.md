@@ -519,8 +519,17 @@ Ce NU acoperă matricea: combinațiile în afara domeniului de mai sus (alte num
 contractul, cazurile scrise de mână și mutanții. Matricea e dovada pentru combinațiile enumerate, nu o demonstrație universală.
 
 ## Pașii de pornire (pentru coordonator — după review și „da”-ul lui Răzvan)
-Nu e nevoie de migrare și nici de secrete noi. **Merge-ul NU publică funcția edge și NU pornește workerul.** Workerul stă OPRIT pe
-toată livrarea; testul de fum se face cu rularea periodică încă dezactivată. Ordinea:
+Nu e nevoie de o migrare NOUĂ și nici de secrete noi — **dar migrarea `20261131e` (răspunsurile din cercetare) trebuie să fie deja
+aplicată.** Funcția edge de pe `main` scrie răspunsul cu parametrii adăugați de ea (`p_surse`, `p_interogari`): ordinea e migrarea →
+funcția edge → workerul. **Găsit la pornire (14.11.2026):** aici scria „nu e nevoie de migrare”, iar `20261131e` nu fusese aplicată
+niciodată. Funcția edge a fost publicată înaintea ei, iar la testul de fum workerul a ascuns numele, dar n-a putut scrie nici
+răspunsul, nici eroarea (500 la scriere). De aceea pasul 0 de mai jos.
+**Merge-ul NU publică funcția edge și NU pornește workerul.** Workerul stă OPRIT pe toată livrarea; testul de fum se face cu rularea
+periodică încă dezactivată. Ordinea:
+0. **Baza de date e la versiunea cerută de funcția edge** (doar citire): `20261131e_intrebari_cercetare_surse` apare în istoricul
+   migrărilor, iar `fn_intrebari_raspunde` are 8 parametri (cu `p_surse` și `p_interogari`). Altfel: stop — întâi se aplică migrarea,
+   prin runner, cu acordul owner-ului; funcția edge NU se publică înaintea ei. Tot aici: cheia API a furnizorului e validă (o cerere
+   de listare a modelelor cu ea răspunde 200) — altfel workerul preia întrebarea și o închide cu eroare.
 1. **Workerul e oprit — dovedit, nu presupus.** Pe serverul AI, în PowerShell (se notează rezultatul fiecăreia):
    - task-ul planificat e dezactivat: `schtasks /Change /TN "Intrebari tehnice worker (Gazpet)" /DISABLE`, apoi
      `(Get-ScheduledTask -TaskName "Intrebari tehnice worker (Gazpet)").State` → `Disabled`;
@@ -595,7 +604,10 @@ toată livrarea; testul de fum se face cu rularea periodică încă dezactivată
    genitiv, o localitate, un nume cu un caracter invizibil copiat, un nume scris cu litere mici). Se pornește workerul **o singură
    dată, de mână**; se verifică: răspunsul afișat are numele la loc și nicio etichetă; jurnalul are `nume_incarcate` (doar numere),
    apoi `mascate`, `inlocuiri`, `regula_b` — fără valori; niciun proces `motor_cli.mjs` rămas (verificarea din pasul 1). Orice
-   abatere: stop, se raportează.
+   abatere: stop, se raportează. La răspuns reușit, jurnalul are `stare: "raspuns"`; pe căile care emit `scriere`, valoarea 200
+   confirmă scrierea. `scriere: 500` sau `stare: "scriere_500"` indică eșecul scrierii — funcția edge n-a putut scrie în bază (vezi
+   pasul 0). `http: 401` cu `authentication_error` = cheia API a furnizorului nu mai e validă. O rulare de probă cu coada goală
+   (înaintea întrebării de test) verifică motorul, lista de nume și jurnalul, dar NU scrierea răspunsului și nici cheia API.
 10. Abia acum se reactivează rularea periodică: `schtasks /Change /TN "Intrebari tehnice worker (Gazpet)" /ENABLE` → `Ready`.
 11. Registrul: rândul de mai jos în `registru_automatizari` și în `public.automatizari` (fără valori de secrete).
 
