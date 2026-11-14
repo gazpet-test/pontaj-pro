@@ -482,6 +482,17 @@ export function prezentareRaspuns({ v2, surse, interogari }) {
   return { v2: true, cercetare, eticheta: cercetare ? ETICHETA_CERCETARE : ETICHETA_VECHE }
 }
 
+/** Mesajul afișat la o întrebare în starea „eroare” (14.11.2026). Textele scrise de worker / edge / RPC se termină de obicei cu punct
+ *  și multe conțin deja îndemnul („Pune întrebarea din nou [mai târziu].”, „Reformulează [sau împarte] întrebarea.”) → nu se mai
+ *  adaugă nici punctul, nici „Poți pune întrebarea din nou.”. Lipsă / gol / doar spații = „eroare”, ca înainte. */
+const INDEMN_DIN_NOU = /\bpune\b[^.!?]*\bdin nou\b|\breformuleaz/
+export function mesajEroareIntrebare(eroare) {
+  const e = String(eroare ?? '').trim() || 'eroare'
+  const fraza = /[.!?…;:]$/.test(e) ? e : `${e}.`
+  const n = normalizeaza(e)
+  return INDEMN_DIN_NOU.test(n) ? `Nu s-a putut răspunde: ${fraza}` : `Nu s-a putut răspunde: ${fraza} Poți pune întrebarea din nou.`
+}
+
 /** Interogările web trimise (audit, doar ownerul le vede): listă de șiruri, max 20 × 200 de caractere. */
 export function interogariAfisabile(x) {
   return Array.isArray(x) ? x.filter(q => typeof q === 'string' && q.trim()).slice(0, 20).map(q => q.slice(0, 200)) : []
