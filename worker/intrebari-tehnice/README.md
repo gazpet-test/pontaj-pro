@@ -7,7 +7,7 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
 | Piesă | Unde |
 |---|---|
 | Tabel + RLS + bucket + RPC-uri | `supabase/migrations/20261105a_intrebari_tehnice.sql` (livrare: `scripts/livrare_migrare.sh`) |
-| Canal worker ↔ ERP | edge `intrebari-tehnice-worker` (verify_jwt = false; poarta: Vault `INTREBARI_WORKER_SECRET`, antet `x-intrebari-secret`) |
+| Canal worker ↔ ERP | edge `intrebari-tehnice-worker` (verify_jwt = false; poarta: Vault `INTREBARI_WORKER_SECRET`, antet `x-intrebari-secret`); acțiunile `preia`, `raspunde`, `eroare`, `amana`, `nume`, `coada` (14.11.2026, doar citire) |
 | Worker | `intrebari_worker.py` + `cercetare.py` (acest folder), Task Scheduler „Intrebari tehnice worker (Gazpet)”, la 2 minute |
 | Cercetare (06.11.2026) | `cercetare.py` (corpus, web oficial, validare); index: `scripts/intrebari/construieste_corpus.mjs` → `corpus_index.json` |
 | Surse + `de_verificat` + reluare | `supabase/migrations/20261131e_intrebari_cercetare_surse.sql` (edge v2 o cere) |
@@ -241,8 +241,30 @@ Simulat cu `SET LOCAL ROLE authenticated` + `request.jwt.claims` pentru un utili
 - (20261131e) `intrebari_preluari`: SELECT / INSERT refuzat pentru `authenticated` și `anon`; după N reluări ale aceleiași
   întrebări, `count(*)` pe ziua curentă crește cu N (plafonul de 40 nu se ocolește); `fn_intrebari_reia` nu golește `tokeni` / `preluat_la`.
 
+### Actualizarea „coada” (14.11.2026) — fără migrare, fără secrete noi
+Funcția edge are acțiunea `coada` (doar citire, răspuns `{"de_preluat": true | false}`); workerul o întreabă înaintea listei de
+nume și, la coadă goală, nu mai încarcă lista. **Ordinea de publicare: oricare e sigură, recomandată funcția edge întâi** — workerul
+vechi nu cheamă `coada`, iar workerul nou cu funcția edge veche primește 400 și face fluxul de azi. Pașii și verificările:
+`docs/intrebari/MASCARE_SI_VERDICT.md`, „Actualizarea «coada»”.
+
 ## Funcționare și erori
 - O rulare preia max 3 întrebări; lock `C:\Users\Public\intrebari_worker\worker.lock`.
+- **Coada (14.11.2026)**: după verificările locale (corpus, vocabular, motor, secret, cheia API) și ÎNAINTEA listei de nume,
+  workerul întreabă edge-ul `{"actiune": "coada"}` — doar citire, aceleași condiții ca `fn_intrebari_preia`, în aceeași ordine:
+  o preluare „în lucru” de peste 30 de minute (`preia` o închide, chiar peste plafon), plafonul de 40 pe ziua Europe/Bucharest
+  (fără amânări), o întrebare `noua` (o amânare o readuce imediat în `noua` — schema n-are termen de amânare). Răspunsul: doar
+  `de_preluat` (boolean), niciun conținut. Erorile merg mereu spre „are ceva”: marja de 60 s la expirare pentru ceasul edge-ului,
+  plafonul numărat „toate − amânate” (o scriere concurentă doar micșorează numărul), o citire eșuată = 500.
+  - `200 {"de_preluat": false}` exact → rularea se încheie: fără listă de nume (21 de tabele citite degeaba de 720 de ori pe zi),
+    fără „preia”, fără rând în jurnal — doar un rând `coada_goala` cel mult o dată pe oră (marcajul `coada_viu` din folderul
+    workerului), ca să se vadă că workerul merge (24 de rânduri pe zi în loc de 720);
+  - `de_preluat: true` → fluxul de azi, neschimbat (nume → preia);
+  - orice altceva (eroare, 401 / 404 / 500, corp de altă formă, excepție de rețea, edge vechi cu 400 „Acțiune necunoscută”) →
+    fluxul de azi, neschimbat: nu se sare peste nimic din cauza unei erori. Lista de nume rămâne ÎNAINTEA lui „preia” (fail closed).
+  - De ce nu o funcție SQL nouă: edge-ul citește deja cu `service_role` ambele tabele (`intrebari_tehnice`, `intrebari_preluari`
+    — SELECT acordat în migrări), o numărătoare HEAD nu scrie și nu întoarce rânduri; o funcție nouă ar fi cerut migrare + ordine
+    de livrare. Paritatea cu `fn_intrebari_preia` e testată pe un singur tabel de cazuri (`scripts/intrebari/coada_cazuri.mjs`): în
+    vitest și pe PGlite cu funcția copiată din migrare; un test pică dacă migrarea schimbă pragul, plafonul sau stările.
 - Jurnal local: `C:\Users\Public\intrebari_worker\jurnal.jsonl` — doar id, stare, tokeni, durată, numărul de extrase / surse web /
   interogări / căutări / citate, `reparat`, `scoase`, `incert`, motivul erorii (fără conținut, fără textul interogărilor, fără
   secrete). De la 13.11.2026 și: `mascate` (câte valori ascunse pe categorie), `inlocuiri`, `cautari_cu_nume`, `regula_b`
@@ -276,6 +298,12 @@ al echipei Paw).
   `test_worker.py` (nimic din valorile sensibile în nicio cerere, atașamentele nu pleacă, jurnalul fără valori, mutanții „apel
   nemascat” / „tip falsificat” / „altă speță” / „demascare lipsă”, demascarea parțială nu se publică, fără lista de nume sau fără
   motor nu se preia nimic). Edge: `supabase/functions/intrebari-tehnice-worker/logic.test.js` (vitest).
+- Coada (14.11.2026): `logic.test.js` (cazurile comune din `scripts/intrebari/coada_cazuri.mjs`: goală, o întrebare, amânată,
+  în lucru nescadentă / expirată / în marjă, plafonul, ziua locală inclusiv schimbarea orei; erorile = 500; răspunsul doar boolean;
+  poarta înaintea acțiunii; constantele = ultima `fn_intrebari_preia`), `test_worker.py` → `Pornire` (coadă goală: doar `coada`,
+  un rând „viu” pe oră; are ceva / eroare / edge vechi: `coada` → `nume` → `preia`) și proba locală
+  `npm install --no-save @electric-sql/pglite && node scripts/pglite/test_intrebari_coada_local.mjs` (paritatea cu
+  `fn_intrebari_preia` din migrare, pe Postgres real în memorie, + mutanți).
 - r5 — **matricea generativă** (criteriul de acceptare L25): `generativ.mjs` (fără importuri, fără funcțiile motorului) generează
   produsul complet al dimensiunilor contractului pe domeniul publicat în `docs/intrebari/MASCARE_SI_VERDICT.md` (6.260.928 de
   cazuri în 68 de loturi de cel mult 100.000); `src/intrebariMascare.generativ.test.js` rulează ACELEAȘI loturi pe fire de lucru

@@ -22,19 +22,25 @@
 //   v3 r3: răspunsul „nume” are și `localitati: string[]` (denumirile UAT + satele programate din red_uat, tabel deja citit) —
 //   workerul NU ascunde un cuvânt care e și localitate cunoscută, scris singur (decizia owner-ului: localitățile rămân vizibile).
 //   index.ts și logic.js se publică ÎMPREUNĂ.
+//   v4 (14.11.2026, fără migrare): { "actiune": "coada" } → 200 { de_preluat: boolean } sau 500 — DOAR CITIRE (patru numărători
+//   pe intrebari_tehnice / intrebari_preluari, aceleași condiții ca fn_intrebari_preia: expirate, plafon, 'noua'); nu preia, nu
+//   scrie, niciun conținut de întrebare. Workerul nou o întreabă înaintea listei de nume și sare peste nume doar la
+//   200 { de_preluat: false }; edge-ul VECHI răspunde 400 „Acțiune necunoscută” → workerul nou merge pe fluxul de azi.
+//   Logica și testele: logic.js (coadaDePreluat), logic.test.js.
 //
 // FIȘA DE SECURITATE (CLAUDE.md pct. 7):
 //  (a) conținut EXTERN: întrebările și atașamentele utilizatorilor trec prin edge spre worker — nu sunt interpretate aici;
 //  (b) scrie DOAR răspunsul/eroarea pe rândul „în lucru” (fn_intrebari_raspunde) + notificarea autorului; emite URL-uri semnate de citire
 //      (300 s) doar pentru atașamentele întrebării preluate (v3: workerul nu le mai descarcă); v3: CITEȘTE numele angajaților și ale
 //      terților din tabelele din logic.js SURSE_NUME (doar coloanele de nume / CUI, niciodată telefon / e-mail / CNP / IBAN) și le dă
-//      DOAR workerului, pentru mascare; fără mail, bani sau drepturi;
+//      DOAR workerului, pentru mascare; v4: „coada” NUMĂRĂ rânduri (intrebari_tehnice / intrebari_preluari, fără conținut) și
+//      răspunde doar cu un boolean; fără mail, bani sau drepturi;
 //  (c) service_role: apelantul (serverul AI) n-are cont Supabase; RPC-urile și createSignedUrl îl cer;
 //  (d) cine pornește: doar deținătorul INTREBARI_WORKER_SECRET (fn_verifica_secret, fail closed);
 //  (e) confirmare umană: nu e cazul — răspunsul e informativ, ajunge doar la autor.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { citesteCorp, esteId, esteObiect, raspuns } from '../_shared/ocrLocal.ts'
-import { autorizat, numeDinPlatforma } from './logic.js'
+import { autorizat, numeDinPlatforma, raspunsCoada } from './logic.js'
 
 const ANTET = 'x-intrebari-secret'
 const NUME_SECRET = 'INTREBARI_WORKER_SECRET'
@@ -94,6 +100,21 @@ function paginaNume(sb: ReturnType<typeof createClient>) {
   }
 }
 
+// v4: o numărătoare pentru acțiunea „coada” — doar HEAD cu count exact (niciun rând nu se întoarce); filtrele vin din logic.js
+// (interogariCoada), pe lista albă eq / lt / gte.
+function numaraCoada(sb: ReturnType<typeof createClient>) {
+  return async (tabel: string, filtre: [string, string, string][]) => {
+    // deno-lint-ignore no-explicit-any
+    let q: any = sb.from(tabel).select('id', { count: 'exact', head: true })
+    for (const [op, col, val] of filtre) {
+      if (op !== 'eq' && op !== 'lt' && op !== 'gte') return { count: null, error: { message: 'filtru' } }
+      q = q[op](col, val)
+    }
+    const { count, error } = await q
+    return { count, error }
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return raspuns(405, { error: 'Doar POST' })
   const url = Deno.env.get('SUPABASE_URL'), cheie = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
@@ -129,6 +150,11 @@ Deno.serve(async (req: Request) => {
     }
     return raspuns(200, { intrebare: { id: data.id, incercare: data.incercare, titlu: data.titlu, intrebare: data.intrebare, context: data.context ?? null,
                                        creat_la: data.creat_la, atasamente } })
+  }
+
+  if (corp.actiune === 'coada') {
+    const r = await raspunsCoada(numaraCoada(sb), new Date())
+    return raspuns(r.status, r.corp)
   }
 
   if (corp.actiune === 'nume') {

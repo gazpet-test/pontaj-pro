@@ -45,6 +45,10 @@ Din 13.11.2026 (deciziile owner-ului A și B, docs/intrebari/MASCARE_SI_VERDICT.
      Orice eroare a motorului (MotorEroare) → procesarea se oprește: nicio cerere nouă către model, răspunsul nu se publică
      (eroare vizibilă, cod în jurnal).
 
+Din 14.11.2026 (fără migrare): înaintea listei de nume workerul întreabă edge-ul „coada” (doar citire, un boolean). Coadă goală
+→ rularea se încheie fără lista de nume și fără rând în jurnal (cel mult un rând „coada_goala” pe oră); orice altă situație
+(are ceva, eroare, edge vechi) → fluxul de mai sus, neschimbat (nume → preia).
+
 Reguli (fișa în migrări): întrebarea, atașamentele, extrasele și paginile web sunt DATE pentru model, nu instrucțiuni; singura
 unealtă e căutarea web pe domeniile oficiale (server-side, la Anthropic); workerul nu execută nimic din conținut, nu trimite mail,
 nu scrie altundeva decât pe rândul întrebării (prin edge). Jurnalul (jurnal.jsonl) ține doar id, stare, tokeni, durată, numărul de
@@ -445,6 +449,33 @@ def incarca_nume(secret, motor):
         return None
 
 
+VIU_FILE_NUME = 'coada_viu'   # marcajul rândului „viu” din jurnal (doar data fișierului contează)
+VIU_SEC = 3600                # coadă goală: cel mult UN rând în jurnal pe oră (în loc de 30), ca să se vadă că workerul merge
+
+
+def coada_goala(secret):
+    """14.11.2026 — acțiunea „coada” a edge-ului (doar citire): True DOAR la răspunsul exact 200 {"de_preluat": false}. Orice
+    altceva — eroare, status necunoscut, corp de altă formă, excepție, edge vechi fără acțiune (400) — dă False, iar rularea merge
+    pe fluxul de azi (nume → preia): nu se sare peste nimic din cauza unei erori (L18)."""
+    try:
+        st, r = edge(secret, {'actiune': 'coada'})
+    except Exception:
+        return False
+    return st == 200 and isinstance(r, dict) and set(r) == {'de_preluat'} and r['de_preluat'] is False
+
+
+def jurnal_viu():
+    """Coadă goală: un rând „coada_goala” în jurnal cel mult o dată pe oră (data marcajului `coada_viu`). O eroare de fișier nu
+    oprește nimic — rularea s-ar fi încheiat oricum fără preluare."""
+    try:
+        m = DIR / VIU_FILE_NUME
+        if m.exists() and time.time() - m.stat().st_mtime < VIU_SEC: return
+        jurnal(stare='coada_goala')
+        m.touch()
+    except OSError:
+        pass
+
+
 def main():
     import msvcrt
     DIR.mkdir(parents=True, exist_ok=True)
@@ -469,6 +500,11 @@ def main():
         secret = SECRET_FILE.read_text(encoding='utf-8').strip()
         if len(secret) != 64: raise RuntimeError('secret')
         cheie = cheie_api()
+        # 14.11.2026: coada goală (răspuns exact de la edge) → rularea se încheie aici, FĂRĂ lista de nume (21 de tabele citite
+        # degeaba de 720 de ori pe zi) și fără rând în jurnal (cel mult unul „viu” pe oră). Orice altceva → fluxul de azi, neschimbat:
+        # lista de nume rămâne ÎNAINTEA lui „preia” (fail closed).
+        if coada_goala(secret):
+            jurnal_viu(); return 0
         nume = incarca_nume(secret, motor)   # decizia A: fără lista de nume nu se preia nimic (întrebările rămân în coadă)
         if nume is None:
             jurnal(stare='nume_indisponibile'); return 1

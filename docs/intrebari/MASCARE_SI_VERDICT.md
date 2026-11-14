@@ -614,6 +614,45 @@ periodică încă dezactivată. Ordinea:
 Revenirea: workerul se oprește întâi (pasul 1), apoi fișierele workerului, ale motorului și indexul corpusului se întorc împreună la
 versiunea anterioară (edge-ul poate rămâne: lista de nume e aceeași).
 
+### Actualizarea „coada” (14.11.2026) — lista de nume se încarcă doar când e ceva de preluat
+**Ce se schimbă:** funcția edge are o acțiune nouă, `coada`, DOAR CITIRE: numără întrebările (expirate, plafonul zilei, cele noi —
+aceleași condiții ca preluarea) și răspunde doar `{"de_preluat": true | false}`. Workerul o întreabă înaintea listei de nume: la
+`false` rularea se încheie fără lista de nume și fără rând în jurnal (cel mult un rând `coada_goala` pe oră, ca să se vadă că
+workerul merge); la orice altceva (are ceva, eroare, funcție edge veche) — fluxul de azi, neschimbat: nume → preia. Fără migrare,
+fără secrete noi; mascarea, cercetarea, regula „Da / Nu / Incert”, plafoanele și sursele de nume NU se schimbă.
+
+**Ordinea de publicare: oricare e sigură; recomandată funcția edge ÎNTÂI, apoi workerul.**
+- Funcția edge nouă + workerul vechi: workerul vechi nu cheamă `coada`; celelalte acțiuni sunt neschimbate → nimic nu se schimbă.
+- Workerul nou + funcția edge veche: `coada` primește 400 „Acțiune necunoscută” → workerul face fluxul de azi (nume → preia) →
+  nimic nu se pierde, doar economia lipsește până la publicarea funcției.
+- Nicio combinație nu sare peste o întrebare: workerul sare peste listă DOAR la răspunsul exact 200 `{"de_preluat": false}`.
+
+Pașii (cu „da”-ul lui Răzvan):
+1. Workerul oprit și verificat oprit (pasul 1 de mai sus). Tehnic nu e obligatoriu aici (vezi ordinea), dar regula casei rămâne.
+2. Merge PR-ul.
+3. Publicarea funcției edge `intrebari-tehnice-worker`: **`index.ts` și `logic.js` împreună**, prin workflow-ul manual (slug-ul e
+   deja în lista `NO_JWT`, deci `verify_jwt = false` rămâne).
+4. Verificarea FĂRĂ worker: cu secretul, `{"actiune": "coada"}` → **200** cu exact `{"de_preluat": false}` (sau `true` dacă e o
+   întrebare în coadă); fără antet / cu cheia anon / cu un JWT de cont obișnuit / cu un secret greșit → **401**. Tot cu secretul,
+   `{"actiune": "nume"}` → 200 ca înainte. Un 500 la `coada` = citirea a eșuat (de exemplu un drept lipsă pe `intrebari_preluari`):
+   workerul ar merge atunci pe fluxul de azi, dar se raportează.
+5. Copierea lui `intrebari_worker.py` din `main` în folderul workerului (doar el se schimbă; motorul, manifestele și indexul
+   corpusului rămân aceleași).
+6. Testele pe `main`: `npx vitest run supabase/functions/intrebari-tehnice-worker/logic.test.js` și
+   `python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py"` → OK.
+7. Testul de fum cu task-ul încă dezactivat, coada goală: o rulare de mână → jurnalul are UN rând `coada_goala` și niciun
+   `nume_incarcate`; a doua rulare imediat după → niciun rând nou. Prima întrebare reală de după reactivare trebuie să apară în
+   jurnal ca înainte (`nume_incarcate`, apoi `raspuns`).
+8. Reactivarea rulării periodice (pasul 10 de mai sus).
+
+**Ce se vede altfel în jurnal:** `nume_incarcate` apare doar la rulările cu ceva de preluat (nu la fiecare 2 minute); semnul că
+workerul merge cu coada goală e `coada_goala`, cel mult o dată pe oră. Un jurnal fără niciun rând nou de peste o oră înseamnă că
+workerul nu mai rulează (dacă funcția edge nu răspunde, workerul merge pe fluxul de azi și scrie `nume_indisponibile` la fiecare
+rulare).
+
+**Revenirea:** se copiază la loc `intrebari_worker.py` anterior (workerul vechi nu folosește `coada`); funcția edge poate rămâne. Sau
+invers: funcția edge veche cu workerul nou = fluxul de azi.
+
 ## Rândul propus pentru `registru_automatizari` (înlocuiește fișa „Întreabă echipa”)
 **Întreabă echipa (intrebari-tehnice-worker) — actualizare 13.11.2026: mascarea numelor (A) + regula „Da / Nu / Incert” (B), r5
 motorul unic, regula B structurală.**
