@@ -623,8 +623,8 @@ merge); la orice altceva (are ceva, eroare, funcție edge veche) — fluxul de a
 secrete noi; mascarea, cercetarea, regula „Da / Nu / Incert”, plafoanele și sursele de nume NU se schimbă.
 
 **Plafonul zilnic NU intră în `coada` (runda 2, după review):** cu plafonul atins și întrebări în așteptare, `coada` spune „are
-ceva”, workerul încarcă numele și preluarea refuză — exact ce se întâmpla înainte de `coada`. Economia lipsește doar în zilele cu
-plafonul atins; în schimb `coada` nu are nicio dată calendaristică (schimbarea zilei nu o afectează) și nicio numărătoare de
+ceva”, workerul încarcă numele și preluarea refuză — exact ce se întâmpla înainte de `coada`. Economia lipsește în zilele cu
+plafonul atins și cât timp există o întrebare `in_lucru` (vezi mai jos); în schimb `coada` nu are nicio dată calendaristică (schimbarea zilei nu o afectează) și nicio numărătoare de
 preluări (o amânare confirmată între două citiri nu mai e posibilă: e o singură citire, deci un singur instantaneu al bazei).
 
 **Fără ceas (runda 3, după review):** `coada` nu are niciun ceas, nicio marjă și niciun prag de vechime. O întrebare `in_lucru`
@@ -661,8 +661,9 @@ Pașii (cu „da”-ul lui Răzvan):
    jurnal ca înainte (`nume_incarcate`, apoi `raspuns`).
 8. Reactivarea rulării periodice (pasul 10 de mai sus).
 
-**Ce se vede altfel în jurnal:** `nume_incarcate` apare doar la rulările cu o întrebare `noua` sau `in_lucru` (nu la fiecare 2
-minute; cât o întrebare e în lucru, rulările îl scriu în continuare, iar preluarea nu face nimic); semnul că
+**Ce se vede altfel în jurnal:** cu funcția edge nouă, `nume_incarcate` apare la rulările cu o întrebare `noua` sau `in_lucru` (nu la
+fiecare 2 minute; cât o întrebare e în lucru, rulările îl scriu în continuare, iar preluarea nu face nimic) și la rulările în care
+`coada` nu a dat un răspuns clar (eroare, răspuns necunoscut sau funcție edge veche: workerul merge atunci pe fluxul vechi); semnul că
 workerul merge cu coada goală e `coada_goala`, cel mult o dată pe oră (marcajul orei se pune înaintea rândului: o oprire între ele
 sau un marcaj care nu se poate scrie lasă ora fără rând, niciodată cu două). Un jurnal fără niciun rând nou de peste două ore
 înseamnă că workerul nu mai rulează sau că marcajul `coada_viu` nu se poate scrie în folderul workerului — se verifică (dacă
