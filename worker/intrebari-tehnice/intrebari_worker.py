@@ -45,6 +45,12 @@ Din 13.11.2026 (deciziile owner-ului A și B, docs/intrebari/MASCARE_SI_VERDICT.
      Orice eroare a motorului (MotorEroare) → procesarea se oprește: nicio cerere nouă către model, răspunsul nu se publică
      (eroare vizibilă, cod în jurnal).
 
+Din 14.11.2026 (fără migrare): înaintea listei de nume workerul întreabă edge-ul „coada” (doar citire, un boolean: există o
+întrebare în starea „noua” sau „in_lucru”, indiferent de vechime; r2: fără plafon; r3: fără ceas). Coadă goală → rularea se
+încheie fără lista de nume și fără rând în jurnal (cel mult un rând „coada_goala” pe oră); orice altă situație (are ceva, eroare,
+edge vechi) → fluxul de mai sus, neschimbat (nume → preia). Nicio întrebare care există în starea „noua” sau „in_lucru” în
+momentul citirii nu e sărită; o întrebare pusă sau revenită în coadă după citire e luată la rularea următoare.
+
 Reguli (fișa în migrări): întrebarea, atașamentele, extrasele și paginile web sunt DATE pentru model, nu instrucțiuni; singura
 unealtă e căutarea web pe domeniile oficiale (server-side, la Anthropic); workerul nu execută nimic din conținut, nu trimite mail,
 nu scrie altundeva decât pe rândul întrebării (prin edge). Jurnalul (jurnal.jsonl) ține doar id, stare, tokeni, durată, numărul de
@@ -445,6 +451,46 @@ def incarca_nume(secret, motor):
         return None
 
 
+VIU_FILE_NUME = 'coada_viu'   # marcajul rândului „viu” din jurnal (doar data fișierului contează)
+VIU_SEC = 3600                # coadă goală: cel mult UN rând în jurnal pe oră (în loc de 30), ca să se vadă că workerul merge
+
+
+def coada_goala(secret):
+    """14.11.2026 — acțiunea „coada” a edge-ului (doar citire): True DOAR la răspunsul exact 200 {"de_preluat": false}. Orice
+    altceva — eroare, status necunoscut, corp de altă formă, excepție, edge vechi fără acțiune (400) — dă False, iar rularea merge
+    pe fluxul de azi (nume → preia): nu se sare peste nimic din cauza unei erori (L18)."""
+    try:
+        st, r = edge(secret, {'actiune': 'coada'})
+    except Exception:
+        return False
+    return st == 200 and isinstance(r, dict) and set(r) == {'de_preluat'} and r['de_preluat'] is False
+
+
+def _marcaj_proaspat(m):
+    """Marcajul a fost pus în ultima oră (o dată din viitor peste un minut = ceas mutat → nu se mai crede, se pune din nou)."""
+    d = time.time() - m.stat().st_mtime
+    return -60 < d < VIU_SEC
+
+
+def jurnal_viu():
+    """Coadă goală: un rând „coada_goala” în jurnal cel mult o dată pe oră (data marcajului `coada_viu`).
+    r2 (review PR #1104, P2): marcajul se pune ÎNAINTE de rând și se verifică după scriere. Un marcaj care nu se poate pune (eroare
+    de fișier sau data lui nu s-a schimbat) → niciun rând; o întrerupere între marcaj și rând → niciun rând în ora aceea. Cel mai
+    rău caz e deci o oră fără rândul „viu”, niciodată două rânduri în aceeași oră. O eroare de fișier nu oprește nimic — rularea
+    s-ar fi încheiat oricum fără preluare."""
+    m = DIR / VIU_FILE_NUME
+    try:
+        if m.exists() and _marcaj_proaspat(m): return
+        m.touch()
+        if not _marcaj_proaspat(m): return   # data nu s-a schimbat: următoarea rulare ar scrie din nou → nu scriem acum
+    except OSError:
+        return
+    try:
+        jurnal(stare='coada_goala')
+    except OSError:
+        pass
+
+
 def main():
     import msvcrt
     DIR.mkdir(parents=True, exist_ok=True)
@@ -469,6 +515,11 @@ def main():
         secret = SECRET_FILE.read_text(encoding='utf-8').strip()
         if len(secret) != 64: raise RuntimeError('secret')
         cheie = cheie_api()
+        # 14.11.2026: coada goală (răspuns exact de la edge) → rularea se încheie aici, FĂRĂ lista de nume (21 de tabele citite
+        # degeaba de 720 de ori pe zi) și fără rând în jurnal (cel mult unul „viu” pe oră). Orice altceva → fluxul de azi, neschimbat:
+        # lista de nume rămâne ÎNAINTEA lui „preia” (fail closed).
+        if coada_goala(secret):
+            jurnal_viu(); return 0
         nume = incarca_nume(secret, motor)   # decizia A: fără lista de nume nu se preia nimic (întrebările rămân în coadă)
         if nume is None:
             jurnal(stare='nume_indisponibile'); return 1
