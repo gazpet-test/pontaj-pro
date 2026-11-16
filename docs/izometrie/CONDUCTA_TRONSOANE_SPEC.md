@@ -2,7 +2,7 @@
 
 Stare: **pasul 1 (contract + manifest) și pasul 2 (bandă doar-citire) livrate în cod; nimic în baza de date.**
 Manifestul (§6) e un inventar după numele fișierelor, nu o verificare de conținut; ce nu s-a putut inventaria e marcat explicit.
-Versiunea regulilor: `conducta-banda-v2` (`VERSIUNE_REGULI` din `src/conductaTronsonLogica.js`; v2 = runda 2 de review, vezi Istoric).
+Versiunea regulilor: `conducta-banda-v3` (`VERSIUNE_REGULI` din `src/conductaTronsonLogica.js`; v3 = runda 3 de review, vezi Istoric).
 Ce NU face această livrare: import, tabele noi, migrări, scrieri, stadiu fizic, hartă, 3D.
 
 Ordinea de lucru convenită (șase pași): (1) contract + manifest · (2) un tronson reconciliat, doar citire ·
