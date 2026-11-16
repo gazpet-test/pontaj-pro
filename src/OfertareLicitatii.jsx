@@ -18,6 +18,7 @@ import { titularVizat, titularEfectiv, ordoneazaPeTitular, permiteAlegerea } fro
 import { indexConfirmari, statisticiAcoperire, badgeNsa, j02bActivPe, propunereCurenta, TIP_NSA, stareComutatorJ02b, poatePorniJ02b } from './ofertareNeaplicabil.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
+import { filtreazaRadar } from './ofertareRadarFiltru.js'
 import OfertareTermene from './OfertareTermene.jsx'
 import { rcNecitite, etichetaRc } from './ofertareRcNecitit.js'
 import { numeResponsabili, esteResponsabil } from './ofertareResponsabili.js'
@@ -4475,6 +4476,9 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
   const [scanning, setScanning] = useState(false)
   const [fStat, setFStat] = useState('activ')   // activ = nou+interesant
   const [fScor, setFScor] = useState(0)
+  const [fSegment, setFSegment] = useState('')
+  const [cautare, setCautare] = useState('')
+  const [cuExpirate, setCuExpirate] = useState(false)   // implicit: expiratele ascunse
   const [expanded, setExpanded] = useState(null)
 
   const load = async () => {
@@ -4532,12 +4536,12 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
   const zileRamase = t => t ? Math.ceil((new Date(t) - Date.now()) / 86400000) : null
   const scorCul = s => s == null ? G.dim : s >= 70 ? G.green : s >= 40 ? G.yellow : G.dim
 
-  const filtrate = rows.filter(r => {
-    if (fStat === 'activ' && !['nou', 'interesant'].includes(r.status)) return false
-    if (fStat !== 'activ' && fStat !== 'toate' && r.status !== fStat) return false
-    if (fScor && (r.scor_potrivire == null || r.scor_potrivire < fScor)) return false
-    return true
+  // Filtrarea e în ofertareRadarFiltru.js (testată): căutarea trece peste stare și peste expirate;
+  // fără căutare, expiratele se ascund dacă nu e bifat „Arată și expirate".
+  const { lista: filtrate, total, ascunsePeScorSegment } = filtreazaRadar(rows, {
+    cautare, stare: fStat, scorMin: fScor, segment: fSegment, cuExpirate, acumMs: Date.now(),
   })
+  const seCauta = cautare.trim() !== ''
 
   return (
     <div>
@@ -4566,6 +4570,29 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
             {scanning ? '⏳ Scanez...' : '🔄 Scanează acum'}
           </button>
         </div>
+      </div>
+
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14, flexWrap:'wrap' }}>
+        <input style={{ ...S.input, flex:1, minWidth:240 }} value={cautare} onChange={e => setCautare(e.target.value)}
+          placeholder="🔎 Caută după nr. anunț, titlu, autoritate sau CPV (în toate stările)" />
+        {seCauta && <button style={{ ...S.btnS, padding:'6px 12px', fontSize:12 }} onClick={() => setCautare('')}>✕ Golește</button>}
+        <select style={{ ...S.input, width:'auto' }} value={fSegment} onChange={e => setFSegment(e.target.value)}>
+          <option value="">Toate segmentele</option>
+          <option value="distributie">Distribuție gaze</option>
+          <option value="transgaz">Transgaz</option>
+          <option value="romgaz">Romgaz</option>
+          <option value="altele">Altele (inclusiv fără segment)</option>
+        </select>
+        <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:12.5, color:G.muted, cursor:'pointer', opacity: seCauta ? .55 : 1 }}
+          title={seCauta ? 'Căutarea arată oricum și anunțurile expirate' : 'Anunțurile cu termenul de depunere trecut sunt ascunse implicit'}>
+          <input type="checkbox" checked={cuExpirate} onChange={e => setCuExpirate(e.target.checked)} />
+          Arată și expirate
+        </label>
+        <span style={{ fontSize:12, color:G.dim }}>
+          afișate {filtrate.length} din {total}
+          {seCauta && ' · căutarea trece peste stare și termen'}
+          {ascunsePeScorSegment > 0 && ` · încă ${ascunsePeScorSegment} ascunse de filtrul de scor / segment`}
+        </span>
       </div>
 
       {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă radarul...</div>}
