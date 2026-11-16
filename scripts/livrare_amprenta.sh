@@ -67,23 +67,23 @@ ag_sql_familii() {
 }
 
 # ag_sql_valid <tabel> <moment> - instructiuni plpgsql: randuri valide + etichete unice (altfel FULL JOIN-ul ar fi ambiguu)
-# + GLOBAL, intr-O SINGURA trecere peste set (17.11.2026: o sortare pe (familie, eticheta) COLLATE "C" in loc de patru
-# parcurgeri). Pune v_g (GLOBAL, aceeasi expresie ag_expr_global) si v_n (randuri). Aceleasi refuzuri, aceleasi mesaje, in
-# aceeasi ordine: intai randul invalid (conditia neschimbata), apoi dublura. Dublura = doua randuri vecine in ordinea sortarii
-# cu aceeasi (familie, eticheta): egalitatea e cea a GROUP BY-ului de dinainte (colatie determinista, octet cu octet), deci
-# perechile egale sunt vecine; lista din mesaj se calculeaza, ca inainte, cu GROUP BY, doar pe calea de refuz. Cu dubluri,
-# GLOBAL nu se foloseste (refuzul vine inainte). DECLARE-ul apelantului: v_g, v_n, v_f, v_inv, v_dub.
+# + GLOBAL (17.11.2026: dublura si GLOBAL dintr-O SINGURA sortare pe (familie, eticheta) COLLATE "C", in loc de GROUP BY +
+# sortare). Pune v_g (GLOBAL, aceeasi expresie ag_expr_global) si v_n (randuri). Aceleasi refuzuri, aceleasi mesaje, in
+# aceeasi ordine: INTAI randul invalid, cu verificarea de dinainte, neschimbata (o parcurgere fara sortare, oprita la primul
+# rand invalid - review r1: refuzul lui nu depinde de o sortare care ar putea esua inainte), apoi dublura. Dublura = doua
+# randuri vecine in ordinea sortarii cu aceeasi (familie, eticheta): egalitatea e cea a GROUP BY-ului de dinainte (colatie
+# determinista, octet cu octet), deci perechile egale sunt vecine; lista din mesaj se calculeaza, ca inainte, cu GROUP BY,
+# doar pe calea de refuz. Cu dubluri, GLOBAL nu se foloseste (refuzul vine inainte). DECLARE-ul apelantului: v_g, v_n, v_f, v_dub.
 ag_sql_valid() {
   local t="$1" mo="$2"
   cat <<SQL
-  SELECT bool_or(a.inv), bool_or(a.dub), $(ag_expr_global), count(*) INTO v_inv, v_dub, v_g, v_n
+  IF EXISTS (SELECT 1 FROM $t a WHERE a.familie IS NULL OR a.eticheta IS NULL OR a.amprenta IS NULL
+               OR a.familie !~ '^[a-z_]+\$' OR a.amprenta !~ '^[0-9a-f]{32}\$') THEN
+    RAISE EXCEPTION 'AMPRENTA_GLOBALA_INVALIDA ($mo): rand fara familie / eticheta / amprenta valida - refuz, nimic comis'; END IF;
+  SELECT bool_or(a.dub), $(ag_expr_global), count(*) INTO v_dub, v_g, v_n
     FROM (SELECT b.familie, b.eticheta, b.amprenta,
-                 (b.familie IS NULL OR b.eticheta IS NULL OR b.amprenta IS NULL
-                  OR b.familie !~ '^[a-z_]+\$' OR b.amprenta !~ '^[0-9a-f]{32}\$') AS inv,
                  (b.familie = lag(b.familie) OVER w AND b.eticheta = lag(b.eticheta) OVER w) AS dub
             FROM $t b WINDOW w AS (ORDER BY b.familie COLLATE "C", b.eticheta COLLATE "C")) a;
-  IF v_inv THEN
-    RAISE EXCEPTION 'AMPRENTA_GLOBALA_INVALIDA ($mo): rand fara familie / eticheta / amprenta valida - refuz, nimic comis'; END IF;
   IF v_dub THEN
     SELECT string_agg(z.k, '; ' ORDER BY z.k COLLATE "C") INTO v_f FROM (
       SELECT a.familie || ' / ' || a.eticheta AS k FROM $t a GROUP BY a.familie, a.eticheta HAVING count(*) > 1) z;
@@ -125,7 +125,7 @@ $cat_sql
 CREATE TEMP TABLE ag_ses_$T AS
 $ses_sql;
 CREATE FUNCTION pg_temp.ag_inainte_$T() RETURNS void LANGUAGE plpgsql $(ag_guc_functie) AS \$ag_inainte_$T\$
-DECLARE v_g text; v_n bigint; v_f text; v_inv boolean; v_dub boolean; v_t0 timestamptz := clock_timestamp();
+DECLARE v_g text; v_n bigint; v_f text; v_dub boolean; v_t0 timestamptz := clock_timestamp();
 BEGIN
   CREATE TEMP TABLE ag_ina_$T AS
     SELECT s.familie, s.eticheta, s.amprenta, s.detaliu FROM pg_temp.ag_ses_$T s
@@ -216,7 +216,7 @@ ag_dupa() {
   fi
   cat <<SQL
 CREATE FUNCTION pg_temp.ag_dupa_$T(p_manifest pg_catalog.text) RETURNS void LANGUAGE plpgsql $(ag_guc_functie) AS \$ag_dupa_$T\$
-DECLARE v_g text; v_n bigint; v_f text; v_inv boolean; v_dub boolean; v_nd bigint; v_ne bigint; v_t0 timestamptz := clock_timestamp(); r record;
+DECLARE v_g text; v_n bigint; v_f text; v_dub boolean; v_nd bigint; v_ne bigint; v_t0 timestamptz := clock_timestamp(); r record;
 BEGIN
 $integ
   CREATE TEMP TABLE ag_dup_$T AS

@@ -205,8 +205,9 @@ valoare distinctă** (`ag_acl`; intrarea ACL a fiecărui obiect e definită o da
 `ag_acl_sis`, iar cheia e valoarea `aclitem[]` însăși, cu egalitatea exactă a tipului — beneficiar, grantor, drepturi —, nu textul ei);
 (2) subinterogările pe tablourile de obicei nule (`attacl`, `attfdwoptions`, `reloptions`, `protrftypes`) rulează doar pe tabloul nenul
 (pe null dădeau oricum null); (3) etichetele enum se agregă o dată pe tip (`ag_enum`), nu cu o parcurgere a lui `pg_enum` pe fiecare tip;
-(4) detaliul (`d::text`) se serializează o dată pe rând. În runner, validările (rânduri valide, etichete unice) și GLOBAL se fac într-o
-singură trecere peste set, cu aceleași condiții, aceleași mesaje și aceeași ordine a refuzurilor; md5-ul pe familii (doar diagnostic,
+(4) detaliul (`d::text`) se serializează o dată pe rând. În runner, rândul invalid se refuză primul, cu verificarea de dinainte (fără
+sortare: refuzul lui nu depinde de o sortare care ar putea eșua, de ex. la o limită de fișiere temporare — review r1), apoi etichetele
+duble și GLOBAL ies dintr-o singură sortare (în loc de GROUP BY + sortare), cu aceleași condiții, aceleași mesaje și aceeași ordine; md5-ul pe familii (doar diagnostic,
 în mesaj) se calculează doar unde se tipărește. Dovada: `scripts/pglite/test_amprenta_paritate_calcul.mjs` (secțiunea 11) compară
 forma nouă cu cea de dinainte, fixată pe commit (`a69ef186`, sha256 verificat), rând cu rând, în aceeași fotografie; aceleași cazuri
 rulează pe clonă (proba coordonatorului). Dacă vreodată o optimizare ar schimba un singur detaliu, nu mai e optimizare: e v3.

@@ -370,14 +370,18 @@ describe('runnerul — runda 15', () => {
   it('17.11.2026: validarile intr-o singura trecere - aceleasi conditii, aceleasi mesaje, aceeasi ordine; GLOBAL din O expresie', () => {
     const V = LIB.slice(LIB.indexOf('ag_sql_valid() {'), LIB.indexOf('# ag_tag'))
     // conditia randului invalid si mesajele: textul de dinainte (doar alias-ul tabelului s-a schimbat)
-    for (const s of ['b.familie IS NULL OR b.eticheta IS NULL OR b.amprenta IS NULL', "OR b.familie !~ '^[a-z_]+\\$' OR b.amprenta !~ '^[0-9a-f]{32}\\$') AS inv",
+    // review r1 (Jakarinos): randul invalid se refuza INAINTE de orice sortare, cu verificarea de dinainte (EXISTS), neschimbata
+    for (const s of ['IF EXISTS (SELECT 1 FROM $t a WHERE a.familie IS NULL OR a.eticheta IS NULL OR a.amprenta IS NULL',
+      "OR a.familie !~ '^[a-z_]+\\$' OR a.amprenta !~ '^[0-9a-f]{32}\\$') THEN",
       "RAISE EXCEPTION 'AMPRENTA_GLOBALA_INVALIDA ($mo): rand fara familie / eticheta / amprenta valida - refuz, nimic comis'",
       "RAISE EXCEPTION 'AMPRENTA_GLOBALA_DUBLURA ($mo): etichete duble (%) - refuz, nimic comis', v_f",
       'SELECT a.familie || \' / \' || a.eticheta AS k FROM $t a GROUP BY a.familie, a.eticheta HAVING count(*) > 1) z;',
       '(b.familie = lag(b.familie) OVER w AND b.eticheta = lag(b.eticheta) OVER w) AS dub',
-      'WINDOW w AS (ORDER BY b.familie COLLATE "C", b.eticheta COLLATE "C")', '$(ag_expr_global), count(*) INTO v_inv, v_dub, v_g, v_n'])
+      'WINDOW w AS (ORDER BY b.familie COLLATE "C", b.eticheta COLLATE "C")', '$(ag_expr_global), count(*) INTO v_dub, v_g, v_n'])
       expect(V, s).toContain(s)
-    expect(V.indexOf('IF v_inv THEN')).toBeLessThan(V.indexOf('IF v_dub THEN'))   // ordinea refuzurilor de dinainte
+    expect(V.indexOf('AMPRENTA_GLOBALA_INVALIDA')).toBeLessThan(V.indexOf('WINDOW w AS'))   // invalidul inaintea sortarii
+    expect(V.indexOf('WINDOW w AS')).toBeLessThan(V.indexOf('IF v_dub THEN'))
+    expect(/\bv_inv\b/.test(LIB)).toBe(false)
     expect(V.indexOf('GROUP BY a.familie, a.eticheta')).toBeGreaterThan(V.indexOf('IF v_dub THEN'))   // lista doar pe calea de refuz
     // O definitie a GLOBAL: ag_sql_global si trecerea folosesc ag_expr_global; formula apare o singura data in biblioteca
     expect(LIB).toContain('printf \'%s\' "SELECT $(ag_expr_global) AS global_md5, pg_catalog.count(*) AS randuri FROM $1 a"')
@@ -387,8 +391,8 @@ describe('runnerul — runda 15', () => {
     expect(LIB).not.toContain('SELECT g.global_md5, g.randuri INTO v_g, v_n')
     expect((LIB.match(/\$fam\b/g) || []).length).toBe(2)
     expect(LIB.indexOf('$fam\n    RAISE EXCEPTION \'AMPRENTA_GLOBALA_INAINTE')).toBeGreaterThan(LIB.indexOf("IF v_g IS DISTINCT FROM '$A' THEN"))
-    for (const d of ['DECLARE v_g text; v_n bigint; v_f text; v_inv boolean; v_dub boolean; v_t0',
-      'DECLARE v_g text; v_n bigint; v_f text; v_inv boolean; v_dub boolean; v_nd bigint']) expect(LIB, d).toContain(d)
+    for (const d of ['DECLARE v_g text; v_n bigint; v_f text; v_dub boolean; v_t0',
+      'DECLARE v_g text; v_n bigint; v_f text; v_dub boolean; v_nd bigint']) expect(LIB, d).toContain(d)
   })
   it('optiunile doar impreuna; manifestul cu numele migrarii; PGTZ / PGDATESTYLE refuzate', () => {
     expect(RUN).toContain('[ -n "$AG_MD5" ] && [ -n "$AG_MAN" ] || refuz 2')

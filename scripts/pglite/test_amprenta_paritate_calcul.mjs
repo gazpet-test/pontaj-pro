@@ -204,7 +204,7 @@ function sqlCazuri() {
 }
 
 // --- pasii runnerului: aceeasi tranzactie, tag fix; injectii optionale in setul sesiunii (inainte / in "migrare") ------
-async function livrare(db, forma, { aprobat, manifest = null, migrare = '', injInainte = '', T = randomBytes(8).toString('hex') }) {
+async function livrare(db, forma, { aprobat, manifest = null, migrare = '', injInainte = '', pre = '', T = randomBytes(8).toString('hex') }) {
   let man = '-'
   if (manifest !== null) { man = join(TMP, `m_${forma}_${T}.l15.tsv`); writeFileSync(man, manifest) }
   let ina = GEN[forma]('inainte', T, aprobat)
@@ -217,6 +217,7 @@ async function livrare(db, forma, { aprobat, manifest = null, migrare = '', injI
   const notices = []
   await db.exec('BEGIN')
   try {
+    if (pre) await db.exec(pre)
     await db.exec(sql, { onNotice: (n) => notices.push(n.message) })
     await db.exec('ROLLBACK')
     return { ok: true, err: '', notices }
@@ -306,6 +307,31 @@ ALTER TABLE ${S}.sites SET (fillfactor = 60);`
   for (const [nume, rand, motiv] of DUB) await pereche(nume, { aprobat: G0, manifest: '', injInainte: `INSERT INTO pg_temp.ag_ses_$T VALUES ${rand};` }, motiv)
   await pereche('invalid SI dublu: refuzul randului invalid vine intai', { aprobat: G0, manifest: '',
     injInainte: `INSERT INTO pg_temp.ag_ses_$T VALUES ('relatie', 'relatie ${S}.sites', md5('x'), 'x'), ('sesiune', 'x', 'nu-e-md5', 'x');` }, 'AMPRENTA_GLOBALA_INVALIDA (inainte)')
+  // review r1 (Jakarinos): randuri invalide MULTE + memorie mica + fara fisiere temporare: refuzul randului invalid vine
+  // inaintea oricarei sortari (care aici ar esua cu 53400) - acelasi mesaj ca forma veche
+  // Validatorul IZOLAT (ca in review): corpul validarilor extras din pasul generat (intre crearea setului si comparatia cu
+  // valoarea aprobata), vechi si nou, rulat pe acelasi tabel ag_ina_<T> pregatit de test.
+  const validator = (forma, T) => {
+    const s = GEN[forma]('inainte', T, '0'.repeat(32))
+    const a = s.indexOf(`FROM pg_temp.ag_cat_${T}() c;\n`), b = s.indexOf("  IF v_g IS DISTINCT FROM '")
+    if (a < 0 || b < a) throw new Error('validatorul nu s-a gasit in pasul ' + forma)
+    return `DO $v$ DECLARE v_g text; v_n bigint; v_f text; v_dub boolean; BEGIN\n${s.slice(s.indexOf('\n', a) + 1, b)}END $v$;`
+  }
+  for (const [nume, randuri] of [
+    ['2000 de randuri invalide (familie NULL, eticheta de 1000 de caractere)', "SELECT NULL::text, lpad(i::text, 1000, 'x'), md5('x'), 'x' FROM generate_series(1, 2000) i"],
+    ['2000 de randuri valide cu o dubla la capat', "SELECT 'relatie', lpad(i::text, 1000, 'x'), md5('x'), 'x' FROM generate_series(1, 2000) i UNION ALL SELECT 'relatie', lpad('7', 1000, 'x'), md5('y'), 'y'"]]) {
+    const T = randomBytes(8).toString('hex'), r = {}
+    for (const forma of ['vechi', 'nou']) {
+      await db.exec('BEGIN')
+      try {
+        await db.exec(`CREATE TEMP TABLE ag_ina_${T} (familie text, eticheta text, amprenta text, detaliu text); INSERT INTO pg_temp.ag_ina_${T} ${randuri};`)
+        await db.exec("SET LOCAL work_mem = '64kB'; SET LOCAL temp_file_limit = 0;")
+        await db.exec(validator(forma, T)); r[forma] = 'fara refuz'
+      } catch (e) { r[forma] = `${e.code} ${e.message}` } finally { await db.exec('ROLLBACK') }
+    }
+    const asteptat = nume.includes('invalide') ? 'AMPRENTA_GLOBALA_INVALIDA' : '53400'
+    ok(r.vechi === r.nou && r.vechi.includes(asteptat), `validatorul izolat, work_mem 64kB, temp_file_limit 0 (review r1), ${nume}: vechi [${r.vechi.slice(0, 90)}] | nou ${r.vechi === r.nou ? 'IDENTIC' : '[' + r.nou.slice(0, 90) + ']'}`)
+  }
   // in pasul „dupa”: injectia vine din „migrare” (dupa fotografia de dinainte, care ramane intacta)
   await pereche('rand invalid aparut dupa (pasul „dupa”)', { aprobat: G0, manifest: '', migrare: "INSERT INTO pg_temp.ag_ses_$T VALUES ('sesiune', 'y', 'nu-e-md5', 'y')" }, 'AMPRENTA_GLOBALA_INVALIDA (dupa)')
   await pereche('eticheta dubla aparuta dupa (pasul „dupa”)', { aprobat: G0, manifest: '', migrare: `INSERT INTO pg_temp.ag_ses_$T VALUES ('relatie', 'relatie ${S}.sites', md5('x'), 'x')` }, 'AMPRENTA_GLOBALA_DUBLURA (dupa)')
@@ -324,7 +350,8 @@ ALTER TABLE ${S}.sites SET (fillfactor = 60);`
     await db.exec(`CREATE TEMP TABLE ag_ina_proba AS ${CAT.nou}`)
     const pas = GEN.nou('inainte', '0123456789abcdef', '-')
     const i = pas.indexOf('  SELECT bool_or('), j = pas.indexOf(';', i)
-    const q = pas.slice(i, j).replace(' INTO v_inv, v_dub, v_g, v_n', '').split('pg_temp.ag_ina_0123456789abcdef').join('pg_temp.ag_ina_proba')
+    if (i < 0) throw new Error('trecerea unica nu s-a gasit in pasul generat')
+    const q = pas.slice(i, j).replace(' INTO v_dub, v_g, v_n', '').split('pg_temp.ag_ina_0123456789abcdef').join('pg_temp.ag_ina_proba')
     const pl = (await db.query(`EXPLAIN ${q}`)).rows.map(r => r['QUERY PLAN'])
     const noduriPl = pl.map(s => s.replace(/^[ ->]+/, '').split('  (')[0]).filter(s => !/^(Sort Key|Output|Filter|Group Key)/.test(s))
     const nSort = noduriPl.filter(s => /^(Incremental )?Sort$/.test(s)).length
