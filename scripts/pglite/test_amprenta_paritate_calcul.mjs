@@ -10,7 +10,8 @@
 //      optimizarilor: ACL-ul unui tip de obiect nelegat, garda inversata, ordinea enum) sunt PRINSI de comparatie;
 //   4. pasii runnerului vechi / nou (inainte, dupa, citire "-", aprobat, manifest bun / gresit) dau ACELEASI rezultate si
 //      ACELEASI mesaje (fara timpi), inclusiv refuzurile de validare pe randuri invalide / duble injectate in set;
-//   5. planul: legatura cu ag_acl e Hash Join (fara bucla pe CTE); trecerea unica a validarilor sorteaza o singura data;
+//   5. planul: legatura cu ag_acl e Hash Join (fara bucla pe CTE); validarile runnerului raman cele de dinainte (o trecere comuna
+//      a fost retrasa la review r1-r2: la limite de resurse schimba ordinea refuzurilor; vezi validatorul izolat de la 4);
 //   6. timpul (ORIENTATIV, PGlite nu e productia): blocul si pasii, vechi / nou, 5 rulari alternate pe un catalog sintetic.
 // Punctele 1-3 ruleaza dintr-UN fisier SQL (BEGIN; obiectele de proba zz_l15_*; cazurile; ROLLBACK), acelasi pe care
 // coordonatorul il ruleaza pe PostgreSQL 17 real (clona): --sql-clona <dosar nou> il scrie (cu antet psql) si iese.
@@ -315,11 +316,14 @@ ALTER TABLE ${S}.sites SET (fillfactor = 60);`
     const s = GEN[forma]('inainte', T, '0'.repeat(32))
     const a = s.indexOf(`FROM pg_temp.ag_cat_${T}() c;\n`), b = s.indexOf("  IF v_g IS DISTINCT FROM '")
     if (a < 0 || b < a) throw new Error('validatorul nu s-a gasit in pasul ' + forma)
-    return `DO $v$ DECLARE v_g text; v_n bigint; v_f text; v_dub boolean; BEGIN\n${s.slice(s.indexOf('\n', a) + 1, b)}END $v$;`
+    return `DO $v$ DECLARE v_g text; v_n bigint; v_f text; BEGIN\n${s.slice(s.indexOf('\n', a) + 1, b)}END $v$;`
   }
   for (const [nume, randuri] of [
     ['2000 de randuri invalide (familie NULL, eticheta de 1000 de caractere)', "SELECT NULL::text, lpad(i::text, 1000, 'x'), md5('x'), 'x' FROM generate_series(1, 2000) i"],
-    ['2000 de randuri valide cu o dubla la capat', "SELECT 'relatie', lpad(i::text, 1000, 'x'), md5('x'), 'x' FROM generate_series(1, 2000) i UNION ALL SELECT 'relatie', lpad('7', 1000, 'x'), md5('y'), 'y'"]]) {
+    ['2000 de randuri valide cu o dubla la capat', "SELECT 'relatie', lpad(i::text, 1000, 'x'), md5('x'), 'x' FROM generate_series(1, 2000) i UNION ALL SELECT 'relatie', lpad('7', 1000, 'x'), md5('y'), 'y'"],
+    // review r2: putine grupuri (aceeasi eticheta de 2000 de ori) - forma veche refuza cu DUBLURA; o sortare comuna ar fi picat cu 53400
+    ['2000 de randuri cu ACEEASI eticheta (contraexemplul review r2)', "SELECT 'relatie', 'x', md5(i::text), 'x' FROM generate_series(1, 2000) i"],
+    ['2000 de randuri cu doua etichete de 1000 de caractere (review r2)', "SELECT 'relatie', lpad((i % 2)::text, 1000, 'x'), md5(i::text), 'x' FROM generate_series(1, 2000) i"]]) {
     const T = randomBytes(8).toString('hex'), r = {}
     for (const forma of ['vechi', 'nou']) {
       await db.exec('BEGIN')
@@ -329,7 +333,7 @@ ALTER TABLE ${S}.sites SET (fillfactor = 60);`
         await db.exec(validator(forma, T)); r[forma] = 'fara refuz'
       } catch (e) { r[forma] = `${e.code} ${e.message}` } finally { await db.exec('ROLLBACK') }
     }
-    const asteptat = nume.includes('invalide') ? 'AMPRENTA_GLOBALA_INVALIDA' : '53400'
+    const asteptat = nume.includes('invalide') ? 'AMPRENTA_GLOBALA_INVALIDA' : nume.includes('review r2') ? 'AMPRENTA_GLOBALA_DUBLURA' : '53400'
     ok(r.vechi === r.nou && r.vechi.includes(asteptat), `validatorul izolat, work_mem 64kB, temp_file_limit 0 (review r1), ${nume}: vechi [${r.vechi.slice(0, 90)}] | nou ${r.vechi === r.nou ? 'IDENTIC' : '[' + r.nou.slice(0, 90) + ']'}`)
   }
   // in pasul „dupa”: injectia vine din „migrare” (dupa fotografia de dinainte, care ramane intacta)
@@ -337,7 +341,7 @@ ALTER TABLE ${S}.sites SET (fillfactor = 60);`
   await pereche('eticheta dubla aparuta dupa (pasul „dupa”)', { aprobat: G0, manifest: '', migrare: `INSERT INTO pg_temp.ag_ses_$T VALUES ('relatie', 'relatie ${S}.sites', md5('x'), 'x')` }, 'AMPRENTA_GLOBALA_DUBLURA (dupa)')
   await pereche('fotografia de dinainte modificata in tranzactie (integritatea „dupa”)', { aprobat: G0, manifest: '', migrare: "DELETE FROM pg_temp.ag_ina_$T WHERE familie = 'tip'" }, 'AMPRENTA_GLOBALA_DUPA: fotografia de dinainte')
 
-  console.log('5. planul: legatura cu ag_acl prin hash; trecerea unica sorteaza o data')
+  console.log('5. planul: legatura cu ag_acl prin hash')
   {
     await db.exec('BEGIN'); await db.exec(GUC)
     const plan = (await db.query(`EXPLAIN (FORMAT JSON) ${CAT.nou}`)).rows[0]['QUERY PLAN']
@@ -347,15 +351,6 @@ ALTER TABLE ${S}.sites SET (fillfactor = 60);`
     // (EXPLAIN redenumeste aliasurile repetate intre ramuri: ka_1, ar_2 ...)
     const peAcl = noduri.filter(n => /\b(ka|ar)(_\d+)?\.acl\b/.test(JSON.stringify({ c: n['Hash Cond'], j: n['Join Filter'], m: n['Merge Cond'] })))
     ok(peAcl.length >= 4 && peAcl.every(n => n['Node Type'] === 'Hash Join'), `legaturile pe cheia ACL: [${peAcl.map(n => n['Node Type'])}] (asteptat Hash Join)`)
-    await db.exec(`CREATE TEMP TABLE ag_ina_proba AS ${CAT.nou}`)
-    const pas = GEN.nou('inainte', '0123456789abcdef', '-')
-    const i = pas.indexOf('  SELECT bool_or('), j = pas.indexOf(';', i)
-    if (i < 0) throw new Error('trecerea unica nu s-a gasit in pasul generat')
-    const q = pas.slice(i, j).replace(' INTO v_dub, v_g, v_n', '').split('pg_temp.ag_ina_0123456789abcdef').join('pg_temp.ag_ina_proba')
-    const pl = (await db.query(`EXPLAIN ${q}`)).rows.map(r => r['QUERY PLAN'])
-    const noduriPl = pl.map(s => s.replace(/^[ ->]+/, '').split('  (')[0]).filter(s => !/^(Sort Key|Output|Filter|Group Key)/.test(s))
-    const nSort = noduriPl.filter(s => /^(Incremental )?Sort$/.test(s)).length
-    ok(nSort === 1, `trecerea unica: ${nSort} sortare (asteptat 1); plan: ${noduriPl.join(' / ').slice(0, 200)}`)
     await db.exec('ROLLBACK')
   }
   await db.close()

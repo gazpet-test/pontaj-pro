@@ -54,39 +54,27 @@ ag_bloc() {
 # ag_sql_global <relatie> - O interogare: global_md5, randuri. Codificare fara ambiguitati: pentru fiecare rand, in ordinea
 # (familie, eticheta) COLLATE "C": lungime(familie) ":" familie lungime(eticheta) ":" eticheta amprenta (32 hex).
 # Fara operatori (functii calificate), deci nu depinde de search_path. Set gol => global_md5 NULL (refuz la apelant).
-# ag_expr_global = expresia (alias a), O SINGURA definitie, folosita si de ag_sql_trecere.
-ag_expr_global() {
-  printf '%s' "pg_catalog.md5(pg_catalog.string_agg(pg_catalog.concat(pg_catalog.length(a.familie), ':', a.familie, pg_catalog.length(a.eticheta), ':', a.eticheta, a.amprenta), '' ORDER BY a.familie COLLATE \"C\", a.eticheta COLLATE \"C\"))"
-}
 ag_sql_global() {
-  printf '%s' "SELECT $(ag_expr_global) AS global_md5, pg_catalog.count(*) AS randuri FROM $1 a"
+  printf '%s' "SELECT pg_catalog.md5(pg_catalog.string_agg(pg_catalog.concat(pg_catalog.length(a.familie), ':', a.familie, pg_catalog.length(a.eticheta), ':', a.eticheta, a.amprenta), '' ORDER BY a.familie COLLATE \"C\", a.eticheta COLLATE \"C\")) AS global_md5, pg_catalog.count(*) AS randuri FROM $1 a"
 }
 # ag_sql_familii <relatie> - md5 pe familie (aceeasi codificare, fara familie), pentru diagnostic: CE familie difera.
 ag_sql_familii() {
   printf '%s' "SELECT a.familie, pg_catalog.md5(pg_catalog.string_agg(pg_catalog.concat(pg_catalog.length(a.eticheta), ':', a.eticheta, a.amprenta), '' ORDER BY a.eticheta COLLATE \"C\")) AS md5, pg_catalog.count(*) AS randuri FROM $1 a GROUP BY a.familie"
 }
 
-# ag_sql_valid <tabel> <moment> - instructiuni plpgsql: randuri valide + etichete unice (altfel FULL JOIN-ul ar fi ambiguu)
-# + GLOBAL (17.11.2026: dublura si GLOBAL dintr-O SINGURA sortare pe (familie, eticheta) COLLATE "C", in loc de GROUP BY +
-# sortare). Pune v_g (GLOBAL, aceeasi expresie ag_expr_global) si v_n (randuri). Aceleasi refuzuri, aceleasi mesaje, in
-# aceeasi ordine: INTAI randul invalid, cu verificarea de dinainte, neschimbata (o parcurgere fara sortare, oprita la primul
-# rand invalid - review r1: refuzul lui nu depinde de o sortare care ar putea esua inainte), apoi dublura. Dublura = doua
-# randuri vecine in ordinea sortarii cu aceeasi (familie, eticheta): egalitatea e cea a GROUP BY-ului de dinainte (colatie
-# determinista, octet cu octet), deci perechile egale sunt vecine; lista din mesaj se calculeaza, ca inainte, cu GROUP BY,
-# doar pe calea de refuz. Cu dubluri, GLOBAL nu se foloseste (refuzul vine inainte). DECLARE-ul apelantului: v_g, v_n, v_f, v_dub.
+# ag_sql_valid <tabel> <moment> - instructiuni plpgsql: randuri valide + etichete unice (altfel FULL JOIN-ul ar fi ambiguu).
+# Text neschimbat: o trecere comuna (dublura + GLOBAL dintr-o
+# sortare) a fost incercata si RETRASA la review (r1-r2, 17.11.2026): la limite de resurse sortarea putea esua INAINTEA
+# refuzului randului invalid / al dublurii, cu alt mesaj. Ordinea refuzurilor ramane: invalid, dublura, apoi GLOBAL.
 ag_sql_valid() {
   local t="$1" mo="$2"
   cat <<SQL
   IF EXISTS (SELECT 1 FROM $t a WHERE a.familie IS NULL OR a.eticheta IS NULL OR a.amprenta IS NULL
                OR a.familie !~ '^[a-z_]+\$' OR a.amprenta !~ '^[0-9a-f]{32}\$') THEN
     RAISE EXCEPTION 'AMPRENTA_GLOBALA_INVALIDA ($mo): rand fara familie / eticheta / amprenta valida - refuz, nimic comis'; END IF;
-  SELECT bool_or(a.dub), $(ag_expr_global), count(*) INTO v_dub, v_g, v_n
-    FROM (SELECT b.familie, b.eticheta, b.amprenta,
-                 (b.familie = lag(b.familie) OVER w AND b.eticheta = lag(b.eticheta) OVER w) AS dub
-            FROM $t b WINDOW w AS (ORDER BY b.familie COLLATE "C", b.eticheta COLLATE "C")) a;
-  IF v_dub THEN
-    SELECT string_agg(z.k, '; ' ORDER BY z.k COLLATE "C") INTO v_f FROM (
-      SELECT a.familie || ' / ' || a.eticheta AS k FROM $t a GROUP BY a.familie, a.eticheta HAVING count(*) > 1) z;
+  SELECT string_agg(z.k, '; ' ORDER BY z.k COLLATE "C") INTO v_f FROM (
+    SELECT a.familie || ' / ' || a.eticheta AS k FROM $t a GROUP BY a.familie, a.eticheta HAVING count(*) > 1) z;
+  IF v_f IS NOT NULL THEN
     RAISE EXCEPTION 'AMPRENTA_GLOBALA_DUBLURA ($mo): etichete duble (%) - refuz, nimic comis', v_f; END IF;
 SQL
 }
@@ -125,12 +113,13 @@ $cat_sql
 CREATE TEMP TABLE ag_ses_$T AS
 $ses_sql;
 CREATE FUNCTION pg_temp.ag_inainte_$T() RETURNS void LANGUAGE plpgsql $(ag_guc_functie) AS \$ag_inainte_$T\$
-DECLARE v_g text; v_n bigint; v_f text; v_dub boolean; v_t0 timestamptz := clock_timestamp();
+DECLARE v_g text; v_n bigint; v_f text; v_t0 timestamptz := clock_timestamp();
 BEGIN
   CREATE TEMP TABLE ag_ina_$T AS
     SELECT s.familie, s.eticheta, s.amprenta, s.detaliu FROM pg_temp.ag_ses_$T s
     UNION ALL SELECT c.familie, c.eticheta, c.amprenta, c.detaliu FROM pg_temp.ag_cat_$T() c;
 $(ag_sql_valid "pg_temp.ag_ina_$T" inainte)
+  SELECT g.global_md5, g.randuri INTO v_g, v_n FROM ($(ag_sql_global "pg_temp.ag_ina_$T")) g;
 $cmp
 END \$ag_inainte_$T\$;
 DO \$ag_pas_$T\$ BEGIN PERFORM pg_temp.ag_inainte_$T(); END \$ag_pas_$T\$;
@@ -216,13 +205,14 @@ ag_dupa() {
   fi
   cat <<SQL
 CREATE FUNCTION pg_temp.ag_dupa_$T(p_manifest pg_catalog.text) RETURNS void LANGUAGE plpgsql $(ag_guc_functie) AS \$ag_dupa_$T\$
-DECLARE v_g text; v_n bigint; v_f text; v_dub boolean; v_nd bigint; v_ne bigint; v_t0 timestamptz := clock_timestamp(); r record;
+DECLARE v_g text; v_n bigint; v_f text; v_nd bigint; v_ne bigint; v_t0 timestamptz := clock_timestamp(); r record;
 BEGIN
 $integ
   CREATE TEMP TABLE ag_dup_$T AS
     SELECT s.familie, s.eticheta, s.amprenta, s.detaliu FROM pg_temp.ag_ses_$T s
     UNION ALL SELECT c.familie, c.eticheta, c.amprenta, c.detaliu FROM pg_temp.ag_cat_$T() c;
 $(ag_sql_valid "pg_temp.ag_dup_$T" dupa)
+  SELECT g.global_md5, g.randuri INTO v_g, v_n FROM ($(ag_sql_global "pg_temp.ag_dup_$T")) g;
   CREATE TEMP TABLE ag_dif_$T AS
     SELECT coalesce(b.familie, a.familie) AS familie, coalesce(b.eticheta, a.eticheta) AS eticheta,
            CASE WHEN a.eticheta IS NULL THEN 'creat' WHEN b.eticheta IS NULL THEN 'sters' ELSE 'schimbat' END AS operatie,
