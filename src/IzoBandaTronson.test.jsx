@@ -7,11 +7,12 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
-const st = vi.hoisted(() => ({ tabele: {}, cereri: [], poarta: null }))
+// plafon = max-rows al serverului (PostgREST taie la el ORICE cerere, și cu .limit() mai mare); eroareLa = a câta cerere pe tabel pică
+const st = vi.hoisted(() => ({ tabele: {}, cereri: [], poarta: null, plafon: 1000, eroareLa: null, inLens: [] }))
 vi.mock('./lib/supabase.js', () => ({
   supabase: {
     from: tabel => {
-      const f = { eq: [], in: null, gt: null, lim: 1000 }
+      const f = { eq: [], in: null, gt: null, lim: Infinity }
       const q = {
         select: () => q, order: () => q,
         eq: (c, v) => { f.eq.push([c, v]); return q },
@@ -20,8 +21,12 @@ vi.mock('./lib/supabase.js', () => ({
         limit: n => { f.lim = n; return q },
         then: (res, rej) => {
           st.cereri.push(tabel)
+          if (f.in) st.inLens.push(f.in[1].length)
+          if (st.eroareLa && st.eroareLa[0] === tabel && st.cereri.filter(t => t === tabel).length === st.eroareLa[1]) {
+            return Promise.resolve({ data: null, error: { message: 'eroare simulată de rețea' } }).then(res, rej)
+          }
           const rows = (st.tabele[tabel] || []).filter(r => f.eq.every(([c, v]) => r[c] === v) && (!f.in || f.in[1].includes(r[f.in[0]])) && (f.gt == null || r.id > f.gt))
-            .sort((a, b) => a.id - b.id).slice(0, f.lim).map(r => ({ ...r }))
+            .sort((a, b) => a.id - b.id).slice(0, Math.min(f.lim, st.plafon)).map(r => ({ ...r }))
           // poarta: răspunsurile din executie_tevi așteaptă până le eliberează testul
           const p = tabel === 'executie_tevi' && st.poarta ? st.poarta.p : Promise.resolve()
           return p.then(() => ({ data: rows, error: null })).then(res, rej)
@@ -54,10 +59,13 @@ const FARA_LIMITE = { id: 50, proiect_id: 1, cod: 'T1', km_start_m: null, km_end
 const curata = []
 afterEach(() => { while (curata.length) curata.pop()() })
 
-async function monteaza(tronson, { poarta = null } = {}) {
-  st.tabele = { executie_pachete_lansare: [PACHET], executie_tevi: TEVI }
+async function monteaza(tronson, { poarta = null, pachete = [PACHET], tevi = TEVI, plafon = 1000, eroareLa = null } = {}) {
+  st.tabele = { executie_pachete_lansare: pachete, executie_tevi: tevi }
   st.cereri = []
+  st.inLens = []
   st.poarta = poarta
+  st.plafon = plafon
+  st.eroareLa = eroareLa
   const j = new JSDOM('<!doctype html><div id="r"></div>')
   const vechi = { window: globalThis.window, document: globalThis.document }
   Object.assign(globalThis, { window: j.window, document: j.window.document })
@@ -70,7 +78,7 @@ async function monteaza(tronson, { poarta = null } = {}) {
   await asteapta()
   let montat = true
   const demonteaza = () => { if (montat) { montat = false; act(() => root.unmount()) } }
-  curata.push(() => { demonteaza(); Object.assign(globalThis, vechi); st.poarta = null })
+  curata.push(() => { demonteaza(); Object.assign(globalThis, vechi); st.poarta = null; st.plafon = 1000; st.eroareLa = null })
   const q = sel => j.window.document.querySelector(`[data-test="${sel}"]`)
   const text = () => j.window.document.body.textContent
   const bifeaza = async el => { await act(async () => { el.click() }); await asteapta() }
@@ -87,7 +95,8 @@ dom(numeDom('IzoBandaTronson — convenția și numitorul'), () => {
     expect(e.q('kpi-realizat').textContent).toContain('22,00 m')
     expect(e.q('kpi-realizat').textContent).toContain('din 30,00 m ai tronsonului')
     expect(e.q('kpi-necunoscut').textContent).toContain('8,00 m')
-    expect(st.cereri).toEqual(['executie_pachete_lansare', 'executie_tevi', 'executie_tevi'])
+    // ambele citiri continuă până la pagina goală
+    expect(st.cereri).toEqual(['executie_pachete_lansare', 'executie_pachete_lansare', 'executie_tevi', 'executie_tevi'])
   })
   it('comparația cu A apare doar la cerere, etichetată, cu diferențele față de B', async () => {
     const e = await monteaza(CU_LIMITE)
@@ -115,14 +124,44 @@ dom(numeDom('IzoBandaTronson — convenția și numitorul'), () => {
     let elibereaza
     const poarta = { p: new Promise(r => { elibereaza = r }) }
     const e = await monteaza(CU_LIMITE, { poarta })
-    expect(st.cereri).toEqual(['executie_pachete_lansare', 'executie_tevi']) // prima pagină, în așteptare
+    const inainte = ['executie_pachete_lansare', 'executie_pachete_lansare', 'executie_tevi'] // prima pagină de țevi, în așteptare
+    expect(st.cereri).toEqual(inainte)
     e.demonteaza()
     elibereaza()
     await e.asteapta()
-    expect(st.cereri).toEqual(['executie_pachete_lansare', 'executie_tevi'])  // pe codul vechi: a doua pagină se cerea oricum
+    expect(st.cereri).toEqual(inainte)  // pe codul vechi: a doua pagină se cerea oricum
   })
-  it('data situației pachetului: afișată ca necunoscută', async () => {
+  it('data situației și data importului: afișate ca necunoscute', async () => {
     const e = await monteaza(CU_LIMITE)
     expect(e.text()).toContain('situație: necunoscută')
+    expect(e.text()).toContain('import: necunoscut')
+  })
+})
+
+// pachete sintetice: id 1..n, fără rânduri; ultimul are cele două țevi de 10 + 12 m (dacă lista e trunchiată, ele nu se mai citesc)
+const multePachete = n => Array.from({ length: n }, (_, i) => ({ ...PACHET, id: i + 1, cod_document_full: `DOC-${i + 1}` }))
+const teviPe = id => TEVI.map((t, k) => ({ ...t, id: 100000 + k, pachet_id: id }))
+
+dom(numeDom('IzoBandaTronson — completitudinea citirii'), () => {
+  it('1001 pachete cu plafonul API de 1000: se citesc toate, inclusiv țevile ultimului', async () => {
+    const e = await monteaza(CU_LIMITE, { pachete: multePachete(1001), tevi: teviPe(1001) })
+    // pe codul vechi (o singură cerere de pachete): pachetul 1001 lipsea tacit și banda ieșea 0 m, fără avertisment
+    expect(e.text()).toContain('DOC-1001 ·')
+    expect(e.q('kpi-realizat').textContent).toContain('22,00 m')
+    expect(st.cereri.filter(t => t === 'executie_pachete_lansare')).toHaveLength(3) // 1000 + 1 + pagina goală
+    expect(Math.max(...st.inLens)).toBeLessThanOrEqual(200)                          // id-urile în bucăți
+  })
+  it('plafon mai mic (2 rânduri pe pagină): tot se citesc toate pachetele și toate țevile', async () => {
+    const e = await monteaza(CU_LIMITE, { pachete: multePachete(5), tevi: teviPe(5), plafon: 2 })
+    for (let i = 1; i <= 5; i++) expect(e.text()).toContain(`DOC-${i} ·`)
+    expect(e.q('kpi-realizat').textContent).toContain('22,00 m')
+    expect(st.cereri).toEqual([...Array(4).fill('executie_pachete_lansare'), ...Array(2).fill('executie_tevi')])
+  })
+  it('o pagină de pachete eșuată la mijloc: eroare afișată, nicio bandă / niciun indicator din date parțiale', async () => {
+    const e = await monteaza(CU_LIMITE, { pachete: multePachete(3), tevi: teviPe(1), plafon: 1, eroareLa: ['executie_pachete_lansare', 2] })
+    expect(e.text()).toContain('Nu s-au putut citi pachetele: eroare simulată de rețea')
+    expect(e.q('kpi-realizat')).toBe(null)
+    expect(e.text()).not.toContain('DOC-1 ·')
+    expect(st.cereri).not.toContain('executie_tevi')
   })
 })

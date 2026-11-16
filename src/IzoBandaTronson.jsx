@@ -31,6 +31,7 @@ const ETICHETA_CONVENTIE = {
   [CONVENTIE_PLATFORMA_COMPARATIE]: 'A · km start pachet = începutul primei țevi',
 }
 const FERESTRE_M = 500
+const BUCATA_IDS = 200 // câte id-uri de pachet într-un .in() la citirea țevilor
 const fmtData = s => {
   if (!s) return null
   const d = new Date(s)
@@ -52,28 +53,41 @@ export default function IzoBandaTronson({ proiectId, tronsoane, initialTronsonId
 
   useEffect(() => { if (!tronsonId && tronsoane?.length) setTronsonId(tronsoane[0].id) }, [tronsoane, tronsonId])
 
-  // citirea: pachetele tronsonului + rândurile lor (keyset pe id, fără plafonul de 1000 de rânduri)
+  // citirea: pachetele tronsonului + rândurile lor, AMBELE paginate keyset pe id până la pagina goală (L23): un plafon al API-ului
+  // (1000 sau mai mic) nu mai trunchiază tacit nici lista pachetelor; o pagină eșuată = eroare, fără bandă din date parțiale.
   useEffect(() => {
     if (!proiectId || !tronsonId) return
     const g = ++gen.current
     setLoading(true); setEroare(null); setDate(null); setSelectat(null); setFereastra('tot'); setComparaA(false)
+    // ecran închis / alt tronson ales: bucla se oprește înaintea paginii următoare (rezultatul oricum s-ar arunca)
+    const viu = () => { if (g !== gen.current) throw new Error('citire anulată') }
     ;(async () => {
       try {
-        const { data: pachete, error } = await supabase.from('executie_pachete_lansare').select('*')
-          .eq('proiect_id', proiectId).eq('tronson_id', tronsonId).order('id')
-        if (error) throw error
-        const ids = (pachete || []).map(p => p.id)
-        const tevi = ids.length ? await paginareKeyset((ultim, pas) => {
-          // ecran închis / alt tronson ales: bucla se oprește înaintea paginii următoare (rezultatul oricum s-ar arunca)
-          if (g !== gen.current) throw new Error('citire anulată')
-          let q = supabase.from('executie_tevi')
-            .select('id, pachet_id, poz_in_pachet, tip_rand, serie_unica, tip, dimensiune, sarja, lungime_m, sudura_cod, sudura_refacuta, sudura_sant_pending, pm_cod, pa_ut_cod')
-            .in('pachet_id', ids).order('id').limit(pas)
+        const pachete = await paginareKeyset((ultim, pas) => {
+          viu()
+          let q = supabase.from('executie_pachete_lansare').select('*')
+            .eq('proiect_id', proiectId).eq('tronson_id', tronsonId).order('id').limit(pas)
           if (ultim != null) q = q.gt('id', ultim)
           return q
-        }) : []
+        })
+        const ids = pachete.map(p => p.id)
+        if (new Set(ids).size !== ids.length) throw new Error('lista pachetelor are id-uri repetate')
+        // id-urile pachetelor merg în bucăți (URL-ul cererii rămâne scurt și la sute de pachete); fiecare bucată, paginată
+        const tevi = []
+        for (let i = 0; i < ids.length; i += BUCATA_IDS) {
+          const bucata = ids.slice(i, i + BUCATA_IDS)
+          const parte = await paginareKeyset((ultim, pas) => {
+            viu()
+            let q = supabase.from('executie_tevi')
+              .select('id, pachet_id, poz_in_pachet, tip_rand, serie_unica, tip, dimensiune, sarja, lungime_m, sudura_cod, sudura_refacuta, sudura_sant_pending, pm_cod, pa_ut_cod')
+              .in('pachet_id', bucata).order('id').limit(pas)
+            if (ultim != null) q = q.gt('id', ultim)
+            return q
+          })
+          for (const t of parte) tevi.push(t)
+        }
         if (g !== gen.current) return
-        setDate({ tronsonId, pachete: pachete || [], tevi })
+        setDate({ tronsonId, pachete, tevi })
       } catch (e) {
         if (g !== gen.current) return
         setEroare(e?.message || String(e))
@@ -132,7 +146,7 @@ export default function IzoBandaTronson({ proiectId, tronsoane, initialTronsonId
             {rez.foi.map(f => (
               <span key={f.id} style={{ ...S.badge, background:G.border2, color:G.text, fontWeight:500 }}>
                 {f.cod} · rev.{f.revizie ?? '—'} · {f.stare || '—'} · start {f.kmStart == null ? '—' : fmtKmMm(Math.round(f.kmStart * 1000))} · {f.randuri} rânduri
-                {' '}· situație: {fmtData(f.dataSituatie) || 'necunoscută'} · modificat: {fmtData(f.modificatLa) || 'necunoscut'}
+                {' '}· situație: {fmtData(f.dataSituatie) || 'necunoscută'} · import: {fmtData(f.dataImport) || 'necunoscut'} · modificat: {fmtData(f.modificatLa) || 'necunoscut'}
               </span>
             ))}
           </div>

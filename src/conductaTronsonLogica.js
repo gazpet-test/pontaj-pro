@@ -18,7 +18,7 @@
 import { parseNumar, areMaxZecimale } from './izoDocumenteLogica.js'
 import { normalizeazaSudura, tronsonNr } from './lib/izoSudura.js'
 
-export const VERSIUNE_REGULI = 'conducta-banda-v2'
+export const VERSIUNE_REGULI = 'conducta-banda-v3'
 export const STARI_BANDA = ['realizat', 'restant', 'necunoscut']
 export const ETICHETE_STARE_BANDA = { realizat: 'În schema de montaj', restant: 'Restant confirmat', necunoscut: 'Necunoscut (fără date)' }
 /**
@@ -548,9 +548,10 @@ export function comparaSurse(schema, platforma) {
     },
     perechi: det,
     doar_schema: doarSchema.map(p => p.id), doar_platforma: doarPlatforma.map(p => p.id),
-    necomparabile_schema: S.fara.map(p => p.id), necomparabile_platforma: P.fara.map(p => p.id),
-    suduri_doar_schema: [...sS.keys()].filter(k => !sP.has(k)), suduri_doar_platforma: [...sP.keys()].filter(k => !sS.has(k)),
-    suduri_alta_piesa: suduriAltaPiesa,
+    // toate listele sortate explicit (km, apoi id / cod), ca ieșirea să nu depindă de ordinea în care au venit piesele
+    necomparabile_schema: [...S.fara].sort(cmpPozitie).map(p => p.id), necomparabile_platforma: [...P.fara].sort(cmpPozitie).map(p => p.id),
+    suduri_doar_schema: [...sS.keys()].filter(k => !sP.has(k)).sort(cmpId), suduri_doar_platforma: [...sP.keys()].filter(k => !sS.has(k)).sort(cmpId),
+    suduri_alta_piesa: suduriAltaPiesa.sort((x, y) => cmpId(x.sudura, y.sudura) || cmpId(x.piesa_schema, y.piesa_schema) || cmpId(x.piesa_platforma, y.piesa_platforma)),
   }
 }
 

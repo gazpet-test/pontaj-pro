@@ -139,7 +139,8 @@ Ieșirea `calculeazaSursa(...)` (fișierul `src/conductaTronsonLogica.js`):
   în toleranță (± 5 mm); la același număr, suma minimă a diferențelor de lungime; restul egalităților se rup determinist (lungime, km, id).
   Abia apoi bucățile rămase se împerechează în ordinea km (și apar cu diferență de „lungime”). Exemplu: schema 10,004 + 10,000 m,
   platforma 10,000 + 10,009 m → perechile 10,004↔10,009 și 10,000↔10,000, fără nicio „diferență de 9 mm”.
-- Toate listele de ieșire au ordine deterministă (cheie, km, id), independentă de ordinea în care s-au încărcat rândurile.
+- Toate listele de ieșire au ordine deterministă (cheie, km, id), independentă de ordinea în care s-au încărcat rândurile:
+  perechile și bucățile fără pereche după km și id, necomparabilele tot după km și id, sudurile după cod (test cu intrarea inversată).
 - Sudura: codul normalizat + marcajul de refacere.
 - Piesele fără serie sunt **necomparabile** (listate separat), nu „lipsă”.
 
@@ -220,8 +221,9 @@ data situației, totalurile declarate (lungime, nr. piese, nr. suduri) comparate
 ## 7. Ecranul livrat la pasul 2 și ce ar trebui pentru pasul 4
 
 **Livrat:** Izometrie → „📏 Bandă tronson (citire)” (`src/IzoBandaTronson.jsx`). Citește **doar** ce există: `executie_pachete_lansare` +
-`executie_tevi` ale tronsonului ales (aceleași drepturi pe proiect ca editorul de pachete; citire paginată pe id, fără plafonul de 1000 de rânduri),
-le trece prin logica de mai sus și arată: pachetele (cod, revizie, stare, km start, „situație: necunoscută”, ultima modificare), indicatorii cu
+`executie_tevi` ale tronsonului ales (aceleași drepturi pe proiect ca editorul de pachete; ambele citiri paginate pe id până la pagina goală, deci fără
+plafonul de 1000 de rânduri al API-ului, oricât ar fi el; o pagină eșuată = eroare afișată, fără bandă din date parțiale),
+le trece prin logica de mai sus și arată: pachetele (cod, revizie, stare, km start, „situație: necunoscută”, „import: necunoscut”, ultima modificare), indicatorii cu
 numitorul (doar când tronsonul are limite; altfel „lungimea tronsonului: necunoscută” + întinderea datelor, iar necunoscutul pe tronson = „necunoscut”),
 banda pe tot tronsonul (sau pe toată întinderea datelor) ori pe ferestre de 500 m, sudurile ca repere (cu cod / de făcut / fără cod), segmentul ales
 (prin atingere, nu doar tooltip), anomaliile și detaliul pe piese cu proveniența.
@@ -260,3 +262,6 @@ pachetele proiectelor atribuite (testul îl face sesiunea care are un astfel de 
   (determinist); fără limite, lungimea tronsonului și necunoscutul pe tronson sunt necunoscute (întinderea datelor separat); convenția
   implicită a pachetelor = B (ca editorul), A doar comparație; verificări distincte pentru primul rând și lungimile lipsă la B; data
   situației / importului în contractul foii; manifest pe documente și revizii cu identificatori anonimi, fără valori reale.
+- 16.11.2026 — v3 (`conducta-banda-v3`, runda 3): și lista pachetelor se citește paginat pe id până la pagina goală (nu doar țevile;
+  id-urile pachetelor merg în bucăți în cererea de țevi); o citire întreruptă = eroare, fără bandă parțială; necomparabilele și sudurile
+  din raportul de diferențe au ordine explicită; ecranul arată și „import: necunoscut”.

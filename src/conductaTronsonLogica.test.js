@@ -164,6 +164,20 @@ describe('piesa doar în schemă / doar în platformă', () => {
     expect(x.rezumat.necomparabile_platforma).toBe(1)
     expect(x.rezumat.doar_platforma).toBe(0)
   })
+  it('ordinea listelor de ieșire nu depinde de ordinea intrării (și la necomparabile)', () => {
+    // piese fără serie: b fără poziție, a fără poziție, c la km 1+005 → ordinea așteptată: c (km), apoi a, b (id)
+    const piese = [{ id: 'b', serie: '', a_mm: null }, { id: 'a', serie: '', a_mm: null }, { id: 'c', serie: '', a_mm: 1005000 }]
+    const sud = [{ canon: 'TR1S9', original: 'T1S9', piesa: null }, { canon: 'TR1S2', original: 'T1S2', piesa: null }, { canon: 'TR1S10', original: 'T1S10', piesa: null }]
+    const gol = { piese: [], suduri: [] }
+    for (const ord of [x => x, x => [...x].reverse()]) {
+      const d = comparaSurse({ piese: ord(piese), suduri: ord(sud) }, gol)
+      expect(d.necomparabile_schema).toEqual(['c', 'a', 'b'])
+      expect(d.suduri_doar_schema).toEqual(['TR1S2', 'TR1S9', 'TR1S10'])
+      const e = comparaSurse(gol, { piese: ord(piese), suduri: ord(sud) })
+      expect(e.necomparabile_platforma).toEqual(['c', 'a', 'b'])
+      expect(e.suduri_doar_platforma).toEqual(['TR1S2', 'TR1S9', 'TR1S10'])
+    }
+  })
 })
 
 describe('km neparsabil', () => {
