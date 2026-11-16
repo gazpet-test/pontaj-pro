@@ -11,7 +11,7 @@
 // - Segment: '' = toate; 'distributie' / 'transgaz' / 'romgaz' = exact; 'altele' = orice altceva
 //   (inclusiv 'conpet' și rândurile fără segment), ca niciun anunț să nu rămână de neatins din filtru.
 
-import { ziValida } from './ofertareTermene.js'
+import { ziValida, zileIntre } from './ofertareTermene.js'
 
 const SEMNE_RE =new RegExp('[' + String.fromCharCode(0x300) + '-' + String.fromCharCode(0x36f) + ']', 'g')
 
@@ -75,6 +75,20 @@ export function citesteTermen(termen) {
   return { ms: momentDinOraRo(an, luna, z, h, mi, s, ms) }
 }
 
+/**
+ * Momentul termenului în NANOSECUNDE (BigInt), pentru ORDONARE: păstrează toată fracțiunea de secundă (până la 9 cifre),
+ * nu doar milisecundele din citesteTermen (review #1113: .000900Z și .000100Z ajungeau egale și se departajau după id).
+ * Aceeași citire ca citesteTermen (formă, zi validă, fus, ora României). Data doar cu zi → miezul nopții UTC al zilei.
+ * Termen lipsă / ilizibil → null.
+ */
+export function momentTermenNs(termen) {
+  const c = citesteTermen(termen)
+  if (!c) return null
+  if (c.zi) return BigInt(Date.UTC(+c.zi.slice(0, 4), +c.zi.slice(5, 7) - 1, +c.zi.slice(8, 10))) * 1000000n
+  const fractie = TERMEN_RE.exec(String(termen).trim())[7] || ''
+  return BigInt(c.ms) * 1000000n + BigInt(Number(fractie.padEnd(9, '0').slice(3, 9)))
+}
+
 // true doar dacă termenul e citibil și a trecut. Termen cu oră = comparat pe momentul exact;
 // termen doar cu dată = expirat abia după ce s-a terminat acea zi în România.
 export function eExpirat(termen, acumMs) {
@@ -82,12 +96,6 @@ export function eExpirat(termen, acumMs) {
   if (!t) return false
   if (t.zi) return ziuaBucuresti(acumMs) > t.zi
   return t.ms < acumMs
-}
-
-// Zile între două zile calendaristice 'AAAA-LL-ZZ' (b - a), exact, fără fusul calculatorului
-const zileIntre = (a, b) => {
-  const [ya, ma, da] = a.split('-').map(Number), [yb, mb, db] = b.split('-').map(Number)
-  return Math.round((Date.UTC(yb, mb - 1, db) - Date.UTC(ya, ma - 1, da)) / 86400000)
 }
 
 /**
