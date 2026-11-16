@@ -8,12 +8,16 @@
 // Vederea „Toată instalația” (grup.parti, varianta B): fiecare grup e o parte a scenei (ascunde / arată, „du-mă la”), etichetele
 // de tip `eticheta` se ascund dintr-un buton; piesele se lipesc pe material (câteva apeluri de desenare, nu sute).
 // Datele vin de la NodCuplareSchema.jsx; aici nu se citește și nu se scrie nimic în BD.
+// Armături (16.11.2026): betonul (cutii semitransparente cu muchii, se poate ascunde), barele ca tuburi cu diametrul REAL și
+// îndoirile rotunjite (pe mărci: ascundere, culoare pe marcă sau pe diametru), piesele înglobate (buloane, plăci) separat;
+// sub scenă legenda pe mărci, starea listei, punctele de confirmat și rândul de control „greutate desenată față de extras”.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { G, S } from './NodCuplareVizualizare.jsx'
 import { celMaiAproape, RAZA_ATINGERE } from './nodCuplareLogica.js'
-import { culoarePunct3d, culoareDn, dnuriGrup, diametruExterior, razaSfera, cutieGrup, spreScena, esteAtingere, gestNou, gestMisca, puncteVizibile, departareCamera } from './nodSchema3dLogica.js'
+import { culoarePunct3d, culoareDn, dnuriGrup, diametruExterior, razaSfera, cutieGrup, spreScena, esteAtingere, gestNou, gestMisca, puncteVizibile, departareCamera, puncteElement } from './nodSchema3dLogica.js'
+import { controlArmare, continutArmare, traseuBara, culoareMarca, culoareDiametru, DENSITATE_OTEL, PRAG_CONTROL_PROC } from './nodSchema3dArmare.js'
 
 export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
   const gazda = useRef(null)
@@ -31,6 +35,14 @@ export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
   const comun = Array.isArray(grup?.parti)
   const areEtichete = comun && grup.elemente.some(e => e.tip === 'eticheta')
   const vizibile = useMemo(() => puncteVizibile(puncte || [], ascunse), [puncte, ascunse])
+  // armături: legenda pe mărci (doar în vederea grupului, care are blocul `armare`), ce se vede și culoarea
+  const ctrl = useMemo(() => controlArmare(grup), [grup])
+  const cont = useMemo(() => continutArmare(grup), [grup])
+  const areArmare = cont.bare + cont.beton + cont.buloane + cont.placi > 0
+  const [ascunseMarci, setAscunseMarci] = useState(() => new Set())
+  const [beton, setBeton] = useState(true)
+  const [inglobate, setInglobate] = useState(true)
+  const [culoareArm, setCuloareArm] = useState('marca')     // marca | diametru
 
   // ── încărcarea Three.js + scena statică a grupului ──
   useEffect(() => {
@@ -66,7 +78,11 @@ export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
   useEffect(() => { if (stare === 'gata') scena.current?.teren(teren) }, [teren, stare])
   useEffect(() => { if (stare === 'gata') scena.current?.etichete(etichete) }, [etichete, stare])
   useEffect(() => { if (stare === 'gata') scena.current?.ascunde(ascunse) }, [ascunse, stare])
+  useEffect(() => {
+    if (stare === 'gata' && areArmare) scena.current?.armare({ ascunseMarci, beton, inglobate, culoare: culoareArm })
+  }, [ascunseMarci, beton, inglobate, culoareArm, stare, areArmare])
   const comuta = id => setAscunse(a => { const n = new Set(a); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  const comutaMarca = m => setAscunseMarci(a => { const n = new Set(a); if (n.has(m)) n.delete(m); else n.add(m); return n })
   // „du-mă la” un grup ascuns îl arată întâi (altfel camera ar merge la un loc gol)
   const mergiLa = id => {
     if (ascunse.has(id)) { const n = new Set(ascunse); n.delete(id); setAscunse(n); scena.current?.ascunde(n) }
@@ -87,6 +103,18 @@ export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
         )}
         {stare === 'gata' && (
           <div style={{ position: 'absolute', right: 8, bottom: 8, display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {cont.beton > 0 && (
+              <button onClick={() => setBeton(x => !x)} title="Arată / ascunde betonul" aria-pressed={beton}
+                style={{ ...S.btn, height: 44, padding: '0 10px', fontSize: 13, background: beton ? G.surface2 : G.bg }}>{beton ? '🧱 Beton' : '▢ Fără beton'}</button>
+            )}
+            {cont.buloane + cont.placi > 0 && (
+              <button onClick={() => setInglobate(x => !x)} title="Arată / ascunde piesele înglobate (buloane, plăci)" aria-pressed={inglobate}
+                style={{ ...S.btn, height: 44, padding: '0 10px', fontSize: 13, background: inglobate ? G.surface2 : G.bg }}>{inglobate ? '🔩 Piese' : '▢ Fără piese'}</button>
+            )}
+            {cont.bare > 0 && (
+              <button onClick={() => setCuloareArm(x => (x === 'marca' ? 'diametru' : 'marca'))} title="Culoarea barelor: pe marcă sau pe diametru"
+                style={{ ...S.btn, height: 44, padding: '0 10px', fontSize: 13 }}>{culoareArm === 'marca' ? '🎨 Pe marcă' : '🎨 Pe diametru'}</button>
+            )}
             {areEtichete && (
               <button onClick={() => setEtichete(x => !x)} title="Arată / ascunde etichetele din schemă"
                 style={{ ...S.btn, height: 44, padding: '0 10px', fontSize: 13, background: etichete ? G.surface2 : G.bg }}>{etichete ? '🏷 Etichete' : '🏷 Fără etichete'}</button>
@@ -116,14 +144,110 @@ export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
         </div>
       )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6, fontSize: 11, color: G.muted, alignItems: 'center' }}>
-        <span>Țevi:</span>
+        {(dnuri.length > 0 || !areArmare) && <span>Țevi:</span>}
         {dnuri.map(d => (
           <span key={d} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <span style={{ width: 16, height: 6, borderRadius: 3, background: culoareDn(d) }} />DN{d}
           </span>
         ))}
-        <span style={{ color: G.dim }}>· mai deschis = estimat · un deget rotește, două degete zoom</span>
+        <span style={{ color: G.dim }}>{dnuri.length > 0 || !areArmare ? '· ' : ''}mai deschis = estimat · un deget rotește, două degete zoom</span>
       </div>
+      {areArmare && <PanouArmare ctrl={ctrl} cont={cont} ascunse={ascunseMarci} comuta={comutaMarca} culoare={culoareArm} />}
+    </div>
+  )
+}
+
+// ── legenda armăturii: starea listei, punctele de confirmat, mărcile (ascundere), controlul față de extras ──
+const nr = (v, z = 2) => (Number.isFinite(v) ? v.toLocaleString('ro-RO', { minimumFractionDigits: z, maximumFractionDigits: z }) : '—')
+const semn = v => (v > 0 ? '+' : v < 0 ? '−' : '') + nr(Math.abs(v))
+export function PanouArmare({ ctrl, cont, ascunse, comuta, culoare }) {
+  const th = { textAlign: 'right', padding: '4px 6px', color: G.muted, fontWeight: 600, whiteSpace: 'nowrap' }
+  const td = { textAlign: 'right', padding: '4px 6px', whiteSpace: 'nowrap' }
+  const rau = { color: G.red, fontWeight: 700 }
+  const lungimeDesen = m => (m.lungimeMin == null ? '—' : Math.round(m.lungimeMin) === Math.round(m.lungimeMax) ? nr(m.lungimeMin, 0) : `${nr(m.lungimeMin, 0)}…${nr(m.lungimeMax, 0)}`)
+  return (
+    <div style={{ marginTop: 8, background: G.surface, border: `1px solid ${G.border2}`, borderRadius: 12, padding: '10px 12px', fontSize: 13, color: G.text }}>
+      {ctrl?.stareLista === 'neconfirmata' && (
+        <div role="alert" style={{ border: `1px solid ${G.yellow}`, background: G.yellow + '22', borderRadius: 10, padding: '8px 10px', marginBottom: 8 }}>
+          <div style={{ fontWeight: 800, color: G.yellow }}>⚠ Listă de armături NECONFIRMATĂ DE OM</div>
+          <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>Nu se folosește la debitare sau comandă până nu e verificată pe planșă.</div>
+          {ctrl.deConfirmat.length > 0 && (
+            <details open style={{ marginTop: 6 }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 700, minHeight: 32, display: 'flex', alignItems: 'center' }}>De confirmat ({ctrl.deConfirmat.length})</summary>
+              <ol style={{ margin: '4px 0 0', paddingLeft: 20, fontSize: 12, lineHeight: 1.45 }}>
+                {ctrl.deConfirmat.map((x, i) => <li key={i}>{x}</li>)}
+              </ol>
+            </details>
+          )}
+        </div>
+      )}
+      {ctrl?.stareLista === 'confirmata' && <div style={{ fontSize: 12, color: G.green, marginBottom: 6, fontWeight: 700 }}>✓ Listă de armături confirmată</div>}
+      {ctrl && ctrl.marci.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${G.border}` }}>
+                <th style={{ ...th, textAlign: 'left' }}>Marca</th><th style={th}>Ø</th><th style={{ ...th, textAlign: 'left' }}>Oțel</th>
+                <th style={th}>Buc. desen / extras</th><th style={th}>L extras (mm)</th><th style={th}>L desen (mm)</th><th style={th}>kg desen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ctrl.marci.map(m => {
+                const vizibil = !ascunse.has(m.marca)
+                return (
+                  <tr key={m.marca} style={{ borderBottom: `1px solid ${G.border2}`, opacity: vizibil ? 1 : 0.55 }}>
+                    <td style={{ ...td, textAlign: 'left' }}>
+                      <button onClick={() => comuta(m.marca)} aria-pressed={vizibil} title={(vizibil ? 'Ascunde' : 'Arată') + ` marca ${m.marca}` + (m.forma ? ` — ${m.forma}` : '')}
+                        style={{ ...S.btn, minHeight: 36, padding: '0 8px', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, background: vizibil ? G.surface2 : G.bg }}>
+                        {vizibil ? '👁' : '🚫'}
+                        <span style={{ width: 16, height: 6, borderRadius: 3, background: culoare === 'diametru' ? m.culoareD : m.culoare }} />
+                        <b>{m.marca}</b>
+                      </button>
+                      {m.estimate > 0 && <span style={{ color: G.yellow, marginLeft: 6 }}>{m.estimate} estimate</span>}
+                    </td>
+                    <td style={td}>{m.d}</td>
+                    <td style={{ ...td, textAlign: 'left' }}>{m.otel}</td>
+                    <td style={{ ...td, ...(m.bucOk ? {} : rau) }}>{m.bucDesen} / {m.bucExtras}</td>
+                    <td style={td}>{nr(m.lungimeExtras, 0)}</td>
+                    <td style={{ ...td, ...(m.lungimeOk ? {} : rau) }}>{lungimeDesen(m)}</td>
+                    <td style={td}>{nr(m.kgDesen)}</td>
+                  </tr>
+                )
+              })}
+              <tr>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 700 }} colSpan={3}>Total</td>
+                <td style={{ ...td, fontWeight: 700, ...(ctrl.bucDesen === ctrl.bucExtras ? {} : rau) }}>{ctrl.bucDesen} / {ctrl.bucExtras}</td>
+                <td style={td} colSpan={2} />
+                <td style={{ ...td, fontWeight: 700 }}>{nr(ctrl.kgDesen)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+      {ctrl?.extrasKg != null && (
+        <div data-control-extras style={{ marginTop: 8, fontWeight: 700, color: ctrl.controlOk ? G.green : G.red }}>
+          Greutate desenată {nr(ctrl.kgDesen)} kg față de extras {nr(ctrl.extrasKg)} kg ({semn(ctrl.diferentaProc)}%)
+          {ctrl.controlOk ? ' ✓' : ` — peste ±${PRAG_CONTROL_PROC}%, de verificat`}
+        </div>
+      )}
+      {ctrl && (
+        <div style={{ fontSize: 11, color: G.dim, marginTop: 4 }}>
+          Lungimea desenată e măsurată ca în extras (laturile pe exterior); greutatea = lungime × {DENSITATE_OTEL} kg/m³ × secțiunea barei.
+          {ctrl.extrasSursa ? ` Extras: ${ctrl.extrasSursa}.` : ''}
+        </div>
+      )}
+      {cont.beton > 0 && (
+        <div style={{ fontSize: 12, color: G.muted, marginTop: 6 }}>
+          Beton: {cont.numeBeton.length ? cont.numeBeton.join(' · ') : `${cont.beton} blocuri`}{cont.betonEstimat ? ' (unele estimate)' : ''}
+        </div>
+      )}
+      {cont.buloane + cont.placi > 0 && (
+        <div style={{ fontSize: 12, color: G.muted, marginTop: 4 }}>
+          Piese înglobate (nu sunt armătură): {cont.buloane > 0 ? `${cont.buloane} buloane${cont.diametreBuloane.length ? ' Ø' + cont.diametreBuloane.join('/Ø') : ''}` : ''}
+          {cont.buloane > 0 && cont.placi > 0 ? ', ' : ''}{cont.placi > 0 ? `${cont.placi} plăci` : ''}
+          {cont.inglobateEstimate > 0 && <span style={{ color: G.yellow }}> · poziție estimată: {cont.inglobateEstimate}</span>}
+        </div>
+      )}
     </div>
   )
 }
@@ -188,30 +312,100 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
     const sus = new THREE.Vector3(0, 1, 0)
     // piesele nu intră direct în scenă: se strâng pe material și se lipesc la final într-o singură plasă pe material și parte
     // (sute de piese = câteva apeluri de desenare; contează pe telefon). Atingerea nu folosește plasele (vezi „atingerea”).
-    const adauga = mesh => {
+    // `tinta` (armături): sub-grupul care se ascunde împreună (o marcă, betonul, piesele înglobate); fără ea = partea însăși.
+    // Materialele din sub-grupuri sunt doar ale lor (cheie / instanță separată), deci o plasă lipită nu amestecă ținte.
+    const adauga = (mesh, tinta) => {
       if (!parte.piese.has(mesh.material)) parte.piese.set(mesh.material, [])
       parte.piese.get(mesh.material).push(mesh)
+      if (tinta) parte.tinte.set(mesh.material, tinta)
       return mesh
     }
     eliberari.push(() => { for (const p of parti.values()) for (const l of p.piese.values()) for (const x of l) x.geometry.dispose() })
-    const cilindru = (a, b, r1, r2, m) => {
+    const cilindru = (a, b, r1, r2, m, tinta, laturi = 18) => {
       const va = V(a), vb = V(b), d = vb.clone().sub(va), L = d.length()
       if (L < 1e-4) return null
-      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r2, r1, L, 18, 1), m)
+      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r2, r1, L, laturi, 1), m)
       mesh.position.copy(va).addScaledVector(d, 0.5)
       mesh.quaternion.setFromUnitVectors(sus, d.normalize())
-      return adauga(mesh)
+      return adauga(mesh, tinta)
     }
     const lipeste = p => {
       for (const [m, l] of p.piese) {
+        const tinta = p.tinte.get(m) || p.obiect
         for (const x of l) { x.updateMatrix(); x.geometry.applyMatrix4(x.matrix); x.position.set(0, 0, 0); x.quaternion.identity(); x.scale.set(1, 1, 1) }
         const unit = l.length > 1 && THREE.mergeGeometries ? THREE.mergeGeometries(l.map(x => x.geometry), false) : null
         if (unit) {
-          p.obiect.add(new THREE.Mesh(unit, m))
+          tinta.add(new THREE.Mesh(unit, m))
           for (const x of l) x.geometry.dispose()
-        } else for (const x of l) p.obiect.add(x)           // nu s-au putut lipi: piesele merg separat (același aspect)
+        } else for (const x of l) tinta.add(x)              // nu s-au putut lipi: piesele merg separat (același aspect)
       }
       p.piese.clear()
+    }
+
+    // ── armături, beton, piese înglobate (create doar dacă grupul le are: modelele vechi rămân identice) ──
+    const subGrup = cheie => {
+      if (cheie === 'beton' || cheie === 'inglobate') {
+        if (!parte[cheie]) { parte[cheie] = new THREE.Group(); parte[cheie].name = cheie; parte.obiect.add(parte[cheie]) }
+        return parte[cheie]
+      }
+      if (!parte.marci.has(cheie)) { const g = new THREE.Group(); g.name = `marca:${cheie}`; parte.obiect.add(g); parte.marci.set(cheie, g) }
+      return parte.marci.get(cheie)
+    }
+    // materialele barelor: câte unul pe parte + marcă + certitudine (culoarea se schimbă pe loc: pe marcă / pe diametru)
+    const materialeBare = new Map()          // cheie -> { m, marca, diametru }
+    eliberari.push(() => { for (const x of materialeBare.values()) x.m.dispose() })
+    const matBara = (marca, d, est) => {
+      const k = `${parte.id}|${marca}|${est ? 1 : 0}`
+      if (!materialeBare.has(k)) {
+        const i = (parte.armare?.marci || []).findIndex(x => x.marca === marca)
+        const cMarca = i >= 0 ? culoareMarca(i) : '#9E9E9E', cD = culoareDiametru(d)
+        materialeBare.set(k, { marca: cMarca, diametru: cD, m: new THREE.MeshStandardMaterial({ color: cMarca, metalness: 0.35, roughness: 0.5,
+          transparent: est, opacity: est ? 0.42 : 1, depthWrite: !est }) })
+      }
+      return materialeBare.get(k).m
+    }
+    const matLinie = est => {
+      const k = `linie|${est ? 1 : 0}`
+      if (!materiale.has(k)) materiale.set(k, new THREE.LineBasicMaterial({ color: '#C8C8BE', transparent: true, opacity: est ? 0.35 : 0.75, depthWrite: false }))
+      return materiale.get(k)
+    }
+    const rad = g => (g * Math.PI) / 180
+    // o bară / un bulon: tuburi pe traseul în ax (îndoirile deja rotunjite); sferă doar la colțurile ascuțite (rază 0)
+    const tub = (pts, raza, m, tinta) => {
+      for (let i = 1; i < pts.length; i++) cilindru(pts[i - 1], pts[i], raza, raza, m, tinta, 10)
+      for (let i = 1; i < pts.length - 1; i++) {
+        const a = V(pts[i]).sub(V(pts[i - 1])).normalize(), b = V(pts[i + 1]).sub(V(pts[i])).normalize()
+        if (a.dot(b) < Math.cos(rad(20))) {
+          const s = new THREE.Mesh(new THREE.SphereGeometry(raza, 10, 6), m)
+          s.position.copy(V(pts[i]))
+          adauga(s, tinta)
+        }
+      }
+    }
+    const pieseArmare = e => {
+      const est = e.cert === 'estimat'
+      if (e.tip === 'bara') tub(traseuBara(e.puncte, e.r), mm(e.d) / 2, matBara(e.marca, e.d, est), subGrup(e.marca))
+      else if (e.tip === 'bulon') tub(traseuBara(e.puncte, e.r), mm(e.d) / 2, mat('#7B6BA8', est, { piesa: 1 }), subGrup('inglobate'))
+      else if (e.tip === 'placa') {
+        const x = e.lx / 2, y = e.ly / 2
+        const forma = new THREE.Shape([new THREE.Vector2(-x, -y), new THREE.Vector2(x, -y), new THREE.Vector2(x, y), new THREE.Vector2(-x, y)])
+        if (e.gol) { const gol = new THREE.Path(); gol.absarc(0, 0, e.gol / 2, 0, Math.PI * 2, true); forma.holes.push(gol) }
+        const geo = new THREE.ExtrudeGeometry(forma, { depth: e.grosime, bevelEnabled: false, curveSegments: 24 })
+        geo.rotateX(-Math.PI / 2)            // (x, y, z) model -> (x, z, -y) scenă, ca spreScena
+        geo.scale(0.001, 0.001, 0.001)
+        const placa = new THREE.Mesh(geo, mat('#55606B', est, { piesa: 1 }))
+        placa.position.copy(V(e.centru))       // centrul feței de jos
+        placa.rotation.y = rad(e.rotZ)
+        adauga(placa, subGrup('inglobate'))
+      } else if (e.tip === 'beton') {
+        const g = subGrup('beton')
+        const geo = new THREE.BoxGeometry(mm(e.dim[0]), mm(e.dim[2]), mm(e.dim[1]))
+        const muchii = new THREE.LineSegments(new THREE.EdgesGeometry(geo), matLinie(est))
+        const bloc = new THREE.Mesh(geo, mat('#A3A39B', false, { opacity: est ? 0.08 : 0.16, beton: 1 }))
+        for (const o of [bloc, muchii]) { o.position.copy(V(e.centru)); o.rotation.y = rad(e.rotZ) }
+        g.add(muchii)                          // muchiile nu se lipesc (alt tip de obiect); sunt puține
+        adauga(bloc, g)
+      }
     }
     const eticheta = (text, p, inaltime, inGrupEtichete = false) => {
       const c = document.createElement('canvas')
@@ -287,18 +481,19 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
           break
         }
         case 'eticheta': eticheta(e.text, e.p, hEt, true); break
+        case 'bara': case 'bulon': case 'placa': case 'beton': pieseArmare(e); break
         default: break
       }
     }
     // ── piesele, pe părți ──
-    const listaParti = grup.parti || [{ id: grup.id, elemente: grup.elemente, suduri: grup.suduri }]
+    const listaParti = grup.parti || [{ id: grup.id, elemente: grup.elemente, suduri: grup.suduri, armare: grup.armare }]
     for (const pg of listaParti) {
       const obiect = new THREE.Group(), etichete = new THREE.Group()
       obiect.add(etichete)
       scene.add(obiect)                // în scenă de la început: dacă ceva pică mai jos, eliberarea (traverse) o găsește
-      parte = { obiect, etichete, piese: new Map(), puncte: [] }
+      parte = { id: pg.id, armare: pg.armare || null, obiect, etichete, piese: new Map(), tinte: new Map(), marci: new Map(), beton: null, inglobate: null, puncte: [] }
       parti.set(pg.id, parte)
-      for (const e of pg.elemente) for (const k of ['a', 'b', 'c', 'r', 'p']) if (e[k]) parte.puncte.push(V(e[k]))
+      for (const e of pg.elemente) for (const p of puncteElement(e)) parte.puncte.push(V(p))
       for (const sd of pg.suduri) parte.puncte.push(V(sd.p))
       for (const e of pg.elemente) piesa(e)
       lipeste(parte)
@@ -484,6 +679,16 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
       etichete: vizibil => { for (const p of parti.values()) p.etichete.visible = vizibil; randeaza() },
       // grupurile ascunse (vederea comună); sferele lor le scoate pagina din lista dată la aplicaPuncte (puncteVizibile)
       ascunde: ascunse => { for (const [id, p] of parti) p.obiect.visible = !ascunse?.has(id); randeaza() },
+      // armături: mărcile ascunse, betonul, piesele înglobate și culoarea barelor (pe marcă / pe diametru)
+      armare: ({ ascunseMarci, beton = true, inglobate = true, culoare = 'marca' } = {}) => {
+        for (const p of parti.values()) {
+          for (const [marca, g] of p.marci) g.visible = !ascunseMarci?.has(marca)
+          if (p.beton) p.beton.visible = beton
+          if (p.inglobate) p.inglobate.visible = inglobate
+        }
+        for (const x of materialeBare.values()) x.m.color.set(culoare === 'diametru' ? x.diametru : x.marca)
+        randeaza()
+      },
       dispose: elibereaza,
     }
   } catch (e) {
