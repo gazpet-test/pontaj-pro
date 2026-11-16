@@ -65,7 +65,7 @@ function clientFals({ rapoarte = [], incarcari = [], sites = [], meteo = [] } = 
     }
     return q
   }
-  const jurnal = (cheie, uscare_id, actiune) => T.executie_uscare_jurnal.set(++idNou, { id: idNou, cheie, uscare_id, actiune, proiect_id: 1 })
+  const jurnal = (cheie, uscare_id, actiune) => T.executie_uscare_jurnal.set(++idNou, { id: idNou, cheie, uscare_id, actiune, proiect_id: 1, creat_de: 'u1' })
   // serverul FALS: cheia apăsării (duplicat; retrasă = refuz), CAS pe versiune (conflict cu rândul curent), creare, poza din rezervare, retragerea
   const aplica = (fn, a) => {
     const j = [...T.executie_uscare_jurnal.values()].find(x => x.cheie === a.p_cheie)
@@ -109,6 +109,7 @@ function clientFals({ rapoarte = [], incarcari = [], sites = [], meteo = [] } = 
       if (fn === 'fn_executie_nod_drept') return Promise.resolve({ data: true, error: null })
       if (fn === 'fn_executie_contract_drept') return Promise.resolve({ data: false, error: null })
       if (fn === 'fn_executie_uscare_retrage' && st.retrageEroare) return Promise.resolve({ data: null, error: { message: 'Failed to fetch' } })
+      if (fn === 'fn_executie_uscare_retrage' && st.retrageLimita) return Promise.resolve({ data: null, error: { code: '54000', message: 'uscare: LIMITA_RETRAGERI: ai 20 retrageri în ultimele 24 h' } })
       const d = amana(); st.rpc.push({ fn, a, ...d })
       // st.devreme: serverul scrie LA APEL, dar răspunsul se pierde (timeout) la eliberarea cu „eroare”
       const devreme = st.devreme ? aplica(fn, a) : null
@@ -164,7 +165,9 @@ async function monteaza(client, stocare = stocareFalsa(), extra = {}) {
     await act(async () => { l.querySelector('input').click() }); await asteapta()
   }
   const elibereaza = async (cerere, val) => { await act(async () => { cerere.res(val) }); await asteapta() }
-  return { d, j, apasa, buton, butonExact, butoane, scrie, camp, bifeaza, elibereaza, asteapta, selecteaza, alegeFisier, text: () => d.body.textContent }
+  // schimbarea proiectului (alt proiectId pe ACEEAȘI componentă montată, ca la navigarea din Execuție)
+  const reranda = async extra2 => { await act(async () => { root.render(<UscareConducta proiectId={1} client={client} stocare={stocare} {...extra} {...extra2} />) }); await asteapta() }
+  return { d, j, apasa, buton, butonExact, butoane, scrie, camp, bifeaza, elibereaza, asteapta, selecteaza, alegeFisier, reranda, text: () => d.body.textContent }
 }
 
 dom(numeDom('UscareConducta (jsdom + react-dom)'), () => {
@@ -323,6 +326,93 @@ dom(numeDom('UscareConducta (jsdom + react-dom)'), () => {
     expect(u.text()).toContain('rămâne de lămurit')
     expect(cheiIncerte(stocare)).toHaveLength(1)
     expect(u.buton('Lămurește cererea de sus').disabled).toBe(true)
+  })
+
+  // ── runda 4 (verdictul r3, P2-3): răspunsurile întârziate nu se aplică după navigare / schimbarea proiectului ──
+  const elibereazaTabel = async (u, st, tabel) => {
+    for (let i = 0; i < 20; i++) {
+      const x = st.cereriTabel.find(c => c.tabel === tabel && !c.gata)
+      if (!x) return
+      x.gata = true; await u.elibereaza(x, 'ok')
+    }
+  }
+
+  it('P2-3 retrimiterea unei creări aplicate: „← Lista” cât se reîncarcă lista -> raportul vechi NU se mai deschide (reproducerea din verdict)', async () => {
+    const { client, st, T } = clientFals()
+    st.auto = false; st.devreme = true
+    const stocare = stocareFalsa()
+    const u = await monteaza(client, stocare)
+    await creeazaNou(u)
+    await u.elibereaza(st.rpc[0], 'eroare')
+    st.auto = true; st.amanaTabel.add('executie_uscari')
+    await u.apasa(u.buton('Retrimite identic'))
+    // 1. reconcilierea găsește raportul creat (citirea lui e în zbor) -> eliberată
+    const citire = st.cereriTabel.find(c => c.tabel === 'executie_uscari')
+    expect(citire).toBeTruthy()
+    citire.gata = true; await u.elibereaza(citire, 'ok')
+    // 2. funcția așteaptă reîncărcarea listei; 3. contextul se schimbă prin navigare
+    expect(st.cereriTabel.some(c => c.tabel === 'executie_uscari' && !c.gata)).toBe(true)
+    await u.apasa(u.buton('← Lista'))
+    // 4. reîncărcarea se termină; 5. raportul vechi NU se deschide
+    await elibereazaTabel(u, st, 'executie_uscari')
+    expect(() => u.camp('Tronson (cum apare în raport)')).toThrow()
+    expect(u.text()).not.toContain('se salvase deja')
+    expect(T.executie_uscari.size).toBe(1)
+    expect(cheiIncerte(stocare)).toHaveLength(0)                              // rezultatul DOVEDIT scoate totuși cheia din registrul cererii
+  })
+
+  it('P2-3 „Renunț” pe o creare aplicată, cu navigare cât serverul răspunde: cheia iese din registru, dar raportul NU se deschide peste listă', async () => {
+    const { client, st } = clientFals()
+    st.auto = false; st.devreme = true
+    const stocare = stocareFalsa()
+    const u = await monteaza(client, stocare)
+    await creeazaNou(u)
+    await u.elibereaza(st.rpc[0], 'eroare')
+    await u.apasa(u.butonExact('Renunț'))
+    const retragere = st.rpc.at(-1)
+    expect(retragere.fn).toBe('fn_executie_uscare_retrage')
+    await u.apasa(u.buton('← Lista'))
+    await u.elibereaza(retragere, 'ok')
+    expect(() => u.camp('Tronson (cum apare în raport)')).toThrow()
+    expect(u.text()).not.toContain('se aplicase deja')
+    expect(cheiIncerte(stocare)).toHaveLength(0)
+  })
+
+  it('P2-3 retrimiterea în zbor + schimbarea PROIECTULUI: răspunsul vechi nu scrie mesajul și nu pune lista proiectului vechi peste cel nou', async () => {
+    const { client, st, T } = clientFals({ rapoarte: [RAP(1, { tronson: 'Tr. P1' }), RAP(2, { proiect_id: 2, tronson: 'Tr. P2' })] })
+    const stocare = stocareFalsa()
+    const u = await monteaza(client, stocare)
+    await u.apasa(u.buton('Tr. P1'))
+    await u.scrie('Observații', 'salvare pierdută')
+    st.auto = false
+    await u.apasa(u.buton('💾 Salvează'))
+    await u.elibereaza(st.rpc[0], 'eroare')
+    await u.apasa(u.buton('Retrimite identic'))
+    const retrimitere = st.rpc.at(-1)
+    expect(retrimitere.a.p_cheie).toBe(st.rpc[0].a.p_cheie)
+    await u.reranda({ proiectId: 2 })
+    expect(u.text()).toContain('Tr. P2')
+    await u.elibereaza(retrimitere, 'ok')
+    expect(T.executie_uscari.get(1).observatii).toBe('salvare pierdută')        // serverul a aplicat retrimiterea
+    expect(u.text()).toContain('Tr. P2')
+    expect(u.text()).not.toContain('Tr. P1')                                    // lista proiectului vechi NU a înlocuit-o pe cea nouă
+    expect(u.text()).not.toContain('Retrimiterea')
+    expect(cheiIncerte(stocare)).toHaveLength(0)                                // cheia lămurită iese din registrul proiectului 1
+  })
+
+  it('P2-4 limita de retrageri (54000) e un refuz DISTINCT: nimic retras, cererea rămâne, „Retrimite identic” e calea', async () => {
+    const { client, st } = clientFals()
+    st.auto = false
+    const stocare = stocareFalsa()
+    const u = await monteaza(client, stocare)
+    await creeazaNou(u)
+    await u.elibereaza(st.rpc[0], 'eroare')
+    st.retrageLimita = true
+    await u.apasa(u.butonExact('Renunț'))
+    expect(u.text()).toContain('Ai atins limita de retrageri')
+    expect(u.text()).not.toContain('Serverul nu a putut confirma')
+    expect(cheiIncerte(stocare)).toHaveLength(1)
+    expect(u.buton('Retrimite identic').disabled).toBe(false)
   })
 
   const SITE = [{ id: 100, name: 'Santier P1', proiect_id: 1 }]

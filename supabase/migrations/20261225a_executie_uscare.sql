@@ -50,18 +50,20 @@
 -- Depinde de 20261201a (fn_executie_nod_drept), 20261202a (executie_probe_tronsoane cu UNIQUE (id, proiect_id)), 20261209a + 20261213a
 --   (restricția pe proiect), meteo_cache (meteo-sync) și sites. Verificat mai jos.
 -- Ordinea lock-urilor (L06), aceeași pe toate căile: lock consultativ pe cheia apăsării -> executie_uscari FOR UPDATE -> executie_uscare_incarcari
---   FOR UPDATE -> executie_uscare_poze (FOR UPDATE / INSERT / DELETE) -> INSERT în jurnal. Lock-urile implicite: FK-urile (FOR KEY SHARE pe
+--   FOR UPDATE -> executie_uscare_poze (FOR UPDATE / INSERT / DELETE) -> INSERT în jurnal (retragerea: cheia -> lock consultativ pe autor,
+--   alt spațiu de chei, luat doar de ea -> INSERT în jurnal). Cheile apăsărilor sunt ale AUTORULUI (unic pe (creat_de, cheie), runda 4). Lock-urile implicite: FK-urile (FOR KEY SHARE pe
 --   executie_proiecte / executie_probe_tronsoane / executie_uscari / executie_uscare_incarcari), trigger-ele pozei și rezervării (FOR SHARE pe
 --   raport, deja ținut mai tare). Modulul Probe pe tronsoane (20261202a) nu atinge nimic de aici: fără ciclu.
 -- Lock-uri la aplicare (punct unic, NOWAIT, reîncercat cât timp nu s-a depășit 1 s de la BEGIN — bugetul se verifică și DUPĂ obținere: un lock
 --   luat după prima secundă = refuz, nimic schimbat): executie_proiecte și executie_probe_tronsoane SHARE ROW EXCLUSIVE (cheile străine),
 --   storage.objects ACCESS EXCLUSIVE (CREATE POLICY + sonda politicilor): oprește scurt și citirile de fișiere — de aplicat într-un moment liniștit.
--- GĂRZILE DE TIMP reale (runda 3; nu există alt plafon): transaction_timeout = 2000 ms pus de runner înainte de BEGIN (verificat în $pre$),
+-- GĂRZILE DE TIMP reale (runda 3; nu există alt plafon): plafonul tranzacției = 2000 ms pus de runner înainte de BEGIN (verificat în $pre$;
+--   numele parametrului apare în fișier DOAR în citirea exactă acceptată de validatorul runnerului — nici în comentarii, runda 4),
 --   lock_timeout = 100 ms, bugetul lock-urilor de 1 s de la BEGIN (mai sus) și garda finală a runnerului. Migrarea NU fixează
 --   statement_timeout și nu are alt plafon (ex. 1.500 ms): durata „sfarsit la … ms” de la final e doar afișată.
 -- LIVRAREA PE PRODUCȚIE NU ÎNCAPE ÎN ACESTE GĂRZI cu runnerul de azi: amprenta globală L15 v2 se calculează ÎNAINTE și DUPĂ, în aceeași tranzacție,
 --   iar pe producție un calcul durează ~1,7–2,3 s (sesiune caldă; mai mult la rece). Fără refacerea uneltei de livrare (sau o derogare aprobată
---   separat) aplicarea se oprește cu BUGET_LOCK / transaction_timeout, fără efect. Ce trebuie măsurat înainte: spec §11 „Livrarea pe producție”.
+--   separat) aplicarea se oprește cu BUGET_LOCK / plafonul tranzacției depășit, fără efect. Ce trebuie măsurat înainte: spec §11 „Livrarea pe producție”.
 -- Revenire: supabase/revenire/20261225a_executie_uscare_ROLLBACK.sql (refuză dacă există date; verifică DEFINIȚIILE, nu doar numerele).
 -- Probe: scripts/pglite/test_executie_uscare_local.mjs (PGlite, cu pașii reali L15 v2 ai runnerului) + supabase/tests/20261225a_executie_uscare_doua_sesiuni.sh
 --   (DOUĂ sesiuni reale, pe clonă: creare / reîncercare, salvare / închidere, poză / închidere).
@@ -338,7 +340,7 @@ CREATE TABLE public.executie_uscare_incarcari (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   uscare_id bigint NOT NULL,
   proiect_id bigint NOT NULL,
-  cale text NOT NULL CHECK (cale ~ '^[0-9]{1,18}/[0-9]{1,18}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$'),
+  cale text NOT NULL CHECK (cale ~ E'^[0-9]{1,18}/[0-9]{1,18}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.jpg$'),
   -- CATEGORII-INCARCARI-START
   categorie text NOT NULL CHECK (categorie IN ('manometru', 'temperatura', 'pistoane', 'cantar_intrare', 'cantar_iesire', 'piston_final', 'punct_roua', 'utilaje', 'altele')),
   -- CATEGORII-INCARCARI-END
@@ -369,7 +371,7 @@ CREATE TABLE public.executie_uscare_poze (
   categorie text NOT NULL CHECK (categorie IN ('manometru', 'temperatura', 'pistoane', 'cantar_intrare', 'cantar_iesire', 'piston_final', 'punct_roua', 'utilaje', 'altele')),
   -- CATEGORII-END
   burete_nr smallint CHECK (burete_nr BETWEEN 1 AND 20),
-  cale text NOT NULL CHECK (cale ~ '^[0-9]{1,18}/[0-9]{1,18}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$'),
+  cale text NOT NULL CHECK (cale ~ E'^[0-9]{1,18}/[0-9]{1,18}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.jpg$'),
   legenda text CHECK (length(legenda) BETWEEN 1 AND 300),
   creat_de uuid,
   creat_la timestamptz NOT NULL DEFAULT now(),
@@ -386,7 +388,10 @@ COMMENT ON TABLE public.executie_uscare_poze IS
 
 -- ── jurnalul (doar adăugare) ──
 -- 'cheie_retrasa' (runda 3, L05): retragerea unei cereri nelămurite („Renunț”), scrisă de fn_executie_uscare_retrage DOAR dacă cheia nu era
--- în jurnal; e singurul rând fără raport (uscare_id NULL) și face orice cerere ulterioară cu acea cheie refuzată (UNIQUE pe cheie).
+-- în jurnal; e singurul rând fără raport (uscare_id NULL) și face orice cerere ulterioară cu acea cheie A ACELUIAȘI AUTOR refuzată.
+-- Runda 4 (verdict P2-4): cheia e a AUTORULUI — unicitatea e pe (creat_de, cheie), creat_de = auth.uid() pus de trigger, obligatoriu; toate
+-- căutările după cheie sunt pe (autorul curent, cheie). Un alt cont care cunoaște UUID-ul (din orice proiect) scrie doar în spațiul LUI de
+-- chei: nu poate retrage / ocupa / bloca intenția altcuiva. Retragerea leagă cheia de autor (creat_de) și de proiectul intenției (proiect_id).
 CREATE TABLE public.executie_uscare_jurnal (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   uscare_id bigint,
@@ -398,16 +403,18 @@ CREATE TABLE public.executie_uscare_jurnal (
   motiv text CHECK (length(motiv) BETWEEN 1 AND 500),
   cheie uuid NOT NULL,
   amprenta text NOT NULL CHECK (amprenta ~ '^[0-9a-f]{32}$'),
-  creat_de uuid,
+  creat_de uuid NOT NULL,
   creat_la timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT executie_uscare_jurnal_uscare_fk FOREIGN KEY (uscare_id, proiect_id) REFERENCES public.executie_uscari (id, proiect_id),
-  CONSTRAINT executie_uscare_jurnal_cheie_uq UNIQUE (cheie),
+  CONSTRAINT executie_uscare_jurnal_cheie_uq UNIQUE (creat_de, cheie),
   CONSTRAINT executie_uscare_jurnal_stari CHECK ((actiune IN ('inchidere', 'redeschidere', 'anulare')) = (stare_veche IS NOT NULL AND stare_noua IS NOT NULL)),
   CONSTRAINT executie_uscare_jurnal_motiv CHECK ((actiune IN ('redeschidere', 'anulare', 'poza_renuntata')) = (motiv IS NOT NULL)),
   CONSTRAINT executie_uscare_jurnal_retragere CHECK ((actiune = 'cheie_retrasa') = (uscare_id IS NULL) AND (actiune <> 'cheie_retrasa' OR valori = '{}'::jsonb))
 );
 CREATE INDEX executie_uscare_jurnal_uscare_idx ON public.executie_uscare_jurnal (uscare_id, proiect_id, id);
 CREATE INDEX executie_uscare_jurnal_proiect_idx ON public.executie_uscare_jurnal (proiect_id, id);
+-- limita retragerilor pe autor (runda 4): numărarea pe fereastră citește doar retragerile autorului
+CREATE INDEX executie_uscare_jurnal_retrageri_idx ON public.executie_uscare_jurnal (creat_de, creat_la) WHERE actiune = 'cheie_retrasa';
 COMMENT ON TABLE public.executie_uscare_jurnal IS
   'Execuție: jurnalul rapoartelor de uscare (creare, salvări cu diferențele, închideri / redeschideri cu conținutul complet, anulări, rezervări, poze, renunțări, retrageri de cereri nelămurite); scris doar de RPC-urile fn_executie_uscare_*, nu se modifică. Ține cheile de idempotență. 20261225a.';
 
@@ -656,7 +663,7 @@ BEGIN
   PERFORM pg_advisory_xact_lock(20261225, hashtext(p_cheie::text));
   v_amprenta := md5(jsonb_build_object('op', 'salveaza', 'proiect', p_proiect, 'id', p_id, 'versiune', p_versiune, 'date', p_date)::text);
   -- reluarea aceleiași apăsări (aceeași cheie): același conținut = succesul de data trecută; alt conținut = eroare
-  SELECT uscare_id, proiect_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE cheie = p_cheie;
+  SELECT uscare_id, proiect_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;
   IF FOUND THEN
     IF j.actiune = 'cheie_retrasa' THEN
       RAISE EXCEPTION 'uscare: cererea a fost retrasă (Renunț) și nu se mai aplică' USING ERRCODE = '22023';
@@ -924,7 +931,7 @@ BEGIN
     RAISE EXCEPTION 'uscare: redeschiderea unui raport închis cere drept de administrator pe Execuție' USING ERRCODE = '42501';
   END IF;
   v_amprenta := md5(jsonb_build_object('op', 'stare', 'id', p_id, 'versiune', p_versiune, 'actiune', p_actiune, 'motiv', v_motiv)::text);
-  SELECT uscare_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE cheie = p_cheie;
+  SELECT uscare_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;
   IF FOUND THEN
     IF j.actiune = 'cheie_retrasa' THEN
       RAISE EXCEPTION 'uscare: cererea a fost retrasă (Renunț) și nu se mai aplică' USING ERRCODE = '22023';
@@ -1005,7 +1012,7 @@ BEGIN
   END IF;
   v_amprenta := md5(jsonb_build_object('op', 'poza', 'uscare', p_uscare, 'actiune', p_actiune, 'poza', p_poza, 'cale', p_cale,
                                        'categorie', p_categorie, 'burete', p_burete_nr, 'legenda', v_leg)::text);
-  SELECT uscare_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE cheie = p_cheie;
+  SELECT uscare_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;
   IF FOUND THEN
     IF j.actiune = 'cheie_retrasa' THEN
       RAISE EXCEPTION 'uscare: cererea a fost retrasă (Renunț) și nu se mai aplică' USING ERRCODE = '22023';
@@ -1094,17 +1101,28 @@ GRANT EXECUTE ON FUNCTION public.fn_executie_uscare_poza(bigint, text, bigint, t
 --     cea pierdută, dacă ajunge mai târziu) e refuzată — „nu există” devine sigur și definitiv: {ok, aplicat: false, retrasa: true};
 --   * cheia deja retrasă (reluarea retragerii) = același răspuns, duplicat.
 -- Drept: retragerea cere scriere pe proiect (scrie în jurnalul lui); răspunsul pe o cheie existentă cere citire pe proiectul ei, iar cheia
--- trebuie să fie a ACELUIAȘI proiect (altfel 22023). Ordinea lock-urilor (L06): cheia -> jurnal (INSERT); niciun rând de raport.
+-- trebuie să fie a ACELUIAȘI proiect (altfel 22023).
+-- Runda 4 (verdict P2-4): cheia e a AUTORULUI (jurnalul e unic pe (creat_de, cheie)): retragerea caută și scrie DOAR în spațiul de chei al
+-- apelantului, legată de el (creat_de = auth.uid()) și de proiectul intenției (proiect_id = p_proiect). Un alt cont, din orice proiect, care
+-- cunoaște UUID-ul nu poate retrage sau bloca intenția altcuiva (retragerea lui privește doar cheia LUI).
+-- Evidența retragerilor (runda 4): un rând retras rămâne PERMANENT (altfel o cerere întârziată ar putea reapărea după ștergere: promisiunea
+-- „refuzată definitiv” cade). Volumul e limitat pe AUTOR: cel mult 20 de retrageri noi în 24 h și cel mult 200 în 365 de zile (fereastră
+-- mobilă) => cel mult 200 de rânduri / an / cont cu drept de scriere. Peste limită: refuz DISTINCT (SQLSTATE 54000, „LIMITA_RETRAGERI”),
+-- nimic scris; cererea rămâne nelămurită și se lămurește prin „Retrimite identic” (aceeași cheie, idempotent), care nu e limitat.
+-- Întrebarea pe o cheie deja în jurnal (aplicată / deja retrasă) nu scrie și nu intră în limită.
+-- Ordinea lock-urilor (L06): cheia -> autorul (lock consultativ pe cont, doar înaintea numărării) -> jurnal (INSERT); niciun rând de raport.
 CREATE FUNCTION public.fn_executie_uscare_retrage(p_proiect bigint, p_cheie uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
   v_uid uuid := auth.uid();
   j record;
+  v_zi integer;
+  v_an integer;
 BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'uscare: autentificare necesară' USING ERRCODE = '42501'; END IF;
   IF p_proiect IS NULL OR p_cheie IS NULL THEN RAISE EXCEPTION 'uscare: parametri lipsă' USING ERRCODE = '22023'; END IF;
   PERFORM pg_advisory_xact_lock(20261225, hashtext(p_cheie::text));
-  SELECT uscare_id, proiect_id, actiune INTO j FROM public.executie_uscare_jurnal WHERE cheie = p_cheie;
+  SELECT uscare_id, proiect_id, actiune INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;
   IF FOUND THEN
     IF NOT public.fn_executie_nod_drept(j.proiect_id, false) THEN
       RAISE EXCEPTION 'uscare: nu ai drept pe proiectul acestei cereri' USING ERRCODE = '42501';
@@ -1117,6 +1135,15 @@ BEGIN
   END IF;
   IF NOT public.fn_executie_nod_drept(p_proiect, true) THEN
     RAISE EXCEPTION 'uscare: nu ai drept de scriere pe Execuție pentru acest proiect' USING ERRCODE = '42501';
+  END IF;
+  -- limita pe autor (L01: lock-ul contului ÎNAINTEA numărării; două retrageri simultane ale aceluiași cont nu trec amândouă de limită)
+  PERFORM pg_advisory_xact_lock(20261226, hashtext(v_uid::text));
+  SELECT count(*) FILTER (WHERE creat_la > now() - interval '24 hours'), count(*) INTO v_zi, v_an
+    FROM public.executie_uscare_jurnal
+   WHERE creat_de = v_uid AND actiune = 'cheie_retrasa' AND creat_la > now() - interval '365 days';
+  IF v_zi >= 20 OR v_an >= 200 THEN
+    RAISE EXCEPTION 'uscare: LIMITA_RETRAGERI: ai % retrageri în ultimele 24 h (cel mult 20) și % în ultimul an (cel mult 200); nimic retras. Lămurește cererea cu „Retrimite identic”.',
+      v_zi, v_an USING ERRCODE = '54000';
   END IF;
   INSERT INTO public.executie_uscare_jurnal (uscare_id, proiect_id, actiune, valori, cheie, amprenta)
   VALUES (NULL, p_proiect, 'cheie_retrasa', '{}'::jsonb, p_cheie, md5(jsonb_build_object('op', 'retrage', 'proiect', p_proiect)::text));
@@ -1317,6 +1344,11 @@ END $post$;
 -- sub-bloc anulat la final prin excepția proprie (prinsă): copia, funcția ajutătoare, rolul și JWT-ul dispar. Ce NU acoperă: politici care se
 -- deschid doar pentru o uscare / rezervare EXISTENTĂ (la aplicare nu există) și trigger-ele lui storage.objects — acelea sunt în amprenta
 -- globală L15 v2 (familiile politica / trigger), revizuite în PR-ul de baseline; pe clonă se probează și cu date (spec §11).
+-- LIMITELE sondei (runda 4, spec §11): e un EȘANTION — cel mult 7 identități, câte PRIMUL cont din fiecare categorie, căi cu uscarea 0,
+-- metadate fixe; poate rata politici condiționate de alte conturi, de alte metadate sau de rapoarte existente. Nu înlocuiește baseline-ul
+-- revizuit și probele cu structura reală pe clonă. Condițiile ei de funcționare (copia cu EXACT drepturile tabelului real — ACL normalizat
+-- și verificat —, ajutătorul cu EXECUTE explicit, SECURITY INVOKER) se verifică; o condiție lipsă = refuz SONDA_CONDITII, distinct de
+-- refuzul pe politici (POLITICI deschise = „politicile EFECTIVE … deschid”).
 DO $sonda$
 DECLARE
   v_fara constant uuid := '00000000-0000-4000-8000-00000000c0de';
@@ -1331,15 +1363,21 @@ DECLARE
   v_nume text;
   v_i integer := 0;
   v_probate text := '';
+  v_cond text := '';
+  v_st text;
+  v_j jsonb;
   p record;
   x record;
   v_nr integer := 0;
 BEGIN
   BEGIN
+    -- runda 4: v_rau = ce DESCHID politicile (refuz RLS lipsă); v_cond = o CONDIȚIE de funcționare a sondei lipsă (sonda nu poate proba corect:
+    -- drepturi pe coloane nereproductibile, copia cu alte drepturi decât tabelul real, ajutătorul fără EXECUTE / apel refuzat). Raportate DISTINCT:
+    -- o condiție lipsă NU se înghite ca „încărcare refuzată” și nu se confundă cu un refuz RLS; ambele opresc migrarea, nimic comis.
     -- drepturile pe coloane fără dreptul pe tabel nu se reproduc: refuz explicit (revizuire de om)
     FOR x IN SELECT r.rol, d.drept FROM unnest(ARRAY['anon', 'authenticated']) r(rol), unnest(ARRAY['SELECT', 'INSERT', 'UPDATE']) d(drept)
               WHERE NOT has_table_privilege(r.rol, 'storage.objects', d.drept) AND has_any_column_privilege(r.rol, 'storage.objects', d.drept) LOOP
-      v_rau := v_rau || x.rol || ' are drept ' || x.drept || ' doar pe coloane (sonda nu il reproduce: revizuire manuala); ';
+      v_cond := v_cond || x.rol || ' are drept ' || x.drept || ' doar pe coloane (sonda nu il reproduce: revizuire manuala); ';
     END LOOP;
     CREATE TEMP TABLE sonda_obiecte_20261225a (LIKE storage.objects INCLUDING GENERATED) ON COMMIT DROP;
     -- copia ține doar coloanele (fără NOT NULL: rândurile sondei au doar ce citesc politicile)
@@ -1349,9 +1387,11 @@ BEGIN
     SELECT array_agg(attname::text) INTO v_cols FROM pg_attribute
      WHERE attrelid = 'pg_temp.sonda_obiecte_20261225a'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '';
     -- un fișier ca la o încărcare reală: coloanele existente din (id, bucket_id, name, owner, owner_id, metadata, user_metadata, version);
-    -- rulează cu drepturile APELANTULUI (rolul probat), deci politicile INSERT se aplică
-    CREATE FUNCTION pg_temp.sonda_rand_20261225a(p_cols text[], p_nume text, p_uid uuid, p_meta boolean) RETURNS void
-    LANGUAGE plpgsql AS $r$
+    -- rulează cu drepturile APELANTULUI (SECURITY INVOKER: rolul probat), deci politicile INSERT se aplică. Întoarce 'inserat' sau 'refuzat'
+    -- (refuzul INSERT-ului = RLS / dreptul pe copie, prins AICI, în corp); un refuz al APELULUI însuși (EXECUTE) iese din funcție și e prins
+    -- separat, ca o condiție de funcționare lipsă (runda 4, verdict P1-2).
+    CREATE FUNCTION pg_temp.sonda_rand_20261225a(p_cols text[], p_nume text, p_uid uuid, p_meta boolean) RETURNS text
+    LANGUAGE plpgsql SECURITY INVOKER AS $r$
     DECLARE v_c text[] := ARRAY['bucket_id', 'name']; v_v text[] := ARRAY[quote_literal('executie-uscare'), quote_literal(p_nume)];
     BEGIN
       IF 'id' = ANY (p_cols) THEN v_c := v_c || 'id'::text; v_v := v_v || quote_literal(md5(p_nume)::uuid::text); END IF;
@@ -1363,14 +1403,38 @@ BEGIN
       END IF;
       IF p_meta AND 'user_metadata' = ANY (p_cols) THEN v_c := v_c || 'user_metadata'::text; v_v := v_v || quote_literal('{}'); END IF;
       IF p_meta AND 'version' = ANY (p_cols) THEN v_c := v_c || 'version'::text; v_v := v_v || quote_literal(md5('v' || p_nume)); END IF;
-      EXECUTE format('INSERT INTO pg_temp.sonda_obiecte_20261225a (%s) VALUES (%s)',
-                     (SELECT string_agg(quote_ident(c), ', ') FROM unnest(v_c) c), array_to_string(v_v, ', '));
+      BEGIN
+        EXECUTE format('INSERT INTO pg_temp.sonda_obiecte_20261225a (%s) VALUES (%s)',
+                       (SELECT string_agg(quote_ident(c), ', ') FROM unnest(v_c) c), array_to_string(v_v, ', '));
+      EXCEPTION WHEN insufficient_privilege THEN
+        RETURN 'refuzat';
+      END;
+      RETURN 'inserat';
     END $r$;
+    -- runda 4 (verdict P1-2): EXECUTE EXPLICIT pentru rolurile probate (privilegiile implicite ale lui postgres pot să nu-l dea lui PUBLIC),
+    -- verificat; ajutătorul rămâne SECURITY INVOKER (verificat și el)
+    GRANT EXECUTE ON FUNCTION pg_temp.sonda_rand_20261225a(text[], text, uuid, boolean) TO anon, authenticated;
+    IF NOT has_function_privilege('anon', 'pg_temp.sonda_rand_20261225a(text[], text, uuid, boolean)', 'EXECUTE')
+       OR NOT has_function_privilege('authenticated', 'pg_temp.sonda_rand_20261225a(text[], text, uuid, boolean)', 'EXECUTE')
+       OR (SELECT fp.prosecdef FROM pg_proc fp WHERE fp.oid = 'pg_temp.sonda_rand_20261225a(text[], text, uuid, boolean)'::regprocedure) IS DISTINCT FROM false THEN
+      v_cond := v_cond || 'ajutatorul sondei nu are EXECUTE pentru anon / authenticated sau nu e SECURITY INVOKER; ';
+    END IF;
     ALTER TABLE pg_temp.sonda_obiecte_20261225a ENABLE ROW LEVEL SECURITY;
+    -- runda 4 (verdict P2-5): ACL-ul copiei NORMALIZAT înaintea reproducerii: privilegiile implicite (globale sau pe schemă) pot da copiei, la
+    -- creare, drepturi pe care tabelul real nu le dă (=> refuz fals); se retrag toate, în afara proprietarului
+    FOR x IN SELECT DISTINCT e.grantee FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) e
+              WHERE c.oid = 'pg_temp.sonda_obiecte_20261225a'::regclass AND e.grantee <> c.relowner LOOP
+      EXECUTE format('REVOKE ALL ON pg_temp.sonda_obiecte_20261225a FROM %s', CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(x.grantee)) END);
+    END LOOP;
     -- drepturile EXACTE ale rolurilor aplicației pe storage.objects, fiecare pe rând
     FOR x IN SELECT r.rol, d.drept FROM unnest(ARRAY['anon', 'authenticated']) r(rol), unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) d(drept)
               WHERE has_table_privilege(r.rol, 'storage.objects', d.drept) LOOP
       EXECUTE format('GRANT %s ON pg_temp.sonda_obiecte_20261225a TO %I', x.drept, x.rol);
+    END LOOP;
+    -- și verificate: drepturile EFECTIVE pe copie = cele de pe tabelul real, pentru fiecare rol și drept
+    FOR x IN SELECT r.rol, d.drept FROM unnest(ARRAY['anon', 'authenticated']) r(rol), unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) d(drept)
+              WHERE has_table_privilege(r.rol, 'pg_temp.sonda_obiecte_20261225a', d.drept) IS DISTINCT FROM has_table_privilege(r.rol, 'storage.objects', d.drept) LOOP
+      v_cond := v_cond || 'copia are alt drept ' || x.drept || ' pentru ' || x.rol || ' decat tabelul real; ';
     END LOOP;
     FOR p IN SELECT pol.polname, pol.polcmd, pol.polpermissive, pg_get_expr(pol.polqual, pol.polrelid) AS q, pg_get_expr(pol.polwithcheck, pol.polrelid) AS c,
                     (SELECT string_agg(CASE WHEN r.oid = 0 THEN 'public' ELSE quote_ident(pg_get_userbyid(r.oid)) END, ', ')
@@ -1411,7 +1475,10 @@ BEGIN
       v_probate := v_probate || x.e || '; ';
       FOREACH v_nume IN ARRAY ARRAY['0', v_k] LOOP
         v_i := v_i + 1;
-        PERFORM pg_temp.sonda_rand_20261225a(v_cols, format('%s/0/00000000-0000-4000-8000-%s.jpg', v_nume, lpad(to_hex(v_i), 12, '0')), x.uid, true);
+        IF pg_temp.sonda_rand_20261225a(v_cols, format('%s/0/00000000-0000-4000-8000-%s.jpg', v_nume, lpad(to_hex(v_i), 12, '0')), x.uid, true)
+           IS DISTINCT FROM 'inserat' THEN
+          v_cond := v_cond || 'fisierul de proba al identitatii ' || x.e || ' nu s-a putut scrie ca proprietar; ';
+        END IF;
       END LOOP;
     END LOOP;
     -- ca fiecare identitate: citire, modificare și ștergere FĂRĂ filtru, încărcare (cu și fără proprietar, pe ambele căi)
@@ -1436,12 +1503,17 @@ BEGIN
       FOREACH v_nume IN ARRAY ARRAY['0', x.p] LOOP
         FOREACH v_k IN ARRAY ARRAY['proprietar', 'fara proprietar'] LOOP
           v_i := v_i + 1;
+          v_st := NULL;
           BEGIN
-            PERFORM pg_temp.sonda_rand_20261225a(v_cols, format('%s/0/00000000-0000-4000-8000-%s.jpg', v_nume, lpad(to_hex(v_i), 12, '0')),
+            v_st := pg_temp.sonda_rand_20261225a(v_cols, format('%s/0/00000000-0000-4000-8000-%s.jpg', v_nume, lpad(to_hex(v_i), 12, '0')),
                                                  CASE WHEN v_k = 'proprietar' THEN x.uid END, v_k = 'proprietar');
-            v_rau := v_rau || x.e || ' incarca (' || CASE WHEN v_nume = '0' THEN 'proiect inexistent' ELSE 'proiect vazut' END || ', ' || v_k || '); ';
-          EXCEPTION WHEN insufficient_privilege THEN NULL;
+          EXCEPTION WHEN insufficient_privilege THEN
+            -- APELUL ajutătorului refuzat (nu INSERT-ul, prins în corpul lui): condiție de funcționare lipsă, NU „încărcare refuzată”
+            v_cond := v_cond || x.e || ': apelul ajutatorului sondei refuzat (' || SQLERRM || '); ';
           END;
+          IF v_st = 'inserat' THEN
+            v_rau := v_rau || x.e || ' incarca (' || CASE WHEN v_nume = '0' THEN 'proiect inexistent' ELSE 'proiect vazut' END || ', ' || v_k || '); ';
+          END IF;
         END LOOP;
       END LOOP;
       RESET ROLE;
@@ -1452,14 +1524,19 @@ BEGIN
         v_rau := v_rau || x.e || ' modifica; ';
       END IF;
     END LOOP;
-    RAISE EXCEPTION USING ERRCODE = 'P0099', MESSAGE = 'sonda:' || v_probate || '|' || v_rau;
+    RAISE EXCEPTION USING ERRCODE = 'P0099', MESSAGE = 'sonda:' || jsonb_build_object('p', v_probate, 'r', v_rau, 'c', v_cond)::text;
   EXCEPTION WHEN SQLSTATE 'P0099' THEN
-    v_probate := split_part(substr(SQLERRM, length('sonda:') + 1), '|', 1);
-    v_rau := substr(SQLERRM, length('sonda:') + 1 + length(v_probate) + 1);
+    v_j := substr(SQLERRM, length('sonda:') + 1)::jsonb;
+    v_probate := v_j ->> 'p'; v_rau := v_j ->> 'r'; v_cond := v_j ->> 'c';
   END;
   IF current_user IS DISTINCT FROM 'postgres' OR to_regclass('pg_temp.sonda_obiecte_20261225a') IS NOT NULL
-     OR to_regprocedure('pg_temp.sonda_rand_20261225a(text[], text, uuid, boolean)') IS NOT NULL THEN
+     OR to_regprocedure('pg_temp.sonda_rand_20261225a(text[], text, uuid, boolean)') IS NOT NULL
+     OR v_probate IS NULL OR v_rau IS NULL OR v_cond IS NULL THEN
     RAISE EXCEPTION '20261225a post: sonda storage nu s-a anulat';
+  END IF;
+  -- întâi condițiile: fără ele rezultatele RLS ale sondei nu sunt dovezi (nici de închidere, nici de deschidere)
+  IF v_cond <> '' THEN
+    RAISE EXCEPTION '20261225a post: SONDA_CONDITII: sonda politicilor de pe storage.objects nu a putut proba corect (NU e un refuz RLS; revizuire manuala): %', v_cond;
   END IF;
   IF v_rau <> '' THEN
     RAISE EXCEPTION '20261225a post: politicile EFECTIVE de pe storage.objects deschid bucket-ul executie-uscare: %', v_rau;

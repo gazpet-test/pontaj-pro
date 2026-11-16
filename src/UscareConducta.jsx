@@ -108,6 +108,8 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const genGps = useRef(0)                              // ultima captură GPS cerută (o captură mai veche sau o editare manuală o anulează)
   const registru = useRef(null)
   const blocat = useRef(false)
+  const proiectCurent = useRef(proiectId)
+  proiectCurent.current = proiectId                     // sincron, la randare: un răspuns care sosește înaintea efectului de schimbare tot e prins
 
   const rand = typeof selectat === 'number' ? uscari.find(u => u.id === selectat) || null : null
   const reimprospateazaNelamurite = () => setNelamurite(registru.current?.toate() || [])
@@ -116,6 +118,11 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   // un rezultat asincron se aplică doar dacă generația contextului e aceeași (proiectul și raportul n-au fost schimbate)
   const tokenCtx = () => ctx.current
   const eCurent = t => t === ctx.current
+  // runda 4 (verdict P2-3): contextul COMPLET al unei cereri (generația, proiectul, formularul deschis, registrul, contul), capturat ÎNAINTEA
+  // ei și verificat după FIECARE await; un rezultat se aplică pe ecran (mesaj, listă, deschiderea raportului) doar dacă toate sunt încă cele
+  // actuale. Registrul capturat primește dovada (scoaterea cheii lămurite) chiar dacă între timp s-a navigat: e registrul proiectului cererii.
+  const capteaza = () => ({ t: ctx.current, proiect: proiectId, selectat, reg: registru.current, uid })
+  const ctxValid = c => !!c && c.t === ctx.current && c.proiect === proiectCurent.current && c.reg === registru.current
 
   // ── încărcarea listei (keyset, L23) + drepturile; întoarce true doar dacă s-a aplicat ──
   const incarca = useCallback(async () => {
@@ -252,70 +259,96 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
 
   // ── trimiterea unei apăsări (L04 + L05) ──
   async function trimite(rpc, payload, tintaReg) {
-    const reg = registru.current
+    const c = capteaza()
+    const reg = c.reg
     if (!reg) return { clasa: 'blocat', error: { message: 'Stocarea locală a browserului nu e disponibilă (navigare privată / blocată): salvarea e oprită, ca un rezultat nelămurit să nu se piardă.' } }
     const intrare = { tinta: tintaReg, rpc, cheie: uuid(), payload, pusLa: new Date().toISOString() }
     if (!reg.pune(intrare)) return { clasa: 'blocat', error: { message: 'Nu am putut scrie în stocarea locală: salvarea e oprită.' } }
     reimprospateazaNelamurite()
-    return lamureste(intrare)
+    return lamureste(intrare, c)
   }
-  async function lamureste(intrare) {
-    const reg = registru.current
+  // c = contextul capturat de apelant ÎNAINTEA cererii (registrul și contul cererii nu se recitesc după await)
+  async function lamureste(intrare, c) {
+    const reg = c.reg
     let r = null, error = null
     try { ({ data: r, error } = await client.rpc(intrare.rpc, { ...intrare.payload, p_cheie: intrare.cheie })) } catch (e) { error = e }
     let clasa = clasificaReluare({ r, error })
     let uscareId = r?.uscare?.id ?? null
-    // 42501 nu dovedește nimic (dreptul e verificat înaintea cheii); 23505 = cheia scrisă de alt apel: se caută cheia în jurnal
+    // 42501 nu dovedește nimic (dreptul e verificat înaintea cheii); 23505 = cheia scrisă de alt apel: se caută cheia în jurnal — cheia e a
+    // AUTORULUI (runda 4: jurnalul e unic pe (creat_de, cheie)), deci căutarea e pe contul cererii
     if (clasa === 'fara_drept' || error?.code === '23505') {
-      const j = await client.from('executie_uscare_jurnal').select('id, uscare_id, actiune').eq('cheie', intrare.cheie).limit(1)
+      const j = c.uid
+        ? await client.from('executie_uscare_jurnal').select('id, uscare_id, actiune').eq('cheie', intrare.cheie).eq('creat_de', c.uid).limit(1)
+        : { data: null, error: { message: 'contul cererii necunoscut' } }
       const g = Array.isArray(j.data) ? j.data[0] : null
       // o cheie retrasă („Renunț” din alt tab) = neaplicată, definitiv
       clasa = j.error || !Array.isArray(j.data) ? 'necunoscut' : g ? (g.actiune === 'cheie_retrasa' ? 'neaplicat' : 'aplicat') : (error?.code === '23505' ? 'necunoscut' : 'fara_drept')
       if (g && g.actiune !== 'cheie_retrasa') uscareId = g.uscare_id
     }
     if (['aplicat', 'aplicat_acum', 'neaplicat'].includes(clasa)) reg?.scoate(intrare.cheie)
-    reimprospateazaNelamurite()
-    return { clasa, r, error, uscareId }
+    if (ctxValid(c)) reimprospateazaNelamurite()
+    return { clasa, r, error, uscareId, ctx: c }
   }
   // o creare lămurită ca APLICATĂ (retrimitere / întrebarea serverului) cât formularul „nou” e încă deschis: se deschide raportul creat, ca
-  // „Creează raportul” să nu mai poată emite o a doua creare (alt UUID = alt raport)
-  async function dupaCreareAplicata(id, mesaj = null) {
-    if (selectat !== 'nou' || id == null) { await incarca(); return }
-    const t = tokenCtx()
+  // „Creează raportul” să nu mai poată emite o a doua creare (alt UUID = alt raport). Runda 4: doar dacă proiectul și formularul cererii sunt
+  // încă cele actuale, verificat după FIECARE await (citirea raportului, reîncărcarea listei)
+  async function dupaCreareAplicata(id, mesaj, c) {
+    if (!ctxValid(c)) return
+    if (c.selectat !== 'nou' || id == null) { await incarca(); return }
     const r = await client.from('executie_uscari').select(COL).eq('id', Number(id)).limit(1)
-    if (!eCurent(t)) return
+    if (!ctxValid(c)) return
     await incarca()
-    if (!r.error && r.data?.[0]) { stergeCiorna('nou'); deschide(r.data[0]); if (mesaj) setMesaj(mesaj) }
+    if (!ctxValid(c)) return
+    if (!r.error && r.data?.[0] && Number(r.data[0].proiect_id) === Number(c.proiect)) { stergeCiorna('nou'); deschide(r.data[0]); if (mesaj) setMesaj(mesaj) }
     else { inchideForm(); setMesaj({ tip: 'info', text: 'Raportul a fost creat (cererea se aplicase): îl găsești în listă.' }) }
+  }
+  // după lămurire, lista și pozele raportului CERERII se recitesc doar în contextul ei (altfel o reîncărcare a proiectului vechi ar suprascrie
+  // lista proiectului nou)
+  async function reimprospateazaDupa(c) {
+    if (!ctxValid(c)) return
+    await incarca()
+    if (!ctxValid(c)) return
+    if (typeof c.selectat === 'number') incarcaPoze(c.selectat, c.t)
   }
   async function retrimiteIdentic(i) {
     if (blocat.current) return
+    const c = capteaza()
+    if (!c.reg) return
     blocat.current = true; setInCurs(true)
     try {
-      const r = await lamureste(i)
+      const r = await lamureste(i, c)
+      if (!ctxValid(c)) return
       setMesaj(mesajRezultat(r, 'Retrimiterea'))
-      if (i.tinta === 'nou' && (r.clasa === 'aplicat' || r.clasa === 'aplicat_acum')) await dupaCreareAplicata(r.uscareId, mesajRezultat(r, 'Retrimiterea'))
-      else { await incarca(); if (rand) incarcaPoze(rand.id, tokenCtx()) }
+      if (i.tinta === 'nou' && (r.clasa === 'aplicat' || r.clasa === 'aplicat_acum')) await dupaCreareAplicata(r.uscareId, mesajRezultat(r, 'Retrimiterea'), c)
+      else await reimprospateazaDupa(c)
     } finally { blocat.current = false; setInCurs(false) }
   }
   // „Renunț” (L05, runda 3): întâi serverul spune, după cheie, dacă cererea s-a aplicat; doar un răspuns SIGUR scoate cheia din registru:
   // aplicată -> reușită; neaplicată -> retrasă definitiv pe server (cererea pierdută, dacă ajunge mai târziu, e refuzată). Altfel cheia rămâne.
+  // Runda 4: proiectul cererii și registrul ei se capturează înainte; ecranul se schimbă doar dacă contextul e încă același. Limita de
+  // retrageri (54000) e un refuz DISTINCT: cererea rămâne de lămurit prin „Retrimite identic”.
   async function retrageCererea(i) {
     if (blocat.current) return
     if (!window.confirm('Renunți la această cerere? Întâi întreb serverul: dacă s-a aplicat, o păstrez ca reușită; dacă nu, o retrag definitiv (nu se mai aplică nici dacă ajunge mai târziu).')) return
+    const c = capteaza()
+    if (!c.reg) return
     blocat.current = true; setInCurs(true)
     try {
       let r = null, error = null
-      try { ({ data: r, error } = await client.rpc(RPC_RETRAGE, { p_proiect: proiectId, p_cheie: i.cheie })) } catch (e) { error = e }
+      try { ({ data: r, error } = await client.rpc(RPC_RETRAGE, { p_proiect: c.proiect, p_cheie: i.cheie })) } catch (e) { error = e }
       if (!error && r?.ok === true && (r.aplicat === true || r.retrasa === true)) {
-        registru.current?.scoate(i.cheie); reimprospateazaNelamurite()
+        c.reg.scoate(i.cheie)
+        if (!ctxValid(c)) return
+        reimprospateazaNelamurite()
         const m = r.aplicat ? { tip: 'ok', text: 'Cererea se aplicase deja pe server: nu s-a pierdut nimic și nu se repetă.' }
                             : { tip: 'ok', text: 'Cererea nu ajunsese pe server: am retras-o definitiv (nu se mai aplică nici dacă ajunge mai târziu).' }
         setMesaj(m)
-        if (r.aplicat && i.tinta === 'nou') await dupaCreareAplicata(r.uscare_id, m)
-        else { await incarca(); if (rand) incarcaPoze(rand.id, tokenCtx()) }
+        if (r.aplicat && i.tinta === 'nou') await dupaCreareAplicata(r.uscare_id, m, c)
+        else await reimprospateazaDupa(c)
       } else {
-        setMesaj({ tip: 'eroare', text: `Serverul nu a putut confirma (${error?.message || 'răspuns necunoscut'}): cererea rămâne de lămurit. Încearcă din nou când ai semnal.` })
+        if (!ctxValid(c)) return
+        if (error?.code === '54000') setMesaj({ tip: 'eroare', text: 'Ai atins limita de retrageri (20 pe zi / 200 pe an): NU am retras nimic. Cererea rămâne de lămurit: apasă „Retrimite identic” (aceeași cerere, nu se dublează).' })
+        else setMesaj({ tip: 'eroare', text: `Serverul nu a putut confirma (${error?.message || 'răspuns necunoscut'}): cererea rămâne de lămurit. Încearcă din nou când ai semnal.` })
       }
     } finally { blocat.current = false; setInCurs(false) }
   }
@@ -352,7 +385,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
         setUscari(l => l.map(x => (x.id === u.id ? u : x)))
         const m = imbinare(baza, form, u)
         setForm(m.form); setConflict({ server: u, conflicte: m.conflicte, alese: {}, deLa: 'salvare' })
-      } else if (rez.clasa === 'aplicat' && nou) await dupaCreareAplicata(rez.uscareId, mesajRezultat(rez, 'Crearea'))
+      } else if (rez.clasa === 'aplicat' && nou) await dupaCreareAplicata(rez.uscareId, mesajRezultat(rez, 'Crearea'), rez.ctx)
     } finally { blocat.current = false; setInCurs(false) }
   }
   const confirmaConflict = () => {

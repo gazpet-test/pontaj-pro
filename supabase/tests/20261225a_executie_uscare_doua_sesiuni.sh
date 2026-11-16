@@ -25,6 +25,9 @@
 #      cu id-ul lui A; nicio retragere scrisă (un singur rând în jurnal, „creare”).
 #   R2 (runda 3) retragerea (A, deschisă) + crearea întârziată cu aceeași cheie (B): B așteaptă, apoi refuz 22023 („retrasă”); niciun
 #      raport cu cheia; în jurnal doar retragerea.
+#   R3 (runda 4) două retrageri ale ACELUIAȘI cont, cu chei diferite (A deschisă, B): B așteaptă lock-ul pe autor (luat înaintea numărării
+#      pentru limita de 20 / 24 h), apoi retrage; 2 retrageri în jurnal. Retragerile probei (R2, R3) intră în limita owner-ului sintetic și
+#      se șterg la curățenie.
 #   H1 (runda 3) două chei DIFERITE cu același hashtext (coliziune căutată pe clonă): A creează cu K1 (deschisă), B creează cu K2 → B
 #      așteaptă (lock-ul consultativ e pe hash), apoi creează ALT raport (duplicat: false); intențiile nu se confundă.
 # Ieșire: 0 = toate OK; 1 = un scenariu a picat; 2 = argumente; 22 = altă țintă; 23 = 20261225a neaplicată; 24 = owner / proiect lipsă.
@@ -105,6 +108,10 @@ sesiune_b() {
     "SELECT 'T0=' || extract(epoch FROM clock_timestamp());" "SELECT 'R=' || ($2)::text;" "SELECT 'T1=' || extract(epoch FROM clock_timestamp());" "COMMIT;"
 }
 ESEC=0
+# runda 4 (clona + verdict r3, P2 / R2): variabila psql NU se înlocuiește între ghilimele simple (forma veche, cu variabila citată, tipărea
+# textul literal); forma corectă, probată pe clonă: \echo R=:LAST_ERROR_SQLSTATE (variabila neghilimelată, în argumentul meta-comenzii). Cu
+# ON_ERROR_STOP 0 psql iese cu 0 după eroarea SQL așteptată, deci și ieșirea lui B (RC_B) se verifică: altă ieșire = conexiune / eroare psql.
+ECHO_SQLSTATE='\echo R=:LAST_ERROR_SQLSTATE'
 verdict() { if [ "$1" = "0" ]; then echo "OK   $2"; else echo "FAIL $2"; ESEC=1; fi; }
 ruleaza_doua() {
   "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -f "$TMP/$1_a.sql" > "$TMP/$1_a.log" 2>&1 & PID_A=$!
@@ -184,12 +191,12 @@ C3="$PROIECT/$ID/$(uuid).jpg"                         # B încearcă o rezervare
 sesiune_a 202612256 "$(stare_rpc "$ID" "$V" inchide)" COMMIT > "$TMP/p2_a.sql"
 printf '%s\n' "\\set ON_ERROR_STOP 0" "$(asteapta 202612256)" "BEGIN; $JWT" "SET LOCAL lock_timeout = '20s';" \
   "SELECT 'T0=' || extract(epoch FROM clock_timestamp());" "SELECT public.fn_executie_uscare_poza($ID, 'rezerva', NULL, '$C3', 'altele', NULL, NULL, '$(uuid)'::uuid);" \
-  "\\echo 'R='':LAST_ERROR_SQLSTATE'" "ROLLBACK;" "SELECT 'T1=' || extract(epoch FROM clock_timestamp());" > "$TMP/p2_b.sql"
+  "$ECHO_SQLSTATE" "ROLLBACK;" "SELECT 'T1=' || extract(epoch FROM clock_timestamp());" > "$TMP/p2_b.sql"
 ruleaza_doua p2
 F="$(camp "$ID" stare)"
 NP="$(q -c "SELECT count(*) FROM public.executie_uscare_poze WHERE uscare_id = $ID")"
-if [ "$RC_A" = 0 ] && a_asteptat && [ "$R_B" = 22023 ] && [ "$F" = inchisa ] && [ "$NP" = 1 ]; then R=0; else R=1; fi
-verdict "$R" "P2 inchidere in curs + inregistrarea unei poze: B a asteptat ${ASTEPTAT_S}s, refuz $R_B (asteptat 22023); poze $NP (asteptat 1); iesire A $RC_A"
+if [ "$RC_A" = 0 ] && [ "$RC_B" = 0 ] && a_asteptat && [ "$R_B" = 22023 ] && [ "$F" = inchisa ] && [ "$NP" = 1 ]; then R=0; else R=1; fi
+verdict "$R" "P2 inchidere in curs + inregistrarea unei poze: B a asteptat ${ASTEPTAT_S}s, refuz $R_B (asteptat 22023); poze $NP (asteptat 1); iesiri $RC_A/$RC_B"
 
 retrage_rpc() { echo "public.fn_executie_uscare_retrage($PROIECT, '$1'::uuid)"; }
 # ── R1: creare în curs (A) + „Renunț” pe aceeași cheie (B): B vede crearea ca APLICATĂ, nu o retrage ──
@@ -207,11 +214,20 @@ K="$(uuid)"; echo "$K" >> "$TMP/chei_retrase"
 sesiune_a 202612258 "$(retrage_rpc "$K")" COMMIT > "$TMP/r2_a.sql"
 printf '%s\n' "\\set ON_ERROR_STOP 0" "$(asteapta 202612258)" "BEGIN; $JWT" "SET LOCAL lock_timeout = '20s';" \
   "SELECT 'T0=' || extract(epoch FROM clock_timestamp());" "SELECT $(salv NULL NULL "$(plan)" "$K");" \
-  "\\echo 'R='':LAST_ERROR_SQLSTATE'" "ROLLBACK;" "SELECT 'T1=' || extract(epoch FROM clock_timestamp());" > "$TMP/r2_b.sql"
+  "$ECHO_SQLSTATE" "ROLLBACK;" "SELECT 'T1=' || extract(epoch FROM clock_timestamp());" > "$TMP/r2_b.sql"
 ruleaza_doua r2
-J="$(q -c "SELECT string_agg(actiune || ':' || coalesce(uscare_id::text, '-'), ',') FROM public.executie_uscare_jurnal WHERE cheie = '$K'")"
-if [ "$RC_A" = 0 ] && a_asteptat && [ "$R_B" = 22023 ] && [ "$J" = "cheie_retrasa:-" ]; then R=0; else R=1; fi
-verdict "$R" "R2 retragere in curs + creare intarziata cu aceeasi cheie: B a asteptat ${ASTEPTAT_S}s, refuz $R_B (asteptat 22023); jurnalul cheii '$J'; iesire A $RC_A"
+J="$(q -c "SELECT string_agg(actiune || ':' || coalesce(uscare_id::text, '-') || ':' || (creat_de = '$OWNER')::text, ',') FROM public.executie_uscare_jurnal WHERE cheie = '$K'")"
+if [ "$RC_A" = 0 ] && [ "$RC_B" = 0 ] && a_asteptat && [ "$R_B" = 22023 ] && [ "$J" = "cheie_retrasa:-:true" ]; then R=0; else R=1; fi
+verdict "$R" "R2 retragere in curs + creare intarziata cu aceeasi cheie: B a asteptat ${ASTEPTAT_S}s, refuz $R_B (asteptat 22023); jurnalul cheii '$J' (asteptat 'cheie_retrasa:-:true'); iesiri $RC_A/$RC_B"
+
+# ── R3 (runda 4): două retrageri ale ACELUIAȘI cont, chei diferite, concurent: lock-ul pe autor e luat ÎNAINTEA numărării (limita) ──
+K1="$(uuid)"; K2="$(uuid)"; printf '%s\n%s\n' "$K1" "$K2" >> "$TMP/chei_retrase"
+sesiune_a 2026122510 "$(retrage_rpc "$K1")" COMMIT > "$TMP/r3_a.sql"
+sesiune_b 2026122510 "$(retrage_rpc "$K2")" > "$TMP/r3_b.sql"
+ruleaza_doua r3
+N="$(q -c "SELECT count(*) FROM public.executie_uscare_jurnal WHERE actiune = 'cheie_retrasa' AND creat_de = '$OWNER' AND cheie IN ('$K1', '$K2')")"
+if [ "$RC_A" = 0 ] && [ "$RC_B" = 0 ] && a_asteptat && [[ "$R_B" == *'"retrasa": true'* ]] && [ "$N" = 2 ]; then R=0; else R=1; fi
+verdict "$R" "R3 doua retrageri ale aceluiasi cont: B a asteptat ${ASTEPTAT_S}s (lock pe autor inaintea numararii), apoi a retras; retrageri $N (asteptat 2); iesiri $RC_A/$RC_B"
 
 # ── H1: coliziune de hashtext între două chei diferite: se serializează, dar NU se confundă ──
 PERECHE="$(q -c "WITH u AS (SELECT gen_random_uuid() AS k FROM generate_series(1, 300000)), h AS (SELECT k, hashtext(k::text) AS x FROM u)

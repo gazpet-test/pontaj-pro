@@ -66,6 +66,42 @@ for (const [nume, cap, aclText, amp] of LANT) {
   SQL_LANT += f + '\n' + acl(aclText, nume) + '\n'
 }
 
+// ── 0b. VALIDATORUL REAL al runnerului (scripts/livrare_validator.py, cu plafon, ca în scripts/livrare_migrare.sh), pe fișierele EXACTE din
+// repo (octeții lor, nu copia fără CR), migrarea ȘI revenirea — runda 4: proba PGlite nu trecea prin validator, deci un artefact refuzat de
+// runner înainte de orice conexiune putea trece aici. Plus formele vechi (refuzate): literalul obișnuit cu backslash și numele parametrului
+// de plafon în comentariu.
+const validator = fisier => {
+  try {
+    const o = execFileSync('bash', ['-c', 'exec python3 "$@"', '_', join(ROOT, 'scripts/livrare_validator.py'), fisier, 'reg_0123456789abcdef', '--plafon-tranzactie'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    return { ok: true, out: o.trim() }
+  } catch (e) { return { ok: false, out: String(e.stderr || e.message).trim() } }
+}
+console.log('0b. validatorul runnerului (cu plafon) pe migrare și pe revenire')
+{
+  const vm = validator(join(ROOT, 'supabase/migrations/20261225a_executie_uscare.sql'))
+  ok(vm.ok && /^OK \d+ /.test(vm.out), 'migrarea trece validatorul: ' + vm.out)
+  const vr = validator(join(ROOT, 'supabase/revenire/20261225a_executie_uscare_ROLLBACK.sql'))
+  ok(vr.ok && /^OK \d+ /.test(vr.out), 'revenirea trece validatorul: ' + vr.out)
+  const brut = readFileSync(join(ROOT, 'supabase/migrations/20261225a_executie_uscare.sql'), 'utf8')
+  const fVechi1 = join(TMP, 'vechi_literal.sql'), fVechi2 = join(TMP, 'vechi_comentariu.sql')
+  writeFileSync(fVechi1, aplica(brut, [["cale ~ E'^[0-9]{1,18}/", "cale ~ '^[0-9]{1,18}/"], ["\\\\.jpg$'),", "\\.jpg$'),"]]))
+  writeFileSync(fVechi2, '-- plafon: transaction' + '_timeout = 2000\n' + brut)
+  const v1 = validator(fVechi1), v2 = validator(fVechi2)
+  ok(!v1.ok && /backslash/.test(v1.out), 'forma veche a CHECK-ului (backslash în literal obișnuit) e refuzată: ' + v1.out.slice(0, 120))
+  ok(!v2.ok && /apare de/.test(v2.out), 'numele parametrului de plafon într-un comentariu e refuzat: ' + v2.out.slice(0, 120))
+  // scriptul cu două sesiuni (rulat doar pe clonă): sintaxa întregului script (bash -n) și linia \echo a SQLSTATE-ului (runda 4: variabila
+  // psql între ghilimele simple nu se înlocuia -> P2 / R2 nu puteau dovedi 22023); linia generată = exact cea probată pe clonă
+  const S2 = join(ROOT, 'supabase/tests/20261225a_executie_uscare_doua_sesiuni.sh')
+  let sn = null; try { execFileSync('bash', ['-n', S2], { stdio: ['ignore', 'pipe', 'pipe'] }) } catch (e) { sn = String(e.stderr || e.message) }
+  ok(sn === null, 'scriptul cu două sesiuni: bash -n ' + (sn || 'OK'))
+  const s2 = citeste('supabase/tests/20261225a_executie_uscare_doua_sesiuni.sh')
+  const linie = execFileSync('bash', ['-c', s2.split('\n').find(l => l.startsWith('ECHO_SQLSTATE=')) + '; printf "%s" "$ECHO_SQLSTATE"'], { encoding: 'utf8' })
+  const folosiri = (s2.match(/"\$ECHO_SQLSTATE"/g) || []).length
+  ok(linie === '\\echo R=:LAST_ERROR_SQLSTATE' && folosiri === 2 && !/LAST_ERROR_SQLSTATE'/.test(s2.replace(/^ECHO_SQLSTATE=.*$/m, '')),
+    `linia SQLSTATE din P2 / R2 = „${linie}” (${folosiri} folosiri), fără variabila între ghilimele simple`)
+}
+
 // ── conturile și datele (scrise de mână) ──
 const U = {
   OWNER: '00000000-0000-0000-0000-0000000000a1', ADMIN: '00000000-0000-0000-0000-0000000000a2', EDITOR: '00000000-0000-0000-0000-0000000000a3',
@@ -170,6 +206,15 @@ async function verifica(db) {
   const asteptCod = (r, cod, ce) => { if (!r.code) ab.push(`${ce}: a trecut (aștepta ${cod})`); else if (r.code !== cod) ab.push(`${ce}: ${r.code} ${r.message} (aștepta ${cod})`) }
   const asteptOk = (r, ce) => { if (r.code) { ab.push(`${ce}: ${r.code} ${r.message}`); return null } return r.rows[0]?.r ?? r.rows }
   const asteptMesaj = (r, re, ce) => { if (!r.code || !re.test(r.message)) ab.push(`${ce}: ${r.code || 'a trecut'} ${r.message || ''} (aștepta ${re})`) }
+  // 0. runda 4: CHECK-ul căii scris E'…\\.jpg$' = ACEEAȘI expresie în catalog (un singur backslash: punctul e literal), pe ambele tabele
+  const ck = (await db.query(`SELECT conname, (regexp_match(pg_get_constraintdef(oid), $$~ '(.*)'::text$$))[1] AS re FROM pg_constraint
+    WHERE conrelid IN ('public.executie_uscare_incarcari'::regclass, 'public.executie_uscare_poze'::regclass) AND conname LIKE '%\\_cale\\_check' ORDER BY conname`)).rows
+  const reAsteptat = '^[0-9]{1,18}/[0-9]{1,18}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.jpg$'
+  if (ck.length !== 2 || ck.some(c => c.re !== reAsteptat)) ab.push('0 CHECK-ul căii în catalog: ' + JSON.stringify(ck))
+  for (const c of ck) {
+    const t = (await db.query(`SELECT $1 ~ $3 AS bun, $2 ~ $3 AS rau`, ['1/2/0f0e0d0c-0000-4000-8000-000000000001.jpg', '1/2/0f0e0d0c-0000-4000-8000-000000000001xjpg', c.re])).rows[0]
+    if (!t.bun || t.rau) ab.push(`0 ${c.conname}: calea bună ${t.bun}, „xjpg” ${t.rau} (punctul trebuie să fie literal)`)
+  }
   // A. crearea: managerul P1 pe P1 (cu tronsonul de probă 10); admin / owner / editor nerestrâns; refuzurile
   const kA = randomUUID()
   const a1 = asteptOk(await salveaza(db, U.MAN_P1, 1, null, null, PLAN(), kA), 'A manager P1 creează pe P1')
@@ -178,7 +223,7 @@ async function verifica(db) {
   // reîncercarea creării cu ACEEAȘI cheie (după un timeout) = același raport, nu altul
   const a1b = asteptOk(await salveaza(db, U.MAN_P1, 1, null, null, PLAN(), kA), 'A reîncercarea creării cu aceeași cheie')
   if (a1b && (a1b.duplicat !== true || a1b.uscare?.id !== id1)) ab.push('A reîncercarea a creat alt raport: ' + JSON.stringify(a1b))
-  asteptCod(await salveaza(db, U.MAN_P2, 2, null, null, { ...PLAN(), proba_id: null }, kA), '22023', 'A aceeași cheie pe alt proiect')
+  asteptCod(await salveaza(db, U.MAN_P1, 2, null, null, { ...PLAN(), proba_id: null }, kA), '22023', 'A aceeași cheie (același autor) pe alt proiect')
   asteptMesaj(await salveaza(db, U.MAN_P1, 1, null, null, { ...PLAN(), constructor: null }), /constructorul se confirmă la creare/, 'A crearea fără constructor')
   const a2 = asteptOk(await salveaza(db, U.ADMIN, 2, null, null, { ...PLAN(), proba_id: 20, km_de_la_m: 0, km_pana_la_m: 5000 }), 'A admin creează pe P2')
   const id2 = a2?.uscare?.id
@@ -397,8 +442,48 @@ async function verifica(db) {
   asteptCod(await retrage(U.FARA, 1, randomUUID()), '42501', 'K cont fără drept retrage')
   asteptCod(await retrage(null, 1, randomUUID()), '42501', 'K fără JWT')
   asteptCod(await retrage(null, 1, randomUUID(), 'anon'), '42501', 'K anon')
-  const jr2 = await ca(db, 'authenticated', U.CIT_P1, `SELECT uscare_id, actiune, valori FROM public.executie_uscare_jurnal WHERE cheie = ${lit(kLost)}`)
-  if (jr2.code || jr2.rows.length !== 1 || jr2.rows[0].uscare_id !== null || jr2.rows[0].actiune !== 'cheie_retrasa') ab.push('K retragerea în jurnal (vizibilă pe proiect): ' + JSON.stringify(jr2))
+  const jr2 = await ca(db, 'authenticated', U.CIT_P1, `SELECT uscare_id, actiune, valori, creat_de FROM public.executie_uscare_jurnal WHERE cheie = ${lit(kLost)}`)
+  if (jr2.code || jr2.rows.length !== 1 || jr2.rows[0].uscare_id !== null || jr2.rows[0].actiune !== 'cheie_retrasa' || jr2.rows[0].creat_de !== U.MAN_P1) ab.push('K retragerea în jurnal (vizibilă pe proiect, legată de autor): ' + JSON.stringify(jr2))
+  // K4 (runda 4, verdict P2-4): cheia e a AUTORULUI. Scenariul din verdict: A (MAN_P2) are o cerere întârziată pe P2 cu cheia K, încă absentă;
+  // B (MAN_P1, doar P1) „retrage” K pe P1 -> retragerea e a LUI B; cererea lui A ajunge apoi și SE APLICĂ (pe codul vechi: refuz 22023)
+  const kAlt = randomUUID()
+  const k4b = asteptOk(await retrage(U.MAN_P1, 1, kAlt), 'K4 B retrage pe P1 cheia (necunoscută lui) a lui A')
+  if (k4b && (k4b.retrasa !== true || k4b.duplicat !== false)) ab.push('K4 retragerea lui B: ' + JSON.stringify(k4b))
+  const k4a = asteptOk(await salveaza(db, U.MAN_P2, 2, null, null, { ...PLAN(), proba_id: null, tronson: 'K4 A' }, kAlt), 'K4 cererea întârziată a lui A pe P2 se aplică (nu e blocată de retragerea lui B)')
+  if (k4a && (k4a.ok !== true || k4a.duplicat !== false || Number(k4a.uscare?.proiect_id) !== 2)) ab.push('K4 cererea lui A: ' + JSON.stringify(k4a))
+  const k4c = asteptOk(await retrage(U.MAN_P2, 2, kAlt), 'K4 A întreabă de cheia lui: aplicată')
+  if (k4c && (k4c.aplicat !== true || Number(k4c.uscare_id) !== Number(k4a?.uscare?.id))) ab.push('K4 A întreabă: ' + JSON.stringify(k4c))
+  const k4d = asteptOk(await retrage(U.MAN_P1, 1, kAlt), 'K4 B reia retragerea LUI (tot retrasă, nu „aplicată” a lui A)')
+  if (k4d && (k4d.retrasa !== true || k4d.duplicat !== true || k4d.aplicat !== false)) ab.push('K4 B reia: ' + JSON.stringify(k4d))
+  // același UUID folosit ÎNTÂI de alt cont într-o operație (nu retragere) nu ocupă cheia lui A
+  const kOc = randomUUID()
+  asteptOk(await salveaza(db, U.EDITOR, 2, null, null, { ...PLAN(), proba_id: null, tronson: 'K4 B ocupă' }, kOc), 'K4 B creează pe P2 cu UUID-ul lui A')
+  const k4e = asteptOk(await salveaza(db, U.ADMIN, 2, null, null, { ...PLAN(), proba_id: null, tronson: 'K4 A după B' }, kOc), 'K4 A creează cu propria cheie (aceeași valoare)')
+  if (k4e && (k4e.duplicat !== false || k4e.uscare?.tronson !== 'K4 A după B')) ab.push('K4 cheia ocupată de alt cont: ' + JSON.stringify(k4e))
+  // L. limita evidenței retragerilor (runda 4): pe AUTOR, 20 / 24 h și 200 / 365 zile; peste ea refuz DISTINCT 54000, nimic scris; întrebarea pe o
+  // cheie aplicată / deja retrasă nu e limitată; alt autor nu e afectat
+  const nRetr = async uid => (await db.query(`SELECT count(*)::int AS n FROM public.executie_uscare_jurnal WHERE actiune = 'cheie_retrasa' AND creat_de = ${lit(uid)}::uuid`)).rows[0].n
+  const deja = await nRetr(U.MAN_P1)
+  for (let i = deja; i < 20; i++) asteptOk(await retrage(U.MAN_P1, 1, randomUUID()), `L retragerea ${i + 1} din 20`)
+  if (await nRetr(U.MAN_P1) !== 20) ab.push(`L retrageri MAN_P1: ${await nRetr(U.MAN_P1)} (aștepta 20)`)
+  const nj1 = await nrJurnal()
+  asteptCod(await retrage(U.MAN_P1, 1, randomUUID()), '54000', 'L a 21-a retragere în 24 h (limita)')
+  asteptMesaj(await retrage(U.MAN_P1, 1, randomUUID()), /LIMITA_RETRAGERI/, 'L mesajul limitei')
+  if (await nrJurnal() !== nj1) ab.push('L retragerea peste limită a scris în jurnal')
+  const l1 = asteptOk(await retrage(U.MAN_P1, 1, kLost), 'L peste limită: reluarea unei retrageri existente tot răspunde')
+  if (l1 && (l1.retrasa !== true || l1.duplicat !== true)) ab.push('L reluarea peste limită: ' + JSON.stringify(l1))
+  const l2 = asteptOk(await retrage(U.MAN_P1, 1, kA), 'L peste limită: întrebarea pe o cheie aplicată tot răspunde')
+  if (l2 && l2.aplicat !== true) ab.push('L cheia aplicată peste limită: ' + JSON.stringify(l2))
+  asteptOk(await retrage(U.OWNER, 1, randomUUID()), 'L alt autor nu e afectat de limita lui MAN_P1')
+  // fereastra anuală: 200 în 365 de zile (rânduri vechi scrise ca proprietar, cu gărzile oprite DOAR pentru această inserare)
+  await db.exec(`BEGIN; ALTER TABLE public.executie_uscare_jurnal DISABLE TRIGGER trg_executie_uscare_jurnal_garda;
+    INSERT INTO public.executie_uscare_jurnal (uscare_id, proiect_id, actiune, valori, cheie, amprenta, creat_de, creat_la)
+      SELECT NULL, 1, 'cheie_retrasa', '{}'::jsonb, gen_random_uuid(), md5(g::text), ${lit(U.ADMIN)}::uuid, now() - (g || ' days')::interval
+        FROM generate_series(2, 400, 2) g;
+    ALTER TABLE public.executie_uscare_jurnal ENABLE TRIGGER trg_executie_uscare_jurnal_garda; COMMIT;`)
+  // 200 rânduri vechi, din care 182 în ultimele 365 de zile (zilele 2, 4, …, 364): mai sunt 18 retrageri până la 200
+  for (let i = 0; i < 18; i++) asteptOk(await retrage(U.ADMIN, 1, randomUUID()), `L an: retragerea ${183 + i} din 200`)
+  asteptMesaj(await retrage(U.ADMIN, 1, randomUUID()), /LIMITA_RETRAGERI/, 'L a 201-a retragere în 365 de zile (limita anuală)')
   // funcțiile interne nu se cheamă din API
   asteptCod(await ca(db, 'authenticated', U.OWNER, `SELECT public.fn_executie_uscare_tranzitie('deschisa', 'inchide')`), '42501', 'D funcție internă din API')
   return ab
@@ -484,7 +569,13 @@ for (const [nume, fn, re] of [
   }, /politicile EFECTIVE .*cont fara drept incarca \(proiect inexistent, proprietar\)/],
   ['drept de modificare DOAR pe coloane pentru anon (sonda nu-l reproduce: refuz explicit)', async db => {
     await db.exec(`REVOKE UPDATE ON storage.objects FROM anon; GRANT UPDATE (metadata) ON storage.objects TO anon;`); return aplicaMig(db)
-  }, /anon are drept UPDATE doar pe coloane/],
+  }, /SONDA_CONDITII.*anon are drept UPDATE doar pe coloane/],
+  // runda 4, CONTRAEXEMPLUL P1-2 din verdictul r3: privilegiile implicite GLOBALE ale lui postgres nu dau EXECUTE lui PUBLIC + încărcarea
+  // generică pe owner_id. Sonda r3 nu putea chema ajutătorul ca authenticated, înghițea refuzul ca „încărcare refuzată” și trecea.
+  ['CONTRAEXEMPLU r3: fără EXECUTE implicit pentru PUBLIC + încărcare generică pe owner_id', async db => {
+    await db.exec(`ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+      CREATE POLICY urca_proprii ON storage.objects FOR INSERT TO authenticated WITH CHECK (owner_id = auth.uid()::text)`); return aplicaMig(db)
+  }, /politicile EFECTIVE .*cont fara drept incarca \(proiect inexistent, proprietar\)/],
 ]) {
   const db = await bazaNoua()
   let m = null
@@ -522,6 +613,31 @@ for (const [nume, fn, re] of [
   const r = (await db.query(`SELECT count(*)::int AS n FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) e
     WHERE c.relname LIKE 'executie\\_uscar%' AND e.grantee = 'zz_platforma'::regrole`)).rows[0].n
   ok(m === null && r === 0, `drepturile implicite ale altui rol retrase la aplicare (${m || 'aplicată'}; rămase: ${r})`)
+  await db.close()
+}
+
+{
+  // runda 4 (verdict P2-5): privilegiile implicite GLOBALE dau SELECT pe orice tabel nou lui authenticated, dar authenticated NU are SELECT pe
+  // storage.objects; o politică SELECT generică. Pe tabelul real nimeni nu citește -> migrarea trebuie să se aplice (copia sondei r3 primea
+  // SELECT automat, vedea rânduri și refuza fals). ACL-ul copiei e normalizat și verificat.
+  const db = await bazaNoua()
+  await db.exec(`ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO authenticated; REVOKE SELECT ON storage.objects FROM authenticated;
+    CREATE POLICY citeste_tot ON storage.objects FOR SELECT TO authenticated USING (true);`)
+  let m = null; try { await aplicaMig(db) } catch (e) { m = e.message }
+  const cit = await ca(db, 'authenticated', U.FARA, `SELECT count(*) FROM storage.objects`)
+  ok(m === null && cit.code === '42501', `privilegiile implicite globale pe copia sondei nu produc refuz fals (${m || 'aplicată'}; authenticated pe tabelul real: ${cit.code || 'citește!'})`)
+  await db.close()
+}
+{
+  // runda 4 (verdict P1-2): o condiție de funcționare a sondei lipsă e raportată DISTINCT (SONDA_CONDITII), nu ca „încărcare refuzată” și nu ca
+  // refuz pe politici — probat pe migrarea FĂRĂ GRANT-ul explicit al ajutătorului, în mediul contraexemplului
+  const db = await bazaNoua()
+  await db.exec(`ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+    CREATE POLICY urca_proprii ON storage.objects FOR INSERT TO authenticated WITH CHECK (owner_id = auth.uid()::text)`)
+  let m = null
+  try { await aplicaMig(db, aplica(MIG, [['    GRANT EXECUTE ON FUNCTION pg_temp.sonda_rand_20261225a(text[], text, uuid, boolean) TO anon, authenticated;\n', '']])) } catch (e) { m = e.message }
+  ok(/SONDA_CONDITII/.test(m || '') && /apelul ajutatorului sondei refuzat/.test(m || '') && !/politicile EFECTIVE/.test(m || ''),
+    `fără EXECUTE pe ajutător: refuz DISTINCT de condiție, nu „încărcare refuzată”: ${(m || 'aplicată!').slice(0, 220)}`)
   await db.close()
 }
 
@@ -622,8 +738,8 @@ const MUTANTI = [
     "              WHERE true LOOP\n      EXECUTE format('GRANT %s ON pg_temp.sonda_obiecte_20261225a TO %I', x.drept, x.rol);"]],
     `REVOKE INSERT ON storage.objects FROM anon; CREATE POLICY anon_urca ON storage.objects FOR INSERT TO anon WITH CHECK (true);`],
   ['M29 retragerea nu scrie cheia (cererea pierdută se aplică după „Renunț”)', [["  INSERT INTO public.executie_uscare_jurnal (uscare_id, proiect_id, actiune, valori, cheie, amprenta)\n  VALUES (NULL, p_proiect, 'cheie_retrasa'", "  PERFORM 1 FROM public.executie_uscare_jurnal WHERE false AND (NULL, p_proiect, 'cheie_retrasa'"]]],
-  ['M30 retragerea nu întreabă jurnalul (cheia aplicată = „neaplicată”)', [["  SELECT uscare_id, proiect_id, actiune INTO j FROM public.executie_uscare_jurnal WHERE cheie = p_cheie;\n  IF FOUND THEN\n    IF NOT public.fn_executie_nod_drept(j.proiect_id, false) THEN",
-    "  SELECT uscare_id, proiect_id, actiune INTO j FROM public.executie_uscare_jurnal WHERE cheie = p_cheie AND false;\n  IF FOUND THEN\n    IF NOT public.fn_executie_nod_drept(j.proiect_id, false) THEN"]]],
+  ['M30 retragerea nu întreabă jurnalul (cheia aplicată = „neaplicată”)', [["  SELECT uscare_id, proiect_id, actiune INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;\n  IF FOUND THEN\n    IF NOT public.fn_executie_nod_drept(j.proiect_id, false) THEN",
+    "  SELECT uscare_id, proiect_id, actiune INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie AND false;\n  IF FOUND THEN\n    IF NOT public.fn_executie_nod_drept(j.proiect_id, false) THEN"]]],
   ['M31 bugetul lock-ului doar la coliziune (ca în r2)', [["  LOOP\n    IF clock_timestamp() >= now() + interval '1 second' THEN\n      RAISE EXCEPTION '20261225a: BUGET_LOCK: % incercari", "  LOOP\n    IF false THEN\n      RAISE EXCEPTION '20261225a: BUGET_LOCK: % incercari"],
     ["  IF clock_timestamp() >= now() + interval '1 second' THEN\n    RAISE EXCEPTION '20261225a: BUGET_LOCK: lock-urile obtinute", "  IF false THEN\n    RAISE EXCEPTION '20261225a: BUGET_LOCK: lock-urile obtinute"]],
     null, { detector: async (db, text) => { try { await aplicaMig(db, 'SELECT pg_sleep(1.05);\n' + text); return 'lock luat după prima secundă' } catch { return null } } }],
@@ -633,8 +749,25 @@ const MUTANTI = [
       try { await aplicaMig(db, 'SELECT count(*) FROM pg_temp.ag_ina_0123456789abcdef;\n' + text, { l15: 'nimic' }); return 'aplicată fără pasul „înainte”' } catch { return null } } }],
   ['M33 fără retragerea drepturilor altor roluri (privilegiile implicite ale platformei)', [["              AND NOT (c.relkind = 'r' AND e.grantee IN ('authenticated'::regrole::oid, 'service_role'::regrole::oid)) LOOP", "              AND false LOOP"]],
     `CREATE ROLE zz_platforma NOLOGIN; ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO zz_platforma;`],
+  // runda 4 — fiecare cu scenariul verdictului r3
+  ['M34 sonda r3: ajutătorul fără EXECUTE explicit, apelul refuzat înghițit ca „încărcare refuzată” (CONTRAEXEMPLUL P1-2 trece)',
+    [['    GRANT EXECUTE ON FUNCTION pg_temp.sonda_rand_20261225a(text[], text, uuid, boolean) TO anon, authenticated;\n', ''],
+     ["      v_cond := v_cond || 'ajutatorul sondei nu are EXECUTE pentru anon / authenticated sau nu e SECURITY INVOKER; ';", '      NULL;'],
+     ["            v_cond := v_cond || x.e || ': apelul ajutatorului sondei refuzat (' || SQLERRM || '); ';", '            NULL;']],
+    `ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+     CREATE POLICY urca_proprii ON storage.objects FOR INSERT TO authenticated WITH CHECK (owner_id = auth.uid()::text)`,
+    { aplicaIntai: true, detector: async db => { const r = await ca(db, 'authenticated', U.FARA, `INSERT INTO storage.objects (bucket_id, name, owner, owner_id) VALUES ('executie-uscare', '1/1/${randomUUID()}.jpg', '${U.FARA}', '${U.FARA}')`); return r.code ? null : 'un cont fără drept a încărcat un fișier nerezervat' } }],
+  ['M35 copia sondei fără ACL normalizat (privilegiile implicite globale -> refuz fals)',
+    [["      EXECUTE format('REVOKE ALL ON pg_temp.sonda_obiecte_20261225a FROM %s',", "      CONTINUE; EXECUTE format('REVOKE ALL ON pg_temp.sonda_obiecte_20261225a FROM %s',"]],
+    `ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO authenticated; REVOKE SELECT ON storage.objects FROM authenticated;
+     CREATE POLICY citeste_tot ON storage.objects FOR SELECT TO authenticated USING (true);`],
+  ['M36 retragerea fără limita pe autor', [["  IF v_zi >= 20 OR v_an >= 200 THEN", '  IF false THEN']]],
+  ['M37 cheia globală, nelegată de autor (ca în r3: alt cont blochează cererea lui A)',
+    [['WHERE creat_de = v_uid AND cheie = p_cheie', 'WHERE cheie = p_cheie'], ['CONSTRAINT executie_uscare_jurnal_cheie_uq UNIQUE (creat_de, cheie)', 'CONSTRAINT executie_uscare_jurnal_cheie_uq UNIQUE (cheie)']]],
 ]
 for (const [nume, inl, preg, opt] of MUTANTI) {
+  // runda 4: un mutant al cărui text nu mai există în migrare NU „pică” — e un test stricat (înainte trecea ca „aplicare: …”)
+  try { aplica(MIG, inl) } catch (e) { ok(false, `${nume}: ${e.message.slice(0, 120)}`); continue }
   const db = await bazaNoua()
   if (preg) await db.exec(preg)
   let picat = null

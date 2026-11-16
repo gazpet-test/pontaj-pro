@@ -197,6 +197,7 @@ relatie	relatie public.executie_uscare_jurnal_cheie_uq	creat
 relatie	relatie public.executie_uscare_jurnal_id_seq	creat
 relatie	relatie public.executie_uscare_jurnal_pkey	creat
 relatie	relatie public.executie_uscare_jurnal_proiect_idx	creat
+relatie	relatie public.executie_uscare_jurnal_retrageri_idx	creat
 relatie	relatie public.executie_uscare_jurnal_uscare_idx	creat
 relatie	relatie public.executie_uscare_poze	creat
 relatie	relatie public.executie_uscare_poze_cale_uq	creat

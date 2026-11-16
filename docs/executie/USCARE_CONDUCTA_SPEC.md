@@ -1,4 +1,4 @@
-# Uscare conductă în Execuție — specificație (prima livrare, runda 3 după review)
+# Uscare conductă în Execuție — specificație (prima livrare, runda 4 după review)
 
 Stare: **cod + migrare NEAPLICATĂ** (`supabase/migrations/20261225a_executie_uscare.sql`, revenire în
 `supabase/revenire/20261225a_executie_uscare_ROLLBACK.sql`). Ecranul: Execuție → proiect → Izometrie → „💨 Uscare conductă”
@@ -105,6 +105,21 @@ Tranzițiile (o singură listă, `fn_executie_uscare_tranzitie` = `TRANZITII` di
      „nu există” devine sigur și definitiv. Fără răspuns sigur (rețea, drept), cheia rămâne în registru.
   O creare lămurită ca aplicată cât formularul „nou” e încă deschis **deschide raportul creat** (butonul „Creează” dispare): nicio cale spre
   o a doua creare cu alt UUID.
+- **Cheia e a AUTORULUI** (runda 4, verdict P2-4): jurnalul e unic pe `(creat_de, cheie)`, `creat_de` = `auth.uid()` pus de trigger,
+  obligatoriu; toate RPC-urile caută cheia doar în spațiul de chei al apelantului. Un alt cont care cunoaște UUID-ul (din orice proiect) nu
+  poate retrage, ocupa sau bloca intenția altcuiva: retragerea lui (sau o operație a lui cu aceeași valoare) privește doar cheia LUI.
+  Retragerea leagă cheia de autor și de proiectul intenției (`proiect_id` = proiectul cererii, capturat de ecran înaintea ei).
+- **Evidența retragerilor** (runda 4): un rând `cheie_retrasa` rămâne **permanent** — ștergerea lui (TTL) ar permite cererii întârziate să
+  reapară, iar promisiunea „refuzată definitiv” ar cădea. Volumul e **limitat pe autor**: cel mult **20 de retrageri noi în 24 h** și
+  **200 în 365 de zile** (fereastră mobilă, lock pe autor ÎNAINTEA numărării), deci cel mult 200 de rânduri / an / cont cu drept de scriere.
+  Peste limită: refuz **distinct** (SQLSTATE `54000`, `LIMITA_RETRAGERI`), nimic scris; ecranul spune limita și lasă cererea de lămurit prin
+  **„Retrimite identic”** (aceeași cheie, idempotent, nelimitat) — calea de siguranță rămâne mereu funcțională. Întrebarea despre o cheie
+  deja în jurnal (aplicată / deja retrasă) nu scrie și nu intră în limită. O curățare cu păstrarea promisiunii ar cere un protocol nou
+  (chei cu termen de valabilitate verificat de server) — schimbare de protocol, **necesită aprobare Răzvan**, nu e în această livrare.
+- **Răspunsurile întârziate** (runda 4, verdict P2-3): „Retrimite identic”, „Renunț” și deschiderea raportului creat capturează ÎNAINTEA
+  cererii contextul (generația, proiectul, formularul deschis, registrul, contul) și îl verifică după FIECARE `await`; mesajul, reîncărcarea
+  listei și deschiderea raportului se fac doar dacă proiectul și formularul sunt încă cele actuale. Rezultatul dovedit scoate totuși cheia
+  din registrul proiectului cererii (registrul capturat), chiar dacă omul a navigat între timp.
 - **CAS**: formularul ține **versiunea de bază** (rândul pe care s-a pornit). La conflict serverul întoarce rândul curent; aplicația **nu
   salvează peste coleg**: îmbină în trei (baza, formularul, serverul) pe câmpuri — schimbările colegului pe câmpurile neatinse intră,
   ale mele rămân, câmpurile schimbate de amândoi cu valori diferite **se aleg explicit** („al meu” / „al colegului”); salvarea e blocată până
@@ -114,7 +129,7 @@ Tranzițiile (o singură listă, `fn_executie_uscare_tranzitie` = `TRANZITII` di
   pe ecran, deci **se arată ca alegere explicită** („03:30 (ora de vară)” / „03:30 (ora de iarnă)”), nu se preia și nu se suprascrie pe tăcute.
   Alegerea pune împreună textul orei, apariția și instantul original.
 - Ordinea lock-urilor (L06), aceeași pe toate căile: cheia → raportul FOR UPDATE → rezervarea FOR UPDATE → poza FOR UPDATE → jurnalul (și la
-  „scoate”: întâi rezervarea, apoi poza). Retragerea: cheia → jurnalul.
+  „scoate”: întâi rezervarea, apoi poza). Retragerea: cheia → autorul (lock consultativ pe cont, doar înaintea numărării) → jurnalul.
 
 ## 7. Fotografiile și încărcările parțiale (P2 din review)
 
@@ -142,8 +157,9 @@ Tranzițiile (o singură listă, `fn_executie_uscare_tranzitie` = `TRANZITII` di
 | alt modul / fără drept / anonim | nimic | nu | nu |
 
 Scrierea: DOAR prin `fn_executie_uscare_salveaza` / `_stare` / `_poza` / `_retrage` (SECURITY DEFINER, `auth.uid()` obligatoriu); niciun
-drept INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / ștergere din aplicație. Retragerea unei chei cere scriere pe proiect;
-întrebarea despre o cheie deja folosită cere citire pe proiectul ei.
+drept INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / ștergere din aplicație. **Autorizarea retragerilor** (runda 4):
+retragerea unei chei cere scriere pe proiect și privește DOAR cheile apelantului (autor = `auth.uid()`); întrebarea despre o cheie proprie
+deja folosită cere citire pe proiectul ei și același proiect (altfel 22023); limita: 20 / 24 h și 200 / an pe cont (§6).
 
 ## 9. Poziția operațiunii (cerința nouă)
 
@@ -205,8 +221,13 @@ drept INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / șterge
   --diferente-globale supabase/migrations/20261225a_executie_uscare.l15.tsv`): fără pasul „înainte” al runnerului în aceeași tranzacție,
   migrarea refuză (`AMPRENTA_GLOBALA_LIPSA`). Garanția pe lanțul de drept = amprenta globală (orice derivă a oricărei funcții / politici /
   drept = refuz); migrarea mai verifică pe amprentă cele două porți chemate direct și lanțul lor (listă scrisă, fără regex pe corpuri).
+- **Validatorul runnerului** (runda 4): migrarea (90 de instrucțiuni) și revenirea (1) trec `scripts/livrare_validator.py
+  --plafon-tranzactie`. Numele parametrului de plafon apare DOAR în citirea exactă acceptată (nici în comentarii); cele două CHECK-uri ale
+  căii folosesc `E'…\\.jpg$'` (literal E, două backslash-uri = un singur backslash în regex, aceeași expresie în catalog — verificat în
+  proba locală, amprentele de structură ale celor două tabele neschimbate).
 - **Manifestul** `.l15.tsv` îl generează coordonatorul pe clonă (`scripts/livrare_l15_manifest.sh --iesire …`). Lista obiectelor pe care
-  trebuie să le conțină — **249** (familie, etichetă, operație; generată cu pașii reali ai runnerului pe PGlite și revizuită) — e în
+  trebuie să le conțină — **252** (runda 4: 85 coloane, 79 constrângeri, 17 funcții, 6 politici, 25 relații — indexul nou al retragerilor —,
+  8 tipuri, 32 trigger-e; familie, etichetă, operație; generată cu pașii reali ai runnerului pe PGlite și revizuită) — e în
   `supabase/tests/20261225a_executie_uscare.l15.obiecte.tsv`. Comparația (pe clonă, după generare; PG17 nu are constrângerile NOT NULL ca
   rânduri):
   `diff <(grep -v '^#' supabase/tests/20261225a_executie_uscare.l15.obiecte.tsv | sort) <(grep -v '^#' supabase/migrations/20261225a_executie_uscare.l15.tsv | cut -f1-3 | sort)` → gol.
@@ -223,6 +244,18 @@ drept INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / șterge
   (nu există la aplicare) și trigger-ele lui `storage.objects` — acestea se probează pe clonă cu date (mai jos, pasul 3) și se revizuiesc în
   PR-ul de baseline: `SELECT polname, polcmd, polpermissive, polroles::regrole[], pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass ORDER BY 1;`
   Sonda **nu repară** o politică existentă: o politică generică incompatibilă se rezolvă explicit (PR separat, cu „da”-ul owner-ului).
+- **Condițiile de funcționare ale sondei** (runda 4, verdict P1-2 / P2-5), verificate, raportate DISTINCT de refuzul pe politici:
+  - ajutătorul temporar care scrie fișierele de probă rămâne **SECURITY INVOKER** (politicile INSERT se aplică rolului probat) și primește
+    **EXECUTE explicit** pentru `anon` / `authenticated` (privilegiile implicite pot să nu-l dea lui PUBLIC); refuzul INSERT-ului (RLS /
+    dreptul pe copie) e prins în corpul lui, iar un refuz al APELULUI = condiție lipsă, nu „încărcare refuzată”;
+  - ACL-ul copiei e **normalizat** (se retrag toate drepturile primite la creare, ex. din privilegii implicite globale), apoi se reproduc
+    drepturile tabelului real și se **verifică** egalitatea drepturilor efective, pe fiecare rol și drept;
+  - drepturile doar pe coloane (nereproductibile) = condiție lipsă.
+  O condiție lipsă oprește migrarea cu `SONDA_CONDITII` (nimic comis; revizuire de om), separat de `politicile EFECTIVE … deschid`.
+- **Limitele sondei** (de citit înaintea oricărei concluzii „Storage e sigur”): e un **eșantion** — cel mult 7 identități, câte PRIMUL cont
+  din fiecare categorie, căi cu uscarea 0, metadate fixe. Poate rata politici condiționate de **alte conturi**, de **alte metadate** sau de
+  **rapoarte / rezervări existente**. Nu înlocuiește baseline-ul revizuit al politicilor de producție și nici probele cu structura reală pe
+  clonă; amprenta unui baseline permisiv nu demonstrează siguranța lui.
 - **Drepturile pe tabelele noi** (runda 3): migrarea retrage drepturile rămase ALTOR roluri (privilegiile implicite ale platformei) pe
   tabelele și secvențele ei; postcondiția și revenirea cer ACL-ul exact: proprietarul + `SELECT` (fără GRANT OPTION) pentru `authenticated` /
   `service_role`; pe secvențe doar proprietarul.
@@ -233,19 +266,26 @@ drept INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / șterge
   colația, **constrângerile** (nume + definiție: un `CHECK` adăugat pe tabelul gol = refuz), indecșii, opțiunile, parametrii secvenței.
   Amprentele de structură sunt calculate pe PGlite (PG 18, fără rândurile NOT NULL ca constrângeri, deci comparabile cu PG 17); pasul 5 de
   mai jos le confirmă pe clonă (o nepotrivire dă refuz cu amprenta găsită, nimic schimbat).
-- **Proba locală** (`scripts/pglite/test_executie_uscare_local.mjs`, PGlite = PG 18): **88 de verificări** — aplicarea ca la livrare
-  (manifest generat → livrare aprobată), drepturi pe 9 conturi, criteriul, cântăririle, pozele / rezervările, meteo construit de server,
-  poziția, stările, idempotența și retragerea cheii, CAS-ul, refuzurile (garda „înainte” și o tabelă veche citită acum, bugetul lock-ului fără
-  coliziune, 7 politici Storage generice inclusiv contraexemplul `owner_id`, drepturi pe coloane), fără refuz fals (politică fără dreptul de
-  tabel; privilegiile implicite ale altui rol), revenirea (16 schimbări de definiție / structură / ACL la același număr de obiecte), 33 de
-  mutanți, paritatea JS = SQL.
+- **Proba locală** (`scripts/pglite/test_executie_uscare_local.mjs`, PGlite = PG 18): **101 verificări** — întâi **validatorul real al
+  runnerului** (`scripts/livrare_validator.py --plafon-tranzactie`, ca `livrare_migrare.sh`) pe octeții migrării ȘI ai revenirii, plus formele
+  vechi refuzate (backslash în literal obișnuit, numele parametrului de plafon în comentariu) și `bash -n` + linia `\echo` pe scriptul cu
+  două sesiuni (runda 4); apoi aplicarea ca la livrare (manifest generat → livrare aprobată), drepturi pe 9 conturi, CHECK-ul căii în catalog
+  (punct literal), criteriul, cântăririle, pozele / rezervările, meteo construit de server, poziția, stările, idempotența, retragerea cheii
+  (legată de autor, limita pe 24 h și pe an), CAS-ul, refuzurile (garda „înainte” și o tabelă veche citită acum, bugetul lock-ului fără
+  coliziune, 8 politici Storage generice inclusiv contraexemplele `owner_id` din r2 și r3, drepturi pe coloane), fără refuz fals (politică fără
+  dreptul de tabel; privilegiile implicite ale altui rol; privilegiile implicite globale pe copia sondei), condiția lipsă a sondei raportată
+  distinct, revenirea (16 schimbări de definiție / structură / ACL la același număr de obiecte), **37 de mutanți** (un mutant al cărui text
+  nu mai există în migrare = test picat, nu „mutant prins”), paritatea JS = SQL.
 - **Proba cu DOUĂ sesiuni reale — obligatorie pe clonă** (PGlite are o singură conexiune):
   `supabase/tests/20261225a_executie_uscare_doua_sesiuni.sh` — scenariile, comenzile și rezultatele așteptate sunt în fișier; pe scurt:
   1. creare / reîncercare cu aceeași cheie, concurent: a doua așteaptă cheia, întoarce `duplicat: true` cu același id; un singur raport;
   2. salvare / închidere concurente pe aceeași versiune: una trece, cealaltă primește `conflict` (sau refuzul închiderii), nimic pierdut;
   3. poză / închidere concurente: închiderea așteaptă poza; fie poza intră înainte (și închiderea o vede), fie e refuzată după;
   4. (runda 3) creare în curs + „Renunț” pe aceeași cheie → „aplicată”, nimic retras; retragere în curs + crearea întârziată → refuz 22023;
-     două chei diferite cu același `hashtext` → se serializează, dar fac DOUĂ rapoarte (intențiile nu se confundă).
+     două chei diferite cu același `hashtext` → se serializează, dar fac DOUĂ rapoarte (intențiile nu se confundă);
+  5. (runda 4) două retrageri ale aceluiași cont, chei diferite → a doua așteaptă lock-ul pe autor (înaintea numărării), apoi retrage.
+  Runda 4: în scenariile P2 / R2 linia `\echo R=:LAST_ERROR_SQLSTATE` (variabila psql neghilimelată; forma cu ghilimele simple nu se
+  înlocuia — probat pe clonă) și se verifică și ieșirea procesului B.
 
 ### Livrarea pe producție (runda 3: limita uneltei de livrare)
 

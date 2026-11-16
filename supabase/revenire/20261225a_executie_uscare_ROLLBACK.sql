@@ -9,6 +9,8 @@
 -- fiecărui tabel (runda 3), ca amprentă: coloanele (nume, tip, NOT NULL, valoarea implicită, identitate, generare, colație), constrângerile
 -- (nume + definiție: un CHECK adăugat pe tabelul gol = altă amprentă), indecșii (definiția), opțiunile tabelului, parametrii secvenței de
 -- identitate. Altă stare = refuz, nimic schimbat. Amprentele se regenerează și se verifică cu scripts/pglite/test_executie_uscare_local.mjs.
+-- Runda 4: jurnalul are cheia pe AUTOR (UNIQUE (creat_de, cheie), creat_de NOT NULL) și indexul parțial al retragerilor — în amprenta lui;
+-- CHECK-urile căii scrise E'…\\.jpg$' dau aceeași definiție în catalog ca înainte (amprentele incarcari / poze neschimbate).
 -- REFUZĂ dacă există date: un raport, o rezervare, o poză, un rând de jurnal sau un fișier în bucket (rapoartele de uscare sunt documente
 -- semnate; golirea = decizie separată: preview → „da” owner → export → apply).
 --
@@ -120,7 +122,7 @@ BEGIN
         ('executie_uscari', '456ffbdfe2fa4fcca58456e96f134a24'),
         ('executie_uscare_incarcari', '846d5be8353da7e23a0e6a604b315b17'),
         ('executie_uscare_poze', 'ed428e6233195f5f5f10c1bbf15d58e7'),
-        ('executie_uscare_jurnal', 'c243a2121d6ca337fd6765c750c4e9d1')
+        ('executie_uscare_jurnal', '29ae610fd92841fe973586333c2a74bf')
         -- STRUCTURA-END
       ) t(tab, amp)
       CROSS JOIN LATERAL (SELECT md5(concat_ws(E'\n',
@@ -200,11 +202,11 @@ BEGIN
         ('public.fn_executie_uscare_incarcare_garda()', 'plpgsql', false, '2599ca1f5feab4f0da29e69758ec984d'),
         ('public.fn_executie_uscare_jurnal_garda()', 'plpgsql', false, 'f6b8159d9439e6bd046fc4766d3076a9'),
         ('public.fn_executie_uscare_fara_golire()', 'plpgsql', false, '1b0ebeecc0b85f90e433e344a10524f4'),
-        ('public.fn_executie_uscare_salveaza(bigint, bigint, integer, jsonb, uuid)', 'plpgsql', true, '65c38443b4bc4b9510ae26773aeb6924'),
-        ('public.fn_executie_uscare_stare(bigint, integer, text, text, uuid)', 'plpgsql', true, 'deab7a030187d84d2acfc4a5ef3990a6'),
-        ('public.fn_executie_uscare_poza(bigint, text, bigint, text, text, integer, text, uuid)', 'plpgsql', true, 'cf553d55e76fd487809df8ae6c1e21a8'),
+        ('public.fn_executie_uscare_salveaza(bigint, bigint, integer, jsonb, uuid)', 'plpgsql', true, 'f99b3a85ec55238f04ab1d6603df25a5'),
+        ('public.fn_executie_uscare_stare(bigint, integer, text, text, uuid)', 'plpgsql', true, '45676729735c59657a5513330dae79c5'),
+        ('public.fn_executie_uscare_poza(bigint, text, bigint, text, text, integer, text, uuid)', 'plpgsql', true, '63031b738cfc296022e59681cdd62f53'),
         ('public.fn_executie_uscare_obiect(text, text, boolean)', 'sql', true, '98336ee3ff2579f4e39618b8a874c6fa'),
-        ('public.fn_executie_uscare_retrage(bigint, uuid)', 'plpgsql', true, 'ce7d5d890b65e4430f1e8b1b7cafb1ba'),
+        ('public.fn_executie_uscare_retrage(bigint, uuid)', 'plpgsql', true, '343ff14345cb2f52e3cbd38bbdcf08f4'),
         -- AMPRENTE-END
         ('', '', false, '')
       ) a(fn, limbaj, definer, amp)
