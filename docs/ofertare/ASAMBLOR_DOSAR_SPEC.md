@@ -1,6 +1,6 @@
 # Asamblorul de dosar pentru propunerea tehnică — specificație
 
-Stare: PROPUNERE (15.11.2026). Doar document: fără cod, fără migrări, fără schimbări în modulul Ofertare.
+Stare: PROPUNERE (15.11.2026), revizia 2 (16.11.2026, după primul review: semnarea și amprentele, costul AI, regula „neverificat”, matricea, câmpurile deterministe, sursa structurii, aprobatorul pachetului, primul pas). Doar document: fără cod, fără migrări, fără schimbări în modulul Ofertare.
 Decizia de direcție: generatorul de propuneri tehnice devine **asamblor de dosar**, iar redactarea asistată rămâne în interiorul lui, pentru părțile specifice licitației (metodologie, particularități). Cele două se îmbină: dosarul se construiește din piese, iar o parte din piese sunt text scris cu asistență.
 
 Referințele `fișier:linie` sunt pe `origin/main` la data documentului. Exemplele sunt generice; nu conțin nume de licitații, de beneficiari sau de persoane și nici valori din dosare reale.
@@ -18,6 +18,7 @@ Cuprins:
 9. Modelul de date propus
 10. Ordinea de lucru (5 pași)
 11. Alegerile rămase pentru owner
+12. Primul pas mic de implementare
 Anexa A. Lecțiile de review care contează la implementare
 Anexa B. Abateri de la dezbaterea de arhitectură
 
@@ -31,6 +32,8 @@ Comparația cu dosarele depuse în ultimele luni (cinci dosare, de tipuri diferi
 - generatorul de azi produce un singur DOCX cu proză pe capitole, plus borderoul, Formularul 9 și Formularul 23;
 - acolo unde textul din platformă a ajuns în dosarul depus, capitolele narative au trecut aproape neschimbate, iar capitolele despre grafic, cantități, fișe tehnice și declarații au fost înlocuite de mână cu trimiteri la anexe;
 - greșelile găsite în dosarele depuse sunt de **asamblare**, nu de stil: titlul altei lucrări rămas într-o piesă, alt responsabil decât cel nominalizat, marcaje „de completat” uitate, trimiteri la anexa greșită, un document probabil expirat, promisiuni peste cerințe.
+
+Limitele comparației: cinci dosare alese, nu un eșantion reprezentativ; citire parțială (cuprins, borderou și piesele cu text, nu fiecare pagină); rezultatele evaluării acelor proceduri nu au fost verificate. Observațiile susțin prioritizarea asamblării; nu dovedesc că toate problemele dosarelor sunt exclusiv de asamblare.
 
 Câștigul nu vine din mai multă proză. Vine din a avea, pentru fiecare cerință, **răspunsul, dovada potrivită și pagina corectă**, iar pentru fiecare piesă, **sursa, versiunea și responsabilul**.
 
@@ -48,7 +51,7 @@ Câștigul nu vine din mai multă proză. Vine din a avea, pentru fiecare cerin�
 | Stările legăturii | `supabase/migrations/20260913_ofertare_pt_legaturi_stare_si_dovezi.sql:11-27` | `atribuita / redactata / dovedita / verificata / blocata`; „verificata” cere om, dată și versiunea capitolului |
 | Ținta dovezii | același fișier, `:40-52` | document de atribuire, autorizație, document al firmei, fișier sau capitol — exact una |
 | Neaplicabil confirmat | `src/OfertarePropunere.jsx:1963-1965` | RPC cu amprenta cerinței văzute (`ofertare_confirma_neaplicabil`) |
-| Generarea unui capitol | `supabase/functions/ofertare-genereaza-capitol/index.ts` | instrucțiuni `:65-99`; pachetul de fapte din ERP `:105-225`; cine are voie `:240`; interdicțiile 0–5 în cod `:278-329`; scrierea cu urmă și condiționată de versiune `:520` (`scriere.ts`) |
+| Generarea unui capitol | `supabase/functions/ofertare-genereaza-capitol/index.ts` | instrucțiuni `:65-99`; pachetul de fapte din ERP `:105-225`; cine are voie `:240` (dreptul de cheltuire: `poateCheltui` → `fn_ofertare_poate_cheltui`, `:256`); apelurile către model `:465-487`, costul jurnalizat după răspuns (`logParte`, `:447-464`); interdicțiile 0–5 în cod `:278-329`; scrierea cu urmă și condiționată de versiune `:520` (`scriere.ts`) |
 | Context tehnic | `supabase/functions/ofertare-genereaza-capitol/tehnic.mjs` | schelet pe tip de capitol `:34-48`; normative găsite în documentație `:62-75`; extrase de cel mult 16.000 de caractere `:119` |
 | Export DOCX | `src/OfertareExport.js` | de ce DOCX și ce nu face (`:1-19`); propunerea `:58`; borderoul cu coloana de pagini goală `:98`; F23 `:154`; F9 `:228` |
 | Poarta propunerii | `src/ofertarePoarta.js:23-215` | ~25 de rânduri block / warn / ok; identitatea lucrării e doar avertisment până la o decizie de business (`:183-186`); rândul porții de server `:204` |
@@ -68,7 +71,7 @@ Descrierea detaliată a stării din septembrie: `docs/as-is/ofertare/07_pt_capit
 Nimic din ce funcționează nu se aruncă. Asamblorul se pune **peste** obiectele existente:
 
 - `ofertare_pt_capitole`, istoricul versiunilor și trigger-ul de versionare rămân sursa textului. Un capitol devine o piesă de tip „text” (secțiunea 2.3).
-- Generatorul `ofertare-genereaza-capitol` rămâne cu interdicțiile lui în cod (cine apelează, lacăt, munca omului, cerințe neconfirmate, scrierea condiționată de versiune). Se schimbă doar ce primește la intrare (secțiunea 6).
+- Generatorul `ofertare-genereaza-capitol` rămâne cu interdicțiile lui în cod (cine apelează, lacăt, munca omului, cerințe neconfirmate, scrierea condiționată de versiune). Se schimbă ce primește la intrare și, la pasul 5, contractul ieșirii: cifrele și faptele din ERP intră prin câmpuri, nu ca text liber al modelului (secțiunea 6.2). Ambele sunt schimbări de contract, cu PR și review propriu.
 - Legăturile, dovezile, neaplicabilul confirmat cu amprentă, garanția, participanții, declarațiile, echipa F9, dotările F23, cantitățile și graficul înghețat rămân cum sunt. Matricea le extinde (secțiunea 4).
 - Poarta (`evalueazaPoarta`), controalele comune și poarta pe server rămân un singur adevăr. Verificările noi se adaugă **acolo**, nu într-un al doilea evaluator (secțiunea 7).
 - Pachetul cu manifest append-only, hash pe server și dovezile de depunere rămâne „ce s-a aprobat”. Asamblorul îi dă conținut complet (toate piesele, nu doar propunerea și borderoul).
@@ -148,12 +151,14 @@ Starea se schimbă doar prin RPC-uri care verifică identitatea (`auth.uid()`), 
 
 ### 3.1 Principiu
 
-Se separă **structura impusă** (ce piese, în ce ordine, cu ce titluri) de **inventarul obligațiilor** (ce cerințe trebuie acoperite și cu ce dovezi). Fișa de date și formularele impuse dau structura; caietul de sarcini, proiectul și clarificările adaugă obligații în matrice (secțiunea 4), nu capitole noi în cuprins.
+Se separă **structura impusă** (ce piese, în ce ordine, cu ce titluri) de **inventarul obligațiilor** (ce cerințe trebuie acoperite și cu ce dovezi).
+
+Regula: se păstrează structura impusă de documentația aplicabilă și de modificările ei, **indiferent de documentul în care apare** (fișa de date, un formular impus, un capitol din caietul de sarcini, un răspuns la clarificări, o erată). O clarificare poate schimba și ordinea, un titlu sau formularul. Ce nu impune structură (cerințe tehnice, obligații de dovedit) intră în matrice (secțiunea 4), nu în cuprins. Două surse care impun structuri diferite sunt o contradicție și se rezolvă prin fluxul din 3.4, nu prin alegerea tacită a uneia.
 
 ### 3.2 Fluxul
 
 1. **Inventarul surselor**: documentele de atribuire și reviziile aplicabile lotului (refolosește `ofertare_documente_atribuire` și controlul de completitudine a documentației din poartă), inclusiv răspunsurile la clarificări.
-2. **Găsirea secțiunilor de structură**: „modul de prezentare a propunerii tehnice” din fișa de date, formularele impuse, eventual un capitol din caietul de sarcini. Locul diferă de la o autoritate la alta (comentariul din `OfertarePropunere.jsx:89-92`), deci se caută după titlu, nu după număr.
+2. **Găsirea secțiunilor de structură**: „modul de prezentare a propunerii tehnice” din fișa de date, formularele impuse, capitolele din caietul de sarcini care cer o anumită structură, răspunsurile la clarificări și eratele care o modifică. Locul diferă de la o autoritate la alta (comentariul din `OfertarePropunere.jsx:89-92`), deci se caută după titlu, nu după număr.
 3. **Propunerea de structură**: fiecare poziție cu titlul, numerotarea și ordinea **exacte** din sursă, plus citatul și pagina, alăturate. În primul pas propunerea o face omul (lipește sau alege pasajul); extragerea asistată vine la pasul 5 (secțiunea 10) și propune, nu decide.
 4. **Confirmarea**: responsabilul licitației confirmă structura **cu sursa alături** (ecran cu pasajul din fișa de date lângă lista de piese). Confirmarea fixează versiunea structurii; orice schimbare ulterioară e o versiune nouă, cu motiv.
 5. **Completarea cu anexe**: piesele probante și formularele cerute în alte locuri (calificare, factori de evaluare, caiet) se adaugă ca anexe, fiecare cu sursa cerinței.
@@ -205,7 +210,18 @@ Fiecare verigă e un câmp separat, cu proveniența ei:
 
 `propus` (o legătură sugerată, inclusiv de model) → `răspuns` (are piesă și rezumat) → `dovedit` (are dovadă cu locator) → `verificat` (un om a văzut cerința lângă pasajul probant, la versiunea curentă) / `insuficient` (cu constatare: ce lipsește) / `neaplicabil justificat` (RPC-ul existent cu amprentă, `OfertarePropunere.jsx:1963-1965`).
 
-Se refolosesc stările existente ale legăturii (`atribuita`, `dovedita`, `verificata`, `blocata` ca „insuficient”), plus cele două câmpuri noi (rezumatul răspunsului și ancora dovezii). Nu se inventează o mașină de stări paralelă.
+Se refolosesc stările existente ale legăturii; nu se inventează o mașină de stări paralelă. Corespondența:
+
+| Stare în matrice | Starea legăturii azi (`stare`, CHECK din `20260913_ofertare_pt_legaturi_stare_si_dovezi.sql:12`) | Ce se adaugă |
+|---|---|---|
+| `propus` | `atribuita`, cu `sursa = 'ai'` (coloana există din `20260912_ofertare_propunere_tehnica_v1.sql:55`), fără confirmarea omului | un câmp de confirmare a atribuirii (cine / când), separat de `confirmat_de` / `confirmat_la`, care azi înseamnă **verificarea** |
+| `răspuns` | `redactata` (azi: textul capitolului a fost scris) | `raspuns_rezumat`; pentru piese care nu sunt text, „redactat” = piesa la „gata de verificare” |
+| `dovedit` | `dovedita` | ancora dovezii (9.3) |
+| `verificat` | `verificata` (om, dată, `verificat_la_versiunea`, CHECK `ofertare_pt_legaturi_stare_chk`) | versiunea verificată se referă la piesă când legătura e pe piesă |
+| `insuficient` | `blocata` (constatare obligatorie prin același CHECK) | — |
+| `neaplicabil justificat` | `fel = 'exceptat'` cu motiv + confirmarea umană existentă | — |
+
+Extinderea legăturii la piese cere migrare și regresii declarate; lista completă e în 9.3.
 
 ### 4.3 Reguli
 
@@ -296,7 +312,7 @@ Owner-ul desemnează titularii și aprobatorii; lista lor e o setare de drepturi
 - Completarea se face pe server, determinist (nu cu model AI), și produce o piesă cu hash propriu; piesa reține versiunea șablonului și versiunea fișei folosite.
 - Un câmp obligatoriu fără valoare blochează trecerea piesei la „gata de verificare”. Marcajele istorice („TBN”, „TBD”, „XXX”, „…”, „de completat”) se caută și în nucleul documentului, nu doar în câmpuri.
 - Responsabilii numiți în orice piesă se compară cu echipa nominalizată din fișă.
-- Documentele scanate (fără strat de text) nu se completează automat: se marchează „necitit” și se verifică vizual de un om.
+- Documentele scanate (fără strat de text) nu se completează automat: se marchează „necitit” și se verifică vizual de un om, după regula din 7.1 (verificarea închide puncte concrete, nu doar deschiderea fișierului).
 
 ### 5.6 Cum se umple biblioteca
 
@@ -320,13 +336,28 @@ Regulile generatorului de azi rămân (`index.ts:65-99`): fapte despre firmă do
 
 Schimbări propuse la intrare (pasul 5 din secțiunea 10):
 - inventarul de piese intră în pachetul de fapte: modelul trimite la piese prin eticheta lor reală („conform Anexa 7”) și nu inventează altele;
-- extrasele tehnice se aleg pe categoriile din listele de cantități, cu plafonul de context mărit controlat (azi 16.000 de caractere, `tehnic.mjs:119`), cu cost estimat înainte de apel;
+- extrasele tehnice se aleg pe categoriile din listele de cantități, cu plafonul de context mărit controlat (azi 16.000 de caractere, `tehnic.mjs:119`);
 - generatorul nu mai scrie titlul capitolului (îl scrie exportul).
+
+**Costul (regula L22).** Ce există azi: înaintea apelului, generatorul verifică **dreptul de cheltuire** (`poateCheltui` → `fn_ofertare_poate_cheltui`, `index.ts:256`); apelurile către model pornesc la `index.ts:465-487`, iar costul fiecărei părți se scrie în jurnal **după** răspuns (`logParte`, `index.ts:447-464`; la consum necunoscut se scrie un cost estimat maxim). Nu există azi o rezervare durabilă a costului înaintea apelului și nici o cheie pe intenție care să deduplice două porniri ale aceleiași generări. Prin urmare:
+- orice cale plătită nouă din asamblor (extragerea structurii, metodologia pe categorii, contextul mărit) păstrează poarta existentă de drept de cheltuire, fără excepții;
+- **rezervarea durabilă** (pas atomic înaintea apelului: legătura cu licitația și capitolul, drept unic de apel, rezervarea pe tokenii de intrare + `max_tokens` la tariful corect), **deduplicarea intenției** (cheie UUID per pornire, refolosită la reîncercare) și tratarea **costului necunoscut** (timeout / 5xx / consum lipsă = cost necunoscut, fără reîncercare automată, decontare o singură dată) sunt **lucru nou**: cer tabel / RPC noi, deci migrare separată, cu **aprobarea owner-ului pentru schemă și RPC-uri** înainte de implementare;
+- o estimare afișată omului înaintea apelului e informare, nu înlocuiește rezervarea;
+- până la acea migrare, contextul mărit și căile plătite noi **nu** se pornesc (pasul 5 depinde de ea).
 
 ### 6.2 Ce NU se generează
 
 - Formularul de conformitate, borderoul, cuprinsul, trimiterile la anexe: se derivă din inventar și din matrice.
 - Cifrele: cantități, durate, luni de garanție, număr de echipe, persoane, utilaje, numere de autorizație. Intră în text ca **câmpuri** din ERP (fișa lucrării, graficul înghețat, echipa, garanția), nu ca text al modelului. Unde nu există valoarea, rămâne marcaj.
+
+**Câmpurile în proză — schimbare de contract (pasul 5).** Azi generatorul produce text liber; nu există un mecanism de câmpuri. Contractul propus:
+1. **Catalogul de câmpuri**: o listă închisă de identificatori (de ex. `{{fisa.durata_luni}}`, `{{garantie.luni}}`, `{{echipa.sef_santier}}`), fiecare cu sursa ERP, tipul și unitatea. Lista se trimite modelului în pachetul de fapte, **fără valori**.
+2. **Ieșirea modelului**: în locul cifrei, modelul scrie identificatorul. Un identificator din afara catalogului = răspuns invalid (nu se scrie nimic, ca la răspunsul tăiat).
+3. **Substituția**: pe server, determinist, la export (nu în textul salvat al capitolului), din versiunea fixată a sursei (fișa lucrării, graficul înghețat). Valoare lipsă = marcaj `[DE COMPLETAT: …]`, nu zero.
+4. **Refuzul valorilor inventate**: o cifră cu unitate scrisă direct de model în locul unui câmp din catalog e semnalată de verificarea V10 și blochează acceptarea până o înlocuiește un om cu câmpul sau o confirmă ca angajament în registru.
+5. **Etapa**: catalogul și substituția la pasul 5, după fișa lucrării (pasul 3); până atunci rămâne regula de azi (fapte doar din pachet, goluri marcate) plus acceptarea umană (6.3).
+
+Limita verificării automate: V10 prinde numere cu unitate. Nu prinde afirmațiile nedovedite **fără cifre** (disponibilitate de resurse, capabilități, conformitate declarată, „dispunem de”, „asigurăm”) și nici o valoare corectă folosită într-un context greșit (durata lucrării pusă la garanție). Acestea intră explicit în acceptarea umană a textului (6.3).
 - Citatele: din normative, din documentație, din decizii. Un citat se inserează din sursă (cu document și pagină), nu se reformulează de model.
 - Declarațiile de conformitate („ne obligăm să…”, „declarăm că…”): sunt formulare cu text fix aprobat.
 - Planurile standard, procedurile, instrucțiunile: vin din bibliotecă.
@@ -337,6 +368,7 @@ Schimbări propuse la intrare (pasul 5 din secțiunea 10):
 - Fiecare piesă `text` arată numărul de marcaje `[DE COMPLETAT]` / `[DE VERIFICAT]` rămase și lista lor; borderoul de lucru le însumează pe dosar.
 - Un marcaj rămas blochează trecerea la „gata de verificare” și finalizarea (secțiunea 7).
 - **Acceptarea textului se separă de proveniență**: azi, un capitol generat devine „citit de om” doar dacă un om îl salvează (și atunci sursa devine „om”). Propunerea: piesa primește „acceptat de X la versiunea N”, iar sursa rămâne cea reală („ai” dacă textul nu a fost modificat). Poarta cere acceptarea, nu schimbarea sursei. Până la implementare, regula de azi rămâne.
+- **Ce confirmă acceptarea**: nu doar „am citit”. Omul confirmă, pe versiunea exactă, o listă scurtă de puncte afișată lângă text: (a) fiecare afirmație despre resurse, capabilități, disponibilitate sau conformitate are acoperire (piesă, dovadă sau angajament aprobat) ori a fost scoasă; (b) fiecare valoare e folosită în contextul ei (nu durata lucrării în locul garanției); (c) nu există promisiuni în afara registrului angajamentelor. Punctele bifate se înregistrează cu acceptarea.
 
 ---
 
@@ -344,11 +376,28 @@ Schimbări propuse la intrare (pasul 5 din secțiunea 10):
 
 ### 7.1 Principii
 
-- **Blocaje pe fapte**, nu pe impresii: o verificare blochează doar când constatarea e un fapt verificabil (piesă absentă, trimitere fără țintă, dată de expirare depășită, marcaj rămas, hash diferit). Ce cere judecată e alertă cu responsabil, nu blocaj.
+- **Blocaje pe fapte**, nu pe impresii: o verificare blochează când constatarea e un fapt verificabil (piesă absentă, trimitere fără țintă, dată de expirare depășită, marcaj rămas, amprentă diferită). Ce cere judecată e alertă cu responsabil, nu blocaj. **Incertitudinea nu e „judecată”**: pe piesele obligatorii, „neverificat” blochează (regula de mai jos).
 - **Necunoscut ≠ în regulă**: o verificare care nu a putut rula, o dată de valabilitate lipsă, un document scanat necitit înseamnă „neverificat”, afișat ca atare, nu „ok”.
 - **Pe pachetul final și pe server**: verificările se rulează pe piesele fixate în pachet și se impun în poarta de pe server (`ofertare_poarta_server`), la aprobarea pachetului. UI-ul doar afișează rezultatul.
 - **O singură definiție**: fiecare regulă nouă se scrie o dată, în modulul comun de controale (`supabase/functions/_shared/ofertarePoartaText.mjs`) sau în SQL, cu test de paritate când există două implementări.
 - **Absența unei alerte nu certifică absența riscului** (la verificările asistate de model).
+
+### 7.1b Regula pentru „neverificat”
+
+O verificare are unul din trei rezultate: `ok`, `constatare` (fapt găsit) sau `neverificat` (nu a putut rula, lipsește data, scan necitit, sursă indisponibilă). Efectul asupra aprobării pachetului:
+
+| Piesa | Rezultat `neverificat` | Ce îl închide |
+|---|---|---|
+| **obligatorie** (sau dovada unei cerințe obligatorii) | **blochează aprobarea pachetului** | (1) rezolvarea verificării (rulează și dă `ok` sau o constatare tratată), sau (2) o **excepție** după regulile de mai jos |
+| neobligatorie | alertă cu responsabil, vizibilă în borderoul de lucru și la aprobare | rezolvare sau închidere cu motiv |
+
+Excepția la o piesă obligatorie e validă doar dacă toate condițiile sunt îndeplinite:
+- **permisă explicit** pentru acel tip de verificare: lista verificărilor care admit excepție e fixă și se definește o singură dată (de ex. V7 cu dată necunoscută pe un document emis fără termen de valabilitate, V12 pe un scan verificat vizual). V1, V13, V14 și V15 **nu** admit excepție;
+- **justificată**: motiv scris și, când există, trimiterea la sursa care o susține;
+- **confirmată de omul autorizat** (aprobatorul pachetului, secțiunea 11, alegerea 7), identitatea luată din `auth.uid()`, nu din parametri;
+- **legată de versiunea exactă**: piesa, versiunea ei fixată și amprenta sursei. O versiune nouă a piesei sau a sursei anulează excepția (derivat la citire), iar verificarea revine la `neverificat`.
+
+**Verificarea vizuală a unui scan** (V12) închide puncte concrete, nu doar faptul că cineva a deschis fișierul. Pentru fiecare piesă scanată, omul înregistrează rezultatul pe fiecare punct relevant: titularul (firma sau persoana) corespunde; data emiterii și data de valabilitate citite (sau „fără termen” cu sursa); obiectul documentului acoperă cerința legată; paginile indicate de locatori conțin pasajul probant; documentul e complet (pagini lipsă, pagini ilizibile). Un punct marcat „nu se poate citi” lasă piesa `neverificat`. Se înregistrează omul, data, versiunea piesei și lista punctelor.
 
 ### 7.2 Lista
 
@@ -360,13 +409,13 @@ Schimbări propuse la intrare (pasul 5 din secțiunea 10):
 | V4 | Marcaje de completat rămase | `[DE COMPLETAT`, `[DE VERIFICAT`, „TBN”, „TBD”, „XXX”, câmpuri goale, în toate piesele cu text (inclusiv anteturi și tabele) | **blocaj** după confirmarea contextului (un „XXX” poate fi legitim într-un cod de material: excepția se notează cu motiv) |
 | V5 | Titlul lucrării sau responsabilul contrazis de fișa aprobată | denumirea, codul și beneficiarul din fișă față de anteturi, coperte, piesa de punctaj; persoanele numite față de echipa nominalizată | **blocaj** după confirmarea nepotrivirii |
 | V6 | Nume / localitate din altă licitație | denumiri din alte licitații ale firmei găsite în piese (controlul existent de identitate, azi doar avertisment, `ofertarePoarta.js:183-186`) | **alertă contextuală**; poate fi experiență similară legitimă; închisă cu motiv de un om |
-| V7 | Dovadă expirată | valabilitatea la **data relevantă** (termenul de depunere sau data cerută de cerință), pe ora României | **blocaj**; dată necunoscută = „de verificat” cu responsabil |
+| V7 | Dovadă expirată | valabilitatea la **data relevantă** (termenul de depunere sau data cerută de cerință), pe ora României | **blocaj**; dată necunoscută = `neverificat` (7.1b: pe piesele obligatorii blochează până la rezolvare sau excepție) |
 | V8 | Versiune retrasă sau depășită din bibliotecă | versiunea fixată față de starea ei în bibliotecă | retrasă = **blocaj**; înlocuită = alertă |
 | V9 | Cerință fără răspuns verificat la versiunea curentă | matricea (secțiunea 4) | **blocaj** (extinde rândurile existente „fără capitol” și „neverificate”) |
-| V10 | Promisiune fără sursă sau aprobare | valori numerice cu unitate (luni, ore, zile, frecvențe, procente) din text, față de registrul angajamentelor și de cerințe | angajament nedeclarat = **revizuire obligatorie** (blocaj până la decizie: se aprobă în registru sau se scoate) |
+| V10 | Promisiune fără sursă sau aprobare | valori numerice cu unitate (luni, ore, zile, frecvențe, procente) din text, față de registrul angajamentelor și de cerințe | angajament nedeclarat = **revizuire obligatorie** (blocaj până la decizie: se aprobă în registru sau se scoate). Nu acoperă afirmațiile fără cifre și nici valoarea corectă în context greșit: acelea trec prin acceptarea umană (6.3) |
 | V11 | Preț în piesa tehnică | sume în lei, coloane de preț în tabele și în piesele externe (formulare fără valori) | **blocaj** pe tipare sigure (coloană de preț nevidă); alertă pe sume izolate (valorile contractelor anterioare la experiență sunt permise) |
-| V12 | Piesă scanată necitită | piese `dovada` / `extern` fără strat de text | stare „neverificat”; verificare vizuală a unui om, cu data și numele lui |
-| V13 | Fișierul final diferit de cel verificat | hash-ul din manifest față de fișierul semnat și față de fișierul încărcat la depunere | **blocaj** (refolosește verificările hash existente) |
+| V12 | Piesă scanată necitită | piese `dovada` / `extern` fără strat de text | `neverificat`; pe piesele obligatorii blochează (7.1b) până la verificarea vizuală pe puncte, înregistrată cu omul, data și versiunea |
+| V13 | Lanțul aprobat → semnat → depus | trei amprente separate (8.3): **A** documentul aprobat înainte de semnare (manifest); **S** rezultatul semnat; **D** fișierul efectiv depus. Se verifică (1) relația A → S (semnarea n-a schimbat conținutul aprobat) și (2) S = D | (1) relație nedovedită automat și neconfirmată de omul autorizat = **blocaj**; (2) S ≠ D = **blocaj**. Nu admite excepție |
 | V14 | Contradicție nedecisă | contradicțiile deschise (3.4) | **blocaj** |
 | V15 | Cuprins neconfirmat sau confirmat pe o structură veche | versiunea structurii față de documentele de atribuire curente (revizii, clarificări noi) | **blocaj** |
 
@@ -407,9 +456,24 @@ fixarea surselor → randare → ordonare → paginare → borderou și formular
 ### 8.3 Semnarea și depunerea rămân în afara platformei
 
 - Semnătura electronică pe PDF și încărcarea în platforma de achiziții se fac în instrumentele de azi.
-- Platforma **înregistrează** fișierele semnate (hash, mărime, data) și dovada depunerii, și le compară cu pachetul aprobat (V13).
 - „Aprobarea internă” (semnătura porții din `ofertare_pt_poarta`) și „semnătura electronică” pe PDF au nume distincte în ecran și în documentație.
 - Hash-ul dovedește identitatea fișierului, nu conformitatea conținutului. Orice editare după verificare = versiune nouă și reverificarea elementelor afectate.
+
+**Semnarea schimbă bytes-ii fișierului**, deci amprenta fișierului semnat nu poate fi egală cu cea a fișierului aprobat. O egalitate directă ar bloca orice semnare legitimă; acceptarea oricărei amprente noi n-ar dovedi nimic. Se țin trei amprente separate, pe fiecare fișier al pachetului:
+
+| Amprentă | Ce e | Unde stă |
+|---|---|---|
+| **A** — aprobat | SHA-256 al fișierului aprobat, înainte de semnare | manifestul pachetului (azi: fișierele pachetului cu SHA-256 verificat pe server, `20260930a_…`) |
+| **S** — semnat | SHA-256 al rezultatului semnării, încărcat în platformă | rând nou în manifest, legat de rândul lui A (de ce fișier aprobat provine) |
+| **D** — depus | SHA-256 al fișierului efectiv încărcat în platforma de achiziții | azi: rolul `depus_final` din manifest, cerut la trecerea în „depus” (`20260928k_ofertare_pachet_depus_r11.sql:13-24`) |
+
+Ce se verifică:
+1. **A → S** (semnarea n-a schimbat conținutul aprobat). Două căi:
+   - **automat**, când semnătura e aplicată ca actualizare incrementală a PDF-ului: primii bytes ai fișierului semnat sunt identici cu fișierul aprobat (amprenta lor = A), iar după ei urmează doar revizia cu semnătura. Verificarea se face pe server; dacă instrumentul de semnare folosit produce sau nu acest format se măsoară la pasul 4, pe fișiere reale, înainte să se bazeze ceva pe ea;
+   - **manual**, când instrumentul rescrie fișierul: confirmarea o face **omul autorizat** (aprobatorul pachetului, alegerea 7), nu cel care a semnat singur. Se înregistrează: pachetul, rândul A și rândul S, metoda (`automat_incremental` / `confirmat_manual`), ce a comparat omul (număr de pagini, pagini de control alese de el, piesele semnate separat), cine (`auth.uid()`), când, observația. Fără una din cele două, relația A → S e nedovedită.
+2. **S = D**: fișierul depus trebuie să fie exact fișierul semnat înregistrat (egalitate de amprentă). Un fișier depus fără pereche S = blocaj.
+
+Codul de azi verifică bytes-ii fișierelor față de manifest și cere fișierele depuse la trecerea în „depus”; **nu** leagă încă un fișier depus de fișierul aprobat din care provine. Legătura A → S → D și înregistrarea confirmării sunt lucru nou (pasul 4, cu migrare aprobată). Verificarea se impune la trecerea pachetului în „depus”, nu la aprobare (aprobarea are loc înainte de semnare).
 
 ---
 
@@ -448,16 +512,28 @@ Doar descris. Nicio migrare nu se scrie în această etapă. Numele sunt orienta
 | `ofertare_biblioteca_documente` | `cod`, `titlu`, `categorie` (`nucleu` / `adaptabil`), `domeniu`, `domeniu_aplicare`, `titular_id`, `activ` | toți utilizatorii modulului Ofertare | titularul domeniului |
 | `ofertare_biblioteca_versiuni` | `document_id`, `versiune`, `fisier_path`, `sha256`, `campuri` (lista câmpurilor variabile și sursa fiecăruia), `normative`, `normative_verificate_la`, `autor_id`, `aprobat_de`, `aprobat_la`, `revizuire_la`, `inlocuieste_id`, `stare` | idem | autorul creează ciorna; aprobatorul domeniului (alt om decât autorul) aprobă prin RPC; după aprobare versiunea e imuabilă |
 | `ofertare_biblioteca_aprobatori` | `domeniu`, `user_id`, `rol` (`titular` / `aprobator`) | idem | **doar owner** (e o setare de drepturi) |
+| `ofertare_dosar_verificari` (din a doua felie a pasului 1, extins la fiecare pas) | `piesa_id`, `piesa_versiune`, `verificare` (V1…V15), `rezultat` (`ok` / `constatare` / `neverificat`), `detalii`, pentru verificarea vizuală lista punctelor închise (7.1b), `verificat_de`, `verificat_la` | idem | funcțiile de verificare pe server; verificarea vizuală prin RPC |
+| `ofertare_dosar_exceptii` (pasul 2) | `piesa_id`, `piesa_versiune`, amprenta sursei, `verificare` (doar din lista fixă care admite excepție), `motiv`, `sursa_justificarii`, `confirmat_de`, `confirmat_la` | idem | doar aprobatorul pachetului (alegerea 7), prin RPC; validă doar pe versiunea și amprenta înregistrate |
+| `ofertare_pt_pachet_semnare` (pasul 4) | `pachet_id`, rândul fișierului aprobat (A), rândul fișierului semnat (S), `metoda` (`automat_incremental` / `confirmat_manual`), ce s-a comparat, `confirmat_de`, `confirmat_la`, `observatie` | idem | metoda automată: funcția de pe server; confirmarea manuală: doar aprobatorul pachetului, prin RPC |
 | `ofertare_dosar_pagini` (pasul 4) | `pachet_id`, `piesa_id`, `piesa_versiune`, `parte_nr`, `pagina_fizica_start`, `pagina_fizica_end`, `pagina_tiparita_start`, `fisier_sha256` | idem | doar funcția de asamblare de pe server |
 
 ### 9.3 Coloane noi pe tabele existente
 
 | Tabel | Coloană | De ce |
 |---|---|---|
-| `ofertare_pt_legaturi` | `piesa_id` (pentru legăturile la piese care nu sunt text); CHECK: exact una dintre `capitol_id` / `piesa_id` la legăturile de acoperire | matricea leagă cerința de orice piesă; legăturile pe capitol rămân cum sunt (fără copiere) |
-| `ofertare_pt_legaturi` | `raspuns_rezumat`, `sugerat_de_ai` (boolean, pus de server) | veriga „răspuns”; o sugestie a modelului rămâne vizibilă ca atare |
+| `ofertare_pt_legaturi` | `piesa_id` (pentru legăturile la piese care nu sunt text) | matricea leagă cerința de orice piesă; legăturile pe capitol rămân cum sunt (fără copiere) |
+| `ofertare_pt_legaturi` | `raspuns_rezumat`; confirmarea atribuirii (cine / când, 4.2). Proveniența sugestiei **refolosește** coloana existentă `sursa` (`om` / `ai`), care devine pusă de server și imuabilă pentru utilizator | veriga „răspuns”; o sugestie a modelului rămâne vizibilă ca atare |
 | `ofertare_pt_dovezi` | ținta `piesa_id`; `ancora` (pagina locală în piesă / titlul subcapitolului / rândul din tabel), aleasă din piesă | locator stabil; înlocuiește ghicirea primului număr din text liber (`OfertarePropunere.jsx:1782`) |
 | `ofertare_pt_pachet_fisiere` | `piesa_id`, `piesa_versiune` | pachetul știe ce piesă și ce versiune conține fiecare fișier |
+
+**Ce mai cere extinderea legăturii la piese** (schema de azi din `20260912_ofertare_propunere_tehnica_v1.sql:49-97`; coloanele nu ajung singure):
+- **CHECK-ul felului**: azi `fel IN ('capitol','exceptat')`, iar `ofertare_pt_legaturi_fel_chk` cere `capitol_id` la `fel = 'capitol'` și `capitol_id IS NULL` la `exceptat`. Se adaugă `fel = 'piesa'` (cu `piesa_id` nevid și `capitol_id` NULL), iar la `capitol` și `exceptat` se cere `piesa_id IS NULL` — exact o țintă pe rând.
+- **Unicitatea**: azi `UNIQUE (cerinta_id, capitol_id)` + indexul parțial `ofertare_pt_legaturi_exceptat_unic`. Cu `capitol_id` NULL pe legăturile la piese, constrângerea existentă nu le deduplică (NULL-urile sunt distincte) → index unic parțial nou pe `(cerinta_id, piesa_id) WHERE fel = 'piesa'`, aceeași cheie folosită de RPC la deduplicare și de UI.
+- **Aceeași licitație / același lot**: trigger-ul de coerență (`trg_pt_legaturi_coerenta`) iese azi imediat când `capitol_id` e NULL; se extinde ca să compare licitația (și lotul) cerinței cu ale piesei.
+- **Consumatorii care citesc doar capitole** (trebuie actualizați sau declarați explicit că ignoră piesele): vederea `v_ofertare_pt_stare` (contoarele `are_capitol`, `fara_capitol`, `inchise_cu_dovada`; ultima formă în `20261004a_ofertare_j02b_na_confirmare_umana.sql`), din care citește și poarta (`ofertarePoarta.js`); trigger-ele de invalidare la schimbarea cerinței (`20260913_ofertare_pt_invalidare_dependente.sql:23`, `20260928i_ofertare_r08_versiuni.sql:38,45`, filtrate pe `fel = 'capitol'`); UI-ul (`OfertarePropunere.jsx`, `ofertarePropunereDate.js`, `ofertareLantProbatorDate.js`, `ofertareNeaplicabil.js`) și generatorul (citește legăturile pe capitol, `ofertare-genereaza-capitol/index.ts:299`).
+- **Dovezile**: `tip_dovada` primește `piesa`, iar `ofertare_pt_dovezi_tinta_chk` se rescrie pentru noua țintă.
+- **Regresii declarate**: legăturile și dovezile existente pe capitole rămân identice (număr și stări înainte = după); contoarele vederii de stare rămân aceleași pe licitațiile fără piese; o legătură pe piesă din altă licitație e refuzată; duplicatul pe `(cerinta_id, piesa_id)` e refuzat; invalidarea la schimbarea cerinței atinge și legăturile pe piese.
+- Totul într-o migrare cu revenire testată (L14), aprobată separat.
 
 Pagina finală **nu** devine coloană pe dovadă (`pagina_globala` rămâne nefolosită și se retrage după pasul 4): depinde de pachet, deci se calculează din `ofertare_dosar_pagini` + ancora dovezii.
 
@@ -472,7 +548,7 @@ Pagina finală **nu** devine coloană pe dovadă (`pagina_globala` rămâne nefo
 
 ## 10. Ordinea de lucru (5 pași)
 
-Fiecare pas e o felie livrabilă separat, cu propriul PR, review și (unde e cazul) migrare cu revenire.
+Fiecare pas e o felie livrabilă separat, cu propriul PR, review și (unde e cazul) migrare cu revenire. Pasul 1 e prea mare pentru un singur PR; se împarte în felii, prima fiind cea din secțiunea 12 (inventarul manual pe licitația pilot). Contradicțiile (V14) și controalele V1 / V15 vin în feliile următoare ale pasului 1.
 
 ### Pasul 1 — Inventarul de dosar pe licitația pilot
 
@@ -484,7 +560,7 @@ Fiecare pas e o felie livrabilă separat, cu propriul PR, review și (unde e caz
 ### Pasul 2 — Matricea probantă
 
 - **Ce**: legături la piese, rezumatul răspunsului, ancora dovezii aleasă din piesă, verificarea cu cerința alături, stările din 4.2; registrul factorilor de punctaj și registrul angajamentelor; acceptarea textului separată de proveniență; verificările V9, V10.
-- **Ce se testează**: o versiune nouă de piesă readuce cerințele ei la „de reverificat”; o sugestie a modelului nu poate fi confirmată de model; factorul financiar nu apare în nicio piesă exportată; un angajament numeric din text fără rând în registru blochează.
+- **Ce se testează**: o versiune nouă de piesă readuce cerințele ei la „de reverificat”; o sugestie a modelului nu poate fi confirmată de model; factorul financiar nu apare în nicio piesă exportată; un angajament numeric din text fără rând în registru blochează; regresiile declarate în 9.3 (legăturile pe capitole neschimbate, contoarele de stare identice pe licitațiile fără piese, duplicatul pe piesă refuzat, legătura pe piesă din altă licitație refuzată); acceptarea textului cere punctele din 6.3 bifate pe versiunea curentă.
 - **Ce se măsoară**: timpul de găsire a dovezii pentru un eșantion de cerințe; numărul de cerințe „insuficiente” găsite înainte de depunere.
 
 ### Pasul 3 — Biblioteca restrânsă, aprobată
@@ -495,14 +571,15 @@ Fiecare pas e o felie livrabilă separat, cu propriul PR, review și (unde e caz
 
 ### Pasul 4 — Asamblarea PDF cu pagini reale
 
-- **Ce**: asamblarea pe server după 8.2; `ofertare_dosar_pagini`; borderoul și formularul de conformitate paginate; împărțirea pe părți; înregistrarea fișierelor semnate și compararea lor; verificările V2 (cu pagini), V3, V11, V13.
-- **Ce se testează**: paginile din borderou corespund fișierului real (verificare pe PDF-ul generat, nu pe calcul); paginarea e stabilă după a doua trecere; o piesă semnată nu e unită; un fișier semnat diferit de cel aprobat blochează; rezultatul unei asamblări vechi nu suprascrie unul nou.
+- **Ce**: asamblarea pe server după 8.2; `ofertare_dosar_pagini`; borderoul și formularul de conformitate paginate; împărțirea pe părți; lanțul de amprente aprobat → semnat → depus și confirmarea transformării (8.3); verificările V2 (cu pagini), V3, V11, V13.
+- **Ce se testează**: paginile din borderou corespund fișierului real (verificare pe PDF-ul generat, nu pe calcul); paginarea e stabilă după a doua trecere; o piesă semnată nu e unită; o semnare legitimă (fișier semnat cu amprentă nouă, relația A → S dovedită automat sau confirmată de omul autorizat) **trece**; un fișier semnat fără relație dovedită cu cel aprobat blochează; un fișier depus diferit de cel semnat înregistrat blochează; confirmarea manuală A → S de către alt om decât cel autorizat e refuzată; formatul real produs de instrumentul de semnare (incremental sau rescris) e măsurat pe fișiere reale înainte de a activa calea automată; rezultatul unei asamblări vechi nu suprascrie unul nou.
 - **Ce se măsoară**: trimiterile reparate de mână după asamblare (ținta: zero); timpul de la „toate piesele verificate” la „dosar pe părți”.
 
 ### Pasul 5 — Tabele structurate și redactare asistată pe lucrare
 
 - **Ce**: PCCVI pe faze, matrice de riscuri, „aspect – impact – măsură”, tabelul de activități, din date validate; integrarea cu graficul înghețat și cu formularele fără valori din devize; metodologia pe categoriile din listele de cantități (6.1); extragerea asistată a structurii, ca propunere confirmată de om.
-- **Ce se testează**: un tabel nu conține valori pe care nu le are sursa; răspunsul modelului tăiat sau parțial nu se scrie; costul se rezervă înainte de apel; extragerea structurii marchează sursele necitite.
+- **Condiție de pornire**: migrarea pentru rezervarea costului, cheia pe intenție și costul necunoscut (6.1) e aprobată și aplicată; fără ea, căile plătite noi nu se activează.
+- **Ce se testează**: un tabel nu conține valori pe care nu le are sursa; răspunsul modelului tăiat sau parțial nu se scrie; costul se rezervă durabil înainte de apel (refuzul rezervării = niciun apel); aceeași intenție pornită de două ori = un singur apel plătit; timeout / 5xx = cost necunoscut, fără reîncercare automată; un identificator de câmp din afara catalogului invalidează răspunsul; o cifră cu unitate scrisă direct de model e semnalată; extragerea structurii marchează sursele necitite.
 - **Ce se măsoară**: timpul de redactare a metodologiei; marcajele rămase la prima versiune; corecturile de structură făcute de om după extragere.
 
 **Ce NU e indicator de succes**: numărul de pagini generate.
@@ -511,7 +588,7 @@ Fiecare pas e o felie livrabilă separat, cu propriul PR, review și (unde e caz
 
 ## 11. Alegerile rămase pentru owner
 
-Direcția (asamblor de dosar cu redactare asistată în interior) e decisă (15.11.2026). Rămân șase alegeri. Varianta presupusă în această specificație e cea marcată **(recomandat)**, din dezbaterea de arhitectură.
+Direcția (asamblor de dosar cu redactare asistată în interior) e decisă (15.11.2026). Rămân șapte alegeri (a șaptea adăugată după review). Varianta presupusă în această specificație e cea marcată **(recomandat)**, din dezbaterea de arhitectură și din review.
 
 | # | Alegere | A | B | C |
 |---|---|---|---|---|
@@ -521,8 +598,48 @@ Direcția (asamblor de dosar cu redactare asistată în interior) e decisă (15.
 | 4 | Finalizarea | **inventar întâi, PDF ulterior, semnare în afara platformei (recomandat)** | PDF din prima livrare | semnare și depunere integrate imediat |
 | 5 | Porțile | doar avertismente | **blocaje pe fapte; incertitudinile rezolvate cu dovadă și responsabil (recomandat)** | verdict AI de conformitate |
 | 6 | Dosarele primite de la un colaborator extern | **intră în inventar ca piese externe, cu aceleași verificări (recomandat)** | rămân în afara platformei | se rescriu în platformă |
+| 7 | Aprobatorul pachetului final (acceptă dosarul întreg, excepțiile de la 7.1b și transformarea la semnare din 8.3) | **mecanismul existent de aprobare a pachetului (aprobat de / la, cu poarta pe server), cu rolul aprobatorului numit explicit pe licitație: responsabilul licitației sau owner-ul; aprobatorul nu confirmă singur excepțiile la piesele pe care le-a pregătit tot el, când regula licitației o cere (recomandat)** | doar owner-ul | oricine are acces la modulul Ofertare |
 
 Alegerea 5 include și o decizie amânată azi: identitatea lucrării (nume din alte licitații) e doar avertisment până la decizia owner-ului (`ofertarePoarta.js:183-186`). Varianta B o împarte: contradicția cu fișa aprobată (V5) devine blocaj după confirmarea nepotrivirii; numele străine fără legătură cu fișa (V6) rămân alertă contextuală.
+
+### 11.1 Lista deciziilor owner-ului, cu varianta recomandată
+
+| # | Decizia | Varianta recomandată | Când trebuie luată |
+|---|---|---|---|
+| D1 | Pilotul (alegerea 1) | o licitație curentă, cu responsabil desemnat | înaintea primului pas (12) |
+| D2 | Structura inițială (alegerea 2) | confirmată de om, cu sursa alături | înaintea primului pas |
+| D3 | Aprobatorul pachetului final (alegerea 7) | mecanismul existent, cu rolul numit explicit pe licitație (responsabilul licitației sau owner-ul) | înaintea primului pas (inventarul numește deja cine aprobă) |
+| D4 | Migrarea / RPC-urile primului pas (12) | aprobare separată, după review pe migrare + revenire | după review-ul propunerii de migrare |
+| D5 | Porțile și regula „neverificat” (alegerea 5, 7.1b) | blocaje pe fapte; „neverificat” blochează piesele obligatorii; excepții doar pe lista fixă, confirmate de aprobator pe versiunea exactă | înaintea pasului 2 |
+| D6 | Extinderea matricei la piese (9.3) | o migrare cu toate constrângerile, consumatorii și regresiile enumerate | înaintea pasului 2 |
+| D7 | Biblioteca (alegerea 3) și titularii pe domenii (5.4) | titulari și aprobatori pe domenii; lista lor e setare de drepturi, schimbată doar de owner | înaintea pasului 3 |
+| D8 | Semnarea și depunerea (alegerea 4, 8.3) | rămân în afara platformei; lanțul de amprente A → S → D, cu confirmare manuală a aprobatorului când calea automată nu se aplică | înaintea pasului 4 |
+| D9 | Rezervarea costului AI, cheia pe intenție, costul necunoscut (6.1) | schemă + RPC noi, aprobate înaintea oricărei căi plătite noi | înaintea pasului 5 |
+| D10 | Câmpurile în proză (6.2) | catalog închis de identificatori, substituție pe server la export | înaintea pasului 5 |
+| D11 | Dosarele colaboratorului extern (alegerea 6) | piese externe, cu aceleași verificări | înaintea pasului 3 |
+
+---
+
+## 12. Primul pas mic de implementare
+
+Prima felie a pasului 1: un **inventar manual pentru o singură licitație pilot**, fără PDF, fără bibliotecă, fără model AI și fără nicio procesare plătită.
+
+**Ce conține:**
+- **structura confirmată cu surse**: fiecare poziție cu ordinea și eticheta exacte, sursa (document, revizie, pagină, citat) sau „profil intern”; confirmarea o face responsabilul licitației, cu sursa alături;
+- **referințe, nu copii**: la capitolele existente (prin `capitol_id`, cu versiunea curentă) și la fișierele anexelor (cu versiune / SHA-256);
+- pe fiecare piesă: **responsabil, obligativitate, stare și lipsurile explicite** (piesă lipsă, sursă neadusă, valabilitate necunoscută = `neverificat`);
+- **borderoul complet** exportat: toate piesele, în ordine, cu coloana de pagini „după asamblare”.
+
+**Ce cere înainte de cod:** o propunere separată de migrare / RPC (tabelele de structură și de piese din 9.2, doar coloanele necesare acestei felii), cu revenire, **care necesită aprobarea owner-ului** (D4). Nicio tabelă existentă nu se modifică în această felie.
+
+**Ce se verifică (teste):**
+- **acces neautorizat**: un utilizator fără drept pe licitație nu poate confirma structura și nu poate crea / schimba piese (test ca non-owner, prin RPC și prin scriere directă);
+- **schimbarea reviziei sursei**: o revizie nouă a documentului din care vine structura face structura „de reconfirmat”;
+- **ordinea exportului**: borderoul are toate piesele, în ordinea confirmată, cu etichetele exacte; rezultatul așteptat scris independent de cod;
+- **persistența lipsurilor**: lipsurile rămân după reîncărcare și nu dispar fără o acțiune înregistrată;
+- **capitolele existente rămân neschimbate**: text, versiune, sursă și legături identice înainte și după.
+
+**Ce rămâne pentru feliile și pașii următori:** contradicțiile și V1 / V14 / V15 (feliile următoare ale pasului 1); PDF-ul, biblioteca și procesările plătite (pașii 3–5).
 
 ---
 
@@ -544,12 +661,12 @@ Din `docs/paw/LECTII_REVIEW.md`. Aici: cum le-a prins specificația, ca să nu f
 | L12 completitudine | structura, inventarul, extragerea asistată | sursă necitită = „structură incomplet verificată”; lipsurile nu dispar (3.2, 8.1) |
 | L13 parsere | V2, V4, V10, V11 | tipare ancorate, testate pozitiv și negativ, definite într-un singur loc (7.1) |
 | L14 / L15 migrări și porți | fiecare pas cu tabele noi; verificările noi în poarta de pe server | migrare + revenire testată pe clonă de chat; porțile noi intră în poarta existentă, nu într-una paralelă |
-| L16 unicitate și hash | piese, versiuni din bibliotecă, fișiere | UNIQUE pe (licitație, lot, versiune) etc.; identitatea fișierului = SHA-256 pe conținut (5.3, 9.2) |
+| L16 unicitate și hash | piese, versiuni din bibliotecă, fișiere, legături pe piese | UNIQUE pe (licitație, lot, versiune) etc.; index unic parțial pe (cerință, piesă) (9.3); identitatea fișierului = SHA-256 pe conținut, cu amprente separate aprobat / semnat / depus (5.3, 8.3, 9.2) |
 | L17 timp | valabilitatea (V7) | ora României, la data relevantă, nu „azi” în UTC |
-| L18 necunoscut ≠ ok | toate verificările | 7.1: control indisponibil, dată lipsă, scan necitit = „neverificat” |
+| L18 necunoscut ≠ ok | toate verificările | 7.1 / 7.1b: control indisponibil, dată lipsă, scan necitit = „neverificat”, care blochează piesele obligatorii până la rezolvare sau excepție confirmată pe versiunea exactă |
 | L19 o singură definiție | „piesa e completă”, tiparele de text | 7.1 și 9.4: o definiție, citită de UI, poartă și asamblare; paritate testată unde există două |
 | L20 căile legitime | excepțiile la V4 / V6, „nu se aplică” | excepții cu motiv și om; teste și pe căile permise |
-| L21 / L22 răspuns și cost AI | extragerea structurii, metodologia mai lungă | răspuns tăiat sau parțial nu se scrie; cost rezervat înainte de apel (pasul 5); generatorul de azi le respectă deja |
+| L21 / L22 răspuns și cost AI | extragerea structurii, metodologia mai lungă | răspuns tăiat sau parțial nu se scrie; identificator de câmp necunoscut = răspuns invalid (6.2). Costul: azi există doar poarta de drept de cheltuire, iar costul se jurnalizează după răspuns; rezervarea durabilă, cheia pe intenție și costul necunoscut sunt lucru nou, cu schemă / RPC aprobate înaintea pasului 5 (6.1) |
 | L23 paginare | dovezi, legături, piese pe dosare mari | keyset (9.4) |
 | L24 async | ecranul dosarului, asamblarea | rezultatul se aplică doar pe licitația și versiunea curente (de detaliat la implementare) |
 | L25 teste reale | toți pașii | rezultatele așteptate din surse independente; paginile verificate pe PDF-ul real, nu pe calcul (pasul 4) |
@@ -557,7 +674,7 @@ Din `docs/paw/LECTII_REVIEW.md`. Aici: cum le-a prins specificația, ca să nu f
 
 ## Anexa B. Abateri de la dezbaterea de arhitectură
 
-Specificația urmează recomandarea B din dezbatere (asamblor cu redactare asistată în interior), pașii 1–5 și cele șase alegeri. Abaterile:
+Specificația urmează recomandarea B din dezbatere (asamblor cu redactare asistată în interior), pașii 1–5 și cele șase alegeri; a șaptea (aprobatorul pachetului final) vine din review. Abaterile:
 
 1. **„Direcția” nu mai e o alegere**: owner-ul a decis-o pe 15.11.2026. Locul ei în tabel îl ia alegerea 6 (dosarele colaboratorului extern), care vine din dezbatere: varianta „verificator” e acolo o etapă inițială în asamblor, iar dosarele scrise de un colaborator extern sunt exact cazul ei.
 2. **Registrul angajamentelor apare din pasul 2, nu doar ca poartă**: dezbaterea îl propune la porți; aici e și sursa verificării V10 și a piesei de punctaj, deci trebuie să existe înaintea lor.
