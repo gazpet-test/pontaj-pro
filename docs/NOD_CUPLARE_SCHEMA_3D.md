@@ -112,13 +112,26 @@ cu amprentele calculate de codul de dinainte, `src/nodSchema3d.regresie.json`). 
 - Validarea respinge, cu motiv în „Schema 3D, părți ignorate” (nimic nu se completează în tăcere): bara fără diametru sau fără rază,
   diametrul diferit de al mărcii, marca necunoscută, segmentul sub 1 mm, unghiul peste 179° (bara s-ar întoarce pe ea însăși),
   raza care nu încape pe segment (toleranță 0,5 mm), cutia goală / întoarsă, placa cu golul mai mare decât latura, blocul `armare`
-  cu câmpuri necunoscute sau stare greșită, marca invalidă / duplicată / fără bucăți sau lungime și **marca fără nicio bară validă**.
+  cu câmpuri necunoscute sau stare greșită, marca invalidă / duplicată / fără bucăți sau lungime, textele de alt tip decât șir
+  sau număr (`otel`, `forma`, `et`, `extras_sursa`, punctele `de_confirmat`: un obiect sau o listă e eroare, nu „[object Object]”).
+- **Controlul extrasului nu se micșorează în tăcere** (review r2): o marcă respinsă la citire rămâne în totalul de bucăți al
+  extrasului (bucăți necitibile = „+ ?”); o marcă fără nicio bară validă rămâne în legendă cu „0 / N” și „fără bare”. În ambele
+  cazuri (și când bucățile desenate diferă de extras) rândul „Control INCOMPLET” spune de ce, iar controlul nu mai iese verde,
+  oricât de aproape ar fi greutatea.
 - `prefixe: []` e permis doar la un grup fără nicio sudură (ex. o fundație); cu suduri, prefixele rămân obligatorii.
 - Ecranul: butoanele „🧱 Beton”, „🔩 Piese” (buloane, plăci) și „🎨 Pe marcă / Pe diametru”; sub scenă legenda pe mărci (👁 / 🚫
   ascunde marca; Ø, oțel, bucăți desenate / extras, lungimea din extras și cea desenată, kg desenate), totalul și rândul
-  „Greutate desenată X kg față de extras Y kg (±Z%)” (verde până la ±2%). Bucățile sau lungimile care nu se potrivesc sunt roșii.
+  „Greutate desenată X kg față de extras Y kg (±Z%)” (verde până la ±2% și doar cu controlul complet). Fără `extras_kg`, rândul
+  scrie „extras necunoscut” (nu lipsește, nu 0). Bucățile sau lungimile care nu se potrivesc sunt roșii.
+- În „Toată instalația” fiecare grup cu armare are panoul lui (cu titlul grupului): avertismentul „NECONFIRMATĂ DE OM”, punctele de
+  confirmat și controlul rămân și în vederea comună. Avertismentul și „estimate” nu depind de mărcile ascunse sau de culoare.
+- O marcă scrisă „beton” sau „inglobate” rămâne marcă: grupurile interne ale scenei (betonul, piesele) nu se iau după textul mărcii.
 - Lungimea desenată se măsoară **ca în extras**: segmentele în ax + d/2 la fiecare capăt îndoit (laturile pe exterior);
-  greutatea = lungime × 7850 kg/m³ × secțiunea barei.
+  greutatea = lungime × 7850 kg/m³ × secțiunea barei. E convenția extrasului, nu lungimea dezvoltată pe axa barei cu arcele
+  îndoirilor: rândul de control verifică potrivirea cu extrasul, nu masa fizică exactă (o notă scurtă o spune și în ecran).
+- Testele scenei rulează pe un DOM fals minim (`src/nodSchema3dDomFals.testutil.js`), fără jsdom, deci nu se mai sar; referința
+  regresiei (`src/nodSchema3d.regresie.json`) e verificată și ea (intrările, numărul de scene, amprenta fișierului). În CI le
+  rulează `.github/workflows/izometrie-3d.yml` (PR gata de review pe fișierele schemei 3D, sau pornit manual).
 - Exemplul complet: `src/nodSchema3d.fundatie-F6.json` (fundația unui rezervor suprateran, 2 bucăți: 56 de bare, 186,63 kg desenate
   față de 187 kg în extras, lista neconfirmată de om, cu 7 puncte de confirmat). În ecran ajunge doar dacă grupul lui e urcat în
   `model_3d.json` al unui nod (vezi mai sus).

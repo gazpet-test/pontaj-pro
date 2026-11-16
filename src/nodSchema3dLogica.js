@@ -71,13 +71,14 @@ export function parseModel3d(json) {
       if (pb) { erori.push(`${eticG}, elementul ${i + 1} (${txt(e?.tip) || '?'}): ${pb}`); return }
       elemente.push(curataElement(e))
     })
-    // o marcă din extras fără nicio bară validă în model = respinsă, cu eroare vizibilă (nu un rând gol în legendă)
+    // o marcă din extras fără nicio bară validă în model RĂMÂNE în listă (review r2: altfel totalul extrasului scădea și controlul
+    // ieșea verde): rândul ei arată 0 bare, controlul iese INCOMPLET (controlArmare), iar eroarea e vizibilă
     if (ar.armare) {
-      ar.armare.marci = ar.armare.marci.filter(m => {
-        if (elemente.some(e => e.tip === 'bara' && e.marca === m.marca)) return true
-        erori.push(`${eticG}: marca ${m.marca} (Ø${m.d}) nu are nicio bară validă în model; marca nu se afișează`)
-        return false
-      })
+      for (const m of ar.armare.marci) {
+        if (!elemente.some(e => e.tip === 'bara' && e.marca === m.marca)) {
+          erori.push(`${eticG}: marca ${m.marca} (Ø${m.d}) nu are nicio bară validă în model; controlul extrasului e incomplet`)
+        }
+      }
     }
     const suduri = []
     su.forEach((s, i) => {

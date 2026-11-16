@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest'
 import { parseModel3d, instalatia, aplicaAmplasare, cutieGrup, puncteElement } from './nodSchema3dLogica.js'
 import {
   verificaTraseu, traseuBara, lungimeTraseu, lungimeExtras, masaBara, controlArmare, continutArmare, citesteArmare,
-  culoareMarca, culoareDiametru, CULORI_MARCA,
+  culoareMarca, culoareDiametru, CULORI_MARCA, panouriArmare,
 } from './nodSchema3dArmare.js'
 import { CULORI } from './nodCuplareLogica.js'
 import { CULORI_DN } from './nodSchema3dLogica.js'
@@ -90,13 +90,15 @@ describe('validatorul elementelor noi: lipsă / imposibil = respins, nimic compl
     expect(p.erori).toEqual([])
     expect(p.grupuri[0].elemente[0].marca).toBe('1')
   })
-  it('bară fără diametru = respinsă (și marca rămasă fără bare = respinsă)', () => {
+  it('bară fără diametru = respinsă; marca rămasă fără bare RĂMÂNE în listă (0 / 1), controlul e incomplet (review r2)', () => {
     const m = MODEL(); delete m.grupuri[0].elemente[0].d
     const p = parseModel3d(m)
     expect(p.erori.join(' | ')).toMatch(/elementul 1 \(bara\): diametrul barei lipsește/)
-    expect(p.erori.join(' | ')).toMatch(/marca 1 \(Ø14\) nu are nicio bară validă/)
+    expect(p.erori.join(' | ')).toMatch(/marca 1 \(Ø14\) nu are nicio bară validă în model; controlul extrasului e incomplet/)
     expect(p.grupuri[0].elemente.some(e => e.tip === 'bara')).toBe(false)
-    expect(p.grupuri[0].armare.marci).toEqual([])
+    expect(p.grupuri[0].armare.marci.map(x => x.marca)).toEqual(['1'])
+    const c = controlArmare(p.grupuri[0])
+    expect([c.bucDesen, c.bucExtras, c.complet, c.controlOk]).toEqual([0, 1, false, false])
   })
   it('unghi imposibil: bara care se întoarce pe ea însăși (180°) e respinsă, cu punctul și unghiul', () => {
     const m = MODEL(); m.grupuri[0].elemente[0].puncte = [[0, 0, 0], [1000, 0, 0], [0, 0, 0.001]]
@@ -111,12 +113,66 @@ describe('validatorul elementelor noi: lipsă / imposibil = respins, nimic compl
     expect(u(83.6)).not.toMatch(/nu încape/)
     expect(u(83)).toMatch(/nu încape pe segmentul 2/)
   })
-  it('marcă fără bare = respinsă cu eroare vizibilă (nu un rând gol în legendă)', () => {
+  it('review r2: marcă fără bare = eroare vizibilă + rând cu 0 bare; numitorul extrasului rămâne întreg, controlul INCOMPLET', () => {
     const m = MODEL(); m.grupuri[0].armare.marci.push({ marca: '4', d: 8, otel: 'OB37', buc: 8, lungime_mm: 3080 })
     const p = parseModel3d(m)
-    expect(p.erori).toEqual(['Grupul 1 (fund): marca 4 (Ø8) nu are nicio bară validă în model; marca nu se afișează'])
-    expect(p.grupuri[0].armare.marci.map(x => x.marca)).toEqual(['1'])
-    expect(controlArmare(p.grupuri[0]).marci.map(x => x.marca)).toEqual(['1'])
+    expect(p.erori).toEqual(['Grupul 1 (fund): marca 4 (Ø8) nu are nicio bară validă în model; controlul extrasului e incomplet'])
+    expect(p.grupuri[0].armare.marci.map(x => x.marca)).toEqual(['1', '4'])
+    const c = controlArmare(p.grupuri[0])
+    expect(c.marci.map(x => [x.marca, x.bucDesen, x.bucExtras, x.bucOk, x.lungimeOk])).toEqual([['1', 1, 1, true, true], ['4', 0, 8, false, false]])
+    expect([c.bucDesen, c.bucExtras, c.complet]).toEqual([1, 9, false])
+    expect(c.greutateOk).toBe(true)                    // 2,44 kg din extras = doar marca 1: greutatea singură ar fi „verde”
+    expect(c.controlOk).toBe(false)                    // dar controlul nu e complet
+    expect(c.motiveIncomplet.join(' ')).toMatch(/fără nicio bară desenată: marca 4 \(8 buc\.\)/)
+  })
+  it('review r2: date parțial respinse — o marcă respinsă, una fără bare, o bară invalidă: totalul din extras e cel original', () => {
+    const m = MODEL()
+    const a = m.grupuri[0].armare
+    a.marci[0].buc = 2
+    a.marci.push({ marca: '2', d: 12, otel: 'PC52', buc: 3, lungime_mm: 1000 })           // va rămâne fără bare
+    a.marci.push({ marca: '3', d: 61, otel: 'PC52', buc: 4, lungime_mm: 1000 })           // diametru peste 60 = respinsă
+    m.grupuri[0].elemente.push({ tip: 'bara', marca: '1', d: 14, r: 0, puncte: [[0, 0, 0], [0, 0, 0.2]] })   // segment sub 1 mm
+    const p = parseModel3d(m)
+    const e = p.erori.join(' | ')
+    expect(e).toMatch(/marca 3 \(3\): diametru invalid.*controlul extrasului e incomplet/)
+    expect(e).toMatch(/elementul 3 \(bara\): segmentul 1/)
+    expect(e).toMatch(/marca 2 \(Ø12\) nu are nicio bară validă/)
+    expect(p.grupuri[0].armare.respinse).toEqual([{ rand: 3, marca: '3', buc: 4 }])
+    const c = controlArmare(p.grupuri[0])
+    expect([c.bucDesen, c.bucExtras, c.bucExtrasNecunoscut, c.complet, c.controlOk]).toEqual([1, 2 + 3 + 4, false, false, false])
+    expect(c.motiveIncomplet).toHaveLength(2)
+    // fără mărci respinse și cu toate mărcile desenate, dar o bară lipsă (1 din 2): tot incomplet, cu motivul bucăților
+    const n = MODEL(); n.grupuri[0].armare.marci[0].buc = 2
+    const cn = controlArmare(parseModel3d(n).grupuri[0])
+    expect([cn.complet, cn.controlOk]).toEqual([false, false])
+    expect(cn.motiveIncomplet).toEqual(['bucăți desenate 1 față de 2 în extras'])
+  })
+  it('review r2 (P3): textele de alt tip (obiect, listă, adevărat / fals) sunt respinse, nu transformate în „[object Object]”', () => {
+    const marca = f => { const m = MODEL(); const x = { marca: '2', d: 10, otel: 'PC52', buc: 1, lungime_mm: 100 }; f(x); m.grupuri[0].armare.marci.push(x); return parseModel3d(m) }
+    for (const [f, re] of [
+      [x => { x.otel = {} }, /marca 2 \(2\): oțelul trebuie să fie text/],
+      [x => { x.otel = ['PC52'] }, /oțelul trebuie să fie text/],
+      [x => { x.otel = true }, /oțelul trebuie să fie text/],
+      [x => { x.forma = { a: 1 } }, /forma trebuie să fie text/],
+    ]) {
+      const p = marca(f)
+      expect(p.erori.join(' | ')).toMatch(re)
+      expect(JSON.stringify(p)).not.toContain('[object Object]')
+      expect(p.grupuri[0].armare.marci.map(x => x.marca)).toEqual(['1'])
+      expect(p.grupuri[0].armare.respinse.map(x => x.marca)).toEqual(['2'])
+    }
+    const nr = marca(x => { x.otel = 52 })                                  // un număr e text acceptat („52”)
+    expect(nr.erori.join(' | ')).not.toMatch(/oțelul/)
+    expect(nr.grupuri[0].armare.marci.map(x => [x.marca, x.otel])).toEqual([['1', 'PC52'], ['2', '52']])
+    const cu = (f, re) => { const m = MODEL(); f(m.grupuri[0]); const p = parseModel3d(m); expect(p.erori.join(' | ')).toMatch(re); expect(JSON.stringify(p)).not.toContain('[object Object]'); return p }
+    cu(g => { g.elemente[0].et = {} }, /elementul 1 \(bara\): eticheta trebuie să fie text/)
+    cu(g => { g.elemente[1].et = ['Bloc'] }, /elementul 2 \(beton\): eticheta trebuie să fie text/)
+    const s = cu(g => { g.armare.extras_sursa = { fisier: 'x' } }, /sursa extrasului nu e text/)
+    expect(s.grupuri[0].armare.extrasSursa).toBe('')
+    const d = cu(g => { g.armare.de_confirmat = ['Lungimea mărcii 1', {}, ['x']] }, /punctul de confirmat 2 nu e text/)
+    expect(d.erori.join(' | ')).toMatch(/punctul de confirmat 3 nu e text/)
+    expect(d.grupuri[0].armare.deConfirmat).toHaveLength(3)                // punctele necitite rămân în avertisment, nu dispar
+    expect(d.grupuri[0].armare.deConfirmat[1]).toMatch(/Punctul 2 nu s-a putut citi/)
   })
   it('alte valori lipsă sau imposibile la bare / buloane', () => {
     const cu = (f, re) => { const m = MODEL(); f(m.grupuri[0].elemente[0]); expect(eroriDe(m)).toMatch(re) }
@@ -153,7 +209,9 @@ describe('validatorul elementelor noi: lipsă / imposibil = respins, nimic compl
     const cu = (marca, re) => {
       const m = MODEL(); m.grupuri[0].armare.marci.push(marca)
       expect(eroriDe(m)).toMatch(re)
-      expect(parseModel3d(m).grupuri[0].armare.marci.map(x => x.marca)).toEqual(['1'])
+      const a = parseModel3d(m).grupuri[0].armare
+      expect(a.marci.map(x => x.marca)).toEqual(['1'])
+      expect(a.respinse).toHaveLength(1)                                  // respinsă, dar numărată în extras (review r2)
     }
     cu({ marca: '1', d: 14, otel: 'PC52', buc: 1, lungime_mm: 2014 }, /marcă duplicată/)
     cu({ marca: '2', otel: 'PC52', buc: 1, lungime_mm: 100 }, /marca 2 \(2\): diametrul lipsește/)
@@ -240,6 +298,12 @@ describe('amplasarea și „Toată instalația” cu beton / bare', () => {
     const inst = instalatia(parseModel3d(m))
     expect(inst.parti[0].armare.marci[0].marca).toBe('1')
     expect('armare' in inst.parti[1]).toBe(false)
+    // review r2: vederea comună are câte un panou pe grupul cu armare, cu starea lui (reuniunea nu are bloc `armare`)
+    expect('armare' in inst).toBe(false)
+    const pan = panouriArmare(inst)
+    expect(pan.map(x => [x.id, x.titlu, x.ctrl?.stareLista])).toEqual([['fund', 'Fundație', 'neconfirmata']])
+    expect(panouriArmare(parseModel3d(MODEL()).grupuri[0]).map(x => x.ctrl.stareLista)).toEqual(['neconfirmata'])
+    expect(panouriArmare(inst.parti[1])).toEqual([])                      // grupul doar cu țevi: niciun panou
   })
 })
 

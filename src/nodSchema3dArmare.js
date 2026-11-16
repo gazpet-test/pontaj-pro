@@ -21,6 +21,12 @@ const RE_MARCA = /^[A-Za-z0-9][A-Za-z0-9.-]{0,11}$/
 const CERT = ['desen', 'estimat']
 
 const txt = v => (v == null ? '' : String(v).trim())
+/**
+ * Câmp de text strict (review r2): șir (fără spațiile de la capete) sau număr finit; lipsă = ''. Orice alt tip (obiect, listă,
+ * adevărat / fals) = null, adică eroare la validare (nu „[object Object]”).
+ */
+export const textStrict = v => (v == null ? '' : typeof v === 'string' ? v.trim() : typeof v === 'number' && Number.isFinite(v) ? String(v) : null)
+const bucValide = v => Number.isInteger(v) && v >= 1 && v <= LIM.buc
 const estePunct = p => Array.isArray(p) && p.length === 3 && p.every(c => typeof c === 'number' && Number.isFinite(c) && Math.abs(c) <= LIM.coord)
 const intre = (v, min, max) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max
 const pozitiv = (v, max) => typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= max
@@ -71,7 +77,8 @@ export function verificaTraseu(puncte, r) {
 /** Validarea unui element de tip nou. `marci` = Map marca -> marca validă din blocul `armare` al grupului. Motivul sau null. */
 export function validElementArmare(e, tip, marci) {
   if (e.cert != null && !CERT.includes(e.cert)) return 'certitudine invalidă'
-  if (e.et != null && txt(e.et).length > LIM.text) return 'eticheta e prea lungă'
+  if (e.et != null && textStrict(e.et) === null) return 'eticheta trebuie să fie text'
+  if (e.et != null && textStrict(e.et).length > LIM.text) return 'eticheta e prea lungă'
   if (tip === 'bara' || tip === 'bulon') {
     if (tip === 'bara') {
       const m = textMarca(e.marca)
@@ -132,8 +139,10 @@ const CHEI_MARCA = ['marca', 'd', 'otel', 'buc', 'lungime_mm', 'kg_m', 'forma']
 
 /**
  * Validarea blocului `armare`. Lipsă / null = fără armare (fără eroare). Structură greșită = armare null + eroare (barele grupului
- * ies apoi ca „marcă necunoscută”, deci vizibile ca erori). O marcă invalidă = eroare pe ea, restul rămân. Textele prea lungi se
- * raportează (nu se taie în tăcere). Întoarce { armare, erori }.
+ * ies apoi ca „marcă necunoscută”, deci vizibile ca erori). O marcă invalidă = eroare pe ea, restul rămân; marca respinsă intră în
+ * `respinse` (cu bucățile ei, dacă se pot citi), ca totalul extrasului să nu scadă în tăcere și controlul să iasă INCOMPLET
+ * (review r2). Textele prea lungi se raportează (nu se taie în tăcere); textele de alt tip (obiect, listă) sunt erori.
+ * Întoarce { armare, erori }.
  */
 export function citesteArmare(a) {
   const erori = []
@@ -147,41 +156,51 @@ export function citesteArmare(a) {
   if (a.marci.length > LIM.marci) return nu(`are peste ${LIM.marci} de mărci`)
   if (a.extras_kg != null && !pozitiv(a.extras_kg, 1e7)) return nu('„extras_kg” trebuie să fie un număr peste 0')
   if (a.de_confirmat != null && !Array.isArray(a.de_confirmat)) return nu('„de_confirmat” trebuie să fie o listă de texte')
-  const marci = [], vazute = new Set()
+  const marci = [], respinse = [], vazute = new Set()
   a.marci.forEach((m, i) => {
-    const et = `armarea grupului, marca ${i + 1} (${textMarca(m?.marca).slice(0, 12) || '?'})`
-    if (!m || typeof m !== 'object' || Array.isArray(m)) { erori.push(`${et}: nu e un obiect`); return }
+    const id = textMarca(m?.marca)
+    const et = `armarea grupului, marca ${i + 1} (${id.slice(0, 12) || '?'})`
+    const respinge = pb => {
+      erori.push(`${et}: ${pb}; marca nu se afișează, controlul extrasului e incomplet`)
+      respinse.push({ rand: i + 1, marca: id.slice(0, 12) || null, buc: bucValide(m?.buc) ? m.buc : null })
+    }
+    if (!m || typeof m !== 'object' || Array.isArray(m)) { respinge('nu e un obiect'); return }
     const nec = Object.keys(m).filter(k => !CHEI_MARCA.includes(k))
-    const id = textMarca(m.marca)
+    const otel = textStrict(m.otel), forma = textStrict(m.forma)
     const pb = nec.length ? `câmpuri necunoscute (${nec.join(', ').slice(0, 60)})`
       : !id ? 'marca lipsește'
       : !RE_MARCA.test(id) ? 'marca e invalidă (litere, cifre, punct sau minus; cel mult 12)'
       : vazute.has(id) ? 'marcă duplicată'
       : m.d == null ? 'diametrul lipsește'
       : !intre(m.d, LIM.dMin, LIM.dMax) ? `diametru invalid (între ${LIM.dMin} și ${LIM.dMax} mm)`
-      : !txt(m.otel) || txt(m.otel).length > 20 ? 'oțelul lipsește sau e prea lung'
-      : !(Number.isInteger(m.buc) && m.buc >= 1 && m.buc <= LIM.buc) ? 'numărul de bucăți lipsește sau nu e un întreg peste 0'
+      : otel === null ? 'oțelul trebuie să fie text'
+      : !otel || otel.length > 20 ? 'oțelul lipsește sau e prea lung'
+      : !bucValide(m.buc) ? 'numărul de bucăți lipsește sau nu e un întreg peste 0'
       : !pozitiv(m.lungime_mm, LIM.lungime) ? 'lungimea (lungime_mm) lipsește sau e invalidă'
       : m.kg_m != null && !pozitiv(m.kg_m, LIM.kgm) ? '„kg_m” e invalid'
-      : m.forma != null && txt(m.forma).length > LIM.text ? 'forma e prea lungă'
+      : forma === null ? 'forma trebuie să fie text'
+      : forma.length > LIM.text ? 'forma e prea lungă'
       : null
-    if (pb) { erori.push(`${et}: ${pb}; marca nu se afișează`); return }
+    if (pb) { respinge(pb); return }
     vazute.add(id)
-    marci.push({ marca: id, d: m.d, otel: txt(m.otel), buc: m.buc, lungimeMm: m.lungime_mm, kgM: m.kg_m == null ? null : m.kg_m, forma: txt(m.forma) })
+    marci.push({ marca: id, d: m.d, otel, buc: m.buc, lungimeMm: m.lungime_mm, kgM: m.kg_m == null ? null : m.kg_m, forma })
   })
   const dc = a.de_confirmat || []
   if (dc.length > LIM.deConfirmat) erori.push(`armarea grupului: „de_confirmat” are ${dc.length} puncte; peste ${LIM.deConfirmat} nu se afișează`)
   const deConfirmat = []
   dc.slice(0, LIM.deConfirmat).forEach((x, i) => {
-    const t = txt(x)
+    const t = textStrict(x)
+    // un punct de confirmat care nu e text nu dispare din avertisment: rămâne ca rând „necitit”, cu eroarea lui
+    if (t === null) { erori.push(`armarea grupului: punctul de confirmat ${i + 1} nu e text`); deConfirmat.push(`Punctul ${i + 1} nu s-a putut citi (vezi erorile modelului).`); return }
     if (!t) { erori.push(`armarea grupului: punctul de confirmat ${i + 1} e gol`); return }
     if (t.length > LIM.nota) erori.push(`armarea grupului: punctul de confirmat ${i + 1} are peste ${LIM.nota} caractere (tăiat)`)
     deConfirmat.push(t.slice(0, LIM.nota))
   })
-  const sursa = txt(a.extras_sursa)
+  let sursa = textStrict(a.extras_sursa)
+  if (sursa === null) { erori.push('armarea grupului: sursa extrasului nu e text (nu se afișează)'); sursa = '' }
   if (sursa.length > LIM.text) erori.push(`armarea grupului: sursa extrasului are peste ${LIM.text} caractere (tăiată)`)
   return {
-    armare: { stareLista: a.stare_lista, deConfirmat, marci, extrasKg: a.extras_kg == null ? null : a.extras_kg, extrasSursa: sursa.slice(0, LIM.text) },
+    armare: { stareLista: a.stare_lista, deConfirmat, marci, respinse, extrasKg: a.extras_kg == null ? null : a.extras_kg, extrasSursa: sursa.slice(0, LIM.text) },
     erori,
   }
 }
@@ -267,6 +286,11 @@ export const culoareDiametru = d => CULORI_DIAMETRU[d] || CULOARE_DIAMETRU_ALTA
  * Legenda și controlul armăturii unui grup cu bloc `armare` (null fără el). Pe fiecare marcă: bucățile desenate față de extras,
  * lungimea desenată (min / max, ca în extras) față de extras, greutatea desenată (lungime × densitate × secțiune); totalul și,
  * dacă modelul are greutatea din extras, diferența procentuală. Barele unei mărci care NU e în listă nu există (validarea le respinge).
+ * Review r2 — numitorul extrasului nu scade: `bucExtras` = bucățile TUTUROR mărcilor din extras, inclusiv cele respinse la citire
+ * (`bucExtrasNecunoscut` = o marcă respinsă nu are nici bucățile citibile). Controlul e `complet` doar dacă nicio marcă nu e
+ * respinsă, fiecare marcă are bare desenate și bucățile desenate sunt exact cele din extras; altfel `motiveIncomplet` spune de ce,
+ * iar `controlOk` (greutatea în prag ȘI control complet) nu poate fi adevărat. Fără greutatea din extras: `controlOk` = null
+ * (necunoscut, nu „în regulă”, nu 0).
  */
 export function controlArmare(grup) {
   const ar = grup?.armare
@@ -290,12 +314,46 @@ export function controlArmare(grup) {
   })
   const kgDesen = marci.reduce((s, m) => s + m.kgDesen, 0)
   const diferentaProc = ar.extrasKg ? (kgDesen / ar.extrasKg - 1) * 100 : null
+  const respinse = ar.respinse || []
+  const bucDesen = marci.reduce((s, m) => s + m.bucDesen, 0)
+  const bucExtras = marci.reduce((s, m) => s + m.bucExtras, 0) + respinse.reduce((s, r) => s + (r.buc || 0), 0)
+  const bucExtrasNecunoscut = respinse.some(r => r.buc == null)
+  const motiveIncomplet = []
+  if (respinse.length) {
+    motiveIncomplet.push(`${respinse.length === 1 ? 'o marcă din extras e respinsă' : `${respinse.length} mărci din extras sunt respinse`} la citire (` +
+      respinse.map(r => (r.marca ? `marca ${r.marca}` : 'fără marcă') + `, rândul ${r.rand}` + (r.buc == null ? ', bucăți necitite' : `, ${r.buc} buc.`)).join('; ') + ')')
+  }
+  const faraBare = marci.filter(m => m.bucDesen === 0)
+  if (faraBare.length) motiveIncomplet.push(`fără nicio bară desenată: ${faraBare.map(m => `marca ${m.marca} (${m.bucExtras} buc.)`).join(', ')}`)
+  if (!motiveIncomplet.length && bucDesen !== bucExtras) motiveIncomplet.push(`bucăți desenate ${bucDesen} față de ${bucExtras} în extras`)
+  const complet = motiveIncomplet.length === 0
+  const greutateOk = diferentaProc == null ? null : Math.abs(diferentaProc) <= PRAG_CONTROL_PROC
   return {
     stareLista: ar.stareLista, deConfirmat: ar.deConfirmat, extrasSursa: ar.extrasSursa,
     marci, kgDesen, extrasKg: ar.extrasKg, diferentaProc,
-    controlOk: diferentaProc == null ? null : Math.abs(diferentaProc) <= PRAG_CONTROL_PROC,
-    bucDesen: marci.reduce((s, m) => s + m.bucDesen, 0), bucExtras: marci.reduce((s, m) => s + m.bucExtras, 0),
+    greutateOk, complet, motiveIncomplet,
+    controlOk: greutateOk == null ? null : greutateOk && complet,
+    bucDesen, bucExtras, bucExtrasNecunoscut,
   }
+}
+
+/**
+ * Cheia unei mărci în ascunderea din ecran: partea (grupul) + marca. Aceeași marcă („1”) poate exista în mai multe grupuri ale
+ * vederii comune; id-ul grupului nu are „/” (RE_ID), deci cheia nu se confundă. Nu se amestecă cu sub-grupurile interne ale scenei.
+ */
+export const cheieMarca = (parteId, marca) => `${parteId}/${marca}`
+
+/**
+ * Panourile de armare ale unei vederi (review r2): în vederea grupului = grupul, dacă are ceva de arătat; în „Toată instalația”
+ * (grup.parti) = câte un panou pe FIECARE grup cu armare / beton / piese, cu starea listei lui. Așa un grup neconfirmat își păstrează
+ * avertismentul și în vederea comună (blocul `armare` stă pe părți, nu pe reuniune). [{ id, titlu, ctrl, cont }]
+ */
+export function panouriArmare(grup) {
+  if (!grup) return []
+  const surse = Array.isArray(grup.parti) ? grup.parti : [grup]
+  return surse
+    .map(p => ({ id: p.id, titlu: p.titlu || p.id, ctrl: controlArmare(p), cont: continutArmare(p) }))
+    .filter(x => x.ctrl || x.cont.bare + x.cont.beton + x.cont.buloane + x.cont.placi > 0)
 }
 
 /** Ce are grupul în afară de țevi (pentru butoanele și legenda din ecran): beton, piese înglobate, bare. */

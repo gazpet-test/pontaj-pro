@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { G, S } from './NodCuplareVizualizare.jsx'
 import { celMaiAproape, RAZA_ATINGERE } from './nodCuplareLogica.js'
 import { culoarePunct3d, culoareDn, dnuriGrup, diametruExterior, razaSfera, cutieGrup, spreScena, esteAtingere, gestNou, gestMisca, puncteVizibile, departareCamera, puncteElement } from './nodSchema3dLogica.js'
-import { controlArmare, continutArmare, traseuBara, culoareMarca, culoareDiametru, DENSITATE_OTEL, PRAG_CONTROL_PROC } from './nodSchema3dArmare.js'
+import { continutArmare, panouriArmare, cheieMarca, traseuBara, culoareMarca, culoareDiametru, DENSITATE_OTEL, PRAG_CONTROL_PROC } from './nodSchema3dArmare.js'
 
 export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
   const gazda = useRef(null)
@@ -35,8 +35,10 @@ export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
   const comun = Array.isArray(grup?.parti)
   const areEtichete = comun && grup.elemente.some(e => e.tip === 'eticheta')
   const vizibile = useMemo(() => puncteVizibile(puncte || [], ascunse), [puncte, ascunse])
-  // armături: legenda pe mărci (doar în vederea grupului, care are blocul `armare`), ce se vede și culoarea
-  const ctrl = useMemo(() => controlArmare(grup), [grup])
+  // armături: un panou (starea listei, mărcile, controlul) pe fiecare grup cu armare — și în „Toată instalația”, unde blocul
+  // `armare` stă pe părți (review r2: altfel avertismentul „neconfirmată” dispărea în vederea comună); ce se vede și culoarea.
+  // Mărcile ascunse se țin pe cheia grup + marcă (cheieMarca), separat de sub-grupurile interne ale scenei (beton, piese).
+  const panouri = useMemo(() => panouriArmare(grup), [grup])
   const cont = useMemo(() => continutArmare(grup), [grup])
   const areArmare = cont.bare + cont.beton + cont.buloane + cont.placi > 0
   const [ascunseMarci, setAscunseMarci] = useState(() => new Set())
@@ -152,21 +154,28 @@ export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
         ))}
         <span style={{ color: G.dim }}>{dnuri.length > 0 || !areArmare ? '· ' : ''}mai deschis = estimat · un deget rotește, două degete zoom</span>
       </div>
-      {areArmare && <PanouArmare ctrl={ctrl} cont={cont} ascunse={ascunseMarci} comuta={comutaMarca} culoare={culoareArm} />}
+      {panouri.map(p => (
+        <PanouArmare key={p.id} parteId={p.id} titlu={comun ? p.titlu : null} ctrl={p.ctrl} cont={p.cont}
+          ascunse={ascunseMarci} comuta={comutaMarca} culoare={culoareArm} />
+      ))}
     </div>
   )
 }
 
 // ── legenda armăturii: starea listei, punctele de confirmat, mărcile (ascundere), controlul față de extras ──
+// Un panou pe grup (în „Toată instalația”, câte unul pe fiecare grup cu armare, cu titlul grupului). Avertismentul, punctele de
+// confirmat, mărcile „estimate” și controlul NU depind de mărcile ascunse sau de culoare (doar opacitatea rândului / culoarea mostrei).
 const nr = (v, z = 2) => (Number.isFinite(v) ? v.toLocaleString('ro-RO', { minimumFractionDigits: z, maximumFractionDigits: z }) : '—')
 const semn = v => (v > 0 ? '+' : v < 0 ? '−' : '') + nr(Math.abs(v))
-export function PanouArmare({ ctrl, cont, ascunse, comuta, culoare }) {
+export function PanouArmare({ ctrl, cont, ascunse, comuta, culoare, parteId, titlu }) {
   const th = { textAlign: 'right', padding: '4px 6px', color: G.muted, fontWeight: 600, whiteSpace: 'nowrap' }
   const td = { textAlign: 'right', padding: '4px 6px', whiteSpace: 'nowrap' }
   const rau = { color: G.red, fontWeight: 700 }
   const lungimeDesen = m => (m.lungimeMin == null ? '—' : Math.round(m.lungimeMin) === Math.round(m.lungimeMax) ? nr(m.lungimeMin, 0) : `${nr(m.lungimeMin, 0)}…${nr(m.lungimeMax, 0)}`)
+  const totalExtras = ctrl ? `${ctrl.bucExtras}${ctrl.bucExtrasNecunoscut ? ' + ?' : ''}` : ''
   return (
-    <div style={{ marginTop: 8, background: G.surface, border: `1px solid ${G.border2}`, borderRadius: 12, padding: '10px 12px', fontSize: 13, color: G.text }}>
+    <div data-panou-armare={parteId || ''} style={{ marginTop: 8, background: G.surface, border: `1px solid ${G.border2}`, borderRadius: 12, padding: '10px 12px', fontSize: 13, color: G.text }}>
+      {titlu && <div style={{ fontWeight: 800, marginBottom: 6 }}>{titlu}</div>}
       {ctrl?.stareLista === 'neconfirmata' && (
         <div role="alert" style={{ border: `1px solid ${G.yellow}`, background: G.yellow + '22', borderRadius: 10, padding: '8px 10px', marginBottom: 8 }}>
           <div style={{ fontWeight: 800, color: G.yellow }}>⚠ Listă de armături NECONFIRMATĂ DE OM</div>
@@ -193,17 +202,19 @@ export function PanouArmare({ ctrl, cont, ascunse, comuta, culoare }) {
             </thead>
             <tbody>
               {ctrl.marci.map(m => {
-                const vizibil = !ascunse.has(m.marca)
+                const cheie = cheieMarca(parteId, m.marca)
+                const vizibil = !ascunse?.has(cheie)
                 return (
                   <tr key={m.marca} style={{ borderBottom: `1px solid ${G.border2}`, opacity: vizibil ? 1 : 0.55 }}>
                     <td style={{ ...td, textAlign: 'left' }}>
-                      <button onClick={() => comuta(m.marca)} aria-pressed={vizibil} title={(vizibil ? 'Ascunde' : 'Arată') + ` marca ${m.marca}` + (m.forma ? ` — ${m.forma}` : '')}
+                      <button onClick={() => comuta?.(cheie)} aria-pressed={vizibil} title={(vizibil ? 'Ascunde' : 'Arată') + ` marca ${m.marca}` + (m.forma ? ` — ${m.forma}` : '')}
                         style={{ ...S.btn, minHeight: 36, padding: '0 8px', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, background: vizibil ? G.surface2 : G.bg }}>
                         {vizibil ? '👁' : '🚫'}
                         <span style={{ width: 16, height: 6, borderRadius: 3, background: culoare === 'diametru' ? m.culoareD : m.culoare }} />
                         <b>{m.marca}</b>
                       </button>
                       {m.estimate > 0 && <span style={{ color: G.yellow, marginLeft: 6 }}>{m.estimate} estimate</span>}
+                      {m.bucDesen === 0 && <span style={{ ...rau, marginLeft: 6 }}>fără bare</span>}
                     </td>
                     <td style={td}>{m.d}</td>
                     <td style={{ ...td, textAlign: 'left' }}>{m.otel}</td>
@@ -216,7 +227,7 @@ export function PanouArmare({ ctrl, cont, ascunse, comuta, culoare }) {
               })}
               <tr>
                 <td style={{ ...td, textAlign: 'left', fontWeight: 700 }} colSpan={3}>Total</td>
-                <td style={{ ...td, fontWeight: 700, ...(ctrl.bucDesen === ctrl.bucExtras ? {} : rau) }}>{ctrl.bucDesen} / {ctrl.bucExtras}</td>
+                <td data-total-bucati style={{ ...td, fontWeight: 700, ...(ctrl.complet ? {} : rau) }}>{ctrl.bucDesen} / {totalExtras}</td>
                 <td style={td} colSpan={2} />
                 <td style={{ ...td, fontWeight: 700 }}>{nr(ctrl.kgDesen)}</td>
               </tr>
@@ -224,15 +235,25 @@ export function PanouArmare({ ctrl, cont, ascunse, comuta, culoare }) {
           </table>
         </div>
       )}
-      {ctrl?.extrasKg != null && (
-        <div data-control-extras style={{ marginTop: 8, fontWeight: 700, color: ctrl.controlOk ? G.green : G.red }}>
-          Greutate desenată {nr(ctrl.kgDesen)} kg față de extras {nr(ctrl.extrasKg)} kg ({semn(ctrl.diferentaProc)}%)
-          {ctrl.controlOk ? ' ✓' : ` — peste ±${PRAG_CONTROL_PROC}%, de verificat`}
+      {/* rândul de control apare mereu când grupul are armare: fără greutatea din extras scrie „extras necunoscut” (nu lipsește, nu 0);
+          verde doar cu greutatea în prag ȘI controlul complet (nicio marcă respinsă / fără bare, bucățile egale cu extrasul) */}
+      {ctrl && (
+        <div data-control-extras style={{ marginTop: 8, fontWeight: 700, color: ctrl.extrasKg == null ? G.yellow : ctrl.controlOk ? G.green : G.red }}>
+          {ctrl.extrasKg == null
+            ? `Greutate desenată ${nr(ctrl.kgDesen)} kg · extras necunoscut (modelul nu are greutatea totală din extras), control nefăcut`
+            : `Greutate desenată ${nr(ctrl.kgDesen)} kg față de extras ${nr(ctrl.extrasKg)} kg (${semn(ctrl.diferentaProc)}%)` +
+              (ctrl.greutateOk ? (ctrl.complet ? ' ✓' : '') : ` — peste ±${PRAG_CONTROL_PROC}%, de verificat`)}
+        </div>
+      )}
+      {ctrl && !ctrl.complet && (
+        <div data-control-incomplet role="alert" style={{ marginTop: 4, fontWeight: 700, color: G.red }}>
+          ⚠ Control INCOMPLET: {ctrl.motiveIncomplet.join('; ')}.
         </div>
       )}
       {ctrl && (
-        <div style={{ fontSize: 11, color: G.dim, marginTop: 4 }}>
+        <div data-nota-greutate style={{ fontSize: 11, color: G.dim, marginTop: 4 }}>
           Lungimea desenată e măsurată ca în extras (laturile pe exterior); greutatea = lungime × {DENSITATE_OTEL} kg/m³ × secțiunea barei.
+          Greutatea urmează convenția laturilor din extras, nu lungimea dezvoltată pe axa barei: e o verificare față de extras, nu masa fizică exactă.
           {ctrl.extrasSursa ? ` Extras: ${ctrl.extrasSursa}.` : ''}
         </div>
       )}
@@ -343,13 +364,15 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
     }
 
     // ── armături, beton, piese înglobate (create doar dacă grupul le are: modelele vechi rămân identice) ──
-    const subGrup = cheie => {
-      if (cheie === 'beton' || cheie === 'inglobate') {
-        if (!parte[cheie]) { parte[cheie] = new THREE.Group(); parte[cheie].name = cheie; parte.obiect.add(parte[cheie]) }
-        return parte[cheie]
-      }
-      if (!parte.marci.has(cheie)) { const g = new THREE.Group(); g.name = `marca:${cheie}`; parte.obiect.add(g); parte.marci.set(cheie, g) }
-      return parte.marci.get(cheie)
+    // Două funcții separate (review r2): sub-grupurile interne (betonul, piesele înglobate) au identitatea lor, iar mărcile stau în
+    // `parte.marci` după textul mărcii — o marcă scrisă „beton” sau „inglobate” rămâne marcă (grupul „marca:beton”), nu intră în beton.
+    const subGrupIntern = cheie => {               // cheie = 'beton' | 'inglobate' (doar din cod, niciodată din model)
+      if (!parte[cheie]) { parte[cheie] = new THREE.Group(); parte[cheie].name = cheie; parte.obiect.add(parte[cheie]) }
+      return parte[cheie]
+    }
+    const subGrupMarca = marca => {
+      if (!parte.marci.has(marca)) { const g = new THREE.Group(); g.name = `marca:${marca}`; parte.obiect.add(g); parte.marci.set(marca, g) }
+      return parte.marci.get(marca)
     }
     // materialele barelor: câte unul pe parte + marcă + certitudine (culoarea se schimbă pe loc: pe marcă / pe diametru)
     const materialeBare = new Map()          // cheie -> { m, marca, diametru }
@@ -384,8 +407,8 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
     }
     const pieseArmare = e => {
       const est = e.cert === 'estimat'
-      if (e.tip === 'bara') tub(traseuBara(e.puncte, e.r), mm(e.d) / 2, matBara(e.marca, e.d, est), subGrup(e.marca))
-      else if (e.tip === 'bulon') tub(traseuBara(e.puncte, e.r), mm(e.d) / 2, mat('#7B6BA8', est, { piesa: 1 }), subGrup('inglobate'))
+      if (e.tip === 'bara') tub(traseuBara(e.puncte, e.r), mm(e.d) / 2, matBara(e.marca, e.d, est), subGrupMarca(e.marca))
+      else if (e.tip === 'bulon') tub(traseuBara(e.puncte, e.r), mm(e.d) / 2, mat('#7B6BA8', est, { piesa: 1 }), subGrupIntern('inglobate'))
       else if (e.tip === 'placa') {
         const x = e.lx / 2, y = e.ly / 2
         const forma = new THREE.Shape([new THREE.Vector2(-x, -y), new THREE.Vector2(x, -y), new THREE.Vector2(x, y), new THREE.Vector2(-x, y)])
@@ -396,9 +419,9 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
         const placa = new THREE.Mesh(geo, mat('#55606B', est, { piesa: 1 }))
         placa.position.copy(V(e.centru))       // centrul feței de jos
         placa.rotation.y = rad(e.rotZ)
-        adauga(placa, subGrup('inglobate'))
+        adauga(placa, subGrupIntern('inglobate'))
       } else if (e.tip === 'beton') {
-        const g = subGrup('beton')
+        const g = subGrupIntern('beton')
         const geo = new THREE.BoxGeometry(mm(e.dim[0]), mm(e.dim[2]), mm(e.dim[1]))
         const muchii = new THREE.LineSegments(new THREE.EdgesGeometry(geo), matLinie(est))
         const bloc = new THREE.Mesh(geo, mat('#A3A39B', false, { opacity: est ? 0.08 : 0.16, beton: 1 }))
@@ -679,10 +702,10 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
       etichete: vizibil => { for (const p of parti.values()) p.etichete.visible = vizibil; randeaza() },
       // grupurile ascunse (vederea comună); sferele lor le scoate pagina din lista dată la aplicaPuncte (puncteVizibile)
       ascunde: ascunse => { for (const [id, p] of parti) p.obiect.visible = !ascunse?.has(id); randeaza() },
-      // armături: mărcile ascunse, betonul, piesele înglobate și culoarea barelor (pe marcă / pe diametru)
+      // armături: mărcile ascunse (chei grup + marcă, cheieMarca), betonul, piesele înglobate și culoarea barelor (pe marcă / pe diametru)
       armare: ({ ascunseMarci, beton = true, inglobate = true, culoare = 'marca' } = {}) => {
         for (const p of parti.values()) {
-          for (const [marca, g] of p.marci) g.visible = !ascunseMarci?.has(marca)
+          for (const [marca, g] of p.marci) g.visible = !ascunseMarci?.has(cheieMarca(p.id, marca))
           if (p.beton) p.beton.visible = beton
           if (p.inglobate) p.inglobate.visible = inglobate
         }

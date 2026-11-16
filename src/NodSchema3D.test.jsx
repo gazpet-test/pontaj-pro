@@ -1,21 +1,13 @@
 // Eliberarea resurselor scenei 3D (review r2): Three.js REAL (geometrii, materiale, scenă), dar renderer și OrbitControls FALSE
 // (jsdom nu are WebGL), ca să vedem ce se eliberează: la ieșire normală ȘI când construcția pică la jumătate (renderer.setSize aruncă,
-// după ce controalele, ascultătorii și ResizeObserver-ul sunt deja create). jsdom nu e dependență: se caută în node_modules sau în
-// REDARI_JSDOM_DIR (tiparul din NodCuplareSchema.test.jsx); fără el, suita e SĂRITĂ VIZIBIL.
+// după ce controalele, ascultătorii și ResizeObserver-ul sunt deja create). Review r2 pe armături (16.11.2026): DOM fals minim
+// (nodSchema3dDomFals.testutil.js) în locul lui jsdom, care nu e dependență — suita rulează peste tot, nu mai e sărită.
 import { afterEach, describe, it, expect, vi } from 'vitest'
-import { createRequire } from 'node:module'
-import path from 'node:path'
 import * as THREE_REAL from 'three'
 import * as THREE_SCENA from './nodSchema3dThree.js'
 import { construiesteScena } from './NodSchema3D.jsx'
 import { parseModel3d, instalatia } from './nodSchema3dLogica.js'
-
-let JSDOM = null
-const surse = [import.meta.url, process.env.REDARI_JSDOM_DIR && path.join(process.env.REDARI_JSDOM_DIR, 'package.json')].filter(Boolean)
-for (const s of surse) { try { JSDOM = createRequire(s)('jsdom').JSDOM; break } catch { /* următoarea sursă */ } }
-const MOTIV_SARIT = 'SĂRIT: lipsește jsdom (nu e dependență a proiectului; rulează cu REDARI_JSDOM_DIR=<dir cu jsdom instalat>)'
-if (!JSDOM) console.warn(`[NodSchema3D.test] ${MOTIV_SARIT}`)
-const dom = JSDOM ? describe : describe.skip
+import { instaleazaDomFals } from './nodSchema3dDomFals.testutil.js'
 
 const GRUP = {
   id: 'rez', titlu: 'Test', prefixe: ['CR'], terenZ: 0,
@@ -29,18 +21,16 @@ const GRUP = {
   faraPozitie: [],
 }
 
-let vechi = null
-afterEach(() => { if (vechi) Object.assign(globalThis, vechi); vechi = null; vi.restoreAllMocks() })
+let refa = null
+afterEach(() => { refa?.(); refa = null; vi.restoreAllMocks() })
 
 function mediu({ picaLaSetSize = 0 } = {}) {   // picaLaSetSize = al câtelea apel al lui setSize aruncă (0 = niciunul)
-  const j = new JSDOM('<!doctype html><div id="g"></div>', { pretendToBeVisual: true })
-  vechi = { window: globalThis.window, document: globalThis.document, ResizeObserver: globalThis.ResizeObserver,
-    requestAnimationFrame: globalThis.requestAnimationFrame, cancelAnimationFrame: globalThis.cancelAnimationFrame }
   const observatoare = []
   class RO { constructor(cb) { this.cb = cb; this.observa = 0; this.deconectat = 0; observatoare.push(this) } observe() { this.observa++ } disconnect() { this.deconectat++ } }
-  Object.assign(globalThis, { window: j.window, document: j.window.document, ResizeObserver: RO,
-    requestAnimationFrame: cb => setTimeout(cb, 0), cancelAnimationFrame: id => clearTimeout(id) })
-  const d = j.window.document
+  // gazda, canvas-urile (renderer + etichete, cu context 2D fals) și numărătoarea ascultătorilor `pointer*` vin din DOM-ul fals
+  const dom = instaleazaDomFals({ ResizeObserver: RO })
+  refa = dom.refa
+  const d = globalThis.document
   const randere = []
   class RendererFals {
     constructor() {
@@ -64,21 +54,11 @@ function mediu({ picaLaSetSize = 0 } = {}) {   // picaLaSetSize = al câtelea ap
     update() {}
   }
   const THREE = { ...THREE_SCENA, WebGLRenderer: RendererFals }   // exact ce primește scena în aplicație (exporturile pe nume)
-  const gazda = d.getElementById('g')
-  // ascultătorii de pe canvas: se numără adăugările și scoaterile (controalele false nu pun ascultători, deci sunt doar ai scenei)
-  const contor = { add: 0, rem: 0 }
-  // jsdom nu are context 2D (fără pachetul canvas): unul fals, ca etichetele să se creeze (textul nu contează aici)
-  j.window.HTMLCanvasElement.prototype.getContext = function (t) {
-    return t === '2d' ? { font: '', fillStyle: '', textBaseline: '', measureText: s => ({ width: String(s).length * 20 }), fillRect() {}, fillText() {} } : null
-  }
-  const origAdd = j.window.HTMLCanvasElement.prototype.addEventListener
-  const origRem = j.window.HTMLCanvasElement.prototype.removeEventListener
-  j.window.HTMLCanvasElement.prototype.addEventListener = function (t, f, o) { if (t.startsWith('pointer')) contor.add++; return origAdd.call(this, t, f, o) }
-  j.window.HTMLCanvasElement.prototype.removeEventListener = function (t, f, o) { if (t.startsWith('pointer')) contor.rem++; return origRem.call(this, t, f, o) }
-  return { THREE, ControaleFalse, gazda, randere, controale, observatoare, contor }
+  // ascultătorii de pe canvas: se numără adăugările și scoaterile `pointer*` (controalele false nu pun ascultători, deci sunt doar ai scenei)
+  return { THREE, ControaleFalse, gazda: dom.gazda, randere, controale, observatoare, contor: dom.contor }
 }
 
-dom(JSDOM ? 'NodSchema3D — eliberarea resurselor (jsdom + Three.js real)' : `NodSchema3D — eliberarea resurselor — ${MOTIV_SARIT}`, () => {
+describe('NodSchema3D — eliberarea resurselor (DOM fals + Three.js real; nu se sare)', () => {
   it('ieșire normală: dispose eliberează rendererul, canvas-ul, controalele, ascultătorii, observatorul', async () => {
     const m = mediu()
     const s = construiesteScena(m.THREE, m.ControaleFalse, m.gazda, GRUP, () => {})

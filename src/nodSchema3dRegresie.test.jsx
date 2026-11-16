@@ -3,60 +3,56 @@
 // exemplul din documentație (toate tipurile vechi, două grupuri amplasate, unul la 30°) și o fundație în formatul vechi
 // (410 elemente: barele ca țevi, îndoirile ca coturi; două grupuri amplasate). Aici se recalculează cu codul curent și se compară:
 // citirea, „Toată instalația”, cutiile, amplasarea și scena (fiecare obiect, geometrie, material, camera după încadrare).
-// Partea de scenă cere jsdom (nu e dependență; tiparul din NodSchema3D.test.jsx): fără el e SĂRITĂ VIZIBIL.
+// Review r2: scena rulează pe un DOM fals minim (nodSchema3dDomFals.testutil.js), nu pe jsdom, deci NU mai poate fi sărită;
+// iar referința însăși e verificată (intrările așteptate, numărul de grupuri / elemente / scene, amprenta fișierului), ca golirea
+// sau tăierea ei să pice testul, nu să lase zero cazuri.
 import { describe, it, expect } from 'vitest'
-import { createRequire } from 'node:module'
-import path from 'node:path'
-import * as THREE_REAL from 'three'
-import * as THREE_SCENA from './nodSchema3dThree.js'
 import { construiesteScena } from './NodSchema3D.jsx'
 import { parseModel3d, instalatia, cutieGrup, aplicaAmplasare } from './nodSchema3dLogica.js'
 import { sha, amprentaScena } from './nodSchema3dAmprenta.testutil.js'
+import { mediuScena } from './nodSchema3dDomFals.testutil.js'
 import REF from './nodSchema3d.regresie.json'
 
-let JSDOM = null
-const surse = [import.meta.url, process.env.REDARI_JSDOM_DIR && path.join(process.env.REDARI_JSDOM_DIR, 'package.json')].filter(Boolean)
-for (const s of surse) { try { JSDOM = createRequire(s)('jsdom').JSDOM; break } catch { /* următoarea sursă */ } }
-const MOTIV_SARIT = 'SĂRIT: lipsește jsdom (nu e dependență a proiectului; rulează cu REDARI_JSDOM_DIR=<dir cu jsdom instalat>)'
-if (!JSDOM) console.warn(`[nodSchema3dRegresie.test] ${MOTIV_SARIT}`)
-const dom = JSDOM ? describe : describe.skip
-
-// mediul scenei: Three.js real, renderer și controale false (jsdom nu are WebGL); identic cu cel care a calculat referința
-function mediu() {
-  const j = new JSDOM('<!doctype html><div id="g"></div>', { pretendToBeVisual: true })
-  Object.assign(globalThis, { window: j.window, document: j.window.document, ResizeObserver: class { observe() {} disconnect() {} },
-    requestAnimationFrame: cb => setTimeout(cb, 0), cancelAnimationFrame: id => clearTimeout(id) })
-  const d = j.window.document
-  class RendererFals { constructor() { this.domElement = d.createElement('canvas') } getContext() { return {} } setPixelRatio() {} setClearColor() {} setSize() {} render() {} dispose() {} forceContextLoss() {} }
-  const controale = []
-  class Controale {
-    constructor(camera) { this.camera = camera; this.target = new THREE_REAL.Vector3(); controale.push(this) }
-    addEventListener() {} removeEventListener() {} dispose() {} update() { this.camera.lookAt(this.target) }
-  }
-  j.window.HTMLCanvasElement.prototype.getContext = function (t) {
-    return t === '2d' ? { font: '', fillStyle: '', textBaseline: '', measureText: s => ({ width: String(s).length * 20 }), fillRect() {}, fillText() {} } : null
-  }
-  const gazda = d.getElementById('g')
-  Object.defineProperty(gazda, 'clientWidth', { value: 800 }); Object.defineProperty(gazda, 'clientHeight', { value: 600 })
-  const scene = [], camere = []
-  const THREE = { ...THREE_SCENA, WebGLRenderer: RendererFals,
-    Scene: class extends THREE_REAL.Scene { constructor() { super(); scene.push(this) } },
-    PerspectiveCamera: class extends THREE_REAL.PerspectiveCamera { constructor(...a) { super(...a); camere.push(this) } } }
-  return { THREE, Controale, gazda, scene, camere, controale }
-}
+// mediul scenei: Three.js real, renderer și controale false; ecran 800 × 600 (ca la calculul referinței)
 function amprentaGrup(grup) {
-  const m = mediu()
-  const s = construiesteScena(m.THREE, m.Controale, m.gazda, grup, () => {})
-  const a = amprentaScena(m.scene[0], m.camere[0], m.controale[0].target)
-  s.dispose()
-  return a
+  const m = mediuScena({ latime: 800, inaltime: 600 })
+  try {
+    const s = construiesteScena(m.THREE, m.Controale, m.gazda, grup, () => {})
+    const a = amprentaScena(m.scene[0], m.camere[0], m.controale[0].target)
+    s.dispose()
+    return a
+  } finally { m.refa() }
 }
+
+// Ce trebuie să conțină referința (scris de mână din modelele de mai sus, nu citit din fișier): cheia, grupurile, elementele pe grup,
+// numărul de scene (un grup = o scenă, plus „Toată instalația”) și numărul de obiecte din fiecare scenă.
+const ASTEPTAT = {
+  exemplu_doc: { grupuri: 3, elemente: [9, 2, 2], scene: [17, 10, 12, 17] },
+  fundatie_format_vechi: { grupuri: 2, elemente: [205, 205], scene: [13, 13, 18] },
+}
+// Amprenta întregului fișier de referință: o schimbare a lui (regenerare) cere și schimbarea acestei linii, explicit, în review.
+const SHA_REF = 'a5ccf232ac89a44d683b004ac432d447ec88ee4b8b0d6304bdfe2e09187de231'
+
+describe('regresie: referința însăși e întreagă (nu poate fi golită fără ca testul să pice)', () => {
+  it('are exact intrările așteptate, cu toate grupurile, elementele și scenele', () => {
+    expect(REF.generat_cu).toMatch(/66b3b867/)
+    expect(Object.keys(REF.intrari).sort()).toEqual(Object.keys(ASTEPTAT).sort())
+    expect(Object.keys(REF.amprente).sort()).toEqual(Object.keys(ASTEPTAT).sort())
+    for (const [k, a] of Object.entries(ASTEPTAT)) {
+      expect(REF.intrari[k].grupuri.map(g => g.elemente.length), k).toEqual(a.elemente)
+      expect(REF.amprente[k].grupuri, k).toBe(a.grupuri)
+      expect(REF.amprente[k].scene.map(s => s.obiecte), k).toEqual(a.scene)
+      for (const s of REF.amprente[k].scene) { expect(s.scena).toMatch(/^[0-9a-f]{64}$/); expect(s.camera).toHaveLength(6) }
+    }
+    expect(sha(REF)).toBe(SHA_REF)
+  })
+})
 
 describe('regresie: modelele vechi se citesc la fel (referința = codul de dinainte de armături)', () => {
-  for (const [k, model] of Object.entries(REF.intrari)) {
+  for (const k of Object.keys(ASTEPTAT)) {
     it(`${k}: citirea, „Toată instalația”, cutiile și amplasarea au aceleași amprente`, () => {
       const ref = REF.amprente[k]
-      const p = parseModel3d(structuredClone(model))
+      const p = parseModel3d(structuredClone(REF.intrari[k]))
       expect(p.erori).toHaveLength(ref.erori)
       expect(p.grupuri).toHaveLength(ref.grupuri)
       expect(p.grupuri.some(g => 'armare' in g)).toBe(false)          // grupurile vechi nu primesc câmpuri noi
@@ -69,12 +65,13 @@ describe('regresie: modelele vechi se citesc la fel (referința = codul de dinai
   }
 })
 
-dom(JSDOM ? 'regresie: modelele vechi se desenează la fel (jsdom + Three.js real)' : `regresie: scena modelelor vechi — ${MOTIV_SARIT}`, () => {
-  for (const [k, model] of Object.entries(REF.intrari)) {
+describe('regresie: modelele vechi se desenează la fel (DOM fals + Three.js real; nu se sare)', () => {
+  for (const k of Object.keys(ASTEPTAT)) {
     it(`${k}: fiecare scenă (pe grup și „Toată instalația”) are aceeași amprentă și aceeași cameră`, () => {
-      const p = parseModel3d(structuredClone(model))
+      const p = parseModel3d(structuredClone(REF.intrari[k]))
       const inst = instalatia(p)
       const acum = [...p.grupuri.map(amprentaGrup), ...(inst ? [amprentaGrup(inst)] : [])]
+      expect(acum).toHaveLength(ASTEPTAT[k].scene.length)
       expect(acum).toEqual(REF.amprente[k].scene)
     })
   }

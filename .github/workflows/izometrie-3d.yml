@@ -1,0 +1,39 @@
+name: Izometrie - schema 3D (logica, scena, regresie)
+
+# Schema 3D a nodurilor de cuplare (Izometrie): validarea modelului, armăturile, scena Three.js pe un DOM fals (fără jsdom, deci
+# testele scenei nu se mai sar) și regresia modelelor vechi față de referința calculată cu codul de dinainte de armături.
+# Ca la „Ofertare - regresie”: rulează la PR gata de review (nu pe draft-uri, ca să nu consume minute la fiecare push de iterație),
+# anulează rularea veche a aceluiași PR; pe un draft, la nevoie: Actions → „Run workflow” pe branch. Fără secrete.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/nodSchema3d*'
+      - 'src/NodSchema3D*'
+      - 'src/nodCuplareLogica*'
+      - '.github/workflows/izometrie-3d.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vitest:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      # filtrele vitest sunt prefixe de cale: prind nodSchema3d*.test.js(x) și NodSchema3D*.test.jsx (inclusiv regresia)
+      - name: Vitest - schema 3D
+        run: npx vitest run src/nodSchema3d src/NodSchema3D
