@@ -4,6 +4,8 @@ export {
   WebGLRenderer, Scene, AmbientLight, HemisphereLight, DirectionalLight, MeshStandardMaterial, MeshBasicMaterial, SpriteMaterial,
   Group, Vector3, Mesh, CylinderGeometry, SphereGeometry, TubeGeometry, PlaneGeometry, QuadraticBezierCurve3, CanvasTexture, Sprite,
   GridHelper, PerspectiveCamera, SRGBColorSpace, DoubleSide, BackSide, Box3, Sphere,
+  // armături / beton / piese înglobate (16.11.2026)
+  BoxGeometry, EdgesGeometry, LineSegments, LineBasicMaterial, Shape, Path, ExtrudeGeometry, Vector2,
 } from 'three'
 export { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 export { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
