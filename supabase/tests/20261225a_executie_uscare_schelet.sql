@@ -40,9 +40,12 @@ CREATE TABLE public.executie_probe_tronsoane (
   stare text NOT NULL DEFAULT 'activ' CHECK (stare IN ('activ', 'anulat')),
   CONSTRAINT executie_probe_tronsoane_id_proiect_uq UNIQUE (id, proiect_id)
 );
-REVOKE ALL ON public.profiles, public.user_module_access, public.executie_proiecte, public.executie_acces_proiect, public.executie_probe_tronsoane
-  FROM anon, authenticated, service_role;
-GRANT SELECT ON public.executie_proiecte, public.executie_probe_tronsoane TO authenticated, service_role;
+-- șantierele (sites: coloanele citite de RPC) și vremea curentă a șantierului (meteo_cache, scrisă de meteo-sync: curent.temp / .vreme / .la)
+CREATE TABLE public.sites (id bigint PRIMARY KEY, name text NOT NULL, proiect_id bigint, lat numeric, lng numeric, active boolean NOT NULL DEFAULT true);
+CREATE TABLE public.meteo_cache (site_id bigint PRIMARY KEY REFERENCES public.sites(id), curent jsonb, actualizat_la timestamptz, sursa text);
+REVOKE ALL ON public.profiles, public.user_module_access, public.executie_proiecte, public.executie_acces_proiect, public.executie_probe_tronsoane,
+  public.sites, public.meteo_cache FROM anon, authenticated, service_role;
+GRANT SELECT ON public.executie_proiecte, public.executie_probe_tronsoane, public.sites, public.meteo_cache TO authenticated, service_role;
 
 -- Storage (forma minimă: coloanele folosite; RLS ca în Supabase; drepturile rolurilor API ca în Supabase, filtrate de politici)
 CREATE SCHEMA storage;

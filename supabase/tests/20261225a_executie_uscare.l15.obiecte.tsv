@@ -1,0 +1,250 @@
+# 20261225a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.executie_uscare_incarcari.burete_nr	creat
+coloana	coloana public.executie_uscare_incarcari.cale	creat
+coloana	coloana public.executie_uscare_incarcari.categorie	creat
+coloana	coloana public.executie_uscare_incarcari.creat_de	creat
+coloana	coloana public.executie_uscare_incarcari.creat_la	creat
+coloana	coloana public.executie_uscare_incarcari.id	creat
+coloana	coloana public.executie_uscare_incarcari.legenda	creat
+coloana	coloana public.executie_uscare_incarcari.proiect_id	creat
+coloana	coloana public.executie_uscare_incarcari.renuntat_de	creat
+coloana	coloana public.executie_uscare_incarcari.renuntat_la	creat
+coloana	coloana public.executie_uscare_incarcari.renuntat_motiv	creat
+coloana	coloana public.executie_uscare_incarcari.uscare_id	creat
+coloana	coloana public.executie_uscare_jurnal.actiune	creat
+coloana	coloana public.executie_uscare_jurnal.amprenta	creat
+coloana	coloana public.executie_uscare_jurnal.cheie	creat
+coloana	coloana public.executie_uscare_jurnal.creat_de	creat
+coloana	coloana public.executie_uscare_jurnal.creat_la	creat
+coloana	coloana public.executie_uscare_jurnal.id	creat
+coloana	coloana public.executie_uscare_jurnal.motiv	creat
+coloana	coloana public.executie_uscare_jurnal.proiect_id	creat
+coloana	coloana public.executie_uscare_jurnal.stare_noua	creat
+coloana	coloana public.executie_uscare_jurnal.stare_veche	creat
+coloana	coloana public.executie_uscare_jurnal.uscare_id	creat
+coloana	coloana public.executie_uscare_jurnal.valori	creat
+coloana	coloana public.executie_uscare_poze.burete_nr	creat
+coloana	coloana public.executie_uscare_poze.cale	creat
+coloana	coloana public.executie_uscare_poze.categorie	creat
+coloana	coloana public.executie_uscare_poze.creat_de	creat
+coloana	coloana public.executie_uscare_poze.creat_la	creat
+coloana	coloana public.executie_uscare_poze.id	creat
+coloana	coloana public.executie_uscare_poze.legenda	creat
+coloana	coloana public.executie_uscare_poze.proiect_id	creat
+coloana	coloana public.executie_uscare_poze.uscare_id	creat
+coloana	coloana public.executie_uscari.bureti_buc	creat
+coloana	coloana public.executie_uscari.cantariri	creat
+coloana	coloana public.executie_uscari.concluzie	creat
+coloana	coloana public.executie_uscari.constructor	creat
+coloana	coloana public.executie_uscari.creat_de	creat
+coloana	coloana public.executie_uscari.creat_la	creat
+coloana	coloana public.executie_uscari.data_operatie	creat
+coloana	coloana public.executie_uscari.id	creat
+coloana	coloana public.executie_uscari.inceput_planificat	creat
+coloana	coloana public.executie_uscari.inchis_de	creat
+coloana	coloana public.executie_uscari.inchis_la	creat
+coloana	coloana public.executie_uscari.km_de_la_m	creat
+coloana	coloana public.executie_uscari.km_pana_la_m	creat
+coloana	coloana public.executie_uscari.lungime_m	creat
+coloana	coloana public.executie_uscari.meteo	creat
+coloana	coloana public.executie_uscari.modificat_de	creat
+coloana	coloana public.executie_uscari.modificat_la	creat
+coloana	coloana public.executie_uscari.motiv_anulare	creat
+coloana	coloana public.executie_uscari.notificare_la	creat
+coloana	coloana public.executie_uscari.notificare_ref	creat
+coloana	coloana public.executie_uscari.observatii	creat
+coloana	coloana public.executie_uscari.ora_final	creat
+coloana	coloana public.executie_uscari.ora_inceput	creat
+coloana	coloana public.executie_uscari.pig_metalic_buc	creat
+coloana	coloana public.executie_uscari.piston_final_rezultat	creat
+coloana	coloana public.executie_uscari.piston_pu_buc	creat
+coloana	coloana public.executie_uscari.poz_km_m	creat
+coloana	coloana public.executie_uscari.poz_la	creat
+coloana	coloana public.executie_uscari.poz_lat	creat
+coloana	coloana public.executie_uscari.poz_lng	creat
+coloana	coloana public.executie_uscari.poz_precizie_m	creat
+coloana	coloana public.executie_uscari.poz_sursa	creat
+coloana	coloana public.executie_uscari.poz_traseu_versiune	creat
+coloana	coloana public.executie_uscari.poze_justificare	creat
+coloana	coloana public.executie_uscari.presiune_bar	creat
+coloana	coloana public.executie_uscari.proba_id	creat
+coloana	coloana public.executie_uscari.proiect_id	creat
+coloana	coloana public.executie_uscari.punct_roua_c	creat
+coloana	coloana public.executie_uscari.punct_roua_loc	creat
+coloana	coloana public.executie_uscari.revizie	creat
+coloana	coloana public.executie_uscari.semn_beneficiar_functie	creat
+coloana	coloana public.executie_uscari.semn_beneficiar_nume	creat
+coloana	coloana public.executie_uscari.semn_constructor_functie	creat
+coloana	coloana public.executie_uscari.semn_constructor_nume	creat
+coloana	coloana public.executie_uscari.stare	creat
+coloana	coloana public.executie_uscari.temperatura_c	creat
+coloana	coloana public.executie_uscari.temperatura_sursa	creat
+coloana	coloana public.executie_uscari.timp_deplasare_min	creat
+coloana	coloana public.executie_uscari.tronson	creat
+coloana	coloana public.executie_uscari.utilaje	creat
+coloana	coloana public.executie_uscari.versiune	creat
+coloana	coloana public.executie_uscari.vreme	creat
+constrangere	constrangere tabel public.executie_uscare_incarcari.executie_uscare_incarcari_burete	creat
+constrangere	constrangere tabel public.executie_uscare_incarcari.executie_uscare_incarcari_burete_nr_check	creat
+constrangere	constrangere tabel public.executie_uscare_incarcari.executie_uscare_incarcari_cale_check	creat
+constrangere	constrangere tabel public.executie_uscare_incarcari.executie_uscare_incarcari_cale_proprie	creat
+constrangere	constrangere tabel public.executie_uscare_incarcari.executie_uscare_incarcari_cale_uq	creat
+constrangere	constrangere tabel public.executie_uscare_incarcari.executie_uscare_incarcari_categorie_check	creat
+constrangere	constrangere tabel public.executie_uscare_incarcari.executie_uscare_incarcari_legenda_check	creat
+constrangere	constrangere tabel public.executie_uscare_incarcari.executie_uscare_incarcari_pkey	creat
+constrangere	constrangere tabel public.executie_uscare_incarcari.executie_uscare_incarcari_renuntare	creat
+constrangere	constrangere tabel public.executie_uscare_incarcari.executie_uscare_incarcari_renuntat_motiv_check	creat
+constrangere	constrangere tabel public.executie_uscare_incarcari.executie_uscare_incarcari_uscare_fk	creat
+constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_actiune_check	creat
+constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_amprenta_check	creat
+constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_cheie_uq	creat
+constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_motiv	creat
+constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_motiv_check	creat
+constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_pkey	creat
+constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_stari	creat
+constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_uscare_fk	creat
+constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_valori_check	creat
+constrangere	constrangere tabel public.executie_uscare_poze.executie_uscare_poze_burete	creat
+constrangere	constrangere tabel public.executie_uscare_poze.executie_uscare_poze_burete_nr_check	creat
+constrangere	constrangere tabel public.executie_uscare_poze.executie_uscare_poze_cale_check	creat
+constrangere	constrangere tabel public.executie_uscare_poze.executie_uscare_poze_cale_proprie	creat
+constrangere	constrangere tabel public.executie_uscare_poze.executie_uscare_poze_cale_uq	creat
+constrangere	constrangere tabel public.executie_uscare_poze.executie_uscare_poze_categorie_check	creat
+constrangere	constrangere tabel public.executie_uscare_poze.executie_uscare_poze_incarcare_fk	creat
+constrangere	constrangere tabel public.executie_uscare_poze.executie_uscare_poze_legenda_check	creat
+constrangere	constrangere tabel public.executie_uscare_poze.executie_uscare_poze_pkey	creat
+constrangere	constrangere tabel public.executie_uscare_poze.executie_uscare_poze_uscare_fk	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_anulare	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_bureti_buc_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_cantariri_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_concluzie_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_constructor_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_id_proiect_uq	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_inchidere	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_interval	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_km_de_la_m_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_km_pana_la_m_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_lungime_m_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_meteo_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_motiv_anulare_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_notificare_ref_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_observatii_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_ore	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_pig_metalic_buc_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_piston_final_rezultat_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_piston_pu_buc_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_pkey	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_poz_km_m_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_poz_lat_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_poz_lng_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_poz_precizie_m_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_poz_sursa_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_poz_traseu_versiune_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_poze_justificare_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_pozitie	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_pozitie_traseu	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_presiune_bar_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_proba_fk	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_proiect_id_fkey	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_punct_roua_c_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_punct_roua_loc_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_revizie_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_semn_beneficiar_functie_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_semn_beneficiar_nume_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_semn_constructor_functie_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_semn_constructor_nume_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_stare_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_temperatura	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_temperatura_c_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_temperatura_sursa_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_timp_deplasare_min_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_tronson_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_utilaje_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_versiune_check	creat
+constrangere	constrangere tabel public.executie_uscari.executie_uscari_vreme_check	creat
+functie	functie public.fn_executie_uscare_cantariri_ok(jsonb)	creat
+functie	functie public.fn_executie_uscare_fara_golire()	creat
+functie	functie public.fn_executie_uscare_garda()	creat
+functie	functie public.fn_executie_uscare_incarcare_garda()	creat
+functie	functie public.fn_executie_uscare_jurnal_garda()	creat
+functie	functie public.fn_executie_uscare_lipsa(public.executie_uscari,jsonb,integer)	creat
+functie	functie public.fn_executie_uscare_lipsa_raport(public.executie_uscari)	creat
+functie	functie public.fn_executie_uscare_meteo_ok(jsonb)	creat
+functie	functie public.fn_executie_uscare_obiect(text,text,boolean)	creat
+functie	functie public.fn_executie_uscare_poza(bigint,text,bigint,text,text,integer,text,uuid)	creat
+functie	functie public.fn_executie_uscare_poza_garda()	creat
+functie	functie public.fn_executie_uscare_poze_lipsa(public.executie_uscari,jsonb)	creat
+functie	functie public.fn_executie_uscare_salveaza(bigint,bigint,integer,jsonb,uuid)	creat
+functie	functie public.fn_executie_uscare_stare(bigint,integer,text,text,uuid)	creat
+functie	functie public.fn_executie_uscare_tranzitie(text,text)	creat
+functie	functie public.fn_executie_uscare_utilaje_ok(jsonb)	creat
+politica	politica public.executie_uscare_incarcari.executie_uscare_incarcari_citire	creat
+politica	politica public.executie_uscare_jurnal.executie_uscare_jurnal_citire	creat
+politica	politica public.executie_uscare_poze.executie_uscare_poze_citire	creat
+politica	politica public.executie_uscari.executie_uscari_citire	creat
+politica	politica storage.objects.executie_uscare_adauga	creat
+politica	politica storage.objects.executie_uscare_citire	creat
+relatie	relatie public.executie_uscare_incarcari	creat
+relatie	relatie public.executie_uscare_incarcari_cale_uq	creat
+relatie	relatie public.executie_uscare_incarcari_id_seq	creat
+relatie	relatie public.executie_uscare_incarcari_pkey	creat
+relatie	relatie public.executie_uscare_incarcari_proiect_idx	creat
+relatie	relatie public.executie_uscare_incarcari_uscare_idx	creat
+relatie	relatie public.executie_uscare_jurnal	creat
+relatie	relatie public.executie_uscare_jurnal_cheie_uq	creat
+relatie	relatie public.executie_uscare_jurnal_id_seq	creat
+relatie	relatie public.executie_uscare_jurnal_pkey	creat
+relatie	relatie public.executie_uscare_jurnal_proiect_idx	creat
+relatie	relatie public.executie_uscare_jurnal_uscare_idx	creat
+relatie	relatie public.executie_uscare_poze	creat
+relatie	relatie public.executie_uscare_poze_cale_uq	creat
+relatie	relatie public.executie_uscare_poze_id_seq	creat
+relatie	relatie public.executie_uscare_poze_pkey	creat
+relatie	relatie public.executie_uscare_poze_proiect_idx	creat
+relatie	relatie public.executie_uscare_poze_uscare_idx	creat
+relatie	relatie public.executie_uscari	creat
+relatie	relatie public.executie_uscari_id_proiect_uq	creat
+relatie	relatie public.executie_uscari_id_seq	creat
+relatie	relatie public.executie_uscari_pkey	creat
+relatie	relatie public.executie_uscari_proba_idx	creat
+relatie	relatie public.executie_uscari_proiect_idx	creat
+tip	tip public.executie_uscare_incarcari	creat
+tip	tip public.executie_uscare_incarcari[]	creat
+tip	tip public.executie_uscare_jurnal	creat
+tip	tip public.executie_uscare_jurnal[]	creat
+tip	tip public.executie_uscare_poze	creat
+tip	tip public.executie_uscare_poze[]	creat
+tip	tip public.executie_uscari	creat
+tip	tip public.executie_uscari[]	creat
+trigger	trigger public.executie_probe_tronsoane intern executie_uscari_proba_fk "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_probe_tronsoane intern executie_uscari_proba_fk "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_proiecte intern executie_uscari_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_proiecte intern executie_uscari_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_uscare_incarcari intern executie_uscare_incarcari_uscare_fk "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_uscare_incarcari intern executie_uscare_incarcari_uscare_fk "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_uscare_incarcari intern executie_uscare_poze_incarcare_fk "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_uscare_incarcari intern executie_uscare_poze_incarcare_fk "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_uscare_incarcari.trg_executie_uscare_incarcare_garda	creat
+trigger	trigger public.executie_uscare_incarcari.trg_executie_uscare_incarcari_fara_golire	creat
+trigger	trigger public.executie_uscare_jurnal intern executie_uscare_jurnal_uscare_fk "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_uscare_jurnal intern executie_uscare_jurnal_uscare_fk "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_uscare_jurnal.trg_executie_uscare_jurnal_fara_golire	creat
+trigger	trigger public.executie_uscare_jurnal.trg_executie_uscare_jurnal_garda	creat
+trigger	trigger public.executie_uscare_poze intern executie_uscare_poze_incarcare_fk "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_uscare_poze intern executie_uscare_poze_incarcare_fk "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_uscare_poze intern executie_uscare_poze_uscare_fk "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_uscare_poze intern executie_uscare_poze_uscare_fk "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_uscare_poze.trg_executie_uscare_poza_garda	creat
+trigger	trigger public.executie_uscare_poze.trg_executie_uscare_poze_fara_golire	creat
+trigger	trigger public.executie_uscari intern executie_uscare_incarcari_uscare_fk "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_uscari intern executie_uscare_incarcari_uscare_fk "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_uscari intern executie_uscare_jurnal_uscare_fk "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_uscari intern executie_uscare_jurnal_uscare_fk "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_uscari intern executie_uscare_poze_uscare_fk "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_uscari intern executie_uscare_poze_uscare_fk "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_uscari intern executie_uscari_proba_fk "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_uscari intern executie_uscari_proba_fk "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_uscari intern executie_uscari_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_uscari intern executie_uscari_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_uscari.trg_executie_uscare_fara_golire	creat
+trigger	trigger public.executie_uscari.trg_executie_uscare_garda	creat
