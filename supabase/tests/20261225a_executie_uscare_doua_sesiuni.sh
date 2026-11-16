@@ -21,6 +21,12 @@
 #   E2 închidere (A, V, deschisă) + salvare (B, V): B așteaptă, apoi {ok: false, motiv: 'conflict'}; final: închis, V+1, nimic de la B.
 #   P1 înregistrarea unei poze (A, deschisă) + închidere (B): B așteaptă rândul raportului, apoi închide; jurnalul închiderii conține poza.
 #   P2 închidere (A, deschisă) + o rezervare de poză NOUĂ (B): B așteaptă, apoi refuz 22023 („raportul e inchisa”); nicio rezervare nouă.
+#   R1 (runda 3) creare (A, deschisă) + „Renunț” = fn_executie_uscare_retrage pe ACEEAȘI cheie (B): B așteaptă cheia, apoi {aplicat: true}
+#      cu id-ul lui A; nicio retragere scrisă (un singur rând în jurnal, „creare”).
+#   R2 (runda 3) retragerea (A, deschisă) + crearea întârziată cu aceeași cheie (B): B așteaptă, apoi refuz 22023 („retrasă”); niciun
+#      raport cu cheia; în jurnal doar retragerea.
+#   H1 (runda 3) două chei DIFERITE cu același hashtext (coliziune căutată pe clonă): A creează cu K1 (deschisă), B creează cu K2 → B
+#      așteaptă (lock-ul consultativ e pe hash), apoi creează ALT raport (duplicat: false); intențiile nu se confundă.
 # Ieșire: 0 = toate OK; 1 = un scenariu a picat; 2 = argumente; 22 = altă țintă; 23 = 20261225a neaplicată; 24 = owner / proiect lipsă.
 set -euo pipefail
 PSQL="${PSQL:-psql}"
@@ -48,6 +54,7 @@ BEGIN;
 ALTER TABLE public.executie_uscare_jurnal DISABLE TRIGGER USER; ALTER TABLE public.executie_uscare_poze DISABLE TRIGGER USER;
 ALTER TABLE public.executie_uscare_incarcari DISABLE TRIGGER USER; ALTER TABLE public.executie_uscari DISABLE TRIGGER USER;
 CREATE TEMP TABLE z_ids ON COMMIT DROP AS SELECT id FROM public.executie_uscari WHERE tronson = '$ETICHETA';
+DELETE FROM public.executie_uscare_jurnal WHERE actiune = 'cheie_retrasa' AND cheie::text IN (SELECT unnest(string_to_array('$(cat "$TMP/chei_retrase" 2>/dev/null | tr '\n' ',' )', ',')));
 SELECT set_config('storage.allow_delete_query', 'true', true);
 DELETE FROM storage.objects WHERE bucket_id = 'executie-uscare' AND split_part(name, '/', 2)::bigint IN (SELECT id FROM z_ids);
 DELETE FROM public.executie_uscare_jurnal WHERE uscare_id IN (SELECT id FROM z_ids);
@@ -183,6 +190,43 @@ F="$(camp "$ID" stare)"
 NP="$(q -c "SELECT count(*) FROM public.executie_uscare_poze WHERE uscare_id = $ID")"
 if [ "$RC_A" = 0 ] && a_asteptat && [ "$R_B" = 22023 ] && [ "$F" = inchisa ] && [ "$NP" = 1 ]; then R=0; else R=1; fi
 verdict "$R" "P2 inchidere in curs + inregistrarea unei poze: B a asteptat ${ASTEPTAT_S}s, refuz $R_B (asteptat 22023); poze $NP (asteptat 1); iesire A $RC_A"
+
+retrage_rpc() { echo "public.fn_executie_uscare_retrage($PROIECT, '$1'::uuid)"; }
+# ── R1: creare în curs (A) + „Renunț” pe aceeași cheie (B): B vede crearea ca APLICATĂ, nu o retrage ──
+K="$(uuid)"
+sesiune_a 202612257 "$(salv NULL NULL "$(plan)" "$K")" COMMIT > "$TMP/r1_a.sql"
+sesiune_b 202612257 "$(retrage_rpc "$K")" > "$TMP/r1_b.sql"
+ruleaza_doua r1
+J="$(q -c "SELECT string_agg(actiune, ',') FROM public.executie_uscare_jurnal WHERE cheie = '$K'")"
+ID_A="$(q -c "SELECT uscare_id FROM public.executie_uscare_jurnal WHERE cheie = '$K'")"
+if [ "$RC_A" = 0 ] && [ "$RC_B" = 0 ] && a_asteptat && [[ "$R_B" == *'"aplicat": true'* ]] && [[ "$R_B" == *"\"uscare_id\": $ID_A"* ]] && [ "$J" = creare ]; then R=0; else R=1; fi
+verdict "$R" "R1 creare in curs + Renunt pe aceeasi cheie: B a asteptat ${ASTEPTAT_S}s, aplicat cu id $ID_A; jurnalul cheii '$J' (asteptat 'creare'); iesiri $RC_A/$RC_B"
+
+# ── R2: retragere în curs (A) + crearea întârziată cu aceeași cheie (B): refuz, niciun raport ──
+K="$(uuid)"; echo "$K" >> "$TMP/chei_retrase"
+sesiune_a 202612258 "$(retrage_rpc "$K")" COMMIT > "$TMP/r2_a.sql"
+printf '%s\n' "\\set ON_ERROR_STOP 0" "$(asteapta 202612258)" "BEGIN; $JWT" "SET LOCAL lock_timeout = '20s';" \
+  "SELECT 'T0=' || extract(epoch FROM clock_timestamp());" "SELECT $(salv NULL NULL "$(plan)" "$K");" \
+  "\\echo 'R='':LAST_ERROR_SQLSTATE'" "ROLLBACK;" "SELECT 'T1=' || extract(epoch FROM clock_timestamp());" > "$TMP/r2_b.sql"
+ruleaza_doua r2
+J="$(q -c "SELECT string_agg(actiune || ':' || coalesce(uscare_id::text, '-'), ',') FROM public.executie_uscare_jurnal WHERE cheie = '$K'")"
+if [ "$RC_A" = 0 ] && a_asteptat && [ "$R_B" = 22023 ] && [ "$J" = "cheie_retrasa:-" ]; then R=0; else R=1; fi
+verdict "$R" "R2 retragere in curs + creare intarziata cu aceeasi cheie: B a asteptat ${ASTEPTAT_S}s, refuz $R_B (asteptat 22023); jurnalul cheii '$J'; iesire A $RC_A"
+
+# ── H1: coliziune de hashtext între două chei diferite: se serializează, dar NU se confundă ──
+PERECHE="$(q -c "WITH u AS (SELECT gen_random_uuid() AS k FROM generate_series(1, 300000)), h AS (SELECT k, hashtext(k::text) AS x FROM u)
+  SELECT a.k || ' ' || b.k FROM h a JOIN h b ON a.x = b.x AND a.k < b.k LIMIT 1")"
+K1="${PERECHE%% *}"; K2="${PERECHE##* }"
+if [[ "$K1" =~ ^[0-9a-f-]{36}$ ]] && [[ "$K2" =~ ^[0-9a-f-]{36}$ ]] && [ "$K1" != "$K2" ]; then
+  sesiune_a 202612259 "$(salv NULL NULL "$(plan)" "$K1")" COMMIT > "$TMP/h1_a.sql"
+  sesiune_b 202612259 "$(salv NULL NULL "$(plan)" "$K2")" > "$TMP/h1_b.sql"
+  ruleaza_doua h1
+  N="$(q -c "SELECT count(DISTINCT uscare_id) FROM public.executie_uscare_jurnal WHERE cheie IN ('$K1', '$K2') AND actiune = 'creare'")"
+  if [ "$RC_A" = 0 ] && [ "$RC_B" = 0 ] && a_asteptat && [[ "$R_B" == *'"duplicat": false'* ]] && [ "$N" = 2 ]; then R=0; else R=1; fi
+  verdict "$R" "H1 doua chei cu acelasi hashtext: B a asteptat ${ASTEPTAT_S}s si a creat ALT raport (duplicat false); rapoarte distincte $N (asteptat 2); iesiri $RC_A/$RC_B"
+else
+  verdict 1 "H1 nu am gasit o coliziune de hashtext in 300000 de chei (reia proba)"
+fi
 
 [ "$ESEC" = 0 ] && echo "TOTUL OK" || echo "EȘEC"
 exit "$ESEC"

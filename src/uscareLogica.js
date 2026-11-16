@@ -53,6 +53,8 @@ export const ETICHETE_CATEGORII = {
 }
 export const CU_BURETE = ['cantar_intrare', 'cantar_iesire']
 export const RPC_USCARE = ['fn_executie_uscare_salveaza', 'fn_executie_uscare_stare', 'fn_executie_uscare_poza']
+/** „Renunț” la o cerere nelămurită: întreabă serverul după cheie; neaplicată = retrasă definitiv (nu e o intenție, nu intră în registru) */
+export const RPC_RETRAGE = 'fn_executie_uscare_retrage'
 export const prefixRegistru = (utilizator, proiect) => `gazpet.uscare.incert.v2:${utilizator}:${proiect}:`
 export const MAX_BURETI = 20
 
@@ -251,11 +253,25 @@ function numar(f, k, { min, max, zec }, erori) {
   }
   return x
 }
+/**
+ * INSTANTUL unui câmp-moment din formular: cel ORIGINAL dacă ora de pe ecran (și alegerea apariției) n-au fost atinse, altfel cel calculat din
+ * ora locală + alegerea apariției. → ISO | null (gol) | NaN (oră invalidă / inexistentă) | ORA_AMBIGUA (ora care apare de două ori, nealeasă).
+ */
+export function instantDinFormular(f, k) {
+  const o = f?._orig?.[k]
+  if (o && f[k] === o.local && !(f.dst?.[k] && f.dst[k] !== alegereDinIso(o.iso))) return o.iso
+  return isoDinOraLocala(f?.[k], f?.dst?.[k] || null)
+}
+/** forma comparabilă a unui moment: instantul (nu textul orei locale); nevalid / ambiguu = textul + alegerea, ca să nu fie egal cu un instant */
+export function canonMoment(f, k) {
+  const v = instantDinFormular(f, k)
+  if (v === null) return ''
+  if (typeof v === 'string' && v !== ORA_AMBIGUA) return new Date(Date.parse(v)).toISOString()
+  return `?${String(f?.[k] ?? '').trim()}|${f?.dst?.[k] || ''}`
+}
 /** momentul unui câmp: cel ORIGINAL dacă ora de pe ecran n-a fost atinsă; ora ambiguă cere alegerea explicită */
 function moment(f, k, erori) {
-  const o = f._orig?.[k]
-  if (o && f[k] === o.local && !(f.dst?.[k] && f.dst[k] !== alegereDinIso(o.iso))) return o.iso
-  const v = isoDinOraLocala(f[k], f.dst?.[k] || null)
+  const v = instantDinFormular(f, k)
   if (v === ORA_AMBIGUA) { erori.push(`${CAMP_ETICHETA[k] || k}: ora ${String(f[k]).slice(11, 16)} apare de două ori (trecerea la ora de iarnă): alege prima sau a doua`); return null }
   if (Number.isNaN(v)) { erori.push(`${CAMP_ETICHETA[k] || k}: oră invalidă`); return null }
   return v
@@ -340,30 +356,56 @@ export function areModificari(f, r) {
 }
 
 // ── conflictul de versiune: îmbinare în trei, pe câmpuri, rezolvată EXPLICIT de om ──
-/** câmpurile formularului care se compară (fără cele interne) */
-export const CHEI_FORMULAR = Object.keys(formularNou()).filter(k => !['_orig', 'dst', 'meteo_cerere'].includes(k))
+/** câmpurile formularului care se compară ca valori (fără cele interne; momentele se compară separat, pe INSTANT) */
+export const CHEI_FORMULAR = Object.keys(formularNou()).filter(k => !['_orig', 'dst', 'meteo_cerere'].includes(k) && !MOMENTE.includes(k))
+export const MOMENTE_FORMULAR = MOMENTE
 const canon = v => (v != null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? '').trim())
+// starea completă a unui moment din formular (textul orei, alegerea apariției, instantul original) și afișarea ei
+const stareMoment = (f, k) => ({ v: f[k] ?? '', dst: f.dst?.[k] || '', orig: f._orig?.[k] || null })
+function puneMoment(f, k, s) {
+  const o = { ...f, [k]: s.v, dst: { ...(f.dst || {}), [k]: s.dst }, _orig: { ...(f._orig || {}) } }
+  if (s.orig) o._orig[k] = s.orig; else delete o._orig[k]
+  return o
+}
+function afisMoment(f, k) {
+  const v = instantDinFormular(f, k)
+  if (v === null) return ''
+  if (typeof v === 'string' && v !== ORA_AMBIGUA) return fmtMoment(v)
+  return `${String(f[k] ?? '').replace('T', ' ')} (${v === ORA_AMBIGUA ? 'apariția nealeasă' : 'oră invalidă'})`
+}
 /**
  * baza = rândul pe care s-a pornit formularul, form = ce a scris omul, server = rândul de acum.
- * { form: formularul îmbinat (pe baza serverului: schimbările colegului intră, ale mele rămân), conflicte: [{ camp, al_meu, al_colegului }] }
+ * { form: formularul îmbinat (pe baza serverului: schimbările colegului intră, ale mele rămân), conflicte: [{ camp, al_meu, al_colegului, … }] }
  * Un câmp schimbat de ambii, cu valori diferite = conflict (rămâne valoarea mea până alege omul, cu aleg()).
+ * MOMENTELE (runda 3, ora de iarnă): se compară pe INSTANT (ora locală + apariția aleasă + instantul original), nu pe textul orei: la
+ * 25.10.2026, 00:30Z și 01:30Z se afișează amândouă „03:30”. O schimbare a colegului care NU se vede pe ecran (același text al orei, alt
+ * instant) se arată tot ca alegere explicită — nu se preia și nu se suprascrie pe tăcute.
  */
 export function imbinare(baza, form, server) {
   const fb = formularDinRand(baza), fs = formularDinRand(server)
-  const out = { ...fs, meteo_cerere: null }
+  let out = { ...fs, meteo_cerere: null, dst: { ...(fs.dst || {}) }, _orig: { ...(fs._orig || {}) } }
   const conflicte = []
   for (const k of CHEI_FORMULAR) {
     const mine = canon(form[k]) !== canon(fb[k]), alor = canon(fs[k]) !== canon(fb[k])
     if (mine && (!alor || canon(form[k]) === canon(fs[k]))) out[k] = form[k]
     else if (mine && alor) { out[k] = form[k]; conflicte.push({ camp: k, al_meu: form[k], al_colegului: fs[k] }) }
   }
-  // o cerere meteo nelămurită a mea rămâne doar dacă ora începerii n-a fost schimbată de coleg
-  if (form.meteo_cerere && canon(out.ora_inceput) === canon(form.ora_inceput)) out.meteo_cerere = form.meteo_cerere
-  out.dst = { ...fs.dst, ...Object.fromEntries(MOMENTE.filter(k => out[k] === form[k]).map(k => [k, form.dst?.[k] || fs.dst?.[k] || ''])) }
+  for (const k of MOMENTE) {
+    const b = canonMoment(fb, k), m = canonMoment(form, k), s = canonMoment(fs, k)
+    const mine = m !== b, alor = s !== b
+    const invizibila = !mine && alor && String(fs[k] ?? '') === String(form[k] ?? '')
+    if ((mine && alor && m !== s) || invizibila) {
+      out = puneMoment(out, k, stareMoment(form, k))
+      conflicte.push({ camp: k, moment: true, al_meu: afisMoment(form, k), al_colegului: afisMoment(fs, k), stare_meu: stareMoment(form, k), stare_colegului: stareMoment(fs, k) })
+    } else if (mine) out = puneMoment(out, k, stareMoment(form, k))
+  }
+  // o cerere meteo nelămurită a mea rămâne doar dacă ora începerii (instantul) e aceeași cu cea pentru care am cerut-o
+  if (form.meteo_cerere && canonMoment(out, 'ora_inceput') === canonMoment(form, 'ora_inceput')) out.meteo_cerere = form.meteo_cerere
   return { form: out, conflicte }
 }
-/** alegerea omului pentru un câmp în conflict: 'al_meu' | 'al_colegului' */
+/** alegerea omului pentru un câmp în conflict: 'al_meu' | 'al_colegului' (la momente: textul, apariția și instantul original, împreună) */
 export function aleg(form, conflict, alegere, server) {
+  if (conflict.moment) return puneMoment(form, conflict.camp, alegere === 'al_colegului' ? conflict.stare_colegului : conflict.stare_meu)
   const fs = formularDinRand(server)
   return { ...form, [conflict.camp]: alegere === 'al_colegului' ? fs[conflict.camp] : conflict.al_meu }
 }
@@ -385,11 +427,28 @@ export function propunereMeteo(rand, oraInceputIso) {
   if (Math.abs(obs - inc) > ORE_METEO_MAX * 3600e3) return { ok: false, motiv: `vremea curentă e observată la ${fmtMoment(rand.curent.la)}, la peste ${ORE_METEO_MAX} h de ora începerii: scrie temperatura măsurată` }
   return { ok: true, temperatura_c: textNr(Math.round(t * 10) / 10), vreme: String(rand.curent.vreme || '').slice(0, 120), ora_observatiei: rand.curent.la, preluat_la: rand.actualizat_la || null }
 }
-/** schimbarea orei începerii invalidează temperatura „din meteo” (propunerea era pentru ora veche): patch-ul suplimentar, sau {} */
+/** schimbarea cere o nouă propunere meteo: INSTANTUL orei începerii s-a schimbat (inclusiv alegerea apariției la ora de iarnă) sau poziția */
+export function schimbaSursaMeteo(form, patch) {
+  const nou = { ...form, ...patch }
+  const ora = ['ora_inceput', 'dst', '_orig'].some(k => k in patch) && canonMoment(form, 'ora_inceput') !== canonMoment(nou, 'ora_inceput')
+  const poz = ['poz_lat', 'poz_lng'].some(k => k in patch && canon(patch[k]) !== canon(form[k]))
+  return { ora, poz }
+}
+/**
+ * Invalidarea propunerii meteo (patch-ul suplimentar, sau {}):
+ *  - ora începerii schimbată (instantul): temperatura „din meteo” se golește (propunerea / instantaneul era pentru ora veche; serverul refuză
+ *    oricum sursa „meteo” pe altă oră), cererea nesalvată cade; o temperatură MĂSURATĂ rămâne (cererea cade);
+ *  - poziția schimbată: cade doar propunerea NESALVATĂ (cererea; temperatura ei, dacă era „din meteo”); instantaneul salvat e al șantierului
+ *    (nu depinde de poziție) și rămâne. Răspunsurile meteo în zbor se ignoră în ecran (generația sursei).
+ */
 export function invalidareMeteo(form, patch) {
-  if (!('ora_inceput' in patch) || canon(patch.ora_inceput) === canon(form.ora_inceput)) return {}
-  if (form.temperatura_sursa !== 'meteo' && !form.meteo_cerere) return {}
-  return form.temperatura_sursa === 'meteo' ? { temperatura_c: '', temperatura_sursa: '', meteo_cerere: null } : { meteo_cerere: null }
+  const { ora, poz } = schimbaSursaMeteo(form, patch)
+  if (ora) {
+    if (form.temperatura_sursa === 'meteo') return { temperatura_c: '', temperatura_sursa: '', meteo_cerere: null }
+    return form.meteo_cerere ? { meteo_cerere: null } : {}
+  }
+  if (poz && form.meteo_cerere) return form.temperatura_sursa === 'meteo' ? { temperatura_c: '', temperatura_sursa: '', meteo_cerere: null } : { meteo_cerere: null }
+  return {}
 }
 
 // ── poziția operațiunii ──

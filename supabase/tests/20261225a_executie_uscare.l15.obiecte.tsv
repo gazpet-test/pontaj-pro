@@ -101,6 +101,7 @@ constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_ju
 constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_motiv	creat
 constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_motiv_check	creat
 constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_pkey	creat
+constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_retragere	creat
 constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_stari	creat
 constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_uscare_fk	creat
 constrangere	constrangere tabel public.executie_uscare_jurnal.executie_uscare_jurnal_valori_check	creat
@@ -174,6 +175,7 @@ functie	functie public.fn_executie_uscare_obiect(text,text,boolean)	creat
 functie	functie public.fn_executie_uscare_poza(bigint,text,bigint,text,text,integer,text,uuid)	creat
 functie	functie public.fn_executie_uscare_poza_garda()	creat
 functie	functie public.fn_executie_uscare_poze_lipsa(public.executie_uscari,jsonb)	creat
+functie	functie public.fn_executie_uscare_retrage(bigint,uuid)	creat
 functie	functie public.fn_executie_uscare_salveaza(bigint,bigint,integer,jsonb,uuid)	creat
 functie	functie public.fn_executie_uscare_stare(bigint,integer,text,text,uuid)	creat
 functie	functie public.fn_executie_uscare_tranzitie(text,text)	creat

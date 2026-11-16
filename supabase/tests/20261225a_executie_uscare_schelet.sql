@@ -51,14 +51,24 @@ GRANT SELECT ON public.executie_proiecte, public.executie_probe_tronsoane, publi
 CREATE SCHEMA storage;
 GRANT USAGE ON SCHEMA storage TO anon, authenticated, service_role;
 CREATE TABLE storage.buckets (id text PRIMARY KEY, name text NOT NULL, public boolean DEFAULT false, file_size_limit bigint, allowed_mime_types text[]);
+-- coloanele ca în Supabase (runda 3: owner_id, metadate, path_tokens generat), ca sonda migrării să le probeze pe toate
 CREATE TABLE storage.objects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   bucket_id text REFERENCES storage.buckets(id),
   name text,
   owner uuid,
   created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  last_accessed_at timestamptz DEFAULT now(),
+  metadata jsonb,
+  path_tokens text[] GENERATED ALWAYS AS (string_to_array(name, '/')) STORED,
+  version text,
+  owner_id text,
+  user_metadata jsonb,
   CONSTRAINT objects_bucket_name_uq UNIQUE (bucket_id, name)
 );
+CREATE FUNCTION storage.foldername(name text) RETURNS text[] LANGUAGE sql IMMUTABLE AS $$ SELECT (string_to_array(name, '/'))[1:array_length(string_to_array(name, '/'), 1) - 1] $$;
+GRANT EXECUTE ON FUNCTION storage.foldername(text) TO anon, authenticated, service_role;
 ALTER TABLE storage.buckets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 GRANT SELECT ON storage.buckets TO anon, authenticated, service_role;

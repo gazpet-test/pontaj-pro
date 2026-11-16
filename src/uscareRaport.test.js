@@ -43,6 +43,11 @@ describe('pagina raportului', () => {
     expect(h).not.toContain('<SRL>')
     expect(t).toContain('BENEFICIAR NUME/ PRENUME: FUNCȚIE:')
   })
+  it('justificarea fotografiilor lipsă apare în PDF (observația 10 din verdictul r2), scăpată HTML; fără justificare, fără secțiune', () => {
+    const cu = htmlRaport({ ...U, poze_justificare: 'manometrul nu s-a putut fotografia <ceață>' })
+    expect(text(cu)).toContain('FOTOGRAFII LIPSĂ — JUSTIFICARE manometrul nu s-a putut fotografia &lt;ceață&gt;')
+    expect(text(htmlRaport({ ...U, poze_justificare: null }))).not.toContain('FOTOGRAFII LIPSĂ')
+  })
   it('coordonatele exacte NU apar implicit; doar cu opțiunea explicită', () => {
     expect(h).not.toContain('44.941234')
     const cu = text(htmlRaport(U, { cuCoordonate: true }))

@@ -9,9 +9,11 @@
 //    proiect (cont restrâns, editor pe P1), manager al altui proiect, administrator Execuție, owner, editor / viewer nerestrâns, cont fără
 //    drept, anonim; criteriul de acceptare (ultimul piston + fotografia lui, punctul de rouă opțional), cântăririle pe bureții declarați,
 //    fotografiile cerute (justificarea), rezervările de încărcare, meteo construit de server, poziția, stările, idempotența, CAS-ul, jurnalul.
-// 2. Refuzurile migrării (marcaj, plafon, fără amprenta globală, lanțul de drept schimbat, o politică Storage generică — sonda politicilor
-//    EFECTIVE) + revenirea (refuz cu date, definiții schimbate, aplicare -> revenire -> re-aplicare).
-// 3. MUTANȚI ai migrării: fiecare TREBUIE să pice (la aplicare sau la verificări).
+// 2. Refuzurile migrării (marcaj, plafon, fără amprenta globală — și o tabelă „înainte” veche citită acum —, bugetul lock-ului fără coliziune,
+//    lanțul de drept schimbat, politici Storage generice — sonda politicilor EFECTIVE pe 7 identități, cu owner_id și metadate —, drepturi pe
+//    coloane) + căile fără refuz fals (politică fără dreptul de tabel, privilegiile implicite ale altui rol) + revenirea (refuz cu date,
+//    definiții / structură / ACL schimbate, aplicare -> revenire -> re-aplicare). Secțiunea K: retragerea cheii („Renunț”, runda 3).
+// 3. MUTANȚI ai migrării: fiecare TREBUIE să pice (la aplicare, la verificări sau prin detectorul lui).
 // 4. Paritatea regulilor de închidere JS (src/uscareLogica.js) = SQL, pe aceleași cazuri (L19).
 // Ce NU probează PGlite (o singură conexiune): concurența reală — supabase/tests/20261225a_executie_uscare_doua_sesiuni.sh, pe clonă.
 // Rulare (din rădăcina repo-ului; cere bash în PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_executie_uscare_local.mjs
@@ -368,6 +370,35 @@ async function verifica(db) {
   asteptCod(await salveaza(db, U.ADMIN, 2, id2, 2, PLAN()), '22023', 'I salvarea unui raport anulat')
   asteptCod(await stare(db, U.ADMIN, id2, 2, 'redeschide', 'x'), '22023', 'I redeschiderea unui raport anulat')
   asteptCod(await stare(db, U.ADMIN, id2, 2, 'inchide'), '22023', 'I închiderea unui raport anulat')
+  // K. retragerea unei cereri nelămurite („Renunț”, runda 3): întâi serverul spune dacă s-a aplicat; doar dacă nu, cheia e retrasă DEFINITIV
+  const retrage = (uid, proiect, cheie, rol = 'authenticated') => ca(db, rol, uid, `SELECT public.fn_executie_uscare_retrage(${proiect}, ${lit(cheie)}::uuid) AS r`)
+  const nrJurnal = async () => (await db.query('SELECT count(*)::int AS n FROM public.executie_uscare_jurnal')).rows[0].n
+  const nj0 = await nrJurnal()
+  const k1r = asteptOk(await retrage(U.MAN_P1, 1, kA), 'K retragerea unei chei APLICATE (crearea din A)')
+  if (k1r && (k1r.aplicat !== true || k1r.retrasa !== false || Number(k1r.uscare_id) !== Number(id1) || k1r.actiune !== 'creare')) ab.push('K cheia aplicată: ' + JSON.stringify(k1r))
+  if (await nrJurnal() !== nj0) ab.push('K întrebarea pe o cheie aplicată a scris în jurnal')
+  const kLost = randomUUID()
+  const k2r = asteptOk(await retrage(U.MAN_P1, 1, kLost), 'K retragerea unei chei neaplicate (cererea pierdută)')
+  if (k2r && (k2r.aplicat !== false || k2r.retrasa !== true || k2r.duplicat !== false)) ab.push('K cheia neaplicată: ' + JSON.stringify(k2r))
+  const k3r = asteptOk(await retrage(U.MAN_P1, 1, kLost), 'K reluarea retragerii')
+  if (k3r && (k3r.retrasa !== true || k3r.duplicat !== true)) ab.push('K reluarea retragerii: ' + JSON.stringify(k3r))
+  // cererea pierdută ajunge DUPĂ retragere: refuzată (nicio dublură), pe toate cele trei RPC-uri
+  asteptMesaj(await salveaza(db, U.MAN_P1, 1, null, null, PLAN(), kLost), /retrasă/, 'K crearea cu o cheie retrasă')
+  const nU = (await db.query('SELECT count(*)::int AS n FROM public.executie_uscari')).rows[0].n
+  const kS = randomUUID(); asteptOk(await retrage(U.MAN_P1, 1, kS), 'K retragerea cheii unei închideri')
+  asteptMesaj(await stare(db, U.MAN_P1, n1?.uscare?.id ?? id1, 99, 'anuleaza', 'x', kS), /retrasă/, 'K starea cu o cheie retrasă')
+  const kP = randomUUID(); asteptOk(await retrage(U.MAN_P1, 1, kP), 'K retragerea cheii unei poze')
+  asteptMesaj(await poza(db, U.MAN_P1, id1, 'rezerva', { cale: cale(1, id1), categorie: 'altele', cheie: kP }), /retrasă/, 'K poza cu o cheie retrasă')
+  if ((await db.query('SELECT count(*)::int AS n FROM public.executie_uscari')).rows[0].n !== nU) ab.push('K o cerere retrasă a creat totuși un raport')
+  // drepturile retragerii
+  asteptCod(await retrage(U.MAN_P2, 1, kA), '42501', 'K managerul P2 întreabă de o cheie din P1')
+  asteptCod(await retrage(U.MAN_P1, 2, kA), '22023', 'K cheia P1 întrebată pe alt proiect')
+  asteptCod(await retrage(U.CIT_P1, 1, randomUUID()), '42501', 'K cititorul P1 retrage (cere drept de scriere)')
+  asteptCod(await retrage(U.FARA, 1, randomUUID()), '42501', 'K cont fără drept retrage')
+  asteptCod(await retrage(null, 1, randomUUID()), '42501', 'K fără JWT')
+  asteptCod(await retrage(null, 1, randomUUID(), 'anon'), '42501', 'K anon')
+  const jr2 = await ca(db, 'authenticated', U.CIT_P1, `SELECT uscare_id, actiune, valori FROM public.executie_uscare_jurnal WHERE cheie = ${lit(kLost)}`)
+  if (jr2.code || jr2.rows.length !== 1 || jr2.rows[0].uscare_id !== null || jr2.rows[0].actiune !== 'cheie_retrasa') ab.push('K retragerea în jurnal (vizibilă pe proiect): ' + JSON.stringify(jr2))
   // funcțiile interne nu se cheamă din API
   asteptCod(await ca(db, 'authenticated', U.OWNER, `SELECT public.fn_executie_uscare_tranzitie('deschisa', 'inchide')`), '42501', 'D funcție internă din API')
   return ab
@@ -419,16 +450,41 @@ for (const [nume, fn, re] of [
   }, /lantul de drept \(inainte\) difera de amprenta revizuita: public\.fn_executie_proiect_permis/],
   ['tronsoanele de probă lipsă', async db => { await db.exec('DROP TABLE public.executie_probe_tronsoane'); return aplicaMig(db) }, /executie_probe_tronsoane\.id lipseste/],
   ['meteo_cache fără ora preluării', async db => { await db.exec('ALTER TABLE public.meteo_cache DROP COLUMN actualizat_la'); return aplicaMig(db) }, /meteo_cache\.actualizat_la lipseste/],
+  ['o tabelă „înainte” rămasă din altă tranzacție, citită (deci blocată) în tranzacția curentă', async db => {
+    await db.exec(`BEGIN; CREATE TEMP TABLE ag_ina_0123456789abcdef (x int); COMMIT;`)
+    return aplicaMig(db, 'SELECT count(*) FROM pg_temp.ag_ina_0123456789abcdef;\n' + MIG, { l15: 'nimic' })
+  }, /AMPRENTA_GLOBALA_LIPSA/],
+  // bugetul lock-urilor (1 s de la BEGIN) se aplică și FĂRĂ coliziune (runda 3): o tranzacție care ajunge la lock după prima secundă = refuz
+  ['lock-ul fără coliziune, dar după prima secundă de la BEGIN', db => aplicaMig(db, 'SELECT pg_sleep(1.05);\n' + MIG), /BUGET_LOCK/],
   // sonda politicilor EFECTIVE: politici permisive generice (care nu numesc bucket-ul) deschid fișierele -> refuz
   ['politică generică de citire pe „proprietarul” fișierului', async db => {
     await db.exec(`CREATE POLICY proprii ON storage.objects FOR SELECT TO authenticated USING (owner = auth.uid())`); return aplicaMig(db)
-  }, /politicile EFECTIVE .*authenticated vede 1/],
+  }, /politicile EFECTIVE .*cont fara drept vede 2/],
   ['politică generică de ștergere pentru orice cont logat', async db => {
     await db.exec(`CREATE POLICY sterge_tot ON storage.objects FOR DELETE TO authenticated USING (true)`); return aplicaMig(db)
-  }, /politicile EFECTIVE .*authenticated sterge/],
+  }, /politicile EFECTIVE .*cont fara drept sterge/],
   ['politică generică de încărcare pentru PUBLIC', async db => {
     await db.exec(`CREATE POLICY urca_tot ON storage.objects FOR INSERT WITH CHECK (bucket_id <> 'altul')`); return aplicaMig(db)
-  }, /politicile EFECTIVE .*anon incarca/],
+  }, /politicile EFECTIVE .*anonim incarca/],
+  // contraexemplul review-ului r2 (P1-2): încărcarea generică pe owner_id = apelantul (sonda veche nu completa owner_id -> fals negativ)
+  ['CONTRAEXEMPLU: încărcare generică pe owner_id = auth.uid()', async db => {
+    await db.exec(`CREATE POLICY urca_proprii ON storage.objects FOR INSERT TO authenticated WITH CHECK (owner_id = auth.uid()::text)`); return aplicaMig(db)
+  }, /politicile EFECTIVE .*cont fara drept incarca \(proiect inexistent, proprietar\)/],
+  // o politică generică pe DREPTUL PE PROIECT (cale <proiect>/…): doar conturile cu drept o declanșează -> sonda trebuie să le probeze
+  ['citire generică pentru cine are drept pe proiectul din cale', async db => {
+    await db.exec(`CREATE POLICY citire_proiect ON storage.objects FOR SELECT TO authenticated
+      USING ((storage.foldername(name))[1] ~ '^[0-9]{1,18}$' AND public.fn_executie_nod_drept((storage.foldername(name))[1]::bigint, false))`); return aplicaMig(db)
+  }, /politicile EFECTIVE .*owner vede \d+.*cont restrans pe proiect vede \d+/],
+  ['încărcare generică pentru cine are drept de SCRIERE pe proiectul din cale (conturile fără drept nu o declanșează)', async db => {
+    await db.exec(`CREATE POLICY urca_proiect ON storage.objects FOR INSERT TO authenticated
+      WITH CHECK ((storage.foldername(name))[1] ~ '^[0-9]{1,18}$' AND public.fn_executie_nod_drept((storage.foldername(name))[1]::bigint, true))`); return aplicaMig(db)
+  }, /politicile EFECTIVE .*owner incarca \(proiect vazut, proprietar\)/],
+  ['încărcare generică pe metadatele unei fotografii (sonda veche nu le completa)', async db => {
+    await db.exec(`CREATE POLICY urca_jpeg ON storage.objects FOR INSERT TO authenticated WITH CHECK (metadata ->> 'mimetype' = 'image/jpeg')`); return aplicaMig(db)
+  }, /politicile EFECTIVE .*cont fara drept incarca \(proiect inexistent, proprietar\)/],
+  ['drept de modificare DOAR pe coloane pentru anon (sonda nu-l reproduce: refuz explicit)', async db => {
+    await db.exec(`REVOKE UPDATE ON storage.objects FROM anon; GRANT UPDATE (metadata) ON storage.objects TO anon;`); return aplicaMig(db)
+  }, /anon are drept UPDATE doar pe coloane/],
 ]) {
   const db = await bazaNoua()
   let m = null
@@ -438,11 +494,34 @@ for (const [nume, fn, re] of [
   await db.close()
 }
 {
-  // sonda nu lasă nimic în urmă: după o aplicare reușită bucket-ul e gol și rolul curent e postgres
+  // sonda nu lasă nimic în urmă: după o aplicare reușită bucket-ul e gol și rolul curent e postgres; a probat toate cele 7 identități
   const db = await bazaNoua()
-  await aplicaMig(db)
-  const r = (await db.query(`SELECT current_user AS u, (SELECT count(*)::int FROM storage.objects WHERE bucket_id = 'executie-uscare') AS n`)).rows[0]
-  ok(r.u === 'postgres' && r.n === 0, `sonda Storage anulată integral (rol ${r.u}, ${r.n} fișiere)`)
+  const j = await aplicaMig(db)
+  const r = (await db.query(`SELECT current_user AS u, (SELECT count(*)::int FROM storage.objects WHERE bucket_id = 'executie-uscare') AS n,
+    to_regprocedure('pg_temp.sonda_rand_20261225a(text[], text, uuid, boolean)') IS NULL AS f`)).rows[0]
+  const pr = (j.find(m => /sonda storage: identitati probate/.test(m)) || '').split(': ').slice(-1)[0]
+  ok(r.u === 'postgres' && r.n === 0 && r.f && pr.split('; ').filter(Boolean).length === 7, `sonda Storage anulată integral (rol ${r.u}, ${r.n} fișiere); identități: ${pr}`)
+  await db.close()
+}
+{
+  // FĂRĂ REFUZ FALS din drepturile copiei (runda 3): o politică de încărcare pentru anon, dar anon NU are INSERT pe storage.objects -> pe
+  // tabelul real anon nu poate încărca nimic, deci migrarea trebuie să se aplice (sonda veche dădea drept INSERT copiei și refuza)
+  const db = await bazaNoua()
+  await db.exec(`REVOKE INSERT ON storage.objects FROM anon; CREATE POLICY anon_urca ON storage.objects FOR INSERT TO anon WITH CHECK (true);`)
+  let m = null; try { await aplicaMig(db) } catch (e) { m = e.message }
+  const urc = await ca(db, 'anon', null, `INSERT INTO storage.objects (bucket_id, name) VALUES ('executie-uscare', '1/1/${randomUUID()}.jpg')`)
+  ok(m === null && urc.code === '42501', `politică fără dreptul de tabel nu produce refuz fals (${m || 'aplicată'}; anon pe tabelul real: ${urc.code || 'a încărcat!'})`)
+  await db.close()
+}
+{
+  // privilegiile implicite ale platformei pentru un ALT rol (ex. un rol de citire): migrarea le retrage pe obiectele ei și se aplică; ACL exact
+  const db = await bazaNoua()
+  await db.exec(`CREATE ROLE zz_platforma NOLOGIN; ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO zz_platforma;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO zz_platforma;`)
+  let m = null; try { await aplicaMig(db) } catch (e) { m = e.message }
+  const r = (await db.query(`SELECT count(*)::int AS n FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) e
+    WHERE c.relname LIKE 'executie\\_uscar%' AND e.grantee = 'zz_platforma'::regrole`)).rows[0].n
+  ok(m === null && r === 0, `drepturile implicite ale altui rol retrase la aplicare (${m || 'aplicată'}; rămase: ${r})`)
   await db.close()
 }
 
@@ -466,6 +545,15 @@ console.log('3. revenirea')
     ['bucket făcut public', `UPDATE storage.buckets SET public = true WHERE id = 'executie-uscare'`, `UPDATE storage.buckets SET public = false WHERE id = 'executie-uscare'`, /bucket/],
     ['drept INSERT dat pe tabel', `GRANT INSERT ON public.executie_uscari TO authenticated`, `REVOKE INSERT ON public.executie_uscari FROM authenticated`, /drepturi/],
     ['coloană adăugată pe tabel', `ALTER TABLE public.executie_uscari ADD COLUMN zz int`, `ALTER TABLE public.executie_uscari DROP COLUMN zz`, /coloane/],
+    // runda 3 (verdict P2-8): starea EXACTĂ și pentru constrângeri, valori implicite, indecși, NOT NULL, secvențe, roluri suplimentare
+    ['CONTRAEXEMPLU: un CHECK în plus pe tabelul gol', `ALTER TABLE public.executie_uscari ADD CONSTRAINT zz_ck CHECK (versiune < 100000)`, `ALTER TABLE public.executie_uscari DROP CONSTRAINT zz_ck`, /structura: executie_uscari \(gasit/],
+    ['altă valoare implicită', `ALTER TABLE public.executie_uscare_jurnal ALTER COLUMN valori SET DEFAULT '{"x": 1}'::jsonb`, `ALTER TABLE public.executie_uscare_jurnal ALTER COLUMN valori SET DEFAULT '{}'::jsonb`, /structura: executie_uscare_jurnal/],
+    ['un index în plus', `CREATE INDEX zz_idx ON public.executie_uscare_poze (legenda)`, `DROP INDEX public.zz_idx`, /structura: executie_uscare_poze/],
+    ['NOT NULL scos', `ALTER TABLE public.executie_uscare_incarcari ALTER COLUMN creat_la DROP NOT NULL`, `ALTER TABLE public.executie_uscare_incarcari ALTER COLUMN creat_la SET NOT NULL`, /structura: executie_uscare_incarcari/],
+    ['parametrii secvenței de identitate', `ALTER TABLE public.executie_uscari ALTER COLUMN id SET CACHE 5`, `ALTER TABLE public.executie_uscari ALTER COLUMN id SET CACHE 1`, /structura: executie_uscari/],
+    ['drept pe secvență', `GRANT USAGE ON SEQUENCE public.executie_uscare_jurnal_id_seq TO authenticated`, `REVOKE USAGE ON SEQUENCE public.executie_uscare_jurnal_id_seq FROM authenticated`, /drepturi ACL: executie_uscare_jurnal_id_seq\/authenticated\/USAGE/],
+    ['un rol suplimentar cu drept pe tabel', `CREATE ROLE zz_rol NOLOGIN; GRANT SELECT ON public.executie_uscare_poze TO zz_rol`, `REVOKE SELECT ON public.executie_uscare_poze FROM zz_rol; DROP ROLE zz_rol`, /drepturi ACL: executie_uscare_poze\/zz_rol\/SELECT/],
+    ['SELECT cu GRANT OPTION', `GRANT SELECT ON public.executie_uscari TO service_role WITH GRANT OPTION`, `REVOKE GRANT OPTION FOR SELECT ON public.executie_uscari FROM service_role`, /drepturi ACL: executie_uscari\/service_role\/SELECT/],
   ]) {
     await db.exec(sql)
     m = null; try { await revino(db) } catch (e) { m = e.message }
@@ -519,11 +607,48 @@ const MUTANTI = [
   ['M23 creare fără revendicarea cheii (cheia citită fără proiect)', [["    IF j.amprenta IS DISTINCT FROM v_amprenta OR j.proiect_id IS DISTINCT FROM p_proiect THEN", "    IF j.amprenta IS DISTINCT FROM v_amprenta AND false THEN"]]],
   ['M24 sonda Storage dezactivată (politica generică trece)', [["  IF v_rau <> '' THEN\n    RAISE EXCEPTION '20261225a post: politicile EFECTIVE", "  IF false THEN\n    RAISE EXCEPTION '20261225a post: politicile EFECTIVE"]], `CREATE POLICY proprii ON storage.objects FOR SELECT TO authenticated USING (owner = auth.uid())`],
   ['M25 fără garda amprentei globale', [["  IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = pg_my_temp_schema()", "  IF false AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = pg_my_temp_schema()"]], null, { l15: 'nimic' }],
+  // runda 3 — fiecare are detectorul lui (ce ar fi lăsat să treacă)
+  ['M26 sonda nu completează owner_id (CONTRAEXEMPLUL r2 trece)', [["      IF 'owner_id' = ANY (p_cols) THEN", "      IF false AND 'owner_id' = ANY (p_cols) THEN"]],
+    `CREATE POLICY urca_proprii ON storage.objects FOR INSERT TO authenticated WITH CHECK (owner_id = auth.uid()::text)`,
+    { aplicaIntai: true, detector: async db => { const r = await ca(db, 'authenticated', U.FARA, `INSERT INTO storage.objects (bucket_id, name, owner, owner_id) VALUES ('executie-uscare', '1/1/${randomUUID()}.jpg', '${U.FARA}', '${U.FARA}')`); return r.code ? null : 'un cont fără drept a încărcat un fișier nerezervat' } }],
+  ['M27 sonda doar cu anonim + contul fără drept (politica pe dreptul de proiect trece)', [["      IF x.uid IS NOT NULL THEN\n        v_ids := v_ids || jsonb_build_array(", "      IF false AND x.uid IS NOT NULL THEN\n        v_ids := v_ids || jsonb_build_array("]],
+    `CREATE POLICY citire_proiect ON storage.objects FOR SELECT TO authenticated USING ((storage.foldername(name))[1] ~ '^[0-9]{1,18}$' AND public.fn_executie_nod_drept((storage.foldername(name))[1]::bigint, false))`,
+    { aplicaIntai: true, detector: async db => {
+      const c = `1/999999/${randomUUID()}.jpg`
+      await db.exec(`INSERT INTO storage.objects (bucket_id, name) VALUES ('executie-uscare', '${c}')`)
+      const r = await ca(db, 'authenticated', U.CIT_P1, `SELECT count(*)::int AS n FROM storage.objects WHERE name = '${c}'`)
+      return !r.code && r.rows[0].n > 0 ? 'cititorul P1 vede un fișier al unui raport inexistent' : null } }],
+  ['M28 copia sondei primește toate drepturile (refuz fals)', [["              WHERE has_table_privilege(r.rol, 'storage.objects', d.drept) LOOP\n      EXECUTE format('GRANT %s ON pg_temp.sonda_obiecte_20261225a TO %I', x.drept, x.rol);",
+    "              WHERE true LOOP\n      EXECUTE format('GRANT %s ON pg_temp.sonda_obiecte_20261225a TO %I', x.drept, x.rol);"]],
+    `REVOKE INSERT ON storage.objects FROM anon; CREATE POLICY anon_urca ON storage.objects FOR INSERT TO anon WITH CHECK (true);`],
+  ['M29 retragerea nu scrie cheia (cererea pierdută se aplică după „Renunț”)', [["  INSERT INTO public.executie_uscare_jurnal (uscare_id, proiect_id, actiune, valori, cheie, amprenta)\n  VALUES (NULL, p_proiect, 'cheie_retrasa'", "  PERFORM 1 FROM public.executie_uscare_jurnal WHERE false AND (NULL, p_proiect, 'cheie_retrasa'"]]],
+  ['M30 retragerea nu întreabă jurnalul (cheia aplicată = „neaplicată”)', [["  SELECT uscare_id, proiect_id, actiune INTO j FROM public.executie_uscare_jurnal WHERE cheie = p_cheie;\n  IF FOUND THEN\n    IF NOT public.fn_executie_nod_drept(j.proiect_id, false) THEN",
+    "  SELECT uscare_id, proiect_id, actiune INTO j FROM public.executie_uscare_jurnal WHERE cheie = p_cheie AND false;\n  IF FOUND THEN\n    IF NOT public.fn_executie_nod_drept(j.proiect_id, false) THEN"]]],
+  ['M31 bugetul lock-ului doar la coliziune (ca în r2)', [["  LOOP\n    IF clock_timestamp() >= now() + interval '1 second' THEN\n      RAISE EXCEPTION '20261225a: BUGET_LOCK: % incercari", "  LOOP\n    IF false THEN\n      RAISE EXCEPTION '20261225a: BUGET_LOCK: % incercari"],
+    ["  IF clock_timestamp() >= now() + interval '1 second' THEN\n    RAISE EXCEPTION '20261225a: BUGET_LOCK: lock-urile obtinute", "  IF false THEN\n    RAISE EXCEPTION '20261225a: BUGET_LOCK: lock-urile obtinute"]],
+    null, { detector: async (db, text) => { try { await aplicaMig(db, 'SELECT pg_sleep(1.05);\n' + text); return 'lock luat după prima secundă' } catch { return null } } }],
+  ['M32 garda tabelei „înainte” fără xmin (o tabelă veche, citită acum, trece)', [["                    AND c.xmin::text = (txid_current() % 4294967296)::text\n", '']],
+    null, { detector: async (db, text) => {
+      await db.exec(`BEGIN; CREATE TEMP TABLE ag_ina_0123456789abcdef (x int); COMMIT;`)
+      try { await aplicaMig(db, 'SELECT count(*) FROM pg_temp.ag_ina_0123456789abcdef;\n' + text, { l15: 'nimic' }); return 'aplicată fără pasul „înainte”' } catch { return null } } }],
+  ['M33 fără retragerea drepturilor altor roluri (privilegiile implicite ale platformei)', [["              AND NOT (c.relkind = 'r' AND e.grantee IN ('authenticated'::regrole::oid, 'service_role'::regrole::oid)) LOOP", "              AND false LOOP"]],
+    `CREATE ROLE zz_platforma NOLOGIN; ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO zz_platforma;`],
 ]
 for (const [nume, inl, preg, opt] of MUTANTI) {
   const db = await bazaNoua()
   if (preg) await db.exec(preg)
   let picat = null
+  if (opt?.detector) {
+    // aplicaIntai: mutantul se aplică (sonda lui nu vede gaura), apoi detectorul arată gaura; altfel detectorul aplică singur, în scenariul lui.
+    // Fără mutant, același scenariu e refuzat de migrarea reală (secțiunea 2).
+    try {
+      if (opt.aplicaIntai) await aplicaMig(db, aplica(MIG, inl))
+      picat = await opt.detector(db, aplica(MIG, inl))
+    } catch (e) { picat = null; console.log('     ' + nume + ': ' + e.message.slice(0, 160)) }
+    ok(picat != null, `${nume} pică (${picat || 'NU a picat'})`)
+    await db.close()
+    continue
+  }
   try {
     await aplicaMig(db, aplica(MIG, inl), opt)
     if (opt?.l15 === 'nimic') picat = null

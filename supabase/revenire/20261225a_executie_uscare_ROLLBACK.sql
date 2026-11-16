@@ -1,12 +1,14 @@
 -- Revenire 20261225a_executie_uscare. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a owner-ului (supabase/revenire/README.md).
 -- Scoate tot ce a creat migrarea: tabelele executie_uscari, executie_uscare_incarcari, executie_uscare_poze, executie_uscare_jurnal (cu
--- politicile, trigger-ele și cheile lor), cele 16 funcții fn_executie_uscare_*, politicile executie_uscare_citire / _adauga de pe
+-- politicile, trigger-ele și cheile lor), cele 17 funcții fn_executie_uscare_*, politicile executie_uscare_citire / _adauga de pe
 -- storage.objects și bucket-ul executie-uscare. Tabelele și funcțiile existente NU se ating.
 -- Starea EXACTĂ a migrării e verificată înainte, pe DEFINIȚII (nu doar pe numere): corpul fiecărei funcții (amprenta fără CR) + limbajul,
 -- DEFINER-ul, search_path-ul, proprietarul, EXECUTE pe fiecare rol; fiecare politică (nume, comandă, permisivă, roluri, expresia exactă);
 -- fiecare trigger (funcția, tipul, activ, fără WHEN / argumente / coloane); configurația bucket-ului (privat, limita, tipurile); drepturile pe
--- tabele (fiecare drept, pe fiecare rol, plus PUBLIC și coloane); coloanele fiecărui tabel (numele + tipul, în ordine). Altă stare = refuz,
--- nimic schimbat.
+-- tabele (fiecare drept, pe fiecare rol, plus PUBLIC și coloane) și ACL-ul EXACT al tabelelor și secvențelor (niciun alt rol); STRUCTURA
+-- fiecărui tabel (runda 3), ca amprentă: coloanele (nume, tip, NOT NULL, valoarea implicită, identitate, generare, colație), constrângerile
+-- (nume + definiție: un CHECK adăugat pe tabelul gol = altă amprentă), indecșii (definiția), opțiunile tabelului, parametrii secvenței de
+-- identitate. Altă stare = refuz, nimic schimbat. Amprentele se regenerează și se verifică cu scripts/pglite/test_executie_uscare_local.mjs.
 -- REFUZĂ dacă există date: un raport, o rezervare, o poză, un rând de jurnal sau un fișier în bucket (rapoartele de uscare sunt documente
 -- semnate; golirea = decizie separată: preview → „da” owner → export → apply).
 --
@@ -15,7 +17,8 @@
 --        --versiune 20261225120001 --tinta-db postgres --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P> --user postgres
 --        --plafon-tranzactie-ms 2000
 --   Runnerul pune marcajul (gazpet.livrare_migrare = '20261225a_executie_uscare_ROLLBACK:<txid>') și plafonul; fără ele fișierul refuză.
--- Ordinea (L06, L14): 1. gărzile + starea exactă (doar catalog); 2. lock-urile, NOWAIT, reîncercate ≤ 1 s de la BEGIN, în ordinea:
+-- Ordinea (L06, L14): 1. gărzile + starea exactă (doar catalog); 2. lock-urile, NOWAIT, cu bugetul de 1 s de la BEGIN verificat înaintea fiecărei
+--   încercări și DUPĂ obținere (un lock luat după prima secundă = refuz, nimic schimbat), în ordinea:
 --   executie_uscari, executie_uscare_incarcari, executie_uscare_poze, executie_uscare_jurnal (ACCESS EXCLUSIVE), storage.objects (ACCESS
 --   EXCLUSIVE: DROP POLICY), ÎNAINTEA verificării „fără date”; 3. sub lock: starea din nou, „fără date”, DROP-urile, postcondiția.
 -- Un SINGUR bloc DO: un refuz e singura instrucțiune care eșuează.
@@ -45,6 +48,10 @@ BEGIN
   FOR v_pas IN 1 .. 2 LOOP
     IF v_pas = 2 THEN
       LOOP
+        IF clock_timestamp() >= now() + interval '1 second' THEN
+          RAISE EXCEPTION '20261225a revenire: BUGET_LOCK: % incercari, % ms de la BEGIN (bugetul lock-urilor e 1 s de la BEGIN); nimic schimbat',
+            v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
+        END IF;
         v_incercari := v_incercari + 1;
         BEGIN
           LOCK TABLE public.executie_uscari IN ACCESS EXCLUSIVE MODE NOWAIT;
@@ -54,13 +61,13 @@ BEGIN
           LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE NOWAIT;
           EXIT;
         EXCEPTION WHEN lock_not_available THEN
-          IF clock_timestamp() >= now() + interval '1 second' THEN
-            RAISE EXCEPTION '20261225a revenire: BUGET_LOCK: tabel ocupat; % incercari, % ms de la BEGIN; nimic schimbat',
-              v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
-          END IF;
           PERFORM pg_sleep(0.05);
         END;
       END LOOP;
+      IF clock_timestamp() >= now() + interval '1 second' THEN
+        RAISE EXCEPTION '20261225a revenire: BUGET_LOCK: lock-urile obtinute abia la % ms de la BEGIN (% incercari; bugetul e 1 s de la BEGIN); nimic schimbat',
+          round(extract(epoch FROM clock_timestamp() - now()) * 1000), v_incercari USING ERRCODE = '55P03';
+      END IF;
     END IF;
     IF to_regclass('public.executie_uscari') IS NULL OR to_regclass('public.executie_uscare_incarcari') IS NULL
        OR to_regclass('public.executie_uscare_poze') IS NULL OR to_regclass('public.executie_uscare_jurnal') IS NULL THEN
@@ -92,6 +99,46 @@ BEGIN
        OR EXISTS (SELECT 1 FROM unnest(v_tabele) x(tab) JOIN pg_class c ON c.oid = ('public.' || x.tab)::regclass
                    WHERE NOT c.relrowsecurity OR c.relforcerowsecurity OR pg_get_userbyid(c.relowner) <> 'postgres') THEN
       RAISE EXCEPTION '20261225a revenire: starea nu e cea din 20261225a (pasul %, drepturi / RLS: %)', v_pas, coalesce(v_rau, 'PUBLIC / coloane / RLS / proprietar');
+    END IF;
+    -- ACL-ul EXACT (runda 3): pe tabele doar proprietarul + SELECT (fără GRANT OPTION) pentru authenticated / service_role, niciun alt rol;
+    -- pe secvențele de identitate doar proprietarul (postgres)
+    SELECT string_agg(DISTINCT c.relname || '/' || CASE WHEN e.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END || '/' || e.privilege_type, ', ') INTO v_rau
+      FROM pg_class c CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's' ELSE 'r' END::"char", c.relowner))) e
+     WHERE c.oid IN (SELECT ('public.' || x)::regclass FROM unnest(v_tabele) x
+                     UNION ALL SELECT pg_get_serial_sequence('public.' || x, 'id')::regclass FROM unnest(v_tabele) x)
+       AND e.grantee <> c.relowner
+       AND NOT (c.relkind = 'r' AND e.grantee IN ('authenticated'::regrole::oid, 'service_role'::regrole::oid) AND e.privilege_type = 'SELECT' AND NOT e.is_grantable);
+    IF v_rau IS NOT NULL
+       OR EXISTS (SELECT 1 FROM unnest(v_tabele) x WHERE pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid = pg_get_serial_sequence('public.' || x, 'id')::regclass)) IS DISTINCT FROM 'postgres') THEN
+      RAISE EXCEPTION '20261225a revenire: starea nu e cea din 20261225a (pasul %, drepturi ACL: %)', v_pas, coalesce(v_rau, 'proprietarul secventei');
+    END IF;
+    -- STRUCTURA fiecărui tabel (runda 3): coloanele (nume, tip, NOT NULL, valoarea implicită, identitate, generare, colație), constrângerile
+    -- (nume, tip, validată, definiția; fără rândurile NOT NULL ale PG18, acoperite de attnotnull), indecșii (definiția), opțiunile, parametrii
+    -- secvenței de identitate; o amprentă md5 pe tabel. Mesajul de refuz dă amprenta găsită (diagnostic), nu o acceptă.
+    SELECT string_agg(t.tab || ' (gasit ' || x.amp || ')', ', ') INTO v_rau FROM (VALUES
+        -- STRUCTURA-START
+        ('executie_uscari', '456ffbdfe2fa4fcca58456e96f134a24'),
+        ('executie_uscare_incarcari', '846d5be8353da7e23a0e6a604b315b17'),
+        ('executie_uscare_poze', 'ed428e6233195f5f5f10c1bbf15d58e7'),
+        ('executie_uscare_jurnal', 'c243a2121d6ca337fd6765c750c4e9d1')
+        -- STRUCTURA-END
+      ) t(tab, amp)
+      CROSS JOIN LATERAL (SELECT md5(concat_ws(E'\n',
+        (SELECT string_agg(format('c %s|%s|%s|%s|%s|%s|%s', a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
+                                  coalesce(pg_get_expr(d.adbin, d.adrelid), ''), a.attidentity, a.attgenerated, a.attcollation), E'\n' ORDER BY a.attnum)
+           FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+          WHERE a.attrelid = ('public.' || t.tab)::regclass AND a.attnum > 0 AND NOT a.attisdropped),
+        (SELECT string_agg(format('k %s|%s|%s|%s', k.conname, k.contype, k.convalidated, pg_get_constraintdef(k.oid)), E'\n' ORDER BY k.conname)
+           FROM pg_constraint k WHERE k.conrelid = ('public.' || t.tab)::regclass AND k.contype <> 'n'),
+        (SELECT string_agg(format('i %s', pg_get_indexdef(i.indexrelid)), E'\n' ORDER BY ic.relname)
+           FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid WHERE i.indrelid = ('public.' || t.tab)::regclass),
+        (SELECT format('o %s|%s|%s', c.relpersistence, coalesce(array_to_string(c.reloptions, ','), ''), c.relreplident)
+           FROM pg_class c WHERE c.oid = ('public.' || t.tab)::regclass),
+        (SELECT string_agg(format('s %s|%s|%s|%s|%s|%s|%s', s.seqtypid::regtype, s.seqstart, s.seqincrement, s.seqmax, s.seqmin, s.seqcache, s.seqcycle), E'\n')
+           FROM pg_sequence s WHERE s.seqrelid = pg_get_serial_sequence('public.' || t.tab, 'id')::regclass))) AS amp) x
+     WHERE x.amp IS DISTINCT FROM t.amp;
+    IF v_rau IS NOT NULL THEN
+      RAISE EXCEPTION '20261225a revenire: starea nu e cea din 20261225a (pasul %, structura: %)', v_pas, v_rau;
     END IF;
     -- politicile: EXACT cele 4 + 2, fiecare cu definiția ei (comanda, permisivă, rolurile, expresiile)
     SELECT string_agg(coalesce(a.nume, p.polname), ', ') INTO v_rau
@@ -138,7 +185,7 @@ BEGIN
                      AND file_size_limit = 10485760 AND allowed_mime_types = ARRAY['image/jpeg']) THEN
       RAISE EXCEPTION '20261225a revenire: starea nu e cea din 20261225a (pasul %, bucket: altă configurație)', v_pas;
     END IF;
-    -- funcțiile: exact cele 16, fiecare cu corpul revizuit (amprenta fără CR), limbajul, DEFINER-ul, search_path-ul, proprietarul, EXECUTE
+    -- funcțiile: exact cele 17, fiecare cu corpul revizuit (amprenta fără CR), limbajul, DEFINER-ul, search_path-ul, proprietarul, EXECUTE
     SELECT string_agg(a.fn, ', ') INTO v_rau FROM (VALUES
         -- AMPRENTE-START
         ('public.fn_executie_uscare_utilaje_ok(jsonb)', 'sql', false, '5950452f25882bc1f1e087fde7dd7ad5'),
@@ -153,10 +200,11 @@ BEGIN
         ('public.fn_executie_uscare_incarcare_garda()', 'plpgsql', false, '2599ca1f5feab4f0da29e69758ec984d'),
         ('public.fn_executie_uscare_jurnal_garda()', 'plpgsql', false, 'f6b8159d9439e6bd046fc4766d3076a9'),
         ('public.fn_executie_uscare_fara_golire()', 'plpgsql', false, '1b0ebeecc0b85f90e433e344a10524f4'),
-        ('public.fn_executie_uscare_salveaza(bigint, bigint, integer, jsonb, uuid)', 'plpgsql', true, '87499e40b31401b8f0a4ad70565b5b42'),
-        ('public.fn_executie_uscare_stare(bigint, integer, text, text, uuid)', 'plpgsql', true, 'fc3a3a200545bd9ff854d74eff6433fb'),
-        ('public.fn_executie_uscare_poza(bigint, text, bigint, text, text, integer, text, uuid)', 'plpgsql', true, '900bee32ef68cb016788e86213ff9a3a'),
+        ('public.fn_executie_uscare_salveaza(bigint, bigint, integer, jsonb, uuid)', 'plpgsql', true, '65c38443b4bc4b9510ae26773aeb6924'),
+        ('public.fn_executie_uscare_stare(bigint, integer, text, text, uuid)', 'plpgsql', true, 'deab7a030187d84d2acfc4a5ef3990a6'),
+        ('public.fn_executie_uscare_poza(bigint, text, bigint, text, text, integer, text, uuid)', 'plpgsql', true, 'cf553d55e76fd487809df8ae6c1e21a8'),
         ('public.fn_executie_uscare_obiect(text, text, boolean)', 'sql', true, '98336ee3ff2579f4e39618b8a874c6fa'),
+        ('public.fn_executie_uscare_retrage(bigint, uuid)', 'plpgsql', true, 'ce7d5d890b65e4430f1e8b1b7cafb1ba'),
         -- AMPRENTE-END
         ('', '', false, '')
       ) a(fn, limbaj, definer, amp)
@@ -168,7 +216,7 @@ BEGIN
                            AND has_function_privilege('authenticated', p.oid, 'EXECUTE') = (a.definer)
                            AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e WHERE e.grantee = 0));
     IF v_rau IS NOT NULL
-       OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_uscare\_%') <> 16 THEN
+       OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_uscare\_%') <> 17 THEN
       RAISE EXCEPTION '20261225a revenire: starea nu e cea din 20261225a (pasul %, functii: %)', v_pas, coalesce(v_rau, 'alt numar');
     END IF;
     -- nimic din afara migrării nu depinde de obiectele ei: vederi / chei străine spre tabele, funcții care le numesc, alte politici
@@ -210,6 +258,7 @@ BEGIN
   DROP FUNCTION public.fn_executie_uscare_stare(bigint, integer, text, text, uuid);
   DROP FUNCTION public.fn_executie_uscare_poza(bigint, text, bigint, text, text, integer, text, uuid);
   DROP FUNCTION public.fn_executie_uscare_obiect(text, text, boolean);
+  DROP FUNCTION public.fn_executie_uscare_retrage(bigint, uuid);
   DROP FUNCTION public.fn_executie_uscare_garda();
   DROP FUNCTION public.fn_executie_uscare_poza_garda();
   DROP FUNCTION public.fn_executie_uscare_incarcare_garda();

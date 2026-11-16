@@ -97,6 +97,14 @@ export function htmlRaportBlocuri(u, { cuCoordonate = false } = {}) {
     <tr><th style="${TH};text-align:left">OBSERVAȚII</th></tr>
     <tr><td style="${B};height:70px;vertical-align:top;font-size:12px;white-space:pre-wrap;word-break:break-word">${esc(u.observatii)}</td></tr>
   </table>`))
+  // justificarea fotografiilor cerute care lipsesc (salvată cu raportul, obligatorie la închidere dacă lipsesc): apare în documentul distribuit
+  if (typeof u.poze_justificare === 'string' && u.poze_justificare.trim()) {
+    blocuri.push(bloc(`
+  <table style="width:100%;border-collapse:collapse"><colgroup><col style="width:100%"></colgroup>
+    <tr><th style="${TH};text-align:left">FOTOGRAFII LIPSĂ — JUSTIFICARE</th></tr>
+    <tr><td style="${B};vertical-align:top;font-size:12px;white-space:pre-wrap;word-break:break-word">${esc(u.poze_justificare)}</td></tr>
+  </table>`))
+  }
   blocuri.push(bloc(`
   <div style="margin:8px 0 4px;font-size:12px">Ultimul piston vehiculat iese uscat (criteriul din caietul de sarcini): &nbsp; ${bifa(u.piston_final_rezultat === 'uscat')} DA &nbsp;&nbsp; ${bifa(u.piston_final_rezultat === 'umed')} NU</div>
   <div style="margin:4px 0 8px;font-size:13px;font-weight:700">Concluzie pentru tronson: &nbsp; ${bifa(u.concluzie === 'conform')} CONFORM &nbsp;&nbsp; ${bifa(u.concluzie === 'neconform')} NECONFORM</div>`))

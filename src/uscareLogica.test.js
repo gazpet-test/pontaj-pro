@@ -245,6 +245,57 @@ describe('conflictul de versiune: îmbinare pe câmpuri, alegere explicită', ()
   })
 })
 
+// runda 3 (verdict P1-4): la 25.10.2026, 00:30Z și 01:30Z se afișează amândouă „03:30” în ora României
+describe('îmbinarea la ora de iarnă: comparația pe INSTANT, apariția orei e comparată', () => {
+  const V = '2026-10-25T00:30:00.000Z', I = '2026-10-25T01:30:00.000Z'
+  const baza = { ...RAND, ora_inceput: V, ora_final: '2026-10-25T05:00:00Z', meteo: null, temperatura_c: 7.5, temperatura_sursa: 'manual', versiune: 3 }
+  it('exemplul din verdict: colegul mută începutul pe a doua apariție, eu schimb doar observațiile -> CONFLICT explicit, nu suprascriere', () => {
+    const server = { ...baza, ora_inceput: I, versiune: 4 }
+    const formB = { ...formularDinRand(baza), observatii: 'doar observații' }
+    expect(formularDinRand(server).ora_inceput).toBe(formB.ora_inceput)          // același text pe ecran: „2026-10-25T03:30”
+    const { form, conflicte } = imbinare(baza, formB, server)
+    expect(conflicte.map(c => c.camp)).toEqual(['ora_inceput'])
+    expect(conflicte[0].al_meu).toBe('25.10.2026 03:30 (ora de vară)')
+    expect(conflicte[0].al_colegului).toBe('25.10.2026 03:30 (ora de iarnă)')
+    expect(form.observatii).toBe('doar observații')
+    expect(payloadDinFormular(aleg(form, conflicte[0], 'al_colegului', server)).date.ora_inceput).toBe(I)
+    expect(payloadDinFormular(aleg(form, conflicte[0], 'al_meu', server)).date.ora_inceput).toBe(V)
+  })
+  it('eu aleg cealaltă apariție, colegul nu atinge ora: rămâne alegerea mea (instantul meu), fără conflict', () => {
+    const server = { ...baza, observatii: 'scris de A', versiune: 4 }
+    const formB = { ...formularDinRand(baza) }
+    formB.dst = { ...formB.dst, ora_inceput: 'iarna' }
+    const { form, conflicte } = imbinare(baza, formB, server)
+    expect(conflicte).toEqual([])
+    expect(payloadDinFormular(form).date.ora_inceput).toBe(I)
+    expect(form.observatii).toBe('scris de A')
+  })
+  it('ambii aleg apariții DIFERITE ale aceleiași ore: conflict', () => {
+    const server = { ...baza, ora_inceput: I, versiune: 4 }
+    const b0 = { ...baza, ora_inceput: '2026-10-25T02:30:00Z' }                  // baza 05:30 (iarnă), eu aleg 03:30 vară, colegul 03:30 iarnă
+    const formB = { ...formularDinRand(b0), ora_inceput: '2026-10-25T03:30', dst: { ...formularDinRand(b0).dst, ora_inceput: 'vara' } }
+    const { conflicte } = imbinare(b0, formB, server)
+    expect(conflicte.map(c => [c.camp, c.al_meu, c.al_colegului])).toEqual([['ora_inceput', '25.10.2026 03:30 (ora de vară)', '25.10.2026 03:30 (ora de iarnă)']])
+  })
+  it('o schimbare VIZIBILĂ a colegului (alt text al orei) pe un câmp neatins de mine se preia fără conflict', () => {
+    const server = { ...baza, ora_inceput: '2026-10-25T03:00:00Z', versiune: 4 }
+    const { form, conflicte } = imbinare(baza, { ...formularDinRand(baza), observatii: 'x' }, server)
+    expect(conflicte).toEqual([])
+    expect(payloadDinFormular(form).date.ora_inceput).toBe('2026-10-25T03:00:00.000Z')
+  })
+  it('aceeași apariție aleasă de amândoi nu e conflict', () => {
+    const server = { ...baza, ora_inceput: I, versiune: 4 }
+    const formB = { ...formularDinRand(baza) }
+    formB.dst = { ...formB.dst, ora_inceput: 'iarna' }
+    expect(imbinare(baza, formB, server).conflicte).toEqual([])
+  })
+  it('restaurarea unei ciorne de pe versiunea veche trece prin aceeași îmbinare (ciorna ține baza)', () => {
+    const ciorna = { baza, form: { ...formularDinRand(baza), observatii: 'ciornă' } }
+    const server = { ...baza, ora_inceput: I, versiune: 5 }
+    expect(imbinare(ciorna.baza, ciorna.form, server).conflicte.map(c => c.camp)).toEqual(['ora_inceput'])
+  })
+})
+
 describe('meteo: ora observației furnizorului, pentru ora începerii', () => {
   const rand = { curent: { temp: 7.46, vreme: 'Senin', la: '2026-12-08T08:00:00+02:00' }, actualizat_la: '2026-12-08T06:20:00Z' }
   it('propunerea păstrează ora observației (nu ora preluării)', () => {
@@ -261,6 +312,26 @@ describe('meteo: ora observației furnizorului, pentru ora începerii', () => {
     expect(invalidareMeteo(f, { ora_inceput: '2026-12-08T09:40' })).toEqual({ temperatura_c: '', temperatura_sursa: '', meteo_cerere: null })
     expect(invalidareMeteo(f, { ora_inceput: '2026-12-08T08:40' })).toEqual({})
     expect(invalidareMeteo({ ...f, temperatura_sursa: 'manual' }, { ora_inceput: '2026-12-08T09:40' })).toEqual({})
+  })
+  // runda 3 (verdict P2-5, P2-6)
+  const CERERE = { site_id: 100, site: 'S', ora_observatiei: '2026-12-08T06:00:00+02:00', preluat_la: '2026-12-08T06:10:00Z', furnizor: 'xweather' }
+  it('alegerea CELEILALTE apariții a orei de iarnă invalidează ca o schimbare de oră (instantul s-a schimbat)', () => {
+    const r = { ...RAND, ora_inceput: '2026-10-25T00:30:00Z', meteo: null, temperatura_sursa: 'meteo' }
+    const f = { ...formularDinRand(r), meteo_cerere: CERERE }
+    expect(invalidareMeteo(f, { dst: { ...f.dst, ora_inceput: 'iarna' } })).toEqual({ temperatura_c: '', temperatura_sursa: '', meteo_cerere: null })
+    expect(invalidareMeteo(f, { dst: { ...f.dst } })).toEqual({})
+  })
+  it('poziția schimbată: cade propunerea NESALVATĂ (și temperatura ei „din meteo”); instantaneul salvat al șantierului rămâne', () => {
+    const f = { ...formularDinRand(RAND), meteo_cerere: CERERE }
+    expect(invalidareMeteo(f, { poz_lat: '44,95' })).toEqual({ temperatura_c: '', temperatura_sursa: '', meteo_cerere: null })
+    expect(invalidareMeteo({ ...f, temperatura_sursa: 'manual' }, { poz_lng: '22,6' })).toEqual({ meteo_cerere: null })
+    expect(invalidareMeteo({ ...f, meteo_cerere: null }, { poz_lat: '44,95' })).toEqual({})
+    expect(invalidareMeteo(f, { poz_lat: f.poz_lat })).toEqual({})
+  })
+  it('corectarea temperaturii înaintea primei salvări păstrează valoarea automată: cererea pleacă la server, sursa e „manual”', () => {
+    const f = { ...formularNou(), tronson: 'T', km_de_la: '0', km_pana_la: '1+000', ora_inceput: '2026-12-08T08:40', temperatura_c: '9', temperatura_sursa: 'manual', meteo_cerere: CERERE }
+    const { date } = payloadDinFormular(f)
+    expect([date.temperatura_c, date.temperatura_sursa, date.meteo]).toEqual([9, 'manual', { cerere: 'santier', site_id: 100 }])
   })
 })
 

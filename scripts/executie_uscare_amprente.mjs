@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 export const MIGRARE = join(ROOT, 'supabase/migrations/20261225a_executie_uscare.sql')
-/** [nume, semnătura, limbajul, SECURITY DEFINER] — cele 16 funcții ale migrării, în ordinea din revenire */
+/** [nume, semnătura, limbajul, SECURITY DEFINER] — cele 17 funcții ale migrării, în ordinea din revenire */
 export const SEMNATURI = [
   ['fn_executie_uscare_utilaje_ok', 'jsonb', 'sql', false], ['fn_executie_uscare_cantariri_ok', 'jsonb', 'sql', false],
   ['fn_executie_uscare_meteo_ok', 'jsonb', 'sql', false], ['fn_executie_uscare_poze_lipsa', 'public.executie_uscari, jsonb', 'sql', false],
@@ -18,6 +18,7 @@ export const SEMNATURI = [
   ['fn_executie_uscare_jurnal_garda', '', 'plpgsql', false], ['fn_executie_uscare_fara_golire', '', 'plpgsql', false],
   ['fn_executie_uscare_salveaza', 'bigint, bigint, integer, jsonb, uuid', 'plpgsql', true], ['fn_executie_uscare_stare', 'bigint, integer, text, text, uuid', 'plpgsql', true],
   ['fn_executie_uscare_poza', 'bigint, text, bigint, text, text, integer, text, uuid', 'plpgsql', true], ['fn_executie_uscare_obiect', 'text, text, boolean', 'sql', true],
+  ['fn_executie_uscare_retrage', 'bigint, uuid', 'plpgsql', true],
 ]
 export const FUNCTII = SEMNATURI.map(s => s[0])
 

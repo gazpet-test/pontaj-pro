@@ -1,8 +1,12 @@
-# Uscare conductă în Execuție — specificație (prima livrare, runda 2 după review)
+# Uscare conductă în Execuție — specificație (prima livrare, runda 3 după review)
 
 Stare: **cod + migrare NEAPLICATĂ** (`supabase/migrations/20261225a_executie_uscare.sql`, revenire în
 `supabase/revenire/20261225a_executie_uscare_ROLLBACK.sql`). Ecranul: Execuție → proiect → Izometrie → „💨 Uscare conductă”
 (`src/UscareConducta.jsx`). Până la aplicarea migrării, ecranul spune că funcția nu e încă activă și nu scrie nimic.
+
+> **Livrarea pe producție NU e posibilă cu unealta de livrare de azi** (§11 „Livrarea pe producție”): amprenta globală L15 v2 se calculează
+> înainte și după migrare, în aceeași tranzacție plafonată la 2.000 ms, iar pe producție un singur calcul durează ~1,7–2,3 s. Aplicarea pe
+> producție depinde de **refacerea uneltei de livrare** sau de o **derogare aprobată separat**; gărzile migrării nu se slăbesc pentru asta.
 
 ## 1. Ce cere contractul și ce cere beneficiarul
 
@@ -90,14 +94,27 @@ Tranzițiile (o singură listă, `fn_executie_uscare_tranzitie` = `TRANZITII` di
 - **Cheia apăsării** (UUID per intenție, scrisă în registrul local ÎNAINTE de trimitere): fiecare RPC o **revendică întâi** (lock
   consultativ pe cheie), apoi caută în jurnal. Două apeluri cu aceeași cheie (reîncercare după timeout, două taburi) se serializează: al doilea
   primește „duplicat” cu raportul primului — **nicio dublură la creare**. Aceeași cheie cu alt conținut / alt proiect = refuz.
-- O intenție **nelămurită** (rețea) rămâne în registru; **o creare nelămurită blochează orice creare nouă** pe proiect până la retrimiterea
-  identică sau renunțarea explicită; o salvare nelămurită pe un raport blochează alte salvări pe el. Un `23505` (cheia scrisă de alt apel)
-  sau un `42501` nu dovedesc nimic: cheia se caută în jurnal.
+- O intenție **nelămurită** (rețea) rămâne în registru; **o creare nelămurită blochează orice creare nouă** pe proiect până la lămurire; o
+  salvare nelămurită pe un raport blochează alte salvări pe el. Un `23505` (cheia scrisă de alt apel) sau un `42501` nu dovedesc nimic: cheia
+  se caută în jurnal (o cheie retrasă = neaplicată).
+- **Lămurirea are doar două ieșiri, amândouă cu răspuns de la server** (runda 3, L05):
+  1. **„Retrimite identic”** — aceeași cheie: serverul întoarce rezultatul de data trecută („se salvase deja”) sau o aplică acum.
+  2. **„Renunț”** — NU mai șterge cheia pe baza markerului local. Ecranul cheamă `fn_executie_uscare_retrage(proiect, cheie)`, care ia același
+     lock pe cheie (o cerere încă în curs se termină întâi) și răspunde după jurnal: **aplicată** → reușită, nimic scris; **neaplicată** →
+     scrie în jurnal o **retragere** (`cheie_retrasa`, fără raport), deci cererea pierdută, dacă ajunge mai târziu, e **refuzată** (22023):
+     „nu există” devine sigur și definitiv. Fără răspuns sigur (rețea, drept), cheia rămâne în registru.
+  O creare lămurită ca aplicată cât formularul „nou” e încă deschis **deschide raportul creat** (butonul „Creează” dispare): nicio cale spre
+  o a doua creare cu alt UUID.
 - **CAS**: formularul ține **versiunea de bază** (rândul pe care s-a pornit). La conflict serverul întoarce rândul curent; aplicația **nu
   salvează peste coleg**: îmbină în trei (baza, formularul, serverul) pe câmpuri — schimbările colegului pe câmpurile neatinse intră,
   ale mele rămân, câmpurile schimbate de amândoi cu valori diferite **se aleg explicit** („al meu” / „al colegului”); salvarea e blocată până
   la confirmare, apoi pleacă pe versiunea nouă. La fel la restaurarea unei ciorne pe o versiune veche.
-- Ordinea lock-urilor (L06), aceeași pe toate căile: cheia → raportul FOR UPDATE → rezervarea → poza → jurnalul.
+- **Momentele (orele) se compară pe INSTANT**, nu pe textul orei locale: ora de pe ecran + apariția aleasă (la ora de iarnă) + instantul
+  original. La 25.10.2026, 00:30Z și 01:30Z se afișează amândouă „03:30”: dacă un coleg a mutat ora pe cealaltă apariție, schimbarea nu se vede
+  pe ecran, deci **se arată ca alegere explicită** („03:30 (ora de vară)” / „03:30 (ora de iarnă)”), nu se preia și nu se suprascrie pe tăcute.
+  Alegerea pune împreună textul orei, apariția și instantul original.
+- Ordinea lock-urilor (L06), aceeași pe toate căile: cheia → raportul FOR UPDATE → rezervarea FOR UPDATE → poza FOR UPDATE → jurnalul (și la
+  „scoate”: întâi rezervarea, apoi poza). Retragerea: cheia → jurnalul.
 
 ## 7. Fotografiile și încărcările parțiale (P2 din review)
 
@@ -105,7 +122,9 @@ Tranzițiile (o singură listă, `fn_executie_uscare_tranzitie` = `TRANZITII` di
   acceptă fișierul DOAR pe o cale rezervată, nerenunțată, neînregistrată, a unui raport deschis, cu drept de scriere pe proiect.
 - După urcare, „adaugă” înregistrează poza din rezervare (serverul verifică fișierul). Dacă urcarea sau înregistrarea se întrerup,
   rezervarea rămâne **vizibilă din server** (supraviețuiește refresh-ului) în secțiunea „Încărcări de fotografii nelămurite”: „Înregistrează”
-  (fișierul a ajuns), „Reîncearcă fișierul” (cât mai e în memorie) sau „Renunț…” (cu motiv, în jurnal).
+  (fișierul a ajuns), „Reîncearcă fișierul” (cât mai e în memorie), **„📷 Alege fișierul pentru această rezervare”** (după refresh: fișierul
+  ales urcă pe ACEEAȘI cale rezervată, apoi se înregistrează — fără rezervare nouă) sau „Renunț…” (cu motiv, în jurnal).
+- PDF-ul are, sub observații, **justificarea fotografiilor lipsă** (dacă e scrisă): documentul distribuit păstrează explicația.
 - **Nimic nu se șterge automat** după un rezultat ambiguu; o poză scoasă din raport își închide rezervarea („poză scoasă din raport”);
   fișierul rămâne în bucket, ca dovadă. Închiderea cere zero rezervări nelămurite.
 - În anexă, ora fotografiei = ora ÎNCĂRCĂRII în platformă (scris „încărcată la”), nu ora din aparat.
@@ -122,8 +141,9 @@ Tranzițiile (o singură listă, `fn_executie_uscare_tranzitie` = `TRANZITII` di
 | cont restrâns, `viewer` pe proiect | doar proiectele lui | nu | nu |
 | alt modul / fără drept / anonim | nimic | nu | nu |
 
-Scrierea: DOAR prin `fn_executie_uscare_salveaza` / `_stare` / `_poza` (SECURITY DEFINER, `auth.uid()` obligatoriu); niciun drept
-INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / ștergere din aplicație.
+Scrierea: DOAR prin `fn_executie_uscare_salveaza` / `_stare` / `_poza` / `_retrage` (SECURITY DEFINER, `auth.uid()` obligatoriu); niciun
+drept INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / ștergere din aplicație. Retragerea unei chei cere scriere pe proiect;
+întrebarea despre o cheie deja folosită cere citire pe proiectul ei.
 
 ## 9. Poziția operațiunii (cerința nouă)
 
@@ -131,12 +151,14 @@ INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / ștergere din
   **precizia** (doar la GPS, obligatorie acolo), **momentul capturii**; la traseu și **km-ul** + **versiunea traseului** (sha256 al
   fișierului de traseu). Toate sau niciunul (CHECK + RPC).
 - **GPS doar la cererea omului**: butonul „📍 Poziția mea” face O citire (`getCurrentPosition`), fără urmărire continuă; alternativa e
-  scrierea de mână. Poziția confirmată (cea salvată) e separată de propunere: nimic nu se salvează fără apăsarea „Salvează”.
+  scrierea de mână. Poziția confirmată (cea salvată) e separată de propunere: nimic nu se salvează fără apăsarea „Salvează”. Dacă se cer
+  două citiri, se aplică doar **ultima cerută** (răspunsurile pot veni în ordine inversă); o editare manuală a poziției anulează citirile în curs.
 - **Propunerea din traseu** (`pozitieDinTraseu` în `src/uscareLogica.js`, testată): punctul de pe ax la km-ul dat, prin INVERSAREA calibrării
   pe borne (ca `calibrare()` din `src/lib/izoKml.js`), cu interpolare între borne și extrapolare limitată; ecranul spune că **distanța
   geometrică nu e automat km contractual**. Ecranul NU are încă alegerea traseului (în platformă nu există un traseu calibrat salvat pe
   proiect; axul îl alege omul la importul KML) — rămas pentru o rundă următoare.
-- **Coordonatele exacte NU apar implicit în PDF**: doar cu bifa „Include coordonatele exacte” la export.
+- **Coordonatele exacte NU apar implicit în PDF**: doar cu bifa „Include coordonatele exacte”, dată pentru raportul deschis și valabilă
+  pentru **următorul export** al lui (nu se moștenește la alt raport / proiect și nu rămâne bifată după export).
 
 ## 10. Vremea pentru locul și ora operațiunii
 
@@ -148,9 +170,15 @@ INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / ștergere din
   furnizorul, șantierul, coordonatele cerute (ale șantierului), **ora cerută** (= ora începerii), **ora observației**, **ora preluării**,
   valoarea automată, vremea. Clientul trimite doar cererea `{cerere: 'santier', site_id}`; un instantaneu scris de client e refuzat.
 - Temperatura din raport = cea automată (sursa `meteo`, egală cu instantaneul) sau **cea măsurată de om** (sursa `manual`). Dacă omul
-  corectează, **se păstrează și valoarea automată** (instantaneul rămâne, cu ora și locul lui).
-- **Schimbarea orei începerii invalidează propunerea**: temperatura „din meteo” se golește pe ecran, iar serverul refuză sursa `meteo` pentru
-  alt instantaneu decât cel al orei curente. Dacă poziția operațiunii e la peste 10 km de șantierul vremii, ecranul avertizează.
+  corectează, **se păstrează și valoarea automată** — și când corectează **înaintea primei salvări** (propunerea încă nesalvată): cererea
+  meteo pleacă la server odată cu temperatura măsurată, iar serverul construiește instantaneul (valoarea automată) alături de ea.
+- **Invalidarea** (runda 3): schimbarea **instantului** orei începerii (inclusiv alegerea celeilalte apariții a orei de iarnă) golește
+  temperatura „din meteo” și propunerea nesalvată; serverul refuză oricum sursa `meteo` pentru alt instantaneu decât cel al orei curente.
+  Schimbarea **poziției** anulează propunerea NESALVATĂ (și temperatura ei, dacă era „din meteo”); instantaneul deja salvat e al
+  șantierului (nu depinde de poziție) și rămâne. Un răspuns meteo **încă în zbor** când ora / apariția / poziția se schimbă se ignoră
+  (generația sursei), la fel o listă de alegere afișată pentru sursa veche. Dacă poziția operațiunii e la peste 10 km de șantierul vremii,
+  ecranul avertizează.
+- Șantierele proiectului se citesc toate (keyset, fără plafon tăcut de 50), vremea lor pe bucăți de câte 100 (L23).
 
 **Proiect: funcția edge `uscare-vreme` (vremea pe coordonatele operațiunii) — NU e scrisă în această rundă.**
 
@@ -169,7 +197,8 @@ INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / ștergere din
 ## 11. Schema, livrarea, proba
 
 - Tabele: `executie_uscari`, `executie_uscare_incarcari`, `executie_uscare_poze`, `executie_uscare_jurnal` (doar adăugare: creare, salvare
-  cu diferențele, închidere / redeschidere cu conținutul complet, anulare, rezervări, poze, renunțări; cheia + amprenta conținutului). RLS pe
+  cu diferențele, închidere / redeschidere cu conținutul complet, anulare, rezervări, poze, renunțări, retrageri de cereri nelămurite — singurul
+  rând fără raport; cheia + amprenta conținutului). RLS pe
   toate patru (citire = `fn_executie_nod_drept(proiect_id, false)`), fără drepturi de scriere pentru clienți. Bucket privat
   `executie-uscare` (JPEG, 10 MB).
 - **Livrarea cere amprenta globală L15 v2** (`scripts/livrare_migrare.sh --plafon-tranzactie-ms 2000 --amprenta-globala <md5>
@@ -181,24 +210,70 @@ INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / ștergere din
   `supabase/tests/20261225a_executie_uscare.l15.obiecte.tsv`. Comparația (pe clonă, după generare; PG17 nu are constrângerile NOT NULL ca
   rânduri):
   `diff <(grep -v '^#' supabase/tests/20261225a_executie_uscare.l15.obiecte.tsv | sort) <(grep -v '^#' supabase/migrations/20261225a_executie_uscare.l15.tsv | cut -f1-3 | sort)` → gol.
-- **Storage — politicile EFECTIVE**: postcondiția copiază TOATE politicile de pe `storage.objects` pe o copie temporară cu un fișier fals
-  al unui cont fără drept și verifică, ca acel cont și ca anon, că nu se vede / modifică / șterge / încarcă nimic în bucket (orice politică
-  generică — pe rol, pe „proprietar”, pe toate bucket-urile — o face să pice). Totul anulat; costul nu depinde de mărimea tabelului.
-  Ce nu acoperă (politici care dau drept DOAR unor conturi cu alte drepturi, trigger-ele lui `storage.objects`) se revizuiește în PR-ul de
-  baseline: `SELECT polname, polcmd, polpermissive, polroles::regrole[], pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass ORDER BY 1;`
-- **Lock-uri la aplicare** (NOWAIT, ≤ 1 s): `executie_proiecte`, `executie_probe_tronsoane` (chei străine), `storage.objects` (politicile + sonda)
-  — de aplicat într-un moment liniștit.
-- **Revenirea** refuză dacă există date (raport / rezervare / poză / jurnal / fișier) și verifică **definițiile**: corpul și proprietățile
-  fiecărei funcții, fiecare politică (comanda, rolurile, expresia exactă), fiecare trigger (funcția, tipul, activ), bucket-ul (privat, limita,
-  tipurile), drepturile pe tabele, coloanele (nume + tip, în ordine).
-- **Proba locală** (`scripts/pglite/test_executie_uscare_local.mjs`, PGlite = PG 18): aplicarea ca la livrare (manifest generat → livrare
-  aprobată), drepturi pe 9 conturi, criteriul, cântăririle, pozele / rezervările, meteo construit de server, poziția, stările, idempotența,
-  CAS-ul, refuzurile (inclusiv 3 politici Storage generice), revenirea (8 definiții schimbate), 25 de mutanți, paritatea JS = SQL.
+- **Storage — politicile EFECTIVE** (runda 3): postcondiția copiază TOATE politicile de pe `storage.objects` pe o copie temporară (aceleași
+  coloane, inclusiv `owner_id`, metadatele și coloanele generate) și **exact drepturile pe tabel** ale lui `anon` / `authenticated` (fiecare
+  drept pe rând: o copie cu drepturi pe care tabelul real nu le dă ar da refuzuri false). Probează **7 identități**: anonim, un cont sintetic
+  fără drept și conturi REALE citite din `profiles` / `user_module_access` / `executie_acces_proiect` (owner, admin / editor / viewer pe
+  Execuție, un cont restrâns pe proiect). Fiecare are fișiere ale ei în bucket (`owner` = `owner_id` = contul, metadate ca la o încărcare
+  reală), pe proiectul 0 (inexistent) și pe un proiect pe care contul îl vede. Ca fiecare: nu vede nimic, nu modifică / șterge nimic (fără
+  filtru), nu încarcă nimic (cu și fără proprietar, pe ambele căi). La aplicare nu există nicio uscare / rezervare, deci politicile modulului
+  nu deschid nimic: orice deschidere vine din altă politică și oprește migrarea (ex. `FOR INSERT TO authenticated WITH CHECK (owner_id =
+  auth.uid()::text)`, contraexemplul review-ului r2). Drepturi doar pe coloane (fără dreptul pe tabel) = refuz explicit, revizuire de om.
+  Totul anulat; costul nu depinde de mărimea tabelului. **Ce nu acoperă**: politici care se deschid doar pentru o uscare / rezervare EXISTENTĂ
+  (nu există la aplicare) și trigger-ele lui `storage.objects` — acestea se probează pe clonă cu date (mai jos, pasul 3) și se revizuiesc în
+  PR-ul de baseline: `SELECT polname, polcmd, polpermissive, polroles::regrole[], pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass ORDER BY 1;`
+  Sonda **nu repară** o politică existentă: o politică generică incompatibilă se rezolvă explicit (PR separat, cu „da”-ul owner-ului).
+- **Drepturile pe tabelele noi** (runda 3): migrarea retrage drepturile rămase ALTOR roluri (privilegiile implicite ale platformei) pe
+  tabelele și secvențele ei; postcondiția și revenirea cer ACL-ul exact: proprietarul + `SELECT` (fără GRANT OPTION) pentru `authenticated` /
+  `service_role`; pe secvențe doar proprietarul.
+- **Revenirea** refuză dacă există date (raport / rezervare / poză / jurnal / retragere / fișier) și verifică **starea exactă**: corpul și
+  proprietățile fiecărei funcții (17), fiecare politică (comanda, rolurile, expresia exactă), fiecare trigger (funcția, tipul, activ),
+  bucket-ul (privat, limita, tipurile), drepturile pe tabele și ACL-ul exact (niciun alt rol, nici pe secvențe), coloanele (nume + tip, în
+  ordine) și — runda 3 — **structura** fiecărui tabel ca amprentă: coloanele cu NOT NULL / valoarea implicită / identitatea / generarea /
+  colația, **constrângerile** (nume + definiție: un `CHECK` adăugat pe tabelul gol = refuz), indecșii, opțiunile, parametrii secvenței.
+  Amprentele de structură sunt calculate pe PGlite (PG 18, fără rândurile NOT NULL ca constrângeri, deci comparabile cu PG 17); pasul 5 de
+  mai jos le confirmă pe clonă (o nepotrivire dă refuz cu amprenta găsită, nimic schimbat).
+- **Proba locală** (`scripts/pglite/test_executie_uscare_local.mjs`, PGlite = PG 18): **88 de verificări** — aplicarea ca la livrare
+  (manifest generat → livrare aprobată), drepturi pe 9 conturi, criteriul, cântăririle, pozele / rezervările, meteo construit de server,
+  poziția, stările, idempotența și retragerea cheii, CAS-ul, refuzurile (garda „înainte” și o tabelă veche citită acum, bugetul lock-ului fără
+  coliziune, 7 politici Storage generice inclusiv contraexemplul `owner_id`, drepturi pe coloane), fără refuz fals (politică fără dreptul de
+  tabel; privilegiile implicite ale altui rol), revenirea (16 schimbări de definiție / structură / ACL la același număr de obiecte), 33 de
+  mutanți, paritatea JS = SQL.
 - **Proba cu DOUĂ sesiuni reale — obligatorie pe clonă** (PGlite are o singură conexiune):
   `supabase/tests/20261225a_executie_uscare_doua_sesiuni.sh` — scenariile, comenzile și rezultatele așteptate sunt în fișier; pe scurt:
   1. creare / reîncercare cu aceeași cheie, concurent: a doua așteaptă cheia, întoarce `duplicat: true` cu același id; un singur raport;
   2. salvare / închidere concurente pe aceeași versiune: una trece, cealaltă primește `conflict` (sau refuzul închiderii), nimic pierdut;
-  3. poză / închidere concurente: închiderea așteaptă poza; fie poza intră înainte (și închiderea o vede), fie e refuzată după.
+  3. poză / închidere concurente: închiderea așteaptă poza; fie poza intră înainte (și închiderea o vede), fie e refuzată după;
+  4. (runda 3) creare în curs + „Renunț” pe aceeași cheie → „aplicată”, nimic retras; retragere în curs + crearea întârziată → refuz 22023;
+     două chei diferite cu același `hashtext` → se serializează, dar fac DOUĂ rapoarte (intențiile nu se confundă).
+
+### Livrarea pe producție (runda 3: limita uneltei de livrare)
+
+**Gărzile de timp reale** (nu există altele; mențiunea unui plafon de 1.500 ms din raportul rundei 2 NU era o gardă — eliminată):
+
+| Gardă | Unde | Ce face |
+|---|---|---|
+| `transaction_timeout = 2000 ms` | pus de runner înainte de `BEGIN`; verificat în `$pre$` (`2000/session` + marcajul prologului) | oprește toată tranzacția (amprentele runnerului + corpul + garda finală) |
+| `lock_timeout = 100 ms` | `$pre$` | o așteptare implicită de lock nu depășește 100 ms |
+| bugetul lock-urilor: 1 s de la `BEGIN` | `$lock$` (migrare) și revenirea | verificat **înaintea fiecărei încercări și după obținere** (runda 3: și fără coliziune); peste buget = `BUGET_LOCK`, nimic schimbat |
+| garda finală a runnerului | `livrare_migrare.sh` | plafonul ~2000 ms până la intrarea în COMMIT |
+
+Migrarea **nu fixează `statement_timeout`**; „sfarsit la … ms” de la final e doar afișat. Lock-urile luate (NOWAIT): `executie_proiecte`,
+`executie_probe_tronsoane` (cheile străine, SHARE ROW EXCLUSIVE), `storage.objects` (ACCESS EXCLUSIVE: politicile + sonda; oprește scurt și
+citirile de fișiere) — de aplicat într-un moment liniștit.
+
+**De ce nu încape pe producție:** runnerul calculează amprenta globală L15 v2 **înainte și după** migrare, în aceeași tranzacție. Pe clonă
+(baza mică) un calcul a durat ~0,42–0,43 s, iar aplicarea întreagă ~0,89 s de la `BEGIN`. Pe producție (citire, fără scriere, măsurătoarea
+coordonatorului) **un** calcul a durat ~1,7 s (verdictul r2) până la ~2,3 s în sesiune caldă și ~4,6 s în sesiune nouă: deja amprenta
+„înainte” depășește bugetul lock-urilor (1 s) și, împreună cu cea „după”, plafonul de 2.000 ms. Rezultatul: aplicarea se oprește cu
+`BUGET_LOCK` sau `transaction_timeout`, **fără niciun efect**.
+
+**Decizia NU se ia în acest PR** (gărzile nu se slăbesc): livrarea pe producție depinde de (A) **refacerea uneltei de livrare** (ex. amprenta
+globală calculată în afara ferestrei plafonate, cu garda de derivă păstrată) sau (B) o **derogare aprobată separat** de owner pentru această
+migrare (plafon / buget mărite, cu motivare și măsurători). **Ce trebuie măsurat înainte**, pe producție sau pe o clonă de aceeași mărime, cu
+runnerul complet, într-o sesiune NOUĂ (ca la livrare): timpul amprentei „înainte”, momentul obținerii lock-urilor de la `BEGIN`, durata
+corpului migrării (fără amprente), timpul amprentei „după”, garda finală și durata `COMMIT`; plus de câte ori apare `BUGET_LOCK` la 3 rulări
+cu `ROLLBACK`. Cu aceste cifre se alege (A) sau (B).
 
 ## 12. Ce NU face prima livrare (pași următori, de decis)
 
