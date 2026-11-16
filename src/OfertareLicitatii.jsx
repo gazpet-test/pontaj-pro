@@ -18,7 +18,7 @@ import { titularVizat, titularEfectiv, ordoneazaPeTitular, permiteAlegerea } fro
 import { indexConfirmari, statisticiAcoperire, badgeNsa, j02bActivPe, propunereCurenta, TIP_NSA, stareComutatorJ02b, poatePorniJ02b } from './ofertareNeaplicabil.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
-import { filtreazaRadar } from './ofertareRadarFiltru.js'
+import { filtreazaRadar, zileRamaseTermen } from './ofertareRadarFiltru.js'
 import OfertareTermene from './OfertareTermene.jsx'
 import { rcNecitite, etichetaRc } from './ofertareRcNecitit.js'
 import { numeResponsabili, esteResponsabil } from './ofertareResponsabili.js'
@@ -4537,7 +4537,9 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
     await load(); onPromovat?.()
   }
 
-  const zileRamase = t => t ? Math.ceil((new Date(t) - acumMs) / 86400000) : null
+  // Aceeași citire a termenului și același ceas ca filtrarea (ofertareRadarFiltru.js, testată)
+  const zileRamase = t => zileRamaseTermen(t, acumMs)
+  const textZile = z => !z ? '' : z.expirat ? ' — EXPIRAT' : z.zile === 0 ? ' — expiră azi' : z.zile === 1 ? ' — 1 zi' : ` — ${z.zile} zile`
   const scorCul = s => s == null ? G.dim : s >= 70 ? G.green : s >= 40 ? G.yellow : G.dim
 
   // Filtrarea e în ofertareRadarFiltru.js (testată): căutarea trece peste stare și peste expirate;
@@ -4627,8 +4629,8 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
                     {r.autoritate} · {fmtVal(r.valoare_lei)} lei · {r.cpv}
                   </div>
                   <div style={{ fontSize:12, marginTop:4 }}>
-                    <span style={{ color: zile != null && zile <= 7 ? G.red : zile != null && zile <= 14 ? G.orange : G.muted, fontWeight:700 }}>
-                      ⏱ {fmtTermen(r.termen_depunere)}{zile != null && zile >= 0 ? ` — ${zile} zile` : zile != null ? ' — EXPIRAT' : ''}
+                    <span style={{ color: zile && !zile.expirat && zile.zile <= 7 ? G.red : zile && !zile.expirat && zile.zile <= 14 ? G.orange : G.muted, fontWeight:700 }}>
+                      ⏱ {fmtTermen(r.termen_depunere)}{textZile(zile)}
                     </span>
                     {r.tip_procedura && <span style={{ color:G.dim }}> · {r.tip_procedura}</span>}
                     {r.are_loturi && <span style={{ color:G.dim }}> · pe loturi</span>}

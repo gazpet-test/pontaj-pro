@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filtreazaRadar, eExpirat, citesteTermen, normCautare } from './ofertareRadarFiltru.js'
+import { filtreazaRadar, eExpirat, citesteTermen, normCautare, zileRamaseTermen } from './ofertareRadarFiltru.js'
 
 // Date inventate. „Acum" = 16.11.2026, 12:00 ora României (10:00 UTC).
 const ACUM = Date.UTC(2026, 10, 16, 10, 0, 0)
@@ -189,5 +189,57 @@ describe('filtreazaRadar cu căutare', () => {
   })
   it('intrare lipsă', () => {
     expect(filtreazaRadar(null, {})).toEqual({ lista: [], total: 0, ascunsePeScorSegment: 0 })
+  })
+})
+
+// Review #1110 r3: „zile rămase” pe cardul radar = aceeași citire a termenului ca filtrarea.
+// Așteptările sunt scrise de mână din calendar (16.11.2026 = ora de iarnă, România = UTC+2).
+describe('zileRamaseTermen', () => {
+  it('expirat cu 1 minut → expirat', () => {
+    expect(zileRamaseTermen('2026-11-16T09:59:00Z', ACUM)).toEqual({ expirat: true })
+  })
+  it('expiră peste 1 minut → azi (0), nu expirat', () => {
+    expect(zileRamaseTermen('2026-11-16T10:01:00Z', ACUM)).toEqual({ expirat: false, zile: 0 })
+  })
+  it('peste 23 h și peste 25 h, la prânz → mâine (1)', () => {
+    expect(zileRamaseTermen('2026-11-17T09:00:00Z', ACUM)).toEqual({ expirat: false, zile: 1 })
+    expect(zileRamaseTermen('2026-11-17T11:00:00Z', ACUM)).toEqual({ expirat: false, zile: 1 })
+  })
+  it('peste 23 h și peste 25 h, la 23:30 ora României → 1 și 2 zile calendaristice', () => {
+    const seara = Date.UTC(2026, 10, 16, 21, 30, 0) // 23:30 în România
+    expect(zileRamaseTermen('2026-11-17T20:30:00Z', seara)).toEqual({ expirat: false, zile: 1 }) // 17.11, 22:30
+    expect(zileRamaseTermen('2026-11-17T22:30:00Z', seara)).toEqual({ expirat: false, zile: 2 }) // 18.11, 00:30
+  })
+  it('termen fără fus = ora României, identic indiferent de TZ', () => {
+    const acum = Date.UTC(2026, 10, 16, 10, 30, 0) // 12:30 în România
+    const vechi = process.env.TZ
+    try {
+      for (const tz of ['UTC', 'Europe/Bucharest', 'America/Los_Angeles', 'Asia/Tokyo', 'Pacific/Kiritimati']) {
+        process.env.TZ = tz
+        expect(zileRamaseTermen('2026-11-16T12:00:00', acum)).toEqual({ expirat: true })            // 12:00 RO a trecut
+        expect(zileRamaseTermen('2026-11-16T13:00:00', acum)).toEqual({ expirat: false, zile: 0 }) // 13:00 RO, azi
+        expect(zileRamaseTermen('2026-11-17 00:15', acum)).toEqual({ expirat: false, zile: 1 })
+        expect(eExpirat('2026-11-16T12:00:00', acum)).toBe(true) // aceeași regulă ca filtrarea
+      }
+    } finally {
+      if (vechi === undefined) delete process.env.TZ; else process.env.TZ = vechi
+    }
+  })
+  it('termen doar cu dată: ziua de azi e încă deschisă, ieri e expirat', () => {
+    expect(zileRamaseTermen('2026-11-16', ACUM)).toEqual({ expirat: false, zile: 0 })
+    expect(zileRamaseTermen('2026-11-15', ACUM)).toEqual({ expirat: true })
+    expect(zileRamaseTermen('2026-11-18', ACUM)).toEqual({ expirat: false, zile: 2 })
+    expect(zileRamaseTermen('2026-12-01', ACUM)).toEqual({ expirat: false, zile: 15 })
+  })
+  it('termen null / gol → null (fără NaN, fără „expirat”)', () => {
+    expect(zileRamaseTermen(null, ACUM)).toBeNull()
+    expect(zileRamaseTermen(undefined, ACUM)).toBeNull()
+    expect(zileRamaseTermen('', ACUM)).toBeNull()
+  })
+  it('termen imposibil / ilizibil → null', () => {
+    expect(zileRamaseTermen('2026-02-31', ACUM)).toBeNull()
+    expect(zileRamaseTermen('2026-11-16T25:00:00', ACUM)).toBeNull()
+    expect(zileRamaseTermen('16.11.2026', ACUM)).toBeNull()
+    expect(zileRamaseTermen('mâine', ACUM)).toBeNull()
   })
 })

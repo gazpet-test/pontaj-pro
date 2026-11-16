@@ -84,6 +84,26 @@ export function eExpirat(termen, acumMs) {
   return t.ms < acumMs
 }
 
+// Zile între două zile calendaristice 'AAAA-LL-ZZ' (b - a), exact, fără fusul calculatorului
+const zileIntre = (a, b) => {
+  const [ya, ma, da] = a.split('-').map(Number), [yb, mb, db] = b.split('-').map(Number)
+  return Math.round((Date.UTC(yb, mb - 1, db) - Date.UTC(ya, ma - 1, da)) / 86400000)
+}
+
+/**
+ * Ce arată cardul la „zile rămase”, cu ACEEAȘI citire a termenului și aceeași regulă de expirare ca filtrarea:
+ *   null                       → termen lipsă sau ilizibil (cardul nu arată nimic în plus)
+ *   { expirat: true }          → expirat după eExpirat()
+ *   { expirat: false, zile: n } → n = zile calendaristice în România până în ziua termenului (0 = expiră azi, încă deschis)
+ */
+export function zileRamaseTermen(termen, acumMs) {
+  const t = citesteTermen(termen)
+  if (!t) return null
+  if (eExpirat(termen, acumMs)) return { expirat: true }
+  const ziTermen = t.zi || ziuaBucuresti(t.ms)
+  return { expirat: false, zile: Math.max(0, zileIntre(ziuaBucuresti(acumMs), ziTermen)) }
+}
+
 const potrivesteStare = (status, stare) => {
   if (!stare || stare === 'toate') return true
   if (stare === 'activ') return status === 'nou' || status === 'interesant'
