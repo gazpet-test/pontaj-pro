@@ -43,9 +43,21 @@ describe('listele', () => {
   it('CPV_OK = lista veche + 45255', () => {
     expect(CPV_OK).toEqual(['45231', '45232', '45255', '45333', '65210', '65200'])
   })
-  it('KEYWORDS si EXCLUDE neschimbate (numar de intrari)', () => {
-    expect(KEYWORDS.length).toBe(19)
-    expect(EXCLUDE.length).toBe(19)
+  // Asteptarile = copia literala a listelor din index.ts de pe main (8ce0a29a), inainte de mutarea in relevanta.js:
+  // verificam continutul si ordinea, nu doar numarul (review #1110 P3).
+  it('KEYWORDS neschimbate (continut si ordine)', () => {
+    expect(KEYWORDS).toEqual([
+      'gaze naturale', 'gaz metan', 'distributie gaze', 'transport gaze', 'retea de gaze', 'retele de gaze',
+      'conducta de gaz', 'conducte de gaz', 'bransament gaz', 'bransamente gaz', 'statie de reglare', 'srm ',
+      'alimentare cu apa', 'retea de apa', 'retele de apa', 'canalizare', 'aductiune', 'apa uzata', 'gospodarie de apa',
+    ])
+  })
+  it('EXCLUDE neschimbate (continut si ordine)', () => {
+    expect(EXCLUDE).toEqual([
+      ' lea ', 'lea 0,4', '0,4 kv', '0.4 kv', '20 kv', '110 kv', 'linii electrice', 'linie electrica',
+      'retele electrice', 'retea electrica', 'electricitate', 'iluminat public', 'post de transformare',
+      'posturi de transformare', 'anvelopat', 'fibra optica', '45231400', '45231600', '45231500',
+    ])
   })
 })
 

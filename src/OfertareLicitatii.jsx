@@ -4480,6 +4480,10 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
   const [cautare, setCautare] = useState('')
   const [cuExpirate, setCuExpirate] = useState(false)   // implicit: expiratele ascunse
   const [expanded, setExpanded] = useState(null)
+  // review #1110: „ceasul” ecranului — momentul de referință la filtrare, actualizat la minut, ca un anunț
+  // să dispară singur când îi trece termenul cât ecranul stă deschis (fără reîncărcare din BD)
+  const [acumMs, setAcumMs] = useState(() => Date.now())
+  useEffect(() => { const t = setInterval(() => setAcumMs(Date.now()), 60000); return () => clearInterval(t) }, [])
 
   const load = async () => {
     setLoading(true)
@@ -4533,13 +4537,13 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
     await load(); onPromovat?.()
   }
 
-  const zileRamase = t => t ? Math.ceil((new Date(t) - Date.now()) / 86400000) : null
+  const zileRamase = t => t ? Math.ceil((new Date(t) - acumMs) / 86400000) : null
   const scorCul = s => s == null ? G.dim : s >= 70 ? G.green : s >= 40 ? G.yellow : G.dim
 
   // Filtrarea e în ofertareRadarFiltru.js (testată): căutarea trece peste stare și peste expirate;
   // fără căutare, expiratele se ascund dacă nu e bifat „Arată și expirate".
   const { lista: filtrate, total, ascunsePeScorSegment } = filtreazaRadar(rows, {
-    cautare, stare: fStat, scorMin: fScor, segment: fSegment, cuExpirate, acumMs: Date.now(),
+    cautare, stare: fStat, scorMin: fScor, segment: fSegment, cuExpirate, acumMs,
   })
   const seCauta = cautare.trim() !== ''
 

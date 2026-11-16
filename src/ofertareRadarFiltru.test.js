@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filtreazaRadar, eExpirat, normCautare } from './ofertareRadarFiltru.js'
+import { filtreazaRadar, eExpirat, citesteTermen, normCautare } from './ofertareRadarFiltru.js'
 
 // Date inventate. „Acum" = 16.11.2026, 12:00 ora României (10:00 UTC).
 const ACUM = Date.UTC(2026, 10, 16, 10, 0, 0)
@@ -39,6 +39,79 @@ describe('eExpirat', () => {
     expect(eExpirat(null, ACUM)).toBe(false)
     expect(eExpirat('', ACUM)).toBe(false)
     expect(eExpirat('nu e dată', ACUM)).toBe(false)
+  })
+  it('alte forme de fus: Z, +02, +0200, fracțiuni de secundă, spațiu în loc de T', () => {
+    expect(citesteTermen('2026-11-16T10:00:00Z')).toEqual({ ms: ACUM })
+    expect(citesteTermen('2026-11-16T12:00:00+02')).toEqual({ ms: ACUM })
+    expect(citesteTermen('2026-11-16T12:00:00+0200')).toEqual({ ms: ACUM })
+    expect(citesteTermen('2026-11-16 12:00:00.123456+02:00')).toEqual({ ms: ACUM + 123 })
+    expect(citesteTermen('2026-11-16T05:00:00-05:00')).toEqual({ ms: ACUM })
+  })
+})
+
+// review #1110 P2: ora fără fus = ora României (nu fusul calculatorului). Valori literale, calculate de mână:
+// iarna România = UTC+2, vara = UTC+3; schimbarea orei 2026: 29.03 03:00 → 04:00, 25.10 04:00 → 03:00.
+describe('eExpirat — ora fără fus orar', () => {
+  it('iarna: 16.11.2026 12:00 fără fus = 10:00 UTC', () => {
+    expect(citesteTermen('2026-11-16T12:00:00')).toEqual({ ms: Date.UTC(2026, 10, 16, 10, 0, 0) })
+    expect(citesteTermen('2026-11-16 12:00')).toEqual({ ms: Date.UTC(2026, 10, 16, 10, 0, 0) })
+    // scenariul din review: la 10:30 UTC (12:30 în România) termenul de 12:00 a trecut
+    expect(eExpirat('2026-11-16T12:00:00', Date.UTC(2026, 10, 16, 10, 30))).toBe(true)
+    expect(eExpirat('2026-11-16T12:00:00', Date.UTC(2026, 10, 16, 9, 59))).toBe(false)
+  })
+  it('vara: 01.07.2026 12:00 fără fus = 09:00 UTC', () => {
+    expect(citesteTermen('2026-07-01T12:00:00')).toEqual({ ms: Date.UTC(2026, 6, 1, 9, 0, 0) })
+    expect(eExpirat('2026-07-01T12:00:00', Date.UTC(2026, 6, 1, 9, 0, 30))).toBe(true)
+    expect(eExpirat('2026-07-01T12:00:00', Date.UTC(2026, 6, 1, 8, 59, 30))).toBe(false)
+  })
+  it('în jurul schimbării orei', () => {
+    expect(citesteTermen('2026-03-29T02:30:00')).toEqual({ ms: Date.UTC(2026, 2, 29, 0, 30) })   // încă iarnă
+    expect(citesteTermen('2026-03-29T04:30:00')).toEqual({ ms: Date.UTC(2026, 2, 29, 1, 30) })   // deja vară
+    expect(citesteTermen('2026-03-29T03:30:00')).toEqual({ ms: Date.UTC(2026, 2, 29, 1, 30) })   // ora sărită → după salt
+    expect(citesteTermen('2026-10-25T02:30:00')).toEqual({ ms: Date.UTC(2026, 9, 24, 23, 30) })  // încă vară
+    expect(citesteTermen('2026-10-25T03:30:00')).toEqual({ ms: Date.UTC(2026, 9, 25, 1, 30) })   // ora dublată → ora de iarnă
+    expect(citesteTermen('2026-10-25T05:00:00')).toEqual({ ms: Date.UTC(2026, 9, 25, 3, 0) })    // iarnă
+  })
+  it('rezultatul nu depinde de fusul calculatorului (TZ schimbat în proces)', () => {
+    const tzVechi = process.env.TZ
+    try {
+      for (const tz of ['UTC', 'America/Los_Angeles', 'Asia/Tokyo', 'Europe/Bucharest']) {
+        process.env.TZ = tz
+        expect(citesteTermen('2026-11-16T12:00:00')).toEqual({ ms: Date.UTC(2026, 10, 16, 10, 0, 0) })
+        expect(citesteTermen('2026-07-01T12:00:00')).toEqual({ ms: Date.UTC(2026, 6, 1, 9, 0, 0) })
+        expect(eExpirat('2026-11-16T12:00:00', Date.UTC(2026, 10, 16, 10, 30))).toBe(true)
+        expect(eExpirat('2026-11-16', Date.UTC(2026, 10, 16, 21, 59))).toBe(false)   // 23:59 în România
+        expect(eExpirat('2026-11-16', Date.UTC(2026, 10, 16, 22, 0))).toBe(true)     // 00:00 pe 17.11
+      }
+    } finally {
+      if (tzVechi === undefined) delete process.env.TZ
+      else process.env.TZ = tzVechi
+    }
+  })
+})
+
+// review #1110 P3: zi imposibilă în calendar = termen ilizibil → anunțul rămâne afișat, nu „expirat”
+describe('eExpirat — date imposibile', () => {
+  const MARTIE = Date.UTC(2026, 2, 1, 10, 0)
+  it('31 februarie, 29 februarie în an nebisect, luna 13, ziua 00 = ilizibil', () => {
+    for (const t of ['2026-02-31', '2026-02-29', '2026-13-01', '2026-11-00', '2026-02-31T10:00:00+02:00', '2026-02-31T10:00:00']) {
+      expect(citesteTermen(t)).toBe(null)
+      expect(eExpirat(t, MARTIE)).toBe(false)
+    }
+  })
+  it('oră sau fus în afara limitelor = ilizibil', () => {
+    for (const t of ['2026-11-15T25:00:00', '2026-11-15T10:60:00', '2026-11-15T10:00:61', '2026-11-15T10:00:00+15:00', '2026-11-15T10:00:00+02:75']) {
+      expect(citesteTermen(t)).toBe(null)
+      expect(eExpirat(t, ACUM)).toBe(false)
+    }
+  })
+  it('29 februarie în an bisect e o zi reală', () => {
+    expect(citesteTermen('2028-02-29')).toEqual({ zi: '2028-02-29' })
+    expect(eExpirat('2028-02-29', Date.UTC(2028, 2, 1, 10, 0))).toBe(true)
+  })
+  it('în listă: anunțul cu termen imposibil rămâne afișat', () => {
+    const rows = [{ id: 9, nr_seap: 'CN0000009', titlu: 'Test', status: 'nou', segment: 'distributie', termen_depunere: '2026-02-31' }]
+    expect(ids(filtreazaRadar(rows, { stare: 'activ', acumMs: MARTIE }))).toEqual([9])
   })
 })
 
