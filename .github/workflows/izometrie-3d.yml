@@ -3,7 +3,8 @@ name: Izometrie - schema 3D (logica, scena, regresie)
 # Schema 3D a nodurilor de cuplare (Izometrie): validarea modelului, armăturile, scena Three.js pe un DOM fals (fără jsdom, deci
 # testele scenei nu se mai sar) și regresia modelelor vechi față de referința calculată cu codul de dinainte de armături.
 # Ca la „Ofertare - regresie”: rulează la PR gata de review (nu pe draft-uri, ca să nu consume minute la fiecare push de iterație),
-# anulează rularea veche a aceluiași PR; pe un draft, la nevoie: Actions → „Run workflow” pe branch. Fără secrete.
+# anulează rularea veche a aceluiași PR. Pornirea manuală (Actions → „Run workflow”) apare doar după ce fișierul e pe main;
+# până atunci un draft se verifică local (npx vitest run src/nodSchema3d src/NodSchema3D). Fără secrete.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -27,10 +28,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      # acțiunile fixate pe SHA complet (review r3: un tag se poate muta), cu versiunea în comentariu
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
       - run: npm ci

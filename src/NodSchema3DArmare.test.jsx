@@ -11,6 +11,7 @@ import NodSchema3D, { construiesteScena, PanouArmare } from './NodSchema3D.jsx'
 import { parseModel3d, instalatia } from './nodSchema3dLogica.js'
 import { culoareDiametru, CULORI_MARCA, controlArmare, continutArmare, cheieMarca } from './nodSchema3dArmare.js'
 import { mediuScena } from './nodSchema3dDomFals.testutil.js'
+import { G } from './NodCuplareVizualizare.jsx'
 import F6 from './nodSchema3d.fundatie-F6.json'
 
 let refa = null
@@ -279,5 +280,35 @@ describe('panoul de armare: avertismentul și starea „estimat” nu depind de 
     expect(h).toContain('Control INCOMPLET')
     expect(h).toContain('marca 5, rândul 4, 10 buc.')
     expect(h).toContain('marca 6, rândul 5, bucăți necitite')
+  })
+
+  // culoarea rândului de control, citită din HTML-ul randat (atributul data-control-extras)
+  const culoareControl = h => /data-control-extras="?[^>]*?color:([^;"]+)/.exec(h)?.[1]
+
+  it('review r3 (P2): F6 cu extrasul 23 + 25 (desenul 24 + 24) = rând roșu, fără ✓, „Control INCOMPLET” cu mărcile', () => {
+    const corect = panou(F6g())
+    expect(culoareControl(corect)).toBe(G.green)                             // proba de control: F6 neschimbat e verde
+    const f = structuredClone(F6)
+    f.grupuri[0].armare.marci[0].buc = 23; f.grupuri[0].armare.marci[1].buc = 25
+    const g = parseModel3d(f).grupuri[0]
+    const h = panou(g)
+    expect(h).toContain('56 / 56')
+    expect(culoareControl(h)).toBe(G.red)
+    expect(h).not.toContain(' ✓')
+    expect(h).toContain('Control INCOMPLET')
+    expect(h).toContain('marca 1 (24 desenate / 23 în extras), marca 2 (24 desenate / 25 în extras)')
+  })
+
+  it('review r3 (P3): o marcă cu 0 bucăți în extras = „0 buc.” în motiv, totalul fără „+ ?”', () => {
+    const f = structuredClone(F6)
+    f.grupuri[0].armare.marci.push({ marca: '4', d: 10, otel: 'PC52', buc: 0, lungime_mm: 1000 })
+    const g = parseModel3d(f).grupuri[0]
+    const h = panou(g)
+    expect(h).toContain('56 / 56')
+    expect(h).not.toContain('+ ?')
+    expect(h).toContain('marca 4, rândul 4, 0 buc.')
+    expect(h).not.toContain('necitite')
+    expect(h).toContain('Control INCOMPLET')
+    expect(culoareControl(h)).toBe(G.red)
   })
 })

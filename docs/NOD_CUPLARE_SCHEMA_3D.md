@@ -117,7 +117,11 @@ cu amprentele calculate de codul de dinainte, `src/nodSchema3d.regresie.json`). 
 - **Controlul extrasului nu se micșorează în tăcere** (review r2): o marcă respinsă la citire rămâne în totalul de bucăți al
   extrasului (bucăți necitibile = „+ ?”); o marcă fără nicio bară validă rămâne în legendă cu „0 / N” și „fără bare”. În ambele
   cazuri (și când bucățile desenate diferă de extras) rândul „Control INCOMPLET” spune de ce, iar controlul nu mai iese verde,
-  oricât de aproape ar fi greutatea.
+  oricât de aproape ar fi greutatea. 0 bucăți în extras e o valoare citită: marca e respinsă ca imposibilă, cu „0 buc.” în motiv
+  (nu „bucăți necitite”).
+- **Controlul se face pe fiecare marcă, nu pe totaluri** (review r3): verde doar dacă FIECARE marcă are exact bucățile din extras
+  și lungimea în ±1 mm. Două greșeli opuse (marca 1 cu o bară în plus, marca 2 cu una în minus; sau lungimi greșite în sensuri
+  opuse) dau același total de bucăți / aceeași greutate, dar controlul iese INCOMPLET, cu mărcile care nu se potrivesc.
 - `prefixe: []` e permis doar la un grup fără nicio sudură (ex. o fundație); cu suduri, prefixele rămân obligatorii.
 - Ecranul: butoanele „🧱 Beton”, „🔩 Piese” (buloane, plăci) și „🎨 Pe marcă / Pe diametru”; sub scenă legenda pe mărci (👁 / 🚫
   ascunde marca; Ø, oțel, bucăți desenate / extras, lungimea din extras și cea desenată, kg desenate), totalul și rândul

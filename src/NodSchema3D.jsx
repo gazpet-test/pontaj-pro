@@ -236,7 +236,8 @@ export function PanouArmare({ ctrl, cont, ascunse, comuta, culoare, parteId, tit
         </div>
       )}
       {/* rândul de control apare mereu când grupul are armare: fără greutatea din extras scrie „extras necunoscut” (nu lipsește, nu 0);
-          verde doar cu greutatea în prag ȘI controlul complet (nicio marcă respinsă / fără bare, bucățile egale cu extrasul) */}
+          verde doar cu greutatea în prag ȘI controlul complet (nicio marcă respinsă / fără bare; pe FIECARE marcă bucățile egale
+          cu extrasul și lungimea în ±1 mm, review r3: totalurile se pot compensa) */}
       {ctrl && (
         <div data-control-extras style={{ marginTop: 8, fontWeight: 700, color: ctrl.extrasKg == null ? G.yellow : ctrl.controlOk ? G.green : G.red }}>
           {ctrl.extrasKg == null

@@ -27,6 +27,8 @@ const txt = v => (v == null ? '' : String(v).trim())
  */
 export const textStrict = v => (v == null ? '' : typeof v === 'string' ? v.trim() : typeof v === 'number' && Number.isFinite(v) ? String(v) : null)
 const bucValide = v => Number.isInteger(v) && v >= 1 && v <= LIM.buc
+// review r3: 0 e o valoare CITITĂ (marca e respinsă ca imposibilă, dar 0 rămâne în numitor, nu devine „necitit”)
+const bucCitite = v => Number.isInteger(v) && v >= 0 && v <= LIM.buc
 const estePunct = p => Array.isArray(p) && p.length === 3 && p.every(c => typeof c === 'number' && Number.isFinite(c) && Math.abs(c) <= LIM.coord)
 const intre = (v, min, max) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max
 const pozitiv = (v, max) => typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= max
@@ -162,7 +164,7 @@ export function citesteArmare(a) {
     const et = `armarea grupului, marca ${i + 1} (${id.slice(0, 12) || '?'})`
     const respinge = pb => {
       erori.push(`${et}: ${pb}; marca nu se afișează, controlul extrasului e incomplet`)
-      respinse.push({ rand: i + 1, marca: id.slice(0, 12) || null, buc: bucValide(m?.buc) ? m.buc : null })
+      respinse.push({ rand: i + 1, marca: id.slice(0, 12) || null, buc: bucCitite(m?.buc) ? (m.buc === 0 ? 0 : m.buc) : null })   // -0 -> 0
     }
     if (!m || typeof m !== 'object' || Array.isArray(m)) { respinge('nu e un obiect'); return }
     const nec = Object.keys(m).filter(k => !CHEI_MARCA.includes(k))
@@ -175,6 +177,7 @@ export function citesteArmare(a) {
       : !intre(m.d, LIM.dMin, LIM.dMax) ? `diametru invalid (între ${LIM.dMin} și ${LIM.dMax} mm)`
       : otel === null ? 'oțelul trebuie să fie text'
       : !otel || otel.length > 20 ? 'oțelul lipsește sau e prea lung'
+      : m.buc === 0 ? '0 bucăți în extras (imposibil: o marcă din extras are cel puțin o bucată)'
       : !bucValide(m.buc) ? 'numărul de bucăți lipsește sau nu e un întreg peste 0'
       : !pozitiv(m.lungime_mm, LIM.lungime) ? 'lungimea (lungime_mm) lipsește sau e invalidă'
       : m.kg_m != null && !pozitiv(m.kg_m, LIM.kgm) ? '„kg_m” e invalid'
@@ -287,8 +290,9 @@ export const culoareDiametru = d => CULORI_DIAMETRU[d] || CULOARE_DIAMETRU_ALTA
  * lungimea desenată (min / max, ca în extras) față de extras, greutatea desenată (lungime × densitate × secțiune); totalul și,
  * dacă modelul are greutatea din extras, diferența procentuală. Barele unei mărci care NU e în listă nu există (validarea le respinge).
  * Review r2 — numitorul extrasului nu scade: `bucExtras` = bucățile TUTUROR mărcilor din extras, inclusiv cele respinse la citire
- * (`bucExtrasNecunoscut` = o marcă respinsă nu are nici bucățile citibile). Controlul e `complet` doar dacă nicio marcă nu e
- * respinsă, fiecare marcă are bare desenate și bucățile desenate sunt exact cele din extras; altfel `motiveIncomplet` spune de ce,
+ * (`bucExtrasNecunoscut` = o marcă respinsă nu are nici bucățile citibile; 0 bucăți e o valoare citită, nu necunoscută).
+ * Controlul e `complet` doar dacă nicio marcă nu e respinsă și FIECARE marcă are bare desenate, exact bucățile din extras și
+ * lungimea în ±1 mm (review r3: pe marcă, nu pe totaluri, ca două greșeli opuse să nu se anuleze); altfel `motiveIncomplet` spune de ce,
  * iar `controlOk` (greutatea în prag ȘI control complet) nu poate fi adevărat. Fără greutatea din extras: `controlOk` = null
  * (necunoscut, nu „în regulă”, nu 0).
  */
@@ -325,6 +329,17 @@ export function controlArmare(grup) {
   }
   const faraBare = marci.filter(m => m.bucDesen === 0)
   if (faraBare.length) motiveIncomplet.push(`fără nicio bară desenată: ${faraBare.map(m => `marca ${m.marca} (${m.bucExtras} buc.)`).join(', ')}`)
+  // review r3: verificarea e pe FIECARE marcă, nu pe totaluri (−1 la o marcă și +1 la alta dau același total; la fel lungimile
+  // greșite în sensuri opuse dau aceeași greutate). Marca fără bare are deja motivul ei de mai sus.
+  const cuBare = marci.filter(m => m.bucDesen > 0)
+  const bucGresite = cuBare.filter(m => !m.bucOk)
+  if (bucGresite.length) motiveIncomplet.push(`bucățile desenate diferă de extras: ${bucGresite.map(m => `marca ${m.marca} (${m.bucDesen} desenate / ${m.bucExtras} în extras)`).join(', ')}`)
+  const lungGresite = cuBare.filter(m => !m.lungimeOk)
+  if (lungGresite.length) {
+    const lg = m => (Math.round(m.lungimeMin) === Math.round(m.lungimeMax) ? `${Math.round(m.lungimeMin)}` : `${Math.round(m.lungimeMin)}–${Math.round(m.lungimeMax)}`)
+    motiveIncomplet.push(`lungimea desenată diferă de extras cu peste 1 mm: ${lungGresite.map(m => `marca ${m.marca} (${lg(m)} mm desenat / ${m.lungimeExtras} mm în extras)`).join(', ')}`)
+  }
+  // plasă de siguranță: cu toate mărcile în regulă, totalurile sunt egale prin construcție; dacă nu, tot incomplet
   if (!motiveIncomplet.length && bucDesen !== bucExtras) motiveIncomplet.push(`bucăți desenate ${bucDesen} față de ${bucExtras} în extras`)
   const complet = motiveIncomplet.length === 0
   const greutateOk = diferentaProc == null ? null : Math.abs(diferentaProc) <= PRAG_CONTROL_PROC
