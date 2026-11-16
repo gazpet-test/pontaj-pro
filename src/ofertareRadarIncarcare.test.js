@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { incarcaRadarComplet, ordoneazaRadar, creeazaGeneratie, incarcaInGeneratie, stareAfisareRadar, mesajEroareRadar, MESAJ_ANULAT } from './ofertareRadarIncarcare.js'
+import { incarcaRadarComplet, ordoneazaRadar, creeazaGeneratie, incarcaInGeneratie, stareAfisareRadar, mesajEroareRadar, MESAJ_ANULAT, MESAJ_EROARE_RADAR } from './ofertareRadarIncarcare.js'
+import { momentTermenNs } from './ofertareRadarFiltru.js'
 
 // Date inventate. Clientul fals imită PostgREST: .from().select().eq().order('id').limit(n)[.gt('id', x)], apoi await → { data, error }.
 // plafon = max-rows al serverului (taie orice limit mai mare); esuezaLaCererea = numărul cererii (1, 2, …) care întoarce eroare.
@@ -94,6 +95,41 @@ describe('ordoneazaRadar', () => {
     expect(ordoneazaRadar(rows).map(r => r.id)).toEqual([4, 3, 7, 5, 6, 2, 1])
     expect(rows.map(r => r.id)).toEqual([1, 2, 3, 4, 5, 6, 7]) // intrarea neschimbată
   })
+
+  it('review #1113: termenele diferite sub milisecundă se ordonează cronologic, nu după id', () => {
+    const rows = [
+      { id: 1, scor_potrivire: 50, termen_depunere: '2026-12-01T10:00:00.000900Z' },
+      { id: 2, scor_potrivire: 50, termen_depunere: '2026-12-01T10:00:00.000100Z' },
+    ]
+    expect(ordoneazaRadar(rows).map(r => r.id)).toEqual([2, 1])
+  })
+
+  it('precizie: nanosecunde, fus orar și același moment scris diferit (egal → id)', () => {
+    const rows = [
+      { id: 1, scor_potrivire: 50, termen_depunere: '2026-12-01T10:00:00.000000002Z' },
+      { id: 2, scor_potrivire: 50, termen_depunere: '2026-12-01T10:00:00.000000001Z' },
+      { id: 3, scor_potrivire: 50, termen_depunere: '2026-12-01T12:00:00.0000005+02:00' }, // = 10:00:00.0000005Z
+      { id: 4, scor_potrivire: 50, termen_depunere: '2026-12-01T10:00:00.0000005Z' },
+      { id: 5, scor_potrivire: 50, termen_depunere: '2026-12-01 10:00:00.001+00' },
+      { id: 6, scor_potrivire: 50, termen_depunere: '2026-12-01T10:00:00.000999999Z' },
+    ]
+    expect(ordoneazaRadar(rows).map(r => r.id)).toEqual([2, 1, 3, 4, 6, 5])
+  })
+})
+
+describe('momentTermenNs', () => {
+  it('nanosecunde exacte (BigInt), null pe lipsă / ilizibil', () => {
+    // 2026-12-01T10:00:00Z = 1796119200000 ms
+    // .000900 = 900 µs = 900 000 ns; .000100 = 100 000 ns
+    expect(momentTermenNs('2026-12-01T10:00:00.000900Z')).toBe(1796119200000900000n)
+    expect(momentTermenNs('2026-12-01T10:00:00.000100Z')).toBe(1796119200000100000n)
+    expect(momentTermenNs('2026-12-01T10:00:00.123456789Z')).toBe(1796119200123456789n)
+    expect(momentTermenNs('2026-12-01T12:00:00+02:00')).toBe(1796119200000000000n)
+    expect(momentTermenNs('2026-12-01')).toBe(1796083200000000000n)
+    expect(momentTermenNs(null)).toBe(null)
+    expect(momentTermenNs('2026-02-31T10:00:00Z')).toBe(null)
+    expect(momentTermenNs('ilizibil')).toBe(null)
+  })
 })
 
 // Promisiune rezolvată din afară, ca să controlăm ordinea în care sosesc răspunsurile
@@ -161,8 +197,9 @@ describe('stareAfisareRadar — eroare vs listă goală', () => {
     expect(stareAfisareRadar({ loading: false, eroare: null, nrAfisate: 3 })).toBe('lista')
     expect(stareAfisareRadar({ loading: true, eroare: null, nrAfisate: 3 })).toBe('lista')
   })
-  it('mesajul de eroare e text simplu', () => {
-    expect(mesajEroareRadar({ message: 'timeout la server' })).toBe('Radarul nu s-a putut încărca: timeout la server')
-    expect(mesajEroareRadar(null)).toBe('Radarul nu s-a putut încărca.')
+  it('mesajul de eroare e fix: detaliul tehnic nu ajunge la om (L10)', () => {
+    expect(mesajEroareRadar({ message: 'permission denied for table ofertare_radar' })).toBe('Lista nu a putut fi încărcată. Încearcă din nou.')
+    expect(mesajEroareRadar(null)).toBe('Lista nu a putut fi încărcată. Încearcă din nou.')
+    expect(MESAJ_EROARE_RADAR).toBe('Lista nu a putut fi încărcată. Încearcă din nou.')
   })
 })

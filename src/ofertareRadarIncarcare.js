@@ -11,24 +11,22 @@
 // - Eroare ≠ listă goală (L18): starea ecranului se decide în stareAfisareRadar.
 
 import { paginareKeyset } from './hrDeciziiUtil.js'
-import { citesteTermen } from './ofertareRadarFiltru.js'
+import { momentTermenNs } from './ofertareRadarFiltru.js'
 
 export const MESAJ_ANULAT = 'încărcare anulată'
 
-// Momentul termenului pentru ordonare (ms UTC); termen lipsă / ilizibil → null (la final, ca NULLS LAST în BD)
-const momentTermen = t => {
-  const c = citesteTermen(t)
-  if (!c) return null
-  return c.zi ? Date.UTC(+c.zi.slice(0, 4), +c.zi.slice(5, 7) - 1, +c.zi.slice(8, 10)) : c.ms
-}
 const scorNr = s => (s == null || !Number.isFinite(Number(s)) ? null : Number(s))
 
-/** Ordinea listei: scor desc (fără scor la final), termen asc (fără termen la final), apoi id asc. Nu modifică intrarea. */
+/**
+ * Ordinea listei: scor desc (fără scor la final), termen asc (fără termen la final), apoi id asc. Nu modifică intrarea.
+ * Termenul se compară cu TOATĂ precizia lui (nanosecunde, BigInt — momentTermenNs), ca în BD (timestamptz = microsecunde),
+ * nu trunchiat la milisecunde.
+ */
 export function ordoneazaRadar(rows) {
-  const cu = (rows || []).map(r => ({ r, s: scorNr(r.scor_potrivire), t: momentTermen(r.termen_depunere) }))
+  const cu = (rows || []).map(r => ({ r, s: scorNr(r.scor_potrivire), t: momentTermenNs(r.termen_depunere) }))
   cu.sort((a, b) => {
     if (a.s !== b.s) return a.s == null ? 1 : b.s == null ? -1 : b.s - a.s
-    if (a.t !== b.t) return a.t == null ? 1 : b.t == null ? -1 : a.t - b.t
+    if (a.t !== b.t) return a.t == null ? 1 : b.t == null ? -1 : a.t < b.t ? -1 : 1
     return a.r.id < b.r.id ? -1 : a.r.id > b.r.id ? 1 : 0
   })
   return cu.map(x => x.r)
@@ -90,8 +88,9 @@ export function stareAfisareRadar({ loading, eroare, nrAfisate }) {
   return 'lista'
 }
 
-/** Mesajul de eroare arătat omului (text simplu, fără obiecte brute). */
-export const mesajEroareRadar = e => {
-  const m = e?.message || (typeof e === 'string' ? e : '')
-  return m ? `Radarul nu s-a putut încărca: ${m}` : 'Radarul nu s-a putut încărca.'
-}
+/**
+ * Mesajul de eroare arătat omului: text FIX, controlat (L10, review #1113). Detaliul tehnic al erorii (ex. „permission denied
+ * for table …”) nu ajunge pe ecran, indiferent de eroare; ecranul îl scrie doar în consolă.
+ */
+export const MESAJ_EROARE_RADAR = 'Lista nu a putut fi încărcată. Încearcă din nou.'
+export const mesajEroareRadar = () => MESAJ_EROARE_RADAR

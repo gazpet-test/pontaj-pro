@@ -4470,7 +4470,8 @@ function ExperientaFormModal({ lucrare, profile, onClose, onSave, onDelete }) {
 // ── 📡 Radar licitații — anunțuri SEAP scanate zilnic + scoring AI (gap-analysis) ──
 // Sursa: tabela ofertare_radar, populată de edge function ofertare-radar-scan
 // (cron zilnic + buton „Scanează acum"). Doar anunțurile relevante (CPV/cuvinte-cheie).
-function RadarLicitatii({ profile, showToast, onPromovat }) {
+// Exportat pentru testele de componentă (OfertareRadar.test.jsx).
+export function RadarLicitatii({ profile, showToast, onPromovat }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [lastScan, setLastScan] = useState(null)
@@ -4502,9 +4503,11 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
       supabase.from('ofertare_radar_scan_log').select('*').order('pornit_la', { ascending: false }).limit(1),
     ]), {
       laSucces: ([lista, { data: log, error: eLog }]) => {
+        if (eLog) console.warn('[radar] jurnalul de scanare nu s-a putut citi:', eLog)
         setRows(lista); setLastScan(eLog ? null : (log?.[0] || null)); setEroareScan(!!eLog)
       },
-      laEroare: e => { setRows([]); setEroare(mesajEroareRadar(e)) },
+      // pe ecran doar mesajul fix (L10); detaliul tehnic rămâne în consolă
+      laEroare: e => { console.error('[radar] încărcarea listei a eșuat:', e); setRows([]); setEroare(mesajEroareRadar()) },
       laFinal: () => setLoading(false),
     })
   }
@@ -4622,7 +4625,7 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
       {afisare === 'eroare' && (
         <div style={{ ...S.card, padding:28, textAlign:'center', border:`1px solid ${G.red}` }}>
           <div style={{ fontSize:14, fontWeight:700, color:G.red, marginBottom:6 }}>⚠ {eroare}</div>
-          <div style={{ fontSize:12.5, color:G.muted, marginBottom:14 }}>Lista nu e afișată ca să nu pară completă. Încearcă din nou.</div>
+          <div style={{ fontSize:12.5, color:G.muted, marginBottom:14 }}>Lista nu e afișată ca să nu pară completă.</div>
           <button style={{ ...S.btnP, opacity: loading ? .6 : 1 }} disabled={loading} onClick={() => load()}>
             {loading ? '⏳ Se reîncarcă...' : '🔄 Reîncearcă'}
           </button>
