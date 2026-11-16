@@ -564,8 +564,11 @@ CREATE TABLE public.t_gr (id int, c int);
 GRANT SELECT ON public.t_gr TO g1, g2 WITH GRANT OPTION; GRANT UPDATE (c) ON public.t_gr TO g1, g2 WITH GRANT OPTION;
 SET ROLE g1; GRANT SELECT ON public.t_gr TO r_gr; GRANT UPDATE (c) ON public.t_gr TO r_gr; RESET ROLE;`)
     const faraGrantor = (fam) => {
-      // mutantul: grantorul scos din serializarea ACL a familiei date (relatie / coloana)
-      const i = CAT.indexOf(`SELECT '${fam}', '${fam} `), j = CAT.indexOf('UNION ALL', i)
+      // mutantul: grantorul scos din serializarea ACL a familiei date (coloana: in ramura ei; relatie: din 17.11.2026 in ag_acl,
+      // serializarea O DATA pe valoare distincta, comuna cu functie / tip / acl_sistem relatie)
+      const [i, j] = fam === 'relatie' ? [CAT.indexOf('ag_acl AS MATERIALIZED ('), CAT.indexOf('ag_enum AS (')]
+        : [CAT.indexOf(`SELECT '${fam}', '${fam} `), CAT.indexOf('UNION ALL', CAT.indexOf(`SELECT '${fam}', '${fam} `))]
+      if (i < 0 || j <= i) throw new Error('mutantul grantorului: bucata nu s-a gasit: ' + fam)
       const bucata = CAT.slice(i, j), fara = bucata.replace(/, (\w)\.grantor::regrole::text\)/, ')')
       if (fara === bucata) throw new Error('mutantul grantorului nu a schimbat nimic: ' + fam)
       return CAT.slice(0, i) + fara + CAT.slice(j)
