@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { paginareKeyset } from './hrDeciziiUtil.js'
-import { calculeazaSursa, foiDinPlatforma, fmtKmMm, fmtM, ETICHETE_STARE_BANDA } from './conductaTronsonLogica.js'
+import { calculeazaSursa, foiDinPlatforma, fmtKmMm, fmtM, ETICHETE_STARE_BANDA, CONVENTIE_PLATFORMA, CONVENTIE_PLATFORMA_COMPARATIE } from './conductaTronsonLogica.js'
 
 const G = {
   bg:'#0D1117', card:'#161B22', surface:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681', border:'#30363D', border2:'#21262D',
@@ -25,15 +25,24 @@ const S = {
 const CULOARE = { realizat: G.green, restant: G.orange, necunoscut: G.gray }
 const CULOARE_SUDURA = { sudata: G.green, restanta: G.orange, necunoscuta: G.muted }
 const ETICHETA_SUDURA = { sudata: 'cu cod', restanta: 'de făcut (șanț)', necunoscuta: 'fără cod' }
-const CONVENTII = [
-  ['start_inceput_prima_piesa', 'km start pachet = începutul primei țevi'],
-  ['start_capat_prima_piesa', 'km start pachet = prima sudură (capătul primei țevi)'],
-]
+// convenția km a pachetelor: B e rezultatul (aceeași formulă ca editorul de pachete); A apare DOAR ca o comparație cerută explicit
+const ETICHETA_CONVENTIE = {
+  [CONVENTIE_PLATFORMA]: 'B · km start pachet = prima sudură (primul rând al pachetului), ca în editorul de pachete',
+  [CONVENTIE_PLATFORMA_COMPARATIE]: 'A · km start pachet = începutul primei țevi',
+}
 const FERESTRE_M = 500
+const fmtData = s => {
+  if (!s) return null
+  const d = new Date(s)
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short', timeStyle: 'short' })
+}
+const calcul = (date, tronson, conventie) => (!date || !tronson || date.tronsonId !== tronson.id) ? null
+  : calculeazaSursa({ sursa: 'platforma', tronson, foi: foiDinPlatforma(date.pachete, date.tevi, { conventie }) })
+const fmtDif = (b, a) => (b == null || a == null ? '—' : `${a - b > 0 ? '+' : ''}${fmtM(Math.round((a - b) * 1000) / 1000)}`)
 
 export default function IzoBandaTronson({ proiectId, tronsoane, initialTronsonId }) {
   const [tronsonId, setTronsonId] = useState(initialTronsonId || tronsoane?.[0]?.id || null)
-  const [conventie, setConventie] = useState(CONVENTII[0][0])
+  const [comparaA, setComparaA] = useState(false) // comparația cu A: niciodată preselectată, se resetează la schimbarea tronsonului
   const [date, setDate] = useState(null)        // { tronsonId, pachete, tevi }
   const [eroare, setEroare] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -47,7 +56,7 @@ export default function IzoBandaTronson({ proiectId, tronsoane, initialTronsonId
   useEffect(() => {
     if (!proiectId || !tronsonId) return
     const g = ++gen.current
-    setLoading(true); setEroare(null); setDate(null); setSelectat(null); setFereastra('tot')
+    setLoading(true); setEroare(null); setDate(null); setSelectat(null); setFereastra('tot'); setComparaA(false)
     ;(async () => {
       try {
         const { data: pachete, error } = await supabase.from('executie_pachete_lansare').select('*')
@@ -55,6 +64,8 @@ export default function IzoBandaTronson({ proiectId, tronsoane, initialTronsonId
         if (error) throw error
         const ids = (pachete || []).map(p => p.id)
         const tevi = ids.length ? await paginareKeyset((ultim, pas) => {
+          // ecran închis / alt tronson ales: bucla se oprește înaintea paginii următoare (rezultatul oricum s-ar arunca)
+          if (g !== gen.current) throw new Error('citire anulată')
           let q = supabase.from('executie_tevi')
             .select('id, pachet_id, poz_in_pachet, tip_rand, serie_unica, tip, dimensiune, sarja, lungime_m, sudura_cod, sudura_refacuta, sudura_sant_pending, pm_cod, pa_ut_cod')
             .in('pachet_id', ids).order('id').limit(pas)
@@ -74,16 +85,13 @@ export default function IzoBandaTronson({ proiectId, tronsoane, initialTronsonId
   }, [proiectId, tronsonId])
 
   const tronson = useMemo(() => (tronsoane || []).find(t => t.id === tronsonId) || null, [tronsoane, tronsonId])
-  const rez = useMemo(() => {
-    if (!date || !tronson || date.tronsonId !== tronson.id) return null
-    return calculeazaSursa({ sursa: 'platforma', tronson, foi: foiDinPlatforma(date.pachete, date.tevi, { conventie }) })
-  }, [date, tronson, conventie])
-
-  useEffect(() => { setSelectat(null) }, [conventie])
+  const rez = useMemo(() => calcul(date, tronson, CONVENTIE_PLATFORMA), [date, tronson])
+  const rezA = useMemo(() => (comparaA ? calcul(date, tronson, CONVENTIE_PLATFORMA_COMPARATIE) : null), [date, tronson, comparaA])
 
   if (!tronsoane?.length) return <div style={S.card}>Proiectul nu are tronsoane.</div>
 
   const lim = rez?.banda?.length ? { a: rez.banda[0].de_la_mm, b: rez.banda[rez.banda.length - 1].pana_la_mm } : null
+  const cuLimite = rez?.dupa?.lungime_tronson_m != null
   const ferestre = lim ? Array.from({ length: Math.ceil((lim.b - lim.a) / (FERESTRE_M * 1000)) }, (_, i) => lim.a + i * FERESTRE_M * 1000) : []
   const vedere = lim && fereastra !== 'tot' ? { a: Number(fereastra), b: Math.min(Number(fereastra) + FERESTRE_M * 1000, lim.b) } : lim
   const seg = selectat != null ? rez?.banda?.[selectat] : null
@@ -91,7 +99,7 @@ export default function IzoBandaTronson({ proiectId, tronsoane, initialTronsonId
     if (seg) return seg.piese.includes(p.id) || (seg.stare !== 'realizat' && p.a_mm == null)
     if (!vedere || fereastra === 'tot') return true
     return p.a_mm == null || (p.b_mm > vedere.a && p.a_mm < vedere.b)
-  }).sort((x, y) => (x.a_mm ?? Infinity) - (y.a_mm ?? Infinity))
+  }).sort((x, y) => (x.a_mm ?? Infinity) - (y.a_mm ?? Infinity) || String(x.id).localeCompare(String(y.id), 'en', { numeric: true }))
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
@@ -100,14 +108,16 @@ export default function IzoBandaTronson({ proiectId, tronsoane, initialTronsonId
         <select value={tronsonId || ''} onChange={e => setTronsonId(Number(e.target.value))} style={S.input} aria-label="Tronson">
           {tronsoane.map(t => <option key={t.id} value={t.id}>{t.cod}</option>)}
         </select>
-        <select value={conventie} onChange={e => setConventie(e.target.value)} style={{ ...S.input, maxWidth:360 }} aria-label="Convenția km a pachetelor">
-          {CONVENTII.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-        </select>
-        <span style={{ ...S.badge, background:G.yellow + '22', color:G.yellow }}>convenția km nu e confirmată</span>
+        <span data-test="conventie" style={{ fontSize:12, color:G.text }}><b>Convenția km:</b> {ETICHETA_CONVENTIE[CONVENTIE_PLATFORMA]}</span>
+        <span style={{ ...S.badge, background:G.yellow + '22', color:G.yellow }}>neconfirmată pe fiecare pachet</span>
+        <label style={{ fontSize:12, color:G.muted, cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}>
+          <input type="checkbox" data-test="compara-a" checked={comparaA} onChange={e => setComparaA(e.target.checked)} />
+          compară cu convenția A (doar comparație)
+        </label>
       </div>
 
       <div style={{ ...S.card, fontSize:12, color:G.muted, lineHeight:1.6 }}>
-        <b style={{ color:G.text }}>Sursa:</b> pachetele de lansare din platformă (nu schema Excel confirmată, care nu e încă importată).
+        <b style={{ color:G.text }}>Sursa:</b> pachetele de lansare din platformă (nu schema Excel confirmată, care nu e încă importată; data situației pe care o descriu pachetele: necunoscută).
         Verde = porțiune acoperită de țevile din pachete; <b style={{ color:G.text }}>gri = necunoscut, nu „neexecutat”</b>; portocaliu = restant confirmat (azi nu există raportări).
         Banda NU arată lansat / astupat / probat. Pozițiile sunt calculate din lungimi, pe axa pachetelor, nu măsurate.
       </div>
@@ -122,13 +132,20 @@ export default function IzoBandaTronson({ proiectId, tronsoane, initialTronsonId
             {rez.foi.map(f => (
               <span key={f.id} style={{ ...S.badge, background:G.border2, color:G.text, fontWeight:500 }}>
                 {f.cod} · rev.{f.revizie ?? '—'} · {f.stare || '—'} · start {f.kmStart == null ? '—' : fmtKmMm(Math.round(f.kmStart * 1000))} · {f.randuri} rânduri
+                {' '}· situație: {fmtData(f.dataSituatie) || 'necunoscută'} · modificat: {fmtData(f.modificatLa) || 'necunoscut'}
               </span>
             ))}
           </div>
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:8 }}>
-            <Kpi titlu="În pachete (pe axă)" val={fmtM(rez.dupa.realizat_m)} sub={rez.dupa.lungime_banda_m ? `din ${fmtM(rez.dupa.lungime_banda_m)} ai tronsonului` : 'tronson fără km'} culoare={G.green} />
-            <Kpi titlu="Necunoscut" val={fmtM(rez.dupa.necunoscut_m)} sub="fără date (nu = neexecutat)" culoare={G.muted} />
+            <Kpi test="kpi-realizat" titlu="În pachete (pe axă)" val={fmtM(rez.dupa.realizat_m)} culoare={G.green}
+              sub={cuLimite ? `din ${fmtM(rez.dupa.lungime_tronson_m)} ai tronsonului`
+                : `lungimea tronsonului: necunoscută (fără km de capăt)${rez.dupa.intindere_banda_m != null ? ` · întinderea datelor: ${fmtM(rez.dupa.intindere_banda_m)}` : ''}`} />
+            <Kpi test="kpi-necunoscut" titlu="Necunoscut" culoare={G.muted}
+              val={rez.dupa.necunoscut_m == null ? 'necunoscut' : fmtM(rez.dupa.necunoscut_m)}
+              sub={rez.dupa.necunoscut_m == null
+                ? `pe tronson nu se poate calcula; goluri în întinderea datelor: ${fmtM(rez.dupa.necunoscut_in_intindere_m)}`
+                : 'fără date (nu = neexecutat)'} />
             <Kpi titlu="Suprapuneri" val={fmtM(rez.dupa.suprapuneri_m)} sub="piese peste piese" culoare={rez.dupa.suprapuneri_m > 0 ? G.red : G.muted} />
             <Kpi titlu="Țevi / curbe" val={`${rez.dupa.tevi} / ${rez.dupa.curbe}`} sub={`${fmtM(rez.dupa.lungime_m)} material`} />
             <Kpi titlu="Suduri cu cod" val={rez.dupa.suduri_cu_cod} sub={`${rez.dupa.suduri_refacute} refăcute`} />
@@ -136,10 +153,32 @@ export default function IzoBandaTronson({ proiectId, tronsoane, initialTronsonId
             <Kpi titlu="Probleme de date" val={rez.blocante} sub={`${rez.anomalii.length - rez.blocante} avertismente`} culoare={rez.blocante ? G.red : G.muted} />
           </div>
 
+          {rezA && (
+            <div data-test="comparatie-a" style={{ ...S.card, borderColor:G.yellow + '66' }}>
+              <div style={{ fontSize:12, fontWeight:700, color:G.yellow, marginBottom:6 }}>
+                Comparație, nu rezultat: aceleași pachete calculate cu convenția A ({ETICHETA_CONVENTIE[CONVENTIE_PLATFORMA_COMPARATIE]}). Banda și tabelul de mai jos rămân pe B.
+              </div>
+              <table style={{ borderCollapse:'collapse', fontSize:12 }}>
+                <thead><tr>{['Indicator', 'B (folosit)', 'A (comparație)', 'A − B'].map(h => <th key={h} style={{ ...S.th, position:'static' }}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {[['În pachete (reuniune)', 'realizat_m'], ['Necunoscut pe tronson', 'necunoscut_m'], ['Suprapuneri', 'suprapuneri_m'], ['În afara limitelor', 'in_afara_limitelor_m']].map(([t, k]) => (
+                    <tr key={k}>
+                      <td style={S.td}>{t}</td>
+                      <td style={{ ...S.td, textAlign:'right' }}>{rez.dupa[k] == null ? 'necunoscut' : fmtM(rez.dupa[k])}</td>
+                      <td style={{ ...S.td, textAlign:'right' }}>{rezA.dupa[k] == null ? 'necunoscut' : fmtM(rezA.dupa[k])}</td>
+                      <td style={{ ...S.td, textAlign:'right' }}>{fmtDif(rez.dupa[k], rezA.dupa[k])}</td>
+                    </tr>
+                  ))}
+                  <tr><td style={S.td}>Piese fără poziție</td><td style={{ ...S.td, textAlign:'right' }}>{rez.dupa.piese_fara_pozitie}</td><td style={{ ...S.td, textAlign:'right' }}>{rezA.dupa.piese_fara_pozitie}</td><td style={{ ...S.td, textAlign:'right' }}>{rezA.dupa.piese_fara_pozitie - rez.dupa.piese_fara_pozitie}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {vedere && (
             <div style={S.card}>
               <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:10 }}>
-                <BtnF activ={fereastra === 'tot'} onClick={() => { setFereastra('tot'); setSelectat(null) }}>Tot tronsonul</BtnF>
+                <BtnF activ={fereastra === 'tot'} onClick={() => { setFereastra('tot'); setSelectat(null) }}>{cuLimite ? 'Tot tronsonul' : 'Toată întinderea datelor'}</BtnF>
                 {ferestre.map(a => <BtnF key={a} activ={fereastra === String(a)} onClick={() => { setFereastra(String(a)); setSelectat(null) }}>{fmtKmMm(a).slice(0, -3)}</BtnF>)}
               </div>
               <Banda rez={rez} vedere={vedere} selectat={selectat} onSelect={setSelectat} />
@@ -205,9 +244,9 @@ export default function IzoBandaTronson({ proiectId, tronsoane, initialTronsonId
   )
 }
 
-function Kpi({ titlu, val, sub, culoare = G.text }) {
+function Kpi({ titlu, val, sub, culoare = G.text, test }) {
   return (
-    <div style={{ ...S.card, padding:'10px 12px' }}>
+    <div data-test={test} style={{ ...S.card, padding:'10px 12px' }}>
       <div style={{ fontSize:11, color:G.muted, textTransform:'uppercase', letterSpacing:'.4px' }}>{titlu}</div>
       <div style={{ fontSize:18, fontWeight:700, color:culoare, marginTop:2 }}>{val}</div>
       <div style={{ fontSize:11, color:G.dim }}>{sub}</div>

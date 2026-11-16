@@ -18,7 +18,7 @@
 import { parseNumar, areMaxZecimale } from './izoDocumenteLogica.js'
 import { normalizeazaSudura, tronsonNr } from './lib/izoSudura.js'
 
-export const VERSIUNE_REGULI = 'conducta-banda-v1'
+export const VERSIUNE_REGULI = 'conducta-banda-v2'
 export const STARI_BANDA = ['realizat', 'restant', 'necunoscut']
 export const ETICHETE_STARE_BANDA = { realizat: 'În schema de montaj', restant: 'Restant confirmat', necunoscut: 'Necunoscut (fără date)' }
 /**
@@ -28,12 +28,18 @@ export const ETICHETE_STARE_BANDA = { realizat: 'În schema de montaj', restant:
  *  - start_capat_prima_piesa: km de început = poziția primei suduri (capătul primei piese); restul din lungimi.
  */
 export const CONVENTII_KM = ['km_capat_pe_rand', 'start_inceput_prima_piesa', 'start_capat_prima_piesa']
+/**
+ * Pachetele din platformă: implicit B = „km start = primul rând fizic = prima sudură” (aceeași formulă ca editorul de pachete,
+ * src/Izometrie.jsx, „POZ KM cascade”). A = „km start = începutul primei țevi” se folosește DOAR ca o comparație explicită.
+ */
+export const CONVENTIE_PLATFORMA = 'start_capat_prima_piesa'
+export const CONVENTIE_PLATFORMA_COMPARATIE = 'start_inceput_prima_piesa'
 /** Toleranțe (mm) — de confirmat de biroul tehnic (spec §8). */
 export const TOLERANTA_POZITIE_MM = 50
 export const TOLERANTA_LUNGIME_MM = 5
 /** Anomaliile care ar bloca publicarea unei revizii (spec §4.4); restul sunt avertismente. */
 export const ANOMALII_BLOCANTE = new Set([
-  'km_neparsabil', 'km_lipsa', 'lungime_invalida', 'lungime_lipsa', 'km_start_lipsa', 'lant_intrerupt', 'conventie_km_necunoscuta',
+  'km_neparsabil', 'km_lipsa', 'lungime_invalida', 'lungime_lipsa', 'km_start_lipsa', 'km_start_rand_fara_piesa', 'lant_intrerupt', 'conventie_km_necunoscuta',
   'conventie_km_neconfirmata', 'suprapunere', 'dublura_identitate', 'frontiera_suduri_diferite', 'frontiera_neconfirmata',
   'sudura_repetata', 'sudura_ilizibila', 'sudura_contradictorie', 'conflict_restant_realizat', 'fel_necunoscut', 'restant_invalid',
 ])
@@ -47,6 +53,9 @@ const txt = v => (v == null ? '' : String(v).trim())
 const cheieText = v => txt(v).toUpperCase().replace(/\s+/g, '')
 const m = mm => (mm == null ? null : mm / 1000)
 const suma = l => l.reduce((s, x) => s + x, 0)
+// criteriul final al sortărilor (rezultat independent de ordinea încărcării): id-ul, cu numerele comparate ca numere
+const cmpId = (x, y) => String(x ?? '').localeCompare(String(y ?? ''), 'en', { numeric: true })
+const cmpPozitie = (x, y) => (x.a_mm ?? Infinity) - (y.a_mm ?? Infinity) || cmpId(x.id, y.id)
 
 /** Lungime / metri (număr sau text RO/EN) → mm întregi. null = lipsă; NaN = invalid (negativ, > 3 zecimale, text). */
 export function mmDinMetri(v) {
@@ -58,7 +67,7 @@ export function mmDinMetri(v) {
 
 // km strict: „24+012.46” / „24+012,46” / „24+012” (exact 3 cifre de metri, 1–3 zecimale) sau număr de metri.
 const RE_KM = /^(\d{1,3})\+(\d{3})(?:[.,](\d{1,3}))?$/
-/** km → mm întregi. null = lipsă; NaN = neparsabil (ex. „27.598.97” — NU se repară tacit). */
+/** km → mm întregi. null = lipsă; NaN = neparsabil (ex. „1.598.97” — NU se repară tacit). */
 export function kmInMm(v) {
   if (v == null) return null
   if (typeof v === 'number') return Number.isFinite(v) && v >= 0 && areMaxZecimale(v, 3) ? Math.round(v * 1000) : NaN
@@ -102,9 +111,26 @@ function sudura(r, ctxTronson) {
   }
 }
 
+// validările comune ale sudurii de pe un rând (piesă SAU legare — aceleași reguli, spec §2.5)
+function anomaliiSudura(s, p, ref, anomalii) {
+  if (s.motiv === 'ilizibila') anomalii.push(anomalie('sudura_ilizibila', `Sudura „${s.original}” (${p.cod}, rândul ${p.rand}) nu se poate citi`, ref))
+  if (s.motiv === 'contradictie') anomalii.push(anomalie('sudura_contradictorie', `Sudura ${s.original} (${p.cod}, rândul ${p.rand}) are cod și e marcată „de făcut în șanț”`, ref))
+  if (s.altTronson) anomalii.push(anomalie('sudura_alt_tronson', `Sudura ${s.original} (${p.cod}, rândul ${p.rand}) e numerotată pe alt tronson`, ref))
+}
+
+// km-ul propriu al unui rând (convenția km_capat_pe_rand): mm sau null + codul anomaliei
+function kmRand(r) {
+  const k = kmInMm(r.km)
+  if (k == null) return { km: null, cod: 'km_lipsa' }
+  if (Number.isNaN(k)) return { km: null, cod: 'km_neparsabil' }
+  return { km: k, cod: null }
+}
+
 /**
  * Piesele și sudurile unei foi, cu poziții după convenția declarată. Nu ghicește nimic: o poziție care nu se poate
  * stabili rămâne null (cu anomalie), iar la convenția cumulată lanțul se oprește acolo (nu se mută piesele următoare).
+ * La convențiile cumulate singura ancoră explicită e km-ul de început al foii: după o întrerupere (lungime lipsă / invalidă,
+ * tip de rând necunoscut) nimic din aceeași foaie nu mai primește poziție.
  */
 function citesteFoaie(foaie, sursa, ctxTronson, anomalii, ignorate) {
   const conv = foaie.conventieKm
@@ -114,35 +140,64 @@ function citesteFoaie(foaie, sursa, ctxTronson, anomalii, ignorate) {
   if (!CONVENTII_KM.includes(conv)) anomalii.push(anomalie('conventie_km_necunoscuta', `Foaia ${txt(foaie.cod) || fid}: convenția km nu e declarată`, { foaie: fid }))
   else if (foaie.conventieConfirmata !== true) anomalii.push(anomalie('conventie_km_neconfirmata', `Foaia ${txt(foaie.cod) || fid}: convenția km (${conv}) nu e confirmată`, { foaie: fid }))
   const cumulat = conv === 'start_inceput_prima_piesa' || conv === 'start_capat_prima_piesa'
+  const laSudura = conv === 'start_capat_prima_piesa' // B: km de început = poziția PRIMULUI RÂND FIZIC (prima sudură)
   const kmStart = cumulat ? kmInMm(foaie.kmStart) : null
   let cur = null
   if (cumulat) {
     if (kmStart == null || Number.isNaN(kmStart)) anomalii.push(anomalie('km_start_lipsa', `Foaia ${txt(foaie.cod) || fid}: km de început lipsă sau invalid`, { foaie: fid, valoare: foaie.kmStart ?? null }))
     else cur = kmStart
   }
-  let primul = true, lantRaportat = false
+  let primulRand = true, lantRaportat = false
+  // întreruperea lanțului cumulat: o singură anomalie pe foaie, la primul rând care o produce
+  const opresteLant = (p, motiv) => {
+    if (cur != null && !lantRaportat) {
+      lantRaportat = true
+      anomalii.push(anomalie('lant_intrerupt', `Foaia ${p.cod}: de la rândul ${p.rand} pozițiile nu se mai pot calcula (${motiv})`, { foaie: fid, rand: p.rand }))
+    }
+    cur = null
+  }
+  // B cu primul rând fără piesă (separator / rând gol / tip necunoscut): km de început ar ancora un rând fără poziție fizică,
+  // iar formula editorului ar trata prima țeavă ca la A → ambiguu, nu se alege: foaia rămâne fără poziții
+  const startFaraPiesa = (p, motiv) => {
+    if (!(cumulat && laSudura && primulRand && cur != null)) return
+    anomalii.push(anomalie('km_start_rand_fara_piesa', `Foaia ${p.cod}: km de început (prima sudură) cade pe rândul ${p.rand}, care nu e piesă (${motiv}): pozițiile foii nu se pot stabili`, { foaie: fid, rand: p.rand, motiv }))
+    lantRaportat = true
+    cur = null
+  }
   const randuri = foaie.randuri || []
   randuri.forEach((r, i) => {
     const fel = txt(r.fel)
     const p = prov(r, i)
     if (!FELURI.has(fel)) {
+      // incertitudine: rândul poate fi o piesă cu lungime → întrerupe lanțul cumulat (piesele următoare NU se poziționează)
       ignorate.push({ ...p, motiv: 'fel_necunoscut' })
       anomalii.push(anomalie('fel_necunoscut', `Rândul ${p.rand} din ${p.cod}: tip de rând necunoscut „${fel}”`, { foaie: fid, rand: p.rand }))
+      if (cumulat) { startFaraPiesa(p, 'tip necunoscut'); opresteLant(p, 'tip de rând necunoscut') }
+      primulRand = false
       return
     }
-    if (fel === 'separator') { ignorate.push({ ...p, motiv: 'separator' }); return }
+    if (fel === 'separator') { ignorate.push({ ...p, motiv: 'separator' }); startFaraPiesa(p, 'separator'); primulRand = false; return }
     const L = mmDinMetri(r.lungime)
     // rând gol = țeavă fără serie, fără lungime și fără sudură; o CURBĂ fără date rămâne piesă (există, dar fără lungime / poziție)
-    if (fel === 'teava' && !txt(r.serie) && (L == null || L === 0) && FARA_COD.has(txt(r.sudura)) && r.sant_pending !== true) { ignorate.push({ ...p, motiv: 'rand_gol' }); return }
+    if (fel === 'teava' && !txt(r.serie) && (L == null || L === 0) && FARA_COD.has(txt(r.sudura)) && r.sant_pending !== true) {
+      ignorate.push({ ...p, motiv: 'rand_gol' }); startFaraPiesa(p, 'rând gol'); primulRand = false; return
+    }
 
     if (fel === 'legare') {
-      // sudură fără piesă: la poziția curentă (cumulat) sau la km-ul rândului
-      // (la „start_capat_prima_piesa” cu legare pe primul rând, km de început = chiar sudura de legare)
+      // sudură fără piesă: la poziția curentă (cumulat) sau la km-ul rândului — cu ACELEAȘI validări ca sudura unei piese
+      const id = `${sursa}:${fid}:${p.rand}`
       let km = null
       if (cumulat) km = cur
-      else { const k = kmInMm(r.km); km = k == null || Number.isNaN(k) ? null : k }
-      primul = false
-      suduriLegare.push({ ...sudura(r, ctxTronson), km_mm: km, piesa: null, provenienta: [p] })
+      else {
+        const k = kmRand(r)
+        km = k.km
+        if (k.cod === 'km_neparsabil') anomalii.push(anomalie('km_neparsabil', `Km „${txt(r.km)}” (${p.cod}, rândul ${p.rand}, sudură de legare) nu se poate citi: sudura rămâne fără poziție`, { sudura: id, valoare: r.km }))
+        else if (k.cod) anomalii.push(anomalie(k.cod, `${p.cod}, rândul ${p.rand} (sudură de legare): km lipsă`, { sudura: id, valoare: r.km ?? null }))
+      }
+      primulRand = false
+      const s = sudura(r, ctxTronson)
+      anomaliiSudura(s, p, { sudura: id }, anomalii)
+      suduriLegare.push({ ...s, km_mm: km, piesa: null, id, provenienta: [p] })
       return
     }
 
@@ -153,22 +208,18 @@ function citesteFoaie(foaie, sursa, ctxTronson, anomalii, ignorate) {
     else if (!Lok) an.push('lungime_invalida')
     else if (L === 0) an.push('lungime_zero')
     if (cumulat) {
-      if (primul && cur != null && Lok && conv === 'start_capat_prima_piesa') cur -= L
-      primul = false
-      if (cur != null && Lok) { a = cur; b = cur + L; cur = b; kmSudura = b }
-      else {
-        if (cur != null && !lantRaportat) {
-          lantRaportat = true
-          anomalii.push(anomalie('lant_intrerupt', `Foaia ${p.cod}: de la rândul ${p.rand} pozițiile nu se mai pot calcula (lungime lipsă sau invalidă)`, { foaie: fid, rand: p.rand }))
-        }
-        cur = null
-      }
+      if (laSudura && primulRand && cur != null) {
+        // B, primul rând = piesă: sudura ei e chiar km-ul de început; lanțul continuă de acolo chiar dacă lungimea lipsește
+        kmSudura = cur
+        if (Lok) { a = cur - L; b = cur }
+      } else if (cur != null && Lok) { a = cur; b = cur + L; cur = b; kmSudura = b }
+      else opresteLant(p, 'lungime lipsă sau invalidă')
     } else {
-      const k = kmInMm(r.km)
-      if (k == null) an.push('km_lipsa')
-      else if (Number.isNaN(k)) an.push('km_neparsabil')
-      else { kmSudura = k; if (Lok) { b = k; a = k - L } }
+      const k = kmRand(r)
+      if (k.cod) an.push(k.cod)
+      else { kmSudura = k.km; if (Lok) { b = k.km; a = k.km - L } }
     }
+    primulRand = false
     const s = sudura(r, ctxTronson)
     const piesa = {
       id: `${sursa}:${fid}:${p.rand}`, sursa, fel, serie: txt(r.serie), tip: txt(r.tip), dim: txt(r.dim), sarja: txt(r.sarja),
@@ -179,9 +230,7 @@ function citesteFoaie(foaie, sursa, ctxTronson, anomalii, ignorate) {
       else if (c === 'km_neparsabil') anomalii.push(anomalie(c, `Km „${txt(r.km)}” (${p.cod}, rândul ${p.rand}) nu se poate citi: piesa rămâne fără poziție`, { piesa: piesa.id, valoare: r.km }))
       else anomalii.push(anomalie(c, `${p.cod}, rândul ${p.rand}: ${c.replace(/_/g, ' ')}`, { piesa: piesa.id, valoare: c.startsWith('km') ? r.km ?? null : r.lungime ?? null }))
     }
-    if (s.motiv === 'ilizibila') anomalii.push(anomalie('sudura_ilizibila', `Sudura „${s.original}” (${p.cod}, rândul ${p.rand}) nu se poate citi`, { piesa: piesa.id }))
-    if (s.motiv === 'contradictie') anomalii.push(anomalie('sudura_contradictorie', `Sudura ${s.original} (${p.cod}, rândul ${p.rand}) are cod și e marcată „de făcut în șanț”`, { piesa: piesa.id }))
-    if (s.altTronson) anomalii.push(anomalie('sudura_alt_tronson', `Sudura ${s.original} (${p.cod}, rândul ${p.rand}) e numerotată pe alt tronson`, { piesa: piesa.id }))
+    anomaliiSudura(s, p, { piesa: piesa.id }, anomalii)
     piese.push(piesa)
   })
   return { piese, suduriLegare }
@@ -239,14 +288,18 @@ export function limiteTronson(t) {
 
 /**
  * Banda: segmente elementare din limitele tronsonului, fiecare cu starea și proveniența (piesele / intervalele restante).
- * Suprapunerea pieselor nu se ascunde: segmentul e „realizat” cu `suprapunere: true` și apare în anomalii.
+ * Fără limitele tronsonului, banda acoperă doar ÎNTINDEREA datelor (piese + restanțe) — nu e lungimea tronsonului.
+ * Suprapunerea pieselor nu se ascunde și NU depinde de starea segmentului: `suprapunere: true` + anomalia `suprapunere`
+ * apar și pe un segment devenit „necunoscut / conflict”.
  */
 function construiesteBanda(piese, restante, lim, anomalii) {
   const poz = piese.filter(p => p.a_mm != null && p.b_mm != null && p.b_mm > p.a_mm)
   let a0, b0
   if (lim) { a0 = lim.a; b0 = lim.b }
-  else if (poz.length) { a0 = Math.min(...poz.map(p => p.a_mm)); b0 = Math.max(...poz.map(p => p.b_mm)) }
-  else return { segmente: [], limite: null, in_afara_mm: 0 }
+  else if (poz.length || restante.length) {
+    a0 = Math.min(...poz.map(p => p.a_mm), ...restante.map(r => r.a))
+    b0 = Math.max(...poz.map(p => p.b_mm), ...restante.map(r => r.b))
+  } else return { segmente: [], limite: null, in_afara_mm: 0 }
   let in_afara_mm = 0
   const cl = []
   for (const p of poz) {
@@ -277,7 +330,7 @@ function construiesteBanda(piese, restante, lim, anomalii) {
   }
   // anomaliile de suprapunere / conflict, pe porțiuni continue
   for (const s of seg) {
-    if (s.suprapunere && s.stare === 'realizat') anomalii.push(anomalie('suprapunere', `Piese suprapuse pe km ${fmtKmMm(s.de_la_mm)}–${fmtKmMm(s.pana_la_mm)} (${fmtM(m(s.pana_la_mm - s.de_la_mm))})`, { piese: s.piese }))
+    if (s.suprapunere) anomalii.push(anomalie('suprapunere', `Piese suprapuse pe km ${fmtKmMm(s.de_la_mm)}–${fmtKmMm(s.pana_la_mm)} (${fmtM(m(s.pana_la_mm - s.de_la_mm))})`, { piese: s.piese }))
     if (s.motiv === 'conflict') anomalii.push(anomalie('conflict_restant_realizat', `Km ${fmtKmMm(s.de_la_mm)}–${fmtKmMm(s.pana_la_mm)}: raportat restant, dar acoperit de piese în schemă`, { piese: s.piese }))
   }
   return {
@@ -318,7 +371,7 @@ function verificaSuduri(suduri, anomalii) {
     if (!v.has(k)) v.set(k, [])
     v.get(k).push(s)
   }
-  for (const [, g] of v) if (g.length > 1) anomalii.push(anomalie('sudura_repetata', `Sudura ${g[0].original} apare de ${g.length} ori`, { piese: g.map(s => s.piesa).filter(Boolean) }))
+  for (const [, g] of v) if (g.length > 1) anomalii.push(anomalie('sudura_repetata', `Sudura ${g[0].original} apare de ${g.length} ori`, { piese: g.map(s => s.piesa || s.id).filter(Boolean) }))
   return v.size
 }
 
@@ -355,7 +408,7 @@ export function calculeazaSursa({ sursa, foi, tronson, restanteConfirmate = [] }
   // reconcilierea frontierelor
   const { piese, frontiere } = reconciliazaFrontiere(citite, anomalii)
   const suduri = [...piese.map(p => ({ ...p.sudura, piesa: p.id })), ...citite.flatMap(c => c.suduriLegare)]
-    .sort((x, y) => (x.km_mm ?? Infinity) - (y.km_mm ?? Infinity))
+    .sort((x, y) => (x.km_mm ?? Infinity) - (y.km_mm ?? Infinity) || cmpId(x.piesa || x.id, y.piesa || y.id))
   const bucatiAceeasiSerie = verificaIdentitati(piese, anomalii)
   const suduriDistincte = verificaSuduri(suduri, anomalii)
   // restanțe confirmate (intrare explicită; azi nu există în platformă — spec §5)
@@ -368,29 +421,67 @@ export function calculeazaSursa({ sursa, foi, tronson, restanteConfirmate = [] }
   if (!piese.length) anomalii.push(anomalie('sursa_goala', `Sursa „${sursa}” nu are nicio piesă pe tronsonul ${txt(tronson?.cod) || '?'}: totul e necunoscut (NU neexecutat)`))
   const banda = construiesteBanda(piese, restante, lim, anomalii)
   const len = st => m(suma(banda.segmente.filter(s => s.stare === st).map(s => s.pana_la_mm - s.de_la_mm)))
-  const suprapuneri_m = m(suma(banda.segmente.map(s => (s.piese.length > 1 && s.stare === 'realizat' ? (s.piese.length - 1) * (s.pana_la_mm - s.de_la_mm) : 0))))
+  // suprapunerea geometrică: Σ (piese peste − 1) × lungime, pe ORICE segment (și pe cele în conflict cu un restant)
+  const suprapuneri_m = m(suma(banda.segmente.map(s => (s.piese.length > 1 ? (s.piese.length - 1) * (s.pana_la_mm - s.de_la_mm) : 0))))
   const dupa = {
     ...statistici(piese, suduri), suduri_distincte: suduriDistincte, piese_frontiera: frontiere.length, bucati_aceeasi_serie: bucatiAceeasiSerie,
     serii_distincte: new Set(piese.filter(p => p.serie).map(p => `${cheieText(p.tip)}|${cheieText(p.serie)}`)).size,
-    realizat_m: len('realizat'), restant_m: len('restant'), necunoscut_m: len('necunoscut'), suprapuneri_m,
+    realizat_m: len('realizat'), restant_m: len('restant'), suprapuneri_m,
     in_afara_limitelor_m: m(banda.in_afara_mm),
-    lungime_banda_m: banda.limite ? m(banda.limite.b - banda.limite.a) : null,
+    // lungimea tronsonului e cunoscută DOAR din limitele lui; întinderea benzii fără limite = cât acoperă datele, nu tronsonul
+    lungime_tronson_m: lim ? m(lim.b - lim.a) : null,
+    intindere_banda_m: banda.limite ? m(banda.limite.b - banda.limite.a) : null,
+    // necunoscut pe tronson: doar cu limite (altfel nu se știe cât lipsește în afara datelor — NU e 0)
+    necunoscut_m: lim ? len('necunoscut') : null,
+    necunoscut_in_intindere_m: banda.limite ? len('necunoscut') : null,
   }
   return {
     sursa, versiune: VERSIUNE_REGULI, tronson: { cod: txt(tronson?.cod), limite: lim },
-    foi: ord.map(f => ({ id: f.id, cod: txt(f.cod), revizie: f.revizie ?? null, stare: txt(f.stare), conventieKm: f.conventieKm, conventieConfirmata: f.conventieConfirmata === true, kmStart: f.kmStart ?? null, randuri: (f.randuri || []).length })),
+    foi: ord.map(f => ({ id: f.id, cod: txt(f.cod), revizie: f.revizie ?? null, stare: txt(f.stare), conventieKm: f.conventieKm, conventieConfirmata: f.conventieConfirmata === true, kmStart: f.kmStart ?? null, randuri: (f.randuri || []).length,
+      // data situației pe care o descrie foaia și data importului: null = NECUNOSCUTĂ (se afișează așa, nu se inventează)
+      dataSituatie: f.dataSituatie ?? null, dataImport: f.dataImport ?? null, modificatLa: f.modificatLa ?? null })),
     inainte, dupa, piese, suduri, frontiere, ignorate, banda: banda.segmente, anomalii,
     blocante: anomalii.filter(a => a.nivel === 'blocant').length,
   }
 }
 
 /**
+ * Împerecherea pe lungime a bucăților cu aceeași (tip, serie): MAXIMUL de perechi în toleranță; la egalitate, suma minimă a
+ * diferențelor de lungime; restul egalităților se rup determinist (listele sortate după lungime, km, id; la scor egal se
+ * preferă săritul bucății din schemă, apoi al celei din platformă, apoi perechea). Pe o axă (|Δ| ≤ toleranță) există mereu o
+ * soluție optimă fără perechi încrucișate, deci programarea dinamică pe listele sortate e exactă. O(n·m) pe grupă.
+ */
+export function imperecheazaPeLungime(s, p, tol = TOLERANTA_LUNGIME_MM) {
+  const ordL = l => l.filter(x => Number.isInteger(x.lungime_mm)).sort((x, y) => x.lungime_mm - y.lungime_mm || cmpPozitie(x, y))
+  const S = ordL(s), P = ordL(p), n = S.length, k = P.length
+  // dp[i][j] = cel mai bun scor pe S[i..], P[j..]: [nr. perechi, −Σ|Δ|]
+  const mai = (a, b) => a[0] > b[0] || (a[0] === b[0] && a[1] > b[1])
+  const dp = Array.from({ length: n + 1 }, () => Array(k + 1).fill(null))
+  const ales = Array.from({ length: n + 1 }, () => Array(k + 1).fill(null))
+  for (let i = n; i >= 0; i--) for (let j = k; j >= 0; j--) {
+    if (i === n || j === k) { dp[i][j] = [0, 0]; continue }
+    let best = dp[i + 1][j], c = 's'
+    if (mai(dp[i][j + 1], best)) { best = dp[i][j + 1]; c = 'p' }
+    const d = Math.abs(S[i].lungime_mm - P[j].lungime_mm)
+    if (d <= tol) { const v = [dp[i + 1][j + 1][0] + 1, dp[i + 1][j + 1][1] - d]; if (mai(v, best)) { best = v; c = 'm' } }
+    dp[i][j] = best; ales[i][j] = c
+  }
+  const perechi = []
+  for (let i = 0, j = 0; i < n && j < k;) {
+    const c = ales[i][j]
+    if (c === 'm') { perechi.push([S[i], P[j]]); i++; j++ } else if (c === 's') i++; else j++
+  }
+  const folS = new Set(perechi.map(x => x[0])), folP = new Set(perechi.map(x => x[1]))
+  return { perechi, restS: s.filter(x => !folS.has(x)).sort(cmpPozitie), restP: p.filter(x => !folP.has(x)).sort(cmpPozitie) }
+}
+
+/**
  * Raportul de diferențe schemă ↔ platformă (spec §4.3). Cheia = bucata: (tip, serie) împerecheată ca MULTISET
- * (o serie poate avea mai multe bucăți tăiate): întâi perechile cu aceeași lungime, apoi restul în ordinea km.
- * „Lipsă din platformă” = bucată cu cheie în schemă rămasă fără pereche; piesele fără serie sunt „necomparabile”, nu lipsă.
+ * (o serie poate avea mai multe bucăți tăiate): întâi maximul de perechi cu lungimea în toleranță (imperecheazaPeLungime),
+ * apoi restul în ordinea km. „Lipsă din platformă” = bucată cu cheie în schemă rămasă fără pereche; piesele fără serie sunt
+ * „necomparabile”, nu lipsă. Ordinea ieșirii e deterministă (cheie, apoi km, apoi id).
  */
 export function comparaSurse(schema, platforma) {
-  const ord = l => [...l].sort((x, y) => (x.a_mm ?? Infinity) - (y.a_mm ?? Infinity))
   const grup = piese => {
     const g = new Map(), fara = []
     for (const p of piese) {
@@ -403,18 +494,15 @@ export function comparaSurse(schema, platforma) {
   }
   const S = grup(schema.piese), P = grup(platforma.piese)
   const perechi = [], doarSchema = [], doarPlatforma = []
-  for (const k of new Set([...S.g.keys(), ...P.g.keys()])) {
-    const s = ord(S.g.get(k) || []), p = ord(P.g.get(k) || [])
-    const folP = new Set(), folS = new Set()
-    s.forEach((x, i) => {
-      const j = p.findIndex((y, jj) => !folP.has(jj) && x.lungime_mm != null && y.lungime_mm != null && Math.abs(x.lungime_mm - y.lungime_mm) <= TOLERANTA_LUNGIME_MM)
-      if (j >= 0) { folP.add(j); folS.add(i); perechi.push([x, p[j]]) }
-    })
-    const rs = s.filter((_, i) => !folS.has(i)), rp = p.filter((_, j) => !folP.has(j))
+  for (const k of [...new Set([...S.g.keys(), ...P.g.keys()])].sort(cmpId)) {
+    const { perechi: pl, restS: rs, restP: rp } = imperecheazaPeLungime(S.g.get(k) || [], P.g.get(k) || [])
+    perechi.push(...pl)
     const n = Math.min(rs.length, rp.length)
     for (let i = 0; i < n; i++) perechi.push([rs[i], rp[i]])
     doarSchema.push(...rs.slice(n)); doarPlatforma.push(...rp.slice(n))
   }
+  perechi.sort((x, y) => cmpPozitie(x[0], y[0]) || cmpPozitie(x[1], y[1]))
+  doarSchema.sort(cmpPozitie); doarPlatforma.sort(cmpPozitie)
   const det = perechi.map(([x, y]) => {
     const dif = []
     if (x.lungime_mm == null || y.lungime_mm == null || Math.abs(x.lungime_mm - y.lungime_mm) > TOLERANTA_LUNGIME_MM) dif.push('lungime')
@@ -475,9 +563,11 @@ export function reconciliazaTronson({ tronson, schema = null, platforma = null, 
 
 /**
  * Adaptorul platformei: pachetele de lansare + rândurile lor (executie_pachete_lansare / executie_tevi) → foi.
- * Convenția km a pachetelor NU e confirmată (spec §2.3): se dă explicit și se afișează ca atare.
+ * Convenția km a pachetelor NU e confirmată pe fiecare pachet (spec §2.3): implicit B (CONVENTIE_PLATFORMA, ca editorul),
+ * A doar la cerere explicită, pentru comparație; se afișează ca atare. Pachetele nu au „data situației”: rămâne necunoscută;
+ * `modificatLa` = ultima modificare a pachetului, dacă rândul o are (nu e data situației și nici a unui import).
  */
-export function foiDinPlatforma(pachete, tevi, { conventie = 'start_inceput_prima_piesa', confirmata = false } = {}) {
+export function foiDinPlatforma(pachete, tevi, { conventie = CONVENTIE_PLATFORMA, confirmata = false } = {}) {
   const pePachet = new Map()
   for (const t of tevi || []) {
     if (!pePachet.has(t.pachet_id)) pePachet.set(t.pachet_id, [])
@@ -486,6 +576,7 @@ export function foiDinPlatforma(pachete, tevi, { conventie = 'start_inceput_prim
   return (pachete || []).map(p => ({
     id: p.id, cod: p.cod_document_full || p.cod_document || `pachet ${p.id}`, revizie: p.revizie ?? null, stare: p.status || '',
     kmStart: parseNumar(p.km_start_m), conventieKm: conventie, conventieConfirmata: confirmata,
+    dataSituatie: null, dataImport: null, modificatLa: p.updated_at ?? null,
     randuri: (pePachet.get(p.id) || []).slice().sort((a, b) => (a.poz_in_pachet ?? 0) - (b.poz_in_pachet ?? 0) || a.id - b.id).map(t => ({
       rand: t.poz_in_pachet ?? t.id, poz: t.poz_in_pachet ?? null, fel: t.tip_rand, serie: t.serie_unica, tip: t.tip, dim: t.dimensiune, sarja: t.sarja,
       lungime: t.lungime_m, km: null, sudura: t.sudura_cod, refacuta: t.sudura_refacuta === true, sant_pending: t.sudura_sant_pending === true,

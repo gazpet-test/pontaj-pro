@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   kmInMm, mmDinMetri, fmtKmMm, calculeazaSursa, comparaSurse, reconciliazaTronson, foiDinPlatforma, limiteTronson,
+  imperecheazaPeLungime, CONVENTIE_PLATFORMA, CONVENTIE_PLATFORMA_COMPARATIE,
 } from './conductaTronsonLogica.js'
 import { uneste, goluri } from './probeTronsoaneLogica.js'
 
@@ -25,7 +26,7 @@ describe('kmInMm / mmDinMetri / fmtKmMm', () => {
     expect(kmInMm(null)).toBe(null)
   })
   it('refuză km ambigui sau stricați (nu repară)', () => {
-    expect(kmInMm('27.598.97')).toBeNaN()
+    expect(kmInMm('1.598.97')).toBeNaN()
     expect(kmInMm('1+10')).toBeNaN()
     expect(kmInMm('1+010.1234')).toBeNaN()
     expect(kmInMm('+010')).toBeNaN()
@@ -226,23 +227,34 @@ describe('convențiile km ale pachetelor din platformă (se declară, nu se ghic
     { id: 5, pachet_id: 7, poz_in_pachet: 4, tip_rand: 'separator', serie_unica: null, lungime_m: null },
     { id: 6, pachet_id: 7, poz_in_pachet: 5, tip_rand: 'teava', serie_unica: null, lungime_m: null, sudura_cod: null },
   ]
-  it('început = începutul primei piese', () => {
-    const rez = calculeazaSursa({ sursa: 'platforma', tronson: T, foi: foiDinPlatforma(pachete, tevi) })
+  it('implicit = B: km start = primul rând fizic = prima sudură (ca editorul de pachete)', () => {
+    const foi = foiDinPlatforma(pachete, tevi)
+    expect(foi[0].conventieKm).toBe('start_capat_prima_piesa')
+    expect(CONVENTIE_PLATFORMA).toBe('start_capat_prima_piesa')
+    const rez = calculeazaSursa({ sursa: 'platforma', tronson: T, foi })
+    // editorul: rândul 1 = km start (1000); rândul i>1 = cumulat + lungimea lui → suduri la 1000, 1012, 1020
+    expect(rez.piese.map(p => [p.serie, p.a_mm / 1000, p.b_mm / 1000])).toEqual([['SX001', 990, 1000], ['SX002', 1000, 1012], ['SX003', 1012, 1020]])
+    expect(rez.suduri.map(s => [s.original, s.km_mm / 1000])).toEqual([['T1S1', 1000], ['T1S2', 1012], ['', 1020]])
+    expect(rez.dupa.in_afara_limitelor_m).toBe(10)
+    expect(coduri(rez)).toEqual(['conventie_km_neconfirmata', 'in_afara_limitelor'])
+  })
+  it('A (început = începutul primei piese) doar cerută explicit, ca o comparație', () => {
+    const rez = calculeazaSursa({ sursa: 'platforma', tronson: T, foi: foiDinPlatforma(pachete, tevi, { conventie: CONVENTIE_PLATFORMA_COMPARATIE }) })
     expect(rez.piese.map(p => [p.serie, p.a_mm / 1000, p.b_mm / 1000])).toEqual([['SX001', 1000, 1010], ['SX002', 1010, 1022], ['SX003', 1022, 1030]])
     expect(rez.suduri.map(s => [s.original, s.stare, s.refacuta])).toEqual([['T1S1', 'sudata', false], ['T1S2', 'sudata', true], ['', 'restanta', false]])
     expect(rez.ignorate.map(i => i.motiv)).toEqual(['separator', 'rand_gol'])
     expect(coduri(rez)).toEqual(['conventie_km_neconfirmata'])
     expect(rez.dupa.suduri_restante).toBe(1)
   })
-  it('început = prima sudură (capătul primei piese)', () => {
-    const rez = calculeazaSursa({ sursa: 'platforma', tronson: T, foi: foiDinPlatforma(pachete, tevi, { conventie: 'start_capat_prima_piesa' }) })
-    expect(rez.piese.map(p => [p.a_mm / 1000, p.b_mm / 1000])).toEqual([[990, 1000], [1000, 1012], [1012, 1020]])
-    expect(rez.dupa.in_afara_limitelor_m).toBe(10)
-    expect(coduri(rez)).toEqual(['conventie_km_neconfirmata', 'in_afara_limitelor'])
+  it('pachetul nu are data situației: rămâne necunoscută (null), nu se inventează', () => {
+    const f = foiDinPlatforma([{ ...pachete[0], updated_at: '2026-11-15T10:00:00Z' }], tevi)[0]
+    expect([f.dataSituatie, f.dataImport, f.modificatLa]).toEqual([null, null, '2026-11-15T10:00:00Z'])
+    const rez = calculeazaSursa({ sursa: 'platforma', tronson: T, foi: [f] })
+    expect([rez.foi[0].dataSituatie, rez.foi[0].dataImport]).toEqual([null, null])
   })
   it('cod de sudură + marcaj „în șanț” pe același rând = contradicție', () => {
     const t2 = [{ id: 1, pachet_id: 7, poz_in_pachet: 1, tip_rand: 'teava', serie_unica: 'SX001', tip: 'L360', lungime_m: '10', sudura_cod: 'T1S1', sudura_sant_pending: true }]
-    const rez = calculeazaSursa({ sursa: 'platforma', tronson: T, foi: foiDinPlatforma(pachete, t2, { confirmata: true }) })
+    const rez = calculeazaSursa({ sursa: 'platforma', tronson: T, foi: foiDinPlatforma([{ ...pachete[0], km_start_m: '1010.00' }], t2, { confirmata: true }) })
     expect(rez.suduri[0].stare).toBe('necunoscuta')
     expect(coduri(rez)).toEqual(['sudura_contradictorie'])
   })
@@ -278,6 +290,150 @@ describe('paritate cu reuniunea existentă (probeTronsoaneLogica.uneste / goluri
     expect(rez.dupa.piese_fara_pozitie).toBe(0)
     expect(rez.dupa.suprapuneri_m).toBeGreaterThan(0)          // setul chiar are suprapuneri…
     expect(g.length).toBeGreaterThan(1)                         // …și goluri interioare
+  })
+})
+
+// ── runda 2 (review PR #1111): fiecare caz pică pe codul vechi ──
+const cumulata = (randuri, conventieKm, kmStart = 1000) => foaie('P', randuri, { conventieKm, kmStart, conventieConfirmata: true })
+const pozitii = rez => rez.piese.map(p => [p.serie, p.a_mm == null ? null : p.a_mm / 1000, p.b_mm == null ? null : p.b_mm / 1000])
+
+describe('rând de tip necunoscut = incertitudine, întrerupe lanțul cumulat (P1)', () => {
+  const necunoscut = { rand: 2, fel: 'cot_special', serie: 'SXN', lungime: 10, sudura: 'T1S2' }
+  it('A: piesa de după el NU primește poziție (codul vechi o punea pe [1010, 1020))', () => {
+    const rez = schema([cumulata([r(1, 'SX001', 10, null, 'T1S1'), necunoscut, r(3, 'SX002', 10, null, 'T1S3')], 'start_inceput_prima_piesa')])
+    expect(pozitii(rez)).toEqual([['SX001', 1000, 1010], ['SX002', null, null]])
+    expect(coduri(rez)).toEqual(['fel_necunoscut', 'lant_intrerupt'])
+    expect(rez.anomalii.find(a => a.cod === 'lant_intrerupt').rand).toBe(2)
+    expect(stari(rez)).toEqual([[1000, 1010, 'realizat'], [1010, 1030, 'necunoscut']])
+    expect([rez.dupa.realizat_m, rez.dupa.necunoscut_m, rez.dupa.piese_fara_pozitie]).toEqual([10, 20, 1])
+    expect(rez.suduri.find(s => s.original === 'T1S3').km_mm).toBe(null)
+  })
+  it('B: la fel (sudura primei piese = km start; apoi lanțul se oprește la rândul necunoscut)', () => {
+    const rez = schema([cumulata([r(1, 'SX001', 10, null, 'T1S1'), necunoscut, r(3, 'SX002', 10, null, 'T1S3')], 'start_capat_prima_piesa', 1010)])
+    expect(pozitii(rez)).toEqual([['SX001', 1000, 1010], ['SX002', null, null]])
+    expect(coduri(rez)).toEqual(['fel_necunoscut', 'lant_intrerupt'])
+  })
+  it('km pe fiecare rând: rândul necunoscut nu mută nimic, fiecare piesă are ancora ei', () => {
+    const rez = schema([foaie('A', [r(1, 'SX001', 10, '1+010', 'T1S1'), { ...necunoscut, km: '1+020' }, r(3, 'SX002', 10, '1+030', 'T1S3')])])
+    expect(pozitii(rez)).toEqual([['SX001', 1000, 1010], ['SX002', 1020, 1030]])
+    expect(coduri(rez)).toEqual(['fel_necunoscut'])
+    expect(stari(rez)).toEqual([[1000, 1010, 'realizat'], [1010, 1020, 'necunoscut'], [1020, 1030, 'realizat']])
+  })
+})
+
+describe('sudura de legare trece prin aceleași validări (P2)', () => {
+  const leg = (rand, km, sudura, extra = {}) => ({ rand, fel: 'legare', km, sudura, ...extra })
+  it('km neparsabil + cod ilizibil', () => {
+    const rez = schema([foaie('A', [leg(1, '1.010.00', 'TTS1R'), r(2, 'SX001', 10, '1+020', 'T1S2')])])
+    expect(rez.anomalii.map(a => [a.cod, a.nivel, a.sudura ?? null, a.valoare ?? null])).toEqual([
+      ['km_neparsabil', 'blocant', 'schema:A:1', '1.010.00'],
+      ['sudura_ilizibila', 'blocant', 'schema:A:1', null],
+    ])
+    expect(rez.suduri.find(s => s.id === 'schema:A:1')).toMatchObject({ canon: null, stare: 'necunoscuta', km_mm: null })
+  })
+  it('km lipsă', () => {
+    expect(coduri(schema([foaie('A', [leg(1, '', 'T1S1')])]))).toEqual(['km_lipsa', 'sursa_goala'])
+  })
+  it('cod + marcaj „în șanț” = contradicție; numerotare pe alt tronson', () => {
+    const rez = schema([foaie('A', [leg(1, '1+000', 'T1S1', { sant_pending: true }), leg(2, '1+010', 'T2S5')])])
+    expect(coduri(rez)).toEqual(['sudura_alt_tronson', 'sudura_contradictorie', 'sursa_goala'])
+    expect(rez.suduri.map(s => [s.original, s.stare])).toEqual([['T1S1', 'necunoscuta'], ['T2S5', 'sudata']])
+  })
+  it('aceeași sudură pe o legare și pe o piesă = repetată (cu ambele locuri)', () => {
+    const rez = schema([foaie('A', [leg(1, '1+000', 'T1S1'), r(2, 'SX001', 10, '1+010', 'T1S1')])])
+    expect(rez.anomalii.filter(a => a.cod === 'sudura_repetata').map(a => a.piese)).toEqual([['schema:A:1', 'schema:A:2']])
+  })
+})
+
+describe('suprapunerea nu dispare când segmentul devine conflict (P2)', () => {
+  it('două piese suprapuse integral + restant confirmat pe același interval', () => {
+    const x = calculeazaSursa({ sursa: 'schema', tronson: T, restanteConfirmate: [{ de_la_m: 1000, pana_la_m: 1010 }],
+      foi: [foaie('A', [r(1, 'SX001', 10, '1+010', 'T1S1'), r(2, 'SX002', 10, '1+010', 'T1S2'), r(3, 'SX003', 20, '1+030', 'T1S3')])] })
+    expect(x.banda.map(s => [s.de_la_m, s.pana_la_m, s.stare, s.motiv, s.suprapunere])).toEqual([
+      [1000, 1010, 'necunoscut', 'conflict', true], [1010, 1030, 'realizat', null, false]])
+    expect(x.dupa.suprapuneri_m).toBe(10)
+    expect(x.dupa.realizat_m).toBe(20)
+    expect(coduri(x)).toEqual(['conflict_restant_realizat', 'suprapunere'])
+  })
+})
+
+describe('împerecherea pe lungime maximizează perechile în toleranță (P2)', () => {
+  it('exemplul din review: 10,004/10,000 față de 10,000/10,009 → două perechi, fără „diferență de 9 mm”', () => {
+    const s = schema([foaie('S', [r(1, 'SX001', 10.004, '1+010.004', 'T1S1'), r(2, 'SX001', 10, '1+020.004', 'T1S2')])])
+    const p = calculeazaSursa({ sursa: 'platforma', tronson: T, foi: [foaie('P', [r(1, 'SX001', 10, '1+010', 'T1S1'), r(2, 'SX001', 10.009, '1+020.009', 'T1S2')])] })
+    const d = comparaSurse(s, p)
+    expect(d.rezumat.lungime_diferita).toBe(0)
+    expect(d.perechi.map(x => [x.schema, x.platforma, x.lungime_schema_m, x.lungime_platforma_m])).toEqual([
+      ['schema:S:1', 'platforma:P:2', 10.004, 10.009],
+      ['schema:S:2', 'platforma:P:1', 10, 10],
+    ])
+  })
+  it('la același număr de perechi: suma minimă a diferențelor; rezultatul nu depinde de ordinea intrării', () => {
+    const b = (id, L, a) => ({ id, lungime_mm: L, a_mm: a })
+    const s = [b('s1', 10000, 0)], p = [b('p1', 9996, 0), b('p2', 10003, 5000)]
+    const x = imperecheazaPeLungime(s, p)
+    expect(x.perechi.map(([u, v]) => [u.id, v.id])).toEqual([['s1', 'p2']])
+    expect(x.restP.map(v => v.id)).toEqual(['p1'])
+    expect(imperecheazaPeLungime(s, [...p].reverse()).perechi.map(([u, v]) => [u.id, v.id])).toEqual([['s1', 'p2']])
+    // lungimi egale: departajare pe km, apoi pe id
+    const e = imperecheazaPeLungime([b('s1', 10000, 2000), b('s2', 10000, 1000)], [b('p9', 10000, null), b('p1', 10000, null)])
+    expect(e.perechi.map(([u, v]) => [u.id, v.id])).toEqual([['s2', 'p1'], ['s1', 'p9']])
+  })
+  it('lungimea lipsă nu intră în toleranță: rămâne pentru perechea în ordinea km (diferență „lungime”)', () => {
+    const b = (id, L, a) => ({ id, lungime_mm: L, a_mm: a })
+    const x = imperecheazaPeLungime([b('s1', null, 0), b('s2', 10000, 1000)], [b('p1', 10002, 0)])
+    expect(x.perechi.map(([u, v]) => [u.id, v.id])).toEqual([['s2', 'p1']])
+    expect(x.restS.map(u => u.id)).toEqual(['s1'])
+  })
+})
+
+describe('fără limitele tronsonului: întinderea ≠ lungimea tronsonului (P2)', () => {
+  it('o piesă de 10 m: întindere 10 m, lungimea tronsonului și necunoscutul pe tronson = necunoscute (null), nu 0', () => {
+    const rez = calculeazaSursa({ sursa: 'schema', tronson: { cod: 'T1' }, foi: [foaie('A', [r(1, 'SX001', 10, '1+010', 'T1S1')])] })
+    expect([rez.dupa.lungime_tronson_m, rez.dupa.intindere_banda_m, rez.dupa.necunoscut_m, rez.dupa.necunoscut_in_intindere_m, rez.dupa.realizat_m])
+      .toEqual([null, 10, null, 0, 10])
+    expect(rez.dupa).not.toHaveProperty('lungime_banda_m')
+    expect(coduri(rez)).toEqual(['limite_tronson_lipsa'])
+  })
+  it('cu limite: lungimea tronsonului vine din limite, nu din date', () => {
+    const rez = schema([foaie('A', [r(1, 'SX001', 10, '1+010', 'T1S1')])])
+    expect([rez.dupa.lungime_tronson_m, rez.dupa.intindere_banda_m, rez.dupa.necunoscut_m]).toEqual([30, 30, 20])
+  })
+})
+
+describe('convenția B: primul rând fizic și lungimile lipsă (verificări distincte)', () => {
+  it('B, primul rând = separator: km start ar cădea pe un rând fără piesă → foaia rămâne fără poziții', () => {
+    const rez = schema([cumulata([{ rand: 1, fel: 'separator' }, r(2, 'SX001', 10, null, 'T1S1'), r(3, 'SX002', 10, null, 'T1S2')], 'start_capat_prima_piesa')])
+    expect(pozitii(rez)).toEqual([['SX001', null, null], ['SX002', null, null]])
+    expect(rez.anomalii.map(a => [a.cod, a.nivel, a.rand, a.motiv])).toEqual([['km_start_rand_fara_piesa', 'blocant', 1, 'separator']])
+    expect(rez.dupa.necunoscut_m).toBe(30)
+  })
+  it('B, primul rând = rând gol: la fel (motiv distinct)', () => {
+    const rez = schema([cumulata([{ rand: 1, fel: 'teava', serie: '', lungime: '', sudura: '' }, r(2, 'SX001', 10, null, 'T1S1')], 'start_capat_prima_piesa')])
+    expect(pozitii(rez)).toEqual([['SX001', null, null]])
+    expect(rez.anomalii.map(a => [a.cod, a.motiv])).toEqual([['km_start_rand_fara_piesa', 'rând gol']])
+  })
+  it('A, primul rând = separator: fără efect (km start = începutul primei piese)', () => {
+    const rez = schema([cumulata([{ rand: 1, fel: 'separator' }, r(2, 'SX001', 10, null, 'T1S1')], 'start_inceput_prima_piesa')])
+    expect(pozitii(rez)).toEqual([['SX001', 1000, 1010]])
+    expect(rez.anomalii).toEqual([])
+  })
+  it('B, lungime lipsă pe PRIMA piesă: sudura ei = km start, lanțul continuă (nu depinde de lungimea ei)', () => {
+    const rez = schema([cumulata([r(1, 'SX001', '', null, 'T1S1'), r(2, 'SX002', 10, null, 'T1S2'), r(3, 'SX003', 8, null, 'T1S3')], 'start_capat_prima_piesa')])
+    expect(pozitii(rez)).toEqual([['SX001', null, null], ['SX002', 1000, 1010], ['SX003', 1010, 1018]])
+    expect(rez.suduri.map(s => [s.original, s.km_mm / 1000])).toEqual([['T1S1', 1000], ['T1S2', 1010], ['T1S3', 1018]])
+    expect(coduri(rez)).toEqual(['lungime_lipsa'])
+  })
+  it('A, lungime lipsă pe prima piesă: lanțul se oprește de la primul rând', () => {
+    const rez = schema([cumulata([r(1, 'SX001', '', null, 'T1S1'), r(2, 'SX002', 10, null, 'T1S2')], 'start_inceput_prima_piesa')])
+    expect(pozitii(rez)).toEqual([['SX001', null, null], ['SX002', null, null]])
+    expect(coduri(rez)).toEqual(['lant_intrerupt', 'lungime_lipsa'])
+  })
+  it('B, lungime lipsă la mijloc: lanțul se oprește (editorul ar fi continuat fără ea — aici nu se ghicește)', () => {
+    const rez = schema([cumulata([r(1, 'SX001', 10, null, 'T1S1'), { rand: 2, fel: 'curba', serie: '', tip: 'CIC', lungime: '', sudura: '' }, r(3, 'SX002', 10, null, 'T1S3')], 'start_capat_prima_piesa', 1010)])
+    expect(pozitii(rez)).toEqual([['SX001', 1000, 1010], ['', null, null], ['SX002', null, null]])
+    expect(coduri(rez)).toEqual(['lant_intrerupt', 'lungime_lipsa'])
+    expect(rez.anomalii.find(a => a.cod === 'lant_intrerupt').rand).toBe(2)
   })
 })
 
