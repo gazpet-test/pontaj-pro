@@ -1,13 +1,15 @@
-// HTML-ul raportului de uscare (src/uscareRaport.js): rubricile modelului beneficiarului, în ordinea lui; anexa foto; nimic despre unelte.
+// HTML-ul raportului de uscare (src/uscareRaport.js): rubricile modelului beneficiarului (cu diacritice), în ordinea lui; criteriul ultimului
+// piston; coordonatele doar la cerere; paginarea pe blocuri (nimic micșorat pe o pagină); anexa foto; nimic despre unelte.
 import { describe, it, expect } from 'vitest'
-import { htmlRaport, htmlAnexa, legendaPoza, ordonPoze, esc } from './uscareRaport.js'
+import { htmlRaport, htmlRaportBlocuri, aseazaBlocuri, htmlAnexa, legendaPoza, ordonPoze, esc } from './uscareRaport.js'
 
 const U = {
   tronson: 'Tr. 2', km_de_la_m: 3200, km_pana_la_m: 3900, lungime_m: 700, data_operatie: '2026-12-08', ora_inceput: '2026-12-08T06:40:00+00:00',
   ora_final: '2026-12-08T09:10:00+00:00', temperatura_c: 7.5, vreme: 'Senin', constructor: 'Constructor <SRL>', utilaje: [{ denumire: 'Compresor', buc: 1 }, { denumire: 'Uscător', buc: 2 }],
   pig_metalic_buc: 1, piston_pu_buc: 0, bureti_buc: 4,
-  cantariri: [{ nr: 2, intrare_kg: 2.05, iesire_kg: 2.2 }, { nr: 1, intrare_kg: 2.1, iesire_kg: 2.45 }, { nr: 3, intrare_kg: 2, iesire_kg: 2.01 }, { nr: 4, intrare_kg: 1.9, iesire_kg: 1.95 }],
-  punct_roua_c: -20.5, punct_roua_loc: 'capăt aval', presiune_bar: 1.5, timp_deplasare_min: 35, observatii: 'linia 1\nlinia 2', concluzie: 'conform',
+  cantariri: [{ nr: 2, intrare_kg: 2.05, iesire_kg: 2.2, motiv: null }, { nr: 1, intrare_kg: 2.1, iesire_kg: 2.45, motiv: null }, { nr: 3, intrare_kg: null, iesire_kg: null, motiv: 'pierdut în conductă' }, { nr: 4, intrare_kg: 1.9, iesire_kg: 1.95, motiv: null }],
+  punct_roua_c: null, punct_roua_loc: null, presiune_bar: 1.5, timp_deplasare_min: 35, observatii: 'linia 1\nlinia 2', concluzie: 'conform', piston_final_rezultat: 'uscat',
+  poz_lat: 44.941234, poz_lng: 22.500001, poz_sursa: 'gps', poz_precizie_m: 4.5,
   semn_constructor_nume: 'NUME A', semn_constructor_functie: 'șef punct de lucru', semn_beneficiar_nume: null, semn_beneficiar_functie: null,
   stare: 'inchisa', revizie: 0,
 }
@@ -15,35 +17,47 @@ const text = html => html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').repla
 
 describe('pagina raportului', () => {
   const h = htmlRaport(U), t = text(h)
-  it('rubricile modelului, în ordinea lui', () => {
-    const rubrici = ['RAPORT - OPERATIUNE DE USCARE A CONDUCTEI', 'Data operatiune', 'Tronson', 'De la km', 'La km', 'Lungime (m)', 'Temperatura exterioara',
-      'Denumire Constructor', 'Utilaje/ Echipamente', 'Perioada', 'Durata (ore)', 'Configuratie ansamblu pistoane', 'Cantarire burete 1', 'Punct de roua',
-      'Denumire', 'Nr. Buc.', 'Ora incepere', 'Ora finalizare', 'PIG metalic [buc]', 'Piston poliuretan [buc]', 'Bureti spuma [buc]', 'La intrare [kg]',
-      'La iesire [kg]', 'Valoare (°C)', 'Locatie masurare', 'Presiune in spatele buretelui (bar)', 'Timp deplasare (min)', 'Viteza medie (m/s)',
-      'Cantarire burete 2', 'Cantarire burete 3', 'OBSERVATII', 'Concluzie pentru tronson:', 'CONFORM', 'NECONFORM', 'CONSTRUCTOR', 'BENEFICIAR', 'NUME/ PRENUME:', 'FUNCTIE:']
+  it('rubricile modelului, cu diacritice, în ordinea lui', () => {
+    const rubrici = ['RAPORT - OPERAȚIUNE DE USCARE A CONDUCTEI', 'Data operațiune', 'Tronson', 'De la km', 'La km', 'Lungime (m)', 'Temperatura exterioară',
+      'Denumire Constructor', 'Utilaje/ Echipamente', 'Perioada', 'Durata (ore)', 'Configurație ansamblu pistoane', 'Cântărire burete 1', 'Punct de rouă',
+      'Denumire', 'Nr. Buc.', 'Ora începere', 'Ora finalizare', 'PIG metalic [buc]', 'Piston poliuretan [buc]', 'Bureți spumă [buc]', 'La intrare [kg]',
+      'La ieșire [kg]', 'Valoare (°C)', 'Locație măsurare', 'Presiune în spatele buretelui (bar)', 'Timp deplasare (min)', 'Viteza medie (m/s)',
+      'Cântărire burete 2', 'Cântărire burete 3', 'OBSERVAȚII', 'Ultimul piston vehiculat iese uscat', 'Concluzie pentru tronson:', 'CONFORM', 'NECONFORM',
+      'CONSTRUCTOR', 'BENEFICIAR', 'NUME/ PRENUME:', 'FUNCȚIE:']
     let poz = -1
     for (const r of rubrici) { const i = t.indexOf(r, poz + 1); expect(i, r).toBeGreaterThan(poz); poz = i }
   })
-  it('valorile: km, ore în ora României, durata, viteza, bureții 1–3 în ordine, al 4-lea în plus', () => {
+  it('valorile: km, ore în ora României, durata, viteza, bureții 1–3, „nu se aplică”, al 4-lea în plus', () => {
     expect(t).toContain('3+200'); expect(t).toContain('3+900')
     expect(t).toContain('08.12.2026 08:40'); expect(t).toContain('08.12.2026 11:10')
     expect(t).toContain(' 2,5 ')                       // durata 2 h 30 min
     expect(t).toContain(' 0,33 ')                      // 700 m / 35 min
     expect(t).toContain('7,5 °C')
-    expect(t.indexOf('2,45')).toBeLessThan(t.indexOf('2,2 '))   // buretele 1 (pagina 1) înaintea buretelui 2
-    expect(t).toContain('Cantarire burete 4')
+    expect(t).toContain('nu se aplică: pierdut în conductă')
+    expect(t).toContain('Cântărire burete 4')
   })
-  it('concluzia bifată, textul scăpat (HTML), semnatarul lipsă = gol', () => {
+  it('criteriul și concluzia bifate, textul scăpat (HTML), semnatarul lipsă = gol', () => {
+    expect(h).toContain('&#9746; DA &nbsp;&nbsp; &#9744; NU')
     expect(h).toContain('&#9746; CONFORM')
-    expect(h).toContain('&#9744; NECONFORM')
     expect(h).toContain('Constructor &lt;SRL&gt;')
     expect(h).not.toContain('<SRL>')
-    expect(t).toContain('BENEFICIAR NUME/ PRENUME: FUNCTIE:')
+    expect(t).toContain('BENEFICIAR NUME/ PRENUME: FUNCȚIE:')
+  })
+  it('coordonatele exacte NU apar implicit; doar cu opțiunea explicită', () => {
+    expect(h).not.toContain('44.941234')
+    const cu = text(htmlRaport(U, { cuCoordonate: true }))
+    expect(cu).toContain('Poziția operațiunii: 44.941234, 22.500001 (GPS din telefon, ±4,5 m)')
   })
   it('tabelele au colgroup în procente (html2canvas)', () => {
     const cols = [...h.matchAll(/<col style="width:([^"]+)">/g)].map(m => m[1])
     expect(cols.length).toBeGreaterThan(10)
     expect(cols.every(w => /^[\d.]+%$/.test(w))).toBe(true)
+  })
+  it('20 de utilaje: toate pe rânduri proprii (nu înghesuite într-o celulă)', () => {
+    const multe = { ...U, utilaje: Array.from({ length: 20 }, (_, i) => ({ denumire: `Utilaj ${i + 1}`, buc: 1 })) }
+    const b = htmlRaportBlocuri(multe)[1]
+    expect((b.match(/<tr>/g) || []).length).toBe(2 + 20)
+    expect(text(b)).toContain('Utilaj 20')
   })
   it('ciorna și revizia se văd; raportul închis fără revizie nu are mențiuni', () => {
     expect(text(htmlRaport({ ...U, stare: 'deschisa' }))).toContain('CIORNĂ — raport neînchis')
@@ -58,20 +72,37 @@ describe('pagina raportului', () => {
   })
 })
 
+describe('paginarea (blocuri pe pagini A4, nimic micșorat)', () => {
+  it('blocurile încap: aceeași pagină, unul sub altul', () => {
+    expect(aseazaBlocuri([30, 50, 40], { inaltimePagina: 281, sus: 8 })).toEqual([[
+      { bloc: 0, y: 8, h: 30, felie: null }, { bloc: 1, y: 38, h: 50, felie: null }, { bloc: 2, y: 88, h: 40, felie: null }]])
+  })
+  it('un bloc care nu mai încape trece pe pagina următoare', () => {
+    const p = aseazaBlocuri([200, 100, 20], { inaltimePagina: 281, sus: 8 })
+    expect(p.map(x => x.map(b => b.bloc))).toEqual([[0], [1, 2]])
+    expect(p[1][0].y).toBe(8)
+  })
+  it('un bloc mai înalt decât o pagină (observații lungi) se taie în felii întregi, fără micșorare', () => {
+    const p = aseazaBlocuri([50, 600, 10], { inaltimePagina: 281, sus: 8 })
+    expect(p.map(x => x.map(b => [b.bloc, b.h, b.felie && b.felie.de_la]))).toEqual([[[0, 50, null]], [[1, 281, 0]], [[1, 281, 281]], [[1, 38, 562], [2, 10, null]]])
+  })
+})
+
 describe('anexa foto', () => {
   const poze = [
     { id: 3, categorie: 'cantar_iesire', burete_nr: 1, legenda: null, cale: 'a', dataUrl: 'data:image/jpeg;base64,AA', creat_la: '2026-12-08T09:00:00Z' },
     { id: 1, categorie: 'altele', cale: 'b', dataUrl: 'data:image/jpeg;base64,AA' },
     { id: 2, categorie: 'manometru', legenda: '1,5 bar', cale: 'c', dataUrl: null, creat_la: '2026-12-08T07:00:00Z' },
+    { id: 4, categorie: 'piston_final', cale: 'd', dataUrl: 'data:image/jpeg;base64,AA' },
   ]
-  it('ordinea modelului, 2 poze pe pagină, poza necitită rămâne cu mențiune', () => {
-    expect(ordonPoze(poze).map(p => p.id)).toEqual([2, 3, 1])
+  it('ordinea modelului (ultimul piston după cântăriri), 2 poze pe pagină, poza necitită rămâne cu mențiune', () => {
+    expect(ordonPoze(poze).map(p => p.id)).toEqual([2, 3, 4, 1])
     const pag = htmlAnexa({ tronson: 'Tr. 2', data_operatie: '2026-12-08' }, poze)
     expect(pag).toHaveLength(2)
     expect(text(pag[0])).toContain('ANEXA FOTO — Raport de uscare, Tr. 2, 08.12.2026')
     expect(text(pag[0])).toContain('Pagina 1 din 2')
     expect(text(pag[0])).toContain('Fotografia nu a putut fi citită la generare (c)')
-    expect(text(pag[1])).toContain('Foto 3 — Altele')
+    expect(text(pag[1])).toContain('Foto 3 — Ultimul piston vehiculat')
   })
   it('legenda', () => {
     expect(legendaPoza(poze[0], 2)).toBe('Foto 2 — Cântar la ieșire, buretele 1 — încărcată la 08.12.2026 11:00')
