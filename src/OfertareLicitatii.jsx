@@ -19,6 +19,7 @@ import { indexConfirmari, statisticiAcoperire, badgeNsa, j02bActivPe, propunereC
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import { filtreazaRadar, zileRamaseTermen } from './ofertareRadarFiltru.js'
+import { incarcaRadarComplet, creeazaGeneratie, incarcaInGeneratie, stareAfisareRadar, mesajEroareRadar } from './ofertareRadarIncarcare.js'
 import OfertareTermene from './OfertareTermene.jsx'
 import { rcNecitite, etichetaRc } from './ofertareRcNecitit.js'
 import { numeResponsabili, esteResponsabil } from './ofertareResponsabili.js'
@@ -4485,18 +4486,33 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
   const [acumMs, setAcumMs] = useState(() => Date.now())
   useEffect(() => { const t = setInterval(() => setAcumMs(Date.now()), 60000); return () => clearInterval(t) }, [])
 
-  const load = async () => {
-    setLoading(true)
-    const [{ data: r }, { data: log }] = await Promise.all([
-      supabase.from('ofertare_radar').select('*').eq('relevant', true)
-        .order('scor_potrivire', { ascending: false, nullsFirst: false })
-        .order('termen_depunere', { ascending: true }),
-      supabase.from('ofertare_radar_scan_log').select('*')
-        .order('pornit_la', { ascending: false }).limit(1),
-    ])
-    setRows(r || []); setLastScan(log?.[0] || null); setLoading(false)
+  // Încărcarea (ofertareRadarIncarcare.js, testată): lista completă pe chei (L23), token de generație (L24),
+  // eroarea arătată ca eroare, nu ca „nimic pe filtru” (L18). O încărcare eșuată nu lasă pe ecran lista veche.
+  const [eroare, setEroare] = useState(null)
+  const [eroareScan, setEroareScan] = useState(false)
+  const gen = useRef(null)
+  if (!gen.current) gen.current = creeazaGeneratie()
+  const montat = useRef(false)
+  const load = () => {
+    if (!montat.current) return Promise.resolve()
+    setLoading(true); setEroare(null)
+    return incarcaInGeneratie(gen.current, viu => Promise.all([
+      incarcaRadarComplet(supabase, { viu }),
+      // antetul cu ultima scanare e informativ: eroarea lui nu ascunde lista, dar nici nu se arată ca „fără scanări”
+      supabase.from('ofertare_radar_scan_log').select('*').order('pornit_la', { ascending: false }).limit(1),
+    ]), {
+      laSucces: ([lista, { data: log, error: eLog }]) => {
+        setRows(lista); setLastScan(eLog ? null : (log?.[0] || null)); setEroareScan(!!eLog)
+      },
+      laEroare: e => { setRows([]); setEroare(mesajEroareRadar(e)) },
+      laFinal: () => setLoading(false),
+    })
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    montat.current = true
+    load()
+    return () => { montat.current = false; gen.current.anuleaza() }
+  }, [])
 
   const scaneaza = async () => {
     setScanning(true)
@@ -4548,6 +4564,7 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
     cautare, stare: fStat, scorMin: fScor, segment: fSegment, cuExpirate, acumMs,
   })
   const seCauta = cautare.trim() !== ''
+  const afisare = stareAfisareRadar({ loading, eroare, nrAfisate: filtrate.length })
 
   return (
     <div>
@@ -4557,6 +4574,7 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
           <div style={{ fontSize:12, color:G.muted }}>
             Anunțuri SEAP scanate automat (conducte gaze + apă/canal) cu scor de potrivire AI
             {lastScan && ` · ultima scanare: ${fmtTermen(lastScan.pornit_la)} — ${lastScan.anunturi_vazute ?? 0} anunțuri, ${lastScan.relevante_noi ?? 0} relevante noi`}
+            {eroareScan && ' · ultima scanare: necunoscută (nu s-a putut citi)'}
           </div>
         </div>
         <div style={{ display:'flex', gap:8, alignItems:'center' }}>
@@ -4594,15 +4612,24 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
           <input type="checkbox" checked={cuExpirate} onChange={e => setCuExpirate(e.target.checked)} />
           Arată și expirate
         </label>
-        <span style={{ fontSize:12, color:G.dim }}>
+        {!eroare && <span style={{ fontSize:12, color:G.dim }}>
           afișate {filtrate.length} din {total}
           {seCauta && ' · căutarea trece peste stare și termen'}
           {ascunsePeScorSegment > 0 && ` · încă ${ascunsePeScorSegment} ascunse de filtrul de scor / segment`}
-        </span>
+        </span>}
       </div>
 
-      {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă radarul...</div>}
-      {!loading && !filtrate.length && (
+      {afisare === 'eroare' && (
+        <div style={{ ...S.card, padding:28, textAlign:'center', border:`1px solid ${G.red}` }}>
+          <div style={{ fontSize:14, fontWeight:700, color:G.red, marginBottom:6 }}>⚠ {eroare}</div>
+          <div style={{ fontSize:12.5, color:G.muted, marginBottom:14 }}>Lista nu e afișată ca să nu pară completă. Încearcă din nou.</div>
+          <button style={{ ...S.btnP, opacity: loading ? .6 : 1 }} disabled={loading} onClick={() => load()}>
+            {loading ? '⏳ Se reîncarcă...' : '🔄 Reîncearcă'}
+          </button>
+        </div>
+      )}
+      {loading && afisare !== 'eroare' && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă radarul...</div>}
+      {afisare === 'gol' && (
         <div style={{ ...S.card, padding:40, textAlign:'center', color:G.dim, fontSize:14 }}>
           Nimic pe filtrul curent. Radarul scanează zilnic anunțurile noi din SEAP.
         </div>

@@ -11,7 +11,7 @@
 // - Segment: '' = toate; 'distributie' / 'transgaz' / 'romgaz' = exact; 'altele' = orice altceva
 //   (inclusiv 'conpet' și rândurile fără segment), ca niciun anunț să nu rămână de neatins din filtru.
 
-import { ziValida } from './ofertareTermene.js'
+import { ziValida, zileIntre } from './ofertareTermene.js'
 
 const SEMNE_RE =new RegExp('[' + String.fromCharCode(0x300) + '-' + String.fromCharCode(0x36f) + ']', 'g')
 
@@ -82,12 +82,6 @@ export function eExpirat(termen, acumMs) {
   if (!t) return false
   if (t.zi) return ziuaBucuresti(acumMs) > t.zi
   return t.ms < acumMs
-}
-
-// Zile între două zile calendaristice 'AAAA-LL-ZZ' (b - a), exact, fără fusul calculatorului
-const zileIntre = (a, b) => {
-  const [ya, ma, da] = a.split('-').map(Number), [yb, mb, db] = b.split('-').map(Number)
-  return Math.round((Date.UTC(yb, mb - 1, db) - Date.UTC(ya, ma - 1, da)) / 86400000)
 }
 
 /**
