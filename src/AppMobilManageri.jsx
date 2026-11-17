@@ -22,8 +22,10 @@ import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
 import { blocNou, blocuriDinLinii, liniiDinBlocuri, activitatiBloc, tintaPe, fmtNr, citesteTinte, cantitateLinie } from './devizTinte.js'
 // Rezumatul scurt salvat pe raport (20261216a): îl scrie serverul la salvare; aici se vede, se copiază, se corectează
 import RubricaRezumat from './RubricaRezumat.jsx'
-// Uscare conductă (20261225a) pe telefon: butonul apare doar dacă serverul dă drept de scriere pe cel puțin un proiect
-import UscareMobil, { useUscareMobil } from './UscareMobil.jsx'
+// Uscare conductă (20261225a) pe telefon: butonul apare după dreptul pe modulul Execuție (owner / editor / admin, o citire ușoară);
+// proiectele și dreptul pe fiecare (fn_executie_nod_drept) se verifică abia la apăsare, în UscareMobil
+import UscareMobil from './UscareMobil.jsx'
+import { arataButonUscare } from './uscareMobilLogica.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -66,9 +68,8 @@ export default function AppMobilManageri() {
   const [sites, setSites] = useState([])
   const [loading, setLoading] = useState(true)
   const [probeWrite, setProbeWrite] = useState(false)
-  // proiectele pe care contul poate scrie uscări (aceeași funcție de drept ca ecranul de uscare); se încarcă în paralel cu restul
-  const uscare = useUscareMobil(supabase)
-  const areUscare = uscare.stare === 'gata' && uscare.proiecte.length > 0
+  // butonul „Uscare conductă”: doar condiția de modul (fără enumerare de proiecte la deschidere); dreptul real îl dă serverul la apăsare
+  const [areUscare, setAreUscare] = useState(false)
 
   useEffect(() => {
     (async () => {
@@ -76,8 +77,15 @@ export default function AppMobilManageri() {
       if (!user) { setLoading(false); return }
       const { data: prof } = await supabase.from('profiles').select('id, name, role, is_owner').eq('id', user.id).maybeSingle()
       setProfile(prof || null)
-      const { data: probeDrept, error: probeErr } = await supabase.rpc('probe_teren_drept', { p_scriere: true })
+      // o singură citire ușoară (rândul propriu din user_module_access, ca la Logistica / Marketing), în paralel cu dreptul probelor;
+      // owner-ul nu are nevoie de ea; o eroare = „necunoscut” -> butonul se arată, verificarea de la apăsare decide (L18)
+      const [{ data: probeDrept, error: probeErr }, accesExecutie] = await Promise.all([
+        supabase.rpc('probe_teren_drept', { p_scriere: true }),
+        prof?.is_owner === true ? null : Promise.resolve(supabase.from('user_module_access').select('access_level').eq('profile_id', user.id).eq('module', 'executie'))
+          .catch(e => ({ data: null, error: e || { message: 'eroare' } })),
+      ])
       setProbeWrite(!probeErr && probeDrept === true)
+      setAreUscare(arataButonUscare(prof, accesExecutie))
       let siteList = []
       if (prof?.is_owner) {
         const { data } = await supabase.from('sites').select('id, name').eq('active', true).order('name')
@@ -95,7 +103,7 @@ export default function AppMobilManageri() {
 
   if (view === 'raport') return <RaportZilnic profile={profile} sites={sites} onBack={() => setView('launcher')} />
   if (view === 'probe' && probeWrite) return <ProbeTerenMobil profile={profile} onBack={() => setView('launcher')} />
-  if (view === 'uscare') return <UscareMobil client={supabase} st={uscare} onBack={() => setView('launcher')} />
+  if (view === 'uscare' && areUscare) return <UscareMobil client={supabase} onBack={() => setView('launcher')} />
 
   // ── Launcher ──
   const butoane = [
@@ -126,13 +134,6 @@ export default function AppMobilManageri() {
             <span style={{ fontSize: 15, fontWeight: 700, textAlign: 'center', whiteSpace: 'pre-line', lineHeight: 1.25 }}>{b.label}</span>
           </button>
         ))}
-        {/* L18: verificarea dreptului pe uscare a eșuat = se spune și se poate reîncerca (nu „fără drept” în tăcere) */}
-        {uscare.stare === 'eroare' && (
-          <div role="alert" style={{ gridColumn: '1 / -1', background: G.surface, border: `1px solid ${G.border}`, borderLeft: `4px solid ${G.red}`, borderRadius: 16, padding: '12px 14px', color: G.muted, fontSize: 13 }}>
-            💨 Uscare conductă: nu am putut verifica dreptul ({uscare.eroare}).
-            <button onClick={uscare.reincarca} style={{ marginLeft: 8, background: G.surface2, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit', cursor: 'pointer' }}>Reîncearcă</button>
-          </div>
-        )}
         {probeWrite && <button onClick={() => setView('probe')} style={{ background: G.surface, border: `1px solid ${G.border}`, borderLeft: `4px solid ${G.blue}`, borderRadius: 16, padding: '26px 14px', minHeight: 110, gridColumn: '1 / -1', color: G.text, fontSize: 19, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer' }}>Probe presiune</button>}
       </div>
       <div style={{ textAlign: 'center', marginTop: 30 }}>

@@ -6,12 +6,37 @@
 // L18: o verificare eșuată (sau un răspuns care nu e boolean) NU înseamnă „fără drept”: se ține separat și se arată.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { paginareKeyset } from './hrDeciziiUtil.js'
+
 export const RPC_DREPT_USCARE = 'fn_executie_nod_drept'
 export const PARALEL_DREPT = 6   // câte verificări de drept pleacă deodată (telefon pe semnal slab)
 
+// Butonul din lansator (runda 2): la deschiderea lui /m NU se enumeră proiecte. Butonul apare după ce lansatorul știe deja / află dintr-O
+// citire ușoară: owner (profilul încărcat oricum) sau rândul propriu 'executie' din user_module_access cu nivel editor / admin — partea de
+// MODUL din fn_executie_nod_drept(proiect, true). E doar o condiție NECESARĂ pentru afișare; dreptul real (și pe proiect) îl dă serverul la
+// apăsare, pe fiecare proiect activ. Citirea eșuată = „necunoscut” (L18): butonul se arată, iar verificarea de la apăsare decide și spune.
+// randuri = rezultatul citirii { data, error } (data = rândurile 'executie' ale contului) sau null când profilul e owner
+export function arataButonUscare(profil, randuri) {
+  if (profil?.is_owner === true) return true
+  if (!randuri || randuri.error || !Array.isArray(randuri.data)) return true      // necunoscut: decide verificarea de la apăsare
+  return randuri.data.some(r => r?.access_level === 'editor' || r?.access_level === 'admin')
+}
+
+// Paginare keyset (L23, până la pagina goală) care se OPREȘTE (L24) când viu() devine fals: viu() se verifică înaintea FIECĂREI pagini,
+// deci după demontare / o reîncărcare nouă nu mai pleacă nicio cerere. Un răspuns fără eroare dar fără listă = eroare, nu „gol” (L18).
+export class Oprit extends Error { constructor() { super('oprit: rezultatul nu mai e cerut'); this.name = 'Oprit' } }
+export function paginiCatTimpViu(cerePagina, viu = () => true, pas = 1000) {
+  return paginareKeyset(async (ultim, p) => {
+    if (!viu()) throw new Oprit()
+    const r = await cerePagina(ultim, p)
+    if (!r?.error && !Array.isArray(r?.data)) throw new Error('răspuns neașteptat la citirea paginii')
+    return r
+  }, pas)
+}
+
 const idValid = v => { const n = Number(v); return Number.isSafeInteger(n) && n > 0 ? n : null }
 
-// candidații = proiectele active + cele (chiar din arhivă) cu rapoarte de uscare încă deschise; arhiva fără uscări deschise nu se oferă
+// candidații = proiectele ACTIVE (runda 2: arhiva nu se mai verifică de pe telefon); uscariDeschise dă doar numărul de rapoarte deschise
 export function candidatiUscare(proiecte, uscariDeschise) {
   const nr = new Map()
   for (const u of Array.isArray(uscariDeschise) ? uscariDeschise : []) {
@@ -25,14 +50,14 @@ export function candidatiUscare(proiecte, uscariDeschise) {
     if (id == null || vazute.has(id)) continue
     vazute.add(id)
     const c = { id, nume: String(p.nume || '').trim(), cod: String(p.cod_intern || '').trim(), activ: p.activ !== false, deschise: nr.get(id) || 0 }
-    if (c.activ || c.deschise > 0) out.push(c)
+    if (c.activ) out.push(c)
   }
   return out
 }
 
 export const etichetaProiect = p => [p?.cod, p?.nume].filter(Boolean).join(' — ') || `Proiectul ${p?.id}`
 
-// ordinea listei: întâi cele cu rapoarte de uscare deschise, apoi cele active, apoi cele din arhivă; în fiecare grup după nume
+// ordinea listei: întâi cele cu rapoarte de uscare deschise, apoi restul; în fiecare grup după nume (activ rămâne criteriu, pentru siguranță)
 export function ordoneazaProiecte(lista) {
   return [...(Array.isArray(lista) ? lista : [])].sort((a, b) =>
     (b.deschise > 0) - (a.deschise > 0) || (b.activ === true) - (a.activ === true)

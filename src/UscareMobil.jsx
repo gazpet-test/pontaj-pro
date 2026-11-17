@@ -1,25 +1,26 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // UscareMobil.jsx — „💨 Uscare conductă” din lansatorul de telefon (/m).
-// useUscareMobil: proiectele pe care contul poate SCRIE uscări, verificate de server cu aceeași funcție ca ecranul de uscare
-//   (fn_executie_nod_drept(proiect, true)); butonul din lansator apare doar dacă lista nu e goală.
+// Runda 2: la deschiderea lansatorului NU se enumeră nimic (butonul apare după arataButonUscare din uscareMobilLogica.js). Abia la APĂSARE,
+//   useUscareMobil citește proiectele ACTIVE și le verifică pe fiecare la server cu aceeași funcție ca ecranul de uscare
+//   (fn_executie_nod_drept(proiect, true)), cu stare de încărcare; niciun proiect cu drept = mesaj clar, nu ecran gol.
 // UscareMobil: un singur proiect activ -> direct ecranul de uscare; mai multe -> lista scurtă, apoi ecranul. Ecranul e componenta
 //   existentă UscareConducta (aceleași RPC-uri, aceeași logică), încadrată cu „← Înapoi”; nimic din logica ei nu se copiază aici.
-// L24: verificarea drepturilor are generația ei (un răspuns vechi nu se aplică); la schimbarea proiectului UscareConducta se montează din
-//   nou (key = proiectul), deci răspunsurile proiectului vechi nu ajung pe ecranul celui nou.
+// L24: fiecare încărcare are generația ei: un răspuns vechi nu se aplică ȘI paginarea / verificările se opresc (viu() înaintea fiecărei
+//   pagini și a fiecărei verificări) la demontare sau la o reîncărcare nouă; la schimbarea proiectului UscareConducta se montează din nou
+//   (key = proiectul), deci răspunsurile proiectului vechi nu ajung pe ecranul celui nou.
 // L18: o verificare eșuată se arată („Reîncearcă”), nu devine „fără drept” și nici „are drept”.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { paginareKeyset } from './hrDeciziiUtil.js'
 import UscareConducta from './UscareConducta.jsx'
 import { G, S } from './NodCuplareVizualizare.jsx'
-import { RPC_DREPT_USCARE, PARALEL_DREPT, candidatiUscare, stareDinDrepturi, drumUscare, inParalel, etichetaProiect } from './uscareMobilLogica.js'
+import { RPC_DREPT_USCARE, PARALEL_DREPT, candidatiUscare, stareDinDrepturi, drumUscare, inParalel, etichetaProiect, paginiCatTimpViu } from './uscareMobilLogica.js'
 
-const pagini = (client, tabel, coloane, filtru = q => q) => paginareKeyset((ultim, pas) => {
+const pagini = (client, viu, tabel, coloane, filtru = q => q) => paginiCatTimpViu((ultim, pas) => {
   let q = filtru(client.from(tabel).select(coloane)).order('id').limit(pas)
   if (ultim != null) q = q.gt('id', ultim)
   return q
-})
+}, viu)
 
 export function useUscareMobil(client) {
   const [st, setSt] = useState({ stare: 'incarcare', proiecte: [] })
@@ -29,10 +30,11 @@ export function useUscareMobil(client) {
     const viu = () => g === gen.current
     setSt({ stare: 'incarcare', proiecte: [] })
     try {
-      // RLS dă doar proiectele / uscările vizibile contului; dreptul de SCRIERE îl spune apoi serverul, pe fiecare candidat
+      // RLS dă doar proiectele / uscările vizibile contului; doar proiectele ACTIVE (filtrul pe server, înaintea paginării);
+      // dreptul de SCRIERE îl spune apoi serverul, pe fiecare proiect
       const [proiecte, deschise] = await Promise.all([
-        pagini(client, 'executie_proiecte', 'id, nume, cod_intern, activ'),
-        pagini(client, 'executie_uscari', 'id, proiect_id', q => q.eq('stare', 'deschisa')),
+        pagini(client, viu, 'executie_proiecte', 'id, nume, cod_intern, activ', q => q.eq('activ', true)),
+        pagini(client, viu, 'executie_uscari', 'id, proiect_id', q => q.eq('stare', 'deschisa')),
       ])
       if (!viu()) return
       const cand = candidatiUscare(proiecte, deschise)
@@ -51,16 +53,20 @@ export function useUscareMobil(client) {
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
 const btnInapoi = { background: G.surface, border: `1px solid ${G.border}`, color: G.text, borderRadius: 10, width: 44, height: 44, fontSize: 18, cursor: 'pointer', flex: '0 0 auto' }
 
-export default function UscareMobil({ client, st, onBack, stocare }) {
+// Se montează abia la apăsarea butonului din lansator: atunci pornește enumerarea (useUscareMobil); la ieșire se demontează și o oprește.
+export default function UscareMobil({ client, onBack, stocare }) {
+  const st = useUscareMobil(client)
   const drum = drumUscare(st)
-  const [ales, setAles] = useState(drum.tip === 'direct' ? drum.proiectId : null)
+  const [ales, setAles] = useState(null)
   const [inFormular, setInFormular] = useState(false)
-  const [dinLista] = useState(drum.tip !== 'direct')        // de unde s-a intrat: „Înapoi” din ecran duce la listă sau la lansator
-  const proiecte = st?.stare === 'gata' ? st.proiecte : []
-  const proiect = ales != null ? proiecte.find(p => p.id === ales) || null : null
+  const proiecte = st.stare === 'gata' ? st.proiecte : []
+  // un singur proiect activ (listă completă) = direct pe el, fără listă; „Înapoi” din ecran duce atunci la lansator
+  const directId = drum.tip === 'direct' ? drum.proiectId : null
+  const idAles = directId ?? ales
+  const proiect = idAles != null ? proiecte.find(p => p.id === idAles) || null : null
 
   if (proiect) {
-    const inapoi = () => { if (dinLista) { setAles(null); setInFormular(false) } else onBack() }
+    const inapoi = () => { if (directId == null) { setAles(null); setInFormular(false) } else onBack() }
     return (
       <div style={{ minHeight: '100vh', background: G.bg, fontFamily: FONT }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, maxWidth: 720, margin: '0 auto', padding: '12px 12px 0' }}>
@@ -82,20 +88,25 @@ export default function UscareMobil({ client, st, onBack, stocare }) {
           <div style={{ fontSize: 13, color: G.muted }}>Alege proiectul</div>
         </div>
       </div>
-      {st?.stare === 'incarcare' && <div style={{ color: G.dim, textAlign: 'center', padding: 30 }}>Se încarcă proiectele…</div>}
-      {st?.stare === 'eroare' && (
+      {st.stare === 'incarcare' && <div role="status" style={{ color: G.dim, textAlign: 'center', padding: 30 }}>Se verifică proiectele pe care poți lucra…</div>}
+      {st.stare === 'eroare' && (
         <div role="alert" style={{ background: G.surface, border: `1px solid ${G.red}`, borderRadius: 12, padding: 14, color: G.text, fontSize: 14 }}>
           Nu am putut verifica proiectele pe care poți lucra: {st.eroare}
           <div><button style={{ ...S.btn, marginTop: 10, minHeight: 44 }} onClick={st.reincarca}>Reîncearcă</button></div>
         </div>
       )}
-      {st?.stare === 'gata' && st.incomplet && (
+      {st.stare === 'gata' && st.incomplet && (
         <div role="alert" style={{ background: G.surface, border: `1px solid ${G.yellow}`, borderRadius: 12, padding: 14, color: G.text, fontSize: 14, marginBottom: 12 }}>
           Dreptul nu s-a putut verifica pe {st.erori.length} {st.erori.length === 1 ? 'proiect' : 'proiecte'}: lista poate fi incompletă.
           <div><button style={{ ...S.btn, marginTop: 10, minHeight: 44 }} onClick={st.reincarca}>Reîncearcă</button></div>
         </div>
       )}
-      {st?.stare === 'gata' && !proiecte.length && <div style={{ color: G.muted, fontSize: 14 }}>Nu ai drept de scriere pe Execuție pe niciun proiect.</div>}
+      {st.stare === 'gata' && !proiecte.length && (
+        <div role="status" style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 12, padding: 14, color: G.text, fontSize: 14 }}>
+          {/* stareDinDrepturi: zero proiecte + vreo eroare = 'eroare' (L18), deci aici e un „nu” dovedit pe toate proiectele */}
+          Nu ai drept de scriere pe niciun proiect activ de Execuție.
+        </div>
+      )}
       <div style={{ display: 'grid', gap: 10 }}>
         {proiecte.map(p => (
           <button key={p.id} onClick={() => setAles(p.id)} style={{
