@@ -6,6 +6,9 @@
 // înregistrare; încărcările nelămurite rămân vizibile din server, fără ștergere automată), poziția operațiunii (GPS la cerere / scrisă de
 // mână), temperatura propusă din vremea șantierului PENTRU ORA ÎNCEPERII (instantaneul îl construiește serverul), închiderea (doar completă),
 // redeschiderea consemnată (admin) și PDF-ul (coordonatele doar la cerere).
+// Ecranul implicit (17.11.2026) e cel PE PAȘI (src/UscarePasi.jsx: tronson → etapa 1 → etapa 2 → rezumat → „Generează raportul”), cu pasul
+// dedus din date (src/uscarePasi.js); formularul pe secțiuni de mai jos rămâne „Vezi / corectează toate datele”. Același formular, aceleași
+// funcții de salvare / poze / PDF pentru ambele (spec §3a).
 // Scrierea: DOAR prin RPC-urile fn_executie_uscare_salveaza / _stare / _poza; citirea prin RLS (dreptul pe proiect).
 // L05: fiecare apăsare are cheia ei, scrisă în registrul local ÎNAINTE de trimitere; un rezultat necunoscut (rețea) rămâne în registru și se
 //   lămurește prin retrimiterea IDENTICĂ (aceeași cheie) — o intenție nelămurită pe aceeași țintă (inclusiv o creare) blochează alta nouă.
@@ -28,6 +31,8 @@ import {
   durataOre, vitezaMedie, diferentaBurete, verificare24h, propunereMeteo, fmtZi, fmtMoment, fmtNr, fmtKm, actiuniPermise,
 } from './uscareLogica.js'
 import { parseNumar } from './izoDocumenteLogica.js'
+import { pasCurent, formularPasNou, formularTrecereNoua, formularInregistreazaEtapa1, formularTerminaEtapa2 } from './uscarePasi.js'
+import UscarePasi, { CardInLucru } from './UscarePasi.jsx'
 
 const stocareImplicita = () => { try { return globalThis.localStorage || null } catch { return null } }
 const BUCKET = 'executie-uscare'
@@ -44,13 +49,13 @@ const pagini = (client, tabel, coloane, filtru) => paginareKeyset((ultim, pas) =
 const lipsaTabel = e => ['42P01', 'PGRST205', 'PGRST202'].includes(e?.code)
 const MOMENTE_FORM = ['inceput_planificat', 'notificare_la', 'ora_inceput', 'ora_final']
 
-// stiluri mari, pentru degetul de pe șantier (font 16 = fără zoom pe iPhone)
+// stiluri mari, pentru degetul de pe șantier (font 16 = fără zoom pe iPhone; butoane și câmpuri de cel puțin 48 px)
 const ST = {
   card: { background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14, padding: 14, margin: '10px 0' },
   h: { fontSize: 15, fontWeight: 800, margin: '0 0 10px', color: G.text },
-  in: { ...S.input, minHeight: 46, fontSize: 16 },
+  in: { ...S.input, minHeight: 48, fontSize: 16 },
   lab: { ...S.label, fontSize: 13, marginTop: 8 },
-  btn: { ...S.btn, minHeight: 46, fontSize: 15 },
+  btn: { ...S.btn, minHeight: 48, fontSize: 15 },
   mare: { ...S.btn, minHeight: 54, fontSize: 16, fontWeight: 800, width: '100%' },
   rand: { display: 'flex', gap: 8, alignItems: 'flex-end' },
   nota: { fontSize: 12, color: G.muted, marginTop: 6 },
@@ -73,7 +78,9 @@ async function comprimaJpeg(file) {
   } finally { URL.revokeObjectURL(url) }
 }
 
-export default function UscareConducta({ proiectId, client = supabase, stocare = stocareImplicita(), comprima = comprimaJpeg }) {
+// ecranInitial: 'pasi' (telefonul: tronson → etapa 1 → etapa 2 → raport, src/UscarePasi.jsx) sau 'complet' (formularul pe secțiuni, „Vezi /
+// corectează toate datele”, pentru birou și corecturi). Ambele lucrează pe ACELAȘI formular, cu aceleași RPC-uri, ciornă și reguli de conflict.
+export default function UscareConducta({ proiectId, client = supabase, stocare = stocareImplicita(), comprima = comprimaJpeg, ecranInitial = 'pasi', acum = () => Date.now() }) {
   const [uscari, setUscari] = useState([])
   const [probe, setProbe] = useState([])
   const [probeEroare, setProbeEroare] = useState(null)
@@ -103,6 +110,10 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const [arataAnulate, setArataAnulate] = useState(false)
   const [coordPentru, setCoordPentru] = useState(null) // id-ul raportului pentru care s-a bifat „coordonatele în PDF” (nu se moștenește)
   const [incarcPoza, setIncarcPoza] = useState(null)   // { uscare, cale, categorie, burete, blob } — fișierul de reîncercat, legat de raport
+  const [mod, setMod] = useState(ecranInitial)          // 'pasi' | 'complet' — ecranul raportului deschis
+  const [ecranPas, setEcranPas] = useState(null)        // null | 'confirmare1' — confirmarea de după „Înregistrează etapa 1” (doar pe ecran)
+  const [confirmDetalii, setConfirmDetalii] = useState(null) // id-ul raportului ale cărui detalii precompletate au fost confirmate (nu se moștenește)
+  const [pozeProiect, setPozeProiect] = useState({ lista: [], eroare: null }) // pozele rapoartelor DESCHISE (pasul din cardurile „în lucru”)
   const gen = useRef(0)
   const ctx = useRef(0)                                 // generația contextului (proiect / raport deschis)
   const genSursa = useRef(0)                            // generația sursei meteo: ora începerii (instantul) / poziția
@@ -141,9 +152,22 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
         client.rpc('fn_executie_nod_drept', { p_proiect: proiectId, p_scriere: true }),
         client.rpc('fn_executie_contract_drept', { p_proiect: proiectId, p_scriere: true }),
       ])
+      // pașii rapoartelor DESCHISE (cardurile „în lucru”) se deduc și din pozele lor: citite pe bucăți de câte 100 de id-uri (keyset, L23);
+      // o eroare NU e „nicio poză” (L18): cardul spune că pasul nu s-a putut determina
+      if (g !== gen.current || proiectCurent.current !== proiectId) return false
+      const ids = u.filter(x => x.proiect_id === proiectId && x.stare === 'deschisa').map(x => x.id)
+      let pp = { lista: [], eroare: null }
+      try {
+        for (let i = 0; i < ids.length; i += 100) {
+          const bucata = ids.slice(i, i + 100)
+          const l = await pagini(client, 'executie_uscare_poze', 'id, uscare_id, proiect_id, categorie, burete_nr', q => q.in('uscare_id', bucata))
+          if (g !== gen.current || proiectCurent.current !== proiectId) return false
+          pp.lista = pp.lista.concat(l.filter(x => bucata.includes(x.uscare_id) && x.proiect_id === proiectId))
+        }
+      } catch (e) { pp = { lista: [], eroare: e?.message || String(e) } }
       // runda 5: și proiectul (sincron, din randare): un răspuns sosit între randarea noului proiect și efectul lui nu se aplică
       if (g !== gen.current || proiectCurent.current !== proiectId) return false
-      setUscari(u.filter(x => x.proiect_id === proiectId)); setNeactivat(false)
+      setUscari(u.filter(x => x.proiect_id === proiectId)); setNeactivat(false); setPozeProiect(pp)
       // L18: eroarea listei de tronsoane de probă NU e „nicio probă”
       if (Array.isArray(p)) { setProbe(p.filter(x => x.proiect_id === proiectId && x.stare === 'activ')); setProbeEroare(null) }
       else { setProbe([]); setProbeEroare('Tronsoanele de probă nu s-au putut citi: ' + (p?.eroare?.message || 'eroare')) }
@@ -164,6 +188,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     const c = ctx.current
     setUscari([]); setSelectat(null); setForm(null); setBaza(null); setConflict(null); setPoze([]); setIncarcari([]); setPozePentru(null)
     setMiniaturi({}); setMesaj(null); setIncarcPoza(null); setMeteoAlegere(null); registru.current = null; setNelamurite([]); setCoordPentru(null)
+    setPozeProiect({ lista: [], eroare: null }); setEcranPas(null); setConfirmDetalii(null); setMod(ecranInitial)
     genSursa.current += 1; genGps.current += 1
     incarca()
     ;(async () => {
@@ -190,6 +215,8 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
       ])
       if (!valabil()) return
       setPoze(p); setIncarcari(i); setPozePentru(id)
+      // cardul „în lucru” al acestui raport vede imediat pozele noi (fără reîncărcarea listei)
+      setPozeProiect(s => ({ ...s, lista: s.lista.filter(x => x.uscare_id !== id).concat(p) }))
       if (p.length) {
         const s = await client.storage.from(BUCKET).createSignedUrls(p.map(x => x.cale), 600)
         if (!valabil()) return
@@ -224,13 +251,14 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     const ultim = [...uscari].filter(u => u.constructor).sort((a, b) => b.id - a.id)[0]
     return ultim?.constructor || CONSTRUCTOR_IMPLICIT
   }
-  const deschide = (u, proba = null) => {
+  // opt.form = formularul propus pentru un raport nou (pașii: detaliile din ultimul raport / „trecere nouă”); opt.mod = ecranul ('pasi' / 'complet')
+  const deschide = (u, proba = null, opt = {}) => {
     schimbaCtx(); genSursa.current += 1; genGps.current += 1
     setMesaj(null); setMotiv(null); setRenunt(null); setMeteoAlegere(null); setCiornaGasita(null); setConflict(null); setIncarcPoza(null); setCiornaEroare(false)
-    setCoordPentru(null)
+    setCoordPentru(null); setEcranPas(null); setConfirmDetalii(null); setMod(opt.mod || ecranInitial)
     if (u === 'nou') {
       setSelectat('nou'); setBaza(null); setConfirmConstructor(false)
-      setForm(formularNou({ proba, constructor: constructorPropus() })); incarcaPoze(null, capteaza('nou'))
+      setForm(opt.form || formularNou({ proba, constructor: constructorPropus() })); incarcaPoze(null, capteaza('nou'))
       const c = citesteCiorna('nou')
       if (c?.form) setCiornaGasita({ ...c, pentru: 'nou' })
       return
@@ -244,7 +272,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const inchideForm = () => {
     schimbaCtx(); genSursa.current += 1; genGps.current += 1
     setSelectat(null); setForm(null); setBaza(null); setConflict(null); setPoze([]); setIncarcari([]); setPozePentru(null); setMotiv(null); setMesaj(null); setIncarcPoza(null)
-    setCoordPentru(null); setMeteoAlegere(null)
+    setCoordPentru(null); setMeteoAlegere(null); setEcranPas(null); setConfirmDetalii(null)
   }
   // orice schimbare a formularului trece pe aici: o schimbare a INSTANTULUI orei începerii (inclusiv alegerea apariției la ora de iarnă) sau a
   // poziției invalidează propunerea meteo (patch-ul din invalidareMeteo) ȘI orice răspuns meteo încă în zbor / lista de alegere (genSursa)
@@ -370,15 +398,20 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     return { tip: 'eroare', text: `${ce}: ${error?.message || 'refuzat'}` }
   }
 
-  async function salveaza() {
-    if (blocat.current || !form) return
-    if (conflict) { setMesaj({ tip: 'eroare', text: 'Rezolvă întâi conflictul de mai sus (alege pentru fiecare câmp).' }); return }
-    if (nelamuriteTinta.length) { setMesaj({ tip: 'eroare', text: 'Ai o salvare nelămurită pe acest raport: retrimite-o identic sau verifică lista înainte de una nouă.' }); return }
+  // opt.form = formularul de trimis (pașii: cu ora „acum” / data / timpul de deplasare / concluzia puse la apăsare; se pune și pe ecran);
+  // opt.ce = eticheta mesajului; opt.faraConstructor = creare din pașii ecranului (constructorul se confirmă la rezumat, înainte de raport).
+  // Întoarce rândul salvat (sau null): pașii trec la ecranul următor DOAR pe un rezultat dovedit, în contextul cererii.
+  async function salveaza(opt = {}) {
+    const f = opt.form || form
+    if (blocat.current || !f) return null
+    if (conflict) { setMesaj({ tip: 'eroare', text: 'Rezolvă întâi conflictul de mai sus (alege pentru fiecare câmp).' }); return null }
+    if (nelamuriteTinta.length) { setMesaj({ tip: 'eroare', text: 'Ai o salvare nelămurită pe acest raport: retrimite-o identic sau verifică lista înainte de una nouă.' }); return null }
     const nou = selectat === 'nou'
-    if (nou && !confirmConstructor) { setMesaj({ tip: 'eroare', text: 'Confirmă constructorul (secțiunea 2) înainte de creare.' }); return }
-    const { date, erori } = payloadDinFormular(form)
-    if (erori.length) { setMesaj({ tip: 'eroare', text: 'De corectat: ' + erori.join(' · ') }); return }
+    if (nou && !confirmConstructor && !opt.faraConstructor) { setMesaj({ tip: 'eroare', text: 'Confirmă constructorul (secțiunea 2) înainte de creare.' }); return null }
+    const { date, erori } = payloadDinFormular(f)
+    if (erori.length) { setMesaj({ tip: 'eroare', text: 'De corectat: ' + erori.join(' · ') }); return null }
     blocat.current = true; setInCurs(true); setMesaj(null)
+    if (opt.form) setForm(opt.form)
     // runda 5: ce se trimite e formularul de ACUM; un GPS / o propunere meteo încă în zbor nu mai aterizează peste formularul înlocuit de
     // răspunsul salvării (s-ar pierde fără urmă) — se reiau după salvare
     genGps.current += 1; genSursa.current += 1; setMeteoAlegere(null)
@@ -386,20 +419,22 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     try {
       const payload = { p_proiect: c.proiect, p_id: nou ? null : rand.id, p_versiune: nou ? null : baza.versiune, p_date: date }
       const rez = await trimite('fn_executie_uscare_salveaza', payload, nou ? 'nou' : `u${rand.id}`, c)
-      if (!ctxValid(c)) return
-      setMesaj(mesajRezultat(rez, nou ? 'Crearea' : 'Salvarea'))
+      if (!ctxValid(c)) return null
+      setMesaj(mesajRezultat(rez, opt.ce || (nou ? 'Crearea' : 'Salvarea')))
       const u = rez.r?.uscare
       if (u && rez.r.ok) {
         stergeCiorna(nou ? 'nou' : u.id)
         setUscari(l => [...l.filter(x => x.id !== u.id), u])
         if (nou) { schimbaCtx(); setSelectat(u.id); incarcaPoze(u.id, capteaza(u.id)) }
         setBaza(u); setForm(formularDinRand(u))
+        return u
       } else if (u && rez.r?.motiv === 'conflict') {
         // NU se salvează peste coleg: formularul rămâne pe versiunea de bază, cu îmbinarea pe câmpuri de rezolvat explicit
         setUscari(l => l.map(x => (x.id === u.id ? u : x)))
-        const m = imbinare(baza, form, u)
+        const m = imbinare(baza, f, u)
         setForm(m.form); setConflict({ server: u, conflicte: m.conflicte, alese: {}, deLa: 'salvare' })
       } else if (rez.clasa === 'aplicat' && nou) await dupaCreareAplicata(rez.uscareId, mesajRezultat(rez, 'Crearea'), rez.ctx)
+      return null
     } finally { blocat.current = false; setInCurs(false) }
   }
   const confirmaConflict = () => {
@@ -408,19 +443,50 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     setForm(f); setBaza(conflict.server); setConflict(null)
     setMesaj({ tip: 'info', text: 'Am pus pe formular versiunea colegului cu alegerile tale. Verifică și salvează.' })
   }
+  // întoarce rândul după tranziție (sau null), doar în contextul cererii
   async function schimbaStare(actiune, textMotiv = null) {
-    if (blocat.current || !rand) return
+    if (blocat.current || !rand) return null
     blocat.current = true; setInCurs(true); setMesaj(null)
     genGps.current += 1; genSursa.current += 1; setMeteoAlegere(null)
     const c = capteaza()
     try {
       const rez = await trimite('fn_executie_uscare_stare', { p_id: rand.id, p_versiune: rand.versiune, p_actiune: actiune, p_motiv: textMotiv }, `u${rand.id}`, c)
-      if (!ctxValid(c)) return
+      if (!ctxValid(c)) return null
       setMesaj(mesajRezultat(rez, { inchide: 'Închiderea', redeschide: 'Redeschiderea', anuleaza: 'Anularea' }[actiune]))
-      if (rez.r?.uscare && rez.r.ok) { const u = rez.r.uscare; setUscari(l => l.map(x => (x.id === u.id ? u : x))); setBaza(u); setForm(formularDinRand(u)); setMotiv(null) }
-      else await incarca()
+      if (rez.r?.uscare && rez.r.ok) { const u = rez.r.uscare; setUscari(l => l.map(x => (x.id === u.id ? u : x))); setBaza(u); setForm(formularDinRand(u)); setMotiv(null); return u }
+      await incarca()
+      return null
     } finally { blocat.current = false; setInCurs(false) }
   }
+
+  // ── pașii (ecranul de telefon): fiecare buton mare trimite formularul complet al etapei, prin salvarea existentă (CAS, cheie, ciornă) ──
+  // L24: contextul se capturează ÎNAINTEA cererii; ecranul următor (confirmarea etapei 1) apare doar dacă raportul e încă cel deschis.
+  // L05: dublul click e oprit de `blocat` (sincron, înaintea primului await din salveaza) — o singură salvare.
+  async function incepeUscarea() {
+    if (selectat !== 'nou') return
+    await salveaza({ ce: 'Începerea uscării', faraConstructor: true })
+  }
+  async function inregistreazaEtapa1() {
+    if (!rand || !form || blocat.current) return
+    const c = capteaza()
+    const u = await salveaza({ form: formularInregistreazaEtapa1(form, acum()), ce: 'Înregistrarea etapei 1' })
+    if (u && ctxValid(c) && c.selectat === u.id) setEcranPas('confirmare1')
+  }
+  async function terminaEtapa2() {
+    if (!rand || !form || blocat.current) return
+    await salveaza({ form: formularTerminaEtapa2(form, acum()), ce: 'Etapa 2' })
+  }
+  // „Generează raportul” = închiderea (aceeași regulă ca azi: lipsaDinRand = fn_executie_uscare_lipsa) + PDF-ul raportului închis
+  async function genereazaRaport() {
+    if (!rand || blocat.current) return
+    if (!window.confirm(`Generezi raportul cu concluzia ${String(rand.concluzie).toUpperCase()}? Raportul se închide (după aceea se poate corecta doar prin redeschidere consemnată, de un administrator), apoi se descarcă PDF-ul.`)) return
+    const c = capteaza()
+    const u = await schimbaStare('inchide')
+    if (!u || u.stare !== 'inchisa' || !ctxValid(c) || c.selectat !== u.id) return
+    await pdf(u)
+  }
+  const pornesteUscare = proba => deschide('nou', proba, { form: formularPasNou({ proba, uscari, constructor: constructorPropus(), acum: acum() }) })
+  const trecereNoua = u => deschide('nou', null, { form: formularTrecereNoua(u, uscari, acum()) })
 
   // ── pozele: rezervarea căii (server) -> fișierul (fără suprascriere) -> înregistrarea. Rezervarea neînregistrată rămâne în server. ──
   // Runda 5 (verdict r4 P2-3): contextul (proiectul, raportul, registrul) se capturează ÎNAINTEA comprimării, se verifică după ea și se
@@ -551,8 +617,9 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 })
   }
 
-  async function pdf() {
-    if (!rand || blocat.current || pozePentru !== rand.id) return
+  // u = raportul de exportat (implicit cel deschis; după „Generează raportul”, rândul închis întors de server)
+  async function pdf(u = rand) {
+    if (!u || blocat.current || pozePentru !== u.id) return
     blocat.current = true; setInCurs(true)
     const c = capteaza()
     const oprire = typeof AbortController === 'function' ? new AbortController() : null
@@ -562,12 +629,12 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
       if (!ctxCitire(c)) return                       // runda 5: raportul nu mai e deschis -> fără PDF pentru el
       // runda 6 (verdict r5 P2): verificarea contextului merge ÎN exportator (după fiecare citire / captură și chiar înainte de descărcare),
       // nu doar aici, după descărcare; schimbarea contextului anulează și semnalul (citirile pozelor în zbor se opresc)
-      const r = await exportRaportUscarePDF({ client, uscare: rand, poze, cuCoordonate: coordPentru === rand.id, eValabil: () => ctxCitire(c), semnal: oprire?.signal || null })
+      const r = await exportRaportUscarePDF({ client, uscare: u, poze, cuCoordonate: coordPentru === u.id, eValabil: () => ctxCitire(c), semnal: oprire?.signal || null })
       if (r?.anulat || !ctxCitire(c)) return
       const { necitite } = r
       setCoordPentru(null)          // consimțământul ține pentru UN export al acestui raport
       setMesaj(necitite ? { tip: 'eroare', text: `PDF generat, dar ${necitite} fotografii n-au putut fi citite (apar cu mențiune în anexă). Reîncearcă cu semnal bun.` }
-                        : { tip: 'ok', text: 'PDF generat.' + (areModificari(form, rand) ? ' Atenție: arată ultima versiune SALVATĂ, nu modificările de pe ecran.' : '') })
+                        : { tip: 'ok', text: 'PDF generat.' + (u === rand && areModificari(form, u) ? ' Atenție: arată ultima versiune SALVATĂ, nu modificările de pe ecran.' : '') })
     } catch (e) { if (ctxCitire(c)) setMesaj({ tip: 'eroare', text: 'PDF-ul nu s-a putut genera: ' + (e?.message || e) }) }
     finally { if (pdfOprire.current === oprire) pdfOprire.current = null; blocat.current = false; setInCurs(false) }
   }
@@ -589,6 +656,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   )
 
   if (!form) {
+    const pasi = ecranInitial === 'pasi'                // lista urmează ecranul implicit (nu ultimul raport deschis pe formularul complet)
     const vizibile = [...uscari].filter(u => arataAnulate || u.stare !== 'anulata').sort((a, b) => String(b.data_operatie || b.creat_la).localeCompare(String(a.data_operatie || a.creat_la)) || b.id - a.id)
     const creareNelamurita = nelamurite.some(i => i.tinta === 'nou')
     return (
@@ -599,7 +667,20 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
         </div>
         {banner}{bannerNelamurite}
         {eroare && <div role="alert" style={{ ...ST.card, borderColor: G.red }}>{eroare}</div>}
-        {poateScrie && (
+        {pasi && (() => {
+          // pașii: sus rapoartele ÎN LUCRU (reluarea la o atingere), apoi „Uscare nouă”; jos doar cele generate / anulate
+          const inLucru = vizibile.filter(u => u.stare === 'deschisa')
+          return <>
+            {inLucru.map(u => (
+              <CardInLucru key={u.id} u={u} ST={ST} eroarePoze={pozeProiect.eroare}
+                pas={pozeProiect.eroare ? null : pasCurent(u, pozeProiect.lista.filter(p => p.uscare_id === u.id))} onDeschide={() => deschide(u)} />
+            ))}
+            {poateScrie && (creareNelamurita
+              ? <div style={{ ...ST.card, color: G.yellow, fontSize: 14 }}>Ai o creare de raport nelămurită (sus): retrimite-o identic sau verifică lista înainte să pornești alta.</div>
+              : <button style={{ ...ST.mare, minHeight: 64, fontSize: 18, background: '#238636', color: '#fff', margin: '12px 0' }} onClick={() => pornesteUscare(null)}>＋ Uscare nouă</button>)}
+          </>
+        })()}
+        {!pasi && poateScrie && (
           <div style={ST.card}>
             <div style={ST.h}>Uscare nouă</div>
             {creareNelamurita ? <div style={{ color: G.yellow, fontSize: 14 }}>Ai o creare de raport nelămurită (sus): retrimite-o identic sau verifică lista înainte să pornești alta.</div> : (
@@ -611,7 +692,8 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
             )}
           </div>
         )}
-        {incarc && !uscari.length ? <p style={{ color: G.muted }}>Se încarcă…</p> : vizibile.length === 0 ? <p style={{ color: G.muted }}>Nicio operațiune de uscare pe acest proiect.</p> : vizibile.map(u => {
+        {pasi && vizibile.some(u => u.stare !== 'deschisa') && <div style={{ ...ST.h, marginTop: 16 }}>Rapoarte generate</div>}
+        {incarc && !uscari.length ? <p style={{ color: G.muted }}>Se încarcă…</p> : vizibile.length === 0 ? <p style={{ color: G.muted }}>Nicio operațiune de uscare pe acest proiect.</p> : vizibile.filter(u => !pasi || u.stare !== 'deschisa').map(u => {
           const v = verificare24h(u.notificare_la, u.ora_inceput, u.inceput_planificat)
           return (
             <button key={u.id} onClick={() => deschide(u)} style={{ ...ST.card, display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer', color: G.text, fontFamily: 'inherit' }}>
@@ -629,6 +711,11 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
           )
         })}
         {uscari.some(u => u.stare === 'anulata') && <button style={ST.btn} onClick={() => setArataAnulate(x => !x)}>{arataAnulate ? 'Ascunde anulatele' : 'Arată și anulatele'}</button>}
+        {pasi && poateScrie && !creareNelamurita && (
+          <div style={{ marginTop: 16 }}>
+            <button style={{ ...ST.btn, background: 'transparent' }} onClick={() => deschide('nou', null, { mod: 'complet' })}>Raport nou pe formularul complet (birou)</button>
+          </div>
+        )}
       </div>
     )
   }
@@ -668,7 +755,8 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   }
   const sect = (titlu, continut) => <div style={ST.card}><div style={ST.h}>{titlu}</div>{continut}</div>
   const pozeCat = cat => poze.filter(p => p.categorie === cat)
-  const blocPoze = (cat, burete = null) => {
+  // eticheta = textul butonului de cameră pe pași (ex. „Poza cântarului, cu kilogramele vizibile”)
+  const blocPoze = (cat, burete = null, eticheta = null) => {
     const lista = pozeCat(cat).filter(p => burete == null || p.burete_nr === burete)
     return (
       <div style={{ marginTop: 8 }}>
@@ -683,7 +771,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
         </div>
         {editabil && rand && pozeGata && (
           <label style={{ ...ST.btn, display: 'inline-flex', marginTop: 6, alignItems: 'center', gap: 6, opacity: inCurs ? 0.5 : 1 }}>
-            📷 {lista.length ? 'Încă o poză' : 'Fotografiază'}{burete ? ` (buretele ${burete}, ${cat === 'cantar_intrare' ? 'intrare' : 'ieșire'})` : ''}
+            📷 {eticheta ? (lista.length ? `Încă o poză · ${eticheta}` : eticheta) : <>{lista.length ? 'Încă o poză' : 'Fotografiază'}{burete ? ` (buretele ${burete}, ${cat === 'cantar_intrare' ? 'intrare' : 'ieșire'})` : ''}</>}
             <input type="file" accept="image/*" capture="environment" disabled={inCurs} style={{ display: 'none' }}
               onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) urcaPoza(cat, f, burete) }} />
           </label>
@@ -700,14 +788,11 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     piston_final_rezultat: 'ultimul piston', presiune_bar: 'presiunea', timp_deplasare_min: 'timpul de deplasare', cantariri: 'cântăririle', utilaje: 'utilajele' }[k] || k.replace(/_/g, ' '))
   const arataValoare = v => (v == null || v === '' ? '(gol)' : typeof v === 'object' ? (Array.isArray(v) ? `${v.length} rânduri` : 'altă propunere meteo') : String(v))
 
-  return (
-    <div style={{ maxWidth: 720, margin: '0 auto', padding: '8px 12px 96px' }}>
-      <div style={{ ...ST.rand, justifyContent: 'space-between', margin: '8px 0' }}>
-        <button style={ST.btn} onClick={() => { if (!modificat || !editabil || window.confirm(ciornaEroare ? 'Ai modificări nesalvate și ciorna locală NU s-a putut scrie: se pierd. Ieși?' : 'Ai modificări nesalvate (rămân în ciorna locală). Ieși?')) inchideForm() }}>← Lista</button>
-        <span style={{ fontSize: 13, fontWeight: 700, color: rand ? CULORI_STARE[rand.stare] : G.blue }}>{rand ? ETICHETE_STARE[rand.stare] : 'Raport nou'}{rand?.revizie ? ` · rev. ${rand.revizie}` : ''}</span>
-      </div>
+  const laLista = () => { if (!modificat || !editabil || window.confirm(ciornaEroare ? 'Ai modificări nesalvate și ciorna locală NU s-a putut scrie: se pierd. Ieși?' : 'Ai modificări nesalvate (rămân în ciorna locală). Ieși?')) inchideForm() }
+  // panourile comune ale ambelor ecrane (pași / formularul complet): mesajul, cererile nelămurite, ciorna, conflictul, doar citire, anularea
+  const panouri = <>
       {banner}{bannerNelamurite}
-      {ciornaEroare && <div role="alert" style={{ ...ST.card, borderColor: G.red }}>Ciorna locală nu se poate scrie (stocare plină sau blocată): modificările de pe ecran se pierd la ieșire. Salvează pe server cât ai semnal.</div>}
+      {ciornaEroare &&<div role="alert" style={{ ...ST.card, borderColor: G.red }}>Ciorna locală nu se poate scrie (stocare plină sau blocată): modificările de pe ecran se pierd la ieșire. Salvează pe server cât ai semnal.</div>}
       {ciornaGasita && (
         <div style={{ ...ST.card, borderColor: G.yellow }}>
           Ai modificări nesalvate din {fmtMoment(ciornaGasita.la)}{ciornaGasita.vecheVersiune ? ' — între timp raportul a fost salvat de altcineva: la restaurare vei alege câmp cu câmp' : ''}.
@@ -738,6 +823,30 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
       )}
       {!poateScrie && <div style={{ ...ST.card, color: G.muted }}>Doar citire: nu ai drept de scriere pe Execuție pentru acest proiect.</div>}
       {rand?.stare === 'anulata' && <div style={{ ...ST.card, borderColor: G.muted }}>Raport anulat: {rand.motiv_anulare}</div>}
+  </>
+
+  if (mod === 'pasi') {
+    const pasDate = selectat === 'nou' ? 'tronson' : rand && pozeGata ? pasCurent(rand, poze) : null
+    return (
+      <UscarePasi p={{
+        ST, Camp, form, rand, val, poze, pozeGata, editabil, poateScrie, inCurs, modificat, conflict, nelamuriteTinta, probe, probeEroare, uscari,
+        pas: pasDate, ecranPas, setEcranPas, lipsa, pozeL, deschise, v24, durata, viteza, kmDif, panouri, acum,
+        confirmat: !!rand && confirmDetalii === rand.id, setConfirmat: x => setConfirmDetalii(x && rand ? rand.id : null),
+        meteoAlegere, propuneMeteo, aplicaMeteo, schimba, cant, setBureti, inp, nrInp, oraInp, blocPoze,
+        laLista, laComplet: () => setMod('complet'), salveaza: () => salveaza({ ce: 'Salvarea pe parcurs' }), incepeUscarea, inregistreazaEtapa1,
+        terminaEtapa2, genereazaRaport, pdf: () => pdf(), trecereNoua,
+      }} />
+    )
+  }
+
+  return (
+    <div style={{ maxWidth: 720, margin: '0 auto', padding: '8px 12px 96px' }}>
+      <div style={{ ...ST.rand, justifyContent: 'space-between', margin: '8px 0' }}>
+        <button style={ST.btn} onClick={laLista}>← Lista</button>
+        {ecranInitial === 'pasi' && <button style={ST.btn} onClick={() => setMod('pasi')}>← Înapoi la pași</button>}
+        <span style={{ fontSize: 13, fontWeight: 700, color: rand ? CULORI_STARE[rand.stare] : G.blue }}>{rand ? ETICHETE_STARE[rand.stare] : 'Raport nou'}{rand?.revizie ? ` · rev. ${rand.revizie}` : ''}</span>
+      </div>
+      {panouri}
 
       {/* runda 5: cât o cerere e în zbor, câmpurile formularului sunt blocate (fieldset nativ): ce s-ar scrie între timp ar fi înlocuit de
           răspunsul salvării, fără urmă */}
@@ -976,7 +1085,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
               <input type="checkbox" checked={coordPentru === rand.id} onChange={e => setCoordPentru(e.target.checked ? rand.id : null)} style={{ width: 22, height: 22 }} />
               Include coordonatele exacte ale operațiunii în PDF (doar pentru acest raport, la următorul export)
             </label>
-            <button style={ST.mare} disabled={inCurs || !pozeGata} onClick={pdf}>📄 Raportul în PDF{rand.stare !== 'inchisa' ? ' (ciornă)' : ''}</button>
+            <button style={ST.mare} disabled={inCurs || !pozeGata} onClick={() => pdf()}>📄 Raportul în PDF{rand.stare !== 'inchisa' ? ' (ciornă)' : ''}</button>
           </div>
         </>)}
       {selectat === 'nou' && <div style={{ ...ST.card, color: G.muted, fontSize: 13 }}>Salvează raportul ca să poți adăuga fotografii.</div>}
@@ -984,7 +1093,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
       {editabil && (
         <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, padding: 10, background: G.bg, borderTop: `1px solid ${G.border}`, zIndex: 20 }}>
           <div style={{ maxWidth: 720, margin: '0 auto' }}>
-            <button style={{ ...ST.mare, background: modificat && !conflict ? '#238636' : G.surface2, color: '#fff' }} disabled={inCurs || !modificat || !!conflict || nelamuriteTinta.length > 0 || (selectat === 'nou' && !confirmConstructor)} onClick={salveaza}>
+            <button style={{ ...ST.mare, background: modificat && !conflict ? '#238636' : G.surface2, color: '#fff' }} disabled={inCurs || !modificat || !!conflict || nelamuriteTinta.length > 0 || (selectat === 'nou' && !confirmConstructor)} onClick={() => salveaza()}>
               {inCurs ? 'Se trimite…' : conflict ? 'Rezolvă conflictul de sus' : nelamuriteTinta.length ? 'Lămurește cererea de sus' : selectat === 'nou' ? '💾 Creează raportul' : modificat ? '💾 Salvează' : '✓ Salvat'}
             </button>
           </div>

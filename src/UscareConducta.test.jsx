@@ -24,6 +24,7 @@ vi.mock('./uscarePdf.js', async importOriginal => {
 vi.mock('jspdf', () => ({ default: class { setProperties() {} addPage() {} addImage() {} getNumberOfPages() { return 1 } save(n) { pdfSt.salvari.push(n) } } }))
 vi.mock('html2canvas', () => ({ default: async () => ({ width: 1476, height: 300, toDataURL: () => 'data:image/jpeg;base64,AA==' }) }))
 import UscareConducta from './UscareConducta.jsx'
+import { lipsaDinRand, incarcariDeschise } from './uscareLogica.js'
 // preîncărcat: importul dinamic din ecran (`await import('./uscarePdf.js')`) se rezolvă apoi imediat, ca în aplicație după primul export
 await import('./uscarePdf.js')
 
@@ -69,6 +70,7 @@ function clientFals({ rapoarte = [], incarcari = [], sites = [], meteo = [] } = 
       eq: (c, v) => { f.eq.push([c, v]); return q },
       limit: n => { f.lim = n; return q }, gt: (_c, v) => { f.gt = v; return q },
       then: (res, rej) => {
+        if (st.eroareTabel?.has(tabel)) return Promise.resolve({ data: null, error: { message: 'eroare simulată' } }).then(res, rej)
         const calc = () => ({ data: [...(T[tabel] || new Map()).values()].filter(r => f.eq.every(([c, v]) => r[c] === v) && (f.gt == null || r.id > f.gt))
           .sort((a, b) => a.id - b.id).slice(0, f.lim).map(r => ({ ...r })), error: null })
         if (st.amanaTabel.has(tabel)) { const d = amana(); st.cereriTabel.push({ tabel, ...d }); return d.p.then(calc).then(res, rej) }
@@ -95,6 +97,23 @@ function clientFals({ rapoarte = [], incarcari = [], sites = [], meteo = [] } = 
       T.executie_uscare_poze.set(p.id, p); jurnal(a.p_cheie, i.uscare_id, 'poza_adaugata')
       return { ok: true, duplicat: false, poza: { ...p } }
     }
+    // pașii (runda „ecran pe pași”): rezervarea căii pozei și tranziția de stare, ca serverul (închiderea cere lipsaDinRand gol)
+    if (fn === 'fn_executie_uscare_poza' && a.p_actiune === 'rezerva') {
+      const i = { id: ++idNou, uscare_id: a.p_uscare, proiect_id: 1, cale: a.p_cale, categorie: a.p_categorie, burete_nr: a.p_burete_nr, legenda: null,
+        renuntat_motiv: null, renuntat_la: null, creat_la: '2026-11-17T08:00:00Z' }
+      T.executie_uscare_incarcari.set(i.id, i); jurnal(a.p_cheie, a.p_uscare, 'rezervare')
+      return { ok: true, duplicat: false, incarcare: { ...i } }
+    }
+    if (fn === 'fn_executie_uscare_stare') {
+      const r = T.executie_uscari.get(a.p_id)
+      if (r.versiune !== a.p_versiune) return { ok: false, motiv: 'conflict', uscare: { ...r } }
+      const pz = [...T.executie_uscare_poze.values()].filter(p => p.uscare_id === r.id)
+      const inc = [...T.executie_uscare_incarcari.values()].filter(i => i.uscare_id === r.id)
+      if (a.p_actiune === 'inchide' && lipsaDinRand(r, pz, incarcariDeschise(inc, pz).length).length) return { __eroare: { code: '22023', message: 'uscare: raportul nu e complet' } }
+      Object.assign(r, { stare: { inchide: 'inchisa', anuleaza: 'anulata', redeschide: 'deschisa' }[a.p_actiune], inchis_la: a.p_actiune === 'inchide' ? '2026-11-17T09:30:00Z' : null, versiune: r.versiune + 1 })
+      jurnal(a.p_cheie, r.id, a.p_actiune)
+      return { ok: true, duplicat: false, uscare: { ...r } }
+    }
     if (fn !== 'fn_executie_uscare_salveaza') throw new Error('rpc necunoscut ' + fn + ' ' + a.p_actiune)
     if (a.p_id == null) {
       const r = RAP(++idNou, { ...a.p_date, versiune: 1 })
@@ -104,7 +123,7 @@ function clientFals({ rapoarte = [], incarcari = [], sites = [], meteo = [] } = 
     }
     const r = T.executie_uscari.get(a.p_id)
     if (r.versiune !== a.p_versiune) return { ok: false, motiv: 'conflict', uscare: { ...r } }
-    Object.assign(r, a.p_date, { versiune: r.versiune + 1 })
+    Object.assign(r, a.p_date, { versiune: r.versiune + 1 }, st.ceas ? { modificat_la: new Date(st.ceas()).toISOString() } : {})
     jurnal(a.p_cheie, r.id, 'salvare')
     return { ok: true, duplicat: false, uscare: { ...r } }
   }
@@ -147,7 +166,8 @@ async function monteaza(client, stocare = stocareFalsa(), extra = {}) {
   const root = createRoot(j.window.document.getElementById('r'))
   const d = j.window.document
   const asteapta = async () => { await act(async () => { for (let i = 0; i < 40; i++) await Promise.resolve() }) }
-  await act(async () => { root.render(<UscareConducta proiectId={1} client={client} stocare={stocare} {...extra} />) })
+  // testele vechi probează formularul complet („Vezi / corectează toate datele”); cele ale pașilor trec { ecranInitial: 'pasi' }
+  await act(async () => { root.render(<UscareConducta proiectId={1} client={client} stocare={stocare} ecranInitial="complet" {...extra} />) })
   await asteapta()
   curata.push(() => { act(() => root.unmount()); Object.assign(globalThis, vechi) })
   const selecteaza = async (el, val) => {
@@ -177,8 +197,18 @@ async function monteaza(client, stocare = stocareFalsa(), extra = {}) {
   }
   const elibereaza = async (cerere, val) => { await act(async () => { cerere.res(val) }); await asteapta() }
   // schimbarea proiectului (alt proiectId pe ACEEAȘI componentă montată, ca la navigarea din Execuție)
-  const reranda = async extra2 => { await act(async () => { root.render(<UscareConducta proiectId={1} client={client} stocare={stocare} {...extra} {...extra2} />) }); await asteapta() }
-  return { d, j, apasa, buton, butonExact, butoane, scrie, camp, bifeaza, elibereaza, asteapta, selecteaza, alegeFisier, reranda, text: () => d.body.textContent }
+  const reranda = async extra2 => { await act(async () => { root.render(<UscareConducta proiectId={1} client={client} stocare={stocare} ecranInitial="complet" {...extra} {...extra2} />) }); await asteapta() }
+  // pașii: câmpurile repetate pe piston, butoanele de cameră după text, dublul click în ACELAȘI act (fără randare între apăsări)
+  const campuri = eticheta => [...d.querySelectorAll('label')].filter(x => x.querySelector('span')?.textContent.startsWith(eticheta)).map(l => l.querySelector('input, textarea'))
+  const scrieEl = async (el, val) => {
+    const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set
+    await act(async () => { set.call(el, val); el.dispatchEvent(new j.window.Event('input', { bubbles: true })) })
+    await asteapta()
+  }
+  const camere = text => [...d.querySelectorAll('label')].filter(l => l.textContent.includes(text) && l.querySelector('input[type=file]')).map(l => l.querySelector('input[type=file]'))
+  const fotografiaza = async (text, i = 0) => { await alegeFisier(camere(text)[i], { name: 'p.jpg', type: 'image/jpeg' }); await asteapta(); await asteapta() }
+  const dublu = async el => { await act(async () => { el.dispatchEvent(new j.window.MouseEvent('click', { bubbles: true })); el.dispatchEvent(new j.window.MouseEvent('click', { bubbles: true })) }); await asteapta() }
+  return { d, j, apasa, buton, butonExact, butoane, scrie, camp, bifeaza, elibereaza, asteapta, selecteaza, alegeFisier, reranda, campuri, scrieEl, camere, fotografiaza, dublu, text: () => d.body.textContent }
 }
 
 dom(numeDom('UscareConducta (jsdom + react-dom)'), () => {
@@ -606,5 +636,226 @@ dom(numeDom('UscareConducta (jsdom + react-dom)'), () => {
     await u.apasa(u.buton('Am ales'))
     await u.apasa(u.buton('💾 Salvează'))
     expect(st.rpc[1].a).toMatchObject({ p_versiune: 2, p_date: { ora_inceput: '2026-10-25T01:30:00.000Z', observatii: 'doar observații' } })
+  })
+})
+
+// ── ecranul pe PAȘI (telefon): tronson → etapa 1 → oprire → reluare → etapa 2 → rezumat → raport ──
+// Pozele trec prin aceleași RPC-uri ca în aplicație (rezervare → fișier → înregistrare); pasul se deduce din rândul serverului fals + poze.
+const ORA = (h, m = 0) => Date.UTC(2026, 10, 17, h, m)          // 17.11.2026, ora UTC (România = UTC+2)
+const pozaServer = (T, uscare_id, categorie, burete_nr = null) => {
+  const id = 900 + T.executie_uscare_poze.size + T.executie_uscare_incarcari.size
+  const cale = `1/${uscare_id}/00000000-0000-4000-8000-${String(id).padStart(12, '0')}.jpg`
+  T.executie_uscare_incarcari.set(id, { id, uscare_id, proiect_id: 1, cale, categorie, burete_nr, legenda: null, renuntat_motiv: null, renuntat_la: null, creat_la: '2026-11-17T08:00:00Z' })
+  T.executie_uscare_poze.set(id, { id, uscare_id, proiect_id: 1, categorie, burete_nr, cale, legenda: null, creat_la: '2026-11-17T08:00:00Z' })
+}
+// un raport cu etapa 1 completă pe server (2 pistoane, intrările 1,25 / 1,30 kg, pozele etapei)
+const etapa1Gata = (T, id, extra = {}) => {
+  T.executie_uscari.set(id, RAP(id, { bureti_buc: 2, cantariri: [{ nr: 1, intrare_kg: 1.25, iesire_kg: null, motiv: null }, { nr: 2, intrare_kg: 1.3, iesire_kg: null, motiv: null }],
+    ora_inceput: '2026-11-17T08:00:00Z', data_operatie: '2026-11-17', ...extra }))
+  pozaServer(T, id, 'cantar_intrare', 1); pozaServer(T, id, 'cantar_intrare', 2); pozaServer(T, id, 'pistoane')
+}
+const salvari = st => st.rpc.filter(r => r.fn === 'fn_executie_uscare_salveaza')
+
+dom(numeDom('UscareConducta — ecranul pe pași (jsdom + react-dom)'), () => {
+  it('parcursul complet: etapa 1 -> oprire -> reluare din ALTĂ sesiune -> etapa 2 -> rezumat -> „Generează raportul” (închidere + PDF)', async () => {
+    const { client, st, T } = clientFals()
+    let ceas = ORA(8)
+    st.ceas = () => ceas
+    const ex = { ecranInitial: 'pasi', acum: () => ceas, comprima: async () => new Blob(['x']) }
+    const u = await monteaza(client, stocareFalsa(), ex)
+    // pasul 0: tronsonul (km și lungimea), nimic altceva
+    await u.apasa(u.buton('Uscare nouă'))
+    expect(u.text()).toContain('Pe ce tronson faci uscarea?')
+    expect(u.buton('Începe').disabled).toBe(true)
+    await u.scrie('Tronson (cum apare în raport)', 'Tr. pași')
+    await u.scrie('De la km', '0+000')
+    await u.scrie('La km', '1+000')
+    expect(u.camp('Lungime (m)').value).toBe('1000')
+    await u.apasa(u.buton('Începe'))
+    expect(T.executie_uscari.size).toBe(1)
+    const id = [...T.executie_uscari.keys()][0]
+    expect(T.executie_uscari.get(id)).toMatchObject({ tronson: 'Tr. pași', lungime_m: 1000, bureti_buc: 2, data_operatie: '2026-11-17', constructor: 'GAZPET INSTAL S.R.L.' })
+    // etapa 1: butonul inactiv spune EXACT ce lipsește
+    expect(u.text()).toContain('Etapa 1 din 2')
+    expect(u.buton('Înregistrează etapa 1').disabled).toBe(true)
+    for (const t of ['greutatea pistonului 1 la intrare', 'poza cântarului pentru pistonul 2 (intrare)', 'poza ansamblului de pistoane']) expect(u.text()).toContain(t)
+    expect(u.text()).not.toContain('ora introducerii,')                        // ora goală = „acum”, la apăsare
+    const kg = u.campuri('Greutatea pe cântar, la intrare')
+    expect(kg).toHaveLength(2)
+    expect(kg[0].getAttribute('inputmode')).toBe('decimal')
+    await u.scrieEl(kg[0], '1250')                                               // grame din greșeală: avertisment, nu blocare
+    expect(u.text()).toContain('pare scris în GRAME')
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la intrare')[0], '1,25')
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la intrare')[1], '1,30')
+    expect(u.text()).toContain('= 1.250 g')
+    await u.fotografiaza('Poza cântarului', 0)
+    await u.fotografiaza('Poza cântarului', 1)
+    await u.fotografiaza('Poza ansamblului de pistoane')
+    expect(T.executie_uscare_poze.size).toBe(3)
+    expect(u.buton('Înregistrează etapa 1').disabled).toBe(false)
+    ceas = ORA(8, 5)                                                              // apăsarea, 10:05 în România
+    await u.apasa(u.buton('Înregistrează etapa 1'))
+    expect(T.executie_uscari.get(id)).toMatchObject({ ora_inceput: '2026-11-17T08:05:00.000Z', bureti_buc: 2,
+      cantariri: [{ nr: 1, intrare_kg: 1.25, iesire_kg: null, motiv: null }, { nr: 2, intrare_kg: 1.3, iesire_kg: null, motiv: null }] })
+    expect(u.text()).toContain('Etapa 1 înregistrată la 10:05')
+    expect(u.text()).toContain('Poți închide telefonul')
+    // oprire: alt telefon / alt om (sesiune nouă, altă stocare locală), după 60 de minute
+    ceas = ORA(9, 5)
+    const v = await monteaza(client, stocareFalsa(), ex)
+    expect(v.text()).toContain('Etapa 1 înregistrată · pistoanele introduse la 10:05')
+    await v.apasa(v.buton('Continuă cu etapa 2'))
+    expect(v.text()).toContain('Etapa 2 din 2')
+    expect(v.buton('Termină etapa 2').disabled).toBe(true)
+    await v.scrieEl(v.campuri('Greutatea pe cântar, la ieșire')[0], '1,40')
+    await v.scrieEl(v.campuri('Greutatea pe cântar, la ieșire')[1], '1,35')
+    expect(v.text()).toContain('+150 g')                                         // primul piston: informativ
+    expect(v.text()).toContain('100 g/km × 1 km = 100 g')
+    expect(v.text()).toContain('+50 g → ✓ în prag: propun USCAT')
+    await v.fotografiaza('Poza cântarului', 0)
+    await v.fotografiaza('Poza cântarului', 1)
+    await v.fotografiaza('Poza ultimului piston')
+    expect(v.text()).toContain('verdictul ultimului piston (uscat / umed)')
+    await v.apasa(v.buton('USCAT (propus)'))
+    expect(v.buton('Termină etapa 2').disabled).toBe(false)
+    await v.apasa(v.buton('Termină etapa 2'))
+    expect(T.executie_uscari.get(id)).toMatchObject({ ora_final: '2026-11-17T09:05:00.000Z', piston_final_rezultat: 'uscat', concluzie: 'conform', timp_deplasare_min: 60 })
+    // rezumat: durata, viteza, verdictul; „Generează raportul” inactiv până la detaliile obligatorii
+    expect(v.text()).toContain('Rezumat')
+    expect(v.text()).toContain('1 ore')
+    expect(v.text()).toContain('0,28 m/s')                                        // 1000 m / 3600 s
+    expect(v.buton('Generează raportul').disabled).toBe(true)
+    for (const t of ['temperatura exterioară', 'utilajele (cel puțin unul)', 'presiunea în spatele buretelui', 'bifează că ai verificat']) expect(v.text()).toContain(t)
+    await v.scrie('Temperatura exterioară (°C)', '8')
+    await v.apasa(v.buton('+ Utilaj'))
+    await v.scrie('Denumire 1', 'Compresor 12 bar')
+    await v.scrie('PIG metalic [buc]', '0')
+    await v.scrie('Piston poliuretan [buc]', '0')
+    await v.scrie('Presiunea (bar)', '2,5')
+    await v.scrie('Justificarea lipsei', 'manometru și termometru fără ecran lizibil')
+    expect(v.buton('Generează raportul').disabled).toBe(true)                    // întâi salvarea
+    await v.apasa(v.buton('Salvează detaliile'))
+    await v.bifeaza('Am verificat detaliile')
+    expect(v.buton('Generează raportul').disabled).toBe(false)
+    await v.apasa(v.buton('Generează raportul'))
+    expect(T.executie_uscari.get(id).stare).toBe('inchisa')
+    expect(exporturi.at(-1)).toMatchObject({ id, cuCoordonate: false })
+    expect(v.text()).toContain('Raport generat (închis)')
+    expect(v.buton('Descarcă raportul (PDF)').disabled).toBe(false)
+  })
+
+  it('dublu click pe „Înregistrează etapa 1” = O SINGURĂ salvare (L05)', async () => {
+    const { client, st, T } = clientFals()
+    etapa1Gata(T, 1, { ora_inceput: null, cantariri: [{ nr: 1, intrare_kg: null, iesire_kg: null, motiv: null }, { nr: 2, intrare_kg: 1.3, iesire_kg: null, motiv: null }] })
+    st.auto = false
+    const u = await monteaza(client, stocareFalsa(), { ecranInitial: 'pasi', acum: () => ORA(8) })
+    await u.apasa(u.buton('Continuă cu etapa 1'))
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la intrare')[0], '1,2')
+    await u.dublu(u.buton('Înregistrează etapa 1'))
+    expect(salvari(st)).toHaveLength(1)
+    await u.elibereaza(st.rpc[0], 'ok')
+    expect(T.executie_uscari.get(1).versiune).toBe(2)
+    expect(u.text()).toContain('Etapa 1 înregistrată')
+  })
+
+  it('L24: răspunsul „Înregistrează etapa 1” sosit după ce s-a deschis ALT raport nu schimbă ecranul celuilalt', async () => {
+    const { client, st, T } = clientFals()
+    etapa1Gata(T, 1, { tronson: 'Tr. A', ora_inceput: null })
+    T.executie_uscari.set(2, RAP(2, { tronson: 'Tr. B', bureti_buc: 1, cantariri: [{ nr: 1, intrare_kg: null, iesire_kg: null, motiv: null }] }))
+    st.auto = false
+    const u = await monteaza(client, stocareFalsa(), { ecranInitial: 'pasi', acum: () => ORA(8) })
+    await u.apasa(u.buton('Tronson Tr. A'))
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la intrare')[0], '1,26')
+    await u.apasa(u.buton('Înregistrează etapa 1'))
+    expect(salvari(st)).toHaveLength(1)
+    await u.apasa(u.buton('← Lista'))
+    await u.apasa(u.buton('Tronson Tr. B'))
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la intrare')[0], '2,5')
+    await u.elibereaza(st.rpc[0], 'ok')                                          // serverul a aplicat cererea pentru A
+    expect(T.executie_uscari.get(1).cantariri[0].intrare_kg).toBe(1.26)
+    expect(u.text()).not.toContain('Etapa 1 înregistrată')                        // nicio confirmare pe B
+    expect(u.text()).not.toContain('Înregistrarea etapei 1')
+    expect(u.campuri('Greutatea pe cântar, la intrare')[0].value).toBe('2,5')    // formularul lui B neatins
+    expect(u.text()).toContain('Tronson Tr. B')
+  })
+
+  it('ciorna locală: reîncărcarea paginii în mijlocul etapei 1 oferă restaurarea greutăților scrise', async () => {
+    const { client, T } = clientFals()
+    T.executie_uscari.set(1, RAP(1, { bureti_buc: 2, cantariri: [1, 2].map(nr => ({ nr, intrare_kg: null, iesire_kg: null, motiv: null })) }))
+    const stocare = stocareFalsa()
+    const u = await monteaza(client, stocare, { ecranInitial: 'pasi', acum: () => ORA(8) })
+    await u.apasa(u.buton('Continuă cu etapa 1'))
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la intrare')[1], '1,31')
+    const v = await monteaza(client, stocare, { ecranInitial: 'pasi', acum: () => ORA(8) })   // „reîncărcarea” (aceeași stocare)
+    await v.apasa(v.buton('Continuă cu etapa 1'))
+    expect(v.text()).toContain('Ai modificări nesalvate')
+    expect(v.campuri('Greutatea pe cântar, la intrare')[1].disabled).toBe(true)  // până la alegere
+    await v.apasa(v.buton('Restaurez'))
+    expect(v.campuri('Greutatea pe cântar, la intrare')[1].value).toBe('1,31')
+    expect(v.text()).toContain('Etapa 1 din 2')
+  })
+
+  it('pasul fiecărui raport din listă se deduce din date (etapa 1 / etapa 2 / raport / generat); eroarea pozelor nu e „etapa 1”', async () => {
+    const { client, st, T } = clientFals()
+    T.executie_uscari.set(1, RAP(1, { tronson: 'Tr. 1', bureti_buc: 2, cantariri: [1, 2].map(nr => ({ nr, intrare_kg: null, iesire_kg: null, motiv: null })) }))
+    etapa1Gata(T, 2, { tronson: 'Tr. 2' })
+    etapa1Gata(T, 3, { tronson: 'Tr. 3', ora_final: '2026-11-17T09:00:00Z', piston_final_rezultat: 'uscat',
+      cantariri: [{ nr: 1, intrare_kg: 1.25, iesire_kg: 1.3, motiv: null }, { nr: 2, intrare_kg: 1.3, iesire_kg: 1.32, motiv: null }] })
+    pozaServer(T, 3, 'cantar_iesire', 1); pozaServer(T, 3, 'cantar_iesire', 2); pozaServer(T, 3, 'piston_final')
+    T.executie_uscari.set(4, RAP(4, { tronson: 'Tr. 4', stare: 'inchisa', inchis_la: '2026-11-16T10:00:00Z', concluzie: 'conform' }))
+    const u = await monteaza(client, stocareFalsa(), { ecranInitial: 'pasi', acum: () => ORA(9) })
+    const card = t => u.butoane().find(b => b.textContent.startsWith(`Tronson ${t}`)).textContent
+    expect(card('Tr. 1')).toContain('Continuă cu etapa 1')
+    expect(card('Tr. 2')).toContain('pistoanele introduse la 10:00')
+    expect(card('Tr. 2')).toContain('Continuă cu etapa 2')
+    expect(card('Tr. 3')).toContain('Generează raportul')
+    expect(u.text()).toContain('Rapoarte generate')
+    expect(u.butoane().some(b => b.textContent.startsWith('Tronson Tr. 4'))).toBe(false)   // generatul nu e „în lucru”
+    await u.apasa(u.buton('Tronson Tr. 3'))
+    expect(u.text()).toContain('Rezumat și raport')
+    // eroarea de citire a pozelor (L18): pasul nu se ghicește
+    st.eroareTabel = new Set(['executie_uscare_poze'])
+    const v = await monteaza(client, stocareFalsa(), { ecranInitial: 'pasi', acum: () => ORA(9) })
+    expect(v.text()).toContain('Pasul nu s-a putut determina')
+    expect(v.text()).not.toContain('Continuă cu etapa 1')
+  })
+
+  it('verdictul contrar calculului cere un motiv în observații; „Vezi / corectează toate datele” duce la formularul complet și înapoi', async () => {
+    const { client, T } = clientFals()
+    etapa1Gata(T, 1)
+    pozaServer(T, 1, 'cantar_iesire', 1); pozaServer(T, 1, 'cantar_iesire', 2); pozaServer(T, 1, 'piston_final')
+    const u = await monteaza(client, stocareFalsa(), { ecranInitial: 'pasi', acum: () => ORA(9) })
+    await u.apasa(u.buton('Continuă cu etapa 2'))
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la ieșire')[0], '1,26')
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la ieșire')[1], '1,45')        // +150 g > 100 g
+    expect(u.text()).toContain('+150 g → ✗ peste prag: propun UMED')
+    await u.apasa(u.buton('USCAT'))
+    expect(u.text()).toContain('Ai ales altceva decât calculul (UMED)')
+    expect(u.buton('Termină etapa 2').disabled).toBe(true)
+    expect(u.text()).toContain('motivul (în observații) pentru verdictul diferit de calcul')
+    await u.scrie('Ai ales altceva', 'apa din primul burete; ultimul cântărit cu buretele ud la exterior')
+    expect(u.buton('Termină etapa 2').disabled).toBe(false)
+    await u.apasa(u.buton('Termină etapa 2'))
+    expect(T.executie_uscari.get(1)).toMatchObject({ piston_final_rezultat: 'uscat', concluzie: 'conform', observatii: 'apa din primul burete; ultimul cântărit cu buretele ud la exterior' })
+    await u.apasa(u.buton('Vezi / corectează toate datele'))
+    expect(u.text()).toContain('1. Planificare și notificarea beneficiarului')
+    await u.apasa(u.buton('Înapoi la pași'))
+    expect(u.text()).toContain('Rezumat și raport')
+  })
+
+  it('ultimul piston UMED: „Trecere nouă” = raport nou pe același tronson, fără greutăți, cu numărul trecerii', async () => {
+    const { client, T } = clientFals()
+    etapa1Gata(T, 1, { proba_id: null, stare: 'inchisa', inchis_la: '2026-11-17T09:30:00Z', ora_final: '2026-11-17T09:00:00Z', piston_final_rezultat: 'umed', concluzie: 'neconform',
+      utilaje: [{ denumire: 'Compresor', buc: 1 }], cantariri: [{ nr: 1, intrare_kg: 1.25, iesire_kg: 1.3, motiv: null }, { nr: 2, intrare_kg: 1.3, iesire_kg: 1.6, motiv: null }] })
+    const u = await monteaza(client, stocareFalsa(), { ecranInitial: 'pasi', acum: () => ORA(10) })
+    await u.apasa(u.buton('Tr. test'))
+    expect(u.text()).toContain('Conducta nu e încă uscată')
+    await u.apasa(u.buton('Trecere nouă pe același tronson'))
+    expect(u.text()).toContain('Pe ce tronson faci uscarea?')
+    await u.apasa(u.buton('Începe'))
+    const nou = [...T.executie_uscari.values()].find(r => r.id !== 1)
+    expect(nou).toMatchObject({ tronson: 'Tr. test', km_de_la_m: 0, km_pana_la_m: 1000, lungime_m: 1000, bureti_buc: 2, utilaje: [{ denumire: 'Compresor', buc: 1 }],
+      cantariri: [1, 2].map(nr => ({ nr, intrare_kg: null, iesire_kg: null, motiv: null })) })
+    expect(nou.observatii).toContain('Trecerea 2')
+    expect(u.text()).toContain('Etapa 1 din 2')
   })
 })
