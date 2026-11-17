@@ -78,8 +78,16 @@ ok(md5(CORP_NIVEL) === '21db8e5d4b69b7f19e571a7087c361ae' && MIG.includes("'21db
   const S2 = join(ROOT, 'supabase/tests/20261212a_redari_fan_doua_sesiuni.sh')
   let sn = null; try { execFileSync('bash', ['-n', S2], { stdio: ['ignore', 'pipe', 'pipe'] }) } catch (x) { sn = String(x.stderr || x.message) }
   const s2 = citeste('supabase/tests/20261212a_redari_fan_doua_sesiuni.sh')
-  ok(sn === null && s2.includes("fn_red_fan_claim_lot(uuid, uuid[], text[], text[])") && MIG.includes('CREATE FUNCTION public.fn_red_fan_claim_lot(p_lot_id uuid, p_ids uuid[], p_hashuri text[], p_surse text[])')
-    && ['K1', 'K2', 'S1', 'S2', 'U1', 'M1', 'R1'].every(k => s2.includes(`rez ok "${k} `)), 'scriptul cu două sesiuni: bash -n ' + (sn || 'OK') + '; scenariile K1 K2 S1 S2 U1 M1 R1 prezente')
+  const SCEN = ['K1', 'K2', 'S1', 'S2a', 'S2b', 'S2c', 'U1', 'U2', 'M1', 'T1', 'R1']
+  ok(sn === null && s2.includes("fn_red_fan_claim_lot(uuid, uuid[], text[], text[])") && s2.includes("fn_red_fan_tiraj(uuid, text, text)")
+    && MIG.includes('CREATE FUNCTION public.fn_red_fan_claim_lot(p_lot_id uuid, p_ids uuid[], p_hashuri text[], p_surse text[])')
+    && MIG.includes('CREATE FUNCTION public.fn_red_fan_tiraj(p_lot_id uuid, p_cheie text, p_inlocuieste text)')
+    && SCEN.every(k => s2.includes(`rez ok "${k} `)), `scriptul cu două sesiuni: bash -n ${sn || 'OK'}; scenariile ${SCEN.join(' ')} prezente`)
+  // fixture-ul sintetic (runda 3): aceeași gardă a țintei, identificatorii comuni cu scriptul, nicio coloană a contoarelor globale
+  const FX = citeste('supabase/tests/20261212a_redari_fan_fixture.sql')
+  const idsScript = ['0000000000f1', '0000000000a1', '0000000000a2', '0000000000a3'].every(s => s2.includes('f12a0000-0000-4000-8000-' + s) && FX.includes('f12a0000-0000-4000-8000-' + s))
+  ok(idsScript && /system_identifier::text FROM pg_control_system\(\)\) IS DISTINCT FROM current_setting\('fixture\.sistem'/.test(FX) && !/fn_red_numar_document|fn_red_plic_creeaza|fn_red_lot_plicuire_creeaza/.test(FX)
+    && s2.includes('--cu-fixture'), 'fixture-ul: garda system_identifier, identificatorii comuni cu scriptul, fără contoarele globale de numerotare')
 }
 
 const ID = {
@@ -286,12 +294,28 @@ async function verificari(db, log) {
   // versiunea curentă, dar un eveniment MAI VECHI decât cel scris: tot depășit
   const w3 = (await urm(ID.owner, ID.lot1, [{ ...u1, versiune: 1, urmarire_stare: 'in_tranzit', ultim_eveniment: 'C0', ultim_eveniment_la: '2026-11-09 10:00:00', retur_propus: null }])).rows[0].r
   ok(w3.scrise === 0 && w3.depasite === 1, 'eveniment mai vechi decât cel scris (aceeași versiune): depășit, nescris')
+  // runda 3 (r2 P2): un răspuns FĂRĂ cronologie („fără evenimente”) nu șterge evenimentul cunoscut: doar „verificat la”, versiunea + 1
+  const inainteGol = await val(db, `SELECT urmarire_stare, ultim_eveniment, ultim_eveniment_la, ridicat_propus::text AS rp, retur_propus, versiune_urmarire AS v, urmarit_la FROM public.red_fan_awb WHERE id = $1`, [r1.id])
+  const gol = { ...u1, versiune: 1, urmarire_stare: 'fara_evenimente', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null }
+  const w3b = (await urm(ID.owner, ID.lot1, [gol])).rows[0].r
+  const dupaGol = await val(db, `SELECT urmarire_stare, ultim_eveniment, ultim_eveniment_la, ridicat_propus::text AS rp, retur_propus, versiune_urmarire AS v, urmarit_la FROM public.red_fan_awb WHERE id = $1`, [r1.id])
+  ok(w3b.scrise === 0 && w3b.pastrate === 1 && w3b.depasite === 0, 'RĂSPUNS FĂRĂ EVENIMENTE pe un rând cu eveniment cunoscut: „păstrat”, nu scris: ' + JSON.stringify(w3b))
+  ok(dupaGol.urmarire_stare === 'retur' && dupaGol.ultim_eveniment === 'S6' && +dupaGol.ultim_eveniment_la === +inainteGol.ultim_eveniment_la && dupaGol.rp === '2026-11-09'
+    && dupaGol.retur_propus === 'refuz' && dupaGol.v === 2 && dupaGol.urmarit_la >= inainteGol.urmarit_la, 'evenimentul, ridicarea și returul propus rămân; doar „verificat la” + versiunea (2)')
+  const w3c = (await urm(ID.owner, ID.lot1, [{ ...gol, versiune: 1 }])).rows[0].r
+  ok(w3c.depasite === 1 && w3c.pastrate === 0, 'și „păstrat” trece prin CAS: versiunea veche (1, acum 2) = depășit')
+  // un eveniment MAI NOU fără ridicarea în răspuns (listă trunchiată) nu șterge ridicarea cunoscută (coalesce)
+  const w3d = (await urm(ID.owner, ID.lot1, [{ ...u1, versiune: 2, urmarire_stare: 'retur', ultim_eveniment: 'S6', ultim_eveniment_la: '2026-11-10 16:00:00', ridicat_propus: null }])).rows[0].r
+  ok(w3d.scrise === 1 && (await val(db, 'SELECT ridicat_propus::text AS rp FROM public.red_fan_awb WHERE id = $1', [r1.id])).rp === '2026-11-09', 'eveniment nou fără ridicare în răspuns: ridicarea cunoscută (09.11) rămâne')
+  // un rând FĂRĂ eveniment cunoscut primește „fără evenimente” normal (nimic de păstrat)
+  const w3e = (await urm(ID.owner, ID.lot2, [{ id: r4.id, awb: '1000000004', versiune: 0, urmarire_stare: 'fara_evenimente', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null }])).rows[0].r
+  ok(w3e.scrise === 1 && w3e.pastrate === 0 && (await rand(4)).urmarire_stare === 'fara_evenimente', 'rând fără eveniment cunoscut: „fără evenimente” scris (nimic pierdut)')
   ok((await val(db, 'SELECT stare FROM public.red_plicuri WHERE id = $1', [plicId(1)])).stare === 'activ' && (await val(db, 'SELECT awb FROM public.red_plicuri WHERE id = $1', [plicId(1)])).awb === null, 'urmărirea NU atinge plicul (propunere)')
   const conf = (uid, lot, arr) => ca(db, uid, 'SELECT public.fn_red_fan_confirmari($1, $2::jsonb) AS r', [lot, JSON.stringify(arr)])
   ok(await cod(conf(ID.owner, ID.lot1, [{ id: r1.id, awb: '1000000001', versiune: 1, confirmare_stare: 'confirmat' }])) === '22023', 'confirmare „confirmat” (succes automat) → 22023')
   const w4 = (await conf(ID.owner, ID.lot1, [{ id: r1.id, awb: '1000000001', versiune: 0, confirmare_stare: 'lipsa' }])).rows[0].r
   ok(w4.scrise === 0 && w4.depasite === 1, 'confirmare cu versiunea veche: depășită')
-  const w5 = (await conf(ID.owner, ID.lot1, [{ id: r1.id, awb: '1000000001', versiune: 1, confirmare_stare: 'forma_necunoscuta' }])).rows[0].r
+  const w5 = (await conf(ID.owner, ID.lot1, [{ id: r1.id, awb: '1000000001', versiune: 3, confirmare_stare: 'forma_necunoscuta' }])).rows[0].r
   ok(w5.scrise === 1 && (await rand(1)).confirmare_stare === 'forma_necunoscuta', 'confirmare de formă necunoscută: scrisă ca atare (versiunea curentă)')
 
   // ── ridicare: lot real → plicul expediat; lot de test → plicul neatins ──
@@ -312,6 +336,29 @@ async function verificari(db, log) {
   ok(await cod(ca(db, ID.owner, 'SELECT public.fn_red_fan_anulat($1, $2, $3)', [r3.id, '1000000099', 'test'])) === 'P0001', 'anulare cu alt AWB → refuz')
   ok(await cod(ca(db, ID.owner, 'SELECT public.fn_red_fan_anulat($1, $2, $3)', [r3.id, '1000000003', 'șters în selfAWB'])) === 'OK', 'AWB generat neridicat → anulat')
   ok(await cod(propune(ID.editor, 3, H('f'))) === 'OK', 'după anulare plicul se poate re-propune')
+
+  // ── tirajul (runda 3, r2 P1): o cheie de manifest pentru TOATE descărcările lotului (etichete, fiecare parte, arhiva documentelor) ──
+  const tiraj = (uid, lot, k, inl = null) => ca(db, uid, 'SELECT public.fn_red_fan_tiraj($1, $2, $3) AS t', [lot, k, inl])
+  ok(await cod(tiraj(ID.viewer, ID.lot1, H('1'))) === '42501', 'tiraj: viewer refuzat')
+  ok(await cod(tiraj(ID.strain, ID.lot1, H('1'))) === '42501', 'tiraj: cont fără drept pe Redări refuzat')
+  ok(await cod(tiraj(null, ID.lot1, H('1'))) === '42501', 'tiraj: anonim refuzat (fără EXECUTE)')
+  ok(await cod(tiraj(ID.editor, ID.lot1, 'x')) === '22023' && await cod(tiraj(ID.owner, ID.lot1, H('1'), 'y')) === '22023', 'tiraj: cheie invalidă → 22023')
+  ok(await cod(tiraj(ID.editor, ID.lot3, H('1'))) === 'P0001', 'tiraj: lot FAN nemarcat → P0001')
+  const t1 = (await tiraj(ID.editor, ID.lot1, H('1'))).rows[0].t
+  const ft1 = await val(db, 'SELECT tiraj_de, tiraj_nr, tiraj_cheie, prima_aprobare_la, test FROM public.red_fan_loturi WHERE lot_id = $1', [ID.lot1])
+  ok(t1.stare === 'inceput' && t1.nr === 1 && t1.cheie === H('1') && typeof t1.inceput_la === 'string' && ft1.tiraj_de === ID.editor && ft1.prima_aprobare_la && ft1.test === false,
+    'tiraj: prima descărcare (editor) îl începe — nr. 1, autorul = auth.uid(), după prima aprobare (marcajul neatins)')
+  const t2 = (await tiraj(ID.owner, ID.lot1, H('1'))).rows[0].t
+  ok(t2.stare === 'acelasi' && t2.nr === 1 && t2.inceput_la === t1.inceput_la, 'tiraj: aceeași cheie (altă parte / arhiva) → același tiraj, nimic schimbat')
+  ok(await cod(tiraj(ID.editor, ID.lot1, H('2'))) === 'RD020' && await cod(tiraj(ID.owner, ID.lot1, H('2'))) === 'RD020', 'tiraj: ALTĂ CHEIE (manifest schimbat) → RD020, și pentru owner fără înlocuire explicită')
+  ok(await cod(tiraj(ID.editor, ID.lot1, H('2'), H('1'))) === '42501', 'tiraj: înlocuirea refuzată editorului (doar owner)')
+  ok(await cod(tiraj(ID.owner, ID.lot1, H('2'), H('3'))) === 'RD020', 'tiraj: înlocuirea cu altă cheie veche decât cea curentă (CAS) → RD020')
+  ok((await val(db, 'SELECT tiraj_cheie FROM public.red_fan_loturi WHERE lot_id = $1', [ID.lot1])).tiraj_cheie === H('1'), 'tiraj: după refuzuri, cheia rămâne cea începută')
+  const t3 = (await tiraj(ID.owner, ID.lot1, H('2'), H('1'))).rows[0].t
+  ok(t3.stare === 'inlocuit' && t3.nr === 2 && t3.cheie === H('2'), 'tiraj: owner, „Tiraj nou” cu CAS pe cheia veche → nr. 2')
+  ok(await cod(tiraj(ID.editor, ID.lot1, H('1'))) === 'RD020' && (await tiraj(ID.editor, ID.lot1, H('2'))).rows[0].t.stare === 'acelasi', 'tiraj: după înlocuire cheia veche e refuzată, cea nouă acceptată')
+  ok(await cod(ca(db, ID.owner, `UPDATE public.red_fan_loturi SET tiraj_cheie = '${H('9')}' WHERE lot_id = '${ID.lot1}'`)) === '42501', 'tiraj: UPDATE direct ca owner (authenticated) refuzat')
+  ok(await cod(db.query(`UPDATE public.red_fan_loturi SET tiraj_cheie = NULL WHERE lot_id = $1`, [ID.lot1])) === '23514', 'tiraj: CHECK-ul coerenței (cheie / nr / moment / autor) refuză o stare parțială')
   return fail
 }
 
@@ -437,7 +484,17 @@ const MUTANTI = [
     "-- fara trigger\nCREATE TRIGGER trg_red_fan_loturi_garda BEFORE TRUNCATE ON public.red_fan_loturi FOR EACH STATEMENT EXECUTE FUNCTION public.fn_red_fan_loturi_garda();"],
   ['urmărire fără verificarea AWB-ului', 'a.lot_id = p_lot_id AND a.awb = u.awb AND', 'a.lot_id = p_lot_id AND'],
   ['urmărire fără CAS pe versiune (runda 2)', '   WHERE a.id = u.id AND a.versiune_urmarire = u.versiune\n', '   WHERE a.id = u.id\n'],
-  ['urmărire fără garda timpului evenimentului', "     AND (a.ultim_eveniment_la IS NULL OR u.ultim_eveniment_la IS NULL OR (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest') >= a.ultim_eveniment_la);", ';'],
+  ['urmărire fără garda timpului evenimentului', "     AND (a.ultim_eveniment_la IS NULL OR (u.ultim_eveniment_la IS NOT NULL AND (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest') >= a.ultim_eveniment_la));", ';'],
+  // runda 3
+  ['urmărire: răspunsul fără cronologie suprascrie evenimentul cunoscut (forma 0716f5b3)',
+    'WHERE a.id = u.id AND a.versiune_urmarire = u.versiune AND a.ultim_eveniment_la IS NOT NULL AND u.ultim_eveniment_la IS NULL;', 'WHERE false;',
+    "     AND (a.ultim_eveniment_la IS NULL OR (u.ultim_eveniment_la IS NOT NULL AND (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest') >= a.ultim_eveniment_la));",
+    "     AND (a.ultim_eveniment_la IS NULL OR u.ultim_eveniment_la IS NULL OR (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest') >= a.ultim_eveniment_la);"],
+  ['urmărire: ridicarea cunoscută ștearsă de un răspuns fără ea', 'ridicat_propus = coalesce(u.ridicat_propus::date, a.ridicat_propus)', 'ridicat_propus = u.ridicat_propus::date'],
+  ['tiraj: o cheie nouă suprascrie tirajul început', 'ELSIF p_inlocuieste IS NULL AND v_fl.tiraj_cheie IS NULL THEN', 'ELSIF p_inlocuieste IS NULL THEN'],
+  ['tiraj: înlocuirea fără CAS pe cheia veche', 'ELSIF p_inlocuieste IS NOT NULL AND v_fl.tiraj_cheie IS NOT DISTINCT FROM p_inlocuieste THEN', 'ELSIF p_inlocuieste IS NOT NULL THEN'],
+  ['tiraj: înlocuirea deschisă editorului', 'OR (p_inlocuieste IS NOT NULL AND NOT public.fn_red_fan_e_owner()) THEN', 'THEN'],
+  ['tiraj: deschis viewer-ului', "IF auth.uid() IS NULL OR coalesce(public.fn_red_nivel(), '') NOT IN ('admin', 'editor')\n     OR (p_inlocuieste", "IF auth.uid() IS NULL\n     OR (p_inlocuieste"],
   ['confirmări fără CAS pe versiune', 'WHERE a.id = c.id AND a.versiune_urmarire = c.versiune;', 'WHERE a.id = c.id;'],
   ['propunerea re-propune și un AWB generat', "IF v_rand.stare NOT IN ('propus', 'aprobat') THEN", "IF v_rand.stare NOT IN ('propus', 'aprobat', 'generat', 'in_curs') THEN"],
   ['scriere directă permisă', 'REVOKE ALL ON public.red_fan_setari, public.red_fan_loturi, public.red_fan_awb FROM PUBLIC, anon, authenticated, service_role;', ''],

@@ -5,9 +5,9 @@ import { descarcaBlob } from '../docx.js'
 import { sesiuneEcran } from '../corespondenta.js'
 import { propune, aplica } from '../importPostal.js'
 import { grupeazaPentruPlicuri, convocareDeRegenerat, MESAJ_DE_REGENERAT, textAR, genereazaOpis, genereazaPvPlicuire, csvEtichete, dataBucuresti, adresaPlic, areImputernicire, planPachetPlicuire,
-  termenExpediere, textTermenExpediere, avertismentExpediere, confirmaExpediereRecitita, textTintaExpediere, recomandareExpediere, genereazaPaginaControl } from '../plicuri.js'
-import { manifestTiparire, destinatarMascat } from '../../../supabase/functions/_shared/redariFan.mjs'
-import { prefixLot } from '../fanLot.js'
+  termenExpediere, textTermenExpediere, avertismentExpediere, confirmaExpediereRecitita, textTintaExpediere, recomandareExpediere, docxPaginaControl, continutPaginaControl } from '../plicuri.js'
+import { destinatarMascat } from '../../../supabase/functions/_shared/redariFan.mjs'
+import { prefixLot, pregatestePachetFan, numeControl, numeArhiva } from '../fanLot.js'
 import { TERMEN_CONVOCARE_ZILE } from '../setari.js'
 import { G, S, Camp, Gol, Modal, MOTIVE_RETUR, msgEroare, fmtDate, citestePaginat } from './comune.jsx'
 import { CALITATI_AR, descriereArPlic } from '../arMentiune.js'
@@ -150,22 +150,29 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, profile = null
   async function document(tip, rand, curent) {
     const lista = plicuri.filter(p => p.lot_id === rand.id)
     // tipărire pe lot: UN zip cu documentele ARHIVATE, în ordinea plicurilor (opisul primul în fiecare plic) + pagina de control; orice lipsă = refuz.
-    // Lot FAN (marcat TEST / real în evidența FAN): DOAR plicurile din manifestul COMUN cu etichetele (manifestTiparire, aceeași funcție ca
-    // funcția edge), cu pozițiile lui; prefixul TEST_ pe un lot de test (Jakarinos #1118 r1 P1 / P2). Evidența se recitește acum (L03).
+    // Lot FAN (marcat TEST / real în evidența FAN): DOAR plicurile din manifestul COMUN cu etichetele, cu pozițiile lui; prefixul TEST_ pe un lot
+    // de test (Jakarinos #1118 r1 P1 / P2). Evidența se recitește acum (L03). Runda 3 (r2 P1): arhiva cere TIRAJUL lotului cu cheia acestui
+    // manifest (pregatestePachetFan → fn_red_fan_tiraj, aceeași cheie ca la fiecare parte a etichetelor); alt manifest decât al tirajului început
+    // = refuz („retipărește tot lotul”), nimic descărcat. Pagina de control = aceeași funcție ca la etichete (controlLotFan).
     if (tip === 'pachet') {
       const ev = await citesteEvidentaFan(supabase, rand.id, curent)
       if (!curent()) return
-      const manifest = ev.fanLot ? manifestTiparire({ randuri: ev.randuri, plicuri: lista }) : null
-      if (manifest && !manifest.tiparite.length) throw { code: '23514', message: `Lot FAN fără niciun plic cu AWB tipăribil; rămase: ${manifest.ramase.map(r => r.nr_plic).join(', ') || '-'}.` }
       const prefix = prefixLot(ev.fanLot)
-      const plan = planPachetPlicuire(lista, pePlic, { prefix, manifest })
-      if (plan.lipsuri.length) throw { code: '23514', message: `Pachetul nu se face, lipsesc ${plan.lipsuri.length} documente: ${plan.lipsuri.slice(0, 8).join('; ')}${plan.lipsuri.length > 8 ? ' …' : ''}` }
+      let plan, continut, tiraj = null, ramase = []
+      if (ev.fanLot) {
+        const p = await pregatestePachetFan({ rpc: (n, a) => supabase.rpc(n, a), lot: rand, fanLot: ev.fanLot, randuriFan: ev.randuri, plicuri: lista, convocariPePlic: pePlic })
+        if (!curent()) return
+        ;({ plan, continut, tiraj } = p); ramase = p.manifest.ramase
+      } else {
+        plan = planPachetPlicuire(lista, pePlic, { prefix })
+        if (plan.lipsuri.length) throw { code: '23514', message: `Pachetul nu se face, lipsesc ${plan.lipsuri.length} documente: ${plan.lipsuri.slice(0, 8).join('; ')}${plan.lipsuri.length > 8 ? ' …' : ''}` }
+        continut = continutPaginaControl({ lot: rand, randuri: plan.plicuri.map(p => ({ pozitie: p.pozitie, nr_plic: p.nr_plic, awb: '', destinatar: destinatarMascat(p.destinatar_nume), documente: p.documente })) })
+      }
       if (!plan.fisiere.length) throw { code: '23514', message: 'Lotul nu are plicuri active.' }
-      const awbPe = new Map((manifest?.tiparite || []).map(t => [t.pozitie, t.awb]))
-      const control = await genereazaPaginaControl({ lot: rand, test: ev.fanLot?.test === true, ramase: manifest?.ramase || [],
-        randuri: plan.plicuri.map(p => ({ pozitie: p.pozitie, nr_plic: p.nr_plic, awb: awbPe.get(p.pozitie) || '', destinatar: destinatarMascat(p.destinatar_nume), documente: p.documente })) })
+      const control = await docxPaginaControl(continut)
+      if (!curent()) return
       const zip = new JSZip()
-      zip.file(`${prefix}0000_pagina_de_control.docx`, await control.arrayBuffer())
+      zip.file(numeControl({ lot: rand, fanLot: ev.fanLot, tiraj, inArhiva: true }), await control.arrayBuffer())
       for (const f of plan.fisiere) {
         if (!curent()) return
         const { data: bl, error } = await supabase.storage.from('redari').download(f.path)
@@ -173,9 +180,9 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, profile = null
         zip.file(f.nume, await bl.arrayBuffer())
       }
       const blob = await zip.generateAsync({ type: 'blob' })
-      if (curent()) descarcaBlob(blob, `${prefix}${rand.nr_lot}_documente_in_ordinea_plicurilor.zip`)
-      return `Pachet descărcat: ${plan.fisiere.length} documente, ${plan.plicuri.length} plicuri, în ordinea pozițiilor (în fiecare plic: opisul, apoi convocările) + pagina de control.`
-        + (manifest?.ramase.length ? ` Rămase netipărite (fără etichetă și fără documente): ${manifest.ramase.map(r => r.nr_plic).join(', ')}.` : '')
+      if (curent()) descarcaBlob(blob, numeArhiva({ lot: rand, fanLot: ev.fanLot, tiraj }))
+      return `Pachet descărcat${tiraj ? ` (tirajul ${tiraj.id}, nr. ${tiraj.nr})` : ''}: ${plan.fisiere.length} documente, ${plan.plicuri.length} plicuri, în ordinea pozițiilor (în fiecare plic: opisul, apoi convocările) + pagina de control.`
+        + (ramase.length ? ` Rămase netipărite (fără etichetă și fără documente): ${ramase.map(r => r.nr_plic).join(', ')}.` : '')
     }
     if (tip === 'csv' && !imputernicire) throw { code: '23514', message: 'Fără împuternicirea Beneficiarului nu se generează textele AR (etichete).' }
     // Jakarinos + Copilot f10 UI P2: opisul atașat la dosar se descarcă EXACT cum e arhivat (fără regenerare), ca exemplarul din plic să fie identic
@@ -330,7 +337,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, profile = null
       {poateScrie && btn('📦 AWB FAN — previzualizare', () => setFanLot(l))}
       {l.pv_path && <p>PV semnat atașat.</p>}
     </div>) : <Gol />}
-    {fanLot && poateScrie && <FanAwbPrevizualizare proiect={proiect} lot={fanLot} plicuri={plicuri.filter(p => p.lot_id === fanLot.id)}
+    {fanLot && poateScrie && <FanAwbPrevizualizare proiect={proiect} lot={fanLot} plicuri={plicuri.filter(p => p.lot_id === fanLot.id)} convocariPePlic={pePlic}
       esteOwner={profile?.is_owner === true} poateScrie={poateScrie} onClose={() => setFanLot(null)}
       onRetur={(plicId, motiv, data) => { const p = plicuri.find(x => x.id === plicId); if (!p) return
         // returul semnalat de FAN = PROPUNERE: omul alege motivul final și atașează scanul plicului returnat (regula BD)

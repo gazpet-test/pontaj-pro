@@ -6,10 +6,10 @@
    JWT-ul omului (RLS: doar admin/editor). Răspunsurile FAN sunt date: ridicarea, reconcilierea și returul le confirmă omul. */
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
-import { pregatestePlicuriFan, contactPePlic, LIMITA_LOT_PILOT_IMPLICITA, FORMAT_ETICHETA, manifestTiparire, partiManifest, destinatarMascat } from '../../../supabase/functions/_shared/redariFan.mjs'
+import { pregatestePlicuriFan, contactPePlic, LIMITA_LOT_PILOT_IMPLICITA, FORMAT_ETICHETA, manifestTiparire, partiManifest, cheieTiraj, idTiraj, tirajDin } from '../../../supabase/functions/_shared/redariFan.mjs'
 import { stariPasi, stareMarcaj, stariOperatii, TRANSPORT_REAL_ACTIV, MESAJ_TRANSPORT_OPRIT, ETICHETE_STARE_FAN, ETICHETE_URMARIRE, ETICHETE_CONFIRMARE, prefixLot, titluLot,
-  csvBorderouFan, mesajEdgeFan, numeEtichete } from '../fanLot.js'
-import { genereazaPaginaControl } from '../plicuri.js'
+  csvBorderouFan, mesajEdgeFan, numeEtichete, numeControl, controlLotFan } from '../fanLot.js'
+import { docxPaginaControl } from '../plicuri.js'
 import { descarcaBlob } from '../docx.js'
 import { G, S, Modal, msgEroare, citestePaginat, etichetaRetur } from './comune.jsx'
 
@@ -24,7 +24,7 @@ export const lipsaTabel = e => ['PGRST205', '42P01'].includes(e?.code) || /does 
 export async function citesteEvidentaFan(client, lotId, esteCurent = () => true) {
   try {
     const randuri = await citestePaginat(() => client.from('red_fan_awb').select(COL_FAN).eq('lot_id', lotId), { cheie: 'id', esteCurent })
-    const { data: fl, error: e1 } = await client.from('red_fan_loturi').select('lot_id,test,prima_aprobare_la').eq('lot_id', lotId).maybeSingle()
+    const { data: fl, error: e1 } = await client.from('red_fan_loturi').select('lot_id,test,prima_aprobare_la,tiraj_cheie,tiraj_nr,tiraj_la').eq('lot_id', lotId).maybeSingle()
     if (e1) throw e1
     const { data: st, error: e2 } = await client.from('red_fan_setari').select('limita_lot').maybeSingle()
     if (e2) throw e2
@@ -32,7 +32,8 @@ export async function citesteEvidentaFan(client, lotId, esteCurent = () => true)
   } catch (e) { if (lipsaTabel(e)) return { instalata: false, randuri: [], fanLot: null, limita: null }; throw e }
 }
 
-export default function FanAwbPrevizualizare({ proiect, lot, plicuri, esteOwner = false, poateScrie = false, onClose, onRetur }) {
+// convocariPePlic = convocările pe plic din ecranul Plicuri (aceleași citiri ca arhiva documentelor): numărul documentelor pe pagina de control
+export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariPePlic = {}, esteOwner = false, poateScrie = false, onClose, onRetur }) {
   const [randuri, setRanduri] = useState(null), [fan, setFan] = useState(null), [eroare, setEroare] = useState(''), [mesaj, setMesaj] = useState('')
   const [lucru, setLucru] = useState(false), [reload, setReload] = useState(0)
   const [dataRec, setDataRec] = useState(''), [propuneri, setPropuneri] = useState(null), [plafonNou, setPlafonNou] = useState('')
@@ -78,6 +79,15 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, esteOwner 
   // manifestul COMUN (aceeași funcție ca funcția edge și arhiva documentelor): mulțimea și ordinea etichetelor
   const manifest = manifestTiparire({ randuri: awb, plicuri })
   const parti = partiManifest(manifest.tiparite)
+  // runda 3: cheia tirajului pentru manifestul de acum (afișată lângă tirajul început; „Tiraj nou” o folosește), calculată asincron
+  const [cheieAcum, setCheieAcum] = useState(null)
+  useEffect(() => {
+    let viu = true
+    setCheieAcum(null)
+    if (manifest.tiparite.length) cheieTiraj(manifest).then(c => { if (viu) setCheieAcum(c) }).catch(() => { if (viu) setCheieAcum(null) })
+    return () => { viu = false }
+  }, [manifest.cheie])   // eslint-disable-line react-hooks/exhaustive-deps
+  const tirajInceput = fan?.fanLot?.tiraj_cheie ? { id: idTiraj(fan.fanLot.tiraj_cheie), nr: fan.fanLot.tiraj_nr, cheie: fan.fanLot.tiraj_cheie } : null
 
   // garda unei acțiuni: generația + lotul de la pornire; fiecare apel dintr-o buclă o verifică ÎNAINTE (L24)
   async function executa(cheiePas, fn) {
@@ -130,22 +140,39 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, esteOwner 
     const { corp, mesaj } = await edge('genereaza')
     return corp?.cod === 'ok' ? `Generate: ${corp.generat}; respinse: ${corp.eroare}; necunoscute: ${corp.necunoscut}; rămase: ${corp.ramase}.${corp.asociere_pe_pozitie ? ` Asociate pe poziție (de verificat în selfAWB): ${corp.asociere_pe_pozitie}.` : ''}${corp.oprit ? ' Oprit: ' + corp.oprit : ''}` : mesaj
   })
-  // pagina de control (aceeași mulțime și ordine ca etichetele și arhiva documentelor)
-  const paginaControl = () => genereazaPaginaControl({ lot, test: fan?.fanLot?.test === true, ramase: manifest.ramase,
-    randuri: manifest.tiparite.map(t => ({ ...t, destinatar: destinatarMascat(plicuri.find(p => p.id === t.plic_id)?.destinatar_nume) })) })
+  // pagina de control: ACEEAȘI funcție și aceleași intrări ca arhiva documentelor (controlLotFan: manifest + plicuri + convocări + tirajul din BD)
+  const paginaControl = tiraj => docxPaginaControl(controlLotFan({ lot, fanLot: fan?.fanLot, manifest, plicuri, convocariPePlic, tiraj }).continut)
   const etichete = parte => executa('etichete', async curent => {
     if (!curent()) return OPRIT
     const { corp, mesaj } = await edge('eticheta', { parte, manifest_cheie: manifest.cheie })
     if (corp?.cod !== 'ok' || typeof corp.pdf_base64 !== 'string') return mesaj
     if (!curent()) return OPRIT
+    // runda 3: tirajul vine din BD (verificat de funcția edge) și trebuie să fie al manifestului afișat; altfel nimic descărcat
+    const tiraj = corp.manifest_cheie === manifest.cheie && cheieAcum ? tirajDin({ stare: 'acelasi', cheie: corp.tiraj?.cheie, nr: corp.tiraj?.nr, inceput_la: corp.tiraj?.inceput_la }, cheieAcum) : null
+    if (!tiraj) return 'Tirajul din răspuns nu corespunde manifestului afișat: nimic descărcat. Reîncarcă evidența.'
     const bin = atob(corp.pdf_base64), bytes = new Uint8Array(bin.length)
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-    descarcaBlob(new Blob([bytes], { type: 'application/pdf' }), numeEtichete({ lot, fanLot: fan.fanLot, parte: corp.parte, parti: corp.parti, format: FORMAT_ETICHETA }))
-    if (corp.parte === 1) descarcaBlob(await paginaControl(), `${prefixLot(fan.fanLot)}${lot.nr_lot}_pagina_de_control.docx`)
-    return `Etichete ${FORMAT_ETICHETA}: ${corp.nr_plicuri.length} plicuri (pozițiile ${corp.pozitii[0]}…${corp.pozitii.at(-1)})${corp.parti > 1 ? `, partea ${corp.parte} din ${corp.parti}` : ''}.${corp.ramase?.length ? ` Rămase netipărite: ${corp.ramase.join(', ')}.` : ''}`
+    let control = null
+    if (corp.parte === 1) { control = await paginaControl(tiraj); if (!curent()) return OPRIT }   // L24: generația reverificată după await
+    descarcaBlob(new Blob([bytes], { type: 'application/pdf' }), numeEtichete({ lot, fanLot: fan.fanLot, parte: corp.parte, parti: corp.parti, format: FORMAT_ETICHETA, tiraj }))
+    if (control) descarcaBlob(control, numeControl({ lot, fanLot: fan.fanLot, tiraj }))
+    return `Etichete ${FORMAT_ETICHETA}, tirajul ${tiraj.id}: ${corp.nr_plicuri.length} plicuri (pozițiile ${corp.pozitii[0]}…${corp.pozitii.at(-1)})${corp.parti > 1 ? `, partea ${corp.parte} din ${corp.parti}` : ''}.${corp.ramase?.length ? ` Rămase netipărite: ${corp.ramase.join(', ')}.` : ''}`
+  })
+  // „Tiraj nou” (owner): înlocuiește tirajul început cu manifestul de acum (CAS pe cheia veche), după distrugerea foilor vechi
+  const tirajNou = () => executa('tiraj', async curent => {
+    if (!tirajInceput) return 'Niciun tiraj început: prima descărcare (etichete sau arhiva documentelor) îl începe.'
+    if (!cheieAcum) return 'Manifestul de acum nu are plicuri tipăribile.'
+    if (cheieAcum === tirajInceput.cheie) return `Manifestul de acum = tirajul ${tirajInceput.id}: nimic de înlocuit.`
+    if (!window.confirm(`Înlocuiești tirajul ${tirajInceput.id} (nr. ${tirajInceput.nr}) cu tirajul ${idTiraj(cheieAcum)}? ÎNTÂI distruge toate etichetele, paginile de control și documentele tipărite din tirajul ${tirajInceput.id}; apoi descarcă din nou TOATE părțile etichetelor și arhiva documentelor.`)) return 'Nimic schimbat.'
+    if (!curent()) return OPRIT
+    const { data, error } = await supabase.rpc('fn_red_fan_tiraj', { p_lot_id: lot.id, p_cheie: cheieAcum, p_inlocuieste: tirajInceput.cheie })
+    if (error) throw error
+    const t = tirajDin(data, cheieAcum)
+    if (!t) throw new Error('rezultat neconfirmat')
+    return `Tirajul nou ${t.id} (nr. ${t.nr}) a început. Descarcă din nou toate părțile etichetelor și arhiva documentelor.`
   })
   const urmarire = () => executa('urmarire', async curent => { if (!curent()) return OPRIT; const { corp, mesaj } = await edge('urmarire')
-    return corp?.cod === 'ok' ? `Urmărire actualizată: ${corp.scrise} AWB-uri${corp.depasite ? `; ${corp.depasite} depășite de o rulare mai nouă (nescrise)` : ''}.` : mesaj })
+    return corp?.cod === 'ok' ? `Urmărire actualizată: ${corp.scrise} AWB-uri${corp.pastrate ? `; ${corp.pastrate} fără evenimente noi (informația cunoscută păstrată, doar „verificat”)` : ''}${corp.depasite ? `; ${corp.depasite} depășite de o rulare mai nouă (nescrise)` : ''}.` : mesaj })
   const confirmari = () => executa('confirmari', async curent => { if (!curent()) return OPRIT; const { corp, mesaj } = await edge('confirmari')
     return corp?.cod === 'ok' ? `Confirmări verificate: ${corp.scrise} AWB-uri${corp.depasite ? `; ${corp.depasite} depășite` : ''}.` : mesaj })
   const evenimente = () => executa('evenimente', async curent => { if (!curent()) return OPRIT; const { corp, mesaj } = await edge('evenimente')
@@ -231,7 +258,10 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, esteOwner 
     </div>
     <div style={{ ...S.card, marginBottom: 8 }}>
       <b>Pagina de control</b> — {manifest.tiparite.length} plicuri tipărite (etichete + documente, aceeași ordine){manifest.ramase.length ? `; rămase netipărite: ${manifest.ramase.map(r => r.nr_plic).join(', ')}` : ''}.
-      Se descarcă odată cu prima parte a etichetelor și în arhiva documentelor (Loturi → „Documente lot”).
+      Se descarcă odată cu prima parte a etichetelor și în arhiva documentelor (Loturi → „Documente lot”), identică în ambele.
+      <div>Tiraj: {tirajInceput ? <b>{tirajInceput.id} (nr. {tirajInceput.nr})</b> : 'niciun tiraj început (prima descărcare îl începe)'}
+        {tirajInceput && cheieAcum && cheieAcum !== tirajInceput.cheie && <span style={{ color: G.red }}> · manifestul de acum ({idTiraj(cheieAcum)}) diferă de tirajul început: descărcările sunt refuzate până la „Tiraj nou” (se retipărește tot lotul)</span>}
+        {' '}<Pas cheie="tiraj" onClick={tirajNou}>Tiraj nou (retipărește tot lotul)</Pas></div>
     </div>
     <div style={{ ...S.card, marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
       <b>Reconciliere</b>

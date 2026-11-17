@@ -293,10 +293,12 @@ export function dataEvenimentFan(v) {
 export function rezumatUrmarireFan(el) {
   const gol = { urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null }
   if (!el || typeof el !== 'object') return { ...gol, motiv: 'element de urmărire fără formă cunoscută' }
-  if (el.events != null && !Array.isArray(el.events)) return { ...gol, motiv: 'lista de evenimente are o formă necunoscută' }
+  // runda 3 (L18): lipsa listei ≠ listă goală — fără `events` (sau null) = formă necunoscută; `events: []` = „fără evenimente” (fără cronologie:
+  // BD-ul nu șterge un eveniment cunoscut cu el, fn_red_fan_urmarire îl numără „păstrat”)
+  if (!Array.isArray(el.events)) return { ...gol, motiv: el.events == null ? 'elementul de urmărire nu are lista de evenimente' : 'lista de evenimente are o formă necunoscută' }
   let stricat = false
   const ev = []
-  for (const e of el.events || []) {
+  for (const e of el.events) {
     const cod = typeof e?.id === 'string' ? e.id.trim() : ''
     const d = dataEvenimentFan(e?.date)
     if (!RE_COD_EVENIMENT.test(cod) || !d) { stricat = true; continue }
@@ -454,6 +456,30 @@ export function manifestTiparire({ randuri, plicuri }) {
 }
 /** Partea `parte` (1…) a manifestului: bucăți de cel mult 100 (limita prudentă pe apelul de etichete), în ordinea pozițiilor. */
 export const partiManifest = tiparite => imparteInBucati(tiparite || [])
+
+// ── TIRAJUL (runda 3, Jakarinos #1118 r2 P1): o cheie de manifest pentru TOATE descărcările unui tiraj ──
+// Manifestul garantează aceeași mulțime și ordine pentru ACEEAȘI stare; tirajul leagă descărcările făcute în momente diferite (fiecare parte a
+// etichetelor, arhiva documentelor): cheia = sha256 pe textul canonic al manifestului (poziție:plic:AWB, în ordine), fixată în BD la PRIMA
+// descărcare (fn_red_fan_tiraj) și cerută identic la fiecare descărcare următoare; altă cheie = refuz („retipărește tot lotul”).
+// O SINGURĂ definiție (L19): funcția edge (etichetele) și ecranul (arhiva, „Tiraj nou”) o cheamă identic.
+export const VERSIUNE_TIRAJ = 'redari-fan-tiraj-v1'
+export const COD_TIRAJ_SCHIMBAT = 'RD020'   // SQLSTATE-ul refuzului din fn_red_fan_tiraj
+export const MESAJ_TIRAJ_SCHIMBAT = 'Tirajul s-a schimbat; retipărește tot lotul: distruge foile tirajului început (etichete, pagina de control, documente), apasă „Tiraj nou” (owner) și descarcă din nou toate părțile etichetelor și arhiva documentelor.'
+export async function cheieTiraj(manifest, subtle = globalThis.crypto?.subtle) {
+  if (!manifest || !Array.isArray(manifest.tiparite) || !manifest.tiparite.length || typeof manifest.cheie !== 'string' || !manifest.cheie) throw new Error('manifest fără plicuri tipărite: nu există tiraj')
+  if (!subtle) throw new Error('Web Crypto indisponibil')
+  const buf = await subtle.digest('SHA-256', new TextEncoder().encode(`${VERSIUNE_TIRAJ}|${manifest.cheie}`))
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('')
+}
+/** Identificatorul SCURT al tirajului (vizibil pe pagina de control și în numele fișierelor): primele 8 caractere ale cheii, majuscule. */
+export const idTiraj = cheie => (typeof cheie === 'string' && /^[0-9a-f]{64}$/.test(cheie) ? cheie.slice(0, 8).toUpperCase() : null)
+/** Rezultatul fn_red_fan_tiraj → { stare, cheie, id, nr, inceput_la } DOAR la forma exactă și cu cheia cerută; altfel null (L18: neconfirmat). */
+export function tirajDin(data, cheie) {
+  const d = data && typeof data === 'object' && !Array.isArray(data) ? data : null
+  if (!d || !['inceput', 'acelasi', 'inlocuit'].includes(d.stare) || d.cheie !== cheie || !idTiraj(cheie)) return null
+  if (!Number.isInteger(d.nr) || d.nr < 1 || typeof d.inceput_la !== 'string' || !Number.isFinite(Date.parse(d.inceput_la))) return null
+  return { stare: d.stare, cheie, id: idTiraj(cheie), nr: d.nr, inceput_la: d.inceput_la }
+}
 
 /** Destinatarul MASCAT pe pagina de control (fără numele întreg pe o foaie de lucru): primele 2 litere ale fiecărui cuvânt + „*”. */
 export const destinatarMascat = nume => txt(nume).split(' ').filter(Boolean).map(c => { const l = [...c]; return l.slice(0, 2).join('') + (l.length > 2 ? '*'.repeat(Math.min(l.length - 2, 6)) : '') }).join(' ')

@@ -19,7 +19,8 @@
 -- Ce face (DOAR obiecte noi, nicio dată existentă atinsă, niciun drept pe tabele existente):
 --   * red_fan_setari (un rând: plafonul lotului pilot, implicit 20 = LIMITA_LOT_PILOT_IMPLICITA, test de paritate);
 --   * red_fan_loturi (marcajul TEST / real al lotului, decis de owner ÎNAINTE de prima aprobare; prima_aprobare_la / _de puse de BD la PRIMA
---     aprobare și imuabile, iar marcajul nu se mai schimbă după ele — și după o re-propunere, runda 2 P2; trigger BEFORE UPDATE / DELETE);
+--     aprobare și imuabile, iar marcajul nu se mai schimbă după ele — și după o re-propunere, runda 2 P2; trigger BEFORE UPDATE / DELETE;
+--     plus TIRAJUL curent — cheia manifestului tipărit, cerută identic la fiecare descărcare, runda 3 P1 — prin fn_red_fan_tiraj);
 --   * red_fan_awb (un rând viu pe plic: stări, AWB, tarif, cheia solicitării, urmărirea propusă, versiunea urmăririi — CAS, runda 2);
 --   * RPC-urile fn_red_fan_* (scrieri DOAR prin ele, fără GRANT INSERT / UPDATE / DELETE) + funcțiile interne fn_red_fan_e_owner, _suma,
 --     _camp, _surse (amprenta SURSELOR unui plic, recalculată de claim în tranzacția rezervării, runda 2) și _loturi_garda (trigger-ul).
@@ -28,8 +29,9 @@
 --   străină ar cere la aplicare un lock SHARE ROW EXCLUSIVE pe profiles (scrierile din toată aplicația oprite); autorul îl pune serverul.
 -- Ordinea lock-urilor la rulare (L06), pe toate căile: red_loturi_plicuire FOR UPDATE → red_plicuri ORDER BY id FOR UPDATE → red_fan_awb
 --   ORDER BY id FOR UPDATE → red_fan_loturi (rândul lotului). Căile care iau doar o parte din lanț îl iau în aceeași ordine (ex. rezultatele:
---   doar red_fan_awb). red_fan_setari se citește sub lock-ul lotului. Claim-ul CITEȘTE (fără lock) red_convocari / red_detinatori_contact
---   pentru amprenta surselor: o schimbare comisă după claim e „după rezervare” (datele trimise = cele aprobate și verificate la claim).
+--   doar red_fan_awb; tirajul: lot → red_fan_loturi). red_fan_setari se citește sub lock-ul lotului. Claim-ul CITEȘTE (fără lock)
+--   red_convocari / red_detinatori_contact pentru amprenta surselor: rezervarea fixează corpul aprobat verificat la claim; o schimbare comisă
+--   după verificare nu schimbă ce pleacă (apare la următoarea propunere) — garanția exactă: la fn_red_fan_claim_lot.
 -- Lock-uri la aplicare (punct unic, NOWAIT, ordine FIXĂ: red_proiecte -> red_loturi_plicuire -> red_plicuri, toate SHARE ROW EXCLUSIVE, cerute de
 --   cheile străine; docs/LIVRARE_L15_V2.md §9 „Bugetul de lock”): opresc DOAR scrierile în cele trei tabele Redări (nu citirile, nu FOR SHARE /
 --   FOR UPDATE), până la COMMIT — inclusiv pasul „după” al runnerului. Bugetul = 1 s cu ceasul pornit IMEDIAT ÎNAINTEA PRIMEI ÎNCERCĂRI (nu la
@@ -186,9 +188,19 @@ CREATE TABLE public.red_fan_loturi (
   marcat_la timestamptz NOT NULL DEFAULT now(),
   prima_aprobare_la timestamptz,
   prima_aprobare_de uuid,
-  CONSTRAINT red_fan_loturi_prima_aprobare CHECK ((prima_aprobare_la IS NULL) = (prima_aprobare_de IS NULL))
+  -- TIRAJUL curent (runda 3, Jakarinos #1118 r2 P1): sha256 pe manifestul tipărit (pozițiile, plicurile, AWB-urile, în ordine;
+  -- redariFan.mjs::cheieTiraj), fixat de PRIMA descărcare (etichete sau arhiva documentelor) și cerut identic la fiecare descărcare
+  -- următoare; tiraj_nr = câte tiraje au început pe lot (1, 2, …). Scris DOAR prin fn_red_fan_tiraj. Nu e acoperit de garda marcajului:
+  -- se schimbă și după prima aprobare (doar prin RPC, owner pentru înlocuire).
+  tiraj_cheie text CHECK (tiraj_cheie IS NULL OR tiraj_cheie ~ '^[0-9a-f]{64}$'),
+  tiraj_nr integer NOT NULL DEFAULT 0 CHECK (tiraj_nr >= 0),
+  tiraj_la timestamptz,
+  tiraj_de uuid,
+  CONSTRAINT red_fan_loturi_prima_aprobare CHECK ((prima_aprobare_la IS NULL) = (prima_aprobare_de IS NULL)),
+  CONSTRAINT red_fan_loturi_tiraj CHECK ((tiraj_cheie IS NULL) = (tiraj_la IS NULL) AND (tiraj_la IS NULL) = (tiraj_de IS NULL)
+    AND (tiraj_cheie IS NULL) = (tiraj_nr = 0))
 );
-COMMENT ON TABLE public.red_fan_loturi IS 'Redări FAN Courier: decizia owner-ului „lot de TEST / lot real”, înainte de aprobare; imuabilă după PRIMA aprobare (prima_aprobare_la, pusă de fn_red_fan_aproba).';
+COMMENT ON TABLE public.red_fan_loturi IS 'Redări FAN Courier: decizia owner-ului „lot de TEST / lot real”, înainte de aprobare; imuabilă după PRIMA aprobare (prima_aprobare_la, pusă de fn_red_fan_aproba). Plus tirajul curent (cheia manifestului tipărit), scris doar prin fn_red_fan_tiraj.';
 
 -- gardă pe ORICE cale (L07): după prima aprobare nimic din rând nu se mai schimbă; marcajul nu se șterge
 CREATE FUNCTION public.fn_red_fan_loturi_garda() RETURNS trigger
@@ -336,6 +348,46 @@ BEGIN
   RETURN p_test;
 END $fn$;
 
+-- (0c) TIRAJUL unui lot FAN (runda 3, Jakarinos #1118 r2 P1): toate descărcările unui tiraj (fiecare parte a etichetelor, din funcția edge,
+-- și arhiva documentelor, din ecranul Plicuri) cer ACEEAȘI cheie de manifest. p_cheie = sha256 pe manifestul din care se construiește
+-- descărcarea (redariFan.mjs::cheieTiraj, aceeași funcție în edge și în ecran, L19).
+--   p_inlocuieste NULL (admin / editor / owner): fără tiraj început → îl începe (nr + 1, momentul, autorul = auth.uid()); aceeași cheie → OK;
+--     altă cheie → refuz RD020 „tirajul s-a schimbat; retipărește tot lotul” (nimic schimbat, nimic descărcat).
+--   p_inlocuieste = cheia tirajului început (DOAR owner, după confirmarea „distruge foile tirajului vechi”): CAS pe ea → tirajul nou cu p_cheie
+--     (nr + 1); altă cheie curentă = refuz RD020 (altcineva a înlocuit-o între timp). Aceeași cheie = nimic de înlocuit (rezultat „același”).
+-- Ce garantează: toate artefactele unui tiraj sunt construite din manifestul cu cheia lui (o descărcare dintr-o stare diferită e refuzată).
+-- NU garantează că manifestul e încă cel curent la descărcare (o schimbare comisă după verificare apare la următoarea descărcare, ca refuz).
+-- Cheia vine de la apelant (edge: din citirile ei; ecran: din citirile omului): BD-ul nu reface manifestul — protejează împotriva derivei
+-- între descărcări, nu împotriva unui client care minte (arhiva se construiește oricum în browser). Lock: lot FOR UPDATE → red_fan_loturi.
+CREATE FUNCTION public.fn_red_fan_tiraj(p_lot_id uuid, p_cheie text, p_inlocuieste text) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_fl record; v_stare text;
+BEGIN
+  IF auth.uid() IS NULL OR coalesce(public.fn_red_nivel(), '') NOT IN ('admin', 'editor')
+     OR (p_inlocuieste IS NOT NULL AND NOT public.fn_red_fan_e_owner()) THEN
+    RAISE EXCEPTION 'redari fan: fara drept pe tiraj (inlocuirea: doar owner-ul)' USING ERRCODE = '42501'; END IF;
+  IF p_lot_id IS NULL OR p_cheie IS NULL OR p_cheie !~ '^[0-9a-f]{64}$' OR (p_inlocuieste IS NOT NULL AND p_inlocuieste !~ '^[0-9a-f]{64}$') THEN
+    RAISE EXCEPTION 'redari fan: cheie de tiraj invalida' USING ERRCODE = '22023'; END IF;
+  PERFORM 1 FROM public.red_loturi_plicuire WHERE id = p_lot_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'redari fan: lot inexistent' USING ERRCODE = 'P0002'; END IF;
+  SELECT lot_id, tiraj_cheie, tiraj_nr INTO v_fl FROM public.red_fan_loturi WHERE lot_id = p_lot_id FOR UPDATE;
+  IF v_fl.lot_id IS NULL THEN RAISE EXCEPTION 'redari fan: lot FAN nemarcat (test / real)' USING ERRCODE = 'P0001'; END IF;
+  IF v_fl.tiraj_cheie IS NOT DISTINCT FROM p_cheie THEN
+    v_stare := 'acelasi';
+  ELSIF p_inlocuieste IS NULL AND v_fl.tiraj_cheie IS NULL THEN
+    v_stare := 'inceput';
+  ELSIF p_inlocuieste IS NOT NULL AND v_fl.tiraj_cheie IS NOT DISTINCT FROM p_inlocuieste THEN
+    v_stare := 'inlocuit';
+  ELSE
+    RAISE EXCEPTION 'redari fan: tirajul s-a schimbat (tirajul nr. % a inceput cu alt continut); retipareste tot lotul', v_fl.tiraj_nr USING ERRCODE = 'RD020';
+  END IF;
+  IF v_stare <> 'acelasi' THEN
+    UPDATE public.red_fan_loturi SET tiraj_cheie = p_cheie, tiraj_nr = tiraj_nr + 1, tiraj_la = now(), tiraj_de = auth.uid() WHERE lot_id = p_lot_id;
+  END IF;
+  RETURN (SELECT jsonb_build_object('stare', v_stare, 'cheie', tiraj_cheie, 'nr', tiraj_nr, 'inceput_la', tiraj_la)
+            FROM public.red_fan_loturi WHERE lot_id = p_lot_id);
+END $fn$;
+
 -- (1) Propunere (admin/editor): un rând „propus” pe plic, cu hash-ul datelor și tariful estimat (opțional).
 -- Re-propunerea unui rând „aprobat” (datele s-au schimbat după aprobare) îl readuce la „propus” și șterge aprobarea rândului (NU și
 -- prima aprobare a lotului: marcajul rămâne imuabil). Lock: lot FOR UPDATE → plic FOR UPDATE → rândul viu al plicului FOR UPDATE.
@@ -404,6 +456,11 @@ END $fn$;
 -- pe solicitare (L04/L22). p_hashuri = hash-urile recalculate din datele CURENTE (≠ aprobate → refuz total); p_surse = amprenta SURSELOR
 -- citite de funcția edge, RECALCULATĂ aici, în tranzacția rezervării (runda 2): o schimbare a contactelor între citire și claim = refuz total.
 -- Un plic cu AWB (aici sau pe plic) nu ajunge aici: doar „aprobat” se rezervă, iar un singur rând viu pe plic (index unic).
+-- CE GARANTEAZĂ (runda 3, Jakarinos #1118 r2, S2): rezervarea fixează CORPUL APROBAT (hash_date, aprobat de owner) verificat la momentul
+--   claim-ului: sursele citite de funcția edge = sursele văzute de această tranzacție (instantaneul instrucțiunii, READ COMMITTED). Ce pleacă
+--   la FAN e corpul aprobat, construit de edge din acele citiri — nu se mai recitește nimic după claim. O modificare de contact comisă DUPĂ
+--   verificare (inclusiv una necomisă în timpul verificării și comisă înaintea COMMIT-ului claim-ului — contactele nu se blochează) NU schimbă
+--   ce pleacă și apare ca diferență (hash nou) la următoarea propunere. NU se garantează „datele sunt actuale la COMMIT / la POST”.
 -- Lock: lot FOR UPDATE → plicuri ORDER BY id FOR UPDATE → rânduri ORDER BY id FOR UPDATE (convocările / contactele doar citite).
 CREATE FUNCTION public.fn_red_fan_claim_lot(p_lot_id uuid, p_ids uuid[], p_hashuri text[], p_surse text[]) RETURNS uuid
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -518,10 +575,11 @@ END $fn$;
 -- (7) Urmărirea (DOAR owner, din funcția edge): ≤ 100 de rânduri ale lotului, fiecare cu AWB-ul lui și VERSIUNEA de urmărire citită;
 -- scrie DOAR câmpurile de urmărire (propuneri). Orice rând străin / AWB diferit / valoare în afara listei = refuz total. Runda 2 (L03):
 -- un rând se scrie doar dacă versiunea e încă cea citită ȘI evenimentul nu e mai vechi decât cel scris; altfel e „depășit” (nescris,
--- numărat). Datele locale vin ca text „AAAA-LL-ZZ HH:MM:SS” (ora României, L17). Întoarce {scrise, depasite}. Lock: rânduri ORDER BY id.
+-- numărat). Datele locale vin ca text „AAAA-LL-ZZ HH:MM:SS” (ora României, L17). Întoarce {scrise, pastrate, depasite} (suma = rândurile
+-- primite; „păstrate” = runda 3, răspuns fără cronologie pe un rând cu eveniment cunoscut). Lock: rânduri ORDER BY id.
 CREATE FUNCTION public.fn_red_fan_urmarire(p_lot_id uuid, p_randuri jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE v_n integer; v_bune integer; v_dist integer; v_scrise integer;
+DECLARE v_n integer; v_bune integer; v_dist integer; v_scrise integer; v_pastrate integer;
 BEGIN
   IF NOT public.fn_red_fan_e_owner() THEN RAISE EXCEPTION 'redari fan: doar owner-ul' USING ERRCODE = '42501'; END IF;
   IF p_lot_id IS NULL OR p_randuri IS NULL OR jsonb_typeof(p_randuri) <> 'array' OR jsonb_array_length(p_randuri) NOT BETWEEN 1 AND 100 THEN
@@ -540,16 +598,24 @@ BEGIN
   IF EXISTS (SELECT 1 FROM jsonb_to_recordset(p_randuri) AS u(id uuid, awb text)
              LEFT JOIN public.red_fan_awb a ON a.id = u.id AND a.lot_id = p_lot_id AND a.awb = u.awb AND a.stare IN ('generat', 'ridicat')
              WHERE a.id IS NULL) THEN RAISE EXCEPTION 'redari fan: rand strain sau AWB diferit' USING ERRCODE = 'P0001'; END IF;
+  -- Runda 3 (Jakarinos #1118 r2 P2, L18): un răspuns FĂRĂ cronologie comparabilă (ultim_eveniment_la NULL: „fără evenimente”, `events: []`)
+  -- NU șterge informația cunoscută: pe un rând care are deja un eveniment datat se consemnează doar „verificat la” (urmarit_la, versiunea + 1),
+  -- restul rămâne neschimbat („păstrat”). Cu cronologie: evenimentul nu poate fi mai vechi decât cel scris (altfel „depășit”), iar o ridicare /
+  -- livrare cunoscută nu dispare (ridicat_propus / livrat_la: valoarea nouă sau, dacă lipsește, cea cunoscută).
+  UPDATE public.red_fan_awb a SET urmarit_la = now(), updated_at = now(), versiune_urmarire = a.versiune_urmarire + 1
+    FROM jsonb_to_recordset(p_randuri) AS u(id uuid, versiune integer, ultim_eveniment_la text)
+   WHERE a.id = u.id AND a.versiune_urmarire = u.versiune AND a.ultim_eveniment_la IS NOT NULL AND u.ultim_eveniment_la IS NULL;
+  GET DIAGNOSTICS v_pastrate = ROW_COUNT;
   UPDATE public.red_fan_awb a SET urmarire_stare = u.urmarire_stare, ultim_eveniment = u.ultim_eveniment,
-         ultim_eveniment_la = (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest'), ridicat_propus = u.ridicat_propus::date,
-         livrat_la = (u.livrat_la::timestamp AT TIME ZONE 'Europe/Bucharest'), retur_propus = u.retur_propus, urmarit_la = now(), updated_at = now(),
+         ultim_eveniment_la = (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest'), ridicat_propus = coalesce(u.ridicat_propus::date, a.ridicat_propus),
+         livrat_la = coalesce(u.livrat_la::timestamp AT TIME ZONE 'Europe/Bucharest', a.livrat_la), retur_propus = u.retur_propus, urmarit_la = now(), updated_at = now(),
          versiune_urmarire = a.versiune_urmarire + 1
     FROM jsonb_to_recordset(p_randuri) AS u(id uuid, awb text, versiune integer, urmarire_stare text, ultim_eveniment text,
       ultim_eveniment_la text, ridicat_propus text, livrat_la text, retur_propus text)
    WHERE a.id = u.id AND a.versiune_urmarire = u.versiune
-     AND (a.ultim_eveniment_la IS NULL OR u.ultim_eveniment_la IS NULL OR (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest') >= a.ultim_eveniment_la);
+     AND (a.ultim_eveniment_la IS NULL OR (u.ultim_eveniment_la IS NOT NULL AND (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest') >= a.ultim_eveniment_la));
   GET DIAGNOSTICS v_scrise = ROW_COUNT;
-  RETURN jsonb_build_object('scrise', v_scrise, 'depasite', v_n - v_scrise);
+  RETURN jsonb_build_object('scrise', v_scrise, 'pastrate', v_pastrate, 'depasite', v_n - v_scrise - v_pastrate);
 END $fn$;
 
 -- (8) Confirmările de livrare (DOAR owner): doar starea (lipsă / primită — de verificat de om / formă necunoscută); răspunsul FAN nu se păstrează.
@@ -596,8 +662,9 @@ REVOKE ALL ON FUNCTION public.fn_red_fan_e_owner(), public.fn_red_fan_suma(numer
   public.fn_red_fan_loturi_garda(), public.fn_red_fan_setari_seteaza(integer), public.fn_red_fan_lot_marcheaza(uuid, boolean),
   public.fn_red_fan_propune(uuid, text, numeric), public.fn_red_fan_aproba(uuid, uuid[], text[]), public.fn_red_fan_claim_lot(uuid, uuid[], text[], text[]),
   public.fn_red_fan_rezultate(uuid, jsonb), public.fn_red_fan_reconciliaza(uuid, text, numeric, numeric, text), public.fn_red_fan_ridicat(uuid, date),
-  public.fn_red_fan_urmarire(uuid, jsonb), public.fn_red_fan_confirmari(uuid, jsonb), public.fn_red_fan_anulat(uuid, text, text) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.fn_red_fan_setari_seteaza(integer), public.fn_red_fan_lot_marcheaza(uuid, boolean),
+  public.fn_red_fan_urmarire(uuid, jsonb), public.fn_red_fan_confirmari(uuid, jsonb), public.fn_red_fan_anulat(uuid, text, text),
+  public.fn_red_fan_tiraj(uuid, text, text) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_red_fan_setari_seteaza(integer), public.fn_red_fan_lot_marcheaza(uuid, boolean), public.fn_red_fan_tiraj(uuid, text, text),
   public.fn_red_fan_propune(uuid, text, numeric), public.fn_red_fan_aproba(uuid, uuid[], text[]), public.fn_red_fan_claim_lot(uuid, uuid[], text[], text[]),
   public.fn_red_fan_rezultate(uuid, jsonb), public.fn_red_fan_reconciliaza(uuid, text, numeric, numeric, text), public.fn_red_fan_ridicat(uuid, date),
   public.fn_red_fan_urmarire(uuid, jsonb), public.fn_red_fan_confirmari(uuid, jsonb), public.fn_red_fan_anulat(uuid, text, text) TO authenticated;
@@ -640,7 +707,7 @@ BEGIN
       ('public.fn_red_fan_claim_lot(uuid, uuid[], text[], text[])', 'plpgsql', true, true), ('public.fn_red_fan_rezultate(uuid, jsonb)', 'plpgsql', true, true),
       ('public.fn_red_fan_reconciliaza(uuid, text, numeric, numeric, text)', 'plpgsql', true, true), ('public.fn_red_fan_ridicat(uuid, date)', 'plpgsql', true, true),
       ('public.fn_red_fan_urmarire(uuid, jsonb)', 'plpgsql', true, true), ('public.fn_red_fan_confirmari(uuid, jsonb)', 'plpgsql', true, true),
-      ('public.fn_red_fan_anulat(uuid, text, text)', 'plpgsql', true, true)
+      ('public.fn_red_fan_anulat(uuid, text, text)', 'plpgsql', true, true), ('public.fn_red_fan_tiraj(uuid, text, text)', 'plpgsql', true, true)
     ) v(fn, limbaj, definer, exec_auth) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
                     WHERE p.oid = to_regprocedure(r.fn) AND l.lanname = r.limbaj AND p.prosecdef = r.definer
@@ -651,8 +718,8 @@ BEGIN
       RAISE EXCEPTION '20261212a post: functia % (limbaj / definer / search_path / owner / EXECUTE)', r.fn;
     END IF;
   END LOOP;
-  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_red\_fan\_%') <> 16 THEN
-    RAISE EXCEPTION '20261212a post: numarul functiilor fn_red_fan_* difera de 16';
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_red\_fan\_%') <> 17 THEN
+    RAISE EXCEPTION '20261212a post: numarul functiilor fn_red_fan_* difera de 17';
   END IF;
   -- trigger-ul gărzii marcajului: forma exactă, activ, singurul de pe tabel (în afara celor interne de FK)
   IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_fan_loturi'::regclass AND NOT tgisinternal) <> 1

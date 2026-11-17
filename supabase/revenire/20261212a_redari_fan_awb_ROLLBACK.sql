@@ -1,10 +1,10 @@
 -- Revenire 20261212a_redari_fan_awb. NEAPLICAT (ca și migrarea). Fără GO de execuție: doar la cererea explicită a owner-ului (supabase/revenire/README.md).
 -- Scoate tot ce a creat migrarea: tabelele red_fan_awb, red_fan_loturi, red_fan_setari (cu politicile, indecșii, trigger-ul gărzii marcajului
--- și cheile lor) și cele 16 funcții fn_red_fan_*. Tabelele și funcțiile existente NU se ating.
+-- și cheile lor) și cele 17 funcții fn_red_fan_* (runda 3: + fn_red_fan_tiraj). Tabelele și funcțiile existente NU se ating.
 -- REFUZĂ (L14) dacă există ORICE rând FAN (un AWB generat e evidență de cost și dovadă de expediere: se PĂSTREAZĂ), un lot marcat (test / real)
 -- sau setări schimbate față de cele implicite. Cu date: NU se rulează; se oprește doar generarea (TRANSPORT_REAL_ACTIV = false + funcția edge
 -- ștearsă), tabelele rămân.
--- Starea verificată înainte (doar catalog) și din nou SUB LOCK: tabelele, numele + semnăturile EXACTE ale celor 16 funcții (nicio altă
+-- Starea verificată înainte (doar catalog) și din nou SUB LOCK: tabelele, numele + semnăturile EXACTE ale celor 17 funcții (nicio altă
 -- fn_red_fan_*), trigger-ul gărzii, nicio dependență străină (vederi / chei străine / politici pe alte tabele) spre obiectele migrării.
 --
 -- LIVRAREA = prin runner, ca migrarea, DOAR cu plafon (forma revenirilor: FĂRĂ amprentă globală, plafonul 2000 al revenirilor —
@@ -26,7 +26,7 @@ DECLARE v_plafon text; v_incercari integer := 0; v_pas integer; v_rau text;
     'fn_red_fan_loturi_garda()', 'fn_red_fan_setari_seteaza(integer)', 'fn_red_fan_lot_marcheaza(uuid,boolean)', 'fn_red_fan_propune(uuid,text,numeric)',
     'fn_red_fan_aproba(uuid,uuid[],text[])', 'fn_red_fan_claim_lot(uuid,uuid[],text[],text[])', 'fn_red_fan_rezultate(uuid,jsonb)',
     'fn_red_fan_reconciliaza(uuid,text,numeric,numeric,text)', 'fn_red_fan_ridicat(uuid,date)', 'fn_red_fan_urmarire(uuid,jsonb)',
-    'fn_red_fan_confirmari(uuid,jsonb)', 'fn_red_fan_anulat(uuid,text,text)'];
+    'fn_red_fan_confirmari(uuid,jsonb)', 'fn_red_fan_anulat(uuid,text,text)', 'fn_red_fan_tiraj(uuid,text,text)'];
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
      OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261212a_redari_fan_awb_ROLLBACK:' || txid_current() THEN
@@ -75,7 +75,7 @@ BEGIN
     IF to_regclass('public.red_fan_awb') IS NULL OR to_regclass('public.red_fan_loturi') IS NULL OR to_regclass('public.red_fan_setari') IS NULL THEN
       RAISE EXCEPTION '20261212a revenire: starea nu e cea din 20261212a (pasul %, tabele)', v_pas;
     END IF;
-    -- exact cele 16 funcții, cu semnăturile lor; nicio altă fn_red_fan_*
+    -- exact cele 17 funcții, cu semnăturile lor; nicio altă fn_red_fan_*
     SELECT string_agg(x.f, ', ') INTO v_rau FROM (
       SELECT f FROM unnest(v_functii) f WHERE to_regprocedure('public.' || f) IS NULL
       UNION ALL
@@ -118,6 +118,7 @@ BEGIN
   DROP TABLE public.red_fan_awb;
   DROP TABLE public.red_fan_loturi;
   DROP TABLE public.red_fan_setari;
+  DROP FUNCTION public.fn_red_fan_tiraj(uuid, text, text);
   DROP FUNCTION public.fn_red_fan_anulat(uuid, text, text);
   DROP FUNCTION public.fn_red_fan_confirmari(uuid, jsonb);
   DROP FUNCTION public.fn_red_fan_urmarire(uuid, jsonb);

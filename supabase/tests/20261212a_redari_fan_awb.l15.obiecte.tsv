@@ -35,6 +35,10 @@ coloana	coloana public.red_fan_loturi.prima_aprobare_de	creat
 coloana	coloana public.red_fan_loturi.prima_aprobare_la	creat
 coloana	coloana public.red_fan_loturi.proiect_id	creat
 coloana	coloana public.red_fan_loturi.test	creat
+coloana	coloana public.red_fan_loturi.tiraj_cheie	creat
+coloana	coloana public.red_fan_loturi.tiraj_de	creat
+coloana	coloana public.red_fan_loturi.tiraj_la	creat
+coloana	coloana public.red_fan_loturi.tiraj_nr	creat
 coloana	coloana public.red_fan_setari.actualizat_de	creat
 coloana	coloana public.red_fan_setari.actualizat_la	creat
 coloana	coloana public.red_fan_setari.id	creat
@@ -65,6 +69,9 @@ constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_lot_id_fkey
 constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_pkey	creat
 constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_prima_aprobare	creat
 constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_proiect_id_fkey	creat
+constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_tiraj	creat
+constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_tiraj_cheie_check	creat
+constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_tiraj_nr_check	creat
 constrangere	constrangere tabel public.red_fan_setari.red_fan_setari_autor	creat
 constrangere	constrangere tabel public.red_fan_setari.red_fan_setari_id_check	creat
 constrangere	constrangere tabel public.red_fan_setari.red_fan_setari_limita_lot_check	creat
@@ -84,6 +91,7 @@ functie	functie public.fn_red_fan_ridicat(uuid,date)	creat
 functie	functie public.fn_red_fan_setari_seteaza(integer)	creat
 functie	functie public.fn_red_fan_suma(numeric)	creat
 functie	functie public.fn_red_fan_surse(uuid)	creat
+functie	functie public.fn_red_fan_tiraj(uuid,text,text)	creat
 functie	functie public.fn_red_fan_urmarire(uuid,jsonb)	creat
 politica	politica public.red_fan_awb.red_fan_awb_citire	creat
 politica	politica public.red_fan_loturi.red_fan_loturi_citire	creat

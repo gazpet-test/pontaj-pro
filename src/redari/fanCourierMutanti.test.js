@@ -21,13 +21,18 @@ const CAI = {
 // importurile relative ale modulelor copiate: handler-ul lângă fanLot, setari.js din arborele de lucru (neschimbat de această livrare)
 const SETARI = pathToFileURL(resolve('src/redari/setari.js')).href
 const adapteaza = (nume, t) => nume === 'fanLot.js' ? t.replace("'../../supabase/functions/_shared/redariFanHandler.mjs'", "'./redariFanHandler.mjs'")
+  .replace("'../../supabase/functions/_shared/redariFan.mjs'", "'./redariFan.mjs'")
   : nume === 'plicuri.js' ? t.replace("'./setari.js'", `'${SETARI}'`) : t
 const SURSE = Object.fromEntries(Object.entries(CAI).map(([n, c]) => [n, adapteaza(n, readFileSync(c, 'utf8'))]))
-const VECHI = '31f0473d589fff7197785973eff6d301e4f455b0'
-const surseVechi = (() => {
-  try { return Object.fromEntries(Object.entries(CAI).map(([n, c]) => [n, adapteaza(n, execFileSync('git', ['show', `${VECHI}:${c}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))])) }
+const surseDin = sha => {
+  try { return Object.fromEntries(Object.entries(CAI).map(([n, c]) => [n, adapteaza(n, execFileSync('git', ['show', `${sha}:${c}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))])) }
   catch { return null }
-})()
+}
+const VECHI = '31f0473d589fff7197785973eff6d301e4f455b0'
+const surseVechi = surseDin(VECHI)
+// runda 3: head-ul revizuit în runda 2 (verdictul Jakarinos #1118 r2)
+const VECHI_R2 = '0716f5b3a67ad43ba9b537c9e03835c2df6115a6'
+const surseR2 = surseDin(VECHI_R2)
 // folderul temporar stă în .tmp/ (ignorat de git): pe Windows, calea scurtă din %TEMP% (GAZPET~1) nu se încarcă prin vite
 const TMP = join(process.cwd(), '.tmp')
 mkdirSync(TMP, { recursive: true })
@@ -52,7 +57,20 @@ async function incarca(mutatie, surse = SURSE) {
 const LOT = { id: '11111111-2222-4333-8444-555555555555', proiect_id: 'p1', nr_lot: 'PP-0001' }
 const contact = { telefon: '0700000001', adresa_strada: 'Str. Fictivă 1', adresa_sat: 'Sat', adresa_judet: 'Prahova' }
 const raspuns = (status, corp) => ({ status, json: async () => corp, arrayBuffer: async () => new ArrayBuffer(0) })
-async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza' }, randuriPlus = {}, rpc }) {
+// fn_red_fan_tiraj SIMULAT după contractul din migrare (semantica SQL e probată pe PGlite); `stare` = rândul lotului, comun descărcărilor
+function tirajSimulat(stare = { cheie: null, nr: 0, la: null }) {
+  return args => {
+    const rasp = s => ({ data: { stare: s, cheie: stare.cheie, nr: stare.nr, inceput_la: stare.la } })
+    if (stare.cheie && stare.cheie === args.p_cheie) return rasp('acelasi')
+    if ((args.p_inlocuieste == null && stare.cheie == null) || (args.p_inlocuieste != null && args.p_inlocuieste === stare.cheie)) {
+      Object.assign(stare, { cheie: args.p_cheie, nr: stare.nr + 1, la: '2026-11-17T16:05:00+00:00' })
+      return rasp(args.p_inlocuieste == null ? 'inceput' : 'inlocuit')
+    }
+    return { error: { code: 'RD020', message: 'redari fan: tirajul s-a schimbat; retipareste tot lotul' } }
+  }
+}
+async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza' }, randuriPlus = {}, rpc, stareTiraj, raspUrmarire }) {
+  const tiraj = tirajSimulat(stareTiraj)
   const plicuri = Array.from({ length: n }, (_, i) => ({ id: `pl${i + 1}`, nr_plic: `PL-TST-${String(i + 1).padStart(4, '0')}`, destinatar_nume: 'PERSOANA FICTIVA', stare: 'activ' }))
   const convocari = plicuri.map((p, i) => ({ id: `c${i}`, plic_id: p.id, detinator_id: `d${i}` }))
   const contacte = plicuri.map((p, i) => ({ detinator_id: `d${i}`, ...contact }))
@@ -70,7 +88,9 @@ async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza
     secrete: () => ({ username: 'u', password: 'p', clientId: 'C' }), randuriLot: async () => ({ data: randuri }), proiect: async () => ({ data: { cod: 'TEST-RAZVAN' } }),
     datePlicuri: async () => ({ data: { plicuri, convocari, contacte } }), plicuriLot: async () => ({ data: plicuri }), pauza: async () => {}, subtle: webcrypto.subtle, fetch,
     rpc: rpc || (async (nume, args) => { jurnal.push({ nume, args }); return nume === 'fn_red_fan_claim_lot' ? { data: '99999999-0000-4000-8000-000000000001' }
-      : ['fn_red_fan_urmarire', 'fn_red_fan_confirmari'].includes(nume) ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : { data: (args.p_rezultate || args.p_randuri || []).length } }),
+      : nume === 'fn_red_fan_tiraj' ? tiraj(args)
+      : nume === 'fn_red_fan_urmarire' ? (raspUrmarire ? raspUrmarire(args) : { data: { scrise: args.p_randuri.length, pastrate: 0, depasite: 0 } })
+      : nume === 'fn_red_fan_confirmari' ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : { data: (args.p_rezultate || args.p_randuri || []).length } }),
   }
   const r = await M.tr.executaActiuneFan({ corp, lot: LOT }, deps)
   return { r, apeluri, jurnal, plicuri, convocari, contacte, randuri }
@@ -140,7 +160,7 @@ const VERIFICARI = {
   async operatiiEcran(M) {
     const o = M.lot.stariOperatii({ evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] })
     const p = M.lot.stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] })
-    return JSON.stringify(o.map(x => x.cheie)) === '["reconciliere","plafon","anulare","evenimente"]' && o.every(x => !x.activ) && p.every(x => x.activ)
+    return JSON.stringify(o.map(x => x.cheie).filter(k => k !== 'tiraj')) === '["reconciliere","plafon","anulare","evenimente"]' && o.every(x => !x.activ) && p.every(x => x.activ)
   },
   // 6 (P2): mesajul FAN (cu valoarea respinsă) nu ajunge în motiv; doar câmpul din lista albă
   async motivFaraPii(M) {
@@ -179,6 +199,66 @@ const VERIFICARI = {
     const { jurnal } = await ruleaza(M, 2, { handler: () => raspuns(200, { response: [{ awbNumber: '3000000002', info: { observation: 'PL-TST-0002' } }, { awbNumber: '3000000001', info: { observation: 'PL-TST-0001' } }] }) })
     const scrise = jurnal.find(j => j.nume === 'fn_red_fan_rezultate')?.args.p_rezultate.map(x => x.stare).join()
     return rez.every(x => x.stare === 'necunoscut') && bun.map(x => x.asociere).join() === 'referinta,pozitie' && scrise === 'necunoscut,necunoscut'
+  },
+  // ── runda 3 (verdictul #1118 r2); fiecare PICĂ pe 0716f5b3 ──
+  // r2 P1, scenariul recenzentului: etichete pentru 1, 3 (2 respins) → tirajul începe; apoi 2 rezolvat → arhiva (și o parte nouă de etichete)
+  // cu manifestul 1, 2, 3 = REFUZ RD020 / 409, nicio etichetă cerută; arhiva în starea tirajului trece, cu identificatorul în nume.
+  async tirajComun(M) {
+    const pdf = new TextEncoder().encode('%PDF-1.7 x')
+    const st = { cheie: null, nr: 0, la: null }
+    const lbl = () => ({ status: 200, arrayBuffer: async () => pdf.buffer })
+    const a = await ruleaza(M, 3, { stari: { 0: 'generat', 1: 'eroare', 2: 'generat' }, randuriPlus: { 0: { awb: '3000000001' }, 2: { awb: '3000000003' } },
+      corp: { actiune: 'eticheta', manifest_cheie: '1:PL-TST-0001:3000000001|2:PL-TST-0003:3000000003' }, handler: lbl, stareTiraj: st })
+    const id = a.r.body.tiraj.id
+    const arhiva = async x => {
+      const pl = x.plicuri.map(p => ({ ...p, opis_path: `o/${p.id}` }))
+      const cv = Object.fromEntries(pl.map(p => [p.id, [{ conv_id: `c${p.id}`, nr_document: 'C-000001', fisier_convocator_path: `f/${p.id}` }]]))
+      const t = tirajSimulat(st)
+      try { return await M.lot.pregatestePachetFan({ rpc: async (n, y) => t(y), lot: LOT, fanLot: { test: false }, randuriFan: x.randuri, plicuri: pl, convocariPePlic: cv, subtle: webcrypto.subtle }) }
+      catch (e) { return { refuz: e?.code || 'exceptie' } }
+    }
+    const inStareaTirajului = await arhiva(a)
+    const b = await ruleaza(M, 3, { stari: { 0: 'generat', 1: 'generat', 2: 'generat' }, randuriPlus: { 0: { awb: '3000000001' }, 1: { awb: '3000000002' }, 2: { awb: '3000000003' } },
+      corp: { actiune: 'eticheta', manifest_cheie: '1:PL-TST-0001:3000000001|2:PL-TST-0002:3000000002|3:PL-TST-0003:3000000003' }, handler: lbl, stareTiraj: st })
+    const dupa = await arhiva(b)
+    return a.r.body.cod === 'ok' && /^[0-9A-F]{8}$/.test(id) && st.nr === 1
+      && inStareaTirajului.tiraj?.id === id && inStareaTirajului.plan.fisiere.length === 4 && inStareaTirajului.plan.fisiere.every(f => f.nume.endsWith(`_T${id}.docx`))
+      && b.r.body.cod === 'tiraj_schimbat' && b.apeluri.filter(x => x.cale === '/awb/label').length === 0 && dupa.refuz === 'RD020'
+  },
+  // r2 P1: pagina de control din etichete = cea din arhivă (inclusiv numărul documentelor), cu tirajul în loc de data zilei; valorile scrise de mână
+  async controlIdentic(M) {
+    const pdf = new TextEncoder().encode('%PDF-1.7 x')
+    const st = { cheie: null, nr: 0, la: null }
+    const a = await ruleaza(M, 3, { stari: { 0: 'generat', 1: 'eroare', 2: 'generat' }, randuriPlus: { 0: { awb: '3000000001' }, 2: { awb: '3000000003' } },
+      corp: { actiune: 'eticheta', manifest_cheie: '1:PL-TST-0001:3000000001|2:PL-TST-0003:3000000003' }, handler: () => ({ status: 200, arrayBuffer: async () => pdf.buffer }), stareTiraj: st })
+    const pl = a.plicuri.map(p => ({ ...p, opis_path: `o/${p.id}` }))
+    const cv = { pl1: [{ conv_id: 'c1', nr_document: 'C-000001', fisier_convocator_path: 'f1' }, { conv_id: 'c2', nr_document: 'C-000002', fisier_convocator_path: 'f2' }],
+      pl2: [{ conv_id: 'c3', nr_document: 'C-000003', fisier_convocator_path: 'f3' }], pl3: [{ conv_id: 'c4', nr_document: 'C-000004', fisier_convocator_path: 'f4' }] }
+    const man = M.fan.manifestTiparire({ randuri: a.randuri, plicuri: pl })
+    const tiraj = a.r.body.tiraj, id = tiraj.id
+    const dinEtichete = M.lot.controlLotFan({ lot: LOT, fanLot: { test: false }, manifest: man, plicuri: pl, convocariPePlic: cv, tiraj }).continut
+    const t = tirajSimulat(st)
+    const dinArhiva = (await M.lot.pregatestePachetFan({ rpc: async (n, y) => t(y), lot: LOT, fanLot: { test: false }, randuriFan: a.randuri, plicuri: pl, convocariPePlic: cv, subtle: webcrypto.subtle })).continut
+    const asteptat = [['0001', 'PL-TST-0001', '3000000001', 'PE****** FI*****', 3, '☐'], ['0002', 'PL-TST-0003', '3000000003', 'PE****** FI*****', 2, '☐']]
+    return JSON.stringify(dinEtichete) === JSON.stringify(dinArhiva) && JSON.stringify(dinArhiva.tabel.randuri) === JSON.stringify(asteptat)
+      && dinArhiva.paragrafe[0].startsWith(`Tirajul ${id} (nr. 1 al lotului), început la 17.11.2026 18:05`) && dinArhiva.titlu.endsWith(`tirajul ${id}`)
+      && !dinArhiva.paragrafe.some(p => p.startsWith('Data:'))
+      && M.lot.numeEtichete({ lot: LOT, fanLot: { test: true }, parte: 1, parti: 1, format: 'A6', tiraj }) === `TEST_PP-0001_tiraj-${id}_etichete_A6.pdf`
+      && M.lot.numeControl({ lot: LOT, fanLot: { test: false }, tiraj }) === `PP-0001_tiraj-${id}_pagina_de_control.docx`
+      && M.lot.numeControl({ lot: LOT, fanLot: { test: false }, tiraj, inArhiva: true }) === `0000_tiraj-${id}_pagina_de_control.docx`
+      && M.lot.numeArhiva({ lot: LOT, fanLot: { test: false }, tiraj }) === `PP-0001_tiraj-${id}_documente_in_ordinea_plicurilor.zip`
+  },
+  // r2 P2: lista lipsă ≠ listă goală; `events: []` = fără cronologie (BD-ul păstrează ce știe: „păstrate”); forma veche a scrierii = neconfirmată
+  async urmarireFaraEvenimente(M) {
+    const lipsa = M.fan.rezumatUrmarireFan({ awbNumber: '3000000001' })
+    const gol = M.fan.rezumatUrmarireFan({ awbNumber: '3000000001', events: [] })
+    const baza = { stari: { 0: 'generat' }, randuriPlus: { 0: { awb: '3000000001' } }, corp: { actiune: 'urmarire' },
+      handler: u => raspuns(200, { data: u.searchParams.getAll('awb[]').map(x => ({ awbNumber: x, events: [] })) }) }
+    const r1 = await ruleaza(M, 1, { ...baza, raspUrmarire: () => ({ data: { scrise: 0, pastrate: 1, depasite: 0 } }) })
+    const p = r1.jurnal.find(j => j.nume === 'fn_red_fan_urmarire')?.args.p_randuri[0]
+    const r2 = await ruleaza(M, 1, { ...baza, raspUrmarire: () => ({ data: { scrise: 1, depasite: 0 } }) })
+    return lipsa.urmarire_stare === 'de_verificat' && gol.urmarire_stare === 'fara_evenimente' && gol.ultim_eveniment_la === null
+      && p?.urmarire_stare === 'fara_evenimente' && p.ultim_eveniment_la === null && r1.r.body.cod === 'ok' && r1.r.body.pastrate === 1 && r2.r.body.cod === 'scriere_neconfirmata'
   },
   async confirmareNecunoscuta(M) {
     const c = M.fan.interpreteazaConfirmari(200, [{ awbNumber: '3000000001' }, { ceva: 'fara awb' }], ['3000000001', '3000000002'])
@@ -226,9 +306,21 @@ const MUTANTI = [
   ['numeArhiva', 'plicul pe 3 cifre (forma 31f0473d)', { fisier: 'plicuri.js', din: 'export const CIFRE_PLIC = 4, CIFRE_DOCUMENT = 3', in: 'export const CIFRE_PLIC = 3, CIFRE_DOCUMENT = 3' }],
   ['surseLaClaim', 'claim fără amprenta surselor', { fisier: 'redariFanTransport.mjs', din: ', p_surse: b.map(x => x.surse) })', in: ' })' }],
   ['versiuneUrmarire', 'urmărirea fără versiunea citită', { fisier: 'redariFanTransport.mjs', din: 'return { id: r.id, awb: r.awb, versiune: r.versiune_urmarire, urmarire_stare', in: 'return { id: r.id, awb: r.awb, urmarire_stare' }],
-  ['versiuneUrmarire', 'orice răspuns al BD acceptat ca scriere', { fisier: 'redariFanTransport.mjs', din: "const rezScriere = (w, n) => !w?.error && w?.data && typeof w.data === 'object'", in: "const rezScriere = (w, n) => ({ scrise: n, depasite: 0 }) || !w?.error && w?.data && typeof w.data === 'object'" }],
+  ['versiuneUrmarire', 'orice răspuns al BD acceptat ca scriere', { fisier: 'redariFanTransport.mjs', din: "const rezUrmarire = (w, n) => !w?.error && w?.data && typeof w.data === 'object'", in: "const rezUrmarire = (w, n) => ({ scrise: n, pastrate: 0, depasite: 0 }) || !w?.error && w?.data && typeof w.data === 'object'" }],
   ['referintaContrazisa', 'referința din răspuns ignorată (doar poziția)', { fisier: 'redariFan.mjs', din: '    if (gresit >= 0) return toate(', in: '    if (false) return toate(' }],
   ['referintaContrazisa', 'transportul nu trimite referințele', { fisier: 'redariFanTransport.mjs', din: ', { referinte: b.map(x => x.rand.nr_plic) })', in: ')' }],
+  // runda 3
+  ['tirajComun', 'etichetele fără verificarea tirajului (forma 0716f5b3)', { fisier: 'redariFanTransport.mjs', din: "const t = await deps.rpc('fn_red_fan_tiraj', { p_lot_id: lot.id, p_cheie: ct, p_inlocuieste: null })",
+    in: "const t = { data: { stare: 'acelasi', cheie: ct, nr: 1, inceput_la: '2026-11-17T16:05:00+00:00' } }" }],
+  ['tirajComun', 'arhiva fără verificarea tirajului (forma 0716f5b3)', { fisier: 'fanLot.js', din: "const { data, error } = await rpc('fn_red_fan_tiraj', { p_lot_id: lot.id, p_cheie: cheie, p_inlocuieste: null })",
+    in: "const { data, error } = { data: { stare: 'acelasi', cheie, nr: 1, inceput_la: '2026-11-17T16:05:00+00:00' } }" }],
+  ['tirajComun', 'documentele din arhivă fără identificatorul tirajului', { fisier: 'plicuri.js', din: "const sufix = tiraj ? `_T${tiraj}` : ''", in: "const sufix = ''" }],
+  ['controlIdentic', 'pagina de control fără numărul documentelor (forma 0716f5b3, etichetele)', { fisier: 'fanLot.js', din: 'documente: p.documente })) })', in: "documente: '' })) })" }],
+  ['controlIdentic', 'pagina de control cu data zilei în loc de tiraj', { fisier: 'plicuri.js', din: 'tiraj ? `Tirajul ${tiraj.id}', in: 'false ? `Tirajul ${tiraj.id}' }],
+  ['controlIdentic', 'numele fișierelor fără tiraj', { fisier: 'fanLot.js', din: "const cuTiraj = tiraj => (tiraj?.id ? `_tiraj-${tiraj.id}` : '')", in: "const cuTiraj = tiraj => ''" }],
+  ['urmarireFaraEvenimente', 'lista lipsă = fără evenimente (forma 0716f5b3)', { fisier: 'redariFan.mjs', din: '  if (!Array.isArray(el.events)) return { ...gol', in: '  if (el.events != null && !Array.isArray(el.events)) return { ...gol' },
+    { fisier: 'redariFan.mjs', din: '  for (const e of el.events) {', in: '  for (const e of el.events || []) {' }],
+  ['urmarireFaraEvenimente', '„păstrate” ignorate în raport', { fisier: 'redariFanTransport.mjs', din: 'scrise += w.scrise; pastrate += w.pastrate; depasite += w.depasite', in: 'scrise += w.scrise; depasite += w.depasite' }],
   ['confirmareNecunoscuta', 'elementul fără AWB ignorat', { fisier: 'redariFan.mjs', din: 'if (!lista || lista.some(el => !awbDin(el)))', in: 'if (!lista)' }],
   ['lotTest', 'prefixul TEST_ pierdut', { fisier: 'fanLot.js', din: "fanLot?.test === true ? 'TEST_' : ''", in: "''" }],
   ['lotTest', 'borderoul fără marcaj', { fisier: 'fanLot.js', din: "const cap = fanLot?.test === true ? [['LOT DE TEST", in: "const cap = false ? [['LOT DE TEST" }],
@@ -265,6 +357,14 @@ describe('mutanți FAN (JS)', () => {
   const NOI = ['reconciliereNeinterpretabil', 'manifestComun', 'stergereStricta', 'marcajIstoric', 'operatiiEcran', 'motivFaraPii', 'numeArhiva', 'surseLaClaim', 'versiuneUrmarire', 'referintaContrazisa']
   it.skipIf(!surseVechi).each(NOI)('pe 31f0473d verificarea nouă „%s” PICĂ (constatarea era reală)', async v => {
     const M = await incarca(null, surseVechi)
+    let rez
+    try { rez = await VERIFICARI[v](M) } catch { rez = false }
+    expect(rez).toBe(false)
+  })
+  // runda 3: verificările noi pe head-ul revizuit în runda 2 (0716f5b3) TREBUIE să pice
+  const NOI_R3 = ['tirajComun', 'controlIdentic', 'urmarireFaraEvenimente']
+  it.skipIf(!surseR2).each(NOI_R3)('pe 0716f5b3 verificarea nouă „%s” PICĂ (constatarea era reală)', async v => {
+    const M = await incarca(null, surseR2)
     let rez
     try { rez = await VERIFICARI[v](M) } catch { rez = false }
     expect(rez).toBe(false)

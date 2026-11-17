@@ -147,8 +147,11 @@ export const CIFRE_PLIC = 4, CIFRE_DOCUMENT = 3
  * manifest; plicurile „rămase” (fără AWB, respinse) nu intră deloc în arhivă (nici în etichete).
  * Întoarce { fisiere: [{ nume, path, nr_plic, pozitie }], lipsuri: [text], plicuri: [{ pozitie, nr_plic, documente }] }. `prefix` = 'TEST_' pentru un lot de test.
  */
-export function planPachetPlicuire(plicuri, convocariPePlic, { prefix = '', manifest = null } = {}) {
+// Runda 3 (Jakarinos #1118 r2 P1): `tiraj` = identificatorul scurt al tirajului (lot FAN) → sufixul `_T<id>` pe fiecare document din arhivă
+// (după poziție și număr: sortarea lexicală = ordinea de tipărire rămâne aceeași).
+export function planPachetPlicuire(plicuri, convocariPePlic, { prefix = '', manifest = null, tiraj = null } = {}) {
   const fisiere = [], lipsuri = [], rezumat = []
+  const sufix = tiraj ? `_T${tiraj}` : ''
   const active = [...(plicuri || [])].filter(p => p.stare === 'activ').sort((a, b) => (txt(a.nr_plic) < txt(b.nr_plic) ? -1 : txt(a.nr_plic) > txt(b.nr_plic) ? 1 : 0))
   const pePlic = new Map(active.map(p => [p.id, p]))
   const lista = manifest ? manifest.tiparite.map(t => ({ p: pePlic.get(t.plic_id), pozitie: t.pozitie, nr_plic: t.nr_plic })) : active.map((p, i) => ({ p, pozitie: i + 1, nr_plic: p.nr_plic }))
@@ -157,10 +160,10 @@ export function planPachetPlicuire(plicuri, convocariPePlic, { prefix = '', mani
     const n = String(pozitie).padStart(CIFRE_PLIC, '0'), doc = k => String(k).padStart(CIFRE_DOCUMENT, '0')
     const cs = ordineConvocari(convocariPePlic?.[p.id] || [])
     if (!cs.length) lipsuri.push(`${p.nr_plic}: plicul nu are convocări`)
-    if (txt(p.opis_path)) fisiere.push({ nume: `${prefix}${n}_${p.nr_plic}_${doc(0)}_opis.docx`, path: p.opis_path, nr_plic: p.nr_plic, pozitie })
+    if (txt(p.opis_path)) fisiere.push({ nume: `${prefix}${n}_${p.nr_plic}_${doc(0)}_opis${sufix}.docx`, path: p.opis_path, nr_plic: p.nr_plic, pozitie })
     else lipsuri.push(`${p.nr_plic}: opisul nu e atașat la dosar (butonul „Opis (DOCX) + exemplar la dosar”)`)
     cs.forEach((c, k) => {
-      if (txt(c.fisier_convocator_path)) fisiere.push({ nume: `${prefix}${n}_${p.nr_plic}_${doc(k + 1)}_${txt(c.nr_document).replace(/[^A-Za-z0-9-]/g, '_')}.docx`, path: c.fisier_convocator_path, nr_plic: p.nr_plic, pozitie })
+      if (txt(c.fisier_convocator_path)) fisiere.push({ nume: `${prefix}${n}_${p.nr_plic}_${doc(k + 1)}_${txt(c.nr_document).replace(/[^A-Za-z0-9-]/g, '_')}${sufix}.docx`, path: c.fisier_convocator_path, nr_plic: p.nr_plic, pozitie })
       else lipsuri.push(`${p.nr_plic}: convocarea ${c.nr_document || c.conv_id} nu are fișierul arhivat`)
     })
     rezumat.push({ pozitie, nr_plic: p.nr_plic, documente: 1 + cs.length, destinatar_nume: p.destinatar_nume })
@@ -172,15 +175,29 @@ export function planPachetPlicuire(plicuri, convocariPePlic, { prefix = '', mani
  * Pagina de CONTROL a lotului (Jakarinos #1118 r1 P1): se descarcă odată cu etichetele și cu arhiva documentelor; omul bifează pe fiecare rând
  * că eticheta, prima pagină (opisul) și teancul de documente au aceeași poziție și același număr de plic. Destinatarul e MASCAT (foaie de lucru).
  * randuri: [{ pozitie, nr_plic, awb, destinatar, documente }]; ramase: [{ nr_plic, motiv }]. Fără nume de AI / unelte (document pentru colegi).
+ * Runda 3 (Jakarinos #1118 r2 P1): `tiraj` = { id, nr, inceput_la } (lot FAN) → identificatorul tirajului pe pagină în locul datei zilei:
+ * conținutul depinde DOAR de tiraj + manifest + documente, deci pagina din etichete și cea din arhivă sunt identice (continutPaginaControl).
  */
-export function genereazaPaginaControl({ lot, test = false, randuri, ramase = [] }) {
-  return docxSimplu({ titlu: `${test ? 'LOT DE TEST - ' : ''}Pagina de control - lotul ${lot?.nr_lot || ''}`, paragrafe: [
-    `Data: ${dataText(dataBucuresti())}`,
+export function continutPaginaControl({ lot, test = false, randuri, ramase = [], tiraj = null }) {
+  return { titlu: `${test ? 'LOT DE TEST - ' : ''}Pagina de control - lotul ${lot?.nr_lot || ''}${tiraj ? ` - tirajul ${tiraj.id}` : ''}`, paragrafe: [
+    tiraj ? `Tirajul ${tiraj.id} (nr. ${tiraj.nr} al lotului), început la ${momentBucuresti(tiraj.inceput_la)}. Etichetele, această pagină și documentele aceluiași plic poartă același identificator de tiraj; o foaie cu alt tiraj nu se folosește.`
+      : `Data: ${dataText(dataBucuresti())}`,
     `Plicuri tipărite: ${randuri.length}. Etichetele și documentele au aceeași ordine: poziția din stânga = poziția etichetei în PDF = prefixul fișierelor din arhivă.`,
     ...(ramase.length ? [`Plicuri rămase (NU se tipăresc, nu au etichetă și nu au documente în arhivă): ${ramase.map(r => `${r.nr_plic} (${r.motiv})`).join('; ')}.`] : []),
   ], tabel: { cap: ['Poziția', 'Nr. plic', 'AWB', 'Destinatar', 'Nr. documente', 'Verificat'],
     randuri: randuri.map(r => [String(r.pozitie).padStart(CIFRE_PLIC, '0'), r.nr_plic, r.awb || '-', r.destinatar || '', r.documente ?? '', '☐']) },
-  semnaturi: ['Verificat (plicuiește): ________________', 'Verificat (verifică): ________________'] })
+  semnaturi: ['Verificat (plicuiește): ________________', 'Verificat (verifică): ________________'] }
+}
+export const genereazaPaginaControl = arg => docxSimplu(continutPaginaControl(arg))
+/** DOCX-ul unui conținut deja construit (continutPaginaControl / controlLotFan): aceeași pagină în etichete și în arhivă. */
+export const docxPaginaControl = continut => docxSimplu(continut)
+/** Un moment (timestamptz ISO) → „ZZ.LL.AAAA HH:MM” în Europe/Bucharest (L17); formă necunoscută = textul primit. */
+export function momentBucuresti(v) {
+  const ms = typeof v === 'string' ? Date.parse(v) : NaN
+  if (!Number.isFinite(ms)) return txt(v)
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date(ms)).map(x => [x.type, x.value]))
+  return `${p.day}.${p.month}.${p.year} ${p.hour}:${p.minute}`
 }
 
 export function genereazaOpis(plic, convocari, { proiect, uat, contact } = {}) {

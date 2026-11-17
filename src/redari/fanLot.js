@@ -2,6 +2,8 @@
 // etichetele stărilor, borderoul CSV (fără date personale) și marcajul de TEST. Proiectare: docs/redari/FANCOURIER_INTEGRARE.md §3, §6.
 // Cât timp TRANSPORT_REAL_ACTIV = false (redariFanHandler.mjs), TOȚI pașii sunt dezactivați vizibil, cu motivul „transport oprit”.
 import { TRANSPORT_REAL_ACTIV } from '../../supabase/functions/_shared/redariFanHandler.mjs'
+import { manifestTiparire, cheieTiraj, tirajDin, destinatarMascat, COD_TIRAJ_SCHIMBAT, MESAJ_TIRAJ_SCHIMBAT } from '../../supabase/functions/_shared/redariFan.mjs'
+import { planPachetPlicuire, continutPaginaControl } from './plicuri.js'
 export { TRANSPORT_REAL_ACTIV }
 
 export const MESAJ_TRANSPORT_OPRIT = 'transport oprit'
@@ -54,6 +56,7 @@ export const OPERATII_FAN = Object.freeze([
   { cheie: 'plafon', titlu: 'Plafonul lotului pilot', ajutor: 'doar owner-ul: câte plicuri aprobate pe lot (1…2000)' },
   { cheie: 'anulare', titlu: 'Anulare AWB', ajutor: 'doar owner-ul: AWB generat, neridicat (ștergere la FAN sau marcare după verificarea în selfAWB)' },
   { cheie: 'evenimente', titlu: 'Lista de evenimente FAN', ajutor: 'doar owner-ul: compară codurile FAN cu cele folosite aici' },
+  { cheie: 'tiraj', titlu: 'Tiraj nou', ajutor: 'doar owner-ul: după distrugerea foilor tirajului început, înlocuiește tirajul cu manifestul de acum (se retipărește TOT lotul)' },
 ])
 /** Operațiile cu starea lor: { ...operatie, activ, motiv } (aceleași reguli ca stariPasi: transportul oprit le dezactivează pe toate). */
 export function stariOperatii({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, randuri = [] } = {}) {
@@ -62,6 +65,7 @@ export function stariOperatii({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaI
     plafon: [[esteOwner, 'doar owner-ul']],
     anulare: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['generat']) > 0, 'niciun AWB generat neridicat']],
     evenimente: [[esteOwner, 'doar owner-ul']],
+    tiraj: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['generat', 'ridicat']) > 0, 'niciun AWB generat']],
   }
   const oprit = !transportActiv ? MESAJ_TRANSPORT_OPRIT : !evidentaInstalata ? 'evidența FAN nu e instalată (migrarea neaplicată)' : null
   return OPERATII_FAN.map(p => {
@@ -71,8 +75,46 @@ export function stariOperatii({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaI
   })
 }
 
-/** Numele fișierului de etichete al unei părți (toate părțile au nume distincte, în ordinea pozițiilor). */
-export const numeEtichete = ({ lot, fanLot, parte, parti, format }) => `${prefixLot(fanLot)}${lot?.nr_lot || ''}_etichete_${format}${parti > 1 ? `_partea${String(parte).padStart(2, '0')}din${String(parti).padStart(2, '0')}` : ''}.pdf`
+/** Numele fișierului de etichete al unei părți (toate părțile au nume distincte, în ordinea pozițiilor). Runda 3: cu identificatorul tirajului. */
+const cuTiraj = tiraj => (tiraj?.id ? `_tiraj-${tiraj.id}` : '')
+export const numeEtichete = ({ lot, fanLot, parte, parti, format, tiraj = null }) => `${prefixLot(fanLot)}${lot?.nr_lot || ''}${cuTiraj(tiraj)}_etichete_${format}${parti > 1 ? `_partea${String(parte).padStart(2, '0')}din${String(parti).padStart(2, '0')}` : ''}.pdf`
+/** Pagina de control descărcată separat (cu prima parte a etichetelor) și cea din arhivă (prima, „0000_”): același conținut, același tiraj. */
+export const numeControl = ({ lot, fanLot, tiraj = null, inArhiva = false }) => inArhiva ? `${prefixLot(fanLot)}0000${cuTiraj(tiraj)}_pagina_de_control.docx`
+  : `${prefixLot(fanLot)}${lot?.nr_lot || ''}${cuTiraj(tiraj)}_pagina_de_control.docx`
+export const numeArhiva = ({ lot, fanLot, tiraj = null }) => `${prefixLot(fanLot)}${lot?.nr_lot || ''}${cuTiraj(tiraj)}_documente_in_ordinea_plicurilor.zip`
+
+/**
+ * Pagina de control a unui lot FAN — O SINGURĂ definiție pentru cele două descărcări (runda 3, Jakarinos #1118 r2 P1): prima parte a
+ * etichetelor (ecranul FAN) și arhiva documentelor (Loturi). Intrări: manifestul (manifestTiparire), plicurile lotului și convocările pe plic
+ * (aceleași citiri ale ecranului Plicuri), tirajul verificat în BD. Întoarce { plan, continut } — plan = planPachetPlicuire (fișierele arhivei,
+ * lipsurile), continut = continutPaginaControl (rândurile: poziție, plic, AWB, destinatar mascat, NUMĂRUL DOCUMENTELOR).
+ */
+export function controlLotFan({ lot, fanLot, manifest, plicuri, convocariPePlic, tiraj }) {
+  const plan = planPachetPlicuire(plicuri, convocariPePlic, { prefix: prefixLot(fanLot), manifest, tiraj: tiraj?.id || null })
+  const awbPe = new Map(manifest.tiparite.map(t => [t.pozitie, t.awb]))
+  const continut = continutPaginaControl({ lot, test: fanLot?.test === true, ramase: manifest.ramase, tiraj,
+    randuri: plan.plicuri.map(p => ({ pozitie: p.pozitie, nr_plic: p.nr_plic, awb: awbPe.get(p.pozitie) || '', destinatar: destinatarMascat(p.destinatar_nume), documente: p.documente })) })
+  return { plan, continut }
+}
+
+/**
+ * Arhiva documentelor unui lot FAN (ecranul Plicuri): manifestul din evidența RECITITĂ, planul (orice lipsă = refuz, ÎNAINTE de tiraj), apoi
+ * tirajul verificat în BD cu cheia ACESTUI manifest (fn_red_fan_tiraj: primul apel îl începe; altă cheie decât a tirajului început = refuz RD020,
+ * nimic descărcat). rpc(nume, args) → { data, error } (JWT-ul omului). Întoarce { manifest, tiraj, plan, continut } sau aruncă { code, message }.
+ */
+export async function pregatestePachetFan({ rpc, lot, fanLot, randuriFan, plicuri, convocariPePlic, subtle = globalThis.crypto?.subtle }) {
+  const manifest = manifestTiparire({ randuri: randuriFan, plicuri })
+  if (!manifest.tiparite.length) throw { code: '23514', message: `Lot FAN fără niciun plic cu AWB tipăribil; rămase: ${manifest.ramase.map(r => r.nr_plic).join(', ') || '-'}.` }
+  const verificare = planPachetPlicuire(plicuri, convocariPePlic, { prefix: prefixLot(fanLot), manifest })
+  if (verificare.lipsuri.length) throw { code: '23514', message: `Pachetul nu se face, lipsesc ${verificare.lipsuri.length} documente: ${verificare.lipsuri.slice(0, 8).join('; ')}${verificare.lipsuri.length > 8 ? ' …' : ''}` }
+  const cheie = await cheieTiraj(manifest, subtle)
+  const { data, error } = await rpc('fn_red_fan_tiraj', { p_lot_id: lot.id, p_cheie: cheie, p_inlocuieste: null })
+  if (error?.code === COD_TIRAJ_SCHIMBAT) throw { code: COD_TIRAJ_SCHIMBAT, message: MESAJ_TIRAJ_SCHIMBAT }
+  if (error) throw error
+  const tiraj = tirajDin(data, cheie)
+  if (!tiraj) throw new Error('Tirajul nu s-a putut verifica (răspuns neconfirmat); nimic descărcat.')
+  return { manifest, tiraj, ...controlLotFan({ lot, fanLot, manifest, plicuri, convocariPePlic, tiraj }) }
+}
 
 export const ETICHETE_STARE_FAN = Object.freeze({
   propus: 'propus', aprobat: 'aprobat', in_curs: 'în curs (trimis la FAN)', generat: 'AWB generat', eroare: 'respins de FAN',
@@ -106,6 +148,8 @@ export function mesajEdgeFan(rez) {
   if (cod === 'transport_real_oprit') return 'Transport oprit: funcția FAN nu face niciun apel până la activare.'
   if (cod === 'non_owner') return 'Doar owner-ul poate porni pașii FAN.'
   if (cod === 'manifest_schimbat') return 'Evidența s-a schimbat de la afișare: reîncarcă și verifică din nou pagina de control. Nimic tipărit.'
+  if (cod === 'tiraj_schimbat') return `${MESAJ_TIRAJ_SCHIMBAT} Nimic tipărit.`
+  if (cod === 'tiraj_neconfirmat') return 'Tirajul nu s-a putut verifica: nimic tipărit. Reîncarcă evidența și reîncearcă.'
   if (cod === 'stergere_neconfirmata') return `Ștergere neconfirmată: AWB-ul rămâne „generat”. ${rez?.data?.motiv || ''}`.trim()
   if (rez?.error) return 'Rezultat neconfirmat: reîncarcă evidența înainte de orice reluare (nu reapăsa orbește).'
   return cod === 'ok' ? 'Operație încheiată.' : `Răspuns: ${cod || 'necunoscut'}`
