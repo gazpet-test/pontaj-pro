@@ -135,12 +135,39 @@ export const MOTIVE_RETUR = [
   { cod:'decedat', eticheta:'Decedat' },
   { cod:'altul', eticheta:'Altul (detaliu)' },
 ]
+// `retrasa`: decizia Răzvan 17.11.2026 (juridic#046) — „Nu particip, cu obiecții” nu se mai oferă la înregistrări NOI (cine are
+// obiecții vine la sesiune sau cere constatare pe teren). Răspunsurile vechi cu acest cod rămân valabile: eticheta rămâne aici
+// pentru afișare (registru, fișă, export), iar stare.js / pv.js îl tratează în continuare. Refuzul pe server (CHECK, RPC,
+// trigger) e o schimbare de bază de date, separată.
 export const OPTIUNI_RASPUNS = [
   { cod:'particip', eticheta:'Particip la sesiune' },
   { cod:'nu_particip_fara_obiectii', eticheta:'Nu particip, fără obiecții' },
-  { cod:'nu_particip_cu_obiectii', eticheta:'Nu particip, cu obiecții' },
+  { cod:'nu_particip_cu_obiectii', eticheta:'Nu particip, cu obiecții', retrasa:true },
   { cod:'constatare_teren', eticheta:'Cere constatare la teren' },
 ]
+// opțiunile oferite la un răspuns NOU (fără cele retrase)
+export const OPTIUNI_RASPUNS_NOI = OPTIUNI_RASPUNS.filter(o => !o.retrasa)
+// Validarea + rândul de INSERT în red_raspunsuri pentru un răspuns înregistrat de operator (📞 Răspuns), fără efecte (testabilă).
+// Lista albă = OPTIUNI_RASPUNS_NOI (aceeași regulă ca formularul public): o opțiune retrasă rămasă în stare, gol sau un cod
+// necunoscut întorc { eroare } și NU produc rândul, deci INSERT-ul nu pleacă. Rezultat: { eroare } | { rand }.
+export function pregatesteRaspunsManual({ optiune, zi, zile = [], obiectii, declaratie, canal, detinatorId, createdBy }) {
+  if (!OPTIUNI_RASPUNS_NOI.some(o => o.cod === optiune)) return { eroare: 'Opțiunea aleasă nu se mai înregistrează la un răspuns nou: alege una din listă.' }
+  const cereZi = optiune === 'particip'
+  const cereDeclaratie = optiune === 'nu_particip_fara_obiectii'
+  const cereObiectii = optiune === 'nu_particip_cu_obiectii' || optiune === 'constatare_teren'
+  const obj = String(obiectii ?? '').trim()
+  if (cereObiectii && !obj) return { eroare: 'Pentru această opțiune obiecțiile sunt obligatorii.' }
+  if (cereZi && !zile.length) return { eroare: 'UAT-ul nu are zile de sesiune stabilite — „particip” nu se poate înregistra încă.' }
+  if (cereZi && !zile.includes(zi)) return { eroare: 'Alege ziua de sesiune din lista UAT-ului.' }
+  if (cereDeclaratie && !declaratie) return { eroare: 'Bifează că deținătorul a confirmat verbal textul declarației.' }
+  return { rand: {
+    detinator_id: detinatorId, canal, optiune,
+    zi_sesiune_aleasa: cereZi ? zi : null,                       // doar pentru „particip”
+    obiectii_text: cereObiectii ? obj : null,
+    declaratie_confirmata: cereDeclaratie ? true : null,         // bifa explicită din modal
+    created_by: createdBy || null,
+  } }
+}
 export const etichetaOptiune = (cod) => OPTIUNI_RASPUNS.find(o => o.cod === cod)?.eticheta || cod || '-'
 export const etichetaRetur = (cod) => MOTIVE_RETUR.find(o => o.cod === cod)?.eticheta || cod || '-'
 

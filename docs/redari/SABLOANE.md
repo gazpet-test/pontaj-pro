@@ -97,6 +97,36 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   rămâne „Lider al Asocierii … · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}”.
   `sabloaneA4.test.js` declară textul scos (`SCOS_INCEPUT`) și cere, după repunere, amprenta de dinainte; testele „antetul oficial”
   verifică header-ul pe șabloane și pe convocatorul completat cu QR. **Aspectul antetului a fost verificat în Word și aprobat de Răzvan**; documente-test cu date fictive în `Documente Redari\TEST_antet` pe NAS.
+- **(11) Terminologia „predare” și trei opțiuni de răspuns (deciziile Răzvan 17.11.2026; textele din modelele rev. 1 ale
+  Juridicului, juridic#044 §1, #045 pct. 1, #046 pct. 1).** Față de Transgaz, readucerea terenului la starea inițială e lucrarea
+  din contract; față de proprietari / deținători, procedura e PREDAREA terenului. În generator, `TERMINOLOGIE_PREDARE`
+  (aplicat în `construieste` după pașii fiecărei rețete, fiecare înlocuire cu exact o apariție):
+  - `convocator.docx`, `convocator_utilizator.docx`: titlul „CONVOCARE la predarea terenului” (era „… la constatarea readucerii
+    terenului la starea inițială”); opțiunea a doua „… procesul-verbal completat, spre semnare, electronic.” (era „prin poștă /
+    electronic”); paragraful „☐ Nu particip. Am următoarele obiecții: ____.” se șterge (`stergeParagraf`), rămân trei opțiuni:
+    particip / nu particip, fără obiecții / contest și solicit constatarea pe teren;
+  - `pv_a.docx`: titlul „PROCES-VERBAL DE PREDARE a terenului către proprietar / deținător (tip A)”;
+  - `pv_b.docx`: „Scrisoare recomandată sau curier, cu confirmare de primire”, „nr. recomandată / AWB …”, „adresa Beneficiar nr. …
+    / recomandată sau AWB nr. …”;
+  - `pv_c.docx`: titlul „PROCES-VERBAL DE FINALIZARE A PREDĂRII TERENURILOR pe tronson”.
+  Neschimbate intenționat: titlul PV tip B; în PV A secțiunile „Lucrări de readucere executate” și „Obiecțiile deținătorului
+  privind readucerea terenului”; în PV C fraza „Comisia constată că lucrările de readucere a terenului la starea inițială …”.
+  Neatinse (așteaptă text de la Juridic): `adresa_uat.docx` și `cerere_imputernicire.docx`. Placeholder-ele nu se schimbă
+  (aceeași listă ordonată; rândul scos nu avea câmpuri). `sabloaneA4.test.js` declară schimbările în `SCHIMBARI_TEXT`, iar
+  `sabloanePredare.test.js` verifică textul nou / vechi, lista de placeholder-e (amprentă de pe main), cele trei opțiuni și că
+  fiecare parte XML / `.rels` din cele cinci arhive e bine formată (verificator cu stivă, cu mutanți care trebuie să pice).
+  **Nu se publică în producție până nu confirmă Răzvan că pachetul a plecat la Transgaz.** Aspectul convocatorului cu trei
+  opțiuni (QR-ul în cadru la dreapta, lângă opțiuni) e de verificat vizual în Word înainte de publicare.
+  **Publicare (PR #1117 rămâne draft până la pasul 1; pașii 3–4 în aceeași fereastră):**
+  1. Răzvan confirmă că pachetul a plecat la Transgaz.
+  2. Verificare în Word (neverificat încă): `convocator.docx` și `convocator_utilizator.docx` — o singură pagină A4 pe față, cele
+     trei opțiuni întregi, QR-ul în cadru la dreapta, lângă opțiuni, nedecalat după rândul scos; plus un convocator completat pe
+     TEST-RAZVAN. PV A / PV B / PV C: titlurile noi încap pe rând, paginarea neschimbată.
+  3. Migrarea de pe `redari/predare-bd` (neaplicată; textul final al declarației de la Juridic, „da”-ul lui Răzvan): `text_declaratie`
+     — DEFAULT-ul ȘI valorile salvate pe proiectele existente — plus refuzul pe server al codului retras. Se aplică ÎNTÂI.
+  4. Imediat după: publicarea aplicației (merge #1117 → deploy automat).
+  5. Control pe live (Ctrl+Shift+R): formularul public al unei convocări de pe TEST-RAZVAN arată trei variante, iar la „Nu particip —
+     nu am obiecții” declarația spune „electronic”, fără „prin poștă”; în 📞 Răspuns lista are trei opțiuni.
 - **Documentul COMPLETAT (tot excepția (8), #970 r2–r18)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
   (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`. **Regula LITERALĂ (r18)**, în locul
   decupajului pe propoziții din r7–r17 (unde fiecare rundă găsea alt caz în care se pierdea un câmp GDPR):
@@ -147,7 +177,7 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
 - Antetul de firmă (adresă, CUI, telefon, „Lider al Asocierii …”) rămâne text fix; din antet s-au parametrizat doar
   `Contract Transgaz nr. {{contract_nr}}/{{contract_data}}` și `{{proiect_denumire}}` (convocator, PV A, PV B, PV C și — din 04.11, excepția (9), confirmată de Răzvan 04.11.2026, #975 — adresa UAT, cu antetul copiat din convocator). Corpul rămâne specific Lot 1 (Prunișor–Jupa, Acordul de mediu nr. 4/18.07.2022, A.P.M. Mehedinți,
   jud. Mehedinți în adresa UAT devine `{{judet}}`) — **șabloanele sunt ale Lot 1**.
-- Textele celor 4 opțiuni de răspuns din convocator rămân FIXE (text juridic); informarea GDPR e `{{text_gdpr}}` (tot
+- Textele opțiunilor de răspuns din convocator rămân FIXE (text juridic; din 17.11.2026 trei opțiuni, excepția (11)); informarea GDPR e `{{text_gdpr}}` (tot
   paragraful de sub „Date personale”), contactul Gazpet e `{{contact_nume}} {{contact_telefon}} {{contact_email}}`.
 - Verificare (03.11.2026): `node scripts/redari_sabloane_verifica.mjs` (ieșirea în §4) și `src/redari/sabloaneFinalV2.test.js`
   (fără DRAFT, fără „acord” pentru lipsa răspunsului, PV A cu 3 semnatari, PV B fără foto / topo / jurnal, termenul din adresa UAT
@@ -412,10 +442,13 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | „constatare pe teren cerută? (data)” (Model 6 col. AB) | registru | v5 spune „la data stabilită de comisie” → data vine din comisie, nu de la deținător: `red_raspunsuri.constatare_teren_data` (setată de operator) | — |
 | conținut fix de parametrizat la alt proiect | toate | A.P.M. Mehedinți, Acordul de mediu, „Lider al Asocierii …”, Prunișor–Jupa în corp | nu acum (Lot 1) |
 
-## 4. Ieșirea `node scripts/redari_sabloane_verifica.mjs` (06.11.2026, Final_v2 + A4 + QR + Model 1U + antetul-imagine în header)
+## 4. Ieșirea `node scripts/redari_sabloane_verifica.mjs` (17.11.2026, Final_v2 + A4 + QR + Model 1U + antetul-imagine în header + terminologia „predare”, excepția (11))
+
+Față de 06.11: convocatoarele au un paragraf cu text mai puțin (opțiunea scoasă) și 2 resturi „opțiune bifată de mână” în loc de 3;
+placeholder-ele sunt aceleași pe toate cele 7.
 
 ```text
-# Verificare șabloane Redări — 7 fișiere din public/redari/sabloane (2026-11-06)
+# Verificare șabloane Redări — 7 fișiere din public/redari/sabloane (2026-11-17)
 
 ## adresa_uat.docx — OK
 - părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 60
@@ -434,22 +467,22 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - relații externe (.rels TargetMode=External): niciuna
 
 ## convocator.docx — OK
-- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 55
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 54
 - placeholder-e distincte: 35 (apariții: 37); rupte între run-uri: 0
 - `{{adresa}}` `{{calitate}}` `{{contact_email}}` `{{contact_nume}}` `{{contact_telefon}}`×2 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{nr_cadastral}}` `{{nr_document}}` `{{nume}}` `{{poz_hg}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{proiect_denumire}}` `{{qr}}` `{{reprezentant_tgz}}` `{{reprezentant_tgz_telefon}}` `{{sat}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{suprafata}}` `{{tarla}}` `{{text_gdpr}}` `{{tronson}}` `{{uat}}`×2 `{{zi1}}` `{{zi2}}` `{{zi3}}`
 - pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.27/1.27/1.50/1.50; corp Normal: 9.5 pt
 - {{qr}} singur în paragraf: da
 - relații externe (.rels TargetMode=External): niciuna
-- resturi intenționate: 3× opțiune bifată de mână de destinatar (convocator); 2× linie de semnătură olografă
+- resturi intenționate: 2× opțiune bifată de mână de destinatar (convocator); 2× linie de semnătură olografă
 
 ## convocator_utilizator.docx — OK
-- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 55
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 54
 - placeholder-e distincte: 35 (apariții: 37); rupte între run-uri: 0
 - `{{adresa}}` `{{calitate}}` `{{contact_email}}` `{{contact_nume}}` `{{contact_telefon}}`×2 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{nr_cadastral}}` `{{nr_document}}` `{{nume}}` `{{poz_hg}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{proiect_denumire}}` `{{qr}}` `{{reprezentant_tgz}}` `{{reprezentant_tgz_telefon}}` `{{sat}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{suprafata}}` `{{tarla}}` `{{text_gdpr}}` `{{tronson}}` `{{uat}}`×2 `{{zi1}}` `{{zi2}}` `{{zi3}}`
 - pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.27/1.27/1.50/1.50; corp Normal: 9.5 pt
 - {{qr}} singur în paragraf: da
 - relații externe (.rels TargetMode=External): niciuna
-- resturi intenționate: 3× opțiune bifată de mână de destinatar (convocator); 2× linie de semnătură olografă
+- resturi intenționate: 2× opțiune bifată de mână de destinatar (convocator); 2× linie de semnătură olografă
 
 ## pv_a.docx — OK
 - părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 46
@@ -679,7 +712,9 @@ Divergențe explicite:
    neridicat | refuz primire | adresă incompletă – neexpediată` ↔ `destinatar_necunoscut | mutat | avizat_neridicat | refuz |
    adresa_incompleta`; canal răspuns `online | telefon | scris | la sesiune | fără răspuns` ↔ `online | telefon | scris |
    sesiune | email | sms` („fără răspuns” = lipsa rândului; `email`/`sms` nu există în Excel, dar există în Model_3 v5);
-   opțiune `particip | nu particip – fără obiecții | nu particip – cu obiecții | constatare pe teren` ↔ identic.
+   opțiune `particip | nu particip – fără obiecții | nu particip – cu obiecții | constatare pe teren` ↔ identic. Din
+   17.11.2026 (decizia Răzvan, juridic#046) „nu particip – cu obiecții” nu se mai oferă la răspunsuri noi (formularul public și
+   ecranul intern); răspunsurile vechi cu acest cod rămân valabile și se afișează / exportă cu aceeași etichetă.
 7. Coloanele `AF Obiecții de readucere? / AG Termen remediere / AH Remediat la` nu intră în STARE nici în Excel, nici în
    contract (acolo doar `red_v_tronson.obiectii_deschise`) — consecvent.
 8. Nr. PV în Excel e număr simplu („17”); contractul: `PVA-HUS-0001`. Col. U „Afișat la primărie (nr. PV afișare)” e per
@@ -730,7 +765,7 @@ Calitate (col. K): proprietar, coproprietar, moștenitor, arendaș, utilizator, 
 | | AF | Obiecții de readucere? | red_procese_verbale.obiectii_redare (DA/NU) |
 | | AG | Termen remediere | red_procese_verbale.termen_remediere |
 | | AH | Remediat la | red_procese_verbale.remediat_la |
-| | AI | Trimis spre semnare prin poștă (data) | red_procese_verbale.trimis_spre_semnare_data |
+| | AI | Trimis spre semnare, electronic (data) | red_procese_verbale.trimis_spre_semnare_data — în Model_6 (v3) antetul era „Trimis spre semnare prin poștă (data)”; schimbat după decizia Răzvan 17.11.2026 (semnarea de la distanță doar electronic, juridic#045) |
 | | AJ | PV semnat primit (data) | red_procese_verbale.semnat_primit_data |
 | STARE | AK | STARE (calculată) | red_v_stare_parcela.stare (etichetă RO din §5.2) |
 | | AL | Responsabil Gazpet | red_uat.responsabil_id -> profiles.name |

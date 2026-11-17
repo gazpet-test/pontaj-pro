@@ -276,7 +276,8 @@ describe('genereazaConvocator', () => {
     expect(await zu.file('word/styles.xml').async('string')).toBe(await z1.file('word/styles.xml').async('string'))
     const texte = x => [...x.matchAll(/<w:t[^>]*>(.*?)<\/w:t>/g)].map(m => m[1])
     const optiuni = x => texte(x).filter(t => t.trim().startsWith('☐'))
-    expect(optiuni(xu)).toHaveLength(4)
+    // trei opțiuni din 17.11.2026 (decizia Răzvan, juridic#046: „Nu particip. Am următoarele obiecții” scoasă)
+    expect(optiuni(xu)).toHaveLength(3)
     expect(optiuni(xu)).toEqual(optiuni(x1))
     // Excepția (10), #999: rândul cu datele firmei este acum în imaginea din header.
     // În corp rămâne un singur text de antet comun, înaintea destinatarului diferit în 1U.
