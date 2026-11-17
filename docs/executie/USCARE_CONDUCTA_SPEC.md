@@ -284,6 +284,18 @@ aceeași amprentă (altfel 22023); fără cotă (§6).
   din fiecare categorie, căi cu uscarea 0, metadate fixe. Poate rata politici condiționate de **alte conturi**, de **alte metadate** sau de
   **rapoarte / rezervări existente**. Nu înlocuiește baseline-ul revizuit al politicilor de producție și nici probele cu structura reală pe
   clonă; amprenta unui baseline permisiv nu demonstrează siguranța lui.
+- **Prima probă cu ROLLBACK pe țintă (17.11.2026): sonda a căzut, nimic comis.** Eroarea: `missing FROM-clause entry for table "objects"`.
+  Cauza: pe țintă, `storage.objects` are 139 de politici; câteva au subinterogări care se referă la rândul exterior, iar `pg_get_expr` le
+  tipărește calificate cu numele tabelei (`… WHERE i.cale = objects.name`, `objects.owner_id`). Recreate pe copia sondei, care avea alt nume,
+  referirea nu mai avea la ce se lega. Clona de probă nu a prins pentru că acolo `storage.objects` nu are nicio politică. **Reparația**
+  (doar în blocul sondei; funcțiile, tabelele, politicile modulului, lock-urile și garda neschimbate; lista obiectelor tot 252): copia se
+  numește chiar `objects`, în schema temporară a sesiunii (`pg_temp.objects`), deci expresiile se recreează neschimbate (fără înlocuiri de
+  text); tabela reală e numită peste tot `storage.objects`, copia `pg_temp.objects`; un `pg_temp.objects` deja existent în sesiune = refuz
+  `SONDA_CONDITII`; o politică pe care copia n-o poate purta (ex. o funcție pe rândul întreg tipat `storage.objects`) = `SONDA_CONDITII` cu
+  numele politicii, nu eroare brută. Proba PGlite (secțiunea 2b) reproduce forma țintei cu nume sintetice: codul vechi pică exact cu eroarea de
+  pe țintă, codul nou trece cu aceleași verdicte, iar o politică preexistentă cu subinterogare care deschide bucket-ul e prinsă în continuare.
+  Costul: ~210 ms cu 139 de politici față de ~155 ms fără (PGlite), departe de plafonul de 5000 ms. **Regula:** înaintea probelor unei
+  migrări care citește politicile de pe `storage.objects`, clona de probă trebuie să poarte politicile țintei pe `storage.objects`.
 - **Drepturile pe tabelele noi** (runda 3): migrarea retrage drepturile rămase ALTOR roluri (privilegiile implicite ale platformei) pe
   tabelele și secvențele ei; postcondiția și revenirea cer ACL-ul exact: proprietarul + `SELECT` (fără GRANT OPTION) pentru `authenticated` /
   `service_role`; pe secvențe doar proprietarul.
