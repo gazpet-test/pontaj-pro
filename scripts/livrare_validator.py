@@ -102,7 +102,8 @@
 #     doar A-Z → a-z (în UTF-8 serverul nu schimbă literele non-ASCII), citat ⇒ conținutul exact ("" despachetat de tokenizer), ambele
 #     trunchiate la 63 de OCTEȚI UTF-8 pe granița unui caracter (NAMEDATALEN - 1). Niciodată casefold la acceptare.
 #   REFUZUL conservator (PLAFON_FORMA): variabila plafonului = identificator simplu NECITAT [A-Za-z_][A-Za-z0-9_]*, cel mult 63 de octeți;
-#     în corpul care o citește NU e admis niciun identificator citat și niciun identificator mai lung de 63 de octeți; în TOT fișierul
+#     în corpul care o citește variabila nu apare niciodată citată (nici "v_plafon", identic) și niciun identificator nu e mai lung
+#     de 63 de octeți — ceilalți identificatori citați, fără legătură cu ea (ex. COLLATE "C"), rămân admiși; în TOT fișierul
 #     (orice corp, nivelul superior — deci și parametrii funcției și blocurile exterioare) niciun identificator CONFUNDABIL cu ea (același
 #     casefold / NFKC, același prefix de 63 de octeți) care nu e identic, și niciun U&"…" / U&'…' (decodificat în server).
 #   Tokenizerul (toate modurile): un cuvânt neciat cu o literă non-ASCII care, prin upper / lower / casefold / NFKC, dă o literă ASCII
@@ -565,8 +566,9 @@ def verifica_structura_plafon(text, absenta=False):
     Limită declarată (ca la garda de livrare): poziția gărzii (cod mort, funcție nechemată, excepție prinsă) e a review-ului
     artefactului; valoarea reală a plafonului o impun oricum prologul și garda finală ale runnerului.
     Runda 18: variabila declarată o singură dată în prima secțiune DECLARE, fără U& în corp (vezi antetul). Runda 19: acceptarea după
-    identitatea EXACTĂ (ident_pg), refuzul după confuzie (confundabil): variabila necitată ASCII ≤ 63 de octeți, corpul ei fără
-    identificatori citați / mai lungi de 63 de octeți, fișierul fără nume confundabile cu ea și fără U&, fără variable_conflict. absenta=True (--fara-plafon): aceleași forme, dar comparația acceptată e cu '0/default' (controlul
+    identitatea EXACTĂ (ident_pg), refuzul după confuzie (confundabil): variabila necitată ASCII ≤ 63 de octeți, scrisă niciodată
+    citat în corpul ei (alți identificatori citați, ex. COLLATE "C", rămân admiși), corpul fără identificatori mai lungi de 63 de
+    octeți, fișierul fără nume confundabile cu ea și fără U&, fără variable_conflict. absenta=True (--fara-plafon): aceleași forme, dar comparația acceptată e cu '0/default' (controlul
     care cere ABSENȚA plafonului); refuzul poartă eticheta PLAFON_LIPSA (o citire în altă formă = cerere neclasificabilă)."""
     cereri = []
     P = "PLAFON_LIPSA" if absenta else "PLAFON_FORMA"

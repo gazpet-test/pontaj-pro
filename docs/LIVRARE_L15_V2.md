@@ -417,8 +417,12 @@ Celelalte **semnale** (EXECUTE dinamic, vederi, alt limbaj) nu sunt refuz automa
    revizuită e identică: **clasificarea diferențelor rămase o face omul**, nu comparatorul.
 7. **Proba cu ROLLBACK pe țintă, obligatorie** înaintea primei aplicări a fiecărei migrări: `livrare_l15_manifest.sh … --compara-cu
    supabase/migrations/<NUME>.l15.tsv --amprenta-globala <GLOBAL din citire_ziua.txt>`, cu acordul owner-ului, **prin același punct de
-   acces (pooler / endpoint) și cu același rol ca livrarea**. Criterii de acceptare (propuse de recenzent; criterii de lucru, nu garanții
-   statistice):
+   acces (pooler / endpoint) și cu același rol ca livrarea**. **Înainte de probă**, la pregătirea ei pe țintă: măsurile compensatorii
+   OBLIGATORII din secțiunea 9, „Limite declarate ale validatorului static” — doar citire, pe același rol și endpoint: (i)
+   `plpgsql.variable_conflict` efectiv = `error` (sesiune, rol, bază); (ii) `search_path`-ul efectiv și absența funcțiilor omonime
+   `current_setting` / `txid_current` / `set_config` înaintea lui `pg_catalog`; (iii) review-ul artefactului pentru poziția gărzii;
+   rezultatele în jurnalul livrării, orice abatere = oprire. Acceptarea explicită a limitelor declarate acolo e condiție a livrării.
+   Criterii de acceptare (propuse de recenzent; criterii de lucru, nu garanții statistice):
    - `IDENTIC`, fără efecte persistente (nimic comis; limita 13);
    - garda finală (`PLAFON_TIMP`) cu **rezervă de cel puțin ~25 %** din plafon, adică **cel mult ~3.750 ms** din 5.000 (runda 16; înainte:
      1.500 din 2.000); dacă toate probele stau mult sub (de ex. ≤ 2.500 ms), plafonul se poate coborî printr-un PR (secțiunea 9);
@@ -427,7 +431,8 @@ Celelalte **semnale** (EXECUTE dinamic, vederi, alt limbaj) nu sunt refuz automa
    - durata lock-urilor puternice (`LOCK_TINUT` + observatorul din altă sesiune, secțiunea 9 „Riscul”) consemnată și acceptată explicit
      în jurnal, mai ales la ACCESS EXCLUSIVE pe tabele folosite de aplicație;
    - variația pe câteva probe aprobate, **inclusiv prima rulare** (cache rece); o singură probă bună nu ajunge.
-8. **Aplicarea:** runnerul cu `--amprenta-globala <GLOBAL din citire_ziua.txt>` + `--diferente-globale` (+ `--aprobare` cu ambele sha-uri).
+8. **Aplicarea:** întâi verificările (i)–(ii) de la pasul 7 se refac în aceeași zi, pe rolul și endpointul livrării (consemnate); apoi
+   runnerul cu `--amprenta-globala <GLOBAL din citire_ziua.txt>` + `--diferente-globale` (+ `--aprobare` cu ambele sha-uri).
 9. Refuz la **„înainte”** (`AMPRENTA_GLOBALA_INAINTE`): catalogul s-a schimbat după recitire — compară md5-urile pe familii din mesaj cu
    `citire_ziua.txt`, recitește (pasul 6) și, dacă partea revizuită diferă, refă PR-ul de baseline. Refuz la **„după”**: lista spune exact
    ce diferă (`NEDECLARAT` / `ABSENT` / `ALTFEL`); analiză înainte de orice reîncercare.
@@ -615,6 +620,67 @@ Fără amprentă globală, plafonul rămâne parametrul runnerului (100..600000)
 | > 63 de octeți (citat sau nu) | trunchiat la 63 de octeți, pe granița caracterului | identitatea trunchiată | variabila > 63 ⇒ refuz; în corpul ei orice nume > 63 ⇒ refuz; prefix de 63 egal ⇒ refuz oriunde |
 | non-ASCII neciat (`v_ţintă`) | neschimbat (nu se pliază) | exact (din textul original, nu din `.upper()`) | literă confuză cu una ASCII (`ı`, `ſ`, `ß`, `ﬁ`, K) ⇒ refuz în tokenizer |
 
+### Limite declarate ale validatorului static
+
+Runda 20 (verdictul rundei 4 a recenzentului pe #1115: GO cu condiții). Lista completă, într-un singur loc. Acestea sunt **limite
+declarate; acceptarea lor explicită e condiție a livrării** (o consemnează coordonatorul, separat de acest document).
+
+1. **`plpgsql.variable_conflict`.** Validatorul inspectează **artefactul**, nu configurația efectivă a sesiunii. Refuzul mențiunii
+   `variable_conflict` acoperă doar textul fișierului. Cu `use_variable` moștenit din afara artefactului (setat pe rol, pe bază sau în
+   sesiune), în citirea `setting || '/' || source` numele `setting` / `source` / `name` pot desemna variabile omonime ale corpului, nu
+   coloanele `pg_settings` (un corp cu variabile `setting` și `source` e acceptat local). Rezultatul depinde și de momentul compilării
+   funcției PL/pgSQL (configurația activă atunci, nu la scrierea fișierului).
+2. **Rezolvarea numelor.** Validatorul verifică **numele** funcțiilor (`current_setting`, `txid_current`, `set_config` necalificate), nu
+   obiectele din catalog la care se rezolvă. Cu un `search_path` care pune altă schemă înaintea lui `pg_catalog` și funcții omonime acolo,
+   apelurile necalificate pot desemna alte funcții (inclusiv `set_config` recunoscut ca scriere sub `--fara-plafon`: se dovedește forma
+   numelui, nu identitatea funcției).
+3. **Poziția gărzii** (limita din runda 17, mai sus): cod mort, funcție nechemată, o excepție prinsă — rămâne a review-ului artefactului.
+4. **Numele parametrului construit în server** (limita din runda 18, mai sus): `chr()`, `format` cu argument dinamic, `U&'…'` într-un corp,
+   `current_setting(<variabilă>)` nu se văd static; o asemenea cerere fără plafon e refuzată abia de garda din SQL a migrării, în tranzacție.
+5. **Ce NU garantează validatorul.** Pentru SQL / PL/pgSQL arbitrar (SQL dinamic, funcții preexistente, configurație externă) un validator
+   static **nu poate garanta „refuz local pentru orice formă adversarială”**; o asemenea garanție ar cere un sub-limbaj strict și un mediu
+   controlat. Validatorul este o **poartă conservatoare pentru formele documentate**. Valoarea reală a plafonului o impun **prologul și garda
+   finală ale runnerului, în tranzacție, înainte de COMMIT**. Nu există audit după COMMIT și nu se adaugă unul.
+
+**Măsuri compensatorii OBLIGATORII** (pași ai livrării: secțiunea 7, pasul 7, înaintea probei cu ROLLBACK, și pasul 8, înaintea aplicării
+reale). Doar citire, **pe rolul și prin endpointul (pooler-ul) livrării**, rezultatele consemnate în jurnalul livrării; orice abatere = oprire
+și analiză, nu aplicare:
+
+- (i) valoarea efectivă `plpgsql.variable_conflict` în sesiune, pe rol și pe bază trebuie să fie cea implicită, **`error`**, fără setări pe
+  rol / bază;
+- (ii) `search_path`-ul efectiv al rolului și **absența** funcțiilor omonime (`current_setting`, `txid_current`, `set_config`) în schemele
+  dinaintea lui `pg_catalog`;
+- (iii) review-ul artefactului pentru poziția gărzii (limita 3) și pentru numele construite în server (limita 4).
+
+Interogări de verificare (exemple generice, doar citire; nimic specific țintei):
+
+```sql
+-- (i) variable_conflict: întâi un bloc gol, ca biblioteca PL/pgSQL să fie încărcată în sesiune (altfel parametrul poate lipsi)
+DO $$ BEGIN END $$;
+SELECT setting, source FROM pg_catalog.pg_settings WHERE name = 'plpgsql.variable_conflict';
+-- așteptat: setting = 'error', source = 'default'
+SELECT s.setrole, s.setdatabase, c AS setare
+FROM pg_catalog.pg_db_role_setting s, unnest(s.setconfig) AS c
+WHERE (c LIKE 'plpgsql.variable_conflict=%' OR c LIKE 'search_path=%')
+  AND s.setrole IN (0, (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
+  AND s.setdatabase IN (0, (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()));
+-- așteptat: niciun rând cu plpgsql.variable_conflict; search_path, dacă apare, se compară cu (ii)
+
+-- (ii) search_path efectiv și ordinea reală (pg_catalog e implicit primul dacă nu e scris explicit)
+SHOW search_path;
+SELECT pg_catalog.current_schemas(true);
+-- funcții omonime în afara lui pg_catalog (așteptat: niciun rând; dacă există, schema lor trebuie să fie DUPĂ pg_catalog în
+-- current_schemas(true), altfel oprire)
+SELECT n.nspname, p.proname, pg_catalog.pg_get_function_identity_arguments(p.oid) AS argumente
+FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+WHERE p.proname IN ('current_setting', 'txid_current', 'set_config') AND n.nspname <> 'pg_catalog';
+```
+
+**Restricții intenționate (refuză și forme SQL legitime).** Ca să rămână conservator, validatorul refuză: variabila plafonului scrisă citat
+sau cu diacritice, orice mențiune `variable_conflict` (chiar și într-un comentariu) și cuvintele necitate cu litere care se pliază în ASCII
+(ex. un cuvânt cu litera germană sharp-s, `ß`; citat e admis) — autorul unei migrări viitoare care primește un asemenea refuz rescrie forma
+(variabila necitată ASCII, fără mențiunea directivei, identificatorul citat), nu ocolește validatorul.
+
 ### Bugetul de lock (runda 16)
 
 Înainte, secunda pentru lock-uri se număra **de la BEGIN** și includea pasul „înainte” al runnerului (~1,2–1,3 s pe producție): migrarea
@@ -793,7 +859,8 @@ sha256sum supabase/migrations/20261221a_meteo_xweather_zilnic.sql supabase/migra
 # 5. în ziua livrării: recitirea + partea revizuită identică
 bash scripts/amprenta_globala_citire.sh … (aceleași opțiuni ca la 1) > citire_ziua_20261221a.txt
 bash scripts/l15_compara_liste.sh --a citire_prod_20261221a.txt --b citire_ziua_20261221a.txt --recitire
-# 6. proba cu ROLLBACK pe țintă (obligatorie, cu acordul owner-ului)
+# 6. proba cu ROLLBACK pe țintă (obligatorie, cu acordul owner-ului); înainte: verificările (i)-(iii) din secțiunea 9,
+#    „Limite declarate ale validatorului static”, pe rolul și endpointul livrării (se refac înainte de pasul 7)
 bash scripts/livrare_l15_manifest.sh --migrare supabase/migrations/20261221a_meteo_xweather_zilnic.sql --versiune 20261221120000 \
   --tinta-host <H> --tinta-port <P> --tinta-db postgres --tinta-sistem <SIS> --user <U> --plafon-tranzactie-ms 5000 \
   --compara-cu supabase/migrations/20261221a_meteo_xweather_zilnic.l15.tsv --amprenta-globala <GLOBAL din citire_ziua_20261221a.txt>
