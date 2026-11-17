@@ -22,24 +22,34 @@
 -- Textele (singurele noi; decizia proprietarului, 17.11.2026):
 --   VECHI = 'Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, prin poștă / electronic.'
 --   NOU   = 'Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, electronic.'
--- Evidența rândurilor schimbate (pentru revenire, fără tabel nou): fiecare UPDATE pe red_proiecte scrie singur un rând în red_jurnal (triggerul
---   trg_red_jurnal, fn_red_jurnal din 20261130j: rândul vechi și cel nou întregi, user_id = NULL în migrare) și crește red_proiecte.versiune
---   (trg_red_versiune). Postcondiția verifică un rând de jurnal pe fiecare proiect schimbat: tabela red_proiecte, update, fără utilizator,
+-- Evidența rândurilor schimbate (pentru revenire, fără tabel / coloană / RPC nou): fiecare UPDATE pe red_proiecte scrie singur un rând în
+--   red_jurnal (triggerul trg_red_jurnal, fn_red_jurnal din 20261130j: rândul vechi și cel nou întregi, user_id = auth.uid(), user_email =
+--   auth.jwt() ->> 'email') și crește red_proiecte.versiune (trg_red_versiune). r2 (review #1119 P1): rândurile de jurnal ale ACESTEI
+--   execuții poartă MARCAJUL EXECUȚIEI în câmpul existent user_email: 'livrare:' || marcajul runnerului = 'livrare:20261226a_redari_predare_
+--   declaratie:<txid>' (numele migrării + tranzacția concretă, din garda de livrare). Cum: doar pe durata UPDATE-ului, request.jwt.claims
+--   (LOCAL, în tranzacție) = {"email": marcaj}, FĂRĂ sub și FĂRĂ role, deci auth.uid() și auth.role() rămân NULL (user_id = NULL ca înainte;
+--   triggerele de pe red_proiecte nu primesc nicio identitate: nicio coloană de autorizare / aprobare / retenție nu se schimbă, verificat de
+--   postcondiție); apoi claims = '' (verificat). Un JWT real nu poate produce marcajul: user_id ar fi nenul (sub), iar service_role nu are email.
+--   Postcondiția verifică un rând de jurnal pe fiecare proiect schimbat: tabela red_proiecte, update, fără utilizator, CU MARCAJUL execuției,
 --   created_at = momentul acestei tranzacții, VECHI -> NOU și NIMIC altceva schimbat în afară de versiune. Revenirea schimbă înapoi DOAR
---   rândurile identice cu date_noi din acel rând de jurnal (to_jsonb(rând) = date_noi, deci și aceeași versiune): un proiect editat între timp
---   de un om (versiunea crește la orice salvare) sau creat după migrare cu DEFAULT-ul nou rămâne neatins. NOTICE-ul listează id / cod /
---   versiunea fiecărui proiect schimbat (de consemnat în jurnalul livrării).
+--   proiectele al căror ULTIM rând de jurnal e un rând al ULTIMEI execuții a migrării (marcajul) și sunt identice cu date_noi din el
+--   (to_jsonb(rând) = date_noi, deci și aceeași versiune): o tranziție VECHI -> NOU făcută de altcineva (fără marcaj), un proiect editat între
+--   timp de un om sau creat după migrare rămân neatinse. NOTICE-ul listează marcajul și id / cod / versiunea fiecărui proiect schimbat (de
+--   consemnat în jurnalul livrării).
 -- Ce NU face: nicio altă dată (denumirea proiectului o schimbă coordonatorul, separat, cu preview și acord); niciun drept nou pe tabele sau
 --   funcții existente; nimic în CHECK-ul red_raspunsuri; nimic în ecrane / șabloane / formular (PR #1117); niciun mail, SMS, cron.
--- PUBLICAREA: în ACELAȘI moment cu publicarea PR-ului #1117 (terminologia în șabloane și formular), de coordonator, cu acordul proprietarului
---   (docs/redari/LIVRARE_20261226a_PREDARE_DECLARATIE.md). Între #1117 publicat și această migrare formularul ar afișa textul vechi din BD.
+-- ORDINEA (aceeași în ambele documente de livrare): ACEASTĂ migrare -> 20261226b -> publicarea coordonată #1117 + #1119 -> reîncărcarea
+--   formularului public pe proiectul de test; de coordonator, cu acordul proprietarului (docs/redari/LIVRARE_20261226a_PREDARE_DECLARATIE.md:
+--   stările intermediare, pașii obligatorii dinainte — amprentele pe producție, trimiterile SMS oprite). #1117 publicat fără această migrare =
+--   formularul afișează textul vechi din BD; #1119 publicat înaintea 20261226b = crearea loturilor SMS Redări refuzată.
 -- Ordinea lock-urilor (L06), punct unic, NOWAIT: red_proiecte ACCESS EXCLUSIVE (cerut de ALTER COLUMN … SET DEFAULT; același lock acoperă
 --   UPDATE-ul). Lock-urile IMPLICITE de după set: (a) UPDATE-ul pe red_proiecte (ținut deja mai tare); (b) în afara setului: INSERT în
 --   red_jurnal (ROW EXCLUSIVE, din trg_red_jurnal; intră în conflict doar cu SHARE și mai tare pe red_jurnal: DDL, LOCK) și citirile de catalog.
 --   CREATE OR REPLACE FUNCTION nu ia lock pe red_raspunsuri (triggerul vede corpul nou de la COMMIT); un răspuns inserat concurent înainte de
 --   COMMIT trece pe regula veche — ca înainte de migrare. red_raspunsuri NU se blochează.
---   Cât e ținut ACCESS EXCLUSIVE (până la COMMIT, inclusiv pasul „după” al runnerului: ~1,3–1,6 s estimat pe producție) sunt oprite și
---   CITIRILE din red_proiecte: formularul public (fn_red_formular_public) și ecranele Redări așteaptă — de aplicat într-un moment liniștit.
+--   Cât e ținut ACCESS EXCLUSIVE (până la COMMIT, inclusiv pasul „după” al runnerului — calculul final al amprentei: ~450 ms pe clonă,
+--   ~1,3–1,6 s estimat pe producție) sunt oprite și CITIRILE din red_proiecte: formularul public (fn_red_formular_public) și ecranele Redări
+--   așteaptă — de aplicat într-un moment liniștit. Bugetul de mai jos limitează OBȚINEREA lock-ului, nu durata ținerii lui.
 --   Bugetul = 1 s cu ceasul pornit IMEDIAT ÎNAINTEA PRIMEI ÎNCERCĂRI, verificat înaintea fiecărei încercări și DUPĂ obținere (docs/LIVRARE_L15_V2.md
 --   §9 „Bugetul de lock”); fiecare încercare = subtranzacție.
 -- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$, în forma acceptată de validator),
@@ -126,8 +136,14 @@ BEGIN
      OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND t.tgname = 'trg_red_versiune'
            AND t.tgfoid = 'public.fn_red_versiune_creste()'::regprocedure AND t.tgtype = 19 AND t.tgenabled = 'O' AND t.tgqual IS NULL AND t.tgnargs = 0) <> 1
      OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_jurnal'
-           AND column_name IN ('tabela', 'inregistrare_id', 'actiune', 'date_vechi', 'date_noi', 'user_id', 'created_at')) <> 7 THEN
+           AND column_name IN ('tabela', 'inregistrare_id', 'actiune', 'date_vechi', 'date_noi', 'user_id', 'user_email', 'created_at')) <> 8 THEN
     RAISE EXCEPTION '20261226a: jurnalul / versiunea pe red_proiecte nu sunt cele asteptate (evidenta revenirii)';
+  END IF;
+  -- marcajul execuției (r2): sesiunea de livrare NU are JWT (altfel marcajul s-ar amesteca cu o identitate); toate sursele lui auth.*
+  IF auth.uid() IS NOT NULL OR auth.jwt() IS NOT NULL OR auth.role() IS NOT NULL
+     OR nullif(current_setting('request.jwt.claim', true), '') IS NOT NULL OR nullif(current_setting('request.jwt.claims', true), '') IS NOT NULL
+     OR nullif(current_setting('request.jwt.claim.sub', true), '') IS NOT NULL OR nullif(current_setting('request.jwt.claim.role', true), '') IS NOT NULL THEN
+    RAISE EXCEPTION '20261226a: sesiunea de livrare are JWT / claims (marcajul executiei cere o sesiune fara identitate)';
   END IF;
   IF has_schema_privilege('anon', 'public', 'CREATE') OR has_schema_privilege('authenticated', 'public', 'CREATE') THEN
     RAISE EXCEPTION '20261226a: anon/authenticated pot crea obiecte in public';
@@ -292,17 +308,35 @@ COMMENT ON FUNCTION public.fn_red_raspuns_public(text, text, date, text, boolean
 ALTER TABLE public.red_proiecte ALTER COLUMN text_declaratie
   SET DEFAULT 'Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, electronic.';
 CREATE TEMP TABLE red_decl_20261226a (id uuid, cod text, versiune integer) ON COMMIT DROP;
+-- marcajul EXECUȚIEI în rândurile de jurnal ale UPDATE-ului (r2, antet): claims LOCALE cu doar e-mailul = 'livrare:<nume>:<txid>'
+DO $marcaj$
+BEGIN
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('email', 'livrare:' || current_setting('gazpet.livrare_migrare'))::text, true);
+  IF auth.uid() IS NOT NULL OR auth.role() IS NOT NULL
+     OR auth.jwt() IS DISTINCT FROM jsonb_build_object('email', 'livrare:20261226a_redari_predare_declaratie:' || txid_current()) THEN
+    RAISE EXCEPTION '20261226a: marcajul executiei nu e cel asteptat (auth.uid / auth.role / auth.jwt)';
+  END IF;
+END $marcaj$;
 WITH s AS (
   UPDATE public.red_proiecte pr
      SET text_declaratie = 'Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, electronic.'
    WHERE pr.text_declaratie = 'Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, prin poștă / electronic.'
   RETURNING pr.id, pr.cod, pr.versiune)
 INSERT INTO red_decl_20261226a (id, cod, versiune) SELECT s.id, s.cod, s.versiune FROM s;
+DO $marcaj_gata$
+BEGIN
+  PERFORM set_config('request.jwt.claims', '', true);
+  IF auth.jwt() IS NOT NULL OR auth.uid() IS NOT NULL THEN RAISE EXCEPTION '20261226a: marcajul executiei a ramas in sesiune'; END IF;
+END $marcaj_gata$;
 
 -- ─── 5. Postcondiții ─────────────────────────────────────────────────────────────────────────────────────────────────────
 DO $post$
 DECLARE v_rau text; v_n integer; v_j integer; v_def text; v_lista text; v_pers integer;
 BEGIN
+  -- marcajul execuției nu mai e în sesiune (restul tranzacției — runnerul — scrie fără el)
+  IF nullif(current_setting('request.jwt.claims', true), '') IS NOT NULL OR auth.jwt() IS NOT NULL THEN
+    RAISE EXCEPTION '20261226a: postconditie: claims ramase in sesiune dupa UPDATE';
+  END IF;
   -- corpurile noi (amprentele: AMPRENTE-NOI 20261226a — aceleași constante în revenire) + proprietățile
   SELECT string_agg(a.semnatura, ', ' ORDER BY a.semnatura) INTO v_rau
     FROM (VALUES
@@ -351,11 +385,19 @@ BEGIN
               WHERE pr.text_declaratie = 'Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, prin poștă / electronic.') THEN
     RAISE EXCEPTION '20261226a: postconditie: a ramas un proiect cu declaratia veche';
   END IF;
-  -- evidența: un rând de jurnal pe FIECARE proiect schimbat (fără utilizator, în această tranzacție, VECHI -> NOU, doar textul și versiunea)
+  -- evidența: un rând de jurnal pe FIECARE proiect schimbat (fără utilizator, CU MARCAJUL acestei execuții, în această tranzacție, VECHI -> NOU,
+  -- doar textul și versiunea); pe red_proiecte niciun alt rând de jurnal cu marcajul (doar UPDATE-ul declarației l-a purtat; filtrul pe
+  -- tabelă folosește indexul (tabela, inregistrare_id) — fără parcurgerea întregului jurnal sub lock)
   SELECT count(*) INTO v_n FROM red_decl_20261226a;
+  SELECT count(*) INTO v_j FROM public.red_jurnal j
+   WHERE j.tabela = 'red_proiecte' AND j.user_email = 'livrare:' || current_setting('gazpet.livrare_migrare');
+  IF v_j IS DISTINCT FROM v_n THEN
+    RAISE EXCEPTION '20261226a: postconditie: randurile de jurnal cu marcajul executiei (% fata de % proiecte schimbate)', v_j, v_n;
+  END IF;
   SELECT count(*) INTO v_j FROM red_decl_20261226a s
    WHERE (SELECT count(*) FROM public.red_jurnal j
            WHERE j.tabela = 'red_proiecte' AND j.actiune = 'update' AND j.inregistrare_id = s.id AND j.user_id IS NULL AND j.created_at = now()
+             AND j.user_email = 'livrare:' || current_setting('gazpet.livrare_migrare')
              AND j.date_vechi ->> 'text_declaratie' = 'Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, prin poștă / electronic.'
              AND j.date_noi ->> 'text_declaratie' = 'Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, electronic.'
              AND (j.date_noi ->> 'versiune')::int = s.versiune
@@ -367,7 +409,8 @@ BEGIN
   SELECT string_agg(s.id::text || ' ' || s.cod || ' v' || s.versiune, '; ' ORDER BY s.cod) INTO v_lista FROM red_decl_20261226a s;
   SELECT count(*) INTO v_pers FROM public.red_proiecte pr
    WHERE pr.text_declaratie IS DISTINCT FROM 'Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, electronic.';
-  RAISE NOTICE '20261226a: declaratia: % proiecte schimbate (id cod versiune: %), % cu text personalizat neatinse', v_n, coalesce(v_lista, '-'), v_pers;
+  RAISE NOTICE '20261226a: declaratia: % proiecte schimbate (id cod versiune: %), % cu text personalizat neatinse; marcajul executiei in red_jurnal.user_email: livrare:%',
+    v_n, coalesce(v_lista, '-'), v_pers, current_setting('gazpet.livrare_migrare');
   RAISE NOTICE '20261226a: sfarsit la % ms de la BEGIN; lock-uri puternice tinute de % ms', round(extract(epoch FROM clock_timestamp() - now()) * 1000),
     round(extract(epoch FROM clock_timestamp()) * 1000 - current_setting('gazpet.lock_puternic_la')::bigint / 1000.0);
 END $post$;

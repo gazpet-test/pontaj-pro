@@ -15,14 +15,18 @@
 --   * lungimea GSM-7 crește cu 1 caracter; cazurile de paritate P1-P15 rămân în aceleași condiții (un segment, P10 tot „prea_lung”).
 -- Loturile existente: un lot creat înainte (filtru.sablon_versiune = 'provizoriu-2026-11-03', textul cu „redare”) e REFUZAT după migrare la
 --   aprobare, la fiecare rezervare și de cron (fn_sms_redari_lot_motiv_la: 'sablon_neaprobat', versiunea nu mai e cea curentă; textul recalculat
---   diferă oricum: 'text_schimbat'); nu pleacă niciun mesaj din el. Loturile Redări pot exista doar pe proiecte TEST-% (versiune provizorie).
+--   diferă oricum: 'text_schimbat'); nicio rezervare NOUĂ din el. r2 (review #1119 P2): un worker sms-trimite care a REZERVAT mesaje înainte
+--   de COMMIT le trimite după, cu textul vechi (trimiterea nu reverifică versiunea; funcția edge nu se schimbă) — garanția e valabilă doar
+--   pentru rezervările făcute după schimbare; de aceea, ÎNAINTE de aplicare, procedura din docs/sms/LIVRARE_20261226b_SABLON_PREDARE.md §3
+--   (comutatorul Redări oprit = nicio rezervare Redări; nicio rundă în curs, verificat doar-citire). Loturile Redări pot exista doar pe proiecte TEST-% (versiune provizorie).
 --   Cât un astfel de lot rămâne „activ” (draft / aprobat / in_trimitere, sau coada_golita cu mesaje „necunoscut”) el ocupă UAT-ul (un singur lot
 --   Redări activ pe UAT) → PASUL DE CURĂȚARE (doar descris, nu executat aici): operatorul anulează din SMS → Istoric loturile numărate în
 --   NOTICE-ul de mai jos, apoi le recreează din șablon. Un lot creat în cele câteva secunde ale aplicării poate primi versiunea veche: același
 --   refuz, aceeași anulare.
 -- Ce NU face: nicio dată, niciun drept, nicio schimbare de reguli (aprobare, eligibilitate, trimitere); nu pornește comutatorul; niciun SMS.
--- PUBLICAREA: în ACELAȘI moment cu publicarea PR-ului #1117 și cu UI-ul acestui PR (constanta JS) — între ele, BD-ul refuză lotul (textul
---   afișat diferă de cel recalculat: 40001, fail-closed). Detalii: docs/sms/LIVRARE_20261226b_SABLON_PREDARE.md.
+-- ORDINEA (aceeași în ambele documente de livrare): 20261226a -> 20261226b -> publicarea coordonată #1117 + #1119 -> reîncărcarea formularului
+--   public pe proiectul de test. Publicarea #1119 (constanta JS) ÎNAINTEA acestei migrări e interzisă: JS nou + SQL vechi = textul afișat diferă
+--   de cel recalculat, crearea loturilor Redări refuzată (40001, fail-closed). Detalii: docs/sms/LIVRARE_20261226b_SABLON_PREDARE.md.
 -- Lock-uri: NICIUN lock pe tabele (CREATE OR REPLACE FUNCTION ia doar rândul din pg_proc). sms_loturi / sms_mesaje / red_* doar citite
 --   (ACCESS SHARE, NOTICE-ul loturilor). Fără bloc de lock: garda finală a runnerului afișează LOCK_TINUT „nedeclarat”.
 -- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, garda finală.

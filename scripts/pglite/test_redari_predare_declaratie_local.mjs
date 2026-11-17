@@ -30,7 +30,11 @@ const F_MIG = 'supabase/migrations/20261226a_redari_predare_declaratie.sql'
 const F_REV = 'supabase/revenire/20261226a_redari_predare_declaratie_ROLLBACK.sql'
 const SCHELET = citeste('supabase/tests/20261226a_redari_predare_schelet.sql')
 const MIG = citeste(F_MIG)
-const REV = citeste(F_REV)
+// --revenire <fișier> = altă revenire, doar ca să arăți că probele o prind (ex. revenirea de la 60072612: pică la 3 și 3b)
+const I_REV = process.argv.indexOf('--revenire')
+const REV = I_REV > 0 ? readFileSync(process.argv[I_REV + 1], 'utf8').replace(/\r/g, '') : citeste(F_REV)
+const MARCAJ_MIG = /^livrare:20261226a_redari_predare_declaratie:\d+$/
+const MARCAJ_REV = /^livrare:20261226a_redari_predare_declaratie_ROLLBACK:\d+$/
 const OBIECTE = citeste('supabase/tests/20261226a_redari_predare_declaratie.l15.obiecte.tsv')
 const gen = (...a) => execFileSync('bash', [join(ROOT, 'scripts/livrare_amprenta_gen.sh'), ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 const VECHI = 'Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, prin poștă / electronic.'
@@ -136,6 +140,18 @@ console.log('0b. validatorul runnerului: migrarea (5000), revenirea (2000), acor
   ok(!vr2.ok && /PLAFON_DIFERIT/.test(vr2.out), 'revenirea cu runnerul la 5000 = refuz: ' + vr2.out.slice(0, 120))
 }
 
+// ── 0c. scriptul coordonatorului pentru clonă (nerulat aici): sintaxa bash + aceleași forme de NOTICE ca migrarea / revenirea ──
+console.log('0c. scriptul pentru clonă: bash -n + formele NOTICE-urilor așteptate există în migrare / revenire')
+{
+  const F_CL = join(ROOT, 'supabase/tests/20261226a_redari_predare_clona.sh')
+  let sn = null; try { execFileSync('bash', ['-n', F_CL], { stdio: ['ignore', 'pipe', 'pipe'] }) } catch (e) { sn = String(e.stderr || e.message) }
+  ok(sn === null, 'scriptul pentru clonă: bash -n ' + (sn || 'OK'))
+  const cl = readFileSync(F_CL, 'utf8')
+  ok(cl.includes('marcajul executiei in red_jurnal\\.user_email: livrare:20261226a_redari_predare_declaratie:') && MIG.includes("marcajul executiei in red_jurnal.user_email: livrare:%'")
+    && cl.includes('1 proiecte ale executiei salvate intre timp, neatinse; [0-9]+ proiecte raman cu textul nou') && REV.includes('% proiecte ale executiei salvate intre timp, neatinse; % proiecte raman cu textul nou'),
+    'scriptul pentru clonă caută exact formele NOTICE-urilor din migrare și revenire')
+}
+
 // ── conturile și datele (fictive, scrise de mână) ──
 const U = { OWNER: '00000000-0000-0000-0000-0000000000a1', EDITOR: '00000000-0000-0000-0000-0000000000a3', VIEWER: '00000000-0000-0000-0000-0000000000a4',
   FARA: '00000000-0000-0000-0000-0000000000a5' }
@@ -226,10 +242,15 @@ async function verifica(db) {
   if (await implicit(db) !== lit2(NOU)) ab.push('A DEFAULT-ul: ' + await implicit(db))
   const vechi = (await db.query(`SELECT count(*)::int AS n FROM public.red_proiecte WHERE text_declaratie = $1`, [VECHI])).rows[0].n
   if (vechi !== 0) ab.push(`A ${vechi} proiecte cu VECHI`)
-  const jr = (await db.query(`SELECT inregistrare_id::text AS id, user_id, date_vechi->>'text_declaratie' AS v, date_noi->>'text_declaratie' AS n FROM public.red_jurnal
+  const jr = (await db.query(`SELECT inregistrare_id::text AS id, user_id, user_email, date_vechi->>'text_declaratie' AS v, date_noi->>'text_declaratie' AS n FROM public.red_jurnal
     WHERE tabela = 'red_proiecte' AND actiune = 'update' ORDER BY id`)).rows
-  if (jr.length !== 2 || jr.some(j => j.user_id !== null || j.v !== VECHI || j.n !== NOU) || !jr.some(j => j.id === P.P1) || !jr.some(j => j.id === P.P2))
+  // r2: ambele rânduri poartă ACELAȘI marcaj al execuției (user_email), fără utilizator
+  if (jr.length !== 2 || jr.some(j => j.user_id !== null || j.v !== VECHI || j.n !== NOU || !MARCAJ_MIG.test(j.user_email || '')) || jr[0].user_email !== jr[1].user_email
+      || !jr.some(j => j.id === P.P1) || !jr.some(j => j.id === P.P2))
     ab.push('A jurnalul: ' + JSON.stringify(jr))
+  // după migrare sesiunea nu mai are claims (marcajul nu se scurge în alte scrieri ale tranzacției / sesiunii)
+  const cl = (await db.query(`SELECT coalesce(current_setting('request.jwt.claims', true), '') AS c`)).rows[0].c
+  if (cl !== '') ab.push('A claims rămase în sesiune după migrare: ' + cl)
   const p4 = asteptOk(await ca(db, 'authenticated', U.OWNER, `INSERT INTO public.red_proiecte (cod, denumire) VALUES ('TEST-PROIECT-4', 'nou') RETURNING text_declaratie AS r`), 'A proiect nou (owner)')
   if (p4 !== null && p4 !== NOU) ab.push('A proiectul nou are: ' + p4)
   // B. RPC-ul public (anon): codul retras = EXACT refuzul unei opțiuni necunoscute; nimic scris; aceleași contoare
@@ -325,7 +346,7 @@ let G0 = null
     && j.some(m => /^LOCK_TINUT 20261226a_redari_predare_declaratie: lock-urile puternice ale migrarii tinute \d+ ms/.test(m))
     && j.some(m => /lock la \d+ ms de la BEGIN \(1 incercari, \d+ ms de la prima incercare\)/.test(m)), 'garda finală a runnerului: PLAFON_TIMP (5000) + LOCK_TINUT + lock-ul la prima încercare')
   const nd = j.find(m => /declaratia: /.test(m)) || ''
-  ok(/declaratia: 2 proiecte schimbate \(id cod versiune: [^)]*TEST-PROIECT-1 v2; [^)]*TEST-PROIECT-2 v2\), 1 cu text personalizat neatinse/.test(nd), 'NOTICE-ul evidenței: ' + nd)
+  ok(/declaratia: 2 proiecte schimbate \(id cod versiune: [^)]*TEST-PROIECT-1 v2; [^)]*TEST-PROIECT-2 v2\), 1 cu text personalizat neatinse; marcajul executiei in red_jurnal\.user_email: livrare:20261226a_redari_predare_declaratie:\d+$/.test(nd), 'NOTICE-ul evidenței: ' + nd)
   const ab = await verifica(db)
   ab.forEach(a => console.log('     ' + a))
   ok(ab.length === 0, `verificările de comportament (${ab.length} abateri)`)
@@ -343,8 +364,11 @@ console.log('3. aplicare -> revenire -> reaplicare -> revenire (revenirea nu ati
   ok(!e.code && e.rows[0].r === 3, 'P2 editat de owner după migrare (versiunea 3): ' + JSON.stringify(e.rows || e))
   await db.exec(`INSERT INTO public.red_proiecte (cod, denumire) VALUES ('TEST-PROIECT-5', 'dupa migrare')`)
   let j = await revino(db)
-  const nr = j.find(m => /revenire: \d+ proiecte readuse/.test(m)) || ''
-  ok(/revenire: 1 proiecte readuse la declaratia veche \(id cod versiune: [^)]*TEST-PROIECT-1 v3\); 2 proiecte raman cu textul nou/.test(nr), 'NOTICE-ul revenirii: ' + nr)
+  const nr = j.find(m => /revenire: executia /.test(m)) || ''
+  ok(/revenire: executia livrare:20261226a_redari_predare_declaratie:\d+: 1 proiecte readuse la declaratia veche \(id cod versiune: [^)]*TEST-PROIECT-1 v3\); 1 proiecte ale executiei salvate intre timp, neatinse; 2 proiecte raman cu textul nou/.test(nr), 'NOTICE-ul revenirii: ' + nr)
+  const jrv = (await db.query(`SELECT user_id, user_email, date_vechi->>'text_declaratie' AS v, date_noi->>'text_declaratie' AS n FROM public.red_jurnal
+    WHERE tabela = 'red_proiecte' AND inregistrare_id = '${P.P1}' ORDER BY id DESC LIMIT 1`)).rows[0]
+  ok(jrv.user_id === null && MARCAJ_REV.test(jrv.user_email || '') && jrv.v === NOU && jrv.n === VECHI, 'revenirea: rândul ei de jurnal pe P1 poartă marcajul revenirii: ' + JSON.stringify(jrv))
   ok((await proiect(db, P.P1)).text_declaratie === VECHI && (await proiect(db, P.P2)).text_declaratie === NOU
     && (await proiect(db, P.P3)).text_declaratie === 'Text personalizat al proiectului (test).'
     && (await db.query(`SELECT text_declaratie FROM public.red_proiecte WHERE cod = 'TEST-PROIECT-5'`)).rows[0].text_declaratie === NOU,
@@ -363,8 +387,64 @@ console.log('3. aplicare -> revenire -> reaplicare -> revenire (revenirea nu ati
   const ri = await ca(db, 'authenticated', U.EDITOR, `INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, obiectii_text) VALUES ('${D(10)}', 'telefon', 'nu_particip_cu_obiectii', 'x')`)
   ok(ri.code === '23514', 'reaplicarea: codul retras iar refuzat')
   j = await revino(db)
-  ok(j.some(m => /revenire: 1 proiecte readuse la declaratia veche \(id cod versiune: [^)]*TEST-PROIECT-1 v5\)/.test(m)) && (await proiect(db, P.P1)).text_declaratie === VECHI,
-    'a doua revenire: P1 înapoi (ultimul rând de jurnal al migrării)')
+  ok(j.some(m => /revenire: executia livrare:20261226a_redari_predare_declaratie:\d+: 1 proiecte readuse la declaratia veche \(id cod versiune: [^)]*TEST-PROIECT-1 v5\); 0 proiecte ale executiei/.test(m))
+    && (await proiect(db, P.P1)).text_declaratie === VECHI,
+    'a doua revenire: P1 înapoi (ultimul rând de jurnal = al execuției a doua)')
+  await db.close()
+}
+
+// r2 (review #1119 P1): proveniența = EXECUȚIA concretă (marcajul), nu forma tranziției. Contraexemplele recenzentului:
+//   (a) ÎNAINTE de migrare, cineva (postgres, fără JWT) schimbă declarația unui proiect VECHI -> NOU: migrarea nu-l atinge (are deja NOU);
+//   (b) DUPĂ aplicare, un proiect creat cu textul VECHI explicit și actualizat apoi fără utilizator la NOU.
+// Ambele au în jurnal tranziția VECHI -> NOU fără utilizator, cu rândul identic cu date_noi — revenirea de la 60072612 le readucea la VECHI.
+// Plus: un proiect al execuției salvat de om între timp (P2) rămâne neatins; P1 (doar migrarea) se readuce.
+console.log('3b. contraexemplele revenirii (proveniența din execuția concretă a migrării)')
+const P_A = '00000000-0000-0000-0000-00000000b0a1', P_B = '00000000-0000-0000-0000-00000000b0b1'
+async function scenariuContra(db) {
+  await db.exec(`INSERT INTO public.red_proiecte (id, cod, denumire) VALUES ('${P_A}', 'TEST-CONTRA-A', 'contraexemplul a');
+    UPDATE public.red_proiecte SET text_declaratie = ${lit(NOU)} WHERE id = '${P_A}';`)
+  await aplicaMig(db)
+  await db.exec(`INSERT INTO public.red_proiecte (id, cod, denumire, text_declaratie) VALUES ('${P_B}', 'TEST-CONTRA-B', 'contraexemplul b', ${lit(VECHI)});
+    UPDATE public.red_proiecte SET text_declaratie = ${lit(NOU)} WHERE id = '${P_B}';`)
+  await ca(db, 'authenticated', U.OWNER, `UPDATE public.red_proiecte SET denumire = 'Redenumit de om' WHERE id = '${P.P2}'`)
+}
+{
+  const db = await bazaNoua()
+  await scenariuContra(db)
+  // reperul: ambele contraexemple au exact forma pe care o căuta revenirea veche (tranziția, fără utilizator, rândul = date_noi)
+  const forma = (await db.query(`SELECT count(*)::int AS n FROM public.red_proiecte pr WHERE pr.id IN ('${P_A}', '${P_B}') AND EXISTS (SELECT 1 FROM public.red_jurnal j
+    WHERE j.tabela = 'red_proiecte' AND j.actiune = 'update' AND j.inregistrare_id = pr.id AND j.user_id IS NULL AND j.user_email IS NULL
+      AND j.date_vechi ->> 'text_declaratie' = $1 AND j.date_noi ->> 'text_declaratie' = $2 AND j.date_noi = to_jsonb(pr))`, [VECHI, NOU])).rows[0].n
+  ok(forma === 2, `reperul: A și B au tranziția VECHI -> NOU fără utilizator și rândul = date_noi, dar fără marcaj (${forma}/2)`)
+  const j = await revino(db)
+  const nr = j.find(m => /revenire: executia/.test(m)) || ''
+  ok(/: 1 proiecte readuse la declaratia veche \(id cod versiune: [^)]*TEST-PROIECT-1 v3\); 1 proiecte ale executiei salvate intre timp, neatinse; 3 proiecte raman cu textul nou/.test(nr), 'NOTICE-ul revenirii: ' + nr)
+  const st = {}
+  for (const [n, id] of [['P1', P.P1], ['P2', P.P2], ['A', P_A], ['B', P_B]]) st[n] = (await proiect(db, id)).text_declaratie === VECHI ? 'VECHI' : 'NOU'
+  ok(JSON.stringify(st) === '{"P1":"VECHI","P2":"NOU","A":"NOU","B":"NOU"}', 'contraexemplul (a) și (b) neatinse, P2 (salvat de om) neatins, P1 readus: ' + JSON.stringify(st))
+  await db.close()
+}
+// mutantul revenirii: fără condiția marcajului (doar forma tranziției, ca la 60072612) -> contraexemplele sunt readuse (probele de mai sus îl prind)
+{
+  const db = await bazaNoua()
+  await scenariuContra(db)
+  const revMut = aplica(REV, [['     AND j.user_email = ex.marcaj AND j.actiune', '     AND j.actiune']])
+  const m = await eroare(revino(db, revMut))
+  const a = (await proiect(db, P_A)).text_declaratie, b = (await proiect(db, P_B)).text_declaratie
+  ok(!m && a === VECHI && b === VECHI, `MUTANT revenirea fără marcajul execuției: chiar readuce contraexemplele (A ${a === VECHI ? 'VECHI' : 'NOU'}, B ${b === VECHI ? 'VECHI' : 'NOU'}) — 3b îl prinde`)
+  await db.close()
+}
+// un proiect al execuției schimbat după migrare de altcineva fără utilizator (NOU -> X -> NOU, postgres): ultimul lui rând de jurnal nu mai e
+// al execuției (și versiunea a crescut) -> neatins
+{
+  const pregateste = async db => {
+    await aplicaMig(db)
+    await db.exec(`UPDATE public.red_proiecte SET text_declaratie = 'intermediar' WHERE id = '${P.P1}'; UPDATE public.red_proiecte SET text_declaratie = ${lit(NOU)} WHERE id = '${P.P1}';`)
+  }
+  const db = await bazaNoua()
+  await pregateste(db)
+  await revino(db)
+  ok((await proiect(db, P.P1)).text_declaratie === NOU, 'P1 schimbat de altcineva după migrare (ultimul rând de jurnal nu e al execuției): neatins')
   await db.close()
 }
 
@@ -374,6 +454,8 @@ for (const [nume, fn, re] of [
   ['fără plafon', db => aplicaMig(db, MIG, { plafon: 0, marcajPlafon: false }), /PLAFON_TRANZACTIE lipsa/],
   ['plafonul vechi (2000) pus de runner', db => aplicaMig(db, MIG, { plafon: 2000 }), /PLAFON_TRANZACTIE lipsa: 2000\/session/],
   ['fără amprenta globală L15 v2 (pasul „înainte” lipsă)', db => aplicaMig(db, MIG, { l15: 'nimic' }), /AMPRENTA_GLOBALA_LIPSA/],
+  ['sesiunea de livrare cu JWT (claims cu sub)', db => aplicaMig(db, `SELECT set_config('request.jwt.claims', '{"sub":"${U.OWNER}","role":"authenticated"}', true);\n` + MIG), /sesiunea de livrare are JWT/],
+  ['sesiunea de livrare cu claims doar cu e-mail (marcaj străin)', db => aplicaMig(db, `SELECT set_config('request.jwt.claims', '{"email":"livrare:20261226a_redari_predare_declaratie:1"}', true);\n` + MIG), /sesiunea de livrare are JWT/],
   ['pasul „înainte” dintr-o tranzacție anterioară', async db => {
     await db.exec(`BEGIN; CREATE TEMP TABLE ag_ina_0123456789abcdef (x int); COMMIT;`)
     return aplicaMig(db, 'SELECT count(*) FROM pg_temp.ag_ina_0123456789abcdef;\n' + MIG, { l15: 'nimic' })
@@ -420,11 +502,12 @@ for (const [nume, pregatire, o, re] of [
   }, {}, /starea nu e cea din 20261226a \(pasul 1, functii: public\.fn_red_raspunsuri_valideaza\(\)\)/],
   ['fn_red_optiune_retrasa primită de authenticated', async db => { await aplicaMig(db); await db.exec(`GRANT EXECUTE ON FUNCTION public.fn_red_optiune_retrasa(text) TO authenticated`) }, {}, /starea nu e cea din 20261226a \(pasul 1, functii: drepturi/],
   ['DEFAULT-ul schimbat după aplicare', async db => { await aplicaMig(db); await db.exec(`ALTER TABLE public.red_proiecte ALTER COLUMN text_declaratie SET DEFAULT 'alt text'`) }, {}, /starea nu e cea din 20261226a \(pasul 1, DEFAULT/],
+  ['sesiunea revenirii cu JWT (claims)', async db => aplicaMig(db), { prefix: `SELECT set_config('request.jwt.claims', '{"sub":"${U.OWNER}","role":"authenticated"}', true);\n` }, /sesiunea de livrare are JWT/],
 ]) {
   const db = await bazaNoua()
   await pregatire(db)
   const inainte = (await proiect(db, P.P1)).text_declaratie
-  const m = await eroare(revino(db, REV, o))
+  const m = await eroare(revino(db, (o.prefix || '') + REV, o))
   ok(m && re.test(m) && (await proiect(db, P.P1)).text_declaratie === inainte, `${nume}: ${m ? m.slice(0, 150) : 'A TRECUT'}`)
   await db.close()
 }
@@ -443,6 +526,10 @@ const MUTANTI = [
   ['DEFAULT schimbat fără rânduri (UPDATE-ul scos)', [[UPD, "   WHERE false\n  RETURNING pr.id, pr.cod, pr.versiune)"]]],
   ['DEFAULT schimbat fără rânduri + postcondiția scoasă', [[UPD, "   WHERE false\n  RETURNING pr.id, pr.cod, pr.versiune)"], [POST_VECHI, '']]],
   ['rândurile cu orice text (și cel personalizat) suprascrise', [[UPD, "   WHERE pr.text_declaratie IS DISTINCT FROM 'x'\n  RETURNING pr.id, pr.cod, pr.versiune)"]]],
+  // r2: fără marcajul execuției (blocul $marcaj$ scos) -> jurnalul fără proveniență: postcondiția trebuie să refuze
+  ['marcajul execuției lipsă (UPDATE fără proveniență în jurnal)', [[MIG.slice(MIG.indexOf('DO $marcaj$\n'), MIG.indexOf('END $marcaj$;\n') + 'END $marcaj$;\n'.length), '']]],
+  // r2: claims rămase în sesiune după UPDATE (blocul de curățare scos) -> verificările găsesc claims rămase
+  ['marcajul rămas în sesiune', [[MIG.slice(MIG.indexOf('DO $marcaj_gata$\n'), MIG.indexOf('END $marcaj_gata$;\n') + 'END $marcaj_gata$;\n'.length), '']]],
 ]
 for (const [nume, lista] of MUTANTI) {
   const db = await bazaNoua()
@@ -459,7 +546,8 @@ for (const [nume, lista] of MUTANTI) {
   const db = await bazaNoua()
   await aplicaMig(db)
   await ca(db, 'authenticated', U.OWNER, `UPDATE public.red_proiecte SET denumire = 'Redenumit de om' WHERE id = '${P.P2}'`)
-  const revMut = aplica(REV, [["                    AND j.date_noi = to_jsonb(pr))\n", "                    OR true)\n"]])
+  const tCte = REV.slice(REV.indexOf('WITH t AS (\n'), REV.indexOf('\n), s AS (\n'))
+  const revMut = aplica(REV, [[tCte, `WITH t AS (\n  SELECT pr.id FROM public.red_proiecte pr WHERE pr.text_declaratie = ${lit(NOU)}`]])
   let m = await eroare(revino(db, revMut))
   const p2 = await proiect(db, P.P2)
   ok(!m && p2.text_declaratie === VECHI, `mutantul revenirii (fără evidența rândului) chiar suprascrie P2 editat de om (aici ${p2.text_declaratie === VECHI ? 'suprascris' : 'neatins'}) — testul 3 îl prinde`)
