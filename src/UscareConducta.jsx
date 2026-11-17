@@ -36,7 +36,7 @@ import UscarePasi, { CardInLucru } from './UscarePasi.jsx'
 
 const stocareImplicita = () => { try { return globalThis.localStorage || null } catch { return null } }
 const BUCKET = 'executie-uscare'
-const COL = 'id, proiect_id, proba_id, tronson, km_de_la_m, km_pana_la_m, lungime_m, inceput_planificat, notificare_la, notificare_ref, data_operatie, ora_inceput, ora_final, poz_lat, poz_lng, poz_sursa, poz_precizie_m, poz_la, poz_km_m, poz_traseu_versiune, temperatura_c, temperatura_sursa, meteo, vreme, constructor, utilaje, pig_metalic_buc, piston_pu_buc, bureti_buc, cantariri, punct_roua_c, punct_roua_loc, presiune_bar, timp_deplasare_min, piston_final_rezultat, poze_justificare, observatii, concluzie, semn_constructor_nume, semn_constructor_functie, semn_beneficiar_nume, semn_beneficiar_functie, stare, motiv_anulare, revizie, inchis_la, versiune, creat_la, modificat_la'
+const COL = 'id, proiect_id, proba_id, tronson, km_de_la_m, km_pana_la_m, lungime_m, inceput_planificat, notificare_la, notificare_ref, data_operatie, ora_inceput, ora_final, poz_lat, poz_lng, poz_sursa, poz_precizie_m, poz_la, poz_km_m, poz_traseu_versiune, temperatura_c, temperatura_sursa, meteo, vreme, constructor, utilaje, pig_metalic_buc, piston_pu_buc, bureti_buc, cantariri, punct_roua_c, punct_roua_loc, presiune_bar, timp_deplasare_min, piston_final_rezultat, poze_justificare, observatii, concluzie, semn_constructor_nume, semn_constructor_functie, semn_beneficiar_nume, semn_beneficiar_functie, stare, motiv_anulare, revizie, inchis_la, versiune, creat_la, modificat_la, creat_de, modificat_de'
 const COL_POZA = 'id, uscare_id, proiect_id, categorie, burete_nr, cale, legenda, creat_la'
 const COL_INC = 'id, uscare_id, proiect_id, cale, categorie, burete_nr, legenda, renuntat_motiv, renuntat_la, creat_la'
 const CONSTRUCTOR_IMPLICIT = 'GAZPET INSTAL S.R.L.'
@@ -65,6 +65,11 @@ const ST = {
 // platforma: bara de salvare stă DEASUPRA zonei lor, iar formularul lasă jos spațiu cât zona + bara (ultimul câmp nu rămâne sub ea).
 const REZERVA_PLUTITOARE = 112   // px de jos, ocupați de butoanele plutitoare
 const INALTIME_BARA = 100        // bara (54 + 2×10 + chenar) cu marjă
+const INALTIME_BARA_PASI = 150   // bara pașilor (runda 2): butonul mare (60) + „Salvează pe parcurs” (48) + spațiu (6) + 2×10 + chenare, cu marjă
+// aceeași regulă pentru ecranul pe pași (o singură definiție, transmisă prin `p.jos`)
+const JOS = { rezerva: REZERVA_PLUTITOARE, bara: INALTIME_BARA_PASI }
+// ținta de atingere pe telefon (proba din 17.11.2026): cel puțin 44 × 44 px pentru „scoate poza” și pentru bifa coordonatelor
+const TINTA_ATINGERE = 44
 const Camp = ({ eticheta, children, nota }) => (
   <label style={{ display: 'block', flex: 1, minWidth: 0 }}><span style={ST.lab}>{eticheta}</span>{children}{nota && <span style={{ fontSize: 12, color: G.muted }}>{nota}</span>}</label>
 )
@@ -119,6 +124,8 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const [ecranPas, setEcranPas] = useState(null)        // null | 'confirmare1' — confirmarea de după „Înregistrează etapa 1” (doar pe ecran)
   const [confirmDetalii, setConfirmDetalii] = useState(null) // id-ul raportului ale cărui detalii precompletate au fost confirmate (nu se moștenește)
   const [pozeProiect, setPozeProiect] = useState({ lista: [], eroare: null }) // pozele rapoartelor DESCHISE (pasul din cardurile „în lucru”)
+  const [autori, setAutori] = useState({ nume: {}, eroare: null })          // numele colegilor care au salvat ultima dată rapoartele deschise (cardurile)
+  const [pdfInCurs, setPdfInCurs] = useState(false)                           // runda 2: PDF-ul (5–15 s pe telefon) se vede că lucrează
   const gen = useRef(0)
   const ctx = useRef(0)                                 // generația contextului (proiect / raport deschis)
   const genSursa = useRef(0)                            // generația sursei meteo: ora începerii (instantul) / poziția
@@ -170,9 +177,21 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
           pp.lista = pp.lista.concat(l.filter(x => bucata.includes(x.uscare_id) && x.proiect_id === proiectId))
         }
       } catch (e) { pp = { lista: [], eroare: e?.message || String(e) } }
+      // runda 2 (etapa 2 o poate face ALT coleg): cardul spune cine a salvat ultima dată raportul deschis (numele din profiles, pe bucăți de
+      // câte 100 de id-uri, ca în IzoCorectii). Eroarea de citire NU e „fără nume” (L18): cardul spune că numele nu s-a putut citi.
+      const uids = [...new Set(u.filter(x => x.proiect_id === proiectId && x.stare === 'deschisa').map(x => x.modificat_de).filter(Boolean))]
+      let au = { nume: {}, eroare: null }
+      try {
+        for (let i = 0; i < uids.length; i += 100) {
+          const bucata = uids.slice(i, i + 100)
+          const l = await pagini(client, 'profiles', 'id, name', q => q.in('id', bucata))
+          if (g !== gen.current || proiectCurent.current !== proiectId) return false
+          for (const x of l) if (bucata.includes(x.id)) au.nume[x.id] = x.name
+        }
+      } catch (e) { au = { nume: {}, eroare: e?.message || String(e) } }
       // runda 5: și proiectul (sincron, din randare): un răspuns sosit între randarea noului proiect și efectul lui nu se aplică
       if (g !== gen.current || proiectCurent.current !== proiectId) return false
-      setUscari(u.filter(x => x.proiect_id === proiectId)); setNeactivat(false); setPozeProiect(pp)
+      setUscari(u.filter(x => x.proiect_id === proiectId)); setNeactivat(false); setPozeProiect(pp); setAutori(au)
       // L18: eroarea listei de tronsoane de probă NU e „nicio probă”
       if (Array.isArray(p)) { setProbe(p.filter(x => x.proiect_id === proiectId && x.stare === 'activ')); setProbeEroare(null) }
       else { setProbe([]); setProbeEroare('Tronsoanele de probă nu s-au putut citi: ' + (p?.eroare?.message || 'eroare')) }
@@ -193,7 +212,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     const c = ctx.current
     setUscari([]); setSelectat(null); setForm(null); setBaza(null); setConflict(null); setPoze([]); setIncarcari([]); setPozePentru(null)
     setMiniaturi({}); setMesaj(null); setIncarcPoza(null); setMeteoAlegere(null); registru.current = null; setNelamurite([]); setCoordPentru(null)
-    setPozeProiect({ lista: [], eroare: null }); setEcranPas(null); setConfirmDetalii(null); setMod(ecranInitial)
+    setPozeProiect({ lista: [], eroare: null }); setAutori({ nume: {}, eroare: null }); setEcranPas(null); setConfirmDetalii(null); setMod(ecranInitial)
     genSursa.current += 1; genGps.current += 1
     incarca()
     ;(async () => {
@@ -623,9 +642,12 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   }
 
   // u = raportul de exportat (implicit cel deschis; după „Generează raportul”, rândul închis întors de server)
+  // Runda 2 (proba pe telefon: 5–15 s): cât se generează, butoanele PDF arată „Se generează raportul…” și sunt blocate (L05: `blocat` sincron,
+  // deci a doua apăsare nu pornește un al doilea export), și pe raportul închis.
   async function pdf(u = rand) {
     if (!u || blocat.current || pozePentru !== u.id) return
-    blocat.current = true; setInCurs(true)
+    blocat.current = true; setInCurs(true); setPdfInCurs(true)
+    setMesaj({ tip: 'info', text: 'Se generează raportul PDF (pozele se citesc și se așază în pagini: poate dura 5–15 secunde). Nu apăsa din nou.' })
     const c = capteaza()
     const oprire = typeof AbortController === 'function' ? new AbortController() : null
     pdfOprire.current = oprire
@@ -641,7 +663,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
       setMesaj(necitite ? { tip: 'eroare', text: `PDF generat, dar ${necitite} fotografii n-au putut fi citite (apar cu mențiune în anexă). Reîncearcă cu semnal bun.` }
                         : { tip: 'ok', text: 'PDF generat.' + (u === rand && areModificari(form, u) ? ' Atenție: arată ultima versiune SALVATĂ, nu modificările de pe ecran.' : '') })
     } catch (e) { if (ctxCitire(c)) setMesaj({ tip: 'eroare', text: 'PDF-ul nu s-a putut genera: ' + (e?.message || e) }) }
-    finally { if (pdfOprire.current === oprire) pdfOprire.current = null; blocat.current = false; setInCurs(false) }
+    finally { if (pdfOprire.current === oprire) pdfOprire.current = null; blocat.current = false; setInCurs(false); setPdfInCurs(false) }
   }
 
   // ── afișarea ──
@@ -662,6 +684,9 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
 
   if (!form) {
     const pasi = ecranInitial === 'pasi'                // lista urmează ecranul implicit (nu ultimul raport deschis pe formularul complet)
+    // cine a salvat ultima dată raportul (etapa 2 o poate face alt coleg decât cel care a făcut etapa 1): „tu” / numele / „numele nu s-a putut citi”
+    const textAutor = u => (!u.modificat_de ? null : u.modificat_de === uid ? 'de tine' : autori.nume[u.modificat_de] ? `de ${autori.nume[u.modificat_de]}`
+      : autori.eroare ? 'de un coleg (numele nu s-a putut citi)' : 'de un coleg')
     const vizibile = [...uscari].filter(u => arataAnulate || u.stare !== 'anulata').sort((a, b) => String(b.data_operatie || b.creat_la).localeCompare(String(a.data_operatie || a.creat_la)) || b.id - a.id)
     const creareNelamurita = nelamurite.some(i => i.tinta === 'nou')
     return (
@@ -677,7 +702,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
           const inLucru = vizibile.filter(u => u.stare === 'deschisa')
           return <>
             {inLucru.map(u => (
-              <CardInLucru key={u.id} u={u} ST={ST} eroarePoze={pozeProiect.eroare}
+              <CardInLucru key={u.id} u={u} ST={ST} eroarePoze={pozeProiect.eroare} autor={textAutor(u)}
                 pas={pozeProiect.eroare ? null : pasCurent(u, pozeProiect.lista.filter(p => p.uscare_id === u.id))} onDeschide={() => deschide(u)} />
             ))}
             {poateScrie && (creareNelamurita
@@ -772,7 +797,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
             <div key={p.id} style={{ position: 'relative' }}>
               {miniaturi[p.cale] ? <a href={miniaturi[p.cale]} target="_blank" rel="noreferrer"><img alt={ETICHETE_CATEGORII[cat]} src={miniaturi[p.cale]} style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: `1px solid ${G.border}` }} /></a>
                 : <div style={{ width: 72, height: 72, borderRadius: 8, border: `1px dashed ${G.border}`, fontSize: 11, color: G.muted, display: 'grid', placeItems: 'center' }}>poză</div>}
-              {editabil && rand && <button aria-label="Scoate poza" disabled={inCurs} onClick={() => { if (window.confirm('Scoți poza din raport? (fișierul rămâne păstrat)')) scoatePoza(p) }} style={{ position: 'absolute', top: -6, right: -6, borderRadius: 999, border: 'none', background: G.red, color: '#fff', width: 24, height: 24, cursor: 'pointer' }}>×</button>}
+              {editabil && rand && <button aria-label="Scoate poza" disabled={inCurs} onClick={() => { if (window.confirm('Scoți poza din raport? (fișierul rămâne păstrat)')) scoatePoza(p) }} style={{ position: 'absolute', top: -10, right: -10, borderRadius: 999, border: `2px solid ${G.bg}`, background: G.red, color: '#fff', width: TINTA_ATINGERE, height: TINTA_ATINGERE, fontSize: 22, lineHeight: 1, cursor: 'pointer', padding: 0 }}>×</button>}
             </div>
           ))}
         </div>
@@ -785,6 +810,23 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
         )}
       </div>
     )
+  }
+  // Utilajele (ambele ecrane). Runda 2 (proba pe telefon): după o salvare fără utilaje, serverul întoarce lista goală și rândul gol dispărea
+  // fără urmă → cât raportul e editabil se arată mereu cel puțin un rând (gol); rândul gol nu se trimite (payloadDinFormular îl sare).
+  const UTILAJ_GOL = { denumire: '', buc: '1' }
+  const blocUtilaje = () => {
+    const lista = form.utilaje.length || !editabil ? form.utilaje : [UTILAJ_GOL]
+    const pune = (i, patch) => schimba({ utilaje: lista.map((x, j) => (j === i ? { ...x, ...patch } : x)) })
+    return <>
+      {lista.map((u, i) => (
+        <div key={i} style={ST.rand}>
+          <Camp eticheta={`Denumire ${i + 1}`}><input style={ST.in} disabled={!editabil} value={u.denumire} onChange={e => pune(i, { denumire: e.target.value })} /></Camp>
+          <div style={{ width: 80 }}><Camp eticheta="Buc."><input style={ST.in} inputMode="numeric" disabled={!editabil} value={u.buc} onChange={e => pune(i, { buc: e.target.value })} /></Camp></div>
+          {editabil && <button style={{ ...ST.btn, minWidth: TINTA_ATINGERE }} aria-label="Scoate utilajul" onClick={() => schimba({ utilaje: lista.filter((_, j) => j !== i) })}>×</button>}
+        </div>
+      ))}
+      {editabil && lista.length < 20 && <button style={{ ...ST.btn, marginTop: 8 }} onClick={() => schimba({ utilaje: [...lista, UTILAJ_GOL] })}>+ Utilaj</button>}
+    </>
   }
   const setBureti = text => {
     const n = parseNumar(text)
@@ -837,9 +879,9 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     return (
       <UscarePasi p={{
         ST, Camp, form, rand, val, poze, pozeGata, editabil, poateScrie, inCurs, modificat, conflict, nelamuriteTinta, probe, probeEroare, uscari,
-        pas: pasDate, ecranPas, setEcranPas, lipsa, pozeL, deschise, v24, durata, viteza, kmDif, panouri, acum,
+        pas: pasDate, ecranPas, setEcranPas, lipsa, pozeL, deschise, v24, durata, viteza, kmDif, panouri, acum, jos: JOS, pdfInCurs,
         confirmat: !!rand && confirmDetalii === rand.id, setConfirmat: x => setConfirmDetalii(x && rand ? rand.id : null),
-        meteoAlegere, propuneMeteo, aplicaMeteo, schimba, cant, setBureti, inp, nrInp, oraInp, blocPoze,
+        meteoAlegere, propuneMeteo, aplicaMeteo, schimba, cant, setBureti, inp, nrInp, nrCuSemn, oraInp, blocPoze, blocUtilaje,
         laLista, laComplet: () => setMod('complet'), salveaza: () => salveaza({ ce: 'Salvarea pe parcurs' }), incepeUscarea, inregistreazaEtapa1,
         terminaEtapa2, genereazaRaport, pdf: () => pdf(), trecereNoua,
       }} />
@@ -933,14 +975,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
       </>)}
 
       {sect('5. Utilaje / echipamente', <>
-        {form.utilaje.map((u, i) => (
-          <div key={i} style={ST.rand}>
-            <Camp eticheta={`Denumire ${i + 1}`}><input style={ST.in} disabled={!editabil} value={u.denumire} onChange={e => schimba({ utilaje: form.utilaje.map((x, j) => (j === i ? { ...x, denumire: e.target.value } : x)) })} /></Camp>
-            <div style={{ width: 80 }}><Camp eticheta="Buc."><input style={ST.in} inputMode="numeric" disabled={!editabil} value={u.buc} onChange={e => schimba({ utilaje: form.utilaje.map((x, j) => (j === i ? { ...x, buc: e.target.value } : x)) })} /></Camp></div>
-            {editabil && <button style={ST.btn} aria-label="Scoate utilajul" onClick={() => schimba({ utilaje: form.utilaje.filter((_, j) => j !== i) })}>×</button>}
-          </div>
-        ))}
-        {editabil && form.utilaje.length < 20 && <button style={{ ...ST.btn, marginTop: 8 }} onClick={() => schimba({ utilaje: [...form.utilaje, { denumire: '', buc: '1' }] })}>+ Utilaj</button>}
+        {blocUtilaje()}
         {blocPoze('utilaje')}
       </>)}
 
@@ -1088,11 +1123,11 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
                 </div>
               </div>
             )}
-            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14 }}>
-              <input type="checkbox" checked={coordPentru === rand.id} onChange={e => setCoordPentru(e.target.checked ? rand.id : null)} style={{ width: 22, height: 22 }} />
+            <label style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 14, minHeight: 48, padding: '4px 0', cursor: 'pointer' }}>
+              <input type="checkbox" checked={coordPentru === rand.id} onChange={e => setCoordPentru(e.target.checked ? rand.id : null)} style={{ width: 28, height: 28, flexShrink: 0, margin: 0 }} />
               Include coordonatele exacte ale operațiunii în PDF (doar pentru acest raport, la următorul export)
             </label>
-            <button style={ST.mare} disabled={inCurs || !pozeGata} onClick={() => pdf()}>📄 Raportul în PDF{rand.stare !== 'inchisa' ? ' (ciornă)' : ''}</button>
+            <button style={ST.mare} disabled={inCurs || !pozeGata} onClick={() => pdf()}>{pdfInCurs ? '⏳ Se generează raportul…' : `📄 Raportul în PDF${rand.stare !== 'inchisa' ? ' (ciornă)' : ''}`}</button>
           </div>
         </>)}
       {selectat === 'nou' && <div style={{ ...ST.card, color: G.muted, fontSize: 13 }}>Salvează raportul ca să poți adăuga fotografii.</div>}

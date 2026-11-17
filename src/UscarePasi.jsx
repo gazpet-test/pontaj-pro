@@ -15,10 +15,12 @@ import {
 } from './uscarePasi.js'
 
 const fmtG = g => (g == null ? '—' : `${g > 0 ? '+' : g < 0 ? '−' : ''}${fmtNr(Math.abs(g), 0)} g`)
-const ETICHETA_VERDICT = { trece: '✓ în prag: propun USCAT', nu_trece: '✗ peste prag: propun UMED', de_verificat: '? de verificat', necalculabil: '— nu se poate calcula' }
+// decizia E (runda 2): o diferență negativă se spune explicit („mai ușor cu X g”), iar una peste 1% cere verificarea cântăririi
+const fmtDif = g => (g != null && g < 0 ? `mai ușor cu ${fmtNr(-g, 0)} g` : fmtG(g))
+const ETICHETA_VERDICT = { trece: '✓ în prag: propun USCAT', nu_trece: '✗ peste prag: propun UMED', de_verificat: '⚠ verifică cântărirea (nu propun nimic)', necalculabil: '— nu se poate calcula' }
 
-/** cardul unui raport ÎN LUCRU din listă: reluarea la o singură atingere, cu pasul la care a rămas */
-export function CardInLucru({ u, pas, eroarePoze, onDeschide, ST }) {
+/** cardul unui raport ÎN LUCRU din listă: reluarea la o singură atingere, cu pasul la care a rămas; `autor` = cine a salvat ultima dată */
+export function CardInLucru({ u, pas, eroarePoze, onDeschide, ST, autor = null }) {
   const t = pas === 'etapa2' ? { rand: `Etapa 1 înregistrată · pistoanele introduse la ${fmtOraMinut(u.ora_inceput)}`, actiune: 'Continuă cu etapa 2 →' }
     : pas === 'rezumat' ? { rand: 'Etapa 2 terminată · rămân detaliile și raportul', actiune: 'Generează raportul →' }
       : pas === 'etapa1' ? { rand: 'Etapa 1 în lucru (introducerea pistoanelor)', actiune: 'Continuă cu etapa 1 →' }
@@ -28,6 +30,7 @@ export function CardInLucru({ u, pas, eroarePoze, onDeschide, ST }) {
       <div style={{ fontSize: 17, fontWeight: 800 }}>Tronson {u.tronson}</div>
       <div style={{ fontSize: 13, color: G.muted, marginTop: 2 }}>km {fmtKm(u.km_de_la_m)} → {fmtKm(u.km_pana_la_m)}</div>
       <div style={{ fontSize: 15, marginTop: 6 }}>{t.rand}</div>
+      {autor && <div style={{ fontSize: 13, color: G.muted, marginTop: 2 }}>Salvat ultima dată {fmtMoment(u.modificat_la)} {autor}</div>}
       <div style={{ fontSize: 16, fontWeight: 800, color: G.blue, marginTop: 6 }}>{t.actiune}</div>
     </button>
   )
@@ -46,10 +49,12 @@ function BaraPasi({ pas }) {
     </div>
   )
 }
-// butonul mare, fix jos (degetul mare pe telefon); motivul pentru care e inactiv se scrie deasupra lui, în pagină
-function BaraJos({ ST, children }) {
+// butonul mare, fix jos (degetul mare pe telefon); motivul pentru care e inactiv se scrie deasupra lui, în pagină.
+// Runda 2 (proba pe telefon): bara stă DEASUPRA butoanelor plutitoare ale platformei (🐛, „Tichet”, asistentul) — `jos.rezerva` px de jos,
+// aceeași constantă ca bara de salvare a formularului complet (UscareConducta.jsx) — complet vizibilă și apăsabilă pe toată lățimea.
+function BaraJos({ jos, children }) {
   return (
-    <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, padding: 10, background: G.bg, borderTop: `1px solid ${G.border}`, zIndex: 20 }}>
+    <div style={{ position: 'fixed', left: 0, right: 0, bottom: jos.rezerva, padding: 10, background: G.bg, borderTop: `1px solid ${G.border}`, borderBottom: `1px solid ${G.border}`, boxShadow: '0 -4px 16px rgba(0,0,0,.35)', zIndex: 20 }}>
       <div style={{ maxWidth: 720, margin: '0 auto', display: 'grid', gap: 6 }}>{children}</div>
     </div>
   )
@@ -66,8 +71,10 @@ function Lipsuri({ titlu, lista }) {
 const Avert = ({ lista }) => (lista.length ? <div role="alert" style={{ color: G.yellow, fontSize: 13, marginTop: 4 }}>{lista.map(t => <div key={t}>⚠ {t}</div>)}</div> : null)
 
 export default function UscarePasi({ p }) {
-  const { ST, form, rand, pas, editabil, inCurs, panouri } = p
+  const { ST, form, rand, pas, editabil, inCurs, panouri, jos } = p
   const titlu = pas ? ETICHETE_PAS[pas] : 'Se citesc datele raportului…'
+  // jos: loc pentru zona plutitoarelor + bara fixă (când există una: raport editabil sau închis, cu PDF-ul), ca ultimul câmp să nu rămână sub ea
+  const areBara = editabil || pas === 'inchis'
   const incarcariDeschise = p.deschise.length > 0 && (
     <div role="alert" style={{ ...ST.card, borderColor: G.yellow, fontSize: 14 }}>
       {p.deschise.length} {p.deschise.length === 1 ? 'fotografie a rămas neterminată' : 'fotografii au rămas neterminate'} (urcare întreruptă).
@@ -80,7 +87,7 @@ export default function UscarePasi({ p }) {
   else if (pas === 'etapa2') corp = p.ecranPas === 'confirmare1' ? <Confirmare1 p={p} /> : <EcranEtapa2 p={p} />
   else if (pas) corp = <EcranRezumat p={p} />
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto', padding: '8px 12px 150px' }}>
+    <div style={{ maxWidth: 720, margin: '0 auto', padding: `8px 12px ${jos.rezerva + (areBara ? jos.bara : 16)}px` }}>
       <div style={{ ...ST.rand, justifyContent: 'space-between', margin: '8px 0', flexWrap: 'wrap' }}>
         <button style={ST.btn} onClick={p.laLista}>← Lista</button>
         {rand && <button style={{ ...ST.btn, background: 'transparent' }} onClick={p.laComplet}>Vezi / corectează toate datele</button>}
@@ -133,7 +140,7 @@ function EcranTronson({ p }) {
       <div style={ST.nota}>Constructorul, utilajele și semnatarii se iau din ultimul raport al proiectului; îi verifici la final, înainte de raport.</div>
     </div>
     {form.tronson ? erori.length > 0 && <Lipsuri titlu="De corectat:" lista={erori} /> : <div style={ST.nota}>Alege tronsonul de probă sau „Alt interval / tot traseul”.</div>}
-    {editabil && <BaraJos ST={ST}>
+    {editabil && <BaraJos jos={p.jos}>
       <button style={{ ...ST.mare, minHeight: 60, background: '#238636', color: '#fff' }} disabled={inCurs || erori.length > 0 || p.nelamuriteTinta.length > 0} onClick={p.incepeUscarea}>
         {inCurs ? 'Se trimite…' : 'Începe · etapa 1 →'}
       </button>
@@ -202,7 +209,7 @@ function EcranEtapa1({ p }) {
       {blocPoze('pistoane', null, 'Poza ansamblului de pistoane')}
     </div>
     <Lipsuri titlu="Ca să înregistrezi etapa 1, mai trebuie:" lista={lipsa} />
-    {editabil && <BaraJos ST={ST}>
+    {editabil && <BaraJos jos={p.jos}>
       <button style={{ ...ST.mare, minHeight: 60, background: lipsa.length ? G.surface2 : '#238636', color: '#fff' }} disabled={inCurs || lipsa.length > 0 || !!p.conflict || p.nelamuriteTinta.length > 0} onClick={p.inregistreazaEtapa1}>
         {inCurs ? 'Se trimite…' : '✓ Înregistrează etapa 1'}
       </button>
@@ -247,7 +254,7 @@ function EcranEtapa2({ p }) {
           <div style={ST.h}>{numePiston(c, n)}</div>
           <div style={{ fontSize: 14 }}>La intrare: <b>{fmtNr(date.cantariri[i]?.intrare_kg, 3) || '—'} kg</b></div>
           <GreutateInp p={p} i={i} k="iesire_kg" eticheta="Greutatea pe cântar, la ieșire [kg]" />
-          <div style={{ fontSize: 16, marginTop: 6 }}>Diferența față de intrare: <b style={{ color: d == null ? G.muted : d > (v.prag_g ?? Infinity) ? G.red : G.green }}>{fmtG(d)}</b></div>
+          <div style={{ fontSize: 16, marginTop: 6 }}>Diferența față de intrare: <b style={{ color: d == null ? G.muted : d > (v.prag_g ?? Infinity) ? G.red : G.green }}>{fmtDif(d)}</b></div>
           <Avert lista={avertismentePereche(date.cantariri[i], v.prag_g)} />
           {blocPoze('cantar_iesire', c.nr, 'Poza cântarului, cu kilogramele vizibile')}
         </div>
@@ -262,7 +269,7 @@ function EcranEtapa2({ p }) {
     <div style={{ ...ST.card, borderColor: v.stare === 'trece' ? G.green : v.stare === 'nu_trece' ? G.red : G.yellow }}>
       <div style={ST.h}>Ultimul piston{v.nr ? ` (nr. ${v.nr})` : ''}: iese uscat?</div>
       <div style={{ fontSize: 14 }}>Pragul de lucru: {v.calcul || `${PRAG_G_PE_KM} g/km × lungimea tronsonului (lipsește lungimea)`}.</div>
-      <div style={{ fontSize: 16, marginTop: 6 }}>Diferența ultimului piston: <b>{fmtG(v.diferenta_g)}</b> → <b>{ETICHETA_VERDICT[v.stare]}</b></div>
+      <div style={{ fontSize: 16, marginTop: 6 }}>Diferența ultimului piston: <b>{fmtDif(v.diferenta_g)}</b> → <b style={{ color: v.stare === 'de_verificat' ? G.yellow : undefined }}>{ETICHETA_VERDICT[v.stare]}</b></div>
       <div style={ST.nota}>{v.motiv}. Calculul doar propune; tu confirmi ce vezi.</div>
       <div style={{ ...ST.rand, marginTop: 10 }}>
         {[['uscat', 'USCAT', G.green], ['umed', 'UMED', G.red]].map(([k, t, cul]) => (
@@ -278,7 +285,7 @@ function EcranEtapa2({ p }) {
       {blocPoze('piston_final', null, 'Poza ultimului piston')}
     </div>
     <Lipsuri titlu="Ca să termini etapa 2, mai trebuie:" lista={lipsa} />
-    {editabil && <BaraJos ST={ST}>
+    {editabil && <BaraJos jos={p.jos}>
       <button style={{ ...ST.mare, minHeight: 60, background: lipsa.length ? G.surface2 : '#238636', color: '#fff' }} disabled={inCurs || lipsa.length > 0 || !!p.conflict || p.nelamuriteTinta.length > 0} onClick={p.terminaEtapa2}>
         {inCurs ? 'Se trimite…' : '✓ Termină etapa 2'}
       </button>
@@ -341,14 +348,7 @@ function EcranRezumat({ p }) {
       <div style={ST.nota}>Unele sunt precompletate din ultimul raport al proiectului: verifică-le dintr-o privire.</div>
       <Camp eticheta="Constructor">{inp('constructor')}</Camp>
       <div style={ST.lab}>Utilaje / echipamente</div>
-      {form.utilaje.map((u, i) => (
-        <div key={i} style={ST.rand}>
-          <Camp eticheta={`Denumire ${i + 1}`}><input style={ST.in} disabled={!editabil} value={u.denumire} onChange={e => schimba({ utilaje: form.utilaje.map((x, j) => (j === i ? { ...x, denumire: e.target.value } : x)) })} /></Camp>
-          <div style={{ width: 80 }}><Camp eticheta="Buc."><input style={ST.in} inputMode="numeric" disabled={!editabil} value={u.buc} onChange={e => schimba({ utilaje: form.utilaje.map((x, j) => (j === i ? { ...x, buc: e.target.value } : x)) })} /></Camp></div>
-          {editabil && <button style={ST.btn} aria-label="Scoate utilajul" onClick={() => schimba({ utilaje: form.utilaje.filter((_, j) => j !== i) })}>×</button>}
-        </div>
-      ))}
-      {editabil && form.utilaje.length < 20 && <button style={{ ...ST.btn, marginTop: 8 }} onClick={() => schimba({ utilaje: [...form.utilaje, { denumire: '', buc: '1' }] })}>+ Utilaj</button>}
+      {p.blocUtilaje()}
       <div style={ST.rand}>
         <Camp eticheta="PIG metalic [buc]">{nrInp('pig_metalic_buc', { inputMode: 'numeric' })}</Camp>
         <Camp eticheta="Piston poliuretan [buc]">{nrInp('piston_pu_buc', { inputMode: 'numeric' })}</Camp>
@@ -358,14 +358,14 @@ function EcranRezumat({ p }) {
       {v24.stare === 'sub_24h' && <div role="alert" style={{ color: G.yellow, fontSize: 14, marginTop: 6 }}>⚠ Notificarea s-a făcut cu {fmtNr(v24.ore)} h înainte; beneficiarul cere minimum 24 h.</div>}
       {v24.stare === 'ok' && <div style={{ color: G.green, fontSize: 13, marginTop: 6 }}>✓ Notificare cu {fmtNr(v24.ore)} h înainte (minimum 24 h).</div>}
       <div style={ST.rand}>
-        <Camp eticheta="Temperatura exterioară (°C)">{inp('temperatura_c', { inputMode: 'decimal', onChange: e => schimba({ temperatura_c: e.target.value, temperatura_sursa: 'manual' }) })}</Camp>
+        <Camp eticheta="Temperatura exterioară (°C)">{p.nrCuSemn('temperatura_c', { onChange: e => schimba({ temperatura_c: e.target.value, temperatura_sursa: 'manual' }) })}</Camp>
         {editabil && <button style={ST.btn} onClick={p.propuneMeteo} disabled={inCurs}>🌡️ Din meteo</button>}
       </div>
       {p.meteoAlegere && <div style={{ display: 'grid', gap: 6, marginTop: 8 }}>{p.meteoAlegere.opt.map(o => <button key={o.site_id} style={ST.btn} onClick={() => p.aplicaMeteo(o, p.meteoAlegere.gen, p.meteoAlegere.ctx)}>{o.site}: {o.temperatura_c} °C, {o.vreme} (observată la {fmtMoment(o.ora_observatiei)})</button>)}</div>}
       <Camp eticheta="Vremea">{inp('vreme')}</Camp>
       {blocPoze('temperatura', null, 'Poza termometrului')}
       <div style={ST.rand}>
-        <Camp eticheta="Punctul de rouă (°C), opțional">{nrInp('punct_roua_c')}</Camp>
+        <Camp eticheta="Punctul de rouă (°C), opțional">{p.nrCuSemn('punct_roua_c')}</Camp>
         <Camp eticheta="Locul măsurării">{inp('punct_roua_loc')}</Camp>
       </div>
       <Camp eticheta="Presiunea (bar)">{nrInp('presiune_bar')}</Camp>
@@ -386,10 +386,10 @@ function EcranRezumat({ p }) {
 
     {deschis && <Lipsuri titlu="Ca să generezi raportul, mai trebuie:" lista={motive} />}
     {pas === 'inchis' && <div style={{ ...ST.card, borderColor: G.green }}>Raportul e generat (închis){rand.inchis_la ? ` la ${fmtMoment(rand.inchis_la)}` : ''}. Corecturile se fac prin redeschidere consemnată (administrator), din „Vezi / corectează toate datele”.</div>}
-    {(deschis && editabil) || pas === 'inchis' ? <BaraJos ST={ST}>
+    {(deschis && editabil) || pas === 'inchis' ? <BaraJos jos={p.jos}>
       {deschis
-        ? <button style={{ ...ST.mare, minHeight: 60, background: motive.length ? G.surface2 : '#238636', color: '#fff' }} disabled={inCurs || motive.length > 0} onClick={p.genereazaRaport}>{inCurs ? 'Se lucrează…' : '📄 Generează raportul'}</button>
-        : <button style={{ ...ST.mare, minHeight: 60 }} disabled={inCurs || !p.pozeGata} onClick={p.pdf}>📄 Descarcă raportul (PDF)</button>}
+        ? <button style={{ ...ST.mare, minHeight: 60, background: motive.length ? G.surface2 : '#238636', color: '#fff' }} disabled={inCurs || motive.length > 0} onClick={p.genereazaRaport}>{p.pdfInCurs ? '⏳ Se generează raportul…' : inCurs ? 'Se închide raportul…' : '📄 Generează raportul'}</button>
+        : <button style={{ ...ST.mare, minHeight: 60 }} disabled={inCurs || !p.pozeGata} onClick={p.pdf}>{p.pdfInCurs ? '⏳ Se generează raportul…' : '📄 Descarcă raportul (PDF)'}</button>}
     </BaraJos> : null}
   </>
 }
