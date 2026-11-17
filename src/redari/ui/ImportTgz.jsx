@@ -6,6 +6,7 @@ import { supabase } from '../../lib/supabase.js'
 import { parseazaTgz, scrieImport, randuriDeTratat, csvRanduriDeTratat, numarRanduriPuseDeoparte } from '../importTgz.js'
 import { parseazaAnexa7 } from '../importAnexa7.js'
 import { G, S, fmtNum, msgEroare, Camp, Gol } from './comune.jsx'
+import ImportUtilizatori from './ImportUtilizatori.jsx'   // PR4b: importul utilizatorilor / arendașilor, în aceeași zonă de import (același drept)
 
 const TRONSOANE = Array.from({ length: 11 }, (_, i) => i + 1)
 const MAX_PREVIEW = 50
@@ -37,7 +38,7 @@ const descarcaCsvDeTratat = (randuri, eticheta) => {
 }
 const SUGESTIE_SARITE = 'necesită completarea poziției HG / nr. cadastral în Excel și reimport (reimportul aceluiași fișier completează doar ce lipsește).'
 
-export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
+export default function ImportTgz({ proiect, uats, nivel, profile = null, show, onImportat }) {
   const poateScrie = nivel === 'admin' || nivel === 'editor'
   const [fisier, setFisier] = useState(null)
   const [versiune, setVersiune] = useState('')
@@ -318,6 +319,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
           </div>
         ))}
       </div>
+      <ImportUtilizatori proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onImportat={onImportat} />
     </div>
   )
 }
