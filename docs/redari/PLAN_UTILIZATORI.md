@@ -29,7 +29,15 @@ Rularea de probă pe Lot 1 (05.11): 411 rânduri, **156 de persoane distincte**,
 
 **Ordinea de rulare în producție:** #998 → #1003 (PR2 / 31d) → #1002 (PR3a / 31c) → #1004 → #1000. PR2 verifică numărul exact de coloane înainte ca PR3a să adauge `calitate_document`.
 - Utilizatorii importați intră **automat** în generarea în masă (`pregatesteLot` filtrează doar `'neidentificat'`).
-- Ca atare, importul (PR4) nu se face în producție înainte de aplicarea și verificarea porții din PR3a. `IMPORT_UTILIZATORI_ACTIV=false` rămâne neschimbat.
+- Ca atare, importul (PR4) nu se face în producție înainte de aplicarea și verificarea porții din PR3a. ~~`IMPORT_UTILIZATORI_ACTIV=false` rămâne neschimbat.~~ Condiția e îndeplinită (vezi PR4b mai jos).
+
+## PR4 / PR4b — stare (17.11.2026)
+
+- **PR4 (biblioteca)**: `src/redari/importUtilizatori.js` — livrată și revizuită (r1–r7).
+- **PR4b (ecranul + pornirea)**: `src/redari/ui/ImportUtilizatori.jsx` în zona „📥 Import TGZ”, raportul în `src/redari/importUtilizatoriRaport.js`, `IMPORT_UTILIZATORI_ACTIV = true`.
+  Motivul pornirii: poarta PR3a (`20261131c` + `20261131d`) e aplicată în producție, șablonul `convocator_utilizator.docx` e pe main, iar proprietarul a decis (17.11.2026) ca utilizatorii să se importe înainte de convocări.
+  Pașii operatorului, categoriile, ce nu face importul, anularea și ordinea în producție: [IMPORT_UTILIZATORI_ECRAN.md](IMPORT_UTILIZATORI_ECRAN.md).
+- Rămâne deschis: anularea pe lot (azi doar ștergere logică câte unul din Fișa parcelei; propunere de migrare în documentul de mai sus, neimplementată).
 
 ## Întrebări deschise
 1. **„A răspuns” = a semnat PV A?** Azi PV B se face și pentru cine a răspuns, dar nu semnează (`motiv_pv_b` = declarație / refuz). Propunere: PV B e blocat doar de un PV A semnat. Pentru Juridic.

@@ -8,13 +8,19 @@
 //  - rândul nou: red_detinatori cu calitate 'utilizator' (fișierul nu deosebește arendașul de alt utilizator), sursa_date + versiune_lista_tgz,
 //    plus red_detinatori_contact cu adresa (telefonul doar dacă are cel puțin 9 cifre);
 //  - lotul în red_import_loturi cu sursa 'TGZ_UTILIZATORI'.
-// ORDINEA DE RULARE ÎN PRODUCȚIE: utilizatorii importați intră automat în generarea în masă (convocatoareMasa.pregatesteLot filtrează doar
-// 'neidentificat'), deci scrierea e oprită (IMPORT_UTILIZATORI_ACTIV = false) până la poarta din PR3 (convocatorul pentru utilizatori).
+// ORDINEA DE RULARE ÎN PRODUCȚIE: utilizatorii importați intră în generarea în masă (convocatoareMasa.pregatesteLot filtrează doar
+// 'neidentificat'), de aceea scrierea a stat oprită până la poarta din PR3a. PR4b (17.11.2026) o pornește (IMPORT_UTILIZATORI_ACTIV = true) pentru că:
+//  - poarta PR3a (20261131c_redari_poarta_utilizatori + 20261131d_redari_stare_utilizatori) e aplicată: fără aprobarea owner-ului pe proiect
+//    (red_proiecte.convocare_utilizatori_aprobata, implicit false) rezervarea, regenerarea și expedierea convocatorului unui utilizator sunt refuzate
+//    în BD (RD006) și în client (convocareUtilizatori.motivConvocatorUtilizator);
+//  - șablonul utilizatorului (public/redari/sabloane/convocator_utilizator.docx, PR3b) există;
+//  - decizia proprietarului din 17.11.2026: utilizatorii se importă ÎNAINTE de convocări.
+// Ecranul: src/redari/ui/ImportUtilizatori.jsx (previzualizare, raport, confirmare dublă). Pași și anulare: docs/redari/IMPORT_UTILIZATORI_ECRAN.md.
 import * as XLSX from 'xlsx-js-style'
 import { normalizeazaNume } from './idParcela.js'
 import { cheieSursa, imparteAdresa, text, LOT, LOT_CITIRE, PAGINA } from './importTgz.js'
 
-export const IMPORT_UTILIZATORI_ACTIV = false
+export const IMPORT_UTILIZATORI_ACTIV = true
 export const SURSA_UTILIZATORI = 'TGZ_UTILIZATORI'
 export const CALITATE_UTILIZATOR = 'utilizator'
 export const COL = { uat: 0, poz_hg: 2, tarla: 3, nr_cadastral: 4, nume: 24, adresa: 25, telefon: 26 }
@@ -165,7 +171,7 @@ export async function citesteDatePlan(supabase, proiectId, { pagina = PAGINA, lo
 /**
  * scrieUtilizatori(supabase, plan, { proiectId, versiune, fisierNume, permite }) → { lotId, detinatoriNoi, contacteNoi, sarite }
  * Recitește deținătorii parcelelor țintă imediat înainte de scriere (alt import / altă fereastră între timp → sare, nu dublează).
- * Oprit cât IMPORT_UTILIZATORI_ACTIV = false (vezi antetul); `permite: true` doar în teste.
+ * Oprit dacă IMPORT_UTILIZATORI_ACTIV = false (vezi antetul); `permite: true` doar în teste.
  */
 export async function scrieUtilizatori(supabase, plan, optiuni = {}) {
   // r3 (Cop r2 P2-03): API-ul productiv NU poate ocoli poarta; doar __scrieUtilizatoriTest (teste) primește `permite`
@@ -178,7 +184,7 @@ export const __scrieUtilizatoriTest = (supabase, plan, optiuni = {}) => {
 }
 
 async function scrie(supabase, plan, { proiectId, versiune, fisierNume = null, permite = false, pagina = PAGINA, lotCitire = LOT_CITIRE } = {}) {
-  if (!permite) throw new Error('Importul utilizatorilor e oprit până la convocatorul pentru utilizatori (PR3, docs/redari/PLAN_UTILIZATORI.md)')
+  if (!permite) throw new Error('Importul utilizatorilor e oprit (IMPORT_UTILIZATORI_ACTIV = false; docs/redari/PLAN_UTILIZATORI.md)')
   if (!proiectId) throw new Error('scrieUtilizatori: proiectId lipsă')
   if (!String(versiune || '').trim()) throw new Error('scrieUtilizatori: versiunea listei e obligatorie')
   const noi = plan?.noi ?? []

@@ -124,11 +124,21 @@ describe('scrieUtilizatori', () => {
     { rand: 4, uat3: 'HUS', cheie_sursa: 'K1', nume: 'A (fictiv)', nume_normalizat: 'A (FICTIV)', contact: { adresa_strada: null, adresa_sat: 'S', adresa_comuna: 'C', adresa_judet: 'J', cod_postal: null, adresa_cunoscuta: true, telefon: null } },
     { rand: 5, uat3: 'HUS', cheie_sursa: 'K2', nume: 'B (fictiv)', nume_normalizat: 'B (FICTIV)', contact: { adresa_strada: null, adresa_sat: null, adresa_comuna: null, adresa_judet: null, cod_postal: null, adresa_cunoscuta: false, telefon: null } },
   ], { parcele: [{ id: 'p1', cheie_sursa: 'K1', id_parcela: 'X1' }, { id: 'p2', cheie_sursa: 'K2', id_parcela: 'X2' }], detinatori: [] })
-  it('oprit implicit până la PR3 (IMPORT_UTILIZATORI_ACTIV = false)', async () => {
-    expect(IMPORT_UTILIZATORI_ACTIV).toBe(false)
+  it('calea internă fără `permite` rămâne oprită (garda din scrie() există în continuare)', async () => {
     const { supabase, jurnal } = clientFals()
     await expect(__scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v' })).rejects.toThrow(/oprit/)
     expect(jurnal.inserturi).toEqual([])
+  })
+  // PR4b (17.11.2026): poarta PR3a aplicată + șablonul utilizatorului pe main + decizia proprietarului → API-ul productiv scrie.
+  // Pe codul vechi (IMPORT_UTILIZATORI_ACTIV = false) acest test pică: scrieUtilizatori arunca „oprit” înainte de orice INSERT.
+  it('PR4b: scrieUtilizatori (API-ul ecranului) scrie; `permite: false` trimis de apelant nu o poate opri sau porni', async () => {
+    expect(IMPORT_UTILIZATORI_ACTIV).toBe(true)
+    const { supabase, tabele } = clientFals()
+    const r = await scrieUtilizatori(supabase, plan, { proiectId: 'pr', versiune: 'TGZ 01.01.2026 utilizatori (fictiv)', permite: false })
+    expect(r).toMatchObject({ detinatoriNoi: 2, contacteNoi: 2, sarite: 0, schimbate: 0 })
+    expect(tabele.red_detinatori.map(d => d.calitate)).toEqual([CALITATE_UTILIZATOR, CALITATE_UTILIZATOR])
+    expect(tabele.red_import_loturi).toHaveLength(1)
+    expect(tabele.red_import_loturi[0]).toMatchObject({ sursa: SURSA_UTILIZATORI, stare: 'finalizat', detinatori_noi: 2 })
   })
   it('scrie utilizatorii (calitate utilizator) + contactele, lot finalizat; cine a apărut între timp pe parcelă e sărit', async () => {
     const { supabase, tabele } = clientFals({ existentiDupaPlan: [{ id: 'd0', parcela_id: 'p2', nume_normalizat: 'B (FICTIV)', sters_la: null }] })

@@ -6,6 +6,7 @@ import { supabase } from '../../lib/supabase.js'
 import { parseazaTgz, scrieImport, randuriDeTratat, csvRanduriDeTratat, numarRanduriPuseDeoparte } from '../importTgz.js'
 import { parseazaAnexa7 } from '../importAnexa7.js'
 import { G, S, fmtNum, msgEroare, Camp, Gol } from './comune.jsx'
+import ImportUtilizatori from './ImportUtilizatori.jsx'   // PR4b: importul utilizatorilor / arendașilor, în aceeași zonă de import (același drept)
 
 const TRONSOANE = Array.from({ length: 11 }, (_, i) => i + 1)
 const MAX_PREVIEW = 50
@@ -318,6 +319,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
           </div>
         ))}
       </div>
+      <ImportUtilizatori proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={onImportat} />
     </div>
   )
 }
