@@ -22,6 +22,8 @@ import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
 import { blocNou, blocuriDinLinii, liniiDinBlocuri, activitatiBloc, tintaPe, fmtNr, citesteTinte, cantitateLinie } from './devizTinte.js'
 // Rezumatul scurt salvat pe raport (20261216a): îl scrie serverul la salvare; aici se vede, se copiază, se corectează
 import RubricaRezumat from './RubricaRezumat.jsx'
+// Uscare conductă (20261225a) pe telefon: butonul apare doar dacă serverul dă drept de scriere pe cel puțin un proiect
+import UscareMobil, { useUscareMobil } from './UscareMobil.jsx'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -64,6 +66,9 @@ export default function AppMobilManageri() {
   const [sites, setSites] = useState([])
   const [loading, setLoading] = useState(true)
   const [probeWrite, setProbeWrite] = useState(false)
+  // proiectele pe care contul poate scrie uscări (aceeași funcție de drept ca ecranul de uscare); se încarcă în paralel cu restul
+  const uscare = useUscareMobil(supabase)
+  const areUscare = uscare.stare === 'gata' && uscare.proiecte.length > 0
 
   useEffect(() => {
     (async () => {
@@ -90,6 +95,7 @@ export default function AppMobilManageri() {
 
   if (view === 'raport') return <RaportZilnic profile={profile} sites={sites} onBack={() => setView('launcher')} />
   if (view === 'probe' && probeWrite) return <ProbeTerenMobil profile={profile} onBack={() => setView('launcher')} />
+  if (view === 'uscare') return <UscareMobil client={supabase} st={uscare} onBack={() => setView('launcher')} />
 
   // ── Launcher ──
   const butoane = [
@@ -97,6 +103,7 @@ export default function AppMobilManageri() {
     { icon: '⏱️', label: 'Pontaj\nechipă', color: G.blue, onClick: () => nav('/pontaj') },
     { icon: '🎫', label: 'Raportare\nproblemă', color: G.orange, onClick: () => nav('/tichete?action=new') },
     { icon: '🚛', label: 'Cerere\ntransport', color: G.green, onClick: () => nav('/logistica') },
+    ...(areUscare ? [{ icon: '💨', label: 'Uscare\nconductă', color: G.purple, onClick: () => setView('uscare'), tot: true }] : []),
   ]
   return (
     <Shell>
@@ -107,6 +114,7 @@ export default function AppMobilManageri() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         {butoane.map((b, i) => (
           <button key={i} onClick={b.onClick} style={{
+            ...(b.tot ? { gridColumn: '1 / -1' } : {}),
             background: G.surface, border: `1px solid ${G.border}`, borderLeft: `4px solid ${b.color}`,
             borderRadius: 16, padding: '26px 14px', cursor: 'pointer', minHeight: 130,
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12,
@@ -118,6 +126,13 @@ export default function AppMobilManageri() {
             <span style={{ fontSize: 15, fontWeight: 700, textAlign: 'center', whiteSpace: 'pre-line', lineHeight: 1.25 }}>{b.label}</span>
           </button>
         ))}
+        {/* L18: verificarea dreptului pe uscare a eșuat = se spune și se poate reîncerca (nu „fără drept” în tăcere) */}
+        {uscare.stare === 'eroare' && (
+          <div role="alert" style={{ gridColumn: '1 / -1', background: G.surface, border: `1px solid ${G.border}`, borderLeft: `4px solid ${G.red}`, borderRadius: 16, padding: '12px 14px', color: G.muted, fontSize: 13 }}>
+            💨 Uscare conductă: nu am putut verifica dreptul ({uscare.eroare}).
+            <button onClick={uscare.reincarca} style={{ marginLeft: 8, background: G.surface2, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit', cursor: 'pointer' }}>Reîncearcă</button>
+          </div>
+        )}
         {probeWrite && <button onClick={() => setView('probe')} style={{ background: G.surface, border: `1px solid ${G.border}`, borderLeft: `4px solid ${G.blue}`, borderRadius: 16, padding: '26px 14px', minHeight: 110, gridColumn: '1 / -1', color: G.text, fontSize: 19, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer' }}>Probe presiune</button>}
       </div>
       <div style={{ textAlign: 'center', marginTop: 30 }}>

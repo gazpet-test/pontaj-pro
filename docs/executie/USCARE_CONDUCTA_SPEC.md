@@ -68,6 +68,17 @@ medie, cântărirea bureților 2 și 3; observații; concluzie CONFORM / NECONFO
 7. **Închiderea** — doar completă (§5). **Raportul semnat** — PDF-ul (tabelul + anexa foto cu legendă) se tipărește și se semnează; un
    raport neînchis iese marcat „CIORNĂ”.
 
+### Accesul de pe telefon
+
+Ecranul de uscare se deschide pe două drumuri, cu aceeași componentă (`UscareConducta`, aceleași RPC-uri și aceeași logică):
+(1) **din aplicația completă** — Execuție → proiect → Izometrie → „💨 Uscare conductă” (adresa directă `/executie?proiect=<id>&tab=uscare`);
+(2) **din lansatorul de telefon `/m`** — butonul „💨 Uscare conductă”, care apare doar dacă serverul dă drept de **scriere** pe cel puțin un
+proiect, verificat cu aceeași funcție pe care o cere ecranul (`fn_executie_nod_drept(proiect, true)`: owner sau modulul `executie`
+editor / admin, plus accesul pe proiect). Se verifică proiectele active și cele din arhivă care mai au rapoarte de uscare deschise. Un singur
+proiect activ = direct ecranul de uscare al lui; mai multe = o listă scurtă (întâi cele cu rapoarte deschise, apoi cele active, apoi arhiva),
+apoi ecranul. „← Înapoi” duce la listă / la lansator; cât e deschis un raport, ieșirea e „← Lista” din ecran (întreabă la modificări
+nesalvate). O verificare de drept eșuată se arată cu „Reîncearcă” (nu ascunde butonul în tăcere). Poarta reală rămâne în BD (RLS + RPC-uri).
+
 ## 4. Stările
 
 | Stare | Ce se poate | Cine |

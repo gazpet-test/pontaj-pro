@@ -73,7 +73,9 @@ async function comprimaJpeg(file) {
   } finally { URL.revokeObjectURL(url) }
 }
 
-export default function UscareConducta({ proiectId, client = supabase, stocare = stocareImplicita(), comprima = comprimaJpeg }) {
+// onFormular (opțional, lansatorul de telefon /m): primește true / false când se deschide / se închide un raport — încadrarea își ascunde
+// atunci „Înapoi”, ca ieșirea dintr-un raport să treacă prin „← Lista” (care întreabă la modificări nesalvate)
+export default function UscareConducta({ proiectId, client = supabase, stocare = stocareImplicita(), comprima = comprimaJpeg, onFormular = null }) {
   const [uscari, setUscari] = useState([])
   const [probe, setProbe] = useState([])
   const [probeEroare, setProbeEroare] = useState(null)
@@ -219,6 +221,9 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     if (!modificat) return
     setCiornaEroare(!scrieCiorna(id, baza, form))
   }, [form]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const formDeschis = form != null
+  useEffect(() => { if (typeof onFormular === 'function') onFormular(formDeschis) }, [formDeschis]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const constructorPropus = () => {
     const ultim = [...uscari].filter(u => u.constructor).sort((a, b) => b.id - a.id)[0]
