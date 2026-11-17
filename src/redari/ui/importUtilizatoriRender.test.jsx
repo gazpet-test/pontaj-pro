@@ -299,6 +299,17 @@ describe('ImportUtilizatori — butonul de scriere', () => {
     expect(p.show.mock.calls.at(-1)).toEqual(['Nimic de completat: utilizatorii au deja contact. Nu s-a creat niciun lot.', 'info'])
     expect(p.onImportat).toHaveBeenCalledTimes(1)
   })
+  it('r2 pct. 5: bifa HG se repune pe „nebifat” la o previzualizare nouă (confirmarea ține de previzualizarea verificată)', async () => {
+    bd.client = clientFals({ parcele: PARCELE(), detinatori: DETINATORI() })
+    const h = harness(); const p = props()
+    pregateste(h, p)
+    let tree = await previzualizeaza(h, p)
+    bifaHg(tree).props.onChange({ target: { checked: true } })
+    expect(text(buton(h.render(ImportUtilizatori, p), '📥'))).toBe('📥 Importă 3 utilizatori pe 3 parcele')
+    tree = await previzualizeaza(h, p)
+    expect(bifaHg(tree).props.checked).toBe(false)
+    expect(text(buton(tree, '📥'))).toBe('📥 Importă 2 utilizatori pe 2 parcele (fără potrivirile după HG: 1)')
+  })
   it('renunțarea la confirmare nu scrie nimic', async () => {
     bd.client = clientFals({ parcele: PARCELE(), detinatori: DETINATORI() })
     vi.stubGlobal('window', { confirm: () => false })
@@ -563,6 +574,18 @@ describe('ImportUtilizatori — r2 pct. 7: anularea pe lot (owner)', () => {
     const r = await executaAnulare(bd.client, { proiectId: 'proiect-A', lotId, aratat, motiv: 'probă fictivă', profilId: 'o' })
     expect(r.anulati.map(a => a.id)).toEqual([dA.id])
     expect(r.raman.find(x => x.id === dB.id).motive.join()).toMatch(/modificat după import/)
+    expect(dB.sters_la).toBeNull()
+  })
+  it('executaAnulare: un rând modificat ÎN TIMPUL anulării (după reverificare, înaintea UPDATE-ului lui) rămâne — UPDATE-ul e condiționat (CAS)', async () => {
+    const { lotId } = await importa()
+    const [dA, dB] = scrisiUtil().sort((a, b) => a.id.localeCompare(b.id))
+    const aratat = await pregatesteAnulare(bd.client, { proiectId: 'proiect-A', lotId })
+    const orig = bd.client.from
+    let primul = true
+    const client = { from: (tab) => { const q = orig(tab); if (tab === 'red_detinatori') { const u = q.update; q.update = (v) => { if (primul) { primul = false; dB.updated_at = 'modificat-in-timpul-anularii' } return u(v) } } return q } }
+    const r = await executaAnulare(client, { proiectId: 'proiect-A', lotId, aratat, motiv: 'probă fictivă', profilId: 'o' })
+    expect(r.anulati.map(a => a.id)).toEqual([dA.id])
+    expect(r.raman.find(x => x.id === dB.id).motive).toEqual(['modificat între timp (sau deja șters) — nu s-a anulat'])
     expect(dB.sters_la).toBeNull()
   })
 })
