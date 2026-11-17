@@ -224,12 +224,35 @@ export function motivTintaSchimbata(n, idx) {
 }
 
 /**
+ * clasificaContacte (r3, Jak r2 P2-1) — completarea contactelor, o singură definiție pentru scriere, ecran și raport (L19).
+ *  intentie: [{ detinator_id, rand }] — consemnată în lot ÎNAINTEA primului INSERT de contact (și pentru deținătorii loturilor vechi);
+ *  confirmate: id-urile din bucățile cu răspuns reușit; nesigure: id-urile din bucățile cu răspuns pierdut (null = nu știm care bucăți au
+ *  plecat → toată intenția neconfirmată e nesigură); acum: Map detinator_id → updated_at, citit ACUM din BD.
+ * → { scrise, necunoscute, nescrise, aparute } (id-uri):
+ *  scrise = confirmate; nescrise = fără contact acum (contactele nu se șterg: lipsa dovedește că nu s-a scris);
+ *  necunoscute = nesigure care AU contact acum — al nostru sau al altcuiva, atribuirea nu se poate dovedi („necunoscut — de verificat”);
+ *  aparute = neîncercate / refuzate determinist, dar cu contact acum (adăugat din altă parte).
+ */
+export function clasificaContacte({ intentie = [], confirmate = [], nesigure = null, acum = new Map() } = {}) {
+  const conf = new Set(confirmate), nes = nesigure ? new Set(nesigure) : null
+  const out = { scrise: [], necunoscute: [], nescrise: [], aparute: [] }
+  for (const { detinator_id: id } of intentie) {
+    if (conf.has(id)) out.scrise.push(id)
+    else if (!acum.has(id)) out.nescrise.push(id)
+    else if (!nes || nes.has(id)) out.necunoscute.push(id)
+    else out.aparute.push(id)
+  }
+  return out
+}
+
+/**
  * reconciliazaImport — ce a scris lotul `lotId`, citit ACUM din BD, și verificarea după scriere (detecție, nu prevenire):
  * fiecare rând cu marcajul lotului trece din nou motivTintaSchimbata pe parcelele recitite; cele care nu mai trec = „de verificat”.
+ * `contacte` (r3, opțional) = { intentie, confirmate, nesigure } ale completării contactelor → clasificarea lor din BD (clasificaContacte).
  * → { parcele, detinatori (activi pe parcelele țintă), contacte: Map detinator_id → updated_at, scrise: [{ id, parcela_id, rand, creat_la,
- *     modificat_la, contact_la }], deVerificat: [{ rand, id, parcela_id, id_parcela, motiv }] }
+ *     modificat_la, contact_la }], deVerificat: [{ rand, id, parcela_id, id_parcela, motiv }], contacteIntentie, contacteClasificate }
  */
-export async function reconciliazaImport(supabase, { proiectId, lotId, plan }, { pagina = PAGINA, lotCitire = LOT_CITIRE } = {}) {
+export async function reconciliazaImport(supabase, { proiectId, lotId, plan, contacte: evContacte = null }, { pagina = PAGINA, lotCitire = LOT_CITIRE } = {}) {
   const parcele = await citesteParcele(supabase, proiectId, { pagina })
   const idx = indexParcele(parcele)
   const tinte = [...new Set([...(plan?.noi ?? []), ...(plan?.deja_detinatori ?? [])].map(n => n.parcela_id).filter(Boolean))]
@@ -238,7 +261,9 @@ export async function reconciliazaImport(supabase, { proiectId, lotId, plan }, {
     detinatori.push(...await citesteTot(() => supabase.from('red_detinatori').select('id, parcela_id, nume_normalizat, calitate, sursa_date, created_at, updated_at').in('parcela_id', lotI).is('sters_la', null), 'reconciliere deținători', pagina))
   }
   const contacte = new Map()
-  for (const lotI of loturi(detinatori.map(d => d.id), lotCitire)) {
+  // r3: și contactele deținătorilor din intenție (inclusiv cei care între timp nu mai sunt activi pe parcelele țintă)
+  const idsContact = [...new Set([...detinatori.map(d => d.id), ...(evContacte?.intentie ?? []).map(c => c.detinator_id)])]
+  for (const lotI of loturi(idsContact, lotCitire)) {
     for (const c of await citesteTot(() => supabase.from('red_detinatori_contact').select('detinator_id, updated_at').in('detinator_id', lotI), 'reconciliere contacte', pagina, 'detinator_id')) contacte.set(c.detinator_id, c.updated_at ?? null)
   }
   const dinPlan = new Map((plan?.noi ?? []).map(n => [`${n.parcela_id}|${n.nume_normalizat}`, n]))
@@ -251,12 +276,14 @@ export async function reconciliazaImport(supabase, { proiectId, lotId, plan }, {
     const motiv = n ? motivTintaSchimbata(n, idx) : 'rândul nu corespunde niciunui rând nou din planul confirmat'
     if (motiv) deVerificat.push({ rand, id: d.id, parcela_id: d.parcela_id, id_parcela: idx.dupaId.get(d.parcela_id)?.id_parcela ?? n?.id_parcela ?? null, motiv: `de verificat: ținta s-a schimbat în timpul importului (${motiv})` })
   }
-  return { parcele, detinatori, contacte, scrise, deVerificat }
+  return { parcele, detinatori, contacte, scrise, deVerificat, contacteIntentie: evContacte?.intentie ?? null,
+    contacteClasificate: evContacte ? clasificaContacte({ ...evContacte, acum: contacte }) : null }
 }
 
 /**
  * scrieUtilizatori(supabase, plan, { proiectId, versiune, fisierNume }) → { lotId, nimicDeFacut, detinatoriNoi, contacteNoi, sarite, schimbate,
- *   deVerificat, eroareVerificare }
+ *   deVerificat, eroareVerificare, contacteNecunoscute, contacte: { intentie, confirmate, nesigure } }
+ * La eroare (cu lot creat): e.lotId, e.evidenta = { deVerificat, contacteNecunoscute, eroareVerificare, contacte }, eventual e.lotNeinchis.
  * Recitește parcelele și deținătorii țintă imediat înaintea fiecărei bucăți (alt import / altă fereastră între timp → sare, nu dublează),
  * apoi verifică după scriere (vezi scrie). `plan.noi` = DOAR rândurile confirmate de operator (ecranul scoate potrivirile HG neconfirmate și le
  * pune în `plan.hg_neconfirmate`). Oprit dacă IMPORT_UTILIZATORI_ACTIV = false (vezi antetul); `permite: true` doar în teste.
@@ -280,7 +307,12 @@ export const __scrieUtilizatoriTest = (supabase, plan, optiuni = {}) => {
  *  - după scriere, reconciliazaImport reverifică fiecare rând scris pe parcelele recitite (r2 pct. 1b): ce nu mai trece = „de verificat”
  *    (detecție, nu prevenire), în rezultat și în lot;
  *  - lotul păstrează în `diferente`: scrise (id-urile deținătorilor creați de lot), contacte_scrise, de_verificat_dupa_scriere,
- *    hg_neconfirmate (r2 pct. 5, 6). Fără nume / contacte în lot (lotul e citibil și de viewer).
+ *    hg_neconfirmate (r2 pct. 5, 6). Fără nume / contacte în lot (lotul e citibil și de viewer);
+ *  - r3 (Jak r2 P2-1): INTENȚIA completării contactelor (contacte_intentie: [{ detinator_id, rand }], și pentru deținătorii loturilor vechi)
+ *    se scrie în lot ÎNAINTEA primului INSERT de contact; bucățile cu răspuns pierdut intră în contacte_nesigure. După orice eroare, contactele
+ *    intenției se recitesc și se clasifică (clasificaContacte): ce nu se poate atribui exact = contacte_necunoscute („necunoscut — de verificat”);
+ *  - r3 (Jak r2 P2-2): finalizarea și calea de eroare trec prin ACEEAȘI funcție (incheieLot): aceeași reconciliere, același
+ *    de_verificat_dupa_scriere + verificare_dupa_scriere pe lot, ca avertismentul să rămână durabil și când ecranul nu mai poate reciti.
  */
 async function scrie(supabase, plan, { proiectId, versiune, fisierNume = null, permite = false, pagina = PAGINA, lotCitire = LOT_CITIRE, marimeLot = LOT } = {}) {
   if (!permite) throw new Error('Importul utilizatorilor e oprit (IMPORT_UTILIZATORI_ACTIV = false; docs/redari/PLAN_UTILIZATORI.md)')
@@ -290,11 +322,12 @@ async function scrie(supabase, plan, { proiectId, versiune, fisierNume = null, p
   const deja = (plan?.deja_detinatori ?? []).filter(d => d.parcela_id && d.contact)   // (contactele: și pentru rândurile scrise la o rulare anterioară; excluse = fără contact)
   const faraPii = ({ contact, nume_normalizat, nume, ...d }) => d
   const cheie = n => `${n.parcela_id}|${n.nume_normalizat}`
-  const schimbate = [], scrise = [], contacteScrise = []
-  let detinatoriNoi = 0, contacteNoi = 0, sarite = 0, lotId = null
+  const schimbate = [], scrise = [], contacteScrise = [], contacteIntentie = [], contacteNesigure = []
+  let detinatoriNoi = 0, contacteNoi = 0, sarite = 0, lotId = null, lipsaContact = null
   const diferente = (extra = {}) => ({ deja_detinatori: (plan?.deja_detinatori ?? []).map(faraPii), parcela_negasita: plan?.parcela_negasita ?? [],
     coliziuni: plan?.coliziuni ?? [], hg_neconfirmate: (plan?.hg_neconfirmate ?? []).map(faraPii), schimbate_la_scriere: schimbate,
-    scrise, contacte_scrise: contacteScrise, contacte_noi: contacteNoi, ...extra })
+    scrise, contacte_intentie: contacteIntentie, contacte_scrise: contacteScrise, contacte_nesigure: contacteNesigure, contacte_noi: contacteNoi, ...extra })
+  const evidentaContacte = () => ({ intentie: [...contacteIntentie], confirmate: [...contacteScrise], nesigure: [...contacteNesigure] })
   const creeazaLot = async () => {
     const lot = verifica(await supabase.from('red_import_loturi').insert({
       proiect_id: proiectId, versiune_lista_tgz: versiune, sursa: SURSA_UTILIZATORI, fisier_nume: fisierNume, stare: 'in_curs',
@@ -315,6 +348,26 @@ async function scrie(supabase, plan, { proiectId, versiune, fisierNume = null, p
     return m
   }
   const marcheazaSchimbat = (n, motiv) => schimbate.push({ rand: n.rand, uat3: n.uat3, id_parcela: n.id_parcela, motiv: `parcela s-a schimbat între plan și scriere (${motiv}) — nescris` })
+  // r3 (Jak r2 P2-2, L19): O SINGURĂ încheiere a lotului pentru finalizare ȘI pentru eroare — aceeași reconciliere din BD (deținători după
+  // marcaj + contactele intenției), același rezultat al verificării de după scriere scris pe lot. Eroarea de la scrierea lotului urcă la apelant.
+  const incheieLot = async (stare, eroareText = null) => {
+    let rec = null, eroareVerificare = null
+    try { rec = await reconciliazaImport(supabase, { proiectId, lotId, plan, contacte: evidentaContacte() }, { pagina, lotCitire }) }
+    catch (e) { eroareVerificare = String(e?.message || e).slice(0, 300) }
+    if (rec) scrise.splice(0, scrise.length, ...rec.scrise)
+    const deVerificat = rec?.deVerificat ?? []
+    // fără recitire, ce era nesigur rămâne necunoscut (L18: nu „nescris”, nu „neschimbat”)
+    const contacteNecunoscute = rec ? rec.contacteClasificate.necunoscute : [...contacteNesigure]
+    const idScrise = new Set(scrise.map(s => s.id))
+    await actualizeaza({ stare, eroare: eroareText, detinatori_noi: stare === 'esuat' && rec ? scrise.length : detinatoriNoi,
+      diferente: diferente({ sarite_la_scriere: sarite, contacte_reparate: contacteScrise.filter(id => !idScrise.has(id)).length, fara_contact: lipsaContact,
+        de_verificat_dupa_scriere: deVerificat, verificare_dupa_scriere: rec ? 'facuta' : `esuata: ${eroareVerificare}`, evidenta_din_bd: !!rec,
+        contacte_necunoscute: contacteNecunoscute,
+        // momentul contactelor scrise de lot, citit imediat după scriere: anularea recunoaște astfel un contact modificat ulterior de un om
+        contacte_la: rec ? Object.fromEntries(contacteScrise.filter(id => rec.contacte.has(id)).map(id => [id, rec.contacte.get(id)])) : {} }) },
+      stare === 'esuat' ? 'marcare lot eșuat' : 'finalizare lot')
+    return { deVerificat, eroareVerificare, contacteNecunoscute }
+  }
 
   if (noi.length) lotId = await creeazaLot()
   try {
@@ -356,39 +409,39 @@ async function scrie(supabase, plan, { proiectId, versiune, fisierNume = null, p
       for (const c of await citesteTot(() => supabase.from('red_detinatori_contact').select('detinator_id').in('detinator_id', lotI), 'citire contacte', pagina, 'detinator_id')) auContact.add(c.detinator_id)
     }
     const contacteDeScris = []; const vazut = new Set()
-    for (const { n, d } of candidatiContact) { if (!auContact.has(d.id) && !vazut.has(d.id) && n.contact) { vazut.add(d.id); contacteDeScris.push({ detinator_id: d.id, ...n.contact }) } }
+    for (const { n, d } of candidatiContact) {
+      if (!auContact.has(d.id) && !vazut.has(d.id) && n.contact) { vazut.add(d.id); contacteDeScris.push({ detinator_id: d.id, ...n.contact }); contacteIntentie.push({ detinator_id: d.id, rand: n.rand ?? null }) }
+    }
+    lipsaContact = candidatiContact.filter(x => !auContact.has(x.d.id) && !vazut.has(x.d.id)).length
     if (!lotId) {
       // r2 pct. 8: nimic nou și niciun contact de completat → niciun lot nou în istoric
-      if (!contacteDeScris.length) return { lotId: null, nimicDeFacut: true, detinatoriNoi: 0, contacteNoi: 0, sarite, schimbate: schimbate.length, deVerificat: [], eroareVerificare: null }
-      lotId = await creeazaLot()
+      if (!contacteDeScris.length) return { lotId: null, nimicDeFacut: true, detinatoriNoi: 0, contacteNoi: 0, sarite, schimbate: schimbate.length, deVerificat: [], eroareVerificare: null, contacteNecunoscute: [], contacte: evidentaContacte() }
+      lotId = await creeazaLot()                                     // r3: lotul nou poartă deja intenția (diferente.contacte_intentie)
+    } else if (contacteDeScris.length) {
+      await actualizeaza({ diferente: diferente() }, 'consemnare contacte de completat')   // r3: intenția, ÎNAINTEA primului INSERT de contact
     }
     for (const bucata of loturi(contacteDeScris, marimeLot)) {
-      verifica(await supabase.from('red_detinatori_contact').insert(bucata), 'inserare contacte utilizatori')
+      try { verifica(await supabase.from('red_detinatori_contact').insert(bucata), 'inserare contacte utilizatori') }
+      catch (e) { if (!eroareDeterminista(e)) contacteNesigure.push(...bucata.map(c => c.detinator_id)); throw e }   // L05: răspuns pierdut = poate comis
       contacteNoi += bucata.length; contacteScrise.push(...bucata.map(c => c.detinator_id))
       await actualizeaza({ diferente: diferente() }, 'actualizare lot (contacte)')
     }
-    const lipsaContact = candidatiContact.filter(x => !auContact.has(x.d.id) && !vazut.has(x.d.id)).length
     // r2 pct. 1b: verificarea după scriere (detecție): rândurile scrise a căror țintă nu mai trece regula sunt „de verificat”
-    let rec = null, eroareVerificare = null
-    try { rec = await reconciliazaImport(supabase, { proiectId, lotId, plan }, { pagina, lotCitire }) } catch (e) { eroareVerificare = String(e?.message || e).slice(0, 300) }
-    if (rec) scrise.splice(0, scrise.length, ...rec.scrise)
-    const deVerificat = rec?.deVerificat ?? []
-    const idScrise = new Set(scrise.map(s => s.id))
-    await actualizeaza({ stare: 'finalizat', eroare: null, detinatori_noi: detinatoriNoi,
-      diferente: diferente({ sarite_la_scriere: sarite, contacte_reparate: contacteScrise.filter(id => !idScrise.has(id)).length, fara_contact: lipsaContact,
-        de_verificat_dupa_scriere: deVerificat, verificare_dupa_scriere: rec ? 'facuta' : `esuata: ${eroareVerificare}`,
-        // momentul contactelor scrise de lot, citit imediat după scriere: anularea recunoaște astfel un contact modificat ulterior de un om
-        contacte_la: rec ? Object.fromEntries(contacteScrise.filter(id => rec.contacte.has(id)).map(id => [id, rec.contacte.get(id)])) : {} }) }, 'finalizare lot')
-    return { lotId, nimicDeFacut: false, detinatoriNoi, contacteNoi, sarite, schimbate: schimbate.length, deVerificat, eroareVerificare }
+    const fin = await incheieLot('finalizat')
+    return { lotId, nimicDeFacut: false, detinatoriNoi, contacteNoi, sarite, schimbate: schimbate.length, ...fin, contacte: evidentaContacte() }
   } catch (e) {
     if (lotId) {
-      // r2 pct. 3 / 6: după o eroare (inclusiv un răspuns pierdut după COMMIT), evidența lotului se reface din BD după marcaj
-      let dinBd = false
-      try { const rec = await reconciliazaImport(supabase, { proiectId, lotId, plan }, { pagina, lotCitire }); scrise.splice(0, scrise.length, ...rec.scrise); dinBd = true } catch { /* rămâne evidența strânsă pe parcurs */ }
+      // r2 pct. 3 / 6 + r3: după o eroare (inclusiv un răspuns pierdut după COMMIT), aceeași încheiere ca la finalizare: evidența din BD după
+      // marcaj, contactele intenției clasificate, verificarea de după scriere pe lot
+      let fin = null
+      try { fin = await incheieLot('esuat', String(e?.message || e).slice(0, 500)) }
       // ca în scrieImport: eroarea de la marcarea „esuat” nu se înghite — rămâne pe eroarea originală (e.lotNeinchis), lotul fiind încă in_curs
-      try { await actualizeaza({ stare: 'esuat', eroare: String(e?.message || e).slice(0, 500), detinatori_noi: dinBd ? scrise.length : detinatoriNoi, diferente: diferente({ evidenta_din_bd: dinBd }) }, 'marcare lot eșuat') }
       catch (e2) { if (e && typeof e === 'object') e.lotNeinchis = String(e2?.message || e2) }
-      if (e && typeof e === 'object') e.lotId = lotId
+      if (e && typeof e === 'object') {
+        e.lotId = lotId
+        // evidența scriitorului (din BD, plus ce știe doar el: bucățile cu răspuns pierdut), pentru ecran — chiar dacă lotul n-a putut fi scris
+        e.evidenta = { deVerificat: fin?.deVerificat ?? [], contacteNecunoscute: fin?.contacteNecunoscute ?? [...contacteNesigure], eroareVerificare: fin?.eroareVerificare ?? null, contacte: evidentaContacte() }
+      }
     }
     throw e
   }

@@ -107,8 +107,10 @@ export const STARI_DUPA = {
   nescris_oprit: 'nescris: importul s-a oprit înainte — refaceți previzualizarea și reluați',
   hg_neconfirmat: 'neimportat: potrivire după poziția HG, neconfirmată — se poate importa ulterior, cu bifa',
   contact_completat: 'contact completat de această operație',
+  contact_nescris: 'contact de completat, necompletat de această operație',
   necunoscut: 'necunoscut — de verificat',
 }
+export const DETALIU_CONTACT_NECUNOSCUT = 'contactul există acum, dar răspunsul la completare s-a pierdut: poate fi scris de această operație sau de altcineva'
 const UTILIZATOR = new Set(['utilizator', 'arendas'])
 
 /**
@@ -116,15 +118,22 @@ const UTILIZATOR = new Set(['utilizator', 'arendas'])
  *  plan = planul confirmat (complet, cu potrivirile HG); plan.hg_neconfirmate = rândurile HG pe care operatorul NU le-a inclus;
  *  rec = reconciliazaImport(...) citit DUPĂ scriere (null = recitirea a eșuat → „necunoscut”, nimic declarat scris fără dovadă, L18);
  *  lot = rândul red_import_loturi recitit (diferente.schimbate_la_scriere, contacte_scrise); lotId = id-ul lotului acestei operații (marcajul).
+ *  r3: contactele se judecă după intenția consemnată înaintea scrierii (rec.contacteIntentie / opt.contacteIntentie / lot.diferente.contacte_intentie,
+ *  [{ detinator_id, rand }]) și clasificarea din BD (rec.contacteClasificate, clasificaContacte): un contact care nu poate fi atribuit exact
+ *  = „necunoscut — de verificat”, niciodată „neschimbat”.
  */
-export function stareDupaScriere(plan, rec, lot = null, lotId = null) {
+export function stareDupaScriere(plan, rec, lot = null, lotId = null, opt = {}) {
   const m = new Map()
   const st = (cod, extra = {}, detaliu = '') => ({ cod, text: STARI_DUPA[cod] + (detaliu ? ` (${detaliu})` : ''), ...extra })
   const schimbate = new Map((lot?.diferente?.schimbate_la_scriere || []).map(s => [s.rand, s.motiv]))
   const hgNeconf = new Set((plan?.hg_neconfirmate || []).map(n => n.rand))
   const activ = new Map((rec?.detinatori || []).map(d => [`${d.parcela_id}|${d.nume_normalizat}`, d]))
   const deVerificat = new Map((rec?.deVerificat || []).map(v => [v.id, v.motiv]))
-  const contacteLot = new Set(lot?.diferente?.contacte_scrise || [])
+  const cc = rec?.contacteClasificate ?? null
+  const contacteLot = new Set(cc ? cc.scrise : (lot?.diferente?.contacte_scrise || []))
+  const contacteNec = new Set(cc ? cc.necunoscute : (lot?.diferente?.contacte_necunoscute || []))
+  const contacteAparute = new Set(cc?.aparute || [])
+  const intentie = new Map(((rec?.contacteIntentie ?? opt.contacteIntentie ?? lot?.diferente?.contacte_intentie) || []).filter(c => c?.rand != null).map(c => [c.rand, c.detinator_id]))
   const scrisDeAcest = d => !!lotId && !!d && String(d.sursa_date || '').endsWith(`; lot ${lotId}`)
   for (const n of plan?.noi || []) {
     if (hgNeconf.has(n.rand)) { m.set(n.rand, st('hg_neconfirmat')); continue }
@@ -137,7 +146,7 @@ export function stareDupaScriere(plan, rec, lot = null, lotId = null) {
       else if (deVerificat.has(d.id)) m.set(n.rand, { cod: 'de_verificat', text: deVerificat.get(d.id), id: d.id, contact })
       else if (!UTILIZATOR.has(d.calitate)) m.set(n.rand, st('de_verificat', { id: d.id, contact }, `calitatea e acum „${d.calitate}”`))
       else if (!contact) m.set(n.rand, st('scris_fara_contact', { id: d.id, contact }))
-      else m.set(n.rand, st('scris', { id: d.id, contact }))
+      else m.set(n.rand, st('scris', { id: d.id, contact }, contacteNec.has(d.id) ? `contact: necunoscut — de verificat; ${DETALIU_CONTACT_NECUNOSCUT}` : ''))
     } else if (sch) m.set(n.rand, { cod: 'nescris_tinta', text: `${STARI_DUPA.nescris_tinta}: ${sch}` })
     else if (d && UTILIZATOR.has(d.calitate)) m.set(n.rand, st('exista_utilizator', { id: d.id }))
     else if (d) m.set(n.rand, st('exista_alta_calitate', { id: d.id }, `„${d.calitate}”`))
@@ -145,10 +154,17 @@ export function stareDupaScriere(plan, rec, lot = null, lotId = null) {
     else if (lot?.stare === 'finalizat') m.set(n.rand, st('necunoscut', {}, 'lotul e finalizat, dar persoana nu e activă pe parcela confirmată'))
     else m.set(n.rand, st('nescris_oprit'))
   }
-  // „deja deținători”: doar contactul se poate completa; îl declarăm completat numai dacă lotul îl are în evidență ȘI baza îl are acum
+  // „deja deținători” (inclusiv utilizatorii loturilor anterioare): doar contactul se poate completa. Completat = confirmat de răspuns ȘI în BD
+  // acum; răspuns pierdut + contact existent = necunoscut; din intenție, fără contact = necompletat (r3, Jak r2 P2-1)
   for (const x of plan?.deja_detinatori || []) {
-    const d = activ.get(`${x.parcela_id}|${x.nume_normalizat}`)
-    if (d && contacteLot.has(d.id) && rec?.contacte?.has(d.id)) m.set(x.rand, st('contact_completat', { id: d.id, contact: true }))
+    const dinIntentie = intentie.get(x.rand) ?? null
+    const id = dinIntentie ?? activ.get(`${x.parcela_id}|${x.nume_normalizat}`)?.id ?? null
+    if (!id) continue
+    if (!rec) { if (dinIntentie) m.set(x.rand, st('necunoscut', { id }, 'contactul era de completat; recitirea din BD după scriere a eșuat')); continue }
+    const areAcum = rec.contacte?.has(id) ?? false
+    if (contacteLot.has(id) && areAcum) m.set(x.rand, st('contact_completat', { id, contact: true }))
+    else if (contacteNec.has(id)) m.set(x.rand, st('necunoscut', { id, contact: areAcum }, DETALIU_CONTACT_NECUNOSCUT))
+    else if (dinIntentie) m.set(x.rand, st('contact_nescris', { id, contact: areAcum }, contacteAparute.has(id) ? 'contactul a apărut între timp din altă parte' : ''))
   }
   return m
 }

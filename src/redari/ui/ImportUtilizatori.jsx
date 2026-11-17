@@ -9,7 +9,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { parseazaUtilizatori, citesteDatePlan, planUtilizatori, scrieUtilizatori, reconciliazaImport, eroareDeterminista, SURSA_UTILIZATORI } from '../importUtilizatori.js'
 import { CATEGORII, totaluriImport, totaluriPeUat, randuriRaport, stareDupaScriere, numaraStari, csvRaportUtilizatori } from '../importUtilizatoriRaport.js'
-import { pregatesteAnulare, executaAnulare, csvAnulare, MOTIV_MINIM } from '../importUtilizatoriAnulare.js'
+import { pregatesteAnulare, executaAnulare, csvAnulare, motiveGrupate, MOTIV_MINIM } from '../importUtilizatoriAnulare.js'
 import { G, S, fmtNum, msgEroare, Camp, Gol } from './comune.jsx'
 
 const MAX_LISTA = 100
@@ -53,7 +53,7 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
   const [versiune, setVersiune] = useState('')
   const [preview, setPreview] = useState(null)       // { proiectId, fisier, fisierNume, parsat, plan }
   const [includHg, setIncludHg] = useState(false)    // r2 pct. 5: potrivirile după poziția HG — confirmare separată, nebifată implicit
-  const [lucru, setLucru] = useState(null)           // null | 'citire' | 'scriere'
+  const [lucru, setLucru] = useState(null)           // null | 'citire' | 'verificare' (înaintea confirmării finale) | 'scriere'
   const [eroare, setEroare] = useState(null)         // eroarea citirii / planului (L18: afișată, nu „nimic de importat”)
   const [rezultat, setRezultat] = useState(null)
   const [subTab, setSubTab] = useState('nou')
@@ -66,6 +66,7 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
   const fisierRef = useRef(null)
   const genPreview = useRef(0), genScriere = useRef(0), genLoturi = useRef(0), genAnulare = useRef(0)
   const ocupat = useRef(false)                       // L05: zăvor sincron, pus înaintea primului await al scrierii
+  const scrierePornita = useRef(false)               // r3: true doar după confirmarea finală (de atunci schimbarea fișierului nu mai anulează nimic)
   const ocupatAnulare = useRef(false)
   useEffect(() => { montat.current = true; return () => { montat.current = false; genPreview.current++; genScriere.current++; genLoturi.current++; genAnulare.current++ } }, [])
   useEffect(() => {
@@ -78,9 +79,11 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
   const alegeFisier = (f) => {
     // fișier nou: citirea în zbor (dacă e) se abandonează, previzualizarea veche nu mai e a acestui fișier
     genPreview.current++
+    // r3 (Jak r2 P2-4): o scriere aflată încă ÎNAINTEA confirmării finale (verificarea altor importuri, dialogurile) nu mai e a acestui fișier
+    if (!scrierePornita.current) genScriere.current++
     fisierRef.current = f || null
     setFisier(f || null); setPreview(null); setEroare(null); setRezultat(null); setIncludHg(false)
-    if (lucru === 'citire') setLucru(null)
+    if (lucru === 'citire' || lucru === 'verificare') setLucru(null)
   }
 
   const previzualizeaza = async () => {
@@ -120,6 +123,7 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
     const noi = includHg ? preview.plan.noi : preview.plan.noi.filter(n => n.potrivire !== 'hg')
     return { noi, hg, hgExclus: includHg ? [] : hg, parcele: new Set(noi.map(n => n.parcela_id)).size, persoane: new Set(noi.map(n => n.nume_normalizat)).size }
   }, [preview, includHg])
+  const blocat = lucru === 'scriere' || lucru === 'verificare'   // r3: fișierul / versiunea / bifa HG nu se schimbă după pornirea fluxului de scriere
   const previewValid = !!preview && preview.proiectId === proiect?.id && preview.fisier === fisier
   const versiuneOk = versiune.trim().length > 0
   const poateImporta = poateScrie && previewValid && versiuneOk && lucru === null && !!scris && scris.noi.length > 0
@@ -143,14 +147,19 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
     const planScris = doarContacte ? { ...p.plan, noi: [], hg_neconfirmate: [] } : { ...p.plan, noi: sc.noi, hg_neconfirmate: sc.hgExclus }
     ocupat.current = true                            // L05: zăvorul înaintea primului await (verificarea altor importuri)
     const gen = ++genScriere.current
+    const fisierStart = p.fisier
     const curent = () => montat.current && gen === genScriere.current && proiectRef.current === proiectStart
+    // r3 (Jak r2 P2-4): până la confirmarea finală scrierea e a fișierului previzualizat; fișier / proiect schimbat = nu pornește
+    const inainteaConfirmarii = () => curent() && fisierRef.current === fisierStart
+    const abandon = () => { if (montat.current && proiectRef.current === proiectStart) show('Fișierul s-a schimbat înainte de confirmare: importul NU a pornit. Refaceți previzualizarea.', 'error') }
+    setLucru('verificare')                           // r3: controalele (fișier, versiune, bifa HG) se blochează ÎNAINTEA primului await
     let pornit = false
     try {
       // r2 pct. 1c: alt import al proiectului în curs / pornit în ultimele minute → confirmare explicită separată; citirea eșuată = nu pornește
       let altele
       try { altele = await alteImporturi(supabase, proiectStart) }
-      catch (e) { if (curent()) show(`Nu am putut verifica dacă rulează alt import în ${cod}: ${msgEroare(e)}. Importul NU a pornit.`, 'error'); return }
-      if (!curent()) return
+      catch (e) { if (inainteaConfirmarii()) show(`Nu am putut verifica dacă rulează alt import în ${cod}: ${msgEroare(e)}. Importul NU a pornit.`, 'error'); else abandon(); return }
+      if (!inainteaConfirmarii()) { abandon(); return }
       const hgText = sc?.hg.length ? (includHg ? `\n${sc.hg.length} potriviți după poziția HG sunt INCLUȘI (bifa „le-am verificat în raport”).` : `\n${sc.hg.length} potriviți după poziția HG NU se importă acum (neconfirmați; rămân în raport și se pot importa ulterior, cu bifa).`) : ''
       const intrebare = doarContacte
         ? `Reiei importul utilizatorilor în ${cod} (lista „${ver}”) doar pentru completarea contactelor lipsă?\nNu se adaugă niciun deținător nou; un lot nou apare în istoric doar dacă există contacte de completat.`
@@ -161,8 +170,8 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
         const avert = `ATENȚIE: în ${cod} există ${altele.length} import(uri) în curs sau pornite în ultimele ${FEREASTRA_ALTE_IMPORTURI_MIN} minute:\n${lista}\n\nDouă importuri / corecturi de parcele în același timp pot pune un utilizator pe o parcelă care tocmai s-a schimbat. Regula: un singur operator, fără alte importuri sau corecturi de parcele în timpul importului.\n\nContinui oricum?`
         if (!window.confirm(avert)) return
       }
-      if (!curent()) return
-      pornit = true
+      if (!inainteaConfirmarii()) { abandon(); return }
+      pornit = true; scrierePornita.current = true
       setLucru('scriere'); setEroare(null); setRezultat(null)
       let rez = null, eroareScriere = null
       try { rez = await scrieUtilizatori(supabase, planScris, { proiectId: proiectStart, versiune: ver, fisierNume: p.fisierNume }) }
@@ -176,21 +185,31 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
           if (error) throw error
           lot = data || null
         }
-        rec = await reconciliazaImport(supabase, { proiectId: proiectStart, lotId, plan: planScris })
+        // r3: intenția contactelor (inclusiv deținători din loturi vechi) + ce știe doar scriitorul (bucățile cu răspuns pierdut); fără ea,
+        // din lot (intenția se scrie acolo înaintea primului INSERT), cu „nesigure” necunoscute = toată intenția neconfirmată
+        const ev = rez?.contacte ?? eroareScriere?.evidenta?.contacte
+          ?? (lot?.diferente?.contacte_intentie ? { intentie: lot.diferente.contacte_intentie, confirmate: lot.diferente.contacte_scrise || [], nesigure: null } : null)
+        rec = await reconciliazaImport(supabase, { proiectId: proiectStart, lotId, plan: planScris, contacte: ev })
       } catch (e) { eroareRecitire = msgEroare(e) }
       // r2 pct. 3: tipul rezultatului — eroare determinată (cod SQL / PostgREST) vs. răspuns pierdut (nu știm ce s-a comis)
       const tip = !eroareScriere ? 'ok' : (eroareDeterminista(eroareScriere) ? 'esuat' : 'ambiguu')
-      // reconcilierea decide reîncărcarea restului modulului: ceva scris de această operație în BD, contacte scrise, sau necunoscut
-      const atins = (rez && !rez.nimicDeFacut && (rez.detinatoriNoi + rez.contacteNoi) > 0) || (rec?.scrise?.length ?? 0) > 0
-        || (lot?.diferente?.contacte_scrise?.length ?? 0) > 0 || (!!eroareScriere && !!lotId && !rec)
+      // reconcilierea decide reîncărcarea restului modulului: ceva scris de această operație în BD, contacte scrise / necunoscute, sau necunoscut
+      // r3 (Jak r2 P2-1): un rezultat nesigur reîncarcă modulul ORICUM (atribuirea poate să nu se poată dovedi)
+      const cc = rec?.contacteClasificate
+      const atins = tip === 'ambiguu' || (rez && !rez.nimicDeFacut && (rez.detinatoriNoi + rez.contacteNoi) > 0) || (rec?.scrise?.length ?? 0) > 0
+        || (cc?.scrise?.length ?? 0) > 0 || (cc?.necunoscute?.length ?? 0) > 0
+        || (lot?.diferente?.contacte_scrise?.length ?? 0) > 0 || (lot?.diferente?.contacte_necunoscute?.length ?? 0) > 0 || (!!eroareScriere && !!lotId && !rec)
       if (!curent()) {
         show(eroareScriere ? `Importul utilizatorilor în ${cod} a eșuat: ${msgEroare(eroareScriere)}` : `Importul utilizatorilor în ${cod} s-a terminat; rezultatul e în istoricul loturilor acelui proiect.`, eroareScriere ? 'error' : 'info')
         return
       }
       const planRaport = { ...p.plan, hg_neconfirmate: planScris.hg_neconfirmate }
-      const dupa = stareDupaScriere(doarContacte ? planScris : planRaport, rec, lot, lotId)
-      setRezultat({ tip, rez, eroare: eroareScriere ? msgEroare(eroareScriere) : null, lotNeinchis: eroareScriere?.lotNeinchis || null,
-        lotId, lot, rec, eroareRecitire, inainte: p, planRaport: doarContacte ? planScris : planRaport, versiune: ver, cod, dupa, doarContacte })
+      const intentie = rec?.contacteIntentie ?? rez?.contacte?.intentie ?? eroareScriere?.evidenta?.contacte?.intentie ?? lot?.diferente?.contacte_intentie ?? null
+      const dupa = stareDupaScriere(doarContacte ? planScris : planRaport, rec, lot, lotId, { contacteIntentie: intentie })
+      // contactele necunoscute: din BD (rec) sau, fără recitire, ce a consemnat scriitorul
+      const contacteNec = cc ? cc.necunoscute : (eroareScriere?.evidenta?.contacteNecunoscute ?? lot?.diferente?.contacte_necunoscute ?? [])
+      setRezultat({ tip, rez, eroare: eroareScriere ? msgEroare(eroareScriere) : null, lotNeinchis: eroareScriere?.lotNeinchis || null, evidenta: eroareScriere?.evidenta || null,
+        lotId, lot, rec, eroareRecitire, inainte: p, planRaport: doarContacte ? planScris : planRaport, versiune: ver, cod, dupa, doarContacte, contacteNec })
       setPreview(null)   // planul confirmat nu mai e valid după o scriere (reușită sau nu): următorul pas pornește de la o previzualizare nouă
       if (tip === 'ambiguu') show('Rezultat nesigur la importul utilizatorilor: ' + msgEroare(eroareScriere) + '. Verificați ce s-a găsit în bază.', 'error')
       else if (eroareScriere) show('Importul utilizatorilor a eșuat: ' + msgEroare(eroareScriere), 'error')
@@ -199,8 +218,9 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
       if (atins) onImportat?.()
       if (loturi) incarcaLoturi()
     } finally {
-      ocupat.current = false
-      if (pornit && curent()) setLucru(null)
+      ocupat.current = false; scrierePornita.current = false
+      // același proiect, ecran montat: controalele se deblochează (și după abandonul de dinaintea confirmării)
+      if (montat.current && proiectRef.current === proiectStart && (!pornit || curent())) setLucru(null)
     }
   }
 
@@ -267,7 +287,8 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
 
   // lista „de verificat” după scriere (r2 pct. 1b), cu numele din fișier (ecranul local; lotul nu ține nume)
   const numeRand = (r, rand) => (r?.inainte?.parsat?.candidati || []).find(c => c.rand === rand)?.nume || '-'
-  const deVerificatRez = rezultat ? [...new Map([...(rezultat.rez?.deVerificat || []), ...(rezultat.rec?.deVerificat || [])].map(v => [v.id, v])).values()] : []
+  // r3: și ce a găsit scriitorul pe calea de eroare (rămâne și dacă recitirea ecranului eșuează)
+  const deVerificatRez = rezultat ? [...new Map([...(rezultat.rez?.deVerificat || []), ...(rezultat.evidenta?.deVerificat || []), ...(rezultat.rec?.deVerificat || [])].map(v => [v.id, v])).values()] : []
   const stari = rezultat ? numaraStari(rezultat.dupa) : null
   const scrisiDeOperatie = stari ? stari.scris + stari.scris_fara_contact + stari.de_verificat : 0
 
@@ -288,10 +309,10 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
 
         <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:10, alignItems:'end' }}>
           <Camp eticheta="1. Fișierul beneficiarului (.xlsx) — foaia 1, antet pe 3 rânduri">
-            <input type="file" accept=".xlsx" onChange={e => alegeFisier(e.target.files?.[0] || null)} style={{ ...S.input, padding:5 }} disabled={lucru === 'scriere'} />
+            <input type="file" accept=".xlsx" onChange={e => alegeFisier(e.target.files?.[0] || null)} style={{ ...S.input, padding:5 }} disabled={blocat} />
           </Camp>
           <Camp eticheta="Versiunea listei (obligatoriu, fără valoare implicită)">
-            <input value={versiune} onChange={e => setVersiune(e.target.value)} style={S.input} placeholder="ex. TGZ 13.07.2026 utilizatori" disabled={lucru === 'scriere'} />
+            <input value={versiune} onChange={e => setVersiune(e.target.value)} style={S.input} placeholder="ex. TGZ 13.07.2026 utilizatori" disabled={blocat} />
           </Camp>
         </div>
         <div style={{ fontSize:12, color:G.muted, marginTop:4 }}>Versiunea se scrie pe fiecare utilizator importat și pe lot. Formatul folosit la celelalte loturi: „TGZ ZZ.LL.AAAA” (data listei primite), aici urmat de „utilizatori”.</div>
@@ -346,7 +367,7 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
 
             {poateScrie && t.potrivire_hg > 0 && (
               <label data-bifa="hg" style={{ display:'flex', gap:8, alignItems:'center', marginTop:12, fontSize:13, color: includHg ? G.yellow : G.text }}>
-                <input type="checkbox" checked={includHg} onChange={e => setIncludHg(!!e.target.checked)} disabled={lucru === 'scriere'} />
+                <input type="checkbox" checked={includHg} onChange={e => setIncludHg(!!e.target.checked)} disabled={blocat} />
                 Includ și cele {fmtNum(t.potrivire_hg)} potrivite după poziția HG (le-am verificat în raport)
               </label>
             )}
@@ -359,7 +380,7 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
               {!poateScrie && <span style={{ fontSize:12.5, color:G.muted }}>Doar admin / editor pot importa.</span>}
               {poateScrie && !versiuneOk && <span style={{ fontSize:12.5, color:G.yellow }}>Completează versiunea listei.</span>}
               {poateScrie && t.noi > 0 && scris.noi.length === 0 && <span style={{ fontSize:12.5, color:G.yellow }}>Rămân doar potriviri după poziția HG: bifează-le după verificare sau nu importa nimic.</span>}
-              {poateScrie && t.noi > 0 && <button style={S.btnP} onClick={() => scrie()} disabled={!poateImporta}>{lucru === 'scriere' ? 'Import în curs…' : `📥 Importă ${scris.noi.length} utilizatori pe ${scris.parcele} parcele${scris.hgExclus.length ? ` (fără potrivirile după HG: ${scris.hgExclus.length})` : ''}`}</button>}
+              {poateScrie && t.noi > 0 && <button style={S.btnP} onClick={() => scrie()} disabled={!poateImporta}>{lucru === 'scriere' ? 'Import în curs…' : lucru === 'verificare' ? 'Verific alte importuri…' : `📥 Importă ${scris.noi.length} utilizatori pe ${scris.parcele} parcele${scris.hgExclus.length ? ` (fără potrivirile după HG: ${scris.hgExclus.length})` : ''}`}</button>}
               {poateScrie && t.noi === 0 && <span style={{ fontSize:12.5, color:G.muted }}>Nimic nou de importat.</span>}
               {poateContacte && <button style={S.btnS} onClick={() => scrie({ doarContacte: true })} title="Doar după un import întrerupt: completează adresa utilizatorilor scriși atunci fără contact; nu adaugă deținători.">Reia doar completarea contactelor lipsă (după un import întrerupt)</button>}
             </div>
@@ -385,9 +406,11 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
                 {statCard('Nescriși: oprit înainte', fmtNum(stari.nescris_oprit), stari.nescris_oprit ? G.orange : G.text)}
                 {statCard('HG neconfirmate (neimportate)', fmtNum(stari.hg_neconfirmat), stari.hg_neconfirmat ? G.yellow : G.text)}
                 {statCard('Contacte completate', fmtNum(stari.contact_completat), G.blue)}
+                {statCard('Contacte necompletate', fmtNum(stari.contact_nescris), stari.contact_nescris ? G.orange : G.text)}
                 {statCard('Necunoscut', fmtNum(stari.necunoscut), stari.necunoscut ? G.red : G.text)}
               </div>
             )}
+            {(rezultat.contacteNec?.length ?? 0) > 0 && <div data-sectiune="contacte-necunoscute" style={{ fontSize:12.5, color:G.red, marginTop:6 }}>Contacte cu rezultat necunoscut: {fmtNum(rezultat.contacteNec.length)}. Contactul există acum în bază, dar răspunsul la completare s-a pierdut: poate fi scris de această operație sau de altcineva. Verificați-le în Fișa parcelei înainte de orice convocare; sunt în raportul de după scriere („necunoscut — de verificat”).</div>}
             <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>Lot: <span style={S.mono}>{rezultat.lotId || '-'}</span> · lista „{rezultat.versiune}” · sursa {SURSA_UTILIZATORI}{rezultat.doarContacte ? ' · doar contacte' : ''}</div>
             {rezultat.eroareRecitire
               ? <div data-eroare="recitire" style={{ fontSize:12.5, color:G.red, marginTop:6 }}>Starea după scriere NU s-a putut reciti din BD ({rezultat.eroareRecitire}): raportul de mai jos o arată „necunoscut”. Refaceți previzualizarea.</div>
@@ -431,7 +454,8 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
           {anulare && (
             <div data-sectiune="anulare" style={{ ...S.card, borderColor:G.red, marginTop:10 }}>
               <div style={{ fontWeight:700, marginBottom:6 }}>Anularea importului — lotul <span style={S.mono}>{anulare.lotId}</span></div>
-              <div style={{ fontSize:12, color:G.muted, marginBottom:8 }}>Se marchează „șters” (ștergere logică, cu motiv, ca din Fișa parcelei) DOAR utilizatorii scriși de acest lot care nu au nicio urmă: convocare, răspuns, PV, plic, e-mail, și nu au fost modificați de un om după import. Ceilalți rămân și sunt listați. Nu se șterge nimic fizic.</div>
+              <div style={{ fontSize:12, color:G.muted, marginBottom:8 }}>Se marchează „șters” (ștergere logică, cu motiv, ca din Fișa parcelei) DOAR utilizatorii scriși de acest lot care nu au nicio urmă: convocare, răspuns, PV, plic, e-mail, și nu au fost modificați de un om după import (inclusiv contactul, reverificat chiar înaintea fiecărei ștergeri). Ceilalți rămân și sunt listați. Nu se șterge nimic fizic.
+                <br />Regula anulării: un singur operator; cât rulează, nimeni nu corectează contacte sau parcele și nu face convocări, PV-uri, plicuri sau mesaje pe proiect. Verificarea și ștergerea nu sunt o singură operație: ce se schimbă exact între ele e doar detectat după („de verificat”).</div>
               {anulare.lucru === 'pregatire' && <div style={{ fontSize:12.5 }}>Verific ce se poate anula…</div>}
               {anulare.eroare && <div data-eroare="anulare" style={{ fontSize:12.5, color:G.red }}>{anulare.eroare}</div>}
               {anulare.pregatire && !anulare.rezultat && (<>
@@ -464,7 +488,13 @@ export default function ImportUtilizatori({ proiect, uats = [], nivel, profile =
                   {statCard('Necunoscut (reluați)', fmtNum(anulare.rezultat.necunoscute.length), anulare.rezultat.necunoscute.length ? G.red : G.text)}
                   {statCard('De verificat', fmtNum(anulare.rezultat.deVerificat.length), anulare.rezultat.deVerificat.length ? G.red : G.text)}
                 </div>
-                {anulare.rezultat.eroareLot && <div style={{ fontSize:12.5, color:G.red }}>Anularea nu a putut fi consemnată în lot ({anulare.rezultat.eroareLot}); rândurile anulate poartă oricum motivul cu id-ul lotului.</div>}
+                {motiveGrupate(anulare.rezultat).length > 0 && (
+                  <table data-sectiune="anulare-motive" style={{ borderCollapse:'collapse', marginBottom:8 }}>
+                    <thead><tr>{['Rezultat', 'Motiv', 'Câte'].map(k => <th key={k} style={S.th}>{k}</th>)}</tr></thead>
+                    <tbody>{motiveGrupate(anulare.rezultat).map((g, i) => <tr key={i}><td style={S.td}>{g.rezultat}</td><td style={{ ...S.td, fontSize:12 }}>{g.motiv}</td><td style={{ ...S.td, textAlign:'right' }}>{fmtNum(g.numar)}</td></tr>)}</tbody>
+                  </table>
+                )}
+                {anulare.rezultat.eroareLot &&<div style={{ fontSize:12.5, color:G.red }}>Anularea nu a putut fi consemnată în lot ({anulare.rezultat.eroareLot}); rândurile anulate poartă oricum motivul cu id-ul lotului.</div>}
                 {anulare.rezultat.eroareVerificare && <div style={{ fontSize:12.5, color:G.red }}>Verificarea de după anulare nu s-a putut face ({anulare.rezultat.eroareVerificare}).</div>}
                 <div style={{ display:'flex', gap:8, marginTop:8 }}>
                   <button style={S.btnS} onClick={() => descarcaCsv(csvAnulare(anulare.rezultat), `anulare-${String(proiect.cod || 'proiect')}-${anulare.lotId}-rezultat.csv`.replace(/[^\w.-]+/g, '_'))}>⬇ Raportul anulării (CSV)</button>

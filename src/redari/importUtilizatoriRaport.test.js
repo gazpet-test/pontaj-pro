@@ -133,6 +133,31 @@ describe('stareDupaScriere', () => {
   })
 })
 
+// r3 (Jak r2 P2-1): contactele „deja deținătorilor” se judecă după intenția consemnată + clasificarea din BD; niciodată „neschimbat” dacă atribuirea lipsește
+describe('stareDupaScriere — r3: completarea contactelor', () => {
+  const dU = { id: 'd-u7', parcela_id: 'p1', nume_normalizat: 'POPESCU ION (FICTIV)', calitate: 'utilizator', sursa_date: 'TGZ_UTILIZATORI: … rândul 7; lot lot-vechi' }
+  const recCu = (cc, cuContact = ['d-u7']) => ({ detinatori: [dU], contacte: new Map(cuContact.map(id => [id, 't'])), deVerificat: [], contacteIntentie: [{ detinator_id: 'd-u7', rand: 7 }], contacteClasificate: cc })
+  const lot = { stare: 'esuat', diferente: {} }
+  it('răspuns pierdut, contact existent → „necunoscut — de verificat” (în CSV, nu „neschimbat”)', () => {
+    const { parsat, plan } = pregateste()
+    const m = stareDupaScriere(plan, recCu({ scrise: [], necunoscute: ['d-u7'], nescrise: [], aparute: [] }), lot, LOT_ID)
+    expect(m.get(7)).toEqual({ cod: 'necunoscut', text: 'necunoscut — de verificat (contactul există acum, dar răspunsul la completare s-a pierdut: poate fi scris de această operație sau de altcineva)', id: 'd-u7', contact: true })
+    const r7 = csvRaportUtilizatori(randuriRaport(parsat, plan, m), { dupa: true }).split('\r\n').find(l => l.startsWith('7;'))
+    expect(r7).not.toMatch(/neschimbat/)
+    expect(r7.endsWith(';d-u7;da')).toBe(true)
+  })
+  it('confirmat → completat; din intenție fără contact → necompletat; apărut din altă parte → necompletat, cu detaliu; fără recitire → necunoscut', () => {
+    const { plan } = pregateste()
+    expect(stareDupaScriere(plan, recCu({ scrise: ['d-u7'], necunoscute: [], nescrise: [], aparute: [] }), lot, LOT_ID).get(7).cod).toBe('contact_completat')
+    expect(stareDupaScriere(plan, recCu({ scrise: [], necunoscute: [], nescrise: ['d-u7'], aparute: [] }, []), lot, LOT_ID).get(7))
+      .toEqual({ cod: 'contact_nescris', text: 'contact de completat, necompletat de această operație', id: 'd-u7', contact: false })
+    expect(stareDupaScriere(plan, recCu({ scrise: [], necunoscute: [], nescrise: [], aparute: ['d-u7'] }), lot, LOT_ID).get(7).text)
+      .toBe('contact de completat, necompletat de această operație (contactul a apărut între timp din altă parte)')
+    const faraRec = stareDupaScriere(plan, null, lot, LOT_ID, { contacteIntentie: [{ detinator_id: 'd-u7', rand: 7 }] })
+    expect(faraRec.get(7)).toEqual({ cod: 'necunoscut', text: 'necunoscut — de verificat (contactul era de completat; recitirea din BD după scriere a eșuat)', id: 'd-u7' })
+  })
+})
+
 describe('csvRaportUtilizatori', () => {
   it('UTF-8 cu BOM, „;”, CRLF, caractere românești, toate categoriile; formulele neutralizate ca la exporturile existente', () => {
     const { parsat, plan } = pregateste()

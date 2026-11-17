@@ -75,17 +75,20 @@ export async function pregatesteAnulare(supabase, { proiectId, lotId }, { pagina
     cuMarcaj.push(...rows.filter(d => scrisDeLot(d, lotId)))
   }
   const rand = d => { const m = /rândul (\d+)/.exec(String(d.sursa_date || '')); return m ? Number(m[1]) : null }
-  const fisa = d => ({ id: d.id, parcela_id: d.parcela_id, id_parcela: idParcela.get(d.parcela_id) ?? null, nume: d.nume, rand: rand(d), created_at: d.created_at, updated_at: d.updated_at })
+  const contacte = new Map()   // detinator_id → updated_at al contactului, citit mai jos pentru deținătorii activi
+  // r3: contact_la = momentul contactului citit acum (null = fără contact); pentru un anulabil e egal cu cel reținut pe lot la import
+  const fisa = d => ({ id: d.id, parcela_id: d.parcela_id, id_parcela: idParcela.get(d.parcela_id) ?? null, nume: d.nume, rand: rand(d), created_at: d.created_at, updated_at: d.updated_at,
+    contact_la: contacte.has(d.id) ? contacte.get(d.id) : null })
   const activi = cuMarcaj.filter(d => !d.sters_la)
   const dejaAnulati = cuMarcaj.filter(d => d.sters_la).map(d => ({ ...fisa(d), motive: [String(d.sters_motiv || '').startsWith(prefixMotiv(lotId)) ? 'anulat deja de o anulare a acestui lot' : 'șters deja (altă operație)'] }))
   const gasiti = new Set(cuMarcaj.map(d => d.id))
   const faraMarcaj = (lot.diferente?.scrise || []).filter(s => s?.id && !gasiti.has(s.id)).map(s => ({ id: s.id, rand: s.rand ?? null, motive: ['în evidența lotului, dar fără marcajul lotului în bază (modificat) — nu se atinge'] }))
-  const contacte = new Map()
   for (const lotI of loturi(activi.map(d => d.id), lotCitire)) {
     for (const c of await citesteTot(() => supabase.from('red_detinatori_contact').select('detinator_id, updated_at').in('detinator_id', lotI), 'citire contacte (anulare)', pagina, 'detinator_id')) contacte.set(c.detinator_id, c.updated_at ?? null)
   }
   const urme = await urmeInAval(supabase, activi, { pagina, lotCitire })
   const anulabili = [], raman = []
+  // dejaAnulati / faraMarcaj nu folosesc contact_la; anulabilii și rămașii îl iau din `contacte` (completat mai sus)
   for (const d of activi) {
     const motive = [...(urme.get(d.id) || [])]
     if (d.calitate !== CALITATE_UTILIZATOR) motive.push(`calitatea e acum „${d.calitate}”`)
@@ -97,22 +100,44 @@ export async function pregatesteAnulare(supabase, { proiectId, lotId }, { pagina
   return { lotId, anulabili, raman, dejaAnulati, faraMarcaj }
 }
 
+export const MOTIV_CONTACT_MODIFICAT = 'neanulat: contact modificat după import'
+export const MOTIV_CONTACT_DUPA = 'de verificat: contactul s-a modificat după anulare (în timpul anulării?)'
+// contactele (updated_at, schimbat de trigger la orice UPDATE) ale deținătorilor dați, citite acum: Map detinator_id → updated_at
+async function contacteAcum(supabase, ids, { pagina, lotCitire }) {
+  const m = new Map()
+  for (const lotI of loturi(ids, lotCitire)) {
+    for (const c of await citesteTot(() => supabase.from('red_detinatori_contact').select('detinator_id, updated_at').in('detinator_id', lotI), 'reverificare contact (anulare)', pagina, 'detinator_id')) m.set(c.detinator_id, c.updated_at ?? null)
+  }
+  return m
+}
+const contactSchimbat = (acum, a) => (acum.has(a.id) ? acum.get(a.id) : null) !== (a.contact_la ?? null)
+
 /**
  * executaAnulare — după confirmarea owner-ului. Reface previzualizarea (L03: se anulează doar ce era anulabil ȘI la previzualizarea arătată ȘI
- * acum, cu același updated_at), apoi pentru fiecare: UPDATE condiționat (CAS: sters_la IS NULL și updated_at neschimbat) cu motiv. 0 rânduri =
- * modificat între timp, rămâne. Eroare fără cod = necunoscut (se vede la reluare). Apoi verificarea urmelor apărute în timpul anulării și
- * consemnarea în lot (diferente.anulari[]). Reluabil: a doua rulare găsește rândurile deja anulate și nu mai scrie nimic.
+ * acum, cu același updated_at și același moment al contactului), apoi pentru fiecare: (r3, Jak r2 P2-3) reverificarea contactului IMEDIAT
+ * înaintea UPDATE-ului lui (contact schimbat față de cel reținut la import = nu se anulează, „neanulat: contact modificat după import”), apoi
+ * UPDATE condiționat (CAS: sters_la IS NULL și updated_at neschimbat) cu motiv. 0 rânduri = modificat între timp, rămâne. Eroare fără cod =
+ * necunoscut (se vede la reluare). Apoi verificarea urmelor ȘI a contactelor schimbate după UPDATE („de verificat”) și consemnarea în lot
+ * (diferente.anulari[]). Reluabil: a doua rulare găsește rândurile deja anulate și nu mai scrie nimic.
+ * Garanția NU e atomică: între reverificarea contactului și UPDATE rămân milisecunde în care o corectură nu e oprită, ci doar detectată
+ * după (de aceea procedura cere fereastră exclusivă la anulare).
  */
 export async function executaAnulare(supabase, { proiectId, lotId, aratat, motiv, profilId }, { pagina = PAGINA, lotCitire = LOT_CITIRE, acum = () => new Date().toISOString() } = {}) {
   const m = String(motiv || '').trim()
   if (m.length < MOTIV_MINIM) throw new Error(`Motivul anulării e obligatoriu (minim ${MOTIV_MINIM} caractere)`)
   const proaspat = await pregatesteAnulare(supabase, { proiectId, lotId }, { pagina, lotCitire })
-  const aratatIds = new Map((aratat?.anulabili || []).map(a => [a.id, a.updated_at]))
-  const deAnulat = proaspat.anulabili.filter(a => aratatIds.get(a.id) === a.updated_at)
-  const raman = [...proaspat.raman, ...proaspat.anulabili.filter(a => aratatIds.get(a.id) !== a.updated_at).map(a => ({ ...a, motive: ['nu era în previzualizarea confirmată (s-a schimbat între timp) — refaceți previzualizarea'] }))]
+  const aratatIds = new Map((aratat?.anulabili || []).map(a => [a.id, a]))
+  const caLaAratat = a => { const x = aratatIds.get(a.id); return !!x && x.updated_at === a.updated_at && (x.contact_la ?? null) === (a.contact_la ?? null) }
+  const deAnulat = proaspat.anulabili.filter(caLaAratat)
+  const raman = [...proaspat.raman, ...proaspat.anulabili.filter(a => !caLaAratat(a)).map(a => ({ ...a, motive: ['nu era în previzualizarea confirmată (s-a schimbat între timp) — refaceți previzualizarea'] }))]
   const anulati = [], necunoscute = [], refuzate = []
   const sters_motiv = prefixMotiv(lotId) + m
   for (const a of deAnulat) {
+    // r3 (Jak r2 P2-3 a): contactul se reverifică pentru ACEST rând, chiar înaintea UPDATE-ului lui (CAS-ul de mai jos vede doar red_detinatori)
+    let ctc
+    try { ctc = await contacteAcum(supabase, [a.id], { pagina, lotCitire }) }
+    catch (e) { raman.push({ ...a, motive: [`neanulat: contactul nu s-a putut reverifica (${e?.message || e}) — reluați`] }); continue }
+    if (contactSchimbat(ctc, a)) { raman.push({ ...a, motive: [MOTIV_CONTACT_MODIFICAT] }); continue }
     const { data, error } = await supabase.from('red_detinatori').update({ sters_la: acum(), sters_de: profilId || null, sters_motiv })
       .eq('id', a.id).is('sters_la', null).eq('updated_at', a.updated_at).select('id')
     if (error) { (error.code ? refuzate : necunoscute).push({ ...a, motive: [error.code ? `refuzat de bază: ${error.message || error.code}` : `rezultat necunoscut (${error.message || 'fără răspuns'}) — reluați anularea`] }); continue }
@@ -120,10 +145,16 @@ export async function executaAnulare(supabase, { proiectId, lotId, aratat, motiv
     else raman.push({ ...a, motive: ['modificat între timp (sau deja șters) — nu s-a anulat'] })
   }
   // urme apărute în timpul anulării (detecție): rândurile anulate care au acum convocare / răspuns / PV / e-mail
+  // r3 (Jak r2 P2-3 b): ȘI contactele schimbate după UPDATE (aceeași comparație ca înainte: momentul reținut la import)
   let deVerificat = [], eroareVerificare = null
   try {
     const urme = await urmeInAval(supabase, anulati, { pagina, lotCitire })
-    deVerificat = anulati.filter(a => (urme.get(a.id) || []).length).map(a => ({ ...a, motive: urme.get(a.id).map(x => `de verificat: ${x} (apărut în timpul anulării?)`) }))
+    const ctc = await contacteAcum(supabase, anulati.map(a => a.id), { pagina, lotCitire })
+    deVerificat = anulati.map(a => {
+      const motive = (urme.get(a.id) || []).map(x => `de verificat: ${x} (apărut în timpul anulării?)`)
+      if (contactSchimbat(ctc, a)) motive.push(MOTIV_CONTACT_DUPA)
+      return motive.length ? { ...a, motive } : null
+    }).filter(Boolean)
   } catch (e) { eroareVerificare = String(e?.message || e).slice(0, 300) }
   const inregistrare = { la: acum(), de: profilId || null, motiv: m, anulati: anulati.map(a => a.id), raman: [...raman, ...refuzate].map(r => ({ id: r.id, motive: r.motive })),
     necunoscute: necunoscute.map(r => r.id), de_verificat: deVerificat.map(r => ({ id: r.id, motive: r.motive })), verificare: eroareVerificare ? `esuata: ${eroareVerificare}` : 'facuta' }
@@ -136,6 +167,18 @@ export async function executaAnulare(supabase, { proiectId, lotId, aratat, motiv
     if (e2) throw e2
   } catch (e) { eroareLot = String(e?.message || e).slice(0, 300) }
   return { anulati, raman: [...raman, ...refuzate], necunoscute, deVerificat, dejaAnulati: proaspat.dejaAnulati, faraMarcaj: proaspat.faraMarcaj, eroareVerificare, eroareLot }
+}
+
+/** r3: motivele rândurilor neanulate / necunoscute / de verificat, grupate (pe ecran): [{ rezultat, motiv, numar }], în ordinea apariției. */
+export function motiveGrupate(rezultat) {
+  const m = new Map()
+  for (const [et, arr] of [['rămâne', rezultat?.raman], ['necunoscut', rezultat?.necunoscute], ['de verificat', rezultat?.deVerificat]]) {
+    for (const r of arr || []) for (const motiv of (r.motive?.length ? r.motive : ['(fără motiv)'])) {
+      const k = `${et}|${motiv}`   // `et` vine dintr-o listă fixă, fără „|”: cheia e neambiguă
+      m.set(k, { rezultat: et, motiv, numar: (m.get(k)?.numar || 0) + 1 })
+    }
+  }
+  return [...m.values()]
 }
 
 /** CSV-ul anulării (previzualizare sau rezultat): UTF-8 cu BOM, „;”, CRLF. Conține nume: se păstrează local, nu se urcă în repository / PR. */

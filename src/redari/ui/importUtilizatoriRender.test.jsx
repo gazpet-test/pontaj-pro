@@ -28,7 +28,8 @@ import { executaAnulare, pregatesteAnulare } from '../importUtilizatoriAnulare.j
 // ── client Supabase simulat: filtre eq / is / in / gt / gte / like, keyset order + limit, insert (.select().single() sau await),
 // update cu filtre (.eq / .is) + .select(), maybeSingle; created_at = updated_at la INSERT, updated_at nou la UPDATE (ca triggerul) ──
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-function clientFals({ parcele, detinatori = [], loturiExistente = [], esueazaDetinatori = null, poartaCitire = null, pierdeRaspuns = null, esueazaContacteLa = 0, esueazaCitireLoturi = false } = {}) {
+// r3: poartaLoturi = { promisiune } — prima citire din red_import_loturi (verificarea altor importuri) așteaptă promisiunea
+function clientFals({ parcele, detinatori = [], loturiExistente = [], esueazaDetinatori = null, poartaCitire = null, pierdeRaspuns = null, esueazaContacteLa = 0, esueazaCitireLoturi = false, poartaLoturi = null } = {}) {
   const tabele = { red_parcele: parcele.map(p => ({ sters_la: null, ...p })), red_detinatori: detinatori.map(d => ({ sters_la: null, created_at: 't0', updated_at: 't0', ...d })),
     red_detinatori_contact: [], red_import_loturi: loturiExistente.map(l => ({ ...l })), red_convocari: [], red_raspunsuri: [], red_procese_verbale: [] }
   let n = 0, tic = 0, inserturiContact = 0, pierdut = false
@@ -49,6 +50,7 @@ function clientFals({ parcele, detinatori = [], loturiExistente = [], esueazaDet
     q.order = (c) => { q._ord = q._ord || c; return q }
     q.limit = async (k) => {
       if (tab === 'red_parcele' && poartaCitire?.promisiune) { const p = poartaCitire.promisiune; poartaCitire.promisiune = null; await p }
+      if (tab === 'red_import_loturi' && poartaLoturi?.promisiune) { const p = poartaLoturi.promisiune; poartaLoturi.promisiune = null; await p }
       if (tab === 'red_import_loturi' && esueazaCitireLoturi) return { data: null, error: { code: '42501', message: 'citire loturi refuzată (simulat)' } }
       const c = q._ord || 'id'
       return { data: rows().sort((a, b) => (String(a[c]) < String(b[c]) ? -1 : String(a[c]) > String(b[c]) ? 1 : 0)).slice(0, k), error: null }
@@ -415,6 +417,54 @@ describe('ImportUtilizatori — L18 / L05: eroarea scrierii, rezultatul nesigur,
     expect(bd.client.tabele.red_import_loturi[0].diferente.contacte_scrise).toHaveLength(200)
     expect(p.onImportat).toHaveBeenCalledTimes(1)
   })
+  it('r3 P2-1: „Reia doar completarea contactelor” pe utilizatorii unui lot ANTERIOR, INSERT comis cu răspuns pierdut → nesigur, modulul reîncărcat, raport „necunoscut”', async () => {
+    const vechi = (id, parcela_id, nume_normalizat, rand) => ({ id, parcela_id, nume_normalizat, calitate: CALITATE_UTILIZATOR, sursa_date: `${SURSA_UTILIZATORI}: rândul ${rand}; lot lot-vechi` })
+    bd.client = clientFals({ parcele: PARCELE(), pierdeRaspuns: 'red_detinatori_contact',
+      detinatori: [...DETINATORI(), vechi('d-u1', 'p1', 'IONESCU ANA (FICTIV)', 4), vechi('d-u2', 'p2', 'IONESCU ANA (FICTIV)', 5), vechi('d-u3', 'p3', 'STEFANESCU TICU (FICTIV)', 6)] })
+    vi.stubGlobal('window', { confirm: () => true })
+    const h = harness(); const p = props()
+    pregateste(h, p)
+    await buton(await previzualizeaza(h, p), 'Reia doar completarea contactelor').props.onClick()
+    const tree = h.render(ImportUtilizatori, p)
+    expect(bd.client.tabele.red_detinatori_contact.map(c => c.detinator_id).sort()).toEqual(['d-u1', 'd-u2', 'd-u3'])   // comise în BD
+    expect(elemente(tree, n => n.props?.['data-rezultat'] === 'ambiguu')).toHaveLength(1)
+    expect(p.onImportat).toHaveBeenCalledTimes(1)                                           // pe c8e2df8b: neapelat (atins = false)
+    expect(text(tree)).toContain('Necunoscut3')
+    expect(text(elemente(tree, n => n.props?.['data-sectiune'] === 'contacte-necunoscute'))).toMatch(/^Contacte cu rezultat necunoscut: 3\./)
+    const lot = bd.client.tabele.red_import_loturi[0]
+    expect([...lot.diferente.contacte_necunoscute].sort()).toEqual(['d-u1', 'd-u2', 'd-u3'])
+    const blobs = capteazaDescarcari()
+    buton(tree, '⬇ Raportul după scriere').props.onClick()
+    const linii = (await blobs[0].text()).split('\r\n')
+    for (const [r, id] of [[4, 'd-u1'], [5, 'd-u2'], [6, 'd-u3']]) {
+      const l = linii.find(x => x.startsWith(`${r};`))
+      expect(l).not.toMatch(/neschimbat/)
+      expect(l.endsWith(`;necunoscut — de verificat (contactul există acum, dar răspunsul la completare s-a pierdut: poate fi scris de această operație sau de altcineva);${id};da`)).toBe(true)
+    }
+  })
+  it('r3 P2-2: potrivire HG inserată, a doua parcelă cu același HG apare, contactul e REFUZAT → „Import eșuat”, „De verificat” pe ecran ȘI pe lot, modulul anunțat', async () => {
+    bd.client = clientFals({ parcele: PARCELE(), detinatori: DETINATORI(), esueazaContacteLa: 1 })
+    const orig = bd.client.from
+    let dupa = false
+    // „alt operator”: imediat după INSERT-ul deținătorilor adaugă o parcelă cu aceeași poziție HG (20) în același UAT
+    bd.client.from = (tab) => { const q = orig(tab); if (tab === 'red_detinatori') { const ins = q.insert; q.insert = (v) => { const r = ins(v); if (!dupa) { dupa = true; bd.client.tabele.red_parcele.push({ id: 'p8', proiect_id: 'proiect-A', cheie_sursa: null, id_parcela: 'T1-HUS-0020B', poz_hg: '20', sters_la: null, red_uat: { uat3: 'HUS' } }) } return r } } return q }
+    vi.stubGlobal('window', { confirm: () => true })
+    const h = harness(); const p = props()
+    pregateste(h, p)
+    let tree = await previzualizeaza(h, p)
+    bifaHg(tree).props.onChange({ target: { checked: true } })
+    await buton(h.render(ImportUtilizatori, p), '📥').props.onClick()
+    tree = h.render(ImportUtilizatori, p)
+    expect(elemente(tree, n => n.props?.['data-rezultat'] === 'esuat')).toHaveLength(1)
+    const d6 = scrisiUtil().find(d => d.parcela_id === 'p3')
+    const motiv = 'de verificat: ținta s-a schimbat în timpul importului (poziția HG nu mai e unică în UAT)'
+    expect(text(elemente(tree, n => n.props?.['data-sectiune'] === 'de-verificat'))).toContain(motiv)
+    const lot = bd.client.tabele.red_import_loturi[0]
+    expect(lot.stare).toBe('esuat')
+    expect(lot.diferente.de_verificat_dupa_scriere).toEqual([{ rand: 6, id: d6.id, parcela_id: 'p3', id_parcela: 'T1-HUS-0020', motiv }])   // pe c8e2df8b: absent
+    expect(lot.diferente.verificare_dupa_scriere).toBe('facuta')
+    expect(p.onImportat).toHaveBeenCalledTimes(1)                                           // deținători scriși, contacte refuzate
+  })
   it('„două parcele active cu aceeași cheie” → eroare vizibilă la previzualizare, nimic de importat', async () => {
     bd.client = clientFals({ parcele: [...PARCELE(), { id: 'p9', proiect_id: 'proiect-A', cheie_sursa: 'HUS|10|100|5', id_parcela: 'T1-HUS-0099', poz_hg: '10', red_uat: { uat3: 'HUS' } }], detinatori: DETINATORI() })
     const h = harness(); const p = props()
@@ -486,6 +536,57 @@ describe('ImportUtilizatori — L24: garda de generație', () => {
     expect(pA.onImportat).not.toHaveBeenCalled()               // B nu primește semnalul lui A
     expect(buton(tree, '🔍').props.disabled).toBe(true)        // B: fără fișier, dar nu „în lucru” din cauza lui A
     expect(text(buton(tree, '🔍'))).toBe('🔍 2. Citește și previzualizează')
+  })
+  it('r3 P2-4: fișierul schimbat în timpul verificării altor importuri → controalele erau blocate, planul vechi NU se importă (control: fără schimbare se importă)', async () => {
+    for (const schimba of [false, true]) {
+      const poarta = amanat()
+      const ctrl = { promisiune: null }
+      bd.client = clientFals({ parcele: PARCELE(), detinatori: DETINATORI(), poartaLoturi: ctrl })
+      const confirm = vi.fn(() => true); vi.stubGlobal('window', { confirm })
+      const h = harness(); const p = props()
+      pregateste(h, p, { fisier: fisierFals('vechi.xlsx') })
+      const b = buton(await previzualizeaza(h, p), '📥')
+      ctrl.promisiune = poarta.promisiune                       // citirea loturilor (primul await al scrierii) întârzie
+      const gata = b.props.onClick()
+      let tree = h.render(ImportUtilizatori, p)
+      // controalele se blochează ÎNAINTEA primului await (pe c8e2df8b: selectorul de fișier rămânea activ)
+      expect(inputuri(tree)[0].props.disabled).toBe(true)
+      expect(inputuri(tree)[1].props.disabled).toBe(true)
+      expect(buton(tree, 'Verific alte importuri…').props.disabled).toBe(true)
+      // reproducerea recenzentului: selecția se schimbă oricum (writtenFile = vechi.xlsx, selectedFile = nou.xlsx)
+      if (schimba) inputuri(tree)[0].props.onChange({ target: { files: [fisierFals('nou.xlsx')] } })
+      poarta.rezolva(); await gata
+      tree = h.render(ImportUtilizatori, p)
+      if (schimba) {
+        expect(confirm).not.toHaveBeenCalled()
+        expect(bd.client.jurnal.filter(j => j[0] === 'insert')).toEqual([])
+        expect(p.show.mock.calls.at(-1)).toEqual(['Fișierul s-a schimbat înainte de confirmare: importul NU a pornit. Refaceți previzualizarea.', 'error'])
+        expect(inputuri(tree)[0].props.disabled).toBe(false)   // deblocat după abandon
+      } else {
+        expect(confirm).toHaveBeenCalledTimes(1)
+        expect(bd.client.tabele.red_import_loturi[0].fisier_nume).toBe('vechi.xlsx')
+        expect(scrisiUtil()).toHaveLength(2)
+      }
+    }
+  })
+  it('r3 P2-4: proiectul schimbat în timpul verificării altor importuri → nimic scris pentru A, nimic afișat în B', async () => {
+    const poarta = amanat()
+    const ctrl = { promisiune: null }
+    bd.client = clientFals({ parcele: PARCELE(), detinatori: DETINATORI(), poartaLoturi: ctrl })
+    const confirm = vi.fn(() => true); vi.stubGlobal('window', { confirm })
+    const h = harness(); const pA = props('proiect-A')
+    pregateste(h, pA)
+    const b = buton(await previzualizeaza(h, pA), '📥')
+    ctrl.promisiune = poarta.promisiune
+    const gata = b.props.onClick()
+    const pB = props('proiect-B', { show: pA.show, onImportat: pA.onImportat })
+    h.render(ImportUtilizatori, pB)
+    poarta.rezolva(); await gata
+    expect(confirm).not.toHaveBeenCalled()
+    expect(bd.client.jurnal.filter(j => j[0] === 'insert')).toEqual([])
+    expect(pA.onImportat).not.toHaveBeenCalled()
+    expect(inputuri(h.render(ImportUtilizatori, pB))).toHaveLength(2)
+    expect(inputuri(h.render(ImportUtilizatori, pB))[0].props.disabled).toBe(false)
   })
   it('demontat în timpul scrierii → nicio actualizare a ecranului, doar un mesaj care numește proiectul', async () => {
     const poarta = amanat()
@@ -587,5 +688,43 @@ describe('ImportUtilizatori — r2 pct. 7: anularea pe lot (owner)', () => {
     expect(r.anulati.map(a => a.id)).toEqual([dA.id])
     expect(r.raman.find(x => x.id === dB.id).motive).toEqual(['modificat între timp (sau deja șters) — nu s-a anulat'])
     expect(dB.sters_la).toBeNull()
+  })
+  // r3 (Jak r2 P2-3): corectura de CONTACT nu schimbă red_detinatori.updated_at — CAS-ul singur nu o vede
+  const corecteazaTelefon = (id, la) => { const c = bd.client.tabele.red_detinatori_contact.find(x => x.detinator_id === id); c.telefon = '0700 000 000 (fictiv)'; c.updated_at = la }
+  it('r3 P2-3 a: după reverificarea globală, înaintea UPDATE-ului unui utilizator, alt operator îi corectează telefonul → NU se anulează; motivul apare pe ecran, grupat', async () => {
+    const { h, p, lotId } = await importa()
+    const [dA, dB] = scrisiUtil().sort((a, b) => a.id.localeCompare(b.id))
+    await buton(h.render(ImportUtilizatori, p), 'Anulează importul').props.onClick()
+    let tree = h.render(ImportUtilizatori, p)
+    expect(text(elemente(tree, n => n.props?.['data-sectiune'] === 'anulare'))).toContain('Se pot anula2')
+    elemente(tree, n => n.type === 'textarea')[0].props.onChange({ target: { value: 'import de probă, fictiv' } })
+    tree = h.render(ImportUtilizatori, p)
+    // bariera: primul UPDATE (dA) declanșează corectura contactului lui dB, înaintea UPDATE-ului lui dB
+    const orig = bd.client.from
+    let primul = true
+    bd.client.from = (tab) => { const q = orig(tab); if (tab === 'red_detinatori') { const u = q.update; q.update = (v) => { if (primul) { primul = false; corecteazaTelefon(dB.id, '2026-11-18T09:30:00') } return u(v) } } return q }
+    await buton(tree, 'Anulează 2 utilizatori').props.onClick()
+    expect(dA.sters_la).toBeTruthy()
+    expect(dB.sters_la).toBeNull()                                                            // pe c8e2df8b: anulat
+    tree = h.render(ImportUtilizatori, p)
+    expect(text(elemente(tree, n => n.props?.['data-rezultat-anulare'] === '1'))).toContain('Anulați acum1')
+    expect(text(elemente(tree, n => n.props?.['data-rezultat-anulare'] === '1'))).toContain('Rămân1')
+    // r3 pct. 5: motivul fiecărui rând neanulat, grupat, cu număr — pe ecran, nu doar în CSV
+    const motive = elemente(tree, n => n.props?.['data-sectiune'] === 'anulare-motive')
+    expect(text(motive)).toBe('RezultatMotivCâterămâneneanulat: contact modificat după import1')
+    expect(bd.client.tabele.red_import_loturi[0].diferente.anulari[0]).toMatchObject({ anulati: [dA.id], raman: [{ id: dB.id, motive: ['neanulat: contact modificat după import'] }], de_verificat: [] })
+    expect(lotId).toBeTruthy()
+  })
+  it('r3 P2-3 b: contactul unui rând deja anulat e corectat înaintea verificării finale → „de verificat”, explicit', async () => {
+    const { lotId } = await importa()
+    const [dA, dB] = scrisiUtil().sort((a, b) => a.id.localeCompare(b.id))
+    const aratat = await pregatesteAnulare(bd.client, { proiectId: 'proiect-A', lotId })
+    const orig = bd.client.from
+    let nr = 0
+    // al doilea UPDATE (dB): dA e deja anulat; corectura contactului lui dA cade după UPDATE-ul lui, înaintea verificării finale
+    const client = { from: (tab) => { const q = orig(tab); if (tab === 'red_detinatori') { const u = q.update; q.update = (v) => { if (++nr === 2) corecteazaTelefon(dA.id, '2026-11-18T09:31:00'); return u(v) } } return q } }
+    const r = await executaAnulare(client, { proiectId: 'proiect-A', lotId, aratat, motiv: 'probă fictivă', profilId: 'o' })
+    expect(r.anulati.map(a => a.id).sort()).toEqual([dA.id, dB.id].sort())
+    expect(r.deVerificat.map(x => [x.id, x.motive])).toEqual([[dA.id, ['de verificat: contactul s-a modificat după anulare (în timpul anulării?)']]])   // pe c8e2df8b: []
   })
 })
