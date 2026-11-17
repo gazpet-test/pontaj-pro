@@ -111,9 +111,32 @@ P1): proveniența = **execuția concretă** a migrării, nu forma tranziției. U
 3. rândul e identic cu `date_noi` din acel rând de jurnal (deci și aceeași versiune).
 
 Rămân neatinse (și numărate în NOTICE): o tranziție VECHI → NOU făcută de altcineva fără JWT, înainte sau după migrare (n-are marcajul);
-un proiect salvat între timp de un om (rând de jurnal mai nou, versiunea crescută); un proiect creat după migrare. De ce marcajul nu poate fi
-falsificat de aplicație: e scris în `user_email` din `auth.jwt()`; un JWT real are `sub` (deci `user_id` nenul), iar `service_role` nu are
-e-mail; doar o sesiune de administrator al BD (care oricum poate orice) l-ar putea imita. Marcajul se pune doar pe durata UPDATE-ului
+un proiect salvat între timp de un om (rând de jurnal mai nou, versiunea crescută); un proiect creat după migrare.
+
+**Limita de încredere a marcajului** (r3, review #1119): marcajul e scris în `user_email` din `auth.jwt()`, cu `user_id` NULL. El
+presupune încredere în **emitentul JWT-urilor** și în **codul de server privilegiat**: un server care ar semna deliberat un JWT fără `sub`,
+cu e-mailul marcajului și cu drept de scriere pe `red_proiecte`, l-ar putea imita (la fel, orice sesiune de administrator al BD, care
+oricum poate orice). NU îl pot produce: utilizatorii aplicației (JWT-ul lor are `sub`, deci `user_id` nenul), cheia standard
+`service_role` (n-are e-mail în JWT) și `anon` (n-are drept de scriere pe proiecte). Un JWT fără `sub`, prin el însuși, nu e un marcaj
+de livrare; revenirea cere în plus ca rândul de jurnal să fie ULTIMUL al proiectului, tranziția exactă VECHI → NOU și rândul identic.
+
+**Revenirea alege „ultima execuție care a SCRIS în jurnal”** (cel mai mare `red_jurnal.id` cu marcajul migrării). O aplicare care n-a
+schimbat niciun proiect nu lasă niciun marcaj. Ce înseamnă pentru o revenire după o astfel de aplicare (verificat pe corpul revenirii,
+fără s-o schimbăm — sha256-ul ei e cel probat pe clonă):
+- dacă n-a existat nicio execuție cu proiecte schimbate: NOTICE-ul spune `executia niciuna in jurnal: 0 proiecte readuse …` — corect;
+- dacă a existat una mai veche (aplicare X1 cu proiecte → revenire R1 → reaplicare X2 cu 0 proiecte): revenirea de după X2 alege X1.
+  Rândurile NU sunt afectate greșit: fiecare proiect pe care X1 l-a schimbat are acum ca ultim rând de jurnal fie rândul revenirii R1,
+  fie o salvare ulterioară a unui om (iar un proiect pe care R1 nu l-a putut readuce pentru că rândul nu mai era identic cu `date_noi`
+  rămâne la fel de neidentic), deci condițiile nu mai sunt îndeplinite de niciun proiect → 0 proiecte
+  readuse (exact ce trebuie: X2 n-a schimbat nimic). DEFAULT-ul și funcțiile revin normal. **Defectul e doar de raportare**: NOTICE-ul
+  numește execuția X1 (nu X2) și numără la „proiecte ale executiei salvate intre timp, neatinse” proiectele lui X1 (readuse deja de R1).
+  De aceea coordonatorul compară marcajul din NOTICE-ul revenirii cu cel consemnat la aplicare (§7): dacă aplicarea a raportat
+  „0 proiecte schimbate” (NOTICE-ul ei afișează totuși marcajul propriu, nefolosit în jurnal), marcajul și numărul din NOTICE-ul
+  revenirii aparțin unei execuții mai vechi și se ignoră; rezultatul corect e „0 proiecte readuse”. Probat local (PGlite, scenariul 3c:
+  X1 → R1 → un om schimbă textul → X2 cu 0 proiecte → R2: alege X1, 0 readuse, niciun proiect atins, DEFAULT-ul vechi; NOTICE-ul
+  numără 2 proiecte ale lui X1 la „salvate intre timp”).
+
+Marcajul se pune doar pe durata UPDATE-ului
 (`request.jwt.claims` local, fără `sub` și fără `role`: `auth.uid()` și `auth.role()` rămân NULL, nicio identitate pentru triggere) și se
 șterge imediat (verificat). Revenirea își marchează la rândul ei rândurile (`…_ROLLBACK:<txid>`). Fără refuz pe date (revenirea nu șterge
 nimic). Starea exactă a migrării e verificată înainte (corpuri, proprietăți, ACL, DEFAULT, trigger, CHECK, jurnal), altfel refuz.
@@ -126,7 +149,8 @@ Coordonatorul consemnează în jurnalul livrării NOTICE-ul aplicării (lista id
   L15 v2 generați — manifestul = 4 obiecte din `supabase/tests/20261226a_redari_predare_declaratie.l15.obiecte.tsv`; comportamentul pe
   fiecare cale; marcajul execuției în jurnal; aplicare → revenire → reaplicare → revenire; **contraexemplele revenirii** (tranziția
   VECHI → NOU fără utilizator înainte de migrare și după ea: neatinse; revenirea de la 60072612 le readucea — `--revenire <fișier>`
-  o rulează pe altă revenire); 17 refuzuri ale migrării, 7 ale revenirii; 10 mutanți ai migrării + 2 ai revenirii).
+  o rulează pe altă revenire); revenirea după o reaplicare fără proiecte schimbate (3c, §5); 17 refuzuri ale migrării, 7 ale
+  revenirii; 10 mutanți ai migrării + 2 ai revenirii).
 - `python3 scripts/test_livrare_validator_plafon.py` (validatorul acceptă migrarea cu 5000 și o refuză cu 2000 / fără plafon; revenirea cu 2000).
 - Pe clonă, coordonatorul (17.11.2026, pe 60072612): manifestul = 4 obiecte, reproductibil; 3 probe cu ROLLBACK IDENTIC; aplicare →
   revenire → reaplicare → revenire cod 0, catalogul identic după revenire. LIMITA: clona n-are rânduri Redări, deci rândurile, jurnalul și
@@ -136,6 +160,12 @@ Coordonatorul consemnează în jurnalul livrării NOTICE-ul aplicării (lista id
   rândurile + jurnalul + refuzurile INSERT / UPDATE pe fiecare cale cu rolurile reale (anon prin RPC, authenticated editor, service_role);
   contraexemplele revenirii; un răspuns public în curs din a doua sesiune în timpul aplicării; formularul citit cât e ținut lock-ul;
   revenirea și curățenia. Rezultatul așteptat pe fiecare pas e în antetul scriptului.
+  Rulări ale coordonatorului (17.11.2026): pe 3be0acd1 **27 OK / 5 NU** (toate cele 5 = comparații de text cu VECHI / NOU, din
+  transmiterea interogărilor ca argument `-c` cu diacritice pe Windows; corectat în cc2bfa2a: SQL-ul pe stdin); pe cc2bfa2a
+  **32 OK / 0 NU**, PASS. Runda 3 (review #1119): S1 cu eliberare explicită a sesiunii B după COMMIT-ul aplicării (B deschisă dovedit pe
+  toată durata aplicării, ordinea COMMIT-urilor dovedită din bază), S2 cu un observator care dovedește că citirea formularului a fost
+  blocată de sesiunea runnerului (`pg_blocking_pids`), curățenia verificată înainte de „PASS” (cod 26 la eșec) — **de rerulat** de
+  coordonator; o blocare neprinsă de observator = „NU - nedovedit”, se reruleaza.
 - NU dovedesc: producția. Pașii de mai jos.
 
 ## 7. Comenzile coordonatorului (clonă adusă la starea producției; producția doar cu acordul owner-ului)

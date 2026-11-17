@@ -393,6 +393,36 @@ console.log('3. aplicare -> revenire -> reaplicare -> revenire (revenirea nu ati
   await db.close()
 }
 
+// r3 (review #1119, pct. 6): revenirea alege „ultima execuție care a SCRIS în jurnal”. O reaplicare care nu schimbă niciun proiect nu lasă
+// marcaj, deci revenirea de după ea alege execuția mai veche. Rezultatul real (revenirea NESCHIMBATĂ): 0 proiecte readuse (corect), dar
+// NOTICE-ul numește execuția veche și numără proiectele ei la „salvate intre timp” — defect doar de raportare, documentat în §5.
+console.log('3c. revenirea după o reaplicare care n-a schimbat niciun proiect (alege ultima execuție care a scris în jurnal)')
+{
+  const db = await bazaNoua()
+  let j = await aplicaMig(db)
+  const x1 = ((j.find(m => /marcajul executiei/.test(m)) || '').match(/livrare:20261226a_redari_predare_declaratie:\d+/) || [])[0]
+  ok(!!x1, 'X1 (prima aplicare) a schimbat proiecte și a scris marcajul: ' + x1)
+  await revino(db)
+  // după R1, un om alege alt text pe toate proiectele cu textul vechi → reaplicarea nu mai are ce schimba
+  const u = await ca(db, 'authenticated', U.OWNER, `UPDATE public.red_proiecte SET text_declaratie = 'Text ales de om (test).' WHERE text_declaratie = ${lit(VECHI)} RETURNING id AS r`)
+  ok(!u.code && u.rows.length >= 1, 'după R1: owner-ul schimbă declarația pe proiectele cu textul vechi: ' + (u.code || u.rows.length))
+  j = await aplicaMig(db)
+  ok(j.some(m => /declaratia: 0 proiecte schimbate/.test(m)), 'X2 (reaplicarea): 0 proiecte schimbate: ' + (j.find(m => /declaratia:/.test(m)) || ''))
+  const scrise = (await db.query(`SELECT count(*)::int AS n FROM public.red_jurnal WHERE tabela = 'red_proiecte' AND user_id IS NULL
+    AND user_email ~ '^livrare:20261226a_redari_predare_declaratie:[0-9]+$' AND user_email <> $1`, [x1])).rows[0].n
+  ok(scrise === 0, 'X2 n-a scris niciun rând de jurnal cu marcajul ei (' + scrise + ')')
+  const inainte = (await db.query(`SELECT string_agg(id::text || '=' || md5(text_declaratie) || '/v' || versiune, ',' ORDER BY id) AS s FROM public.red_proiecte`)).rows[0].s
+  j = await revino(db)
+  const nr = j.find(m => /revenire: executia/.test(m)) || ''
+  const mm = nr.match(/revenire: executia (\S+): 0 proiecte readuse la declaratia veche \(id cod versiune: -\); (\d+) proiecte ale executiei salvate intre timp, neatinse/)
+  ok(!!mm && mm[1] === x1, 'R2 alege X1 (ultima execuție care a scris) și readuce 0 proiecte: ' + nr)
+  ok(!!mm && Number(mm[2]) >= 1, `defectul de raportare, documentat: NOTICE-ul numără ${mm ? mm[2] : '?'} proiecte ale lui X1 la „salvate intre timp” (readuse deja de R1)`)
+  const dupa = (await db.query(`SELECT string_agg(id::text || '=' || md5(text_declaratie) || '/v' || versiune, ',' ORDER BY id) AS s FROM public.red_proiecte`)).rows[0].s
+  ok(dupa === inainte, 'R2: niciun proiect atins (text + versiune identice)')
+  ok(await implicit(db) === lit2(VECHI), 'R2: DEFAULT-ul = VECHI')
+  await db.close()
+}
+
 // r2 (review #1119 P1): proveniența = EXECUȚIA concretă (marcajul), nu forma tranziției. Contraexemplele recenzentului:
 //   (a) ÎNAINTE de migrare, cineva (postgres, fără JWT) schimbă declarația unui proiect VECHI -> NOU: migrarea nu-l atinge (are deja NOU);
 //   (b) DUPĂ aplicare, un proiect creat cu textul VECHI explicit și actualizat apoi fără utilizator la NOU.
