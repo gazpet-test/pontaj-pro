@@ -22,8 +22,10 @@ import FanAwbPrevizualizare from './ui/FanAwbPrevizualizare.jsx'
 import { planPachetPlicuire, ordineConvocari, genereazaPaginaControl, continutPaginaControl, momentBucuresti, docxPaginaControl } from './plicuri.js'
 import { createHash } from 'node:crypto'
 import { genereazaPvB } from './pv.js'
+import { pasiDinDocument, parcurge, butonDin } from './fanProcedura.testutil.js'
 
 const DOC = readFileSync('docs/redari/FANCOURIER_INTEGRARE.md', 'utf8')
+const PASI_DOC = readFileSync('docs/redari/FAN_TEST1_PASI.md', 'utf8')
 const MIG = readFileSync('supabase/migrations/20261212a_redari_fan_awb.sql', 'utf8')
 const plic = { nr_plic: 'PL-TST-0001', destinatar_nume: 'PERSOANA FICTIVA' }
 const contact = { telefon: '0700 000 001', adresa_strada: 'Str. Fictivă nr. 1', adresa_sat: 'Sat Fictiv', adresa_comuna: 'Comuna Fictivă', adresa_judet: 'Prahova', cod_postal: '100000' }
@@ -740,6 +742,67 @@ describe('ecranul: pașii, lotul de test, lotul pilot', () => {
   })
   it('PASI_FAN acoperă exact pașii ceruți, în ordine', () => {
     expect(PASI_FAN.map(p => p.titlu)).toEqual(['1. Propune', '2. Aprobă', '3. Generează AWB', '4. Etichete A6', '5. Comandă curier', '6. Urmărire', '7. Confirmări / retururi'])
+  })
+})
+
+// Runda 2 (verdictul Jakarinos pe PR #1130, P2 1): procedura zilei trebuie să fie EXECUTABILĂ din ecran, în ordinea scrisă în document.
+// Simulatorul (fanProcedura.testutil.js) pornește de la LOT GOL și apasă, pas cu pas, doar butoanele pe care stariPasi / stareMarcaj /
+// stariOperatii le dau active; ordinea din 9ceea228 (plafon înaintea marcajului, „Propune” înaintea „Marchează TEST”) pică aici (dovada: fanCourierMutanti.test.js).
+describe('procedura Testului 1 din document (FAN_TEST1_PASI.md §5–§8), executabilă din ecran de la lot gol până la prima generare', () => {
+  const FN = { stariPasi, stareMarcaj, stariOperatii }
+  const pasi = pasiDinDocument(PASI_DOC, '## 5.', '## 9.')
+  it('documentul are pașii cu butoane, în ordinea: marcaj TEST → lista de evenimente → plafon 1 → propune → aprobă → generează → etichete', () => {
+    expect(pasi.filter(p => p.buton).map(p => p.buton.cheie)).toEqual(['marcaj_test', 'evenimente', 'plafon', 'propune', 'aproba', 'genereaza', 'etichete', 'etichete'])
+    expect(pasi.find(p => p.buton?.cheie === 'plafon').buton.valoare).toBe(1)
+    // butoanele din document sunt cele din ecran (textele exacte ale lui FanAwbPrevizualizare.jsx)
+    const src = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8')
+    for (const t of ['2a. Marchează TEST', 'Lista de evenimente FAN', 'Schimbă plafonul', '1. Propune', '2c. Aprobă', 'Etichete']) expect(src).toContain(t)
+    expect(butonDin('selfAWB (contul de TEST) → AWB-urile zilei')).toBeNull(); expect(butonDin('ERP: rândul FAN al plicului')).toBeNull()
+  })
+  it('fiecare pas e activ în ecran în momentul lui; starea butoanelor după fiecare pas, scrisă de mână (L25)', () => {
+    const { lot, jurnal } = parcurge(pasi, FN)
+    const dupa = k => jurnal.find(j => j.buton === k)
+    // lot gol, nemarcat, un plic complet: SINGURUL buton activ e marcajul (nici „Propune”, nici plafonul — garda „doar TEST”)
+    expect(dupa('marcaj_test').inainte).toEqual(['marcaj_test'])
+    expect(dupa('marcaj_test').dupa).toEqual(['evenimente', 'marcaj_test', 'plafon', 'propune'])   // după marcaj: propunerea, plafonul, lista; aprobarea încă nu (niciun plic propus)
+    expect(dupa('plafon').inainte).toContain('plafon'); expect(dupa('plafon').inainte).not.toContain('aproba')
+    expect(dupa('propune').dupa).toEqual(['aproba', 'evenimente', 'marcaj_test', 'plafon', 'propune'])   // după propunere: aprobarea; marcajul încă se poate schimba
+    expect(dupa('aproba').dupa).toEqual(['evenimente', 'genereaza', 'plafon', 'propune'])   // după aprobare: generarea; marcajul e fixat (prima aprobare)
+    expect(dupa('genereaza').dupa).toEqual(['anulare', 'confirmari', 'curier', 'etichete', 'evenimente', 'plafon', 'propune', 'tiraj', 'urmarire'])
+    expect(lot.randuri).toEqual([{ id: 'r1', stare: 'generat', awb: '3000000001' }]); expect(lot.limita).toBe(1); expect(lot.fanLot.test).toBe(true)
+  })
+  it('o ordine imposibilă e prinsă: „Propune” sau plafonul înaintea marcajului, aprobarea fără propunere, generarea fără aprobare', () => {
+    const pas = (nr, cine, text) => ({ nr, cine, text, buton: butonDin(text) })
+    expect(() => parcurge([pas('1', 'admin / editor Redări (sau owner-ul)', '„1. Propune 1 plicuri”')], FN)).toThrow(/pasul 1: .*nu e activ.*marcate TEST/)
+    expect(() => parcurge([pas('1', 'owner', 'caseta „Plafonul lotului pilot” → `1` → „Schimbă plafonul”')], FN)).toThrow(/pasul 1: .*marcate TEST/)
+    expect(() => parcurge([pas('1', 'owner', '„2a. Marchează TEST”'), pas('2', 'owner', '„2c. Aprobă”')], FN)).toThrow(/pasul 2: .*niciun plic propus/)
+    expect(() => parcurge([pas('1', 'owner', '„2a. Marchează TEST”'), pas('2', 'owner', '„1. Propune 1 plicuri”'), pas('3', 'owner', '„3. Generează AWB”')], FN)).toThrow(/pasul 3: .*niciun plic aprobat/)
+    // regula BD simulată după fn_red_fan_aproba: plafonul 1 refuză lotul de 3 (aprobarea nu se face); plafonul 3 îl lasă
+    const trei = [pas('1', 'owner', '„2a. Marchează TEST”'), pas('2', 'owner', '`1` → „Schimbă plafonul”'), pas('3', 'owner', '„1. Propune 3 plicuri”'), pas('4', 'owner', '„2c. Aprobă”')]
+    expect(() => parcurge(trei, FN, { plicuri: 3 })).toThrow(/pasul 4: 3 plicuri peste plafonul 1/)
+    expect(parcurge([trei[0], pas('2', 'owner', '`3` → „Schimbă plafonul”'), ...trei.slice(2)], FN, { plicuri: 3 }).lot.randuri.every(r => r.stare === 'aprobat')).toBe(true)
+    // un proiect real: nici marcajul nu e activ (nimic nu se poate începe)
+    expect(() => parcurge([pas('1', 'owner', '„2a. Marchează TEST”')], FN, { proiectCod: 'LOT1-PRUNISOR-JUPA' })).toThrow(/proiecte de TEST/)
+  })
+  it('documentul: opririle cerute de secțiunea Testul 1 (tarif gol / diferit, referința absentă de pe etichetă), derogarea doar a proprietarului, plafonul 20 spus o singură dată', () => {
+    const d = PASI_DOC.replace(/\r/g, '')
+    expect(d).toMatch(/Tarif \*\*gol sau diferit = OPRIRE\*\*/); expect(d).toMatch(/\*\*NU = OPRIRE\*\*/); expect(d).toMatch(/scrierea de mână pe plic NU e procedura/)
+    expect(d).not.toMatch(/se scrie de mână pe plic\b(?! NU)/); expect(d).not.toMatch(/sau gol = „necunoscut”, de notat/)
+    expect(d).toMatch(/Derogări\*\*: orice continuare .* o decide DOAR proprietarul, explicit, scrisă în jurnal/)
+    // plafonul 20: un singur moment (încheierea Testului 1), spus în §6 și referit din §12
+    expect((d.match(/\*\*20\*\* la\s+încheierea Testului 1/g) || []).length).toBe(1); expect(d).not.toMatch(/înapoi la \*\*20\*\* după Testul 2/)
+    expect(d).toMatch(/calendarul din §6: 20 la încheierea Testului 1/)
+    // oprirea de urgență: ce oprește și ce nu; cererile în curs; jurnalul nu arată apelurile ieșite
+    expect(d).toMatch(/\*\*o cerere deja începută\*\*: continuă cu secretele capturate/); expect(d).not.toMatch(/orice apel\s+răspunde 503 `transport_neconfigurat`, fără niciun apel la curier \(secretele se citesc la fiecare cerere\)/)
+    expect(d).toMatch(/absența unei linii `POST \/login`\s+nu dovedește nimic\*\* singură/); expect(d).toMatch(/fără reapăsare\*\* pe nimic/)
+    // lista omului din ziua testului (verdict): ID-uri, fără redenumiri, commit-ul, probele pe versiunea inertă, contul / clientId / costuri, asocierea, oprirea, anularea
+    for (const t of ['ID-ul proiectului', 'ID-ul lotului', 'nu se redenumesc proiecte și nu se schimbă marcaje de lot', 'commit-ul publicat', 'versiunea INERTĂ', 'contul de TEST al curierului, `clientId`-ul lui și costurile',
+      'asocierea AWB ↔ plic verificată în selfAWB', 'oprire la orice rezultat ambiguu', 'anularea AWB-ului înainte de ridicare']) expect(d).toContain(t)
+    // aliniat cu documentul de proiectare: ordinea 4a și deschisa 12 fără „se scrie de mână” ca procedură
+    const doc = DOC.replace(/\r/g, '')
+    expect(doc).toMatch(/\| 4a \| \*\*\(runda 3, BLOCANT[^\n]*„Marchează TEST”[^\n]*plafonul[^\n]*„Propune”[^\n]*„Aprobă”[^\n]*„Generează AWB”/)
+    expect(doc).toMatch(/\| 2 \| Owner: „Marchează TEST”/); expect(doc).toMatch(/\| 3 \| Admin\/editor: „Propune 3 plicuri”; apoi owner: „Aprobă”/)
+    expect(doc).not.toMatch(/altfel numărul plicului se scrie de mână pe plic/); expect(doc).toMatch(/lipsa lui = OPRIRE la Testul 1/)
   })
 })
 

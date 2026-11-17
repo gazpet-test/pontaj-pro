@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { webcrypto } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
+import { pasiDinDocument, parcurge } from './fanProcedura.testutil.js'
 
 const CAI = {
   'redariFan.mjs': 'supabase/functions/_shared/redariFan.mjs',
@@ -36,6 +37,12 @@ const surseR2 = surseDin(VECHI_R2)
 // runda 4: head-ul revizuit în runda 3 (verdictul Jakarinos #1118 r3)
 const VECHI_R3 = 'fdaa0496171a95d65644c49e17d033c07c1a3457'
 const surseR3 = surseDin(VECHI_R3)
+// activare, runda 2 (verdictul Jakarinos pe PR #1130): procedura zilei din 9ceea228 (plafon înaintea marcajului, „Propune” înaintea „Marchează TEST”)
+// TREBUIE să pice în simulatorul procedurii; documentul curent trece
+const DOC_PASI = 'docs/redari/FAN_TEST1_PASI.md'
+const PASI_ACUM = readFileSync(DOC_PASI, 'utf8')
+const docDin = sha => { try { return execFileSync('git', ['show', `${sha}:${DOC_PASI}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) } catch { return null } }
+const PASI_VECHI = docDin('9ceea22800da3cce3c4c072a7314c67cb974c827')
 // folderul temporar stă în .tmp/ (ignorat de git): pe Windows, calea scurtă din %TEMP% (GAZPET~1) nu se încarcă prin vite
 const TMP = join(process.cwd(), '.tmp')
 mkdirSync(TMP, { recursive: true })
@@ -355,6 +362,13 @@ const VERIFICARI = {
       && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: false }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).every(p => !p.activ)
       && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).some(p => p.activ)
   },
+  // ACTIVARE runda 2 (Jakarinos #1130 P2 1): procedura documentului e executabilă din ecran, de la lot gol până la prima generare, în ordinea scrisă
+  // (marcaj → plafon → propune → aprobă → generează). Pică dacă ordinea din COD se schimbă (mutanții de mai jos) sau dacă documentul cere o ordine imposibilă.
+  async procedura(M, doc = PASI_ACUM) {
+    const { lot, jurnal } = parcurge(pasiDinDocument(doc, '## 5.', '## 9.'), { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii })
+    return jurnal.filter(j => j.buton).map(j => j.buton).join() === 'marcaj_test,evenimente,plafon,propune,aproba,genereaza,etichete,etichete'
+      && JSON.stringify(jurnal[0].inainte) === '["marcaj_test"]' && lot.randuri.length === 1 && lot.randuri[0].stare === 'generat' && lot.limita === 1
+  },
 }
 
 // comutatorul OPRIT (forma de dinaintea activării, obținută prin mutația flag-ului): comportamentul de pe main rămâne neschimbat —
@@ -434,6 +448,11 @@ const MUTANTI = [
   ['doarTest', 'marcajul lotului neverificat', { fisier: 'redariFanHandler.mjs', din: "    if (cereMarcaj && fanLot?.test !== true) return", in: '    if (false) return' }],
   ['doarTest', 'flag-ul oprit (lotul de TEST n-ar mai trece)', { fisier: 'redariFanHandler.mjs', din: 'export const TRANSPORT_REAL_ACTIV = true', in: 'export const TRANSPORT_REAL_ACTIV = false' }],
   ['doarTest', 'ecranul ignoră garda (pașii activi pe proiect real)', { fisier: 'fanLot.js', din: '    if (oprit) return { ...p, motiv: oprit, activ: false }', in: '    if (false) return null' }],
+  // activare runda 2: ordinea din cod schimbată → procedura documentului nu mai e executabilă
+  ['procedura', 'marcajul cere lotul deja marcat (nu s-ar putea începe)', { fisier: 'fanLot.js', din: 'const oprit = motivTransport({ transportActiv, proiectCod, fanLot, cereMarcaj: false })', in: 'const oprit = motivTransport({ transportActiv, proiectCod, fanLot, cereMarcaj: true })' }],
+  ['procedura', 'plafonul doar după un AWB generat', { fisier: 'fanLot.js', din: "    plafon: [[esteOwner, 'doar owner-ul']],", in: "    plafon: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['generat']) > 0, 'niciun AWB generat']]," }],
+  ['procedura', 'aprobarea cere rânduri deja aprobate', { fisier: 'fanLot.js', din: "[numar(randuri, ['propus']) > 0, 'niciun plic propus']", in: "[numar(randuri, ['aprobat']) > 0, 'niciun plic propus']" }],
+  ['procedura', 'propunerea doar după prima aprobare', { fisier: 'fanLot.js', din: "    propune: [[poateScrie, 'doar admin / editor'], ", in: "    propune: [[poateScrie, 'doar admin / editor'], [!!fanLot?.prima_aprobare_la, 'lotul nu e aprobat'], " }],
 ]
 
 describe('mutanți FAN (JS)', () => {
@@ -483,5 +502,12 @@ describe('mutanți FAN (JS)', () => {
     let rez
     try { rez = await VERIFICARI[v](M) } catch { rez = false }
     expect(rez).toBe(false)
+  })
+  // activare runda 2: procedura din documentul de la 9ceea228 (ordinea recenzentului: „Propune” înaintea marcajului) PICĂ pe codul real, cu motivul gărzii
+  it.skipIf(!PASI_VECHI)('documentul FAN_TEST1_PASI.md de la 9ceea228 NU e executabil din ecran (constatarea era reală)', async () => {
+    const M = await incarca(null)
+    const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii }
+    expect(() => parcurge(pasiDinDocument(PASI_VECHI, '## 5.', '## 9.'), fn)).toThrow(/pasul 1: „„1\. Propune 1 plicuri”” nu e activ în ecran \(transport doar pe loturi marcate TEST/)
+    expect(await VERIFICARI.procedura(M)).toBe(true)
   })
 })
