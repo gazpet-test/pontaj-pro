@@ -161,6 +161,8 @@ export function pozeLipsa(r, poze) {
   for (const n of cant) for (const cat of CU_BURETE) if (!are(cat, n)) out.push(`${cat}:${n}`)
   return out
 }
+/** lipsa fotografiilor cerute e JUSTIFICATĂ (poze_justificare pe rând): singura definiție (L19), folosită de închidere și de etapele pe pași */
+export const pozeJustificate = r => r?.poze_justificare != null
 /** pe rândul salvat (valorile serverului) + pozele înregistrate + câte încărcări sunt nelămurite; întoarce cheile din OBLIGATORII care lipsesc */
 export function lipsaDinRand(r, poze = [], deschise = 0) {
   const gol = v => v == null
@@ -175,7 +177,7 @@ export function lipsaDinRand(r, poze = [], deschise = 0) {
     presiune_bar: gol(r?.presiune_bar), timp_deplasare_min: gol(r?.timp_deplasare_min),
     piston_final_rezultat: gol(r?.piston_final_rezultat), concluzie: gol(r?.concluzie),
     dovada_conform: r?.concluzie === 'conform' && (r?.piston_final_rezultat !== 'uscat' || !(poze || []).some(p => p.categorie === 'piston_final')),
-    poze_justificare: gol(r?.poze_justificare) && pozeLipsa(r, poze).length > 0,
+    poze_justificare: !pozeJustificate(r) && pozeLipsa(r, poze).length > 0,
     incarcari_nelamurite: Number(deschise || 0) > 0,
   }
   return OBLIGATORII.filter(k => verif[k])

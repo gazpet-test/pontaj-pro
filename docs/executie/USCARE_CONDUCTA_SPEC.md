@@ -86,17 +86,26 @@ oprire între etape (între introducerea și ieșirea pistoanelor pot trece și 
 | **2. Ieșirea** | ora ieșirii (la fel), pentru fiecare piston greutatea la ieșire + poza, diferența față de intrare în grame, presiunea + poza manometrului (nu blochează), pragul cu calculul, verdictul PROPUS pentru ultimul piston, confirmat de om (USCAT / UMED; contra calculului = motiv în observații), poza ultimului piston | **✓ Termină etapa 2** — pune și timpul de deplasare (din ore, dacă e gol) și concluzia din verdict (uscat → CONFORM, umed → NECONFORM) |
 | **3. Rezumat** | greutățile și diferențele, verdictul, durata, viteza medie, tronsonul, vremea; „Detalii cerute de beneficiar”: constructor, utilaje, PIG / poliuretan, notificarea + referința (cu verificarea celor 24 h), temperatura (cu „Din meteo”) + vremea, punctul de rouă, presiunea, timpul de deplasare, observații, semnatarii, justificarea pozelor lipsă; bifa „Am verificat detaliile” | **📄 Generează raportul** = închiderea (§5, aceeași regulă `lipsaDinRand` = `fn_executie_uscare_lipsa`, nici dublată, nici relaxată) + PDF-ul raportului închis; inactiv cu motivele scrise (detalii nesalvate, ce lipsește, bifa) |
 
-- **Pasul se deduce din date** (`pasCurent`, nimic stocat): anulat / închis → final; altfel prima etapă incompletă pe rândul SALVAT + pozele
-  înregistrate, apoi rezumatul. Etapa 1 e completă cu: ora introducerii, numărul de pistoane, rândurile de cântărire, greutatea la intrare
-  și poza cântarului pe fiecare piston cântărit, poza ansamblului. Etapa 2: ora ieșirii, greutatea la ieșire + poza pe fiecare, verdictul,
-  motivul la verdict contrar calculului, poza ultimului piston. Un piston marcat „nu se aplică” (din formularul complet) nu cere greutăți
+- **Pasul se deduce din date** (`pasCurent`, nimic stocat): anulat / închis → final; **dacă regula comună a închiderii (`lipsaDinRand` =
+  `fn_executie_uscare_lipsa`) nu mai cere nimic → rezumatul, pe orice drum ar fi fost completat raportul** (formularul complet, birou,
+  redeschidere) — o singură regulă decide dacă raportul se poate genera (runda 3, 17.11.2026); altfel prima etapă incompletă pe rândul
+  SALVAT + pozele înregistrate, apoi rezumatul. Etapa 1 e completă cu: ora introducerii, numărul de pistoane (0 e o configurație permisă,
+  ca în regula comună), rândurile de cântărire, greutatea la intrare și poza cântarului pe fiecare piston cântărit, poza ansamblului.
+  Etapa 2: ora ieșirii, greutatea la ieșire + poza pe fiecare, verdictul, motivul la verdict contrar calculului, poza ultimului piston
+  **doar dacă iese USCAT** (dovada, ca `dovada_conform`; NECONFORM n-o cere). Etapele nu cer nimic peste regula comună: **pozele lipsă
+  JUSTIFICATE** (`poze_justificare`, „Nu poți face o poză? Scrie de ce” — aceeași ieșire ca în formularul complet, salvată cu raportul)
+  nu mai sunt cerute de etape; dovada USCAT nu se justifică. Un piston marcat „nu se aplică” (din formularul complet) nu cere greutăți
   și poze. Cardurile listei citesc pozele rapoartelor deschise (keyset, pe bucăți de 100 de id-uri); o eroare de citire NU e „etapa 1”:
   cardul spune că pasul nu s-a putut determina (L18).
+- **Motivul verdictului contrar calculului** e un câmp DISTINCT pe ecranul etapei 2, scris explicit de om, și intră în observații la
+  „Termină etapa 2” cu eticheta „Verdictul diferit de calcul, motivul: …” (fără schemă nouă). Textul automat al „trecerii noi” („Trecerea N
+  pe acest tronson …”) NU contează ca motiv; un text scris de om în observații (și din birou) contează.
 - **Oprirea între etape**: „Înregistrează etapa 1” salvează pe server (raportul rămâne deschis). În interiorul unei etape: ciorna locală
   (§3) + „💾 Salvează pe parcurs”. Etapa 2 o poate continua oricine are scriere pe proiect (alt telefon, alt om), cu regulile §6.
 - **Calculul propus** (doar pe ecran): diferențele în **grame întregi**; pragul P = 100 × L / 1000 g (L = `lungime_m`); ultimul piston =
   numărul cel mai mare (buretele 1 = primul introdus); Δ ≤ P „în prag” (egalitatea trece), comparat în întregi ca în V2 §3.1
-  (`100.000·Δ ≤ (10·v)·(10·L)`); Δ negativ cel mult 1% din intrare = fără acumulare (trece), mai mult = „de verificat” (fără propunere);
+  (`100.000·Δ ≤ (10·v)·(10·L)`); Δ negativ cel mult 1% din intrare (în întregi: `100 × pierdere_g ≤ intrare_g`, fără toleranță minimă
+  de 1 g) = fără acumulare (trece), mai mult = „de verificat” (fără propunere);
   ultimul piston fără cântărire / greutate lipsă / lungime lipsă = „nu se poate calcula”. Avertismente (nu blochează): valoare ≥ 100 kg
   („pare scris în grame”), peste 50 kg, sub 0,1 kg, ieșirea peste 3 × intrarea, Δ peste 20 × prag.
 - **Mai multe treceri pe același raport: NU, fără schemă.** Modelul de date ține o singură trecere pe raport: `cantariri` are cheile EXACTE

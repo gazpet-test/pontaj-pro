@@ -10,7 +10,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { parseNumar, textNr, areMaxZecimale } from './izoDocumenteLogica.js'
-import { formularNou, formularDinRand, cantaririPentru, oraLocalaDinIso, alegereDinIso, isoDinOraLocala, ziBucuresti, fmtZi, fmtNr, MAX_BURETI } from './uscareLogica.js'
+import {
+  formularNou, formularDinRand, cantaririPentru, oraLocalaDinIso, alegereDinIso, isoDinOraLocala, ziBucuresti, fmtZi, fmtNr, MAX_BURETI,
+  lipsaDinRand, pozeJustificate,
+} from './uscareLogica.js'
 
 /** pragul de lucru, g pe km (decizia proprietarului D3, 17.11.2026); aici constantă, apoi parametru de proiect cu istoric */
 export const PRAG_G_PE_KM = 100
@@ -64,6 +67,7 @@ export function ultimulPiston(r) {
  * Verdictul PROPUS din diferența ultimului piston față de pragul de lucru (omul îl confirmă sau îl contrazice cu motiv).
  * → { stare: 'trece' | 'nu_trece' | 'de_verificat' | 'necalculabil', propus: 'uscat' | 'umed' | null, nr, diferenta_g, prag_g, calcul, motiv }
  * Δ negativ mic (cel mult 1% din intrare) = „fără acumulare” → trece; Δ negativ mai mare = de verificat (cântărirea), fără propunere.
+ * Runda 3: „cel mult 1%” se compară în ÎNTREGI (100 × pierdere_g ≤ intrare_g), fără toleranță minimă de 1 g (la 50 g, 1 g = 2%).
  */
 export function verdictPropus(r, v = PRAG_G_PE_KM) {
   const u = ultimulPiston(r)
@@ -77,8 +81,7 @@ export function verdictPropus(r, v = PRAG_G_PE_KM) {
   if (d == null) return { ...baza, stare: 'necalculabil', motiv: `lipsește greutatea ultimului piston (nr. ${u.nr}) la ${grame(u.intrare_kg) == null ? 'intrare' : 'ieșire'}` }
   if (P == null) return { ...baza, diferenta_g: d, stare: 'necalculabil', motiv: 'lipsește lungimea tronsonului (pragul se calculează din ea)' }
   if (d < 0) {
-    const toleranta = Math.max(1, Math.floor(grame(u.intrare_kg) / 100))
-    return -d <= toleranta
+    return 100 * -d <= grame(u.intrare_kg)
       ? { ...baza, diferenta_g: d, stare: 'trece', propus: 'uscat', motiv: `a ieșit cu ${fmtNr(-d, 0)} g mai ușor: fără acumulare de apă` }
       : { ...baza, diferenta_g: d, stare: 'de_verificat', motiv: `a ieșit cu ${fmtNr(-d, 0)} g mai ușor (peste 1% din greutate): verifică cântărirea` }
   }
@@ -88,6 +91,20 @@ export function verdictPropus(r, v = PRAG_G_PE_KM) {
 }
 /** omul a ales altceva decât calculul (sau a ales deși calculul nu propune nimic) → cere un motiv scurt în observații */
 export const contrazice = (rezultat, verdict) => !!rezultat && verdict?.propus !== rezultat
+// ── motivul verdictului contrar: câmp DISTINCT pe ecran, inclus apoi în observații (fără schemă nouă, runda 3) ──
+/** textul automat pus în observații de „Trecere nouă”; NU contează ca motiv */
+export const textTrecere = (n, zi) => `Trecerea ${n} pe acest tronson (trecerea anterioară: raportul din ${zi || 'fără dată'}, ultimul piston nu a ieșit uscat).`
+const RX_TEXT_TRECERE = /Trecerea \d+ pe acest tronson \(trecerea anterioară: raportul din [^)]*, ultimul piston nu a ieșit uscat\)\./g
+/** eticheta cu care motivul scris de om intră în observații */
+export const PREFIX_MOTIV_VERDICT = 'Verdictul diferit de calcul, motivul:'
+/** ce rămâne din observații după scoaterea textului automat al trecerii = motivul scris de om ('' = niciun motiv) */
+export const motivDinObservatii = obs => String(obs ?? '').replace(RX_TEXT_TRECERE, '').trim()
+/** formularul cu motivul verdictului (câmpul distinct de pe ecran) adăugat la observații; motiv gol = formularul neschimbat */
+export function cuMotivVerdict(form, motiv) {
+  const m = String(motiv ?? '').trim()
+  if (!m) return form
+  return { ...form, observatii: [String(form?.observatii ?? '').trim(), `${PREFIX_MOTIV_VERDICT} ${m}`].filter(Boolean).join('\n') }
+}
 
 /** avertismentele unei greutăți scrise (text de pe ecran): unitatea greșită, valori nefirești; [] = nimic de spus */
 export function avertismenteGreutate(text) {
@@ -113,47 +130,57 @@ export function avertismentePereche(c, pragG) {
 }
 
 // ── ce cere fiecare etapă (pe un rând „ca al serverului”: cel salvat sau formularul convertit cu payloadDinFormular) ──
+// Runda 3 (verdict P1): etapele NU cer nimic peste regula comună a închiderii (lipsaDinRand): pozele lipsă JUSTIFICATE (poze_justificare,
+// aceeași ieșire ca în formularul complet) nu mai sunt cerute; poza ultimului piston e cerută doar ca dovadă a lui USCAT (ca dovada_conform);
+// zero pistoane-burete e o configurație permisă (bureti_buc = 0, fără rânduri).
 /** etapa 1: ora introducerii, câte pistoane, greutatea la intrare + poza cântarului pe fiecare, poza ansamblului → textele care lipsesc */
 export function lipsaEtapa1(r, poze) {
   const out = []
   if (r?.ora_inceput == null) out.push('ora introducerii')
   const b = nr(r?.bureti_buc)
-  if (!Number.isInteger(b) || b < 1) { out.push('câte pistoane-burete (cel puțin unul)'); return out }
+  if (!Number.isInteger(b) || b < 0) { out.push('câte pistoane-burete'); return out }
   const l = lista(r)
   if (l.length !== b || l.some(c => Number(c?.nr) > b)) out.push('rândurile de cântărire (câte unul pe piston)')
+  const just = pozeJustificate(r)
   for (const c of l.slice().sort((x, y) => Number(x.nr) - Number(y.nr))) {
     if (!cantarit(c)) continue
     if (grame(c.intrare_kg) == null) out.push(`greutatea pistonului ${c.nr} la intrare`)
-    if (!arePoza(poze, 'cantar_intrare', c.nr)) out.push(`poza cântarului pentru pistonul ${c.nr} (intrare)`)
+    if (!just && !arePoza(poze, 'cantar_intrare', c.nr)) out.push(`poza cântarului pentru pistonul ${c.nr} (intrare)`)
   }
-  if (!arePoza(poze, 'pistoane')) out.push('poza ansamblului de pistoane')
+  if (!just && !arePoza(poze, 'pistoane')) out.push('poza ansamblului de pistoane')
   return out
 }
 /**
- * etapa 2: ora ieșirii, greutatea la ieșire + poza cântarului pe fiecare piston cântărit, verdictul confirmat de om, poza ultimului piston;
- * dacă omul contrazice calculul, un motiv în observații. Presiunea (și poza ei) NU blochează etapa (o cere doar închiderea, ca azi).
+ * etapa 2: ora ieșirii, greutatea la ieșire + poza cântarului pe fiecare piston cântărit, verdictul confirmat de om, poza ultimului piston
+ * dacă iese USCAT (dovada); dacă omul contrazice calculul, un motiv scris de el (textul automat al trecerii nu contează).
+ * Presiunea (și poza ei) NU blochează etapa (o cere doar închiderea, ca azi).
  */
 export function lipsaEtapa2(r, poze, v = PRAG_G_PE_KM) {
   const out = []
   if (r?.ora_final == null) out.push('ora ieșirii')
+  const just = pozeJustificate(r)
   for (const c of lista(r).slice().sort((x, y) => Number(x.nr) - Number(y.nr))) {
     if (!cantarit(c)) continue
     if (grame(c.iesire_kg) == null) out.push(`greutatea pistonului ${c.nr} la ieșire`)
-    if (!arePoza(poze, 'cantar_iesire', c.nr)) out.push(`poza cântarului pentru pistonul ${c.nr} (ieșire)`)
+    if (!just && !arePoza(poze, 'cantar_iesire', c.nr)) out.push(`poza cântarului pentru pistonul ${c.nr} (ieșire)`)
   }
-  if (r?.piston_final_rezultat !== 'uscat' && r?.piston_final_rezultat !== 'umed') out.push('verdictul ultimului piston (uscat / umed)')
-  else if (contrazice(r.piston_final_rezultat, verdictPropus(r, v)) && !String(r?.observatii ?? '').trim()) out.push('motivul (în observații) pentru verdictul diferit de calcul')
-  if (!arePoza(poze, 'piston_final')) out.push('poza ultimului piston')
+  const rez = r?.piston_final_rezultat
+  if (rez !== 'uscat' && rez !== 'umed') out.push('verdictul ultimului piston (uscat / umed)')
+  else if (contrazice(rez, verdictPropus(r, v)) && !motivDinObservatii(r?.observatii)) out.push('motivul scris de tine pentru verdictul diferit de calcul')
+  if (rez === 'uscat' && !arePoza(poze, 'piston_final')) out.push('poza ultimului piston (dovada că iese uscat)')
   return out
 }
 /**
  * Pasul la care a rămas un raport, DEDUS din datele lui (nimic stocat): fără raport = tronsonul; anulat / închis = final;
- * altfel prima etapă incompletă, apoi rezumatul. `poze` = pozele ÎNREGISTRATE ale raportului.
+ * dacă regula COMUNĂ a închiderii (lipsaDinRand = fn_executie_uscare_lipsa) nu mai cere nimic → rezumatul, pe orice drum ar fi fost
+ * completat raportul (formularul complet, birou, redeschidere) — o singură regulă decide dacă raportul se poate genera (runda 3, P1);
+ * altfel prima etapă incompletă, apoi rezumatul. `poze` = pozele ÎNREGISTRATE ale raportului; `deschise` = încărcările nelămurite.
  */
-export function pasCurent(r, poze, v = PRAG_G_PE_KM) {
+export function pasCurent(r, poze, deschise = 0, v = PRAG_G_PE_KM) {
   if (!r) return 'tronson'
   if (r.stare === 'anulata') return 'anulat'
   if (r.stare === 'inchisa') return 'inchis'
+  if (!lipsaDinRand(r, poze, deschise).length) return 'rezumat'
   if (lipsaEtapa1(r, poze).length) return 'etapa1'
   if (lipsaEtapa2(r, poze, v).length) return 'etapa2'
   return 'rezumat'
@@ -197,7 +224,7 @@ export function formularTrecereNoua(u, uscari = [], acum = Date.now()) {
     proba_id: f.proba_id, tronson: f.tronson, km_de_la: f.km_de_la, km_pana_la: f.km_pana_la, lungime_m: f.lungime_m,
     data_operatie: ziBucuresti(acum), bureti_buc: f.bureti_buc || String(BURETI_IMPLICIT),
     cantariri: cantaririPentru(Number.isInteger(nr(f.bureti_buc)) && nr(f.bureti_buc) >= 1 && nr(f.bureti_buc) <= MAX_BURETI ? nr(f.bureti_buc) : BURETI_IMPLICIT),
-    observatii: `Trecerea ${n} pe acest tronson (trecerea anterioară: raportul din ${fmtZi(u.data_operatie) || 'fără dată'}, ultimul piston nu a ieșit uscat).`,
+    observatii: textTrecere(n, fmtZi(u.data_operatie)),
   }
 }
 
@@ -216,9 +243,12 @@ export function minuteIntre(a, b) {
   const m = Math.round((y - x) / 6000) / 10
   return m >= 0.1 && m <= 10000 ? textNr(m) : ''
 }
-/** formularul trimis la „Termină etapa 2”: ora ieșirii (acum, dacă e goală), timpul de deplasare (din ore, dacă e gol), concluzia din verdict */
-export function formularTerminaEtapa2(form, acum = Date.now()) {
-  const f = cuOraImplicita(form, 'ora_final', acum)
+/**
+ * formularul trimis la „Termină etapa 2”: ora ieșirii (acum, dacă e goală), timpul de deplasare (din ore, dacă e gol), concluzia din verdict,
+ * motivul verdictului contrar (câmpul distinct de pe ecran) adăugat la observații
+ */
+export function formularTerminaEtapa2(form, acum = Date.now(), motivVerdict = '') {
+  const f = cuMotivVerdict(cuOraImplicita(form, 'ora_final', acum), motivVerdict)
   const a = isoDinOraLocala(f.ora_inceput, f.dst?.ora_inceput || null), b = isoDinOraLocala(f.ora_final, f.dst?.ora_final || null)
   const timp = String(f.timp_deplasare_min ?? '').trim() ? f.timp_deplasare_min : (typeof a === 'string' && typeof b === 'string' ? minuteIntre(a, b) : '')
   const concluzie = f.piston_final_rezultat === 'uscat' ? 'conform' : f.piston_final_rezultat === 'umed' ? 'neconform' : f.concluzie

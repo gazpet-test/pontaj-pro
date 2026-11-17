@@ -11,7 +11,7 @@ import { payloadDinFormular, ETICHETE_OBLIGATORII, MAX_BURETI, fmtKm, parseKm, f
 import { textNr, parseNumar } from './izoDocumenteLogica.js'
 import {
   PASI, ETICHETE_PAS, PRAG_G_PE_KM, lipsaEtapa1, lipsaEtapa2, verdictPropus, contrazice, diferentaGrame, grame, avertismenteGreutate,
-  avertismentePereche, cuOraImplicita, momentAcum,
+  avertismentePereche, cuOraImplicita, momentAcum, cuMotivVerdict, motivDinObservatii,
 } from './uscarePasi.js'
 
 const fmtG = g => (g == null ? '—' : `${g > 0 ? '+' : g < 0 ? '−' : ''}${fmtNr(Math.abs(g), 0)} g`)
@@ -69,6 +69,22 @@ function Lipsuri({ titlu, lista }) {
   )
 }
 const Avert = ({ lista }) => (lista.length ? <div role="alert" style={{ color: G.yellow, fontSize: 13, marginTop: 4 }}>{lista.map(t => <div key={t}>⚠ {t}</div>)}</div> : null)
+// Runda 3 (verdict P1): ieșirea explicită „nu pot face poza — scriu de ce”, aceeași ca în formularul complet (poze_justificare, cerută și
+// de regula comună a închiderii): cu ea scrisă, etapa nu mai cere pozele ei și se poate înregistra. `lipsaPoze` = pozele etapei care lipsesc,
+// socotite FĂRĂ justificare (ca blocul să rămână vizibil și după ce s-a scris).
+function JustificarePoze({ p, lipsaPoze }) {
+  const { ST, Camp, form, schimba, editabil } = p
+  if (!lipsaPoze.length) return null
+  const scrisa = String(form.poze_justificare ?? '').trim() !== ''
+  return (
+    <div style={{ ...ST.card, borderColor: scrisa ? G.green : G.yellow }}>
+      <div style={ST.h}>Nu poți face o poză?</div>
+      <div style={{ fontSize: 14 }}>Lipsesc: {lipsaPoze.join(', ')}. Scrie de ce nu se pot face: cu motivul scris, etapa se poate înregistra fără ele (justificarea se salvează cu raportul și apare la „Generează raportul”).</div>
+      <Camp eticheta="Justificarea lipsei pozelor"><textarea style={{ ...ST.in, minHeight: 60 }} disabled={!editabil} value={form.poze_justificare} maxLength={1000} onChange={e => schimba({ poze_justificare: e.target.value })} /></Camp>
+    </div>
+  )
+}
+const doarPozele = lista => lista.filter(t => t.startsWith('poza '))
 
 export default function UscarePasi({ p }) {
   const { ST, form, rand, pas, editabil, inCurs, panouri, jos } = p
@@ -191,7 +207,9 @@ function EcranEtapa1({ p }) {
   const { ST, form, rand, poze, blocPoze, editabil, inCurs, modificat } = p
   const f1 = cuOraImplicita(form, 'ora_inceput', p.acum())
   const { date, erori } = payloadDinFormular(f1)
-  const lipsa = [...lipsaEtapa1({ ...rand, ...date }, poze), ...erori]
+  const r1 = { ...rand, ...date }
+  const lipsa = [...lipsaEtapa1(r1, poze), ...erori]
+  const lipsaPoze = doarPozele(lipsaEtapa1({ ...r1, poze_justificare: null }, poze))
   const n = form.cantariri.length
   return <>
     <div style={ST.card}><OraAcum p={p} k="ora_inceput" eticheta="Ora introducerii pistoanelor" buton="Înregistrează etapa 1" /><Bureti p={p} /></div>
@@ -208,6 +226,7 @@ function EcranEtapa1({ p }) {
       <div style={ST.h}>Ansamblul de pistoane</div>
       {blocPoze('pistoane', null, 'Poza ansamblului de pistoane')}
     </div>
+    <JustificarePoze p={p} lipsaPoze={lipsaPoze} />
     <Lipsuri titlu="Ca să înregistrezi etapa 1, mai trebuie:" lista={lipsa} />
     {editabil && <BaraJos jos={p.jos}>
       <button style={{ ...ST.mare, minHeight: 60, background: lipsa.length ? G.surface2 : '#238636', color: '#fff' }} disabled={inCurs || lipsa.length > 0 || !!p.conflict || p.nelamuriteTinta.length > 0} onClick={p.inregistreazaEtapa1}>
@@ -237,11 +256,14 @@ function Confirmare1({ p }) {
 // ── etapa 2: ieșirea pistoanelor ──
 function EcranEtapa2({ p }) {
   const { ST, Camp, form, rand, poze, blocPoze, editabil, inCurs, modificat, schimba, nrInp } = p
-  const f2 = cuOraImplicita(form, 'ora_final', p.acum())
+  // motivul verdictului contrar e un câmp DISTINCT (p.motivVerdict), scris explicit de om; intră în observații la „Termină etapa 2”
+  const f2 = cuMotivVerdict(cuOraImplicita(form, 'ora_final', p.acum()), p.motivVerdict)
   const { date, erori } = payloadDinFormular(f2)
   const r2 = { ...rand, ...date }
   const v = verdictPropus(r2)
   const lipsa = [...lipsaEtapa2(r2, poze), ...erori]
+  const lipsaPoze = doarPozele(lipsaEtapa2({ ...r2, poze_justificare: null }, poze)).filter(t => t.startsWith('poza cântarului'))
+  const motivSalvat = motivDinObservatii(form.observatii)
   const n = form.cantariri.length
   const ales = form.piston_final_rezultat
   return <>
@@ -279,11 +301,15 @@ function EcranEtapa2({ p }) {
           </button>
         ))}
       </div>
-      {contrazice(ales, v) && <Camp eticheta={v.propus ? `Ai ales altceva decât calculul (${v.propus.toUpperCase()}): de ce? (se scrie în observații)` : 'Calculul nu propune nimic: de ce ai ales așa? (se scrie în observații)'}>
-        <textarea style={{ ...ST.in, minHeight: 70 }} disabled={!editabil} value={form.observatii} maxLength={4000} onChange={e => schimba({ observatii: e.target.value })} />
-      </Camp>}
-      {blocPoze('piston_final', null, 'Poza ultimului piston')}
+      {contrazice(ales, v) && <>
+        <Camp eticheta={v.propus ? `Ai ales altceva decât calculul (${v.propus.toUpperCase()}): de ce? (motivul tău, se adaugă la observații)` : 'Calculul nu propune nimic: de ce ai ales așa? (motivul tău, se adaugă la observații)'}>
+          <textarea style={{ ...ST.in, minHeight: 70 }} disabled={!editabil} value={p.motivVerdict} maxLength={2000} onChange={e => p.setMotivVerdict(e.target.value)} />
+        </Camp>
+        {motivSalvat && <div style={ST.nota}>Motiv deja scris în observații: „{motivSalvat}”.</div>}
+      </>}
+      {blocPoze('piston_final', null, ales === 'uscat' ? 'Poza ultimului piston (dovada că iese uscat)' : 'Poza ultimului piston')}
     </div>
+    <JustificarePoze p={p} lipsaPoze={lipsaPoze} />
     <Lipsuri titlu="Ca să termini etapa 2, mai trebuie:" lista={lipsa} />
     {editabil && <BaraJos jos={p.jos}>
       <button style={{ ...ST.mare, minHeight: 60, background: lipsa.length ? G.surface2 : '#238636', color: '#fff' }} disabled={inCurs || lipsa.length > 0 || !!p.conflict || p.nelamuriteTinta.length > 0} onClick={p.terminaEtapa2}>

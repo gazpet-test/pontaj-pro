@@ -28,6 +28,9 @@ vi.mock('jspdf', () => ({ default: class { setProperties() {} addPage() {} addIm
 vi.mock('html2canvas', () => ({ default: async () => ({ width: 1476, height: 300, toDataURL: () => 'data:image/jpeg;base64,AA==' }) }))
 import UscareConducta from './UscareConducta.jsx'
 import { lipsaDinRand, incarcariDeschise } from './uscareLogica.js'
+// runda 3: textele cu care motivul verdictului și „trecerea nouă” ajung în observații, scrise aici de mână (L25), nu luate din uscarePasi.js
+const PREFIX_MOTIV_VERDICT = 'Verdictul diferit de calcul, motivul:'
+const textTrecere = (n, zi) => `Trecerea ${n} pe acest tronson (trecerea anterioară: raportul din ${zi}, ultimul piston nu a ieșit uscat).`
 // preîncărcat: importul dinamic din ecran (`await import('./uscarePdf.js')`) se rezolvă apoi imediat, ca în aplicație după primul export
 await import('./uscarePdf.js')
 
@@ -876,7 +879,7 @@ dom(numeDom('UscareConducta — ecranul pe pași (jsdom + react-dom)'), () => {
     expect(v.text()).not.toContain('Continuă cu etapa 1')
   })
 
-  it('verdictul contrar calculului cere un motiv în observații; „Vezi / corectează toate datele” duce la formularul complet și înapoi', async () => {
+  it('verdictul contrar calculului cere un motiv scris (câmp distinct, pus apoi în observații); „Vezi / corectează toate datele” duce la formularul complet și înapoi', async () => {
     const { client, T } = clientFals()
     etapa1Gata(T, 1)
     pozaServer(T, 1, 'cantar_iesire', 1); pozaServer(T, 1, 'cantar_iesire', 2); pozaServer(T, 1, 'piston_final')
@@ -888,11 +891,11 @@ dom(numeDom('UscareConducta — ecranul pe pași (jsdom + react-dom)'), () => {
     await u.apasa(u.buton('USCAT'))
     expect(u.text()).toContain('Ai ales altceva decât calculul (UMED)')
     expect(u.buton('Termină etapa 2').disabled).toBe(true)
-    expect(u.text()).toContain('motivul (în observații) pentru verdictul diferit de calcul')
+    expect(u.text()).toContain('motivul scris de tine pentru verdictul diferit de calcul')
     await u.scrie('Ai ales altceva', 'apa din primul burete; ultimul cântărit cu buretele ud la exterior')
     expect(u.buton('Termină etapa 2').disabled).toBe(false)
     await u.apasa(u.buton('Termină etapa 2'))
-    expect(T.executie_uscari.get(1)).toMatchObject({ piston_final_rezultat: 'uscat', concluzie: 'conform', observatii: 'apa din primul burete; ultimul cântărit cu buretele ud la exterior' })
+    expect(T.executie_uscari.get(1)).toMatchObject({ piston_final_rezultat: 'uscat', concluzie: 'conform', observatii: `${PREFIX_MOTIV_VERDICT} apa din primul burete; ultimul cântărit cu buretele ud la exterior` })
     await u.apasa(u.buton('Vezi / corectează toate datele'))
     expect(u.text()).toContain('1. Planificare și notificarea beneficiarului')
     await u.apasa(u.buton('Înapoi la pași'))
@@ -1086,13 +1089,153 @@ dom(numeDom('UscareConducta — ecranul pe pași (jsdom + react-dom)'), () => {
     expect(u.text()).toContain('mai ușor cu 10 g → ✓ în prag: propun USCAT')
   })
 
-  it('runda 2: Execuție.jsx — bara sub-filelor derulează lateral, sub-fila activă e adusă în vedere, banda de sus nu stă lipită cât e deschisă uscarea', async () => {
-    const fs = await import('node:fs')
-    const sursa = fs.readFileSync(new URL('./Executie.jsx', import.meta.url), 'utf8')
-    expect(sursa).toMatch(/background:G\.surface, paddingLeft:28, overflowX:'auto',/)                       // bara sub-filelor
-    expect(sursa).toMatch(/data-activ=\{active \? '1' : '0'\}[\s\S]{0,800}whiteSpace:'nowrap', flexShrink:0,/)   // sub-filele nu se mai înghesuie
-    expect(sursa).toMatch(/querySelector\('\[data-activ="1"\]'\)\?\.scrollIntoView\?\.\(\{ block: 'nearest', inline: 'nearest' \}\)/)
-    expect(sursa).toMatch(/position: tabStr === 'uscare' \? 'static' : 'sticky', top: 60, zIndex: 50,/)   // banda „Execuție | Proiecte”
-    expect(sursa).toMatch(/onClick=\{\(\)=>\{ setIzSubTab\(st\.key\); onSubTab\?\.\(st\.key\) \}\}/)         // sub-fila ajunge în URL (tab=uscare)
+  // runda 3: drumul prin Execuție (banda, sub-filele, URL-ul) se probează prin NAVIGARE reală în src/Executie.test.jsx, nu pe textul sursei.
+
+  // ── runda 3 (verdict Jakarinos NO-GO pe 52dec722): o singură regulă decide dacă raportul se poate genera (lipsaDinRand) ──
+  // rândul COMPLET pentru regula comună (toate detaliile cerute de închidere), 2 pistoane, ultimul +300 g (peste prag → UMED / NECONFORM)
+  const completServer = (T, id, extra = {}) => T.executie_uscari.set(id, RAP(id, { tronson: `Tr. ${id}`, data_operatie: '2026-11-17', temperatura_c: 8, utilaje: [{ denumire: 'Compresor', buc: 1 }],
+    ora_inceput: '2026-11-17T08:00:00Z', ora_final: '2026-11-17T09:00:00Z', pig_metalic_buc: 0, piston_pu_buc: 0, bureti_buc: 2,
+    cantariri: [{ nr: 1, intrare_kg: 1.25, iesire_kg: 1.4, motiv: null }, { nr: 2, intrare_kg: 1.3, iesire_kg: 1.6, motiv: null }], presiune_bar: 2.5, timp_deplasare_min: 60,
+    piston_final_rezultat: 'umed', concluzie: 'neconform', ...extra }))
+  // lista „mai trebuie:” a etapei (blocul Lipsuri), ca text pe rânduri (blocul „Nu poți face o poză?” enumeră și el pozele, informativ)
+  const lipsuri = u => [...u.d.querySelectorAll('[role="status"] li')].map(li => li.textContent)
+  it('runda 3 (P1): rapoartele pe care regula comună le permite ajung la REZUMAT pe pași: NECONFORM cu pozele justificate, NECONFORM fără poza ultimului piston, zero bureți; și după redeschidere', async () => {
+    const { client, T } = clientFals()
+    completServer(T, 1, { poze_justificare: 'aparatul foto defect; cântarul citit de doi martori' })        // (a) completat la birou, în formularul complet
+    completServer(T, 2)                                                                                      // (b) toate pozele cerute, fără poza ultimului piston
+    for (const [c, n] of [['manometru'], ['temperatura'], ['pistoane'], ['cantar_intrare', 1], ['cantar_intrare', 2], ['cantar_iesire', 1], ['cantar_iesire', 2]]) pozaServer(T, 2, c, n ?? null)
+    completServer(T, 3, { bureti_buc: 0, cantariri: [], poze_justificare: 'fără pistoane-burete, doar PIG metalic' })   // (c) zero bureți
+    for (const id of [1, 2, 3]) expect(lipsaDinRand(T.executie_uscari.get(id), [...T.executie_uscare_poze.values()].filter(p => p.uscare_id === id))).toEqual([])
+    const u = await monteaza(client, stocareFalsa(), { ecranInitial: 'pasi', acum: () => ORA(10) })
+    for (const id of [1, 2, 3]) expect(u.buton(`Tronson Tr. ${id}`).textContent, `cardul ${id}`).toContain('Generează raportul →')
+    // (a): rezumatul, „Generează raportul” accesibil după bifă; închiderea reușește (serverul fals aplică lipsaDinRand), apoi PDF-ul
+    await u.apasa(u.buton('Tronson Tr. 1'))
+    expect(u.text()).toContain('Rezumat și raport')
+    expect(u.text()).not.toContain('Etapa 1 din 2')
+    expect(u.text()).toContain('NU IESE USCAT')
+    await u.bifeaza('Am verificat detaliile')
+    expect(u.buton('Generează raportul').disabled).toBe(false)
+    await u.apasa(u.buton('Generează raportul'))
+    expect(T.executie_uscari.get(1).stare).toBe('inchisa')
+    expect(exporturi.at(-1)).toMatchObject({ id: 1 })
+    expect(u.text()).toContain('Raport generat (închis)')
+    await u.apasa(u.buton('← Lista'))
+    // (b) și (c): la fel
+    for (const id of [2, 3]) {
+      await u.apasa(u.buton(`Tronson Tr. ${id}`))
+      expect(u.text(), `raportul ${id}`).toContain('Rezumat și raport')
+      await u.bifeaza('Am verificat detaliile')
+      expect(u.buton('Generează raportul').disabled, `raportul ${id}`).toBe(false)
+      await u.apasa(u.buton('← Lista'))
+    }
+    // redeschiderea consemnată (administrator) pune raportul (a) înapoi pe „deschis”: pasul se recalculează din date → tot rezumatul, nu etapa 1
+    Object.assign(T.executie_uscari.get(1), { stare: 'deschisa', inchis_la: null, revizie: 1, versiune: 7 })
+    const v = await monteaza(client, stocareFalsa(), { ecranInitial: 'pasi', acum: () => ORA(11) })
+    expect(v.buton('Tronson Tr. 1').textContent).toContain('Generează raportul →')
+    await v.apasa(v.buton('Tronson Tr. 1'))
+    expect(v.text()).toContain('Rezumat și raport')
+    await v.bifeaza('Am verificat detaliile')
+    expect(v.buton('Generează raportul').disabled).toBe(false)
+  })
+
+  it('runda 3 (P1): raport început în formularul complet (birou, cu justificarea pozelor) și continuat pe pași: etapele cer doar ce lipsește; USCAT cere dovada, UMED contra calculului cere motivul scris', async () => {
+    const { client, T } = clientFals()
+    T.executie_uscari.set(1, RAP(1, { data_operatie: '2026-11-17', temperatura_c: 8, utilaje: [{ denumire: 'Compresor', buc: 1 }], pig_metalic_buc: 0, piston_pu_buc: 0, bureti_buc: 2,
+      cantariri: [1, 2].map(nr => ({ nr, intrare_kg: null, iesire_kg: null, motiv: null })), presiune_bar: 2.5, poze_justificare: 'cântarul nu are ecran lizibil' }))
+    let ceas = ORA(8)
+    const u = await monteaza(client, stocareFalsa(), { ecranInitial: 'pasi', acum: () => ceas })
+    expect(u.buton('Tronson Tr. test').textContent).toContain('Continuă cu etapa 1')
+    await u.apasa(u.buton('Continuă cu etapa 1'))
+    expect(u.text()).toContain('Nu poți face o poză?')
+    expect(u.camp('Justificarea lipsei pozelor').value).toBe('cântarul nu are ecran lizibil')
+    expect(lipsuri(u)).toEqual(['greutatea pistonului 1 la intrare', 'greutatea pistonului 2 la intrare'])   // pozele justificate NU sunt cerute
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la intrare')[0], '1,25'); await u.scrieEl(u.campuri('Greutatea pe cântar, la intrare')[1], '1,30')
+    expect(lipsuri(u)).toEqual([])
+    expect(u.buton('Înregistrează etapa 1').disabled).toBe(false)
+    await u.apasa(u.buton('Înregistrează etapa 1'))
+    expect(u.text()).toContain('Etapa 1 înregistrată')
+    await u.apasa(u.buton('Continuă acum cu etapa 2'))
+    ceas = ORA(9)
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la ieșire')[0], '1,40'); await u.scrieEl(u.campuri('Greutatea pe cântar, la ieșire')[1], '1,35')
+    expect(u.text()).toContain('propun USCAT')
+    await u.apasa(u.buton('USCAT (propus)'))
+    expect(u.buton('Termină etapa 2').disabled).toBe(true)
+    expect(lipsuri(u)).toEqual(['poza ultimului piston (dovada că iese uscat)'])                             // dovada nu se justifică; pozele cântarelor, da
+    await u.apasa(u.buton('UMED'))                                                                            // contra calculului → motivul scris de om
+    expect(u.buton('Termină etapa 2').disabled).toBe(true)
+    expect(lipsuri(u)).toEqual(['motivul scris de tine pentru verdictul diferit de calcul'])
+    await u.scrie('Ai ales altceva decât calculul (USCAT)', 'buretele ud la exterior')
+    expect(lipsuri(u)).toEqual([])
+    expect(u.buton('Termină etapa 2').disabled).toBe(false)
+    await u.apasa(u.buton('Termină etapa 2'))
+    expect(T.executie_uscari.get(1)).toMatchObject({ piston_final_rezultat: 'umed', concluzie: 'neconform', observatii: `${PREFIX_MOTIV_VERDICT} buretele ud la exterior` })
+    expect(u.text()).toContain('Rezumat și raport')
+    await u.bifeaza('Am verificat detaliile')
+    expect(u.buton('Generează raportul').disabled).toBe(false)
+  })
+
+  it('runda 3 (P1): pe telefon, fără poze: etapa 1 le cere, iar ieșirea e „nu pot face o poză — scriu de ce” (aceeași justificare ca în formularul complet, salvată cu raportul)', async () => {
+    const { client, T } = clientFals()
+    T.executie_uscari.set(1, RAP(1, { bureti_buc: 1, cantariri: [{ nr: 1, intrare_kg: null, iesire_kg: null, motiv: null }] }))
+    let ceas = ORA(8)
+    const u = await monteaza(client, stocareFalsa(), { ecranInitial: 'pasi', acum: () => ceas, comprima: async () => new Blob(['x']) })
+    await u.apasa(u.buton('Continuă cu etapa 1'))
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la intrare')[0], '1,25')
+    expect(u.buton('Înregistrează etapa 1').disabled).toBe(true)
+    expect(lipsuri(u)).toEqual(['poza cântarului pentru pistonul 1 (intrare)', 'poza ansamblului de pistoane'])
+    expect(u.text()).toContain('Nu poți face o poză?')
+    await u.scrie('Justificarea lipsei pozelor', 'camera telefonului defectă')
+    expect(u.text()).not.toContain('Ca să înregistrezi etapa 1, mai trebuie')
+    expect(lipsuri(u)).toEqual([])
+    expect(u.buton('Înregistrează etapa 1').disabled).toBe(false)
+    await u.apasa(u.buton('Înregistrează etapa 1'))
+    expect(T.executie_uscari.get(1)).toMatchObject({ poze_justificare: 'camera telefonului defectă', cantariri: [{ nr: 1, intrare_kg: 1.25, iesire_kg: null, motiv: null }] })
+    // etapa 2: pozele cântarului sunt justificate (blocul rămâne, cu textul salvat); dovada USCAT tot se cere (nu se justifică)
+    await u.apasa(u.buton('Continuă acum cu etapa 2'))
+    ceas = ORA(9)
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la ieșire')[0], '1,30')
+    await u.apasa(u.buton('USCAT (propus)'))
+    expect(u.text()).toContain('Ca să termini etapa 2, mai trebuie:')
+    expect(lipsuri(u)).toEqual(['poza ultimului piston (dovada că iese uscat)'])
+    expect(u.camp('Justificarea lipsei pozelor').value).toBe('camera telefonului defectă')
+    await u.fotografiaza('Poza ultimului piston')
+    expect(u.buton('Termină etapa 2').disabled).toBe(false)
+  })
+
+  it('runda 3 (P2-4): la „Trecere nouă”, textul automat din observații NU motivează verdictul contrar: motivul e câmp distinct, scris de om, apoi adăugat la observații', async () => {
+    const { client, T } = clientFals()
+    etapa1Gata(T, 1, { stare: 'inchisa', inchis_la: '2026-11-17T09:30:00Z', ora_final: '2026-11-17T09:00:00Z', piston_final_rezultat: 'umed', concluzie: 'neconform',
+      cantariri: [{ nr: 1, intrare_kg: 1.25, iesire_kg: 1.3, motiv: null }, { nr: 2, intrare_kg: 1.3, iesire_kg: 1.6, motiv: null }] })
+    let ceas = ORA(10)
+    const u = await monteaza(client, stocareFalsa(), { ecranInitial: 'pasi', acum: () => ceas, comprima: async () => new Blob(['x']) })
+    await u.apasa(u.buton('Tr. test'))
+    await u.apasa(u.buton('Trecere nouă pe același tronson'))
+    await u.apasa(u.buton('Începe'))
+    const nou = [...T.executie_uscari.values()].find(r => r.id !== 1)
+    expect(nou.observatii).toBe(textTrecere(2, '17.11.2026'))
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la intrare')[0], '1,25'); await u.scrieEl(u.campuri('Greutatea pe cântar, la intrare')[1], '1,30')
+    await u.scrie('Justificarea lipsei pozelor', 'fără cameră')
+    await u.apasa(u.buton('Înregistrează etapa 1'))
+    await u.apasa(u.buton('Continuă acum cu etapa 2'))
+    ceas = ORA(11)
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la ieșire')[0], '1,30'); await u.scrieEl(u.campuri('Greutatea pe cântar, la ieșire')[1], '1,60')   // +300 g > 100 g
+    expect(u.text()).toContain('propun UMED')
+    await u.apasa(u.buton('USCAT'))
+    expect(u.text()).toContain('Ai ales altceva decât calculul (UMED)')
+    expect(u.camp('Ai ales altceva decât calculul (UMED)').value).toBe('')            // câmpul distinct e gol: NU arată observațiile automate
+    expect(u.text()).not.toContain('Motiv deja scris în observații')
+    expect(u.buton('Termină etapa 2').disabled).toBe(true)                            // textul automat nu satisface motivarea
+    expect(u.text()).toContain('motivul scris de tine pentru verdictul diferit de calcul')
+    await u.scrie('Ai ales altceva decât calculul (UMED)', 'ultimul burete cântărit cu apă de ploaie pe el')
+    expect(u.text()).not.toContain('motivul scris de tine')
+    expect(u.buton('Termină etapa 2').disabled).toBe(true)                            // USCAT cere și dovada
+    await u.fotografiaza('Poza ultimului piston')
+    expect(u.buton('Termină etapa 2').disabled).toBe(false)
+    await u.apasa(u.buton('Termină etapa 2'))
+    expect(T.executie_uscari.get(nou.id)).toMatchObject({ piston_final_rezultat: 'uscat', concluzie: 'conform',
+      observatii: `${textTrecere(2, '17.11.2026')}\n${PREFIX_MOTIV_VERDICT} ultimul burete cântărit cu apă de ploaie pe el` })
+    expect(u.text()).toContain('Rezumat și raport')
+    // după salvare, motivul e în observații: câmpul distinct nu mai apare gol ca „lipsă” la o reîntoarcere pe etapa 2 (pasul e dedus din date)
+    expect(u.camp('Observații').value).toContain(PREFIX_MOTIV_VERDICT)
   })
 })
