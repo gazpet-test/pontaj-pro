@@ -327,12 +327,20 @@ aceeași amprentă (altfel 22023); fără cotă (§6).
 | `lock_timeout = 100 ms` | `$pre$` | o așteptare implicită de lock nu depășește 100 ms |
 | bugetul lock-urilor: 1 s de la **prima încercare** (runda 16; era de la `BEGIN`) | `$lock$` (migrare) | verificat **înaintea fiecărei încercări și după obținerea setului complet** (și fără coliziune); încercarea = subtranzacție (eșecul eliberează lock-urile parțiale); peste buget = `BUGET_LOCK`, nimic schimbat |
 | bugetul lock-urilor la revenire: 1 s de la `BEGIN` | revenirea (fără amprentă globală, plafon 2000, nu s-a schimbat) | ca înainte |
-| garda finală a runnerului | `livrare_migrare.sh` | plafonul ~5000 ms până la intrarea în COMMIT; tipărește și `LOCK_TINUT` (cât au fost ținute lock-urile puternice) |
+| garda finală a runnerului | `livrare_migrare.sh` | plafonul ~5000 ms până la intrarea în COMMIT; tipărește și `LOCK_TINUT` (cât a fost ținut setul de lock-uri puternice de la obținerea lui până la gardă; fără COMMIT și fără eliberarea reală) |
+| validatorul runnerului (runda 17) | `livrare_validator.py`, înainte de conexiune | fiecare comparație a plafonului din cod verificată STRUCTURAL (formă + valoare; altfel `PLAFON_FORMA`); runnerul fără `--plafon-tranzactie-ms` = `PLAFON_LIPSA` local, nu abia în `$pre$` |
 
 Migrarea **nu fixează `statement_timeout`**; „lock la …”, „sfarsit la … ; lock-uri puternice tinute de …” sunt doar afișate. Lock-urile luate
 (NOWAIT, ordinea fixă): `executie_proiecte`, `executie_probe_tronsoane` (cheile străine, SHARE ROW EXCLUSIVE), `storage.objects` (ACCESS
 EXCLUSIVE: politicile + sonda; **oprește citirile și scrierile de fișiere din toată aplicația** cât e ținut — până la COMMIT, inclusiv pasul
-„după” al runnerului, ~1,3–1,6 s estimat pe producție) — de aplicat într-un moment liniștit.
+„după” al runnerului, ~1,3–1,6 s estimat pe producție — o extrapolare, nu o măsurătoare) — de aplicat într-un moment liniștit.
+**Lock-urile implicite de după set (runda 17):** `INSERT INTO storage.buckets` ia ROW EXCLUSIVE pe `storage.buckets` (+ indecșii, verificarea
+de unicitate, triggerele platformei) cât `storage.objects` e deja ACCESS EXCLUSIVE; postcondițiile și sonda citesc `storage.buckets`,
+`profiles`, `user_module_access`, `executie_acces_proiect` și lanțul de drept. Fiecare așteptare e limitată la 100 ms (`lock_timeout`), apoi
+refuz, nimic comis — dar ținând deja fișierele oprite. Inventarul complet: comentariul blocului de lock din migrare și docs/LIVRARE_L15_V2.md
+§9; proba pe clonă: `supabase/tests/l15_aplicare_concurenta.sh --migrare uscare` (inclusiv `storage.buckets` blocat).
+**Revenirea** (plafon 2000, fără amprentă globală) are altă acoperire decât aplicarea L15: înaintea aplicării reale proprietarul acceptă
+explicit procedura ei sau cere o revenire compatibilă L15, separat (docs/LIVRARE_L15_V2.md §9, „Fișierele de revenire”).
 
 **De ce s-a schimbat (runda 16):** pe producție un calcul de amprentă durează ~0,86 s (cald, forma optimizată) + ~0,2–0,3 s pe un backend
 proaspăt, iar pasul runnerului ~×1,5 ⇒ tranzacția întreagă ~2,5–2,8 s (estimat), peste vechiul plafon de 2.000 ms; iar amprenta

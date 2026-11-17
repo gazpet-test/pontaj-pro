@@ -11,13 +11,21 @@ Fiecare caz e un artefact minim (cu garda de livrare). Asteptat:
   * FARA optiune: aceleasi artefacte au exact rezultatul de dinainte (regresie: runda 10 neschimbata);
   * apelul fara tag / cu argumente in plus = cod de utilizare 2.
 """
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-VALIDATOR = ROOT / "scripts" / "livrare_validator.py"
+# Runda 17: „--validator <alt fișier>” (sau VALIDATOR_FISIER=<alt fișier>) rulează ACELEAȘI cazuri pe altă versiune (ex. cea din
+# head-ul revizuit, extrasă cu git show) — dovada că mutanții noi pică pe codul vechi: acolo testul dă ESEC pe cazurile „r17”.
+if len(sys.argv) == 3 and sys.argv[1] == "--validator":
+    VALIDATOR = Path(sys.argv[2]).resolve()
+elif os.environ.get("VALIDATOR_FISIER"):
+    VALIDATOR = Path(os.environ["VALIDATOR_FISIER"]).resolve()
+else:
+    VALIDATOR = ROOT / "scripts" / "livrare_validator.py"
 GARDA = ("DO $g$ BEGIN\n  IF current_setting('gazpet.livrare_migrare', true) IS NULL THEN RAISE EXCEPTION 'x'; END IF;\n"
          "END $g$;\n")
 CITIRE = "FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout'"
@@ -135,6 +143,136 @@ def acord_plafon():
     return esecuri
 
 
+# Runda 17 (verdictul Jakarinos pe PR #1115, P1-1 / P1-2). Mutanții se aplică pe migrările REALE (octeții din repo), fiecare
+# înlocuire EXACT o dată (altfel testul e nefuncțional = ESEC). Așteptările scrise de mână, din verdict (L25).
+USCARE = "supabase/migrations/20261225a_executie_uscare.sql"
+METEO = "supabase/migrations/20261221a_meteo_xweather_zilnic.sql"
+CMP_S = "IS DISTINCT FROM '5000/session'"
+CMP_M = "IS DISTINCT FROM '5000:' || txid_current()"
+MUTANTI_FORMA = [
+    # (eticheta, [(din, in)], cod cu --plafon-tranzactie-ms 5000, fragment din mesaj)
+    ("exemplul din verdict: ('2000' || '/session')", [(CMP_S, "IS DISTINCT FROM ('2000' || '/session')")], 1, "PLAFON_FORMA"),
+    ("concatenare fara paranteze: '2000' || '/session'", [(CMP_S, "IS DISTINCT FROM '2000' || '/session'")], 1, "PLAFON_FORMA"),
+    ("cast pe literalul corect: '5000/session'::text", [(CMP_S, CMP_S + "::text")], 1, "PLAFON_FORMA"),
+    ("cast pe concatenare: ('2000' || '/session')::text", [(CMP_S, "IS DISTINCT FROM ('2000' || '/session')::text")], 1, "PLAFON_FORMA"),
+    ("CAST(... AS varchar(4)) (trunchiaza)", [(CMP_S, "IS DISTINCT FROM CAST('5000/session' AS varchar(4))")], 1, "PLAFON_FORMA"),
+    ("comentariu bloc cu forma buna + concatenare",
+     [(CMP_S, "IS DISTINCT FROM /* '5000/session' */ ('2000' || '/session')")], 1, "PLAFON_FORMA"),
+    ("comentariu de linie cu forma buna + concatenare",
+     [(CMP_S, "IS DISTINCT FROM -- '5000/session'\n       ('2000' || '/session')")], 1, "PLAFON_FORMA"),
+    ("literal continuat pe linia urmatoare: '2000/' 'session'", [(CMP_S, "IS DISTINCT FROM '2000/'\n       'session'")], 1, "PLAFON_FORMA"),
+    ("literal continuat cu valoarea buna: '5000/' 'session'", [(CMP_S, "IS DISTINCT FROM '5000/'\n       'session'")], 1, "PLAFON_FORMA"),
+    ("prefix E'...'", [(CMP_S, "IS DISTINCT FROM E'5000/session'")], 1, "PLAFON_FORMA"),
+    ("dollar-quote $s$5000/session$s$", [(CMP_S, "IS DISTINCT FROM $s$5000/session$s$")], 1, "PLAFON_FORMA"),
+    ("operatorul <> in loc de IS DISTINCT FROM (NULL = fara refuz)", [("v_plafon " + CMP_S, "v_plafon <> '5000/session'")], 1, "PLAFON_FORMA"),
+    ("neutralizat: IF false AND v_plafon ...", [("IF v_plafon " + CMP_S, "IF false AND v_plafon " + CMP_S)], 1, "PLAFON_FORMA"),
+    ("neutralizat: ... '5000/session' AND false OR", [(CMP_S + "\n", CMP_S + " AND false\n")], 1, "PLAFON_FORMA"),
+    ("neutralizat: IF NOT (v_plafon ...)", [("IF v_plafon " + CMP_S + "\n", "IF NOT (v_plafon " + CMP_S + ")\n")], 1, "PLAFON_FORMA"),
+    ("RAISE NOTICE in loc de RAISE EXCEPTION", [("txid_current() THEN\n    RAISE EXCEPTION '20261225a: PLAFON_TRANZACTIE",
+                                                  "txid_current() THEN\n    RAISE NOTICE '20261225a: PLAFON_TRANZACTIE")], 1, "PLAFON_FORMA"),
+    ("variabila suprascrisa dupa citire", [("WHERE name = 'transaction_timeout';\n",
+                                             "WHERE name = 'transaction_timeout';\n  v_plafon := '5000/session';\n")], 1, "PLAFON_FORMA"),
+    ("variabila citita a doua oara (SELECT ... INTO)", [("WHERE name = 'transaction_timeout';\n",
+                                                          "WHERE name = 'transaction_timeout';\n  SELECT '5000/session' INTO v_plafon;\n")], 1, "PLAFON_FORMA"),
+    ("marcajul: '2000' || ':' || txid_current() + forma buna in comentariu",
+     [(CMP_M, "IS DISTINCT FROM /* '5000:' || txid_current() */ '2000' || ':' || txid_current()")], 1, "PLAFON_FORMA"),
+    ("marcajul: concatenat in plus (|| '')", [(CMP_M, CMP_M + " || ''")], 1, "PLAFON_FORMA"),
+    ("marcajul: fara true (current_setting simplu)", [("OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT",
+                                                        "OR current_setting('gazpet.plafon_tranzactie') IS DISTINCT")], 1, "PLAFON_FORMA"),
+    # (refuzat și de regula brută din runda 16: nicio formă verificabilă a marcajului în fișier)
+    ("marcajul: literal continuat '5000' ':'", [(CMP_M, "IS DISTINCT FROM '5000'\n     ':' || txid_current()")], 1, "PLAFON_"),
+    ("marcajul scris de migrare (set_config)", [("WHERE name = 'transaction_timeout';\n",
+                                                 "WHERE name = 'transaction_timeout';\n  PERFORM set_config('gazpet.plafon_tranzactie', '5000:' || txid_current(), true);\n")],
+     1, "PLAFON_FORMA"),
+    ("citirea pg_settings in alta forma (fara '/' || source)", [("SELECT setting || '/' || source INTO v_plafon", "SELECT setting INTO v_plafon")],
+     1, "PLAFON_FORMA"),
+    # controale pozitive: forma acceptata cu spatii / comentarii intre tokeni, si pg_catalog. la marcaj
+    ("CONTROL: comentariu intre tokeni, forma buna", [(CMP_S, "IS DISTINCT /* nota */ FROM\n       '5000/session'")], 0, "OK "),
+    ("CONTROL: pg_catalog.current_setting / pg_catalog.txid_current", [
+        ("OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || txid_current()",
+         "OR pg_catalog.current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || pg_catalog.txid_current()")], 0, "OK "),
+]
+
+
+def forma_structurala():
+    esecuri = []
+
+    def rez(et, bun, detaliu):
+        print(f"{'ok' if bun else 'ESEC'} r17: {et}{'' if bun else ' — ' + detaliu[:240]}")
+        if not bun:
+            esecuri.append("r17: " + et)
+
+    for rel in (USCARE, METEO):
+        brut = (ROOT / rel).read_bytes().decode("utf-8")
+        sep = "\r\n" if "\r\n" in brut else "\n"
+        for et, inloc, exp, frag in MUTANTI_FORMA:
+            t = brut
+            aplicat = True
+            for din, in_ in inloc:
+                din, in_ = din.replace("\n", sep), in_.replace("\n", sep)
+                if rel == METEO:
+                    din, in_ = din.replace("20261225a:", "20261221a:"), in_.replace("20261225a:", "20261221a:")
+                if t.count(din) != 1:
+                    aplicat = False
+                    break
+                t = t.replace(din, in_)
+            if not aplicat:
+                rez(f"{rel.split('/')[-1]}: {et}", False, "mutantul nu se aplica exact o data (proba nefunctionala)")
+                continue
+            with tempfile.TemporaryDirectory() as d:
+                f = Path(d) / Path(rel).name
+                f.write_bytes(t.encode("utf-8"))
+                rc, out = iesire(f, "reg_test", "--plafon-tranzactie-ms", "5000")
+            rez(f"{rel.split('/')[-1]}: {et}: cod {rc} (asteptat {exp})", rc == exp and frag in out, out)
+        # P1-2: fara plafon, migrarea care cere plafon = refuz LOCAL (PLAFON_LIPSA), forma runnerului --fara-plafon
+        rc, out = iesire(ROOT / rel, "reg_test", "--fara-plafon")
+        rez(f"{rel.split('/')[-1]}: runner fara plafon (--fara-plafon) = PLAFON_LIPSA, cod {rc}", rc == 1 and "PLAFON_LIPSA" in out, out)
+        t = brut.replace(CMP_S, "IS DISTINCT FROM ('2000' || '/session')").replace(CMP_M, "IS DISTINCT FROM ('2000' || ':') || txid_current()")
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / Path(rel).name
+            f.write_bytes(t.encode("utf-8"))
+            rc, out = iesire(f, "reg_test", "--fara-plafon")
+        rez(f"{rel.split('/')[-1]}: fara plafon, cererea in forma neverificabila = tot PLAFON_LIPSA, cod {rc}", rc == 1 and "PLAFON_LIPSA" in out, out)
+    # P1-2: fara plafon, fisierele fara cerere de plafon trec ca inainte (compatibilitate) — cazuri minime
+    for et, corp, exp, frag in [
+        ("fara nicio cerere", "CREATE TABLE public.t (id integer);\n", 0, "OK "),
+        ("garda care cere LIPSA plafonului ('0/default', ca test_livrare_plafon.sh fara)",
+         "DO $p$ BEGIN IF (SELECT setting || '/' || source " + CITIRE + ") IS DISTINCT FROM '0/default' THEN RAISE EXCEPTION 'p'; END IF; END $p$;\n",
+         0, "OK "),
+        ("mutantul r13 fara cerere (SET LOCAL transaction_timeout = 0; regulile vechi fara plafon)",
+         "SET LOCAL transaction_timeout = 0;\nSELECT pg_sleep(3);\n", 0, "OK "),
+        ("cere 5000 = PLAFON_LIPSA", "DO $p$ BEGIN IF (SELECT setting || '/' || source " + CITIRE + ") IS DISTINCT FROM '5000/session' THEN "
+         "RAISE EXCEPTION 'p'; END IF; END $p$;\n", 1, "PLAFON_LIPSA"),
+        ("doar marcajul = PLAFON_LIPSA", "DO $p$ BEGIN IF current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || "
+         "txid_current() THEN RAISE EXCEPTION 'p'; END IF; END $p$;\n", 1, "PLAFON_LIPSA"),
+        ("cererea doar intr-un comentariu (fail-closed) = PLAFON_LIPSA", "-- cere '5000/session'\nSELECT 1;\n", 1, "PLAFON_LIPSA"),
+    ]:
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "a.sql"
+            f.write_bytes((GARDA + corp).encode("utf-8"))
+            rc, out = iesire(f, "reg_test", "--fara-plafon")
+        rez(f"--fara-plafon: {et}: cod {rc} (asteptat {exp})", rc == exp and frag in out, out)
+    # P1-2: TOATE migrarile / revenirile din repo: cu --fara-plafon = refuz daca cer plafon, altfel ACELASI rezultat ca fara optiune
+    n_cer, n_compat = 0, 0
+    for cale in sorted(list((ROOT / "supabase/migrations").glob("*.sql")) + list((ROOT / "supabase/revenire").glob("*.sql"))):
+        text = cale.read_bytes().decode("utf-8", "replace")
+        cere = "/session" in text.lower() or "plafon_tranzactie" in text.lower()
+        rc_f, out_f = iesire(cale, "reg_test", "--fara-plafon")
+        rel = cale.relative_to(ROOT).as_posix()
+        if cere:
+            n_cer += 1
+            if not (rc_f == 1 and "PLAFON_LIPSA" in out_f):
+                rez(f"{rel}: cere plafon, --fara-plafon cod {rc_f}", False, out_f)
+        else:
+            rc_0, _ = iesire(cale, "reg_test")
+            n_compat += 1
+            if rc_f != rc_0:
+                rez(f"{rel}: fara cerere de plafon, --fara-plafon cod {rc_f} != fara optiune {rc_0} (compatibilitate)", False, out_f)
+    rez(f"repo: {n_cer} fisiere cer plafon (toate PLAFON_LIPSA fara plafon), {n_compat} fara cerere (acelasi cod ca fara optiune)",
+        n_cer >= 20 and n_compat >= 100, "prea putine fisiere (proba nefunctionala)")
+    return esecuri
+
+
 def main():
     esecuri = []
     with tempfile.TemporaryDirectory() as d:
@@ -175,6 +313,7 @@ def main():
         if cale.exists():
             print(f"info {rel}: cod {ruleaza(cale, 'reg_test', '--plafon-tranzactie')} cu --plafon-tranzactie")
     esecuri += acord_plafon()
+    esecuri += forma_structurala()
     if esecuri:
         print(f"ESEC test_livrare_validator_plafon: {len(esecuri)} caz(uri): {', '.join(esecuri)}")
         return 1

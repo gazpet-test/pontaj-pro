@@ -94,6 +94,12 @@ lanțul, semnalele și contextul sunt identice cu ale producției**, iar plasa o
 eșuat” e închisă); garda finală a
 runnerului tipărește și `LOCK_TINUT`. Probele pe clonă de mai sus se refac pe forma nouă (manifestul regenerat, aplicare → revenire →
 reaplicare, lock-ul cu a doua sesiune). Revenirea nu s-a schimbat (plafon 2000, fără amprentă globală).
+**Runda 17 (verdictul pe #1115):** fișierul migrării NU s-a schimbat (aceleași 108 rânduri, același sha256 `238daabc…`). Validatorul
+runnerului verifică acum structural garda plafonului (o comparație în altă formă = `PLAFON_FORMA`) și refuză local livrarea fără
+`--plafon-tranzactie-ms` (`PLAFON_LIPSA`, înainte de conexiune; garda din `$pre$` rămâne a doua barieră). Lock-ul cu a doua sesiune are acum
+o probă scrisă: `supabase/tests/l15_aplicare_concurenta.sh --migrare meteo …` (o scriere în curs pe `sites` ⇒ `BUGET_LOCK`; eliberată
+înainte de termen ⇒ `IDENTIC`), rulată de coordonator pe clonă. Revenirea: acoperirea ei diferă de aplicarea L15 — de acceptat explicit
+înaintea aplicării reale (docs/LIVRARE_L15_V2.md §9, „Fișierele de revenire”).
 
 Cu acordul owner-ului, după criteriile din `docs/LIVRARE_L15_V2.md`: recitirea din ziua livrării (comparată și clasificată), trei probe
 consecutive cu ROLLBACK pe țintă — toate `IDENTIC`, garda finală cu rezerva din `docs/LIVRARE_L15_V2.md` §7 (cel mult ~3,75 s din 5 s), verificarea „înainte” raportată separat, lock-ul în

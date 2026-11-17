@@ -108,6 +108,41 @@ for c in 2000:"$PL" "$PL":2000; do
   [ "$rc" = 3 ] && [ ! -e "$d/apeluri" ] && grep -qF "PLAFON_DIFERIT: fișierul cere $cere ms" "$d/runner.log" || { cat "$d/runner.log"; fail "acord: cere $cere, dat $da: cod $rc"; }
 done
 echo "L15_FORMA_PLAFON_ACORD: cu L15 plafonul 2000 / 60000 => 2 (doar $PL); migrare care cere 2000 cu runnerul la $PL si invers => 3 (PLAFON_DIFERIT); niciun apel psql"
+# runda 17 (verdictul PR #1115): (P1-1) comparatia plafonului in forma neverificabila = refuz 3 (PLAFON_FORMA), si cu forma buna intr-un
+# comentariu; (P1-2) migrarea care cere plafon, cu runnerul FARA plafon (cu si fara L15) si cu generatorul de manifest fara plafon = refuz 3
+# (PLAFON_LIPSA); niciun apel psql in niciun caz. Controlul: aceeasi migrare cu plafonul ei trece de validator (codul 0 al livrarii false).
+CERE="$TMP/cere"; mkdir "$CERE"
+M3="$CERE/${NUME%_l15}_cere.sql"
+printf "DO \$g\$ DECLARE v_plafon text; BEGIN\n  IF current_setting('gazpet.livrare_migrare', true) IS NULL THEN RAISE EXCEPTION 'x'; END IF;\n  SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';\n  IF v_plafon IS DISTINCT FROM '%s/session'\n     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '%s:' || txid_current() THEN\n    RAISE EXCEPTION 'p %%', coalesce(v_plafon, 'lipsa'); END IF;\nEND \$g\$;\n" "$PL" "$PL" >"$M3"
+livreaza_m() { # $1 dir, $2 cod, $3 migrarea, restul = optiuni
+  local d="$1" exp="$2" m="$3" rc=0; shift 3; mkdir "$d"
+  FALS_DIR="$d" PSQL_BIN="$TMP/psql_fals" bash "$ROOT/scripts/livrare_migrare.sh" --migrare "$m" --sha256 "$(sha256sum "$m" | cut -d' ' -f1)" \
+    --versiune 20990101000003 --tinta-db forma_test --tinta-sistem 42 --tinta-host 127.0.0.1 --tinta-port 1 "$@" >"$d/runner.log" 2>&1 || rc=$?
+  [ "$rc" = "$exp" ] || { cat "$d/runner.log"; fail "$d: cod $rc, asteptat $exp"; }
+}
+cp "$MAN" "$CERE/$(basename "$M3" .sql).l15.tsv"
+livreaza_m "$CERE/ok" 0 "$M3" --plafon-tranzactie-ms "$PL"
+livreaza_m "$CERE/fara" 3 "$M3"
+livreaza_m "$CERE/fara_l15" 3 "$M3" --amprenta-globala "$AG" --diferente-globale "$CERE/$(basename "$M3" .sql).l15.tsv"
+for c in fara fara_l15; do
+  [ ! -e "$CERE/$c/apeluri" ] && grep -qF 'PLAFON_LIPSA: fișierul cere plafonul tranzacției' "$CERE/$c/runner.log" \
+    || { cat "$CERE/$c/runner.log"; fail "runner fara plafon ($c): asteptat PLAFON_LIPSA fara apel psql"; }
+done
+for v in "('2000' || '/session')" "/* '$PL/session' */ ('2000' || '/session')"; do
+  k=$((${k:-0} + 1)); M4="$CERE/f$k/${NUME%_l15}_forma.sql"; mkdir "$CERE/f$k"
+  sed "s#IS DISTINCT FROM '$PL/session'#IS DISTINCT FROM $v#" "$M3" >"$M4"
+  ! cmp -s "$M3" "$M4" || fail "mutantul formei $k nu s-a aplicat"
+  livreaza_m "$CERE/f$k/r" 3 "$M4" --plafon-tranzactie-ms "$PL"
+  [ ! -e "$CERE/f$k/r/apeluri" ] && grep -qF 'PLAFON_FORMA' "$CERE/f$k/r/runner.log" \
+    || { cat "$CERE/f$k/r/runner.log"; fail "forma neverificabila $k: asteptat PLAFON_FORMA fara apel psql"; }
+done
+mkdir "$CERE/gen"; rc=0
+FALS_DIR="$CERE/gen" PSQL_BIN="$TMP/psql_fals" bash "$ROOT/scripts/livrare_l15_manifest.sh" --migrare "$M3" --versiune 20990101000003 \
+  --tinta-host 127.0.0.1 --tinta-port 1 --tinta-db forma_test --tinta-sistem 42 --user u --iesire "$CERE/gen/$(basename "$M3" .sql).l15.tsv" \
+  >"$CERE/gen/gen.log" 2>&1 || rc=$?
+[ "$rc" = 3 ] && [ ! -e "$CERE/gen/apeluri" ] && [ ! -e "$CERE/gen/$(basename "$M3" .sql).l15.tsv" ] && grep -qF 'PLAFON_LIPSA' "$CERE/gen/gen.log" \
+  || { cat "$CERE/gen/gen.log"; fail "generatorul de manifest fara plafon: cod $rc, asteptat 3 (PLAFON_LIPSA, niciun apel psql)"; }
+echo "L15_FORMA_PLAFON_R17: forma neverificabila (si cu forma buna in comentariu) => 3 PLAFON_FORMA; plafon omis (runner cu / fara L15, generatorul de manifest) => 3 PLAFON_LIPSA; niciun apel psql; controlul cu plafonul ei => 0"
 
 # 2. Cu plafon: un mesaj; verificatorul independent cu --l15.
 printf '%s  %s.sql\n%s  %s.l15.tsv\n' "$SHA" "$NUME" "$(sha256sum "$MAN" | cut -d' ' -f1)" "$NUME" >"$TMP/aprobare_ok"

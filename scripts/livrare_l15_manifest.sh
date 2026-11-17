@@ -34,6 +34,8 @@
 # Runda 16 a runnerului (17.11.2026): --plafon-tranzactie-ms, daca e dat, e EXACT AG_PLAFON_MS (5000; scripts/livrare_amprenta.sh),
 #   ca la livrarea cu amprenta globala (altfel 2); validatorul runnerului cere ca migrarea sa ceara acelasi plafon (altfel 3);
 #   garda finala tipareste si LOCK_TINUT, iar timpii (lock / sfarsit / LOCK_TINUT) apar in lista de la final.
+# Runda 17: generarea trece prin runner => validatorul lui refuza local (cod 3 aici, nimic trimis) si o migrare care cere plafon generata
+#   FARA --plafon-tranzactie-ms (PLAFON_LIPSA), si o comparatie a plafonului in forma neverificabila (PLAFON_FORMA).
 # ============================================================================
 set -Eeuo pipefail
 umask 077

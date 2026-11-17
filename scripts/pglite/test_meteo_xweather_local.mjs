@@ -249,6 +249,19 @@ console.log('0b. validatorul runnerului: acordul plafonului migrare / revenire �
   writeFileSync(fv, brut.split('5000/session').join('2000/session').split("'5000:'").join("'2000:'").split('--plafon-tranzactie-ms 5000').join('--plafon-tranzactie-ms 2000'))
   const v = validator(fv, PLAFON_LIVRARE)
   ok(!v.ok && /PLAFON_DIFERIT: fișierul cere 2000 ms/.test(v.out), 'MUTANT plafonul vechi cerut (2000) cu runnerul nou (5000) = refuz clar: ' + v.out.slice(0, 120))
+  // runda 17 (verdictul PR #1115): P1-1 — doar comparația înlocuită cu ('2000' || '/session') (era acceptată: 30 de instrucțiuni) = refuz
+  // structural; P1-2 — runnerul fără plafon (--fara-plafon) = refuz local PLAFON_LIPSA
+  const ff = join(TMP, 'plafon_forma_concat.sql')
+  ok(brut.split("IS DISTINCT FROM '5000/session'").length === 2, 'mutantul formei se aplică exact o dată')
+  writeFileSync(ff, brut.split("IS DISTINCT FROM '5000/session'").join("IS DISTINCT FROM ('2000' || '/session')"))
+  const vf = validator(ff, PLAFON_LIVRARE)
+  ok(!vf.ok && /PLAFON_FORMA/.test(vf.out), "MUTANT comparația ('2000' || '/session') cu plafonul 5000 = refuz structural: " + vf.out.slice(0, 120))
+  let vfp = null
+  try {
+    execFileSync('bash', ['-c', 'exec python3 "$@"', '_', join(ROOT, 'scripts/livrare_validator.py'), fm, 'reg_0123456789abcdef', '--fara-plafon'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  } catch (e) { vfp = String(e.stderr || e.message) }
+  ok(vfp !== null && /PLAFON_LIPSA: fișierul cere plafonul tranzacției \(5000 ms/.test(vfp), 'runnerul FĂRĂ plafon (--fara-plafon) = refuz local: ' + (vfp || 'ACCEPTAT').slice(0, 120))
 }
 
 // ── 1. aplicarea + verificările ──

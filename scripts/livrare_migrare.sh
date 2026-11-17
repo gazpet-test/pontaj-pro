@@ -195,6 +195,9 @@
 #       să fie exact N ⇒ altfel refuz 3 (PLAFON_DIFERIT). Deci o migrare care cere 2000 nu pleacă cu runnerul la 5000 și invers;
 #     * pe calea cu amprenta globală garda finală tipărește și LOCK_TINUT (diagnostic: cât au fost ținute până la gardă lock-urile
 #       puternice ale migrării, din momentul declarat de ea în gazpet.lock_puternic_la). Fără amprenta globală garda e neschimbată.
+#   Runda 17 (verdictul Jakarinos pe PR #1115): validatorul verifică STRUCTURAL fiecare comparație a plafonului din codul artefactului
+#     (altă formă = PLAFON_FORMA, refuz 3); FĂRĂ --plafon-tranzactie-ms validatorul primește --fara-plafon, deci un artefact care CERE plafon
+#     e refuzat aici (PLAFON_LIPSA, refuz 3, înainte de conexiune), nu abia în $pre$. Artefactele fără cerere de plafon: neschimbat.
 # Orice altă opțiune (-v, -f, -c, --set, -d URI, …) ⇒ refuz înainte de conexiune. Nu se acceptă URI-uri de conexiune.
 # Variabile respinse (pot schimba execuția/ținta pe ascuns): PGPASSWORD, PGOPTIONS, PGDATABASE, PSQLRC, PGHOSTADDR,
 # PGTARGETSESSIONATTRS, PGLOADBALANCEHOSTS, PGSERVICE, PGSERVICEFILE, PGSYSCONFDIR. PGHOST/PGPORT: eliminate explicit (unset)
@@ -291,8 +294,10 @@ CONTROL_0E="$(dirname "${BASH_SOURCE[0]}")/control_0e.sql"
 [ -f "$CONTROL_0E" ] || refuz 3 "gate-ul permanent 0e lipsește: $CONTROL_0E"
 # Runda 11: cu plafon, validatorul refuză în plus orice atingere a ceasului tranzacției (vezi antetul).
 # Runda 16: și ACORDUL plafonului — fiecare plafon cerut de artefact = exact cel dat runnerului (PLAFON_DIFERIT = refuz 3).
-VAL_PLAFON=(); [ -z "$PLAFON_MS" ] || VAL_PLAFON=(--plafon-tranzactie-ms "$PLAFON_MS")
-VAL_OUT="$(python3 "$(dirname "${BASH_SOURCE[0]}")/livrare_validator.py" "$COPIE" "$TAG" ${VAL_PLAFON[@]+"${VAL_PLAFON[@]}"})" || refuz 3 "validatorul a refuzat $NUME (vezi mai sus)"
+# Runda 17 (verdictul PR #1115): fără plafon, validatorul primește --fara-plafon ⇒ un artefact care CERE plafon e refuzat aici
+# (PLAFON_LIPSA, refuz 3, înainte de conexiune), nu abia în $pre$; artefactele fără cerere de plafon trec ca înainte.
+VAL_PLAFON=(--fara-plafon); [ -z "$PLAFON_MS" ] || VAL_PLAFON=(--plafon-tranzactie-ms "$PLAFON_MS")
+VAL_OUT="$(python3 "$(dirname "${BASH_SOURCE[0]}")/livrare_validator.py" "$COPIE" "$TAG" "${VAL_PLAFON[@]}")" || refuz 3 "validatorul a refuzat $NUME (vezi mai sus)"
 echo "→ $NUME: sha256 $SHA_COPIE = aprobat; validator: $VAL_OUT"
 # Runda 15 (L15 v2): copia protejată a manifestului, formatul verificat local; cu --aprobare, și sha256-ul lui e aprobat.
 if [ -n "$AG_MD5" ]; then

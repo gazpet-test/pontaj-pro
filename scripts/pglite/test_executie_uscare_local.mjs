@@ -80,6 +80,14 @@ const validator = (fisier, plafon = PLAFON_LIVRARE) => {
     return { ok: true, out: o.trim() }
   } catch (e) { return { ok: false, out: String(e.stderr || e.message).trim() } }
 }
+// runda 17: aceeași chemare cu altă opțiune a runnerului (ex. --fara-plafon, forma runnerului fără --plafon-tranzactie-ms)
+const validatorCu = (fisier, ...opt) => {
+  try {
+    const o = execFileSync('bash', ['-c', 'exec python3 "$@"', '_', join(ROOT, 'scripts/livrare_validator.py'), fisier, 'reg_0123456789abcdef', ...opt],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    return { ok: true, out: o.trim() }
+  } catch (e) { return { ok: false, out: String(e.stderr || e.message).trim() } }
+}
 // plafonul livrărilor L15 v2: O SINGURĂ definiție, în biblioteca runnerului (scripts/livrare_amprenta.sh, AG_PLAFON_MS); revenirea: 2000
 const PLAFON_LIVRARE = Number(execFileSync('bash', ['-c', '. "$1"; printf %s "$AG_PLAFON_MS"', '_', join(ROOT, 'scripts/livrare_amprenta.sh')], { encoding: 'utf8' }))
 const PLAFON_REVENIRE = 2000
@@ -105,6 +113,15 @@ console.log('0b. validatorul runnerului (cu plafon, acordul plafonului) pe migra
   const vv = validator(fPlVechi), vg = validator(fPlGarda)
   ok(!vv.ok && /PLAFON_DIFERIT: fișierul cere 2000 ms/.test(vv.out), 'MUTANT plafonul vechi cerut (2000) cu runnerul nou (5000) = refuz clar: ' + vv.out.slice(0, 140))
   ok(!vg.ok && /PLAFON_DIFERIT: fișierul cere 2000 ms \(garda pe pg_settings/.test(vg.out), 'MUTANT doar garda pe 2000 (antetul pe 5000) = refuz: ' + vg.out.slice(0, 140))
+  // runda 17 (verdictul PR #1115, P1-1): exemplul recenzentului — DOAR comparația înlocuită cu ('2000' || '/session'), antetul și marcajul pe
+  // 5000 — era acceptat (91 de instrucțiuni); acum refuz STRUCTURAL înainte de conexiune. (P1-2): fără plafon = refuz local, PLAFON_LIPSA.
+  const fForma = join(TMP, 'plafon_forma_concat.sql')
+  ok(brutV.split("IS DISTINCT FROM '5000/session'").length === 2, 'mutantul formei se aplică exact o dată')
+  writeFileSync(fForma, brutV.split("IS DISTINCT FROM '5000/session'").join("IS DISTINCT FROM ('2000' || '/session')"))
+  const vf = validator(fForma)
+  ok(!vf.ok && /PLAFON_FORMA/.test(vf.out), "MUTANT comparația ('2000' || '/session') cu plafonul 5000 = refuz structural: " + vf.out.slice(0, 140))
+  const vfp = validatorCu(join(ROOT, 'supabase/migrations/20261225a_executie_uscare.sql'), '--fara-plafon')
+  ok(!vfp.ok && /PLAFON_LIPSA: fișierul cere plafonul tranzacției \(5000 ms/.test(vfp.out), 'runnerul FĂRĂ plafon (--fara-plafon) = refuz local: ' + vfp.out.slice(0, 140))
   const brut = brutV
   const fVechi1 = join(TMP, 'vechi_literal.sql'), fVechi2 = join(TMP, 'vechi_comentariu.sql')
   writeFileSync(fVechi1, aplica(brut, [["cale ~ E'^[0-9]{1,18}/", "cale ~ '^[0-9]{1,18}/"], ["\\\\.jpg$'),", "\\.jpg$'),"]]))
@@ -584,7 +601,7 @@ console.log('1. aplicarea ca la livrare (L15 v2: manifest generat, apoi livrarea
     'livrarea aprobată: diferența = manifestul; ' + j.filter(m => /ms de la BEGIN/.test(m)).map(m => m.slice(0, 90)).join(' | '))
   const lt = j.find(m => /^LOCK_TINUT /.test(m)) || ''
   ok(j.some(m => /^PLAFON_TIMP 20261225a_executie_uscare: garda trecuta la \d+ ms de la BEGIN \(plafon 5000 ms\)/.test(m))
-    && /^LOCK_TINUT 20261225a_executie_uscare: lock-urile puternice ale migrarii tinute \d+ ms pana la garda \(luate la \d+ ms de la BEGIN; urmeaza COMMIT/.test(lt)
+    && /^LOCK_TINUT 20261225a_executie_uscare: lock-urile puternice ale migrarii tinute \d+ ms pana la garda \(de la obtinerea setului complet, la \d+ ms de la BEGIN; primele lock-uri ale setului pot fi luate putin mai devreme; urmeaza COMMIT, neplafonat; eliberarea reala o masoara observatorul\)$/.test(lt)
     && j.some(m => /lock la \d+ ms de la BEGIN \(1 incercari, \d+ ms de la prima incercare\)/.test(m)),
     'garda finală a runnerului: PLAFON_TIMP (5000) + durata lock-urilor puternice: ' + lt.slice(0, 150))
   const ab = await verifica(db)

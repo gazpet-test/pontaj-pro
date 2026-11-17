@@ -57,7 +57,8 @@
 --   raport, deja ținut mai tare). Modulul Probe pe tronsoane (20261202a) nu atinge nimic de aici: fără ciclu.
 -- Lock-uri la aplicare (punct unic, NOWAIT, ordine FIXĂ: executie_proiecte -> executie_probe_tronsoane -> storage.objects; docs/LIVRARE_L15_V2.md
 --   §9 „Bugetul de lock”): executie_proiecte și executie_probe_tronsoane SHARE ROW EXCLUSIVE (cheile străine), storage.objects ACCESS EXCLUSIVE
---   (CREATE POLICY + sonda politicilor): oprește și citirile de fișiere cât e ținut (până la COMMIT, inclusiv pasul „după” al runnerului) — de
+--   (CREATE POLICY + sonda politicilor; lock-urile implicite de după set, inclusiv storage.buckets, sunt inventariate la blocul de lock):
+--   oprește și citirile de fișiere cât e ținut (până la COMMIT, inclusiv pasul „după” al runnerului) — de
 --   aplicat într-un moment liniștit. Bugetul = 1 s cu ceasul pornit IMEDIAT ÎNAINTEA PRIMEI ÎNCERCĂRI (nu la BEGIN: pasul „înainte” al runnerului
 --   nu îl mai consumă), verificat înaintea fiecărei încercări și DUPĂ obținerea setului complet (și pe calea fără coliziune: setul obținut după
 --   termen = refuz, nimic schimbat); fiecare încercare e o subtranzacție (un eșec eliberează lock-urile parțiale înaintea pauzei).
@@ -171,8 +172,19 @@ END $lant$;
 DO $l15_inainte$ BEGIN PERFORM pg_temp.lant_20261225a('inainte'); END $l15_inainte$;
 
 -- ── punctul UNIC de blocare (L06), după verificările de catalog. Ordinea FIXĂ (aceeași la fiecare încercare): executie_proiecte, apoi
--- executie_probe_tronsoane (SHARE ROW EXCLUSIVE), apoi storage.objects (ACCESS EXCLUSIVE); lock-urile implicite ulterioare (FK la CREATE TABLE,
--- CREATE POLICY) sunt pe aceleași relații, deja ținute mai tare. Bugetul = 1 s cu ceasul pornit IMEDIAT ÎNAINTEA PRIMEI ÎNCERCĂRI (v_t0; nu la
+-- executie_probe_tronsoane (SHARE ROW EXCLUSIVE), apoi storage.objects (ACCESS EXCLUSIVE). Lock-urile IMPLICITE ale corpului, după set
+-- (inventarul complet, runda 17; docs/LIVRARE_L15_V2.md §9):
+--   (a) pe relațiile setului, deja ținute la fel de tare sau mai tare: FK la CREATE TABLE (SHARE ROW EXCLUSIVE pe executie_proiecte /
+--       executie_probe_tronsoane), CREATE POLICY și citirile din postcondiții / sondă pe storage.objects;
+--   (b) ÎN AFARA setului, luate când storage.objects e DEJA ținut ACCESS EXCLUSIVE: INSERT INTO storage.buckets = ROW EXCLUSIVE pe
+--       storage.buckets și pe indecșii lui, verificarea de unicitate a cheii (poate aștepta o tranzacție concurentă care inserează același
+--       id) și triggerele platformei pe storage.buckets (inventariate pe țintă: supabase/tests/l15_aplicare_concurenta.sh, pasul I);
+--       citirile (ACCESS SHARE) din postcondiții și din sondă pe storage.buckets, profiles, user_module_access, executie_acces_proiect și
+--       pe tabelele citite de lanțul fn_executie_nod_drept — acestea intră în conflict doar cu ACCESS EXCLUSIVE (DDL, VACUUM FULL, LOCK).
+--   Fiecare așteptare implicită e limitată de lock_timeout = 100 ms (apoi eroare, tranzacția anulată, nimic comis), dar se face ȚINÂND
+--   storage.objects: cel mult ~100 ms în plus de oprire a fișierelor pe așteptare, totul sub plafonul tranzacției. storage.buckets NU intră în
+--   set (conținutul funcțional rămâne cel revizuit); refuzul curat e probat pe clonă (l15_aplicare_concurenta.sh, B1).
+-- Bugetul = 1 s cu ceasul pornit IMEDIAT ÎNAINTEA PRIMEI ÎNCERCĂRI (v_t0; nu la
 -- BEGIN), verificat ÎNAINTE de fiecare încercare și DUPĂ obținerea setului complet — și pe calea fără coliziune: setul obținut după termen = refuz,
 -- nimic schimbat. Fiecare încercare = subtranzacție (BEGIN … EXCEPTION): eșecul unui lock anulează subtranzacția și eliberează lock-urile luate
 -- deja în ea, ÎNAINTEA pauzei. Momentul obținerii (gazpet.lock_puternic_la, µs de la epoch) îl citește garda finală a runnerului (LOCK_TINUT). ──

@@ -72,6 +72,8 @@ lm_timp() {
 # până aici lock-urile puternice ale migrării, din momentul declarat de migrare în gazpet.lock_puternic_la (microsecunde de la
 # epoch, scris imediat după obținerea setului complet). E DIAGNOSTIC, nu gardă (valoarea vine din artefact; nu decide nimic);
 # lipsă / formă greșită = mesaj „nedeclarat”. Eliberarea reală (după COMMIT) o măsoară observatorul din altă sesiune.
+# Runda 17 (verdictul PR #1115): mesajul spune exact ce măsoară — intervalul de la obținerea SETULUI complet până la gardă; primele
+# lock-uri ale setului sunt luate puțin mai devreme (în aceeași încercare), iar COMMIT-ul și eliberarea reală nu sunt incluse.
 # Fără „lock” textul e octet cu octet cel de dinainte (calea fără amprentă globală, scripts/test_livrare_l15_paritate.sh).
 lm_fin() {
   local NUME="$1" PLAFON_MS="$2" FINAL="$3" LOCK="${4:-}" DECL="" TIN=""
@@ -81,7 +83,7 @@ lm_fin() {
     TIN="
   v_lock := pg_catalog.current_setting('gazpet.lock_puternic_la', true);
   IF v_lock ~ '^[0-9]{10,19}\$' THEN
-    RAISE NOTICE 'LOCK_TINUT $NUME: lock-urile puternice ale migrarii tinute % ms pana la garda (luate la % ms de la BEGIN; urmeaza $FINAL, neplafonat)',
+    RAISE NOTICE 'LOCK_TINUT $NUME: lock-urile puternice ale migrarii tinute % ms pana la garda (de la obtinerea setului complet, la % ms de la BEGIN; primele lock-uri ale setului pot fi luate putin mai devreme; urmeaza $FINAL, neplafonat; eliberarea reala o masoara observatorul)',
       round(extract(epoch FROM pg_catalog.clock_timestamp()) * 1000 - v_lock::numeric / 1000),
       round(v_lock::numeric / 1000 - extract(epoch FROM pg_catalog.transaction_timestamp()) * 1000);
   ELSE
