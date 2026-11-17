@@ -353,8 +353,12 @@ export function payloadDinFormular(f) {
 /** formularul are modificări față de rândul salvat (comparând valorile care s-ar trimite) */
 export function areModificari(f, r) {
   if (!f || !r) return false
-  const a = payloadDinFormular(f), b = payloadDinFormular(formularDinRand(r))
-  return JSON.stringify(a.date) !== JSON.stringify(b.date)
+  return formulareDiferite(f, formularDinRand(r))
+}
+/** două formulare diferă în ce s-ar trimite (aceeași comparație ca areModificari, între formulare: raportul NOU față de propunerea lui) */
+export function formulareDiferite(f, g) {
+  if (!f || !g) return false
+  return JSON.stringify(payloadDinFormular(f).date) !== JSON.stringify(payloadDinFormular(g).date)
 }
 
 // ── conflictul de versiune: îmbinare în trei, pe câmpuri, rezolvată EXPLICIT de om ──

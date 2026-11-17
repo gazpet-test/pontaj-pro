@@ -3,13 +3,17 @@
 import { describe, it, expect } from 'vitest'
 import {
   PRAG_G_PE_KM, grame, diferentaGrame, pragGrame, inPrag, ultimulPiston, verdictPropus, contrazice, avertismenteGreutate, avertismentePereche,
-  lipsaEtapa1, lipsaEtapa2, pasCurent, precompletare, formularPasNou, formularTrecereNoua, treceriPeTronson, momentAcum, cuOraImplicita,
-  minuteIntre, formularInregistreazaEtapa1, formularTerminaEtapa2,
+  lipsaEtapa1, lipsaEtapa2, pasCurent, pasTinut, precompletare, formularPasNou, formularTrecereNoua, treceriPeTronson, momentAcum, cuOraImplicita,
+  minuteIntre, formularInregistreazaEtapa1, formularTerminaEtapa2, concluzieDinVerdict,
 } from './uscarePasi.js'
 import { isoDinOraLocala, formularDinRand, payloadDinFormular, lipsaDinRand } from './uscareLogica.js'
 
 const C = (nr, intrare_kg, iesire_kg = null, motiv = null) => ({ nr, intrare_kg, iesire_kg, motiv })
 const P = (categorie, burete_nr = null) => ({ categorie, burete_nr })
+// eticheta motivului verdictului contrar, scrisă de mână (L25); textul liber al observațiilor NU e motiv (proba din 17.11.2026)
+const MOTIV = 'Verdictul diferit de calcul, motivul:'
+const LIPSA_MOTIV = 'motivul scris de tine pentru verdictul diferit de calcul'
+const LIPSA_CONCLUZIE = 'concluzia din verdict (o pune „Termină etapa 2”)'
 
 describe('grame și diferența (întregi, fără rotunjiri înainte de comparație)', () => {
   it('kg → g întregi; diferența ieșire − intrare', () => {
@@ -87,13 +91,28 @@ describe('verdictul propus (doar ultimul piston contează)', () => {
   it('runda 3 (verdict P2-4): textul automat al trecerii noi NU e motiv pentru verdictul contrar; un motiv scris de om, da', () => {
     // textul EXACT pe care îl pune „Trecere nouă” în observații (scris aici de mână, nu luat din cod — L25)
     const auto = 'Trecerea 2 pe acest tronson (trecerea anterioară: raportul din 10.11.2026, ultimul piston nu a ieșit uscat).'
-    const baza = { ora_inceput: 'a', ora_final: 'b', lungime_m: 1000, bureti_buc: 1, cantariri: [C(1, 1, 1.25)], piston_final_rezultat: 'uscat', observatii: auto }
+    const baza = { ora_inceput: 'a', ora_final: 'b', lungime_m: 1000, bureti_buc: 1, cantariri: [C(1, 1, 1.25)], piston_final_rezultat: 'uscat', concluzie: 'conform', observatii: auto }
     const poze = [P('cantar_iesire', 1), P('piston_final')]
     expect(verdictPropus(baza).propus).toBe('umed')                                                   // +250 g > 100 g
-    expect(lipsaEtapa2(baza, poze)).toEqual(['motivul scris de tine pentru verdictul diferit de calcul'])
-    expect(lipsaEtapa2({ ...baza, observatii: `${auto}\nVerdictul diferit de calcul, motivul: cântărit cu buretele ud la exterior` }, poze)).toEqual([])
-    expect(lipsaEtapa2({ ...baza, observatii: 'buretele ud la exterior' }, poze)).toEqual([])         // scris din birou, fără etichetă: tot motiv
-    expect(lipsaEtapa2({ ...baza, observatii: '   ' }, poze)).toEqual(['motivul scris de tine pentru verdictul diferit de calcul'])
+    expect(lipsaEtapa2(baza, poze)).toEqual([LIPSA_MOTIV])
+    expect(lipsaEtapa2({ ...baza, observatii: `${auto}\n${MOTIV} cântărit cu buretele ud la exterior` }, poze)).toEqual([])
+    expect(lipsaEtapa2({ ...baza, observatii: `${MOTIV} cântărit cu buretele ud la exterior` }, poze)).toEqual([])   // raport vechi / din birou, cu etichetă: recunoscut
+    expect(lipsaEtapa2({ ...baza, observatii: '   ' }, poze)).toEqual([LIPSA_MOTIV])
+  })
+  it('proba din 17.11.2026 (defectul 2): observații preexistente oarecare NU sunt motiv; doar textul de sub eticheta motivului', () => {
+    const baza = { ora_inceput: 'a', ora_final: 'b', lungime_m: 1000, bureti_buc: 1, cantariri: [C(1, 1, 1.25)], piston_final_rezultat: 'uscat', concluzie: 'conform' }
+    const poze = [P('cantar_iesire', 1), P('piston_final')]
+    for (const obs of ['TEST automat 17.11.2026 noaptea — de ignorat', 'buretele ud la exterior', 'motivul: nu', `${MOTIV}   `, `${MOTIV}\n`]) {
+      expect(lipsaEtapa2({ ...baza, observatii: obs }, poze), JSON.stringify(obs)).toEqual([LIPSA_MOTIV])
+    }
+    expect(lipsaEtapa2({ ...baza, observatii: `TEST automat — de ignorat\n${MOTIV} apă de ploaie pe burete` }, poze)).toEqual([])
+    expect(lipsaEtapa2({ ...baza, observatii: `${MOTIV} apă de ploaie\nnotă scrisă după, din birou` }, poze)).toEqual([])
+  })
+  it('concluzia din verdict: o singură definiție (uscat → conform, umed → neconform, altfel nimic)', () => {
+    expect(concluzieDinVerdict('uscat')).toBe('conform')
+    expect(concluzieDinVerdict('umed')).toBe('neconform')
+    expect(concluzieDinVerdict(null)).toBe(null)
+    expect(concluzieDinVerdict('')).toBe(null)
   })
 })
 
@@ -138,20 +157,51 @@ describe('ce cere fiecare etapă și pasul dedus din date', () => {
     expect(lipsaEtapa1({ ora_inceput: 'x', bureti_buc: -1, cantariri: [] }, [P('pistoane')])).toEqual(['câte pistoane-burete'])
   })
   it('etapa 2: presiunea nu blochează; verdictul contrar calculului cere motivul; poza ultimului piston doar la USCAT (dovada, ca regula comună)', () => {
-    const baza = { ora_inceput: 'a', ora_final: 'b', lungime_m: 1000, bureti_buc: 1, cantariri: [C(1, 1, 1.05)], piston_final_rezultat: 'uscat', observatii: null, presiune_bar: null }
+    const baza = { ora_inceput: 'a', ora_final: 'b', lungime_m: 1000, bureti_buc: 1, cantariri: [C(1, 1, 1.05)], piston_final_rezultat: 'uscat', concluzie: 'conform', observatii: null, presiune_bar: null }
     const poze = [P('cantar_iesire', 1), P('piston_final')]
     expect(lipsaEtapa2(baza, poze)).toEqual([])
-    expect(lipsaEtapa2({ ...baza, piston_final_rezultat: 'umed' }, poze)).toEqual(['motivul scris de tine pentru verdictul diferit de calcul'])
-    expect(lipsaEtapa2({ ...baza, piston_final_rezultat: 'umed', observatii: 'buretele avea urme de apă' }, poze)).toEqual([])
-    expect(lipsaEtapa2({ ...baza, ora_final: null, piston_final_rezultat: null }, [])).toEqual([
+    expect(lipsaEtapa2({ ...baza, piston_final_rezultat: 'umed', concluzie: 'neconform' }, poze)).toEqual([LIPSA_MOTIV])
+    expect(lipsaEtapa2({ ...baza, piston_final_rezultat: 'umed', concluzie: 'neconform', observatii: `${MOTIV} buretele avea urme de apă` }, poze)).toEqual([])
+    expect(lipsaEtapa2({ ...baza, ora_final: null, piston_final_rezultat: null, concluzie: null }, [])).toEqual([
       'ora ieșirii', 'poza cântarului pentru pistonul 1 (ieșire)', 'verdictul ultimului piston (uscat / umed)',
     ])
     // runda 3 (verdict P1): USCAT fără poza ultimului piston = lipsește dovada; UMED (NECONFORM) nu o cere (regula existentă o cere doar pentru CONFORM)
     expect(lipsaEtapa2(baza, [P('cantar_iesire', 1)])).toEqual(['poza ultimului piston (dovada că iese uscat)'])
-    expect(lipsaEtapa2({ ...baza, cantariri: [C(1, 1, 1.5)], piston_final_rezultat: 'umed' }, [P('cantar_iesire', 1)])).toEqual([])
+    expect(lipsaEtapa2({ ...baza, cantariri: [C(1, 1, 1.5)], piston_final_rezultat: 'umed', concluzie: 'neconform' }, [P('cantar_iesire', 1)])).toEqual([])
     // pozele cântarelor justificate: nu mai sunt cerute
-    expect(lipsaEtapa2({ ...baza, cantariri: [C(1, 1, 1.5)], piston_final_rezultat: 'umed', poze_justificare: 'ceață' }, [])).toEqual([])
+    expect(lipsaEtapa2({ ...baza, cantariri: [C(1, 1, 1.5)], piston_final_rezultat: 'umed', concluzie: 'neconform', poze_justificare: 'ceață' }, [])).toEqual([])
     expect(lipsaEtapa2({ ...baza, poze_justificare: 'ceață' }, [])).toEqual(['poza ultimului piston (dovada că iese uscat)'])   // dovada nu se justifică
+  })
+  it('proba din 17.11.2026 (defectul 1): datele etapei 2 complete FĂRĂ concluzia din verdict (salvate pe parcurs / de pe alt telefon) = etapa 2 NU e terminată', () => {
+    const baza = { ora_inceput: 'a', ora_final: 'b', lungime_m: 1000, bureti_buc: 1, cantariri: [C(1, 1, 1.05)], piston_final_rezultat: 'uscat', concluzie: null, observatii: null }
+    const poze = [P('cantar_iesire', 1), P('piston_final')]
+    expect(lipsaEtapa2(baza, poze)).toEqual([LIPSA_CONCLUZIE])
+    expect(lipsaEtapa2({ ...baza, concluzie: 'neconform' }, poze)).toEqual([LIPSA_CONCLUZIE])          // concluzia nu urmează verdictul
+    expect(lipsaEtapa2({ ...baza, concluzie: 'conform' }, poze)).toEqual([])
+    expect(lipsaEtapa2({ ...baza, piston_final_rezultat: 'umed', concluzie: 'conform' }, poze)).toEqual([LIPSA_MOTIV, LIPSA_CONCLUZIE])
+    expect(lipsaEtapa2({ ...baza, piston_final_rezultat: 'umed', concluzie: 'neconform', observatii: `${MOTIV} x` }, poze)).toEqual([])
+    // ce trimite „Termină etapa 2” nu mai lasă nimic: formularul de pe ecran, judecat prin aceeași funcție
+    const rand = { ...baza, ora_inceput: '2026-11-17T08:00:00Z', ora_final: '2026-11-17T09:00:00Z', id: 1, proiect_id: 1, stare: 'deschisa', tronson: 'T', km_de_la_m: 0, km_pana_la_m: 1000, utilaje: [] }
+    const g = formularTerminaEtapa2(formularDinRand(rand), Date.UTC(2026, 10, 17, 9))
+    expect(payloadDinFormular(g).erori).toEqual([])
+    expect(lipsaEtapa2({ ...rand, ...payloadDinFormular(g).date }, poze)).toEqual([])
+    // rândul blocat din probă (B1_22): etapa 2 completă, concluzia null → pasul e ETAPA 2 (de unde „Termină etapa 2” pune concluzia), nu rezumatul fără câmp de concluzie
+    const blocat = { stare: 'deschisa', data_operatie: '2026-11-17', lungime_m: 500, bureti_buc: 2, ora_inceput: 'a', ora_final: 'b',
+      cantariri: [C(1, 5.2, 5.23), C(2, 5.1, 5.12)], piston_final_rezultat: 'uscat', concluzie: null, timp_deplasare_min: null, constructor: 'C', utilaje: [] }
+    const pozeB = [P('pistoane'), P('cantar_intrare', 1), P('cantar_intrare', 2), P('cantar_iesire', 1), P('cantar_iesire', 2), P('piston_final')]
+    expect(lipsaDinRand(blocat, pozeB)).toContain('concluzie')
+    expect(pasCurent(blocat, pozeB)).toBe('etapa2')
+    expect(pasCurent({ ...blocat, concluzie: 'conform' }, pozeB)).toBe('rezumat')                       // timpul lipsă îl are rezumatul ca câmp
+  })
+  it('pasul AFIȘAT e ținut pe loc cât omul lucrează pe el; înainte doar prin butonul etapei; stările finale și întoarcerile nu se țin', () => {
+    expect(pasTinut('etapa1', 'etapa2')).toBe('etapa1')
+    expect(pasTinut('etapa1', 'rezumat')).toBe('etapa1')
+    expect(pasTinut('etapa2', 'rezumat')).toBe('etapa2')
+    expect(pasTinut('etapa2', 'etapa2')).toBe('etapa2')
+    expect(pasTinut('etapa2', 'etapa1')).toBe('etapa1')                                                // datele au rămas în urmă: le urmează
+    expect(pasTinut('etapa1', 'tronson')).toBe('tronson')
+    for (const fin of ['inchis', 'anulat', null]) expect(pasTinut('etapa2', fin)).toBe(fin)
+    for (const p of ['tronson', 'etapa1', 'etapa2', 'rezumat', 'inchis', 'anulat', null]) expect(pasTinut(null, p)).toBe(p)
   })
   // rândul COMPLET pentru regula comună (toate detaliile cerute de închidere), cu 2 pistoane, ultimul +50 g (în prag)
   const complet = (extra = {}) => ({
@@ -198,37 +248,38 @@ describe('ce cere fiecare etapă și pasul dedus din date', () => {
     expect(pasCurent(birou2, [])).toBe('etapa2')
     expect(lipsaEtapa2(birou2, [])).toEqual(['ora ieșirii', 'greutatea pistonului 1 la ieșire', 'greutatea pistonului 2 la ieșire', 'verdictul ultimului piston (uscat / umed)'])
   })
-  it('pasul curent pe TOATE combinațiile celor 9 elemente ale etapelor + cele 5 excepții ale regulii comune (2^14), plus stările finale', () => {
+  it('pasul curent pe TOATE combinațiile celor 9 elemente ale etapelor + cele 6 excepții ale regulii comune (2^15), plus stările finale', () => {
     // elementele etapelor: [0] ora introducerii, [1] greutatea la intrare, [2] poza cântarului la intrare, [3] poza ansamblului,
     //   [4] ora ieșirii, [5] greutatea la ieșire, [6] poza cântarului la ieșire, [7] verdictul ales, [8] poza ultimului piston
     // excepțiile (runda 3): [9] lipsa pozelor JUSTIFICATĂ, [10] verdictul ales e UMED (altfel USCAT), [11] ZERO pistoane-burete,
-    //   [12] un motiv scris de om în observații, [13] detaliile cerute de închidere (temperatura, constructor, utilaje, configurația,
-    //   presiunea, timpul, data, concluzia din verdict) sunt complete
+    //   [12] un motiv scris de om în observații (cu eticheta lui), [13] detaliile cerute de închidere (temperatura, constructor, utilaje,
+    //   configurația, presiunea, timpul, data) sunt complete, [14] concluzia din verdict e pusă („Termină etapa 2”; 17.11.2026, defectul 1)
     // Așteptările sunt calculate de mână din regula scrisă (V2 §3.1 + §3a + regula comună §5), nu din codul testat (L25):
     //   etapa 1 = ora intr. + (zero sau greutatea intr.) + (justificat sau (poza cântar intr. (dacă nu zero) + poza ansamblu))
     //   propus = (zero sau greutăți lipsă) ? nimic : USCAT (1,05 − 1 = 50 g ≤ 100 g); contrar = verdict ales ≠ propus → cere motiv scris
     //   etapa 2 = ora ieș. + (zero sau greutatea ieș.) + (justificat sau zero sau poza cântar ieș.) + verdict + (nu contrar sau motiv) + (UMED sau poza ultimului piston)
-    //   regula comună goală = detalii + justificat (manometrul și termometrul nu sunt fotografiate aici) + ambele ore + (zero sau ambele greutăți)
+    //     + concluzia din verdict
+    //   regula comună goală = detalii + concluzia + justificat (manometrul și termometrul nu sunt fotografiate aici) + ambele ore + (zero sau ambele greutăți)
     //     + verdict + (UMED sau poza ultimului piston, dovada CONFORM) → REZUMAT direct, indiferent de etape
     let numarate = { etapa1: 0, etapa2: 0, rezumat: 0, comun: 0 }
-    for (let m = 0; m < 16384; m++) {
+    for (let m = 0; m < 32768; m++) {
       const are = i => !!((m >> i) & 1)
-      const zero = are(11), umed = are(10), just = are(9), obs = are(12), detalii = are(13)
+      const zero = are(11), umed = are(10), just = are(9), obs = are(12), detalii = are(13), concl = are(14)
       const ales = are(7) ? (umed ? 'umed' : 'uscat') : null
       const r = { stare: 'deschisa', lungime_m: 1000, bureti_buc: zero ? 0 : 1, ora_inceput: are(0) ? '2026-11-17T08:00:00Z' : null, ora_final: are(4) ? '2026-11-17T09:00:00Z' : null,
-        cantariri: zero ? [] : [C(1, are(1) ? 1 : null, are(5) ? 1.05 : null)], piston_final_rezultat: ales, observatii: obs ? 'buretele ud la exterior' : null,
-        poze_justificare: just ? 'ceață' : null,
+        cantariri: zero ? [] : [C(1, are(1) ? 1 : null, are(5) ? 1.05 : null)], piston_final_rezultat: ales, observatii: obs ? `${MOTIV} buretele ud la exterior` : 'notă liberă',
+        poze_justificare: just ? 'ceață' : null, concluzie: concl && ales ? (umed ? 'neconform' : 'conform') : null,
         ...(detalii ? { data_operatie: '2026-11-17', temperatura_c: 8, constructor: 'Constructor SRL', utilaje: [{ denumire: 'Compresor', buc: 1 }], pig_metalic_buc: 0, piston_pu_buc: 0,
-          presiune_bar: 2, timp_deplasare_min: 60, concluzie: ales ? (umed ? 'neconform' : 'conform') : null }
-          : { data_operatie: null, temperatura_c: null, constructor: null, utilaje: [], pig_metalic_buc: null, piston_pu_buc: null, presiune_bar: null, timp_deplasare_min: null, concluzie: null }) }
+          presiune_bar: 2, timp_deplasare_min: 60 }
+          : { data_operatie: null, temperatura_c: null, constructor: null, utilaje: [], pig_metalic_buc: null, piston_pu_buc: null, presiune_bar: null, timp_deplasare_min: null }) }
       const poze = [!zero && are(2) && P('cantar_intrare', 1), are(3) && P('pistoane'), !zero && are(6) && P('cantar_iesire', 1), are(8) && P('piston_final')].filter(Boolean)
       const e1 = are(0) && (zero || are(1)) && (just || ((zero || are(2)) && are(3)))
       const propus = !zero && are(1) && are(5) ? 'uscat' : null
       const contrar = !!ales && ales !== propus
-      const e2 = are(4) && (zero || are(5)) && (just || zero || are(6)) && !!ales && (!contrar || obs) && (umed || are(8))
-      const comun = detalii && just && are(0) && are(4) && (zero || (are(1) && are(5))) && !!ales && (umed || are(8))
+      const e2 = are(4) && (zero || are(5)) && (just || zero || are(6)) && !!ales && (!contrar || obs) && (umed || are(8)) && concl
+      const comun = detalii && concl && just && are(0) && are(4) && (zero || (are(1) && are(5))) && !!ales && (umed || are(8))
       const asteptat = comun ? 'rezumat' : !e1 ? 'etapa1' : !e2 ? 'etapa2' : 'rezumat'
-      const eticheta = `combinația ${m.toString(2).padStart(14, '0')}`
+      const eticheta = `combinația ${m.toString(2).padStart(15, '0')}`
       expect(lipsaDinRand(r, poze).length === 0, eticheta + ' (regula comună)').toBe(comun)
       expect(pasCurent(r, poze), eticheta).toBe(asteptat)
       expect(pasCurent({ ...r, stare: 'inchisa' }, poze)).toBe('inchis')
@@ -236,11 +287,11 @@ describe('ce cere fiecare etapă și pasul dedus din date', () => {
       numarate[asteptat] += 1
       if (comun) numarate.comun += 1
     }
-    // numărate de mână: regula comună goală = 5 biți fixați (detalii, justificat, cele două ore, verdictul) × 16 (pozele cântarelor, ansamblului
-    // și motivul, libere) × 5 (zero cu greutățile libere: 4, sau ambele greutăți: 1) × 3 (UMED cu poza finală liberă: 2, sau USCAT cu poză: 1) = 240
+    // numărate de mână: regula comună goală = 6 biți fixați (detalii, concluzia, justificat, cele două ore, verdictul) × 16 (pozele cântarelor,
+    // ansamblului și motivul, libere) × 5 (zero cu greutățile libere: 4, sau ambele greutăți: 1) × 3 (UMED cu poza finală liberă: 2, sau USCAT cu poză: 1) = 240
     expect(numarate.comun).toBe(240)
     expect(numarate.rezumat).toBeGreaterThan(240)
-    expect(numarate.etapa1 + numarate.etapa2 + numarate.rezumat).toBe(16384)
+    expect(numarate.etapa1 + numarate.etapa2 + numarate.rezumat).toBe(32768)
     expect(pasCurent(null, [])).toBe('tronson')
   })
 })
@@ -265,11 +316,15 @@ describe('formularele propuse', () => {
     expect(f.constructor).toBe('Firma A')
     expect(payloadDinFormular({ ...f, tronson: 'T', km_de_la: '0', km_pana_la: '1000' }).erori).toEqual([])
   })
-  it('trecere nouă: tronsonul și configurația, FĂRĂ greutăți; observațiile spun a câta trecere', () => {
-    const u = rap(7, { proba_id: 2, stare: 'inchisa', bureti_buc: 3, constructor: 'Firma A', piston_final_rezultat: 'umed', cantariri: [C(1, 1, 1.2), C(2, 1, 1.3), C(3, 1, 1.4)] })
-    const alta = rap(6, { proba_id: 2 }), alt_tronson = rap(5, { proba_id: 9 }), anulat = rap(8, { proba_id: 2, stare: 'anulata' })
-    expect(treceriPeTronson([u, alta, alt_tronson, anulat], u)).toBe(2)
-    const f = formularTrecereNoua(u, [u, alta, alt_tronson, anulat], Date.UTC(2026, 10, 17, 8, 0))
+  it('trecere nouă: tronsonul și configurația, FĂRĂ greutăți; observațiile spun a câta trecere (numărate doar cele NECONFORME, 17.11.2026)', () => {
+    const u = rap(7, { proba_id: 2, stare: 'inchisa', bureti_buc: 3, constructor: 'Firma A', piston_final_rezultat: 'umed', concluzie: 'neconform', cantariri: [C(1, 1, 1.2), C(2, 1, 1.3), C(3, 1, 1.4)] })
+    const alta = rap(6, { proba_id: 2, concluzie: 'neconform' }), alt_tronson = rap(5, { proba_id: 9, concluzie: 'neconform' }), anulat = rap(8, { proba_id: 2, stare: 'anulata', concluzie: 'neconform' })
+    const conforma = rap(4, { proba_id: 2, concluzie: 'conform', piston_final_rezultat: 'uscat' }), inLucru = rap(9, { proba_id: 2, concluzie: null })
+    expect(treceriPeTronson([u, alta, alt_tronson, anulat, conforma, inLucru], u)).toBe(2)
+    // același interval de km, fără tronson de probă: la fel, doar cele neconforme
+    const k = rap(11, { proba_id: null, concluzie: 'neconform' })
+    expect(treceriPeTronson([k, rap(12, { proba_id: null, concluzie: 'conform' }), rap(13, { proba_id: null, concluzie: 'neconform', km_pana_la_m: 2000 }), rap(14, { proba_id: 3, concluzie: 'neconform' })], k)).toBe(1)
+    const f = formularTrecereNoua(u, [u, alta, alt_tronson, anulat, conforma, inLucru], Date.UTC(2026, 10, 17, 8, 0))
     expect(f).toMatchObject({ proba_id: '2', tronson: 'T', lungime_m: '1000', bureti_buc: '3', constructor: 'Firma A', data_operatie: '2026-11-17' })
     expect(f.cantariri).toEqual([1, 2, 3].map(nr => ({ nr, intrare_kg: '', iesire_kg: '', motiv: '' })))
     expect(f.observatii).toBe('Trecerea 3 pe acest tronson (trecerea anterioară: raportul din 10.11.2026, ultimul piston nu a ieșit uscat).')

@@ -2,7 +2,8 @@
 // UscarePasi.jsx — ecranul de TELEFON al uscării, pe pași: tronsonul → etapa 1 (introducerea pistoanelor) → etapa 2 (ieșirea) → rezumat +
 // „Generează raportul”. Doar afișarea: formularul, salvarea (CAS + cheia apăsării + ciorna locală), pozele și PDF-ul sunt cele din
 // UscareConducta.jsx (primite prin `p`), deci regulile de conflict, de idempotență și de context (L05, L24) sunt aceleași.
-// Pasul se DEDUCE din datele salvate (uscarePasi.js → pasCurent); omul se poate opri oricând între etape și relua din listă.
+// Pasul se DEDUCE din datele salvate (uscarePasi.js → pasCurent) și e ținut pe loc cât omul lucrează pe el (pasTinut: o salvare pe parcurs /
+// o poză nu avansează ecranul); omul se poate opri oricând între etape și relua din listă.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useState } from 'react'
@@ -11,8 +12,11 @@ import { payloadDinFormular, ETICHETE_OBLIGATORII, MAX_BURETI, fmtKm, parseKm, f
 import { textNr, parseNumar } from './izoDocumenteLogica.js'
 import {
   PASI, ETICHETE_PAS, PRAG_G_PE_KM, lipsaEtapa1, lipsaEtapa2, verdictPropus, contrazice, diferentaGrame, grame, avertismenteGreutate,
-  avertismentePereche, cuOraImplicita, momentAcum, cuMotivVerdict, motivDinObservatii,
+  avertismentePereche, cuOraImplicita, momentAcum, formularTerminaEtapa2, motivDinObservatii,
 } from './uscarePasi.js'
+
+/** ținta de atingere pe telefon (proba din 17.11.2026): cel puțin 44 × 44 px (scoaterea pozei, bifele) — o singură definiție, pentru ambele ecrane */
+export const TINTA_ATINGERE = 44
 
 const fmtG = g => (g == null ? '—' : `${g > 0 ? '+' : g < 0 ? '−' : ''}${fmtNr(Math.abs(g), 0)} g`)
 // decizia E (runda 2): o diferență negativă se spune explicit („mai ușor cu X g”), iar una peste 1% cere verificarea cântăririi
@@ -256,8 +260,9 @@ function Confirmare1({ p }) {
 // ── etapa 2: ieșirea pistoanelor ──
 function EcranEtapa2({ p }) {
   const { ST, Camp, form, rand, poze, blocPoze, editabil, inCurs, modificat, schimba, nrInp } = p
-  // motivul verdictului contrar e un câmp DISTINCT (p.motivVerdict), scris explicit de om; intră în observații la „Termină etapa 2”
-  const f2 = cuMotivVerdict(cuOraImplicita(form, 'ora_final', p.acum()), p.motivVerdict)
+  // ce lipsește se judecă pe EXACT formularul pe care l-ar trimite „Termină etapa 2” (ora „acum”, concluzia din verdict, timpul, motivul
+  // verdictului contrar = câmpul DISTINCT p.motivVerdict, scris explicit de om) — o singură definiție (L19)
+  const f2 = formularTerminaEtapa2(form, p.acum(), p.motivVerdict)
   const { date, erori } = payloadDinFormular(f2)
   const r2 = { ...rand, ...date }
   const v = verdictPropus(r2)
@@ -404,8 +409,9 @@ function EcranRezumat({ p }) {
         <Camp eticheta="Justificarea lipsei (obligatorie dacă generezi fără ele)"><textarea style={{ ...ST.in, minHeight: 60 }} disabled={!editabil} value={form.poze_justificare} maxLength={1000} onChange={e => schimba({ poze_justificare: e.target.value })} /></Camp>
       </>}
       {editabil && modificat && <button style={{ ...ST.mare, marginTop: 12 }} disabled={inCurs || !!p.conflict || p.nelamuriteTinta.length > 0} onClick={p.salveaza}>💾 Salvează detaliile</button>}
-      <label style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 14, fontSize: 15, minHeight: 48 }}>
-        <input type="checkbox" checked={p.confirmat} disabled={!editabil} onChange={e => p.setConfirmat(e.target.checked)} style={{ width: 26, height: 26 }} />
+      {/* bifa nu se lasă strivită de text (proba: 14 × 26 px): ținta de atingere, fără flexShrink */}
+      <label style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 14, fontSize: 15, minHeight: 48, cursor: 'pointer' }}>
+        <input type="checkbox" checked={p.confirmat} disabled={!editabil} onChange={e => p.setConfirmat(e.target.checked)} style={{ width: TINTA_ATINGERE, height: TINTA_ATINGERE, flexShrink: 0, margin: 0 }} />
         Am verificat detaliile de mai sus (constructorul, utilajele, notificarea, semnatarii)
       </label>
     </div>}
