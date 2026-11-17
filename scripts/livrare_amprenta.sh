@@ -63,6 +63,9 @@ ag_sql_familii() {
 }
 
 # ag_sql_valid <tabel> <moment> - instructiuni plpgsql: randuri valide + etichete unice (altfel FULL JOIN-ul ar fi ambiguu).
+# Text neschimbat: o trecere comuna (dublura + GLOBAL dintr-o
+# sortare) a fost incercata si RETRASA la review (r1-r2, 17.11.2026): la limite de resurse sortarea putea esua INAINTEA
+# refuzului randului invalid / al dublurii, cu alt mesaj. Ordinea refuzurilor ramane: invalid, dublura, apoi GLOBAL.
 ag_sql_valid() {
   local t="$1" mo="$2"
   cat <<SQL
@@ -81,17 +84,22 @@ ag_tag() { od -An -N8 -tx1 /dev/urandom | tr -d ' \n'; }
 
 # ag_inainte <T> <md5_aprobat|-> - fisierul 2_ag_inainte.sql (stdout).
 ag_inainte() {
-  local T="$1" A="$2" cat_sql ses_sql cmp
+  local T="$1" A="$2" cat_sql ses_sql cmp fam
   [[ "$T" =~ ^[0-9a-f]{16}$ ]] || { echo "ag_inainte: tag invalid" >&2; return 2; }
   [[ "$A" =~ ^([0-9a-f]{32}|-)$ ]] || { echo "ag_inainte: md5 aprobat invalid" >&2; return 2; }
   cat_sql="$(ag_bloc 'AG_CATALOG v2')" || return 3
   ses_sql="$(ag_bloc 'AG_SESIUNE v2')" || return 3
+  # md5-ul pe familii (diagnostic, doar in mesaj): calculat doar unde se tipareste (citirea "-" / refuzul), acelasi text
+  fam="  SELECT string_agg(f.familie || '=' || f.md5 || '/' || f.randuri, ', ' ORDER BY f.familie COLLATE \"C\") INTO v_f
+    FROM ($(ag_sql_familii "pg_temp.ag_ina_$T")) f;"
   if [ "$A" = - ]; then
-    cmp="  RAISE NOTICE 'AMPRENTA_GLOBALA_CITITA inainte: % (% randuri), calcul % ms, la % ms de la BEGIN; familii: %', v_g, v_n,
+    cmp="$fam
+  RAISE NOTICE 'AMPRENTA_GLOBALA_CITITA inainte: % (% randuri), calcul % ms, la % ms de la BEGIN; familii: %', v_g, v_n,
     round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), round(extract(epoch FROM clock_timestamp() - transaction_timestamp()) * 1000), v_f;
   RAISE NOTICE 'AMPRENTA_GLOBALA_CONTEXT server_version_num % rol %', current_setting('server_version_num'), current_user;"
   else
     cmp="  IF v_g IS DISTINCT FROM '$A' THEN
+$fam
     RAISE EXCEPTION 'AMPRENTA_GLOBALA_INAINTE: GLOBAL % (% randuri) diferit de cel aprobat $A - catalogul nu mai e cel citit si revizuit (recitire baseline); familii acum: % - refuz inaintea artefactului, nimic comis', coalesce(v_g, 'NULL'), v_n, v_f;
   END IF;
   RAISE NOTICE 'AMPRENTA_GLOBALA inainte: % = aprobat (% randuri), calcul % ms, la % ms de la BEGIN', v_g, v_n,
@@ -112,8 +120,6 @@ BEGIN
     UNION ALL SELECT c.familie, c.eticheta, c.amprenta, c.detaliu FROM pg_temp.ag_cat_$T() c;
 $(ag_sql_valid "pg_temp.ag_ina_$T" inainte)
   SELECT g.global_md5, g.randuri INTO v_g, v_n FROM ($(ag_sql_global "pg_temp.ag_ina_$T")) g;
-  SELECT string_agg(f.familie || '=' || f.md5 || '/' || f.randuri, ', ' ORDER BY f.familie COLLATE "C") INTO v_f
-    FROM ($(ag_sql_familii "pg_temp.ag_ina_$T")) f;
 $cmp
 END \$ag_inainte_$T\$;
 DO \$ag_pas_$T\$ BEGIN PERFORM pg_temp.ag_inainte_$T(); END \$ag_pas_$T\$;

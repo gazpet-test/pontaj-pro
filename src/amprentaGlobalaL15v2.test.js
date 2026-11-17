@@ -54,11 +54,46 @@ describe('AMPRENTA_GLOBALA v2 — blocul unic (L19)', () => {
   it('grantorul: fiecare aclexplode( are serializarea cu grantor; nicio serializare ACL fara el (P1)', () => {
     const acl = (CAT.match(/aclexplode\(/g) || []).length
     const cuGrantor = (CAT.match(/jsonb_build_array\(CASE WHEN (\w)\.grantee = 0 THEN NULL ELSE \1\.grantee::regrole::text END, \1\.privilege_type, \1\.is_grantable, \1\.grantor::regrole::text\)/g) || []).length
-    // r3: 18 (cele 2 ale familiei sumare sistem_adaugat au iesit; obiectele create in schemele de sistem au ACL-ul in familiile lor)
-    expect(acl).toBeGreaterThanOrEqual(18)
+    // r3: 18 (cele 2 ale familiei sumare sistem_adaugat au iesit; obiectele create in schemele de sistem au ACL-ul in familiile lor).
+    // 17.11.2026 (calcul o data pe valoare): relatie, functie, tip si acl_sistem relatie folosesc O serializare, in ag_acl => 15
+    expect(acl).toBe(15)
     expect(cuGrantor).toBe(acl)
     expect(/is_grantable\)/.test(CAT)).toBe(false)
     expect((CAT.match(/privilege_type/g) || []).length).toBe(acl)
+  })
+  it('17.11.2026: ACL-ul o data pe valoare distincta (ag_acl) - intrarea fiecarui obiect definita O DATA, cheia = aclitem[] (nu text)', () => {
+    const COD = CAT.replace(/--.*$/gm, '')
+    const acl = CAT.slice(CAT.indexOf('ag_acl AS MATERIALIZED ('), CAT.indexOf('ag_enum AS ('))
+    expect(acl).toContain('FROM aclexplode(k.acl) a) z) AS j')
+    expect(acl).toContain('FROM (SELECT x.acl FROM ag_acl_rel x UNION SELECT x.acl FROM ag_acl_fn x UNION SELECT x.acl FROM ag_acl_typ x')
+    expect(acl).toContain('UNION SELECT x.acl FROM ag_acl_sis x) k')
+    // intrarea ACL a fiecarui tip de obiect: exact o data in tot blocul (in CTE-ul ei), cu aceeasi forma ca inainte
+    for (const [cte, intrare] of [
+      ['ag_acl_rel', `coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's' ELSE 'r' END::"char", c.relowner))`],
+      ['ag_acl_fn', "coalesce(p.proacl, acldefault('f', p.proowner))"], ['ag_acl_typ', "coalesce(t.typacl, acldefault('T', t.typowner))"]]) {
+      const k = COD.indexOf(`${cte} AS (`), u = COD.indexOf(intrare)
+      expect(COD.split(intrare).length, cte).toBe(2)
+      expect(k >= 0 && u > k && u - k < 120, cte).toBe(true)
+    }
+    expect(COD).toContain('ag_acl_sis AS (SELECT c.oid, c.relacl AS acl FROM ag_rel_sis r JOIN pg_class c ON c.oid = r.oid WHERE c.relacl IS NOT NULL)')
+    // fiecare familie isi ia serializarea prin cheia obiectului ei (JOIN pe oid + LEFT JOIN pe valoarea aclitem[]); fara ::text pe cheie
+    for (const [fam, et, cte] of [['relatie', 'relatie', 'ag_acl_rel'], ['functie', 'functie', 'ag_acl_fn'], ['tip', 'tip', 'ag_acl_typ'],
+      ['acl_sistem', 'acl_sistem relatie', 'ag_acl_sis']]) {
+      const r = ramura(fam, et)
+      expect(r, et).toContain(`JOIN ${cte} ar ON ar.oid = `)
+      expect(r, et).toContain('LEFT JOIN ag_acl ka ON ka.acl = ar.acl')
+      expect(r, et).toContain('ka.j')
+      expect(/aclexplode\(/.test(r), et).toBe(false)
+    }
+    expect((COD.match(/LEFT JOIN ag_acl ka ON ka\.acl = ar\.acl/g) || []).length).toBe(4)
+    expect(/ka\.acl\s*=\s*[^\n]*::text|acl::text/.test(COD)).toBe(false)
+    // tablourile de obicei nule: subinterogarea doar pe tabloul nenul; enum o data pe tip; detaliul serializat o data
+    for (const c of ['CASE WHEN a.attacl IS NOT NULL THEN (SELECT jsonb_agg', 'CASE WHEN a.attfdwoptions IS NOT NULL THEN (SELECT md5(',
+      'CASE WHEN c.reloptions IS NOT NULL THEN (SELECT jsonb_agg', 'CASE WHEN p.protrftypes IS NOT NULL THEN (SELECT jsonb_agg']) expect(COD, c).toContain(c)
+    expect(COD).toContain('ag_enum AS (SELECT e.enumtypid, jsonb_agg(e.enumlabel::text ORDER BY e.enumsortorder) AS j FROM pg_enum e GROUP BY e.enumtypid)')
+    expect(ramura('tip')).toContain('LEFT JOIN ag_enum en ON en.enumtypid = t.oid')
+    expect(CAT.trimEnd().endsWith('SELECT q.familie, q.eticheta, md5(q.detaliu) AS amprenta, q.detaliu\n  FROM (SELECT r.familie, r.eticheta, r.d::text AS detaliu FROM ag_rand r CROSS JOIN ag_garda g WHERE g.ok = 1 OFFSET 0) q')).toBe(true)
+    expect((COD.match(/\bd::text\b/g) || []).length).toBe(1)
   })
   it('garda contextului canonic verifica toate GUC-urile puse de runner si de citire', () => {
     for (const g of ['search_path', 'TimeZone', 'DateStyle', 'IntervalStyle', 'extra_float_digits', 'bytea_output',
@@ -136,7 +171,11 @@ describe('AMPRENTA_GLOBALA v2 — blocul unic (L19)', () => {
   it('r4: plasa sistem_initdb = functii (+ agregate) si relatii de la initdb, independenta de build; blocul AG_PLASA e inceputul catalogului', () => {
     const PL = sectiune(BLOC, 'AG_PLASA v2')
     expect(PL).not.toBeNull()
-    expect(CAT.startsWith(`-- >>> AG_PLASA v2\n${PL}\n-- <<< AG_PLASA v2\n, ag_rand(familie, eticheta, d) AS (`)).toBe(true)
+    // 17.11.2026: intre AG_PLASA si ag_rand stau doar CTE-urile de calcul (ag_acl_*, ag_acl, ag_enum), fara randuri proprii
+    expect(CAT.startsWith(`-- >>> AG_PLASA v2\n${PL}\n-- <<< AG_PLASA v2\n`)).toBe(true)
+    const intre = CAT.slice(`-- >>> AG_PLASA v2\n${PL}\n-- <<< AG_PLASA v2\n`.length, CAT.indexOf(', ag_rand(familie, eticheta, d) AS ('))
+    expect([...intre.replace(/--.*$/gm, '').matchAll(/(?:^|,\s*|\n)(ag_[a-z_]+) AS (?:MATERIALIZED )?\(/g)].map(m => m[1]))
+      .toEqual(['ag_acl_rel', 'ag_acl_fn', 'ag_acl_typ', 'ag_acl_sis', 'ag_acl', 'ag_enum'])
     const pl = PL.slice(PL.indexOf('ag_plasa(plasa, identitate, campuri) AS ('))
     expect(pl.length > 0 && PL.trimEnd().endsWith(')')).toBe(true)
     for (const c of ['ROW(s.q, p.proname, p.proargtypes', 'p.prokind', 'p.prolang', 'p.proowner', 'p.prosecdef', 'p.proisstrict', 'p.provolatile',
@@ -327,6 +366,25 @@ describe('runnerul — runda 15', () => {
       c = RUN.indexOf('POZ_COPIE="$(lm_octeti "$DIR/m_rest.sql")"')
     expect(a > 0 && b > a && c > b).toBe(true)
     expect(RUN).toContain('{ cat "$COPIE"; lm_sep; cat "$DIR/3_inreg.sql"; [ -z "$AG_MD5" ] || cat "$DIR/4_ag_dupa.sql"; lm_timp "$NUME"; lm_fin')
+  })
+  it('17.11.2026: validarile runnerului NESCHIMBATE (trecerea comuna retrasa la review r1-r2); md5-ul pe familii doar unde se tipareste', () => {
+    const V = LIB.slice(LIB.indexOf('ag_sql_valid() {'), LIB.indexOf('# ag_tag'))
+    // textul de dinainte, in ordinea de dinainte: invalid (EXISTS), dublura (GROUP BY), apoi GLOBAL la apelant; fara sortare comuna
+    const VECHI = [`  IF EXISTS (SELECT 1 FROM $t a WHERE a.familie IS NULL OR a.eticheta IS NULL OR a.amprenta IS NULL
+               OR a.familie !~ '^[a-z_]+\\$' OR a.amprenta !~ '^[0-9a-f]{32}\\$') THEN
+    RAISE EXCEPTION 'AMPRENTA_GLOBALA_INVALIDA ($mo): rand fara familie / eticheta / amprenta valida - refuz, nimic comis'; END IF;
+  SELECT string_agg(z.k, '; ' ORDER BY z.k COLLATE "C") INTO v_f FROM (
+    SELECT a.familie || ' / ' || a.eticheta AS k FROM $t a GROUP BY a.familie, a.eticheta HAVING count(*) > 1) z;
+  IF v_f IS NOT NULL THEN
+    RAISE EXCEPTION 'AMPRENTA_GLOBALA_DUBLURA ($mo): etichete duble (%) - refuz, nimic comis', v_f; END IF;
+SQL`]
+    for (const s of VECHI) expect(V, 'textul validarilor').toContain(s)
+    expect(/WINDOW|lag\(|ag_expr_global|v_dub|v_inv/.test(LIB.replace(/^#.*$/gm, ''))).toBe(false)
+    for (const m of ['ina', 'dup']) expect(LIB).toContain(`$(ag_sql_valid "pg_temp.ag_${m}_$T" ${m === 'ina' ? 'inainte' : 'dupa'})\n  SELECT g.global_md5, g.randuri INTO v_g, v_n FROM ($(ag_sql_global "pg_temp.ag_${m}_$T")) g;`)
+    // md5-ul pe familii (doar text de diagnostic): in citirea "-" si pe refuzul „inainte”, NU pe drumul aprobat care trece
+    expect((LIB.match(/\$fam\b/g) || []).length).toBe(2)
+    expect(LIB.indexOf('$fam\n    RAISE EXCEPTION \'AMPRENTA_GLOBALA_INAINTE')).toBeGreaterThan(LIB.indexOf("IF v_g IS DISTINCT FROM '$A' THEN"))
+    expect(LIB).toContain('cmp="$fam\n  RAISE NOTICE \'AMPRENTA_GLOBALA_CITITA inainte:')
   })
   it('optiunile doar impreuna; manifestul cu numele migrarii; PGTZ / PGDATESTYLE refuzate', () => {
     expect(RUN).toContain('[ -n "$AG_MD5" ] && [ -n "$AG_MAN" ] || refuz 2')
