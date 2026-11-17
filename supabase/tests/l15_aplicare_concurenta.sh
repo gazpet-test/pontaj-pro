@@ -24,7 +24,21 @@
 #       IDENTIC; „lock la …” cu k >= 2 incercari si Y < 1000 ms de la prima incercare.
 #   B1  (uscare) storage.buckets tinut SHARE 6 s (incompatibil cu ROW EXCLUSIVE al INSERT-ului din corp): cod 1, „lock timeout” (lock_timeout
 #       = 100 ms al migrarii), NU BUGET_LOCK (setul explicit a fost obtinut), proba terminata inainte ca H sa elibereze, nimic comis.
+#   B2  (uscare, runda 18) coliziunea de UNICITATE pe bucket: H are un INSERT INTO storage.buckets NECOMIS cu acelasi id ('executie-uscare'),
+#       fara LOCK pe relatie (H tine pe storage.buckets doar ROW EXCLUSIVE, compatibil cu INSERT-ul migrarii; verificat la bariera) => INSERT-ul migrarii asteapta
+#       tranzactia lui H la verificarea cheii unice: cod 1, „lock timeout” (100 ms), NU BUGET_LOCK, fara asteptare pana la ROLLBACK-ul lui H,
+#       nimic comis. Distinct de B1 (acolo asteptarea e pe RELATIE; aici pe TRANZACTIA concurenta). H scrie ca postgres, cu coloanele din
+#       INSERT-ul migrarii, si face ROLLBACK.
 #   Dupa fiecare scenariu: migrarea tot neaplicata (tabel / bucket / politici absente), H iesit cu 0, niciun backend al probei ramas.
+# LIMITA OBSERVATORULUI (L1): esantionarea la ~30 ms (80 de esantioane) e o DOVADA, nu o demonstratie: un lock partial tinut mai putin decat
+#   intervalul dintre doua esantioane poate scapa; pragul „cel mult 2 esantioane cu lock partial” arata ca lock-urile partiale nu raman tinute
+#   intre incercari, nu ca nu exista niciodata. Absenta lor rezulta din constructie (subtranzactia fiecarei incercari, anulata la esec).
+# MESAJELE BUGET_LOCK (runda 18): formele asteptate sunt cele din migrarea aleasa (uscare: „BUGET_LOCK: N incercari, …”, meteo:
+#   „BUGET_LOCK: sites ocupat; N incercari, …”, plus forma „… abia la X ms …”); scriptul verifica la pornire ca ambele sunt in fisierul
+#   migrarii (altfel refuz 2: proba nu ar mai recunoaste refuzul corect).
+# CURATENIA (runda 18): la orice iesire (eroare la bariera, set -e, semnal) trap-ul opreste procesele pornite de script (H, observatorul),
+#   inchide pe tinta backend-urile lor si ale probei (pg_terminate_backend pe application_name) si le asteapta (wait); codul de iesire se
+#   pastreaza (L25).
 # Iesire: 0 = toate OK; 1 = un scenariu a picat; 2 = argumente; 22 = alta tinta; 23 = migrarea pare aplicata.
 set -euo pipefail
 PSQL="${PSQL:-psql}"
@@ -44,9 +58,18 @@ done
 case "$TIP" in
   uscare) NUME=20261225a_executie_uscare; VERS=20261225120000; REL=storage.objects; HMOD='ACCESS SHARE'; HLOCK=AccessShareLock
           ABSENT="to_regclass('public.executie_uscari') IS NULL AND NOT EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'executie-uscare')
-                  AND NOT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname LIKE 'executie\\_uscare\\_%')" ;;
+                  AND NOT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname LIKE 'executie\\_uscare\\_%')"
+          # mesajele BUGET_LOCK ale migrarii (textul exact din RAISE, verificat mai jos in fisier) si regex-urile de extragere (ms de la prima incercare)
+          BL_FMT_A='BUGET_LOCK: % incercari, % ms de la prima incercare'
+          BL_FMT_B='BUGET_LOCK: lock-urile obtinute abia la % ms de la prima incercare (% incercari;'
+          BL_RX_A='BUGET_LOCK: ([0-9]+) incercari, ([0-9]+) ms de la prima incercare'
+          BL_RX_B='BUGET_LOCK: lock-urile obtinute abia la ([0-9]+) ms de la prima incercare \(([0-9]+) incercari;' ;;
   meteo)  NUME=20261221a_meteo_xweather_zilnic; VERS=20261221120000; REL=public.sites; HMOD='ROW EXCLUSIVE'; HLOCK=RowExclusiveLock
-          ABSENT="to_regclass('public.meteo_zilnic_xweather') IS NULL" ;;
+          ABSENT="to_regclass('public.meteo_zilnic_xweather') IS NULL"
+          BL_FMT_A='BUGET_LOCK: sites ocupat; % incercari, % ms de la prima incercare'
+          BL_FMT_B='BUGET_LOCK: lock-ul pe sites obtinut abia la % ms de la prima incercare (% incercari;'
+          BL_RX_A='BUGET_LOCK: sites ocupat; ([0-9]+) incercari, ([0-9]+) ms de la prima incercare'
+          BL_RX_B='BUGET_LOCK: lock-ul pe sites obtinut abia la ([0-9]+) ms de la prima incercare \(([0-9]+) incercari;' ;;
   *) echo "--migrare uscare|meteo" >&2; exit 2 ;;
 esac
 [[ "$SISTEM" =~ ^[0-9]+$ ]] && [ -n "$H" ] && [[ "$P" =~ ^[0-9]+$ ]] && [ -n "$U" ] && [ -n "$D" ] && [ -f "$MAN" ] && [[ "$AG" =~ ^[0-9a-f]{32}$ ]] \
@@ -55,16 +78,41 @@ esac
 MAN="$(cd "$(dirname "$MAN")" && pwd)/$(basename "$MAN")"
 cd "$(dirname "$0")/../.."
 MIG="supabase/migrations/$NUME.sql"
-TMP="$(mktemp -d ./.l15_aplicare_concurenta.XXXXXX)"
-trap 'rm -rf "$TMP"' EXIT
+# runda 18: mesajele BUGET_LOCK pe care le recunoaste proba = textul din RAISE-urile migrarii (altfel L1 ar pica si la refuzul corect)
+for f in "$BL_FMT_A" "$BL_FMT_B"; do
+  [ "$(grep -cF "'${NUME:0:9}: $f" "$MIG")" = 1 ] || { echo "REFUZ: mesajul „${NUME:0:9}: $f” nu apare exact o data in $MIG - actualizati proba" >&2; exit 2; }
+done
 CONN=(-h "$H" -p "$P" -U "$U" -d "$D")
+APP=proba_l15_conc; APP_H=tine_l15_conc; APP_O=obs_l15_conc
+PIDS=(); TINTA_OK=0
+TMP="$(mktemp -d ./.l15_aplicare_concurenta.XXXXXX)"
+# runda 18 (P2-2): la ORICE iesire - procesele pornite de script (H, observatorul) oprite si asteptate, backend-urile lor si ale probei
+# inchise pe tinta (doar dupa ce tinta a fost verificata: system_identifier), fara tranzactii lasate deschise; codul de iesire pastrat.
+curatenie() {
+  local rc=$? p
+  trap - EXIT INT TERM
+  for p in "${PIDS[@]+"${PIDS[@]}"}"; do kill "$p" 2>/dev/null || true; done
+  if [ "$TINTA_OK" = 1 ]; then
+    "$PSQL" -X -q -At "${CONN[@]}" -c "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity
+        WHERE application_name IN ('$APP_H', '$APP_O', '$APP') AND pid <> pg_backend_pid()" >/dev/null 2>&1 \
+      || echo "AVERTISMENT curatenie: backend-urile $APP_H / $APP_O / $APP nu au putut fi inchise pe tinta - verificati pg_stat_activity" >&2
+  fi
+  for p in "${PIDS[@]+"${PIDS[@]}"}"; do wait "$p" 2>/dev/null || true; done
+  rm -rf "$TMP"
+  exit "$rc"
+}
+trap curatenie EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# un proces asteptat iese din lista (fara kill pe un PID refolosit)
+gata_pid() { local p r=(); for p in "${PIDS[@]+"${PIDS[@]}"}"; do [ "$p" = "$1" ] || r+=("$p"); done; PIDS=("${r[@]+"${r[@]}"}"); }
 q() { "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -c "$1"; }
 REAL="$(q "SELECT system_identifier FROM pg_control_system()")"
 [ "$REAL" = "$SISTEM" ] || { echo "REFUZ: system_identifier al bazei ($REAL) <> --sistem ($SISTEM)" >&2; exit 22; }
+TINTA_OK=1
 [ "$(q "SELECT $ABSENT")" = t ] || { echo "REFUZ: $NUME pare aplicata - proba cere migrarea NEAPLICATA" >&2; exit 23; }
 ESEC=0
 verdict() { if [ "$1" = 0 ]; then echo "OK   $2"; else echo "FAIL $2"; ESEC=1; fi; }
-APP=proba_l15_conc
 ms() { date +%s%3N; }
 # proba cu ROLLBACK (forma livrarii L15 v2, plafonul AG_PLAFON_MS); $1 = jurnal; seteaza RC_P si MS_P (durata, ms)
 proba() {
@@ -78,21 +126,23 @@ proba() {
 curat() { [ "$(q "SELECT ($ABSENT) AND NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = '$APP')")" = t ]; }
 # sesiunea H: $1 relatia, $2 modul SQL, $3 corpul de dupa LOCK (asteptarea), in fundal; bariera: lock-ul lui H acordat ($4 = modul din pg_locks)
 tine() {
-  printf '%s\n' "\\set ON_ERROR_STOP 1" "BEGIN;" "SET LOCAL application_name = 'tine_l15_conc';" "LOCK TABLE $1 IN $2 MODE;" "$3" "ROLLBACK;" >"$TMP/tine.sql"
+  printf '%s\n' "\\set ON_ERROR_STOP 1" "BEGIN;" "SET LOCAL application_name = '$APP_H';" "LOCK TABLE $1 IN $2 MODE;" "$3" "ROLLBACK;" >"$TMP/tine.sql"
   "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -f "$TMP/tine.sql" >"$TMP/tine.log" 2>&1 &
-  PID_H=$!
+  PID_H=$!; PIDS+=("$PID_H")
   q "DO \$b\$ DECLARE i int := 0; BEGIN
        LOOP
          PERFORM pg_stat_clear_snapshot();
-         EXIT WHEN EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = 'tine_l15_conc'
+         EXIT WHEN EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = '$APP_H'
                              AND l.relation = '$1'::regclass AND l.mode = '$4' AND l.granted);
          PERFORM pg_sleep(0.02); i := i + 1;
          IF i > 500 THEN RAISE EXCEPTION 'bariera: lock-ul lui H pe $1 nu a aparut'; END IF;
        END LOOP; END \$b\$;" >/dev/null
 }
-h_activ() { [ "$(q "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'tine_l15_conc')")" = t ]; }
+h_activ() { [ "$(q "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = '$APP_H')")" = t ]; }
 # RC_H = codul de iesire al lui H (wait; fara iesire din script la set -e)
-astept_h() { RC_H=0; wait "$PID_H" || RC_H=$?; [ "$RC_H" = 0 ] || cat "$TMP/tine.log"; }
+astept_h() { RC_H=0; wait "$PID_H" || RC_H=$?; gata_pid "$PID_H"; [ "$RC_H" = 0 ] || cat "$TMP/tine.log"; }
+# extragerea timpului din refuzul BUGET_LOCK al migrarii alese (ambele forme ale mesajului ei): ms de la prima incercare
+bl_ms() { sed -nE -e "s/.*${BL_RX_A}.*/\\2/p" -e "s/.*${BL_RX_B}.*/\\1/p" "$1" | head -n 1; }
 # verifica <eticheta> <conditie...>: conditia rulata ca o comanda (fara efectul set -e), apoi verdictul
 verifica() { local et="$1"; shift; if "$@"; then verdict 0 "$et"; else verdict 1 "$et"; fi; }
 lock_linie() { grep -E "^$(echo "$NUME" | cut -c1-9): lock la [0-9]+ ms de la BEGIN \([0-9]+ incercari, [0-9]+ ms de la prima incercare\)" "$1" | head -n 1; }
@@ -100,9 +150,10 @@ lock_linie() { grep -E "^$(echo "$NUME" | cut -c1-9): lock la [0-9]+ ms de la BE
 # ── I: inventarul lock-urilor implicite (doar citire) ──
 echo "--- inventar: triggere / constrangeri / politici pe relatiile atinse implicit de corp ---"
 for r in $([ "$TIP" = uscare ] && echo storage.buckets storage.objects || echo public.sites); do
-  q "SELECT '$r trigger ' || tgname || ' ' || pg_get_triggerdef(oid) || ' enabled=' || tgenabled FROM pg_trigger WHERE tgrelid = '$r'::regclass AND NOT tgisinternal ORDER BY tgname"
-  q "SELECT '$r constrangere ' || conname || ' ' || contype || ' ' || pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = '$r'::regclass ORDER BY conname"
-  q "SELECT '$r politica ' || polname || ' ' || polcmd FROM pg_policy WHERE polrelid = '$r'::regclass ORDER BY polname"
+  # runda 18 (P2-1): "char" convertit explicit la text (text || "char" = „operator is not unique” pe PostgreSQL real)
+  q "SELECT '$r trigger ' || tgname || ' ' || pg_get_triggerdef(oid) || ' enabled=' || tgenabled::text FROM pg_trigger WHERE tgrelid = '$r'::regclass AND NOT tgisinternal ORDER BY tgname"
+  q "SELECT '$r constrangere ' || conname || ' ' || contype::text || ' ' || pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = '$r'::regclass ORDER BY conname"
+  q "SELECT '$r politica ' || polname || ' ' || polcmd::text FROM pg_policy WHERE polrelid = '$r'::regclass ORDER BY polname"
 done
 
 # ── L0: control fara concurenta ──
@@ -120,7 +171,7 @@ verifica "L0 control: cod $RC_P, IDENTIC, $L0; pasul inainte terminat la ${INA:-
 tine "$REL" "$HMOD" 'SELECT pg_sleep(6);' "$HLOCK"
 OBS_PID=""
 if [ "$TIP" = uscare ]; then
-  "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -c "SET default_transaction_read_only = on" -c "DO \$o\$
+  PGAPPNAME="$APP_O" "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -c "SET default_transaction_read_only = on" -c "DO \$o\$
     DECLARE v_partial int := 0; v_activ int := 0; BEGIN
       FOR i IN 1..80 LOOP
         PERFORM pg_stat_clear_snapshot();
@@ -132,15 +183,16 @@ if [ "$TIP" = uscare ]; then
         PERFORM pg_sleep(0.03);
       END LOOP;
       RAISE NOTICE 'OBS partial=% activ=%', v_partial, v_activ; END \$o\$" >"$TMP/obs.log" 2>&1 &
-  OBS_PID=$!
+  OBS_PID=$!; PIDS+=("$OBS_PID")
 fi
 proba "$TMP/l1.log"
 H_INCA=1; h_activ || H_INCA=0
-X1="$(sed -nE 's/.*BUGET_LOCK: ([0-9]+) incercari, ([0-9]+) ms de la prima incercare.*/\2/p' "$TMP/l1.log" | head -n 1)"
+X1="$(bl_ms "$TMP/l1.log")"   # runda 18 (P2-2): mesajul real al migrarii alese (meteo: „BUGET_LOCK: sites ocupat; …”)
 astept_h
 OK_OBS=0 PART=""
 if [ -n "$OBS_PID" ]; then
   wait "$OBS_PID" || OK_OBS=1
+  gata_pid "$OBS_PID"
   PART="$(sed -nE 's/.*OBS partial=([0-9]+) activ=([0-9]+).*/\1 \2/p' "$TMP/obs.log")"
   if ! { [ -n "$PART" ] && [ "${PART% *}" -le 2 ] && [ "${PART#* }" -ge 10 ]; }; then OK_OBS=1; fi
 fi
@@ -178,6 +230,41 @@ if [ "$TIP" = uscare ]; then
              && [ "$RC_H" = 0 ] && curat; }
   verifica "B1 storage.buckets tinut SHARE: cod $RC_P, lock timeout la lock-ul implicit (nu BUGET_LOCK), H inca activ la final ($H_INCA), $MS_P ms" c_b1
   [ "$ESEC" = 0 ] || cat "$TMP/b1.log"
+fi
+
+# ── B2 (uscare, runda 18): coliziunea de UNICITATE - INSERT necomis al lui H cu acelasi id, fara LOCK pe relatie => lock timeout ──
+if [ "$TIP" = uscare ]; then
+  # coloanele si valorile = INSERT-ul migrarii (verificat in fisier: aceeasi lista de coloane)
+  COL_B='INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)'
+  VAL_B="VALUES ('executie-uscare', 'executie-uscare', false, 10485760, ARRAY['image/jpeg']);"
+  [ "$(grep -cF "$COL_B" "$MIG")" = 1 ] && [ "$(grep -cF "$VAL_B" "$MIG")" = 1 ] \
+    || { echo "B2: INSERT-ul bucket-ului nu mai are forma asteptata in $MIG - actualizati proba" >&2; exit 2; }
+  printf '%s\n' "\\set ON_ERROR_STOP 1" "BEGIN;" "SET LOCAL application_name = '$APP_H';" \
+    "$COL_B $VAL_B" "SELECT pg_sleep(6);" "ROLLBACK;" >"$TMP/tine.sql"
+  "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -f "$TMP/tine.sql" >"$TMP/tine.log" 2>&1 &
+  PID_H=$!; PIDS+=("$PID_H")
+  # bariera: H a terminat INSERT-ul (doarme in pg_sleep) si nu tine pe storage.buckets niciun lock incompatibil cu ROW EXCLUSIVE (deci
+  # nimic pe relatie nu opreste INSERT-ul migrarii: asteptarea, daca apare, e pe tranzactia lui H = verificarea cheii unice)
+  q "DO \$b\$ DECLARE i int := 0; BEGIN
+       LOOP
+         PERFORM pg_stat_clear_snapshot();
+         EXIT WHEN EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = '$APP_H' AND wait_event = 'PgSleep');
+         PERFORM pg_sleep(0.02); i := i + 1;
+         IF i > 500 THEN RAISE EXCEPTION 'bariera B2: H nu a ajuns la pg_sleep dupa INSERT'; END IF;
+       END LOOP;
+       IF EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = '$APP_H'
+                    AND l.relation = 'storage.buckets'::regclass
+                    AND l.mode IN ('ShareLock', 'ShareRowExclusiveLock', 'ExclusiveLock', 'AccessExclusiveLock')) THEN
+         RAISE EXCEPTION 'bariera B2: H tine pe storage.buckets un lock incompatibil cu ROW EXCLUSIVE (scenariul nu mai e distinct de B1)';
+       END IF; END \$b\$;" >/dev/null
+  proba "$TMP/b2.log"
+  H_INCA=1; h_activ || H_INCA=0
+  astept_h
+  c_b2() { [ "$RC_P" = 1 ] && grep -qi 'lock timeout' "$TMP/b2.log" && ! grep -q 'BUGET_LOCK' "$TMP/b2.log" && [ "$H_INCA" = 1 ] \
+             && [ "$RC_H" = 0 ] && curat; }
+  CTX_B2="$(grep -i -m 1 'uniqueness\|unicit' "$TMP/b2.log" || true)"
+  verifica "B2 INSERT necomis al lui H cu acelasi id de bucket: cod $RC_P, lock timeout la verificarea unicitatii (nu BUGET_LOCK), H inca activ la final ($H_INCA), $MS_P ms; context: ${CTX_B2:-n/a}" c_b2
+  [ "$ESEC" = 0 ] || cat "$TMP/b2.log"
 fi
 
 if [ "$ESEC" = 0 ]; then echo "PASS l15_aplicare_concurenta $TIP"; else echo "ESEC l15_aplicare_concurenta $TIP"; fi

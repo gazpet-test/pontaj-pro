@@ -118,6 +118,25 @@ def acord_plafon():
     caz("fara nicio cerere de plafon (nimic de acordat)", "SELECT 1;\n", ("--plafon-tranzactie-ms", "5000"), 0)
     caz("regulile plafonului raman (SET LOCAL pe ceas)", "SET LOCAL transaction_timeout = 0;\n", ("--plafon-tranzactie-ms", "5000"), 1, "apare de")
     caz("forma veche fara valoare (doar teste statice) nu face acordul", garda_plafon(2000), ("--plafon-tranzactie",), 0)
+    # Runda 18 (re-review PR #1115, P1-2 cu plafon): aceeași citire în altă formă decât cea acceptată = PLAFON_FORMA și cu plafonul dat
+    caz("r18 artefactul recenzentului cu plafonul 5000", ARTEFACT_P12, ("--plafon-tranzactie-ms", "5000"), 1, "PLAFON_FORMA")
+    caz("r18 current_setting('transaction_timeout') cu plafonul 5000",
+        "DO $p$ BEGIN IF current_setting('transaction_timeout') IS DISTINCT FROM '5s' THEN RAISE EXCEPTION 'p'; END IF; END $p$;\n",
+        ("--plafon-tranzactie-ms", "5000"), 1, "PLAFON_FORMA")
+    caz("r18 SHOW transaction_timeout cu plafonul 5000", "SHOW transaction_timeout;\n", ("--plafon-tranzactie-ms", "5000"), 1, "PLAFON_FORMA")
+    caz("r18 EXECUTE 'SHOW transaction_timeout' cu plafonul 5000",
+        "DO $p$ DECLARE v text; BEGIN EXECUTE 'SHOW transaction_timeout' INTO v; END $p$;\n", ("--plafon-tranzactie-ms", "5000"), 1, "PLAFON_FORMA")
+    # P1-1 (umbrirea unui parametru): variabila declarată doar într-un bloc interior, comparația în afara lui vede PARAMETRUL funcției
+    caz("r18 parametrul cu acelasi nume, citirea intr-un bloc interior",
+        "CREATE FUNCTION public.f_p(v_plafon text) RETURNS void LANGUAGE plpgsql AS $f$\nBEGIN\n"
+        "  DECLARE v_plafon text; BEGIN SELECT setting || '/' || source INTO v_plafon " + CITIRE + "; END;\n"
+        "  IF v_plafon IS DISTINCT FROM '5000/session' THEN RAISE EXCEPTION 'p %', v_plafon; END IF;\nEND $f$;\n",
+        ("--plafon-tranzactie-ms", "5000"), 1, "PLAFON_FORMA")
+    caz("r18 CONTROL: aceeasi functie cu declaratia in blocul exterior",
+        "CREATE FUNCTION public.f_p() RETURNS void LANGUAGE plpgsql AS $f$\nDECLARE v_plafon text;\nBEGIN\n"
+        "  SELECT setting || '/' || source INTO v_plafon " + CITIRE + ";\n"
+        "  IF v_plafon IS DISTINCT FROM '5000/session' THEN RAISE EXCEPTION 'p %', v_plafon; END IF;\nEND $f$;\n",
+        ("--plafon-tranzactie-ms", "5000"), 0)
     for v in ("abc", "050", "99", "600001", "5000ms"):
         caz(f"valoare invalida {v!r}", "SELECT 1;\n", ("--plafon-tranzactie-ms", v), 2)
     # fisierele reale: fiecare migrare / revenire cu plafon declarat trece cu plafonul EI si e refuzata cu oricare altul (fara refuz fals)
@@ -149,6 +168,8 @@ USCARE = "supabase/migrations/20261225a_executie_uscare.sql"
 METEO = "supabase/migrations/20261221a_meteo_xweather_zilnic.sql"
 CMP_S = "IS DISTINCT FROM '5000/session'"
 CMP_M = "IS DISTINCT FROM '5000:' || txid_current()"
+IF_S = "  IF v_plafon " + CMP_S   # runda 18: ancora mutanților P1-1 (exact o dată în fiecare migrare)
+FAB = "5000::text || chr(47) || 'session'"   # valoarea fabricată din verdict, fără literalul '/session'
 MUTANTI_FORMA = [
     # (eticheta, [(din, in)], cod cu --plafon-tranzactie-ms 5000, fragment din mesaj)
     ("exemplul din verdict: ('2000' || '/session')", [(CMP_S, "IS DISTINCT FROM ('2000' || '/session')")], 1, "PLAFON_FORMA"),
@@ -191,7 +212,42 @@ MUTANTI_FORMA = [
     ("CONTROL: pg_catalog.current_setting / pg_catalog.txid_current", [
         ("OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || txid_current()",
          "OR pg_catalog.current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || pg_catalog.txid_current()")], 0, "OK "),
+] + [
+    # Runda 18 (re-review PR #1115, P1-1): aceeași variabilă scrisă fără tokenul ei simplu. Fiecare inserată IMEDIAT înaintea
+    # comparației (ancora IF_S), pe ambele migrări reale; valoarea fabricată fără literalul '/session' (altfel o prindea regula literalului).
+    (f"r18 {et}", [(IF_S, ins + "\n" + IF_S)] + extra, 1, "PLAFON_FORMA") for et, ins, extra in [
+        ("mutantul recenzentului: \"v_plafon\" := (identificator citat)", '  "v_plafon" := ' + FAB + ";", []),
+        ("\"V_PLAFON\" := (citat, alte majuscule; conservator)", '  "V_PLAFON" := ' + FAB + ";", []),
+        ("V_Plafon := (neciat, alte majuscule = aceeasi variabila)", "  V_Plafon := " + FAB + ";", []),
+        ("SELECT ... INTO \"v_plafon\"", "  SELECT " + FAB + ' INTO "v_plafon";', []),
+        ("EXECUTE ... INTO \"v_plafon\"", "  EXECUTE 'SELECT ' || quote_literal(" + FAB + ') INTO "v_plafon";', []),
+        ("FOR \"v_plafon\" IN SELECT ... LOOP", '  FOR "v_plafon" IN SELECT ' + FAB + " LOOP NULL; END LOOP;", []),
+        ("GET DIAGNOSTICS \"v_plafon\" = PG_CONTEXT", '  GET DIAGNOSTICS "v_plafon" = PG_CONTEXT;', []),
+        ("eticheta blocului: <<b>> ... b.v_plafon :=", "  b.v_plafon := " + FAB + ";", [("DO $pre$\n", "DO $pre$\n<<b>>\n")]),
+        ("ALIAS FOR intr-un bloc interior", "  DECLARE v_a ALIAS FOR v_plafon; BEGIN v_a := " + FAB + "; END;", []),
+        ("umbrire: bloc interior care redeclara numele", "  DECLARE v_plafon text; BEGIN NULL; END;", []),
+        ("U&\"\\0076_plafon\" := (escape Unicode in corp)", '  U&"\\0076_plafon" := ' + FAB + ";", []),
+        ("eticheta <<raise>> inaintea atribuirii (in_raise vechi)", "  <<raise>> BEGIN v_plafon := " + FAB + "; END;", []),
+        ("argument de apel (INOUT posibil)", "  PERFORM public.f_seteaza(v_plafon);", []),
+    ]
+] + [
+    # controale pozitive r18: aceeasi variabila scrisa citat, cu aceleasi litere, in comparatie si in RAISE = acceptata
+    ("CONTROL r18: comparatia cu \"v_plafon\" (citat, aceleasi litere)", [(IF_S, IF_S.replace("v_plafon", '"v_plafon"'))], 0, "OK "),
+    ("CONTROL r18: coalesce(\"v_plafon\", 'lipsa') in RAISE", [("coalesce(v_plafon, 'lipsa')", "coalesce(\"v_plafon\", 'lipsa')")], 0, "OK "),
 ]
+
+
+# Runda 18 (P1-2): artefactul din re-review, octet cu octet (cere 5000 fără „/session” și fără marcaj).
+ARTEFACT_P12 = """DO $pre$ BEGIN
+ IF current_setting('gazpet.livrare_migrare', true) IS NULL THEN
+  RAISE EXCEPTION 'livrare lipsa';
+ END IF;
+ IF (SELECT setting FROM pg_catalog.pg_settings
+     WHERE name = 'transaction_timeout') IS DISTINCT FROM '5000' THEN
+  RAISE EXCEPTION 'plafon 5000 necesar';
+ END IF;
+END $pre$;
+"""
 
 
 def forma_structurala():
@@ -246,6 +302,36 @@ def forma_structurala():
         ("doar marcajul = PLAFON_LIPSA", "DO $p$ BEGIN IF current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || "
          "txid_current() THEN RAISE EXCEPTION 'p'; END IF; END $p$;\n", 1, "PLAFON_LIPSA"),
         ("cererea doar intr-un comentariu (fail-closed) = PLAFON_LIPSA", "-- cere '5000/session'\nSELECT 1;\n", 1, "PLAFON_LIPSA"),
+        # Runda 18 (re-review PR #1115, P1-2): citirile explicite ale parametrului = cerere (refuz local), scrierile = regulile vechi
+        ("r18 artefactul recenzentului (pg_settings fara '/' || source, '5000')", ARTEFACT_P12, 1, "PLAFON_LIPSA"),
+        ("r18 pg_settings comparat cu alta valoare ('5000/client')",
+         "DO $p$ BEGIN IF (SELECT setting || '/' || source " + CITIRE + ") IS DISTINCT FROM '5000/client' THEN RAISE EXCEPTION 'p'; END IF; END $p$;\n",
+         1, "PLAFON_LIPSA"),
+        ("r18 current_setting('transaction_timeout')",
+         "DO $p$ BEGIN IF current_setting('transaction_timeout') IS DISTINCT FROM '5s' THEN RAISE EXCEPTION 'p'; END IF; END $p$;\n", 1, "PLAFON_LIPSA"),
+        ("r18 SHOW transaction_timeout la nivel superior", "SHOW transaction_timeout;\n", 1, "PLAFON_LIPSA"),
+        ("r18 EXECUTE 'SHOW transaction_timeout' INTO v",
+         "DO $p$ DECLARE v text; BEGIN EXECUTE 'SHOW transaction_timeout' INTO v; IF v IS DISTINCT FROM '5s' THEN RAISE EXCEPTION 'p'; END IF; END $p$;\n",
+         1, "PLAFON_LIPSA"),
+        ("r18 EXECUTE format('SHOW %s', 'transaction_timeout')",
+         "DO $p$ DECLARE v text; BEGIN EXECUTE format('SHOW %s', 'transaction_timeout') INTO v; END $p$;\n", 1, "PLAFON_LIPSA"),
+        ("r18 pg_settings cu numele din bucati ('transaction' || '_timeout')",
+         "DO $p$ BEGIN IF (SELECT setting FROM pg_catalog.pg_settings WHERE name = 'transaction' || '_timeout') <> '5000' THEN RAISE EXCEPTION 'p'; END IF; END $p$;\n",
+         1, "PLAFON_LIPSA"),
+        ("r18 pg_catalog.\"pg_settings\" (identificator citat)",
+         "DO $p$ BEGIN IF (SELECT setting FROM pg_catalog.\"pg_settings\" WHERE name = 'transaction_timeout') <> '5000' THEN RAISE EXCEPTION 'p'; END IF; END $p$;\n",
+         1, "PLAFON_LIPSA"),
+        ("r18 controlul de absenta citit in variabila si comparat cu '0/default' (forma acceptata)",
+         "DO $p$ DECLARE v text; BEGIN SELECT setting || '/' || source INTO v " + CITIRE + "; IF v IS DISTINCT FROM '0/default' THEN "
+         "RAISE EXCEPTION 'p %', v; END IF; END $p$;\n", 0, "OK "),
+        ("r18 controlul de absenta cu citirea si in RAISE (forma test_livrare_plafon.sh fara)",
+         "DO $p$ BEGIN IF (SELECT setting || '/' || source " + CITIRE + ") IS DISTINCT FROM '0/default' THEN RAISE EXCEPTION 'p %', "
+         "(SELECT setting || '/' || source " + CITIRE + "); END IF; END $p$;\n", 0, "OK "),
+        ("r18 scriere: set_config('transaction_timeout', '0', true) in DO (regulile vechi)",
+         "DO $d$ BEGIN PERFORM set_config('transaction_timeout', '0', true); END $d$;\n", 0, "OK "),
+        ("r18 scriere: EXECUTE 'RESET transaction_timeout' (regulile vechi)", "DO $d$ BEGIN EXECUTE 'RESET transaction_timeout'; END $d$;\n", 0, "OK "),
+        ("r18 scriere: ALTER FUNCTION ... SET transaction_timeout = 0 (regulile vechi)", "ALTER FUNCTION public.f() SET transaction_timeout = 0;\n", 0, "OK "),
+        ("r18 mentiune doar in comentariu (nu e o citire)", "-- aici nu citim transaction_timeout\nSELECT 1;\n", 0, "OK "),
     ]:
         with tempfile.TemporaryDirectory() as d:
             f = Path(d) / "a.sql"

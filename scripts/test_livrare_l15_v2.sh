@@ -33,6 +33,10 @@
 #      stins de VACUUM) => GLOBAL identic;
 #   n  (r4) --detalii-plasa pe doua citiri reale, inainte / dupa ALTER FUNCTION pg_catalog.quote_nullable(text) STRICT:
 #      citirea reproduce randurile plasei din detaliu (cod 0), iar diferenta celor doua detalii arata exact acea functie;
+#   p  (runda 18, re-review PR #1115) bugetul de lock incepe la PRIMA incercare: blocul de lock REAL al migrarii uscare (setul inlocuit
+#      cu public.sites), livrarea tinuta > 1 s la o bariera intre pasul „inainte” si blocul de lock, apoi lock liber => APLICAT (0),
+#      „lock la >1000 ms de la BEGIN (1 incercari, <100 ms de la prima incercare)”; mutantul cu ceasul de la BEGIN (v_t0 := now()) =>
+#      BUGET_LOCK „0 incercari”, NEAPLICAT (10), nimic comis;
 #   o  (r5) contraexemplul recenzentului: information_schema.sql_features partitie a unui tabel al aplicatiei, reatasata cu alta
 #      limita intre doua citiri reale (INSERT ... RETURNING: eroare -> succes) => GLOBAL difera, doar sistem_initdb, detaliul
 #      plasei arata acel tabel; lista inchisa a coloanelor pg_class / pg_proc / pg_aggregate pe catalogul PG17.
@@ -190,6 +194,48 @@ bariera fara_plafon_control fara_ddl 0
 bariera plafon_ddl cu_ddl 10 --plafon-tranzactie-ms 5000
 bariera plafon_control fara_ddl 0 --plafon-tranzactie-ms 5000
 echo 'L15_B: DDL comis de alta sesiune intre inainte si dupa (bariera) => NEDECLARAT, NEAPLICAT (10), cu si fara plafon; control fara DDL => APLICAT (0)'
+
+# p. (runda 18, re-review PR #1115) Bugetul de lock incepe la PRIMA incercare, nu la BEGIN. Blocul de lock al migrarii REALE (uscare),
+#    copiat din fisier (doar setul de lock-uri inlocuit cu public.sites, liber); o bariera (lock consultativ tinut de test) tine livrarea
+#    peste 1 s intre pasul „inainte” si blocul de lock, apoi lock liber. Mutantul cu ceasul pornit la BEGIN (v_t0 := now()) trebuie sa pice.
+BAR2=7770002
+BLOC_LOCK="$(tr -d '\r' <"$ROOT/supabase/migrations/20261225a_executie_uscare.sql" | awk '/^DO \$lock\$$/ { p = 1 } p { print } /^END \$lock\$;$/ { p = 0 }')"
+[[ "$(grep -c '^      LOCK TABLE .* NOWAIT;$' <<<"$BLOC_LOCK")" == 3 && "$(grep -c 'v_t0 timestamptz := clock_timestamp()' <<<"$BLOC_LOCK")" == 1 \
+   && "$(grep -c '^DO \$lock\$$' <<<"$BLOC_LOCK")" == 1 && "$(grep -c '^END \$lock\$;$' <<<"$BLOC_LOCK")" == 1 ]] \
+  || { printf '%s\n' "$BLOC_LOCK" | head -n 40; fail 'p: blocul de lock al migrarii uscare nu mai are forma asteptata (3 LOCK NOWAIT, v_t0 la prima incercare)'; }
+BLOC_P="$(awk '/^      LOCK TABLE / { if (!f) print "      LOCK TABLE public.sites IN SHARE ROW EXCLUSIVE MODE NOWAIT;"; f = 1; next } { print }' <<<"$BLOC_LOCK")"
+BLOC_M="${BLOC_P/v_t0 timestamptz := clock_timestamp()/v_t0 timestamptz := now()}"
+[[ "$BLOC_M" != "$BLOC_P" && "$(grep -c 'v_t0 timestamptz := now()' <<<"$BLOC_M")" == 1 ]] || fail 'p: mutantul ceasului nu s-a aplicat exact o data'
+buget() { # $1 eticheta, $2 litera, $3 blocul de lock, $4 codul asteptat => jurnalul in $TMP/p_$1.log
+  local et="$1" n="20990207${2}_l15_buget" v="2099020700000${5}" bloc="$3" exp="$4" m g man h k rc
+  m="$(migrare "$n" "SELECT pg_advisory_xact_lock($BAR2);
+$bloc
+CREATE TABLE public.t_buget_${2} (id int);")"
+  g="$(citeste "p_$et")"; man="$(manifest "$m" "$v" --plafon-tranzactie-ms 5000)"
+  "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB" -c "SELECT pg_advisory_lock($BAR2), pg_sleep(120)" >/dev/null 2>&1 &
+  h=$!; PIDS+=("$h")
+  for k in $(seq 1 100); do [[ "$(q "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = $BAR2 AND granted")" == 1 ]] && break; sleep 0.1; done
+  ( c=0; runner "$v" "$m" --plafon-tranzactie-ms 5000 --amprenta-globala "$g" --diferente-globale "$man" >"$TMP/p_$et.log" 2>&1 || c=$?; echo "$c" >"$TMP/p_$et.rc" ) &
+  PIDS+=("$!")
+  for k in $(seq 1 300); do [[ "$(q "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = $BAR2 AND NOT granted")" == 1 ]] && break; sleep 0.1; done
+  [[ "$(q "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = $BAR2 AND NOT granted")" == 1 ]] || { cat "$TMP/p_$et.log"; fail "p $et: livrarea nu a ajuns la bariera"; }
+  sleep 1.2   # livrarea sta la bariera DUPA pasul „inainte”: blocul de lock porneste la > 1 s de la BEGIN
+  qa "SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype = 'advisory' AND objid = $BAR2 AND granted" >/dev/null
+  for k in $(seq 1 600); do [ -s "$TMP/p_$et.rc" ] && break; sleep 0.1; done
+  rc="$(cat "$TMP/p_$et.rc" 2>/dev/null || echo NECUNOSCUT)"
+  [[ "$rc" == "$exp" ]] || { cat "$TMP/p_$et.log"; fail "p $et: cod $rc, asteptat $exp"; }
+  grep -q 'AMPRENTA_GLOBALA inainte: .* = aprobat' "$TMP/p_$et.log" || { cat "$TMP/p_$et.log"; fail "p $et: pasul inainte nu a trecut"; }
+}
+buget ok a "$BLOC_P" 0 1
+LP="$(grep -oE '20261225a: lock la [0-9]+ ms de la BEGIN \([0-9]+ incercari, [0-9]+ ms de la prima incercare\)' "$TMP/p_ok.log" | head -n 1 || true)"
+XP=''; KP=''; YP=''
+read -r XP KP YP < <(sed -nE 's/.*lock la ([0-9]+) ms de la BEGIN \(([0-9]+) incercari, ([0-9]+) ms de la prima incercare\).*/\1 \2 \3/p' <<<"$LP") || true
+[[ -n "$LP" && "$XP" -gt 1000 && "$KP" == 1 && "$YP" -lt 100 && "$(inregistrat 20990207a_l15_buget)" == 1 ]] \
+  || { cat "$TMP/p_ok.log"; fail "p: asteptat APLICAT cu „lock la >1000 ms de la BEGIN (1 incercari, <100 ms de la prima incercare)”, primit [$LP]"; }
+buget ceas_begin b "$BLOC_M" 10 2
+grep -q '20261225a: BUGET_LOCK: 0 incercari' "$TMP/p_ceas_begin.log" || { cat "$TMP/p_ceas_begin.log"; fail 'p: mutantul cu ceasul de la BEGIN trebuia refuzat cu BUGET_LOCK inainte de prima incercare'; }
+[[ "$(inregistrat 20990207b_l15_buget)" == 0 && "$(q "SELECT to_regclass('public.t_buget_b') IS NULL")" == t ]] || fail 'p: mutantul a comis ceva'
+echo "L15_P: pasul inainte + bariera > 1 s, apoi lock liber => APLICAT (0), $LP; mutantul cu ceasul de la BEGIN => BUGET_LOCK (0 incercari), NEAPLICAT (10)"
 
 # d. Drumul bun, cu plafon 5000 (forma „un mesaj”; runda 16: cu L15 plafonul e exact AG_PLAFON_MS, bariera b la fel).
 G1="$(citeste d0)"; MAN_D="$(manifest "$M_A" 20990202000001 --plafon-tranzactie-ms 5000)"
@@ -366,4 +412,4 @@ timp() { # $1 eticheta, $2 numele migrarii, $3 versiunea
 }
 timp rece 20990204a_l15_timp_rece 20990204000001
 timp cald 20990204b_l15_timp_cald 20990204000002
-echo 'PASS test_livrare_l15_v2: a contraexemplul vederii (inainte), b DDL concurent cu bariera (dupa, cu si fara plafon), c manifest gresit, d drumul bun, e fara optiuni, g proba --compara-cu, h --detalii, i DEFINER nesigur / acceptat, j grantorul, k recitirea reala, l triggerul / RLS pe un tabel de la initdb, m VACUUM / ANALYZE, n detaliul plasei, o limita partitiei de la initdb + lista inchisa, f timpii (mai sus)'
+echo 'PASS test_livrare_l15_v2: a contraexemplul vederii (inainte), b DDL concurent cu bariera (dupa, cu si fara plafon), p bugetul de lock de la prima incercare (inainte > 1 s; mutantul ceasului de la BEGIN pica), c manifest gresit, d drumul bun, e fara optiuni, g proba --compara-cu, h --detalii, i DEFINER nesigur / acceptat, j grantorul, k recitirea reala, l triggerul / RLS pe un tabel de la initdb, m VACUUM / ANALYZE, n detaliul plasei, o limita partitiei de la initdb + lista inchisa, f timpii (mai sus)'

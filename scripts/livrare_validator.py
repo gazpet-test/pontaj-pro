@@ -79,6 +79,24 @@
 #   P1-2: --fara-plafon (forma runnerului FĂRĂ --plafon-tranzactie-ms): un fișier care cere plafon = PLAFON_LIPSA, refuz local,
 #     înainte de conexiune (înainte refuza abia în $pre$, după pasul „înainte”). Fără nicio cerere: regulile de dinainte.
 #   Fără opțiune (testele statice): neschimbat.
+# Runda 18 (17.11.2026, re-review-ul Jakarinos pe PR #1115, NO-GO: două P1 noi):
+#   P1-1: variabila plafonului se urmărește după IDENTITATEA PostgreSQL a identificatorilor, nu după token: v_plafon, V_PLAFON,
+#     "v_plafon" (și, conservator, orice variantă cu alte majuscule) sunt aceeași variabilă. Forma acceptată devine mai strictă:
+#     variabila e declarată O SINGURĂ DATĂ, „<v> text;”, în PRIMA secțiune DECLARE a corpului (blocul exterior: o redeclarare într-un
+#     bloc interior = umbrire = refuz; un parametru de funcție cu același nume e umbrit de ea), corpul nu are U&"…" / U&'…' (escape-uri
+#     decodificate în server) și orice altă apariție a numelui — atribuire (simplă sau citată), alt INTO / EXECUTE … INTO, FOR,
+#     GET DIAGNOSTICS, ALIAS FOR, calificare cu eticheta blocului (b.v_plafon), argument de apel — = PLAFON_FORMA. „În RAISE” înseamnă
+#     acum instrucțiunea care ÎNCEPE cu RAISE (o etichetă <<raise>> sau un RAISE mai devreme în aceeași instrucțiune nu mai ajung).
+#   P1-2: --fara-plafon refuză local (PLAFON_LIPSA) și ORICE CITIRE explicită a parametrului în cod: pg_settings (orice formă, alta
+#     decât controlul de ABSENȚĂ „( SELECT setting || '/' || source FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout' )
+#     IS DISTINCT FROM '0/default'”, verificat structural ca garda), current_setting('transaction_timeout' …), SHOW transaction_timeout,
+#     un literal care numește parametrul în afara unei scrieri recunoscute (EXECUTE 'SHOW …', format(…)), numele din bucăți. Scrierile
+#     (SET [LOCAL] / RESET / ALTER … SET / CREATE FUNCTION … SET / set_config('transaction_timeout', …) / EXECUTE 'SET … = …') NU sunt
+#     cereri: fără plafon trec ca înainte (regulile vechi). Comentariile nu sunt citiri. Cu --plafon-tranzactie-ms aceleași citiri erau
+#     deja refuzate (doar citirea exactă e permisă); refuzul poartă acum eticheta PLAFON_FORMA.
+#   Limită declarată (ca SQL-ul dinamic din runda 12): numele parametrului construit în server (chr(), format cu argument dinamic,
+#   U&'…' în corpuri, current_setting(<variabilă>)) nu se vede static; o asemenea cerere fără plafon e refuzată abia de garda din SQL
+#   a migrării (în tranzacție, nimic comis), ca înainte de runda 17.
 #
 # Utilizare: python3 livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie | --plafon-tranzactie-ms <N> | --fara-plafon]
 #   <tag-interzis> = tag-ul dollar-quote al înregistrării generate de runner; nu are voie să apară în fișier.
@@ -113,6 +131,13 @@ PL_MARCAJ_ARG = "'" + PLAFON_MARCAJ
 PL_LIT_SESIUNE = re.compile(r"'([1-9][0-9]{0,5})/session")
 PL_LIT_MARCAJ = re.compile(r"'([1-9][0-9]{0,5}):")
 PL_INCEPUT = (";", "BEGIN", "THEN", "ELSE", "LOOP")  # începutul unei instrucțiuni PL/pgSQL (forma SELECT … INTO)
+# Runda 18: începutul instrucțiunii pentru „în RAISE” (și DECLARE: prima declarație a secțiunii)
+PL_INCEPUT_INSTR = PL_INCEPUT + ("DECLARE",)
+PL_LIT_ABSENTA = re.compile(r"'0/default")  # controlul legitim care cere ABSENȚA plafonului (runner fără plafon)
+# Runda 18 (P1-2): o scriere recunoscută a parametrului într-un literal (EXECUTE 'SET LOCAL transaction_timeout = 0' / 'RESET …')
+PL_SCRIERE_LIT = re.compile(r"[ \t\n\r\f\v]*(?:set(?:[ \t\n\r\f\v]+(?:local|session))?[ \t\n\r\f\v]+\"?transaction_timeout\"?"
+                            r"[ \t\n\r\f\v]*(?:=|[ \t\n\r\f\v]to[ \t\n\r\f\v])[^;]*|reset[ \t\n\r\f\v]+\"?transaction_timeout\"?)"
+                            r"[ \t\n\r\f\v]*;?[ \t\n\r\f\v]*", re.I)
 SPATIU = " \t\n\r\f\v"
 IDENT_START = re.compile(r"[A-Za-z_\u0080-\U0010FFFF]")
 TAG = re.compile(r"\$([A-Za-z_\u0080-\U0010FFFF][A-Za-z0-9_\u0080-\U0010FFFF]*)?\$")
@@ -268,6 +293,13 @@ def nume_param(tok):
     return tok.lower()
 
 
+def acelasi_ident(tok, v):
+    """Runda 18 (P1-1): tok desemnează (posibil) același identificator ca v, după regulile PostgreSQL — neciat ⇒ litere mici, citat ⇒
+    exact: v_plafon = V_PLAFON = "v_plafon". Comparația e CONSERVATOARE (casefold pe ambele: și "V_PLAFON", alt identificator în
+    PostgreSQL, se potrivește) ⇒ o potrivire în plus duce doar la refuz, niciodată la o apariție scăpată."""
+    return e_ident(tok) and e_ident(v) and nume_param(tok).casefold() == nume_param(v).casefold()
+
+
 def protejat(nume):
     """Numele GUC se compară în PostgreSQL FĂRĂ diferență de majuscule (guc_name_compare) ⇒ comparăm pe lower, pe
     numele întreg și pe ultima componentă (fail-closed pentru nume calificate)."""
@@ -356,7 +388,7 @@ def verifica_plafon(text):
     for nume in PLAFON_NUME:
         n, nc = mic.count(nume), comprimat.count(nume)
         if n != permise or nc != permise:
-            raise Refuz(f"cu plafonul tranzacției activ, „{nume}” apare de {max(n, nc)} ori, dar doar {permise} în citirea "
+            raise Refuz(f"PLAFON_FORMA: cu plafonul tranzacției activ, „{nume}” apare de {max(n, nc)} ori, dar doar {permise} în citirea "
                         f"permisă „{PLAFON_CITIRE}” — artefactul nu are voie să schimbe / reseteze / citească altfel "
                         f"ceasul tranzacției (SET, SET LOCAL, set_config, RESET, ALTER … SET, funcții cu SET)")
     m = RESET_ALL.search(mic)
@@ -381,7 +413,12 @@ def verifica_acord_plafon(text, plafon_ms):
                     f"'<D>:' || txid_current() — plafonul cerut nu se poate compara cu cel al runnerului")
     # Runda 17: textul brut de mai sus doar REFUZĂ (fail-closed, și comentariile); acceptarea cere ca FIECARE citire / comparație
     # din codul executabil să aibă forma acceptată și valoarea exactă (comentariile nu mai pot „acoperi” o comparație în altă formă).
-    for et, d, ln in verifica_structura_plafon(text):
+    try:
+        structura = verifica_structura_plafon(text)
+    except Refuz as e:
+        # runda 18: orice refuz al analizei structurale (și „corp $…$ neanalizabil”) poartă eticheta PLAFON_FORMA
+        raise Refuz(str(e) if str(e).startswith("PLAFON_") else f"PLAFON_FORMA: {e}")
+    for et, d, ln in structura:
         if d != plafon_ms:
             diferite.append(f"{d} ms ({et} în cod, linia {ln})")
     if diferite:
@@ -417,7 +454,7 @@ def fluxuri_cod(text, adanc=0):
     return rez
 
 
-def verifica_structura_plafon(text):
+def verifica_structura_plafon(text, absenta=False):
     """Runda 17 (verdictul PR #1115, P1): fiecare citire / comparație protejată a plafonului din codul EXECUTABIL are una dintre
     formele acceptate, altfel REFUZ (înainte de orice conexiune). Întoarce cererile găsite: [(eticheta, D în ms, linia)].
     Forme acceptate (tokeni, majuscule ignorate, spațiile / comentariile dintre tokeni nu contează):
@@ -432,8 +469,14 @@ def verifica_structura_plafon(text):
                             fără cast, fără concatenare, fără literal continuat pe linia următoare.
     Orice alt literal din cod (în afara argumentelor RAISE) care conține „/session” sau „plafon_tranzactie” = refuz.
     Limită declarată (ca la garda de livrare): poziția gărzii (cod mort, funcție nechemată, excepție prinsă) e a review-ului
-    artefactului; valoarea reală a plafonului o impun oricum prologul și garda finală ale runnerului."""
+    artefactului; valoarea reală a plafonului o impun oricum prologul și garda finală ale runnerului.
+    Runda 18: variabila se recunoaște după identitatea PostgreSQL (acelasi_ident), declarată o singură dată în prima secțiune DECLARE,
+    fără U& în corp (vezi antetul). absenta=True (--fara-plafon): aceleași forme, dar comparația acceptată e cu '0/default' (controlul
+    care cere ABSENȚA plafonului); refuzul poartă eticheta PLAFON_LIPSA (o citire în altă formă = cerere neclasificabilă)."""
     cereri = []
+    P = "PLAFON_LIPSA" if absenta else "PLAFON_FORMA"
+    LIT = PL_LIT_ABSENTA if absenta else PL_LIT_SESIUNE
+    FORMA_LIT = "'0/default'" if absenta else "'<D>/session'"
     for T, sursa in fluxuri_cod(text):
         n = len(T)
         acceptate = set()   # pozițiile literalilor validați ca parte a unei forme acceptate
@@ -447,12 +490,12 @@ def verifica_structura_plafon(text):
             return baza + (linie(sursa, p) - 1 if p >= 0 else 0)
 
         def in_raise(i):
+            # runda 18: T[i] e în argumentele unei instrucțiuni care ÎNCEPE cu RAISE (primul token după începutul instrucțiunii);
+            # un RAISE în altă poziție (etichetă <<raise>>, identificator) nu ajunge
             j = i - 1
-            while j >= 0 and T[j] != ";":
-                if T[j] == "RAISE":
-                    return True
+            while j >= 0 and T[j] not in PL_INCEPUT_INSTR:
                 j -= 1
-            return False
+            return j + 1 < i and T[j + 1] == "RAISE"
 
         def disjunct(s, e):
             # T[s:e] = comparația: termen al disjuncției de nivel 0 dintr-un IF … THEN RAISE EXCEPTION
@@ -497,14 +540,14 @@ def verifica_structura_plafon(text):
         def comparatie_sesiune(s, e, et):
             # T[e:] = IS DISTINCT FROM '<D>/session' urmat de OR / THEN; T[s:e] = citirea
             if T[e:e + 3] != PL_IDF or e + 3 >= n:
-                raise Refuz(f"PLAFON_FORMA: {et} (linia ~{ln(s)}) nu e comparată în forma acceptată "
-                            f"„IS DISTINCT FROM '<D>/session'”: {' '.join(T[s:e + 6])}")
-            m = PL_LIT_SESIUNE.fullmatch(T[e + 3])
+                raise Refuz(f"{P}: {et} (linia ~{ln(s)}) nu e comparată în forma acceptată "
+                            f"„IS DISTINCT FROM {FORMA_LIT}”: {' '.join(T[s:e + 6])}")
+            m = LIT.fullmatch(T[e + 3])
             if not m or not disjunct(s, e + 4):
-                raise Refuz(f"PLAFON_FORMA: comparația plafonului (linia ~{ln(e + 3)}) nu are forma acceptată (UN literal simplu "
-                            f"'<D>/session', termen al disjuncției unui IF … THEN RAISE EXCEPTION): {' '.join(T[s:e + 6])}")
+                raise Refuz(f"{P}: comparația plafonului (linia ~{ln(e + 3)}) nu are forma acceptată (UN literal simplu "
+                            f"{FORMA_LIT}, termen al disjuncției unui IF … THEN RAISE EXCEPTION): {' '.join(T[s:e + 6])}")
             acceptate.add(e + 3)
-            cereri.append(("garda pe pg_settings '<D>/session'", int(m.group(1)), ln(e + 3)))
+            cereri.append((f"garda pe pg_settings {FORMA_LIT}", 0 if absenta else int(m.group(1)), ln(e + 3)))
 
         L = len(PL_SEL)
         for i in range(n):
@@ -514,31 +557,46 @@ def verifica_structura_plafon(text):
             if i >= L + 2 and T[i - 2] == "INTO" and e_ident(T[i - 1]) and T[i - 2 - L:i - 2] == PL_SEL \
                     and (i - 3 - L < 0 or T[i - 3 - L] in PL_INCEPUT) and f < n and T[f] == ";":
                 v = T[i - 1]
+                nv = nume_param(v)
+                # runda 18 (P1-1): fără escape-uri Unicode în corpul variabilei (U&"\0076_plafon" = v_plafon, decodificat în server)
+                for k in range(n - 2):
+                    if T[k] == "U" and T[k + 1] == "&" and T[k + 2][:1] in ("'", '"'):
+                        raise Refuz(f"{P}: corpul care citește plafonul în {nv} are U&{T[k + 2][:1]}…{T[k + 2][:1]} (linia ~{ln(k)}) — "
+                                    f"identificatorii / literalii cu escape-uri Unicode se decodifică în server, variabila nu se poate urmări")
+                # declarația: o SINGURĂ dată, „<v> text;”, în prima secțiune DECLARE a corpului (blocul exterior, opțional cu etichetă)
+                k0 = 5 if T[0:2] == ["<", "<"] and T[3:5] == [">", ">"] else 0
+                sf_decl = T.index("BEGIN", k0) if T[k0:k0 + 1] == ["DECLARE"] and "BEGIN" in T[k0:] else -1
+                decl = [j for j in range(n) if acelasi_ident(T[j], v) and j > 0 and T[j - 1] in ("DECLARE", ";")
+                        and T[j + 1:j + 3] == ["TEXT", ";"]]
+                if len(decl) != 1 or not (k0 < decl[0] < sf_decl):
+                    raise Refuz(f"{P}: variabila plafonului {nv} (linia ~{ln(i)}) trebuie declarată O SINGURĂ DATĂ, „{nv} text;”, în "
+                                f"prima secțiune DECLARE a corpului (găsite {len(decl)} declarații în forma aceasta; o redeclarare într-un "
+                                f"bloc interior = umbrire, iar fără declarație în corp numele poate fi un parametru)")
                 comparatii = 0
                 for j in range(n):
-                    if T[j] != v or j == i - 1:
-                        continue
-                    if T[j + 1:j + 3] == ["TEXT", ";"] and j > 0 and T[j - 1] in ("DECLARE", ";"):
+                    if not acelasi_ident(T[j], v) or j == i - 1 or j == decl[0]:
                         continue
                     if T[j + 1:j + 4] == PL_IDF:
-                        comparatie_sesiune(j, j + 1, f"variabila plafonului {v.lower()}")
+                        comparatie_sesiune(j, j + 1, f"variabila plafonului {nv}")
                         comparatii += 1
                         continue
                     if in_raise(j):
                         continue
-                    raise Refuz(f"PLAFON_FORMA: variabila plafonului {v.lower()} (linia ~{ln(j)}) e folosită în afara formei "
-                                f"acceptate (doar declarată „text”, comparată cu IS DISTINCT FROM '<D>/session' sau în RAISE): "
-                                f"{' '.join(T[max(0, j - 3):j + 5])}")
+                    raise Refuz(f"{P}: variabila plafonului {nv} (linia ~{ln(j)}) e folosită în afara formei acceptate (identitatea "
+                                f"PostgreSQL: și citată / cu alte majuscule / calificată; doar declarată „text”, citită o dată, comparată "
+                                f"cu IS DISTINCT FROM {FORMA_LIT} sau în argumentele unui RAISE): {' '.join(T[max(0, j - 3):j + 5])}")
                 if not comparatii:
-                    raise Refuz(f"PLAFON_FORMA: plafonul citit în {v.lower()} (linia ~{ln(i)}) nu e comparat nicăieri în forma acceptată")
+                    raise Refuz(f"{P}: plafonul citit în {nv} (linia ~{ln(i)}) nu e comparat nicăieri în forma acceptată")
             elif i >= L + 1 and T[i - 1 - L] == "(" and T[i - L:i] == PL_SEL and f < n and T[f] == ")":
                 s = i - 1 - L
                 if not in_raise(s):
                     comparatie_sesiune(s, f + 1, "citirea plafonului din pg_settings")
             else:
-                raise Refuz(f"PLAFON_FORMA: citirea plafonului din pg_settings (linia ~{ln(i)}) nu are forma acceptată "
+                raise Refuz(f"{P}: citirea plafonului din pg_settings (linia ~{ln(i)}) nu are forma acceptată "
                             f"(SELECT setting || '/' || source INTO <v> … sau ( SELECT setting || '/' || source … ) IS DISTINCT FROM …): "
                             f"{' '.join(T[max(0, i - 10):f + 2])}")
+        if absenta:
+            continue  # --fara-plafon: marcajul și „/session” au fost deja refuzate (PLAFON_LIPSA) pe textul brut
         for j in range(n):
             t = T[j]
             if not (t.startswith("'") and PLAFON_MARCAJ.split(".")[1] in t.lower()):
@@ -571,6 +629,53 @@ def verifica_structura_plafon(text):
     return cereri
 
 
+def citiri_parametru(text):
+    """Runda 18 (re-review PR #1115, P1-2): citirile explicite ale lui transaction_timeout din codul EXECUTABIL (nivelul superior +
+    corpurile $…$, fără comentarii), pentru --fara-plafon. Întoarce motivele (listă goală = nicio citire). Acceptate (NU sunt cereri):
+      * controlul de absență ( SELECT setting || '/' || source FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout' )
+        IS DISTINCT FROM '0/default' (sau în RAISE), verificat structural (verifica_structura_plafon(absenta=True), altă formă = refuz);
+      * scrierile: SET [LOCAL | SESSION] / RESET transaction_timeout (și în ALTER … SET / CREATE FUNCTION … SET),
+        set_config('transaction_timeout', …), un literal care e DOAR o asemenea scriere (EXECUTE 'SET LOCAL transaction_timeout = 0').
+    Orice altceva = motiv: pg_settings în altă formă (orice nume: nu se poate dovedi static ce citește), SHOW transaction_timeout,
+    current_setting('transaction_timeout' …), alt literal care numește parametrul (EXECUTE 'SHOW …', format(…)), numele din bucăți."""
+    mic = text.lower()
+    comprimat = re.sub(r"[^a-z0-9_]", "", mic)
+    if "transaction_timeout" not in comprimat and "pg_settings" not in comprimat:
+        return []  # nicio mențiune (nici în comentarii): fișierele de până acum, neschimbat
+    motive = []
+    for nume in PLAFON_NUME:
+        if comprimat.count(nume) != mic.count(nume):
+            motive.append(f"numele {nume} construit din bucăți (ex. 'transaction' || '_timeout') — citirea nu se poate clasifica")
+    verifica_structura_plafon(text, absenta=True)   # citirile din pg_settings: doar controlul de absență (altfel PLAFON_LIPSA)
+    for T, sursa in fluxuri_cod(text):
+        n = len(T)
+        absente = set()
+        for i in range(n):
+            if T[i:i + len(PL_CIT)] == PL_CIT:   # validată mai sus ca formă acceptată a controlului de absență
+                absente.update((i + 3, i + 7))
+        for j, t in enumerate(T):
+            if j in absente:
+                continue
+            ctx = " ".join(T[max(0, j - 3):j + 3])
+            if t.startswith("'"):
+                c = t[1:].casefold()
+                if "transaction_timeout" not in c and "pg_settings" not in c:
+                    continue
+                if c.strip() == "transaction_timeout" and j >= 2 and T[j - 1] == "(" and e_set_config(T[j - 2]) \
+                        and T[j + 1:j + 2] == [","]:
+                    continue   # set_config('transaction_timeout', …) = scriere
+                if "pg_settings" not in c and c.count("transaction_timeout") == 1 and PL_SCRIERE_LIT.fullmatch(t[1:]):
+                    continue   # EXECUTE 'SET LOCAL transaction_timeout = 0' / 'RESET transaction_timeout' = scriere
+                motive.append(f"literal care numește parametrul în afara unei scrieri recunoscute: {ctx}")
+            elif e_ident(t) and nume_param(t).casefold() == "pg_settings":
+                motive.append(f"pg_settings citit în altă formă decât controlul de absență '0/default': {ctx}")
+            elif e_ident(t) and nume_param(t).casefold() == "transaction_timeout":
+                if T[j - 1:j] in (["SET"], ["RESET"]) or (T[j - 1:j] in (["LOCAL"], ["SESSION"]) and T[j - 2:j - 1] == ["SET"]):
+                    continue   # SET [LOCAL | SESSION] / RESET / ALTER … SET / CREATE FUNCTION … SET = scriere
+                motive.append(f"transaction_timeout citit (SHOW / altă formă decât o scriere): {ctx}")
+    return motive
+
+
 def verifica_cere_plafon(text):
     """Runda 17 (verdictul PR #1115, P1-2): runnerul FĂRĂ --plafon-tranzactie-ms cheamă validatorul cu --fara-plafon. Un fișier
     care CERE plafon — în cod o citire a plafonului (pg_settings / marcajul) sau, oriunde (fail-closed, și comentariile), un
@@ -584,6 +689,12 @@ def verifica_cere_plafon(text):
     if "/session" in text.lower() and not motive:
         # orice altă formă a cererii (ex. ('2000' || '/session')): textul brut ajunge (fail-closed); '0/default' NU e o cerere
         motive.append("„/session” în fișier")
+    if not motive:
+        # runda 18 (P1-2): orice CITIRE explicită a parametrului în cod = cerere de plafon (sau neclasificabilă) ⇒ același refuz local
+        try:
+            motive += citiri_parametru(text)
+        except Refuz as e:
+            motive.append(str(e)[len("PLAFON_LIPSA: "):] if str(e).startswith("PLAFON_LIPSA: ") else str(e))
     if motive:
         raise Refuz(f"PLAFON_LIPSA: fișierul cere plafonul tranzacției ({'; '.join(motive)}), dar runnerul nu dă "
                     f"--plafon-tranzactie-ms — livrați cu --plafon-tranzactie-ms <D> (D = valoarea cerută); nimic trimis")

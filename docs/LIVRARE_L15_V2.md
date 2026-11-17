@@ -407,7 +407,7 @@ Celelalte **semnale** (EXECUTE dinamic, vederi, alt limbaj) nu sunt refuz automa
    - diferențele rămase între liste, **grupate** (pe familii / scheme), fiecare grup cu motivul pentru care nu atinge traseul migrării;
    - proba integrală proprie pe clonă (cu concurență pe tabelele pe care migrarea le blochează) și criteriile de timp / concurență pentru
      proba pe țintă (pasul 7). Runda 17: concurența la aplicare are scriptul ei, `supabase/tests/l15_aplicare_concurenta.sh` (inventarul
-     triggerelor / constrângerilor / politicilor + L0 / L1 / L2 / B1, secțiunea 9), iar regresiile locale o singură comandă,
+     triggerelor / constrângerilor / politicilor + L0 / L1 / L2 / B1 / B2, secțiunea 9), iar regresiile locale o singură comandă,
      `bash scripts/test_livrare_l15_local_toate.sh` (ieșirea întreagă se păstrează în jurnal).
 6. **În ziua livrării:** recitirea pe producție (aceleași opțiuni) + `l15_compara_liste.sh --a citire_prod.txt --b citire_ziua.txt
    --recitire` ⇒ partea revizuită (ieșirea scriptului de amprente al migrării — cu momentul fotografiei înlocuit —, `LANT`, `SEMNALE`,
@@ -551,6 +551,34 @@ Fără amprentă globală, plafonul rămâne parametrul runnerului (100..600000)
   — garda care cere LIPSA plafonului — nu e o cerere). Fără nicio opțiune (testele statice) validatorul e neschimbat. Garda din `$pre$`
   rămâne (apărare în adâncime pentru o rulare în afara runnerului).
 
+**Runda 18 (re-review-ul Jakarinos pe #1115, două P1 noi):**
+- **Variabila plafonului după identitatea PostgreSQL, nu după token.** `v_plafon`, `V_PLAFON` și `"v_plafon"` sunt aceeași variabilă
+  (neciat ⇒ litere mici, citat ⇒ exact); comparația e conservatoare (și `"V_PLAFON"`, alt identificator în PostgreSQL, e tratat ca
+  aceeași variabilă ⇒ doar refuz în plus). Forma acceptată devine: variabila declarată **o singură dată**, `<v> text;`, în **prima**
+  secțiune `DECLARE` a corpului (blocul exterior), citită o dată, folosită doar în comparație sau în argumentele unei instrucțiuni care
+  **începe** cu `RAISE`, fără `U&"…"` / `U&'…'` în același corp. Refuzate acum (`PLAFON_FORMA`, mutanți pe ambele migrări reale, fiecare
+  aplicat exact o dată): mutantul recenzentului `"v_plafon" := 5000::text || chr(47) || 'session';`, `"V_PLAFON" :=`, `V_Plafon :=`,
+  `SELECT … INTO "v_plafon"`, `EXECUTE … INTO "v_plafon"`, `FOR "v_plafon" IN …`, `GET DIAGNOSTICS "v_plafon" = …`, eticheta blocului
+  (`<<b>>` … `b.v_plafon :=`), `ALIAS FOR` într-un bloc interior, redeclararea într-un bloc interior (umbrire), `U&"\0076_plafon" :=`,
+  o etichetă `<<raise>>` înaintea atribuirii (vechea regulă „un RAISE mai devreme în instrucțiune” o accepta), variabila ca argument de
+  apel; și un parametru de funcție cu același nume, cu citirea într-un bloc interior (comparația vedea parametrul). Controale acceptate:
+  comparația și `coalesce(…)` din `RAISE` scrise cu `"v_plafon"` (aceleași litere); funcția cu declarația în blocul exterior.
+- **`--fara-plafon` vede citirile explicite ale parametrului.** Pe lângă marcaj și `/session`, este cerere de plafon (refuz local
+  `PLAFON_LIPSA`, înainte de conexiune) **orice citire** a lui `transaction_timeout` în codul executabil: `pg_settings` în orice formă în
+  afara controlului de absență `( SELECT setting || '/' || source FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout' ) IS
+  DISTINCT FROM '0/default'` (verificat structural, ca garda; și citit într-o variabilă), `current_setting('transaction_timeout' …)`,
+  `SHOW transaction_timeout`, un literal care numește parametrul (`EXECUTE 'SHOW …'`, `format('SHOW %s', 'transaction_timeout')`),
+  `pg_catalog."pg_settings"`, numele din bucăți (`'transaction' || '_timeout'`). Artefactul recenzentului (garda pe `pg_settings` comparată
+  cu `'5000'`, fără `/session`) = `PLAFON_LIPSA`. **Scrierile nu sunt cereri** și trec fără plafon ca înainte (regulile vechi):
+  `SET [LOCAL] transaction_timeout`, `RESET`, `ALTER … SET`, `CREATE FUNCTION … SET`, `set_config('transaction_timeout', …)`,
+  `EXECUTE 'RESET transaction_timeout'`; comentariile nu sunt citiri. Compatibilitatea: niciun fișier din repo fără cerere nu menționează
+  parametrul sau `pg_settings`, deci tot 459 cu același cod, 24 refuzate. Cu `--plafon-tranzactie-ms N` aceleași citiri erau deja refuzate
+  (doar citirea exactă e permisă); refuzul poartă acum eticheta `PLAFON_FORMA` (test: artefactul recenzentului, `current_setting`, `SHOW`,
+  `EXECUTE 'SHOW …'` cu plafonul 5000).
+- **Limită declarată** (ca SQL-ul dinamic din runda 12): numele construit în server (`chr()`, `format` cu argument dinamic, `U&'…'` într-un
+  corp, `current_setting(<variabilă>)`) nu se vede static; o asemenea cerere fără plafon e refuzată abia de garda din SQL a migrării, în
+  tranzacție, nimic comis (comportamentul de dinainte de runda 17).
+
 ### Bugetul de lock (runda 16)
 
 Înainte, secunda pentru lock-uri se număra **de la BEGIN** și includea pasul „înainte” al runnerului (~1,2–1,3 s pe producție): migrarea
@@ -580,14 +608,31 @@ neaplicate și în **șablonul pentru migrările viitoare**:
    - fiecare așteptare implicită e limitată de `lock_timeout` = 100 ms (apoi eroare, tranzacția anulată, nimic comis), dar se face **ținând
      deja `storage.objects`**: o sesiune care blochează `storage.buckets` (SHARE sau mai tare) poate prelungi oprirea fișierelor cu ~100 ms
      pe așteptare înainte de refuz. `storage.buckets` **nu** intră în set (conținutul funcțional rămâne cel revizuit); refuzul curat e
-     proba B1 de pe clonă.
+     proba B1 de pe clonă (relația ținută) și B2 (runda 18: un `INSERT` necomis cu același id ⇒ așteptarea pe tranzacția concurentă la
+     verificarea unicității).
+   - **Completitudinea inventarului pe ținta reală rămâne de demonstrat** (runda 18, observația recenzentului): triggerele platformei pe
+     `storage.buckets` și relațiile accesate de ele depind de catalogul țintei. Clona folosită are Storage stub, fără triggere: un inventar
+     gol acolo nu dovedește inventarul producției. Pasul I se rulează (doar citire) și pe producție, înaintea probei cu ROLLBACK, iar orice
+     trigger găsit se adaugă în inventarul de mai sus cu lock-urile lui.
    **Proba de concurență la aplicare** (doar pe clonă, cu migrarea NEAPLICATĂ; fiecare aplicare = proba cu ROLLBACK a generatorului de
    manifest, nimic comis): `supabase/tests/l15_aplicare_concurenta.sh --migrare uscare|meteo …` — I inventarul (triggere, constrângeri,
    politici pe `storage.buckets` / `storage.objects` / `sites`); L0 control `IDENTIC` cu 1 încercare; L1 relația principală ținută
    permanent ⇒ `BUGET_LOCK` la 900..1500 ms de la prima încercare, fără așteptare până la eliberare, și (uscare) un observator doar-citire care
    nu vede lock-urile parțiale ținute între încercări; L2 eliberare la ~400 ms după pasul „înainte” ⇒ `IDENTIC` cu ≥ 2 încercări, < 1000 ms;
-   B1 (uscare) `storage.buckets` ținut SHARE ⇒ `lock timeout` la lock-ul implicit (nu `BUGET_LOCK`), fără așteptare până la eliberare.
-   Scriptul e **netestat local** (serverul de cod nu are PostgreSQL); îl rulează coordonatorul.
+   B1 (uscare) `storage.buckets` ținut SHARE ⇒ `lock timeout` la lock-ul implicit (nu `BUGET_LOCK`), fără așteptare până la eliberare;
+   B2 (uscare, runda 18) altă sesiune cu `INSERT INTO storage.buckets` **necomis** cu id-ul `executie-uscare`, fără LOCK pe relație (ține doar
+   ROW EXCLUSIVE, verificat la barieră) ⇒ `lock timeout` (100 ms) la verificarea unicității, nu `BUGET_LOCK`, fără așteptare până la
+   ROLLBACK-ul ei, nimic comis. Runda 18 a mai reparat: conversiile `tgenabled::text` / `contype::text` / `polcmd::text` din inventar
+   (`text || "char"` = „operator is not unique” pe PostgreSQL real), extragerea timpului din `BUGET_LOCK` pe mesajul REAL al fiecărei
+   migrări (meteo: `BUGET_LOCK: sites ocupat; N incercari, …`; ambele forme verificate la pornire în fișierul migrării) și curățenia la
+   eroare (trap-ul oprește și așteaptă H / observatorul și închide pe țintă backend-urile lor și ale probei; codul se păstrează).
+   **Limita observatorului:** eșantionarea (~30 ms, 80 de eșantioane) e o dovadă, nu o demonstrație exhaustivă: un lock parțial mai scurt
+   decât intervalul dintre eșantioane poate scăpa; absența lor între încercări rezultă din construcție (subtranzacția fiecărei încercări).
+   **Bugetul pornește la prima încercare, probat pe PostgreSQL real** (runda 18, `scripts/test_livrare_l15_v2.sh` cazul p, cluster PG17
+   efemer): blocul de lock REAL al uscării (setul înlocuit cu `public.sites`), livrarea ținută > 1 s la o barieră între pasul „înainte” și
+   blocul de lock, apoi lock liber ⇒ APLICAT, `lock la >1000 ms de la BEGIN (1 incercari, <100 ms de la prima incercare)`; mutantul cu
+   ceasul de la BEGIN (`v_t0 := now()`) ⇒ `BUGET_LOCK: 0 incercari`, NEAPLICAT (10).
+   Scriptul de concurență e **netestat local** (serverul de cod nu are PostgreSQL); îl rulează coordonatorul.
 5. **Măsurarea:** după obținere migrarea scrie momentul în `gazpet.lock_puternic_la` (µs de la epoch, `set_config(…, true)`) și tipărește
    `lock la X ms de la BEGIN (N incercari, Y ms de la prima incercare)`; la sfârșit, `lock-uri puternice tinute de Z ms`; garda finală a
    runnerului (doar pe calea cu amprentă globală) tipărește, după `PLAFON_TIMP`, **`LOCK_TINUT <nume>: lock-urile puternice ale migrarii
@@ -737,6 +782,9 @@ bash scripts/livrare_migrare.sh --migrare supabase/migrations/20261221a_meteo_xw
 | **Runda 17, PGlite pe migrările reale:** mutantul recenzentului (`('2000' \|\| '/session')`) = `PLAFON_FORMA`; runnerul fără plafon = `PLAFON_LIPSA`; `LOCK_TINUT` în forma nouă (ce măsoară exact); manifestul uscării = aceleași 252 de obiecte | `node scripts/pglite/test_executie_uscare_local.mjs`, `node scripts/pglite/test_meteo_xweather_local.mjs` | rulat la livrare (PASS) |
 | **Runda 17, forma runnerului fără PostgreSQL:** forma neverificabilă (și cu forma bună într-un comentariu) = 3 `PLAFON_FORMA`; plafonul omis — runner cu / fără L15 și generatorul de manifest — = 3 `PLAFON_LIPSA`; niciun apel psql; controlul cu plafonul cerut = 0. `test_portal_e1.sh`: runnerul fără plafon pe 18a = refuz LOCAL (cod 3), nu în `$pre$` | `bash scripts/test_livrare_l15_forma.sh`; `bash scripts/test_portal_e1.sh` | coordonatorul (bash nu rulează în sesiunea de cod) |
 | **Runda 17, concurența la aplicare (clonă, ROLLBACK):** I inventarul (triggere / constrângeri / politici pe `storage.buckets`, `storage.objects`, `sites`), L0 control, L1 ocupat permanent ⇒ `BUGET_LOCK` + observatorul lock-urilor parțiale, L2 eliberat înainte de termen ⇒ `IDENTIC`, B1 `storage.buckets` ținut ⇒ `lock timeout` curat | `bash supabase/tests/l15_aplicare_concurenta.sh --migrare uscare\|meteo …` | coordonatorul pe clonă (netestat local) |
+| **Runda 18, validatorul (re-review #1115):** P1-1 — 13 mutanți ai variabilei plafonului pe ambele migrări reale (identificator citat / alte majuscule, INTO / EXECUTE INTO / FOR / GET DIAGNOSTICS citate, eticheta blocului, ALIAS, umbrire, `U&`, `<<raise>>`, argument de apel) = `PLAFON_FORMA` + parametrul umbrit; controalele cu `"v_plafon"` acceptate. P1-2 — citirile parametrului fără plafon (artefactul recenzentului, `current_setting`, `SHOW`, `EXECUTE 'SHOW …'`, `format`, nume din bucăți, `"pg_settings"`) = `PLAFON_LIPSA`; controlul de absență `'0/default'` (și în variabilă) și scrierile = acceptate; aceleași citiri cu plafonul 5000 = `PLAFON_FORMA`. Pe validatorul din e58dc330 aceleași cazuri = ESEC (33) | `python3 scripts/test_livrare_validator_plafon.py` (și `--validator <fișierul din e58dc330>`) | rulat la livrare (PASS; vechiul: ESEC 33) |
+| **Runda 18, bugetul de la prima încercare (PG17 efemer):** cazul p — pasul „înainte” + barieră > 1 s, apoi lock liber ⇒ APLICAT cu `lock la >1000 ms de la BEGIN (1 incercari, <100 ms …)`; mutantul ceasului de la BEGIN ⇒ `BUGET_LOCK: 0 incercari`, 10 | `bash scripts/test_livrare_l15_v2.sh <slot>` (WSL, ca postgres) | coordonatorul |
+| **Runda 18, concurența la aplicare:** conversiile `::text` din inventar, L1 meteo pe mesajul real, B2 coliziunea de unicitate pe bucket, curățenia la eroare (trap) | `bash supabase/tests/l15_aplicare_concurenta.sh --migrare uscare\|meteo …` | coordonatorul pe clonă (netestat local) |
 | **Toate regresiile bash locale, o singură comandă** (runda 17): rulează în ordine validatorul, forma L15, paritatea cu `origin/main`, forma finală, cele două PGlite; tipărește PASS / ESEC pe fiecare și codul final | `bash scripts/test_livrare_l15_local_toate.sh [<ref>]` | coordonatorul |
 | Comparatorul de liste: fără opțiuni, `--manifest`, `--recitire`, intrări invalide, eticheta cu TAB; mutant pe fiecare regulă; **r3:** două fotografii care diferă doar prin `MOMENT` ⇒ 0 (mutantul cu `MOMENT` în partea revizuită ⇒ 6), și secțiunea diferă ⇒ 6, `MOMENT` lipsă / dublu / neînlocuit ⇒ 2; citirea reală cu un psql simulat (momente de lungimi diferite) ⇒ secțiunea cu marcajul, `--recitire` 0; mutantul citirii fără înlocuire ⇒ refuz; **r4:** coliziunea (aceeași valoare și într-un rând de date ⇒ rămâne; două citiri în care ea diferă ⇒ 6; mutantul cu înlocuirea globală ⇒ 0), momentul în alt format și antetul în alt format ⇒ nenormalizate, 6; `--detalii-plasa`: detaliul scris și recalculat = `RAND`, alt obiect ⇒ diferența îl numește, detaliu nereproductibil ⇒ 1 (mutantul fără verificare ⇒ 0), fără `--lista` / fișier existent ⇒ 2, fără opțiune nimic în plus; **r5:** antetul repetat în date (a doua pereche antet + rând cu momentul ⇒ rândul rămâne, o singură înlocuire; două citiri în care el diferă ⇒ 6, diferența arătată), mutantul citirii (rearmarea la fiecare antet) ⇒ 0, mutantul comparatorului ⇒ 2 (refuz fals), cele 5 scripturi cu antet standard ⇒ `--recitire` 0 | `bash scripts/test_l15_compara_liste.sh` (doar bash; rulat și de vitest) | CI + livrare |
 | Forma runnerului fără PostgreSQL: argumente, `--aprobare`, mesajul unic cu `--l15`, forma fără plafon, `--genereaza-in`, fără opțiuni | `bash scripts/test_livrare_l15_forma.sh` | coordonatorul (cere python3) |
