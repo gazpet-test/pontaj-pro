@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { webcrypto } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { pasiDinDocument, parcurge } from './fanProcedura.testutil.js'
+import { pasiDinDocument, parcurge, lumeNoua } from './fanProcedura.testutil.js'
 
 const CAI = {
   'redariFan.mjs': 'supabase/functions/_shared/redariFan.mjs',
@@ -38,11 +38,13 @@ const surseR2 = surseDin(VECHI_R2)
 const VECHI_R3 = 'fdaa0496171a95d65644c49e17d033c07c1a3457'
 const surseR3 = surseDin(VECHI_R3)
 // activare, runda 2 (verdictul Jakarinos pe PR #1130): procedura zilei din 9ceea228 (plafon înaintea marcajului, „Propune” înaintea „Marchează TEST”)
-// TREBUIE să pice în simulatorul procedurii; documentul curent trece
+// TREBUIE să pice în simulatorul procedurii; runda 3 (al doilea verdict): documentul din 9fb88b2f trece pe primul plic, dar continuarea cu trei
+// plicuri („aceiași pași de la §5 la §8”) TREBUIE să pice pe istoricul primului lot; documentul curent trece COMPLET (primul plic → lotul de 3 → încheierea)
 const DOC_PASI = 'docs/redari/FAN_TEST1_PASI.md'
 const PASI_ACUM = readFileSync(DOC_PASI, 'utf8')
 const docDin = sha => { try { return execFileSync('git', ['show', `${sha}:${DOC_PASI}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) } catch { return null } }
 const PASI_VECHI = docDin('9ceea22800da3cce3c4c072a7314c67cb974c827')
+const PASI_R2 = docDin('9fb88b2f0cfd897375271ac93be6768cae69dd7f')
 // folderul temporar stă în .tmp/ (ignorat de git): pe Windows, calea scurtă din %TEMP% (GAZPET~1) nu se încarcă prin vite
 const TMP = join(process.cwd(), '.tmp')
 mkdirSync(TMP, { recursive: true })
@@ -362,12 +364,17 @@ const VERIFICARI = {
       && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: false }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).every(p => !p.activ)
       && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).some(p => p.activ)
   },
-  // ACTIVARE runda 2 (Jakarinos #1130 P2 1): procedura documentului e executabilă din ecran, de la lot gol până la prima generare, în ordinea scrisă
-  // (marcaj → plafon → propune → aprobă → generează). Pică dacă ordinea din COD se schimbă (mutanții de mai jos) sau dacă documentul cere o ordine imposibilă.
+  // ACTIVARE runda 2 + 3 (Jakarinos #1130 P2 / P3): procedura documentului e executabilă din ecran, COMPLET — primul plic (plafon 1), lotul de 3
+  // (plafon 3) cu istoricul primului lot prezent, încheierea (plafon 20) — în ordinea scrisă (coloana „Acțiune”). Pică dacă ordinea din COD se
+  // schimbă (mutanții de mai jos) sau dacă documentul cere o stare imposibilă / sare o verificare a procedurii.
   async procedura(M, doc = PASI_ACUM) {
-    const { lot, jurnal } = parcurge(pasiDinDocument(doc, '## 5.', '## 9.'), { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii })
-    return jurnal.filter(j => j.buton).map(j => j.buton).join() === 'marcaj_test,evenimente,plafon,propune,aproba,genereaza,etichete,etichete'
-      && JSON.stringify(jurnal[0].inainte) === '["marcaj_test"]' && lot.randuri.length === 1 && lot.randuri[0].stare === 'generat' && lot.limita === 1
+    const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii }
+    const lume = lumeNoua()
+    const a = parcurge(pasiDinDocument(doc, '## 5.', '## 9.'), fn, { lume, lot: 'PP-xxxx' })
+    const b = parcurge(pasiDinDocument(doc, '## 9.', '## 10.'), fn, { lume, lot: 'PP-yyyy', plicuri: 3, respinse: [2] })
+    parcurge(pasiDinDocument(doc, '## 10.', '## 11.'), fn, { lume, lot: 'PP-yyyy' })
+    return JSON.stringify(a.jurnal[0].inainte) === '["marcaj_test"]' && a.lot.randuri.length === 1 && a.lot.randuri[0].stare === 'generat'
+      && JSON.stringify(b.jurnal[0].inainte) === '["marcaj_test"]' && b.lot.randuri.map(r => r.stare).join() === 'generat,eroare,generat' && lume.setari.limita === 20
   },
 }
 
@@ -504,10 +511,27 @@ describe('mutanți FAN (JS)', () => {
     expect(rez).toBe(false)
   })
   // activare runda 2: procedura din documentul de la 9ceea228 (ordinea recenzentului: „Propune” înaintea marcajului) PICĂ pe codul real, cu motivul gărzii
+  // (documentele vechi n-au coloana „Acțiune”: modul legacy recunoaște butoanele și verificările din text)
   it.skipIf(!PASI_VECHI)('documentul FAN_TEST1_PASI.md de la 9ceea228 NU e executabil din ecran (constatarea era reală)', async () => {
     const M = await incarca(null)
     const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii }
-    expect(() => parcurge(pasiDinDocument(PASI_VECHI, '## 5.', '## 9.'), fn)).toThrow(/pasul 1: „„1\. Propune 1 plicuri”” nu e activ în ecran \(transport doar pe loturi marcate TEST/)
+    expect(() => parcurge(pasiDinDocument(PASI_VECHI, '## 5.', '## 9.', { legacy: true }), fn)).toThrow(/pasul 1 \(propune\): „„1\. Propune 1 plicuri”” nu e activ în ecran \(transport doar pe loturi marcate TEST/)
     expect(await VERIFICARI.procedura(M)).toBe(true)
+  })
+  // activare runda 3: documentul de la 9fb88b2f — primul plic trece, dar continuarea „aceiași pași de la §5 la §8” pe lotul de 3 PICĂ: verificarea
+  // GLOBALĂ din §6 (zero aprobări / trimiteri, exact un lot marcat) nu mai poate trece după primul AWB, nici cu plafonul 3 (istoricul rămâne)
+  it.skipIf(!PASI_R2)('documentul FAN_TEST1_PASI.md de la 9fb88b2f: primul plic trece, continuarea cu trei plicuri PICĂ pe istoricul primului lot (constatarea era reală)', async () => {
+    const M = await incarca(null)
+    const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii }
+    const pasi = pasiDinDocument(PASI_R2, '## 5.', '## 9.', { legacy: true })
+    expect(pasi.map(p => p.actiune?.text || null)).toEqual(['marcaj-test', 'evenimente', 'plafon=1', 'verifica-plafon', 'verifica-fara-aprobari', 'propune', 'aproba', 'genereaza',
+      'verifica-selfawb', 'verifica-tarif', 'etichete', 'verifica-eticheta', 'verifica-control', 'tipareste', 'etichete'])
+    const lume = lumeNoua()
+    expect(parcurge(pasi, fn, { lume, lot: 'PP-xxxx' }).lot.randuri[0].stare).toBe('generat')
+    expect(() => parcurge(pasi, fn, { lume, lot: 'PP-yyyy', plicuri: 3 })).toThrow(/pasul 3 \(verifica-fara-aprobari\): verificarea globală „fără aprobări \/ trimiteri” nu poate trece: PP-xxxx: generat/)
+    // nici cu plafonul 3, cum spunea paragraful final din §8: istoricul tot rămâne
+    const cu3 = pasi.map(p => p.actiune?.cod === 'plafon' ? { ...p, actiune: { ...p.actiune, valoare: 3, text: 'plafon=3' } } : p)
+    const lume2 = lumeNoua(); parcurge(pasi, fn, { lume: lume2, lot: 'PP-xxxx' })
+    expect(() => parcurge(cu3, fn, { lume: lume2, lot: 'PP-yyyy', plicuri: 3 })).toThrow(/verificarea globală „fără aprobări \/ trimiteri” nu poate trece/)
   })
 })
