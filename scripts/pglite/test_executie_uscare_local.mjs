@@ -1,10 +1,11 @@
 // Proba LOCALĂ a migrării 20261225a (Execuție → raportul de uscare a conductei) pe PGlite (Postgres în WASM, în memorie) — NU atinge nicio bază reală.
 // Baza: schema falsă supabase/tests/20261225a_executie_uscare_schelet.sql + funcțiile de drept extrase EXACT din migrările lor (20261209a pentru
 //   corpul cu restricția pe proiect, 20261201a / 20261203a pentru drepturile lor); amprentele lor = constantele din migrare (verificat).
-// Aplicarea: ca runnerul — marcaj + plafon 2000 + PAȘII L15 v2 GENERAȚI de scripts/livrare_amprenta_gen.sh (aceleași funcții ca runnerul):
-//   întâi generarea manifestului (GLOBAL aprobat „-”, ROLLBACK), apoi livrarea cu GLOBAL-ul citit + manifestul generat (diferența = exact
-//   manifestul) și COMMIT. Lista obiectelor din manifest = supabase/tests/20261225a_executie_uscare.l15.obiecte.tsv (revizuită; PG18 adaugă
-//   constrângerile NOT NULL, ignorate aici: producția e PG17).
+// Aplicarea: ca runnerul — marcaj + plafon 5000 (AG_PLAFON_MS, runda 16) + PAȘII L15 v2 GENERAȚI de scripts/livrare_amprenta_gen.sh (aceleași
+//   funcții ca runnerul): întâi generarea manifestului (GLOBAL aprobat „-”, ROLLBACK), apoi livrarea cu GLOBAL-ul citit + manifestul generat
+//   (diferența = exact manifestul) și garda finală REALĂ a runnerului (lm_fin … lock: PLAFON_TIMP + LOCK_TINUT) + COMMIT. Lista obiectelor din
+//   manifest = supabase/tests/20261225a_executie_uscare.l15.obiecte.tsv (revizuită; PG18 adaugă constrângerile NOT NULL, ignorate aici: producția
+//   e PG17). Revenirea rămâne cu plafonul ei (2000, fără amprenta globală); validatorul cere acordul fiecărui fișier cu plafonul dat runnerului.
 // 1. VERIFICĂRILE de comportament (valorile așteptate scrise de mână, L25), ca rolul authenticated cu JWT-ul fiecărui cont: manager de
 //    proiect (cont restrâns, editor pe P1), manager al altui proiect, administrator Execuție, owner, editor / viewer nerestrâns, cont fără
 //    drept, anonim; criteriul de acceptare (ultimul piston + fotografia lui, punctul de rouă opțional), cântăririle pe bureții declarați,
@@ -71,20 +72,57 @@ for (const [nume, cap, aclText, amp] of LANT) {
 // repo (octeții lor, nu copia fără CR), migrarea ȘI revenirea — runda 4: proba PGlite nu trecea prin validator, deci un artefact refuzat de
 // runner înainte de orice conexiune putea trece aici. Plus formele vechi (refuzate): literalul obișnuit cu backslash și numele parametrului
 // de plafon în comentariu.
-const validator = fisier => {
+// runda 16: forma runnerului, --plafon-tranzactie-ms <N> (regulile plafonului + ACORDUL: fiecare plafon cerut de fișier = N)
+const validator = (fisier, plafon = PLAFON_LIVRARE) => {
   try {
-    const o = execFileSync('bash', ['-c', 'exec python3 "$@"', '_', join(ROOT, 'scripts/livrare_validator.py'), fisier, 'reg_0123456789abcdef', '--plafon-tranzactie'],
+    const o = execFileSync('bash', ['-c', 'exec python3 "$@"', '_', join(ROOT, 'scripts/livrare_validator.py'), fisier, 'reg_0123456789abcdef', '--plafon-tranzactie-ms', String(plafon)],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
     return { ok: true, out: o.trim() }
   } catch (e) { return { ok: false, out: String(e.stderr || e.message).trim() } }
 }
-console.log('0b. validatorul runnerului (cu plafon) pe migrare și pe revenire')
+// runda 17: aceeași chemare cu altă opțiune a runnerului (ex. --fara-plafon, forma runnerului fără --plafon-tranzactie-ms)
+const validatorCu = (fisier, ...opt) => {
+  try {
+    const o = execFileSync('bash', ['-c', 'exec python3 "$@"', '_', join(ROOT, 'scripts/livrare_validator.py'), fisier, 'reg_0123456789abcdef', ...opt],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    return { ok: true, out: o.trim() }
+  } catch (e) { return { ok: false, out: String(e.stderr || e.message).trim() } }
+}
+// plafonul livrărilor L15 v2: O SINGURĂ definiție, în biblioteca runnerului (scripts/livrare_amprenta.sh, AG_PLAFON_MS); revenirea: 2000
+const PLAFON_LIVRARE = Number(execFileSync('bash', ['-c', '. "$1"; printf %s "$AG_PLAFON_MS"', '_', join(ROOT, 'scripts/livrare_amprenta.sh')], { encoding: 'utf8' }))
+const PLAFON_REVENIRE = 2000
+// garda finală REALĂ a runnerului (scripts/livrare_mesaj.sh, lm_fin; cu „lock”, ca pe calea cu amprenta globală) — text generat, nu copiat
+const garda = (nume, plafon, final) => execFileSync('bash', ['-c', '. "$1"; lm_fin "$2" "$3" "$4" lock', '_', join(ROOT, 'scripts/livrare_mesaj.sh'), nume, String(plafon), final], { encoding: 'utf8' })
+console.log('0b. validatorul runnerului (cu plafon, acordul plafonului) pe migrare și pe revenire')
 {
+  ok(PLAFON_LIVRARE === 5000 && MIG.includes(`IS DISTINCT FROM '${PLAFON_LIVRARE}/session'`) && MIG.includes(`IS DISTINCT FROM '${PLAFON_LIVRARE}:' || txid_current()`),
+    `migrarea cere exact plafonul runnerului L15 v2 (AG_PLAFON_MS = ${PLAFON_LIVRARE})`)
   const vm = validator(join(ROOT, 'supabase/migrations/20261225a_executie_uscare.sql'))
-  ok(vm.ok && /^OK \d+ /.test(vm.out), 'migrarea trece validatorul: ' + vm.out)
-  const vr = validator(join(ROOT, 'supabase/revenire/20261225a_executie_uscare_ROLLBACK.sql'))
-  ok(vr.ok && /^OK \d+ /.test(vr.out), 'revenirea trece validatorul: ' + vr.out)
-  const brut = readFileSync(join(ROOT, 'supabase/migrations/20261225a_executie_uscare.sql'), 'utf8')
+  ok(vm.ok && /^OK \d+ /.test(vm.out), 'migrarea trece validatorul cu plafonul runnerului: ' + vm.out)
+  const vr = validator(join(ROOT, 'supabase/revenire/20261225a_executie_uscare_ROLLBACK.sql'), PLAFON_REVENIRE)
+  ok(vr.ok && /^OK \d+ /.test(vr.out), 'revenirea trece validatorul cu plafonul ei: ' + vr.out)
+  // acordul plafonului (runda 16): fiecare nepotrivire = refuz ÎNAINTE de conexiune, cu motivul clar
+  const vm2 = validator(join(ROOT, 'supabase/migrations/20261225a_executie_uscare.sql'), 2000)
+  ok(!vm2.ok && /PLAFON_DIFERIT: fișierul cere 5000 ms .*runnerul dă 2000 ms/.test(vm2.out), 'migrarea (cere 5000) cu runnerul la 2000 = refuz: ' + vm2.out.slice(0, 140))
+  const vr2 = validator(join(ROOT, 'supabase/revenire/20261225a_executie_uscare_ROLLBACK.sql'), PLAFON_LIVRARE)
+  ok(!vr2.ok && /PLAFON_DIFERIT: fișierul cere 2000 ms .*runnerul dă 5000 ms/.test(vr2.out), 'revenirea (cere 2000) cu runnerul la 5000 = refuz: ' + vr2.out.slice(0, 140))
+  const brutV = readFileSync(join(ROOT, 'supabase/migrations/20261225a_executie_uscare.sql'), 'utf8')
+  const fPlVechi = join(TMP, 'plafon_vechi.sql'), fPlGarda = join(TMP, 'plafon_vechi_doar_garda.sql')
+  writeFileSync(fPlVechi, brutV.split('5000/session').join('2000/session').split("'5000:'").join("'2000:'").split('--plafon-tranzactie-ms 5000').join('--plafon-tranzactie-ms 2000'))
+  writeFileSync(fPlGarda, brutV.split("IS DISTINCT FROM '5000/session'").join("IS DISTINCT FROM '2000/session'"))
+  const vv = validator(fPlVechi), vg = validator(fPlGarda)
+  ok(!vv.ok && /PLAFON_DIFERIT: fișierul cere 2000 ms/.test(vv.out), 'MUTANT plafonul vechi cerut (2000) cu runnerul nou (5000) = refuz clar: ' + vv.out.slice(0, 140))
+  ok(!vg.ok && /PLAFON_DIFERIT: fișierul cere 2000 ms \(garda pe pg_settings/.test(vg.out), 'MUTANT doar garda pe 2000 (antetul pe 5000) = refuz: ' + vg.out.slice(0, 140))
+  // runda 17 (verdictul PR #1115, P1-1): exemplul recenzentului — DOAR comparația înlocuită cu ('2000' || '/session'), antetul și marcajul pe
+  // 5000 — era acceptat (91 de instrucțiuni); acum refuz STRUCTURAL înainte de conexiune. (P1-2): fără plafon = refuz local, PLAFON_LIPSA.
+  const fForma = join(TMP, 'plafon_forma_concat.sql')
+  ok(brutV.split("IS DISTINCT FROM '5000/session'").length === 2, 'mutantul formei se aplică exact o dată')
+  writeFileSync(fForma, brutV.split("IS DISTINCT FROM '5000/session'").join("IS DISTINCT FROM ('2000' || '/session')"))
+  const vf = validator(fForma)
+  ok(!vf.ok && /PLAFON_FORMA/.test(vf.out), "MUTANT comparația ('2000' || '/session') cu plafonul 5000 = refuz structural: " + vf.out.slice(0, 140))
+  const vfp = validatorCu(join(ROOT, 'supabase/migrations/20261225a_executie_uscare.sql'), '--fara-plafon')
+  ok(!vfp.ok && /PLAFON_LIPSA: fișierul cere plafonul tranzacției \(5000 ms/.test(vfp.out), 'runnerul FĂRĂ plafon (--fara-plafon) = refuz local: ' + vfp.out.slice(0, 140))
+  const brut = brutV
   const fVechi1 = join(TMP, 'vechi_literal.sql'), fVechi2 = join(TMP, 'vechi_comentariu.sql')
   writeFileSync(fVechi1, aplica(brut, [["cale ~ E'^[0-9]{1,18}/", "cale ~ '^[0-9]{1,18}/"], ["\\\\.jpg$'),", "\\.jpg$'),"]]))
   writeFileSync(fVechi2, '-- plafon: transaction' + '_timeout = 2000\n' + brut)
@@ -141,7 +179,7 @@ async function bazaNoua() {
 }
 // ca runnerul: plafon + marcaje + (opțional) pașii L15 v2 generați. l15: 'livrare' (inainte aprobat + dupa cu manifest), 'inainte' (doar pasul
 // „înainte”, GLOBAL „-”: suficient pentru gardă, fără manifest), 'nimic'.
-async function caRunner(db, nume, text, { plafon = 2000, marcajPlafon = true, marcaj = true, l15 = 'inainte', aprobat = '-', manifest = '-', final = 'COMMIT' } = {}) {
+async function caRunner(db, nume, text, { plafon = PLAFON_LIVRARE, marcajPlafon = true, marcaj = true, l15 = 'inainte', aprobat = '-', manifest = '-', final = 'COMMIT' } = {}) {
   const pre = plafon ? `SET transaction_timeout = ${plafon};` : 'SET transaction_timeout = 0;'
   const mp = marcajPlafon ? `SELECT set_config('gazpet.plafon_tranzactie', '${plafon}:' || txid_current(), true);` : ''
   const mk = marcaj ? `SELECT set_config('gazpet.livrare_migrare', '${nume}:' || txid_current(), true);` : ''
@@ -153,12 +191,26 @@ async function caRunner(db, nume, text, { plafon = 2000, marcajPlafon = true, ma
     await db.exec(pre)
     await db.exec(`BEGIN ISOLATION LEVEL READ COMMITTED; ${mk} ${mp}`)
     await db.exec(ina + '\n' + text + '\n;\n' + dupa, { onNotice: n => jurnal.push(n.message) })
-    await db.exec(final)
+    await db.exec(final, { onNotice: n => jurnal.push(n.message) })
   } catch (e) { try { await db.exec('ROLLBACK') } catch { /* deja anulată */ } e.jurnal = jurnal; throw e } finally { await db.exec('SET transaction_timeout = 0;') }
   return jurnal
 }
 const aplicaMig = (db, text = MIG, o) => caRunner(db, '20261225a_executie_uscare', text, o)
-const revino = (db, text = REV, o) => caRunner(db, '20261225a_executie_uscare_ROLLBACK', text, { l15: 'nimic', ...o })
+const revino = (db, text = REV, o) => caRunner(db, '20261225a_executie_uscare_ROLLBACK', text, { l15: 'nimic', plafon: PLAFON_REVENIRE, ...o })
+// runda 16 — bugetul lock-ului: textele EXACTE ale încercării (mutanții / injecțiile pică dacă textul nu mai există, vezi aplica())
+const LOCK_1 = '      LOCK TABLE public.executie_proiecte IN SHARE ROW EXCLUSIVE MODE NOWAIT;\n'
+const LOCK_2 = '      LOCK TABLE public.executie_probe_tronsoane IN SHARE ROW EXCLUSIVE MODE NOWAIT;\n'
+const LOCK_3_EXIT = '      LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE NOWAIT;\n      EXIT;\n'
+const LOCK_PAUZA = '    EXCEPTION WHEN lock_not_available THEN\n      PERFORM pg_sleep(0.05);\n'
+const BUGET_INAINTE = "  LOOP\n    IF clock_timestamp() >= v_t0 + v_buget THEN\n      RAISE EXCEPTION '20261225a: BUGET_LOCK: % incercari"
+const BUGET_DUPA = "  IF clock_timestamp() >= v_t0 + v_buget THEN\n    RAISE EXCEPTION '20261225a: BUGET_LOCK: lock-urile obtinute"
+// setul complet obținut LENT, fără nicio coliziune (o încercare care durează peste termen): bugetul trebuie verificat și DUPĂ obținere
+const lockLent = t => aplica(t, [[LOCK_3_EXIT, '      LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE NOWAIT;\n      PERFORM pg_sleep(1.05);\n      EXIT;\n']])
+// coliziune simulată pe AL TREILEA lock (după ce primele două au fost luate), la primele n încercări (55P03 = lock_not_available, ca un NOWAIT
+// ocupat); handlerul tipărește câte lock-uri SHARE ROW EXCLUSIVE ale primelor două tabele mai ține sesiunea după eșec (trebuie 0: subtranzacția
+// le-a eliberat)
+const coliziune = (t, n) => aplica(t, [[LOCK_3_EXIT, `      IF v_incercari <= ${n} THEN RAISE EXCEPTION 'coliziune simulata' USING ERRCODE = '55P03'; END IF;\n` + LOCK_3_EXIT],
+  [LOCK_PAUZA, "    EXCEPTION WHEN lock_not_available THEN\n      RAISE NOTICE 'TEST_LOCK_PARTIAL %', (SELECT count(*) FROM pg_locks l WHERE l.pid = pg_backend_pid() AND l.granted AND l.mode = 'ShareRowExclusiveLock'\n        AND l.relation IN ('public.executie_proiecte'::regclass, 'public.executie_probe_tronsoane'::regclass));\n      PERFORM pg_sleep(0.05);\n"]])
 function aplica(text, lista) {
   let t = text
   for (const [din, in_] of lista || []) {
@@ -543,8 +595,15 @@ console.log('1. aplicarea ca la livrare (L15 v2: manifest generat, apoi livrarea
   ok(G && gener.length > 50 && !lipsa.length && !plus.length, `manifestul generat (${gener.length} obiecte) = lista revizuită; lipsă [${lipsa.join(' | ')}] în plus [${plus.join(' | ')}]`)
   const fManifest = join(TMP, '20261225a_executie_uscare.l15.tsv')
   writeFileSync(fManifest, manifest)
-  const j = await aplicaMig(db, MIG, { l15: 'livrare', aprobat: G, manifest: fManifest })
-  ok(j.some(m => /^AMPRENTA_GLOBALA dupa: \d+ diferente = manifestul/.test(m)) && j.some(m => /sfarsit la \d+ ms/.test(m)), 'livrarea aprobată: diferența = manifestul; ' + j.filter(m => /ms de la BEGIN/.test(m)).map(m => m.slice(0, 90)).join(' | '))
+  // livrarea aprobată se încheie cu garda finală REALĂ a runnerului (runda 16: plafonul 5000, LOCK_TINUT pe calea cu amprenta globală)
+  const j = await aplicaMig(db, MIG, { l15: 'livrare', aprobat: G, manifest: fManifest, final: garda('20261225a_executie_uscare', PLAFON_LIVRARE, 'COMMIT') })
+  ok(j.some(m => /^AMPRENTA_GLOBALA dupa: \d+ diferente = manifestul/.test(m)) && j.some(m => /sfarsit la \d+ ms de la BEGIN; lock-uri puternice tinute de \d+ ms/.test(m)),
+    'livrarea aprobată: diferența = manifestul; ' + j.filter(m => /ms de la BEGIN/.test(m)).map(m => m.slice(0, 90)).join(' | '))
+  const lt = j.find(m => /^LOCK_TINUT /.test(m)) || ''
+  ok(j.some(m => /^PLAFON_TIMP 20261225a_executie_uscare: garda trecuta la \d+ ms de la BEGIN \(plafon 5000 ms\)/.test(m))
+    && /^LOCK_TINUT 20261225a_executie_uscare: lock-urile puternice ale migrarii tinute \d+ ms pana la garda \(de la obtinerea setului complet, la \d+ ms de la BEGIN; primele lock-uri ale setului pot fi luate putin mai devreme; urmeaza COMMIT, neplafonat; eliberarea reala o masoara observatorul\)$/.test(lt)
+    && j.some(m => /lock la \d+ ms de la BEGIN \(1 incercari, \d+ ms de la prima incercare\)/.test(m)),
+    'garda finală a runnerului: PLAFON_TIMP (5000) + durata lock-urilor puternice: ' + lt.slice(0, 150))
   const ab = await verifica(db)
   ab.forEach(a => console.log('     ' + a))
   ok(ab.length === 0, `verificările de comportament (${ab.length} abateri)`)
@@ -559,6 +618,8 @@ console.log('2. refuzurile migrării')
 for (const [nume, fn, re] of [
   ['fără marcajul runnerului', db => aplicaMig(db, MIG, { marcaj: false }), /garda start invalida/],
   ['fără plafon', db => aplicaMig(db, MIG, { plafon: 0, marcajPlafon: false }), /PLAFON_TRANZACTIE lipsa/],
+  // runda 16: plafonul vechi (2000) pus de runner = refuz și ÎN tranzacție (pe lângă refuzul validatorului dinaintea conexiunii, 0b)
+  ['plafonul vechi (2000) pus de runner', db => aplicaMig(db, MIG, { plafon: 2000 }), /PLAFON_TRANZACTIE lipsa: 2000\/session marcaj 2000:\d+ \(cerut 5000\/session/],
   ['fără amprenta globală L15 v2 (pasul „înainte” lipsă)', db => aplicaMig(db, MIG, { l15: 'nimic' }), /AMPRENTA_GLOBALA_LIPSA/],
   ['pasul „înainte” dintr-o tranzacție anterioară', async db => {
     await db.exec(`BEGIN; CREATE TEMP TABLE ag_ina_0123456789abcdef (x int); COMMIT;`)
@@ -575,8 +636,11 @@ for (const [nume, fn, re] of [
     await db.exec(`BEGIN; CREATE TEMP TABLE ag_ina_0123456789abcdef (x int); COMMIT;`)
     return aplicaMig(db, 'SELECT count(*) FROM pg_temp.ag_ina_0123456789abcdef;\n' + MIG, { l15: 'nimic' })
   }, /AMPRENTA_GLOBALA_LIPSA/],
-  // bugetul lock-urilor (1 s de la BEGIN) se aplică și FĂRĂ coliziune (runda 3): o tranzacție care ajunge la lock după prima secundă = refuz
-  ['lock-ul fără coliziune, dar după prima secundă de la BEGIN', db => aplicaMig(db, 'SELECT pg_sleep(1.05);\n' + MIG), /BUGET_LOCK/],
+  // bugetul lock-urilor (runda 16: 1 s de la PRIMA ÎNCERCARE) se verifică și FĂRĂ coliziune, DUPĂ obținerea setului complet: o încercare care
+  // durează peste termen (setul obținut abia la ~1,05 s) = refuz, nimic schimbat
+  ['setul de lock-uri obținut după termen, fără coliziune', db => aplicaMig(db, lockLent(MIG)), /BUGET_LOCK: lock-urile obtinute abia la \d+ ms de la prima incercare \(1 incercari/],
+  // ocupat la fiecare încercare (coliziune simulată): termenul verificat ÎNAINTEA încercărilor oprește reîncercările la ~1 s
+  ['ocupat permanent (coliziune la fiecare încercare)', db => aplicaMig(db, coliziune(MIG, 1000)), /BUGET_LOCK: \d+ incercari, \d+ ms de la prima incercare/],
   // sonda politicilor EFECTIVE: politici permisive generice (care nu numesc bucket-ul) deschid fișierele -> refuz
   ['politică generică de citire pe „proprietarul” fișierului', async db => {
     await db.exec(`CREATE POLICY proprii ON storage.objects FOR SELECT TO authenticated USING (owner = auth.uid())`); return aplicaMig(db)
@@ -619,6 +683,29 @@ for (const [nume, fn, re] of [
   const gol = (await db.query(`SELECT to_regclass('public.executie_uscari') IS NULL AND NOT EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'executie-uscare') AS g`)).rows[0].g
   ok(re.test(m || '') && gol, `${nume}: ${m}`)
   await db.close()
+}
+// runda 16 — bugetul lock-ului pe căile LEGITIME și lock-urile parțiale (o probă = o funcție, refolosită de mutanți)
+// (a) un pas „înainte” lung (1,05 s, cât ar dura amprenta pe producție) NU mai consumă bugetul: ceasul pornește la prima încercare
+async function probaInainteLung(db, text = MIG) {
+  const j = await aplicaMig(db, 'SELECT pg_sleep(1.05);\n' + text)
+  const m = (j.find(x => /lock la \d+ ms de la BEGIN/.test(x)) || '').match(/lock la (\d+) ms de la BEGIN \((\d+) incercari, (\d+) ms de la prima incercare\)/)
+  return m && Number(m[1]) >= 1050 && Number(m[3]) < 1000 ? `lock la ${m[1]} ms de la BEGIN, ${m[3]} ms de la prima încercare` : null
+}
+// (b) eșecul unei încercări după ce o parte din set a fost luată eliberează partea luată (subtranzacția), apoi a doua încercare reușește
+async function probaPartial(db, text = MIG) {
+  const j = await aplicaMig(db, coliziune(text, 1))
+  const p = j.filter(x => /^TEST_LOCK_PARTIAL /.test(x)).map(x => Number(x.split(' ')[1]))
+  return { p, ok: p.length === 1 && p[0] === 0 && j.some(x => /lock la \d+ ms de la BEGIN \(2 incercari/.test(x)) }
+}
+{
+  const db = await bazaNoua()
+  let r = null, m = null; try { r = await probaInainteLung(db) } catch (e) { m = e.message }
+  ok(r != null, `pasul „înainte” lung (1,05 s) nu consumă bugetul lock-ului: ${r || m}`)
+  await db.close()
+  const db2 = await bazaNoua()
+  let q = null; m = null; try { q = await probaPartial(db2) } catch (e) { m = e.message }
+  ok(q?.ok === true, `eșec după primele două lock-uri: lock-urile parțiale eliberate (${JSON.stringify(q?.p)} ținute după eșec), a doua încercare reușește${m ? ': ' + m : ''}`)
+  await db2.close()
 }
 {
   // sonda nu lasă nimic în urmă: după o aplicare reușită bucket-ul e gol și rolul curent e postgres; a probat toate cele 7 identități
@@ -685,6 +772,8 @@ console.log('3. revenirea')
   await aplicaMig(db)
   let m = null; try { await revino(db, REV, { plafon: 0, marcajPlafon: false }) } catch (e) { m = e.message }
   ok(/PLAFON_TRANZACTIE lipsa/.test(m || ''), 'revenirea fără plafon refuzată')
+  m = null; try { await revino(db, REV, { plafon: PLAFON_LIVRARE }) } catch (e) { m = e.message }
+  ok(/PLAFON_TRANZACTIE lipsa: 5000\/session/.test(m || ''), 'revenirea cu plafonul livrărilor L15 v2 (5000, nu al ei) refuzată: ' + (m || '').slice(0, 90))
   m = null; try { await revino(db, REV, { marcaj: false }) } catch (e) { m = e.message }
   ok(/garda invalida/.test(m || ''), 'revenirea fără marcaj refuzată')
   // definițiile schimbate (nu doar numerele): fiecare = refuz, nimic schimbat
@@ -778,9 +867,21 @@ const MUTANTI = [
   ['M29 retragerea nu scrie cheia (cererea pierdută se aplică după „Renunț”)', [["  INSERT INTO public.executie_uscare_jurnal (uscare_id, proiect_id, actiune, valori, cheie, amprenta)\n  VALUES (NULL, v_proiect, 'cheie_retrasa'", "  PERFORM 1 FROM public.executie_uscare_jurnal WHERE false AND (NULL, v_proiect, 'cheie_retrasa'"]]],
   ['M30 retragerea nu întreabă jurnalul (cheia aplicată = „neaplicată”)', [["  SELECT uscare_id, proiect_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;\n  IF FOUND THEN\n    IF NOT public.fn_executie_nod_drept(j.proiect_id, false) THEN",
     "  SELECT uscare_id, proiect_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie AND false;\n  IF FOUND THEN\n    IF NOT public.fn_executie_nod_drept(j.proiect_id, false) THEN"]]],
-  ['M31 bugetul lock-ului doar la coliziune (ca în r2)', [["  LOOP\n    IF clock_timestamp() >= now() + interval '1 second' THEN\n      RAISE EXCEPTION '20261225a: BUGET_LOCK: % incercari", "  LOOP\n    IF false THEN\n      RAISE EXCEPTION '20261225a: BUGET_LOCK: % incercari"],
-    ["  IF clock_timestamp() >= now() + interval '1 second' THEN\n    RAISE EXCEPTION '20261225a: BUGET_LOCK: lock-urile obtinute", "  IF false THEN\n    RAISE EXCEPTION '20261225a: BUGET_LOCK: lock-urile obtinute"]],
-    null, { detector: async (db, text) => { try { await aplicaMig(db, 'SELECT pg_sleep(1.05);\n' + text); return 'lock luat după prima secundă' } catch { return null } } }],
+  ['M31 fără niciun termen al bugetului de lock (nici înainte, nici după)', [[BUGET_INAINTE, BUGET_INAINTE.replace('IF clock_timestamp() >= v_t0 + v_buget THEN', 'IF false THEN')],
+    [BUGET_DUPA, BUGET_DUPA.replace('IF clock_timestamp() >= v_t0 + v_buget THEN', 'IF false THEN')]],
+    null, { detector: async (db, text) => { try { await aplicaMig(db, lockLent(text)); return 'set obținut după termen, acceptat' } catch { return null } } }],
+  // runda 16 — bugetul de lock numărat corect (fiecare mutant cu scenariul lui; fără mutant scenariul trece / e refuzat corect, secțiunea 2)
+  ['M42 termenul NU se verifică după obținerea setului (calea fără coliziune)', [[BUGET_DUPA, BUGET_DUPA.replace('IF clock_timestamp() >= v_t0 + v_buget THEN', 'IF false THEN')]],
+    null, { detector: async (db, text) => { try { await aplicaMig(db, lockLent(text)); return 'set obținut după termen, fără coliziune, acceptat' } catch { return null } } }],
+  ['M43 termenul NU se verifică înaintea încercărilor (reîncercări peste termen)', [[BUGET_INAINTE, BUGET_INAINTE.replace('IF clock_timestamp() >= v_t0 + v_buget THEN', 'IF false THEN')]],
+    null, { detector: async (db, text) => {
+      // ocupat la primele 25 de încercări (~1,25 s): migrarea reală se oprește înaintea încercării de după termen; mutantul reîncearcă peste termen
+      let m = null; try { await aplicaMig(db, coliziune(text, 25)) } catch (e) { m = e.message }
+      return /BUGET_LOCK: \d+ incercari, \d+ ms de la prima incercare/.test(m || '') ? null : 'reîncercat după termen (' + (m || 'aplicată').slice(0, 80) + ')' } }],
+  ['M44 ceasul bugetului pornit la BEGIN (ca înainte de runda 16)', [['v_t0 timestamptz := clock_timestamp();', 'v_t0 timestamptz := now();']],
+    null, { detector: async (db, text) => { try { return (await probaInainteLung(db, text)) ? null : 'NOTICE-ul lock-ului greșit' } catch (e) { return 'refuz fals după un pas „înainte” lung: ' + e.message.slice(0, 70) } } }],
+  ['M45 primele două lock-uri în afara subtranzacției încercării (rămân ținute după eșec)', [['    BEGIN\n' + LOCK_1 + LOCK_2, LOCK_1.slice(2) + LOCK_2.slice(2) + '    BEGIN\n']],
+    null, { detector: async (db, text) => { const q = await probaPartial(db, text); return q.ok ? null : `lock-uri parțiale ținute după eșec: ${JSON.stringify(q.p)}` } }],
   ['M32 garda tabelei „înainte” fără xmin (o tabelă veche, citită acum, trece)', [["                    AND c.xmin::text = (txid_current() % 4294967296)::text\n", '']],
     null, { detector: async (db, text) => {
       await db.exec(`BEGIN; CREATE TEMP TABLE ag_ina_0123456789abcdef (x int); COMMIT;`)

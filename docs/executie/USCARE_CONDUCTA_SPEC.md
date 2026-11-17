@@ -4,9 +4,10 @@ Stare: **cod + migrare NEAPLICATĂ** (`supabase/migrations/20261225a_executie_us
 `supabase/revenire/20261225a_executie_uscare_ROLLBACK.sql`). Ecranul: Execuție → proiect → Izometrie → „💨 Uscare conductă”
 (`src/UscareConducta.jsx`). Până la aplicarea migrării, ecranul spune că funcția nu e încă activă și nu scrie nimic.
 
-> **Livrarea pe producție NU e posibilă cu unealta de livrare de azi** (§11 „Livrarea pe producție”): amprenta globală L15 v2 se calculează
-> înainte și după migrare, în aceeași tranzacție plafonată la 2.000 ms, iar pe producție un singur calcul durează ~1,7–2,3 s. Aplicarea pe
-> producție depinde de **refacerea uneltei de livrare** sau de o **derogare aprobată separat**; gărzile migrării nu se slăbesc pentru asta.
+> **Livrarea pe producție (decizia proprietarului, 17.11.2026; §11 „Livrarea pe producție”):** amprenta globală L15 v2 se calculează
+> înainte și după migrare, în aceeași tranzacție; plafonul tranzacției a fost ridicat la **5.000 ms** (era 2.000) și bugetul de lock se
+> numără de la **prima încercare** (nu de la BEGIN). Tranzacția estimată pe producție: ~2,5–2,8 s. De confirmat prin proba cu ROLLBACK pe
+> producție; dacă nici așa nu încape, se ia o instanță mai puternică (nu audit după COMMIT).
 
 ## 1. Ce cere contractul și ce cere beneficiarul
 
@@ -244,12 +245,12 @@ aceeași amprentă (altfel 22023); fără cotă (§6).
   rând fără raport; cheia + amprenta conținutului). RLS pe
   toate patru (citire = `fn_executie_nod_drept(proiect_id, false)`), fără drepturi de scriere pentru clienți. Bucket privat
   `executie-uscare` (JPEG, 10 MB).
-- **Livrarea cere amprenta globală L15 v2** (`scripts/livrare_migrare.sh --plafon-tranzactie-ms 2000 --amprenta-globala <md5>
+- **Livrarea cere amprenta globală L15 v2** (`scripts/livrare_migrare.sh --plafon-tranzactie-ms 5000 --amprenta-globala <md5>
   --diferente-globale supabase/migrations/20261225a_executie_uscare.l15.tsv`): fără pasul „înainte” al runnerului în aceeași tranzacție,
   migrarea refuză (`AMPRENTA_GLOBALA_LIPSA`). Garanția pe lanțul de drept = amprenta globală (orice derivă a oricărei funcții / politici /
   drept = refuz); migrarea mai verifică pe amprentă cele două porți chemate direct și lanțul lor (listă scrisă, fără regex pe corpuri).
 - **Validatorul runnerului** (runda 4): migrarea (91 de instrucțiuni la runda 5) și revenirea (1) trec `scripts/livrare_validator.py
-  --plafon-tranzactie`. Numele parametrului de plafon apare DOAR în citirea exactă acceptată (nici în comentarii); cele două CHECK-uri ale
+  --plafon-tranzactie-ms <N>` (runda 16 a runnerului: migrarea cu 5000, revenirea cu 2000; orice alt plafon = refuz `PLAFON_DIFERIT`). Numele parametrului de plafon apare DOAR în citirea exactă acceptată (nici în comentarii); cele două CHECK-uri ale
   căii folosesc `E'…\\.jpg$'` (literal E, două backslash-uri = un singur backslash în regex, aceeași expresie în catalog — verificat în
   proba locală, amprentele de structură ale celor două tabele neschimbate).
 - **Manifestul** `.l15.tsv` îl generează coordonatorul pe clonă (`scripts/livrare_l15_manifest.sh --iesire …`). Lista obiectelor pe care
@@ -322,27 +323,34 @@ aceeași amprentă (altfel 22023); fără cotă (§6).
 
 | Gardă | Unde | Ce face |
 |---|---|---|
-| `transaction_timeout = 2000 ms` | pus de runner înainte de `BEGIN`; verificat în `$pre$` (`2000/session` + marcajul prologului) | oprește toată tranzacția (amprentele runnerului + corpul + garda finală) |
+| `transaction_timeout = 5000 ms` (runda 16; era 2000) | pus de runner înainte de `BEGIN`; verificat în `$pre$` (`5000/session` + marcajul prologului); validatorul runnerului cere ca runnerul să dea exact această valoare | oprește toată tranzacția (amprentele runnerului + corpul + garda finală) |
 | `lock_timeout = 100 ms` | `$pre$` | o așteptare implicită de lock nu depășește 100 ms |
-| bugetul lock-urilor: 1 s de la `BEGIN` | `$lock$` (migrare) și revenirea | verificat **înaintea fiecărei încercări și după obținere** (runda 3: și fără coliziune); peste buget = `BUGET_LOCK`, nimic schimbat |
-| garda finală a runnerului | `livrare_migrare.sh` | plafonul ~2000 ms până la intrarea în COMMIT |
+| bugetul lock-urilor: 1 s de la **prima încercare** (runda 16; era de la `BEGIN`) | `$lock$` (migrare) | verificat **înaintea fiecărei încercări și după obținerea setului complet** (și fără coliziune); încercarea = subtranzacție (eșecul eliberează lock-urile parțiale); peste buget = `BUGET_LOCK`, nimic schimbat |
+| bugetul lock-urilor la revenire: 1 s de la `BEGIN` | revenirea (fără amprentă globală, plafon 2000, nu s-a schimbat) | ca înainte |
+| garda finală a runnerului | `livrare_migrare.sh` | plafonul ~5000 ms până la intrarea în COMMIT; tipărește și `LOCK_TINUT` (cât a fost ținut setul de lock-uri puternice de la obținerea lui până la gardă; fără COMMIT și fără eliberarea reală) |
+| validatorul runnerului (runda 17) | `livrare_validator.py`, înainte de conexiune | fiecare comparație a plafonului din cod verificată STRUCTURAL (formă + valoare; altfel `PLAFON_FORMA`); runnerul fără `--plafon-tranzactie-ms` = `PLAFON_LIPSA` local, nu abia în `$pre$` |
 
-Migrarea **nu fixează `statement_timeout`**; „sfarsit la … ms” de la final e doar afișat. Lock-urile luate (NOWAIT): `executie_proiecte`,
-`executie_probe_tronsoane` (cheile străine, SHARE ROW EXCLUSIVE), `storage.objects` (ACCESS EXCLUSIVE: politicile + sonda; oprește scurt și
-citirile de fișiere) — de aplicat într-un moment liniștit.
+Migrarea **nu fixează `statement_timeout`**; „lock la …”, „sfarsit la … ; lock-uri puternice tinute de …” sunt doar afișate. Lock-urile luate
+(NOWAIT, ordinea fixă): `executie_proiecte`, `executie_probe_tronsoane` (cheile străine, SHARE ROW EXCLUSIVE), `storage.objects` (ACCESS
+EXCLUSIVE: politicile + sonda; **oprește citirile și scrierile de fișiere din toată aplicația** cât e ținut — până la COMMIT, inclusiv pasul
+„după” al runnerului, ~1,3–1,6 s estimat pe producție — o extrapolare, nu o măsurătoare) — de aplicat într-un moment liniștit.
+**Lock-urile implicite de după set (runda 17):** `INSERT INTO storage.buckets` ia ROW EXCLUSIVE pe `storage.buckets` (+ indecșii, verificarea
+de unicitate, triggerele platformei) cât `storage.objects` e deja ACCESS EXCLUSIVE; postcondițiile și sonda citesc `storage.buckets`,
+`profiles`, `user_module_access`, `executie_acces_proiect` și lanțul de drept. Fiecare așteptare e limitată la 100 ms (`lock_timeout`), apoi
+refuz, nimic comis — dar ținând deja fișierele oprite. Inventarul complet: comentariul blocului de lock din migrare și docs/LIVRARE_L15_V2.md
+§9; proba pe clonă: `supabase/tests/l15_aplicare_concurenta.sh --migrare uscare` (inclusiv `storage.buckets` blocat).
+**Revenirea** (plafon 2000, fără amprentă globală) are altă acoperire decât aplicarea L15: înaintea aplicării reale proprietarul acceptă
+explicit procedura ei sau cere o revenire compatibilă L15, separat (docs/LIVRARE_L15_V2.md §9, „Fișierele de revenire”).
 
-**De ce nu încape pe producție:** runnerul calculează amprenta globală L15 v2 **înainte și după** migrare, în aceeași tranzacție. Pe clonă
-(baza mică) un calcul a durat ~0,42–0,43 s, iar aplicarea întreagă ~0,89 s de la `BEGIN`. Pe producție (citire, fără scriere, măsurătoarea
-coordonatorului) **un** calcul a durat ~1,7 s (verdictul r2) până la ~2,3 s în sesiune caldă și ~4,6 s în sesiune nouă: deja amprenta
-„înainte” depășește bugetul lock-urilor (1 s) și, împreună cu cea „după”, plafonul de 2.000 ms. Rezultatul: aplicarea se oprește cu
-`BUGET_LOCK` sau `transaction_timeout`, **fără niciun efect**.
+**De ce s-a schimbat (runda 16):** pe producție un calcul de amprentă durează ~0,86 s (cald, forma optimizată) + ~0,2–0,3 s pe un backend
+proaspăt, iar pasul runnerului ~×1,5 ⇒ tranzacția întreagă ~2,5–2,8 s (estimat), peste vechiul plafon de 2.000 ms; iar amprenta
+„înainte” (~1,2–1,3 s) consuma singură bugetul lock-urilor numărat de la `BEGIN`. Proprietarul a decis (17.11.2026): protocolul atomic
+rămâne, plafonul urcă la 5.000 ms, secunda lock-urilor se numără de la prima încercare (docs/LIVRARE_L15_V2.md §9).
 
-**Decizia NU se ia în acest PR** (gărzile nu se slăbesc): livrarea pe producție depinde de (A) **refacerea uneltei de livrare** (ex. amprenta
-globală calculată în afara ferestrei plafonate, cu garda de derivă păstrată) sau (B) o **derogare aprobată separat** de owner pentru această
-migrare (plafon / buget mărite, cu motivare și măsurători). **Ce trebuie măsurat înainte**, pe producție sau pe o clonă de aceeași mărime, cu
-runnerul complet, într-o sesiune NOUĂ (ca la livrare): timpul amprentei „înainte”, momentul obținerii lock-urilor de la `BEGIN`, durata
-corpului migrării (fără amprente), timpul amprentei „după”, garda finală și durata `COMMIT`; plus de câte ori apare `BUGET_LOCK` la 3 rulări
-cu `ROLLBACK`. Cu aceste cifre se alege (A) sau (B).
+**Ce se măsoară la proba cu ROLLBACK pe producție** (cu acordul owner-ului, cu runnerul complet, într-o sesiune NOUĂ, ca la livrare): timpul
+amprentei „înainte”, momentul obținerii lock-urilor (de la `BEGIN` și de la prima încercare), durata corpului migrării, timpul amprentei
+„după”, garda finală (`PLAFON_TIMP`), `LOCK_TINUT` și — cu un observator din altă sesiune — momentul real al eliberării lock-urilor și
+sesiunile aplicației care au așteptat; plus de câte ori apare `BUGET_LOCK` la 3 rulări. Dacă nu încape în 5.000 ms: instanță mai puternică.
 
 ## 12. Ce NU face prima livrare (pași următori, de decis)
 

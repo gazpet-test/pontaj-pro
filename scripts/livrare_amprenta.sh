@@ -29,6 +29,18 @@
 
 AG_V2_FISIER="$(dirname "${BASH_SOURCE[0]}")/amprenta_globala_v2.sql"
 
+# Plafonul tranzactiei pentru livrarile cu amprenta globala (decizia proprietarului, 17.11.2026; docs/LIVRARE_L15_V2.md §9):
+# O SINGURA definitie, folosita de runner (scripts/livrare_migrare.sh) si de generatorul / proba manifestului
+# (scripts/livrare_l15_manifest.sh). Migrarile L15 v2 cer aceeasi valoare in garda lor ('<N>/session' + marcajul), iar
+# validatorul (--plafon-tranzactie-ms) refuza orice migrare care cere alta valoare decat cea data runnerului.
+# Coborarea dupa masuratoarea pe productie = PR (constanta + gardele migrarilor neaplicate), nu optiune de linie de comanda.
+AG_PLAFON_MS=5000
+# ag_plafon_ok <plafon_ms|""> - cu amprenta globala, plafonul (daca e dat) trebuie sa fie EXACT AG_PLAFON_MS.
+ag_plafon_ok() {
+  [ -z "$1" ] || [ "$1" = "$AG_PLAFON_MS" ] || {
+    echo "L15 v2: plafonul tranzactiei cu amprenta globala este $AG_PLAFON_MS ms (docs/LIVRARE_L15_V2.md §9), dat: $1 ms" >&2; return 2; }
+}
+
 # GUC-urile contextului canonic (aceleasi verificate de garda ag_garda din blocul AG_CATALOG v2).
 ag_guc_functie() {
   printf "SET quote_all_identifiers = off SET search_path = pg_catalog, pg_temp SET TimeZone = 'UTC' SET DateStyle = 'ISO, YMD'"
