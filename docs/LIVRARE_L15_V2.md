@@ -589,8 +589,8 @@ Fără amprentă globală, plafonul rămâne parametrul runnerului (100..600000)
   octeți; în **tot** fișierul (deci și parametrii funcției, blocurile exterioare, alte corpuri) niciun nume confundabil cu ea — același
   casefold / NFKC, același prefix de 63 de octeți — care nu e identic, niciun `U&"…"` / `U&'…'`, și nicio mențiune `variable_conflict` (cu
   `use_variable`, `setting` / `source` / `name` din forma acceptată ar putea fi variabile, nu coloanele `pg_settings`). Ceilalți identificatori
-  citați rămân admiși (`COLLATE "C"` apare în corpurile cu plafon din 8 fișiere ale repo-ului; regula „niciun identificator citat” le-ar fi
-  rupt). Cele două controale ale rundei 18 cu `"v_plafon"` (aceleași litere) devin refuzuri; nicio migrare / revenire din repo nu scrie
+  citați rămân admiși (8 fișiere ale repo-ului au identificatori citați legitimi în corpul cu plafon, ex. `COLLATE "C"`; regula „niciun
+  identificator citat” le-ar fi rupt). Cele două controale ale rundei 18 cu `"v_plafon"` (aceleași litere) devin refuzuri; nicio migrare / revenire din repo nu scrie
   variabila plafonului citat (inventarul e un test).
 - **Tokenizerul** (toate modurile, și fără plafon): un cuvânt neciat cu o literă non-ASCII care, prin upper / lower / casefold / NFKC, dă o
   literă ASCII (`ı`, `ſ`, `ß`, ligaturile `ﬁ` / `ﬆ`, semnul Kelvin, literele „fullwidth”) = refuz: `.upper()` făcea din `publıc` cuvântul
