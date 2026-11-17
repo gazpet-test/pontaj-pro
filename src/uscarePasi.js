@@ -99,11 +99,21 @@ const RX_TEXT_TRECERE = /Trecerea \d+ pe acest tronson \(trecerea anterioară: r
 export const PREFIX_MOTIV_VERDICT = 'Verdictul diferit de calcul, motivul:'
 /** ce rămâne din observații după scoaterea textului automat al trecerii = motivul scris de om ('' = niciun motiv) */
 export const motivDinObservatii = obs => String(obs ?? '').replace(RX_TEXT_TRECERE, '').trim()
-/** formularul cu motivul verdictului (câmpul distinct de pe ecran) adăugat la observații; motiv gol = formularul neschimbat */
+/** rândul cu care motivul intră în observații ('' = niciun motiv) */
+const randMotiv = motiv => { const m = String(motiv ?? '').trim(); return m ? `${PREFIX_MOTIV_VERDICT} ${m}` : '' }
+// liniile normalizate (CRLF, spații la capete), încadrate de \n: „conține rândul” = conține TOATE liniile lui, consecutive (motivul poate avea mai multe linii)
+const liniiNorm = s => '\n' + String(s ?? '').replace(/\r\n?/g, '\n').split('\n').map(x => x.trim()).join('\n') + '\n'
+/** observațiile au deja motivul: aceeași etichetă + același text (motiv gol = false) */
+export const areMotivVerdict = (obs, motiv) => { const l = randMotiv(motiv); return !!l && liniiNorm(obs).includes(liniiNorm(l)) }
+/**
+ * formularul cu motivul verdictului (câmpul distinct de pe ecran) adăugat la observații; motiv gol = formularul neschimbat.
+ * IDEMPOTENT (P2 din review-ul #1127): o reîncercare după refuz / eroare / conflict pornește de la formularul care are deja motivul
+ * (salveaza îl pune pe ecran înaintea răspunsului, câmpul se golește doar după succes) → motivul deja prezent nu se adaugă a doua oară.
+ */
 export function cuMotivVerdict(form, motiv) {
-  const m = String(motiv ?? '').trim()
-  if (!m) return form
-  return { ...form, observatii: [String(form?.observatii ?? '').trim(), `${PREFIX_MOTIV_VERDICT} ${m}`].filter(Boolean).join('\n') }
+  const l = randMotiv(motiv)
+  if (!l || areMotivVerdict(form?.observatii, motiv)) return form
+  return { ...form, observatii: [String(form?.observatii ?? '').trim(), l].filter(Boolean).join('\n') }
 }
 
 /** avertismentele unei greutăți scrise (text de pe ecran): unitatea greșită, valori nefirești; [] = nimic de spus */

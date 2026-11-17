@@ -31,7 +31,7 @@ import {
   durataOre, vitezaMedie, diferentaBurete, verificare24h, propunereMeteo, fmtZi, fmtMoment, fmtNr, fmtKm, actiuniPermise,
 } from './uscareLogica.js'
 import { parseNumar } from './izoDocumenteLogica.js'
-import { pasCurent, formularPasNou, formularTrecereNoua, formularInregistreazaEtapa1, formularTerminaEtapa2 } from './uscarePasi.js'
+import { pasCurent, formularPasNou, formularTrecereNoua, formularInregistreazaEtapa1, formularTerminaEtapa2, areMotivVerdict } from './uscarePasi.js'
 import UscarePasi, { CardInLucru } from './UscarePasi.jsx'
 
 const stocareImplicita = () => { try { return globalThis.localStorage || null } catch { return null } }
@@ -256,10 +256,11 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
 
   // ── ciorna locală: pe (utilizator, proiect, raport | „nou”), cu rândul de BAZĂ (ca restaurarea să se poată îmbina) ──
   const cheieCiorna = id => (uid ? `gazpet.uscare.ciorna.v2:${uid}:${proiectId}:${id}` : null)
-  const scrieCiorna = (id, b, f) => {
+  // mv = motivul verdictului contrar încă netrimis (câmpul distinct al pașilor): intră și el în ciornă, ca să revină la reîncărcare
+  const scrieCiorna = (id, b, f, mv = '') => {
     const k = cheieCiorna(id)
     if (!k || !stocare) return false
-    try { stocare.setItem(k, JSON.stringify({ baza: b, form: f, la: new Date().toISOString() })); return stocare.getItem(k) !== null } catch { return false }
+    try { stocare.setItem(k, JSON.stringify({ baza: b, form: f, ...(mv ? { motivVerdict: mv } : {}), la: new Date().toISOString() })); return stocare.getItem(k) !== null } catch { return false }
   }
   const citesteCiorna = id => { const k = cheieCiorna(id); if (!k || !stocare) return null; try { return JSON.parse(stocare.getItem(k) || 'null') } catch { return null } }
   const stergeCiorna = id => { const k = cheieCiorna(id); if (k && stocare) { try { stocare.removeItem(k) } catch { /* se vede la următoarea scriere */ } } }
@@ -269,10 +270,12 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     if (!form || !editabilAcum || ciornaGasita) return
     const id = selectat === 'nou' ? 'nou' : rand?.id
     if (id == null) return
-    const modificat = selectat === 'nou' || areModificari(form, baza)
+    // un motiv scris care nu e încă în observațiile formularului = modificare nesalvată (deja inclus, ex. după succes = nu mai contează)
+    const mv = motivVerdict.trim()
+    const modificat = selectat === 'nou' || areModificari(form, baza) || (!!mv && !areMotivVerdict(form.observatii, mv))
     if (!modificat) return
-    setCiornaEroare(!scrieCiorna(id, baza, form))
-  }, [form]) // eslint-disable-line react-hooks/exhaustive-deps
+    setCiornaEroare(!scrieCiorna(id, baza, form, mv))
+  }, [form, motivVerdict]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const formDeschis = form != null
   useEffect(() => { if (typeof onFormular === 'function') onFormular(formDeschis) }, [formDeschis]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -296,7 +299,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     setSelectat(u.id); setBaza(u); setForm(formularDinRand(u)); incarcaPoze(u.id, capteaza(u.id))
     if (u.stare === 'deschisa') {
       const c = citesteCiorna(u.id)
-      if (c?.form && areModificari(c.form, c.baza || u)) setCiornaGasita({ ...c, pentru: u.id, vecheVersiune: (c.baza?.versiune ?? u.versiune) !== u.versiune })
+      if (c?.form && (areModificari(c.form, c.baza || u) || (c.motivVerdict && !areMotivVerdict(c.form.observatii, c.motivVerdict)))) setCiornaGasita({ ...c, pentru: u.id, vecheVersiune: (c.baza?.versiune ?? u.versiune) !== u.versiune })
     }
   }
   const inchideForm = () => {
@@ -318,6 +321,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const restaureazaCiorna = () => {
     const c = ciornaGasita
     setCiornaGasita(null)
+    setMotivVerdict(typeof c.motivVerdict === 'string' ? c.motivVerdict : '')   // motivul netrimis revine în câmpul lui (dublura o oprește cuMotivVerdict)
     if (c.pentru === 'nou' || !c.baza || !rand || c.baza.versiune === rand.versiune) { setForm(c.form); return }
     const m = imbinare(c.baza, c.form, rand)
     setForm(m.form)
