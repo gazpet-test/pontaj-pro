@@ -553,8 +553,9 @@ Fără amprentă globală, plafonul rămâne parametrul runnerului (100..600000)
 
 **Runda 18 (re-review-ul Jakarinos pe #1115, două P1 noi):**
 - **Variabila plafonului după identitatea PostgreSQL, nu după token.** `v_plafon`, `V_PLAFON` și `"v_plafon"` sunt aceeași variabilă
-  (neciat ⇒ litere mici, citat ⇒ exact); comparația e conservatoare (și `"V_PLAFON"`, alt identificator în PostgreSQL, e tratat ca
-  aceeași variabilă ⇒ doar refuz în plus). Forma acceptată devine: variabila declarată **o singură dată**, `<v> text;`, în **prima**
+  (neciat ⇒ litere mici, citat ⇒ exact). *Corectat în runda 19:* comparația rundei 18 era prin casefold și s-a folosit **și la acceptare**,
+  deci afirmația „casefold produce doar refuzuri în plus” era falsă (`"V_PLAFON"`, alt identificator, era acceptat drept comparația gărzii;
+  numele peste 63 de octeți nu erau trunchiate) — vezi runda 19. Forma acceptată devine: variabila declarată **o singură dată**, `<v> text;`, în **prima**
   secțiune `DECLARE` a corpului (blocul exterior), citită o dată, folosită doar în comparație sau în argumentele unei instrucțiuni care
   **începe** cu `RAISE`, fără `U&"…"` / `U&'…'` în același corp. Refuzate acum (`PLAFON_FORMA`, mutanți pe ambele migrări reale, fiecare
   aplicat exact o dată): mutantul recenzentului `"v_plafon" := 5000::text || chr(47) || 'session';`, `"V_PLAFON" :=`, `V_Plafon :=`,
@@ -578,6 +579,41 @@ Fără amprentă globală, plafonul rămâne parametrul runnerului (100..600000)
 - **Limită declarată** (ca SQL-ul dinamic din runda 12): numele construit în server (`chr()`, `format` cu argument dinamic, `U&'…'` într-un
   corp, `current_setting(<variabilă>)`) nu se vede static; o asemenea cerere fără plafon e refuzată abia de garda din SQL a migrării, în
   tranzacție, nimic comis (comportamentul de dinainte de runda 17).
+
+**Runda 19 (re-review-ul Jakarinos pe #1115, NO-GO P1-R3-1: identitatea identificatorilor):** două reguli separate, nu una „aproximativă”.
+- **Acceptarea = identitatea EXACTĂ PostgreSQL** (declarația, citirea `INTO`, comparația gărzii, folosirea în `RAISE`): neciat ⇒ doar `A-Z`
+  devin `a-z` (pe un server UTF-8 literele non-ASCII rămân neschimbate), citat ⇒ conținutul exact (`""` din interior = `"`), ambele
+  **trunchiate la 63 de octeți UTF-8**, pe granița unui caracter (nu pe caractere). Niciodată casefold la acceptare.
+- **Refuzul = conservator** (`PLAFON_FORMA`): variabila plafonului e un identificator simplu **necitat** `[A-Za-z_][A-Za-z0-9_]*` de cel mult
+  63 de octeți; în corpul care o citește ea nu apare niciodată citată (nici `"v_plafon"`, identic) și niciun identificator nu depășește 63 de
+  octeți; în **tot** fișierul (deci și parametrii funcției, blocurile exterioare, alte corpuri) niciun nume confundabil cu ea — același
+  casefold / NFKC, același prefix de 63 de octeți — care nu e identic, niciun `U&"…"` / `U&'…'`, și nicio mențiune `variable_conflict` (cu
+  `use_variable`, `setting` / `source` / `name` din forma acceptată ar putea fi variabile, nu coloanele `pg_settings`). Ceilalți identificatori
+  citați rămân admiși (`COLLATE "C"` apare în corpurile cu plafon din 8 fișiere ale repo-ului; regula „niciun identificator citat” le-ar fi
+  rupt). Cele două controale ale rundei 18 cu `"v_plafon"` (aceleași litere) devin refuzuri; nicio migrare / revenire din repo nu scrie
+  variabila plafonului citat (inventarul e un test).
+- **Tokenizerul** (toate modurile, și fără plafon): un cuvânt neciat cu o literă non-ASCII care, prin upper / lower / casefold / NFKC, dă o
+  literă ASCII (`ı`, `ſ`, `ß`, ligaturile `ﬁ` / `ﬆ`, semnul Kelvin, literele „fullwidth”) = refuz: `.upper()` făcea din `publıc` cuvântul
+  `PUBLIC` (forma verificată a lui `search_path` era acceptată, serverul ar fi setat altă schemă) și din `ınto` cuvântul `INTO`. Literele
+  românești (`ă â î ș ț`) rămân permise.
+- **`--fara-plafon`:** `set_config('transaction_timeout', …)` e recunoscut ca scriere doar pentru funcția exactă (`set_config` /
+  `"set_config"`, necalificat sau `pg_catalog.`); `"SET_CONFIG"`, `public.set_config` = altă funcție ⇒ `PLAFON_LIPSA`.
+- **Teste** (`scripts/test_livrare_validator_plafon.py`, secțiunea r19; pe 165798ed testul dă ESEC 37): reproducerea (a) octet cu octet,
+  variantele ei (parametrul `"V_PLAFON"` cu garda pe variabila locală, parametrul `v_plafon` cu garda pe `"V_PLAFON"`), reproducerea (b) pe
+  ambele migrări reale, numele de 63 de octeți prin numele lung necitat / citat, prefixul multi-octet (62 de octeți + `ţ` = 63 de caractere,
+  64 de octeți), `"V_plafon"` / `"V_PLAFON"` în comparație, literele confuze, `variable_conflict`, `set_config`; controale acceptate:
+  `V_PLAFON` / `V_Plafon` necitat (identic), variabila de 62 / 63 de octeți, un nume de 61 de octeți diferit, parametrul `v_plafon` umbrit,
+  literele românești. Compatibilitatea 165798ed ↔ nou pe toate cele 483 de fișiere SQL, în toate modurile: 1.954 de rulări, 0 diferențe.
+
+| PostgreSQL (server UTF-8) | identitatea | validatorul la acceptare | refuzul conservator |
+|---|---|---|---|
+| neciat ASCII (`V_Plafon`) | litere mici ASCII: `v_plafon` | identic (`ident_pg`) | — |
+| citat (`"V_PLAFON"`) | exact: `V_PLAFON` ≠ `v_plafon` | nu e variabila | confundabil (casefold) ⇒ refuz oriunde în fișier |
+| citat, aceleași litere (`"v_plafon"`) | `v_plafon` (identic) | identic | variabila nu se scrie citat ⇒ refuz în corpul ei |
+| `""` în interior (`"a""b"`) | `a"b` | despachetat de tokenizer | — |
+| `U&"…"` / `U&'…'` | decodificat în server | — | refuz (nivel superior: oricând; fișier cu variabila plafonului: oriunde) |
+| > 63 de octeți (citat sau nu) | trunchiat la 63 de octeți, pe granița caracterului | identitatea trunchiată | variabila > 63 ⇒ refuz; în corpul ei orice nume > 63 ⇒ refuz; prefix de 63 egal ⇒ refuz oriunde |
+| non-ASCII neciat (`v_ţintă`) | neschimbat (nu se pliază) | exact (din textul original, nu din `.upper()`) | literă confuză cu una ASCII (`ı`, `ſ`, `ß`, `ﬁ`, K) ⇒ refuz în tokenizer |
 
 ### Bugetul de lock (runda 16)
 

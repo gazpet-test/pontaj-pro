@@ -231,9 +231,28 @@ MUTANTI_FORMA = [
         ("argument de apel (INOUT posibil)", "  PERFORM public.f_seteaza(v_plafon);", []),
     ]
 ] + [
-    # controale pozitive r18: aceeasi variabila scrisa citat, cu aceleasi litere, in comparatie si in RAISE = acceptata
-    ("CONTROL r18: comparatia cu \"v_plafon\" (citat, aceleasi litere)", [(IF_S, IF_S.replace("v_plafon", '"v_plafon"'))], 0, "OK "),
-    ("CONTROL r18: coalesce(\"v_plafon\", 'lipsa') in RAISE", [("coalesce(v_plafon, 'lipsa')", "coalesce(\"v_plafon\", 'lipsa')")], 0, "OK "),
+    # Runda 19 (P1-R3-1): cele doua controale r18 de mai jos (variabila scrisa citat, cu aceleasi litere) erau ACCEPTATE; regula mai
+    # stricta (variabila plafonului se scrie doar necitat) le REFUZA. Niciun fisier din repo nu scrie variabila plafonului citat
+    # (verificat in test: inventar_repo_r19), deci rezultatul pe repo nu se schimba.
+    ("r19 (fost CONTROL r18) comparatia cu \"v_plafon\" (citat, aceleasi litere)", [(IF_S, IF_S.replace("v_plafon", '"v_plafon"'))], 1,
+     "PLAFON_FORMA"),
+    ("r19 (fost CONTROL r18) coalesce(\"v_plafon\", 'lipsa') in RAISE", [("coalesce(v_plafon, 'lipsa')", "coalesce(\"v_plafon\", 'lipsa')")], 1,
+     "PLAFON_FORMA"),
+    # Runda 19: comparatia gărzii pe ALT identificator, confundabil cu variabila (citat, alte majuscule): in PostgreSQL "V_plafon" nu e
+    # v_plafon, deci valoarea citita nu e comparata. Pe 165798ed: ACCEPT (casefold la acceptare).
+    ("r19 comparatia cu \"V_plafon\" (citat, alte majuscule = alt identificator)", [(IF_S, IF_S.replace("v_plafon", '"V_plafon"'))], 1,
+     "PLAFON_FORMA"),
+    ("r19 comparatia cu \"V_PLAFON\" (citat, alte majuscule = alt identificator)", [(IF_S, IF_S.replace("v_plafon", '"V_PLAFON"'))], 1,
+     "PLAFON_FORMA"),
+    # litera care se confunda cu una ASCII in cuvintele formei: .upper() facea din „ınto” cuvantul INTO (serverul nu)
+    ("r19 litera confuza: INTO scris cu i fara punct (U+0131)", [("source INTO v_plafon", "source " + chr(0x131) + "NTO v_plafon")], 1,
+     "PLAFON_FORMA"),
+    ("r19 litera confuza: source scris cu s lung (U+017F)", [("source INTO v_plafon", chr(0x17F) + "ource INTO v_plafon")], 1, "PLAFON_FORMA"),
+    ("r19 litera confuza: IS scris cu i fara punct in comparatie", [(IF_S, IF_S.replace(" IS ", " " + chr(0x131) + "S "))], 1, "PLAFON_FORMA"),
+    # controale pozitive r19: aceeasi variabila NECITATA cu alte majuscule (identica in PostgreSQL) = acceptata
+    ("CONTROL r19: comparatia cu V_PLAFON (neciat, alte majuscule = acelasi identificator)", [(IF_S, IF_S.replace("v_plafon", "V_PLAFON"))], 0,
+     "OK "),
+    ("CONTROL r19: coalesce(V_Plafon, 'lipsa') in RAISE (neciat)", [("coalesce(v_plafon, 'lipsa')", "coalesce(V_Plafon, 'lipsa')")], 0, "OK "),
 ]
 
 
@@ -359,6 +378,144 @@ def forma_structurala():
     return esecuri
 
 
+# Runda 19 (re-review PR #1115 pe 165798ed, NO-GO P1-R3-1): identitatea identificatorilor. Reproducerile recenzentului EXACT (a: artefactul
+# cu functia, octet cu octet; b: pe AMBELE migrari reale, redenumirea + atribuirea prin numele cu acelasi prefix de 63 de octeti), plus
+# variantele cerute. Pe 165798ed toate cazurile „r19” de refuz sunt ACCEPTATE (testul rulat cu --validator <165798ed> = ESEC).
+ARTEFACT_R3_A = """DO $g$ BEGIN
+ IF current_setting('gazpet.livrare_migrare', true) IS NULL THEN
+  RAISE EXCEPTION 'livrare lipsa';
+ END IF;
+END $g$;
+CREATE FUNCTION public.test_plafon("V_PLAFON" text)
+RETURNS void LANGUAGE plpgsql AS $f$
+DECLARE v_plafon text;
+BEGIN
+ SELECT setting || '/' || source INTO v_plafon
+ FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
+ IF "V_PLAFON" IS DISTINCT FROM '5000/session' THEN
+  RAISE EXCEPTION 'plafon incorect';
+ END IF;
+END $f$;
+SELECT public.test_plafon(5000::text || chr(47) || 'session');
+"""
+
+
+def functie_r19(param, decl, garda, extra=""):
+    # artefact minim in forma (a), cu parametrul / declaratia / identificatorul din garda alese de test
+    return ARTEFACT_R3_A.replace('("V_PLAFON" text)', f"({param})" if param else "()") \
+        .replace("DECLARE v_plafon text;", f"DECLARE {decl} text;") \
+        .replace("INTO v_plafon\n", f"INTO {decl}\n") \
+        .replace('IF "V_PLAFON" IS DISTINCT', extra + f'IF {garda} IS DISTINCT') \
+        .replace("SELECT public.test_plafon(5000::text || chr(47) || 'session');\n", "")
+
+
+def identitate_r19():
+    esecuri = []
+    import re as _re
+
+    def rez(et, bun, detaliu):
+        print(f"{'ok' if bun else 'ESEC'} r19: {et}{'' if bun else ' — ' + detaliu[:240]}")
+        if not bun:
+            esecuri.append("r19: " + et)
+
+    def caz(et, text, args, exp, frag):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "a.sql"
+            f.write_bytes(text.encode("utf-8"))
+            rc, out = iesire(f, *args)
+        rez(f"{et}: cod {rc} (asteptat {exp})", rc == exp and frag in out, out)
+
+    P5 = ("reg_test", "--plafon-tranzactie-ms", "5000")
+    # (a) exact: garda compara parametrul DISTINCT "V_PLAFON", nu variabila citita v_plafon
+    caz("(a) reproducerea recenzentului: garda pe parametrul \"V_PLAFON\"", ARTEFACT_R3_A, P5, 1, "PLAFON_FORMA")
+    # variantele cazului (a): parametrul "V_PLAFON" + variabila locala v_plafon, garda pe fiecare dintre ele
+    caz("(a') parametrul \"V_PLAFON\", garda pe variabila locala v_plafon (parametru confundabil)",
+        functie_r19('"V_PLAFON" text', "v_plafon", "v_plafon"), P5, 1, "PLAFON_FORMA")
+    caz("(a'') parametrul v_plafon (neciat, umbrit de declaratie), garda pe \"V_PLAFON\" (nedeclarat)",
+        functie_r19("v_plafon text", "v_plafon", '"V_PLAFON"'), P5, 1, "PLAFON_FORMA")
+    caz("CONTROL (a): fara parametru, garda pe variabila locala v_plafon", functie_r19("", "v_plafon", "v_plafon"), P5, 0, "OK ")
+    caz("CONTROL (a): parametrul v_plafon (neciat, identic, umbrit de declaratia din corp), garda pe v_plafon",
+        functie_r19("v_plafon text", "v_plafon", "v_plafon"), P5, 0, "OK ")
+    caz("CONTROL (a): parametru cu alt nume (p_alt), garda pe v_plafon", functie_r19("p_alt text", "v_plafon", "v_plafon"), P5, 0, "OK ")
+    caz("CONTROL (a): litere romanesti intr-un alt identificator din corp (v_ţintă, neconfundabil)",
+        functie_r19("", "v_plafon", "v_plafon").replace("DECLARE v_plafon text;", "DECLARE v_plafon text; v_ţintă text;"),
+        P5, 0, "OK ")
+    # (b) exact, pe AMBELE migrari reale: variabila redenumita cu un nume lung, atribuirea prin alt nume cu aceiasi primi 63 de octeti
+    prefix = "v_" + "a" * 61
+    assert len(prefix.encode("utf-8")) == 63
+    for nume in ("20261225a_executie_uscare", "20261221a_meteo_xweather_zilnic"):
+        brut = (ROOT / "supabase/migrations" / (nume + ".sql")).read_bytes().decode("utf-8")
+        sep = "\r\n" if "\r\n" in brut else "\n"
+
+        def mutant(var, inserat):
+            t = _re.sub(r"\bv_plafon\b", var, brut)
+            ancora = "  IF " + var + " IS DISTINCT FROM"
+            if t.count(ancora) != 1:
+                return None
+            return t.replace(ancora, inserat + sep + ancora, 1) if inserat else t
+
+        def caz_m(et, var, inserat, exp, frag):
+            t = mutant(var, inserat)
+            if t is None:
+                rez(f"{nume}: {et}", False, "mutantul nu se aplica exact o data (proba nefunctionala)")
+                return
+            caz(f"{nume}: {et}", t, P5, exp, frag)
+
+        caz_m("(b) reproducerea recenzentului: variabila de 70 de octeti, atribuire prin \"<prefix 63>_fals\"", prefix + "_citire",
+              '  "' + prefix + '_fals" := ' + FAB + ";", 1, "PLAFON_FORMA")
+        caz_m("(b) variabila de 70 de octeti, fara alta schimbare (nume peste 63 de octeti = refuz)", prefix + "_citire", "", 1, "PLAFON_FORMA")
+        caz_m("(b') variabila de 63 de octeti, atribuire prin numele NECITAT de 68 de octeti (acelasi prefix)", prefix,
+              "  " + prefix + "_fals := " + FAB + ";", 1, "PLAFON_FORMA")
+        caz_m("(b') variabila de 63 de octeti, atribuire prin acelasi nume lung CITAT", prefix,
+              '  "' + prefix + '_fals" := ' + FAB + ";", 1, "PLAFON_FORMA")
+        # trunchierea e pe OCTETI, nu pe caractere: variabila de 62 de octeti + „ţ” (2 octeti) = 63 de caractere, 64 de octeti;
+        # serverul taie la 62 de octeti (nu rupe caracterul) => acelasi identificator ca variabila
+        v62 = "v_" + "a" * 60
+        caz_m("(b'') prefix multi-octet: atribuire prin <v62>ţ (63 de caractere, 64 de octeti, trunchiat = variabila)", v62,
+              "  " + v62 + "ţ := " + FAB + ";", 1, "PLAFON_FORMA")
+        caz_m("(b'') prefix multi-octet citat: \"<v62>ţ\" :=", v62, '  "' + v62 + 'ţ" := ' + FAB + ";", 1, "PLAFON_FORMA")
+        caz_m("CONTROL (b): variabila redenumita cu 63 de octeti, fara alta schimbare", prefix, "", 0, "OK ")
+        caz_m("CONTROL (b): variabila redenumita cu 62 de octeti, fara alta schimbare", v62, "", 0, "OK ")
+        caz_m("CONTROL (b): alt nume de 61 de octeti care NU e prefixul variabilei (v_<60 a>b, alt identificator)", v62,
+              "  DECLARE v_" + "a" * 58 + "b text; BEGIN NULL; END;", 0, "OK ")
+        # plpgsql.variable_conflict: cu use_variable, setting / source / name ar putea fi variabile, nu coloanele pg_settings
+        t = brut.replace("DO $pre$" + sep, "SET LOCAL plpgsql.variable_conflict = use_variable;" + sep + "DO $pre$" + sep, 1)
+        caz(f"{nume}: SET LOCAL plpgsql.variable_conflict = use_variable inaintea gărzii", t, P5, 1, "PLAFON_FORMA")
+    # variable_conflict in corp (#variable_conflict) — refuzat si inainte (forma declaratiei), acum cu motivul lui
+    caz("#variable_conflict use_variable in corp", functie_r19("", "v_plafon", "v_plafon").replace("$f$\nDECLARE", "$f$\n#variable_conflict use_variable\nDECLARE"),
+        P5, 1, "PLAFON_FORMA")
+    # litera confuza la nivel superior (fara plafon, regulile vechi): „publıc” trecea drept PUBLIC in forma verificata a lui search_path
+    for args, et in ((("reg_test",), "fara optiune"), (("reg_test", "--fara-plafon"), "--fara-plafon"), (P5, "--plafon-tranzactie-ms 5000")):
+        caz(f"SET LOCAL search_path = publ{chr(0x131)}c, pg_temp ({et})",
+            GARDA + "SET LOCAL search_path = publ" + chr(0x131) + "c, pg_temp;\n", args, 1, "confundă cu o literă ASCII")
+        caz(f"CONTROL: SET LOCAL search_path = public, pg_temp ({et})", GARDA + "SET LOCAL search_path = public, pg_temp;\n", args, 0, "OK ")
+        caz(f"CONTROL: identificator cu litere romanesti la nivel superior ({et})",
+            GARDA + "CREATE TABLE public.t_șantă (id integer);\n", args, 0, "OK ")
+    # --fara-plafon: set_config recunoscut ca SCRIERE doar dupa identitatea exacta
+    FP = ("reg_test", "--fara-plafon")
+    for apel, exp in (("set_config", 0), ("Set_Config", 0), ('"set_config"', 0), ("pg_catalog.set_config", 0), ('"pg_catalog".set_config', 0),
+                      ('"SET_CONFIG"', 1), ("public.set_config", 1), ('pg_catalog."Set_Config"', 1)):
+        caz(f"--fara-plafon: {apel}('transaction_timeout', '0', true) {'= scriere' if exp == 0 else '= alta functie => PLAFON_LIPSA'}",
+            GARDA + "DO $d$ BEGIN PERFORM " + apel + "('transaction_timeout', '0', true); END $d$;\n", FP, exp,
+            "OK " if exp == 0 else "PLAFON_LIPSA")
+    # inventarul repo-ului (justificarea regulii alese): niciun fisier care citeste plafonul in variabila nu o scrie citat, nu are
+    # identificatori > 63 de octeti in corpul ei, nume confundabile, U& sau variable_conflict
+    n_var = 0
+    for cale in sorted(list((ROOT / "supabase/migrations").glob("*.sql")) + list((ROOT / "supabase/revenire").glob("*.sql"))):
+        text = cale.read_bytes().decode("utf-8", "replace")
+        if "transaction_timeout" not in text:
+            continue
+        for m in _re.finditer(r"source[ \t\r\n]+INTO[ \t\r\n]+([^ \t\r\n]+)[ \t\r\n]+FROM[ \t\r\n]+pg_catalog\.pg_settings", text, _re.I):
+            n_var += 1
+            v = m.group(1)
+            bun = _re.fullmatch(r"[a-z_][a-z0-9_]*", v) is not None and ('"' + v + '"') not in text.lower()
+            if not bun:
+                rez(f"inventar {cale.name}: variabila {v!r} citata / in alta forma", False, v)
+    rez(f"inventar repo: {n_var} citiri INTO <variabila> din pg_settings, toate necitate, litere mici, fara forma citata", n_var >= 2,
+        "prea putine (proba nefunctionala)")
+    return esecuri
+
+
 def main():
     esecuri = []
     with tempfile.TemporaryDirectory() as d:
@@ -400,6 +557,7 @@ def main():
             print(f"info {rel}: cod {ruleaza(cale, 'reg_test', '--plafon-tranzactie')} cu --plafon-tranzactie")
     esecuri += acord_plafon()
     esecuri += forma_structurala()
+    esecuri += identitate_r19()
     if esecuri:
         print(f"ESEC test_livrare_validator_plafon: {len(esecuri)} caz(uri): {', '.join(esecuri)}")
         return 1

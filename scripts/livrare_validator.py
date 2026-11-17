@@ -97,6 +97,19 @@
 #   Limită declarată (ca SQL-ul dinamic din runda 12): numele parametrului construit în server (chr(), format cu argument dinamic,
 #   U&'…' în corpuri, current_setting(<variabilă>)) nu se vede static; o asemenea cerere fără plafon e refuzată abia de garda din SQL
 #   a migrării (în tranzacție, nimic comis), ca înainte de runda 17.
+# Runda 19 (17.11.2026, re-review-ul Jakarinos pe PR #1115, NO-GO P1-R3-1: casefold folosit și la ACCEPTARE). Două reguli separate:
+#   ACCEPTAREA (declarația, citirea INTO, comparația gărzii, folosirea în RAISE) = identitatea EXACTĂ PostgreSQL (ident_pg): neciat ⇒
+#     doar A-Z → a-z (în UTF-8 serverul nu schimbă literele non-ASCII), citat ⇒ conținutul exact ("" despachetat de tokenizer), ambele
+#     trunchiate la 63 de OCTEȚI UTF-8 pe granița unui caracter (NAMEDATALEN - 1). Niciodată casefold la acceptare.
+#   REFUZUL conservator (PLAFON_FORMA): variabila plafonului = identificator simplu NECITAT [A-Za-z_][A-Za-z0-9_]*, cel mult 63 de octeți;
+#     în corpul care o citește NU e admis niciun identificator citat și niciun identificator mai lung de 63 de octeți; în TOT fișierul
+#     (orice corp, nivelul superior — deci și parametrii funcției și blocurile exterioare) niciun identificator CONFUNDABIL cu ea (același
+#     casefold / NFKC, același prefix de 63 de octeți) care nu e identic, și niciun U&"…" / U&'…' (decodificat în server).
+#   Tokenizerul (toate modurile): un cuvânt neciat cu o literă non-ASCII care, prin upper / lower / casefold / NFKC, dă o literă ASCII
+#     (ı, ſ, ß, ligaturile ﬁ / ﬆ, K Kelvin, litere „fullwidth” …) = REFUZ: tokenii sunt comparați cu cuvinte-cheie ASCII după .upper()
+#     (ex. „publıc” devenea PUBLIC, „ınto” devenea INTO), iar serverul nu le confundă. Literele românești (ă â î ș ț) rămân permise.
+#   --fara-plafon: set_config se recunoaște ca SCRIERE doar după identitatea exactă (set_config / "set_config", necalificat sau
+#     pg_catalog.); altă formă ("SET_CONFIG", altă schemă) = citire neclasificabilă ⇒ PLAFON_LIPSA.
 #
 # Utilizare: python3 livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie | --plafon-tranzactie-ms <N> | --fara-plafon]
 #   <tag-interzis> = tag-ul dollar-quote al înregistrării generate de runner; nu are voie să apară în fișier.
@@ -104,6 +117,7 @@
 # ============================================================================
 import re
 import sys
+import unicodedata
 
 INTERZISE = {"BEGIN", "START", "COMMIT", "END", "ROLLBACK", "ABORT", "SAVEPOINT", "RELEASE"}
 LEXICALE = ("standard_conforming_strings", "client_encoding", "escape_string_warning", "backslash_quote")
@@ -146,6 +160,77 @@ CUVANT = re.compile(r"[A-Za-z_\u0080-\U0010FFFF][A-Za-z0-9_$\u0080-\U0010FFFF]*"
 
 class Refuz(Exception):
     pass
+
+
+# Runda 19 (P1-R3-1): identitatea identificatorilor ca în PostgreSQL (scan.l + scansup.c, server UTF-8).
+NAMEDATALEN_1 = 63            # identificatorii (și cei citați) se trunchiază la 63 de octeți
+VAR_SIMPLA = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")   # forma admisă a variabilei plafonului (necitată, ASCII)
+
+
+class Cuv(str):
+    """Token-cuvânt: valoarea rămâne cuvântul cu MAJUSCULE (comparațiile vechi neschimbate), iar .orig = textul exact din fișier
+    (identitatea PostgreSQL se calculează din el, nu din forma cu majuscule: .upper() schimbă unele litere non-ASCII)."""
+    __slots__ = ("orig",)
+
+    def __new__(cls, orig):
+        o = str.__new__(cls, orig.upper())
+        o.orig = orig
+        return o
+
+
+def litera_confuza(c):
+    """O literă non-ASCII care, prin upper / lower / casefold / NFKC, produce o literă ASCII (ı → I, ſ → S, ß → SS, ﬁ → FI, K Kelvin → k,
+    Ａ fullwidth → A): serverul o păstrează (nu e cuvânt-cheie, nu se pliază), dar .upper() din Python ar face din ea un cuvânt-cheie."""
+    if ord(c) < 128:
+        return False
+    forme = c.upper() + c.lower() + c.casefold() + unicodedata.normalize("NFKC", c)
+    return any(ord(x) < 128 and (x.isalnum() or x in "_$") for x in forme)
+
+
+def litere_mici_ascii(s):
+    # downcase_identifier pe un server UTF-8: doar A-Z; octeții non-ASCII rămân neschimbați
+    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in s)
+
+
+def trunchiaza_63(s):
+    # truncate_identifier: pg_mbcliplen(…, 63) = cel mult 63 de octeți, tăiat pe granița unui caracter
+    b = s.encode("utf-8")
+    return s if len(b) <= NAMEDATALEN_1 else b[:NAMEDATALEN_1].decode("utf-8", "ignore")
+
+
+def ident_brut(tok):
+    """Numele unui identificator ÎNAINTE de trunchiere (citat ⇒ conținutul exact; neciat ⇒ litere mici ASCII ale textului din fișier),
+    sau None dacă tokenul nu e identificator / nu i se cunoaște textul exact."""
+    if tok.startswith('"'):
+        return tok[1:]
+    if CUVANT.fullmatch(tok) is None:
+        return None
+    if isinstance(tok, Cuv):
+        return litere_mici_ascii(tok.orig)
+    return litere_mici_ascii(tok) if tok.isascii() else None
+
+
+def ident_pg(tok):
+    """Identitatea EXACTĂ PostgreSQL (folosită la ACCEPTARE): ident_brut trunchiat la 63 de octeți; None = necunoscută."""
+    b = ident_brut(tok)
+    return None if b is None else trunchiaza_63(b)
+
+
+def chei_confuzie(s):
+    # formele sub care un nume poate fi confundat cu altul (doar pentru REFUZ): casefold, NFKC + casefold, și prefixele de 63 de octeți
+    f = {s.casefold(), unicodedata.normalize("NFKC", s).casefold()}
+    return f | {trunchiaza_63(x) for x in f} | {trunchiaza_63(s).casefold()}
+
+
+def confundabil(tok, vid):
+    """Runda 19 (REFUZ conservator): tok NU e identic cu variabila vid (identitatea exactă), dar e confundabil cu ea: același casefold /
+    NFKC, același prefix de 63 de octeți (după casefold), identitate necunoscută. Acceptarea nu folosește NICIODATĂ funcția aceasta."""
+    b = ident_brut(tok)
+    if b is None:
+        return tok.startswith('"') or (CUVANT.fullmatch(tok) is not None and not tok.isascii())
+    if trunchiaza_63(b) == vid:
+        return False   # identic: tratat de regulile acceptării (o folosire în afara formei = refuz acolo)
+    return vid.casefold() in chei_confuzie(b)
 
 
 def linie(text, poz):
@@ -267,9 +352,14 @@ def instructiuni(text, corpuri=None, strict=True):
             continue
         m = CUVANT.match(text, i)
         if m:
+            conf = [c for c in m.group(0) if litera_confuza(c)]
+            if conf:
+                # runda 19: .upper() ar face din „ınto” / „publıc” cuvintele-cheie INTO / PUBLIC, pe care serverul nu le vede acolo
+                raise Refuz(f"identificator neciat cu litera {conf[0]!r} (U+{ord(conf[0]):04X}) care se confundă cu o literă ASCII "
+                            f"(linia {linie(text, i)}): {m.group(0)!r} — serverul nu o pliază, validatorul ar compara alt cuvânt")
             if start is None:
                 start = i
-            cur.append(m.group(0).upper())
+            cur.append(Cuv(m.group(0)))
             i = m.end()
             continue
         if start is None:
@@ -293,11 +383,14 @@ def nume_param(tok):
     return tok.lower()
 
 
-def acelasi_ident(tok, v):
-    """Runda 18 (P1-1): tok desemnează (posibil) același identificator ca v, după regulile PostgreSQL — neciat ⇒ litere mici, citat ⇒
-    exact: v_plafon = V_PLAFON = "v_plafon". Comparația e CONSERVATOARE (casefold pe ambele: și "V_PLAFON", alt identificator în
-    PostgreSQL, se potrivește) ⇒ o potrivire în plus duce doar la refuz, niciodată la o apariție scăpată."""
-    return e_ident(tok) and e_ident(v) and nume_param(tok).casefold() == nume_param(v).casefold()
+def e_set_config_exact(T, k):
+    """Runda 19: T[k] e EXACT funcția pg_catalog.set_config (pentru ACCEPTAREA unei scrieri): numele set_config (neciat, ASCII) sau
+    "set_config" (citat, litere mici), necalificat sau calificat exact pg_catalog. ("SET_CONFIG" citat / altă schemă = altă funcție)."""
+    if ident_pg(T[k]) != "set_config":
+        return False
+    if k >= 1 and T[k - 1] == ".":
+        return k >= 2 and ident_pg(T[k - 2]) == "pg_catalog" and not (k >= 3 and T[k - 3] == ".")
+    return True
 
 
 def protejat(nume):
@@ -427,7 +520,8 @@ def verifica_acord_plafon(text, plafon_ms):
     return gasite
 
 
-MENTIUNI_PLAFON = ("transaction_timeout", "plafon_tranzactie", "/session")
+# runda 19: și pg_settings — un corp care îl numește și nu se analizează lexical (ex. litera confuză a tokenizerului) = refuz, nu sărit
+MENTIUNI_PLAFON = ("transaction_timeout", "plafon_tranzactie", "/session", "pg_settings")
 
 
 def fluxuri_cod(text, adanc=0):
@@ -470,14 +564,21 @@ def verifica_structura_plafon(text, absenta=False):
     Orice alt literal din cod (în afara argumentelor RAISE) care conține „/session” sau „plafon_tranzactie” = refuz.
     Limită declarată (ca la garda de livrare): poziția gărzii (cod mort, funcție nechemată, excepție prinsă) e a review-ului
     artefactului; valoarea reală a plafonului o impun oricum prologul și garda finală ale runnerului.
-    Runda 18: variabila se recunoaște după identitatea PostgreSQL (acelasi_ident), declarată o singură dată în prima secțiune DECLARE,
-    fără U& în corp (vezi antetul). absenta=True (--fara-plafon): aceleași forme, dar comparația acceptată e cu '0/default' (controlul
+    Runda 18: variabila declarată o singură dată în prima secțiune DECLARE, fără U& în corp (vezi antetul). Runda 19: acceptarea după
+    identitatea EXACTĂ (ident_pg), refuzul după confuzie (confundabil): variabila necitată ASCII ≤ 63 de octeți, corpul ei fără
+    identificatori citați / mai lungi de 63 de octeți, fișierul fără nume confundabile cu ea și fără U&, fără variable_conflict. absenta=True (--fara-plafon): aceleași forme, dar comparația acceptată e cu '0/default' (controlul
     care cere ABSENȚA plafonului); refuzul poartă eticheta PLAFON_LIPSA (o citire în altă formă = cerere neclasificabilă)."""
     cereri = []
     P = "PLAFON_LIPSA" if absenta else "PLAFON_FORMA"
     LIT = PL_LIT_ABSENTA if absenta else PL_LIT_SESIUNE
     FORMA_LIT = "'0/default'" if absenta else "'<D>/session'"
-    for T, sursa in fluxuri_cod(text):
+    fluxuri = fluxuri_cod(text)
+    if any(m in text.lower() for m in ("transaction_timeout", "plafon_tranzactie")) \
+            and "variable_conflict" in re.sub(r"[^a-z0-9_]", "", text.lower()):
+        # runda 19: cu „use_variable”, setting / source / name din forma acceptată ar putea fi variabile PL/pgSQL, nu coloanele pg_settings
+        raise Refuz(f"{P}: fișierul citește plafonul și menționează variable_conflict (#variable_conflict / plpgsql.variable_conflict) — "
+                    f"numele din forma acceptată (setting, source, name) trebuie să fie coloanele pg_settings, nu variabile")
+    for T, sursa in fluxuri:
         n = len(T)
         acceptate = set()   # pozițiile literalilor validați ca parte a unei forme acceptate
 
@@ -557,16 +658,48 @@ def verifica_structura_plafon(text, absenta=False):
             if i >= L + 2 and T[i - 2] == "INTO" and e_ident(T[i - 1]) and T[i - 2 - L:i - 2] == PL_SEL \
                     and (i - 3 - L < 0 or T[i - 3 - L] in PL_INCEPUT) and f < n and T[f] == ";":
                 v = T[i - 1]
-                nv = nume_param(v)
-                # runda 18 (P1-1): fără escape-uri Unicode în corpul variabilei (U&"\0076_plafon" = v_plafon, decodificat în server)
-                for k in range(n - 2):
-                    if T[k] == "U" and T[k + 1] == "&" and T[k + 2][:1] in ("'", '"'):
-                        raise Refuz(f"{P}: corpul care citește plafonul în {nv} are U&{T[k + 2][:1]}…{T[k + 2][:1]} (linia ~{ln(k)}) — "
-                                    f"identificatorii / literalii cu escape-uri Unicode se decodifică în server, variabila nu se poate urmări")
+                # runda 19 (P1-R3-1): variabila = identificator simplu NECITAT, ASCII, cel mult 63 de octeți ⇒ identitatea ei exactă e
+                # v.orig cu litere mici (fără trunchiere, fără litere pe care serverul nu le pliază)
+                orig = v.orig if isinstance(v, Cuv) else v
+                if not (isinstance(v, Cuv) and VAR_SIMPLA.fullmatch(v.orig) and len(v.orig) <= NAMEDATALEN_1):
+                    raise Refuz(f"{P}: variabila plafonului {orig!r} (linia ~{ln(i)}) trebuie să fie un identificator simplu NECITAT "
+                                f"[A-Za-z_][A-Za-z0-9_]*, de cel mult {NAMEDATALEN_1} de octeți (identitatea PostgreSQL: citat ⇒ exact, "
+                                f"neciat ⇒ litere mici, ambele trunchiate la {NAMEDATALEN_1} de octeți)")
+                vid = ident_pg(v)
+                nv = vid
+                # runda 18 (P1-1): fără escape-uri Unicode în corpul variabilei (U&"\0076_plafon" = v_plafon, decodificat în server);
+                # runda 19: nici în restul fișierului (un parametru / alt bloc cu U& nu se poate compara cu variabila)
+                for T2, s2 in fluxuri:
+                    for k in range(len(T2) - 2):
+                        if T2[k] == "U" and T2[k + 1] == "&" and T2[k + 2][:1] in ("'", '"'):
+                            raise Refuz(f"{P}: fișierul care citește plafonul în {nv} are U&{T2[k + 2][:1]}…{T2[k + 2][:1]} "
+                                        f"({'în corpul variabilei' if T2 is T else 'în alt corp / la nivel superior'}) — identificatorii / "
+                                        f"literalii cu escape-uri Unicode se decodifică în server, variabila nu se poate urmări")
+                # runda 19: în corpul variabilei ea nu apare niciodată citată (nici "v_plafon", identic) și niciun identificator nu e mai
+                # lung de 63 de octeți (trunchiat). Alți identificatori citați rămân admiși (COLLATE "C" e în 8 fișiere din repo).
+                for k in range(n):
+                    b = ident_brut(T[k])
+                    if T[k].startswith('"') and (ident_pg(T[k]) == vid or confundabil(T[k], vid)):
+                        raise Refuz(f"{P}: corpul care citește plafonul în {nv} are identificatorul citat {T[k]}\" (linia ~{ln(k)}) — "
+                                    f"variabila plafonului se scrie doar necitat (identitatea exactă: \"V_PLAFON\" ≠ v_plafon, "
+                                    f"\"v_plafon\" = v_plafon; orice formă citată a numelui = refuz)")
+                    if b is not None and len(b.encode("utf-8")) > NAMEDATALEN_1:
+                        raise Refuz(f"{P}: corpul care citește plafonul în {nv} are un identificator de {len(b.encode('utf-8'))} de octeți "
+                                    f"(linia ~{ln(k)}): {T[k].orig if isinstance(T[k], Cuv) else T[k]!r} — serverul îl trunchiază la "
+                                    f"{NAMEDATALEN_1} de octeți (poate deveni altă variabilă)")
+                # runda 19: în TOT fișierul (parametrii funcției, blocurile exterioare, alte corpuri) niciun nume CONFUNDABIL cu variabila
+                # (același casefold / NFKC / prefix de 63 de octeți) care nu e identic cu ea
+                for T2, s2 in fluxuri:
+                    for k, t in enumerate(T2):
+                        if e_ident(t) and confundabil(t, vid):
+                            raise Refuz(f"{P}: numele {(t.orig if isinstance(t, Cuv) else t)!r} "
+                                        f"({'în corpul variabilei' if T2 is T else 'în alt corp / la nivel superior, ex. un parametru'}) "
+                                        f"se confundă cu variabila plafonului {nv} (același casefold / prefix de {NAMEDATALEN_1} de octeți), "
+                                        f"dar e alt identificator în PostgreSQL — refuz conservator")
                 # declarația: o SINGURĂ dată, „<v> text;”, în prima secțiune DECLARE a corpului (blocul exterior, opțional cu etichetă)
                 k0 = 5 if T[0:2] == ["<", "<"] and T[3:5] == [">", ">"] else 0
                 sf_decl = T.index("BEGIN", k0) if T[k0:k0 + 1] == ["DECLARE"] and "BEGIN" in T[k0:] else -1
-                decl = [j for j in range(n) if acelasi_ident(T[j], v) and j > 0 and T[j - 1] in ("DECLARE", ";")
+                decl = [j for j in range(n) if ident_pg(T[j]) == vid and j > 0 and T[j - 1] in ("DECLARE", ";")
                         and T[j + 1:j + 3] == ["TEXT", ";"]]
                 if len(decl) != 1 or not (k0 < decl[0] < sf_decl):
                     raise Refuz(f"{P}: variabila plafonului {nv} (linia ~{ln(i)}) trebuie declarată O SINGURĂ DATĂ, „{nv} text;”, în "
@@ -574,7 +707,7 @@ def verifica_structura_plafon(text, absenta=False):
                                 f"bloc interior = umbrire, iar fără declarație în corp numele poate fi un parametru)")
                 comparatii = 0
                 for j in range(n):
-                    if not acelasi_ident(T[j], v) or j == i - 1 or j == decl[0]:
+                    if ident_pg(T[j]) != vid or j == i - 1 or j == decl[0]:   # runda 19: identitatea EXACTĂ (acceptare)
                         continue
                     if T[j + 1:j + 4] == PL_IDF:
                         comparatie_sesiune(j, j + 1, f"variabila plafonului {nv}")
@@ -661,9 +794,9 @@ def citiri_parametru(text):
                 c = t[1:].casefold()
                 if "transaction_timeout" not in c and "pg_settings" not in c:
                     continue
-                if c.strip() == "transaction_timeout" and j >= 2 and T[j - 1] == "(" and e_set_config(T[j - 2]) \
+                if c.strip() == "transaction_timeout" and j >= 2 and T[j - 1] == "(" and e_set_config_exact(T, j - 2) \
                         and T[j + 1:j + 2] == [","]:
-                    continue   # set_config('transaction_timeout', …) = scriere
+                    continue   # set_config('transaction_timeout', …) = scriere (runda 19: doar funcția exactă pg_catalog.set_config)
                 if "pg_settings" not in c and c.count("transaction_timeout") == 1 and PL_SCRIERE_LIT.fullmatch(t[1:]):
                     continue   # EXECUTE 'SET LOCAL transaction_timeout = 0' / 'RESET transaction_timeout' = scriere
                 motive.append(f"literal care numește parametrul în afara unei scrieri recunoscute: {ctx}")
