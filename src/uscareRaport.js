@@ -11,9 +11,14 @@
 import { durataOre, vitezaMedie, fmtZi, fmtMoment, fmtNr, fmtKm, ETICHETE_CATEGORII, ETICHETE_POZ_SURSA } from './uscareLogica.js'
 
 export const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
-const B = 'border:1px solid #000;padding:5px 6px;vertical-align:middle'
+// Proba pe telefon (17.11.2026): HTML-ul se capturează din documentul aplicației, deci îl atinge și stilul GLOBAL din App.jsx
+// (th{text-transform:uppercase;letter-spacing:.6px;color:#8B949E}, td{padding…}): antetele ieșeau cu majuscule, gri și mai late, iar tabelul 2
+// ieșea din pagină. De aceea fiecare celulă își fixează culoarea, majusculele, spațierea și ruperea textului, iar tabelele au lățimi FIXE din
+// <colgroup> (table-layout:fixed): textul se rupe pe rânduri în coloana lui, nu împinge tabelul peste lățimea utilă de 738 px.
+const B = 'border:1px solid #000;padding:5px 4px;vertical-align:middle;font-size:12px;color:#000;text-transform:none;letter-spacing:normal;line-height:1.25;overflow-wrap:break-word;word-break:normal;white-space:normal'
 const TH = `${B};background:#f2f2f2;font-weight:700;text-align:center;font-size:11px`
 const TD = `${B};text-align:center;font-size:12px;min-height:22px`
+const TABEL = 'width:100%;border-collapse:collapse;table-layout:fixed'
 const kg = x => (x == null ? '' : fmtNr(x, 3))
 const bifa = da => (da ? '&#9746;' : '&#9744;')   // ☒ / ☐
 const PAGINA = 'width:738px;font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;padding:6px 24px;box-sizing:content-box'
@@ -45,7 +50,7 @@ export function htmlRaportBlocuri(u, { cuCoordonate = false } = {}) {
   const temp = u.temperatura_c == null ? '' : `${fmtNr(u.temperatura_c, 1)} °C${u.vreme ? `<div style="font-size:10px;margin-top:2px">${esc(u.vreme)}</div>` : ''}`
   const blocuri = []
   blocuri.push(bloc(`${titlu(u)}
-  <table style="width:100%;border-collapse:collapse">
+  <table style="${TABEL}">
     <colgroup><col style="width:13%"><col style="width:15%"><col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:14%"><col style="width:25%"></colgroup>
     <tr><th style="${TH}">Data operațiune</th><th style="${TH}">Tronson</th><th style="${TH}">De la km</th><th style="${TH}">La km</th><th style="${TH}">Lungime (m)</th><th style="${TH}">Temperatura exterioară</th><th style="${TH}">Denumire Constructor</th></tr>
     <tr><td style="${TD}">${esc(fmtZi(u.data_operatie))}</td><td style="${TD}">${esc(u.tronson)}</td><td style="${TD}">${esc(fmtKm(u.km_de_la_m))}</td><td style="${TD}">${esc(fmtKm(u.km_pana_la_m))}</td>
@@ -66,8 +71,8 @@ export function htmlRaportBlocuri(u, { cuCoordonate = false } = {}) {
         <td style="${TD}" rowspan="${n}">${esc(u.punct_roua_c == null ? '' : fmtNr(u.punct_roua_c, 1))}</td><td style="${TD}" rowspan="${n}">${esc(u.punct_roua_loc)}</td></tr>`
   }
   blocuri.push(bloc(`
-  <table style="width:100%;border-collapse:collapse">
-    <colgroup><col style="width:17%"><col style="width:6%"><col style="width:9%"><col style="width:9%"><col style="width:7%"><col style="width:8%"><col style="width:8%"><col style="width:8%"><col style="width:7%"><col style="width:7%"><col style="width:7%"><col style="width:7%"></colgroup>
+  <table style="${TABEL}">
+    <colgroup><col style="width:14.5%"><col style="width:6%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:7%"><col style="width:7.5%"><col style="width:9%"><col style="width:7.5%"><col style="width:7%"><col style="width:7%"><col style="width:7%"><col style="width:8.5%"></colgroup>
     <tr><th style="${TH}" colspan="2">Utilaje/ Echipamente</th><th style="${TH}" colspan="2">Perioada</th><th style="${TH}" rowspan="2">Durata (ore)</th>
         <th style="${TH}" colspan="3">Configurație ansamblu pistoane</th><th style="${TH}" colspan="2">Cântărire burete 1</th><th style="${TH}" colspan="2">Punct de rouă</th></tr>
     <tr><th style="${TH}">Denumire</th><th style="${TH}">Nr. Buc.</th><th style="${TH}">Ora începere</th><th style="${TH}">Ora finalizare</th>
@@ -76,7 +81,7 @@ export function htmlRaportBlocuri(u, { cuCoordonate = false } = {}) {
     ${Array.from({ length: n }, (_, i) => rand(i)).join('\n    ')}
   </table>`))
   blocuri.push(bloc(`
-  <table style="width:100%;border-collapse:collapse">
+  <table style="${TABEL}">
     <colgroup><col style="width:18%"><col style="width:14%"><col style="width:14%"><col style="width:13.5%"><col style="width:13.5%"><col style="width:13.5%"><col style="width:13.5%"></colgroup>
     <tr><th style="${TH}" rowspan="2">Presiune în spatele buretelui (bar)</th><th style="${TH}" rowspan="2">Timp deplasare (min)</th><th style="${TH}" rowspan="2">Viteza medie (m/s)</th>
         <th style="${TH}" colspan="2">Cântărire burete 2</th><th style="${TH}" colspan="2">Cântărire burete 3</th></tr>
@@ -88,19 +93,19 @@ export function htmlRaportBlocuri(u, { cuCoordonate = false } = {}) {
   const extra = (Array.isArray(u.cantariri) ? [...u.cantariri] : []).filter(x => Number(x.nr) > NR_MODEL).sort((a, b) => a.nr - b.nr)
   for (let i = 0; i < extra.length; i += 10) {
     blocuri.push(bloc(`
-  <table style="width:100%;border-collapse:collapse"><colgroup><col style="width:40%"><col style="width:30%"><col style="width:30%"></colgroup>
+  <table style="${TABEL}"><colgroup><col style="width:40%"><col style="width:30%"><col style="width:30%"></colgroup>
     ${extra.slice(i, i + 10).map(x => `<tr><td style="${TH}">Cântărire burete ${esc(x.nr)}</td>${typeof x.motiv === 'string' && x.motiv ? `<td style="${TD}" colspan="2">nu se aplică: ${esc(x.motiv)}</td>` : `<td style="${TD}">La intrare [kg]: ${esc(kg(x.intrare_kg))}</td><td style="${TD}">La ieșire [kg]: ${esc(kg(x.iesire_kg))}</td>`}</tr>`).join('')}
   </table>`))
   }
   blocuri.push(bloc(`
-  <table style="width:100%;border-collapse:collapse"><colgroup><col style="width:100%"></colgroup>
+  <table style="${TABEL}"><colgroup><col style="width:100%"></colgroup>
     <tr><th style="${TH};text-align:left">OBSERVAȚII</th></tr>
     <tr><td style="${B};height:70px;vertical-align:top;font-size:12px;white-space:pre-wrap;word-break:break-word">${esc(u.observatii)}</td></tr>
   </table>`))
   // justificarea fotografiilor cerute care lipsesc (salvată cu raportul, obligatorie la închidere dacă lipsesc): apare în documentul distribuit
   if (typeof u.poze_justificare === 'string' && u.poze_justificare.trim()) {
     blocuri.push(bloc(`
-  <table style="width:100%;border-collapse:collapse"><colgroup><col style="width:100%"></colgroup>
+  <table style="${TABEL}"><colgroup><col style="width:100%"></colgroup>
     <tr><th style="${TH};text-align:left">FOTOGRAFII LIPSĂ — JUSTIFICARE</th></tr>
     <tr><td style="${B};vertical-align:top;font-size:12px;white-space:pre-wrap;word-break:break-word">${esc(u.poze_justificare)}</td></tr>
   </table>`))
@@ -116,7 +121,7 @@ export function htmlRaportBlocuri(u, { cuCoordonate = false } = {}) {
       <div style="font-size:11px;margin-top:18px">Semnătura:</div>
     </td>`
   blocuri.push(bloc(`
-  <table style="width:100%;border-collapse:collapse"><colgroup><col style="width:50%"><col style="width:50%"></colgroup>
+  <table style="${TABEL}"><colgroup><col style="width:50%"><col style="width:50%"></colgroup>
     <tr>${semn('CONSTRUCTOR', u.semn_constructor_nume, u.semn_constructor_functie)}${semn('BENEFICIAR', u.semn_beneficiar_nume, u.semn_beneficiar_functie)}</tr>
   </table>`))
   return blocuri

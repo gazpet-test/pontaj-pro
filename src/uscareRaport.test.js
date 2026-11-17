@@ -1,6 +1,7 @@
 // HTML-ul raportului de uscare (src/uscareRaport.js): rubricile modelului beneficiarului (cu diacritice), în ordinea lui; criteriul ultimului
 // piston; coordonatele doar la cerere; paginarea pe blocuri (nimic micșorat pe o pagină); anexa foto; nimic despre unelte.
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { htmlRaport, htmlRaportBlocuri, aseazaBlocuri, htmlAnexa, legendaPoza, ordonPoze, esc } from './uscareRaport.js'
 
 const U = {
@@ -90,6 +91,47 @@ describe('paginarea (blocuri pe pagini A4, nimic micșorat)', () => {
   it('un bloc mai înalt decât o pagină (observații lungi) se taie în felii întregi, fără micșorare', () => {
     const p = aseazaBlocuri([50, 600, 10], { inaltimePagina: 281, sus: 8 })
     expect(p.map(x => x.map(b => [b.bloc, b.h, b.felie && b.felie.de_la]))).toEqual([[[0, 50, null]], [[1, 281, 0]], [[1, 281, 281]], [[1, 38, 562], [2, 10, null]]])
+  })
+})
+
+// Proba pe telefon (17.11.2026): tabelul 2 ieșea din pagină în dreapta. HTML-ul raportului se capturează din documentul aplicației, deci îl
+// atinge stilul GLOBAL din App.jsx (th: majuscule, spațiere, gri; td: padding). Regula se citește din App.jsx (sursa independentă), iar
+// fiecare celulă a raportului trebuie să-și fixeze singură fiecare proprietate pe care o pune regula globală.
+describe('tabelele raportului: neatinse de stilul global al aplicației, lățimi fixe în procente', () => {
+  const css = /const css = `([\s\S]*?)`/.exec(readFileSync(new URL('./App.jsx', import.meta.url), 'utf8'))[1]
+  const regula = sel => {
+    const m = new RegExp(`(?:^|\\n)${sel}\\{([^}]*)\\}`).exec(css)
+    return m ? m[1].split(';').map(x => x.split(':')[0].trim()).filter(Boolean) : []
+  }
+  const U_MULTE = { ...U, utilaje: Array.from({ length: 20 }, (_, i) => ({ denumire: `Utilaj ${i + 1}`, buc: 1 })), punct_roua_c: -20.5, punct_roua_loc: 'capătul de primire', poze_justificare: 'lipsă' }
+  const tabele = [U, U_MULTE].flatMap(u => htmlRaportBlocuri(u, { cuCoordonate: true }).flatMap(b => b.match(/<table[\s\S]*?<\/table>/g) || []))
+  const stilCelule = (t, tag) => [...t.matchAll(new RegExp(`<${tag}\\b[^>]*style="([^"]*)"`, 'g'))].map(m => m[1])
+  it('regula globală din App.jsx există (altfel testul nu mai dovedește nimic) și pune majuscule pe th', () => {
+    expect(regula('th')).toEqual(expect.arrayContaining(['text-transform', 'letter-spacing', 'color']))
+    expect(regula('td').length).toBeGreaterThan(0)
+    expect(tabele.length).toBeGreaterThanOrEqual(10)
+  })
+  it('fiecare th / td își fixează fiecare proprietate pusă de regula globală; fără majuscule, fără spațiere, text negru', () => {
+    for (const [tag, props] of [['th', regula('th')], ['td', regula('td')]]) {
+      for (const t of tabele) for (const s of stilCelule(t, tag)) {
+        for (const p of props) expect(s.includes(`${p}:`) || (p.startsWith('border') && s.includes('border:')), `${tag} fără ${p}: ${s}`).toBe(true)
+        expect(s).toContain('text-transform:none'); expect(s).toContain('letter-spacing:normal'); expect(s).toContain('color:#000')
+        expect(s).toContain('overflow-wrap:break-word')                      // un cuvânt prea lung se rupe în coloană, nu împinge tabelul
+      }
+    }
+  })
+  it('fiecare tabel: lățimi FIXE (table-layout:fixed, 100%), colgroup în procente cu suma 100, câte o coloană pentru fiecare coloană a grilei', () => {
+    for (const t of tabele) {
+      const stil = /<table style="([^"]*)"/.exec(t)[1]
+      expect(stil).toContain('table-layout:fixed'); expect(stil).toContain('width:100%')
+      const cols = [...t.matchAll(/<col style="width:([\d.]+)%">/g)].map(m => Number(m[1]))
+      expect([...t.matchAll(/<col\b/g)].length, 'toate coloanele în procente').toBe(cols.length)
+      expect(Math.abs(cols.reduce((a, b) => a + b, 0) - 100), t.slice(0, 200)).toBeLessThan(1e-9)
+      // grila: primul rând (fără rowspan-uri moștenite) = suma colspan-urilor
+      const rand1 = /<tr>([\s\S]*?)<\/tr>/.exec(t)[1]
+      const grila = [...rand1.matchAll(/<t[hd]\b([^>]*)>/g)].reduce((a, m) => a + Number((/colspan="(\d+)"/.exec(m[1]) || [0, 1])[1]), 0)
+      expect(cols.length, rand1.slice(0, 120)).toBe(grila)
+    }
   })
 })
 
