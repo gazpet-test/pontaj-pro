@@ -184,7 +184,9 @@ const VERIFICARI = {
   async operatiiEcran(M) {
     const o = M.lot.stariOperatii({ evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] })
     const p = M.lot.stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] })
-    return JSON.stringify(o.map(x => x.cheie).filter(k => k !== 'tiraj')) === '["reconciliere","plafon","anulare","evenimente"]' && o.every(x => !x.activ) && p.every(x => x.activ)
+    // runda 5: „solutionare” cere o contradicție (aici niciuna) — verificată separat (fanCourier.test.js)
+    return JSON.stringify(o.map(x => x.cheie).filter(k => !['tiraj', 'solutionare'].includes(k))) === '["reconciliere","plafon","anulare","evenimente"]' && o.every(x => !x.activ)
+      && p.filter(x => x.cheie !== 'solutionare').every(x => x.activ)
   },
   // 6 (P2): mesajul FAN (cu valoarea respinsă) nu ajunge în motiv; doar câmpul din lista albă
   async motivFaraPii(M) {

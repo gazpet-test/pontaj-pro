@@ -342,7 +342,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, profile = null
       {l.pv_path && <p>PV semnat atașat.</p>}
     </div>) : <Gol />}
     {fanLot && poateScrie && <FanAwbPrevizualizare proiect={proiect} lot={fanLot} plicuri={plicuri.filter(p => p.lot_id === fanLot.id)} convocariPePlic={pePlic}
-      esteOwner={profile?.is_owner === true} poateScrie={poateScrie} onClose={() => setFanLot(null)}
+      esteOwner={profile?.is_owner === true} esteAdmin={nivel === 'admin'} poateScrie={poateScrie} onClose={() => setFanLot(null)}
       onRetur={(plicId, motiv, data) => { const p = plicuri.find(x => x.id === plicId); if (!p) return
         // returul semnalat de FAN = PROPUNERE: omul alege motivul final și atașează scanul plicului returnat (regula BD)
         setFanLot(null); deschide('retur', p); setF(x => ({ ...x, motiv: MOTIVE_RETUR.some(m => m.cod === motiv) ? motiv : x.motiv, data: data && p.data_expediere && data >= p.data_expediere ? data : x.data })) }} />}

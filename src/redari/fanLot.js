@@ -3,7 +3,7 @@
 // Cât timp TRANSPORT_REAL_ACTIV = false (redariFanHandler.mjs), TOȚI pașii sunt dezactivați vizibil, cu motivul „transport oprit”.
 import { TRANSPORT_REAL_ACTIV } from '../../supabase/functions/_shared/redariFanHandler.mjs'
 import { manifestTiparire, cheieTiraj, tirajDin, tirajNeschimbat, refuzTiraj, destinatarMascat, COD_TIRAJ_SCHIMBAT, COD_TIRAJ_OPRIT, MESAJ_TIRAJ_SCHIMBAT, MESAJ_TIRAJ_OPRIT,
-  ASTEPTARE_DUPA_OPRIRE_S } from '../../supabase/functions/_shared/redariFan.mjs'
+  ASTEPTARE_DUPA_OPRIRE_S, fapteContrazise, ALEGERI_SOLUTIONARE, COD_URMARIRE_SCHIMBATA } from '../../supabase/functions/_shared/redariFan.mjs'
 import { planPachetPlicuire, continutPaginaControl } from './plicuri.js'
 export { TRANSPORT_REAL_ACTIV }
 
@@ -58,10 +58,13 @@ export const OPERATII_FAN = Object.freeze([
   { cheie: 'anulare', titlu: 'Anulare AWB', ajutor: 'doar owner-ul: AWB generat, neridicat (ștergere la FAN sau marcare după verificarea în selfAWB)' },
   { cheie: 'evenimente', titlu: 'Lista de evenimente FAN', ajutor: 'doar owner-ul: compară codurile FAN cu cele folosite aici' },
   { cheie: 'tiraj', titlu: 'Tiraj nou', ajutor: 'doar owner-ul, în ordine: oprește descărcările tirajului început → așteaptă 30 s → distruge foile și fișierele lui → înlocuiește tirajul cu manifestul de acum (se retipărește TOT lotul)' },
+  { cheie: 'solutionare', titlu: 'Soluționează o contradicție', ajutor: 'owner-ul sau un admin Redări: după verificarea în selfAWB, alegi pentru fiecare fapt contrazis valoarea care rămâne (cea cunoscută sau cea nouă), cu motiv; istoricul rămâne în jurnal' },
 ])
 /** Operațiile cu starea lor: { ...operatie, activ, motiv } (aceleași reguli ca stariPasi: transportul oprit le dezactivează pe toate). */
-export function stariOperatii({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, randuri = [] } = {}) {
+export function stariOperatii({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, esteAdmin = false, randuri = [] } = {}) {
   const conditii = {
+    // runda 5: soluționarea contradicțiilor urmăririi — owner SAU admin Redări (aceeași poartă ca fn_red_fan_urmarire_solutioneaza)
+    solutionare: [[esteOwner || esteAdmin, 'doar owner-ul sau un admin Redări'], [(randuri || []).some(r => fapteContrazise(r).length > 0), 'nicio contradicție de soluționat']],
     reconciliere: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['necunoscut', 'in_curs']) > 0, 'niciun rând „necunoscut” sau „în curs”']],
     plafon: [[esteOwner, 'doar owner-ul']],
     anulare: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['generat']) > 0, 'niciun AWB generat neridicat']],
@@ -149,13 +152,13 @@ export function stareOprireTiraj(fanLot, acumMs = Date.now()) {
  * Faptele urmăririi unui rând FAN, pentru ecran (runda 4, Jakarinos #1118 r3 P2): ridicarea, livrarea, returul (+ motivul) cunoscute și
  * CONTRADICȚIILE (valoarea cunoscută ȘI cea nouă, ambele vizibile). Text gol = niciun fapt. Datele: ziua / ora României (L17).
  */
+const zi = v => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? `${v.slice(8, 10)}.${v.slice(5, 7)}.${v.slice(0, 4)}` : '')
+const ora = v => { const ms = Date.parse(v); if (!Number.isFinite(ms)) return ''
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date(ms)).map(x => [x.type, x.value]))
+  return `${p.day}.${p.month}.${p.year} ${p.hour}:${p.minute}` }
 export function textFapteUrmarire(r, eticheteRetur = {}) {
   if (!r) return ''
-  const zi = v => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? `${v.slice(8, 10)}.${v.slice(5, 7)}.${v.slice(0, 4)}` : '')
-  const ora = v => { const ms = Date.parse(v); if (!Number.isFinite(ms)) return ''
-    const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-      .formatToParts(new Date(ms)).map(x => [x.type, x.value]))
-    return `${p.day}.${p.month}.${p.year} ${p.hour}:${p.minute}` }
   const motiv = m => eticheteRetur[m] || m
   const f = [], c = []
   if (r.ridicat_propus) f.push(`ridicat ${zi(r.ridicat_propus)}`)
@@ -166,6 +169,40 @@ export function textFapteUrmarire(r, eticheteRetur = {}) {
   if (r.retur_contrazis) c.push(`motiv de retur ${motiv(r.retur_propus)} (cunoscut) ≠ ${motiv(r.retur_contrazis)} (FAN, mai nou)`)
   if (r.livrat_la && r.retur_cunoscut) c.push('livrat ȘI retur')
   return [f.length ? `fapte: ${f.join(', ')}` : '', c.length ? `CONTRADICȚIE de verificat de om: ${c.join('; ')}` : ''].filter(Boolean).join(' · ')
+}
+
+export { fapteContrazise, ALEGERI_SOLUTIONARE }
+/** Opțiunile din formularul de soluționare: pe fiecare fapt contrazis, AMBELE valori (cunoscută și nouă), cu textul afișat (ziua / ora României). */
+export function optiuniSolutionare(r, eticheteRetur = {}) {
+  const motiv = m => (m ? eticheteRetur[m] || m : 'fără motiv')
+  return fapteContrazise(r).map(f => {
+    if (f.cheie === 'ridicat') return { cheie: f.cheie, titlu: 'Ridicarea (C0)', optiuni: [{ valoare: 'cunoscut', text: `${zi(f.cunoscut)} (cunoscută)` }, { valoare: 'nou', text: `${zi(f.nou)} (FAN, mai nou)` }] }
+    if (f.cheie === 'livrat') return { cheie: f.cheie, titlu: 'Livrarea', optiuni: [{ valoare: 'cunoscut', text: `${ora(f.cunoscut)} (cunoscută)` }, { valoare: 'nou', text: `${ora(f.nou)} (FAN, mai nou)` }] }
+    if (f.cheie === 'retur') return { cheie: f.cheie, titlu: 'Motivul returului', optiuni: [{ valoare: 'cunoscut', text: `${motiv(f.cunoscut)} (cunoscut)` }, { valoare: 'nou', text: `${motiv(f.nou)} (FAN, mai nou)` }] }
+    return { cheie: f.cheie, titlu: 'Livrat ȘI retur', optiuni: [{ valoare: 'livrat', text: `livrat ${ora(f.cunoscut)} (returul se scoate)` }, { valoare: 'retur', text: `retur (${motiv(f.nou)}) (livrarea se scoate)` }] }
+  })
+}
+export const MESAJ_URMARIRE_SCHIMBATA = 'Între timp urmărirea s-a schimbat (a sosit un răspuns FAN nou sau altcineva a soluționat): nimic scris. Reîncarcă și verifică din nou.'
+/**
+ * Soluționarea unei contradicții (runda 5, Jakarinos #1118 r4 P2): verifică local că alegerile acoperă EXACT faptele contrazise ale rândului
+ * citit (fapteContrazise, aceeași listă ca BD-ul), fiecare cu o valoare permisă, și că motivul are 1..500 de caractere — altfel nimic trimis;
+ * apoi fn_red_fan_urmarire_solutioneaza cu VERSIUNEA citită (CAS). RD023 (răspuns FAN nou între timp) → MESAJ_URMARIRE_SCHIMBATA; orice altă
+ * eroare se propagă (L18); rezultatul se acceptă doar cu versiunea + 1 și o stare (altfel „neconfirmat”).
+ */
+export async function solutioneazaUrmarire({ rpc, rand, alegeri, motiv }) {
+  const cer = fapteContrazise(rand).map(f => f.cheie)
+  const chei = Object.keys(alegeri || {})
+  const m = typeof motiv === 'string' ? motiv.trim() : ''
+  if (!cer.length) throw new Error('Rândul nu are nicio contradicție de soluționat.')
+  if (!Number.isInteger(rand?.versiune_urmarire) || rand.versiune_urmarire < 0) throw new Error('Versiunea urmăririi lipsește: reîncarcă evidența.')
+  if (chei.length !== cer.length || !cer.every(k => chei.includes(k)) || !cer.every(k => ALEGERI_SOLUTIONARE[k].includes(alegeri[k]))) {
+    throw new Error(`Alege valoarea care rămâne pentru fiecare fapt contrazis (${cer.join(', ')}).`)
+  }
+  if (!m || m.length > 500) throw new Error('Motivul soluționării e obligatoriu (cel mult 500 de caractere).')
+  const { data, error } = await rpc('fn_red_fan_urmarire_solutioneaza', { p_id: rand.id, p_versiune: rand.versiune_urmarire, p_alegeri: alegeri, p_motiv: m })
+  if (error) { if (error.code === COD_URMARIRE_SCHIMBATA) { const e = new Error(MESAJ_URMARIRE_SCHIMBATA); e.code = error.code; throw e } throw error }
+  if (!data || data.versiune !== rand.versiune_urmarire + 1 || typeof data.stare !== 'string') throw new Error('rezultat neconfirmat')
+  return data
 }
 
 export const ETICHETE_STARE_FAN = Object.freeze({

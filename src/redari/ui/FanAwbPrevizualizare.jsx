@@ -9,7 +9,8 @@ import { supabase } from '../../lib/supabase.js'
 import { pregatestePlicuriFan, contactPePlic, LIMITA_LOT_PILOT_IMPLICITA, FORMAT_ETICHETA, manifestTiparire, partiManifest, cheieTiraj, idTiraj, tirajDin,
   ASTEPTARE_DUPA_OPRIRE_S } from '../../../supabase/functions/_shared/redariFan.mjs'
 import { stariPasi, stareMarcaj, stariOperatii, TRANSPORT_REAL_ACTIV, MESAJ_TRANSPORT_OPRIT, ETICHETE_STARE_FAN, ETICHETE_URMARIRE, ETICHETE_CONFIRMARE, prefixLot, titluLot,
-  csvBorderouFan, mesajEdgeFan, numeEtichete, numeControl, controlLotFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire } from '../fanLot.js'
+  csvBorderouFan, mesajEdgeFan, numeEtichete, numeControl, controlLotFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire,
+  fapteContrazise, optiuniSolutionare, solutioneazaUrmarire } from '../fanLot.js'
 import { docxPaginaControl } from '../plicuri.js'
 import { descarcaBlob } from '../docx.js'
 import { G, S, Modal, msgEroare, citestePaginat, etichetaRetur, MOTIVE_RETUR } from './comune.jsx'
@@ -18,7 +19,7 @@ export { contactPePlic }   // compatibil cu testele vechi (definiția e în reda
 const LOT_IN = 100
 // runda 4: faptele urmăririi + contradicțiile (Jakarinos #1118 r3 P2)
 const COL_FAN = 'id,plic_id,nr_plic,stare,hash_date,awb,tarif,motiv,urmarire_stare,ultim_eveniment,ultim_eveniment_la,ridicat_propus,livrat_la,retur_propus,'
-  + 'retur_cunoscut,ridicat_contrazis,livrat_contrazis,retur_contrazis,confirmare_stare'
+  + 'retur_cunoscut,ridicat_contrazis,livrat_contrazis,retur_contrazis,confirmare_stare,versiune_urmarire'   // runda 5: versiunea = CAS-ul soluționării
 const ETICHETE_RETUR = Object.fromEntries(MOTIVE_RETUR.map(m => [m.cod, etichetaRetur(m.cod)]))
 // tabelul FAN lipsește (migrarea neaplicată) ≠ eroare de citire (L18)
 export const lipsaTabel = e => ['PGRST205', '42P01'].includes(e?.code) || /does not exist|could not find the table/i.test(e?.message || '')
@@ -37,10 +38,12 @@ export async function citesteEvidentaFan(client, lotId, esteCurent = () => true)
 }
 
 // convocariPePlic = convocările pe plic din ecranul Plicuri (aceleași citiri ca arhiva documentelor): numărul documentelor pe pagina de control
-export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariPePlic = {}, esteOwner = false, poateScrie = false, onClose, onRetur }) {
+export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariPePlic = {}, esteOwner = false, esteAdmin = false, poateScrie = false, onClose, onRetur }) {
   const [randuri, setRanduri] = useState(null), [fan, setFan] = useState(null), [eroare, setEroare] = useState(''), [mesaj, setMesaj] = useState('')
   const [lucru, setLucru] = useState(false), [reload, setReload] = useState(0)
   const [dataRec, setDataRec] = useState(''), [propuneri, setPropuneri] = useState(null), [plafonNou, setPlafonNou] = useState('')
+  // runda 5: formularul de soluționare a unei contradicții — rândul EXACT văzut (valori + versiune), alegerile și motivul; unul odată
+  const [sol, setSol] = useState(null)
   const gen = useRef(0), ocupat = useRef(false)
   // L24 (Jakarinos #1118 r1 P2): acțiunile au generația lor + lotul pentru care au pornit; schimbarea lotului / închiderea le invalidează
   const genActiune = useRef(0), lotCurent = useRef(lot.id)
@@ -48,7 +51,7 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   const cheie = active.map(p => p.id).join(',')   // lista nouă la fiecare randare a părintelui → efectul depinde de id-uri, nu de referință
   useEffect(() => {
     lotCurent.current = lot.id; genActiune.current++; ocupat.current = false
-    setLucru(false); setMesaj(''); setPropuneri(null); setPlafonNou('')
+    setLucru(false); setMesaj(''); setPropuneri(null); setPlafonNou(''); setSol(null)
     return () => { genActiune.current++ }
   }, [lot.id])
   useEffect(() => {
@@ -74,7 +77,7 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   const awb = fan?.randuri || []
   const pePlic = new Map(awb.filter(r => !['eroare', 'anulat'].includes(r.stare)).map(r => [r.plic_id, r]))
   const gata = randuri?.filter(r => r.ok).length ?? 0
-  const st = { transportActiv: TRANSPORT_REAL_ACTIV, evidentaInstalata: !!fan?.instalata, esteOwner, randuri: awb }
+  const st = { transportActiv: TRANSPORT_REAL_ACTIV, evidentaInstalata: !!fan?.instalata, esteOwner, esteAdmin, randuri: awb }
   const pasi = stariPasi({ ...st, poateScrie, fanLot: fan?.fanLot, gataDePropus: gata })
   const operatii = stariOperatii(st)
   const marcaj = stareMarcaj({ ...st, fanLot: fan?.fanLot })
@@ -269,6 +272,27 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
     const { error } = await supabase.rpc('fn_red_fan_anulat', { p_id: r.id, p_awb: r.awb, p_motiv: motiv.trim() }); if (error) throw error
     return `${r.nr_plic}: AWB marcat anulat.`
   })
+  // runda 5 (Jakarinos #1118 r4 P2): SOLUȚIONAREA unei contradicții (owner / admin Redări). Formularul ține rândul EXACT văzut (valorile +
+  // versiunea): BD-ul refuză dacă a sosit între timp un răspuns FAN (RD023). Garda: generația + lotul (executa) și dublu-click (ocupat).
+  const deschideSolutionare = r => { if (!lucru && pas('solutionare')?.activ) setSol({ rand: r, alegeri: {}, motiv: '' }) }
+  const solutioneaza = () => executa('solutionare', async curent => {
+    if (!sol) return 'Nicio contradicție aleasă.'
+    const { rand: r, alegeri, motiv } = sol
+    const opt = optiuniSolutionare(r, ETICHETE_RETUR)
+    const lipsa = opt.filter(o => !alegeri[o.cheie])
+    if (lipsa.length) return `Alege valoarea care rămâne pentru: ${lipsa.map(o => o.titlu).join(', ')}.`
+    if (!motiv.trim()) return 'Scrie motivul soluționării (ce ai verificat în selfAWB).'
+    const ales = opt.map(o => `${o.titlu}: ${o.optiuni.find(x => x.valoare === alegeri[o.cheie]).text}`).join('; ')
+    if (!window.confirm(`Soluționezi contradicția pentru ${r.nr_plic} (AWB ${r.awb})? Rămân: ${ales}. Motiv: ${motiv.trim()}. Istoricul (ce era contrazis, alegerea, motivul) rămâne în jurnal.`)) return 'Nimic schimbat.'
+    if (!curent()) return OPRIT
+    let d
+    // RD023 (răspuns FAN nou între timp): formularul cu valorile vechi se închide; se redeschide pe evidența reîncărcată
+    try { d = await solutioneazaUrmarire({ rpc: (n, a) => supabase.rpc(n, a), rand: r, alegeri, motiv }) }
+    catch (e) { if (curent() && e?.code === 'RD023') setSol(null); throw e }
+    if (!curent()) return OPRIT
+    setSol(null)
+    return `${r.nr_plic}: contradicția soluționată; urmărire: ${ETICHETE_URMARIRE[d.stare] || d.stare}.`
+  })
   const borderou = () => descarcaBlob(new Blob([csvBorderouFan({ lot, fanLot: fan?.fanLot, randuri: awb })], { type: 'text/csv;charset=utf-8' }), `${prefixLot(fan?.fanLot)}${lot.nr_lot}_borderou_FAN.csv`)
 
   const Pas = ({ cheie: k, onClick, children }) => { const p = pas(k)
@@ -348,8 +372,19 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
     </div>}
     {deVerificat.length > 0 && <div style={{ ...S.card, borderColor: G.red, marginBottom: 8 }}>
       <b style={{ color: G.red }}>Urmărire de verificat de om ({deVerificat.length})</b> — răspuns FAN neclar sau CONTRADICȚIE cu un fapt cunoscut: faptele cunoscute rămân
-      (nu se șterg și nu se înlocuiesc automat); verifică în selfAWB, apoi înregistrează din ecran ridicarea / AR-ul / returul.
-      {deVerificat.map(r => <div key={r.id}>{r.nr_plic} · AWB {r.awb} · ultimul eveniment: {r.ultim_eveniment || '-'}{textFapteUrmarire(r, ETICHETE_RETUR) ? ` · ${textFapteUrmarire(r, ETICHETE_RETUR)}` : ''}</div>)}
+      (nu se șterg și nu se înlocuiesc automat, nici la un răspuns ulterior). Verifică în selfAWB; o contradicție o soluționează owner-ul sau un admin Redări
+      cu „Soluționează…” (alegi valoarea care rămâne pentru fiecare fapt, cu motiv); ridicarea / AR-ul / returul pe plic se înregistrează apoi ca de obicei.
+      {deVerificat.map(r => <div key={r.id}>{r.nr_plic} · AWB {r.awb} · ultimul eveniment: {r.ultim_eveniment || '-'}{textFapteUrmarire(r, ETICHETE_RETUR) ? ` · ${textFapteUrmarire(r, ETICHETE_RETUR)}` : ''}
+        {fapteContrazise(r).length > 0 && sol?.rand.id !== r.id && <> <Pas cheie="solutionare" onClick={() => deschideSolutionare(r)}>Soluționează…</Pas></>}
+        {sol?.rand.id === r.id && <div style={{ ...S.card, margin: '4px 0', display: 'grid', gap: 4 }}>
+          {optiuniSolutionare(sol.rand, ETICHETE_RETUR).map(o => <div key={o.cheie}><b>{o.titlu}:</b>{' '}
+            {o.optiuni.map(x => <label key={x.valoare} style={{ marginRight: 10 }}><input type="radio" name={`sol_${r.id}_${o.cheie}`} disabled={lucru}
+              checked={sol.alegeri[o.cheie] === x.valoare} onChange={() => setSol(s => s && s.rand.id === r.id ? { ...s, alegeri: { ...s.alegeri, [o.cheie]: x.valoare } } : s)} /> {x.text}</label>)}</div>)}
+          <input style={S.input} maxLength={500} value={sol.motiv} disabled={lucru} placeholder="Motivul (ce ai verificat în selfAWB)" aria-label="Motivul soluționării"
+            onChange={e => { const v = e.target.value; setSol(s => s && s.rand.id === r.id ? { ...s, motiv: v } : s) }} />
+          <div><Pas cheie="solutionare" onClick={solutioneaza}>Confirmă soluționarea</Pas>{' '}
+            <button style={S.btnX} disabled={lucru} onClick={() => setSol(null)}>Renunță</button></div>
+        </div>}</div>)}
     </div>}
     {randuri && <>
       <p>{gata} din {randuri.length} plicuri au toate datele cerute de FAN.</p>

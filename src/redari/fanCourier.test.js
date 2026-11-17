@@ -14,7 +14,8 @@ import { construiestePlicFan, telefonFan, hashPlicFan, jsonCanonic, interpreteaz
 import { raspundeFan, TRANSPORT_REAL_ACTIV, ACTIUNI_FAN } from '../../supabase/functions/_shared/redariFanHandler.mjs'
 import { executaActiuneFan, MAX_BUCATI_PE_APEL, citesteToate } from '../../supabase/functions/_shared/redariFanTransport.mjs'
 import { stariPasi, stareMarcaj, stariOperatii, PASI_FAN, MESAJ_TRANSPORT_OPRIT, csvBorderouFan, prefixLot, titluLot, numeEtichete, numeControl, numeArhiva,
-  controlLotFan, pregatestePachetFan, mesajEdgeFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire } from './fanLot.js'
+  controlLotFan, pregatestePachetFan, mesajEdgeFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire,
+  fapteContrazise, ALEGERI_SOLUTIONARE, optiuniSolutionare, solutioneazaUrmarire, MESAJ_URMARIRE_SCHIMBATA } from './fanLot.js'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import FanAwbPrevizualizare from './ui/FanAwbPrevizualizare.jsx'
@@ -1014,10 +1015,90 @@ describe('runda 4: înlocuirea tirajului nu lasă să treacă o descărcare înc
   })
   it('paritate JS = SQL (L19): cele 30 s, codurile RD021 / RD022 și evidența în red_jurnal sunt în migrare', () => {
     const m = MIG.replace(/\r/g, '')
-    expect(Number((m.match(/v_fl\.tiraj_oprit_la > now\(\) - interval '(\d+) seconds'/) || [])[1])).toBe(ASTEPTARE_DUPA_OPRIRE_S)
+    // runda 5 (r4 P1): cele 30 s pe CEASUL EFECTIV (clock_timestamp, sub lock), oprirea scrisă cu momentul luat după lock-uri — nimic cu now()
+    expect(Number((m.match(/v_fl\.tiraj_oprit_la > clock_timestamp\(\) - interval '(\d+) seconds'/) || [])[1])).toBe(ASTEPTARE_DUPA_OPRIRE_S)
+    expect(m).not.toMatch(/tiraj_oprit_la > now\(\)/); expect(m).not.toMatch(/tiraj_oprit_la = now\(\)/)
+    expect(m).toMatch(/v_la := clock_timestamp\(\);[^\n]*\n  IF p_opreste AND v_fl\.tiraj_oprit_la IS NULL THEN\n    UPDATE public\.red_fan_loturi SET tiraj_oprit_la = v_la,/)
     expect(m).toMatch(/USING ERRCODE = 'RD021'/); expect(m).toMatch(/USING ERRCODE = 'RD022'/)
     expect(m).toMatch(/CREATE FUNCTION public\.fn_red_fan_tiraj_opreste\(p_lot_id uuid, p_cheie text, p_opreste boolean\) RETURNS jsonb/)
-    expect((m.match(/INSERT INTO public\.red_jurnal \(tabela, inregistrare_id, actiune, date_vechi, date_noi, user_id\)/g) || []).length).toBe(2)
+    // trei scrieri în jurnal: tirajul, oprirea / reluarea, soluționarea urmăririi (runda 5)
+    expect((m.match(/INSERT INTO public\.red_jurnal \(tabela, inregistrare_id, actiune, date_vechi, date_noi, user_id\)/g) || []).length).toBe(3)
+  })
+})
+
+describe('runda 5: soluționarea contradicțiilor urmăririi (Jakarinos #1118 r4 P2)', () => {
+  const rand = (x = {}) => ({ id: 'r1', nr_plic: 'PL-TST-0001', awb: '1000000001', versiune_urmarire: 3, ridicat_propus: '2026-11-10', ridicat_contrazis: '2026-11-11',
+    livrat_la: null, livrat_contrazis: null, retur_cunoscut: false, retur_propus: null, retur_contrazis: null, ...x })
+  const rpcCu = rasp => { const apeluri = []; return { apeluri, rpc: async (n, a) => { apeluri.push([n, a]); return rasp(a) } } }
+  it('fapteContrazise: aceeași listă și ordine ca fn_red_fan_urmarire_solutioneaza (ridicat, livrat, retur, livrat_retur); fără contradicție = []', () => {
+    expect(fapteContrazise(rand()).map(f => f.cheie)).toEqual(['ridicat'])
+    const toate = rand({ livrat_la: '2026-11-12T11:00:00Z', livrat_contrazis: '2026-11-12T12:00:00Z', retur_cunoscut: true, retur_propus: 'refuz', retur_contrazis: 'mutat' })
+    expect(fapteContrazise(toate).map(f => f.cheie)).toEqual(['ridicat', 'livrat', 'retur', 'livrat_retur'])
+    expect(fapteContrazise(rand({ ridicat_contrazis: null }))).toEqual([]); expect(fapteContrazise(null)).toEqual([])
+    // ordinea SQL: aceleași patru verificări, în aceeași ordine, în migrare
+    const m = MIG.replace(/\r/g, '')
+    const i = ['ridicat_contrazis IS NOT NULL THEN v_cer', 'livrat_contrazis IS NOT NULL THEN v_cer', 'retur_contrazis IS NOT NULL THEN v_cer', 'v_r.livrat_la IS NOT NULL AND v_r.retur_cunoscut THEN v_cer'].map(s => m.indexOf(s))
+    expect(i.every(x => x > 0)).toBe(true); expect([...i].sort((a, b) => a - b)).toEqual(i)
+    expect(Object.keys(ALEGERI_SOLUTIONARE)).toEqual(['ridicat', 'livrat', 'retur', 'livrat_retur'])
+    expect(m).toMatch(/\(e\.key = 'livrat_retur' AND \(e\.value #>> '\{\}'\) NOT IN \('livrat', 'retur'\)\)/)
+    expect(m).toMatch(/\(e\.key <> 'livrat_retur' AND \(e\.value #>> '\{\}'\) NOT IN \('cunoscut', 'nou'\)\)/)
+  })
+  it('optiuniSolutionare: AMBELE valori pe fiecare fapt, în ora / ziua României (L17)', () => {
+    const o = optiuniSolutionare(rand({ livrat_la: '2026-11-12T07:00:00Z', retur_cunoscut: true, retur_propus: 'refuz' }), { refuz: 'Refuz' })
+    expect(o.map(x => x.cheie)).toEqual(['ridicat', 'livrat_retur'])
+    expect(o[0].optiuni).toEqual([{ valoare: 'cunoscut', text: '10.11.2026 (cunoscută)' }, { valoare: 'nou', text: '11.11.2026 (FAN, mai nou)' }])
+    expect(o[1].optiuni.map(x => x.text)).toEqual(['livrat 12.11.2026 09:00 (returul se scoate)', 'retur (Refuz) (livrarea se scoate)'])
+  })
+  it('solutioneazaUrmarire: alegeri incomplete / nepermise / în plus, motiv gol sau peste 500, versiune lipsă = NIMIC trimis', async () => {
+    const { apeluri, rpc } = rpcCu(() => ({ data: { stare: 'ridicat', versiune: 4 }, error: null }))
+    for (const [alegeri, motiv, r] of [[{}, 'ok', rand()], [{ ridicat: 'altceva' }, 'ok', rand()], [{ ridicat: 'cunoscut', livrat: 'nou' }, 'ok', rand()],
+      [{ ridicat: 'cunoscut' }, '   ', rand()], [{ ridicat: 'cunoscut' }, 'x'.repeat(501), rand()], [{ ridicat: 'cunoscut' }, 'ok', rand({ versiune_urmarire: null })],
+      [{ ridicat: 'cunoscut' }, 'ok', rand({ ridicat_contrazis: null })]]) {
+      await expect(solutioneazaUrmarire({ rpc, rand: r, alegeri, motiv })).rejects.toThrow()
+    }
+    expect(apeluri).toEqual([])
+  })
+  it('solutioneazaUrmarire: trimite VERSIUNEA citită (CAS) și motivul curățat; RD023 = mesajul „s-a schimbat între timp”; rezultat fără versiunea + 1 = neconfirmat', async () => {
+    const a = rpcCu(() => ({ data: { stare: 'ridicat', versiune: 4, solutionate: ['ridicat'] }, error: null }))
+    expect(await solutioneazaUrmarire({ rpc: a.rpc, rand: rand(), alegeri: { ridicat: 'cunoscut' }, motiv: '  verificat  ' })).toMatchObject({ stare: 'ridicat', versiune: 4 })
+    expect(a.apeluri).toEqual([['fn_red_fan_urmarire_solutioneaza', { p_id: 'r1', p_versiune: 3, p_alegeri: { ridicat: 'cunoscut' }, p_motiv: 'verificat' }]])
+    const b = rpcCu(() => ({ data: null, error: { code: 'RD023', message: 'redari fan: urmarirea s-a schimbat intre timp' } }))
+    await expect(solutioneazaUrmarire({ rpc: b.rpc, rand: rand(), alegeri: { ridicat: 'nou' }, motiv: 'x' })).rejects.toMatchObject({ code: 'RD023', message: MESAJ_URMARIRE_SCHIMBATA })
+    const c = rpcCu(() => ({ data: null, error: { code: '42501', message: 'redari fan: doar owner-ul sau un admin Redari solutioneaza urmarirea' } }))
+    await expect(solutioneazaUrmarire({ rpc: c.rpc, rand: rand(), alegeri: { ridicat: 'nou' }, motiv: 'x' })).rejects.toMatchObject({ code: '42501' })
+    const d = rpcCu(() => ({ data: { stare: 'ridicat', versiune: 3 }, error: null }))
+    await expect(solutioneazaUrmarire({ rpc: d.rpc, rand: rand(), alegeri: { ridicat: 'nou' }, motiv: 'x' })).rejects.toThrow('rezultat neconfirmat')
+  })
+  it('operația „solutionare”: owner SAU admin Redări, doar cu o contradicție; dezactivată cât transportul e oprit', () => {
+    const cu = [rand({ stare: 'generat' })], fara = [rand({ stare: 'generat', ridicat_contrazis: null })]
+    const s = o => stariOperatii({ transportActiv: true, evidentaInstalata: true, ...o }).find(x => x.cheie === 'solutionare')
+    expect([s({ esteOwner: true, randuri: cu }).activ, s({ esteAdmin: true, randuri: cu }).activ, s({ randuri: cu }).activ, s({ esteOwner: true, randuri: fara }).activ]).toEqual([true, true, false, false])
+    expect(stariOperatii({ evidentaInstalata: true, esteOwner: true, randuri: cu }).find(x => x.cheie === 'solutionare')).toMatchObject({ activ: false, motiv: MESAJ_TRANSPORT_OPRIT })
+  })
+  it('ecranul: acțiunea în caseta „de verificat de om”, cu ambele valori și motivul; garda de generație (executa) și dublu-click; citește versiunea', () => {
+    const src = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8').replace(/\r/g, '')
+    expect(src).toMatch(/confirmare_stare,versiune_urmarire'/)
+    expect(src).toMatch(/const solutioneaza = \(\) => executa\('solutionare', async curent => \{/)
+    expect(src).toMatch(/if \(!curent\(\)\) return OPRIT\n    let d\n/)
+    expect(src).toMatch(/solutioneazaUrmarire\(\{ rpc: \(n, a\) => supabase\.rpc\(n, a\), rand: r, alegeri, motiv \}\)/)
+    expect(src).toMatch(/optiuniSolutionare\(sol\.rand, ETICHETE_RETUR\)/); expect(src).toMatch(/Motivul soluționării/)
+    expect(src).toMatch(/if \(ocupat\.current \|\| !pas\(cheiePas\)\?\.activ\) return/)
+    const casuta = src.slice(src.indexOf('Urmărire de verificat de om'), src.indexOf('{randuri && <>'))
+    expect(casuta).toMatch(/Soluționează…/); expect(casuta).toMatch(/Confirmă soluționarea/)
+    expect(readFileSync('src/redari/ui/PlicuriEcran.jsx', 'utf8')).toMatch(/esteAdmin=\{nivel === 'admin'\}/)
+  })
+  it('migrarea: funcția nouă cu poarta de rol în corp, CAS, motiv obligatoriu, jurnal; drepturi doar authenticated; 19 funcții; revenirea o scoate', () => {
+    const m = MIG.replace(/\r/g, '')
+    const f = m.slice(m.indexOf('CREATE FUNCTION public.fn_red_fan_urmarire_solutioneaza'), m.indexOf('END $fn$;', m.indexOf('CREATE FUNCTION public.fn_red_fan_urmarire_solutioneaza')))
+    expect(f).toMatch(/IF auth\.uid\(\) IS NULL OR NOT \(public\.fn_red_fan_e_owner\(\) OR coalesce\(public\.fn_red_nivel\(\), ''\) = 'admin'\) THEN/)
+    expect(f).toMatch(/IF v_r\.versiune_urmarire IS DISTINCT FROM p_versiune THEN/); expect(f).toMatch(/USING ERRCODE = 'RD023'/)
+    expect(f).toMatch(/v_motiv IS NULL OR v_motiv !~ '\[\^\[:space:\]\]' OR length\(v_motiv\) > 500/)
+    expect(f).toMatch(/INSERT INTO public\.red_jurnal/); expect(f).toMatch(/'eveniment', 'urmarire_solutionata'/)
+    expect(m).toMatch(/p\.proname LIKE 'fn\\_red\\_fan\\_%'\) <> 19 THEN/)
+    expect(m).toMatch(/GRANT EXECUTE ON FUNCTION [^;]*public\.fn_red_fan_urmarire_solutioneaza\(uuid, integer, jsonb, text\)[^;]*TO authenticated;/)
+    expect(m).toMatch(/CONSTRAINT red_fan_awb_contradictii CHECK/)
+    const r = readFileSync('supabase/revenire/20261212a_redari_fan_awb_ROLLBACK.sql', 'utf8').replace(/\r/g, '')
+    expect(r).toMatch(/'fn_red_fan_urmarire_solutioneaza\(uuid,integer,jsonb,text\)'\];/); expect(r).toMatch(/DROP FUNCTION public\.fn_red_fan_urmarire_solutioneaza\(uuid, integer, jsonb, text\);/)
   })
 })
 

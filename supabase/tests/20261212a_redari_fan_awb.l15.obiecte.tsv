@@ -52,6 +52,7 @@ coloana	coloana public.red_fan_setari.limita_lot	creat
 constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_aprobare	creat
 constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_awb_check	creat
 constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_confirmare_stare_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_contradictii	creat
 constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_fapte	creat
 constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_generat	creat
 constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_hash_date_check	creat
@@ -103,6 +104,7 @@ functie	functie public.fn_red_fan_surse(uuid)	creat
 functie	functie public.fn_red_fan_tiraj(uuid,text,text)	creat
 functie	functie public.fn_red_fan_tiraj_opreste(uuid,text,boolean)	creat
 functie	functie public.fn_red_fan_urmarire(uuid,jsonb)	creat
+functie	functie public.fn_red_fan_urmarire_solutioneaza(uuid,integer,jsonb,text)	creat
 politica	politica public.red_fan_awb.red_fan_awb_citire	creat
 politica	politica public.red_fan_loturi.red_fan_loturi_citire	creat
 politica	politica public.red_fan_setari.red_fan_setari_citire	creat

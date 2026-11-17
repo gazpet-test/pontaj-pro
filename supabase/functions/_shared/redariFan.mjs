@@ -486,8 +486,10 @@ export function tirajDin(data, cheie) {
 // pagina de control), înainte să-l livreze: aceeași cheie ȘI același nr., altfel nimic livrat. Înlocuirea cere întâi OPRIREA descărcărilor
 // (fn_red_fan_tiraj_opreste, owner): cât e pusă, ambele verificări sunt refuzate (RD021), deci după ce oprirea e comisă nicio descărcare a
 // tirajului vechi nu se mai termină. Înlocuirea e permisă abia după ASTEPTARE_DUPA_OPRIRE_S secunde de la oprire (aceeași valoare ca
-// `interval '30 seconds'` din fn_red_fan_tiraj, test de paritate): o descărcare care a trecut reverificarea chiar înaintea opririi ajunge la om
-// în acest interval, iar foile ei se distrug odată cu celelalte.
+// `interval '30 seconds'` din fn_red_fan_tiraj, test de paritate). Runda 5 (Jakarinos #1118 r4 P1): cele 30 s se numără de la MOMENTUL
+// EFECTIV al opririi (clock_timestamp() după lock-uri, nu începutul tranzacției, nu COMMIT-ul) și se verifică tot cu ceasul efectiv al BD-ului;
+// orice reverificare finală trecută s-a comis înaintea acelui moment. NU garantează că fișierele livrate au ajuns la om: un transfer mai lung
+// de 30 s și distrugerea foilor rămân procedurale.
 export const COD_TIRAJ_OPRIT = 'RD021'      // descărcările tirajului sunt oprite (fn_red_fan_tiraj)
 export const COD_TIRAJ_NEOPRIT = 'RD022'    // înlocuirea fără oprire / înainte de 30 s (fn_red_fan_tiraj)
 export const ASTEPTARE_DUPA_OPRIRE_S = 30
@@ -498,6 +500,22 @@ export const refuzTiraj = error => (error?.code === COD_TIRAJ_SCHIMBAT ? 'tiraj_
 export function tirajNeschimbat(data, tiraj) {
   const t = tiraj?.cheie ? tirajDin(data, tiraj.cheie) : null
   return t && t.stare === 'acelasi' && t.nr === tiraj.nr ? t : null
+}
+
+// ── SOLUȚIONAREA unei contradicții a urmăririi (runda 5, Jakarinos #1118 r4 P2) ──
+// Faptele CONTRAZISE ale unui rând red_fan_awb, în ordinea fixă din fn_red_fan_urmarire_solutioneaza (L19: aceeași listă; BD-ul refuză
+// alegerile care nu acoperă EXACT aceste chei — 22023): ridicat / livrat / retur (valoarea cunoscută vs cea nouă din *_contrazis) și
+// livrat_retur (livrat ȘI retur cunoscute deodată). Alegerile permise pe cheie: ALEGERI_SOLUTIONARE.
+export const COD_URMARIRE_SCHIMBATA = 'RD023'   // CAS-ul soluționării: versiunea urmăririi s-a schimbat (un răspuns FAN nou / altă soluționare)
+export const ALEGERI_SOLUTIONARE = Object.freeze({ ridicat: ['cunoscut', 'nou'], livrat: ['cunoscut', 'nou'], retur: ['cunoscut', 'nou'], livrat_retur: ['livrat', 'retur'] })
+export function fapteContrazise(r) {
+  if (!r) return []
+  const f = []
+  if (r.ridicat_contrazis != null) f.push({ cheie: 'ridicat', cunoscut: r.ridicat_propus, nou: r.ridicat_contrazis })
+  if (r.livrat_contrazis != null) f.push({ cheie: 'livrat', cunoscut: r.livrat_la, nou: r.livrat_contrazis })
+  if (r.retur_contrazis != null) f.push({ cheie: 'retur', cunoscut: r.retur_propus, nou: r.retur_contrazis })
+  if (r.livrat_la != null && r.retur_cunoscut === true) f.push({ cheie: 'livrat_retur', cunoscut: r.livrat_la, nou: r.retur_propus ?? null })
+  return f
 }
 
 /** Destinatarul MASCAT pe pagina de control (fără numele întreg pe o foaie de lucru): primele 2 litere ale fiecărui cuvânt + „*”. */
