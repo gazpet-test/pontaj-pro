@@ -33,6 +33,9 @@ const surseVechi = surseDin(VECHI)
 // runda 3: head-ul revizuit în runda 2 (verdictul Jakarinos #1118 r2)
 const VECHI_R2 = '0716f5b3a67ad43ba9b537c9e03835c2df6115a6'
 const surseR2 = surseDin(VECHI_R2)
+// runda 4: head-ul revizuit în runda 3 (verdictul Jakarinos #1118 r3)
+const VECHI_R3 = 'fdaa0496171a95d65644c49e17d033c07c1a3457'
+const surseR3 = surseDin(VECHI_R3)
 // folderul temporar stă în .tmp/ (ignorat de git): pe Windows, calea scurtă din %TEMP% (GAZPET~1) nu se încarcă prin vite
 const TMP = join(process.cwd(), '.tmp')
 mkdirSync(TMP, { recursive: true })
@@ -57,17 +60,38 @@ async function incarca(mutatie, surse = SURSE) {
 const LOT = { id: '11111111-2222-4333-8444-555555555555', proiect_id: 'p1', nr_lot: 'PP-0001' }
 const contact = { telefon: '0700000001', adresa_strada: 'Str. Fictivă 1', adresa_sat: 'Sat', adresa_judet: 'Prahova' }
 const raspuns = (status, corp) => ({ status, json: async () => corp, arrayBuffer: async () => new ArrayBuffer(0) })
-// fn_red_fan_tiraj SIMULAT după contractul din migrare (semantica SQL e probată pe PGlite); `stare` = rândul lotului, comun descărcărilor
+// fn_red_fan_tiraj / _opreste SIMULATE după contractul din migrare (semantica SQL e probată pe PGlite); `stare` = rândul lotului, comun
+// descărcărilor; runda 4: oprirea (RD021 la orice descărcare) și înlocuirea doar după oprire + 30 s (RD022), ceasul = stare.acum
 function tirajSimulat(stare = { cheie: null, nr: 0, la: null }) {
-  return args => {
-    const rasp = s => ({ data: { stare: s, cheie: stare.cheie, nr: stare.nr, inceput_la: stare.la } })
-    if (stare.cheie && stare.cheie === args.p_cheie) return rasp('acelasi')
-    if ((args.p_inlocuieste == null && stare.cheie == null) || (args.p_inlocuieste != null && args.p_inlocuieste === stare.cheie)) {
-      Object.assign(stare, { cheie: args.p_cheie, nr: stare.nr + 1, la: '2026-11-17T16:05:00+00:00' })
-      return rasp(args.p_inlocuieste == null ? 'inceput' : 'inlocuit')
+  const acum = () => stare.acum ?? Date.now()
+  const rasp = s => ({ data: { stare: s, cheie: stare.cheie, nr: stare.nr, inceput_la: stare.la, oprit_la: stare.oprit_la ?? null } })
+  const rd = code => ({ error: { code, message: `redari fan: refuz ${code}` } })
+  const f = args => {
+    if (args.p_inlocuieste == null) {
+      if (stare.oprit_la) return rd('RD021')
+      if (stare.cheie && stare.cheie === args.p_cheie) return rasp('acelasi')
+      if (stare.cheie == null) { Object.assign(stare, { cheie: args.p_cheie, nr: stare.nr + 1, la: '2026-11-17T16:05:00+00:00' }); return rasp('inceput') }
+      return rd('RD020')
     }
-    return { error: { code: 'RD020', message: 'redari fan: tirajul s-a schimbat; retipareste tot lotul' } }
+    if (args.p_inlocuieste !== stare.cheie) return rd('RD020')
+    if (args.p_cheie === stare.cheie) return rasp('acelasi')
+    if (!stare.oprit_la || acum() - Date.parse(stare.oprit_la) < 30000) return rd('RD022')
+    Object.assign(stare, { cheie: args.p_cheie, nr: stare.nr + 1, la: '2026-11-17T16:05:00+00:00', oprit_la: null })
+    return rasp('inlocuit')
   }
+  f.opreste = args => {
+    if (args.p_cheie !== stare.cheie) return rd('RD020')
+    stare.oprit_la = args.p_opreste ? (stare.oprit_la || new Date(acum()).toISOString()) : null
+    return { data: { stare: stare.oprit_la ? 'oprit' : 'reluat', cheie: stare.cheie, nr: stare.nr, oprit_la: stare.oprit_la } }
+  }
+  return f
+}
+// owner-ul, în ALTĂ sesiune: oprește tirajul curent și (opțional) îl înlocuiește după 30 s
+const schimbaTirajul = (stare, cheieNoua) => {
+  const t = tirajSimulat(stare), vechi = stare.cheie
+  stare.acum = Date.parse('2026-11-17T17:00:00Z')
+  t.opreste({ p_cheie: vechi, p_opreste: true })
+  if (cheieNoua) { stare.acum += 30000; t({ p_cheie: cheieNoua, p_inlocuieste: vechi }) }
 }
 async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza' }, randuriPlus = {}, rpc, stareTiraj, raspUrmarire }) {
   const tiraj = tirajSimulat(stareTiraj)
@@ -88,7 +112,7 @@ async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza
     secrete: () => ({ username: 'u', password: 'p', clientId: 'C' }), randuriLot: async () => ({ data: randuri }), proiect: async () => ({ data: { cod: 'TEST-RAZVAN' } }),
     datePlicuri: async () => ({ data: { plicuri, convocari, contacte } }), plicuriLot: async () => ({ data: plicuri }), pauza: async () => {}, subtle: webcrypto.subtle, fetch,
     rpc: rpc || (async (nume, args) => { jurnal.push({ nume, args }); return nume === 'fn_red_fan_claim_lot' ? { data: '99999999-0000-4000-8000-000000000001' }
-      : nume === 'fn_red_fan_tiraj' ? tiraj(args)
+      : nume === 'fn_red_fan_tiraj' ? tiraj(args) : nume === 'fn_red_fan_tiraj_opreste' ? tiraj.opreste(args)
       : nume === 'fn_red_fan_urmarire' ? (raspUrmarire ? raspUrmarire(args) : { data: { scrise: args.p_randuri.length, pastrate: 0, depasite: 0 } })
       : nume === 'fn_red_fan_confirmari' ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : { data: (args.p_rezultate || args.p_randuri || []).length } }),
   }
@@ -260,6 +284,45 @@ const VERIFICARI = {
     return lipsa.urmarire_stare === 'de_verificat' && gol.urmarire_stare === 'fara_evenimente' && gol.ultim_eveniment_la === null
       && p?.urmarire_stare === 'fara_evenimente' && p.ultim_eveniment_la === null && r1.r.body.cod === 'ok' && r1.r.body.pastrate === 1 && r2.r.body.cod === 'scriere_neconfirmata'
   },
+  // ── runda 4 (verdictul #1118 r3); fiecare PICĂ pe fdaa0496 ──
+  // r3 P1, scenariul recenzentului: partea 2 cerută pe K1; cât FAN răspunde, owner-ul oprește și înlocuiește cu K2 → nimic livrat (409),
+  // după verificare + reverificarea FINALĂ cu aceeași cheie; oprirea singură → 409 „tiraj_oprit”; partea 1 (neschimbată) trece
+  async tirajInlocuitInCurs(M) {
+    const pdf = new TextEncoder().encode('%PDF-1.7 x')
+    const st = { cheie: null, nr: 0, la: null }
+    const baza = { stari: Object.fromEntries(Array.from({ length: 150 }, (_, i) => [i, 'generat'])),
+      randuriPlus: Object.fromEntries(Array.from({ length: 150 }, (_, i) => [i, { awb: String(3000000001 + i) }])), stareTiraj: st }
+    const man = M.fan.manifestTiparire({ randuri: Array.from({ length: 150 }, (_, i) => ({ id: `r${i}`, plic_id: `pl${i + 1}`, stare: 'generat', awb: String(3000000001 + i) })),
+      plicuri: Array.from({ length: 150 }, (_, i) => ({ id: `pl${i + 1}`, nr_plic: `PL-TST-${String(i + 1).padStart(4, '0')}`, stare: 'activ' })) })
+    const lbl = () => ({ status: 200, arrayBuffer: async () => pdf.buffer })
+    const p1 = await ruleaza(M, 150, { ...baza, corp: { actiune: 'eticheta', parte: 1, manifest_cheie: man.cheie }, handler: lbl })
+    const p2 = await ruleaza(M, 150, { ...baza, corp: { actiune: 'eticheta', parte: 2, manifest_cheie: man.cheie },
+      handler: u => { if (u.pathname === '/awb/label') schimbaTirajul(st, 'b'.repeat(64)); return lbl() } })
+    const inlocuit = st.nr === 2 && st.cheie === 'b'.repeat(64)
+    const st2 = { cheie: null, nr: 0, la: null }
+    await ruleaza(M, 150, { ...baza, stareTiraj: st2, corp: { actiune: 'eticheta', parte: 1, manifest_cheie: man.cheie }, handler: lbl })
+    const p3 = await ruleaza(M, 150, { ...baza, stareTiraj: st2, corp: { actiune: 'eticheta', parte: 2, manifest_cheie: man.cheie },
+      handler: u => { if (u.pathname === '/awb/label') schimbaTirajul(st2, null); return lbl() } })
+    return p1.r.body.cod === 'ok' && inlocuit && p2.r.status === 409 && p2.r.body.cod === 'tiraj_schimbat' && p2.r.body.pdf_base64 === undefined
+      && p2.apeluri.filter(x => x.cale === '/awb/label').length === 1 && p2.jurnal.filter(j => j.nume === 'fn_red_fan_tiraj').length === 2
+      && p3.r.status === 409 && p3.r.body.cod === 'tiraj_oprit' && p3.r.body.pdf_base64 === undefined
+  },
+  // r3 P1 în ecran: reverificarea FINALĂ a arhivei / etichetelor (confirmaTirajFinal) — neschimbat = trece; oprit / înlocuit / aceeași cheie cu alt
+  // nr. = refuz; plus oprirea refuzată la începutul arhivei
+  async arhivaReverificata(M) {
+    const k = 'a'.repeat(64), st = { cheie: k, nr: 1, la: '2026-11-17T16:05:00+00:00' }, t = tirajSimulat(st)
+    const rpc = async (n, y) => (n === 'fn_red_fan_tiraj_opreste' ? t.opreste(y) : t(y))
+    const tiraj = { cheie: k, nr: 1, id: 'AAAAAAAA', inceput_la: st.la }
+    const cod = async p => { try { await p; return 'ok' } catch (e) { return e?.code || 'exceptie' } }
+    const a = await cod(M.lot.confirmaTirajFinal({ rpc, lot: LOT, tiraj }))
+    schimbaTirajul(st, null)
+    const b = await cod(M.lot.confirmaTirajFinal({ rpc, lot: LOT, tiraj }))
+    st.acum += 30000; t({ p_cheie: 'c'.repeat(64), p_inlocuieste: k })
+    const c = await cod(M.lot.confirmaTirajFinal({ rpc, lot: LOT, tiraj }))
+    schimbaTirajul(st, k)   // același manifest ca la început, dar tirajul nr. 3
+    const d = await cod(M.lot.confirmaTirajFinal({ rpc, lot: LOT, tiraj }))
+    return a === 'ok' && b === 'RD021' && c === 'RD020' && d === 'exceptie' && st.nr === 3
+  },
   async confirmareNecunoscuta(M) {
     const c = M.fan.interpreteazaConfirmari(200, [{ awbNumber: '3000000001' }, { ceva: 'fara awb' }], ['3000000001', '3000000002'])
     return [...c.pe_awb.values()].every(v => v === 'forma_necunoscuta')
@@ -321,6 +384,13 @@ const MUTANTI = [
   ['urmarireFaraEvenimente', 'lista lipsă = fără evenimente (forma 0716f5b3)', { fisier: 'redariFan.mjs', din: '  if (!Array.isArray(el.events)) return { ...gol', in: '  if (el.events != null && !Array.isArray(el.events)) return { ...gol' },
     { fisier: 'redariFan.mjs', din: '  for (const e of el.events) {', in: '  for (const e of el.events || []) {' }],
   ['urmarireFaraEvenimente', '„păstrate” ignorate în raport', { fisier: 'redariFanTransport.mjs', din: 'scrise += w.scrise; pastrate += w.pastrate; depasite += w.depasite', in: 'scrise += w.scrise; depasite += w.depasite' }],
+  // runda 4
+  ['tirajInlocuitInCurs', 'etichetele fără reverificarea finală (forma fdaa0496)', { fisier: 'redariFanTransport.mjs',
+    din: "const t2 = await deps.rpc('fn_red_fan_tiraj', { p_lot_id: lot.id, p_cheie: ct, p_inlocuieste: null })", in: "const t2 = { data: { ...t.data, stare: 'acelasi' } }" }],
+  ['tirajInlocuitInCurs', 'refuzul „oprit” tratat ca neconfirmat (fără mesajul lui)', { fisier: 'redariFan.mjs', din: ": error?.code === COD_TIRAJ_OPRIT ? 'tiraj_oprit' : null)", in: ': null)' }],
+  ['arhivaReverificata', 'arhiva fără reverificarea finală', { fisier: 'fanLot.js', din: "const { data, error } = await rpc('fn_red_fan_tiraj', { p_lot_id: lot.id, p_cheie: tiraj.cheie, p_inlocuieste: null })",
+    in: "const { data, error } = { data: { stare: 'acelasi', cheie: tiraj.cheie, nr: tiraj.nr, inceput_la: tiraj.inceput_la } }" }],
+  ['arhivaReverificata', 'reverificarea acceptă același cheie cu alt nr.', { fisier: 'redariFan.mjs', din: "return t && t.stare === 'acelasi' && t.nr === tiraj.nr ? t : null", in: "return t && t.stare === 'acelasi' ? t : null" }],
   ['confirmareNecunoscuta', 'elementul fără AWB ignorat', { fisier: 'redariFan.mjs', din: 'if (!lista || lista.some(el => !awbDin(el)))', in: 'if (!lista)' }],
   ['lotTest', 'prefixul TEST_ pierdut', { fisier: 'fanLot.js', din: "fanLot?.test === true ? 'TEST_' : ''", in: "''" }],
   ['lotTest', 'borderoul fără marcaj', { fisier: 'fanLot.js', din: "const cap = fanLot?.test === true ? [['LOT DE TEST", in: "const cap = false ? [['LOT DE TEST" }],
@@ -365,6 +435,14 @@ describe('mutanți FAN (JS)', () => {
   const NOI_R3 = ['tirajComun', 'controlIdentic', 'urmarireFaraEvenimente']
   it.skipIf(!surseR2).each(NOI_R3)('pe 0716f5b3 verificarea nouă „%s” PICĂ (constatarea era reală)', async v => {
     const M = await incarca(null, surseR2)
+    let rez
+    try { rez = await VERIFICARI[v](M) } catch { rez = false }
+    expect(rez).toBe(false)
+  })
+  // runda 4: verificările noi pe head-ul revizuit în runda 3 (fdaa0496) TREBUIE să pice (P2 = proba PGlite a migrării)
+  const NOI_R4 = ['tirajInlocuitInCurs', 'arhivaReverificata']
+  it.skipIf(!surseR3).each(NOI_R4)('pe fdaa0496 verificarea nouă „%s” PICĂ (constatarea era reală)', async v => {
+    const M = await incarca(null, surseR3)
     let rez
     try { rez = await VERIFICARI[v](M) } catch { rez = false }
     expect(rez).toBe(false)

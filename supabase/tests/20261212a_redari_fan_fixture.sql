@@ -12,12 +12,28 @@
 --   Convocările se inserează cu auth.uid() = owner-ul fixture (trigger-ul calității cere admin / editor) și FĂRĂ request.jwt.claims (sesiune de
 --   mentenanță: informarea GDPR publicată nu e cerută). Plicurile și lotul: inserare directă de mentenanță (fără contoarele globale „C” / „PP”
 --   / „PL-…”, care rămân neatinse).
--- CE ȘTERGE (actiune=sterge): DOAR rândurile cu identificatorii de mai jos (și rândurile FAN ale lotului fixture — lotul e sintetic), apoi
+-- CE ȘTERGE (actiune=sterge): DOAR rândurile cu identificatorii de mai jos (și rândurile FAN ale lotului fixture — lotul e sintetic — plus
+--   sarea SINTETICĂ marcată, dacă fixture-ul a pus-o; o sare reală nu se atinge), apoi
 --   jurnalele scrise de trigger-ele lor (red_jurnal după inregistrare_id, conturi_tip_jurnal după auth_user_id), cu trigger-ele de
 --   imuabilitate oprite DOAR în acea tranzacție; la final verifică dispariția fiecărui identificator (altfel refuz, nimic șters).
 -- Identificatorii (fixați, prefix f12a…): conturi …a1 / a2 / a3, proiect …b1, UAT …c1, parcelă …d1, deținători …e1-e3, lot …f1,
 --   plicuri …71-73, convocări …81-83. Urme ale unei rulări anterioare = refuz la creare („rulează întâi actiune=sterge”).
--- Dependențe de verificat pe clonă (nu sunt în repo): dreptul lui postgres de INSERT / DELETE pe auth.users; trigger-ele GoTrue de pe auth.users.
+-- PRECONDIȚIILE (runda 4, Jakarinos #1118 r3 P4), verificate ÎNAINTEA oricărei scrieri, fiecare cu codul ei (mesajul începe cu
+--   „FIXTURE_PRECONDITIE FX00n”, SQLSTATE FX00n; scriptul cu două sesiuni iese cu 26 / 27 / 28). Fixture-ul NU acordă drepturi și NU creează
+--   trigger-e:
+--   FX001 — rolul curent (postgres) are SELECT, INSERT și DELETE pe auth.users (fiecare verificat separat);
+--   FX002 — sarea cheii persoanei (red_plic_sare) e utilizabilă: un singur rând nevid (folosit NEATINS) sau tabelul gol — atunci, DOAR pe clona
+--           verificată prin system_identifier, fixture-ul pune o sare SINTETICĂ marcată („FIXTURE-FAN-SARE-SINTETICA-…”), o șterge la final și
+--           verifică ștergerea; orice altă formă = refuz; o cheie a persoanei NULL după contacte = refuz;
+--   FX003 — trigger-ul REAL de pe auth.users (on_auth_user_created → public.handle_new_user()) există, e activ, session_replication_role =
+--           origin, iar după inserarea conturilor a creat profilul fiecăruia (fără nicio plasă: un profil lipsă = refuz, nimic comis).
+-- PREGĂTIREA unei clone GOALE (exemple, de un administrator al clonei, fără valori de producție), înainte de --cu-fixture:
+--   1. proprietarul auth.users: SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'auth.users'::regclass;
+--      apoi, conectat ca acel rol: GRANT SELECT, INSERT, DELETE ON auth.users TO postgres;   (pe producție postgres le are deja)
+--   2. trigger-ul: SELECT tgname, tgenabled, tgfoid::regprocedure FROM pg_trigger WHERE tgrelid = 'auth.users'::regclass AND NOT tgisinternal;
+--      → on_auth_user_created | O | handle_new_user(). Lipsă = clona nu e completă (restaurați schema auth cu trigger-ele ei); fixture-ul refuză.
+--   3. sarea: nimic de făcut (tabel gol = sarea sintetică a fixture-ului; un rând existent rămâne neatins).
+--   Apoi: PSQL=… bash supabase/tests/20261212a_redari_fan_doua_sesiuni.sh --sistem <system_identifier clonă> --cu-fixture -- <conexiune>.
 \set ON_ERROR_STOP 1
 SELECT :'actiune' = 'creeaza' AS creeaza, :'actiune' = 'sterge' AS sterge, :'actiune' IN ('creeaza', 'sterge') AS valid \gset
 \if :valid
@@ -71,9 +87,21 @@ CREATE FUNCTION pg_temp.fx_urme() RETURNS TABLE (tabel text, n bigint) LANGUAGE 
   UNION ALL SELECT 'red_fan_awb', count(*) FROM public.red_fan_awb WHERE lot_id = pg_temp.fx('lot') OR plic_id IN (SELECT id FROM pg_temp.fx_id)
   UNION ALL SELECT 'red_jurnal', count(*) FROM public.red_jurnal WHERE inregistrare_id IN (SELECT id FROM pg_temp.fx_id)
   UNION ALL SELECT 'red_numere PL-ZFX', count(*) FROM public.red_numere WHERE cheie = 'PL-ZFX'
+  UNION ALL SELECT 'red_plic_sare (sintetica)', count(*) FROM public.red_plic_sare WHERE sare LIKE 'FIXTURE-FAN-SARE-SINTETICA-%'
 $f$;
+-- precondițiile comune (creare și ștergere): drepturile pe auth.users, fiecare separat (has_table_privilege cu o listă = ORICARE)
+CREATE FUNCTION pg_temp.fx_drepturi() RETURNS void LANGUAGE plpgsql AS $f$
+DECLARE v_lipsa text;
+BEGIN
+  SELECT string_agg(d, ', ' ORDER BY d) INTO v_lipsa FROM unnest(ARRAY['SELECT', 'INSERT', 'DELETE']) d WHERE NOT has_table_privilege(current_user, 'auth.users', d);
+  IF v_lipsa IS NOT NULL THEN
+    RAISE EXCEPTION 'FIXTURE_PRECONDITIE FX001: rolul % nu are pe auth.users: % (de acordat pe clona de proprietarul tabelului, vezi antetul; fixture-ul nu acorda drepturi); nimic scris',
+      current_user, v_lipsa USING ERRCODE = 'FX001';
+  END IF;
+END $f$;
 
 \if :creeaza
+SELECT pg_temp.fx_drepturi();   -- FX001 înaintea oricărei citiri / scrieri pe auth.users
 DO $curat$
 DECLARE v text;
 BEGIN
@@ -82,13 +110,34 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.red_uat WHERE uat3 = 'ZFX') THEN RAISE EXCEPTION 'FIXTURE: UAT-ul ZFX exista deja pe clona; alege alt cod'; END IF;
 END $curat$;
 
--- conturile: trigger-ul real (handle_new_user) creează profilul + conturi_tip; INSERT-ul de profil e doar plasă dacă trigger-ul lipsește
+-- PRECONDIȚIILE (runda 4), ÎNAINTEA oricărei inserări (FX001 e mai sus): FX003 trigger-ul real, FX002 forma sării
+DO $preconditii$
+BEGIN
+  IF current_setting('session_replication_role') IS DISTINCT FROM 'origin'
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'auth.users'::regclass AND NOT t.tgisinternal AND t.tgname = 'on_auth_user_created'
+                      AND t.tgenabled IN ('O', 'A') AND t.tgfoid = to_regprocedure('public.handle_new_user()')) THEN
+    RAISE EXCEPTION 'FIXTURE_PRECONDITIE FX003: trigger-ul real on_auth_user_created -> public.handle_new_user() lipseste sau e oprit pe auth.users (session_replication_role %); fixture-ul nu il creeaza; nimic scris',
+      current_setting('session_replication_role') USING ERRCODE = 'FX003';
+  END IF;
+  IF (SELECT count(*) FROM public.red_plic_sare) > 1 OR EXISTS (SELECT 1 FROM public.red_plic_sare WHERE sare IS NULL OR sare !~ '[^[:space:]]') THEN
+    RAISE EXCEPTION 'FIXTURE_PRECONDITIE FX002: red_plic_sare nu are forma asteptata (un rand nevid sau tabel gol); nimic scris' USING ERRCODE = 'FX002';
+  END IF;
+END $preconditii$;
+
+-- sarea: tabel gol (clona verificată prin system_identifier) = sare SINTETICĂ marcată, ștearsă la final; un rând existent rămâne neatins
+INSERT INTO public.red_plic_sare (sare)
+SELECT 'FIXTURE-FAN-SARE-SINTETICA-' || md5(random()::text || clock_timestamp()::text) WHERE NOT EXISTS (SELECT 1 FROM public.red_plic_sare);
+
+-- conturile: DOAR trigger-ul real (handle_new_user) creează profilul (+ conturi_tip); fără plasă — un profil lipsă = refuz FX003
 INSERT INTO auth.users (instance_id, id, aud, role, email, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
 SELECT '00000000-0000-0000-0000-000000000000', pg_temp.fx(r), 'authenticated', 'authenticated', 'fixture-fan-r3-' || r || '@exemplu.invalid', '{}'::jsonb, '{}'::jsonb, now(), now()
   FROM unnest(ARRAY['owner', 'editor', 'viewer']) r;
-INSERT INTO public.profiles (id, email, name, role)
-SELECT pg_temp.fx(r), 'fixture-fan-r3-' || r || '@exemplu.invalid', 'FIXTURE FAN ' || upper(r), 'in_asteptare' FROM unnest(ARRAY['owner', 'editor', 'viewer']) r
-ON CONFLICT (id) DO NOTHING;
+DO $trigger_real$
+BEGIN
+  IF (SELECT count(*) FROM public.profiles WHERE id IN (pg_temp.fx('owner'), pg_temp.fx('editor'), pg_temp.fx('viewer'))) <> 3 THEN
+    RAISE EXCEPTION 'FIXTURE_PRECONDITIE FX003: trigger-ul de pe auth.users nu a creat profilul celor 3 conturi; nimic comis' USING ERRCODE = 'FX003';
+  END IF;
+END $trigger_real$;
 UPDATE public.profiles SET name = 'FIXTURE FAN ' || upper(x.rol), is_owner = (x.rol = 'owner')
   FROM pg_temp.fx_id x WHERE profiles.id = x.id AND x.rol IN ('owner', 'editor', 'viewer');
 INSERT INTO public.user_module_access (profile_id, module, access_level)
@@ -105,6 +154,13 @@ INSERT INTO public.red_detinatori_contact (detinator_id, telefon, adresa_strada,
 SELECT pg_temp.fx('det' || i), '07000001' || lpad(i::text, 2, '0'), 'Strada Fictiva nr. ' || i, 'Sat Fictiv', 'Comuna Fictiva', 'Prahova', '10000' || i, true
   FROM generate_series(1, 3) i;
 
+-- sarea e utilizabilă: cheia persoanei (funcția reală) e calculabilă pentru fiecare deținător, altfel refuz FX002 (nu NOT NULL la plic)
+DO $sare$
+BEGIN
+  IF EXISTS (SELECT 1 FROM generate_series(1, 3) i WHERE public.fn_red_cheie_persoana(pg_temp.fx('det' || i)) IS NULL) THEN
+    RAISE EXCEPTION 'FIXTURE_PRECONDITIE FX002: fn_red_cheie_persoana intoarce NULL (sarea red_plic_sare neutilizabila); nimic comis' USING ERRCODE = 'FX002';
+  END IF;
+END $sare$;
 -- lotul și plicurile (mentenanță: plicul nou poate veni direct cu lotul), cheia persoanei = funcția reală
 INSERT INTO public.red_loturi_plicuire (id, proiect_id, nr_lot, data_plicuire) VALUES (pg_temp.fx('lot'), pg_temp.fx('proiect'), 'PP-9912', current_date);
 INSERT INTO public.red_plicuri (id, proiect_id, uat_id, nr_plic, cheie_persoana, destinatar_nume, lot_id)
@@ -143,6 +199,7 @@ SELECT 'FIXTURE_CREAT LOT=' || 'f12a0000-0000-4000-8000-0000000000f1' || ' OWNER
 \endif
 
 \if :sterge
+SELECT pg_temp.fx_drepturi();   -- FX001 înaintea oricărei ștergeri
 -- rândurile FAN ale lotului fixture (lotul e sintetic: tot ce e pe el ține de probă), cu garda marcajului oprită DOAR aici
 ALTER TABLE public.red_fan_loturi DISABLE TRIGGER trg_red_fan_loturi_garda;
 DELETE FROM public.red_fan_awb WHERE lot_id = pg_temp.fx('lot') OR plic_id IN (SELECT id FROM pg_temp.fx_id);
@@ -161,7 +218,10 @@ DELETE FROM public.user_module_access WHERE profile_id IN (SELECT id FROM pg_tem
 DELETE FROM auth.users WHERE id IN (SELECT id FROM pg_temp.fx_id);
 DELETE FROM public.conturi_tip WHERE auth_user_id IN (SELECT id FROM pg_temp.fx_id);
 DELETE FROM public.profiles WHERE id IN (SELECT id FROM pg_temp.fx_id);
--- jurnalele scrise de trigger-ele rândurilor fixture-ului (și de ștergerile de mai sus), DOAR după identificatori
+-- sarea SINTETICĂ a fixture-ului (doar ea, după marcaj; plicurile care o foloseau sunt deja șterse); o sare reală nu se atinge
+DELETE FROM public.red_plic_sare WHERE sare LIKE 'FIXTURE-FAN-SARE-SINTETICA-%';
+-- jurnalele scrise de trigger-ele rândurilor fixture-ului (și de ștergerile de mai sus), DOAR după identificatori — inclusiv evenimentele de
+-- tiraj ale lotului fixture (runda 4: inregistrare_id = lotul)
 ALTER TABLE public.red_jurnal DISABLE TRIGGER trg_red_jurnal_imuabil;
 DELETE FROM public.red_jurnal WHERE inregistrare_id IN (SELECT id FROM pg_temp.fx_id);
 ALTER TABLE public.red_jurnal ENABLE TRIGGER trg_red_jurnal_imuabil;

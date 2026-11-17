@@ -464,7 +464,7 @@ export const partiManifest = tiparite => imparteInBucati(tiparite || [])
 // O SINGURĂ definiție (L19): funcția edge (etichetele) și ecranul (arhiva, „Tiraj nou”) o cheamă identic.
 export const VERSIUNE_TIRAJ = 'redari-fan-tiraj-v1'
 export const COD_TIRAJ_SCHIMBAT = 'RD020'   // SQLSTATE-ul refuzului din fn_red_fan_tiraj
-export const MESAJ_TIRAJ_SCHIMBAT = 'Tirajul s-a schimbat; retipărește tot lotul: distruge foile tirajului început (etichete, pagina de control, documente), apasă „Tiraj nou” (owner) și descarcă din nou toate părțile etichetelor și arhiva documentelor.'
+export const MESAJ_TIRAJ_SCHIMBAT = 'Tirajul s-a schimbat; retipărește tot lotul: owner-ul oprește descărcările tirajului început, după 30 de secunde se distrug foile lui (etichete, pagina de control, documente) și fișierele descărcate, owner-ul înlocuiește tirajul, apoi se descarcă din nou toate părțile etichetelor și arhiva documentelor.'
 export async function cheieTiraj(manifest, subtle = globalThis.crypto?.subtle) {
   if (!manifest || !Array.isArray(manifest.tiparite) || !manifest.tiparite.length || typeof manifest.cheie !== 'string' || !manifest.cheie) throw new Error('manifest fără plicuri tipărite: nu există tiraj')
   if (!subtle) throw new Error('Web Crypto indisponibil')
@@ -479,6 +479,25 @@ export function tirajDin(data, cheie) {
   if (!d || !['inceput', 'acelasi', 'inlocuit'].includes(d.stare) || d.cheie !== cheie || !idTiraj(cheie)) return null
   if (!Number.isInteger(d.nr) || d.nr < 1 || typeof d.inceput_la !== 'string' || !Number.isFinite(Date.parse(d.inceput_la))) return null
   return { stare: d.stare, cheie, id: idTiraj(cheie), nr: d.nr, inceput_la: d.inceput_la }
+}
+
+// ── OPRIREA tirajului și REVERIFICAREA FINALĂ (runda 4, Jakarinos #1118 r3 P1) ──
+// O descărcare verifică tirajul de DOUĂ ori: la început (îl începe / îl confirmă) și din nou DUPĂ ce are fișierul (PDF-ul FAN, arhiva,
+// pagina de control), înainte să-l livreze: aceeași cheie ȘI același nr., altfel nimic livrat. Înlocuirea cere întâi OPRIREA descărcărilor
+// (fn_red_fan_tiraj_opreste, owner): cât e pusă, ambele verificări sunt refuzate (RD021), deci după ce oprirea e comisă nicio descărcare a
+// tirajului vechi nu se mai termină. Înlocuirea e permisă abia după ASTEPTARE_DUPA_OPRIRE_S secunde de la oprire (aceeași valoare ca
+// `interval '30 seconds'` din fn_red_fan_tiraj, test de paritate): o descărcare care a trecut reverificarea chiar înaintea opririi ajunge la om
+// în acest interval, iar foile ei se distrug odată cu celelalte.
+export const COD_TIRAJ_OPRIT = 'RD021'      // descărcările tirajului sunt oprite (fn_red_fan_tiraj)
+export const COD_TIRAJ_NEOPRIT = 'RD022'    // înlocuirea fără oprire / înainte de 30 s (fn_red_fan_tiraj)
+export const ASTEPTARE_DUPA_OPRIRE_S = 30
+export const MESAJ_TIRAJ_OPRIT = 'Descărcările tirajului sunt OPRITE (owner-ul pregătește un tiraj nou): nimic descărcat. Așteaptă tirajul nou și descarcă din nou tot lotul.'
+/** Refuzul unei verificări de tiraj (eroarea RPC) → codul de răspuns: 'tiraj_schimbat' | 'tiraj_oprit' | null (altă eroare = neconfirmat, L18). */
+export const refuzTiraj = error => (error?.code === COD_TIRAJ_SCHIMBAT ? 'tiraj_schimbat' : error?.code === COD_TIRAJ_OPRIT ? 'tiraj_oprit' : null)
+/** Reverificarea FINALĂ: rezultatul fn_red_fan_tiraj pentru cheia tirajului început → tirajul DOAR dacă e „același” (aceeași cheie, același nr.). */
+export function tirajNeschimbat(data, tiraj) {
+  const t = tiraj?.cheie ? tirajDin(data, tiraj.cheie) : null
+  return t && t.stare === 'acelasi' && t.nr === tiraj.nr ? t : null
 }
 
 /** Destinatarul MASCAT pe pagina de control (fără numele întreg pe o foaie de lucru): primele 2 litere ale fiecărui cuvânt + „*”. */

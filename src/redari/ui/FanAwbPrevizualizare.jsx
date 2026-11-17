@@ -6,16 +6,20 @@
    JWT-ul omului (RLS: doar admin/editor). Răspunsurile FAN sunt date: ridicarea, reconcilierea și returul le confirmă omul. */
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
-import { pregatestePlicuriFan, contactPePlic, LIMITA_LOT_PILOT_IMPLICITA, FORMAT_ETICHETA, manifestTiparire, partiManifest, cheieTiraj, idTiraj, tirajDin } from '../../../supabase/functions/_shared/redariFan.mjs'
+import { pregatestePlicuriFan, contactPePlic, LIMITA_LOT_PILOT_IMPLICITA, FORMAT_ETICHETA, manifestTiparire, partiManifest, cheieTiraj, idTiraj, tirajDin,
+  ASTEPTARE_DUPA_OPRIRE_S } from '../../../supabase/functions/_shared/redariFan.mjs'
 import { stariPasi, stareMarcaj, stariOperatii, TRANSPORT_REAL_ACTIV, MESAJ_TRANSPORT_OPRIT, ETICHETE_STARE_FAN, ETICHETE_URMARIRE, ETICHETE_CONFIRMARE, prefixLot, titluLot,
-  csvBorderouFan, mesajEdgeFan, numeEtichete, numeControl, controlLotFan } from '../fanLot.js'
+  csvBorderouFan, mesajEdgeFan, numeEtichete, numeControl, controlLotFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire } from '../fanLot.js'
 import { docxPaginaControl } from '../plicuri.js'
 import { descarcaBlob } from '../docx.js'
-import { G, S, Modal, msgEroare, citestePaginat, etichetaRetur } from './comune.jsx'
+import { G, S, Modal, msgEroare, citestePaginat, etichetaRetur, MOTIVE_RETUR } from './comune.jsx'
 
 export { contactPePlic }   // compatibil cu testele vechi (definiția e în redariFan.mjs, comună cu funcția edge)
 const LOT_IN = 100
-const COL_FAN = 'id,plic_id,nr_plic,stare,hash_date,awb,tarif,motiv,urmarire_stare,ultim_eveniment,ultim_eveniment_la,ridicat_propus,livrat_la,retur_propus,confirmare_stare'
+// runda 4: faptele urmăririi + contradicțiile (Jakarinos #1118 r3 P2)
+const COL_FAN = 'id,plic_id,nr_plic,stare,hash_date,awb,tarif,motiv,urmarire_stare,ultim_eveniment,ultim_eveniment_la,ridicat_propus,livrat_la,retur_propus,'
+  + 'retur_cunoscut,ridicat_contrazis,livrat_contrazis,retur_contrazis,confirmare_stare'
+const ETICHETE_RETUR = Object.fromEntries(MOTIVE_RETUR.map(m => [m.cod, etichetaRetur(m.cod)]))
 // tabelul FAN lipsește (migrarea neaplicată) ≠ eroare de citire (L18)
 export const lipsaTabel = e => ['PGRST205', '42P01'].includes(e?.code) || /does not exist|could not find the table/i.test(e?.message || '')
 
@@ -24,7 +28,7 @@ export const lipsaTabel = e => ['PGRST205', '42P01'].includes(e?.code) || /does 
 export async function citesteEvidentaFan(client, lotId, esteCurent = () => true) {
   try {
     const randuri = await citestePaginat(() => client.from('red_fan_awb').select(COL_FAN).eq('lot_id', lotId), { cheie: 'id', esteCurent })
-    const { data: fl, error: e1 } = await client.from('red_fan_loturi').select('lot_id,test,prima_aprobare_la,tiraj_cheie,tiraj_nr,tiraj_la').eq('lot_id', lotId).maybeSingle()
+    const { data: fl, error: e1 } = await client.from('red_fan_loturi').select('lot_id,test,prima_aprobare_la,tiraj_cheie,tiraj_nr,tiraj_la,tiraj_oprit_la').eq('lot_id', lotId).maybeSingle()
     if (e1) throw e1
     const { data: st, error: e2 } = await client.from('red_fan_setari').select('limita_lot').maybeSingle()
     if (e2) throw e2
@@ -88,6 +92,15 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
     return () => { viu = false }
   }, [manifest.cheie])   // eslint-disable-line react-hooks/exhaustive-deps
   const tirajInceput = fan?.fanLot?.tiraj_cheie ? { id: idTiraj(fan.fanLot.tiraj_cheie), nr: fan.fanLot.tiraj_nr, cheie: fan.fanLot.tiraj_cheie } : null
+  // runda 4: ceasul ecranului pentru cele 30 s de după oprire (doar afișare; BD-ul impune cu ora lui), pornit doar cât tirajul e oprit
+  const [acum, setAcum] = useState(() => Date.now())
+  const opritLa = fan?.fanLot?.tiraj_oprit_la || null
+  useEffect(() => {
+    if (!opritLa) return undefined
+    setAcum(Date.now())
+    const t = setInterval(() => setAcum(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [opritLa])
 
   // garda unei acțiuni: generația + lotul de la pornire; fiecare apel dintr-o buclă o verifică ÎNAINTE (L24)
   async function executa(cheiePas, fn) {
@@ -154,16 +167,46 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
     let control = null
     if (corp.parte === 1) { control = await paginaControl(tiraj); if (!curent()) return OPRIT }   // L24: generația reverificată după await
+    // runda 4 (Jakarinos #1118 r3 P1): funcția edge a reverificat tirajul după PDF; ecranul îl reverifică încă o dată ÎNAINTE de salvare
+    // (după pagina de control): oprit / înlocuit între timp = nimic descărcat
+    await confirmaTirajFinal({ rpc: (n, a) => supabase.rpc(n, a), lot, tiraj })
+    if (!curent()) return OPRIT
     descarcaBlob(new Blob([bytes], { type: 'application/pdf' }), numeEtichete({ lot, fanLot: fan.fanLot, parte: corp.parte, parti: corp.parti, format: FORMAT_ETICHETA, tiraj }))
     if (control) descarcaBlob(control, numeControl({ lot, fanLot: fan.fanLot, tiraj }))
     return `Etichete ${FORMAT_ETICHETA}, tirajul ${tiraj.id}: ${corp.nr_plicuri.length} plicuri (pozițiile ${corp.pozitii[0]}…${corp.pozitii.at(-1)})${corp.parti > 1 ? `, partea ${corp.parte} din ${corp.parti}` : ''}.${corp.ramase?.length ? ` Rămase netipărite: ${corp.ramase.join(', ')}.` : ''}`
   })
-  // „Tiraj nou” (owner): înlocuiește tirajul început cu manifestul de acum (CAS pe cheia veche), după distrugerea foilor vechi
-  const tirajNou = () => executa('tiraj', async curent => {
+  // „Tiraj nou” (owner), runda 4 (Jakarinos #1118 r3 P1) — procedura în ordine, impusă de BD: (1) OPREȘTE descărcările tirajului început
+  // (nicio descărcare a lui nu se mai termină, nici cele începute); (2) așteaptă 30 s; (3) distruge foile ȘI fișierele descărcate ale tirajului;
+  // (4) ÎNLOCUIEȘTE tirajul cu manifestul de acum (CAS pe cheia veche; BD-ul refuză fără oprire / înainte de 30 s). „Reia” = renunțare, fără tiraj nou.
+  const oprire = stareOprireTiraj(fan?.fanLot, acum)
+  const opresteTiraj = () => executa('tiraj', async curent => {
+    if (!tirajInceput) return 'Niciun tiraj început: prima descărcare (etichete sau arhiva documentelor) îl începe.'
+    if (!window.confirm(`Oprești descărcările tirajului ${tirajInceput.id} (nr. ${tirajInceput.nr})? Din acest moment nicio descărcare a lui nu se mai termină, nici cele începute deja. `
+      + `Pasul următor: după ${ASTEPTARE_DUPA_OPRIRE_S} de secunde, adună și DISTRUGE toate foile tirajului ${tirajInceput.id} (etichete, pagina de control, documente) și ȘTERGE fișierele lui descărcate, inclusiv cele primite chiar acum; abia apoi „Înlocuiește tirajul”.`)) return 'Nimic schimbat.'
+    if (!curent()) return OPRIT
+    const { data, error } = await supabase.rpc('fn_red_fan_tiraj_opreste', { p_lot_id: lot.id, p_cheie: tirajInceput.cheie, p_opreste: true })
+    if (error) throw error
+    if (data?.stare !== 'oprit' || data?.cheie !== tirajInceput.cheie) throw new Error('rezultat neconfirmat')
+    return `Descărcările tirajului ${tirajInceput.id} sunt OPRITE. Așteaptă ${ASTEPTARE_DUPA_OPRIRE_S} de secunde, distruge foile și fișierele lui, apoi „Înlocuiește tirajul”.`
+  })
+  const reiaTiraj = () => executa('tiraj', async curent => {
+    if (!tirajInceput || !oprire.oprit) return 'Descărcările nu sunt oprite.'
+    if (!window.confirm(`Reiei descărcările tirajului ${tirajInceput.id} (nr. ${tirajInceput.nr}), FĂRĂ tiraj nou? Foile lui rămân valabile doar dacă nu le-ai distrus deja.`)) return 'Nimic schimbat.'
+    if (!curent()) return OPRIT
+    const { data, error } = await supabase.rpc('fn_red_fan_tiraj_opreste', { p_lot_id: lot.id, p_cheie: tirajInceput.cheie, p_opreste: false })
+    if (error) throw error
+    if (data?.stare !== 'reluat') throw new Error('rezultat neconfirmat')
+    return `Descărcările tirajului ${tirajInceput.id} au fost reluate.`
+  })
+  const inlocuiesteTiraj = () => executa('tiraj', async curent => {
     if (!tirajInceput) return 'Niciun tiraj început: prima descărcare (etichete sau arhiva documentelor) îl începe.'
     if (!cheieAcum) return 'Manifestul de acum nu are plicuri tipăribile.'
     if (cheieAcum === tirajInceput.cheie) return `Manifestul de acum = tirajul ${tirajInceput.id}: nimic de înlocuit.`
-    if (!window.confirm(`Înlocuiești tirajul ${tirajInceput.id} (nr. ${tirajInceput.nr}) cu tirajul ${idTiraj(cheieAcum)}? ÎNTÂI distruge toate etichetele, paginile de control și documentele tipărite din tirajul ${tirajInceput.id}; apoi descarcă din nou TOATE părțile etichetelor și arhiva documentelor.`)) return 'Nimic schimbat.'
+    if (!oprire.oprit) return 'Oprește întâi descărcările tirajului început (pasul 1).'
+    if (!oprire.gataDeInlocuit) return `Mai așteaptă ${oprire.secundeRamase} s de la oprire, apoi distruge foile și fișierele tirajului ${tirajInceput.id}.`
+    if (!window.confirm(`Confirm că: (1) descărcările tirajului ${tirajInceput.id} (nr. ${tirajInceput.nr}) au fost oprite și au trecut cel puțin ${ASTEPTARE_DUPA_OPRIRE_S} de secunde; `
+      + `(2) am adunat și am DISTRUS toate foile tirajului ${tirajInceput.id} (etichete, pagina de control, documente) și am ȘTERS fișierele lui descărcate, inclusiv cele primite după oprire. `
+      + `Tirajul nou ${idTiraj(cheieAcum)} începe acum; se descarcă din nou TOATE părțile etichetelor și arhiva documentelor.`)) return 'Nimic schimbat.'
     if (!curent()) return OPRIT
     const { data, error } = await supabase.rpc('fn_red_fan_tiraj', { p_lot_id: lot.id, p_cheie: cheieAcum, p_inlocuieste: tirajInceput.cheie })
     if (error) throw error
@@ -177,7 +220,8 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
     return corp?.cod === 'ok' ? `Confirmări verificate: ${corp.scrise} AWB-uri${corp.depasite ? `; ${corp.depasite} depășite` : ''}.` : mesaj })
   const evenimente = () => executa('evenimente', async curent => { if (!curent()) return OPRIT; const { corp, mesaj } = await edge('evenimente')
     return corp?.cod === 'ok' ? `Coduri lipsă la FAN: ${corp.lipsa_la_fan.join(', ') || '-'}; coduri FAN neclasificate: ${corp.neclasificate.map(c => c.cod).join(', ') || '-'}.` : mesaj })
-  const deConfirmatRidicare = awb.filter(r => r.stare === 'generat' && r.ridicat_propus)
+  // runda 4: o ridicare CONTRAZISĂ (FAN a dat două date) nu se confirmă în bloc: omul o verifică în selfAWB
+  const deConfirmatRidicare = awb.filter(r => r.stare === 'generat' && r.ridicat_propus && !r.ridicat_contrazis)
   const confirmaRidicarea = () => executa('urmarire', async curent => {
     const efect = fan.fanLot?.test ? 'Lot de TEST: se marchează doar în evidența FAN.' : 'Lot real: plicurile primesc AWB-ul și data expedierii (pornește termenul de 10 zile).'
     if (!window.confirm(`Confirmi ridicarea de către curier pentru ${deConfirmatRidicare.length} plicuri, la datele evenimentului C0? ${efect}`)) return 'Nimic confirmat.'
@@ -230,6 +274,7 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   const Pas = ({ cheie: k, onClick, children }) => { const p = pas(k)
     return <button style={{ ...S.btnX, opacity: p.activ ? 1 : 0.5 }} disabled={!p.activ || lucru} title={p.activ ? p.ajutor : `${p.ajutor} — ${p.motiv}`} onClick={onClick}>{children || p.titlu}</button> }
   const retururi = awb.filter(r => r.urmarire_stare === 'retur')
+  const deVerificat = awb.filter(r => r.urmarire_stare === 'de_verificat')
   const generate = awb.filter(r => r.stare === 'generat')
   return <Modal titlu={`AWB FAN — ${titluLot(lot, fan?.fanLot)}`} onClose={onClose} latime={900}>
     {fan?.fanLot?.test === true && <p role="note" style={{ margin: '0 0 8px', padding: 8, borderRadius: 6, background: G.blueDim, color: G.blue, fontWeight: 700 }}>
@@ -261,7 +306,12 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
       Se descarcă odată cu prima parte a etichetelor și în arhiva documentelor (Loturi → „Documente lot”), identică în ambele.
       <div>Tiraj: {tirajInceput ? <b>{tirajInceput.id} (nr. {tirajInceput.nr})</b> : 'niciun tiraj început (prima descărcare îl începe)'}
         {tirajInceput && cheieAcum && cheieAcum !== tirajInceput.cheie && <span style={{ color: G.red }}> · manifestul de acum ({idTiraj(cheieAcum)}) diferă de tirajul început: descărcările sunt refuzate până la „Tiraj nou” (se retipărește tot lotul)</span>}
-        {' '}<Pas cheie="tiraj" onClick={tirajNou}>Tiraj nou (retipărește tot lotul)</Pas></div>
+        {oprire.oprit && <span style={{ color: G.red, fontWeight: 700 }}> · DESCĂRCĂRI OPRITE{oprire.gataDeInlocuit ? ': distruge foile și fișierele tirajului, apoi înlocuiește' : ` — încă ${oprire.secundeRamase} s, apoi distruge foile și fișierele tirajului`}</span>}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+        <Pas cheie="tiraj" onClick={opresteTiraj}>Tiraj nou — 1. Oprește descărcările</Pas>
+        <Pas cheie="tiraj" onClick={inlocuiesteTiraj}>2. Înlocuiește tirajul (după {ASTEPTARE_DUPA_OPRIRE_S} s și distrugerea foilor)</Pas>
+        <Pas cheie="tiraj" onClick={reiaTiraj}>Reia descărcările (fără tiraj nou)</Pas>
+      </div>
     </div>
     <div style={{ ...S.card, marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
       <b>Reconciliere</b>
@@ -296,6 +346,11 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
           {fan?.fanLot?.test ? ' · lot de test: nu se înregistrează pe plic' : p?.data_expediere && !p?.retur && onRetur
             ? <> <button style={S.btnX} disabled={lucru} onClick={() => onRetur(p.id, r.retur_propus, (r.ultim_eveniment_la || '').slice(0, 10))}>Înregistrează returul…</button></> : ''}</div> })}
     </div>}
+    {deVerificat.length > 0 && <div style={{ ...S.card, borderColor: G.red, marginBottom: 8 }}>
+      <b style={{ color: G.red }}>Urmărire de verificat de om ({deVerificat.length})</b> — răspuns FAN neclar sau CONTRADICȚIE cu un fapt cunoscut: faptele cunoscute rămân
+      (nu se șterg și nu se înlocuiesc automat); verifică în selfAWB, apoi înregistrează din ecran ridicarea / AR-ul / returul.
+      {deVerificat.map(r => <div key={r.id}>{r.nr_plic} · AWB {r.awb} · ultimul eveniment: {r.ultim_eveniment || '-'}{textFapteUrmarire(r, ETICHETE_RETUR) ? ` · ${textFapteUrmarire(r, ETICHETE_RETUR)}` : ''}</div>)}
+    </div>}
     {randuri && <>
       <p>{gata} din {randuri.length} plicuri au toate datele cerute de FAN.</p>
       <div style={{ display: 'grid', gap: 8 }}>
@@ -305,6 +360,7 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
             {r.ok ? <div style={{ color: G.green }}>✓ gata pentru FAN · referința pe etichetă: {r.shipment.info.observation}</div> : <ul style={{ margin: '4px 0 0', paddingLeft: 18, color: G.yellow }}>{r.probleme.map((x, i) => <li key={i}>{x}</li>)}</ul>}
             {f && <div style={{ fontSize: 12.5, color: G.muted }}>FAN: {ETICHETE_STARE_FAN[f.stare] || f.stare}{f.awb ? ` · AWB ${f.awb}` : ''}{f.hash_date !== r.hash && ['propus', 'aprobat'].includes(f.stare) ? ' · datele s-au schimbat după propunere: propune din nou' : ''}
               {f.urmarire_stare && f.urmarire_stare !== 'neurmarit' ? ` · urmărire: ${ETICHETE_URMARIRE[f.urmarire_stare] || f.urmarire_stare}` : ''}
+              {textFapteUrmarire(f, ETICHETE_RETUR) ? ` · ${textFapteUrmarire(f, ETICHETE_RETUR)}` : ''}
               {f.confirmare_stare && f.confirmare_stare !== 'nesolicitata' ? ` · ${ETICHETE_CONFIRMARE[f.confirmare_stare] || f.confirmare_stare}` : ''}
               {f.motiv ? ` · ${f.motiv}` : ''}</div>}
           </div> })}

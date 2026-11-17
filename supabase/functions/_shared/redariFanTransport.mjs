@@ -8,7 +8,7 @@
 // (ridicarea, AR-ul, returul le confirmă omul în ecran). Parola / tokenul / URL-ul de login nu se loghează și nu ajung în răspuns.
 import { MAX_PE_CERERE, URL_FAN, pregatestePlicuriFan, comparaPlic, imparteInBucati, interpreteazaRaspunsLot, interpreteazaUrmarire,
   interpreteazaConfirmari, comparaEvenimente, cautaInBorderou, caleEticheta, caleListaAwb, estePdf, inBase64, amprenteSurse, manifestTiparire,
-  partiManifest, interpreteazaStergere, cheieTiraj, tirajDin, COD_TIRAJ_SCHIMBAT, MESAJ_TIRAJ_SCHIMBAT } from './redariFan.mjs'
+  partiManifest, interpreteazaStergere, cheieTiraj, tirajDin, tirajNeschimbat, refuzTiraj, MESAJ_TIRAJ_SCHIMBAT, MESAJ_TIRAJ_OPRIT } from './redariFan.mjs'
 
 // Câte solicitări de creare la un apăsat de buton (5 × 100 = 500 de plicuri), cu pauză între ele: limita pe minut a FAN nu e documentată
 // (doc §8, deschisă 2) → solicitările merg una după alta, niciodată în paralel. Restul lotului = încă un apăsat (decizie umană).
@@ -218,13 +218,20 @@ async function eticheta({ corp, lot, randuri, s, fan, deps, out }) {
   // runda 3 (Jakarinos #1118 r2 P1): FIECARE parte cere tirajul lotului cu cheia manifestului din care se construiește (aceeași funcție ca
   // arhiva documentelor din ecran). Primul apel îl începe; altă cheie decât a tirajului început = refuz, nimic cerut de la FAN.
   const ct = await cheieTiraj(m, deps.subtle)
+  const refuz = r => (refuzTiraj(r?.error) === 'tiraj_oprit' ? out(409, 'tiraj_oprit', { motiv: MESAJ_TIRAJ_OPRIT })
+    : refuzTiraj(r?.error) === 'tiraj_schimbat' ? out(409, 'tiraj_schimbat', { motiv: MESAJ_TIRAJ_SCHIMBAT }) : null)
   const t = await deps.rpc('fn_red_fan_tiraj', { p_lot_id: lot.id, p_cheie: ct, p_inlocuieste: null })
-  if (t?.error?.code === COD_TIRAJ_SCHIMBAT) return out(409, 'tiraj_schimbat', { motiv: MESAJ_TIRAJ_SCHIMBAT })
+  if (refuz(t)) return refuz(t)
   const tiraj = t?.error ? null : tirajDin(t?.data, ct)
   if (!tiraj) return out(503, 'tiraj_neconfirmat')   // L18: eroare / formă necunoscută ≠ tiraj verificat
   const b = parti[parte - 1]
   const x = await fan.cerere('GET', caleEticheta({ clientId: s.clientId, awbs: b.map(r => r.awb) }), undefined, { binar: true })
   if (x.status !== 200 || !estePdf(x.bytes)) return out(502, 'eticheta_neconfirmata', { http: x.status })
+  // runda 4 (Jakarinos #1118 r3 P1): REVERIFICAREA FINALĂ după PDF, înainte de a-l livra — tirajul poate fi fost oprit / înlocuit cât am
+  // așteptat FAN-ul. Aceeași cheie ȘI același nr., altfel nimic livrat (PDF-ul aruncat).
+  const t2 = await deps.rpc('fn_red_fan_tiraj', { p_lot_id: lot.id, p_cheie: ct, p_inlocuieste: null })
+  if (refuz(t2)) return refuz(t2)
+  if (t2?.error || !tirajNeschimbat(t2?.data, tiraj)) return out(503, 'tiraj_neconfirmat')
   return out(200, 'ok', { parte, parti: parti.length, nr_plicuri: b.map(r => r.nr_plic), pozitii: b.map(r => r.pozitie), ramase: m.ramase.map(r => r.nr_plic),
     manifest_cheie: m.cheie, tiraj: { id: tiraj.id, cheie: tiraj.cheie, nr: tiraj.nr, inceput_la: tiraj.inceput_la }, pdf_base64: inBase64(x.bytes) })
 }

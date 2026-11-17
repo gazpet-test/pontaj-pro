@@ -78,11 +78,35 @@ ok(md5(CORP_NIVEL) === '21db8e5d4b69b7f19e571a7087c361ae' && MIG.includes("'21db
   const S2 = join(ROOT, 'supabase/tests/20261212a_redari_fan_doua_sesiuni.sh')
   let sn = null; try { execFileSync('bash', ['-n', S2], { stdio: ['ignore', 'pipe', 'pipe'] }) } catch (x) { sn = String(x.stderr || x.message) }
   const s2 = citeste('supabase/tests/20261212a_redari_fan_doua_sesiuni.sh')
-  const SCEN = ['K1', 'K2', 'S1', 'S2a', 'S2b', 'S2c', 'U1', 'U2', 'M1', 'T1', 'R1']
+  const SCEN = ['K1', 'K2', 'S1', 'S2a', 'S2b', 'S2c', 'U1', 'U2', 'M1', 'T1', 'T2', 'T2b', 'R1']
   ok(sn === null && s2.includes("fn_red_fan_claim_lot(uuid, uuid[], text[], text[])") && s2.includes("fn_red_fan_tiraj(uuid, text, text)")
+    && s2.includes("fn_red_fan_tiraj_opreste(uuid, text, boolean)")
     && MIG.includes('CREATE FUNCTION public.fn_red_fan_claim_lot(p_lot_id uuid, p_ids uuid[], p_hashuri text[], p_surse text[])')
     && MIG.includes('CREATE FUNCTION public.fn_red_fan_tiraj(p_lot_id uuid, p_cheie text, p_inlocuieste text)')
+    && MIG.includes('CREATE FUNCTION public.fn_red_fan_tiraj_opreste(p_lot_id uuid, p_cheie text, p_opreste boolean)')
     && SCEN.every(k => s2.includes(`rez ok "${k} `)), `scriptul cu două sesiuni: bash -n ${sn || 'OK'}; scenariile ${SCEN.join(' ')} prezente`)
+  // runda 4 (r3 P5): proba de concurență la APLICARE (supabase/tests/l15_aplicare_concurenta.sh, pe clonă) are profilul ADITIV „fan”:
+  // bash -n, versiunea și setul migrării, mesajele BUGET_LOCK exact o dată în migrare, scenariile L1b / F1; profilurile uscare / meteo neschimbate
+  const L15C = join(ROOT, 'supabase/tests/l15_aplicare_concurenta.sh')
+  let ln = null; try { execFileSync('bash', ['-n', L15C], { stdio: ['ignore', 'pipe', 'pipe'] }) } catch (x) { ln = String(x.stderr || x.message) }
+  const l15c = citeste('supabase/tests/l15_aplicare_concurenta.sh')
+  let l15main = null; try { l15main = execFileSync('git', ['show', 'origin/main:supabase/tests/l15_aplicare_concurenta.sh'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).replace(/\r/g, '') } catch { l15main = null }
+  const ramuri = t => (t.match(/^ {2}(uscare|meteo)\) [\s\S]*?;;$/gm) || []).join('\n')
+  const fmtA = "'20261212a: BUGET_LOCK: % incercari, % ms de la prima incercare", fmtB = "'20261212a: BUGET_LOCK: lock-urile obtinute abia la % ms de la prima incercare (% incercari;"
+  ok(ln === null && /\bfan\)\s+NUME=20261212a_redari_fan_awb; VERS=20261212120000; REL=public\.red_plicuri; HMOD='ROW EXCLUSIVE'; HLOCK=RowExclusiveLock/.test(l15c)
+    && MIG.startsWith('-- Version 20261212120000.') && MIG.split(fmtA).length === 2 && MIG.split(fmtB).length === 2
+    && ['L1b (fan)', 'F1 (fan)', 'public.red_proiecte public.red_loturi_plicuire public.red_plicuri'].every(s => l15c.includes(s))
+    && (l15main === null || (ramuri(l15main).length > 100 && ramuri(l15main) === ramuri(l15c))),
+    `concurența la aplicare: bash -n ${ln || 'OK'}; profilul fan (setul, mesajele BUGET_LOCK o dată, L1b, F1); ramurile uscare / meteo identice cu origin/main${l15main === null ? ' (origin/main indisponibil: nesărit, dar necomparat)' : ''}`)
+  // runda 4 (r3 P4): precondițiile fixture-ului cu coduri distincte, verificate ÎNAINTEA inserărilor; fără plasa „INSERT în profiles”; codurile
+  // de ieșire 26 / 27 / 28 în script
+  const FXr = citeste('supabase/tests/20261212a_redari_fan_fixture.sql')
+  const iPre = FXr.indexOf("SELECT pg_temp.fx_drepturi();   -- FX001"), iUsers = FXr.indexOf('INSERT INTO auth.users'), iSare = FXr.indexOf('INSERT INTO public.red_plic_sare')
+  ok(['FX001', 'FX002', 'FX003'].every(c => FXr.includes(`'FIXTURE_PRECONDITIE ${c}:`) && FXr.includes(`ERRCODE = '${c}'`)) && iPre > 0 && iPre < iSare && iSare < iUsers
+    && FXr.indexOf("t.tgname = 'on_auth_user_created'") < iUsers && !/INSERT INTO public\.profiles/.test(FXr) && !/\bGRANT\b/.test(FXr.replace(/^--.*$/gm, ''))
+    && /DELETE FROM public\.red_plic_sare WHERE sare LIKE 'FIXTURE-FAN-SARE-SINTETICA-%'/.test(FXr)
+    && /FX001\) exit 26 ;; FX002\) exit 27 ;; FX003\) exit 28/.test(s2),
+    'fixture-ul (runda 4): precondițiile FX001 / FX002 / FX003 înaintea inserărilor, trigger-ul real verificat, fără plasa de profil, fără GRANT, sarea sintetică ștearsă; scriptul: 26 / 27 / 28')
   // fixture-ul sintetic (runda 3): aceeași gardă a țintei, identificatorii comuni cu scriptul, nicio coloană a contoarelor globale
   const FX = citeste('supabase/tests/20261212a_redari_fan_fixture.sql')
   const idsScript = ['0000000000f1', '0000000000a1', '0000000000a2', '0000000000a3'].every(s => s2.includes('f12a0000-0000-4000-8000-' + s) && FX.includes('f12a0000-0000-4000-8000-' + s))
@@ -310,6 +334,47 @@ async function verificari(db, log) {
   // un rând FĂRĂ eveniment cunoscut primește „fără evenimente” normal (nimic de păstrat)
   const w3e = (await urm(ID.owner, ID.lot2, [{ id: r4.id, awb: '1000000004', versiune: 0, urmarire_stare: 'fara_evenimente', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null }])).rows[0].r
   ok(w3e.scrise === 1 && w3e.pastrate === 0 && (await rand(4)).urmarire_stare === 'fara_evenimente', 'rând fără eveniment cunoscut: „fără evenimente” scris (nimic pierdut)')
+  // ── runda 4 (Jakarinos #1118 r3 P2): FAPTELE cunoscute (ridicat, livrat, retur + motivul) nu se șterg de un răspuns mai sărac; o valoare nouă care
+  // le CONTRAZICE nu se aplică în tăcere („de verificat”, ambele valori). Răspunsurile vin din PARSERUL REAL (interpreteazaUrmarire), ca în edge.
+  const dinFan = (awb, ev) => FAN.interpreteazaUrmarire(200, { data: [{ awbNumber: awb, events: ev.map(([id, date]) => ({ id, date })) }] }, [awb]).pe_awb.get(awb)
+  const urmFan = async (r, lot, awb, v, ev) => (await urm(ID.owner, lot, [{ id: r.id, awb, versiune: v, ...dinFan(awb, ev) }])).rows[0].r
+  const fapte = async id => val(db, `SELECT urmarire_stare AS s, ultim_eveniment AS ev, ridicat_propus::text AS rid, to_char(livrat_la AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI') AS liv,
+    retur_propus AS mot, retur_cunoscut AS ret, ridicat_contrazis::text AS c_rid, to_char(livrat_contrazis AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI') AS c_liv,
+    retur_contrazis AS c_ret, versiune_urmarire AS v FROM public.red_fan_awb WHERE id = $1`, [id])
+  const F = (s, ev, rid, liv, mot, ret, c_rid, c_liv, c_ret, v) => JSON.stringify({ s, ev, rid, liv, mot, ret, c_rid, c_liv, c_ret, v })
+  const eF = async (id, asteptat, m) => { const x = await fapte(id); ok(JSON.stringify(x) === asteptat, `${m}: ${JSON.stringify(x)}`) }
+  const A4 = '1000000004'
+  ok(dinFan(A4, [['S43', '2026-11-11 09:00:00']]).retur_propus === null, 'parserul real: răspunsul DOAR cu S43 nu are motivul (intrarea reproducerii recenzentului)')
+  ok((await urmFan(r4, ID.lot2, A4, 1, [['S6', '2026-11-10 15:00:00'], ['S43', '2026-11-11 09:00:00']])).scrise === 1, 'urmărire S6 → S43 scrisă')
+  await eF(r4.id, F('retur', 'S43', null, null, 'refuz', true, null, null, null, 2), 'S6 → S43: retur, motiv „refuz”, retur cunoscut')
+  ok((await urmFan(r4, ID.lot2, A4, 2, [['S43', '2026-11-11 09:00:00']])).scrise === 1, 'REPRODUCEREA 1: răspunsul ulterior doar cu S43, la aceeași dată, se scrie (>=)')
+  await eF(r4.id, F('retur', 'S43', null, null, 'refuz', true, null, null, null, 3), 'REPRODUCEREA 1: motivul „refuz” NU se șterge (fdaa0496: null)')
+  await urmFan(r4, ID.lot2, A4, 3, [['C0', '2026-11-09 10:00:00'], ['S43', '2026-11-11 09:00:00']])
+  await eF(r4.id, F('retur', 'S43', '2026-11-09', null, 'refuz', true, null, null, null, 4), 'ridicarea completată (fapt nou, nimic contrazis)')
+  await urmFan(r4, ID.lot2, A4, 4, [['S30', '2026-11-12 08:00:00']])
+  await eF(r4.id, F('retur', 'S30', '2026-11-09', null, 'refuz', true, null, null, null, 5), 'REPRODUCEREA 2: răspuns PARȚIAL cu ultim eveniment mai nou („în tranzit”): starea rămâne „retur”, faptele rămân')
+  await urmFan(r4, ID.lot2, A4, 5, [['S99', '2026-11-12 09:00:00']])
+  await eF(r4.id, F('de_verificat', 'S99', '2026-11-09', null, 'refuz', true, null, null, null, 6), 'răspuns NECLAR (cod necunoscut, mai nou): „de verificat”, dar ridicarea și returul cu motivul rămân')
+  await urmFan(r4, ID.lot2, A4, 6, [['C0', '2026-11-10 10:00:00'], ['S43', '2026-11-12 10:00:00']])
+  await eF(r4.id, F('de_verificat', 'S43', '2026-11-09', null, 'refuz', true, '2026-11-10', null, null, 7), 'CONTRADICȚIE pe ridicare (09.11 cunoscut, 10.11 nou): faptul rămâne, valoarea nouă vizibilă, „de verificat”')
+  await urmFan(r4, ID.lot2, A4, 7, [['S5', '2026-11-12 11:00:00'], ['S43', '2026-11-12 12:00:00']])
+  await eF(r4.id, F('de_verificat', 'S43', '2026-11-09', null, 'refuz', true, '2026-11-10', null, 'mutat', 8), 'CONTRADICȚIE pe motiv (refuz cunoscut, mutat nou): ambele vizibile; contradicția anterioară rămâne')
+  await urmFan(r4, ID.lot2, A4, 8, [['S2', '2026-11-12 13:00:00']])
+  await eF(r4.id, F('de_verificat', 'S2', '2026-11-09', '2026-11-12 13:00', 'refuz', true, '2026-11-10', null, 'mutat', 9), 'livrare după retur: LIVRAT ȘI RETUR = contradicție, ambele fapte vizibile')
+  await urmFan(r4, ID.lot2, A4, 9, [['S2', '2026-11-12 14:00:00']])
+  await eF(r4.id, F('de_verificat', 'S2', '2026-11-09', '2026-11-12 13:00', 'refuz', true, '2026-11-10', '2026-11-12 14:00', 'mutat', 10), 'CONTRADICȚIE pe livrare (13:00 cunoscut, 14:00 nou): ambele vizibile')
+  // livrarea cunoscută nu coboară la „în tranzit” la un răspuns parțial; un eveniment mai vechi tot „depășit”
+  const A3 = '1000000003'
+  await urmFan(r3, ID.lot1, A3, 0, [['C0', '2026-11-09 10:00:00'], ['S2', '2026-11-11 09:00:00']])
+  await eF(r3.id, F('livrat', 'S2', '2026-11-09', '2026-11-11 09:00', null, false, null, null, null, 1), 'C0 → S2: livrat, ridicat')
+  await urmFan(r3, ID.lot1, A3, 1, [['S30', '2026-11-12 08:00:00']])
+  await eF(r3.id, F('livrat', 'S30', '2026-11-09', '2026-11-11 09:00', null, false, null, null, null, 2), 'răspuns parțial mai nou („în tranzit”): rămâne „livrat” cu ora livrării (fdaa0496: „în tranzit”)')
+  await urmFan(r3, ID.lot1, A3, 2, [['S43', '2026-11-12 09:00:00']])
+  await eF(r3.id, F('de_verificat', 'S43', '2026-11-09', '2026-11-11 09:00', null, true, null, null, null, 3), 'retur după o livrare cunoscută: LIVRAT ȘI RETUR = contradicție (singura), „de verificat”, ambele fapte')
+  ok((await urmFan(r3, ID.lot1, A3, 3, [['C0', '2026-11-09 10:00:00']])).depasite === 1, 'eveniment mai vechi decât cel scris: depășit, nescris')
+  // r1 = „retur” cu motivul „refuz”, fără contradicții (scrisă mai sus)
+  ok(await cod(db.query(`UPDATE public.red_fan_awb SET ridicat_contrazis = '2026-11-10' WHERE id = $1`, [r1.id])) === '23514', 'CHECK red_fan_awb_fapte: o contradicție fără „de verificat” e refuzată pe orice cale')
+  ok(await cod(db.query(`UPDATE public.red_fan_awb SET retur_cunoscut = false WHERE id = $1`, [r1.id])) === '23514', 'CHECK red_fan_awb_fapte: un motiv / o stare de retur fără „retur cunoscut” e refuzată')
   ok((await val(db, 'SELECT stare FROM public.red_plicuri WHERE id = $1', [plicId(1)])).stare === 'activ' && (await val(db, 'SELECT awb FROM public.red_plicuri WHERE id = $1', [plicId(1)])).awb === null, 'urmărirea NU atinge plicul (propunere)')
   const conf = (uid, lot, arr) => ca(db, uid, 'SELECT public.fn_red_fan_confirmari($1, $2::jsonb) AS r', [lot, JSON.stringify(arr)])
   ok(await cod(conf(ID.owner, ID.lot1, [{ id: r1.id, awb: '1000000001', versiune: 1, confirmare_stare: 'confirmat' }])) === '22023', 'confirmare „confirmat” (succes automat) → 22023')
@@ -354,11 +419,44 @@ async function verificari(db, log) {
   ok(await cod(tiraj(ID.editor, ID.lot1, H('2'), H('1'))) === '42501', 'tiraj: înlocuirea refuzată editorului (doar owner)')
   ok(await cod(tiraj(ID.owner, ID.lot1, H('2'), H('3'))) === 'RD020', 'tiraj: înlocuirea cu altă cheie veche decât cea curentă (CAS) → RD020')
   ok((await val(db, 'SELECT tiraj_cheie FROM public.red_fan_loturi WHERE lot_id = $1', [ID.lot1])).tiraj_cheie === H('1'), 'tiraj: după refuzuri, cheia rămâne cea începută')
+  // runda 4 (Jakarinos #1118 r3 P1): înlocuirea cere OPRIREA descărcărilor de cel puțin 30 s; cât e oprit, ORICE descărcare (și reverificarea
+  // finală a celor începute) = RD021; fiecare început / oprire / reluare / înlocuire = un rând în red_jurnal (cine, când, cheia veche → nouă, nr.)
+  const opreste = (uid, lot, k, o = true) => ca(db, uid, 'SELECT public.fn_red_fan_tiraj_opreste($1, $2, $3) AS t', [lot, k, o])
+  const oprit = async lot => (await val(db, 'SELECT tiraj_oprit_la, tiraj_oprit_de FROM public.red_fan_loturi WHERE lot_id = $1', [lot]))
+  ok(await cod(tiraj(ID.owner, ID.lot1, H('2'), H('1'))) === 'RD022', 'tiraj: înlocuirea FĂRĂ oprirea descărcărilor → RD022 (nimic schimbat)')
+  ok(await cod(opreste(ID.editor, ID.lot1, H('1'))) === '42501' && await cod(opreste(ID.viewer, ID.lot1, H('1'))) === '42501' && await cod(opreste(null, ID.lot1, H('1'))) === '42501',
+    'oprirea: editor / viewer / anonim refuzați (doar owner)')
+  ok(await cod(opreste(ID.owner, ID.lot1, H('3'))) === 'RD020' && await cod(opreste(ID.owner, ID.lot2, H('1'))) === 'RD020' && await cod(opreste(ID.owner, ID.lot1, 'x')) === '22023',
+    'oprirea: CAS pe cheia tirajului afișat (altă cheie / lot fără tiraj → RD020), cheie invalidă → 22023')
+  const o1 = (await opreste(ID.owner, ID.lot1, H('1'))).rows[0].t, o2 = (await opreste(ID.owner, ID.lot1, H('1'))).rows[0].t
+  ok(o1.stare === 'oprit' && o1.nr === 1 && o1.oprit_la && o2.stare === 'oprit' && o2.oprit_la === o1.oprit_la && (await oprit(ID.lot1)).tiraj_oprit_de === ID.owner,
+    'oprirea (owner): „oprit”, autorul = auth.uid(); repetată = no-op (momentul rămâne cel dintâi)')
+  ok(await cod(tiraj(ID.editor, ID.lot1, H('1'))) === 'RD021' && await cod(tiraj(ID.owner, ID.lot1, H('1'))) === 'RD021' && await cod(tiraj(ID.editor, ID.lot1, H('2'))) === 'RD021',
+    'OPRIT: orice descărcare — aceeași cheie (inclusiv reverificarea FINALĂ a unei descărcări începute) sau alta — → RD021, nimic descărcat')
+  ok(await cod(tiraj(ID.owner, ID.lot1, H('2'), H('1'))) === 'RD022', 'înlocuirea imediat după oprire (sub 30 s) → RD022')
+  const ac = (await tiraj(ID.owner, ID.lot1, H('1'), H('1'))).rows[0].t
+  ok(ac.stare === 'acelasi' && ac.nr === 1 && ac.oprit_la === o1.oprit_la, 'înlocuirea cu aceeași cheie = nimic de înlocuit (oprirea rămâne)')
+  // ceasul: PGlite nu așteaptă 30 s reali — oprirea se mută 31 s în urmă direct (proprietarul tabelului; garda marcajului nu acoperă tirajul)
+  await db.query(`UPDATE public.red_fan_loturi SET tiraj_oprit_la = tiraj_oprit_la - interval '31 seconds' WHERE lot_id = $1`, [ID.lot1])
+  ok(await cod(tiraj(ID.editor, ID.lot1, H('2'), H('1'))) === '42501', 'tiraj: înlocuirea refuzată editorului și după oprire (doar owner)')
   const t3 = (await tiraj(ID.owner, ID.lot1, H('2'), H('1'))).rows[0].t
-  ok(t3.stare === 'inlocuit' && t3.nr === 2 && t3.cheie === H('2'), 'tiraj: owner, „Tiraj nou” cu CAS pe cheia veche → nr. 2')
+  ok(t3.stare === 'inlocuit' && t3.nr === 2 && t3.cheie === H('2') && t3.oprit_la === null && (await oprit(ID.lot1)).tiraj_oprit_de === null,
+    'tiraj: owner, după oprire + 30 s, „Tiraj nou” cu CAS pe cheia veche → nr. 2, oprirea ștearsă')
   ok(await cod(tiraj(ID.editor, ID.lot1, H('1'))) === 'RD020' && (await tiraj(ID.editor, ID.lot1, H('2'))).rows[0].t.stare === 'acelasi', 'tiraj: după înlocuire cheia veche e refuzată, cea nouă acceptată')
+  await opreste(ID.owner, ID.lot1, H('2'))
+  const rl = (await opreste(ID.owner, ID.lot1, H('2'), false)).rows[0].t
+  ok(rl.stare === 'reluat' && rl.oprit_la === null && (await tiraj(ID.editor, ID.lot1, H('2'))).rows[0].t.stare === 'acelasi' && (await opreste(ID.owner, ID.lot1, H('2'), false)).rows[0].t.stare === 'reluat',
+    'reluarea (owner, fără tiraj nou): descărcările trec din nou; repetată = no-op')
+  const jt = (await db.query(`SELECT actiune, inregistrare_id, date_vechi, date_noi, user_id FROM public.red_jurnal WHERE tabela = 'red_fan_loturi' ORDER BY id`)).rows
+  const jtt = jt.map(j => [j.inregistrare_id, j.date_noi.eveniment, j.date_vechi.tiraj_cheie, j.date_noi.tiraj_cheie, j.date_noi.tiraj_nr, j.user_id, j.actiune])
+  ok(JSON.stringify(jtt) === JSON.stringify([[ID.lot1, 'tiraj_inceput', null, H('1'), 1, ID.editor, 'update'], [ID.lot1, 'tiraj_oprit', H('1'), H('1'), 1, ID.owner, 'update'],
+    [ID.lot1, 'tiraj_inlocuit', H('1'), H('2'), 2, ID.owner, 'update'], [ID.lot1, 'tiraj_oprit', H('2'), H('2'), 2, ID.owner, 'update'], [ID.lot1, 'tiraj_reluat', H('2'), H('2'), 2, ID.owner, 'update']]),
+    'red_jurnal: începutul, oprirea, înlocuirea (cheia veche → nouă, nr. 2), oprirea, reluarea — cu lotul, autorul = auth.uid(); refuzurile și no-op-urile fără rânduri: ' + JSON.stringify(jtt.map(x => x[1])))
+  ok(jt[2].date_vechi.tiraj_oprit_la !== null && Object.keys(jt[2].date_noi).sort().join() === 'eveniment,tiraj_cheie,tiraj_nr', 'înlocuirea consemnează și momentul opririi; jurnalul fără date personale (doar cheia-hash, nr., evenimentul)')
+  ok(await cod(ca(db, ID.owner, `INSERT INTO public.red_jurnal (tabela, actiune) VALUES ('red_fan_loturi', 'update')`)) === '42501', 'red_jurnal: nimeni nu scrie direct din API (doar funcțiile tirajului)')
   ok(await cod(ca(db, ID.owner, `UPDATE public.red_fan_loturi SET tiraj_cheie = '${H('9')}' WHERE lot_id = '${ID.lot1}'`)) === '42501', 'tiraj: UPDATE direct ca owner (authenticated) refuzat')
   ok(await cod(db.query(`UPDATE public.red_fan_loturi SET tiraj_cheie = NULL WHERE lot_id = $1`, [ID.lot1])) === '23514', 'tiraj: CHECK-ul coerenței (cheie / nr / moment / autor) refuză o stare parțială')
+  ok(await cod(db.query(`UPDATE public.red_fan_loturi SET tiraj_oprit_la = now(), tiraj_oprit_de = $2 WHERE lot_id = $1`, [ID.lot2, ID.owner])) === '23514', 'tiraj: CHECK — oprire fără tiraj început refuzată')
   return fail
 }
 
@@ -440,6 +538,9 @@ for (const [nume, pregateste, re] of [
   ['un lot marcat (fără AWB)', db => db.exec(`SELECT set_config('request.jwt.claim.sub', '${ID.owner}', false); SELECT public.fn_red_fan_lot_marcheaza('${ID.lot3}', true);`), /loturi marcate/],
   ['o funcție fn_red_fan_* în plus', db => db.exec(`CREATE FUNCTION public.fn_red_fan_alta() RETURNS int LANGUAGE sql AS $f$ SELECT 1 $f$;`), /functii: (public\.)?fn_red_fan_alta\(\)/],
   ['o vedere a altei migrări peste red_fan_awb', db => db.exec(`CREATE VIEW public.v_fan_alta AS SELECT id FROM public.red_fan_awb;`), /alte obiecte depind/],
+  // runda 4: istoric FAN în jurnalul append-only (aici scris direct de proprietar, fără rândul lotului) = refuz, jurnalul nu se șterge
+  ['istoric FAN în red_jurnal', db => db.exec(`INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_noi) VALUES ('red_fan_loturi', '${ID.lot3}', 'update', '{"eveniment":"tiraj_inceput"}');`),
+    /red_jurnal are istoric FAN/],
 ]) {
   const db = await aplicatCurat()
   await pregateste(db)
@@ -483,16 +584,40 @@ const MUTANTI = [
   ['fără trigger-ul gărzii marcajului', 'CREATE TRIGGER trg_red_fan_loturi_garda BEFORE UPDATE OR DELETE ON public.red_fan_loturi FOR EACH ROW EXECUTE FUNCTION public.fn_red_fan_loturi_garda();',
     "-- fara trigger\nCREATE TRIGGER trg_red_fan_loturi_garda BEFORE TRUNCATE ON public.red_fan_loturi FOR EACH STATEMENT EXECUTE FUNCTION public.fn_red_fan_loturi_garda();"],
   ['urmărire fără verificarea AWB-ului', 'a.lot_id = p_lot_id AND a.awb = u.awb AND', 'a.lot_id = p_lot_id AND'],
-  ['urmărire fără CAS pe versiune (runda 2)', '   WHERE a.id = u.id AND a.versiune_urmarire = u.versiune\n', '   WHERE a.id = u.id\n'],
-  ['urmărire fără garda timpului evenimentului', "     AND (a.ultim_eveniment_la IS NULL OR (u.ultim_eveniment_la IS NOT NULL AND (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest') >= a.ultim_eveniment_la));", ';'],
+  ['urmărire fără CAS pe versiune (runda 2)', '   WHERE a.id = m.id AND a.versiune_urmarire = m.versiune\n', '   WHERE a.id = m.id\n'],
+  ['urmărire fără garda timpului evenimentului', '     AND (a.ultim_eveniment_la IS NULL OR (m.n_la IS NOT NULL AND m.n_la >= a.ultim_eveniment_la));', ';'],
   // runda 3
   ['urmărire: răspunsul fără cronologie suprascrie evenimentul cunoscut (forma 0716f5b3)',
     'WHERE a.id = u.id AND a.versiune_urmarire = u.versiune AND a.ultim_eveniment_la IS NOT NULL AND u.ultim_eveniment_la IS NULL;', 'WHERE false;',
-    "     AND (a.ultim_eveniment_la IS NULL OR (u.ultim_eveniment_la IS NOT NULL AND (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest') >= a.ultim_eveniment_la));",
-    "     AND (a.ultim_eveniment_la IS NULL OR u.ultim_eveniment_la IS NULL OR (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest') >= a.ultim_eveniment_la);"],
-  ['urmărire: ridicarea cunoscută ștearsă de un răspuns fără ea', 'ridicat_propus = coalesce(u.ridicat_propus::date, a.ridicat_propus)', 'ridicat_propus = u.ridicat_propus::date'],
-  ['tiraj: o cheie nouă suprascrie tirajul început', 'ELSIF p_inlocuieste IS NULL AND v_fl.tiraj_cheie IS NULL THEN', 'ELSIF p_inlocuieste IS NULL THEN'],
-  ['tiraj: înlocuirea fără CAS pe cheia veche', 'ELSIF p_inlocuieste IS NOT NULL AND v_fl.tiraj_cheie IS NOT DISTINCT FROM p_inlocuieste THEN', 'ELSIF p_inlocuieste IS NOT NULL THEN'],
+    '     AND (a.ultim_eveniment_la IS NULL OR (m.n_la IS NOT NULL AND m.n_la >= a.ultim_eveniment_la));',
+    '     AND (a.ultim_eveniment_la IS NULL OR m.n_la IS NULL OR m.n_la >= a.ultim_eveniment_la);'],
+  ['urmărire: ridicarea cunoscută ștearsă de un răspuns fără ea', 'coalesce(b.ridicat_propus, n.rid) AS ridicat', 'n.rid AS ridicat'],
+  // runda 4 (r3 P2: faptele urmăririi; r3 P1: oprirea tirajului + jurnalul)
+  ['urmărire: motivul de retur scris direct din răspuns (forma fdaa0496)', 'coalesce(b.retur_propus, u.retur_propus) AS motiv', 'u.retur_propus AS motiv'],
+  ['urmărire: livrarea cunoscută ștearsă de un răspuns fără ea', 'coalesce(b.livrat_la, n.liv) AS livrat', 'n.liv AS livrat'],
+  ['urmărire: valoarea nouă înlocuiește faptul cunoscut', 'coalesce(b.ridicat_propus, n.rid) AS ridicat', 'coalesce(n.rid, b.ridicat_propus) AS ridicat'],
+  ['urmărire: contradicția pe ridicare nedetectată', 'coalesce(b.ridicat_contrazis, CASE WHEN n.rid <> b.ridicat_propus THEN n.rid END) AS c_rid', 'b.ridicat_contrazis AS c_rid'],
+  ['urmărire: contradicția pe motiv nedetectată', 'coalesce(b.retur_contrazis, CASE WHEN u.retur_propus <> b.retur_propus THEN u.retur_propus END) AS c_ret', 'b.retur_contrazis AS c_ret'],
+  ['urmărire: livrat ȘI retur nu e contradicție', ' OR (f.livrat IS NOT NULL AND f.retur)) AS contradictie', ') AS contradictie',
+    "         OR (livrat_la IS NOT NULL AND retur_cunoscut))))", '         )))'],
+  ['urmărire: starea nu ține cont de fapte (un parțial coboară „retur” / „livrat”)', "WHEN m.retur THEN 'retur'", "WHEN false THEN 'retur'",
+    "WHEN m.livrat IS NOT NULL THEN 'livrat'", "WHEN false THEN 'livrat'"],
+  ['urmărire: returul cunoscut uitat', '(b.retur_cunoscut OR u.urmarire_stare = ', '(u.urmarire_stare = '],
+  ['tiraj: descărcarea trece cu tirajul oprit (și reverificarea finală)', "    IF v_fl.tiraj_oprit_la IS NOT NULL THEN\n      RAISE EXCEPTION 'redari fan: descarcarile", "    IF false THEN\n      RAISE EXCEPTION 'redari fan: descarcarile"],
+  ['tiraj: înlocuirea fără oprire', "ELSIF v_fl.tiraj_oprit_la IS NULL OR v_fl.tiraj_oprit_la > now() - interval '30 seconds' THEN", 'ELSIF false THEN'],
+  ['tiraj: înlocuirea fără cele 30 s', " OR v_fl.tiraj_oprit_la > now() - interval '30 seconds' THEN", ' THEN'],
+  ['tiraj: înlocuirea nu șterge oprirea', '           tiraj_oprit_la = NULL, tiraj_oprit_de = NULL WHERE lot_id = p_lot_id;\n    INSERT', '           tiraj_oprit_la = tiraj_oprit_la WHERE lot_id = p_lot_id;\n    INSERT'],
+  ['tiraj: fără evidența în jurnal (forma fdaa0496)', "    INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_vechi, date_noi, user_id)\n    VALUES ('red_fan_loturi', p_lot_id, 'update',\n",
+    "    PERFORM * FROM (\n    VALUES ('red_fan_loturi', p_lot_id, 'update',\n",
+    "jsonb_build_object('eveniment', 'tiraj_' || v_stare, 'tiraj_cheie', p_cheie, 'tiraj_nr', v_fl.tiraj_nr + 1), auth.uid());",
+    "jsonb_build_object('eveniment', 'tiraj_' || v_stare, 'tiraj_cheie', p_cheie, 'tiraj_nr', v_fl.tiraj_nr + 1), auth.uid())) x;"],
+  ['tiraj: jurnalul fără autor', "jsonb_build_object('eveniment', 'tiraj_' || v_stare, 'tiraj_cheie', p_cheie, 'tiraj_nr', v_fl.tiraj_nr + 1), auth.uid());",
+    "jsonb_build_object('eveniment', 'tiraj_' || v_stare, 'tiraj_cheie', p_cheie, 'tiraj_nr', v_fl.tiraj_nr + 1), NULL);"],
+  ['tiraj: oprirea fără jurnal', '  IF v_schimbat THEN', '  IF false THEN'],
+  ['tiraj: oprirea deschisă editorului', "IF NOT public.fn_red_fan_e_owner() THEN RAISE EXCEPTION 'redari fan: doar owner-ul opreste", "IF auth.uid() IS NULL THEN RAISE EXCEPTION 'redari fan: doar owner-ul opreste"],
+  ['tiraj: oprirea fără CAS pe cheie', "  IF v_fl.tiraj_cheie IS DISTINCT FROM p_cheie THEN\n    RAISE EXCEPTION 'redari fan: tirajul s-a schimbat (tirajul curent", "  IF false THEN\n    RAISE EXCEPTION 'redari fan: tirajul s-a schimbat (tirajul curent"],
+  ['tiraj: o cheie nouă suprascrie tirajul început', "ELSIF v_fl.tiraj_cheie IS NULL THEN v_stare := 'inceput';", "ELSIF true THEN v_stare := 'inceput';"],
+  ['tiraj: înlocuirea fără CAS pe cheia veche', 'IF v_fl.tiraj_cheie IS DISTINCT FROM p_inlocuieste THEN', 'IF false THEN'],
   ['tiraj: înlocuirea deschisă editorului', 'OR (p_inlocuieste IS NOT NULL AND NOT public.fn_red_fan_e_owner()) THEN', 'THEN'],
   ['tiraj: deschis viewer-ului', "IF auth.uid() IS NULL OR coalesce(public.fn_red_nivel(), '') NOT IN ('admin', 'editor')\n     OR (p_inlocuieste", "IF auth.uid() IS NULL\n     OR (p_inlocuieste"],
   ['confirmări fără CAS pe versiune', 'WHERE a.id = c.id AND a.versiune_urmarire = c.versiune;', 'WHERE a.id = c.id;'],

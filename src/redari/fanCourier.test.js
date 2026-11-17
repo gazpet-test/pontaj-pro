@@ -9,11 +9,12 @@ import { readFileSync } from 'node:fs'
 import { construiestePlicFan, telefonFan, hashPlicFan, jsonCanonic, interpreteazaRaspunsAwb, interpreteazaRaspunsLot, rezumatUrmarireFan, CONFIG_FAN_PLIC,
   imparteInBucati, MAX_PE_CERERE, FORMAT_ETICHETA, LIMITA_LOT_PILOT_IMPLICITA, interpreteazaUrmarire, interpreteazaConfirmari, comparaEvenimente, cautaInBorderou,
   caleEticheta, caleListaAwb, dataEvenimentFan, EVENIMENTE_FAN, pregatestePlicuriFan, estePdf, inBase64, LIMITE_FAN, contactPePlic,
-  manifestTiparire, destinatarMascat, interpreteazaStergere, campuriEroareFan, cheieTiraj, idTiraj, tirajDin, VERSIUNE_TIRAJ, MESAJ_TIRAJ_SCHIMBAT } from '../../supabase/functions/_shared/redariFan.mjs'
+  manifestTiparire, destinatarMascat, interpreteazaStergere, campuriEroareFan, cheieTiraj, idTiraj, tirajDin, VERSIUNE_TIRAJ, MESAJ_TIRAJ_SCHIMBAT,
+  MESAJ_TIRAJ_OPRIT, ASTEPTARE_DUPA_OPRIRE_S, tirajNeschimbat, refuzTiraj } from '../../supabase/functions/_shared/redariFan.mjs'
 import { raspundeFan, TRANSPORT_REAL_ACTIV, ACTIUNI_FAN } from '../../supabase/functions/_shared/redariFanHandler.mjs'
 import { executaActiuneFan, MAX_BUCATI_PE_APEL, citesteToate } from '../../supabase/functions/_shared/redariFanTransport.mjs'
 import { stariPasi, stareMarcaj, stariOperatii, PASI_FAN, MESAJ_TRANSPORT_OPRIT, csvBorderouFan, prefixLot, titluLot, numeEtichete, numeControl, numeArhiva,
-  controlLotFan, pregatestePachetFan, mesajEdgeFan } from './fanLot.js'
+  controlLotFan, pregatestePachetFan, mesajEdgeFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire } from './fanLot.js'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import FanAwbPrevizualizare from './ui/FanAwbPrevizualizare.jsx'
@@ -267,19 +268,36 @@ function fanSimulat(handler) {
 }
 const raspunsJson = (status, corp) => ({ status, json: async () => corp, arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(corp)).buffer })
 const okPentru = corp => ({ response: corp.shipments.map((s, i) => ({ awbNumber: String(2000000000 + Number(s.info.content.slice(-4))), tariff: 9.5, vat: 1.8, errors: null })) })
-// fn_red_fan_tiraj SIMULAT după contractul din migrare (semantica SQL reală e probată pe PGlite): fără tiraj → începe; aceeași cheie → același;
-// înlocuirea cu CAS pe cheia veche; altă cheie → RD020. `stare` se poate împărți între descărcări (etichete, arhivă) ca rândul din BD.
+// fn_red_fan_tiraj / fn_red_fan_tiraj_opreste SIMULATE după contractul din migrare (semantica SQL reală e probată pe PGlite). Descărcare
+// (p_inlocuieste null): oprit → RD021; fără tiraj → începe; aceeași cheie → același; altă cheie → RD020. Înlocuire: CAS pe cheia veche (RD020),
+// aceeași cheie → același, altfel cere oprirea de ≥ 30 s (RD022). `stare` se poate împărți între descărcări ca rândul din BD; `stare.acum` = ceasul.
 function tirajSimulat(stare = { cheie: null, nr: 0, la: null }) {
-  return args => {
-    const rasp = s => ({ data: { stare: s, cheie: stare.cheie, nr: stare.nr, inceput_la: stare.la } })
-    if (stare.cheie && stare.cheie === args.p_cheie) return rasp('acelasi')
-    if ((args.p_inlocuieste == null && stare.cheie == null) || (args.p_inlocuieste != null && args.p_inlocuieste === stare.cheie)) {
-      Object.assign(stare, { cheie: args.p_cheie, nr: stare.nr + 1, la: '2026-11-17T16:05:00+00:00' })
-      return rasp(args.p_inlocuieste == null ? 'inceput' : 'inlocuit')
+  const acum = () => stare.acum ?? Date.now()
+  const rasp = s => ({ data: { stare: s, cheie: stare.cheie, nr: stare.nr, inceput_la: stare.la, oprit_la: stare.oprit_la ?? null } })
+  const rd = (code, message) => ({ error: { code, message } })
+  const schimbat = () => rd('RD020', `redari fan: tirajul s-a schimbat (tirajul nr. ${stare.nr} a inceput cu alt continut); retipareste tot lotul`)
+  const f = args => {
+    if (args.p_inlocuieste == null) {
+      if (stare.oprit_la) return rd('RD021', `redari fan: descarcarile tirajului nr. ${stare.nr} sunt oprite (inlocuire in curs); nimic descarcat`)
+      if (stare.cheie && stare.cheie === args.p_cheie) return rasp('acelasi')
+      if (stare.cheie == null) { Object.assign(stare, { cheie: args.p_cheie, nr: stare.nr + 1, la: '2026-11-17T16:05:00+00:00' }); return rasp('inceput') }
+      return schimbat()
     }
-    return { error: { code: 'RD020', message: `redari fan: tirajul s-a schimbat (tirajul nr. ${stare.nr} a inceput cu alt continut); retipareste tot lotul` } }
+    if (args.p_inlocuieste !== stare.cheie) return schimbat()
+    if (args.p_cheie === stare.cheie) return rasp('acelasi')
+    if (!stare.oprit_la || acum() - Date.parse(stare.oprit_la) < ASTEPTARE_DUPA_OPRIRE_S * 1000) return rd('RD022', 'redari fan: opreste intai descarcarile si asteapta 30 de secunde')
+    Object.assign(stare, { cheie: args.p_cheie, nr: stare.nr + 1, la: '2026-11-17T16:05:00+00:00', oprit_la: null })
+    return rasp('inlocuit')
   }
+  f.opreste = args => {
+    if (args.p_cheie !== stare.cheie) return schimbat()
+    stare.oprit_la = args.p_opreste ? (stare.oprit_la || new Date(acum()).toISOString()) : null
+    return { data: { stare: stare.oprit_la ? 'oprit' : 'reluat', cheie: stare.cheie, nr: stare.nr, oprit_la: stare.oprit_la } }
+  }
+  return f
 }
+// rpc-ul simulat al unui ecran / al funcției edge peste același rând de tiraj (ambele funcții)
+const rpcTiraj = sim => async (n, x) => (n === 'fn_red_fan_tiraj_opreste' ? sim.opreste(x) : sim(x))
 function depsFake(fx, fan, o = {}) {
   const jurnal = []
   const tiraj = tirajSimulat(o.stareTiraj)
@@ -290,7 +308,7 @@ function depsFake(fx, fan, o = {}) {
     datePlicuri: async () => ({ data: { plicuri: fx.plicuri, convocari: fx.convocari, contacte: fx.contacte } }),
     plicuriLot: async () => ({ data: fx.plicuri }),
     rpc: vi.fn(async (nume, args) => { jurnal.push({ nume, args }); return nume === 'fn_red_fan_claim_lot' ? { data: '99999999-0000-4000-8000-' + String(jurnal.length).padStart(12, '0') }
-      : nume === 'fn_red_fan_tiraj' ? tiraj(args)
+      : nume === 'fn_red_fan_tiraj' ? tiraj(args) : nume === 'fn_red_fan_tiraj_opreste' ? tiraj.opreste(args)
       : nume === 'fn_red_fan_urmarire' ? { data: { scrise: args.p_randuri.length, pastrate: 0, depasite: 0 } }
       : nume === 'fn_red_fan_confirmari' ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : { data: args.p_rezultate?.length ?? null } }),
     fetch: fan.fetch, pauza: vi.fn(async () => {}), subtle: webcrypto.subtle, ...o,
@@ -640,7 +658,8 @@ describe('ecranul: pașii, lotul de test, lotul pilot', () => {
     expect(on.filter(o => o.activ).map(o => o.cheie)).toEqual(['plafon', 'anulare', 'evenimente', 'tiraj'])
     expect(stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: false, randuri: [{ stare: 'necunoscut' }] }).every(o => !o.activ)).toBe(true)
     const html = renderToStaticMarkup(React.createElement(FanAwbPrevizualizare, { proiect: { cod: 'TEST-RAZVAN' }, lot: { id: 'l1', nr_lot: 'PP-0001' }, plicuri: [], esteOwner: true, poateScrie: true, onClose: () => {} }))
-    for (const t of ['Reconciliază (borderoul zilei)', 'Schimbă plafonul', 'Șterge la FAN', 'Marchează anulat', 'Lista de evenimente FAN', 'Tiraj nou (retipărește tot lotul)']) {
+    for (const t of ['Reconciliază (borderoul zilei)', 'Schimbă plafonul', 'Șterge la FAN', 'Marchează anulat', 'Lista de evenimente FAN', 'Tiraj nou — 1. Oprește descărcările',
+      '2. Înlocuiește tirajul', 'Reia descărcările (fără tiraj nou)']) {
       const b = [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].find(m => m[1].includes(t))
       expect([t, !!b && /disabled=""/.test(b[0])]).toEqual([t, true])
     }
@@ -754,7 +773,13 @@ describe('runda 3: TIRAJUL — aceeași cheie de manifest pentru toate descărc�
     // „Tiraj nou” (owner, CAS pe cheia veche): după el etichetele ȘI arhiva trec, cu identificatorul nou
     const k123 = await cheieTiraj(m123, webcrypto.subtle)
     expect(sim({ p_lot_id: LOT.id, p_cheie: k123, p_inlocuieste: 'f'.repeat(64) }).error.code).toBe('RD020')
-    expect(sim({ p_lot_id: LOT.id, p_cheie: k123, p_inlocuieste: k13 }).data).toMatchObject({ stare: 'inlocuit', nr: 2 })
+    // runda 4: înlocuirea cere întâi OPRIREA descărcărilor și cele 30 s (RD022 altfel), apoi trece
+    expect(sim({ p_lot_id: LOT.id, p_cheie: k123, p_inlocuieste: k13 }).error.code).toBe('RD022')
+    stare.acum = Date.parse('2026-11-17T17:00:00Z')
+    expect(sim.opreste({ p_lot_id: LOT.id, p_cheie: k13, p_opreste: true }).data).toMatchObject({ stare: 'oprit' })
+    expect(sim({ p_lot_id: LOT.id, p_cheie: k123, p_inlocuieste: k13 }).error.code).toBe('RD022')
+    stare.acum += ASTEPTARE_DUPA_OPRIRE_S * 1000
+    expect(sim({ p_lot_id: LOT.id, p_cheie: k123, p_inlocuieste: k13 }).data).toMatchObject({ stare: 'inlocuit', nr: 2, oprit_la: null })
     const c = await executaActiuneFan({ corp: { actiune: 'eticheta', manifest_cheie: m123.cheie }, lot: LOT }, depsFake(fx, fanSimulat(eticheta), { stareTiraj: stare }).deps)
     expect(c.body).toMatchObject({ cod: 'ok', pozitii: [1, 2, 3], tiraj: { id: idTiraj(k123), nr: 2 } })
     expect((await pregatestePachetFan({ rpc, lot: LOT, fanLot: { test: true }, randuriFan: fx.randuri, plicuri: pl, convocariPePlic: cv, subtle: webcrypto.subtle })).tiraj.nr).toBe(2)
@@ -831,7 +856,7 @@ describe('runda 3: pagina de control IDENTICĂ în etichete și în arhivă (r2 
   it('ecranele folosesc funcția comună: etichetele trimit convocările pe plic, arhiva trece prin pregatestePachetFan, evidența citește tirajul', () => {
     const fan = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8'), pe = readFileSync('src/redari/ui/PlicuriEcran.jsx', 'utf8')
     expect(fan).toMatch(/docxPaginaControl\(controlLotFan\(\{ lot, fanLot: fan\?\.fanLot, manifest, plicuri, convocariPePlic, tiraj \}\)\.continut\)/)
-    expect(fan).toMatch(/select\('lot_id,test,prima_aprobare_la,tiraj_cheie,tiraj_nr,tiraj_la'\)/)
+    expect(fan).toMatch(/select\('lot_id,test,prima_aprobare_la,tiraj_cheie,tiraj_nr,tiraj_la,tiraj_oprit_la'\)/)
     expect(pe).toMatch(/<FanAwbPrevizualizare proiect=\{proiect\} lot=\{fanLot\} plicuri=\{[^\n]*\} convocariPePlic=\{pePlic\}/)
     expect(pe).toMatch(/const control = await docxPaginaControl\(continut\)\s*\n\s*if \(!curent\(\)\) return/)
     expect(pe).toMatch(/pregatestePachetFan\(\{ rpc: \(n, a\) => supabase\.rpc\(n, a\), lot: rand, fanLot: ev\.fanLot, randuriFan: ev\.randuri, plicuri: lista, convocariPePlic: pePlic \}\)\s*\n\s*if \(!curent\(\)\) return/)
@@ -868,18 +893,172 @@ describe('runda 3: urmărirea nu șterge un eveniment cunoscut (r2 P2)', () => {
   })
   it('documentul (runda 3): garanția rezervării, presupunerea neconfirmată + pasul blocant, tirajul, istoricul livrării, fixture-ul', () => {
     expect(DOC).toMatch(/NU se garantează „datele sunt actuale la COMMIT \/ la POST”/)
-    expect(DOC).toMatch(/PRESUPUNERE NECONFIRMATĂ/); expect(DOC).toMatch(/8a\. \*\*BLOCANT \(runda 3\): confirmarea asocierii/)
+    expect(DOC).toMatch(/PRESUPUNERE NECONFIRMATĂ/); expect(DOC).toMatch(/\*\*4a\. BLOCANT: confirmarea asocierii/)   // runda 4: §10 în ordinea recenzentului (fost 8a)
     expect(DOC).toMatch(/\| 4a \| \*\*\(runda 3, BLOCANT/); expect(DOC).toMatch(/tirajul s-a schimbat; retipărește tot lotul/)
     expect(DOC).toMatch(/Identificatorul tirajului pe ETICHETĂ: nu se poate/)
     expect(DOC).toMatch(/Istoricul livrării la reaplicarea de TEST după revenire/); expect(DOC).toMatch(/Versiunea `20261212120000` e mai VECHE/)
     expect(DOC).toMatch(/--cu-fixture/); for (const s of ['S2a', 'S2b', 'S2c', 'U2', 'T1']) expect(DOC).toContain(`| ${s} |`)
     expect(MIG).toMatch(/NU se garantează „datele sunt actuale la COMMIT \/ la POST”/)
   })
-  it('migrarea: garda „fără cronologie” și coalesce pe ridicare / livrare sunt în fn_red_fan_urmarire (proba semantică: PGlite)', () => {
+  it('migrarea: garda „fără cronologie” și FAPTELE păstrate (cunoscut, apoi nou) sunt în fn_red_fan_urmarire (proba semantică: PGlite)', () => {
     const m = MIG.replace(/\r/g, '')
     expect(m).toMatch(/AND a\.ultim_eveniment_la IS NOT NULL AND u\.ultim_eveniment_la IS NULL;/)
-    expect(m).toMatch(/ridicat_propus = coalesce\(u\.ridicat_propus::date, a\.ridicat_propus\)/)
-    expect(m).toMatch(/livrat_la = coalesce\(u\.livrat_la::timestamp AT TIME ZONE 'Europe\/Bucharest', a\.livrat_la\)/)
+    // runda 4 (r3 P2): faptul CUNOSCUT are întâietate (coalesce(b.…, nou)); retur_propus nu se mai scrie direct din răspuns
+    expect(m).toMatch(/coalesce\(b\.ridicat_propus, n\.rid\) AS ridicat, coalesce\(b\.livrat_la, n\.liv\) AS livrat, coalesce\(b\.retur_propus, u\.retur_propus\) AS motiv/)
+    expect(m).not.toMatch(/retur_propus = u\.retur_propus/)   // forma fdaa0496
     expect(m).not.toMatch(/OR u\.ultim_eveniment_la IS NULL OR \(u\.ultim_eveniment_la::timestamp/)   // forma 0716f5b3
+  })
+})
+
+describe('runda 4: înlocuirea tirajului nu lasă să treacă o descărcare începută (r3 P1)', () => {
+  const pdf = new TextEncoder().encode('%PDF-1.7 fictiv')
+  const etichetaPdf = () => ({ status: 200, arrayBuffer: async () => pdf.buffer, json: async () => null })
+  const cuAwb = async n => { const fx = await fixtura(n); fx.randuri.forEach((r, i) => { r.stare = 'generat'; r.awb = String(2000000001 + i) }); return fx }
+  // FAN răspunde la /awb/label abia DUPĂ ce „altă sesiune” (owner-ul) a schimbat tirajul: cârligul rulează în timpul cererii
+  const fanCuSchimbare = carlig => fanSimulat(async u => { if (u.pathname === '/awb/label') carlig(); return etichetaPdf() })
+  const T0 = Date.parse('2026-11-17T17:00:00Z')
+
+  it('SCENARIUL RECENZENTULUI: partea 2 cerută pe K1; owner-ul oprește + înlocuiește cu K2 cât FAN răspunde → 409, nimic livrat (fdaa0496: 200 ok, tirajul nr. 1)', async () => {
+    const stare = { cheie: null, nr: 0, la: null }
+    const fx = await cuAwb(150)
+    const m = manifestTiparire({ randuri: fx.randuri, plicuri: fx.plicuri })
+    const p1 = await executaActiuneFan({ corp: { actiune: 'eticheta', parte: 1, manifest_cheie: m.cheie }, lot: LOT }, depsFake(fx, fanSimulat(etichetaPdf), { stareTiraj: stare }).deps)
+    expect(p1.body).toMatchObject({ cod: 'ok', parte: 1, tiraj: { nr: 1 } })
+    const k1 = stare.cheie, k2 = 'b'.repeat(64), sim = tirajSimulat(stare)
+    const fan = fanCuSchimbare(() => {
+      stare.acum = T0
+      sim.opreste({ p_lot_id: LOT.id, p_cheie: k1, p_opreste: true })
+      stare.acum = T0 + ASTEPTARE_DUPA_OPRIRE_S * 1000
+      sim({ p_lot_id: LOT.id, p_cheie: k2, p_inlocuieste: k1 })
+    })
+    const d = depsFake(fx, fan, { stareTiraj: stare })
+    const p2 = await executaActiuneFan({ corp: { actiune: 'eticheta', parte: 2, manifest_cheie: m.cheie }, lot: LOT }, d.deps)
+    expect([stare.cheie, stare.nr]).toEqual([k2, 2])                              // înlocuirea a avut loc în timpul cererii
+    expect(fan.apeluri.filter(x => x.cale === '/awb/label')).toHaveLength(1)      // PDF-ul a fost cerut…
+    expect([p2.status, p2.body.cod, p2.body.pdf_base64, p2.body.tiraj]).toEqual([409, 'tiraj_schimbat', undefined, undefined])   // …dar NU livrat
+    expect(d.jurnal.filter(j => j.nume === 'fn_red_fan_tiraj').map(j => j.args)).toEqual([   // verificarea + reverificarea FINALĂ, aceeași cheie
+      { p_lot_id: LOT.id, p_cheie: k1, p_inlocuieste: null }, { p_lot_id: LOT.id, p_cheie: k1, p_inlocuieste: null }])
+  })
+  it('oprirea singură în timpul cererii → 409 „tiraj_oprit”, nimic livrat; o descărcare nouă cât e oprit → refuz ÎNAINTE de FAN; reluarea → trece', async () => {
+    const stare = { cheie: null, nr: 0, la: null }
+    const fx = await cuAwb(2)
+    const m = manifestTiparire({ randuri: fx.randuri, plicuri: fx.plicuri })
+    await executaActiuneFan({ corp: { actiune: 'eticheta', manifest_cheie: m.cheie }, lot: LOT }, depsFake(fx, fanSimulat(etichetaPdf), { stareTiraj: stare }).deps)
+    const k1 = stare.cheie, sim = tirajSimulat(stare)
+    const a = await executaActiuneFan({ corp: { actiune: 'eticheta', manifest_cheie: m.cheie }, lot: LOT },
+      depsFake(fx, fanCuSchimbare(() => sim.opreste({ p_lot_id: LOT.id, p_cheie: k1, p_opreste: true })), { stareTiraj: stare }).deps)
+    expect([a.status, a.body.cod, a.body.pdf_base64]).toEqual([409, 'tiraj_oprit', undefined])
+    expect(mesajEdgeFan({ data: a.body })).toBe(MESAJ_TIRAJ_OPRIT)
+    const fan = fanSimulat(etichetaPdf)
+    const b = await executaActiuneFan({ corp: { actiune: 'eticheta', manifest_cheie: m.cheie }, lot: LOT }, depsFake(fx, fan, { stareTiraj: stare }).deps)
+    expect([b.status, b.body.cod]).toEqual([409, 'tiraj_oprit']); expect(fan.apeluri.filter(x => x.cale === '/awb/label')).toHaveLength(0)
+    sim.opreste({ p_lot_id: LOT.id, p_cheie: k1, p_opreste: false })
+    const c = await executaActiuneFan({ corp: { actiune: 'eticheta', manifest_cheie: m.cheie }, lot: LOT }, depsFake(fx, fanSimulat(etichetaPdf), { stareTiraj: stare }).deps)
+    expect(c.body).toMatchObject({ cod: 'ok', tiraj: { nr: 1 } })
+  })
+  it('reverificarea finală neconfirmată (eroare BD, formă greșită, același cheie dar ALT nr.) → 503, nimic livrat (L18)', async () => {
+    const fx = await cuAwb(2)
+    const m = manifestTiparire({ randuri: fx.randuri, plicuri: fx.plicuri })
+    const k = await cheieTiraj(m, webcrypto.subtle)
+    const prim = { data: { stare: 'inceput', cheie: k, nr: 1, inceput_la: '2026-11-17T16:05:00Z' } }
+    for (const al2lea of [{ error: { code: '57014', message: 'timeout' } }, { data: null }, { data: { stare: 'acelasi', cheie: k, nr: 3, inceput_la: '2026-11-17T16:05:00Z' } }]) {
+      const d = depsFake(fx, fanSimulat(etichetaPdf))
+      let n = 0
+      d.deps.rpc.mockImplementation(async nume => (nume === 'fn_red_fan_tiraj' ? (++n === 1 ? prim : al2lea) : { data: null }))
+      const r = await executaActiuneFan({ corp: { actiune: 'eticheta', manifest_cheie: m.cheie }, lot: LOT }, d.deps)
+      expect([r.status, r.body.cod, r.body.pdf_base64]).toEqual([503, 'tiraj_neconfirmat', undefined])
+    }
+  })
+  it('ecranul: confirmaTirajFinal — neschimbat = trece; oprit (RD021) / înlocuit (RD020) / aceeași cheie cu ALT nr. / eroare BD = refuz, nimic salvat', async () => {
+    const fx = await cuAwb(2)
+    const pl = fx.plicuri.map(p => ({ ...p, opis_path: `o/${p.id}` }))
+    const cv = Object.fromEntries(pl.map(p => [p.id, [{ conv_id: `c${p.id}`, nr_document: 'C-000001', fisier_convocator_path: `c/${p.id}` }]]))
+    const stare = { cheie: null, nr: 0, la: null, acum: T0 }, sim = tirajSimulat(stare), rpc = rpcTiraj(sim)
+    const arh = await pregatestePachetFan({ rpc, lot: LOT, fanLot: { test: true }, randuriFan: fx.randuri, plicuri: pl, convocariPePlic: cv, subtle: webcrypto.subtle })
+    await expect(confirmaTirajFinal({ rpc, lot: LOT, tiraj: arh.tiraj })).resolves.toBe(true)
+    await rpc('fn_red_fan_tiraj_opreste', { p_lot_id: LOT.id, p_cheie: arh.tiraj.cheie, p_opreste: true })
+    await expect(confirmaTirajFinal({ rpc, lot: LOT, tiraj: arh.tiraj })).rejects.toMatchObject({ code: 'RD021', message: MESAJ_TIRAJ_OPRIT })
+    await expect(pregatestePachetFan({ rpc, lot: LOT, fanLot: { test: true }, randuriFan: fx.randuri, plicuri: pl, convocariPePlic: cv, subtle: webcrypto.subtle }))
+      .rejects.toMatchObject({ code: 'RD021' })
+    stare.acum += ASTEPTARE_DUPA_OPRIRE_S * 1000
+    expect((await rpc('fn_red_fan_tiraj', { p_lot_id: LOT.id, p_cheie: 'c'.repeat(64), p_inlocuieste: arh.tiraj.cheie })).data.nr).toBe(2)
+    await expect(confirmaTirajFinal({ rpc, lot: LOT, tiraj: arh.tiraj })).rejects.toMatchObject({ code: 'RD020', message: MESAJ_TIRAJ_SCHIMBAT })
+    // înapoi la aceeași cheie (manifestul revenit), dar tirajul nr. 3: o descărcare a tirajului nr. 1 tot nu trece
+    await rpc('fn_red_fan_tiraj_opreste', { p_lot_id: LOT.id, p_cheie: 'c'.repeat(64), p_opreste: true }); stare.acum += ASTEPTARE_DUPA_OPRIRE_S * 1000
+    expect((await rpc('fn_red_fan_tiraj', { p_lot_id: LOT.id, p_cheie: arh.tiraj.cheie, p_inlocuieste: 'c'.repeat(64) })).data.nr).toBe(3)
+    await expect(confirmaTirajFinal({ rpc, lot: LOT, tiraj: arh.tiraj })).rejects.toThrow(/nu s-a putut reverifica/)
+    await expect(confirmaTirajFinal({ rpc: async () => ({ error: { code: '57014', message: 'timeout' } }), lot: LOT, tiraj: arh.tiraj })).rejects.toMatchObject({ code: '57014' })
+  })
+  it('sursele ecranelor: reverificarea finală stă DUPĂ pregătire și ÎNAINTEA salvării (arhiva și fiecare parte a etichetelor)', () => {
+    const pe = readFileSync('src/redari/ui/PlicuriEcran.jsx', 'utf8'), fan = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8')
+    const a = pe.indexOf("await zip.generateAsync({ type: 'blob' })"), b = pe.indexOf('await confirmaTirajFinal({ rpc: (n, a) => supabase.rpc(n, a), lot: rand, tiraj })'), c = pe.indexOf('descarcaBlob(blob, numeArhiva(')
+    expect(a > 0 && b > a && c > b).toBe(true)
+    const x = fan.indexOf('control = await paginaControl(tiraj)'), y = fan.indexOf('await confirmaTirajFinal({ rpc: (n, a) => supabase.rpc(n, a), lot, tiraj })'), z = fan.indexOf("descarcaBlob(new Blob([bytes], { type: 'application/pdf' })")
+    expect(x > 0 && y > x && z > y).toBe(true)
+    expect(fan).toMatch(/await confirmaTirajFinal\(\{ rpc: \(n, a\) => supabase\.rpc\(n, a\), lot, tiraj \}\)\s*\n\s*if \(!curent\(\)\) return OPRIT/)   // L24 după await
+    // înlocuirea din ecran: oprire → 30 s → înlocuire; confirmarea owner-ului spune exact pașii
+    expect(fan).toMatch(/fn_red_fan_tiraj_opreste', \{ p_lot_id: lot\.id, p_cheie: tirajInceput\.cheie, p_opreste: true \}/)
+    expect(fan).toMatch(/am adunat și am DISTRUS toate foile tirajului/); expect(fan).toMatch(/am ȘTERS fișierele lui descărcate, inclusiv cele primite după oprire/)
+  })
+  it('tirajNeschimbat / refuzTiraj: același tiraj = aceeași cheie ȘI același nr.; RD020 / RD021 recunoscute, restul = neconfirmat', () => {
+    const k = 'a'.repeat(64), t = { cheie: k, nr: 2 }, d = { stare: 'acelasi', cheie: k, nr: 2, inceput_la: '2026-11-17T16:05:00Z' }
+    expect(tirajNeschimbat(d, t)).toMatchObject({ nr: 2, cheie: k })
+    for (const rau of [{ ...d, nr: 3 }, { ...d, stare: 'inceput' }, { ...d, cheie: 'b'.repeat(64) }, null]) expect(tirajNeschimbat(rau, t)).toBe(null)
+    expect([refuzTiraj({ code: 'RD020' }), refuzTiraj({ code: 'RD021' }), refuzTiraj({ code: 'RD022' }), refuzTiraj(null)]).toEqual(['tiraj_schimbat', 'tiraj_oprit', null, null])
+  })
+  it('stareOprireTiraj: oprit + secundele rămase din 30, după ceasul injectat (BD-ul impune; ecranul doar afișează)', () => {
+    const fl = { tiraj_cheie: 'a'.repeat(64), tiraj_oprit_la: '2026-11-17T17:00:00Z' }
+    expect(stareOprireTiraj(fl, T0 + 10000)).toEqual({ oprit: true, opritLa: fl.tiraj_oprit_la, gataDeInlocuit: false, secundeRamase: 20 })
+    expect(stareOprireTiraj(fl, T0 + ASTEPTARE_DUPA_OPRIRE_S * 1000).gataDeInlocuit).toBe(true)
+    expect(stareOprireTiraj({ ...fl, tiraj_oprit_la: null }, T0).oprit).toBe(false); expect(stareOprireTiraj(null).oprit).toBe(false)
+  })
+  it('paritate JS = SQL (L19): cele 30 s, codurile RD021 / RD022 și evidența în red_jurnal sunt în migrare', () => {
+    const m = MIG.replace(/\r/g, '')
+    expect(Number((m.match(/v_fl\.tiraj_oprit_la > now\(\) - interval '(\d+) seconds'/) || [])[1])).toBe(ASTEPTARE_DUPA_OPRIRE_S)
+    expect(m).toMatch(/USING ERRCODE = 'RD021'/); expect(m).toMatch(/USING ERRCODE = 'RD022'/)
+    expect(m).toMatch(/CREATE FUNCTION public\.fn_red_fan_tiraj_opreste\(p_lot_id uuid, p_cheie text, p_opreste boolean\) RETURNS jsonb/)
+    expect((m.match(/INSERT INTO public\.red_jurnal \(tabela, inregistrare_id, actiune, date_vechi, date_noi, user_id\)/g) || []).length).toBe(2)
+  })
+})
+
+describe('runda 4: urmărirea păstrează FAPTELE; contradicțiile sunt vizibile (r3 P2)', () => {
+  const ev = (id, date) => ({ id, date })
+  it('reproducerea recenzentului, partea de parser: S6 → S43 dă retur „refuz”; răspunsul ulterior DOAR cu S43 (aceeași dată) dă motivul null — BD-ul îl păstrează (PGlite)', () => {
+    const a = rezumatUrmarireFan({ awbNumber: '2000000001', events: [ev('S6', '2026-11-10 15:00:00'), ev('S43', '2026-11-11 09:00:00')] })
+    const b = rezumatUrmarireFan({ awbNumber: '2000000001', events: [ev('S43', '2026-11-11 09:00:00')] })
+    expect([a.urmarire_stare, a.retur_propus, a.ultim_eveniment_la]).toEqual(['retur', 'refuz', '2026-11-11 09:00:00'])
+    expect([b.urmarire_stare, b.retur_propus, b.ultim_eveniment_la]).toEqual(['retur', null, '2026-11-11 09:00:00'])
+  })
+  it('textFapteUrmarire: faptele cunoscute și, la contradicție, AMBELE valori (cunoscută și nouă)', () => {
+    const et = { refuz: 'Refuz', mutat: 'Mutat' }
+    expect(textFapteUrmarire({ ridicat_propus: '2026-11-09', livrat_la: null, retur_cunoscut: true, retur_propus: 'refuz' }, et)).toBe('fapte: ridicat 09.11.2026, retur (Refuz)')
+    const t = textFapteUrmarire({ ridicat_propus: '2026-11-09', ridicat_contrazis: '2026-11-10', retur_cunoscut: true, retur_propus: 'refuz', retur_contrazis: 'mutat',
+      livrat_la: '2026-11-11T07:00:00Z' }, et)
+    expect(t).toMatch(/CONTRADICȚIE de verificat de om: ridicare 09\.11\.2026 \(cunoscută\) ≠ 10\.11\.2026 \(FAN, mai nou\); motiv de retur Refuz \(cunoscut\) ≠ Mutat \(FAN, mai nou\); livrat ȘI retur/)
+    expect(t).toMatch(/livrat 11\.11\.2026 09:00/)   // ora României (L17)
+    expect(textFapteUrmarire({})).toBe(''); expect(textFapteUrmarire(null)).toBe('')
+  })
+  it('documentul (runda 4, r3 P3): deciziile din 17.11.2026 consemnate, lista de activare în ordinea recenzentului, arhiva descrisă exact', () => {
+    const d = DOC.replace(/\r/g, '')
+    expect(d).not.toMatch(/NEDECISE/); expect(d).not.toMatch(/expedieri fizice PLĂTITE/); expect(d).not.toMatch(/sandbox sau expedieri reale/)
+    expect(d).toMatch(/contul de TEST FAN — DECIS de proprietar \(17\.11\.2026\)/); expect(d).toMatch(/costurile se lămuresc pe acel cont/)
+    expect(d).toMatch(/Numărul plicului apare și pe convocator — DECIS/); expect(d).toMatch(/felie separată, după publicarea terminologiei/)
+    expect(d).toMatch(/amprenta documentelor în tiraj/)
+    expect(d).toMatch(/Documentele unui lot se descarcă într-o ARHIVĂ \(ZIP\) — DECIS/); expect(d).toMatch(/un plic\s+cu două convocări = trei fișiere DOCX/)
+    expect(d).toMatch(/Un singur document pe plic NU se poate face simplu și sigur/); expect(d).not.toMatch(/un fișier pe plic\b(?! NU)(?!, varianta)/i)
+    // §10: cei 5 pași, în ordinea recenzentului
+    const s10 = d.slice(d.indexOf('## 10. Lista de activare'), d.indexOf('## 11.'))
+    const pasi = ['1. **Concurența tirajului', '2. **Precondițiile fixture-ului', '3. ⚑ **Baseline L15 revizuit', '4. ⚑ **Confirmările FAN pe contul de TEST', '5. ⚑ **Numai după acceptarea Testului 1']
+    const poz = pasi.map(p => s10.indexOf(p))
+    expect(poz.every(x => x >= 0)).toBe(true); expect([...poz].sort((a, b) => a - b)).toEqual(poz)
+    for (const s of ['T2', 'T2b', 'L1b', 'F1']) expect(d).toContain(`| ${s} |`)
+    for (const c of ['FX001', 'FX002', 'FX003']) expect(d).toContain(`\`${c}\``)
+    expect(d).toMatch(/--migrare fan/); expect(d).toMatch(/Tirajul înlocuit cât o descărcare e ÎN CURS/); expect(d).toMatch(/Ce rămâne procedural:/)
+  })
+  it('ecranul: ridicarea contrazisă nu intră în „Confirmă ridicarea”; caseta „de verificat de om” arată faptele; evidența citește coloanele faptelor', () => {
+    const src = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8')
+    expect(src).toMatch(/r\.stare === 'generat' && r\.ridicat_propus && !r\.ridicat_contrazis/)
+    expect(src).toMatch(/retur_cunoscut,ridicat_contrazis,livrat_contrazis,retur_contrazis/)
+    expect(src).toMatch(/Urmărire de verificat de om/)
   })
 })

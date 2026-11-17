@@ -7,7 +7,7 @@ import { propune, aplica } from '../importPostal.js'
 import { grupeazaPentruPlicuri, convocareDeRegenerat, MESAJ_DE_REGENERAT, textAR, genereazaOpis, genereazaPvPlicuire, csvEtichete, dataBucuresti, adresaPlic, areImputernicire, planPachetPlicuire,
   termenExpediere, textTermenExpediere, avertismentExpediere, confirmaExpediereRecitita, textTintaExpediere, recomandareExpediere, docxPaginaControl, continutPaginaControl } from '../plicuri.js'
 import { destinatarMascat } from '../../../supabase/functions/_shared/redariFan.mjs'
-import { prefixLot, pregatestePachetFan, numeControl, numeArhiva } from '../fanLot.js'
+import { prefixLot, pregatestePachetFan, confirmaTirajFinal, numeControl, numeArhiva } from '../fanLot.js'
 import { TERMEN_CONVOCARE_ZILE } from '../setari.js'
 import { G, S, Camp, Gol, Modal, MOTIVE_RETUR, msgEroare, fmtDate, citestePaginat } from './comune.jsx'
 import { CALITATI_AR, descriereArPlic } from '../arMentiune.js'
@@ -180,7 +180,11 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, profile = null
         zip.file(f.nume, await bl.arrayBuffer())
       }
       const blob = await zip.generateAsync({ type: 'blob' })
-      if (curent()) descarcaBlob(blob, numeArhiva({ lot: rand, fanLot: ev.fanLot, tiraj }))
+      if (!curent()) return
+      // runda 4 (Jakarinos #1118 r3 P1): REVERIFICAREA FINALĂ a tirajului (aceeași cheie, același nr., neoprit) după ce arhiva e gata și
+      // ÎNAINTE de salvare: un tiraj oprit / înlocuit între timp (altă sesiune, owner-ul) = refuz, nimic descărcat
+      if (tiraj) { await confirmaTirajFinal({ rpc: (n, a) => supabase.rpc(n, a), lot: rand, tiraj }); if (!curent()) return }
+      descarcaBlob(blob, numeArhiva({ lot: rand, fanLot: ev.fanLot, tiraj }))
       return `Pachet descărcat${tiraj ? ` (tirajul ${tiraj.id}, nr. ${tiraj.nr})` : ''}: ${plan.fisiere.length} documente, ${plan.plicuri.length} plicuri, în ordinea pozițiilor (în fiecare plic: opisul, apoi convocările) + pagina de control.`
         + (ramase.length ? ` Rămase netipărite (fără etichetă și fără documente): ${ramase.map(r => r.nr_plic).join(', ')}.` : '')
     }

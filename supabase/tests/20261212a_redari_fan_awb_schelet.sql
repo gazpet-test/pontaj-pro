@@ -48,3 +48,21 @@ CREATE TABLE public.red_convocari (
 );
 GRANT SELECT ON public.profiles, public.user_module_access, public.red_proiecte, public.red_loturi_plicuire, public.red_plicuri,
   public.red_detinatori, public.red_detinatori_contact, public.red_convocari TO authenticated;
+-- runda 4: jurnalul Redări (coloanele + imuabilitatea din 20261126a); evenimentele de tiraj le scriu fn_red_fan_tiraj / _opreste (DEFINER).
+-- Politica reală de citire (fn_red_nivel) nu e aici: harness-ul citește jurnalul ca proprietar; rolurile aplicației au doar SELECT, ca în producție.
+CREATE TABLE public.red_jurnal (
+  id bigserial PRIMARY KEY,
+  tabela text NOT NULL,
+  inregistrare_id uuid,
+  actiune text NOT NULL CHECK (actiune IN ('insert', 'update', 'delete')),
+  date_vechi jsonb, date_noi jsonb,
+  user_id uuid, user_email text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE FUNCTION public.fn_red_jurnal_imuabil() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN RAISE EXCEPTION 'red_jurnal este append-only (% refuzat)', TG_OP USING ERRCODE = '42501'; END $f$;
+CREATE TRIGGER trg_red_jurnal_imuabil BEFORE UPDATE OR DELETE ON public.red_jurnal FOR EACH ROW EXECUTE FUNCTION public.fn_red_jurnal_imuabil();
+ALTER TABLE public.red_jurnal ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.red_jurnal FROM anon, authenticated, service_role;
+REVOKE ALL ON SEQUENCE public.red_jurnal_id_seq FROM anon, authenticated, service_role;
+GRANT SELECT ON public.red_jurnal TO authenticated, service_role;

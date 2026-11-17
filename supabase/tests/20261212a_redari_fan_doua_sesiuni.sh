@@ -38,11 +38,19 @@
 #   M1 aprobare (A, deschisă; prima aprobare a lotului) + schimbarea marcajului (B) → B așteaptă, apoi E=P0001 „lotul a fost aprobat o data”.
 #   T1 (runda 3, P1) tirajul: A începe tirajul cu cheia K1 (deschisă), B (editor) cere tirajul cu K2 → B așteaptă lock-ul lotului, apoi
 #      E=RD020 „tirajul s-a schimbat”; final: tiraj_cheie = K1, nr. 1.
+#   T2 (runda 4, r3 P1) oprirea concurentă cu REVERIFICAREA FINALĂ: tirajul K1 început (comis); A (owner) oprește descărcările (deschisă 3 s,
+#      COMMIT), B (editor) face reverificarea finală a unei descărcări K1 → B așteaptă lock-ul lotului, apoi E=RD021 „descarcarile … sunt
+#      oprite”; final: K1, nr. 1, oprit; în red_jurnal un rând „tiraj_oprit” al lotului, autorul = OWNER.
+#   T2b la fel, A face ROLLBACK → B așteaptă, apoi trece („acelasi”, nr. 1); tirajul neoprit.
 #   R1 roluri reale + RLS: EDITOR → claim / aprobare / urmărire = 42501; EDITOR → propunerea pe un plic al lotului = OK (rândul devine
 #      „propus”, propus_de = EDITOR; anulată) și începerea tirajului = OK (anulată); EDITOR → înlocuirea tirajului = 42501; VIEWER → SELECT pe
 #      red_fan_awb = 0 rânduri, tirajul = 42501; anon → claim = 42501; UPDATE direct pe red_fan_awb ca owner (instrucțiune proprie) = 42501.
-# Ieșire: 0 = toate OK; 1 = un scenariu a picat; 2 = argumente; 3 = curățenia a picat; 22 = altă țintă; 23 = 20261212a neaplicată;
-#   24 = lot / conturi nepotrivite; 25 = fixture-ul nu s-a putut crea.
+# Ieșire: 0 = toate OK; 1 = un scenariu a picat; 2 = argumente; 3 = curățenia a picat; 22 = altă țintă; 23 = 20261212a (forma rundei 4)
+#   neaplicată; 24 = lot / conturi nepotrivite; 25 = fixture-ul nu s-a putut crea (alt motiv); runda 4 — precondițiile fixture-ului, verificate
+#   ÎNAINTEA oricărei scrieri: 26 = FX001 drepturile lui postgres pe auth.users; 27 = FX002 sarea red_plic_sare; 28 = FX003 trigger-ul real de pe
+#   auth.users (pregătirea clonei: antetul fixture-ului).
+# Jurnalul (runda 4): evenimentele de tiraj ale probei (red_jurnal, tabela red_fan_loturi, lotul probei, id > maximul de la început) se șterg în
+#   curățenie, cu imuabilitatea oprită DOAR în acea tranzacție, și se verifică dispariția (revenirea 20261212a refuză cu istoric FAN).
 set -euo pipefail
 PSQL="${PSQL:-psql}"
 export PGCLIENTENCODING=UTF8
@@ -73,7 +81,7 @@ q() { "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" "$@" | tr -d '\r'; }
 BAZA=$(( ($$ % 30000) * 65536 + (RANDOM % 4096) * 16 ))
 MARCAJ_LA='2001-01-01 00:00:00+00'
 AWB3="9$(printf '%05d' $(( RANDOM % 100000 )))$(printf '%04d' $(( $$ % 10000 )))"
-ESEC=0; FIXTURE_CREAT=0; DET=""; TEL_ORIG=""; TEL_ATINS=0
+ESEC=0; FIXTURE_CREAT=0; DET=""; TEL_ORIG=""; TEL_ATINS=0; JURNAL0=""
 touch "$TMP/ids_awb"
 lista_ids() { tr -d '\r' < "$TMP/ids_awb" | tr -s '\n' ',' | sed 's/^,//; s/,$//'; }
 
@@ -93,11 +101,16 @@ ALTER TABLE public.red_fan_loturi DISABLE TRIGGER trg_red_fan_loturi_garda;
 DELETE FROM public.red_fan_awb WHERE id = ANY('{$(lista_ids)}'::uuid[]);
 DELETE FROM public.red_fan_loturi WHERE lot_id = '$LOT' AND marcat_la = '$MARCAJ_LA';
 ALTER TABLE public.red_fan_loturi ENABLE TRIGGER trg_red_fan_loturi_garda;
+ALTER TABLE public.red_jurnal DISABLE TRIGGER trg_red_jurnal_imuabil;
+DELETE FROM public.red_jurnal WHERE id > ${JURNAL0:-9223372036854775807} AND tabela = 'red_fan_loturi' AND inregistrare_id = '$LOT';
+ALTER TABLE public.red_jurnal ENABLE TRIGGER trg_red_jurnal_imuabil;
 COMMIT;
 SQL
   q -f "$TMP/curata.sql" > "$TMP/curata.out" 2>&1 || ok=0
   local rest; rest="$(q -c "SELECT (SELECT count(*) FROM public.red_fan_awb WHERE id = ANY('{$(lista_ids)}'::uuid[]))
-    + (SELECT count(*) FROM public.red_fan_loturi WHERE lot_id = '$LOT' AND marcat_la = '$MARCAJ_LA')" 2>>"$TMP/curata.out")" || ok=0
+    + (SELECT count(*) FROM public.red_fan_loturi WHERE lot_id = '$LOT' AND marcat_la = '$MARCAJ_LA')
+    + (SELECT count(*) FROM public.red_jurnal WHERE id > ${JURNAL0:-9223372036854775807} AND tabela = 'red_fan_loturi' AND inregistrare_id = '$LOT')
+    + (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_red_jurnal_imuabil' AND tgenabled <> 'O')" 2>>"$TMP/curata.out")" || ok=0
   [ "$rest" = 0 ] || { echo "ATENTIE: au ramas randuri FAN ale probei ($rest)" >&2; ok=0; }
   if [ "$FIXTURE_CREAT" = 1 ]; then
     q -v sistem="$SISTEM" -v actiune=sterge -f "$FIXTURE_SQL" > "$TMP/fixture_sterge.out" 2>&1 || { echo "ATENTIE: stergerea fixture-ului a picat" >&2; ok=0; }
@@ -110,13 +123,18 @@ SQL
 }
 REAL="$(q -c "SELECT system_identifier FROM pg_control_system()")"
 if [ "$REAL" != "$SISTEM" ]; then echo "REFUZ: system_identifier al bazei ($REAL) <> --sistem ($SISTEM)" >&2; rm -rf "$TMP"; exit 22; fi
-if [ "$(q -c "SELECT to_regprocedure('public.fn_red_fan_claim_lot(uuid, uuid[], text[], text[])') IS NOT NULL AND to_regprocedure('public.fn_red_fan_tiraj(uuid, text, text)') IS NOT NULL")" != "t" ]; then
-  echo "REFUZ: 20261212a (forma rundei 3) nu e aplicata pe clona" >&2; rm -rf "$TMP"; exit 23
+if [ "$(q -c "SELECT to_regprocedure('public.fn_red_fan_claim_lot(uuid, uuid[], text[], text[])') IS NOT NULL AND to_regprocedure('public.fn_red_fan_tiraj(uuid, text, text)') IS NOT NULL
+               AND to_regprocedure('public.fn_red_fan_tiraj_opreste(uuid, text, boolean)') IS NOT NULL")" != "t" ]; then
+  echo "REFUZ: 20261212a (forma rundei 4) nu e aplicata pe clona" >&2; rm -rf "$TMP"; exit 23
 fi
+JURNAL0="$(q -c "SELECT coalesce(max(id), 0) FROM public.red_jurnal")"
+[[ "$JURNAL0" =~ ^[0-9]+$ ]] || { echo "REFUZ: maximul red_jurnal nu s-a putut citi" >&2; rm -rf "$TMP"; exit 23; }
 trap curata EXIT
 if [ "$CU_FIXTURE" = 1 ]; then
   if ! q -v sistem="$SISTEM" -v actiune=creeaza -f "$FIXTURE_SQL" > "$TMP/fixture_creeaza.out" 2>&1; then
-    echo "REFUZ: fixture-ul nu s-a putut crea: $(tr '\n' ' ' < "$TMP/fixture_creeaza.out")" >&2; exit 25
+    PRE="$(grep -o 'FIXTURE_PRECONDITIE FX00[1-3]' "$TMP/fixture_creeaza.out" | head -n 1 | cut -c 21- || true)"
+    echo "REFUZ: fixture-ul nu s-a putut crea${PRE:+ (preconditie $PRE)}: $(tr '\n' ' ' < "$TMP/fixture_creeaza.out")" >&2
+    case "$PRE" in FX001) exit 26 ;; FX002) exit 27 ;; FX003) exit 28 ;; *) exit 25 ;; esac
   fi
   FIXTURE_CREAT=1; echo "fixture: $(grep '^FIXTURE_CREAT' "$TMP/fixture_creeaza.out")"
 fi
@@ -270,6 +288,28 @@ read -r CA CB < <(doua 7 "SELECT public.fn_red_fan_tiraj('$LOT', '$K1', NULL)" "
 TF="$(q -c "SELECT tiraj_cheie = '$K1' AND tiraj_nr = 1 FROM public.red_fan_loturi WHERE lot_id = '$LOT' AND marcat_la = '$MARCAJ_LA'")"
 [ "$CA" = 0 ] && [ "$CB" = 0 ] && [ "$(val E "$TMP/b7.out")" = RD020 ] && val M "$TMP/b7.out" | grep -qF "$MOTIV_TIRAJ" && [ "$(asteptat "$TMP/b7.out")" = da ] && [ "$TF" = t ] \
   && rez ok "T1 tiraj concurent: B a asteptat, apoi RD020 ($MOTIV_TIRAJ); tirajul ramas = K1, nr. 1" || rez esec "T1 (A=$CA B=$CB final=$TF): $(tr '\n' ' ' < "$TMP/b7.out")"
+# T2 (runda 4): tirajul K1 început și comis; A (owner) OPREȘTE descărcările (deschisă), B (editor) = reverificarea finală a unei descărcări K1
+# → B așteaptă lock-ul lotului, apoi RD021; final: K1, nr. 1, oprit de OWNER; un rând „tiraj_oprit” în red_jurnal
+MOTIV_OPRIT='sunt oprite'
+T2_INCEPE() { pregateste aprobat; singur "$1" "$(JWT "$OWNER")" "SELECT 'R=' || (public.fn_red_fan_tiraj('$LOT', '$K1', NULL) ->> 'stare');" COMMIT; }
+JT() { q -c "SELECT count(*) FROM public.red_jurnal WHERE id > $JURNAL0 AND tabela = 'red_fan_loturi' AND inregistrare_id = '$LOT' AND date_noi ->> 'eveniment' = '$1' AND user_id = '$OWNER'"; }
+T2_INCEPE t2p; J0="$(JT tiraj_oprit)"
+read -r CA CB < <(doua 8 "SELECT public.fn_red_fan_tiraj_opreste('$LOT', '$K1', true)" "public.fn_red_fan_tiraj('$LOT', '$K1', NULL) ->> 'stare'" COMMIT "$OWNER" "$EDITOR")
+TF="$(q -c "SELECT tiraj_cheie = '$K1' AND tiraj_nr = 1 AND tiraj_oprit_la IS NOT NULL AND tiraj_oprit_de = '$OWNER' FROM public.red_fan_loturi WHERE lot_id = '$LOT' AND marcat_la = '$MARCAJ_LA'")"
+J1="$(JT tiraj_oprit)"
+[ "$(val R "$TMP/s_t2p.out")" = inceput ] && [ "$(val E "$TMP/s_t2p.out")" = 00000 ] && [ "$CA" = 0 ] && [ "$CB" = 0 ] && [ "$(val E "$TMP/b8.out")" = RD021 ] \
+  && val M "$TMP/b8.out" | grep -qF "$MOTIV_OPRIT" && [ -z "$(val R "$TMP/b8.out")" ] && [ "$(asteptat "$TMP/b8.out")" = da ] && [ "$TF" = t ] && [ "$((J1 - J0))" = 1 ] \
+  && rez ok "T2 oprire concurenta cu reverificarea finala: B a asteptat, apoi RD021 (nimic livrat); K1 nr. 1 oprit de owner; jurnal +1 tiraj_oprit" \
+  || rez esec "T2 (A=$CA B=$CB final=$TF jurnal=$J0->$J1): $(cat "$TMP/s_t2p.out" "$TMP/b8.out" | tr '\n' ' ')"
+# T2b: la fel, A face ROLLBACK → B așteaptă, apoi trece („acelasi”); tirajul neoprit, niciun rând nou de jurnal
+T2_INCEPE t2q; J0="$(JT tiraj_oprit)"
+read -r CA CB < <(doua 9 "SELECT public.fn_red_fan_tiraj_opreste('$LOT', '$K1', true)" "public.fn_red_fan_tiraj('$LOT', '$K1', NULL) ->> 'stare'" ROLLBACK "$OWNER" "$EDITOR")
+TF="$(q -c "SELECT tiraj_cheie = '$K1' AND tiraj_nr = 1 AND tiraj_oprit_la IS NULL FROM public.red_fan_loturi WHERE lot_id = '$LOT' AND marcat_la = '$MARCAJ_LA'")"
+J1="$(JT tiraj_oprit)"
+[ "$(val E "$TMP/s_t2q.out")" = 00000 ] && [ "$CA" = 0 ] && [ "$CB" = 0 ] && [ "$(val E "$TMP/b9.out")" = 00000 ] && [ "$(val R "$TMP/b9.out")" = acelasi ] \
+  && [ "$(asteptat "$TMP/b9.out")" = da ] && [ "$TF" = t ] && [ "$J1" = "$J0" ] \
+  && rez ok "T2b oprirea anulata (ROLLBACK): B a asteptat, apoi a trecut (acelasi); tirajul neoprit, jurnal neschimbat" \
+  || rez esec "T2b (A=$CA B=$CB final=$TF jurnal=$J0->$J1): $(tr '\n' ' ' < "$TMP/b9.out")"
 # R1: roluri reale + RLS (fiecare verificare = o instrucțiune, E= imediat după ea)
 pregateste aprobat; S="$(SURSE)"
 R1() {   # $1 eticheta, $2 preambul, $3 corpul, $4 E așteptat, $5 descriere, [$6 R așteptat (regex)], [$7 S așteptat (regex)]
