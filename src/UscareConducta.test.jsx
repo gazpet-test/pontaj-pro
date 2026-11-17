@@ -309,6 +309,59 @@ dom(numeDom('UscareConducta (jsdom + react-dom)'), () => {
     expect(u2.text()).toContain('Ciorna locală nu se poate scrie')
   })
 
+  // review #1129 pct. 4: valorile tastate încă INVALIDE / incomplete (nu trec de validare, deci nu intră în payload) se păstrează în ciornă
+  const ciorne = s => [...s.m.keys()].filter(k => k.includes('.ciorna.'))
+  it('#1129-4 raport NOU: lungimea cu 2 zecimale (500.12) intră în ciornă, ieșirea întreabă, redeschiderea o oferă și o restaurează', async () => {
+    const { client } = clientFals()
+    const stocare = stocareFalsa()
+    const u = await monteaza(client, stocare)
+    let intrebari = 0
+    u.j.window.confirm = () => { intrebari += 1; return true }
+    await u.apasa(u.buton('Alt interval / tot traseul'))
+    expect(ciorne(stocare)).toEqual([])                                  // neatins: nimic scris
+    await u.scrie('Lungime (m)', '500.12')
+    expect(ciorne(stocare)).toHaveLength(1)
+    expect(JSON.parse(stocare.getItem(ciorne(stocare)[0])).form.lungime_m).toBe('500.12')
+    await u.apasa(u.buton('← Lista'))
+    expect(intrebari).toBe(1)
+    await u.apasa(u.buton('Alt interval / tot traseul'))
+    expect(u.text()).toContain('Ai modificări nesalvate')                // oferită, nu aruncată la deschidere
+    expect(ciorne(stocare)).toHaveLength(1)
+    await u.apasa(u.buton('Restaurez'))
+    expect(u.camp('Lungime (m)').value).toBe('500.12')
+  })
+  it('#1129-4 raport NOU: un utilaj numit cu bucățile încă goale nu se pierde (scris, apoi oferit la redeschidere)', async () => {
+    const { client } = clientFals()
+    const stocare = stocareFalsa()
+    const u = await monteaza(client, stocare)
+    await u.apasa(u.buton('Alt interval / tot traseul'))
+    await u.scrie('Denumire 1', 'Compresor')
+    await u.scrie('Buc.', '')
+    const c = JSON.parse(stocare.getItem(ciorne(stocare)[0]))
+    expect(c.form.utilaje).toEqual([{ denumire: 'Compresor', buc: '' }])
+    await u.apasa(u.buton('← Lista'))
+    await u.apasa(u.buton('Alt interval / tot traseul'))
+    expect(u.text()).toContain('Ai modificări nesalvate')
+    await u.apasa(u.buton('Restaurez'))
+    expect(u.camp('Denumire 1').value).toBe('Compresor')
+    expect(u.camp('Buc.').value).toBe('')
+  })
+  // (ciorna identică cu formularul propus se aruncă în continuare: testul „17.11.2026: Uscare nouă neatinsă…” de la pași, neschimbat)
+  it('#1129-4 raport SALVAT: text într-un câmp numeric gol intră în ciornă și se oferă la redeschidere', async () => {
+    const { client } = clientFals({ rapoarte: [RAP(1)] })                // presiunea goală pe server: payload-ul invalid (null) = același
+    const stocare = stocareFalsa()
+    const u = await monteaza(client, stocare)
+    await u.apasa(u.buton('Tr. test'))
+    expect(ciorne(stocare)).toEqual([])
+    await u.scrie('Presiunea în spatele buretelui (bar)', '1,5 bar')
+    expect(ciorne(stocare)).toHaveLength(1)
+    await u.apasa(u.buton('← Lista'))
+    await u.apasa(u.buton('Tr. test'))
+    expect(u.text()).toContain('Ai modificări nesalvate')
+    await u.apasa(u.buton('Restaurez'))
+    expect(u.camp('Presiunea în spatele buretelui (bar)').value).toBe('1,5 bar')
+  })
+
   // ── runda 3 (verdictul r2) ──
   const creeazaNou = async u => {
     await u.apasa(u.buton('Alt interval / tot traseul'))

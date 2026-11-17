@@ -26,7 +26,7 @@ import { paginareKeyset } from './hrDeciziiUtil.js'
 import { G, S } from './NodCuplareVizualizare.jsx'
 import {
   ETICHETE_CATEGORII, ETICHETE_OBLIGATORII, ETICHETE_STARE, CULORI_STARE, RPC_USCARE, RPC_RETRAGE, prefixRegistru, MAX_BURETI, ETICHETE_POZ_SURSA,
-  registruNou, clasificaReluare, formularNou, formularDinRand, payloadDinFormular, areModificari, formulareDiferite, lipsaDinRand, pozeLipsa, etichetaPozaLipsa,
+  registruNou, clasificaReluare, formularNou, formularDinRand, payloadDinFormular, areModificari, formulareDiferiteBrut, lipsaDinRand, pozeLipsa, etichetaPozaLipsa,
   incarcariDeschise, cantaririPentru, imbinare, aleg, momenteLocale, invalidareMeteo, schimbaSursaMeteo, pozitieDinGps, distantaMeteo,
   durataOre, vitezaMedie, diferentaBurete, verificare24h, propunereMeteo, fmtZi, fmtMoment, fmtNr, fmtKm, actiuniPermise,
 } from './uscareLogica.js'
@@ -267,8 +267,9 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const stergeCiorna = id => { const k = cheieCiorna(id); if (k && stocare) { try { stocare.removeItem(k) } catch { /* se vede la următoarea scriere */ } } }
   // fiecare schimbare a formularului editabil se scrie în ciornă; un eșec se ARATĂ (nu „rămân în ciornă” dacă n-au rămas)
   const editabilAcum = (selectat === 'nou' || rand?.stare === 'deschisa') && poateScrie
-  // schimbat = față de ce era la deschidere (raportul nou: față de formularul propus) — decide ciorna și întrebarea de la ieșire
-  const schimbat = selectat === 'nou' ? formulareDiferite(form, formNou.current) : areModificari(form, baza)
+  // schimbat = față de ce era la deschidere (raportul nou: față de formularul propus) — decide ciorna și întrebarea de la ieșire; compară și
+  // valorile BRUTE (tastate, chiar invalide / incomplete): o lungime cu 2 zecimale sau un utilaj fără bucăți nu se pierd din ciornă
+  const schimbat = selectat === 'nou' ? formulareDiferiteBrut(form, formNou.current) : !!baza && formulareDiferiteBrut(form, formularDinRand(baza))
   useEffect(() => {
     if (!form || !editabilAcum || ciornaGasita) return
     const id = selectat === 'nou' ? 'nou' : rand?.id
@@ -299,14 +300,14 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
       setForm(formNou.current); incarcaPoze(null, capteaza('nou'))
       // o ciornă fără nicio schimbare față de formularul propus nu se oferă și nu se păstrează
       const c = citesteCiorna('nou')
-      if (c?.form && formulareDiferite(c.form, formNou.current)) setCiornaGasita({ ...c, pentru: 'nou' })
+      if (c?.form && formulareDiferiteBrut(c.form, formNou.current)) setCiornaGasita({ ...c, pentru: 'nou' })
       else if (c) stergeCiorna('nou')
       return
     }
     setSelectat(u.id); setBaza(u); setForm(formularDinRand(u)); incarcaPoze(u.id, capteaza(u.id))
     if (u.stare === 'deschisa') {
       const c = citesteCiorna(u.id)
-      if (c?.form && (areModificari(c.form, c.baza || u) || (c.motivVerdict && !areMotivVerdict(c.form.observatii, c.motivVerdict)))) setCiornaGasita({ ...c, pentru: u.id, vecheVersiune: (c.baza?.versiune ?? u.versiune) !== u.versiune })
+      if (c?.form && (formulareDiferiteBrut(c.form, formularDinRand(c.baza || u)) || (c.motivVerdict && !areMotivVerdict(c.form.observatii, c.motivVerdict)))) setCiornaGasita({ ...c, pentru: u.id, vecheVersiune: (c.baza?.versiune ?? u.versiune) !== u.versiune })
     }
   }
   const inchideForm = () => {
