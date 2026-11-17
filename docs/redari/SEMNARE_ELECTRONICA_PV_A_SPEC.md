@@ -55,6 +55,7 @@ Date în chatul de coordonare, 17.11.2026. Sunt **decise**; secțiunile indicate
 | D11 | **Fereastra de semnare = 7 zile.** La expirare, parcela se finalizează prin PV tip B. | Termenul curge de la **punerea la dispoziție a PV-ului** (deschiderea cererii), ca în planul trimis beneficiarului; anunțul nu îl mută. Termenele dependente la §7.2. | §7.2 |
 | D12 | **„Doar electronic”** (închisă mai devreme, tot 17.11): PV-ul nu se mai trimite spre semnare prin poștă; cine nu are e-mail / telefon cu internet rămâne la sesiune sau la PV B. Alinierea textului din formular și din convocatoare: PR #1117 (draft). | — | §0 |
 | D13 | **Orarul codului (fostul O8, decis 17.11.2026):** codul de semnare se trimite **la orice oră**, când îl cere deținătorul; toate celelalte SMS-uri rămân în intervalul 08–20. | Excepție explicită **numai** pentru mesajul de cod cerut de deținător (categoria `redari_cod`), scrisă în **ambele** locuri: în rezervarea SQL și în verificarea dinaintea apelului către furnizor. Nu există o oră limită separată pentru ultimul cod: codul se poate cere cât cererea e în fereastră. | §7.2, §7.11 |
+| D14 | **Lista persoanelor care semnează pentru Antreprenor o administrează owner-ul și managerul de proiect** (fostul punct de administrare din O1, decis 17.11.2026). | În listă scriu (adăugare / retragere) doar owner-ul și managerul de proiect al proiectului; fiecare schimbare se jurnalizează (cine, când, pe cine). Managerul de proiect poate fi el însuși persoană desemnată. Cum se identifică managerul de proiect în platformă (un câmp pe proiectul Redări sau managerul proiectului de Execuție legat) se stabilește în felia S3, cu acordul owner-ului pe schimbarea de schemă. Simplul nivel de admin Redări nu dă drept de scriere în listă. | §7.9, §7.12 |
 | — | **Ecranul „Semnări la distanță”**, pe UAT și pe tronson, cu numărul de PV-uri în fiecare stare și lista pentru ziua de sesiune. | Felia de interfață (S4). | §7.16 |
 | — | **Scopul dovezilor = „pot demonstra că am trimis”** (17.11, seara). Nu se verifică la furnizorul de SMS detectarea SIM-ului înlocuit și nici cât păstrează textele. | Secțiunea „Ce putem dovedi” (§2) și dosarul de dovezi; orice mecanism de identificare mai tare decât cele decise trece la „eventual, mai târziu” (§12.1). | §2 |
 
@@ -121,7 +122,7 @@ Prima felie (S1) poate începe după „da”-ul proprietarului pe specificație
 
 | # | Ce e deschis | A | B | C | Recomandare |
 |---|---|---|---|---|---|
-| O1 | **Cine semnează pentru Antreprenor din ERP (D5) și cine administrează lista** | Persoanele desemnate pe proiect (1–3, ex. responsabilul de contract, șeful de proiect), cu funcția lor; **lista o administrează doar owner-ul** | Aceleași persoane desemnate; lista o administrează owner-ul **și** responsabilul de contract al proiectului (desemnat de owner) | — | **A.** Persoanele le numește owner-ul, pe proiect; fiecare trebuie să aibă și acces Redări (admin / editor); identitatea vine din autentificare, nu din ce scrie cineva în formular. Simplul nivel de admin Redări **nu** dă dreptul de a semna. Până la decizie se aplică A (doar owner-ul administrează lista, §7.9, §7.12). |
+| O1 | **Cine semnează pentru Antreprenor din ERP (D5)** — administrarea listei e decisă (D14: owner-ul și managerul de proiect) | Persoanele desemnate pe proiect (1–3, ex. responsabilul de contract, șeful de proiect), cu funcția lor | Orice utilizator cu nivel admin Redări pe proiect | — | **A.** Persoanele se numesc pe proiect, de către owner sau managerul de proiect (D14); fiecare trebuie să aibă și acces Redări (admin / editor); identitatea vine din autentificare, nu din ce scrie cineva în formular. Simplul nivel de admin Redări **nu** dă dreptul de a semna. Rămâne de numit persoanele, înainte de S3. |
 | O2 | **Ce cere beneficiarul pentru semnătura reprezentantului său** | Semnătură de mână pe **anexa fiecărui PV**, la următoarea zi de sesiune, în lot | Un **borderou pe zi**, cu toate PV-urile, semnat o dată | Semnătura electronică proprie a beneficiarului | **A** (recomandarea acceptată în D5); se întreabă beneficiarul prin documentele de la §10. B dacă o cere reprezentantul; C nu se construiește fără cererea lui. |
 | O3 | **Ziua de contrasemnare când UAT-ul nu mai are zile de sesiune** (un deținător poate semna după ultima zi de sesiune) | O **zi de contrasemnare** convenită cu reprezentantul beneficiarului, trecută în ERP pe UAT | Contrasemnarea la predarea PV C pe tronson | — | **A.** Fără zi programată, ecranul arată alerta „fără zi de contrasemnare” (§7.16). |
 | O4 | **Conținutul informării pentru datele noi** | Completare la informarea existentă (aceeași pagină, versiune nouă) + un rezumat de 3 rânduri pe pagina de semnare | Informare separată pentru semnare | — | **A.** Textul îl dă Juridic; lista datelor e la §9 și §10. Fără informare publicată, fluxul nu pornește pe date reale. |
@@ -268,8 +269,8 @@ Proprietarul a ales semnătura simplă; riscurile de mai jos sunt **asumate**, n
 ### 7.1 Fluxul, pas cu pas
 
 **Pregătirea (o dată pe proiect / pe fișier):** operatorul importă fișierul beneficiarului cu telefoanele (§7.4); owner-ul aprobă lotul
-permanent de SMS cu cod (O5) și lista persoanelor care semnează pentru Antreprenor (până la decizia O1, doar owner-ul o
-administrează).
+permanent de SMS cu cod (O5) și lista persoanelor care semnează pentru Antreprenor (o administrează owner-ul și managerul de
+proiect, D14).
 
 **Operatorul (admin / editor Redări, în ERP):**
 1. **Precondiții** (verificate în BD, sub lock, §7.10): ultimul răspuns al deținătorului e „nu particip, fără obiecții” (online, cu
@@ -567,7 +568,7 @@ coduri și sesiuni.
 | `red_pv_semnare_sesiuni` | Sesiunile de acces (§7.6). | nimeni direct |
 | `red_pv_semnare_dovezi` | Jurnalul de dovezi, **doar adăugare pentru rolurile aplicației**; fiecare rând conține hash-ul rândului precedent al cererii (lanț, §7.18). Evenimente: PDF confirmat (hash + amprenta), cerere deschisă = PV pus la dispoziție, anunț expediat (id-ul mesajului de e-mail), pagină deschisă, cod cerut / acceptat de furnizor / livrare raportată / eșuat / rezultat necunoscut / greșit / verificat (cu id-ul mesajului SMS), document servit (hash), descărcare, acord (versiune + hash text), nume tastat, semnat, poză olografă încărcată / acceptată / respinsă, refuz, blocare, retragere, semnătura Antreprenorului (= prefixul tipărit în anexă), anexă atașată / înlocuită, anexă confirmată de operator față de conținutul canonic, lista zilei descărcată (hash-urile anexelor incluse), scan contrasemnat verificat vizual, finalizare, contestație. | SELECT admin / editor; scriere doar prin RPC |
 | `red_pv_semnare_olograf` | Pozele / PDF-urile încărcate de deținător (D2): octeți, tip verificat, SHA-256, plafoane. | SELECT admin / editor; scriere doar prin RPC |
-| `red_pv_semnatari_antreprenor` | Persoanele desemnate să semneze pentru Antreprenor pe proiect (O1): utilizatorul, numele și funcția afișate, cine l-a desemnat, `retras_la`. | SELECT admin / editor; scriere doar de owner până la decizia O1 (varianta „și responsabilul de contract desemnat” rămâne opțiune la O1) |
+| `red_pv_semnatari_antreprenor` | Persoanele desemnate să semneze pentru Antreprenor pe proiect (O1): utilizatorul, numele și funcția afișate, cine l-a desemnat, `retras_la`. | SELECT admin / editor; scriere: owner-ul și managerul de proiect al proiectului (D14) |
 | `red_pv_semnatura_imagini` | Imaginea semnăturii unei persoane desemnate (opțională, PNG ≤ 200 KB), versionată. | SELECT admin / editor; scriere doar de persoana însăși; retragere de owner |
 | `red_pv_semnare_texte` | Textele de acord, versionate, **integral**, imuabile. | SELECT authenticated; scriere doar prin migrare |
 | `red_pv_semnare_contestatii` | Contestațiile după semnare (§7.15). | SELECT admin / editor; scriere prin RPC |
@@ -709,8 +710,7 @@ rezultat necunoscut, clientul reapelează cu aceeași cheie UUID (L04, L05). Cos
 ### 7.12 Semnătura Antreprenorului din ERP și contrasemnarea beneficiarului (D5)
 
 **Cine are dreptul (O1):** persoanele din `red_pv_semnatari_antreprenor` pentru proiectul PV-ului, care au și nivel admin / editor
-Redări. Până la decizia O1, lista o administrează doar owner-ul; varianta în care o administrează și responsabilul de contract
-desemnat de owner rămâne opțiune la O1 (§3). Identitatea vine **numai** din `auth.uid()` (L08); numele și funcția se iau din listă de
+Redări. Lista o administrează owner-ul și managerul de proiect (D14, §1). Identitatea vine **numai** din `auth.uid()` (L08); numele și funcția se iau din listă de
 server, nu din formular. **Operatorul care a deschis cererea poate fi și semnatarul Antreprenorului, dacă e persoană desemnată:**
 deciziile nu cer separarea acestor roluri, iar riscul e asumat (§6.1).
 
@@ -981,8 +981,8 @@ drepturi de acces sau setări. Trece PV-ul în `semnat` **doar** prin RPC-ul de 
 
 **(c) Identitatea:** RPC-urile publice rulează `SECURITY DEFINER` (ca formularul de azi), cu `search_path` fix, fără `service_role`.
 RPC-urile operatorului verifică `auth.uid()` + nivelul Redări pe proiectul PV-ului; semnătura Antreprenorului verifică în plus lista
-persoanelor desemnate; corecția telefonului și lista persoanelor desemnate verifică owner-ul (pentru listă: până la decizia O1,
-care poate adăuga responsabilul de contract desemnat). Funcția existentă care predă SMS-urile
+persoanelor desemnate; corecția telefonului verifică owner-ul, iar lista persoanelor desemnate verifică owner-ul sau
+managerul de proiect al proiectului (D14). Funcția existentă care predă SMS-urile
 furnizorului (rol de server) citește și codul criptat temporar: singurul loc nou cu acces la el, justificat de expedierea asincronă.
 Generarea PDF-ului pe server (S7) are fișă proprie.
 
@@ -1205,3 +1205,4 @@ Specificația nu are cod; regulile se aplică proiectării și devin criterii de
   lista persoanelor desemnate: până la decizia O1 doar owner-ul (§3, §7.1, §7.9, §7.12, §9); orarul codului decis (D13: codul la
   orice oră, celelalte SMS-uri 08–20; fără limita separată a ultimului cod), scos din lista de decis (§1, §3, §7.2, §7.11, §7.17, §10,
   §11).
+- **17.11.2026, completare după r5** — administrarea listei persoanelor care semnează pentru Antreprenor e decisă de proprietar: owner-ul și managerul de proiect (D14); O1 rămâne doar pentru numirea persoanelor (§1, §3, §7.1, §7.9, §7.12, §9).
