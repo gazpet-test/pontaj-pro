@@ -35,7 +35,8 @@
 --   * Scrierea DOAR prin 4 RPC-uri SECURITY DEFINER (fn_executie_uscare_salveaza / _stare / _poza / _retrage): auth.uid() obligatoriu, cheia
 --     apăsării REVENDICATĂ întâi (lock consultativ pe cheie: două apeluri cu aceeași cheie se serializează, al doilea vede jurnalul primului),
 --     dreptul pe proiect prin fn_executie_nod_drept (redeschiderea: fn_executie_contract_drept, nivelul admin), lock pe rând, CAS pe versiune.
---     _retrage = „Renunț” la o cerere nelămurită: răspunde după cheie dacă s-a aplicat; dacă nu, o retrage DEFINITIV (nicio cale spre dublură).
+--     _retrage = „Renunț” la o cerere nelămurită: răspunde după cheie dacă s-a aplicat; dacă nu, o retrage DEFINITIV (nicio cale spre dublură),
+--     pe proiectul INTENȚIEI, derivat de server din cererea trimisă (runda 5); fără cotă. Amprenta unei cereri: o singură funcție internă.
 --     Fără INSERT / UPDATE / DELETE pentru anon / authenticated / service_role. Citirea prin RLS: același drept, orice nivel.
 --   * Gărzi în BD pe ORICE cale (L07, trigger-e BEFORE): proveniența (creat_de / modificat_de = auth.uid()), proiectul imuabil, raportul
 --     închis / anulat nu se modifică, închiderea doar completă (aceeași funcție ca RPC-ul), schimbarea stării nu schimbă datele, nicio ștergere;
@@ -50,8 +51,8 @@
 -- Depinde de 20261201a (fn_executie_nod_drept), 20261202a (executie_probe_tronsoane cu UNIQUE (id, proiect_id)), 20261209a + 20261213a
 --   (restricția pe proiect), meteo_cache (meteo-sync) și sites. Verificat mai jos.
 -- Ordinea lock-urilor (L06), aceeași pe toate căile: lock consultativ pe cheia apăsării -> executie_uscari FOR UPDATE -> executie_uscare_incarcari
---   FOR UPDATE -> executie_uscare_poze (FOR UPDATE / INSERT / DELETE) -> INSERT în jurnal (retragerea: cheia -> lock consultativ pe autor,
---   alt spațiu de chei, luat doar de ea -> INSERT în jurnal). Cheile apăsărilor sunt ale AUTORULUI (unic pe (creat_de, cheie), runda 4). Lock-urile implicite: FK-urile (FOR KEY SHARE pe
+--   FOR UPDATE -> executie_uscare_poze (FOR UPDATE / INSERT / DELETE) -> INSERT în jurnal (retragerea: cheia -> INSERT în jurnal; raportul
+--   țintă doar citit). Cheile apăsărilor sunt ale AUTORULUI (unic pe (creat_de, cheie), runda 4). Lock-urile implicite: FK-urile (FOR KEY SHARE pe
 --   executie_proiecte / executie_probe_tronsoane / executie_uscari / executie_uscare_incarcari), trigger-ele pozei și rezervării (FOR SHARE pe
 --   raport, deja ținut mai tare). Modulul Probe pe tronsoane (20261202a) nu atinge nimic de aici: fără ciclu.
 -- Lock-uri la aplicare (punct unic, NOWAIT, reîncercat cât timp nu s-a depășit 1 s de la BEGIN — bugetul se verifică și DUPĂ obținere: un lock
@@ -391,7 +392,8 @@ COMMENT ON TABLE public.executie_uscare_poze IS
 -- în jurnal; e singurul rând fără raport (uscare_id NULL) și face orice cerere ulterioară cu acea cheie A ACELUIAȘI AUTOR refuzată.
 -- Runda 4 (verdict P2-4): cheia e a AUTORULUI — unicitatea e pe (creat_de, cheie), creat_de = auth.uid() pus de trigger, obligatoriu; toate
 -- căutările după cheie sunt pe (autorul curent, cheie). Un alt cont care cunoaște UUID-ul (din orice proiect) scrie doar în spațiul LUI de
--- chei: nu poate retrage / ocupa / bloca intenția altcuiva. Retragerea leagă cheia de autor (creat_de) și de proiectul intenției (proiect_id).
+-- chei: nu poate retrage / ocupa / bloca intenția altcuiva. Retragerea leagă cheia de autor (creat_de), de proiectul intenției (proiect_id,
+-- derivat de server, runda 5) și de conținutul ei (amprenta). Rândurile retrase rămân permanent (acumulare acceptată, spec §6).
 CREATE TABLE public.executie_uscare_jurnal (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   uscare_id bigint,
@@ -413,8 +415,6 @@ CREATE TABLE public.executie_uscare_jurnal (
 );
 CREATE INDEX executie_uscare_jurnal_uscare_idx ON public.executie_uscare_jurnal (uscare_id, proiect_id, id);
 CREATE INDEX executie_uscare_jurnal_proiect_idx ON public.executie_uscare_jurnal (proiect_id, id);
--- limita retragerilor pe autor (runda 4): numărarea pe fereastră citește doar retragerile autorului
-CREATE INDEX executie_uscare_jurnal_retrageri_idx ON public.executie_uscare_jurnal (creat_de, creat_la) WHERE actiune = 'cheie_retrasa';
 COMMENT ON TABLE public.executie_uscare_jurnal IS
   'Execuție: jurnalul rapoartelor de uscare (creare, salvări cu diferențele, închideri / redeschideri cu conținutul complet, anulări, rezervări, poze, renunțări, retrageri de cereri nelămurite); scris doar de RPC-urile fn_executie_uscare_*, nu se modifică. Ține cheile de idempotență. 20261225a.';
 
@@ -624,6 +624,35 @@ CREATE TRIGGER trg_executie_uscare_poze_fara_golire BEFORE TRUNCATE ON public.ex
 CREATE TRIGGER trg_executie_uscare_jurnal_fara_golire BEFORE TRUNCATE ON public.executie_uscare_jurnal
   FOR EACH STATEMENT EXECUTE FUNCTION public.fn_executie_uscare_fara_golire();
 
+-- ── amprenta unei INTENȚII (L04, L19; runda 5): O SINGURĂ definiție, folosită de cele 3 RPC-uri (pe parametrii lor) și de retragere (pe
+-- intenția din registrul ecranului: numele RPC-ului + parametrii exacți ai cererii). Cheile = EXACT semnătura RPC-ului, fără p_cheie; altă
+-- formă / alt RPC = 22023. Valorile trec prin aceleași tipuri ca parametrii RPC-ului (bigint / integer / text / jsonb), motivul / legenda prin
+-- aceeași normalizare (btrim, gol = NULL): aceeași cerere = aceeași amprentă, oricare ar fi calea. Internă: fără EXECUTE pentru API.
+CREATE FUNCTION public.fn_executie_uscare_amprenta(p_rpc text, p_args jsonb) RETURNS text
+LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $f$
+DECLARE
+  v_n integer;
+BEGIN
+  IF jsonb_typeof(p_args) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'uscare: intenția nu e un obiect' USING ERRCODE = '22023'; END IF;
+  SELECT count(*) INTO v_n FROM jsonb_object_keys(p_args);
+  IF p_rpc = 'fn_executie_uscare_salveaza' AND v_n = 4 AND p_args ?& ARRAY['p_proiect', 'p_id', 'p_versiune', 'p_date'] THEN
+    RETURN md5(jsonb_build_object('op', 'salveaza', 'proiect', (p_args ->> 'p_proiect')::bigint, 'id', (p_args ->> 'p_id')::bigint,
+                                  'versiune', (p_args ->> 'p_versiune')::integer, 'date', p_args -> 'p_date')::text);
+  END IF;
+  IF p_rpc = 'fn_executie_uscare_stare' AND v_n = 4 AND p_args ?& ARRAY['p_id', 'p_versiune', 'p_actiune', 'p_motiv'] THEN
+    RETURN md5(jsonb_build_object('op', 'stare', 'id', (p_args ->> 'p_id')::bigint, 'versiune', (p_args ->> 'p_versiune')::integer,
+                                  'actiune', p_args ->> 'p_actiune', 'motiv', nullif(btrim(coalesce(p_args ->> 'p_motiv', '')), ''))::text);
+  END IF;
+  IF p_rpc = 'fn_executie_uscare_poza' AND v_n = 7
+     AND p_args ?& ARRAY['p_uscare', 'p_actiune', 'p_poza', 'p_cale', 'p_categorie', 'p_burete_nr', 'p_legenda'] THEN
+    RETURN md5(jsonb_build_object('op', 'poza', 'uscare', (p_args ->> 'p_uscare')::bigint, 'actiune', p_args ->> 'p_actiune',
+                                  'poza', (p_args ->> 'p_poza')::bigint, 'cale', p_args ->> 'p_cale', 'categorie', p_args ->> 'p_categorie',
+                                  'burete', (p_args ->> 'p_burete_nr')::integer, 'legenda', nullif(btrim(coalesce(p_args ->> 'p_legenda', '')), ''))::text);
+  END IF;
+  RAISE EXCEPTION 'uscare: intenția nu are forma unei cereri de uscare' USING ERRCODE = '22023';
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_executie_uscare_amprenta(text, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+
 -- ── RPC 1: creare / salvare pe parcurs (L01, L02, L04, L07, L08, L09, L12, L17) ──
 -- p_id NULL = raport nou (p_versiune NULL); altfel salvare cu CAS pe versiune, doar pe raport deschis.
 -- p_date = TOATE câmpurile formularului (cheile EXACTE din lista CAMPURI; o cheie lipsă sau necunoscută = refuz). Valorile: text (gol = NULL),
@@ -661,14 +690,16 @@ BEGIN
     RAISE EXCEPTION 'uscare: parametri lipsă' USING ERRCODE = '22023';
   END IF;
   PERFORM pg_advisory_xact_lock(20261225, hashtext(p_cheie::text));
-  v_amprenta := md5(jsonb_build_object('op', 'salveaza', 'proiect', p_proiect, 'id', p_id, 'versiune', p_versiune, 'date', p_date)::text);
-  -- reluarea aceleiași apăsări (aceeași cheie): același conținut = succesul de data trecută; alt conținut = eroare
+  v_amprenta := public.fn_executie_uscare_amprenta('fn_executie_uscare_salveaza',
+                  jsonb_build_object('p_proiect', p_proiect, 'p_id', p_id, 'p_versiune', p_versiune, 'p_date', p_date));
+  -- reluarea aceleiași apăsări (aceeași cheie): același conținut = succesul de data trecută; alt conținut = eroare. O cheie retrasă: aceeași
+  -- intenție (proiect + amprentă) = „retrasă”; alta = cheia altei operații (runda 5: retragerea e legată de intenție, nu doar de autor)
   SELECT uscare_id, proiect_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;
   IF FOUND THEN
-    IF j.actiune = 'cheie_retrasa' THEN
+    IF j.actiune = 'cheie_retrasa' AND j.amprenta = v_amprenta AND j.proiect_id = p_proiect THEN
       RAISE EXCEPTION 'uscare: cererea a fost retrasă (Renunț) și nu se mai aplică' USING ERRCODE = '22023';
     END IF;
-    IF j.amprenta IS DISTINCT FROM v_amprenta OR j.proiect_id IS DISTINCT FROM p_proiect THEN
+    IF j.actiune = 'cheie_retrasa' OR j.amprenta IS DISTINCT FROM v_amprenta OR j.proiect_id IS DISTINCT FROM p_proiect THEN
       RAISE EXCEPTION 'uscare: cheia apăsării a fost folosită pentru altă operație' USING ERRCODE = '22023';
     END IF;
     IF NOT public.fn_executie_nod_drept(p_proiect, false) THEN
@@ -930,13 +961,14 @@ BEGIN
   IF p_actiune = 'redeschide' AND NOT public.fn_executie_contract_drept(r.proiect_id, true) THEN
     RAISE EXCEPTION 'uscare: redeschiderea unui raport închis cere drept de administrator pe Execuție' USING ERRCODE = '42501';
   END IF;
-  v_amprenta := md5(jsonb_build_object('op', 'stare', 'id', p_id, 'versiune', p_versiune, 'actiune', p_actiune, 'motiv', v_motiv)::text);
-  SELECT uscare_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;
+  v_amprenta := public.fn_executie_uscare_amprenta('fn_executie_uscare_stare',
+                  jsonb_build_object('p_id', p_id, 'p_versiune', p_versiune, 'p_actiune', p_actiune, 'p_motiv', p_motiv));
+  SELECT uscare_id, proiect_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;
   IF FOUND THEN
-    IF j.actiune = 'cheie_retrasa' THEN
+    IF j.actiune = 'cheie_retrasa' AND j.amprenta = v_amprenta AND j.proiect_id = r.proiect_id THEN
       RAISE EXCEPTION 'uscare: cererea a fost retrasă (Renunț) și nu se mai aplică' USING ERRCODE = '22023';
     END IF;
-    IF j.amprenta = v_amprenta AND j.uscare_id = p_id THEN RETURN jsonb_build_object('ok', true, 'duplicat', true, 'uscare', to_jsonb(r)); END IF;
+    IF j.actiune <> 'cheie_retrasa' AND j.amprenta = v_amprenta AND j.uscare_id = p_id THEN RETURN jsonb_build_object('ok', true, 'duplicat', true, 'uscare', to_jsonb(r)); END IF;
     RAISE EXCEPTION 'uscare: cheia apăsării a fost folosită pentru altă operație' USING ERRCODE = '22023';
   END IF;
   IF r.versiune IS DISTINCT FROM p_versiune THEN RETURN jsonb_build_object('ok', false, 'motiv', 'conflict', 'uscare', to_jsonb(r)); END IF;
@@ -1010,14 +1042,15 @@ BEGIN
   IF NOT FOUND OR NOT public.fn_executie_nod_drept(u.proiect_id, true) THEN
     RAISE EXCEPTION 'uscare: raportul nu există sau nu ai drept de scriere pe Execuție' USING ERRCODE = '42501';
   END IF;
-  v_amprenta := md5(jsonb_build_object('op', 'poza', 'uscare', p_uscare, 'actiune', p_actiune, 'poza', p_poza, 'cale', p_cale,
-                                       'categorie', p_categorie, 'burete', p_burete_nr, 'legenda', v_leg)::text);
-  SELECT uscare_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;
+  v_amprenta := public.fn_executie_uscare_amprenta('fn_executie_uscare_poza',
+                  jsonb_build_object('p_uscare', p_uscare, 'p_actiune', p_actiune, 'p_poza', p_poza, 'p_cale', p_cale, 'p_categorie', p_categorie,
+                                     'p_burete_nr', p_burete_nr, 'p_legenda', p_legenda));
+  SELECT uscare_id, proiect_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;
   IF FOUND THEN
-    IF j.actiune = 'cheie_retrasa' THEN
+    IF j.actiune = 'cheie_retrasa' AND j.amprenta = v_amprenta AND j.proiect_id = u.proiect_id THEN
       RAISE EXCEPTION 'uscare: cererea a fost retrasă (Renunț) și nu se mai aplică' USING ERRCODE = '22023';
     END IF;
-    IF j.amprenta = v_amprenta AND j.uscare_id = p_uscare THEN
+    IF j.actiune <> 'cheie_retrasa' AND j.amprenta = v_amprenta AND j.uscare_id = p_uscare THEN
       RETURN jsonb_build_object('ok', true, 'duplicat', true,
                                 'poza', (SELECT to_jsonb(x) FROM public.executie_uscare_poze x WHERE x.cale = p_cale AND x.uscare_id = p_uscare));
     END IF;
@@ -1100,57 +1133,69 @@ GRANT EXECUTE ON FUNCTION public.fn_executie_uscare_poza(bigint, text, bigint, t
 --   * cheia lipsește = se scrie în jurnal RETRAGEREA (actiune 'cheie_retrasa', fără raport): de acum orice cerere cu această cheie (inclusiv
 --     cea pierdută, dacă ajunge mai târziu) e refuzată — „nu există” devine sigur și definitiv: {ok, aplicat: false, retrasa: true};
 --   * cheia deja retrasă (reluarea retragerii) = același răspuns, duplicat.
--- Drept: retragerea cere scriere pe proiect (scrie în jurnalul lui); răspunsul pe o cheie existentă cere citire pe proiectul ei, iar cheia
--- trebuie să fie a ACELUIAȘI proiect (altfel 22023).
--- Runda 4 (verdict P2-4): cheia e a AUTORULUI (jurnalul e unic pe (creat_de, cheie)): retragerea caută și scrie DOAR în spațiul de chei al
--- apelantului, legată de el (creat_de = auth.uid()) și de proiectul intenției (proiect_id = p_proiect). Un alt cont, din orice proiect, care
--- cunoaște UUID-ul nu poate retrage sau bloca intenția altcuiva (retragerea lui privește doar cheia LUI).
--- Evidența retragerilor (runda 4): un rând retras rămâne PERMANENT (altfel o cerere întârziată ar putea reapărea după ștergere: promisiunea
--- „refuzată definitiv” cade). Volumul e limitat pe AUTOR: cel mult 20 de retrageri noi în 24 h și cel mult 200 în 365 de zile (fereastră
--- mobilă) => cel mult 200 de rânduri / an / cont cu drept de scriere. Peste limită: refuz DISTINCT (SQLSTATE 54000, „LIMITA_RETRAGERI”),
--- nimic scris; cererea rămâne nelămurită și se lămurește prin „Retrimite identic” (aceeași cheie, idempotent), care nu e limitat.
--- Întrebarea pe o cheie deja în jurnal (aplicată / deja retrasă) nu scrie și nu intră în limită.
--- Ordinea lock-urilor (L06): cheia -> autorul (lock consultativ pe cont, doar înaintea numărării) -> jurnal (INSERT); niciun rând de raport.
-CREATE FUNCTION public.fn_executie_uscare_retrage(p_proiect bigint, p_cheie uuid) RETURNS jsonb
+-- Runda 5 (verdict r4 P2-4): retragerea e legată de INTENȚIE, nu de un proiect declarat. Ecranul trimite intenția din registrul lui (p_rpc =
+-- numele RPC-ului, p_args = parametrii exacți ai cererii, fără cheie); serverul derivă din ea, cu aceleași reguli ca RPC-ul, proiectul
+-- (salvarea: p_proiect, iar raportul, dacă e dat, trebuie să fie al lui; starea / poza: proiectul raportului țintă, citit din BD — proiectul
+-- unui raport nu se schimbă) și amprenta (fn_executie_uscare_amprenta, aceeași funcție ca RPC-ul). Drept: retragerea cere scriere pe
+-- proiectul INTENȚIEI; răspunsul pe o cheie existentă cere citire pe proiectul ei, iar proiectul și amprenta din jurnal trebuie să fie ale
+-- intenției (altfel 22023: cheia e a altei operații). Rândul retragerii poartă proiectul și amprenta intenției; cele 3 RPC-uri refuză o cheie
+-- retrasă: aceeași intenție = „retrasă”, alta = „cheia altei operații”.
+-- Cheia e a AUTORULUI (runda 4: jurnalul e unic pe (creat_de, cheie)): retragerea caută și scrie DOAR în spațiul de chei al apelantului.
+-- Un alt cont, din orice proiect, care cunoaște UUID-ul nu poate retrage sau bloca intenția altcuiva.
+-- Evidența retragerilor (runda 5, decizia coordonatorului): FĂRĂ cotă — „Renunț” rămâne mereu posibil pentru autorul cererii (o cotă ar bloca
+-- tocmai calea de siguranță, L20). Rândul retras rămâne PERMANENT (o ștergere ar lăsa o cerere întârziată să se aplice după „Renunț”): o
+-- acumulare ACCEPTATĂ explicit, un rând mic pentru fiecare cerere abandonată de om (ordinul de mărime: câteva pe an pe cont). O curățare sigură
+-- ar cere o schimbare de protocol (chei cu termen de valabilitate verificat de server), care nu se face acum: spec §6.
+-- Ordinea lock-urilor (L06): cheia (lock consultativ) -> jurnal (INSERT); raportul țintă e doar citit (fără lock: proiectul lui e imuabil).
+CREATE FUNCTION public.fn_executie_uscare_retrage(p_rpc text, p_args jsonb, p_cheie uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
   v_uid uuid := auth.uid();
   j record;
-  v_zi integer;
-  v_an integer;
+  v_amprenta text;
+  v_proiect bigint;
+  v_uscare bigint;
 BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'uscare: autentificare necesară' USING ERRCODE = '42501'; END IF;
-  IF p_proiect IS NULL OR p_cheie IS NULL THEN RAISE EXCEPTION 'uscare: parametri lipsă' USING ERRCODE = '22023'; END IF;
+  IF p_rpc IS NULL OR p_args IS NULL OR p_cheie IS NULL THEN RAISE EXCEPTION 'uscare: parametri lipsă' USING ERRCODE = '22023'; END IF;
+  -- intenția: forma exactă a unei cereri (altfel 22023), amprenta și proiectul ei, ca în RPC
+  v_amprenta := public.fn_executie_uscare_amprenta(p_rpc, p_args);
+  IF p_rpc = 'fn_executie_uscare_salveaza' THEN
+    v_proiect := (p_args ->> 'p_proiect')::bigint;
+    v_uscare := (p_args ->> 'p_id')::bigint;
+  ELSE
+    v_uscare := (p_args ->> CASE p_rpc WHEN 'fn_executie_uscare_stare' THEN 'p_id' ELSE 'p_uscare' END)::bigint;
+  END IF;
+  IF v_uscare IS NOT NULL THEN
+    SELECT CASE WHEN v_proiect IS NULL OR u.proiect_id = v_proiect THEN u.proiect_id END INTO v_proiect FROM public.executie_uscari u WHERE u.id = v_uscare;
+    IF NOT FOUND THEN v_proiect := NULL; END IF;
+  END IF;
+  IF v_proiect IS NULL THEN
+    RAISE EXCEPTION 'uscare: raportul nu există sau nu ai drept de scriere pe Execuție' USING ERRCODE = '42501';
+  END IF;
   PERFORM pg_advisory_xact_lock(20261225, hashtext(p_cheie::text));
-  SELECT uscare_id, proiect_id, actiune INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;
+  SELECT uscare_id, proiect_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;
   IF FOUND THEN
     IF NOT public.fn_executie_nod_drept(j.proiect_id, false) THEN
       RAISE EXCEPTION 'uscare: nu ai drept pe proiectul acestei cereri' USING ERRCODE = '42501';
     END IF;
-    IF j.proiect_id IS DISTINCT FROM p_proiect THEN RAISE EXCEPTION 'uscare: cheia nu e a acestui proiect' USING ERRCODE = '22023'; END IF;
+    IF j.proiect_id IS DISTINCT FROM v_proiect OR j.amprenta IS DISTINCT FROM v_amprenta THEN
+      RAISE EXCEPTION 'uscare: cheia e a altei operații (alt proiect sau alt conținut)' USING ERRCODE = '22023';
+    END IF;
     IF j.actiune = 'cheie_retrasa' THEN
       RETURN jsonb_build_object('ok', true, 'duplicat', true, 'aplicat', false, 'retrasa', true);
     END IF;
     RETURN jsonb_build_object('ok', true, 'duplicat', true, 'aplicat', true, 'retrasa', false, 'actiune', j.actiune, 'uscare_id', j.uscare_id);
   END IF;
-  IF NOT public.fn_executie_nod_drept(p_proiect, true) THEN
-    RAISE EXCEPTION 'uscare: nu ai drept de scriere pe Execuție pentru acest proiect' USING ERRCODE = '42501';
-  END IF;
-  -- limita pe autor (L01: lock-ul contului ÎNAINTEA numărării; două retrageri simultane ale aceluiași cont nu trec amândouă de limită)
-  PERFORM pg_advisory_xact_lock(20261226, hashtext(v_uid::text));
-  SELECT count(*) FILTER (WHERE creat_la > now() - interval '24 hours'), count(*) INTO v_zi, v_an
-    FROM public.executie_uscare_jurnal
-   WHERE creat_de = v_uid AND actiune = 'cheie_retrasa' AND creat_la > now() - interval '365 days';
-  IF v_zi >= 20 OR v_an >= 200 THEN
-    RAISE EXCEPTION 'uscare: LIMITA_RETRAGERI: ai % retrageri în ultimele 24 h (cel mult 20) și % în ultimul an (cel mult 200); nimic retras. Lămurește cererea cu „Retrimite identic”.',
-      v_zi, v_an USING ERRCODE = '54000';
+  IF NOT public.fn_executie_nod_drept(v_proiect, true) THEN
+    RAISE EXCEPTION 'uscare: raportul nu există sau nu ai drept de scriere pe Execuție' USING ERRCODE = '42501';
   END IF;
   INSERT INTO public.executie_uscare_jurnal (uscare_id, proiect_id, actiune, valori, cheie, amprenta)
-  VALUES (NULL, p_proiect, 'cheie_retrasa', '{}'::jsonb, p_cheie, md5(jsonb_build_object('op', 'retrage', 'proiect', p_proiect)::text));
+  VALUES (NULL, v_proiect, 'cheie_retrasa', '{}'::jsonb, p_cheie, v_amprenta);
   RETURN jsonb_build_object('ok', true, 'duplicat', false, 'aplicat', false, 'retrasa', true);
 END $f$;
-REVOKE ALL ON FUNCTION public.fn_executie_uscare_retrage(bigint, uuid) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.fn_executie_uscare_retrage(bigint, uuid) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_executie_uscare_retrage(text, jsonb, uuid) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_executie_uscare_retrage(text, jsonb, uuid) TO authenticated;
 
 -- ── RLS + privilegii: doar citire pentru aplicație (L07); scrierea trece numai prin RPC-uri ──
 ALTER TABLE public.executie_uscari ENABLE ROW LEVEL SECURITY;
@@ -1276,7 +1321,8 @@ BEGIN
       ('public.fn_executie_uscare_stare(bigint, integer, text, text, uuid)', 'plpgsql', true, true),
       ('public.fn_executie_uscare_poza(bigint, text, bigint, text, text, integer, text, uuid)', 'plpgsql', true, true),
       ('public.fn_executie_uscare_obiect(text, text, boolean)', 'sql', true, true),
-      ('public.fn_executie_uscare_retrage(bigint, uuid)', 'plpgsql', true, true)
+      ('public.fn_executie_uscare_retrage(text, jsonb, uuid)', 'plpgsql', true, true),
+      ('public.fn_executie_uscare_amprenta(text, jsonb)', 'plpgsql', false, false)
     ) v(fn, limbaj, definer, exec_auth) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
                     WHERE p.oid = to_regprocedure(r.fn) AND l.lanname = r.limbaj AND p.prosecdef = r.definer
@@ -1287,8 +1333,8 @@ BEGIN
       RAISE EXCEPTION '20261225a post: functia % (limbaj / definer / search_path / owner / EXECUTE)', r.fn;
     END IF;
   END LOOP;
-  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_uscare\_%') <> 17 THEN
-    RAISE EXCEPTION '20261225a post: numarul functiilor fn_executie_uscare_* difera de 17';
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_uscare\_%') <> 18 THEN
+    RAISE EXCEPTION '20261225a post: numarul functiilor fn_executie_uscare_* difera de 18';
   END IF;
   -- trigger-ele: forma exactă (funcția, evenimentele, fără WHEN / argumente / coloane), active, singurele ne-interne de pe tabele
   IF (SELECT count(*) FROM pg_trigger tg JOIN (VALUES

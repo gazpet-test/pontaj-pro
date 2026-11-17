@@ -163,6 +163,7 @@ constrangere	constrangere tabel public.executie_uscari.executie_uscari_tronson_c
 constrangere	constrangere tabel public.executie_uscari.executie_uscari_utilaje_check	creat
 constrangere	constrangere tabel public.executie_uscari.executie_uscari_versiune_check	creat
 constrangere	constrangere tabel public.executie_uscari.executie_uscari_vreme_check	creat
+functie	functie public.fn_executie_uscare_amprenta(text,jsonb)	creat
 functie	functie public.fn_executie_uscare_cantariri_ok(jsonb)	creat
 functie	functie public.fn_executie_uscare_fara_golire()	creat
 functie	functie public.fn_executie_uscare_garda()	creat
@@ -175,7 +176,7 @@ functie	functie public.fn_executie_uscare_obiect(text,text,boolean)	creat
 functie	functie public.fn_executie_uscare_poza(bigint,text,bigint,text,text,integer,text,uuid)	creat
 functie	functie public.fn_executie_uscare_poza_garda()	creat
 functie	functie public.fn_executie_uscare_poze_lipsa(public.executie_uscari,jsonb)	creat
-functie	functie public.fn_executie_uscare_retrage(bigint,uuid)	creat
+functie	functie public.fn_executie_uscare_retrage(text,jsonb,uuid)	creat
 functie	functie public.fn_executie_uscare_salveaza(bigint,bigint,integer,jsonb,uuid)	creat
 functie	functie public.fn_executie_uscare_stare(bigint,integer,text,text,uuid)	creat
 functie	functie public.fn_executie_uscare_tranzitie(text,text)	creat
@@ -197,7 +198,6 @@ relatie	relatie public.executie_uscare_jurnal_cheie_uq	creat
 relatie	relatie public.executie_uscare_jurnal_id_seq	creat
 relatie	relatie public.executie_uscare_jurnal_pkey	creat
 relatie	relatie public.executie_uscare_jurnal_proiect_idx	creat
-relatie	relatie public.executie_uscare_jurnal_retrageri_idx	creat
 relatie	relatie public.executie_uscare_jurnal_uscare_idx	creat
 relatie	relatie public.executie_uscare_poze	creat
 relatie	relatie public.executie_uscare_poze_cale_uq	creat

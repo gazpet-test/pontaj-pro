@@ -109,7 +109,6 @@ function clientFals({ rapoarte = [], incarcari = [], sites = [], meteo = [] } = 
       if (fn === 'fn_executie_nod_drept') return Promise.resolve({ data: true, error: null })
       if (fn === 'fn_executie_contract_drept') return Promise.resolve({ data: false, error: null })
       if (fn === 'fn_executie_uscare_retrage' && st.retrageEroare) return Promise.resolve({ data: null, error: { message: 'Failed to fetch' } })
-      if (fn === 'fn_executie_uscare_retrage' && st.retrageLimita) return Promise.resolve({ data: null, error: { code: '54000', message: 'uscare: LIMITA_RETRAGERI: ai 20 retrageri în ultimele 24 h' } })
       const d = amana(); st.rpc.push({ fn, a, ...d })
       // st.devreme: serverul scrie LA APEL, dar răspunsul se pierde (timeout) la eliberarea cu „eroare”
       const devreme = st.devreme ? aplica(fn, a) : null
@@ -275,7 +274,11 @@ dom(numeDom('UscareConducta (jsdom + react-dom)'), () => {
     expect(T.executie_uscari.size).toBe(1)
     st.auto = true
     await u.apasa(u.butonExact('Renunț'))
-    expect(st.rpc.at(-1)).toMatchObject({ fn: 'fn_executie_uscare_retrage', a: { p_proiect: 1, p_cheie: st.rpc[0].a.p_cheie } })
+    // runda 5: „Renunț” trimite INTENȚIA din registru (RPC + parametrii exacți ai cererii), nu un proiect declarat
+    const { p_cheie: cheie0, ...args0 } = st.rpc[0].a
+    expect(st.rpc.at(-1).fn).toBe('fn_executie_uscare_retrage')
+    expect(st.rpc.at(-1).a).toEqual({ p_rpc: 'fn_executie_uscare_salveaza', p_args: args0, p_cheie: cheie0 })
+    expect(args0).toMatchObject({ p_proiect: 1, p_id: null, p_versiune: null })
     expect(u.text()).toContain('se aplicase deja')
     expect(cheiIncerte(stocare)).toHaveLength(0)
     expect(() => u.buton('Creează raportul')).toThrow()                       // formularul „nou” nu mai poate emite altă creare
@@ -400,19 +403,27 @@ dom(numeDom('UscareConducta (jsdom + react-dom)'), () => {
     expect(cheiIncerte(stocare)).toHaveLength(0)                                // cheia lămurită iese din registrul proiectului 1
   })
 
-  it('P2-4 limita de retrageri (54000) e un refuz DISTINCT: nimic retras, cererea rămâne, „Retrimite identic” e calea', async () => {
-    const { client, st } = clientFals()
-    st.auto = false
-    const stocare = stocareFalsa()
-    const u = await monteaza(client, stocare)
-    await creeazaNou(u)
-    await u.elibereaza(st.rpc[0], 'eroare')
-    st.retrageLimita = true
-    await u.apasa(u.butonExact('Renunț'))
-    expect(u.text()).toContain('Ai atins limita de retrageri')
-    expect(u.text()).not.toContain('Serverul nu a putut confirma')
-    expect(cheiIncerte(stocare)).toHaveLength(1)
-    expect(u.buton('Retrimite identic').disabled).toBe(false)
+  // ── runda 5 (verdictul r4, P2-3): poza — contextul capturat ÎNAINTEA comprimării, verificat după ea ──
+  it('P2-3 poza: proiectul (sau raportul) se schimbă cât se comprimă fotografia -> NIMIC emis, nicio cheie în registrul niciunui proiect (reproducerea din verdict)', async () => {
+    for (const schimbare of [u => u.reranda({ proiectId: 2 }), u => u.apasa(u.buton('← Lista'))]) {
+      const { client, st } = clientFals({ rapoarte: [RAP(10, { tronson: 'Tr. P1' }), RAP(20, { proiect_id: 2, tronson: 'Tr. P2' })] })
+      const stocare = stocareFalsa()
+      const comprimari = []
+      const u = await monteaza(client, stocare, { comprima: () => { const d = amana(); comprimari.push(d); return d.p } })
+      await u.apasa(u.buton('Tr. P1'))
+      const input = u.d.querySelector('input[type="file"][capture]')
+      expect(input).not.toBeNull()
+      // 1. pornește fotografia pentru raportul 10 din P1; 2. comprimarea așteaptă
+      await u.alegeFisier(input, new u.j.window.File(['x'], 'poza.jpg', { type: 'image/jpeg' }))
+      expect(comprimari).toHaveLength(1)
+      // 3. se schimbă proiectul (registrul curent devine P2) / se închide raportul; 4. comprimarea se termină
+      await schimbare(u)
+      await u.elibereaza(comprimari[0], new Blob(['jpeg'], { type: 'image/jpeg' }))
+      // 5. nicio rezervare emisă (pe r4: rezervarea 1/10/K.jpg, cu cheia în registrul P2), nimic în registre, niciun mesaj
+      expect(st.rpc.filter(r => r.fn === 'fn_executie_uscare_poza')).toHaveLength(0)
+      expect(cheiIncerte(stocare)).toHaveLength(0)
+      expect(u.text()).not.toContain('Rezervarea pozei')
+    }
   })
 
   const SITE = [{ id: 100, name: 'Santier P1', proiect_id: 1 }]

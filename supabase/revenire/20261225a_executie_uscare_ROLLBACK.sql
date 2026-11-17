@@ -1,6 +1,6 @@
 -- Revenire 20261225a_executie_uscare. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a owner-ului (supabase/revenire/README.md).
 -- Scoate tot ce a creat migrarea: tabelele executie_uscari, executie_uscare_incarcari, executie_uscare_poze, executie_uscare_jurnal (cu
--- politicile, trigger-ele și cheile lor), cele 17 funcții fn_executie_uscare_*, politicile executie_uscare_citire / _adauga de pe
+-- politicile, trigger-ele și cheile lor), cele 18 funcții fn_executie_uscare_*, politicile executie_uscare_citire / _adauga de pe
 -- storage.objects și bucket-ul executie-uscare. Tabelele și funcțiile existente NU se ating.
 -- Starea EXACTĂ a migrării e verificată înainte, pe DEFINIȚII (nu doar pe numere): corpul fiecărei funcții (amprenta fără CR) + limbajul,
 -- DEFINER-ul, search_path-ul, proprietarul, EXECUTE pe fiecare rol; fiecare politică (nume, comandă, permisivă, roluri, expresia exactă);
@@ -9,8 +9,10 @@
 -- fiecărui tabel (runda 3), ca amprentă: coloanele (nume, tip, NOT NULL, valoarea implicită, identitate, generare, colație), constrângerile
 -- (nume + definiție: un CHECK adăugat pe tabelul gol = altă amprentă), indecșii (definiția), opțiunile tabelului, parametrii secvenței de
 -- identitate. Altă stare = refuz, nimic schimbat. Amprentele se regenerează și se verifică cu scripts/pglite/test_executie_uscare_local.mjs.
--- Runda 4: jurnalul are cheia pe AUTOR (UNIQUE (creat_de, cheie), creat_de NOT NULL) și indexul parțial al retragerilor — în amprenta lui;
--- CHECK-urile căii scrise E'…\\.jpg$' dau aceeași definiție în catalog ca înainte (amprentele incarcari / poze neschimbate).
+-- Runda 4: jurnalul are cheia pe AUTOR (UNIQUE (creat_de, cheie), creat_de NOT NULL) — în amprenta lui; CHECK-urile căii scrise
+-- E'…\\.jpg$' dau aceeași definiție în catalog ca înainte (amprentele incarcari / poze neschimbate).
+-- Runda 5: fără indexul retragerilor (cota a fost scoasă; amprenta jurnalului regenerată); retragerea are semnătura (text, jsonb, uuid);
+-- funcția internă fn_executie_uscare_amprenta (a 18-a) intră în listă și se scoate.
 -- REFUZĂ dacă există date: un raport, o rezervare, o poză, un rând de jurnal sau un fișier în bucket (rapoartele de uscare sunt documente
 -- semnate; golirea = decizie separată: preview → „da” owner → export → apply).
 --
@@ -122,7 +124,7 @@ BEGIN
         ('executie_uscari', '456ffbdfe2fa4fcca58456e96f134a24'),
         ('executie_uscare_incarcari', '846d5be8353da7e23a0e6a604b315b17'),
         ('executie_uscare_poze', 'ed428e6233195f5f5f10c1bbf15d58e7'),
-        ('executie_uscare_jurnal', '29ae610fd92841fe973586333c2a74bf')
+        ('executie_uscare_jurnal', 'e51e1946eb51851bea3f397d5ba2b871')
         -- STRUCTURA-END
       ) t(tab, amp)
       CROSS JOIN LATERAL (SELECT md5(concat_ws(E'\n',
@@ -187,7 +189,7 @@ BEGIN
                      AND file_size_limit = 10485760 AND allowed_mime_types = ARRAY['image/jpeg']) THEN
       RAISE EXCEPTION '20261225a revenire: starea nu e cea din 20261225a (pasul %, bucket: altă configurație)', v_pas;
     END IF;
-    -- funcțiile: exact cele 17, fiecare cu corpul revizuit (amprenta fără CR), limbajul, DEFINER-ul, search_path-ul, proprietarul, EXECUTE
+    -- funcțiile: exact cele 18, fiecare cu corpul revizuit (amprenta fără CR), limbajul, DEFINER-ul, search_path-ul, proprietarul, EXECUTE
     SELECT string_agg(a.fn, ', ') INTO v_rau FROM (VALUES
         -- AMPRENTE-START
         ('public.fn_executie_uscare_utilaje_ok(jsonb)', 'sql', false, '5950452f25882bc1f1e087fde7dd7ad5'),
@@ -202,11 +204,12 @@ BEGIN
         ('public.fn_executie_uscare_incarcare_garda()', 'plpgsql', false, '2599ca1f5feab4f0da29e69758ec984d'),
         ('public.fn_executie_uscare_jurnal_garda()', 'plpgsql', false, 'f6b8159d9439e6bd046fc4766d3076a9'),
         ('public.fn_executie_uscare_fara_golire()', 'plpgsql', false, '1b0ebeecc0b85f90e433e344a10524f4'),
-        ('public.fn_executie_uscare_salveaza(bigint, bigint, integer, jsonb, uuid)', 'plpgsql', true, 'f99b3a85ec55238f04ab1d6603df25a5'),
-        ('public.fn_executie_uscare_stare(bigint, integer, text, text, uuid)', 'plpgsql', true, '45676729735c59657a5513330dae79c5'),
-        ('public.fn_executie_uscare_poza(bigint, text, bigint, text, text, integer, text, uuid)', 'plpgsql', true, '63031b738cfc296022e59681cdd62f53'),
+        ('public.fn_executie_uscare_salveaza(bigint, bigint, integer, jsonb, uuid)', 'plpgsql', true, '5f4b00f09961b4e006e43effb9873b57'),
+        ('public.fn_executie_uscare_stare(bigint, integer, text, text, uuid)', 'plpgsql', true, '23e376e1756585a9bceb19900ccc22b5'),
+        ('public.fn_executie_uscare_poza(bigint, text, bigint, text, text, integer, text, uuid)', 'plpgsql', true, '3735197d114553e871b2aa33658bcbac'),
         ('public.fn_executie_uscare_obiect(text, text, boolean)', 'sql', true, '98336ee3ff2579f4e39618b8a874c6fa'),
-        ('public.fn_executie_uscare_retrage(bigint, uuid)', 'plpgsql', true, '343ff14345cb2f52e3cbd38bbdcf08f4'),
+        ('public.fn_executie_uscare_retrage(text, jsonb, uuid)', 'plpgsql', true, '3b0b1a4cab88d7c45bda45598a1c703d'),
+        ('public.fn_executie_uscare_amprenta(text, jsonb)', 'plpgsql', false, 'fd434bf1c679aaa4887068e5d25b25a6'),
         -- AMPRENTE-END
         ('', '', false, '')
       ) a(fn, limbaj, definer, amp)
@@ -218,7 +221,7 @@ BEGIN
                            AND has_function_privilege('authenticated', p.oid, 'EXECUTE') = (a.definer)
                            AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e WHERE e.grantee = 0));
     IF v_rau IS NOT NULL
-       OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_uscare\_%') <> 17 THEN
+       OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_uscare\_%') <> 18 THEN
       RAISE EXCEPTION '20261225a revenire: starea nu e cea din 20261225a (pasul %, functii: %)', v_pas, coalesce(v_rau, 'alt numar');
     END IF;
     -- nimic din afara migrării nu depinde de obiectele ei: vederi / chei străine spre tabele, funcții care le numesc, alte politici
@@ -260,7 +263,8 @@ BEGIN
   DROP FUNCTION public.fn_executie_uscare_stare(bigint, integer, text, text, uuid);
   DROP FUNCTION public.fn_executie_uscare_poza(bigint, text, bigint, text, text, integer, text, uuid);
   DROP FUNCTION public.fn_executie_uscare_obiect(text, text, boolean);
-  DROP FUNCTION public.fn_executie_uscare_retrage(bigint, uuid);
+  DROP FUNCTION public.fn_executie_uscare_retrage(text, jsonb, uuid);
+  DROP FUNCTION public.fn_executie_uscare_amprenta(text, jsonb);
   DROP FUNCTION public.fn_executie_uscare_garda();
   DROP FUNCTION public.fn_executie_uscare_poza_garda();
   DROP FUNCTION public.fn_executie_uscare_incarcare_garda();

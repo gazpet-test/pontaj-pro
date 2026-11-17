@@ -99,27 +99,41 @@ Tranzițiile (o singură listă, `fn_executie_uscare_tranzitie` = `TRANZITII` di
   se caută în jurnal (o cheie retrasă = neaplicată).
 - **Lămurirea are doar două ieșiri, amândouă cu răspuns de la server** (runda 3, L05):
   1. **„Retrimite identic”** — aceeași cheie: serverul întoarce rezultatul de data trecută („se salvase deja”) sau o aplică acum.
-  2. **„Renunț”** — NU mai șterge cheia pe baza markerului local. Ecranul cheamă `fn_executie_uscare_retrage(proiect, cheie)`, care ia același
-     lock pe cheie (o cerere încă în curs se termină întâi) și răspunde după jurnal: **aplicată** → reușită, nimic scris; **neaplicată** →
-     scrie în jurnal o **retragere** (`cheie_retrasa`, fără raport), deci cererea pierdută, dacă ajunge mai târziu, e **refuzată** (22023):
-     „nu există” devine sigur și definitiv. Fără răspuns sigur (rețea, drept), cheia rămâne în registru.
+  2. **„Renunț”** — NU mai șterge cheia pe baza markerului local. Ecranul cheamă `fn_executie_uscare_retrage(rpc, parametri, cheie)` cu
+     **intenția** din registru (numele RPC-ului + parametrii exacți ai cererii, fără cheie; runda 5), care ia același lock pe cheie (o cerere
+     încă în curs se termină întâi) și răspunde după jurnal: **aplicată** → reușită, nimic scris; **neaplicată** → scrie în jurnal o
+     **retragere** (`cheie_retrasa`, fără raport), deci cererea pierdută, dacă ajunge mai târziu, e **refuzată** (22023): „nu există” devine
+     sigur și definitiv. Fără răspuns sigur (rețea, drept), cheia rămâne în registru.
+  Cele două ieșiri **nu sunt interschimbabile**: „Retrimite identic” poate APLICA tocmai cererea la care omul voia să renunțe; doar „Renunț”
+  o oprește. De aceea „Renunț” nu are cotă (runda 5) și rămâne mereu posibil pentru autorul cererii.
   O creare lămurită ca aplicată cât formularul „nou” e încă deschis **deschide raportul creat** (butonul „Creează” dispare): nicio cale spre
   o a doua creare cu alt UUID.
 - **Cheia e a AUTORULUI** (runda 4, verdict P2-4): jurnalul e unic pe `(creat_de, cheie)`, `creat_de` = `auth.uid()` pus de trigger,
   obligatoriu; toate RPC-urile caută cheia doar în spațiul de chei al apelantului. Un alt cont care cunoaște UUID-ul (din orice proiect) nu
   poate retrage, ocupa sau bloca intenția altcuiva: retragerea lui (sau o operație a lui cu aceeași valoare) privește doar cheia LUI.
-  Retragerea leagă cheia de autor și de proiectul intenției (`proiect_id` = proiectul cererii, capturat de ecran înaintea ei).
-- **Evidența retragerilor** (runda 4): un rând `cheie_retrasa` rămâne **permanent** — ștergerea lui (TTL) ar permite cererii întârziate să
-  reapară, iar promisiunea „refuzată definitiv” ar cădea. Volumul e **limitat pe autor**: cel mult **20 de retrageri noi în 24 h** și
-  **200 în 365 de zile** (fereastră mobilă, lock pe autor ÎNAINTEA numărării), deci cel mult 200 de rânduri / an / cont cu drept de scriere.
-  Peste limită: refuz **distinct** (SQLSTATE `54000`, `LIMITA_RETRAGERI`), nimic scris; ecranul spune limita și lasă cererea de lămurit prin
-  **„Retrimite identic”** (aceeași cheie, idempotent, nelimitat) — calea de siguranță rămâne mereu funcțională. Întrebarea despre o cheie
-  deja în jurnal (aplicată / deja retrasă) nu scrie și nu intră în limită. O curățare cu păstrarea promisiunii ar cere un protocol nou
-  (chei cu termen de valabilitate verificat de server) — schimbare de protocol, **necesită aprobare Răzvan**, nu e în această livrare.
-- **Răspunsurile întârziate** (runda 4, verdict P2-3): „Retrimite identic”, „Renunț” și deschiderea raportului creat capturează ÎNAINTEA
-  cererii contextul (generația, proiectul, formularul deschis, registrul, contul) și îl verifică după FIECARE `await`; mesajul, reîncărcarea
-  listei și deschiderea raportului se fac doar dacă proiectul și formularul sunt încă cele actuale. Rezultatul dovedit scoate totuși cheia
-  din registrul proiectului cererii (registrul capturat), chiar dacă omul a navigat între timp.
+- **Retragerea e legată de INTENȚIE** (runda 5, verdict r4 P2-4): serverul NU primește un proiect declarat, ci derivă din intenție, cu
+  aceleași reguli ca RPC-ul ei, **proiectul** (salvarea: `p_proiect`, iar raportul, dacă e dat, trebuie să fie al lui; starea / poza:
+  proiectul raportului țintă, citit din BD — proiectul unui raport nu se schimbă) și **amprenta** conținutului (`fn_executie_uscare_amprenta`,
+  o singură funcție internă, folosită și de cele 3 RPC-uri pe parametrii lor — L19). Retragerea unei chei absente cere **scriere pe proiectul
+  intenției**; rândul `cheie_retrasa` poartă proiectul și amprenta ei. O cerere ulterioară a autorului cu cheia retrasă: aceeași intenție =
+  „retrasă”, alta = „cheia altei operații” (ambele 22023, nimic aplicat). Întrebarea despre o cheie existentă cere citire pe proiectul ei și
+  ca proiectul + amprenta din jurnal să fie ale intenției trimise (altfel 22023). Un cont care nu (mai) scrie pe proiectul intenției nu o
+  poate retrage (42501) — pe protocolul r4 retragerea se înscria pe proiectul declarat.
+- **Evidența retragerilor — acumulare ACCEPTATĂ explicit** (runda 5, decizia coordonatorului): un rând `cheie_retrasa` rămâne **permanent**
+  (o ștergere ar lăsa cererea întârziată să se aplice după „Renunț”, iar promisiunea „refuzată definitiv” ar cădea) și **nu există cotă**
+  (cota din runda 4 bloca tocmai calea de siguranță). Evidența **crește** cu un rând mic (cheie, proiect, autor, amprentă, moment) pentru
+  fiecare cerere abandonată de om prin „Renunț”; volumul așteptat: **câteva rânduri pe an pe cont** (o retragere apare doar după o cerere
+  rămasă fără răspuns din cauza rețelei ȘI decizia omului de a renunța). Protecția împotriva abuzului: cheia e a autorului (alt cont nu
+  scrie în spațiul lui de chei) + dreptul de scriere pe proiectul intenției; niciun alt mecanism de limitare. O curățare sigură ar cere o
+  schimbare de protocol (chei cu termen de valabilitate verificat de server, după care cererea e refuzată oricum) — **nu se face acum**.
+- **Răspunsurile întârziate** (runda 4 + runda 5, verdict r4 P2-3): orice acțiune asincronă a ecranului (salvare, schimbarea stării,
+  „Retrimite identic”, „Renunț”, deschiderea raportului creat, poza — inclusiv **comprimarea** —, reîncercarea fișierului, înregistrarea /
+  scoaterea / renunțarea la o poză, citirea pozelor, propunerea meteo și alegerea din listă, GPS, PDF) capturează contextul (generația,
+  proiectul, raportul deschis, registrul, contul) **înaintea primului `await`**, îl transmite mai departe (nimic nu se recapturează după un
+  `await`) și îl verifică după fiecare; o scriere se emite doar dacă e încă valid (altfel nimic trimis, nimic în registru). Rezultatul
+  dovedit scoate totuși cheia din registrul proiectului cererii (registrul capturat), chiar dacă omul a navigat între timp. Cât o cerere e în
+  zbor, câmpurile formularului sunt blocate, iar salvarea / schimbarea stării anulează capturile GPS și propunerile meteo încă în zbor (ar
+  ateriza peste formularul înlocuit de răspuns).
 - **CAS**: formularul ține **versiunea de bază** (rândul pe care s-a pornit). La conflict serverul întoarce rândul curent; aplicația **nu
   salvează peste coleg**: îmbină în trei (baza, formularul, serverul) pe câmpuri — schimbările colegului pe câmpurile neatinse intră,
   ale mele rămân, câmpurile schimbate de amândoi cu valori diferite **se aleg explicit** („al meu” / „al colegului”); salvarea e blocată până
@@ -157,9 +171,10 @@ Tranzițiile (o singură listă, `fn_executie_uscare_tranzitie` = `TRANZITII` di
 | alt modul / fără drept / anonim | nimic | nu | nu |
 
 Scrierea: DOAR prin `fn_executie_uscare_salveaza` / `_stare` / `_poza` / `_retrage` (SECURITY DEFINER, `auth.uid()` obligatoriu); niciun
-drept INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / ștergere din aplicație. **Autorizarea retragerilor** (runda 4):
-retragerea unei chei cere scriere pe proiect și privește DOAR cheile apelantului (autor = `auth.uid()`); întrebarea despre o cheie proprie
-deja folosită cere citire pe proiectul ei și același proiect (altfel 22023); limita: 20 / 24 h și 200 / an pe cont (§6).
+drept INSERT / UPDATE / DELETE pe tabele. Fișierele: nicio modificare / ștergere din aplicație. **Autorizarea retragerilor** (runda 4 +
+runda 5): retragerea unei chei cere scriere pe proiectul INTENȚIEI (derivat de server din cererea trimisă, nu declarat) și privește DOAR
+cheile apelantului (autor = `auth.uid()`); întrebarea despre o cheie proprie deja folosită cere citire pe proiectul ei, același proiect și
+aceeași amprentă (altfel 22023); fără cotă (§6).
 
 ## 9. Poziția operațiunii (cerința nouă)
 
@@ -221,13 +236,13 @@ deja folosită cere citire pe proiectul ei și același proiect (altfel 22023); 
   --diferente-globale supabase/migrations/20261225a_executie_uscare.l15.tsv`): fără pasul „înainte” al runnerului în aceeași tranzacție,
   migrarea refuză (`AMPRENTA_GLOBALA_LIPSA`). Garanția pe lanțul de drept = amprenta globală (orice derivă a oricărei funcții / politici /
   drept = refuz); migrarea mai verifică pe amprentă cele două porți chemate direct și lanțul lor (listă scrisă, fără regex pe corpuri).
-- **Validatorul runnerului** (runda 4): migrarea (90 de instrucțiuni) și revenirea (1) trec `scripts/livrare_validator.py
+- **Validatorul runnerului** (runda 4): migrarea (91 de instrucțiuni la runda 5) și revenirea (1) trec `scripts/livrare_validator.py
   --plafon-tranzactie`. Numele parametrului de plafon apare DOAR în citirea exactă acceptată (nici în comentarii); cele două CHECK-uri ale
   căii folosesc `E'…\\.jpg$'` (literal E, două backslash-uri = un singur backslash în regex, aceeași expresie în catalog — verificat în
   proba locală, amprentele de structură ale celor două tabele neschimbate).
 - **Manifestul** `.l15.tsv` îl generează coordonatorul pe clonă (`scripts/livrare_l15_manifest.sh --iesire …`). Lista obiectelor pe care
-  trebuie să le conțină — **252** (runda 4: 85 coloane, 79 constrângeri, 17 funcții, 6 politici, 25 relații — indexul nou al retragerilor —,
-  8 tipuri, 32 trigger-e; familie, etichetă, operație; generată cu pașii reali ai runnerului pe PGlite și revizuită) — e în
+  trebuie să le conțină — **252** (runda 5: 85 coloane, 79 constrângeri, 18 funcții — `fn_executie_uscare_amprenta` nouă, retragerea cu
+  semnătura `(text, jsonb, uuid)` —, 6 politici, 24 relații — fără indexul cotei —, 8 tipuri, 32 trigger-e; familie, etichetă, operație; generată cu pașii reali ai runnerului pe PGlite și revizuită) — e în
   `supabase/tests/20261225a_executie_uscare.l15.obiecte.tsv`. Comparația (pe clonă, după generare; PG17 nu are constrângerile NOT NULL ca
   rânduri):
   `diff <(grep -v '^#' supabase/tests/20261225a_executie_uscare.l15.obiecte.tsv | sort) <(grep -v '^#' supabase/migrations/20261225a_executie_uscare.l15.tsv | cut -f1-3 | sort)` → gol.
@@ -260,21 +275,23 @@ deja folosită cere citire pe proiectul ei și același proiect (altfel 22023); 
   tabelele și secvențele ei; postcondiția și revenirea cer ACL-ul exact: proprietarul + `SELECT` (fără GRANT OPTION) pentru `authenticated` /
   `service_role`; pe secvențe doar proprietarul.
 - **Revenirea** refuză dacă există date (raport / rezervare / poză / jurnal / retragere / fișier) și verifică **starea exactă**: corpul și
-  proprietățile fiecărei funcții (17), fiecare politică (comanda, rolurile, expresia exactă), fiecare trigger (funcția, tipul, activ),
+  proprietățile fiecărei funcții (18), fiecare politică (comanda, rolurile, expresia exactă), fiecare trigger (funcția, tipul, activ),
   bucket-ul (privat, limita, tipurile), drepturile pe tabele și ACL-ul exact (niciun alt rol, nici pe secvențe), coloanele (nume + tip, în
   ordine) și — runda 3 — **structura** fiecărui tabel ca amprentă: coloanele cu NOT NULL / valoarea implicită / identitatea / generarea /
   colația, **constrângerile** (nume + definiție: un `CHECK` adăugat pe tabelul gol = refuz), indecșii, opțiunile, parametrii secvenței.
   Amprentele de structură sunt calculate pe PGlite (PG 18, fără rândurile NOT NULL ca constrângeri, deci comparabile cu PG 17); pasul 5 de
   mai jos le confirmă pe clonă (o nepotrivire dă refuz cu amprenta găsită, nimic schimbat).
-- **Proba locală** (`scripts/pglite/test_executie_uscare_local.mjs`, PGlite = PG 18): **101 verificări** — întâi **validatorul real al
+- **Proba locală** (`scripts/pglite/test_executie_uscare_local.mjs`, PGlite = PG 18): **105 verificări** (runda 5) — întâi **validatorul real al
   runnerului** (`scripts/livrare_validator.py --plafon-tranzactie`, ca `livrare_migrare.sh`) pe octeții migrării ȘI ai revenirii, plus formele
   vechi refuzate (backslash în literal obișnuit, numele parametrului de plafon în comentariu) și `bash -n` + linia `\echo` pe scriptul cu
   două sesiuni (runda 4); apoi aplicarea ca la livrare (manifest generat → livrare aprobată), drepturi pe 9 conturi, CHECK-ul căii în catalog
   (punct literal), criteriul, cântăririle, pozele / rezervările, meteo construit de server, poziția, stările, idempotența, retragerea cheii
-  (legată de autor, limita pe 24 h și pe an), CAS-ul, refuzurile (garda „înainte” și o tabelă veche citită acum, bugetul lock-ului fără
+  (legată de autor și — runda 5 — de intenție: proiectul derivat, amprenta, refuzul pe proiectul altei intenții; fără cotă: 25 de retrageri la
+  rând trec; **paritatea amprentei**: fiecare cerere aplicată în probă, pe toate cele 9 tipuri, e găsită „aplicată” de retragerea intenției ei), CAS-ul, refuzurile (garda „înainte” și o tabelă veche citită acum, bugetul lock-ului fără
   coliziune, 8 politici Storage generice inclusiv contraexemplele `owner_id` din r2 și r3, drepturi pe coloane), fără refuz fals (politică fără
   dreptul de tabel; privilegiile implicite ale altui rol; privilegiile implicite globale pe copia sondei), condiția lipsă a sondei raportată
-  distinct, revenirea (16 schimbări de definiție / structură / ACL la același număr de obiecte), **37 de mutanți** (un mutant al cărui text
+  distinct, revenirea (16 schimbări de definiție / structură / ACL la același număr de obiecte), **41 de mutanți** (runda 5: dreptul pe proiectul intenției, proiectul derivat din raport, amprenta cheii existente, cota pusă la loc, legarea
+  cheii retrase de intenție în RPC-uri; un mutant al cărui text
   nu mai există în migrare = test picat, nu „mutant prins”), paritatea JS = SQL.
 - **Proba cu DOUĂ sesiuni reale — obligatorie pe clonă** (PGlite are o singură conexiune):
   `supabase/tests/20261225a_executie_uscare_doua_sesiuni.sh` — scenariile, comenzile și rezultatele așteptate sunt în fișier; pe scurt:
@@ -283,7 +300,7 @@ deja folosită cere citire pe proiectul ei și același proiect (altfel 22023); 
   3. poză / închidere concurente: închiderea așteaptă poza; fie poza intră înainte (și închiderea o vede), fie e refuzată după;
   4. (runda 3) creare în curs + „Renunț” pe aceeași cheie → „aplicată”, nimic retras; retragere în curs + crearea întârziată → refuz 22023;
      două chei diferite cu același `hashtext` → se serializează, dar fac DOUĂ rapoarte (intențiile nu se confundă);
-  5. (runda 4) două retrageri ale aceluiași cont, chei diferite → a doua așteaptă lock-ul pe autor (înaintea numărării), apoi retrage.
+  (Runda 5: retragerea primește intenția; fără cotă, deci fără scenariul R3 din runda 4; R2 verifică și proiectul retragerii.)
   Runda 4: în scenariile P2 / R2 linia `\echo R=:LAST_ERROR_SQLSTATE` (variabila psql neghilimelată; forma cu ghilimele simple nu se
   înlocuia — probat pe clonă) și se verifică și ieșirea procesului B.
 
