@@ -360,6 +360,19 @@ export function formulareDiferite(f, g) {
   if (!f || !g) return false
   return JSON.stringify(payloadDinFormular(f).date) !== JSON.stringify(payloadDinFormular(g).date)
 }
+// valoarea BRUTĂ comparabilă: textele fără spațiile de la capete, listele / obiectele pe chei sortate (un rând de utilaj pe jumătate rămâne vizibil)
+const brut = v => (Array.isArray(v) ? v.map(brut)
+  : v != null && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, brut(v[k])])) : String(v ?? '').trim())
+/**
+ * pentru CIORNĂ (o păstrez / o arunc): ce s-ar trimite SAU ce a tastat omul, inclusiv valorile încă invalide sau incomplete (lungimea cu
+ * 2 zecimale, un utilaj fără bucăți, o oră pe jumătate) — ele nu ajung în payload, dar sunt date tastate care nu au voie să se piardă.
+ * Validarea și areModificari rămân neschimbate; momentele se compară pe instant (canonMoment), ca la îmbinare.
+ */
+export function formulareDiferiteBrut(f, g) {
+  if (!f || !g) return false
+  if (formulareDiferite(f, g)) return true
+  return CHEI_FORMULAR.some(k => JSON.stringify(brut(f[k])) !== JSON.stringify(brut(g[k]))) || MOMENTE.some(k => canonMoment(f, k) !== canonMoment(g, k))
+}
 
 // ── conflictul de versiune: îmbinare în trei, pe câmpuri, rezolvată EXPLICIT de om ──
 /** câmpurile formularului care se compară ca valori (fără cele interne; momentele se compară separat, pe INSTANT) */
