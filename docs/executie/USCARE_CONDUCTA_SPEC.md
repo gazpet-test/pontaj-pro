@@ -130,13 +130,19 @@ Tranzițiile (o singură listă, `fn_executie_uscare_tranzitie` = `TRANZITII` di
   „Retrimite identic”, „Renunț”, deschiderea raportului creat, poza — inclusiv **comprimarea** —, reîncercarea fișierului, înregistrarea /
   scoaterea / renunțarea la o poză, citirea pozelor, propunerea meteo și alegerea din listă, GPS, PDF) capturează contextul (generația,
   proiectul, raportul deschis, registrul, contul) **înaintea primului `await`**, îl transmite mai departe (nimic nu se recapturează după un
-  `await`) și îl verifică după fiecare; o scriere se emite doar dacă e încă valid (altfel nimic trimis, nimic în registru). Rezultatul
+  `await`) și îl verifică după fiecare `await` al ecranului și al exportatorului PDF (inclusiv cele trei etape ale citirii unei poze:
+  `fetch()`, `blob()`, `FileReader` — runda 7); o scriere se emite doar dacă e încă valid (altfel nimic trimis, nimic în registru).
+  **Limite (verificarea respinge rezultatul, nu oprește operația deja pornită):** o citire paginată comună deja pornită își continuă
+  paginile, iar rezultatul vechi e respins la apelant; cererea de URL-uri semnate și o captură `html2canvas` deja pornite se termină, iar
+  rezultatul e aruncat; o citire `FileReader` deja pornită se termină, dar nu mai produce nimic (exportul e anulat la verificarea de după).
+  Doar descărcarea pozelor e oprită efectiv în zbor (prin semnalul de anulare). Rezultatul
   dovedit scoate totuși cheia din registrul proiectului cererii (registrul capturat), chiar dacă omul a navigat între timp. Cât o cerere e în
   zbor, câmpurile formularului sunt blocate, iar salvarea / schimbarea stării anulează capturile GPS și propunerile meteo încă în zbor (ar
   ateriza peste formularul înlocuit de răspuns).
   **PDF-ul** (runda 6, verdict r5 P2): verificarea nu stă doar în ecran, după export — exportatorul (`uscarePdf.js`) primește o funcție de
   verificare a contextului și un semnal de anulare (anulat de ecran la orice schimbare de raport / proiect / ieșire). Contextul se verifică
-  după URL-urile semnate, după FIECARE poză citită, înainte și după fiecare captură și **imediat înainte de descărcare**; context schimbat =
+  după URL-urile semnate, la fiecare poză după `fetch()`, după `blob()` (dacă a căzut, `FileReader` nu mai pornește) și după citirea
+  `FileReader` (runda 7, verdict r6 P3), înainte și după fiecare captură și **imediat înainte de descărcare**; context schimbat =
   buclele se opresc, citirile pozelor în zbor sunt anulate, nimic descărcat, niciun mesaj (o citire întreruptă de anulare nu se numără ca
   „poză necitită”). O eroare reală, cu contextul încă valid, se arată în continuare. Probe: `src/uscarePdf.test.js` și testele „runda 6”
   din `src/UscareConducta.test.jsx` (exportatorul real, poza amânată, navigare între timp → zero descărcări; martorul fără navigare → una).

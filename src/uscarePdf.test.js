@@ -24,7 +24,8 @@ function mediu() {
   const cereri = []
   const nod = () => ({ style: {}, innerHTML: '', firstElementChild: {} })
   vi.stubGlobal('document', { createElement: nod, body: { appendChild() {}, removeChild() {} } })
-  vi.stubGlobal('FileReader', class { readAsDataURL() { this.result = 'data:image/jpeg;base64,AA=='; queueMicrotask(() => this.onload()) } })
+  st.cititori = 0
+  vi.stubGlobal('FileReader', class { readAsDataURL() { st.cititori++; this.result = 'data:image/jpeg;base64,AA=='; queueMicrotask(() => this.onload()) } })
   vi.stubGlobal('requestAnimationFrame', cb => { queueMicrotask(cb); return 1 })
   vi.stubGlobal('fetch', (url, opt) => {
     const d = amana(); cereri.push({ url, opt, ...d })
@@ -101,6 +102,84 @@ describe('exportRaportUscarePDF — contextul verificat în exportator (runda 6)
     mediu()
     const stricat = { storage: { from: () => ({ createSignedUrls: async () => { throw new Error('rețea') } }) } }
     await expect(exportRaportUscarePDF({ client: stricat, uscare: RAP, poze: POZE, eValabil: () => true })).rejects.toThrow('rețea')
+  })
+})
+
+describe('citirea unei poze — verificată și în interior (runda 7, verdict r6 P3)', () => {
+  it('blob() amânat, contextul cade între timp -> FileReader NU pornește, anulat, zero descărcări', async () => {
+    const cereri = mediu()
+    let valid = true
+    const blob = amana()
+    let ceruteBlob = 0
+    const p = exportRaportUscarePDF({ client, uscare: RAP, poze: POZE, eValabil: () => valid })
+    await tick()
+    cereri[0].res({ ok: true, status: 200, blob: () => { ceruteBlob++; return blob.p } })
+    await tick()
+    expect(ceruteBlob).toBe(1)
+    valid = false
+    blob.res(new Blob(['jpeg'], { type: 'image/jpeg' }))
+    expect(await p).toEqual({ anulat: true, necitite: 0, pagini: 0 })
+    expect(st.cititori).toBe(0)
+    expect(cereri).toHaveLength(1)
+    expect(st.salvari).toEqual([])
+  })
+
+  it('contextul cade după fetch() -> blob() nu mai e cerut', async () => {
+    const cereri = mediu()
+    let valid = true, ceruteBlob = 0
+    const p = exportRaportUscarePDF({ client, uscare: RAP, poze: POZE, eValabil: () => valid })
+    await tick()
+    valid = false
+    cereri[0].res({ ok: true, status: 200, blob: async () => { ceruteBlob++; return new Blob(['x']) } })
+    expect(await p).toMatchObject({ anulat: true })
+    expect(ceruteBlob).toBe(0)
+    expect(st.cititori).toBe(0)
+  })
+
+  it('contextul cade în timpul citirii FileReader -> anulat, nu „poză necitită”; pozele următoare necerute', async () => {
+    const cereri = mediu()
+    let valid = true
+    vi.stubGlobal('FileReader', class { readAsDataURL() { st.cititori++; this.result = 'data:image/jpeg;base64,AA=='; valid = false; queueMicrotask(() => this.onload()) } })
+    const p = exportRaportUscarePDF({ client, uscare: RAP, poze: POZE, eValabil: () => valid })
+    await tick(); cereri[0].res(raspuns)
+    expect(await p).toEqual({ anulat: true, necitite: 0, pagini: 0 })
+    expect(st.cititori).toBe(1)
+    expect(cereri).toHaveLength(1)
+    expect(st.salvari).toEqual([])
+  })
+
+  it('ordinea: verificatorul e chemat după fetch(), după blob() și după FileReader, la fiecare poză', async () => {
+    const cereri = mediu()
+    const ev = []
+    vi.stubGlobal('FileReader', class { readAsDataURL() { ev.push('reader'); this.result = 'data:image/jpeg;base64,AA=='; queueMicrotask(() => this.onload()) } })
+    const p = pozeCuImagini(client, POZE.slice(0, 1), { viu: () => ev.push('viu') })
+    await tick(); ev.push('fetch'); cereri[0].res({ ok: true, status: 200, blob: async () => { ev.push('blob'); return new Blob(['x']) } })
+    await p
+    expect(ev).toEqual(['viu', 'viu', 'fetch', 'viu', 'blob', 'viu', 'reader', 'viu', 'viu'])
+  })
+
+  it('o singură constatare „context invalid” în timpul citirii oprește exportul (nu e înghițită ca „poză necitită”)', async () => {
+    const cereri = mediu()
+    let apeluri = 0
+    // contextul pare invalid DOAR la verificarea de după blob() (apelul 4: început, URL-uri, fetch, blob); dacă anularea ar fi
+    // înghițită ca poză necitită, verificările următoare ar trece și PDF-ul s-ar descărca
+    const p = exportRaportUscarePDF({ client, uscare: RAP, poze: POZE, eValabil: () => ++apeluri !== 4 })
+    await tick(); cereri[0].res(raspuns)
+    expect(await p).toEqual({ anulat: true, necitite: 0, pagini: 0 })
+    expect(st.cititori).toBe(0)
+    expect(st.salvari).toEqual([])
+  })
+
+  it('o poză care chiar nu se poate citi (blob stricat), contextul valid -> apare ca necitită, PDF-ul se descarcă', async () => {
+    const cereri = mediu()
+    const p = exportRaportUscarePDF({ client, uscare: RAP, poze: POZE, eValabil: () => true })
+    await tick(); cereri[0].res({ ok: true, status: 200, blob: async () => { throw new Error('corupt') } })
+    await tick(); cereri[1].res(raspuns)
+    await tick(); cereri[2].res({ ok: false, status: 404 })
+    const r = await p
+    expect(r.anulat).toBeUndefined()
+    expect(r.necitite).toBe(2)
+    expect(st.salvari).toHaveLength(1)
   })
 })
 

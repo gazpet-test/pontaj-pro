@@ -11,16 +11,22 @@ const BUCKET = 'executie-uscare'
 const LATIME_MM = 194, INALTIME_MM = 281, SUS_MM = 8
 
 // Runda 6 (verdict r5, L24): exportul primește de la ecran `eValabil` (contextul în care s-a cerut PDF-ul e încă cel curent) și un `semnal`
-// (AbortSignal, anulat de ecran la schimbarea raportului / proiectului / la ieșire). Se verifică după FIECARE await (URL-uri semnate, fiecare
-// poză, fiecare captură) și imediat înainte de pdf.save(): context schimbat = buclele se opresc, nimic descărcat, rezultat { anulat: true }.
+// (AbortSignal, anulat de ecran la schimbarea raportului / proiectului / la ieșire). Se verifică după FIECARE await din exportator (URL-uri semnate,
+// fetch / blob / FileReader la fiecare poză — runda 7 —, fiecare captură) și imediat înainte de pdf.save(): context schimbat = buclele se opresc, nimic descărcat, rezultat { anulat: true }.
 class ExportAnulat extends Error { constructor() { super('Exportul PDF a fost oprit: ecranul s-a schimbat.'); this.anulat = true } }
 const verificator = (eValabil, semnal) => () => { if (semnal?.aborted || !eValabil()) throw new ExportAnulat() }
 
-async function fetchAsDataURL(url, semnal) {
+// Runda 7 (verdict r6 P3): verificatorul `viu` intră și în citirea pozei — după fetch(), după blob() (FileReader NU mai pornește dacă
+// contextul a căzut) și după citirea FileReader. ExportAnulat iese ca atare (apelantul nu-l transformă în „poză necitită”).
+async function fetchAsDataURL(url, { semnal = null, viu = () => {} } = {}) {
   const r = await fetch(url, semnal ? { signal: semnal } : undefined)
+  viu()
   if (!r.ok) throw new Error('HTTP ' + r.status)
   const b = await r.blob()
-  return await new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(fr.result); fr.onerror = () => reject(fr.error); fr.readAsDataURL(b) })
+  viu()
+  const rez = await new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(fr.result); fr.onerror = () => reject(fr.error); fr.readAsDataURL(b) })
+  viu()
+  return rez
 }
 
 /** pozele cu imaginea ca data URL; o poză necitită rămâne în listă fără imagine (apare cu mențiunea în anexă) și e numărată.
@@ -36,7 +42,8 @@ export async function pozeCuImagini(client, poze, { viu = () => {}, semnal = nul
   const rez = []
   for (const p of lista) {
     let dataUrl = null
-    try { if (url.get(p.cale)) dataUrl = await fetchAsDataURL(url.get(p.cale), semnal) } catch { dataUrl = null }
+    try { if (url.get(p.cale)) dataUrl = await fetchAsDataURL(url.get(p.cale), { semnal, viu }) }
+    catch (e) { if (e instanceof ExportAnulat) throw e; dataUrl = null }   // anularea NU e „necitită”; doar o eroare reală de citire
     viu()                                      // întâi contextul: o citire întreruptă de anulare NU devine „poză necitită”
     if (!dataUrl) necitite++
     rez.push({ ...p, dataUrl })
