@@ -1,6 +1,6 @@
 # Redări Lot 1 — semnarea electronică de la distanță a PV-ului tip A + e-mailul către proprietari (SPECIFICAȚIE)
 
-Stare: 17.11.2026, runda 3 (intră deciziile proprietarului din 17.11.2026). **Doar document.** Nu există cod, migrare sau schimbare de
+Stare: 17.11.2026, runda 4 (după re-review-ul rundei 3; deciziile proprietarului din 17.11.2026). **Doar document.** Nu există cod, migrare sau schimbare de
 date în acest PR. Deciziile D1–D12 sunt **luate** (§1) și nu se mai redeschid aici; ce a rămas cu adevărat deschis e la §3.
 Întrebările pentru avocat / Juridic sunt **informative** (§12.2): răspunsurile pot ajusta textele, nu schimbă varianta aleasă.
 Documentul nu afirmă că vreo variantă e legală sau valabilă. Orice migrare, RPC sau modificare de drepturi propusă aici **necesită
@@ -43,7 +43,7 @@ Date în chatul de coordonare, 17.11.2026. Sunt **decise**; secțiunile indicate
 | # | Decizia | Ce înseamnă în proiectare | Unde |
 |---|---|---|---|
 | D1 | **Varianta principală = semnătura electronică simplă în platformă:** link personal (QR), cod pe SMS, „Semnez” + nume tastat. Proprietarul a decis că semnătura simplă ajunge pentru fraza din plan „aceeași valoare ca unul semnat la sesiune”. | Nu mai e întrebare deschisă. Ce nu dovedește semnătura simplă rămâne scris ca **risc asumat** (§6.1). | §5, §7 |
-| D2 | **Rezerva rămâne:** PV-ul tipărit, semnat de mână, fotografiat și încărcat **prin același link**. Dacă nici așa, sesiunea sau PV tip B. | Felie proprie (S5), aceeași fereastră de 7 zile, verificată de operator. | §7.13 |
+| D2 | **Rezerva rămâne:** PV-ul tipărit, semnat de mână, fotografiat și încărcat **prin același link**. Dacă nici așa, sesiunea sau PV tip B. | Felie proprie (S5), aceeași fereastră de 7 zile, verificată de operator. **S5 e condiție a pilotului cu deținători** (pilotul nu începe fără ea, §11). | §7.13 |
 | D3 | **Codul pleacă DOAR la telefoanele primite de la beneficiar.** | Telefonul pentru cod nu poate fi modificat de operator. Corecțiile vin doar printr-un fișier nou de la beneficiar sau cu aprobarea owner-ului, jurnalizat. | §7.4, §6.2 (T1) |
 | D4 | **Același link personal** pentru răspuns și pentru semnare; **pe SMS doar codul.** | Niciun SMS nu poartă linkul. | §7.1, §7.11 |
 | D5 | **Contrasemnarea:** semnătura Antreprenorului se **generează din ERP** (reprezentantul autentificat semnează din ecran, și în lot); reprezentantul beneficiarului semnează **la următoarea zi de sesiune de la primărie, în lot** (recomandare acceptată; se schimbă dacă beneficiarul cere altfel). | Stări noi ale cererii, lista pentru ziua de sesiune, încărcarea scanului. | §7.12 |
@@ -52,7 +52,7 @@ Date în chatul de coordonare, 17.11.2026. Sunt **decise**; secțiunile indicate
 | D8 | **IP trunchiat** și doar tipul browserului. | IPv4 la /24, IPv6 la /48; familia browserului și a sistemului. | §9 |
 | D9 | **Fără sigiliu calificat la pilot.** | Fără ancoră independentă; riscul rămâne scris (§6.1); marca temporală trece la „eventual, mai târziu”. | §7.18 |
 | D10 | **Doi coproprietari cu același telefon → sesiune.** | Cererea se refuză la deschidere când același telefon e al altei persoane. | §7.4 |
-| D11 | **Fereastra de semnare = 7 zile.** La expirare, parcela se finalizează prin PV tip B. | Termenele dependente la §7.2. | §7.2 |
+| D11 | **Fereastra de semnare = 7 zile.** La expirare, parcela se finalizează prin PV tip B. | Termenul curge de la **punerea la dispoziție a PV-ului** (deschiderea cererii), ca în planul trimis beneficiarului; anunțul nu îl mută. Termenele dependente la §7.2. | §7.2 |
 | D12 | **„Doar electronic”** (închisă mai devreme, tot 17.11): PV-ul nu se mai trimite spre semnare prin poștă; cine nu are e-mail / telefon cu internet rămâne la sesiune sau la PV B. Alinierea textului din formular și din convocatoare: PR #1117 (draft). | — | §0 |
 | — | **Ecranul „Semnări la distanță”**, pe UAT și pe tronson, cu numărul de PV-uri în fiecare stare și lista pentru ziua de sesiune. | Felia de interfață (S4). | §7.16 |
 | — | **Scopul dovezilor = „pot demonstra că am trimis”** (17.11, seara). Nu se verifică la furnizorul de SMS detectarea SIM-ului înlocuit și nici cât păstrează textele. | Secțiunea „Ce putem dovedi” (§2) și dosarul de dovezi; orice mecanism de identificare mai tare decât cele decise trece la „eventual, mai târziu” (§12.1). | §2 |
@@ -69,41 +69,65 @@ dovedim cine a citit un mesaj sau cine a folosit efectiv linkul și codul (§6.1
 |---|---|---|---|---|
 | **Scrisoarea recomandată (plicul)** | Plicul a plecat (nr. plic, AWB / nr. de urmărire, data expedierii, opisul de la dosar) și a ajuns (data AR, scanul AR, primit de destinatar sau de altă persoană, cu mențiune) **sau** s-a întors (motivul, data, scanul returului) | `red_plicuri` (`20261129i_redari_plicuri.sql:52-95`); propagat pe convocare: nr. C-nnnn, data expedierii, nr. de urmărire, confirmarea, returul, hash-ul conținutului, fișierul convocatorului (`red_convocari`, `20261126a_redari_teren.sql:191-206`) | Ecranul Plicuri, coloana „AWB / expediat” (`src/redari/ui/PlicuriEcran.jsx:124-126`); cronologia fișei parcelei (`src/redari/ui/FisaParcela.jsx:177-181`); exportul Model_6, coloanele P–T (`src/redari/exportXlsx.js:52-53`) | Complet pentru convocare. Pentru semnarea PV-ului scrisoarea nu se mai folosește (D12). |
 | **Curierul** | AWB generat, ridicat de curier | `red_fan_awb` (`20261212a_redari_fan_awb.sql:22-57`) — migrare scrisă, **neaplicată** (`:2`) | — | Până la aplicare, AWB-ul curierului e cel trecut pe plic (rândul de sus). |
-| **SMS** | Momentul trimiterii (mesajul acceptat de furnizorul SMS), raportul de livrare al operatorului telecom (livrat / eșuat + ora), **textul exact** (comun pe lot, aprobat de proprietar cu nr. autorizării scrise a beneficiarului) | `sms_mesaje` (`20261130a_sms_mvp.sql:112-134`), `sms_dlr` (`:147-157`), `sms_loturi` (`:81-110`) | Rândul „SMS” și cronologia din fișă (`FisaParcela.jsx:33-44`, `:193`); agregatele pe deținător (`20261130i_redari_sms_stare.sql:89-127`); lista SMS în CSV, fără telefon (`src/redari/smsStare.js:144-145`) | Lipsesc: numărul **mascat** și ora fiecărui mesaj în export. Pentru cod: legătura mesaj ↔ cerere și evenimentele „cod trimis / livrat” (§7.11). Livrarea arată că mesajul a ajuns pe telefon, nu că a fost citit. |
-| **E-mail** | Momentul trimiterii | `red_mail_mesaje.trimis_la` (`20261131a_redari_mail_f2_loturi.sql:160-186`) | — (transportul e oprit, `supabase/functions/_shared/redariMailF2.mjs:4`, `:85-86`) | „Trimis” = acceptat de serverul de e-mail, nu livrat / citit (fără pixel de urmărire, intenționat, §8.3). Depinde de F2 (§8.2). |
-| **Afișarea la primărie** | Nr. PV de afișare, perioada, ora, cine a afișat | `red_uat` (`20261126a:132`; `20261127a_redari_uat_setari.sql:53-54`); regula „afișare completă” (`src/redari/notificari.js:32-38`) | Setările UAT; exportul Model_6, coloana U (`exportXlsx.js:53`) | Lipsește **scanul** PV-ului de afișare (azi doar numărul) — propus în felia S4. |
+| **SMS** | Că mesajul a fost **acceptat de furnizorul SMS** și, dacă vine, raportul de livrare al operatorului telecom (livrat / eșuat), plus **textul exact** (comun pe lot, aprobat de proprietar cu nr. autorizării scrise a beneficiarului). Trei ore distincte, oricare poate lipsi: **ora înregistrării rezultatului acceptat** (`sms_mesaje.trimis_la`, `20261130a:362`), **ora aplicării raportului de livrare** în BD (`livrat_la`, `:367`) și **ora raportată de operatorul telecom** (`sms_dlr.raportat_la`, păstrată doar dacă e plauzibilă, `:810-812`). | `sms_mesaje` (`20261130a_sms_mvp.sql:112-134`), `sms_dlr` (`:147-157`), `sms_loturi` (`:81-110`) | Rândul „SMS” și cronologia din fișă (`FisaParcela.jsx:33-44`, `:193`); agregatele pe deținător (`20261130i_redari_sms_stare.sql:89-127`); lista SMS în CSV, fără telefon (`src/redari/smsStare.js:144-145`) | Fișa și CSV-ul de azi arată agregate, nu istoricul fiecărui mesaj. Lipsesc: numărul **mascat**, cele trei ore, separat, pe fiecare mesaj. Pentru cod: legătura mesaj ↔ cerere și evenimentele „cod acceptat de furnizor / livrare raportată” (§7.11). Rezultatul `necunoscut` (rezervat, fără răspuns) se arată ca „rezultat necunoscut”, nu ca trimis. Livrarea arată că mesajul a ajuns pe telefon, nu că a fost citit. |
+| **E-mail** | Momentul în care serverul de e-mail a acceptat mesajul | `red_mail_mesaje.trimis_la` (`20261131a_redari_mail_f2_loturi.sql:160-186`) | — (transportul e oprit, `supabase/functions/_shared/redariMailF2.mjs:4`, `:85-86`) | Starea „trimis” din F2 = acceptat de serverul de e-mail, nu livrat / citit; în ecranul și dosarul semnării apare ca „anunț expediat” sau „anunț netrimis” (§7.16) (fără pixel de urmărire, intenționat, §8.3). Depinde de F2 (§8.2). |
+| **Afișarea la primărie** | Nr. PV de afișare, perioada, ora, cine a afișat | `red_uat` (`20261126a:132`; `20261127a_redari_uat_setari.sql:53-54`); regula „afișare completă” (`src/redari/notificari.js:32-38`) | Setările UAT; exportul Model_6, coloana U (`exportXlsx.js:53`) | Numărul, perioada, ora și persoana există deja. Lipsește doar **scanul** PV-ului de afișare — propus în felia S4. |
 | **Răspunsul online** | Data, opțiunea, declarația bifată, IP-ul și browserul | `red_raspunsuri` + `red_raspunsuri_meta` (`20261126a:208-225`) | Cronologia fișei; exportul Model_6, coloanele V–X (`exportXlsx.js:53-54`) | Complet. |
-| **Deschiderea linkului, codul, documentul, semnarea** (nou) | Momentul fiecărui eveniment: pagina deschisă, cod cerut / trimis / livrat / verificat, document servit (cu SHA-256), semnat (nume tastat, versiunea textului de acord) | Nimic azi | Fișa parcelei; ecranul „Semnări la distanță” (§7.16) | Jurnalul de dovezi al cererii (§7.9). |
+| **Deschiderea linkului, codul, documentul, semnarea** (nou) | Momentul fiecărui eveniment: PV pus la dispoziție (cererea deschisă), anunț expediat / netrimis, pagina deschisă, cod cerut / acceptat de furnizor / livrare raportată / verificat, document servit (cu SHA-256), semnat (nume tastat, versiunea textului de acord) | Nimic azi | Fișa parcelei; ecranul „Semnări la distanță” (§7.16) | Jurnalul de dovezi al cererii (§7.9). |
 | **Semnătura Antreprenorului și contrasemnarea beneficiarului** (nou) | Cine a semnat din ERP pentru Antreprenor, când, pe ce document; data contrasemnării beneficiarului și scanul ei | Nimic azi | Idem | §7.12. |
 
-**Dosarul de dovezi** (export nou, felia S4) — **o pagină pe deținător** (pe parcelă: câte o pagină pentru fiecare deținător):
+**Dosarul de dovezi** (export nou, felia S4) = **rezumatul** pe deținător + **documentele suport** care îl însoțesc.
+
+**Rezumatul** — pe deținător (pe parcelă: câte un rezumat pentru fiecare deținător), începe pe o pagină nouă și **continuă pe pagini
+suplimentare** („pagina 2 din 3”) când istoricul nu încape; nu se taie niciodată (L12):
 - identificarea: proiectul, UAT-ul, parcela, deținătorul, nr. PV-ului;
-- cronologic, pe canale, din rândurile de mai sus: convocarea (nr., data expedierii, AWB / nr. de urmărire, AR sau retur, cu
-  trimitere la scanul de la dosar), afișarea (nr. PV, perioada), SMS-urile (data trimiterii, data livrării, numărul mascat, de forma
-  `07•• ••• •12`, textul lotului), e-mailurile (data trimiterii, adresa mascată), răspunsul online (data, opțiunea), semnarea (cererea
-  deschisă, linkul deschis, codul trimis / livrat / verificat, documentul servit cu SHA-256, semnat, Antreprenorul, beneficiarul);
-- data extragerii. **Fără** token, telefon complet, IP, text de obiecții; fără „generat automat” și fără nume de unelte; autorul e
+- cronologic, pe canale, din rândurile de mai sus: convocarea (nr. C-nnnn, nr. plicului, data expedierii, AWB / nr. de urmărire, AR sau
+  retur), afișarea (nr. PV, perioada, ora, cine a afișat), SMS-urile (numărul mascat, de forma `07•• ••• •12`, șablonul / textul
+  lotului cu versiunea, starea: acceptat de furnizor / livrare raportată / eșuat / **rezultat necunoscut**, cele trei ore separat, „—”
+  unde lipsesc), e-mailurile (adresa mascată, acceptat de serverul de e-mail sau „netrimis”), răspunsul online (data, opțiunea),
+  semnarea (PV pus la dispoziție, **anunț expediat / anunț netrimis**, linkul deschis, codurile cu starea lor, documentul servit cu
+  SHA-256, semnat, Antreprenorul, beneficiarul);
+- fiecare mesaj (SMS / e-mail) poartă id-ul lui din platformă și id-ul evenimentului din lanțul de dovezi cu care e legat;
+- **opisul documentelor suport** (mai jos), fiecare cu SHA-256; un document care lipsește din platformă apare ca „lipsește din
+  platformă”, nu dispare din listă;
+- data extragerii. **Fără** token, telefon complet, IP, text de obiecții și **fără codul SMS**: pentru SMS-ul cu cod apare doar
+  șablonul versionat (cu „[cod]” în locul cifrelor) și evenimentele; fără „generat automat” și fără nume de unelte; autorul e
   responsabilul de contract.
-- Ieșiri: PDF de o pagină din fișa parcelei și, pentru un UAT / tronson, un fișier cu o pagină pe deținător; aceleași date ca rânduri
-  noi în exportul Model_6 (numărul mascat, ora SMS-ului, starea semnării). O singură funcție de citire pentru ecran și export (L19).
+
+**Documentele suport** (octeții exacți din platformă, nu trimiteri „la dosar”): convocatorul exact trimis (fișierul convocării, cu
+hash-ul lui), opisul plicului, scanul AR sau al returului, scanul PV-ului de afișare (după S4), PDF-ul supus semnării (b), anexa
+oficială (c), scanul contrasemnat și manifestul de finalizare (§7.5). Se predau împreună cu rezumatul, într-o arhivă (ZIP) cu rezumatul
+PDF la început; aceleași fișiere rămân în platformă, nemodificabile prin aplicație (§7.18), și se pot extrage din nou oricând, cu
+aceleași hash-uri.
+
+- Ieșiri: dosarul din fișa parcelei și, pentru un UAT / tronson, o arhivă cu dosarul fiecărui deținător; aceleași date ca rânduri noi
+  în exportul Model_6 (numărul mascat, orele SMS-ului, starea semnării, starea anunțului). O singură funcție de citire pentru ecran și
+  export (L19), cu paginare keyset (L23).
 
 ---
 
 ## 3. Ce trebuie decis înainte de prima felie de cod
 
-După deciziile din §1 rămân deschise doar punctele de mai jos. **O1–O3 condiționează felia S3** (semnătura Antreprenorului și
-contrasemnarea); **O4–O5 condiționează orice probă pe date reale**; O6–O7 pot veni până la pilot. Prima felie (S1) poate începe după
-„da”-ul proprietarului pe specificație, pe transport inert.
+După deciziile din §1 rămân deschise doar punctele de mai jos. Când trebuie decise:
+- **O8 — înainte de S1** (orarul codului intră în schema și în RPC-urile primei felii);
+- **O1, O2, O3, O7, O9 — înainte de S3** (semnătura Antreprenorului, contrasemnarea, finalizarea, acoperirea și PV C); O7 e deci
+  necesară înainte de S3, nu „până la pilot”;
+- **O4, O5 — înainte de orice probă pe date reale** (O5 și înainte de S2);
+- **O6 — înainte de S6** (reamintirea pe e-mail).
+
+Prima felie (S1) poate începe după „da”-ul proprietarului pe specificație și pe O8, pe transport inert.
 
 | # | Ce e deschis | A | B | C | Recomandare |
 |---|---|---|---|---|---|
-| O1 | **Cine semnează pentru Antreprenor din ERP** (D5) | Doar owner-ul | **Persoanele desemnate de owner pe proiect** (1–3, ex. responsabilul de contract, șeful de proiect), cu funcția lor, într-o listă pe care o schimbă doar owner-ul | Orice admin Redări | **B.** Persoana trebuie să aibă și acces Redări (admin / editor); identitatea vine din autentificare, nu din ce scrie cineva în formular. |
+| O1 | **Cine semnează pentru Antreprenor din ERP (D5) și cine administrează lista** | Persoanele desemnate pe proiect (1–3, ex. responsabilul de contract, șeful de proiect), cu funcția lor; **lista o administrează doar owner-ul** | Aceleași persoane desemnate; lista o administrează owner-ul **și** responsabilul de contract al proiectului (desemnat de owner) | — | **A.** Persoanele le numește owner-ul, pe proiect; fiecare trebuie să aibă și acces Redări (admin / editor); identitatea vine din autentificare, nu din ce scrie cineva în formular. Simplul nivel de admin Redări **nu** dă dreptul de a semna. |
 | O2 | **Ce cere beneficiarul pentru semnătura reprezentantului său** | Semnătură de mână pe **anexa fiecărui PV**, la următoarea zi de sesiune, în lot | Un **borderou pe zi**, cu toate PV-urile, semnat o dată | Semnătura electronică proprie a beneficiarului | **A** (recomandarea acceptată în D5); se întreabă beneficiarul prin documentele de la §10. B dacă o cere reprezentantul; C nu se construiește fără cererea lui. |
 | O3 | **Ziua de contrasemnare când UAT-ul nu mai are zile de sesiune** (un deținător poate semna după ultima zi de sesiune) | O **zi de contrasemnare** convenită cu reprezentantul beneficiarului, trecută în ERP pe UAT | Contrasemnarea la predarea PV C pe tronson | — | **A.** Fără zi programată, ecranul arată alerta „fără zi de contrasemnare” (§7.16). |
 | O4 | **Conținutul informării pentru datele noi** | Completare la informarea existentă (aceeași pagină, versiune nouă) + un rezumat de 3 rânduri pe pagina de semnare | Informare separată pentru semnare | — | **A.** Textul îl dă Juridic; lista datelor e la §9 și §10. Fără informare publicată, fluxul nu pornește pe date reale. |
 | O5 | **Autorizarea categoriei de SMS cu cod** | **Lot permanent pe proiect** (`redari_cod`), aprobat o dată de owner: șablon versionat, plafoane, dată de expirare; aceleași porți ca azi | Fiecare cod aprobat individual (inutilizabil pentru un cod valabil 10 minute) | — | **A**; autorizarea scrisă a beneficiarului pentru SMS să numească explicit și codurile de semnare (§10). |
-| O6 | **Reamintirea** cu 2 zile înainte de expirarea ferestrei (§7.2) | E-mail (unde există adresă și F2 e activ) + lista „expiră în 2 zile” pentru operator, care poate suna | A + SMS **fără link**, printr-un lot aprobat de owner | Fără reamintire | **A** (respectă D4: pe SMS doar codul). |
-| O7 | **Contestațiile și acoperirea parcelei** (fostele D16, D18) | Contestația e obiect separat; cât e deschisă, PV-ul nu mai acoperă parcela; utilizatorul / arendașul **nu** închide parcela cât un proprietar are obiecții sau contestație deschise; decide responsabilul de contract, cu confirmarea owner-ului | Contestația doar se consemnează; regulile de acoperire rămân ca azi | — | **A.** Atinge regula de acoperire (`20261130n_redari_pv_utilizatori.sql:198-214`, `src/redari/pv.js:229-235`): migrare proprie, cu paritate JS / SQL. |
+| O6 | **Reamintirea** cu 2 zile înainte de expirarea ferestrei (§7.2). **Pe SMS pleacă doar codul (D4)**, deci reamintirea, dacă există, e doar pe e-mail. | E-mail (unde există adresă și F2 e activ) + lista „expiră în 2 zile” pentru operator, care poate suna | Doar lista pentru operator, fără niciun mesaj | — | **A.** |
+| O7 | **Contestațiile și acoperirea parcelei** (fostele D16, D18) | Contestația e obiect separat; cât e deschisă, PV-ul nu mai acoperă parcela; utilizatorul / arendașul **nu** închide parcela cât un proprietar are obiecții sau contestație deschise; decide responsabilul de contract, cu confirmarea owner-ului | Contestația doar se consemnează; regulile de acoperire rămân ca azi | — | **A.** Atinge regula de acoperire (`20261130n_redari_pv_utilizatori.sql:198-214`, `src/redari/pv.js:229-235`): migrare proprie, cu paritate JS / SQL. **Necesară înainte de S3.** |
+| O8 | **Orarul codului** (SMS-ul cu cod, §7.2) — **nedecis** | **Doar 08–20**, ca restul SMS-urilor | **La orice oră, la cererea deținătorului**: excepție explicită numai pentru codul cerut chiar de deținător, scrisă în rezervarea SQL și în verificarea dinaintea apelului către furnizor; celelalte SMS-uri rămân 08–20 | — | **B** (recomandarea coordonatorului). Implicațiile ambelor variante: §7.2. Până la decizie, documentul nu presupune niciuna. |
+| O9 | **Parcelele mixte în PV C** (un deținător semnat la sesiune + altul semnat electronic) și coloana nouă | Regula de azi rămâne: parcela cu **cel puțin un** PV A semnat la sesiune intră la „PV A la sesiune”; parcela semnată **doar** de la distanță intră într-o coloană nouă „PV A semnat electronic”, niciodată la „corespondență” | Coloană separată „mixt” pentru parcelele cu ambele metode | — | **A** (schimbă cel mai puțin regula de azi, `pv.js:398-402`). Textul coloanelor îl dă Juridic. Necesară înainte de S3. |
 
 Restul alegerilor tehnice (cifrele telefonului înainte de cod, linkul compromis, calea veche de semnare, fișierele în BD, limitele)
 au o **propunere implicită** la §12.1, care se aplică dacă proprietarul nu spune altfel.
@@ -213,6 +237,11 @@ Proprietarul a ales semnătura simplă; riscurile de mai jos sunt **asumate**, n
   împiedică (§7.5).
 - **Fără ancoră independentă** (D9): integritatea e „nemodificabil prin aplicație”; o modificare făcută de administratorul BD sau o
   restaurare coerentă nu se poate detecta din platformă (§7.18).
+- **Scanul contrasemnat se leagă de PV prin verificarea vizuală a operatorului** (§7.12): operatorul confirmă explicit, consemnat cu
+  identitatea lui, că pe scan citește nr. PV-ului și codul anexei oficiale. Serverul nu citește scanul; o asociere greșită (scanul
+  anexei altui PV, o pagină lipsă) rămâne posibilă și se poate descoperi ulterior, comparând scanul cu anexa oficială păstrată.
+- **Același om poate deschide cererea și semna pentru Antreprenor**, dacă e persoană desemnată (O1): deciziile nu cer separarea
+  acestor roluri (§7.12).
 
 ### 6.2 Modelul de amenințări (ce rămâne după decizii)
 
@@ -243,17 +272,22 @@ permanent de SMS cu cod (O5) și lista persoanelor care semnează pentru Antrepr
    blocată pe deținător.
 2. **PDF-ul de semnat (D6):** operatorul salvează DOCX-ul generat ca PDF (din Word) și îl încarcă în ecranul „Trimite spre semnare
    electronică”. Platforma verifică `%PDF-` și mărimea, îl arată pagină cu pagină; **o a doua persoană** (alt admin / editor) confirmă
-   că PDF-ul corespunde datelor din registru (§7.5). SHA-256 îl calculează **serverul**.
-3. **Deschide cererea** (un singur RPC, L02): scrie octeții PDF-ului și hash-ul, legătura cu DOCX-ul și cu amprenta rândului PV,
-   versiunea telefonului pentru cod, fereastra de 7 zile (§7.2), și trece PV-ul în `trimis_spre_semnare`. Cheie UUID per intenție (L04).
+   că PDF-ul corespunde datelor din registru. SHA-256 îl calculează **serverul**. **Confirmarea reține hash-ul PDF-ului și amprenta
+   versiunii registrului pe care a văzut-o persoana a doua** (§7.5).
+3. **Deschide cererea** (un singur RPC, L02) = **punerea la dispoziție a PV-ului**: sub lock pe PV reverifică, față de confirmare,
+   hash-ul PDF-ului și amprenta registrului (orice schimbare a PV-ului după confirmare = refuz, confirmarea devine invalidă, §7.5); scrie
+   octeții PDF-ului și hash-ul, legătura cu DOCX-ul și cu amprenta rândului PV, versiunea telefonului pentru cod, termenul de 7 zile
+   (§7.2), și trece PV-ul în `trimis_spre_semnare`. Cheie UUID per intenție (L04). **De aici curge termenul.**
 4. **Anunțul** (opțional): e-mailul „PV-ul e gata de semnat” cu același link personal (§8), unde există adresă și F2 e activ. **Pe SMS
    nu pleacă linkul** (D4). Fără anunț, deținătorul vede PV-ul când redeschide QR-ul din scrisoare. Nimic nu pleacă automat (decizia 6).
+   **Anunțul e separat de termen și nu îl mută**: termenul curge de la pasul 3, chiar dacă anunțul pleacă mai târziu sau deloc (practica
+   propusă: anunțul în aceeași zi cu deschiderea). În dosar și în ecran apare „anunț netrimis” cât timp n-a plecat niciunul.
 5. **Urmărirea** în ecranul „Semnări la distanță” (§7.16) și în fișa parcelei. Operatorul poate **retrage** cererea, cu motiv.
 
 **Deținătorul (pe telefon, fără cont):**
 1. Deschide linkul personal (QR sau e-mail). Vede ce vede și azi (§4.3) plus, dacă are un PV de semnat, „există un proces-verbal
    pregătit pentru semnare, până la [data], ora 20:00” (lista exactă: §7.8).
-2. Apasă „Trimite-mi codul”. Primește un SMS cu un cod de 6 cifre, valabil 10 minute (doar între 08 și 20).
+2. Apasă „Trimite-mi codul”. Primește un SMS cu un cod de 6 cifre, valabil 10 minute (orarul în care se poate cere codul: O8, §7.2).
 3. Introduce codul. Abia acum vede **PV-ul A complet** (exact octeții din cerere) și îl poate descărca.
 4. Are trei butoane:
    - **„Semnez”**: bifează textul de acord (de la Juridic, versionat, păstrat integral), își tastează numele, apasă „Semnez” (fără
@@ -265,27 +299,49 @@ permanent de SMS cu cod (O5) și lista persoanelor care semnează pentru Antrepr
 **Antreprenorul (persoana desemnată, O1):** în „Semnări la distanță” alege PV-urile semnate de deținători și **semnează din ERP, în
 lot**, cu confirmare explicită (§7.12). ERP-ul generează anexa de semnare a fiecărui PV.
 
-**Beneficiarul (reprezentantul):** la următoarea zi de sesiune de la primărie (sau la ziua de contrasemnare, O3) semnează anexele din
-„lista pentru ziua de sesiune”, în lot; operatorul încarcă scanul fiecărei anexe semnate, iar PV-ul devine `semnat` (§7.12).
+**Beneficiarul (reprezentantul):** la următoarea zi de sesiune de la primărie (sau la ziua de contrasemnare, O3) **efectiv
+disponibilă** (§7.12) semnează anexele oficiale din „lista pentru ziua de sesiune”, în lot; operatorul încarcă scanul fiecărei anexe semnate, iar PV-ul devine `semnat` (§7.12).
 
 ### 7.2 Termenele (D11 = 7 zile)
 
 | Termen | Valoare | De ce |
 |---|---|---|
-| **Fereastra deținătorului** (`expira_la`) | 7 zile calendaristice de la deschiderea cererii; se termină în ziua a 7-a la **ora 20:00** (Europe/Bucharest) | Ultima oră la care mai poate pleca un SMS extern (08–20); altfel deținătorul ar avea fereastra deschisă, dar n-ar mai putea primi cod. |
-| Ultimul cod | Se poate cere până la `expira_la` minus 30 de minute (19:30 în ziua a 7-a) | Un cod cerut la 19:58 n-ar mai lăsa timp de semnat. |
+| **Fereastra deținătorului** (`expira_la`) | **O singură regulă:** 7 zile calendaristice de la **punerea la dispoziție a PV-ului** (= deschiderea cererii, §7.1 pasul 3), ca în planul trimis beneficiarului („7 zile de la punerea la dispoziție a procesului-verbal”). Ziua deschiderii nu se numără; termenul = data locală a deschiderii (Europe/Bucharest) + 7 zile, la **ora 20:00**. Anunțul (e-mail) e separat și **nu mută termenul**. | Aceeași oră de terminare în ambele variante O8, ca termenul să nu depindă de alegerea orarului; la 20:00 operatorul încă lucrează. |
+| Ultimul cod | Se poate cere până la `expira_la` minus 30 de minute (**19:30** în ziua termenului); pagina afișează explicit **ambele** ore: „codul se poate cere până la [data] ora 19:30; semnarea până la [data] ora 20:00” | Un cod cerut la 19:58 n-ar mai lăsa timp de semnat. Pagina nu promite „semnare până la 20:00” fără limita codului: cine încearcă **prima dată** la 19:40 în ultima zi nu mai primește cod. |
 | Codul | 10 minute | — |
 | Sesiunea de acces | min(30 de minute, `expira_la`) | — |
 | **Reamintirea** | Cu **2 zile** înainte de `expira_la` (ziua a 5-a): rândul apare în lista „expiră în 2 zile”; e-mailul, după O6 | Nimic nu pleacă automat; operatorul pornește trimiterea (lot) sau sună. |
 | Rezerva olografă | Încărcarea în aceeași fereastră; o poză încărcată la timp **nu expiră** cât așteaptă verificarea operatorului | Deținătorul nu e penalizat pentru întârzierea noastră. |
 | **La expirare** | Cererea → `expirata`; parcela se finalizează prin **PV tip B** (D11). O cerere nouă pe același PV doar cu aprobarea owner-ului (ex. codul nu a plecat din vina noastră), jurnalizată. | — |
 | Semnătura Antreprenorului | Fără termen în BD; alertă dacă PV-ul semnat de deținător n-a fost semnat de Antreprenor până în ajunul următoarei zile de sesiune / de contrasemnare | Să intre pe lista zilei. |
-| Contrasemnarea beneficiarului | La următoarea zi de sesiune sau de contrasemnare (O3); semnătura deținătorului **nu expiră** cât așteaptă | Fereastra de 7 zile privește doar pasul deținătorului. |
-| Tokenul personal | Neschimbat (ultima zi de sesiune + 30 de zile, `20261126a:295-300`) | Semnarea folosește fereastra cererii, nu expirarea tokenului: RPC-urile de semnare acceptă tokenul doar dacă are o cerere în fereastră. Formularul de răspuns rămâne închis după expirarea tokenului, ca azi. |
+| Contrasemnarea beneficiarului | La următoarea zi de sesiune sau de contrasemnare (O3) **efectiv disponibilă** (§7.12); semnătura deținătorului **nu expiră** cât așteaptă | Fereastra de 7 zile privește doar pasul deținătorului. |
+| Tokenul personal | Neschimbat (ultima zi de sesiune + 30 de zile, `20261126a:295-300`) | Semnarea folosește fereastra cererii, nu expirarea tokenului: RPC-urile de semnare acceptă tokenul doar dacă are o cerere în fereastră. Formularul de răspuns rămâne închis după expirarea tokenului, ca azi. După închiderea cererii, linkul nu mai autorizează nimic; pagina arată doar starea și contactul proiectului (inclusiv pentru o contestație, care se face prin operator, §7.15). |
+
+**Exemplu calendaristic** (aceeași regulă, oricare ar fi ora deschiderii):
+
+| Cererea deschisă (PV pus la dispoziție) | Anunțul pe e-mail | Termenul (`expira_la`) | Ultimul cod |
+|---|---|---|---|
+| luni 16.11.2026, 15:00 | luni 16.11, 15:10 | **luni 23.11.2026, 20:00** | luni 23.11, 19:30 |
+| luni 16.11.2026, 15:00 | joi 19.11 (întârziat) sau deloc | **luni 23.11.2026, 20:00** (anunțul nu îl mută) | luni 23.11, 19:30 |
+| luni 16.11.2026, **21:30** (după 20:00) | marți 17.11 | **luni 23.11.2026, 20:00** (ziua deschiderii nu se numără: deținătorul are în continuare zilele 17–23.11) | luni 23.11, 19:30 |
+| marți 17.11.2026, 00:10 | marți 17.11 | **marți 24.11.2026, 20:00** | marți 24.11, 19:30 |
+
+**Orarul codului — nedecis (O8).** Cele două variante, cu implicațiile lor; termenul de mai sus e același în ambele:
+
+| | **A. Doar 08–20** (regula de azi a SMS-urilor externe) | **B. La orice oră, la cererea deținătorului** (recomandarea coordonatorului) |
+|---|---|---|
+| Ce se schimbă în modulul SMS | Nimic: rezervarea refuză loturile Redări în afara orelor 08–20 (`20261130a:716`, `:724`), iar funcția de trimitere reverifică ora înaintea fiecărei cereri către furnizor (`supabase/functions/sms-trimite/logica.ts:12`, `:102`) | **Excepție explicită numai pentru mesajul de cod cerut de deținător** (categoria `redari_cod`), în **ambele** locuri: în rezervarea SQL și în verificarea dinaintea apelului extern. Toate celelalte SMS-uri (convocări, orice alt lot Redări) rămân 08–20. Aprobarea lotului permanent, plafoanele, opt-out-ul, comutatoarele și oprirea de urgență rămân aplicabile și noaptea. |
+| Ce vede deținătorul | Pagina anunță orarul („codul se poate cere între 08:00 și 20:00”) și limita ultimei cereri. Cine revine seara fără sesiune de acces valabilă așteaptă dimineața. | Poate cere codul oricând în fereastră; singura limită orară e ultimul cod din ziua termenului (19:30). |
+| Ultima zi | Codul se poate cere 08:00–19:30; după 19:30 accesul se pierde. | Codul se poate cere de la 00:00 până la 19:30; după 19:30 accesul se pierde. |
+| Semnarea propriu-zisă | Nu e limitată de orar: cine are o sesiune de acces valabilă semnează și după 20:00 în zilele dinaintea termenului (sesiunea durează cel mult 30 de minute). | La fel. |
+| Riscuri | Accesul efectiv e mai mic decât 7 × 24 h (în ziua deschiderii după 20:00, zero ore); deținătorii care lucrează ziua au doar serile până la 20:00. | SMS-uri noaptea: un link furat poate trezi deținătorul cu coduri (limitele de la §7.7 rămân); o regulă de excepție în plus în modulul SMS, cu probe proprii (ceas controlat la 07:59 / 20:01, alte loturi refuzate noaptea). |
+
+Documentul nu presupune nicio variantă: alegerea vine de la proprietar înainte de S1 (§3), iar textele (§7.17, §10) se scriu după ea.
 
 **Compatibilitatea celor 7 zile:**
-- **cu intervalul SMS (08–20):** fereastra conține 7 intervale zilnice de câte 12 ore (6 în ziua deschiderii, dacă se deschide după-
-  amiaza); limitele de coduri (§7.7: 3 / 24 h, 6 pe cerere) încap fără să blocheze un deținător legitim;
+- **cu orarul codului:** în varianta A, fereastra conține 7 intervale zilnice de câte 12 ore (mai puțin în ziua deschiderii); în
+  varianta B, codul se poate cere oricând până la 19:30 în ziua termenului. În ambele, limitele de coduri (§7.7: 3 / 24 h, 6 pe cerere)
+  încap fără să blocheze un deținător legitim;
 - **cu contrasemnarea:** fereastra privește doar deținătorul; după „Semnez”, PV-ul așteaptă Antreprenorul și beneficiarul fără să
   expire. Riscul real e lipsa unei zile de sesiune după semnare (UAT-ul are doar trei zile) → O3 și alerta din §7.16;
 - **cu termenul PV C pe tronson:** un PV care așteaptă contrasemnarea apare separat în PV C (§7.19), nu blochează tăcut.
@@ -362,12 +418,50 @@ Trei documente, fiecare cu SHA-256 calculat de **server** pe octeții din BD, ni
 
 | | Document | Ce leagă | Cum se verifică |
 |---|---|---|---|
-| (a) | **Sursa:** DOCX-ul generat din registru (`fisier_generat_path`, `pv.js:314-327`) + **amprenta rândului PV** | Cererea reține calea DOCX-ului și amprenta câmpurilor PV-ului (calculată de server, sub lock, la deschidere) = **versiunea datelor din registru**. Garda pe PV (§7.9) interzice orice schimbare cât cererea e activă. | La semnătura Antreprenorului și la finalizare, serverul recalculează amprenta: diferită = refuz (L03). |
-| (b) | **PDF-ul supus acordului** | Octeții în BD (`bytea`, plafon 2 MB), hash-ul la deschidere. Deținătorul primește exact acești octeți; sesiunea de acces e legată de acest hash (§7.6). Navigatorul poate trimite hash-ul văzut doar ca verificare suplimentară (nepotrivire = refuz). | Oricine recalculează SHA-256 al PDF-ului păstrat și îl compară cu cel din cerere și din anexă. |
-| (c) | **Anexa de semnare**, apoi **scanul ei contrasemnat** | Anexa (generată din ERP la semnătura Antreprenorului, §7.12) tipărește nr. PV-ului, hash-ul lui (b), evenimentele deținătorului, semnătura Antreprenorului și capul lanțului de dovezi; are loc liber pentru reprezentantul beneficiarului. (b) rămâne **neschimbat**. Scanul anexei contrasemnate e documentul final; `fisier_semnat_path` indică cererea (format `semnare:<id>`; CHECK-ul de azi cere doar o valoare nevidă, `20261129c:35-37`). | Dosarul = (b) + anexa (c) + scanul + manifestul de finalizare (hash-urile (a), (b), (c), al scanului, capul lanțului, ora). |
+| (a) | **Sursa:** DOCX-ul generat din registru (`fisier_generat_path`, `pv.js:314-327`) + **amprenta rândului PV** | **Amprenta versiunii registrului** = hash-ul, calculat de server, al câmpurilor PV-ului + calea DOCX-ului. Se reține de **trei** ori: la încărcarea PDF-ului, la **confirmarea** persoanei a doua (versiunea pe care a văzut-o) și la deschidere (sub lock). Garda pe PV (§7.9) interzice orice schimbare cât cererea e activă. | La deschidere, amprenta curentă trebuie să fie **identică** cu cea confirmată (altfel refuz, vezi mai jos); la semnătura Antreprenorului și la finalizare, serverul o recalculează din nou: diferită = refuz (L03). |
+| (b) | **PDF-ul supus acordului** | Octeții în BD (`bytea`, plafon 2 MB), hash-ul calculat la încărcare. Deținătorul primește exact acești octeți; sesiunea de acces e legată de acest hash (§7.6). Navigatorul poate trimite hash-ul văzut doar ca verificare suplimentară (nepotrivire = refuz). | Oricine recalculează SHA-256 al PDF-ului păstrat și îl compară cu cel din confirmare, din cerere și din anexă. |
+| (c) | **Anexa de semnare oficială**, apoi **scanul ei contrasemnat** | Conținutul anexei îl fixează **serverul** la semnătura Antreprenorului (mai jos); anexa tipărește nr. PV-ului, hash-ul lui (b), evenimentele deținătorului, semnătura Antreprenorului, **prefixul lanțului de dovezi** și codul anexei; are loc liber pentru reprezentantul beneficiarului. (b) rămâne **neschimbat**. Scanul anexei oficiale contrasemnate e documentul final; `fisier_semnat_path` indică cererea (format `semnare:<id>`; CHECK-ul de azi cere doar o valoare nevidă, `20261129c:35-37`). | Dosarul = (b) + anexa oficială (c) + scanul + manifestul de finalizare (hash-urile (a), (b), al conținutului anexei, al octeților anexei, al scanului, prefixul și capul lanțului la finalizare, ora). |
+
+**Confirmarea PDF-ului, legată de versiunea registrului.** Persoana a doua vede PDF-ul alături de datele din registru; ecranul primește
+de la server, odată cu datele afișate, amprenta versiunii lor. RPC-ul de confirmare primește hash-ul PDF-ului văzut și amprenta
+văzută și, sub lock pe PV, le compară cu PDF-ul încărcat, cu amprenta curentă și cu amprenta de la încărcare (toate trei egale, altfel
+refuz: PV-ul s-a schimbat după conversia în PDF); le reține împreună cu identitatea ei (`auth.uid()`).
+Deschiderea cererii reverifică, **sub lock pe PV** (§7.10), că hash-ul PDF-ului și amprenta curentă sunt **exact** cele confirmate.
+Orice schimbare a sursei între confirmare și deschidere (PV editat, DOCX regenerat) **invalidează confirmarea**: deschiderea e refuzată
+cu motivul „PV-ul s-a schimbat după confirmare”, confirmarea e marcată `invalidata` și nu mai poate fi folosită; urmează PDF nou și
+confirmare nouă. Scenariul din review: persoana a doua confirmă PDF-ul pe versiunea V1 a registrului; operatorul schimbă PV-ul în V2
+înainte de deschidere → **deschiderea e refuzată**; PDF-ul confirmat pe V1 nu se poate lega niciodată de amprenta V2. (Riscul conversiei
+manuale DOCX → PDF, mai jos, rămâne separat.)
+
+**Anexa oficială: conținut fixat de server, o singură versiune tipărită.**
+- **Conținutul** îl scrie RPC-ul de semnare a Antreprenorului (§7.12), în aceeași tranzacție cu semnătura: un document canonic (JSON
+  cu cheile ordonate) cu tot ce tipărește anexa — nr. PV, parcela, deținătorul, hash-ul (b), amprenta (a), evenimentele deținătorului
+  (id-ul și hash-ul fiecăruia), numele și funcția semnatarului, ora, hash-ul imaginii semnăturii, **prefixul lanțului** — și hash-ul
+  lui (`sha256_continut_anexa`). **Codul anexei** = primele 12 caractere ale acestui hash. Nimic din conținut nu vine de la client.
+- **Generarea** în navigator citește doar documentul canonic de la server și tipărește pe fiecare pagină nr. PV-ului și codul anexei;
+  versiunea generatorului se trece în PDF. Atașarea (`fn_red_semnare_anexa_ataseaza`) primește octeții și `sha256_continut_anexa`
+  pentru care au fost generați: serverul refuză dacă hash-ul nu e cel fixat pentru cerere, verifică `%PDF-` și plafonul, și verifică
+  în octeți că metadatele PDF-ului (câmpul `Keywords`, scris necomprimat de generator) conțin hash-ul complet al conținutului. Asta
+  leagă octeții de conținutul fixat, nu doar le calculează hash-ul; corespondența vizuală dintre pagini și conținut rămâne garantată
+  de generatorul versionat (oricine regenerează anexa din documentul canonic și o compară).
+- **O singură anexă oficială pe cerere.** Prima atașare reușită devine anexa oficială (`versiune_anexa = 1`); reluarea cu aceeași cheie
+  UUID întoarce același rezultat (L04, L05). **Înlocuirea** e permisă doar **înainte de prima tipărire** (evenimentul „lista zilei
+  descărcată”, care reține hash-ul fiecărei anexe incluse), cu motiv, ca versiune nouă (versiunea veche rămâne în jurnal). După prima
+  tipărire anexa e **înghețată**: lista zilei, re-descărcările ei și dosarul folosesc exact octeții anexei oficiale păstrate, nu o
+  regenerare; o regenerare ulterioară nu poate fi atașată.
+- **Versiunea contrasemnată** = anexa oficială înghețată; finalizarea o reține în manifest (versiunea, hash-ul octeților, codul).
+  Operatorul confirmă vizual, la încărcarea scanului, că pe scan se citesc nr. PV-ului și codul anexei oficiale (§7.12; riscul asumat
+  la §6.1).
+- **Prefixul lanțului, nu capul.** Hash-ul tipărit în anexă e al evenimentului „semnat de Antreprenor” = capul lanțului **în acel
+  moment**. După el se adaugă legitim evenimente (anexa atașată, descărcări, lista zilei tipărită, un raport de livrare SMS întârziat,
+  contrasemnarea). La finalizare serverul verifică: (1) evenimentul tipărit există în lanțul cererii și lanțul recalculat de la primul
+  eveniment până la el dă exact hash-ul tipărit; (2) fiecare eveniment de după el se leagă corect de precedentul, până la capul curent.
+  Capul curent **nu** trebuie să fie egal cu hash-ul tipărit. Evenimentele de după prefix nu apar în anexă (ex. o livrare SMS raportată
+  târziu); apar în dosarul de dovezi.
 
 **Ce rămâne până la generarea directă a PDF-ului (felia S7).** La început nu se poate **împiedica** încărcarea unui PDF diferit de
-registru, doar **detecta**: (1) a doua persoană confirmă PDF-ul față de registru înainte de deschidere (consemnat cu `auth.uid()` ei);
+registru, doar **detecta**: (1) a doua persoană confirmă PDF-ul față de versiunea registrului pe care o vede, înainte de deschidere
+(consemnat cu `auth.uid()` ei, legat de amprentă, ca mai sus);
 (2) navigatorul extrage textul PDF-ului și verifică, orientativ, nr. PV-ului și identificatorul parcelei (plasă, nu dovadă); (3)
 persoana care semnează pentru Antreprenor vede PDF-ul alături de datele din registru. Riscul rămas: doi oameni care greșesc la fel sau
 sunt complici. **Împiedicarea** vine în S7: PDF-ul produs direct din registru, printr-un serviciu de server cu secret propriu (L10) și
@@ -379,6 +473,12 @@ fișă de securitate proprie; atunci pasul (1) dispare.
 - generat de server (aleator criptografic), 6 cifre, valabil 10 minute; păstrat ca HMAC cu secret propriu al fluxului (L10), legat de
   cerere și de versiunea telefonului; în clar doar temporar, pentru expediere (§7.11);
 - **un singur cod activ pe cerere:** un cod nou anulează, în aceeași tranzacție, codurile anterioare;
+- **cheie de intenție pe cererea de cod** (L04, L05): navigatorul generează o cheie UUID înainte de primul apel „Trimite-mi codul” și o
+  păstrează în `sessionStorage`, pe cerere; după un timeout sau o rețea căzută reapelează cu **aceeași** cheie. Aceeași cheie pe aceeași
+  cerere → același rezultat („codul a fost cerut la HH:MM”), **fără al doilea cod, fără al doilea SMS și fără consum dublu** din limitele de la
+  §7.7 și din plafoanele SMS; aceeași cheie pe alt token / altă cerere → refuz. Cheia e UNIQUE pe (cerere, cheie) în tabelul codurilor.
+  O cheie nouă („cere alt cod”) e o intenție nouă: anulează codul anterior și consumă din limite. Codul nu e întors niciodată în
+  răspuns;
 - verificarea, sub lock-ul cererii (§7.10): întâi se incrementează contorul de încercări, apoi se compară; **verificarea reușită consumă
   codul atomic** (`UPDATE … SET consumat_la = now() WHERE id = … AND consumat_la IS NULL AND anulat_la IS NULL AND expira_la > now()
   RETURNING`; 0 rânduri = refuz).
@@ -436,12 +536,13 @@ coduri și sesiuni.
 
 | Nume propus | Rol | Cine citește / scrie |
 |---|---|---|
-| `red_pv_semnari` | Cererea: PV, deținător, starea (§7.3), PDF-ul (b) ca octeți + SHA-256, calea DOCX (a) + amprenta rândului PV, versiunea telefonului pentru cod, `expira_la`, `versiune`, cheia UUID, confirmarea PDF-ului de a doua persoană, cine a deschis / retras / finalizat și când, anexa (c) și scanul contrasemnat ca octeți + hash, manifestul. UNIQUE parțial: o cerere activă pe PV. | SELECT admin / editor (viewer: doar starea, prin vedere fără telefon și fără octeți); scriere **doar** prin RPC |
+| `red_pv_semnare_pdf` | PDF-ul (b) încărcat de operator (octeți + SHA-256, amprenta registrului la încărcare, cine l-a încărcat) și **confirmarea** persoanei a doua: hash-ul PDF-ului văzut, **amprenta versiunii registrului văzute**, cine a confirmat și când, starea confirmării (`confirmata` / `folosita` de o cerere / `invalidata`). | SELECT admin / editor; scriere doar prin RPC |
+| `red_pv_semnari` | Cererea: PV, deținător, starea (§7.3), legătura cu PDF-ul confirmat (b) + SHA-256, calea DOCX (a) + amprenta rândului PV, versiunea telefonului pentru cod, `expira_la`, `versiune`, cheia UUID, cine a deschis / retras / finalizat și când, documentul canonic al anexei + `sha256_continut_anexa` + prefixul lanțului, anexa oficială (octeți + hash + `versiune_anexa` + `inghetata_la`), scanul contrasemnat (octeți + hash), manifestul. UNIQUE parțial: o cerere activă pe PV. | SELECT admin / editor (viewer: doar starea, prin vedere fără telefon și fără octeți); scriere **doar** prin RPC |
 | `red_pv_semnare_importuri` | Fișierele beneficiarului cu telefoane (octeții, SHA-256, nr. / data adresei, cine a importat). | SELECT admin / editor; scriere doar prin RPC |
 | `red_pv_semnare_telefoane` | Telefonul pentru cod, versionat, cu sursa (`import_beneficiar` + importul / `corectie_owner` + motivul). | SELECT admin / editor; scriere doar prin RPC |
-| `red_pv_semnare_coduri` | HMAC-ul codului, creat / expiră / consumat / anulat, încercări, legătura cu mesajul SMS. | nimeni direct; doar funcțiile DEFINER |
+| `red_pv_semnare_coduri` | HMAC-ul codului, creat / expiră / consumat / anulat, încercări, cheia de intenție a cererii de cod (UNIQUE pe cerere + cheie, §7.6), legătura cu mesajul SMS. | nimeni direct; doar funcțiile DEFINER |
 | `red_pv_semnare_sesiuni` | Sesiunile de acces (§7.6). | nimeni direct |
-| `red_pv_semnare_dovezi` | Jurnalul de dovezi, **doar adăugare pentru rolurile aplicației**; fiecare rând conține hash-ul rândului precedent al cererii (lanț, §7.18). Evenimente: pagină deschisă, cod cerut / trimis / livrat / greșit / verificat, document servit (hash), descărcare, acord (versiune + hash text), nume tastat, semnat, poză olografă încărcată / acceptată / respinsă, refuz, blocare, retragere, semnătura Antreprenorului, anexă generată, contrasemnare încărcată, finalizare, contestație. | SELECT admin / editor; scriere doar prin RPC |
+| `red_pv_semnare_dovezi` | Jurnalul de dovezi, **doar adăugare pentru rolurile aplicației**; fiecare rând conține hash-ul rândului precedent al cererii (lanț, §7.18). Evenimente: PDF confirmat (hash + amprenta), cerere deschisă = PV pus la dispoziție, anunț expediat (id-ul mesajului de e-mail), pagină deschisă, cod cerut / acceptat de furnizor / livrare raportată / eșuat / rezultat necunoscut / greșit / verificat (cu id-ul mesajului SMS), document servit (hash), descărcare, acord (versiune + hash text), nume tastat, semnat, poză olografă încărcată / acceptată / respinsă, refuz, blocare, retragere, semnătura Antreprenorului (= prefixul tipărit în anexă), anexă atașată / înlocuită, lista zilei descărcată (hash-urile anexelor incluse), scan contrasemnat verificat vizual, finalizare, contestație. | SELECT admin / editor; scriere doar prin RPC |
 | `red_pv_semnare_olograf` | Pozele / PDF-urile încărcate de deținător (D2): octeți, tip verificat, SHA-256, plafoane. | SELECT admin / editor; scriere doar prin RPC |
 | `red_pv_semnatari_antreprenor` | Persoanele desemnate să semneze pentru Antreprenor pe proiect (O1): utilizatorul, numele și funcția afișate, cine l-a desemnat, `retras_la`. | SELECT admin / editor; scriere doar de owner |
 | `red_pv_semnatura_imagini` | Imaginea semnăturii unei persoane desemnate (opțională, PNG ≤ 200 KB), versionată. | SELECT admin / editor; scriere doar de persoana însăși; retragere de owner |
@@ -463,15 +564,17 @@ CHECK-uri: hash-uri `^[0-9a-f]{64}$`, stare pe listă, `expira_la > deschisa_la`
 |---|---|
 | `fn_red_semnare_telefoane_importa(octeti_fisier, nr_adresa, data_adresa, randuri, cheie_uuid)` | §7.4. |
 | `fn_red_semnare_telefon_corecteaza(detinator, telefon, motiv, referinta, cheie_uuid)` | §7.4; **doar owner**. |
-| `fn_red_semnare_confirma_pdf(pv, octeti, cheie_uuid)` | A doua persoană confirmă PDF-ul (hash calculat de server); refuzat pentru cel care l-a încărcat. |
-| `fn_red_semnare_deschide(pv, sha256_confirmat, cheie_uuid)` | Precondițiile de la §7.1 sub lock-urile de la §7.10, scrie cererea, PV → `trimis_spre_semnare`, dovada, atomic. |
+| `fn_red_semnare_pdf_incarca(pv, octeti, cheie_uuid)` | Operatorul încarcă PDF-ul (b); serverul calculează hash-ul și reține amprenta registrului de atunci. |
+| `fn_red_semnare_confirma_pdf(pdf, sha256_vazut, amprenta_vazuta, cheie_uuid)` | A doua persoană confirmă PDF-ul față de versiunea registrului pe care o vede; sub lock pe PV, hash-ul și amprenta văzute trebuie să fie cele curente și cele de la încărcare; refuzat pentru cel care l-a încărcat (§7.5). |
+| `fn_red_semnare_deschide(pdf, cheie_uuid)` | Precondițiile de la §7.1 sub lock-urile de la §7.10; reverifică hash-ul și amprenta față de confirmare (diferit = refuz, confirmarea → `invalidata`); scrie cererea, confirmarea → `folosita`, PV → `trimis_spre_semnare`, dovada, atomic. |
 | `fn_red_semnare_retrage(cerere, versiune, motiv)` | CAS pe versiune; cererea → `retrasa`; revocă codurile și sesiunile. |
 | `fn_red_semnare_olograf_decide(cerere, versiune, accept, motiv)` | §7.13. |
-| `fn_red_semnare_antreprenor(cereri[], versiuni[], cheie_uuid)` | §7.12; doar persoanele din `red_pv_semnatari_antreprenor`; tot lotul sau nimic. |
-| `fn_red_semnare_anexa_ataseaza(cerere, octeti_anexa, cheie_uuid)` | §7.12; hash calculat de server. |
-| `fn_red_semnare_finalizeaza(cerere, versiune, octeti_scan, data_contrasemnare, reprezentant, cheie_uuid)` | Doar din `semnata_antreprenor`; verifică (a), (b), anexa, capul lanțului; scrie scanul și manifestul; PV → `semnat` cu metoda corespunzătoare; cererea → `finalizata`; atomic. |
+| `fn_red_semnare_antreprenor(cereri[], versiuni[], cheie_uuid)` | §7.12; doar persoanele din `red_pv_semnatari_antreprenor`; tot lotul sau nimic; fixează documentul canonic al fiecărei anexe și prefixul lanțului (§7.5). |
+| `fn_red_semnare_anexa_ataseaza(cerere, sha256_continut_anexa, octeti_anexa, motiv_inlocuire?, cheie_uuid)` | §7.5: hash-ul conținutului = cel fixat; metadatele PDF-ului îl conțin; hash-ul octeților calculat de server; înlocuirea doar înainte de prima tipărire, cu motiv. |
+| `fn_red_semnare_lista_zilei(uat, data, cereri[], cheie_uuid)` | Înregistrează descărcarea listei zilei (hash-urile anexelor oficiale incluse) și îngheață anexele (§7.5, §7.12); întoarce exact octeții păstrați. |
+| `fn_red_semnare_finalizeaza(cerere, versiune, octeti_scan, data_contrasemnare, reprezentant, verificat_vizual, cheie_uuid)` | Doar din `semnata_antreprenor`, cu anexa oficială înghețată; verifică (a), (b), anexa oficială, prefixul și continuitatea lanțului (§7.5); cere confirmarea vizuală a operatorului (consemnată); scrie scanul și manifestul; PV → `semnat` cu metoda corespunzătoare; cererea → `finalizata`; atomic. |
 | `fn_red_semnare_blocheaza(detinator, motiv)` / `…_deblocheaza` | Deblocarea doar admin. |
-| `fn_red_semnare_contestatie_*` | §7.15. |
+| `fn_red_semnare_contestatie_*` | §7.15; **doar operator** (nu există cale publică). |
 | vederea `red_v_pv_semnari_urmarire` + lista paginată (keyset, L23) | Ecranul „Semnări la distanță”, fișa parcelei, dosarul de dovezi (§2, §7.16). |
 
 **RPC-uri publice (`anon`)** — toate primesc tokenul personal, verifică formatul înainte de orice scriere, folosesc contoarele de la §7.7
@@ -480,7 +583,7 @@ CHECK-uri: hash-uri `^[0-9a-f]{64}$`, stare pe listă, `expira_la > deschisa_la`
 | Nume propus | Rol |
 |---|---|
 | `fn_red_semnare_public_stare(token)` | Lista de la §7.8. |
-| `fn_red_semnare_public_cere_cod(token)` | Limitele; anulează codul anterior; pune mesajul în coada SMS **doar la telefonul pentru cod al cererii**; refuz în afara intervalului 08–20 și după `expira_la` minus 30 de minute. |
+| `fn_red_semnare_public_cere_cod(token, cheie_uuid)` | Idempotent pe cheia de intenție (§7.6); limitele; anulează codul anterior; pune mesajul în lotul permanent **doar la telefonul pentru cod al cererii** (§7.11); refuz în afara orarului ales (O8) și după `expira_la` minus 30 de minute. |
 | `fn_red_semnare_public_verifica_cod(token, cod)` | §7.6; corect → cheia sesiunii de acces + dovadă. |
 | `fn_red_semnare_public_document(token, sesiune)` | Octeții PDF-ului (b); dovada „document servit” cu hash-ul. |
 | `fn_red_semnare_public_semneaza(token, sesiune, nume, versiune_acord, cheie_uuid, sha256_vazut?)` | Verifică legăturile sesiunii, cererea `deschisa` și neexpirată, numele nevid cu limită de lungime, versiunea acordului curentă; dovada; cererea → `semnata_detinator`. Idempotent pe cheie. |
@@ -495,6 +598,8 @@ CHECK-uri: hash-uri `^[0-9a-f]{64}$`, stare pe listă, `expira_la > deschisa_la`
 1. rândurile telefonului pentru cod ale deținătorilor atinși (`red_pv_semnare_telefoane`, `FOR UPDATE ORDER BY detinator_id`);
 1'. lock consultativ pe HMAC-ul telefonului (regula D10) — după rândurile proprii, niciodată înainte;
 2. PV-urile, `FOR UPDATE ORDER BY id`;
+2'. rândul PDF-ului încărcat / confirmat (`red_pv_semnare_pdf`), `FOR UPDATE` — la confirmare și la deschidere, după PV, ca o
+   schimbare a PV-ului să nu se poată strecura între verificarea amprentei și scriere;
 3. cererile, `FOR UPDATE ORDER BY id`;
 4. codurile și sesiunile cererii, `ORDER BY id`;
 5. contoarele persistente pe deținător / telefon / proiect;
@@ -513,6 +618,9 @@ Cazuri care trebuie să iasă corect (probe cu două sesiuni reale, L25):
 - deținătorul semnează pe două telefoane deodată → exact una reușește, cealaltă vede „deja semnat”;
 - operatorul retrage cererea exact când deținătorul semnează → câștigă cine ia primul lock-ul (3); celălalt primește motivul exact;
 - un import de telefoane în timp ce deținătorul cere cod → se serializează pe (1); codul nu pleacă la vechiul număr după schimbare;
+- PV-ul editat de un operator exact când altul deschide cererea → se serializează pe (2); deschiderea vede amprenta nouă și refuză
+  (confirmarea invalidată, §7.5), sau editarea e refuzată de garda pe PV pentru că cererea e deja activă;
+- aceeași cerere de cod trimisă de două ori (timeout + reluare cu aceeași cheie) → un singur cod, un singur SMS (§7.6);
 - două loturi de semnătură a Antreprenorului care se suprapun → unul trece, celălalt e refuzat întreg;
 - rezultat ambiguu în navigator (rețea căzută după „Semnez”) → reapel cu aceeași cheie UUID sau recitirea stării (L05).
 
@@ -524,13 +632,44 @@ nu are text (`:112-134`). Un cod e diferit la fiecare mesaj și trebuie să plec
   **o dată** de owner: șablonul cu loc pentru cod (versionat, GSM-7, un segment, **fără link**, D4), plafonul zilnic al proiectului
   (§7.7), data până la care e valabil, referința autorizării scrise a beneficiarului;
 - fiecare cod adaugă **un mesaj** în acest lot, doar prin `fn_red_semnare_public_cere_cod`; **toate porțile existente se aplică la
-  rezervare, neschimbate:** comutatorul general, comutatorul Redări (autorizarea beneficiarului), intervalul 08–20, opt-out-ul,
-  plafoanele zi / lună; regula „șablon provizoriu doar pe `TEST-…`, cel mult 5 destinatari” se aplică și aici;
+  rezervare, neschimbate:** comutatorul general, comutatorul Redări (autorizarea beneficiarului), opt-out-ul, plafoanele zi / lună,
+  orarul (08–20, sau excepția doar pentru cod dacă O8 = B, §7.2); regula „șablon provizoriu doar pe `TEST-…`, cel mult 5 destinatari”
+  se aplică și aici;
 - lotul permanent se poate anula oricând de owner (oprește toate codurile proiectului).
 
-**Dovada trimiterii codului (§2):** mesajul SMS e legat de cerere; evenimentele „cod trimis” (ora la care furnizorul SMS l-a
-acceptat) și „cod livrat” (raportul de livrare) intră în jurnalul de dovezi, cu numărul mascat. Rezultatul `necunoscut` nu se
-retrimite automat, ca azi.
+**Adaptările concrete cerute de coada de azi (`supabase/migrations/20261130a_sms_mvp.sql`), toate în migrarea S2.** Coada a fost
+construită pentru loturi fixe, cu lista destinatarilor înghețată la aprobare; lotul permanent încalcă trei presupuneri ale ei. Regulile
+pentru **loturile obișnuite rămân exact cum sunt**; fiecare excepție se aplică doar categoriei `redari_cod` și are probă negativă pe un
+lot obișnuit.
+1. **Unicitatea `UNIQUE (lot_id, telefon)`** (`:129`): același telefon primește mai multe coduri în același lot permanent (cod nou după
+   expirare, alt PV al aceleiași persoane), deci al doilea cod ar fi respins. Adaptare: mesajele de cod poartă legătura cu rândul
+   codului (`cod_id`, UNIQUE); unicitatea `(lot_id, telefon)` devine index unic parțial **doar pe mesajele fără `cod_id`** (loturile
+   obișnuite, neschimbate); un trigger cere `cod_id` nevid **dacă și numai dacă** lotul e `redari_cod`.
+2. **Inserarea doar în lot `draft`** (triggerul de la `:320-328`): lotul permanent e aprobat, deci inserarea ar fi refuzată. Adaptare:
+   excepție **doar** pentru lotul `redari_cod` în starea `aprobat` / `in_trimitere`, cu `cod_id` al unui cod neconsumat, neanulat,
+   neexpirat, al cărui telefon e exact telefonul pentru cod al cererii; inserarea o face doar funcția de cerere a codului (DEFINER), nu
+   rolul `authenticated`. La loturile obișnuite rămâne „doar în `draft`”. Aprobarea lotului permanent fixează șablonul, plafonul și
+   valabilitatea, **nu** o listă de destinatari (lista fixată la aprobare rămâne regula loturilor obișnuite).
+3. **Ciclul de rezervare / golire** (`fn_sms_rezerva`, `:699-746`): (a) când coada e goală, lotul trece în `coada_golita`
+   (`:743`), stare din care nu mai primește mesaje — lotul permanent **nu** trece în `coada_golita`; se închide doar prin anulare de
+   owner sau la data de valabilitate; (b) selecția automată a lotului (fără lot dat, `:714-717`) ia „cel mai vechi lot aprobat”, deci un
+   lot permanent gol ar bloca celelalte loturi — selecția automată sare loturile `redari_cod` fără mesaje în coadă; (c) mesajul de cod
+   trebuie să plece în minute, nu odată cu restul lotului: se rezervă **individual, după id-ul mesajului**, de un cron des (ex. la un
+   minut) și / sau de un apel imediat al funcției de trimitere după cerere — alegerea se face în S2, cu probe pe simulator; (d) textul:
+   lotul are un text comun (`sms_loturi.text`), aici șablonul; funcția de trimitere compune textul final din șablon + codul din tabelul
+   temporar (mai jos), fără să-l scrie în `sms_mesaje`.
+4. **Orarul**: dacă O8 = B, excepția pentru `redari_cod` se scrie în rezervare (`:716`, `:724`) **și** în verificarea dinaintea apelului
+   extern (`sms-trimite/logica.ts:102`); celelalte categorii rămân 08–20, cu probă la 07:59 / 20:01.
+5. **Reluarea fără al doilea cod** (L04, L05): cheia de intenție de la §7.6; reluarea cu aceeași cheie nu inserează alt mesaj și nu
+   consumă din nou din limite sau din plafoanele SMS (plafonul zilnic se numără pe mesajele rezervate, `fn_sms_consum`, `:224-231`).
+
+**Dovada trimiterii codului (§2):** mesajul SMS e legat de cerere (prin `cod_id`); în jurnalul de dovezi intră, separat:
+- „cod cerut” (ora cererii, în BD);
+- „cod acceptat de furnizor”, cu **ora înregistrării rezultatului acceptat** (`trimis_la`, `:362`);
+- „livrare raportată” (livrat / eșuat), cu **ora primirii / aplicării raportului** în BD (`sms_dlr.primit_la`; la livrat și `sms_mesaje.livrat_la`, `:367`) și, separat, **ora raportată de
+  operatorul telecom** (`sms_dlr.raportat_la`), care poate lipsi;
+- „rezultat necunoscut” când mesajul a fost rezervat și furnizorul n-a răspuns; nu se retrimite automat, ca azi.
+Numărul apare doar mascat. Oricare dintre ore poate lipsi; dosarul arată „—”, nu o oră presupusă.
 
 **Păstrarea temporară a codului.** Expedierea e asincronă, deci codul trebuie să existe în clar până la predarea către furnizor:
 - tabel separat, accesibil doar funcției care predă mesajele furnizorului: codul **criptat** (cheie proprie, nu în BD), legat de mesaj;
@@ -547,8 +686,9 @@ rezultat necunoscut, clientul reapelează cu aceeași cheie UUID (L04, L05). Cos
 ### 7.12 Semnătura Antreprenorului din ERP și contrasemnarea beneficiarului (D5)
 
 **Cine are dreptul (O1):** persoanele din `red_pv_semnatari_antreprenor` pentru proiectul PV-ului, care au și nivel admin / editor
-Redări. Lista o schimbă doar owner-ul. Identitatea vine **numai** din `auth.uid()` (L08); numele și funcția se iau din listă de server,
-nu din formular.
+Redări. Lista o schimbă doar owner-ul (O1). Identitatea vine **numai** din `auth.uid()` (L08); numele și funcția se iau din listă de
+server, nu din formular. **Operatorul care a deschis cererea poate fi și semnatarul Antreprenorului, dacă e persoană desemnată:**
+deciziile nu cer separarea acestor roluri, iar riscul e asumat (§6.1).
 
 **Ce se aplică pe document:** anexa de semnare a PV-ului, generată din ERP după semnare, conține în blocul Antreprenorului:
 - numele și funcția persoanei desemnate (din listă), momentul semnării (ora serverului, Europe/Bucharest);
@@ -556,8 +696,10 @@ nu din formular.
   nouă nu schimbă anexele deja generate); altfel, mențiunea „semnat electronic din platformă”;
 - mențiunea că semnătura a fost aplicată din platformă de persoana desemnată, autentificată.
 Anexa mai conține: nr. PV-ului, parcela, deținătorul, SHA-256 al PDF-ului (b) acceptat, evenimentele deținătorului (cod livrat,
-cod verificat, semnat, numele tastat, versiunea textului de acord), ce nu dovedește semnarea (§6.1), capul lanțului de dovezi și un
-bloc liber pentru reprezentantul beneficiarului (nume, semnătură, data). Text de la Juridic; fără „generat automat”, fără nume de unelte.
+cod verificat, semnat, numele tastat, versiunea textului de acord — cele înregistrate până la semnătura Antreprenorului), ce nu
+dovedește semnarea (§6.1), prefixul lanțului de dovezi, codul anexei pe fiecare pagină și un bloc liber pentru reprezentantul
+beneficiarului (nume, semnătură, data). Tot conținutul vine din documentul canonic fixat de server (§7.5). Text de la Juridic; fără
+„generat automat”, fără nume de unelte.
 
 **Semnarea în lot, cu confirmare explicită:**
 1. În „Semnări la distanță”, persoana desemnată filtrează „semnat de deținător”, pe UAT / tronson, și bifează PV-urile (cel mult 50).
@@ -566,23 +708,37 @@ bloc liber pentru reprezentantul beneficiarului (nume, semnătură, data). Text 
    bifează, iar butonul arată numărul („Semnez 12 PV-uri”).
 3. Un singur RPC (`fn_red_semnare_antreprenor`) primește lista exactă de cereri și versiunile văzute; sub lock-uri (§7.10) verifică
    dreptul, starea `semnata_detinator`, versiunea (CAS), amprenta PV-ului (a) și hash-ul (b); scrie pentru fiecare cerere dovada
-   „semnat de Antreprenor” (utilizatorul, numele și funcția copiate, ora, hash-ul (b), hash-ul imaginii folosite, capul lanțului) și
-   trece cererea în `semnata_antreprenor`. Tot lotul sau nimic (L02); aceeași cheie UUID = același rezultat (L04, L05).
-4. ERP-ul generează anexele (PDF, în navigator, ca celelalte documente ale platformei) din datele întoarse de RPC și le atașează prin
-   `fn_red_semnare_anexa_ataseaza` (hash calculat de server, dovadă „anexă generată”). O anexă lipsă (ex. rețea căzută) se vede în ecran
-   și se regenerează; fiecare versiune rămâne în jurnal, iar lista zilei folosește ultima.
+   „semnat de Antreprenor” (utilizatorul, numele și funcția copiate, ora, hash-ul (b), hash-ul imaginii folosite) — hash-ul acestei
+   dovezi e **prefixul** tipărit în anexă —, fixează documentul canonic al anexei și hash-ul lui (§7.5) și trece cererea în
+   `semnata_antreprenor`. Tot lotul sau nimic (L02); aceeași cheie UUID = același rezultat (L04, L05).
+4. ERP-ul generează anexele (PDF, în navigator, ca celelalte documente ale platformei) **doar din documentul canonic** citit de la server
+   și le atașează prin `fn_red_semnare_anexa_ataseaza`, care verifică legătura cu conținutul fixat (§7.5). O anexă lipsă (ex. rețea
+   căzută) se vede în ecran și se regenerează din același document canonic. **Prima atașare reușită = anexa oficială**; o înlocuire e
+   posibilă doar până la prima tipărire, cu motiv; după aceea anexa e înghețată și lista zilei folosește exact octeții ei.
+
+**Interfața minimă din S3** (selecția PV-urilor, fereastra de confirmare, atașarea anexei, lista zilei, încărcarea scanului) se
+livrează în S3, ca felia să se poată proba cap-coadă; ecranul complet cu numere, filtre și alerte rămâne în S4.
 
 **Ce dovadă rămâne:** cine (utilizatorul autentificat), ce nume și funcție, când, pe ce document (hash-ul (b) și amprenta (a)), cu ce
-imagine (hash), în ce lot; toate în lanțul de dovezi al fiecărei cereri. Anexa leagă vizual semnătura de hash-ul PDF-ului acceptat.
+imagine (hash), în ce lot; toate în lanțul de dovezi al fiecărei cereri. Anexa oficială leagă vizual semnătura de hash-ul PDF-ului
+acceptat și de prefixul lanțului.
 
-**Contrasemnarea beneficiarului (la următoarea zi de sesiune, în lot):**
-- starea `semnata_antreprenor` apare în ecran ca **„așteaptă contrasemnarea beneficiarului”** când UAT-ul are o zi de sesiune sau de
-  contrasemnare (O3) azi sau mai târziu; altfel ca **„semnat de Antreprenor — fără zi de contrasemnare”** (alertă);
-- **lista pentru ziua de sesiune** (pe UAT și dată): PV-urile care așteaptă, cu un fișier de tipărit (anexele, opțional și PDF-ul (b)) și
-  un opis cu nr. PV-urilor, pe care reprezentantul îl semnează la primire;
-- după semnare, operatorul **încarcă scanul fiecărei anexe semnate** (PDF / JPG / PNG): ecranul arată alături nr. PV-ului și începutul
-  hash-ului așteptat, ca să se vadă că scanul e al anexei corecte; RPC-ul de finalizare scrie scanul, data contrasemnării și numele
-  reprezentantului, PV → `semnat` (`semnat_primit_data` = data contrasemnării), cererea → `finalizata`;
+**Contrasemnarea beneficiarului (la următoarea zi efectiv disponibilă, în lot):**
+- **următoarea dată efectiv disponibilă** pentru un PV semnat de Antreprenor = prima zi de sesiune sau de contrasemnare (O3) a UAT-ului
+  **strict după** ziua semnăturii Antreprenorului; **ziua de azi** contează doar dacă lista zilei de azi **nu a fost încă tipărită**
+  (evenimentul „lista zilei descărcată”). Cazul tipic: Antreprenorul semnează într-o zi de sesiune, după ce sesiunea s-a încheiat și
+  lista a fost tipărită → PV-ul trece la următoarea zi de sesiune / contrasemnare, nu la ziua de azi. Dacă nu mai există nicio astfel
+  de zi, PV-ul apare cu alerta „fără zi de contrasemnare” până se programează o zi de contrasemnare (O3);
+- starea `semnata_antreprenor` apare în ecran ca **„așteaptă contrasemnarea beneficiarului — [data]”** când există o dată efectiv
+  disponibilă; altfel ca **„semnat de Antreprenor — fără zi de contrasemnare”** (alertă);
+- **lista pentru ziua de sesiune** (pe UAT și dată): PV-urile care au acea dată ca următoare dată efectiv disponibilă, cu un fișier de
+  tipărit (anexele oficiale, opțional și PDF-ul (b)) și un opis cu nr. PV-urilor și codurile anexelor, pe care reprezentantul îl
+  semnează la primire; descărcarea listei îngheață anexele incluse (§7.5);
+- după semnare, operatorul **încarcă scanul fiecărei anexe semnate** (PDF / JPG / PNG): ecranul arată alături anexa oficială, nr.
+  PV-ului și codul anexei; **operatorul confirmă explicit** (bifă, consemnată cu identitatea lui în lanțul de dovezi) că pe scan citește
+  nr. PV-ului și codul anexei oficiale. Aceasta e verificarea aleasă pentru scan: serverul nu citește imaginea, iar riscul unei asocieri
+  greșite e asumat (§6.1). RPC-ul de finalizare scrie scanul, data contrasemnării și numele reprezentantului, PV → `semnat`
+  (`semnat_primit_data` = data contrasemnării), cererea → `finalizata`;
 - încărcarea întregului teanc dintr-un singur PDF, cu împărțirea pe PV-uri: eventual, mai târziu.
 - Dacă beneficiarul cere altă formă (O2: borderou pe zi, semnătură electronică proprie), se schimbă doar acest pas.
 
@@ -599,6 +755,8 @@ imagine (hash), în ce lot; toate în lanțul de dovezi al fiecărei cereri. Ane
 - **Fișiere ostile:** imaginile nu se afișează niciodată ca HTML; se servesc cu tipul verificat, ca `blob`, cu plafon de pixeli; PDF-urile
   nu se deschid în pagină cu scripturi. Probe cu PDF poliglot, imagine imensă, tip fals (S5).
 - **Ce rămâne:** poza e o copie, fără legătură criptografică cu PDF-ul servit (§6.1).
+- **Condiție a pilotului:** S5 rămâne felie separată de implementare, dar **pilotul cu deținători nu începe fără ea** (§11): un deținător
+  din pilot care cere varianta pe hârtie trebuie să găsească fluxul promis în documente (D2, §10).
 
 ### 7.14 Cazurile urâte
 
@@ -623,8 +781,13 @@ imagine (hash), în ce lot; toate în lanțul de dovezi al fiecărei cereri. Ane
 ### 7.15 Contestația după semnare
 
 După `finalizata`, PV-ul e `semnat` și înghețat (§4.1 pct. 5). Contestația e un **obiect separat**:
-- **înregistrarea:** de operator (contestație primită la telefon, în scris, pe e-mail, la sesiune) sau de deținător din link, după cod
-  („Contest semnătura”, max 4.000 de caractere). Rând nou + eveniment în lanțul de dovezi. **Nicio dovadă nu se șterge.**
+- **înregistrarea: exclusiv prin operator** (contestație primită la telefon, în scris, pe e-mail, la sesiune, max 4.000 de caractere,
+  cu canalul și, unde există, scanul scrisorii). Rând nou + eveniment în lanțul de dovezi. **Nicio dovadă nu se șterge.**
+- **De ce nu din link:** finalizarea revocă sesiunile, iar linkul autorizează doar o cerere în fereastră (§7.2); o cale publică după
+  finalizare ar cere un acces nou (cod SMS, limite, cotă) doar pentru un caz rar, încă o suprafață de atac pe un token care nu se poate
+  revoca (§8.3), și ar trebui să nu poată autoriza nicio semnare nouă. Operatorul primește oricum contestația pe toate canalele de mai
+  sus. După finalizare, pagina din link arată contactul proiectului „pentru întrebări sau contestații”; **nu** promite un buton de
+  contestație.
 - **suspendarea folosirii administrative (O7):** cât e deschisă, PV-ul nu mai acoperă parcela în centralizator, în `red_v_stare_parcela`
   și în PV C (apare separat, „semnătură contestată”); PV-ul rămâne `semnat` în tabel. Migrare proprie, paritate JS / SQL.
 - **decizia** (`respinsa` / `admisa`, cu motiv): după O7; `admisa` → PV-ul nu mai acoperă parcela, care se reia la sesiune (PV nou).
@@ -635,19 +798,30 @@ După `finalizata`, PV-ul e `semnat` și înghețat (§4.1 pct. 5). Contestația
 **Unde:** Redări → tab nou „Semnări la distanță”, pentru admin / editor (viewer: doar numerele, fără nume și fără telefoane). Filtre:
 proiect, **UAT**, **tronson**; sus, numărul de PV-uri A în fiecare stare, pe UAT și pe tronson (tabel UAT × stare, cu totaluri).
 
+**Nimic nu se numește „Trimis”.** Ecranul separă patru fapte diferite, fiecare cu ora lui: **PV disponibil** (cererea deschisă = PV pus
+la dispoziție, de aici curge termenul), **anunț expediat** (e-mailul acceptat de serverul de e-mail; altfel „anunț netrimis” sau
+„rezultat necunoscut”), **cod acceptat de furnizor** (SMS-ul cu cod predat furnizorului) și **livrare raportată** (raportul de livrare
+al operatorului telecom: livrat / eșuat). Starea principală vine din cerere; anunțul și codul sunt coloane separate, ca o cerere fără
+niciun mesaj plecat să nu arate ca „trimisă”.
+
 | Stare în ecran | Definiția (derivată din cerere + jurnalul de dovezi) |
 |---|---|
-| **Trimis** | cerere `deschisa`, linkul nedeschis după deschiderea cererii |
-| **Deschis** | cerere `deschisa`, pagina deschisă, niciun cod verificat |
+| **PV disponibil — link nedeschis** | cerere `deschisa`, pagina nedeschisă după deschiderea cererii |
+| **Link deschis** | cerere `deschisa`, pagina deschisă, niciun cod verificat |
 | **Cod verificat** | cerere `deschisa`, cel puțin un cod verificat, nesemnat |
 | *De verificat (olograf)* | cerere `incarcata_olograf` |
 | **Semnat de deținător** | `semnata_detinator` (electronic sau olograf acceptat), așteaptă Antreprenorul |
-| **Semnat de Antreprenor** | `semnata_antreprenor`, **fără** zi de sesiune / contrasemnare programată (alertă) |
-| **Așteaptă contrasemnarea beneficiarului** | `semnata_antreprenor`, cu zi de sesiune / contrasemnare azi sau mai târziu |
+| **Semnat de Antreprenor** | `semnata_antreprenor`, **fără** dată efectiv disponibilă de contrasemnare (alertă, §7.12) |
+| **Așteaptă contrasemnarea beneficiarului** | `semnata_antreprenor`, cu dată efectiv disponibilă (§7.12) |
 | **Finalizat** | `finalizata`, fără contestație deschisă |
-| **Expirat** | `expirata` (de trecut la PV B) |
+| **Expirat** | `expirata`, **sau** `deschisa` cu `expira_la` trecut (derivat din timestamp, chiar dacă nimeni n-a citit încă cererea; de trecut la PV B) |
 | **Contestat** | `finalizata` cu contestație deschisă |
 | *Altele* (restrânse) | `refuzata` (→ obiecții), `blocata`, `retrasa` |
+
+| Coloană separată | Valori (fiecare cu ora ei; „—” unde lipsește) |
+|---|---|
+| **Anunț** | netrimis / expediat (acceptat de serverul de e-mail) / rezultat necunoscut / eșuat |
+| **Cod** | niciun cod cerut / cerut, în coadă / acceptat de furnizor / livrare raportată: livrat sau eșuat / rezultat necunoscut / anulat |
 
 - Fiecare număr se deschide într-o listă (keyset, L23): parcela, deținătorul, nr. PV, data deschiderii, termenul (zile rămase),
   ultimul eveniment, cu acțiunile stării: retrage; verifică poza; semnează ca Antreprenor (lot, §7.12); încarcă scanul contrasemnat;
@@ -670,9 +844,11 @@ proiect, **UAT**, **tronson**; sus, numărul de PV-uri A în fiecare stare, pe U
 - **Anexa de semnare** (§7.12): conținutul de acolo; text stabilit cu Juridic.
 - **SMS-ul cu codul:** cerințele de la §10; propunere de lucru: „Gazpet pt Transgaz: cod semnare PV predare teren 123456, valabil 10 min.
   Nu il dati nimanui; nu vi-l cerem la telefon.” (de verificat că încape în 160 de caractere cu numărul de contact).
-- **Pagina de semnare:** termenul („până la [data], ora 20:00”), rezumatul informării (O4), varianta pe hârtie (D2).
-- **PV C:** coloana „PV A prin corespondență” (`pv.js:398-402`) ar număra și parcelele semnate electronic; de stabilit cu Juridic o coloană
-  „semnat electronic” și tratarea parcelelor mixte.
+- **Pagina de semnare:** termenul și limita codului („codul se poate cere până la [data] ora 19:30; semnarea până la [data] ora 20:00”),
+  orarul codului după O8, rezumatul informării (O4), varianta pe hârtie (D2); după închiderea cererii, contactul proiectului pentru
+  întrebări sau contestații (§7.15).
+- **PV C:** coloana „PV A prin corespondență” (`pv.js:398-402`) ar număra și parcelele semnate electronic; coloana nouă și tratarea
+  parcelelor mixte: O9 (§3); textul coloanelor de la Juridic.
 - **Ghidul notificărilor:** „trimis spre semnare prin poștă” (`GHID_NOTIFICARI.md:28`) se actualizează (D12).
 
 ### 7.18 Integritatea și păstrarea dovezilor
@@ -684,8 +860,11 @@ acord și manifestul (doar RPC-uri, triggere care refuză UPDATE / DELETE). Buck
 **Ce NU garantăm (T7, risc asumat prin D9):** administratorul BD (poate dezactiva triggerele; aceeași limită e scrisă deja pentru
 `red_jurnal`, `20261126a:265`), o cale privilegiată, restaurarea unei copii vechi coerente.
 
-**Lanțul de hash-uri** (cost mic, păstrat): fiecare dovadă conține hash-ul dovezii precedente; capul lanțului e tipărit în anexa de
-semnare, care ajunge la beneficiar semnată — o copie în afara infrastructurii noastre, valabilă pentru momentul semnării Antreprenorului.
+**Lanțul de hash-uri** (cost mic, păstrat): fiecare dovadă conține hash-ul dovezii precedente. Anexa oficială tipărește **prefixul**
+lanțului (hash-ul dovezii „semnat de Antreprenor”), iar anexa ajunge la beneficiar semnată — o copie în afara infrastructurii noastre,
+valabilă pentru evenimentele de până la semnătura Antreprenorului. Evenimentele adăugate după (anexa, descărcări, lista zilei, livrări
+raportate târziu, contrasemnarea) sunt legitime și se verifică prin continuitatea lanțului de la prefix la capul curent (§7.5);
+manifestul de finalizare reține ambele.
 **Eventual, mai târziu:** marca temporală calificată pe evenimentele-cheie, sigiliul calificat pe documentul final (D9).
 
 | Ce | Unde | Cât |
@@ -706,10 +885,11 @@ informare).
 
 - **Fișa parcelei:** cererea, starea, istoricul de dovezi (fără telefon pentru viewer), PDF-ul supus semnării, anexa, scanul
   contrasemnat, contestațiile, butonul „Dosar de dovezi” (§2).
-- **Registru / centralizator / export Model_6:** coloană „semnare electronică” cu starea din §7.16; coloane noi pentru numărul mascat și
-  ora SMS-ului (§2); fără date de contact complete.
-- **PV C:** după §7.17; PV-urile care așteaptă contrasemnarea și contestațiile deschise apar separat.
-- **Dosarul predat beneficiarului:** PDF-ul acceptat (b) + anexa contrasemnată + manifestul + dosarul de dovezi; jurnalul complet la
+- **Registru / centralizator / export Model_6:** coloană „semnare electronică” cu starea din §7.16, coloana anunțului; coloane noi
+  pentru numărul mascat și orele SMS-ului, separat (§2); fără date de contact complete.
+- **PV C:** după §7.17 și O9; PV-urile care așteaptă contrasemnarea și contestațiile deschise apar separat.
+- **Dosarul predat beneficiarului:** dosarul de dovezi (§2) = rezumatul + documentele suport (convocatorul exact, opisul, AR / retur,
+  PV-ul de afișare, PDF-ul acceptat (b), anexa oficială, scanul contrasemnat, manifestul), cu opisul hash-urilor; jurnalul complet la
   cerere.
 
 ---
@@ -761,8 +941,8 @@ de deținător; un mesaj de persoană; fără date despre parcelă; `{LINK_RASPU
 
 ## 9. Fișa de securitate (CLAUDE.md pct. 7) și GDPR
 
-**(a) Conținut extern citit:** tot ce tastează sau încarcă deținătorul — codul, numele, obiecțiile, contestația, pozele PV-ului semnat
-de mână, antetul `User-Agent`; fișierul beneficiarului cu telefoane; confirmările de livrare SMS de la furnizor; PDF-ul încărcat de
+**(a) Conținut extern citit:** tot ce tastează sau încarcă deținătorul — codul, numele, obiecțiile, pozele PV-ului semnat de mână,
+antetul `User-Agent`; contestația (primită de la deținător și înregistrată de operator, §7.15); fișierul beneficiarului cu telefoane; confirmările de livrare SMS de la furnizor; PDF-ul încărcat de
 operator; scanul contrasemnat. Toate sunt **date**: niciun text nu poate porni o acțiune în afara celei alese prin buton și nimic nu e
 interpretat automat (pozele nu se citesc cu OCR / AI).
 
@@ -822,7 +1002,10 @@ Textele le scrie Juridic; aici e doar ce trebuie să acopere, ca fluxul de mai s
 **Planul procedurii (pct. 4.4) și convocatorul:**
 - semnarea de la distanță se face electronic, prin **același link personal** din convocare, cu un **cod primit prin SMS** la numărul
   comunicat de beneficiar;
-- **fereastra de 7 zile** de la anunțul PV-ului; la expirare, parcela se finalizează prin **PV tip B**;
+- **fereastra de 7 zile de la punerea la dispoziție a procesului-verbal** (formularea din plan; = deschiderea cererii, §7.2), cu
+  data și ora exactă afișate pe pagina de semnare; anunțul (e-mail) e separat și nu mută termenul; la expirare, parcela se finalizează
+  prin **PV tip B**;
+- orarul în care se poate cere codul, după O8, și limita ultimei cereri de cod în ziua termenului;
 - **rezerva:** PV-ul tipărit, semnat de mână, fotografiat și încărcat prin același link, în aceeași fereastră; dacă nici așa, sesiunea sau
   PV B;
 - **contrasemnarea:** Antreprenorul semnează din platformă, prin persoana desemnată; reprezentantul beneficiarului contrasemnează la
@@ -830,7 +1013,9 @@ Textele le scrie Juridic; aici e doar ce trebuie să acopere, ca fluxul de mai s
   contrasemnare când nu mai sunt zile de sesiune (O3);
 - fraza „aceeași valoare ca unul semnat la sesiune” rămâne (D1);
 - **telefoanele pentru cod vin doar de la beneficiar:** cererea ca beneficiarul să trimită în scris (fișier) orice corecție de telefon;
-- ce primește beneficiarul la final: PDF-ul acceptat, anexa contrasemnată, dosarul de dovezi (§2).
+- ce primește beneficiarul la final: dosarul de dovezi (§2) — rezumatul și documentele suport, inclusiv PDF-ul acceptat și anexa
+  contrasemnată;
+- contestația după semnare se face prin contactul proiectului (§7.15), nu prin link.
 
 **Informarea (GDPR), completată (O4):** scopul nou (semnarea electronică a PV-ului și păstrarea dovezilor); temeiul (Juridic); datele noi
 din §9 (telefonul pentru cod, codul, evenimentele semnării, IP trunchiat și tipul browserului, numele tastat, pozele olografe);
@@ -846,8 +1031,9 @@ SMS** să numească și categoria „cod de semnare” (O5), pe lângă convocă
 pentru Transgaz); codul și valabilitatea (10 minute); „nu dați codul nimănui; nu vi-l cerem la telefon”; numărul de contact; aprobat de
 beneficiar odată cu autorizarea scrisă.
 
-**E-mailul „PV gata de semnat” și reamintirea (dacă se folosesc, O6):** același link personal, termenul, fără atașament, fără date despre
-parcelă, doar în plus față de scrisoare.
+**E-mailul „PV gata de semnat” și reamintirea (dacă se folosesc, O6):** același link personal, termenul (calculat de la punerea la
+dispoziție, nu de la data e-mailului), fără atașament, fără date despre parcelă, doar în plus față de scrisoare. Reamintirea nu pleacă
+pe SMS (D4: pe SMS doar codul).
 
 **Modelul PV A:** mențiunile pentru semnarea de la distanță (§7.17); modelul a fost deja trimis, deci schimbarea se trimite din nou.
 
@@ -862,7 +1048,8 @@ Estimările sunt orientative, **fără rundele de review** (istoric 2–5 runde 
 Reguli comune:
 - **întâi proba sintetică**, cu transport inert (simulatorul SMS, transportul F2 oprit), pe PGlite și pe clonă (roluri reale, FK reale,
   două sesiuni PostgreSQL pentru concurență, RLS ca non-owner, L25); abia după ea probele cu numere interne;
-- feliile cu termene se probează cu **ceas controlat** (cod, sesiune, fereastra de 7 zile, ora 20:00, intervalul 08–20, reamintirea) și
+- feliile cu termene se probează cu **ceas controlat** (cod, sesiune, fereastra de 7 zile cu exemplele de la §7.2, inclusiv deschiderea
+  după 20:00, ultimul cod la 19:30, ora 20:00, orarul codului după O8, reamintirea) și
   **transport controlat** (simulatorul furnizorului, inclusiv timeout și DLR întârziat);
 - nimic publicat care promite semnarea înainte ca fluxul să meargă cap-coadă pe proiectul de test;
 - **activarea** SMS-ului (`redari_cod`) și a e-mailului (F2) sunt acte separate ale owner-ului, după acordurile scrise; nicio felie nu le
@@ -870,15 +1057,15 @@ Reguli comune:
 
 | Felie | Ce conține | Migrare | Depinde de | Estimare | Proba (întâi sintetică), apoi |
 |---|---|---|---|---|---|
-| **S0 — texte și documente** | Documentele către beneficiar (§10), textele (acord, anexă, SMS, pagina de semnare, model PV A), deciziile O1–O7 | — | Juridic, beneficiar | 0,5–1 zi după texte | — |
-| **S1 — cererea + codul + acceptarea** (prima felie utilă) | Tabelele, importul telefoanelor (§7.4), confirmarea PDF-ului, gărzile pe PV (R1–R3) și pe telefon, RPC-urile operatorului (deschide / retrage / blochează) și publice (stare, cere cod **cu transport inert**, verifică, document, semnează, refuză), secțiunea de semnare din pagina publică, limitele, termenele (§7.2), schimbarea regulii 3 (JS + SQL, paritate); starea în fișa parcelei | da | „da”-ul pe specificație | 5–7 zile | PGlite + DRY pe clonă (roluri, gărzi pe PATCH direct, concurență cu două sesiuni); ceas controlat; atacuri: token greșit, cod ghicit, cod reutilizat, sesiune veche pe cerere nouă, două semnări, blocare, telefon schimbat în timpul cererii; pe `TEST-…` operatorul vede codul în ERP (gardă în BD pe codul proiectului); apoi Playwright pe proiectul de test Redări cu gardă de rețea |
-| **S2 — codul pe SMS** | Categoria `redari_cod`, lotul permanent, codul criptat temporar și ștergerea lui, legătura cu DLR și evenimentele „cod trimis / livrat” | da (modulul SMS) | S1, O5, autorizarea scrisă | 1–2 zile | Simulatorul furnizorului; apoi pe `TEST-…`, cel mult 5 numere interne, cu „da”-ul owner-ului pentru comutator |
-| **S3 — semnătura Antreprenorului din ERP + contrasemnarea + finalizarea** | Lista persoanelor desemnate, imaginea semnăturii, semnarea în lot, anexa de semnare, lista pentru ziua de sesiune, încărcarea scanului, finalizarea, manifestul; contestația și regula de acoperire (O7) | da | S1, O1–O3, O7 | 4–5 zile | Loturi suprapuse, CAS, anexă lipsă / regenerată, persoană retrasă din listă; cap-coadă pe proiectul de test |
-| **S4 — ecranul „Semnări la distanță” + dosarul de dovezi** (felia de interfață) | Vederea de urmărire, ecranul pe UAT / tronson, listele și acțiunile, alertele, lista zilei; dosarul de dovezi (PDF + export Model_6); scanul PV-ului de afișare | da (vedere) | S3 | 3–4 zile | Paritatea stărilor (L19) pe un tabel de cazuri; numere mari (keyset); eroare ≠ zero |
-| **S5 — rezerva olografă** | Încărcarea prin link, verificarea operatorului, metoda `olograf_distanta` | da (mică) | S1, S3 | 2 zile | Fișiere ostile (PDF poliglot, imagine imensă, tip fals); respingere + reîncărcare în fereastră |
+| **S0 — texte și documente** | Documentele către beneficiar (§10), textele (acord, anexă, SMS, pagina de semnare, model PV A), deciziile O1–O9 | — | Juridic, beneficiar | 0,5–1 zi după texte | — |
+| **S1 — cererea + codul + acceptarea** (prima felie utilă) | Tabelele (inclusiv cele ale lanțului de dovezi și ale anexei, folosite apoi de S3), importul telefoanelor (§7.4), încărcarea și confirmarea PDF-ului legată de amprenta registrului (§7.5), gărzile pe PV (R1–R3) și pe telefon, RPC-urile operatorului (deschide / retrage / blochează) și publice (stare, cere cod **cu transport inert** și cheie de intenție, verifică, document, semnează, refuză), secțiunea de semnare din pagina publică, limitele, termenele (§7.2), schimbarea regulii 3 (JS + SQL, paritate); starea în fișa parcelei | da | „da”-ul pe specificație și pe O8 | 5–7 zile | PGlite + DRY pe clonă (roluri, gărzi pe PATCH direct, concurență cu două sesiuni); ceas controlat; atacuri: token greșit, cod ghicit, cod reutilizat, sesiune veche pe cerere nouă, două semnări, blocare, telefon schimbat în timpul cererii, **PV schimbat între confirmare și deschidere (refuz)**, cerere de cod reluată cu aceeași cheie (un singur cod); pe `TEST-…` operatorul vede codul în ERP (gardă în BD pe codul proiectului); apoi Playwright pe proiectul de test Redări cu gardă de rețea |
+| **S2 — codul pe SMS** | Categoria `redari_cod`, lotul permanent, **adaptările cozii de la §7.11** (unicitatea pe `cod_id`, inserarea în lotul permanent aprobat, fără `coada_golita` pentru el, selecția automată care îl sare când e gol, rezervarea individuală, textul compus din șablon, orarul după O8), codul criptat temporar și ștergerea lui, legătura cu DLR și evenimentele „cod acceptat de furnizor / livrare raportată / rezultat necunoscut” | da (modulul SMS) | S1, O5, O8, autorizarea scrisă | 2–3 zile | Simulatorul furnizorului (inclusiv timeout și DLR întârziat); probe negative pe loturile obișnuite (aceleași reguli ca azi); apoi pe `TEST-…`, cel mult 5 numere interne, cu „da”-ul owner-ului pentru comutator |
+| **S3 — semnătura Antreprenorului din ERP + contrasemnarea + finalizarea** | Lista persoanelor desemnate, imaginea semnăturii, semnarea în lot, documentul canonic și anexa oficială (§7.5), lista pentru ziua de sesiune cu data efectiv disponibilă, încărcarea scanului cu verificarea vizuală consemnată, finalizarea, manifestul; contestația prin operator și regula de acoperire (O7); PV C (O9); **interfața minimă** pentru selecție, confirmare, atașare, lista zilei și scan | da | S1, O1–O3, O7, O9 | 4–6 zile | Loturi suprapuse, CAS, anexă lipsă / regenerată, anexă cu alt conținut (refuz), înlocuire după tipărire (refuz), DLR sosit după semnătura Antreprenorului (prefixul rămâne valid), semnătură după tipărirea listei zilei (trece la următoarea dată), persoană retrasă din listă; cap-coadă pe proiectul de test |
+| **S4 — ecranul „Semnări la distanță” + dosarul de dovezi** (felia de interfață) | Vederea de urmărire (stările și coloanele anunț / cod, §7.16), ecranul pe UAT / tronson, listele și acțiunile, alertele; dosarul de dovezi (rezumatul pe pagini + documentele suport, export Model_6); scanul PV-ului de afișare | da (vedere) | S3 | 3–4 zile | Paritatea stărilor (L19) pe un tabel de cazuri, inclusiv „anunț netrimis” și cererea expirată necitită; numere mari (keyset); istoric care nu încape pe o pagină; codul absent din export; eroare ≠ zero |
+| **S5 — rezerva olografă** (**condiție a pilotului**) | Încărcarea prin link, verificarea operatorului, metoda `olograf_distanta` | da (mică) | S1, S3 | 2 zile | Fișiere ostile (PDF poliglot, imagine imensă, tip fals); respingere + reîncărcare în fereastră |
 | **S6 — e-mailul „PV gata” + reamintirea** | Tipurile de mesaj în F2 | da (în lanțul F2) | F2 activ (§8.2 (1)), O6 | 1 zi după F2 | Transport inert; apoi doar adrese interne |
 | **S7 — PDF-ul generat direct din platformă** | Serviciul de server care produce PDF-ul din registru; pasul de confirmare a PDF-ului dispare | da | S1 | 4–6 zile | Paritate conținut registru ↔ PDF pe proiectul de test |
-| **Pilot** | Un UAT, câțiva deținători care au ales opțiunea, cu „da”-ul owner-ului pe fiecare pas | — | S0–S4 (S5 înainte de extindere) | — | — |
+| **Pilot** | Un UAT, câțiva deținători care au ales opțiunea, cu „da”-ul owner-ului pe fiecare pas | — | **S0–S5** (rezerva olografă e condiție: pilotul cu deținători nu începe fără ea), O4, O5 | — | — |
 
 Ce **nu** se poate proba fără date reale: livrarea SMS la numere de proprietari, comportamentul oamenilor (abandon, telefoane comune),
 acceptarea de către beneficiar a documentului final.
@@ -896,10 +1083,11 @@ acceptarea de către beneficiar a documentului final.
 | Calea veche (fostul D17) | R1 + R2 în BD, R3 doar în UI (§7.3) | R3 în BD pentru PV-urile A create după o dată |
 | Fișierele fluxului (fostul D20) | Octeți în BD (§7.11) | — |
 | Limitele | Tabelul de la §7.7 | — |
-| PDF-ul de la operator | Confirmarea unei a doua persoane (§7.5) | Dispare la S7 |
+| PDF-ul de la operator | Confirmarea unei a doua persoane, legată de amprenta versiunii registrului văzute (§7.5) | Dispare la S7 |
 | Telefonul pentru cod | Import + corecție de owner (§7.4) | Citirea fișierului pe server; aprobarea fiecărui import de către owner |
-| Integritatea | Lanțul de hash-uri, capul tipărit în anexă (§7.18) | Marcă temporală calificată; sigiliu calificat |
-| Scanul contrasemnat | Încărcat pe PV (§7.12) | Teancul dintr-un PDF, împărțit pe PV-uri |
+| Integritatea | Lanțul de hash-uri, prefixul tipărit în anexa oficială (§7.5, §7.18) | Marcă temporală calificată; sigiliu calificat |
+| Scanul contrasemnat | Încărcat pe PV, cu verificarea vizuală a operatorului consemnată (§7.12) | Teancul dintr-un PDF, împărțit pe PV-uri |
+| Contestația după finalizare | Doar prin operator (§7.15) | — |
 | Identificarea | Ce e decis (link + cod la telefonul beneficiarului) | Orice mecanism mai tare (identificare video, semnătură avansată) — doar dacă o cere beneficiarul |
 
 ### 12.2 Întrebări pentru avocat / Juridic (informative, nu blochează)
@@ -932,8 +1120,8 @@ Specificația nu are cod; regulile se aplică proiectării și devin criterii de
 |---|---|
 | L01 | Lock înainte de verificări pe toate căile, inclusiv refuzul și lotul Antreprenorului; contorul de încercări incrementat înainte de comparare; CAS pe `versiune` la retragere, semnătura Antreprenorului, finalizare (§7.6, §7.10, §7.12) |
 | L02 | Deschidere, semnare, refuz, încărcare olografă, semnătura Antreprenorului (lotul întreg), finalizare: fiecare într-un singur RPC; octeții în aceeași tranzacție cu scrierea (§7.9, §7.11, §7.12) |
-| L03 | Semnătura Antreprenorului și finalizarea doar dacă amprenta PV-ului, hash-ul PDF-ului și capul lanțului sunt cele legate de cerere (§7.5) |
-| L04 | Cheie UUID per intenție la import, deschidere, semnare, refuz, încărcare olografă, lot Antreprenor, anexă, finalizare; aceeași cheie + alt conținut = refuz (§7.6, §7.9) |
+| L03 | Deschiderea doar dacă hash-ul PDF-ului și amprenta registrului sunt exact cele confirmate (altfel confirmarea e invalidată); semnătura Antreprenorului și finalizarea doar dacă amprenta PV-ului și hash-ul PDF-ului sunt cele legate de cerere, iar prefixul tipărit e în lanț și lanțul continuă corect până la cap; anexa atașată doar pentru conținutul fixat de server (§7.5) |
+| L04 | Cheie UUID per intenție la import, încărcarea / confirmarea PDF-ului, deschidere, **cererea de cod**, semnare, refuz, încărcare olografă, lot Antreprenor, anexă, lista zilei, finalizare; aceeași cheie + alt conținut = refuz (§7.6, §7.9) |
 | L05 | Rezultat ambiguu → reapel cu aceeași cheie / recitire; fără ștergere compensatorie, fără retrimiterea SMS-ului `necunoscut`; anexa lipsă se regenerează, nu se ghicește (§7.10, §7.11, §7.12) |
 | L06 | Ordinea completă: contoare publice → telefoane → lock consultativ pe telefon → PV-uri → cereri → coduri / sesiuni → contoare persistente → coada SMS; importul și lotul Antreprenorului în același sens; lock-urile implicite numărate (§7.10) |
 | L07 | Gărzi în BD pe PV (R1–R3, și după închiderea cererii) și pe telefon; scrierile doar prin RPC (§7.3, §7.9) |
@@ -941,13 +1129,13 @@ Specificația nu are cod; regulile se aplică proiectării și devin criterii de
 | L09 | Nivelul Redări verificat pe proiectul fiecărui PV / deținător atins, inclusiv în lot (§7.9, §7.12) |
 | L10 | Codul ca HMAC cu secret propriu; în clar doar criptat ≤ 10 minute; sesiunea ca hash; nimic în jurnale; serviciul PDF din S7 cu secret propriu (§7.5, §7.6, §7.11) |
 | L11 | n/a (fără extragere; pozele nu se citesc automat) |
-| L12 | Refuzurile au motiv din listă închisă; lotul refuzat arată ce PV-uri s-au schimbat; nimic nu dispare tacit (§7.9, §7.10) |
+| L12 | Refuzurile au motiv din listă închisă; lotul refuzat arată ce PV-uri s-au schimbat; rezumatul dosarului continuă pe pagini, documentele suport lipsă apar ca „lipsește din platformă”; nimic nu dispare tacit (§2, §7.9, §7.10) |
 | L13 | Formatul tokenului / codului / hash-ului ancorat (`^…$`), testat pozitiv și negativ (§7.9) |
 | L14 | O migrare pe felie, cu revenire și probă apply → rollback → re-apply (§11) |
 | L15 | S1, S3, S4 schimbă vederi, triggere și RPC-uri publice: amprenta globală și manifestul, ca la celelalte migrări Redări (§11) |
-| L16 | UNIQUE parțial „o cerere activă pe PV”; un singur cod activ pe cerere; o versiune activă de telefon pe deținător; identitatea documentului = SHA-256 pe octeți (§7.3, §7.4, §7.6) |
-| L17 | Expirările pe timestamp exact, ora serverului; fereastra până la 20:00 și intervalul 08–20 în Europe/Bucharest; probate cu ceas controlat (§7.2, §11) |
-| L18 | Eroare ≠ „nu există PV de semnat” și ≠ „zero” în ecranul de urmărire (§7.8, §7.16) |
+| L16 | UNIQUE parțial „o cerere activă pe PV”; un singur cod activ pe cerere; UNIQUE (cerere, cheie de intenție) la cod; în coada SMS, `cod_id` UNIQUE și `(lot_id, telefon)` păstrat pentru loturile obișnuite (§7.11); o versiune activă de telefon pe deținător; o singură anexă oficială pe cerere; identitatea documentului = SHA-256 pe octeți (§7.3, §7.4, §7.5, §7.6) |
+| L17 | O singură regulă de termen (data locală a deschiderii + 7 zile, ora 20:00, Europe/Bucharest), cu exemplele de la §7.2 (inclusiv deschiderea după 20:00); expirările pe timestamp exact; orarul codului după O8; probate cu ceas controlat (§7.2, §11) |
+| L18 | Eroare ≠ „nu există PV de semnat” și ≠ „zero” în ecranul de urmărire; „anunț netrimis” și „rezultat necunoscut” ≠ trimis; orele lipsă = „—”, nu presupuse (§2, §7.8, §7.11, §7.16) |
 | L19 | Starea parcelei, regula de acoperire și stările din ecranul de urmărire: o singură definiție, cu test de paritate JS / SQL (§7.3, §7.16) |
 | L20 | Tranzițiile cererii dintr-un tabel; teste pe căile legitime (retragere, refuz, expirare, blocare, respingerea pozei, contestație) (§7.3) |
 | L21, L22 | n/a (fără AI) |
@@ -971,3 +1159,12 @@ Specificația nu are cod; regulile se aplică proiectării și devin criterii de
   trebuie să spună documentele către beneficiar (§10). „Ce trebuie decis” refăcut (§3, O1–O7); feliile reordonate (§11); întrebările
   pentru avocat devin informative (§12.2). Scoase: verificarea SIM-ului și a păstrării textelor la furnizorul SMS, confirmarea
   telefonului de a doua persoană (înlocuită de D3), semnătura desenată.
+- **17.11.2026, r4** — după re-review-ul rundei 3 (GO cu condiții pentru document): confirmarea PDF-ului legată de amprenta versiunii
+  registrului, cu refuz la deschidere dacă PV-ul s-a schimbat (§7.5); anexa oficială cu conținut fixat de server, o singură versiune
+  tipărită, înghețată la prima tipărire, prefixul lanțului în locul capului (§7.5, §7.12, §7.18); verificarea vizuală a scanului
+  consemnată ca risc asumat (§6.1); rezerva olografă (S5) condiție a pilotului (§11); o singură regulă de termen, de la punerea la
+  dispoziție, cu exemplu calendaristic (§7.2, §10); orarul codului prezentat ca decizie deschisă O8 (§3, §7.2); contestația după
+  finalizare doar prin operator (§7.15); adaptările cozii SMS și cheia de intenție la cererea de cod (§7.6, §7.11); stările „PV
+  disponibil / anunț expediat / cod acceptat / livrare raportată” în locul lui „Trimis”, cu cele trei ore SMS separate (§2, §7.16);
+  dosarul de dovezi cu documentele suport și continuare pe pagini, fără cod (§2); O1, O6 curățate, O8, O9 adăugate, O7 înainte de S3
+  (§3); operatorul poate fi și semnatarul Antreprenorului (§6.1, §7.12); următoarea dată de contrasemnare efectiv disponibilă (§7.12).
