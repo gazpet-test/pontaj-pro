@@ -1418,6 +1418,19 @@ END $post$;
 -- revizuit și probele cu structura reală pe clonă. Condițiile ei de funcționare (copia cu EXACT drepturile tabelului real — ACL normalizat
 -- și verificat —, ajutătorul cu EXECUTE explicit, SECURITY INVOKER) se verifică; o condiție lipsă = refuz SONDA_CONDITII, distinct de
 -- refuzul pe politici (POLITICI deschise = „politicile EFECTIVE … deschid”).
+-- NUMELE COPIEI (17.11.2026, prima probă pe ținta reală): pg_get_expr tipărește referirile la rândul exterior din SUBINTEROGĂRILE unei
+-- politici calificate cu numele tabelei (ex. EXISTS (SELECT 1 FROM t i WHERE i.cale = objects.name)). Recreate pe o copie cu alt nume,
+-- `objects.name` nu se mai lega („missing FROM-clause entry for table "objects"”); clona de probă nu avea politici pe storage.objects, deci
+-- nu a prins. De aceea copia se numește chiar `objects`, în schema temporară a sesiunii (pg_temp.objects): expresiile se recreează NESCHIMBATE
+-- (fără înlocuiri de text) și `objects.<coloană>` se leagă de tabela țintă a politicii recreate. Condițiile, verificate:
+--   (a) în blocul sondei, tabela REALĂ e numită doar `storage.objects`, iar copia doar `pg_temp.objects` (o tabelă temporară `objects`
+--       umbrește numele NECALIFICAT în sesiune; search_path-ul migrării e „public, pg_temp”, deci storage.* se tipărește calificat);
+--   (b) nimic din migrare nu folosește `objects` necalificat (nici corpurile funcțiilor create, nici amprentele, nici pașii L15 de după);
+--       copia există doar în sub-blocul anulat al sondei, deci pasul „după” și COMMIT-ul nu o mai văd;
+--   (c) copia dispare: sub-blocul se anulează prin excepția proprie (CREATE TEMP TABLE e anulat odată cu el) + ON COMMIT DROP ca plasă;
+--       e verificat după bloc (to_regclass NULL); NU intră în manifest (lista obiectelor rămâne 252);
+--   (d) dacă sesiunea are deja o relație `pg_temp.objects` = refuz SONDA_CONDITII înainte de orice (nu o eroare brută, nu o folosim).
+-- O politică pe care sonda n-o poate recrea pe copie (orice formă neprevăzută) = refuz SONDA_CONDITII cu numele politicii, nu eroare brută.
 DO $sonda$
 DECLARE
   v_fara constant uuid := '00000000-0000-4000-8000-00000000c0de';
@@ -1438,7 +1451,12 @@ DECLARE
   p record;
   x record;
   v_nr integer := 0;
+  v_esuate integer := 0;
 BEGIN
+  -- (d) numele copiei e liber în sesiune, altfel refuz clar (nu folosim și nu ștergem o relație temporară străină)
+  IF to_regclass('pg_temp.objects') IS NOT NULL THEN
+    RAISE EXCEPTION '20261225a post: SONDA_CONDITII: sesiunea are deja relatia temporara pg_temp.objects (copia sondei nu se poate crea; revizuire manuala)';
+  END IF;
   BEGIN
     -- runda 4: v_rau = ce DESCHID politicile (refuz RLS lipsă); v_cond = o CONDIȚIE de funcționare a sondei lipsă (sonda nu poate proba corect:
     -- drepturi pe coloane nereproductibile, copia cu alte drepturi decât tabelul real, ajutătorul fără EXECUTE / apel refuzat). Raportate DISTINCT:
@@ -1448,13 +1466,13 @@ BEGIN
               WHERE NOT has_table_privilege(r.rol, 'storage.objects', d.drept) AND has_any_column_privilege(r.rol, 'storage.objects', d.drept) LOOP
       v_cond := v_cond || x.rol || ' are drept ' || x.drept || ' doar pe coloane (sonda nu il reproduce: revizuire manuala); ';
     END LOOP;
-    CREATE TEMP TABLE sonda_obiecte_20261225a (LIKE storage.objects INCLUDING GENERATED) ON COMMIT DROP;
+    CREATE TEMP TABLE pg_temp.objects (LIKE storage.objects INCLUDING GENERATED) ON COMMIT DROP;
     -- copia ține doar coloanele (fără NOT NULL: rândurile sondei au doar ce citesc politicile)
-    FOR p IN SELECT attname FROM pg_attribute WHERE attrelid = 'pg_temp.sonda_obiecte_20261225a'::regclass AND attnum > 0 AND NOT attisdropped AND attnotnull LOOP
-      EXECUTE format('ALTER TABLE pg_temp.sonda_obiecte_20261225a ALTER COLUMN %I DROP NOT NULL', p.attname);
+    FOR p IN SELECT attname FROM pg_attribute WHERE attrelid = 'pg_temp.objects'::regclass AND attnum > 0 AND NOT attisdropped AND attnotnull LOOP
+      EXECUTE format('ALTER TABLE pg_temp.objects ALTER COLUMN %I DROP NOT NULL', p.attname);
     END LOOP;
     SELECT array_agg(attname::text) INTO v_cols FROM pg_attribute
-     WHERE attrelid = 'pg_temp.sonda_obiecte_20261225a'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '';
+     WHERE attrelid = 'pg_temp.objects'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '';
     -- un fișier ca la o încărcare reală: coloanele existente din (id, bucket_id, name, owner, owner_id, metadata, user_metadata, version);
     -- rulează cu drepturile APELANTULUI (SECURITY INVOKER: rolul probat), deci politicile INSERT se aplică. Întoarce 'inserat' sau 'refuzat'
     -- (refuzul INSERT-ului = RLS / dreptul pe copie, prins AICI, în corp); un refuz al APELULUI însuși (EXECUTE) iese din funcție și e prins
@@ -1473,7 +1491,7 @@ BEGIN
       IF p_meta AND 'user_metadata' = ANY (p_cols) THEN v_c := v_c || 'user_metadata'::text; v_v := v_v || quote_literal('{}'); END IF;
       IF p_meta AND 'version' = ANY (p_cols) THEN v_c := v_c || 'version'::text; v_v := v_v || quote_literal(md5('v' || p_nume)); END IF;
       BEGIN
-        EXECUTE format('INSERT INTO pg_temp.sonda_obiecte_20261225a (%s) VALUES (%s)',
+        EXECUTE format('INSERT INTO pg_temp.objects (%s) VALUES (%s)',
                        (SELECT string_agg(quote_ident(c), ', ') FROM unnest(v_c) c), array_to_string(v_v, ', '));
       EXCEPTION WHEN insufficient_privilege THEN
         RETURN 'refuzat';
@@ -1488,21 +1506,21 @@ BEGIN
        OR (SELECT fp.prosecdef FROM pg_proc fp WHERE fp.oid = 'pg_temp.sonda_rand_20261225a(text[], text, uuid, boolean)'::regprocedure) IS DISTINCT FROM false THEN
       v_cond := v_cond || 'ajutatorul sondei nu are EXECUTE pentru anon / authenticated sau nu e SECURITY INVOKER; ';
     END IF;
-    ALTER TABLE pg_temp.sonda_obiecte_20261225a ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE pg_temp.objects ENABLE ROW LEVEL SECURITY;
     -- runda 4 (verdict P2-5): ACL-ul copiei NORMALIZAT înaintea reproducerii: privilegiile implicite (globale sau pe schemă) pot da copiei, la
     -- creare, drepturi pe care tabelul real nu le dă (=> refuz fals); se retrag toate, în afara proprietarului
     FOR x IN SELECT DISTINCT e.grantee FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) e
-              WHERE c.oid = 'pg_temp.sonda_obiecte_20261225a'::regclass AND e.grantee <> c.relowner LOOP
-      EXECUTE format('REVOKE ALL ON pg_temp.sonda_obiecte_20261225a FROM %s', CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(x.grantee)) END);
+              WHERE c.oid = 'pg_temp.objects'::regclass AND e.grantee <> c.relowner LOOP
+      EXECUTE format('REVOKE ALL ON pg_temp.objects FROM %s', CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(x.grantee)) END);
     END LOOP;
     -- drepturile EXACTE ale rolurilor aplicației pe storage.objects, fiecare pe rând
     FOR x IN SELECT r.rol, d.drept FROM unnest(ARRAY['anon', 'authenticated']) r(rol), unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) d(drept)
               WHERE has_table_privilege(r.rol, 'storage.objects', d.drept) LOOP
-      EXECUTE format('GRANT %s ON pg_temp.sonda_obiecte_20261225a TO %I', x.drept, x.rol);
+      EXECUTE format('GRANT %s ON pg_temp.objects TO %I', x.drept, x.rol);
     END LOOP;
     -- și verificate: drepturile EFECTIVE pe copie = cele de pe tabelul real, pentru fiecare rol și drept
     FOR x IN SELECT r.rol, d.drept FROM unnest(ARRAY['anon', 'authenticated']) r(rol), unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) d(drept)
-              WHERE has_table_privilege(r.rol, 'pg_temp.sonda_obiecte_20261225a', d.drept) IS DISTINCT FROM has_table_privilege(r.rol, 'storage.objects', d.drept) LOOP
+              WHERE has_table_privilege(r.rol, 'pg_temp.objects', d.drept) IS DISTINCT FROM has_table_privilege(r.rol, 'storage.objects', d.drept) LOOP
       v_cond := v_cond || 'copia are alt drept ' || x.drept || ' pentru ' || x.rol || ' decat tabelul real; ';
     END LOOP;
     FOR p IN SELECT pol.polname, pol.polcmd, pol.polpermissive, pg_get_expr(pol.polqual, pol.polrelid) AS q, pg_get_expr(pol.polwithcheck, pol.polrelid) AS c,
@@ -1510,13 +1528,19 @@ BEGIN
                        FROM unnest(pol.polroles) r(oid)) AS roluri
                FROM pg_policy pol WHERE pol.polrelid = 'storage.objects'::regclass ORDER BY pol.polname LOOP
       v_nr := v_nr + 1;
-      EXECUTE format('CREATE POLICY %I ON pg_temp.sonda_obiecte_20261225a AS %s FOR %s TO %s%s%s', 'sonda_' || v_nr,
-        CASE WHEN p.polpermissive THEN 'PERMISSIVE' ELSE 'RESTRICTIVE' END,
-        CASE p.polcmd WHEN 'r' THEN 'SELECT' WHEN 'a' THEN 'INSERT' WHEN 'w' THEN 'UPDATE' WHEN 'd' THEN 'DELETE' ELSE 'ALL' END,
-        p.roluri, CASE WHEN p.q IS NULL THEN '' ELSE ' USING (' || p.q || ')' END, CASE WHEN p.c IS NULL THEN '' ELSE ' WITH CHECK (' || p.c || ')' END);
+      BEGIN
+        EXECUTE format('CREATE POLICY %I ON pg_temp.objects AS %s FOR %s TO %s%s%s', 'sonda_' || v_nr,
+          CASE WHEN p.polpermissive THEN 'PERMISSIVE' ELSE 'RESTRICTIVE' END,
+          CASE p.polcmd WHEN 'r' THEN 'SELECT' WHEN 'a' THEN 'INSERT' WHEN 'w' THEN 'UPDATE' WHEN 'd' THEN 'DELETE' ELSE 'ALL' END,
+          p.roluri, CASE WHEN p.q IS NULL THEN '' ELSE ' USING (' || p.q || ')' END, CASE WHEN p.c IS NULL THEN '' ELSE ' WITH CHECK (' || p.c || ')' END);
+      EXCEPTION WHEN OTHERS THEN
+        -- o formă pe care copia nu o poate purta: condiție de funcționare lipsă, raportată cu numele politicii (nu eroare brută)
+        v_esuate := v_esuate + 1;
+        v_cond := v_cond || 'politica ' || quote_ident(p.polname) || ' nu s-a putut recrea pe copie (' || SQLSTATE || ': ' || SQLERRM || '); ';
+      END;
     END LOOP;
     IF v_nr <> (SELECT count(*) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass)
-       OR v_nr <> (SELECT count(*) FROM pg_policy WHERE polrelid = 'pg_temp.sonda_obiecte_20261225a'::regclass) THEN
+       OR v_nr - v_esuate <> (SELECT count(*) FROM pg_policy WHERE polrelid = 'pg_temp.objects'::regclass) THEN
       RAISE EXCEPTION '20261225a post: sonda storage: politicile nu s-au copiat toate';
     END IF;
     -- identitățile (doar citite): eticheta, rolul, contul; proiectul văzut se calculează mai jos, cu JWT-ul fiecăreia
@@ -1554,19 +1578,19 @@ BEGIN
     FOR x IN SELECT o.v ->> 'e' AS e, o.v ->> 'rol' AS rol, (o.v ->> 'uid')::uuid AS uid, o.v ->> 'p' AS p FROM jsonb_array_elements(v_ids) o(v) LOOP
       PERFORM set_config('request.jwt.claim.sub', coalesce(x.uid::text, ''), true);
       PERFORM set_config('request.jwt.claims', jsonb_strip_nulls(jsonb_build_object('sub', x.uid, 'role', x.rol))::text, true);
-      SELECT coalesce(jsonb_object_agg(name, ctid::text), '{}'::jsonb) INTO v_inainte FROM pg_temp.sonda_obiecte_20261225a;
+      SELECT coalesce(jsonb_object_agg(name, ctid::text), '{}'::jsonb) INTO v_inainte FROM pg_temp.objects;
       IF x.rol = 'authenticated' THEN SET LOCAL ROLE authenticated; ELSE SET LOCAL ROLE anon; END IF;
       BEGIN
-        SELECT count(*) INTO v_n FROM pg_temp.sonda_obiecte_20261225a WHERE bucket_id = 'executie-uscare';
+        SELECT count(*) INTO v_n FROM pg_temp.objects WHERE bucket_id = 'executie-uscare';
         IF v_n <> 0 THEN v_rau := v_rau || x.e || ' vede ' || v_n || '; '; END IF;
       EXCEPTION WHEN insufficient_privilege THEN NULL;
       END;
       BEGIN
-        UPDATE pg_temp.sonda_obiecte_20261225a SET owner = x.uid;     -- valoare constantă (proprietarul = apelantul): nu citește coloane
+        UPDATE pg_temp.objects SET owner = x.uid;     -- valoare constantă (proprietarul = apelantul): nu citește coloane
       EXCEPTION WHEN insufficient_privilege THEN NULL;
       END;
       BEGIN
-        DELETE FROM pg_temp.sonda_obiecte_20261225a;
+        DELETE FROM pg_temp.objects;
       EXCEPTION WHEN insufficient_privilege THEN NULL;
       END;
       FOREACH v_nume IN ARRAY ARRAY['0', x.p] LOOP
@@ -1587,7 +1611,7 @@ BEGIN
       END LOOP;
       RESET ROLE;
       -- efectul, constatat ca postgres: un rând dispărut = șters; altă versiune a rândului (ctid) = modificat
-      SELECT coalesce(jsonb_object_agg(name, ctid::text), '{}'::jsonb) INTO v_dupa FROM pg_temp.sonda_obiecte_20261225a;
+      SELECT coalesce(jsonb_object_agg(name, ctid::text), '{}'::jsonb) INTO v_dupa FROM pg_temp.objects;
       IF EXISTS (SELECT 1 FROM jsonb_object_keys(v_inainte) k WHERE NOT v_dupa ? k) THEN v_rau := v_rau || x.e || ' sterge; '; END IF;
       IF EXISTS (SELECT 1 FROM jsonb_each_text(v_inainte) a WHERE v_dupa ? a.key AND v_dupa ->> a.key IS DISTINCT FROM a.value) THEN
         v_rau := v_rau || x.e || ' modifica; ';
@@ -1598,7 +1622,7 @@ BEGIN
     v_j := substr(SQLERRM, length('sonda:') + 1)::jsonb;
     v_probate := v_j ->> 'p'; v_rau := v_j ->> 'r'; v_cond := v_j ->> 'c';
   END;
-  IF current_user IS DISTINCT FROM 'postgres' OR to_regclass('pg_temp.sonda_obiecte_20261225a') IS NOT NULL
+  IF current_user IS DISTINCT FROM 'postgres' OR to_regclass('pg_temp.objects') IS NOT NULL
      OR to_regprocedure('pg_temp.sonda_rand_20261225a(text[], text, uuid, boolean)') IS NOT NULL
      OR v_probate IS NULL OR v_rau IS NULL OR v_cond IS NULL THEN
     RAISE EXCEPTION '20261225a post: sonda storage nu s-a anulat';

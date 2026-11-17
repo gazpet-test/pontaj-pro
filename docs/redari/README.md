@@ -402,6 +402,8 @@ Final_v2 / A4; SMS (30a–30d); domeniul public. Ce rămâne:
   implicitelor din §7.1 și opinia Juridic pe (s) și (k). Trimiterea către proprietari cere lot aprobat de owner; citirea căsuței,
   reconcilierea și retenția sunt automatizări separate, pornite explicit de owner.
 - **SMS** — codul e livrat (30a–30d); textul final al mesajului nu e stabilit.
+- **Semnarea electronică de la distanță a PV A** (plan rev. 1, pct. 4.4) — nu există în platformă; specificația:
+  [`SEMNARE_ELECTRONICA_PV_A_SPEC.md`](SEMNARE_ELECTRONICA_PV_A_SPEC.md) (doar document, 17.11.2026, r3; deciziile proprietarului în §1, ce putem dovedi în §2, ce mai e de decis în §3).
 - **FAN Courier** — nefăcut; expedierea rămâne prin Poștă, cu import CSV.
 - **AWB între plicuri** — concurența (același AWB pe două plicuri în paralel) nu e garantată în BD; azi o prinde doar aplicația.
 - **CHECK opțional pe afișare** — neaplicat; de decis dacă se adaugă.

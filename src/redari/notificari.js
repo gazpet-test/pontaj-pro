@@ -79,7 +79,7 @@ export function ghidModele({ proiect = {}, uats = [], smsPanou = null, smsPanouE
   // Jakarinos r2 P2 (L18): verificarea informării eșuată → nu „gata”; motivul spune că trebuie reîncărcat
   if (avertismentInformare(proiect)) lConv.push(avertismentInformare(proiect))
   out.push({ cod: 'convocator', model: 'Convocator (Model 1)', ce: 'Convocarea scrisă la constatare: zilele de sesiune, cod QR / link personal spre formular, informarea GDPR pe verso.',
-    cui: 'Fiecare deținător identificat, cu adresă cunoscută', canal: 'Poștă recomandată cu AR (în plicul comun)',
+    cui: 'Fiecare deținător identificat, cu adresă cunoscută', canal: 'Scrisoare recomandată sau curier, cu confirmare de primire (în plicul comun)',
     unde: '📋 Registru → 📄 Convocator (pe rând); ↻ Reîncarcă din 📄 Fișa parcelei', lipsuri: lConv, stare: stare(lConv),
     nota: 'Neidentificații și cei fără adresă nu primesc convocator: sunt convocați prin afișare la Primărie.' })
 
@@ -102,7 +102,7 @@ export function ghidModele({ proiect = {}, uats = [], smsPanou = null, smsPanouE
   if (!plin(proiect?.text_gdpr)) lForm.push('proiect fără text GDPR')
   if (!['contact_nume', 'contact_telefon', 'contact_email'].some(k => plin(proiect?.[k]))) lForm.push('proiect fără persoană de contact')
   const faraZile = sorteazaUat(uats).filter(u => lipsuriUat(u).includes('nicio zi de sesiune cu program')).map(numeUat)
-  out.push({ cod: 'formular', model: 'Formularul public de răspuns (QR / link)', ce: '4 opțiuni: particip (+ zi), nu particip fără obiecții (+ declarație), nu particip cu obiecții, constatare pe teren.',
+  out.push({ cod: 'formular', model: 'Formularul public de răspuns (QR / link)', ce: '3 opțiuni: particip (+ zi), nu particip fără obiecții (+ declarație), constatare pe teren. „Nu particip cu obiecții” e retrasă din 17.11.2026 (răspunsurile vechi rămân valabile).',
     cui: 'Deținătorul convocat (tokenul personal din QR)', canal: 'Online', unde: 'Se creează odată cu convocatorul; răspunsul intră singur în Registru',
     lipsuri: [...lForm, ...(faraZile.length ? [`„particip” indisponibil (fără zile de sesiune): ${faraZile.join(', ')}`] : [])],
     stare: lForm.length ? 'blocat' : faraZile.length ? 'partial' : 'gata', nota: 'Nu trimite nimic și nu generează PV (decizia 6): operatorul lucrează din Registru.' })
@@ -116,7 +116,7 @@ export function ghidModele({ proiect = {}, uats = [], smsPanou = null, smsPanouE
 
   const lPvA = [...fara, ...lipsuriProiectSiUat(uats, u => verificaDatePvA({ proiect, uat: u, parcela: {}, detinator: { nume: 'x' }, pv: PV_MARTOR }))]
   out.push({ cod: 'pv_a', model: 'PV A (Model 2) — constatare per deținător', ce: 'Procesul-verbal de constatare a readucerii terenului, cu propunerea din deviz.',
-    cui: 'Deținătorul (semnează)', canal: 'La sesiune sau trimis spre semnare prin poștă', unde: '📄 Fișa parcelei → PV A; 🗓️ Sesiune → PV A',
+    cui: 'Deținătorul (semnează)', canal: 'La sesiune sau trimis spre semnare, electronic', unde: '📄 Fișa parcelei → PV A; 🗓️ Sesiune → PV A',
     lipsuri: lPvA, stare: stare(lPvA), nota: 'Pe fiecare PV se completează data, locul, modul constatării și starea terenului.' })
 
   const lPvB = [...fara, ...lipsuriProiectSiUat(uats, u => verificaDatePvB({ proiect, uat: u, parcela: PARCELA_MARTOR, pv: PV_MARTOR, detinatori: [], pvs: [] }))]
