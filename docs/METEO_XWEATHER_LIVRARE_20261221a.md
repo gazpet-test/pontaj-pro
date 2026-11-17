@@ -1,6 +1,8 @@
 # Livrarea migrării 20261221a — vremea zilei din Vaisala Xweather (tabelul pasului zilnic)
 
-**Stare: NEAPLICATĂ.** Pe producție se aplică **DOAR prin runnerul cu amprenta GLOBALĂ L15 v2**, cu plafonul de 2000 ms, după review și
+**Stare: NEAPLICATĂ.** Pe producție se aplică **DOAR prin runnerul cu amprenta GLOBALĂ L15 v2**, cu plafonul de 5000 ms (runda 16 a
+runnerului, decizia proprietarului din 17.11.2026; era 2000 — probele de mai jos sunt făcute cu forma veche, 2000 și bugetul de lock numărat
+de la BEGIN; manifestul se regenerează pe clonă pe fișierul nou, rândurile așteptate identice), după review și
 „da”-ul owner-ului. Comenzile exacte (opțiuni, fișiere, coduri de ieșire) stau în `docs/LIVRARE_L15_V2.md`; aici e doar ce e specific
 acestei migrări. Aplicarea migrării e prima parte a treptei II din `docs/METEO_XWEATHER_COTA.md`; pornirea pasului zilnic
 (`XW_ZILNIC_ACTIV=1`) e o decizie separată, legată de cotă.
@@ -87,8 +89,14 @@ lanțul, semnalele și contextul sunt identice cu ale producției**, iar plasa o
 
 ## 4. Ce rămâne
 
+**Runda 16 (17.11.2026):** migrarea cere acum plafonul 5000 și numără secunda lock-ului de la **prima încercare** (termenul verificat
+înaintea fiecărei încercări și după obținere, și pe calea fără coliziune — observația recenzentului „termenul verificat doar după un lock
+eșuat” e închisă); garda finală a
+runnerului tipărește și `LOCK_TINUT`. Probele pe clonă de mai sus se refac pe forma nouă (manifestul regenerat, aplicare → revenire →
+reaplicare, lock-ul cu a doua sesiune). Revenirea nu s-a schimbat (plafon 2000, fără amprentă globală).
+
 Cu acordul owner-ului, după criteriile din `docs/LIVRARE_L15_V2.md`: recitirea din ziua livrării (comparată și clasificată), trei probe
-consecutive cu ROLLBACK pe țintă — toate `IDENTIC`, garda finală cel mult 1,5 s, verificarea „înainte” raportată separat, lock-ul în
+consecutive cu ROLLBACK pe țintă — toate `IDENTIC`, garda finală cu rezerva din `docs/LIVRARE_L15_V2.md` §7 (cel mult ~3,75 s din 5 s), verificarea „înainte” raportată separat, lock-ul în
 jurnal (momentul, încercările, durata; proba tipărește doar rândurile runnerului, deci se păstrează ieșirea întreagă a sesiunii și se
 pornește un observator doar-citire al lock-ului, legat de sesiunea livrării, nu de orice sesiune care ține același lock; un jurnal
 incomplet = probă neacceptată) —, o recitire comparată imediat înaintea aplicării, apoi aplicarea. Durata lock-ului pe `sites` se

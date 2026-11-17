@@ -11,8 +11,14 @@
 #   fara plafon: psql --single-transaction cu 0_prolog, 1_pre, 2_ag_inainte, copia, 3_inreg, 4_ag_dupa (in ordinea asta);
 #   --genereaza-in: si 2_ag_inainte.sql, 4_ag_dupa.sql si copia manifestului, cod 40, niciun apel psql;
 #   fara optiunile noi: nicio urma a pasilor (nici „ag_”, nici AMPRENTA_GLOBALA) in fisierele trimise.
+#   runda 16 (17.11.2026): cu amprenta globala plafonul e EXACT AG_PLAFON_MS (5000, scripts/livrare_amprenta.sh) => 2000 / 60000
+#     = refuz 2, niciun apel psql; garda finala a mesajului L15 are LOCK_TINUT (diagnostic), cea fara L15 nu (octet cu octet ca main);
+#     o migrare care cere alt plafon decat cel dat runnerului = refuz 3 (validatorul, PLAFON_DIFERIT), niciun apel psql.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# plafonul livrarilor L15 v2: din biblioteca runnerului (o singura definitie), nu copiat aici
+PL="$(bash -c '. "$1"; printf %s "$AG_PLAFON_MS"' _ "$ROOT/scripts/livrare_amprenta.sh")"
+[ "$PL" = 5000 ] || { echo "ESEC: AG_PLAFON_MS = '$PL', asteptat 5000 (decizia proprietarului 17.11.2026)" >&2; exit 1; }
 TMP="$(mktemp -d)"; trap 'chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 fail() { echo "ESEC: $*" >&2; exit 1; }
 
@@ -52,7 +58,7 @@ i=0
 while IFS='|' read -r exp mesaj opt; do
   i=$((i + 1)); d="$TMP/arg$i"
   # shellcheck disable=SC2086
-  livreaza "$d" "$exp" --sha256 "$SHA" --plafon-tranzactie-ms 2000 $opt
+  livreaza "$d" "$exp" --sha256 "$SHA" --plafon-tranzactie-ms "$PL" $opt
   [ ! -e "$d/apeluri" ] || fail "argumente $i: psql apelat ($opt)"
   grep -qF "$mesaj" "$d/runner.log" || { cat "$d/runner.log"; fail "argumente $i: mesajul '$mesaj' lipseste"; }
 done <<EOF
@@ -86,26 +92,46 @@ livreaza "$TMP/apr_fara" 3 --aprobare "$TMP/aprobare_fara" --amprenta-globala "$
 printf '%s  %s.sql\n%s  %s.l15.tsv\n' "$SHA" "$NUME" "$(printf d%.0s {1..64})" "$NUME" >"$TMP/aprobare_alt"
 livreaza "$TMP/apr_alt" 3 --aprobare "$TMP/aprobare_alt" --amprenta-globala "$AG" --diferente-globale "$MAN"
 echo 'L15_FORMA_ARG: o optiune fara cealalta, md5 invalid / cu majuscule, alt nume de manifest, PGTZ / PGDATESTYLE => 2; manifest cu format gresit / backslash, aprobare fara randul manifestului / cu alt sha => 3; niciun apel psql'
+# runda 16: plafonul cu amprenta globala = exact AG_PLAFON_MS; plafonul vechi (2000) sau altul => refuz 2, niciun apel psql
+for v in 2000 60000; do
+  livreaza "$TMP/pl_$v" 2 --sha256 "$SHA" --plafon-tranzactie-ms "$v" --amprenta-globala "$AG" --diferente-globale "$MAN"
+  [ ! -e "$TMP/pl_$v/apeluri" ] || fail "plafon $v cu L15: psql apelat"
+  grep -qF "plafonul tranzactiei cu amprenta globala este $PL ms" "$TMP/pl_$v/runner.log" || { cat "$TMP/pl_$v/runner.log"; fail "plafon $v cu L15: mesajul"; }
+done
+# runda 16: o migrare care cere alt plafon decat cel dat runnerului => refuz 3 (validatorul), in ambele sensuri, niciun apel psql
+for c in 2000:"$PL" "$PL":2000; do
+  cere="${c%%:*}" da="${c##*:}"; d="$TMP/acord_$cere"; mkdir "$d"
+  printf "DO \$g\$ BEGIN\n  IF current_setting('gazpet.livrare_migrare', true) IS NULL THEN RAISE EXCEPTION 'x'; END IF;\n  IF (SELECT setting || '/' || source FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout') IS DISTINCT FROM '%s/session' THEN RAISE EXCEPTION 'p'; END IF;\nEND \$g\$;\n" "$cere" >"$d/${NUME%_l15}_acord.sql"
+  M2="$d/${NUME%_l15}_acord.sql"; rc=0
+  FALS_DIR="$d" PSQL_BIN="$TMP/psql_fals" bash "$ROOT/scripts/livrare_migrare.sh" --migrare "$M2" --sha256 "$(sha256sum "$M2" | cut -d' ' -f1)" \
+    --versiune 20990101000002 --tinta-db forma_test --tinta-sistem 42 --tinta-host 127.0.0.1 --tinta-port 1 --plafon-tranzactie-ms "$da" >"$d/runner.log" 2>&1 || rc=$?
+  [ "$rc" = 3 ] && [ ! -e "$d/apeluri" ] && grep -qF "PLAFON_DIFERIT: fișierul cere $cere ms" "$d/runner.log" || { cat "$d/runner.log"; fail "acord: cere $cere, dat $da: cod $rc"; }
+done
+echo "L15_FORMA_PLAFON_ACORD: cu L15 plafonul 2000 / 60000 => 2 (doar $PL); migrare care cere 2000 cu runnerul la $PL si invers => 3 (PLAFON_DIFERIT); niciun apel psql"
 
 # 2. Cu plafon: un mesaj; verificatorul independent cu --l15.
 printf '%s  %s.sql\n%s  %s.l15.tsv\n' "$SHA" "$NUME" "$(sha256sum "$MAN" | cut -d' ' -f1)" "$NUME" >"$TMP/aprobare_ok"
-P="$TMP/cu"; livreaza "$P" 0 --aprobare "$TMP/aprobare_ok" --plafon-tranzactie-ms 2000 --amprenta-globala "$AG" --diferente-globale "$MAN"
+P="$TMP/cu"; livreaza "$P" 0 --aprobare "$TMP/aprobare_ok" --plafon-tranzactie-ms "$PL" --amprenta-globala "$AG" --diferente-globale "$MAN"
 LIV="$(grep -v 'reconc.sql\|control_0e.sql' "$P/apeluri")"
 [[ "$(printf '%s\n' "$LIV" | wc -l | tr -d ' ')" == 1 && "$LIV" == *" -f 00_sesiune.sql -f 5_mesaj.sql -f 9_reset.sql -h "* ]] || fail "cu plafon: apelul de livrare: $LIV"
 N="${LIV%%:*}"
-python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$P/${N}_5_mesaj.sql" "$MIG" "$SHA" 2000 --l15 "$AG" "$MAN" >"$P/mu.log" 2>&1 \
+python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$P/${N}_5_mesaj.sql" "$MIG" "$SHA" "$PL" --l15 "$AG" "$MAN" >"$P/mu.log" 2>&1 \
   || { cat "$P/mu.log"; fail 'cu plafon: mesajul nu trece verificatorul cu --l15'; }
 grep -q 'L15 v2: amprenta globala inainte / dupa' "$P/mu.log" || fail 'cu plafon: verificatorul nu a facut verificarea L15'
 grep -q 'AMPRENTA_GLOBALA înainte + copie + înregistrare + AMPRENTA_GLOBALA după = manifest' "$P/runner.log" || fail 'cu plafon: runnerul nu anunta pasii'
 grep -q "manifest $NUME.l15.tsv sha256 .* = aprobat" "$P/runner.log" || { cat "$P/runner.log"; fail 'cu plafon: sha-ul manifestului nu e anuntat ca aprobat'; }
+# runda 16: garda finala a mesajului L15 raporteaza si durata lock-urilor puternice (dupa PLAFON_TIMP, in acelasi DO)
+grep -q "LOCK_TINUT $NUME: lock-urile puternice ale migrarii tinute" "$P/${N}_5_mesaj.sql" \
+  && [ "$(grep -o 'PLAFON_TIMP\|LOCK_TINUT' "$P/${N}_5_mesaj.sql" | tr '\n' ' ')" = 'PLAFON_TIMP LOCK_TINUT LOCK_TINUT ' ] \
+  || fail 'cu plafon: LOCK_TINUT lipseste din garda finala L15 (sau nu e dupa PLAFON_TIMP)'
 # control: verificatorul chiar compara md5-ul si manifestul
-! python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$P/${N}_5_mesaj.sql" "$MIG" "$SHA" 2000 --l15 "$(printf e%.0s {1..32})" "$MAN" >/dev/null 2>&1 \
+! python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$P/${N}_5_mesaj.sql" "$MIG" "$SHA" "$PL" --l15 "$(printf e%.0s {1..32})" "$MAN" >/dev/null 2>&1 \
   || fail 'proba nefunctionala: verificatorul accepta alt md5'
 sed 's/creat/schimbat/' "$MAN" >"$TMP/alt.tsv"
-! python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$P/${N}_5_mesaj.sql" "$MIG" "$SHA" 2000 --l15 "$AG" "$TMP/alt.tsv" >/dev/null 2>&1 \
+! python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$P/${N}_5_mesaj.sql" "$MIG" "$SHA" "$PL" --l15 "$AG" "$TMP/alt.tsv" >/dev/null 2>&1 \
   || fail 'proba nefunctionala: verificatorul accepta alt manifest'
 # si fara --l15 mesajul ramane o livrare valida (verificarile de dinainte nu se schimba)
-python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$P/${N}_5_mesaj.sql" "$MIG" "$SHA" 2000 >/dev/null || fail 'cu plafon: verificatorul vechi respinge mesajul L15'
+python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$P/${N}_5_mesaj.sql" "$MIG" "$SHA" "$PL" >/dev/null || fail 'cu plafon: verificatorul vechi respinge mesajul L15'
 echo "L15_FORMA_PLAFON: un mesaj; inainte imediat inaintea copiei, dupa imediat dupa inregistrare, corpul = blocul, md5 + manifest exacte; $(cat "$P/mu.log")"
 
 # 3. Fara plafon: fisierele in --single-transaction, in ordine.
@@ -122,7 +148,7 @@ echo 'L15_FORMA_FARA_PLAFON: --single-transaction cu 0_prolog, 1_pre, 2_ag_inain
 G="$TMP/gen"; mkdir "$G"; rc=0
 FALS_DIR="$G" PSQL_BIN="$TMP/psql_fals" bash "$ROOT/scripts/livrare_migrare.sh" --migrare "$MIG" --sha256 "$SHA" \
   --versiune 20990101000001 --tinta-db forma_test --tinta-sistem 42 --tinta-host 127.0.0.1 --tinta-port 1 \
-  --plafon-tranzactie-ms 2000 --amprenta-globala "$AG" --diferente-globale "$MAN" --genereaza-in "$G/f" >"$G/runner.log" 2>&1 || rc=$?
+  --plafon-tranzactie-ms "$PL" --amprenta-globala "$AG" --diferente-globale "$MAN" --genereaza-in "$G/f" >"$G/runner.log" 2>&1 || rc=$?
 [ "$rc" = 40 ] && [ ! -e "$G/apeluri" ] || { cat "$G/runner.log"; fail "genereaza-in: cod $rc"; }
 for f in 2_ag_inainte.sql 4_ag_dupa.sql 5_mesaj.sql "$NUME.l15.tsv"; do [ -f "$G/f/$f" ] || fail "genereaza-in: lipseste $f"; done
 cmp -s "$G/f/$NUME.l15.tsv" "$MAN" || fail 'genereaza-in: copia manifestului difera'
@@ -131,7 +157,7 @@ echo 'L15_FORMA_GENEREAZA: 2_ag_inainte, 4_ag_dupa, 5_mesaj, copia manifestului;
 # 5. Fara optiunile noi: nicio urma a pasilor.
 Z="$TMP/fara"; livreaza "$Z" 0 --sha256 "$SHA" --plafon-tranzactie-ms 2000
 Y="$TMP/fara2"; livreaza "$Y" 0 --sha256 "$SHA"
-! cat "$Z"/*_*.sql "$Y"/*_*.sql | grep -q 'ag_cat_\|ag_inainte_\|AMPRENTA_GLOBALA' || fail 'fara optiuni: pasii L15 apar in fisierele trimise'
+! cat "$Z"/*_*.sql "$Y"/*_*.sql | grep -q 'ag_cat_\|ag_inainte_\|AMPRENTA_GLOBALA\|LOCK_TINUT\|lock_puternic_la' || fail 'fara optiuni: pasii L15 apar in fisierele trimise'
 cat "$P"/*_*.sql | grep -q 'ag_cat_' || fail 'proba nefunctionala: cautarea nu gaseste pasii nici cu optiunile'
 ! grep -q 'AMPRENTA_GLOBALA\|L15' "$Z/runner.log" "$Y/runner.log" || fail 'fara optiuni: runnerul mentioneaza L15'
 echo 'L15_FORMA_FARA: fara optiuni nicio urma a pasilor (cu si fara plafon)'

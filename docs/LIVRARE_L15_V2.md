@@ -418,9 +418,12 @@ Celelalte **semnale** (EXECUTE dinamic, vederi, alt limbaj) nu sunt refuz automa
    acces (pooler / endpoint) și cu același rol ca livrarea**. Criterii de acceptare (propuse de recenzent; criterii de lucru, nu garanții
    statistice):
    - `IDENTIC`, fără efecte persistente (nimic comis; limita 13);
-   - garda finală (`PLAFON_TIMP`) **cel mult 1.500 ms**, adică minimum 500 ms rămași din plafonul de 2.000 ms;
-   - pasul „înainte” măsurat separat (`AMPRENTA_GLOBALA inainte: … calcul N ms`); dacă se apropie de **700 ms**, fereastra de reîncercări
-     rămasă migrării (~300 ms din bugetul ei de lock) se acceptă **explicit**, în jurnal;
+   - garda finală (`PLAFON_TIMP`) cu **rezervă de cel puțin ~25 %** din plafon, adică **cel mult ~3.750 ms** din 5.000 (runda 16; înainte:
+     1.500 din 2.000); dacă toate probele stau mult sub (de ex. ≤ 2.500 ms), plafonul se poate coborî printr-un PR (secțiunea 9);
+   - pasul „înainte” măsurat separat (`AMPRENTA_GLOBALA inainte: … calcul N ms`): NU mai consumă bugetul de lock (ceasul lock-ului pornește
+     la prima încercare, secțiunea 9 „Bugetul de lock”); lock-ul obținut în ≤ 1 s de la prima încercare (`… ms de la prima incercare`);
+   - durata lock-urilor puternice (`LOCK_TINUT` + observatorul din altă sesiune, secțiunea 9 „Riscul”) consemnată și acceptată explicit
+     în jurnal, mai ales la ACCESS EXCLUSIVE pe tabele folosite de aplicație;
    - variația pe câteva probe aprobate, **inclusiv prima rulare** (cache rece); o singură probă bună nu ajunge.
 8. **Aplicarea:** runnerul cu `--amprenta-globala <GLOBAL din citire_ziua.txt>` + `--diferente-globale` (+ `--aprobare` cu ambele sha-uri).
 9. Refuz la **„înainte”** (`AMPRENTA_GLOBALA_INAINTE`): catalogul s-a schimbat după recitire — compară md5-urile pe familii din mesaj cu
@@ -482,21 +485,147 @@ aruncă), dar schimbă forma livrării verificată de `scripts/test_livrare_mesa
 `scripts/portal/dry_prod_e1.sh` (încă un fișier psql în aceeași conexiune), iar câștigul depinde de pooler (backend-ul poate fi deja
 cald). Rămâne propunere, cu review propriu.
 
-**Recomandare:** pentru livrările cu amprentă globală plafonul rămâne parametrul runnerului; 2000 ms ajunge doar dacă proba pe țintă arată
-`PLAFON_TIMP` ≤ ~1.500 ms (marjă pentru rețea și lock-uri). **20261221a** cere exact `2000/session` (nu se schimbă): calculul „înainte”
-consumă din fereastra ei de lock (`BUGET_LOCK` = 1 s de la BEGIN), iar calculul „după” rulează sub lock-ul ei pe `sites` (SHARE ROW
-EXCLUSIVE: oprește scurt doar scrierile în `sites`).
+### Plafonul livrărilor L15 v2: 5000 ms (runda 16, decizia proprietarului din 17.11.2026)
+
+**Decizia.** Protocolul atomic rămâne neschimbat: cele două fotografii, comparația exactă cu manifestul, refuzul înainte de COMMIT,
+`lock_timeout` pe încercare, garda amprentei globale din migrări. Se **ridică plafonul** tranzacției de aplicare și se **schimbă momentul**
+de la care se numără secunda lock-urilor (mai jos). Dacă nici așa nu încape pe producție, se ia o instanță mai puternică — nu se trece la
+auditul după COMMIT (varianta B a proiectării).
+
+**Valoarea: 5000 ms**, o singură definiție: `AG_PLAFON_MS` în `scripts/livrare_amprenta.sh`. De ce, din cifrele măsurate pe 17.11.2026
+(rapoartele coordonatorului: diagnosticul doar-citire, paritatea pe producție, probele pe clonă ale uscării):
+
+| Componentă | Clonă (măsurat) | Producție |
+|---|---:|---:|
+| Interogarea amprentei, forma optimizată, backend cald | ~207 ms | **~855 ms** (măsurat) |
+| Prima rulare pe un backend proaspăt | +~60 ms | **+~215–285 ms** (măsurat, forma de dinainte) |
+| Pasul runnerului (tabel temporar, validări, diferența) | ~×1,5 față de interogare | estimat ×1,5 |
+| Calculul „înainte” / „după” | ~310 / ~315 ms | ~1.200–1.300 ms fiecare (estimat) |
+| Corpul migrării (uscarea: lock-uri, obiecte, sonda, postcondiții) | ~26 ms | ~50–150 ms (estimat) |
+| **Tranzacția până la garda finală** | ~655–680 ms | **~2.500–2.800 ms** (estimat) |
+
+Plafonul vechi (2000) nu încape nici în varianta optimistă (marjă zero). **5000** acoperă estimarea caldă cu ~45–50 % rezervă și lasă
+~20–35 % și la rece (backend proaspăt; dacă prima rulare a formei noi e tot de ~2× mai lentă, ~3,7–4,2 s). **Valoarea e de confirmat prin
+proba cu ROLLBACK pe producție** (secțiunea 7, pasul 7) **și se poate coborî după măsurătoare** — printr-un PR care schimbă constanta și
+gărzile migrărilor neaplicate (nu printr-o opțiune de linie de comandă).
+
+**Acordul runner ↔ validator ↔ gărzile migrării (nicio cale de nepotrivire tăcută):**
+- runnerul (`scripts/livrare_migrare.sh`) și generatorul / proba manifestului (`scripts/livrare_l15_manifest.sh`): cu amprenta globală,
+  `--plafon-tranzactie-ms` dat trebuie să fie EXACT `AG_PLAFON_MS` ⇒ altfel refuz 2, înainte de orice conexiune;
+- validatorul (`scripts/livrare_validator.py --plafon-tranzactie-ms <N>`, forma folosită de runner): fiecare plafon CERUT de fișier —
+  garda `'<D>/session'`, marcajul `'<D>:' || txid_current()`, antetul „`--plafon-tranzactie-ms <D>`” — trebuie să fie exact N ⇒ altfel
+  refuz 3 (`PLAFON_DIFERIT`), înainte de orice conexiune; un fișier care citește `gazpet.plafon_tranzactie` fără marcajul în forma
+  verificabilă = refuz (fail-closed). Deci o migrare care cere 2000 nu pleacă cu runnerul la 5000 și nici invers. Forma veche
+  `--plafon-tranzactie` (fără valoare) rămâne doar pentru testele statice; runnerul nu o mai folosește;
+- migrările neaplicate cu amprentă globală (`20261221a`, `20261225a`) cer `5000/session` + marcajul `5000:<txid>` în `$pre$` ⇒ un runner
+  care ar da altă valoare e refuzat și în tranzacție (`PLAFON_TRANZACTIE lipsa`, nimic comis);
+- fișierele de **revenire** se livrează fără amprentă globală și își păstrează plafonul lor (2000, ~75 ms pe clonă): validatorul cere
+  `--plafon-tranzactie-ms 2000` pentru ele și refuză 5000;
+- migrările **deja aplicate** pe producție nu se ating (cer în continuare valoarea lor; validatorul le acceptă exact cu ea). Consecință:
+  `scripts/portal/dry_prod_e1.sh` în modul L15 (18a / 19a, aplicate pe 13.11, cer 2000) se oprește la generare.
+
+Fără amprentă globală, plafonul rămâne parametrul runnerului (100..600000), cu același acord al validatorului. Fără plafon, o migrare care
+cere plafon refuză în `$pre$` (în tranzacție, nimic comis) — regulile validatorului fără opțiune sunt cele de dinainte.
+
+### Bugetul de lock (runda 16)
+
+Înainte, secunda pentru lock-uri se număra **de la BEGIN** și includea pasul „înainte” al runnerului (~1,2–1,3 s pe producție): migrarea
+ar fi refuzat cu `BUGET_LOCK` înaintea primei încercări (pe clonă s-a văzut forma refuzului, `0 incercari, 2172 ms de la BEGIN`). La meteo
+termenul se verifica doar după o încercare eșuată, deci un lock liber putea fi obținut și după termen. Regula nouă, în ambele migrări
+neaplicate și în **șablonul pentru migrările viitoare**:
+
+1. **Ceasul pornește imediat înaintea primei încercări** (`v_t0 := clock_timestamp()` în blocul de lock), nu la BEGIN. Bugetul rămâne
+   **1 s** (`v_buget`), separat de plafonul tranzacției.
+2. **Termenul se verifică înaintea fiecărei încercări** (deci și înaintea reîncercărilor după o coliziune) **și după obținerea setului
+   complet** — inclusiv pe calea **fără** coliziune: un set obținut după termen = `BUGET_LOCK`, nimic schimbat.
+3. **Fiecare încercare e o subtranzacție** (`BEGIN … EXCEPTION WHEN lock_not_available`): eșecul unui lock anulează subtranzacția și
+   eliberează lock-urile luate deja în ea, **înaintea** pauzei de 50 ms. Lock-urile sunt `NOWAIT` (`lock_timeout` = 100 ms rămâne pentru
+   lock-urile implicite ale corpului).
+4. **Ordinea e fixă și scrisă în migrare** (L06), aceeași la fiecare încercare: uscarea `executie_proiecte` → `executie_probe_tronsoane`
+   (SHARE ROW EXCLUSIVE) → `storage.objects` (ACCESS EXCLUSIVE); meteo doar `sites` (SHARE ROW EXCLUSIVE). Lock-urile implicite ulterioare
+   (FK la `CREATE TABLE`, `CREATE POLICY`) cad pe aceleași relații, deja ținute mai tare.
+5. **Măsurarea:** după obținere migrarea scrie momentul în `gazpet.lock_puternic_la` (µs de la epoch, `set_config(…, true)`) și tipărește
+   `lock la X ms de la BEGIN (N incercari, Y ms de la prima incercare)`; la sfârșit, `lock-uri puternice tinute de Z ms`; garda finală a
+   runnerului (doar pe calea cu amprentă globală) tipărește, după `PLAFON_TIMP`, **`LOCK_TINUT <nume>: lock-urile puternice ale migrarii
+   tinute T ms pana la garda`**. E diagnostic, nu gardă (valoarea vine din artefact; lipsă = mesajul „nedeclarat”). Până la eliberarea
+   reală se adaugă COMMIT-ul, neplafonat; eliberarea o dovedește **observatorul din altă sesiune** (mai jos), nu NOTICE-ul.
+
+Șablonul (de copiat în migrările noi, cu numele și ordinea lor):
+
+```sql
+DO $lock$
+DECLARE v_incercari integer := 0; v_t0 timestamptz := clock_timestamp(); v_buget constant interval := interval '1 second';
+BEGIN
+  LOOP
+    IF clock_timestamp() >= v_t0 + v_buget THEN
+      RAISE EXCEPTION '<NNNN>: BUGET_LOCK: % incercari, % ms de la prima incercare; nimic schimbat', v_incercari,
+        round(extract(epoch FROM clock_timestamp() - v_t0) * 1000) USING ERRCODE = '55P03';
+    END IF;
+    v_incercari := v_incercari + 1;
+    BEGIN
+      LOCK TABLE <a> IN <mod> MODE NOWAIT;   -- ordinea FIXĂ, documentată în antet
+      LOCK TABLE <b> IN <mod> MODE NOWAIT;
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      PERFORM pg_sleep(0.05);               -- subtranzacția a eliberat deja lock-urile parțiale
+    END;
+  END LOOP;
+  IF clock_timestamp() >= v_t0 + v_buget THEN
+    RAISE EXCEPTION '<NNNN>: BUGET_LOCK: lock-urile obtinute abia la % ms de la prima incercare; nimic schimbat',
+      round(extract(epoch FROM clock_timestamp() - v_t0) * 1000) USING ERRCODE = '55P03';
+  END IF;
+  PERFORM set_config('gazpet.lock_puternic_la', round(extract(epoch FROM clock_timestamp()) * 1000000)::bigint::text, true);
+  RAISE NOTICE '<NNNN>: lock la % ms de la BEGIN (% incercari, % ms de la prima incercare)',
+    round(extract(epoch FROM clock_timestamp() - now()) * 1000), v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+END $lock$;
+```
+
+**Ce NU se schimbă:** nu se așteaptă alt calcul global după lock-urile puternice în afară de pasul „după” al runnerului, care rămâne
+înainte de COMMIT (asta e chiar garanția atomică aleasă de proprietar). Blocul de lock rămâne după verificările de catalog ale migrării.
+
+### Riscul: lock-uri ținute mai mult
+
+Separarea bugetelor **nu eliberează lock-uri**: lock-urile puternice se iau după pasul „înainte” și se țin **până la COMMIT**, adică peste
+corpul migrării, pasul „după” (~1,2–1,3 s estimat pe producție), garda finală și COMMIT. Estimare pe producție: **~1,3–1,6 s** cu
+lock-urile ținute (față de ~0,35 s pe clonă).
+- **Uscarea:** `storage.objects` în **ACCESS EXCLUSIVE** — în acest interval sunt oprite **toate** citirile și scrierile de fișiere din
+  aplicație (orice bucket, nu doar cel nou): încărcări, descărcări, linkuri semnate. Plus SHARE ROW EXCLUSIVE pe `executie_proiecte` și
+  `executie_probe_tronsoane` (opresc scrierile, nu citirile). De aplicat într-un moment liniștit (seara / dimineața devreme).
+- **Meteo:** SHARE ROW EXCLUSIVE pe `sites` — oprește doar scrierile în `sites` (nu citirile, nu `FOR SHARE` / `FOR UPDATE`).
+- O cerere a aplicației care așteaptă lock-ul nu pică singură (dacă nu are `lock_timeout`), ci întârzie cu durata de mai sus; cererile
+  care țin deja lock-uri incompatibile fac migrarea să refuze curat (`BUGET_LOCK`, nimic schimbat).
+- Plafonul mai mare înseamnă și că o livrare care se blochează în altă parte (nu la lock) poate ține tranzacția deschisă până la ~5 s
+  înainte de refuz — fără lock-urile puternice dacă blocajul e înaintea lor.
+
+**Cum se măsoară la proba pe producție (cu ROLLBACK, cu acordul owner-ului):** în jurnalul probei — `AMPRENTA_GLOBALA inainte: … calcul N ms,
+la M ms de la BEGIN`, `<NNNN>: lock la X ms de la BEGIN (…, Y ms de la prima incercare)`, `sfarsit la … ; lock-uri puternice tinute de Z
+ms`, `AMPRENTA_GLOBALA dupa: … calcul …`, `PLAFON_TIMP … garda trecuta la G ms`, `LOCK_TINUT … T ms`; **în paralel, un observator doar-citire
+din altă sesiune** care, la ~50 ms, citește `pg_locks` + `pg_stat_activity` filtrat pe PID-ul livrării și pe relațiile blocate
+(`storage.objects`, `executie_proiecte`, `executie_probe_tronsoane` / `sites`) și scrie momentul primei apariții a lock-ului puternic și al
+dispariției lui (= eliberarea reală, după ROLLBACK / COMMIT) + câte sesiuni au așteptat (`wait_event_type = 'Lock'`). Comenzile exacte și
+rezultatele așteptate le are coordonatorul în raportul rundei 16.
+
+**Revenire:** PR-ul se poate retrage integral (runnerul, validatorul, biblioteca și cele două migrări neaplicate revin la forma de dinainte);
+nicio migrare aplicată și nicio dată nu depind de el.
+
+**20261221a** cere acum exact `5000/session` (mai sus): calculul „înainte” NU mai consumă fereastra de lock, iar calculul „după” rulează sub
+lock-ul ei pe `sites` (SHARE ROW EXCLUSIVE: oprește doar scrierile în `sites`, ~1,3–1,6 s estimat pe producție).
 
 Varianta „pasul «înainte» separat, sub lock consultativ de sesiune” **NU e acceptată** ca soluție implicită: iese din mesajul verificat
 prin `current_query()` și din plafon, iar fereastra „schimbare + revenire” (limita 6) crește. Rămâne doar ca idee, care ar cere review și
 probe proprii.
 
-## 10. 20261221a (pe main, NEAPLICATĂ, fișier fixat) prin forma nouă — fără a modifica fișierul
+## 10. 20261221a (pe main, NEAPLICATĂ) prin forma nouă
 
 Migrarea își păstrează propria verificare L15 de dinainte (BASELINE-ul lipit în #1088) — rulează în interiorul pașilor noi.
+**Runda 16 (17.11.2026) a schimbat fișierul** (doar gărzile de timp, nimic din obiectele create): plafonul cerut `5000/session` (era 2000) și
+blocul de lock cu ceasul pornit la prima încercare + termenul verificat înainte și după (secțiunea 9; observația recenzentului — garda
+verificată doar după un lock eșuat — e închisă). sha256-ul migrării s-a schimbat (`238daabc…`), deci antetul manifestului
+`20261221a_meteo_xweather_zilnic.l15.tsv` a fost actualizat; rândurile lui nu depind de blocul de lock (un `DO` nu creează obiecte de
+catalog), dar manifestul se **regenerează pe clonă** (pasul 2 de mai jos) înaintea PR-ului de baseline, iar rezultatul așteptat e identic
+cu cel din repo (aceleași 108 rânduri, alt GLOBAL al clonei în antet).
 **Proba integrală e OBLIGATORIE:** pe clonă, cu manifestul real și cu **concurență pe `sites`** (tabelul pe care migrarea îl blochează),
-apoi proba cu ROLLBACK pe țintă. Observația recenzentului, de consemnat: garda de timp a lock-ului din migrare se verifică doar **după un
-lock eșuat** — dacă lock-ul e liber, poate fi obținut și după pragul de o secundă; proba pe țintă arată unde cade efectiv.
+apoi proba cu ROLLBACK pe țintă.
 
 ```bash
 # 1. citirea pe producție (o fotografie: scriptul ei de amprente + GLOBAL + lista + semnale), fără DDL concurent
@@ -506,7 +635,7 @@ bash scripts/amprenta_globala_citire.sh --tinta-host <H> --tinta-port <P> --tint
   > citire_prod_20261221a.txt
 # 2. manifestul + detaliile, pe clonă (PG17, adusă la starea producției); apoi citirea clonei
 bash scripts/livrare_l15_manifest.sh --migrare supabase/migrations/20261221a_meteo_xweather_zilnic.sql --versiune 20261221120000 \
-  --tinta-host <clona> --tinta-port <P> --tinta-db postgres --tinta-sistem <SIS clona> --user <U> --plafon-tranzactie-ms 2000 \
+  --tinta-host <clona> --tinta-port <P> --tinta-db postgres --tinta-sistem <SIS clona> --user <U> --plafon-tranzactie-ms 5000 \
   --iesire supabase/migrations/20261221a_meteo_xweather_zilnic.l15.tsv --detalii <în afara repo-ului>/20261221a.l15.detalii.txt
 bash scripts/amprenta_globala_citire.sh --tinta-host <clona> … --lista --amprente-migrare scripts/meteo_xweather_amprente.sql \
   --radacina … > citire_clona_20261221a.txt
@@ -521,12 +650,12 @@ bash scripts/amprenta_globala_citire.sh … (aceleași opțiuni ca la 1) > citir
 bash scripts/l15_compara_liste.sh --a citire_prod_20261221a.txt --b citire_ziua_20261221a.txt --recitire
 # 6. proba cu ROLLBACK pe țintă (obligatorie, cu acordul owner-ului)
 bash scripts/livrare_l15_manifest.sh --migrare supabase/migrations/20261221a_meteo_xweather_zilnic.sql --versiune 20261221120000 \
-  --tinta-host <H> --tinta-port <P> --tinta-db postgres --tinta-sistem <SIS> --user <U> --plafon-tranzactie-ms 2000 \
+  --tinta-host <H> --tinta-port <P> --tinta-db postgres --tinta-sistem <SIS> --user <U> --plafon-tranzactie-ms 5000 \
   --compara-cu supabase/migrations/20261221a_meteo_xweather_zilnic.l15.tsv --amprenta-globala <GLOBAL din citire_ziua_20261221a.txt>
-# 7. livrarea (forma „un mesaj”, plafon 2000 cerut de migrare)
+# 7. livrarea (forma „un mesaj”, plafon 5000 cerut de migrare = AG_PLAFON_MS)
 bash scripts/livrare_migrare.sh --migrare supabase/migrations/20261221a_meteo_xweather_zilnic.sql --aprobare aprobare_20261221a.txt \
   --versiune 20261221120000 --tinta-db postgres --tinta-sistem <SIS> --tinta-host <H> --tinta-port <P> --user <U> \
-  --plafon-tranzactie-ms 2000 --amprenta-globala <GLOBAL din citire_ziua_20261221a.txt> \
+  --plafon-tranzactie-ms 5000 --amprenta-globala <GLOBAL din citire_ziua_20261221a.txt> \
   --diferente-globale supabase/migrations/20261221a_meteo_xweather_zilnic.l15.tsv
 ```
 
@@ -538,6 +667,8 @@ bash scripts/livrare_migrare.sh --migrare supabase/migrations/20261221a_meteo_xw
 | **r4, pe PGlite:** contraexemplul recenzentului (trigger `BEFORE INSERT` pe `information_schema.sql_features` cu o funcție existentă: `INSERT` întoarce 1 → 0 rânduri ⇒ GLOBAL diferă, familiile `trigger` + `sistem_initdb`); câte un caz minim pe un părinte de la initdb pentru regulă, politică, constrângere pe tabel, constrângere pe domeniu (`information_schema.cardinal_number`), valoare implicită (poziția corectă printre coloane), `amop` / `amproc` pe o familie de la initdb, index nou, moștenire în ambele sensuri — cu poarta reală acolo unde există; **mutantul regulii** (`ag_par` fără ramura „rând atașat după initdb”) ⇒ familia nu se mai schimbă, pe FIECARE caz (indexul: mutantul perimetrului; moștenirea: mutantul fiecărui capăt); mutantul dublu (și fără plasa relațiilor) ⇒ GLOBAL identic, ca în r3; plasa relațiilor: RLS pe un tabel de la initdb ⇒ doar `sistem_initdb` (+ mutant), VACUUM + ANALYZE între citiri (cu `relhastriggers` stins) ⇒ GLOBAL identic; agregatele: `CREATE OR REPLACE AGGREGATE bool_and … INITCOND` (pg_proc identic, poarta null → true) ⇒ `sistem_initdb` (+ mutant); câmpurile OID ale plasei funcțiilor sub 12000 în afara schemei; detaliul plasei recalculat independent = rândurile plasei, două detalii diferite ⇒ exact obiectele schimbate; limita declarată (redenumirea unei coloane de la initdb nevăzută) | `node scripts/pglite/test_amprenta_globala_local.mjs` (secțiunile 11 și 13) | rulat la livrare (PASS) |
 | **r5, pe PGlite:** contraexemplul recenzentului (`information_schema.sql_features` partiție a unui tabel al aplicației, reatașată cu altă limită: `INSERT … RETURNING` eroare → succes ⇒ GLOBAL diferă, doar `sistem_initdb`; **mutantul** plasei fără `relpartbound` ⇒ GLOBAL identic); detaliul plasei arată limita canonică (`FOR VALUES FROM (MINVALUE) TO ('ZZZ')`), fără arborele brut; verificări fără câmp nou: limita unei partiții a **aplicației** e deja în familia `relatie` (+ mutant), cheia de partiționare a părintelui (aplicație) cu o partiție de la initdb e în rândul `relatie` al părintelui; `ALTER FUNCTION … COST` pe o funcție de la initdb ⇒ `sistem_initdb` (+ mutant); **lista închisă**: coloanele `pg_class` / `pg_proc` / `pg_aggregate` ale catalogului real = „în plasă” ∪ „exclusă”, fără rest și fără suprapunere (34 = 17 + 17; 30 = 27 + 3; 22 = 21 + 1), cu mutanții listei (coloană neclasificată, clasificare dublă) | `node scripts/pglite/test_amprenta_globala_local.mjs` (secțiunea 14) | rulat la livrare (PASS) |
 | **Optimizarea calculului (17.11.2026), pe PGlite:** forma nouă ↔ forma de dinainte (commit `a69ef186`, sha256 verificat), `FULL JOIN` pe (familie, etichetă) în aceeași interogare: 0 rânduri doar într-o parte, 0 cu amprentă / detaliu diferit, același GLOBAL — pe catalogul cu obiectele de probă, după **35 de schimbări** pe familiile atinse (relație, coloană, funcție, tip, `acl_sistem`) și pe câteva neatinse (fiecare schimbă GLOBAL-ul), și pe catalogul sintetic; verificări directe (ordinea enum, enum gol, `protrftypes`, ACL cu grantori diferiți); **14 mutanți** ai formei noi prinși de comparație (rând omis, câmp omis, grantor omis, schemă exclusă, regula rândurilor atașate eliminată, ACL nelegat pe funcții / relații de sistem, intrarea ACL fără `acldefault`, fiecare gardă inversată, ordinea / legătura enum); **pașii runnerului vechi ↔ nou: aceleași rezultate și aceleași mesaje** în 26 de cazuri (citire, aprobat, manifest bun / lipsă / altă amprentă, rânduri invalide și duble injectate înainte și după, integritatea fotografiei); validatorul izolat, vechi ↔ nou, la memorie mică și fără fișiere temporare (contraexemplele review r1–r2: rânduri invalide multe, aceeași etichetă de 2.000 de ori) — același refuz; planul (legăturile pe ACL = Hash Join); timpi orientativi. Cazurile 1–3 sunt UN fișier SQL (o tranzacție anulată), scris cu `--sql-clona` pentru proba pe PostgreSQL 17 real | `node scripts/pglite/test_amprenta_paritate_calcul.mjs` | rulat la livrare (PASS); pe clonă: coordonatorul |
+| **Runda 16 (17.11.2026): plafonul 5000 + bugetul de lock.** Validatorul cu `--plafon-tranzactie-ms`: acordul pe cazuri minime (cere 5000 / runner 5000 = 0; plafonul vechi 2000 cu runnerul la 5000 și invers, garda și marcajul amestecate, antetul cu altă valoare, marcajul în formă neverificabilă = 1; fără nicio cerere = 0; valori invalide = 2) și pe **toate** migrările / revenirile din repo cu plafon declarat (trec cu plafonul lor, refuzate cu altul: fără refuz fals); runnerul: cu L15, 2000 / 60000 = 2; migrare care cere alt plafon = 3 (PLAFON_DIFERIT); LOCK_TINUT doar în garda L15 | `python3 scripts/test_livrare_validator_plafon.py`; `bash scripts/test_livrare_l15_forma.sh` | validatorul: rulat la livrare (PASS); forma: coordonatorul |
+| **Runda 16, pe PGlite, pe migrările reale** (`20261225a`, `20261221a`): validatorul real (migrarea cu 5000 = 0, cu 2000 = refuz; revenirea cu 2000 = 0, cu 5000 = refuz; mutantul „plafonul vechi cerut cu runnerul nou”); aplicarea cu plafonul vechi pus de runner = `PLAFON_TRANZACTIE`; garda finală REALĂ a runnerului (`lm_fin … lock`) pe livrarea aprobată: `PLAFON_TIMP` (5000) + `LOCK_TINUT`; bugetul: un pas „înainte” de 1,05 s nu-l mai consumă; set obținut după termen fără coliziune = `BUGET_LOCK`; ocupat permanent = `BUGET_LOCK` la ~1 s; uscarea: eșec după primele două lock-uri ⇒ 0 lock-uri parțiale rămase, a doua încercare reușește; **mutanți**: fără niciun termen, fără termenul de după (calea fără coliziune), fără termenul de dinainte, ceasul de la BEGIN, primele lock-uri în afara subtranzacției — toți prinși; manifestul uscării generat = aceleași **252** de obiecte | `node scripts/pglite/test_executie_uscare_local.mjs`, `node scripts/pglite/test_meteo_xweather_local.mjs` | rulat la livrare (PASS) |
 | Comparatorul de liste: fără opțiuni, `--manifest`, `--recitire`, intrări invalide, eticheta cu TAB; mutant pe fiecare regulă; **r3:** două fotografii care diferă doar prin `MOMENT` ⇒ 0 (mutantul cu `MOMENT` în partea revizuită ⇒ 6), și secțiunea diferă ⇒ 6, `MOMENT` lipsă / dublu / neînlocuit ⇒ 2; citirea reală cu un psql simulat (momente de lungimi diferite) ⇒ secțiunea cu marcajul, `--recitire` 0; mutantul citirii fără înlocuire ⇒ refuz; **r4:** coliziunea (aceeași valoare și într-un rând de date ⇒ rămâne; două citiri în care ea diferă ⇒ 6; mutantul cu înlocuirea globală ⇒ 0), momentul în alt format și antetul în alt format ⇒ nenormalizate, 6; `--detalii-plasa`: detaliul scris și recalculat = `RAND`, alt obiect ⇒ diferența îl numește, detaliu nereproductibil ⇒ 1 (mutantul fără verificare ⇒ 0), fără `--lista` / fișier existent ⇒ 2, fără opțiune nimic în plus; **r5:** antetul repetat în date (a doua pereche antet + rând cu momentul ⇒ rândul rămâne, o singură înlocuire; două citiri în care el diferă ⇒ 6, diferența arătată), mutantul citirii (rearmarea la fiecare antet) ⇒ 0, mutantul comparatorului ⇒ 2 (refuz fals), cele 5 scripturi cu antet standard ⇒ `--recitire` 0 | `bash scripts/test_l15_compara_liste.sh` (doar bash; rulat și de vitest) | CI + livrare |
 | Forma runnerului fără PostgreSQL: argumente, `--aprobare`, mesajul unic cu `--l15`, forma fără plafon, `--genereaza-in`, fără opțiuni | `bash scripts/test_livrare_l15_forma.sh` | coordonatorul (cere python3) |
 | Paritatea căii vechi cu main: aceleași fișiere generate, octet cu octet, cu și fără plafon, cu `--aprobare` | `bash scripts/test_livrare_l15_paritate.sh [<ref>]` | coordonatorul (cere python3) |

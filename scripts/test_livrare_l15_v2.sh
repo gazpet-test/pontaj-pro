@@ -13,9 +13,9 @@
 #      test; testul vede livrarea blocata DUPA pasul inainte, comite DDL-ul, elibereaza bariera) => refuz la „dupa”
 #      (NEDECLARAT), NEAPLICAT (10); control: aceeasi bariera FARA DDL => APLICAT (0); in forma fara plafon SI cu plafon;
 #   c  manifest cu un rand lipsa / in plus / cu alta amprenta finala => NEAPLICAT (10) cu motivul exact;
-#   d  drumul bun (cu plafon 2000, forma „un mesaj”) => APLICAT + INREGISTRAT (0), GLOBAL nou citit != cel vechi;
+#   d  drumul bun (cu plafon 5000 = AG_PLAFON_MS, runda 16; forma „un mesaj”) => APLICAT + INREGISTRAT (0), GLOBAL nou citit != cel vechi;
 #   e  fara optiunile noi => aplicat (0), jurnalul fara nicio urma AMPRENTA_GLOBALA; o optiune fara cealalta => 2;
-#   f  timpul: catalog sintetic (~1.500 functii, ~300 tabele, ~50 vederi), livrare cu plafon 2000 + L15: timpii pasilor
+#   f  timpul: catalog sintetic (~1.500 functii, ~300 tabele, ~50 vederi), livrare cu plafon 5000 + L15: timpii pasilor
 #      (NOTICE-urile AMPRENTA_GLOBALA, LIVRARE_TIMP, PLAFON_TIMP) cu cache RECE (server repornit) si CALD (a doua livrare);
 #   g  proba cu ROLLBACK pe tinta (livrare_l15_manifest.sh --compara-cu): manifestul generat => IDENTIC (0), nimic comis;
 #      manifest cu un rand diferit => 6 (ALTA_AMPRENTA); --amprenta-globala gresita => 6;
@@ -128,9 +128,9 @@ echo 'L15_E: o optiune fara cealalta => 2; fara optiuni => APLICAT (0), nicio ur
 
 # a. Contraexemplul: auxiliarul vederii schimbat dupa citirea baseline-ului => refuz la „inainte”.
 M_A="$(migrare 20990202a_l15_a "$CORP_OK")"
-G0="$(citeste a0)"; MAN_A="$(manifest "$M_A" 20990202000001 --plafon-tranzactie-ms 2000)"
+G0="$(citeste a0)"; MAN_A="$(manifest "$M_A" 20990202000001 --plafon-tranzactie-ms 5000)"
 q 'CREATE OR REPLACE FUNCTION public.aux_drept() RETURNS boolean LANGUAGE sql STABLE AS $f$ SELECT now() IS NOT NULL $f$' >/dev/null
-asteapta 'a contraexemplu' 10 "$TMP/a.log" runner 20990202000001 "$M_A" --plafon-tranzactie-ms 2000 --amprenta-globala "$G0" --diferente-globale "$MAN_A"
+asteapta 'a contraexemplu' 10 "$TMP/a.log" runner 20990202000001 "$M_A" --plafon-tranzactie-ms 5000 --amprenta-globala "$G0" --diferente-globale "$MAN_A"
 grep -q 'AMPRENTA_GLOBALA_INAINTE' "$TMP/a.log" || { cat "$TMP/a.log"; fail 'a: motivul nu e AMPRENTA_GLOBALA_INAINTE'; }
 [[ "$(inregistrat 20990202a_l15_a)" == 0 && "$(q "SELECT to_regclass('public.nou_l15') IS NULL")" == t ]] || fail 'a: ceva aplicat'
 q 'CREATE OR REPLACE FUNCTION public.aux_drept() RETURNS boolean LANGUAGE sql STABLE AS $f$ SELECT true $f$' >/dev/null
@@ -144,7 +144,7 @@ grep -vxF "$L1" "$MAN_A" >"$TMP/c_lipsa/20990202a_l15_a.l15.tsv"
 { cat "$MAN_A"; printf 'functie\tfunctie public.inexistenta()\tcreat\t%s\n' "$(printf f%.0s {1..32})"; } >"$TMP/c_plus/20990202a_l15_a.l15.tsv"
 awk -v l="$L1" -v f="$(printf f%.0s {1..32})" 'BEGIN {FS = OFS = "\t"} $0 == l {$NF = f} {print}' "$MAN_A" >"$TMP/c_alta/20990202a_l15_a.l15.tsv"
 for c in lipsa:NEDECLARAT plus:ABSENT alta:ALTFEL; do
-  asteapta "c $c" 10 "$TMP/c_${c%%:*}.log" runner 20990202000001 "$M_A" --plafon-tranzactie-ms 2000 --amprenta-globala "$G0" \
+  asteapta "c $c" 10 "$TMP/c_${c%%:*}.log" runner 20990202000001 "$M_A" --plafon-tranzactie-ms 5000 --amprenta-globala "$G0" \
     --diferente-globale "$TMP/c_${c%%:*}/20990202a_l15_a.l15.tsv"
   grep -q "AMPRENTA_GLOBALA_DUPA: [0-9]* diferente fata de manifest.*${c##*:}" "$TMP/c_${c%%:*}.log" || { cat "$TMP/c_${c%%:*}.log"; fail "c $c: motivul"; }
   [[ "$(inregistrat 20990202a_l15_a)" == 0 ]] || fail "c $c: inregistrat"
@@ -187,22 +187,25 @@ CREATE TABLE public.t_bariera_$BI (id int);")"
 }
 bariera fara_plafon_ddl cu_ddl 10
 bariera fara_plafon_control fara_ddl 0
-bariera plafon_ddl cu_ddl 10 --plafon-tranzactie-ms 60000
-bariera plafon_control fara_ddl 0 --plafon-tranzactie-ms 60000
+bariera plafon_ddl cu_ddl 10 --plafon-tranzactie-ms 5000
+bariera plafon_control fara_ddl 0 --plafon-tranzactie-ms 5000
 echo 'L15_B: DDL comis de alta sesiune intre inainte si dupa (bariera) => NEDECLARAT, NEAPLICAT (10), cu si fara plafon; control fara DDL => APLICAT (0)'
 
-# d. Drumul bun, cu plafon 2000 (forma „un mesaj”).
-G1="$(citeste d0)"; MAN_D="$(manifest "$M_A" 20990202000001 --plafon-tranzactie-ms 2000)"
-asteapta 'd drum bun' 0 "$TMP/d.log" runner 20990202000001 "$M_A" --plafon-tranzactie-ms 2000 --amprenta-globala "$G1" --diferente-globale "$MAN_D"
+# d. Drumul bun, cu plafon 5000 (forma „un mesaj”; runda 16: cu L15 plafonul e exact AG_PLAFON_MS, bariera b la fel).
+G1="$(citeste d0)"; MAN_D="$(manifest "$M_A" 20990202000001 --plafon-tranzactie-ms 5000)"
+asteapta 'd drum bun' 0 "$TMP/d.log" runner 20990202000001 "$M_A" --plafon-tranzactie-ms 5000 --amprenta-globala "$G1" --diferente-globale "$MAN_D"
 grep -q 'APLICAT + ÎNREGISTRAT confirmat' "$TMP/d.log" && grep -q 'AMPRENTA_GLOBALA dupa: [0-9]* diferente = manifestul' "$TMP/d.log" || { cat "$TMP/d.log"; fail 'd: mesajele'; }
+# runda 16: garda finala L15 tipareste LOCK_TINUT; migrarea de proba nu declara momentul lock-urilor => mesajul „nedeclarat”, nu eroare
+grep -q 'LOCK_TINUT 20990202a_l15_a: migrarea nu a declarat momentul lock-urilor puternice (gazpet.lock_puternic_la: lipsa)' "$TMP/d.log" \
+  || { cat "$TMP/d.log"; fail 'd: LOCK_TINUT (nedeclarat) lipseste din garda finala'; }
 [[ "$(citeste d1)" != "$G1" ]] || fail 'd: GLOBAL neschimbat dupa livrare'
 echo "L15_D: drumul bun => APLICAT + INREGISTRAT (0); $(grep -o 'AMPRENTA_GLOBALA dupa: [0-9]* diferente' "$TMP/d.log")"
 
 # g. Proba cu ROLLBACK pe tinta: diferenta obtinuta = manifestul => IDENTIC; nimic comis.
 M_G="$(migrare 20990205a_l15_g "CREATE TABLE public.t_proba_g (id bigint PRIMARY KEY, x text);")"
-G_G="$(citeste g0)"; MAN_G="$(manifest "$M_G" 20990205000001 --plafon-tranzactie-ms 2000)"
+G_G="$(citeste g0)"; MAN_G="$(manifest "$M_G" 20990205000001 --plafon-tranzactie-ms 5000)"
 proba() { PSQL_BIN="$PG_BIN/psql" bash "$ROOT/scripts/livrare_l15_manifest.sh" --migrare "$M_G" --versiune 20990205000001 "${CONN_OPT[@]}" \
-  --plafon-tranzactie-ms 2000 --compara-cu "$@"; }
+  --plafon-tranzactie-ms 5000 --compara-cu "$@"; }
 asteapta 'g identic' 0 "$TMP/g_ok.log" proba "$MAN_G" --amprenta-globala "$G_G"
 grep -q 'IDENTIC: diferenta pe tinta = manifestul' "$TMP/g_ok.log" || { cat "$TMP/g_ok.log"; fail 'g: mesajul IDENTIC'; }
 mkdir -p "$TMP/g_alt"; L1="$(grep -v '^#' "$MAN_G" | head -n 1)"
@@ -216,7 +219,7 @@ echo 'L15_G: proba cu ROLLBACK pe tinta: IDENTIC (0); rand diferit / GLOBAL gres
 # h. --detalii: md5(detaliu) = amprenta pentru fiecare rand; refuz in supabase/migrations.
 mkdir -p "$TMP/h"
 PSQL_BIN="$PG_BIN/psql" bash "$ROOT/scripts/livrare_l15_manifest.sh" --migrare "$M_G" --versiune 20990205000001 "${CONN_OPT[@]}" \
-  --plafon-tranzactie-ms 2000 --iesire "$TMP/h/20990205a_l15_g.l15.tsv" --detalii "$TMP/h/20990205a_l15_g.l15.detalii.txt" >"$TMP/h.log" 2>&1 \
+  --plafon-tranzactie-ms 5000 --iesire "$TMP/h/20990205a_l15_g.l15.tsv" --detalii "$TMP/h/20990205a_l15_g.l15.detalii.txt" >"$TMP/h.log" 2>&1 \
   || { cat "$TMP/h.log"; fail 'h: generarea cu --detalii'; }
 NH=0
 while IFS=$'\t' read -r fam et op amp; do
@@ -332,10 +335,10 @@ echo "L15_O: partitia de la initdb reatasata cu alta limita (INSERT 23514 -> ZZZ
 qa "CREATE ROLE g1; CREATE ROLE g2; CREATE ROLE r_gr; CREATE TABLE public.t_gr (id int); ALTER TABLE public.t_gr OWNER TO postgres;
 GRANT SELECT ON public.t_gr TO g1, g2 WITH GRANT OPTION; SET ROLE g1; GRANT SELECT ON public.t_gr TO r_gr; RESET ROLE;" >/dev/null
 M_J="$(migrare 20990206a_l15_j "CREATE TABLE public.t_j (id int);")"
-G_J="$(citeste j0)"; MAN_J="$(manifest "$M_J" 20990206000001 --plafon-tranzactie-ms 2000)"
+G_J="$(citeste j0)"; MAN_J="$(manifest "$M_J" 20990206000001 --plafon-tranzactie-ms 5000)"
 qa "SET ROLE g1; REVOKE SELECT ON public.t_gr FROM r_gr; RESET ROLE; SET ROLE g2; GRANT SELECT ON public.t_gr TO r_gr; RESET ROLE;" >/dev/null
 [[ "$(qa "SELECT relacl::text FROM pg_class WHERE oid = 'public.t_gr'::regclass")" == *"r_gr=r/g2"* ]] || fail 'j: transferul nu s-a facut'
-asteapta 'j grantor' 10 "$TMP/j.log" runner 20990206000001 "$M_J" --plafon-tranzactie-ms 2000 --amprenta-globala "$G_J" --diferente-globale "$MAN_J"
+asteapta 'j grantor' 10 "$TMP/j.log" runner 20990206000001 "$M_J" --plafon-tranzactie-ms 5000 --amprenta-globala "$G_J" --diferente-globale "$MAN_J"
 grep -q 'AMPRENTA_GLOBALA_INAINTE' "$TMP/j.log" || { cat "$TMP/j.log"; fail 'j: motivul nu e AMPRENTA_GLOBALA_INAINTE'; }
 [[ "$(inregistrat 20990206a_l15_j)" == 0 ]] || fail 'j: inregistrat'
 echo 'L15_J: grantorul transferat g1 -> g2 dupa citire => AMPRENTA_GLOBALA_INAINTE, NEAPLICAT (10)'
@@ -355,11 +358,11 @@ echo 'L15_J: grantorul transferat g1 -> g2 dupa citire => AMPRENTA_GLOBALA_INAIN
 "$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB" -f "$TMP/sintetic.sql" >/dev/null
 timp() { # $1 eticheta, $2 numele migrarii, $3 versiunea
   local m v="$3"; m="$(migrare "$2" "CREATE TABLE public.timp_$1 (id int PRIMARY KEY);")"
-  local g; g="$(citeste "f_$1")"; local man; man="$(manifest "$m" "$v" --plafon-tranzactie-ms 2000)"
+  local g; g="$(citeste "f_$1")"; local man; man="$(manifest "$m" "$v" --plafon-tranzactie-ms 5000)"
   [ "$1" != rece ] || { "$PG_BIN/pg_ctl" -D "$DATA" -m fast -w stop >/dev/null; porneste; }
-  asteapta "f $1" 0 "$TMP/f_$1.log" runner "$v" "$m" --plafon-tranzactie-ms 2000 --amprenta-globala "$g" --diferente-globale "$man"
+  asteapta "f $1" 0 "$TMP/f_$1.log" runner "$v" "$m" --plafon-tranzactie-ms 5000 --amprenta-globala "$g" --diferente-globale "$man"
   echo "L15_F_TIMP $1 ($(q "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')") functii, $(q "SELECT count(*) FROM pg_class WHERE relkind = 'r' AND relnamespace = 'public'::regnamespace") tabele):"
-  grep -E 'AMPRENTA_GLOBALA (inainte|dupa)|LIVRARE_TIMP|PLAFON_TIMP' "$TMP/f_$1.log" | sed 's/^.*NOTICE: */    /'
+  grep -E 'AMPRENTA_GLOBALA (inainte|dupa)|LIVRARE_TIMP|PLAFON_TIMP|LOCK_TINUT' "$TMP/f_$1.log" | sed 's/^.*NOTICE: */    /'
 }
 timp rece 20990204a_l15_timp_rece 20990204000001
 timp cald 20990204b_l15_timp_cald 20990204000002

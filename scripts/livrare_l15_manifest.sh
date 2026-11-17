@@ -31,6 +31,9 @@
 #        [--doar-genereaza <dosar_nou>]
 # Coduri: 0 manifest scris / IDENTIC | 1 aplicarea / tiparirea a esuat (nimic comis) | 2 argumente | 3 generare locala |
 #   6 proba: diferenta != manifestul (sau GLOBAL inainte != cel asteptat) | 40 doar generat.
+# Runda 16 a runnerului (17.11.2026): --plafon-tranzactie-ms, daca e dat, e EXACT AG_PLAFON_MS (5000; scripts/livrare_amprenta.sh),
+#   ca la livrarea cu amprenta globala (altfel 2); validatorul runnerului cere ca migrarea sa ceara acelasi plafon (altfel 3);
+#   garda finala tipareste si LOCK_TINUT, iar timpii (lock / sfarsit / LOCK_TINUT) apar in lista de la final.
 # ============================================================================
 set -Eeuo pipefail
 umask 077
@@ -75,6 +78,8 @@ W="$(mktemp -d)"; trap 'chmod -R u+w "$W" 2>/dev/null; rm -rf "$W"' EXIT
 chmod 700 "$W"
 # shellcheck source=livrare_amprenta.sh
 . "$ROOT/scripts/livrare_amprenta.sh"
+# Runda 16: aceeasi forma ca livrarea cu amprenta globala => acelasi plafon, EXACT AG_PLAFON_MS (o singura definitie).
+AG_PL_MSG="$(ag_plafon_ok "$PLAFON_MS" 2>&1)" || refuz 2 "$AG_PL_MSG"
 if [ -n "$CMP" ]; then
   ag_manifest_valid "$CMP" || refuz 2 "--compara-cu: manifestul dat nu are formatul corect"
   tr -d '\r' <"$CMP" | grep -v '^#' | grep -v '^$' | LC_ALL=C sort >"$W/manifest_dat.tsv" || true
@@ -95,7 +100,7 @@ if [ -n "$PLAFON_MS" ]; then
   REST="$W/m_rest.sql"
   { cat "$W/g/1_pre.sql"; cat "$W/2_ag_inainte.sql"; } >"$REST"
   POZ="$(lm_octeti "$REST")"
-  { cat "$COPIE"; lm_sep; cat "$W/g/3_inreg.sql"; cat "$W/4_ag_dupa.sql"; lm_timp "$NUME"; lm_fin "$NUME" "$PLAFON_MS" ROLLBACK; } >>"$REST" \
+  { cat "$COPIE"; lm_sep; cat "$W/g/3_inreg.sql"; cat "$W/4_ag_dupa.sql"; lm_timp "$NUME"; lm_fin "$NUME" "$PLAFON_MS" ROLLBACK lock; } >>"$REST" \
     || refuz 3 "restul mesajului"
   lm_mesaj "$W/g/0_prolog.sql" "$REST" "$W/m_mesaj.sql" "$NUME" "$POZ:$(lm_octeti "$COPIE"):$SHA" || refuz 3 "mesajul"
   TAG_M="lm_$(ag_tag)"
@@ -141,7 +146,7 @@ grep -q "PLAFON_TIMP $NUME: garda trecuta" "$W/out_lf.txt" || [ -z "$PLAFON_MS" 
   || { echo "[x] garda finala nu a trecut - nimic scris" >&2; exit 1; }
 timpi() {
   echo "--- timpi (ms de la BEGIN) ---"
-  grep -E "${PFX}(AMPRENTA_GLOBALA|L15_DIF_TOTAL|LIVRARE_TIMP|PLAFON_TIMP)" "$W/out_lf.txt" | grep -v 'AMPRENTA_GLOBALA_CONTEXT' | sed -E "s/${PFX}//" || true
+  grep -E "${PFX}(AMPRENTA_GLOBALA|L15_DIF_TOTAL|LIVRARE_TIMP|PLAFON_TIMP|LOCK_TINUT|[0-9]{8}[a-z]?: (lock|sfarsit) la)" "$W/out_lf.txt" | grep -v 'AMPRENTA_GLOBALA_CONTEXT' | sed -E "s/${PFX}//" || true
 }
 
 if [ -n "$CMP" ]; then

@@ -187,6 +187,14 @@
 #   trebuie să aibă și rândul „<hex64>  <NUME>.l15.tsv” (refuz 3 altfel); sha256-ul lui e tipărit. PGTZ / PGDATESTYLE din
 #   mediu = refuz 2 (profilul sesiunii trebuie să fie al rolului, ca la citirea baseline-ului).
 #   Fără aceste opțiuni: NIMIC schimbat (biblioteca nici nu se încarcă).
+#   Runda 16 (17.11.2026, decizia proprietarului; docs/LIVRARE_L15_V2.md §9 „Plafonul livrărilor L15 v2” și „Bugetul de lock”):
+#     * cu --amprenta-globala, --plafon-tranzactie-ms (dacă e dat) trebuie să fie EXACT AG_PLAFON_MS = 5000 (o singură definiție, în
+#       scripts/livrare_amprenta.sh) ⇒ altfel refuz 2, înainte de orice conexiune;
+#     * validatorul primește --plafon-tranzactie-ms <N> (în loc de --plafon-tranzactie): pe lângă regulile de mai sus, fiecare
+#       plafon CERUT de artefact ('<D>/session', marcajul '<D>:' || txid_current(), antetul „--plafon-tranzactie-ms <D>”) trebuie
+#       să fie exact N ⇒ altfel refuz 3 (PLAFON_DIFERIT). Deci o migrare care cere 2000 nu pleacă cu runnerul la 5000 și invers;
+#     * pe calea cu amprenta globală garda finală tipărește și LOCK_TINUT (diagnostic: cât au fost ținute până la gardă lock-urile
+#       puternice ale migrării, din momentul declarat de ea în gazpet.lock_puternic_la). Fără amprenta globală garda e neschimbată.
 # Orice altă opțiune (-v, -f, -c, --set, -d URI, …) ⇒ refuz înainte de conexiune. Nu se acceptă URI-uri de conexiune.
 # Variabile respinse (pot schimba execuția/ținta pe ascuns): PGPASSWORD, PGOPTIONS, PGDATABASE, PSQLRC, PGHOSTADDR,
 # PGTARGETSESSIONATTRS, PGLOADBALANCEHOSTS, PGSERVICE, PGSERVICEFILE, PGSYSCONFDIR. PGHOST/PGPORT: eliminate explicit (unset)
@@ -253,6 +261,15 @@ if [ -n "$AG_MD5$AG_MAN" ]; then
     [ -z "${!v+x}" ] || refuz 2 "variabila $v e setată (L15 v2: profilul sesiunii de livrare trebuie să fie al rolului, ca la citirea baseline-ului)"
   done
 fi
+# Runda 16: cu amprenta globală plafonul (dacă e dat) este EXACT AG_PLAFON_MS din biblioteca L15 (o singură definiție), verificat
+# aici, cu argumentele (refuz 2, înainte de copie / validator / conexiune). Fără opțiunile L15 biblioteca nu se încarcă.
+if [ -n "$AG_MD5" ]; then
+  LIB_AG="$(dirname "${BASH_SOURCE[0]}")/livrare_amprenta.sh"
+  [ -f "$LIB_AG" ] || refuz 3 "biblioteca L15 v2 lipsește: $LIB_AG"
+  # shellcheck source=livrare_amprenta.sh
+  . "$LIB_AG"
+  AG_PL_MSG="$(ag_plafon_ok "$PLAFON_MS" 2>&1)" || refuz 2 "$AG_PL_MSG"
+fi
 if [ -n "$APROBARE" ]; then
   [ -z "$SHA" ] || refuz 2 "--sha256 și --aprobare se exclud"
   [ -f "$APROBARE" ] || refuz 2 "fișier de aprobare lipsă: $APROBARE"
@@ -273,15 +290,13 @@ TAG="reg_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 CONTROL_0E="$(dirname "${BASH_SOURCE[0]}")/control_0e.sql"
 [ -f "$CONTROL_0E" ] || refuz 3 "gate-ul permanent 0e lipsește: $CONTROL_0E"
 # Runda 11: cu plafon, validatorul refuză în plus orice atingere a ceasului tranzacției (vezi antetul).
-VAL_PLAFON=(); [ -z "$PLAFON_MS" ] || VAL_PLAFON=(--plafon-tranzactie)
+# Runda 16: și ACORDUL plafonului — fiecare plafon cerut de artefact = exact cel dat runnerului (PLAFON_DIFERIT = refuz 3).
+VAL_PLAFON=(); [ -z "$PLAFON_MS" ] || VAL_PLAFON=(--plafon-tranzactie-ms "$PLAFON_MS")
 VAL_OUT="$(python3 "$(dirname "${BASH_SOURCE[0]}")/livrare_validator.py" "$COPIE" "$TAG" ${VAL_PLAFON[@]+"${VAL_PLAFON[@]}"})" || refuz 3 "validatorul a refuzat $NUME (vezi mai sus)"
 echo "→ $NUME: sha256 $SHA_COPIE = aprobat; validator: $VAL_OUT"
 # Runda 15 (L15 v2): copia protejată a manifestului, formatul verificat local; cu --aprobare, și sha256-ul lui e aprobat.
 if [ -n "$AG_MD5" ]; then
-  LIB_AG="$(dirname "${BASH_SOURCE[0]}")/livrare_amprenta.sh"
-  [ -f "$LIB_AG" ] || refuz 3 "biblioteca L15 v2 lipsește: $LIB_AG"
-  # shellcheck source=livrare_amprenta.sh
-  . "$LIB_AG"
+  # (biblioteca L15 v2 e deja încărcată la verificarea argumentelor, runda 16)
   AG_COPIE="$DIR/$NUME.l15.tsv"
   cp -- "$AG_MAN" "$AG_COPIE"; chmod 400 "$AG_COPIE"
   AG_SHA="$(sha256sum "$AG_COPIE" | cut -d' ' -f1)"
@@ -373,7 +388,8 @@ if [ -n "$PLAFON_MS" ]; then
   cp -- "$DIR/1_pre.sql" "$DIR/m_rest.sql"
   [ -z "$AG_MD5" ] || cat "$DIR/2_ag_inainte.sql" >> "$DIR/m_rest.sql"   # runda 15: înaintea copiei
   POZ_COPIE="$(lm_octeti "$DIR/m_rest.sql")"
-  { cat "$COPIE"; lm_sep; cat "$DIR/3_inreg.sql"; [ -z "$AG_MD5" ] || cat "$DIR/4_ag_dupa.sql"; lm_timp "$NUME"; lm_fin "$NUME" "$PLAFON_MS" COMMIT; } >> "$DIR/m_rest.sql" \
+  # runda 16: cu amprenta globală garda finală raportează și cât au fost ținute lock-urile puternice ale migrării (LOCK_TINUT)
+  { cat "$COPIE"; lm_sep; cat "$DIR/3_inreg.sql"; [ -z "$AG_MD5" ] || cat "$DIR/4_ag_dupa.sql"; lm_timp "$NUME"; lm_fin "$NUME" "$PLAFON_MS" COMMIT ${AG_MD5:+lock}; } >> "$DIR/m_rest.sql" \
     || refuz 3 "forma un mesaj: generarea restului a eșuat"
   lm_mesaj "$DIR/0_prolog.sql" "$DIR/m_rest.sql" "$DIR/m_mesaj.sql" "$NUME" "$POZ_COPIE:$(lm_octeti "$COPIE"):$SHA" \
     || refuz 3 "forma un mesaj: construirea mesajului a eșuat"

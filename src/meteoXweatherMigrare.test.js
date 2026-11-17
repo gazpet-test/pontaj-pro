@@ -84,12 +84,20 @@ describe('20261221a — AMPRENTA_L15: o singură definiție', () => {
 })
 
 describe('20261221a — migrarea: garda, plafonul, obiectele, drepturile', () => {
-  it('antet de versiune, gardă de start / final, plafon 2000 cerut, READ COMMITTED, lock NOWAIT cu buget', () => {
+  it('antet de versiune, gardă de start / final, plafon 5000 cerut (L15 v2, runda 16), READ COMMITTED, lock NOWAIT cu buget de la prima încercare', () => {
     expect(MIG.startsWith('-- Version 20261221120000. NEAPLICAT.')).toBe(true)
     expect(MIG).toContain(`IS DISTINCT FROM '${X}_meteo_xweather_zilnic:' || txid_current()`)
     expect(nr(MIG, `'${X}_meteo_xweather_zilnic:' || txid_current()`)).toBe(2)
-    expect(MIG).toContain("IS DISTINCT FROM '2000/session'")
+    expect(MIG).toContain("IS DISTINCT FROM '5000/session'")
+    expect(MIG).not.toContain('2000/session')
     expect(MIG).toContain('LOCK TABLE public.sites IN SHARE ROW EXCLUSIVE MODE NOWAIT;')
+    // bugetul lock-ului: ceasul pornit imediat înaintea primei încercări, termenul verificat înainte (în buclă) și după obținere
+    const lock = MIG.slice(MIG.indexOf('DO $lock$'), MIG.indexOf('END $lock$;'))
+    expect(lock).toContain('v_t0 timestamptz := clock_timestamp();')
+    expect(nr(lock, 'IF clock_timestamp() >= v_t0 + v_buget THEN')).toBe(2)
+    expect(lock.indexOf('IF clock_timestamp() >= v_t0 + v_buget THEN')).toBeLessThan(lock.indexOf('LOCK TABLE public.sites'))
+    expect(lock.lastIndexOf('IF clock_timestamp() >= v_t0 + v_buget THEN')).toBeGreaterThan(lock.indexOf('END LOOP;'))
+    expect(lock).not.toMatch(/now\(\) \+ interval/)
     expect(MIG).not.toMatch(/^\s*(BEGIN|COMMIT)\s*;/m)
   })
   it('nemodificabil: niciun UPDATE / DELETE / TRUNCATE acordat; trigger-ele pe UPDATE / DELETE / TRUNCATE; versiunea și preluat_la de la server', () => {

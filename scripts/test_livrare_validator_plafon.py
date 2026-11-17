@@ -71,6 +71,70 @@ def ruleaza(cale, *extra):
                           encoding="utf-8").returncode
 
 
+def iesire(cale, *extra):
+    r = subprocess.run([sys.executable, str(VALIDATOR), str(cale), *extra], capture_output=True, text=True, encoding="utf-8")
+    return r.returncode, (r.stdout + r.stderr).strip()
+
+
+# Runda 16 (decizia proprietarului, 17.11.2026): --plafon-tranzactie-ms <N> = regulile plafonului + ACORDUL plafonului (fiecare
+# plafon cerut de fisier = N). Cazuri minime, valori scrise de mana (L25), plus fisierele reale din repo.
+def garda_plafon(d):
+    return (f"DO $p$ BEGIN\n  IF ({CITIRE.replace('FROM', 'SELECT setting || ' + chr(39) + '/' + chr(39) + ' || source FROM', 1)}) "
+            f"IS DISTINCT FROM '{d}/session'\n     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '{d}:' || "
+            f"txid_current() THEN\n    RAISE EXCEPTION 'PLAFON lipsa'; END IF;\nEND $p$;\n")
+
+
+def acord_plafon():
+    esecuri = []
+
+    def caz(et, corp, args, exp, re_mesaj=None):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "a.sql"
+            f.write_bytes((GARDA + corp).encode("utf-8"))
+            rc, out = iesire(f, "reg_test", *args)
+        bun = rc == exp and (re_mesaj is None or re_mesaj in out)
+        print(f"{'ok' if bun else 'ESEC'} acord: {et}: cod {rc} (asteptat {exp}){'' if bun else ' — ' + out[:200]}")
+        if not bun:
+            esecuri.append("acord: " + et)
+
+    caz("cere 5000, runnerul 5000", garda_plafon(5000), ("--plafon-tranzactie-ms", "5000"), 0)
+    caz("cere 2000 (plafonul vechi), runnerul 5000", garda_plafon(2000), ("--plafon-tranzactie-ms", "5000"), 1,
+        "PLAFON_DIFERIT: fișierul cere 2000 ms")
+    caz("cere 5000, runnerul 2000 (runner vechi)", garda_plafon(5000), ("--plafon-tranzactie-ms", "2000"), 1, "runnerul dă 2000 ms")
+    caz("garda 5000, marcajul 2000 (amestec)", garda_plafon(5000).replace("'5000:'", "'2000:'"), ("--plafon-tranzactie-ms", "5000"), 1,
+        "2000 ms (marcajul")
+    caz("antetul de livrare cere 2000, garda 5000", "-- Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 2000\n" + garda_plafon(5000),
+        ("--plafon-tranzactie-ms", "5000"), 1, "2000 ms (antetul")
+    caz("marcajul citit fara forma verificabila", "DO $m$ BEGIN PERFORM current_setting('gazpet.plafon_tranzactie', true); END $m$;\n",
+        ("--plafon-tranzactie-ms", "5000"), 1, "forma verificabilă")
+    caz("fara nicio cerere de plafon (nimic de acordat)", "SELECT 1;\n", ("--plafon-tranzactie-ms", "5000"), 0)
+    caz("regulile plafonului raman (SET LOCAL pe ceas)", "SET LOCAL transaction_timeout = 0;\n", ("--plafon-tranzactie-ms", "5000"), 1, "apare de")
+    caz("forma veche fara valoare (doar teste statice) nu face acordul", garda_plafon(2000), ("--plafon-tranzactie",), 0)
+    for v in ("abc", "050", "99", "600001", "5000ms"):
+        caz(f"valoare invalida {v!r}", "SELECT 1;\n", ("--plafon-tranzactie-ms", v), 2)
+    # fisierele reale: fiecare migrare / revenire cu plafon declarat trece cu plafonul EI si e refuzata cu oricare altul (fara refuz fals)
+    import re as _re
+    for cale in sorted(list((ROOT / "supabase/migrations").glob("*.sql")) + list((ROOT / "supabase/revenire").glob("*.sql"))):
+        text = cale.read_text(encoding="utf-8")
+        vals = set(_re.findall(r"'([0-9]+)/session'", text))
+        if len(vals) != 1:
+            continue
+        d = vals.pop()
+        rel = cale.relative_to(ROOT).as_posix()
+        rc_vechi, _ = iesire(cale, "reg_test", "--plafon-tranzactie")
+        if rc_vechi != 0:
+            print(f"info acord {rel}: picat deja cu regulile plafonului (cod {rc_vechi}), nu se compara")
+            continue
+        rc_ok, out_ok = iesire(cale, "reg_test", "--plafon-tranzactie-ms", d)
+        alt = "5000" if d != "5000" else "2000"
+        rc_alt, out_alt = iesire(cale, "reg_test", "--plafon-tranzactie-ms", alt)
+        bun = rc_ok == 0 and rc_alt == 1 and "PLAFON_DIFERIT" in out_alt
+        print(f"{'ok' if bun else 'ESEC'} acord {rel}: cu {d} cod {rc_ok}, cu {alt} cod {rc_alt}{'' if bun else ' — ' + (out_ok + ' | ' + out_alt)[:200]}")
+        if not bun:
+            esecuri.append("acord: " + rel)
+    return esecuri
+
+
 def main():
     esecuri = []
     with tempfile.TemporaryDirectory() as d:
@@ -110,6 +174,7 @@ def main():
         cale = ROOT / rel
         if cale.exists():
             print(f"info {rel}: cod {ruleaza(cale, 'reg_test', '--plafon-tranzactie')} cu --plafon-tranzactie")
+    esecuri += acord_plafon()
     if esecuri:
         print(f"ESEC test_livrare_validator_plafon: {len(esecuri)} caz(uri): {', '.join(esecuri)}")
         return 1

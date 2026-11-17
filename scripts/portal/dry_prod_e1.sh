@@ -67,6 +67,9 @@
 #   ii include in aceeasi ordine ca livrarea. 19a vine dupa 18a in aceeasi tranzactie => GLOBAL-ul aprobat al lui 19a =
 #   GLOBAL-ul de DUPA 18a (tiparit de scripts/livrare_l15_manifest.sh pe clona). Perechile se dau impreuna (refuz 2 altfel);
 #   doar modul normal (nu --diagnostic-porti). Fara ele: mesajul de dinainte, neschimbat.
+#   Runda 16 a runnerului (17.11.2026): cu amprenta globala runnerul cere plafonul EXACT AG_PLAFON_MS (5000), iar 18a / 19a
+#   (APLICATE pe 13.11, nu se ating) cer 2000 => modul L15 al acestui script se opreste la generare (refuz 3, nimic trimis).
+#   Modul fara L15 (proba istorica a E1, plafon 2000) e neschimbat.
 # ============================================================================
 set -Eeuo pipefail
 umask 077

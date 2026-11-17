@@ -1,5 +1,5 @@
 # L15 v2 - manifestul diferentelor pentru 20261221a_meteo_xweather_zilnic (AMPRENTA_GLOBALA v2); familie TAB eticheta TAB operatie TAB amprenta
-# generat pe clona cu scripts/livrare_l15_manifest.sh (ROLLBACK, nimic comis); migrarea sha256 29ef3fa32dac15082d0c50aa0233b16ad144202f484a5e7211d5a9e327e87fca
+# generat pe clona cu scripts/livrare_l15_manifest.sh (ROLLBACK, nimic comis); migrarea sha256 238daabcd64f3b78055dec0c34b285747967409a08364c27e2135201f5742eb4
 # clona: server_version_num 170006, rol postgres
 # clona: GLOBAL inainte 14dfa03488fe782dbf98b1777fd51702 (26150 randuri), dupa 79fd3e10c72d780c56714de08ce501e0 (26258 randuri); 108 obiecte
 coloana	coloana public.meteo_zilnic_xweather.cerere_conditii	creat	f4e6a210619678ca573fba858dc5ab7e

@@ -1,4 +1,4 @@
--- Version 20261225120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 2000 --amprenta-globala <md5> --diferente-globale
+-- Version 20261225120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 5000 --amprenta-globala <md5> --diferente-globale
 --   supabase/migrations/20261225a_executie_uscare.l15.tsv (DOAR cu plafon ȘI cu amprenta globală L15 v2: fără pasul „înainte” al runnerului
 --   în aceeași tranzacție, migrarea refuză în $pre$ — AMPRENTA_GLOBALA_LIPSA).
 -- L15 (runda 2): garanția la aplicare = amprenta GLOBALĂ v2 a runnerului (docs/LIVRARE_L15_V2.md): orice derivă a oricărei funcții, politici,
@@ -55,16 +55,19 @@
 --   țintă doar citit). Cheile apăsărilor sunt ale AUTORULUI (unic pe (creat_de, cheie), runda 4). Lock-urile implicite: FK-urile (FOR KEY SHARE pe
 --   executie_proiecte / executie_probe_tronsoane / executie_uscari / executie_uscare_incarcari), trigger-ele pozei și rezervării (FOR SHARE pe
 --   raport, deja ținut mai tare). Modulul Probe pe tronsoane (20261202a) nu atinge nimic de aici: fără ciclu.
--- Lock-uri la aplicare (punct unic, NOWAIT, reîncercat cât timp nu s-a depășit 1 s de la BEGIN — bugetul se verifică și DUPĂ obținere: un lock
---   luat după prima secundă = refuz, nimic schimbat): executie_proiecte și executie_probe_tronsoane SHARE ROW EXCLUSIVE (cheile străine),
---   storage.objects ACCESS EXCLUSIVE (CREATE POLICY + sonda politicilor): oprește scurt și citirile de fișiere — de aplicat într-un moment liniștit.
--- GĂRZILE DE TIMP reale (runda 3; nu există alt plafon): plafonul tranzacției = 2000 ms pus de runner înainte de BEGIN (verificat în $pre$;
---   numele parametrului apare în fișier DOAR în citirea exactă acceptată de validatorul runnerului — nici în comentarii, runda 4),
---   lock_timeout = 100 ms, bugetul lock-urilor de 1 s de la BEGIN (mai sus) și garda finală a runnerului. Migrarea NU fixează
---   statement_timeout și nu are alt plafon (ex. 1.500 ms): durata „sfarsit la … ms” de la final e doar afișată.
--- LIVRAREA PE PRODUCȚIE NU ÎNCAPE ÎN ACESTE GĂRZI cu runnerul de azi: amprenta globală L15 v2 se calculează ÎNAINTE și DUPĂ, în aceeași tranzacție,
---   iar pe producție un calcul durează ~1,7–2,3 s (sesiune caldă; mai mult la rece). Fără refacerea uneltei de livrare (sau o derogare aprobată
---   separat) aplicarea se oprește cu BUGET_LOCK / plafonul tranzacției depășit, fără efect. Ce trebuie măsurat înainte: spec §11 „Livrarea pe producție”.
+-- Lock-uri la aplicare (punct unic, NOWAIT, ordine FIXĂ: executie_proiecte -> executie_probe_tronsoane -> storage.objects; docs/LIVRARE_L15_V2.md
+--   §9 „Bugetul de lock”): executie_proiecte și executie_probe_tronsoane SHARE ROW EXCLUSIVE (cheile străine), storage.objects ACCESS EXCLUSIVE
+--   (CREATE POLICY + sonda politicilor): oprește și citirile de fișiere cât e ținut (până la COMMIT, inclusiv pasul „după” al runnerului) — de
+--   aplicat într-un moment liniștit. Bugetul = 1 s cu ceasul pornit IMEDIAT ÎNAINTEA PRIMEI ÎNCERCĂRI (nu la BEGIN: pasul „înainte” al runnerului
+--   nu îl mai consumă), verificat înaintea fiecărei încercări și DUPĂ obținerea setului complet (și pe calea fără coliziune: setul obținut după
+--   termen = refuz, nimic schimbat); fiecare încercare e o subtranzacție (un eșec eliberează lock-urile parțiale înaintea pauzei).
+-- GĂRZILE DE TIMP reale (runda 3; nu există alt plafon): plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$;
+--   numele parametrului apare în fișier DOAR în citirea exactă acceptată de validatorul runnerului — nici în comentarii, runda 4; validatorul
+--   cere ca runnerul să dea exact plafonul de aici), lock_timeout = 100 ms, bugetul lock-urilor de 1 s (mai sus) și garda finală a runnerului.
+--   Migrarea NU fixează statement_timeout și nu are alt plafon: duratele „lock la …” / „sfarsit la …” / „lock-uri tinute …” sunt doar afișate.
+-- Plafonul 5000 (decizia proprietarului, 17.11.2026): pe producție un calcul de amprentă ~0,86 s cald (+0,2–0,3 s pe un backend proaspăt), pasul
+--   runnerului ~×1,5 ⇒ tranzacția estimată ~2,5–2,8 s; 5000 lasă rezervă și la rece. De CONFIRMAT prin proba cu ROLLBACK pe producție (spec §11);
+--   se poate coborî după măsurătoare (PR: constanta runnerului + garda de aici).
 -- Revenire: supabase/revenire/20261225a_executie_uscare_ROLLBACK.sql (refuză dacă există date; verifică DEFINIȚIILE, nu doar numerele).
 -- Probe: scripts/pglite/test_executie_uscare_local.mjs (PGlite, cu pașii reali L15 v2 ai runnerului) + supabase/tests/20261225a_executie_uscare_doua_sesiuni.sh
 --   (DOUĂ sesiuni reale, pe clonă: creare / reîncercare, salvare / închidere, poză / închidere).
@@ -83,9 +86,9 @@ BEGIN
   END IF;
   IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION '20261225a: cere PostgreSQL 17 (plafonul tranzactiei)'; END IF;
   SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
-  IF v_plafon IS DISTINCT FROM '2000/session'
-     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '2000:' || txid_current() THEN
-    RAISE EXCEPTION '20261225a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 2000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 2000)',
+  IF v_plafon IS DISTINCT FROM '5000/session'
+     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || txid_current() THEN
+    RAISE EXCEPTION '20261225a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 5000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 5000)',
       coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa');
   END IF;
   -- L15 v2: pasul „înainte” al runnerului a rulat în ACEASTĂ tranzacție (tabelul lui temporar, cu tag aleator, există în schema temporară a
@@ -167,15 +170,20 @@ BEGIN
 END $lant$;
 DO $l15_inainte$ BEGIN PERFORM pg_temp.lant_20261225a('inainte'); END $l15_inainte$;
 
--- ── punctul UNIC de blocare (L06), după verificările de catalog: NOWAIT, mereu în aceeași ordine; bugetul = 1 s de la BEGIN, verificat ÎNAINTE de
--- fiecare încercare și DUPĂ obținere (și pe calea fără coliziune: un lock obținut după prima secundă = refuz, nimic schimbat) ──
+-- ── punctul UNIC de blocare (L06), după verificările de catalog. Ordinea FIXĂ (aceeași la fiecare încercare): executie_proiecte, apoi
+-- executie_probe_tronsoane (SHARE ROW EXCLUSIVE), apoi storage.objects (ACCESS EXCLUSIVE); lock-urile implicite ulterioare (FK la CREATE TABLE,
+-- CREATE POLICY) sunt pe aceleași relații, deja ținute mai tare. Bugetul = 1 s cu ceasul pornit IMEDIAT ÎNAINTEA PRIMEI ÎNCERCĂRI (v_t0; nu la
+-- BEGIN), verificat ÎNAINTE de fiecare încercare și DUPĂ obținerea setului complet — și pe calea fără coliziune: setul obținut după termen = refuz,
+-- nimic schimbat. Fiecare încercare = subtranzacție (BEGIN … EXCEPTION): eșecul unui lock anulează subtranzacția și eliberează lock-urile luate
+-- deja în ea, ÎNAINTEA pauzei. Momentul obținerii (gazpet.lock_puternic_la, µs de la epoch) îl citește garda finală a runnerului (LOCK_TINUT). ──
 DO $lock$
-DECLARE v_incercari integer := 0;
+DECLARE v_incercari integer := 0; v_t0 timestamptz := clock_timestamp(); v_buget constant interval := interval '1 second';
 BEGIN
   LOOP
-    IF clock_timestamp() >= now() + interval '1 second' THEN
-      RAISE EXCEPTION '20261225a: BUGET_LOCK: % incercari, % ms de la BEGIN (bugetul lock-urilor e 1 s de la BEGIN); nimic schimbat',
-        v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
+    IF clock_timestamp() >= v_t0 + v_buget THEN
+      RAISE EXCEPTION '20261225a: BUGET_LOCK: % incercari, % ms de la prima incercare (bugetul lock-urilor e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
+        v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), round(extract(epoch FROM clock_timestamp() - now()) * 1000)
+        USING ERRCODE = '55P03';
     END IF;
     v_incercari := v_incercari + 1;
     BEGIN
@@ -187,11 +195,14 @@ BEGIN
       PERFORM pg_sleep(0.05);
     END;
   END LOOP;
-  IF clock_timestamp() >= now() + interval '1 second' THEN
-    RAISE EXCEPTION '20261225a: BUGET_LOCK: lock-urile obtinute abia la % ms de la BEGIN (% incercari; bugetul e 1 s de la BEGIN); nimic schimbat',
-      round(extract(epoch FROM clock_timestamp() - now()) * 1000), v_incercari USING ERRCODE = '55P03';
+  IF clock_timestamp() >= v_t0 + v_buget THEN
+    RAISE EXCEPTION '20261225a: BUGET_LOCK: lock-urile obtinute abia la % ms de la prima incercare (% incercari; bugetul e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
+      round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000)
+      USING ERRCODE = '55P03';
   END IF;
-  RAISE NOTICE '20261225a: lock la % ms de la BEGIN (% incercari)', round(extract(epoch FROM clock_timestamp() - now()) * 1000), v_incercari;
+  PERFORM set_config('gazpet.lock_puternic_la', round(extract(epoch FROM clock_timestamp()) * 1000000)::bigint::text, true);
+  RAISE NOTICE '20261225a: lock la % ms de la BEGIN (% incercari, % ms de la prima incercare)', round(extract(epoch FROM clock_timestamp() - now()) * 1000),
+    v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
 END $lock$;
 
 -- ── listele și instantaneul meteo: forma exactă, verificată pe ORICE cale (CHECK) ──
@@ -1596,6 +1607,8 @@ DO $l15_dupa$ BEGIN
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261225a_executie_uscare:' || txid_current() OR current_user IS DISTINCT FROM 'postgres' THEN
     RAISE EXCEPTION '20261225a: garda final invalida';
   END IF;
-  RAISE NOTICE '20261225a: sfarsit la % ms de la BEGIN', round(extract(epoch FROM clock_timestamp() - now()) * 1000);
+  RAISE NOTICE '20261225a: sfarsit la % ms de la BEGIN; lock-uri puternice tinute de % ms (pana la COMMIT se adauga pasul dupa al runnerului si garda: LOCK_TINUT)',
+    round(extract(epoch FROM clock_timestamp() - now()) * 1000),
+    round(extract(epoch FROM clock_timestamp()) * 1000 - current_setting('gazpet.lock_puternic_la')::numeric / 1000);
 END $l15_dupa$;
 DROP FUNCTION pg_temp.lant_20261225a(text);

@@ -61,8 +61,17 @@
 #   neschimbat; cazurile sunt acum teste explicite (scripts/test_livrare_validator_plafon.py). În corpuri $…$ și în
 #   literali E'…' psql nu le interpreta nici în forma veche (aceeași semantică). Invarianța la
 #   standard_conforming_strings (runda 6) e cea care face sigură citirea întregului mesaj de către server la primire.
+# Runda 16 (17.11.2026, decizia proprietarului: plafonul livrărilor L15 v2 = 5000 ms, docs/LIVRARE_L15_V2.md §9):
+#   --plafon-tranzactie-ms <N> (forma folosită de runner) = regulile lui --plafon-tranzactie + ACORDUL plafonului:
+#   fiecare valoare de plafon cerută de fișier trebuie să fie EXACT N, altfel REFUZ înainte de orice conexiune
+#   (PLAFON_DIFERIT; o migrare care cere 2000 nu pleacă cu un runner care dă 5000 și invers). Se citesc, pe textul brut
+#   (și comentariile — fail-closed): literalul '<D>/session' (garda pe pg_settings), marcajul '<D>:' || txid_current()
+#   (garda pe gazpet.plafon_tranzactie) și mențiunea „--plafon-tranzactie-ms <D>” (antetul de livrare). Un fișier care
+#   citește gazpet.plafon_tranzactie fără marcajul în forma de mai sus = REFUZ (valoarea cerută nu se poate verifica).
+#   Un fișier fără nicio cerere de plafon nu are ce acorda (doar regulile statice). --plafon-tranzactie fără valoare
+#   rămâne pentru testele statice vechi (doar regulile, fără acord); runnerul NU îl mai folosește.
 #
-# Utilizare: python3 livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie]
+# Utilizare: python3 livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie | --plafon-tranzactie-ms <N>]
 #   <tag-interzis> = tag-ul dollar-quote al înregistrării generate de runner; nu are voie să apară în fișier.
 # Ieșire: 0 = acceptat (tipărește „OK <n instrucțiuni>”); 1 = refuzat (motivul pe stderr); orice altceva = eroare ⇒ refuz.
 # ============================================================================
@@ -79,6 +88,13 @@ GARDA = "gazpet.livrare_migrare"
 PLAFON_CITIRE = "FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout'"
 PLAFON_NUME = ("transaction_timeout", "pg_settings")
 RESET_ALL = re.compile(r"(?<![a-z0-9_$])reset[ \t\n\r\f\v]+all(?![a-z0-9_$])")
+# Runda 16: cererile de plafon din fișier (valoarea D, în ms), comparate cu plafonul dat runnerului.
+PLAFON_CERERI = (
+    ("garda pe pg_settings '<D>/session'", re.compile(r"'([0-9]+)/session'")),
+    ("marcajul '<D>:' || txid_current()", re.compile(r"'([0-9]+):'[ \t\n\r\f\v]*\|\|[ \t\n\r\f\v]*(?:pg_catalog\.)?txid_current\(\)", re.I)),
+    ("antetul --plafon-tranzactie-ms <D>", re.compile(r"--plafon-tranzactie-ms[ \t=]+([0-9]+)")),
+)
+PLAFON_MARCAJ = "gazpet.plafon_tranzactie"
 SPATIU = " \t\n\r\f\v"
 IDENT_START = re.compile(r"[A-Za-z_\u0080-\U0010FFFF]")
 TAG = re.compile(r"\$([A-Za-z_\u0080-\U0010FFFF][A-Za-z0-9_\u0080-\U0010FFFF]*)?\$")
@@ -330,7 +346,25 @@ def verifica_plafon(text):
         raise Refuz(f"cu plafonul tranzacției activ, RESET ALL e interzis oriunde (linia {linie(text, m.start())})")
 
 
-def valideaza(cale, tag_interzis=None, plafon=False):
+def verifica_acord_plafon(text, plafon_ms):
+    """Runda 16: fiecare cerere de plafon din fișier = exact plafonul dat runnerului (vezi antetul). Întoarce numărul
+    cererilor găsite. Fail-closed: marcajul plafonului citit într-o formă nerecunoscută = refuz."""
+    gasite, diferite = 0, []
+    for et, rx in PLAFON_CERERI:
+        for m in rx.finditer(text):
+            gasite += 1
+            if int(m.group(1)) != plafon_ms:
+                diferite.append(f"{m.group(1)} ms ({et}, linia {linie(text, m.start())})")
+    if diferite:
+        raise Refuz(f"PLAFON_DIFERIT: fișierul cere {'; '.join(diferite)}, iar runnerul dă {plafon_ms} ms — "
+                    f"livrați cu plafonul cerut sau schimbați migrarea (review nou); nimic trimis")
+    if PLAFON_MARCAJ in text.lower() and not PLAFON_CERERI[1][1].search(text):
+        raise Refuz(f"PLAFON_DIFERIT: fișierul citește {PLAFON_MARCAJ}, dar nu îl compară în forma verificabilă "
+                    f"'<D>:' || txid_current() — plafonul cerut nu se poate compara cu cel al runnerului")
+    return gasite
+
+
+def valideaza(cale, tag_interzis=None, plafon=False, plafon_ms=None):
     brut = open(cale, "rb").read()
     if b"\x00" in brut:
         raise Refuz("octet NUL în fișier")
@@ -347,8 +381,10 @@ def valideaza(cale, tag_interzis=None, plafon=False):
     for p in LEXICALE:
         if p in mic:
             raise Refuz(f"fișierul menționează parametrul lexical {p} (interzis oriunde; runnerul îl fixează)")
-    if plafon:
+    if plafon or plafon_ms is not None:
         verifica_plafon(text)
+    if plafon_ms is not None:
+        verifica_acord_plafon(text, plafon_ms)
     instr = instructiuni(text)
     if not instr:
         raise Refuz("fișier fără instrucțiuni")
@@ -378,11 +414,20 @@ def main(argv):
     plafon = bool(args) and args[-1] == "--plafon-tranzactie"
     if plafon:
         args.pop()
+    plafon_ms = None
+    if not plafon and len(args) >= 2 and args[-2] == "--plafon-tranzactie-ms":
+        # aceeași formă ca runnerul: întreg simplu 100..600000, fără zerouri în față
+        if not (re.fullmatch(r"[1-9][0-9]{2,5}", args[-1]) and int(args[-1]) <= 600000):
+            print(f"Utilizare: --plafon-tranzactie-ms <N> cu N întreg 100..600000 (dat: {args[-1]!r})", file=sys.stderr)
+            return 2
+        plafon_ms = int(args[-1])
+        del args[-2:]
     if len(args) not in (1, 2) or any(a.startswith("--") for a in args):
-        print("Utilizare: livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie]", file=sys.stderr)
+        print("Utilizare: livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie | --plafon-tranzactie-ms <N>]",
+              file=sys.stderr)
         return 2
     try:
-        n = valideaza(args[0], args[1] if len(args) == 2 else None, plafon)
+        n = valideaza(args[0], args[1] if len(args) == 2 else None, plafon, plafon_ms)
     except Refuz as e:
         print(f"REFUZ validator: {e}", file=sys.stderr)
         return 1
