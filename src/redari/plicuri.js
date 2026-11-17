@@ -131,7 +131,35 @@ export async function docxSimplu({ titlu, paragrafe = [], tabel, semnaturi = [] 
   return new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
 }
 
+/** Ordinea convocărilor într-un plic (opis, pachetul de documente): după numărul C-nnnn, apoi textul numărului. O singură definiție (L19). */
+export const ordineConvocari = convocari => [...(convocari || [])].sort((a, b) => (numarConvocare(a) ?? Infinity) - (numarConvocare(b) ?? Infinity)
+  || txt(a.nr_document).localeCompare(txt(b.nr_document)) || txt(a.conv_id ?? a.id).localeCompare(txt(b.conv_id ?? b.id)))
+
+/**
+ * Pachetul de documente al unui lot (tipărire pe lot, FAN sau Poștă): UN fișier ZIP cu documentele ARHIVATE, în ordinea numărului de plic;
+ * în fiecare plic întâi opisul (pagina 1 a plicului: numărul plicului în titlu, verificat cu eticheta), apoi convocările în ordinea opisului
+ * (fiecare convocare are informarea pe verso, în același DOCX). Doar plicurile active. Orice fișier lipsă = lipsă numită, nu se sare (L12).
+ * Întoarce { fisiere: [{ nume, path, nr_plic }], lipsuri: [text] }. `prefix` = 'TEST_' pentru un lot de test.
+ */
+export function planPachetPlicuire(plicuri, convocariPePlic, { prefix = '' } = {}) {
+  const fisiere = [], lipsuri = []
+  const active = [...(plicuri || [])].filter(p => p.stare === 'activ').sort((a, b) => (txt(a.nr_plic) < txt(b.nr_plic) ? -1 : txt(a.nr_plic) > txt(b.nr_plic) ? 1 : 0))
+  active.forEach((p, i) => {
+    const n = String(i + 1).padStart(3, '0')
+    const cs = ordineConvocari(convocariPePlic?.[p.id] || [])
+    if (!cs.length) lipsuri.push(`${p.nr_plic}: plicul nu are convocări`)
+    if (txt(p.opis_path)) fisiere.push({ nume: `${prefix}${n}_${p.nr_plic}_0_opis.docx`, path: p.opis_path, nr_plic: p.nr_plic })
+    else lipsuri.push(`${p.nr_plic}: opisul nu e atașat la dosar (butonul „Opis (DOCX) + exemplar la dosar”)`)
+    cs.forEach((c, k) => {
+      if (txt(c.fisier_convocator_path)) fisiere.push({ nume: `${prefix}${n}_${p.nr_plic}_${k + 1}_${txt(c.nr_document).replace(/[^A-Za-z0-9-]/g, '_')}.docx`, path: c.fisier_convocator_path, nr_plic: p.nr_plic })
+      else lipsuri.push(`${p.nr_plic}: convocarea ${c.nr_document || c.conv_id} nu are fișierul arhivat`)
+    })
+  })
+  return { fisiere, lipsuri }
+}
+
 export function genereazaOpis(plic, convocari, { proiect, uat, contact } = {}) {
+  convocari = ordineConvocari(convocari)
   return docxSimplu({ titlu: `Opis - plicul ${plic.nr_plic}`, paragrafe: [
     `Data: ${dataText(dataBucuresti())}`, `Destinatar: ${plic.destinatar_nume}`, `Adresa: ${adresaPlic(contact || convocari[0]?.adresa)}`,
     `UAT: ${uat?.nume || plic.uat_nume || ''}`, `Proiect: ${proiect?.denumire || proiect?.cod || ''}`,

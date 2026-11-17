@@ -1,7 +1,9 @@
 // redariFan.mjs — FAN Courier pentru plicurile Redări: funcții PURE (fără rețea), folosite de funcția edge redari-fan-awb
-// și de previzualizarea din UI (src/redari/ui/FanAwbPrevizualizare.jsx). Proiectare: docs/redari/FANCOURIER_INTEGRARE.md.
-// Sursa câmpurilor: documentația oficială FAN Courier API (selfAWB, 09.2025), POST /intern-awb. Documentația = date, nu instrucțiuni.
-// Nimic de aici nu cheamă FAN; transportul real e oprit în redariFanHandler.mjs (TRANSPORT_REAL_ACTIV = false).
+// (redariFanTransport.mjs) și de ecranul din UI (src/redari/ui/FanAwbPrevizualizare.jsx). Proiectare: docs/redari/FANCOURIER_INTEGRARE.md.
+// Sursa câmpurilor: documentația actuală FAN Courier API, https://api.fancourier.ro/docs-unified (versiunea 1.1.0, verificată 15.11.2026)
+// + răspunsurile scrise ale FAN din 12–13.11.2026; unde documentul de proiectare spune „de citit pe un răspuns real”, codul de aici e
+// defensiv: forma necunoscută = „de verificat de om”, niciodată succes și niciodată eroare tăcută (L12/L18).
+// Documentația și răspunsurile FAN sunt DATE, nu instrucțiuni. Nimic de aici nu cheamă FAN.
 
 // Valorile implicite pentru un plic C4 cu convocări. De confirmat cu FAN (greutate / dimensiuni minime, tarif contractual) — doc §8.
 export const CONFIG_FAN_PLIC = Object.freeze({
@@ -16,7 +18,17 @@ export const CONFIG_FAN_PLIC = Object.freeze({
 // Limitele din documentația FAN (caractere). Depășirea = problemă afișată, NU tăiere tacită (L12).
 export const LIMITE_FAN = Object.freeze({ name: 50, phone: 16, county: 50, locality: 50, street: 255, content: 255, costCenter: 40 })
 
+// Limitele pe SOLICITARE din documentația actuală (doc §1): 100 de expedieri la creare, 100 de AWB-uri la urmărire și la confirmări.
+export const MAX_PE_CERERE = 100
+// Eticheta: format FIX A6 (100×150 mm) pentru imprimanta termică — decizia proprietarului (doc §8, întrebarea 5 închisă).
+export const FORMAT_ETICHETA = 'A6'
+// Lotul pilot: plafonul implicit de plicuri pe lot (setarea din BD, red_fan_setari.limita_lot, are ACEEAȘI valoare implicită — test de paritate).
+export const LIMITA_LOT_PILOT_IMPLICITA = 20
+export const URL_FAN = 'https://api.fancourier.ro'
+
 const txt = v => (v == null ? '' : String(v).replace(/\s+/g, ' ').trim())
+const RE_NR_PLIC = /^PL-[A-Z]{3}-[0-9]{4}$/
+const RE_AWB = /^[0-9]{6,20}$/
 
 /** Telefonul în forma acceptată de FAN: cifre, cu „+” opțional în față; spațiile / cratimele / punctele se scot. null = lipsă sau invalid. */
 export function telefonFan(v) {
@@ -30,12 +42,13 @@ export function telefonFan(v) {
  * Corpul unui element din `shipments` (POST /intern-awb) pentru un plic + problemele care blochează generarea.
  * plic: { nr_plic, destinatar_nume } (red_plicuri); contact: { telefon, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal }
  * (red_detinatori_contact — PII, doar admin/editor); proiectCod: red_proiecte.cod (centrul de cost pe factura FAN).
- * Întoarce { ok, shipment, probleme: [text] }. În `content` / `observation` intră DOAR nr_plic (fără nume / date personale).
+ * Întoarce { ok, shipment, probleme: [text] }. În `content` / `observation` intră DOAR nr_plic (fără nume / date personale):
+ * e câmpul de referință care ajunge pe etichetă (verificarea celor trei numere, doc §10) și cheia reconcilierii (borderoul zilei).
  */
 export function construiestePlicFan({ plic, contact, proiectCod, config = CONFIG_FAN_PLIC } = {}) {
   const probleme = []
   const nrPlic = txt(plic?.nr_plic)
-  if (!/^PL-[A-Z]{3}-[0-9]{4}$/.test(nrPlic)) probleme.push('numărul plicului lipsește sau e invalid')
+  if (!RE_NR_PLIC.test(nrPlic)) probleme.push('numărul plicului lipsește sau e invalid')
   const nume = txt(plic?.destinatar_nume)
   if (!nume) probleme.push('destinatarul nu are nume')
   else if (nume.length > LIMITE_FAN.name) probleme.push(`numele destinatarului are ${nume.length} caractere (FAN acceptă ${LIMITE_FAN.name})`)
@@ -76,6 +89,32 @@ export function construiestePlicFan({ plic, contact, proiectCod, config = CONFIG
   return { ok: probleme.length === 0, shipment, probleme }
 }
 
+/** Pentru fiecare plic: contactul primului deținător din plic care are telefon (altfel primul), ordine stabilă după id.
+ *  O SINGURĂ definiție (L19): ecranul (previzualizare + propunere) și funcția edge (recalcularea hash-ului la generare) o folosesc identic. */
+export function contactPePlic(plicuri, convocari, contacte) {
+  const peDet = new Map((contacte || []).map(c => [c.detinator_id, c]))
+  const detPePlic = new Map()
+  for (const c of convocari || []) {
+    if (!c.plic_id) continue
+    if (!detPePlic.has(c.plic_id)) detPePlic.set(c.plic_id, [])
+    detPePlic.get(c.plic_id).push(c.detinator_id)
+  }
+  return (plicuri || []).map(p => {
+    const lista = [...new Set(detPePlic.get(p.id) || [])].sort().map(id => peDet.get(id)).filter(Boolean)
+    return { plic: p, contact: lista.find(c => String(c.telefon || '').trim()) || lista[0] || null }
+  })
+}
+
+/** Plicurile gata de propunere / de generat: contactul ales + corpul FAN + hash-ul. Aceeași funcție în ecran și în edge (L19). */
+export async function pregatestePlicuriFan({ plicuri, convocari, contacte, proiectCod, subtle = globalThis.crypto?.subtle }) {
+  const out = []
+  for (const { plic, contact } of contactPePlic(plicuri, convocari, contacte)) {
+    const r = construiestePlicFan({ plic, contact, proiectCod })
+    out.push({ plic, contact, ...r, hash: await hashPlicFan(r.shipment, subtle) })
+  }
+  return out
+}
+
 // JSON canonic (chei sortate) — baza hash-ului aprobat de owner: același plic, aceleași date → același hash.
 export function jsonCanonic(v) {
   if (Array.isArray(v)) return '[' + v.map(jsonCanonic).join(',') + ']'
@@ -90,49 +129,267 @@ export async function hashPlicFan(shipment, subtle = globalThis.crypto?.subtle) 
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-/**
- * Interpretarea răspunsului POST /intern-awb pentru UN element trimis (un AWB pe apel → asocierea e sigură).
- * Întoarce { stare: 'generat' | 'eroare' | 'necunoscut', awb?, tarif?, tva?, motiv? }.
- * HTTP 5xx / răspuns neparsabil / fără awbNumber și fără erori = 'necunoscut' (L05: AWB-ul poate exista; fără retry automat).
- */
-export function interpreteazaRaspunsAwb(status, corp) {
-  if (!Number.isInteger(status) || status >= 500 || status === 0) return { stare: 'necunoscut', motiv: `răspuns FAN neconfirmat (HTTP ${status})` }
-  const el = Array.isArray(corp?.response) ? corp.response : null
-  if (status >= 400) return { stare: 'eroare', motiv: `FAN a refuzat cererea (HTTP ${status})` }
-  if (!el || el.length !== 1) return { stare: 'necunoscut', motiv: 'răspuns FAN fără exact un element' }
-  const r = el[0] || {}
-  const erori = r.errors
-  const areErori = erori && (Array.isArray(erori) ? erori.length > 0 : typeof erori === 'object' ? Object.keys(erori).length > 0 : !!String(erori).trim())
+/** Ordinea pe lot = numărul plicului (etichete, documente, solicitări). Comparație de text simplă: PL-XXX-0001 are lungime fixă. */
+export const comparaPlic = (a, b) => (txt(a?.nr_plic) < txt(b?.nr_plic) ? -1 : txt(a?.nr_plic) > txt(b?.nr_plic) ? 1 : 0)
+
+/** Bucăți de cel mult `max` (implicit 100, limita FAN pe solicitare), în ordinea primită. max în afara 1..100 = eroare, nu tăcere. */
+export function imparteInBucati(lista, max = MAX_PE_CERERE) {
+  if (!Number.isInteger(max) || max < 1 || max > MAX_PE_CERERE) throw new Error(`mărimea bucății trebuie să fie între 1 și ${MAX_PE_CERERE}`)
+  const out = []
+  for (let i = 0; i < (lista || []).length; i += max) out.push(lista.slice(i, i + max))
+  return out
+}
+
+// ── interpretarea răspunsului POST /intern-awb ──
+// Jakarinos r1/r2 P2 (L18): tarif lipsă = necunoscut (null), nu 0; doar număr finit sau text zecimal.
+const numar = v => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && /^[0-9]+(\.[0-9]+)?$/.test(v.trim()) && Number.isFinite(Number(v.trim())) ? Number(v.trim()) : null)
+const areErori = erori => !!erori && (Array.isArray(erori) ? erori.length > 0 : typeof erori === 'object' ? Object.keys(erori).length > 0 : !!String(erori).trim())
+const textAwb = v => (v == null ? '' : String(v).trim())
+
+/** Un element din `response` → { stare, awb?, tarif?, tva?, motiv? } (fără HTTP). */
+function interpreteazaElement(r) {
+  r = r && typeof r === 'object' ? r : {}
   // Jakarinos r2 P2 (L13/L18): un AWB numeric peste Number.MAX_SAFE_INTEGER a fost deja rotunjit de JSON.parse → nu se acceptă
   if (typeof r.awbNumber === 'number' && !Number.isSafeInteger(r.awbNumber)) return { stare: 'necunoscut', motiv: 'număr AWB numeric nesigur (precizie pierdută)' }
-  const awb = r.awbNumber == null ? '' : String(r.awbNumber).trim()
-  if (areErori && !awb) return { stare: 'eroare', motiv: 'FAN: ' + JSON.stringify(erori).slice(0, 300) }
-  if (!/^[0-9]{6,20}$/.test(awb)) return { stare: 'necunoscut', motiv: 'răspuns FAN fără număr AWB valid' }
-  // Jakarinos r1 P2 (L18): tarif lipsă = necunoscut (null), nu 0 — Number(null) ar da 0
-  // Jakarinos r2 P2: doar număr finit sau text zecimal; ' ', false, [] etc. = necunoscut (null), nu 0
-  const numar = v => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && /^[0-9]+(\.[0-9]+)?$/.test(v.trim()) && Number.isFinite(Number(v.trim())) ? Number(v.trim()) : null)
+  const awb = textAwb(r.awbNumber)
+  if (areErori(r.errors) && !awb) return { stare: 'eroare', motiv: 'FAN: ' + JSON.stringify(r.errors).slice(0, 300) }
+  if (!RE_AWB.test(awb)) return { stare: 'necunoscut', motiv: 'răspuns FAN fără număr AWB valid' }
   return { stare: 'generat', awb, tarif: numar(r.tariff), tva: numar(r.vat) }
 }
 
-// Codurile de eveniment FAN (GET /reports/awb-events) folosite pentru plicuri. Doar propuneri: AR-ul și returul le confirmă omul.
-export const EVENIMENTE_FAN = Object.freeze({
-  ridicat: ['C0'],
-  livrat: ['S2'],
-  retur: ['S16', 'S33', 'S43'],
-  adresa: ['S4', 'S5', 'S10', 'S19', 'S20', 'S25', 'S27', 'S28', 'S42'],
-  refuz: ['S6', 'S50'],
-})
-
-/** Din tracking-ul unui AWB: data ridicării (C0, = data expedierii în ERP), livrarea și semnalele de retur — pentru propuneri afișate omului. */
-export function rezumatUrmarire(urmarire) {
-  const ev = Array.isArray(urmarire?.events) ? urmarire.events.filter(e => e && typeof e.id === 'string') : []
-  const primul = coduri => ev.filter(e => coduri.includes(e.id)).map(e => String(e.date || '')).sort()[0] || null
-  const ultimul = ev.map(e => e).sort((a, b) => String(a.date || '').localeCompare(String(b.date || ''))).at(-1) || null
-  return {
-    ridicat_la: primul(EVENIMENTE_FAN.ridicat),
-    livrat_la: primul(EVENIMENTE_FAN.livrat),
-    confirmat_de: txt(urmarire?.confirmation?.name) || null,
-    semnal_retur: ev.some(e => [...EVENIMENTE_FAN.retur, ...EVENIMENTE_FAN.adresa, ...EVENIMENTE_FAN.refuz].includes(e.id)) || !!urmarire?.returnAwbNumber,
-    ultimul_eveniment: ultimul ? { id: ultimul.id, nume: txt(ultimul.name), data: ultimul.date || null } : null,
+/**
+ * Răspunsul POST /intern-awb pentru o solicitare cu `n` expedieri (1…100) → o listă de `n` rezultate, în ordinea trimisă.
+ * Asocierea element trimis ↔ element primit se face pe POZIȚIE și DOAR când răspunsul are exact `n` elemente (doc §5: alt număr de
+ * elemente = rândurile rămân „necunoscut”, asocierea nu se ghicește). Ordinea răspunsului = ordinea expedierilor e o presupunere de
+ * verificat la Testul 1 (doc §11); de aceea fiecare rând „generat” se compară apoi cu borderoul (nr_plic din observație) la urmărire.
+ * HTTP 0 / 5xx / corp neparsabil = toate „necunoscut” (L05: AWB-urile pot exista; fără retry automat).
+ * 4xx = refuz determinist („eroare”) — DAR dacă răspunsul de refuz conține vreun număr AWB, toată bucata e „necunoscut”.
+ * Același număr AWB pe două elemente = ambele „necunoscut”.
+ */
+export function interpreteazaRaspunsLot(status, corp, n) {
+  if (!Number.isInteger(n) || n < 1 || n > MAX_PE_CERERE) throw new Error('număr de expedieri invalid')
+  const toate = (stare, motiv) => Array.from({ length: n }, () => ({ stare, motiv }))
+  if (!Number.isInteger(status) || status >= 500 || status <= 0) return toate('necunoscut', `răspuns FAN neconfirmat (HTTP ${status})`)
+  const el = Array.isArray(corp?.response) ? corp.response : null
+  if (status >= 400) {
+    if (el && el.some(e => textAwb(e?.awbNumber))) return toate('necunoscut', `refuz FAN (HTTP ${status}) cu număr AWB în răspuns: de verificat în borderou`)
+    return toate('eroare', status === 429 ? 'FAN: prea multe solicitări (HTTP 429); rularea s-a oprit, se reia de om' : `FAN a refuzat cererea (HTTP ${status})`)
   }
+  if (!el || el.length !== n) return toate('necunoscut', `răspuns FAN cu ${el ? el.length : 'niciun'} element(e) pentru ${n} expedieri: asocierea nu se ghicește`)
+  const rez = el.map(interpreteazaElement)
+  const vazute = new Map()
+  rez.forEach((r, i) => { if (r.awb) vazute.set(r.awb, [...(vazute.get(r.awb) || []), i]) })
+  for (const idx of vazute.values()) if (idx.length > 1) for (const i of idx) rez[i] = { stare: 'necunoscut', motiv: 'același AWB pe mai multe elemente ale răspunsului' }
+  return rez
+}
+
+/** Compatibil cu scheletul: răspunsul pentru O singură expediere. */
+export const interpreteazaRaspunsAwb = (status, corp) => interpreteazaRaspunsLot(status, corp, 1)[0]
+
+// ── evenimente de urmărire (GET /reports/awb-events) ──
+// Lista din PDF-ul 09.2025 (doc §1); înainte de activare se compară cu răspunsul actual al /reports/awb-events (acțiunea „evenimente”).
+// Doar PROPUNERI afișate omului: ridicarea, AR-ul și returul le confirmă omul.
+export const EVENIMENTE_FAN = Object.freeze({
+  ridicat: Object.freeze(['C0']),
+  livrat: Object.freeze(['S2']),
+  avizat: Object.freeze(['S3', 'S11']),
+  adresa: Object.freeze(['S4', 'S10', 'S19', 'S20', 'S25', 'S27', 'S28', 'S42']),
+  mutat: Object.freeze(['S5']),
+  refuz: Object.freeze(['S6']),
+  retur: Object.freeze(['S16', 'S33', 'S43']),
+  // S50 „confirmare refuzată”: plicul poate fi livrat, dar confirmarea nu s-a semnat → judecată umană (juridic), nu retur automat
+  confirmare_refuzata: Object.freeze(['S50']),
+  neutru: Object.freeze(['S30']),   // nu răspunde la telefon: nu schimbă starea
+})
+const CATEGORIE = new Map(Object.entries(EVENIMENTE_FAN).flatMap(([cat, coduri]) => coduri.map(c => [c, cat])))
+export const categorieEveniment = cod => CATEGORIE.get(cod) || null
+// Semnalele de retur → motivul propus (MOTIVE_RETUR din src/redari/ui/comune.jsx = CHECK-ul red_plicuri.retur). Omul îl poate schimba
+// (ex. „destinatar necunoscut” în loc de „adresă incompletă”): codul FAN pentru „destinatar negăsit” nu e în lista de lucru (doc §8).
+export const RETUR_DIN_CATEGORIE = Object.freeze({ refuz: 'refuz', adresa: 'adresa_incompleta', mutat: 'mutat', avizat: 'avizat_neridicat' })
+const RE_COD_EVENIMENT = /^[A-Z]{1,2}[0-9]{1,3}$/
+
+/**
+ * Data/ora unui eveniment FAN → { data: 'AAAA-LL-ZZ', local: 'AAAA-LL-ZZ HH:MM:SS' } în Europe/Bucharest (L17), sau null.
+ * Fără fus orar în text („2026-11-10 15:00:00”) = ora locală României (PRESUPUNERE de verificat pe un răspuns real, doc §8).
+ * Cu „Z” / „+02:00” = se convertește în Europe/Bucharest. Orice altă formă = null (de verificat de om).
+ */
+export function dataEvenimentFan(v) {
+  const s = typeof v === 'string' ? v.trim() : ''
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d{1,6})?(Z|[+-]\d{2}:?\d{2})?$/.exec(s)
+  if (!m) return null
+  const [, a, l, z, h, mi, se = '00', fus] = m
+  const valid = (() => { const d = new Date(Date.UTC(+a, +l - 1, +z, +h, +mi, +se)); return d.getUTCFullYear() === +a && d.getUTCMonth() === +l - 1 && d.getUTCDate() === +z && +h < 24 && +mi < 60 && +se < 60 })()
+  if (!valid) return null
+  if (!fus) return { data: `${a}-${l}-${z}`, local: `${a}-${l}-${z} ${h}:${mi}:${se}` }
+  const ms = Date.parse(`${a}-${l}-${z}T${h}:${mi}:${se}${fus === 'Z' ? 'Z' : fus.length === 5 ? fus.slice(0, 3) + ':' + fus.slice(3) : fus}`)
+  if (!Number.isFinite(ms)) return null
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date(ms)).map(x => [x.type, x.value]))
+  return { data: `${p.year}-${p.month}-${p.day}`, local: `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}` }
+}
+
+/**
+ * Urmărirea unui AWB (un element din răspunsul GET /reports/awb/tracking) → starea pentru evidență:
+ * { urmarire_stare, ultim_eveniment, ultim_eveniment_la, ridicat_propus, livrat_la, retur_propus, motiv }
+ * urmarire_stare: 'fara_evenimente' | 'in_tranzit' | 'ridicat' | 'livrat' | 'retur' | 'de_verificat'.
+ * - retur: un cod de retur (S16/S33/S43) sau returnAwbNumber, ori ULTIMUL eveniment e refuz / adresă greșită / mutat;
+ *   retur_propus = motivul ultimului semnal (refuz → 'refuz', adresă → 'adresa_incompleta', mutat → 'mutat', avizat → 'avizat_neridicat'), null dacă nu e clar.
+ * - de_verificat: evenimente cu formă necunoscută, ultimul eveniment cu cod necunoscut sau „confirmare refuzată” (L12: nimic nu dispare tacit).
+ */
+export function rezumatUrmarireFan(el) {
+  const gol = { urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null }
+  if (!el || typeof el !== 'object') return { ...gol, motiv: 'element de urmărire fără formă cunoscută' }
+  if (el.events != null && !Array.isArray(el.events)) return { ...gol, motiv: 'lista de evenimente are o formă necunoscută' }
+  let stricat = false
+  const ev = []
+  for (const e of el.events || []) {
+    const cod = typeof e?.id === 'string' ? e.id.trim() : ''
+    const d = dataEvenimentFan(e?.date)
+    if (!RE_COD_EVENIMENT.test(cod) || !d) { stricat = true; continue }
+    ev.push({ cod, la: d.local, data: d.data, cat: categorieEveniment(cod) })
+  }
+  ev.sort((a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : 0))
+  const primul = cat => ev.find(e => e.cat === cat) || null
+  const ultim = ev.at(-1) || null
+  const ridicat = primul('ridicat'), livrat = primul('livrat')
+  const semnale = ev.filter(e => RETUR_DIN_CATEGORIE[e.cat])
+  const ultimSemnal = semnale.at(-1) || null
+  const areRetur = ev.some(e => e.cat === 'retur') || !!textAwb(el.returnAwbNumber)
+  const baza = { ultim_eveniment: ultim?.cod || null, ultim_eveniment_la: ultim?.la || null, ridicat_propus: ridicat?.data || null, livrat_la: livrat?.la || null, retur_propus: null }
+  const rez = (urmarire_stare, extra = {}) => ({ ...baza, urmarire_stare, ...extra })
+  if (stricat) return rez('de_verificat', { motiv: 'evenimente cu cod sau dată de formă necunoscută' })
+  if (areRetur) return rez('retur', { retur_propus: ultimSemnal ? RETUR_DIN_CATEGORIE[ultimSemnal.cat] : null })
+  if (ultim && ['refuz', 'adresa', 'mutat'].includes(ultim.cat)) return rez('retur', { retur_propus: RETUR_DIN_CATEGORIE[ultim.cat] })
+  if (ev.some(e => e.cat === 'confirmare_refuzata')) return rez('de_verificat', { motiv: 'confirmare refuzată (S50): judecată umană' })
+  if (ultim && !ultim.cat) return rez('de_verificat', { motiv: `ultimul eveniment are un cod necunoscut (${ultim.cod})` })
+  if (livrat) return rez('livrat')
+  if (ridicat) return rez('ridicat')
+  return ev.length ? rez('in_tranzit') : rez('fara_evenimente')
+}
+
+const listaDin = corp => (Array.isArray(corp) ? corp : Array.isArray(corp?.data) ? corp.data : Array.isArray(corp?.response) ? corp.response : null)
+const awbDin = el => {
+  if (!el || typeof el !== 'object') return null
+  for (const k of ['awbNumber', 'awb']) {
+    const v = el[k]
+    if (typeof v === 'number' && !Number.isSafeInteger(v)) return null
+    if (v != null && RE_AWB.test(String(v).trim())) return String(v).trim()
+  }
+  return null
+}
+
+/**
+ * Răspunsul GET /reports/awb/tracking pentru AWB-urile cerute (≤ 100) → { ok, pe_awb: Map(awb → rezumat), motiv }.
+ * ok=false (HTTP 0 / 4xx / 5xx) = nu se scrie nimic (citire, nu bani). Listă de formă necunoscută = TOATE AWB-urile cerute „de_verificat”.
+ * AWB cerut și absent din răspuns = „de_verificat”; elementele pentru AWB-uri necerute se ignoră, dar se numără (raportate).
+ */
+export function interpreteazaUrmarire(status, corp, awbs) {
+  if (!Number.isInteger(status) || status <= 0 || status >= 400) return { ok: false, motiv: `urmărire neconfirmată (HTTP ${status})`, pe_awb: new Map(), necerute: 0 }
+  const lista = listaDin(corp)
+  const pe = new Map()
+  const deVerificat = motiv => ({ urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null, motiv })
+  if (!lista) { for (const a of awbs) pe.set(a, deVerificat('răspuns de urmărire de formă necunoscută')); return { ok: true, pe_awb: pe, necerute: 0 } }
+  const grup = new Map()
+  let necerute = 0
+  for (const el of lista) {
+    const a = awbDin(el)
+    if (!a || !awbs.includes(a)) { necerute++; continue }
+    grup.set(a, [...(grup.get(a) || []), el])
+  }
+  for (const a of awbs) {
+    const g = grup.get(a) || []
+    pe.set(a, g.length === 1 ? rezumatUrmarireFan(g[0]) : deVerificat(g.length ? 'mai multe elemente pentru același AWB' : 'AWB absent din răspunsul de urmărire'))
+  }
+  return { ok: true, pe_awb: pe, necerute }
+}
+
+/**
+ * Răspunsul GET /reports/awb/confirmations (listă JSON, doc §1) → confirmare_stare pe AWB:
+ * 'lipsa' (lista nu are nimic pentru AWB) | 'primita_de_verificat' (există un element pentru AWB: conținutul se verifică de om — câmpurile
+ * exacte sunt întrebarea deschisă 7 din doc §8) | 'forma_necunoscuta' (lista sau elementele nu au forma așteptată).
+ * NICIODATĂ „confirmat” automat: AR-ul îl înregistrează omul. Răspunsul nu se stochează (poate conține numele primitorului).
+ */
+export function interpreteazaConfirmari(status, corp, awbs) {
+  if (!Number.isInteger(status) || status <= 0 || status >= 400) return { ok: false, motiv: `confirmări neconfirmate (HTTP ${status})`, pe_awb: new Map() }
+  const lista = listaDin(corp)
+  const pe = new Map()
+  if (!lista || lista.some(el => !awbDin(el))) { for (const a of awbs) pe.set(a, 'forma_necunoscuta'); return { ok: true, pe_awb: pe } }
+  const cu = new Set(lista.map(awbDin))
+  for (const a of awbs) pe.set(a, cu.has(a) ? 'primita_de_verificat' : 'lipsa')
+  return { ok: true, pe_awb: pe }
+}
+
+/** Lista FAN de evenimente (GET /reports/awb-events) față de codurile folosite aici → ce lipsește la FAN și ce coduri FAN nu sunt clasificate. */
+export function comparaEvenimente(status, corp) {
+  if (!Number.isInteger(status) || status <= 0 || status >= 400) return { ok: false, motiv: `lista de evenimente neconfirmată (HTTP ${status})` }
+  const lista = listaDin(corp)
+  if (!lista) return { ok: false, motiv: 'lista de evenimente are o formă necunoscută (de verificat de om)' }
+  const coduri = [], stricate = []
+  for (const el of lista) {
+    const c = typeof el?.id === 'string' ? el.id.trim() : typeof el?.code === 'string' ? el.code.trim() : ''
+    if (RE_COD_EVENIMENT.test(c)) coduri.push({ cod: c, nume: txt(el?.name ?? el?.description).slice(0, 120) })
+    else stricate.push(el)
+  }
+  if (!coduri.length) return { ok: false, motiv: 'lista de evenimente nu conține niciun cod recunoscut (de verificat de om)' }
+  const laFan = new Set(coduri.map(c => c.cod))
+  return { ok: true, lipsa_la_fan: [...CATEGORIE.keys()].filter(c => !laFan.has(c)).sort(),
+    neclasificate: coduri.filter(c => !CATEGORIE.has(c.cod)).sort((a, b) => (a.cod < b.cod ? -1 : 1)), elemente_stricate: stricate.length }
+}
+
+/**
+ * Reconcilierea unui rezultat necunoscut (doc §5): paginile borderoului zilei (GET /reports/awb?date=) → pentru fiecare nr_plic:
+ * { stare: 'gasit', awb } | { stare: 'lipsa' } | { stare: 'de_verificat', motiv }. Doar PROPUNERI: omul confirmă (fn_red_fan_reconciliaza).
+ * `complet` = s-a citit până la pagina goală; altfel „lipsa” devine „de_verificat”. Căutarea: nr_plic EXACT în content / observation.
+ */
+export function cautaInBorderou(pagini, nrPlicuri, { complet }) {
+  const pe = new Map(nrPlicuri.map(n => [n, []]))
+  for (const corp of pagini) {
+    const lista = listaDin(corp)
+    if (!lista) return new Map(nrPlicuri.map(n => [n, { stare: 'de_verificat', motiv: 'borderou de formă necunoscută' }]))
+    for (const el of lista) {
+      const texte = [el?.info?.content, el?.info?.observation, el?.content, el?.observation].filter(v => typeof v === 'string').map(v => v.trim())
+      for (const n of nrPlicuri) if (texte.includes(n)) pe.get(n).push(awbDin(el) || awbDin(el?.info))
+    }
+  }
+  return new Map(nrPlicuri.map(n => {
+    const g = pe.get(n)
+    if (g.length === 1 && g[0]) return [n, { stare: 'gasit', awb: g[0] }]
+    if (g.length > 1) return [n, { stare: 'de_verificat', motiv: 'numărul plicului apare pe mai multe AWB-uri' }]
+    if (g.length === 1) return [n, { stare: 'de_verificat', motiv: 'rând găsit fără număr AWB valid' }]
+    return [n, complet ? { stare: 'lipsa' } : { stare: 'de_verificat', motiv: 'borderoul nu a fost citit complet' }]
+  }))
+}
+
+/** Calea etichetei: TOATE AWB-urile date, în ordinea dată, într-un singur PDF, format FIX A6 (doc §1: mai multe AWB-uri într-un apel). */
+export function caleEticheta({ clientId, awbs }) {
+  if (!txt(clientId)) throw new Error('clientId lipsă')
+  if (!Array.isArray(awbs) || !awbs.length || awbs.length > MAX_PE_CERERE || awbs.some(a => !RE_AWB.test(String(a)))) throw new Error('lista de AWB-uri pentru etichetă e invalidă')
+  const q = new URLSearchParams()
+  q.append('clientId', txt(clientId))
+  for (const a of awbs) q.append('awbs[]', String(a))
+  q.append('pdf', '1')
+  q.append('format', FORMAT_ETICHETA)
+  return '/awb/label?' + q.toString()
+}
+
+/** Calea de urmărire / confirmări pentru ≤ 100 AWB-uri (doc §1). */
+export function caleListaAwb(baza, { clientId, awbs, extra = {} }) {
+  if (!['/reports/awb/tracking', '/reports/awb/confirmations'].includes(baza)) throw new Error('cale necunoscută')
+  if (!txt(clientId)) throw new Error('clientId lipsă')
+  if (!Array.isArray(awbs) || !awbs.length || awbs.length > MAX_PE_CERERE || awbs.some(a => !RE_AWB.test(String(a)))) throw new Error('lista de AWB-uri e invalidă (1…100)')
+  const q = new URLSearchParams()
+  q.append('clientId', txt(clientId))
+  for (const a of awbs) q.append('awb[]', String(a))
+  for (const [k, v] of Object.entries(extra)) q.append(k, String(v))
+  return baza + '?' + q.toString()
+}
+
+/** Un PDF adevărat (antet %PDF-), nu HTML / JSON de eroare cu status 200. */
+export const estePdf = bytes => bytes instanceof Uint8Array && bytes.length > 5 && [0x25, 0x50, 0x44, 0x46, 0x2d].every((b, i) => bytes[i] === b)
+
+/** Octeți → base64 (Deno și browser), pe bucăți (fără RangeError la fișiere mari). */
+export function inBase64(bytes) {
+  let s = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(s)
 }
