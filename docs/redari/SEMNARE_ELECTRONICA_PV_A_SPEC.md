@@ -1,7 +1,7 @@
 # Redări Lot 1 — semnarea electronică de la distanță a PV-ului tip A + e-mailul către proprietari (SPECIFICAȚIE)
 
 Stare: 17.11.2026, runda 5 (după re-review-ul rundei 4; deciziile proprietarului din 17.11.2026). **Doar document.** Nu există cod, migrare sau schimbare de
-date în acest PR. Deciziile D1–D13 sunt **luate** (§1) și nu se mai redeschid aici; ce a rămas cu adevărat deschis e la §3.
+date în acest PR. Deciziile D1–D14 sunt **luate** (§1) și nu se mai redeschid aici; ce a rămas cu adevărat deschis e la §3.
 Întrebările pentru avocat / Juridic sunt **informative** (§12.2): răspunsurile pot ajusta textele, nu schimbă varianta aleasă.
 Documentul nu afirmă că vreo variantă e legală sau valabilă. Orice migrare, RPC sau modificare de drepturi propusă aici **necesită
 acordul proprietarului** înainte de implementare și se livrează în felii separate, cu review propriu.
