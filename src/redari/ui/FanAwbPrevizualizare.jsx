@@ -2,13 +2,15 @@
    pașii propune → aprobă → generează → etichete A6 (toate părțile, cu pagina de control) → comandă curier → urmărire → confirmări / retururi,
    plus operațiile procedurii: reconcilierea (cu confirmarea omului), plafonul lotului pilot, anularea AWB-ului, lista de evenimente.
    Cât timp TRANSPORT_REAL_ACTIV = false (redariFanHandler.mjs) TOȚI pașii și TOATE operațiile sunt vizibile și dezactivate, cu „transport
-   oprit”; nu se cheamă funcția edge și nu se scrie nimic. Proiectare: docs/redari/FANCOURIER_INTEGRARE.md. Contactul (PII) se citește cu
+   oprit”; nu se cheamă funcția edge și nu se scrie nimic. Activarea pentru Testul 1 (DOAR_PROIECTE_TEST = true): activ DOAR pe un proiect
+   „TEST-…” cu lotul marcat TEST (aceeași gardă ca funcția edge, transportPermis); pe orice alt lot, pașii rămân dezactivați cu motivul.
+   Proiectare: docs/redari/FANCOURIER_INTEGRARE.md, docs/redari/FAN_TEST1_PASI.md. Contactul (PII) se citește cu
    JWT-ul omului (RLS: doar admin/editor). Răspunsurile FAN sunt date: ridicarea, reconcilierea și returul le confirmă omul. */
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { pregatestePlicuriFan, contactPePlic, LIMITA_LOT_PILOT_IMPLICITA, FORMAT_ETICHETA, manifestTiparire, partiManifest, cheieTiraj, idTiraj, tirajDin,
   ASTEPTARE_DUPA_OPRIRE_S } from '../../../supabase/functions/_shared/redariFan.mjs'
-import { stariPasi, stareMarcaj, stariOperatii, TRANSPORT_REAL_ACTIV, MESAJ_TRANSPORT_OPRIT, ETICHETE_STARE_FAN, ETICHETE_URMARIRE, ETICHETE_CONFIRMARE, prefixLot, titluLot,
+import { stariPasi, stareMarcaj, stariOperatii, TRANSPORT_REAL_ACTIV, transportPermis, MESAJ_TRANSPORT_OPRIT, ETICHETE_STARE_FAN, ETICHETE_URMARIRE, ETICHETE_CONFIRMARE, prefixLot, titluLot,
   csvBorderouFan, mesajEdgeFan, numeEtichete, numeControl, controlLotFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire,
   fapteContrazise, optiuniSolutionare, solutioneazaUrmarire } from '../fanLot.js'
 import { docxPaginaControl } from '../plicuri.js'
@@ -77,10 +79,12 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   const awb = fan?.randuri || []
   const pePlic = new Map(awb.filter(r => !['eroare', 'anulat'].includes(r.stare)).map(r => [r.plic_id, r]))
   const gata = randuri?.filter(r => r.ok).length ?? 0
-  const st = { transportActiv: TRANSPORT_REAL_ACTIV, evidentaInstalata: !!fan?.instalata, esteOwner, esteAdmin, randuri: awb }
-  const pasi = stariPasi({ ...st, poateScrie, fanLot: fan?.fanLot, gataDePropus: gata })
+  // garda „doar TEST” (aceeași ca în funcția edge): proiectul lotului + marcajul lui; marcajul cere doar proiectul de TEST
+  const st = { transportActiv: TRANSPORT_REAL_ACTIV, evidentaInstalata: !!fan?.instalata, esteOwner, esteAdmin, randuri: awb, fanLot: fan?.fanLot, proiectCod: proiect?.cod }
+  const pasi = stariPasi({ ...st, poateScrie, gataDePropus: gata })
   const operatii = stariOperatii(st)
-  const marcaj = stareMarcaj({ ...st, fanLot: fan?.fanLot })
+  const marcaj = stareMarcaj(st)
+  const permis = transportPermis({ proiectCod: proiect?.cod, fanLot: fan?.fanLot })
   const pas = k => (k === 'marcaj' ? { ...marcaj, cheie: 'marcaj', titlu: 'Marcaj', ajutor: 'doar owner-ul, înainte de prima aprobare: lot de TEST sau lot real' }
     : pasi.find(p => p.cheie === k) || operatii.find(p => p.cheie === k))
   // manifestul COMUN (aceeași funcție ca funcția edge și arhiva documentelor): mulțimea și ordinea etichetelor
@@ -305,6 +309,10 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
       LOT DE TEST: AWB-urile lui nu sunt expedieri ale convocărilor și nu intră în registru, PV sau export. Fișierele lui încep cu „TEST_”.</p>}
     {!TRANSPORT_REAL_ACTIV && <p role="status" style={{ margin: '0 0 8px', padding: 8, borderRadius: 6, background: G.yellowDim, color: G.yellow }}>
       Transport oprit: pașii FAN sunt dezactivați până la activare (acordul proprietarului, migrarea, secretele FAN și publicarea funcției). Nu se trimite și nu se plătește nimic.</p>}
+    {TRANSPORT_REAL_ACTIV && !permis.ok && <p role="status" style={{ margin: '0 0 8px', padding: 8, borderRadius: 6, background: G.yellowDim, color: G.yellow }}>
+      Activare de TEST (Testul 1): {permis.motiv}. Pe acest lot funcția FAN nu face niciun apel și nu se plătește nimic.</p>}
+    {TRANSPORT_REAL_ACTIV && permis.ok && <p role="status" style={{ margin: '0 0 8px', padding: 8, borderRadius: 6, background: G.redDim, color: G.red, fontWeight: 700 }}>
+      TRANSPORT REAL PORNIT pe acest lot de TEST: „Generează AWB” trimite expedieri către curier (pe contul configurat în secretele funcției) și fiecare AWB poate costa. Urmează pașii din procedura Testului 1.</p>}
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
       {[...pasi, ...operatii].map(p => <div key={p.cheie} style={{ ...S.card, padding: 8, minWidth: 150, opacity: p.activ ? 1 : 0.6 }}>
         <b style={{ fontSize: 12.5 }}>{p.titlu}</b><div style={{ fontSize: 11.5, color: G.muted }}>{p.ajutor}</div>

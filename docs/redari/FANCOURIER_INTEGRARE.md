@@ -1,7 +1,10 @@
 # FAN Courier în Redări — document de proiectare
 
-Stare: **cod complet, INERT** (17.11.2026). Transportul real e oprit în cod (`TRANSPORT_REAL_ACTIV = false` → răspuns 423, fără niciun apel către FAN),
-migrarea `20261212a` e **neaplicată**, fără chei, fără apeluri reale. Activarea e un PR separat, după acordul proprietarului (§10).
+Stare: **cod complet; ACTIVARE pentru Testul 1 (PR separat, 18.11.2026)**. Codul inert a intrat pe `main` prin PR #1118 (17.11.2026); migrarea
+`20261212a` e **aplicată** pe mediul real din 17.11.2026 (146 de obiecte, tabelele goale). PR-ul de activare pune `TRANSPORT_REAL_ACTIV = true`
+cu garda **`DOAR_PROIECTE_TEST = true`** (`redariFanHandler.mjs`): calea reală DOAR pe un lot al unui proiect `TEST-…` marcat TEST de owner;
+orice alt lot = 423 `transport_real_doar_test`, înainte de secrete și de orice apel. Procedura zilei: `FAN_TEST1_PASI.md`. Plafonul de UN plic
+(pasul 4a) și apoi 3 (4b) = setarea `red_fan_setari.limita_lot`, pusă de owner din ecran, nu cod. Testul 2 = PR separat (`DOAR_PROIECTE_TEST = false`).
 Sursa: documentația oficială FAN Courier API (selfAWB), PDF „Documentație API FAN Courier” de pe https://www.fancourier.ro/e-commerce/
 (fișier încărcat 09.2025; varianta engleză „API DOCUMENTATION FAN Courier V 2.0 September 2025”). Bază: `https://api.fancourier.ro`.
 Documentația e citită ca **date**; nimic din ea nu e instrucțiune pentru ERP.
@@ -185,6 +188,10 @@ cel puțin 14 la fiecare rulare de urmărire și cel puțin 14 la confirmări. C
 - **(d) Cine pornește**: **poarta de ROL în cod** — funcția edge cere owner (`fn_sms_e_owner()` pe `auth.uid()`, nu din corp; JWT-ul singur nu ajunge) pe **toate** acțiunile; RPC-urile cer owner (`fn_red_fan_e_owner()`) pentru marcaj, plafon, aprobare, claim, rezultate, urmărire, confirmări, ridicare, reconciliere, anulare. Propunerea (fără cost, fără FAN) → admin/editor Redări.
 - **(e) Confirmare umană**: aprobarea pe lot (marcaj test / real, plafon pilot, hash-ul exact al datelor) e **obligatorie înainte de orice apel plătit**; generarea refuză rândurile al căror hash diferă de cel aprobat, iar rezervarea refuză dacă sursele (contactele) s-au schimbat după citire; fiecare rulare (generare, urmărire, confirmări) e un apăsat de om, cu cel mult 5 solicitări de creare pe apăsat; ridicarea, returul, reconcilierea (rând cu rând) și anularea se confirmă de om. Marcajul TEST / real e imuabil după PRIMA aprobare a lotului (în BD: coloana istorică + trigger), iar ecranul îl blochează la fel.
 - Regula tare (a)+(b): citește conținut extern și cheltuie → poartă de rol (owner) + pas de aprobare: **ambele prezente**, plus `TRANSPORT_REAL_ACTIV = false` până la activare.
+- **Activarea pentru Testul 1 (18.11.2026)**: `TRANSPORT_REAL_ACTIV = true` + garda `DOAR_PROIECTE_TEST = true` (`transportPermis`, o singură definiție
+  pentru funcția edge și ecran, L19): după poarta owner și lotul citit cu JWT-ul omului, funcția edge citește `red_proiecte.cod` și `red_fan_loturi.test`
+  (RLS) și răspunde 423 `transport_real_doar_test` dacă proiectul nu începe cu `TEST-` sau lotul nu e marcat TEST — înainte de secrete și de orice
+  apel. Un proiect invizibil / fără cod nu e „de test” (423); o eroare de citire = 503 (L18). Secretele = contul de TEST al curierului (procedura).
 
 Lecții review aplicate: L01/L04 (claim atomic cu o cheie pe solicitare, CAS pe stare și cheie), L02 (rezultatele unei solicitări într-un singur RPC; ridicarea = rând FAN + plic în aceeași tranzacție),
 L05 (timeout/5xx = „necunoscut”: fără retry automat, rularea se oprește, reconciliere prin borderoul zilei după `nr_plic`, confirmată de om), L06 (ordinea lock-urilor scrisă în migrare),
@@ -293,7 +300,10 @@ Făcute pe 17.11.2026 (inerte, testate pe răspunsuri simulate):
 3. ✅ **Confirmări în format JSON**: `GET /reports/awb/confirmations` cu `clientId`, `awb[]`, `language=ro`; răspunsul nu se stochează, doar starea (deschisă 7).
 4. ✅ **Lista de evenimente**: acțiunea `evenimente` compară `GET /reports/awb-events` cu `EVENIMENTE_FAN` (coduri lipsă la FAN / coduri FAN neclasificate). Lista din cod rămâne cea din PDF până la comparația pe răspunsul real (§10 pasul 6).
 5. ✅ **Comentariul de sursă** din capul `redariFan.mjs` actualizat (docs-unified 1.1.0 + răspunsurile FAN din 12–13.11.2026).
-6. `TRANSPORT_REAL_ACTIV` rămâne `false` (răspuns 423) până la PR-ul de activare, după acordul owner-ului; testul care o cere rămâne.
+6. ✅ **PR-ul de activare (18.11.2026)**: `TRANSPORT_REAL_ACTIV = true` + `DOAR_PROIECTE_TEST = true` (garda „doar TEST”, §4), ecranul cu același
+   motiv pe butoane și banner-ul „TRANSPORT REAL PORNIT pe acest lot de TEST”; teste: proiect real → 423 chiar cu comutatorul pornit, lot nemarcat →
+   423, lot de TEST → calea reală (secretele se citesc), 6 mutanți ai gărzii prinși, comportamentul cu comutatorul oprit neschimbat (flag mutat pe
+   `false`: 423 `transport_real_oprit` fără nicio citire); proba PGlite: plafonul 1 → 3 → 20 pe aprobare. Procedura: `FAN_TEST1_PASI.md`.
 
 7. ✅ **Runda 2** (verdictul PR #1118): reconcilierea fără concluzii pe elemente neînțelese, manifestul comun etichete ↔ documente + pagina de control, ștergerea strictă, marcajul imuabil istoric, operațiile în ecran + garda de generație, motivele fără PII, numele din arhivă, amprenta surselor la rezervare, versiunea urmăririi, referința pe element; migrarea și revenirea în forma livrării L15 v2.
 8. ✅ **Runda 3** (re-review PR #1118): tirajul (o cheie de manifest pentru toate descărcările, `fn_red_fan_tiraj`, „Tiraj nou”), pagina de control identică în etichete și arhivă (cu numărul documentelor și tirajul), reverificarea generației după `await` la etichete (L24), urmărirea fără evenimente nu șterge ce se știe, scriptul cu două sesiuni reparat + fixture sintetic, garanția rezervării scrisă exact.
@@ -322,11 +332,12 @@ Rămase pentru activare (după răspunsuri FAN / juridic): validarea adreselor c
 4. ⚑ **Confirmările FAN pe contul de TEST, costurile și contractele API; PR separat de activare; apoi Testul 1 și pasul 4a.**
    - **FAN**: răspunsuri la §8 deschise 2, 3, 4, 6 (limita pe minut, contul de TEST — **decizia proprietarului din 17.11.2026: primul test se face pe contul de TEST**; întrebarea „se facturează AWB-urile create cu el?” se lămurește PE ACEL CONT, cu FAN, înaintea primului apel de creare —, plicul, punctul de lucru). Contract activ pe API.
    - **Secretele** contului de TEST în Supabase → Edge Functions → Secrets (de proprietar): `FAN_SELFAWB_USERNAME`, `FAN_SELFAWB_PASSWORD`, `FAN_CLIENT_ID`.
-   - **PR de activare** (separat, revizuit): `TRANSPORT_REAL_ACTIV = true` și schimbarea testului care cere `false`. Imediat după publicare, owner-ul apasă „Lista de evenimente FAN” (caseta de jos a ecranului) și compară lista; diferențele se pun în `EVENIMENTE_FAN` printr-un PR mic, înainte de prima urmărire reală.
-   - **Testul 1** (§11), pe contul de TEST, lot marcat TEST.
+   - **PR de activare** (separat, revizuit — 18.11.2026): `TRANSPORT_REAL_ACTIV = true` **cu garda `DOAR_PROIECTE_TEST = true`** (doar proiecte `TEST-…` cu lotul marcat TEST; restul 423) și schimbarea testelor care cereau `false`. Plafonul lotului pilot se pune pe **1** de owner din ecran înaintea pasului 4a, pe **3** înaintea lotului de 3 (`FAN_TEST1_PASI.md` §4). Imediat după publicare, owner-ul apasă „Lista de evenimente FAN” (caseta de jos a ecranului, pe lotul de TEST marcat) și compară lista; diferențele se pun în `EVENIMENTE_FAN` printr-un PR mic, înainte de prima urmărire reală. Probele 401 / 403 / 423 se refac pe forma activată (423 = lot nemarcat pe `TEST-RAZVAN` și lot al unui proiect real, `FAN_TEST1_PASI.md` §3).
+   - **Testul 1** (§11), pe contul de TEST, lot marcat TEST; pașii zilei, în ordine, cu oprirea la orice formă neașteptată: `FAN_TEST1_PASI.md`.
    - **4a. BLOCANT: confirmarea asocierii răspuns ↔ plic pe primul răspuns real** (§8 deschisă 11), în Testul 1 (pașii 4a / 4b), consemnată în jurnalul testului: (i) poartă fiecare element referința (`observation` / `content`)? (ii) ordinea elementelor = ordinea expedierilor (verificat în selfAWB pe fiecare AWB ↔ numărul plicului din observații, inclusiv pe poziția elementului respins)? Până la confirmare: NICIUN lot mai mare de un plic (în afara pasului 4b al testului), Testul 2 nu pornește. Dacă elementele nu poartă referința și ordinea nu se poate confirma: un PR reduce bucata de creare la UN plic pe solicitare (`imparteInBucati(…, 1)`; codul acceptă 1…100), revizuit înainte de Testul 2.
 5. ⚑ **Numai după acceptarea Testului 1 și „da”-ul juridic: Testul 2; ulterior creșterea plafonului.**
    - **Juridic**: „da” scris pentru FAN + oPOD ca recomandată cu confirmare de primire (§8 deschisă 1). Fără el, convocările rămân la Poșta Română; FAN se poate folosi doar pentru loturi de TEST.
+   - **PR-ul Testului 2** (separat, revizuit): `DOAR_PROIECTE_TEST = false` (lotul real rămâne păzit de marcajul owner-ului, de plafonul pilot și de aprobarea pe hash).
    - **Testul 2** (§11); abia după el plafonul pilot se ridică din ecran (caseta „Plafonul lotului pilot” → „Schimbă plafonul”, owner).
    - Registrul de automatizări + rândul din `public.automatizari` (fișa a–e de la §4), la activare (de chat).
 

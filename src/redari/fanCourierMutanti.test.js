@@ -177,13 +177,13 @@ const VERIFICARI = {
   },
   // 4 (P2): marcajul TEST / real blocat după PRIMA aprobare, chiar dacă rândurile au redevenit „propus”
   async marcajIstoric(M) {
-    return M.lot.stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'propus' }], fanLot: { test: false, prima_aprobare_la: '2026-11-17T10:00:00Z' } }).activ === false
-      && M.lot.stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'propus' }], fanLot: { test: false, prima_aprobare_la: null } }).activ === true
+    return M.lot.stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', randuri: [{ stare: 'propus' }], fanLot: { test: false, prima_aprobare_la: '2026-11-17T10:00:00Z' } }).activ === false
+      && M.lot.stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', randuri: [{ stare: 'propus' }], fanLot: { test: false, prima_aprobare_la: null } }).activ === true
   },
   // 5 (P2): operațiile procedurii (reconciliere, plafon, anulare, evenimente) există și sunt dezactivate cu transportul oprit
   async operatiiEcran(M) {
-    const o = M.lot.stariOperatii({ evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] })
-    const p = M.lot.stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] })
+    const o = M.lot.stariOperatii({ transportActiv: false, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] })
+    const p = M.lot.stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] })
     // runda 5: „solutionare” cere o contradicție (aici niciuna) — verificată separat (fanCourier.test.js)
     return JSON.stringify(o.map(x => x.cheie).filter(k => !['tiraj', 'solutionare'].includes(k))) === '["reconciliere","plafon","anulare","evenimente"]' && o.every(x => !x.activ)
       && p.filter(x => x.cheie !== 'solutionare').every(x => x.activ)
@@ -337,16 +337,46 @@ const VERIFICARI = {
     const deps = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: false }), lot: async () => ({ data: LOT }) }
     return (await M.h.raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: LOT.id } }, deps)).status === 403
   },
-  async transportOprit(M) {
+  // ACTIVARE Testul 1: flag-ul pornit, DAR calea reală DOAR pe un proiect „TEST-…” cu lotul marcat TEST; orice alt lot = 423, fără secrete / rețea
+  async doarTest(M) {
     const interzis = vi.fn(() => { throw new Error('APEL INTERZIS') })
-    const deps = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: async () => ({ data: LOT }),
-      fetch: interzis, rpc: interzis, secrete: interzis, randuriLot: interzis, datePlicuri: interzis, proiect: interzis }
-    let r
-    try { r = await M.h.raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: LOT.id } }, deps) } catch { return false }
-    return r.status === 423 && r.body.cod === 'transport_real_oprit' && interzis.mock.calls.length === 0 && M.h.TRANSPORT_REAL_ACTIV === false
-      && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, fanLot: { test: false }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).every(p => !p.activ)
+    const baza = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: async () => ({ data: LOT }), fetch: interzis, rpc: interzis, secrete: interzis, randuriLot: interzis, datePlicuri: interzis }
+    const cer = async (cod, test) => { try { return await M.h.raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: LOT.id } }, { ...baza, proiect: async () => ({ data: { id: 'p1', cod } }), fanLot: async () => ({ data: test == null ? null : { test } }) }) } catch { return null } }
+    const real = await cer('LOT1-PRUNISOR-JUPA', true), nemarcat = await cer('TEST-RAZVAN', null), marcatReal = await cer('TEST-RAZVAN', false)
+    const refuz = r => r?.status === 423 && r.body.cod === 'transport_real_doar_test'
+    if (!refuz(real) || !refuz(nemarcat) || !refuz(marcatReal) || interzis.mock.calls.length !== 0) return false
+    // lotul de TEST trece de gardă: calea reală începe cu citirea secretelor (lipsă = 503), fără rețea
+    const secrete = vi.fn(() => null)
+    let ok
+    try { ok = await M.h.raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: LOT.id } }, { ...baza, secrete, proiect: async () => ({ data: { id: 'p1', cod: 'TEST-RAZVAN' } }), fanLot: async () => ({ data: { test: true } }) }) } catch { return false }
+    return ok.status === 503 && ok.body.cod === 'transport_neconfigurat' && secrete.mock.calls.length === 1 && interzis.mock.calls.length === 0
+      && M.h.TRANSPORT_REAL_ACTIV === true && M.h.DOAR_PROIECTE_TEST === true
+      && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'LOT1-PRUNISOR-JUPA', fanLot: { test: true }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).every(p => !p.activ)
+      && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: false }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).every(p => !p.activ)
+      && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).some(p => p.activ)
   },
 }
+
+// comutatorul OPRIT (forma de dinaintea activării, obținută prin mutația flag-ului): comportamentul de pe main rămâne neschimbat —
+// 423 „transport_real_oprit” pe ORICE acțiune, fără NICIO citire în plus (nici proiectul, nici marcajul), fără secrete / rețea; ecranul tot oprit
+describe('comutatorul oprit (TRANSPORT_REAL_ACTIV = false): comportamentul de dinaintea activării, neschimbat', () => {
+  it('toate acțiunile → 423 transport_real_oprit, nicio dependență atinsă; pașii din ecran dezactivați cu „transport oprit”', async () => {
+    const M = await incarca({ fisier: 'redariFanHandler.mjs', din: 'export const TRANSPORT_REAL_ACTIV = true', in: 'export const TRANSPORT_REAL_ACTIV = false' })
+    const interzis = vi.fn(() => { throw new Error('APEL INTERZIS cât transportul e oprit') })
+    const deps = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: async () => ({ data: LOT }),
+      fetch: interzis, rpc: interzis, secrete: interzis, randuriLot: interzis, datePlicuri: interzis, proiect: interzis, fanLot: interzis, plicuriLot: interzis, pauza: interzis }
+    for (const actiune of M.h.ACTIUNI_FAN) {
+      const r = await M.h.raspundeFan({ jwt: 'x', corp: { actiune, lot_id: LOT.id, parte: 1, data: '2026-11-18' } }, deps)
+      expect([actiune, r]).toEqual([actiune, { status: 423, body: { cod: 'transport_real_oprit' } }])
+    }
+    expect(interzis).not.toHaveBeenCalled()
+    expect(M.h.TRANSPORT_REAL_ACTIV).toBe(false)
+    const p = M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 })
+    expect(p.every(x => !x.activ && x.motiv === M.lot.MESAJ_TRANSPORT_OPRIT)).toBe(true)
+    expect(M.lot.stariOperatii({ evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'generat' }] }).every(x => !x.activ && x.motiv === M.lot.MESAJ_TRANSPORT_OPRIT)).toBe(true)
+    expect(M.lot.stareMarcaj({ evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN' })).toEqual({ activ: false, motiv: M.lot.MESAJ_TRANSPORT_OPRIT })
+  })
+})
 
 const MUTANTI = [
   ['limita100', 'limita de 100 ridicată la 1000', { fisier: 'redariFan.mjs', din: 'export const MAX_PE_CERERE = 100', in: 'export const MAX_PE_CERERE = 1000' }],
@@ -397,8 +427,13 @@ const MUTANTI = [
   ['lotTest', 'prefixul TEST_ pierdut', { fisier: 'fanLot.js', din: "fanLot?.test === true ? 'TEST_' : ''", in: "''" }],
   ['lotTest', 'borderoul fără marcaj', { fisier: 'fanLot.js', din: "const cap = fanLot?.test === true ? [['LOT DE TEST", in: "const cap = false ? [['LOT DE TEST" }],
   ['poartaRol', 'fără verificarea owner-ului', { fisier: 'redariFanHandler.mjs', din: "if (owner?.data !== true) return out(403, 'non_owner')", in: '' }],
-  ['transportOprit', 'garda 423 scoasă', { fisier: 'redariFanHandler.mjs', din: "if (!TRANSPORT_REAL_ACTIV) return out(423, 'transport_real_oprit')", in: '' }],
-  ['transportOprit', 'flag-ul pornit', { fisier: 'redariFanHandler.mjs', din: 'export const TRANSPORT_REAL_ACTIV = false', in: 'export const TRANSPORT_REAL_ACTIV = true' }],
+  // activare Testul 1: garda „doar TEST”
+  ['doarTest', 'garda „doar TEST” scoasă', { fisier: 'redariFanHandler.mjs', din: '    if (!p.ok) return out(423, p.cod, { motiv: p.motiv })', in: '' }],
+  ['doarTest', 'garda oprită din constantă (forma Testului 2)', { fisier: 'redariFanHandler.mjs', din: 'export const DOAR_PROIECTE_TEST = true', in: 'export const DOAR_PROIECTE_TEST = false' }],
+  ['doarTest', 'orice proiect trece drept de TEST', { fisier: 'redariFanHandler.mjs', din: "export const esteProiectTest = cod => typeof cod === 'string' && cod.startsWith(PREFIX_PROIECT_TEST)", in: 'export const esteProiectTest = cod => true' }],
+  ['doarTest', 'marcajul lotului neverificat', { fisier: 'redariFanHandler.mjs', din: "    if (cereMarcaj && fanLot?.test !== true) return", in: '    if (false) return' }],
+  ['doarTest', 'flag-ul oprit (lotul de TEST n-ar mai trece)', { fisier: 'redariFanHandler.mjs', din: 'export const TRANSPORT_REAL_ACTIV = true', in: 'export const TRANSPORT_REAL_ACTIV = false' }],
+  ['doarTest', 'ecranul ignoră garda (pașii activi pe proiect real)', { fisier: 'fanLot.js', din: '    if (oprit) return { ...p, motiv: oprit, activ: false }', in: '    if (false) return null' }],
 ]
 
 describe('mutanți FAN (JS)', () => {
