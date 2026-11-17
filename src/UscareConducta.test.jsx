@@ -607,4 +607,53 @@ dom(numeDom('UscareConducta (jsdom + react-dom)'), () => {
     await u.apasa(u.buton('💾 Salvează'))
     expect(st.rpc[1].a).toMatchObject({ p_versiune: 2, p_date: { ora_inceput: '2026-10-25T01:30:00.000Z', observatii: 'doar observații' } })
   })
+
+  // ── proba pe telefon (17.11.2026) ──
+  // Zona butoanelor plutitoare ale platformei, din sursele lor (nu din ecranul testat): 🐛 (BugReportButton) bottom 24 + buton 52 + gap 6 +
+  // eticheta „Buuuuuuuug :(” ~24 = ~106 px; asistentul (ChatbotWidget) 24 + 70 = 94; „Tichet” (TichetModulButton) 24 + 52 = 76.
+  const ZONA_PLUTITOARE = 106
+  const INALTIME_MIN_BARA = 54 + 2 * 10 + 1                                  // ST.mare (54) + padding 10 sus/jos + chenar
+  const barapx = v => parseFloat(String(v).replace('px', ''))
+  it('proba pe telefon: bara „Salvează” stă deasupra butoanelor plutitoare și formularul lasă jos loc pentru ea', async () => {
+    const { client } = clientFals({ rapoarte: [RAP(1)] })
+    const u = await monteaza(client)
+    await u.apasa(u.buton('Tr. test'))
+    const btn = u.buton('Salvat')
+    let bara = btn.parentElement
+    while (bara && bara.style.position !== 'fixed') bara = bara.parentElement
+    expect(bara, 'bara fixă a salvării').toBeTruthy()
+    expect(barapx(bara.style.bottom)).toBeGreaterThanOrEqual(ZONA_PLUTITOARE)   // pe toată lățimea, deasupra zonei plutitoarelor
+    expect([bara.style.left, bara.style.right]).toEqual(['0px', '0px'])
+    const formular = u.d.getElementById('r').firstElementChild
+    const jos = barapx(formular.style.paddingBottom || formular.style.padding.split(' ')[2])
+    expect(jos).toBeGreaterThanOrEqual(barapx(bara.style.bottom) + INALTIME_MIN_BARA)   // ultimul câmp poate urca deasupra barei
+  })
+  it('proba pe telefon: sursele butoanelor plutitoare au încă pozițiile din care e calculată zona (altfel se recalculează)', async () => {
+    const fs = await import('node:fs')
+    const sursa = f => fs.readFileSync(new URL(`./${f}`, import.meta.url), 'utf8')
+    expect(sursa('BugReportButton.jsx')).toMatch(/position: 'fixed', bottom: 24, left: 24/)
+    expect(sursa('BugReportButton.jsx')).toMatch(/width: 52, height: 52/)
+    expect(sursa('ChatbotWidget.jsx')).toMatch(/bottom: 24,\s+right: 24,\s+width: 70,\s+height: 70/)
+    expect(sursa('TichetModulButton.jsx')).toMatch(/position:'fixed', bottom:24, right:88[\s\S]{0,120}height:52/)
+  })
+  it('proba pe telefon: raportul ANULAT nu mai arată concluzia (CONFORM) în listă; cel închis o arată', async () => {
+    const { client } = clientFals({ rapoarte: [RAP(1, { tronson: 'Tr. anulat', stare: 'anulata', concluzie: 'conform', motiv_anulare: 'probă' }), RAP(2, { tronson: 'Tr. închis', stare: 'inchisa', concluzie: 'conform' })] })
+    const u = await monteaza(client)
+    await u.apasa(u.buton('Arată și anulatele'))
+    expect(u.buton('Tr. anulat').textContent).toContain('Anulat')
+    expect(u.buton('Tr. anulat').textContent).not.toContain('CONFORM')
+    expect(u.buton('Tr. închis').textContent).toContain('CONFORM')
+  })
+  it('proba pe telefon: temperatura și punctul de rouă au tastatura cu semnul minus; valorile negative ajung la server', async () => {
+    const { client, st } = clientFals({ rapoarte: [RAP(1)] })
+    const u = await monteaza(client)
+    await u.apasa(u.buton('Tr. test'))
+    for (const e of ['Temperatura exterioară (°C)', 'Valoare (°C)']) expect(u.camp(e).getAttribute('inputmode'), e).toBe('text')
+    expect(u.camp('Lungime').getAttribute('inputmode')).toBe('decimal')     // celelalte numere rămân pe tastatura numerică
+    await u.scrie('Temperatura exterioară (°C)', '-6,5')
+    await u.scrie('Valoare (°C)', '-20,5')
+    await u.scrie('Locul măsurării', 'capăt')
+    await u.apasa(u.buton('💾 Salvează'))
+    expect(st.rpc[0].a.p_date).toMatchObject({ temperatura_c: -6.5, punct_roua_c: -20.5 })
+  })
 })
