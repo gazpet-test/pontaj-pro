@@ -4,12 +4,14 @@ Comutatorul Redări (`sms_setari.redari_autorizat`, din 📱 SMS → Setări, do
 
 1. **Autorizarea scrisă Transgaz** (sub-împuternicit, art. 28 GDPR). Numărul și data ei se trec la pornirea comutatorului.
 2. **Textul final al șablonului**, formulat de Juridic și aprobat de Razvan.
-   - Textul de acum e PROVIZORIU, cu versiunea `provizoriu-2026-11-03`.
+   - Textul de acum e PROVIZORIU, cu versiunea `provizoriu-2026-11-17` (terminologia „predare”, migrarea 20261226b, neaplicată la scriere:
+     până la aplicarea ei, în BD rămâne `provizoriu-2026-11-03`, textul cu „redare”; `docs/sms/LIVRARE_20261226b_SABLON_PREDARE.md`).
    - Cât timp versiunea începe cu `provizoriu-`, comutatorul rămâne oprit.
 3. **Textul final, schimbat într-o singură livrare**: o migrare nouă plus PR-ul de UI, cu verificările obișnuite (Jakarinos + Copilot, DRY pe producție):
    - `fn_sms_redari_sablon_model()` și `fn_sms_redari_sablon_versiune()` (versiune nouă, de ex. `final-AAAA-LL-ZZ`), în SQL;
    - `SABLON_REDARI` și `SABLON_REDARI_VERSIUNE` din `src/sms/sablonRedari.js`;
-   - cazurile de paritate SQL / JS refăcute: `src/sms/sablonRedari.test.js` și DRY-ul (TEST2), cu textele noi scrise de mână.
+   - cazurile de paritate SQL / JS refăcute, cu textele noi scrise de mână: tabelul comun `src/sms/sablonRedari.cazuri.js` (vitest + proba
+     PGlite a migrării, tiparul `scripts/pglite/test_sms_sablon_predare_local.mjs`).
 4. **Lungimea textului.** Dacă textul final e mai lung, verificați că UAT-urile proiectului încap în 160 de caractere GSM-7. UI-ul și BD-ul refuză oricum lotul peste 160.
 
 Loturile create cu un text vechi nu se mai pot trimite după schimbarea lui: aprobarea și rezervarea dau `text_schimbat`. Se anulează din 📱 SMS → Istoric și se refac.
