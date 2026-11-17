@@ -354,6 +354,10 @@ sesiunile aplicației care au așteptat; plus de câte ori apare `BUGET_LOCK` la
 
 ## 12. Ce NU face prima livrare (pași următori, de decis)
 
+> **Treapta a doua** (17.11.2026, doar specificație): procedura în două etape, pragul numeric pe proiect, procesul-verbal de uscare semnat
+> de Antreprenor din ERP, semnătura reprezentantului beneficiarului (în ERP sau olograf) și tronsonul confirmat uscat —
+> `docs/executie/USCARE_CONDUCTA_V2_SPEC.md`. Prima livrare (această specificație și migrarea `20261225a`) rămâne neschimbată.
+
 - Nu sincronizează etapa „uscare” din Probe pe tronsoane cu raportul (fără copii sincronizate prin trigger-e); propunere: în fișa tronsonului
   de probă, lista rapoartelor de uscare legate (citire prin cheia străină).
 - Nu trimite notificarea și nu trimite raportul (mailurile rămân la oameni). Nu are semnătură electronică.
