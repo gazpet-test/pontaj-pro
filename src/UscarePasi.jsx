@@ -368,10 +368,8 @@ function EcranRezumat({ p }) {
         <Camp eticheta="Punctul de rouă (°C), opțional">{nrInp('punct_roua_c')}</Camp>
         <Camp eticheta="Locul măsurării">{inp('punct_roua_loc')}</Camp>
       </div>
-      <div style={ST.rand}>
-        <Camp eticheta="Presiunea (bar)">{nrInp('presiune_bar')}</Camp>
-        <Camp eticheta="Timp deplasare (min)" nota="Calculat din ora introducerii și a ieșirii; corectează-l dacă buretele a stat.">{nrInp('timp_deplasare_min')}</Camp>
-      </div>
+      <Camp eticheta="Presiunea (bar)">{nrInp('presiune_bar')}</Camp>
+      <Camp eticheta="Timp deplasare (min)" nota="Calculat din ora introducerii și a ieșirii; corectează-l dacă buretele a stat.">{nrInp('timp_deplasare_min')}</Camp>
       <Camp eticheta="Observații"><textarea style={{ ...ST.in, minHeight: 80 }} disabled={!editabil} value={form.observatii} maxLength={4000} onChange={e => schimba({ observatii: e.target.value })} /></Camp>
       <div style={ST.rand}><Camp eticheta="Constructor — nume, prenume">{inp('semn_constructor_nume')}</Camp><Camp eticheta="Funcția">{inp('semn_constructor_functie')}</Camp></div>
       <div style={ST.rand}><Camp eticheta="Beneficiar — nume, prenume">{inp('semn_beneficiar_nume')}</Camp><Camp eticheta="Funcția">{inp('semn_beneficiar_functie')}</Camp></div>
