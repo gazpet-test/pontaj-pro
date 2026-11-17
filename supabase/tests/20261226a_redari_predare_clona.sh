@@ -27,7 +27,7 @@
 #   S1 sesiunea B (anon, ca PostgREST): BEGIN; fn_red_raspuns_public(D1, 'nu_particip_cu_obiectii') → {ok: true} (regula VECHE: RPC-ul
 #      rulează înainte de migrare); RESET ROLE; apoi B ȚINE tranzacția deschisă și AȘTEAPTĂ ELIBERAREA: o sesiune proba_predare_elib, pornită
 #      de script DOAR după ce runnerul a ieșit și istoricul lui A e vizibil (A comisă). Limita lui B: 300 s → eroare, B iese ≠ 0 (NU).
-#      Ultima instrucțiune a lui B înaintea COMMIT-ului: „B_VEDE_A_COMISA t” (rândul de istoric al lui A vizibil din tranzacția încă deschisă
+#      Ultima instrucțiune a lui B înaintea COMMIT-ului: „B_VEDE_A_COMISA true” (rândul de istoric al lui A vizibil din tranzacția încă deschisă
 #      a lui B = A a comis ÎNAINTEA lui B; ordinea e dovedită, nu presupusă); după COMMIT: „B_COMIS”.
 #      LOCK-URILE LUI B (ipoteza, citită din cod; verificată la barieră din pg_locks și tipărită): RPC-ul și triggerele lui NU ating
 #      red_proiecte. Citește red_detinatori_token / red_detinatori / red_parcele / red_uat (ACCESS SHARE); scrie red_rate_limit (contorul IP
@@ -43,7 +43,7 @@
 #      B = ACEEAȘI tranzacție (pid | xact_start | backend_xid | stare, identice) (1) la barieră, înainte de pornirea runnerului, (2) la primul
 #      eșantion al observatorului în care A ține ACCESS EXCLUSIVE pe red_proiecte și (3) după ieșirea runnerului, când istoricul lui A e deja
 #      vizibil → B a fost deschisă pe toată durata aplicării, inclusiv la obținerea lock-ului și la COMMIT-ul lui A; eliberarea cod 0;
-#      B cod 0, „B_RPC {"ok": true”, „B_VEDE_A_COMISA t”, „B_COMIS”; răspunsul lui B există (1 rând cu opțiunea veche, comis DUPĂ A).
+#      B cod 0, „B_RPC {"ok": true”, „B_VEDE_A_COMISA true”, „B_COMIS”; răspunsul lui B există (1 rând cu opțiunea veche, comis DUPĂ A).
 #   S2 sesiunea C (anon): BEGIN; o buclă (ca postgres, marcaj C_ASTEAPTA_LOCK) așteaptă ACCESS EXCLUSIVE pe red_proiecte ACORDAT unei sesiuni
 #      cu application_name proba_predare_a (runnerul → PID-ul lui, reținut); în ACEEAȘI instrucțiune trece pe rolul anon (claims anon);
 #      instrucțiunea IMEDIAT următoare = citirea formularului (fn_red_formular_public, D3), nimic între ele. Prima citire din red_proiecte a
@@ -469,7 +469,7 @@ ok "$RC_E" 0 "S1 eliberarea lui B (dupa COMMIT-ul lui A): cod 0"
 ok "$RC_B" 0 "S1 sesiunea B: cod 0"
 [ "$RC_B" = 0 ] || sed 's/^/     b| /' "$TMP/b.log"
 okre "$(jurnal "$TMP/b.log")" 'B_RPC \{"ok": true' "S1 B: RPC-ul inceput inainte de migrare a primit {ok: true} (regula veche)"
-ok "$(linie B_VEDE_A_COMISA "$TMP/b.log")" t "S1 ordinea: ultima instructiune a lui B inaintea COMMIT-ului vede A comisa (A a comis inaintea lui B)"
+ok "$(linie B_VEDE_A_COMISA "$TMP/b.log")" true "S1 ordinea: ultima instructiune a lui B inaintea COMMIT-ului vede A comisa (A a comis inaintea lui B)"
 okre "$(jurnal "$TMP/b.log")" '^B_COMIS$' "S1 B comisa"
 ok "$(q "SELECT count(*) FROM public.red_raspunsuri WHERE detinator_id = '$D1' AND optiune = 'nu_particip_cu_obiectii'")" 1 "S1 raspunsul lui B (regula veche) exista, comis dupa A"
 # S2: C a citit formularul IMEDIAT după ce a văzut lock-ul sesiunii runnerului și a fost BLOCATĂ de A (observatorul)
