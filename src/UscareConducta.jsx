@@ -60,6 +60,11 @@ const ST = {
   rand: { display: 'flex', gap: 8, alignItems: 'flex-end' },
   nota: { fontSize: 12, color: G.muted, marginTop: 6 },
 }
+// Proba pe telefon (17.11.2026): butoanele plutitoare ale platformei (🐛 stânga-jos; „Tichet” și asistentul dreapta-jos) stau la 24 px de jos
+// și urcă până la ~106 px (🐛 52 px + eticheta de deasupra); acopereau bara de salvare (doar ~31% din buton se putea apăsa). Fără să atingem
+// platforma: bara de salvare stă DEASUPRA zonei lor, iar formularul lasă jos spațiu cât zona + bara (ultimul câmp nu rămâne sub ea).
+const REZERVA_PLUTITOARE = 112   // px de jos, ocupați de butoanele plutitoare
+const INALTIME_BARA = 100        // bara (54 + 2×10 + chenar) cu marjă
 const Camp = ({ eticheta, children, nota }) => (
   <label style={{ display: 'block', flex: 1, minWidth: 0 }}><span style={ST.lab}>{eticheta}</span>{children}{nota && <span style={{ fontSize: 12, color: G.muted }}>{nota}</span>}</label>
 )
@@ -703,7 +708,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
               </div>
               <div style={{ fontSize: 13, color: G.muted, marginTop: 4 }}>
                 {u.data_operatie ? fmtZi(u.data_operatie) : 'fără dată'} · km {fmtKm(u.km_de_la_m)} → {fmtKm(u.km_pana_la_m)}
-                {u.concluzie && <> · <b style={{ color: u.concluzie === 'conform' ? G.green : G.red }}>{u.concluzie.toUpperCase()}</b></>}
+                {u.concluzie && u.stare !== 'anulata' && <> · <b style={{ color: u.concluzie === 'conform' ? G.green : G.red }}>{u.concluzie.toUpperCase()}</b></>}
               </div>
               {v.stare === 'sub_24h' && <div style={{ fontSize: 12, color: G.yellow, marginTop: 4 }}>⚠ Notificarea beneficiarului: {fmtNr(v.ore)} h înainte (cerut minimum 24 h)</div>}
               {v.stare === 'necunoscut' && u.stare === 'deschisa' && <div style={{ fontSize: 12, color: G.muted, marginTop: 4 }}>Notificarea beneficiarului nu e consemnată</div>}
@@ -736,6 +741,8 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const distMeteo = distantaMeteo(form)
   const inp = (k, extra = {}) => <input style={ST.in} value={form[k] ?? ''} disabled={!editabil} onChange={e => schimba({ [k]: e.target.value })} {...extra} />
   const nrInp = (k, extra = {}) => inp(k, { inputMode: 'decimal', ...extra })
+  // valorile care pot fi NEGATIVE (iarna): tastatura „decimal” a iPhone-ului nu are semnul minus -> tastatura de text (are „123” cu „-” și „,”)
+  const nrCuSemn = (k, extra = {}) => inp(k, { inputMode: 'text', autoComplete: 'off', autoCorrect: 'off', spellCheck: false, ...extra })
   // ora locală: la ora care apare de două ori (trecerea la ora de iarnă) se alege explicit prima sau a doua apariție
   const oraInp = k => {
     const c = form[k] ? momenteLocale(form[k]) : null
@@ -840,7 +847,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   }
 
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto', padding: '8px 12px 96px' }}>
+    <div style={{ maxWidth: 720, margin: '0 auto', padding: `8px 12px ${REZERVA_PLUTITOARE + (editabil ? INALTIME_BARA : 16)}px` }}>
       <div style={{ ...ST.rand, justifyContent: 'space-between', margin: '8px 0' }}>
         <button style={ST.btn} onClick={laLista}>← Lista</button>
         {ecranInitial === 'pasi' && <button style={ST.btn} onClick={() => setMod('pasi')}>← Înapoi la pași</button>}
@@ -909,7 +916,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
 
       {sect('4. Vremea', <>
         <div style={ST.rand}>
-          <Camp eticheta="Temperatura exterioară (°C)">{inp('temperatura_c', { inputMode: 'decimal', onChange: e => schimba({ temperatura_c: e.target.value, temperatura_sursa: 'manual' }) })}</Camp>
+          <Camp eticheta="Temperatura exterioară (°C)">{nrCuSemn('temperatura_c', { onChange: e => schimba({ temperatura_c: e.target.value, temperatura_sursa: 'manual' }) })}</Camp>
           {editabil && <button style={ST.btn} onClick={propuneMeteo} disabled={inCurs}>🌡️ Din meteo</button>}
         </div>
         <Camp eticheta="Vremea">{inp('vreme')}</Camp>
@@ -978,7 +985,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
 
       {sect('9. Punctul de rouă (opțional)', <>
         <div style={ST.rand}>
-          <Camp eticheta="Valoare (°C)">{nrInp('punct_roua_c')}</Camp>
+          <Camp eticheta="Valoare (°C)">{nrCuSemn('punct_roua_c')}</Camp>
           <Camp eticheta="Locul măsurării">{inp('punct_roua_loc')}</Camp>
         </div>
         <div style={ST.nota}>Caietul de sarcini nu dă un prag pentru punctul de rouă: dacă îl măsori, se trece în rubricile modelului; nu decide concluzia.</div>
@@ -1091,7 +1098,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
       {selectat === 'nou' && <div style={{ ...ST.card, color: G.muted, fontSize: 13 }}>Salvează raportul ca să poți adăuga fotografii.</div>}
 
       {editabil && (
-        <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, padding: 10, background: G.bg, borderTop: `1px solid ${G.border}`, zIndex: 20 }}>
+        <div style={{ position: 'fixed', left: 0, right: 0, bottom: REZERVA_PLUTITOARE, padding: 10, background: G.bg, borderTop: `1px solid ${G.border}`, borderBottom: `1px solid ${G.border}`, boxShadow: '0 -4px 16px rgba(0,0,0,.35)', zIndex: 20 }}>
           <div style={{ maxWidth: 720, margin: '0 auto' }}>
             <button style={{ ...ST.mare, background: modificat && !conflict ? '#238636' : G.surface2, color: '#fff' }} disabled={inCurs || !modificat || !!conflict || nelamuriteTinta.length > 0 || (selectat === 'nou' && !confirmConstructor)} onClick={() => salveaza()}>
               {inCurs ? 'Se trimite…' : conflict ? 'Rezolvă conflictul de sus' : nelamuriteTinta.length ? 'Lămurește cererea de sus' : selectat === 'nou' ? '💾 Creează raportul' : modificat ? '💾 Salvează' : '✓ Salvat'}

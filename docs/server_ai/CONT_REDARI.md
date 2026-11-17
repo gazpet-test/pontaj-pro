@@ -9,6 +9,10 @@ Nu se rotește cu contul principal ca să ocolească limitele: are rolul lui (sc
 - Chat-ul pornește o rulare: `powershell -File C:\Users\Gazpet-Ai\claude-redari\rdr.ps1 -Brief <paw-data\brief\...md> -Slug <nume>`.
   Rularea e Claude Code headless (`claude -p`) cu `CLAUDE_CONFIG_DIR=C:\Users\Gazpet-Ai\.claude-redari`, în clona
   `C:\Users\Gazpet-Ai\gazpet-erp-redari`, pornind de pe `main` proaspăt; rezultatul în `paw-data\out\rdr_<slug>.json`.
+- **Modelul și nivelul de gândire** (parametrii lansatorului; decizia proprietarului din 17.11.2026): `-Model opus` (implicit) sau
+  `-Model fable`; `-Effort medium | high (implicit) | max`. Regula de alegere: reparații mici și documente = opus, high; sarcini grele
+  (migrări, concurență, securitate, ecrane mari) = fable, high; o sarcină întoarsă de două ori cu NO-GO la review = fable, max. Fable
+  consumă mai repede limita contului, pe care stă și recenzentul; dacă limita se apropie, se revine la opus și se anunță proprietarul.
 - O singură rulare odată (lock `paw-data\lock_rdr`); un modul = o sarcină în lucru.
 - Agentul face: branch cu prefixul modulului, cod, teste (`npx vitest run` + `npx vite build`), push, PR **draft**.
 - NU face: merge, aplicare de migrări, deploy, secrete, date reale, mailuri. Acestea rămân la chat (cu „treci pe manual”

@@ -8,6 +8,8 @@
 #     --host <H> --port <P> --user postgres --db postgres \
 #     --manifest <dosar regenerat>/20261225a_executie_uscare.l15.tsv --amprenta-globala <GLOBAL al clonei>
 #   (--migrare meteo: 20261221a, relatia blocata = public.sites, manifestul 20261221a_meteo_xweather_zilnic.l15.tsv)
+#   (--migrare fan: 20261212a, PR #1118 runda 4; setul blocat = red_proiecte -> red_loturi_plicuire -> red_plicuri, SHARE ROW EXCLUSIVE NOWAIT;
+#    manifestul 20261212a_redari_fan_awb.l15.tsv; H = o SCRIERE in curs pe red_plicuri (ROW EXCLUSIVE). Profil ADITIV: uscare / meteo neschimbate.)
 # Sesiunea H tine lock-ul intr-o tranzactie (application_name tine_l15_conc) si face ROLLBACK; proba are application_name proba_l15_conc;
 # bariera = lock-ul lui H acordat (pg_locks); PID-urile se asteapta cu wait, codurile de iesire se pastreaza (L25).
 # SCENARII si REZULTATE ASTEPTATE:
@@ -29,6 +31,25 @@
 #       tranzactia lui H la verificarea cheii unice: cod 1, „lock timeout” (100 ms), NU BUGET_LOCK, fara asteptare pana la ROLLBACK-ul lui H,
 #       nimic comis. Distinct de B1 (acolo asteptarea e pe RELATIE; aici pe TRANZACTIA concurenta). H scrie ca postgres, cu coloanele din
 #       INSERT-ul migrarii, si face ROLLBACK.
+#   FAN (--migrare fan, 20261212a; H tine red_plicuri in ROW EXCLUSIVE = o scriere Redari in curs; SHARE ROW EXCLUSIVE al migrarii o asteapta):
+#     L0  ca mai sus: cod 0, IDENTIC, 1 incercare, Y < 100 ms.
+#     L1  red_plicuri tinut 6 s: cod 1, BUGET_LOCK la 900..1500 ms, H inca activ, nimic comis. CAT APLICAREA ASTEAPTA (doi observatori, ~30 ms):
+#         (a) doar-citire: proba tine SHARE ROW EXCLUSIVE pe red_proiecte / red_loturi_plicuire in cel mult 2 esantioane (lock-urile partiale se
+#         elibereaza intre incercari), proba activa in >= 10 esantioane; (b) L1b: un SCRIITOR pe red_proiecte + red_loturi_plicuire (LOCK ROW
+#         EXCLUSIVE, lock_timeout 50 ms, ROLLBACK la fiecare esantion) + o citire a lui red_plicuri (tabelul tinut de H). Runda 5 (Jakarinos
+#         #1118 r4 P3): esantioanele se NUMARA doar cat observatorul vede aplicarea ASTEPTAND lock-ul (backend-ul probei in pauza buclei de
+#         lock — wait_event PgSleep —, fara SHARE ROW EXCLUSIVE pe red_plicuri, H tinand red_plicuri), verificat IMEDIAT INAINTE si IMEDIAT
+#         DUPA fiecare esantion; bariera = prima observare. Cerut: >= 20 de esantioane sincronizate, blocate <= 2 din ele, citiri reusite in
+#         toate => cat aplicarea asteapta, nu opreste nici citirile, nici scrierile Redari pe red_proiecte / red_loturi_plicuire. CE NU
+#         DOVEDESTE: momentele dintre doua verificari (~5 ms + esantionul) si cele in care proba e in incercarea NOWAIT propriu-zisa (micro-
+#         secunde, lock-uri partiale eliberate de subtranzactie) — acolo garantia vine din constructie, ca la observatorul (a).
+#     L2  red_plicuri eliberat la ~400 ms dupa pasul „inainte”: cod 0, IDENTIC, k >= 2 incercari, Y < 1000 ms.
+#     F1  CAT APLICAREA TINE LOCK-UL (fara H): un cititor si un scriitor pornesc INAINTEA probei si asteapta (bariera din pg_locks) momentul in
+#         care proba tine SHARE ROW EXCLUSIVE pe red_plicuri; atunci: cititorul citeste red_proiecte / red_loturi_plicuire / red_plicuri in
+#         < 200 ms, cu lock-ul inca tinut de proba (tinut=t) => citirile nu sunt oprite; scriitorul (LOCK red_plicuri ROW EXCLUSIVE,
+#         lock_timeout 6 s) primeste lock-ul abia DUPA ce proba l-a eliberat (tinut_dupa=f), in < 5500 ms (plafonul 5000 + marja) => scrierile
+#         Redari asteapta cel mult cat tine aplicarea; proba: cod 0, IDENTIC (ROLLBACK). Ambele procese: cod 0.
+#     (B1 / B2 sunt doar pentru uscare.)
 #   Dupa fiecare scenariu: migrarea tot neaplicata (tabel / bucket / politici absente), H iesit cu 0, niciun backend al probei ramas.
 # LIMITA OBSERVATORULUI (L1): esantionarea la ~30 ms (80 de esantioane) e o DOVADA, nu o demonstratie: un lock partial tinut mai putin decat
 #   intervalul dintre doua esantioane poate scapa; pragul „cel mult 2 esantioane cu lock partial” arata ca lock-urile partiale nu raman tinute
@@ -70,10 +91,18 @@ case "$TIP" in
           BL_FMT_B='BUGET_LOCK: lock-ul pe sites obtinut abia la % ms de la prima incercare (% incercari;'
           BL_RX_A='BUGET_LOCK: sites ocupat; ([0-9]+) incercari, ([0-9]+) ms de la prima incercare'
           BL_RX_B='BUGET_LOCK: lock-ul pe sites obtinut abia la ([0-9]+) ms de la prima incercare \(([0-9]+) incercari;' ;;
-  *) echo "--migrare uscare|meteo" >&2; exit 2 ;;
+  # runda 4 a PR #1118 (aditiv): FAN Courier pe Redari; mesajele BUGET_LOCK au aceeasi forma ca la uscare (verificate mai jos in fisier)
+  fan)    NUME=20261212a_redari_fan_awb; VERS=20261212120000; REL=public.red_plicuri; HMOD='ROW EXCLUSIVE'; HLOCK=RowExclusiveLock
+          ABSENT="to_regclass('public.red_fan_awb') IS NULL AND to_regclass('public.red_fan_loturi') IS NULL AND to_regclass('public.red_fan_setari') IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname LIKE 'fn\\_red\\_fan\\_%')"
+          BL_FMT_A='BUGET_LOCK: % incercari, % ms de la prima incercare'
+          BL_FMT_B='BUGET_LOCK: lock-urile obtinute abia la % ms de la prima incercare (% incercari;'
+          BL_RX_A='BUGET_LOCK: ([0-9]+) incercari, ([0-9]+) ms de la prima incercare'
+          BL_RX_B='BUGET_LOCK: lock-urile obtinute abia la ([0-9]+) ms de la prima incercare \(([0-9]+) incercari;' ;;
+  *) echo "--migrare uscare|meteo|fan" >&2; exit 2 ;;
 esac
 [[ "$SISTEM" =~ ^[0-9]+$ ]] && [ -n "$H" ] && [[ "$P" =~ ^[0-9]+$ ]] && [ -n "$U" ] && [ -n "$D" ] && [ -f "$MAN" ] && [[ "$AG" =~ ^[0-9a-f]{32}$ ]] \
-  || { echo "argumente: --migrare uscare|meteo --sistem --host --port --user --db --manifest <fisier> --amprenta-globala <md5>" >&2; exit 2; }
+  || { echo "argumente: --migrare uscare|meteo|fan --sistem --host --port --user --db --manifest <fisier> --amprenta-globala <md5>" >&2; exit 2; }
 [ "$(basename "$MAN")" = "$NUME.l15.tsv" ] || { echo "--manifest: fisierul $NUME.l15.tsv" >&2; exit 2; }
 MAN="$(cd "$(dirname "$MAN")" && pwd)/$(basename "$MAN")"
 cd "$(dirname "$0")/../.."
@@ -149,7 +178,10 @@ lock_linie() { grep -E "^$(echo "$NUME" | cut -c1-9): lock la [0-9]+ ms de la BE
 
 # ── I: inventarul lock-urilor implicite (doar citire) ──
 echo "--- inventar: triggere / constrangeri / politici pe relatiile atinse implicit de corp ---"
-for r in $([ "$TIP" = uscare ] && echo storage.buckets storage.objects || echo public.sites); do
+INV_REL="public.sites"
+[ "$TIP" = uscare ] && INV_REL="storage.buckets storage.objects"
+[ "$TIP" = fan ] && INV_REL="public.red_proiecte public.red_loturi_plicuire public.red_plicuri"
+for r in $INV_REL; do
   # runda 18 (P2-1): "char" convertit explicit la text (text || "char" = „operator is not unique” pe PostgreSQL real)
   q "SELECT '$r trigger ' || tgname || ' ' || pg_get_triggerdef(oid) || ' enabled=' || tgenabled::text FROM pg_trigger WHERE tgrelid = '$r'::regclass AND NOT tgisinternal ORDER BY tgname"
   q "SELECT '$r constrangere ' || conname || ' ' || contype::text || ' ' || pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = '$r'::regclass ORDER BY conname"
@@ -185,6 +217,65 @@ if [ "$TIP" = uscare ]; then
       RAISE NOTICE 'OBS partial=% activ=%', v_partial, v_activ; END \$o\$" >"$TMP/obs.log" 2>&1 &
   OBS_PID=$!; PIDS+=("$OBS_PID")
 fi
+# fan (runda 4, aditiv): (a) acelasi observator doar-citire, pe relatiile partiale ale setului fan; (b) un SCRIITOR pe red_proiecte +
+# red_loturi_plicuire si un cititor al lui red_plicuri (tabelul tinut de H), 80 de esantioane, fiecare intr-o subtranzactie anulata
+OBSW_PID=""
+if [ "$TIP" = fan ]; then
+  PGAPPNAME="$APP_O" "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -c "SET default_transaction_read_only = on" -c "DO \$o\$
+    DECLARE v_partial int := 0; v_activ int := 0; BEGIN
+      FOR i IN 1..80 LOOP
+        PERFORM pg_stat_clear_snapshot();
+        IF EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = '$APP' AND xact_start IS NOT NULL) THEN v_activ := v_activ + 1; END IF;
+        IF EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+                    WHERE a.application_name = '$APP' AND l.granted AND l.mode = 'ShareRowExclusiveLock'
+                      AND l.relation IN ('public.red_proiecte'::regclass, 'public.red_loturi_plicuire'::regclass)) THEN
+          v_partial := v_partial + 1; END IF;
+        PERFORM pg_sleep(0.03);
+      END LOOP;
+      RAISE NOTICE 'OBS partial=% activ=%', v_partial, v_activ; END \$o\$" >"$TMP/obs.log" 2>&1 &
+  OBS_PID=$!; PIDS+=("$OBS_PID")
+  # runda 5 (Jakarinos #1118 r4 P3): esantioanele scriitorului sunt LEGATE de asteptarea aplicarii. „Aplicarea asteapta” = backend-ul probei
+  # in tranzactie, in pauza buclei de lock (wait_event PgSleep: singurul pg_sleep al probei e cel dintre incercarile NOWAIT ale migrarii;
+  # runnerul nu are pauze), FARA SHARE ROW EXCLUSIVE acordat pe red_plicuri, cu H inca tinand red_plicuri. Un esantion (citire + scriere) se
+  # NUMARA doar daca aceasta conditie e adevarata IMEDIAT INAINTE si IMEDIAT DUPA el; restul = „in afara” (numarate separat, ignorate).
+  # Bariera: scriitorul porneste inaintea probei si asteapta prima observare (<= 30 s); se opreste dupa 20 de verificari consecutive fara
+  # asteptare (proba a renuntat: BUGET_LOCK) sau la 2000 de iteratii. Cerut (c_l1b): >= 20 esantioane sincronizate, blocate <= 2 din ele,
+  # citiri reusite = toate cele sincronizate.
+  ASTEAPTA_APL="EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.application_name = '$APP' AND a.xact_start IS NOT NULL AND a.wait_event = 'PgSleep'
+                  AND NOT EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid AND l.relation = 'public.red_plicuri'::regclass AND l.mode = 'ShareRowExclusiveLock' AND l.granted))
+                AND EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity h ON h.pid = l.pid WHERE h.application_name = '$APP_H'
+                  AND l.relation = 'public.red_plicuri'::regclass AND l.granted)"
+  PGAPPNAME="$APP_O" "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -c "DO \$w\$
+    DECLARE v_blocat int := 0; v_liber int := 0; v_cit int := 0; v_sinc int := 0; v_afara int := 0; v_fara int := 0; v_vazut boolean := false;
+      v_inainte boolean; v_dupa boolean; v_b int; v_l int; v_c int; BEGIN
+      PERFORM set_config('lock_timeout', '50ms', true);
+      FOR i IN 1..6000 LOOP
+        PERFORM pg_stat_clear_snapshot();
+        EXIT WHEN $ASTEAPTA_APL;
+        PERFORM pg_sleep(0.005);
+        IF i = 6000 THEN RAISE EXCEPTION 'bariera L1b: aplicarea nu a fost vazuta asteptand lock-ul'; END IF;
+      END LOOP;
+      FOR i IN 1..2000 LOOP
+        PERFORM pg_stat_clear_snapshot(); v_inainte := $ASTEAPTA_APL;
+        v_b := 0; v_l := 0; v_c := 0;
+        BEGIN
+          PERFORM count(*) FROM (SELECT 1 FROM public.red_plicuri LIMIT 1) x;
+          v_c := 1;
+          LOCK TABLE public.red_proiecte IN ROW EXCLUSIVE MODE;
+          LOCK TABLE public.red_loturi_plicuire IN ROW EXCLUSIVE MODE;
+          RAISE EXCEPTION 'liber' USING ERRCODE = 'P0001';
+        EXCEPTION WHEN lock_not_available THEN v_b := 1;
+                  WHEN raise_exception THEN v_l := 1;
+        END;
+        PERFORM pg_stat_clear_snapshot(); v_dupa := $ASTEAPTA_APL;
+        IF v_inainte AND v_dupa THEN v_sinc := v_sinc + 1; v_blocat := v_blocat + v_b; v_liber := v_liber + v_l; v_cit := v_cit + v_c; v_vazut := true; v_fara := 0;
+        ELSE v_afara := v_afara + 1; IF NOT v_dupa THEN v_fara := v_fara + 1; END IF; END IF;
+        EXIT WHEN v_vazut AND v_fara >= 20;
+        PERFORM pg_sleep(0.005);
+      END LOOP;
+      RAISE NOTICE 'OBSW blocat=% liber=% citiri=% sincronizate=% in_afara=%', v_blocat, v_liber, v_cit, v_sinc, v_afara; END \$w\$" >"$TMP/obsw.log" 2>&1 &
+  OBSW_PID=$!; PIDS+=("$OBSW_PID")
+fi
 proba "$TMP/l1.log"
 H_INCA=1; h_activ || H_INCA=0
 X1="$(bl_ms "$TMP/l1.log")"   # runda 18 (P2-2): mesajul real al migrarii alese (meteo: „BUGET_LOCK: sites ocupat; …”)
@@ -200,6 +291,15 @@ c_l1() { [ "$RC_P" = 1 ] && [[ "$X1" =~ ^[0-9]+$ ]] && [ "$X1" -ge 900 ] && [ "$
            && [ "$OK_OBS" = 0 ] && curat; }
 verifica "L1 $REL tinut ($HMOD): cod $RC_P, BUGET_LOCK la ${X1:-?} ms de la prima incercare, H inca activ la final ($H_INCA), $MS_P ms; observator (partial activ): ${PART:-n/a}" c_l1
 [ "$ESEC" = 0 ] || { cat "$TMP/l1.log" "$TMP/obs.log" 2>/dev/null || true; }
+# L1b (fan): scrierile pe red_proiecte / red_loturi_plicuire si citirile lui red_plicuri NU sunt oprite cat aplicarea asteapta
+if [ -n "$OBSW_PID" ]; then
+  RC_W=0; wait "$OBSW_PID" || RC_W=$?
+  gata_pid "$OBSW_PID"
+  OBSW="$(sed -nE 's/.*OBSW blocat=([0-9]+) liber=([0-9]+) citiri=([0-9]+) sincronizate=([0-9]+) in_afara=([0-9]+).*/\1 \2 \3 \4 \5/p' "$TMP/obsw.log")"
+  c_l1b() { [ "$RC_W" = 0 ] && [ -n "$OBSW" ] && read -r b l c s a <<< "$OBSW" && [ "$s" -ge 20 ] && [ "$b" -le 2 ] && [ "$c" = "$s" ] && [ $((b + l)) = "$s" ]; }
+  verifica "L1b (fan) cat aplicarea ASTEAPTA (esantioane sincronizate cu asteptarea): blocat / liber / citiri / sincronizate / in afara = ${OBSW:-?} (cerut: sincronizate >= 20, blocat <= 2, citiri = sincronizate)" c_l1b
+  [ "$ESEC" = 0 ] || cat "$TMP/obsw.log"
+fi
 
 # ── L2: relatia principala eliberata la ~400 ms dupa pasul „inainte” => aplicat (ROLLBACK), k >= 2, Y < 1000 ──
 tine "$REL" "$HMOD" "DO \$w\$ DECLARE i int := 0; v_start timestamptz; BEGIN
@@ -219,6 +319,42 @@ c_l2() { [ "$RC_P" = 0 ] && grep -q '\[ok\] IDENTIC' "$TMP/l2.log" && [ -n "$Y2"
            && [ "$RC_H" = 0 ] && curat; }
 verifica "L2 $REL eliberat inainte de termen: cod $RC_P, IDENTIC, $L2; $MS_P ms" c_l2
 [ "$ESEC" = 0 ] || cat "$TMP/l2.log"
+
+# ── F1 (fan, runda 4): CAT APLICAREA TINE setul — cititorul trece imediat, scriitorul pe red_plicuri asteapta eliberarea (cel mult plafonul) ──
+if [ "$TIP" = fan ]; then
+  TINE_SRX="EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = '$APP'
+              AND l.relation = 'public.red_plicuri'::regclass AND l.mode = 'ShareRowExclusiveLock' AND l.granted)"
+  BARIERA="LOOP PERFORM pg_stat_clear_snapshot(); EXIT WHEN $TINE_SRX; PERFORM pg_sleep(0.005); i := i + 1;
+             IF i > 4000 THEN RAISE EXCEPTION 'bariera F1: proba nu a tinut red_plicuri'; END IF; END LOOP;"
+  PGAPPNAME="$APP_O" "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -c "SET default_transaction_read_only = on" -c "DO \$r\$
+    DECLARE i int := 0; t0 timestamptz; v boolean; BEGIN
+      $BARIERA
+      t0 := clock_timestamp();
+      PERFORM count(*) FROM (SELECT 1 FROM public.red_proiecte LIMIT 1) x;
+      PERFORM count(*) FROM (SELECT 1 FROM public.red_loturi_plicuire LIMIT 1) x;
+      PERFORM count(*) FROM (SELECT 1 FROM public.red_plicuri LIMIT 1) x;
+      PERFORM pg_stat_clear_snapshot(); v := $TINE_SRX;
+      RAISE NOTICE 'CIT ms=% tinut=%', round(extract(epoch FROM clock_timestamp() - t0) * 1000), v; END \$r\$" >"$TMP/f1r.log" 2>&1 &
+  PID_R=$!; PIDS+=("$PID_R")
+  PGAPPNAME="$APP_O" "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -c "DO \$w\$
+    DECLARE i int := 0; t0 timestamptz; v boolean; BEGIN
+      PERFORM set_config('lock_timeout', '6s', true);
+      $BARIERA
+      t0 := clock_timestamp();
+      LOCK TABLE public.red_plicuri IN ROW EXCLUSIVE MODE;
+      PERFORM pg_stat_clear_snapshot(); v := $TINE_SRX;
+      RAISE NOTICE 'SCR ms=% tinut_dupa=%', round(extract(epoch FROM clock_timestamp() - t0) * 1000), v; END \$w\$" >"$TMP/f1w.log" 2>&1 &
+  PID_W=$!; PIDS+=("$PID_W")
+  proba "$TMP/f1.log"
+  RC_R=0; wait "$PID_R" || RC_R=$?; gata_pid "$PID_R"
+  RC_W=0; wait "$PID_W" || RC_W=$?; gata_pid "$PID_W"
+  CIT="$(sed -nE 's/.*CIT ms=([0-9]+) tinut=(t|f|true|false).*/\1 \2/p' "$TMP/f1r.log")"
+  SCR="$(sed -nE 's/.*SCR ms=([0-9]+) tinut_dupa=(t|f|true|false).*/\1 \2/p' "$TMP/f1w.log")"
+  c_f1() { [ "$RC_P" = 0 ] && grep -q '\[ok\] IDENTIC' "$TMP/f1.log" && [ "$RC_R" = 0 ] && [ "$RC_W" = 0 ] && [ -n "$CIT" ] && [ -n "$SCR" ] \
+             && [ "${CIT% *}" -lt 200 ] && [[ "${CIT#* }" =~ ^t ]] && [[ "${SCR#* }" =~ ^f ]] && [ "${SCR% *}" -lt 5500 ] && curat; }
+  verifica "F1 (fan) cat aplicarea tine lock-ul: proba cod $RC_P; cititor (ms tinut) = ${CIT:-?}; scriitor red_plicuri (ms tinut_dupa) = ${SCR:-?}; $MS_P ms" c_f1
+  [ "$ESEC" = 0 ] || cat "$TMP/f1.log" "$TMP/f1r.log" "$TMP/f1w.log" 2>/dev/null || true
+fi
 
 # ── B1 (uscare): storage.buckets tinut SHARE => lock timeout la INSERT (implicit), nu BUGET_LOCK, fara asteptare pana la eliberare ──
 if [ "$TIP" = uscare ]; then
