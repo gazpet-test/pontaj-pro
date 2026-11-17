@@ -8,7 +8,7 @@ const AUTO = 'Trecerea 2 pe acest tronson (trecerea anterioară: raportul din 10
 const PREFIX = 'Verdictul diferit de calcul, motivul:'
 
 describe('motivul verdictului contrar (câmp distinct → observații)', () => {
-  it('textul automat al trecerii e cel așteptat și NU contează ca motiv; textul scris de om, da', () => {
+  it('textul automat al trecerii e cel așteptat și NU contează ca motiv; nici textul liber al observațiilor (17.11.2026); doar ce stă sub etichetă', () => {
     expect(PREFIX_MOTIV_VERDICT).toBe(PREFIX)
     expect(textTrecere(2, '10.11.2026')).toBe(AUTO)
     expect(textTrecere(13, null)).toBe('Trecerea 13 pe acest tronson (trecerea anterioară: raportul din fără dată, ultimul piston nu a ieșit uscat).')
@@ -16,8 +16,13 @@ describe('motivul verdictului contrar (câmp distinct → observații)', () => {
     expect(motivDinObservatii(textTrecere(13, null))).toBe('')
     expect(motivDinObservatii(null)).toBe('')
     expect(motivDinObservatii('   ')).toBe('')
-    expect(motivDinObservatii('buretele ud la exterior')).toBe('buretele ud la exterior')
-    expect(motivDinObservatii(`${AUTO}\n${PREFIX} apă din primul burete`)).toBe(`${PREFIX} apă din primul burete`)
+    expect(motivDinObservatii('buretele ud la exterior')).toBe('')                                  // observație liberă, fără etichetă: nu e motiv
+    expect(motivDinObservatii('TEST automat 17.11.2026 noaptea — de ignorat')).toBe('')             // cazul din probă (B1_14)
+    expect(motivDinObservatii(`${AUTO}\n${PREFIX} apă din primul burete`)).toBe('apă din primul burete')
+    expect(motivDinObservatii(`${PREFIX} apă din primul burete`)).toBe('apă din primul burete')     // raport vechi cu eticheta: recunoscut
+    expect(motivDinObservatii(`${PREFIX}   `)).toBe('')                                             // eticheta goală nu e motiv
+    expect(motivDinObservatii(`${PREFIX} prima linie\na doua`)).toBe('prima linie\na doua')
+    expect(motivDinObservatii(`x\n${PREFIX} a\n${PREFIX} b`)).toBe('a\nb')
     expect(motivDinObservatii(`${AUTO} ${AUTO}`)).toBe('')                                          // de două ori tot automat e
   })
   it('motivul intră în observații cu eticheta lui, sub ce era scris; gol = formularul neschimbat', () => {

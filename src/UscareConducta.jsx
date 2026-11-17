@@ -26,13 +26,13 @@ import { paginareKeyset } from './hrDeciziiUtil.js'
 import { G, S } from './NodCuplareVizualizare.jsx'
 import {
   ETICHETE_CATEGORII, ETICHETE_OBLIGATORII, ETICHETE_STARE, CULORI_STARE, RPC_USCARE, RPC_RETRAGE, prefixRegistru, MAX_BURETI, ETICHETE_POZ_SURSA,
-  registruNou, clasificaReluare, formularNou, formularDinRand, payloadDinFormular, areModificari, lipsaDinRand, pozeLipsa, etichetaPozaLipsa,
+  registruNou, clasificaReluare, formularNou, formularDinRand, payloadDinFormular, areModificari, formulareDiferite, lipsaDinRand, pozeLipsa, etichetaPozaLipsa,
   incarcariDeschise, cantaririPentru, imbinare, aleg, momenteLocale, invalidareMeteo, schimbaSursaMeteo, pozitieDinGps, distantaMeteo,
   durataOre, vitezaMedie, diferentaBurete, verificare24h, propunereMeteo, fmtZi, fmtMoment, fmtNr, fmtKm, actiuniPermise,
 } from './uscareLogica.js'
 import { parseNumar } from './izoDocumenteLogica.js'
-import { pasCurent, formularPasNou, formularTrecereNoua, formularInregistreazaEtapa1, formularTerminaEtapa2, areMotivVerdict } from './uscarePasi.js'
-import UscarePasi, { CardInLucru } from './UscarePasi.jsx'
+import { pasCurent, pasTinut, formularPasNou, formularTrecereNoua, formularInregistreazaEtapa1, formularTerminaEtapa2, areMotivVerdict } from './uscarePasi.js'
+import UscarePasi, { CardInLucru, TINTA_ATINGERE } from './UscarePasi.jsx'
 
 const stocareImplicita = () => { try { return globalThis.localStorage || null } catch { return null } }
 const BUCKET = 'executie-uscare'
@@ -68,8 +68,7 @@ const INALTIME_BARA = 100        // bara (54 + 2×10 + chenar) cu marjă
 const INALTIME_BARA_PASI = 150   // bara pașilor (runda 2): butonul mare (60) + „Salvează pe parcurs” (48) + spațiu (6) + 2×10 + chenare, cu marjă
 // aceeași regulă pentru ecranul pe pași (o singură definiție, transmisă prin `p.jos`)
 const JOS = { rezerva: REZERVA_PLUTITOARE, bara: INALTIME_BARA_PASI }
-// ținta de atingere pe telefon (proba din 17.11.2026): cel puțin 44 × 44 px pentru „scoate poza” și pentru bifa coordonatelor
-const TINTA_ATINGERE = 44
+// ținta de atingere pe telefon (cel puțin 44 × 44 px pentru „scoate poza” și bife): TINTA_ATINGERE, definită o dată în UscarePasi.jsx
 const Camp = ({ eticheta, children, nota }) => (
   <label style={{ display: 'block', flex: 1, minWidth: 0 }}><span style={ST.lab}>{eticheta}</span>{children}{nota && <span style={{ fontSize: 12, color: G.muted }}>{nota}</span>}</label>
 )
@@ -124,6 +123,8 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const [incarcPoza, setIncarcPoza] = useState(null)   // { uscare, cale, categorie, burete, blob } — fișierul de reîncercat, legat de raport
   const [mod, setMod] = useState(ecranInitial)          // 'pasi' | 'complet' — ecranul raportului deschis
   const [ecranPas, setEcranPas] = useState(null)        // null | 'confirmare1' — confirmarea de după „Înregistrează etapa 1” (doar pe ecran)
+  const [pasFixat, setPasFixat] = useState(null)        // pasul pe care LUCREAZĂ omul (etapa 1 / 2), reținut la o scriere pe parcurs (salvare, poză): ecranul nu avansează sub mâna lui; îl șterg butoanele etapei
+  const formNou = useRef(null)                          // formularul PROPUS la deschiderea unui raport nou: ciorna se scrie / se oferă doar dacă omul a schimbat ceva față de el
   const [motivVerdict, setMotivVerdict] = useState('')  // runda 3: motivul verdictului contrar calculului, câmp DISTINCT (intră în observații la „Termină etapa 2”)
   const [confirmDetalii, setConfirmDetalii] = useState(null) // id-ul raportului ale cărui detalii precompletate au fost confirmate (nu se moștenește)
   const [pozeProiect, setPozeProiect] = useState({ lista: [], eroare: null }) // pozele rapoartelor DESCHISE (pasul din cardurile „în lucru”)
@@ -215,8 +216,8 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     const c = ctx.current
     setUscari([]); setSelectat(null); setForm(null); setBaza(null); setConflict(null); setPoze([]); setIncarcari([]); setPozePentru(null)
     setMiniaturi({}); setMesaj(null); setIncarcPoza(null); setMeteoAlegere(null); registru.current = null; setNelamurite([]); setCoordPentru(null)
-    setPozeProiect({ lista: [], eroare: null }); setAutori({ nume: {}, eroare: null }); setEcranPas(null); setConfirmDetalii(null); setMod(ecranInitial); setMotivVerdict('')
-    genSursa.current += 1; genGps.current += 1
+    setPozeProiect({ lista: [], eroare: null }); setAutori({ nume: {}, eroare: null }); setEcranPas(null); setPasFixat(null); setConfirmDetalii(null); setMod(ecranInitial); setMotivVerdict('')
+    formNou.current = null; genSursa.current += 1; genGps.current += 1
     incarca()
     ;(async () => {
       let id = null
@@ -266,13 +267,16 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const stergeCiorna = id => { const k = cheieCiorna(id); if (k && stocare) { try { stocare.removeItem(k) } catch { /* se vede la următoarea scriere */ } } }
   // fiecare schimbare a formularului editabil se scrie în ciornă; un eșec se ARATĂ (nu „rămân în ciornă” dacă n-au rămas)
   const editabilAcum = (selectat === 'nou' || rand?.stare === 'deschisa') && poateScrie
+  // schimbat = față de ce era la deschidere (raportul nou: față de formularul propus) — decide ciorna și întrebarea de la ieșire
+  const schimbat = selectat === 'nou' ? formulareDiferite(form, formNou.current) : areModificari(form, baza)
   useEffect(() => {
     if (!form || !editabilAcum || ciornaGasita) return
     const id = selectat === 'nou' ? 'nou' : rand?.id
     if (id == null) return
-    // un motiv scris care nu e încă în observațiile formularului = modificare nesalvată (deja inclus, ex. după succes = nu mai contează)
+    // un motiv scris care nu e încă în observațiile formularului = modificare nesalvată (deja inclus, ex. după succes = nu mai contează);
+    // raportul NOU: doar față de formularul propus (proba din 17.11.2026: „Uscare nouă” scria o ciornă goală, oferită apoi la fiecare deschidere)
     const mv = motivVerdict.trim()
-    const modificat = selectat === 'nou' || areModificari(form, baza) || (!!mv && !areMotivVerdict(form.observatii, mv))
+    const modificat = schimbat || (!!mv && !areMotivVerdict(form.observatii, mv))
     if (!modificat) return
     setCiornaEroare(!scrieCiorna(id, baza, form, mv))
   }, [form, motivVerdict]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -288,12 +292,15 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const deschide = (u, proba = null, opt = {}) => {
     schimbaCtx(); genSursa.current += 1; genGps.current += 1
     setMesaj(null); setMotiv(null); setRenunt(null); setMeteoAlegere(null); setCiornaGasita(null); setConflict(null); setIncarcPoza(null); setCiornaEroare(false)
-    setCoordPentru(null); setEcranPas(null); setConfirmDetalii(null); setMod(opt.mod || ecranInitial); setMotivVerdict('')
+    setCoordPentru(null); setEcranPas(null); setPasFixat(null); setConfirmDetalii(null); setMod(opt.mod || ecranInitial); setMotivVerdict('')
     if (u === 'nou') {
       setSelectat('nou'); setBaza(null); setConfirmConstructor(false)
-      setForm(opt.form || formularNou({ proba, constructor: constructorPropus() })); incarcaPoze(null, capteaza('nou'))
+      formNou.current = opt.form || formularNou({ proba, constructor: constructorPropus() })
+      setForm(formNou.current); incarcaPoze(null, capteaza('nou'))
+      // o ciornă fără nicio schimbare față de formularul propus nu se oferă și nu se păstrează
       const c = citesteCiorna('nou')
-      if (c?.form) setCiornaGasita({ ...c, pentru: 'nou' })
+      if (c?.form && formulareDiferite(c.form, formNou.current)) setCiornaGasita({ ...c, pentru: 'nou' })
+      else if (c) stergeCiorna('nou')
       return
     }
     setSelectat(u.id); setBaza(u); setForm(formularDinRand(u)); incarcaPoze(u.id, capteaza(u.id))
@@ -305,7 +312,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const inchideForm = () => {
     schimbaCtx(); genSursa.current += 1; genGps.current += 1
     setSelectat(null); setForm(null); setBaza(null); setConflict(null); setPoze([]); setIncarcari([]); setPozePentru(null); setMotiv(null); setMesaj(null); setIncarcPoza(null)
-    setCoordPentru(null); setMeteoAlegere(null); setEcranPas(null); setConfirmDetalii(null); setMotivVerdict('')
+    setCoordPentru(null); setMeteoAlegere(null); setEcranPas(null); setPasFixat(null); setConfirmDetalii(null); setMotivVerdict('')
   }
   // orice schimbare a formularului trece pe aici: o schimbare a INSTANTULUI orei începerii (inclusiv alegerea apariției la ora de iarnă) sau a
   // poziției invalidează propunerea meteo (patch-ul din invalidareMeteo) ȘI orice răspuns meteo încă în zbor / lista de alegere (genSursa)
@@ -504,14 +511,16 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     if (!rand || !form || blocat.current) return
     const c = capteaza()
     const u = await salveaza({ form: formularInregistreazaEtapa1(form, acum()), ce: 'Înregistrarea etapei 1' })
-    if (u && ctxValid(c) && c.selectat === u.id) setEcranPas('confirmare1')
+    if (u && ctxValid(c) && c.selectat === u.id) { setPasFixat(null); setEcranPas('confirmare1') }   // butonul etapei e singurul care duce înainte
   }
   async function terminaEtapa2() {
     if (!rand || !form || blocat.current) return
     const c = capteaza()
     const u = await salveaza({ form: formularTerminaEtapa2(form, acum(), motivVerdict), ce: 'Etapa 2' })
-    if (u && ctxValid(c) && c.selectat === u.id) setMotivVerdict('')   // motivul e acum în observațiile salvate
+    if (u && ctxValid(c) && c.selectat === u.id) { setPasFixat(null); setMotivVerdict('') }   // motivul e acum în observațiile salvate; pasul urmează datele (rezumatul)
   }
+  // „Salvează pe parcurs” (pașii): aceeași salvare, dar pasul afișat rămâne cel pe care lucrează omul, chiar dacă datele etapei sunt acum complete
+  const salveazaPeParcurs = () => { fixeazaPas(); return salveaza({ ce: 'Salvarea pe parcurs' }) }
   // „Generează raportul” = închiderea (aceeași regulă ca azi: lipsaDinRand = fn_executie_uscare_lipsa) + PDF-ul raportului închis
   async function genereazaRaport() {
     if (!rand || blocat.current) return
@@ -529,6 +538,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   // transmite mai departe; calea și cererea se construiesc din contextul capturat. Proiect / raport schimbat în timpul comprimării = nimic emis.
   async function urcaPoza(categorie, file, burete = null) {
     if (!rand || blocat.current) return
+    fixeazaPas()                                        // o poză e o scriere pe parcurs: pasul afișat rămâne (și dacă e ultima cerută de etapă)
     blocat.current = true; setInCurs(true); setMesaj(null)
     const id = rand.id, c = capteaza()
     try {
@@ -547,6 +557,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   // după un refresh, o rezervare fără fișier primește fișierul ales din ecran (aceeași cale rezervată: fără rezervare nouă, fără dublură)
   async function fisierPentruRezervare(i, file) {
     if (!rand || blocat.current || i.uscare_id !== rand.id) return
+    fixeazaPas()
     blocat.current = true; setInCurs(true); setMesaj(null)
     const id = rand.id, c = capteaza()
     try {
@@ -769,9 +780,16 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const v24 = verificare24h(val.notificare_la, val.ora_inceput, val.inceput_planificat)
   const durata = durataOre(val.ora_inceput, val.ora_final)
   const viteza = vitezaMedie(val.lungime_m, val.timp_deplasare_min)
-  const modificat = selectat === 'nou' || areModificari(form, baza)
+  // modificat = ce se poate trimite („Creează raportul” e mereu posibil pe un raport nou, și neatins); `schimbat` (mai sus) = față de deschidere
+  const modificat = selectat === 'nou' || schimbat
   const pozeGata = rand && pozePentru === rand.id
   const deschise = pozeGata ? incarcariDeschise(incarcari, poze) : []
+  // pasul: regula comună a închiderii decide întâi (lipsaDinRand, cu încărcările nelămurite), apoi etapele (runda 3, P1); pe ecran, pasul pe
+  // care lucrează omul e ținut pe loc (pasTinut) — o salvare pe parcurs / o poză nu-l avansează; `fixeazaPas` îl reține la o astfel de scriere
+  // (apelată din funcțiile de mai sus la clic, când `pas` e deja calculat)
+  const pasDate = selectat === 'nou' ? 'tronson' : rand && pozeGata ? pasCurent(rand, poze, deschise.length) : null
+  const pas = mod === 'pasi' ? pasTinut(pasFixat, pasDate) : pasDate
+  const fixeazaPas = () => { if (mod === 'pasi' && (pas === 'etapa1' || pas === 'etapa2')) setPasFixat(pas) }
   const lipsa = rand && pozeGata ? lipsaDinRand(rand, poze, deschise.length) : []
   const pozeL = rand && pozeGata ? pozeLipsa(rand, poze) : []
   const kmDif = Number.isFinite(val.km_de_la_m) && Number.isFinite(val.km_pana_la_m) && val.lungime_m != null && Math.abs(val.km_pana_la_m - val.km_de_la_m - val.lungime_m) > 0.05
@@ -849,7 +867,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     piston_final_rezultat: 'ultimul piston', presiune_bar: 'presiunea', timp_deplasare_min: 'timpul de deplasare', cantariri: 'cântăririle', utilaje: 'utilajele' }[k] || k.replace(/_/g, ' '))
   const arataValoare = v => (v == null || v === '' ? '(gol)' : typeof v === 'object' ? (Array.isArray(v) ? `${v.length} rânduri` : 'altă propunere meteo') : String(v))
 
-  const laLista = () => { if (!modificat || !editabil || window.confirm(ciornaEroare ? 'Ai modificări nesalvate și ciorna locală NU s-a putut scrie: se pierd. Ieși?' : 'Ai modificări nesalvate (rămân în ciorna locală). Ieși?')) inchideForm() }
+  const laLista = () => { if (!schimbat || !editabil || window.confirm(ciornaEroare ? 'Ai modificări nesalvate și ciorna locală NU s-a putut scrie: se pierd. Ieși?' : 'Ai modificări nesalvate (rămân în ciorna locală). Ieși?')) inchideForm() }
   // panourile comune ale ambelor ecrane (pași / formularul complet): mesajul, cererile nelămurite, ciorna, conflictul, doar citire, anularea
   const panouri = <>
       {banner}{bannerNelamurite}
@@ -887,15 +905,13 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   </>
 
   if (mod === 'pasi') {
-    // pasul: regula comună a închiderii decide întâi (lipsaDinRand, cu încărcările nelămurite), apoi etapele (runda 3, P1)
-    const pasDate = selectat === 'nou' ? 'tronson' : rand && pozeGata ? pasCurent(rand, poze, deschise.length) : null
     return (
       <UscarePasi p={{
         ST, Camp, form, rand, val, poze, pozeGata, editabil, poateScrie, inCurs, modificat, conflict, nelamuriteTinta, probe, probeEroare, uscari,
-        pas: pasDate, ecranPas, setEcranPas, lipsa, pozeL, deschise, v24, durata, viteza, kmDif, panouri, acum, jos: JOS, pdfInCurs, motivVerdict, setMotivVerdict,
+        pas, ecranPas, setEcranPas, lipsa, pozeL, deschise, v24, durata, viteza, kmDif, panouri, acum, jos: JOS, pdfInCurs, motivVerdict, setMotivVerdict,
         confirmat: !!rand && confirmDetalii === rand.id, setConfirmat: x => setConfirmDetalii(x && rand ? rand.id : null),
         meteoAlegere, propuneMeteo, aplicaMeteo, schimba, cant, setBureti, inp, nrInp, nrCuSemn, oraInp, blocPoze, blocUtilaje,
-        laLista, laComplet: () => setMod('complet'), salveaza: () => salveaza({ ce: 'Salvarea pe parcurs' }), incepeUscarea, inregistreazaEtapa1,
+        laLista, laComplet: () => setMod('complet'), salveaza: salveazaPeParcurs, incepeUscarea, inregistreazaEtapa1,
         terminaEtapa2, genereazaRaport, pdf: () => pdf(), trecereNoua,
       }} />
     )

@@ -92,16 +92,26 @@ oprire între etape (între introducerea și ieșirea pistoanelor pot trece și 
   SALVAT + pozele înregistrate, apoi rezumatul. Etapa 1 e completă cu: ora introducerii, numărul de pistoane (0 e o configurație permisă,
   ca în regula comună), rândurile de cântărire, greutatea la intrare și poza cântarului pe fiecare piston cântărit, poza ansamblului.
   Etapa 2: ora ieșirii, greutatea la ieșire + poza pe fiecare, verdictul, motivul la verdict contrar calculului, poza ultimului piston
-  **doar dacă iese USCAT** (dovada, ca `dovada_conform`; NECONFORM n-o cere). Etapele nu cer nimic peste regula comună: **pozele lipsă
+  **doar dacă iese USCAT** (dovada, ca `dovada_conform`; NECONFORM n-o cere) și **concluzia din verdict** (uscat → conform, umed →
+  neconform, `concluzieDinVerdict`), pe care o pune DOAR „Termină etapa 2”: datele etapei salvate pe parcurs / de pe alt telefon nu
+  înseamnă etapa terminată (proba de pe mediul publicat, 17.11.2026: rezumatul cerea concluzia, pe care pașii n-o au ca câmp → blocaj).
+  Pe ecran, lipsurile etapei 2 se judecă pe exact formularul pe care l-ar trimite butonul (`formularTerminaEtapa2`), o singură definiție.
+  Etapele nu cer nimic peste regula comună: **pozele lipsă
   JUSTIFICATE** (`poze_justificare`, „Nu poți face o poză? Scrie de ce” — aceeași ieșire ca în formularul complet, salvată cu raportul)
   nu mai sunt cerute de etape; dovada USCAT nu se justifică. Un piston marcat „nu se aplică” (din formularul complet) nu cere greutăți
   și poze. Cardurile listei citesc pozele rapoartelor deschise (keyset, pe bucăți de 100 de id-uri); o eroare de citire NU e „etapa 1”:
   cardul spune că pasul nu s-a putut determina (L18).
+- **Pasul AFIȘAT nu avansează sub mâna omului** (`pasTinut`, 17.11.2026): o scriere pe parcurs („💾 Salvează pe parcurs”, o poză) reține
+  pasul pe care lucrează omul; ecranul trece înainte doar prin butonul etapei („Înregistrează etapa 1” → confirmarea, „Termină etapa 2” →
+  rezumatul). Dacă datele rămân în urmă (poză scoasă, conflict), ecranul le urmează. Deschiderea din listă ia pasul dedus din date.
 - **Motivul verdictului contrar calculului** e un câmp DISTINCT pe ecranul etapei 2, scris explicit de om, și intră în observații la
-  „Termină etapa 2” cu eticheta „Verdictul diferit de calcul, motivul: …” (fără schemă nouă). Textul automat al „trecerii noi” („Trecerea N
-  pe acest tronson …”) NU contează ca motiv; un text scris de om în observații (și din birou) contează.
+  „Termină etapa 2” cu eticheta „Verdictul diferit de calcul, motivul: …” (fără schemă nouă). Contează ca motiv DOAR textul de sub această
+  etichetă (și la un raport vechi care o are deja); textul liber al observațiilor (note, „TEST …”, textul automat al „trecerii noi”
+  „Trecerea N pe acest tronson …”) NU contează (proba din 17.11.2026, defectul 2).
 - **Oprirea între etape**: „Înregistrează etapa 1” salvează pe server (raportul rămâne deschis). În interiorul unei etape: ciorna locală
   (§3) + „💾 Salvează pe parcurs”. Etapa 2 o poate continua oricine are scriere pe proiect (alt telefon, alt om), cu regulile §6.
+  Ciorna unui raport NOU se scrie / se oferă doar dacă omul a schimbat ceva față de formularul propus („Uscare nouă” neatinsă nu lasă
+  ciornă). „Trecerea N” numără doar trecerile NECONFORME (neanulate) de pe același tronson / interval, nu și rapoartele conforme.
 - **Calculul propus** (doar pe ecran): diferențele în **grame întregi**; pragul P = 100 × L / 1000 g (L = `lungime_m`); ultimul piston =
   numărul cel mai mare (buretele 1 = primul introdus); Δ ≤ P „în prag” (egalitatea trece), comparat în întregi ca în V2 §3.1
   (`100.000·Δ ≤ (10·v)·(10·L)`); Δ negativ cel mult 1% din intrare (în întregi: `100 × pierdere_g ≤ intrare_g`, fără toleranță minimă
