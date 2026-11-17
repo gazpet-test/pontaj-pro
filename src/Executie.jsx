@@ -144,8 +144,10 @@ export default function ExecutiePage() {
     <div style={{ background: G.bg, minHeight: 'calc(100vh - 60px)', color: G.text }}>
 
       {/* ─── NAV BAR STICKY ─── */}
+      {/* Uscare conductă (proba pe telefon, 17.11.2026): cât ecranul de uscare e deschis, banda NU rămâne lipită sus (acoperea formularul
+          la derulare pe telefon); derulează odată cu pagina. Pe celelalte file rămâne ca înainte. */}
       <div style={{
-        position: 'sticky', top: 60, zIndex: 50,
+        position: tabStr === 'uscare' ? 'static' : 'sticky', top: 60, zIndex: 50,
         background: G.surface, borderBottom: `1px solid ${G.border}`,
         padding: '0 28px',
       }}>
@@ -194,7 +196,7 @@ export default function ExecutiePage() {
             <span style={{ color: G.border, fontSize: 20, marginInline: 2, flexShrink: 0 }}>›</span>
 
             {CONTEXT_TABS.map(t => {
-              const isActive = tabStr === t.key || (t.key === 'izometrie' && (tabStr === 'tronsoane' || tabStr === 'nod' || tabStr === 'probe' || tabStr === 'fibra' || tabStr === 'uscare'))
+              const isActive = tabStr === t.key || (t.key === 'izometrie' && SUB_FILE_IZOMETRIE.includes(tabStr))
               return (
                 <button
                   key={t.key}
@@ -261,6 +263,7 @@ export default function ExecutiePage() {
           proiectId={proiectIdStr}
           tab={tabStr}
           onBack={goBack}
+          onSubTab={changeTab}
           canEdit={canEdit}
           acces={acces}
         />
@@ -279,14 +282,20 @@ export default function ExecutiePage() {
 // ===========================================================================
 // CONTEXT VIEW — banner proiect + renderează tab-ul cu proiectId prop
 // ===========================================================================
-function ProiectContextView({ proiectId, tab, onBack, canEdit, acces }) {
+// onSubTab: sub-fila aleasă se scrie în URL (tab=uscare etc.), ca banda de sus să știe ce ecran e deschis și ca reîncărcarea să revină pe ea
+const SUB_FILE_IZOMETRIE = ['izometrie', 'tronsoane', 'nod', 'probe', 'uscare', 'fibra']
+function ProiectContextView({ proiectId, tab, onBack, onSubTab, canEdit, acces }) {
   // undefined = se încarcă; null = serverul n-a întors proiectul (nu există sau nu e permis contului); obiect = găsit
   const [proiectRand, setProiectRand] = useState(undefined)
   const [eroareProiect, setEroareProiect] = useState(null)
   const proiect = proiectRand || null
-  // Sub-tab izometrie: 'izometrie' | 'tronsoane' | 'nod' | 'probe' | 'uscare' | 'fibra'
-  // Dacă vine cu tab=tronsoane (link vechi), tab=nod, tab=probe sau tab=fibra (link direct de pe telefon), auto-selectăm sub-tab-ul
-  const [izSubTab, setIzSubTab] = useState(tab === 'tronsoane' || tab === 'nod' || tab === 'probe' || tab === 'fibra' || tab === 'uscare' ? tab : 'izometrie')
+  // Sub-fila Izometriei: 'izometrie' | 'tronsoane' | 'nod' | 'probe' | 'uscare' | 'fibra' — O SINGURĂ sursă: URL-ul (`tab`), nu o stare
+  // locală (17.11.2026, runda 3: starea locală nu urmărea schimbările lui `tab`, iar „Izometrie” din banda principală lăsa uscarea pe ecran
+  // cu URL-ul tab=izometrie). tab=tronsoane (link vechi), tab=nod / probe / fibra / uscare (link direct de pe telefon) = acea sub-filă.
+  const izSubTab = SUB_FILE_IZOMETRIE.includes(tab) ? tab : 'izometrie'
+  // proba pe telefon (17.11.2026): bara sub-filelor derulează lateral (6 file nu încap pe 360–412 px), iar sub-fila activă e adusă în vedere
+  const [baraSubFile, setBaraSubFile] = useState(null)
+  useEffect(() => { baraSubFile?.querySelector('[data-activ="1"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }) }, [baraSubFile, izSubTab])
 
   useEffect(() => {
     // la schimbarea proiectului: bannerul nu mai arată proiectul vechi, iar un răspuns întârziat al celui vechi nu se aplică
@@ -388,12 +397,12 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit, acces }) {
       {tab === 'contract'       && <ContractProiectTab proiectId={proiectId} />}
 
       {/* ── Izometrie + Tronsoane (sub-tabs) ── */}
-      {(tab === 'izometrie' || tab === 'tronsoane' || tab === 'nod' || tab === 'probe' || tab === 'fibra' || tab === 'uscare') && (
+      {SUB_FILE_IZOMETRIE.includes(tab) && (
         <div>
           {/* Sub-tab bar */}
-          <div style={{
+          <div ref={setBaraSubFile} style={{
             display:'flex', gap:0, borderBottom:`1px solid ${G.border}`,
-            background:G.surface, paddingLeft:28,
+            background:G.surface, paddingLeft:28, overflowX:'auto',
           }}>
             {[
               {key:'izometrie', label:'📐 Izometrie',  desc:'Pachete · Lansare · Cumulat'},
@@ -405,12 +414,12 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit, acces }) {
             ].map(st => {
               const active = izSubTab === st.key
               return (
-                <button key={st.key} onClick={()=>setIzSubTab(st.key)} title={st.desc} style={{
+                <button key={st.key} data-activ={active ? '1' : '0'} onClick={()=>onSubTab?.(st.key)} title={st.desc} style={{
                   padding:'10px 18px', background:'transparent', border:'none',
                   borderBottom:`2px solid ${active ? G.purple : 'transparent'}`,
                   color: active ? G.purple : G.muted,
                   cursor:'pointer', fontSize:12, fontWeight: active ? 700 : 500,
-                  transition:'all .15s',
+                  transition:'all .15s', whiteSpace:'nowrap', flexShrink:0,
                 }}>
                   {st.label}
                 </button>
