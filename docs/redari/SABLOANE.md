@@ -113,9 +113,20 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   privind readucerea terenului”; în PV C fraza „Comisia constată că lucrările de readucere a terenului la starea inițială …”.
   Neatinse (așteaptă text de la Juridic): `adresa_uat.docx` și `cerere_imputernicire.docx`. Placeholder-ele nu se schimbă
   (aceeași listă ordonată; rândul scos nu avea câmpuri). `sabloaneA4.test.js` declară schimbările în `SCHIMBARI_TEXT`, iar
-  `sabloanePredare.test.js` verifică textul nou / vechi, lista de placeholder-e (amprentă de pe main) și cele trei opțiuni.
+  `sabloanePredare.test.js` verifică textul nou / vechi, lista de placeholder-e (amprentă de pe main), cele trei opțiuni și că
+  fiecare parte XML / `.rels` din cele cinci arhive e bine formată (verificator cu stivă, cu mutanți care trebuie să pice).
   **Nu se publică în producție până nu confirmă Răzvan că pachetul a plecat la Transgaz.** Aspectul convocatorului cu trei
   opțiuni (QR-ul în cadru la dreapta, lângă opțiuni) e de verificat vizual în Word înainte de publicare.
+  **Publicare (PR #1117 rămâne draft până la pasul 1; pașii 3–4 în aceeași fereastră):**
+  1. Răzvan confirmă că pachetul a plecat la Transgaz.
+  2. Verificare în Word (neverificat încă): `convocator.docx` și `convocator_utilizator.docx` — o singură pagină A4 pe față, cele
+     trei opțiuni întregi, QR-ul în cadru la dreapta, lângă opțiuni, nedecalat după rândul scos; plus un convocator completat pe
+     TEST-RAZVAN. PV A / PV B / PV C: titlurile noi încap pe rând, paginarea neschimbată.
+  3. Migrarea de pe `redari/predare-bd` (neaplicată; textul final al declarației de la Juridic, „da”-ul lui Răzvan): `text_declaratie`
+     — DEFAULT-ul ȘI valorile salvate pe proiectele existente — plus refuzul pe server al codului retras. Se aplică ÎNTÂI.
+  4. Imediat după: publicarea aplicației (merge #1117 → deploy automat).
+  5. Control pe live (Ctrl+Shift+R): formularul public al unei convocări de pe TEST-RAZVAN arată trei variante, iar la „Nu particip —
+     nu am obiecții” declarația spune „electronic”, fără „prin poștă”; în 📞 Răspuns lista are trei opțiuni.
 - **Documentul COMPLETAT (tot excepția (8), #970 r2–r18)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
   (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`. **Regula LITERALĂ (r18)**, în locul
   decupajului pe propoziții din r7–r17 (unde fiecare rundă găsea alt caz în care se pierdea un câmp GDPR):

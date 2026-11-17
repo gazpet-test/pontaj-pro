@@ -35,6 +35,23 @@ const MAX_OBIECTII = 4000
 const MSG_NEUTRU = 'Linkul nu este valid sau a expirat.'
 const MSG_EROARE = 'A apărut o eroare, reîncercați.'
 
+// Validarea + parametrii cererii fn_red_raspuns_public, fără efecte (testabilă). Lista albă = OPTIUNI_NOI: un cod care nu e oferit
+// (opțiunea retrasă, gol, necunoscut) întoarce { eroare } și NU produce parametri, deci cererea nu pleacă.
+// Rezultat: { eroare } | { trimis: { optiune, zi, obiectii, declaratie }, parametri: { p_optiune, p_zi, p_obiectii, p_declaratie_confirmata } }
+export function pregatesteRaspunsPublic({ optiune, zi, obiectii, declaratie }) {
+  if (!OPTIUNI_NOI.some(o => o.cod === optiune)) return { eroare: 'Alegeți una din cele trei variante.' }
+  const cereZi = optiune === 'particip'
+  const cereDeclaratie = optiune === 'nu_particip_fara_obiectii'
+  const cereObiectii = optiune === 'nu_particip_cu_obiectii' || optiune === 'constatare_teren'
+  if (cereZi && !zi) return { eroare: 'Alegeți ziua în care participați.' }
+  if (cereDeclaratie && !declaratie) return { eroare: 'Bifați declarația pentru a continua.' }
+  const obj = String(obiectii ?? '').trim()
+  if (cereObiectii && !obj) return { eroare: 'Scrieți pe scurt obiecțiile dumneavoastră.' }
+  if (obj.length > MAX_OBIECTII) return { eroare: `Textul este prea lung (maxim ${MAX_OBIECTII} caractere).` }
+  const trimis = { optiune, zi: cereZi ? zi : '', obiectii: cereObiectii ? obj : '', declaratie: cereDeclaratie ? declaratie : false }
+  return { trimis, parametri: { p_optiune: trimis.optiune, p_zi: cereZi ? trimis.zi : null, p_obiectii: cereObiectii ? trimis.obiectii : null, p_declaratie_confirmata: trimis.declaratie } }
+}
+
 const fmtZi = (d) => {
   if (!d) return '—'
   const dt = new Date(String(d).slice(0, 10) + 'T00:00:00')
@@ -188,24 +205,17 @@ export default function RedariRaspunsPublic() {
 
   const trimite = async () => {
     if (busy) return
-    // doar opțiunile oferite (OPTIUNI_NOI); o opțiune retrasă nu pleacă din formular
-    if (!OPTIUNI_NOI.some(o => o.cod === optiune)) return setValidare('Alegeți una din cele trei variante.')
-    if (cereZi && !zi) return setValidare('Alegeți ziua în care participați.')
-    if (cereDeclaratie && !declaratie) return setValidare('Bifați declarația pentru a continua.')
-    const obj = obiectii.trim()
-    if (cereObiectii && !obj) return setValidare('Scrieți pe scurt obiecțiile dumneavoastră.')
-    if (obj.length > MAX_OBIECTII) return setValidare(`Textul este prea lung (maxim ${MAX_OBIECTII} caractere).`)
+    // doar opțiunile oferite (OPTIUNI_NOI); o opțiune retrasă nu pleacă din formular — garda e în pregatesteRaspunsPublic
+    const cerere = pregatesteRaspunsPublic({ optiune, zi, obiectii, declaratie })
+    if (cerere.eroare) return setValidare(cerere.eroare)
     setValidare(''); setBusy(true)
     const tokenCerere = token   // capturat la pornirea cererii
     // r5 P2-2: instantaneul datelor trimise — formularul e blocat (fieldset disabled) cât durează cererea, iar rezumatul arată exact ce s-a trimis
-    const trimis = { optiune, zi: cereZi ? zi : '', obiectii: cereObiectii ? obj : '', declaratie: cereDeclaratie ? declaratie : false, la: new Date() }
+    const trimis = { ...cerere.trimis, la: new Date() }
     try {
       const { data, error } = await supabase.rpc('fn_red_raspuns_public', {
         p_token: tokenCerere,
-        p_optiune: trimis.optiune,
-        p_zi: cereZi ? trimis.zi : null,
-        p_obiectii: cereObiectii ? trimis.obiectii : null,
-        p_declaratie_confirmata: trimis.declaratie,
+        ...cerere.parametri,
         p_user_agent: (typeof navigator !== 'undefined' && navigator.userAgent) ? String(navigator.userAgent).slice(0, 500) : null,
       })
       if (tokenCerere !== tokenCurent.current) return   // tokenul s-a schimbat între timp: rezultatul nu e al acestui formular

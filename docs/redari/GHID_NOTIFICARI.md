@@ -48,7 +48,9 @@ Terminologia (deciziile Răzvan 17.11.2026): față de proprietari / deținător
 scrisă pleacă prin **scrisoare recomandată sau curier, cu confirmare de primire**; PV A trimis spre semnare de la distanță se semnează
 **doar electronic** (cine n-are e-mail sau telefon cu internet vine la sesiune sau intră în PV B). Șabloanele convocatorului, PV A, PV B
 și PV C au textele noi (`docs/redari/SABLOANE.md` §1, excepția (11)). Textul declarației din formular vine din
-`red_proiecte.text_declaratie` (bază de date) și se schimbă separat.
+`red_proiecte.text_declaratie` (bază de date): migrarea care îl schimbă (DEFAULT + proiectele existente, ramura `redari/predare-bd`)
+**se aplică odată cu publicarea aplicației; ordinea: migrarea, apoi publicarea aplicației** (altfel formularul arată „electronic” la
+opțiune și „prin poștă / electronic” la declarație). Pașii: `SABLOANE.md` §1, excepția (11), lista „Publicare”.
 
 ## 2. Canalele de răspuns — unde răspunde proprietarul și cum se înregistrează
 
