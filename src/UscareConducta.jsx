@@ -90,7 +90,9 @@ async function comprimaJpeg(file) {
 
 // ecranInitial: 'pasi' (telefonul: tronson → etapa 1 → etapa 2 → raport, src/UscarePasi.jsx) sau 'complet' (formularul pe secțiuni, „Vezi /
 // corectează toate datele”, pentru birou și corecturi). Ambele lucrează pe ACELAȘI formular, cu aceleași RPC-uri, ciornă și reguli de conflict.
-export default function UscareConducta({ proiectId, client = supabase, stocare = stocareImplicita(), comprima = comprimaJpeg, ecranInitial = 'pasi', acum = () => Date.now() }) {
+// onFormular (opțional, lansatorul de telefon /m): primește true / false când se deschide / se închide un raport — încadrarea își ascunde
+// atunci „Înapoi”, ca ieșirea dintr-un raport să treacă prin „← Lista” (care întreabă la modificări nesalvate)
+export default function UscareConducta({ proiectId, client = supabase, stocare = stocareImplicita(), comprima = comprimaJpeg, ecranInitial = 'pasi', acum = () => Date.now(), onFormular = null }) {
   const [uscari, setUscari] = useState([])
   const [probe, setProbe] = useState([])
   const [probeEroare, setProbeEroare] = useState(null)
@@ -270,6 +272,9 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     if (!modificat) return
     setCiornaEroare(!scrieCiorna(id, baza, form))
   }, [form]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const formDeschis = form != null
+  useEffect(() => { if (typeof onFormular === 'function') onFormular(formDeschis) }, [formDeschis]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const constructorPropus = () => {
     const ultim = [...uscari].filter(u => u.constructor).sort((a, b) => b.id - a.id)[0]

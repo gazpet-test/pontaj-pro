@@ -111,6 +111,20 @@ oprire între etape (între introducerea și ieșirea pistoanelor pot trece și 
   (S1), momentul etapei 1 pus de server + înghețarea intrărilor (S1), cântarul și diviziunea (S1), procesul-verbal semnat din ERP de
   persoana desemnată a Antreprenorului (S2), exemplarul olograf urcat și tronsonul confirmat uscat (S3).
 
+### Accesul de pe telefon
+
+Ecranul de uscare se deschide pe două drumuri, cu aceeași componentă (`UscareConducta`, aceleași RPC-uri și aceeași logică):
+(1) **din aplicația completă** — Execuție → proiect → Izometrie → „💨 Uscare conductă” (adresa directă `/executie?proiect=<id>&tab=uscare`);
+(2) **din lansatorul de telefon `/m`** — butonul „💨 Uscare conductă”. La deschiderea lansatorului **nu se enumeră nimic**: butonul apare
+după partea de modul a dreptului (owner, din profilul încărcat oricum, sau rândul propriu `executie` din `user_module_access` cu nivel
+editor / admin — o singură citire ușoară); dacă citirea eșuează, butonul se arată și decide verificarea de la apăsare. Abia **la apăsare**
+se citesc proiectele **active** (arhiva nu se oferă pe telefon) și se verifică pe fiecare dreptul de **scriere** cu aceeași funcție pe care
+o cere ecranul (`fn_executie_nod_drept(proiect, true)`: owner sau modulul `executie` editor / admin, plus accesul pe proiect), cu „Se verifică
+proiectele…”; dacă nu iese niciunul: „Nu ai drept de scriere pe niciun proiect activ de Execuție”. Un singur proiect = direct ecranul de
+uscare al lui; mai multe = o listă scurtă (întâi cele cu rapoarte deschise), apoi ecranul. „← Înapoi” duce la listă / la lansator; cât e
+deschis un raport, ieșirea e „← Lista” din ecran (întreabă la modificări nesalvate). O verificare de drept eșuată se arată cu „Reîncearcă”
+(nu devine „fără drept”). La ieșire, citirile în curs se opresc (nicio pagină sau verificare în plus). Poarta reală rămâne în BD (RLS + RPC-uri).
+
 ## 4. Stările
 
 | Stare | Ce se poate | Cine |
