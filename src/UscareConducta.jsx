@@ -109,6 +109,9 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   const genGps = useRef(0)                              // ultima captură GPS cerută (o captură mai veche sau o editare manuală o anulează)
   const registru = useRef(null)
   const blocat = useRef(false)
+  const pdfOprire = useRef(null)                        // AbortController-ul exportului PDF în curs (runda 6)
+  // runda 6: orice schimbare de context (alt raport, listă, alt proiect, ieșire) oprește și exportul PDF în zbor (citirile pozelor, capturile)
+  const schimbaCtx = () => { ctx.current += 1; pdfOprire.current?.abort(); pdfOprire.current = null }
   const proiectCurent = useRef(proiectId)
   proiectCurent.current = proiectId                     // sincron, la randare: un răspuns care sosește înaintea efectului de schimbare tot e prins
 
@@ -122,6 +125,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   // Runda 5: TOATE acțiunile asincrone (salvare, stare, poze — inclusiv comprimarea —, meteo, GPS, PDF, lămurire) primesc contextul capturat
   // ÎNAINTEA primului await și îl transmit mai departe (nimic nu se recapturează după un await); o scriere se emite doar dacă contextul e încă
   // valid (trimite). Citirile (listă, poze, meteo, GPS, PDF) cer generația + proiectul; scrierile și registrul cer în plus același registru.
+  // Runda 6: PDF-ul verifică contextul și ÎN exportator (după fiecare citire / captură, înainte de descărcare) — vezi pdf() și uscarePdf.js.
   const capteaza = (sel = selectat) => ({ t: ctx.current, proiect: proiectId, selectat: sel, reg: registru.current, uid })
   const ctxCitire = c => !!c && c.t === ctx.current && c.proiect === proiectCurent.current
   const ctxValid = c => ctxCitire(c) && c.reg === registru.current
@@ -156,7 +160,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
   }, [client, proiectId])
 
   useEffect(() => {
-    ctx.current += 1
+    schimbaCtx()
     const c = ctx.current
     setUscari([]); setSelectat(null); setForm(null); setBaza(null); setConflict(null); setPoze([]); setIncarcari([]); setPozePentru(null)
     setMiniaturi({}); setMesaj(null); setIncarcPoza(null); setMeteoAlegere(null); registru.current = null; setNelamurite([]); setCoordPentru(null)
@@ -170,8 +174,8 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
       const reg = registruNou(id ? stocare : null, id ? prefixRegistru(id, proiectId) : null, RPC_USCARE)
       if (reg.utilizabil && reg.toate() !== null) { registru.current = reg; setNelamurite(reg.toate()) }
     })()
-    return () => { ctx.current += 1 }
-  }, [incarca, client, stocare, proiectId])
+    return () => { schimbaCtx() }
+  }, [incarca, client, stocare, proiectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── pozele + încărcările raportului deschis + miniaturile (signed URL, 10 min); totul legat de (context, raport) ──
   // c = contextul capturat de apelant (runda 5: generația + proiectul, nu doar generația)
@@ -221,7 +225,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     return ultim?.constructor || CONSTRUCTOR_IMPLICIT
   }
   const deschide = (u, proba = null) => {
-    ctx.current += 1; genSursa.current += 1; genGps.current += 1
+    schimbaCtx(); genSursa.current += 1; genGps.current += 1
     setMesaj(null); setMotiv(null); setRenunt(null); setMeteoAlegere(null); setCiornaGasita(null); setConflict(null); setIncarcPoza(null); setCiornaEroare(false)
     setCoordPentru(null)
     if (u === 'nou') {
@@ -238,7 +242,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     }
   }
   const inchideForm = () => {
-    ctx.current += 1; genSursa.current += 1; genGps.current += 1
+    schimbaCtx(); genSursa.current += 1; genGps.current += 1
     setSelectat(null); setForm(null); setBaza(null); setConflict(null); setPoze([]); setIncarcari([]); setPozePentru(null); setMotiv(null); setMesaj(null); setIncarcPoza(null)
     setCoordPentru(null); setMeteoAlegere(null)
   }
@@ -388,7 +392,7 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
       if (u && rez.r.ok) {
         stergeCiorna(nou ? 'nou' : u.id)
         setUscari(l => [...l.filter(x => x.id !== u.id), u])
-        if (nou) { ctx.current += 1; setSelectat(u.id); incarcaPoze(u.id, capteaza(u.id)) }
+        if (nou) { schimbaCtx(); setSelectat(u.id); incarcaPoze(u.id, capteaza(u.id)) }
         setBaza(u); setForm(formularDinRand(u))
       } else if (u && rez.r?.motiv === 'conflict') {
         // NU se salvează peste coleg: formularul rămâne pe versiunea de bază, cu îmbinarea pe câmpuri de rezolvat explicit
@@ -551,16 +555,21 @@ export default function UscareConducta({ proiectId, client = supabase, stocare =
     if (!rand || blocat.current || pozePentru !== rand.id) return
     blocat.current = true; setInCurs(true)
     const c = capteaza()
+    const oprire = typeof AbortController === 'function' ? new AbortController() : null
+    pdfOprire.current = oprire
     try {
       const { exportRaportUscarePDF } = await import('./uscarePdf.js')
       if (!ctxCitire(c)) return                       // runda 5: raportul nu mai e deschis -> fără PDF pentru el
-      const { necitite } = await exportRaportUscarePDF({ client, uscare: rand, poze, cuCoordonate: coordPentru === rand.id })
-      if (!ctxCitire(c)) return
+      // runda 6 (verdict r5 P2): verificarea contextului merge ÎN exportator (după fiecare citire / captură și chiar înainte de descărcare),
+      // nu doar aici, după descărcare; schimbarea contextului anulează și semnalul (citirile pozelor în zbor se opresc)
+      const r = await exportRaportUscarePDF({ client, uscare: rand, poze, cuCoordonate: coordPentru === rand.id, eValabil: () => ctxCitire(c), semnal: oprire?.signal || null })
+      if (r?.anulat || !ctxCitire(c)) return
+      const { necitite } = r
       setCoordPentru(null)          // consimțământul ține pentru UN export al acestui raport
       setMesaj(necitite ? { tip: 'eroare', text: `PDF generat, dar ${necitite} fotografii n-au putut fi citite (apar cu mențiune în anexă). Reîncearcă cu semnal bun.` }
                         : { tip: 'ok', text: 'PDF generat.' + (areModificari(form, rand) ? ' Atenție: arată ultima versiune SALVATĂ, nu modificările de pe ecran.' : '') })
     } catch (e) { if (ctxCitire(c)) setMesaj({ tip: 'eroare', text: 'PDF-ul nu s-a putut genera: ' + (e?.message || e) }) }
-    finally { blocat.current = false; setInCurs(false) }
+    finally { if (pdfOprire.current === oprire) pdfOprire.current = null; blocat.current = false; setInCurs(false) }
   }
 
   // ── afișarea ──

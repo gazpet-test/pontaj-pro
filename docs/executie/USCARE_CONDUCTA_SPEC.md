@@ -134,6 +134,12 @@ Tranzițiile (o singură listă, `fn_executie_uscare_tranzitie` = `TRANZITII` di
   dovedit scoate totuși cheia din registrul proiectului cererii (registrul capturat), chiar dacă omul a navigat între timp. Cât o cerere e în
   zbor, câmpurile formularului sunt blocate, iar salvarea / schimbarea stării anulează capturile GPS și propunerile meteo încă în zbor (ar
   ateriza peste formularul înlocuit de răspuns).
+  **PDF-ul** (runda 6, verdict r5 P2): verificarea nu stă doar în ecran, după export — exportatorul (`uscarePdf.js`) primește o funcție de
+  verificare a contextului și un semnal de anulare (anulat de ecran la orice schimbare de raport / proiect / ieșire). Contextul se verifică
+  după URL-urile semnate, după FIECARE poză citită, înainte și după fiecare captură și **imediat înainte de descărcare**; context schimbat =
+  buclele se opresc, citirile pozelor în zbor sunt anulate, nimic descărcat, niciun mesaj (o citire întreruptă de anulare nu se numără ca
+  „poză necitită”). O eroare reală, cu contextul încă valid, se arată în continuare. Probe: `src/uscarePdf.test.js` și testele „runda 6”
+  din `src/UscareConducta.test.jsx` (exportatorul real, poza amânată, navigare între timp → zero descărcări; martorul fără navigare → una).
 - **CAS**: formularul ține **versiunea de bază** (rândul pe care s-a pornit). La conflict serverul întoarce rândul curent; aplicația **nu
   salvează peste coleg**: îmbină în trei (baza, formularul, serverul) pe câmpuri — schimbările colegului pe câmpurile neatinse intră,
   ale mele rămân, câmpurile schimbate de amândoi cu valori diferite **se aleg explicit** („al meu” / „al colegului”); salvarea e blocată până

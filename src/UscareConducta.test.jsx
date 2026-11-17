@@ -10,10 +10,22 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 vi.mock('./lib/supabase.js', () => ({ supabase: null }))
-// PDF-ul real cere canvas (nu există în jsdom): se înregistrează doar argumentele exportului (consimțământul coordonatelor)
+// PDF-ul real cere canvas (nu există în jsdom): implicit se înregistrează doar argumentele exportului (consimțământul coordonatelor).
+// Runda 6: cu pdfSt.real = true rulează EXPORTATORUL REAL (uscarePdf.js), cu jsPDF / html2canvas falși: descărcările ajung în pdfSt.salvari.
 const exporturi = []
-vi.mock('./uscarePdf.js', () => ({ exportRaportUscarePDF: async a => { exporturi.push({ id: a.uscare.id, cuCoordonate: a.cuCoordonate }); return { necitite: 0 } } }))
+const pdfSt = vi.hoisted(() => ({ real: false, salvari: [] }))
+vi.mock('./uscarePdf.js', async importOriginal => {
+  const real = await importOriginal()
+  return { ...real, exportRaportUscarePDF: async a => {
+    if (pdfSt.real) return real.exportRaportUscarePDF(a)
+    exporturi.push({ id: a.uscare.id, cuCoordonate: a.cuCoordonate }); return { necitite: 0 }
+  } }
+})
+vi.mock('jspdf', () => ({ default: class { setProperties() {} addPage() {} addImage() {} getNumberOfPages() { return 1 } save(n) { pdfSt.salvari.push(n) } } }))
+vi.mock('html2canvas', () => ({ default: async () => ({ width: 1476, height: 300, toDataURL: () => 'data:image/jpeg;base64,AA==' }) }))
 import UscareConducta from './UscareConducta.jsx'
+// preîncărcat: importul dinamic din ecran (`await import('./uscarePdf.js')`) se rezolvă apoi imediat, ca în aplicație după primul export
+await import('./uscarePdf.js')
 
 let JSDOM = null
 const surse = [import.meta.url, process.env.REDARI_JSDOM_DIR && path.join(process.env.REDARI_JSDOM_DIR, 'package.json')].filter(Boolean)
@@ -523,6 +535,63 @@ dom(numeDom('UscareConducta (jsdom + react-dom)'), () => {
     expect(exporturi).toEqual([{ id: 2, cuCoordonate: false }, { id: 1, cuCoordonate: true }])
     expect(bifa().checked).toBe(false)                                        // după export, consimțământul nu rămâne pentru următorul
   })
+
+  // runda 6 (verdict r5 P2): exportatorul REAL, cu citirea pozei AMÂNATĂ; între apăsare și sosirea pozei omul pleacă (listă / alt proiect)
+  // -> zero descărcări, niciun mesaj de PDF; citirea în zbor primește semnalul anulat. Martor: fără navigare, exact o descărcare.
+  async function pregatestePdfReal({ ignoraAnularea = false } = {}) {
+    pdfSt.real = true; pdfSt.salvari.length = 0
+    curata.push(() => { pdfSt.real = false; pdfSt.salvari.length = 0 })
+    const cereri = []
+    vi.stubGlobal('fetch', (url, opt) => {
+      const d = amana(), c = { url, opt, ...d }
+      cereri.push(c)
+      // fetch-ul real respinge la anulare (AbortError); ignoraAnularea = o citire care se termină oricum, după navigare
+      if (!ignoraAnularea) opt?.signal?.addEventListener('abort', () => d.res(Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))))
+      return d.p
+    })
+    vi.stubGlobal('FileReader', class { readAsDataURL() { this.result = 'data:image/jpeg;base64,AA=='; queueMicrotask(() => this.onload()) } })
+    vi.stubGlobal('requestAnimationFrame', cb => { queueMicrotask(cb); return 1 })
+    curata.push(() => vi.unstubAllGlobals())
+    const { client, T } = clientFals({ rapoarte: [RAP(1)] })
+    T.executie_uscare_poze.set(5, { id: 5, uscare_id: 1, proiect_id: 1, categorie: 'manometru', burete_nr: null, cale: '1/1/a.jpg', legenda: null, creat_la: '2026-11-10T09:00:00Z' })
+    client.storage = { from: () => ({ createSignedUrls: async cai => ({ data: cai.map(p => ({ path: p, signedUrl: 'https://stocare.test/' + p })), error: null }) }) }
+    const u = await monteaza(client)
+    await u.apasa(u.buton('Tr. test'))
+    await u.apasa(u.buton('Raportul în PDF'))
+    expect(cereri).toHaveLength(1)                                            // exportul așteaptă poza
+    const raspuns = { ok: true, status: 200, blob: async () => new Blob(['jpeg'], { type: 'image/jpeg' }) }
+    return { u, cereri, elibereaza: () => u.elibereaza(cereri[0], raspuns) }
+  }
+
+  it('runda 6: martor — fără navigare, poza amânată sosește și PDF-ul se descarcă o dată', async () => {
+    const { u, elibereaza } = await pregatestePdfReal()
+    expect(pdfSt.salvari).toHaveLength(0)
+    await elibereaza()
+    expect(pdfSt.salvari).toHaveLength(1)
+    expect(u.text()).toContain('PDF generat.')
+  })
+
+  for (const [nume, ignoraAnularea] of [['citirea respinsă la anulare', false], ['citirea care se termină oricum', true]]) {
+    it(`runda 6: poza amânată + revenire la listă -> zero descărcări (${nume})`, async () => {
+      const { u, cereri, elibereaza } = await pregatestePdfReal({ ignoraAnularea })
+      await u.apasa(u.buton('← Lista'))
+      const anulataLaNavigare = cereri[0].opt?.signal?.aborted === true
+      await elibereaza()
+      await u.asteapta()
+      expect(pdfSt.salvari).toEqual([])
+      expect(u.text()).not.toContain('PDF generat')
+      expect(u.text()).not.toContain('PDF-ul nu s-a putut genera')
+      expect(anulataLaNavigare).toBe(true)                                     // citirea în zbor e anulată la schimbarea contextului
+    })
+    it(`runda 6: poza amânată + alt proiect -> zero descărcări (${nume})`, async () => {
+      const { u, elibereaza } = await pregatestePdfReal({ ignoraAnularea })
+      await u.reranda({ proiectId: 2 })
+      await elibereaza()
+      await u.asteapta()
+      expect(pdfSt.salvari).toEqual([])
+      expect(u.text()).not.toContain('PDF generat')
+    })
+  }
 
   it('P1-4 conflict la ora de iarnă: colegul mută începutul pe a doua apariție a orei 03:30 -> alegere explicită, nu suprascriere', async () => {
     const { client, st, T } = clientFals({ rapoarte: [RAP(1, { ora_inceput: '2026-10-25T00:30:00Z', versiune: 1 })] })
