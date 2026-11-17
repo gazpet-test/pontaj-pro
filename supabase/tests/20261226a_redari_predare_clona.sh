@@ -87,7 +87,9 @@ D1=5e5e0000-0000-4000-8000-000000000301; D2=5e5e0000-0000-4000-8000-000000000302
 R_OLD=5e5e0000-0000-4000-8000-000000000401
 IDS="'$PR1','$PR2','$PRA','$PRB','$PRC','$UAT','$PARC','$D1','$D2','$D3','$R_OLD'"
 PIDS=(); TINTA_OK=0; APLICAT=0; REVENIT=0; ESEC=0
-q() { "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -c "$1"; }
+# SQL-ul pleacă pe stdin, nu ca argument (-c): pe Windows (Git Bash -> psql.exe) argumentele cu diacritice sunt trecute prin pagina de cod a
+# sistemului și ajung alterate, deci comparațiile cu textele VECHI / NOU dădeau „ALT” deși rândurile erau corecte (prima rulare pe clonă).
+q() { printf '%s\n' "$1" | "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -f -; }
 qf() { "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -f "$1"; }
 ok() { if [ "$1" = "$2" ]; then echo "  OK  $3"; else echo "  NU  $3: obtinut [$1], asteptat [$2]"; ESEC=1; fi; }
 okre() { if printf '%s' "$1" | grep -Eq -- "$2"; then echo "  OK  $3"; else echo "  NU  $3: [$(printf '%s' "$1" | head -c 400)] nu se potriveste cu /$2/"; ESEC=1; fi; }
