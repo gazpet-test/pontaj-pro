@@ -78,18 +78,58 @@ describe('randuriRaport', () => {
   })
 })
 
+// r2 (Jak PR1120 P2): starea după scriere din parcela confirmată + calitate + contact + marcajul lotului; motivul din lot are prioritate
+const LOT_ID = 'lot-fictiv-1'
+const scris = (id, parcela_id, nume_normalizat, extra = {}) => ({ id, parcela_id, nume_normalizat, calitate: 'utilizator', sursa_date: `TGZ_UTILIZATORI: … rândul x; lot ${LOT_ID}`, ...extra })
+const rec = (detinatori, cuContact = detinatori.map(d => d.id), deVerificat = []) => ({ detinatori, contacte: new Map(cuContact.map(id => [id, 't'])), deVerificat })
 describe('stareDupaScriere', () => {
-  it('scris = acum deținător activ în BD; încă nou = NESCRIS cu motivul din lot; fără recitire = necunoscută', () => {
-    const { parsat, plan } = pregateste()
-    // după scriere (simulat): 4, 5, 12 sunt în BD; rândul 6 (HG) nu s-a scris — parcela s-a schimbat
-    const detinatoriDupa = [...DETINATORI, { parcela_id: 'p1', nume_normalizat: 'IONESCU ANA (FICTIV)' }, { parcela_id: 'p2', nume_normalizat: 'IONESCU ANA (FICTIV)' }, { parcela_id: 'p4', nume_normalizat: '=CMD (FICTIV)' }]
-    const planDupa = planUtilizatori(parsat.candidati, { parcele: PARCELE, detinatori: detinatoriDupa })
-    const lot = { diferente: { schimbate_la_scriere: [{ rand: 6, motiv: 'parcela s-a schimbat între plan și scriere' }] } }
-    const m = stareDupaScriere(plan, planDupa, lot)
-    expect([...m.entries()]).toEqual([[4, 'în BD: utilizator activ pe parcelă'], [5, 'în BD: utilizator activ pe parcelă'], [6, 'NESCRIS: parcela s-a schimbat între plan și scriere'], [12, 'în BD: utilizator activ pe parcelă']])
-    expect(stareDupaScriere(plan, null, lot).get(4)).toMatch(/^necunoscută/)
-    // planul refăcut din BD: cei scriși sunt acum „deja deținători”, rămâne nou doar rândul nescris (6)
-    expect(planDupa.statistici).toMatchObject({ noi: 1, deja_detinatori: 4 })
+  it('stările distincte: scris / contact lipsă / de verificat / există ca utilizator / altă calitate / țintă schimbată / oprit / necunoscut', () => {
+    const { plan } = pregateste()
+    const r = rec([
+      scris('d4', 'p1', 'IONESCU ANA (FICTIV)'),                                                     // 4: scris, cu contact
+      scris('d5', 'p2', 'IONESCU ANA (FICTIV)'),                                                     // 5: scris, fără contact
+      scris('d12', 'p4', '=CMD (FICTIV)'),                                                          // 12: scris, ținta schimbată după scriere
+    ], ['d4', 'd12'], [{ id: 'd12', motiv: 'de verificat: ținta s-a schimbat în timpul importului (parcela nu mai e activă în proiect)' }])
+    const lot = { stare: 'finalizat', diferente: { schimbate_la_scriere: [{ rand: 6, motiv: 'parcela s-a schimbat între plan și scriere (poziția HG nu mai e unică în UAT) — nescris' }] } }
+    const m = stareDupaScriere(plan, r, lot, LOT_ID)
+    expect(Object.fromEntries([...m.entries()].map(([k, v]) => [k, v.cod]))).toEqual({ 4: 'scris', 5: 'scris_fara_contact', 6: 'nescris_tinta', 12: 'de_verificat' })
+    expect(m.get(4)).toEqual({ cod: 'scris', text: 'scris de această operație', id: 'd4', contact: true })
+    expect(m.get(6).text).toBe('nescris: țintă schimbată: parcela s-a schimbat între plan și scriere (poziția HG nu mai e unică în UAT) — nescris')
+    expect(m.get(12).text).toMatch(/^de verificat: ținta s-a schimbat în timpul importului/)
+    // fără recitire: necunoscut pentru toate rândurile noi (nimic declarat scris fără dovadă)
+    expect([...stareDupaScriere(plan, null, lot, LOT_ID).values()].every(v => v.cod === 'necunoscut')).toBe(true)
+    // lot eșuat, nimic în BD: oprit; lot finalizat, nimic în BD: necunoscut
+    expect(stareDupaScriere(plan, rec([]), { stare: 'esuat', diferente: {} }, LOT_ID).get(4).cod).toBe('nescris_oprit')
+    expect(stareDupaScriere(plan, rec([]), { stare: 'finalizat', diferente: {} }, LOT_ID).get(4).cod).toBe('necunoscut')
+  })
+  it('scenariul (i) al recenzentului: alt operator adaugă persoana ca PROPRIETAR, importul o sare → „există deja cu altă calitate”, nu „utilizator activ”', () => {
+    const { plan } = pregateste()
+    const m = stareDupaScriere(plan, rec([{ id: 'dx', parcela_id: 'p1', nume_normalizat: 'IONESCU ANA (FICTIV)', calitate: 'proprietar', sursa_date: 'manual' }]), { stare: 'finalizat', diferente: {} }, LOT_ID)
+    expect(m.get(4)).toEqual({ cod: 'exista_alta_calitate', text: 'există deja cu altă calitate — nescris („proprietar”)', id: 'dx' })
+    // același om adăugat ca utilizator de altă operație (fără marcajul acestui lot) → „există deja ca utilizator”, nu „scris”
+    const m2 = stareDupaScriere(plan, rec([scris('dy', 'p1', 'IONESCU ANA (FICTIV)', { sursa_date: 'TGZ_UTILIZATORI: … rândul 4; lot alt-lot' })]), { stare: 'finalizat', diferente: {} }, LOT_ID)
+    expect(m2.get(4).cod).toBe('exista_utilizator')
+  })
+  it('scenariul (ii): ținta inițială a dispărut, persoana e acum pe ALTĂ parcelă, lotul spune „nescris” → nescris: țintă schimbată (nu „scris”)', () => {
+    const { plan } = pregateste()
+    // rândul 6 fusese potrivit după HG pe p3; acum persoana există pe p9 (alt rând, altă parcelă)
+    const m = stareDupaScriere(plan, rec([scris('d9', 'p9', plan.noi.find(n => n.rand === 6).nume_normalizat)]),
+      { stare: 'finalizat', diferente: { schimbate_la_scriere: [{ rand: 6, motiv: 'parcela s-a schimbat' }] } }, LOT_ID)
+    expect(m.get(6).cod).toBe('nescris_tinta')
+    // chiar dacă cineva ar fi pus-o pe parcela confirmată fără marcaj, motivul din lot are prioritate față de „există deja”
+    const m2 = stareDupaScriere(plan, rec([{ id: 'dz', parcela_id: 'p3', nume_normalizat: plan.noi.find(n => n.rand === 6).nume_normalizat, calitate: 'utilizator', sursa_date: 'manual' }]),
+      { stare: 'finalizat', diferente: { schimbate_la_scriere: [{ rand: 6, motiv: 'parcela s-a schimbat' }] } }, LOT_ID)
+    expect(m2.get(6).cod).toBe('nescris_tinta')
+  })
+  it('potrivirile HG neconfirmate → „neimportat … neconfirmată”; contactul completat al unui „deja deținător” doar cu dovadă din lot + BD', () => {
+    const { plan } = pregateste()
+    const hg = plan.noi.filter(n => n.potrivire === 'hg')
+    const planScris = { ...plan, hg_neconfirmate: hg }
+    const dProp = { id: 'd-prop', parcela_id: 'p1', nume_normalizat: 'POPESCU ION (FICTIV)', calitate: 'proprietar', sursa_date: 'TGZ' }
+    const m = stareDupaScriere(planScris, rec([dProp]), { stare: 'finalizat', diferente: { contacte_scrise: ['d-prop'] } }, LOT_ID)
+    expect(m.get(6).cod).toBe('hg_neconfirmat')
+    expect(m.get(7)).toEqual({ cod: 'contact_completat', text: 'contact completat de această operație', id: 'd-prop', contact: true })
+    expect(stareDupaScriere(planScris, rec([dProp], []), { stare: 'finalizat', diferente: { contacte_scrise: ['d-prop'] } }, LOT_ID).get(7)).toBeUndefined()
   })
 })
 
@@ -115,13 +155,24 @@ describe('csvRaportUtilizatori', () => {
     expect(linii.slice(1, 6).map(l => l.split(';')[6])).toEqual([`"'=1+1"`, `"'+40711"`, `"'-2"`, `"'@SUM(1)"`, `"' =x"`])
     expect(linii[1].split(';')[4]).toBe('HUS|1||')
   })
-  it('după scriere: coloana „După scriere (din BD)”', () => {
+  it('r2: valorile care încep cu TAB / CR (singure sau urmate de formulă) sunt neutralizate și citate', () => {
+    const r = ['\t=1+1', '\r=1+1', '\tTEXT', '\rTEXT', 'A\tB'].map((nume, i) => ({ rand: i + 4, eticheta: 'Nou (se importă)', uat: 'HUS', id_parcela: 'X', cheie_sursa: 'HUS|1||', potrivire: 'cheie', nume, cu_adresa: 'da', cu_telefon: 'nu', motiv: 'm' }))
+    const csv = csvRaportUtilizatori(r)
+    // fiecare valoare care începe cu TAB / CR primește apostrof și ghilimele; TAB-ul din interior rămâne text
+    expect(csv).toContain(`;"'\t=1+1";`); expect(csv).toContain(`;"'\r=1+1";`)
+    expect(csv).toContain(`;"'\tTEXT";`); expect(csv).toContain(`;"'\rTEXT";`)
+    expect(csv).toContain(';A\tB;')
+  })
+  it('după scriere: coloanele „După scriere (din BD)”, „ID deținător”, „Contact în BD”', () => {
     const { parsat, plan } = pregateste()
-    const m = stareDupaScriere(plan, null, null)
+    const m = stareDupaScriere(plan, rec([scris('d4', 'p1', 'IONESCU ANA (FICTIV)')]), { stare: 'esuat', diferente: {} }, LOT_ID)
     const csv = csvRaportUtilizatori(randuriRaport(parsat, plan, m), { dupa: true })
     const linii = csv.slice(1).split('\r\n')
-    expect(linii[0].endsWith(';Motiv;După scriere (din BD)')).toBe(true)
-    expect(linii.find(l => l.startsWith('4;'))).toMatch(/necunoscută — recitirea din BD/)
-    expect(linii.find(l => l.startsWith('7;'))).toMatch(/neschimbat \(nu era de scris\)$/)
+    expect(linii[0].endsWith(';Motiv;După scriere (din BD);ID deținător;Contact în BD')).toBe(true)
+    expect(linii.find(l => l.startsWith('4;')).endsWith(';scris de această operație;d4;da')).toBe(true)
+    expect(linii.find(l => l.startsWith('5;')).endsWith(';nescris: importul s-a oprit înainte — refaceți previzualizarea și reluați;;')).toBe(true)
+    expect(linii.find(l => l.startsWith('7;'))).toMatch(/neschimbat \(nu era de scris\);;$/)
+    const necunoscut = csvRaportUtilizatori(randuriRaport(parsat, plan, stareDupaScriere(plan, null, null, LOT_ID)), { dupa: true })
+    expect(necunoscut.slice(1).split('\r\n').find(l => l.startsWith('4;'))).toMatch(/necunoscut — de verificat \(recitirea din BD după scriere a eșuat/)
   })
 })

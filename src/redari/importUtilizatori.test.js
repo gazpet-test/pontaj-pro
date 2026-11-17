@@ -85,9 +85,11 @@ describe('planUtilizatori', () => {
 // client Supabase fals: inserturi / update-uri / citiri keyset (.in().is().gt().order().limit()); limitaServer simulează o limită de server
 const PARCELE_TEST = [{ id: 'p1', cheie_sursa: 'K1', id_parcela: 'X1', poz_hg: null, sters_la: null, red_uat: { uat3: 'HUS' } }, { id: 'p2', cheie_sursa: 'K2', id_parcela: 'X2', poz_hg: null, sters_la: null, red_uat: { uat3: 'HUS' } }]
 const COLOANE = { red_detinatori_contact: ['detinator_id', 'adresa_strada', 'adresa_sat', 'adresa_comuna', 'adresa_judet', 'cod_postal', 'adresa_cunoscuta', 'telefon', 'email'] }
-function clientFals({ existentiDupaPlan = [], esueazaContacte = 0, limitaServer = Infinity, unic = true, parcele = PARCELE_TEST, contacteExistente = [] } = {}) {
+// r2: dupaInsert(tab, randuri, tabele) = o schimbare făcută de „alt operator” imediat după un INSERT comis; pierdeRaspuns = tabela al cărei
+// prim INSERT se COMITE, dar răspunsul se pierde (eroare de rețea, fără cod)
+function clientFals({ existentiDupaPlan = [], esueazaContacte = 0, limitaServer = Infinity, unic = true, parcele = PARCELE_TEST, contacteExistente = [], dupaInsert = null, pierdeRaspuns = null } = {}) {
   const tabele = { red_detinatori: [...existentiDupaPlan], red_detinatori_contact: [...contacteExistente], red_import_loturi: [], red_parcele: parcele.map(p => ({ ...p })) }
-  let n = 0, esecuriRamase = esueazaContacte
+  let n = 0, esecuriRamase = esueazaContacte, pierdut = false
   const jurnal = { inserturi: [], update: [] }
   const from = (tab) => {
     const q = { _f: [], _lim: Infinity }
@@ -110,7 +112,10 @@ function clientFals({ existentiDupaPlan = [], esueazaContacte = 0, limitaServer 
       let rez = { data: arr, error: null }
       if (tab === 'red_detinatori_contact' && esecuriRamase > 0) { esecuriRamase--; rez = { data: null, error: { message: 'contact picat' } } }
       else if (tab === 'red_detinatori' && unic && arr.some(a => tabele.red_detinatori.some(d => !d.sters_la && d.parcela_id === a.parcela_id && d.nume_normalizat === a.nume_normalizat))) rez = { data: null, error: { code: '23505', message: 'duplicate key' } }
-      else { tabele[tab].push(...arr); jurnal.inserturi.push([tab, arr.length]) }
+      else {
+        tabele[tab].push(...arr); jurnal.inserturi.push([tab, arr.length]); dupaInsert?.(tab, arr, tabele)
+        if (tab === pierdeRaspuns && !pierdut) { pierdut = true; rez = { data: null, error: { message: 'TypeError: Failed to fetch' } } }
+      }
       return { select: () => ({ single: async () => ({ data: rez.data?.[0] ?? null, error: rez.error }) }), then: (res) => res(rez) }
     }
     q.update = (v) => ({ eq: async (col, val) => { jurnal.update.push(v); const r = tabele[tab].find(x => x[col] === val); Object.assign(r, v); return { data: null, error: null } } })
@@ -146,10 +151,13 @@ describe('scrieUtilizatori', () => {
     expect(r).toMatchObject({ detinatoriNoi: 1, contacteNoi: 1, sarite: 1 })
     const nou = tabele.red_detinatori.find(d => d.nume_normalizat === 'A (FICTIV)')
     expect(nou).toMatchObject({ parcela_id: 'p1', calitate: CALITATE_UTILIZATOR, versiune_lista_tgz: 'TGZ 13.07.2026 utilizatori' })
-    expect(nou.sursa_date).toMatch(/^TGZ_UTILIZATORI: .*rândul 4$/)
+    // r2: marcajul lotului la final (dovada „scris de această operație”), lotul ține id-urile create și contactele scrise
+    const lotId = tabele.red_import_loturi[0].id
+    expect(nou.sursa_date).toBe(`TGZ_UTILIZATORI: TGZ Despăgubiri LOT 1 – date de contact utilizatori (col. 24–26), rândul 4; lot ${lotId}`)
     expect(tabele.red_detinatori_contact).toHaveLength(1)
     expect(tabele.red_detinatori_contact[0]).toMatchObject({ detinator_id: nou.id, adresa_cunoscuta: true, adresa_sat: 'S' })
     expect(tabele.red_import_loturi[0]).toMatchObject({ sursa: SURSA_UTILIZATORI, stare: 'finalizat', detinatori_noi: 1 })
+    expect(tabele.red_import_loturi[0].diferente).toMatchObject({ scrise: [{ id: nou.id, parcela_id: 'p1', rand: 4 }], contacte_scrise: [nou.id], de_verificat_dupa_scriere: [], verificare_dupa_scriere: 'facuta' })
   })
   it('eroare la contacte → lot „esuat”, eroarea originală urcă, cu lotId; deținătorii scriși apar în lot', async () => {
     const { supabase, tabele } = clientFals({ esueazaContacte: 1 })
@@ -261,6 +269,49 @@ describe('scrieUtilizatori', () => {
     const { supabase, tabele } = clientFals({ limitaServer: 1 })
     const r = await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true, pagina: 1000 })
     expect(r.detinatoriNoi).toBe(2); expect(tabele.red_detinatori_contact).toHaveLength(2)
+  })
+  // ── r2 (Jak PR1120 P1 / P2) ──
+  it('r2 pct. 1a: ținta se recitește înaintea FIECĂREI bucăți — o a doua parcelă cu aceeași cheie apărută după prima bucată oprește a doua', async () => {
+    // pe 4f98f4a0 recitirea era o dată pentru tot lotul: rândul 5 se scria pe ținta veche
+    const { supabase, tabele } = clientFals({ dupaInsert: (tab, arr, t) => { if (tab === 'red_detinatori' && arr.some(a => a.parcela_id === 'p1')) t.red_parcele.push({ id: 'p9', cheie_sursa: 'K2', id_parcela: 'X9', poz_hg: null, sters_la: null, red_uat: { uat3: 'HUS' } }) } })
+    const r = await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true, marimeLot: 1 })
+    expect(r).toMatchObject({ detinatoriNoi: 1, schimbate: 1, deVerificat: [] })
+    expect(tabele.red_detinatori.map(d => d.parcela_id)).toEqual(['p1'])
+    expect(tabele.red_import_loturi[0].diferente.schimbate_la_scriere).toMatchObject([{ rand: 5, motiv: expect.stringMatching(/cheia nu mai e unică/) }])
+  })
+  it('r2 pct. 1b: verificarea după scriere — ținta schimbată după INSERT (fereastra rămasă) → „de verificat”, în rezultat și în lot', async () => {
+    const { supabase, tabele } = clientFals({ dupaInsert: (tab, arr, t) => { if (tab === 'red_detinatori') t.red_parcele.find(p => p.id === 'p2').sters_la = '2026-11-17' } })
+    const r = await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true })
+    expect(r.detinatoriNoi).toBe(2)
+    const dP2 = tabele.red_detinatori.find(d => d.parcela_id === 'p2')
+    expect(r.deVerificat).toEqual([{ rand: 5, id: dP2.id, parcela_id: 'p2', id_parcela: 'X2', motiv: 'de verificat: ținta s-a schimbat în timpul importului (parcela nu mai e activă în proiect)' }])
+    expect(tabele.red_import_loturi[0].diferente.de_verificat_dupa_scriere).toEqual(r.deVerificat)
+  })
+  it('r2 pct. 3: INSERT comis, răspuns pierdut → eroarea urcă, dar lotul are evidența din BD (id-uri, contor) și e „esuat”', async () => {
+    const { supabase, tabele } = clientFals({ pierdeRaspuns: 'red_detinatori' })
+    const e = await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true }).catch(x => x)
+    expect(e.message).toMatch(/Failed to fetch/); expect(e.code).toBeUndefined()
+    expect(tabele.red_detinatori).toHaveLength(2)                        // comise
+    const lot = tabele.red_import_loturi[0]
+    expect(lot).toMatchObject({ stare: 'esuat', detinatori_noi: 2 })     // pe 4f98f4a0: 0
+    expect(lot.diferente.evidenta_din_bd).toBe(true)
+    expect(lot.diferente.scrise.map(s => s.id).sort()).toEqual(tabele.red_detinatori.map(d => d.id).sort())
+  })
+  it('r2 pct. 8: 0 noi și niciun contact de completat → niciun lot nou', async () => {
+    const { supabase, tabele } = clientFals()
+    await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true })
+    const din = [{ parcela_id: 'p1', nume_normalizat: 'A (FICTIV)' }, { parcela_id: 'p2', nume_normalizat: 'B (FICTIV)' }]
+    const plan2 = planUtilizatori(plan.noi.map(({ parcela_id, id_parcela, potrivire, ...c }) => c), { parcele: [{ id: 'p1', cheie_sursa: 'K1', id_parcela: 'X1', uat3: 'HUS' }, { id: 'p2', cheie_sursa: 'K2', id_parcela: 'X2', uat3: 'HUS' }], detinatori: din })
+    const r = await __scrieUtilizatoriTest(supabase, plan2, { proiectId: 'pr', versiune: 'v', permite: true })
+    expect(r).toMatchObject({ lotId: null, nimicDeFacut: true, detinatoriNoi: 0, contacteNoi: 0 })
+    expect(tabele.red_import_loturi).toHaveLength(1)                       // pe 4f98f4a0: 2
+  })
+  it('r2 pct. 5: potrivirile HG neconfirmate (scoase de ecran din plan.noi) ajung în lot ca hg_neconfirmate, fără nume / contact', async () => {
+    const { supabase, tabele } = clientFals()
+    const hg = { rand: 9, uat3: 'HUS', cheie_sursa: 'HUS|9|X|', poz_hg: '9', nume: 'Z (fictiv)', nume_normalizat: 'Z (FICTIV)', contact: { adresa_cunoscuta: true }, parcela_id: 'p2', id_parcela: 'X2', potrivire: 'hg' }
+    await __scrieUtilizatoriTest(supabase, { ...plan, hg_neconfirmate: [hg] }, { proiectId: 'pr', versiune: 'v', permite: true })
+    expect(tabele.red_import_loturi[0].diferente.hg_neconfirmate).toEqual([{ rand: 9, uat3: 'HUS', cheie_sursa: 'HUS|9|X|', poz_hg: '9', parcela_id: 'p2', id_parcela: 'X2', potrivire: 'hg' }])
+    expect(tabele.red_detinatori.some(d => d.nume_normalizat === 'Z (FICTIV)')).toBe(false)
   })
   it('fără proiect / versiune → refuz înainte de orice scriere', async () => {
     const { supabase, jurnal } = clientFals()

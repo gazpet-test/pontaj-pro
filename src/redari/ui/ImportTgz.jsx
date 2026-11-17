@@ -38,7 +38,7 @@ const descarcaCsvDeTratat = (randuri, eticheta) => {
 }
 const SUGESTIE_SARITE = 'necesită completarea poziției HG / nr. cadastral în Excel și reimport (reimportul aceluiași fișier completează doar ce lipsește).'
 
-export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
+export default function ImportTgz({ proiect, uats, nivel, profile = null, show, onImportat }) {
   const poateScrie = nivel === 'admin' || nivel === 'editor'
   const [fisier, setFisier] = useState(null)
   const [versiune, setVersiune] = useState('')
@@ -319,7 +319,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
           </div>
         ))}
       </div>
-      <ImportUtilizatori proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={onImportat} />
+      <ImportUtilizatori proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onImportat={onImportat} />
     </div>
   )
 }
