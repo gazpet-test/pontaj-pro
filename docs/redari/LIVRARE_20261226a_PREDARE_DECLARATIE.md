@@ -156,7 +156,7 @@ bash scripts/amprenta_globala_citire.sh --tinta-host <clona> … --lista --radac
 bash scripts/l15_compara_liste.sh --a citire_clona_20261226a.txt --b citire_prod_20261226a.txt \
   --manifest supabase/migrations/20261226a_redari_predare_declaratie.l15.tsv
 # 4. pe clonă: proba cu date sintetice, două sesiuni, roluri reale, aplicare -> revenire (scriptul cheamă runnerul)
-PSQL=/c/Users/Public/pgsql/bin/psql.exe EDITOR=<uuid profil editor redari pe clonă> bash supabase/tests/20261226a_redari_predare_clona.sh \
+PSQL=<calea psql> EDITOR=<uuid profil editor redari pe clonă> bash supabase/tests/20261226a_redari_predare_clona.sh \
   --sistem <SIS clona> --host <clona> --port <P> --user postgres --db postgres \
   --manifest supabase/migrations/20261226a_redari_predare_declaratie.l15.tsv --amprenta-globala <GLOBAL clona>
 # 5. în ziua livrării: §2 (doar citire), recitirea + partea revizuită identică; apoi proba cu ROLLBACK pe țintă (acordul owner-ului), apoi aplicarea

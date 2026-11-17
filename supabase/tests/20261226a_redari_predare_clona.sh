@@ -3,7 +3,7 @@
 # NEAPLICATĂ. NETESTAT de autor (serverul de cod nu are acces la nicio bază): îl rulează coordonatorul. Completează PGlite (o singură
 # conexiune, schelet) cu: roluri și politici REALE, runnerul real, DOUĂ sesiuni în timpul aplicării, rândurile + jurnalul + revenirea pe date.
 # Rulare (Git Bash; parola din pgpass, niciodată pe linia de comandă):
-#   PSQL=/c/Users/Public/pgsql/bin/psql.exe EDITOR=<uuid profil cu redari = editor pe clonă> \
+#   PSQL=<calea psql> EDITOR=<uuid profil cu redari = editor pe clonă> \
 #   bash supabase/tests/20261226a_redari_predare_clona.sh --sistem <system_identifier clonă> --host <H> --port <P> --user postgres --db postgres \
 #     --manifest <manifestul regenerat pe clonă>/20261226a_redari_predare_declaratie.l15.tsv --amprenta-globala <GLOBAL al clonei>
 #   (OWNER=<uuid>, implicit 00000000-0000-4000-8000-000000000001: profilul sintetic is_owner al clonei, ca la 20261225a)
