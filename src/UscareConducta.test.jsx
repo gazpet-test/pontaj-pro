@@ -150,6 +150,8 @@ function clientFals({ rapoarte = [], incarcari = [], sites = [], meteo = [], pro
       if (fn === 'fn_executie_nod_drept') return Promise.resolve({ data: true, error: null })
       if (fn === 'fn_executie_contract_drept') return Promise.resolve({ data: false, error: null })
       if (fn === 'fn_executie_uscare_retrage' && st.retrageEroare) return Promise.resolve({ data: null, error: { message: 'Failed to fetch' } })
+      // st.refuzaSalvari = n: următoarele n salvări sunt REFUZATE determinist de server (nimic scris), ca o regulă a serverului
+      if (fn === 'fn_executie_uscare_salveaza' && st.refuzaSalvari > 0) { st.refuzaSalvari -= 1; return Promise.resolve({ data: null, error: { code: '22023', message: 'uscare: refuz simulat' } }) }
       const d = amana(); st.rpc.push({ fn, a, ...d })
       // st.devreme: serverul scrie LA APEL, dar răspunsul se pierde (timeout) la eliberarea cu „eroare”
       const devreme = st.devreme ? aplica(fn, a, cont) : null
@@ -1237,5 +1239,71 @@ dom(numeDom('UscareConducta — ecranul pe pași (jsdom + react-dom)'), () => {
     expect(u.text()).toContain('Rezumat și raport')
     // după salvare, motivul e în observații: câmpul distinct nu mai apare gol ca „lipsă” la o reîntoarcere pe etapa 2 (pasul e dedus din date)
     expect(u.camp('Observații').value).toContain(PREFIX_MOTIV_VERDICT)
+  })
+
+  // P2 din review-ul final al PR #1127: salveaza pune pe ecran formularul CU motivul înaintea răspunsului, câmpul distinct se golește doar
+  // după succes → o reîncercare nu are voie să adauge motivul a doua oară; motivul netrimis intră în ciorna locală
+  const MOTIV = 'buretele ud la exterior, cântărit după ploaie'
+  const laVerdictContrar = async u => {
+    await u.apasa(u.buton('Continuă cu etapa 2'))
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la ieșire')[0], '1,26')
+    await u.scrieEl(u.campuri('Greutatea pe cântar, la ieșire')[1], '1,45')        // +150 g > 100 g → propun UMED
+    await u.apasa(u.buton('USCAT'))
+    await u.scrie('Ai ales altceva', MOTIV)
+  }
+  const cheiCiorna = s => [...s.m.keys()].filter(k => k.includes('.ciorna.'))
+  it('P2 (#1127 final): verdict contrar, salvarea REFUZATĂ de server, apoi reîncercare → motivul o singură dată în observații', async () => {
+    const { client, st, T } = clientFals()
+    etapa1Gata(T, 1)
+    pozaServer(T, 1, 'cantar_iesire', 1); pozaServer(T, 1, 'cantar_iesire', 2); pozaServer(T, 1, 'piston_final')
+    const stocare = stocareFalsa()
+    const u = await monteaza(client, stocare, { ecranInitial: 'pasi', acum: () => ORA(9) })
+    await laVerdictContrar(u)
+    st.refuzaSalvari = 2
+    await u.apasa(u.buton('Termină etapa 2'))
+    await u.apasa(u.buton('Termină etapa 2'))                                        // a doua reîncercare, tot refuzată
+    expect(u.text()).toContain('uscare: refuz simulat')
+    expect(T.executie_uscari.get(1)).toMatchObject({ observatii: null, piston_final_rezultat: null })   // nimic scris
+    expect(u.text()).toContain('Etapa 2 din 2')
+    expect(u.camp('Ai ales altceva').value).toBe(MOTIV)                               // câmpul distinct se păstrează după refuz
+    expect(u.buton('Termină etapa 2').disabled).toBe(false)
+    await u.apasa(u.buton('Termină etapa 2'))
+    expect(T.executie_uscari.get(1)).toMatchObject({ piston_final_rezultat: 'uscat', concluzie: 'conform', observatii: `${PREFIX_MOTIV_VERDICT} ${MOTIV}` })
+    expect(u.text()).toContain('Rezumat și raport')
+    expect(cheiCiorna(stocare)).toEqual([])                                           // după succes: nicio ciornă rămasă (nici cu motivul)
+  })
+
+  it('P2 (#1127 final): motivul netrimis intră în ciornă; eroare de rețea → reîncărcare → motivul revine → salvare: motivul o singură dată', async () => {
+    const { client, st, T } = clientFals()
+    etapa1Gata(T, 1)
+    pozaServer(T, 1, 'cantar_iesire', 1); pozaServer(T, 1, 'cantar_iesire', 2); pozaServer(T, 1, 'piston_final')
+    const stocare = stocareFalsa()
+    const ex = { ecranInitial: 'pasi', acum: () => ORA(9) }
+    const u = await monteaza(client, stocare, ex)
+    await laVerdictContrar(u)
+    // (a) reîncărcare ÎNAINTE de orice apăsare: motivul scris doar în câmpul distinct revine din ciornă
+    expect(cheiCiorna(stocare).map(k => JSON.parse(stocare.getItem(k)).motivVerdict)).toEqual([MOTIV])
+    const v = await monteaza(client, stocare, ex)
+    await v.apasa(v.buton('Continuă cu etapa 2'))
+    expect(v.text()).toContain('Ai modificări nesalvate')
+    await v.apasa(v.buton('Restaurez'))
+    expect(v.camp('Ai ales altceva').value).toBe(MOTIV)
+    // (b) „Termină etapa 2” cu rezultat necunoscut (rețea; serverul nu a scris), apoi reîncărcare
+    st.auto = false
+    await v.apasa(v.buton('Termină etapa 2'))
+    await v.elibereaza(salvari(st).at(-1), 'eroare')
+    st.auto = true
+    expect(T.executie_uscari.get(1).observatii).toBe(null)
+    const w = await monteaza(client, stocare, ex)
+    await w.apasa(w.buton('Continuă cu etapa 2'))
+    await w.apasa(w.buton('Restaurez'))
+    expect(w.camp('Ai ales altceva').value).toBe(MOTIV)                               // motivul revine în câmpul lui
+    await w.apasa(w.butonExact('Renunț'))                                             // cererea pierdută: serverul confirmă că nu s-a aplicat
+    expect(w.text()).toContain('am retras-o definitiv')
+    expect(w.buton('Termină etapa 2').disabled).toBe(false)
+    await w.apasa(w.buton('Termină etapa 2'))
+    expect(T.executie_uscari.get(1)).toMatchObject({ piston_final_rezultat: 'uscat', concluzie: 'conform', observatii: `${PREFIX_MOTIV_VERDICT} ${MOTIV}` })
+    expect(w.text()).toContain('Rezumat și raport')
+    expect(cheiCiorna(stocare)).toEqual([])
   })
 })
