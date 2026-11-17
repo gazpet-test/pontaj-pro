@@ -19,13 +19,13 @@ deținătorului).
 
 | Model | Ce e | Cui | Canal | De unde (tab → buton) | Cine |
 |---|---|---|---|---|---|
-| **Convocator** (Model 1) | Convocarea la constatare: zilele sesiunii, codul QR personal, informarea GDPR pe verso | Deținătorii identificați, cu adresă cunoscută | Poștă recomandată cu AR, în plicul comun | 📋 Registru → 📄 Convocator, pe rând. Din 📄 Fișa parcelei → ↻ Reîncarcă | admin / editor |
+| **Convocator** (Model 1) | Convocarea la constatare: zilele sesiunii, codul QR personal, informarea GDPR pe verso | Deținătorii identificați, cu adresă cunoscută | Scrisoare recomandată sau curier, cu confirmare de primire, în plicul comun | 📋 Registru → 📄 Convocator, pe rând. Din 📄 Fișa parcelei → ↻ Reîncarcă | admin / editor |
 | **Plic comun + opis + PV de plicuire + etichete** | Toate convocările unei persoane din UAT într-un plic, cu opisul și PV-ul semnat de doi colegi | Deținătorul | Poștă | ✉️ Poștă → Plicuri de făcut | admin / editor |
 | **AR** (confirmarea de primire) | Textul de pe AR: câte convocări, pentru ce lucrare | Se întoarce de la Poștă | Poștă | ✉️ Poștă → plicul → AR primit / Retur. Sau importul CSV poștal | admin / editor |
 | **Borderou Poștă** (CSV) | Convocările poștale neexpediate, cu fișier și adresă | Ghișeul poștal | Poștă | 📋 Registru → 📮 Borderou CSV | admin / editor |
-| **Formularul public de răspuns** | Patru opțiuni: particip (cu ziua), nu particip fără obiecții (cu declarația), nu particip cu obiecții, constatare pe teren | Deținătorul convocat | Online (QR sau link) | Se creează odată cu convocatorul; răspunsul intră singur în Registru | — |
+| **Formularul public de răspuns** | Trei opțiuni: particip (cu ziua), nu particip fără obiecții (cu declarația), constatare pe teren. „Nu particip cu obiecții” nu se mai oferă din 17.11.2026; răspunsurile vechi cu ea rămân valabile | Deținătorul convocat | Online (QR sau link) | Se creează odată cu convocatorul; răspunsul intră singur în Registru | — |
 | **Informarea GDPR** | Informarea despre datele personale | Deținătorii | Verso-ul convocatorului; pagina web e planificată | ⚙️ Setări proiect → Text GDPR / Link informare | admin |
-| **PV A** (Model 2) | Constatarea per deținător, cu propunerea din deviz | Deținătorul semnează | La sesiune, sau trimis spre semnare prin poștă | 📄 Fișa parcelei → PV A. 🗓️ Sesiune → PV A | admin / editor |
+| **PV A** (Model 2) | Constatarea per deținător, cu propunerea din deviz | Deținătorul semnează | La sesiune, sau trimis spre semnare, electronic | 📄 Fișa parcelei → PV A. 🗓️ Sesiune → PV A | admin / editor |
 | **PV B** (Model 3) | Constatarea per parcelă: deținătorul lipsește, refuză sau cere constatare pe teren | Comisia: Gazpet, TGZ, UAT | Pe teren sau la sesiune | 📄 Fișa parcelei → PV B (parcela) | admin / editor |
 | **PV C** (Model 5) | PV-ul pe tronson, după ce toate parcelele au PV A semnat sau PV B | Transgaz | Predare la Beneficiar | 🛤️ Tronsoane / PV C | admin / editor |
 | **Adresa către Primărie** (Model 4, AU-nnnn) | Înștiințarea Primăriei: afișarea, zilele și sala sesiunii, reprezentantul UAT, anexele | Primăria fiecărui UAT | Registratură, poștă sau e-mail (rândul C1 din Corespondență) | 🏛️ UAT-uri → editare UAT → Generează adresa | admin |
@@ -43,6 +43,12 @@ Ce blochează azi (verificat în tab, 04.11.2026):
 - **SMS**: așteaptă autorizarea scrisă a Transgaz și textul final aprobat de Juridic + Răzvan. Trimiterea e oprită din kill-switch.
 - **Textul AR** e validat juridic doar pentru LOT1. Pe alt proiect nu se generează AR.
 - **Pagina web GDPR**: PR #939 e draft și așteaptă aprobarea TGZ a textului. Verso-ul convocatorului are deja textul.
+
+Terminologia (deciziile Răzvan 17.11.2026): față de proprietari / deținători procedura se numește **predarea terenului**; convocarea
+scrisă pleacă prin **scrisoare recomandată sau curier, cu confirmare de primire**; PV A trimis spre semnare de la distanță se semnează
+**doar electronic** (cine n-are e-mail sau telefon cu internet vine la sesiune sau intră în PV B). Șabloanele convocatorului, PV A, PV B
+și PV C au textele noi (`docs/redari/SABLOANE.md` §1, excepția (11)). Textul declarației din formular vine din
+`red_proiecte.text_declaratie` (bază de date) și se schimbă separat.
 
 ## 2. Canalele de răspuns — unde răspunde proprietarul și cum se înregistrează
 

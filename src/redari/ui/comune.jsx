@@ -135,12 +135,18 @@ export const MOTIVE_RETUR = [
   { cod:'decedat', eticheta:'Decedat' },
   { cod:'altul', eticheta:'Altul (detaliu)' },
 ]
+// `retrasa`: decizia Răzvan 17.11.2026 (juridic#046) — „Nu particip, cu obiecții” nu se mai oferă la înregistrări NOI (cine are
+// obiecții vine la sesiune sau cere constatare pe teren). Răspunsurile vechi cu acest cod rămân valabile: eticheta rămâne aici
+// pentru afișare (registru, fișă, export), iar stare.js / pv.js îl tratează în continuare. Refuzul pe server (CHECK, RPC,
+// trigger) e o schimbare de bază de date, separată.
 export const OPTIUNI_RASPUNS = [
   { cod:'particip', eticheta:'Particip la sesiune' },
   { cod:'nu_particip_fara_obiectii', eticheta:'Nu particip, fără obiecții' },
-  { cod:'nu_particip_cu_obiectii', eticheta:'Nu particip, cu obiecții' },
+  { cod:'nu_particip_cu_obiectii', eticheta:'Nu particip, cu obiecții', retrasa:true },
   { cod:'constatare_teren', eticheta:'Cere constatare la teren' },
 ]
+// opțiunile oferite la un răspuns NOU (fără cele retrase)
+export const OPTIUNI_RASPUNS_NOI = OPTIUNI_RASPUNS.filter(o => !o.retrasa)
 export const etichetaOptiune = (cod) => OPTIUNI_RASPUNS.find(o => o.cod === cod)?.eticheta || cod || '-'
 export const etichetaRetur = (cod) => MOTIVE_RETUR.find(o => o.cod === cod)?.eticheta || cod || '-'
 

@@ -17,10 +17,24 @@ const TEXT_INAINTE = {
   adresa_uat: [4843, '0113e3a3295b35cfec8e0457066b531c6d6c1540799115657d35b41ba189a066'],
   pv_c: [1836, 'e99eb57eb97fdeb57515ce0b9f0fff81145682c26922f54416ed5ef6d5b05a9d'],
 }
-// Singura schimbare de text de după reformatare (decizia Răzvan 03.11 seara, excepția (8) din SABLOANE.md §1): convocatorul
-// pleacă prin poștă doar cu QR-ul, deci fraza nu mai cere adresa web. [înainte, după], în textul din <w:t> (escapat XML).
+// Schimbările de text de după reformatare, [înainte, după], în textul din <w:t> (escapat XML). Decizia Răzvan 03.11 seara (excepția
+// (8) din SABLOANE.md §1): convocatorul pleacă doar cu QR-ul, deci fraza nu mai cere adresa web.
+// Din 17.11.2026 (excepția (11), deciziile Răzvan; textele din juridic#044 §1, #045 pct. 1, #046 pct. 1): terminologia „predare”,
+// „recomandată sau curier / AWB”, semnarea de la distanță doar electronic și opțiunea „Nu particip. Am următoarele obiecții” scoasă
+// (în textul concatenat, rândul scos dispare dintre opțiunea a doua și „Contest …”).
+const OPTIUNI_PREDARE = ['spre semnare, prin poștă / electronic.   ☐ Nu particip. Am următoarele obiecții: ________________________________.   ☐ Contest',
+  'spre semnare, electronic.   ☐ Contest']
+const TITLU_CONVOCATOR = ['CONVOCAREla constatarea readucerii terenului la starea inițială', 'CONVOCAREla predarea terenului']
 const SCHIMBARI_TEXT = {
-  convocator: [[' de la adresa {{link}} (sau scanând codul QR de mai jos)', ', scanând cu telefonul codul QR de mai jos']],
+  convocator: [[' de la adresa {{link}} (sau scanând codul QR de mai jos)', ', scanând cu telefonul codul QR de mai jos'], TITLU_CONVOCATOR, OPTIUNI_PREDARE],
+  convocator_utilizator: [TITLU_CONVOCATOR, OPTIUNI_PREDARE],
+  pv_a: [['PROCES-VERBAL DE CONSTATAREa readucerii terenului la starea inițială (tip A – cu proprietarul / utilizatorul)', 'PROCES-VERBAL DE PREDAREa terenului către proprietar / deținător (tip A)']],
+  pv_b: [
+    ['Scrisoare recomandată cu confirmare de primire', 'Scrisoare recomandată sau curier, cu confirmare de primire'],
+    ['nr. recomandată {{conv_nr_tracking}}', 'nr. recomandată / AWB {{conv_nr_tracking}}'],
+    ['adresa Beneficiar nr. {{reluare_adresa_tgz_nr}} / recomandată nr. {{reluare_nr_tracking}}', 'adresa Beneficiar nr. {{reluare_adresa_tgz_nr}} / recomandată sau AWB nr. {{reluare_nr_tracking}}'],
+  ],
+  pv_c: [['PROCES-VERBAL DE RECEPȚIE A READUCERII TERENULUI LA STAREA INIȚIALĂpe tronson', 'PROCES-VERBAL DE FINALIZARE A PREDĂRII TERENURILORpe tronson']],
 }
 // Text ADĂUGAT la începutul documentului (excepția (9) din SABLOANE.md §1, 04.11, DE CONFIRMAT — claude#026 întrebarea 1):
 // antetul firmei din convocator, repus pe adresa UAT. Scos de la început, textul trebuie să dea amprenta de dinainte.

@@ -17,7 +17,7 @@ import { cuInformarePublicata } from './redari/informareGdpr.js'
 import { citesteNeexpediatePeDetinatori, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou, poateDescarcaExistent,
   poateDeschideConvocator, dataDocumentConvocare, useConvocariNeexpediate, aparuteDupaVerificare, rezervaNumarConvocare, motivRelatieSchimbata, motivIdentitateDiferita,
   AVERTISMENT_CONCURENTA } from './redari/convocatorNeexpediat.js'
-import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CANALE_CONVOCARE, MOTIVE_RETUR, OPTIUNI_RASPUNS, etichetaOptiune, etichetaRetur,
+import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CANALE_CONVOCARE, MOTIVE_RETUR, OPTIUNI_RASPUNS_NOI, etichetaOptiune, etichetaRetur,
   SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, citesteTokenRaspuns, motivBlocareGenerareNoua, citesteIn } from './redari/ui/comune.jsx'
 import FisaParcela from './redari/ui/FisaParcela.jsx'
 import ImportTgz from './redari/ui/ImportTgz.jsx'
@@ -813,7 +813,7 @@ function ModalArRetur({ mod, rand, show, onClose, onGata, onPosta }) {
   )
 }
 
-function ModalRaspunsTelefon({ rand, profile, uats, proiect, show, onClose, onGata }) {
+export function ModalRaspunsTelefon({ rand, profile, uats, proiect, show, onClose, onGata }) {
   const uat = uats.find(u => u.id === rand.uat_id)
   const zile = [uat?.sesiune_zi1, uat?.sesiune_zi2, uat?.sesiune_zi3].filter(Boolean)
   // r3 P2-4: „particip” se poate alege DOAR dacă UAT-ul are zile de sesiune; ziua vine strict din lista UAT-ului (fără câmp liber)
@@ -876,7 +876,8 @@ function ModalRaspunsTelefon({ rand, profile, uats, proiect, show, onClose, onGa
         </Camp>
         <Camp eticheta="Opțiune" span={2}>
           <select value={optiune} onChange={e => setOptiune(e.target.value)} disabled={!!raspunsId} style={{ ...S.select, width:'100%' }}>
-            {OPTIUNI_RASPUNS.map(o => <option key={o.cod} value={o.cod} disabled={o.cod === 'particip' && faraSesiune}>{o.eticheta}{o.cod === 'particip' && faraSesiune ? ' — indisponibil: UAT-ul nu are zile de sesiune' : ''}</option>)}
+            {/* 17.11.2026: doar opțiunile pentru răspunsuri noi (fără „Nu particip, cu obiecții”, retrasă); cele vechi se afișează cu etichetaOptiune */}
+            {OPTIUNI_RASPUNS_NOI.map(o => <option key={o.cod} value={o.cod} disabled={o.cod === 'particip' && faraSesiune}>{o.eticheta}{o.cod === 'particip' && faraSesiune ? ' — indisponibil: UAT-ul nu are zile de sesiune' : ''}</option>)}
           </select>
           {faraSesiune && <div style={{ fontSize:12, color:G.yellow, marginTop:4 }}>⚠ UAT-ul {uat?.nume || rand.uat3} nu are zile de sesiune stabilite: „particip” se poate înregistra după ce se completează sesiunea.</div>}
         </Camp>

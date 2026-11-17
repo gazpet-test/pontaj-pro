@@ -16,13 +16,20 @@ import { supabase } from './lib/supabase.js'
 // Paletă deschisă — pagina se citește în soare, pe teren (ca AplicaPublic.jsx)
 const G = { bg: '#f4f6f8', card: '#fff', text: '#1a2733', muted: '#5a6b7b', blue: '#0b4f8a', green: '#0b7a3b', red: '#b42318', amber: '#8a5a00', border: '#cdd6de', soft: '#eef5fb' }
 
-const OPTIUNI = [
+// Deciziile Răzvan 17.11.2026 (juridic#045, #046): semnarea de la distanță doar electronic — descrierea opțiunii a doua e textul
+// din modelul de convocator („…sunt de acord să primesc procesul-verbal completat, spre semnare, electronic.”); opțiunea
+// „Nu particip — am obiecții” e RETRASĂ: nu se mai oferă pentru răspunsuri noi, dar titlul ei rămâne pentru afișarea unui răspuns
+// cu acest cod. Refuzul pe server (fn_red_raspuns_public, CHECK pe red_raspunsuri.optiune) e o schimbare de BD, separată.
+export const OPTIUNI = [
   { cod: 'particip', titlu: 'Particip la constatare', desc: 'Voi fi prezent pe teren, în una din zilele de mai sus.' },
-  { cod: 'nu_particip_fara_obiectii', titlu: 'Nu particip — nu am obiecții', desc: 'Sunt de acord ca procesul-verbal să fie întocmit în lipsa mea.' },
-  { cod: 'nu_particip_cu_obiectii', titlu: 'Nu particip — am obiecții', desc: 'Nu pot veni, dar vreau să semnalez ceva despre starea terenului.' },
+  { cod: 'nu_particip_fara_obiectii', titlu: 'Nu particip — nu am obiecții', desc: 'Sunt de acord să primesc procesul-verbal completat, spre semnare, electronic.' },
+  { cod: 'nu_particip_cu_obiectii', titlu: 'Nu particip — am obiecții', desc: 'Nu pot veni, dar vreau să semnalez ceva despre starea terenului.', retrasa: true },
   { cod: 'constatare_teren', titlu: 'Solicit constatare pe teren', desc: 'Cer să ne întâlnim pe parcelă; scrieți mai jos ce ați constatat.' },
 ]
+// opțiunile oferite în formular (răspuns nou)
+export const OPTIUNI_NOI = OPTIUNI.filter(o => !o.retrasa)
 const TITLU_OPTIUNE = Object.fromEntries(OPTIUNI.map(o => [o.cod, o.titlu]))
+export const titluOptiune = cod => TITLU_OPTIUNE[cod] || cod
 const DECLARATIE_STANDARD = 'Declar că am luat cunoștință de convocare, nu am obiecții privind readucerea terenului la starea inițială și sunt de acord ca procesul-verbal să fie întocmit în lipsa mea.'
 const MAX_OBIECTII = 4000
 const MSG_NEUTRU = 'Linkul nu este valid sau a expirat.'
@@ -74,6 +81,40 @@ function Contact({ f }) {
       {tel && mail && ' · '}
       {mail && <a href={`mailto:${mail}`} style={{ color: G.blue, fontWeight: 700, textDecoration: 'none', wordBreak: 'break-all' }}>{mail}</a>}
     </div>
+  )
+}
+
+// Lista de variante a formularului: DOAR opțiunile pentru răspunsuri noi (OPTIUNI_NOI)
+export function ListaOptiuni({ optiune, onAlege }) {
+  return (
+    <div role="radiogroup" aria-label="Varianta de răspuns">
+      {OPTIUNI_NOI.map(o => {
+        const activ = optiune === o.cod
+        return (
+          <button key={o.cod} type="button" role="radio" aria-checked={activ} data-optiune={o.cod} onClick={() => onAlege(o.cod)} style={S.optiune(activ)}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span aria-hidden="true" style={{ width: 22, height: 22, borderRadius: '50%', border: `2px solid ${activ ? G.blue : G.border}`, background: activ ? G.blue : '#fff', color: '#fff', fontSize: 14, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{activ ? '✓' : ''}</span>
+              <span style={{ fontSize: 16, fontWeight: 700 }}>{o.titlu}</span>
+            </div>
+            <div style={{ fontSize: 13, color: G.muted, marginTop: 4, paddingLeft: 32 }}>{o.desc}</div>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// Rezumatul unui răspuns trimis (instantaneul): afișează orice cod, inclusiv opțiunea retrasă
+export function Rezumat({ inst, sesiune = [] }) {
+  const instZi = inst.optiune === 'particip', instDecl = inst.optiune === 'nu_particip_fara_obiectii', instObj = inst.optiune === 'nu_particip_cu_obiectii' || inst.optiune === 'constatare_teren'
+  return (
+    <table style={S.tabel}><tbody>
+      <tr><td style={{ ...S.td, color: G.muted, width: '38%' }}>Opțiunea</td><td style={{ ...S.td, fontWeight: 700 }}>{titluOptiune(inst.optiune)}</td></tr>
+      {instZi && <tr><td style={{ ...S.td, color: G.muted }}>Ziua aleasă</td><td style={S.td}>{fmtZi(inst.zi)}{(() => { const s = sesiune.find(x => String(x.zi).slice(0, 10) === inst.zi); return s?.program ? ` · ${s.program}` : '' })()}</td></tr>}
+      {instDecl && <tr><td style={{ ...S.td, color: G.muted }}>Declarație</td><td style={S.td}>{inst.declaratie ? 'Confirmată' : '—'}</td></tr>}
+      {instObj && <tr><td style={{ ...S.td, color: G.muted }}>Obiecții</td><td style={{ ...S.td, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{inst.obiectii}</td></tr>}
+      <tr><td style={{ ...S.td, color: G.muted, borderBottom: 'none' }}>Data</td><td style={{ ...S.td, borderBottom: 'none' }}>{(inst.la || new Date()).toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td></tr>
+    </tbody></table>
   )
 }
 
@@ -147,7 +188,8 @@ export default function RedariRaspunsPublic() {
 
   const trimite = async () => {
     if (busy) return
-    if (!optiune) return setValidare('Alegeți una din cele patru variante.')
+    // doar opțiunile oferite (OPTIUNI_NOI); o opțiune retrasă nu pleacă din formular
+    if (!OPTIUNI_NOI.some(o => o.cod === optiune)) return setValidare('Alegeți una din cele trei variante.')
     if (cereZi && !zi) return setValidare('Alegeți ziua în care participați.')
     if (cereDeclaratie && !declaratie) return setValidare('Bifați declarația pentru a continua.')
     const obj = obiectii.trim()
@@ -202,7 +244,6 @@ export default function RedariRaspunsPublic() {
   if (rezultat?.ok) {
     // rezumatul = instantaneul trimis (nu starea curentă a câmpurilor)
     const inst = instantaneu || { optiune, zi, obiectii: obiectii.trim(), declaratie, la: new Date() }
-    const instZi = inst.optiune === 'particip', instDecl = inst.optiune === 'nu_particip_fara_obiectii', instObj = inst.optiune === 'nu_particip_cu_obiectii' || inst.optiune === 'constatare_teren'
     return (
       <div style={S.pagina}>
         <div style={S.card}>
@@ -213,13 +254,7 @@ export default function RedariRaspunsPublic() {
             <div style={{ fontSize: 13.5, color: G.muted, marginTop: 4 }}>{rezultat.mesaj || 'Vă mulțumim. Puteți închide pagina.'}</div>
           </div>
           <div style={S.eticheta}>Rezumat</div>
-          <table style={S.tabel}><tbody>
-            <tr><td style={{ ...S.td, color: G.muted, width: '38%' }}>Opțiunea</td><td style={{ ...S.td, fontWeight: 700 }}>{TITLU_OPTIUNE[inst.optiune] || inst.optiune}</td></tr>
-            {instZi && <tr><td style={{ ...S.td, color: G.muted }}>Ziua aleasă</td><td style={S.td}>{fmtZi(inst.zi)}{(() => { const s = sesiune.find(x => String(x.zi).slice(0, 10) === inst.zi); return s?.program ? ` · ${s.program}` : '' })()}</td></tr>}
-            {instDecl && <tr><td style={{ ...S.td, color: G.muted }}>Declarație</td><td style={S.td}>{inst.declaratie ? 'Confirmată' : '—'}</td></tr>}
-            {instObj && <tr><td style={{ ...S.td, color: G.muted }}>Obiecții</td><td style={{ ...S.td, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{inst.obiectii}</td></tr>}
-            <tr><td style={{ ...S.td, color: G.muted, borderBottom: 'none' }}>Data</td><td style={{ ...S.td, borderBottom: 'none' }}>{(inst.la || new Date()).toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td></tr>
-          </tbody></table>
+          <Rezumat inst={inst} sesiune={sesiune} />
           <Contact f={form} />
           <div style={S.subsol}>gazpet.ro · răspunsul este păstrat în registrul lucrării și vizibil doar echipei Gazpet</div>
         </div>
@@ -261,20 +296,7 @@ export default function RedariRaspunsPublic() {
         {/* r5 P2-2: cât durează trimiterea, tot formularul e blocat — nimic nu se mai poate schimba sub cererea în curs */}
         <fieldset disabled={busy} aria-busy={busy} style={S.fieldset}>
         <div style={S.eticheta}>Cum răspundeți?</div>
-        <div role="radiogroup" aria-label="Varianta de răspuns">
-          {OPTIUNI.map(o => {
-            const activ = optiune === o.cod
-            return (
-              <button key={o.cod} type="button" role="radio" aria-checked={activ} onClick={() => alegeOptiune(o.cod)} style={S.optiune(activ)}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span aria-hidden="true" style={{ width: 22, height: 22, borderRadius: '50%', border: `2px solid ${activ ? G.blue : G.border}`, background: activ ? G.blue : '#fff', color: '#fff', fontSize: 14, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{activ ? '✓' : ''}</span>
-                  <span style={{ fontSize: 16, fontWeight: 700 }}>{o.titlu}</span>
-                </div>
-                <div style={{ fontSize: 13, color: G.muted, marginTop: 4, paddingLeft: 32 }}>{o.desc}</div>
-              </button>
-            )
-          })}
-        </div>
+        <ListaOptiuni optiune={optiune} onAlege={alegeOptiune} />
 
         {cereZi && (
           <>

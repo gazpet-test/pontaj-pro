@@ -75,6 +75,9 @@ default true, created_at`. **[r2] DEFAULT-uri editabile** (texte confirmate de P
 `contact_email` = `redari@gazpet.ro` (adresa nu există încă — configurare); `text_gdpr` = „Operatori: S.N.T.G.N. TRANSGAZ S.A. … plângere la
 ANSPDCP (www.dataprotection.ro).” (NOT NULL); `text_declaratie` = „Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc
 procesul-verbal completat, spre semnare, prin poștă / electronic.” Formularul public întoarce `text_declaratie` ȘI `text_gdpr`.
+**17.11.2026 (decizia Răzvan: semnarea de la distanță doar electronic, juridic#045):** textele din cod și din șabloane spun „spre semnare,
+electronic”; valoarea din baza de date `text_declaratie` (DEFAULT-ul de mai sus și valorile salvate pe proiecte) **NU se schimbă în
+PR-ul de terminologie** — schimbarea ei e o operație pe date / schemă, cu acordul lui Răzvan, după ce Juridicul dă textul final al declarației.
 
 ### red_uat
 `id, proiect_id FK, nume text NOT NULL, uat3 text NOT NULL` (3 litere mari, ex. PRU/GOD/HUS/CAZ/ILO/BAL/SIS; UNIQUE (proiect_id, uat3)),
@@ -132,6 +135,11 @@ neîncărcat, de reluat. **[r2]** Fișierele din bucket sunt imutabile (fără U
 optiune text CHECK IN ('particip','nu_particip_fara_obiectii','nu_particip_cu_obiectii','constatare_teren')`,
 `zi_sesiune_aleasa date, obiectii_text` (business — vizibil și viewer), `declaratie_confirmata bool, semnatura_electronica_ref text,
 created_by uuid NULL` (NULL la online), `created_at`.
+**17.11.2026 (decizia Răzvan, juridic#046):** `nu_particip_cu_obiectii` nu se mai OFERĂ la răspunsuri noi — formularul public
+(`OPTIUNI_NOI` în `RedariRaspunsPublic.jsx`) și modalul 📞 Răspuns (`OPTIUNI_RASPUNS_NOI` în `ui/comune.jsx`). Codul rămâne în CHECK,
+în RPC și în trigger (răspunsurile vechi sunt valabile, iar starea / PV-urile îl tratează ca „obiecții”). Refuzul și pe server (CHECK
+doar pentru rândurile noi, `fn_red_raspuns_public`, `fn_red_raspunsuri_valideaza`) e o migrare separată, cu acordul lui Răzvan;
+până atunci un apel direct la RPC cu codul vechi e încă acceptat.
 **[r2] „Ultimul răspuns” = `ORDER BY data DESC, seq DESC`** — în view, în RPC și în `src/redari/stare.js` (UI-ul trebuie să folosească `seq` ca
 tie-break, nu ordinea din listă). **[r3] Semantica**: `data` = momentul DECLARAT al răspunsului (editabil de operator: „a sunat ieri”), `seq` =
 ordinea de înregistrare (tie-break la `data` egală), `created_at` = momentul recepției, IMUTABIL (trigger). Starea urmărește declarația, nu recepția. **[r2]** `ip_sau_sursa`, `user_agent`, `raw_payload` NU mai sunt aici (Copilot r1 P2-02) — vezi
