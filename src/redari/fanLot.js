@@ -37,14 +37,42 @@ export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInsta
   })
 }
 
-/** Marcajul lotului (TEST / real): owner, înainte de prima aprobare (BD-ul îl refuză după). Separat de pasul „Aprobă”, care îl cere. */
-export function stareMarcaj({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, randuri = [] } = {}) {
+/** Marcajul lotului (TEST / real): owner, înainte de PRIMA aprobare din istoricul lotului (Jakarinos #1118 r1 P2: red_fan_loturi.prima_aprobare_la,
+ *  pusă de BD la prima aprobare și imuabilă — o re-propunere care readuce rândurile la „propus” nu redeschide marcajul). Separat de „Aprobă”. */
+export function stareMarcaj({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, randuri = [], fanLot = null } = {}) {
   if (!transportActiv) return { activ: false, motiv: MESAJ_TRANSPORT_OPRIT }
   if (!evidentaInstalata) return { activ: false, motiv: 'evidența FAN nu e instalată (migrarea neaplicată)' }
   if (!esteOwner) return { activ: false, motiv: 'doar owner-ul' }
+  if (fanLot?.prima_aprobare_la) return { activ: false, motiv: 'lotul a fost aprobat o dată: marcajul TEST / real nu se mai schimbă' }
   if (numar(randuri, ['aprobat', 'in_curs', 'generat', 'necunoscut', 'ridicat']) > 0) return { activ: false, motiv: 'lotul are deja plicuri aprobate: marcajul nu se mai schimbă' }
   return { activ: true, motiv: '' }
 }
+
+// Operațiile din procedură care nu sunt pași ai fluxului (Jakarinos #1118 r1 P2: toate în ecran, dezactivate cât transportul e oprit).
+export const OPERATII_FAN = Object.freeze([
+  { cheie: 'reconciliere', titlu: 'Reconciliază', ajutor: 'doar owner-ul: borderoul zilei pentru rândurile „necunoscut” / „în curs”; propunerile le confirmă omul' },
+  { cheie: 'plafon', titlu: 'Plafonul lotului pilot', ajutor: 'doar owner-ul: câte plicuri aprobate pe lot (1…2000)' },
+  { cheie: 'anulare', titlu: 'Anulare AWB', ajutor: 'doar owner-ul: AWB generat, neridicat (ștergere la FAN sau marcare după verificarea în selfAWB)' },
+  { cheie: 'evenimente', titlu: 'Lista de evenimente FAN', ajutor: 'doar owner-ul: compară codurile FAN cu cele folosite aici' },
+])
+/** Operațiile cu starea lor: { ...operatie, activ, motiv } (aceleași reguli ca stariPasi: transportul oprit le dezactivează pe toate). */
+export function stariOperatii({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, randuri = [] } = {}) {
+  const conditii = {
+    reconciliere: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['necunoscut', 'in_curs']) > 0, 'niciun rând „necunoscut” sau „în curs”']],
+    plafon: [[esteOwner, 'doar owner-ul']],
+    anulare: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['generat']) > 0, 'niciun AWB generat neridicat']],
+    evenimente: [[esteOwner, 'doar owner-ul']],
+  }
+  const oprit = !transportActiv ? MESAJ_TRANSPORT_OPRIT : !evidentaInstalata ? 'evidența FAN nu e instalată (migrarea neaplicată)' : null
+  return OPERATII_FAN.map(p => {
+    if (oprit) return { ...p, activ: false, motiv: oprit }
+    const pica = conditii[p.cheie].find(([c]) => !c)
+    return { ...p, activ: !pica, motiv: pica ? pica[1] : '' }
+  })
+}
+
+/** Numele fișierului de etichete al unei părți (toate părțile au nume distincte, în ordinea pozițiilor). */
+export const numeEtichete = ({ lot, fanLot, parte, parti, format }) => `${prefixLot(fanLot)}${lot?.nr_lot || ''}_etichete_${format}${parti > 1 ? `_partea${String(parte).padStart(2, '0')}din${String(parti).padStart(2, '0')}` : ''}.pdf`
 
 export const ETICHETE_STARE_FAN = Object.freeze({
   propus: 'propus', aprobat: 'aprobat', in_curs: 'în curs (trimis la FAN)', generat: 'AWB generat', eroare: 'respins de FAN',
@@ -77,6 +105,8 @@ export function mesajEdgeFan(rez) {
   const cod = rez?.data?.cod || rez?.error?.context?.cod || null
   if (cod === 'transport_real_oprit') return 'Transport oprit: funcția FAN nu face niciun apel până la activare.'
   if (cod === 'non_owner') return 'Doar owner-ul poate porni pașii FAN.'
+  if (cod === 'manifest_schimbat') return 'Evidența s-a schimbat de la afișare: reîncarcă și verifică din nou pagina de control. Nimic tipărit.'
+  if (cod === 'stergere_neconfirmata') return `Ștergere neconfirmată: AWB-ul rămâne „generat”. ${rez?.data?.motiv || ''}`.trim()
   if (rez?.error) return 'Rezultat neconfirmat: reîncarcă evidența înainte de orice reluare (nu reapăsa orbește).'
   return cod === 'ok' ? 'Operație încheiată.' : `Răspuns: ${cod || 'necunoscut'}`
 }

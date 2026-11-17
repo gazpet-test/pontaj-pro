@@ -1,12 +1,15 @@
 /* FanAwbPrevizualizare.jsx — FAN Courier pe un lot de plicuire: previzualizarea (ce s-ar trimite pentru fiecare plic și ce lipsește) +
-   pașii propune → aprobă → generează → etichete A6 → comandă curier → urmărire → confirmări / retururi.
-   Cât timp TRANSPORT_REAL_ACTIV = false (redariFanHandler.mjs) TOȚI pașii sunt dezactivați vizibil, cu „transport oprit”; nu se cheamă
-   funcția edge și nu se scrie nimic. Proiectare: docs/redari/FANCOURIER_INTEGRARE.md. Contactul (PII) se citește cu JWT-ul omului
-   (RLS: doar admin/editor). Răspunsurile FAN sunt date: ridicarea și returul le confirmă omul aici / în tabelul Plicuri. */
+   pașii propune → aprobă → generează → etichete A6 (toate părțile, cu pagina de control) → comandă curier → urmărire → confirmări / retururi,
+   plus operațiile procedurii: reconcilierea (cu confirmarea omului), plafonul lotului pilot, anularea AWB-ului, lista de evenimente.
+   Cât timp TRANSPORT_REAL_ACTIV = false (redariFanHandler.mjs) TOȚI pașii și TOATE operațiile sunt vizibile și dezactivate, cu „transport
+   oprit”; nu se cheamă funcția edge și nu se scrie nimic. Proiectare: docs/redari/FANCOURIER_INTEGRARE.md. Contactul (PII) se citește cu
+   JWT-ul omului (RLS: doar admin/editor). Răspunsurile FAN sunt date: ridicarea, reconcilierea și returul le confirmă omul. */
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
-import { pregatestePlicuriFan, contactPePlic, LIMITA_LOT_PILOT_IMPLICITA, FORMAT_ETICHETA } from '../../../supabase/functions/_shared/redariFan.mjs'
-import { stariPasi, stareMarcaj, TRANSPORT_REAL_ACTIV, MESAJ_TRANSPORT_OPRIT, ETICHETE_STARE_FAN, ETICHETE_URMARIRE, ETICHETE_CONFIRMARE, prefixLot, titluLot, csvBorderouFan, mesajEdgeFan } from '../fanLot.js'
+import { pregatestePlicuriFan, contactPePlic, LIMITA_LOT_PILOT_IMPLICITA, FORMAT_ETICHETA, manifestTiparire, partiManifest, destinatarMascat } from '../../../supabase/functions/_shared/redariFan.mjs'
+import { stariPasi, stareMarcaj, stariOperatii, TRANSPORT_REAL_ACTIV, MESAJ_TRANSPORT_OPRIT, ETICHETE_STARE_FAN, ETICHETE_URMARIRE, ETICHETE_CONFIRMARE, prefixLot, titluLot,
+  csvBorderouFan, mesajEdgeFan, numeEtichete } from '../fanLot.js'
+import { genereazaPaginaControl } from '../plicuri.js'
 import { descarcaBlob } from '../docx.js'
 import { G, S, Modal, msgEroare, citestePaginat, etichetaRetur } from './comune.jsx'
 
@@ -14,18 +17,40 @@ export { contactPePlic }   // compatibil cu testele vechi (definiția e în reda
 const LOT_IN = 100
 const COL_FAN = 'id,plic_id,nr_plic,stare,hash_date,awb,tarif,motiv,urmarire_stare,ultim_eveniment,ultim_eveniment_la,ridicat_propus,livrat_la,retur_propus,confirmare_stare'
 // tabelul FAN lipsește (migrarea neaplicată) ≠ eroare de citire (L18)
-const lipsaTabel = e => ['PGRST205', '42P01'].includes(e?.code) || /does not exist|could not find the table/i.test(e?.message || '')
+export const lipsaTabel = e => ['PGRST205', '42P01'].includes(e?.code) || /does not exist|could not find the table/i.test(e?.message || '')
+
+/** Evidența FAN a unui lot, citită cu JWT-ul omului: { instalata, fanLot, randuri, limita }. Tabel lipsă = neinstalată; altă eroare = aruncată (L18).
+ *  Folosită și de ecranul Plicuri (arhiva documentelor pe manifestul comun). */
+export async function citesteEvidentaFan(client, lotId, esteCurent = () => true) {
+  try {
+    const randuri = await citestePaginat(() => client.from('red_fan_awb').select(COL_FAN).eq('lot_id', lotId), { cheie: 'id', esteCurent })
+    const { data: fl, error: e1 } = await client.from('red_fan_loturi').select('lot_id,test,prima_aprobare_la').eq('lot_id', lotId).maybeSingle()
+    if (e1) throw e1
+    const { data: st, error: e2 } = await client.from('red_fan_setari').select('limita_lot').maybeSingle()
+    if (e2) throw e2
+    return { instalata: true, randuri, fanLot: fl || null, limita: st?.limita_lot ?? null }
+  } catch (e) { if (lipsaTabel(e)) return { instalata: false, randuri: [], fanLot: null, limita: null }; throw e }
+}
 
 export default function FanAwbPrevizualizare({ proiect, lot, plicuri, esteOwner = false, poateScrie = false, onClose, onRetur }) {
   const [randuri, setRanduri] = useState(null), [fan, setFan] = useState(null), [eroare, setEroare] = useState(''), [mesaj, setMesaj] = useState('')
   const [lucru, setLucru] = useState(false), [reload, setReload] = useState(0)
+  const [dataRec, setDataRec] = useState(''), [propuneri, setPropuneri] = useState(null), [plafonNou, setPlafonNou] = useState('')
   const gen = useRef(0), ocupat = useRef(false)
-  const cheie = plicuri.map(p => p.id).join(',')   // lista nouă la fiecare randare a părintelui → efectul depinde de id-uri, nu de referință
+  // L24 (Jakarinos #1118 r1 P2): acțiunile au generația lor + lotul pentru care au pornit; schimbarea lotului / închiderea le invalidează
+  const genActiune = useRef(0), lotCurent = useRef(lot.id)
+  const active = (plicuri || []).filter(p => p.stare === 'activ')
+  const cheie = active.map(p => p.id).join(',')   // lista nouă la fiecare randare a părintelui → efectul depinde de id-uri, nu de referință
+  useEffect(() => {
+    lotCurent.current = lot.id; genActiune.current++; ocupat.current = false
+    setLucru(false); setMesaj(''); setPropuneri(null); setPlafonNou('')
+    return () => { genActiune.current++ }
+  }, [lot.id])
   useEffect(() => {
     const token = ++gen.current, curent = () => gen.current === token
     setRanduri(null); setEroare('')
     ;(async () => {
-      const ids = plicuri.map(p => p.id)
+      const ids = active.map(p => p.id)
       const conv = []
       for (let i = 0; i < ids.length; i += LOT_IN) conv.push(...await citestePaginat(() => supabase.from('red_convocari').select('id,plic_id,detinator_id')
         .in('plic_id', ids.slice(i, i + LOT_IN)).eq('stare', 'activ').is('sters_la', null), { cheie: 'id', esteCurent: curent }))
@@ -33,104 +58,159 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, esteOwner 
       const cont = []
       for (let i = 0; i < det.length; i += LOT_IN) cont.push(...await citestePaginat(() => supabase.from('red_detinatori_contact')
         .select('detinator_id,telefon,adresa_strada,adresa_sat,adresa_comuna,adresa_judet,cod_postal').in('detinator_id', det.slice(i, i + LOT_IN)), { cheie: 'detinator_id', esteCurent: curent }))
-      const pregatite = await pregatestePlicuriFan({ plicuri, convocari: conv, contacte: cont, proiectCod: proiect.cod })
-      // evidența FAN (după migrare): rândurile lotului, marcajul de test, plafonul pilot
-      let stare = { instalata: false }
-      try {
-        const awb = await citestePaginat(() => supabase.from('red_fan_awb').select(COL_FAN).eq('lot_id', lot.id), { cheie: 'id', esteCurent: curent })
-        const { data: fl, error: e1 } = await supabase.from('red_fan_loturi').select('lot_id,test').eq('lot_id', lot.id).maybeSingle()
-        if (e1) throw e1
-        const { data: st, error: e2 } = await supabase.from('red_fan_setari').select('limita_lot').maybeSingle()
-        if (e2) throw e2
-        stare = { instalata: true, awb, fanLot: fl || null, limita: st?.limita_lot ?? null }
-      } catch (e) { if (!lipsaTabel(e)) throw e }
+      const pregatite = await pregatestePlicuriFan({ plicuri: active, convocari: conv, contacte: cont, proiectCod: proiect.cod })
+      const stare = await citesteEvidentaFan(supabase, lot.id, curent)   // evidența FAN (după migrare): rândurile, marcajul, plafonul
       if (!curent()) return
       setRanduri(pregatite); setFan(stare)
     })().catch(e => { if (curent()) setEroare(msgEroare(e)) })
     return () => { gen.current++ }
   }, [proiect.cod, lot.id, cheie, reload])   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const awb = fan?.awb || []
+  const awb = fan?.randuri || []
   const pePlic = new Map(awb.filter(r => !['eroare', 'anulat'].includes(r.stare)).map(r => [r.plic_id, r]))
   const gata = randuri?.filter(r => r.ok).length ?? 0
-  const pasi = stariPasi({ transportActiv: TRANSPORT_REAL_ACTIV, evidentaInstalata: !!fan?.instalata, esteOwner, poateScrie, fanLot: fan?.fanLot, randuri: awb, gataDePropus: gata })
-  const marcaj = stareMarcaj({ transportActiv: TRANSPORT_REAL_ACTIV, evidentaInstalata: !!fan?.instalata, esteOwner, randuri: awb })
-  const pas = k => (k === 'marcaj' ? { ...marcaj, cheie: 'marcaj', titlu: 'Marcaj', ajutor: 'doar owner-ul, înainte de aprobare: lot de TEST sau lot real' } : pasi.find(p => p.cheie === k))
+  const st = { transportActiv: TRANSPORT_REAL_ACTIV, evidentaInstalata: !!fan?.instalata, esteOwner, randuri: awb }
+  const pasi = stariPasi({ ...st, poateScrie, fanLot: fan?.fanLot, gataDePropus: gata })
+  const operatii = stariOperatii(st)
+  const marcaj = stareMarcaj({ ...st, fanLot: fan?.fanLot })
+  const pas = k => (k === 'marcaj' ? { ...marcaj, cheie: 'marcaj', titlu: 'Marcaj', ajutor: 'doar owner-ul, înainte de prima aprobare: lot de TEST sau lot real' }
+    : pasi.find(p => p.cheie === k) || operatii.find(p => p.cheie === k))
+  // manifestul COMUN (aceeași funcție ca funcția edge și arhiva documentelor): mulțimea și ordinea etichetelor
+  const manifest = manifestTiparire({ randuri: awb, plicuri })
+  const parti = partiManifest(manifest.tiparite)
 
+  // garda unei acțiuni: generația + lotul de la pornire; fiecare apel dintr-o buclă o verifică ÎNAINTE (L24)
   async function executa(cheiePas, fn) {
     if (ocupat.current || !pas(cheiePas)?.activ) return   // dublă gardă: butonul e dezactivat, iar funcția refuză oricum
+    const token = genActiune.current, lotId = lot.id
+    const curent = () => genActiune.current === token && lotCurent.current === lotId
     ocupat.current = true; setLucru(true); setMesaj('')
-    const token = gen.current
-    try { const m = await fn(); if (token === gen.current) setMesaj(m || 'Operație încheiată.') }
-    catch (e) { setMesaj(`Eroare: ${msgEroare(e)}. Reîncarcă evidența înainte de reluare.`) }
-    finally { ocupat.current = false; setLucru(false); setReload(n => n + 1) }
+    try { const m = await fn(curent); if (curent()) setMesaj(m || 'Operație încheiată.') }
+    catch (e) { if (curent()) setMesaj(`Eroare: ${msgEroare(e)}. Reîncarcă evidența înainte de reluare.`) }
+    finally { if (curent()) { ocupat.current = false; setLucru(false); setReload(n => n + 1) } }
   }
+  const OPRIT = 'Oprit: lotul s-a schimbat sau ecranul s-a închis; reîncarcă evidența.'
   async function edge(actiune, extra = {}) {
     const rez = await supabase.functions.invoke('redari-fan-awb', { body: { actiune, lot_id: lot.id, ...extra } })
     let corp = rez.data
     if (rez.error && typeof rez.error.context?.json === 'function') { try { corp = await rez.error.context.json() } catch { corp = null } }
     return { corp, mesaj: mesajEdgeFan({ data: corp, error: corp ? null : rez.error }) }
   }
-  const propune = () => executa('propune', async () => {
+  // o buclă de RPC-uri pe rânduri: generația verificată înaintea FIECĂRUI apel; oprirea e raportată, nu tăcută
+  async function bucla(curent, lista, apel, eticheta) {
     let n = 0; const erori = []
-    for (const r of randuri.filter(x => x.ok)) {
-      const { error } = await supabase.rpc('fn_red_fan_propune', { p_plic_id: r.plic.id, p_hash: r.hash, p_tarif_estimat: null })
-      if (error) erori.push(`${r.plic.nr_plic}: ${msgEroare(error)}`); else n++
+    for (const x of lista) {
+      if (!curent()) return `${OPRIT} Făcute înainte de oprire: ${n}.`
+      const { error } = await apel(x)
+      if (error) erori.push(`${x.nr_plic || x.plic?.nr_plic}: ${msgEroare(error)}`); else n++
     }
-    return `Propuse: ${n}; erori: ${erori.length}. ${erori.join('; ')}`
-  })
-  const marcheaza = test => executa('marcaj', async () => {
+    return `${eticheta}: ${n}; erori: ${erori.length}. ${erori.join('; ')}`
+  }
+  const propune = () => executa('propune', curent => bucla(curent, randuri.filter(x => x.ok),
+    r => supabase.rpc('fn_red_fan_propune', { p_plic_id: r.plic.id, p_hash: r.hash, p_tarif_estimat: null }), 'Propuse'))
+  const marcheaza = test => executa('marcaj', async curent => {
     if (!window.confirm(test ? `Marchezi ${lot.nr_lot} ca LOT DE TEST? AWB-urile lui nu vor fi expedieri ale convocărilor.` : `Marchezi ${lot.nr_lot} ca lot REAL (convocări cu efect juridic)?`)) return 'Nimic schimbat.'
+    if (!curent()) return OPRIT
     const { error } = await supabase.rpc('fn_red_fan_lot_marcheaza', { p_lot_id: lot.id, p_test: test }); if (error) throw error
     return test ? 'Lot marcat: TEST.' : 'Lot marcat: real.'
   })
-  const aproba = () => executa('aproba', async () => {
-    const curent = new Map(randuri.filter(r => r.ok).map(r => [r.plic.id, r.hash]))
-    const propuse = awb.filter(r => r.stare === 'propus' && curent.get(r.plic_id) === r.hash_date)
+  const aproba = () => executa('aproba', async curent => {
+    const h = new Map(randuri.filter(r => r.ok).map(r => [r.plic.id, r.hash]))
+    const propuse = awb.filter(r => r.stare === 'propus' && h.get(r.plic_id) === r.hash_date)
     if (!propuse.length) return 'Niciun plic propus cu datele de acum: propune din nou.'
     if (!window.confirm(`Aprobi ${propuse.length} AWB-uri FAN pentru ${titluLot(lot, fan.fanLot)}? Fiecare AWB generat costă (tariful vine de la FAN).`)) return 'Nimic aprobat.'
+    if (!curent()) return OPRIT
     const { data, error } = await supabase.rpc('fn_red_fan_aproba', { p_lot_id: lot.id, p_ids: propuse.map(r => r.id), p_hashuri: propuse.map(r => r.hash_date) })
     if (error) throw error
     return `Aprobate: ${data}.`
   })
-  const genereaza = () => executa('genereaza', async () => {
+  const genereaza = () => executa('genereaza', async curent => {
     if (!window.confirm(`Generezi AWB-urile aprobate pentru ${titluLot(lot, fan.fanLot)}? Se plătesc.`)) return 'Nimic trimis.'
+    if (!curent()) return OPRIT
     const { corp, mesaj } = await edge('genereaza')
-    return corp?.cod === 'ok' ? `Generate: ${corp.generat}; respinse: ${corp.eroare}; necunoscute: ${corp.necunoscut}; rămase: ${corp.ramase}.${corp.oprit ? ' Oprit: ' + corp.oprit : ''}` : mesaj
+    return corp?.cod === 'ok' ? `Generate: ${corp.generat}; respinse: ${corp.eroare}; necunoscute: ${corp.necunoscut}; rămase: ${corp.ramase}.${corp.asociere_pe_pozitie ? ` Asociate pe poziție (de verificat în selfAWB): ${corp.asociere_pe_pozitie}.` : ''}${corp.oprit ? ' Oprit: ' + corp.oprit : ''}` : mesaj
   })
-  const etichete = (parte = 1) => executa('etichete', async () => {
-    const { corp, mesaj } = await edge('eticheta', { parte })
+  // pagina de control (aceeași mulțime și ordine ca etichetele și arhiva documentelor)
+  const paginaControl = () => genereazaPaginaControl({ lot, test: fan?.fanLot?.test === true, ramase: manifest.ramase,
+    randuri: manifest.tiparite.map(t => ({ ...t, destinatar: destinatarMascat(plicuri.find(p => p.id === t.plic_id)?.destinatar_nume) })) })
+  const etichete = parte => executa('etichete', async curent => {
+    if (!curent()) return OPRIT
+    const { corp, mesaj } = await edge('eticheta', { parte, manifest_cheie: manifest.cheie })
     if (corp?.cod !== 'ok' || typeof corp.pdf_base64 !== 'string') return mesaj
+    if (!curent()) return OPRIT
     const bin = atob(corp.pdf_base64), bytes = new Uint8Array(bin.length)
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-    descarcaBlob(new Blob([bytes], { type: 'application/pdf' }), `${prefixLot(fan.fanLot)}${lot.nr_lot}_etichete_${FORMAT_ETICHETA}${corp.parti > 1 ? `_partea${corp.parte}din${corp.parti}` : ''}.pdf`)
-    return `Etichete ${FORMAT_ETICHETA}: ${corp.nr_plicuri.length} plicuri (${corp.nr_plicuri[0]} … ${corp.nr_plicuri.at(-1)})${corp.parti > 1 ? `, partea ${corp.parte} din ${corp.parti}` : ''}.`
+    descarcaBlob(new Blob([bytes], { type: 'application/pdf' }), numeEtichete({ lot, fanLot: fan.fanLot, parte: corp.parte, parti: corp.parti, format: FORMAT_ETICHETA }))
+    if (corp.parte === 1) descarcaBlob(await paginaControl(), `${prefixLot(fan.fanLot)}${lot.nr_lot}_pagina_de_control.docx`)
+    return `Etichete ${FORMAT_ETICHETA}: ${corp.nr_plicuri.length} plicuri (pozițiile ${corp.pozitii[0]}…${corp.pozitii.at(-1)})${corp.parti > 1 ? `, partea ${corp.parte} din ${corp.parti}` : ''}.${corp.ramase?.length ? ` Rămase netipărite: ${corp.ramase.join(', ')}.` : ''}`
   })
-  const urmarire = () => executa('urmarire', async () => { const { corp, mesaj } = await edge('urmarire'); return corp?.cod === 'ok' ? `Urmărire actualizată: ${corp.scrise} AWB-uri.` : mesaj })
-  const confirmari = () => executa('confirmari', async () => { const { corp, mesaj } = await edge('confirmari'); return corp?.cod === 'ok' ? `Confirmări verificate: ${corp.scrise} AWB-uri.` : mesaj })
+  const urmarire = () => executa('urmarire', async curent => { if (!curent()) return OPRIT; const { corp, mesaj } = await edge('urmarire')
+    return corp?.cod === 'ok' ? `Urmărire actualizată: ${corp.scrise} AWB-uri${corp.depasite ? `; ${corp.depasite} depășite de o rulare mai nouă (nescrise)` : ''}.` : mesaj })
+  const confirmari = () => executa('confirmari', async curent => { if (!curent()) return OPRIT; const { corp, mesaj } = await edge('confirmari')
+    return corp?.cod === 'ok' ? `Confirmări verificate: ${corp.scrise} AWB-uri${corp.depasite ? `; ${corp.depasite} depășite` : ''}.` : mesaj })
+  const evenimente = () => executa('evenimente', async curent => { if (!curent()) return OPRIT; const { corp, mesaj } = await edge('evenimente')
+    return corp?.cod === 'ok' ? `Coduri lipsă la FAN: ${corp.lipsa_la_fan.join(', ') || '-'}; coduri FAN neclasificate: ${corp.neclasificate.map(c => c.cod).join(', ') || '-'}.` : mesaj })
   const deConfirmatRidicare = awb.filter(r => r.stare === 'generat' && r.ridicat_propus)
-  const confirmaRidicarea = () => executa('urmarire', async () => {
+  const confirmaRidicarea = () => executa('urmarire', async curent => {
     const efect = fan.fanLot?.test ? 'Lot de TEST: se marchează doar în evidența FAN.' : 'Lot real: plicurile primesc AWB-ul și data expedierii (pornește termenul de 10 zile).'
     if (!window.confirm(`Confirmi ridicarea de către curier pentru ${deConfirmatRidicare.length} plicuri, la datele evenimentului C0? ${efect}`)) return 'Nimic confirmat.'
-    let n = 0; const erori = []
-    for (const r of deConfirmatRidicare) {
-      const { error } = await supabase.rpc('fn_red_fan_ridicat', { p_id: r.id, p_data: r.ridicat_propus })
-      if (error) erori.push(`${r.nr_plic}: ${msgEroare(error)}`); else n++
-    }
-    return `Ridicări confirmate: ${n}; erori: ${erori.length}. ${erori.join('; ')}`
+    return bucla(curent, deConfirmatRidicare, r => supabase.rpc('fn_red_fan_ridicat', { p_id: r.id, p_data: r.ridicat_propus }), 'Ridicări confirmate')
+  })
+  // reconcilierea: funcția edge doar PROPUNE; omul confirmă fiecare rând (L05). „De verificat” = nicio confirmare din ecran (selfAWB).
+  const reconciliaza = () => executa('reconciliere', async curent => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dataRec)) return 'Alege ziua borderoului (ziua generării).'
+    if (!curent()) return OPRIT
+    const { corp, mesaj } = await edge('reconciliaza', { data: dataRec })
+    if (corp?.cod !== 'ok' || !Array.isArray(corp.propuneri)) return mesaj
+    if (curent()) setPropuneri({ data: dataRec, complet: corp.complet, neinterpretabile: corp.neinterpretabile || 0, lista: corp.propuneri })
+    return `Propuneri: ${corp.propuneri.length}${corp.neinterpretabile ? `; ${corp.neinterpretabile} elemente ale borderoului neinterpretabile: TOATE rândurile rămân de verificat în selfAWB` : ''}.`
+  })
+  const confirmaReconciliere = p => executa('reconciliere', async curent => {
+    const gasit = p.stare === 'gasit'
+    if (!gasit && p.stare !== 'lipsa') return 'Rândul e de verificat în selfAWB: nicio confirmare din ecran.'
+    if (!window.confirm(gasit ? `Confirmi pentru ${p.nr_plic} AWB-ul ${p.awb}, găsit în borderoul din ${propuneri.data}?`
+      : `Confirmi că pentru ${p.nr_plic} NU există niciun AWB în borderoul COMPLET din ${propuneri.data}? Rândul devine „respins” și plicul se poate propune din nou (un AWB nou costă).`)) return 'Nimic confirmat.'
+    if (!curent()) return OPRIT
+    const { error } = await supabase.rpc('fn_red_fan_reconciliaza', { p_id: p.id, p_awb: gasit ? p.awb : null, p_tarif: null, p_tva: null,
+      p_motiv: gasit ? `găsit în borderoul FAN din ${propuneri.data}` : `confirmat absent în borderoul FAN complet din ${propuneri.data}` })
+    if (error) throw error
+    if (curent()) setPropuneri(x => x && { ...x, lista: x.lista.filter(y => y.id !== p.id) })
+    return `${p.nr_plic}: ${gasit ? 'AWB confirmat' : 'absență confirmată'}.`
+  })
+  const schimbaPlafon = () => executa('plafon', async curent => {
+    const n = Number(plafonNou)
+    if (!Number.isInteger(n) || n < 1 || n > 2000) return 'Plafonul trebuie să fie un număr întreg între 1 și 2000.'
+    if (!window.confirm(`Plafonul lotului pilot devine ${n} plicuri aprobate pe lot (pentru toate loturile)?`)) return 'Nimic schimbat.'
+    if (!curent()) return OPRIT
+    const { data, error } = await supabase.rpc('fn_red_fan_setari_seteaza', { p_limita: n }); if (error) throw error
+    return `Plafonul lotului pilot: ${data}.`
+  })
+  const stergeAwb = r => executa('anulare', async curent => {
+    if (!window.confirm(`Ștergi la FAN AWB-ul ${r.awb} al plicului ${r.nr_plic}? Doar înainte de ridicarea de către curier.`)) return 'Nimic șters.'
+    if (!curent()) return OPRIT
+    const { corp, mesaj } = await edge('sterge_awb', { rand_id: r.id })
+    return corp?.cod === 'ok' ? `AWB șters și anulat: ${corp.anulat}.` : mesaj
+  })
+  const marcheazaAnulat = r => executa('anulare', async curent => {
+    const motiv = window.prompt(`Motivul anulării AWB-ului ${r.awb} (${r.nr_plic}), după verificarea în selfAWB că a fost șters:`, 'șters în selfAWB, verificat')
+    if (!motiv || !motiv.trim()) return 'Nimic schimbat.'
+    if (!curent()) return OPRIT
+    const { error } = await supabase.rpc('fn_red_fan_anulat', { p_id: r.id, p_awb: r.awb, p_motiv: motiv.trim() }); if (error) throw error
+    return `${r.nr_plic}: AWB marcat anulat.`
   })
   const borderou = () => descarcaBlob(new Blob([csvBorderouFan({ lot, fanLot: fan?.fanLot, randuri: awb })], { type: 'text/csv;charset=utf-8' }), `${prefixLot(fan?.fanLot)}${lot.nr_lot}_borderou_FAN.csv`)
 
   const Pas = ({ cheie: k, onClick, children }) => { const p = pas(k)
     return <button style={{ ...S.btnX, opacity: p.activ ? 1 : 0.5 }} disabled={!p.activ || lucru} title={p.activ ? p.ajutor : `${p.ajutor} — ${p.motiv}`} onClick={onClick}>{children || p.titlu}</button> }
   const retururi = awb.filter(r => r.urmarire_stare === 'retur')
-  return <Modal titlu={`AWB FAN — ${titluLot(lot, fan?.fanLot)}`} onClose={onClose} latime={860}>
+  const generate = awb.filter(r => r.stare === 'generat')
+  return <Modal titlu={`AWB FAN — ${titluLot(lot, fan?.fanLot)}`} onClose={onClose} latime={900}>
     {fan?.fanLot?.test === true && <p role="note" style={{ margin: '0 0 8px', padding: 8, borderRadius: 6, background: G.blueDim, color: G.blue, fontWeight: 700 }}>
       LOT DE TEST: AWB-urile lui nu sunt expedieri ale convocărilor și nu intră în registru, PV sau export. Fișierele lui încep cu „TEST_”.</p>}
     {!TRANSPORT_REAL_ACTIV && <p role="status" style={{ margin: '0 0 8px', padding: 8, borderRadius: 6, background: G.yellowDim, color: G.yellow }}>
       Transport oprit: pașii FAN sunt dezactivați până la activare (acordul proprietarului, migrarea, secretele FAN și publicarea funcției). Nu se trimite și nu se plătește nimic.</p>}
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-      {pasi.map(p => <div key={p.cheie} style={{ ...S.card, padding: 8, minWidth: 150, opacity: p.activ ? 1 : 0.6 }}>
+      {[...pasi, ...operatii].map(p => <div key={p.cheie} style={{ ...S.card, padding: 8, minWidth: 150, opacity: p.activ ? 1 : 0.6 }}>
         <b style={{ fontSize: 12.5 }}>{p.titlu}</b><div style={{ fontSize: 11.5, color: G.muted }}>{p.ajutor}</div>
         {!p.activ && <div style={{ fontSize: 11.5, color: G.yellow }}>{p.motiv === MESAJ_TRANSPORT_OPRIT ? 'transport oprit' : p.motiv}</div>}
       </div>)}
@@ -141,16 +221,41 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, esteOwner 
       <Pas cheie="marcaj" onClick={() => marcheaza(false)}>2b. Marchează real</Pas>
       <Pas cheie="aproba" onClick={aproba}>2c. Aprobă</Pas>
       <Pas cheie="genereaza" onClick={genereaza} />
-      <Pas cheie="etichete" onClick={() => etichete(1)}>4. Etichete {FORMAT_ETICHETA} (PDF)</Pas>
+      {(parti.length ? parti : [[]]).map((b, i) => <Pas key={i} cheie="etichete" onClick={() => etichete(i + 1)}>
+        4. Etichete {FORMAT_ETICHETA} (PDF){parti.length > 1 ? ` — partea ${i + 1} din ${parti.length} (pozițiile ${b[0].pozitie}…${b.at(-1).pozitie})` : ''}</Pas>)}
       <Pas cheie="urmarire" onClick={urmarire} />
       <Pas cheie="urmarire" onClick={confirmaRidicarea}>6b. Confirmă ridicarea ({deConfirmatRidicare.length})</Pas>
       <Pas cheie="confirmari" onClick={confirmari} />
+      <Pas cheie="evenimente" onClick={evenimente}>Lista de evenimente FAN</Pas>
       {fan?.instalata && awb.length > 0 && <button style={S.btnX} disabled={lucru} onClick={borderou}>Borderou FAN (CSV, fără date personale)</button>}
     </div>
+    <div style={{ ...S.card, marginBottom: 8 }}>
+      <b>Pagina de control</b> — {manifest.tiparite.length} plicuri tipărite (etichete + documente, aceeași ordine){manifest.ramase.length ? `; rămase netipărite: ${manifest.ramase.map(r => r.nr_plic).join(', ')}` : ''}.
+      Se descarcă odată cu prima parte a etichetelor și în arhiva documentelor (Loturi → „Documente lot”).
+    </div>
+    <div style={{ ...S.card, marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+      <b>Reconciliere</b>
+      <input style={S.input} type="date" value={dataRec} disabled={lucru || !pas('reconciliere').activ} onChange={e => setDataRec(e.target.value)} aria-label="Ziua borderoului" />
+      <Pas cheie="reconciliere" onClick={reconciliaza}>Reconciliază (borderoul zilei)</Pas>
+      {propuneri && <div style={{ width: '100%' }}>
+        {propuneri.lista.map(p => <div key={p.id}>{p.nr_plic} · {p.stare === 'gasit' ? `găsit: AWB ${p.awb}` : p.stare === 'lipsa' ? 'nu apare în borderoul complet' : `de verificat în selfAWB: ${p.motiv || ''}`}
+          {' '}{p.stare !== 'de_verificat' && <Pas cheie="reconciliere" onClick={() => confirmaReconciliere(p)}>{p.stare === 'gasit' ? 'Confirmă AWB-ul' : 'Confirmă absența'}</Pas>}</div>)}
+      </div>}
+    </div>
+    <div style={{ ...S.card, marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+      <b>Plafonul lotului pilot:</b> {fan?.limita ?? LIMITA_LOT_PILOT_IMPLICITA} plicuri aprobate pe lot{fan?.instalata ? '' : ' (implicit; evidența FAN nu e instalată încă)'}.
+      <input style={{ ...S.input, width: 90 }} type="number" min={1} max={2000} value={plafonNou} disabled={lucru || !pas('plafon').activ} onChange={e => setPlafonNou(e.target.value)} aria-label="Plafon nou" />
+      <Pas cheie="plafon" onClick={schimbaPlafon}>Schimbă plafonul</Pas>
+    </div>
+    <div style={{ ...S.card, marginBottom: 8 }}>
+      <b>Anulare AWB (înainte de ridicare)</b>
+      {generate.length ? generate.map(r => <div key={r.id}>{r.nr_plic} · AWB {r.awb} <Pas cheie="anulare" onClick={() => stergeAwb(r)}>Șterge la FAN</Pas>
+        <Pas cheie="anulare" onClick={() => marcheazaAnulat(r)}>Marchează anulat (verificat în selfAWB)</Pas></div>)
+        : <div><Pas cheie="anulare" onClick={() => {}}>Șterge la FAN</Pas> <Pas cheie="anulare" onClick={() => {}}>Marchează anulat</Pas> <span style={{ color: G.muted }}>niciun AWB generat neridicat</span></div>}
+    </div>
     <p style={{ fontSize: 12, color: G.muted, margin: '0 0 8px' }}>
-      Plafonul lotului pilot: {fan?.limita ?? LIMITA_LOT_PILOT_IMPLICITA} plicuri aprobate pe lot{fan?.instalata ? '' : ' (implicit; evidența FAN nu e instalată încă)'}.
       Comanda curierului (pasul 5) se face în selfAWB: o comandă pe zi pentru punctul de lucru, interval de cel puțin 2 ore.
-      Înainte de predare, verifică pe fiecare plic cele trei numere: eticheta FAN, prima pagină (opisul) și opisul cu convocările din plic.</p>
+      Înainte de predare, verifică pe fiecare plic, cu pagina de control: poziția și numărul de pe etichetă, prima pagină (opisul) și teancul de documente.</p>
     {eroare && <p role="alert" style={{ color: G.red }}>Nu am putut citi datele: {eroare}</p>}
     {mesaj && <p role="status" style={{ color: G.yellow, whiteSpace: 'pre-wrap' }}>{mesaj}</p>}
     {!randuri && !eroare && <p>Se citesc plicurile…</p>}

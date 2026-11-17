@@ -146,28 +146,64 @@ const numar = v => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v =
 const areErori = erori => !!erori && (Array.isArray(erori) ? erori.length > 0 : typeof erori === 'object' ? Object.keys(erori).length > 0 : !!String(erori).trim())
 const textAwb = v => (v == null ? '' : String(v).trim())
 
+// Jakarinos #1118 r1 P2 (mesajele FAN, PII): motivul unui refuz NU copiază textul FAN (poate conține valoarea respinsă: telefon, adresă).
+// Se păstrează DOAR numele câmpurilor de mai jos (lista albă = câmpurile corpului trimis, §2 din doc) + un mesaj local controlat.
+export const CAMPURI_EROARE_FAN = Object.freeze(['clientId', 'shipments', 'info', 'service', 'packages', 'parcel', 'envelope', 'weight', 'payment', 'content',
+  'observation', 'dimensions', 'length', 'width', 'height', 'costCenter', 'options', 'recipient', 'name', 'contactPerson', 'phone', 'address', 'county',
+  'locality', 'street', 'streetNo', 'zipCode'])
+const CAMP_EROARE = new Set(CAMPURI_EROARE_FAN)
+/** Numele câmpurilor semnalate de FAN în `errors` (chei de obiect, inclusiv „recipient.phone” / „shipments[0].info”), DOAR din lista albă,
+ *  sortate. Textele (mesajele FAN, valorile) nu se citesc niciodată: elementele-text ale listelor se sar. */
+export function campuriEroareFan(erori) {
+  const gasite = new Set()
+  const viz = (v, adancime) => {
+    if (v == null || adancime > 5 || typeof v !== 'object') return
+    if (Array.isArray(v)) { for (const x of v) viz(x, adancime + 1); return }
+    for (const [k, x] of Object.entries(v)) {
+      for (const seg of String(k).split(/[.[\]]+/)) if (CAMP_EROARE.has(seg)) gasite.add(seg)
+      viz(x, adancime + 1)
+    }
+  }
+  viz(erori, 0)
+  return [...gasite].sort()
+}
+export const motivRefuzFan = erori => {
+  const c = campuriEroareFan(erori)
+  return c.length ? `FAN a respins expedierea; câmpuri semnalate: ${c.join(', ')} (detaliile în selfAWB)` : 'FAN a respins expedierea (fără câmp recunoscut; detaliile în selfAWB)'
+}
+
+/** Referința noastră (nr_plic) așa cum ar putea-o întoarce FAN pe un element: content / observation, direct sau sub `info`.
+ *  Câmpurile sunt PRESUPUNERE (doc §8 deschisă 11): pe un câmp prezent se verifică, pe unul absent asocierea rămâne pe poziție. */
+export function referinteElement(el) {
+  if (!el || typeof el !== 'object') return []
+  return [el.info?.observation, el.info?.content, el.observation, el.content].filter(v => typeof v === 'string').map(v => v.trim()).filter(Boolean)
+}
+
 /** Un element din `response` → { stare, awb?, tarif?, tva?, motiv? } (fără HTTP). */
 function interpreteazaElement(r) {
   r = r && typeof r === 'object' ? r : {}
   // Jakarinos r2 P2 (L13/L18): un AWB numeric peste Number.MAX_SAFE_INTEGER a fost deja rotunjit de JSON.parse → nu se acceptă
   if (typeof r.awbNumber === 'number' && !Number.isSafeInteger(r.awbNumber)) return { stare: 'necunoscut', motiv: 'număr AWB numeric nesigur (precizie pierdută)' }
   const awb = textAwb(r.awbNumber)
-  if (areErori(r.errors) && !awb) return { stare: 'eroare', motiv: 'FAN: ' + JSON.stringify(r.errors).slice(0, 300) }
+  if (areErori(r.errors) && !awb) return { stare: 'eroare', motiv: motivRefuzFan(r.errors) }
   if (!RE_AWB.test(awb)) return { stare: 'necunoscut', motiv: 'răspuns FAN fără număr AWB valid' }
   return { stare: 'generat', awb, tarif: numar(r.tariff), tva: numar(r.vat) }
 }
 
 /**
  * Răspunsul POST /intern-awb pentru o solicitare cu `n` expedieri (1…100) → o listă de `n` rezultate, în ordinea trimisă.
- * Asocierea element trimis ↔ element primit se face pe POZIȚIE și DOAR când răspunsul are exact `n` elemente (doc §5: alt număr de
- * elemente = rândurile rămân „necunoscut”, asocierea nu se ghicește). Ordinea răspunsului = ordinea expedierilor e o presupunere de
- * verificat la Testul 1 (doc §11); de aceea fiecare rând „generat” se compară apoi cu borderoul (nr_plic din observație) la urmărire.
+ * Asocierea element trimis ↔ element primit (Jakarinos #1118 r1, „Bani”): dacă elementul poartă referința noastră (content / observation,
+ * `referinteElement`), ea trebuie să fie EXACT numărul plicului de pe acea poziție (`referinte[i]`) — o referință diferită pe ORICE element =
+ * toată bucata „necunoscut” (asocierea contrazisă, reconciliere). Fără referință în răspuns, asocierea rămâne pe POZIȚIE: PRESUPUNERE de
+ * confirmat pe răspunsul real (doc §8 deschisă 11, Testul 1); rezultatul o spune (`asociere: 'pozitie' | 'referinta'`). Alt număr de
+ * elemente decât `n` = toate „necunoscut” (asocierea nu se ghicește).
  * HTTP 0 / 5xx / corp neparsabil = toate „necunoscut” (L05: AWB-urile pot exista; fără retry automat).
  * 4xx = refuz determinist („eroare”) — DAR dacă răspunsul de refuz conține vreun număr AWB, toată bucata e „necunoscut”.
  * Același număr AWB pe două elemente = ambele „necunoscut”.
  */
-export function interpreteazaRaspunsLot(status, corp, n) {
+export function interpreteazaRaspunsLot(status, corp, n, { referinte } = {}) {
   if (!Number.isInteger(n) || n < 1 || n > MAX_PE_CERERE) throw new Error('număr de expedieri invalid')
+  if (referinte != null && (!Array.isArray(referinte) || referinte.length !== n)) throw new Error('referințele trebuie să aibă exact n elemente')
   const toate = (stare, motiv) => Array.from({ length: n }, () => ({ stare, motiv }))
   if (!Number.isInteger(status) || status >= 500 || status <= 0) return toate('necunoscut', `răspuns FAN neconfirmat (HTTP ${status})`)
   const el = Array.isArray(corp?.response) ? corp.response : null
@@ -176,11 +212,29 @@ export function interpreteazaRaspunsLot(status, corp, n) {
     return toate('eroare', status === 429 ? 'FAN: prea multe solicitări (HTTP 429); rularea s-a oprit, se reia de om' : `FAN a refuzat cererea (HTTP ${status})`)
   }
   if (!el || el.length !== n) return toate('necunoscut', `răspuns FAN cu ${el ? el.length : 'niciun'} element(e) pentru ${n} expedieri: asocierea nu se ghicește`)
-  const rez = el.map(interpreteazaElement)
+  if (referinte) {
+    const gresit = el.findIndex((e, i) => { const r = referinteElement(e); return r.length > 0 && r.some(x => x !== referinte[i]) })
+    if (gresit >= 0) return toate('necunoscut', `elementul ${gresit + 1} al răspunsului poartă altă referință decât plicul de pe poziția lui: asocierea nu se face, reconciliază`)
+  }
+  const rez = el.map(e => ({ ...interpreteazaElement(e), ...(referinte ? { asociere: referinteElement(e).length ? 'referinta' : 'pozitie' } : {}) }))
   const vazute = new Map()
   rez.forEach((r, i) => { if (r.awb) vazute.set(r.awb, [...(vazute.get(r.awb) || []), i]) })
   for (const idx of vazute.values()) if (idx.length > 1) for (const i of idx) rez[i] = { stare: 'necunoscut', motiv: 'același AWB pe mai multe elemente ale răspunsului' }
   return rez
+}
+
+/**
+ * Răspunsul DELETE /awb (Jakarinos #1118 r1 P2): succes DOAR la forma de succes recunoscută — HTTP 200 + obiect JSON cu `status: "success"`
+ * și fără erori (forma generală a răspunsurilor FAN, ca la login; PRESUPUNERE de confirmat pe răspunsul real, doc §8 deschisă 15).
+ * Orice altceva (200 cu eroare, corp gol / altă formă, 204, 5xx, rețea) = „necunoscut”: AWB-ul rămâne „generat”, omul verifică în selfAWB.
+ * 4xx = „refuzat” (determinist): AWB-ul rămâne.
+ */
+export function interpreteazaStergere(status, corp) {
+  if (!Number.isInteger(status) || status <= 0 || status >= 500) return { rezultat: 'necunoscut', motiv: `ștergere neconfirmată (HTTP ${status})` }
+  if (status >= 400) return { rezultat: 'refuzat', motiv: `FAN a refuzat ștergerea (HTTP ${status})` }
+  const obiect = corp && typeof corp === 'object' && !Array.isArray(corp)
+  if (status === 200 && obiect && corp.status === 'success' && !areErori(corp.errors) && !areErori(corp.error)) return { rezultat: 'sters' }
+  return { rezultat: 'necunoscut', motiv: `răspuns FAN la ștergere fără confirmarea de succes recunoscută (HTTP ${status})` }
 }
 
 /** Compatibil cu scheletul: răspunsul pentru O singură expediere. */
@@ -339,25 +393,98 @@ export function comparaEvenimente(status, corp) {
 /**
  * Reconcilierea unui rezultat necunoscut (doc §5): paginile borderoului zilei (GET /reports/awb?date=) → pentru fiecare nr_plic:
  * { stare: 'gasit', awb } | { stare: 'lipsa' } | { stare: 'de_verificat', motiv }. Doar PROPUNERI: omul confirmă (fn_red_fan_reconciliaza).
- * `complet` = s-a citit până la pagina goală; altfel „lipsa” devine „de_verificat”. Căutarea: nr_plic EXACT în content / observation.
+ * Căutarea: nr_plic EXACT în content / observation (direct sau sub `info`).
+ * Jakarinos #1118 r1 P1: „lipsa” se propune DOAR dacă borderoul a fost citit complet (până la pagina goală) ȘI FIECARE element din FIECARE pagină
+ * a fost interpretat complet: obiect, cu AWB valid și cu referința într-un câmp cunoscut, fără să conțină un număr căutat altfel decât exact.
+ * Un singur element neinterpretabil (ex. AWB valid, referința într-un câmp necunoscut) = TOATE plicurile „de_verificat” (nici „lipsa”, nici
+ * „gasit”: un al doilea AWB al aceluiași plic poate sta în elementul neînțeles) — omul verifică în selfAWB, nu confirmă absența.
+ * Întoarce Map(nr_plic → propunere); `neinterpretabile` = numărul elementelor neînțelese (proprietate a Map-ului).
  */
 export function cautaInBorderou(pagini, nrPlicuri, { complet }) {
+  const tot = motiv => Object.assign(new Map(nrPlicuri.map(n => [n, { stare: 'de_verificat', motiv }])), { neinterpretabile: 0 })
   const pe = new Map(nrPlicuri.map(n => [n, []]))
+  let neinterpretabile = 0
   for (const corp of pagini) {
     const lista = listaDin(corp)
-    if (!lista) return new Map(nrPlicuri.map(n => [n, { stare: 'de_verificat', motiv: 'borderou de formă necunoscută' }]))
+    if (!lista) return tot('borderou de formă necunoscută')
     for (const el of lista) {
-      const texte = [el?.info?.content, el?.info?.observation, el?.content, el?.observation].filter(v => typeof v === 'string').map(v => v.trim())
-      for (const n of nrPlicuri) if (texte.includes(n)) pe.get(n).push(awbDin(el) || awbDin(el?.info))
+      const awb = el && typeof el === 'object' ? awbDin(el) || awbDin(el.info) : null
+      const refs = referinteElement(el)
+      if (!awb || !refs.length) { neinterpretabile++; continue }
+      for (const n of nrPlicuri) {
+        if (refs.includes(n)) pe.get(n).push(awb)
+        else if (refs.some(x => x.includes(n))) { neinterpretabile++; break }   // numărul plicului într-o referință mai lungă: ambiguu
+      }
     }
   }
-  return new Map(nrPlicuri.map(n => {
+  if (neinterpretabile) return Object.assign(tot(`borderoul are ${neinterpretabile} element(e) neinterpretabil(e) (fără AWB valid sau fără referința plicului într-un câmp cunoscut): verifică în selfAWB; nicio concluzie automată`), { neinterpretabile })
+  return Object.assign(new Map(nrPlicuri.map(n => {
     const g = pe.get(n)
-    if (g.length === 1 && g[0]) return [n, { stare: 'gasit', awb: g[0] }]
+    if (g.length === 1) return [n, { stare: 'gasit', awb: g[0] }]
     if (g.length > 1) return [n, { stare: 'de_verificat', motiv: 'numărul plicului apare pe mai multe AWB-uri' }]
-    if (g.length === 1) return [n, { stare: 'de_verificat', motiv: 'rând găsit fără număr AWB valid' }]
     return [n, complet ? { stare: 'lipsa' } : { stare: 'de_verificat', motiv: 'borderoul nu a fost citit complet' }]
-  }))
+  })), { neinterpretabile: 0 })
+}
+
+// ── manifestul COMUN al plicurilor tipărite (Jakarinos #1118 r1 P1: etichetele și documentele = aceeași mulțime, aceeași ordine) ──
+/**
+ * O SINGURĂ definiție (L19), folosită de funcția edge (PDF-ul etichetelor, `eticheta`) și de ecranul Plicuri (arhiva documentelor + pagina de
+ * control). Intră DOAR plicurile ACTIVE ale lotului cu exact un rând FAN viu în stare generat / ridicat și AWB valid, în ordinea numărului de
+ * plic; poziția 1…N apare pe pagina de control și în numele fișierelor din arhivă. Restul plicurilor active = „rămase” (NU se tipăresc, nici
+ * etichetă, nici documente; sunt numite pe pagina de control). Un AWB viu pe un plic care nu mai e activ în lot = „rămas”, de anulat.
+ * randuri: red_fan_awb ale lotului ({ id, plic_id, nr_plic, stare, awb }); plicuri: red_plicuri ale lotului ({ id, nr_plic, stare }).
+ * Întoarce { tiparite: [{ pozitie, plic_id, nr_plic, awb, rand_id }], ramase: [{ plic_id, nr_plic, motiv }], cheie } — `cheie` = textul
+ * canonic al tipăritelor (poziție:plic:AWB), comparat de funcția edge cu cel văzut în ecran (L03: manifest vechi = refuz).
+ */
+export function manifestTiparire({ randuri, plicuri }) {
+  const vii = new Map()
+  for (const r of randuri || []) if (r && !['eroare', 'anulat'].includes(r.stare)) vii.set(r.plic_id, [...(vii.get(r.plic_id) || []), r])
+  const active = [...(plicuri || [])].filter(p => p?.stare === 'activ').sort(comparaPlic)
+  const tiparite = [], ramase = []
+  for (const p of active) {
+    const v = vii.get(p.id) || []
+    const r = v.length === 1 && ['generat', 'ridicat'].includes(v[0].stare) && RE_AWB.test(textAwb(v[0].awb)) ? v[0] : null
+    if (r) tiparite.push({ pozitie: tiparite.length + 1, plic_id: p.id, nr_plic: p.nr_plic, awb: textAwb(r.awb), rand_id: r.id })
+    else ramase.push({ plic_id: p.id, nr_plic: p.nr_plic, motiv: v.length > 1 ? 'mai multe rânduri FAN vii' : v.length ? `fără AWB tipăribil (stare FAN: ${v[0].stare})` : 'fără AWB FAN' })
+  }
+  const ids = new Set(active.map(p => p.id))
+  for (const [plicId, v] of vii) if (!ids.has(plicId)) for (const r of v) if (r.awb) ramase.push({ plic_id: plicId, nr_plic: r.nr_plic, motiv: 'AWB pe un plic care nu mai e activ în lot: de anulat, nu se tipărește' })
+  ramase.sort(comparaPlic)
+  return { tiparite, ramase, cheie: tiparite.map(t => `${t.pozitie}:${t.nr_plic}:${t.awb}`).join('|') }
+}
+/** Partea `parte` (1…) a manifestului: bucăți de cel mult 100 (limita prudentă pe apelul de etichete), în ordinea pozițiilor. */
+export const partiManifest = tiparite => imparteInBucati(tiparite || [])
+
+/** Destinatarul MASCAT pe pagina de control (fără numele întreg pe o foaie de lucru): primele 2 litere ale fiecărui cuvânt + „*”. */
+export const destinatarMascat = nume => txt(nume).split(' ').filter(Boolean).map(c => { const l = [...c]; return l.slice(0, 2).join('') + (l.length > 2 ? '*'.repeat(Math.min(l.length - 2, 6)) : '') }).join(' ')
+
+// ── amprenta SURSELOR unui plic (Jakarinos #1118 r1, „Bani”: claim-ul verifică datele de contact în ACEEAȘI tranzacție cu rezervarea) ──
+// Textul canonic = aceleași câmpuri BRUTE, în aceeași ordine, ca fn_red_fan_surse(uuid) din migrarea 20261212a (L19: paritate testată pe PGlite):
+//   'redari-fan-surse-v1' | cod proiect | nr_plic | destinatar_nume | stare | lot_id | apoi, pentru fiecare deținător DISTINCT al convocărilor
+//   active, neșterse, din plic (ordonați după id ca text, „C”): id, 'c' / 'x' (are / nu are rând de contact), telefon, strada, sat, comună, județ,
+//   cod poștal. Fiecare câmp: NULL → „-”, altfel „<octeți UTF-8>:<valoare>” (fără separator ambiguu). sha256 hex.
+// Include TOȚI deținătorii plicului (nu doar contactul ales): orice schimbare a unui contact al plicului = altă amprentă = claim refuzat.
+const OCTETI = new TextEncoder()
+const campSursa = v => (v == null ? '-' : `${OCTETI.encode(String(v)).length}:${String(v)}`)
+export function textSursePlic({ proiectCod, plic, convocari, contacte }) {
+  const peDet = new Map((contacte || []).map(c => [c.detinator_id, c]))
+  const det = [...new Set((convocari || []).filter(c => c.plic_id === plic.id).map(c => String(c.detinator_id)))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  let s = 'redari-fan-surse-v1' + [proiectCod, plic.nr_plic, plic.destinatar_nume, plic.stare, plic.lot_id].map(campSursa).join('')
+  for (const d of det) {
+    const c = peDet.get(d)
+    s += campSursa(d) + (c ? 'c' : 'x') + [c?.telefon, c?.adresa_strada, c?.adresa_sat, c?.adresa_comuna, c?.adresa_judet, c?.cod_postal].map(campSursa).join('')
+  }
+  return s
+}
+/** Map(plic_id → sha256 hex al textului canonic al surselor). `convocari` = DOAR convocările active, neșterse (aceleași citiri ca ecranul). */
+export async function amprenteSurse({ plicuri, convocari, contacte, proiectCod, subtle = globalThis.crypto?.subtle }) {
+  if (!subtle) throw new Error('Web Crypto indisponibil')
+  const out = new Map()
+  for (const p of plicuri || []) {
+    const buf = await subtle.digest('SHA-256', OCTETI.encode(textSursePlic({ proiectCod, plic: p, convocari, contacte })))
+    out.set(p.id, [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join(''))
+  }
+  return out
 }
 
 /** Calea etichetei: TOATE AWB-urile date, în ordinea dată, într-un singur PDF, format FIX A6 (doc §1: mai multe AWB-uri într-un apel). */

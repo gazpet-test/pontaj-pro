@@ -135,27 +135,52 @@ export async function docxSimplu({ titlu, paragrafe = [], tabel, semnaturi = [] 
 export const ordineConvocari = convocari => [...(convocari || [])].sort((a, b) => (numarConvocare(a) ?? Infinity) - (numarConvocare(b) ?? Infinity)
   || txt(a.nr_document).localeCompare(txt(b.nr_document)) || txt(a.conv_id ?? a.id).localeCompare(txt(b.conv_id ?? b.id)))
 
+// Numele din arhivă se sortează LEXICAL în aplicația de tipărire (Jakarinos #1118 r1 P2): poziția plicului pe 4 cifre (un lot are cel mult
+// 2000 de plicuri), poziția documentului în plic pe 3 cifre (opisul = 000; un plic are cel mult MAX_CONVOCARI_PLIC = 200 de convocări).
+export const CIFRE_PLIC = 4, CIFRE_DOCUMENT = 3
 /**
  * Pachetul de documente al unui lot (tipărire pe lot, FAN sau Poștă): UN fișier ZIP cu documentele ARHIVATE, în ordinea numărului de plic;
  * în fiecare plic întâi opisul (pagina 1 a plicului: numărul plicului în titlu, verificat cu eticheta), apoi convocările în ordinea opisului
- * (fiecare convocare are informarea pe verso, în același DOCX). Doar plicurile active. Orice fișier lipsă = lipsă numită, nu se sare (L12).
- * Întoarce { fisiere: [{ nume, path, nr_plic }], lipsuri: [text] }. `prefix` = 'TEST_' pentru un lot de test.
+ * (fiecare convocare are informarea pe verso, în același DOCX). Orice fișier lipsă = lipsă numită, nu se sare (L12).
+ * Fără `manifest` (lot de Poștă): toate plicurile active, pozițiile 1…N în ordinea numărului de plic.
+ * Cu `manifest` (lot FAN, manifestTiparire din redariFan.mjs — ACEEAȘI funcție ca PDF-ul etichetelor): DOAR plicurile tipărite, cu poziția din
+ * manifest; plicurile „rămase” (fără AWB, respinse) nu intră deloc în arhivă (nici în etichete).
+ * Întoarce { fisiere: [{ nume, path, nr_plic, pozitie }], lipsuri: [text], plicuri: [{ pozitie, nr_plic, documente }] }. `prefix` = 'TEST_' pentru un lot de test.
  */
-export function planPachetPlicuire(plicuri, convocariPePlic, { prefix = '' } = {}) {
-  const fisiere = [], lipsuri = []
+export function planPachetPlicuire(plicuri, convocariPePlic, { prefix = '', manifest = null } = {}) {
+  const fisiere = [], lipsuri = [], rezumat = []
   const active = [...(plicuri || [])].filter(p => p.stare === 'activ').sort((a, b) => (txt(a.nr_plic) < txt(b.nr_plic) ? -1 : txt(a.nr_plic) > txt(b.nr_plic) ? 1 : 0))
-  active.forEach((p, i) => {
-    const n = String(i + 1).padStart(3, '0')
+  const pePlic = new Map(active.map(p => [p.id, p]))
+  const lista = manifest ? manifest.tiparite.map(t => ({ p: pePlic.get(t.plic_id), pozitie: t.pozitie, nr_plic: t.nr_plic })) : active.map((p, i) => ({ p, pozitie: i + 1, nr_plic: p.nr_plic }))
+  for (const { p, pozitie, nr_plic } of lista) {
+    if (!p) { lipsuri.push(`${nr_plic}: plicul din manifest nu mai e activ în lot (reîncarcă)`); continue }
+    const n = String(pozitie).padStart(CIFRE_PLIC, '0'), doc = k => String(k).padStart(CIFRE_DOCUMENT, '0')
     const cs = ordineConvocari(convocariPePlic?.[p.id] || [])
     if (!cs.length) lipsuri.push(`${p.nr_plic}: plicul nu are convocări`)
-    if (txt(p.opis_path)) fisiere.push({ nume: `${prefix}${n}_${p.nr_plic}_0_opis.docx`, path: p.opis_path, nr_plic: p.nr_plic })
+    if (txt(p.opis_path)) fisiere.push({ nume: `${prefix}${n}_${p.nr_plic}_${doc(0)}_opis.docx`, path: p.opis_path, nr_plic: p.nr_plic, pozitie })
     else lipsuri.push(`${p.nr_plic}: opisul nu e atașat la dosar (butonul „Opis (DOCX) + exemplar la dosar”)`)
     cs.forEach((c, k) => {
-      if (txt(c.fisier_convocator_path)) fisiere.push({ nume: `${prefix}${n}_${p.nr_plic}_${k + 1}_${txt(c.nr_document).replace(/[^A-Za-z0-9-]/g, '_')}.docx`, path: c.fisier_convocator_path, nr_plic: p.nr_plic })
+      if (txt(c.fisier_convocator_path)) fisiere.push({ nume: `${prefix}${n}_${p.nr_plic}_${doc(k + 1)}_${txt(c.nr_document).replace(/[^A-Za-z0-9-]/g, '_')}.docx`, path: c.fisier_convocator_path, nr_plic: p.nr_plic, pozitie })
       else lipsuri.push(`${p.nr_plic}: convocarea ${c.nr_document || c.conv_id} nu are fișierul arhivat`)
     })
-  })
-  return { fisiere, lipsuri }
+    rezumat.push({ pozitie, nr_plic: p.nr_plic, documente: 1 + cs.length, destinatar_nume: p.destinatar_nume })
+  }
+  return { fisiere, lipsuri, plicuri: rezumat }
+}
+
+/**
+ * Pagina de CONTROL a lotului (Jakarinos #1118 r1 P1): se descarcă odată cu etichetele și cu arhiva documentelor; omul bifează pe fiecare rând
+ * că eticheta, prima pagină (opisul) și teancul de documente au aceeași poziție și același număr de plic. Destinatarul e MASCAT (foaie de lucru).
+ * randuri: [{ pozitie, nr_plic, awb, destinatar, documente }]; ramase: [{ nr_plic, motiv }]. Fără nume de AI / unelte (document pentru colegi).
+ */
+export function genereazaPaginaControl({ lot, test = false, randuri, ramase = [] }) {
+  return docxSimplu({ titlu: `${test ? 'LOT DE TEST - ' : ''}Pagina de control - lotul ${lot?.nr_lot || ''}`, paragrafe: [
+    `Data: ${dataText(dataBucuresti())}`,
+    `Plicuri tipărite: ${randuri.length}. Etichetele și documentele au aceeași ordine: poziția din stânga = poziția etichetei în PDF = prefixul fișierelor din arhivă.`,
+    ...(ramase.length ? [`Plicuri rămase (NU se tipăresc, nu au etichetă și nu au documente în arhivă): ${ramase.map(r => `${r.nr_plic} (${r.motiv})`).join('; ')}.`] : []),
+  ], tabel: { cap: ['Poziția', 'Nr. plic', 'AWB', 'Destinatar', 'Nr. documente', 'Verificat'],
+    randuri: randuri.map(r => [String(r.pozitie).padStart(CIFRE_PLIC, '0'), r.nr_plic, r.awb || '-', r.destinatar || '', r.documente ?? '', '☐']) },
+  semnaturi: ['Verificat (plicuiește): ________________', 'Verificat (verifică): ________________'] })
 }
 
 export function genereazaOpis(plic, convocari, { proiect, uat, contact } = {}) {

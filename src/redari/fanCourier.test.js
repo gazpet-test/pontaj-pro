@@ -8,14 +8,15 @@ import { webcrypto } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { construiestePlicFan, telefonFan, hashPlicFan, jsonCanonic, interpreteazaRaspunsAwb, interpreteazaRaspunsLot, rezumatUrmarireFan, CONFIG_FAN_PLIC,
   imparteInBucati, MAX_PE_CERERE, FORMAT_ETICHETA, LIMITA_LOT_PILOT_IMPLICITA, interpreteazaUrmarire, interpreteazaConfirmari, comparaEvenimente, cautaInBorderou,
-  caleEticheta, caleListaAwb, dataEvenimentFan, EVENIMENTE_FAN, pregatestePlicuriFan, estePdf, inBase64, LIMITE_FAN, contactPePlic } from '../../supabase/functions/_shared/redariFan.mjs'
+  caleEticheta, caleListaAwb, dataEvenimentFan, EVENIMENTE_FAN, pregatestePlicuriFan, estePdf, inBase64, LIMITE_FAN, contactPePlic,
+  manifestTiparire, destinatarMascat, interpreteazaStergere, campuriEroareFan } from '../../supabase/functions/_shared/redariFan.mjs'
 import { raspundeFan, TRANSPORT_REAL_ACTIV, ACTIUNI_FAN } from '../../supabase/functions/_shared/redariFanHandler.mjs'
 import { executaActiuneFan, MAX_BUCATI_PE_APEL, citesteToate } from '../../supabase/functions/_shared/redariFanTransport.mjs'
-import { stariPasi, stareMarcaj, PASI_FAN, MESAJ_TRANSPORT_OPRIT, csvBorderouFan, prefixLot, titluLot } from './fanLot.js'
+import { stariPasi, stareMarcaj, stariOperatii, PASI_FAN, MESAJ_TRANSPORT_OPRIT, csvBorderouFan, prefixLot, titluLot, numeEtichete } from './fanLot.js'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import FanAwbPrevizualizare from './ui/FanAwbPrevizualizare.jsx'
-import { planPachetPlicuire, ordineConvocari } from './plicuri.js'
+import { planPachetPlicuire, ordineConvocari, genereazaPaginaControl } from './plicuri.js'
 import { genereazaPvB } from './pv.js'
 
 const DOC = readFileSync('docs/redari/FANCOURIER_INTEGRARE.md', 'utf8')
@@ -205,12 +206,25 @@ describe('evenimente (GET /reports/awb-events) și borderou (reconciliere)', () 
   })
   it('borderoul: nr_plic EXACT în observație → găsit; dublură → de verificat; necitit complet → nu „lipsă”', () => {
     const pag = [{ data: [{ awbNumber: '1000000001', info: { observation: 'PL-TST-0001' } }, { awbNumber: '1000000002', info: { content: 'PL-TST-0002' } },
-      { awbNumber: '1000000003', info: { content: 'PL-TST-0002' } }, { awbNumber: '1000000004', info: { observation: 'PL-TST-00011' } }] }, { data: [] }]
+      { awbNumber: '1000000003', info: { content: 'PL-TST-0002' } }, { awbNumber: '1000000004', info: { observation: 'ACTE TGZ' } }] }, { data: [] }]
     const g = cautaInBorderou(pag, ['PL-TST-0001', 'PL-TST-0002', 'PL-TST-0003'], { complet: true })
     expect(g.get('PL-TST-0001')).toEqual({ stare: 'gasit', awb: '1000000001' })
     expect(g.get('PL-TST-0002').stare).toBe('de_verificat'); expect(g.get('PL-TST-0003')).toEqual({ stare: 'lipsa' })
+    expect(g.neinterpretabile).toBe(0)
     expect(cautaInBorderou(pag, ['PL-TST-0003'], { complet: false }).get('PL-TST-0003').stare).toBe('de_verificat')
     expect(cautaInBorderou([{ x: 1 }], ['PL-TST-0001'], { complet: true }).get('PL-TST-0001').stare).toBe('de_verificat')
+  })
+  // Jakarinos #1118 r1 P1: un singur element neînțeles (în ORICE pagină) = nicio concluzie automată, nici „lipsă”, nici „găsit”
+  it('borderoul cu un element NEINTERPRETABIL (referința în câmp necunoscut / lipsă / AWB invalid / număr inclus) → TOT „de verificat”, niciodată „lipsă”', () => {
+    const bun = { awbNumber: '1000000001', info: { observation: 'PL-TST-0001' } }
+    for (const rau of [{ awbNumber: '1000000009', reference: 'PL-TST-0002' }, { awbNumber: '1000000009' }, { info: { observation: 'PL-TST-0002' } },
+      { awbNumber: 'X1', info: { observation: 'PL-TST-0002' } }, { awbNumber: '1000000009', info: { observation: 'PL-TST-0002 bis' } }, 'text', null]) {
+      for (const pag of [[{ data: [bun, rau] }, { data: [] }], [{ data: [bun] }, { data: [rau] }, { data: [] }]]) {
+        const g = cautaInBorderou(pag, ['PL-TST-0001', 'PL-TST-0002'], { complet: true })
+        expect([g.get('PL-TST-0001').stare, g.get('PL-TST-0002').stare]).toEqual(['de_verificat', 'de_verificat'])
+        expect(g.get('PL-TST-0002').motiv).toMatch(/neinterpretabil/); expect(g.neinterpretabile).toBe(1)
+      }
+    }
   })
 })
 
@@ -258,8 +272,9 @@ function depsFake(fx, fan, o = {}) {
     randuriLot: async () => ({ data: fx.randuri }),
     proiect: async () => ({ data: { cod: 'TEST-RAZVAN' } }),
     datePlicuri: async () => ({ data: { plicuri: fx.plicuri, convocari: fx.convocari, contacte: fx.contacte } }),
+    plicuriLot: async () => ({ data: fx.plicuri }),
     rpc: vi.fn(async (nume, args) => { jurnal.push({ nume, args }); return nume === 'fn_red_fan_claim_lot' ? { data: '99999999-0000-4000-8000-' + String(jurnal.length).padStart(12, '0') }
-      : nume === 'fn_red_fan_urmarire' || nume === 'fn_red_fan_confirmari' ? { data: args.p_randuri.length } : { data: args.p_rezultate?.length ?? null } }),
+      : nume === 'fn_red_fan_urmarire' || nume === 'fn_red_fan_confirmari' ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : { data: args.p_rezultate?.length ?? null } }),
     fetch: fan.fetch, pauza: vi.fn(async () => {}), subtle: webcrypto.subtle, ...o,
   } }
 }
@@ -297,7 +312,7 @@ describe('generare în loturi de ≤ 100 (POST /intern-awb, simulat)', () => {
     const w = jurnal.find(j => j.nume === 'fn_red_fan_rezultate')
     expect(w.args.p_cerere).toBe((await deps.rpc.mock.results[0].value).data)   // aceeași cheie ca la claim
     expect(w.args.p_rezultate.map(x => [x.id, x.stare, x.awb])).toEqual([['r0001', 'generat', '2000000001'], ['r0002', 'eroare', null], ['r0003', 'generat', '2000000003']])
-    expect(w.args.p_rezultate[1].motiv).toMatch(/recipient\.phone/)
+    expect(w.args.p_rezultate[1].motiv).toBe('FAN a respins expedierea; câmpuri semnalate: phone, recipient (detaliile în selfAWB)')   // fără textul FAN (PII)
     expect(r.body).toMatchObject({ generat: 2, eroare: 1, necunoscut: 0 })
   })
   it('RĂSPUNS PIERDUT (timeout) → bucata = necunoscut, rularea se OPREȘTE: a doua bucată nu se mai trimite, fără retry (L05)', async () => {
@@ -386,13 +401,44 @@ describe('urmărire / confirmări / etichete / reconciliere (simulat)', () => {
     fx.randuri.reverse()
     const pdf = new TextEncoder().encode('%PDF-1.7 fictiv')
     const fan = fanSimulat(() => ({ status: 200, arrayBuffer: async () => pdf.buffer, json: async () => null }))
-    const r = await executaActiuneFan({ corp: { actiune: 'eticheta' }, lot: LOT }, depsFake(fx, fan).deps)
+    const cheie = manifestTiparire({ randuri: fx.randuri, plicuri: fx.plicuri }).cheie
+    expect(cheie).toBe('1:PL-TST-0001:2000000001|2:PL-TST-0002:2000000002|3:PL-TST-0003:2000000003')
+    const r = await executaActiuneFan({ corp: { actiune: 'eticheta', manifest_cheie: cheie }, lot: LOT }, depsFake(fx, fan).deps)
     const a = fan.apeluri.find(x => x.cale === '/awb/label')
     expect(a.q.getAll('awbs[]')).toEqual(['2000000001', '2000000002', '2000000003']); expect(a.q.get('format')).toBe('A6')
-    expect(r.body).toMatchObject({ cod: 'ok', parte: 1, parti: 1, nr_plicuri: ['PL-TST-0001', 'PL-TST-0002', 'PL-TST-0003'] })
+    expect(r.body).toMatchObject({ cod: 'ok', parte: 1, parti: 1, nr_plicuri: ['PL-TST-0001', 'PL-TST-0002', 'PL-TST-0003'], pozitii: [1, 2, 3], ramase: [] })
     expect(Buffer.from(r.body.pdf_base64, 'base64').toString()).toBe('%PDF-1.7 fictiv')
     const fan2 = fanSimulat(() => ({ status: 200, arrayBuffer: async () => new TextEncoder().encode('<html>').buffer }))
-    expect((await executaActiuneFan({ corp: { actiune: 'eticheta' }, lot: LOT }, depsFake(fx, fan2).deps)).status).toBe(502)
+    expect((await executaActiuneFan({ corp: { actiune: 'eticheta', manifest_cheie: cheie }, lot: LOT }, depsFake(fx, fan2).deps)).status).toBe(502)
+    // manifestul văzut de om (cheia) diferă de evidența de acum → 409, NICIUN apel de etichetă; fără cheie → 400
+    const fan3 = fanSimulat(() => ({ status: 200, arrayBuffer: async () => pdf.buffer }))
+    expect((await executaActiuneFan({ corp: { actiune: 'eticheta', manifest_cheie: '1:PL-TST-0001:2000000001' }, lot: LOT }, depsFake(fx, fan3).deps)).body.cod).toBe('manifest_schimbat')
+    expect((await executaActiuneFan({ corp: { actiune: 'eticheta' }, lot: LOT }, depsFake(fx, fan3).deps)).status).toBe(400)
+    expect(fan3.apeluri.filter(x => x.cale === '/awb/label')).toHaveLength(0)
+  })
+  it('MANIFEST COMUN: plicurile 1-2-3 cu 2 respins → etichetele și documentele = 1, 3 (pozițiile 1, 2); 2 numit „rămas” (Jakarinos #1118 r1 P1)', async () => {
+    const fx = await cuAwb(3)
+    fx.randuri[1].stare = 'eroare'; fx.randuri[1].awb = null
+    const m = manifestTiparire({ randuri: fx.randuri, plicuri: fx.plicuri })
+    expect(m.tiparite.map(t => [t.pozitie, t.nr_plic, t.awb])).toEqual([[1, 'PL-TST-0001', '2000000001'], [2, 'PL-TST-0003', '2000000003']])
+    expect(m.ramase).toEqual([{ plic_id: 'pl2', nr_plic: 'PL-TST-0002', motiv: 'fără AWB FAN' }])
+    const pdf = new TextEncoder().encode('%PDF-1.7 fictiv')
+    const fan = fanSimulat(() => ({ status: 200, arrayBuffer: async () => pdf.buffer }))
+    const r = await executaActiuneFan({ corp: { actiune: 'eticheta', manifest_cheie: m.cheie }, lot: LOT }, depsFake(fx, fan).deps)
+    expect(fan.apeluri.find(x => x.cale === '/awb/label').q.getAll('awbs[]')).toEqual(['2000000001', '2000000003'])
+    expect(r.body).toMatchObject({ pozitii: [1, 2], nr_plicuri: ['PL-TST-0001', 'PL-TST-0003'], ramase: ['PL-TST-0002'] })
+    const pl = fx.plicuri.map(p => ({ ...p, opis_path: `o/${p.id}` }))
+    const cv = Object.fromEntries(pl.map(p => [p.id, [{ conv_id: `c${p.id}`, nr_document: 'C-000001', fisier_convocator_path: `c/${p.id}` }]]))
+    const z = planPachetPlicuire(pl, cv, { manifest: m, prefix: 'TEST_' })
+    expect(z.fisiere.map(f => f.nume)).toEqual(['TEST_0001_PL-TST-0001_000_opis.docx', 'TEST_0001_PL-TST-0001_001_C-000001.docx', 'TEST_0002_PL-TST-0003_000_opis.docx', 'TEST_0002_PL-TST-0003_001_C-000001.docx'])
+    expect(z.plicuri.map(p => [p.pozitie, p.nr_plic, p.documente])).toEqual([[1, 'PL-TST-0001', 2], [2, 'PL-TST-0003', 2]])
+    // AWB viu pe un plic anulat între timp: nu se tipărește, e numit
+    const m2 = manifestTiparire({ randuri: fx.randuri, plicuri: fx.plicuri.map(p => p.id === 'pl3' ? { ...p, stare: 'anulat' } : p) })
+    expect(m2.tiparite.map(t => t.nr_plic)).toEqual(['PL-TST-0001']); expect(m2.ramase.map(r => r.nr_plic)).toEqual(['PL-TST-0002', 'PL-TST-0003'])
+    // pagina de control: un DOCX, destinatarul mascat
+    expect(destinatarMascat('POPESCU ION')).toBe('PO***** IO*'); expect(destinatarMascat('')).toBe('')
+    const b = await genereazaPaginaControl({ lot: { nr_lot: 'PP-0001' }, test: true, randuri: m.tiparite.map(t => ({ ...t, destinatar: 'PO*****', documente: 2 })), ramase: m.ramase })
+    expect(b.size).toBeGreaterThan(500)
   })
   it('reconciliere: citește borderoul până la pagina goală și doar PROPUNE (nicio scriere)', async () => {
     const fx = await fixtura(2)
@@ -413,6 +459,45 @@ describe('urmărire / confirmări / etichete / reconciliere (simulat)', () => {
     fx.randuri[0].id = '00000000-0000-4000-8000-000000000001'
     expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: fx.randuri[0].id }, lot: LOT }, deps)).body.cod).toBe('stergere_neconfirmata')
     expect(jurnal).toHaveLength(0)
+  })
+  it('ștergere AWB (Jakarinos #1118 r1 P2): DOAR forma de succes recunoscută anulează; 200 cu eroare / gol / altă formă / 204 → AWB păstrat', async () => {
+    expect(interpreteazaStergere(200, { status: 'success' })).toEqual({ rezultat: 'sters' })
+    for (const [st, corp] of [[200, { status: 'error', message: 'AWB inexistent' }], [200, null], [200, { status: 'success', errors: ['x'] }], [200, []], [204, null], [201, { status: 'success' }], [0, null], [502, null]])
+      expect(interpreteazaStergere(st, corp).rezultat).toBe('necunoscut')
+    expect(interpreteazaStergere(404, { status: 'error' }).rezultat).toBe('refuzat')
+    const fx = await cuAwb(1)
+    fx.randuri[0].id = '00000000-0000-4000-8000-000000000001'
+    for (const [corp, codAsteptat, anulat] of [[{ status: 'error' }, 'stergere_neconfirmata', false], [{ ceva: 1 }, 'stergere_neconfirmata', false], [{ status: 'success' }, 'ok', true]]) {
+      const { deps, jurnal } = depsFake(fx, fanSimulat(() => raspunsJson(200, corp)))
+      expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: fx.randuri[0].id }, lot: LOT }, deps)).body.cod).toBe(codAsteptat)
+      expect(jurnal.some(j => j.nume === 'fn_red_fan_anulat')).toBe(anulat)
+    }
+  })
+  it('reconcilierea prin funcția edge: mutantul recenzentului (AWB valid, referința în câmp necunoscut, apoi pagina goală) → „de verificat”, nu „lipsă”', async () => {
+    const fx = await fixtura(1)
+    fx.randuri[0].stare = 'necunoscut'
+    const fan = fanSimulat(u => raspunsJson(200, { data: u.searchParams.get('page') === '1' ? [{ awbNumber: '2000000001', reference: 'PL-TST-0001' }] : [] }))
+    const r = await executaActiuneFan({ corp: { actiune: 'reconciliaza', data: '2026-11-17' }, lot: LOT }, depsFake(fx, fan).deps)
+    expect(r.body).toMatchObject({ complet: true, neinterpretabile: 1 }); expect(r.body.propuneri[0].stare).toBe('de_verificat')
+  })
+  it('motivul unui refuz FAN: doar câmpuri din lista albă, fără mesajele / valorile FAN (Jakarinos #1118 r1 P2)', () => {
+    expect(campuriEroareFan({ 'recipient.phone': ['Telefonul 0712345678 e invalid'], 'shipments[0].info.weight': 'prea mic', 'Str. Exemplu 5': 'x' })).toEqual(['info', 'phone', 'recipient', 'shipments', 'weight'])
+    expect(campuriEroareFan(['Adresa Str. X 5 nu există'])).toEqual([])
+    const r = interpreteazaRaspunsLot(200, { response: [{ awbNumber: null, errors: ['Telefonul 0712345678 e invalid'] }] }, 1)[0]
+    expect(r).toEqual({ stare: 'eroare', motiv: 'FAN a respins expedierea (fără câmp recunoscut; detaliile în selfAWB)' })
+  })
+  it('asocierea rezultatelor: referința pe element (dacă FAN o întoarce) trebuie să fie plicul de pe poziție; altfel toată bucata „necunoscut”', async () => {
+    const fx = await fixtura(2)
+    const fan = fanSimulat(() => raspunsJson(200, { response: [{ awbNumber: '2000000002', info: { observation: 'PL-TST-0002' } }, { awbNumber: '2000000001', info: { observation: 'PL-TST-0001' } }] }))
+    const { deps, jurnal } = depsFake(fx, fan)
+    const r = await executaActiuneFan({ corp: { actiune: 'genereaza' }, lot: LOT }, deps)
+    expect(jurnal.find(j => j.nume === 'fn_red_fan_rezultate').args.p_rezultate.map(x => x.stare)).toEqual(['necunoscut', 'necunoscut'])
+    expect(r.body.oprit).toMatch(/neconfirmat/)
+    // claim-ul a primit amprenta surselor (aceeași funcție ca fn_red_fan_surse), câte una pe rând
+    expect(jurnal.find(j => j.nume === 'fn_red_fan_claim_lot').args.p_surse).toHaveLength(2)
+    // fără referință în răspuns: asociere pe poziție, numărată în raport (presupunere de confirmat)
+    const fan2 = fanSimulat((u, init) => raspunsJson(200, okPentru(JSON.parse(init.body))))
+    expect((await executaActiuneFan({ corp: { actiune: 'genereaza' }, lot: LOT }, depsFake(await fixtura(2), fan2).deps)).body).toMatchObject({ generat: 2, asociere_pe_pozitie: 2 })
   })
 })
 
@@ -518,6 +603,10 @@ describe('ecranul: pașii, lotul de test, lotul pilot', () => {
     expect(stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'propus' }] }).activ).toBe(true)
     expect(stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'aprobat' }] }).activ).toBe(false)
     expect(stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: false }).activ).toBe(false)
+    // Jakarinos #1118 r1 P2: după PRIMA aprobare (istoric), chiar dacă rândurile au redevenit „propus”
+    expect(stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'propus' }], fanLot: { test: true, prima_aprobare_la: '2026-11-17T08:00:00Z' } }))
+      .toEqual({ activ: false, motiv: expect.stringMatching(/aprobat o dată/) })
+    expect(MIG).toMatch(/IF v_vechi\.prima_aprobare_la IS NOT NULL OR EXISTS/)
   })
   it('ecranul randat (owner, admin): banner „Transport oprit” și TOATE butoanele de pas dezactivate', () => {
     const html = renderToStaticMarkup(React.createElement(FanAwbPrevizualizare, { proiect: { cod: 'TEST-RAZVAN' }, lot: { id: 'l1', nr_lot: 'PP-0001' }, plicuri: [], esteOwner: true, poateScrie: true, onClose: () => {} }))
@@ -526,6 +615,25 @@ describe('ecranul: pașii, lotul de test, lotul pilot', () => {
     expect(butoane.length).toBe(9)
     expect(butoane.every(m => /disabled=""/.test(m[0]))).toBe(true)
     expect((html.match(/transport oprit/g) || []).length).toBeGreaterThanOrEqual(PASI_FAN.length)
+  })
+  it('operațiile procedurii (Jakarinos #1118 r1 P2): reconciliere, plafon, anulare, evenimente — vizibile, dezactivate cu transportul oprit', () => {
+    expect(stariOperatii({ evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] }).every(o => !o.activ && o.motiv === MESAJ_TRANSPORT_OPRIT)).toBe(true)
+    const on = stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'generat' }] })
+    expect(on.filter(o => o.activ).map(o => o.cheie)).toEqual(['plafon', 'anulare', 'evenimente'])
+    expect(stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: false, randuri: [{ stare: 'necunoscut' }] }).every(o => !o.activ)).toBe(true)
+    const html = renderToStaticMarkup(React.createElement(FanAwbPrevizualizare, { proiect: { cod: 'TEST-RAZVAN' }, lot: { id: 'l1', nr_lot: 'PP-0001' }, plicuri: [], esteOwner: true, poateScrie: true, onClose: () => {} }))
+    for (const t of ['Reconciliază (borderoul zilei)', 'Schimbă plafonul', 'Șterge la FAN', 'Marchează anulat', 'Lista de evenimente FAN']) {
+      const b = [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].find(m => m[1].includes(t))
+      expect([t, !!b && /disabled=""/.test(b[0])]).toEqual([t, true])
+    }
+    expect(html).toMatch(/Pagina de control/)
+    expect(numeEtichete({ lot: { nr_lot: 'PP-0001' }, fanLot: { test: true }, parte: 2, parti: 3, format: 'A6' })).toBe('TEST_PP-0001_etichete_A6_partea02din03.pdf')
+  })
+  it('L24 în ecran: acțiunile au generația lor, verificată înaintea FIECĂRUI apel din bucle și în catch / finally', () => {
+    const src = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8')
+    expect(src).toMatch(/for \(const x of lista\) \{\s*if \(!curent\(\)\) return/)
+    expect(src).toMatch(/catch \(e\) \{ if \(curent\(\)\) setMesaj/); expect(src).toMatch(/finally \{ if \(curent\(\)\) \{ ocupat\.current = false/)
+    expect(src).not.toMatch(/for \(const r of randuri\.filter\(x => x\.ok\)\)/)   // vechea buclă de propunere, fără gardă
   })
   it('PASI_FAN acoperă exact pașii ceruți, în ordine', () => {
     expect(PASI_FAN.map(p => p.titlu)).toEqual(['1. Propune', '2. Aprobă', '3. Generează AWB', '4. Etichete A6', '5. Comandă curier', '6. Urmărire', '7. Confirmări / retururi'])
@@ -540,8 +648,16 @@ describe('pachetul de documente pe lot (ordinea plicurilor) și opisul', () => {
   it('ordinea: plicul 0001 întâi; în plic opisul primul, apoi convocările în ordinea numărului (C-000002 înaintea C-000010); anulatele excluse', () => {
     const p = planPachetPlicuire(pl, cv)
     expect(p.lipsuri).toEqual([])
-    expect(p.fisiere.map(f => f.nume)).toEqual(['001_PL-TST-0001_0_opis.docx', '001_PL-TST-0001_1_C-000002.docx', '001_PL-TST-0001_2_C-000010.docx', '002_PL-TST-0002_0_opis.docx', '002_PL-TST-0002_1_C-000003.docx'])
-    expect(planPachetPlicuire(pl, cv, { prefix: 'TEST_' }).fisiere[0].nume).toBe('TEST_001_PL-TST-0001_0_opis.docx')
+    // Jakarinos #1118 r1 P2: plicul pe 4 cifre, documentul pe 3 (opisul = 000) → sortarea lexicală a numelor = ordinea de tipărire
+    expect(p.fisiere.map(f => f.nume)).toEqual(['0001_PL-TST-0001_000_opis.docx', '0001_PL-TST-0001_001_C-000002.docx', '0001_PL-TST-0001_002_C-000010.docx', '0002_PL-TST-0002_000_opis.docx', '0002_PL-TST-0002_001_C-000003.docx'])
+    expect(planPachetPlicuire(pl, cv, { prefix: 'TEST_' }).fisiere[0].nume).toBe('TEST_0001_PL-TST-0001_000_opis.docx')
+  })
+  it('numele din arhivă: 12 convocări într-un plic și 12 plicuri → sortarea lexicală = ordinea inserării (convocarea 10 după 9, plicul 10 după 9)', () => {
+    const pl12 = Array.from({ length: 12 }, (_, i) => ({ id: `p${i}`, nr_plic: `PL-TST-${String(i + 1).padStart(4, '0')}`, stare: 'activ', opis_path: `o${i}` }))
+    const cv12 = Object.fromEntries(pl12.map((p, i) => [p.id, Array.from({ length: i === 0 ? 12 : 1 }, (_, k) => ({ conv_id: `c${i}_${k}`, nr_document: `C-${String(k + 1).padStart(6, '0')}`, fisier_convocator_path: `f${i}_${k}` }))]))
+    const nume = planPachetPlicuire(pl12, cv12).fisiere.map(f => f.nume)
+    expect([...nume].sort()).toEqual(nume)
+    expect(nume).toContain('0001_PL-TST-0001_012_C-000012.docx'); expect(nume).toContain('0012_PL-TST-0012_000_opis.docx')
   })
   it('orice document lipsă = lipsă numită (nu se sare tacit, L12)', () => {
     const p = planPachetPlicuire([{ ...pl[1], opis_path: null }], { a: [{ ...cv.a[0], fisier_convocator_path: null }] })

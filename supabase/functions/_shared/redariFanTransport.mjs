@@ -7,7 +7,8 @@
 // L18 — eroare ≠ gol; L12 — formă necunoscută = „de verificat de om”. Răspunsurile FAN sunt DATE: nu declanșează nimic ireversibil
 // (ridicarea, AR-ul, returul le confirmă omul în ecran). Parola / tokenul / URL-ul de login nu se loghează și nu ajung în răspuns.
 import { MAX_PE_CERERE, URL_FAN, pregatestePlicuriFan, comparaPlic, imparteInBucati, interpreteazaRaspunsLot, interpreteazaUrmarire,
-  interpreteazaConfirmari, comparaEvenimente, cautaInBorderou, caleEticheta, caleListaAwb, estePdf, inBase64 } from './redariFan.mjs'
+  interpreteazaConfirmari, comparaEvenimente, cautaInBorderou, caleEticheta, caleListaAwb, estePdf, inBase64, amprenteSurse, manifestTiparire,
+  partiManifest, interpreteazaStergere } from './redariFan.mjs'
 
 // Câte solicitări de creare la un apăsat de buton (5 × 100 = 500 de plicuri), cu pauză între ele: limita pe minut a FAN nu e documentată
 // (doc §8, deschisă 2) → solicitările merg una după alta, niciodată în paralel. Restul lotului = încă un apăsat (decizie umană).
@@ -77,7 +78,8 @@ export async function citesteToate(fabrica, ids, cheie = 'id') {
 /**
  * Execută o acțiune pe un lot. ctx = { corp, lot: { id, proiect_id, nr_lot } } (lotul a fost deja citit cu JWT-ul omului — RLS, L09).
  * deps: { rpc(nume, args) → {data,error}, randuriLot(lotId) → {data,error}, datePlicuri(plicIds) → {data:{plicuri,convocari,contacte},error},
- *         proiect(proiectId) → {data:{cod},error}, fetch, secrete() → {username,password,clientId}|null, pauza(ms), subtle }
+ *         plicuriLot(lotId) → {data:[{id,nr_plic,stare}],error} (manifestul etichetelor), proiect(proiectId) → {data:{cod},error}, fetch,
+ *         secrete() → {username,password,clientId}|null, pauza(ms), subtle }
  * Întoarce { status, body }.
  */
 export async function executaActiuneFan({ corp, lot }, deps) {
@@ -94,7 +96,7 @@ export async function executaActiuneFan({ corp, lot }, deps) {
       case 'urmarire': return await urmarire({ lot, randuri, s, fan, deps, out })
       case 'confirmari': return await confirmari({ lot, randuri, s, fan, deps, out })
       case 'evenimente': { const x = await fan.cerere('GET', '/reports/awb-events'); const c = comparaEvenimente(x.status, x.corp); return c.ok ? out(200, 'ok', c) : out(502, 'evenimente_de_verificat', { motiv: c.motiv }) }
-      case 'eticheta': return await eticheta({ corp, randuri, s, fan, out })
+      case 'eticheta': return await eticheta({ corp, lot, randuri, s, fan, deps, out })
       case 'reconciliaza': return await reconciliaza({ corp, randuri, s, fan, out })
       case 'sterge_awb': return await stergeAwb({ corp, randuri, s, fan, deps, out })
       default: return out(400, 'cerere_invalida')
@@ -114,6 +116,9 @@ async function genereaza({ lot, randuri, s, fan, deps, out }) {
   const d = await deps.datePlicuri(aprobate.map(x => x.plic_id))
   if (d?.error || !d?.data) return out(503, 'citire_neconfirmata')
   const pregatite = await pregatestePlicuriFan({ ...d.data, proiectCod: pr.data.cod, subtle: deps.subtle })
+  // amprenta SURSELOR din aceleași citiri (Jakarinos #1118 r1): claim-ul o recalculează în BD, în tranzacția rezervării; o schimbare a
+  // contactelor între citirea de aici și claim = refuz, nimic plătit
+  const surse = await amprenteSurse({ ...d.data, proiectCod: pr.data.cod, subtle: deps.subtle })
   const pePlic = new Map(pregatite.map(p => [p.plic.id, p]))
   const excluse = [], deTrimis = []
   for (const x of aprobate) {
@@ -121,30 +126,33 @@ async function genereaza({ lot, randuri, s, fan, deps, out }) {
     if (!p) excluse.push({ nr_plic: x.nr_plic, motiv: 'plicul nu mai e citibil sau activ' })
     else if (!p.ok) excluse.push({ nr_plic: x.nr_plic, motiv: p.probleme.join('; ') })
     else if (p.hash !== x.hash_date) excluse.push({ nr_plic: x.nr_plic, motiv: 'datele s-au schimbat după aprobare (re-propunere + aprobare nouă)' })
-    else deTrimis.push({ rand: x, shipment: p.shipment, hash: p.hash })
+    else deTrimis.push({ rand: x, shipment: p.shipment, hash: p.hash, surse: surse.get(x.plic_id) })
   }
   const bucati = imparteInBucati(deTrimis, MAX_PE_CERERE)
-  const raport = { generat: 0, eroare: 0, necunoscut: 0 }
+  const raport = { generat: 0, eroare: 0, necunoscut: 0, asociere_pe_pozitie: 0 }
   let oprit = null, trimise = 0
   for (const [i, b] of bucati.entries()) {
     if (i >= MAX_BUCATI_PE_APEL) { oprit = 'limita de solicitări pe apăsare; restul se trimite la următorul apăsat'; break }
     if (i > 0) await deps.pauza(PAUZA_INTRE_CERERI_MS)
     // L04/L22: pasul durabil ÎNAINTE de bani. Refuz = nimic trimis; rândurile rămân „aprobat”.
-    const c = await deps.rpc('fn_red_fan_claim_lot', { p_lot_id: lot.id, p_ids: b.map(x => x.rand.id), p_hashuri: b.map(x => x.hash) })
-    if (c?.error || typeof c?.data !== 'string' || !UUID.test(c.data)) { oprit = 'rezervarea în BD a fost refuzată sau neconfirmată; nimic trimis la FAN pentru această bucată'; break }
+    const c = await deps.rpc('fn_red_fan_claim_lot', { p_lot_id: lot.id, p_ids: b.map(x => x.rand.id), p_hashuri: b.map(x => x.hash), p_surse: b.map(x => x.surse) })
+    if (c?.error || typeof c?.data !== 'string' || !UUID.test(c.data)) { oprit = 'rezervarea în BD a fost refuzată sau neconfirmată (date schimbate între timp?); nimic trimis la FAN pentru această bucată'; break }
     const raspuns = await fan.cerere('POST', '/intern-awb', { clientId: s.clientId, shipments: b.map(x => x.shipment) })
     trimise++
-    const rez = interpreteazaRaspunsLot(raspuns.status, raspuns.corp, b.length)
+    const rez = interpreteazaRaspunsLot(raspuns.status, raspuns.corp, b.length, { referinte: b.map(x => x.rand.nr_plic) })
     const w = await deps.rpc('fn_red_fan_rezultate', { p_cerere: c.data, p_rezultate: b.map((x, k) => ({ id: x.rand.id, stare: rez[k].stare, awb: rez[k].awb ?? null,
       tarif: rez[k].tarif ?? null, tva: rez[k].tva ?? null, motiv: rez[k].motiv ?? null })) })
     if (w?.error) { raport.necunoscut += b.length; oprit = 'rezultatul nu s-a putut scrie: rândurile rămân „în curs”; reconciliază după 10 minute (borderoul zilei)'; break }
-    for (const x of rez) raport[x.stare]++
+    for (const x of rez) { raport[x.stare]++; if (x.stare === 'generat' && x.asociere === 'pozitie') raport.asociere_pe_pozitie++ }
     if (rez.some(x => x.stare === 'necunoscut')) { oprit = 'răspuns FAN neconfirmat: rularea s-a oprit (fără retry automat); reconciliază'; break }
     if (raspuns.status === 429) { oprit = 'FAN: prea multe solicitări; rularea s-a oprit, se reia de om'; break }
   }
   const ramase = deTrimis.length - bucati.slice(0, trimise).reduce((n, b) => n + b.length, 0)
   return out(200, 'ok', { ...raport, solicitari: trimise, excluse, ramase, oprit })
 }
+// rezultatul fn_red_fan_urmarire / fn_red_fan_confirmari: { scrise, depasite } cu suma = rândurile trimise (altfel scriere neconfirmată)
+const rezScriere = (w, n) => !w?.error && w?.data && typeof w.data === 'object' && Number.isInteger(w.data.scrise) && Number.isInteger(w.data.depasite)
+  && w.data.scrise >= 0 && w.data.depasite >= 0 && w.data.scrise + w.data.depasite === n ? w.data : null
 
 // ── urmărire: ≤ 100 AWB-uri pe solicitare; scrie DOAR starea de urmărire (propuneri), nu expedierea ──
 const cuAwb = randuri => randuri.filter(x => ['generat', 'ridicat'].includes(x.stare) && x.awb)
@@ -152,54 +160,63 @@ async function urmarire({ lot, randuri, s, fan, deps, out }) {
   const lista = cuAwb(randuri)
   if (!lista.length) return out(409, 'nimic_de_urmarit')
   const stari = {}
-  let scrise = 0, necerute = 0
+  let scrise = 0, depasite = 0, necerute = 0
   for (const [i, b] of imparteInBucati(lista).entries()) {
     if (i > 0) await deps.pauza(PAUZA_INTRE_CERERI_MS)
     const awbs = b.map(x => x.awb)
     const x = await fan.cerere('GET', caleListaAwb('/reports/awb/tracking', { clientId: s.clientId, awbs }))
     const u = interpreteazaUrmarire(x.status, x.corp, awbs)
-    if (!u.ok) return out(502, 'urmarire_neconfirmata', { motiv: u.motiv, scrise, stari })
+    if (!u.ok) return out(502, 'urmarire_neconfirmata', { motiv: u.motiv, scrise, depasite, stari })
     necerute += u.necerute
+    // Jakarinos #1118 r1 (L03): fiecare rând poartă versiunea de urmărire CITITĂ la începutul rulării; BD-ul scrie doar dacă e încă aceeași
+    // și dacă evenimentul nu e mai vechi decât cel deja scris (altfel „depășit”: o rulare mai nouă a câștigat)
     const p = b.map(r => { const z = u.pe_awb.get(r.awb); stari[z.urmarire_stare] = (stari[z.urmarire_stare] || 0) + 1
-      return { id: r.id, awb: r.awb, urmarire_stare: z.urmarire_stare, ultim_eveniment: z.ultim_eveniment, ultim_eveniment_la: z.ultim_eveniment_la,
+      return { id: r.id, awb: r.awb, versiune: r.versiune_urmarire, urmarire_stare: z.urmarire_stare, ultim_eveniment: z.ultim_eveniment, ultim_eveniment_la: z.ultim_eveniment_la,
         ridicat_propus: z.ridicat_propus, livrat_la: z.livrat_la, retur_propus: z.retur_propus } })
-    const w = await deps.rpc('fn_red_fan_urmarire', { p_lot_id: lot.id, p_randuri: p })
-    if (w?.error || w?.data !== p.length) return out(503, 'scriere_neconfirmata', { scrise, stari })
-    scrise += p.length
+    const w = rezScriere(await deps.rpc('fn_red_fan_urmarire', { p_lot_id: lot.id, p_randuri: p }), p.length)
+    if (!w) return out(503, 'scriere_neconfirmata', { scrise, depasite, stari })
+    scrise += w.scrise; depasite += w.depasite
   }
-  return out(200, 'ok', { scrise, stari, necerute })
+  return out(200, 'ok', { scrise, depasite, stari, necerute })
 }
 
 async function confirmari({ lot, randuri, s, fan, deps, out }) {
   const lista = cuAwb(randuri)
   if (!lista.length) return out(409, 'nimic_de_urmarit')
   const stari = {}
-  let scrise = 0
+  let scrise = 0, depasite = 0
   for (const [i, b] of imparteInBucati(lista).entries()) {
     if (i > 0) await deps.pauza(PAUZA_INTRE_CERERI_MS)
     const awbs = b.map(x => x.awb)
     const x = await fan.cerere('GET', caleListaAwb('/reports/awb/confirmations', { clientId: s.clientId, awbs, extra: { language: 'ro' } }))
     const c = interpreteazaConfirmari(x.status, x.corp, awbs)
-    if (!c.ok) return out(502, 'confirmari_neconfirmate', { motiv: c.motiv, scrise, stari })
-    const p = b.map(r => { const z = c.pe_awb.get(r.awb); stari[z] = (stari[z] || 0) + 1; return { id: r.id, awb: r.awb, confirmare_stare: z } })
-    const w = await deps.rpc('fn_red_fan_confirmari', { p_lot_id: lot.id, p_randuri: p })
-    if (w?.error || w?.data !== p.length) return out(503, 'scriere_neconfirmata', { scrise, stari })
-    scrise += p.length
+    if (!c.ok) return out(502, 'confirmari_neconfirmate', { motiv: c.motiv, scrise, depasite, stari })
+    const p = b.map(r => { const z = c.pe_awb.get(r.awb); stari[z] = (stari[z] || 0) + 1; return { id: r.id, awb: r.awb, versiune: r.versiune_urmarire, confirmare_stare: z } })
+    const w = rezScriere(await deps.rpc('fn_red_fan_confirmari', { p_lot_id: lot.id, p_randuri: p }), p.length)
+    if (!w) return out(503, 'scriere_neconfirmata', { scrise, depasite, stari })
+    scrise += w.scrise; depasite += w.depasite
   }
-  return out(200, 'ok', { scrise, stari })
+  return out(200, 'ok', { scrise, depasite, stari })
 }
 
-// ── etichete: UN PDF pentru tot lotul (≤ 100 AWB-uri), în ordinea numărului de plic, format A6; peste 100 = părți numerotate ──
-async function eticheta({ corp, randuri, s, fan, out }) {
-  const lista = cuAwb(randuri)
-  if (!lista.length) return out(409, 'nimic_de_tiparit')
-  const parti = imparteInBucati(lista)
+// ── etichete: MANIFESTUL COMUN (manifestTiparire, aceeași funcție ca arhiva documentelor din ecran), în părți de ≤ 100, format A6 ──
+// Jakarinos #1118 r1 P1: mulțimea și ordinea etichetelor = cele ale documentelor. Ecranul trimite cheia manifestului pe care l-a arătat omului
+// (pagina de control); dacă evidența s-a schimbat între timp, cheia diferă → 409, nimic tipărit (L03).
+async function eticheta({ corp, lot, randuri, s, fan, deps, out }) {
+  if (typeof corp.manifest_cheie !== 'string') return out(400, 'cerere_invalida')
+  const pl = await deps.plicuriLot(lot.id)
+  if (pl?.error || !Array.isArray(pl?.data)) return out(503, 'citire_neconfirmata')
+  const m = manifestTiparire({ randuri, plicuri: pl.data })
+  if (!m.tiparite.length) return out(409, 'nimic_de_tiparit', { ramase: m.ramase.map(r => r.nr_plic) })
+  if (m.cheie !== corp.manifest_cheie) return out(409, 'manifest_schimbat', { motiv: 'evidența s-a schimbat de la afișare: reîncarcă și verifică din nou pagina de control' })
+  const parti = partiManifest(m.tiparite)
   const parte = corp.parte == null ? 1 : corp.parte
   if (!Number.isInteger(parte) || parte < 1 || parte > parti.length) return out(400, 'cerere_invalida')
   const b = parti[parte - 1]
   const x = await fan.cerere('GET', caleEticheta({ clientId: s.clientId, awbs: b.map(r => r.awb) }), undefined, { binar: true })
   if (x.status !== 200 || !estePdf(x.bytes)) return out(502, 'eticheta_neconfirmata', { http: x.status })
-  return out(200, 'ok', { parte, parti: parti.length, nr_plicuri: b.map(r => r.nr_plic), pdf_base64: inBase64(x.bytes) })
+  return out(200, 'ok', { parte, parti: parti.length, nr_plicuri: b.map(r => r.nr_plic), pozitii: b.map(r => r.pozitie), ramase: m.ramase.map(r => r.nr_plic),
+    manifest_cheie: m.cheie, pdf_base64: inBase64(x.bytes) })
 }
 
 // ── reconciliere: citește borderoul zilei și PROPUNE; scrierea o face omul (fn_red_fan_reconciliaza) ──
@@ -219,7 +236,7 @@ async function reconciliaza({ corp, randuri, s, fan, out }) {
     if (!l.length) { complet = true; break }
   }
   const g = cautaInBorderou(pagini, lista.map(x => x.nr_plic), { complet })
-  return out(200, 'ok', { complet, propuneri: lista.map(x => ({ id: x.id, nr_plic: x.nr_plic, stare_rand: x.stare, ...g.get(x.nr_plic) })) })
+  return out(200, 'ok', { complet, neinterpretabile: g.neinterpretabile, propuneri: lista.map(x => ({ id: x.id, nr_plic: x.nr_plic, stare_rand: x.stare, ...g.get(x.nr_plic) })) })
 }
 
 // ── ștergerea unui AWB neridicat (doc §5: doar de pe borderoul zilei, înainte de C0) ──
@@ -230,8 +247,10 @@ async function stergeAwb({ corp, randuri, s, fan, deps, out }) {
   if (x.stare !== 'generat' || !x.awb) return out(409, 'doar_awb_generat_neridicat')
   const q = new URLSearchParams({ clientId: s.clientId, awb: x.awb })
   const d = await fan.cerere('DELETE', '/awb?' + q.toString())
-  if (!Number.isInteger(d.status) || d.status <= 0 || d.status >= 500) return out(503, 'stergere_neconfirmata', { motiv: 'verifică în selfAWB; AWB-ul rămâne „generat” până la confirmare' })
-  if (d.status >= 400) return out(409, 'stergere_refuzata', { http: d.status })
+  // Jakarinos #1118 r1 P2: succes DOAR la forma de succes recunoscută; 200 cu eroare / formă necunoscută = AWB păstrat, verificare de om
+  const st = interpreteazaStergere(d.status, d.corp)
+  if (st.rezultat === 'necunoscut') return out(503, 'stergere_neconfirmata', { motiv: `${st.motiv}: AWB-ul rămâne „generat”; verifică în selfAWB, apoi „Marchează anulat” din ecran` })
+  if (st.rezultat === 'refuzat') return out(409, 'stergere_refuzata', { http: d.status })
   const w = await deps.rpc('fn_red_fan_anulat', { p_id: x.id, p_awb: x.awb, p_motiv: 'AWB șters prin API (DELETE /awb confirmat)' })
   if (w?.error) return out(503, 'scriere_neconfirmata', { motiv: 'AWB șters la FAN, dar evidența nu s-a actualizat: verifică în selfAWB, apoi „Marchează anulat” din ecran' })
   return out(200, 'ok', { anulat: x.nr_plic })

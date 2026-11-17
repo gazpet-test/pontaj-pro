@@ -7,7 +7,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { raspundeFan } from '../_shared/redariFanHandler.mjs';
 import { citesteToate } from '../_shared/redariFanTransport.mjs';
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
-const COL_FAN = 'id, plic_id, nr_plic, stare, hash_date, awb';
+const COL_FAN = 'id, plic_id, nr_plic, stare, hash_date, awb, versiune_urmarire';
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   const raspuns = (body: unknown, status: number) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
@@ -29,6 +29,8 @@ Deno.serve(async (req: Request) => {
       rpc: (nume: string, args: Record<string, unknown>) => uc.rpc(nume, args),
       randuriLot: (lotId: string) => citesteToate(() => uc.from('red_fan_awb').select(COL_FAN).eq('lot_id', lotId), [lotId]),
       proiect: (id: string) => uc.from('red_proiecte').select('id, cod').eq('id', id).maybeSingle(),
+      // manifestul etichetelor: TOATE plicurile lotului (și cele anulate: un AWB viu pe un plic anulat se semnalează, nu se tipărește)
+      plicuriLot: (lotId: string) => citesteToate((ids: string[]) => uc.from('red_plicuri').select('id, nr_plic, stare').in('lot_id', ids), [lotId]),
       datePlicuri: async (plicIds: string[]) => {
         // aceleași citiri ca ecranul (FanAwbPrevizualizare.jsx) → același contact, același corp, același hash (L19)
         const pl = await citesteToate((ids: string[]) => uc.from('red_plicuri').select('id, proiect_id, lot_id, nr_plic, destinatar_nume, stare').in('id', ids).eq('stare', 'activ'), plicIds);
