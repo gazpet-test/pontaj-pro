@@ -362,6 +362,12 @@ async function verifica(db) {
     asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S', 'Comuna {COMUNA}: {LINK_RASPUNS}'), '22023', `C r3 mesajul final, corp (${ce})`, /link_strain/)
     asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S {COMUNA}', 'text {LINK_RASPUNS}'), '22023', `C r3 mesajul final, subiect (${ce})`, /link_strain/)
   }
+  // r5: tokenul lui D2 DUPĂ primele 64 de ferestre (lipit de un șir lung: spațiile se scot) — în bucata a 4-a / a 5-a, nu în prima; corp și subiect
+  for (const [ce, nume] of [['după 250 de caractere, într-o bucată din mijloc', `Comuna ${'Q'.repeat(250)}${T.D2}${'Q'.repeat(100)}`], ['în ultima bucată, parțială', `Comuna ${'Q'.repeat(64 * 4 - 7)} ${T.D2}`]]) {
+    await db.exec(`UPDATE public.red_uat SET nume = ${lit(nume)} WHERE id = '${UAT.A}'`)
+    asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S', 'Comuna {COMUNA}: {LINK_RASPUNS}'), '22023', `C r5 bucăți, corp (${ce})`, /link_strain/)
+    asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S {COMUNA}', 'text {LINK_RASPUNS}'), '22023', `C r5 bucăți, subiect (${ce})`, /link_strain/)
+  }
   await db.exec(`UPDATE public.red_uat SET nume = ${lit(NUME_A)} WHERE id = '${UAT.A}'`)
   // r4: (1) mesajul care NU e forma comună cu linkul lui trece prin detectorul complet — un semn combinant lipit de {LINK_RASPUNS} se compune (NFC) cu ultima
   //     literă a tokenului lui D1 („a” + U+0301 = „á”): linkul lui D1 nu mai e întreg, calea rămasă cu alt token = link_strain (la D2, „b” + U+0301 nu se
@@ -521,8 +527,11 @@ async function sectiuneaCost() {
   const r = await masoaraCost(alt ? readFileSync(alt, 'utf8').replace(/\r/g, '') : MIG)
   const c = citesteCost(r)
   console.log('     ' + (c ? JSON.stringify(c) : JSON.stringify(r).slice(0, 300)))
-  ok(c && c.verdict !== 'GRESIT' && c.mesaje === Number(COST_PARAM.destinatari) && c.mesaje_cu_linkul_lor === c.mesaje && c.rpc_ms <= PRAG_COST_RPC_MS && c.lock_setari_ms <= PRAG_COST_LOCK_MS,
-    `costul lotului mare: rpc ${c?.rpc_ms} ms, lock setări ${c?.lock_setari_ms} ms, lock numerotare ${c?.lock_numerotare_ms} ms, ${c?.mesaje} mesaje cu linkul lor${r.depasit ? ' — OPRIT LA LIMITĂ' : ''}`)
+  // r5: lock-ul global măsurat până la ULTIMA instrucțiune înaintea ROLLBACK-ului (RPC + verificarea), nu doar până la sfârșitul RPC-ului
+  ok(c && c.verdict !== 'GRESIT' && c.mesaje === Number(COST_PARAM.destinatari) && c.mesaje_cu_linkul_lor === c.mesaje && c.rpc_ms <= PRAG_COST_RPC_MS
+    && c.lock_setari_tranzactie_ms <= PRAG_COST_LOCK_MS && c.lock_numerotare_tranzactie_ms <= PRAG_COST_LOCK_MS && c.lock_setari_tranzactie_ms >= c.lock_setari_rpc_ms,
+    `costul lotului mare: rpc ${c?.rpc_ms} ms, lock setări ${c?.lock_setari_rpc_ms} ms până la sfârșitul RPC-ului / ${c?.lock_setari_tranzactie_ms} ms până la ROLLBACK, ` +
+    `lock numerotare ${c?.lock_numerotare_tranzactie_ms} ms până la ROLLBACK, ${c?.mesaje} mesaje cu linkul lor${r.depasit ? ' — OPRIT LA LIMITĂ' : ''}`)
   if (alt) return
   // mutanții de COST: fiecare TREBUIE să depășească pragul (sau limita) — proba de timp prinde întoarcerea la căutarea pătratică / fără index / fără forma comună
   for (const [nume, lista] of MUTANTI_COST) {
@@ -530,32 +539,137 @@ async function sectiuneaCost() {
     try { t = recalculeaza(aplica(MIG, lista)) } catch (e) { ok(false, `${nume}: mutantul nu se aplică (${e.message})`); continue }
     const rm = await masoaraCost(t)
     const cm = citesteCost(rm)
-    const prins = rm.depasit || (cm && (cm.rpc_ms > PRAG_COST_RPC_MS || cm.lock_setari_ms > PRAG_COST_LOCK_MS))
-    ok(prins, `MUTANT COST ${nume} — ${rm.depasit ? `oprit la limită (${rm.ms} ms)` : cm ? `rpc ${cm.rpc_ms} ms, lock ${cm.lock_setari_ms} ms` : 'eroare: ' + JSON.stringify(rm).slice(0, 200)}`)
+    const prins = rm.depasit || (cm && (cm.rpc_ms > PRAG_COST_RPC_MS || cm.lock_setari_tranzactie_ms > PRAG_COST_LOCK_MS))
+    ok(prins, `MUTANT COST ${nume} — ${rm.depasit ? `oprit la limită (${rm.ms} ms)` : cm ? `rpc ${cm.rpc_ms} ms, lock ${cm.lock_setari_tranzactie_ms} ms` : 'eroare: ' + JSON.stringify(rm).slice(0, 200)}`)
   }
 }
 // mutanții de COST (textul migrării schimbat ca să refacă costul vechi): fiecare trebuie să depășească pragul / limita
 const FARA_FORMA_COMUNA = ["  IF v_x0 IS NOT NULL AND replace(msg.corp_text_final,public.fn_red_link_raspuns(tok),'#')=v_x0 THEN\n", '  IF false THEN\n']
+// r5: ferestrele de acum (conversia o dată pe șir) și forma r4 (subinterogarea aplatizată: conversia repetată pe fiecare fereastră + DISTINCT)
+const FERESTRE_R5 = " WITH s AS MATERIALIZED (SELECT convert_to(r.m[1],'UTF8') AS b FROM regexp_matches(v,'[A-Za-z0-9_-]{43,}','g') r(m))\n" +
+  " SELECT coalesce(array_agg(convert_from(substring(s.b FROM i FOR 43),'UTF8')),ARRAY[]::text[]) INTO ferestre\n  FROM s,generate_series(1,octet_length(s.b)-42) i;"
+const FERESTRE_R4 = " SELECT coalesce(array_agg(DISTINCT w.f),ARRAY[]::text[]) INTO ferestre\n  FROM (SELECT convert_from(substring(s.b FROM i FOR 43),'UTF8') AS f\n" +
+  "          FROM (SELECT convert_to(r.m[1],'UTF8') AS b FROM regexp_matches(v,'[A-Za-z0-9_-]{43,}','g') r(m)) s,generate_series(1,octet_length(s.b)-42) i) w;"
+// mutantul „fără conversia unică” = forma r4 FĂRĂ DISTINCT (aceleași ferestre, cu repetări — trece postcondiția): doar costul îl deosebește
+const FARA_CONVERSIE_UNICA = [FERESTRE_R5, FERESTRE_R4.replace('array_agg(DISTINCT w.f)', 'array_agg(w.f)')]
+// r5: căutarea tokenurilor pe bucăți (detectorul și forma comună a lotului)
+const BUC_STRAIN = " FOR buc IN SELECT array_agg(w.f) FROM unnest(v_fer) WITH ORDINALITY w(f,o) GROUP BY (w.o-1)/64 LOOP\n" +
+  "  IF EXISTS(SELECT 1 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(buc) AND t.token_raspuns IS DISTINCT FROM p_token) THEN RETURN true; END IF;\n END LOOP;\n RETURN false;"
+const BUC_LOT = "  FOR v_buc IN SELECT array_agg(w.f) FROM unnest(v_fer0) WITH ORDINALITY w(f,o) GROUP BY (w.o-1)/64 LOOP\n" +
+  "   v_gasite0:=v_gasite0||ARRAY(SELECT t.token_raspuns FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_buc));\n  END LOOP;"
 const MUTANTI_COST = [
   // ca în r3: ferestrele cu substr pe TEXT (în UTF-8 substr numără caracterele de la început: pătratic) și detectorul complet pe fiecare mesaj
   ['ferestrele cu substr pe text + detectorul pe fiecare mesaj (costul r3)', [FARA_FORMA_COMUNA,
-    ["  FROM (SELECT convert_from(substring(s.b FROM i FOR 43),'UTF8') AS f\n          FROM (SELECT convert_to(r.m[1],'UTF8') AS b FROM regexp_matches(v,'[A-Za-z0-9_-]{43,}','g') r(m)) s,generate_series(1,octet_length(s.b)-42) i) w;",
-     "  FROM (SELECT substr(s.b,i,43) AS f\n          FROM (SELECT r.m[1] AS b FROM regexp_matches(v,'[A-Za-z0-9_-]{43,}','g') r(m)) s,generate_series(1,length(s.b)-42) i) w;"]]],
+    [FERESTRE_R5, " SELECT coalesce(array_agg(w.f),ARRAY[]::text[]) INTO ferestre\n  FROM (SELECT substr(s.b,i,43) AS f\n" +
+      "          FROM (SELECT r.m[1] AS b FROM regexp_matches(v,'[A-Za-z0-9_-]{43,}','g') r(m)) s,generate_series(1,length(s.b)-42) i) w;"]]],
   // fără forma comună: detectorul (liniar) pe fiecare dintre cele 300 de mesaje, sub lock-ul global
   ['fără forma comună (detectorul complet pe fiecare mesaj, sub lock)', [FARA_FORMA_COMUNA]],
   // fără index: fiecare token existent comparat cu fiecare fereastră (strpos nu folosește nici indexul, nici hash-ul) — scanarea completă
   ['fără index: scanarea tuturor tokenurilor pe fiecare fereastră', [
-    [" RETURN EXISTS(SELECT 1 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_fer) AND t.token_raspuns IS DISTINCT FROM p_token);",
-     " RETURN EXISTS(SELECT 1 FROM public.red_detinatori_token t,unnest(v_fer) w WHERE strpos(t.token_raspuns,w)=1 AND t.token_raspuns IS DISTINCT FROM p_token);"],
-    ["  SELECT coalesce(array_agg(t.token_raspuns),ARRAY[]::text[]) INTO v_gasite0 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_fer0);",
-     "  SELECT coalesce(array_agg(DISTINCT t.token_raspuns),ARRAY[]::text[]) INTO v_gasite0 FROM public.red_detinatori_token t,unnest(v_fer0) w WHERE strpos(t.token_raspuns,w)=1;"]]],
+    [BUC_STRAIN, " RETURN EXISTS(SELECT 1 FROM public.red_detinatori_token t,unnest(v_fer) w WHERE strpos(t.token_raspuns,w)=1 AND t.token_raspuns IS DISTINCT FROM p_token);"],
+    [BUC_LOT, "  SELECT coalesce(array_agg(DISTINCT t.token_raspuns),ARRAY[]::text[]) INTO v_gasite0 FROM public.red_detinatori_token t,unnest(v_fer0) w WHERE strpos(t.token_raspuns,w)=1;"]]],
 ]
+
+// ── 7b. CREȘTEREA (r5, Jakarinos #1138 r4 P2): detectorul complet (fn_red_mail_f2_link_strain = forma + căutarea tokenurilor) pe un șir base64url de
+//    4.000 / 8.000 / 16.000 / 19.000 de caractere (ferestre toate diferite), cu 20.000 de tokenuri existente și statistici (ANALYZE): timpul trebuie să
+//    crească ~LINIAR și să rămână sub PRAG_19K_MS. Poarta de creștere = un punct EXTINS de 76.000 de caractere (de 4 ori 19k; doar funcția — plafonul
+//    lotului rămâne 19.000): 76k / 19k ≤ RAPORT_CRESTERE (liniar = 4, pătratic = 16). Raportul 19k / 4k doar se afișează: la timpi de câteva ms zgomotul
+//    îl mută între 4,3 și 6,1, iar partea pătratică a formei r4 abia începe să se vadă (8,5). Căutarea tokenurilor = DOAR indexul (pg_stat: zero scanări
+//    secvențiale ale tabelului în timpul apelului; EXPLAIN pe interogările EXACTE din migrare, cu o bucată de 64 de ferestre: indexul unic, în planul cu
+//    valori și în cel generic). Fiecare măsurătoare = mediana a 5 rulări, fiecare rulare = 5 apeluri. Mutanți: fără conversia unică (forma r4) →
+//    raportul depășit; fără bucăți (un singur `= ANY(toate ferestrele)`) → interogarea pe bucăți lipsește.
+const MARIMI = [4000, 8000, 16000, 19000, 76000], RAPORT_CRESTERE = 6, PRAG_19K_MS = 200, NR_TOK_CRESTERE = 20000
+const TEXT_CRESTERE = n => `(SELECT left(string_agg(substr(md5('crestere-' || i), 1, 7), ' ' ORDER BY i), ${n}) FROM generate_series(1, ${n} / 8 + 2) i)`
+async function bazaCrestere(textMig) {
+  const db = await bazaNoua()
+  await aplicaMig(db, textMig)
+  await db.exec(`INSERT INTO public.red_detinatori (id, parcela_id, nume) SELECT ('0c0570c0-0000-4000-8000-' || lpad(to_hex(i), 12, '0'))::uuid, '${PAR.A2}', 'CRESTERE ' || i FROM generate_series(1, ${NR_TOK_CRESTERE}) i;
+    INSERT INTO public.red_detinatori_token (detinator_id, token_raspuns, token_expira_la) SELECT ('0c0570c0-0000-4000-8000-' || lpad(to_hex(i), 12, '0'))::uuid,
+      rtrim(translate(encode(sha256(convert_to('crestere-t-' || i, 'UTF8')), 'base64'), '+/', '-_'), '='), now() + interval '30 days' FROM generate_series(1, ${NR_TOK_CRESTERE}) i;
+    ANALYZE public.red_detinatori_token;`)
+  for (const n of MARIMI) await db.exec(`SELECT set_config('crestere.t${n}', ${TEXT_CRESTERE(n)}, false)`)
+  return db
+}
+async function masoaraCrestere(db) {
+  const timpi = {}
+  for (const n of MARIMI) {
+    const r = []
+    for (let k = 0; k < 5; k++) {
+      const t0 = performance.now()
+      await db.exec(`DO $c$ BEGIN FOR k IN 1..5 LOOP PERFORM public.fn_red_mail_f2_link_strain(current_setting('crestere.t${n}'), NULL); END LOOP; END $c$`)
+      r.push(performance.now() - t0)
+    }
+    timpi[n] = Math.round(r.sort((a, b) => a - b)[2] / 5 * 10) / 10
+  }
+  return timpi
+}
+const scanari = async db => {
+  await db.query('SELECT pg_stat_force_next_flush()'); await db.query('SELECT pg_stat_clear_snapshot()')
+  return (await db.query(`SELECT seq_scan::int AS s, idx_scan::int AS i FROM pg_stat_user_tables WHERE relid = 'public.red_detinatori_token'::regclass`)).rows[0]
+}
+// interogările de căutare EXACT din textul migrării (bucata → $1, tokenul → $2)
+const RX_Q_STRAIN = /IF EXISTS\((SELECT 1 FROM public\.red_detinatori_token t WHERE t\.token_raspuns=ANY\(buc\) AND t\.token_raspuns IS DISTINCT FROM p_token)\) THEN RETURN true;/
+const RX_Q_LOT = /ARRAY\((SELECT t\.token_raspuns FROM public\.red_detinatori_token t WHERE t\.token_raspuns=ANY\(v_buc\))\);/
+async function sectiuneaCrestere() {
+  console.log(`7b. CREȘTEREA: fn_red_mail_f2_link_strain pe ${MARIMI.join(' / ')} caractere, ${NR_TOK_CRESTERE} tokenuri (ANALYZE); 76k/19k ≤ ${RAPORT_CRESTERE}, 19k ≤ ${PRAG_19K_MS} ms; doar indexul`)
+  const db = await bazaCrestere(MIG)
+  const t = await masoaraCrestere(db)
+  const rap = x => `19k/4k = ${(x[19000] / x[4000]).toFixed(1)}, 16k/8k = ${(x[16000] / x[8000]).toFixed(1)}, 76k/19k = ${(x[76000] / x[19000]).toFixed(1)}`
+  console.log('     timpi pe apel (ms): ' + JSON.stringify(t) + ', ' + rap(t))
+  ok(t[19000] <= PRAG_19K_MS && t[76000] / t[19000] <= RAPORT_CRESTERE, `creșterea ~liniară: 19k = ${t[19000]} ms (prag ${PRAG_19K_MS}), 76k/19k = ${(t[76000] / t[19000]).toFixed(1)} (prag ${RAPORT_CRESTERE})`)
+  const nf = Number((await db.query(`SELECT cardinality(f.ferestre) AS n FROM public.fn_red_mail_f2_link_forma(current_setting('crestere.t19000')) f`)).rows[0].n)
+  const s0 = await scanari(db)
+  const rez = (await db.query(`SELECT public.fn_red_mail_f2_link_strain(current_setting('crestere.t19000'), NULL) AS x`)).rows[0].x
+  const s1 = await scanari(db)
+  ok(rez === false && nf > 16000 && s1.s === s0.s && s1.i > s0.i, `19k: ${nf} ferestre, ${NR_TOK_CRESTERE} tokenuri — scanări secvențiale ale tokenurilor ${s1.s - s0.s}, scanări de index ${s1.i - s0.i}`)
+  // un token existent în fereastra de după prima bucată (poziția 200) și în ultima bucată, parțială: tot găsit (bucățile acoperă toate ferestrele)
+  const tok = (await db.query(`SELECT token_raspuns AS t FROM public.red_detinatori_token WHERE detinator_id = '0c0570c0-0000-4000-8000-000000000007'`)).rows[0].t
+  const g = async sql => (await db.query(`SELECT public.fn_red_mail_f2_link_strain(${sql}, NULL) AS x`)).rows[0].x
+  ok(await g(`repeat('Q', 199) || '${tok}' || repeat('Q', 300)`) === true && await g(`repeat('Q', 64 * 3 + 5) || '${tok}'`) === true && await g(`repeat('Q', 64 * 3 + 5) || '${tok.slice(0, 42)}'`) === false,
+    'tokenul existent găsit oriunde: în bucata a 4-a, în ultima bucată (parțială); 42 de caractere = nu')
+  // EXPLAIN pe interogările exacte din migrare, cu o bucată reală de 64 de ferestre
+  const qs = RX_Q_STRAIN.exec(MIG)?.[1], ql = RX_Q_LOT.exec(MIG)?.[1]
+  ok(qs && ql && (MIG.match(/GROUP BY \(w\.o-1\)\/64 LOOP/g) || []).length === 2, 'interogările de căutare pe bucăți de 64 (detectorul + forma comună a lotului) există în migrare')
+  if (qs && ql) {
+    const buc = (await db.query(`SELECT f.ferestre[1:64] AS b FROM public.fn_red_mail_f2_link_forma(current_setting('crestere.t19000')) f`)).rows[0].b
+    const arr = `ARRAY[${buc.map(lit).join(',')}]::text[]`
+    const plan = async sql => (await db.query('EXPLAIN ' + sql)).rows.map(x => x['QUERY PLAN']).join('\n')
+    const pS = await plan(qs.replace('ANY(buc)', `ANY(${arr})`).replace('p_token', 'NULL')), pL = await plan(ql.replace('ANY(v_buc)', `ANY(${arr})`))
+    await db.exec(`PREPARE q_s(text[], text) AS ${qs.replace('ANY(buc)', 'ANY($1)').replace('p_token', '$2')}; PREPARE q_l(text[]) AS ${ql.replace('ANY(v_buc)', 'ANY($1)')}; SET plan_cache_mode = force_generic_plan;`)
+    const gS = await plan(`EXECUTE q_s(${arr}, NULL)`), gL = await plan(`EXECUTE q_l(${arr})`)
+    await db.exec('RESET plan_cache_mode')
+    const peIndex = p => /Index (Only )?Scan|Bitmap Index Scan/.test(p) && /red_detinatori_token_token_raspuns_key/.test(p) && !/Seq Scan/.test(p)
+    for (const [n, p] of [['detectorul, cu valori', pS], ['detectorul, generic', gS], ['forma comună, cu valori', pL], ['forma comună, generic', gL]]) {
+      ok(peIndex(p), `EXPLAIN ${n}: indexul unic (${p.split('\n')[0].replace(/\s+\(cost.*$/, '')} / ${(p.match(/(Bitmap )?Index (Only )?Scan[^(]*/) || [''])[0].trim()})`)
+      if (n.endsWith('cu valori') && process.argv.includes('--arata-planuri')) console.log(p.replace(/'\{[^}]*\}'/g, m => `'{… ${m.split(',').length} valori …}'`).replace(/^/gm, '        '))
+    }
+  }
+  await db.close()
+  if (argv('--cost-mig')) return
+  // mutanții de CREȘTERE
+  for (const [nume, lista] of [['fără conversia unică (forma r4 fără DISTINCT: subinterogarea aplatizată, conversia repetată pe fiecare fereastră)', [FARA_CONVERSIE_UNICA]]]) {
+    let tm
+    try { tm = recalculeaza(aplica(MIG, lista)) } catch (e) { ok(false, `${nume}: mutantul nu se aplică (${e.message})`); continue }
+    let dbm
+    try { dbm = await bazaCrestere(tm) } catch (e) { ok(false, `${nume}: mutantul nu se aplică (${e.message.slice(0, 120)})`); continue }
+    const x = await masoaraCrestere(dbm)
+    await dbm.close()
+    ok(x[19000] > PRAG_19K_MS || x[76000] / x[19000] > RAPORT_CRESTERE, `MUTANT CREȘTERE ${nume} — ${JSON.stringify(x)}, ${rap(x)}`)
+  }
+  {
+    const nume = 'fără bucăți (un singur = ANY(toate ferestrele), ca în r4)'
+    const tm = aplica(MIG, [[BUC_STRAIN, ' RETURN EXISTS(SELECT 1 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_fer) AND t.token_raspuns IS DISTINCT FROM p_token);'],
+      [BUC_LOT, '  SELECT coalesce(array_agg(t.token_raspuns),ARRAY[]::text[]) INTO v_gasite0 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_fer0);']])
+    ok(!(RX_Q_STRAIN.test(tm) && RX_Q_LOT.test(tm)), `MUTANT CREȘTERE ${nume} — interogările pe bucăți lipsesc (verificarea structurală de mai sus pică)`)
+  }
+}
 
 // ── manifestul L15: lista obiectelor (familie, etichetă, operație) = diferența generată de pașii runnerului ──
 const listaObiecte = text => text.split('\n').filter(l => l && !l.startsWith('#')).map(l => l.split('\t').slice(0, 3).join('\t')).sort()
 const faraPg18 = l => !/^constrangere\tconstrangere tabel [^\t]*_not_null\tcreat$/.test(l)
 
 if (process.argv.includes('--doar-cost')) {
+  await sectiuneaCrestere()
   await sectiuneaCost()
   console.log(esec ? `\nESEC: ${esec} verificări au picat` : '\nPASS: toate verificările au trecut')
   process.exit(esec ? 1 : 0)
@@ -798,10 +912,14 @@ const MUTANTI = [
   ['linkul literal acceptat peste tot (refuzul șablonului ȘI verificarea mesajului final scoase)', [[" IF public.fn_red_mail_f2_link_strain(p_subiect,NULL) OR public.fn_red_mail_f2_link_strain(p_text,NULL) THEN RAISE EXCEPTION 'link_literal' USING ERRCODE='22023'; END IF;\n", ''],
     ["  IF v_strain THEN RAISE EXCEPTION 'link_strain' USING ERRCODE='22023'; END IF;\n", ''],
     [" IF public.fn_red_mail_f2_link_strain(subiect,NULL) THEN RAISE EXCEPTION 'link_strain' USING ERRCODE='22023'; END IF;\n", '']]],
-  ['tokenul copiat fără adresă nu e văzut (lookup-ul în red_detinatori_token scos, în detector și în forma comună)', [[" RETURN EXISTS(SELECT 1 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_fer) AND t.token_raspuns IS DISTINCT FROM p_token);", ' RETURN false;'],
-    ["  SELECT coalesce(array_agg(t.token_raspuns),ARRAY[]::text[]) INTO v_gasite0 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_fer0);", '  v_gasite0:=ARRAY[]::text[];']]],
+  ['tokenul copiat fără adresă nu e văzut (lookup-ul în red_detinatori_token scos, în detector și în forma comună)', [[BUC_STRAIN, ' RETURN false;'], [BUC_LOT, '']]],
   // r4: forma comună a lotului — fiecare ramură a ei trebuie să conteze
-  ['forma comună fără căutarea tokenurilor (tokenul altuia dintr-o valoare de câmp nu e văzut)', [["  SELECT coalesce(array_agg(t.token_raspuns),ARRAY[]::text[]) INTO v_gasite0 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_fer0);", '  v_gasite0:=ARRAY[]::text[];']]],
+  ['forma comună fără căutarea tokenurilor (tokenul altuia dintr-o valoare de câmp nu e văzut)', [[BUC_LOT, '']]],
+  // r5: căutarea pe bucăți — fiecare bucată trebuie să conteze (tokenul altuia după primele 64 de ferestre: cazurile C r5)
+  ['detectorul: doar prima bucată de ferestre', [['FROM unnest(v_fer) WITH ORDINALITY', 'FROM unnest(v_fer[1:64]) WITH ORDINALITY']]],
+  ['forma comună: doar prima bucată de ferestre', [['FROM unnest(v_fer0) WITH ORDINALITY', 'FROM unnest(v_fer0[1:64]) WITH ORDINALITY']]],
+  ['detectorul: ultima bucată (parțială) ignorată', [['GROUP BY (w.o-1)/64 LOOP\n  IF EXISTS', 'GROUP BY (w.o-1)/64 HAVING count(*)=64 LOOP\n  IF EXISTS']]],
+  ['forma comună: ultima bucată (parțială) ignorată', [['GROUP BY (w.o-1)/64 LOOP\n   v_gasite0', 'GROUP BY (w.o-1)/64 HAVING count(*)=64 LOOP\n   v_gasite0']]],
   ['forma comună folosită fără comparația cu mesajul (diferențele de după completare nu mai trec prin detectorul complet)', [["  IF v_x0 IS NOT NULL AND replace(msg.corp_text_final,public.fn_red_link_raspuns(tok),'#')=v_x0 THEN\n", '  IF v_x0 IS NOT NULL THEN\n']]],
   ['forma comună fără prinderea refuzului (reluarea idempotentă a unei intenții existente refuzată înainte de lock)', [[" EXCEPTION WHEN OTHERS THEN v_x0:=NULL; v_cale0:=NULL; v_fer0:=NULL;\n", '']]],
   ['forma comună fără cale (calea formularului dintr-o valoare de câmp nu e văzută)', [['   v_strain:=v_cale0 OR EXISTS(', '   v_strain:=coalesce(v_cale0 AND false,false) OR EXISTS(']]],
@@ -880,6 +998,7 @@ for (const [nume, lista, pregatire] of [
   await db.close()
 }
 
+await sectiuneaCrestere()
 await sectiuneaCost()
 
 console.log(esec ? `\nESEC: ${esec} verificări au picat` : '\nPASS: toate verificările au trecut')

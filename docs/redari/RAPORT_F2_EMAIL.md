@@ -63,6 +63,14 @@ linkului), ÎNAINTEA lock-ului global; sub lock rămân căutarea tokenurilor ei
 forma comună; altfel detectorul complet). Plafon explicit pe lungimea brută: text > 19.000 / subiect > 400 = `text_prea_lung`. Măsurat în PGlite (300 ×
 19.000, 20.000 de tokenuri sintetice): înainte RPC 267 s / lock 267 s, după RPC ~2,8 s / lock ~1,3 s; proba de timp (pragurile PGlite 10 s / 6 s) prinde
 mutanții „costul r3”, „fără forma comună” și „fără index”. Pe clonă: `supabase/tests/20261131i_redari_mail_link_cost.sql` (+ `_cost_concurenta.sh`, două sesiuni) — `MAIL_PROBA_PASI.md` §3.
+**Runda 5 (Jakarinos #1138 r4, NO-GO pe 91c0119f; două P2):** (1) plannerul muta conversia în octeți a șirului întreg în bucla ferestrelor (pătratic:
+55 / 197 / 722 ms la 4k / 8k / 16k), iar `= ANY(toate ferestrele)` putea alege scanarea tuturor tokenurilor. Acum: fiecare șir e convertit o singură dată
+(CTE MATERIALIZED), fără DISTINCT, iar tokenurile se caută pe bucăți de cel mult 64 de ferestre (`= ANY(bucată)` → indexul unic; o bucată costă cel mult 64
+de coborâri în index, deci scanarea tabelului e aleasă doar pe un tabel mic). Regula și cele 49 de cazuri neschimbate. Proba PGlite §7b: timpii pe 4k / 8k /
+16k / 19k cresc liniar, zero scanări secvențiale ale tokenurilor, EXPLAIN pe interogările exacte = indexul (cu valori și generic); mutantul „fără conversia
+unică” depășește pragul. (2) Scriptul cu două sesiuni compară explicit cu pragul (2000 ms) fiecare durată — A: RPC + lock-urile până la ROLLBACK, B: blocarea
+văzută pe setări și pe numerotare (acum prin același UPSERT ca RPC-ul, ca să vadă și rândul M nou) — și iese cu ESEC peste prag; testul mecanicii (psql fals)
++ mutanții comparației: `src/redari/mailLinkCostConcurenta.test.js`. Fixture-ul de cost folosește `id_parcela` = `CST-0001` (regula UAT a parcelelor).
 
 # Runda 2 — PR #1000, 05.11.2026
 

@@ -118,8 +118,11 @@ conectare (pasul 4), prin RPC-ul `fn_red_mail_secret_seteaza` (doar `service_rol
    **Costul pe clonă (runda 4, ÎNAINTE de îmbinare)**: după aplicarea pe clonă, `psql -X -v ON_ERROR_STOP=1 -v clona=da -f supabase/tests/20261131i_redari_mail_link_cost.sql`
    (implicit 300 de destinatari × 19.000 de caractere, 20.000 de tokenuri sintetice în plus față de cele ale clonei, `statement_timeout` 8 s ca PostgREST,
    pragul 2000 ms; parametrii `-v destinatari= caractere= tokenuri= timeout= prag_ms=`) — totul într-o tranzacție anulată la final, date sintetice; raportul
-   `COST 20261131i: … rpc_ms … lock_setari_ms … lock_numerotare_ms … verdict=OK`. Cu două sesiuni (cât stă blocată o altă sesiune pe setări / numerotarea M):
-   `COST_CLONA=da bash supabase/tests/20261131i_redari_mail_link_cost_concurenta.sh` → `REZULTAT: OK`. Dacă verdictul e `DEPASIT`, nu se îmbină.
+   `COST 20261131i: … rpc_ms … lock_setari_rpc_ms … lock_setari_tranzactie_ms … lock_numerotare_tranzactie_ms … verdict=OK` (r5: duratele „tranzactie” țin
+   lock-urile până la ultima instrucțiune înaintea ROLLBACK-ului; verdictul OK cere rpc_ms și ambele durate ≤ prag). Cu două sesiuni (cât stă blocată o altă
+   sesiune pe setări / numerotarea M): `COST_CLONA=da bash supabase/tests/20261131i_redari_mail_link_cost_concurenta.sh` → scriptul compară explicit cu
+   pragul fiecare durată (A: rpc + lock-urile până la ROLLBACK; B: blocarea văzută pe setări și pe numerotare) și scrie `REZULTAT: OK` doar dacă toate sunt
+   ≤ 2000 ms. Dacă verdictul e `DEPASIT` sau scriptul iese cu ESEC, nu se îmbină.
 2. GitHub → Actions → **„Deploy edge function (manual)”** → `slug` = `redari-mail-oauth`, apoi din nou cu `slug` = `redari-mail-trimite` (de pe
    `main`). Ambele se publică cu `verify_jwt = true` (callback-ul OAuth vine din pagina ERP cu JWT-ul omului, nu direct de la Google).
 3. Identificarea commit-ului publicat (rândul (c) din §0): `git rev-parse origin/main` = SHA-ul din rezumatul workflow-ului; în Supabase, Code:
