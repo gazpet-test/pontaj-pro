@@ -388,7 +388,8 @@ export function textPlafonAzi(plafon) {
  * mai multe plicuri decât încap → TOATĂ trimiterea așteaptă aprobarea.
  */
 export function stareTrimitere({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOperator = null, fanLot = null, proiectCod = null, selectate = 0, plafon = null, intentieVie = null, acumMs = Date.now() } = {}) {
-  const oprit = motivTransport({ transportActiv, proiectCod, fanLot, cereMarcaj: false })   // marcajul îl pune comanda (automat); BD-ul refuză lotul REAL (RD032)
+  // marcajul îl pune comanda (automat), deci doar proiectul se verifică aici (cereMarcaj: false); BD-ul refuză lotul REAL (RD032)
+  const oprit = motivTransport({ transportActiv, fanLot, proiectCod, cereMarcaj: false })
   if (oprit) return { activ: false, motiv: oprit, avertisment: '' }
   if (!evidentaInstalata) return { activ: false, motiv: 'evidența FAN nu e instalată (migrarea neaplicată)', avertisment: '' }
   if (esteOperator === null) return { activ: false, motiv: 'dreptul de operator nu s-a putut verifica (reîncarcă)', avertisment: '' }
