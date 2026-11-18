@@ -10,6 +10,7 @@ import { uat3 as uat3Din } from '../idParcela.js'
 import { CAMPURI_UAT, COL_UAT, ZILE_SESIUNE, normalizeaza, cheiSchimbate, valideazaUat, avertismenteUat, recomandariUat, MESAJ_TERMEN_RECOMANDAT, dataTintaRecomandata, lipsuriUat, motiveGataConvocare, rezumatZile, conflicteConcurente } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
 import { avertismentInformare, cuInformarePublicata } from '../informareGdpr.js'
+import { textProblemeIdentificatori, MESAJ_IDENTIFICATORI_REFUZATI } from '../identificatoriPublici.js'
 
 // audit D8: acordul la singular („1 parcelă”), ca în restul ERP-ului
 export const numarParcele = n => (Number(n) === 1 ? '1 parcelă' : `${n} parcele`)
@@ -114,6 +115,9 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
   // anunțul de afișare (plan pct. 4.3 + cap. 8): fără date personale, fără număr, fără salvare în ERP → îl poate genera și editorul
   const poateAnunt = poateDescarca
   const lipsuriAnunt = verificaDateAnuntAfisare({ proiect, uat })
+  // parcelele refuzate la ultima generare (identificatori fără forma așteptată: id_parcela + câmp, fără valori) — rămân sub buton
+  const [refuzAnunt, setRefuzAnunt] = useState(null)
+  useEffect(() => { setRefuzAnunt(null) }, [uat.id])
   // termenul de 10 zile al afișării (plan pct. 4.3): vizibil mereu, confirmat la salvare, fără blocaj (data afișării e un fapt)
   const avertismente = avertismenteUat(form)
   const recomandari = recomandariUat(form)   // juridic#031: ținta ziua 1 − 15 — afișată, NU cerută la confirmarea salvării
@@ -207,6 +211,7 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
     const token = ++generatie.current
     const id = uat.id
     const curent = () => generatie.current === token && id === uat.id
+    setRefuzAnunt(null)
     try {
       const parcele = await citestePaginat(() => supabase.from('red_v_parcele').select(COL_PARCELA_ANUNT)
         .eq('proiect_id', proiect.id).eq('uat_id', id).is('sters_la', null), { cheie: 'id_parcela', esteCurent: curent })
@@ -230,7 +235,12 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
       if (!curent()) return
       descarcaBlob(blob, `Anunt_afisare_${uatProaspat.uat3}_${aziBucuresti()}.docx`)
       show(`Anunțul de afișare pentru ${uatProaspat.nume} e generat (${numarParcele(randuri)}). Nu se salvează în ERP: după lipire, treci perioada și nr. PV de afișare în acest formular.`, 'success')
-    } catch (err) { if (curent()) show('Anunț de afișare: ' + msgEroare(err), 'error') }
+    } catch (err) {
+      if (!curent()) return
+      // identificatori refuzați: lista exactă (parcelă + câmp) rămâne sub buton, ca să poată fi corectate în Fișa parcelei
+      if (Array.isArray(err?.probleme) && err.probleme.length) setRefuzAnunt(`${MESAJ_IDENTIFICATORI_REFUZATI}: ${textProblemeIdentificatori(err.probleme)}`)
+      show('Anunț de afișare: ' + msgEroare(err), 'error')
+    }
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
 
@@ -328,6 +338,7 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
         {esteAdmin && nesalvat && <div style={{ color: G.yellow }}>Salvează modificările înainte de generarea documentelor.</div>}
         {esteAdmin && lipsuriAdresa.length > 0 && <div style={{ color: G.yellow, fontSize: 12 }}>Adresa UAT: {lipsuriAdresa.join('; ')}</div>}
         {poateAnunt && lipsuriAnunt.length > 0 && <div style={{ color: G.yellow, fontSize: 12 }}>Anunț de afișare: {lipsuriAnunt.join('; ')}</div>}
+        {poateAnunt && refuzAnunt && <div role="alert" style={{ color: G.red, fontSize: 12, marginTop: 4 }}>{refuzAnunt}</div>}
       </div>}
       {erori.length > 0 && (
         <div style={{ marginTop: 12, padding: 10, borderRadius: 7, background: G.redDim, color: G.red, fontSize: 12.5 }}>

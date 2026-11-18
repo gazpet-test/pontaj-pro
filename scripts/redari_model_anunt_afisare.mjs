@@ -30,8 +30,11 @@ export const UAT_MODEL = {
   sesiune_zi2: DATA_MODEL, program_zi2: '09:00 – 19:00 (program prelungit)', sate_zi2: L(20),
   sesiune_zi3: DATA_MODEL, program_zi3: '09:00 – 16:00', sate_zi3: L(20),
 }
-export const PARCELE_MODEL = Array.from({ length: 6 }, (_, i) => ({ id_parcela: `T0-MOD-${String(i + 1).padStart(4, '0')}`, sat: L(12), tarla: 'T___', nr_cadastral: L(8), poz_hg: L(5), tronson: '__', sters_la: null }))
-// exemplu sintetic (DOAR pentru paginare): sate „Satul Exemplu A/B”, tarlale T1..T12, numere cadastrale fictive
+// toate celulele = doar „____” (marcajul „necompletat” acceptat de forma identificatorilor; „T___” ar fi refuzat ca tarla)
+export const PARCELE_MODEL = Array.from({ length: 6 }, (_, i) => ({ id_parcela: `T0-MOD-${String(i + 1).padStart(4, '0')}`, sat: L(12), tarla: L(4), nr_cadastral: L(8), poz_hg: L(5), tronson: '__', sters_la: null }))
+// exemplu sintetic (DOAR pentru paginare): sate „Satul Exemplu A/B/C”, tarlale T1..T12, numere cadastrale fictive; satele trebuie
+// declarate la sesiuni (UAT_EXEMPLU), altfel generatorul refuză satul (identificatoriPublici.js)
+export const UAT_EXEMPLU = { ...UAT_MODEL, nume: 'Comuna Exemplu', sate_zi1: 'Satul Exemplu A', sate_zi2: 'Satul Exemplu B', sate_zi3: 'Satul Exemplu C' }
 export const parceleExemplu = n => Array.from({ length: n }, (_, i) => ({ id_parcela: `T0-EXE-${String(i + 1).padStart(4, '0')}`, sat: `Satul Exemplu ${'ABC'[i % 3]}`, tarla: `T${(i % 12) + 1}`, nr_cadastral: String(1000 + ((i * 37) % 500)), poz_hg: String(((i * 11) % 300) + 1), tronson: (i % 3) + 1, sters_la: null }))
 
 const dez = s => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
@@ -65,7 +68,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === fileURLToPath(new URL(
   writeFileSync(`${baza}.txt`, '﻿' + await textDocx(model.blob) + '\n', 'utf8')
   console.log(`${baza}.docx  sha256=${model.hash}  parcele=${model.randuri}  chei=${CHEI_ANUNT_AFISARE.length}`)
   if (process.argv.includes('--exemplu')) {
-    const ex = await genereazaAnuntAfisare({ proiect: PROIECT_MODEL, uat: { ...UAT_MODEL, nume: 'Comuna Exemplu' }, parcele: parceleExemplu(150), templateArrayBuffer, dataDocument: '2026-11-18' })
+    const ex = await genereazaAnuntAfisare({ proiect: PROIECT_MODEL, uat: UAT_EXEMPLU, parcele: parceleExemplu(150), templateArrayBuffer, dataDocument: '2026-11-18' })
     const cale = resolve(dosar, 'Exemplu_TEST_anunt_afisare_150_parcele.docx')
     writeFileSync(cale, Buffer.from(await ex.blob.arrayBuffer()))
     console.log(`${cale}  sha256=${ex.hash}  parcele=${ex.randuri}`)

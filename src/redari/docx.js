@@ -25,6 +25,7 @@ import QRCode from 'qrcode'
 import { COL_UAT, termenAfisare, mesajTermenAfisare, areZiCuProgram } from './setari.js'
 import { TEXT_INFORMARE_LOT1, informarePublicataPeProiect, informareVerificareEsuata, informareGata, blocuri, segmenteInline, TRIMITERE_VERSO_GDPR, MOTIV_INFORMARE_NEPUBLICATA } from './informareGdpr.js'
 import { ORIGINE_PUBLICA_REDARI } from './domeniuPublic.js'
+import { verificaIdentificatoriPublicati, textProblemeIdentificatori, MESAJ_IDENTIFICATORI_REFUZATI } from './identificatoriPublici.js'
 
 // Denumirea Antreprenorului/liderului; se modifica in cod daca Asocierea este alta.
 export const ANTREPRENOR = 'GAZPET INSTAL S.R.L.'
@@ -943,7 +944,8 @@ export async function salveazaAdresaUat(supabase, { blob, proiectCod, uat, nrDoc
 // ─── Anunțul de afișare la primărie (convocarea pe UAT) — planul procedurii de predare rev. 1 (18.11.2026), pct. 4.3 + cap. 8 ───
 // Textul: docs/redari/TEXT_ANUNT_AFISARE.md → șablonul public/redari/sabloane/anunt_afisare.docx (scripts/redari_sablon_anunt_afisare.mjs).
 // Se lipește la intrarea în primărie, pentru TOȚI deținătorii (și cei neidentificați / fără adresă), deci NU conține date personale:
-// din parcele intră DOAR coloanele din CAMPURI_PARCELA_ANUNT; deținătorii nu sunt citiți deloc. Nu se numerotează și nu se salvează în
+// din parcele intră DOAR coloanele din CAMPURI_PARCELA_ANUNT, fiecare valoare cu forma câmpului verificată (identificatoriPublici.js;
+// altfel generarea e blocată cu lista parcelelor de corectat); deținătorii nu sunt citiți deloc. Nu se numerotează și nu se salvează în
 // ERP (afișarea se consemnează prin PV-ul de afișare al primăriei: red_uat.afisare_*); documentul se descarcă din 🏛️ UAT-uri.
 export const SABLON_ANUNT_AFISARE = '/redari/sabloane/anunt_afisare.docx'
 /** Pagina publică a informării GDPR (aceeași pentru toți — fără link personal); tipărită pe anunț, cu QR-ul ei. */
@@ -1001,6 +1003,8 @@ export function randuriAnuntAfisare(parcele = []) {
 /**
  * Anunțul de afișare al unui UAT (DOCX). Strict implicit: lipsurile (verificaDateAnuntAfisare) și UAT-ul fără parcele active
  * opresc generarea; `strict: false` DOAR pentru previzualizare. Nu primește și nu citește deținători.
+ * Identificatorii publicați (CAMPURI_PARCELA_ANUNT) trec prin `verificaIdentificatoriPublicati` INDIFERENT de `strict` (review #1137 P1):
+ * o valoare fără forma așteptată a câmpului nu se publică niciodată — eroarea poartă `probleme` = [{ id_parcela, camp }] (fără valori).
  * @returns {Promise<{ blob: Blob, hash: string, campuri: Record<string,string>, randuri: number, lipsuri: string[] }>}
  */
 export async function genereazaAnuntAfisare({ proiect = {}, uat = {}, parcele = [], templateArrayBuffer, strict = true, dataDocument = aziBucuresti() }) {
@@ -1010,6 +1014,12 @@ export async function genereazaAnuntAfisare({ proiect = {}, uat = {}, parcele = 
   const rand = randuriAnuntAfisare(parcele)
   if (strict && !rand.length) throw new Error(MESAJ_ANUNT_FARA_PARCELE)
   const pr = proiect || {}, u = uat || {}
+  const probleme = verificaIdentificatoriPublicati(parcele.filter(p => p && p.sters_la == null), CAMPURI_PARCELA_ANUNT, u)
+  if (probleme.length) {
+    const err = new Error(`${MESAJ_IDENTIFICATORI_REFUZATI} — ${textProblemeIdentificatori(probleme)}`)
+    err.probleme = probleme
+    throw err
+  }
   const campuri = {
     ...campuriContractProiect(pr), ...campuriSesiuniUat(u), ...campuriContactGazpet(pr),
     uat: u.nume ?? '', judet: u.judet ?? '', data: formatDataRo(dataDocument),

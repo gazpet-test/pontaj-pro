@@ -41,7 +41,9 @@ Ce blochează azi (verificat în tab, 04.11.2026):
   formular și SMS-ul.
 - **Afișarea**: anunțul de afișare cere aceleași date ca butonul lui (contract, împuternicire, UAT + județ, o zi cu program, contactul
   Gazpet, reprezentantul Transgaz cu telefon, semnatarul Gazpet, informarea GDPR publicată); apoi perioada și nr. PV de afișare, pe
-  fiecare UAT (18.11.2026).
+  fiecare UAT (18.11.2026). La generare, fiecare identificator de parcelă tipărit (sat, tarla, nr. cadastral, poz. HG, tronson) trebuie să
+  aibă forma câmpului, iar satul să fie unul dintre cele scrise la „Sate / tarlale ziua 1–3”; altfel anunțul nu se generează și sub buton
+  apare lista parcelelor de corectat (cod + câmp), de corectat în Fișa parcelei (SABLOANE.md §2.7).
 - **SMS**: așteaptă autorizarea scrisă a Transgaz și textul final aprobat de Juridic + Răzvan. Trimiterea e oprită din kill-switch.
 - **Textul AR** e validat juridic doar pentru LOT1. Pe alt proiect nu se generează AR.
 - **Pagina web GDPR**: PR #939 e draft și așteaptă aprobarea TGZ a textului. Verso-ul convocatorului are deja textul.

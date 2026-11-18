@@ -436,8 +436,16 @@ cu terminologia veche; anunțul de sine stătător lipsea din pachetul trimis Tr
   (comparare naturală), id_parcela. Nu se numerotează, nu se salvează în storage / BD: afișarea se dovedește prin PV-ul de afișare
   (`red_uat.afisare_data_start / _end / _pv_nr`, Anexa 5 din plan).
 - **O singură definiție (L19)**: câmpurile comune vin din helper-ele `campuriContractProiect`, `campuriSesiuniUat`, `campuriContactGazpet`
-  (folosite identic de convocator, adresa UAT și anunț; test de paritate + mutant textual) și `areZiCuProgram` (`setari.js`; convocator,
-  adresa UAT, anunț, „Gata de convocare?”).
+  (folosite identic de convocator, adresa UAT și anunț; test de paritate cu generatoarele de pe `origin/main` + mutant textual) și
+  `areZiCuProgram` (`setari.js`; convocator, adresa UAT, anunț, „Gata de convocare?”).
+- **Forma identificatorilor publicați** (review #1137 r1, P1; `src/redari/identificatoriPublici.js`): câmpurile parcelei sunt text liber la
+  import, deci fiecare valoare care ajunge pe afiș trece printr-o validare de FORMĂ, una singură, indiferent de `strict`: tarla („T12”, „12”,
+  „T12/1”, „12A”), nr. cadastral / parcelă (valoarea TGZ compusă cu „#”: „52#”, „#44#”, „50029#30#”, „##”; „CF 1001”, „123/4”; un cod de 1–2
+  majuscule, ex. „DE”), poz. HG („117”, „12A”, „HG 1” — fără „/”, ca o cotă să nu treacă), tronson (1..11, regula importului
+  `tronsonOptional`), **satul doar dintre satele declarate la „Sate / tarlale ziua 1–3”** (nu există nomenclator de sate în schemă; un nume
+  de persoană are aceeași formă ca un nume de sat, deci forma singură nu ajunge). Valoarea goală trece (TGZ nu are coloana „sat”);
+  marcajul „____” al modelelor trece (nu poartă informație). Ce nu se potrivește **nu se publică și blochează generarea**, cu lista exactă
+  „câmp: id_parcela, …” (fără valori — pot fi chiar datele personale), afișată sub buton; se corectează în Fișa parcelei.
 - **Unde**: 🏛️ UAT-uri → editare UAT → „Anunț de afișare (DOCX)”, pentru admin și editor (documentul nu are date personale și nu scrie
   nimic); UAT-ul, proiectul (cu starea informării de la server, `cuInformarePublicata`) și parcelele se recitesc din BD înainte de
   generare; aceleași lipsuri apar în 📬 Notificări la modelul „Afișarea la Primărie”.
@@ -453,7 +461,7 @@ cu terminologia veche; anunțul de sine stătător lipsea din pachetul trimis Tr
 | `{{link_informare}}`, `{{qr}}` | constanta `LINK_INFORMARE_PUBLIC` (pagina publică a informării) + QR-ul ei | informarea publicată (server) | `false` / `null` de la server blochează |
 | `{{semnatar_gazpet}}`, `{{data}}` | reprezentant_gazpet_nume + _functie; data generării (Europe/Bucharest) | da (semnatarul) | |
 | `{{numar_parcele}}` | COUNT parcele active | — | |
-| `{{rand.nr}}`, `{{rand.sat}}`, `{{rand.tarla}}`, `{{rand.nr_cadastral}}`, `{{rand.poz_hg}}`, `{{rand.tronson}}` | red_v_parcele (lista albă) | ≥ 1 parcelă | rând-șablon → `repetaRand` |
+| `{{rand.nr}}`, `{{rand.sat}}`, `{{rand.tarla}}`, `{{rand.nr_cadastral}}`, `{{rand.poz_hg}}`, `{{rand.tronson}}` | red_v_parcele (lista albă) | ≥ 1 parcelă; fiecare valoare cu forma câmpului (`identificatoriPublici.js`), altfel blocat cu lista | rând-șablon → `repetaRand` |
 
 Întrebări deschise pentru Juridic (textul e propunere): formularea despre neprezentare (reluată din convocator) și fraza „publicitate
 suplimentară … nu valorează acceptare tacită”; dacă pe afiș se trec numele persoanelor de contact (Gazpet / Transgaz) sau doar
