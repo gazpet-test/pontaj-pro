@@ -3,8 +3,9 @@
 Felia F2b (branch `redari/mail-f2b-trimitere`) completează transportul: OAuth pentru scopul `trimitere` (callback prin pagina ERP, state consumat atomic,
 `id_token` validat local, refresh token în Vault prin RPC-uri `service_role`), wrapperul HTTP cu liste închise, funcția edge `redari-mail-trimite` completă,
 ecranul (conectare / revocare / pornire / „Trimite lotul” doar pe proiecte `TEST-`) și migrarea **neaplicată** `20261131h` (gărzile în bază: pornirea doar cu
-căsuța conectată, `doar_proiecte_test`, `extern_permis` tot fals). Deciziile proprietarului din 18.11.2026 și limita atașamentului PDF (decizie deschisă A/B/C)
-sunt în `PLAN_EMAIL_REDARI.md`; procedura probei în `MAIL_PROBA_PASI.md`. Probe: `mailTrimitereF2b.test.js` (gărzi, wrapper, OAuth, MIME, mutanți, dovada
+căsuța conectată, `doar_proiecte_test`, `extern_permis` tot fals). Deciziile proprietarului din 18.11.2026 — inclusiv **varianta C pentru atașament: fără
+atașament, și pe proiectele reale** (textul + linkul formularului public; convocarea oficială rămâne cea din plic) — sunt în `PLAN_EMAIL_REDARI.md`;
+procedura probei în `MAIL_PROBA_PASI.md`. Probe: `mailTrimitereF2b.test.js` (gărzi, wrapper, OAuth, MIME, mutanți, dovada
 pe main), `scripts/pglite/test_redari_mail_f2b_local.mjs` (migrarea cu pașii L15 v2 ai runnerului, comportament, aplicare → revenire → reaplicare, refuzuri,
 mutanți). Nimic de mai jos (rundele F2a) nu e schimbat de F2b în afara punctelor numite acolo.
 
@@ -15,6 +16,20 @@ mutanți). Nimic de mai jos (rundele F2a) nu e schimbat de F2b în afara punctel
 migrare + 3 pe revenire) + scriptul cu două sesiuni pentru PostgreSQL real; revenirea L14 textual (refuz la istoric nou, fără ștergeri); procedura
 probei corectată (garanția tehnică în loc de interdicție verbală, „Recitește” doar afișează, mesajele OAuth nuanțate). Detalii: `PLAN_EMAIL_REDARI.md`
 (blocul deciziilor din 18.11.2026) și `MAIL_PROBA_PASI.md` §0.1.
+
+**Runda 3 (Jakarinos #1134 r2, NO-GO pe 6beacd27 → corectat):** Jakarinos confirmă că **pentru e-mail** cursa redenumire ↔ autorizare ↔ apel HTTP e
+închisă. (P1) **Contractul FAN restrâns, nu felia extinsă** (decizia coordonatorului): triggerul rămâne neschimbat, dar documentele nu mai afirmă că FAN e
+acoperit integral — condiția pe `red_fan_awb` acoperă doar intervalul cu AWB-uri `propus` / `aprobat` / `in_curs` / `necunoscut` (deci și un AWB deja
+rezervat `in_curs`); **nu acoperă** verificarea categoriei → claim → HTTP din handler-ul FAN fără AWB-uri în stările protejate la momentul verificării
+(`fn_red_fan_claim_lot` nu verifică categoria), acțiunea `evenimente` (GET fără AWB) și urmărirea / etichetele / confirmările pe AWB-uri `generat` /
+`ridicat`. Protecția completă a FAN = **PR FAN separat** (proiectul `FOR SHARE` + verificarea categoriei în `fn_red_fan_claim_lot` și în celelalte căi) —
+lucru rămas. Niciun cod FAN modificat. (P2) **Scriptul de concurență** `supabase/tests/20261131h_redari_mail_f2b_concurenta.sh` rescris: sesiunea A e un
+psql ținut deschis (coproc) care confirmă fiecare pas printr-un marcaj cu SQLSTATE pe stderr (barieră explicită, fără `sleep`); SQLSTATE-urile promise se
+citesc din psql (`:SQLSTATE`), nu din texte (la P0001 se verifică și mesajul triggerului, pentru că P0001 e generic); ambele sensuri concurente (S1 TEST →
+real și S2 real → TEST față de rezervare, S3 UPDATE-ul proiectului față de `apel_incepe`, S4 după încheiere); rulează DOAR cu `F2B_CLUSTER_DISPENSABIL=da`,
+notează rolurile de cluster pe care le creează fixture-ul și le șterge la final, curățenia (baza cu `FORCE`, rolurile, fișierele temporare) e în `trap`
+(și la întrerupere); antetul spune exact ce atinge, iar regresiile pe clona completă sunt descrise separat (`MAIL_PROBA_PASI.md` §3). Nerulat în PR
+(fără PostgreSQL local): îl rulează coordonatorul pe un cluster dispensabil. (3) **Atașamentul: varianta C** scrisă ca decizie luată, nu deschisă.
 
 # Runda 2 — PR #1000, 05.11.2026
 

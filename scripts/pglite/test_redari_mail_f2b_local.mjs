@@ -10,7 +10,8 @@
 //    state-ul OAuth, Vault prin RPC, pornirea doar cu căsuța conectată, extern refuzat, fn_red_mail_f2_poate (doar proiecte TEST-, inclusiv „test-mic”),
 //    TRIMITEREA prin RPC-urile reale (rezervă → apel_incepe → rezultat, CAS pe lease, idempotență), CATEGORIA proiectului (runda 2, Jakarinos #1134 P1):
 //    redenumirea TEST- ↔ real refuzată cât lotul e în lucru (rezervat / în apel / neîncheiat) sau cât există AWB-uri FAN în lucru, doar de owner în
-//    contextul aplicației, permisă în aceeași categorie și după încheiere; revocarea.
+//    contextul aplicației, permisă în aceeași categorie și după încheiere; revocarea. (Pentru FAN contractul e PARȚIAL — doar intervalul cu AWB-uri în
+//    stările protejate; antetul migrării, runda 3 — J8 probează exact această condiție, nu lanțul FAN.)
 // 2. L14: pe o bază FOLOSITĂ revenirea refuză la fiecare pas (pornită / conectată / ISTORIC_NOU) și nu șterge nimic; pe o bază NEFOLOSITĂ: aplicare →
 //    revenire → reaplicare → revenire. 3. Refuzurile migrării și ale revenirii. 4. MUTANȚI (migrare + revenire): fiecare TREBUIE să pice.
 // Ce NU probează PGlite (o singură conexiune): CONCURENȚA reală — lock-ul FOR SHARE al proiectului din rezerva / apel_incepe față de UPDATE-ul
@@ -226,12 +227,14 @@ const SQL_LOTURI = [[LOT.TEST, P.TEST], [LOT.REAL, P.REAL], [LOT.MIC, P.MIC]].ma
   + `UPDATE public.red_mail_loturi SET stare = 'aprobat', lot_sha256 = public.fn_red_mail_f2_lot_hash(id), aprobat_lot_sha256 = public.fn_red_mail_f2_lot_hash(id), aprobat_versiune = 1, aprobat_de = '${U.OWNER}', aprobat_la = now() WHERE id IN ('${LOT.TEST}', '${LOT.REAL}', '${LOT.MIC}');\n`
 const loturi = db => db.exec(SQL_LOTURI)
 // --scrie-fixture <fisier.sql>: toată baza falsă (schelet + funcțiile reale + datele + loturile) ca SQL, pentru proba cu două sesiuni pe PostgreSQL real
-// (supabase/tests/20261131h_redari_mail_f2b_concurenta.sh); nu se comite, se generează la rulare
+// (supabase/tests/20261131h_redari_mail_f2b_concurenta.sh); nu se comite, se generează la rulare. Scrie fișierul și SE OPREȘTE (ieșire 0 dacă pașii 0 / 0b
+// de mai sus au trecut): proba în memorie nu se mai rulează, scriptul de concurență o cere separat.
 {
   const i = process.argv.indexOf('--scrie-fixture')
   if (i > 0 && process.argv[i + 1]) {
     writeFileSync(process.argv[i + 1], `-- Fixture generat de scripts/pglite/test_redari_mail_f2b_local.mjs --scrie-fixture (NU pentru producție; bază de unică folosință)\n${SCH_A}\n${SQL_FUNCTII}\n${SCH_B}\n${DATE}\n${SQL_LOTURI}`)
-    console.log('fixture scris: ' + process.argv[i + 1])
+    console.log('fixture scris: ' + process.argv[i + 1] + (esec ? ` (ATENȚIE: ${esec} verificări din pașii 0 / 0b au picat)` : ''))
+    process.exit(esec ? 1 : 0)
   }
 }
 
@@ -381,7 +384,8 @@ async function verifica(db) {
   asteptCod(await redenumeste(db, U.OWNER, P.MIC, 'TEST-MIC'), 'P0001', 'J7 owner: test-mic → TEST-MIC cu lot aprobat', /neincheiate/)
   if (asteptOk(await redenumeste(db, U.OWNER, P.REAL, 'LOT1-REAL-B'), 'J7 owner: real → real (aceeași categorie)')?.[0]?.cod !== 'LOT1-REAL-B') ab.push('J7 redenumirea în categoria „real” n-a trecut')
   asteptOk(await redenumeste(db, U.OWNER, P.REAL, 'LOT1-REAL'), 'J7 înapoi la LOT1-REAL')
-  // J8. lanțul FAN: AWB-uri propuse / aprobate / în curs / necunoscute blochează categoria; generat / ridicat / anulat / eroare nu
+  // J8. condiția FAN a triggerului: AWB-uri propuse / aprobate / în curs / necunoscute blochează categoria; generat / ridicat / anulat / eroare nu.
+  //     (Doar atât e contractul FAN al acestei migrări — runda 3; lanțul FAN însuși (handler → claim → HTTP, evenimente, urmărire) NU e probat aici.)
   const awb = s => db.exec(`UPDATE public.red_fan_awb SET stare = '${s}' WHERE proiect_id = '${P.FAN}'`)
   await db.exec(`INSERT INTO public.red_fan_awb (proiect_id, lot_id, plic_id, nr_plic, stare, hash_date) VALUES ('${P.FAN}', gen_random_uuid(), gen_random_uuid(), 'PL-TST-0001', 'aprobat', repeat('f', 64))`)
   for (const s of ['propus', 'aprobat', 'in_curs', 'necunoscut']) { await awb(s); asteptCod(await redenumeste(db, U.OWNER, P.FAN, 'TEST-FAN'), 'P0001', `J8 owner: real → TEST- cu AWB FAN ${s}`, /AWB-uri FAN/) }

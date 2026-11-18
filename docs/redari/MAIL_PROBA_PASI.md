@@ -13,10 +13,11 @@ către Google, pagina ERP `/redari/mail-oauth` (întoarcerea de la Google), buto
 secret și de orice apel către Google. Scoaterea gărzii = PR + migrare separate, revizuite, după „da”-urile din plan (textul juridic, DKIM / DMARC,
 autorizarea Transgaz, `extern_permis`).
 
-**Ce NU face această felie (limite declarate):** fără atașament PDF (e-mailul are doar textul validat de Juridic; convocatorul există azi doar ca
-DOCX, iar transformarea lui în PDF cere fie o instalare nouă pe server, fie un PDF nou generat în browser — decizie separată, vezi planul); fără
-citirea / golirea căsuței (F1); fără reconcilierea automată a rezultatelor `necunoscut` (rămân „de decis”, cu pauza de 15 minute din bază; nu se
-retrimit); fără destinatari din afara `@gazpet.ro` (`extern_permis` rămâne fals și în CHECK).
+**Ce NU face această felie (limite declarate):** fără atașament — **decizia C a proprietarului (18.11.2026), valabilă și pentru proiectele reale**:
+e-mailul are textul (validat de Juridic înaintea proiectelor reale) și linkul formularului public, iar convocarea oficială rămâne cea din plic (nu se
+face nici conversia convocatorului DOCX pe server, nici un PDF generat în browser); fără citirea / golirea căsuței (F1); fără reconcilierea automată a
+rezultatelor `necunoscut` (rămân „de decis”, cu pauza de 15 minute din bază; nu se retrimit); fără destinatari din afara `@gazpet.ro` (`extern_permis`
+rămâne fals și în CHECK); fără protecția completă a categoriei pe lanțul FAN (§0.1 — PR FAN separat).
 
 **Ordinea:** (a) Google Cloud → (b) secretele în Supabase → (c) aplicarea migrării + publicarea funcțiilor → (d) conectarea căsuței (proprietarul, logat
 ca `redari@`) → (e) proba pe `TEST-RAZVAN` cu UN destinatar intern → (f) verificarea livrării → (g) oprirea / revocarea. Fiecare rând bifat în jurnal.
@@ -39,8 +40,12 @@ ca `redari@`) → (e) proba pe `TEST-RAZVAN` cu UN destinatar intern → (f) ver
 Convenția `TEST-` este păzită **în bază**, pe toate căile (nu doar prin ecran și prin funcția edge):
 - **codul proiectului nu poate trece din `TEST-…` într-un cod „real” (sau invers) cât proiectul are loturi de e-mail neîncheiate ori mesaje rezervate /
   în apel** — deci nici în intervalul dintre autorizarea unui apel și apelul propriu-zis către Google — **și nici cât are AWB-uri FAN propuse /
-  aprobate / în curs / necunoscute** (lanțul FAN are aceeași convenție; triggerul îl acoperă fără schimbări în codul FAN). Serverul răspunde cu
-  refuz explicit (`categoria codului (TEST- / real) nu se schimba cat proiectul are …`);
+  aprobate / în curs / necunoscute**. Serverul răspunde cu refuz explicit (`categoria codului (TEST- / real) nu se schimba cat proiectul are …`).
+  **Pentru e-mail garanția e completă** (toate căile de trimitere). **Pentru FAN garanția e PARȚIALĂ și declarată ca atare** (runda 3): condiția pe
+  AWB-uri acoperă doar intervalul cu AWB-uri în stările de mai sus (deci și un AWB aprobat deja rezervat „în curs”, cu apelul în desfășurare); **nu
+  acoperă** verificarea categoriei → autorizare → apel din funcția FAN când la momentul verificării nu există încă AWB-uri în acele stări, nici acțiunea
+  „evenimente” (fără AWB), nici urmărirea / etichetele / confirmările pe AWB-uri generate / ridicate. Protecția completă a FAN e un PR FAN separat
+  (lucru rămas); până atunci, pe FAN rămân gărzile FAN existente (proiect `TEST-` + lot marcat TEST) și regula din `FAN_TEST1_PASI.md`;
 - **schimbarea categoriei o poate face doar proprietarul** (owner), și doar când condiția de mai sus nu se aplică; redenumirile care păstrează
   categoria (`TEST-RAZVAN` → `TEST-RAZVAN-2`, `LOT1` → `LOT1-B`) rămân ca azi (admin Redări);
 - decizia „doar TEST” din bază (`fn_red_mail_f2_poate`, chemată de rezervare și de autorizarea apelului) se ia **cu rândul proiectului blocat
@@ -84,13 +89,22 @@ conectare (pasul 4), prin RPC-ul `fn_red_mail_secret_seteaza` (doar `service_rol
 
 ## 3. Migrarea și publicarea funcțiilor (coordonatorul, după îmbinarea PR-ului)
 
-1. **Migrarea `20261131h_redari_mail_f2b_trimitere`** (NEAPLICATĂ în PR): pe clonă, manifestul L15 (`scripts/livrare_l15_manifest.sh --iesire …`;
-   lista obiectelor așteptate: `supabase/tests/20261131h_redari_mail_f2b_trimitere.l15.obiecte.tsv`, 22 obiecte), proba cu ROLLBACK pe țintă
-   (`--compara-cu`), **proba de concurență cu două sesiuni** pe o bază PostgreSQL de unică folosință (`supabase/tests/20261131h_redari_mail_f2b_concurenta.sh`,
-   nerulată în PR — fără PostgreSQL local), apoi livrarea prin runner cu plafonul 5000 și amprenta globală (antetul migrării). Postcondițiile verifică:
-   comutatorul tot OFF, căsuța neconectată, `doar_proiecte_test = true`, niciun state / secret, triggerul pe `red_proiecte` pus. Fără „da”-ul
-   proprietarului nu se aplică. **Revenirea** (`…_ROLLBACK.sql`) e posibilă doar cât trimiterea n-a fost folosită deloc (L14): după prima conectare,
-   întoarcerea = migrare nouă, nu revenire (§8).
+1. **Migrarea `20261131h_redari_mail_f2b_trimitere`** (NEAPLICATĂ în PR). Două probe SEPARATE, apoi livrarea:
+   - **(1a) Proba de concurență, pe un cluster PostgreSQL ≥ 17 COMPLET DISPENSABIL** (nu clona de producție, nu un cluster folosit la altceva):
+     `F2B_CLUSTER_DISPENSABIL=da PGHOST=… PGUSER=postgres … bash supabase/tests/20261131h_redari_mail_f2b_concurenta.sh <nume_baza_noua>`
+     (nerulată în PR — fără PostgreSQL local). Ce atinge: creează și șterge baza dată; creează, DOAR dacă lipsesc, rolurile de cluster `anon` /
+     `authenticated` / `service_role` / `supabase_auth_admin` / `supabase_storage_admin` și le șterge la final pe cele create de ea; fișiere temporare
+     șterse; nicio conexiune în afara clusterului. Ce dovedește (două sesiuni psql reale, barieră explicită, SQLSTATE-urile promise): redenumirea
+     `TEST-` → real **și** real → `TEST-` concurentă cu rezervarea așteaptă lock-ul proiectului (55P03) și după commit e refuzată de trigger (P0001);
+     `apel_incepe` așteaptă un UPDATE al proiectului și nu autorizează nimic sub lock; după încheierea lotului owner-ul poate schimba categoria,
+     adminul nu (42501). Ieșire 0 = toate așteptările se țin.
+   - **(1b) Regresiile pe CLONA COMPLETĂ** (schema de producție): manifestul L15 (`scripts/livrare_l15_manifest.sh --iesire …`; lista obiectelor
+     așteptate: `supabase/tests/20261131h_redari_mail_f2b_trimitere.l15.obiecte.tsv`, 22 obiecte), proba cu ROLLBACK pe țintă (`--compara-cu`),
+     aplicare → revenire → reaplicare, apoi suitele existente F1 / F2 / FAN (20261130j / k, 20261131a, 20261212a) rulate DUPĂ migrare, inclusiv
+     interacțiunea cu triggerele de pe live care lipsesc din fixture (`trg_red_autorizare_tgz`, 20261130m). Acestea nu sunt acoperite de (1a).
+   - apoi livrarea prin runner cu plafonul 5000 și amprenta globală (antetul migrării). Postcondițiile verifică: comutatorul tot OFF, căsuța neconectată,
+     `doar_proiecte_test = true`, niciun state / secret, triggerul pe `red_proiecte` pus. Fără „da”-ul proprietarului nu se aplică. **Revenirea**
+     (`…_ROLLBACK.sql`) e posibilă doar cât trimiterea n-a fost folosită deloc (L14): după prima conectare, întoarcerea = migrare nouă, nu revenire (§8).
 2. GitHub → Actions → **„Deploy edge function (manual)”** → `slug` = `redari-mail-oauth`, apoi din nou cu `slug` = `redari-mail-trimite` (de pe
    `main`). Ambele se publică cu `verify_jwt = true` (callback-ul OAuth vine din pagina ERP cu JWT-ul omului, nu direct de la Google).
 3. Identificarea commit-ului publicat (rândul (c) din §0): `git rev-parse origin/main` = SHA-ul din rezumatul workflow-ului; în Supabase, Code:

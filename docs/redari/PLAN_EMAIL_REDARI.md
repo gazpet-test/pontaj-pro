@@ -129,20 +129,30 @@ Doar plan de design: fără cod de producție, fără scrieri în BD, fără sec
   convenția `TEST-` are o singură definiție SQL (`fn_red_proiect_e_test`, L19); `fn_red_mail_rezerva` / `fn_red_mail_apel_incepe` iau rândul proiectului
   `FOR SHARE` (setări → lot → proiect → mesaje), deci decizia „doar TEST” e serializată cu orice `UPDATE` al proiectului; triggerul
   `trg_red_proiect_cod_test` (`BEFORE UPDATE OF cod`, SECURITY DEFINER) refuză schimbarea categoriei `TEST-` ↔ real cât proiectul are loturi de e-mail
-  neîncheiate / mesaje rezervate sau în apel **sau AWB-uri FAN propuse / aprobate / în curs / necunoscute** (acoperă și lanțul FAN, fără a-i schimba codul:
-  FAN cere AWB `aprobat` înaintea oricărui apel) și cere owner în contextul aplicației (admin Redări → 42501); redenumirile în aceeași categorie rămân
-  libere. Celelalte două corecții ale rundei: `id_token` malformat = refuz controlat cu revocarea grantului (`id_token_forma`, fără excepție); rezultatul
-  RPC-ului de persistare ≠ `true` = `persistare_neconfirmata` (oprire, recitirea stării din server, nimic „trimis”). Revenirea respectă L14 textual: refuză la
-  orice istoric nou (state-uri, evenimente OAuth ale trimiterii, rândul Vault, mesaje / jurnal de transport), nu șterge nimic — după prima conectare
-  întoarcerea e o migrare nouă. Probe: PGlite cu RPC-urile reale (`scripts/pglite/test_redari_mail_f2b_local.mjs`) + două sesiuni psql pe PostgreSQL
-  (`supabase/tests/20261131h_redari_mail_f2b_concurenta.sh`, de rulat de coordonator).
-- **Atașamentul PDF — DECIZIE DESCHISĂ, de luat de Răzvan înaintea proiectelor reale** (limită declarată a F2b): convocatorul există azi doar ca DOCX
-  (generat în browser cu biblioteca `docx`, stocat în bucketul `redari`); nu există o cale de a-l transforma în PDF fără (A) o instalare nouă pe server
-  (LibreOffice / serviciu de conversie) sau (B) un PDF **nou**, generat în browser din textul convocării (jsPDF / html2canvas, deja în repo), care ar fi alt
-  document decât convocatorul validat de Juridic și ar cere schimbarea RPC-ului de creare a lotului + politici Storage pe `mail/` + inventarul fișierelor
-  (§1.3). F2b livrează trimiterea **fără atașament** (textul validat de Juridic în corp; MIME-ul, snapshotul și `CHECK`-urile acceptă deja un PDF, deci (B)
-  sau (A) intră ca felie separată, cu review propriu). Opțiuni pentru Răzvan: **A** conversie pe server (instalare nouă, de aprobat), **B** PDF generat în
-  browser din textul convocării (document nou, de validat de Juridic), **C** fără atașament și pentru proiectele reale (textul + linkul formularului public în corp).
+  neîncheiate / mesaje rezervate sau în apel **sau AWB-uri FAN propuse / aprobate / în curs / necunoscute** și cere owner în contextul aplicației (admin
+  Redări → 42501); redenumirile în aceeași categorie rămân libere. **Pentru e-mail contractul e complet** (cursa redenumire ↔ autorizare ↔ apel HTTP e
+  închisă pe toate căile de trimitere; confirmat de Jakarinos la runda 2). Celelalte două corecții ale rundei: `id_token` malformat = refuz controlat cu
+  revocarea grantului (`id_token_forma`, fără excepție); rezultatul RPC-ului de persistare ≠ `true` = `persistare_neconfirmata` (oprire, recitirea stării din
+  server, nimic „trimis”). Revenirea respectă L14 textual: refuză la orice istoric nou (state-uri, evenimente OAuth ale trimiterii, rândul Vault, mesaje /
+  jurnal de transport), nu șterge nimic — după prima conectare întoarcerea e o migrare nouă. Probe: PGlite cu RPC-urile reale
+  (`scripts/pglite/test_redari_mail_f2b_local.mjs`) + două sesiuni psql reale cu barieră explicită, pe un cluster PostgreSQL complet dispensabil
+  (`supabase/tests/20261131h_redari_mail_f2b_concurenta.sh`: ambele sensuri TEST → real / real → TEST concurente cu rezervarea, UPDATE-ul proiectului
+  concurent cu autorizarea apelului, SQLSTATE-urile promise; de rulat de coordonator, nerulat în PR).
+- **Lanțul FAN — contract PARȚIAL, declarat (runda 3, Jakarinos #1134 r2 P1; decizia coordonatorului: contractul se restrânge, felia nu se extinde;
+  niciun cod FAN modificat în PR-ul F2b).** Condiția pe `red_fan_awb` din trigger **acoperă doar atât**: cât proiectul are AWB-uri `propus` / `aprobat` /
+  `in_curs` / `necunoscut`, categoria nu se schimbă — deci și intervalul în care un AWB aprobat e deja rezervat `in_curs` de `fn_red_fan_claim_lot` și
+  apelul POST e în desfășurare. **Nu acoperă**: (a) intervalul verificare categorie → autorizare (claim) → HTTP din handler-ul FAN când la momentul
+  verificării nu există încă AWB-uri în stările protejate (handler-ul citește codul `TEST-` și lotul marcat TEST; categoria se schimbă în real — triggerul
+  permite, nimic în lucru; AWB-uri noi sunt propuse / aprobate cu codul real; `fn_red_fan_claim_lot` verifică aprobarea, hash-urile și sursele, nu
+  categoria, deci apelul poate continua); (b) acțiunea `evenimente` (GET fără niciun AWB); (c) urmărirea / confirmările / etichetele / ștergerea pe
+  AWB-uri `generat` / `ridicat`, stări pe care triggerul nu le consideră blocante. **Lucru rămas — PR FAN separat**: proiectul `FOR SHARE` + verificarea
+  categoriei în `fn_red_fan_claim_lot` și în celelalte căi (`evenimente`, urmărire / etichete / confirmări), cu proba lui de concurență. Până atunci, pe FAN
+  categoria proiectului e păzită de gărzile FAN existente (handler + lot marcat TEST) plus efectul secundar al triggerului de mai sus.
+- **Atașamentul — DECIS: varianta C (Răzvan, 18.11.2026)**: **fără atașament, inclusiv pe proiectele reale**: e-mailul are textul (validat de Juridic
+  înaintea proiectelor reale, §2.7) și linkul formularului public; **convocarea oficială rămâne cea din plic** (convocatorul tipărit, canalul poștal /
+  FAN). Deci nici conversia pe server (A), nici PDF-ul generat în browser (B) nu se mai fac; MIME-ul, snapshotul și `CHECK`-urile acceptă în continuare un
+  PDF (fără flux de atașare), ceea ce nu condiționează livrarea. Contextul deciziei: convocatorul există doar ca DOCX (generat în browser cu biblioteca
+  `docx`, stocat în bucketul `redari`), iar un PDF ar fi cerut fie o instalare nouă pe server, fie un document nou, de validat separat de Juridic.
 - Rămân deschise, neschimbate: reconcilierea `necunoscut` și decizia owner-ului (`esuat_confirmat`), monitorizarea SENT, opt-out-ul în UI, `extern_permis`
   (§1.3, §1.4, §1.9). Procedura probei pe `TEST-RAZVAN`: `docs/redari/MAIL_PROBA_PASI.md`.
 
@@ -897,8 +907,9 @@ Porți comune: branch din `origin/main`; GO Jakarinos + Copilot pe diff; DRY ver
 **F2b (18.11.2026) — trimiterea din `redari@` pe proiecte de TEST, PR separat:** OAuth de trimitere (`redari-mail-oauth` + `_shared/gmailOauthTrimitere.mjs`),
 wrapperul HTTP unic cu liste închise (`_shared/gmailHttp.mjs`: modulele `gmailTrimitere` / `gmailOauth`, scopul `trimitere`), transportul
 (`_shared/gmailTrimitere.mjs`, `redari-mail-trimite` complet), UI (conectare / revocare / pornire / „Trimite lotul” doar pe `TEST-…`, pagina `/redari/mail-oauth`),
-migrarea `20261131h` (neaplicată: gărzile în bază, state-ul OAuth, Vault prin RPC). Deciziile (w) / (x) și limita atașamentului PDF: blocul „Deciziile lui Răzvan
-(18.11.2026)” de la început. Procedura probei: `MAIL_PROBA_PASI.md`. Rămân în afara F2b: reconcilierea / SENT (cer cititorul F1), opt-out UI, `extern_permis`, PDF-ul.
+migrarea `20261131h` (neaplicată: gărzile în bază, state-ul OAuth, Vault prin RPC). Deciziile (w) / (x), decizia C pentru atașament (fără, și pe proiectele
+reale) și contractul parțial FAN al triggerului: blocul „Deciziile lui Răzvan (18.11.2026)” de la început. Procedura probei: `MAIL_PROBA_PASI.md`. Rămân în
+afara F2b: reconcilierea / SENT (cer cititorul F1), opt-out UI, `extern_permis`, protecția completă a categoriei pe lanțul FAN (PR FAN separat).
 
 **Worktree 05.11.2026 — implementare PARȚIALĂ, neaplicată, nedeployată; nu este GO de activare.**
 Decizia din brief permite construirea F2 acum, cu **trimiterea reală oprită**. Există un nucleu de loturi

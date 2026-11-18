@@ -24,11 +24,20 @@
 --     fn_red_mail_f2_poate e serializată cu orice UPDATE al rândului proiectului; (ii) triggerul BEFORE UPDATE OF cod trg_red_proiect_cod_test
 --     (fn_red_proiect_cod_test_garda, SECURITY DEFINER ca să vadă loturile tuturor) refuză schimbarea CATEGORIEI codului (TEST- ↔ real) cât proiectul
 --     are loturi de e-mail neîncheiate sau mesaje rezervate / în apel (deci și în intervalul dintre commit-ul lui apel_incepe și apelul HTTP) sau AWB-uri
---     FAN propuse / aprobate / în curs / necunoscute (lanțul FAN are aceeași convenție și aceeași gaură; FAN cere AWB `aprobat` înaintea oricărui apel,
---     așa că triggerul singur îl acoperă, fără a modifica codul FAN); în contextul aplicației (JWT) schimbarea categoriei o face DOAR owner-ul (42501);
+--     FAN propuse / aprobate / în curs / necunoscute; în contextul aplicației (JWT) schimbarea categoriei o face DOAR owner-ul (42501);
 --     redenumirile care păstrează categoria (TEST-A → TEST-B, LOT1 → LOT1-B) rămân ca azi (admin Redări). Mentenanța (postgres fără JWT) e scutită doar
 --     de condiția „owner”, nu și de cea „în lucru”. Pe live, trg_red_autorizare_tgz (20261130m) refuză deja orice schimbare a codului cât există
 --     autorizarea Transgaz; triggerul nou acoperă proiectele fără autorizare și căile de mentenanță.
+--     CONTRACTUL pentru E-MAIL e COMPLET: (i) + (ii) închid cursa redenumire ↔ autorizare ↔ apel HTTP pe toate căile de trimitere (Jakarinos #1134 r2).
+--     CONTRACTUL pentru FAN e PARȚIAL (runda 3, Jakarinos #1134 r2 P1 — restrâns, nu extins; NICIUN cod FAN modificat aici). Condiția pe red_fan_awb
+--     ACOPERĂ doar atât: cât există AWB-uri în stările propus / aprobat / in_curs / necunoscut, categoria nu se schimbă — deci și intervalul în care un
+--     AWB aprobat e deja rezervat `in_curs` de fn_red_fan_claim_lot (20261212a) și apelul POST e în desfășurare. NU ACOPERĂ: (a) intervalul verificare
+--     categorie → autorizare (claim) → HTTP din handler-ul FAN (redariFanHandler.mjs → redariFanTransport.mjs `genereaza`) când la momentul verificării
+--     nu există încă AWB-uri în stările protejate: handler-ul citește codul TEST- și lotul marcat TEST, categoria se schimbă în real (triggerul permite:
+--     nimic în lucru), AWB-uri noi sunt propuse / aprobate cu codul real, iar fn_red_fan_claim_lot verifică aprobarea, hash-urile și sursele, NU categoria,
+--     deci apelul poate continua; (b) acțiunea `evenimente` (GET /reports/awb-events, fără niciun AWB); (c) urmărirea / confirmările / etichetele /
+--     ștergerea pe AWB-uri `generat` / `ridicat` (stări neblocante pentru trigger). Protecția COMPLETĂ a FAN = PR FAN separat (proiectul FOR SHARE +
+--     verificarea categoriei în fn_red_fan_claim_lot și în celelalte căi), listat ca lucru rămas în docs/redari/PLAN_EMAIL_REDARI.md și RAPORT_F2_EMAIL.md.
 --     EFECT ZILNIC pentru proprietar: un proiect de TEST cu loturi de e-mail active sau cu AWB-uri FAN în lucru nu poate fi redenumit cu un cod „real”,
 --     și invers; redenumirile în aceeași categorie nu se schimbă; după încheierea loturilor (și AWB-urile ajunse generat / ridicat / anulat / eroare),
 --     owner-ul poate schimba categoria.
@@ -60,8 +69,9 @@
 --   produs după aplicare — state `trimitere`, evenimente oauth_* ale trimiterii, rândul Vault, mesaje / jurnal F2 de transport — deci e posibilă doar
 --   pe o bază pe care trimiterea n-a fost folosită; după prima conectare, întoarcerea = migrare nouă, revizuită). Probe:
 --   scripts/pglite/test_redari_mail_f2b_local.mjs (PGlite, pașii reali L15 v2 ai runnerului, RPC-urile reale de trimitere, triggerul, refuzuri,
---   aplicare → revenire → reaplicare, mutanți) + supabase/tests/20261131h_redari_mail_f2b_concurenta.sh (două sesiuni psql pe o bază PostgreSQL de
---   unică folosință: redenumirea concurentă cu rezervarea). Vault-ul real și clona completă: coordonatorul.
+--   aplicare → revenire → reaplicare, mutanți) + supabase/tests/20261131h_redari_mail_f2b_concurenta.sh (două sesiuni psql REALE cu barieră explicită, pe un
+--   cluster PostgreSQL complet dispensabil: redenumirea TEST → real și real → TEST concurentă cu rezervarea, UPDATE-ul proiectului concurent cu
+--   autorizarea apelului; SQLSTATE-urile promise). Vault-ul real și regresiile pe clona completă: coordonatorul (docs/redari/MAIL_PROBA_PASI.md §3).
 DO $pre$
 DECLARE v_plafon text; v_rau text; v_def text;
 BEGIN
