@@ -1,9 +1,11 @@
 # Redări FAN — fluxul simplu pentru operator: un singur buton, urmărire automată, arhiva AWB, comanda curierului (SPECIFICAȚIE)
 
-Stare: 18.11.2026, după primul AWB real (Testul 1, lot de TEST cu un plic). **Doar document.** Nu există cod, migrare sau schimbare de date în
-acest PR; migrările sunt DESCRISE (§13), nu scrise. Deciziile proprietarului D1–D7 (§0) sunt **luate** și nu se redeschid aici; ce rămâne cu
-adevărat deschis e la §15. Orice migrare, RPC, automatizare sau drept propus aici **necesită acordul proprietarului** și se livrează în felii
-separate (§13), fiecare cu review propriu (Jakarinos + Fable), după `docs/paw/LECTII_REVIEW.md` (§14).
+Stare: 18.11.2026, după primul AWB real (Testul 1, lot de TEST cu un plic), comanda manuală a curierului și proba SMS pe proiectul de test;
+**trecerea a doua** (seara) adaugă deciziile D8–D11: pachetul de tipărit, evidența tipăririlor, bifarea automată „tipărit” și verificarea
+generate / tipărite / ridicate. **Doar document.** Nu există cod, migrare sau schimbare de date în acest PR; migrările sunt DESCRISE (§13), nu
+scrise. Deciziile proprietarului D1–D11 (§0) sunt **luate** și nu se redeschid aici; ce rămâne cu adevărat deschis e la §15. Orice migrare,
+RPC, automatizare sau drept propus aici **necesită acordul proprietarului** și se livrează în felii separate (§13), fiecare cu review propriu
+(Jakarinos + Fable), după `docs/paw/LECTII_REVIEW.md` (§14).
 
 Documentul are doi cititori. **Partea I (§1–§5)** e pentru proprietar: cum arată ziua operatorului, ce rămâne la el, ce se întâmplă singur,
 ce NU face platforma. **Partea II (§6–§16)** e pentru recenzent și implementator. Proiectarea integrării (câmpuri, răspunsuri, cazurile
@@ -14,12 +16,15 @@ Termeni: **operator** = coleg numit explicit de proprietar să trimită plicuri 
 **lot** = lotul de plicuire din ✉️ Poștă (PV de plicuire semnat de doi colegi); **plic** = un deținător + un UAT, toate convocările lui;
 **AWB** = numărul de expediere al curierului; **ridicat** = evenimentul curierului „preluat de la expeditor” (codul C0); **AR** = confirmarea
 de primire; **oPOD** = opțiunea curierului prin care confirmarea semnată se întoarce fizic; **tiraj** = mulțimea tipărită odată (etichete +
-pagina de control + documente), cu identificatorul ei; **curierul** = FAN Courier.
+pagina de control + documente), cu identificatorul ei; **pachet de tipărit** = cele două fișiere ale unui tiraj (etichetele pentru imprimanta
+de etichete; convocările + opisul, cu pagina de control în față, pentru imprimanta A4); **tipărit** = fișierul a fost predat de platformă
+pentru tipărire (nu „foaia a ieșit”, §8.7); **curierul** = FAN Courier.
 
 Cuprins: 0. Deciziile proprietarului · **I.** 1. Ziua operatorului · 2. Ce rămâne la proprietar · 3. Ce se întâmplă singur · 4. Ce NU face
-platforma · 5. În ce ordine livrăm · **II.** 6. Starea de azi · 7. Modelul de drepturi și plafonul · 8. Butonul unic · 9. Urmărirea automată ·
-10. Arhiva · 11. Comanda curierului · 12. De la test la real · 13. Feliile livrabile · 14. Lecțiile L01–L25 · 15. Întrebări deschise ·
-16. Ce nu s-a putut stabili din cod.
+platforma · 5. În ce ordine livrăm · **II.** 6. Starea de azi (6.1 ce a arătat Testul 1) · 7. Modelul de drepturi și plafonul · 8. Butonul unic
+(8.6 pachetul de tipărit · 8.7 evidența tipăririlor) · 9. Urmărirea automată (9.5 verificarea generate / tipărite / ridicate) · 10. Arhiva ·
+11. Comanda curierului · 12. De la test la real · 13. Feliile livrabile · 14. Lecțiile L01–L25 · 15. Întrebări deschise · 16. Ce nu s-a putut
+stabili din cod.
 
 ---
 
@@ -33,9 +38,15 @@ platforma · 5. În ce ordine livrăm · **II.** 6. Starea de azi · 7. Modelul 
 | D4 | Urmărirea rulează automat de trei ori pe zi (08:00, 13:00, 18:00, ora României) și bifează singură, pe codurile limpezi: ridicat → „expediat” (AWB + data ridicării, de unde curg cele 10 zile); livrat → AR; refuzat / întors → retur. Codurile nelimpezi nu bifează nimic și intră într-o listă „de verificat”. Fiecare bifare rămâne în evidență cu codul și ora curierului. | §3, §9 |
 | D5 | Eticheta (PDF) și dovada de livrare se salvează în dosarul plicului, lângă convocare și opis; arhiva ZIP a lotului le cuprinde (fișiere separate pe plic). | §10 |
 | D6 | Comanda curierului din platformă; punctul de ridicare = punctul de lucru al contului de curier; persoana de contact implicită, configurabilă pe proiect. | §11 |
-| D7 | Eticheta pe A6 — întrebare deschisă către curier. | §15.2 |
+| D7 | Eticheta pe A6 — întrebare deschisă către curier. Până la răspuns: varianta de micșorare făcută de platformă, probată pe imprimanta reală. | §8.6.3, §15.2 |
+| D8 | PACHETUL DE TIPĂRIT se face singur după „Trimite la curier”, pentru toate plicurile cu date complete și AWB generat: (1) etichetele AWB, pentru imprimanta de etichete; (2) convocările + opisul, în ordinea plicurilor, pentru imprimanta A4, cu pagina de control (ce etichetă merge pe ce plic) în față. Operatorul apasă „Tipărește” de două ori, o dată pe fiecare imprimantă. NU tipărire silențioasă. | §1, §8.6 |
+| D9 | EVIDENȚA TIPĂRIRILOR, separată de evidența AWB-urilor și de cea a expedierii: pe fiecare plic — ce s-a tipărit (eticheta; convocările + opisul), când, de către cine, de câte ori (retipăriri), ce a rămas netipărit. | §8.7 |
+| D10 | Bifarea „tipărit” e AUTOMATĂ, în clipa în care pachetul plicului e predat pentru imprimantă (fără buton „Am tiparit”). Limita, spusă limpede: platforma știe că fișierul a fost trimis la tipărit, nu că foaia a ieșit. | §3, §8.7 |
+| D11 | VERIFICAREA cu datele curierului, la fiecare urmărire automată (08 / 13 / 18): pe lot și pe zi, AWB-uri GENERATE vs TIPĂRITE vs RIDICATE; operatorul vede doar EXCEPȚIILE: (a) tipărit dar neridicat după o zi; (b) generat dar netipărit; (c) ridicat dar netrecut ca tipărit. Sus, un rând de control („azi: N generate, N tipărite, N ridicate, K de verificat”). | §3, §9.5 |
 
 Există un cont de operator fără owner pentru probe (`redari@`, editor pe modulul Redări): cu el se probează fiecare felie pe `TEST-RAZVAN` (§12.3).
+Deciziile din 17.11.2026 din `FANCOURIER_INTEGRARE.md` §12 rămân: **arhiva ZIP** a lotului (exemplarele de la dosar, fișiere separate pe plic) nu
+dispare — D8 adaugă, pe lângă ea, **pachetul de tipărit** (ce merge la imprimante), care e alt lucru decât arhiva (§8.6.1).
 
 ---
 
@@ -53,17 +64,38 @@ Apasă **„Trimite la curier (12 plicuri)”** → o singură confirmare („Tr
 secunde → primește un singur mesaj, de exemplu:
 
 > **12 AWB-uri generate, 1 respins: PL-HUS-0007 — lipsește telefonul.** Tarif: 326,40 lei fără TVA.
-> S-au descărcat: etichetele (PDF, 12 poziții) și pagina de control (tirajul 7B2C91A0). Tipărește etichetele, lipește-le după pagina de
-> control (poziția, numărul plicului, AWB-ul) și cheamă curierul.
+> Pachetul de tipărit e gata (tirajul 7B2C91A0): **[🖨 Tipărește etichetele]** (imprimanta de etichete, 12 poziții) și
+> **[🖨 Tipărește convocările + opisul]** (imprimanta A4, 12 plicuri, pagina de control în față). Lipește etichetele după pagina de control
+> (poziția, numărul plicului, AWB-ul) și cheamă curierul.
 
 În spate s-au întâmplat, fără să le vadă: propunerea, aprobarea sub plafon, rezervarea, apelul plătit către curier, scrierea rezultatului,
 etichetele și pagina de control (§8). Dacă ceva nu e limpede (curierul n-a răspuns, răspunsul e ciudat), mesajul e unul singur și spune
 exact ce are de făcut: **„Răspunsul curierului nu s-a confirmat pentru 12 plicuri. NU retrimite. Apasă «Verifică la curier» după 10 minute.”**
 Nimic nu se retrimite singur — un AWB dublu costă dublu.
 
+**Tipărirea (D8, D10).** Operatorul apasă de două ori: o dată „Tipărește etichetele” — se deschide fereastra de tipărire a calculatorului, el
+alege imprimanta de etichete și dă „Print” — și o dată „Tipărește convocările + opisul” — fișierul A4 se deschide în Word, el dă „Print” pe
+imprimanta A4 (de ce Word și nu direct din platformă: §8.6.2, întrebarea Q1 din §15.1). Nimic nu se tipărește singur, pe furiș: fiecare
+foaie pleacă dintr-un „Print” apăsat de el. În clipa în care platforma îi predă fișierul, bifează singură, pe fiecare plic din fișier, „eticheta
+tipărită” / „convocările + opisul tipărite”, cu ora și numele lui — fără buton „Am tipărit” (sunt sute de plicuri). **Limita, spusă cinstit:**
+platforma știe că fișierul a fost trimis la tipărit, nu că foaia a ieșit din imprimantă (hârtie blocată, imprimantă oprită, „Print” anulat).
+De aceea există „Retipărește…” (același tiraj, cu un motiv din listă: hârtie blocată, etichetă deteriorată, pierdută) și verificarea cu
+datele curierului de la §3: un plic „tipărit” pe care curierul nu l-a ridicat în ziua următoare apare la el ca excepție.
+
+**Eticheta pe A4 (D7).** Azi curierul întoarce eticheta pe o foaie A4 întreagă, deși i se cere A6. Până la răspunsul lui, platforma poate
+micșora eticheta la A6 (exact jumătate) fără să-i strice conținutul — codul de bare e desenat cu linii, nu e o poză — dar dacă liniile
+înjumătățite mai pot fi citite de cititorul curierului se află DOAR pe imprimanta reală, cu un plic de test (§8.6.3). Până la proba reușită,
+etichetele se tipăresc pe A4 și se lipesc ca atare.
+
 Apoi operatorul cheamă curierul (azi: din contul curierului, manual, §11), predă plicurile și **nu mai are nimic de făcut**: de trei ori pe zi
 platforma întreabă curierul ce s-a întâmplat cu fiecare AWB și bifează singură ridicarea, livrarea și returul (§3). Ce nu e limpede apare la el
-într-o listă scurtă „De verificat”, cu un buton „Verifică la curier” și cu ce să caute în contul curierului.
+într-o listă scurtă „De verificat”, cu un buton „Verifică la curier” și cu ce să caute în contul curierului. **Rândul de control (D11)**, sus în
+ecran, îi spune dintr-o privire dacă azi totul s-a închis: „azi: 12 generate, 12 tipărite, 12 ridicate, 0 de verificat”.
+
+**Și SMS-ul?** SMS-ul de redări (probat azi pe proiectul de test: lot pe comună, trei destinatari, toate livrate) e o reamintire a sesiunii și îl
+trimite pe proprietar la „QR-ul din scrisoare”. Deci ordinea firească e: plicul pleacă (ridicat de curier) și ajunge, abia apoi SMS-ul. Legătura
+celor două e un singur fapt: data ridicării de pe plic (bifată automat la §3). Cum anume ține cont lotul de SMS de ea (avertisment sau excludere a
+proprietarilor cu plicul neridicat) se hotărăște în felia SMS, nu aici (§9.5.5).
 
 **Schița ecranului (text):**
 
@@ -77,15 +109,24 @@ platforma întreabă curierul ce s-a întâmplat cu fiecare AWB și bifează sin
 │ …                                                                                            │
 │ Selectate: 12 din 13 plicuri.                                                                │
 │                                                                                              │
-│ [ Trimite la curier (12 plicuri) ]   [ Retipărește etichetele ]   [ Verifică la curier ]     │
+│ [ Trimite la curier (12 plicuri) ]                                   [ Verifică la curier ]   │
 │                                                                                              │
 │ Ultimul rezultat: 12 AWB-uri generate, 1 respins (PL-HUS-0007 — lipsește telefonul).        │
-│ Tarif 326,40 lei fără TVA. Tirajul 7B2C91A0: etichete + pagina de control descărcate.        │
+│ Tarif 326,40 lei fără TVA. Tirajul 7B2C91A0 — pachetul de tipărit:                           │
+│   [ 🖨 Tipărește etichetele (12) ]  [ 🖨 Tipărește convocările + opisul (12 plicuri, 31 foi) ] │
+│   [ Retipărește… ]  (același tiraj; cere motivul: hârtie blocată / etichetă deteriorată / …)  │
 │                                                                                              │
-│ De verificat (2): PL-HUS-0002 — curierul a dat două date de ridicare; PL-HUS-0003 — cod S65 │
-│ „în așteptare”. Deschide contul curierului și verifică; proprietarul / adminul soluționează. │
+│ Control azi: 12 generate · 12 tipărite (etichete 12, documente 12) · 9 ridicate · 1 de verif.│
+│ Ultima urmărire: 19.11.2026 13:02.                                                           │
+│                                                                                              │
+│ De verificat (3): PL-HUS-0002 — curierul a dat două date de ridicare; PL-HUS-0003 — cod S65 │
+│ „în așteptare”; PL-HUS-0009 — etichetă tipărită ieri, neridicată (comanda curierului?).      │
+│ Deschide contul curierului și verifică; proprietarul / adminul soluționează.                  │
 └──────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+Pe fiecare plic din listă, după trimitere, apare și evidența tipăririi (D9): „etichetă: tipărită 19.11 09:40 de I. Popescu · documente: tipărite
+19.11 09:41 (retipărite 1×: hârtie blocată)”, sau „etichetă: NETIPĂRITĂ” cu roșu.
 
 Butoanele vechi (1. Propune … 7. Confirmări) nu dispar: rămân într-o casetă „Pași detaliați (owner)”, strânsă implicit, pentru
 proprietar și pentru situațiile rare (reconciliere, tiraj nou, anulare, soluționare).
@@ -103,6 +144,11 @@ proprietar și pentru situațiile rare (reconciliere, tiraj nou, anulare, soluț
   trebuie distruse și refăcute), confirmarea că un AWB **nu există** la curier (deschide drumul unui al doilea AWB, deci cost), soluționarea
   unei contradicții a urmăririi (azi: tu sau un admin Redări).
 - **Întrerupătoarele**: urmărirea automată pornită / oprită; arhivarea automată pornită / oprită; plafonul zilei pe 0 = totul cere aprobarea ta.
+- **Lămurirea excepțiilor de tipărire** (D11, §9.5): un AWB ridicat de curier fără să fie trecut ca tipărit în platformă (eticheta a fost tipărită
+  din contul curierului sau de pe un tiraj înlocuit) îl lămurești tu sau un admin Redări, cu motivul; un AWB tipărit și apoi anulat cere confirmarea
+  că eticheta a fost distrusă. Operatorul le vede, dar nu le poate închide singur.
+- **La „Tiraj nou”**: platforma îți arată exact ce foi ale tirajului vechi au fost tipărite (etichete și documente, pe plic), ca lista de distrus
+  să fie completă — nu mai e „toate foile”, e o listă bifabilă (§8.7.4).
 
 ## 3. Ce se întâmplă singur
 
@@ -123,6 +169,24 @@ din urmărirea curierului, C0 din 19.11.2026 09:12”). Dacă mai târziu curier
 Arhiva (§10): eticheta fiecărui AWB și dovada de livrare (în forma în care o dă curierul) se salvează singure în dosarul plicului, lângă opis
 și convocare; „Documente lot (ZIP)” le cuprinde, ca fișiere separate pe plic.
 
+**Bifarea „tipărit” (D10)** se face singură, în clipa în care platforma predă fișierul pentru imprimantă: pe fiecare plic din fișier se scrie ce
+s-a tipărit (eticheta / convocările + opisul), ora, cine a apăsat și a câta tipărire e (§8.7). Platforma nu știe dacă foaia a ieșit; de aceea:
+
+**Verificarea cu datele curierului (D11)**, la fiecare din cele trei urmăriri, pe fiecare lot și pe fiecare zi: câte AWB-uri s-au generat, câte
+au eticheta tipărită, câte a ridicat curierul. Dacă cele trei numere se potrivesc, operatorul nu vede nimic în plus — doar rândul de control.
+Dacă nu, apar DOAR excepțiile, fiecare cu ce e de făcut (§9.5):
+
+| Excepția | Când apare | Ce vede operatorul | Ce are de făcut |
+|---|---|---|---|
+| (a) etichetă tipărită, plic neridicat | de la ora 08 a celei de-a doua zile lucrătoare după tipărire, dacă curierul nu a dat „ridicat” și AWB-ul nu e anulat | „PL-… — etichetă tipărită 19.11, neridicată” | verifică plicul fizic și comanda curierului (a fost chemat? a venit?); după încă o zi, propune proprietarului anularea (§15.1 Q6) |
+| (b) AWB generat, etichetă netipărită | de la ora 08 a zilei lucrătoare următoare generării, dacă nu există nicio tipărire a etichetei pe tirajul curent | „PL-… — AWB plătit, etichetă netipărită” | „Tipărește etichetele” (sau „Retipărește…”); după 3 zile lucrătoare netipărit, platforma propune anularea AWB-ului înainte de ridicare (cine anulează: §15.1 Q3 și Q6) |
+| (c) ridicat de curier, netrecut ca tipărit | imediat, la urmărirea care aduce „ridicat” pentru un AWB fără tipărire pe tirajul curent | „PL-… — ridicat de curier, dar eticheta nu a fost tipărită din platformă” | nimic de făcut de el; proprietarul / adminul lămurește (etichetă tipărită din contul curierului? tiraj înlocuit?) |
+| (d) anulat după tipărire | imediat, la anularea unui AWB care are eticheta tipărită | „PL-… — AWB anulat; eticheta tipărită trebuie distrusă” | distruge eticheta; proprietarul / adminul confirmă |
+
+Sâmbăta și duminica nu se numără ca zile lucrătoare; sărbătorile legale nu sunt cunoscute de platformă (limita e spusă în ecran). Retipăririle nu
+schimbă numerele (un plic tipărit de trei ori e tot UN plic tipărit); ele se văd pe plic. AWB-urile anulate ies din toate cele trei numere și se
+arată separat („2 anulate”).
+
 ## 4. Ce NU face platforma
 
 - Nu trimite nimic la curier fără apăsarea unui operator numit; nu retrimite niciodată singură un plic al cărui rezultat nu s-a confirmat.
@@ -132,16 +196,24 @@ Arhiva (§10): eticheta fiecărui AWB și dovada de livrare (în forma în care 
 - Nu trimite mailuri, SMS-uri sau mesaje colegilor; nu dă drepturi; nu șterge fișiere.
 - Nu pune date personale în fișierele de lucru (pagina de control are destinatarul mascat; borderoul CSV n-are nume / telefoane).
 - Nu bifează nimic pe proiectele reale cât timp garda „doar proiecte de TEST” e pornită (§12).
+- Nu tipărește nimic singură și nu trimite nimic la o imprimantă pe furiș: fiecare foaie pleacă dintr-un „Print” apăsat de un om. Un program pe
+  calculatorul de la șantier care să tipărească singur rămâne o variantă viitoare, doar dacă volumul o va cere (§8.6.4, cu riscurile ei).
+- Nu pretinde că știe că foaia a ieșit: „tipărit” înseamnă „predat pentru tipărire” (D10); dovada că plicul a plecat e ridicarea curierului.
+- Nu modifică eticheta primită de la curier (conținutul, codul de bare); cel mult o așază micșorată pe o pagină A6, după proba reușită pe imprimantă (§8.6.3).
 
 ## 5. În ce ordine livrăm (detaliile la §13)
 
 1. **F1 — Operatorii numiți + butonul unic** (încă pe proiecte de TEST): cea mai mare ușurare pentru operator (șapte pași → unul), cu riscul
    ținut de garda „doar TEST”, de plafonul zilei și de plafonul pe lot.
-2. **F2 — Urmărirea automată** (trei rulări pe zi; pe loturile de TEST scrie doar evidența, deci se probează fără efect juridic).
-3. **F3 — Arhiva** (eticheta pe plic, dovada de livrare, AR-ul automat doar cu dovadă).
-4. **F4 — Trecerea la proiectul real** (garda „doar TEST” cade; cere „da”-ul juridic, §12).
-5. **F5 — Comanda curierului din platformă** (după răspunsul curierului la întrebările din §15.2).
-6. **F6 — Eticheta A6** (depinde de curier; poate fi zero cod).
+2. **F1b — Pachetul de tipărit + evidența tipăririlor** (D8, D9, D10): cele două fișiere, cele două butoane „Tipărește”, bifarea automată,
+   „Retipărește…” cu motiv, evidența pe plic; tot pe proiecte de TEST. Depinde de răspunsul la Q1 (forma fișierului A4).
+3. **F2 — Urmărirea automată + verificarea generate / tipărite / ridicate** (D4, D11): trei rulări pe zi; pe loturile de TEST scrie doar
+   evidența, deci se probează fără efect juridic; rândul de control și excepțiile se calculează la fiecare rulare.
+4. **F3 — Arhiva** (eticheta pe plic, dovada de livrare, AR-ul automat doar cu dovadă).
+5. **F4 — Trecerea la proiectul real** (garda „doar TEST” cade; cere „da”-ul juridic, §12).
+6. **F5 — Comanda curierului din platformă** (după răspunsul curierului la întrebările din §15.2).
+7. **F6 — Eticheta A6**: întâi proba de micșorare pe imprimanta reală (zero cod în platformă, un fișier de probă), apoi, dacă proba reușește și
+   curierul nu dă A6 nativ, așezarea pe A6 făcută de platformă (cod mic, §8.6.3); dacă curierul dă A6 nativ, poate fi zero cod.
 
 Ce ne trebuie de la tine înainte de F1: răspunsurile la cele șase întrebări din §15.1 (fiecare cu variante și recomandare).
 
@@ -164,6 +236,22 @@ operator, plafonul zilnic, cronul, arhiva și comanda curierului.
 | bucket-ul privat `redari`, politici admin / editor (SELECT, INSERT; fără UPDATE / DELETE), calea plicului `plicuri/<plic_id>/…`, scanul AR / retur verificat în Storage de trigger | `20261126a`, `20261129i` |
 | tiparul cron → edge cu poartă internă: pg_cron (postgres) → `net.http_post` cu antetul `x-intern-secret` din Vault → edge verifică prin `fn_verifica_secret` (EXECUTE doar `service_role`), fail-closed | `20261011a_sec_edge_poarta_intern.sql`, `cleanup-recycle-bin`, `api-consum-extern` |
 | registrul automatizărilor (fișa a–e pe coloane) | `public.automatizari` (`20261010a`) |
+| descărcările din ecran (`descarcaBlob`: legătură `download` pe un Blob — browserul doar salvează fișierul; nu există nicio cale de tipărire directă); pagina de control și opisul ca DOCX construite din zero (`docxSimplu`); convocatorul din șablonul `convocator.docx` completat în browser, cu QR-ul ca imagine (`adaugaRelatieImagine`) și versoul adăugat prin editarea `word/document.xml` cu JSZip (`adaugaVersoInformare`) — adică repo-ul știe deja să deschidă, să modifice și să reîmpacheteze DOCX-uri | `src/redari/docx.js`, `plicuri.js` |
+| jurnalul modulului (`red_jurnal`: tabela, `user_id`, `date_noi` fără date personale) | existent |
+
+### 6.1 Ce a arătat Testul 1 (18.11.2026) și intră în proiectare
+
+- **Generarea**: un click, un AWB. Răspunsul acțiunii către ecran NU a adus AWB-ul și tariful; ambele au apărut în rândul din BD → ecranul le
+  citește din rând după scrierea rezultatelor (corectat în #1132), iar mesajul operatorului (§8.5) se construiește din rândurile recitite, nu din
+  răspunsul curierului. Tariful din rând a diferit de oferta comercială (§15.2 pct. 5).
+- **Asocierea pe poziție** a mers: eticheta întoarsă de curier purta referința plicului (câmpurile de observații și conținut) — verificarea celor
+  trei numere (`FANCOURIER_INTEGRARE.md` §12) stă în picioare, deci pagina de control rămâne cheia pachetului de tipărit (§8.6).
+- **Eticheta a venit pe A4** (595 × 842 pt), cu conținutul pe toată pagina (190 × 277 mm), vectorial — text și linii, trei imagini mici — deși
+  cererea a trimis `format=A6` (§8.6.3). **Expeditorul de pe etichetă = punctul de lucru al contului de curier**, nu sediul (D6, §11).
+- **Comanda curierului** s-a dat manual din aplicația lui web; câmpurile și regulile observate sunt la §11 (nu se folosesc apelurile interne ale
+  aplicației lor în platformă: nu sunt API-ul public).
+- **SMS-ul de redări** a fost probat pe proiectul de test (lot pe comună, trei destinatari, livrate): e o reamintire care trimite la QR-ul din
+  scrisoare → plicul întâi, SMS-ul după ridicare / livrare (§9.5.5).
 
 Ce se schimbă la primitive: **poarta** RPC-urilor de pe drumul butonului (propune → aprobă → claim → rezultate → tiraj → etichete) devine
 „operator numit SAU owner” (§7.1), cu identitatea celui care apasă în coloanele de autor; restul porților owner rămân (§2).
@@ -331,7 +419,171 @@ cu distrugerea foilor). Varianta e la §15.1 Q6.
 | 423 `transport_real_doar_test` | „Transportul e permis doar pe proiecte de TEST (Testul 1)” | nimic (anunță proprietarul) |
 | 503 `transport_neconfigurat` / `autentificare_fan_neconfirmata` | „Legătura cu curierul nu e configurată / nu răspunde; nimic trimis” | anunță proprietarul |
 | 403 `non_operator` (cod nou) | „Doar operatorii numiți de proprietar pot trimite” | — |
-| etichete 502 după AWB-uri generate | „AWB-urile există; etichetele nu s-au putut descărca acum” | „Retipărește etichetele” |
+| etichete 502 după AWB-uri generate | „AWB-urile există; etichetele nu s-au putut descărca acum” | „Tipărește etichetele” (aceeași comandă, mai târziu) |
+| tipărirea refuzată de BD (`RD020` tiraj schimbat / `RD021` descărcări oprite / eroare) | „Fișierul nu s-a predat pentru tipărire: <motiv>” — nimic descărcat, nimic bifat | owner: „Tiraj nou”; altfel reîncearcă |
+
+### 8.6 Pachetul de tipărit (D8)
+
+#### 8.6.1 Ce e pachetul și prin ce diferă de arhivă
+
+Pachetul de tipărit al unui tiraj = **două fișiere**, din ACELAȘI manifest (plicurile active cu AWB generat / ridicat, pozițiile 1…N — regula de
+azi; plicurile respinse / fără AWB / anulate nu intră, sunt „rămase” pe pagina de control):
+
+| Fișier | Pentru | Conținut | Cine îl face, când |
+|---|---|---|---|
+| **Etichetele** (PDF) | imprimanta de etichete | etichetele AWB în ordinea pozițiilor; un fișier pe parte de ≤ 100 (limita cererii de etichete), deci loturile de până la 100 au un singur fișier; numele cu tirajul, ca azi | funcția edge, în răspunsul lui `trimite` (§8.1), din PDF-urile curierului, neschimbate (§8.6.3 pentru varianta A6) |
+| **Convocările + opisul** (un fișier A4) | imprimanta A4 | **prima: pagina de control** (poziție · nr. plic · AWB · destinatar mascat · nr. documente · bifă — aceeași de azi, `controlLotFan`), apoi, pentru fiecare plic în ordinea pozițiilor: opisul (prima pagină din plic), convocările în ordinea opisului (fiecare cu informarea pe verso) | ecranul, din DOCX-urile arhivate în Storage (aceleași citiri ca arhiva ZIP: `planPachetPlicuire` cu manifestul), imediat după rezultat; forma fișierului: §8.6.2 |
+
+**Arhiva ZIP** („Documente lot”, decizia (b) din 17.11.2026) rămâne neatinsă: ea e **exemplarul de la dosar** (fișiere separate pe plic, descărcate
+exact cum sunt arhivate) și primește în F3 eticheta și dovada pe plic (§10.1). Pachetul de tipărit e **ce merge la imprimante**: ordonat pentru
+plicuire, cu pagina de control în față, într-un singur fișier pe imprimantă. Ambele cer același tiraj; „Tiraj nou” le invalidează pe amândouă.
+
+**„Se face singur”** (D8) înseamnă: pregătit automat, fără pași ai operatorului, în aceeași apăsare cu generarea — etichetele vin în răspunsul
+funcției edge, fișierul A4 se construiește în ecran din arhivă. **Predarea** fiecărui fișier pentru imprimantă e însă o apăsare a lui
+(„Tipărește etichetele” / „Tipărește convocările + opisul”): acela e momentul D10 (§8.7.2). Dacă operatorul închide ecranul înainte să apese, la
+reîntoarcere butoanele sunt tot „Tipărește…” (nimic în evidență) și fișierele se refac (etichetele = aceeași cerere la curier pe același tiraj, ca
+„Retipărește etichetele” de azi; nu costă). Butonul devine „Retipărește…” abia când evidența are o tipărire pe tirajul curent.
+
+#### 8.6.2 Fișierul A4: cum se face UN fișier din zeci de DOCX-uri (întrebarea Q1, §15.1)
+
+Azi convocatorul și opisul sunt DOCX (convocatorul din șablonul validat juridic, cu QR și cu informarea pe verso; opisul și pagina de control
+construite în browser). Un singur fișier pentru imprimanta A4 are trei forme posibile:
+
+| Varianta | Cum | Ce câștigă | Ce costă / riscă |
+|---|---|---|---|
+| **A) un DOCX unit** (recomandat pentru F1b) | ecranul descarcă DOCX-urile din Storage (ca la ZIP) și le unește cu JSZip într-un singur `document.xml`: fiecare document devine **secțiune proprie** cu început pe **pagină impară** (`w:sectPr` / `w:type w:val="oddPage"`), ca la tipărirea față-verso fiecare opis și fiecare convocare să înceapă pe o față nouă — Word adaugă singur pagina albă unde trebuie, fără să știm numărul de pagini; imaginile QR și relațiile lor se renumerotează (`rIdN`, `media/qrN.png`, `docPr id` unic); stilurile vin din șablonul convocatorului (același pentru toate) + cele ale `docxSimplu` (nume distincte, verificate la unire) | zero infrastructură nouă; conținutul fiecărui document e **identic** cu exemplarul arhivat (același XML); față-verso corect prin secțiuni; repo-ul deja editează DOCX-uri | se tipărește din Word („Tipărește…” = descarcă și deschide; „Print” din Word), nu din fereastra browserului; cere Word (sau LibreOffice) pe calculatorul de la șantier (§16); unirea trebuie probată pe șablonul real (antete / subsoluri pe secțiune, numerotări, fonturi); numărul de foi nu e cunoscut dinainte („31 foi” din exemplu ar fi doar o estimare: 1 + opis 1 + 2 × convocări) |
+| B) un PDF unic făcut de un convertor | un serviciu (LibreOffice fără interfață) pe un server al firmei primește DOCX-urile, întoarce PDF; platforma le pune cap la cap și adaugă pagini albe acolo unde un document are număr impar de pagini (știut după conversie) | tipărire direct din browser (fereastra de tipărire), numărul exact de foi, un format bun și pentru arhivă | **infrastructură nouă** cu date personale în tranzit (cine o poate chema, cu ce secret, cine o întreține, ce se întâmplă când e oprită); redarea LibreOffice ≠ Word (fonturi, despărțiri) pe un document validat juridic; felie separată, cu fișa de securitate a–e |
+| C) ca azi | arhiva ZIP, tipărire fișier cu fișier | nimic nou | NU respectă D8 (o apăsare pe imprimantă); zeci de deschideri pentru un lot |
+
+Varianta „DOCX → HTML → imagine → PDF în browser” (`html2canvas` + `jspdf`, deja în proiect) e **respinsă**: redă aproximativ un document a cărui
+formă a fost validată de juridic, și rasterizează textul. Recomandarea: **A** în F1b; **B** doar dacă tipărirea din Word la șantier se dovedește
+o piedică (sau pentru arhiva PDF, mai târziu). Fișierul A4 poartă același identificator de tiraj în nume și pe pagina de control; pe un lot de TEST
+numele începe cu `TEST_`, iar pagina de control cu „LOT DE TEST”.
+
+#### 8.6.3 Eticheta A4 → A6 cât timp curierul nu dă A6 (D7, interimar)
+
+**Ce s-a văzut pe PDF-ul real** (Testul 1): o pagină A4 (595 × 842 pt) cu conținutul pe toată pagina (190 × 277 mm), **vectorial**: text
+(DejaVu Sans), 59 dreptunghiuri, ~1.250 segmente de linie (barele codului de bare; cea mai îngustă ≈ 1 pt = 0,35 mm), trei imagini mici (sigla,
+un pătrat 78 × 78 px, o bandă 356 × 30 px); pagina e o redare HTML → PDF (matricea 0,75 = 96 → 72 dpi). Urmări:
+
+1. **Decuparea nu ajută**: nu există o zonă A6 în pagină de păstrat (conținutul e pe toată foaia) — eticheta e un șablon A4 al curierului, nu o
+   etichetă A6 pusă pe A4.
+2. **Micșorarea e vectorială, deci fără pixelare**: la A6 (105 × 148 mm) factorul e exact 0,5; pe o rolă termică „A6” de **100 × 150 mm**
+   (imprimantele de etichete uzuale) factorul cu proporția păstrată e **0,476** (100 / 210). Barele cele mai înguste ajung la ≈ 0,17 mm: la 203 dpi
+   (0,125 mm / punct) ≈ 1,4 puncte pe bară — la limită; la 300 dpi (0,085 mm) ≈ 2 puncte — probabil citibil. **Textul** (adresa, numele) se
+   înjumătățește și el: ce e 8 pt devine 4 pt, greu de citit pentru curierul care livrează. De aceea micșorarea e **interimară**: răspunsul bun
+   rămâne eticheta A6 nativă a curierului (șablon cu litere pe măsura foii).
+3. **Ce poate face platforma sigur** (fără să atingă conținutul): în funcția edge, cu o bibliotecă PDF care încorporează pagini ca formular
+   (pe Deno: `pdf-lib` — de probat; în browser nu e în proiect și a dat probleme la build), fiecare pagină A4 se pune, scalată cu factorul de la
+   pct. 2, pe o pagină de **100 × 150 mm**; conținutul (textul, liniile codului de bare) rămâne același flux, doar transformat — nimic
+   redesenat, nimic rasterizat. PDF-ul original de la curier se păstrează neschimbat (arhiva, §10, și evidența), cel micșorat se numește cu
+   sufixul `_100x150` și e DOAR pentru imprimantă. Varianta cu zero cod: „Potrivește la pagină” din fereastra de tipărire (Acrobat / Edge) pe
+   imprimanta de etichete — același efect, dar depinde de driver (unele păstrează margini, altele taie); se folosește la proba de la pct. 4.
+4. **Ce trebuie probat pe imprimanta reală** (înainte de orice cod): eticheta Testului 1 tipărită micșorat pe rola de 100 × 150 mm (din
+   fereastra de tipărire), apoi (i) scanată cu telefonul (codul e un cod de bare liniar — orice aplicație îl citește sau nu), (ii) adresa citită
+   de un om de la un metru, (iii) **decisiv**: scanată de curier la ridicarea unui lot de TEST (Testul 2a, un plic). Se notează rezoluția
+   imprimantei (203 / 300 dpi) și lățimea reală a rolei. Până la proba reușită: A4, lipită ca atare.
+5. **Ce se întreabă la curier** (§15.2 pct. 1, extins): dacă `format` e luat în seamă la `pdf=1`; dacă formatul e o setare a contului / punctului
+   de lucru; dacă există ieșire **ZPL / EPL** (limbajul imprimantelor termice — ar da eticheta nativă, dar cere un program local, §8.6.4) sau un
+   șablon A6 cu litere pe măsură; ce factor minim de micșorare acceptă cititoarele lor.
+
+#### 8.6.4 Tipărirea silențioasă: variantă viitoare, nu acum (D8)
+
+Un program pe calculatorul de la șantier (agent local) ar putea lua pachetele din platformă și le-ar trimite singur la cele două imprimante
+(PDF prin driver; ZPL direct). **Nu se face acum**; dacă volumul o va cere (sute de plicuri pe zi, în fiecare zi), se proiectează separat, cu fișa de
+securitate a–e, pentru că aduce riscuri proprii: (1) un program de întreținut pe un calculator din șantier (instalare, actualizări, antivirus,
+cine răspunde de el); (2) un **canal din cloud spre o imprimantă fizică** = o țintă: un cont ERP compromis ar putea tipări orice, oricând, pe
+șantier (hârtie, etichete cu date personale) — agentul ar avea nevoie de secret propriu, legat de lot / tiraj, cu coada vizibilă unui om; (3)
+„trimis la imprimantă” tot nu e „foaia a ieșit” (driverul confirmă intrarea în coadă, nu ieșirea); (4) date personale în coada locală / cache-ul
+calculatorului; (5) amestecarea tirajelor dacă coada nu se golește la „Tiraj nou”; (6) dependența de calculatorul și imprimanta pornite. Varianta
+de azi (două apăsări de „Print”, de un om) e lentă cu câteva secunde și sigură.
+
+### 8.7 Evidența tipăririlor (D9) și bifarea automată (D10)
+
+#### 8.7.1 Ce se ține și unde (separat de evidența AWB și de expediere)
+
+```
+red_fan_tiparire_pachete (            -- o predare de fișier pentru imprimantă = un pachet
+  id uuid PRIMARY KEY,                -- cheia intenției, generată de ecran (registru local, L05 în UI)
+  lot_id uuid NOT NULL, tiraj_cheie text NOT NULL, tiraj_nr smallint NOT NULL,
+  tip text NOT NULL CHECK (tip IN ('eticheta','documente')),
+  parte smallint,                     -- partea etichetelor (NULL la documente)
+  pozitii int[] NOT NULL,             -- pozițiile din manifest cuprinse în fișier (toate sau o alegere la retipărire)
+  fisier_sha256 text NOT NULL CHECK (fisier_sha256 ~ '^[0-9a-f]{64}$'),
+  retiparire boolean NOT NULL,        -- cel puțin un plic din fișier mai avea o tipărire de același tip pe acest tiraj
+  motiv text CHECK (motiv IS NULL OR motiv IN ('hartie_blocata','eticheta_deteriorata','pierduta','imprimanta_oprita','alt_motiv')),
+  CONSTRAINT red_fan_tiparire_pachete_motiv CHECK (retiparire = (motiv IS NOT NULL)),
+  de uuid NOT NULL, la timestamptz NOT NULL DEFAULT clock_timestamp()
+)
+red_fan_tipariri (                    -- un rând pe plic și tip, la fiecare predare
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  pachet_id uuid NOT NULL REFERENCES red_fan_tiparire_pachete(id),
+  lot_id uuid NOT NULL, plic_id uuid NOT NULL, awb_id uuid NOT NULL,   -- rândul red_fan_awb (AWB-ul de pe etichetă / din manifest)
+  tip text NOT NULL CHECK (tip IN ('eticheta','documente')),
+  tiraj_cheie text NOT NULL, pozitie int NOT NULL,
+  nr smallint NOT NULL CHECK (nr >= 1),  -- a câta tipărire a acestui tip pe acest plic pe acest tiraj (1 = prima; ≥ 2 = retipărire)
+  de uuid NOT NULL, la timestamptz NOT NULL,
+  UNIQUE (pachet_id, plic_id, tip),       -- replay-ul aceluiași pachet nu dublează
+  UNIQUE (plic_id, tip, tiraj_cheie, nr)  -- numărătoarea e densă și unică
+)
+```
+- RLS: SELECT pentru admin / editor Redări (`auth.uid() IS NOT NULL AND fn_red_nivel() IN ('admin','editor')`), nimic altceva pentru nimeni;
+  scrieri DOAR prin RPC (L07). Fără date personale: numere de plic, poziții, id-uri, cine a apăsat (L10).
+- **Separarea** (D9): tipărirea NU schimbă `red_fan_awb.stare` și NU scrie nimic pe `red_plicuri` (expedierea o scrie doar ridicarea C0, §9.2);
+  niciun trigger nu leagă cele trei evidențe — D11 (§9.5) le COMPARĂ, nu le sincronizează (lecția Polițe #1043: fără copii sincronizate prin
+  triggere).
+- `v_red_fan_plic_tiparire` (view `security_invoker`): pe fiecare plic al unui lot FAN — `eticheta_tiparita_la` (prima pe tirajul **curent**),
+  `eticheta_tipariri`, `eticheta_ultima_de`, `documente_tiparite_la`, `documente_tipariri`, `netiparit_eticheta` / `netiparit_documente`
+  (boolean, derivate în view — clientul primește flagul, L19), `tipariri_pe_tiraj_inlocuit` (rânduri cu altă cheie decât a lotului). Ecranul
+  afișează de aici (§1); nicio numărătoare în JS.
+
+#### 8.7.2 Momentul D10 și ordinea pașilor (evidența nu rămâne niciodată în urma fișierului)
+
+```
+Apasă „Tipărește etichetele” / „Tipărește convocările + opisul” / „Retipărește… (motiv, poziții)”
+  1. ecranul face fișierul în memorie (etichetele: răspunsul lui `trimite` sau o cerere nouă de etichete pe același tiraj;
+     documentele: DOCX-ul unit §8.6.2) → sha256
+  2. cheia pachetului (UUID) → registrul local (localStorage, o intrare pe cheie: lot, tiraj, tip, poziții, sha256), scris și RECITIT;
+     eșec = nu se predă nimic (lecția „L05 în UI”)
+  3. RPC fn_red_fan_tiparire_inregistreaza(p_pachet, p_lot_id, p_tiraj_cheie, p_tip, p_parte, p_plicuri [{plic_id, awb, pozitie}], p_sha256, p_motiv)
+       — operator sau owner (fn_red_fan_e_operator, L08), într-O tranzacție (L02), lock-uri în ordinea L06:
+       lot FOR UPDATE → red_fan_loturi (tirajul: cheia = p_tiraj_cheie și neoprit, altfel RD020 / RD021 — același corp ca fn_red_fan_tiraj, L19)
+       → red_fan_awb ORDER BY id FOR UPDATE (fiecare plic: AWB-ul din cerere = AWB-ul rândului, stare în {generat, ridicat, …}, nu anulat, plicul activ în lot;
+         altfel 22023 pe toată cererea — un fișier parțial greșit nu se predă)
+       → INSERT pachet ON CONFLICT (id) DO NOTHING RETURNING; fără rând = recitește: aceeași cheie + același sha256 → REPLAY (întoarce evidența
+         memorată, nimic nou); aceeași cheie + alt sha256 → 22023
+       → INSERT rânduri cu nr = (câte există pe plic / tip / tiraj) + 1, sub lock-ul lotului (L01: numărătoarea e serializată)
+       → red_jurnal: UN rând pe pachet (tabela red_fan_tiparire_pachete, date_noi: tip, tiraj, poziții, nr. plicuri, retipărire, motiv)
+       → întoarce { pachet_id, randuri, retipariri: [{nr_plic, nr}], tiraj }
+  4. DOAR după răspunsul ok: predarea fișierului — etichete: fereastra de tipărire a browserului pe PDF (iframe + print()), cu „Salvează” ca rezervă;
+     documente: descărcare (se deschide în Word); intrarea din registrul local iese la rezultat dovedit (ok / refuz 4xx cu cod); 5xx / timeout =
+     rămâne și se lămurește prin recitirea pachetului din BD la redeschidere (replay cu aceeași cheie)
+```
+De ce înregistrarea e ÎNAINTEA predării: astfel **nu există fișier predat fără rând în evidență** — evidența poate cel mult să fie în avans
+(„Print” anulat, hârtie blocată), caz acoperit de limita D10 și de verificarea D11 (a). Invers (fișier predat, apoi RPC picat) ar lăsa foi tipărite
+fără urmă, exact ce D9 vrea să excludă. Dublu-click: `ocupat` + registrul local (a doua apăsare pe același lot / tip cât prima e în registru e
+refuzată local). Două taburi: replay sau pachet nou cu `nr` mai mare (= retipărire, cere motiv) — nimic dublat în evidență.
+
+**Retipărirea**: „Retipărește…” cere motivul din listă și lasă alegerea pozițiilor (toate sau câteva) — etichetele pentru o alegere se cer la
+curier doar pe AWB-urile alese (manifestul lotului nu se schimbă, deci tirajul rămâne); documentele pentru o alegere = DOCX-ul unit al acelor
+plicuri (tot cu pagina de control în față). Fiecare plic retipărit primește `nr` + 1. Operatorul poate retipări (nu costă); numărul retipăririlor se
+vede pe plic și pe lot (D9) și intră în raportul lotului.
+
+#### 8.7.3 Ce vede operatorul și proprietarul
+
+- Pe plic (§1): „etichetă: tipărită <data ora> de <nume> · documente: tipărite <data ora> (retipărite N×: <motiv>)” / „NETIPĂRITĂ”.
+- Pe lot: „tipărite: etichete N / M, documente N / M; retipăriri R; netipărite: PL-…” (din view; `M` = plicurile din manifest).
+- În jurnal (`red_jurnal`): câte un rând pe pachet, cu cine / când / ce; și rândul de la „Tiraj nou” cu lista de distrus (§8.7.4).
+- În raportul lotului (PV / export): coloanele de tipărire NU intră în registrul juridic (expedierea e data ridicării); sunt evidență de lucru.
+
+#### 8.7.4 Legătura cu tirajul și cu „Tiraj nou”
+
+Evidența e **pe cheia de tiraj**: o tipărire aparține tirajului cu care s-a predat fișierul. La „Tiraj nou” (owner, trei pași, neschimbat):
+rândurile vechi rămân (istoric), view-ul recalculează „tipărit” pe cheia **curentă** → toate plicurile devin „netipărite” până la retipărire;
+pasul 2 („se adună și se distrug toate foile”) primește din evidență **lista exactă a foilor tipărite pe tirajul vechi** (pe plic: etichetă da / nu,
+documente da / nu, de câte ori), ca listă bifabilă, iar înlocuirea tirajului scrie în `red_jurnal` numărul foilor de distrus. Excepția D11 (b)
+reapare după fereastra ei dacă nu se retipărește. O descărcare cu cheie veche e refuzată de RPC-ul de înregistrare (RD020), deci nu poate intra
+în evidență ca tipărire pe tirajul nou.
 
 ## 9. Urmărirea automată (D4)
 
@@ -439,6 +691,74 @@ Faptele se derivă ca azi (`rezumatUrmarireFan`): C0 = ridicat, S2 = livrat, cat
   `secrete_nume` = `REDARI_FAN_INTERN_SECRET (Vault)`, `FAN_SELFAWB_USERNAME / FAN_SELFAWB_PASSWORD / FAN_CLIENT_ID (Edge Secrets)`) + secțiunea din
   `registru_automatizari` — de chat, în aceeași sesiune cu aplicarea.
 
+### 9.5 Verificarea generate / tipărite / ridicate la fiecare rulare (D11)
+
+#### 9.5.1 Definițiile exacte (o singură definiție, în SQL; ecranul primește numerele și flagurile, L19)
+
+Toate pe **lot** și pe **zi** = ziua generării AWB-ului în ora României (`(generat_la AT TIME ZONE 'Europe/Bucharest')::date`, L17); „tirajul
+curent” = `red_fan_loturi.tiraj_cheie`; „acum” = ora României la citire (view) sau la rulare (instantaneu):
+
+| Numărul | Ce intră | Ce NU intră |
+|---|---|---|
+| **GENERATE** (lot, zi) | rândurile `red_fan_awb` cu `awb IS NOT NULL`, generate în ziua respectivă, `stare <> 'anulat'` (orice stare ulterioară: generat, ridicat, livrat, retur, de_verificat) | anulatele (număr separat: **ANULATE** (lot, zi)); rândurile fără AWB (propuse, aprobate, respinse, necunoscute — ele sunt „rămase”, nu AWB-uri) |
+| **TIPĂRITE** (lot, zi) | dintre GENERATE, cele cu cel puțin UN rând `red_fan_tipariri` de tip `eticheta` pe tirajul **curent** al lotului; alături, în paranteză, același număr pentru `documente` | retipăririle (un plic = 1, oricâte tipăriri); tipăririle pe un tiraj înlocuit |
+| **RIDICATE** (lot, zi) | dintre GENERATE, cele cu `ridicat_la IS NOT NULL` (faptul C0 necontrazis, §9.2), indiferent de ce a urmat (livrat, retur) | AWB-urile cu C0 contrazis (sunt în „de verificat” al urmăririi, nu aici) |
+| **DE VERIFICAT** (lot) | numărul AWB-urilor lotului **din ultimele 60 de zile** (nu doar din zi) aflate în cel puțin o excepție (a)–(d) nelămurită (jos) | excepțiile urmăririi (coduri nelimpezi, contradicții) se numără separat, în lista „De verificat” de azi; ecranul le arată împreună, cu eticheta fiecăreia |
+
+Rândul de control: „**azi**: N generate (K anulate) · N tipărite (documente N) · N ridicate · **K de verificat**”, cu „ultima urmărire: <data ora>”;
+un selector arată aceleași numere pe oricare din ultimele 7 zile. Pe un lot de TEST, aceleași numere, cu „LOT DE TEST” în față.
+
+#### 9.5.2 Excepțiile: definiție, fereastră, cine închide
+
+Zilele lucrătoare: funcție SQL `fn_red_zi_lucratoare_dupa(p_zi date, p_n int) → date` (a `p_n`-a zi lucrătoare după `p_zi`; sâmbăta și duminica
+excluse; **fără** sărbătorile legale — limită spusă în ecran și în §16), folosită de view și de testele de paritate; ora de început a unei zile e
+08:00 ora României (prima rulare).
+
+| Excepția | Condiția exactă (pe rândul `red_fan_awb` + evidența §8.7) | De când | Cine o închide și cum |
+|---|---|---|---|
+| **(a) tipărit, neridicat** | există tipărire `eticheta` pe tirajul curent, prima la `T`; `ridicat_la IS NULL`; `stare <> 'anulat'`; nu există C0 contrazis | din `fn_red_zi_lucratoare_dupa(T::date, 2)` ora 08:00 (tipărit luni → excepție de miercuri 08:00; tipărit vineri → marți 08:00) | se închide singură la C0 sau la anulare; operatorul verifică plicul fizic și comanda curierului; după `fn_red_zi_lucratoare_dupa(T::date, 3)` ecranul propune **anularea** (Q6, §15.1) |
+| **(b) generat, netipărit** | `awb IS NOT NULL`, generat la `G`; nicio tipărire `eticheta` pe tirajul curent; `stare <> 'anulat'` | din `fn_red_zi_lucratoare_dupa(G::date, 1)` ora 08:00 | se închide singură la tipărire sau anulare; după `fn_red_zi_lucratoare_dupa(G::date, 3)`: „AWB plătit fără etichetă de 3 zile — propune anularea înainte de ridicare” (cine anulează: Q3 / Q6; factura: §15.2 pct. 9). După „Tiraj nou” reapare pentru toate plicurile, după aceeași fereastră |
+| **(c) ridicat, netrecut ca tipărit** | `ridicat_la IS NOT NULL`; nicio tipărire `eticheta` pe tirajul curent; fără lămurire | imediat, la rularea care scrie C0 | DOAR owner / admin Redări: `fn_red_fan_exceptie_lamureste(p_awb_id, 'c_ridicat_netiparit', p_motiv ∈ {tiparit_din_contul_curierului, tiparit_pe_tiraj_inlocuit, alt_motiv}, p_nota ≤ 200)` → rând în `red_fan_tiparire_lamuriri (awb_id, tip, motiv, nota, de, la, PRIMARY KEY (awb_id, tip))` + `red_jurnal`; **nu** se fabrică un rând de tipărire (evidența rămâne adevărată: nu s-a tipărit din platformă) |
+| **(d) anulat după tipărire** | `stare = 'anulat'`; există tipărire `eticheta` (pe orice tiraj); fără lămurire | imediat, la anulare | owner / admin: aceeași funcție cu `'d_anulat_tiparit'`, motiv `eticheta_distrusa`; până atunci plicul arată „eticheta tipărită trebuie distrusă” |
+
+- Pe loturile de **TEST**: aceleași excepții, cu „LOT DE TEST”; nu se propune anulare automată (anularea pe loturile de test e inventarul de
+  închidere al probei, §12.3).
+- AWB-urile mai vechi de 60 de zile ies din verificare (ca din urmărire, §9.3); ce era deschis apare o singură dată ca „AWB vechi neîncheiat”.
+- Retipăririle nu creează și nu închid excepții; se văd pe plic.
+
+#### 9.5.3 Cum se calculează și unde se păstrează
+
+- **La citire**: view `v_red_fan_control_zi` (`security_invoker`, pe lot × zi) pentru rândul de control, și `v_red_fan_exceptii` (pe AWB, cu
+  tipul excepției și textul-cod pentru ecran) — numere și flaguri calculate în SQL, nimic în JS (L19); RLS a tabelelor de dedesubt (admin / editor).
+- **La fiecare rulare** (08 / 13 / 18): după scrierea urmăririi, `fn_red_fan_urmarire_auto` (calea cron, §9.1) salvează în `red_fan_rulari` un
+  instantaneu `control jsonb` (pe fiecare lot cu AWB-uri deschise: generate / anulate / tipărite / ridicate / de_verificat pe ziua curentă + numărul
+  excepțiilor pe tip) și pune suma excepțiilor în `de_verificat`. Instantaneul e **istoric** („la 13:02 erau 2 de verificat”); ecranul arată
+  numerele vii din view și ora ultimei rulări. Nicio scriere pe `red_fan_awb` / `red_plicuri` din această verificare: ea doar **compară** (fișa
+  §9.4 (b) rămâne neschimbată; `red_fan_rulari` e deja în perimetru).
+- Excepțiile (a) și (b) depind de ceas → se evaluează la citire cu ora României (o excepție poate „apărea” între două rulări; ecranul o arată
+  oricum din view). (c) și (d) sunt fapte.
+
+#### 9.5.4 Ce se întâmplă cu AWB-urile anulate, retipăririle și „Tiraj nou”
+
+- **Anulat înainte de tipărire**: iese din GENERATE, intră în ANULATE; nicio excepție.
+- **Anulat după tipărire**: excepția (d) până la lămurire; iese din GENERATE / TIPĂRITE / RIDICATE.
+- **Anularea propusă** de platformă ((a) după 3 zile lucrătoare, (b) după 3 zile lucrătoare) e o PROPUNERE în ecran (text + buton spre acțiunea
+  de anulare existentă, `DELETE /awb` doar înainte de C0, forma de succes strictă); nimic nu se anulează singur (D-urile nu dau voie: anularea
+  atinge banii și e decisă de om; Q3 / Q6).
+- **Retipăriri**: nu schimbă numerele; `retipariri` apare pe lot ca număr separat.
+- **Tiraj nou**: TIPĂRITE scade la 0 pe lot (cheia curentă s-a schimbat) → (b) reapare după fereastră; lista foilor vechi (§8.7.4) e de distrus;
+  excepțiile (c) de pe tirajul vechi (ridicat, dar tipărit pe tiraj înlocuit) se lămuresc cu motivul `tiparit_pe_tiraj_inlocuit`.
+- **Reconciliere / AWB găsit ulterior** (`fn_red_fan_reconciliaza` cu `p_awb`): rândul primește AWB-ul și intră în GENERATE în ziua lui `generat_la`;
+  excepția (b) apare după fereastră dacă nu se tipărește (etichetele pentru el se cer pe tirajul curent; manifestul se schimbă → „Tiraj nou” după
+  regula de azi, §8.4).
+
+#### 9.5.5 Unde se leagă SMS-ul (fără a proiecta SMS-ul aici)
+
+Faptul comun e **ridicarea** (`red_fan_awb.ridicat_la` + `red_plicuri.data_expediere` pe loturile reale). Lotul de SMS (Registru → „SMS proprietari”)
+exclude azi: au răspuns, PV semnat, fără mobil RO, opt-out, telefon dublat. Propunerea pentru felia SMS (de decis acolo): un număr nou în
+previzualizare — „N cu plicul neridicat încă de curier” — ca avertisment sau ca excludere implicită, derivat din același view
+(`v_red_fan_plic_tiparire` + ridicarea), nu din numărători în JS. Aici nu se scrie nimic în tabelele SMS.
+
 ## 10. Arhiva (D5)
 
 ### 10.1 Unde și cum
@@ -498,6 +818,18 @@ punctul de lucru al contului de TEST, nu sediul — pe contul real trebuie verif
 format? greutatea?), forma răspunsului (id-ul comenzii, starea), ce întoarce la a doua comandă în aceeași zi (eroare / înlocuire), dacă se
 leagă de AWB-uri sau doar de punct, dacă există citirea comenzilor zilei (reconciliere), fusul orar.
 
+**Ce a arătat comanda manuală din 18.11.2026** (aplicația web a curierului, fila „Creare comandă”; detaliile câmpurilor stau în dosarul probei,
+nu în repo): persoana de contact ≤ 25 de caractere; telefonul de contact înlocuiește telefonul contului DOAR pe comanda respectivă; data preluării
+implicit azi; intervalul se alege din liste de ore date **pe localitate și pe zi**, din 15 în 15 minute, sfârșitul la cel puțin o oră după început
+(în ziua probei, pentru localitatea punctului de lucru, fereastra oferită s-a încheiat la 16:30); un singur tip de comandă („Standard”);
+comutator plicuri / colete cu număr; **fără câmp de AWB**, fără greutate (formularul a trimis singur 1 kg), fără cost afișat, fără confirmare la
+„Plasează”; după trimitere comanda apare în raportul lor „În așteptare”, **fără număr** până la preluare; **observația apare tăiată la 50 de
+caractere** în lista lor (nu se știe dacă la curier ajunge întreagă) → numerele de AWB puse în observație nu sunt un mijloc de legare. Legătura
+comandă ↔ AWB-uri o face curierul la ridicare (raportul lor de comenzi are un câmp cu AWB-urile ridicate). Urmări pentru F5: `red_fan_comenzi`
+nu stochează o listă de AWB-uri „promisă”; legătura se citește înapoi din raportul curierului (dacă API-ul îl expune, §15.2 pct. 2), altfel pe
+punct + zi; observația ≤ 50 de caractere utile („Gazpet – N plicuri”), fără AWB-uri. Apelurile interne ale aplicației lor web NU se folosesc din
+platformă (nu sunt API-ul public; se pot schimba oricând).
+
 **Propunerea (felia F5, după răspunsuri)**: buton **„Cheamă curierul azi”** (operator sau owner), activ doar dacă pe punctul de lucru există
 AWB-uri generate neridicate și nu există comandă vie azi; ecranul propune intervalul implicit (ora curentă rotunjită la sfert + 2 h → sfârșitul
 programului localității; configurabil pe proiect) și contactul implicit al proiectului; confirmare cu ziua, intervalul, punctul, numărul de
@@ -541,7 +873,10 @@ să nu se dea de două ori (același tabel, `stare = 'manuala'`).
 Fiecare felie se probează cu contul `redari@` (editor Redări, fără owner), după un document de pași în stilul `FAN_TEST1_PASI.md` (coloana
 „Acțiune” stabilă, simulatorul procedurii extins): (1) fără rând în lista operatorilor → butonul dezactivat + 403 / 42501 la apel direct; (2)
 owner-ul îl numește (jurnal); (3) lot de TEST cu 3 plicuri (unul cu localitate inexistentă, ca la Testul 1) → un apăsat → „2 AWB-uri generate,
-1 respins: adresa”, etichete + pagina de control, tarif; (4) plafonul zilei pus pe 1 de owner → al doilea lot → „așteaptă aprobarea” → owner
+1 respins: adresa”, tarif, pachetul de tipărit gata → „Tipărește etichetele” (fereastra de tipărire) + „Tipărește convocările + opisul” (DOCX-ul
+unit se deschide în Word: pagina de control, apoi fiecare document pe față nouă) → evidența pe plic bifată automat, cu ora și numele; „Retipărește…”
+pe o poziție cu motiv → `nr` 2 pe acel plic; (3b) rândul de control: „2 generate · 2 tipărite · 0 ridicate · 0 de verificat” (a doua zi
+lucrătoare, fără ridicare: excepția (a) pe ambele); (4) plafonul zilei pus pe 1 de owner → al doilea lot → „așteaptă aprobarea” → owner
 aprobă → operatorul trimite; (5) dublu-click și două taburi (cheia intenției; al doilea primește replay / „în curs”); (6) întreruperea simulată
 (secretele șterse între aprobare și generare → 503; rândurile `aprobat` rămân; repunere → trimiterea reia fără a renumăra); (7) comanda
 curierului manual; (8) urmărirea automată pornită de owner → la 13:00 rularea bifează `ridicat` în evidență, **nu** pe plic (lot de TEST), jurnalul
@@ -579,13 +914,40 @@ PGlite + două sesiuni pe clonă (de chat). Numărul migrării se alege după `g
 - **Risc**: bani — ținut de garda „doar TEST”, plafonul zilei (implicit 20, în Testul 1: 1 / 3), plafonul pe lot, aprobarea pe hash și claim-ul
   atomic. Risc de drept: un editor numit greșit — lista e owner-only, cu jurnal; nivelul rămâne precondiție.
 
-### F2 — Urmărirea automată
-- **Conține**: `red_fan_rulari`, `fn_red_fan_urmarire_tick` (postgres / pg_cron), secretul Vault `REDARI_FAN_INTERN_SECRET` (generat în BD),
+### F1b — Pachetul de tipărit + evidența tipăririlor (D8, D9, D10; după răspunsul la Q1)
+- **Conține**: `red_fan_tiparire_pachete`, `red_fan_tipariri`, `v_red_fan_plic_tiparire`, `fn_red_fan_tiparire_inregistreaza` (operator / owner;
+  corpul verificării tirajului comun cu `fn_red_fan_tiraj`, L19). UI: cele două butoane „Tipărește…” (etichetele: fereastra de tipărire a
+  browserului pe PDF; documentele: descărcarea DOCX-ului unit), „Retipărește…” (motiv din listă, poziții), evidența pe plic și pe lot, lista de
+  distrus la „Tiraj nou”; modulul nou `src/redari/docxUnit.js` (unirea DOCX-urilor: secțiuni `oddPage`, renumerotarea `rId` / `media` / `docPr`,
+  stilurile; funcții pure, testabile pe fixture-uri DOCX mici) și construirea fișierului A4 din `planPachetPlicuire` + pagina de control; mesajele
+  §8.5 noi. Edge: nimic nou (etichetele vin deja din `trimite` / `eticheta`). Tot cu `DOAR_PROIECTE_TEST = true`.
+- **Migrare descrisă** (`…a2_redari_fan_tiparire`, număr ales după `git ls-tree` pe toate branch-urile): cele două tabele cu CHECK-urile din §8.7.1,
+  indexuri `(lot_id, tiraj_cheie, tip)` și `(plic_id, tip, tiraj_cheie)`, RLS SELECT admin / editor, `REVOKE ALL` + GRANT SELECT, funcția (DEFINER,
+  `search_path` fix, EXECUTE `authenticated`, poarta în corp), view-ul `security_invoker`, jurnalul; postcondiții pe fiecare drept în parte (un
+  `has_table_privilege` pe drept, nu cu listă), pe UNIQUE-uri și pe CHECK-ul `retiparire = (motiv IS NOT NULL)`. Revenire: refuză dacă există
+  pachete (istoric de tipărire); altfel DROP view → funcție → tabele (copil înaintea părintelui), `LOCK … NOWAIT`.
+- **Probe**: vitest (`docxUnit`: ordinea = manifestul, fiecare document în secțiune proprie cu `oddPage`, QR-urile distincte după unire, stilurile
+  fără coliziune, un document lipsă = refuz înainte de unire (L12); registrul local al pachetului: scris și recitit înainte, iese doar la rezultat
+  dovedit; sha256 stabil pe același conținut), PGlite (`nr` crește dens sub lock; replay cu aceeași cheie = zero rânduri noi; aceeași cheie + alt
+  sha = 22023; cheie de tiraj veche = RD020; tiraj oprit = RD021; UNIQUE-urile; RLS ca editor non-owner fără rând de operator = 42501; viewer = 0
+  rânduri), două sesiuni pe clonă (doi operatori predau același tip pe același lot deodată → `nr` 1 și 2, fără dublare), live pe `TEST-RAZVAN`
+  (un lot de TEST cu 2–3 plicuri: cele două fișiere, Word deschide DOCX-ul unit și previzualizarea de tipărire arată fiecare document pe față
+  nouă; evidența pe plic; retipărirea unei poziții; „Tiraj nou” arată lista de distrus).
+- **Risc**: date personale în fișierul A4 (aceleași ca în ZIP-ul de azi: fișier local pe calculatorul operatorului, nu în Storage); evidența în
+  avans față de hârtie (limita D10, acoperită de D11); unirea DOCX pe șablonul real (antete / subsoluri / numerotări) — probată înainte de PR.
+
+### F2 — Urmărirea automată + verificarea generate / tipărite / ridicate (D4, D11)
+- **Conține**: `red_fan_rulari` (+ `control jsonb`), `fn_red_fan_urmarire_tick` (postgres / pg_cron), secretul Vault `REDARI_FAN_INTERN_SECRET` (generat în BD),
   `fn_red_fan_urmarire_auto`, `fn_red_fan_bifeaza_auto` (EXECUTE doar `service_role`; corp comun cu `fn_red_fan_urmarire` / `fn_red_fan_ridicat`),
   coloanele `red_plicuri.curier_livrat_la / curier_livrat_cod / curier_retur_semnalat_la / curier_retur_motiv` (+ CHECK: motivul în lista de
   retur; trigger-ul plicului lasă aceste coloane scrise DOAR de funcția internă — proveniență, L08), jobul cron (`cron.schedule`, idempotent pe
   nume), funcția edge `redari-fan-urmarire` (în `NO_JWT`), întrerupătorul activ din ecran (owner), lista „De verificat” și „Ultima urmărire” în
-  ecran, rândul `automatizari` + registrul (chat).
+  ecran, rândul `automatizari` + registrul (chat). **D11**: `fn_red_zi_lucratoare_dupa`, view-urile `v_red_fan_control_zi` și `v_red_fan_exceptii`,
+  `red_fan_tiparire_lamuriri` + `fn_red_fan_exceptie_lamureste` (owner / admin Redări), instantaneul `control` scris de rulare, rândul de control
+  și excepțiile în ecran (texte din coduri, în `fanLot.js`), propunerea de anulare (text + butonul existent; nimic automat).
+- **Probe D11** (în plus față de cele de jos): tabel de cazuri pentru (a)–(d) cu ceasul (vineri → marți 08:00; sâmbătă / duminică; 07:59 vs 08:00;
+  ora de vară), paritate SQL ↔ așteptările din acest document (L25: așteptările din §9.5.2, nu din cod); anulat înainte / după tipărire; „Tiraj
+  nou” → TIPĂRITE 0; replay-ul lămuririi (aceeași cheie primară = 23505 → mesaj „deja lămurit”).
 - **Migrare descrisă** (`…b_redari_fan_urmarire_auto`): precondiții fail-closed ca în 20261011a (`fn_verifica_secret` pinuită, extensiile
   `pg_cron` / `pg_net` / Vault prezente, secretul inexistent și fără `_VECHI`), tabelul rulărilor, coloanele pe plic (ALTER cu lock SHARE ROW
   EXCLUSIVE pe `red_plicuri` în setul fix), funcțiile, trigger-ul plicului extins (amprenta corpului vechi verificată), jobul cron; postcondiții:
@@ -621,23 +983,35 @@ PGlite + două sesiuni pe clonă (de chat). Numărul migrării se alege după `g
   intra deja în F1 ca UI fără apel.
 
 ### F6 — Eticheta A6
-- Depinde de răspunsul curierului (§15.2): poate fi doar o setare a contului (zero cod) sau un parametru (o constantă + un test).
+- **Pasul 0, zero cod**: proba de la §8.6.3 pct. 4 pe imprimanta reală (eticheta Testului 1 micșorată din fereastra de tipărire pe rola de
+  100 × 150 mm; scanare cu telefonul; adresa citită de om; scanarea curierului la ridicarea unui lot de TEST). Rezultatul se scrie în
+  `FANCOURIER_INTEGRARE.md` §8 (deschisa 17).
+- **Dacă curierul dă A6 nativ**: o setare a contului (zero cod) sau un parametru (o constantă + un test) — preferat.
+- **Dacă nu, și proba reușește**: în funcția edge, pasul de **așezare pe 100 × 150 mm** (biblioteca PDF pe Deno, pagina A4 încorporată ca formular,
+  factorul 0,476, fără rasterizare), DOAR pentru fișierul de imprimantă; originalul rămâne pentru arhivă și evidență. Teste: dimensiunea paginii,
+  numărul paginilor = numărul AWB-urilor, originalul neschimbat (sha256), un PDF de formă necunoscută (nu A4, mai multe pagini pe AWB) = fără
+  transformare + mesaj (L12 / L13). Fără librărie nouă în browser.
 
 ## 14. Lecțiile L01–L25: cum le respectă implementarea descrisă
 
 - **L01** lock înainte de verificare: `fn_red_fan_comanda` ia lotul, plicurile, rândurile, setările (un rând = serializarea plafonului) și abia
-  apoi verifică; `red_fan_zi` cu `ON CONFLICT … WHERE` atomic; revendicarea slotului cron prin `INSERT … ON CONFLICT DO NOTHING RETURNING`.
+  apoi verifică; `red_fan_zi` cu `ON CONFLICT … WHERE` atomic; revendicarea slotului cron prin `INSERT … ON CONFLICT DO NOTHING RETURNING`;
+  `fn_red_fan_tiparire_inregistreaza` ia lotul FOR UPDATE și abia apoi numără tipăririle existente (`nr` dens, UNIQUE).
 - **L02** atomic: propunere + aprobare + plafon + cerere + intenție într-UN RPC; rezultatele unei solicitări într-un RPC (existent); bifarea pe
-  plic + evidența FAN + jurnalul într-o tranzacție; Storage scris înainte, înregistrarea căii doar după verificarea obiectului.
+  plic + evidența FAN + jurnalul într-o tranzacție; Storage scris înainte, înregistrarea căii doar după verificarea obiectului; pachet + rânduri pe
+  plic + jurnal într-UN RPC, iar fișierul se predă DOAR după rowcount confirmat (fără fișier predat fără evidență).
 - **L03** rezultat vechi: CAS pe `versiune_urmarire` (existent) și la cron; tirajul (existent); intenția încheiată cu CAS pe `in_curs`.
 - **L04** idempotență: cheia intenției UUID + hash-ul cererii (`UNIQUE`, aceeași cheie + alt hash = eroare); cheia solicitării (existent); o
-  rulare = un rând unic `(zi_ro, slot)`.
+  rulare = un rând unic `(zi_ro, slot)`; pachetul de tipărire = cheie UUID + sha256 al fișierului (`ON CONFLICT DO NOTHING RETURNING`, replay
+  la aceeași cheie + același sha, 22023 la alt sha); lămurirea = cheie primară `(awb_id, tip)`.
 - **L05** ambiguu = necunoscut: fără retry la `necunoscut` / `in_curs`, butonul blocat până la reconciliere, registrul local nu iese la 5xx /
-  42501, replay-ul intenției întoarce rezultatul memorat, cronul se oprește la primul 429 / 5xx.
+  42501, replay-ul intenției întoarce rezultatul memorat, cronul se oprește la primul 429 / 5xx; la tipărire, un 5xx după RPC nu lasă fișierul
+  „pierdut”: cheia rămâne în registrul local și pachetul se recitește din BD la redeschidere (replay).
 - **L06** deadlock: ordinea scrisă în fiecare RPC (lot → plicuri → rânduri FAN → `red_fan_loturi` → setări → `red_fan_zi` → cereri → intenții →
   jurnal); cronul: rânduri FAN `ORDER BY id` → plic → jurnal, fără lock pe lot (nu schimbă marcaj / tiraj).
 - **L07** toate căile: `de_aprobat` și contorul zilei impuse în RPC (fără GRANT de scriere); coloanele `curier_*` pe plic scrise doar de
-  funcția internă (trigger BEFORE pe OLD / NEW); operatorii doar prin RPC.
+  funcția internă (trigger BEFORE pe OLD / NEW); operatorii doar prin RPC; evidența tipăririi și lămuririle fără niciun GRANT de scriere
+  (doar RPC), fără trigger care să sincronizeze „tipărit” pe `red_fan_awb` / `red_plicuri` — D11 compară, nu copiază.
 - **L08** identitate: `auth.uid()` peste tot; funcția edge nu primește rolul; calea cron = EXECUTE exclusiv `service_role` + `auth.uid() IS NULL`
   + secret în Vault (rol verificat explicit, nu claims); autorii puși de server.
 - **L09** entitatea țintă: lotul citit cu JWT-ul omului (RLS); fiecare plic verificat pe lotul lui; căile Storage pe listă albă legate de plicul
@@ -648,16 +1022,21 @@ PGlite + două sesiuni pe clonă (de chat). Numărul migrării se alege după `g
   albă, regex-urile ancorate (existente).
 - **L14 / L15**: migrări în forma L15 v2, cu preflight pe date, postcondiții, revenire testată apply → rollback → re-apply; allow-list-ul din 31d.
 - **L16** unicitate: `red_fan_zi (zi_ro)`, `red_fan_rulari (zi_ro, slot)`, `red_fan_intentii (cheie)`, cererile deschise pe lot, comenzile vii pe
-  punct / zi; hash-ul cererii pe lista canonică.
+  punct / zi; hash-ul cererii pe lista canonică; `red_fan_tipariri (pachet_id, plic_id, tip)` și `(plic_id, tip, tiraj_cheie, nr)`; identitatea
+  fișierului predat = sha256 pe conținut, nu numele.
 - **L17** timp: ziua și orele în `Europe/Bucharest` (contorul zilei, sloturile, data expedierii = data C0 locală); tick orar în loc de cron fix
-  (ora de vară).
+  (ora de vară); ziua generării și ferestrele excepțiilor D11 în ora României, zilele lucrătoare printr-o singură funcție SQL, „de la 08:00” pe
+  timestamp exact (07:59 nu e 08:00).
 - **L18** fail-open: eroare ≠ gol (RPC eșuat = mesaj, nu „nimic de trimis”); „azi mai poți trimite N” doar din citire reușită; necunoscut ≠ 0;
   tarif gol = „necunoscut”.
 - **L19** o definiție: `fn_red_fan_e_operator` (RPC + edge + ecran), corpul comun al urmăririi / bifării (om + cron), mesajele §8.5 în `fanLot.js`,
-  tabelul cod → efect ca tabel de cazuri cu paritate JS ↔ SQL.
+  tabelul cod → efect ca tabel de cazuri cu paritate JS ↔ SQL; „tipărit” / „netipărit” / excepțiile (a)–(d) / numerele D11 calculate o singură
+  dată în SQL (view-uri) și primite de ecran ca flaguri; verificarea tirajului la înregistrarea tipăririi = corpul lui `fn_red_fan_tiraj`;
+  manifestul pachetului de tipărit = `manifestTiparire` (același ca etichetele și arhiva).
 - **L20** garda nouă testată și pe căile legitime: owner-ul fără rând de operator trece; cererea aprobată se trimite; retragerea unui operator cu
   intenție `in_curs` nu rupe încheierea (owner-ul o poate încheia); întrerupătorul oprește doar rulările noi; refuzul local (plafon) raportat
-  distinct de eșecul extern.
+  distinct de eșecul extern; retipărirea legitimă (motiv, poziții alese) trece, iar „Tiraj nou” nu șterge evidența veche (istoric); excepțiile
+  (a) / (b) se închid singure la C0 / tipărire / anulare (nu rămân agățate), (c) / (d) doar prin lămurire.
 - **L21 / L22**: nu e AI; pasul durabil înaintea apelului plătit (existent) + aprobarea / plafonul înaintea rezervării.
 - **L23** paginare: citirile cronului cu keyset (`urmarit_la, id`), id-uri în bucăți de 100 (`citesteToate`, existent).
 - **L24** async: generația + lotul la fiecare acțiune (existent); descărcările multiple după `await` reverifică generația; registrul local pe
@@ -667,31 +1046,45 @@ PGlite + două sesiuni pe clonă (de chat). Numărul migrării se alege după `g
 
 ## 15. Întrebările deschise
 
-### 15.1 Către proprietar (maximum 6; recomandarea e marcată)
+### 15.1 Către proprietar (lista FINALĂ, maximum 6; recomandarea e marcată)
 
-**Q1. Unitatea plafonului.** A) **AWB-uri pe zi (ora României), pe tot modulul**, cu plafonul pe lot păstrat ca a doua frână — *recomandat*;
-B) doar pe lot (azi); C) pe săptămână. Valoarea inițială propusă: 20 pe zi până după Testul 2, apoi cât îți convine (ex. 200).
+Două întrebări din prima trecere au fost scoase, fiind deja decise: unitatea plafonului (D3 spune „AWB-uri pe zi” — rămâne plafonul pe lot ca a
+doua frână și valoarea inițială 20 pe zi până după Testul 2) și forma listei operatorilor (D2 spune „listă explicită, administrată de owner”; că e
+una pe tot modulul, nu pe proiect, e presupunerea mea, marcată la §16).
 
-**Q2. Când o trimitere nu încape în plafon.** A) **tot clickul așteaptă aprobarea ta**, iar ecranul îi spune operatorului dinainte cât mai
+**Q1. Fișierul pentru imprimanta A4 (convocările + opisul într-un singur fișier, D8).** Azi fiecare convocare și fiecare opis e un fișier Word
+separat. Ca să fie UN fișier și o apăsare: A) **un singur fișier Word unit, în care fiecare document începe pe o față nouă (corect și la
+tipărire față-verso); se deschide în Word și se dă „Print” de acolo** — *recomandat*: nimic nou de instalat pe servere, documentele rămân
+identice cu cele arhivate; cere Word (sau LibreOffice) pe calculatorul de la șantier; B) un singur PDF făcut de un program de conversie pus pe un
+server al firmei — tipărire direct din browser și numărul exact de foi, dar o instalație nouă prin care trec date personale, de întreținut și de
+securizat (felie separată); C) ca azi, arhiva cu fișiere separate, tipărite unul câte unul (nu respectă D8).
+
+**Q2. Când o trimitere nu încape în plafonul zilei.** A) **tot clickul așteaptă aprobarea ta**, iar ecranul îi spune operatorului dinainte cât mai
 încape, ca să poată alege mai puține plicuri — *recomandat* (lotul se tipărește întreg, o singură dată); B) se trimit câte încap, restul
 așteaptă (două tiraje pe același lot); C) refuz sec, fără cerere.
 
-**Q3. Ce poate face operatorul în afara butonului.** A) nimic (tot restul owner); B) **operatorul poate anula un AWB neridicat (nu costă) și
-poate confirma „găsit” la reconciliere; confirmarea că un AWB NU există (deschide drumul unui al doilea AWB) și „Tiraj nou” rămân la tine** —
-*recomandat*; C) operatorul poate și confirma absența.
+**Q3. Ce poate face operatorul în afara butonului.** A) nimic (tot restul owner); B) **operatorul poate: retipări (același tiraj, cu motiv din
+listă), anula un AWB neridicat (nu costă) și confirma „găsit” la reconciliere; rămân la tine: confirmarea că un AWB NU există (deschide drumul
+unui al doilea AWB), „Tiraj nou” și lămurirea excepțiilor „ridicat dar netipărit” / „anulat după tipărire”** — *recomandat*; C) operatorul poate
+și confirma absența și lămuri excepțiile.
 
-**Q4. Lista operatorilor.** A) **o listă pe modul (globală), administrată de tine, cu jurnal** — *recomandat*; B) câte o listă pe proiect;
-C) orice editor Redări = operator (fără listă; nerecomandat: lărgește tacit drepturi existente).
+**Q4. Ce bifează platforma singură, fără hârtie (semnalarea față de D4).** D4 cere „livrat → AR” și „întors → retur”, dar regula procedurii,
+pusă în bază la cererea Juridicului, cere pentru AR scanul confirmării semnate, iar pentru retur scanul plicului întors. Platforma nu poate
+respecta amândouă deodată. A) **ridicarea se bifează automat (de aici curg cele 10 zile); livrarea se scrie ca fapt al curierului, iar AR-ul se
+bifează singur DOAR când dovada curierului (imaginea confirmării) e arhivată în dosar și numele primitorului e destinatarul; returul definitiv
+rămâne cu plicul fizic întors, automat doar „retur semnalat”** — *recomandat, până la răspunsul Juridicului (§15.3 pct. 3–4)*; B) AR și retur
+definitive din codul curierului, fără document — schimbă regula procedurii și cere „da”-ul juridic explicit înainte; C) doar ridicarea automat,
+restul la om.
 
-**Q5. Bifările cu efect juridic fără document fizic.** Azi AR-ul cere scanul confirmării, iar returul cere scanul plicului întors (regula
-procedurii, în BD). A) **ridicarea se bifează automat (C0); livrarea se bifează ca fapt, AR-ul doar când dovada curierului (imagine) e arhivată
-și numele primitorului = destinatarul; returul definitiv rămâne cu plicul fizic, automat doar „retur semnalat”** — *recomandat, până la
-răspunsul juridic*; B) AR și retur definitive din codul curierului, fără document (schimbă regula procedurii; cere „da” juridic explicit);
-C) doar ridicarea automat, restul la om.
-
-**Q6. Plicurile respinse și corectate.** A) **se mută într-un lot nou de plicuire și se trimit ca lot nou** (lotul tipărit nu se mai atinge;
+**Q5. Plicurile respinse și corectate.** A) **se mută într-un lot nou de plicuire și se trimit ca lot nou** (lotul tipărit nu se mai atinge;
 fără „Tiraj nou”) — *recomandat*; B) se trimit pe același lot, iar tu faci „Tiraj nou” (distrugerea foilor, retipărirea întregului lot);
 C) operatorul poate face „Tiraj nou” singur.
+
+**Q6. AWB-uri plătite care nu pleacă (D11): când propune platforma anularea și cine anulează.** Un AWB generat costă indiferent dacă plicul
+pleacă (de confirmat la curier dacă unul neridicat se facturează, §15.2 pct. 9). A) **etichetă netipărită 3 zile lucrătoare SAU tipărită dar
+neridicată 3 zile lucrătoare → platforma propune anularea, operatorul o face (un click, doar înainte de ridicare), tu vezi lista anulărilor** —
+*recomandat*; B) la fel, dar anularea doar de tine; C) platforma doar arată excepțiile, nimeni nu anulează din platformă (se lasă să expire la
+curier).
 
 ### 15.2 Către curier
 
@@ -708,6 +1101,13 @@ C) operatorul poate face „Tiraj nou” singur.
 6. **Punctul de lucru**: `clientId`-ul contului real = punctul de unde pleacă plicurile? Un singur punct sau unul pe proiect?
 7. **Eticheta pe un singur AWB**: `GET /awb/label` cu un AWB întoarce același PDF ca în lot (pentru arhiva pe plic)? Limita de AWB-uri pe apel;
    ordinea paginilor = ordinea `awbs[]`?
+8. **A6, concret** (completează pct. 1): formatul e o setare a contului / punctului de lucru? Există ieșire ZPL / EPL pentru imprimante termice,
+   sau un șablon A6 cu litere pe măsura foii? Eticheta A4 tipărită micșorată la 100 × 150 mm (factor ≈ 0,48) e acceptată de cititoarele
+   curierilor? Care e factorul minim de micșorare pe care îl acceptă?
+9. **AWB neridicat**: un AWB generat, dar niciodată predat curierului, se facturează? După cât timp expiră singur? Anularea înainte de ridicare
+   (`DELETE /awb`) anulează și factura?
+10. **Comanda și AWB-urile**: comanda de ridicare nu are câmp de AWB; legătura comandă ↔ AWB-uri se face la ridicare? Raportul de comenzi din API
+    expune AWB-urile ridicate (câmpul din aplicația web)? Observația comenzii ajunge întreagă la curier (în lista web apare tăiată la 50 de caractere)?
 
 ### 15.3 Către juridic
 
@@ -737,3 +1137,16 @@ C) operatorul poate face „Tiraj nou” singur.
 - Durata unei rulări de urmărire cu 3.000 de AWB-uri (30 de solicitări × timeout 30 s + pauze) față de limita de execuție a funcției edge:
   plafonul de 30 se poate reduce la 15 dacă proba pe clonă o cere.
 - Existența unui ecran de setări pe proiect în Redări în care să intre contactul implicit (§11); altfel caseta se pune în ecranul proiectului.
+- Că lista operatorilor e una pe tot modulul (nu pe proiect) — presupunere de proiectare, D2 nu spune; dacă proprietarul vrea pe proiect,
+  `red_fan_operatori` primește `proiect_id` în cheie (schimbare mică, înainte de F1).
+- Că șablonul real al convocatorului (`convocator.docx`) se poate uni cu alte documente fără conflicte de stiluri / antete / numerotări (§8.6.2 A)
+  — se probează pe fixture-uri reale înainte de PR-ul F1b; dacă nu, varianta B (PDF prin convertor) devine prima.
+- Că pe calculatorul de la șantier există Word (sau LibreOffice) pentru fișierul A4 unit și o fereastră de tipărire pentru PDF-ul etichetelor.
+- Că imprimanta de etichete e pe rolă de 100 × 150 mm (nu 105 × 148) și rezoluția ei (203 sau 300 dpi) — se notează la proba §8.6.3 pct. 4;
+  că cititoarele curierului acceptă codul de bare micșorat la ≈ 0,48 — se află doar la ridicare.
+- Că o bibliotecă PDF care încorporează pagini (pdf-lib) rulează în funcția edge pe Deno fără probleme de dimensiune / timp — de probat în F6;
+  altfel așezarea pe A6 rămâne la „Potrivește la pagină” din fereastra de tipărire.
+- Că `red_fan_awb.generat_la` / `ridicat_la` sunt `timestamptz` (ziua se derivă în ora României); sărbătorile legale nu sunt cunoscute de
+  `fn_red_zi_lucratoare_dupa` (excepțiile (a) / (b) pot apărea cu o zi mai devreme în jurul lor — spus în ecran).
+- Că raportul de comenzi al curierului din API expune AWB-urile ridicate pe comandă (în aplicația web există); altfel legătura comandă ↔ AWB-uri
+  rămâne pe punct + zi (§11).
