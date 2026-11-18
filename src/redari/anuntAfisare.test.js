@@ -21,7 +21,10 @@ import { ghidModele } from './notificari.js'
 import { parseazaText, PAGINA, LATIME_UTILA } from '../../scripts/redari_sablon_anunt_afisare.mjs'
 import { PROIECT_MODEL, UAT_MODEL, UAT_EXEMPLU, PARCELE_MODEL, parceleExemplu, textDocx, DATA_MODEL } from '../../scripts/redari_model_anunt_afisare.mjs'
 import { partiXmlDocx } from './xmlBineFormat.testutil.js'
-import { areFormaIdentificator, sateDeclarate, verificaIdentificatoriPublicati, textProblemeIdentificatori, MESAJ_IDENTIFICATORI_REFUZATI, MESAJ_SAT_NEDECLARAT, RE_NECOMPLETAT, LUNGIME_MAX_IDENTIFICATOR } from './identificatoriPublici.js'
+import {
+  areFormaIdentificator, canonizeazaIdentificator, canonizeazaParcelePublicate, sateDeclarate, verificaIdentificatoriPublicati, textProblemeIdentificatori,
+  MESAJ_IDENTIFICATORI_REFUZATI, MESAJ_SAT_NEDECLARAT, RE_NECOMPLETAT, LUNGIME_MAX_IDENTIFICATOR, MAX_CIFRE_SUBCAMP, MOTIV, ETICHETA_MOTIV,
+} from './identificatoriPublici.js'
 import { tronsonOptional } from './importTgz.js'
 
 const SABLON = resolve(process.cwd(), 'public/redari/sabloane/anunt_afisare.docx')
@@ -211,10 +214,14 @@ describe('genereazaAnuntAfisare — conținutul', () => {
       expect(JSON.stringify(r.campuri), v).not.toContain(v)
     }
     expect(totText).not.toMatch(/POPESCU|Fictivă nr\. 7|0711|cnp|token/i)
-    // rândurile au exact coloanele din lista albă
-    const rand = randuriAnuntAfisare(parcele)
+    // rândurile au exact coloanele din lista albă, cu valorile canonice (șiruri), nu obiectele parcelelor
+    const { randuri: rand, probleme } = randuriAnuntAfisare(parcele, UAT)
+    expect(probleme).toEqual([])
     expect(rand).toHaveLength(9)
-    for (const x of rand) expect(Object.keys(x).sort()).toEqual(['nr', ...CAMPURI_PARCELA_ANUNT].sort())
+    for (const x of rand) {
+      expect(Object.keys(x).sort()).toEqual(['nr', ...CAMPURI_PARCELA_ANUNT].sort())
+      for (const k of CAMPURI_PARCELA_ANUNT) expect(typeof x[k], k).toBe('string')
+    }
     // selectul din UI nu cere coloane de persoană
     expect(COL_PARCELA_ANUNT.split(',').map(s => s.trim())).toEqual(['id_parcela', ...CAMPURI_PARCELA_ANUNT, 'sters_la'])
   })
@@ -238,7 +245,9 @@ describe('genereazaAnuntAfisare — conținutul', () => {
     for (let i = 1; i < tarlale.length; i++) expect(ordine(tarlale[i]) >= ordine(tarlale[i - 1]), `${tarlale[i - 1]} → ${tarlale[i]}`).toBe(true)
     const cad = randuri.slice(1).filter(c => c[2] === 'T1').map(c => Number(c[3]))
     expect(cad).toEqual([...cad].sort((a, b) => a - b))
-    expect(randuriAnuntAfisare([parcela(1, { tarla: 'T10' }), parcela(2, { tarla: 'T2' })]).map(x => x.tarla)).toEqual(['T2', 'T10'])
+    expect(randuriAnuntAfisare([parcela(1, { tarla: 'T10' }), parcela(2, { tarla: 'T2' })], UAT).randuri.map(x => x.tarla)).toEqual(['T2', 'T10'])
+    // ordinea pe forma publicată a TGZ-ului compus („31#” rămâne „31#”): 9 < 31 < 123, nu alfabetic
+    expect(randuriAnuntAfisare([parcela(1, { tarla: '123#' }), parcela(2, { tarla: '9#' }), parcela(3, { tarla: '31#' })], UAT).randuri.map(x => x.tarla)).toEqual(['9#', '31#', '123#'])
   })
 })
 
@@ -274,7 +283,7 @@ describe('XML bine format și modelul pentru Transgaz', () => {
     expect(JSON.stringify(parceleExemplu(150))).not.toMatch(/nume|adresa|telefon/)
     expect((await genereazaAnuntAfisare({ proiect: PROIECT_MODEL, uat: UAT_EXEMPLU, parcele: parceleExemplu(150), templateArrayBuffer: sablon(), dataDocument: '2026-11-18' })).randuri).toBe(150)
     const refuz = await genereazaAnuntAfisare({ proiect: PROIECT_MODEL, uat: UAT_MODEL, parcele: parceleExemplu(3), templateArrayBuffer: sablon() }).catch(e => e)
-    expect(refuz.probleme).toEqual([1, 2, 3].map(i => ({ id_parcela: `T0-EXE-000${i}`, camp: 'sat' })))
+    expect(refuz.probleme).toEqual([1, 2, 3].map(i => ({ id_parcela: `T0-EXE-000${i}`, camp: 'sat', motiv: MOTIV.SAT_NEDECLARAT })))
   })
 })
 
@@ -287,13 +296,14 @@ const RX_IMPORT_LOCAL = /from\s+'\.\/([\w.-]+\.js)'/g
 const sursaModul = (nume, ref) => (ref === 'lucru'
   ? readFileSync(resolve('src/redari', nume), 'utf8')
   : execFileSync('git', ['show', `${ref}:src/redari/${nume}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).replace(/\r\n/g, '\n')
-async function incarcaDocx(ref, mutatie = null) {
+async function incarcaDocx(ref, mutatii = []) {
+  const lista = Array.isArray(mutatii) ? mutatii : (mutatii ? [mutatii] : [])
   const dir = mkdtempSync(join(TMP, 'anunt_docx_')); foldere.push(dir)
   const surse = new Map(); const coada = ['docx.js']
   while (coada.length) {
     const n = coada.shift(); if (surse.has(n)) continue
     let t = sursaModul(n, ref)
-    if (mutatie && mutatie.fisier === n) {
+    for (const mutatie of lista.filter(x => x.fisier === n)) {
       if (t.split(mutatie.din).length !== 2) throw new Error(`mutația nu se aplică exact o dată în ${n}: ${mutatie.din}`)
       t = t.replace(mutatie.din, mutatie.in)
     }
@@ -301,8 +311,11 @@ async function incarcaDocx(ref, mutatie = null) {
     for (const m of t.matchAll(RX_IMPORT_LOCAL)) coada.push(m[1])
   }
   for (const [n, t] of surse) writeFileSync(join(dir, n), t)
-  const mod = await import(pathToFileURL(join(dir, 'docx.js')).href + `?v=${Date.now()}${Math.random()}`)
-  return { mod, fisiere: [...surse.keys()] }
+  const v = `?v=${Date.now()}${Math.random()}`
+  const mod = await import(pathToFileURL(join(dir, 'docx.js')).href + v)
+  // același modul de validare pe care îl folosește generatorul încărcat (aceeași cheie de import, deci aceeași instanță)
+  const idp = surse.has('identificatoriPublici.js') ? await import(pathToFileURL(join(dir, 'identificatoriPublici.js')).href) : null
+  return { mod, idp, fisiere: [...surse.keys()] }
 }
 const areOriginMain = (() => { try { execFileSync('git', ['rev-parse', '--verify', 'origin/main^{commit}'], { stdio: ['ignore', 'pipe', 'ignore'] }); return true } catch { return false } })()
 
@@ -310,64 +323,151 @@ describe('identificatorii publicați (review #1137 P1): forma fiecărui câmp, o
   // valori contaminate (fictive), câte una pe câmp: nume în sat, adresă în tarla, CNP în nr_cadastral, cotă în poz_hg, telefon în tronson
   const CONTAMINATE = { sat: 'POPESCU Ion', tarla: 'Str. Fictivă nr. 7', nr_cadastral: '1800101000000', poz_hg: '1/2', tronson: '0711 111 111' }
   const genereaza = (parcele, extra = {}) => genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele, templateArrayBuffer: sablon(), ...extra })
-  it('un nume în sat / o adresă în tarla / un CNP în nr_cadastral / o cotă în poz_hg / un telefon în tronson → generarea e BLOCATĂ (și cu strict=false), cu lista exactă (id_parcela + câmp) și FĂRĂ valoarea în mesaj', async () => {
+  // motivul așteptat pe fiecare contaminare: numele nu e sat declarat, adresa n-are forma, CNP-ul are 13 cifre, cota e „a/b” cu a ≤ b, telefonul are 10 cifre
+  const MOTIVE = { sat: MOTIV.SAT_NEDECLARAT, tarla: MOTIV.FORMA, nr_cadastral: MOTIV.TELEFON_CNP, poz_hg: MOTIV.COTA, tronson: MOTIV.TELEFON_CNP }
+  it('un nume în sat / o adresă în tarla / un CNP în nr_cadastral / o cotă în poz_hg / un telefon în tronson → generarea e BLOCATĂ (și cu strict=false), cu lista exactă (id_parcela + câmp + motiv) și FĂRĂ valoarea în mesaj', async () => {
     for (const [camp, valoare] of Object.entries(CONTAMINATE)) {
       for (const strict of [true, false]) {
         const err = await genereaza([parcela(1), parcela(2, { [camp]: valoare })], { strict }).catch(e => e)
         expect(err, `${camp} strict=${strict}`).toBeInstanceOf(Error)
-        expect(err.probleme).toEqual([{ id_parcela: 'T1-FIC-0002', camp }])
+        expect(err.probleme).toEqual([{ id_parcela: 'T1-FIC-0002', camp, motiv: MOTIVE[camp] }])
         expect(err.message).toContain(MESAJ_IDENTIFICATORI_REFUZATI)
         expect(err.message).toContain('T1-FIC-0002')
         expect(err.message).not.toContain(valoare)
         expect(JSON.stringify(err.probleme)).not.toContain(valoare)
       }
     }
-    // toate cinci pe parcele diferite + o parcelă bună → lista are exact cele cinci, în ordinea parcelelor, apoi a coloanelor
+    // toate cinci pe parcele diferite + o parcelă bună → lista are exact cele cinci, în ordinea parcelelor, apoi a coloanelor; motivul apare ca etichetă, nu valoarea
     const parcele = [parcela(1), ...Object.entries(CONTAMINATE).map(([camp, valoare], i) => parcela(i + 2, { [camp]: valoare })), parcela(9, { sat: 'POPESCU Ion', tronson: '0711 111 111' })]
     const err = await genereaza(parcele).catch(e => e)
-    expect(err.probleme).toEqual([...Object.keys(CONTAMINATE).map((camp, i) => ({ id_parcela: `T1-FIC-000${i + 2}`, camp })), { id_parcela: 'T1-FIC-0009', camp: 'sat' }, { id_parcela: 'T1-FIC-0009', camp: 'tronson' }])
-    expect(textProblemeIdentificatori(err.probleme)).toBe(`sat: T1-FIC-0002, T1-FIC-0009; tarla: T1-FIC-0003; nr. cadastral / parcelă: T1-FIC-0004; poz. HG: T1-FIC-0005; tronson: T1-FIC-0006, T1-FIC-0009; (${MESAJ_SAT_NEDECLARAT})`)
+    expect(err.probleme).toEqual([...Object.keys(CONTAMINATE).map((camp, i) => ({ id_parcela: `T1-FIC-000${i + 2}`, camp, motiv: MOTIVE[camp] })), { id_parcela: 'T1-FIC-0009', camp: 'sat', motiv: MOTIV.SAT_NEDECLARAT }, { id_parcela: 'T1-FIC-0009', camp: 'tronson', motiv: MOTIV.TELEFON_CNP }])
+    const CIFRE = ETICHETA_MOTIV[MOTIV.TELEFON_CNP], COTA = ETICHETA_MOTIV[MOTIV.COTA]
+    expect(textProblemeIdentificatori(err.probleme)).toBe(`sat: T1-FIC-0002, T1-FIC-0009; tarla: T1-FIC-0003; nr. cadastral / parcelă: T1-FIC-0004 (${CIFRE}); poz. HG: T1-FIC-0005 (${COTA}); tronson: T1-FIC-0006 (${CIFRE}), T1-FIC-0009 (${CIFRE}); (${MESAJ_SAT_NEDECLARAT})`)
+    for (const valoare of Object.values(CONTAMINATE)) expect(textProblemeIdentificatori(err.probleme)).not.toContain(valoare)
+    // a doua barieră, independentă de poarta din generator: dintr-o listă cu refuzuri nu se construiește NICIUN rând
+    expect(randuriAnuntAfisare(parcele, UAT).randuri).toEqual([])
+    expect(canonizeazaParcelePublicate(parcele, CAMPURI_PARCELA_ANUNT, UAT).randuri).toEqual([])
     // o parcelă ȘTEARSĂ cu valori contaminate nu intră în listă (nu se publică oricum)
     expect((await genereaza([parcela(1), parcela(2, { ...CONTAMINATE, sters_la: '2026-11-01T00:00:00Z' })])).randuri).toBe(1)
   })
-  it('valorile reale de formă din fixture-urile importului (TGZ / Anexa 7 / CONTRACT_SCHEMA) trec: tarla „T12” „T 12” „12” „T12/1” „12A”, cadastru „CF 1001” „52#” „#44#” „50029#30#” „##” „123/4” „DE”, poz. HG „117” „12A” „HG 1”, tronson 1..11, gol', async () => {
-    const BUNE = {
-      tarla: ['T12', 'T 12', 'T.12', 'Tarla 1', '12', 'T12/1', 'T13-2', '12A', 'T20', 'T1'],
-      nr_cadastral: ['CF 1001', 'cf 1010', 'CF 1', '100', '5001', '52#', '#44#', '50029#30#', '##', '123/4', '1234/2/1', 'DE', '12A', ''],
-      poz_hg: ['117', '1', '12A', '12 A', '12 BIS', 'HG 1', 'hg  9', 'HG 117'],
-      tronson: [1, 3, 11, '3', '11', null, undefined, ''],
-      sat: ['Satul A', 'Satul B', 'satul a', 'SATUL B', ' Satul A ', null, ''],
+  it('tabelul din verdictul r2 (27f5567c): „1/2” în tarla și în nr. cadastral, „0711/111/111” și „180010/100000/0” în nr. cadastral, „1/2” în poz. HG → refuzate cu motivul lor; „12//3” nu mai trece normalizat ca „12/3”', () => {
+    const VERDICT_R2 = [
+      ['tarla', '1/2', MOTIV.COTA], ['nr_cadastral', '1/2', MOTIV.COTA], ['nr_cadastral', '0711/111/111', MOTIV.TELEFON_CNP],
+      ['nr_cadastral', '180010/100000/0', MOTIV.TELEFON_CNP], ['poz_hg', '1/2', MOTIV.COTA], ['tarla', '12//3', MOTIV.FORMA],
+    ]
+    for (const [camp, v, motiv] of VERDICT_R2) expect(canonizeazaIdentificator(camp, v, { uat: UAT }), `${camp}=${v}`).toEqual({ ok: false, motiv })
+    // „12/3” (a > b) e o subdiviziune legitimă și se publică exact așa; „12//3” e refuzată, nu reparată
+    expect(canonizeazaIdentificator('tarla', '12/3')).toEqual({ ok: true, valoare: '12/3' })
+  })
+  it('se publică EXACT șirul validat: doar majuscule / spații simple („cf  1010” → „CF 1010”, „hg  9” → „HG 9”), TGZ-ul compus rămâne cu „#” („50029#30#”), satul cu ortografia DECLARATĂ („GARNITA” → „Gârnița”); subcâmpurile NU se lipesc cu „ / ” („1#2#” nu devine „1 / 2”)', async () => {
+    const uat = { ...UAT, sate_zi1: 'Gârnița, tarlalele 1–5' }
+    const parcele = [parcela(1, { sat: 'GARNITA', tarla: '31#', nr_cadastral: '50029#30#', poz_hg: '117', tronson: '3' }), parcela(2, { sat: 'satul b', tarla: 't 12', nr_cadastral: 'cf  1010', poz_hg: 'hg  9', tronson: 2 }),
+      parcela(3, { sat: 'Satul B', tarla: 'T20', nr_cadastral: '1#2#', poz_hg: '5', tronson: 1 })]
+    const r = await genereazaAnuntAfisare({ proiect: PROIECT, uat, parcele, templateArrayBuffer: sablon() })
+    const { xml } = await docDin(r.blob)
+    const lista = [...xml.matchAll(/<w:tbl>[\s\S]*?<\/w:tbl>/g)].map(m => m[0]).at(-1)
+    const randuri = [...lista.matchAll(/<w:tr[\s>][\s\S]*?<\/w:tr>/g)].map(m => textWt(m[0]))
+    expect(randuri.slice(1)).toEqual([['1', 'Gârnița', '31#', '50029#30#', '117', '3'], ['2', 'Satul B', 'T 12', 'CF 1010', 'HG 9', '2'], ['3', 'Satul B', 'T20', '1#2#', '5', '1']])
+    for (const brut of ['GARNITA', 'satul b', 'cf  1010', 'hg  9', '1 / 2', '50029 / 30']) expect(lista, brut).not.toContain(brut)
+    // fiecare celulă publicată = EXACT valoarea întoarsă de validare pentru acel câmp (o singură reprezentare)
+    const { randuri: rand } = randuriAnuntAfisare(parcele, uat)
+    for (const x of rand) {
+      // id-ul parcelei nu e în rândul publicat: sursa se regăsește după poz. HG (unică în acest fixture)
+      const sursa = parcele.find(q => canonizeazaIdentificator('poz_hg', q.poz_hg).valoare === x.poz_hg)
+      for (const k of CAMPURI_PARCELA_ANUNT) expect(x[k], k).toBe(canonizeazaIdentificator(k, sursa[k], { uat }).valoare)
     }
-    for (const [camp, valori] of Object.entries(BUNE)) for (const v of valori) expect(areFormaIdentificator(camp, v, { uat: UAT }), `${camp}=${JSON.stringify(v)}`).toBe(true)
+  })
+  // ── TABELUL FORMELOR (forma → acceptat cu forma publicată / refuzat cu motivul). Formele „reale” vin din fixture-urile importurilor
+  // (TGZ: „T1#”, „123##”, „#123#”, „##UA 62A”, „52#”, „#44#”, „50029#30#”, „##”; Anexa 7: „T12”, „CF100”), din cadastru.js / SABLOANE.md
+  // și din CONTRACT_SCHEMA §7; câteva tipare TGZ suplimentare („12IV#”, „#12'(34/5)#”) vin din notele rundei 3 (neverificate pe BD);
+  // restul sunt contaminări sintetice. Forma publicată = șirul validat (majuscule, spații simple), cu „#” cu tot; „##” → nimic.
+  const ok = valoare => ({ ok: true, valoare }); const nu = motiv => ({ ok: false, motiv })
+  const TABEL = [
+    // tarla: TGZ compus „<tarla>#<nr. topo>” sau simplu; publicat exact cum a fost validat
+    ['tarla', '31#', ok('31#'), 'forma TGZ: tarla + topo gol'], ['tarla', '123#', ok('123#'), 'TGZ'], ['tarla', '9#', ok('9#'), 'TGZ'],
+    ['tarla', '123/4#', ok('123/4#'), 'TGZ: subdiviziune, a > b'], ['tarla', '12IV#', ok('12IV#'), 'TGZ: sufix roman'], ['tarla', 'T1#', ok('T1#'), 'fixture TGZ'],
+    ['tarla', 'T12', ok('T12'), 'Anexa 7'], ['tarla', 'T 12', ok('T 12'), 'prefix cu spațiu'], ['tarla', 'T.12', ok('T.12'), 'prefix cu punct'], ['tarla', 'Tarla 1', ok('TARLA 1'), 'prefix „Tarla”, majuscule canonice'],
+    ['tarla', '12', ok('12'), 'număr simplu'], ['tarla', 'T12/1', ok('T12/1'), 'prefix + subdiviziune (a > b)'], ['tarla', 'T1/2', ok('T1/2'), 'prefixul „T” exclude cota'], ['tarla', '12A', ok('12A'), 'sufix literă'],
+    ['tarla', '12/3', ok('12/3'), 'a > b: subdiviziune'], ['tarla', '#', ok(''), 'TGZ gol: nu publică nimic'], ['tarla', '-', ok('-'), 'marcaj „fără valoare”'], ['tarla', ' t12 ', ok('T12'), 'spații / minuscule → canonic'],
+    ['tarla', '1/2', nu(MOTIV.COTA), 'a ≤ b: cotă (verdict r2)'], ['tarla', '12/15', nu(MOTIV.COTA), 'a ≤ b: ambiguu → refuz, nu ghicit'], ['tarla', '1/1', nu(MOTIV.COTA), 'cotă întreagă'],
+    ['tarla', '12//3', nu(MOTIV.FORMA), 'separator dublu: refuzat, nu normalizat (verdict r2)'], ['tarla', 'T13-2', nu(MOTIV.FORMA), '„-” nu e separator real (doar „/”)'],
+    ['tarla', 'Str. Fictivă nr. 7', nu(MOTIV.FORMA), 'adresă'], ['tarla', 'Ion', nu(MOTIV.FORMA), 'cuvânt de 3 litere'], ['tarla', 'POPESCU', nu(MOTIV.FORMA), 'nume'], ['tarla', '12 A B', nu(MOTIV.FORMA), 'două sufixe'],
+    ['tarla', '1234567', nu(MOTIV.FORMA), 'peste 6 cifre pentru tarla'], ['tarla', '0711 111 111', nu(MOTIV.TELEFON_CNP), 'telefon'], ['tarla', '1800101000000', nu(MOTIV.TELEFON_CNP), 'CNP'],
+    // nr. cadastral / parcelă: TGZ compus „<nr. cadastral>#<parcelă / topo>#<rest>” sau simplu; publicat exact cum a fost validat
+    ['nr_cadastral', '#44#', ok('#44#'), 'TGZ: parcelă'], ['nr_cadastral', '#1234#', ok('#1234#'), 'TGZ'], ['nr_cadastral', '50029##', ok('50029##'), 'TGZ: nr. cadastral'], ['nr_cadastral', '50029#30#', ok('50029#30#'), 'TGZ: cadastral + parcelă'],
+    ['nr_cadastral', '50029#1234#', ok('50029#1234#'), 'TGZ: 9 cifre în total, dar în subcâmpuri diferite și fără prefix de telefon — nedeosebibil de un telefon fără 0 (raport)'], ['nr_cadastral', '#12/3#', ok('#12/3#'), 'TGZ: parcelă cu subdiviziune, a > b'],
+    ['nr_cadastral', "#12'#", ok("#12'#"), 'TGZ: număr cu prim'], ['nr_cadastral', "#12'(34/5)#", ok("#12'(34/5)#"), 'TGZ: prim + numerotarea veche în paranteze'], ['nr_cadastral', '#123(456)#', ok('#123(456)#'), 'TGZ: paranteze'],
+    ['nr_cadastral', '#7A#', ok('#7A#'), 'TGZ: sufix literă'], ['nr_cadastral', '#3/A#', ok('#3/A#'), 'TGZ: parte literă după „/”'], ['nr_cadastral', '##UA 62A', ok('##UA 62A'), 'fixture TGZ: unitate amenajistică (pădure)'],
+    ['nr_cadastral', '##', ok(''), 'TGZ gol: nu publică nimic'], ['nr_cadastral', ' # # ', ok(''), 'TGZ gol cu spații'], ['nr_cadastral', '# 44 #', ok('#44#'), 'spațiile din jurul „#” → canonic'],['nr_cadastral', '123##', ok('123##'), 'fixture TGZ'], ['nr_cadastral', '#123#', ok('#123#'), 'fixture TGZ'], ['nr_cadastral', 'CF 1001', ok('CF 1001'), 'Anexa 7 / fixture'],
+    ['nr_cadastral', '1#2#', ok('1#2#'), 'cadastral 1 + parcelă 2: publicat cu „#”, NU „1 / 2” (forma unei cote)'],
+    ['nr_cadastral', 'cf  1010', ok('CF 1010'), 'minuscule, spațiu dublu → canonic'], ['nr_cadastral', 'CF100', ok('CF100'), 'Anexa 7'], ['nr_cadastral', '123/4', ok('123/4'), 'subdiviziune'], ['nr_cadastral', '1234/2/1', ok('1234/2/1'), 'topo pe 3 niveluri'],
+    ['nr_cadastral', 'DE', ok('DE'), 'cod de 1–2 litere (drum de exploatare)'], ['nr_cadastral', '12 BIS', ok('12 BIS'), 'sufix BIS'], ['nr_cadastral', '', ok(''), 'gol'],
+    ['nr_cadastral', '1/2', nu(MOTIV.COTA), 'cotă (verdict r2)'], ['nr_cadastral', '#1/2#', nu(MOTIV.COTA), 'cotă în subcâmpul TGZ'], ['nr_cadastral', '#3/3#', nu(MOTIV.COTA), 'a = b'], ['nr_cadastral', "#12'(1/2)#", nu(MOTIV.COTA), 'cotă în paranteze'],
+    ['nr_cadastral', '0711/111/111', nu(MOTIV.TELEFON_CNP), 'telefon pe segmente (verdict r2)'], ['nr_cadastral', '180010/100000/0', nu(MOTIV.TELEFON_CNP), '13 cifre pe segmente (verdict r2)'],
+    ['nr_cadastral', '1800101000000', nu(MOTIV.TELEFON_CNP), 'CNP'], ['nr_cadastral', '0711#111111#', nu(MOTIV.TELEFON_CNP), 'telefon lipit din subcâmpuri'], ['nr_cadastral', '180010#100000#0', nu(MOTIV.TELEFON_CNP), 'CNP lipit din subcâmpuri'],
+    ['nr_cadastral', '711111111', nu(MOTIV.TELEFON_CNP), '9 cifre'], ['nr_cadastral', 'Ion', nu(MOTIV.FORMA), 'prenume'], ['nr_cadastral', 'DEX', nu(MOTIV.FORMA), '3 litere'], ['nr_cadastral', 'ANNA', nu(MOTIV.FORMA), '4 litere'],
+    ['nr_cadastral', '50029#Ion#', nu(MOTIV.FORMA), 'cuvânt într-un subcâmp'], ['nr_cadastral', 'CF 1001 2', nu(MOTIV.FORMA), 'două numere'], ['nr_cadastral', '1234567', nu(MOTIV.FORMA), '7 cifre într-un număr'],
+    ['nr_cadastral', '12 ION', nu(MOTIV.FORMA), 'cuvânt după număr'], ['nr_cadastral', 'POPESCU ION', nu(MOTIV.FORMA), 'nume'], ['nr_cadastral', '?', nu(MOTIV.FORMA), 'marcaj necunoscut'],
+    // poz. HG: număr simplu (real: 1–4 cifre), opțional „HG ” și sufix; fără „/” și „#”
+    ['poz_hg', '1234', ok('1234'), 'forma reală'], ['poz_hg', '117', ok('117'), ''], ['poz_hg', '1', ok('1'), ''], ['poz_hg', '12A', ok('12A'), 'sufix'], ['poz_hg', '12 A', ok('12 A'), ''], ['poz_hg', '12 BIS', ok('12 BIS'), ''],
+    ['poz_hg', 'HG 1', ok('HG 1'), 'fixture'], ['poz_hg', 'hg  9', ok('HG 9'), 'canonic'],
+    ['poz_hg', '1/2', nu(MOTIV.COTA), 'cotă (verdict r2)'], ['poz_hg', '12/1', nu(MOTIV.FORMA), 'fără „/” la poz. HG'], ['poz_hg', '12#', nu(MOTIV.FORMA), 'fără „#”'], ['poz_hg', '50%', nu(MOTIV.FORMA), 'procent'],
+    ['poz_hg', '123456', nu(MOTIV.FORMA), 'peste 5 cifre'], ['poz_hg', 'HG', nu(MOTIV.FORMA), 'fără cifră'], ['poz_hg', 'POPESCU', nu(MOTIV.FORMA), 'nume'], ['poz_hg', '0711 111 111', nu(MOTIV.TELEFON_CNP), 'telefon'],
+    // tronson: exact regula importului (1..11)
+    ['tronson', 1, ok('1'), ''], ['tronson', 11, ok('11'), ''], ['tronson', '3', ok('3'), 'text → canonic'], ['tronson', null, ok(''), 'neatribuit'], ['tronson', '__', ok('__'), 'marcajul modelului'],
+    ['tronson', 0, nu(MOTIV.FORMA), ''], ['tronson', 12, nu(MOTIV.FORMA), ''], ['tronson', '3x', nu(MOTIV.FORMA), ''], ['tronson', 2.5, nu(MOTIV.FORMA), ''], ['tronson', true, nu(MOTIV.FORMA), ''], ['tronson', 'unu', nu(MOTIV.FORMA), ''],
+    ['tronson', '0711 111 111', nu(MOTIV.TELEFON_CNP), 'telefon'],
+    // sat: doar satele declarate la sesiuni (UAT: „Satul A”, „Satul B”), publicat cu ortografia declarată
+    ['sat', 'Satul A', ok('Satul A'), 'declarat'], ['sat', 'satul b', ok('Satul B'), 'ortografia declarată'], ['sat', ' SATUL A ', ok('Satul A'), ''], ['sat', 'A', nu(MOTIV.FORMA), 'prea scurt'],
+    ['sat', 'POPESCU Ion', nu(MOTIV.SAT_NEDECLARAT), 'nume cu forma unui sat, nedeclarat'], ['sat', 'POPESCU Ion (fictiv)', nu(MOTIV.FORMA), 'paranteze'], ['sat', 'Satul C', nu(MOTIV.SAT_NEDECLARAT), 'nedeclarat'],
+    ['sat', 'Satul A 2', nu(MOTIV.FORMA), 'cifre'], ['sat', 'restul', nu(MOTIV.SAT_NEDECLARAT), 'indicație de program'], ['sat', 'tarlalele 1–5', nu(MOTIV.FORMA), 'indicație de program'], ['sat', '', ok(''), 'gol (TGZ n-are coloana sat)'],
+  ]
+  it('tabelul formelor (forma → acceptat cu forma canonică / refuzat cu motivul), pe fiecare câmp: formele reale TGZ / Anexa 7 trec, cotele („a/b” cu a ≤ b), telefoanele / CNP-urile (9+ cifre, lipite sau nu), cuvintele și „12//3” sunt refuzate', () => {
+    for (const [camp, v, asteptat, de_ce] of TABEL) {
+      expect(canonizeazaIdentificator(camp, v, { uat: UAT }), `${camp}=${JSON.stringify(v)} (${de_ce})`).toEqual(asteptat)
+      expect(areFormaIdentificator(camp, v, { uat: UAT })).toBe(asteptat.ok)
+    }
+    // tabelul acoperă fiecare câmp cu acceptări și refuzuri și fiecare motiv de refuz (în afară de „camp”, testat separat)
+    for (const camp of CAMPURI_PARCELA_ANUNT) {
+      expect(TABEL.some(r => r[0] === camp && r[2].ok), camp).toBe(true)
+      expect(TABEL.some(r => r[0] === camp && !r[2].ok), camp).toBe(true)
+    }
+    for (const motiv of [MOTIV.FORMA, MOTIV.COTA, MOTIV.TELEFON_CNP, MOTIV.SAT_NEDECLARAT]) expect(TABEL.some(r => r[2].motiv === motiv), motiv).toBe(true)
     // tronsonul = exact regula importului (tronsonOptional), nu una nouă (L19)
     for (const v of [0, 12, '0', '12', '3x', 2.5, true, '0711 111 111']) { expect(tronsonOptional(v)).toBeNull(); expect(areFormaIdentificator('tronson', v)).toBe(false) }
-    // documentul se generează cu aceste forme (TGZ: cadastrul compus cu „#” rămâne ca în BD)
+    for (const v of [1, 11, '3']) expect(canonizeazaIdentificator('tronson', v).valoare).toBe(String(tronsonOptional(v)))
+  })
+  it('documentul se generează cu formele reale și le publică exact cum au fost validate (TGZ compus cu „#”, „##” = celulă goală)', async () => {
     const r = await genereaza([parcela(1, { sat: 'Satul B', tarla: 'T 12', nr_cadastral: '50029#30#', poz_hg: '117', tronson: 11 }), parcela(2, { sat: null, tarla: '12A', nr_cadastral: '##', poz_hg: 'HG 1', tronson: null })])
     const lista = [...(await docDin(r.blob)).xml.matchAll(/<w:tbl>[\s\S]*?<\/w:tbl>/g)].map(m => m[0]).at(-1)
     const randuri = [...lista.matchAll(/<w:tr[\s>][\s\S]*?<\/w:tr>/g)].map(m => textWt(m[0]))
-    expect(randuri.slice(1)).toEqual([['1', '', '12A', '##', 'HG 1', ''], ['2', 'Satul B', 'T 12', '50029#30#', '117', '11']])
+    expect(randuri.slice(1)).toEqual([['1', '', '12A', '', 'HG 1', ''], ['2', 'Satul B', 'T 12', '50029#30#', '117', '11']])
+    expect(lista).not.toContain('##')
   })
-  it('refuzuri pe formă, pe fiecare câmp: tarla cu litere / peste 4 cifre, cadastru cu 13 cifre sau cuvânt, poz. HG cu „/” „%” sau cuvânt, tronson în afara 1..11, orice valoare peste 40 de caractere sau obiect', () => {
-    const RELE = {
-      tarla: ['Str. Fictivă nr. 7', 'T12345', 'Ion', 'T', 'T12/1/1', 'POPESCU', '12 A B'],
-      nr_cadastral: ['1800101000000', 'Ion', 'DEX', 'CF 1001 2', '1234567', 'POPESCU ION', '50029#Ion#'],
-      poz_hg: ['1/2', '50%', '123456', '12345/1', 'POPESCU', 'HG', '12 A B'],
-      tronson: ['0711 111 111', 0, 12, '3x', 2.5, true, 'unu'],
-      sat: ['POPESCU Ion (fictiv)', 'Peri Nou', 'Satul C', 'Satul A 2', 'restul', 'tarlalele 1–5', 'A'],
-    }
-    for (const [camp, valori] of Object.entries(RELE)) for (const v of valori) expect(areFormaIdentificator(camp, v, { uat: UAT }), `${camp}=${JSON.stringify(v)}`).toBe(false)
+  it('refuzuri independente de câmp: orice valoare peste 40 de caractere, obiect / tablou / funcție, câmp necunoscut; nul = nimic publicat; lista problemelor poartă id-ul parcelei („?” dacă lipsește) și motivul', () => {
     for (const camp of CAMPURI_PARCELA_ANUNT) {
-      expect(areFormaIdentificator(camp, '1'.repeat(LUNGIME_MAX_IDENTIFICATOR + 1), { uat: UAT })).toBe(false)
-      expect(areFormaIdentificator(camp, { x: 1 }, { uat: UAT })).toBe(false)
-      expect(areFormaIdentificator(camp, ['1'], { uat: UAT })).toBe(false)
+      expect(canonizeazaIdentificator(camp, '1'.repeat(LUNGIME_MAX_IDENTIFICATOR + 1), { uat: UAT })).toEqual(nu(MOTIV.LUNGIME))
+      // 9 cifre: telefon / CNP la câmpurile numerice; la sat, orice cifră e deja în afara formei
+      expect(canonizeazaIdentificator(camp, '1'.repeat(MAX_CIFRE_SUBCAMP + 1), { uat: UAT })).toEqual(nu(camp === 'sat' ? MOTIV.FORMA : MOTIV.TELEFON_CNP))
+      for (const v of [{ x: 1 }, ['1'], () => 1]) expect(canonizeazaIdentificator(camp, v, { uat: UAT })).toEqual(nu(MOTIV.FORMA))
+      for (const v of [null, undefined]) expect(canonizeazaIdentificator(camp, v, { uat: UAT })).toEqual(ok(''))
     }
-    expect(areFormaIdentificator('nume', 'T12')).toBe(false)   // câmp necunoscut = nu se publică
-    expect(verificaIdentificatoriPublicati([{ id_parcela: 'X-1', sat: 'POPESCU Ion' }, null, { sat: 'Y' }], ['sat'], UAT)).toEqual([{ id_parcela: 'X-1', camp: 'sat' }, { id_parcela: '?', camp: 'sat' }])
+    expect(canonizeazaIdentificator('nume', 'T12')).toEqual(nu(MOTIV.CAMP))   // câmp necunoscut = nu se publică
+    expect(areFormaIdentificator('nume', 'T12')).toBe(false)
+    expect(verificaIdentificatoriPublicati([{ id_parcela: 'X-1', sat: 'POPESCU Ion' }, null, { sat: 'Y' }], ['sat'], UAT)).toEqual([{ id_parcela: 'X-1', camp: 'sat', motiv: MOTIV.SAT_NEDECLARAT }, { id_parcela: '?', camp: 'sat', motiv: MOTIV.FORMA }])
+    expect(textProblemeIdentificatori([{ id_parcela: 'X-1', camp: 'tarla', motiv: MOTIV.LUNGIME }])).toBe(`tarla: X-1 (${ETICHETA_MOTIV[MOTIV.LUNGIME]})`)
+    // rândurile canonice: doar coloanele cerute + id-ul; valorile originale nu apar
+    const { probleme, randuri } = canonizeazaParcelePublicate([{ id_parcela: 'X-2', tarla: '31#', nr_cadastral: 'cf  1', sat: 'satul a', poz_hg: 7, tronson: '2' }], CAMPURI_PARCELA_ANUNT, UAT)
+    expect(probleme).toEqual([])
+    expect(randuri).toEqual([{ id_parcela: 'X-2', sat: 'Satul A', tarla: '31#', nr_cadastral: 'CF 1', poz_hg: '7', tronson: '2' }])
   })
   it('satul: doar unul dintre satele DECLARATE la „Sate / tarlale ziua 1–3” (fără diacritice / majuscule, cu sau fără „Satul”); indicațiile de program („tarlalele 1–5”, „restul”, parantezele) nu devin sate', () => {
-    expect([...sateDeclarate(UAT)]).toEqual(['SATUL A', 'SATUL B'])   // „tarlalele 1–5” și „restul” nu sunt sate; „A” singur e prea scurt
+    expect([...sateDeclarate(UAT)]).toEqual([['SATUL A', 'Satul A'], ['SATUL B', 'Satul B']])   // „tarlalele 1–5” și „restul” nu sunt sate; „A” singur e prea scurt
     const u = { sate_zi1: 'sat Peri (tarlalele 1–5); Husnicioara și Gârnița', sate_zi2: 'Marga – T7-T9, Dumbrava de Jos', sate_zi3: 'toate satele' }
-    expect([...sateDeclarate(u)].sort()).toEqual(['DUMBRAVA DE JOS', 'GARNITA', 'HUSNICIOARA', 'MARGA', 'PERI', 'SAT PERI'])
+    expect([...sateDeclarate(u).keys()].sort()).toEqual(['DUMBRAVA DE JOS', 'GARNITA', 'HUSNICIOARA', 'MARGA', 'PERI', 'SAT PERI'])
+    // forma publicată = ortografia declarată (cu diacritice, fără prefixul „sat”)
+    expect(['PERI', 'SAT PERI', 'GARNITA'].map(k => sateDeclarate(u).get(k))).toEqual(['Peri', 'sat Peri', 'Gârnița'])
+    expect(canonizeazaIdentificator('sat', 'Satul Peri', { uat: u })).toEqual(ok('Peri'))
     for (const sat of ['Peri', 'PERI', 'Gârnița', 'Garnita', 'sat Peri', 'Satul Peri', 'Dumbrava de Jos', 'Marga']) expect(areFormaIdentificator('sat', sat, { uat: u }), sat).toBe(true)
     for (const sat of ['Peri Nou', 'Jos', 'toate satele', 'POPESCU Ion', 'T7']) expect(areFormaIdentificator('sat', sat, { uat: u }), sat).toBe(false)
     // UAT fără sate declarate: orice sat nevid e refuzat (satul gol trece — TGZ nu are coloana „sat”)
@@ -375,19 +475,81 @@ describe('identificatorii publicați (review #1137 P1): forma fiecărui câmp, o
     expect(areFormaIdentificator('sat', '', { uat: {} })).toBe(true)
     expect(sateDeclarate(undefined).size).toBe(0)
   })
-  it('MUTANT: validarea scoasă din genereazaAnuntAfisare → numele din „sat” AJUNGE în document (deci testul de blocare chiar păzește); cu validarea, aceleași parcele sunt refuzate', async () => {
-    const mutatie = { fisier: 'docx.js', din: '  if (probleme.length) {\n', in: '  if (false) {\n' }
-    const { mod: mutant, fisiere } = await incarcaDocx('lucru', mutatie)
-    expect(fisiere).toContain('identificatoriPublici.js')
+  // ── Mutanți (sursa din arborele de lucru, o regulă scoasă pe rând): fiecare trebuie să schimbe EXACT rândurile tabelului care depind de
+  // regula lui (deci tabelul chiar o păzește), iar pe document mutantul publică valoarea pe care intactul o refuză.
+  const M = {
+    poarta: { fisier: 'docx.js', din: '  if (probleme.length) {\n', in: '  if (false) {\n' },
+    bariera: { fisier: 'identificatoriPublici.js', din: 'return { probleme, randuri: probleme.length ? [] : randuri }', in: 'return { probleme, randuri }' },
+    original: { fisier: 'identificatoriPublici.js', din: '      if (r.ok) rand[camp] = r.valoare\n', in: "      if (r.ok) rand[camp] = p[camp] ?? ''\n" },
+    cota: { fisier: 'identificatoriPublici.js', din: '    if (pareCota(s)) return MOTIV.COTA\n', in: '' },
+    telefonLipit: { fisier: 'identificatoriPublici.js', din: '  if (RE_TELEFON_SAU_CNP.test(toateCifrele)) return MOTIV.TELEFON_CNP\n', in: '' },
+    cifreSubcamp: { fisier: 'identificatoriPublici.js', din: '    if (c.length > MAX_CIFRE_SUBCAMP) return MOTIV.TELEFON_CNP\n', in: '' },
+  }
+  const cheie = r => `${r[0]}=${JSON.stringify(r[1])}`
+  const diferenteTabel = idp => TABEL.filter(r => JSON.stringify(idp.canonizeazaIdentificator(r[0], r[1], { uat: UAT })) !== JSON.stringify(r[2])).map(cheie)
+  const xmlLista = async blob => [...(await docDin(blob)).xml.matchAll(/<w:tbl>[\s\S]*?<\/w:tbl>/g)].map(m => m[0]).at(-1)
+  it('MUTANT cotă / telefon lipit / cifre pe subcâmp: fiecare regulă scoasă schimbă EXACT rândurile ei din tabelul formelor, iar documentul mutant publică „1/2” și „0711#111111#”', async () => {
+    const { idp: intact } = await incarcaDocx('lucru')
+    expect(diferenteTabel(intact)).toEqual([])
+    // cota: toate rândurile cu motivul „cotă” (și doar ele) se schimbă
+    const { mod: mCota, idp: iCota } = await incarcaDocx('lucru', M.cota)
+    expect(diferenteTabel(iCota)).toEqual(TABEL.filter(r => r[2].motiv === MOTIV.COTA).map(cheie))
+    const rc = await mCota.genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele: [parcela(1), parcela(2, { tarla: '1/2', nr_cadastral: '#1/2#' })], templateArrayBuffer: sablon() })
+    expect(await xmlLista(rc.blob)).toContain('>1/2<')
+    // telefonul / CNP-ul lipit din subcâmpuri: exact cele două rânduri „lipite”
+    const { mod: mTel, idp: iTel } = await incarcaDocx('lucru', M.telefonLipit)
+    expect(diferenteTabel(iTel)).toEqual(['nr_cadastral="0711#111111#"', 'nr_cadastral="180010#100000#0"'])
+    const rt = await mTel.genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele: [parcela(1), parcela(2, { nr_cadastral: '0711#111111#' })], templateArrayBuffer: sablon() })
+    expect(await xmlLista(rt.blob)).toContain('0711#111111#')
+    // plafonul de cifre pe subcâmp: valorile rămân refuzate de plafonul câmpului, dar cu motivul „forma” — lista de corectat pierde explicația
+    const { idp: iCif } = await incarcaDocx('lucru', M.cifreSubcamp)
+    const telefonPeSubcamp = TABEL.filter(r => r[2].motiv === MOTIV.TELEFON_CNP && r[0] !== 'tronson' && !['0711#111111#', '180010#100000#0'].includes(r[1]))
+    expect(diferenteTabel(iCif)).toEqual(telefonPeSubcamp.map(cheie))
+    for (const r of telefonPeSubcamp) expect(iCif.canonizeazaIdentificator(r[0], r[1], { uat: UAT })).toEqual(nu(MOTIV.FORMA))
+    // intactul refuză aceleași parcele
+    for (const parcele of [[parcela(1), parcela(2, { tarla: '1/2' })], [parcela(1), parcela(2, { nr_cadastral: '0711#111111#' })]]) {
+      const err = await genereaza(parcele).catch(e => e)
+      expect(err.probleme).toHaveLength(1)
+    }
+  })
+  it('MUTANT „originalul în loc de forma validată”: mutantul publică „cf  1010” / „satul b” ca în BD, intactul publică „CF 1010” / „Satul B”', async () => {
+    const parcele = [parcela(1, { sat: 'satul b', nr_cadastral: 'cf  1010', tarla: 't 12' })]
+    const { mod: mOrig } = await incarcaDocx('lucru', M.original)
+    const lm = await xmlLista((await mOrig.genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele, templateArrayBuffer: sablon() })).blob)
+    expect(textWt(lm)).toEqual(expect.arrayContaining(['satul b', 'cf  1010', 't 12']))
+    const li = await xmlLista((await genereaza(parcele)).blob)
+    expect(textWt(li)).toEqual(expect.arrayContaining(['Satul B', 'CF 1010', 'T 12']))
+    for (const brut of ['satul b', 'cf  1010', 't 12']) expect(textWt(li)).not.toContain(brut)
+  })
+  it('MUTANT cele trei bariere (poarta din generator, „niciun rând dintr-o listă cu refuzuri”, rândul conține doar forme validate): oricare singură oprește publicarea numelui; scoase TOATE, numele din „sat” ajunge în document', async () => {
     const parcele = [parcela(1), parcela(2, { sat: 'POPESCU Ion' })]
-    const r = await mutant.genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele, templateArrayBuffer: sablon() })
-    expect((await docDin(r.blob)).xml).toContain('POPESCU Ion')   // mutantul publică numele
+    const gen = (mod, strict = true) => mod.genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele, templateArrayBuffer: sablon(), strict }).catch(e => e)
+    // a treia mutație: în rând intră valoarea din BD pentru ORICE câmp (și cele refuzate); „else”-ul original rămâne pe lista problemelor
+    const { mod: toate, fisiere } = await incarcaDocx('lucru', [M.poarta, M.bariera, { ...M.original, in: "      if (r.ok) rand[camp] = p[camp] ?? ''; else rand[camp] = p[camp] ?? ''\n      if (r.ok) ;\n" }])
+    expect(fisiere).toContain('identificatoriPublici.js')
+    expect((await docDin((await gen(toate)).blob)).xml).toContain('POPESCU Ion')   // mutantul publică numele
+    // poarta + bariera scoase, rândul tot canonic: parcela iese cu celula „sat” GOALĂ (golire tacită — de aceea poarta refuză, L18), fără nume
+    const { mod: doua } = await incarcaDocx('lucru', [M.poarta, M.bariera])
+    const r2 = await gen(doua)
+    expect((await docDin(r2.blob)).xml).not.toContain('POPESCU')
+    const randuri2 = [...(await xmlLista(r2.blob)).matchAll(/<w:tr[\s>][\s\S]*?<\/w:tr>/g)].map(m => textWt(m[0]))
+    expect(randuri2.slice(1)).toEqual([['1', 'Satul A', 'T2', '101', '1', '2'], ['2', '', 'T3', '102', '2', '3']])
+    // doar poarta scoasă: nu se construiește niciun rând (strict → „fără parcele”; previzualizare → tabel gol), numele nu apare
+    const { mod: faraPoarta } = await incarcaDocx('lucru', M.poarta)
+    expect(await gen(faraPoarta)).toBeInstanceOf(Error)
+    const prev = await gen(faraPoarta, false)
+    expect((await docDin(prev.blob)).xml).not.toContain('POPESCU')
+    expect(prev.randuri).toBe(0)
+    // doar bariera scoasă: poarta refuză, cu lista
+    const { mod: faraBariera } = await incarcaDocx('lucru', M.bariera)
+    expect((await gen(faraBariera)).probleme).toEqual([{ id_parcela: 'T1-FIC-0002', camp: 'sat', motiv: MOTIV.SAT_NEDECLARAT }])
     const { mod: intact } = await incarcaDocx('lucru')
-    const err = await intact.genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele, templateArrayBuffer: sablon() }).catch(e => e)
-    expect(err.probleme).toEqual([{ id_parcela: 'T1-FIC-0002', camp: 'sat' }])
+    expect((await gen(intact)).probleme).toEqual([{ id_parcela: 'T1-FIC-0002', camp: 'sat', motiv: MOTIV.SAT_NEDECLARAT }])
+    expect((await gen(intact, false)).probleme).toEqual([{ id_parcela: 'T1-FIC-0002', camp: 'sat', motiv: MOTIV.SAT_NEDECLARAT }])
     // regula de formă e UNA (identificatoriPublici.js): generatorul anunțului n-are regex-uri proprii pe aceste câmpuri, UI-ul doar afișează lista
     const src = readFileSync('src/redari/docx.js', 'utf8')
-    expect(src.match(/verificaIdentificatoriPublicati\(/g)).toHaveLength(1)   // un singur apel (importul e pe altă formă)
+    expect(src.match(/canonizeazaParcelePublicate\(/g)).toHaveLength(1)   // un singur apel, în randuriAnuntAfisare
+    expect(src).not.toMatch(/verificaIdentificatoriPublicati\(/)
     const corpAnunt = src.slice(src.indexOf('export function randuriAnuntAfisare('), src.indexOf('export async function genereazaAnuntAfisare(') + 1)
       + src.slice(src.indexOf('export async function genereazaAnuntAfisare('))
     expect(corpAnunt).not.toMatch(/\/\^|new RegExp/)
