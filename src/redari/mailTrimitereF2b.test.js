@@ -6,6 +6,8 @@
 //  * OAuth: state generat / consumat o singură dată (prin RPC), căsuța greșită / scope diferit / id_token invalid → revocare + nimic salvat;
 //    id_token validat local pe o cheie RSA generată în test (semnătură bună / rea, aud, exp, email, hd);
 //  * MIME: diacritice în subiect / corp, atașament PDF, un singur To; comutatoarele oprite: comportament neschimbat (409 înaintea secretului);
+//  * runda 2 (Jakarinos #1134): id_token malformat („A.A.A”, base64 / JSON stricat) = refuz controlat + revocarea grantului + eveniment, fără excepție;
+//    rezultatul RPC-ului de persistare diferit de `true` = neconfirmat: oprire, recitirea stării din server, nimic contorizat „trimis”, un singur send;
 //  * dovada pe main: handlerul de pe main (git show) refuză lotul de TEST cu 423 transport_real_oprit; cel nou îl lasă să treacă până la secret.
 import { describe, it, expect, vi, afterAll } from 'vitest'
 import { webcrypto } from 'node:crypto'
@@ -150,6 +152,39 @@ describe('F2b: comutatoarele oprite — comportament neschimbat, 409 înaintea s
     const r = await raspundeTrimitere({ jwt: 'f', corp: { lot_id: id } }, d)
     expect(r.body.sarite).toBe(1); expect(d.fetchSpy.mock.calls.some(c => c[0].endsWith('/send'))).toBe(false)
   })
+  // runda 2 (Jakarinos #1134 P2): rezultatul RPC-ului de persistare diferit de `true` = NECONFIRMAT
+  it.each([[{ data: false }], [{ data: null }], [{ data: 'true' }], [{}]])('persistarea cu răspunsul RPC %j: NU e trimis, oprire, recitirea stării, un singur send, fără a doua rezervare', async w => {
+    const d = deps({ rezultat: vi.fn(async () => w), mesaj: vi.fn(async () => ({ data: { id, stare: 'necunoscut', eroare_cod: 'lease_expirat' } })) })
+    const r = await raspundeTrimitere({ jwt: 'f', corp: { lot_id: id } }, d)
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ cod: 'persistare_neconfirmata', trimise: 0, esuate: 0, necunoscute: 0, neconfirmate: 1, rezervate: 1, mesaj_id: id, stare_server: 'necunoscut', rezultat_send: 'trimis' })
+    expect(d.fetchSpy.mock.calls.filter(c => c[0].endsWith('/send')).length).toBe(1)
+    expect(d.rezultat).toHaveBeenCalledTimes(1); expect(d.rezerva).toHaveBeenCalledTimes(1); expect(d.mesaj).toHaveBeenCalledWith(id); expect(d.pauza).not.toHaveBeenCalled()
+  })
+  it('persistarea neconfirmată cu recitirea eșuată / lipsă: stare_server = necitita, tot neconfirmat', async () => {
+    let d = deps({ rezultat: vi.fn(async () => ({ data: false })), mesaj: vi.fn(async () => ({ error: { message: 'x' } })) })
+    expect((await raspundeTrimitere({ jwt: 'f', corp: { lot_id: id } }, d)).body).toMatchObject({ cod: 'persistare_neconfirmata', neconfirmate: 1, trimise: 0, stare_server: 'necitita' })
+    d = deps({ rezultat: vi.fn(async () => ({ data: false })) }); delete d.mesaj
+    expect((await raspundeTrimitere({ jwt: 'f', corp: { lot_id: id } }, d)).body).toMatchObject({ cod: 'persistare_neconfirmata', neconfirmate: 1, trimise: 0, stare_server: 'necitita' })
+  })
+  it('persistarea care aruncă de 3 ori (RPC cu eroare): neconfirmat fără rezultatul send-ului, un singur send, recitire', async () => {
+    const d = deps({ rezultat: vi.fn(async () => ({ error: { message: 'x' } })), mesaj: vi.fn(async () => ({ data: { id, stare: 'in_apel' } })) })
+    const r = await raspundeTrimitere({ jwt: 'f', corp: { lot_id: id } }, d)
+    expect(r.body).toMatchObject({ cod: 'persistare_neconfirmata', necunoscute: 0, trimise: 0, neconfirmate: 1, stare_server: 'in_apel', rezultat_send: null })
+    expect(d.rezultat).toHaveBeenCalledTimes(3); expect(d.fetchSpy.mock.calls.filter(c => c[0].endsWith('/send')).length).toBe(1)
+  })
+  it('o excepție în afara persistării (apel_incepe aruncă): rezultat_neconfirmat, niciun send, recitire', async () => {
+    const d = deps({ incepe: vi.fn(async () => { throw new Error('retea') }), mesaj: vi.fn(async () => ({ data: { id, stare: 'rezervat' } })) })
+    const r = await raspundeTrimitere({ jwt: 'f', corp: { lot_id: id } }, d)
+    expect(r.body).toMatchObject({ cod: 'rezultat_neconfirmat', necunoscute: 1, trimise: 0, stare_server: 'rezervat' }); expect(d.fetchSpy.mock.calls.some(c => c[0].endsWith('/send'))).toBe(false)
+  })
+  it('esuat_sigur (snapshot diferit, fără send) cu persistarea neconfirmată: tot neconfirmat, nu „eșuat”', async () => {
+    const d = deps({ rezultat: vi.fn(async () => ({ data: false })), mesaj: vi.fn(async () => ({ data: { id, stare: 'rezervat' } })) })
+    d.rezerva.mockReset(); let n = 0
+    d.rezerva.mockImplementation(async () => { n++; if (n === 1) { const m = mesaj(); m.mesaj_sha256 = 'b'.repeat(64); return { data: [m] } } return { data: [] } })
+    const r = await raspundeTrimitere({ jwt: 'f', corp: { lot_id: id } }, d)
+    expect(r.body).toMatchObject({ cod: 'persistare_neconfirmata', esuate: 0, neconfirmate: 1, rezultat_send: 'esuat_sigur' }); expect(d.fetchSpy.mock.calls.some(c => c[0].endsWith('/send'))).toBe(false)
+  })
 })
 
 describe('F2b: wrapperul HTTP cu listă închisă', () => {
@@ -247,6 +282,21 @@ describe('F2b: OAuth — scope-uri canonice, id_token validat local, state consu
     expect((await valideazaIdToken(undefined, o)).cod).toBe('id_token_lipsa'); expect((await valideazaIdToken('a.b', o)).cod).toBe('id_token_forma')
     void c
   })
+  // runda 2 (Jakarinos #1134 P2): id_token malformat = refuz CONTROLAT (id_token_forma), niciodată excepție
+  it.each([['A.A.A'], ['A.A.' + 'x'.repeat(10)], ['!!.!!.!!'], ['QQ.QQ.QQ'], [b64u('nu e json') + '.' + b64u('{}') + '.QUJD'], [b64u('[]') + '.' + b64u('{}') + '.QUJD'], [b64u('{}') + '.' + b64u('{"a":1}') + '.A'], ['..'], ['a.b.c.d'], ['']])(
+    'id_token malformat %j → id_token_forma, fără excepție', async tk => {
+    const { jwks } = await cheie()
+    const o = { jwks: async () => jwks, clientId: 'client-fictiv.apps', casuta: 'redari@gazpet.ro', acum: ACUM }
+    const r = await valideazaIdToken(tk, o)
+    expect(r.ok).toBe(false); expect(['id_token_forma', 'id_token_lipsa']).toContain(r.cod)
+  })
+  it('antet / corp decodabile dar fără alg sau semnătură stricată: codurile lor, fără excepție', async () => {
+    const { k, jwks } = await cheie()
+    const o = { jwks: async () => jwks, clientId: 'client-fictiv.apps', casuta: 'redari@gazpet.ro', acum: ACUM }
+    expect((await valideazaIdToken(b64u('{"alg":"RS256","kid":"k1"}') + '.' + b64u(JSON.stringify(corpOk())) + '.AAAA', o)).cod).toBe('id_token_semnatura')
+    expect((await valideazaIdToken(b64u('{"alg":"HS256","kid":"k1"}') + '.' + b64u(JSON.stringify(corpOk())) + '.AAAA', o)).cod).toBe('id_token_alg')
+    const bun = await idToken(k, corpOk()); expect((await valideazaIdToken(bun, o)).ok).toBe(true)
+  })
   /** dependențele handlerului OAuth; Google e simulat prin fetch */
   async function depsOauth(tokenBody, o = {}) {
     const { k, jwks } = await cheie()
@@ -301,6 +351,22 @@ describe('F2b: OAuth — scope-uri canonice, id_token validat local, state consu
     expect(revocari.length).toBeGreaterThanOrEqual(1); expect(revocari.every(c => /^token=/.test(c[1].body))).toBe(true)
     expect(d.eveniment).toHaveBeenCalledWith('oauth_respins', cod)
   })
+  it.each([['A.A.A'], ['!!.!!.!!'], ['QQ.QQ.QQ'], [123], [{ x: 1 }], [b64u('[1]') + '.' + b64u('{}') + '.QUJD']])(
+    'callback cu id_token malformat %j (runda 2): 409 id_token_forma, grantul REVOCAT (refresh + access), eveniment, nimic salvat, fără excepție', async tk => {
+    const d = await depsOauth({ id_token: tk })
+    const r = await raspundeOauth({ jwt: 'f', corp: { actiune: 'callback', code: 'cod-fictiv-4/0Ab', state: stateBun } }, d)
+    expect(r).toEqual({ status: 409, body: { cod: tk === 123 || typeof tk === 'object' ? 'id_token_lipsa' : 'id_token_forma' } })
+    expect(d.secretSeteaza).not.toHaveBeenCalled()
+    const revocari = d.fetchSpy.mock.calls.filter(c => c[0] === GAZDA_OAUTH + '/revoke').map(c => c[1].body).sort()
+    expect(revocari).toEqual(['token=at', 'token=rt-fictiv'])
+    expect(d.eveniment).toHaveBeenCalledWith('oauth_respins', r.body.cod)
+  })
+  it('callback: dacă verificarea ar arunca totuși (subtle stricat), grantul se revocă și refuzul e controlat', async () => {
+    const d = await depsOauth({}, { subtle: { importKey: async () => { throw new Error('crypto indisponibil') }, verify: async () => { throw new Error('x') } } })
+    const r = await raspundeOauth({ jwt: 'f', corp: { actiune: 'callback', code: 'cod-fictiv-4/0Ab', state: stateBun } }, d)
+    expect(r.status).toBe(409); expect(r.body.cod).toBe('id_token_semnatura')
+    expect(d.fetchSpy.mock.calls.filter(c => c[0] === GAZDA_OAUTH + '/revoke').length).toBe(2); expect(d.secretSeteaza).not.toHaveBeenCalled()
+  })
   it('callback: schimbul eșuat (4xx Google) → 502, eveniment, nimic salvat; salvarea eșuată → revocare + 503', async () => {
     let d = await depsOauth(); d.fetch = d.fetchSpy = vi.fn(async () => raspuns(400, { error: 'invalid_grant' }))
     expect((await raspundeOauth({ jwt: 'f', corp: { actiune: 'callback', code: 'cod-fictiv-4/0Ab', state: stateBun } }, d))).toEqual({ status: 502, body: { cod: 'schimb_esuat' } }); expect(d.secretSeteaza).not.toHaveBeenCalled()
@@ -352,7 +418,7 @@ describe('F2b: MIME cu diacritice și atașament; garda JS cere căsuța conecta
 
 // ── MUTANȚI pe handler (copii cu mutația într-un folder temporar) + DOVADA PE MAIN (sursele de pe origin/main prin git show) ──
 const CAI = { 'redariMailF2Handler.mjs': 'supabase/functions/_shared/redariMailF2Handler.mjs', 'redariMailF2.mjs': 'supabase/functions/_shared/redariMailF2.mjs', 'gmailTrimitere.mjs': 'supabase/functions/_shared/gmailTrimitere.mjs', 'gmailOauthTrimitere.mjs': 'supabase/functions/_shared/gmailOauthTrimitere.mjs' }
-const SURSE = Object.fromEntries(Object.entries(CAI).map(([n, c]) => [n, readFileSync(c, 'utf8')]))
+const SURSE = Object.fromEntries(Object.entries(CAI).map(([n, c]) => [n, readFileSync(c, 'utf8').replace(/\r\n/g, '\n')]))   // checkout CRLF (Windows) = aceleași surse
 const TMP = join(process.cwd(), '.tmp'); mkdirSync(TMP, { recursive: true })
 const foldere = []
 afterAll(() => { for (const f of foldere) rmSync(f, { recursive: true, force: true }) })

@@ -5,6 +5,10 @@
 // integru) → abia apoi secretul din Vault, refresh-ul și apelurile către Google. Orice refuz de dinainte = NICIO citire de secret, NICIUN apel.
 // Rezultat ambiguu (5xx / timeout / rețea / 200 neinterpretabil) = `necunoscut` + oprirea buclei (BD pune pauza de 15 min): reconciliere, niciodată
 // retrimitere (L05). Refresh respins (4xx) înaintea oricărei rezervări → trimiterea se oprește din BD (fn_red_mail_f2_setari OFF) și 409.
+// Persistarea rezultatului (fn_red_mail_rezultat) e CONFIRMATĂ doar de `true` (runda 2, Jakarinos #1134 P2): orice altceva (false = CAS pierdut:
+// lease expirat / stare schimbată de altă invocare; null; eroare) = NECONFIRMAT → oprire, recitirea stării mesajului din server (cu JWT-ul omului),
+// nimic contorizat ca „trimis”, niciun al doilea send; răspunsul poartă `persistare_neconfirmata` + starea citită (`stare_server`), ca omul să decidă
+// după ce vede BD-ul, nu după un mesaj de succes fals.
 import { TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST, LIMITA_INVOCARE, gardaTrimitere, transportPermis, proceseazaMesaj } from './redariMailF2.mjs'
 import { reimprospateaza, trimite } from './gmailTrimitere.mjs'
 
@@ -54,8 +58,12 @@ export async function raspundeTrimitere({ jwt, corp }, deps) {
     return out(503, tok.cod === 'metoda_nepermisa' ? 'transport_neconfigurat' : 'token_neconfirmat')
   }
   // ── bucla: rezervare (RPC, plafoane + optout + extern_permis + hash-uri sub lock) → mesaj → pauză ≥ 2 s ──
-  const n = { trimise: 0, esuate: 0, necunoscute: 0, sarite: 0, rezervate: 0 }
-  let oprit = null
+  const n = { trimise: 0, esuate: 0, necunoscute: 0, neconfirmate: 0, sarite: 0, rezervate: 0 }
+  let oprit = null, extra = {}
+  // starea mesajului recitită din server (JWT-ul omului) după o persistare neconfirmată; eroare de citire ≠ stare (L18)
+  const recitire = async id => {
+    try { const s = await deps.mesaj?.(id); return s?.error ? 'necitita' : (typeof s?.data?.stare === 'string' ? s.data.stare : 'necitita') } catch { return 'necitita' }
+  }
   for (let k = 0; k < LIMITA_INVOCARE; k++) {
     const r = await deps.rezerva(l.data.id)
     if (r?.error) { oprit = 'rezervare_neconfirmata'; break }
@@ -74,12 +82,19 @@ export async function raspundeTrimitere({ jwt, corp }, deps) {
           return { stare: rr.stare, cod: rr.cod, persistat: w.data === true }
         },
       })
-    } catch { n.necunoscute++; oprit = 'rezultat_neconfirmat'; break }   // starea reală e în BD (rezervat / in_apel); se recitește, nu se reia
-    if (rez?.sarit) n.sarite++
-    else if (rez?.stare === 'trimis') n.trimise++
-    else if (rez?.stare === 'esuat_sigur') n.esuate++
-    else { n.necunoscute++; oprit = 'rezultat_ambiguu'; break }   // necunoscut / persistare neconfirmată: BD pune pauza; reconciliere, nu retrimitere
+    } catch { n.necunoscute++; oprit = 'rezultat_neconfirmat'; extra = { mesaj_id: m.id, stare_server: await recitire(m.id) }; break }   // starea reală e în BD; se recitește, nu se reia
+    if (rez?.sarit) { n.sarite++ }
+    else if (rez?.persistat !== true) {
+      // RPC-ul n-a confirmat scrierea (false / null / 3 încercări eșuate): rezultatul send-ului NU e în BD sub lease-ul nostru → neconfirmat, oprire,
+      // recitire; NU se contorizează ca trimis / eșuat și NU se repetă send-ul (L05)
+      // rezultat_send = ce a răspuns Gmail (trimis / esuat_sigur / necunoscut), DOAR dacă e cunoscut; după 3 eșecuri ale RPC-ului nu-l mai avem (null)
+      n.neconfirmate++; oprit = 'persistare_neconfirmata'
+      extra = { mesaj_id: m.id, stare_server: await recitire(m.id), rezultat_send: rez?.cod === 'persistare_neconfirmata' ? null : rez?.stare ?? null }; break
+    }
+    else if (rez.stare === 'trimis') n.trimise++
+    else if (rez.stare === 'esuat_sigur') n.esuate++
+    else { n.necunoscute++; oprit = 'rezultat_ambiguu'; break }   // necunoscut persistat: BD pune pauza; reconciliere, nu retrimitere
     if (k + 1 < LIMITA_INVOCARE) await deps.pauza(2100)
   }
-  return out(200, oprit || 'rulat', n)
+  return out(200, oprit || 'rulat', { ...n, ...extra })
 }

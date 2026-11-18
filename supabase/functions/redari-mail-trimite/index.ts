@@ -44,6 +44,8 @@ Deno.serve(async (req: Request) => {
       incepe: (mesaj: string, token: string) => uc.rpc('fn_red_mail_apel_incepe', { p_mesaj: mesaj, p_token: token }),
       rezultat: (mesaj: string, token: string, stare: string, gmailId: string | null, threadId: string | null) =>
         uc.rpc('fn_red_mail_rezultat', { p_mesaj: mesaj, p_token: token, p_stare: stare, p_gmail_id: gmailId, p_thread_id: threadId }),
+      // recitirea stării mesajului (JWT-ul omului, RLS) după o persistare neconfirmată — doar citire, fără conținut
+      mesaj: (id: string) => uc.from('red_mail_mesaje').select('id, stare, eroare_cod').eq('id', id).maybeSingle(),
       descarca: async (cale: string) => {
         const { data, error } = await uc.storage.from('redari').download(cale);
         if (error || !data) throw new Error('atasament_indisponibil');

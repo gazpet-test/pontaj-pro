@@ -17,7 +17,21 @@
 --   * red_mail_oauth_state: scopul `trimitere` intră în CHECK (F1 avea citire / citire_test / golire / golire_test);
 --   * fn_red_mail_f2_poate (chemată sub lock de fn_red_mail_rezerva și fn_red_mail_apel_incepe): refuză `casuta_neconectata` și, cât
 --     doar_proiecte_test e adevărat, orice lot al unui proiect al cărui cod NU începe cu „TEST-” (`doar_proiecte_test`) — regula impusă în BD, pe
---     toate căile (L07), nu doar în funcția edge; corpul 20261131a altfel neschimbat;
+--     toate căile (L07), nu doar în funcția edge; corpul 20261131a altfel neschimbat; convenția „TEST-” are O SINGURĂ definiție SQL (L19),
+--     fn_red_proiect_e_test(cod), folosită și de triggerul de mai jos;
+--   * CATEGORIA proiectului e garantată TEHNIC pe durata trimiterii (runda 2, Jakarinos #1134 P1): (i) fn_red_mail_rezerva și fn_red_mail_apel_incepe
+--     iau rândul proiectului FOR SHARE (după lot, înaintea mesajelor — ordinea L06 setări → lot → proiect → mesaje), deci decizia „doar TEST” a lui
+--     fn_red_mail_f2_poate e serializată cu orice UPDATE al rândului proiectului; (ii) triggerul BEFORE UPDATE OF cod trg_red_proiect_cod_test
+--     (fn_red_proiect_cod_test_garda, SECURITY DEFINER ca să vadă loturile tuturor) refuză schimbarea CATEGORIEI codului (TEST- ↔ real) cât proiectul
+--     are loturi de e-mail neîncheiate sau mesaje rezervate / în apel (deci și în intervalul dintre commit-ul lui apel_incepe și apelul HTTP) sau AWB-uri
+--     FAN propuse / aprobate / în curs / necunoscute (lanțul FAN are aceeași convenție și aceeași gaură; FAN cere AWB `aprobat` înaintea oricărui apel,
+--     așa că triggerul singur îl acoperă, fără a modifica codul FAN); în contextul aplicației (JWT) schimbarea categoriei o face DOAR owner-ul (42501);
+--     redenumirile care păstrează categoria (TEST-A → TEST-B, LOT1 → LOT1-B) rămân ca azi (admin Redări). Mentenanța (postgres fără JWT) e scutită doar
+--     de condiția „owner”, nu și de cea „în lucru”. Pe live, trg_red_autorizare_tgz (20261130m) refuză deja orice schimbare a codului cât există
+--     autorizarea Transgaz; triggerul nou acoperă proiectele fără autorizare și căile de mentenanță.
+--     EFECT ZILNIC pentru proprietar: un proiect de TEST cu loturi de e-mail active sau cu AWB-uri FAN în lucru nu poate fi redenumit cu un cod „real”,
+--     și invers; redenumirile în aceeași categorie nu se schimbă; după încheierea loturilor (și AWB-urile ajunse generat / ridicat / anulat / eroare),
+--     owner-ul poate schimba categoria.
 --   * fn_red_mail_f2_setari: owner-ul poate PORNI trimiterea (p_oprit = false, cu versiunea curentă și căsuța conectată); p_extern = true rămâne refuzat
 --     (`extern_amanat`); OFF rămâne fără condiții (L20);
 --   * RPC-uri noi cu JWT-ul owner-ului (auth.uid(), L08): fn_red_mail_oauth_start (state-ul OAuth: doar sha256, scopul `trimitere`, 10 minute),
@@ -29,19 +43,25 @@
 --     oauth_conectat / oauth_revocat) și fn_red_mail_secret_citeste (valoarea, doar cu căsuța conectată; pentru motivul `trimitere` doar cu
 --     trimiterea pornită și fără pauză). Niciun rol al aplicației nu le poate chema; valoarea nu apare în niciun jurnal.
 -- Ce NU face: nu creează secrete în Vault (le scrie owner-ul prin conectare); nu pornește trimiterea (rămâne OFF); nu atinge citirea / golirea
---   (F1), red_mail_loturi / red_mail_mesaje, drepturile de modul, cronuri; nicio dată de business.
+--   (F1), datele din red_mail_loturi / red_mail_mesaje / red_fan_* (doar le CITEȘTE în trigger), drepturile de modul, cronuri; nicio dată de business.
 -- Identitatea: auth.uid() în RPC-urile owner-ului; p_apelant (uid din getUser) DOAR în cele două RPC-uri service_role, re-verificat în profiles.
--- Ordinea lock-urilor la rulare (L06), aceeași ca în 20261131a: red_mail_setari (FOR UPDATE / FOR SHARE) → restul; fn_red_mail_secret_seteaza ia
---   setările FOR UPDATE înaintea scrierii în Vault; RPC-urile de state ating doar red_mail_oauth_state.
+-- Ordinea lock-urilor la rulare (L06): red_mail_setari (FOR UPDATE / FOR SHARE) → red_mail_loturi FOR UPDATE → red_proiecte FOR SHARE (nou, doar în
+--   rezerva / apel_incepe) → red_mail_mesaje ORDER BY id; fn_red_mail_secret_seteaza ia setările FOR UPDATE înaintea scrierii în Vault; RPC-urile de
+--   state ating doar red_mail_oauth_state. Triggerul trg_red_proiect_cod_test rulează cu rândul proiectului deja blocat de UPDATE și nu ia alt lock
+--   (citiri simple din red_mail_loturi / red_mail_mesaje / red_fan_awb); fn_red_mail_lot_creeaza ia KEY SHARE pe proiect (FK) după setări — niciun
+--   drum nu ia proiectul înaintea setărilor sau lotului, deci fără ciclu.
 -- Lock-uri la aplicare (punct unic, NOWAIT, ordine FIXĂ: red_mail_setari → red_mail_oauth_state, ambele ACCESS EXCLUSIVE, cerute de ALTER TABLE):
 --   opresc și citirile din cele două tabele până la COMMIT (ecranul „Lot e-mail” așteaptă). Bugetul = 1 s cu ceasul pornit IMEDIAT ÎNAINTEA PRIMEI
 --   ÎNCERCĂRI, verificat înaintea fiecărei încercări și DUPĂ obținerea setului complet; fiecare încercare = subtranzacție. Lock-uri implicite:
 --   CREATE OR REPLACE FUNCTION nu ia lock pe tabele; INSERT-urile RPC-urilor noi nu rulează aici.
 -- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, bugetul lock-urilor
 --   de 1 s și garda finală a runnerului.
--- Revenire: supabase/revenire/20261131h_redari_mail_f2b_trimitere_ROLLBACK.sql (prin runner, plafon 2000; refuză cu căsuța conectată, cu trimiterea
---   pornită sau cu un state `trimitere` activ). Probe: scripts/pglite/test_redari_mail_f2b_local.mjs (PGlite, pașii reali L15 v2 ai runnerului:
---   comportament, refuzuri, aplicare → revenire → reaplicare, mutanți). Concurența reală și Vault-ul real: pe clonă, coordonatorul.
+-- Revenire: supabase/revenire/20261131h_redari_mail_f2b_trimitere_ROLLBACK.sql (prin runner, plafon 2000; L14 textual: refuză la ORICE istoric
+--   produs după aplicare — state `trimitere`, evenimente oauth_* ale trimiterii, rândul Vault, mesaje / jurnal F2 de transport — deci e posibilă doar
+--   pe o bază pe care trimiterea n-a fost folosită; după prima conectare, întoarcerea = migrare nouă, revizuită). Probe:
+--   scripts/pglite/test_redari_mail_f2b_local.mjs (PGlite, pașii reali L15 v2 ai runnerului, RPC-urile reale de trimitere, triggerul, refuzuri,
+--   aplicare → revenire → reaplicare, mutanți) + supabase/tests/20261131h_redari_mail_f2b_concurenta.sh (două sesiuni psql pe o bază PostgreSQL de
+--   unică folosință: redenumirea concurentă cu rezervarea). Vault-ul real și clona completă: coordonatorul.
 DO $pre$
 DECLARE v_plafon text; v_rau text; v_def text;
 BEGIN
@@ -73,13 +93,17 @@ BEGIN
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- reaplicare = refuz
   IF to_regprocedure('public.fn_red_mail_secret_seteaza(text,text,uuid,text)') IS NOT NULL OR to_regprocedure('public.fn_red_mail_oauth_start(text,text)') IS NOT NULL
-     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_red_mail_secret_seteaza', 'fn_red_mail_secret_citeste', 'fn_red_mail_oauth_start', 'fn_red_mail_oauth_consuma', 'fn_red_mail_oauth_eveniment'))
+     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_red_mail_secret_seteaza', 'fn_red_mail_secret_citeste', 'fn_red_mail_oauth_start', 'fn_red_mail_oauth_consuma', 'fn_red_mail_oauth_eveniment', 'fn_red_proiect_e_test', 'fn_red_proiect_cod_test_garda'))
+     OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND t.tgname = 'trg_red_proiect_cod_test')
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.red_mail_setari'::regclass AND a.attname IN ('doar_proiecte_test', 'trimitere_conectata_la', 'trimitere_conectata_de', 'trimitere_casuta') AND NOT a.attisdropped) THEN
     RAISE EXCEPTION '20261131h: obiectele exista deja (reaplicare)';
   END IF;
-  -- coloanele citite / scrise (tipurile din 20261126a / 20261130j / 20261131a)
+  -- coloanele citite / scrise (tipurile din 20261126a / 20261130j / 20261131a / 20261212a)
   SELECT string_agg(v.t || '.' || v.c, ', ') INTO v_rau FROM (VALUES
       ('profiles', 'id', 'uuid'), ('profiles', 'is_owner', 'boolean'), ('red_proiecte', 'id', 'uuid'), ('red_proiecte', 'cod', 'text'),
+      ('red_mail_loturi', 'id', 'uuid'), ('red_mail_mesaje', 'lot_id', 'uuid'), ('red_mail_mesaje', 'stare', 'text'), ('red_mail_mesaje', 'id', 'uuid'),
+      ('red_mail_mesaje', 'lease_token', 'uuid'), ('red_mail_mesaje', 'lease_pana', 'timestamp with time zone'), ('red_mail_mesaje', 'rezervat_la', 'timestamp with time zone'),
+      ('red_fan_awb', 'proiect_id', 'uuid'), ('red_fan_awb', 'stare', 'text'), ('red_mail_jurnal_f2', 'cod', 'text'),
       ('red_mail_setari', 'id', 'smallint'), ('red_mail_setari', 'trimitere_oprita', 'boolean'), ('red_mail_setari', 'extern_permis', 'boolean'),
       ('red_mail_setari', 'pauza_pana', 'timestamp with time zone'), ('red_mail_setari', 'versiune', 'integer'),
       ('red_mail_oauth_state', 'id', 'uuid'), ('red_mail_oauth_state', 'state_sha256', 'text'), ('red_mail_oauth_state', 'scop', 'text'), ('red_mail_oauth_state', 'owner_id', 'uuid'),
@@ -109,14 +133,23 @@ BEGIN
   END IF;
   IF (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.red_mail_evenimente'::regclass AND t.tgname = 'trg_red_mail_evenimente_reguli' AND t.tgenabled = 'O') <> 1
      OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.red_mail_oauth_state'::regclass AND t.tgname = 'trg_red_mail_oauth_state_reguli' AND t.tgenabled = 'O') <> 1
-     OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.red_mail_setari'::regclass AND t.tgname IN ('trg_red_mail_setari_reguli', 'trg_red_versiune') AND t.tgenabled = 'O') <> 2 THEN
-    RAISE EXCEPTION '20261131h: triggerele 20261130k pe evenimente / oauth_state / setari lipsesc sau sunt oprite';
+     OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.red_mail_setari'::regclass AND t.tgname IN ('trg_red_mail_setari_reguli', 'trg_red_versiune') AND t.tgenabled = 'O') <> 2
+     OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.red_mail_loturi'::regclass AND t.tgname = 'trg_red_mail_f2_lot' AND t.tgenabled = 'O') <> 1
+     OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.red_mail_mesaje'::regclass AND t.tgname = 'trg_red_mail_f2_mesaj' AND t.tgenabled = 'O') <> 1 THEN
+    RAISE EXCEPTION '20261131h: triggerele 20261130k / 20261131a pe evenimente / oauth_state / setari / loturi / mesaje lipsesc sau sunt oprite';
+  END IF;
+  -- stările FAN pe care le citește triggerul: CHECK-ul din 20261212a le conține
+  SELECT pg_get_constraintdef(c.oid) INTO v_def FROM pg_constraint c WHERE c.conrelid = 'public.red_fan_awb'::regclass AND c.contype = 'c' AND pg_get_constraintdef(c.oid) LIKE 'CHECK ((stare = ANY (ARRAY[%';
+  IF v_def IS NULL OR v_def NOT LIKE '%''propus''::text%' OR v_def NOT LIKE '%''aprobat''::text%' OR v_def NOT LIKE '%''in_curs''::text%' OR v_def NOT LIKE '%''necunoscut''::text%' THEN
+    RAISE EXCEPTION '20261131h: red_fan_awb.stare nu are starile asteptate (20261212a): %', coalesce(v_def, 'lipsa');
   END IF;
   -- funcțiile F2 înlocuite / chemate: EXACT cele din 20261131a (corp fără CR + proprietăți)
   SELECT string_agg(a.semnatura, ', ' ORDER BY a.semnatura) INTO v_rau
     FROM (VALUES
       ('public.fn_red_mail_f2_setari(boolean,boolean,integer)', '88b2a3f13a95d346b1fec56736aa89e3', 'plpgsql', true, 'v', 'boolean'),
       ('public.fn_red_mail_f2_poate(public.red_mail_loturi)', 'd239c6cc7bcb13691d798f99d4f1aa58', 'plpgsql', false, 's', 'text'),
+      ('public.fn_red_mail_rezerva(uuid)', 'a5bf83c98b41d8665cce7e536eea4343', 'plpgsql', true, 'v', 'public.red_mail_mesaje'),
+      ('public.fn_red_mail_apel_incepe(uuid,uuid)', 'b3834ab1c09d2671c0778621f3271255', 'plpgsql', true, 'v', 'boolean'),
       ('public.fn_red_mail_f2_owner()', '220cfdf1f3e97fde8cd597a5b24537ed', 'plpgsql', true, 's', 'void'),
       ('public.fn_red_mail_f2_audit(uuid,uuid,text)', '22f7267f17b19a625fc849ae217fc160', 'plpgsql', true, 'v', 'void'),
       ('public.fn_red_mail_f2_lot_hash(uuid)', '405820f220f0bd56b901f22b3ef35155', 'sql', false, 's', 'text')
@@ -131,8 +164,16 @@ BEGIN
       OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
       OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres';
   IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20261131h: functiile F2 nu sunt cele din 20261131a: %', v_rau; END IF;
-  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_red_mail_f2_setari', 'fn_red_mail_f2_poate')) <> 2 THEN
+  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_red_mail_f2_setari', 'fn_red_mail_f2_poate', 'fn_red_mail_rezerva', 'fn_red_mail_apel_incepe')) <> 4
+     OR (SELECT p.proretset FROM pg_proc p WHERE p.oid = 'public.fn_red_mail_rezerva(uuid)'::regprocedure) IS NOT TRUE THEN
     RAISE EXCEPTION '20261131h: variante neasteptate ale functiilor inlocuite';
+  END IF;
+  -- istoricul pe care revenirea îl va trata ca „utilizare” (L14) nu există încă: trimiterea era imposibilă înainte (CHECK-ul inert), iar OAuth-ul
+  -- F1 nu e livrat; evenimentele oauth_* / state-urile sunt append-only, deci după aplicare orice astfel de rând = urmă a acestei migrări
+  IF EXISTS (SELECT 1 FROM public.red_mail_evenimente e WHERE (e.tip IN ('oauth_conectat', 'oauth_revocat') AND e.cod = 'trimitere') OR e.tip = 'oauth_respins')
+     OR EXISTS (SELECT 1 FROM public.red_mail_jurnal_f2 j WHERE j.cod IN ('rezervat', 'apel_inceput', 'trimis', 'esuat_sigur', 'necunoscut', 'esuat_confirmat'))
+     OR EXISTS (SELECT 1 FROM public.red_mail_mesaje m WHERE m.stare IN ('rezervat', 'in_apel', 'trimis', 'esuat_sigur', 'necunoscut', 'esuat_confirmat') OR m.rezervat_la IS NOT NULL) THEN
+    RAISE EXCEPTION '20261131h: exista deja istoric de trimitere / OAuth trimitere (evenimente, jurnal F2, mesaje) — revenirea L14 nu l-ar putea deosebi';
   END IF;
   -- dependențele: identitatea, poarta owner, informarea, Vault-ul (create / update / vederea decriptată)
   IF to_regprocedure('auth.uid()') IS NULL OR to_regprocedure('public.fn_sms_e_owner()') IS NULL OR to_regprocedure('public.fn_red_informare_publicata(text)') IS NULL
@@ -152,10 +193,11 @@ BEGIN
   END IF;
 END $pre$;
 
--- drepturile EXACTE ale celor două funcții înlocuite, ÎNAINTE (postcondiția: aceleași după CREATE OR REPLACE)
+-- drepturile EXACTE ale celor patru funcții înlocuite, ÎNAINTE (postcondiția: aceleași după CREATE OR REPLACE)
 CREATE TEMP TABLE red_acl_20261131h ON COMMIT DROP AS
   SELECT p.oid::regprocedure::text AS functie, coalesce(p.proacl, acldefault('f', p.proowner))::text AS acl
-    FROM pg_proc p WHERE p.oid IN ('public.fn_red_mail_f2_setari(boolean,boolean,integer)'::regprocedure, 'public.fn_red_mail_f2_poate(public.red_mail_loturi)'::regprocedure);
+    FROM pg_proc p WHERE p.oid IN ('public.fn_red_mail_f2_setari(boolean,boolean,integer)'::regprocedure, 'public.fn_red_mail_f2_poate(public.red_mail_loturi)'::regprocedure,
+                                   'public.fn_red_mail_rezerva(uuid)'::regprocedure, 'public.fn_red_mail_apel_incepe(uuid,uuid)'::regprocedure);
 
 -- ── punctul UNIC de blocare (L06): red_mail_setari → red_mail_oauth_state, ACCESS EXCLUSIVE, NOWAIT; bugetul 1 s de la prima încercare ──
 DO $lock$
@@ -207,22 +249,106 @@ COMMENT ON COLUMN public.red_mail_setari.trimitere_casuta IS 'Redări e-mail F2b
 ALTER TABLE public.red_mail_oauth_state DROP CONSTRAINT red_mail_oauth_state_scop_ck;
 ALTER TABLE public.red_mail_oauth_state ADD CONSTRAINT red_mail_oauth_state_scop_ck CHECK (scop IN ('citire', 'citire_test', 'golire', 'golire_test', 'trimitere'));
 
--- ─── 3. fn_red_mail_f2_poate: corpul 20261131a + `casuta_neconectata` + garda „doar TEST” (în BD, toate căile) ────────────────────────
+-- ─── 3. convenția „TEST-” într-o singură definiție SQL (L19) + fn_red_mail_f2_poate: corpul 20261131a + `casuta_neconectata` + garda „doar TEST” ──
+CREATE FUNCTION public.fn_red_proiect_e_test(p_cod text) RETURNS boolean
+LANGUAGE sql IMMUTABLE SET search_path=public,pg_temp AS $fn$
+ SELECT left(p_cod,5)='TEST-'
+$fn$;
+COMMENT ON FUNCTION public.fn_red_proiect_e_test(text) IS 'Redări: proiect de TEST = codul începe EXACT cu „TEST-” (sensibil la caz, fără spații) — aceeași convenție ca în cod (redariMailF2.mjs / redariFanHandler.mjs). Folosită de fn_red_mail_f2_poate și de trg_red_proiect_cod_test. 20261131h.';
 CREATE OR REPLACE FUNCTION public.fn_red_mail_f2_poate(l public.red_mail_loturi) RETURNS text
 LANGUAGE plpgsql STABLE SET search_path=public,pg_temp AS $fn$
 BEGIN
  IF NOT EXISTS(SELECT 1 FROM public.red_mail_setari WHERE id=1 AND trimitere_oprita IS FALSE AND (pauza_pana IS NULL OR pauza_pana<=now())) THEN RETURN 'trimitere_oprita'; END IF;
  -- 20261131h: trimiterea cere căsuța conectată (refresh token în Vault), iar cât doar_proiecte_test e adevărat, doar proiecte cu codul „TEST-…”
+ -- (apelantul — fn_red_mail_rezerva / fn_red_mail_apel_incepe — ține rândul proiectului FOR SHARE, deci codul citit aici nu se poate schimba până la COMMIT)
  IF NOT EXISTS(SELECT 1 FROM public.red_mail_setari WHERE id=1 AND trimitere_conectata_la IS NOT NULL) THEN RETURN 'casuta_neconectata'; END IF;
  IF EXISTS(SELECT 1 FROM public.red_mail_setari WHERE id=1 AND doar_proiecte_test IS TRUE)
-    AND NOT EXISTS(SELECT 1 FROM public.red_proiecte WHERE id=l.proiect_id AND left(cod,5)='TEST-') THEN RETURN 'doar_proiecte_test'; END IF;
+    AND NOT EXISTS(SELECT 1 FROM public.red_proiecte WHERE id=l.proiect_id AND public.fn_red_proiect_e_test(cod) IS TRUE) THEN RETURN 'doar_proiecte_test'; END IF;
  IF NOT EXISTS(SELECT 1 FROM public.red_proiecte WHERE id=l.proiect_id AND public.fn_red_informare_publicata(cod) IS TRUE) THEN RETURN 'informare_nepublicata'; END IF;
  IF l.stare NOT IN ('aprobat','in_trimitere') OR l.aprobat_de IS NULL THEN RETURN 'lot_neaprobat'; END IF;
  IF l.aprobat_la IS NULL OR l.aprobat_la+interval '7 days'<=now() THEN RETURN 'aprobare_expirata'; END IF;
  IF public.fn_red_mail_f2_lot_hash(l.id) IS DISTINCT FROM l.lot_sha256 OR l.lot_sha256 IS DISTINCT FROM l.aprobat_lot_sha256 THEN RETURN 'lot_integritate'; END IF;
  RETURN NULL;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_mail_f2_poate(public.red_mail_loturi) IS 'Redări e-mail F2 (intern, chemată sub lock de fn_red_mail_rezerva / fn_red_mail_apel_incepe): motivul pentru care un lot NU poate trimite, sau NULL. 20261131h: casuta_neconectata; doar_proiecte_test cât red_mail_setari.doar_proiecte_test e adevărat (codul proiectului nu începe cu TEST-).';
+COMMENT ON FUNCTION public.fn_red_mail_f2_poate(public.red_mail_loturi) IS 'Redări e-mail F2 (intern, chemată sub lock de fn_red_mail_rezerva / fn_red_mail_apel_incepe, care țin și proiectul FOR SHARE): motivul pentru care un lot NU poate trimite, sau NULL. 20261131h: casuta_neconectata; doar_proiecte_test cât red_mail_setari.doar_proiecte_test e adevărat (fn_red_proiect_e_test(cod) nu e adevărat).';
+
+-- ─── 3b. categoria proiectului (TEST- / real) e blocată cât proiectul are trimiteri în lucru (e-mail) sau AWB-uri FAN în lucru ───────────────
+-- Rulează cu rândul proiectului deja blocat de UPDATE (lock-ul cu care rezerva / apel_incepe se serializează prin FOR SHARE); nu ia alt lock (L06).
+-- SECURITY DEFINER: loturile / mesajele / AWB-urile au RLS doar pentru owner, iar redenumirea o poate încerca un admin Redări (red_proiecte_upd).
+CREATE FUNCTION public.fn_red_proiect_cod_test_garda() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS $fn$
+BEGIN
+ IF NEW.cod IS NOT DISTINCT FROM OLD.cod OR public.fn_red_proiect_e_test(NEW.cod) IS NOT DISTINCT FROM public.fn_red_proiect_e_test(OLD.cod) THEN RETURN NEW; END IF;
+ -- schimbarea CATEGORIEI: în contextul aplicației (JWT) doar owner-ul; mentenanța (postgres fără JWT) trece de această condiție, nu și de următoarele
+ IF (auth.uid() IS NOT NULL OR coalesce(auth.role(),'') IN ('anon','authenticated')) AND public.fn_sms_e_owner() IS NOT TRUE THEN
+  RAISE EXCEPTION 'red_proiecte: categoria codului (TEST- / real) o schimba doar owner-ul' USING ERRCODE='42501';
+ END IF;
+ IF EXISTS(SELECT 1 FROM public.red_mail_loturi l WHERE l.proiect_id=NEW.id
+           AND (l.stare<>'incheiat' OR EXISTS(SELECT 1 FROM public.red_mail_mesaje m WHERE m.lot_id=l.id AND m.stare IN ('rezervat','in_apel')))) THEN
+  RAISE EXCEPTION 'red_proiecte: categoria codului (TEST- / real) nu se schimba cat proiectul are loturi de e-mail neincheiate sau mesaje rezervate / in apel' USING ERRCODE='P0001';
+ END IF;
+ IF EXISTS(SELECT 1 FROM public.red_fan_awb a WHERE a.proiect_id=NEW.id AND a.stare IN ('propus','aprobat','in_curs','necunoscut')) THEN
+  RAISE EXCEPTION 'red_proiecte: categoria codului (TEST- / real) nu se schimba cat proiectul are AWB-uri FAN propuse / aprobate / in curs / necunoscute' USING ERRCODE='P0001';
+ END IF;
+ RETURN NEW;
+END $fn$;
+COMMENT ON FUNCTION public.fn_red_proiect_cod_test_garda() IS 'Redări: trigger BEFORE UPDATE OF cod pe red_proiecte — categoria codului (TEST- / real, fn_red_proiect_e_test) se schimbă doar de owner și doar fără loturi de e-mail neîncheiate / mesaje rezervate sau în apel / AWB-uri FAN propuse, aprobate, în curs, necunoscute; redenumirile din aceeași categorie trec. 20261131h.';
+CREATE TRIGGER trg_red_proiect_cod_test BEFORE UPDATE OF cod ON public.red_proiecte FOR EACH ROW EXECUTE FUNCTION public.fn_red_proiect_cod_test_garda();
+
+-- ─── 3c. fn_red_mail_rezerva / fn_red_mail_apel_incepe: corpurile 20261131a + proiectul FOR SHARE după lot (ordinea L06: setări → lot → proiect → mesaje) ──
+CREATE OR REPLACE FUNCTION public.fn_red_mail_rezerva(p_lot uuid) RETURNS SETOF public.red_mail_mesaje
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS $fn$
+DECLARE l public.red_mail_loturi; m public.red_mail_mesaje; s public.red_mail_setari; cod text;
+BEGIN
+ PERFORM public.fn_red_mail_f2_owner();
+ -- Ordine: setări -> lot -> proiect (FOR SHARE, 20261131h) -> mesaje ORDER BY id. Setările serializează și cotele globale.
+ SELECT * INTO s FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;  -- r3 (Gem r2 P2-02)
+ SELECT * INTO l FROM public.red_mail_loturi WHERE id=p_lot FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'lot_inexistent'; END IF;
+ -- 20261131h: decizia „doar TEST” a lui fn_red_mail_f2_poate e serializată cu orice UPDATE al proiectului (redenumire); trg_red_proiect_cod_test refuză
+ -- schimbarea categoriei cât lotul nu e încheiat sau are mesaje rezervate / în apel, deci și între COMMIT-ul de aici și apelul HTTP.
+ PERFORM 1 FROM public.red_proiecte WHERE id=l.proiect_id FOR SHARE;
+ -- Reconcilierea locală a lease-urilor nu reia un send ambiguu.
+ PERFORM 1 FROM public.red_mail_mesaje WHERE lot_id=l.id ORDER BY id FOR UPDATE;
+ UPDATE public.red_mail_mesaje SET stare='necunoscut',eroare_cod='lease_expirat' WHERE lot_id=l.id AND stare='in_apel' AND lease_pana<=now();
+ UPDATE public.red_mail_mesaje SET stare=CASE WHEN l.stare IN ('incheiat','blocat_integritate') THEN 'anulat' ELSE 'in_coada' END,rezervat_la=NULL,lease_token=NULL,lease_pana=NULL WHERE lot_id=l.id AND stare='rezervat' AND lease_pana<=now();
+ cod:=public.fn_red_mail_f2_poate(l);
+ IF cod='lot_integritate' THEN UPDATE public.red_mail_loturi SET stare='blocat_integritate',versiune=versiune+1 WHERE id=l.id; PERFORM public.fn_red_mail_f2_audit(l.id,NULL,cod); END IF;
+ IF cod='aprobare_expirata' THEN UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod=cod WHERE lot_id=l.id AND stare='in_coada'; END IF;
+ IF cod IS NOT NULL THEN RETURN; END IF;
+ IF (SELECT count(*) FROM public.red_mail_mesaje WHERE stare IN ('rezervat','in_apel','necunoscut'))>=50 THEN RETURN; END IF;
+ IF (SELECT count(*) FROM public.red_mail_mesaje WHERE rezervat_la IS NOT NULL AND (rezervat_la AT TIME ZONE 'Europe/Bucharest')::date=(now() AT TIME ZONE 'Europe/Bucharest')::date)>=s.plafon_zi OR (SELECT count(*) FROM public.red_mail_mesaje WHERE rezervat_la IS NOT NULL AND date_trunc('month',rezervat_la AT TIME ZONE 'Europe/Bucharest')=date_trunc('month',now() AT TIME ZONE 'Europe/Bucharest'))>=s.plafon_luna THEN RETURN; END IF;
+ SELECT * INTO m FROM public.red_mail_mesaje WHERE lot_id=l.id AND stare='in_coada' ORDER BY id LIMIT 1 FOR UPDATE;
+ IF NOT FOUND THEN RETURN; END IF;
+ IF EXISTS(SELECT 1 FROM public.red_mail_optout WHERE email=m.catre AND activ) THEN UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='optout' WHERE id=m.id; RETURN; END IF;
+ IF NOT s.extern_permis AND split_part(m.catre,'@',2)<>'gazpet.ro' THEN RETURN; END IF;
+ IF l.stare='aprobat' THEN UPDATE public.red_mail_loturi SET stare='in_trimitere',versiune=versiune+1 WHERE id=l.id; END IF;
+ UPDATE public.red_mail_mesaje SET stare='rezervat',lease_token=gen_random_uuid(),lease_pana=now()+interval '2 minutes',rezervat_la=now(),rezervare_nr=rezervare_nr+1 WHERE id=m.id RETURNING * INTO m;
+ PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'rezervat'); RETURN NEXT m;
+END $fn$;
+COMMENT ON FUNCTION public.fn_red_mail_rezerva(uuid) IS 'Redări e-mail F2 (owner): rezervă următorul mesaj al lotului sub lock (setări → lot → proiect FOR SHARE → mesaje). 20261131h: proiectul FOR SHARE, ca decizia „doar TEST” să fie serializată cu redenumirea (trg_red_proiect_cod_test).';
+CREATE OR REPLACE FUNCTION public.fn_red_mail_apel_incepe(p_mesaj uuid,p_token uuid) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS $fn$
+DECLARE l public.red_mail_loturi; m public.red_mail_mesaje; cod text; s public.red_mail_setari;
+BEGIN
+ PERFORM public.fn_red_mail_f2_owner();
+ -- Ordine: setări -> lot -> proiect (FOR SHARE, 20261131h) -> mesaj; primul SELECT al id-ului nu blochează.
+ SELECT * INTO s FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;  -- r3 (Gem r2 P2-02)
+ SELECT * INTO l FROM public.red_mail_loturi WHERE id=(SELECT lot_id FROM public.red_mail_mesaje WHERE id=p_mesaj) FOR UPDATE;
+ -- 20261131h: proiectul FOR SHARE (vezi fn_red_mail_rezerva); autorizarea apelului HTTP nu poate fi dată cu un cod de proiect care se schimbă în paralel
+ PERFORM 1 FROM public.red_proiecte WHERE id=l.proiect_id FOR SHARE;
+ SELECT * INTO m FROM public.red_mail_mesaje WHERE id=p_mesaj FOR UPDATE;
+ IF NOT FOUND OR m.stare<>'rezervat' OR m.lease_token IS DISTINCT FROM p_token OR m.lease_pana<=now() THEN RETURN false; END IF;
+ cod:=public.fn_red_mail_f2_poate(l);
+ IF cod='lot_integritate' THEN UPDATE public.red_mail_loturi SET stare='blocat_integritate',versiune=versiune+1 WHERE id=l.id; PERFORM public.fn_red_mail_f2_audit(l.id,m.id,cod); END IF;
+ IF cod IS NOT NULL OR (NOT s.extern_permis AND split_part(m.catre,'@',2)<>'gazpet.ro') OR EXISTS(SELECT 1 FROM public.red_mail_optout WHERE email=m.catre AND activ) OR s.ultim_apel_la>now()-interval '2 seconds' THEN RETURN false; END IF;
+ UPDATE public.red_mail_mesaje SET stare='in_apel',apel_inceput_la=now() WHERE id=m.id;
+ UPDATE public.red_mail_setari SET ultim_apel_la=now() WHERE id=1;
+ PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'apel_inceput'); RETURN true;
+END $fn$;
+COMMENT ON FUNCTION public.fn_red_mail_apel_incepe(uuid,uuid) IS 'Redări e-mail F2 (owner): autorizează UN apel Gmail pentru mesajul rezervat (CAS pe lease). 20261131h: proiectul FOR SHARE, ca decizia „doar TEST” să fie serializată cu redenumirea (trg_red_proiect_cod_test).';
 
 -- ─── 4. fn_red_mail_f2_setari: owner-ul poate porni trimiterea (căsuța conectată, versiunea curentă); extern rămâne refuzat; OFF fără condiții ──
 CREATE OR REPLACE FUNCTION public.fn_red_mail_f2_setari(p_oprit boolean,p_extern boolean,p_versiune integer) RETURNS boolean
@@ -331,9 +457,11 @@ BEGIN
 END $fn$;
 COMMENT ON FUNCTION public.fn_red_mail_secret_citeste(text,uuid,text) IS 'Redări e-mail F2b (DOAR service_role, din funcțiile edge după poarta owner): refresh token-ul de trimitere din Vault (doar numele REDARI_GMAIL_TRIMITERE_REFRESH_TOKEN), doar cu căsuța conectată; motivul trimitere cere trimiterea pornită și fără pauză. 20261131h.';
 
--- ─── 7. Drepturi: nimic pentru PUBLIC / anon; owner-ul (authenticated, verificat în corp) pe state / eveniment; service_role doar pe Vault ─────
+-- ─── 7. Drepturi: nimic pentru PUBLIC / anon; owner-ul (authenticated, verificat în corp) pe state / eveniment; service_role doar pe Vault;
+--        funcția convenției și cea a triggerului: doar proprietarul (sunt chemate din funcții ale lui postgres / de trigger) ─────────────────
 REVOKE ALL ON FUNCTION public.fn_red_mail_oauth_start(text,text), public.fn_red_mail_oauth_consuma(text), public.fn_red_mail_oauth_eveniment(text,text),
-  public.fn_red_mail_secret_seteaza(text,text,uuid,text), public.fn_red_mail_secret_citeste(text,uuid,text) FROM PUBLIC, anon, authenticated, service_role;
+  public.fn_red_mail_secret_seteaza(text,text,uuid,text), public.fn_red_mail_secret_citeste(text,uuid,text),
+  public.fn_red_proiect_e_test(text), public.fn_red_proiect_cod_test_garda() FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_red_mail_oauth_start(text,text), public.fn_red_mail_oauth_consuma(text), public.fn_red_mail_oauth_eveniment(text,text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_red_mail_secret_seteaza(text,text,uuid,text), public.fn_red_mail_secret_citeste(text,uuid,text) TO service_role;
 
@@ -345,8 +473,12 @@ BEGIN
   SELECT string_agg(a.semnatura, ', ' ORDER BY a.semnatura) INTO v_rau
     FROM (VALUES
       -- >>> AMPRENTE-NOI 20261131h
-      ('public.fn_red_mail_f2_poate(public.red_mail_loturi)', '6266c432709a2b813c74dcca1207f2a7', 'plpgsql', false, 's', 'text'),
+      ('public.fn_red_mail_f2_poate(public.red_mail_loturi)', '01d3390b765bedc9fd64801f113109c9', 'plpgsql', false, 's', 'text'),
       ('public.fn_red_mail_f2_setari(boolean,boolean,integer)', '06f8a334c57a61109aa2086870712ace', 'plpgsql', true, 'v', 'boolean'),
+      ('public.fn_red_mail_rezerva(uuid)', 'd779e03d0644e437db412b0c3721e6c0', 'plpgsql', true, 'v', 'public.red_mail_mesaje'),
+      ('public.fn_red_mail_apel_incepe(uuid,uuid)', '9e8dbac708ee9512cd402a960d1d446a', 'plpgsql', true, 'v', 'boolean'),
+      ('public.fn_red_proiect_e_test(text)', 'b3a152708e032c698980981ab0eb3cf9', 'sql', false, 'i', 'boolean'),
+      ('public.fn_red_proiect_cod_test_garda()', '5754b1afd6385c9a2c96a5330be85bb5', 'plpgsql', true, 'v', 'trigger'),
       ('public.fn_red_mail_oauth_start(text,text)', '3c99764f8b3ae99b845301477387dd31', 'plpgsql', true, 'v', 'uuid'),
       ('public.fn_red_mail_oauth_consuma(text)', '376c86dba339df3453368f1964359452', 'plpgsql', true, 'v', 'text'),
       ('public.fn_red_mail_oauth_eveniment(text,text)', 'c7c0629bcde5687075f531278987c374', 'plpgsql', true, 'v', 'void'),
@@ -364,15 +496,25 @@ BEGIN
       OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
       OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres';
   IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20261131h: postconditie: functiile (corp / proprietati) difera: %', v_rau; END IF;
-  -- drepturile: funcțiile înlocuite = EXACT ACL-ul de dinainte; cele noi: owner-ul (authenticated) pe state / eveniment, service_role pe Vault, nimic altceva
+  IF (SELECT p.proretset FROM pg_proc p WHERE p.oid = 'public.fn_red_mail_rezerva(uuid)'::regprocedure) IS NOT TRUE THEN RAISE EXCEPTION '20261131h: postconditie: fn_red_mail_rezerva nu mai e SETOF'; END IF;
+  -- drepturile: funcțiile înlocuite = EXACT ACL-ul de dinainte; cele noi: owner-ul (authenticated) pe state / eveniment, service_role pe Vault,
+  -- convenția și funcția triggerului doar postgres, nimic altceva
   IF EXISTS (SELECT 1 FROM red_acl_20261131h a JOIN pg_proc p ON p.oid = to_regprocedure(a.functie)
               WHERE coalesce(p.proacl, acldefault('f', p.proowner))::text IS DISTINCT FROM a.acl)
-     OR (SELECT count(*) FROM red_acl_20261131h) <> 2
+     OR (SELECT count(*) FROM red_acl_20261131h) <> 4
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid IN ('public.fn_red_mail_oauth_start(text,text)'::regprocedure, 'public.fn_red_mail_oauth_consuma(text)'::regprocedure, 'public.fn_red_mail_oauth_eveniment(text,text)'::regprocedure)
                  AND coalesce(p.proacl, acldefault('f', p.proowner))::text IS DISTINCT FROM '{postgres=X/postgres,authenticated=X/postgres}')
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid IN ('public.fn_red_mail_secret_seteaza(text,text,uuid,text)'::regprocedure, 'public.fn_red_mail_secret_citeste(text,uuid,text)'::regprocedure)
-                 AND coalesce(p.proacl, acldefault('f', p.proowner))::text IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres}') THEN
+                 AND coalesce(p.proacl, acldefault('f', p.proowner))::text IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres}')
+     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid IN ('public.fn_red_proiect_e_test(text)'::regprocedure, 'public.fn_red_proiect_cod_test_garda()'::regprocedure)
+                 AND coalesce(p.proacl, acldefault('f', p.proowner))::text IS DISTINCT FROM '{postgres=X/postgres}') THEN
     RAISE EXCEPTION '20261131h: postconditie: drepturile functiilor difera';
+  END IF;
+  -- triggerul: exact unul, BEFORE UPDATE OF cod, FOR EACH ROW, fără WHEN / argumente, pornit, pe funcția lui
+  IF (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND t.tgname = 'trg_red_proiect_cod_test' AND NOT t.tgisinternal
+        AND t.tgfoid = 'public.fn_red_proiect_cod_test_garda()'::regprocedure AND t.tgenabled = 'O' AND t.tgtype = 19 AND t.tgqual IS NULL AND t.tgnargs = 0
+        AND t.tgattr::text = (SELECT a.attnum::text FROM pg_attribute a WHERE a.attrelid = 'public.red_proiecte'::regclass AND a.attname = 'cod')) <> 1 THEN
+    RAISE EXCEPTION '20261131h: postconditie: trg_red_proiect_cod_test lipseste sau difera';
   END IF;
   -- constrângerile noi, exact; cea inertă dispărută; scopul `trimitere` în CHECK
   SELECT string_agg(c.conname || ' = ' || pg_get_constraintdef(c.oid), '; ' ORDER BY c.conname) INTO v_def

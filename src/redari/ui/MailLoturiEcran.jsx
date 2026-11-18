@@ -146,7 +146,9 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
       <button style={S.btnP} disabled={ocupat || !!motivTrimite} title={motivTrimite} onClick={() => actiune(async curent => {
         if (!window.confirm(`Trimiți acum e-mailurile din coada acestui lot, din ${EXPEDITOR}? Fiecare apăsare trimite cel mult 20 de mesaje.`)) return
         const d = await edge('redari-mail-trimite', { lot_id: lot.id })
-        if (curent()) setRezultat(`Rulat: trimise ${d?.trimise ?? 0}, eșuate sigur ${d?.esuate ?? 0}, necunoscute ${d?.necunoscute ?? 0}, rezervate ${d?.rezervate ?? 0}${d?.cod && d.cod !== 'rulat' ? ` · oprit: ${d.cod}` : ''}. Recitește lotul; un rezultat necunoscut NU se retrimite.`)
+        // o persistare neconfirmată (RPC-ul n-a întors true) NU e trimitere: se arată separat, cu starea recitită din server
+        const neconf = d?.neconfirmate ? `, neconfirmate ${d.neconfirmate} (starea în server: ${d?.stare_server ?? 'necitită'})` : ''
+        if (curent()) setRezultat(`Rulat: trimise ${d?.trimise ?? 0}, eșuate sigur ${d?.esuate ?? 0}, necunoscute ${d?.necunoscute ?? 0}${neconf}, rezervate ${d?.rezervate ?? 0}${d?.cod && d.cod !== 'rulat' ? ` · oprit: ${d.cod}` : ''}. Recitește lotul; un rezultat necunoscut sau neconfirmat NU se retrimite.`)
       })}>{motivTrimite ? `Trimite lotul — ${motivTrimite}` : 'Trimite lotul (până la 20 de mesaje)'}</button>
       {lot.stare !== 'incheiat' && <button style={S.btnS} disabled={ocupat} onClick={() => actiune(async () => {
         await rpcMail(supabase, 'fn_red_mail_lot_inchide', { p_lot: lot.id, p_versiune: lot.versiune })

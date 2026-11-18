@@ -6,7 +6,15 @@ ecranul (conectare / revocare / pornire / „Trimite lotul” doar pe proiecte `
 căsuța conectată, `doar_proiecte_test`, `extern_permis` tot fals). Deciziile proprietarului din 18.11.2026 și limita atașamentului PDF (decizie deschisă A/B/C)
 sunt în `PLAN_EMAIL_REDARI.md`; procedura probei în `MAIL_PROBA_PASI.md`. Probe: `mailTrimitereF2b.test.js` (gărzi, wrapper, OAuth, MIME, mutanți, dovada
 pe main), `scripts/pglite/test_redari_mail_f2b_local.mjs` (migrarea cu pașii L15 v2 ai runnerului, comportament, aplicare → revenire → reaplicare, refuzuri,
-13 mutanți). Nimic de mai jos (rundele F2a) nu e schimbat de F2b în afara punctelor numite acolo.
+mutanți). Nimic de mai jos (rundele F2a) nu e schimbat de F2b în afara punctelor numite acolo.
+
+**Runda 2 (Jakarinos #1134, NO-GO pe d37716d0 → corectat):** (P1) categoria proiectului garantată în bază — `fn_red_proiect_e_test`, triggerul
+`trg_red_proiect_cod_test` pe `red_proiecte` (refuză TEST- ↔ real cât există loturi de e-mail în lucru sau AWB-uri FAN în lucru; doar owner), proiectul
+`FOR SHARE` în `fn_red_mail_rezerva` / `fn_red_mail_apel_incepe`; (P2) `id_token` malformat → refuz controlat + revocare + eveniment; (P2) rezultatul RPC ≠
+`true` → `persistare_neconfirmata`, recitirea stării, nimic „trimis”; (P2) proba PGlite cu RPC-urile reale, triggerul F2, mutanți discriminatorii (22 pe
+migrare + 3 pe revenire) + scriptul cu două sesiuni pentru PostgreSQL real; revenirea L14 textual (refuz la istoric nou, fără ștergeri); procedura
+probei corectată (garanția tehnică în loc de interdicție verbală, „Recitește” doar afișează, mesajele OAuth nuanțate). Detalii: `PLAN_EMAIL_REDARI.md`
+(blocul deciziilor din 18.11.2026) și `MAIL_PROBA_PASI.md` §0.1.
 
 # Runda 2 — PR #1000, 05.11.2026
 

@@ -28,13 +28,29 @@ ca `redari@`) → (e) proba pe `TEST-RAZVAN` cu UN destinatar intern → (f) ver
 | # | Cine | Ce verifică / decide | Când |
 |---|---|---|---|
 | a | proprietarul | **proiectul de test** are codul exact `TEST-RAZVAN` (începe cu `TEST-`, fără spații); **destinatarul probei** = o adresă `@gazpet.ro` a unui coleg care acceptă (sau a proprietarului); niciun deținător real în lot | înainte de (e) |
-| b | toți | pe durata probei **nu se redenumesc proiecte** (`red_proiecte.cod`) și nimeni nu pornește trimiterea pe alt proiect | toată ziua |
+| b | toți | **categoria proiectului (TEST / real) e păzită de bază, nu de o înțelegere verbală** (§0.1): nimeni nu pornește trimiterea pe alt proiect; o redenumire care ar schimba categoria e refuzată de server cât lotul e în lucru | toată ziua |
 | c | coordonatorul | **commit-ul publicat** identificat: SHA-ul de pe `main` după îmbinare = versiunea funcțiilor edge din Supabase | înainte de (d) |
 | d | coordonatorul | **migrarea `20261131h` aplicată** prin runner (manifest L15 generat pe clonă, proba cu ROLLBACK pe țintă, apoi livrarea), ÎNAINTE de publicarea funcțiilor; postcondițiile ei trecute | înainte de (c) publicare |
 | e | proprietarul | **contul Google folosit la consimțământ este `redari@gazpet.ro`** (nu contul personal): ecranul Google arată adresa înainte de „Permite”; serverul refuză oricum altă căsuță (id_token) | la (d) |
 | f | toți | **oprire la orice rezultat ambiguu** („necunoscut”, cod neașteptat, mail neprimit cu stare „trimis”): nimic nu se „mai apasă o dată” | toată ziua |
 
-Convenția `TEST-` nu e o clasificare imuabilă de securitate (un admin Redări poate redenumi un proiect): de aceea rândurile (a) și (b).
+### 0.1 Garanția tehnică a categoriei proiectului (migrarea `20261131h`, runda 2)
+
+Convenția `TEST-` este păzită **în bază**, pe toate căile (nu doar prin ecran și prin funcția edge):
+- **codul proiectului nu poate trece din `TEST-…` într-un cod „real” (sau invers) cât proiectul are loturi de e-mail neîncheiate ori mesaje rezervate /
+  în apel** — deci nici în intervalul dintre autorizarea unui apel și apelul propriu-zis către Google — **și nici cât are AWB-uri FAN propuse /
+  aprobate / în curs / necunoscute** (lanțul FAN are aceeași convenție; triggerul îl acoperă fără schimbări în codul FAN). Serverul răspunde cu
+  refuz explicit (`categoria codului (TEST- / real) nu se schimba cat proiectul are …`);
+- **schimbarea categoriei o poate face doar proprietarul** (owner), și doar când condiția de mai sus nu se aplică; redenumirile care păstrează
+  categoria (`TEST-RAZVAN` → `TEST-RAZVAN-2`, `LOT1` → `LOT1-B`) rămân ca azi (admin Redări);
+- decizia „doar TEST” din bază (`fn_red_mail_f2_poate`, chemată de rezervare și de autorizarea apelului) se ia **cu rândul proiectului blocat
+  (FOR SHARE)**: o redenumire pornită în același moment așteaptă și apoi e refuzată, iar o redenumire deja comisă e văzută;
+- pe proiectele cu autorizarea Transgaz completată, codul nu se poate schimba deloc (regula din `20261130m`, existentă).
+
+**Efect zilnic:** un proiect de TEST cu loturi active nu poate fi „transformat” într-unul real redenumindu-l, și nici invers; după încheierea
+loturilor (și AWB-urile ajunse generat / ridicat / anulat / eroare), proprietarul poate schimba categoria. Obiecte noi în bază:
+`fn_red_proiect_e_test` (definiția unică a convenției), `fn_red_proiect_cod_test_garda` + triggerul `trg_red_proiect_cod_test` pe `red_proiecte`, și
+lock-ul proiectului în `fn_red_mail_rezerva` / `fn_red_mail_apel_incepe`. Proprietarul le aprobă odată cu migrarea.
 
 ## 1. Google Cloud (proprietarul; coordonatorul verifică DOAR existența, nu valorile)
 
@@ -69,9 +85,12 @@ conectare (pasul 4), prin RPC-ul `fn_red_mail_secret_seteaza` (doar `service_rol
 ## 3. Migrarea și publicarea funcțiilor (coordonatorul, după îmbinarea PR-ului)
 
 1. **Migrarea `20261131h_redari_mail_f2b_trimitere`** (NEAPLICATĂ în PR): pe clonă, manifestul L15 (`scripts/livrare_l15_manifest.sh --iesire …`;
-   lista obiectelor așteptate: `supabase/tests/20261131h_redari_mail_f2b_trimitere.l15.obiecte.tsv`, 17 obiecte), proba cu ROLLBACK pe țintă
-   (`--compara-cu`), apoi livrarea prin runner cu plafonul 5000 și amprenta globală (antetul migrării). Postcondițiile verifică: comutatorul tot OFF,
-   căsuța neconectată, `doar_proiecte_test = true`, niciun state / secret. Fără „da”-ul proprietarului nu se aplică.
+   lista obiectelor așteptate: `supabase/tests/20261131h_redari_mail_f2b_trimitere.l15.obiecte.tsv`, 22 obiecte), proba cu ROLLBACK pe țintă
+   (`--compara-cu`), **proba de concurență cu două sesiuni** pe o bază PostgreSQL de unică folosință (`supabase/tests/20261131h_redari_mail_f2b_concurenta.sh`,
+   nerulată în PR — fără PostgreSQL local), apoi livrarea prin runner cu plafonul 5000 și amprenta globală (antetul migrării). Postcondițiile verifică:
+   comutatorul tot OFF, căsuța neconectată, `doar_proiecte_test = true`, niciun state / secret, triggerul pe `red_proiecte` pus. Fără „da”-ul
+   proprietarului nu se aplică. **Revenirea** (`…_ROLLBACK.sql`) e posibilă doar cât trimiterea n-a fost folosită deloc (L14): după prima conectare,
+   întoarcerea = migrare nouă, nu revenire (§8).
 2. GitHub → Actions → **„Deploy edge function (manual)”** → `slug` = `redari-mail-oauth`, apoi din nou cu `slug` = `redari-mail-trimite` (de pe
    `main`). Ambele se publică cu `verify_jwt = true` (callback-ul OAuth vine din pagina ERP cu JWT-ul omului, nu direct de la Google).
 3. Identificarea commit-ului publicat (rândul (c) din §0): `git rev-parse origin/main` = SHA-ul din rezumatul workflow-ului; în Supabase, Code:
@@ -88,6 +107,10 @@ conectare (pasul 4), prin RPC-ul `fn_red_mail_secret_seteaza` (doar `service_rol
    + adresa de e-mail; **„Permite”**. Alt cont (personal) = serverul refuză (`casuta_gresita`), revocă accesul primit și nu salvează nimic — se reia pasul 2.
 4. Întoarcerea pe pagina ERP `/redari/mail-oauth`: mesajul **„Căsuța redari@gazpet.ro este conectată pentru trimitere. Trimiterea rămâne oprită…”**.
    Orice alt mesaj (cu codul în paranteză) = oprire (§9). Pagina încearcă o singură dată; o reîncărcare a ei dă „state_invalid” — normal.
+   Mesajele de eșec spun exact cât se știe: la un **refuz al serverului** (`casuta_gresita`, `scope_diferit`, `id_token_*`…) nimic nu e salvat în ERP și
+   serverul **a cerut** revocarea accesului la Google (dacă Google a confirmat-o nu se vede de aici); la un **răspuns pierdut / eroare temporară**
+   (`salvare_neconfirmata`, 503, rețea) **nu se știe** dacă căsuța s-a conectat sau dacă revocarea a reușit → se verifică în Lot e-mail (Recitește) și,
+   la nevoie, în contul Google (§7, „Rezervă”). Nu se reîncarcă pagina.
 5. Înapoi în **✉️ Lot e-mail**: caseta arată „conectată (redari@gazpet.ro, data și ora)”. În jurnal: ora conectării.
 6. **Pornirea trimiterii**: butonul **„Pornește trimiterea”** → confirmare. Caseta arată „Trimiterea: PORNITĂ · destinatari externi: doar @gazpet.ro”.
    (Pornirea e refuzată de bază fără căsuța conectată: `casuta_neconectata`.)
@@ -112,7 +135,7 @@ altfel aprobarea lotului e refuzată cu `informare_nepublicata`).
 | 1 | admin / owner | pe `TEST-RAZVAN`, deținătorul de test are în contact **e-mailul colegului** (`@gazpet.ro`) | în ✉️ Lot e-mail, la UAT-ul lui, deținătorul apare la „Eligibili” |
 | 2 | owner | UAT → bifează DOAR acel deținător → subiect + text (textul validat de Juridic sau un text de probă marcat „PROBĂ”) → **„Creează ciorna pentru previzualizare”** | lotul apare cu starea `ciorna`, un mesaj `M-nnnnnn`, adresa completă și textul exact |
 | 3 | owner | bifa „Aprob explicit acest lot…” → **„Aprobă acest lot”** | starea `aprobat`; butonul „Trimite lotul (până la 20 de mesaje)” devine activ (pe un proiect real ar rămâne „Trimite lotul — transport doar pe proiecte de TEST…”) |
-| 4 | owner | **„Trimite lotul”** → confirmare | mesajul „Rulat: trimise 1, eșuate sigur 0, necunoscute 0, rezervate 1”; mesajul lotului trece în `trimis` |
+| 4 | owner | **„Trimite lotul”** → confirmare | mesajul „Rulat: trimise 1, eșuate sigur 0, necunoscute 0, rezervate 1”; mesajul lotului trece în `trimis`. „trimise 1” apare **doar** dacă baza a confirmat scrierea rezultatului; altfel „neconfirmate 1 (starea în server: …)” — §9 |
 | 5 | coordonator | SQL de mai jos (A1, A2) | A1: un rând `trimis`, `gmail_id` și `thread_id` nenule, `trimis_la` = acum; A2: jurnalul `rezervat → apel_inceput → trimis` |
 
 ```sql
@@ -123,7 +146,10 @@ SELECT cod, creat_la FROM public.red_mail_jurnal_f2 WHERE lot_id = '<uuid lot>' 
 ```
 
 Alte rezultate posibile la pasul 4 (toate FĂRĂ reapăsare):
-- `Refuzat: transport_real_doar_test` → lotul nu e pe un proiect `TEST-`; se verifică codul proiectului, nu se redenumește nimic;
+- `Refuzat: transport_real_doar_test` → lotul nu e pe un proiect `TEST-`; se verifică codul proiectului (o redenumire care ar schimba categoria e
+  oricum refuzată de bază cât lotul e în lucru — §0.1);
+- „oprit: persistare_neconfirmata · neconfirmate 1” → mailul **poate** fi plecat, dar baza n-a confirmat scrierea rezultatului sub rezervarea noastră
+  (de ex. rezervarea expirase): NU se reapasă; se citește starea din server (afișată), se verifică „Trimise” în `redari@`; decizia e a owner-ului (§9);
 - `Refuzat: trimitere_oprita` / `casuta_neconectata` → §4 pașii 5–6;
 - `Refuzat: token_respins` → Google a respins refresh token-ul (revocat din contul Google sau clientul schimbat): trimiterea s-a oprit singură în bază;
   se reconectează (§4) și se pornește din nou;
@@ -154,21 +180,24 @@ Alte rezultate posibile la pasul 4 (toate FĂRĂ reapăsare):
 ## 8. Ce rămâne în bază după probă (evidență, nu se șterge)
 
 Lotul și mesajul pe `TEST-RAZVAN` (`red_mail_loturi`, `red_mail_mesaje` cu snapshotul, `red_mail_jurnal_f2`), evenimentele `oauth_*` și `f2_*`,
-state-urile OAuth consumate (`red_mail_oauth_state`), rândul din Vault (cu valoare cât e conectată; golit după revocare). Revenirea migrării
-(`20261131h_…_ROLLBACK.sql`) **refuză** cât căsuța e conectată, trimiterea pornită sau un state activ; după oprire + revocare trece și lasă rândul golit din
-Vault (documentat în antetul ei).
+state-urile OAuth consumate (`red_mail_oauth_state`), rândul din Vault (cu valoare cât e conectată; golit după revocare). **Revenirea migrării
+(`20261131h_…_ROLLBACK.sql`) refuză la orice istoric produs după aplicare** (state-uri, evenimente OAuth ale trimiterii, rândul Vault, mesaje / jurnal
+de transport) și nu șterge nimic: după prima conectare nu mai există „revenire”, ci doar o migrare nouă, revizuită (regula L14, textual).
 
 ## 9. Dacă rezultatul nu are forma așteptată: OPRIRE, nu improvizație
 
 | Ce se vede | Ce înseamnă | Ce se face |
 |---|---|---|
 | „necunoscute 1” / mesajul `necunoscut` | 5xx / timeout / răspuns de neînțeles DUPĂ `messages.send`: mailul **poate** fi plecat | NU se reapasă. Baza pune pauza de 15 minute. Se verifică „Trimise” în `redari@`: dacă mailul e acolo, se notează; decizia pe rând („a plecat” / „n-a plecat”) e a owner-ului, într-o felie următoare (reconcilierea); până atunci rândul rămâne `necunoscut` și ocupă un loc în contorul „în zbor” |
-| mesaj `in_apel` după ce ecranul s-a liniștit | rezultatul nu s-a putut scrie în bază după apel | fără reapăsare; după 2 minute, „Recitește”: rezervarea expiră și rândul trece `necunoscut` (regula de mai sus) |
-| `casuta_gresita` la întoarcerea de la Google | consimțământul a fost dat cu alt cont decât `redari@` | nimic salvat (tokenul primit a fost revocat); se reia §4 cu contul corect |
-| `scope_diferit` | ecranul de consimțământ sau clientul au alte permisiuni decât `gmail.send` + `openid` + `email` | nimic salvat; se corectează în Google Cloud (§1.3), se reia §4 |
-| `id_token_*` / `jwks_indisponibil` | răspunsul Google nu a putut fi validat local | nimic salvat; se notează codul; dacă se repetă = PR |
-| `state_invalid` | pagina de întoarcere a fost reîncărcată sau au trecut peste 10 minute | se reia §4 pasul 2 (buton nou „Conectează”) |
-| `transport_real_doar_test` | lotul nu e pe un proiect `TEST-` | se verifică lotul; NU se redenumește niciun proiect |
+| mesaj `in_apel` după ce ecranul s-a liniștit | rezultatul nu s-a putut scrie în bază după apel | fără reapăsare. „Recitește” doar **afișează** (nu mișcă nimic): rândul rămâne `in_apel` până la următoarea rezervare pe acel lot (`fn_red_mail_rezerva`, chemată de „Trimite lotul”), care după expirarea rezervării (2 minute) îl trece în `necunoscut` (`lease_expirat`) și **apoi continuă cu următorul mesaj din coadă**. În proba cu UN singur mesaj coada e goală, deci coordonatorul decide: după 2 minute, o singură apăsare „Trimite lotul” doar pentru reconciliere; cu mai multe mesaje în coadă NU se apasă (ar pleca următorul) — se oprește și se notează |
+| „neconfirmate 1” (`persistare_neconfirmata`) | Gmail a răspuns, dar baza NU a confirmat scrierea rezultatului sub rezervarea noastră (rezervare expirată / stare schimbată); mailul **poate** fi plecat | NU se reapasă. Se citește „starea în server” din mesaj și SQL A1; se verifică „Trimise” în `redari@`; dacă rândul e `necunoscut` → regula de mai sus; dacă e `trimis` (scris între timp de altă cale) → se notează; orice altă combinație = OPRIRE |
+| `casuta_gresita` la întoarcerea de la Google | consimțământul a fost dat cu alt cont decât `redari@` | nimic salvat în ERP; serverul a cerut revocarea tokenului primit (confirmarea Google nu e vizibilă de aici — la nevoie §7 „Rezervă”); se reia §4 cu contul corect |
+| `scope_diferit` | ecranul de consimțământ sau clientul au alte permisiuni decât `gmail.send` + `openid` + `email` | nimic salvat în ERP, revocare cerută; se corectează în Google Cloud (§1.3), se reia §4 |
+| `id_token_*` / `jwks_indisponibil` | răspunsul Google nu a putut fi validat local (inclusiv un `id_token` malformat) | nimic salvat în ERP, revocare cerută; se notează codul; dacă se repetă = PR |
+| `salvare_neconfirmata` / mesaj „răspunsul s-a pierdut” | serverul a primit accesul dar nu a confirmat salvarea, ori răspunsul nu a ajuns în browser | **nu se știe** dacă e conectată și dacă revocarea a reușit: Recitește în Lot e-mail; dacă apare conectată → se continuă; dacă nu → §7 „Rezervă” (contul Google) și apoi „Conectează” din nou |
+| `state_invalid` | pagina de întoarcere a fost reîncărcată sau au trecut peste 10 minute | nimic salvat, codul nu a fost schimbat la Google; se reia §4 pasul 2 (buton nou „Conectează”) |
+| `transport_real_doar_test` | lotul nu e pe un proiect `TEST-` | se verifică lotul; categoria proiectului e păzită de bază (§0.1) |
+| „categoria codului (TEST- / real) nu se schimba…” la editarea unui proiect | cineva a încercat o redenumire TEST- ↔ real cât proiectul are loturi de e-mail / AWB-uri FAN în lucru | normal: regula din §0.1; se încheie loturile întâi, apoi (doar owner-ul) redenumește |
 | `transport_neconfigurat` / `client_neconfigurat` | lipsește un secret din §2 (numele exact) | §2 |
 | mail în Spam / `dkim=fail` | DKIM / DMARC nepornite pentru `gazpet.ro` | se notează; precondiție pentru proiectele reale (planul §0.4), nu pentru proba internă |
 | două mesaje în „Trimise” pentru același rând | dublare | OPRIRE; se lămurește înainte de orice altă trimitere (nu se mai apasă nimic) |

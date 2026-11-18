@@ -9,7 +9,7 @@
 // Redirect URI = pagina ERP /redari/mail-oauth (ca la ViCare): Google întoarce code + state în browserul owner-ului, iar pagina le trimite aici cu
 // JWT-ul lui — deci callback-ul NU e un endpoint public fără JWT. Răspunsurile Google sunt date (pct. 10).
 import { creeazaGmailHttp } from './gmailHttp.mjs'
-import { genereazaState, sha256Hex, stateValid, urlAutorizare, verificaRaspunsToken, corpJson, REDIRECT_URI_TRIMITERE } from './gmailOauthTrimitere.mjs'
+import { genereazaState, sha256Hex, stateValid, urlAutorizare, verificaRaspunsToken, tokenuriDeRevocat, corpJson, REDIRECT_URI_TRIMITERE } from './gmailOauthTrimitere.mjs'
 
 export const SCOPURI_F2B = Object.freeze(['trimitere'])
 export const ACTIUNI_OAUTH = Object.freeze(['start', 'callback', 'revoca'])
@@ -52,7 +52,10 @@ export async function raspundeOauth({ jwt, corp }, deps) {
     try { res = await http.token({ grant_type: 'authorization_code', code: corp.code, redirect_uri: REDIRECT_URI_TRIMITERE }); t = await corpJson(res) }
     catch { await eveniment('oauth_respins', 'schimb_esuat'); return out(502, 'schimb_esuat') }
     if (res.status !== 200 || !t) { await eveniment('oauth_respins', 'schimb_esuat'); return out(502, 'schimb_esuat') }
-    const v = await verificaRaspunsToken(t, { http, clientId: http.clientId(), acum: deps.acum?.() ?? Date.now(), subtle: deps.subtle })
+    // verificarea nu aruncă; dacă totuși ar arunca (runda 2, P2), grantul primit se revocă oricum și refuzul e controlat (id_token_forma)
+    let v
+    try { v = await verificaRaspunsToken(t, { http, clientId: http.clientId(), acum: deps.acum?.() ?? Date.now(), subtle: deps.subtle }) }
+    catch { v = { ok: false, cod: 'id_token_forma', deRevocat: tokenuriDeRevocat(t) } }
     if (!v.ok) {
       for (const tk of v.deRevocat) { try { await http.revoca(tk) } catch { /* revocarea e best-effort; nimic salvat oricum */ } }
       await eveniment('oauth_respins', v.cod)

@@ -42,22 +42,31 @@ export function urlAutorizare({ clientId, state, scope, casuta, redirectUri = RE
     access_type: 'offline', prompt: 'consent', include_granted_scopes: 'false', login_hint: casuta, hd: DOMENIU_WORKSPACE })) u.searchParams.set(k, v)
   return u.toString()
 }
+/** base64url → octeți; null la orice formă stricată (lungime imposibilă — ex. „A” —, caractere în afara alfabetului): decodarea NU aruncă. */
 const b64urlDecode = s => {
-  const t = s.replace(/-/g, '+').replace(/_/g, '/')
-  const bin = atob(t + '='.repeat((4 - t.length % 4) % 4))
-  return Uint8Array.from(bin, c => c.charCodeAt(0))
+  if (typeof s !== 'string' || !/^[A-Za-z0-9_-]+$/.test(s) || s.length % 4 === 1) return null
+  try {
+    const t = s.replace(/-/g, '+').replace(/_/g, '/')
+    const bin = atob(t + '='.repeat((4 - t.length % 4) % 4))
+    return Uint8Array.from(bin, c => c.charCodeAt(0))
+  } catch { return null }
 }
-const jsonDin = bytes => { try { const v = JSON.parse(new TextDecoder().decode(bytes)); return v && typeof v === 'object' ? v : null } catch { return null } }
+const jsonDin = bytes => { if (!bytes) return null; try { const v = JSON.parse(new TextDecoder().decode(bytes)); return v && typeof v === 'object' && !Array.isArray(v) ? v : null } catch { return null } }
 /**
  * Validarea locală a id_token-ului (RS256, JWKS Google). `jwks` = () => Promise<{keys:[...]}> (prin wrapper). Întoarce { ok:true, email, hd }
  * sau { ok:false, cod } cu codul exact al primei verificări căzute. `acum` în ms. Fără librărie nouă: WebCrypto.
+ * Niciodată nu aruncă (runda 2, Jakarinos #1134 P2): un id_token malformat (ex. „A.A.A”, base64 stricat, JSON invalid) = { ok:false, cod:'id_token_forma' },
+ * ca handlerul să ajungă la revocare + eveniment; orice excepție neprevăzută = tot refuz controlat.
  */
-export async function valideazaIdToken(idToken, { jwks, clientId, casuta, acum = Date.now(), subtle = crypto.subtle }) {
+export async function valideazaIdToken(idToken, optiuni) {
+  try { return await valideazaIdTokenIntern(idToken, optiuni) } catch { return { ok: false, cod: 'id_token_forma' } }
+}
+async function valideazaIdTokenIntern(idToken, { jwks, clientId, casuta, acum = Date.now(), subtle = crypto.subtle }) {
   if (typeof idToken !== 'string' || idToken.length > 8192) return { ok: false, cod: 'id_token_lipsa' }
   const parti = idToken.split('.')
   if (parti.length !== 3 || parti.some(p => !/^[A-Za-z0-9_-]+$/.test(p))) return { ok: false, cod: 'id_token_forma' }
-  const antet = jsonDin(b64urlDecode(parti[0])), corp = jsonDin(b64urlDecode(parti[1]))
-  if (!antet || !corp) return { ok: false, cod: 'id_token_forma' }
+  const antet = jsonDin(b64urlDecode(parti[0])), corp = jsonDin(b64urlDecode(parti[1])), semnatura = b64urlDecode(parti[2])
+  if (!antet || !corp || !semnatura) return { ok: false, cod: 'id_token_forma' }
   if (antet.alg !== 'RS256' || typeof antet.kid !== 'string' || !antet.kid) return { ok: false, cod: 'id_token_alg' }
   let set
   try { set = await jwks() } catch { return { ok: false, cod: 'jwks_indisponibil' } }
@@ -66,7 +75,7 @@ export async function valideazaIdToken(idToken, { jwks, clientId, casuta, acum =
   let valid = false
   try {
     const k = await subtle.importKey('jwk', { kty: 'RSA', n: cheie.n, e: cheie.e, alg: 'RS256', ext: true }, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify'])
-    valid = await subtle.verify('RSASSA-PKCS1-v1_5', k, b64urlDecode(parti[2]), new TextEncoder().encode(parti[0] + '.' + parti[1]))
+    valid = await subtle.verify('RSASSA-PKCS1-v1_5', k, semnatura, new TextEncoder().encode(parti[0] + '.' + parti[1]))
   } catch { valid = false }
   if (!valid) return { ok: false, cod: 'id_token_semnatura' }
   const sec = Math.floor(acum / 1000)
@@ -81,16 +90,21 @@ export async function valideazaIdToken(idToken, { jwks, clientId, casuta, acum =
 }
 /** Corpul JSON al unui răspuns, fără să arunce; răspuns neinterpretabil = null. */
 export async function corpJson(res) { try { const v = await res.json(); return v && typeof v === 'object' ? v : null } catch { return null } }
+/** Tokenurile din răspuns care trebuie revocate la orice refuz (string-uri nevide; nimic altceva nu e token). */
+export const tokenuriDeRevocat = t => [t?.refresh_token, t?.access_token].filter(v => typeof v === 'string' && v)
 /**
  * Verificările răspunsului de token la callback: scope exact, refresh_token prezent, id_token valid pentru căsuța scopului.
  * Întoarce { ok:true, refresh_token, access_token, email } sau { ok:false, cod, deRevocat: [tokenuri] } — handlerul revocă și nu salvează.
+ * Nu aruncă: orice excepție (inclusiv din decodarea id_token-ului) = refuz controlat `id_token_forma`, cu aceeași listă de revocat.
  */
 export async function verificaRaspunsToken(t, { http, clientId, acum, subtle }) {
-  const deRevocat = [t?.refresh_token, t?.access_token].filter(v => typeof v === 'string' && v)
-  if (!t || typeof t.access_token !== 'string' || !t.access_token) return { ok: false, cod: 'schimb_esuat', deRevocat }
-  if (!scopuriExacte(t.scope, http.scopuriCanonice)) return { ok: false, cod: 'scope_diferit', deRevocat }
-  if (typeof t.refresh_token !== 'string' || !t.refresh_token) return { ok: false, cod: 'fara_refresh_token', deRevocat }
-  const v = await valideazaIdToken(t.id_token, { jwks: async () => corpJson(await http.jwks()), clientId, casuta: http.casuta, acum, subtle })
-  if (!v.ok) return { ok: false, cod: v.cod, deRevocat }
-  return { ok: true, refresh_token: t.refresh_token, access_token: t.access_token, email: v.email }
+  const deRevocat = tokenuriDeRevocat(t)
+  try {
+    if (!t || typeof t.access_token !== 'string' || !t.access_token) return { ok: false, cod: 'schimb_esuat', deRevocat }
+    if (!scopuriExacte(t.scope, http.scopuriCanonice)) return { ok: false, cod: 'scope_diferit', deRevocat }
+    if (typeof t.refresh_token !== 'string' || !t.refresh_token) return { ok: false, cod: 'fara_refresh_token', deRevocat }
+    const v = await valideazaIdToken(t.id_token, { jwks: async () => corpJson(await http.jwks()), clientId, casuta: http.casuta, acum, subtle })
+    if (!v.ok) return { ok: false, cod: v.cod, deRevocat }
+    return { ok: true, refresh_token: t.refresh_token, access_token: t.access_token, email: v.email }
+  } catch { return { ok: false, cod: 'id_token_forma', deRevocat } }
 }

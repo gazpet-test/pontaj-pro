@@ -125,6 +125,17 @@ Doar plan de design: fără cod de producție, fără scrieri în BD, fără sec
 - **Pornirea trimiterii** cere căsuța conectată: RPC (`fn_red_mail_f2_setari`: `casuta_neconectata`) **și** `CHECK` (`red_mail_f2b_pornire_ck`); revocarea
   (`fn_red_mail_secret_seteaza('')`) golește secretul, oprește trimiterea și șterge starea conectării. Refresh respins (`invalid_grant`) înaintea oricărei
   rezervări → trimiterea se oprește din bază, nimic `in_apel`.
+- **Categoria proiectului e garantată tehnic pe durata trimiterii (runda 2, Jakarinos #1134 P1; necesită aprobarea proprietarului odată cu migrarea)**:
+  convenția `TEST-` are o singură definiție SQL (`fn_red_proiect_e_test`, L19); `fn_red_mail_rezerva` / `fn_red_mail_apel_incepe` iau rândul proiectului
+  `FOR SHARE` (setări → lot → proiect → mesaje), deci decizia „doar TEST” e serializată cu orice `UPDATE` al proiectului; triggerul
+  `trg_red_proiect_cod_test` (`BEFORE UPDATE OF cod`, SECURITY DEFINER) refuză schimbarea categoriei `TEST-` ↔ real cât proiectul are loturi de e-mail
+  neîncheiate / mesaje rezervate sau în apel **sau AWB-uri FAN propuse / aprobate / în curs / necunoscute** (acoperă și lanțul FAN, fără a-i schimba codul:
+  FAN cere AWB `aprobat` înaintea oricărui apel) și cere owner în contextul aplicației (admin Redări → 42501); redenumirile în aceeași categorie rămân
+  libere. Celelalte două corecții ale rundei: `id_token` malformat = refuz controlat cu revocarea grantului (`id_token_forma`, fără excepție); rezultatul
+  RPC-ului de persistare ≠ `true` = `persistare_neconfirmata` (oprire, recitirea stării din server, nimic „trimis”). Revenirea respectă L14 textual: refuză la
+  orice istoric nou (state-uri, evenimente OAuth ale trimiterii, rândul Vault, mesaje / jurnal de transport), nu șterge nimic — după prima conectare
+  întoarcerea e o migrare nouă. Probe: PGlite cu RPC-urile reale (`scripts/pglite/test_redari_mail_f2b_local.mjs`) + două sesiuni psql pe PostgreSQL
+  (`supabase/tests/20261131h_redari_mail_f2b_concurenta.sh`, de rulat de coordonator).
 - **Atașamentul PDF — DECIZIE DESCHISĂ, de luat de Răzvan înaintea proiectelor reale** (limită declarată a F2b): convocatorul există azi doar ca DOCX
   (generat în browser cu biblioteca `docx`, stocat în bucketul `redari`); nu există o cale de a-l transforma în PDF fără (A) o instalare nouă pe server
   (LibreOffice / serviciu de conversie) sau (B) un PDF **nou**, generat în browser din textul convocării (jsPDF / html2canvas, deja în repo), care ar fi alt

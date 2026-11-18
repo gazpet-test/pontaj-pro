@@ -3,9 +3,13 @@
 -- obiecte noi: migrarea trebuie să le scoată), auth.uid() / auth.jwt() / auth.role() (textul live, din 20261130j_redari_mail_f1_schelet.sql),
 -- profiles + user_module_access + fn_sms_e_owner, MACHETA Vault (vault.secrets, decrypted_secrets, create_secret, update_secret — valoarea în clar),
 -- tabelele Redări folosite (coloanele de pe live: red_proiecte / red_uat din 20261126a + 30m, red_mail_setari / oauth_state / evenimente din 30j
--- + coloanele F2 din 31a, red_mail_loturi / mesaje / jurnal_f2 din 31a — fără cheile străine spre tabele nefolosite), triggerele, politicile și
--- drepturile lor. Corpurile funcțiilor NU sunt aici: proba (scripts/pglite/test_redari_mail_f2b_local.mjs) le extrage EXACT din migrările lor și
--- le pune în locul marcajului „@@FUNCTII@@” (amprentele = constantele din 20261131h, verificat de probă).
+-- + coloanele F2 din 31a, red_mail_loturi / mesaje (toate coloanele 31a) / optout / fisiere_inventar(_antet) / jurnal_f2 din 31a, red_fan_awb din
+-- 20261212a — fără cheile străine spre tabele nefolosite), triggerele REALE F2 (trg_red_mail_f2_lot / _mesaj din 31a), politicile și drepturile lor
+-- (inclusiv red_proiecte_upd: admin Redări poate modifica proiectul, 20261126a / 30g — calea redenumirii pe care o închide triggerul 31h).
+-- Corpurile funcțiilor NU sunt aici: proba (scripts/pglite/test_redari_mail_f2b_local.mjs) le extrage EXACT din migrările lor (inclusiv
+-- fn_red_mail_rezerva / apel_incepe / rezultat / f2_garda din 31a) și le pune în locul marcajului „@@FUNCTII@@” (amprentele = constantele din
+-- 20261131h, verificat de probă). Ce NU e aici: trg_red_autorizare_tgz (30m), care pe live refuză orice schimbare a codului cât există autorizarea —
+-- lipsa lui lasă triggerul 31h să fie probat singur.
 DO $r$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN NOINHERIT; END IF;
@@ -138,13 +142,61 @@ CREATE TABLE public.red_mail_loturi (
   creat_de uuid NOT NULL, creat_la timestamptz NOT NULL DEFAULT now(),
   incheiat_la timestamptz
 );
+-- red_mail_mesaje: TOATE coloanele din 31a (fără FK-urile spre red_detinatori / red_convocari), ca RPC-urile reale rezerva / apel_incepe / rezultat să ruleze
 CREATE TABLE public.red_mail_mesaje (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), lot_id uuid NOT NULL REFERENCES public.red_mail_loturi(id), detinator_id uuid NOT NULL,
-  nr_document text NOT NULL UNIQUE, catre text, subiect_final text, corp_text_final text, corp_html_final text, message_id text UNIQUE,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  lot_id uuid NOT NULL REFERENCES public.red_mail_loturi(id),
+  detinator_id uuid NOT NULL,
+  tip text NOT NULL DEFAULT 'convocare' CHECK (tip='convocare'),
+  nr_document text NOT NULL UNIQUE,
+  convocare_postala_id uuid,
+  catre text, subiect_final text, corp_text_final text, corp_html_final text,
+  message_id text UNIQUE,
+  antete_snapshot jsonb,
+  atasament_path text, atasament_nume text, atasament_mime text, atasament_sha256 text, atasament_marime bigint,
   mesaj_sha256 text NOT NULL CHECK (mesaj_sha256 ~ '^[0-9a-f]{64}$'),
-  stare text NOT NULL DEFAULT 'in_coada', retentie_stare text NOT NULL DEFAULT 'activ'
+  stare text NOT NULL DEFAULT 'in_coada' CHECK (stare IN ('in_coada','rezervat','in_apel','trimis','esuat_sigur','necunoscut','esuat_confirmat','anulat')),
+  lease_token uuid, lease_pana timestamptz, rezervare_nr integer NOT NULL DEFAULT 0,
+  rezervat_la timestamptz, apel_inceput_la timestamptz, trimis_la timestamptz,
+  gmail_id text, thread_id text, gmail_id_raportat text,
+  eroare_cod text CHECK (eroare_cod ~ '^[a-z0-9_]{1,64}$'),
+  retentie_stare text NOT NULL DEFAULT 'activ' CHECK (retentie_stare IN ('activ','golit')),
+  UNIQUE (lot_id,detinator_id),
+  CHECK ((stare='trimis')=(trimis_la IS NOT NULL)),
+  CHECK (retentie_stare='golit' OR (catre IS NOT NULL AND corp_text_final IS NOT NULL AND subiect_final IS NOT NULL AND message_id IS NOT NULL))
+);
+CREATE INDEX red_mail_mesaje_coada ON public.red_mail_mesaje(lot_id,stare,id);
+CREATE TABLE public.red_mail_optout (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), email text NOT NULL UNIQUE,
+  activ boolean NOT NULL DEFAULT true, motiv text NOT NULL CHECK (length(btrim(motiv)) BETWEEN 1 AND 500),
+  sursa text NOT NULL CHECK (sursa IN ('cerere_om','mail_primit')), primit_id uuid REFERENCES public.red_mail_primite(id),
+  setat_de uuid NOT NULL, setat_la timestamptz NOT NULL DEFAULT now(),
+  CHECK (email=lower(email))
+);
+CREATE TABLE public.red_mail_fisiere_inventar_antet (
+  lot_id uuid PRIMARY KEY REFERENCES public.red_mail_loturi(id), inventar_complet_la timestamptz NOT NULL DEFAULT now(),
+  nr_fisiere integer NOT NULL CHECK (nr_fisiere>=0), inventar_sha256 text NOT NULL CHECK (inventar_sha256 ~ '^[0-9a-f]{64}$')
+);
+CREATE TABLE public.red_mail_fisiere_inventar (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), lot_id uuid NOT NULL REFERENCES public.red_mail_loturi(id),
+  mesaj_id uuid NOT NULL REFERENCES public.red_mail_mesaje(id), cale text NOT NULL,
+  sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'), marime bigint NOT NULL CHECK (marime>0),
+  proprietate text NOT NULL CHECK (proprietate IN ('exclusiv','partajat')),
+  stare text NOT NULL CHECK (stare IN ('de_sters','sters','pastrat')), UNIQUE(lot_id,mesaj_id,cale)
+);
+-- 20261212a: AWB-urile FAN (doar coloanele citite de triggerul 31h + CHECK-ul stărilor, EXACT ca pe live; fără FK-urile spre plicuri / loturi de plicuire)
+CREATE TABLE public.red_fan_awb (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  proiect_id uuid NOT NULL REFERENCES public.red_proiecte(id),
+  lot_id uuid NOT NULL, plic_id uuid NOT NULL,
+  nr_plic text NOT NULL CHECK (nr_plic ~ '^PL-[A-Z]{3}-[0-9]{4}$'),
+  stare text NOT NULL DEFAULT 'propus' CHECK (stare IN ('propus', 'aprobat', 'in_curs', 'generat', 'eroare', 'necunoscut', 'anulat', 'ridicat')),
+  hash_date text NOT NULL CHECK (hash_date ~ '^[0-9a-f]{64}$')
 );
 -- @@FUNCTII@@
+-- ---------------------------------------------------------------- triggerele REALE F2 (20261131a)
+CREATE TRIGGER trg_red_mail_f2_lot BEFORE UPDATE ON public.red_mail_loturi FOR EACH ROW EXECUTE FUNCTION public.fn_red_mail_f2_garda();
+CREATE TRIGGER trg_red_mail_f2_mesaj BEFORE INSERT OR UPDATE OR DELETE ON public.red_mail_mesaje FOR EACH ROW EXECUTE FUNCTION public.fn_red_mail_f2_garda();
 -- ---------------------------------------------------------------- triggerele de pe live (20261130k)
 CREATE TRIGGER trg_red_mail_setari_reguli BEFORE UPDATE OR DELETE ON public.red_mail_setari FOR EACH ROW EXECUTE FUNCTION public.fn_red_mail_setari_reguli();
 CREATE TRIGGER trg_red_mail_fara_truncate BEFORE TRUNCATE ON public.red_mail_setari FOR EACH STATEMENT EXECUTE FUNCTION public.fn_red_jurnal_imuabil();
@@ -164,18 +216,26 @@ BEGIN
       EXECUTE format('GRANT SELECT ON public.%I TO authenticated, service_role', t);
     END IF;
   END LOOP;
-  FOREACH t IN ARRAY ARRAY['red_mail_loturi', 'red_mail_mesaje', 'red_mail_jurnal_f2'] LOOP
+  FOREACH t IN ARRAY ARRAY['red_mail_loturi', 'red_mail_mesaje', 'red_mail_optout', 'red_mail_fisiere_inventar', 'red_mail_fisiere_inventar_antet', 'red_mail_jurnal_f2'] LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC,anon,authenticated,service_role', t);
     EXECUTE format('GRANT SELECT ON public.%I TO authenticated', t);
     EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL AND public.fn_sms_e_owner() IS TRUE)', t || '_sel', t);
   END LOOP;
+  -- 20261212a: AWB-urile FAN se citesc doar de admin / editor Redări (fără scriere pentru roluri)
+  ALTER TABLE public.red_fan_awb ENABLE ROW LEVEL SECURITY;
+  REVOKE ALL ON public.red_fan_awb FROM PUBLIC, anon, authenticated, service_role;
+  GRANT SELECT ON public.red_fan_awb TO authenticated, service_role;
+  CREATE POLICY red_fan_awb_citire ON public.red_fan_awb FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL AND public.fn_red_nivel() IN ('admin', 'editor'));
   FOREACH t IN ARRAY ARRAY['red_proiecte', 'red_uat'] LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC, anon, authenticated, service_role', t);
     EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING ((select public.fn_red_nivel()) IS NOT NULL)', t || '_sel', t);
     EXECUTE format('GRANT SELECT ON public.%I TO authenticated, service_role', t);
   END LOOP;
+  -- 20261126a / 30g: admin Redări poate modifica proiectul (inclusiv codul) — calea pe care triggerul 31h o îngrădește
+  CREATE POLICY red_proiecte_upd ON public.red_proiecte FOR UPDATE TO authenticated USING ((select public.fn_red_nivel()) = 'admin') WITH CHECK ((select public.fn_red_nivel()) = 'admin');
+  GRANT UPDATE ON public.red_proiecte TO authenticated;
 END $rls$;
 REVOKE ALL ON SEQUENCE public.red_mail_evenimente_id_seq FROM PUBLIC, anon, authenticated, service_role;
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
@@ -184,7 +244,10 @@ GRANT SELECT ON storage.objects, storage.buckets TO anon, authenticated, service
 REVOKE ALL ON FUNCTION public.fn_red_nivel(), public.fn_red_jurnal_imuabil(), public.fn_red_versiune_creste(), public.fn_red_informare_publicata(text),
   public.fn_red_mail_setari_reguli(), public.fn_red_mail_oauth_state_reguli(), public.fn_red_mail_evenimente_reguli(),
   public.fn_red_mail_f2_canonic(jsonb), public.fn_red_mail_f2_hash(jsonb), public.fn_red_mail_f2_lot_hash(uuid), public.fn_red_mail_f2_owner(), public.fn_red_mail_f2_audit(uuid,uuid,text),
-  public.fn_red_mail_f2_poate(public.red_mail_loturi), public.fn_red_mail_f2_setari(boolean,boolean,integer), public.fn_sms_e_owner() FROM PUBLIC, anon, authenticated, service_role;
+  public.fn_red_mail_f2_poate(public.red_mail_loturi), public.fn_red_mail_f2_setari(boolean,boolean,integer), public.fn_sms_e_owner(),
+  public.fn_red_mail_f2_garda(), public.fn_red_mail_f2_retentie_poate(uuid), public.fn_red_mail_rezerva(uuid), public.fn_red_mail_apel_incepe(uuid,uuid),
+  public.fn_red_mail_rezultat(uuid,uuid,text,text,text) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_red_nivel(), public.fn_sms_e_owner() TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_red_informare_publicata(text) TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.fn_red_mail_f2_setari(boolean,boolean,integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_red_mail_f2_setari(boolean,boolean,integer), public.fn_red_mail_rezerva(uuid), public.fn_red_mail_apel_incepe(uuid,uuid),
+  public.fn_red_mail_rezultat(uuid,uuid,text,text,text) TO authenticated;
