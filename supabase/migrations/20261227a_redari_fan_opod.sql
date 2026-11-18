@@ -10,7 +10,18 @@
 --   ALEGERE explicită a owner-ului, pe lot, implicit OPRITĂ. De ce (18.11.2026): primul AWB real al Testului 1 a costat 27,16 lei în loc de 13,16,
 --   pentru că codul trimitea mereu options = ['B'] (proiectarea din 06.11.2026), deși la întâlnirea cu curierul din 09.11.2026 proprietarul decisese
 --   „fără oPOD, confirmarea electronică de pe terminalul curierului”. Decizia proprietarului din 18.11.2026: oPOD rămâne posibil, dar doar cerut.
---   * red_fan_loturi.opod boolean NOT NULL DEFAULT false (coloană nouă; rândurile existente = fără oPOD, exact ce a decis proprietarul pe 09.11);
+--   * red_fan_loturi.opod boolean NOT NULL DEFAULT false (coloană nouă; implicitul = fără oPOD, exact ce a decis proprietarul pe 09.11);
+--     ISTORICUL (Jakarinos #1135 r1 P2, „AWB-ul taxat cu oPOD”): până la această migrare codul (redariFan.mjs::CONFIG_FAN_PLIC, options ['B'])
+--     trimitea MEREU B, deci hash-urile aprobate și AWB-urile generate înainte au avut oPOD. DEDUCERE aplicată pe rândurile existente, sub lock:
+--     opod = true pe orice lot cu o aprobare în istoric (prima_aprobare_la IS NOT NULL — pusă de fn_red_fan_aproba la prima aprobare, imuabilă —
+--     SAU vreun rând red_fan_awb în altă stare decât 'propus': aprobat / in_curs / generat / eroare / necunoscut / anulat / ridicat, toate după
+--     o aprobare); loturile fără nicio aprobare (doar propuneri sau nimic) rămân false. Așa (1) ecranul arată „oPOD” pe AWB-ul deja taxat
+--     cu oPOD, (2) hash-urile deja propuse / aprobate pe loturile aprobate (calculate cu B) rămân valabile, (3) un lot aprobat o dată nu
+--     își mai poate schimba alegerea (regula de mai jos), deci istoricul nu se falsifică. Numărătoarea e în NOTICE și în postcondiții.
+--   * MARCAJ DE INSTALARE în red_jurnal (append-only, fără trigger pe red_fan_loturi): un rând (tabela 'red_fan_loturi', inregistrare_id NULL,
+--     actiune 'insert', date_noi {eveniment:'opod_instalat', la, loturi_opod:[lot_id…], n_loturi, n_opod}) cu momentul aplicării (now() al
+--     tranzacției) și lista loturilor deduse. Revenirea îl citește ca să deosebească datele PREEXISTENTE de folosirea de DUPĂ aplicare (L14) și
+--     scrie 'opod_dezinstalat'; reaplicarea cere istoricul echilibrat (câte 'opod_instalat', atâtea 'opod_dezinstalat').
 --   * fn_red_fan_lot_opod(p_lot_id, p_opod) — DOAR owner, prin RPC (nu UPDATE direct), DOAR pe un lot marcat (TEST / real) și DOAR înainte de
 --     PRIMA aprobare a lotului (istoric: prima_aprobare_la; și fără rânduri aprobate / trimise în stările curente), ca pretul aprobat să nu se
 --     schimbe între aprobare și generare; repetarea aceleiași valori = no-op; fiecare schimbare = un rând în red_jurnal (tabela red_fan_loturi,
@@ -20,20 +31,33 @@
 --   Unde se folosește valoarea: ecranul și funcția edge construiesc corpul fiecărui plic cu options = ['B'] DOAR dacă lotul are opod = true
 --   (redariFan.mjs::configPlicFan, aceeași funcție în ambele, L19); corpul intră în hash-ul aprobat (red_fan_awb.hash_date) → valoarea folosită la
 --   generare e EXACT cea văzută la aprobare: o alegere diferită după aprobare ar da alt hash, exclus de la generare și refuzat de claim — și oricum
---   e interzisă de RPC + trigger după prima aprobare. Nicio funcție existentă nu se schimbă în afara gărzii; nicio dată existentă nu se rescrie.
+--   e interzisă de RPC + trigger după prima aprobare. Nicio funcție existentă nu se schimbă în afara gărzii; singura dată existentă rescrisă e
+--   coloana nouă (deducerea istorică de mai sus), iar red_jurnal primește marcajul de instalare.
+-- FĂRĂ migrare (codul publicat înainte): citirea lotului (redariFan.mjs::citesteLotFan, aceeași în ecran și în funcția edge) tolerează lipsa
+--   coloanei (opod = null): marcajul, urmărirea, confirmările, etichetele, reconcilierea, ștergerea merg ca înainte; DOAR generarea refuză (503,
+--   nimic trimis) până la aplicare. Nu există ordine obligatorie față de 20261131h (atinge red_proiecte / citește red_fan_awb; trigger pe alt
+--   tabel); manifestele L15 se generează pe clonă în ordinea efectivă de aplicare, cu baseline-ul actualizat după fiecare.
 -- Identitatea = auth.uid() (L08); niciun parametru de utilizator. Ordinea lock-urilor la rulare (L06), ca în 20261212a: red_loturi_plicuire FOR
 --   UPDATE → red_fan_loturi (rândul lotului) FOR UPDATE → INSERT red_jurnal, ultimul.
 -- Lock-uri la aplicare: ALTER TABLE … ADD COLUMN cere ACCESS EXCLUSIVE pe red_fan_loturi (tabel mic: câteva rânduri; ADD COLUMN cu DEFAULT
---   constant nu rescrie tabelul pe PG ≥ 11). Punct unic de blocare, NOWAIT, bugetul de 1 s de la PRIMA încercare (ca 20261212a), verificat
---   înaintea fiecărei încercări și după obținere. Lock-uri IMPLICITE după set: CREATE OR REPLACE FUNCTION / CREATE FUNCTION (plpgsql: corpul nu
---   se analizează la creare — fără lock-uri pe tabele; doar rândul din pg_proc), COMMENT, REVOKE / GRANT (catalog), postcondițiile (catalog +
---   red_fan_loturi, deja ținut). Nimic pe red_fan_awb, red_plicuri, red_proiecte, red_loturi_plicuire, red_jurnal. Fiecare așteptare implicită
---   e limitată de lock_timeout = 100 ms.
+--   constant nu rescrie tabelul pe PG ≥ 11) + SHARE pe red_fan_awb (citit de deducerea istorică; SHARE oprește scriitorii FAN în curs —
+--   aprobare / claim / rezultate / urmărire țin ROW EXCLUSIVE — ca momentul de instalare din marcaj să nu aibă nicio scriere FAN în zbor; citirile
+--   ecranului trec). AMBELE în același bloc, NOWAIT, în ordinea red_fan_loturi → red_fan_awb (fără așteptare ⇒ fără deadlock), bugetul de 1 s de la
+--   PRIMA încercare (ca 20261212a), verificat înaintea fiecărei încercări și după obținere; un eșec al celui de-al doilea eliberează și primul
+--   (sub-tranzacția blocului). Lock-uri IMPLICITE după set: CREATE OR REPLACE FUNCTION / CREATE FUNCTION (plpgsql: corpul nu se analizează la
+--   creare — fără lock-uri pe tabele; doar rândul din pg_proc), COMMENT, REVOKE / GRANT (catalog), UPDATE red_fan_loturi (deja ținut, ROW
+--   EXCLUSIVE sub ACCESS EXCLUSIVE), INSERT red_jurnal (ROW EXCLUSIVE pe red_jurnal + secvența), postcondițiile (catalog + cele două tabele ținute).
+--   Nimic pe red_plicuri, red_proiecte, red_loturi_plicuire. Fiecare așteptare implicită e limitată de lock_timeout = 100 ms.
+--   Rest cunoscut: un RPC FAN pornit înainte de BEGIN-ul nostru, care nu atinsese încă tabelele când am luat lock-urile (fereastra dintre
+--   startul lui și prima citire: verificarea owner-ului), poate scrie după COMMIT-ul nostru cu now() < momentul din marcaj; pentru un lot
+--   nou îl prinde revenirea pe CONȚINUT (aprobat + opod = false), pentru un lot deja aprobat înainte rezultatul (cu B) e identic cu istoricul.
 -- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, bugetul lock-ului
 --   de 1 s, garda finală a runnerului.
--- Revenire: supabase/revenire/20261227a_redari_fan_opod_ROLLBACK.sql (prin runner, plafonul 2000; refuză dacă vreun lot are opod = true sau dacă
---   red_jurnal are evenimente 'opod_schimbat' — istoric nou, L14 textual). Probe: scripts/pglite/test_redari_fan_opod_local.mjs (PGlite, pașii reali
---   L15 v2 ai runnerului peste 20261212a aplicată: comportament ca roluri, trigger, jurnal, refuzuri, revenire, mutanți).
+-- Revenire: supabase/revenire/20261227a_redari_fan_opod_ROLLBACK.sql (prin runner, plafonul 2000; refuză la ORICE folosire de după aplicare,
+--   L14 textual: evenimente 'opod_schimbat', lot aprobat după aplicare (aprobat cu opod = false sau în afara listei din marcaj), rânduri FAN
+--   aprobate / rezervate / generate după momentul din marcaj, loturi cu opod = true în afara listei deduse; datele preexistente — loturile
+--   deduse true — nu opresc revenirea). Probe: scripts/pglite/test_redari_fan_opod_local.mjs (PGlite, pașii reali L15 v2 ai runnerului peste
+--   20261212a aplicată, cu un lot aprobat + generat ÎNAINTE: comportament ca roluri, trigger, jurnal, deducerea, marcajul, refuzuri, revenire, mutanți).
 DO $pre$
 DECLARE v_plafon text; v_rau text; v_tip text; r record;
 BEGIN
@@ -95,10 +119,23 @@ BEGIN
                       AND tg.tgtype = (1 | 2 | 8 | 16)) THEN
     RAISE EXCEPTION '20261227a: trigger-ul trg_red_fan_loturi_garda nu e cel din 20261212a';
   END IF;
-  -- istoricul nu există încă (L14: revenirea refuză la istoric nou; aici dovada că e al acestei migrări)
+  -- istoricul nu există încă (L14: revenirea refuză la istoric nou; aici dovada că e al acestei migrări); marcajele de instalare echilibrate
+  -- (fiecare 'opod_instalat' are 'opod_dezinstalat'-ul lui: altfel migrarea e aplicată fără revenire sau coloana a fost scoasă pe altă cale)
   IF EXISTS (SELECT 1 FROM public.red_jurnal WHERE tabela = 'red_fan_loturi' AND date_noi ->> 'eveniment' = 'opod_schimbat') THEN
     RAISE EXCEPTION '20261227a: red_jurnal are deja evenimente opod_schimbat';
   END IF;
+  IF (SELECT count(*) FILTER (WHERE date_noi ->> 'eveniment' = 'opod_instalat') - count(*) FILTER (WHERE date_noi ->> 'eveniment' = 'opod_dezinstalat')
+        FROM public.red_jurnal WHERE tabela = 'red_fan_loturi') <> 0 THEN
+    RAISE EXCEPTION '20261227a: marcajele de instalare din red_jurnal (opod_instalat / opod_dezinstalat) nu sunt echilibrate (aplicare fara revenire?)';
+  END IF;
+  -- coloanele citite de deducerea istorică / de revenire
+  FOR r IN SELECT * FROM (VALUES ('red_fan_awb', 'aprobat_la', '^timestamp with time zone$'), ('red_fan_awb', 'generat_la', '^timestamp with time zone$'),
+      ('red_fan_awb', 'updated_at', '^timestamp with time zone$'), ('red_fan_loturi', 'marcat_la', '^timestamp with time zone$')) v(t, c, tip) LOOP
+    SELECT data_type INTO v_tip FROM information_schema.columns WHERE table_schema = 'public' AND table_name = r.t AND column_name = r.c;
+    IF v_tip IS NULL OR v_tip !~ r.tip THEN
+      RAISE EXCEPTION '20261227a: coloana %.% lipseste sau are alt tip (%; asteptat %)', r.t, r.c, coalesce(v_tip, 'lipsa'), r.tip;
+    END IF;
+  END LOOP;
   IF to_regprocedure('auth.uid()') IS NULL
      OR (SELECT prorettype FROM pg_proc WHERE oid = to_regprocedure('auth.uid()')) IS DISTINCT FROM 'uuid'::regtype::oid
      OR NOT pg_has_role('postgres', 'authenticated', 'USAGE') OR NOT pg_has_role('postgres', 'anon', 'USAGE') THEN
@@ -141,7 +178,8 @@ BEGIN
 END $lant$;
 DO $l15_inainte$ BEGIN PERFORM pg_temp.lant_20261227a('inainte'); END $l15_inainte$;
 
--- ── punctul UNIC de blocare (L06): ACCESS EXCLUSIVE pe red_fan_loturi (ADD COLUMN), NOWAIT, bugetul de 1 s de la PRIMA încercare ──
+-- ── punctul UNIC de blocare (L06): ACCESS EXCLUSIVE pe red_fan_loturi (ADD COLUMN) + SHARE pe red_fan_awb (deducerea istorică, fără scriitori FAN
+-- în zbor), în același bloc, NOWAIT, bugetul de 1 s de la PRIMA încercare ──
 DO $lock$
 DECLARE v_incercari integer := 0; v_t0 timestamptz := clock_timestamp(); v_buget constant interval := interval '1 second';
 BEGIN
@@ -154,6 +192,7 @@ BEGIN
     v_incercari := v_incercari + 1;
     BEGIN
       LOCK TABLE public.red_fan_loturi IN ACCESS EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.red_fan_awb IN SHARE MODE NOWAIT;
       EXIT;
     EXCEPTION WHEN lock_not_available THEN
       PERFORM pg_sleep(0.05);
@@ -171,7 +210,31 @@ END $lock$;
 
 -- ─── 1. coloana: alegerea oPOD a lotului, implicit OPRITĂ ───
 ALTER TABLE public.red_fan_loturi ADD COLUMN opod boolean NOT NULL DEFAULT false;
-COMMENT ON COLUMN public.red_fan_loturi.opod IS 'Redări FAN: confirmarea de primire în ORIGINAL (opțiunea B, oPOD, cost suplimentar pe plic) e cerută pe lot? Implicit false = confirmarea electronică a curierului (decizia proprietarului, 09.11 + 18.11.2026). Scrisă doar prin fn_red_fan_lot_opod (owner), înainte de prima aprobare; imuabilă după (trigger).';
+COMMENT ON COLUMN public.red_fan_loturi.opod IS 'Redări FAN: confirmarea de primire în ORIGINAL (opțiunea B, oPOD, cost suplimentar pe plic) e cerută pe lot? Implicit false = confirmarea electronică a curierului (decizia proprietarului, 09.11 + 18.11.2026). Scrisă doar prin fn_red_fan_lot_opod (owner), înainte de prima aprobare; imuabilă după (trigger). Loturile aprobate înainte de 20261227a au true (codul trimitea mereu B; marcajul opod_instalat din red_jurnal le listează).';
+
+-- ─── 1b. ISTORICUL: loturile cu o aprobare înainte de această migrare au plecat / pleacă cu B (oPOD) → opod = true; apoi marcajul de instalare ───
+-- ÎNAINTEA gărzii noi (pasul 2): garda nouă refuză orice schimbare a lui opod pe un lot aprobat — exact loturile pe care deducerea le scrie.
+DO $istoric$
+DECLARE v_true integer; v_total integer; v_marcate integer; v_marcaj_id bigint;
+BEGIN
+  UPDATE public.red_fan_loturi l SET opod = true
+   WHERE l.prima_aprobare_la IS NOT NULL
+      OR EXISTS (SELECT 1 FROM public.red_fan_awb a WHERE a.lot_id = l.lot_id AND a.stare <> 'propus');
+  GET DIAGNOSTICS v_true = ROW_COUNT;
+  SELECT count(*) INTO v_total FROM public.red_fan_loturi;
+  -- (deducerea = exact predicatul se verifică în postcondiții)
+  -- rânduri FAN trecute de „propus” pe loturi FĂRĂ rând red_fan_loturi nu pot exista (aprobarea cere marcajul): doar numărate, ca dovadă
+  SELECT count(*) INTO v_marcate FROM public.red_fan_awb a WHERE a.stare <> 'propus' AND NOT EXISTS (SELECT 1 FROM public.red_fan_loturi l WHERE l.lot_id = a.lot_id);
+  IF v_marcate <> 0 THEN RAISE EXCEPTION '20261227a: % randuri FAN aprobate pe loturi fara marcaj (date neasteptate; nimic schimbat)', v_marcate; END IF;
+  INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_vechi, date_noi, user_id)
+  VALUES ('red_fan_loturi', NULL, 'insert', NULL,
+          jsonb_build_object('eveniment', 'opod_instalat', 'migrare', '20261227a_redari_fan_opod', 'la', now(),
+                             'loturi_opod', (SELECT coalesce(jsonb_agg(lot_id ORDER BY lot_id), '[]'::jsonb) FROM public.red_fan_loturi WHERE opod),
+                             'n_loturi', v_total, 'n_opod', v_true), NULL)
+  RETURNING id INTO v_marcaj_id;
+  RAISE NOTICE '20261227a: istoric: % din % loturi marcate aveau o aprobare inainte (opod = true, dedus: codul trimitea mereu B); marcaj opod_instalat #%',
+    v_true, v_total, v_marcaj_id;
+END $istoric$;
 
 -- ─── 2. garda (același trigger): după prima aprobare nici opod nu se mai schimbă, pe orice cale (L07) ───
 CREATE OR REPLACE FUNCTION public.fn_red_fan_loturi_garda() RETURNS trigger
@@ -219,7 +282,22 @@ BEGIN
                    AND data_type = 'boolean' AND is_nullable = 'NO' AND column_default = 'false') THEN
     RAISE EXCEPTION '20261227a post: coloana opod (boolean NOT NULL DEFAULT false)';
   END IF;
-  IF EXISTS (SELECT 1 FROM public.red_fan_loturi WHERE opod IS DISTINCT FROM false) THEN RAISE EXCEPTION '20261227a post: randurile existente trebuie sa aiba opod = false'; END IF;
+  -- rândurile existente: opod = deducerea istorică (aprobare în istoric ⇔ true); marcajul de instalare scris în ACEASTĂ tranzacție, cu lista exactă
+  IF EXISTS (SELECT 1 FROM public.red_fan_loturi l
+              WHERE l.opod IS DISTINCT FROM (l.prima_aprobare_la IS NOT NULL OR EXISTS (SELECT 1 FROM public.red_fan_awb a WHERE a.lot_id = l.lot_id AND a.stare <> 'propus'))) THEN
+    RAISE EXCEPTION '20261227a post: opod difera de deducerea istorica (aprobare in istoric = true, altfel false)';
+  END IF;
+  IF (SELECT count(*) FILTER (WHERE date_noi ->> 'eveniment' = 'opod_instalat') - count(*) FILTER (WHERE date_noi ->> 'eveniment' = 'opod_dezinstalat')
+        FROM public.red_jurnal WHERE tabela = 'red_fan_loturi') <> 1
+     OR NOT EXISTS (SELECT 1 FROM public.red_jurnal j
+                     WHERE j.tabela = 'red_fan_loturi' AND j.date_noi ->> 'eveniment' = 'opod_instalat' AND j.inregistrare_id IS NULL AND j.actiune = 'insert'
+                       AND j.xmin::text = (txid_current() % 4294967296)::text
+                       AND (j.date_noi ->> 'la')::timestamptz = now()
+                       AND (SELECT coalesce(jsonb_agg(lot_id ORDER BY lot_id), '[]'::jsonb) FROM public.red_fan_loturi WHERE opod) = j.date_noi -> 'loturi_opod'
+                       AND (j.date_noi ->> 'n_loturi')::int = (SELECT count(*) FROM public.red_fan_loturi)
+                       AND (j.date_noi ->> 'n_opod')::int = (SELECT count(*) FROM public.red_fan_loturi WHERE opod)) THEN
+    RAISE EXCEPTION '20261227a post: marcajul opod_instalat lipseste sau nu descrie exact loturile deduse';
+  END IF;
   IF EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.red_fan_loturi'::regclass AND a.attnum > 0 AND a.attacl IS NOT NULL) THEN
     RAISE EXCEPTION '20261227a post: drepturi pe coloane';
   END IF;
@@ -247,6 +325,11 @@ BEGIN
               WHERE has_table_privilege(y.rol, 'public.red_fan_loturi'::regclass, z.drept) IS DISTINCT FROM (z.drept = 'SELECT' AND y.rol <> 'anon'))
      OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = 'public.red_fan_loturi'::regclass AND c.relrowsecurity AND NOT c.relforcerowsecurity) THEN
     RAISE EXCEPTION '20261227a post: drepturile / RLS pe red_fan_loturi s-au schimbat';
+  END IF;
+  -- red_jurnal: doar rândul marcajului în plus (nimic altceva scris acolo de migrare), drepturile neatinse (nimic de scris pentru rolurile aplicației)
+  IF (SELECT count(*) FROM public.red_jurnal j WHERE j.xmin::text = (txid_current() % 4294967296)::text) <> 1
+     OR has_table_privilege('authenticated', 'public.red_jurnal'::regclass, 'INSERT') OR has_table_privilege('anon', 'public.red_jurnal'::regclass, 'SELECT') THEN
+    RAISE EXCEPTION '20261227a post: red_jurnal (randuri scrise / drepturi)';
   END IF;
 END $post$;
 

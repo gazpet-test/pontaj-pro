@@ -27,6 +27,23 @@ export const COST_OPOD_ESTIMAT_LEI = 14
 export const configPlicFan = ({ opod = false } = {}) => (opod === true ? Object.freeze({ ...CONFIG_FAN_PLIC, options: Object.freeze([OPTIUNE_OPOD]) }) : CONFIG_FAN_PLIC)
 /** Corpul unei expedieri cere oPOD? (ce s-a aprobat / ce pleacă: hash-ul îl include) */
 export const cereOpod = shipment => Array.isArray(shipment?.info?.options) && shipment.info.options.includes(OPTIUNE_OPOD)
+/** Coloana lipsește (PostgREST 42703) = migrarea 20261227a neaplicată încă; ≠ eroare de citire (L18). */
+export const lipsaColoana = e => e?.code === '42703' || /column .* does not exist/i.test(e?.message || '')
+export const COLOANA_OPOD = 'opod'
+/**
+ * Rândul red_fan_loturi al unui lot, cu alegerea oPOD — O SINGURĂ definiție pentru ecran și funcția edge (L19; Jakarinos #1135 r1 P1).
+ * citeste(coloane) → { data, error } (PostgREST .maybeSingle(), cu JWT-ul omului). Se cere întâi cu coloana `opod`; dacă coloana lipsește
+ * (42703: migrarea 20261227a neaplicată), se recitește FĂRĂ ea și rândul primește opod = null („alegerea neinstalată”): marcajul TEST / real,
+ * urmărirea, confirmările, etichetele, reconcilierea și ștergerea merg ca înainte; DOAR generarea refuză (opod ≠ boolean → 503, nimic trimis).
+ * Orice altă eroare (RLS, rețea) se întoarce ca atare; rândul lipsă (lot nemarcat) rămâne { data: null }.
+ */
+export async function citesteLotFan(citeste, coloane) {
+  const r = await citeste(`${coloane},${COLOANA_OPOD}`)
+  if (!r?.error || !lipsaColoana(r.error)) return r
+  const r2 = await citeste(coloane)
+  if (r2?.error || !r2?.data) return r2
+  return { ...r2, data: { ...r2.data, [COLOANA_OPOD]: null } }
+}
 
 // Limitele din documentația FAN (caractere). Depășirea = problemă afișată, NU tăiere tacită (L12).
 export const LIMITE_FAN = Object.freeze({ name: 50, phone: 16, county: 50, locality: 50, street: 255, content: 255, costCenter: 40 })

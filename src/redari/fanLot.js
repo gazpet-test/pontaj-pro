@@ -111,6 +111,27 @@ export function stareOpod({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInsta
 /** oPOD-ul lotului, DOAR din valoarea citită (true); lipsă / necunoscut = fără oPOD în corp (același criteriu ca configPlicFan, L19). */
 export const opodLot = fanLot => fanLot?.opod === true
 export const costOpodEstimat = n => (Number.isInteger(n) && n > 0 ? n * COST_OPOD_ESTIMAT_LEI : 0)
+// Rândurile TRIMISE curierului (claim făcut; au sau au avut un AWB): oPOD-ul lor e cel al lotului la aprobare, nu corpul reconstruit acum.
+export const STARI_TRIMISE_FAN = Object.freeze(['in_curs', 'generat', 'necunoscut', 'ridicat'])
+export const TEXT_OPOD_RAND = 'oPOD'
+export const TEXT_OPOD_LEGACY = 'oPOD (expediat înainte de alegerea pe lot: opțiunea B pleca mereu)'
+/**
+ * Ce se arată pe rândul unui plic despre oPOD (Jakarinos #1135 r1 P2: AWB-ul deja taxat cu oPOD trebuie identificat ca atare):
+ *  - rând TRIMIS (STARI_TRIMISE_FAN): alegerea lotului e înghețată de prima aprobare și a fost exact cea din hash-ul trimis (funcția edge
+ *    exclude orice rând al cărui hash nu e cel recalculat cu alegerea lotului) → `opod === true` = „oPOD”, `false` = nimic; `opod` null /
+ *    lipsă (coloana neinstalată) pe un rând trimis = rând generat de codul de dinaintea migrării, care trimitea MEREU B → TEXT_OPOD_LEGACY
+ *    (aceeași deducere ca backfill-ul migrării 20261227a: orice lot aprobat înainte de ea primește opod = true);
+ *  - rând netrimis (sau fără rând): corpul reconstruit acum (cereOpod), adică ce s-ar propune / aproba.
+ * Întoarce '' când nu e nimic de spus.
+ */
+export function textOpodRand({ fanLot = null, rand = null, shipment = null } = {}) {
+  if (rand && STARI_TRIMISE_FAN.includes(rand.stare)) {
+    if (fanLot?.opod === true) return TEXT_OPOD_RAND
+    if (fanLot?.opod === false) return ''
+    return TEXT_OPOD_LEGACY
+  }
+  return cereOpod(shipment) ? TEXT_OPOD_RAND : ''
+}
 /** Textul dialogului de aprobare: ce se aprobă (număr), dacă oPOD e cerut și costul estimat suplimentar — DIN CORPURILE propuse (cereOpod pe
  *  shipment), nu din rândul lotului: se arată exact ce intră în hash-urile aprobate. Corpuri amestecate (unele cu B, altele fără) = nu se aprobă. */
 export function textAprobare({ n, shipments = [], titlu = '' }) {

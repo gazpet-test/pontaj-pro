@@ -15,11 +15,11 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { pregatestePlicuriFan, contactPePlic, LIMITA_LOT_PILOT_IMPLICITA, FORMAT_ETICHETA, manifestTiparire, partiManifest, cheieTiraj, idTiraj, tirajDin,
-  ASTEPTARE_DUPA_OPRIRE_S, cereOpod, COST_OPOD_ESTIMAT_LEI } from '../../../supabase/functions/_shared/redariFan.mjs'
+  ASTEPTARE_DUPA_OPRIRE_S, COST_OPOD_ESTIMAT_LEI, citesteLotFan, lipsaColoana } from '../../../supabase/functions/_shared/redariFan.mjs'
 import { stariPasi, stareMarcaj, stareMarcajReal, starePropunere, stariOperatii, TRANSPORT_REAL_ACTIV, transportPermis, MESAJ_TRANSPORT_OPRIT, ETICHETE_STARE_FAN, ETICHETE_URMARIRE, ETICHETE_CONFIRMARE,
   prefixLot, titluLot, csvBorderouFan, mesajEdgeFan, numeEtichete, numeControl, controlLotFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire,
   fapteContrazise, optiuniSolutionare, solutioneazaUrmarire, etichetaUrmarire, textTarif, textTotalTarif, totalTarifLot, MESAJ_TARIF_NECUNOSCUT,
-  stareOpod, TEXT_OPOD, opodLot, textAprobare, textUltimEveniment } from '../fanLot.js'
+  stareOpod, TEXT_OPOD, opodLot, textAprobare, textUltimEveniment, textOpodRand } from '../fanLot.js'
 import { docxPaginaControl } from '../plicuri.js'
 import { descarcaBlob } from '../docx.js'
 import { G, S, Modal, msgEroare, citestePaginat, etichetaRetur, MOTIVE_RETUR } from './comune.jsx'
@@ -34,21 +34,18 @@ const COST_OPOD_TEXT = `${COST_OPOD_ESTIMAT_LEI} lei`   // 18.11: costul estimat
 // tabelul FAN lipsește (migrarea neaplicată) ≠ eroare de citire (L18)
 export const lipsaTabel = e => ['PGRST205', '42P01'].includes(e?.code) || /does not exist|could not find the table/i.test(e?.message || '')
 
-// coloana lipsește (migrarea 20261227a neaplicată încă) ≠ eroare de citire: evidența rămâne citibilă, alegerea oPOD e „neinstalată” (opod: null)
-export const lipsaColoana = e => e?.code === '42703' || /column .* does not exist/i.test(e?.message || '')
+// coloana lipsește (migrarea 20261227a neaplicată încă) ≠ eroare de citire: evidența rămâne citibilă, alegerea oPOD e „neinstalată” (opod: null);
+// definiția e în redariFan.mjs (comună cu funcția edge, L19), re-exportată pentru testele vechi
+export { lipsaColoana }
 const COL_LOT = 'lot_id,test,prima_aprobare_la,tiraj_cheie,tiraj_nr,tiraj_la,tiraj_oprit_la'
 
 /** Evidența FAN a unui lot, citită cu JWT-ul omului: { instalata, fanLot, randuri, limita }. Tabel lipsă = neinstalată; altă eroare = aruncată (L18).
- *  fanLot.opod (18.11.2026): alegerea oPOD a lotului (boolean); null = coloana nu e instalată încă (bifa dezactivată, corpurile fără oPOD).
- *  Folosită și de ecranul Plicuri (arhiva documentelor pe manifestul comun). */
+ *  fanLot.opod (18.11.2026): alegerea oPOD a lotului (boolean); null = coloana nu e instalată încă (bifa dezactivată, corpurile fără oPOD) —
+ *  aceeași citire ca în funcția edge (citesteLotFan). Folosită și de ecranul Plicuri (arhiva documentelor pe manifestul comun). */
 export async function citesteEvidentaFan(client, lotId, esteCurent = () => true) {
   try {
     const randuri = await citestePaginat(() => client.from('red_fan_awb').select(COL_FAN).eq('lot_id', lotId), { cheie: 'id', esteCurent })
-    let { data: fl, error: e1 } = await client.from('red_fan_loturi').select(COL_LOT + ',opod').eq('lot_id', lotId).maybeSingle()
-    if (e1 && lipsaColoana(e1)) {
-      ;({ data: fl, error: e1 } = await client.from('red_fan_loturi').select(COL_LOT).eq('lot_id', lotId).maybeSingle())
-      if (fl) fl = { ...fl, opod: null }
-    }
+    const { data: fl, error: e1 } = await citesteLotFan(coloane => client.from('red_fan_loturi').select(coloane).eq('lot_id', lotId).maybeSingle(), COL_LOT)
     if (e1) throw e1
     const { data: st, error: e2 } = await client.from('red_fan_setari').select('limita_lot').maybeSingle()
     if (e2) throw e2
@@ -446,9 +443,11 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
       <div style={{ display: 'grid', gap: 8 }}>
         {randuri.map(r => { const f = pePlic.get(r.plic.id)
           const tarif = f?.awb ? textTarif(f.tarif) : null   // 18.11: tariful lângă AWB; gol = „tarif necunoscut”, evidențiat (procedura cere oprire)
+          // oPOD-ul rândului: pe un rând trimis = alegerea înghețată a lotului (ce a plecat), nu corpul reconstruit acum (Jakarinos #1135 r1 P2)
+          const opodTxt = textOpodRand({ fanLot: fan?.fanLot, rand: f, shipment: r.shipment })
           return <div key={r.plic.id} style={{ ...S.card, borderColor: r.ok ? G.green : G.yellow }}>
             <b>{r.plic.nr_plic}</b> · {r.shipment.recipient.name || '(fără nume)'} · {[r.shipment.recipient.address.street, r.shipment.recipient.address.locality, r.shipment.recipient.address.county].filter(Boolean).join(', ') || '(fără adresă)'}
-            {r.ok ? <div style={{ color: G.green }}>✓ gata pentru FAN · referința pe etichetă: {r.shipment.info.observation}{cereOpod(r.shipment) ? <b style={{ color: G.orange }}> · oPOD</b> : ''}</div> : <ul style={{ margin: '4px 0 0', paddingLeft: 18, color: G.yellow }}>{r.probleme.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+            {r.ok ? <div style={{ color: G.green }}>✓ gata pentru FAN · referința pe etichetă: {r.shipment.info.observation}{opodTxt ? <b style={{ color: G.orange }}> · {opodTxt}</b> : ''}</div> : <ul style={{ margin: '4px 0 0', paddingLeft: 18, color: G.yellow }}>{r.probleme.map((x, i) => <li key={i}>{x}</li>)}</ul>}
             {f && <div style={{ fontSize: 12.5, color: G.muted }}>FAN: {ETICHETE_STARE_FAN[f.stare] || f.stare}{f.awb ? ` · AWB ${f.awb}` : ''}
               {tarif && <> · <b style={tarif === MESAJ_TARIF_NECUNOSCUT ? { color: G.red, background: G.redDim, padding: '0 4px', borderRadius: 4 } : { color: G.text }}>{tarif}</b>{tarif !== MESAJ_TARIF_NECUNOSCUT && f.tva != null ? ` (+ TVA ${textTarif(f.tva)})` : ''}</>}
               {f.hash_date !== r.hash && ['propus', 'aprobat'].includes(f.stare) ? ' · datele s-au schimbat după propunere: propune din nou' : ''}

@@ -80,6 +80,22 @@ implicit, activă doar pentru owner, după marcaj și înainte de prima aprobare
 suplimentar (din corpurile care se aprobă); rândul plicului arată „oPOD” când corpul îl cere; (5) rândul plicului arată și **ultimul eveniment
 de urmărire cu data și ora României** („ridicat de curier (C0) 18.11.2026 17:21”), doar afișare. Specificația fluxului pentru operator
 (`FAN_FLUX_OPERATOR_SPEC.md`, alt PR) se aliniază separat.
+**Runda 2 (verdictul review-ului pe `0c36cdc0`).** (6) **Fără migrare** (codul publicat înaintea ei): lotul se citește la fel în ecran și în
+funcția edge (`citesteLotFan`); dacă coloana `opod` lipsește (42703) se recitește fără ea și alegerea e „neinstalată” (`opod = null`) — marcajul
+TEST / real, urmărirea, confirmările, etichetele, reconcilierea și ștergerea merg ca înainte; **doar generarea refuză** (503 „citire neconfirmată”,
+nimic trimis, niciun claim) până la aplicare. (7) **Istoricul**: până la 20261227a codul trimitea mereu `B`, deci orice lot cu o aprobare înainte
+(hash-uri aprobate / AWB-uri generate cu oPOD) primește la migrare `opod = true` (deducere scrisă în migrare, cu numărătoarea în postcondiții și un
+**marcaj de instalare** în `red_jurnal` — `opod_instalat`, cu momentul și lista loturilor deduse); loturile fără nicio aprobare rămân `false`. Pe
+rândul unui plic **trimis** ecranul arată „oPOD” după alegerea înghețată a lotului (ce a plecat), nu după corpul reconstruit acum; fără coloană, un
+rând trimis poartă „oPOD (expediat înainte de alegerea pe lot: opțiunea B pleca mereu)”. Lotul dedus `true` e deja aprobat, deci alegerea lui nu se
+mai schimbă (istoricul nu se falsifică; un lot nou se marchează separat). (8) **Revenirea** deosebește datele preexistente de folosirea de după
+aplicare prin marcaj: refuză la orice alegere a owner-ului (`opod_schimbat`), la orice lot aprobat după aplicare (și cu implicitul `false`), la rânduri
+aprobate / rezervate / generate după momentul din marcaj și la `opod = true` în afara listei deduse; loturile deduse `true` nu o opresc; scrie
+`opod_dezinstalat` (jurnalul nu se șterge). (9) **Cursa „schimbare înaintea unei aprobări întârziate cu hash-ul vechi”** e probată (PGlite + vitest):
+BD-ul acceptă aprobarea (nu cunoaște conținutul hash-ului), lotul rămâne pe alegerea nouă, înghețată; la generare rândul e exclus (hash-ul recalculat
+cu alegerea lotului ≠ cel aprobat), niciun claim, niciun POST; recuperarea = re-propunere + aprobare nouă; nimic nu pleacă cu altă opțiune decât cea
+din hash-ul aprobat. Ce rămâne neprobat fără cont real: acceptarea listei goale `options: []` de către FAN și disponibilitatea confirmării electronice
+pe contul contractual — se verifică la primul AWB de după migrare (Testul 1, §11, pasul `verifica-tarif`: tariful fără oPOD trebuie să fie 13,16 lei).
 
 ---
 
@@ -280,7 +296,8 @@ L16 (un singur rând viu pe plic, AWB unic), L17 (ora României), L18 (eroare FA
 | Redirecționarea livrării de către destinatar | nu se poate opri din API; o dezactivează FAN, prin excepția acceptată pe 13.11.2026. De verificat pe primele AWB-uri că excepția e activă. |
 | Plic anulat după AWB | doar înainte de C0: `DELETE /awb`, apoi „anulat” — DOAR la forma de succes recunoscută; 5xx, 200 cu eroare, corp gol sau altă formă = AWB-ul rămâne „generat”, omul verifică în selfAWB, apoi „Marchează anulat”. Până atunci AWB-ul plicului anulat nu se tipărește (manifestul îl numește „de anulat”). După C0: nu se mai anulează din ERP. |
 | AWB generat, plic modificat între timp | rândul are hash-ul datelor; generarea compară hash-ul aprobat cu datele curente și exclude rândul. |
-| Alegerea oPOD a lotului diferă de cea de la aprobare (18.11.2026) | nu se poate pe căile normale: după PRIMA aprobare RPC-ul și trigger-ul refuză schimbarea. Dacă totuși rândul lotului ar avea altă valoare decât la aprobare, corpul recalculat are alt hash → rândul e exclus de la generare („datele s-au schimbat după aprobare”) și claim-ul refuză; nimic trimis, nimic plătit. Alegerea necitibilă (rând lipsă / coloana lipsă / altă formă) = 409 / 503, nimic trimis (necunoscut ≠ „fără oPOD”). |
+| Alegerea oPOD a lotului diferă de cea de la aprobare (18.11.2026) | nu se poate pe căile normale: după PRIMA aprobare RPC-ul și trigger-ul refuză schimbarea. Singura cale: owner-ul schimbă alegerea cât lotul e neaprobat, iar o aprobare întârziată (cu hash-urile vechi, propuse pe cealaltă alegere) e acceptată de BD → lotul rămâne pe alegerea nouă, înghețată, rândurile aprobate au hash-ul vechi; la generare corpul recalculat are alt hash → TOATE rândurile sunt excluse („datele s-au schimbat după aprobare”), niciun claim, niciun POST; recuperarea = re-propunere + aprobare nouă (probat PGlite + vitest, runda 2). Alegerea necitibilă (rând lipsă / coloana lipsă / altă formă) = 409 / 503, nimic trimis (necunoscut ≠ „fără oPOD”). |
+| Codul publicat ÎNAINTE de migrarea 20261227a (coloana `opod` lipsă) | citirea lotului (aceeași în ecran și edge) recitește fără coloană și pune `opod = null`: marcajul, urmărirea, confirmările, etichetele, reconcilierea, ștergerea merg ca înainte; DOAR generarea refuză (503, nimic trimis). Ecranul: bifa dezactivată „neinstalată”; rândurile trimise poartă „oPOD (expediat înainte de alegerea pe lot…)”. |
 
 ---
 
@@ -309,6 +326,7 @@ numele fișierului (`…_etichete.pdf`) nu afirmă formatul, iar omul verifică 
 - Înainte de orice AWB real: se șterge funcția edge, se aplică revenirea prin runner (`--plafon-tranzactie-ms 2000`, comanda e în antetul fișierului; refuză dacă există rânduri FAN, loturi marcate sau setări schimbate), se scoate butonul din UI (revert PR).
 - După AWB-uri reale: tabelele rămân (evidență de cost și dovadă); se oprește doar generarea (flag în cod înapoi pe `false` + funcție ștearsă). AWB-urile neridicate se șterg din selfAWB.
 - **Istoricul livrării la reaplicarea de TEST după revenire (runda 3; doar pe clonă).** Revenirea DDL nu scoate rândul migrării din istoricul livrărilor: runnerul înregistrează și revenirea ca livrare proprie (`20261212120001 20261212a_redari_fan_awb_ROLLBACK`), iar rândul `20261212120000 20261212a_redari_fan_awb` rămâne. O reaplicare cu același nume / aceeași versiune e refuzată de runner („migrarea e deja înregistrată — refuz”, `scripts/livrare_migrare.sh:352–355`). Pe CLONĂ, coordonatorul șterge explicit AMBELE rânduri din istoric după revenire (cum face proba lui: „istoric sters de pe clona: 20261212120000 …, 20261212120001 …”) și abia apoi reaplică; pe PRODUCȚIE istoricul nu se rescrie niciodată — după o revenire reală, o nouă aplicare se face cu un fișier nou (altă versiune), revizuit ca orice migrare.
+- **Revenirea lui 20261227a (oPOD, runda 2)**: refuză la orice folosire de după aplicare (alegeri `opod_schimbat`, lot aprobat după aplicare — și cu implicitul `false` —, rânduri aprobate / rezervate / generate după momentul din marcajul `opod_instalat`, `opod = true` în afara listei deduse); loturile deduse `true` din istoric NU o opresc. Scrie `opod_dezinstalat` în jurnal; reaplicarea cere marcajele echilibrate. Se face DOAR înaintea revenirii lui 20261212a (20 → 19 funcții).
 - **Versiunea `20261212120000` e mai VECHE decât migrări deja aplicate** (ex. 20261220120000, 20261222120100 pe clonă). Runnerul analizat nu o blochează: verifică existența numelui / versiunii în istoric, nu o compară cu versiunea maximă aplicată (`scripts/livrare_migrare.sh:352–355`). Se consemnează și se verifică la aplicare că rândul nou apare în istoric cu exact `20261212120000` / `20261212a_redari_fan_awb` (fără conflict exact de nume sau versiune); fără redenumire. Alte unelte (CLI Supabase `db push`) NU se folosesc pentru această livrare: ele ar putea trata o versiune mai veche altfel.
 
 ## 8. Întrebări: ce s-a lămurit și ce rămâne deschis
