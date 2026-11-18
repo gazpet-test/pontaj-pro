@@ -19,6 +19,7 @@ import { stariPasi, stareMarcaj, stareMarcajReal, starePropunere, stariOperatii,
 import { docxPaginaControl } from '../plicuri.js'
 import { descarcaBlob } from '../docx.js'
 import { G, S, Modal, msgEroare, citestePaginat, etichetaRetur, MOTIVE_RETUR } from './comune.jsx'
+import TrimiteLaCurier, { CereriAprobare, OperatoriCurier, ListaAnulari, SetariZi } from './FanTrimitere.jsx'
 
 export { contactPePlic }   // compatibil cu testele vechi (definiția e în redariFan.mjs, comună cu funcția edge)
 const LOT_IN = 100
@@ -41,6 +42,18 @@ export async function citesteEvidentaFan(client, lotId, esteCurent = () => true)
     return { instalata: true, randuri, fanLot: fl || null, limita: st?.limita_lot ?? null }
   } catch (e) { if (lipsaTabel(e)) return { instalata: false, randuri: [], fanLot: null, limita: null }; throw e }
 }
+/** F1: dreptul de operator (fn_red_fan_e_operator, BD), plafonul zilei (v_red_fan_plafon_azi), intențiile și cererile lotului — fiecare citire separat; o eroare
+ *  lasă câmpul null (= „necitit”, afișat ca atare: L18), nu „fals” / „0”. Evidența veche (20261212a) fără F1 (20261228a) = toate null. */
+export async function citesteStareF1(client, lotId) {
+  const incearca = async f => { try { const { data, error } = await f(); return error ? null : data } catch { return null } }
+  const [op, plafon, intentii, cereri] = await Promise.all([
+    incearca(() => client.rpc('fn_red_fan_e_operator')),
+    incearca(() => client.from('v_red_fan_plafon_azi').select('limita_zi,aprobate,incap,presupunere_429,doar_proiecte_test,limita_lot').maybeSingle()),
+    incearca(() => client.from('v_red_fan_intentii').select('cheie,lot_id,operator,stare,lucru_pana_la,inceput_la,incheiata_la,incheiata_de,rezultat,ramase,necunoscute,generate,de_aprobat').eq('lot_id', lotId).order('inceput_la', { ascending: false }).limit(50)),
+    incearca(() => client.from('red_fan_cereri_aprobare').select('id,lot_id,cerut_de,cerut_la,intentie,n,zi_ro,stare,decis_de,decis_la,motiv').eq('lot_id', lotId).order('cerut_la', { ascending: false }).limit(50)),
+  ])
+  return { esteOperator: typeof op === 'boolean' ? op : null, plafon: plafon || null, intentii: Array.isArray(intentii) ? intentii : null, cereri: Array.isArray(cereri) ? cereri : null }
+}
 
 // convocariPePlic = convocările pe plic din ecranul Plicuri (aceleași citiri ca arhiva documentelor): numărul documentelor pe pagina de control
 export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariPePlic = {}, esteOwner = false, esteAdmin = false, poateScrie = false, onClose, onRetur }) {
@@ -49,6 +62,8 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   const [dataRec, setDataRec] = useState(''), [propuneri, setPropuneri] = useState(null), [plafonNou, setPlafonNou] = useState('')
   // runda 5: formularul de soluționare a unei contradicții — rândul EXACT văzut (valori + versiune), alegerile și motivul; unul odată
   const [sol, setSol] = useState(null)
+  // F1: dreptul de operator (din BD), plafonul zilei, intențiile și cererile lotului (null = necitit)
+  const [f1, setF1] = useState({ esteOperator: null, plafon: null, intentii: null, cereri: null })
   const gen = useRef(0), ocupat = useRef(false)
   // L24 (Jakarinos #1118 r1 P2): acțiunile au generația lor + lotul pentru care au pornit; schimbarea lotului / închiderea le invalidează
   const genActiune = useRef(0), lotCurent = useRef(lot.id)
@@ -73,8 +88,9 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
         .select('detinator_id,telefon,adresa_strada,adresa_sat,adresa_comuna,adresa_judet,cod_postal').in('detinator_id', det.slice(i, i + LOT_IN)), { cheie: 'detinator_id', esteCurent: curent }))
       const pregatite = await pregatestePlicuriFan({ plicuri: active, convocari: conv, contacte: cont, proiectCod: proiect.cod })
       const stare = await citesteEvidentaFan(supabase, lot.id, curent)   // evidența FAN (după migrare): rândurile, marcajul, plafonul
+      const f1Nou = stare.instalata ? await citesteStareF1(supabase, lot.id) : { esteOperator: null, plafon: null, intentii: null, cereri: null }
       if (!curent()) return
-      setRanduri(pregatite); setFan(stare)
+      setRanduri(pregatite); setFan(stare); setF1(f1Nou)
     })().catch(e => { if (curent()) setEroare(msgEroare(e)) })
     return () => { gen.current++ }
   }, [proiect.cod, lot.id, cheie, reload])   // eslint-disable-line react-hooks/exhaustive-deps
@@ -85,7 +101,8 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   // 18.11.2026: DE PROPUS = plicurile gata FĂRĂ rând FAN viu cu datele de acum (starePropunere, aceeași definiție ca în simulatorul procedurii)
   const propunere = starePropunere({ pregatite: randuri || [], randuri: awb })
   // garda „doar TEST” (aceeași ca în funcția edge): proiectul lotului + marcajul lui; marcajul cere doar proiectul de TEST
-  const st = { transportActiv: TRANSPORT_REAL_ACTIV, evidentaInstalata: !!fan?.instalata, esteOwner, esteAdmin, randuri: awb, fanLot: fan?.fanLot, proiectCod: proiect?.cod }
+  // F1: esteOperator = fn_red_fan_e_operator (owner-ul e inclus în BD); deschide pașii pe care funcția edge îi permite operatorului
+  const st = { transportActiv: TRANSPORT_REAL_ACTIV, evidentaInstalata: !!fan?.instalata, esteOwner, esteOperator: f1.esteOperator === true, esteAdmin, randuri: awb, fanLot: fan?.fanLot, proiectCod: proiect?.cod }
   const pasi = stariPasi({ ...st, poateScrie, gataDePropus: propunere.dePropus.length, motivPropunere: propunere.motiv })
   const operatii = stariOperatii(st)
   const marcajTest = stareMarcaj(st), marcajReal = stareMarcajReal(st)   // 18.11: „real” e oprit cât garda „doar TEST” e pornită
@@ -119,7 +136,12 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
 
   // garda unei acțiuni: generația + lotul de la pornire; fiecare apel dintr-o buclă o verifică ÎNAINTE (L24)
   async function executa(cheiePas, fn) {
-    if (ocupat.current || !pas(cheiePas)?.activ) return   // dublă gardă: butonul e dezactivat, iar funcția refuză oricum
+    if (!pas(cheiePas)?.activ) return   // dublă gardă: butonul e dezactivat, iar funcția refuză oricum
+    return ruleaza(fn)
+  }
+  // F1: aceeași gardă (ocupat, generație, lot) pentru acțiunile secțiunii „Trimite la curier”, care își verifică singure poarta (stareTrimitere / operator)
+  async function ruleaza(fn) {
+    if (ocupat.current) return
     const token = genActiune.current, lotId = lot.id
     const curent = () => genActiune.current === token && lotCurent.current === lotId
     ocupat.current = true; setLucru(true); setMesaj('')
@@ -171,6 +193,13 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   })
   // pagina de control: ACEEAȘI funcție și aceleași intrări ca arhiva documentelor (controlLotFan: manifest + plicuri + convocări + tirajul din BD)
   const paginaControl = tiraj => docxPaginaControl(controlLotFan({ lot, fanLot: fan?.fanLot, manifest, plicuri, convocariPePlic, tiraj }).continut)
+  // F1: după „Trimite la curier” evidența s-a schimbat (AWB-uri noi) → pagina de control se face pe manifestul RECITIT, doar dacă e cel al tirajului din răspuns
+  async function controlDupaTrimitere(manifestCheie, tiraj) {
+    const stare = await citesteEvidentaFan(supabase, lot.id)
+    const m = manifestTiparire({ randuri: stare.randuri, plicuri })
+    if (!manifestCheie || m.cheie !== manifestCheie || !tiraj?.cheie) return null
+    return docxPaginaControl(controlLotFan({ lot, fanLot: stare.fanLot, manifest: m, plicuri, convocariPePlic, tiraj }).continut)
+  }
   const etichete = parte => executa('etichete', async curent => {
     if (!curent()) return OPRIT
     const { corp, mesaj } = await edge('eticheta', { parte, manifest_cheie: manifest.cheie })
@@ -240,6 +269,7 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   // runda 4: o ridicare CONTRAZISĂ (FAN a dat două date) nu se confirmă în bloc: omul o verifică în selfAWB
   const deConfirmatRidicare = awb.filter(r => r.stare === 'generat' && r.ridicat_propus && !r.ridicat_contrazis)
   const confirmaRidicarea = () => executa('urmarire', async curent => {
+    if (!esteOwner) return 'Confirmarea ridicării (cu efect pe plic) e a owner-ului.'   // fn_red_fan_ridicat = clasa C
     const efect = fan.fanLot?.test ? 'Lot de TEST: se marchează doar în evidența FAN.' : 'Lot real: plicurile primesc AWB-ul și data expedierii (pornește termenul de 10 zile).'
     if (!window.confirm(`Confirmi ridicarea de către curier pentru ${deConfirmatRidicare.length} plicuri, la datele evenimentului C0? ${efect}`)) return 'Nimic confirmat.'
     return bucla(curent, deConfirmatRidicare, r => supabase.rpc('fn_red_fan_ridicat', { p_id: r.id, p_data: r.ridicat_propus }), 'Ridicări confirmate')
@@ -256,6 +286,7 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   const confirmaReconciliere = p => executa('reconciliere', async curent => {
     const gasit = p.stare === 'gasit'
     if (!gasit && p.stare !== 'lipsa') return 'Rândul e de verificat în selfAWB: nicio confirmare din ecran.'
+    if (!esteOwner) return 'Calea detaliată a reconcilierii e a owner-ului; operatorul confirmă „găsit” din „Verifică la curier”.'   // fn_red_fan_reconciliaza = clasa C
     if (!window.confirm(gasit ? `Confirmi pentru ${p.nr_plic} AWB-ul ${p.awb}, găsit în borderoul din ${propuneri.data}?`
       : `Confirmi că pentru ${p.nr_plic} NU există niciun AWB în borderoul COMPLET din ${propuneri.data}? Rândul devine „respins” și plicul se poate propune din nou (un AWB nou costă).`)) return 'Nimic confirmat.'
     if (!curent()) return OPRIT
@@ -273,13 +304,15 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
     const { data, error } = await supabase.rpc('fn_red_fan_setari_seteaza', { p_limita: n }); if (error) throw error
     return `Plafonul lotului pilot: ${data}.`
   })
+  // F1: ștergerea la curier e în doi pași, cu motiv din listă (secțiunea „Trimite la curier”); calea veche din „Pași detaliați” cere motivul „date greșite”
   const stergeAwb = r => executa('anulare', async curent => {
-    if (!window.confirm(`Ștergi la FAN AWB-ul ${r.awb} al plicului ${r.nr_plic}? Doar înainte de ridicarea de către curier.`)) return 'Nimic șters.'
+    if (!window.confirm(`Ștergi la FAN AWB-ul ${r.awb} al plicului ${r.nr_plic} (motiv: date greșite)? Doar înainte de ridicarea de către curier; „anulat” se scrie după răspunsul curierului.`)) return 'Nimic șters.'
     if (!curent()) return OPRIT
-    const { corp, mesaj } = await edge('sterge_awb', { rand_id: r.id })
-    return corp?.cod === 'ok' ? `AWB șters și anulat: ${corp.anulat}.` : mesaj
+    const { corp, mesaj } = await edge('sterge_awb', { rand_id: r.id, motiv_cod: 'date_gresite', nota: null })
+    return corp?.cod === 'ok' ? `AWB șters la curier și anulat: ${corp.anulat}.` : mesaj
   })
   const marcheazaAnulat = r => executa('anulare', async curent => {
+    if (!esteOwner) return 'Doar owner-ul marchează anulat după verificarea în selfAWB.'
     const motiv = window.prompt(`Motivul anulării AWB-ului ${r.awb} (${r.nr_plic}), după verificarea în selfAWB că a fost șters:`, 'șters în selfAWB, verificat')
     if (!motiv || !motiv.trim()) return 'Nimic schimbat.'
     if (!curent()) return OPRIT
@@ -322,8 +355,24 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
     {TRANSPORT_REAL_ACTIV && !permis.ok && <p role="status" style={{ margin: '0 0 8px', padding: 8, borderRadius: 6, background: G.yellowDim, color: G.yellow }}>
       Activare de TEST (Testul 1): {permis.motiv}. Pe acest lot funcția FAN nu face niciun apel și nu se plătește nimic.</p>}
     {TRANSPORT_REAL_ACTIV && permis.ok && <p role="status" style={{ margin: '0 0 8px', padding: 8, borderRadius: 6, background: G.redDim, color: G.red, fontWeight: 700 }}>
-      TRANSPORT REAL PORNIT pe acest lot de TEST: „Generează AWB” trimite expedieri către curier (pe contul configurat în secretele funcției) și fiecare AWB poate costa. Urmează pașii din procedura Testului 1.</p>}
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+      TRANSPORT REAL PORNIT pe acest lot de TEST: „Trimite la curier” / „Generează AWB” trimit expedieri către curier (pe contul configurat în secretele funcției) și fiecare AWB poate costa. Urmează pașii din procedura Testului 1.</p>}
+    {/* F1 (spec §1, §13): ecranul operatorului — butonul unic, plafonul zilei, registrul intenției, „Verifică la curier”, retragerea, anularea în doi pași */}
+    <TrimiteLaCurier proiect={proiect} lot={lot} fanLot={fan?.fanLot} pregatite={randuri || []} awb={awb} esteOwner={esteOwner} esteOperator={f1.esteOperator} evidentaInstalata={!!fan?.instalata}
+      plafon={f1.plafon} intentii={f1.intentii} cereri={f1.cereri} lucru={lucru} ruleaza={ruleaza} edge={edge} rpc={(n, a) => supabase.rpc(n, a)} controlDocx={controlDupaTrimitere} OPRIT={OPRIT} />
+    {fan?.instalata && manifest.tiparite.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8, alignItems: 'center' }}>
+      <span style={{ fontSize: 12.5 }}>Foile AWB ale lotului (tirajul curent):</span>
+      {parti.map((b, i) => <Pas key={i} cheie="etichete" onClick={() => etichete(i + 1)}>Descarcă AWB-urile{parti.length > 1 ? ` — partea ${i + 1} din ${parti.length}` : ''}</Pas>)}
+    </div>}
+    <CereriAprobare cereri={f1.cereri} esteOwner={esteOwner} lucru={lucru} ruleaza={ruleaza} rpc={(n, a) => supabase.rpc(n, a)} OPRIT={OPRIT} />
+    {esteOwner && <details style={{ marginBottom: 8 }}>
+      <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Owner: operatori curier, plafonul zilei, lista anulărilor</summary>
+      <OperatoriCurier client={supabase} lucru={lucru} ruleaza={ruleaza} activ={!!fan?.instalata} OPRIT={OPRIT} reload={reload} />
+      <SetariZi plafon={f1.plafon} lucru={lucru} ruleaza={ruleaza} rpc={(n, a) => supabase.rpc(n, a)} activ={!!fan?.instalata} OPRIT={OPRIT} />
+      <ListaAnulari client={supabase} activ={!!fan?.instalata} reload={reload} />
+    </details>}
+    <details style={{ marginBottom: 8 }} open={esteOwner && !fan?.instalata}>
+    <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Pași detaliați (owner): propune → aprobă → generează → etichete → urmărire → confirmări, reconciliere, plafonul lotului, tiraj nou</summary>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8, marginTop: 6 }}>
       {[...pasi, ...operatii].map(p => <div key={p.cheie} style={{ ...S.card, padding: 8, minWidth: 150, opacity: p.activ ? 1 : 0.6 }}>
         <b style={{ fontSize: 12.5 }}>{p.titlu}</b><div style={{ fontSize: 11.5, color: G.muted }}>{p.ajutor}</div>
         {!p.activ && <div style={{ fontSize: 11.5, color: G.yellow }}>{p.motiv === MESAJ_TRANSPORT_OPRIT ? 'transport oprit' : p.motiv}</div>}
@@ -378,6 +427,7 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
     <p style={{ fontSize: 12, color: G.muted, margin: '0 0 8px' }}>
       Comanda curierului (pasul 5) se face în selfAWB: o comandă pe zi pentru punctul de lucru, interval de cel puțin 2 ore.
       Înainte de predare, verifică pe fiecare plic, cu pagina de control: poziția și numărul de pe etichetă, prima pagină (opisul) și teancul de documente.</p>
+    </details>
     {eroare && <p role="alert" style={{ color: G.red }}>Nu am putut citi datele: {eroare}</p>}
     {mesaj && <p role="status" style={{ color: G.yellow, whiteSpace: 'pre-wrap' }}>{mesaj}</p>}
     {!randuri && !eroare && <p>Se citesc plicurile…</p>}

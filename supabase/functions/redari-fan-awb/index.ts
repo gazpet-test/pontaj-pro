@@ -1,15 +1,21 @@
 // redari-fan-awb — FAN Courier pentru plicurile Redări. ACTIVARE pentru Testul 1 (docs/redari/FAN_TEST1_PASI.md): TRANSPORT_REAL_ACTIV = true
-// cu garda DOAR_PROIECTE_TEST = true în handler → calea reală DOAR pe un lot al unui proiect „TEST-…”, marcat TEST de owner; restul 423.
+// cu garda DOAR_PROIECTE_TEST = true în handler → calea reală DOAR pe un lot al unui proiect „TEST-…”, marcat TEST; restul 423.
+// F1 (docs/redari/FAN_FLUX_OPERATOR_SPEC.md §7.3, §13 F1): butonul unic `trimite` + poarta „operator numit sau owner” (fn_red_fan_e_operator) pe
+// toate acțiunile în afara căii detaliate `genereaza` (owner).
 // Fișa a–e (docs/redari/FANCOURIER_INTEGRARE.md §4): (a) răspunsurile FAN = date (afișate / propuneri, nimic ireversibil automat);
-// (b) AWB-uri plătite doar după aprobarea owner-ului pe lot (fn_red_fan_aproba) și claim-ul atomic (fn_red_fan_claim_lot);
-// (c) JWT-ul omului, FĂRĂ service_role; secretele FAN_SELFAWB_USERNAME / FAN_SELFAWB_PASSWORD / FAN_CLIENT_ID (contul de TEST al
-// curierului la Testul 1) se citesc DOAR pe calea reală, după poarta owner, flag și garda „doar TEST”; (d) fn_sms_e_owner pe auth.uid(),
-// în handler; (e) aprobare pe hash, fiecare apăsat = decizie umană.
+// (b) AWB-uri plătite doar după aprobarea din comandă (sub plafonul zilei) sau a owner-ului, și claim-ul atomic;
+// (c) JWT-ul omului pentru TOATE citirile și pentru COMENZI (clasa A); al DOILEA client, service_role (cheia de service_role, Edge Secret
+// standard), e construit DOAR pentru RPC-urile clasei B (înscrierea rezultatelor externe: fn_red_fan_srv_*), DOAR după poarta omului, cu
+// p_actor = user.id din JWT-ul verificat; cu el nu se citește și nu se scrie nimic direct pe tabele (fără GRANT; RPC-urile sunt DEFINER cu EXECUTE
+// exclusiv service_role). Justificarea (CLAUDE.md pct. 7 (c)): singura alternativă ar fi EXECUTE authenticated pe înscriere, adică exact defectul
+// „operatorul poate fabrica fapte ale curierului” (spec §7.3). Secretele FAN se citesc DOAR pe calea reală, după poartă, flag, garda „doar TEST” și,
+// pe `trimite`, după RPC-ul comenzii; (d) fn_red_fan_e_operator / fn_sms_e_owner pe auth.uid(), în handler; (e) fiecare apăsat = decizie umană;
+// peste plafonul zilei totul așteaptă aprobarea owner-ului.
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { raspundeFan } from '../_shared/redariFanHandler.mjs';
+import { raspundeFan, transportPermis } from '../_shared/redariFanHandler.mjs';
 import { citesteToate } from '../_shared/redariFanTransport.mjs';
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
-const COL_FAN = 'id, plic_id, nr_plic, stare, hash_date, awb, versiune_urmarire';
+const COL_FAN = 'id, plic_id, nr_plic, stare, hash_date, awb, versiune_urmarire, intentie_cheie, motiv';
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   const raspuns = (body: unknown, status: number) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
@@ -20,17 +26,26 @@ Deno.serve(async (req: Request) => {
     const uc = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
       global: { headers: { Authorization: `Bearer ${jwt}` } }, auth: { persistSession: false, autoRefreshToken: false },
     });
+    // clasa B: clientul service_role, construit LENEȘ (doar dacă o acțiune ajunge la înscrierea unui rezultat extern, deci după poarta omului)
+    let sc: ReturnType<typeof createClient> | null = null;
+    const server = () => sc ??= createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false, autoRefreshToken: false } });
     let corp: unknown
     try { corp = await req.json() } catch { return raspuns({ cod: 'cerere_invalida' }, 400) }   // doar JSON-ul stricat = 400
     const r = await raspundeFan({ jwt, corp }, {
       getUser: () => uc.auth.getUser(jwt),
       owner: () => uc.rpc('fn_sms_e_owner'),
+      // F1: operator numit SAU owner — o singură definiție, în BD (fn_red_fan_e_operator pe auth.uid())
+      operator: () => uc.rpc('fn_red_fan_e_operator'),
       lot: (id: string) => uc.from('red_loturi_plicuire').select('id, proiect_id, nr_lot').eq('id', id).maybeSingle(),
       // garda „doar TEST” (după flag, ÎNAINTE de secrete): marcajul lotului, citit cu JWT-ul omului (RLS admin / editor Redări)
       fanLot: (id: string) => uc.from('red_fan_loturi').select('lot_id, test, prima_aprobare_la').eq('lot_id', id).maybeSingle(),
+      // `trimite`, pasul 4: garda COMPLETĂ (cereMarcaj: true) pe marcajul recitit după RPC-ul comenzii — aceeași funcție ca în handler (L19)
+      transportPermisDupaRpc: (x: { proiectCod: string | null, fanLot: unknown }) => transportPermis({ proiectCod: x.proiectCod, fanLot: x.fanLot, cereMarcaj: true }),
       // ── doar pe calea reală (după flag și garda „doar TEST”) ──
       secrete: () => ({ username: Deno.env.get('FAN_SELFAWB_USERNAME'), password: Deno.env.get('FAN_SELFAWB_PASSWORD'), clientId: Deno.env.get('FAN_CLIENT_ID') }),
       rpc: (nume: string, args: Record<string, unknown>) => uc.rpc(nume, args),
+      // clasa B (fn_red_fan_srv_*): DOAR cu service_role, DOAR după poarta omului; p_actor îl pune transportul din user.id (JWT verificat)
+      rpcServer: (nume: string, args: Record<string, unknown>) => server().rpc(nume, args),
       randuriLot: (lotId: string) => citesteToate(() => uc.from('red_fan_awb').select(COL_FAN).eq('lot_id', lotId), [lotId]),
       proiect: (id: string) => uc.from('red_proiecte').select('id, cod').eq('id', id).maybeSingle(),
       // manifestul etichetelor: TOATE plicurile lotului (și cele anulate: un AWB viu pe un plic anulat se semnalează, nu se tipărește)

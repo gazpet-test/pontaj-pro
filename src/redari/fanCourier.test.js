@@ -142,9 +142,10 @@ describe('interpreteazaRaspunsAwb / interpreteazaRaspunsLot (exemplul din docume
   it('același AWB pe două elemente → ambele necunoscut', () => {
     expect(interpreteazaRaspunsLot(200, { response: [{ awbNumber: '1000000001' }, { awbNumber: '1000000001' }] }, 2).map(x => x.stare)).toEqual(['necunoscut', 'necunoscut'])
   })
-  it('4xx cu număr AWB în răspuns → necunoscut (nu „eroare”, AWB-ul poate exista); 429 → eroare cu motivul', () => {
+  it('4xx cu număr AWB în răspuns → necunoscut (nu „eroare”, AWB-ul poate exista); 429 → necunoscut (F1, L05: pauza nu e un refuz al conținutului), 422 → eroare', () => {
     expect(interpreteazaRaspunsLot(422, { response: [{ awbNumber: '1000000001' }, { errors: ['x'] }] }, 2).map(x => x.stare)).toEqual(['necunoscut', 'necunoscut'])
-    expect(interpreteazaRaspunsLot(429, null, 2)[0]).toMatchObject({ stare: 'eroare', motiv: expect.stringMatching(/429/) })
+    expect(interpreteazaRaspunsLot(429, null, 2)[0]).toMatchObject({ stare: 'necunoscut', motiv: expect.stringMatching(/429/) })
+    expect(interpreteazaRaspunsLot(422, null, 2)[0]).toMatchObject({ stare: 'eroare', motiv: expect.stringMatching(/422/) })
   })
 })
 
@@ -315,6 +316,9 @@ function depsFake(fx, fan, o = {}) {
       : nume === 'fn_red_fan_tiraj' ? tiraj(args) : nume === 'fn_red_fan_tiraj_opreste' ? tiraj.opreste(args)
       : nume === 'fn_red_fan_urmarire' ? { data: { scrise: args.p_randuri.length, pastrate: 0, depasite: 0 } }
       : nume === 'fn_red_fan_confirmari' ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : { data: args.p_rezultate?.length ?? null } }),
+    // F1: clasa B (service_role) simulată după contractul migrării 20261228a; semantica SQL e probată pe PGlite
+    rpcServer: vi.fn(async (nume, args) => { jurnal.push({ nume, args }); return nume === 'fn_red_fan_srv_anuleaza' ? { data: args.p_rezultat }
+      : nume === 'fn_red_fan_srv_reconciliaza' ? { data: 'generat' } : { data: null } }),
     fetch: fan.fetch, pauza: vi.fn(async () => {}), subtle: webcrypto.subtle, ...o,
   } }
 }
@@ -490,28 +494,43 @@ describe('urmărire / confirmări / etichete / reconciliere (simulat)', () => {
     expect(jurnal).toHaveLength(0)
     expect((await executaActiuneFan({ corp: { actiune: 'reconciliaza', data: '17.11.2026' }, lot: LOT }, deps)).status).toBe(400)
   })
-  it('ștergere AWB: doar generat; 5xx → rămâne generat (necunoscut), fără scriere', async () => {
+  // F1 (spec §8.4.1): anularea în DOI pași — cererea (JWT, fn_red_fan_anulare_cere), DELETE /awb, înscrierea (service_role, fn_red_fan_srv_anuleaza)
+  const UID = 'f0000000-0000-4000-8000-000000000001'
+  it('ștergere AWB: doar generat, motiv din listă; 5xx → rămâne generat: cererea scrisă, înscrierea „ambiguu” (nimic anulat), fără fn_red_fan_anulat', async () => {
     const fx = await cuAwb(1)
     const fan = fanSimulat(() => raspunsJson(503, null))
     const { deps, jurnal } = depsFake(fx, fan)
-    expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: 'x' }, lot: LOT }, deps)).status).toBe(400)
-    expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: '00000000-0000-4000-8000-000000000000' }, lot: LOT }, deps)).status).toBe(404)
+    expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: 'x', motiv_cod: 'date_gresite' }, lot: LOT, uid: UID }, deps)).status).toBe(400)
+    expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: '00000000-0000-4000-8000-000000000000' }, lot: LOT, uid: UID }, deps)).status).toBe(400)   // fără motiv
+    expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: '00000000-0000-4000-8000-000000000000', motiv_cod: 'date_gresite' }, lot: LOT, uid: UID }, deps)).status).toBe(404)
     fx.randuri[0].id = '00000000-0000-4000-8000-000000000001'
-    expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: fx.randuri[0].id }, lot: LOT }, deps)).body.cod).toBe('stergere_neconfirmata')
-    expect(jurnal).toHaveLength(0)
+    expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: fx.randuri[0].id, motiv_cod: 'date_gresite' }, lot: LOT, uid: UID }, deps)).body.cod).toBe('stergere_neconfirmata')
+    expect(jurnal.map(j => j.nume)).toEqual(['fn_red_fan_anulare_cere', 'fn_red_fan_srv_anuleaza'])
+    expect(jurnal[1].args).toMatchObject({ p_actor: UID, p_rezultat: 'ambiguu', p_awb: fx.randuri[0].awb })
+    expect(jurnal.some(j => j.nume === 'fn_red_fan_anulat')).toBe(false)
   })
-  it('ștergere AWB (Jakarinos #1118 r1 P2): DOAR forma de succes recunoscută anulează; 200 cu eroare / gol / altă formă / 204 → AWB păstrat', async () => {
+  it('ștergere AWB (Jakarinos #1118 r1 P2): DOAR forma de succes recunoscută anulează (înscrierea „sters” prin clasa B); 200 cu eroare / gol / altă formă / 204 → AWB păstrat', async () => {
     expect(interpreteazaStergere(200, { status: 'success' })).toEqual({ rezultat: 'sters' })
     for (const [st, corp] of [[200, { status: 'error', message: 'AWB inexistent' }], [200, null], [200, { status: 'success', errors: ['x'] }], [200, []], [204, null], [201, { status: 'success' }], [0, null], [502, null]])
       expect(interpreteazaStergere(st, corp).rezultat).toBe('necunoscut')
     expect(interpreteazaStergere(404, { status: 'error' }).rezultat).toBe('refuzat')
     const fx = await cuAwb(1)
     fx.randuri[0].id = '00000000-0000-4000-8000-000000000001'
-    for (const [corp, codAsteptat, anulat] of [[{ status: 'error' }, 'stergere_neconfirmata', false], [{ ceva: 1 }, 'stergere_neconfirmata', false], [{ status: 'success' }, 'ok', true]]) {
+    for (const [corp, codAsteptat, rezultat] of [[{ status: 'error' }, 'stergere_neconfirmata', 'ambiguu'], [{ ceva: 1 }, 'stergere_neconfirmata', 'ambiguu'], [{ status: 'success' }, 'ok', 'sters']]) {
       const { deps, jurnal } = depsFake(fx, fanSimulat(() => raspunsJson(200, corp)))
-      expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: fx.randuri[0].id }, lot: LOT }, deps)).body.cod).toBe(codAsteptat)
-      expect(jurnal.some(j => j.nume === 'fn_red_fan_anulat')).toBe(anulat)
+      expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: fx.randuri[0].id, motiv_cod: 'neridicat_3_zile' }, lot: LOT, uid: UID }, deps)).body.cod).toBe(codAsteptat)
+      expect(jurnal.find(j => j.nume === 'fn_red_fan_srv_anuleaza')?.args.p_rezultat).toBe(rezultat)
+      expect(jurnal.some(j => j.nume === 'fn_red_fan_anulat')).toBe(false)
     }
+    // 4xx determinist (AWB deja preluat) → înscrierea „refuzat_ridicat” (cererea se golește în BD), 409
+    const { deps, jurnal } = depsFake(fx, fanSimulat(() => raspunsJson(409, { status: 'error' })))
+    expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: fx.randuri[0].id, motiv_cod: 'neridicat_3_zile' }, lot: LOT, uid: UID }, deps)).body.cod).toBe('stergere_refuzata')
+    expect(jurnal.find(j => j.nume === 'fn_red_fan_srv_anuleaza')?.args.p_rezultat).toBe('refuzat_ridicat')
+    // RD035 din BD (anulare deja cerută) → 409, fără DELETE
+    const d2 = depsFake(fx, fanSimulat(() => raspunsJson(200, { status: 'success' })))
+    d2.deps.rpc.mockImplementation(async () => ({ error: { code: 'RD035', message: 'anulare in curs' } }))
+    expect((await executaActiuneFan({ corp: { actiune: 'sterge_awb', rand_id: fx.randuri[0].id, motiv_cod: 'neridicat_3_zile' }, lot: LOT, uid: UID }, d2.deps)).body.cod).toBe('anulare_in_curs')
+    expect(d2.deps.rpcServer).not.toHaveBeenCalled()
   })
   it('reconcilierea prin funcția edge: mutantul recenzentului (AWB valid, referința în câmp necunoscut, apoi pagina goală) → „de verificat”, nu „lipsă”', async () => {
     const fx = await fixtura(1)
@@ -544,8 +563,10 @@ describe('urmărire / confirmări / etichete / reconciliere (simulat)', () => {
 describe('raspundeFan — poarta funcției edge (ACTIVARE Testul 1: TRANSPORT_REAL_ACTIV = true, DOAR_PROIECTE_TEST = true)', () => {
   const ID_LOT = '11111111-2222-4333-8444-555555555555'
   // implicit: lotul e al unui proiect de TEST și e marcat TEST (garda „doar TEST” trece); testele gărzii suprascriu proiect / fanLot
-  const deps = (o = {}) => ({ getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: vi.fn(async () => ({ data: { id: ID_LOT, proiect_id: 'p1' } })),
+  // F1: owner-ul e și operator (fn_red_fan_e_operator), deci deps() implicit = owner + operator; testele porților le separă
+  const deps = (o = {}) => ({ getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), operator: async () => ({ data: true }), lot: vi.fn(async () => ({ data: { id: ID_LOT, proiect_id: 'p1' } })),
     proiect: vi.fn(async () => ({ data: { id: 'p1', cod: 'TEST-RAZVAN' } })), fanLot: vi.fn(async () => ({ data: { lot_id: ID_LOT, test: true, prima_aprobare_la: null } })), ...o })
+  const FARA_TRIMITE = ACTIUNI_FAN.filter(a => a !== 'trimite')   // `trimite` are ordinea ei (fanOperator.test.js): garda pe proiect → RPC → marcajul → secretele
   it('ACTIVARE Testul 1: transportul real e pornit în cod DOAR pentru proiecte de TEST; comanda curierului nu e acțiune API (manuală în selfAWB)', () => {
     expect(TRANSPORT_REAL_ACTIV).toBe(true)
     expect(DOAR_PROIECTE_TEST).toBe(true)
@@ -571,13 +592,25 @@ describe('raspundeFan — poarta funcției edge (ACTIVARE Testul 1: TRANSPORT_RE
     expect((await raspundeFan({ jwt: 'x', corp: {} }, deps({ getUser: async () => ({ error: { status: 0 } }) }))).status).toBe(503)
     expect((await raspundeFan({ jwt: 'x', corp: {} }, deps({ getUser: async () => ({ data: { user: null } }) }))).status).toBe(401)
   })
-  it('POARTA DE ROL: non-owner → 403 pe ORICE acțiune; verificarea owner eșuată → 503 (nu „non_owner”)', async () => {
-    for (const actiune of ACTIUNI_FAN) expect((await raspundeFan({ jwt: 'x', corp: { actiune, lot_id: ID_LOT } }, deps({ owner: async () => ({ data: false }) }))).status).toBe(403)
+  it('POARTA DE ROL (F1): `genereaza` = doar owner (403 non_owner); restul = operator numit sau owner (403 non_operator pentru un editor nenumit); verificarea eșuată → 503', async () => {
+    const nimeni = { owner: async () => ({ data: false }), operator: async () => ({ data: false }) }
+    for (const actiune of ACTIUNI_FAN) {
+      const r = await raspundeFan({ jwt: 'x', corp: { actiune, lot_id: ID_LOT } }, deps(nimeni))
+      expect([actiune, r.status, r.body.cod]).toEqual([actiune, 403, actiune === 'genereaza' ? 'non_owner' : 'non_operator'])
+    }
+    // un operator numit care NU e owner: calea detaliată rămâne închisă, restul trece de poartă
+    const op = deps({ owner: async () => ({ data: false }), operator: async () => ({ data: true }), lot: async () => ({ data: null }) })
+    expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: ID_LOT } }, op)).body.cod).toBe('non_owner')
+    for (const actiune of FARA_TRIMITE.filter(a => a !== 'genereaza')) expect([actiune, (await raspundeFan({ jwt: 'x', corp: { actiune, lot_id: ID_LOT } }, op)).status]).toEqual([actiune, 404])   // a trecut poarta, lotul lipsește
     expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: ID_LOT } }, deps({ owner: async () => ({ error: {} }) }))).body.cod).toBe('autorizare_neconfirmata')
+    expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'trimite', lot_id: ID_LOT } }, deps({ operator: async () => ({ error: {} }) }))).body.cod).toBe('autorizare_neconfirmata')
+    // poarta e în BD (fn_red_fan_e_operator), nu în JS: handler-ul nu derivă operatorul din owner
+    expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'eticheta', lot_id: ID_LOT } }, deps({ owner: async () => ({ data: true }), operator: async () => ({ data: false }) }))).body.cod).toBe('non_operator')
   })
   it('rolul / identitatea din corp sunt ignorate', async () => {
     const r = await raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: ID_LOT, is_owner: true } }, deps({ owner: async () => ({ data: false }) }))
     expect(r.status).toBe(403)
+    expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'trimite', lot_id: ID_LOT, operator: true, p_actor: 'u' } }, deps({ operator: async () => ({ data: false }) }))).status).toBe(403)
   })
   it('acțiune / lot invalid → 400; lot invizibil → 404', async () => {
     expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'trimite', lot_id: ID_LOT } }, deps())).status).toBe(400)
@@ -588,13 +621,14 @@ describe('raspundeFan — poarta funcției edge (ACTIVARE Testul 1: TRANSPORT_RE
     const fetchGlobal = vi.spyOn(globalThis, 'fetch').mockImplementation(() => { throw new Error('APEL DE REȚEA INTERZIS') })
     const interzis = () => { throw new Error('APEL INTERZIS pe un proiect real') }
     const spioni = { fetch: vi.fn(interzis), rpc: vi.fn(interzis), secrete: vi.fn(interzis), randuriLot: vi.fn(interzis), datePlicuri: vi.fn(interzis), plicuriLot: vi.fn(interzis), pauza: vi.fn(interzis) }
-    // (a) proiect real, chiar cu lotul marcat TEST
+    // (a) proiect real, chiar cu lotul marcat TEST (și pe `trimite`: garda pe proiect e ÎNAINTEA RPC-ului comenzii)
     for (const actiune of ACTIUNI_FAN) {
-      const r = await raspundeFan({ jwt: 'x', corp: { actiune, lot_id: ID_LOT, parte: 1, data: '2026-11-18' } }, deps({ ...spioni, proiect: async () => ({ data: { id: 'p1', cod: 'LOT1-PRUNISOR-JUPA' } }) }))
-      expect(r).toMatchObject({ status: 423, body: { cod: 'transport_real_doar_test' } })
+      const r = await raspundeFan({ jwt: 'x', corp: { actiune, lot_id: ID_LOT, parte: 1, data: '2026-11-18', plic_ids: ['00000000-0000-4000-8000-000000000001'], intentie: '00000000-0000-4000-8000-000000000009' } },
+        deps({ ...spioni, proiect: async () => ({ data: { id: 'p1', cod: 'LOT1-PRUNISOR-JUPA' } }) }))
+      expect([actiune, r]).toEqual([actiune, expect.objectContaining({ status: 423, body: expect.objectContaining({ cod: 'transport_real_doar_test' }) })])
     }
-    // (b) proiect de TEST, dar lotul NEmarcat sau marcat REAL
-    for (const fl of [null, { lot_id: ID_LOT, test: false, prima_aprobare_la: null }]) for (const actiune of ACTIUNI_FAN) {
+    // (b) proiect de TEST, dar lotul NEmarcat sau marcat REAL (fără `trimite`: acolo marcajul îl decide BD-ul după RPC — fanOperator.test.js)
+    for (const fl of [null, { lot_id: ID_LOT, test: false, prima_aprobare_la: null }]) for (const actiune of FARA_TRIMITE) {
       const r = await raspundeFan({ jwt: 'x', corp: { actiune, lot_id: ID_LOT, parte: 1, data: '2026-11-18' } }, deps({ ...spioni, fanLot: async () => ({ data: fl }) }))
       expect(r).toMatchObject({ status: 423, body: { cod: 'transport_real_doar_test' } })
     }
@@ -609,17 +643,18 @@ describe('raspundeFan — poarta funcției edge (ACTIVARE Testul 1: TRANSPORT_RE
   it('garda „doar TEST” lasă să treacă DOAR proiectul de TEST cu lotul marcat TEST: calea reală începe (secretele se citesc; lipsă = 503 transport_neconfigurat, fără rețea)', async () => {
     const fetchGlobal = vi.spyOn(globalThis, 'fetch').mockImplementation(() => { throw new Error('APEL DE REȚEA INTERZIS') })
     const secrete = vi.fn(() => null), fetch = vi.fn(() => { throw new Error('APEL INTERZIS fără secrete') })
-    for (const actiune of ACTIUNI_FAN) {
+    for (const actiune of FARA_TRIMITE) {
       const r = await raspundeFan({ jwt: 'x', corp: { actiune, lot_id: ID_LOT, parte: 1, data: '2026-11-18' } }, deps({ secrete, fetch }))
       expect(r).toEqual({ status: 503, body: { cod: 'transport_neconfigurat' } })
     }
-    expect(secrete).toHaveBeenCalledTimes(ACTIUNI_FAN.length)
+    expect(secrete).toHaveBeenCalledTimes(FARA_TRIMITE.length)
     expect(fetch).not.toHaveBeenCalled(); expect(fetchGlobal).not.toHaveBeenCalled()
     fetchGlobal.mockRestore()
   })
-  it('garda „doar TEST” vine după poarta owner și după lot (un non-owner nu află nimic despre proiect / marcaj)', async () => {
+  it('garda „doar TEST” vine după poarta de rol și după lot (un non-operator nu află nimic despre proiect / marcaj)', async () => {
     const proiect = vi.fn(async () => ({ data: { cod: 'TEST-RAZVAN' } })), fanLot = vi.fn(async () => ({ data: { test: true } }))
-    expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'evenimente', lot_id: ID_LOT } }, deps({ owner: async () => ({ data: false }), proiect, fanLot }))).status).toBe(403)
+    expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'evenimente', lot_id: ID_LOT } }, deps({ operator: async () => ({ data: false }), proiect, fanLot }))).status).toBe(403)
+    expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: ID_LOT } }, deps({ owner: async () => ({ data: false }), proiect, fanLot }))).status).toBe(403)
     expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'evenimente', lot_id: ID_LOT } }, deps({ lot: async () => ({ data: null }), proiect, fanLot }))).status).toBe(404)
     expect(proiect).not.toHaveBeenCalled(); expect(fanLot).not.toHaveBeenCalled()
   })
@@ -627,10 +662,15 @@ describe('raspundeFan — poarta funcției edge (ACTIVARE Testul 1: TRANSPORT_RE
     const idx = readFileSync('supabase/functions/redari-fan-awb/index.ts', 'utf8')
     expect(idx).toMatch(/fanLot: \(id: string\) => uc\.from\('red_fan_loturi'\)\.select\('lot_id, test, prima_aprobare_la'\)\.eq\('lot_id', id\)\.maybeSingle\(\)/)
   })
-  it('funcția edge intră DOAR prin poartă: index.ts nu importă calea reală', () => {
-    const idx = readFileSync('supabase/functions/redari-fan-awb/index.ts', 'utf8')
-    expect(idx).not.toMatch(/executaActiuneFan/); expect(idx).toMatch(/import \{ raspundeFan \} from '\.\.\/_shared\/redariFanHandler\.mjs'/)
-    expect(idx).not.toMatch(/SERVICE_ROLE/)
+  it('funcția edge intră DOAR prin poartă: index.ts nu importă calea reală; clientul service_role e construit LENEȘ și folosit DOAR în rpcServer (clasa B)', () => {
+    const idx = readFileSync('supabase/functions/redari-fan-awb/index.ts', 'utf8').replace(/\r/g, '')
+    expect(idx).not.toMatch(/executaActiuneFan/); expect(idx).toMatch(/import \{ raspundeFan, transportPermis \} from '\.\.\/_shared\/redariFanHandler\.mjs'/)
+    // SUPABASE_SERVICE_ROLE_KEY apare EXACT o dată, în fabrica `server()`; `server()` e apelat EXACT o dată, în rpcServer; nicio citire (.from) nu-l folosește
+    expect(idx.split('SUPABASE_SERVICE_ROLE_KEY').length).toBe(2)
+    expect(idx).toMatch(/const server = \(\) => sc \?\?= createClient\(Deno\.env\.get\('SUPABASE_URL'\)!, Deno\.env\.get\('SUPABASE_SERVICE_ROLE_KEY'\)!/)
+    expect(idx.split('server()').length).toBe(2); expect(idx).toMatch(/rpcServer: \(nume: string, args: Record<string, unknown>\) => server\(\)\.rpc\(nume, args\)/)
+    expect(idx).not.toMatch(/server\(\)\.from|sc\.from|sc\?\.from/)
+    expect(idx).toMatch(/operator: \(\) => uc\.rpc\('fn_red_fan_e_operator'\)/)
   })
 })
 

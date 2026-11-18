@@ -1,0 +1,233 @@
+# 20261228a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase); baza = 20261212a aplicata
+coloana	coloana public.red_fan_awb.anulare_ceruta_de	creat
+coloana	coloana public.red_fan_awb.anulare_ceruta_la	creat
+coloana	coloana public.red_fan_awb.anulare_ceruta_motiv	creat
+coloana	coloana public.red_fan_awb.anulare_ceruta_nota	creat
+coloana	coloana public.red_fan_awb.anulare_nota	creat
+coloana	coloana public.red_fan_awb.anulat_de	creat
+coloana	coloana public.red_fan_awb.anulat_la	creat
+coloana	coloana public.red_fan_awb.aprobare_owner_la	creat
+coloana	coloana public.red_fan_awb.cerere_aprobare_id	creat
+coloana	coloana public.red_fan_awb.intentie_cheie	creat
+coloana	coloana public.red_fan_awb.motiv_anulare	creat
+coloana	coloana public.red_fan_awb.motiv_retragere	creat
+coloana	coloana public.red_fan_awb.retras_de	creat
+coloana	coloana public.red_fan_awb.retras_la	creat
+coloana	coloana public.red_fan_cereri_aprobare.cerut_de	creat
+coloana	coloana public.red_fan_cereri_aprobare.cerut_la	creat
+coloana	coloana public.red_fan_cereri_aprobare.decis_de	creat
+coloana	coloana public.red_fan_cereri_aprobare.decis_la	creat
+coloana	coloana public.red_fan_cereri_aprobare.id	creat
+coloana	coloana public.red_fan_cereri_aprobare.intentie	creat
+coloana	coloana public.red_fan_cereri_aprobare.lot_id	creat
+coloana	coloana public.red_fan_cereri_aprobare.motiv	creat
+coloana	coloana public.red_fan_cereri_aprobare.n	creat
+coloana	coloana public.red_fan_cereri_aprobare.proiect_id	creat
+coloana	coloana public.red_fan_cereri_aprobare.stare	creat
+coloana	coloana public.red_fan_cereri_aprobare.zi_ro	creat
+coloana	coloana public.red_fan_intentii.cheie	creat
+coloana	coloana public.red_fan_intentii.hash_cerere	creat
+coloana	coloana public.red_fan_intentii.inceput_la	creat
+coloana	coloana public.red_fan_intentii.incheiata_de	creat
+coloana	coloana public.red_fan_intentii.incheiata_la	creat
+coloana	coloana public.red_fan_intentii.lot_id	creat
+coloana	coloana public.red_fan_intentii.lucru_pana_la	creat
+coloana	coloana public.red_fan_intentii.operator	creat
+coloana	coloana public.red_fan_intentii.proiect_id	creat
+coloana	coloana public.red_fan_intentii.rezultat	creat
+coloana	coloana public.red_fan_intentii.stare	creat
+coloana	coloana public.red_fan_operatori.nota	creat
+coloana	coloana public.red_fan_operatori.numit_de	creat
+coloana	coloana public.red_fan_operatori.numit_la	creat
+coloana	coloana public.red_fan_operatori.profile_id	creat
+coloana	coloana public.red_fan_operatori.retras_de	creat
+coloana	coloana public.red_fan_operatori.retras_la	creat
+coloana	coloana public.red_fan_setari.doar_proiecte_test	creat
+coloana	coloana public.red_fan_setari.limita_zi	creat
+coloana	coloana public.red_fan_setari.presupunere_429	creat
+coloana	coloana public.red_fan_zi.aprobate	creat
+coloana	coloana public.red_fan_zi.zi_ro	creat
+coloana	coloana public.red_fan_zi_consum.awb_id	creat
+coloana	coloana public.red_fan_zi_consum.intentie	creat
+coloana	coloana public.red_fan_zi_consum.la	creat
+coloana	coloana public.red_fan_zi_consum.zi_ro	creat
+coloana	coloana public.v_red_fan_anulari.anulare_ceruta_de	creat
+coloana	coloana public.v_red_fan_anulari.anulare_ceruta_la	creat
+coloana	coloana public.v_red_fan_anulari.anulare_ceruta_motiv	creat
+coloana	coloana public.v_red_fan_anulari.anulare_ceruta_nota	creat
+coloana	coloana public.v_red_fan_anulari.anulare_nota	creat
+coloana	coloana public.v_red_fan_anulari.anulat_de	creat
+coloana	coloana public.v_red_fan_anulari.anulat_la	creat
+coloana	coloana public.v_red_fan_anulari.awb	creat
+coloana	coloana public.v_red_fan_anulari.foaie_tiparita	creat
+coloana	coloana public.v_red_fan_anulari.id	creat
+coloana	coloana public.v_red_fan_anulari.lot_id	creat
+coloana	coloana public.v_red_fan_anulari.motiv_anulare	creat
+coloana	coloana public.v_red_fan_anulari.nr_lot	creat
+coloana	coloana public.v_red_fan_anulari.nr_plic	creat
+coloana	coloana public.v_red_fan_anulari.proiect_id	creat
+coloana	coloana public.v_red_fan_anulari.stare	creat
+coloana	coloana public.v_red_fan_intentii.cheie	creat
+coloana	coloana public.v_red_fan_intentii.de_aprobat	creat
+coloana	coloana public.v_red_fan_intentii.generate	creat
+coloana	coloana public.v_red_fan_intentii.hash_cerere	creat
+coloana	coloana public.v_red_fan_intentii.inceput_la	creat
+coloana	coloana public.v_red_fan_intentii.incheiata_de	creat
+coloana	coloana public.v_red_fan_intentii.incheiata_la	creat
+coloana	coloana public.v_red_fan_intentii.lot_id	creat
+coloana	coloana public.v_red_fan_intentii.lucru_pana_la	creat
+coloana	coloana public.v_red_fan_intentii.necunoscute	creat
+coloana	coloana public.v_red_fan_intentii.operator	creat
+coloana	coloana public.v_red_fan_intentii.proiect_id	creat
+coloana	coloana public.v_red_fan_intentii.ramase	creat
+coloana	coloana public.v_red_fan_intentii.rezultat	creat
+coloana	coloana public.v_red_fan_intentii.stare	creat
+coloana	coloana public.v_red_fan_plafon_azi.aprobate	creat
+coloana	coloana public.v_red_fan_plafon_azi.doar_proiecte_test	creat
+coloana	coloana public.v_red_fan_plafon_azi.incap	creat
+coloana	coloana public.v_red_fan_plafon_azi.limita_lot	creat
+coloana	coloana public.v_red_fan_plafon_azi.limita_zi	creat
+coloana	coloana public.v_red_fan_plafon_azi.presupunere_429	creat
+coloana	coloana public.v_red_fan_plafon_azi.zi_ro	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_anulare_cerere	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_anulare_ceruta_motiv_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_anulare_ceruta_nota_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_anulare_conf	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_anulare_nota_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_anulat	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_aprobare	schimbat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_de_aprobat	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_generat	schimbat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_motiv_anulare_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_motiv_retragere_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_retras	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_stare_check	schimbat
+constrangere	constrangere tabel public.red_fan_cereri_aprobare.red_fan_cereri_aprobare_decizie	creat
+constrangere	constrangere tabel public.red_fan_cereri_aprobare.red_fan_cereri_aprobare_lot_id_fkey	creat
+constrangere	constrangere tabel public.red_fan_cereri_aprobare.red_fan_cereri_aprobare_motiv_check	creat
+constrangere	constrangere tabel public.red_fan_cereri_aprobare.red_fan_cereri_aprobare_n_check	creat
+constrangere	constrangere tabel public.red_fan_cereri_aprobare.red_fan_cereri_aprobare_pkey	creat
+constrangere	constrangere tabel public.red_fan_cereri_aprobare.red_fan_cereri_aprobare_proiect_id_fkey	creat
+constrangere	constrangere tabel public.red_fan_cereri_aprobare.red_fan_cereri_aprobare_stare_check	creat
+constrangere	constrangere tabel public.red_fan_intentii.red_fan_intentii_hash_cerere_check	creat
+constrangere	constrangere tabel public.red_fan_intentii.red_fan_intentii_incheiata_de_check	creat
+constrangere	constrangere tabel public.red_fan_intentii.red_fan_intentii_incheiere	creat
+constrangere	constrangere tabel public.red_fan_intentii.red_fan_intentii_lot_id_fkey	creat
+constrangere	constrangere tabel public.red_fan_intentii.red_fan_intentii_pkey	creat
+constrangere	constrangere tabel public.red_fan_intentii.red_fan_intentii_proiect_id_fkey	creat
+constrangere	constrangere tabel public.red_fan_intentii.red_fan_intentii_stare_check	creat
+constrangere	constrangere tabel public.red_fan_operatori.red_fan_operatori_nota_check	creat
+constrangere	constrangere tabel public.red_fan_operatori.red_fan_operatori_pkey	creat
+constrangere	constrangere tabel public.red_fan_operatori.red_fan_operatori_retras	creat
+constrangere	constrangere tabel public.red_fan_setari.red_fan_setari_limita_zi_check	creat
+constrangere	constrangere tabel public.red_fan_zi.red_fan_zi_aprobate_check	creat
+constrangere	constrangere tabel public.red_fan_zi.red_fan_zi_pkey	creat
+constrangere	constrangere tabel public.red_fan_zi_consum.red_fan_zi_consum_awb_id_fkey	creat
+constrangere	constrangere tabel public.red_fan_zi_consum.red_fan_zi_consum_pkey	creat
+functie	functie public.fn_red_fan_anulare_cere(uuid,text,text,text)	creat
+functie	functie public.fn_red_fan_anulat(uuid,text,text)	schimbat
+functie	functie public.fn_red_fan_aproba(uuid,uuid[],text[])	schimbat
+functie	functie public.fn_red_fan_awb_garda()	creat
+functie	functie public.fn_red_fan_cerere_decide(uuid,boolean,text)	creat
+functie	functie public.fn_red_fan_cerere_retrage(uuid)	creat
+functie	functie public.fn_red_fan_claim_intern(uuid,uuid[],text[],text[],uuid,uuid,boolean)	creat
+functie	functie public.fn_red_fan_claim_lot(uuid,uuid[],text[],text[])	schimbat
+functie	functie public.fn_red_fan_comanda(uuid,uuid,jsonb,text)	creat
+functie	functie public.fn_red_fan_confirmari(uuid,jsonb)	schimbat
+functie	functie public.fn_red_fan_confirmari_intern(uuid,jsonb)	creat
+functie	functie public.fn_red_fan_e_operator()	creat
+functie	functie public.fn_red_fan_e_operator_profil(uuid)	creat
+functie	functie public.fn_red_fan_intentie_incheie_intern(uuid,text,jsonb)	creat
+functie	functie public.fn_red_fan_intentie_sumar(uuid)	creat
+functie	functie public.fn_red_fan_lot_incheiat(uuid)	creat
+functie	functie public.fn_red_fan_lot_marcheaza(uuid,boolean)	schimbat
+functie	functie public.fn_red_fan_lot_permis(uuid)	creat
+functie	functie public.fn_red_fan_lot_permis_valori(boolean,text,boolean)	creat
+functie	functie public.fn_red_fan_operator_seteaza(uuid,boolean,text)	creat
+functie	functie public.fn_red_fan_propune(uuid,text,numeric)	schimbat
+functie	functie public.fn_red_fan_reconciliaza(uuid,text,numeric,numeric,text)	schimbat
+functie	functie public.fn_red_fan_reconciliaza_intern(uuid,text,numeric,numeric,text,uuid,boolean)	creat
+functie	functie public.fn_red_fan_retrage(uuid,text)	creat
+functie	functie public.fn_red_fan_rezultate(uuid,jsonb)	schimbat
+functie	functie public.fn_red_fan_rezultate_intern(uuid,jsonb,integer,uuid,uuid)	creat
+functie	functie public.fn_red_fan_ridicat(uuid,date)	schimbat
+functie	functie public.fn_red_fan_setari_doar_test(boolean)	creat
+functie	functie public.fn_red_fan_setari_limita_zi(integer)	creat
+functie	functie public.fn_red_fan_setari_presupunere_429(boolean,text)	creat
+functie	functie public.fn_red_fan_srv_anuleaza(uuid,uuid,text,text)	creat
+functie	functie public.fn_red_fan_srv_claim(uuid,uuid,uuid,uuid[],text[],text[])	creat
+functie	functie public.fn_red_fan_srv_confirmari(uuid,uuid,uuid,jsonb)	creat
+functie	functie public.fn_red_fan_srv_intentie_incheie(uuid,uuid,jsonb)	creat
+functie	functie public.fn_red_fan_srv_poarta(uuid,boolean)	creat
+functie	functie public.fn_red_fan_srv_reconciliaza(uuid,uuid,text,numeric,numeric)	creat
+functie	functie public.fn_red_fan_srv_rezultate(uuid,uuid,uuid,jsonb,integer)	creat
+functie	functie public.fn_red_fan_srv_urmarire(uuid,uuid,uuid,jsonb)	creat
+functie	functie public.fn_red_fan_tiraj(uuid,text,text)	schimbat
+functie	functie public.fn_red_fan_urmarire(uuid,jsonb)	schimbat
+functie	functie public.fn_red_fan_urmarire_intern(uuid,jsonb)	creat
+functie	functie public.fn_red_fan_zi_garda()	creat
+politica	politica public.red_fan_cereri_aprobare.red_fan_cereri_aprobare_citire	creat
+politica	politica public.red_fan_intentii.red_fan_intentii_citire	creat
+politica	politica public.red_fan_operatori.red_fan_operatori_citire	creat
+politica	politica public.red_fan_zi.red_fan_zi_citire	creat
+politica	politica public.red_fan_zi_consum.red_fan_zi_consum_citire	creat
+regula	regula public.v_red_fan_anulari."_RETURN"	creat
+regula	regula public.v_red_fan_intentii."_RETURN"	creat
+regula	regula public.v_red_fan_plafon_azi."_RETURN"	creat
+relatie	relatie public.red_fan_awb_intentie_ix	creat
+relatie	relatie public.red_fan_awb_plic_viu_uq	schimbat
+relatie	relatie public.red_fan_cereri_aprobare	creat
+relatie	relatie public.red_fan_cereri_aprobare_lot_deschisa_uq	creat
+relatie	relatie public.red_fan_cereri_aprobare_lot_ix	creat
+relatie	relatie public.red_fan_cereri_aprobare_pkey	creat
+relatie	relatie public.red_fan_intentii	creat
+relatie	relatie public.red_fan_intentii_lot_in_curs_uq	creat
+relatie	relatie public.red_fan_intentii_lot_ix	creat
+relatie	relatie public.red_fan_intentii_pkey	creat
+relatie	relatie public.red_fan_operatori	creat
+relatie	relatie public.red_fan_operatori_pkey	creat
+relatie	relatie public.red_fan_zi	creat
+relatie	relatie public.red_fan_zi_consum	creat
+relatie	relatie public.red_fan_zi_consum_pkey	creat
+relatie	relatie public.red_fan_zi_pkey	creat
+relatie	relatie public.v_red_fan_anulari	creat
+relatie	relatie public.v_red_fan_intentii	creat
+relatie	relatie public.v_red_fan_plafon_azi	creat
+tip	tip public.red_fan_cereri_aprobare	creat
+tip	tip public.red_fan_cereri_aprobare[]	creat
+tip	tip public.red_fan_intentii	creat
+tip	tip public.red_fan_intentii[]	creat
+tip	tip public.red_fan_operatori	creat
+tip	tip public.red_fan_operatori[]	creat
+tip	tip public.red_fan_zi	creat
+tip	tip public.red_fan_zi[]	creat
+tip	tip public.red_fan_zi_consum	creat
+tip	tip public.red_fan_zi_consum[]	creat
+tip	tip public.v_red_fan_anulari	creat
+tip	tip public.v_red_fan_anulari[]	creat
+tip	tip public.v_red_fan_intentii	creat
+tip	tip public.v_red_fan_intentii[]	creat
+tip	tip public.v_red_fan_plafon_azi	creat
+tip	tip public.v_red_fan_plafon_azi[]	creat
+trigger	trigger public.red_fan_awb intern red_fan_zi_consum_awb_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_fan_awb intern red_fan_zi_consum_awb_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.red_fan_awb.trg_red_fan_awb_garda	creat
+trigger	trigger public.red_fan_cereri_aprobare intern red_fan_cereri_aprobare_lot_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_fan_cereri_aprobare intern red_fan_cereri_aprobare_lot_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_fan_cereri_aprobare intern red_fan_cereri_aprobare_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_fan_cereri_aprobare intern red_fan_cereri_aprobare_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_fan_intentii intern red_fan_intentii_lot_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_fan_intentii intern red_fan_intentii_lot_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_fan_intentii intern red_fan_intentii_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_fan_intentii intern red_fan_intentii_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_fan_zi.trg_red_fan_zi_garda	creat
+trigger	trigger public.red_fan_zi_consum intern red_fan_zi_consum_awb_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_fan_zi_consum intern red_fan_zi_consum_awb_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_loturi_plicuire intern red_fan_cereri_aprobare_lot_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_loturi_plicuire intern red_fan_cereri_aprobare_lot_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.red_loturi_plicuire intern red_fan_intentii_lot_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_loturi_plicuire intern red_fan_intentii_lot_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.red_proiecte intern red_fan_cereri_aprobare_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_proiecte intern red_fan_cereri_aprobare_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.red_proiecte intern red_fan_intentii_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_proiecte intern red_fan_intentii_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
