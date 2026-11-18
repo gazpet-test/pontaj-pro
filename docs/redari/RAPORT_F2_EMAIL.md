@@ -62,7 +62,7 @@ distincte pe octeți), tokenurile prin indexul unic (`= ANY(ferestre)`); crearea
 linkului), ÎNAINTEA lock-ului global; sub lock rămân căutarea tokenurilor ei (o dată) și, pe fiecare mesaj, o comparație liniară (mesajul cu linkul lui → „#” =
 forma comună; altfel detectorul complet). Plafon explicit pe lungimea brută: text > 19.000 / subiect > 400 = `text_prea_lung`. Măsurat în PGlite (300 ×
 19.000, 20.000 de tokenuri sintetice): înainte RPC 267 s / lock 267 s, după RPC ~2,8 s / lock ~1,3 s; proba de timp (pragurile PGlite 10 s / 6 s) prinde
-mutanții „costul r3” și „fără index”. Pe clonă: `supabase/tests/20261131i_redari_mail_link_cost.sql` (+ `_cost_concurenta.sh`, două sesiuni) — `MAIL_PROBA_PASI.md` §3.
+mutanții „costul r3”, „fără forma comună” și „fără index”. Pe clonă: `supabase/tests/20261131i_redari_mail_link_cost.sql` (+ `_cost_concurenta.sh`, două sesiuni) — `MAIL_PROBA_PASI.md` §3.
 
 # Runda 2 — PR #1000, 05.11.2026
 
