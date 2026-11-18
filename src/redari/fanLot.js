@@ -512,9 +512,10 @@ export function mesajTrimitere(corp) {
   } else if (generate > 0) {
     const tarif = sumaFan(corp.tarif_total)
     linii.push(`${generate} ${generate === 1 ? 'AWB generat' : 'AWB-uri generate'}${respinse.length ? `, ${respinse.length} ${respinse.length === 1 ? 'respins' : 'respinse'}` : ''}.${tarif != null ? ` Tarif: ${formatLei(tarif)} fără TVA.` : ' Tarif: necunoscut.'}`)
-    if (corp.tiraj?.id) linii.push(`Foile AWB au fost descărcate (tirajul ${corp.tiraj.id}${Number(corp.parti) > 1 ? `, ${corp.parti} fișiere` : ''}): pune fiecare AWB în buzunarul plicului, după pagina de control.`)
-    else if (corp.etichete_eroare === 'lot_neincheiat') linii.push(MESAJ_LOT_NEINCHEIAT)
+    // foile: „descărcate” DOAR cu PDF-urile în răspuns și fără eroare la etichete (tirajul poate fi început și când PDF-ul a picat după el — L18)
+    if (corp.etichete_eroare === 'lot_neincheiat') linii.push(MESAJ_LOT_NEINCHEIAT)
     else if (corp.etichete_eroare) linii.push('AWB-urile există; foile AWB nu s-au putut descărca acum: „Descarcă AWB-urile” mai târziu.')
+    else if (corp.tiraj?.id && Array.isArray(corp.pdf_parti) && corp.pdf_parti.length) linii.push(`Foile AWB au fost descărcate (tirajul ${corp.tiraj.id}${Number(corp.parti) > 1 ? `, ${corp.parti} fișiere` : ''}): pune fiecare AWB în buzunarul plicului, după pagina de control.`)
   } else if (corp.nimic_de_trimis || corp.mod === 'nimic') {
     linii.push('Nimic de trimis: plicurile alese au deja AWB sau sunt excluse (motivele mai jos).')
   } else if (respinse.length) {
