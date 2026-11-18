@@ -278,7 +278,7 @@ const VERIFICARI = {
     return JSON.stringify(dinEtichete) === JSON.stringify(dinArhiva) && JSON.stringify(dinArhiva.tabel.randuri) === JSON.stringify(asteptat)
       && dinArhiva.paragrafe[0].startsWith(`Tirajul ${id} (nr. 1 al lotului), început la 17.11.2026 18:05`) && dinArhiva.titlu.endsWith(`tirajul ${id}`)
       && !dinArhiva.paragrafe.some(p => p.startsWith('Data:'))
-      && M.lot.numeEtichete({ lot: LOT, fanLot: { test: true }, parte: 1, parti: 1, format: 'A6', tiraj }) === `TEST_PP-0001_tiraj-${id}_etichete_A6.pdf`
+      && M.lot.numeEtichete({ lot: LOT, fanLot: { test: true }, parte: 1, parti: 1, tiraj }) === `TEST_PP-0001_tiraj-${id}_etichete.pdf`
       && M.lot.numeControl({ lot: LOT, fanLot: { test: false }, tiraj }) === `PP-0001_tiraj-${id}_pagina_de_control.docx`
       && M.lot.numeControl({ lot: LOT, fanLot: { test: false }, tiraj, inArhiva: true }) === `0000_tiraj-${id}_pagina_de_control.docx`
       && M.lot.numeArhiva({ lot: LOT, fanLot: { test: false }, tiraj }) === `PP-0001_tiraj-${id}_documente_in_ordinea_plicurilor.zip`
@@ -368,13 +368,43 @@ const VERIFICARI = {
   // (plafon 3) cu istoricul primului lot prezent, încheierea (plafon 20) — în ordinea scrisă (coloana „Acțiune”). Pică dacă ordinea din COD se
   // schimbă (mutanții de mai jos) sau dacă documentul cere o stare imposibilă / sare o verificare a procedurii.
   async procedura(M, doc = PASI_ACUM) {
-    const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii }
+    const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii, starePropunere: M.lot.starePropunere, stareMarcajReal: M.lot.stareMarcajReal }
     const lume = lumeNoua()
     const a = parcurge(pasiDinDocument(doc, '## 5.', '## 9.'), fn, { lume, lot: 'PP-xxxx' })
     const b = parcurge(pasiDinDocument(doc, '## 9.', '## 10.'), fn, { lume, lot: 'PP-yyyy', plicuri: 3, respinse: [2] })
     parcurge(pasiDinDocument(doc, '## 10.', '## 11.'), fn, { lume, lot: 'PP-yyyy' })
+    // 18.11: după generarea singurului plic „Propune” e inactiv; „2b. Marchează real” nu e activ în niciun pas
+    const dupaGen = a.jurnal.find(j => j.actiune === 'genereaza').dupa
     return JSON.stringify(a.jurnal[0].inainte) === '["marcaj_test"]' && a.lot.randuri.length === 1 && a.lot.randuri[0].stare === 'generat'
       && JSON.stringify(b.jurnal[0].inainte) === '["marcaj_test"]' && b.lot.randuri.map(r => r.stare).join() === 'generat,eroare,generat' && lume.setari.limita === 20
+      && !dupaGen.includes('propune') && dupaGen.includes('etichete') && [...a.jurnal, ...b.jurnal].every(j => !j.inainte.includes('marcaj_real') && !j.dupa.includes('marcaj_real'))
+  },
+  // ── 18.11.2026, după primul AWB real (fiecare PICĂ pe 2f7fabc1: funcțiile noi lipsesc sau comportamentul e cel vechi) ──
+  async dupaTest1(M) {
+    const { lot, fan } = M
+    if (!lot.starePropunere || !lot.stareMarcajReal || !lot.textTarif || !lot.textTotalTarif || !lot.etichetaUrmarire) return false
+    // 3: nimic de propus când fiecare plic are rând FAN viu cu datele de acum; respinsul și hash-ul schimbat rămân de propus
+    const preg = [{ ok: true, plic: { id: 'p1' }, hash: 'h1' }, { ok: true, plic: { id: 'p2' }, hash: 'h2' }]
+    const p0 = lot.starePropunere({ pregatite: preg, randuri: [{ plic_id: 'p1', stare: 'generat', hash_date: 'h1' }, { plic_id: 'p2', stare: 'aprobat', hash_date: 'h2' }] })
+    const p1 = lot.starePropunere({ pregatite: preg, randuri: [{ plic_id: 'p1', stare: 'eroare', hash_date: 'h1' }, { plic_id: 'p2', stare: 'aprobat', hash_date: 'vechi' }] })
+    const p2 = lot.starePropunere({ pregatite: preg.slice(0, 1), randuri: [{ plic_id: 'p1', stare: 'generat', hash_date: 'vechi' }] })   // cu AWB: niciodată, nici cu date noi
+    const pas = lot.stariPasi({ transportActiv: true, evidentaInstalata: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'generat' }], gataDePropus: 0, motivPropunere: p0.motiv }).find(x => x.cheie === 'propune')
+    // 4: „real” oprit cât garda e pornită; cu garda oprită = marcajul obișnuit
+    const baza = { transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', fanLot: null, randuri: [] }
+    const real = lot.stareMarcajReal(baza), real2 = lot.stareMarcajReal({ ...baza, doarTest: false })
+    // 1: tariful (text numeric PostgREST → lei) și totalul (necunoscut ≠ 0)
+    const total = lot.totalTarifLot([{ stare: 'generat', tarif: '27.1600' }, { stare: 'generat', tarif: null }, { stare: 'eroare', tarif: 5 }])
+    // 5: codurile reale clasificate; nelimpede ca ultim eveniment = de verificat; tranzitul nu schimbă faptele; 2: fișierul fără A6, cererea cu format=A6
+    const ev = (...l) => ({ events: l.map(([id, h]) => ({ id, date: `2026-11-${h}` })) })
+    const u99 = fan.rezumatUrmarireFan(ev(['C0', '19 08:00:00'], ['S99', '20 10:00:00'])), uH = fan.rezumatUrmarireFan(ev(['C0', '19 08:00:00'], ['H17', '20 10:00:00']))
+    const comp = fan.comparaEvenimente(200, { data: ['C1', 'H0', 'S98', 'S99', 'S21', 'S12', 'S14'].map(id => ({ id, name: id })) })
+    return p0.dePropus.length === 0 && /nimic de propus/.test(p0.motiv) && p1.dePropus.map(x => x.plic.id).join() === 'p1,p2' && p2.dePropus.length === 0 && pas.activ === false && /nimic de propus/.test(pas.motiv)
+      && real.activ === false && real.motiv === lot.MESAJ_MARCAJ_REAL_OPRIT && real2.activ === true
+      && lot.textTarif('27.1600') === '27,16 lei' && lot.textTarif(null) === lot.MESAJ_TARIF_NECUNOSCUT && JSON.stringify(total) === '{"awb":2,"cuTarif":1,"necunoscute":1,"total":27.16}' && /INCOMPLET/.test(lot.textTotalTarif([{ stare: 'generat', tarif: '27.1600' }, { stare: 'generat', tarif: null }]))
+      && u99.urmarire_stare === 'de_verificat' && uH.urmarire_stare === 'ridicat' && comp.ok && comp.neclasificate.length === 0
+      && lot.etichetaUrmarire({ urmarire_stare: 'in_tranzit', ultim_eveniment: 'S98' }) !== 'în tranzit' && lot.etichetaUrmarire({ urmarire_stare: 'in_tranzit', ultim_eveniment: 'H2' }) === 'în tranzit'
+      && lot.numeEtichete({ lot: LOT, fanLot: null, parte: 1, parti: 1 }) === 'PP-0001_etichete.pdf' && /format=A6/.test(fan.caleEticheta({ clientId: 'C', awbs: ['3000000001'] }))
+      && lot.PASI_FAN.find(x => x.cheie === 'etichete').titlu === '4. Etichete'
   },
 }
 
@@ -460,6 +490,20 @@ const MUTANTI = [
   ['procedura', 'plafonul doar după un AWB generat', { fisier: 'fanLot.js', din: "    plafon: [[esteOwner, 'doar owner-ul']],", in: "    plafon: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['generat']) > 0, 'niciun AWB generat']]," }],
   ['procedura', 'aprobarea cere rânduri deja aprobate', { fisier: 'fanLot.js', din: "[numar(randuri, ['propus']) > 0, 'niciun plic propus']", in: "[numar(randuri, ['aprobat']) > 0, 'niciun plic propus']" }],
   ['procedura', 'propunerea doar după prima aprobare', { fisier: 'fanLot.js', din: "    propune: [[poateScrie, 'doar admin / editor'], ", in: "    propune: [[poateScrie, 'doar admin / editor'], [!!fanLot?.prima_aprobare_la, 'lotul nu e aprobat'], " }],
+  // 18.11.2026, după primul AWB real
+  ['procedura', '„Propune” rămâne activ după ce toate plicurile au AWB (forma 2f7fabc1)', { fisier: 'fanLot.js', din: "  const dePropus = ok.filter(p => { const f = vii.get(p.plic.id); return !f ||", in: '  const dePropus = ok.filter(p => { const f = vii.get(p.plic.id); return true ||' }],
+  ['dupaTest1', 'plicul cu AWB tratat ca re-propozabil', { fisier: 'fanLot.js', din: "return !f || (['propus', 'aprobat'].includes(f.stare) && f.hash_date !== p.hash) })", in: "return !f || f.hash_date !== p.hash })" }],
+  ['dupaTest1', 'rândul respins (eroare) nu mai e de propus', { fisier: 'fanLot.js', din: "const vii = new Map((randuri || []).filter(r => r && !['eroare', 'anulat'].includes(r.stare)).map(r => [r.plic_id, r]))", in: "const vii = new Map((randuri || []).filter(r => r && r.stare !== 'anulat').map(r => [r.plic_id, r]))" }],
+  ['dupaTest1', 'motivul propunerii ignorat de pas', { fisier: 'fanLot.js', din: "[gataDePropus > 0, motivPropunere || 'niciun plic cu toate datele cerute de FAN']", in: "[gataDePropus > 0, 'niciun plic cu toate datele cerute de FAN']" }],
+  ['procedura', '„Marchează real” activ în Testul 1 (forma 2f7fabc1)', { fisier: 'fanLot.js', din: '  return doarTest ? { activ: false, motiv: MESAJ_MARCAJ_REAL_OPRIT } : m', in: '  return m' }],
+  ['dupaTest1', '„Marchează real” oprit și cu garda oprită (Testul 2 n-ar mai putea marca real)', { fisier: 'fanLot.js', din: '  return doarTest ? { activ: false, motiv: MESAJ_MARCAJ_REAL_OPRIT } : m', in: '  return { activ: false, motiv: MESAJ_MARCAJ_REAL_OPRIT }' }],
+  ['dupaTest1', 'tarif gol = 0 lei (L18)', { fisier: 'redariFan.mjs', din: 'export const sumaFan = v => { const n = numar(v); return n == null || n < 0 ? null : n }', in: 'export const sumaFan = v => { const n = numar(v); return n == null || n < 0 ? 0 : n }' }],
+  ['dupaTest1', 'totalul numără și tarifele rândurilor fără AWB plătit', { fisier: 'fanLot.js', din: "const platite = (randuri || []).filter(r => r && ['generat', 'ridicat'].includes(r.stare))", in: "const platite = (randuri || []).filter(r => r && r.stare !== 'anulat')" }],
+  ['dupaTest1', 'codul nelimpede ca ultim eveniment NU mai e de verificat', { fisier: 'redariFan.mjs', din: "  if (ultim && ultim.cat === 'de_verificat') return rez('de_verificat'", in: "  if (false) return rez('de_verificat'" }],
+  ['dupaTest1', 'codurile nelimpezi puse la tranzit', { fisier: 'redariFan.mjs', din: "  de_verificat: Object.freeze(['S7', 'S8', 'S9', 'S14',", in: "  tranzit2: Object.freeze(['S7', 'S8', 'S9', 'S14'," }],
+  ['dupaTest1', 'numele fișierului afirmă din nou A6 (forma 2f7fabc1)', { fisier: 'fanLot.js', din: "${cuTiraj(tiraj)}_etichete${parti > 1", in: "${cuTiraj(tiraj)}_etichete_A6${parti > 1" }],
+  ['dupaTest1', 'eticheta cerută fără parametrul de format documentat', { fisier: 'redariFan.mjs', din: "  q.append('format', FORMAT_ETICHETA)", in: '' }],
+  ['dupaTest1', 'S98 afișat ca „în tranzit”', { fisier: 'fanLot.js', din: "  if (r.urmarire_stare === 'in_tranzit' && EVENIMENTE_FAN.inregistrat.includes(r.ultim_eveniment)) return", in: '  if (false) return' }],
 ]
 
 describe('mutanți FAN (JS)', () => {
@@ -510,11 +554,20 @@ describe('mutanți FAN (JS)', () => {
     try { rez = await VERIFICARI[v](M) } catch { rez = false }
     expect(rez).toBe(false)
   })
+  // 18.11.2026: verificările de după primul AWB real pe main-ul de atunci (2f7fabc1: PR #1130 îmbinat) TREBUIE să pice — constatările probei erau reale
+  const VECHI_TEST1 = '2f7fabc1ee94199dac7b5884cbbded569b6f7155'
+  const surseTest1 = surseDin(VECHI_TEST1)
+  it.skipIf(!surseTest1).each(['dupaTest1', 'procedura'])('pe 2f7fabc1 verificarea „%s” PICĂ (constatările Testului 1 erau reale)', async v => {
+    const M = await incarca(null, surseTest1)
+    let rez
+    try { rez = await VERIFICARI[v](M) } catch { rez = false }
+    expect(rez).toBe(false)
+  })
   // activare runda 2: procedura din documentul de la 9ceea228 (ordinea recenzentului: „Propune” înaintea marcajului) PICĂ pe codul real, cu motivul gărzii
   // (documentele vechi n-au coloana „Acțiune”: modul legacy recunoaște butoanele și verificările din text)
   it.skipIf(!PASI_VECHI)('documentul FAN_TEST1_PASI.md de la 9ceea228 NU e executabil din ecran (constatarea era reală)', async () => {
     const M = await incarca(null)
-    const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii }
+    const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii, starePropunere: M.lot.starePropunere, stareMarcajReal: M.lot.stareMarcajReal }
     expect(() => parcurge(pasiDinDocument(PASI_VECHI, '## 5.', '## 9.', { legacy: true }), fn)).toThrow(/pasul 1 \(propune\): „„1\. Propune 1 plicuri”” nu e activ în ecran \(transport doar pe loturi marcate TEST/)
     expect(await VERIFICARI.procedura(M)).toBe(true)
   })
@@ -522,7 +575,7 @@ describe('mutanți FAN (JS)', () => {
   // GLOBALĂ din §6 (zero aprobări / trimiteri, exact un lot marcat) nu mai poate trece după primul AWB, nici cu plafonul 3 (istoricul rămâne)
   it.skipIf(!PASI_R2)('documentul FAN_TEST1_PASI.md de la 9fb88b2f: primul plic trece, continuarea cu trei plicuri PICĂ pe istoricul primului lot (constatarea era reală)', async () => {
     const M = await incarca(null)
-    const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii }
+    const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii, starePropunere: M.lot.starePropunere, stareMarcajReal: M.lot.stareMarcajReal }
     const pasi = pasiDinDocument(PASI_R2, '## 5.', '## 9.', { legacy: true })
     expect(pasi.map(p => p.actiune?.text || null)).toEqual(['marcaj-test', 'evenimente', 'plafon=1', 'verifica-plafon', 'verifica-fara-aprobari', 'propune', 'aproba', 'genereaza',
       'verifica-selfawb', 'verifica-tarif', 'etichete', 'verifica-eticheta', 'verifica-control', 'tipareste', 'etichete'])

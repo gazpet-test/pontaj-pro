@@ -103,7 +103,8 @@ jurnal. Dacă răspunsul arată un cost: se oprește și decide proprietarul (re
 3. ✉️ Poștă → lotul → **„📦 AWB FAN”**: previzualizarea arată „1 din 1 plicuri au toate datele cerute de FAN” și „referința pe etichetă: PL-…”.
    Dacă lipsește ceva (telefon, județ, stradă) se completează pe contact, nu se forțează.
 4. **Doar pe forma ACTIVATĂ (după §2 pasul 1).** Dacă §3 se face înaintea îmbinării, pentru probele inerte (§2 pasul 0), pregătirea se oprește la pasul 3: pe forma inertă toate operațiile FAN din ecran sunt dezactivate („transport real oprit”), nu există banner-ul activării și nu se apasă nimic; pasul 4 se verifică după publicarea formei activate, înainte de §5. Banner-ul de sus: „Activare de TEST (Testul 1): transport doar pe loturi marcate TEST …” (lotul încă nemarcat). **În acest moment singurul
-   buton activ e „2a. Marchează TEST”**: „1. Propune”, „2c. Aprobă”, „Schimbă plafonul” și restul sunt dezactivate cu motivul gărzii. Lotul rămâne
+   buton activ e „2a. Marchează TEST”**: „1. Propune”, „2c. Aprobă”, „Schimbă plafonul” și restul sunt dezactivate cu motivul gărzii; „2b. Marchează real”
+   e dezactivat cât garda „doar TEST” e pornită (corecție după proba din 18.11.2026, când era activ alături de 2a). Lotul rămâne
    NEMARCAT până la §5 (nu se apasă nimic aici): el e **L_NEMARCAT** din probele de la §4.
 
 Ce pleacă la curier pentru acest plic (doc §2): numele deținătorului de test, telefonul și adresa firmei, numărul plicului (`content` /
@@ -201,11 +202,11 @@ Toate cu proprietarul de față; fiecare rând în jurnal, cu ora. Precondiții 
 
 | # | Cine | Acțiune | Ce apasă | Ce trebuie să vadă |
 |---|---|---|---|---|
-| 1 | admin / editor Redări (sau owner-ul) | `propune` | „1. Propune 1 plicuri” | „Propuse: 1; erori: 0.”; rândul FAN „propus”; „2c. Aprobă” devine activ (owner); „2a. / 2b.” încă active (nicio aprobare) |
-| 2 | owner | `aproba` | „2c. Aprobă” → confirmare („Aprobi 1 AWB-uri FAN … Fiecare AWB generat costă”) | „Aprobate: 1.”; „3. Generează AWB” devine activ; „2a. / 2b.” devin inactive (marcajul e fixat de prima aprobare); cu plafonul 1 un lot mai mare ar fi refuzat („peste plafonul lotului pilot (1)”) |
-| 3 | owner | `genereaza` | **„3. Generează AWB”** → confirmare („Se plătesc.”) — **primul apel real `POST /intern-awb`, o expediere** | mesaj: „Generate: 1; respinse: 0; necunoscute: 0; rămase: 0.” + eventual „Asociate pe poziție (de verificat în selfAWB): 1.” |
+| 1 | admin / editor Redări (sau owner-ul) | `propune` | „1. Propune 1 plicuri” | „Propuse: 1; erori: 0.”; rândul FAN „propus”; „2c. Aprobă” devine activ (owner); „2a.” încă activă (nicio aprobare); „1. Propune” devine inactiv („nimic de propus”: plicul e deja propus cu datele de acum); „2b. Marchează real” rămâne dezactivat cât garda „doar TEST” e pornită (18.11.2026) |
+| 2 | owner | `aproba` | „2c. Aprobă” → confirmare („Aprobi 1 AWB-uri FAN … Fiecare AWB generat costă”) | „Aprobate: 1.”; „3. Generează AWB” devine activ; „2a.” devine inactivă (marcajul e fixat de prima aprobare); cu plafonul 1 un lot mai mare ar fi refuzat („peste plafonul lotului pilot (1)”) |
+| 3 | owner | `genereaza` | **„3. Generează AWB”** → confirmare („Se plătesc.”) — **primul apel real `POST /intern-awb`, o expediere** | mesaj: „Generate: 1; respinse: 0; necunoscute: 0; rămase: 0.” + eventual „Asociate pe poziție (de verificat în selfAWB): 1.”; „1. Propune” rămâne inactiv („nimic de propus”: plicul are AWB) |
 | 4 | owner | `verifica-selfawb` | selfAWB (contul de TEST) → AWB-urile zilei | **un singur AWB nou**, cu numărul plicului (PL-…) la observații / conținut, destinatarul și adresa firmei, tariful. **Verdictul 4a** (asocierea, mai jos) se scrie acum în jurnal |
-| 5 | coordonator | `verifica-tarif` | ERP: rândul FAN al plicului | stare „AWB generat”, AWB-ul = cel din selfAWB, **tariful = cel din selfAWB ȘI = oferta FAN**. Tarif **gol sau diferit = OPRIRE** (§12): nu se continuă cu eticheta; se lămurește cu FAN / în selfAWB; continuarea cu tarif neconfirmat e o derogare pe care o decide explicit proprietarul (§0) |
+| 5 | coordonator | `verifica-tarif` | ERP: rândul FAN al plicului | stare „AWB generat”, AWB-ul = cel din selfAWB; tariful e afișat în ecran lângă AWB (lei, 2 zecimale, fără TVA; TVA-ul alături, dacă a venit) și în rândul „Tarif FAN pe lot” (totalul lotului; 18.11.2026); **tariful = cel din selfAWB ȘI = oferta FAN**. Tarif **gol sau diferit = OPRIRE** (gol = „tarif necunoscut”, evidențiat roșu în ecran; §12): nu se continuă cu eticheta; se lămurește cu FAN / în selfAWB; continuarea cu tarif neconfirmat e o derogare pe care o decide explicit proprietarul (§0) |
 
 **Ce se citește din răspuns și cum se confirmă asocierea (doc §8 deschisă 11, §10 pasul 4a):**
 - ERP-ul nu afișează și nu păstrează corpul brut al răspunsului FAN (regula „textele FAN nu intră în evidență”). Ce spune mesajul:
@@ -223,11 +224,11 @@ Toate cu proprietarul de față; fiecare rând în jurnal, cu ora. Precondiții 
 
 | # | Cine | Acțiune | Ce apasă | Ce trebuie să vadă |
 |---|---|---|---|---|
-| 1 | owner | `etichete` | „4. Etichete A6 (PDF)” | se descarcă `TEST_PP-xxxx_tiraj-<ID>_etichete_A6.pdf` (o etichetă) și `TEST_PP-xxxx_tiraj-<ID>_pagina_de_control.docx`; mesaj „Etichete A6, tirajul <ID>: 1 plicuri (pozițiile 1…1).”; caseta „Pagina de control”: „Tiraj: <ID> (nr. 1)” |
-| 2 | om | `verifica-eticheta` | PDF-ul | un PDF real (nu HTML), format A6, AWB-ul = cel din ERP; **numărul plicului (PL-…) e tipărit pe etichetă?** (doc §8 deschisă 12) → în jurnal da / nu. **NU = OPRIRE** (doc §11, Testul 1): nu se tipărește, nu se continuă cu lotul de 3; scrierea de mână pe plic NU e procedura — ar fi o derogare pe care o decide explicit proprietarul, în jurnal, înainte (§0) |
+| 1 | owner | `etichete` | „4. Etichete (PDF)” | se descarcă `TEST_PP-xxxx_tiraj-<ID>_etichete.pdf` (o etichetă) și `TEST_PP-xxxx_tiraj-<ID>_pagina_de_control.docx`; mesaj „Etichete PDF, tirajul <ID>: 1 plicuri (pozițiile 1…1). Formatul paginii (cerut: A6) se verifică pe PDF înainte de tipărire.”; caseta „Pagina de control”: „Tiraj: <ID> (nr. 1)” |
+| 2 | om | `verifica-eticheta` | PDF-ul | un PDF real (nu HTML); **formatul paginii se notează în jurnal** (ERP-ul cere curierului A6 — parametrul `format` din documentația lui —, dar la proba din 18.11.2026 PDF-ul a venit A4: întrebare deschisă pentru curier, doc §8 deschisă 17; pe A4 imprimanta termică nu e de folos, decizia de tipărire e a proprietarului); AWB-ul = cel din ERP; **numărul plicului (PL-…) e tipărit pe etichetă?** (doc §8 deschisă 12) → în jurnal da / nu. **NU = OPRIRE** (doc §11, Testul 1): nu se tipărește, nu se continuă cu lotul de 3; scrierea de mână pe plic NU e procedura — ar fi o derogare pe care o decide explicit proprietarul, în jurnal, înainte (§0) |
 | 3 | om | `verifica-control` | pagina de control | un rând: poziția 1 · PL-… · AWB · destinatar mascat · nr. documente; tirajul <ID> în titlu; orice nepotrivire cu eticheta = oprire |
 | 4 | om | `tipareste` | imprimanta termică | eticheta se tipărește lizibil (cod de bare întreg) |
-| 5 | owner | `etichete` | „4. Etichete A6 (PDF)” a doua oară | același fișier, același `<ID>` (tirajul nu se schimbă) |
+| 5 | owner | `etichete` | „4. Etichete (PDF)” a doua oară | același fișier, același `<ID>` (tirajul nu se schimbă) |
 
 ## 9. Pasul 4b: lotul de 3 plicuri — lot NOU, după verdictul 4a (plafonul 3, verificările lotului nou, apoi propune → aprobă → generează → etichete)
 
@@ -253,12 +254,12 @@ aprobat (probat în proba PGlite a migrării: lotul cu un plic aprobat + lotul d
 | 3 | coordonator | `verifica-plafon=3` | **recitirea din BD** (SQL B1, doar citire) | `limita_lot = 3`, `actualizat_de` = uuid-ul owner-ului, `actualizat_la` = acum; altceva = oprire |
 | 4 | coordonator | `verifica-lot-nou` | **verificările lotului NOU și istoricul primului lot** (SQL B2, B3, B4) | B2 (lotul nou): zero rânduri în `red_fan_awb`. B3 (istoricul, așteptat): DOAR lotul PP-xxxx, cu exact un rând `generat` (sau `anulat`, dacă §11 s-a făcut deja) cu AWB-ul din selfAWB și tariful, plus eventual rânduri `eroare` ale unei respingeri corectate (fiecare cunoscută din jurnal); NICIUN rând `in_curs` / `necunoscut` / `aprobat` / `propus` (ar însemna o cerere neîncheiată: §12, nu se continuă). B4: exact două rânduri în `red_fan_loturi` — PP-xxxx (`test = true`, `prima_aprobare_la NOT NULL`, `tiraj_nr ≥ 1`) și PP-yyyy (`test = true`, `prima_aprobare_la IS NULL`, `tiraj_nr = 0`). Altceva = oprire, se lămurește înainte |
 | 5 | admin / editor Redări (sau owner-ul) | `propune` | „1. Propune 3 plicuri” | „Propuse: 3; erori: 0.”; 3 rânduri „propus”; „2c. Aprobă” devine activ |
-| 6 | owner | `aproba` | „2c. Aprobă” → confirmare („Aprobi 3 AWB-uri FAN …”) | „Aprobate: 3.”; „3. Generează AWB” devine activ; „2a. / 2b.” devin inactive (marcajul e fixat) |
-| 7 | owner | `genereaza` | „3. Generează AWB” → confirmare („Se plătesc.”) — o solicitare cu 3 expedieri | mesaj „Generate: 2; respinse: 1; necunoscute: 0; rămase: 0.” (+ eventual „Asociate pe poziție (de verificat în selfAWB): 2.”); rândurile FAN: 1 și 3 „AWB generat”, 2 „respins de FAN” cu câmpul semnalat (localitatea), fără textul FAN. „necunoscute: 1”, „respinse: 0” sau respinsul pe alt plic decât 2 = §12 |
+| 6 | owner | `aproba` | „2c. Aprobă” → confirmare („Aprobi 3 AWB-uri FAN …”) | „Aprobate: 3.”; „3. Generează AWB” devine activ; „2a.” devine inactivă (marcajul e fixat); „2b. Marchează real” e dezactivat oricum în Testul 1 |
+| 7 | owner | `genereaza` | „3. Generează AWB” → confirmare („Se plătesc.”) — o solicitare cu 3 expedieri | mesaj „Generate: 2; respinse: 1; necunoscute: 0; rămase: 0.” (+ eventual „Asociate pe poziție (de verificat în selfAWB): 2.”); rândurile FAN: 1 și 3 „AWB generat”, 2 „respins de FAN” cu câmpul semnalat (localitatea), fără textul FAN; „1. Propune 1 plicuri” rămâne activ DOAR pentru plicul 2 (respins; se re-propune după corectare, nu acum). „necunoscute: 1”, „respinse: 0” sau respinsul pe alt plic decât 2 = §12 |
 | 8 | owner | `verifica-selfawb` | selfAWB (contul de TEST) → AWB-urile zilei | exact 2 AWB-uri noi, cu numărul plicului la observații (PL-…-0001, PL-…-0003). **Verificare obligatorie, înainte de orice tipărire**: fiecare AWB din ERP ↔ numărul plicului din observațiile lui, inclusiv că elementul respins e cel al plicului 2; „asociate pe poziție” > 0 = oprire până la această verificare. Rezultatul (confirmat / neconfirmat) în jurnal = pasul 4a din doc §10 |
-| 9 | coordonator | `verifica-tarif` | ERP: rândurile FAN ale plicurilor 1 și 3 | AWB-urile = cele din selfAWB; **tariful = cel din selfAWB ȘI = oferta FAN** pe fiecare; gol sau diferit = OPRIRE (§12) |
-| 10 | owner | `etichete` | „4. Etichete A6 (PDF)” | `TEST_PP-yyyy_tiraj-<ID>_etichete_A6.pdf` cu **2** etichete (PL-…-0001 pe poziția 1, PL-…-0003 pe poziția 2) + `TEST_PP-yyyy_tiraj-<ID>_pagina_de_control.docx` (titlul cu „tirajul <ID> (nr. 1)”, 2 rânduri + „rămase: PL-…-0002”); mesaj „Etichete A6, tirajul <ID>: 2 plicuri (pozițiile 1…2).”; caseta „Pagina de control”: 2 plicuri tipărite, rămase netipărite: PL-…-0002 |
-| 11 | om | `verifica-eticheta` | PDF-ul | 2 etichete A6, AWB-urile = cele din ERP, **numărul plicului tipărit pe fiecare**; NU = OPRIRE (§12) |
+| 9 | coordonator | `verifica-tarif` | ERP: rândurile FAN ale plicurilor 1 și 3 | AWB-urile = cele din selfAWB; tarifele afișate lângă AWB și totalul „Tarif FAN pe lot” (2 AWB-uri); **tariful = cel din selfAWB ȘI = oferta FAN** pe fiecare; gol („tarif necunoscut”) sau diferit = OPRIRE (§12) |
+| 10 | owner | `etichete` | „4. Etichete (PDF)” | `TEST_PP-yyyy_tiraj-<ID>_etichete.pdf` cu **2** etichete (PL-…-0001 pe poziția 1, PL-…-0003 pe poziția 2) + `TEST_PP-yyyy_tiraj-<ID>_pagina_de_control.docx` (titlul cu „tirajul <ID> (nr. 1)”, 2 rânduri + „rămase: PL-…-0002”); mesaj „Etichete PDF, tirajul <ID>: 2 plicuri (pozițiile 1…2). Formatul paginii (cerut: A6) se verifică pe PDF înainte de tipărire.”; caseta „Pagina de control”: 2 plicuri tipărite, rămase netipărite: PL-…-0002 |
+| 11 | om | `verifica-eticheta` | PDF-ul | 2 etichete, formatul paginii notat în jurnal (ca la §8 pasul 2), AWB-urile = cele din ERP, **numărul plicului tipărit pe fiecare**; NU = OPRIRE (§12) |
 | 12 | om | `verifica-control` | pagina de control + Loturi → „Documente lot (ZIP, în ordinea plicurilor)” | arhiva `TEST_PP-yyyy_tiraj-<ID>_documente_in_ordinea_plicurilor.zip` cu ACELAȘI `<ID>`: `TEST_0000_tiraj-<ID>_pagina_de_control.docx`, apoi fișierele plicurilor 1 și 3 (`TEST_0001_PL-…-0001_000_opis_T<ID>.docx`, `TEST_0001_…_001_C-…_T<ID>.docx`, `TEST_0002_PL-…-0003_000_opis_T<ID>.docx` …), **niciun fișier al plicului 2**; pagina de control IDENTICĂ cu cea de la pasul 10 (aceleași rânduri, același număr de documente); verificarea celor trei numere (doc §12) pe fiecare poziție; orice nepotrivire = oprire |
 | 13 | om | `tipareste` | imprimanta termică | 2 etichete lizibile (cod de bare întreg); plicul 2 rămâne deoparte (fără etichetă, fără documente în arhivă) |
 
@@ -284,8 +285,10 @@ tot lotul”, nimic descărcat) → owner: „Tiraj nou — 1. Oprește descărc
 
 - **Doar pe AWB-urile NEANULATE.** Un AWB anulat (§11) iese din urmărire și din confirmări: pe un lot fără niciun AWB neanulat butoanele „6. Urmărire” și „7. Confirmări / retururi” sunt dezactivate, iar pașii de mai jos se sar pentru el (în jurnal: „anulat la ora …”). Dacă primul AWB (PP-xxxx) a fost anulat înaintea lotului de 3 (§9 îl acceptă), §10 se aplică doar pe PP-yyyy. Numărătorile de mai jos sunt pentru cazul fără anulări; cu anulări, numărul = AWB-urile neanulate ale lotului.
 - „6. Urmărire” imediat după generare, pe fiecare lot: „Urmărire actualizată: 1 AWB-uri.” pe PP-xxxx, „Urmărire actualizată: 2 AWB-uri.” pe
-  PP-yyyy (3 dacă s-a făcut corectarea opțională din §9); starea de urmărire „fără evenimente” sau „în tranzit” (cod + dată în ora României). „de verificat de om” = formă de răspuns neașteptată →
-  jurnal (doc §8 deschisă 10), nu se continuă cu urmăriri în buclă.
+  PP-yyyy (3 dacă s-a făcut corectarea opțională din §9); starea de urmărire „fără evenimente”, „AWB înregistrat la curier (plic neridicat încă)” (codul S98,
+  starea de după generare) sau „în tranzit” (cod + dată în ora României). Lista reală de evenimente a curierului (37 de coduri în plus față de PDF) a fost
+  clasificată pe 18.11.2026 (doc §1): codurile cu sens nelimpede rămân „de verificat de om”. „de verificat de om” = cod nelimpede sau formă de răspuns
+  neașteptată → jurnal (doc §8 deschisă 10), nu se continuă cu urmăriri în buclă.
 - „7. Confirmări / retururi”, pe fiecare lot: „Confirmări verificate: 1 AWB-uri.” / „… 2 AWB-uri.” (3 cu corectarea); așteptat „nicio confirmare încă”. „răspuns de
   formă necunoscută” → jurnal (deschisa 7).
 - Comanda curierului: **manual în selfAWB** (o comandă pe zi, interval ≥ 2 h), DOAR cu decizia explicită a proprietarului (rândul (i) din §0).
@@ -389,7 +392,7 @@ rămâne păzit de marcajul owner-ului și de plafonul pilot), + registrul de au
 ## 14. Ce NU se poate verifica fără apelul real și riscul care rămâne la primul apel
 
 **Nu se poate verifica în prealabil** (toate cu pas de oprire mai sus): forma elementului din răspunsul `POST /intern-awb` (referința pe element —
-deschisa 11), dacă eticheta A6 tipărește numărul plicului (12), formele răspunsurilor la urmărire / confirmări / ștergere / borderou (7, 10, 15, 16),
+deschisa 11), dacă eticheta tipărește numărul plicului (12) și dacă vine în formatul cerut (17: pe 18.11.2026 a venit A4 la `format=A6`), formele răspunsurilor la urmărire / confirmări / ștergere / borderou (7, 10, 15, 16),
 dacă AWB-urile contului de TEST se facturează (3), limita de solicitări pe minut (2), potrivirea adresei firmei cu nomenclatorul FAN (validarea
 cu nomenclatorul nu e în cod: un refuz vine ca „respins de FAN” cu câmpurile semnalate), și că apelul din ecran trece de `verify_jwt = true`
 (precedent în repo: `sms-trimite`, `polita-citeste`; dacă nu trece, probele din §4 cu `curl` merg oricum, iar soluția e lista `NO_JWT`, PR separat).

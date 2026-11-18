@@ -20,7 +20,9 @@ export const LIMITE_FAN = Object.freeze({ name: 50, phone: 16, county: 50, local
 
 // Limitele pe SOLICITARE din documentația actuală (doc §1): 100 de expedieri la creare, 100 de AWB-uri la urmărire și la confirmări.
 export const MAX_PE_CERERE = 100
-// Eticheta: format FIX A6 (100×150 mm) pentru imprimanta termică — decizia proprietarului (doc §8, întrebarea 5 închisă).
+// Eticheta: formatul CERUT curierului = A6 (100×150 mm, imprimanta termică) — decizia proprietarului (doc §8, întrebarea 5 închisă); parametrul
+// `format` e cel din documentația FAN (doc §1). 18.11.2026 (Testul 1): PDF-ul întors cu `format=A6` a avut pagina A4 → numele butonului și al
+// fișierului NU mai afirmă A6 (doc §8, deschisă 17: întrebare pentru curier); formatul paginii se verifică pe PDF înainte de tipărire.
 export const FORMAT_ETICHETA = 'A6'
 // Lotul pilot: plafonul implicit de plicuri pe lot (setarea din BD, red_fan_setari.limita_lot, are ACEEAȘI valoare implicită — test de paritate).
 export const LIMITA_LOT_PILOT_IMPLICITA = 20
@@ -143,6 +145,9 @@ export function imparteInBucati(lista, max = MAX_PE_CERERE) {
 // ── interpretarea răspunsului POST /intern-awb ──
 // Jakarinos r1/r2 P2 (L18): tarif lipsă = necunoscut (null), nu 0; doar număr finit sau text zecimal.
 const numar = v => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && /^[0-9]+(\.[0-9]+)?$/.test(v.trim()) && Number.isFinite(Number(v.trim())) ? Number(v.trim()) : null)
+/** O sumă FAN (tarif / TVA) din răspunsul FAN sau din coloana numeric citită prin PostgREST (text „27.1600”): număr finit ≥ 0 sau null =
+ *  necunoscut (L18: necunoscut ≠ 0). O SINGURĂ definiție (L19) pentru funcția edge (scrierea) și ecran (afișarea tarifului). */
+export const sumaFan = v => { const n = numar(v); return n == null || n < 0 ? null : n }
 const areErori = erori => !!erori && (Array.isArray(erori) ? erori.length > 0 : typeof erori === 'object' ? Object.keys(erori).length > 0 : !!String(erori).trim())
 const textAwb = v => (v == null ? '' : String(v).trim())
 
@@ -241,19 +246,32 @@ export function interpreteazaStergere(status, corp) {
 export const interpreteazaRaspunsAwb = (status, corp) => interpreteazaRaspunsLot(status, corp, 1)[0]
 
 // ── evenimente de urmărire (GET /reports/awb-events) ──
-// Lista din PDF-ul 09.2025 (doc §1); înainte de activare se compară cu răspunsul actual al /reports/awb-events (acțiunea „evenimente”).
-// Doar PROPUNERI afișate omului: ridicarea, AR-ul și returul le confirmă omul.
+// Lista din PDF-ul 09.2025 (doc §1), completată pe 18.11.2026 cu lista REALĂ întoarsă de /reports/awb-events la Testul 1 (37 de coduri
+// neclasificate atunci; clasificarea DOAR după numele dat de curier și regulile de mai jos — doc §1). Doar PROPUNERI afișate omului:
+// ridicarea, AR-ul și returul le confirmă omul. Un cod al cărui sens pentru o convocare nu e limpede din nume stă în `de_verificat`
+// (ca ultim eveniment = „de verificat de om”, L18), nu se ghicește.
 export const EVENIMENTE_FAN = Object.freeze({
   ridicat: Object.freeze(['C0']),
   livrat: Object.freeze(['S2']),
-  avizat: Object.freeze(['S3', 'S11']),
+  // „Notified …” = avizat (destinatarul anunțat, plicul așteaptă): S21 fără persoană de contact, S22 fără banii de ramburs, S24 fără delegație / act
+  avizat: Object.freeze(['S3', 'S11', 'S21', 'S22', 'S24']),
   adresa: Object.freeze(['S4', 'S10', 'S19', 'S20', 'S25', 'S27', 'S28', 'S42']),
   mutat: Object.freeze(['S5']),
   refuz: Object.freeze(['S6']),
   retur: Object.freeze(['S16', 'S33', 'S43']),
   // S50 „confirmare refuzată”: plicul poate fi livrat, dar confirmarea nu s-a semnat → judecată umană (juridic), nu retur automat
   confirmare_refuzata: Object.freeze(['S50']),
-  neutru: Object.freeze(['S30']),   // nu răspunde la telefon: nu schimbă starea
+  // contact cu destinatarul, fără schimbarea stării: S30 nu răspunde la telefon; S12 „Contacted; further delivery” (contactat, livrare reluată)
+  neutru: Object.freeze(['S30', 'S12']),
+  // mișcarea plicului în rețeaua curierului (preluat pentru livrare, în tranzit, în depozit, sortat, livrare în curs, retrimis la livrare):
+  // nu schimbă faptele (ridicare, livrare, retur); ca ultim eveniment = „în tranzit”
+  tranzit: Object.freeze(['C1', 'H0', 'H1', 'H2', 'H3', 'H4', 'H10', 'H11', 'H12', 'H13', 'H15', 'H17', 'S1', 'S35']),
+  // S98 „Registered AWB”: AWB-ul e înregistrat la curier, plicul încă neridicat (starea de după generare); nu e tranzit și nu e ridicare
+  inregistrat: Object.freeze(['S98']),
+  // sens nelimpede din nume pentru o convocare → de verificat de om: S7 plata transportului respinsă, S9 redirecționat, S14 acces restricționat
+  // la adresă, S15 ramburs refuzat, S37 despăgubit, S38 AWB neexpediat, S46 / S47 „Shed …”, S49 activitate suspendată, S54 / S55 / S67 locker,
+  // S56 predat la punct de livrare, S64 fără acte vamale, S65 în așteptare, S69 livrare suspendată pentru adresă, S99 AWB șters din baza curierului
+  de_verificat: Object.freeze(['S7', 'S8', 'S9', 'S14', 'S15', 'S37', 'S38', 'S46', 'S47', 'S49', 'S54', 'S55', 'S56', 'S64', 'S65', 'S67', 'S69', 'S99']),
 })
 const CATEGORIE = new Map(Object.entries(EVENIMENTE_FAN).flatMap(([cat, coduri]) => coduri.map(c => [c, cat])))
 export const categorieEveniment = cod => CATEGORIE.get(cod) || null
@@ -288,7 +306,10 @@ export function dataEvenimentFan(v) {
  * urmarire_stare: 'fara_evenimente' | 'in_tranzit' | 'ridicat' | 'livrat' | 'retur' | 'de_verificat'.
  * - retur: un cod de retur (S16/S33/S43) sau returnAwbNumber, ori ULTIMUL eveniment e refuz / adresă greșită / mutat;
  *   retur_propus = motivul ultimului semnal (refuz → 'refuz', adresă → 'adresa_incompleta', mutat → 'mutat', avizat → 'avizat_neridicat'), null dacă nu e clar.
- * - de_verificat: evenimente cu formă necunoscută, ultimul eveniment cu cod necunoscut sau „confirmare refuzată” (L12: nimic nu dispare tacit).
+ * - de_verificat: evenimente cu formă necunoscută, ultimul eveniment cu cod necunoscut sau din categoria `de_verificat` (coduri FAN cu sens
+ *   nelimpede pentru o convocare, 18.11.2026), sau „confirmare refuzată” (L12: nimic nu dispare tacit).
+ * - tranzit / inregistrat / neutru nu schimbă faptele: ca ultim eveniment dau „în tranzit” (sau „ridicat” / „livrat” după faptele cunoscute);
+ *   ecranul deosebește „AWB înregistrat, neridicat” (S98) după ultimul eveniment (fanLot.js, etichetaUrmarire).
  */
 export function rezumatUrmarireFan(el) {
   const gol = { urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null }
@@ -318,6 +339,7 @@ export function rezumatUrmarireFan(el) {
   if (ultim && ['refuz', 'adresa', 'mutat'].includes(ultim.cat)) return rez('retur', { retur_propus: RETUR_DIN_CATEGORIE[ultim.cat] })
   if (ev.some(e => e.cat === 'confirmare_refuzata')) return rez('de_verificat', { motiv: 'confirmare refuzată (S50): judecată umană' })
   if (ultim && !ultim.cat) return rez('de_verificat', { motiv: `ultimul eveniment are un cod necunoscut (${ultim.cod})` })
+  if (ultim && ultim.cat === 'de_verificat') return rez('de_verificat', { motiv: `ultimul eveniment (${ultim.cod}) cere verificarea omului (sens nelimpede pentru o convocare)` })
   if (livrat) return rez('livrat')
   if (ridicat) return rez('ridicat')
   return ev.length ? rez('in_tranzit') : rez('fara_evenimente')

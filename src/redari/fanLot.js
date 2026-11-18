@@ -5,7 +5,7 @@
 // ACEEAȘI gardă (transportPermis) ca în funcția edge (L19); butonul de marcaj cere doar proiectul de TEST (lotul nu e încă marcat).
 import { TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST, transportPermis, esteProiectTest, MESAJ_TRANSPORT_OPRIT, MESAJ_DOAR_PROIECT_TEST, MESAJ_DOAR_LOT_TEST } from '../../supabase/functions/_shared/redariFanHandler.mjs'
 import { manifestTiparire, cheieTiraj, tirajDin, tirajNeschimbat, refuzTiraj, destinatarMascat, COD_TIRAJ_SCHIMBAT, COD_TIRAJ_OPRIT, MESAJ_TIRAJ_SCHIMBAT, MESAJ_TIRAJ_OPRIT,
-  ASTEPTARE_DUPA_OPRIRE_S, fapteContrazise, ALEGERI_SOLUTIONARE, COD_URMARIRE_SCHIMBATA } from '../../supabase/functions/_shared/redariFan.mjs'
+  ASTEPTARE_DUPA_OPRIRE_S, fapteContrazise, ALEGERI_SOLUTIONARE, COD_URMARIRE_SCHIMBATA, sumaFan, EVENIMENTE_FAN } from '../../supabase/functions/_shared/redariFan.mjs'
 import { planPachetPlicuire, continutPaginaControl } from './plicuri.js'
 export { TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST, transportPermis, esteProiectTest, MESAJ_TRANSPORT_OPRIT, MESAJ_DOAR_PROIECT_TEST, MESAJ_DOAR_LOT_TEST }
 
@@ -18,7 +18,8 @@ export const PASI_FAN = Object.freeze([
   { cheie: 'propune', titlu: '1. Propune', ajutor: 'admin / editor: salvează datele verificate ale fiecărui plic (hash), fără cost' },
   { cheie: 'aproba', titlu: '2. Aprobă', ajutor: 'doar owner-ul: lotul (test / real), plafonul pilot, numărul de AWB-uri' },
   { cheie: 'genereaza', titlu: '3. Generează AWB', ajutor: 'doar owner-ul: AWB-uri plătite, în solicitări de cel mult 100' },
-  { cheie: 'etichete', titlu: '4. Etichete A6', ajutor: 'un PDF pe lot, în ordinea numărului de plic, pentru imprimanta termică' },
+  // 18.11.2026: formatul A6 e CERUT curierului (parametrul din documentație), dar prima probă a venit A4 → titlul nu mai afirmă A6
+  { cheie: 'etichete', titlu: '4. Etichete', ajutor: 'un PDF pe lot, în ordinea numărului de plic; formatul paginii se verifică pe PDF (A6 cerut curierului; la prima probă a venit A4)' },
   { cheie: 'curier', titlu: '5. Comandă curier', ajutor: 'în selfAWB (manual): o comandă pe zi, interval de cel puțin 2 ore' },
   { cheie: 'urmarire', titlu: '6. Urmărire', ajutor: 'ridicarea (C0) și livrarea; ridicarea o confirmă omul' },
   { cheie: 'confirmari', titlu: '7. Confirmări / retururi', ajutor: 'confirmările FAN și retururile propuse; AR-ul și returul le înregistrează omul' },
@@ -26,12 +27,30 @@ export const PASI_FAN = Object.freeze([
 
 const numar = (randuri, stari) => (randuri || []).filter(r => stari.includes(r.stare)).length
 
+/**
+ * Ce e DE PROPUS pe lot (18.11.2026, după primul AWB real: „1. Propune” rămânea activ după ce toate plicurile aveau AWB): din plicurile
+ * pregătite (pregatestePlicuriFan: { ok, plic, hash }) intră DOAR cele fără rând FAN viu (un rând „eroare” / „anulat” nu e viu — plicul se poate
+ * propune din nou) sau cu rândul viu „propus” / „aprobat” pe ALT hash (datele s-au schimbat: re-propunere). Un plic „propus” / „aprobat” cu
+ * același hash NU se mai propune (RPC-ul ar readuce un rând aprobat la „propus”); un plic cu AWB (in_curs / generat / necunoscut / ridicat) nu se
+ * propune niciodată (RPC-ul refuză oricum: P0001, fără rând dublu). Întoarce { dePropus: [pregătite], motiv } — motiv = de ce nu e nimic de propus.
+ * O SINGURĂ definiție (L19): ecranul (butonul + lista trimisă) și simulatorul procedurii o folosesc identic.
+ */
+export function starePropunere({ pregatite = [], randuri = [] } = {}) {
+  const vii = new Map((randuri || []).filter(r => r && !['eroare', 'anulat'].includes(r.stare)).map(r => [r.plic_id, r]))
+  const ok = (pregatite || []).filter(p => p?.ok && p.plic?.id)
+  const dePropus = ok.filter(p => { const f = vii.get(p.plic.id); return !f || (['propus', 'aprobat'].includes(f.stare) && f.hash_date !== p.hash) })
+  const motiv = !ok.length ? 'niciun plic cu toate datele cerute de FAN'
+    : !dePropus.length ? 'nimic de propus: fiecare plic are deja rând FAN cu datele de acum (propus, aprobat sau cu AWB)' : ''
+  return { dePropus, motiv }
+}
+
 /** Pașii cu starea lor: { ...pas, activ, motiv }. transportActiv = flag-ul din cod; evidentaInstalata = tabelul red_fan_awb citibil;
- *  proiectCod = red_proiecte.cod al lotului (garda „doar TEST”: fără el, cu DOAR_PROIECTE_TEST, nimic nu e activ). */
-export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, poateScrie = false, fanLot = null, randuri = [], gataDePropus = 0, proiectCod = null } = {}) {
+ *  proiectCod = red_proiecte.cod al lotului (garda „doar TEST”: fără el, cu DOAR_PROIECTE_TEST, nimic nu e activ).
+ *  gataDePropus = numărul plicurilor DE PROPUS (starePropunere.dePropus.length), motivPropunere = motivul când e 0 (starePropunere.motiv). */
+export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, poateScrie = false, fanLot = null, randuri = [], gataDePropus = 0, motivPropunere = '', proiectCod = null } = {}) {
   const cuAwb = numar(randuri, ['generat', 'ridicat'])
   const conditii = {
-    propune: [[poateScrie, 'doar admin / editor'], [gataDePropus > 0, 'niciun plic cu toate datele cerute de FAN']],
+    propune: [[poateScrie, 'doar admin / editor'], [gataDePropus > 0, motivPropunere || 'niciun plic cu toate datele cerute de FAN']],
     aproba: [[esteOwner, 'doar owner-ul'], [!!fanLot, 'alege întâi: lot de TEST sau lot real'], [numar(randuri, ['propus']) > 0, 'niciun plic propus']],
     genereaza: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['aprobat']) > 0, 'niciun plic aprobat']],
     etichete: [[esteOwner, 'doar owner-ul'], [cuAwb > 0, 'niciun AWB generat']],
@@ -59,6 +78,15 @@ export function stareMarcaj({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaIns
   if (fanLot?.prima_aprobare_la) return { activ: false, motiv: 'lotul a fost aprobat o dată: marcajul TEST / real nu se mai schimbă' }
   if (numar(randuri, ['aprobat', 'in_curs', 'generat', 'necunoscut', 'ridicat']) > 0) return { activ: false, motiv: 'lotul are deja plicuri aprobate: marcajul nu se mai schimbă' }
   return { activ: true, motiv: '' }
+}
+/** „2b. Marchează real” (18.11.2026, Testul 1): cât garda „doar TEST” e pornită (DOAR_PROIECTE_TEST), un lot REAL nu poate face nimic (garda îl
+ *  refuză pe orice pas), deci marcajul „real” nu are rost și poate încurca procedura (FAN_TEST1_PASI.md §3 pasul 4: singurul activ e „2a”).
+ *  Aceleași condiții ca stareMarcaj, plus refuzul cât garda e pornită; cu DOAR_PROIECTE_TEST = false (Testul 2) = exact stareMarcaj (L20). */
+export const MESAJ_MARCAJ_REAL_OPRIT = 'cât transportul e permis doar pe loturi de TEST (Testul 1), un lot nu se marchează real'
+export function stareMarcajReal({ doarTest = DOAR_PROIECTE_TEST, ...rest } = {}) {
+  const m = stareMarcaj(rest)
+  if (!m.activ) return m
+  return doarTest ? { activ: false, motiv: MESAJ_MARCAJ_REAL_OPRIT } : m
 }
 
 // Operațiile din procedură care nu sunt pași ai fluxului (Jakarinos #1118 r1 P2: toate în ecran, dezactivate cât transportul e oprit).
@@ -89,9 +117,10 @@ export function stariOperatii({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaI
   })
 }
 
-/** Numele fișierului de etichete al unei părți (toate părțile au nume distincte, în ordinea pozițiilor). Runda 3: cu identificatorul tirajului. */
+/** Numele fișierului de etichete al unei părți (toate părțile au nume distincte, în ordinea pozițiilor). Runda 3: cu identificatorul tirajului.
+ *  18.11.2026: FĂRĂ formatul în nume — „_A6” afirma un format pe care PDF-ul primit nu l-a avut (A4); formatul se verifică pe fișier. */
 const cuTiraj = tiraj => (tiraj?.id ? `_tiraj-${tiraj.id}` : '')
-export const numeEtichete = ({ lot, fanLot, parte, parti, format, tiraj = null }) => `${prefixLot(fanLot)}${lot?.nr_lot || ''}${cuTiraj(tiraj)}_etichete_${format}${parti > 1 ? `_partea${String(parte).padStart(2, '0')}din${String(parti).padStart(2, '0')}` : ''}.pdf`
+export const numeEtichete = ({ lot, fanLot, parte, parti, tiraj = null }) => `${prefixLot(fanLot)}${lot?.nr_lot || ''}${cuTiraj(tiraj)}_etichete${parti > 1 ? `_partea${String(parte).padStart(2, '0')}din${String(parti).padStart(2, '0')}` : ''}.pdf`
 /** Pagina de control descărcată separat (cu prima parte a etichetelor) și cea din arhivă (prima, „0000_”): același conținut, același tiraj. */
 export const numeControl = ({ lot, fanLot, tiraj = null, inArhiva = false }) => inArhiva ? `${prefixLot(fanLot)}0000${cuTiraj(tiraj)}_pagina_de_control.docx`
   : `${prefixLot(fanLot)}${lot?.nr_lot || ''}${cuTiraj(tiraj)}_pagina_de_control.docx`
@@ -226,6 +255,38 @@ export const ETICHETE_URMARIRE = Object.freeze({
 export const ETICHETE_CONFIRMARE = Object.freeze({
   nesolicitata: '-', lipsa: 'nicio confirmare încă', primita_de_verificat: 'confirmare primită: de verificat de om', forma_necunoscuta: 'răspuns de formă necunoscută: de verificat',
 })
+/** Eticheta urmăririi unui rând, după stare ȘI ultimul eveniment: „în tranzit” cu ultimul eveniment S98 („Registered AWB”) = AWB înregistrat la
+ *  curier, plicul încă neridicat — nu e în drum (18.11.2026, clasificarea listei reale de evenimente). Restul: ETICHETE_URMARIRE. */
+export function etichetaUrmarire(r) {
+  if (!r?.urmarire_stare) return ''
+  if (r.urmarire_stare === 'in_tranzit' && EVENIMENTE_FAN.inregistrat.includes(r.ultim_eveniment)) return 'AWB înregistrat la curier (plic neridicat încă)'
+  return ETICHETE_URMARIRE[r.urmarire_stare] || r.urmarire_stare
+}
+
+// ── tariful (18.11.2026, după primul AWB real: tariful exista în rând, dar nu se vedea în ecran) ──
+// red_fan_awb.tarif vine prin PostgREST ca text numeric („27.1600”); parserul e cel al funcției edge (sumaFan, L19). Gol = NECUNOSCUT, nu 0
+// (L18): procedura (FAN_TEST1_PASI.md §7 pasul 5) cere oprire la tarif gol, de aceea ecranul îl evidențiază. Tariful FAN e fără TVA (răspunsul
+// are `tariff` și `vat` separate); TVA-ul se afișează lângă, când există.
+export const MESAJ_TARIF_NECUNOSCUT = 'tarif necunoscut'
+const LEI = new Intl.NumberFormat('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+export const formatLei = n => `${LEI.format(n)} lei`
+/** Textul tarifului unui rând: „27,16 lei” sau MESAJ_TARIF_NECUNOSCUT (null / gol / formă necunoscută). */
+export const textTarif = v => { const n = sumaFan(v); return n == null ? MESAJ_TARIF_NECUNOSCUT : formatLei(n) }
+/** Totalul tarifelor pe lot, DOAR pe rândurile cu AWB plătit (generat / ridicat): { awb, cuTarif, necunoscute, total } — total = null dacă
+ *  niciun rând nu are tarif; cu rânduri „necunoscute” totalul e INCOMPLET (necunoscut ≠ 0, L18) și textul o spune. */
+export function totalTarifLot(randuri) {
+  const platite = (randuri || []).filter(r => r && ['generat', 'ridicat'].includes(r.stare))
+  let total = 0, cuTarif = 0
+  for (const r of platite) { const n = sumaFan(r.tarif); if (n != null) { total += n; cuTarif++ } }
+  return { awb: platite.length, cuTarif, necunoscute: platite.length - cuTarif, total: cuTarif ? Math.round(total * 100) / 100 : null }
+}
+export function textTotalTarif(randuri) {
+  const t = totalTarifLot(randuri)
+  if (!t.awb) return 'niciun AWB generat'
+  if (!t.cuTarif) return `necunoscut: ${t.awb === 1 ? 'AWB-ul generat nu are tarif' : `niciunul din cele ${t.awb} AWB-uri nu are tarif`} (procedura cere oprire)`
+  const baza = `${formatLei(t.total)} pentru ${t.cuTarif} ${t.cuTarif === 1 ? 'AWB' : 'AWB-uri'}`
+  return t.necunoscute ? `${baza} · INCOMPLET: ${t.necunoscute} ${t.necunoscute === 1 ? 'AWB' : 'AWB-uri'} cu tarif necunoscut (procedura cere oprire)` : baza
+}
 
 /** Prefixul fișierelor unui lot de TEST (etichete, borderou, pachet de documente): un lot de test nu se confundă cu unul real. */
 export const prefixLot = fanLot => (fanLot?.test === true ? 'TEST_' : '')
@@ -235,9 +296,10 @@ export const titluLot = (lot, fanLot) => `${fanLot?.test === true ? 'LOT DE TEST
 export function csvBorderouFan({ lot, fanLot, randuri }) {
   const celula = v => { const s = String(v ?? ''); return `"${(/^[\s]*[=+@-]/.test(s) ? "'" : '') + s.replace(/"/g, '""')}"` }
   const cap = fanLot?.test === true ? [['LOT DE TEST: AWB-urile nu sunt expedieri ale convocărilor și nu intră în registru / PV / export']] : []
-  const linii = [...cap, [`Lot ${lot?.nr_lot || ''}`], ['Nr. plic', 'AWB', 'Stare', 'Urmărire', 'Ultimul eveniment', 'Retur propus', 'Confirmare'],
-    ...[...(randuri || [])].sort((a, b) => (a.nr_plic < b.nr_plic ? -1 : a.nr_plic > b.nr_plic ? 1 : 0)).map(r => [r.nr_plic, r.awb || '', ETICHETE_STARE_FAN[r.stare] || r.stare,
-      ETICHETE_URMARIRE[r.urmarire_stare] || r.urmarire_stare || '', r.ultim_eveniment || '', r.retur_propus || '', ETICHETE_CONFIRMARE[r.confirmare_stare] || r.confirmare_stare || ''])]
+  // 18.11.2026: tariful (lei, fără TVA; gol = „tarif necunoscut”) intră în borderou — compararea cu factura curierului (doc §11)
+  const linii = [...cap, [`Lot ${lot?.nr_lot || ''}`], ['Nr. plic', 'AWB', 'Tarif (lei, fără TVA)', 'Stare', 'Urmărire', 'Ultimul eveniment', 'Retur propus', 'Confirmare'],
+    ...[...(randuri || [])].sort((a, b) => (a.nr_plic < b.nr_plic ? -1 : a.nr_plic > b.nr_plic ? 1 : 0)).map(r => [r.nr_plic, r.awb || '', r.awb ? textTarif(r.tarif) : '', ETICHETE_STARE_FAN[r.stare] || r.stare,
+      etichetaUrmarire(r), r.ultim_eveniment || '', r.retur_propus || '', ETICHETE_CONFIRMARE[r.confirmare_stare] || r.confirmare_stare || ''])]
   return String.fromCharCode(0xFEFF) + linii.map(l => l.map(celula).join(';')).join('\r\n')
 }
 
