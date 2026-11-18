@@ -458,6 +458,11 @@ cu terminologia veche; anunțul de sine stătător lipsea din pachetul trimis Tr
   descrierea PR-ului #1137. Lista de corectat poartă motivul („arată ca o cotă”, „prea multe cifre: telefon / CNP?”, „prea lung”).
   (4) **Satul publicat** (runda 4): se verifică și ortografia declarată care se tipărește (cel mult 40 de caractere, fără punctuație
   repetată / spații duble), nu doar cheia normalizată.
+  (5) **Forme cadastrale numerice** (runda 5, după măsurarea pe LOT1: 49 din 2512 parcele refuzate): DOAR la nr. cadastral se acceptă
+  primul dublu / triplu („12''”, „12'''(34'')”), lista de 2–4 numere despărțite de „,” sau „+” fără spațiu („12,34”, „12',34/5”,
+  „12+34”) și parantezele cu 1–4 elemente, cu 1–2 litere lipite de cifre („12(A34,B56)”). Cota se caută pe fiecare număr din listă /
+  din paranteze și înaintea parantezei („12,1/2”, „1/2(34)” = cotă); plafonul de 8 cifre pe subcâmp și ferestrele de telefon / CNP
+  rămân pe toată valoarea. Formele cu cuvinte („ABC 1234”, „AB_1234”, „A-ABCD”) și „#a/b#” cu a ≤ b rămân refuzate (de decis).
 - **Unde**: 🏛️ UAT-uri → editare UAT → „Anunț de afișare (DOCX)”, pentru admin și editor (documentul nu are date personale și nu scrie
   nimic); UAT-ul, proiectul (cu starea informării de la server, `cuInformarePublicata`) și parcelele se recitesc din BD înainte de
   generare; aceleași lipsuri apar în 📬 Notificări la modelul „Afișarea la Primărie”.
