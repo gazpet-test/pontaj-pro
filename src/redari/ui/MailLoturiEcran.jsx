@@ -1,7 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { S } from './comune.jsx'
-import { citesteMail, rpcMail, hashLot, hashMesaj, TRANSPORT_REAL_ACTIV, inventarMail, MOTIVE_MAIL } from '../mailLoturi.js'
+import { citesteMail, rpcMail, hashLot, hashMesaj, inventarMail, MOTIVE_MAIL, transportPermis, DOAR_PROIECTE_TEST, EXPEDITOR } from '../mailLoturi.js'
+
+// F2b (18.11.2026): conectarea căsuței redari@ pentru trimitere (OAuth, doar owner), comutatorul de trimitere și „Trimite lotul” — DOAR pe
+// proiecte de TEST (codul începe cu „TEST-”, aceeași gardă ca în funcția edge: transportPermis). Pe proiectele reale butoanele rămân
+// dezactivate cu motivul. Fără atașament PDF în această felie (limită documentată în plan).
+const COL_SETARI = 'trimitere_oprita, extern_permis, doar_proiecte_test, trimitere_conectata_la, trimitere_casuta, pauza_pana, versiune'
+export const MESAJ_FARA_ATASAMENT = 'Fără atașament PDF în această etapă: e-mailul conține doar textul de mai jos. Poșta cu AR rămâne obligatorie.'
 
 export default function MailLoturiEcran({ proiect, uats, profile }) {
   const owner = profile?.is_owner === true
@@ -10,17 +16,24 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
   const [selectie, setSelectie] = useState([]), [subiect, setSubiect] = useState(''), [text, setText] = useState('')
   const [eroare, setEroare] = useState(''), [ocupat, setOcupat] = useState(false), [reload, setReload] = useState(0)
   const [confirm, setConfirm] = useState(false), [integru, setIntegru] = useState(false)
-  const [inventar, setInventar] = useState(null)
+  const [inventar, setInventar] = useState(null), [setari, setSetari] = useState(null), [rezultat, setRezultat] = useState('')
   const generatie = useRef(0), intentie = useRef(null), activ = useRef(true)
   const lot = loturi.find(l => l.id === lotId)
+  const garda = transportPermis({ proiectCod: proiect?.cod })
+  const conectata = !!setari?.trimitere_conectata_la
+  const pornita = setari?.trimitere_oprita === false
   useEffect(() => { activ.current = true; return () => { activ.current = false; generatie.current++ } }, [])
   useEffect(() => {
     const g = ++generatie.current, id = proiect.id
     const curent = () => activ.current && g === generatie.current && id === proiect.id
-    setMesaje([]); setDestinatari([]); setLoturi([]); setIntegru(false); setConfirm(false); setEroare(''); setInventar(null); setSelectie([])
+    setMesaje([]); setDestinatari([]); setLoturi([]); setIntegru(false); setConfirm(false); setEroare(''); setInventar(null); setSelectie([]); setSetari(null)
     if (!owner) return
     ;(async () => {
       try {
+        const st = await supabase.from('red_mail_setari').select(COL_SETARI).eq('id', 1).maybeSingle()
+        if (!curent()) return
+        if (st.error) throw new Error('Setările e-mail nu au putut fi citite.')
+        setSetari(st.data)
         const lista = await citesteMail(supabase, 'red_mail_loturi', { proiect_id: id, ...(uat ? { uat_id: uat } : {}) }, curent)
         if (!curent()) return
         setLoturi(lista)
@@ -51,15 +64,46 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
   }, [owner, proiect.id, uat, lotId, reload])
   const actiune = async fn => {
     const g = generatie.current
-    setOcupat(true); setEroare('')
+    setOcupat(true); setEroare(''); setRezultat('')
     try { await fn(() => activ.current && g === generatie.current) }
     catch (e) { if (activ.current && g === generatie.current) setEroare(e.message) }
     finally { if (activ.current && g === generatie.current) { setOcupat(false); setReload(n => n + 1) } }
   }
+  const edge = async (fn, corp) => {
+    const { data, error } = await supabase.functions.invoke(fn, { body: corp })
+    if (error) {
+      // corpul răspunsului de refuz (409 / 423 / 503) vine în context; codul e din listă închisă, fără conținut
+      let cod = null
+      try { cod = (await error.context?.json())?.cod ?? null } catch { /* fără corp */ }
+      throw new Error(cod ? `Refuzat: ${cod}. Recitește stările; nu crea un lot duplicat.` : 'Operația nu a fost confirmată. Recitește stările; nu crea un lot duplicat.')
+    }
+    return data
+  }
   if (!owner) return null
+  const motivTrimite = !garda.ok ? garda.motiv : !conectata ? 'căsuța nu e conectată pentru trimitere' : !pornita ? 'trimiterea e oprită (comutatorul de mai sus)'
+    : !lot || !['aprobat', 'in_trimitere'].includes(lot.stare) ? 'lotul trebuie să fie aprobat' : ''
   return <div style={S.card}>
     <h3>Loturi e-mail către proprietari</h3>
-    <p>Trimiterea reală este oprită în această livrare. E-mailul este suplimentar; poșta cu AR rămâne obligatorie.</p>
+    <p>{garda.ok
+      ? <b>Proiect de TEST: trimiterea reală din {EXPEDITOR} e permisă pe acest proiect{DOAR_PROIECTE_TEST ? ' (doar proiecte de TEST în această etapă)' : ''}.</b>
+      : <>Trimiterea reală este oprită pe acest proiect: {garda.motiv}.</>} E-mailul este suplimentar; poșta cu AR rămâne obligatorie.</p>
+    <div style={S.card} aria-label="Căsuța de trimitere">
+      <b>Căsuța {EXPEDITOR} pentru trimitere: {setari === null ? 'se citește…' : conectata ? `conectată (${setari.trimitere_casuta || EXPEDITOR}, ${new Date(setari.trimitere_conectata_la).toLocaleString('ro-RO')})` : 'neconectată'}</b>
+      {setari && <p>Trimiterea: {pornita ? 'PORNITĂ' : 'oprită'}{setari.pauza_pana && Date.parse(setari.pauza_pana) > Date.now() ? ` · pauză până la ${new Date(setari.pauza_pana).toLocaleTimeString('ro-RO')}` : ''} · destinatari externi: {setari.extern_permis ? 'permiși' : 'doar @gazpet.ro'}.</p>}
+      {!conectata && <button style={S.btnP} disabled={ocupat || !setari} onClick={() => actiune(async () => {
+        const d = await edge('redari-mail-oauth', { actiune: 'start', scop: 'trimitere' })
+        if (typeof d?.url !== 'string' || !d.url.startsWith('https://accounts.google.com/')) throw new Error('Adresa de autorizare nu a fost confirmată.')
+        window.location.href = d.url
+      })}>Conectează căsuța pentru trimitere (Google)</button>}
+      {conectata && <button style={S.btnS} disabled={ocupat} onClick={() => actiune(async () => {
+        if (!window.confirm('Revoci conectarea căsuței pentru trimitere? Trimiterea se oprește.')) return
+        await edge('redari-mail-oauth', { actiune: 'revoca' })
+      })}>Revocă conectarea</button>}
+      {setari && <button style={S.btnS} disabled={ocupat || (!pornita && !conectata)} onClick={() => actiune(async () => {
+        if (!pornita && !window.confirm('Pornești trimiterea e-mailurilor (doar proiecte de TEST, doar @gazpet.ro)?')) return
+        await rpcMail(supabase, 'fn_red_mail_f2_setari', { p_oprit: pornita, p_extern: false, p_versiune: setari.versiune })
+      })}>{pornita ? 'Oprește trimiterea' : 'Pornește trimiterea'}</button>}
+    </div>
     <select aria-label="UAT e-mail" style={S.select} value={uat} disabled={ocupat} onChange={e => { generatie.current++; setUat(e.target.value); setLotId(''); setSelectie([]); intentie.current = null }}>
       <option value="">Alege UAT</option>{uats.map(u => <option key={u.id} value={u.id}>{u.nume}</option>)}
     </select>
@@ -68,6 +112,7 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
     </select>
     <button style={S.btnS} disabled={ocupat} onClick={() => setReload(n => n + 1)}>Recitește</button>
     {eroare && <p role="alert">{eroare}</p>}
+    {rezultat && <p role="status">{rezultat}</p>}
     {!lotId && uat && <>
       <p>{selectie.length} destinatari selectați / maximum 300.</p>
       {inventar && <div aria-label="Inventar eligibilitate">
@@ -75,6 +120,7 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
         {Object.entries(MOTIVE_MAIL).map(([cod, eticheta]) => <p key={cod}>{eticheta}: {inventar.motive[cod]}</p>)}
         <p>Motivele se pot suprapune. Poșta cu AR rămâne obligatorie și nu exclude e-mailul suplimentar.</p>
       </div>}
+      <p>{MESAJ_FARA_ATASAMENT}</p>
       <input aria-label="Subiect e-mail" style={S.input} value={subiect} maxLength={400} onChange={e => { setSubiect(e.target.value); intentie.current = null }} placeholder="Subiectul validat de Juridic" disabled={ocupat} />
       <textarea aria-label="Text e-mail" style={{ ...S.input, width: '100%', minHeight: 150 }} value={text} maxLength={19000} onChange={e => { setText(e.target.value); intentie.current = null }} placeholder="Textul exact al convocării" disabled={ocupat} />
       {destinatari.map(d => <label key={d.id} style={{ display: 'block' }}>
@@ -89,18 +135,19 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
     </>}
     {lot && <>
       <p>UAT lot: {uats.find(u => u.id === lot.uat_id)?.nume || lot.uat_id}</p>
-      <p>Stare lot: {lot.stare} · {mesaje.length} destinatari · {mesaje.filter(m => m.stare === 'in_apel').length} trimiteri deja autorizate în curs.</p>
-      {mesaje.map(m => <div style={S.card} key={m.id}><b>{m.nr_document} · {m.catre || 'conținut golit'}</b> · {m.stare}<p>{m.subiect_final}</p><pre style={{ whiteSpace: 'pre-wrap' }}>{m.corp_text_final}</pre>{m.atasament_path && <p>Atașament: {m.atasament_nume}</p>}</div>)}
+      <p>Stare lot: {lot.stare} · {mesaje.length} destinatari · {mesaje.filter(m => m.stare === 'in_apel').length} trimiteri deja autorizate în curs · {mesaje.filter(m => m.stare === 'necunoscut').length} cu rezultat necunoscut (de reconciliat, nu se retrimit).</p>
+      {mesaje.map(m => <div style={S.card} key={m.id}><b>{m.nr_document} · {m.catre || 'conținut golit'}</b> · {m.stare}{m.eroare_cod ? ` (${m.eroare_cod})` : ''}<p>{m.subiect_final}</p><pre style={{ whiteSpace: 'pre-wrap' }}>{m.corp_text_final}</pre>{m.atasament_path && <p>Atașament: {m.atasament_nume}</p>}</div>)}
       {lot.stare === 'ciorna' && <>
         <label><input type="checkbox" checked={confirm} disabled={ocupat} onChange={e => setConfirm(e.target.checked)} />Aprob explicit acest lot, destinatarii și textele afișate.</label>
         <button style={S.btnP} disabled={ocupat || !confirm || !integru} onClick={() => actiune(async () => {
           await rpcMail(supabase, 'fn_red_mail_lot_aproba', { p_lot: lot.id, p_versiune: lot.versiune, p_lot_sha256: lot.lot_sha256 })
         })}>Aprobă acest lot</button>
       </>}
-      <button style={S.btnP} disabled={!TRANSPORT_REAL_ACTIV || ocupat || !['aprobat', 'in_trimitere'].includes(lot.stare)} onClick={() => actiune(async () => {
-        const { error } = await supabase.functions.invoke('redari-mail-trimite', { body: { lot_id: lot.id } })
-        if (error) throw new Error('Trimiterea nu a fost confirmată. Recitește stările; nu crea un lot duplicat.')
-      })}>Trimite lotul — oprit</button>
+      <button style={S.btnP} disabled={ocupat || !!motivTrimite} title={motivTrimite} onClick={() => actiune(async curent => {
+        if (!window.confirm(`Trimiți acum e-mailurile din coada acestui lot, din ${EXPEDITOR}? Fiecare apăsare trimite cel mult 20 de mesaje.`)) return
+        const d = await edge('redari-mail-trimite', { lot_id: lot.id })
+        if (curent()) setRezultat(`Rulat: trimise ${d?.trimise ?? 0}, eșuate sigur ${d?.esuate ?? 0}, necunoscute ${d?.necunoscute ?? 0}, rezervate ${d?.rezervate ?? 0}${d?.cod && d.cod !== 'rulat' ? ` · oprit: ${d.cod}` : ''}. Recitește lotul; un rezultat necunoscut NU se retrimite.`)
+      })}>{motivTrimite ? `Trimite lotul — ${motivTrimite}` : 'Trimite lotul (până la 20 de mesaje)'}</button>
       {lot.stare !== 'incheiat' && <button style={S.btnS} disabled={ocupat} onClick={() => actiune(async () => {
         await rpcMail(supabase, 'fn_red_mail_lot_inchide', { p_lot: lot.id, p_versiune: lot.versiune })
       })}>Încheie lotul și anulează mesajele neîncepute</button>}

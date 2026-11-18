@@ -1,8 +1,28 @@
 // F2: logică comună browser / edge. Intrările externe sunt numai date.
 export const EXPEDITOR = 'redari@gazpet.ro'
-// Decizia 05.11.2026: transportul real rămâne imposibil în această livrare.
-export const TRANSPORT_REAL_ACTIV = false
+// F2b (decizia proprietarului, 18.11.2026): transportul real PORNIT, DAR cu garda DOAR_PROIECTE_TEST = true — aceeași convenție ca FAN
+// (redariFanHandler.mjs) și SMS (20261130c): e-mailul pleacă DOAR pentru loturi ale proiectelor al căror cod începe cu „TEST-”. Funcția edge
+// verifică proiectul lotului (citit din bază, cu JWT-ul omului) ÎNAINTE de orice citire de secrete și de orice apel către Google; BD-ul
+// impune aceeași regulă în fn_red_mail_f2_poate (coloana red_mail_setari.doar_proiecte_test, 20261131h). Proiectele reale = PR separat,
+// după „da”-urile din plan (textul juridic, DKIM / DMARC, autorizarea Transgaz, extern_permis).
+export const TRANSPORT_REAL_ACTIV = true
+export const DOAR_PROIECTE_TEST = true
+export const PREFIX_PROIECT_TEST = 'TEST-'
 export const LIMITA_LOT = 300
+export const LIMITA_INVOCARE = 20   // mesaje pe o invocare a funcției edge (≈ 2 s între apeluri, fn_red_mail_apel_incepe); UI-ul reia
+export const MESAJ_TRANSPORT_OPRIT = 'transport oprit'
+export const MESAJ_DOAR_PROIECT_TEST = `transport doar pe proiecte de TEST (codul proiectului începe cu „${PREFIX_PROIECT_TEST}”)`
+/** Proiect de TEST = codul începe cu „TEST-” (exact, fără spații). Orice altceva (lipsă, null, „test-”) = proiect real. Paritate cu FAN (test). */
+export const esteProiectTest = cod => typeof cod === 'string' && cod.startsWith(PREFIX_PROIECT_TEST)
+/**
+ * O SINGURĂ definiție (L19) a gărzii de activare, folosită identic de funcția edge (înaintea secretelor) și de ecran (butonul „Trimite”):
+ * { ok, cod, motiv }. transportActiv / doarTest sunt parametri doar pentru teste; funcția edge le lasă pe cele din cod.
+ */
+export function transportPermis({ proiectCod = null, transportActiv = TRANSPORT_REAL_ACTIV, doarTest = DOAR_PROIECTE_TEST } = {}) {
+  if (!transportActiv) return { ok: false, cod: 'transport_real_oprit', motiv: MESAJ_TRANSPORT_OPRIT }
+  if (doarTest && !esteProiectTest(proiectCod)) return { ok: false, cod: 'transport_real_doar_test', motiv: MESAJ_DOAR_PROIECT_TEST }
+  return { ok: true, cod: null, motiv: '' }
+}
 export const STARI_LOT = ['ciorna', 'aprobat', 'in_trimitere', 'blocat_integritate', 'incheiat']
 export const STARI_MESAJ = ['in_coada', 'rezervat', 'in_apel', 'trimis', 'esuat_sigur', 'necunoscut', 'esuat_confirmat', 'anulat']
 export function emailValid(v) {
@@ -37,6 +57,8 @@ export const hashLot = mesaje => sha256(canonic([...mesaje].sort((a, b) => a.id 
 export function gardaTrimitere({ owner, setari, informare, lot, acum = Date.now() }) {
   if (owner !== true) return 'non_owner'
   if (!setari || setari.trimitere_oprita !== false) return 'trimitere_oprita'
+  // F2b: trimiterea cere căsuța conectată (refresh token-ul în Vault; starea pe red_mail_setari, scrisă doar de fn_red_mail_secret_seteaza)
+  if (!setari.trimitere_conectata_la) return 'casuta_neconectata'
   if (informare !== true) return 'informare_nepublicata'
   if (!lot || !['aprobat', 'in_trimitere'].includes(lot.stare) || !lot.aprobat_de) return 'lot_neaprobat'
   const aprobat = Date.parse(lot.aprobat_la)
@@ -81,7 +103,11 @@ export async function compuneMime(m, atasament = null, delimitator = crypto.rand
   if (m.atasament_path) parts.push(`Content-Type: application/pdf\r\nContent-Disposition: attachment; filename*=UTF-8''${encodeURIComponent(m.atasament_nume).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())}\r\nContent-Transfer-Encoding: base64\r\n\r\n${linii64(b64(atasament))}`)
   return head.join('\r\n') + '\r\n\r\n' + parts.map(p => `--${delimitator}\r\n${p}\r\n`).join('') + `--${delimitator}--\r\n`
 }
-/** Transport injectat numai pentru probe. Nu repetă send niciodată la rezultat ambiguu. */
+/**
+ * Un mesaj rezervat → MIME din snapshot → apel_incepe (CAS, commit înainte de apel) → UN singur send → rezultatul persistat (retry doar
+ * pe persistare, cu aceleași argumente). Transportul e injectat (deps.send); nu repetă send niciodată la rezultat ambiguu (L05).
+ * Garda TRANSPORT_REAL_ACTIV rămâne și aici (fără transport nu se atinge nici descărcarea, nici claim-ul).
+ */
 export async function proceseazaMesaj(m, deps) {
   if (!TRANSPORT_REAL_ACTIV) return { sarit: true, cod: 'transport_real_oprit' }
   if (m.stare !== 'rezervat') return { stare: m.stare, sarit: true }

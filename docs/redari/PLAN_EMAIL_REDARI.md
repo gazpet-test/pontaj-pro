@@ -100,6 +100,41 @@ Doar plan de design: fără cod de producție, fără scrieri în BD, fără sec
   2. formularea „o singură ședință” din decizia 2A, înlocuită de (g) cu conectări separate (din r19e: trei de producție + căsuța de test);
   3. probele din §8 (fixture-uri Gmail reale, validarea Juridic a metadatelor de audit — domeniul (k) închis pe 04.11, durata backup-urilor, durata maximă a worker-ului Supabase).
 
+**Deciziile lui Răzvan (18.11.2026) — felia F2b, TRIMITEREA (schimbă planul; implementate în PR-ul F2b, migrarea `20261131h`, neaplicată)**
+- **(w) Fără căsuță de test separată pentru TRIMITERE** (înlocuiește decizia implicită **(l)** DOAR pentru trimitere; pentru citire (F1) (l) rămâne cum e):
+  proba se face **direct din `redari@gazpet.ro`**, iar transportul real e permis **DOAR pentru loturile proiectelor cu codul care începe cu `TEST-`**
+  (aceeași convenție ca FAN — PR #1130, `redariFanHandler.mjs`, `DOAR_PROIECTE_TEST` — și ca SMS-urile Redări, 20261130c). Garda e **dublă**:
+  (1) în funcția edge `redari-mail-trimite` (`redariMailF2.mjs`: `TRANSPORT_REAL_ACTIV = true`, `DOAR_PROIECTE_TEST = true`), verificată pe proiectul
+  lotului citit din bază cu JWT-ul omului, **înaintea oricărei citiri de secrete și a oricărui apel către Google** (423 `transport_real_doar_test`);
+  (2) în bază, `fn_red_mail_f2_poate` (chemată sub lock de rezervare și de `apel_incepe`) refuză `doar_proiecte_test` cât `red_mail_setari.doar_proiecte_test`
+  e adevărat (coloană cu `CHECK IS TRUE`: se scoate doar prin migrare revizuită). Orice proiect real → refuz explicit. Poarta pentru proiectele reale
+  rămâne închisă până la „da”-urile cerute de plan: textul juridic (§2.7), DKIM / DMARC (§0.4), autorizarea Transgaz, `extern_permis` (rămâne fals și prin
+  `CHECK`, `red_mail_f2b_extern_ck`). Testele: garda înaintea secretelor (spioni), mutanți (garda scoasă / flag oprit / prefix fără majuscule / garda după secret),
+  paritate cu garda FAN pe același tabel de cazuri (`mailTrimitereF2b.test.js`), proba PGlite a migrării (`scripts/pglite/test_redari_mail_f2b_local.mjs`).
+- **(x) Doar trimiterea în această felie**: un singur client OAuth („ERP Redări trimitere”, scope `gmail.send` + `openid email`, proiect GCP propriu, maparea
+  §2.3); citirea (F1) și golirea (clienții `citire` / `golire`) rămân neatinse. Modul `gmailOauth` din wrapper acceptă azi un singur scop (`trimitere`);
+  `fn_red_mail_oauth_start` acceptă doar `trimitere` (F1 își adaugă scopurile în migrarea ei).
+- **Callback-ul OAuth = pagina ERP `/redari/mail-oauth`** (precizare la §2.3 (d)): Google întoarce `code` + `state` în browserul owner-ului (redirect URI
+  fix, înregistrat în clientul GCP), iar pagina le trimite funcției edge `redari-mail-oauth` cu JWT-ul lui (aceeași schemă ca ViCare). Deci callback-ul
+  **nu e un endpoint public fără JWT**; state-ul e consumat atomic în bază (`fn_red_mail_oauth_consuma`: o singură dată, neexpirat, doar al owner-ului
+  curent), căsuța e dovedită din `id_token` validat local (RS256 cu cheile JWKS Google, `iss` / `aud` / `exp` / `iat` / `email_verified` / `email` / `hd`),
+  scope-urile ca set canonic exact; orice nepotrivire → revocare la Google, eveniment `oauth_respins`, nimic salvat. Refresh token-ul stă în Vault
+  (`REDARI_GMAIL_TRIMITERE_REFRESH_TOKEN`), scris / citit DOAR prin RPC-uri cu `EXECUTE` pentru `service_role` (`fn_red_mail_secret_seteaza` / `_citeste`,
+  `p_apelant` = uid-ul din `getUser`, re-verificat owner — regula (ii) din §2.4). Secretele clientului (`REDARI_GMAIL_TRIMITERE_CLIENT_ID` / `_SECRET`) se
+  citesc doar în wrapperul HTTP unic (`gmailHttp.mjs`), la cererile de token.
+- **Pornirea trimiterii** cere căsuța conectată: RPC (`fn_red_mail_f2_setari`: `casuta_neconectata`) **și** `CHECK` (`red_mail_f2b_pornire_ck`); revocarea
+  (`fn_red_mail_secret_seteaza('')`) golește secretul, oprește trimiterea și șterge starea conectării. Refresh respins (`invalid_grant`) înaintea oricărei
+  rezervări → trimiterea se oprește din bază, nimic `in_apel`.
+- **Atașamentul PDF — DECIZIE DESCHISĂ, de luat de Răzvan înaintea proiectelor reale** (limită declarată a F2b): convocatorul există azi doar ca DOCX
+  (generat în browser cu biblioteca `docx`, stocat în bucketul `redari`); nu există o cale de a-l transforma în PDF fără (A) o instalare nouă pe server
+  (LibreOffice / serviciu de conversie) sau (B) un PDF **nou**, generat în browser din textul convocării (jsPDF / html2canvas, deja în repo), care ar fi alt
+  document decât convocatorul validat de Juridic și ar cere schimbarea RPC-ului de creare a lotului + politici Storage pe `mail/` + inventarul fișierelor
+  (§1.3). F2b livrează trimiterea **fără atașament** (textul validat de Juridic în corp; MIME-ul, snapshotul și `CHECK`-urile acceptă deja un PDF, deci (B)
+  sau (A) intră ca felie separată, cu review propriu). Opțiuni pentru Răzvan: **A** conversie pe server (instalare nouă, de aprobat), **B** PDF generat în
+  browser din textul convocării (document nou, de validat de Juridic), **C** fără atașament și pentru proiectele reale (textul + linkul formularului public în corp).
+- Rămân deschise, neschimbate: reconcilierea `necunoscut` și decizia owner-ului (`esuat_confirmat`), monitorizarea SENT, opt-out-ul în UI, `extern_permis`
+  (§1.3, §1.4, §1.9). Procedura probei pe `TEST-RAZVAN`: `docs/redari/MAIL_PROBA_PASI.md`.
+
 **Deciziile lui Razvan (03.11.2026)**
 - Căsuța `redari@gazpet.ro` există (Google Workspace). Autorizarea Gmail API o facem împreună (formularea inițială „într-o singură ședință” e înlocuită de *implicit (g)*. Din r19e sunt trei conectări de producție — citire (F1), golire (la activarea golirilor din Gmail), trimitere (F2) — plus autorizarea căsuței de test, §2.3, §7.1).
 - **Trimitere** ERP → proprietari: **fără niciun automatism**. Fluxul: lot → aprobare → trimitere, ca la SMS. Mailurile către instituții rămân în 📨 Corespondență (`red_corespondenta`), cu „da” pe fiecare rând.
@@ -848,6 +883,12 @@ Porți comune: branch din `origin/main`; GO Jakarinos + Copilot pe diff; DRY ver
 - DRY + teste ca anon: injecție, adresă invalidă, prima introducere malițioasă (contact gol → rămâne gol, lotul F2 nu o vede).
 
 ### F2 — Trimiterea în loturi + reconcilierea + SENT
+**F2b (18.11.2026) — trimiterea din `redari@` pe proiecte de TEST, PR separat:** OAuth de trimitere (`redari-mail-oauth` + `_shared/gmailOauthTrimitere.mjs`),
+wrapperul HTTP unic cu liste închise (`_shared/gmailHttp.mjs`: modulele `gmailTrimitere` / `gmailOauth`, scopul `trimitere`), transportul
+(`_shared/gmailTrimitere.mjs`, `redari-mail-trimite` complet), UI (conectare / revocare / pornire / „Trimite lotul” doar pe `TEST-…`, pagina `/redari/mail-oauth`),
+migrarea `20261131h` (neaplicată: gărzile în bază, state-ul OAuth, Vault prin RPC). Deciziile (w) / (x) și limita atașamentului PDF: blocul „Deciziile lui Răzvan
+(18.11.2026)” de la început. Procedura probei: `MAIL_PROBA_PASI.md`. Rămân în afara F2b: reconcilierea / SENT (cer cititorul F1), opt-out UI, `extern_permis`, PDF-ul.
+
 **Worktree 05.11.2026 — implementare PARȚIALĂ, neaplicată, nedeployată; nu este GO de activare.**
 Decizia din brief permite construirea F2 acum, cu **trimiterea reală oprită**. Există un nucleu de loturi
 în `20261131a_redari_mail_f2_loturi.sql`, modulul comun `redariMailF2.mjs`, UI owner „✉️ Lot e-mail” și

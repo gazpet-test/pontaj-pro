@@ -1,0 +1,190 @@
+-- Schelet LOCAL (PGlite / PG de unică folosință) pentru 20261131h (Redări e-mail F2b: trimiterea). NU se rulează pe producție.
+-- Reproduce DOAR ce atinge / citește migrarea: rolurile Supabase (service_role BYPASSRLS), privilegiile implicite periculoase (ALL / EXECUTE pe
+-- obiecte noi: migrarea trebuie să le scoată), auth.uid() / auth.jwt() / auth.role() (textul live, din 20261130j_redari_mail_f1_schelet.sql),
+-- profiles + user_module_access + fn_sms_e_owner, MACHETA Vault (vault.secrets, decrypted_secrets, create_secret, update_secret — valoarea în clar),
+-- tabelele Redări folosite (coloanele de pe live: red_proiecte / red_uat din 20261126a + 30m, red_mail_setari / oauth_state / evenimente din 30j
+-- + coloanele F2 din 31a, red_mail_loturi / mesaje / jurnal_f2 din 31a — fără cheile străine spre tabele nefolosite), triggerele, politicile și
+-- drepturile lor. Corpurile funcțiilor NU sunt aici: proba (scripts/pglite/test_redari_mail_f2b_local.mjs) le extrage EXACT din migrările lor și
+-- le pune în locul marcajului „@@FUNCTII@@” (amprentele = constantele din 20261131h, verificat de probă).
+DO $r$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN NOINHERIT; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN NOINHERIT; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_auth_admin') THEN CREATE ROLE supabase_auth_admin NOLOGIN; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_storage_admin') THEN CREATE ROLE supabase_storage_admin NOLOGIN; END IF;
+END $r$;
+CREATE SCHEMA auth;
+CREATE SCHEMA storage;
+CREATE SCHEMA vault;
+GRANT USAGE ON SCHEMA public, auth, storage TO anon, authenticated, service_role;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE ALL ON SCHEMA vault FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon, authenticated, service_role;
+CREATE FUNCTION auth.jwt() RETURNS jsonb LANGUAGE sql STABLE AS $function$
+  select coalesce(nullif(current_setting('request.jwt.claim', true), ''), nullif(current_setting('request.jwt.claims', true), ''))::jsonb
+$function$;
+CREATE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $function$
+  select coalesce(nullif(current_setting('request.jwt.claim.role', true), ''), (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role'))::text
+$function$;
+CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $function$
+  select coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''), (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'))::uuid
+$function$;
+ALTER FUNCTION auth.uid() OWNER TO supabase_auth_admin;
+ALTER FUNCTION auth.jwt() OWNER TO supabase_auth_admin;
+ALTER FUNCTION auth.role() OWNER TO supabase_auth_admin;
+CREATE TABLE public.profiles (id uuid PRIMARY KEY, email text, name text, is_owner boolean NOT NULL DEFAULT false);
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+CREATE TABLE public.user_module_access (
+  id serial PRIMARY KEY, profile_id uuid NOT NULL REFERENCES public.profiles(id), module text NOT NULL,
+  access_level text NOT NULL CHECK (access_level IN ('admin', 'editor', 'viewer')), UNIQUE (profile_id, module));
+ALTER TABLE public.user_module_access ENABLE ROW LEVEL SECURITY;
+CREATE FUNCTION public.fn_sms_e_owner() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT coalesce((SELECT p.is_owner FROM public.profiles p WHERE p.id = auth.uid()), false)
+$f$;
+-- ---------------------------------------------------------------- Vault (machetă: decrypted_secret = secret în clar; semnăturile de pe live)
+CREATE TABLE vault.secrets (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text UNIQUE, description text DEFAULT '', secret text NOT NULL, key_id uuid,
+  created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now());
+CREATE VIEW vault.decrypted_secrets AS SELECT id, name, description, secret, secret AS decrypted_secret, key_id, created_at, updated_at FROM vault.secrets;
+CREATE FUNCTION vault.create_secret(new_secret text, new_name text DEFAULT NULL, new_description text DEFAULT '', new_key_id uuid DEFAULT NULL)
+  RETURNS uuid LANGUAGE sql AS $$ INSERT INTO vault.secrets (name, description, secret, key_id) VALUES (new_name, new_description, new_secret, new_key_id) RETURNING id $$;
+CREATE FUNCTION vault.update_secret(secret_id uuid, new_secret text DEFAULT NULL, new_name text DEFAULT NULL, new_description text DEFAULT NULL, new_key_id uuid DEFAULT NULL)
+  RETURNS void LANGUAGE sql AS $$ UPDATE vault.secrets SET secret = coalesce(new_secret, secret), name = coalesce(new_name, name), description = coalesce(new_description, description),
+    key_id = coalesce(new_key_id, key_id), updated_at = now() WHERE id = secret_id $$;
+REVOKE ALL ON vault.secrets, vault.decrypted_secrets FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION vault.create_secret(text, text, text, uuid), vault.update_secret(uuid, text, text, text, uuid) FROM PUBLIC, anon, authenticated, service_role;
+-- ---------------------------------------------------------------- tabelele (coloanele de pe live)
+CREATE TABLE public.red_proiecte (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), cod text NOT NULL UNIQUE CHECK (btrim(cod) <> ''), denumire text, activ boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(), versiune int NOT NULL DEFAULT 1, retentie_mail_pana date,
+  autorizare_tgz_nr text, autorizare_tgz_data date, autorizare_tgz_fisier text, autorizare_tgz_obiect uuid, autorizare_tgz_etag text);
+CREATE TABLE public.red_uat (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), proiect_id uuid NOT NULL REFERENCES public.red_proiecte(id), nume text NOT NULL, uat3 text NOT NULL, versiune integer NOT NULL DEFAULT 1);
+CREATE TABLE storage.buckets (id text PRIMARY KEY, name text NOT NULL, public boolean DEFAULT false);
+CREATE TABLE storage.objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text REFERENCES storage.buckets(id), name text, owner uuid, owner_id text, metadata jsonb, created_at timestamptz DEFAULT now());
+ALTER TABLE storage.objects OWNER TO supabase_storage_admin;
+INSERT INTO storage.buckets (id, name, public) VALUES ('redari', 'redari', false);
+CREATE TABLE public.red_mail_primite (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
+-- red_mail_setari: 20261130j + coloanele F2 și CHECK-ul inert din 20261131a
+CREATE TABLE public.red_mail_setari (
+  id smallint PRIMARY KEY CONSTRAINT red_mail_setari_id_ck CHECK (id = 1),
+  citire_activa boolean NOT NULL DEFAULT false,
+  ultima_eroare_cod text CONSTRAINT red_mail_setari_eroare_ck CHECK (ultima_eroare_cod IS NULL OR ultima_eroare_cod ~ '^[a-z0-9_]{1,64}$'),
+  retentie_activa boolean NOT NULL DEFAULT false,
+  golire_gmail_activa boolean NOT NULL DEFAULT false,
+  retentie_lease_token uuid,
+  retentie_lease_pana timestamptz,
+  versiune integer NOT NULL DEFAULT 1 CONSTRAINT red_mail_setari_versiune_ck CHECK (versiune >= 1),
+  actualizat_la timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT red_mail_setari_lease_ck CHECK ((retentie_lease_token IS NULL) = (retentie_lease_pana IS NULL))
+);
+INSERT INTO public.red_mail_setari (id) VALUES (1);
+ALTER TABLE public.red_mail_setari
+  ADD COLUMN trimitere_oprita boolean NOT NULL DEFAULT true,
+  ADD COLUMN extern_permis boolean NOT NULL DEFAULT false,
+  ADD COLUMN plafon_zi integer NOT NULL DEFAULT 200 CHECK (plafon_zi BETWEEN 1 AND 200),
+  ADD COLUMN plafon_luna integer NOT NULL DEFAULT 1000 CHECK (plafon_luna BETWEEN 1 AND 1000),
+  ADD COLUMN pauza_pana timestamptz,
+  ADD COLUMN ultim_apel_la timestamptz;
+ALTER TABLE public.red_mail_setari ADD CONSTRAINT red_mail_f2_inert_ck CHECK (trimitere_oprita IS TRUE AND extern_permis IS FALSE);
+-- red_mail_oauth_state: 20261130j
+CREATE TABLE public.red_mail_oauth_state (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  state_sha256 text NOT NULL CONSTRAINT red_mail_oauth_state_sha_uq UNIQUE CONSTRAINT red_mail_oauth_state_sha_ck CHECK (state_sha256 ~ '^[0-9a-f]{64}$'),
+  scop text NOT NULL CONSTRAINT red_mail_oauth_state_scop_ck CHECK (scop IN ('citire', 'citire_test', 'golire', 'golire_test')),
+  owner_id uuid NOT NULL,
+  creat_la timestamptz NOT NULL DEFAULT now(),
+  expira_la timestamptz NOT NULL,
+  consumat_la timestamptz,
+  CONSTRAINT red_mail_oauth_state_expira_ck CHECK (expira_la > creat_la AND expira_la <= creat_la + interval '10 minutes'),
+  CONSTRAINT red_mail_oauth_state_consumat_ck CHECK (consumat_la IS NULL OR consumat_la >= creat_la)
+);
+-- red_mail_evenimente: 20261130j, cu CHECK-ul tipului extins de 20261131a ('f2')
+CREATE TABLE public.red_mail_evenimente (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  tip text NOT NULL CONSTRAINT red_mail_evenimente_tip_ck CHECK (tip IN ('activare', 'ingestie_ok', 'ingestie_neprocesabil', 'deja_golit', 'disparut', 'spam_numarat',
+    'dry_rulat', 'recuperare_inceputa', 'recuperare_terminata', 'lease_pierdut', 'eroare_citire', 'descarcare', 'golire', 'blocaj_cerut', 'blocaj_activ',
+    'blocaj_ridicat', 'orfane_sterse', 'alerta_de_triat', 'alerta_escaladare', 'oauth_conectat', 'oauth_respins', 'oauth_revocat', 'tombstone_sters',
+    'neprocesabil_eliberat', 'eliberare_anulata', 'gmail_trash_inceput', 'gmail_in_cos', 'gmail_trash_ambiguu', 'gmail_de_decis', 'gmail_absent_verificat',
+    'gmail_stergere_esuata', 'metoda_nepermisa', 'trash_tardiv', 'alerta_gmail_stergere', 'alerta_dedup_expira', 'tombstone_sters_termen', 'hmac_cheie_retrasa', 'f2')),
+  primit_id uuid CONSTRAINT red_mail_evenimente_primit_fk REFERENCES public.red_mail_primite(id) ON DELETE CASCADE,
+  obiect_id uuid,
+  casuta text CONSTRAINT red_mail_evenimente_casuta_ck CHECK (casuta IS NULL OR casuta IN ('redari@gazpet.ro', 'redari-test@gazpet.ro')),
+  gmail_id_hmac text CONSTRAINT red_mail_evenimente_hmac_ck CHECK (gmail_id_hmac IS NULL OR gmail_id_hmac ~ '^[0-9a-f]{64}$'),
+  cod text CONSTRAINT red_mail_evenimente_cod_ck CHECK (cod IS NULL OR cod ~ '^[a-z0-9_]{1,64}$'),
+  numar bigint CONSTRAINT red_mail_evenimente_numar_ck CHECK (numar IS NULL OR numar >= 0),
+  numaratori jsonb CONSTRAINT red_mail_evenimente_numaratori_ck CHECK (numaratori IS NULL OR (jsonb_typeof(numaratori) = 'object' AND length(numaratori::text) <= 2000
+    AND NOT jsonb_path_exists(numaratori, '$.* ? (@.type() != "number")') AND NOT jsonb_path_exists(numaratori, '$.keyvalue() ? (!(@.key like_regex "^[a-z0-9_]{1,40}$"))'))),
+  autor uuid,
+  creat_la timestamptz NOT NULL DEFAULT now()
+);
+-- 20261131a: loturile, mesajele (fără cheile străine spre red_detinatori / red_convocari, nefolosite aici), jurnalul F2
+CREATE TABLE public.red_mail_jurnal_f2 (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), lot_id uuid, mesaj_id uuid, autor uuid,
+  cod text NOT NULL CHECK (cod IN ('creat','aprobat','rezervat','apel_inceput','trimis','esuat_sigur','necunoscut','esuat_confirmat','anulat','lot_integritate','lot_incheiat','golit','lot_sters_final','setari','optout')),
+  creat_la timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE public.red_mail_loturi (
+  id uuid PRIMARY KEY,
+  proiect_id uuid NOT NULL REFERENCES public.red_proiecte(id),
+  uat_id uuid NOT NULL REFERENCES public.red_uat(id),
+  cerere_sha256 text NOT NULL CHECK (cerere_sha256 ~ '^[0-9a-f]{64}$'),
+  stare text NOT NULL DEFAULT 'ciorna' CHECK (stare IN ('ciorna','aprobat','in_trimitere','blocat_integritate','incheiat')),
+  versiune integer NOT NULL DEFAULT 1 CHECK (versiune>0),
+  lot_sha256 text NOT NULL CHECK (lot_sha256 ~ '^[0-9a-f]{64}$'),
+  aprobat_lot_sha256 text CHECK (aprobat_lot_sha256 ~ '^[0-9a-f]{64}$'),
+  aprobat_versiune integer, aprobat_de uuid, aprobat_la timestamptz,
+  creat_de uuid NOT NULL, creat_la timestamptz NOT NULL DEFAULT now(),
+  incheiat_la timestamptz
+);
+CREATE TABLE public.red_mail_mesaje (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), lot_id uuid NOT NULL REFERENCES public.red_mail_loturi(id), detinator_id uuid NOT NULL,
+  nr_document text NOT NULL UNIQUE, catre text, subiect_final text, corp_text_final text, corp_html_final text, message_id text UNIQUE,
+  mesaj_sha256 text NOT NULL CHECK (mesaj_sha256 ~ '^[0-9a-f]{64}$'),
+  stare text NOT NULL DEFAULT 'in_coada', retentie_stare text NOT NULL DEFAULT 'activ'
+);
+-- @@FUNCTII@@
+-- ---------------------------------------------------------------- triggerele de pe live (20261130k)
+CREATE TRIGGER trg_red_mail_setari_reguli BEFORE UPDATE OR DELETE ON public.red_mail_setari FOR EACH ROW EXECUTE FUNCTION public.fn_red_mail_setari_reguli();
+CREATE TRIGGER trg_red_mail_fara_truncate BEFORE TRUNCATE ON public.red_mail_setari FOR EACH STATEMENT EXECUTE FUNCTION public.fn_red_jurnal_imuabil();
+CREATE TRIGGER trg_red_versiune BEFORE UPDATE ON public.red_mail_setari FOR EACH ROW EXECUTE FUNCTION public.fn_red_versiune_creste();
+CREATE TRIGGER trg_red_mail_oauth_state_reguli BEFORE INSERT OR UPDATE OR DELETE ON public.red_mail_oauth_state FOR EACH ROW EXECUTE FUNCTION public.fn_red_mail_oauth_state_reguli();
+CREATE TRIGGER trg_red_mail_evenimente_reguli BEFORE INSERT OR UPDATE OR DELETE ON public.red_mail_evenimente FOR EACH ROW EXECUTE FUNCTION public.fn_red_mail_evenimente_reguli();
+CREATE TRIGGER trg_red_mail_evenimente_fara_truncate BEFORE TRUNCATE ON public.red_mail_evenimente FOR EACH STATEMENT EXECUTE FUNCTION public.fn_red_jurnal_imuabil();
+-- ---------------------------------------------------------------- RLS + drepturi (20261130j / 20261131a)
+DO $rls$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['red_mail_setari', 'red_mail_evenimente', 'red_mail_oauth_state', 'red_mail_primite'] LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC, anon, authenticated, service_role', t);
+    IF t <> 'red_mail_oauth_state' THEN
+      EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (( SELECT public.fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]))', t || '_sel', t);
+      EXECUTE format('GRANT SELECT ON public.%I TO authenticated, service_role', t);
+    END IF;
+  END LOOP;
+  FOREACH t IN ARRAY ARRAY['red_mail_loturi', 'red_mail_mesaje', 'red_mail_jurnal_f2'] LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC,anon,authenticated,service_role', t);
+    EXECUTE format('GRANT SELECT ON public.%I TO authenticated', t);
+    EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL AND public.fn_sms_e_owner() IS TRUE)', t || '_sel', t);
+  END LOOP;
+  FOREACH t IN ARRAY ARRAY['red_proiecte', 'red_uat'] LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC, anon, authenticated, service_role', t);
+    EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING ((select public.fn_red_nivel()) IS NOT NULL)', t || '_sel', t);
+    EXECUTE format('GRANT SELECT ON public.%I TO authenticated, service_role', t);
+  END LOOP;
+END $rls$;
+REVOKE ALL ON SEQUENCE public.red_mail_evenimente_id_seq FROM PUBLIC, anon, authenticated, service_role;
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+GRANT SELECT ON storage.objects, storage.buckets TO anon, authenticated, service_role;
+-- funcțiile: doar proprietarul, în afară de cele expuse (20261126a §7, 20261130m, 20261131a)
+REVOKE ALL ON FUNCTION public.fn_red_nivel(), public.fn_red_jurnal_imuabil(), public.fn_red_versiune_creste(), public.fn_red_informare_publicata(text),
+  public.fn_red_mail_setari_reguli(), public.fn_red_mail_oauth_state_reguli(), public.fn_red_mail_evenimente_reguli(),
+  public.fn_red_mail_f2_canonic(jsonb), public.fn_red_mail_f2_hash(jsonb), public.fn_red_mail_f2_lot_hash(uuid), public.fn_red_mail_f2_owner(), public.fn_red_mail_f2_audit(uuid,uuid,text),
+  public.fn_red_mail_f2_poate(public.red_mail_loturi), public.fn_red_mail_f2_setari(boolean,boolean,integer), public.fn_sms_e_owner() FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_red_nivel(), public.fn_sms_e_owner() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_red_informare_publicata(text) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_red_mail_f2_setari(boolean,boolean,integer) TO authenticated;

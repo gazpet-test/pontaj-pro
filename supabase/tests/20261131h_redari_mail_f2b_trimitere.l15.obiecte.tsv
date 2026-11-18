@@ -1,0 +1,18 @@
+# 20261131h: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.red_mail_setari.doar_proiecte_test	creat
+coloana	coloana public.red_mail_setari.trimitere_casuta	creat
+coloana	coloana public.red_mail_setari.trimitere_conectata_de	creat
+coloana	coloana public.red_mail_setari.trimitere_conectata_la	creat
+constrangere	constrangere tabel public.red_mail_oauth_state.red_mail_oauth_state_scop_ck	schimbat
+constrangere	constrangere tabel public.red_mail_setari.red_mail_f2_inert_ck	sters
+constrangere	constrangere tabel public.red_mail_setari.red_mail_f2b_conectare_ck	creat
+constrangere	constrangere tabel public.red_mail_setari.red_mail_f2b_doar_test_ck	creat
+constrangere	constrangere tabel public.red_mail_setari.red_mail_f2b_extern_ck	creat
+constrangere	constrangere tabel public.red_mail_setari.red_mail_f2b_pornire_ck	creat
+functie	functie public.fn_red_mail_f2_poate(public.red_mail_loturi)	schimbat
+functie	functie public.fn_red_mail_f2_setari(boolean,boolean,integer)	schimbat
+functie	functie public.fn_red_mail_oauth_consuma(text)	creat
+functie	functie public.fn_red_mail_oauth_eveniment(text,text)	creat
+functie	functie public.fn_red_mail_oauth_start(text,text)	creat
+functie	functie public.fn_red_mail_secret_citeste(text,uuid,text)	creat
+functie	functie public.fn_red_mail_secret_seteaza(text,text,uuid,text)	creat

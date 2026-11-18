@@ -1,3 +1,13 @@
+# F2b — trimiterea din `redari@` pe proiecte de TEST (18.11.2026)
+
+Felia F2b (branch `redari/mail-f2b-trimitere`) completează transportul: OAuth pentru scopul `trimitere` (callback prin pagina ERP, state consumat atomic,
+`id_token` validat local, refresh token în Vault prin RPC-uri `service_role`), wrapperul HTTP cu liste închise, funcția edge `redari-mail-trimite` completă,
+ecranul (conectare / revocare / pornire / „Trimite lotul” doar pe proiecte `TEST-`) și migrarea **neaplicată** `20261131h` (gărzile în bază: pornirea doar cu
+căsuța conectată, `doar_proiecte_test`, `extern_permis` tot fals). Deciziile proprietarului din 18.11.2026 și limita atașamentului PDF (decizie deschisă A/B/C)
+sunt în `PLAN_EMAIL_REDARI.md`; procedura probei în `MAIL_PROBA_PASI.md`. Probe: `mailTrimitereF2b.test.js` (gărzi, wrapper, OAuth, MIME, mutanți, dovada
+pe main), `scripts/pglite/test_redari_mail_f2b_local.mjs` (migrarea cu pașii L15 v2 ai runnerului, comportament, aplicare → revenire → reaplicare, refuzuri,
+13 mutanți). Nimic de mai jos (rundele F2a) nu e schimbat de F2b în afara punctelor numite acolo.
+
 # Runda 2 — PR #1000, 05.11.2026
 
 Acest bloc descrie numai runda 2 și prevalează asupra istoricului de mai jos.
