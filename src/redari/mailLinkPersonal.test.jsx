@@ -174,6 +174,12 @@ describe('ecranul „Lot e-mail”', () => {
     expect(h3).toContain(MESAJ_LINK_LITERAL); expect(h3).toMatch(/<button[^>]*disabled=""[^>]*>Creează ciorna/)   // (textarea arată ce a tastat owner-ul; nimic nu pleacă)
     const h4 = randeaza({ uat: 'uat-fictiv', subiect: `S ${LINK}`, text: 'text {LINK_RASPUNS}', destinatari: dst })
     expect(h4).toContain(MESAJ_LINK_LITERAL)
+    // r3 (Jakarinos #1138 P1): linkul copiat cu %54 în loc de „T” (routerul îl decodează) și calea cu majuscule = tot link copiat, butonul oprit
+    const h5 = randeaza({ uat: 'uat-fictiv', subiect: 'S', text: `Răspuns: https://redari.gazpet.ro/redari/raspuns/%54${TOK.slice(1)} și {LINK_RASPUNS}`, destinatari: dst })
+    expect(h5).toContain(MESAJ_LINK_LITERAL); expect(h5).toMatch(/<button[^>]*disabled=""[^>]*>Creează ciorna/)
+    expect(randeaza({ uat: 'uat-fictiv', subiect: 'S HTTPS://REDARI.GAZPET.RO/REDARI/RASPUNS/', text: 'text {LINK_RASPUNS}', destinatari: dst })).toContain(MESAJ_LINK_LITERAL)
+    // „20%” și un URL străin codificat nu blochează nimic
+    expect(randeaza({ uat: 'uat-fictiv', subiect: 'Reducere 20%', text: 'Plan: https://exemplu.invalid/plan%20lucrari.pdf {LINK_RASPUNS}', destinatari: dst })).not.toContain(MESAJ_LINK_LITERAL)
     // textul corect: nicio avertizare, butonul fără motiv de blocare (rămâne dezactivat doar pentru că nu e bifat niciun destinatar în această randare)
     const ok = randeaza({ uat: 'uat-fictiv', subiect: 'S {COMUNA}', text: 'text {COMUNA} {LINK_RASPUNS}', destinatari: dst })
     expect(ok).not.toContain(MESAJ_ACOLADE); expect(ok).not.toContain(MESAJ_LINK_LITERAL); expect(ok).not.toContain('role="alert"'); expect(ok).toMatch(/<button[^>]*title=""[^>]*>Creează ciorna/)

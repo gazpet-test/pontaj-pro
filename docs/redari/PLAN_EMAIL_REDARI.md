@@ -168,7 +168,10 @@ Doar plan de design: fără cod de producție, fără scrieri în BD, fără sec
   `camp_necunoscut`; runda 2, Jakarinos #1138 P2: limita de 40 de caractere a parserului lăsa să treacă numele mai lungi), `fn_red_mail_f2_link_strain` (**un link
   personal literal în subiect sau text = refuz `link_literal`** — un link copiat ar fi ajuns la toți destinatarii; „link personal” = un șir de 43 de caractere
   base64url într-un `…/redari/raspuns/<token>` pe orice origine SAU un token existent al unui deținător, copiat fără adresă; pe mesajul FINAL fiecare link personal
-  trebuie să fie al destinatarului — `link_strain`; runda 2, Jakarinos #1138 P1); subiectul primește câmpurile lotului (fără link); (2) **deținătorul fără token
+  trebuie să fie al destinatarului — `link_strain`; runda 2, Jakarinos #1138 P1; **runda 3, P1: căutarea se face pe forma normalizată** — `%XX` și entități
+  HTML decodate până la punct fix, fără spații / rupturi de linie / caractere invizibile, NFKC — iar **orice apariție a căii formularului** (`redari/raspuns`,
+  oricum scrisă) în afara linkului exact al destinatarului = refuz; tokenurile existente se caută în orice fereastră de 43 de caractere, sensibil la majuscule;
+  aceeași definiție în JS, pe tabelul comun `src/redari/__tests__/link_strain_cazuri.json`); subiectul primește câmpurile lotului (fără link); (2) **deținătorul fără token
   valid e EXCLUS**: inventarul îl arată cu motivul `fara_token`, crearea îl refuză (`destinatari_neeligibili`); un deținător nou are tokenul din momentul adăugării
   (trigger 20261126a), deci intră în orice lot creat după aceea; (3) **token devenit invalid între aprobare și trimitere** (expirat / deținător șters): la
   rezervare mesajul trece în `anulat` cu `eroare_cod = token_expirat` și **rezervarea trece la următorul mesaj din coadă** (la fel după anularea pentru opt-out) —

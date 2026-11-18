@@ -46,6 +46,15 @@ ORICĂREI acolade rămase, aceeași definiție în SQL și JS, tabelul comun de 
 întorcea zero rânduri și handlerul se oprea înaintea destinatarilor valizi → rezervarea trece peste anulările locale (token expirat, opt-out) la următorul mesaj;
 probat prin handlerul REAL peste RPC-urile din PGlite (ordinile „expirat, valid, valid”, „opt-out, expirat, valid”, „valid, expirat, valid”). În plus: paritatea
 celor patru câmpuri cu convocatorul pe tabelul comun `campuri_lot_cazuri.json`; dovezile istorice pe SHA fix (e13e7ef8 / 8e6a3152), nu pe `origin/main`.
+**Runda 3 (Jakarinos #1138, NO-GO pe b6f0f85b):** (P1) tokenul procent-codificat (`%54…`, tot codificat, dublu codificat) trecea de căutarea literală, iar
+routerul îl decodează → `fn_red_mail_f2_link_strain` caută pe FORMA DE CĂUTARE (o singură definiție, aceeași în JS: `formaCautareLink` / `linkStrain`):
+linkul EXACT al destinatarului scos întâi, NFKC, apoi până la punct fix (cel mult 12 treceri; nestabil = străin) fără spații / rupturi de linie / invizibile /
+semne combinante, liniuțele Unicode = „-”, `%XX` și entitățile HTML decodate; străin = **orice apariție a căii `redari/raspuns`** (litere mici, `\`, `//`, `.`,
+`..` rezolvate) în afara linkului exact al destinatarului, SAU un token existent (≠ al destinatarului) în orice fereastră de 43 de caractere (și lipit de alte
+litere); tokenul rămâne sensibil la majuscule. Refuzul oricărui `%XX` NU a fost ales: ar fi oprit URL-uri străine legitime (documente, hărți); refuzul căii
+în orice formă a fost ales (singura formă permisă e `{LINK_RASPUNS}`). Tabelul comun `link_strain_cazuri.json` (49 de cazuri, valori scrise de mână) e
+rulat identic în JS și în PGlite; tabelele de caractere sunt citite de test din migrare; mutanți pe normalizare (fără decodare, fără entități, fără
+invizibile, fără NFKC, un singur pas, fără ferestre, fără litere mici) — fiecare pică, și cu postcondiția scoasă.
 
 # Runda 2 — PR #1000, 05.11.2026
 

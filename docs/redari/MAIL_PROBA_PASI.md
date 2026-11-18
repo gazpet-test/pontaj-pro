@@ -201,7 +201,9 @@ Regulile (impuse în bază, nu doar în ecran):
   din datele UAT-ului / proiectului (de ex. `{ZILE}` fără zile de sesiune) = refuz (`camp_necompletabil`); `{LINK_RASPUNS}` în subiect = refuz. Un text FĂRĂ
   `{LINK_RASPUNS}` e permis, dar ecranul avertizează (proprietarii n-ar primi linkul lor);
 - **un link personal copiat în text sau în subiect** (`…/redari/raspuns/<token>`, pe orice adresă, sau tokenul singur) = refuz (`link_literal`): ar fi ajuns
-  la TOȚI destinatarii lotului. Linkul personal intră în mesaj DOAR prin `{LINK_RASPUNS}`; ecranul oprește butonul și explică;
+  la TOȚI destinatarii lotului. Contează orice formă: cu `%XX` (de ex. `%54` în loc de `T`), dublu codificat, cu entități HTML, cu majuscule, rupt de
+  spații / rânduri noi / caractere invizibile; și **adresa formularului fără token** (`…/redari/raspuns/`) e refuzată. Textul obișnuit cu procente („20%”) și
+  linkurile către alte site-uri (chiar codificate, `%20`) trec. Linkul personal intră în mesaj DOAR prin `{LINK_RASPUNS}`; ecranul oprește butonul și explică;
 - **deținătorul fără link valid** (token lipsă, expirat sau deținător / parcelă ștearsă) **nu intră în lot**: inventarul îl arată la „Fără link de răspuns valid
   (token lipsă sau expirat)” (`fara_token`), iar crearea cu el bifat e refuzată (`destinatari_neeligibili`). Un deținător adăugat azi are tokenul din momentul
   adăugării (expirarea = ultima zi de sesiune a UAT-ului + 30 de zile), deci intră în orice lot creat după aceea;
