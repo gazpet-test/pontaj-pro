@@ -567,6 +567,138 @@ describe('identificatorii publicați (review #1137 P1): forma fiecărui câmp, o
     expect(textWt(await xmlLista(rm.blob))).toContain('0711#111111#UA62A')
     expect((await genereaza([parcela(1), parcela(2, { nr_cadastral: '0711#111111#UA62A' })]).catch(e => e)).probleme).toHaveLength(1)
   })
+  // ── Runda 5 (GO cu condiții pe ff754d8c + măsurarea pe LOT1: 49 / 2512 parcele refuzate, majoritatea forme cadastrale reale DOAR din
+  // cifre și punctuație). Măștile vin din măsurarea chat-ului (cifră → 9, literă → A; nicio valoare reală); valorile de mai jos sunt
+  // SINTETICE, construite pe mască. Etichetele: LOT1 / NOU = formă acceptată acum; BUCATĂ = cotă văzută doar pe bucăți (articol / element);
+  // PRIM = cotă cu prim dublu / triplu; FEREASTRĂ = telefon / CNP prins doar de ferestre; RĂMÂNE = refuz păstrat (decizie / formă greșită).
+  const masca = v => v.replace(/[0-9]/g, '9').replace(/\p{L}/gu, 'A')
+  const TABEL_R5 = [
+    // acceptate acum, doar la nr. cadastral (publicate exact cum au fost validate)
+    ['nr_cadastral', "#12''#", ok("#12''#"), 'LOT1: prim dublu'], ['nr_cadastral', "#123''#", ok("#123''#"), 'LOT1: prim dublu, 3 cifre'], ['nr_cadastral', "#12'''#", ok("#12'''#"), 'NOU: prim triplu'],
+    ['nr_cadastral', '#12’’#', ok('#12’’#'), 'NOU: prim dublu tipografic'], ['nr_cadastral', "#12''(34/5)#", ok("#12''(34/5)#"), 'LOT1: prim dublu + numerotarea veche a/b'],
+    ['nr_cadastral', "#12''(34)#", ok("#12''(34)#"), 'LOT1: prim dublu + paranteze'], ['nr_cadastral', "#12'''(34'')#", ok("#12'''(34'')#"), 'LOT1: prim triplu + paranteze cu prim dublu'],
+    ['nr_cadastral', '#12,34#', ok('#12,34#'), 'LOT1: două numere cu virgulă'], ['nr_cadastral', "#12',34/5#", ok("#12',34/5#"), 'LOT1: virgulă, prim, subdiviziune'], ['nr_cadastral', '#12+34#', ok('#12+34#'), 'LOT1: plus între numere'],
+    ['nr_cadastral', '#12(A34,B56)#', ok('#12(A34,B56)#'), 'LOT1: literă + cifre în paranteze, cu virgulă'], ['nr_cadastral', '#12(a34)#', ok('#12(A34)#'), 'NOU: un element literă + cifre, majuscule canonice'],
+    ['nr_cadastral', '50029#12,34#', ok('50029#12,34#'), 'NOU: cadastral + listă de parcele'], ['nr_cadastral', '#12,34,56,78#', ok('#12,34,56,78#'), 'NOU: 4 articole (maximul)'], ['nr_cadastral', '#12+34,56#', ok('#12+34,56#'), 'NOU: „+” și „,” în aceeași listă'],
+    // cota rămâne refuzată și în formele noi (pe fiecare articol / element / înaintea parantezei)
+    ['nr_cadastral', '#12,1/2#', nu(MOTIV.COTA), 'BUCATĂ: cotă ca al doilea articol'], ['nr_cadastral', '#1/2,34#', nu(MOTIV.COTA), 'BUCATĂ: cotă ca primul articol'], ['nr_cadastral', '#12+1/2#', nu(MOTIV.COTA), 'BUCATĂ: cotă după „+”'],
+    ['nr_cadastral', '#12(A34,1/2)#', nu(MOTIV.COTA), 'BUCATĂ: cotă ca element în paranteze'], ['nr_cadastral', '#12(1/2,A34)#', nu(MOTIV.COTA), 'BUCATĂ: cotă ca prim element în paranteze'],
+    ['nr_cadastral', '#1/2(34)#', nu(MOTIV.COTA), 'BUCATĂ: cotă înaintea parantezei (pe ff754d8c trecea)'],
+    ['nr_cadastral', "#1''/2#", nu(MOTIV.COTA), 'PRIM: cotă cu prim dublu'], ['nr_cadastral', "#12'''(1/2'')#", nu(MOTIV.COTA), 'PRIM: cotă cu prim dublu în paranteze'],
+    ['nr_cadastral', "#12''(1/2)#", nu(MOTIV.COTA), 'cotă în paranteze după prim dublu'], ['nr_cadastral', '#12(A1/2)#', ok('#12(A1/2)#'), 'NOU: prefixul de literă exclude cota (ca „T1/2”)'],
+    // telefon / CNP: plafonul de 8 cifre pe subcâmp (pe toată lista) și ferestrele, peste „,” / „+” / prim / paranteze
+    ['nr_cadastral', "#0711'',111111#", nu(MOTIV.TELEFON_CNP), 'telefon într-o listă: 10 cifre în subcâmp'], ['nr_cadastral', '#1234,56789#', nu(MOTIV.TELEFON_CNP), 'două numere lungi: 9 cifre în subcâmp (RĂMÂNE, raport)'],
+    // (fiecare rând FEREASTRĂ are cifre în plus, ca lipirea TUTUROR cifrelor să nu-l prindă: doar fereastra îl prinde)
+    ['nr_cadastral', "#0711''#111111#12#", nu(MOTIV.TELEFON_CNP), 'FEREASTRĂ: telefon după prim dublu'], ['nr_cadastral', '#12+0711#111111#', nu(MOTIV.TELEFON_CNP), 'FEREASTRĂ: telefon după „+”'],
+    ['nr_cadastral', '#1(A0711)#111111#', nu(MOTIV.TELEFON_CNP), 'FEREASTRĂ: telefon început în paranteze'], ['nr_cadastral', "#180010''#100000(A0)#5#", nu(MOTIV.TELEFON_CNP), 'FEREASTRĂ: 13 cifre peste prim și paranteze'],
+    ['nr_cadastral', '#9#4071+1111#11111#', nu(MOTIV.TELEFON_CNP), 'FEREASTRĂ: 13 cifre peste „+”'],
+    // forme încă refuzate: semne în plus, separatori goi, cuvinte, prea multe articole
+    ['nr_cadastral', "#12''''#", nu(MOTIV.FORMA), 'RĂMÂNE: 4 prime'], ['nr_cadastral', "#12'’#", nu(MOTIV.FORMA), 'RĂMÂNE: prim amestecat'], ['nr_cadastral', '#12, 34#', nu(MOTIV.FORMA), 'RĂMÂNE: spațiu după virgulă (nu e în măsurare)'],
+    ['nr_cadastral', '#12,#', nu(MOTIV.FORMA), 'RĂMÂNE: virgulă la capăt'], ['nr_cadastral', '#,12#', nu(MOTIV.FORMA), 'RĂMÂNE: virgulă la început'], ['nr_cadastral', '#12,,34#', nu(MOTIV.FORMA), 'RĂMÂNE: virgulă dublă'],
+    ['nr_cadastral', '#12++34#', nu(MOTIV.FORMA), 'RĂMÂNE: plus dublu'], ['nr_cadastral', '#12(A34,)#', nu(MOTIV.FORMA), 'RĂMÂNE: element gol în paranteze'], ['nr_cadastral', '#12(ABC34)#', nu(MOTIV.FORMA), 'RĂMÂNE: 3 litere în paranteze'],
+    ['nr_cadastral', '#12(ION)#', nu(MOTIV.FORMA), 'RĂMÂNE: cuvânt în paranteze'], ['nr_cadastral', '#12+ION#', nu(MOTIV.FORMA), 'RĂMÂNE: cuvânt după „+”'], ['nr_cadastral', '#1,2,3,4,5#', nu(MOTIV.FORMA), 'RĂMÂNE: 5 articole'],
+    ['nr_cadastral', '#12(34)(56)#', nu(MOTIV.FORMA), 'RĂMÂNE: două paranteze'], ['nr_cadastral', '#12(34,56)7#', nu(MOTIV.FORMA), 'RĂMÂNE: text după paranteză'], ['nr_cadastral', '#ABC 1234#', nu(MOTIV.FORMA), 'RĂMÂNE: cuvânt + număr (decizie)'],
+    ['nr_cadastral', '#1/2#', nu(MOTIV.COTA), 'RĂMÂNE: „#a/b#” cu a ≤ b (decizia A/B/C din runda 3)'],
+    // formele noi NU se extind la tarla / poz. HG (nemăsurate acolo); primul simplu rămâne ca pe ff754d8c
+    ['tarla', "12''#", nu(MOTIV.FORMA), 'RĂMÂNE: prim dublu doar la nr. cadastral'], ['tarla', '12,34#', nu(MOTIV.FORMA), 'RĂMÂNE: listă doar la nr. cadastral'], ['tarla', '12+34#', nu(MOTIV.FORMA), 'RĂMÂNE: plus doar la nr. cadastral'],
+    ['tarla', "12'#", ok("12'#"), 'prim simplu: neschimbat'], ['poz_hg', "12''", nu(MOTIV.FORMA), 'RĂMÂNE: prim dublu'], ['poz_hg', '12,34', nu(MOTIV.FORMA), 'RĂMÂNE: listă'], ['poz_hg', '12+34', nu(MOTIV.FORMA), 'RĂMÂNE: plus'],
+  ]
+  // Măsurarea pe LOT1 (ff754d8c): [câmp, mască, apariții, motivul pe ff754d8c, valoare SINTETICĂ pe mască, rezultatul acum]. Suma = 56 de
+  // refuzuri pe câmpuri (+ 2 pe „sat”, fără mască) = 58, pe 49 de parcele.
+  const MASTI_LOT1 = [
+    ['nr_cadastral', "#99''#", 7, MOTIV.FORMA, "#12''#", true], ['nr_cadastral', '#99,99#', 2, MOTIV.FORMA, '#12,34#', true], ['nr_cadastral', "#99',99/9#", 1, MOTIV.FORMA, "#12',34/5#", true],
+    ['nr_cadastral', "#99'''(99'')#", 1, MOTIV.FORMA, "#12'''(34'')#", true], ['nr_cadastral', "#99''(99/9)#", 4, MOTIV.FORMA, "#12''(34/5)#", true], ['nr_cadastral', "#999''#", 1, MOTIV.FORMA, "#123''#", true],
+    ['nr_cadastral', "#99''(99)#", 1, MOTIV.FORMA, "#12''(34)#", true], ['nr_cadastral', '#99+99#', 1, MOTIV.FORMA, '#12+34#', true], ['nr_cadastral', '#99(A99,A99)#', 1, MOTIV.FORMA, '#12(B34,C56)#', true],
+    // rămân refuzate: cuvinte (decizie), cote (decizie), plafonul de cifre, formele de tarla / poz. HG cu litere
+    ['nr_cadastral', '#AAA 999#', 1, MOTIV.FORMA, '#BCD 123#', false], ['nr_cadastral', '#AAA 99999#', 1, MOTIV.FORMA, '#BCD 12345#', false], ['nr_cadastral', '#AAA 9999#', 1, MOTIV.FORMA, '#BCD 1234#', false],
+    ['nr_cadastral', '99999#9999/9,9999/9/9', 1, MOTIV.TELEFON_CNP, '12345#6789/1,2345/6/7', false], ['nr_cadastral', '99999#99(AA AA, AA 999), 99/9(', 1, MOTIV.FORMA, '12345#12(BC DE, FG 123), 34/5(', false],
+    ['nr_cadastral', '#AA_9999#', 3, MOTIV.FORMA, '#BC_1234#', false], ['nr_cadastral', '#AAA_9999#', 2, MOTIV.FORMA, '#BCD_1234#', false], ['nr_cadastral', 'AAAA-9', 3, MOTIV.FORMA, 'BCDE-1', false],
+    ['nr_cadastral', '99999#9/9#', 1, MOTIV.COTA, '12345#1/2#', false], ['nr_cadastral', '#9/9#', 6, MOTIV.COTA, '#1/2#', false], ['nr_cadastral', '#99999#99/99', 1, MOTIV.COTA, '#12345#12/34', false],
+    ['nr_cadastral', '#9(9/9)#', 1, MOTIV.COTA, '#1(1/2)#', false],
+    ['tarla', '#AA AA AAAAA', 1, MOTIV.FORMA, '#BC DE FGHIJ', false], ['tarla', 'AAA#', 1, MOTIV.FORMA, 'BCD#', false], ['tarla', '#AA AAAA AAAAAAAAA', 3, MOTIV.FORMA, '#BC DEFG HIJKLMNOP', false],
+    ['tarla', '999#AA AAAA AAAAAAAAA', 1, MOTIV.FORMA, '123#BC DEFG HIJKLMNOP', false], ['tarla', '99/99 99/9#', 1, MOTIV.FORMA, '12/34 56/7#', false], ['tarla', 'A-AAAA', 3, MOTIV.FORMA, 'B-CDEF', false],
+    ['tarla', '99#AA AA AAAAAAA', 2, MOTIV.FORMA, '12#BC DE FGHIJKL', false], ['poz_hg', 'AAAA', 3, MOTIV.FORMA, 'BCDE', false],
+  ]
+  const areFf754 = (() => { try { execFileSync('git', ['cat-file', '-e', 'ff754d8c55ebc52785a41238d7a54adb8e5a471d^{commit}'], { stdio: ['ignore', 'pipe', 'ignore'] }); return true } catch { return false } })()
+  const eticheta = (r, prefix) => r[3].startsWith(prefix)
+  it('runda 5, tabelul formelor noi: formele numerice reale din LOT1 trec doar la nr. cadastral și se publică exact; cota / telefonul / CNP-ul rămân refuzate și în ele; semnele în plus, cuvintele și „#a/b#” rămân refuzate', () => {
+    for (const [camp, v, asteptat, de_ce] of TABEL_R5) {
+      expect(canonizeazaIdentificator(camp, v, { uat: UAT }), `${camp}=${JSON.stringify(v)} (${de_ce})`).toEqual(asteptat)
+      expect(areFormaIdentificator(camp, v, { uat: UAT })).toBe(asteptat.ok)
+    }
+    // tabelul are fiecare categorie
+    for (const p of ['LOT1', 'NOU', 'BUCATĂ', 'PRIM', 'FEREASTRĂ', 'RĂMÂNE']) expect(TABEL_R5.some(r => eticheta(r, p)), p).toBe(true)
+    // tabelul formelor din rundele 1–4 rămâne neschimbat (nicio acceptare / refuz nou acolo)
+    for (const [camp, v, asteptat] of TABEL) expect(canonizeazaIdentificator(camp, v, { uat: UAT }), `${camp}=${JSON.stringify(v)}`).toEqual(asteptat)
+  })
+  it('runda 5, măștile LOT1: valorile sintetice reproduc măștile; din 56 de refuzuri pe câmpuri rămân 37 (+ 2 pe sat = 39), pe câmp / motiv ca în calculul din raport', () => {
+    // valoarea sintetică are exact masca măsurată
+    for (const [, m, , , v] of MASTI_LOT1) expect(masca(v), v).toBe(m)
+    expect(MASTI_LOT1.reduce((s, r) => s + r[2], 0)).toBe(56)
+    // totalurile pe câmp / motiv pe ff754d8c = cele din măsurare (31 + 1 + 12 + 9 + 3; „sat” 2 fără mască)
+    const peMotiv = (randuri) => randuri.reduce((acc, r) => { const k = `${r[0]}/${r[3]}`; acc[k] = (acc[k] ?? 0) + r[2]; return acc }, {})
+    expect(peMotiv(MASTI_LOT1)).toEqual({ 'nr_cadastral/forma': 31, 'nr_cadastral/telefon_cnp': 1, 'tarla/forma': 12, 'nr_cadastral/cota': 9, 'poz_hg/forma': 3 })
+    // acum: fiecare valoare sintetică are rezultatul declarat; cele refuzate își păstrează motivul de pe ff754d8c
+    for (const [camp, , , motiv, v, trece] of MASTI_LOT1) {
+      const r = canonizeazaIdentificator(camp, v, { uat: UAT })
+      expect(r, `${camp}=${v}`).toEqual(trece ? ok(v.toUpperCase()) : nu(motiv))
+    }
+    const ramase = MASTI_LOT1.filter(r => !canonizeazaIdentificator(r[0], r[4], { uat: UAT }).ok)
+    expect(ramase.reduce((s, r) => s + r[2], 0)).toBe(37)
+    expect(peMotiv(ramase)).toEqual({ 'nr_cadastral/forma': 12, 'nr_cadastral/telefon_cnp': 1, 'tarla/forma': 12, 'nr_cadastral/cota': 9, 'poz_hg/forma': 3 })
+  })
+  it.skipIf(!areFf754)('runda 5, aceleași valori sintetice pe ff754d8c (referință din istoric): dau exact motivele din măsurare, deci reproduc refuzurile reale', async () => {
+    const { idp: vechi } = await incarcaDocx('ff754d8c55ebc52785a41238d7a54adb8e5a471d')
+    for (const [camp, , , motiv, v] of MASTI_LOT1) expect(vechi.canonizeazaIdentificator(camp, v, { uat: UAT }), `${camp}=${v}`).toEqual(nu(motiv))
+    // și formele LOT1 / NOU din tabel erau refuzate acolo, iar „#1/2(34)#” trecea (cota dinaintea parantezei)
+    for (const r of TABEL_R5.filter(x => eticheta(x, 'LOT1') || eticheta(x, 'NOU'))) expect(vechi.canonizeazaIdentificator(r[0], r[1]).ok, r[1]).toBe(false)
+    expect(vechi.canonizeazaIdentificator('nr_cadastral', '#1/2(34)#')).toEqual(ok('#1/2(34)#'))
+  })
+  it('runda 5, documentul: formele LOT1 se generează și se publică exact cum au fost validate; o cotă / un telefon într-o formă nouă blochează generarea (și cu strict=false), fără valoarea în mesaj', async () => {
+    const forme = TABEL_R5.filter(r => eticheta(r, 'LOT1')).map(r => r[2].valoare)
+    const r = await genereaza(forme.map((v, i) => parcela(i + 1, { nr_cadastral: v })))
+    expect(textWt(await xmlLista(r.blob))).toEqual(expect.arrayContaining(forme))
+    for (const v of ['#12,1/2#', '#1/2(34)#', "#1''/2#", "#0711''#111111#", '#12+0711#111111#']) {
+      for (const strict of [true, false]) {
+        const err = await genereaza([parcela(1), parcela(2, { nr_cadastral: v })], { strict }).catch(e => e)
+        expect(err, `${v} strict=${strict}`).toBeInstanceOf(Error)
+        expect(err.probleme).toHaveLength(1)
+        expect(err.message).not.toContain(v)
+      }
+    }
+  })
+  const M5 = {
+    // gramatica nouă scoasă = comportamentul ff754d8c pentru formă
+    liste: { fisier: 'identificatoriPublici.js', din: '(regula.liste === true && RE_SUBCAMP_LISTA.test(s))', in: 'false' },
+    // cota verificată doar pe tot subcâmpul și pe ultima paranteză (ca pe ff754d8c)
+    bucati: { fisier: 'identificatoriPublici.js', din: 'const pareCota = s => s.split(RE_SEPARATOR_BUCATI).some(t => {', in: "const pareCota = s => [s, /\\(([^()]*)\\)$/.exec(s)?.[1] ?? ''].some(t => {" },
+    // sufixul cotei doar cu prim simplu (ca pe ff754d8c)
+    prim: { fisier: 'identificatoriPublici.js', din: "const SUFIX_FRACTIE = String.raw`(?:'{1,3}|’{1,3})?", in: "const SUFIX_FRACTIE = String.raw`['’]?" },
+  }
+  const diferenteR5 = idp => TABEL_R5.filter(r => JSON.stringify(idp.canonizeazaIdentificator(r[0], r[1], { uat: UAT })) !== JSON.stringify(r[2]))
+  it('MUTANȚI runda 5: fiecare regulă nouă scoasă schimbă EXACT rândurile ei din tabelul rundei 5, iar documentul mutant publică cota „#12,1/2#” / cota cu prim dublu', async () => {
+    const { idp: intact } = await incarcaDocx('lucru')
+    expect(diferenteR5(intact)).toEqual([])
+    // fără gramatica nouă: formele acceptate acum (LOT1 / NOU) devin „formă”, nimic refuzat nu trece;
+    // rândurile „FEREASTRĂ” cu forme noi rămân refuzate (alt motiv)
+    const { idp: iListe } = await incarcaDocx('lucru', M5.liste)
+    const schimbateListe = diferenteR5(iListe)
+    expect(schimbateListe.filter(r => r[2].ok).map(r => r[1])).toEqual(TABEL_R5.filter(r => (eticheta(r, 'LOT1') || eticheta(r, 'NOU'))).map(r => r[1]))
+    for (const r of TABEL_R5.filter(x => !x[2].ok)) expect(iListe.canonizeazaIdentificator(r[0], r[1], { uat: UAT }).ok, r[1]).toBe(false)
+    // cota doar pe tot subcâmpul: exact rândurile BUCATĂ trec (publicate), restul neschimbat
+    const { mod: mBuc, idp: iBuc } = await incarcaDocx('lucru', M5.bucati)
+    expect(diferenteR5(iBuc).map(r => r[1])).toEqual(TABEL_R5.filter(r => eticheta(r, 'BUCATĂ')).map(r => r[1]))
+    const rb = await mBuc.genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele: [parcela(1), parcela(2, { nr_cadastral: '#12,1/2#' })], templateArrayBuffer: sablon() })
+    expect(textWt(await xmlLista(rb.blob))).toContain('#12,1/2#')
+    // sufixul cotei fără prim dublu / triplu: exact rândurile PRIM
+    const { mod: mPrim, idp: iPrim } = await incarcaDocx('lucru', M5.prim)
+    expect(diferenteR5(iPrim).map(r => r[1])).toEqual(TABEL_R5.filter(r => eticheta(r, 'PRIM')).map(r => r[1]))
+    const rp = await mPrim.genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele: [parcela(1), parcela(2, { nr_cadastral: "#1''/2#" })], templateArrayBuffer: sablon() })
+    expect(textWt(await xmlLista(rp.blob))).toContain("#1''/2#")
+    // fără ferestre (mutantul rundei 4): exact rândurile FEREASTRĂ din tabelul rundei 5
+    const { idp: iFer } = await incarcaDocx('lucru', M.fereastra)
+    expect(diferenteR5(iFer).map(r => r[1])).toEqual(TABEL_R5.filter(r => eticheta(r, 'FEREASTRĂ')).map(r => r[1]))
+  })
   it('satul (verdict r3 P2): se validează și reprezentarea RETURNATĂ — „Peri” + 50 de „.” nu se mai publică (nici din lista declarată, nici dintr-o listă dată de apelant); lungimea ≤ 40 și forma', async () => {
     const lung = 'Peri' + '.'.repeat(50)
     const uat = { ...UAT, sate_zi1: `Satul A, ${lung}` }

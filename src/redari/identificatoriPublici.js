@@ -22,6 +22,12 @@
 //    [+ „(părți)”, numerotarea veche între paranteze], SAU un cod singur de 1–2 litere („DE”, „A”); o PARTE numerică = 1–6 cifre [+ prim ' ]
 //    [+ 1–3 litere lipite: „12A”, „12IV”, sau după spațiu o literă / „BIS”: „12 A”, „12 BIS”]; o parte după „/” poate fi și un cod („3/A”);
 //    cuvintele de 3+ litere („ION”, „DEX”) nu sunt identificator; subcâmp gol = informație lipsă; „-” singur = marcaj „fără valoare”;
+//  - DOAR la nr_cadastral (runda 5: formele reale din LOT1 refuzate fals, măsurate pe măști — cifră → 9, literă → A — fără valori): primul
+//    poate fi simplu / dublu / triplu („12''”, „123''”, „12'''(34'')”); un subcâmp poate fi o LISTĂ de 2–4 articole numerice despărțite
+//    de „,” sau „+” fără spațiu („12,34”, „12',34/5”, „12+34”); parantezele pot avea 1–4 elemente despărțite de „,”, iar un element
+//    poate începe cu 1–2 litere lipite de cifre („12(A34,A56)”). Cota / telefonul / CNP-ul se verifică pe FIECARE articol și element
+//    (inclusiv cel dinaintea parantezei: „1/2(34)” e cotă), iar ferestrele și plafonul de 8 cifre rămân pe tot subcâmpul / toată valoarea.
+//    Formele cu CUVINTE („ABC 1234”, „AB_1234”, „A-ABCD”) și „#a/b#” cu a ≤ b rămân refuzate (decizie Răzvan, raportul rundei 5);
 //  - tarla / nr_cadastral: compuse cu „#” (TGZ) sau simple (Anexa 7 / Fișă); forma publicată = EXACT șirul validat (majuscule, spații
 //    simple), cu „#” cu tot, ca în documentele de până acum (cadastru.js: valoarea brută nu se schimbă în documente) — NU subcâmpurile
 //    lipite cu „ / ” (din „1#2#” ar ieși „1 / 2”, adică forma unei cote); TGZ-ul fără nicio valoare („##”) → nimic;
@@ -53,13 +59,22 @@ const CORP = `${PARTE}(?:/${PARTE}){0,3}`
 const RE_COD = new RegExp(`^${PARTE_COD}$`)
 // un SUBCÂMP numeric: [prefix 1–2 litere / „TARLA” + spațiu sau punct opțional] parte numerică [/ părți] [(corp: numerotarea veche)]
 const RE_SUBCAMP_NUMERIC = new RegExp(String.raw`^(?:(?:[A-Z]{1,2}|TARLA)[ .]?)?${PARTE_NUM}(?:/${PARTE}){0,3}(?:\(${CORP}\))?$`)
-const areFormaSubcamp = s => RE_COD.test(s) || RE_SUBCAMP_NUMERIC.test(s)
+// runda 5, DOAR nr_cadastral: prim simplu / dublu / triplu (același semn), liste „,” / „+” de articole, paranteze cu listă „,” de elemente
+const PRIM_EXT = String.raw`(?:'{1,3}|’{1,3})?`
+const PARTE_NUM_EXT = String.raw`[0-9]{1,6}${PRIM_EXT}(?:[A-Z]{1,3}| [A-Z]| BIS)?`
+const PARTE_EXT = `(?:${PARTE_NUM_EXT}|${PARTE_COD})`
+// un element din paranteze: corp numeric / cod, opțional cu 1–2 litere lipite de cifre în față („A12”; „ION” rămâne refuzat)
+const ELEMENT_PARANTEZE = `(?:[A-Z]{1,2}(?=[0-9]))?${PARTE_EXT}(?:/${PARTE_EXT}){0,3}`
+const ARTICOL_EXT = `${PARTE_NUM_EXT}(?:/${PARTE_EXT}){0,3}(?:\\(${ELEMENT_PARANTEZE}(?:,${ELEMENT_PARANTEZE}){0,3}\\))?`
+const RE_SUBCAMP_LISTA = new RegExp(String.raw`^(?:(?:[A-Z]{1,2}|TARLA)[ .]?)?${ARTICOL_EXT}(?:[,+]${ARTICOL_EXT}){0,3}$`)
+const areFormaSubcamp = (s, regula) => RE_COD.test(s) || RE_SUBCAMP_NUMERIC.test(s) || (regula.liste === true && RE_SUBCAMP_LISTA.test(s))
 const RE_FARA_VALOARE = /^[-–—]$/
-// „a/b” fără prefix de literă (primul ' și sufixul de literă / BIS nu contează: „1/2A”, „1'/2” arată tot a cotă): cotă dacă a ≤ b;
-// se aplică și grupului din paranteze. Un prefix explicit („T1/2”, „CF 1/2”) arată că e un identificator, nu o cotă.
-const SUFIX_FRACTIE = String.raw`['’]?(?:[A-Z]{1,3}| [A-Z]| BIS)?`
+// „a/b” fără prefix de literă (primul ' / '' / ''' și sufixul de literă / BIS nu contează: „1/2A”, „1''/2” arată tot a cotă): cotă dacă
+// a ≤ b; se aplică FIECĂREI bucăți dintre „(”, „)”, „,”, „+” (articolele unei liste, elementele din paranteze, articolul dinaintea
+// parantezei). Un prefix explicit („T1/2”, „CF 1/2”, „(A1/2)”) arată că e un identificator, nu o cotă.
+const SUFIX_FRACTIE = String.raw`(?:'{1,3}|’{1,3})?(?:[A-Z]{1,3}| [A-Z]| BIS)?`
 const RE_FRACTIE = new RegExp(String.raw`^([0-9]+)${SUFIX_FRACTIE}/([0-9]+)${SUFIX_FRACTIE}$`)
-const RE_GRUP_PARANTEZE = /\(([^()]*)\)$/
+const RE_SEPARATOR_BUCATI = /[(),+]/
 // componente consecutive lipite: telefon RO (0[237] + 8 cifre), internațional (+40 / 0040 / 40 + 9 cifre), CNP (13 cifre)
 const RE_TELEFON_SAU_CNP = /^(?:0[237][0-9]{8}|(?:00)?40[0-9]{9}|[1-9][0-9]{12})$/
 /** Cea mai lungă formă căutată (CNP / 0040 + 9 cifre): o fereastră mai lungă nu se mai potrivește. */
@@ -74,7 +89,7 @@ const RE_PREFIX_SAT_ORIGINAL = /^(?:sat(?:ul)?|loc(?:alitatea)?)\.? /i
 /** Regula pe câmp: compus cu „#” (TGZ) / „/” permis / cifră obligatorie / cifre maxime pe subcâmp (cele mai lungi forme reale + marjă). */
 const REGULA_CAMP = Object.freeze({
   tarla: { compus: true, slash: true, cifraObligatorie: false, maxCifre: 6 },
-  nr_cadastral: { compus: true, slash: true, cifraObligatorie: false, maxCifre: MAX_CIFRE_SUBCAMP },
+  nr_cadastral: { compus: true, slash: true, cifraObligatorie: false, maxCifre: MAX_CIFRE_SUBCAMP, liste: true },
   poz_hg: { compus: false, slash: false, cifraObligatorie: true, maxCifre: 5 },
 })
 
@@ -84,13 +99,10 @@ export const normalizeazaIdentificator = v => normalizeazaNume(v)
 const ok = valoare => ({ ok: true, valoare })
 const refuz = motiv => ({ ok: false, motiv })
 const cifre = s => s.replace(/[^0-9]/g, '')
-const pareCota = s => {
-  for (const t of [s, RE_GRUP_PARANTEZE.exec(s)?.[1]]) {
-    const m = t == null ? null : RE_FRACTIE.exec(t)
-    if (m && Number(m[1]) <= Number(m[2])) return true
-  }
-  return false
-}
+const pareCota = s => s.split(RE_SEPARATOR_BUCATI).some(t => {
+  const m = RE_FRACTIE.exec(t)
+  return m !== null && Number(m[1]) <= Number(m[2])
+})
 
 /** Componentele numerice ale valorii: grupurile maximale de cifre, în ordine („0711#111111#UA62A” → [0711, 111111, 62]). */
 export const componenteNumerice = s => String(s ?? '').match(/[0-9]+/g) ?? []
@@ -124,7 +136,7 @@ function motivIdentificatorText(canon, regula) {
     if (regula.cifraObligatorie && !c) return MOTIV.FORMA
     if (pareCota(s)) return MOTIV.COTA
     if (!regula.slash && s.includes('/')) return MOTIV.FORMA
-    if (!areFormaSubcamp(s)) return MOTIV.FORMA
+    if (!areFormaSubcamp(s, regula)) return MOTIV.FORMA
   }
   // după forma fiecărui subcâmp: telefonul / CNP-ul împărțit pe componente consecutive (oriunde în valoare, nu doar toată valoarea)
   if (areTelefonSauCnp(canon)) return MOTIV.TELEFON_CNP
