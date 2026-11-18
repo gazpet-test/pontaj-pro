@@ -4,8 +4,12 @@ Stare: 18.11.2026, după primul AWB real (Testul 1, lot de TEST cu un plic), com
 **trecerea a doua** (seara) adaugă deciziile D8–D11: pachetul de tipărit, evidența tipăririlor, bifarea automată „tipărit” și verificarea
 generate / tipărite / ridicate; **trecerea a treia** (18.11.2026, tot seara) închide întrebările proprietarului Q1–Q6 (§15.1, toate pe
 varianta recomandată) și adaugă deciziile D12–D14: AWB-ul pe hârtie **A5** în buzunarul transparent al curierului, imprimanta proiectului
-(laser A4 față-verso, două tăvi), ordinea față-verso pe proprietar și laptopul proiectului. **Doar document.** Nu există cod, migrare sau
-schimbare de date în acest PR; migrările sunt DESCRISE (§13), nu scrise. Deciziile proprietarului D1–D14 (§0) și Q1–Q6 (§15.1) sunt **luate**
+(laser A4 față-verso, două tăvi), ordinea față-verso pe proprietar și laptopul proiectului; **trecerea a patra** (18.11.2026, după review-ul
+Jakarinos NO-GO cu 6 × P1 pe `673dce4e`) scrie confirmările proprietarului D15–D18 și corectează contractele: plafonul zilei pe AMBELE ramuri
+(§7.2), separarea strictă între COMENZILE operatorului și ÎNSCRIEREA rezultatelor externe, cu garda „doar TEST” și în BD (§7.3), ordinea exactă
+a primei trimiteri pe un lot nemarcat (§8.1), O SINGURĂ ordine a lock-urilor în tot documentul (§6.2), reluarea aceleiași intenții după
+crash (§8.3) și tabelul tranzițiilor care închid lotul (§8.8). **Doar document.** Nu există cod, migrare sau
+schimbare de date în acest PR; migrările sunt DESCRISE (§13), nu scrise. Deciziile proprietarului D1–D18 (§0) și Q1–Q6 (§15.1) sunt **luate**
 și nu se redeschid aici; ce rămâne deschis sunt doar întrebările către curier și juridic (§15.2, §15.3). Orice migrare,
 RPC, automatizare sau drept propus aici **necesită acordul proprietarului** și se livrează în felii separate (§13), fiecare cu review propriu
 (Jakarinos + Fable), după `docs/paw/LECTII_REVIEW.md` (§14).
@@ -27,18 +31,19 @@ pentru tipărire (nu „foaia a ieșit”, §8.7); **curierul** = FAN Courier. �
 hârtie se tipărește.
 
 Cuprins: 0. Deciziile proprietarului · **I.** 1. Ziua operatorului · 2. Ce rămâne la proprietar · 3. Ce se întâmplă singur · 4. Ce NU face
-platforma · 5. În ce ordine livrăm · **II.** 6. Starea de azi (6.1 ce a arătat Testul 1) · 7. Modelul de drepturi și plafonul · 8. Butonul unic
-(8.4.1 anularea de operator · 8.6 pachetul de tipărit: A4 față-verso, AWB pe A5, imprimanta și laptopul · 8.7 evidența tipăririlor) ·
-9. Urmărirea automată (9.5 verificarea generate / tipărite / ridicate) · 10. Arhiva · 11. Comanda curierului · 12. De la test la real ·
-13. Feliile livrabile (F1 exact) · 14. Lecțiile L01–L25 · 15. Întrebările (proprietar: toate decise; curier, juridic: deschise) · 16. Ce nu s-a putut
-stabili din cod.
+platforma · 5. În ce ordine livrăm · **II.** 6. Starea de azi (6.1 ce a arătat Testul 1 · **6.2 ordinea unică a lock-urilor**) · 7. Modelul de
+drepturi și plafonul (7.2 plafonul pe ambele ramuri · **7.3 comenzi vs. înscrierea rezultatelor externe**) · 8. Butonul unic (8.1 prima trimitere
+pe un lot nemarcat · 8.3 reluarea aceleiași intenții · 8.4.1 anularea în doi pași · 8.6 pachetul de tipărit: A4 față-verso, AWB pe A5, imprimanta
+și laptopul · 8.7 evidența tipăririlor · **8.8 stările, tranzițiile și „lotul încheiat”**) · 9. Urmărirea automată (9.5 verificarea generate /
+tipărite / ridicate) · 10. Arhiva · 11. Comanda curierului · 12. De la test la real · 13. Feliile livrabile (F1 exact) · 14. Lecțiile L01–L25 ·
+15. Întrebările (proprietar: toate decise; curier, juridic: deschise) · 16. Ce nu s-a putut stabili din cod.
 
 ---
 
 ## 0. Deciziile proprietarului (18.11.2026) — nu se redeschid
 
-D1–D11 au fost luate în prima și a doua trecere; D12–D14 și răspunsurile la Q1–Q6 (§15.1) în a treia. Unde o decizie nouă o precizează sau o
-înlocuiește pe una veche, rândul vechi rămâne (istoric) și spune asta.
+D1–D11 au fost luate în prima și a doua trecere; D12–D14 și răspunsurile la Q1–Q6 (§15.1) în a treia; D15–D18 (confirmările din 18.11.2026,
+după trecerea a treia) în a patra. Unde o decizie nouă o precizează sau o înlocuiește pe una veche, rândul vechi rămâne (istoric) și spune asta.
 
 | # | Decizia | Unde o pune în practică documentul |
 |---|---|---|
@@ -56,6 +61,10 @@ D1–D11 au fost luate în prima și a doua trecere; D12–D14 și răspunsurile
 | D12 | FORMATUL AWB (înlocuiește D7 ca format implicit): AWB-ul se tipărește pe hârtie **A5** (o pagină A5 pe plic), introdus în **plicul transparent autocolant al curierului (17 × 22,5 cm)** lipit pe plicul nostru. Imprimanta dedicată proiectului: **laser monocrom A4, față-verso automat, două tăvi** (A4 pentru convocări + opis, A5 pentru AWB-uri) → două tipăriri pe lot, fără schimbat hârtia. Eticheta autocolantă 100 × 150 rămâne alternativă. Pachetul A5 iese ca fișier separat de cel A4. | §1, §8.6.1, §8.6.3 |
 | D13 | FAȚĂ-VERSO implicit pentru convocări: imprimanta proiectului setată pe față-verso din Windows; pachetul A4 are un număr **PAR** de pagini pe fiecare proprietar (convocarea = o foaie: fața convocarea, versoul informarea; pagină albă adăugată unde e nevoie), ca versoul unui proprietar să nu ajungă pe foaia altuia; **opisul pe foaie separată, doar pe față, imediat după convocările aceluiași proprietar**. | §1, §8.6.2 |
 | D14 | CALCULATORUL DE LA ȘANTIER = un laptop dedicat proiectului (Windows 11 Pro), cu cont de operator fără drept de administrator, disc criptat și acces de la distanță pentru suport; are Word / LibreOffice. | §1, §8.6.5, §16 |
+| D15 | TIPĂRIREA PORNEȘTE DOAR DUPĂ CE TRIMITEREA ÎNTREGULUI LOT S-A ÎNCHEIAT (confirmă regula „lot încheiat înainte de tiraj” găsită în trecerea a treia): niciun AWB nu se tipărește cât lotul mai are plicuri în așteptare, aprobate netrimise, în curs sau cu rezultat necunoscut; tabelul tranzițiilor care închid lotul e la §8.8, garda e în BD. | §1, §8.1, §8.8, F1 |
+| D16 | CONFIRMAREA DE PRIMIRE ȘI RETURUL sunt ÎNCHISE pe decizia proprietarului (Q4 A): AR automat doar cu dovada curierului arhivată și primitorul = destinatarul; retur definitiv doar cu plicul fizic întors. La juridic rămân DOAR: data ridicării ca dată a expedierii; AWB-ul cu confirmare în locul scrisorii recomandate; durata păstrării dovezilor; informarea colegului de contact. | §10.3, §12.2, §15.3 |
+| D17 | PROPUNEREA DE ANULARE (Q6) apare ȘI pe loturile de TEST, ca să fie probată pe `TEST-RAZVAN` înaintea proiectului real; anularea rămâne un click al omului. | §9.5.2, §9.5.4, §12.3 |
+| D18 | FUNCȚIA VECHE DE ANULARE (`fn_red_fan_anulat`, owner) RĂMÂNE până se publică cea nouă (funcția edge nouă + ecranul nou); retragerea ei = migrare separată, după publicare. Până atunci primește aceleași gărzi în BD ca primitivele noi (§7.3). | §8.4.1, §13 F1, §16 |
 
 Există un cont de operator fără owner pentru probe (`redari@`, editor pe modulul Redări): cu el se probează fiecare felie pe `TEST-RAZVAN` (§12.3).
 Deciziile din 17.11.2026 din `FANCOURIER_INTEGRARE.md` §12 rămân: **arhiva ZIP** a lotului (exemplarele de la dosar, fișiere separate pe plic) nu
@@ -163,8 +172,12 @@ Pe fiecare plic din listă, după trimitere, apare și evidența tipăririi (D9)
 19.11 09:41 (retipărite 1×: hârtie blocată)”, sau „AWB: NETIPĂRIT” cu roșu.
 
 **Ce mai poate face operatorul singur** (Q3, decis B), în afara butonului: „Retipărește…” (același tiraj, cu motiv din listă), „Anulează AWB-ul”
-pe un AWB neridicat și „Confirmă: găsit” la „Verifică la curier” (reconcilierea care a găsit AWB-ul). Rămân la proprietar: confirmarea că un AWB
-**nu există** la curier, „Tiraj nou” și lămurirea excepțiilor „ridicat dar netipărit” / „anulat după tipărire” (§2).
+pe un AWB neridicat (platforma cere întâi ștergerea la curier și abia după răspunsul lui scrie „anulat”, §8.4.1), „Confirmă: găsit” la „Verifică
+la curier” (platforma reverifică la curier că AWB-ul e în borderou înainte să-l scrie, §8.2), „Retrage din trimitere” un plic aprobat dar încă
+netrimis (sau o cerere de aprobare încă nedecisă) și „Reia trimiterea” când o trimitere a rămas neîncheiată (§8.3). Rămân la proprietar:
+confirmarea că un AWB **nu există** la curier, „Tiraj nou” și lămurirea excepțiilor „ridicat dar netipărit” / „anulat după tipărire” (§2).
+**Ce nu poate face niciodată operatorul**, nici din ecran, nici apelând platforma direct: să scrie el un AWB, o ridicare, o livrare sau o anulare
+— faptele curierului le înscrie doar serverul, după ce le-a primit de la curier (§7.3).
 
 Butoanele vechi (1. Propune … 7. Confirmări) nu dispar: rămân într-o casetă „Pași detaliați (owner)”, strânsă implicit, pentru
 proprietar și pentru situațiile rare (confirmarea absenței la reconciliere, tiraj nou, soluționare).
@@ -183,7 +196,9 @@ proprietar și pentru situațiile rare (confirmarea absenței la reconciliere, t
 - **Excepțiile**: marcarea unui lot ca TEST pe un proiect real (ca să probezi fără efect juridic), „Tiraj nou” (când foile tipărite
   trebuie distruse și refăcute), confirmarea că un AWB **nu există** la curier (deschide drumul unui al doilea AWB, deci cost), soluționarea
   unei contradicții a urmăririi (azi: tu sau un admin Redări).
-- **Întrerupătoarele**: urmărirea automată pornită / oprită; arhivarea automată pornită / oprită; plafonul zilei pe 0 = totul cere aprobarea ta.
+- **Întrerupătoarele**: urmărirea automată pornită / oprită; arhivarea automată pornită / oprită; plafonul zilei pe 0 = totul cere aprobarea ta;
+  **„doar proiecte de TEST”** — comutatorul care ține toate efectele (AWB-uri, ridicări, anulări) pe proiectele de test stă și în baza de date,
+  nu doar în codul funcției (§7.3); cade abia la F4, cu „da”-ul tău și al juridicului (§12).
 - **Lămurirea excepțiilor de tipărire** (D11, §9.5; Q3, decis B): un AWB ridicat de curier fără să fie trecut ca tipărit în platformă (foaia
   AWB a fost tipărită din contul curierului sau de pe un tiraj înlocuit) îl lămurești tu sau un admin Redări, cu motivul; un AWB tipărit și apoi
   anulat cere confirmarea că foaia AWB a fost distrusă. Operatorul le vede, dar nu le poate închide singur.
@@ -204,8 +219,8 @@ De trei ori pe zi (08:00, 13:00, 18:00, ora României), pentru fiecare AWB neîn
 | în tranzit / avizat / contactat / „AWB înregistrat” | nimic pe plic; se vede starea | „în drum”, „avizat”, „neridicat încă” |
 | orice cod nelimpede, două date diferite pentru acelaşi fapt, livrat ȘI retur, dată imposibilă | **nimic**; plicul intră în „De verificat” | lista „De verificat”, cu codul și ora curierului |
 
-Fiecare bifare automată rămâne în jurnal cu codul și ora primite de la curier, cu rularea care a făcut-o, și se vede pe plic („bifat automat
-din urmărirea curierului, C0 din 19.11.2026 09:12”). Dacă mai târziu curierul contrazice ce a spus (altă dată de ridicare), platforma NU
+Fiecare bifare automată rămâne în jurnal cu codul și **data** primite de la curier (curierul dă ziua ridicării; ora lui nu e promisă, §9.2), cu
+rularea care a făcut-o, și se vede pe plic („bifat automat din urmărirea curierului, C0 din 19.11.2026”). Dacă mai târziu curierul contrazice ce a spus (altă dată de ridicare), platforma NU
 înlocuiește singură: păstrează ce știa, pune noua valoare alături și cere omului să aleagă (ca azi).
 
 Arhiva (§10): eticheta fiecărui AWB și dovada de livrare (în forma în care o dă curierul) se salvează singure în dosarul plicului, lângă opis
@@ -307,8 +322,44 @@ operator, plafonul zilnic, cronul, arhiva și comanda curierului.
 - **SMS-ul de redări** a fost probat pe proiectul de test (lot pe comună, trei destinatari, livrate): e o reamintire care trimite la QR-ul din
   scrisoare → plicul întâi, SMS-ul după ridicare / livrare (§9.5.5).
 
-Ce se schimbă la primitive: **poarta** RPC-urilor de pe drumul butonului (propune → aprobă → claim → rezultate → tiraj → etichete) devine
-„operator numit SAU owner” (§7.1), cu identitatea celui care apasă în coloanele de autor; restul porților owner rămân (§2).
+Ce se schimbă la primitive (corectat în trecerea a patra, Jakarinos P1 „operatorul poate fabrica fapte ale curierului”): drumul butonului se
+împarte în DOUĂ clase de RPC-uri (§7.3). **Comenzile** operatorului (propunere + aprobare + plafoane într-un RPC, începerea tirajului, cererea de
+anulare, retragerea, reluarea) primesc poarta „operator numit SAU owner”, cu identitatea celui care apasă (`auth.uid()`) în coloanele de autor.
+**Înscrierea rezultatelor externe** (rezervarea înaintea apelului plătit, rezultatele generării, urmărirea, confirmările, „găsit” la
+reconciliere, anularea confirmată de curier, încheierea intenției) NU e apelabilă de niciun om: RPC-uri noi cu EXECUTE exclusiv `service_role`,
+chemate doar de funcția edge după poarta omului. Primitivele owner de azi rămân pentru calea detaliată și pentru excepțiile manuale ale
+owner-ului, cu gărzile noi în corp (§7.3, §13 F1).
+
+### 6.2 Ordinea unică a lock-urilor (L06) — valabilă în TOT documentul
+
+O singură ordine, pentru toate căile (om, funcție edge, cron, revenire) și pentru toate feliile; fiecare RPC / trigger care blochează rânduri din
+mai multe tabele o scrie în comentariul lui și ia DOAR un subșir al ei, în această ordine (niciodată un element dinaintea altuia deja luat):
+
+| # | Tabel (lock) | Cine îl ia | Observații |
+|---|---|---|---|
+| 1 | `red_loturi_plicuire` — rândul lotului `FOR UPDATE` | comanda, propunerea, aprobarea, claim-ul, tirajul (începere / oprire / înlocuire), înregistrarea tipăririi, marcajul | serializează tot ce schimbă manifestul sau marcajul unui lot |
+| 2 | `red_plicuri` — plicurile atinse `ORDER BY id FOR UPDATE` | comanda, aprobarea, claim-ul, ridicarea (om și cron), anularea (cerere și înscriere), retragerea | **plicul înaintea rândului FAN** — aliniat cu `fn_red_fan_ridicat` și `fn_red_fan_anulat` existente (plic → AWB) |
+| 3 | `red_fan_awb` — rândurile `ORDER BY id FOR UPDATE` | toate cele de mai sus + rezultatele, urmărirea, confirmările, soluționarea, reconcilierea, înregistrarea tipăririi | rezultatele / urmărirea / confirmările iau DOAR acest element (subșir) |
+| 4 | `red_fan_loturi` — rândul lotului FAN `FOR UPDATE` | comanda (marcajul automat, citirea tirajului), tirajul, marcajul manual, înregistrarea tipăririi | DUPĂ rândurile FAN (corectat: §8.7.2 îl avea înaintea lor) |
+| 5 | `red_fan_setari` — rândul unic `FOR UPDATE` | comanda (plafonul zilei), setările | serializează aprobările din tot modulul |
+| 6 | `red_fan_zi` — rândul zilei (`SELECT … FOR UPDATE`, apoi `INSERT … ON CONFLICT`: lock-ul implicit pe aceeași cheie) + `red_fan_zi_consum` | comanda | §7.2 |
+| 7 | `red_fan_cereri_aprobare` — cererea `FOR UPDATE` / `INSERT` | comanda, decizia owner-ului, retragerea cererii | — |
+| 8 | `red_fan_intentii` — `INSERT … ON CONFLICT DO NOTHING` (lock implicit pe cheie) sau `FOR UPDATE` | comanda, încheierea, reluarea, închiderea `neincheiata` | intenția se blochează AICI, nu la începutul RPC-ului (corectat: §8.1 o avea prima, §13 după lot) |
+| 9 | `red_fan_tiparire_pachete` (`INSERT … ON CONFLICT`) → `red_fan_tipariri` (F1b) | înregistrarea tipăririi | — |
+| 10 | `red_fan_tiparire_lamuriri`, `red_fan_rulari` (F2); `red_fan_comenzi` (F5) | lămurirea; cronul; comanda curierului | — |
+| 11 | `red_jurnal` — `INSERT`, ÎNTOTDEAUNA ULTIMUL | toate | nu se citește sub lock |
+
+- **Lock-urile implicite** (numărate, L06): `INSERT` în `red_fan_awb` / `red_fan_loturi` / `red_fan_cereri_aprobare` / `red_fan_intentii` ia
+  `KEY SHARE` prin cheile străine pe `red_proiecte`, `red_loturi_plicuire`, `red_plicuri` — rândurile lotului și ale plicurilor sunt deja ale
+  noastre (1, 2); `red_proiecte` nu e luat `FOR UPDATE` de nicio cale FAN (doar `KEY SHARE`), deci nu intră în niciun ciclu. `INSERT … ON CONFLICT`
+  blochează rândul-cheie existent (`red_fan_zi`, `red_fan_intentii`, `red_fan_tiparire_pachete`) exact în poziția tabelului lui. Trigger-ele
+  BEFORE de pe `red_fan_awb` / `red_fan_loturi` / `red_plicuri` nu iau lock-uri pe alte tabele (citesc doar OLD / NEW).
+- **Cronul** (§9): urmărirea / confirmările = o tranzacție pe bucată, DOAR elementul 3 (rânduri `ORDER BY id`); bifarea pe plic = **altă
+  tranzacție**, pe rând: 2 (plic) → 3 (rândul FAN, CAS pe `versiune_urmarire`) → 11 — ca `fn_red_fan_ridicat`; niciodată plicul după rândul FAN
+  și niciodată bifarea în aceeași tranzacție cu scrierea urmăririi (ar inversa 2 și 3).
+- **Revenirile**: `LOCK TABLE … NOWAIT` pe tabelele atinse în aceeași ordine (1 → 11), apoi verificarea „fără date”.
+- Proba: PGlite + două sesiuni pe clonă (comanda ∥ începerea tirajului; comanda ∥ cronul de bifare; înregistrarea tipăririi ∥ comanda) — fără
+  deadlock (nici `40P01`, nici așteptare peste `lock_timeout`), rezultatele serializate.
 
 ## 7. Modelul de drepturi și plafonul
 
@@ -342,13 +393,16 @@ red_fan_operatori (
 - **Pe server, niciodată din client**: identitatea = `auth.uid()` din JWT-ul omului (L08); funcția edge NU primește rolul în corp; RPC-urile
   verifică poarta în corp, nu doar prin EXECUTE. Testul negativ: contul `redari@` fără rând în listă → 403 pe `trimite`, 42501 pe RPC-uri;
   cu rândul retras → la fel; viewer cu rând → refuz (nivelul e precondiție).
-- **Ce se întâmplă cu poarta owner de azi**: rămâne owner pe `fn_red_fan_setari_seteaza` (plafoanele, întrerupătoarele), `fn_red_fan_lot_marcheaza`
-  (marcajul manual TEST / real — excepțiile), înlocuirea tirajului, `fn_red_fan_reconciliaza` cu `p_awb NULL` (confirmarea absenței = drum spre
-  al doilea AWB), `fn_red_fan_cerere_decide` (§7.2), lista operatorilor. Devine „operator sau owner”: propunere (azi admin / editor → devine
-  operator; propunerea singură nu costă, dar e un pas al butonului), aprobare sub plafon, claim, rezultate, tiraj (începere / confirmare),
-  urmărire / confirmări la cerere, confirmarea ridicării, reconcilierea cu `p_awb` găsit (nu costă), anularea unui AWB neridicat (nu costă;
-  Q3 decis B, Q6 decis A — cu motiv din listă și autorul pus de server, §8.4.1). Soluționarea contradicțiilor și lămurirea excepțiilor (c) / (d)
-  rămân owner / admin Redări (Q3 B).
+- **Ce se întâmplă cu poarta owner de azi** (corectat în trecerea a patra — detaliul și tabelul complet la §7.3): rămâne owner pe
+  `fn_red_fan_setari_seteaza` și setările noi, `fn_red_fan_lot_marcheaza` (marcajul manual TEST / real — excepțiile), înlocuirea tirajului,
+  `fn_red_fan_reconciliaza` (confirmarea absenței = drum spre al doilea AWB; și forma manuală „găsit” a owner-ului), `fn_red_fan_ridicat`
+  (ridicarea confirmată manual de owner), `fn_red_fan_anulat` (anularea verificată manual de owner în contul curierului, D18),
+  `fn_red_fan_cerere_decide` (§7.2), lista operatorilor. Devine „operator sau owner” DOAR pentru **comenzi**: `fn_red_fan_comanda` (propunere +
+  aprobare sub plafon + plafoane), începerea / confirmarea tirajului, cererea de anulare, retragerea din trimitere, reluarea intenției.
+  **Nu devine niciodată apelabilă de operator** înscrierea unui fapt extern: rezervarea (claim), rezultatele generării, urmărirea, confirmările,
+  „găsit” la reconciliere, anularea confirmată de curier, încheierea intenției — toate trec pe RPC-uri noi cu EXECUTE exclusiv `service_role`,
+  chemate de funcția edge după ce a verificat omul (§7.3). Soluționarea contradicțiilor și lămurirea excepțiilor (c) / (d) rămân owner / admin
+  Redări (Q3 B).
 
 ### 7.2 Plafonul (D3)
 
@@ -357,28 +411,119 @@ nu pe proiect (în primul val e un singur proiect). Plafonul pe lot de azi (`lim
 plicuri nu trece oricum). Unitatea e decisă (D3); valoarea inițială: 20 pe zi până după Testul 2.
 
 - `red_fan_setari` primește: `limita_zi integer NOT NULL DEFAULT 20 CHECK (limita_zi BETWEEN 0 AND 5000)` (0 = orice trimitere cere
-  aprobarea owner-ului), `urmarire_auto_activa boolean NOT NULL DEFAULT false`, `arhivare_auto_activa boolean NOT NULL DEFAULT false`;
-  scrise doar prin `fn_red_fan_setari_seteaza` extinsă (owner), fiecare schimbare în `red_jurnal`. `limita_zi` vine în F1; cele două
-  întrerupătoare vin în F2 / F3, odată cu funcțiile care le citesc (§13).
-- **Numărarea atomică** (L01: lock înainte de verificare, fără insert-apoi-count): tabel `red_fan_zi (zi_ro date PRIMARY KEY, aprobate integer
-  NOT NULL DEFAULT 0 CHECK (aprobate >= 0))`. RPC-ul butonului (§8) ia ÎNTÂI `SELECT … FROM red_fan_setari WHERE id FOR UPDATE` (un singur rând →
-  serializează toate aprobările din modul; tranzacția e scurtă: doar scrieri în BD, apelul plătit e în afara ei), apoi
-  `INSERT INTO red_fan_zi (zi_ro, aprobate) VALUES (azi_ro, n) ON CONFLICT (zi_ro) DO UPDATE SET aprobate = red_fan_zi.aprobate + EXCLUDED.aprobate
-  WHERE red_fan_zi.aprobate + EXCLUDED.aprobate <= v_limita RETURNING aprobate` — zero rânduri = peste plafon, nimic aprobat. Ziua =
-  `(clock_timestamp() AT TIME ZONE 'Europe/Bucharest')::date` (L17; `CURRENT_DATE` e UTC). Postcondiție de paritate în probe: `aprobate` =
-  numărul rândurilor `red_fan_awb` cu `aprobat_la` în ziua respectivă și fără aprobare owner.
+  aprobarea owner-ului), `doar_proiecte_test boolean NOT NULL DEFAULT true` (garda „doar TEST” în BD, §7.3), `urmarire_auto_activa boolean NOT
+  NULL DEFAULT false`, `arhivare_auto_activa boolean NOT NULL DEFAULT false`. **Semnătura veche rămâne** (Jakarinos: „păstrarea semnăturii vechi
+  pentru setări”): `fn_red_fan_setari_seteaza(integer)` (plafonul pe lot) nu se schimbă, pentru ecranul vechi; setările noi au RPC-uri proprii,
+  câte unul pe setare, owner: `fn_red_fan_setari_limita_zi(p_limita integer)` (0…5000), `fn_red_fan_setari_doar_test(p_activ boolean)`,
+  în F2 / F3 `fn_red_fan_setari_urmarire_auto(boolean)` / `fn_red_fan_setari_arhivare_auto(boolean)`; fiecare schimbare în `red_jurnal`
+  (tabela `red_fan_setari`, valoarea veche → nouă, `user_id = auth.uid()`). Fără supraîncărcare pe nume (PostgREST ar alege ambiguu între
+  semnături). `limita_zi` și `doar_proiecte_test` vin în F1; cele două întrerupătoare vin în F2 / F3, odată cu funcțiile care le citesc (§13).
+- **Numărarea atomică, pe AMBELE ramuri** (L01: lock înainte de verificare, fără insert-apoi-count; corectat în trecerea a patra — Jakarinos P1:
+  forma `INSERT … ON CONFLICT DO UPDATE … WHERE … <= limita` verifica plafonul DOAR la actualizarea unui rând existent, iar prima inserare a zilei
+  accepta orice `n`, inclusiv peste limită și la limita 0). Tabel `red_fan_zi (zi_ro date PRIMARY KEY, aprobate integer NOT NULL DEFAULT 0 CHECK
+  (aprobate >= 0))` + registrul consumului `red_fan_zi_consum (awb_id uuid NOT NULL, zi_ro date NOT NULL, intentie uuid NOT NULL, la timestamptz
+  NOT NULL, PRIMARY KEY (awb_id, zi_ro))`. În `fn_red_fan_comanda` (§8.1), în ordinea §6.2:
+  1. `SELECT limita_zi INTO v_limita FROM red_fan_setari WHERE id FOR UPDATE` (un singur rând → serializează toate aprobările din modul;
+     tranzacția e scurtă: doar scrieri în BD, apelul plătit e în afara ei);
+  2. `v_azi := (clock_timestamp() AT TIME ZONE 'Europe/Bucharest')::date` (L17; `CURRENT_DATE` e UTC);
+  3. `SELECT aprobate INTO v_acum FROM red_fan_zi WHERE zi_ro = v_azi FOR UPDATE; v_acum := coalesce(v_acum, 0)` — **zi absentă = 0, explicit**;
+  4. `v_n` = rândurile care AR consuma plafonul acum (cele noi + cele re-propuse; NU cele deja numărate azi — rândul are deja `red_fan_zi_consum`
+     pe `v_azi` — și NU cele `aprobat` rămase dintr-o trimitere anterioară sau aprobate de owner);
+  5. **verificarea, o singură dată, înaintea oricărei scrieri, pe orice ramură**: `IF v_acum + v_n > v_limita THEN` → toate rândurile cererii →
+     `de_aprobat` + cerere (Q2 A), **nimic scris în `red_fan_zi` / `red_fan_zi_consum`**, `RETURN`; cu `v_limita = 0` orice `v_n ≥ 1` ia această
+     ramură, inclusiv prima trimitere a zilei;
+  6. altfel `INSERT INTO red_fan_zi (zi_ro, aprobate) VALUES (v_azi, v_acum + v_n) ON CONFLICT (zi_ro) DO UPDATE SET aprobate = red_fan_zi.aprobate + v_n
+     RETURNING aprobate INTO v_dupa` și `INSERT INTO red_fan_zi_consum (awb_id, zi_ro, intentie, la) SELECT …` pentru fiecare rând numărat;
+  7. **postcondiție în RPC** (nu doar în teste): `IF v_dupa IS NULL OR v_dupa <> v_acum + v_n OR v_dupa > v_limita THEN RAISE … USING ERRCODE =
+     'P0001'` — tranzacția cade, nimic aprobat (nu se poate întâmpla sub lock-ul setărilor; dacă se întâmplă, e un defect, nu o aprobare).
+  **Garda în BD pe orice cale** (L07): trigger `BEFORE INSERT OR UPDATE ON red_fan_zi` (`fn_red_fan_zi_garda`): `NEW.aprobate > (SELECT limita_zi
+  FROM red_fan_setari)` → refuz `P0001`; `NEW.aprobate < OLD.aprobate` → refuz (contorul nu scade; o retragere nu restituie plafonul). Nimeni nu
+  are GRANT de scriere pe cele două tabele. **Paritatea** (postcondiție în probe, exactă): `red_fan_zi.aprobate` = `count(*)` din
+  `red_fan_zi_consum` pe aceeași zi — sursa parității e registrul consumului, NU `aprobat_la` (care e rescris la re-propunere / re-aprobare, deci
+  nu poate fi numitor; Jakarinos, „contorizarea la re-propunere”). **Re-propunerea** (datele plicului s-au schimbat după aprobare → rândul revine
+  `propus`): la următoarea trimitere rândul consumă plafonul din nou DOAR dacă nu l-a consumat deja în aceeași zi (`PRIMARY KEY (awb_id, zi_ro)`:
+  conflict = numărat deja azi → nu se mai numără); consumat într-o altă zi → se numără (e o aprobare nouă, în altă zi). Aprobarea owner-ului
+  (`fn_red_fan_cerere_decide`, și calea veche `fn_red_fan_aproba`) pune `aprobare_owner_la = clock_timestamp()` și NU scrie în registru.
+- **Probele obligatorii ale plafonului** (PGlite + două sesiuni pe clonă; așteptările din acest paragraf, nu din cod, L25):
+  | # | Caz | Așteptat |
+  |---|---|---|
+  | P1 | zi absentă (niciun rând în `red_fan_zi`), `limita_zi = 0`, cerere cu 1 plic | 0 aprobate, 1 `de_aprobat`, cerere `deschisa`; `red_fan_zi` fără rând; `red_fan_zi_consum` gol |
+  | P2 | zi absentă, `limita_zi = 5`, cerere cu 6 plicuri | 0 aprobate, 6 `de_aprobat`; `red_fan_zi` fără rând |
+  | P3 | zi absentă, `limita_zi = 5`, cerere cu 5 | 5 aprobate; rândul zilei `(azi, 5)`; 5 rânduri în consum |
+  | P4 | zi cu `aprobate = 3`, `limita_zi = 5`, cerere cu 3 | 0 aprobate, 3 `de_aprobat`; rândul zilei rămâne 3 |
+  | P5 | **doi operatori pe muchie** (două sesiuni reale, barieră): zi absentă, `limita_zi = 5`, ambii cu 3 | exact unul trece (rândul zilei 3), celălalt `de_aprobat`; ordinea nu contează |
+  | P6 | mutant: verificarea de la pasul 5 scoasă de pe ramura „zi absentă” | P1 și P2 trebuie să PICE (dovada că proba prinde defectul semnalat) |
+  | P7 | re-propunere în aceeași zi (rând numărat azi, datele schimbate, retrimis) | plafonul nu crește a doua oară; paritatea `aprobate = count(consum)` ține |
+  | P8 | cerere aprobată de owner (`cerere_decide`) | `aprobare_owner_la` pus, rândul zilei neschimbat, nimic în consum |
+  | P9 | `fn_red_fan_setari_…` coboară `limita_zi` sub `aprobate` de azi, apoi o cerere cu 1 | `de_aprobat` (nu eroare); trigger-ul refuză orice `UPDATE` care ar depăși |
+  | P10 | scriere directă `INSERT` / `UPDATE` în `red_fan_zi` ca `authenticated` | `42501` (fără GRANT), înaintea trigger-ului |
 - Doi operatori deodată: al doilea așteaptă lock-ul rândului de setări (milisecunde), apoi vede contorul actualizat; nu pot trece amândoi
-  „pe muchie” (probă cu două sesiuni, §13 F1).
+  „pe muchie” (P5).
 - **Peste plafon**: tot clickul așteaptă (Q2, decis A; nu se trimite „câte încap”) — rândurile intră în starea nouă
   `de_aprobat` (adăugată în CHECK-ul `red_fan_awb.stare`; nu intră în manifest, nu se tipăresc, nu se rezervă), legate de un rând nou
   `red_fan_cereri_aprobare (id, lot_id, proiect_id, cerut_de, cerut_la, n, zi_ro, stare CHECK IN ('deschisa','aprobata','respinsa'), decis_de,
-  decis_la, motiv ≤ 500)` cu `red_fan_awb.cerere_aprobare_id`. Owner-ul vede cererile deschise (casetă în Poștă + pe lot) și apasă „Aprobă” /
-  „Respinge” → `fn_red_fan_cerere_decide(p_id, p_aproba boolean, p_motiv)` (owner; lot FOR UPDATE → rânduri ORDER BY id FOR UPDATE → cererea;
-  aprobare = rândurile → `aprobat` cu `aprobat_de = auth.uid()` (owner) și `aprobare_owner_la = now()` — **nu consumă plafonul zilei**; respingere =
-  rândurile → `propus`, cererea `respinsa`; CAS pe `stare = 'deschisa'`). După aprobare, trimiterea efectivă (claim → POST) se face la următorul
-  apăsat pe „Trimite” (operator sau owner), care găsește rânduri `aprobat` și NU le mai numără. Ecranul spune înainte de apăsare cât mai încape
-  azi, ca operatorul să poată alege mai puține plicuri.
-- Plafonul pe lot rămâne în `fn_red_fan_aproba` / în RPC-ul nou, neschimbat ca regulă (deja aprobate / trimise + cele de acum ≤ `limita_lot`).
+  decis_la, motiv ≤ 500)` cu `red_fan_awb.cerere_aprobare_id`; stările cererii: `deschisa` → `aprobata` | `respinsa` | `retrasa` (CHECK derivat din
+  §8.8). Owner-ul vede cererile deschise (casetă în Poștă + pe lot) și apasă „Aprobă” / „Respinge” → `fn_red_fan_cerere_decide(p_id, p_aproba
+  boolean, p_motiv)` (owner; ordinea §6.2: lot FOR UPDATE → plicurile rândurilor ORDER BY id → rândurile FAN ORDER BY id → cererea FOR UPDATE →
+  jurnal; aprobare = rândurile încă `de_aprobat` ale cererii, cu plicul încă activ și în lot → `aprobat` cu `aprobat_de = auth.uid()` (owner),
+  `aprobat_la` și `aprobare_owner_la = clock_timestamp()` — **nu consumă plafonul zilei** și nu scrie în `red_fan_zi_consum`; un rând al cărui plic
+  nu mai e activ / în lot → `retras` (motiv `plic_mutat` / `plic_anulat`, §8.8); respingere = rândurile → `propus`, cererea `respinsa`; CAS pe
+  `stare = 'deschisa'`). **Retragerea cererii** (Jakarinos P1-6): `fn_red_fan_cerere_retrage(p_id)` — operatorul care a cerut (`cerut_de =
+  auth.uid()`) sau owner-ul; CAS `deschisa` → `retrasa`, rândurile → `propus`; aceeași ordine de lock. După aprobare, trimiterea efectivă (claim →
+  POST) se face la următorul apăsat pe „Trimite” (operator sau owner), care găsește rânduri `aprobat` și NU le mai numără. Ecranul spune înainte
+  de apăsare cât mai încape azi, ca operatorul să poată alege mai puține plicuri.
+- Plafonul pe lot rămâne în `fn_red_fan_aproba` / în RPC-ul nou, neschimbat ca regulă (deja aprobate / trimise + cele de acum ≤ `limita_lot`);
+  rândurile `de_aprobat` ale lotului se numără și ele la „deja” (conservator: o cerere aprobată ulterior nu poate duce lotul peste plafon).
+
+### 7.3 Comenzile operatorului vs. înscrierea rezultatelor externe (Jakarinos P1: „operatorul poate fabrica fapte ale curierului”)
+
+**Problema**: RPC-urile sunt apelabile direct prin PostgREST cu JWT-ul omului. Dacă poarta `rezultate` / `urmarire` / `confirmari` / `ridicat` /
+`anulat` ar fi „operator sau owner”, un operator ar putea, fără niciun apel la curier, înscrie un AWB ales după un claim, o urmărire fabricată, o
+ridicare (cu efect juridic pe un lot real) sau o anulare fără `DELETE /awb`. CAS-ul verifică starea rândului, NU confirmarea externă; garda „doar
+TEST” din handler nu protejează apelurile directe.
+
+**Regula**: fiecare RPC FAN e în exact UNA din trei clase; clasa e scrisă în comentariul funcției și verificată de postcondiții (EXECUTE exact).
+
+| Clasa | Ce înscrie | Cine o poate apela (EXECUTE + poarta în corp) | Identitatea | Exemple |
+|---|---|---|---|---|
+| **A. Comenzi** | intenția omului: ce vrea să trimită / să tipărească / să anuleze / să retragă | `authenticated`; în corp `fn_red_fan_e_operator()` (operator numit sau owner) sau `fn_red_fan_e_owner()` | `auth.uid()` al omului, NULL = refuz (L08) | `fn_red_fan_comanda`, `fn_red_fan_tiraj` (începere / confirmare), `fn_red_fan_anulare_cere`, `fn_red_fan_retrage`, `fn_red_fan_cerere_retrage`, `fn_red_fan_tiparire_inregistreaza` (F1b), `fn_red_fan_operator_seteaza`, setările, `fn_red_fan_cerere_decide`, `fn_red_fan_lot_marcheaza`, înlocuirea tirajului |
+| **B. Înscrierea rezultatelor externe** | ce a spus curierul sau ce a făcut serverul: rezervarea înaintea apelului plătit, AWB-urile și tarifele, urmărirea, confirmările, „găsit” în borderou, anularea confirmată de curier, încheierea intenției, bifarea automată | **EXCLUSIV `service_role`** (`REVOKE … FROM PUBLIC, anon, authenticated`); în corp: `auth.uid() IS NULL` (un JWT de om pe această cale = refuz `42501`), `p_actor` re-verificat intern ca operator / owner activ, legătura cu intenția / cererea / rularea | serverul (funcția edge sau cronul); omul care a apăsat = `p_actor uuid`, transmis de funcția edge DUPĂ ce l-a verificat ea din JWT (singura excepție L08: „cale server cu rol verificat explicit”); la cron `p_actor NULL` + `p_rulare` | `fn_red_fan_srv_claim`, `fn_red_fan_srv_rezultate`, `fn_red_fan_srv_urmarire`, `fn_red_fan_srv_confirmari`, `fn_red_fan_srv_reconciliaza` („găsit” reverificat în borderou), `fn_red_fan_srv_anuleaza`, `fn_red_fan_srv_intentie_incheie`; F2: `fn_red_fan_srv_bifeaza`, `fn_red_fan_srv_rulare`; F3: `fn_red_fan_srv_arhiva` |
+| **C. Excepțiile manuale ale owner-ului** (D18) | un fapt pe care owner-ul l-a verificat EL în contul curierului | `authenticated`; în corp `fn_red_fan_e_owner()` | `auth.uid()` = owner | `fn_red_fan_ridicat(p_id, p_data)` (ridicare confirmată manual), `fn_red_fan_reconciliaza` (absența = `eroare`; și „găsit” manual), `fn_red_fan_anulat(p_id, p_awb, p_motiv)` (anulare verificată în selfAWB), `fn_red_fan_urmarire_solutioneaza` (owner / admin), `fn_red_fan_exceptie_lamureste` (F2) |
+
+- **Primitivele owner de azi** `fn_red_fan_claim_lot`, `fn_red_fan_rezultate`, `fn_red_fan_urmarire`, `fn_red_fan_confirmari` rămân owner
+  (clasa C de fapt: azi le cheamă funcția edge veche cu JWT-ul owner-ului pe acțiunea `genereaza` / `urmarire` / `confirmari`) **neschimbate ca
+  semnătură și poartă** până la publicarea funcției edge noi; apoi retragerea lor e o migrare separată (lecția „dreptul folosit de clientul
+  vechi”). În F1 primesc în corp DOAR gărzile noi: `fn_red_fan_lot_permis` (mai jos), `lot_tiparit` / „lot încheiat” unde e cazul (§8.8) —
+  cu amprenta md5 a corpului vechi verificată înaintea `CREATE OR REPLACE`.
+- **Cum dovedește serverul că rezultatul vine de la curier**: nu criptografic (curierul nu semnează răspunsurile). Dovada e **lanțul**: (1)
+  secretele curierului există doar în funcția edge; (2) clasa B e apelabilă doar de `service_role`, cheie pe care niciun client (ecran, operator,
+  owner) nu o are — un om primește `42501` înaintea oricărei verificări de corp; (3) funcția edge cheamă clasa B DOAR după poarta omului (JWT →
+  operator → cerere → lot RLS → flag → garda TEST) și DOAR cu rezultatul formei stricte de succes a răspunsului curierului (ca azi:
+  `interpreteazaRaspunsCreare`, `rezumatUrmarireFan`, forma de succes a lui `DELETE /awb`); (4) fiecare înscriere e legată de un pas durabil
+  anterior creat de același lanț (claim → `cerere_id`; comandă → `intentie`; cron → `rulare_id`) și e CAS pe el; (5) jurnalul (`red_jurnal`) ține
+  `sursa` (`edge` / `cron`), `actor` (p_actor) și `cerere_id` / `rulare_id`. Ce NU garantează: un răspuns fals al curierului (sau un server
+  compromis) ar fi înscris — asta nu se schimbă față de azi și e acoperit de verificările omului (D11, reconciliere).
+- **`service_role` în funcția edge `redari-fan-awb`** (nou; fișa a–e a funcției se actualizează în `FANCOURIER_INTEGRARE.md` §7 la F1): un al
+  doilea client, construit din `SUPABASE_SERVICE_ROLE_KEY` (Edge Secret standard al proiectului), folosit **DOAR pentru RPC-urile clasei B**, DOAR
+  după poarta omului, DOAR cu `p_actor` = `user.id` din JWT-ul verificat; **nicio citire** cu el (lotul, plicurile, contactele, rândurile FAN se
+  citesc în continuare cu JWT-ul omului, sub RLS, L09); nicio scriere directă pe tabele (nu are GRANT de scriere: `REVOKE ALL … FROM service_role`
+  pe tabelele FAN rămâne, iar RPC-urile sunt DEFINER). Justificarea (CLAUDE.md pct. 7 (c)): singura alternativă ar fi EXECUTE `authenticated`, ceea
+  ce recreează exact defectul semnalat. Test negativ obligatoriu: clasa B cu cheia anon → `42501`; cu JWT de owner → `42501`; cu `service_role`
+  dar `p_actor` fără rând de operator activ → `42501`; `p_actor` al unui operator **retras** între comandă și rezultat → rezultatele se scriu
+  totuși (banii s-au cheltuit; L20) cu jurnal „operator retras între timp”, dar nicio comandă nouă.
+- **Garda „doar TEST” în BD, pe tot ce produce efecte** (Jakarinos P1-2, ultima frază): funcție internă `fn_red_fan_lot_permis(p_lot_id uuid) →
+  boolean` (fără EXECUTE pentru roluri; o singură definiție, L19) = `NOT red_fan_setari.doar_proiecte_test OR (red_fan_loturi.test IS TRUE AND
+  red_proiecte.cod LIKE 'TEST-%')`, citită sub lock-urile deja luate (lotul, rândul FAN al lotului). O cheamă, înaintea oricărei scrieri de
+  efect: `fn_red_fan_comanda` (aprobarea), toate RPC-urile clasei B, `fn_red_fan_ridicat`, `fn_red_fan_anulat`, `fn_red_fan_reconciliaza`,
+  `fn_red_fan_claim_lot` / `fn_red_fan_rezultate` / `fn_red_fan_urmarire` / `fn_red_fan_confirmari` (cele vechi, cât rămân), începerea tirajului
+  — refuz `RD032` „doar proiecte de TEST”, nimic scris. Handler-ul își păstrează constanta `DOAR_PROIECTE_TEST` ca PRIMA poartă (înaintea
+  secretelor, fără citiri în plus); BD-ul e a doua, pe orice cale. F4 le schimbă pe amândouă în același PR (migrare `fn_red_fan_setari_doar_test(false)`
+  cu „da”-ul proprietarului + constanta), cu un test de paritate (constanta și flagul din BD trebuie să coincidă; dezacord = `423` în handler).
+  Probe: ca owner, `fn_red_fan_ridicat` pe un rând al unui lot marcat REAL cu flagul pornit → `RD032`; `fn_red_fan_srv_rezultate` (ca
+  `service_role`) pe un lot real → `RD032`; `fn_red_fan_comanda` pe un lot al unui proiect fără prefix `TEST-` → `RD032` înaintea marcajului
+  automat (§8.1); același set cu flagul oprit (pe PGlite) → trece.
+- **Scriere directă pe tabele** (L07): rămâne fără niciun GRANT de INSERT / UPDATE / DELETE pentru `authenticated` și `service_role` pe toate
+  tabelele FAN (vechi și noi); proba: `PATCH /red_fan_awb` ca operator → `42501`.
 
 ## 8. Butonul unic: orchestrarea peste lanțul existent
 
@@ -388,76 +533,145 @@ plicuri nu trece oricum). Unitatea e decisă (D3); valoarea inițială: 20 pe zi
 |---|---|---|
 | citirea plicurilor, contactelor, corpului, hash-ului, amprentei surselor | ecran + funcția edge (`pregatestePlicuriFan`, `amprenteSurse`) | neschimbat, în funcția edge |
 | propunere | `fn_red_fan_propune` (un plic pe apel, admin / editor) | logica ei devine funcție internă (fără EXECUTE), chemată din RPC-ul nou pentru fiecare plic |
-| marcaj TEST / real | owner, manual, înainte de aprobare | **automat** la prima trimitere: `test = proiectul e TEST-` dacă lotul nu are marcaj; un marcaj pus de owner înainte (excepție) se respectă; după prima aprobare rămâne imuabil (trigger existent) |
+| marcaj TEST / real | owner, manual, înainte de aprobare | **automat** la prima trimitere, ÎN `fn_red_fan_comanda`, sub lock, în ordinea exactă de mai jos (Jakarinos P1-3): `test = proiectul e TEST-` dacă lotul nu are marcaj; un marcaj pus de owner înainte (excepție) se respectă; după prima aprobare rămâne imuabil (trigger existent) |
 | aprobare | `fn_red_fan_aproba` (owner, pe hash-urile văzute în ecran, plafon pe lot) | aceleași verificări + plafonul zilei (§7.2), în RPC-ul nou, autor = operatorul |
-| rezervare → apel plătit → rezultate | `fn_red_fan_claim_lot` → `POST /intern-awb` → `fn_red_fan_rezultate` (owner) | neschimbat, poarta „operator sau owner” |
+| rezervare → apel plătit → rezultate | `fn_red_fan_claim_lot` → `POST /intern-awb` → `fn_red_fan_rezultate` (owner, cu JWT-ul lui) | **clasa B** (§7.3): `fn_red_fan_srv_claim` → `POST` → `fn_red_fan_srv_rezultate`, chemate de funcția edge cu `service_role` + `p_actor` + `p_intentie`; corpurile = cele de azi + legătura cu intenția; niciun om nu le poate apela |
 | etichete + pagina de control | acțiunea `eticheta` pe fiecare parte, apăsată de owner; tiraj | chemată **automat** de funcția edge pentru toate părțile, în același răspuns; pagina de control o face ecranul ca azi (`controlLotFan`) |
 | rezultatul | mesajul tehnic („Generate: 1; respinse: 0; necunoscute: 0…”) | un mesaj pe înțelesul operatorului (§8.5) |
 
-**RPC nou `fn_red_fan_comanda(p_lot_id uuid, p_intentie uuid, p_plicuri jsonb, p_hash_cerere text)`** — SECURITY DEFINER, `search_path` fix,
-EXECUTE `authenticated`, poarta în corp `fn_red_fan_e_operator()`. `p_plicuri` = `[{plic_id, hash}]` (hash-ul corpului calculat de funcția edge
-din citirile ei — același cu cel pe care l-ar fi aprobat owner-ul azi); `p_hash_cerere` = sha256 pe lista canonică a plicurilor (idempotență,
-L04). Într-O tranzacție (L02): (1) intenția (§8.3); (2) `red_loturi_plicuire FOR UPDATE` → marcajul automat → plicurile `ORDER BY id FOR UPDATE` →
-rândurile FAN `ORDER BY id FOR UPDATE` → `red_fan_setari FOR UPDATE` → `red_fan_zi` (ordinea L06, scrisă în comentariul funcției; `red_fan_loturi`
-după plicuri ca azi); (3) pentru fiecare plic: verificările din `fn_red_fan_propune` + `fn_red_fan_aproba` (activ, neexpediat, fără AWB, în
-lot; un rând viu `propus` / `aprobat` se refolosește, altul = refuz pe acel plic cu motiv, nu pe toată cererea — plicul intră la „excluse”);
-**lotul tipărit nu se mai atinge** (Q5, decis A): dacă `red_fan_loturi.tiraj_cheie IS NOT NULL` (citit sub lock, în ordinea de mai sus; tirajul
-se începe tot sub `red_loturi_plicuire FOR UPDATE`, deci cele două se serializează), orice plic fără rând viu `generat` / `ridicat` e exclus cu
-`motiv_cod = 'lot_tiparit'` („mută plicul într-un lot nou de plicuire”) — niciun plic nou nu intră în manifestul unui lot deja tipărit;
-(4) plafonul pe lot; (5) plafonul zilei: dacă încape → `aprobat` (autor = `auth.uid()`), altfel **toate** → `de_aprobat` + cerere (Q2, decis
-A; nicio aprobare parțială); (6) întoarce `{aprobate: [id…], de_aprobat: n, cerere_id, excluse: [{nr_plic, motiv_cod}]}`. Rândurile `aprobat`
-rămase dintr-o trimitere anterioară întreruptă (§8.2) sau dintr-o cerere aprobată de owner intră în lista de trimis fără să fie numărate din nou.
+**RPC nou `fn_red_fan_comanda(p_lot_id uuid, p_intentie uuid, p_plicuri jsonb, p_hash_cerere text)`** — clasa A (§7.3): SECURITY DEFINER,
+`search_path` fix, EXECUTE `authenticated`, poarta în corp `fn_red_fan_e_operator()`. `p_plicuri` = `[{plic_id, hash}]` (hash-ul corpului calculat
+de funcția edge din citirile ei — același cu cel pe care l-ar fi aprobat owner-ul azi); `p_hash_cerere` = sha256 pe lista canonică a plicurilor
+(idempotență, L04). Într-O tranzacție (L02), în **ordinea unică §6.2** (scrisă în comentariul funcției):
 
-**Tirajul pornește doar pe lotul încheiat** (urmare a Q5 A): etichetele (și deci tirajul) se cer doar când lotul nu mai are rânduri `propus`
-legate de o intenție, `de_aprobat`, `aprobat`, `in_curs` sau `necunoscut` — adică toate plicurile trimise au rezultat definitiv (`generat` sau
-respins). Altfel (429, limita de 5 solicitări pe apăsat, cerere de aprobare încă deschisă, „necunoscut”) răspunsul spune „AWB-urile se tipăresc
-după ce se termină trimiterea lotului” și tirajul nu începe — ca manifestul să nu se schimbe după tipărire (fără „Tiraj nou” din cauza unei
-trimiteri în două reprize). Garda stă și în `fn_red_fan_tiraj` (începerea refuză `RD022` „lot neîncheiat”), nu doar în funcția edge (L07).
+1. `red_loturi_plicuire FOR UPDATE` (lotul; `P0002` dacă lipsește) → `proiect_id`, `red_proiecte.cod` (citite, fără lock).
+2. plicurile cerute `ORDER BY id FOR UPDATE` → rândurile FAN vii ale lotului `ORDER BY id FOR UPDATE` (toate, nu doar cele cerute: starea lotului
+   — §8.8 — se evaluează sub lock).
+3. `red_fan_loturi FOR UPDATE` → **marcajul, în ordinea exactă (Jakarinos P1-3)**: (a) dacă rândul lipsește: `IF doar_proiecte_test AND cod NOT
+   LIKE 'TEST-%' THEN RAISE RD032` (niciun marcaj pe un proiect real cât garda e pornită); altfel `INSERT red_fan_loturi (lot_id, proiect_id,
+   test = (cod LIKE 'TEST-%'), marcat_de = auth.uid())` + `red_jurnal` („marcaj automat la prima trimitere”); (b) dacă rândul există (owner-ul l-a
+   marcat manual — excepția): se respectă așa cum e; (c) **verificarea completă**: `fn_red_fan_lot_permis(p_lot_id)` (§7.3) pe rândul acum
+   existent → `RD032` dacă nu trece. Toate înaintea oricărei aprobări și a oricărui apel la curier (care e oricum în afara tranzacției).
+   Trigger-ul existent al marcajului (`BEFORE UPDATE OR DELETE`) nu e atins: INSERT-ul automat e permis, iar după prima aprobare rândul e imuabil
+   ca azi. `marcat_de` poate fi de acum și un operator (doar prin această cale, doar pe TEST).
+4. tot sub `red_fan_loturi`: dacă `tiraj_cheie IS NOT NULL` → **lotul tipărit nu se mai atinge** (Q5 A): orice plic cerut fără rând viu `generat` /
+   `ridicat` e exclus cu `motiv_cod = 'lot_tiparit'` („mută plicul într-un lot nou de plicuire”), iar rândul lui `propus` / `aprobat` (dacă există)
+   trece în `retras` (§8.8) — niciun plic nou nu intră în manifestul unui lot deja tipărit; începerea tirajului ia și ea lotul `FOR UPDATE`, deci
+   cele două se serializează.
+5. pentru fiecare plic cerut: verificările din `fn_red_fan_propune` + `fn_red_fan_aproba` (activ, neexpediat, fără AWB, în lot; hash-ul cerut =
+   hash-ul recalculat); un rând viu `propus` / `aprobat` / `de_aprobat` se refolosește (re-propunere: `lot_id` / `proiect_id` ale rândului se
+   aliniază la plicul de azi — azi `fn_red_fan_propune` le lăsa pe cele vechi la un plic mutat), altul = refuz pe acel plic cu motiv, nu pe toată
+   cererea — plicul intră la „excluse”; un rând `aprobat` / `de_aprobat` al cărui plic nu mai e activ / în lot → `retras` automat (§8.8).
+6. `red_fan_setari FOR UPDATE` → plafonul pe lot (§7.2, ultimul punct) → **plafonul zilei pe ambele ramuri** (§7.2 pașii 2–7, inclusiv
+   `red_fan_zi` / `red_fan_zi_consum`): dacă încape → `aprobat` (`aprobat_de = auth.uid()`, `aprobat_la`, `intentie_cheie = p_intentie`), altfel
+   **toate** → `de_aprobat` + cerere `deschisa` (Q2 A; nicio aprobare parțială) — `red_fan_cereri_aprobare` la poziția 7.
+7. `red_fan_intentii` (poziția 8): `INSERT … ON CONFLICT (cheie) DO NOTHING RETURNING`; fără rând → contractul de reluare / replay din §8.3 (se
+   evaluează ACUM, cu toate lock-urile luate, nu la începutul funcției — o singură ordine); cu rând → `in_curs`, `lucru_pana_la =
+   clock_timestamp() + 10 min`.
+8. `red_jurnal` (ultimul): un rând pe comandă (`eveniment: 'comanda'`, intenția, numărul de aprobate / de_aprobat / excluse, fără PII).
+9. întoarce `{intentie, reluare: boolean, aprobate: [id…], de_trimis: [id…] (aprobate acum + `aprobat` rămase din trimiteri anterioare sau din
+   cereri aprobate de owner, nenumărate), de_aprobat: n, cerere_id, excluse: [{nr_plic, motiv_cod}], retrase: [{nr_plic, motiv_cod}]}`.
+
+**Tirajul pornește doar pe lotul încheiat** (D15, urmare a Q5 A): etichetele (și deci tirajul) se cer doar când lotul e **încheiat** în sensul
+exact din §8.8: niciun rând `de_aprobat` / `aprobat` / `in_curs` / `necunoscut` pe lot, nicio cerere `deschisa`, nicio intenție `in_curs` cu
+`lucru_pana_la` în viitor. Rândurile `propus` rămase NU blochează (sunt resturi, nu trimiteri în curs; după tiraj ele nu mai pot intra în lot —
+`lot_tiparit` → `retras`). Altfel (429, limita de 5 solicitări pe apăsat, cerere de aprobare încă deschisă, „necunoscut”, intenție în curs)
+răspunsul spune „AWB-urile se tipăresc după ce se termină trimiterea lotului” și tirajul nu începe — ca manifestul să nu se schimbe după tipărire
+(fără „Tiraj nou” din cauza unei trimiteri în două reprize). Garda stă în BD, într-o singură funcție internă `fn_red_fan_lot_incheiat(p_lot_id) →
+boolean` (L19), chemată de `fn_red_fan_tiraj` la începere (refuz **`RD031`** „lot neîncheiat”; corectat: trecerea a treia scria `RD022`, cod deja
+folosit de `fn_red_fan_tiraj` pentru „oprește și așteaptă 30 s”) și de `fn_red_fan_tiparire_inregistreaza` (F1b), nu doar în funcția edge (L07).
+Fiecare stare care poate ține lotul deschis are o ieșire definită (tabelul §8.8), deci „neîncheiat” nu e permanent.
 
 **Acțiune nouă în funcția edge: `trimite`** (`ACTIUNI_FAN` + `raspundeFan`): corp `{actiune:'trimite', lot_id, plic_ids:[uuid…] (1…2000),
-intentie: uuid}`. Ordinea porților neschimbată: JWT → utilizator → **operator** (nou: `deps.operator()` = `fn_red_fan_e_operator`) → cerere →
-lot (RLS) → flag → garda „doar TEST” → secretele. Apoi: citiri → `fn_red_fan_comanda` → bucla existentă claim → POST → rezultate (oprire la
-primul „necunoscut”, L05) → dacă lotul e încheiat (mai sus) și are cel puțin un AWB: etichetele pe toate părțile (logica `eticheta`, tiraj
-început / confirmat / reverificat după PDF) → `fn_red_fan_intentie_incheie` (§8.3) → răspuns `{rezultat, pdf_parti:[base64…], tiraj,
-manifest_cheie, ramase, tarif_total, respinse:[{nr_plic, motiv_cod}], excluse, necunoscute, oprit}`. `pdf_parti` sunt PDF-urile curierului
-**neschimbate** (pagini A4); trecerea pe A5 e la tipărire (§8.6.3). Fără etichete când lotul nu e încheiat (manifestul nu e sigur). Dacă
-etichetele pică (502) după AWB-uri generate, răspunsul spune că AWB-urile există și că se pot tipări cu „Tipărește AWB-urile” mai târziu (același
-tiraj, aceeași cerere la curier, nu costă).
+intentie: uuid}`. **Ordinea exactă pentru un lot nemarcat** (Jakarinos P1-3 — garda de azi cere `fanLot.test === true` ÎNAINTE de RPC, ceea ce ar
+bloca prima trimitere, pentru că marcajul automat se face în RPC):
+1. JWT → utilizator → **operator** (nou: `deps.operator()` = `fn_red_fan_e_operator`; `403 non_operator`) → cerere → lot (RLS) → flag
+   `TRANSPORT_REAL_ACTIV`;
+2. garda „doar TEST” **pe proiect**: `transportPermis({ proiectCod, fanLot, cereMarcaj: false })` (parametrul există deja în `redariFanHandler.mjs`)
+   — proiectul fără prefix `TEST-` → `423 transport_real_doar_test`, nimic chemat; un lot deja marcat REAL de owner → tot `423` aici (marcajul e
+   citit și e `test = false`);
+3. citirile cu JWT-ul omului → **`fn_red_fan_comanda`** (JWT-ul omului; marcajul automat sub lock, verificarea completă în BD — pasul 3 de mai sus);
+4. **recitirea** `red_fan_loturi` (JWT, RLS) → `transportPermis({ …, cereMarcaj: true })` — verificarea completă, în handler, pe marcajul acum
+   existent; refuz `423` dacă nu trece (nu se poate întâmpla după pasul 3; dacă se întâmplă e un defect și se oprește aici, nimic plătit);
+5. abia acum secretele curierului → bucla claim → `POST` → rezultate, **cu clientul `service_role`** (`fn_red_fan_srv_claim(p_actor, p_intentie,
+   …)` → `POST /intern-awb` → `fn_red_fan_srv_rezultate(p_actor, p_intentie, p_cerere, p_rezultate)`), oprire la primul „necunoscut” (L05); fiecare
+   pas reînnoiește `lucru_pana_la` (§8.3);
+6. dacă lotul e încheiat (`fn_red_fan_lot_incheiat`, recitit) și are cel puțin un AWB: etichetele pe toate părțile (logica `eticheta`,
+   `fn_red_fan_tiraj` cu JWT-ul omului — e o comandă — început / confirmat / reverificat după PDF) → `fn_red_fan_srv_intentie_incheie` (§8.3) →
+   răspuns `{rezultat, pdf_parti:[base64…], tiraj, manifest_cheie, ramase, tarif_total, respinse:[{nr_plic, motiv_cod}], excluse, retrase,
+   necunoscute, oprit, reluare}`. `pdf_parti` sunt PDF-urile curierului **neschimbate** (pagini A4); trecerea pe A5 e la tipărire (§8.6.3).
+Fără etichete când lotul nu e încheiat (manifestul nu e sigur). Dacă etichetele pică (502) după AWB-uri generate, răspunsul spune că AWB-urile
+există și că se pot tipări cu „Tipărește AWB-urile” mai târziu (același tiraj, aceeași cerere la curier, nu costă). **Proba obligatorie** (vitest
+pe handler + PGlite + live pe `TEST-RAZVAN`): un lot de TEST **fără niciun marcaj anterior** → `trimite` trece de pasul 2, RPC-ul inserează
+marcajul `test = true` cu `marcat_de` = operatorul, pasul 4 trece, AWB-urile se generează; același lot pe un proiect fără prefix `TEST-` → `423` la
+pasul 2 și, la apel direct al RPC-ului, `RD032` fără rând în `red_fan_loturi`; un lot marcat manual REAL de owner pe un proiect `TEST-` → `423` la
+pasul 2 (marcajul owner-ului se respectă, nu se rescrie).
 
 ### 8.2 Atomicitate și reluare
 
 - **Fiecare pas durabil e în BD înaintea pasului plătit** (L22): aprobarea (`fn_red_fan_comanda`) și rezervarea (`fn_red_fan_claim_lot`) sunt
   tranzacții separate; apelul plătit e între rezervare și rezultate; rezultatele unei solicitări se scriu toate odată (`fn_red_fan_rezultate`).
-- **Întrerupere între aprobare și generare** (funcția edge moare, rețea): rândurile rămân `aprobat`, nimic plătit. Următorul apăsat pe
-  „Trimite” (orice intenție) le găsește și le trimite fără să le numere din nou (plafonul s-a consumat la aprobare). Ecranul arată „12 plicuri
-  aprobate, netrimise” și butonul spune „Trimite (12 aprobate + 3 noi)”.
+- **Întrerupere între aprobare și generare** (funcția edge moare, rețea): rândurile rămân `aprobat`, nimic plătit, intenția rămâne `in_curs` cu
+  `lucru_pana_la` în viitor cel mult 10 minute. Reluarea e **aceeași intenție** (§8.3: „Reia trimiterea”, aceeași cheie, fără dublă aprobare);
+  dacă operatorul nu reia, următorul apăsat pe „Trimite” cu o cheie nouă, după expirarea lui `lucru_pana_la`, închide intenția veche
+  (`neincheiata`) și preia rândurile `aprobat` fără să le numere din nou (plafonul s-a consumat la aprobare). Ecranul arată „12 plicuri aprobate,
+  netrimise” și butonul spune „Trimite (12 aprobate + 3 noi)”.
 - **Întrerupere între rezervare și rezultate** (rândurile `in_curs`) sau răspuns „necunoscut”: **niciodată regenerare** (L05). Ecranul arată
   „trimitere neîncheiată: N plicuri cu rezultat necunoscut” și butonul „Trimite” e dezactivat pe acel lot până la reconciliere. „Verifică la
-  curier” (operator) = acțiunea `reconciliaza` existentă pe ziua trimiterii: propunerile „găsit: AWB …” le poate confirma operatorul
-  (`fn_red_fan_reconciliaza` cu `p_awb` — nu costă); „nu apare în borderoul complet” o confirmă DOAR owner-ul (deschide un al doilea AWB);
-  „de verificat în selfAWB” n-are buton. Fereastra de 10 minute pentru `in_curs` rămâne (ceasul efectiv, ca azi).
+  curier” (operator) = acțiunea `reconciliaza` existentă pe ziua trimiterii, în funcția edge: ea citește borderoul curierului și propune
+  „găsit: AWB …” / „nu apare în borderoul complet” / „de verificat în selfAWB”. **„Confirmă: găsit”** (operator) NU scrie AWB-ul din ecran: trimite
+  funcției edge `{actiune:'reconciliaza', confirma:{id}}`, iar funcția edge **recitește borderoul**, verifică că AWB-ul e acolo pentru `nr_plic`-ul
+  rândului și abia apoi cheamă clasa B `fn_red_fan_srv_reconciliaza(p_actor, p_id, p_awb, p_tarif, p_tva)` (CAS pe `necunoscut` / `in_curs` > 10
+  min, `fn_red_fan_lot_permis`) — un operator nu poate alege el AWB-ul (Jakarinos P1-2). „Nu apare în borderoul complet” o confirmă DOAR owner-ul
+  (`fn_red_fan_reconciliaza` cu `p_awb NULL`, clasa C: deschide un al doilea AWB); „de verificat în selfAWB” n-are buton. Fereastra de 10 minute
+  pentru `in_curs` rămâne (ceasul efectiv, ca azi).
 - **Rezultate scrise, etichete nedescărcate**: AWB-urile există; „Tipărește AWB-urile” / „Retipărește…” cere același tiraj (cheia manifestului
   curent = tirajul început → aceleași fișiere; altă cheie → refuz „tirajul s-a schimbat”, drumul „Tiraj nou” al owner-ului, ca azi).
 
-### 8.3 Idempotență: dublu-click și două taburi (L04 / L05, lecția „L05 în UI”)
+### 8.3 Idempotență și reluare: dublu-click, două taburi, crash (L04 / L05, lecția „L05 în UI”; Jakarinos P1-5)
 
 - **Cheia intenției**: ecranul generează un UUID la fiecare apăsare pe „Trimite” și îl scrie într-un **registru local** (`localStorage`, o
   intrare pe cheie, `{lot_id, plic_ids, hash_cerere, inceput_la}`) ÎNAINTE de apel; scrierea se verifică prin recitire (eșec = nu trimite).
-  Intrarea iese din registru DOAR la rezultat dovedit (răspuns `ok`, sau refuz determinist 4xx cu cod cunoscut); un 42501 / 5xx / timeout nu
-  dovedește nimic → intrarea rămâne, iar la redeschiderea ecranului se caută în BD (`red_fan_intentii`) starea cheii și se afișează.
+  Intrarea iese din registru DOAR la rezultat dovedit (răspuns `ok` cu intenția `incheiata`, intenția găsită `neincheiata`, sau refuz determinist
+  4xx cu cod cunoscut); un 42501 / 5xx / timeout nu dovedește nimic → intrarea rămâne, iar la redeschiderea ecranului se caută în BD
+  (`red_fan_intentii`, RLS admin / editor) starea cheii și se oferă **„Reia trimiterea”** (aceeași cheie) sau se afișează rezultatul memorat.
 - **În BD**: `red_fan_intentii (cheie uuid PRIMARY KEY, lot_id, proiect_id, operator uuid NOT NULL, hash_cerere text NOT NULL, stare CHECK IN
-  ('in_curs','incheiata','neincheiata'), rezultat jsonb, inceput_la timestamptz NOT NULL, incheiata_la timestamptz)`. `fn_red_fan_comanda` face
-  `INSERT … ON CONFLICT (cheie) DO NOTHING RETURNING`; fără rând întors → recitește: aceeași cheie + același hash + `incheiata` → întoarce
-  rezultatul memorat (**replay**, nimic nou trimis); aceeași cheie + `in_curs` → `RD030` „trimiterea e în curs în alt tab; așteaptă”; aceeași
-  cheie + alt hash → `22023` (cerere coruptă). Al doilea tab cu o cheie **nouă** pe același lot, cât primul e `in_curs`: lotul e sub
-  `FOR UPDATE` doar cât durează tranzacția RPC-ului; de aceea RPC-ul refuză și cu `RD030` dacă există o intenție `in_curs` pe lot mai nouă de 10
-  minute (ceasul efectiv). Rândurile `aprobat` ale primului tab nu pot fi oricum rezervate de două ori (claim-ul cere `aprobat`).
-- `fn_red_fan_intentie_incheie(p_cheie, p_rezultat jsonb)` (operator / owner; CAS pe `stare = 'in_curs'` și `operator = auth.uid()` SAU owner):
-  scrie `incheiata` + rezultatul (fără PII: numere de plic, AWB-uri, coduri de motiv, sume). O intenție `in_curs` de peste 10 minute pe care
-  nimeni n-o încheie devine `neincheiata` la reconciliere (operatorul apasă „Verifică la curier”, care o închide după ce rândurile nu mai sunt
-  `in_curs` / `necunoscut`).
+  ('in_curs','incheiata','neincheiata'), lucru_pana_la timestamptz NOT NULL, rezultat jsonb, inceput_la timestamptz NOT NULL, incheiata_la
+  timestamptz, incheiata_de text CHECK IN ('edge','reconciliere','comanda_noua'))`; pe `red_fan_awb`: `intentie_cheie uuid` (intenția care a
+  aprobat rândul; rămâne la re-propunere ca istoric, se rescrie la o nouă aprobare). **`lucru_pana_la` = arenda** (lease) intenției:
+  `clock_timestamp() + 10 min` la comandă, **reînnoită de fiecare pas durabil** al aceleiași trimiteri (`fn_red_fan_srv_claim`,
+  `fn_red_fan_srv_rezultate`, începerea tirajului): o trimitere vie nu expiră niciodată; una moartă expiră 10 minute după ultimul pas scris
+  (aceeași fereastră ca reconcilierea `in_curs`; ceasul efectiv, L17).
+- **Contractul complet al aceleiași chei**, evaluat de `fn_red_fan_comanda` după `INSERT … ON CONFLICT DO NOTHING` fără rând (toate lock-urile
+  §6.2 deja luate), **replay-ul verificând lotul, apelantul și payloadul canonic**:
+  | Găsit | Condiție | Răspuns |
+  |---|---|---|
+  | alt `lot_id`, sau alt `hash_cerere`, sau alt `operator` (și apelantul nu e owner) | — | `22023` „cerere coruptă” — nimic scris |
+  | `incheiata` | aceeași cheie, lot, hash, operator / owner | **replay**: `{reluare:false, replay:true, rezultat memorat}` — nimic nou scris; funcția edge NU trimite nimic și **recitește rândurile** lotului cu JWT-ul omului ca să construiască răspunsul (memo-ul e doar afișare, §8.5) |
+  | `in_curs`, `lucru_pana_la > clock_timestamp()` | aceeași cheie | `RD030` „trimiterea e în curs (alt tab sau încă rulează); așteaptă până la <lucru_pana_la>” — nimic scris |
+  | `in_curs`, `lucru_pana_la <= clock_timestamp()` | aceeași cheie, lot, hash, operator / owner | **reluare**: aceeași tranzacție continuă pașii 4–6 din §8.1 idempotent: rândurile cu `intentie_cheie = cheie` și `aprobat` NU se re-aprobă și NU se numără din nou; rândurile revenite `propus` (date schimbate) se tratează ca noi (numărate o singură dată pe zi, §7.2); rândurile `in_curs` / `necunoscut` ale intenției → **refuz `RD033`** „N plicuri cu rezultat necunoscut; Verifică la curier” (L05: nu se reia peste o rezervare nelămurită); `lucru_pana_la` reînnoită; răspuns `{reluare:true, de_trimis:[…]}`, apoi funcția edge continuă claim → POST pe `de_trimis` |
+  | `neincheiata` | aceeași cheie | `RD034` „trimiterea a fost închisă; apasă din nou «Trimite»” — ecranul șterge cheia din registru și generează una nouă la următoarea apăsare; rândurile `aprobat` rămase intră în `de_trimis` al noii intenții fără numărare |
+  Nu există cheie nouă pentru reluare, nu există dublă aprobare (rândurile aprobate poartă cheia și sunt sărite) și nu există blocare permanentă
+  (arenda expiră în cel mult 10 minute de la ultimul pas scris; după ea, fie reluarea, fie o cheie nouă închide intenția).
+- **Cheie nouă pe același lot** (al doilea tab) cât există o intenție `in_curs`: cu `lucru_pana_la` în viitor → `RD030`; expirată → RPC-ul o
+  închide `neincheiata` (`incheiata_de = 'comanda_noua'`, jurnal) și continuă cu cheia nouă, preluând rândurile `aprobat`. Rândurile `aprobat` nu
+  pot fi oricum rezervate de două ori (claim-ul cere `aprobat` și le trece `in_curs`).
+- `fn_red_fan_srv_intentie_incheie(p_actor, p_cheie, p_rezultat jsonb)` — **clasa B** (doar funcția edge, §7.3): CAS pe `stare = 'in_curs'`,
+  `operator = p_actor` SAU `p_actor` owner; **rezultatul memorat nu e adevăr pentru că vine în `p_rezultat`**: RPC-ul **derivă** sumarul din rânduri
+  (`count(*) FILTER (WHERE stare = …)` pe `red_fan_awb WHERE intentie_cheie = p_cheie`: generate, respinse, necunoscute, retrase, tarif total din
+  `tarif`) și scrie DOAR sumarul derivat + cheile permise din `p_rezultat` (`tiraj`, `manifest_cheie`, `oprit`, `ramase`, `excluse` — listă albă;
+  orice altă cheie = `22023`); `incheiata_de = 'edge'`. O intenție `in_curs` cu arenda expirată pe care nimeni n-o reia devine `neincheiata` la
+  „Verifică la curier” (reconcilierea, `incheiata_de = 'reconciliere'`, după ce rândurile ei nu mai sunt `in_curs` / `necunoscut`) sau la prima
+  comandă nouă pe lot (mai sus).
 - **Dublu-click în același tab**: `ocupat` (ref) + butonul dezactivat cât `lucru` + registrul local (a doua apăsare cu intenție nouă e refuzată
-  local cât prima e în registru pe același lot).
+  local cât prima e în registru pe același lot și `inceput_la` < 10 min).
+- **Probele obligatorii** (PGlite; două sesiuni pe clonă pentru I5): I1 crash după aprobare (comanda comisă, nimic după) → reluare cu aceeași cheie
+  după expirarea arendei: zero aprobări noi, `red_fan_zi` neschimbat, `de_trimis` = rândurile aprobate; I2 aceeași cheie înainte de expirare →
+  `RD030`; I3 aceeași cheie, alt hash → `22023`, nimic scris; aceeași cheie, alt operator ne-owner → `22023`; I4 `incheiata` → replay, `red_fan_awb`
+  neschimbat (sha pe tabel înainte / după); `p_rezultat` cu sumar fals la încheiere → sumarul scris e cel derivat din rânduri, nu cel trimis;
+  cheie străină în `p_rezultat` → `22023`; I5 două sesiuni: cheie nouă pe lotul unei intenții expirate → cea veche `neincheiata`, rândurile preluate
+  o singură dată; I6 reluare cu un rând `in_curs` al intenției → `RD033`, nimic scris; I7 `fn_red_fan_srv_intentie_incheie` ca `authenticated` →
+  `42501`.
 
 ### 8.4 Tirajul și retipărirea
 
@@ -472,13 +686,28 @@ tirajul până la reconciliere).
 
 #### 8.4.1 Anularea unui AWB neridicat de către operator (Q3 B, Q6 A)
 
-- Acțiunea edge `sterge_awb` (azi owner) trece pe poarta „operator sau owner” (`fn_red_fan_e_operator`) și cheamă RPC-ul nou
-  `fn_red_fan_anuleaza` (operator sau owner); `fn_red_fan_anulat` de azi rămâne owner, cu semnătura neschimbată, cât timp mai rulează funcția
-  edge veche (§13 F1). Regulile de azi rămân: doar un rând `generat` (neridicat, fără C0), `DELETE /awb` la curier cu forma de succes strictă, apoi RPC-ul cu CAS pe
-  `stare = 'generat' AND awb = p_awb`; un răspuns ambiguu al curierului = nimic scris, „Verifică la curier” (L05).
+- **Anularea e în DOI pași, ca operatorul să nu poată scrie „anulat” fără curier** (Jakarinos P1-2): (1) **comanda** — acțiunea edge `sterge_awb`
+  (poarta „operator sau owner”) cheamă întâi, cu JWT-ul omului, clasa A `fn_red_fan_anulare_cere(p_id, p_awb, p_motiv_cod, p_nota)`: ordinea §6.2
+  (plic FOR UPDATE → rândul FAN FOR UPDATE), `fn_red_fan_lot_permis`, CAS `stare = 'generat' AND awb = p_awb AND ridicat_la IS NULL AND
+  ridicat_contrazis IS NULL AND anulare_ceruta_la IS NULL` → scrie `anulare_ceruta_de = auth.uid()`, `anulare_ceruta_la = clock_timestamp()`,
+  `motiv_anulare`, `anulare_nota`; `stare` rămâne `generat`; o cerere deja deschisă = `RD035` „anulare în curs” (fără al doilea `DELETE`); (2)
+  funcția edge face `DELETE /awb` cu forma de succes strictă (ca azi) și apoi **înscrierea**, clasa B: `fn_red_fan_srv_anuleaza(p_actor, p_id,
+  p_awb, p_rezultat ∈ {'sters','refuzat_ridicat','ambiguu'})` — `sters` → CAS `anulare_ceruta_la IS NOT NULL AND stare = 'generat'` → `stare =
+  'anulat'`, `anulat_de = anulare_ceruta_de`, `anulat_la = clock_timestamp()`; `refuzat_ridicat` (curierul spune că AWB-ul e deja preluat, 4xx
+  determinist) → cererea se golește (`anulare_ceruta_* NULL`, motivul în jurnal), rândul rămâne `generat` și intră în „De verificat” (ridicarea va
+  veni la urmărire); `ambiguu` (5xx / timeout / formă necunoscută) → **nimic schimbat**, cererea rămâne deschisă, „Verifică la curier” (L05):
+  reconcilierea pe borderou lămurește (AWB absent → `sters` prin aceeași clasă B; prezent → cererea se golește). `fn_red_fan_anulat` de azi rămâne
+  owner (clasa C, D18), cu semnătura neschimbată, cât timp mai rulează funcția edge veche și ecranul owner-ului (§13 F1, §16); în F1 primește în
+  corp `fn_red_fan_lot_permis` și scrie și coloanele noi (`motiv_anulare = 'alt_motiv'`, `anulare_nota` = textul vechi tăiat la 200, `anulat_de /
+  anulat_la`).
 - Motivul devine **cod din listă** (`motiv_anulare CHECK IN ('netiparit_3_zile','neridicat_3_zile','plic_retras','date_gresite','alt_motiv')`,
-  `alt_motiv` cere notă ≤ 200), nu text liber; coloane noi `anulat_de uuid`, `anulat_la timestamptz` puse de server (`auth.uid()`,
-  `clock_timestamp()`; L08), imuabile după scriere (trigger BEFORE UPDATE, L07); rând în `red_jurnal`.
+  `alt_motiv` cere notă ≤ 200), nu text liber; coloane noi `anulare_ceruta_de uuid`, `anulare_ceruta_la timestamptz`, `anulat_de uuid`, `anulat_la
+  timestamptz`, `anulare_nota text` puse de server (`auth.uid()` / `p_actor`, `clock_timestamp()`; L08). **Trigger BEFORE UPDATE pe
+  `red_fan_awb`** (L07): `anulat_de` / `anulat_la` / `motiv_anulare` se pot scrie DOAR dintr-una din funcțiile de pe lista EXACTĂ
+  `fn_red_fan_srv_anuleaza`, `fn_red_fan_anulat` (corectat: trecerea a treia scria „doar din `fn_red_fan_anulat`”, deși RPC-ul nou era altul —
+  Jakarinos), verificat prin `pg_trigger_depth()` + un marcaj de tranzacție pus de funcție (`set_config('redari_fan.anulare', <id rând>, true)`,
+  comparat cu `NEW.id`), nu prin `current_user`; odată scrise, imuabile (`OLD.anulat_la IS NOT NULL AND NEW.* IS DISTINCT FROM OLD.*` → refuz
+  `42501`); `stare = 'anulat'` cere `anulat_la IS NOT NULL` (CHECK); rând în `red_jurnal` la cerere și la înscriere.
 - **Lista anulărilor pentru owner**: view `v_red_fan_anulari` (`security_invoker`; lot, nr. plic, AWB, cine, când, motivul, „avea foaia
   tipărită” din evidența §8.7 — până la F1b `NULL` = „necunoscut”, nu „nu”, L18); ecranul o arată owner-ului în Poștă, cu filtrul pe zi.
 - Propunerea de anulare (excepțiile (a) / (b) după 3 zile lucrătoare, §9.5.2) vine în F2; anularea manuală, oricând înainte de ridicare, e în F1.
@@ -497,6 +726,16 @@ tirajul până la reconciliere).
 | exclus: plic anulat / expediat manual / mutat din lot | „PL-… — plicul nu mai e în lot sau are deja expediere” | nimic |
 | `de_aprobat` (peste plafon) | „Toate cele N plicuri așteaptă aprobarea proprietarului (azi mai încăpeau X)” | așteaptă; după aprobare, „Trimite” din nou (Q2 A) |
 | `necunoscut` / `in_curs` rămas | „Răspunsul curierului nu s-a confirmat pentru N plicuri. NU retrimite.” | „Verifică la curier” după 10 minute |
+| `RD030` (aceeași cheie sau alt tab, intenție în curs) | „Trimiterea e în curs (alt tab sau încă rulează); așteaptă până la HH:MM” | nimic; ecranul reîncearcă să afle starea |
+| `reluare: true` (aceeași cheie după întrerupere) | „Trimiterea întreruptă a fost reluată: N plicuri aprobate deja, M noi” | nimic |
+| `replay: true` (intenție deja încheiată) | rezultatul memorat, cu „(rezultat deja înregistrat la HH:MM)” — numerele din rândurile recitite | nimic |
+| `RD033` (reluare peste rezultat necunoscut) | „N plicuri au rezultatul neconfirmat; întâi «Verifică la curier»” | „Verifică la curier” |
+| `RD034` (intenția a fost închisă) | „Trimiterea anterioară a fost închisă; apasă din nou «Trimite»” | „Trimite” (cheie nouă) |
+| `RD031` (tiraj cerut pe lot neîncheiat) | „AWB-urile se tipăresc după ce se termină trimiterea lotului” (același rând ca mai sus) | termină trimiterea |
+| `RD032` (garda „doar TEST” din BD) | „Transportul e permis doar pe proiecte de TEST (Testul 1)” (același text ca 423) | nimic (anunță proprietarul) |
+| retras automat (`plic_mutat` / `plic_anulat` / `lot_tiparit`) | „PL-… — scos din trimitere: plicul nu mai e în lot / e anulat / lotul e tipărit” | mută plicul într-un lot nou dacă mai trebuie trimis |
+| `RD035` (anulare deja cerută) | „Anularea AWB-ului … e deja în curs; așteaptă răspunsul curierului” | „Verifică la curier” dacă durează |
+| anulare `refuzat_ridicat` | „Nu s-a anulat: curierul spune că AWB-ul a fost deja preluat” | nimic (ridicarea vine la urmărire) |
 | 429 | „Curierul a cerut o pauză; restul se trimite mai târziu” | „Trimite” din nou peste câteva minute (doar rândurile rămase `aprobat`) |
 | `oprit` = limita de 5 solicitări pe apăsat | „S-au trimis 500; mai sunt N” | „Trimite” din nou |
 | 423 `transport_real_doar_test` | „Transportul e permis doar pe proiecte de TEST (Testul 1)” | nimic (anunță proprietarul) |
@@ -700,12 +939,15 @@ Apasă „Tipărește AWB-urile (A5)” / „Tipărește convocările + opisul (
   2. cheia pachetului (UUID) → registrul local (localStorage, o intrare pe cheie: lot, tiraj, tip, poziții, sha256), scris și RECITIT;
      eșec = nu se predă nimic (lecția „L05 în UI”)
   3. RPC fn_red_fan_tiparire_inregistreaza(p_pachet, p_lot_id, p_tiraj_cheie, p_tip, p_parte, p_plicuri [{plic_id, awb, pozitie}], p_sha256, p_motiv)
-       — operator sau owner (fn_red_fan_e_operator, L08), într-O tranzacție (L02), lock-uri în ordinea L06:
-       lot FOR UPDATE → red_fan_loturi (tirajul: cheia = p_tiraj_cheie și neoprit, altfel RD020 / RD021 — același corp ca fn_red_fan_tiraj, L19)
-       → red_fan_awb ORDER BY id FOR UPDATE (fiecare plic: AWB-ul din cerere = AWB-ul rândului, stare în {generat, ridicat, …}, nu anulat, plicul activ în lot;
-         altfel 22023 pe toată cererea — un fișier parțial greșit nu se predă)
-       → INSERT pachet ON CONFLICT (id) DO NOTHING RETURNING; fără rând = recitește: aceeași cheie + același sha256 → REPLAY (întoarce evidența
-         memorată, nimic nou); aceeași cheie + alt sha256 → 22023
+       — clasa A (§7.3): operator sau owner (fn_red_fan_e_operator, L08), într-O tranzacție (L02), lock-uri în ORDINEA UNICĂ §6.2
+       (corectat: trecerea a treia lua red_fan_loturi înaintea rândurilor FAN):
+       lot FOR UPDATE → red_fan_awb ORDER BY id FOR UPDATE (fiecare plic: AWB-ul din cerere = AWB-ul rândului, stare în {generat, ridicat, …}, nu anulat,
+         plicul activ în lot; altfel 22023 pe toată cererea — un fișier parțial greșit nu se predă)
+       → red_fan_loturi FOR UPDATE (tirajul: cheia = p_tiraj_cheie și neoprit, altfel RD020 / RD021 — același corp ca fn_red_fan_tiraj, L19;
+         lotul încheiat — fn_red_fan_lot_incheiat, altfel RD031, D15)
+       → INSERT pachet ON CONFLICT (id) DO NOTHING RETURNING; fără rând = recitește și compară CONTRACTUL SEMANTIC COMPLET (Jakarinos):
+         aceeași cheie + același lot + același tiraj (cheie și nr) + același tip + aceeași parte + aceleași poziții (tablou egal, ordonat) +
+         același sha256 + același motiv → REPLAY (întoarce evidența memorată, nimic nou); orice câmp diferit → 22023 (nu doar sha-ul)
        → INSERT rânduri cu nr = (câte există pe plic / tip / tiraj) + 1, sub lock-ul lotului (L01: numărătoarea e serializată)
        → red_jurnal: UN rând pe pachet (tabela red_fan_tiparire_pachete, date_noi: tip, tiraj, poziții, nr. plicuri, retipărire, motiv)
        → întoarce { pachet_id, randuri, retipariri: [{nr_plic, nr}], tiraj }
@@ -738,7 +980,61 @@ rândurile vechi rămân (istoric), view-ul recalculează „tipărit” pe chei
 pasul 2 („se adună și se distrug toate foile”) primește din evidență **lista exactă a foilor tipărite pe tirajul vechi** (pe plic: foaie AWB da / nu,
 documente da / nu, de câte ori), ca listă bifabilă, iar înlocuirea tirajului scrie în `red_jurnal` numărul foilor de distrus. Excepția D11 (b)
 reapare după fereastra ei dacă nu se retipărește. O descărcare cu cheie veche e refuzată de RPC-ul de înregistrare (RD020), deci nu poate intra
-în evidență ca tipărire pe tirajul nou.
+în evidență ca tipărire pe tirajul nou. Limita evidenței, spusă și aici: un fișier descărcat o dată poate fi tipărit din nou de pe laptop fără o
+nouă înregistrare — evidența e a **predărilor din platformă**, nu a foilor (D10).
+
+### 8.8 Stările rândului FAN, tranzițiile și „lotul încheiat” (Jakarinos P1-6; L20: CHECK-ul derivat din acest tabel)
+
+**Stările** `red_fan_awb.stare` după F1: `propus`, `de_aprobat` (nou), `aprobat`, `in_curs`, `generat`, `ridicat`, `necunoscut`, `eroare`, `anulat`,
+`retras` (nou, terminal: scos din trimitere fără să fi costat). **Vii** (indexul unic pe plic `red_fan_awb_plic_viu_uq`): toate în afară de
+`eroare`, `anulat`, `retras`. **Țin lotul deschis** (blochează tirajul, D15): `de_aprobat`, `aprobat`, `in_curs`, `necunoscut`. **Nu țin lotul
+deschis**: `propus` (rest), `generat`, `ridicat`, `eroare`, `anulat`, `retras`.
+
+**Lot încheiat** := `NOT EXISTS (rând al lotului în ('de_aprobat','aprobat','in_curs','necunoscut')) AND NOT EXISTS (cerere 'deschisa' pe lot) AND
+NOT EXISTS (intenție 'in_curs' pe lot cu lucru_pana_la > clock_timestamp())` — o singură funcție internă `fn_red_fan_lot_incheiat(p_lot_id)`
+(L19), evaluată sub lock-ul lotului de `fn_red_fan_tiraj` (începere, `RD031`), `fn_red_fan_tiparire_inregistreaza` (F1b) și funcția edge înainte
+de etichete.
+
+**Tabelul tranzițiilor** (fiecare stare care poate ține lotul deschis are cel puțin o ieșire care nu depinde de curier):
+
+| Din | În | Cine / cum | Observații |
+|---|---|---|---|
+| (nimic) | `propus` | `fn_red_fan_comanda` (intern) / `fn_red_fan_propune` (calea veche) | pe un lot cu tiraj → refuz `lot_tiparit` (`RD036` pe calea veche; exclus cu motiv în comandă) |
+| `propus` | `aprobat` | comandă sub plafon / `fn_red_fan_aproba` (owner, calea veche: pune `aprobare_owner_la`) | `intentie_cheie` setată |
+| `propus` | `de_aprobat` | comandă peste plafon (toate rândurile cererii) | cerere `deschisa` |
+| `propus` | `retras` | `fn_red_fan_retrage(p_id)` (operator / owner); automat în comandă când plicul nu mai e activ / în lot (`plic_anulat` / `plic_mutat`) sau lotul e tipărit (`lot_tiparit`) | `retras_de`, `retras_la`, `motiv_retragere` puse de server |
+| `de_aprobat` | `aprobat` | `fn_red_fan_cerere_decide(aprobă)` (owner) | fără consum de plafon; `aprobare_owner_la` |
+| `de_aprobat` | `propus` | `fn_red_fan_cerere_decide(respinge)` (owner) · `fn_red_fan_cerere_retrage` (operatorul care a cerut / owner) | cererea `respinsa` / `retrasa`; `cerere_aprobare_id` rămâne ca istoric |
+| `de_aprobat` | `retras` | automat la decizia owner-ului sau la comandă, dacă plicul nu mai e activ / în lot | cererea rămâne pe restul rândurilor; fără rânduri rămase → cererea `retrasa` automat |
+| `aprobat` | `in_curs` | `fn_red_fan_srv_claim` (clasa B) | `cerere_id`; arenda intenției reînnoită |
+| `aprobat` | `propus` | re-propunere când datele plicului s-au schimbat (comandă / `fn_red_fan_propune`) | consumul de plafon rămâne în registru (§7.2) |
+| `aprobat` | `retras` | `fn_red_fan_retrage` (operator / owner) · automat la comandă / claim când plicul nu mai e activ / în lot | plafonul consumat nu se restituie (spus în ecran) |
+| `in_curs` | `generat` / `eroare` / `necunoscut` | `fn_red_fan_srv_rezultate` (clasa B) | toate rândurile unei solicitări deodată |
+| `in_curs` (> 10 min) | `generat` | `fn_red_fan_srv_reconciliaza` („găsit” reverificat în borderou de funcția edge) · `fn_red_fan_reconciliaza` (owner, manual) | |
+| `in_curs` (> 10 min) | `eroare` | `fn_red_fan_reconciliaza(p_awb NULL)` (DOAR owner: „nu există în borderou”) | deschide un al doilea AWB (rând nou) |
+| `necunoscut` | `generat` / `eroare` | aceleași două reconcilieri | |
+| `generat` | `ridicat` | `fn_red_fan_srv_bifeaza` (cron, F2) · `fn_red_fan_ridicat` (owner, manual) | pe lot real: plicul → expediat |
+| `generat` | `anulat` | `fn_red_fan_anulare_cere` → `DELETE /awb` → `fn_red_fan_srv_anuleaza` (clasa B) · `fn_red_fan_anulat` (owner, manual, D18) | doar fără C0 cunoscut / contrazis |
+| `eroare` / `anulat` / `retras` | (terminal) | — | plicul poate primi un rând nou (în același lot doar dacă lotul n-are tiraj; altfel în lot nou) |
+
+**Ieșirea din fiecare stare deschisă fără curier**: `de_aprobat` → owner decide sau operatorul retrage; `aprobat` → operatorul trimite sau
+retrage; `in_curs` → după 10 minute reconcilierea (găsit / absență); `necunoscut` → reconcilierea. Cererea `deschisa` → decizie / retragere;
+intenția `in_curs` → arenda expiră în ≤ 10 minute de la ultimul pas, apoi reluare sau închidere la comanda următoare (§8.3). Deci un lot nu rămâne
+„neîncheiat” fără o acțiune disponibilă omului.
+
+**Gărzile pe primitivele vechi care rămân apelabile** (owner, până la retragere): `fn_red_fan_propune` și `fn_red_fan_aproba` refuză pe un lot cu
+`tiraj_cheie IS NOT NULL` (`RD036` „lotul e tipărit; plic nou doar într-un lot nou”); `fn_red_fan_aproba` pune `aprobare_owner_la` și ia
+`red_fan_loturi FOR UPDATE` în poziția §6.2; `fn_red_fan_claim_lot` / `fn_red_fan_rezultate` / `fn_red_fan_urmarire` / `fn_red_fan_confirmari` /
+`fn_red_fan_ridicat` / `fn_red_fan_anulat` / `fn_red_fan_reconciliaza` primesc `fn_red_fan_lot_permis` (`RD032`); `fn_red_fan_tiraj` primește
+`fn_red_fan_lot_incheiat` la începere (`RD031`). Toate cu amprenta md5 a corpului vechi verificată înaintea `CREATE OR REPLACE` și cu probe pe
+calea legitimă (owner, lot TEST fără tiraj, lot încheiat → trece).
+
+**CHECK-urile derivate**: `red_fan_awb_aprobare`: `stare IN ('propus','de_aprobat','eroare','anulat','retras') OR (aprobat_de IS NOT NULL AND
+aprobat_la IS NOT NULL)`; `red_fan_awb_generat`: `de_aprobat` și `retras` în lista „fără AWB”; `red_fan_awb_in_curs`: neschimbat (`de_aprobat` /
+`retras` nu cer `cerere_id`); nou `red_fan_awb_retras`: `(stare = 'retras') = (retras_la IS NOT NULL)`; nou `red_fan_awb_anulat`: `stare <>
+'anulat' OR anulat_la IS NOT NULL` (cu backfill pe rândurile `anulat` existente, §13 F1); nou `red_fan_awb_de_aprobat`: `stare <> 'de_aprobat'
+OR cerere_aprobare_id IS NOT NULL` (`cerere_aprobare_id` rămâne ca istoric după decizie, deci nu poate fi egalitate). Testele CHECK-urilor =
+fiecare rând al tabelului de mai sus (tranziția permisă trece, tranziția absentă din tabel e refuzată de RPC, iar scrierea directă e `42501`).
 
 ## 9. Urmărirea automată (D4)
 
@@ -757,12 +1053,16 @@ reapare după fereastra ei dacă nu se retipărește. O descărcare cu cheie vec
   `redari-fan-awb` (JWT-ul omului): cele două funcții nu se amestecă.
 - **Identitatea: `service_role`, cu justificare explicită.** Nu există un om: rularea pornește din cron. RLS-ul tabelelor FAN cere
   `fn_red_nivel()` admin / editor pe `auth.uid()`, iar RPC-urile de azi cer owner-ul — un cron nu are niciuna. Alternativa „un cont tehnic cu JWT”
-  ar fi exact „contul comun cu drept de owner” pe care D2 îl interzice. De aceea: `service_role` **doar** în această funcție edge, folosit DOAR
-  pentru (a) `fn_verifica_secret`, (b) citirile FAN de urmărit, (c) două RPC-uri noi cu EXECUTE **exclusiv** pentru `service_role`
-  (`REVOKE … FROM PUBLIC, anon, authenticated`): `fn_red_fan_urmarire_auto(p_rulare, p_randuri)` și `fn_red_fan_bifeaza_auto(p_rulare, p_ids)`.
-  Dreptul EXECUTE restrâns E poarta de rol („cale server cu rol verificat explicit”, L08); în corp funcțiile verifică și `auth.uid() IS NULL`
-  (un JWT de om pe această cale = refuz) și existența rândului de rulare `in_curs` cu id-ul primit (o cheie pe rulare). Fără alte drepturi:
-  nicio scriere directă pe tabele (service_role are doar SELECT pe tabelele FAN, ca azi), niciun apel către altă funcție.
+  ar fi exact „contul comun cu drept de owner” pe care D2 îl interzice. De aceea: `service_role` în această funcție edge, folosit DOAR
+  pentru (a) `fn_verifica_secret`, (b) citirile FAN de urmărit, (c) RPC-urile **clasei B** (§7.3), cu EXECUTE **exclusiv** pentru `service_role`
+  (`REVOKE … FROM PUBLIC, anon, authenticated`): `fn_red_fan_srv_urmarire(p_actor NULL, p_rulare, p_lot_id, p_randuri)` și
+  `fn_red_fan_srv_confirmari(…)` — aceleași funcții pe care le cheamă și funcția edge a omului cu `p_actor` (un singur corp pentru om și cron,
+  L19; exact unul dintre `p_actor` / `p_rulare` e nenul), `fn_red_fan_srv_bifeaza(p_rulare, p_id, p_data, p_cod)` (bifarea pe plic, un rând pe
+  apel, în tranzacție separată — ordinea §6.2: plic → rândul FAN → jurnal) și `fn_red_fan_srv_rulare(p_rulare, p_stare, p_numere)` (jurnalul
+  rulării). Dreptul EXECUTE restrâns E poarta de rol („cale server cu rol verificat explicit”, L08); în corp funcțiile verifică și `auth.uid() IS
+  NULL` (un JWT de om pe această cale = refuz) și existența rândului de rulare `in_curs` cu id-ul primit (o cheie pe rulare). Fără alte drepturi:
+  nicio scriere directă pe tabele (service_role are doar SELECT pe tabelele FAN, ca azi), niciun apel către altă funcție. (Numele
+  `fn_red_fan_urmarire_auto` / `fn_red_fan_bifeaza_auto` din trecerile anterioare sunt înlocuite de cele de mai sus.)
 - **Ce citește din afară**: răspunsurile curierului la `GET /reports/awb/tracking` și `GET /reports/awb/confirmations` — **date**, nu
   instrucțiuni: coduri pe listă albă (`EVENIMENTE_FAN`), AWB numeric, date cu formă fixă; textele curierului nu se stochează; forma necunoscută =
   „de verificat de om” (ca azi, `interpreteazaUrmarire`).
@@ -773,14 +1073,28 @@ reapare după fereastra ei dacă nu se retipărește. O descărcare cu cheie vec
 ### 9.2 Tabelul cod → efect în registru
 
 Faptele se derivă ca azi (`rezumatUrmarireFan`): C0 = ridicat, S2 = livrat, categoriile `retur` / `refuz` / `adresa` / `mutat` = retur semnalat,
-`avizat` / `neutru` / `tranzit` / `inregistrat` = nimic pe fapte, `de_verificat` + necunoscut + S50 = de verificat. Bifarea automată pe plic
-(`fn_red_fan_bifeaza_auto`) se face DOAR din faptele **necontrazise** ale rândului, după scrierea urmăririi, în aceeași rulare:
+`avizat` / `neutru` / `tranzit` / `inregistrat` = nimic pe fapte, `de_verificat` + necunoscut + S50 = de verificat. **Două coloane, două
+lucruri** (Jakarinos): `stare` = starea rândului (§8.8: `generat` → `ridicat` e singura tranziție pe care o face urmărirea; „livrat” NU e o stare a
+rândului), iar `urmarire_stare` = ce a spus ultima urmărire (`neurmarit`, `fara_evenimente`, `in_tranzit`, `ridicat`, `livrat`, `retur`,
+`de_verificat`). **Ce știm despre ora ridicării**: `ridicat_propus` e `date` (curierul dă ziua C0; ora C0 nu e păstrată), iar `ultim_eveniment_la`
+e ora ULTIMULUI eveniment, nu a C0 → nici jurnalul, nici ecranul nu promit „ora ridicării”: scriu „ridicat (C0) în ziua de <data>” și, separat,
+„ultimul eveniment <cod> la <ora>”; `ridicat_la` (timestamptz) = ziua C0 la 00:00 ora României, ca azi în `fn_red_fan_ridicat`.
+**Contradicții în ACELAȘI răspuns** (Jakarinos, P1 înainte de F2 — proba lui: helperul din `main` cu două C0 diferite întoarce `ridicat` cu prima
+dată, fără contradicție): `rezumatUrmarireFan` primește regula: două sau mai multe evenimente din categoria `ridicat` cu **zile diferite** →
+`de_verificat`, motiv „două date de ridicare în același răspuns”; două `livrat` cu ore diferite → `de_verificat`; `livrat` și `retur` în același
+răspuns → `de_verificat` (azi iese `retur` cu `livrat_la` completat, iar contradicția o prinde doar CHECK-ul din BD); evenimente identice repetate
+(același cod, aceeași dată) = un singur fapt, nu contradicție. Probe (vitest pe helper, tabel de cazuri): două C0 în zile diferite →
+`de_verificat`; două C0 în aceeași zi, ore diferite → `ridicat` cu ziua; C0 + S2 → `livrat`; S2 + S16 → `de_verificat`; S2 fără C0 → `livrat`,
+`ridicat_propus` NULL. Regula e tot în `rezumatUrmarireFan` (o definiție, folosită și de `urmarire` la cerere, L19); poate intra în F1 ca fix
+al helperului dacă chat-ul o cere (nu schimbă BD-ul), altfel e prima condiție a lui F2. Bifarea automată pe plic (`fn_red_fan_srv_bifeaza`) se
+face DOAR din faptele **necontrazise** ale rândului, după scrierea urmăririi, în **altă tranzacție** (ordinea §6.2: plic → rândul FAN, CAS pe
+`versiune_urmarire` citită după scrierea urmăririi), în aceeași rulare:
 
 | Codul / situația (ultimul eveniment + faptele) | Efect pe `red_fan_awb` | Efect pe `red_plicuri` (DOAR lot real) | Jurnal |
 |---|---|---|---|
-| **C0** ridicat, o singură dată, dată validă, rândul `generat` | `ridicat_propus` = data C0; stare → `ridicat`, `ridicat_la` | `awb` + `data_expediere` = **data C0 în ora României** (trigger-ele existente: convocările → expediate, termenul de 10 zile) — exact ce face azi `fn_red_fan_ridicat` apăsat de owner | `red_jurnal`: `ridicare_auto`, cod C0, `ultim_eveniment_la`, `rulare_id`, `user_id NULL` |
-| **S2** livrat, cu C0 cunoscut (sau bifat în aceeași rulare) | `livrat_la` = ora S2 | coloană nouă `curier_livrat_la timestamptz` + `curier_livrat_cod text` (fapt, nu AR); AR-ul (`data_ar`, `ar_scan_path`, `ar_primit_de`) se completează DOAR de arhivarea dovezii (§10.3) | `livrare_auto`, cod S2 |
-| **S2 fără C0** (livrat, dar curierul n-a dat ridicarea) | stare `livrat`, `ridicat_propus` NULL | **nimic** (data expedierii nu se poate deriva); în „De verificat” cu motivul „livrat fără ridicare: data expedierii lipsește” | — |
+| **C0** ridicat, o singură zi, dată validă, rândul `generat` | `ridicat_propus` = ziua C0 (`date`); `stare` → `ridicat`, `ridicat_la` = ziua C0 la 00:00 RO | `awb` + `data_expediere` = **ziua C0** (trigger-ele existente: convocările → expediate, termenul de 10 zile) — exact ce face azi `fn_red_fan_ridicat` apăsat de owner | `red_jurnal`: `ridicare_auto`, cod C0, `ridicat_propus` (ziua), `ultim_eveniment` + `ultim_eveniment_la` (ca „ultimul eveniment”, nu ca ora C0), `rulare_id`, `user_id NULL` |
+| **S2** livrat, cu C0 cunoscut (sau bifat în aceeași rulare) | `urmarire_stare = 'livrat'`, `livrat_la` = ora S2; `stare` rămâne `ridicat` | coloană nouă `curier_livrat_la timestamptz` + `curier_livrat_cod text` (fapt, nu AR); AR-ul (`data_ar`, `ar_scan_path`, `ar_primit_de`) se completează DOAR de arhivarea dovezii (§10.3) | `livrare_auto`, cod S2 |
+| **S2 fără C0** (livrat, dar curierul n-a dat ridicarea) | `urmarire_stare = 'livrat'`, `ridicat_propus` NULL; `stare` rămâne `generat` | **nimic** (data expedierii nu se poate deriva); în „De verificat” cu motivul „livrat fără ridicare: data expedierii lipsește” | — |
 | **S16 / S33 / S43** retur, **S6** refuz, **S4/S10/S19/S20/S25/S27/S28/S42** adresă, **S5** mutat (ca ultim semnal), `returnAwbNumber` | `retur_cunoscut`, `retur_propus` = motivul din categorie (`refuz` / `adresa_incompleta` / `mutat` / `avizat_neridicat`) | coloane noi `curier_retur_semnalat_la timestamptz`, `curier_retur_motiv text` (aceleași coduri ca `red_plicuri.retur`), **fără** `retur` / `retur_data` / `retur_scan_path` (cer scanul plicului întors, CHECK `red_plicuri_retur_complet`; §9.4) | `retur_semnalat_auto`, codul |
 | retur după **livrat** (ambele fapte) | contradicție (CHECK `red_fan_awb_fapte`) → `de_verificat` | nimic | — |
 | **S3 / S11 / S21 / S22 / S24** avizat, **S30 / S12** contact, **tranzit** (C1, H*, S1, S35), **S98** înregistrat | doar `ultim_eveniment` / stare afișată | nimic | — |
@@ -796,8 +1110,8 @@ Faptele se derivă ca azi (`rezumatUrmarireFan`): C0 = ridicat, S2 = livrat, cat
   automat** (trigger-ul `red_plicuri` refuză schimbarea `data_expediere`); ecranul spune „data expedierii de pe plic rămâne X; corectarea pe plic
   e o operație separată a proprietarului” (§15.3, juridic: care dată contează).
 - **Loturi de TEST**: urmărirea scrie evidența FAN (inclusiv `ridicat`), niciodată plicul — ca azi.
-- Bifarea e **o singură definiție** (L19): `fn_red_fan_ridicat` (om) și `fn_red_fan_bifeaza_auto` (cron) cheamă același corp intern, cu autorul
-  diferit (`auth.uid()` vs `NULL` + `rulare_id`).
+- Bifarea e **o singură definiție** (L19): `fn_red_fan_ridicat` (owner, manual, clasa C) și `fn_red_fan_srv_bifeaza` (cron, clasa B) cheamă
+  același corp intern, cu autorul diferit (`auth.uid()` vs `NULL` + `rulare_id`) și cu aceeași ordine de lock (plic → rândul FAN → jurnal).
 
 ### 9.3 Limite de apeluri, pauze, oprire la erori, întrerupător, jurnal
 
@@ -825,8 +1139,11 @@ Faptele se derivă ca azi (`rezumatUrmarireFan`): C0 = ridicat, S2 = livrat, cat
   (efect juridic: termenul de 10 zile), `curier_livrat_*`, `curier_retur_*`. **Nu** cheltuie bani (apelurile de urmărire sunt gratuite), nu
   trimite mail / SMS, nu atinge drepturi, nu șterge, nu scrie AR-ul fără dovadă arhivată, nu scrie returul definitiv.
 - **(c) Identitate**: `service_role` în funcția edge `redari-fan-urmarire` — justificat la §9.1 (fără om; RLS pe nivel de om; D2 interzice
-  contul tehnic cu owner). Perimetru minim: `fn_verifica_secret`, SELECT pe tabelele FAN + plicurile legate, cele două RPC-uri cu EXECUTE
-  exclusiv `service_role`. Secretele curierului: aceleași trei (Edge Secrets), citite după poarta secretului intern și după întrerupător.
+  contul tehnic cu owner). Perimetru minim: `fn_verifica_secret`, SELECT pe tabelele FAN + plicurile legate, RPC-urile clasei B (§7.3) cu EXECUTE
+  exclusiv `service_role`. **Privilegiile minime se demonstrează**, nu se declară (Jakarinos): postcondiție în migrare + test pe clonă — pentru
+  `service_role`, pe fiecare tabel FAN și pe fiecare drept în parte, `has_table_privilege` adevărat DOAR pentru SELECT; `has_function_privilege`
+  adevărat DOAR pe lista exactă a clasei B; `fn_verifica_secret` cu secret greșit → fals. Secretele curierului: aceleași trei (Edge Secrets),
+  citite după poarta secretului intern și după întrerupător.
 - **(d) Cine pornește**: DOAR pg_cron (`postgres`) cu `x-intern-secret` din Vault; `verify_jwt` nu e folosit (funcția e în `NO_JWT`) și NU ar fi
   suficient oricum (cheia anon e un JWT valid); un apel fără / cu alt secret = 401, nimic citit, nimic chemat la curier. Testele negative: fără
   antet, antet greșit, antet `_VECHI`, JWT de owner fără antet → 401.
@@ -871,13 +1188,18 @@ excluse; **fără** sărbătorile legale — limită spusă în ecran și în §
 
 | Excepția | Condiția exactă (pe rândul `red_fan_awb` + evidența §8.7) | De când | Cine o închide și cum |
 |---|---|---|---|
-| **(a) tipărit, neridicat** | există tipărire `eticheta` pe tirajul curent, prima la `T`; `ridicat_la IS NULL`; `stare <> 'anulat'`; nu există C0 contrazis | din `fn_red_zi_lucratoare_dupa(T::date, 2)` ora 08:00 (tipărit luni → excepție de miercuri 08:00; tipărit vineri → marți 08:00) | se închide singură la C0 sau la anulare; operatorul verifică plicul fizic și comanda curierului; de la `fn_red_zi_lucratoare_dupa(T::date, 3)` ora 08:00 ecranul propune **anularea**, operatorul o face cu un click (`neridicat_3_zile`; Q6, decis A) |
-| **(b) generat, netipărit** | `awb IS NOT NULL`, generat la `G`; nicio tipărire `eticheta` pe tirajul curent; `stare <> 'anulat'` | din `fn_red_zi_lucratoare_dupa(G::date, 1)` ora 08:00 | se închide singură la tipărire sau anulare; de la `fn_red_zi_lucratoare_dupa(G::date, 3)` ora 08:00: „AWB plătit, netipărit de 3 zile lucrătoare — anulează-l înainte de ridicare”, operatorul anulează cu un click (`netiparit_3_zile`; Q6, decis A; factura: §15.2 pct. 9). După „Tiraj nou” reapare pentru toate plicurile, după aceeași fereastră |
+| **(a) tipărit, neridicat** | există tipărire `eticheta` pe tirajul curent, prima la `T`; `stare = 'generat'` (deci `ridicat_la IS NULL`); `ridicat_contrazis IS NULL`; `urmarire_stare NOT IN ('ridicat','livrat','retur')` (un C0 cunoscut sau contestat scoate rândul din (a) — Jakarinos) | din `fn_red_zi_lucratoare_dupa(T_ro, 2)` ora 08:00, cu `T_ro = (T AT TIME ZONE 'Europe/Bucharest')::date` (tipărit luni → excepție de miercuri 08:00; tipărit vineri → marți 08:00) | se închide singură la C0 sau la anulare; operatorul verifică plicul fizic și comanda curierului; de la `fn_red_zi_lucratoare_dupa(T_ro, 3)` ora 08:00 ecranul propune **anularea**, operatorul o face cu un click (`neridicat_3_zile`; Q6, decis A) |
+| **(b) generat, netipărit** | `awb IS NOT NULL`; nicio tipărire `eticheta` pe tirajul curent; `stare = 'generat'`; `ridicat_contrazis IS NULL`; `urmarire_stare NOT IN ('ridicat','livrat','retur')` (un AWB ridicat NU poate fi „generat, netipărit” și nu primește propunere de anulare — Jakarinos; el intră, dacă e cazul, la (c)) | **ancora temporală** `G' = greatest(generat_la, red_fan_loturi.tiraj_la)` — după „Tiraj nou” fereastra se numără de la începutul tirajului curent, nu de la generarea veche (altfel un AWB vechi ar primi propunerea de anulare imediat — Jakarinos); din `fn_red_zi_lucratoare_dupa((G' AT TIME ZONE 'Europe/Bucharest')::date, 1)` ora 08:00 | se închide singură la tipărire sau anulare; de la `fn_red_zi_lucratoare_dupa(G'_ro, 3)` ora 08:00: „AWB plătit, netipărit de 3 zile lucrătoare — anulează-l înainte de ridicare”, operatorul anulează cu un click (`netiparit_3_zile`; Q6, decis A; factura: §15.2 pct. 9). După „Tiraj nou” reapare pentru toate plicurile, după aceeași fereastră de la `tiraj_la` |
 | **(c) ridicat, netrecut ca tipărit** | `ridicat_la IS NOT NULL`; nicio tipărire `eticheta` pe tirajul curent; fără lămurire | imediat, la rularea care scrie C0 | DOAR owner / admin Redări: `fn_red_fan_exceptie_lamureste(p_awb_id, 'c_ridicat_netiparit', p_motiv ∈ {tiparit_din_contul_curierului, tiparit_pe_tiraj_inlocuit, alt_motiv}, p_nota ≤ 200)` → rând în `red_fan_tiparire_lamuriri (awb_id, tip, motiv, nota, de, la, PRIMARY KEY (awb_id, tip))` + `red_jurnal`; **nu** se fabrică un rând de tipărire (evidența rămâne adevărată: nu s-a tipărit din platformă) |
 | **(d) anulat după tipărire** | `stare = 'anulat'`; există tipărire `eticheta` (pe orice tiraj); fără lămurire | imediat, la anulare | owner / admin (Q3 B): aceeași funcție cu `'d_anulat_tiparit'`, motiv `eticheta_distrusa`; până atunci plicul arată „foaia AWB tipărită trebuie distrusă” |
 
-- Pe loturile de **TEST**: aceleași excepții și aceeași propunere de anulare, cu „LOT DE TEST” (altfel propunerea Q6 n-ar putea fi probată pe
-  `TEST-RAZVAN` înainte de proiectul real); anularea rămâne tot un click al omului, iar inventarul de închidere al probei (§12.3) o cuprinde.
+- Pe loturile de **TEST** (D17, confirmată de proprietar): aceleași excepții și aceeași propunere de anulare, cu „LOT DE TEST” (altfel propunerea
+  Q6 n-ar putea fi probată pe `TEST-RAZVAN` înainte de proiectul real); anularea rămâne tot un click al omului, iar inventarul de închidere al
+  probei (§12.3) o cuprinde.
+- **Toate conversiile de timp** din view-uri și din `fn_red_zi_lucratoare_dupa` sunt explicite în `Europe/Bucharest`: niciodată `T::date` /
+  `G::date` direct pe un `timestamptz` (ar lua fusul sesiunii, UTC pe server — L17); „ora 08:00” = `(zi_ro::timestamp + time '08:00') AT TIME ZONE
+  'Europe/Bucharest'` comparat cu `clock_timestamp()`. Probe: un AWB generat la 23:30 RO (21:30 UTC) e „din ziua” RO, nu din cea UTC; schimbarea
+  orei (ultima duminică din martie / octombrie) nu mută fereastra.
 - AWB-urile mai vechi de 60 de zile ies din verificare (ca din urmărire, §9.3); ce era deschis apare o singură dată ca „AWB vechi neîncheiat”.
 - Retipăririle nu creează și nu închid excepții; se văd pe plic.
 
@@ -885,7 +1207,7 @@ excluse; **fără** sărbătorile legale — limită spusă în ecran și în §
 
 - **La citire**: view `v_red_fan_control_zi` (`security_invoker`, pe lot × zi) pentru rândul de control, și `v_red_fan_exceptii` (pe AWB, cu
   tipul excepției și textul-cod pentru ecran) — numere și flaguri calculate în SQL, nimic în JS (L19); RLS a tabelelor de dedesubt (admin / editor).
-- **La fiecare rulare** (08 / 13 / 18): după scrierea urmăririi, `fn_red_fan_urmarire_auto` (calea cron, §9.1) salvează în `red_fan_rulari` un
+- **La fiecare rulare** (08 / 13 / 18): după scrierea urmăririi, `fn_red_fan_srv_rulare` (calea cron, §9.1) salvează în `red_fan_rulari` un
   instantaneu `control jsonb` (pe fiecare lot cu AWB-uri deschise: generate / anulate / tipărite / ridicate / de_verificat pe ziua curentă + numărul
   excepțiilor pe tip) și pune suma excepțiilor în `de_verificat`. Instantaneul e **istoric** („la 13:02 erau 2 de verificat”); ecranul arată
   numerele vii din view și ora ultimei rulări. Nicio scriere pe `red_fan_awb` / `red_plicuri` din această verificare: ea doar **compară** (fișa
@@ -898,9 +1220,13 @@ excluse; **fără** sărbătorile legale — limită spusă în ecran și în §
 - **Anulat înainte de tipărire**: iese din GENERATE, intră în ANULATE; nicio excepție.
 - **Anulat după tipărire**: excepția (d) până la lămurire; iese din GENERATE / TIPĂRITE / RIDICATE.
 - **Anularea propusă** de platformă ((a) și (b) de la a 3-a zi lucrătoare, ora 08:00) e o PROPUNERE în ecran (text + butonul „Anulează AWB-ul”
-  cu motivul precompletat `neridicat_3_zile` / `netiparit_3_zile`, spre acțiunea de anulare din §8.4.1: `DELETE /awb` doar înainte de C0, forma
-  de succes strictă). **Operatorul** o face (Q6, decis A), owner-ul o vede în lista anulărilor; nimic nu se anulează singur (anularea atinge
-  banii și e decisă de om). Propunerea vine din `v_red_fan_exceptii` (flag `propune_anulare`, calculat în SQL, L19), nu din JS.
+  cu motivul precompletat `neridicat_3_zile` / `netiparit_3_zile`, spre anularea în doi pași din §8.4.1: `DELETE /awb` doar înainte de C0, forma
+  de succes strictă, înscrierea doar de server). **Operatorul** o face (Q6, decis A), owner-ul o vede în lista anulărilor; nimic nu se anulează
+  singur (anularea atinge banii și e decisă de om). Propunerea vine din `v_red_fan_exceptii` (flag `propune_anulare`, calculat în SQL, L19), nu
+  din JS, și e **falsă** ori de câte ori rândul are un C0 cunoscut sau contestat (`ridicat_la IS NOT NULL OR ridicat_contrazis IS NOT NULL OR
+  urmarire_stare IN ('ridicat','livrat','retur')`) sau o cerere de anulare deja deschisă — un AWB ridicat nu poate apărea simultan la „generat,
+  netipărit” și „ridicat, netipărit” (Jakarinos). Probe pe view: AWB ridicat netipărit → doar (c), `propune_anulare = false`; AWB cu C0 contrazis →
+  nicio propunere; AWB generat netipărit a 3-a zi → `propune_anulare = true`; după „Tiraj nou” → `false` până la a 3-a zi lucrătoare de la `tiraj_la`.
 - **Retipăriri**: nu schimbă numerele; `retipariri` apare pe lot ca număr separat.
 - **Tiraj nou**: TIPĂRITE scade la 0 pe lot (cheia curentă s-a schimbat) → (b) reapare după fereastră; lista foilor vechi (§8.7.4) e de distrus;
   excepțiile (c) de pe tirajul vechi (ridicat, dar tipărit pe tiraj înlocuit) se lămuresc cu motivul `tiparit_pe_tiraj_inlocuit`.
@@ -956,8 +1282,19 @@ Codul acceptă azi un element pe AWB în `GET /reports/awb/confirmations` → �
 | (c) element doar cu text (nume, dată, fără imagine) | `.json` cu câmpurile; `dovada_forma = 'json_text'` | **nu** (CHECK-ul `red_plicuri_ar_scan` cere scanul; procedura cere confirmarea semnată) → „livrat · dovada doar text · AR de înregistrat” |
 | (d) nimic la API; cartonașul oPOD vine fizic | nimic automat; omul scanează cartonașul ca azi | nu |
 
-**Decis (Q4, varianta A, 18.11.2026)**: la (a)/(b) AR-ul se bifează automat DOAR cu dovada arhivată și primitorul = destinatarul; altfel, și la
-(c)/(d), omul înregistrează AR-ul. Juridicul mai confirmă doar data ridicării ca dată de expediere (§15.3 pct. 2). **Date personale**: imaginea
+**Decis (Q4, varianta A, 18.11.2026; reconfirmat D16)**: la (a)/(b) AR-ul se bifează automat DOAR cu dovada arhivată și primitorul = destinatarul;
+altfel, și la (c)/(d), omul înregistrează AR-ul. Juridicul mai confirmă doar data ridicării ca dată de expediere (§15.3 pct. 2).
+
+**Contractul descărcării dovezii dintr-un URL extern** (varianta (a), F3 — Jakarinos): URL-ul din răspunsul curierului e **conținut extern** și nu se
+urmează orbește: (1) doar `https`, doar gazde dintr-o **listă albă fixată în cod** (gazda API-ului curierului + gazda de stocare observată la prima
+livrare reală și revizuită în PR, nu învățată din răspunsuri); (2) **fără redirecturi** (`redirect: 'manual'`; un 3xx = `dovada_forma = 'lipsa'`, de
+verificat de om); (3) `Content-Type` pe listă albă (`image/jpeg`, `image/png`, `application/pdf`) și verificarea semnăturii de fișier (primii
+octeți) — altfel refuz; (4) dimensiune ≤ 5 MB (citită cu limită, nu după `Content-Length`), timeout 20 s, un singur apel pe AWB pe rulare; (5)
+sha256 pe conținut, calea `plicuri/<plic_id>/awb_<awb>_dovada_livrare_<AAAALLZZ>.<ext>` **legată de rândul `red_fan_awb`** (plicul și AWB-ul
+rândului, nu câmpuri din răspuns), scrisă prin `fn_red_fan_srv_arhiva` după verificarea obiectului în Storage; (6) URL-ul NU se păstrează (poate fi
+semnat), doar gazda și sha-ul în `.json`; (7) nicio dată internă în URL (nu se adaugă parametri). Probe: gazdă în afara listei → refuz, nimic
+descărcat; 3xx → `lipsa`; `Content-Type` imagine cu conținut HTML → refuz; fișier > 5 MB → refuz; dovada unui AWB nu poate fi legată de alt plic.
+**Date personale**: imaginea
 confirmării poartă numele și semnătura primitorului; stă în bucket-ul privat, lângă scanurile AR de azi, cu aceleași drepturi (admin / editor);
 păstrarea = cât dosarul proiectului (durata o spune juridicul, §15.3); nimic nu se șterge automat; numele din `.json` nu intră în `red_jurnal`.
 
@@ -992,17 +1329,19 @@ AWB-uri generate neridicate și nu există comandă vie azi; ecranul propune int
 programului localității; configurabil pe proiect) și contactul implicit al proiectului; confirmare cu ziua, intervalul, punctul, numărul de
 plicuri; după răspuns: „Comanda nr. … pentru azi, 14:00–16:30” + „Anulează comanda” (doar înainte de început, cu motiv). Gărzi: tabel
 `red_fan_comenzi (id, punct_client_id text, zi_ro, interval_start, interval_sfarsit, plicuri int, contact_nume, contact_telefon, fan_id, stare
-CHECK IN ('in_curs','plasata','necunoscuta','anulata','refuzata'), cerut_de, cerut_la, motiv_anulare)` cu UNIQUE parțial `(punct_client_id, zi_ro)
-WHERE stare IN ('in_curs','plasata','necunoscuta')` (L16) + claim atomic ÎNAINTE de apel (L04 / L22), timeout / 5xx = `necunoscuta` fără retry
+CHECK IN ('in_curs','plasata','necunoscuta','anulata','refuzata','manuala'), cerut_de, cerut_la, motiv_anulare)` cu UNIQUE parțial `(punct_client_id,
+zi_ro) WHERE stare IN ('in_curs','plasata','necunoscuta','manuala')` (L16; `manuala` = comanda dată de om în contul curierului și consemnată în
+ecran — e „vie” pe ziua ei, deci intră și în CHECK, și în index — Jakarinos) + claim atomic ÎNAINTE de apel (L04 / L22), timeout / 5xx = `necunoscuta` fără retry
 (L05; reconciliere cu lista comenzilor dacă apelul există), intervalul calculat în ora României (L17), refuz local înainte de apel pe reguli
 (interval, program). **Contactul implicit pe proiect** (D6): tabel nou `red_fan_proiect_setari (proiect_id PRIMARY KEY, contact_nume ≤ 50,
 contact_telefon, interval_implicit_start time, interval_implicit_sfarsit time, observatii_sablon ≤ 200)` scris prin RPC (owner / admin Redări),
 nu coloane noi pe `red_proiecte` (`contact_nume` / `contact_telefon` de acolo sunt contactul de pe convocator, alt rol). Datele personale ale
 colegului de contact: nume + telefon de serviciu, vizibile admin / editor.
 
-**Până la răspuns rămâne manual**, dar ecranul ajută: „Pregătește comanda” arată textul de copiat (numărul de plicuri, AWB-urile, contactul,
-intervalul propus) și linkul spre contul curierului; comanda se consemnează în ecran („comandă dată manual azi, 14:00–16:30, de <operator>”) ca
-să nu se dea de două ori (același tabel, `stare = 'manuala'`).
+**Până la răspuns rămâne manual**, dar ecranul ajută: „Pregătește comanda” arată textul de copiat (numărul de plicuri, contactul, intervalul
+propus — fără AWB-uri, §11 mai sus) și linkul spre contul curierului; comanda se consemnează în ecran („comandă dată manual azi, 14:00–16:30, de
+<operator>”) ca să nu se dea de două ori (același tabel, `stare = 'manuala'`). **Nu intră în F1** (corectat: §13 F5 spunea că „poate intra în
+F1”, contrar excluderii explicite din F1 — Jakarinos): cere tabelul `red_fan_comenzi`, deci vine cu F5 sau ca felie UI proprie după F1b.
 
 ## 12. De la forma de test la proiectul real
 
@@ -1011,8 +1350,9 @@ să nu se dea de două ori (același tabel, `stare = 'manuala'`).
 1. Azi: `TRANSPORT_REAL_ACTIV = true`, **`DOAR_PROIECTE_TEST = true`** (lot pe proiect `TEST-` + marcat TEST; restul 423). F1 și F2 se livrează
    și se probează **cu garda pornită** (nimic pe proiecte reale).
 2. **„Da”-urile** (§12.2) — fără ele garda nu cade.
-3. PR separat, revizuit: `DOAR_PROIECTE_TEST = false`. Rămân: marcajul automat real / TEST, plafonul zilei (mic la început: 20), plafonul pe
-   lot (20 până după Testul 2), lista operatorilor, aprobarea pe hash (recalculat la generare), claim-ul atomic.
+3. PR separat, revizuit: `DOAR_PROIECTE_TEST = false` în handler ȘI `fn_red_fan_setari_doar_test(false)` în BD (owner, cu „da”-ul lui; cele două
+   trebuie să coincidă — test de paritate, §7.3). Rămân: marcajul automat real / TEST, plafonul zilei (mic la început: 20), plafonul pe lot (20
+   până după Testul 2), lista operatorilor, aprobarea pe hash (recalculat la generare), claim-ul atomic, separarea comenzi / înscriere (§7.3).
 4. Testul 2 (`FANCOURIER_INTEGRARE.md` §11) pe un lot real de 10–20 de plicuri, cu butonul unic, de un operator numit (nu de owner), cu
    urmărirea automată pornită doar după ce ridicarea reală a fost văzută o dată și comparată cu contul curierului.
 5. Abia apoi plafoanele cresc (din ecran, owner).
@@ -1040,7 +1380,13 @@ acolo (Q5 A); (3b) rândul de control: „2 generate · 2 tipărite · 0 ridicat
 pe ambele); (3c) operatorul anulează un AWB neridicat (motiv din listă) → owner-ul îl vede în lista anulărilor; (4) plafonul zilei pus pe 1 de
 owner → al doilea lot cu 2 plicuri → „toate cele 2 așteaptă aprobarea” (Q2 A) → owner aprobă → operatorul trimite; (5) dublu-click și două
 taburi (cheia intenției; al doilea primește replay / „în curs”); (6) întreruperea simulată (secretele șterse între aprobare și generare → 503;
-rândurile `aprobat` rămân, tirajul nu începe; repunere → trimiterea reia fără a renumăra, apoi tirajul); (7) comanda curierului manual; (8)
+rândurile `aprobat` rămân, tirajul nu începe; repunere → „Reia trimiterea” cu ACEEAȘI cheie după expirarea arendei reia fără a renumăra, apoi
+tirajul; §8.3); (6a) **apeluri directe ca operator ne-owner** (REST, contul `redari@` numit operator): `fn_red_fan_srv_rezultate`,
+`fn_red_fan_srv_claim`, `fn_red_fan_srv_urmarire`, `fn_red_fan_srv_anuleaza`, `fn_red_fan_srv_reconciliaza`, `fn_red_fan_srv_intentie_incheie` →
+`42501`; `fn_red_fan_ridicat`, `fn_red_fan_anulat`, `fn_red_fan_reconciliaza`, `fn_red_fan_aproba`, `fn_red_fan_lot_marcheaza`, `fn_red_fan_tiraj`
+cu `p_inlocuieste` → `42501`; `PATCH /red_fan_awb` → `42501`; (6b) lotul nemarcat: prima trimitere pe un lot de TEST FĂRĂ marcaj anterior trece și
+scrie marcajul (§8.1); (6c) „Retrage din trimitere” pe un plic aprobat netrimis → `retras`, lotul devine încheiat, tirajul pornește (§8.8);
+(7) comanda curierului manual; (8)
 urmărirea automată pornită de owner → la 13:00 rularea bifează `ridicat` în evidență, **nu** pe plic (lot de TEST), jurnalul rulării; propunerea
 de anulare apare pe un AWB lăsat neridicat 3 zile lucrătoare; (9) arhiva: AWB-ul pe plic + ZIP-ul lotului. Toate cu garda de rețea a probelor
 (scrieri doar pe entitatea de test) și cu inventarul de închidere (AWB-uri anulate înainte de ridicare dacă nu se vrea transport). Proba de hârtie
@@ -1049,7 +1395,9 @@ de anulare apare pe un AWB lăsat neridicat 3 zile lucrătoare; (9) arhiva: AWB-
 ## 13. Feliile livrabile (în ordinea recomandată)
 
 Reguli comune ale fiecărei migrări (CLAUDE.md pct. 4, lecțiile D): forma livrării L15 v2 (garda legată de nume + tranzacție, plafon, amprentă
-globală, allow-list-ul complet din 31d înainte și după, bugetul de lock, ordinea fixă a lock-urilor la aplicare), tabele noi cu RLS + GRANT
+globală, allow-list-ul complet din 31d înainte și după, bugetul de lock, ordinea fixă a lock-urilor la aplicare), **ordinea unică a lock-urilor
+la rulare din §6.2 scrisă în comentariul fiecărei funcții** și verificată în probele cu două sesiuni, clasa fiecărui RPC (§7.3) scrisă în
+comentariu și verificată de postcondiții (EXECUTE exact pe `authenticated` / `service_role`), tabele noi cu RLS + GRANT
 explicit (`REVOKE ALL`, apoi doar ce trebuie; politici cu `auth.uid() IS NOT NULL`), funcții `SECURITY DEFINER SET search_path = public,
 pg_temp` cu `REVOKE EXECUTE FROM PUBLIC, anon` și EXECUTE doar rolului care le cheamă, postcondiții pe fiecare drept în parte (nu
 `has_table_privilege` cu listă), revenire în `supabase/revenire/` care refuză cu date (LOCK NOWAIT înainte de verificarea „fără date”), probe
@@ -1065,41 +1413,61 @@ aplicarea e a chat-ului):
 | Obiect | Ce | Drepturi |
 |---|---|---|
 | `red_fan_operatori` (nou) | §7.1 (profil, numit / retras de / la, notă ≤ 200, CHECK retras_de ↔ retras_la) | RLS SELECT admin / editor; fără INSERT / UPDATE / DELETE pentru nimeni |
-| `red_fan_zi` (nou) | `zi_ro date PRIMARY KEY`, `aprobate int ≥ 0` (§7.2) | la fel |
-| `red_fan_cereri_aprobare` (nou) | §7.2 (lot, proiect, cerut de / la, n, zi_ro, stare `deschisa / aprobata / respinsa`, decis de / la, motiv ≤ 500); index unic parțial `(lot_id) WHERE stare = 'deschisa'` | la fel |
-| `red_fan_intentii` (nou) | §8.3 (cheie, lot, proiect, operator, hash_cerere, stare `in_curs / incheiata / neincheiata`, rezultat fără PII, început / încheiată la) | la fel |
-| `red_fan_setari` (existent) | + `limita_zi int NOT NULL DEFAULT 20 CHECK (0…5000)` (întrerupătoarele urmăririi / arhivării NU intră aici: vin cu F2 / F3, odată cu cine le citește) | neschimbate |
-| `red_fan_awb` (existent) | starea nouă `de_aprobat` în CHECK-ul stărilor; coloanele `cerere_aprobare_id uuid`, `aprobare_owner_la timestamptz`, `anulat_de uuid`, `anulat_la timestamptz`, `motiv_anulare text` (CHECK pe lista din §8.4.1), `anulare_nota text ≤ 200` (obligatorie la `alt_motiv`); trigger BEFORE UPDATE: `anulat_*` / `motiv_anulare` puse doar de `fn_red_fan_anulat`, imuabile după scriere (L07 / L08). **Inventar obligatoriu în PR**: fiecare predicat pe `stare` din 20261212a (CHECK-urile `aprobare` / `awb` / `ridicat`, indexul viu `red_fan_awb_plic_viu_uq`, gărzile `NOT IN ('propus','eroare','anulat')` din marcaj, plafonul pe lot, claim) recitit pentru `de_aprobat`, cu decizia scrisă (de ex. `de_aprobat` e „viu” pentru index, nu e „aprobat” pentru claim / CHECK-ul aprobării) | neschimbate (scrieri doar prin RPC) |
+| `red_fan_zi` (nou) + trigger `fn_red_fan_zi_garda` | `zi_ro date PRIMARY KEY`, `aprobate int ≥ 0`; trigger BEFORE INSERT OR UPDATE: `NEW.aprobate <= limita_zi` și nu scade (§7.2) | la fel |
+| `red_fan_zi_consum` (nou) | registrul consumului: `PRIMARY KEY (awb_id, zi_ro)`, `intentie`, `la` — sursa parității (§7.2) | la fel |
+| `red_fan_cereri_aprobare` (nou) | §7.2 (lot, proiect, cerut de / la, n, zi_ro, stare `deschisa / aprobata / respinsa / retrasa`, decis de / la, motiv ≤ 500); index unic parțial `(lot_id) WHERE stare = 'deschisa'` | la fel |
+| `red_fan_intentii` (nou) | §8.3 (cheie, lot, proiect, operator, hash_cerere, stare `in_curs / incheiata / neincheiata`, **`lucru_pana_la`** (arenda), rezultat fără PII, început / încheiată la, `incheiata_de`) | la fel |
+| `red_fan_setari` (existent) | + `limita_zi int NOT NULL DEFAULT 20 CHECK (0…5000)`, + `doar_proiecte_test boolean NOT NULL DEFAULT true` (§7.3) (întrerupătoarele urmăririi / arhivării NU intră aici: vin cu F2 / F3, odată cu cine le citește) | neschimbate |
+| `red_fan_awb` (existent) | stările noi `de_aprobat` și `retras` în CHECK-ul stărilor (§8.8); coloanele `cerere_aprobare_id uuid`, `aprobare_owner_la timestamptz`, `intentie_cheie uuid`, `retras_de uuid`, `retras_la timestamptz`, `motiv_retragere text` (CHECK: `plic_mutat / plic_anulat / lot_tiparit / operator / owner`), `anulare_ceruta_de uuid`, `anulare_ceruta_la timestamptz`, `anulat_de uuid`, `anulat_la timestamptz`, `motiv_anulare text` (CHECK pe lista din §8.4.1), `anulare_nota text ≤ 200` (obligatorie la `alt_motiv`); CHECK-urile noi din §8.8 (`red_fan_awb_retras`, `red_fan_awb_anulat`, `red_fan_awb_de_aprobat`) și cele existente rescrise textual (`aprobare`, `generat`); **backfill** (L14) pe rândurile `anulat` existente: `anulat_la = updated_at`, `anulat_de = aprobat_de`, `motiv_anulare = 'alt_motiv'`, `anulare_nota = left(motiv, 200)` — preflight: numărul lor raportat, zero rânduri = nimic de făcut; trigger BEFORE UPDATE `fn_red_fan_awb_garda`: `anulat_*` / `motiv_anulare` scrise doar din lista EXACTĂ {`fn_red_fan_srv_anuleaza`, `fn_red_fan_anulat`} (marcaj de tranzacție, §8.4.1), `retras_*` doar din {`fn_red_fan_comanda`, `fn_red_fan_retrage`, `fn_red_fan_cerere_decide`, `fn_red_fan_srv_claim`}, toate imuabile după scriere (L07 / L08). **Inventar obligatoriu în PR** (Jakarinos): fiecare predicat pe `stare` din 20261212a recitit pentru `de_aprobat` și `retras`, cu decizia scrisă în migrare: CHECK `aprobare` → ambele în lista „fără aprobare”; CHECK `generat` → ambele în lista „fără AWB”; CHECK `ridicat` → neschimbat; CHECK `in_curs` → neschimbat; indexul viu `red_fan_awb_plic_viu_uq` → `retras` se adaugă la excluse (`NOT IN ('eroare','anulat','retras')`), `de_aprobat` e viu; garda marcajului `NOT IN ('propus','eroare','anulat')` din `fn_red_fan_lot_marcheaza` → devine `NOT IN ('propus','de_aprobat','eroare','anulat','retras')` (o cerere în așteptare nu e o aprobare); plafonul pe lot (`fn_red_fan_aproba` + comandă) → `de_aprobat` se numără la „deja”; claim → cere strict `aprobat`; `fn_red_fan_propune` re-propunere → acceptă `propus / aprobat / de_aprobat`; `fn_red_fan_urmarire` / `confirmari` / `solutioneaza` → doar `generat / ridicat`, neschimbat; `red_fan_awb_cerere_ix` → neschimbat | neschimbate (scrieri doar prin RPC) |
 | `v_red_fan_plafon_azi` (view nou, `security_invoker`) | limita zilei, aprobate azi, **cât mai încape** — ziua în ora României (L17), aceeași expresie ca în `fn_red_fan_comanda` (L19) | SELECT `authenticated` (RLS-ul tabelelor de dedesubt) |
-| `v_red_fan_anulari` (view nou, `security_invoker`) | §8.4.1; coloana „avea foaia tipărită” = `NULL` până la F1b | la fel; ecranul îl arată doar owner-ului |
+| `v_red_fan_anulari` (view nou, `security_invoker`) | §8.4.1; coloana „avea foaia tipărită” = `NULL` până la F1b; și cererile de anulare deschise (`anulare_ceruta_la` fără `anulat_la`) | la fel; ecranul îl arată doar owner-ului |
+| `v_red_fan_intentii` (view nou, `security_invoker`) | §8.3: cheia, lotul, starea, `lucru_pana_la`, sumarul — pentru „Reia trimiterea” la redeschiderea ecranului | SELECT `authenticated` (RLS) |
 
-| Funcție | Poarta | Ce face |
+| Funcție | Clasa (§7.3) / poarta | Ce face |
 |---|---|---|
 | `fn_red_fan_e_operator()` (nouă) | EXECUTE `authenticated` | §7.1, o singură definiție (RPC + edge + ecran, L19) |
-| `fn_red_fan_operator_seteaza(p_profile, p_activ, p_nota)` (nouă) | owner | numește / retrage; refuză profil fără nivel Redări admin / editor; jurnal |
-| `fn_red_fan_comanda(p_lot_id, p_intentie, p_plicuri, p_hash_cerere)` (nouă) | operator sau owner | §8.1: intenția, lock-urile, propunere + aprobare internă, `lot_tiparit` (Q5), plafonul pe lot, plafonul zilei (Q2: toate sau nimic → `de_aprobat` + cerere) |
-| `fn_red_fan_intentie_incheie(p_cheie, p_rezultat)` (nouă) | operatorul intenției sau owner | §8.3, CAS pe `in_curs` |
-| `fn_red_fan_cerere_decide(p_id, p_aproba, p_motiv)` (nouă) | owner | §7.2: aprobare fără consum de plafon / respingere → `propus`; CAS pe `deschisa` |
-| `fn_red_fan_propune` | operator sau owner (azi admin / editor) | corpul mutat într-o funcție internă fără EXECUTE, chemată și de `fn_red_fan_comanda` |
-| `fn_red_fan_claim_lot`, `fn_red_fan_rezultate`, `fn_red_fan_urmarire`, `fn_red_fan_confirmari`, `fn_red_fan_ridicat` | operator sau owner (azi owner) | corpuri neschimbate în afară de poartă și de autorul pus din `auth.uid()` |
-| `fn_red_fan_tiraj` | începere / confirmare: operator sau owner; **înlocuire** (`p_inlocuieste` nenul = „Tiraj nou”): owner | + refuz `RD022` la începere pe lot neîncheiat (§8.1) |
-| `fn_red_fan_reconciliaza` | cu `p_awb` („găsit”): operator sau owner; cu `p_awb NULL` (absența): owner | neschimbat altfel (Q3 B) |
-| `fn_red_fan_anuleaza(p_id, p_awb, p_motiv_cod, p_nota)` (nouă) | operator sau owner | §8.4.1: CAS pe `generat` + AWB, motiv din listă, `anulat_de / anulat_la` puse de server, jurnal |
-| `fn_red_fan_anulat(p_id, p_awb, p_motiv)` (existentă, semnătura păstrată pentru funcția edge și ecranul vechi până la publicarea celor noi, §16) | owner, ca azi | corpul scrie și coloanele noi (`motiv_anulare = 'alt_motiv'`, nota = textul vechi tăiat la 200); retragerea ei = migrare separată, DUPĂ publicarea funcției edge noi (lecția „dreptul folosit de clientul vechi”) |
-| rămân owner, neschimbate | `fn_red_fan_setari_seteaza` (extinsă cu `limita_zi`), `fn_red_fan_lot_marcheaza`, `fn_red_fan_aproba` (calea detaliată), soluționarea (owner / admin) | — |
+| `fn_red_fan_lot_permis(uuid)`, `fn_red_fan_lot_incheiat(uuid)`, `fn_red_fan_e_operator_profil(uuid)` (noi, interne, fără EXECUTE pentru roluri) | interne | garda „doar TEST” în BD (§7.3); „lot încheiat” (§8.8); verificarea lui `p_actor` în clasa B |
+| `fn_red_fan_operator_seteaza(p_profile, p_activ, p_nota)` (nouă) | A, owner | numește / retrage; refuză profil fără nivel Redări admin / editor; jurnal |
+| `fn_red_fan_setari_limita_zi(integer)`, `fn_red_fan_setari_doar_test(boolean)` (noi) | A, owner | §7.2; semnătura veche `fn_red_fan_setari_seteaza(integer)` rămâne neschimbată |
+| `fn_red_fan_comanda(p_lot_id, p_intentie, p_plicuri, p_hash_cerere)` (nouă) | A, operator sau owner | §8.1 pașii 1–9: marcajul automat sub lock, `lot_permis`, `lot_tiparit` (Q5), propunere + aprobare internă, plafonul pe lot, plafonul zilei pe ambele ramuri (Q2: toate sau nimic → `de_aprobat` + cerere), intenția (reluare / replay, §8.3) |
+| `fn_red_fan_retrage(p_id, p_motiv_cod)` (nouă) | A, operator sau owner | §8.8: `propus` / `aprobat` → `retras`; plic FOR UPDATE → rând |
+| `fn_red_fan_cerere_decide(p_id, p_aproba, p_motiv)` (nouă) | A, owner | §7.2: aprobare fără consum de plafon (`aprobare_owner_la`) / respingere → `propus`; CAS pe `deschisa` |
+| `fn_red_fan_cerere_retrage(p_id)` (nouă) | A, operatorul care a cerut sau owner | §7.2 / §8.8: `deschisa` → `retrasa`, rândurile → `propus` |
+| `fn_red_fan_anulare_cere(p_id, p_awb, p_motiv_cod, p_nota)` (nouă) | A, operator sau owner | §8.4.1 pasul 1: cererea de anulare (nu schimbă `stare`); `RD035` dacă e deja cerută |
+| `fn_red_fan_propune` | A, operator sau owner (azi admin / editor) | corpul mutat într-o funcție internă fără EXECUTE, chemată și de `fn_red_fan_comanda`; + `RD036` pe lot cu tiraj; re-propunerea aliniază `lot_id` / `proiect_id` la plic |
+| `fn_red_fan_tiraj` | A: începere / confirmare — operator sau owner; **înlocuire** (`p_inlocuieste` nenul = „Tiraj nou”) — owner | + refuz **`RD031`** la începere pe lot neîncheiat (`fn_red_fan_lot_incheiat`, §8.8) + `lot_permis` |
+| `fn_red_fan_srv_claim(p_actor, p_intentie, p_lot_id, p_ids, p_hashuri, p_surse)` (nouă) | **B, EXECUTE exclusiv `service_role`** | corpul lui `fn_red_fan_claim_lot` + intenția `in_curs` a lui `p_actor` (arenda reînnoită), `lot_permis`, rândurile cu plic mutat / anulat → `retras` |
+| `fn_red_fan_srv_rezultate(p_actor, p_intentie, p_cerere, p_rezultate)` (nouă) | B | corpul lui `fn_red_fan_rezultate` + legătura cu intenția (`cerere_id` creat sub aceeași intenție), `lot_permis`, arenda |
+| `fn_red_fan_srv_urmarire(p_actor, p_rulare, p_lot_id, p_randuri)`, `fn_red_fan_srv_confirmari(…)` (noi) | B | corpurile lui `fn_red_fan_urmarire` / `_confirmari` (un corp pentru om și cron, L19); `p_actor` XOR `p_rulare` (în F1 doar `p_actor`; `p_rulare` prinde viață în F2) |
+| `fn_red_fan_srv_reconciliaza(p_actor, p_id, p_awb, p_tarif, p_tva)` (nouă) | B | „găsit” reverificat în borderou de funcția edge (§8.2); CAS pe `necunoscut` / `in_curs` > 10 min |
+| `fn_red_fan_srv_anuleaza(p_actor, p_id, p_awb, p_rezultat)` (nouă) | B | §8.4.1 pasul 2: `sters` → `anulat`; `refuzat_ridicat` → cererea golită; `ambiguu` → nimic |
+| `fn_red_fan_srv_intentie_incheie(p_actor, p_cheie, p_rezultat)` (nouă) | B | §8.3: CAS pe `in_curs`, sumarul DERIVAT din rânduri, listă albă de chei |
+| `fn_red_fan_ridicat`, `fn_red_fan_reconciliaza`, `fn_red_fan_anulat`, `fn_red_fan_urmarire_solutioneaza` | **C, owner** (admin la soluționare), ca azi | excepțiile manuale; + `lot_permis` (`RD032`); `fn_red_fan_anulat` scrie și coloanele noi (D18) |
+| `fn_red_fan_claim_lot`, `fn_red_fan_rezultate`, `fn_red_fan_urmarire`, `fn_red_fan_confirmari` (vechi) | owner, ca azi (clientul vechi: funcția edge `genereaza` / `urmarire` / `confirmari`) | semnătura și poarta neschimbate; + `lot_permis`; retragerea lor = migrare separată, DUPĂ publicarea funcției edge noi |
+| `fn_red_fan_aproba` (veche) | owner, ca azi | + `aprobare_owner_la`, + `RD036` pe lot cu tiraj, + `red_fan_loturi FOR UPDATE` în poziția §6.2 |
+| rămân owner, neschimbate | `fn_red_fan_setari_seteaza(integer)`, `fn_red_fan_lot_marcheaza`, `fn_red_fan_tiraj_opreste` | — |
 
-Toate DEFINER cu `search_path = public, pg_temp`, `REVOKE … FROM PUBLIC, anon`, EXECUTE exact; `CREATE OR REPLACE` doar după amprenta md5 a
-corpului vechi (`replace(prosrc, chr(13), '')`) + owner / ACL verificate; ordinea lock-urilor scrisă în fiecare funcție: lot → plicuri →
-rânduri FAN `ORDER BY id` → `red_fan_loturi` → `red_fan_setari` → `red_fan_zi` → cereri → intenții → jurnal (L06). Postcondiții: numărul exact al
-funcțiilor `fn_red_fan_*`, EXECUTE pe fiecare, RLS pe fiecare tabel nou, CHECK-ul stărilor, coloanele noi, allow-list-ul din 31d înainte și
-după. **Revenirea** refuză (după `LOCK … NOWAIT`) dacă există operatori numiți, cereri, intenții, rânduri `de_aprobat` sau anulări cu
-`anulat_de`; altfel readuce textual corpurile vechi și șterge ce s-a creat; testată apply → rollback → re-apply (pe clonă, de chat).
+Toate DEFINER cu `search_path = public, pg_temp`, `REVOKE … FROM PUBLIC, anon`, EXECUTE exact pe clasă (A, C: `authenticated`; B:
+`service_role`; interne: nimeni); `CREATE OR REPLACE` doar după amprenta md5 a corpului vechi (`replace(prosrc, chr(13), '')`) + owner / ACL
+verificate; **ordinea unică a lock-urilor §6.2** scrisă în comentariul fiecărei funcții (L06). Postcondiții: numărul exact al funcțiilor
+`fn_red_fan_*` (vechi + noi, listă scrisă), EXECUTE pe fiecare funcție și fiecare rol în parte, RLS pe fiecare tabel nou, CHECK-urile din §8.8,
+coloanele noi, trigger-ele exact (`tgqual IS NULL`, `tgnargs`, `tgtype`), allow-list-ul din 31d înainte și după. **Revenirea COMPLETĂ**
+(Jakarinos: „nu doar obiectele enumerate sumar”): `LOCK … NOWAIT` în ordinea §6.2; refuză dacă există operatori numiți, rânduri în `red_fan_zi` /
+`red_fan_zi_consum`, cereri, intenții, rânduri `de_aprobat` / `retras`, `intentie_cheie` / `aprobare_owner_la` / `anulare_ceruta_la` / `anulat_de`
+nenule, `limita_zi <> 20`, `doar_proiecte_test <> true`, sau rânduri noi în `red_jurnal` cu evenimentele noi (`comanda`, `marcaj_automat`,
+`retragere`, `anulare_ceruta`, `cerere_*`, `intentie_*`); altfel: DROP view-urile → funcțiile noi (A, B, interne) → trigger-ele noi → coloanele
+noi (în ordinea inversă creării) → tabelele noi; readuce textual corpurile vechi ale funcțiilor modificate (`propune`, `aproba`, `claim_lot`,
+`rezultate`, `urmarire`, `confirmari`, `ridicat`, `reconciliaza`, `anulat`, `tiraj`, `lot_marcheaza`) cu amprenta md5 verificată DUPĂ revenire,
+CHECK-urile și indexul viu în forma veche, `red_fan_setari` fără coloanele noi; testată apply → rollback → re-apply (pe clonă, de chat).
 
-**(2) Funcția edge `redari-fan-awb`**: acțiunea nouă `trimite` (§8.1, cu „tirajul doar pe lotul încheiat”); `deps.operator()` =
-`fn_red_fan_e_operator`; poarta pe acțiune: `trimite`, `eticheta`, `urmarire`, `confirmari`, `evenimente`, `reconciliaza`, `sterge_awb` →
-operator sau owner; `genereaza` (calea detaliată) → owner, ca azi; codul nou `non_operator` (403); `sterge_awb` primește motivul ca cod din
-listă; ordinea porților neschimbată (JWT → utilizator → operator / owner → cerere → lot (RLS) → flag → garda „doar TEST” → secretele).
-`DOAR_PROIECTE_TEST = true` rămâne.
+**(2) Funcția edge `redari-fan-awb`**: acțiunea nouă `trimite` (§8.1, cu ordinea exactă pe lot nemarcat și „tirajul doar pe lotul încheiat”);
+`deps.operator()` = `fn_red_fan_e_operator`; poarta pe acțiune: `trimite`, `eticheta`, `urmarire`, `confirmari`, `evenimente`, `reconciliaza`,
+`sterge_awb` → operator sau owner; `genereaza` (calea detaliată) → owner, ca azi; codul nou `non_operator` (403); `sterge_awb` primește motivul ca
+cod din listă și face anularea în doi pași (§8.4.1); `reconciliaza` cu `confirma:{id}` reverifică borderoul (§8.2); **al doilea client,
+`service_role`**, DOAR pentru RPC-urile clasei B, DOAR după poarta omului, cu `p_actor = user.id` (§7.3; fișa a–e a funcției actualizată în
+`FANCOURIER_INTEGRARE.md` §7); ordinea porților: JWT → utilizator → operator / owner → cerere → lot (RLS) → flag → garda „doar TEST” pe proiect
+(`cereMarcaj:false` la `trimite`) → RPC-ul comenzii → garda completă (`cereMarcaj:true`) → secretele. `DOAR_PROIECTE_TEST = true` rămâne și e
+dublată de `red_fan_setari.doar_proiecte_test` în BD.
 
 **(3) Ecranul** (`src/redari/fanLot.js` + componenta Poștă / `FanAwbPrevizualizare.jsx`): ecranul operatorului din §1 (lista cu semnele
 „gata / lipsește …”, „azi mai poți trimite N” din `v_red_fan_plafon_azi` — eroare de citire = mesaj, nu „0”, L18 —, avertismentul Q2 înainte de
@@ -1113,14 +1481,22 @@ urmărirea automată, excepțiile D11 și propunerea de anulare (F2); întrerup�
 comanda curierului și „Pregătește comanda” (F5); orice efect pe proiecte reale (F4).
 
 - **Probe**: vitest (handler: 403 `non_operator` pe fiecare acțiune cu poarta nouă și 403 pe `genereaza` pentru operatorul fără owner; ordinea
-  porților neschimbată; `trimite` pe lot neîncheiat → fără etichete și fără tiraj; mesajele §8.5 ca tabel de cazuri, inclusiv `lot_tiparit` și
-  anularea; registrul local al intenției — „scris și verificat înainte de apel”, „iese doar la rezultat dovedit”; simulatorul procedurii
-  operatorului), PGlite (plafonul zilei pe muchie; Q2: o cerere peste plafon → TOATE `de_aprobat`, zero aprobate; cererea aprobată nu consumă
-  plafonul; replay-ul intenției; `RD030`; `lot_tiparit` pe lotul cu tiraj; `RD022` pe tirajul unui lot neîncheiat; anularea de operator: CAS,
-  motivul din listă, `anulat_*` imuabile și refuzate la scriere directă; `p_awb NULL` la reconciliere = 42501 pentru operator; „Tiraj nou” =
-  42501 pentru operator; RLS / EXECUTE ca editor non-owner fără rând de operator = 42501, viewer = 0 rânduri; revenirea refuză cu date), două
-  sesiuni pe clonă (doi operatori pe același plafon: unul trece, celălalt `de_aprobat`; două intenții pe același lot; începerea tirajului
-  concurentă cu `fn_red_fan_comanda` pe același lot), proba live §12.3 pașii 1–7, 3a și 3c.
+  porților pe `trimite` cu lot NEMARCAT: `cereMarcaj:false` → RPC → `cereMarcaj:true` → secretele, și 423 pe proiect ne-TEST înaintea RPC-ului;
+  clasa B chemată DOAR cu clientul `service_role` și DOAR după poarta omului (deps separate, verificate în test); `trimite` pe lot neîncheiat → fără
+  etichete și fără tiraj; mesajele §8.5 ca tabel de cazuri, inclusiv `lot_tiparit`, `RD030`–`RD036`, reluarea și anularea în doi pași; registrul
+  local al intenției — „scris și verificat înainte de apel”, „iese doar la rezultat dovedit”, „Reia trimiterea” cu aceeași cheie; simulatorul
+  procedurii operatorului), PGlite (plafonul zilei P1–P10 din §7.2, inclusiv mutantul P6; Q2: o cerere peste plafon → TOATE `de_aprobat`, zero
+  aprobate; cererea aprobată nu consumă plafonul; intenția I1–I7 din §8.3; `lot_tiparit` pe lotul cu tiraj → `retras`; `RD031` pe tirajul unui lot
+  neîncheiat și fiecare rând al tabelului §8.8 (tranziție permisă trece, cea absentă e refuzată); `RD032` pe lot real cu garda pornită pentru
+  owner, `service_role` și comandă; marcajul automat pe lot nemarcat (TEST → `test = true`; proiect ne-TEST → `RD032` fără rând); anularea în doi
+  pași: cerere → înscriere `sters` / `refuzat_ridicat` / `ambiguu`, `anulat_*` imuabile și refuzate la scriere directă; **ca operator ne-owner
+  (`SET LOCAL ROLE authenticated` + `sub` de operator numit), apel direct**: fiecare funcție din clasa B → `42501`, fiecare din clasa C → `42501`,
+  `fn_red_fan_tiraj` cu `p_inlocuieste` → `42501`, `PATCH` pe orice tabel FAN → `42501`; ca `service_role` cu `auth.uid()` nenul → `42501`;
+  `p_actor` fără rând de operator → `42501`; RLS / EXECUTE ca editor non-owner fără rând de operator = `42501` pe clasa A, viewer = 0 rânduri;
+  revenirea refuză cu date și readuce amprentele vechi), două sesiuni pe clonă (doi operatori pe același plafon pe muchie, zi absentă: unul
+  trece, celălalt `de_aprobat` — P5; două intenții pe același lot (a doua `RD030`, apoi după arendă preluarea — I5); începerea tirajului
+  concurentă cu `fn_red_fan_comanda` pe același lot și cu `fn_red_fan_tiparire_inregistreaza` (F1b): fără deadlock, §6.2), proba live §12.3
+  pașii 1–7, 3a, 3c, 6a–6c.
 - **Lecțiile L01–L25**: cum le respectă e la §14; PR-ul F1 le reia pe fiecare cu fișierul / testul.
 - **Risc**: bani — ținut de garda „doar TEST”, plafonul zilei (implicit 20, în Testul 1: 1 / 3), plafonul pe lot, aprobarea pe hash, claim-ul
   atomic și regula „lotul tipărit nu se mai atinge”. Risc de drept: un editor numit greșit — lista e owner-only, cu jurnal; nivelul rămâne
@@ -1157,8 +1533,10 @@ comanda curierului și „Pregătește comanda” (F5); orice efect pe proiecte 
   cere, de F6.
 
 ### F2 — Urmărirea automată + verificarea generate / tipărite / ridicate (D4, D11)
+- **Precondiție (P1 înainte de F2, Jakarinos)**: regula contradicțiilor în ACELAȘI răspuns în `rezumatUrmarireFan` (§9.2), cu tabelul de cazuri.
 - **Conține**: `red_fan_rulari` (+ `control jsonb`), `fn_red_fan_urmarire_tick` (postgres / pg_cron), secretul Vault `REDARI_FAN_INTERN_SECRET` (generat în BD),
-  `fn_red_fan_urmarire_auto`, `fn_red_fan_bifeaza_auto` (EXECUTE doar `service_role`; corp comun cu `fn_red_fan_urmarire` / `fn_red_fan_ridicat`),
+  `fn_red_fan_srv_urmarire` / `fn_red_fan_srv_confirmari` cu `p_rulare` activ, `fn_red_fan_srv_bifeaza`, `fn_red_fan_srv_rulare` (clasa B, EXECUTE
+  doar `service_role`; corp comun cu `fn_red_fan_ridicat`; bifarea în tranzacție separată, ordinea §6.2),
   coloanele `red_plicuri.curier_livrat_la / curier_livrat_cod / curier_retur_semnalat_la / curier_retur_motiv` (+ CHECK: motivul în lista de
   retur; trigger-ul plicului lasă aceste coloane scrise DOAR de funcția internă — proveniență, L08), jobul cron (`cron.schedule`, idempotent pe
   nume), funcția edge `redari-fan-urmarire` (în `NO_JWT`), întrerupătorul `red_fan_setari.urmarire_auto_activa` (implicit oprit; owner, din
@@ -1183,8 +1561,9 @@ comanda curierului și „Pregătește comanda” (F5); orice efect pe proiecte 
   și la „da”-ul juridic; întrerupătorul implicit oprit.
 
 ### F3 — Arhiva (etichete pe plic, PDF-ul lotului, dovada de livrare, AR automat doar cu dovadă)
-- **Conține**: coloanele `eticheta_* / dovada_*` pe `red_fan_awb`, RPC `fn_red_fan_arhiva_scrie` (EXECUTE `service_role`, verifică obiectul în
-  Storage + eTag, calea pe listă albă), pasul de arhivare în rularea automată (după urmărire; max 30 de apeluri de etichetă pe rulare), scrierea
+- **Conține**: coloanele `eticheta_* / dovada_*` pe `red_fan_awb`, RPC `fn_red_fan_srv_arhiva` (clasa B, EXECUTE `service_role`, verifică obiectul
+  în Storage + eTag, calea pe listă albă legată de rândul AWB), descărcarea dovezii din URL extern pe contractul §10.3 (gazde pe listă albă, fără
+  redirecturi, tip și mărime verificate), pasul de arhivare în rularea automată (după urmărire; max 30 de apeluri de etichetă pe rulare), scrierea
   PDF-ului lotului din `trimite` (JWT-ul operatorului), AR-ul automat (varianta (a)/(b), doar cu primitorul = destinatarul; Q4 decis A), ZIP-ul lotului cu fișierele noi,
   coloana paginii de control, `arhivare_auto_activa`.
 - **Migrare descrisă** (`…c_redari_fan_arhiva`): coloane + CHECK-uri (path pe forma `^plicuri/<uuid>/awb_[0-9]{6,20}_…$`, sha256 hex, forma),
@@ -1195,14 +1574,16 @@ comanda curierului și „Pregătește comanda” (F5); orice efect pe proiecte 
 - **Risc**: PII în Storage (același bucket, aceleași drepturi ca scanurile de azi); apeluri în plus la curier (limitate, cu pauză).
 
 ### F4 — Trecerea la proiectul real
-- PR fără migrare: `DOAR_PROIECTE_TEST = false`, testele mutate, procedura Testului 2 cu butonul unic (document de pași + simulator), rândurile
+- PR cu constanta `DOAR_PROIECTE_TEST = false` + schimbarea flagului din BD de către owner (`fn_red_fan_setari_doar_test(false)`, fără migrare:
+  e o setare), testul de paritate constantă ↔ flag, testele mutate, procedura Testului 2 cu butonul unic (document de pași + simulator), rândurile
   `automatizari` / registrul la zi (chat), plafoanele recitite din BD. Cere §12.2. Risc: cel real — ținut de plafonul zilei mic, de lista
-  operatorilor și de urmărirea cu întrerupător.
+  operatorilor, de separarea comenzi / înscriere (§7.3) și de urmărirea cu întrerupător.
 
 ### F5 — Comanda curierului din platformă (după răspunsurile curierului)
-- `red_fan_comenzi`, `red_fan_proiect_setari`, `fn_red_fan_comanda_curier_claim / _rezultat / _anuleaza`, acțiunile `comanda_curier` /
-  `anuleaza_comanda` în funcția edge, ecranul §11; până atunci „Pregătește comanda” + consemnarea manuală (`stare = 'manuala'`), care poate
-  intra deja în F1 ca UI fără apel.
+- `red_fan_comenzi` (cu `manuala` în CHECK și în indexul comenzilor vii, §11), `red_fan_proiect_setari`, `fn_red_fan_comanda_curier_claim`
+  (clasa A) / `fn_red_fan_srv_comanda_curier_rezultat` (clasa B) / `fn_red_fan_comanda_curier_anuleaza`, acțiunile `comanda_curier` /
+  `anuleaza_comanda` în funcția edge, ecranul §11; „Pregătește comanda” + consemnarea manuală (`stare = 'manuala'`) vin TOT aici (sau într-o
+  felie UI proprie după F1b), **nu în F1** (corectat; contrazicea excluderea din F1 pct. (4)).
 
 ### F6 — AWB-ul pe A5 făcut de platformă (doar dacă proba de hârtie o cere)
 - **Pasul 0, zero cod** (comun cu F1b): proba de hârtie de la §8.6.3 (tabelul pct. 1–8). Rezultatul se scrie în `FANCOURIER_INTEGRARE.md` §8
@@ -1218,29 +1599,41 @@ comanda curierului și „Pregătește comanda” (F5); orice efect pe proiecte 
 
 ## 14. Lecțiile L01–L25: cum le respectă implementarea descrisă
 
-- **L01** lock înainte de verificare: `fn_red_fan_comanda` ia lotul, plicurile, rândurile, setările (un rând = serializarea plafonului) și abia
-  apoi verifică; `red_fan_zi` cu `ON CONFLICT … WHERE` atomic; revendicarea slotului cron prin `INSERT … ON CONFLICT DO NOTHING RETURNING`;
-  `fn_red_fan_tiparire_inregistreaza` ia lotul FOR UPDATE și abia apoi numără tipăririle existente (`nr` dens, UNIQUE); regula `lot_tiparit` și
-  `RD022` se verifică sub lock-ul lotului, pe care îl ia și începerea tirajului (cele două se serializează).
+- **L01** lock înainte de verificare: `fn_red_fan_comanda` ia lotul, plicurile, rândurile, `red_fan_loturi`, setările (un rând = serializarea
+  plafonului) și abia apoi verifică; plafonul zilei: `SELECT … FOR UPDATE` pe rândul zilei (absent = 0, explicit), verificarea ÎNAINTEA oricărei
+  scrieri pe AMBELE ramuri, apoi `INSERT … ON CONFLICT DO UPDATE` + postcondiție în RPC + trigger-gardă (§7.2, P1–P10); revendicarea slotului cron
+  prin `INSERT … ON CONFLICT DO NOTHING RETURNING`; `fn_red_fan_tiparire_inregistreaza` ia lotul FOR UPDATE și abia apoi numără tipăririle
+  existente (`nr` dens, UNIQUE); regula `lot_tiparit`, marcajul automat și `RD031` se verifică sub lock-ul lotului, pe care îl ia și începerea
+  tirajului (cele două se serializează).
 - **L02** atomic: propunere + aprobare + plafon + cerere + intenție într-UN RPC; rezultatele unei solicitări într-un RPC (existent); bifarea pe
   plic + evidența FAN + jurnalul într-o tranzacție; Storage scris înainte, înregistrarea căii doar după verificarea obiectului; pachet + rânduri pe
   plic + jurnal într-UN RPC, iar fișierul se predă DOAR după rowcount confirmat (fără fișier predat fără evidență).
 - **L03** rezultat vechi: CAS pe `versiune_urmarire` (existent) și la cron; tirajul (existent); intenția încheiată cu CAS pe `in_curs`.
-- **L04** idempotență: cheia intenției UUID + hash-ul cererii (`UNIQUE`, aceeași cheie + alt hash = eroare); cheia solicitării (existent); o
-  rulare = un rând unic `(zi_ro, slot)`; pachetul de tipărire = cheie UUID + sha256 al fișierului (`ON CONFLICT DO NOTHING RETURNING`, replay
-  la aceeași cheie + același sha, 22023 la alt sha); lămurirea = cheie primară `(awb_id, tip)`.
+- **L04** idempotență: cheia intenției UUID + hash-ul cererii (`UNIQUE`, aceeași cheie + alt hash / alt lot / alt operator = eroare; replay verifică
+  lotul, apelantul și payloadul canonic, §8.3); consumul plafonului o singură dată pe rând și zi (`PRIMARY KEY (awb_id, zi_ro)`); cheia solicitării
+  (existent); o rulare = un rând unic `(zi_ro, slot)`; pachetul de tipărire = cheie UUID + contractul semantic complet (lot, tiraj, tip, parte,
+  poziții, sha256, motiv; replay doar la egalitate totală, 22023 altfel); lămurirea = cheie primară `(awb_id, tip)`; anularea = o cerere
+  deschisă pe rând (`RD035` la a doua).
 - **L05** ambiguu = necunoscut: fără retry la `necunoscut` / `in_curs`, butonul blocat până la reconciliere, registrul local nu iese la 5xx /
-  42501, replay-ul intenției întoarce rezultatul memorat, cronul se oprește la primul 429 / 5xx; la tipărire, un 5xx după RPC nu lasă fișierul
-  „pierdut”: cheia rămâne în registrul local și pachetul se recitește din BD la redeschidere (replay).
-- **L06** deadlock: ordinea scrisă în fiecare RPC (lot → plicuri → rânduri FAN → `red_fan_loturi` → setări → `red_fan_zi` → cereri → intenții →
-  jurnal); cronul: rânduri FAN `ORDER BY id` → plic → jurnal, fără lock pe lot (nu schimbă marcaj / tiraj).
-- **L07** toate căile: `de_aprobat` și contorul zilei impuse în RPC (fără GRANT de scriere); „lotul tipărit nu se mai atinge” și „tiraj doar pe
-  lotul încheiat” impuse în `fn_red_fan_comanda` / `fn_red_fan_tiraj`, nu doar în funcția edge; `anulat_*` / `motiv_anulare` imuabile prin
-  trigger BEFORE UPDATE; coloanele `curier_*` pe plic scrise doar de
-  funcția internă (trigger BEFORE pe OLD / NEW); operatorii doar prin RPC; evidența tipăririi și lămuririle fără niciun GRANT de scriere
-  (doar RPC), fără trigger care să sincronizeze „tipărit” pe `red_fan_awb` / `red_plicuri` — D11 compară, nu copiază.
-- **L08** identitate: `auth.uid()` peste tot; funcția edge nu primește rolul; calea cron = EXECUTE exclusiv `service_role` + `auth.uid() IS NULL`
-  + secret în Vault (rol verificat explicit, nu claims); autorii puși de server (inclusiv `anulat_de` / `anulat_la`).
+  42501, reluarea aceleiași intenții după crash (arenda `lucru_pana_la`, fără cheie nouă, fără dublă aprobare, `RD033` peste un rând nelămurit),
+  replay-ul întoarce sumarul DERIVAT din rânduri (memo-ul nu e adevăr), cronul se oprește la primul 429 / 5xx; anularea cu răspuns ambiguu =
+  cererea rămâne deschisă, nimic scris; la tipărire, un 5xx după RPC nu lasă fișierul „pierdut”: cheia rămâne în registrul local și pachetul se
+  recitește din BD la redeschidere (replay).
+- **L06** deadlock: O SINGURĂ ordine, §6.2, scrisă în fiecare RPC: lot → plicuri → rânduri FAN → `red_fan_loturi` → setări → `red_fan_zi` (+ consum)
+  → cereri → intenții → pachete / tipăriri → lămuriri / rulări → jurnal; lock-urile implicite (FK `KEY SHARE`, `ON CONFLICT`) numărate; cronul:
+  urmărirea doar pe rânduri FAN, bifarea în ALTĂ tranzacție plic → rând FAN → jurnal (ca `fn_red_fan_ridicat`), fără lock pe lot (nu schimbă marcaj
+  / tiraj); revenirile `LOCK … NOWAIT` în aceeași ordine.
+- **L07** toate căile: `de_aprobat`, `retras` și contorul zilei impuse în RPC + trigger-gardă pe `red_fan_zi` (fără GRANT de scriere); garda „doar
+  TEST” în BD (`fn_red_fan_lot_permis`) pe TOATE funcțiile cu efect, vechi și noi, owner inclus; „lotul tipărit nu se mai atinge” și „tiraj doar pe
+  lotul încheiat” impuse în `fn_red_fan_comanda` / `fn_red_fan_tiraj` / `fn_red_fan_propune` / `fn_red_fan_aproba`, nu doar în funcția edge;
+  `anulat_*` / `motiv_anulare` / `retras_*` scrise doar din lista exactă de funcții și imuabile prin trigger BEFORE UPDATE; coloanele `curier_*` pe
+  plic scrise doar de funcția internă (trigger BEFORE pe OLD / NEW); operatorii doar prin RPC; evidența tipăririi și lămuririle fără niciun GRANT de
+  scriere (doar RPC), fără trigger care să sincronizeze „tipărit” pe `red_fan_awb` / `red_plicuri` — D11 compară, nu copiază.
+- **L08** identitate: `auth.uid()` în clasele A și C; funcția edge nu primește rolul; **înscrierea rezultatelor externe (clasa B) nu e apelabilă de
+  niciun om**: EXECUTE exclusiv `service_role` + `auth.uid() IS NULL` + `p_actor` verificat de funcția edge din JWT și re-verificat în corp ca
+  operator / owner („cale server cu rol verificat explicit” — singura excepție admisă de L08, declarată și justificată la §7.3); calea cron la fel,
+  cu secret în Vault (rol verificat explicit, nu claims); autorii puși de server (inclusiv `anulat_de` / `anulat_la`, `retras_de`, `marcat_de` la
+  marcajul automat).
 - **L09** entitatea țintă: lotul citit cu JWT-ul omului (RLS); fiecare plic verificat pe lotul lui; căile Storage pe listă albă legate de plicul
   rândului.
 - **L10** secrete: secret propriu pentru poarta cronului (fără fallback, fără `_VECHI` în afara rotației), secretele curierului neschimbate,
@@ -1260,12 +1653,15 @@ comanda curierului și „Pregătește comanda” (F5); orice efect pe proiecte 
   tabelul cod → efect ca tabel de cazuri cu paritate JS ↔ SQL; „tipărit” / „netipărit” / excepțiile (a)–(d) / numerele D11 calculate o singură
   dată în SQL (view-uri) și primite de ecran ca flaguri; verificarea tirajului la înregistrarea tipăririi = corpul lui `fn_red_fan_tiraj`;
   manifestul pachetului de tipărit = `manifestTiparire` (același ca etichetele și arhiva).
-- **L20** garda nouă testată și pe căile legitime: owner-ul fără rând de operator trece; cererea aprobată se trimite; plicul respins mutat
-  într-un lot nou se trimite acolo; lotul fără niciun AWB poate fi retrimis; anularea de operator pe un AWB neridicat trece, pe unul ridicat e
-  refuzată; funcția edge veche (owner) continuă să anuleze până la publicarea celei noi; retragerea unui operator cu
-  intenție `in_curs` nu rupe încheierea (owner-ul o poate încheia); întrerupătorul oprește doar rulările noi; refuzul local (plafon) raportat
-  distinct de eșecul extern; retipărirea legitimă (motiv, poziții alese) trece, iar „Tiraj nou” nu șterge evidența veche (istoric); excepțiile
-  (a) / (b) se închid singure la C0 / tipărire / anulare (nu rămân agățate), (c) / (d) doar prin lămurire.
+- **L20** garda nouă testată și pe căile legitime: owner-ul fără rând de operator trece; prima trimitere pe un lot de TEST nemarcat trece și
+  marchează; cererea aprobată se trimite; plicul respins mutat într-un lot nou se trimite acolo; lotul fără niciun AWB poate fi retrimis;
+  anularea de operator pe un AWB neridicat trece (în doi pași), pe unul ridicat e refuzată; funcția edge veche (owner) continuă să anuleze până
+  la publicarea celei noi (D18); retragerea unui operator cu intenție `in_curs` nu rupe încheierea (clasa B scrie rezultatele deja plătite, owner-ul
+  poate încheia); reluarea aceleiași intenții după crash trece fără cheie nouă; retragerea din trimitere închide lotul și deblochează tirajul;
+  CHECK-ul stărilor e derivat din tabelul tranzițiilor §8.8 și fiecare rând al lui are probă; întrerupătorul oprește doar rulările noi; refuzul
+  local (plafon, `RD032`) raportat distinct de eșecul extern; retipărirea legitimă (motiv, poziții alese) trece, iar „Tiraj nou” nu șterge evidența
+  veche (istoric); excepțiile (a) / (b) se închid singure la C0 / tipărire / anulare (nu rămân agățate) și nu apar pe AWB-uri ridicate, (c) / (d)
+  doar prin lămurire.
 - **L21 / L22**: nu e AI; pasul durabil înaintea apelului plătit (existent) + aprobarea / plafonul înaintea rezervării.
 - **L23** paginare: citirile cronului cu keyset (`urmarit_la, id`), id-uri în bucăți de 100 (`citesteToate`, existent).
 - **L24** async: generația + lotul la fiecare acțiune (existent); descărcările multiple după `await` reverifică generația; registrul local pe
@@ -1321,9 +1717,9 @@ Deciziile noi din aceeași trecere, care nu erau întrebări: **D12** (AWB pe A5
 10. **Comanda și AWB-urile**: comanda de ridicare nu are câmp de AWB; legătura comandă ↔ AWB-uri se face la ridicare? Raportul de comenzi din API
     expune AWB-urile ridicate (câmpul din aplicația web)? Observația comenzii ajunge întreagă la curier (în lista web apare tăiată la 50 de caractere)?
 
-### 15.3 Către juridic
+### 15.3 Către juridic (lista confirmată de proprietar, D16, 18.11.2026: rămân DOAR 1, 2, 5, 6)
 
-1. Convocarea trimisă prin curier cu oPOD = „scrisoare recomandată cu confirmare de primire” (deschisă din 09.11.2026)?
+1. Convocarea trimisă prin curier cu oPOD (AWB-ul cu confirmare) = „scrisoare recomandată cu confirmare de primire” (deschisă din 09.11.2026)?
 2. **Data expedierii = data ridicării de către curier** (evenimentul C0 din sistemul curierului), înregistrată automat; termenul de 10 zile
    curge de la ea? (Singura întrebare juridică rămasă din Q4; bifarea automată pe loturi REALE așteaptă acest răspuns, F4.) Dacă curierul corectează ulterior data ridicării, care dată contează și cum se consemnează corectarea?
 3. ~~**AR-ul**: dovada electronică a curierului ține locul cartonașului oPOD fizic?~~ **Închisă prin decizia proprietarului (Q4 A,
@@ -1373,7 +1769,16 @@ Deciziile noi din aceeași trecere, care nu erau întrebări: **D12** (AWB pe A5
 - Semnătura veche `fn_red_fan_anulat(uuid, text, text)` e chemată azi din DOUĂ locuri: funcția edge (`redariFanTransport.mjs`, după `DELETE /awb`)
   și ecranul owner-ului (`FanAwbPrevizualizare.jsx`, anularea după verificarea în contul curierului). Rămâne deci până sunt publicate AMÂNDOUĂ
   (funcția edge nouă și ecranul nou); retragerea ei e o migrare separată, după.
-- Că `red_fan_awb.generat_la` / `ridicat_la` sunt `timestamptz` (ziua se derivă în ora României); sărbătorile legale nu sunt cunoscute de
-  `fn_red_zi_lucratoare_dupa` (excepțiile (a) / (b) pot apărea cu o zi mai devreme în jurul lor — spus în ecran).
+- Că `red_fan_awb.generat_la` / `ridicat_la` sunt `timestamptz` (ziua se derivă în ora României), iar `ridicat_propus` e `date` (verificat în
+  20261212a: curierul dă ziua C0, ora C0 nu se păstrează); sărbătorile legale nu sunt cunoscute de `fn_red_zi_lucratoare_dupa` (excepțiile (a) /
+  (b) pot apărea cu o zi mai devreme în jurul lor — spus în ecran).
+- **Trecerea a patra**: că funcția edge `redari-fan-awb` poate construi un client `service_role` din `SUPABASE_SERVICE_ROLE_KEY` (Edge Secret
+  standard, prezent în alte funcții ale proiectului) fără schimbare în workflow-ul de publicare — de verificat la F1; dacă nu, clasa B rămâne
+  apelabilă DOAR prin funcția edge `redari-fan-urmarire` (care îl are prin design) sau printr-un secret propriu în Vault verificat în corp
+  (`fn_verifica_secret`), niciodată prin EXECUTE `authenticated`. Că `transportPermis({ cereMarcaj:false })` din `redariFanHandler.mjs` rămâne
+  cu semantica de azi (verificat pe `9f6fdada`). Că un marcaj de tranzacție (`set_config(…, true)`) pus de o funcție DEFINER e vizibil
+  trigger-ului BEFORE din aceeași tranzacție și nu e setabil de un client PostgREST în afara unui RPC (nu există RPC care să-l expună) — probă
+  PGlite + clonă. Că pe mediul real există rânduri `anulat` fără `anulat_la` (Testul 1) — preflight-ul le numără și le completează (L14).
+  Că `red_fan_loturi.marcat_de` poate purta de acum un operator (marcajul automat, doar pe TEST); comentariul coloanei se actualizează.
 - Că raportul de comenzi al curierului din API expune AWB-urile ridicate pe comandă (în aplicația web există); altfel legătura comandă ↔ AWB-uri
   rămâne pe punct + zi (§11).
