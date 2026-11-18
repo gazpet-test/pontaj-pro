@@ -56,12 +56,67 @@ export const MESAJ_FARA_LINK = `Textul nu conține {${CAMP_LINK}}: proprietarii 
 const RX_LINK_TOKEN = /(\/redari\/raspuns\/)([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/g
 export const MASCA_TOKEN = '••••••'
 export const mascheazaLink = text => String(text ?? '').replace(RX_LINK_TOKEN, (_, cale, tok) => `${cale}${MASCA_TOKEN}${tok.slice(-6)}`)
+// ── Linkul personal STRĂIN (r3, Jakarinos #1138 P1: tokenul procent-codificat trecea de căutarea literală): O SINGURĂ definiție, aceeași ca
+// fn_red_mail_f2_link_strain din 20261131i (paritate pe src/redari/__tests__/link_strain_cazuri.json; tabelele de caractere de mai jos = blocul
+// „TABEL-LINK 20261131i” din migrare, comparat de test). Căutarea se face pe FORMA DE CĂUTARE: (0) linkul EXACT al destinatarului → „#”; (1) NFKC;
+// (2) până la punct fix (cel mult TRECERI_LINK; nestabil = străin): fără INVIZIBILE (spații, rupturi de linie, controale, formatare, semne combinante),
+// liniuțele Unicode → „-”, %XX decodat într-un pas de la stânga la dreapta (ASCII tipăribil = caracterul, altfel eliminat), entitățile HTML decodate;
+// (3) străin = calea „redari/raspuns” oriunde (litere ASCII mici, „\” = „/”, „//”, „.” și „..” rezolvate) SAU un token existent (≠ al destinatarului)
+// în orice fereastră de 43 de caractere. Ecranul nu cunoaște tokenurile (secrete): verifică doar calea; serverul le verifică pe amândouă.
+export const PREFIX_LINK_RASPUNS = 'https://redari.gazpet.ro/redari/raspuns/'
+export const TRECERI_LINK = 12
+export const INVIZIBILE_LINK = Object.freeze([[1, 32], [127, 160], [173, 173], [768, 879], [1564, 1564], [4447, 4448], [5760, 5760], [6155, 6158], [8192, 8207], [8232, 8239], [8287, 8303], [10240, 10240], [12288, 12288], [12644, 12644], [65024, 65039], [65279, 65279], [65440, 65440], [65529, 65531], [119155, 119162], [917504, 917631], [917760, 917999]])
+export const LINIUTE_LINK = Object.freeze([[8208, 8213], [8722, 8722], [11834, 11835]])
+export const ENTITATI_LINK = Object.freeze({ amp: '&', AMP: '&', lowbar: '_', UnderBar: '_', sol: '/', bsol: '\\', hyphen: '-', dash: '-', minus: '-', period: '.', colon: ':', num: '#', percnt: '%', quest: '?' })
+const clasaLink = intervale => new RegExp('[' + intervale.map(([a, b]) => String.fromCodePoint(a) + '-' + String.fromCodePoint(b)).join('') + ']', 'gu')
+const RX_INVIZIBILE = clasaLink(INVIZIBILE_LINK), RX_LINIUTE = clasaLink(LINIUTE_LINK)
+const RX_PROCENT = /%[0-9A-Fa-f]{2}/g
+const RX_ENTITATE = /&#[0-9]{1,7};?|&#[xX][0-9A-Fa-f]{1,6};?|&[A-Za-z][A-Za-z0-9]{1,31};/g
+const asciiTiparibil = c => c >= 33 && c <= 126 ? String.fromCharCode(c) : ''
+const decodeazaEntitate = e => e.startsWith('&#')
+  ? asciiTiparibil(/^&#[xX]/.test(e) ? parseInt(/^&#[xX]([0-9A-Fa-f]+)/.exec(e)[1], 16) : parseInt(/^&#([0-9]+)/.exec(e)[1], 10))
+  : (Object.hasOwn(ENTITATI_LINK, e.slice(1, -1)) ? ENTITATI_LINK[e.slice(1, -1)] : '')
+/** Forma de căutare a unui text (pașii 1–2); null = nestabilă după TRECERI_LINK treceri (tratată ca link străin). */
+export function formaCautareLink(text) {
+  let v = String(text ?? '').normalize('NFKC')
+  for (let i = 0; i < TRECERI_LINK; i++) {
+    const ant = v
+    v = v.replace(RX_INVIZIBILE, '').replace(RX_LINIUTE, '-')
+    v = v.replace(RX_PROCENT, p => asciiTiparibil(parseInt(p.slice(1), 16)))
+    v = v.replace(RX_ENTITATE, decodeazaEntitate)
+    if (v === ant) return v
+  }
+  return null
+}
+/** Calea formularului de răspuns („redari/raspuns”) în forma de căutare, ca un browser (litere ASCII mici, „\”, „//”, „.”, „..”); null = nestabilă. */
+export function areCaleRaspuns(forma) {
+  let c = forma.replace(/[A-Z]/g, x => x.toLowerCase()).replace(/\\/g, '/')
+  for (let i = 0; i < TRECERI_LINK; i++) {
+    const ant = c
+    c = c.replace(/\/+/g, '/').replace(/\/\.(?=\/|$)/g, '').replace(/\/[^/]+\/\.\.(?=\/|$)/g, '')
+    if (c === ant) return c.includes('redari/raspuns')
+  }
+  return true
+}
+/** Textul conține un link personal STRĂIN de destinatarul cu tokenul dat (null = orice link personal e străin); tokeniExistenti = cei din bază (serverul). */
+export function linkStrain(text, token = null, tokeniExistenti = []) {
+  if (text == null) return false
+  let v = String(text)
+  if (token != null && /^[A-Za-z0-9_-]{43}$/.test(token)) v = v.split(PREFIX_LINK_RASPUNS + token).join('#')
+  const f = formaCautareLink(v)
+  if (f === null || areCaleRaspuns(f)) return true
+  const alti = new Set(tokeniExistenti.filter(t => t !== token))
+  if (!alti.size) return false
+  for (const m of f.matchAll(/[A-Za-z0-9_-]{43,}/g)) for (let i = 0; i + 43 <= m[0].length; i++) if (alti.has(m[0].slice(i, i + 43))) return true
+  return false
+}
 /**
- * Un link personal LITERAL în șablon (…/redari/raspuns/<token de 43 de caractere>, pe orice origine): ar ajunge la TOȚI destinatarii — serverul refuză
- * crearea (link_literal; fn_red_mail_f2_link_strain, care prinde în plus și un token copiat fără adresă). Linkul intră doar prin {LINK_RASPUNS}.
+ * Un link personal în ȘABLON (calea formularului, oricum scrisă — literală, %XX, entități, majuscule, rupt de spații): ar ajunge la TOȚI destinatarii —
+ * serverul refuză crearea (link_literal; fn_red_mail_f2_link_strain, care prinde în plus tokenurile existente copiate fără adresă). Linkul intră doar
+ * prin {LINK_RASPUNS}.
  */
-export const areLinkLiteral = text => new RegExp(RX_LINK_TOKEN.source).test(String(text ?? ''))
-export const MESAJ_LINK_LITERAL = `Textul sau subiectul conține un link personal de răspuns copiat: ar ajunge la toți destinatarii. Scoate-l și folosește {${CAMP_LINK}}.`
+export const areLinkLiteral = text => text != null && linkStrain(text, null, [])
+export const MESAJ_LINK_LITERAL = `Textul sau subiectul conține un link personal de răspuns sau adresa formularului de răspuns (…/redari/raspuns/…, oricum scrisă): ar ajunge la toți destinatarii. Scoate-l și folosește {${CAMP_LINK}}.`
 export const STARI_LOT = ['ciorna', 'aprobat', 'in_trimitere', 'blocat_integritate', 'incheiat']
 export const STARI_MESAJ = ['in_coada', 'rezervat', 'in_apel', 'trimis', 'esuat_sigur', 'necunoscut', 'esuat_confirmat', 'anulat']
 export function emailValid(v) {

@@ -26,7 +26,9 @@
 --     acolade neînchise) — altfel camp_necunoscut (r2, Jakarinos #1138 P2: limita de 40 de caractere a parserului lăsa să treacă numele mai lungi);
 --   * fn_red_mail_f2_link_strain(text,text): „textul conține un link personal care nu e al deținătorului dat” — orice șir de exact 43 de caractere base64url
 --     care fie stă într-un link de răspuns (…/redari/raspuns/<token>, pe ORICE origine), fie e un token existent în red_detinatori_token; p_token NULL =
---     orice link personal e străin. O singură definiție (L19) pentru șablon și pentru mesajul final (r2, Jakarinos #1138 P1);
+--     orice link personal e străin. O singură definiție (L19) pentru șablon și pentru mesajul final (r2, Jakarinos #1138 P1). r3 (P1, forma codificată):
+--     căutarea se face pe FORMA DE CĂUTARE (NFKC, fără spații / invizibile, %XX și entități HTML decodate până la punct fix), orice apariție a căii
+--     „redari/raspuns” în afara linkului exact al destinatarului = străin, iar tokenurile existente se caută în orice fereastră de 43 de caractere;
 --   * fn_red_mail_destinatari: motivul nou `fara_token` (deținător fără link personal valid — exclus din lot, vizibil în inventar);
 --   * fn_red_mail_lot_creeaza (aceeași semnătură): refuză destinatarii fără token valid (destinatari_neeligibili), REFUZĂ un link personal literal în subiect
 --     sau în text (link_literal — un link copiat ar ajunge la toți destinatarii), completează subiectul cu câmpurile lotului și corpul FIECĂRUI mesaj cu
@@ -273,16 +275,75 @@ END $fn$;
 COMMENT ON FUNCTION public.fn_red_mail_f2_completeaza(text,jsonb) IS 'Redări e-mail (intern): înlocuiește fiecare {NUME} din text cu valoarea din p_campuri; un câmp necunoscut (scris greșit) = camp_necunoscut, un câmp fără valoare = camp_necompletabil (ambele 22023); textul rezultat nu mai conține NICIO acoladă (orice formă rămasă, oricât de lungă, = camp_necunoscut). Mesajele de eroare nu conțin valori. 20261131i.';
 
 -- ─── 5b. linkul personal STRĂIN: o singură definiție pentru șablon (p_token NULL) și pentru mesajul final (p_token = al destinatarului) ─────────
--- Un „link personal” = un șir de exact 43 de caractere base64url (delimitat) care fie stă într-un link de răspuns „…/redari/raspuns/<token>” (pe orice
--- origine: redari.gazpet.ro, previzualizări, domenii vechi), fie e un token EXISTENT în red_detinatori_token (un token copiat fără adresă e tot secretul
--- cuiva). Străin = diferit de p_token. Nimic nu se scrie; nicio valoare în rezultat.
+-- r3 (Jakarinos #1138 P1: un token procent-codificat — „%54…” — trecea de căutarea literală, iar routerul îl decodează): căutarea se face pe FORMA DE
+-- CĂUTARE a textului, cu o singură definiție (aceeași în JS: formaCautareLink / linkStrain din redariMailF2.mjs; paritate pe tabelul comun
+-- src/redari/__tests__/link_strain_cazuri.json; tabelele de caractere de mai jos sunt citite de testul JS din acest text):
+--   0. linkul destinatarului însuși, în forma EXACTĂ din fn_red_link_raspuns, se înlocuiește cu „#” (nu e străin); orice altă formă a lui rămâne de verificat;
+--   1. NFKC (literele „late” / compatibile devin ASCII);
+--   2. până la punct fix (cel mult 12 treceri; nestabil = străin): se elimină spațiile, rupturile de linie, controalele, caracterele invizibile / de formatare,
+--      semnele combinante (INVIZIBILE), liniuțele Unicode devin „-”, se decodează %XX (un pas de la stânga la dreapta, ca routerul; octet ASCII tipăribil =
+--      caracterul, altfel eliminat) și entitățile HTML (numerice; cele cu nume din ENTITATI, restul eliminate);
+--   3. străin = (a) calea formularului „redari/raspuns” apare oriunde (litere ASCII mici, „\” = „/”, „//” și segmentele „.” / „..” rezolvate, ca un browser):
+--      singura formă permisă e {LINK_RASPUNS} al destinatarului (pasul 0); SAU (b) un token EXISTENT în red_detinatori_token, diferit de p_token, apare
+--      oriunde în forma de căutare (orice fereastră de 43 de caractere dintr-un șir base64url — și lipit de alte litere); sensibil la majuscule.
+-- Nimic nu se scrie; nicio valoare în rezultat.
 CREATE FUNCTION public.fn_red_mail_f2_link_strain(p_text text,p_token text) RETURNS boolean
-LANGUAGE sql STABLE SET search_path=public,pg_temp AS $fn$
- SELECT EXISTS(SELECT 1 FROM regexp_matches(p_text,'(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])','g') r
-  WHERE r[1] IS DISTINCT FROM p_token
-  AND (position('/redari/raspuns/'||r[1] IN p_text)>0 OR EXISTS(SELECT 1 FROM public.red_detinatori_token t WHERE t.token_raspuns=r[1])))
-$fn$;
-COMMENT ON FUNCTION public.fn_red_mail_f2_link_strain(text,text) IS 'Redări e-mail (intern): true dacă textul conține un link personal de răspuns (…/redari/raspuns/<token de 43 de caractere>, pe orice origine) sau un token existent al unui deținător, DIFERIT de p_token (NULL = orice link personal e străin). Folosită de fn_red_mail_lot_creeaza pe șablon (refuz link_literal) și pe fiecare mesaj final (refuz link_strain). 20261131i.';
+LANGUAGE plpgsql STABLE SET search_path=public,pg_temp AS $fn$
+DECLARE
+ -- >>> TABEL-LINK 20261131i (aceleași valori în JS: INVIZIBILE_LINK / LINIUTE_LINK / ENTITATI_LINK din redariMailF2.mjs)
+ inviz constant jsonb:='[[1,32],[127,160],[173,173],[768,879],[1564,1564],[4447,4448],[5760,5760],[6155,6158],[8192,8207],[8232,8239],[8287,8303],[10240,10240],[12288,12288],[12644,12644],[65024,65039],[65279,65279],[65440,65440],[65529,65531],[119155,119162],[917504,917631],[917760,917999]]';
+ liniute constant jsonb:='[[8208,8213],[8722,8722],[11834,11835]]';
+ entitati constant jsonb:='{"amp":"&","AMP":"&","lowbar":"_","UnderBar":"_","sol":"/","bsol":"\\","hyphen":"-","dash":"-","minus":"-","period":".","colon":":","num":"#","percnt":"%","quest":"?"}';
+ -- <<< TABEL-LINK 20261131i
+ c_inviz text; c_lin text; v text; ant text; cale text; parti text[]; potr text[]; k int; c int; x text; stabil boolean:=false;
+BEGIN
+ IF p_text IS NULL THEN RETURN false; END IF;
+ SELECT '['||string_agg(chr((e->>0)::int)||'-'||chr((e->>1)::int),'')||']' INTO c_inviz FROM jsonb_array_elements(inviz) e;
+ SELECT '['||string_agg(chr((e->>0)::int)||'-'||chr((e->>1)::int),'')||']' INTO c_lin FROM jsonb_array_elements(liniute) e;
+ v:=p_text;
+ IF p_token IS NOT NULL AND public.fn_red_link_raspuns(p_token) IS NOT NULL THEN v:=replace(v,public.fn_red_link_raspuns(p_token),'#'); END IF;
+ v:=normalize(v,NFKC);
+ FOR k IN 1..12 LOOP
+  ant:=v;
+  v:=regexp_replace(regexp_replace(v,c_inviz,'','g'),c_lin,'-','g');
+  -- %XX: un singur pas de la stânga la dreapta (bucățile dintre potriviri + potrivirile, în ordine)
+  parti:=regexp_split_to_array(v,'%[0-9A-Fa-f]{2}');
+  SELECT array_agg(r.m[1] ORDER BY r.o) INTO potr FROM regexp_matches(v,'%[0-9A-Fa-f]{2}','g') WITH ORDINALITY r(m,o);
+  v:=parti[1];
+  FOR n IN 1..coalesce(cardinality(potr),0) LOOP
+   c:=get_byte(decode(substr(potr[n],2),'hex'),0);
+   v:=v||CASE WHEN c BETWEEN 33 AND 126 THEN chr(c) ELSE '' END||parti[n+1];
+  END LOOP;
+  -- entitățile HTML: &#zecimal; &#xhex; (ASCII tipăribil = caracterul, altfel eliminat) și &nume; (din ENTITATI, altfel eliminat)
+  parti:=regexp_split_to_array(v,'&#[0-9]{1,7};?|&#[xX][0-9A-Fa-f]{1,6};?|&[A-Za-z][A-Za-z0-9]{1,31};');
+  SELECT array_agg(r.m[1] ORDER BY r.o) INTO potr FROM regexp_matches(v,'&#[0-9]{1,7};?|&#[xX][0-9A-Fa-f]{1,6};?|&[A-Za-z][A-Za-z0-9]{1,31};','g') WITH ORDINALITY r(m,o);
+  v:=parti[1];
+  FOR n IN 1..coalesce(cardinality(potr),0) LOOP
+   x:=potr[n];
+   IF x ~ '^&#' THEN
+    c:=CASE WHEN x ~ '^&#[xX]' THEN ('x'||lpad(substring(x FROM '^&#[xX]([0-9A-Fa-f]+)'),8,'0'))::bit(32)::int ELSE substring(x FROM '^&#([0-9]+)')::int END;
+    x:=CASE WHEN c BETWEEN 33 AND 126 THEN chr(c) ELSE '' END;
+   ELSE x:=coalesce(entitati->>substring(x FROM 2 FOR length(x)-2),'');
+   END IF;
+   v:=v||x||parti[n+1];
+  END LOOP;
+  IF v=ant THEN stabil:=true; EXIT; END IF;
+ END LOOP;
+ IF NOT stabil THEN RETURN true; END IF;
+ -- (a) calea formularului, oricum ar fi scrisă (doar literele ASCII devin mici, ca în JS)
+ cale:=replace(translate(v,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'\','/');
+ stabil:=false;
+ FOR k IN 1..12 LOOP
+  ant:=cale;
+  cale:=regexp_replace(regexp_replace(regexp_replace(cale,'/+','/','g'),'/\.(?=/|$)','','g'),'/[^/]+/\.\.(?=/|$)','','g');
+  IF cale=ant THEN stabil:=true; EXIT; END IF;
+ END LOOP;
+ IF NOT stabil OR position('redari/raspuns' IN cale)>0 THEN RETURN true; END IF;
+ -- (b) un token existent al altcuiva, oriunde în forma de căutare (ferestre de 43 de caractere; indexul UNIQUE pe token_raspuns)
+ RETURN EXISTS(SELECT 1 FROM regexp_matches(v,'[A-Za-z0-9_-]{43,}','g') r, generate_series(1,length(r[1])-42) i, public.red_detinatori_token t
+  WHERE t.token_raspuns=substr(r[1],i,43) AND t.token_raspuns IS DISTINCT FROM p_token);
+END $fn$;
+COMMENT ON FUNCTION public.fn_red_mail_f2_link_strain(text,text) IS 'Redări e-mail (intern): true dacă textul conține — după forma de căutare (NFKC, fără spații / invizibile, %XX și entități HTML decodate până la punct fix) — calea formularului de răspuns (redari/raspuns, oricum scrisă) în afara linkului exact al destinatarului p_token, sau un token existent al altui deținător (sensibil la majuscule). p_token NULL = orice link personal e străin. Folosită de fn_red_mail_lot_creeaza pe șablon (refuz link_literal) și pe fiecare mesaj final (refuz link_strain). 20261131i (r3: forma codificată).';
 
 -- ─── 6. inventarul destinatarilor: motivul `fara_token` (corpul 20261131a + o condiție) ─────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.fn_red_mail_destinatari(p_proiect uuid,p_uat uuid,p_dupa uuid DEFAULT NULL)
@@ -441,7 +502,7 @@ BEGIN
       ('public.fn_red_mail_f2_token(uuid)', '604a8adddf23112c5c0f70c89cff0244', 'sql', false, 's', 'text'),
       ('public.fn_red_mail_f2_campuri(uuid,uuid)', '503dc3c94d4e255ac5e827658b38a0ff', 'plpgsql', true, 's', 'jsonb'),
       ('public.fn_red_mail_f2_completeaza(text,jsonb)', '61331ec6fc15d05e02517825877084d6', 'plpgsql', false, 'i', 'text'),
-      ('public.fn_red_mail_f2_link_strain(text,text)', 'cdd9d19027dd5e22edab160fcdaee5b6', 'sql', false, 's', 'boolean'),
+      ('public.fn_red_mail_f2_link_strain(text,text)', 'fee77863c42c77d1d363eae4145ebf2d', 'plpgsql', false, 's', 'boolean'),
       ('public.fn_red_mail_destinatari(uuid,uuid,uuid)', 'b1fbfaf746f1e05fd88f9204bfbbea68', 'plpgsql', true, 's', 'record'),
       ('public.fn_red_mail_lot_creeaza(uuid,uuid,uuid,uuid[],text,text)', 'bff52e712db5084b48eefd3824ca7283', 'plpgsql', true, 'v', 'uuid'),
       ('public.fn_red_mail_rezerva(uuid)', 'dbd0cbf99e8e2e0715441333ad17664c', 'plpgsql', true, 'v', 'public.red_mail_mesaje'),
@@ -502,11 +563,18 @@ BEGIN
   EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
   BEGIN PERFORM public.fn_red_mail_f2_completeaza('a { X }', '{"X":"1"}'::jsonb); RAISE EXCEPTION '20261131i: postconditie: campul cu spatii a trecut';
   EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
-  -- r2: linkul străin (valori fictive): link pe orice origine = străin față de NULL și față de alt token; al destinatarului = nu; 44 de caractere = nu e token
+  -- r2 + r3: linkul străin (valori fictive): calea formularului pe orice origine, oricum scrisă (codificată %XX / dublu, entitate HTML, majuscule, spații)
+  --   = străină față de NULL și față de alt token; linkul EXACT al destinatarului = nu; „20%” și un URL străin codificat = nu
   IF public.fn_red_mail_f2_link_strain('x https://oricare.invalid/redari/raspuns/' || repeat('a', 43) || ' y', NULL) IS NOT TRUE
      OR public.fn_red_mail_f2_link_strain('x /redari/raspuns/' || repeat('a', 43), repeat('b', 43)) IS NOT TRUE
-     OR public.fn_red_mail_f2_link_strain('x /redari/raspuns/' || repeat('a', 43), repeat('a', 43)) IS NOT FALSE
-     OR public.fn_red_mail_f2_link_strain('x /redari/raspuns/' || repeat('a', 44), NULL) IS NOT FALSE
+     OR public.fn_red_mail_f2_link_strain('x ' || public.fn_red_link_raspuns(repeat('a', 43)) || ' y', repeat('a', 43)) IS NOT FALSE
+     OR public.fn_red_mail_f2_link_strain('x ' || public.fn_red_link_raspuns(repeat('a', 43)) || ' y', NULL) IS NOT TRUE
+     OR public.fn_red_mail_f2_link_strain('x /redari/raspuns/' || repeat('a', 44), NULL) IS NOT TRUE
+     OR public.fn_red_mail_f2_link_strain('x https://redari.gazpet.ro/%72edari%2Fraspuns%2F' || repeat('a', 43), NULL) IS NOT TRUE
+     OR public.fn_red_mail_f2_link_strain('x https://redari.gazpet.ro/%2572edari/raspuns/', NULL) IS NOT TRUE
+     OR public.fn_red_mail_f2_link_strain('x /REDARI/Raspuns/ y', NULL) IS NOT TRUE
+     OR public.fn_red_mail_f2_link_strain('x /redari/ ras&#112;uns/ y', NULL) IS NOT TRUE
+     OR public.fn_red_mail_f2_link_strain('Reducere 20% la https://exemplu.invalid/plan%20lucrari.pdf', NULL) IS NOT FALSE
      OR public.fn_red_mail_f2_link_strain('fara link ' || repeat('a', 43), NULL) IS NOT FALSE
      OR public.fn_red_mail_f2_link_strain(NULL, NULL) IS NOT FALSE THEN
     RAISE EXCEPTION '20261131i: postconditie: fn_red_mail_f2_link_strain';

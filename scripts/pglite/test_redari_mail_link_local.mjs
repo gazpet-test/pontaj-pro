@@ -30,7 +30,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, 'crypto', { value: webcrypto })
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const { hashMesaj } = await import(pathToFileURL(join(ROOT, 'supabase/functions/_shared/redariMailF2.mjs')).href)
+const { hashMesaj, linkStrain } = await import(pathToFileURL(join(ROOT, 'supabase/functions/_shared/redariMailF2.mjs')).href)
 const { raspundeTrimitere } = await import(pathToFileURL(join(ROOT, 'supabase/functions/_shared/redariMailF2Handler.mjs')).href)
 const { creeazaGmailHttp, GAZDA_OAUTH, GAZDA_GMAIL } = await import(pathToFileURL(join(ROOT, 'supabase/functions/_shared/gmailHttp.mjs')).href)
 const TMP = mkdtempSync(join(tmpdir(), 'maillink_'))
@@ -43,6 +43,9 @@ const SCHELET = citeste('supabase/tests/20261131i_redari_mail_link_schelet.sql')
 const MIG = citeste(F_MIG), REV = citeste(F_REV), MIG_H = citeste(`supabase/migrations/${NUME_H}.sql`)
 const CAZURI = JSON.parse(citeste('src/redari/__tests__/campuri_mail_cazuri.json'))
 const CAZURI_LOT = JSON.parse(citeste('src/redari/__tests__/campuri_lot_cazuri.json'))   // UAT-urile fixture-ului + valorile așteptate (aceleași ca în testul JS al convocatorului)
+// r3: linkul străin pe forma de căutare — tabelul comun cu testul JS (src/redari/mailLinkStrain.test.js), aceleași tokenuri fictive ca fixture-ul de mai jos
+const LS = JSON.parse(citeste('src/redari/__tests__/link_strain_cazuri.json'))
+const LSC = id => { const c = LS.cazuri.find(x => x.id === id); if (!c) throw new Error('lipsește cazul ' + id); return c }
 let OBIECTE = ''; try { OBIECTE = citeste(F_OB) } catch { /* se scrie cu --scrie-obiecte */ }
 const gen = (...a) => execFileSync('bash', [join(ROOT, 'scripts/livrare_amprenta_gen.sh'), ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 const SECRET = 'REDARI_GMAIL_TRIMITERE_REFRESH_TOKEN'
@@ -262,9 +265,11 @@ const LOT = { A: '00000000-0000-0000-0000-00000000aa01', B: '00000000-0000-0000-
 // un lot + un mesaj scrise direct (postgres), fără RPC — pentru cazurile în care singura urmă trebuie să fie eroare_cod
 const SQL_LOT_DIRECT = `INSERT INTO public.red_mail_loturi (id, proiect_id, uat_id, cerere_sha256, stare, lot_sha256, creat_de) VALUES ('${LOT.B}', '${P.TEST}', '${UAT.A}', repeat('a', 64), 'ciorna', repeat('b', 64), '${U.OWNER}');
 INSERT INTO public.red_mail_mesaje (id, lot_id, detinator_id, nr_document, catre, subiect_final, corp_text_final, message_id, mesaj_sha256) VALUES ('00000000-0000-0000-0000-0000000e0b01', '${LOT.B}', '${D.D1}', 'M-000901', 'unu.fictiv@gazpet.ro', 'Subiect fictiv', 'Text fictiv', '<00000000-0000-0000-0000-0000000e0b01@gazpet.ro>', repeat('1', 64));`
-const TEXT = `Bună ziua,\n\nLucrările pe terenul dumneavoastră din {COMUNA} s-au încheiat. Vă invităm la Primăria {COMUNA}, în una dintre zilele {ZILE}, între orele {PROGRAM}.\nNe puteți spune dacă participați la telefon {TEL} sau prin formularul dumneavoastră de răspuns: {LINK_RASPUNS}\n\nCu stimă,\nGAZPET INSTAL S.R.L.`
+// r3: textul are și forme LEGITIME care trebuie să treacă de detector: un procent („100%”) și un URL străin procent-codificat, fără token
+const PLAN = 'Planul lucrărilor (100% finalizat): https://exemplu.invalid/docs/Plan%20lucrari.pdf?v=1%2C2'
+const TEXT = `Bună ziua,\n\nLucrările pe terenul dumneavoastră din {COMUNA} s-au încheiat. Vă invităm la Primăria {COMUNA}, în una dintre zilele {ZILE}, între orele {PROGRAM}.\nNe puteți spune dacă participați la telefon {TEL} sau prin formularul dumneavoastră de răspuns: {LINK_RASPUNS}\n${PLAN}\n\nCu stimă,\nGAZPET INSTAL S.R.L.`
 const SUBIECT = 'Predarea terenului – {COMUNA}, {ZILE}'
-const TEXT_ASTEPTAT = tok => `Bună ziua,\n\nLucrările pe terenul dumneavoastră din ${COMUNA} s-au încheiat. Vă invităm la Primăria ${COMUNA}, în una dintre zilele 24.11.2026 și 25.11.2026, între orele 09:00–16:00.\nNe puteți spune dacă participați la telefon ${TEL} sau prin formularul dumneavoastră de răspuns: ${LINK(tok)}\n\nCu stimă,\nGAZPET INSTAL S.R.L.`
+const TEXT_ASTEPTAT = tok => `Bună ziua,\n\nLucrările pe terenul dumneavoastră din ${COMUNA} s-au încheiat. Vă invităm la Primăria ${COMUNA}, în una dintre zilele 24.11.2026 și 25.11.2026, între orele 09:00–16:00.\nNe puteți spune dacă participați la telefon ${TEL} sau prin formularul dumneavoastră de răspuns: ${LINK(tok)}\n${PLAN}\n\nCu stimă,\nGAZPET INSTAL S.R.L.`
 const SUBIECT_ASTEPTAT = `Predarea terenului – ${COMUNA}, 24.11.2026 și 25.11.2026`
 
 // ── VERIFICĂRILE după migrare; întoarce lista abaterilor ──
@@ -298,9 +303,16 @@ async function verifica(db) {
     const ll = await ls(c.text, null)
     if (ll !== c.link_literal) ab.push(`A paritate link literal SQL „${c.text.slice(0, 30)}”: ${ll} ≠ ${c.link_literal}`)
   }
-  // link_strain pe tokenurile REALE ale fixture-ului: al destinatarului = nu e străin; al altuia (ca link sau ca token gol, fără adresă) = străin
+  // link_strain pe tokenurile REALE ale fixture-ului: al destinatarului = nu e străin; al altuia (ca link sau ca token gol, fără adresă) = străin;
+  // r3: tokenul lipit de alte litere e găsit (fereastra de 43), iar „t1…” cu minusculă nu e tokenul „T1…” (sensibil la majuscule)
   if (await ls('x ' + LINK(T.D1) + ' y', T.D1) !== false || await ls('x ' + LINK(T.D2) + ' y', T.D1) !== true || await ls('token copiat ' + T.D2 + ' fara adresa', T.D1) !== true
-    || await ls('x ' + LINK(T.D1), null) !== true || await ls('nu e token ' + T.D1 + 'x', null) !== false) ab.push('A fn_red_mail_f2_link_strain pe tokenurile fixture-ului')
+    || await ls('x ' + LINK(T.D1), null) !== true || await ls('lipit ' + T.D1 + 'x', null) !== true || await ls('minuscula ' + T.D1.toLowerCase(), null) !== false) ab.push('A fn_red_mail_f2_link_strain pe tokenurile fixture-ului')
+  // r3 (Jakarinos #1138 P1): paritatea SQL = valorile scrise de mână în tabelul comun (aceleași ca în JS), pe tokenurile fixture-ului
+  if (JSON.stringify([...LS.tokeni_existenti].sort()) !== JSON.stringify([...TOKENI].sort()) || LS.tokeni.A !== T.D1 || LS.tokeni.B !== T.D2) ab.push('A tabelul link_strain: tokenurile ≠ fixture-ul')
+  for (const c of LS.cazuri) {
+    const r = await ls(c.text, c.token == null ? null : LS.tokeni[c.token])
+    if (r !== c.asteptat) ab.push(`A paritate link_strain SQL ${c.id}: ${r} ≠ ${c.asteptat}`)
+  }
   // D. inventarul: D4 (fără token) și D5 (expirat) = fara_token; D6 = fara_email (tokenul valid nu ajută); D1..D3 eligibili
   const inv = asteptOk(await destinatari(db, U.OWNER, P.TEST, UAT.A), 'D inventar') || []
   const motive = Object.fromEntries(inv.map(x => [x.id, x.motive]))
@@ -331,6 +343,25 @@ async function verifica(db) {
   asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], `S ${LINK(T.D1)}`, 'text {LINK_RASPUNS}'), '22023', 'C link literal în subiect', /link_literal/)
   asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S', `https://pontaj-pro-sooty.vercel.app/redari/raspuns/${T.D2} {LINK_RASPUNS}`), '22023', 'C link literal pe altă origine', /link_literal/)
   asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S', `token ${T.D2} {LINK_RASPUNS}`), '22023', 'C token copiat fără adresă', /link_literal/)
+  // r3 (Jakarinos #1138 P1): formele codificate / rupte / cu majuscule ale linkului sau tokenului altcuiva, în TEXT și în SUBIECT = link_literal, nimic creat
+  for (const id of ['n01_pct54_rest_literal', 'n02_token_tot_codificat_in_cale', 'n03_dublu_codificat', 'n04_token_codificat_fara_cale', 'n05_token_rupt_spatiu', 'n06_token_rupt_linie',
+    'n07_token_rupt_zero_width', 'n08_entitate_zecimala', 'n10_entitate_amp_imbricata', 'n11_cale_majuscule', 'n12_cale_singura', 'n13_cale_codificata', 'n17_litera_lata_nfkc',
+    'n18_token_lipit_de_text', 'n20_invizibil_codificat', 'n25_pct54_fara_cale', 'n26_dublu_fara_cale', 'n27_tot_dublu_codificat_fara_cale']) {
+    asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S', `${LSC(id).text} {LINK_RASPUNS}`), '22023', `C r3 text ${id}`, /link_literal/)
+  }
+  for (const id of ['n01_pct54_rest_literal', 'n02_token_tot_codificat_in_cale', 'n03_dublu_codificat', 'n05_token_rupt_spatiu', 'n07_token_rupt_zero_width', 'n08_entitate_zecimala',
+    'n11_cale_majuscule', 'n13_cale_codificata', 'n25_pct54_fara_cale', 'n27_tot_dublu_codificat_fara_cale']) {
+    asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], LSC(id).text, 'text {LINK_RASPUNS}'), '22023', `C r3 subiect ${id}`, /link_literal/)
+  }
+  // r3: pe MESAJUL FINAL — tokenul lui D2 intră printr-o VALOARE de câmp (numele UAT-ului: codificat %XX, rupt de spațiu) la mesajul lui D1: link_strain
+  //     (șablonul e curat; verificarea finală prinde, în corp și în subiect); la mesajul lui D2 același token e al lui, deci textul ar trece — de aceea D1 și D2
+  const NUME_A = (await db.query(`SELECT nume FROM public.red_uat WHERE id = $1`, [UAT.A])).rows[0].nume
+  for (const [ce, nume] of [['codificat', `Comuna %54${T.D2.slice(1)}`], ['rupt de spațiu', `Comuna ${T.D2.slice(0, 20)} ${T.D2.slice(20)}`], ['calea codificată', 'Comuna redari%2Fraspuns']]) {
+    await db.exec(`UPDATE public.red_uat SET nume = ${lit(nume)} WHERE id = '${UAT.A}'`)
+    asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S', 'Comuna {COMUNA}: {LINK_RASPUNS}'), '22023', `C r3 mesajul final, corp (${ce})`, /link_strain/)
+    asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S {COMUNA}', 'text {LINK_RASPUNS}'), '22023', `C r3 mesajul final, subiect (${ce})`, /link_strain/)
+  }
+  await db.exec(`UPDATE public.red_uat SET nume = ${lit(NUME_A)} WHERE id = '${UAT.A}'`)
   if (await nrLoturi(db) !== n0) ab.push('C un refuz a creat lotul')
   // un text fără niciun câmp rămâne permis (ca azi); un text fără {LINK_RASPUNS} e avertisment în ecran, nu refuz în bază
   const c1 = asteptOk(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D9], 'Fără câmpuri', 'Text simplu.'), 'C lot fără câmpuri')
@@ -542,6 +573,28 @@ for (const [nume, pregateste, asteptat] of [
   const tokDet = Object.fromEntries(Object.entries(D).map(([k, v]) => [v, T[k]]))
   ok(corpuri.length === trimisi.length && corpuri.every((t, i) => t.includes(LINK(tokDet[trimisi[i]])) && TOKENI.every(tk => tk === tokDet[trimisi[i]] || !t.includes(tk))),
     `${nume}: fiecare MIME trimis conține DOAR linkul destinatarului lui`)
+  // r3: pe MIME-ul decodat (corp + subiect) forma de căutare nu are linkul / tokenul nimănui altcuiva (aceeași definiție ca serverul, toți tokenii
+  //     fixture-ului), iar formele legitime (procentul, URL-ul străin procent-codificat) au plecat neatinse
+  const subiecte = mime.map(t => (/^Subject: (.*(?:\r\n .*)*)/m.exec(t)?.[1] || '').split('\r\n ').map(w => Buffer.from(/=\?UTF-8\?B\?([^?]*)\?=/.exec(w)?.[1] || '', 'base64').toString('utf8')).join(''))
+  ok(corpuri.length > 0 && corpuri.every((t, i) => !linkStrain(t, tokDet[trimisi[i]], TOKENI) && linkStrain(t, null, TOKENI) && t.includes(PLAN))
+    && subiecte.every(s => s === SUBIECT_ASTEPTAT && !linkStrain(s, null, TOKENI)), `${nume}: MIME-ul decodat — niciun link / token străin în nicio formă, „100%” și „%20” neatinse, subiectul completat`)
+  await db.close()
+}
+// r3: prin handlerul REAL, o cerere cu linkul altcuiva codificat nu ajunge niciodată la Gmail: crearea e refuzată în bază (link_literal / link_strain), deci
+//     lotul nu există și apăsarea „Trimite” nu face niciun apel
+{
+  const db = await bazaNoua()
+  await aplicaMig(db)
+  await porneste(db)
+  const r1 = await creeaza(db, U.OWNER, LOT.A, P.TEST, UAT.A, [D.D1, D.D2, D.D3], SUBIECT, `${LSC('n25_pct54_fara_cale').text}\n${TEXT}`)
+  const r2 = await creeaza(db, U.OWNER, LOT.A, P.TEST, UAT.A, [D.D1, D.D2, D.D3], LSC('n13_cale_codificata').text, TEXT)
+  await db.exec(`UPDATE public.red_uat SET nume = ${lit('Comuna %54' + T.D2.slice(1))} WHERE id = '${UAT.A}'`)
+  const r3 = await creeaza(db, U.OWNER, LOT.A, P.TEST, UAT.A, [D.D1, D.D2, D.D3], SUBIECT, TEXT)
+  const d = depsPglite(db)
+  const r = await raspundeTrimitere({ jwt: 'fictiv', corp: { lot_id: LOT.A } }, d)
+  ok(r1.code === '22023' && /link_literal/.test(r1.message) && r2.code === '22023' && /link_literal/.test(r2.message) && r3.code === '22023' && /link_strain/.test(r3.message)
+    && await nrLoturi(db) === 0 && d.trimise.length === 0 && r.body?.trimise !== 1,
+    `handlerul real după cererile cu tokenul lui D2 codificat (text, subiect, valoarea câmpului): ${[r1, r2, r3].map(x => x.code + ' ' + (x.message || '').slice(0, 20)).join(' | ')}; răspuns ${r.status} ${JSON.stringify(r.body)}; ${d.trimise.length} apeluri Gmail`)
   await db.close()
 }
 
@@ -653,9 +706,17 @@ const MUTANTI = [
   ['linkul literal acceptat peste tot (refuzul șablonului ȘI verificarea mesajului final scoase)', [[" IF public.fn_red_mail_f2_link_strain(p_subiect,NULL) OR public.fn_red_mail_f2_link_strain(p_text,NULL) THEN RAISE EXCEPTION 'link_literal' USING ERRCODE='22023'; END IF;\n", ''],
     ["  IF public.fn_red_mail_f2_link_strain(msg.corp_text_final,tok) THEN RAISE EXCEPTION 'link_strain' USING ERRCODE='22023'; END IF;\n", ''],
     [" IF public.fn_red_mail_f2_link_strain(subiect,NULL) THEN RAISE EXCEPTION 'link_strain' USING ERRCODE='22023'; END IF;\n", '']]],
-  ['tokenul copiat fără adresă nu e văzut (lookup-ul în red_detinatori_token scos)', [["  AND (position('/redari/raspuns/'||r[1] IN p_text)>0 OR EXISTS(SELECT 1 FROM public.red_detinatori_token t WHERE t.token_raspuns=r[1])))", "  AND position('/redari/raspuns/'||r[1] IN p_text)>0)"]]],
-  ['linkul străin pe altă origine nu e văzut (doar domeniul public)', [["  AND (position('/redari/raspuns/'||r[1] IN p_text)>0 OR EXISTS", "  AND (position('https://redari.gazpet.ro/redari/raspuns/'||r[1] IN p_text)>0 OR EXISTS"]]],
-  ['linkul străin comparat fără token (orice link = al destinatarului)', [['  WHERE r[1] IS DISTINCT FROM p_token\n', '  WHERE p_token IS NULL\n']]],
+  ['tokenul copiat fără adresă nu e văzut (lookup-ul în red_detinatori_token scos)', [["  WHERE t.token_raspuns=substr(r[1],i,43) AND t.token_raspuns IS DISTINCT FROM p_token);", '  WHERE false);']]],
+  ['linkul străin pe altă origine nu e văzut (doar domeniul public)', [["position('redari/raspuns' IN cale)>0", "position('redari.gazpet.ro/redari/raspuns' IN cale)>0"]]],
+  ['linkul străin comparat fără token (orice cale = a destinatarului)', [["IF NOT stabil OR position('redari/raspuns' IN cale)>0 THEN RETURN true; END IF;", "IF NOT stabil OR (p_token IS NULL AND position('redari/raspuns' IN cale)>0) THEN RETURN true; END IF;"]]],
+  // r3 (Jakarinos #1138 P1): mutanți pe NORMALIZARE — fiecare trebuie să pice (la postcondiții sau pe paritatea cu tabelul comun / refuzurile C r3)
+  ['fără decodarea %XX (căutarea pe textul literal, ca în runda 2)', [["   v:=v||CASE WHEN c BETWEEN 33 AND 126 THEN chr(c) ELSE '' END||parti[n+1];", '   v:=v||potr[n]||parti[n+1];']]],
+  ['fără decodarea entităților HTML', [['   v:=v||x||parti[n+1];', '   v:=v||potr[n]||parti[n+1];']]],
+  ['fără eliminarea invizibilelor (spații, linii, zero-width)', [["  v:=regexp_replace(regexp_replace(v,c_inviz,'','g'),c_lin,'-','g');", "  v:=regexp_replace(v,c_lin,'-','g');"]]],
+  ['fără NFKC', [[' v:=normalize(v,NFKC);', ' v:=v;']]],
+  ['un singur pas de decodare (fără punct fix)', [['  IF v=ant THEN stabil:=true; EXIT; END IF;', '  stabil:=true; EXIT;']]],
+  ['doar prima fereastră (tokenul lipit de text nu e văzut)', [['generate_series(1,length(r[1])-42) i', 'generate_series(1,1) i']]],
+  ['calea cu majuscule nu e văzută (fără litere mici)', [["cale:=replace(translate(v,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'\\','/');", "cale:=replace(v,'\\','/');"]]],
   // r2 (P2): rezervarea se oprește la prima anulare locală (RETURN în loc de CONTINUE) → handlerul s-ar opri la zero rânduri înaintea destinatarilor valizi
   ['rezervarea se oprește la token expirat (RETURN în loc de CONTINUE)', [["PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'anulat'); CONTINUE; END IF;", "PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'anulat'); RETURN; END IF;"]]],
   ['rezervarea se oprește la opt-out (RETURN în loc de CONTINUE)', [["UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='optout' WHERE id=m.id; CONTINUE; END IF;", "UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='optout' WHERE id=m.id; RETURN; END IF;"]]],
@@ -673,10 +734,26 @@ const MUTANTI = [
   ['linkul pe alt domeniu', [["'https://redari.gazpet.ro/redari/raspuns/'||p_token", "'https://pontaj-pro-sooty.vercel.app/redari/raspuns/'||p_token"]]],
   ['jurnalul `campuri` nescris (urma L14 lipsă)', [[" PERFORM public.fn_red_mail_f2_audit(p_operatie,NULL,'creat'); PERFORM public.fn_red_mail_f2_audit(p_operatie,NULL,'campuri'); RETURN p_operatie;", " PERFORM public.fn_red_mail_f2_audit(p_operatie,NULL,'creat'); RETURN p_operatie;"]]],
 ]
-for (const [nume, lista] of MUTANTI) {
+// r3: mutanții pe normalizare prinși deja de postcondiția link_strain se rulează și CU postcondiția scoasă din textul mutat — trebuie să-i prindă și
+//     verificările de comportament (paritatea cu tabelul comun, refuzurile C r3, mesajul final)
+const POST_LS_A = '  -- r2 + r3: linkul străin (valori fictive)', POST_LS_B = "RAISE EXCEPTION '20261131i: postconditie: fn_red_mail_f2_link_strain';\n  END IF;\n"
+const faraPostLs = t => { const a = t.indexOf(POST_LS_A), b = t.indexOf(POST_LS_B, a); if (a < 0 || b < 0) throw new Error('postcondiția link_strain lipsește'); return t.slice(0, a) + t.slice(b + POST_LS_B.length) }
+for (const nume of ['fără decodarea %XX (căutarea pe textul literal, ca în runda 2)', 'fără decodarea entităților HTML', 'fără eliminarea invizibilelor (spații, linii, zero-width)',
+  'un singur pas de decodare (fără punct fix)', 'calea cu majuscule nu e văzută (fără litere mici)']) {
+  const m = MUTANTI.find(x => x[0] === nume)
+  MUTANTI.push([nume + ' — FĂRĂ postcondiția link_strain', m[1], faraPostLs])
+}
+{ // martorul: migrarea REALĂ fără postcondiția link_strain trece toate verificările (deci mutanții de mai jos sunt prinși de comportament, nu de tăiere)
+  const db = await bazaNoua()
+  const m = await eroare(aplicaMig(db, recalculeaza(faraPostLs(MIG))))
+  const ab = m ? [m] : await verifica(db)
+  ok(ab.length === 0, `martor: migrarea reală fără postcondiția link_strain — ${ab.length} abateri ${ab[0] ? '(' + ab[0].slice(0, 120) + ')' : ''}`)
+  await db.close()
+}
+for (const [nume, lista, transforma] of MUTANTI) {
   const db = await bazaNoua()
   let t
-  try { t = recalculeaza(aplica(MIG, lista)) } catch (e) { ok(false, `${nume}: mutantul nu se aplică (${e.message})`); await db.close(); continue }
+  try { t = recalculeaza((transforma || (x => x))(aplica(MIG, lista))) } catch (e) { ok(false, `${nume}: mutantul nu se aplică (${e.message})`); await db.close(); continue }
   const m = await eroare(aplicaMig(db, t))
   let prins = !!m, cum = m ? 'la aplicare: ' + m.slice(0, 110) : ''
   if (!m) { const ab = await verifica(db); prins = ab.length > 0; cum = `${ab.length} abateri (${(ab[0] || '').slice(0, 130)})` }

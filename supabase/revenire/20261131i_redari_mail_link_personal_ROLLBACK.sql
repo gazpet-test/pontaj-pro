@@ -71,7 +71,7 @@ BEGIN
         ('public.fn_red_mail_f2_token(uuid)', '604a8adddf23112c5c0f70c89cff0244', 'sql', false, 's', 'text'),
         ('public.fn_red_mail_f2_campuri(uuid,uuid)', '503dc3c94d4e255ac5e827658b38a0ff', 'plpgsql', true, 's', 'jsonb'),
         ('public.fn_red_mail_f2_completeaza(text,jsonb)', '61331ec6fc15d05e02517825877084d6', 'plpgsql', false, 'i', 'text'),
-        ('public.fn_red_mail_f2_link_strain(text,text)', 'cdd9d19027dd5e22edab160fcdaee5b6', 'sql', false, 's', 'boolean'),
+        ('public.fn_red_mail_f2_link_strain(text,text)', 'fee77863c42c77d1d363eae4145ebf2d', 'plpgsql', false, 's', 'boolean'),
         ('public.fn_red_mail_destinatari(uuid,uuid,uuid)', 'b1fbfaf746f1e05fd88f9204bfbbea68', 'plpgsql', true, 's', 'record'),
         ('public.fn_red_mail_lot_creeaza(uuid,uuid,uuid,uuid[],text,text)', 'bff52e712db5084b48eefd3824ca7283', 'plpgsql', true, 'v', 'uuid'),
         ('public.fn_red_mail_rezerva(uuid)', 'dbd0cbf99e8e2e0715441333ad17664c', 'plpgsql', true, 'v', 'public.red_mail_mesaje'),

@@ -15,5 +15,6 @@
   { "text": "link copiat: https://redari.gazpet.ro/redari/raspuns/L1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx și {LINK_RASPUNS}", "campuri": ["LINK_RASPUNS"], "necunoscute": [], "refuz": false, "link_literal": true },
   { "text": "link copiat pe altă origine: https://pontaj-pro-sooty.vercel.app/redari/raspuns/L2yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.", "campuri": [], "necunoscute": [], "refuz": false, "link_literal": true },
   { "text": "cale fără origine /redari/raspuns/L3zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "campuri": [], "necunoscute": [], "refuz": false, "link_literal": true },
-  { "text": "nu e token: /redari/raspuns/scurt și /redari/raspuns/L4wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww (44) și /redari/raspuns/", "campuri": [], "necunoscute": [], "refuz": false, "link_literal": false }
+  { "text": "r3: calea formularului fără token de 43 (/redari/raspuns/scurt, 44 de caractere, calea goală) = tot link literal: singura formă permisă e {LINK_RASPUNS} /redari/raspuns/scurt și /redari/raspuns/L4wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww (44) și /redari/raspuns/", "campuri": ["LINK_RASPUNS"], "necunoscute": [], "refuz": false, "link_literal": true },
+  { "text": "r3: fără cale și fără token: Reducere 20% la https://exemplu.invalid/plan%20lucrari.pdf", "campuri": [], "necunoscute": [], "refuz": false, "link_literal": false }
 ]
