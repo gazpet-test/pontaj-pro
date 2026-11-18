@@ -4,11 +4,12 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { G, S, Modal, Camp, Gol, fmtDate, msgEroare, motivBlocareConvocator, citestePaginat } from './comune.jsx'
-import { verificaDateAdresaUat, genereazaAdresaUat, salveazaAdresaUat, descarcaBlob, versiuneMaximaInBucket, caleAdresaUat, aziBucuresti, BUCKET_REDARI } from '../docx.js'
+import { verificaDateAdresaUat, genereazaAdresaUat, salveazaAdresaUat, descarcaBlob, versiuneMaximaInBucket, caleAdresaUat, aziBucuresti, BUCKET_REDARI,
+  verificaDateAnuntAfisare, genereazaAnuntAfisare, SABLON_ANUNT_AFISARE, COL_PARCELA_ANUNT } from '../docx.js'
 import { uat3 as uat3Din } from '../idParcela.js'
 import { CAMPURI_UAT, COL_UAT, ZILE_SESIUNE, normalizeaza, cheiSchimbate, valideazaUat, avertismenteUat, recomandariUat, MESAJ_TERMEN_RECOMANDAT, dataTintaRecomandata, lipsuriUat, motiveGataConvocare, rezumatZile, conflicteConcurente } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
-import { avertismentInformare } from '../informareGdpr.js'
+import { avertismentInformare, cuInformarePublicata } from '../informareGdpr.js'
 
 // audit D8: acordul la singular („1 parcelă”), ca în restul ERP-ului
 export const numarParcele = n => (Number(n) === 1 ? '1 parcelă' : `${n} parcele`)
@@ -110,6 +111,9 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
   const ocupat = useRef(false)
   useEffect(() => { generatie.current++; return () => { generatie.current++ } }, [uat.id, proiect?.id])
   const lipsuriAdresa = verificaDateAdresaUat({ proiect, uat, nrDocument: uat.adresa_nr || 'AU-rezervat-la-generare' })
+  // anunțul de afișare (plan pct. 4.3 + cap. 8): fără date personale, fără număr, fără salvare în ERP → îl poate genera și editorul
+  const poateAnunt = poateDescarca
+  const lipsuriAnunt = verificaDateAnuntAfisare({ proiect, uat })
   // termenul de 10 zile al afișării (plan pct. 4.3): vizibil mereu, confirmat la salvare, fără blocaj (data afișării e un fapt)
   const avertismente = avertismenteUat(form)
   const recomandari = recomandariUat(form)   // juridic#031: ținta ziua 1 − 15 — afișată, NU cerută la confirmarea salvării
@@ -191,6 +195,42 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
       else show(`Adresa ${nrDocument} salvată.`, 'success')
       onGata()
     } catch (err) { if (curent()) { show('Adresă UAT: ' + msgEroare(err), 'error'); if (rezervat) onGata() } }
+    finally { if (curent()) { ocupat.current = false; setLucru(false) } }
+  }
+
+  // Anunțul de afișare: parcelele active ale UAT-ului (doar coloanele fără date personale), UAT-ul și proiectul PROASPETE din BD
+  // (cu starea informării GDPR de la server), aceeași gardă ca butonul, apoi DOCX descărcat. Nimic scris în BD sau în storage.
+  const anunt = async () => {
+    if (ocupat.current || lucru || !poateAnunt || nesalvat || lipsuriAnunt.length) return
+    ocupat.current = true
+    setLucru(true) // înainte de primul await
+    const token = ++generatie.current
+    const id = uat.id
+    const curent = () => generatie.current === token && id === uat.id
+    try {
+      const parcele = await citestePaginat(() => supabase.from('red_v_parcele').select(COL_PARCELA_ANUNT)
+        .eq('proiect_id', proiect.id).eq('uat_id', id).is('sters_la', null), { cheie: 'id_parcela', esteCurent: curent })
+      if (!curent()) return
+      const raspuns = await fetch(SABLON_ANUNT_AFISARE)
+      if (!raspuns.ok) throw new Error('Șablonul anunțului de afișare nu a putut fi citit')
+      const templateArrayBuffer = await raspuns.arrayBuffer()
+      if (!curent()) return
+      const [{ data: uatProaspat, error: eu }, { data: proiectBrut, error: ep }] = await Promise.all([
+        supabase.from('red_uat').select(COL_UAT).eq('id', id).maybeSingle(),
+        supabase.from('red_proiecte').select('*').eq('id', proiect.id).maybeSingle(),
+      ])
+      if (!curent()) return
+      if (eu || ep) throw eu || ep
+      if (!uatProaspat || !proiectBrut) throw new Error('UAT-ul sau proiectul nu mai sunt vizibile (fără drept pe modul?)')
+      const proiectProaspat = await cuInformarePublicata(supabase, proiectBrut)
+      if (!curent()) return
+      const lipsuriProaspete = verificaDateAnuntAfisare({ proiect: proiectProaspat, uat: uatProaspat })
+      if (lipsuriProaspete.length) throw new Error('Datele actuale nu permit generarea: ' + lipsuriProaspete.join('; '))
+      const { blob, randuri } = await genereazaAnuntAfisare({ proiect: proiectProaspat, uat: uatProaspat, parcele, templateArrayBuffer })
+      if (!curent()) return
+      descarcaBlob(blob, `Anunt_afisare_${uatProaspat.uat3}_${aziBucuresti()}.docx`)
+      show(`Anunțul de afișare pentru ${uatProaspat.nume} e generat (${numarParcele(randuri)}). Nu se salvează în ERP: după lipire, treci perioada și nr. PV de afișare în acest formular.`, 'success')
+    } catch (err) { if (curent()) show('Anunț de afișare: ' + msgEroare(err), 'error') }
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
 
@@ -279,12 +319,15 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
           {recomandari.map(a => <div key={a}>ℹ {a}</div>)}
         </div>
       )}
-      {(esteAdmin || (poateDescarca && uat.adresa_nr)) && <div style={{ marginTop: 14 }}>
+      {(esteAdmin || poateDescarca) && <div style={{ marginTop: 14 }}>
         {poateDescarca && uat.adresa_nr && <button style={S.btnS} disabled={lucru} onClick={() => adresa(true)}>Descarcă adresa {uat.adresa_nr}</button>}
         {esteAdmin && uat.adresa_nr && <>{' '}<button style={S.btnS} disabled={lucru || nesalvat || lipsuriAdresa.length > 0} onClick={() => adresa()}>Regenerează</button></>}
         {esteAdmin && !uat.adresa_nr && <button style={S.btnP} disabled={lucru || nesalvat || lipsuriAdresa.length > 0} onClick={() => adresa()}>Generează adresa UAT</button>}
-        {esteAdmin && nesalvat && <div style={{ color: G.yellow }}>Salvează modificările înainte de generarea adresei.</div>}
-        {esteAdmin && lipsuriAdresa.length > 0 && <div style={{ color: G.yellow, fontSize: 12 }}>{lipsuriAdresa.join('; ')}</div>}
+        {poateAnunt && <>{' '}<button style={S.btnS} disabled={lucru || nesalvat || lipsuriAnunt.length > 0} onClick={() => anunt()}
+          title="Anunțul lipit la intrarea în primărie: convocarea pe UAT cu zilele de sesiune și lista parcelelor, fără date personale (plan pct. 4.3). Se descarcă, nu se salvează în ERP.">Anunț de afișare (DOCX)</button></>}
+        {esteAdmin && nesalvat && <div style={{ color: G.yellow }}>Salvează modificările înainte de generarea documentelor.</div>}
+        {esteAdmin && lipsuriAdresa.length > 0 && <div style={{ color: G.yellow, fontSize: 12 }}>Adresa UAT: {lipsuriAdresa.join('; ')}</div>}
+        {poateAnunt && lipsuriAnunt.length > 0 && <div style={{ color: G.yellow, fontSize: 12 }}>Anunț de afișare: {lipsuriAnunt.join('; ')}</div>}
       </div>}
       {erori.length > 0 && (
         <div style={{ marginTop: 12, padding: 10, borderRadius: 7, background: G.redDim, color: G.red, fontSize: 12.5 }}>

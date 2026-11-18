@@ -163,6 +163,23 @@ describe('ecranul UAT', () => {
       expect(h).not.toContain('Regenerează')
     }
   })
+  it('anunțul de afișare: admin și editor îl văd (editor = fără generarea adresei), viewer nu; blocat cu lipsurile butonului, activ pe date complete', () => {
+    const randare = (admin, descarca, pr = proiect, u = uats[0]) => renderToString(<ModalUat proiect={pr} uat={u} uats={uats} esteAdmin={admin} poateDescarca={descarca} show={show} onClose={() => {}} onGata={() => {}} />)
+    const buton = h => /<button[^>]*>Anunț de afișare \(DOCX\)<\/button>/.exec(h)?.[0] ?? null
+    // proiectul de test nu are contract / împuternicire / contact → butonul există, dar e blocat, cu lipsurile sub el
+    expect(buton(randare(true, true))).toMatch(/disabled=""/)
+    expect(randare(true, true)).toMatch(/Anunț de afișare: (?:<!-- -->)?Lipsește nr\. contractului/)   // SSR pune <!-- --> între textele alăturate
+    const editor = randare(false, true)
+    expect(buton(editor)).toMatch(/disabled=""/)
+    expect(editor).not.toContain('Generează adresa UAT')
+    expect(buton(randare(false, false))).toBeNull()
+    // date complete (fictive) → activ; informarea nepublicată de server → blocat din nou
+    const complet = { ...proiect, contract_nr: 'TEST-30', contract_data: '2025-01-22', imputernicire_nr: 'IMP', imputernicire_data: '2026-11-01', contact_nume: 'C', contact_telefon: '0700000000',
+      reprezentant_tgz_nume: 'R', reprezentant_tgz_telefon: '0700000001', reprezentant_gazpet_nume: 'G', informare_publicata: true }
+    expect(buton(randare(false, true, complet))).not.toMatch(/disabled/)
+    expect(buton(randare(true, true, { ...complet, informare_publicata: false }))).toMatch(/disabled=""/)
+    expect(randare(true, true, { ...complet, informare_publicata: false })).toContain('informarea GDPR nepublicată')
+  })
   it('admin: tabelul cu ambele UAT-uri și butonul de UAT nou', () => {
     const h = renderToString(<UatEcran proiect={proiect} uats={uats} nivel="admin" show={show} onSchimbat={() => {}} />)
     expect(h).toContain('Test UAT')
