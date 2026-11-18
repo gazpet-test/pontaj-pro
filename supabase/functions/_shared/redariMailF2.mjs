@@ -23,6 +23,35 @@ export function transportPermis({ proiectCod = null, transportActiv = TRANSPORT_
   if (doarTest && !esteProiectTest(proiectCod)) return { ok: false, cod: 'transport_real_doar_test', motiv: MESAJ_DOAR_PROIECT_TEST }
   return { ok: true, cod: null, motiv: '' }
 }
+// ── Câmpurile textului (19.11.2026, migrarea 20261131i): completate PE FIECARE MESAJ de fn_red_mail_lot_creeaza, în snapshot, înaintea hash-ului.
+// Definiția valorilor e DOAR în SQL (fn_red_mail_f2_campuri / fn_red_mail_f2_token / fn_red_link_raspuns — L19): ecranul primește valorile prin RPC și
+// textul final din snapshot; aici stau doar numele câmpurilor, descrierile pentru ecran și forma „{NUME}” (paritate cu SQL pe tabelul de cazuri din
+// src/redari/__tests__/campuri_mail_cazuri.json). {LINK_RASPUNS} e linkul PERSONAL al deținătorului (același ca în codul QR din convocator) — secret.
+export const CAMP_LINK = 'LINK_RASPUNS'
+export const CAMPURI_MAIL = Object.freeze([
+  Object.freeze({ nume: CAMP_LINK, descriere: 'linkul personal de răspuns al destinatarului (același ca în codul QR din convocator); diferit pe fiecare mesaj', perMesaj: true }),
+  Object.freeze({ nume: 'COMUNA', descriere: 'numele UAT-ului (red_uat.nume), ca în convocator', perMesaj: false }),
+  Object.freeze({ nume: 'ZILE', descriere: 'zilele de sesiune ale UAT-ului, ZZ.LL.AAAA, legate cu „, ” și „ și ”', perMesaj: false }),
+  Object.freeze({ nume: 'PROGRAM', descriere: 'programul sesiunii, doar dacă e același în toate zilele UAT-ului', perMesaj: false }),
+  Object.freeze({ nume: 'TEL', descriere: 'telefonul de contact al proiectului (red_proiecte.contact_telefon), ca în convocator', perMesaj: false }),
+])
+export const NUME_CAMPURI = Object.freeze(CAMPURI_MAIL.map(c => c.nume))
+// Aceeași formă ca în SQL: orice „{…}” fără acolade înăuntru, 1–40 de caractere, e o încercare de câmp (sensibil la caz, fără spații în plus).
+const RX_CAMP = /\{([^{}]{1,40})\}/g
+/** Numele câmpurilor găsite în text (în ordinea apariției, fără duplicate). */
+export function campuriDinText(text) {
+  const gasite = []
+  for (const m of String(text ?? '').matchAll(RX_CAMP)) if (!gasite.includes(m[1])) gasite.push(m[1])
+  return gasite
+}
+/** Câmpurile scrise greșit / necunoscute (serverul le refuză cu camp_necunoscut; ecranul oprește crearea înainte). */
+export const campuriNecunoscute = text => campuriDinText(text).filter(n => !NUME_CAMPURI.includes(n))
+export const areLinkRaspuns = text => campuriDinText(text).includes(CAMP_LINK)
+export const MESAJ_FARA_LINK = `Textul nu conține {${CAMP_LINK}}: proprietarii n-ar primi linkul lor personal de răspuns.`
+// Tokenul e secret: în ecran linkul se arată MASCAT (ultimele 6 caractere), în jurnale / erori / exporturi nu apare deloc.
+const RX_LINK_TOKEN = /(\/redari\/raspuns\/)([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/g
+export const MASCA_TOKEN = '••••••'
+export const mascheazaLink = text => String(text ?? '').replace(RX_LINK_TOKEN, (_, cale, tok) => `${cale}${MASCA_TOKEN}${tok.slice(-6)}`)
 export const STARI_LOT = ['ciorna', 'aprobat', 'in_trimitere', 'blocat_integritate', 'incheiat']
 export const STARI_MESAJ = ['in_coada', 'rezervat', 'in_apel', 'trimis', 'esuat_sigur', 'necunoscut', 'esuat_confirmat', 'anulat']
 export function emailValid(v) {
