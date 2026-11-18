@@ -50,7 +50,7 @@ fiecare cerere, nu îl fixează pe durata ei. Riscul e acceptabil DOAR cu contro
 | a | proprietarul | **ID-ul proiectului** de test, **ID-urile celor două loturi** de test (PP-xxxx cu UN plic, §3; PP-yyyy cu trei, §9), **codul** (`TEST-RAZVAN`, exact, fără spații) și **conținutul fictiv** (deținătorii de test, contactele = datele firmei sau ale unor colegi care acceptă; niciun deținător real în loturi) — citite din ERP și din SQL-ul de previzualizare (§6, A4), scrise în jurnal | înainte de §5 (PP-xxxx) și de §9 (PP-yyyy) |
 | b | toți | **pe durata testului nu se redenumesc proiecte și nu se schimbă marcaje de lot** (nimeni nu editează `red_proiecte.cod`, nimeni nu apasă „Marchează” pe alt lot); coordonatorul anunță colegii cu drept de admin Redări | toată ziua |
 | c | coordonatorul | **commit-ul publicat** identificat: SHA-ul de pe `main` de după îmbinare = versiunea funcției edge din Supabase (§2) | înainte de §4 |
-| d | coordonatorul | **probele 401 / 403 / 423 pe versiunea INERTĂ** (cea de pe `main` ÎNAINTE de îmbinarea acestui PR: 423 `transport_real_oprit`) — dacă nu au fost făcute la publicarea cu flag-ul `false` (doc §10 pasul 3b), se fac întâi ele, apoi **din nou după activare** (§4) | înainte de §4 |
+| d | coordonatorul | **probele 401 / 403 / 423 pe versiunea INERTĂ** (cea de pe `main` ÎNAINTE de îmbinarea acestui PR: 423 `transport_real_oprit`) — dacă nu au fost făcute la publicarea cu flag-ul `false` (doc §10 pasul 3b), **OPRIRE înaintea îmbinării acestui PR**: se fac întâi ele (§2 pasul 0), pe forma inertă publicată de pe `main`-ul de dinaintea îmbinării; după publicarea formei activate nu mai pot fi făcute. Apoi **din nou după activare** (§4) | înainte de §2 (înaintea îmbinării), respectiv înainte de §5 |
 | e | proprietarul | **contul de TEST al curierului, `clientId`-ul lui și costurile**: confirmare explicită, în jurnal, că secretele sunt ale contului de TEST (login în selfAWB cu aceleași credențiale), că `FAN_CLIENT_ID` e punctul de lucru al acelui cont și că acceptă costul eventual al AWB-urilor de test (răspunsul FAN la deschisa 3 în jurnal) | înainte de §7 |
 | f | proprietarul | **plafonul 1 setat ȘI recitit din BD, verificarea inițială globală trecută** (§6); pentru lotul de 3: **plafonul 3 setat ȘI recitit, verificările lotului NOU trecute** (§9 pașii 2–4) | înainte de §7, respectiv de §9 pasul 5 |
 | g | proprietarul | **asocierea AWB ↔ plic verificată în selfAWB** pe primul AWB (verdictul 4a în jurnal) ÎNAINTE de lotul de 3 | după §7, înainte de §9 |
@@ -83,7 +83,8 @@ jurnal. Dacă răspunsul arată un cost: se oprește și decide proprietarul (re
 
 ## 2. Publicarea funcției edge (coordonatorul, după merge-ul acestui PR în `main`)
 
-1. GitHub → Actions → **„Deploy edge function (manual)”** → `slug` = `redari-fan-awb` → Run workflow (de pe `main`).
+0. **ÎNAINTE de îmbinarea acestui PR — probele pe forma INERTĂ** (rândul (d) din §0). Dacă există deja în jurnal (publicarea cu flag-ul `false`, doc §10 pasul 3b), se trece la pasul 1. Dacă LIPSESC: **OPRIRE, PR-ul nu se îmbină încă**. Se pregătește întâi lotul din §3 (§3 nu depinde de publicare), se publică funcția de pe `main`-ul actual (același workflow ca la pasul 1; în Code: `TRANSPORT_REAL_ACTIV = false`), se fac probele din §4 cu așteptările formei inerte (la 3 și 3b: 423 `transport_real_oprit`) și se trec în jurnal cu versiunea și SHA-ul. Abia apoi îmbinarea și pasul 1. După publicarea formei activate, `transport_real_oprit` nu mai poate fi dovedit.
+1. După îmbinare: GitHub → Actions → **„Deploy edge function (manual)”** → `slug` = `redari-fan-awb` → Run workflow (de pe `main`).
    Funcția NU e în lista `NO_JWT` a workflow-ului → se publică cu `verify_jwt = true` (poarta platformei + poarta owner din cod). Apelul din
    ecran (`supabase.functions.invoke`) merge așa, ca la `sms-trimite` și `polita-citeste`.
 2. **Identificarea commit-ului publicat** (rândul (c) din §0): `git rev-parse origin/main` după îmbinare = SHA-ul din pasul „Rezumat repo vs
@@ -110,8 +111,9 @@ Ce pleacă la curier pentru acest plic (doc §2): numele deținătorului de test
 
 ## 4. Probele 401 / 403 / 423 (coordonatorul, de pe server, cu `curl`; nimic nu ajunge la curier)
 
-Se fac de DOUĂ ori (rândul (d) din §0): **pe versiunea INERTĂ** (publicarea cu flag-ul `false`, doc §10 pasul 3b; așteptat la pasul 3: 423
-`transport_real_oprit`), dacă nu au fost făcute atunci; apoi **pe versiunea activată** (așteptările de mai jos). Ambele seturi în jurnal.
+Se fac de DOUĂ ori (rândul (d) din §0): **pe versiunea INERTĂ**, ÎNAINTEA îmbinării acestui PR (§2 pasul 0; așteptat la pașii 3 și 3b: 423
+`transport_real_oprit`); apoi, aici, **pe versiunea activată** (așteptările de mai jos). Ambele seturi în jurnal. Dacă setul inert lipsește din
+jurnal în acest punct = OPRIRE (§12): forma activată e deja publicată, proba inertă nu mai poate fi recuperată fără revenirea la forma inertă.
 
 `<URL>` = adresa proiectului Supabase, `<ANON>` = cheia publică (anon). JWT-urile se iau din sesiunea contului respectiv (browser → DevTools →
 Application → Local Storage → cheia `sb-…-auth-token` → `access_token`; expiră în ~1 oră) și **nu se scriu nicăieri** (nici în jurnal).
@@ -276,17 +278,17 @@ SELECT lot_id, test, prima_aprobare_la, tiraj_nr FROM public.red_fan_loturi ORDE
 (hash nou) → „2c. Aprobă” → „3. Generează AWB” (un AWB în plus) → „Etichete” și „Documente lot” sunt REFUZATE („tirajul s-a schimbat; retipărește
 tot lotul”, nimic descărcat) → owner: „Tiraj nou — 1. Oprește descărcările” → după 30 s se distrug foile ȘI fișierele tirajului `<ID>` →
 „2. Înlocuiește tirajul” → se descarcă din nou TOT lotul (tirajul `<ID2>`, nr. 2, 3 poziții, fără „rămase”). Fără această decizie, plicul 2 rămâne
-„respins de FAN” și nu se mai atinge în Testul 1.
+„respins de FAN” și nu se mai atinge în Testul 1. **Dacă se face corectarea, PP-yyyy are 3 AWB-uri (4 în total cu PP-xxxx)**: decizia și numărul se scriu în jurnal, iar toate numărătorile din §10 și §11 pentru PP-yyyy devin 3.
 
 ## 10. Urmărirea, confirmările, comanda curierului; încheierea Testului 1
 
 - „6. Urmărire” imediat după generare, pe fiecare lot: „Urmărire actualizată: 1 AWB-uri.” pe PP-xxxx, „Urmărire actualizată: 2 AWB-uri.” pe
-  PP-yyyy; starea de urmărire „fără evenimente” sau „în tranzit” (cod + dată în ora României). „de verificat de om” = formă de răspuns neașteptată →
+  PP-yyyy (3 dacă s-a făcut corectarea opțională din §9); starea de urmărire „fără evenimente” sau „în tranzit” (cod + dată în ora României). „de verificat de om” = formă de răspuns neașteptată →
   jurnal (doc §8 deschisă 10), nu se continuă cu urmăriri în buclă.
-- „7. Confirmări / retururi”, pe fiecare lot: „Confirmări verificate: 1 AWB-uri.” / „… 2 AWB-uri.”; așteptat „nicio confirmare încă”. „răspuns de
+- „7. Confirmări / retururi”, pe fiecare lot: „Confirmări verificate: 1 AWB-uri.” / „… 2 AWB-uri.” (3 cu corectarea); așteptat „nicio confirmare încă”. „răspuns de
   formă necunoscută” → jurnal (deschisa 7).
 - Comanda curierului: **manual în selfAWB** (o comandă pe zi, interval ≥ 2 h), DOAR cu decizia explicită a proprietarului (rândul (i) din §0).
-  Dacă în Testul 1 NU se vrea ridicarea fizică, nu se comandă curierul și AWB-urile (toate trei) se anulează (§11).
+  Dacă în Testul 1 NU se vrea ridicarea fizică, nu se comandă curierul și TOATE AWB-urile existente (3; 4 cu corectarea opțională) se anulează (§11).
 - După ridicare (a doua zi): „6. Urmărire” → „ridicat (C0): de confirmat” → „6b. Confirmă ridicarea (N)” pe fiecare lot → pe un lot de TEST se
   marchează DOAR evidența FAN (plicurile din Poștă NU devin expediate; nu apar în registru / PV / export).
 - Zilele următoare (doc §11, Testul 1): plicul 1 „livrat (S2)”; colegul destinatar al plicului 3 refuză → „Urmărire”: plicul 3 „RETUR”, propus
@@ -306,7 +308,7 @@ Testul 2 NU pornește de aici: PR separat (`DOAR_PROIECTE_TEST = false`), după 
 
 ## 11. Anularea AWB-urilor de test
 
-Fiecare AWB separat (1 pe PP-xxxx, 2 pe PP-yyyy), înainte de ridicare (doar de pe borderoul zilei): caseta „Anulare AWB (înainte de ridicare)” a
+Fiecare AWB separat — **toate cele existente**: 1 pe PP-xxxx, 2 pe PP-yyyy (3 dacă s-a făcut corectarea opțională din §9) —, înainte de ridicare (doar de pe borderoul zilei): caseta „Anulare AWB (înainte de ridicare)” a
 lotului → **„Șterge la FAN”** (`DELETE /awb`):
 - „AWB șters și anulat: PL-…” → rândul FAN „anulat”; în selfAWB AWB-ul nu mai apare pe borderou. Se notează forma răspunsului de succes
   (doc §8 deschisă 15: codul acceptă doar HTTP 200 + `status: "success"`).
@@ -315,6 +317,12 @@ lotului → **„Șterge la FAN”** (`DELETE /awb`):
 - „stergere_refuzata” (409) → FAN a refuzat (ex. deja ridicat); rămâne „generat”; se lămurește în selfAWB.
 În ERP, pe un lot de TEST, plicul nu e atins în niciun caz (AWB-ul stă doar în `red_fan_awb`). Un AWB șters poate apărea totuși pe factură
 (întrebarea deschisă 3): se compară factura contului de test cu evidența.
+
+**Inventarul de închidere (coordonatorul, doar citire; în jurnal):** fiecare AWB din evidență se regăsește în selfAWB și invers; dacă s-a decis anularea, niciun rând nu rămâne „generat” cu AWB neridicat.
+```sql
+-- C1: toate AWB-urile testului, pe loturi; așteptat 3 rânduri (4 cu corectarea opțională), fiecare «anulat» sau, cu decizia de ridicare, «generat»
+SELECT lot_id, nr_plic, stare, awb FROM public.red_fan_awb WHERE awb IS NOT NULL ORDER BY lot_id, nr_plic;
+```
 
 ## 12. Dacă răspunsul nu are forma așteptată sau un rezultat e ambiguu: OPRIRE, nu improvizație
 
