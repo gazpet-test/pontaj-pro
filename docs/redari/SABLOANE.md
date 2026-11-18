@@ -445,7 +445,15 @@ cu terminologia veche; anunțul de sine stătător lipsea din pachetul trimis Tr
   `tronsonOptional`), **satul doar dintre satele declarate la „Sate / tarlale ziua 1–3”** (nu există nomenclator de sate în schemă; un nume
   de persoană are aceeași formă ca un nume de sat, deci forma singură nu ajunge). Valoarea goală trece (TGZ nu are coloana „sat”);
   marcajul „____” al modelelor trece (nu poartă informație). Ce nu se potrivește **nu se publică și blochează generarea**, cu lista exactă
-  „câmp: id_parcela, …” (fără valori — pot fi chiar datele personale), afișată sub buton; se corectează în Fișa parcelei.
+  „câmp: id_parcela (motiv), …” (fără valori — pot fi chiar datele personale), afișată sub buton; se corectează în Fișa parcelei.
+- **Runda 3 (review #1137 r2, P1)**: (1) în document intră **exact șirul validat** (`canonizeazaIdentificator`: majuscule, spații simple;
+  TGZ-ul compus rămâne cu „#”, „##” = celulă goală; satul cu ortografia declarată), nu valoarea din BD și nu o formă recompusă (din
+  „1#2#” lipit cu „ / ” ar ieși „1 / 2”, forma unei cote); o valoare care ar trebui „reparată” („12//3”) e refuzată. (2) **Cote**: „a/b” cu
+  a ≤ b („1/2”, „3/3”, „12/15”) e refuzată în orice câmp, și ca subcâmp TGZ sau între paranteze — o subdiviziune reală are a > b („123/4”);
+  formele ambigue (o parcelă chiar numerotată „12/15”) se refuză și se corectează / se decid, nu se ghicesc. (3) **Telefon / CNP**: peste 8
+  cifre într-un subcâmp (ex. „0711/111/111”, „180010/100000/0”), sau cifrele lipite ale subcâmpurilor care dau un telefon (0[237] + 8 cifre,
+  40 / 0040 + 9) ori un CNP (13 cifre). Ce NU se poate deosebi doar după formă (ex. un telefon fără 0 împărțit în subcâmpuri) e listat în
+  descrierea PR-ului #1137, pentru decizie. Lista de corectat poartă motivul („arată ca o cotă”, „prea multe cifre: telefon / CNP?”, „prea lung”).
 - **Unde**: 🏛️ UAT-uri → editare UAT → „Anunț de afișare (DOCX)”, pentru admin și editor (documentul nu are date personale și nu scrie
   nimic); UAT-ul, proiectul (cu starea informării de la server, `cuInformarePublicata`) și parcelele se recitesc din BD înainte de
   generare; aceleași lipsuri apar în 📬 Notificări la modelul „Afișarea la Primărie”.

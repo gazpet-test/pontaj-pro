@@ -403,6 +403,10 @@ describe('identificatorii publicați (review #1137 P1): forma fiecărui câmp, o
     ['nr_cadastral', 'cf  1010', ok('CF 1010'), 'minuscule, spațiu dublu → canonic'], ['nr_cadastral', 'CF100', ok('CF100'), 'Anexa 7'], ['nr_cadastral', '123/4', ok('123/4'), 'subdiviziune'], ['nr_cadastral', '1234/2/1', ok('1234/2/1'), 'topo pe 3 niveluri'],
     ['nr_cadastral', 'DE', ok('DE'), 'cod de 1–2 litere (drum de exploatare)'], ['nr_cadastral', '12 BIS', ok('12 BIS'), 'sufix BIS'], ['nr_cadastral', '', ok(''), 'gol'],
     ['nr_cadastral', '1/2', nu(MOTIV.COTA), 'cotă (verdict r2)'], ['nr_cadastral', '#1/2#', nu(MOTIV.COTA), 'cotă în subcâmpul TGZ'], ['nr_cadastral', '#3/3#', nu(MOTIV.COTA), 'a = b'], ['nr_cadastral', "#12'(1/2)#", nu(MOTIV.COTA), 'cotă în paranteze'],
+    ['nr_cadastral', '1/2A', nu(MOTIV.COTA), 'cotă cu sufix de literă'], ['nr_cadastral', "1'/2", nu(MOTIV.COTA), 'cotă cu prim'], ['nr_cadastral', "1/2'", nu(MOTIV.COTA), 'cotă cu prim'], ['nr_cadastral', '5/7', nu(MOTIV.COTA), 'nr. topo mic „5/7”: ambiguu → refuz (raport)'],
+    ['nr_cadastral', 'CF 1/2', ok('CF 1/2'), 'prefix explicit: identificator'], ['nr_cadastral', '1/2/3', ok('1/2/3'), 'trei niveluri: nu e forma unei cote'], ['nr_cadastral', '1 / 2', nu(MOTIV.FORMA), 'spații în jurul „/”'], ['nr_cadastral', '½', nu(MOTIV.FORMA), 'fracție tipografică'],
+    ['nr_cadastral', '0711#111#111', nu(MOTIV.TELEFON_CNP), 'telefon pe trei subcâmpuri'], ['nr_cadastral', '+40711111111', nu(MOTIV.TELEFON_CNP), 'telefon internațional'], ['nr_cadastral', '0040#711111111', nu(MOTIV.TELEFON_CNP), '0040 + 9 cifre'],
+    ['nr_cadastral', '50029/1234', nu(MOTIV.TELEFON_CNP), '9 cifre într-un subcâmp: ambiguu → refuz (raport)'], ['nr_cadastral', '711#111111#', ok('711#111111#'), 'telefon fără 0 pe subcâmpuri = nedeosebibil de cadastral + parcelă (raport)'],
     ['nr_cadastral', '0711/111/111', nu(MOTIV.TELEFON_CNP), 'telefon pe segmente (verdict r2)'], ['nr_cadastral', '180010/100000/0', nu(MOTIV.TELEFON_CNP), '13 cifre pe segmente (verdict r2)'],
     ['nr_cadastral', '1800101000000', nu(MOTIV.TELEFON_CNP), 'CNP'], ['nr_cadastral', '0711#111111#', nu(MOTIV.TELEFON_CNP), 'telefon lipit din subcâmpuri'], ['nr_cadastral', '180010#100000#0', nu(MOTIV.TELEFON_CNP), 'CNP lipit din subcâmpuri'],
     ['nr_cadastral', '711111111', nu(MOTIV.TELEFON_CNP), '9 cifre'], ['nr_cadastral', 'Ion', nu(MOTIV.FORMA), 'prenume'], ['nr_cadastral', 'DEX', nu(MOTIV.FORMA), '3 litere'], ['nr_cadastral', 'ANNA', nu(MOTIV.FORMA), '4 litere'],
@@ -496,14 +500,15 @@ describe('identificatorii publicați (review #1137 P1): forma fiecărui câmp, o
     expect(diferenteTabel(iCota)).toEqual(TABEL.filter(r => r[2].motiv === MOTIV.COTA).map(cheie))
     const rc = await mCota.genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele: [parcela(1), parcela(2, { tarla: '1/2', nr_cadastral: '#1/2#' })], templateArrayBuffer: sablon() })
     expect(await xmlLista(rc.blob)).toContain('>1/2<')
-    // telefonul / CNP-ul lipit din subcâmpuri: exact cele două rânduri „lipite”
+    // telefonul / CNP-ul lipit din subcâmpuri (fiecare subcâmp ≤ 8 cifre): exact rândurile „lipite”
+    const LIPITE = ['0711#111#111', '0711#111111#', '180010#100000#0']
     const { mod: mTel, idp: iTel } = await incarcaDocx('lucru', M.telefonLipit)
-    expect(diferenteTabel(iTel)).toEqual(['nr_cadastral="0711#111111#"', 'nr_cadastral="180010#100000#0"'])
+    expect(diferenteTabel(iTel)).toEqual(LIPITE.map(v => `nr_cadastral=${JSON.stringify(v)}`))
     const rt = await mTel.genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele: [parcela(1), parcela(2, { nr_cadastral: '0711#111111#' })], templateArrayBuffer: sablon() })
     expect(await xmlLista(rt.blob)).toContain('0711#111111#')
     // plafonul de cifre pe subcâmp: valorile rămân refuzate de plafonul câmpului, dar cu motivul „forma” — lista de corectat pierde explicația
     const { idp: iCif } = await incarcaDocx('lucru', M.cifreSubcamp)
-    const telefonPeSubcamp = TABEL.filter(r => r[2].motiv === MOTIV.TELEFON_CNP && r[0] !== 'tronson' && !['0711#111111#', '180010#100000#0'].includes(r[1]))
+    const telefonPeSubcamp = TABEL.filter(r => r[2].motiv === MOTIV.TELEFON_CNP && r[0] !== 'tronson' && !LIPITE.includes(r[1]))
     expect(diferenteTabel(iCif)).toEqual(telefonPeSubcamp.map(cheie))
     for (const r of telefonPeSubcamp) expect(iCif.canonizeazaIdentificator(r[0], r[1], { uat: UAT })).toEqual(nu(MOTIV.FORMA))
     // intactul refuză aceleași parcele

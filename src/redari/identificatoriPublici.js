@@ -8,9 +8,9 @@
 //     normalizat ca „12/3”, dar se publica „12//3”); nimic nu se „curăță” tacit (L18): o valoare care diferă de forma ei canonică altfel
 //     decât prin majuscule / spații e refuzată, nu reparată;
 //  3. cotele și telefoanele / CNP-urile sunt refuzate și atunci când AU forma unui identificator: „a/b” cu a ≤ b (1/2, 3/4, 1/1, 17/240)
-//     arată ca o cotă de proprietate, nu ca o subdiviziune („123/4”, „166/2” au a > b); segmente cu peste 8 cifre în total sau care,
-//     lipite, dau un telefon (0[237]… de 10 cifre, +40 / 0040…) ori un CNP (13 cifre) sunt refuzate. O formă reală ambiguă (o parcelă
-//     chiar numită „1/2”) e REFUZATĂ și listată pentru decizie, nu ghicită (review r2).
+//     arată ca o cotă de proprietate, nu ca o subdiviziune („123/4”, „166/2” au a > b); un subcâmp cu peste 8 cifre în total (pe toate
+//     părțile lui: „0711/111/111”) sau subcâmpuri care, lipite, dau un telefon (0[237]… de 10 cifre, 40 / 0040…) ori un CNP (13 cifre)
+//     sunt refuzate. O formă reală ambiguă (o parcelă chiar numită „1/2”) e REFUZATĂ și listată pentru decizie, nu ghicită (review r2).
 // Formele vin din datele reale de import (coloanele TGZ „Tarla/Nr. Topo” și „Nr. cadastral/Parcelă”, compuse cu „#”: „31#”, „123/4#”,
 // „12IV#”, „#44#”, „50029#30#”, „#12/3#”, „#12'#”, „#12'(34/5)#”, „##UA 62A”, „##”; Anexa 7: „T12”, „CF100”; fixture-urile importurilor;
 // CONTRACT_SCHEMA.md §7); compatibilitatea cu TOATE valorile din BD nu e dovedită aici (fără acces la BD) — vezi raportul rundei 3:
@@ -51,8 +51,10 @@ const RE_COD = new RegExp(`^${PARTE_COD}$`)
 const RE_SUBCAMP_NUMERIC = new RegExp(String.raw`^(?:(?:[A-Z]{1,2}|TARLA)[ .]?)?${PARTE_NUM}(?:/${PARTE}){0,3}(?:\(${CORP}\))?$`)
 const areFormaSubcamp = s => RE_COD.test(s) || RE_SUBCAMP_NUMERIC.test(s)
 const RE_FARA_VALOARE = /^[-–—]$/
-// „a/b” exact (fără prefix): cotă dacă a ≤ b; se aplică și grupului din paranteze
-const RE_FRACTIE = /^([0-9]+)\/([0-9]+)$/
+// „a/b” fără prefix de literă (primul ' și sufixul de literă / BIS nu contează: „1/2A”, „1'/2” arată tot a cotă): cotă dacă a ≤ b;
+// se aplică și grupului din paranteze. Un prefix explicit („T1/2”, „CF 1/2”) arată că e un identificator, nu o cotă.
+const SUFIX_FRACTIE = String.raw`['’]?(?:[A-Z]{1,3}| [A-Z]| BIS)?`
+const RE_FRACTIE = new RegExp(String.raw`^([0-9]+)${SUFIX_FRACTIE}/([0-9]+)${SUFIX_FRACTIE}$`)
 const RE_GRUP_PARANTEZE = /\(([^()]*)\)$/
 // cifrele tuturor subcâmpurilor, lipite: telefon RO (0[237] + 8 cifre), internațional (+40 / 0040 / 40 + 9 cifre), CNP (13 cifre)
 const RE_TELEFON_SAU_CNP = /^(?:0[237][0-9]{8}|(?:00)?40[0-9]{9}|[1-9][0-9]{12})$/
