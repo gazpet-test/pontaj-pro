@@ -4,7 +4,7 @@
 //   scrie <dosar>/13b_Model_Anunt_afisare_primarie_rev1.docx + .txt (textul, pentru verificare);
 //   cu --exemplu scrie și Exemplu_TEST_anunt_afisare_150_parcele.docx (date sintetice, doar pentru verificarea paginării).
 // Nu scrie în repo; dosarul de ieșire îl dă apelantul (ex. un folder din paw-data). Conversia în PDF se face în afara repo-ului.
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import JSZip from 'jszip'
@@ -12,7 +12,6 @@ import { genereazaAnuntAfisare, CHEI_ANUNT_AFISARE } from '../src/redari/docx.js
 
 const RADACINA = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const SABLON = resolve(RADACINA, 'public/redari/sabloane/anunt_afisare.docx')
-const { readFileSync } = await import('node:fs')
 
 const L = n => '_'.repeat(n)
 // data de model: fără cifre, ca formatDataRo să o lase neschimbată (un șir cu „2026” în el ar fi citit de JS ca dată)

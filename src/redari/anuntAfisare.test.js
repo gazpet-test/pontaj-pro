@@ -16,6 +16,8 @@ import { MOTIV_INFORMARE_NEPUBLICATA, TEXT_INFORMARE_LOT1 } from './informareGdp
 import { ORIGINE_PUBLICA_REDARI } from './domeniuPublic.js'
 import { ghidModele } from './notificari.js'
 import { parseazaText, PAGINA, LATIME_UTILA } from '../../scripts/redari_sablon_anunt_afisare.mjs'
+import { PROIECT_MODEL, UAT_MODEL, PARCELE_MODEL, parceleExemplu, textDocx, DATA_MODEL } from '../../scripts/redari_model_anunt_afisare.mjs'
+import { partiXmlDocx } from './xmlBineFormat.testutil.js'
 
 const SABLON = resolve(process.cwd(), 'public/redari/sabloane/anunt_afisare.docx')
 const SURSA = resolve(process.cwd(), 'docs/redari/TEXT_ANUNT_AFISARE.md')
@@ -225,6 +227,34 @@ describe('genereazaAnuntAfisare — conținutul', () => {
     const cad = randuri.slice(1).filter(c => c[2] === 'T1').map(c => Number(c[3]))
     expect(cad).toEqual([...cad].sort((a, b) => a - b))
     expect(randuriAnuntAfisare([parcela(1, { tarla: 'T10' }), parcela(2, { tarla: 'T2' })]).map(x => x.tarla)).toEqual(['T2', 'T10'])
+  })
+})
+
+describe('XML bine format și modelul pentru Transgaz', () => {
+  it('șablonul și documentele generate (2 și 150 de parcele): fiecare parte .xml / .rels e bine formată (verificator cu stivă)', async () => {
+    const asteapta = async zip => { for (const p of await partiXmlDocx(zip)) expect(p.eroare, p.nume).toBeNull() }
+    await asteapta(await JSZip.loadAsync(sablon()))
+    for (const n of [2, 150]) {
+      const r = await genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele: Array.from({ length: n }, (_, i) => parcela(i + 1, { sat: 'Sat <&> "x"' })), templateArrayBuffer: sablon() })
+      const { zip, xml } = await docDin(r.blob)
+      await asteapta(zip)
+      expect(xml).toContain('Sat &lt;&amp;&gt; &quot;x&quot;')
+    }
+  })
+  it('modelul (scripts/redari_model_anunt_afisare.mjs): date de MODEL fără nimic real, datele „__.__.____” rămân necompletate, textul copiat conține tabelele', async () => {
+    const r = await genereazaAnuntAfisare({ proiect: PROIECT_MODEL, uat: UAT_MODEL, parcele: PARCELE_MODEL, templateArrayBuffer: sablon(), dataDocument: DATA_MODEL })
+    expect(r.randuri).toBe(6)
+    expect([r.campuri.imputernicire_data, r.campuri.zi1, r.campuri.zi3, r.campuri.data]).toEqual([DATA_MODEL, DATA_MODEL, DATA_MODEL, DATA_MODEL])
+    expect(r.campuri.contract_nr).toBe('30')   // contractul din planul transmis Transgaz (public în plan)
+    for (const v of [r.campuri.uat, r.campuri.imputernicire_nr, r.campuri.reprezentant_tgz, r.campuri.semnatar_gazpet, r.campuri.contact_telefon]) expect(v).toMatch(/^_+$/)
+    const text = await textDocx(r.blob)
+    expect(text).toContain('Ziua 1 | __.__.____ | 09:00 – 16:00 | ____________________')
+    expect(text).toContain('Nr. | Sat | Tarla | Nr. cadastral / parcelă | Poz. HG | Tronson')
+    expect(text).toContain('[cod QR: pagina publică a informării]')
+    expect(text).not.toMatch(/\d\d\.\d\d\.20(?!25)\d\d/)   // singura dată reală: contractul 22.01.2025
+    // exemplul sintetic de paginare: 150 de rânduri, fără nume de persoane
+    expect(parceleExemplu(150)).toHaveLength(150)
+    expect(JSON.stringify(parceleExemplu(150))).not.toMatch(/nume|adresa|telefon/)
   })
 })
 
