@@ -8,9 +8,12 @@
 -- Rulare (clona; parametrii au valori implicite):
 --   psql -X -v ON_ERROR_STOP=1 -v clona=da [-v destinatari=300] [-v caractere=19000] [-v tokenuri=20000] [-v timeout=8s] [-v prag_ms=2000] \
 --        -f supabase/tests/20261131i_redari_mail_link_cost.sql
---   Rezultatul = un NOTICE „COST 20261131i: …” (rpc_ms = RPC-ul complet; lock_setari_ms = de la INSERT-ul lotului — imediat după lock-ul global — până la
---   sfârșitul RPC-ului; lock_numerotare_ms = de la primul mesaj — imediat după prima numerotare M — până la sfârșit; verdict = OK / DEPASIT față de prag_ms,
---   aplicat lui rpc_ms). Statement_timeout-ul apelantului (timeout) se aplică RPC-ului: depășirea lui = eroare 57014 (RPC-ul nu ar trece prin PostgREST).
+--   Rezultatul = un NOTICE „COST 20261131i: …”: rpc_ms = RPC-ul complet; lock_setari_rpc_ms = de la INSERT-ul lotului — imediat după lock-ul global — până
+--   la sfârșitul RPC-ului; r5: lock_setari_tranzactie_ms / lock_numerotare_tranzactie_ms = de la INSERT-ul lotului / de la primul mesaj (imediat după prima
+--   numerotare M) până la ULTIMA instrucțiune înaintea ROLLBACK-ului (RPC + verificarea mesajelor: lock-urile țin până la sfârșitul tranzacției; nemăsurat
+--   rămâne doar drumul NOTICE-ului și al ROLLBACK-ului); verdict = OK doar dacă rpc_ms și ambele durate „tranzactie” sunt ≤ prag_ms, altfel DEPASIT
+--   (GRESIT = mesaje lipsă / fără linkul lor). Statement_timeout-ul apelantului (timeout) se aplică RPC-ului: depășirea lui = eroare 57014 (RPC-ul nu ar
+--   trece prin PostgREST).
 --   Blocarea văzută de O ALTĂ sesiune (setări / numerotare): supabase/tests/20261131i_redari_mail_link_cost_concurenta.sh (rulează scriptul ăsta în sesiunea A).
 -- Același corp (între marcajele COST-CORP) îl rulează proba PGlite (scripts/pglite/test_redari_mail_link_local.mjs, secțiunea 7: înainte / după, mutanți).
 -- Textul sintetic: un antet cu toate câmpurile ({COMUNA}, {ZILE}, {PROGRAM}, {TEL}, {LINK_RASPUNS}), un „100%” și un URL străin codificat (trebuie să treacă),
@@ -69,7 +72,8 @@ BEGIN
   INSERT INTO public.red_proiecte (id, cod, denumire, contact_telefon) VALUES (v_pr, 'TEST-COST-20261131I', 'Proba de cost (sintetic)', '0700 000 000');
   INSERT INTO public.red_uat (id, proiect_id, nume, uat3, sesiune_zi1, sesiune_zi2, program_zi1, program_zi2)
     VALUES (v_uat, v_pr, 'Comuna Sintetica', 'CST', current_date + 7, current_date + 8, '09:00–16:00', '09:00–16:00');
-  INSERT INTO public.red_parcele (id, proiect_id, uat_id, id_parcela) VALUES (v_par, v_pr, v_uat, 'COST-0001'), (v_par2, v_pr, v_uat, 'COST-0002');
+  -- id_parcela = {uat3}-{nnnn} (triggerul de pe red_parcele, 20261129g)
+  INSERT INTO public.red_parcele (id, proiect_id, uat_id, id_parcela) VALUES (v_par, v_pr, v_uat, 'CST-0001'), (v_par2, v_pr, v_uat, 'CST-0002');
   -- id-urile: 0c057001-… = destinatarii (cu e-mail), 0c057002-… = ceilalți deținători (doar token); tokenurile = sha256 sintetic în base64url (43)
   INSERT INTO public.red_detinatori (id, parcela_id, nume)
     SELECT ('0c057001-0000-4000-8000-' || lpad(to_hex(i), 12, '0'))::uuid, v_par, 'DESTINATAR SINTETIC ' || i FROM generate_series(1, n_dst) i;
@@ -122,21 +126,34 @@ SELECT set_config('cost.t1', (extract(epoch FROM clock_timestamp()) * 1000000)::
 RESET ROLE;
 SELECT set_config('statement_timeout', '0', true);
 
--- ── rezultatul + verificarea (fiecare mesaj are linkul LUI, numărul de mesaje = destinatari) ──
-DO $rezultat$
-DECLARE t0 bigint := current_setting('cost.t0')::bigint; t1 bigint := current_setting('cost.t1')::bigint;
-        tl bigint := nullif(current_setting('cost.lot_la'), '')::bigint; tm bigint := nullif(current_setting('cost.mesaj_la'), '')::bigint;
-        n int; n_bun int; prag int := current_setting('cost.prag_ms')::int; rpc int;
+-- ── verificarea (fiecare mesaj are linkul LUI, numărul de mesaje = destinatari) — încă sub lock-urile RPC-ului (aceeași tranzacție) ──
+DO $verificare$
+DECLARE n int; n_bun int;
 BEGIN
   SELECT count(*), count(*) FILTER (WHERE position(public.fn_red_link_raspuns(t.token_raspuns) IN m.corp_text_final) > 0 AND m.corp_text_final !~ '[{}]')
     INTO n, n_bun
     FROM public.red_mail_mesaje m JOIN public.red_detinatori_token t ON t.detinator_id = m.detinator_id
    WHERE m.lot_id = current_setting('cost.op')::uuid;
-  rpc := round((t1 - t0) / 1000.0);
-  RAISE NOTICE 'COST 20261131i: destinatari=% caractere=% tokenuri_sintetice=% tokenuri_total=% rpc_ms=% lock_setari_ms=% lock_numerotare_ms=% mesaje=% mesaje_cu_linkul_lor=% prag_ms=% verdict=%',
-    current_setting('cost.destinatari'), current_setting('cost.caractere'), current_setting('cost.tokenuri'), (SELECT count(*) FROM public.red_detinatori_token),
-    rpc, round((t1 - tl) / 1000.0), round((t1 - tm) / 1000.0), n, n_bun, prag,
-    CASE WHEN n <> current_setting('cost.destinatari')::int OR n_bun <> n THEN 'GRESIT' WHEN rpc <= prag THEN 'OK' ELSE 'DEPASIT' END;
+  PERFORM set_config('cost.n', n::text, true), set_config('cost.n_bun', n_bun::text, true), set_config('cost.tokenuri_total', (SELECT count(*) FROM public.red_detinatori_token)::text, true);
+END $verificare$;
+
+-- ── rezultatul (r5): marcajul t2 = ULTIMA instrucțiune înaintea ROLLBACK-ului; lock-urile luate de RPC (setări, numerotarea M) sunt ținute până la
+--    ROLLBACK, deci durata lor în proba asta = de la marcajul lor până la t2 (RPC + verificarea de mai sus). Ce rămâne nemăsurat: trimiterea acestui NOTICE
+--    și drumul ROLLBACK-ului până la server (o singură instrucțiune, fără calcul). În PostgREST lock-urile țin doar RPC-ul + COMMIT-ul (rpc_ms).
+--    verdict = OK doar dacă rpc_ms ȘI cele două durate de lock până la t2 sunt ≤ prag_ms ──
+DO $rezultat$
+DECLARE t2 bigint := (extract(epoch FROM clock_timestamp()) * 1000000)::bigint;
+        t0 bigint := current_setting('cost.t0')::bigint; t1 bigint := current_setting('cost.t1')::bigint;
+        tl bigint := nullif(current_setting('cost.lot_la'), '')::bigint; tm bigint := nullif(current_setting('cost.mesaj_la'), '')::bigint;
+        n int := current_setting('cost.n')::int; n_bun int := current_setting('cost.n_bun')::int; prag int := current_setting('cost.prag_ms')::int;
+        rpc int; ls_rpc int; ls_tx int; lm_tx int;
+BEGIN
+  rpc := round((t1 - t0) / 1000.0); ls_rpc := round((t1 - tl) / 1000.0); ls_tx := round((t2 - tl) / 1000.0); lm_tx := round((t2 - tm) / 1000.0);
+  RAISE NOTICE 'COST 20261131i: destinatari=% caractere=% tokenuri_sintetice=% tokenuri_total=% rpc_ms=% lock_setari_rpc_ms=% lock_setari_tranzactie_ms=% lock_numerotare_tranzactie_ms=% mesaje=% mesaje_cu_linkul_lor=% prag_ms=% verdict=%',
+    current_setting('cost.destinatari'), current_setting('cost.caractere'), current_setting('cost.tokenuri'), current_setting('cost.tokenuri_total'),
+    rpc, ls_rpc, ls_tx, lm_tx, n, n_bun, prag,
+    CASE WHEN n <> current_setting('cost.destinatari')::int OR n_bun <> n OR tl IS NULL OR tm IS NULL THEN 'GRESIT'
+         WHEN rpc <= prag AND ls_tx <= prag AND lm_tx <= prag THEN 'OK' ELSE 'DEPASIT' END;
 END $rezultat$;
 -- <<< COST-CORP 20261131i
 ROLLBACK;
