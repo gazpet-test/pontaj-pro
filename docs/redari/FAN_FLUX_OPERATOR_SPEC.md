@@ -680,7 +680,8 @@ bloca prima trimitere, pentru că marcajul automat se face în RPC):
    în ecran, §8.5). Helperul NU se schimbă (alternativa — o verificare în plus a marcajului în handler, înaintea RPC-ului — ar dubla
    `fn_red_fan_lot_permis` fără câștig: RPC-ul e prima scriere și refuză înaintea ei, iar între pasul 2 și RPC nu se plătește nimic);
 3. citirile cu JWT-ul omului → **`fn_red_fan_comanda`** (JWT-ul omului; fazele L → V → M de mai sus: garda completă pe valori în V, marcajul
-   automat în M); `replay: true` → sari la pasul 6 (nimic de trimis, rândurile se recitesc); `incheiata: true` → sari la pasul 7;
+   automat în M); `replay: true` → sari la pasul 7 (nimic de trimis și nimic de încheiat — intenția e deja `incheiata`; rândurile se recitesc);
+   `incheiata: true` (încheiată de RPC: nimic de trimis) → sari la pasul 7; `de_trimis` nevid → pașii 4–6;
 4. **recitirea** `red_fan_loturi` (JWT, RLS) → `transportPermis({ …, cereMarcaj: true })` — verificarea completă, în handler, pe marcajul acum
    existent; refuz `423` dacă nu trece (nu se poate întâmpla după pasul 3; dacă se întâmplă e un defect și se oprește aici, nimic plătit);
 5. abia acum secretele curierului → bucla claim → `POST` → rezultate pe `de_trimis`, **cu clientul `service_role`** (`fn_red_fan_srv_claim(p_actor,
