@@ -102,7 +102,7 @@ jurnal. Dacă răspunsul arată un cost: se oprește și decide proprietarul (re
    fără AWB, fără dată de expediere, cu opisul atașat (doc §11, „Înainte”, (c)).
 3. ✉️ Poștă → lotul → **„📦 AWB FAN”**: previzualizarea arată „1 din 1 plicuri au toate datele cerute de FAN” și „referința pe etichetă: PL-…”.
    Dacă lipsește ceva (telefon, județ, stradă) se completează pe contact, nu se forțează.
-4. Banner-ul de sus: „Activare de TEST (Testul 1): transport doar pe loturi marcate TEST …” (lotul încă nemarcat). **În acest moment singurul
+4. **Doar pe forma ACTIVATĂ (după §2 pasul 1).** Dacă §3 se face înaintea îmbinării, pentru probele inerte (§2 pasul 0), pregătirea se oprește la pasul 3: pe forma inertă toate operațiile FAN din ecran sunt dezactivate („transport real oprit”), nu există banner-ul activării și nu se apasă nimic; pasul 4 se verifică după publicarea formei activate, înainte de §5. Banner-ul de sus: „Activare de TEST (Testul 1): transport doar pe loturi marcate TEST …” (lotul încă nemarcat). **În acest moment singurul
    buton activ e „2a. Marchează TEST”**: „1. Propune”, „2c. Aprobă”, „Schimbă plafonul” și restul sunt dezactivate cu motivul gărzii. Lotul rămâne
    NEMARCAT până la §5 (nu se apasă nimic aici): el e **L_NEMARCAT** din probele de la §4.
 
@@ -275,13 +275,14 @@ SELECT lot_id, test, prima_aprobare_la, tiraj_nr FROM public.red_fan_loturi ORDE
 ```
 
 **Corectarea plicului 2 (OPȚIONAL, ⚑ cost, decizia proprietarului; doc §11 Testul 1, „Tiraj nou”):** localitatea reală pe contact → „1. Propune”
-(hash nou) → „2c. Aprobă” → „3. Generează AWB” (un AWB în plus) → „Etichete” și „Documente lot” sunt REFUZATE („tirajul s-a schimbat; retipărește
+(hash nou) → „2c. Aprobă” → „3. Generează AWB” (un AWB în plus) → **aceleași verificări ca la orice AWB nou, ÎNAINTEA oricărei descărcări**: selfAWB (un singur AWB nou, cu numărul plicului 2 la observații), ERP (rândul plicului 2 „AWB generat”, AWB-ul = cel din selfAWB, tariful = cel din selfAWB ȘI = oferta FAN); tarif gol / diferit sau nepotrivire = OPRIRE (§12) → „Etichete” și „Documente lot” sunt REFUZATE („tirajul s-a schimbat; retipărește
 tot lotul”, nimic descărcat) → owner: „Tiraj nou — 1. Oprește descărcările” → după 30 s se distrug foile ȘI fișierele tirajului `<ID>` →
-„2. Înlocuiește tirajul” → se descarcă din nou TOT lotul (tirajul `<ID2>`, nr. 2, 3 poziții, fără „rămase”). Fără această decizie, plicul 2 rămâne
+„2. Înlocuiește tirajul” → se descarcă din nou TOT lotul (tirajul `<ID2>`, nr. 2, 3 poziții, fără „rămase”) → **se verifică din nou etichetele și pagina de control pentru `<ID2>`**, ca la pașii 11–13: 3 etichete A6, AWB-urile = cele din ERP, numărul plicului tipărit pe fiecare (NU = OPRIRE, §12), pagina de control cu 3 rânduri și tirajul `<ID2>`; foile tirajului `<ID>` nu se mai folosesc. Fără această decizie, plicul 2 rămâne
 „respins de FAN” și nu se mai atinge în Testul 1. **Dacă se face corectarea, PP-yyyy are 3 AWB-uri (4 în total cu PP-xxxx)**: decizia și numărul se scriu în jurnal, iar toate numărătorile din §10 și §11 pentru PP-yyyy devin 3.
 
 ## 10. Urmărirea, confirmările, comanda curierului; încheierea Testului 1
 
+- **Doar pe AWB-urile NEANULATE.** Un AWB anulat (§11) iese din urmărire și din confirmări: pe un lot fără niciun AWB neanulat butoanele „6. Urmărire” și „7. Confirmări / retururi” sunt dezactivate, iar pașii de mai jos se sar pentru el (în jurnal: „anulat la ora …”). Dacă primul AWB (PP-xxxx) a fost anulat înaintea lotului de 3 (§9 îl acceptă), §10 se aplică doar pe PP-yyyy. Numărătorile de mai jos sunt pentru cazul fără anulări; cu anulări, numărul = AWB-urile neanulate ale lotului.
 - „6. Urmărire” imediat după generare, pe fiecare lot: „Urmărire actualizată: 1 AWB-uri.” pe PP-xxxx, „Urmărire actualizată: 2 AWB-uri.” pe
   PP-yyyy (3 dacă s-a făcut corectarea opțională din §9); starea de urmărire „fără evenimente” sau „în tranzit” (cod + dată în ora României). „de verificat de om” = formă de răspuns neașteptată →
   jurnal (doc §8 deschisă 10), nu se continuă cu urmăriri în buclă.
@@ -318,9 +319,10 @@ lotului → **„Șterge la FAN”** (`DELETE /awb`):
 În ERP, pe un lot de TEST, plicul nu e atins în niciun caz (AWB-ul stă doar în `red_fan_awb`). Un AWB șters poate apărea totuși pe factură
 (întrebarea deschisă 3): se compară factura contului de test cu evidența.
 
-**Inventarul de închidere (coordonatorul, doar citire; în jurnal):** fiecare AWB din evidență se regăsește în selfAWB și invers; dacă s-a decis anularea, niciun rând nu rămâne „generat” cu AWB neridicat.
+**Inventarul de închidere (coordonatorul, doar citire; în jurnal):** fiecare AWB din evidență se regăsește în selfAWB și invers; dacă s-a decis anularea, niciun rând nu rămâne „generat”; dacă s-a decis ridicarea, rândurile confirmate ca ridicate (§10, „6b. Confirmă ridicarea”) sunt „ridicat”, iar „generat” înseamnă AWB încă neridicat (se urmărește până la ridicare sau se anulează).
 ```sql
--- C1: toate AWB-urile testului, pe loturi; așteptat 3 rânduri (4 cu corectarea opțională), fiecare «anulat» sau, cu decizia de ridicare, «generat»
+-- C1: toate AWB-urile testului, pe loturi; așteptat 3 rânduri (4 cu corectarea opțională). Ramura «fără ridicare»: toate «anulat».
+--     Ramura «cu ridicare»: «ridicat» după confirmarea ridicării, «generat» cât AWB-ul nu e încă ridicat, «anulat» pentru cele anulate.
 SELECT lot_id, nr_plic, stare, awb FROM public.red_fan_awb WHERE awb IS NOT NULL ORDER BY lot_id, nr_plic;
 ```
 
