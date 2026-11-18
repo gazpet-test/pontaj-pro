@@ -18,11 +18,12 @@ import { stariPasi, stareMarcaj, stariOperatii, PASI_FAN, MESAJ_TRANSPORT_OPRIT,
   controlLotFan, pregatestePachetFan, mesajEdgeFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire,
   fapteContrazise, ALEGERI_SOLUTIONARE, optiuniSolutionare, solutioneazaUrmarire, MESAJ_URMARIRE_SCHIMBATA,
   starePropunere, stareMarcajReal, MESAJ_MARCAJ_REAL_OPRIT, textTarif, textTotalTarif, totalTarifLot, MESAJ_TARIF_NECUNOSCUT, etichetaUrmarire,
-  stareOpod, TEXT_OPOD, MESAJ_OPOD_NEINSTALAT, opodLot, costOpodEstimat, textAprobare, textUltimEveniment, oraBucuresti,
+  stareOpod, TEXT_OPOD, MESAJ_OPOD_NEINSTALAT, MESAJ_OPOD_NEINSTALAT_PASI, opodLot, costOpodEstimat, textAprobare, textUltimEveniment, oraBucuresti,
   textOpodRand, TEXT_OPOD_RAND, TEXT_OPOD_LEGACY, STARI_TRIMISE_FAN } from './fanLot.js'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import FanAwbPrevizualizare from './ui/FanAwbPrevizualizare.jsx'
+import FanAwbPrevizualizare, { citesteEvidentaFan } from './ui/FanAwbPrevizualizare.jsx'
+const SRC_FAN = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8')
 import { planPachetPlicuire, ordineConvocari, genereazaPaginaControl, continutPaginaControl, momentBucuresti, docxPaginaControl } from './plicuri.js'
 import { createHash } from 'node:crypto'
 import { genereazaPvB } from './pv.js'
@@ -672,7 +673,7 @@ describe('ecranul: pașii, lotul de test, lotul pilot', () => {
     expect(stariPasi({}).every(x => !x.activ)).toBe(true)   // implicit = flag-ul din cod + garda „doar TEST” fără proiect → nimic activ
   })
   it('ACTIVARE Testul 1: pe un proiect REAL sau pe un lot nemarcat TEST, TOȚI pașii și TOATE operațiile rămân dezactivate, cu motivul gărzii', () => {
-    const baza = { transportActiv: true, evidentaInstalata: true, esteOwner: true, esteAdmin: true, poateScrie: true, randuri: awb, gataDePropus: 3 }
+    const baza = { transportActiv: true, evidentaInstalata: true, opodInstalat: true, esteOwner: true, esteAdmin: true, poateScrie: true, randuri: awb, gataDePropus: 3 }
     for (const [caz, re] of [[{ proiectCod: 'LOT1-PRUNISOR-JUPA', fanLot: { test: true } }, /proiecte de TEST/], [{ proiectCod: 'TEST-RAZVAN', fanLot: null }, /marcate TEST/],
       [{ proiectCod: 'TEST-RAZVAN', fanLot: { test: false } }, /marcate TEST/], [{ fanLot: { test: true } }, /proiecte de TEST/]]) {
       expect(stariPasi({ ...baza, ...caz }).every(x => !x.activ && re.test(x.motiv))).toBe(true)
@@ -681,16 +682,51 @@ describe('ecranul: pașii, lotul de test, lotul pilot', () => {
     // marcajul: cere proiectul de TEST, nu și lotul deja marcat (altfel n-ar putea fi marcat niciodată)
     expect(stareMarcaj({ ...baza, proiectCod: 'TEST-RAZVAN', fanLot: null, randuri: [{ stare: 'propus' }] }).activ).toBe(true)
     expect(stareMarcaj({ ...baza, proiectCod: 'LOT1-X', fanLot: null, randuri: [{ stare: 'propus' }] })).toMatchObject({ activ: false, motiv: expect.stringMatching(/proiecte de TEST/) })
-    // implicit (flag-ul din cod = pornit) pe un lot de TEST: pașii owner-ului sunt activi
-    expect(stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, ...TEST, randuri: awb, gataDePropus: 3 }).filter(x => x.activ).map(x => x.cheie))
+    // implicit (flag-ul din cod = pornit) pe un lot de TEST, cu coloana opod instalată: pașii owner-ului sunt activi
+    expect(stariPasi({ evidentaInstalata: true, opodInstalat: true, esteOwner: true, poateScrie: true, ...TEST, randuri: awb, gataDePropus: 3 }).filter(x => x.activ).map(x => x.cheie))
       .toEqual(['propune', 'aproba', 'genereaza', 'etichete', 'curier', 'urmarire', 'confirmari'])
   })
   it('transport pornit (lot de TEST): editorul doar propune; owner-ul aprobă doar după marcajul test / real', () => {
-    const ed = stariPasi({ transportActiv: true, evidentaInstalata: true, poateScrie: true, ...TEST, randuri: awb, gataDePropus: 1 })
+    const ed = stariPasi({ transportActiv: true, evidentaInstalata: true, opodInstalat: true, poateScrie: true, ...TEST, randuri: awb, gataDePropus: 1 })
     expect(ed.filter(x => x.activ).map(x => x.cheie)).toEqual(['propune', 'curier'])
-    const ow = stariPasi({ transportActiv: true, evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: null, randuri: awb, gataDePropus: 1 })
+    const ow = stariPasi({ transportActiv: true, evidentaInstalata: true, opodInstalat: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: null, randuri: awb, gataDePropus: 1 })
     expect(ow.find(x => x.cheie === 'aproba')).toMatchObject({ activ: false, motiv: expect.stringMatching(/marcate TEST/) })   // activare: garda vine înaintea condiției pasului
     expect(stariPasi({ transportActiv: true, evidentaInstalata: false, esteOwner: true, ...TEST }).every(x => /neaplicată/.test(x.motiv))).toBe(true)
+  })
+  // runda 3 pe #1135 (Jakarinos r2 P2): codul publicat ÎNAINTEA migrării 20261227a → fără coloana opod nu se propune / aprobă / generează
+  it('FĂRĂ coloana opod (migrarea 20261227a neaplicată): „1. Propune”, „2. Aprobă”, „3. Generează AWB” dezactivate cu motivul lor; restul pașilor și operațiile merg; necunoscut ≠ instalat', () => {
+    const baza = { transportActiv: true, evidentaInstalata: true, esteOwner: true, esteAdmin: true, poateScrie: true, ...TEST, randuri: awb, gataDePropus: 3 }
+    for (const opodInstalat of [false, null, undefined, 'true', 1]) {
+      const p = stariPasi({ ...baza, opodInstalat })
+      expect([opodInstalat, p.filter(x => !x.activ).map(x => x.cheie)]).toEqual([opodInstalat, ['propune', 'aproba', 'genereaza']])
+      expect(p.filter(x => !x.activ).every(x => x.motiv === MESAJ_OPOD_NEINSTALAT_PASI)).toBe(true)
+      expect(p.filter(x => x.activ).map(x => x.cheie)).toEqual(['etichete', 'curier', 'urmarire', 'confirmari'])
+    }
+    expect(MESAJ_OPOD_NEINSTALAT_PASI).toMatch(/20261227a/); expect(MESAJ_OPOD_NEINSTALAT_PASI).toMatch(/nu se propune, nu se aprobă și nu se generează/)
+    // motivul gărzii / al rolului vine înaintea celui al coloanei; cel al coloanei înaintea condițiilor pasului (nimic de propus / niciun plic propus)
+    expect(stariPasi({ ...baza, opodInstalat: false, poateScrie: false, esteOwner: false }).find(x => x.cheie === 'propune').motiv).toBe('doar admin / editor')
+    expect(stariPasi({ ...baza, opodInstalat: false, fanLot: null }).find(x => x.cheie === 'aproba').motiv).toMatch(/marcate TEST/)
+    expect(stariPasi({ ...baza, opodInstalat: false, gataDePropus: 0, randuri: [] }).find(x => x.cheie === 'propune').motiv).toBe(MESAJ_OPOD_NEINSTALAT_PASI)
+    // operațiile (reconciliere, plafon, anulare, evenimente, tiraj, soluționare) și marcajul nu depind de coloană
+    expect(stariOperatii(baza).filter(x => x.activ).map(x => x.cheie)).toEqual(['plafon', 'anulare', 'evenimente', 'tiraj'])
+    expect(stareMarcaj({ ...baza, randuri: [{ stare: 'propus' }] }).activ).toBe(true)
+    // ecranul dă valoarea citită (citesteEvidentaFan.opodInstalat), fără implicit „instalată”
+    expect(SRC_FAN).toMatch(/opodInstalat: fan\?\.opodInstalat === true \}\)/)
+    expect(readFileSync('src/redari/fanLot.js', 'utf8')).toMatch(/opodInstalat = null \} = \{\}\) \{/)
+  })
+  it('citesteEvidentaFan: opodInstalat = coloana confirmată de citire (true și pe lotul nemarcat, fără rând); 42703 → false, fanLot.opod = null; tabel lipsă → false', async () => {
+    const randLot = { lot_id: 'l1', test: true, prima_aprobare_la: null, tiraj_cheie: null, tiraj_nr: 0, tiraj_la: null, tiraj_oprit_la: null }
+    const client = ({ cuColoana, randLipsa = false, faraTabel = false }) => ({ from(t) { const b = { apel: [], select(cols) { b.cols = cols; return b }, eq() { return b }, order() { return b }, limit() { return b }, gt() { b.pagUrm = true; return b },
+      maybeSingle: async () => {
+        if (t === 'red_fan_setari') return { data: { limita_lot: 20 }, error: null }
+        if (!cuColoana && /\bopod\b/.test(b.cols)) return { data: null, error: { code: '42703', message: 'column red_fan_loturi.opod does not exist' } }
+        return { data: randLipsa ? null : { ...randLot, ...(cuColoana && /\bopod\b/.test(b.cols) ? { opod: false } : {}) }, error: null } },
+      then(res) { return res(faraTabel ? { data: null, error: { code: 'PGRST205', message: 'could not find the table' } } : { data: [], error: null }) } }; return b } })
+    expect(await citesteEvidentaFan(client({ cuColoana: true }), 'l1')).toEqual({ instalata: true, randuri: [], fanLot: { ...randLot, opod: false }, limita: 20, opodInstalat: true })
+    expect(await citesteEvidentaFan(client({ cuColoana: true, randLipsa: true }), 'l1')).toEqual({ instalata: true, randuri: [], fanLot: null, limita: 20, opodInstalat: true })   // lot nemarcat, coloana există
+    expect(await citesteEvidentaFan(client({ cuColoana: false }), 'l1')).toEqual({ instalata: true, randuri: [], fanLot: { ...randLot, opod: null }, limita: 20, opodInstalat: false })
+    expect(await citesteEvidentaFan(client({ cuColoana: false, randLipsa: true }), 'l1')).toEqual({ instalata: true, randuri: [], fanLot: null, limita: 20, opodInstalat: false })   // lot nemarcat, coloana lipsă: tot oprit
+    expect(await citesteEvidentaFan(client({ cuColoana: true, faraTabel: true }), 'l1')).toEqual({ instalata: false, randuri: [], fanLot: null, limita: null, opodInstalat: false })
   })
   it('LOT DE TEST: titlul, prefixul fișierelor și borderoul îl arată; borderoul fără nume / adrese / telefoane', () => {
     const lot = { nr_lot: 'PP-0001' }
@@ -940,7 +976,7 @@ describe('după primul AWB real (18.11.2026): tariful în ecran, „Propune” f
     expect(starePropunere({ pregatite: [preg[2]], randuri: [] })).toEqual({ dePropus: [], motiv: 'niciun plic cu toate datele cerute de FAN' })
     expect(starePropunere({})).toEqual({ dePropus: [], motiv: 'niciun plic cu toate datele cerute de FAN' })
     // pasul: inactiv cu motivul propunerii; activ când e ceva de propus
-    const baza = { transportActiv: true, evidentaInstalata: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: gen.randuri }
+    const baza = { transportActiv: true, evidentaInstalata: true, opodInstalat: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: gen.randuri }
     expect(stariPasi({ ...baza, gataDePropus: 0, motivPropunere: starePropunere(gen).motiv }).find(x => x.cheie === 'propune')).toMatchObject({ activ: false, motiv: expect.stringMatching(/^nimic de propus/) })
     expect(stariPasi({ ...baza, gataDePropus: 0 }).find(x => x.cheie === 'propune').motiv).toBe('niciun plic cu toate datele cerute de FAN')
     expect(stariPasi({ ...baza, gataDePropus: 1 }).find(x => x.cheie === 'propune').activ).toBe(true)
@@ -1566,7 +1602,7 @@ describe('oPOD opțional pe lot, implicit oprit (18.11.2026) + ora evenimentului
     expect(SRC).not.toMatch(/cereOpod\(r\.shipment\)/)
     expect(SRC).toMatch(/pregatestePlicuriFan\(\{ plicuri: active, convocari: conv, contacte: cont, proiectCod: proiect\.cod, opod: opodLot\(stare\.fanLot\) \}\)/)   // corpurile cu alegerea CITITĂ a lotului
     // r2 (P1): aceeași citire a lotului ca funcția edge (citesteLotFan din redariFan.mjs), nu una proprie
-    expect(SRC).toMatch(/const \{ data: fl, error: e1 \} = await citesteLotFan\(coloane => client\.from\('red_fan_loturi'\)\.select\(coloane\)\.eq\('lot_id', lotId\)\.maybeSingle\(\), COL_LOT\)/)
+    expect(SRC).toMatch(/const \{ data: fl, error: e1, opodInstalat \} = await citesteLotFan\(coloane => client\.from\('red_fan_loturi'\)\.select\(coloane\)\.eq\('lot_id', lotId\)\.maybeSingle\(\), COL_LOT\)/)
     expect(SRC).not.toMatch(/42703/)
     // migrarea: coloana implicit false, RPC owner, trigger-ul păzește oPOD după prima aprobare; revenirea există
     expect(MIG27).toMatch(/ADD COLUMN opod boolean NOT NULL DEFAULT false/); expect(MIG27).toMatch(/CREATE FUNCTION public\.fn_red_fan_lot_opod\(p_lot_id uuid, p_opod boolean\)/)
@@ -1585,10 +1621,12 @@ describe('oPOD opțional pe lot, implicit oprit (18.11.2026) + ora evenimentului
       return lipsa ? { data: null, error: null } : { data: cuColoana && /\bopod\b/.test(cols) ? { ...rand, opod: true } : { ...rand }, error: null } } }) }) } } })
     // EXACT forma din index.ts (regexul de mai sus o fixează)
     const fanLotCa = c => (id => citesteLotFan(coloane => c.from('red_fan_loturi').select(coloane).eq('lot_id', id).maybeSingle(), 'lot_id, test, prima_aprobare_la'))
-    const c1 = client(true); expect(await fanLotCa(c1)(LOT.id)).toEqual({ data: { ...rand, opod: true }, error: null }); expect(c1.apeluri).toEqual(['lot_id, test, prima_aprobare_la,opod'])
-    const c0 = client(false); expect(await fanLotCa(c0)(LOT.id)).toEqual({ data: { ...rand, opod: null }, error: null }); expect(c0.apeluri).toEqual(['lot_id, test, prima_aprobare_la,opod', 'lot_id, test, prima_aprobare_la'])
-    expect(await fanLotCa(client(false, { lipsa: true }))(LOT.id)).toEqual({ data: null, error: null })   // lot nemarcat, fără coloană: tot „fără rând”
-    const alta = { code: '42501', message: 'permission denied' }; expect(await fanLotCa(client(true, { eroare: alta }))(LOT.id)).toEqual({ data: null, error: alta })
+    // (r3: + opodInstalat — coloana confirmată de citire: true / false; necunoscut la altă eroare)
+    const c1 = client(true); expect(await fanLotCa(c1)(LOT.id)).toEqual({ data: { ...rand, opod: true }, error: null, opodInstalat: true }); expect(c1.apeluri).toEqual(['lot_id, test, prima_aprobare_la,opod'])
+    const c0 = client(false); expect(await fanLotCa(c0)(LOT.id)).toEqual({ data: { ...rand, opod: null }, error: null, opodInstalat: false }); expect(c0.apeluri).toEqual(['lot_id, test, prima_aprobare_la,opod', 'lot_id, test, prima_aprobare_la'])
+    expect(await fanLotCa(client(false, { lipsa: true }))(LOT.id)).toEqual({ data: null, error: null, opodInstalat: false })   // lot nemarcat, fără coloană: tot „fără rând”, coloana lipsă spusă
+    expect(await fanLotCa(client(true, { lipsa: true }))(LOT.id)).toEqual({ data: null, error: null, opodInstalat: true })   // lot nemarcat, cu coloană: coloana există
+    const alta = { code: '42501', message: 'permission denied' }; expect(await fanLotCa(client(true, { eroare: alta }))(LOT.id)).toEqual({ data: null, error: alta, opodInstalat: null })
     expect(lipsaColoana(fara42703)).toBe(true); expect(lipsaColoana({ message: 'column "x" does not exist' })).toBe(true); expect(lipsaColoana(alta)).toBe(false); expect(lipsaColoana(null)).toBe(false)
     // (b) handlerul întreg, cu baza FĂRĂ coloană (scenariul recenzentului): rândurile lotului au un AWB generat (legacy) și unul aprobat
     const fx = await fixtura(2)
@@ -1646,11 +1684,30 @@ describe('oPOD opțional pe lot, implicit oprit (18.11.2026) + ora evenimentului
     // paritate cu deducerea migrării: aceeași regulă („aprobat înainte = a plecat cu B”) e scrisă în SQL (backfill) și în marcajul de instalare
     expect(MIG27).toMatch(/UPDATE public\.red_fan_loturi l SET opod = true\s+WHERE l\.prima_aprobare_la IS NOT NULL\s+OR EXISTS \(SELECT 1 FROM public\.red_fan_awb a WHERE a\.lot_id = l\.lot_id AND a\.stare <> 'propus'\)/)
     expect(MIG27).toMatch(/'eveniment', 'opod_instalat'/); expect(MIG27).toMatch(/'loturi_opod', \(SELECT coalesce\(jsonb_agg\(lot_id ORDER BY lot_id\)/)
-    expect(MIG27).toMatch(/LOCK TABLE public\.red_fan_awb IN SHARE MODE NOWAIT/)
+    expect(MIG27).toMatch(/LOCK TABLE public\.red_fan_awb IN SHARE ROW EXCLUSIVE MODE NOWAIT/)   // r3: CREATE TRIGGER cere SHARE ROW EXCLUSIVE
     expect(MIG27).not.toMatch(/randurile existente trebuie sa aiba opod = false/)
     const REV = readFileSync('supabase/revenire/20261227a_redari_fan_opod_ROLLBACK.sql', 'utf8')
     expect(REV).toMatch(/aprobat\(e\) dupa aplicarea migrarii \(cu alegerea oPOD din coloana, implicit false\)/); expect(REV).toMatch(/'eveniment', 'opod_dezinstalat'/)
     expect(REV).toMatch(/loturile cu opod = true difera de lista dedusa la aplicare/); expect(REV).not.toMatch(/exista loturi cu oPOD cerut \(opod = true\) - refuz/)
+  })
+  // runda 3 (Jakarinos r2 P2): dovada DURABILĂ a folosirii după aplicare — re-propunerea șterge aprobat_la (20261212a), deci revenirea citește jurnalul
+  it('P2 (revenirea): fiecare aprobare lasă un eveniment opod_aprobare în red_jurnal (trigger AFTER pe red_fan_awb, DEFINER), pe care re-propunerea nu-l șterge; revenirea refuză la orice astfel de eveniment', () => {
+    // premisa constatării: re-propunerea unui rând aprobat golește aprobarea rândului (fn_red_fan_propune din 20261212a)
+    expect(MIG).toMatch(/UPDATE public\.red_fan_awb SET stare = 'propus', hash_date = p_hash, tarif_estimat = p_tarif_estimat, propus_de = auth\.uid\(\),\s+aprobat_de = NULL, aprobat_la = NULL, updated_at = now\(\) WHERE id = v_rand\.id;/)
+    expect(MIG27).toMatch(/CREATE FUNCTION public\.fn_red_fan_awb_opod_jurnal\(\) RETURNS trigger\s+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp/)
+    expect(MIG27).toMatch(/IF NEW\.stare = 'aprobat' AND \(TG_OP = 'INSERT' OR OLD\.stare IS DISTINCT FROM 'aprobat'\) THEN/)
+    expect(MIG27).toMatch(/jsonb_build_object\('eveniment', 'opod_aprobare', 'lot_id', NEW\.lot_id, 'opod', v_opod, 'hash_date', NEW\.hash_date, 'la', now\(\)\), auth\.uid\(\)\)/)
+    expect(MIG27).toMatch(/CREATE TRIGGER trg_red_fan_awb_opod_jurnal AFTER INSERT OR UPDATE OF stare ON public\.red_fan_awb FOR EACH ROW EXECUTE FUNCTION public\.fn_red_fan_awb_opod_jurnal\(\);/)
+    expect(MIG27).toMatch(/REVOKE ALL ON FUNCTION public\.fn_red_fan_awb_opod_jurnal\(\) FROM PUBLIC, anon, authenticated, service_role;/)
+    expect(MIG27).toMatch(/red_jurnal are deja evenimente opod_aprobare/); expect(MIG27).toMatch(/difera de 21/)
+    const REV = readFileSync('supabase/revenire/20261227a_redari_fan_opod_ROLLBACK.sql', 'utf8')
+    expect(REV).toMatch(/SELECT count\(\*\) INTO v_n FROM public\.red_jurnal j WHERE j\.tabela = 'red_fan_awb' AND j\.date_noi ->> 'eveniment' = 'opod_aprobare';/)
+    expect(REV).toMatch(/aprobare\(i\) FAN dupa aplicarea migrarii \(jurnal opod_aprobare/); expect(REV).toMatch(/DROP TRIGGER trg_red_fan_awb_opod_jurnal ON public\.red_fan_awb;/)
+    expect(REV).toMatch(/LOCK TABLE public\.red_fan_awb IN ACCESS EXCLUSIVE MODE NOWAIT;/); expect(REV).toMatch(/difera de 21/)
+    // ordinea livrării: codul ÎNTÂI (ecranul gardat), apoi migrarea — scrisă în migrare și în document; forma veche („migrarea înainte de cod”) nu mai apare
+    expect(MIG27).toMatch(/ORDINEA OBLIGATORIE COD → MIGRARE/)
+    expect(doc).toMatch(/codul se publică ÎNTÂI[^\n]*apoi se aplică migrarea/); expect(doc).not.toMatch(/migrarea se aplică ÎNAINTE de publicarea codului/)
+    expect(pasiDoc).toMatch(/20261227a/)
   })
   it('CURSA din verdict: alegerea schimbată înaintea unei aprobări întârziate cu hash-ul vechi → la generare TOTUL exclus (niciun claim, niciun POST), recuperabil prin re-propunere; nimic nu pleacă cu altă opțiune decât cea din hash-ul aprobat', async () => {
     // rândurile au fost propuse FĂRĂ B (opod false la propunere) și aprobate întârziat cu acel hash; între timp owner-ul a cerut oPOD (lotul: true, înghețat)

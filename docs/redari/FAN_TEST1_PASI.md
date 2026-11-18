@@ -33,6 +33,10 @@ Plafoanele (UN plic la pasul 4a, apoi 3 la 4b, 20 la încheiere) NU sunt cod nou
 
 **Precondiții deja îndeplinite (17.11.2026):** migrarea `20261212a_redari_fan_awb` aplicată pe mediul real (146 de obiecte, tabelele goale);
 review-ul PR #1118: fără probleme de cod restante; decizia proprietarului: Testul 1 pe **contul de TEST** al curierului.
+**Precondiție nouă (18.11.2026, oPOD, PR #1135):** migrarea `20261227a_redari_fan_opod` aplicată, în ordinea cerută — ÎNTÂI codul publicat, apoi
+migrarea (doc §6). Cât coloana `opod` lipsește, ecranul nou NU propune, NU aprobă și NU generează: „1. Propune” / „2c. Aprobă” / „3. Generează AWB”
+sunt dezactivate cu motivul „alegerea oPOD nu e instalată în evidența FAN (migrarea 20261227a neaplicată)…” — asta e și verificarea coordonatorului
+ÎNAINTE de a aplica migrarea (dovada că codul nou e live); după aplicare și Ctrl+Shift+R butoanele revin. Pașii de la §5 încolo presupun migrarea aplicată.
 
 **Ce NU face nimeni în această zi:** lot real; proiect real; mai mult de un plic pe lot înainte de verdictul 4a (§7); comanda curierului
 prin API (se face manual în selfAWB); Testul 2.

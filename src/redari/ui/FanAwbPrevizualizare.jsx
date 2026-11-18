@@ -7,6 +7,8 @@
    oPOD (18.11.2026, 27,16 lei în loc de 13,16 pe primul AWB): bifa „Confirmare de primire în original (oPOD)” e a owner-ului, pe lot, după
    marcaj și înainte de prima aprobare (fn_red_fan_lot_opod; red_fan_loturi.opod, implicit oprit), intră în corp și în hash; dialogul de aprobare
    spune dacă oPOD e cerut și costul estimat; rândul plicului arată „oPOD” și ultimul eveniment de urmărire cu ora României (textUltimEveniment).
+   Cât coloana `opod` lipsește (codul publicat înaintea migrării 20261227a), „1. Propune” / „2c. Aprobă” / „3. Generează AWB” sunt dezactivate cu
+   motivul lor (citesteEvidentaFan.opodInstalat → stariPasi): nicio aprobare „fără B” înaintea deducerii istorice a migrării; restul merge.
    Cât timp TRANSPORT_REAL_ACTIV = false (redariFanHandler.mjs) TOȚI pașii și TOATE operațiile sunt vizibile și dezactivate, cu „transport
    oprit”; nu se cheamă funcția edge și nu se scrie nimic. Activarea pentru Testul 1 (DOAR_PROIECTE_TEST = true): activ DOAR pe un proiect
    „TEST-…” cu lotul marcat TEST (aceeași gardă ca funcția edge, transportPermis); pe orice alt lot, pașii rămân dezactivați cu motivul.
@@ -39,18 +41,19 @@ export const lipsaTabel = e => ['PGRST205', '42P01'].includes(e?.code) || /does 
 export { lipsaColoana }
 const COL_LOT = 'lot_id,test,prima_aprobare_la,tiraj_cheie,tiraj_nr,tiraj_la,tiraj_oprit_la'
 
-/** Evidența FAN a unui lot, citită cu JWT-ul omului: { instalata, fanLot, randuri, limita }. Tabel lipsă = neinstalată; altă eroare = aruncată (L18).
- *  fanLot.opod (18.11.2026): alegerea oPOD a lotului (boolean); null = coloana nu e instalată încă (bifa dezactivată, corpurile fără oPOD) —
- *  aceeași citire ca în funcția edge (citesteLotFan). Folosită și de ecranul Plicuri (arhiva documentelor pe manifestul comun). */
+/** Evidența FAN a unui lot, citită cu JWT-ul omului: { instalata, fanLot, randuri, limita, opodInstalat }. Tabel lipsă = neinstalată; altă eroare =
+ *  aruncată (L18). fanLot.opod (18.11.2026): alegerea oPOD a lotului (boolean); null = coloana nu e instalată încă (bifa dezactivată) — aceeași
+ *  citire ca în funcția edge (citesteLotFan). opodInstalat (runda 3) = coloana `opod` există, confirmat de citire (și pe un lot nemarcat, fără
+ *  rând); cât e false, ecranul nu propune / nu aprobă / nu generează (stariPasi). Folosită și de ecranul Plicuri (arhiva documentelor). */
 export async function citesteEvidentaFan(client, lotId, esteCurent = () => true) {
   try {
     const randuri = await citestePaginat(() => client.from('red_fan_awb').select(COL_FAN).eq('lot_id', lotId), { cheie: 'id', esteCurent })
-    const { data: fl, error: e1 } = await citesteLotFan(coloane => client.from('red_fan_loturi').select(coloane).eq('lot_id', lotId).maybeSingle(), COL_LOT)
+    const { data: fl, error: e1, opodInstalat } = await citesteLotFan(coloane => client.from('red_fan_loturi').select(coloane).eq('lot_id', lotId).maybeSingle(), COL_LOT)
     if (e1) throw e1
     const { data: st, error: e2 } = await client.from('red_fan_setari').select('limita_lot').maybeSingle()
     if (e2) throw e2
-    return { instalata: true, randuri, fanLot: fl || null, limita: st?.limita_lot ?? null }
-  } catch (e) { if (lipsaTabel(e)) return { instalata: false, randuri: [], fanLot: null, limita: null }; throw e }
+    return { instalata: true, randuri, fanLot: fl || null, limita: st?.limita_lot ?? null, opodInstalat: opodInstalat === true }
+  } catch (e) { if (lipsaTabel(e)) return { instalata: false, randuri: [], fanLot: null, limita: null, opodInstalat: false }; throw e }
 }
 
 // convocariPePlic = convocările pe plic din ecranul Plicuri (aceleași citiri ca arhiva documentelor): numărul documentelor pe pagina de control
@@ -98,7 +101,8 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   const propunere = starePropunere({ pregatite: randuri || [], randuri: awb })
   // garda „doar TEST” (aceeași ca în funcția edge): proiectul lotului + marcajul lui; marcajul cere doar proiectul de TEST
   const st = { transportActiv: TRANSPORT_REAL_ACTIV, evidentaInstalata: !!fan?.instalata, esteOwner, esteAdmin, randuri: awb, fanLot: fan?.fanLot, proiectCod: proiect?.cod }
-  const pasi = stariPasi({ ...st, poateScrie, gataDePropus: propunere.dePropus.length, motivPropunere: propunere.motiv })
+  // runda 3: fără coloana opod (migrarea 20261227a neaplicată) nu se propune / aprobă / generează — doar ce e confirmat de citire trece
+  const pasi = stariPasi({ ...st, poateScrie, gataDePropus: propunere.dePropus.length, motivPropunere: propunere.motiv, opodInstalat: fan?.opodInstalat === true })
   const operatii = stariOperatii(st)
   const marcajTest = stareMarcaj(st), marcajReal = stareMarcajReal(st)   // 18.11: „real” e oprit cât garda „doar TEST” e pornită
   const opodSt = stareOpod(st)   // 18.11: alegerea oPOD (owner, după marcaj, înainte de prima aprobare)

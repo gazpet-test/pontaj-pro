@@ -36,13 +36,17 @@ export const COLOANA_OPOD = 'opod'
  * (42703: migrarea 20261227a neaplicată), se recitește FĂRĂ ea și rândul primește opod = null („alegerea neinstalată”): marcajul TEST / real,
  * urmărirea, confirmările, etichetele, reconcilierea și ștergerea merg ca înainte; DOAR generarea refuză (opod ≠ boolean → 503, nimic trimis).
  * Orice altă eroare (RLS, rețea) se întoarce ca atare; rândul lipsă (lot nemarcat) rămâne { data: null }.
+ * Întoarce și `opodInstalat` (runda 3, Jakarinos #1135 r2 P2): true = citirea cu coloana a reușit (coloana există — și când lotul n-are rând),
+ * false = coloana lipsește (42703), null = nu se știe (altă eroare). Ecranul oprește cu el propunerea / aprobarea / generarea cât coloana lipsește,
+ * ca nicio aprobare „fără B” să nu preceadă deducerea istorică a migrării (loturile aprobate înainte = oPOD).
  */
 export async function citesteLotFan(citeste, coloane) {
   const r = await citeste(`${coloane},${COLOANA_OPOD}`)
-  if (!r?.error || !lipsaColoana(r.error)) return r
+  if (!r?.error) return { ...r, opodInstalat: true }
+  if (!lipsaColoana(r.error)) return { ...r, opodInstalat: null }
   const r2 = await citeste(coloane)
-  if (r2?.error || !r2?.data) return r2
-  return { ...r2, data: { ...r2.data, [COLOANA_OPOD]: null } }
+  if (r2?.error || !r2?.data) return { ...r2, opodInstalat: false }
+  return { ...r2, data: { ...r2.data, [COLOANA_OPOD]: null }, opodInstalat: false }
 }
 
 // Limitele din documentația FAN (caractere). Depășirea = problemă afișată, NU tăiere tacită (L12).

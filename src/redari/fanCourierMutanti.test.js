@@ -363,9 +363,9 @@ const VERIFICARI = {
     try { ok = await M.h.raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: LOT.id } }, { ...baza, secrete, proiect: async () => ({ data: { id: 'p1', cod: 'TEST-RAZVAN' } }), fanLot: async () => ({ data: { test: true } }) }) } catch { return false }
     return ok.status === 503 && ok.body.cod === 'transport_neconfigurat' && secrete.mock.calls.length === 1 && interzis.mock.calls.length === 0
       && M.h.TRANSPORT_REAL_ACTIV === true && M.h.DOAR_PROIECTE_TEST === true
-      && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'LOT1-PRUNISOR-JUPA', fanLot: { test: true }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).every(p => !p.activ)
-      && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: false }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).every(p => !p.activ)
-      && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).some(p => p.activ)
+      && M.lot.stariPasi({ evidentaInstalata: true, opodInstalat: true, esteOwner: true, poateScrie: true, proiectCod: 'LOT1-PRUNISOR-JUPA', fanLot: { test: true }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).every(p => !p.activ)
+      && M.lot.stariPasi({ evidentaInstalata: true, opodInstalat: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: false }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).every(p => !p.activ)
+      && M.lot.stariPasi({ evidentaInstalata: true, opodInstalat: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).some(p => p.activ)
   },
   // ACTIVARE runda 2 + 3 (Jakarinos #1130 P2 / P3): procedura documentului e executabilă din ecran, COMPLET — primul plic (plafon 1), lotul de 3
   // (plafon 3) cu istoricul primului lot prezent, încheierea (plafon 20) — în ordinea scrisă (coloana „Acțiune”). Pică dacă ordinea din COD se
@@ -391,7 +391,7 @@ const VERIFICARI = {
     const p0 = lot.starePropunere({ pregatite: preg, randuri: [{ plic_id: 'p1', stare: 'generat', hash_date: 'h1' }, { plic_id: 'p2', stare: 'aprobat', hash_date: 'h2' }] })
     const p1 = lot.starePropunere({ pregatite: preg, randuri: [{ plic_id: 'p1', stare: 'eroare', hash_date: 'h1' }, { plic_id: 'p2', stare: 'aprobat', hash_date: 'vechi' }] })
     const p2 = lot.starePropunere({ pregatite: preg.slice(0, 1), randuri: [{ plic_id: 'p1', stare: 'generat', hash_date: 'vechi' }] })   // cu AWB: niciodată, nici cu date noi
-    const pas = lot.stariPasi({ transportActiv: true, evidentaInstalata: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'generat' }], gataDePropus: 0, motivPropunere: p0.motiv }).find(x => x.cheie === 'propune')
+    const pas = lot.stariPasi({ transportActiv: true, evidentaInstalata: true, opodInstalat: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'generat' }], gataDePropus: 0, motivPropunere: p0.motiv }).find(x => x.cheie === 'propune')
     // 4: „real” oprit cât garda e pornită; cu garda oprită = marcajul obișnuit
     const baza = { transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', fanLot: null, randuri: [] }
     const real = lot.stareMarcajReal(baza), real2 = lot.stareMarcajReal({ ...baza, doarTest: false })
@@ -488,6 +488,25 @@ const VERIFICARI = {
       && lot.textOpodRand({ fanLot: { opod: false }, rand: { stare: 'generat' }, shipment: cu }) === ''
       && /^oPOD \(expediat înainte/.test(lot.textOpodRand({ fanLot: { opod: null }, rand: { stare: 'ridicat' }, shipment: fara }))
       && lot.textOpodRand({ fanLot: { opod: false }, rand: { stare: 'propus' }, shipment: cu }) === 'oPOD' && lot.textOpodRand({ fanLot: { opod: true }, rand: null, shipment: fara }) === ''
+  },
+  // ── runda 3 pe #1135 (verdictul Jakarinos pe f4d1fd46, P2 ordinea cod → migrare); PICĂ pe f4d1fd46 ──
+  // fără coloana opod ecranul NU propune / aprobă / generează (doar citirea și acțiunile fără rezultate noi); citirea comună spune dacă coloana există
+  async opodPasiFaraColoana(M) {
+    const { fan, lot } = M
+    if (!lot.MESAJ_OPOD_NEINSTALAT_PASI) return false
+    const baza = { transportActiv: true, evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true, prima_aprobare_la: null, opod: null },
+      randuri: [{ stare: 'propus' }, { stare: 'aprobat' }, { stare: 'generat', awb: '2000000001' }], gataDePropus: 2 }
+    const fara = lot.stariPasi({ ...baza, opodInstalat: false }), nec = lot.stariPasi(baza), cu = lot.stariPasi({ ...baza, opodInstalat: true, fanLot: { ...baza.fanLot, opod: false } })
+    const k = (l, c) => l.find(x => x.cheie === c)
+    const oprit = p => !!p && p.activ === false && p.motiv === lot.MESAJ_OPOD_NEINSTALAT_PASI
+    if (!['propune', 'aproba', 'genereaza'].every(c => oprit(k(fara, c)) && oprit(k(nec, c)))) return false
+    if (!['etichete', 'curier', 'urmarire', 'confirmari'].every(c => k(fara, c).activ === true)) return false
+    if (!['propune', 'aproba', 'genereaza', 'etichete', 'curier', 'urmarire', 'confirmari'].every(c => k(cu, c).activ === true)) return false
+    const client = cuColoana => ({ from: () => ({ select: cols => ({ eq: () => ({ maybeSingle: async () => (!cuColoana && /\bopod\b/.test(cols)
+      ? { data: null, error: { code: '42703', message: 'column red_fan_loturi.opod does not exist' } } : { data: null, error: null }) }) }) }) })
+    const c1 = await fan.citesteLotFan(c => client(true).from('red_fan_loturi').select(c).eq('lot_id', 'x').maybeSingle(), 'lot_id, test, prima_aprobare_la')
+    const c0 = await fan.citesteLotFan(c => client(false).from('red_fan_loturi').select(c).eq('lot_id', 'x').maybeSingle(), 'lot_id, test, prima_aprobare_la')
+    return c1?.opodInstalat === true && c1.data === null && c0?.opodInstalat === false && c0.data === null
   },
 }
 
@@ -600,11 +619,17 @@ const MUTANTI = [
   ['opod', 'dialogul de aprobare nu spune costul oPOD', { fisier: 'fanLot.js', din: 'cost estimat suplimentar ${formatLei(costOpodEstimat(n))} (${n} × ${COST_OPOD_ESTIMAT_LEI} lei), peste transport.', in: 'cost suplimentar.' }],
   ['opod', 'ora evenimentului fără fusul României (UTC)', { fisier: 'fanLot.js', din: "{ timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })", in: "{ timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })" }],
   // runda 2 pe #1135 (0c36cdc0)
-  ['opodFaraMigrare', 'citirea lotului fără recitire la coloana lipsă (forma 0c36cdc0: 42703 = 503 pe toate acțiunile)', { fisier: 'redariFan.mjs', din: '  if (!r?.error || !lipsaColoana(r.error)) return r', in: '  return r' }],
+  ['opodFaraMigrare', 'citirea lotului fără recitire la coloana lipsă (forma 0c36cdc0: 42703 = 503 pe toate acțiunile)', { fisier: 'redariFan.mjs', din: '  if (!lipsaColoana(r.error)) return { ...r, opodInstalat: null }', in: '  return { ...r, opodInstalat: null }' }],
   ['opodFaraMigrare', 'generarea ia alegerea necitită drept „fără oPOD” (ar trimite fără coloană)', { fisier: 'redariFanTransport.mjs', din: "  if (typeof fl.data.opod !== 'boolean') return out(503, 'citire_neconfirmata', { motiv: 'alegerea oPOD a lotului nu s-a putut citi (evidența FAN fără coloana opod?)' })", in: '  if (false) return null' }],
-  ['opodFaraMigrare', 'recitirea pune opod = false în loc de null (necunoscut tratat ca „fără oPOD”)', { fisier: 'redariFan.mjs', din: '  return { ...r2, data: { ...r2.data, [COLOANA_OPOD]: null } }', in: '  return { ...r2, data: { ...r2.data, [COLOANA_OPOD]: false } }' }],
+  ['opodFaraMigrare', 'recitirea pune opod = false în loc de null (necunoscut tratat ca „fără oPOD”)', { fisier: 'redariFan.mjs', din: '  return { ...r2, data: { ...r2.data, [COLOANA_OPOD]: null }, opodInstalat: false }', in: '  return { ...r2, data: { ...r2.data, [COLOANA_OPOD]: false }, opodInstalat: false }' }],
   ['opodLegacyEcran', 'rândul trimis arată oPOD din corpul reconstruit (forma 0c36cdc0)', { fisier: 'fanLot.js', din: '  if (rand && STARI_TRIMISE_FAN.includes(rand.stare)) {', in: '  if (false) {' }],
   ['opodLegacyEcran', 'coloana lipsă pe un rând trimis = „fără oPOD” (istoricul falsificat)', { fisier: 'fanLot.js', din: '    return TEXT_OPOD_LEGACY', in: "    return ''" }],
+  // runda 3 pe #1135 (f4d1fd46): fără coloană, propunerea / aprobarea / generarea trebuie oprite în ecran
+  ['opodPasiFaraColoana', 'propunerea permisă fără coloană (forma f4d1fd46)', { fisier: 'fanLot.js', din: "    propune: [[poateScrie, 'doar admin / editor'], cuOpod, [gataDePropus > 0,", in: "    propune: [[poateScrie, 'doar admin / editor'], [gataDePropus > 0," }],
+  ['opodPasiFaraColoana', 'aprobarea permisă fără coloană (forma f4d1fd46)', { fisier: 'fanLot.js', din: "    aproba: [[esteOwner, 'doar owner-ul'], cuOpod, [!!fanLot,", in: "    aproba: [[esteOwner, 'doar owner-ul'], [!!fanLot," }],
+  ['opodPasiFaraColoana', 'generarea din ecran permisă fără coloană', { fisier: 'fanLot.js', din: "    genereaza: [[esteOwner, 'doar owner-ul'], cuOpod, [numar(randuri, ['aprobat']) > 0,", in: "    genereaza: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['aprobat']) > 0," }],
+  ['opodPasiFaraColoana', 'coloana necunoscută trece drept instalată (L18)', { fisier: 'fanLot.js', din: '  const cuOpod = [opodInstalat === true, MESAJ_OPOD_NEINSTALAT_PASI]', in: '  const cuOpod = [opodInstalat !== false, MESAJ_OPOD_NEINSTALAT_PASI]' }],
+  ['opodPasiFaraColoana', 'citirea comună nu raportează coloana lipsă pe lotul nemarcat', { fisier: 'redariFan.mjs', din: '  if (r2?.error || !r2?.data) return { ...r2, opodInstalat: false }', in: '  if (r2?.error || !r2?.data) return { ...r2, opodInstalat: true }' }],
 ]
 
 describe('mutanți FAN (JS)', () => {
@@ -680,6 +705,15 @@ describe('mutanți FAN (JS)', () => {
     const M = await incarca(null, surseOpodR1)
     let rez
     try { rez = await VERIFICARI[v](M) } catch { rez = false }
+    expect(rez).toBe(false)
+  })
+  // runda 3 pe #1135: pe head-ul revizuit în runda 2 (f4d1fd46) verificarea nouă PICĂ — fără coloană ecranul permitea propunerea / aprobarea (P2)
+  const VECHI_OPOD_R2 = 'f4d1fd463785674c50e96f57da56e42948a41dca'
+  const surseOpodR2 = surseDin(VECHI_OPOD_R2)
+  it.skipIf(!surseOpodR2)('pe f4d1fd46 verificarea nouă „opodPasiFaraColoana” PICĂ (constatarea r2 era reală)', async () => {
+    const M = await incarca(null, surseOpodR2)
+    let rez
+    try { rez = await VERIFICARI.opodPasiFaraColoana(M) } catch { rez = false }
     expect(rez).toBe(false)
   })
   // activare runda 2: procedura din documentul de la 9ceea228 (ordinea recenzentului: „Propune” înaintea marcajului) PICĂ pe codul real, cu motivul gărzii

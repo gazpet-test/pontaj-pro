@@ -45,15 +45,22 @@ export function starePropunere({ pregatite = [], randuri = [] } = {}) {
   return { dePropus, motiv }
 }
 
+// Runda 3 pe #1135 (Jakarinos r2 P2): cât coloana `opod` lipsește (migrarea 20261227a neaplicată, codul publicat înainte), ecranul NU propune, NU
+// aprobă și NU generează — doar citirea și acțiunile care nu creează rezultate noi (marcaj, urmărire, confirmări, etichete, reconciliere, ștergere).
+// Altfel o aprobare cu hash-uri „fără B” ar preceda deducerea istorică a migrării („aprobat înainte = oPOD”), iar lotul ar rămâne înghețat pe true.
+export const MESAJ_OPOD_NEINSTALAT_PASI = 'alegerea oPOD nu e instalată în evidența FAN (migrarea 20261227a neaplicată): până la aplicarea ei nu se propune, nu se aprobă și nu se generează nimic nou'
 /** Pașii cu starea lor: { ...pas, activ, motiv }. transportActiv = flag-ul din cod; evidentaInstalata = tabelul red_fan_awb citibil;
  *  proiectCod = red_proiecte.cod al lotului (garda „doar TEST”: fără el, cu DOAR_PROIECTE_TEST, nimic nu e activ).
- *  gataDePropus = numărul plicurilor DE PROPUS (starePropunere.dePropus.length), motivPropunere = motivul când e 0 (starePropunere.motiv). */
-export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, poateScrie = false, fanLot = null, randuri = [], gataDePropus = 0, motivPropunere = '', proiectCod = null } = {}) {
+ *  gataDePropus = numărul plicurilor DE PROPUS (starePropunere.dePropus.length), motivPropunere = motivul când e 0 (starePropunere.motiv).
+ *  opodInstalat = coloana red_fan_loturi.opod există (citesteLotFan.opodInstalat === true); orice altceva (lipsă, necunoscut) oprește propunerea,
+ *  aprobarea și generarea cu MESAJ_OPOD_NEINSTALAT_PASI — fără valoare implicită „instalată” (L18: necunoscut ≠ instalat). */
+export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, poateScrie = false, fanLot = null, randuri = [], gataDePropus = 0, motivPropunere = '', proiectCod = null, opodInstalat = null } = {}) {
   const cuAwb = numar(randuri, ['generat', 'ridicat'])
+  const cuOpod = [opodInstalat === true, MESAJ_OPOD_NEINSTALAT_PASI]
   const conditii = {
-    propune: [[poateScrie, 'doar admin / editor'], [gataDePropus > 0, motivPropunere || 'niciun plic cu toate datele cerute de FAN']],
-    aproba: [[esteOwner, 'doar owner-ul'], [!!fanLot, 'alege întâi: lot de TEST sau lot real'], [numar(randuri, ['propus']) > 0, 'niciun plic propus']],
-    genereaza: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['aprobat']) > 0, 'niciun plic aprobat']],
+    propune: [[poateScrie, 'doar admin / editor'], cuOpod, [gataDePropus > 0, motivPropunere || 'niciun plic cu toate datele cerute de FAN']],
+    aproba: [[esteOwner, 'doar owner-ul'], cuOpod, [!!fanLot, 'alege întâi: lot de TEST sau lot real'], [numar(randuri, ['propus']) > 0, 'niciun plic propus']],
+    genereaza: [[esteOwner, 'doar owner-ul'], cuOpod, [numar(randuri, ['aprobat']) > 0, 'niciun plic aprobat']],
     etichete: [[esteOwner, 'doar owner-ul'], [cuAwb > 0, 'niciun AWB generat']],
     curier: [[cuAwb > 0, 'niciun AWB generat']],
     urmarire: [[esteOwner, 'doar owner-ul'], [cuAwb > 0, 'niciun AWB generat']],

@@ -18,6 +18,11 @@
 //    marcaj de instalare lipsă; plus fără migrare / funcție în plus / fără marcajul runnerului / plafon greșit. Mutanți ai REVENIRII: fiecare
 //    verificare scoasă lasă scenariul ei să treacă (dovada că scenariul testează exact acea verificare).
 // 4. MUTANȚI ai migrării (cu amprentele proprii recalculate, ca autoverificarea să nu-i prindă singură): fiecare TREBUIE să pice în verificări.
+// Runda 3 (verdictul Jakarinos pe f4d1fd46, P2): trigger-ul de jurnal al aprobărilor (fn_red_fan_awb_opod_jurnal: eveniment 'opod_aprobare' la
+//    fiecare trecere în 'aprobat', pe RPC, UPDATE direct și INSERT direct; nimic la propunere / re-propunere / claim), verificat în `verificari`;
+//    revenirea refuză scenariul recenzentului (lot dedus true → aprobare nouă pe alt plic → RE-PROPUNERE → revenire) DOAR prin jurnal (nici (3), nici
+//    (4) nu-l văd); mutanții revenirii au scenarii prinse de EXACT o verificare. OPOD_SQL_DIN=<sha>: migrarea + revenirea se citesc din acel commit
+//    (git show) — dovada că scenariile noi PICĂ pe forma de dinainte (f4d1fd46).
 // Rulare (din rădăcina repo-ului; cere bash + python3 în PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_redari_fan_opod_local.mjs
 import { readFileSync, writeFileSync, existsSync, mkdtempSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
@@ -37,8 +42,11 @@ const F_MIG = 'supabase/migrations/20261227a_redari_fan_opod.sql', F_REV = 'supa
 const F_OBIECTE = 'supabase/tests/20261227a_redari_fan_opod.l15.obiecte.tsv'
 const SCHELET = citeste('supabase/tests/20261212a_redari_fan_awb_schelet.sql')
 const M12 = citeste('supabase/migrations/20261212a_redari_fan_awb.sql')
-const MIG = citeste(F_MIG)
-const REV = citeste(F_REV)
+// OPOD_SQL_DIN=<sha>: fișierele SQL ale migrării / revenirii din alt commit (proba „scenariile noi pică pe forma veche”); altfel arborele de lucru
+const dinGit = rel => execFileSync('git', ['show', `${process.env.OPOD_SQL_DIN}:${rel}`], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).replace(/\r/g, '')
+const MIG = process.env.OPOD_SQL_DIN ? dinGit(F_MIG) : citeste(F_MIG)
+const REV = process.env.OPOD_SQL_DIN ? dinGit(F_REV) : citeste(F_REV)
+if (process.env.OPOD_SQL_DIN) console.log(`ATENȚIE: migrarea și revenirea se citesc din commitul ${process.env.OPOD_SQL_DIN} (OPOD_SQL_DIN), nu din arborele de lucru`)
 const OBIECTE = existsSync(join(ROOT, F_OBIECTE)) ? citeste(F_OBIECTE) : ''
 const M26 = citeste('supabase/migrations/20261126a_redari_teren.sql')
 const NIVEL = (() => {
@@ -66,6 +74,7 @@ function corp(text, cap) {
   const start = i + a.index + a[0].length
   return text.slice(start, text.indexOf(a[1], start))
 }
+const corpSauNul = (text, cap) => { try { return corp(text, cap) } catch { return null } }
 
 let esec = 0
 const ok = (c, m) => { if (c) console.log('  OK  ' + m); else { esec++; console.log('  NU  ' + m) } }
@@ -74,10 +83,17 @@ console.log('0. amprentele + validatorul runnerului pe fișierele exacte')
 const GARDA_VECHE = md5(corp(M12, 'CREATE FUNCTION public.fn_red_fan_loturi_garda()'))
 const GARDA_NOUA = md5(corp(MIG, 'CREATE OR REPLACE FUNCTION public.fn_red_fan_loturi_garda()'))
 const OPOD_RPC = md5(corp(MIG, 'CREATE FUNCTION public.fn_red_fan_lot_opod('))
+const JURNAL_CORP = corpSauNul(MIG, 'CREATE FUNCTION public.fn_red_fan_awb_opod_jurnal()')
+const JURNAL_FN = JURNAL_CORP === null ? null : md5(JURNAL_CORP)
 const blocGarda = t => t.slice(t.indexOf('-- >>> GARDA 20261227a'), t.indexOf('-- <<< GARDA 20261227a'))
 ok(GARDA_VECHE === '1931e70c3b15a07a6ee485537f27ce93' && blocGarda(MIG).includes(`'${GARDA_VECHE}'`) && REV.includes(`'${GARDA_VECHE}'`), `garda din 20261212a: ${GARDA_VECHE} (în migrare, „inainte”, și în postcondiția revenirii)`)
 ok(blocGarda(MIG).includes(`'${GARDA_NOUA}'`) && blocGarda(REV).includes(`'${GARDA_NOUA}'`), `garda nouă: ${GARDA_NOUA} (migrare „dupa” + revenire)`)
 ok(REV.includes(`'${OPOD_RPC}'`), `fn_red_fan_lot_opod: ${OPOD_RPC} (revenirea cere exact corpul livrat)`)
+// runda 3: trigger-ul de jurnal al aprobărilor — corpul livrat e cel cerut de revenire; SECURITY DEFINER (scrie în red_jurnal din orice context)
+ok(JURNAL_FN !== null && REV.includes(`'${JURNAL_FN}'`), `fn_red_fan_awb_opod_jurnal: ${JURNAL_FN || 'LIPSĂ din migrare'} (revenirea cere exact corpul livrat)`)
+ok(/CREATE FUNCTION public\.fn_red_fan_awb_opod_jurnal\(\) RETURNS trigger\nLANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp/.test(MIG)
+  && /CREATE TRIGGER trg_red_fan_awb_opod_jurnal AFTER INSERT OR UPDATE OF stare ON public\.red_fan_awb FOR EACH ROW EXECUTE FUNCTION public\.fn_red_fan_awb_opod_jurnal\(\);/.test(MIG)
+  && /DROP TRIGGER trg_red_fan_awb_opod_jurnal ON public\.red_fan_awb;\n  DROP FUNCTION public\.fn_red_fan_awb_opod_jurnal\(\);/.test(REV), 'trigger-ul de jurnal: AFTER INSERT OR UPDATE OF stare, FOR EACH ROW, funcție DEFINER; revenirea îl scoate cu funcția lui')
 ok(corp(REV, 'CREATE OR REPLACE FUNCTION public.fn_red_fan_loturi_garda()') === corp(M12, 'CREATE FUNCTION public.fn_red_fan_loturi_garda()'), 'revenirea repune corpul EXACT al gărzii din 20261212a')
 for (const dep of [['fn_red_fan_e_owner()', '941c20690f2ae0cda77869a1d865ea69'], ['fn_red_fan_lot_marcheaza(', '7ea87499188a0c7d6a7189b017fa4805'], ['fn_red_fan_aproba(', 'e584116e292d5a307041225b2ff27fbc'],
   ['fn_red_fan_claim_lot(', '2e10d8103f144fee46ceae430eff8f6f'], ['fn_red_fan_propune(', 'fa0e624dfc9d6a354914ce1da1784b64']]) {
@@ -133,6 +149,12 @@ const LEGACY = `
   UPDATE public.red_fan_awb SET stare = 'generat', awb = '2000000005', cerere_id = gen_random_uuid(), generat_la = now(), tarif = 27.16, tva = 5.16, updated_at = now()
    WHERE plic_id = '${plicId(5)}';
   SELECT set_config('request.jwt.claim.sub', '', false);`
+// varianta cu încă un rând APROBAT (nu generat) înainte de migrare, pe lotul 4: plicul 6, propus de editor și aprobat de owner cu hash-ul „cu B”
+const LEGACY6 = `
+  SELECT set_config('request.jwt.claim.sub', '${ID.editor}', false); SELECT public.fn_red_fan_propune('${plicId(6)}', '${H('b')}', NULL);
+  SELECT set_config('request.jwt.claim.sub', '${ID.owner}', false);
+  SELECT public.fn_red_fan_aproba('${ID.lot4}', ARRAY[(SELECT id FROM public.red_fan_awb WHERE plic_id = '${plicId(6)}')], ARRAY['${H('b')}']);
+  SELECT set_config('request.jwt.claim.sub', '', false);`
 
 // ca runnerul: plafon + marcaje + (opțional) pașii L15 v2 generați. l15: 'livrare' (înainte + după cu manifest), 'inainte', 'nimic'.
 async function caRunner(db, nume, text, { plafon = PLAFON_LIVRARE, marcajPlafon = true, marcaj = true, l15 = 'inainte', aprobat = '-', manifest = '-', final = 'COMMIT' } = {}) {
@@ -171,7 +193,7 @@ const recalculeaza = t => {
 }
 // baza: schelet + fn_red_nivel + date + 20261212a aplicată; ÎNAINTE de 20261227a: lotul 2 marcat TEST, lotul 1 marcat real (fără aprobări → opod
 // implicit false), lotul 4 marcat real + aprobat + generat (istoric cu B → opod dedus true)
-async function bazaNoua({ cu12 = true, marcaj = true, legacy = true } = {}) {
+async function bazaNoua({ cu12 = true, marcaj = true, legacy = true, plic6Aprobat = false } = {}) {
   const db = new PGlite()
   await db.exec(SCHELET)
   await db.exec(NIVEL)
@@ -179,9 +201,12 @@ async function bazaNoua({ cu12 = true, marcaj = true, legacy = true } = {}) {
   if (cu12) await aplica12(db)
   if (cu12 && marcaj) await db.exec(`SELECT set_config('request.jwt.claim.sub', '${ID.owner}', false); SELECT public.fn_red_fan_lot_marcheaza('${ID.lot2}', true); SELECT public.fn_red_fan_lot_marcheaza('${ID.lot1}', false);`)
   if (cu12 && marcaj && legacy) await db.exec(LEGACY)
+  if (cu12 && marcaj && legacy && plic6Aprobat) await db.exec(LEGACY6)
   return db
 }
 const marcaje = async db => (await db.query(`SELECT id, actiune, inregistrare_id, date_vechi, date_noi FROM public.red_jurnal WHERE tabela = 'red_fan_loturi' AND date_noi ->> 'eveniment' IN ('opod_instalat', 'opod_dezinstalat') ORDER BY id`)).rows
+// runda 3: evenimentele 'opod_aprobare' scrise de trigger-ul de jurnal (tabela red_fan_awb), în ordinea scrierii
+const jurnalAprobari = async db => (await db.query(`SELECT id, actiune, inregistrare_id, date_vechi, date_noi, user_id FROM public.red_jurnal WHERE tabela = 'red_fan_awb' AND date_noi ->> 'eveniment' = 'opod_aprobare' ORDER BY id`)).rows
 // apel ca rolul authenticated cu JWT-ul contului (uid null = anonim → rolul anon)
 async function ca(db, uid, sql, params = []) {
   await db.exec(`RESET ROLE; SELECT set_config('request.jwt.claim.sub', '${uid || ''}', false);`)
@@ -242,7 +267,14 @@ async function verificari(db, log, fail = [], { nLoturi = 3 } = {}) {
   const r4 = (await propune(ID.editor, 4, H('a'))).rows[0].id
   ok(await cod(opod(ID.owner, ID.lot2, false)) === 'OK' && (await rand(ID.lot2)).opod === false, 'cu un plic DOAR propus (neaprobat) alegerea încă se schimbă (false)')
   ok(await cod(opod(ID.owner, ID.lot2, true)) === 'OK', '… și înapoi (true) — hash-urile propuse cu altă alegere se re-propun în ecran')
+  // runda 3: până la prima aprobare de după aplicare, niciun eveniment 'opod_aprobare' (aprobarea legacy a lotului 4 a fost înaintea trigger-ului)
+  ok((await jurnalAprobari(db)).length === 0, 'înainte de prima aprobare de după aplicare: niciun eveniment opod_aprobare (propunerea nu scrie; aprobarea legacy a fost înaintea trigger-ului)')
   ok(await cod(ca(db, ID.owner, 'SELECT public.fn_red_fan_aproba($1, $2, $3)', [ID.lot2, [r4], [H('a')]])) === 'OK' && (await rand(ID.lot2)).prima_aprobare_la !== null, 'owner: lotul 2 aprobat (prima aprobare consemnată)')
+  // runda 3: aprobarea prin RPC = EXACT un eveniment 'opod_aprobare' cu rândul, lotul, alegerea oPOD a lotului în acel moment (true), hash-ul aprobat, autorul
+  const ja = await jurnalAprobari(db)
+  ok(ja.length === 1 && ja[0].inregistrare_id === r4 && ja[0].actiune === 'update' && ja[0].user_id === ID.owner && JSON.stringify(ja[0].date_vechi) === '{"stare":"propus"}'
+    && ja[0].date_noi.lot_id === ID.lot2 && ja[0].date_noi.opod === true && ja[0].date_noi.hash_date === H('a') && typeof ja[0].date_noi.la === 'string',
+    'aprobarea prin RPC scrie în red_jurnal evenimentul opod_aprobare (rândul, lotul, opod = true la aprobare, hash-ul, autorul = auth.uid()): ' + JSON.stringify(ja[0]?.date_noi))
   const nJ = (await jurnalOpod(db)).length
   ok(await cod(opod(ID.owner, ID.lot2, false)) === 'P0001' && (await rand(ID.lot2)).opod === true, 'DUPĂ prima aprobare: schimbarea oPOD refuzată prin RPC (P0001), valoarea rămâne cea aprobată')
   ok(await cod(opod(ID.owner, ID.lot2, true)) === 'OK' && (await jurnalOpod(db)).length === nJ, 'aceeași valoare după aprobare = no-op (nimic în jurnal)')
@@ -252,12 +284,31 @@ async function verificari(db, log, fail = [], { nLoturi = 3 } = {}) {
   ok(await cod(db.query(`DELETE FROM public.red_fan_loturi WHERE lot_id = $1`, [ID.lot2])) === '42501', 'marcajul nu se șterge (trigger, neschimbat)')
   // re-propunerea readuce rândul la „propus”, dar prima aprobare e istorică → tot refuz
   ok(await cod(propune(ID.editor, 4, H('a'))) === 'OK' && (await val(db, 'SELECT stare FROM public.red_fan_awb WHERE id = $1', [r4])).stare === 'propus', 're-propunere: rândul redevine propus')
+  // runda 3: re-propunerea șterge aprobat_la, dar evenimentul rămâne (jurnal append-only) — dovada durabilă pe care o citește revenirea
+  ok((await val(db, 'SELECT aprobat_la FROM public.red_fan_awb WHERE id = $1', [r4])).aprobat_la === null && (await jurnalAprobari(db)).length === 1,
+    're-propunerea șterge aprobat_la de pe rând, dar NU scrie și nu șterge evenimente: opod_aprobare rămâne 1 (dovada durabilă a aprobării)')
   ok(await cod(opod(ID.owner, ID.lot2, false)) === 'P0001', 'după re-propunere: alegerea oPOD rămâne blocată (prima aprobare e istorică)')
   // lotul 1 (REAL, neaprobat): oPOD se poate cere și pe un lot real
   ok(await cod(opod(ID.owner, ID.lot1, true)) === 'OK' && (await rand(ID.lot1)).opod === true, 'lot real neaprobat: oPOD cerut (alegerea e a owner-ului, nu a marcajului)')
   ok(await cod(opod(ID.owner, ID.lot1, false)) === 'OK', 'lot real: renunțare (înapoi la implicit)')
   // tirajul și restul coloanelor nu sunt în gardă (ca înainte): un UPDATE pe tiraj_* după aprobare trece prin CHECK-urile lui, nu prin gardă
   ok(await cod(db.query(`UPDATE public.red_fan_loturi SET tiraj_cheie = $2, tiraj_nr = 1, tiraj_la = now(), tiraj_de = $3 WHERE lot_id = $1`, [ID.lot2, H('1'), ID.owner])) === 'OK', 'tirajul nu e acoperit de gardă (neschimbat față de 20261212a)')
+  // ── runda 3: jurnalul aprobărilor pe ORICE cale (L07): UPDATE direct ca postgres (fără JWT → autor NULL) și INSERT direct al unui rând deja aprobat;
+  //    claim-ul (aprobat → in_curs) nu scrie; nimic la re-propunere (mai sus) ──
+  await db.exec(`RESET ROLE; SELECT set_config('request.jwt.claim.sub', '', false);`)
+  ok(await cod(db.query(`UPDATE public.red_fan_awb SET stare = 'aprobat', aprobat_de = $2, aprobat_la = now(), updated_at = now() WHERE id = $1`, [r4, ID.owner])) === 'OK'
+    && (await jurnalAprobari(db)).length === 2 && (await jurnalAprobari(db))[1].user_id === null && (await jurnalAprobari(db))[1].date_noi.lot_id === ID.lot2,
+    'UPDATE direct ca postgres (mentenanță, fără JWT) → eveniment opod_aprobare cu autor NULL (orice cale, L07)')
+  const surse4 = (await val(db, 'SELECT public.fn_red_fan_surse($1) AS s', [plicId(4)])).s
+  ok(await cod(ca(db, ID.owner, 'SELECT public.fn_red_fan_claim_lot($1, $2, $3, $4)', [ID.lot2, [r4], [H('a')], [surse4]])) === 'OK' && (await jurnalAprobari(db)).length === 2,
+    'claim-ul (aprobat → in_curs) nu scrie eveniment: doar trecerile ÎN aprobat')
+  ok(await cod(db.query(`INSERT INTO public.red_fan_awb (proiect_id, lot_id, plic_id, nr_plic, hash_date, stare, propus_de, aprobat_de, aprobat_la)
+      VALUES ($1, $2, $3, 'PL-TST-0002', $4, 'aprobat', $5, $5, now())`, [ID.proiect, ID.lot1, plicId(2), H('d'), ID.owner])) === 'OK'
+    && (await jurnalAprobari(db)).length === 3 && (await jurnalAprobari(db))[2].actiune === 'insert' && (await jurnalAprobari(db))[2].date_vechi === null
+    && (await jurnalAprobari(db))[2].date_noi.lot_id === ID.lot1 && (await jurnalAprobari(db))[2].date_noi.opod === false && (await jurnalAprobari(db))[2].date_noi.hash_date === H('d'),
+    'INSERT direct al unui rând deja aprobat (lotul 1, opod false) → eveniment opod_aprobare (actiune insert, fără date_vechi, opod = false)')
+  ok(await cod(db.query(`UPDATE public.red_jurnal SET date_noi = '{}'::jsonb WHERE tabela = 'red_fan_awb'`)) === '42501' && await cod(db.query(`DELETE FROM public.red_jurnal WHERE tabela = 'red_fan_awb'`)) === '42501',
+    'evenimentele nu se pot rescrie / șterge (red_jurnal append-only, trigger-ul din 20261126a)')
   return fail
 }
 
@@ -294,7 +345,7 @@ console.log('1. aplicarea ca la livrare (peste 20261212a; L15 v2: manifest gener
   ok(/istoric opod_schimbat/.test(m || ''), 'revenirea refuză pe baza folosită (owner-ul a ales oPOD: istoric în jurnal): ' + m)
   ok((await val(db, `SELECT to_regprocedure('public.fn_red_fan_lot_opod(uuid, boolean)') IS NOT NULL AS e`)).e === true, 'după refuz, funcția există încă (tranzacția s-a anulat)')
   ok((await marcaje(db)).length === 1, 'refuzul revenirii nu lasă marcaj opod_dezinstalat (tranzacția s-a anulat)')
-  // revenirea lui 20261212a e blocată cât 20261227a e aplicată (20 de funcții, nu 19)
+  // revenirea lui 20261212a e blocată cât 20261227a e aplicată (21 de funcții, nu 19)
   const REV12 = citeste('supabase/revenire/20261212a_redari_fan_awb_ROLLBACK.sql')
   m = await eroare(caRunner(db, '20261212a_redari_fan_awb_ROLLBACK', REV12, { l15: 'nimic', plafon: 2000 }))
   ok(/functii: .*fn_red_fan_lot_opod/.test(m || ''), 'revenirea lui 20261212a refuză cât 20261227a e aplicată (funcția în plus): ' + (m || '').slice(0, 120))
@@ -302,7 +353,7 @@ console.log('1. aplicarea ca la livrare (peste 20261212a; L15 v2: manifest gener
 }
 
 console.log('2. refuzurile migrării (nimic schimbat)')
-const LOCK_EXIT = '      LOCK TABLE public.red_fan_loturi IN ACCESS EXCLUSIVE MODE NOWAIT;\n      LOCK TABLE public.red_fan_awb IN SHARE MODE NOWAIT;\n      EXIT;\n'
+const LOCK_EXIT = '      LOCK TABLE public.red_fan_loturi IN ACCESS EXCLUSIVE MODE NOWAIT;\n      LOCK TABLE public.red_fan_awb IN SHARE ROW EXCLUSIVE MODE NOWAIT;\n      EXIT;\n'
 for (const [nume, fn, re, baza] of [
   ['fără marcajul runnerului', db => aplicaMig(db, MIG, { marcaj: false }), /garda start invalida/],
   ['fără plafon', db => aplicaMig(db, MIG, { plafon: 0, marcajPlafon: false }), /PLAFON_TRANZACTIE lipsa/],
@@ -330,6 +381,15 @@ for (const [nume, fn, re, baza] of [
     await db.exec(`INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_noi) VALUES ('red_fan_loturi', NULL, 'insert', '{"eveniment":"opod_instalat","la":"2026-11-18T10:00:00+00:00","loturi_opod":[]}');`)
     return aplicaMig(db)
   }, /marcajele de instalare .* nu sunt echilibrate/],
+  // runda 3: evenimentele de aprobare le scrie doar trigger-ul migrării, iar revenirea nu trece cu ele → la aplicare nu pot exista
+  ['istoric opod_aprobare deja în jurnal (aplicare fără revenire)', async db => {
+    await db.exec(`INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_noi) VALUES ('red_fan_awb', '${plicId(5)}', 'update', '{"eveniment":"opod_aprobare","lot_id":"${ID.lot4}","opod":true}');`)
+    return aplicaMig(db)
+  }, /are deja evenimente opod_aprobare/],
+  ['un trigger străin pe red_fan_awb (baza nu e 20261212a)', async db => {
+    await db.exec(`CREATE FUNCTION public.fn_alt_trigger() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NULL; END $f$; CREATE TRIGGER trg_alt AFTER UPDATE ON public.red_fan_awb FOR EACH ROW EXECUTE FUNCTION public.fn_alt_trigger();`)
+    return aplicaMig(db)
+  }, /red_fan_awb are deja un trigger al aplicatiei/],
   ['coloana red_fan_awb.updated_at lipsă (citită de revenire)', async db => { await db.exec('ALTER TABLE public.red_fan_awb DROP COLUMN updated_at'); return aplicaMig(db) }, /red_fan_awb\.updated_at lipseste/],
   ['coloana prima_aprobare_la lipsă', async db => { await db.exec('ALTER TABLE public.red_fan_loturi DROP COLUMN prima_aprobare_la'); return aplicaMig(db) }, /red_fan_loturi\.prima_aprobare_la lipseste/],
   ['lock ocupat permanent', db => aplicaMig(db, aplica(MIG, [[LOCK_EXIT, "      RAISE EXCEPTION 'coliziune simulata' USING ERRCODE = '55P03';\n" + LOCK_EXIT]])), /BUGET_LOCK: \d+ incercari, \d+ ms de la prima incercare/],
@@ -340,7 +400,8 @@ for (const [nume, fn, re, baza] of [
     /BUGET_LOCK: \d+ incercari, \d+ ms de la prima incercare/],
 ]) {
   const db = await bazaNoua(baza || {})
-  const m = await eroare(fn(db))
+  // (fn poate arunca sincron — ex. un mutant care nu găsește textul pe fișierele altui commit, OPOD_SQL_DIN — tot ca „picat”, nu ca oprire a probei)
+  const m = await eroare((async () => fn(db))())
   const gol = (await val(db, `SELECT NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'red_fan_loturi' AND column_name = 'opod')
     AND to_regprocedure('public.fn_red_fan_lot_opod(uuid, boolean)') IS NULL AS g`)).g
   ok(m && re.test(m) && gol, `${nume}: ${m ? m.slice(0, 150) : 'A TRECUT'}`)
@@ -374,7 +435,7 @@ console.log('1b. CURSA din verdictul r1: schimbarea alegerii înaintea unei apro
 }
 
 console.log('3. revenirea (prin runner, plafonul 2000, fără amprentă globală)')
-const aplicatCurat = async () => { const db = await bazaNoua(); await aplicaMig(db); return db }
+const aplicatCurat = async (o = {}) => { const db = await bazaNoua(o); await aplicaMig(db); return db }
 const cere = (db, lot, v) => db.exec(`RESET ROLE; SELECT set_config('request.jwt.claim.sub', '${ID.owner}', false); SELECT public.fn_red_fan_lot_opod('${lot}', ${v});`)
 const caSql = (uid, sql) => `RESET ROLE; SELECT set_config('request.jwt.claim.sub', '${uid}', false); ${sql}`
 // folosirea de DUPĂ aplicare: lotul 2 (implicit false) propus + aprobat; plicul 6 propus + aprobat pe lotul 4 (dedus true)
@@ -382,17 +443,39 @@ const aprobaLot2 = db => db.exec(caSql(ID.editor, `SELECT public.fn_red_fan_prop
   + caSql(ID.owner, `SELECT public.fn_red_fan_aproba('${ID.lot2}', ARRAY[(SELECT id FROM public.red_fan_awb WHERE plic_id = '${plicId(4)}')], ARRAY['${H('a')}']);`))
 const aprobaPlic6 = db => db.exec(caSql(ID.editor, `SELECT public.fn_red_fan_propune('${plicId(6)}', '${H('b')}', NULL);`)
   + caSql(ID.owner, `SELECT public.fn_red_fan_aproba('${ID.lot4}', ARRAY[(SELECT id FROM public.red_fan_awb WHERE plic_id = '${plicId(6)}')], ARRAY['${H('b')}']);`))
+// SCENARIUL RECENZENTULUI (Jakarinos #1135 r2 P2): lotul 4 (dedus true, în lista marcajului) → aprobare NOUĂ pe plicul 6 → RE-PROPUNERE (fn_red_fan_propune
+// șterge aprobat_la, rândul redevine „propus”) → revenire. Nici (3) (lotul e în listă), nici (4) (aprobat_la = NULL, stare „propus”) nu văd nimic;
+// DOAR evenimentul 'opod_aprobare' scris de trigger la aprobare (durabil) o oprește. Pe f4d1fd46 revenirea trecea.
+const repropunePlic6 = async db => { await aprobaPlic6(db); await db.exec(caSql(ID.editor, `SELECT public.fn_red_fan_propune('${plicId(6)}', '${H('c')}', NULL);`)) }
+// același tipar pe calea directă: rând INSERAT ca aprobat (mentenanță, postgres), apoi re-propus prin RPC — tot doar jurnalul îl vede
+const insereazaAprobatRepropus = async db => {
+  await db.exec(`RESET ROLE; SELECT set_config('request.jwt.claim.sub', '', false);
+    INSERT INTO public.red_fan_awb (proiect_id, lot_id, plic_id, nr_plic, hash_date, stare, propus_de, aprobat_de, aprobat_la)
+      VALUES ('${ID.proiect}', '${ID.lot4}', '${plicId(6)}', 'PL-TST-0006', '${H('b')}', 'aprobat', '${ID.owner}', '${ID.owner}', now() - interval '1 hour');`)
+  await db.exec(caSql(ID.editor, `SELECT public.fn_red_fan_propune('${plicId(6)}', '${H('c')}', NULL);`))
+}
 // fereastra reziduală din antetul migrării: un RPC de aprobare pornit ÎNAINTE de BEGIN-ul migrării și comis DUPĂ (now() mai vechi decât marcajul) —
-// simulat prin retrodatarea aprobării (trigger-ul gărzii dezactivat doar pentru fixture; în producție prima_aprobare_la e imuabilă)
-const aprobaLot2Retro = async db => {
-  await aprobaLot2(db)
-  await db.exec(`RESET ROLE; ALTER TABLE public.red_fan_loturi DISABLE TRIGGER trg_red_fan_loturi_garda;
+// simulat prin retrodatarea aprobării (trigger-ul gărzii dezactivat doar pentru fixture; în producție prima_aprobare_la e imuabilă); evenimentul de
+// jurnal rămâne (în producție trigger-ul există când UPDATE-ul lui rulează) → revenirea o prinde pe conținut (3) ȘI prin jurnal (6)
+const retrodateaza = db => db.exec(`RESET ROLE; ALTER TABLE public.red_fan_loturi DISABLE TRIGGER trg_red_fan_loturi_garda;
     UPDATE public.red_fan_loturi SET prima_aprobare_la = now() - interval '1 hour' WHERE lot_id = '${ID.lot2}';
     UPDATE public.red_fan_awb SET aprobat_la = now() - interval '1 hour', updated_at = now() - interval '1 hour' WHERE lot_id = '${ID.lot2}';
     ALTER TABLE public.red_fan_loturi ENABLE TRIGGER trg_red_fan_loturi_garda;`)
+const aprobaLot2Retro = async db => { await aprobaLot2(db); await retrodateaza(db) }
+// apărarea în adâncime a lui (3): aceeași aprobare retrodatată, dar cu trigger-ul de jurnal DEZACTIVAT (mentenanță) → fără eveniment; DOAR (3) o vede
+const aprobaLot2RetroFaraJurnal = async db => {
+  await db.exec('RESET ROLE; ALTER TABLE public.red_fan_awb DISABLE TRIGGER trg_red_fan_awb_opod_jurnal;')
+  await aprobaLot2(db)
+  await db.exec('RESET ROLE; ALTER TABLE public.red_fan_awb ENABLE TRIGGER trg_red_fan_awb_opod_jurnal;')
+  await retrodateaza(db)
 }
+// apărarea în adâncime a lui (4): rândul plicului 6 APROBAT ÎNAINTE de aplicare (baza cu plic6Aprobat) e GENERAT după aplicare (claim + rezultat
+// simulate pe calea proprietarului): nicio trecere nouă în 'aprobat' → fără eveniment; lotul 4 e în listă → DOAR (4) (generat_la ≥ marcaj) o vede
+const genereazaPlic6 = db => db.exec(`RESET ROLE; UPDATE public.red_fan_awb SET stare = 'generat', awb = '2000000006', cerere_id = gen_random_uuid(), generat_la = now(), updated_at = now()
+   WHERE plic_id = '${plicId(6)}';`)
 const trueFaraJurnal = db => db.exec(`RESET ROLE; UPDATE public.red_fan_loturi SET opod = true WHERE lot_id = '${ID.lot2}';`)
 const faraMarcaj = db => db.exec(`RESET ROLE; ALTER TABLE public.red_jurnal DISABLE TRIGGER trg_red_jurnal_imuabil; DELETE FROM public.red_jurnal WHERE date_noi ->> 'eveniment' = 'opod_instalat'; ALTER TABLE public.red_jurnal ENABLE TRIGGER trg_red_jurnal_imuabil;`)
+const RE_JURNAL = /\d+ aprobare\(i\) FAN dupa aplicarea migrarii \(jurnal opod_aprobare/
 const SCENARII_REFUZ = [
   ['migrarea neaplicată', async () => {}, /starea nu e cea din 20261227a \(pasul 1, coloana opod\)/, { marcaj: true, fara27: true }],
   ['oPOD ales de owner pe un lot (jurnal opod_schimbat)', db => cere(db, ID.lot2, true), /istoric opod_schimbat/],
@@ -400,17 +483,25 @@ const SCENARII_REFUZ = [
   // L14 (Jakarinos #1135 r1 P2): lot NOU, cu implicitul false, aprobat după aplicare — nicio activare, niciun opod_schimbat, dar o decizie luată cu coloana
   ['lot nou cu implicitul false, propus + APROBAT după aplicare (fără opod_schimbat)', aprobaLot2, /1 lot\(uri\) aprobat\(e\) dupa aplicarea migrarii \(cu alegerea oPOD din coloana, implicit false\)/],
   ['aprobare „în zbor” comisă după aplicare cu now() dinaintea ei (fereastra reziduală): prinsă pe CONȚINUT, nu pe timp', aprobaLot2Retro, /1 lot\(uri\) aprobat\(e\) dupa aplicarea migrarii/],
+  ['aprobare retrodatată cu trigger-ul de jurnal dezactivat (mentenanță): tot prinsă, pe conținut', aprobaLot2RetroFaraJurnal, /1 lot\(uri\) aprobat\(e\) dupa aplicarea migrarii/],
   ['rând nou aprobat după aplicare pe lotul dedus true (lotul vechi folosit din nou)', aprobaPlic6, /1 rand\(uri\) FAN aprobat\(e\) \/ rezervat\(e\) \/ generat\(e\) dupa aplicarea migrarii/],
+  ['rând aprobat ÎNAINTE de aplicare pe lotul dedus true, GENERAT după (fără aprobare nouă)', genereazaPlic6, /1 rand\(uri\) FAN aprobat\(e\) \/ rezervat\(e\) \/ generat\(e\) dupa aplicarea migrarii/, { plic6Aprobat: true }],
+  // runda 3 — scenariul recenzentului: lotul vechi → aprobare nouă → re-propunere (aprobat_la șters) → DOAR jurnalul o vede (pe f4d1fd46 TRECEA)
+  ['RECENZENT r2: lot dedus true → aprobare nouă pe alt plic → RE-PROPUNERE → revenire = refuz (jurnal opod_aprobare)', repropunePlic6, RE_JURNAL],
+  ['rând inserat direct ca aprobat (mentenanță), apoi re-propus: tot jurnalul îl vede', insereazaAprobatRepropus, RE_JURNAL],
   ['opod = true fără jurnal (calea directă a proprietarului tabelului, lot neaprobat)', trueFaraJurnal, /loturile cu opod = true difera de lista dedusa la aplicare/],
   ['marcajul de instalare lipsă (jurnalul golit cu trigger-ul dezactivat)', faraMarcaj, /marcajul de instalare \(opod_instalat\) lipseste sau e dezechilibrat/],
-  ['o funcție fn_red_fan_* în plus', db => db.exec(`CREATE FUNCTION public.fn_red_fan_alta() RETURNS int LANGUAGE sql AS $f$ SELECT 1 $f$;`), /numarul functiilor fn_red_fan_\* difera de 20/],
+  ['o funcție fn_red_fan_* în plus', db => db.exec(`CREATE FUNCTION public.fn_red_fan_alta() RETURNS int LANGUAGE sql AS $f$ SELECT 1 $f$;`), /numarul functiilor fn_red_fan_\* difera de 21/],
   ['garda schimbată după aplicare', db => db.exec(`CREATE OR REPLACE FUNCTION public.fn_red_fan_loturi_garda() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$ BEGIN RETURN NEW; END $f$;`),
     /starea nu e cea din 20261227a \(pasul 1, functii: public\.fn_red_fan_loturi_garda\(\)\)/],
+  ['trigger-ul de jurnal dezactivat / scos (starea nu e cea livrată)', db => db.exec('ALTER TABLE public.red_fan_awb DISABLE TRIGGER trg_red_fan_awb_opod_jurnal;'), /trigger-ul de jurnal pe red_fan_awb/],
+  ['încă un trigger pe red_fan_awb (altă stare decât cea livrată)', db => db.exec(`CREATE TRIGGER trg_alt AFTER UPDATE ON public.red_fan_awb FOR EACH ROW EXECUTE FUNCTION public.fn_red_fan_awb_opod_jurnal();`), /trigger-ul de jurnal pe red_fan_awb/],
   ['o vedere peste coloana opod', db => db.exec(`CREATE VIEW public.v_fan_opod AS SELECT lot_id, opod FROM public.red_fan_loturi;`), /alte obiecte depind/],
 ]
 for (const [nume, pregateste, re, baza] of SCENARII_REFUZ) {
-  const db = baza?.fara27 ? await bazaNoua() : await aplicatCurat()
-  await pregateste(db)
+  const db = baza?.fara27 ? await bazaNoua() : await aplicatCurat(baza || {})
+  const ef = await eroare((async () => pregateste(db))())   // fixture-ul picat (ex. trigger inexistent pe fișierele altui commit) = verificare picată, nu oprire
+  if (ef !== null) { ok(false, `revenirea refuză: ${nume}: fixture-ul scenariului a picat: ${ef.slice(0, 120)}`); await db.close(); continue }
   const inainte = (await marcaje(db)).length
   const m = await eroare(revino(db))
   const neschimbat = baza?.fara27 ? (await val(db, `SELECT to_regprocedure('public.fn_red_fan_lot_opod(uuid, boolean)') IS NULL AS e`)).e
@@ -419,16 +510,18 @@ for (const [nume, pregateste, re, baza] of SCENARII_REFUZ) {
   await db.close()
 }
 // MUTANȚI ai revenirii: cu verificarea scoasă, scenariul ei TRECE (= scenariul testează exact acea verificare, nu alta); pe revenirea reală refuză (mai sus)
-for (const [nume, din, scenariu] of [
-  // (aprobarea obișnuită după aplicare e prinsă ȘI de verificarea pe timp; cea retrodatată DOAR de cea pe conținut → ea deosebește mutantul)
-  ['fără verificarea „lot aprobat după aplicare” (conținut)', "RAISE EXCEPTION '20261227a revenire: % lot(uri) aprobat(e) dupa aplicarea migrarii (cu alegerea oPOD din coloana, implicit false) - refuz', v_n;", aprobaLot2Retro],
-  ['fără verificarea „rânduri FAN după aplicare”', "RAISE EXCEPTION '20261227a revenire: % rand(uri) FAN aprobat(e) / rezervat(e) / generat(e) dupa aplicarea migrarii (%) - refuz', v_n, v_la;", aprobaPlic6],
+for (const [nume, din, scenariu, baza] of [
+  // (aprobarea obișnuită după aplicare e prinsă ȘI de verificarea pe timp ȘI de jurnal; cea retrodatată fără eveniment DOAR de cea pe conținut)
+  ['fără verificarea „lot aprobat după aplicare” (conținut)', "RAISE EXCEPTION '20261227a revenire: % lot(uri) aprobat(e) dupa aplicarea migrarii (cu alegerea oPOD din coloana, implicit false) - refuz', v_n;", aprobaLot2RetroFaraJurnal],
+  // (generarea unui rând aprobat înainte de aplicare: fără eveniment, lotul în listă → DOAR verificarea pe timp)
+  ['fără verificarea „rânduri FAN după aplicare”', "RAISE EXCEPTION '20261227a revenire: % rand(uri) FAN aprobat(e) / rezervat(e) / generat(e) dupa aplicarea migrarii (%) - refuz', v_n, v_la;", genereazaPlic6, { plic6Aprobat: true }],
   ['fără verificarea „lista dedusă”', "RAISE EXCEPTION '20261227a revenire: loturile cu opod = true difera de lista dedusa la aplicare (marcaj #%) - refuz', v_marcaj.id;", trueFaraJurnal],
   ['fără verificarea „opod_schimbat”', "RAISE EXCEPTION '20261227a revenire: red_jurnal are istoric opod_schimbat (alegeri ale owner-ului dupa aplicare) - refuz (jurnalul nu se sterge)';", async db => { await cere(db, ID.lot2, true); await cere(db, ID.lot2, false) }],
+  // runda 3: scenariul recenzentului e prins DOAR de jurnal
+  ['fără verificarea „jurnal opod_aprobare”', "RAISE EXCEPTION '20261227a revenire: % aprobare(i) FAN dupa aplicarea migrarii (jurnal opod_aprobare: randuri aprobate cu alegerea oPOD din coloana, chiar daca re-propuse / anulate intre timp) - refuz (jurnalul nu se sterge)', v_n;", repropunePlic6],
 ]) {
-  const db = await aplicatCurat()
-  await scenariu(db)
-  const m = await eroare(revino(db, aplica(REV, [[din, 'NULL;']])))
+  const db = await aplicatCurat(baza || {})
+  const m = await eroare((async () => { await scenariu(db); return revino(db, aplica(REV, [[din, 'NULL;']])) })())
   ok(m === null, `mutantul revenirii „${nume}” lasă scenariul lui să treacă (deci scenariul testează exact verificarea)${m ? ': ' + m.slice(0, 120) : ''}`)
   await db.close()
 }
@@ -448,8 +541,13 @@ for (const [nume, o, re] of [['fără marcajul runnerului', { marcaj: false }, /
     'revenirea pe aplicarea NEFOLOSITĂ trece, chiar cu lotul dedus true și cu un lot marcat (neaprobat) după: ' + (j.find(m => /revenire: sfarsit/.test(m)) || 'LIPSĂ'))
   const dupa = await val(db, `SELECT (SELECT count(*)::int FROM pg_proc WHERE proname LIKE 'fn_red_fan_%') AS n,
     (SELECT md5(replace(prosrc, chr(13), '')) FROM pg_proc WHERE oid = to_regprocedure('public.fn_red_fan_loturi_garda()')) AS g,
-    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'red_fan_loturi' AND column_name = 'opod') AS col`)
-  ok(dupa.n === 19 && dupa.g === GARDA_VECHE && dupa.col === false, 'după revenire: 19 funcții, garda cu corpul 20261212a, coloana scoasă')
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'red_fan_loturi' AND column_name = 'opod') AS col,
+    (SELECT count(*)::int FROM pg_trigger WHERE tgrelid = 'public.red_fan_awb'::regclass AND NOT tgisinternal) AS trg`)
+  ok(dupa.n === 19 && dupa.g === GARDA_VECHE && dupa.col === false && dupa.trg === 0, 'după revenire: 19 funcții, garda cu corpul 20261212a, coloana scoasă, niciun trigger pe red_fan_awb')
+  // runda 3: după revenire o aprobare nu mai scrie eveniment (trigger-ul e scos), iar re-aplicarea nu găsește evenimente
+  await db.exec(caSql(ID.editor, `SELECT public.fn_red_fan_propune('${plicId(6)}', '${H('b')}', NULL);`)
+    + caSql(ID.owner, `SELECT public.fn_red_fan_aproba('${ID.lot4}', ARRAY[(SELECT id FROM public.red_fan_awb WHERE plic_id = '${plicId(6)}')], ARRAY['${H('b')}']);`) + 'RESET ROLE;')
+  ok((await jurnalAprobari(db)).length === 0, 'după revenire, o aprobare (codul 20261212a) nu scrie opod_aprobare: trigger-ul nu mai există')
   const mk = await marcaje(db)
   ok(mk.length === 2 && mk[1].date_noi.eveniment === 'opod_dezinstalat' && mk[1].actiune === 'delete' && JSON.stringify(mk[1].date_vechi) === JSON.stringify(mk[0].date_noi)
     && mk[1].date_noi.marcaj_instalat === Number(mk[0].id) && mk[1].date_noi.loturi_marcate_dupa === 1,
@@ -462,6 +560,7 @@ for (const [nume, o, re] of [['fără marcajul runnerului', { marcaj: false }, /
   const mk2 = await marcaje(db)
   ok(mk2.length === 3 && mk2[2].date_noi.eveniment === 'opod_instalat' && JSON.stringify(mk2[2].date_noi.loturi_opod) === JSON.stringify([ID.lot4]) && mk2[2].date_noi.n_loturi === 4,
     'după re-aplicare: al treilea marcaj (instalat), aceeași deducere (lot4), 4 loturi marcate acum (lotul 5 marcat între cicluri)')
+  // (rândul plicului 6, aprobat între cicluri sub codul 20261212a, e dată PREEXISTENTĂ pentru noua aplicare: lotul 4 rămâne dedus true, fără eveniment)
   const f = await verificari(db, false, [], { nLoturi: 4 })
   ok(f.length === 0, `comportamentul identic după re-aplicare (${f.length} abateri${f[0] ? ': ' + f[0] : ''})`)
   await db.close()
@@ -486,6 +585,13 @@ const MUTANTI = [
   ['deducerea inversată (loturile fără aprobare = true)', '   WHERE l.prima_aprobare_la IS NOT NULL\n      OR EXISTS', '   WHERE l.prima_aprobare_la IS NULL\n      AND NOT EXISTS'],
   ['marcajul de instalare fără lista loturilor deduse', "'loturi_opod', (SELECT coalesce(jsonb_agg(lot_id ORDER BY lot_id), '[]'::jsonb) FROM public.red_fan_loturi WHERE opod),", "'loturi_opod', '[]'::jsonb,"],
   ['marcajul de instalare scris sub alt nume (revenirea nu l-ar găsi)', "jsonb_build_object('eveniment', 'opod_instalat', 'migrare'", "jsonb_build_object('eveniment', 'opod_pus', 'migrare'"],
+  // runda 3: jurnalul aprobărilor (dovada durabilă citită de revenire) — fiecare slăbire e prinsă de verificările pe eveniment
+  ['fără trigger-ul de jurnal al aprobărilor (forma f4d1fd46: aprobarea nu lasă urmă durabilă)', 'CREATE TRIGGER trg_red_fan_awb_opod_jurnal AFTER INSERT OR UPDATE OF stare ON public.red_fan_awb FOR EACH ROW EXECUTE FUNCTION public.fn_red_fan_awb_opod_jurnal();', ''],
+  ['trigger-ul doar la UPDATE (rândul inserat direct ca aprobat scapă)', 'CREATE TRIGGER trg_red_fan_awb_opod_jurnal AFTER INSERT OR UPDATE OF stare ON public.red_fan_awb', 'CREATE TRIGGER trg_red_fan_awb_opod_jurnal AFTER UPDATE OF stare ON public.red_fan_awb'],
+  ['evenimentul de aprobare sub alt nume (revenirea nu l-ar găsi)', "jsonb_build_object('eveniment', 'opod_aprobare', 'lot_id'", "jsonb_build_object('eveniment', 'aprobare_fan', 'lot_id'"],
+  ['evenimentul de aprobare fără autor', "'hash_date', NEW.hash_date, 'la', now()), auth.uid());", "'hash_date', NEW.hash_date, 'la', now()), NULL);"],
+  ['evenimentul de aprobare fără alegerea oPOD a lotului', "'opod', v_opod, 'hash_date'", "'opod', NULL, 'hash_date'"],
+  ['evenimentul scris la orice schimbare de stare (și la re-propunere / claim)', "  IF NEW.stare = 'aprobat' AND (TG_OP = 'INSERT' OR OLD.stare IS DISTINCT FROM 'aprobat') THEN", '  IF true THEN'],
 ]
 // mutanții trebuie prinși de VERIFICĂRI (comportament), nu doar de postcondițiile proprii ale migrării: postcondițiile se scot din textul mutat
 const faraPost = t => { const a = t.indexOf('-- ── postcondiții ──'), b = t.indexOf('END $post$;') + 'END $post$;'.length; if (a < 0 || b < a) throw new Error('postcondițiile lipsesc'); return t.slice(0, a) + t.slice(b) }
