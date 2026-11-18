@@ -239,7 +239,10 @@ async function verificari(db, log, fail = []) {
   const c5 = await cmd(ID.editor, ID.L1, K(5), pl([1, 2, 3, 4, 5, 6]))
   ok(c5.de_trimis.length === 0 && c5.incheiata === true && c5.excluse.length === 6 && c5.excluse.every(x => x.motiv_cod === 'in_asteptare_aprobare') && (await rand(1)).stare === 'aprobat' && (await rand(1)).intentie_cheie === K(4),
     'P14 extins (P2-2): cheie nouă înaintea deciziei, doar cu partea aprobată → TOATE excluse in_asteptare_aprobare, de_trimis gol (zero POST), rândurile neatinse')
-  ok(await cod(comanda(ID.editor, ID.L1, K(6), pl([7, 8]))) === 'RD037' || true, '(RD037 doar la plicuri noi peste plafon; 7–8 sunt de_aprobat → excluse)')
+  const c6 = await cmd(ID.editor, ID.L1, K(6), pl([7, 8]))
+  ok(c6.incheiata === true && c6.de_trimis.length === 0 && c6.excluse.length === 2 && c6.excluse.every(x => x.motiv_cod === 'in_asteptare_aprobare') && c6.cerere_id === null
+    && (await cereri(ID.L1)).filter(c => c.stare === 'deschisa').length === 1 && (await rand(7)).stare === 'de_aprobat' && (await rand(7)).cerere_aprobare_id === cer4.id,
+    'I9a pe cererea K4: cheie nouă DOAR cu plicurile cererii (de_aprobat) → excluse in_asteptare_aprobare, fără RD037 (nimic nou peste plafon), fără a doua cerere, rândurile neatinse')
   const dec4 = (await ca(db, ID.owner, 'SELECT public.fn_red_fan_cerere_decide($1, true, $2) AS r', [cer4.id, 'ok'])).rows[0].r
   ok(dec4.aprobate === 6 && (await rand(7)).stare === 'aprobat' && (await rand(7)).aprobare_owner_la && await consum() === 0, 'decizia: 6 → aprobat fără consum')
   const c7 = await cmd(ID.editor, ID.L1, K(7), pl([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]))
