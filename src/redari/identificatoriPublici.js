@@ -9,8 +9,12 @@
 //     decât prin majuscule / spații e refuzată, nu reparată;
 //  3. cotele și telefoanele / CNP-urile sunt refuzate și atunci când AU forma unui identificator: „a/b” cu a ≤ b (1/2, 3/4, 1/1, 17/240)
 //     arată ca o cotă de proprietate, nu ca o subdiviziune („123/4”, „166/2” au a > b); un subcâmp cu peste 8 cifre în total (pe toate
-//     părțile lui: „0711/111/111”) sau subcâmpuri care, lipite, dau un telefon (0[237]… de 10 cifre, 40 / 0040…) ori un CNP (13 cifre)
-//     sunt refuzate. O formă reală ambiguă (o parcelă chiar numită „1/2”) e REFUZATĂ și listată pentru decizie, nu ghicită (review r2).
+//     părțile lui: „0711/111/111”) e refuzat; la fel ORICE șir de COMPONENTE numerice CONSECUTIVE (grupurile de cifre ale valorii, în
+//     ordine, peste „#”, „/”, paranteze și litere) care, lipite, dau un telefon (0[237] + 8 cifre; 40 / 0040 + 9 cifre) ori 13 cifre
+//     (forma unui CNP) — review r3: „0711#111111#UA62A” trecea pentru că se verifica doar lipirea TUTUROR cifrelor. O fereastră începe și
+//     se termină la o graniță de componentă (cifrele unui grup nu se taie): „50711#111111#” NU e prins (vezi raportul rundei 4), iar
+//     telefonul fără 0 („711#111111#”, 9 cifre) trece, după decizia rundei 3 (nedeosebibil de cadastral + parcelă). O formă reală ambiguă
+//     (o parcelă chiar numită „1/2”, un TGZ cu 13 cifre pe subcâmpuri consecutive) e REFUZATĂ și listată pentru decizie, nu ghicită.
 // Formele vin din datele reale de import (coloanele TGZ „Tarla/Nr. Topo” și „Nr. cadastral/Parcelă”, compuse cu „#”: „31#”, „123/4#”,
 // „12IV#”, „#44#”, „50029#30#”, „#12/3#”, „#12'#”, „#12'(34/5)#”, „##UA 62A”, „##”; Anexa 7: „T12”, „CF100”; fixture-urile importurilor;
 // CONTRACT_SCHEMA.md §7); compatibilitatea cu TOATE valorile din BD nu e dovedită aici (fără acces la BD) — vezi raportul rundei 3:
@@ -28,7 +32,7 @@
 //    nomenclator de sate în schemă); forma publicată = ortografia DECLARATĂ („Gârnița”), nu valoarea parcelei („GARNITA”).
 // Valoarea goală (NULL / '') e permisă la orice câmp (nu publică nimic). Marcajul „necompletat” al modelelor („____”, doar liniuțe de
 // subliniere, ≥ 2) e acceptat la orice câmp: nu poartă nicio informație (scripts/redari_model_anunt_afisare.mjs).
-import { normalizeazaNume } from './idParcela.js'
+import { normalizeazaNume, faraDiacritice } from './idParcela.js'
 import { tronsonOptional, text, cadastruGol } from './importTgz.js'
 
 /** Marcajul „necompletat” din modele: doar „_” (cel puțin două). */
@@ -56,8 +60,10 @@ const RE_FARA_VALOARE = /^[-–—]$/
 const SUFIX_FRACTIE = String.raw`['’]?(?:[A-Z]{1,3}| [A-Z]| BIS)?`
 const RE_FRACTIE = new RegExp(String.raw`^([0-9]+)${SUFIX_FRACTIE}/([0-9]+)${SUFIX_FRACTIE}$`)
 const RE_GRUP_PARANTEZE = /\(([^()]*)\)$/
-// cifrele tuturor subcâmpurilor, lipite: telefon RO (0[237] + 8 cifre), internațional (+40 / 0040 / 40 + 9 cifre), CNP (13 cifre)
+// componente consecutive lipite: telefon RO (0[237] + 8 cifre), internațional (+40 / 0040 / 40 + 9 cifre), CNP (13 cifre)
 const RE_TELEFON_SAU_CNP = /^(?:0[237][0-9]{8}|(?:00)?40[0-9]{9}|[1-9][0-9]{12})$/
+/** Cea mai lungă formă căutată (CNP / 0040 + 9 cifre): o fereastră mai lungă nu se mai potrivește. */
+const MAX_CIFRE_FEREASTRA = 13
 // numele unui sat (segment din „Sate / tarlale ziua N”, normalizat): litere, spații, cratimă, apostrof, punct; fără cifre; 2–40 de caractere
 const RE_NUME_SAT = /^[A-Z][A-Z '.\-]{1,39}$/
 // segmente din „Sate / tarlale ziua N” care NU sunt sate (indicații de program)
@@ -86,11 +92,30 @@ const pareCota = s => {
   return false
 }
 
+/** Componentele numerice ale valorii: grupurile maximale de cifre, în ordine („0711#111111#UA62A” → [0711, 111111, 62]). */
+export const componenteNumerice = s => String(s ?? '').match(/[0-9]+/g) ?? []
+/**
+ * Toate lipirile de componente CONSECUTIVE (ferestre [i..j], granițele păstrate: niciun grup nu se taie), până la 13 cifre:
+ * [0711, 111111, 62] → 0711, 0711111111, 071111111162, 111111, 11111162, 62.
+ */
+export function ferestreConsecutive(componente) {
+  const ferestre = []
+  for (let i = 0; i < componente.length; i++) {
+    let lipit = ''
+    for (let j = i; j < componente.length && lipit.length < MAX_CIFRE_FEREASTRA; j++) {
+      lipit += componente[j]
+      if (lipit.length <= MAX_CIFRE_FEREASTRA) ferestre.push(lipit)
+    }
+  }
+  return ferestre
+}
+/** true = o fereastră de componente consecutive are forma unui telefon (0 / 40 / 0040) sau 13 cifre (CNP). */
+const areTelefonSauCnp = s => ferestreConsecutive(componenteNumerice(s)).some(f => RE_TELEFON_SAU_CNP.test(f))
+
 /** Motivul refuzului unui identificator TEXT (tarla / nr_cadastral / poz_hg) în forma canonică `canon`, sau null dacă are forma câmpului. */
 function motivIdentificatorText(canon, regula) {
   if (!regula.compus && canon.includes('#')) return MOTIV.FORMA
   const subcampuri = regula.compus ? canon.split('#') : [canon]
-  let toateCifrele = ''
   for (const s of subcampuri) {
     if (s === '' || RE_FARA_VALOARE.test(s)) continue
     const c = cifre(s)
@@ -100,16 +125,30 @@ function motivIdentificatorText(canon, regula) {
     if (pareCota(s)) return MOTIV.COTA
     if (!regula.slash && s.includes('/')) return MOTIV.FORMA
     if (!areFormaSubcamp(s)) return MOTIV.FORMA
-    toateCifrele += c
   }
-  if (RE_TELEFON_SAU_CNP.test(toateCifrele)) return MOTIV.TELEFON_CNP
+  // după forma fiecărui subcâmp: telefonul / CNP-ul împărțit pe componente consecutive (oriunde în valoare, nu doar toată valoarea)
+  if (areTelefonSauCnp(canon)) return MOTIV.TELEFON_CNP
   return null
+}
+
+/**
+ * Motivul pentru care ORTOGRAFIA unui sat (reprezentarea care se publică) nu se poate publica, sau null. Review r3 P2: se validase doar
+ * cheia normalizată („Peri” + 50 de „.” → cheia „PERI.”), iar pe afiș ajungea șirul declarat, de 54 de caractere. Acum reprezentarea
+ * însăși: cel mult 40 de caractere (LUNGIME) și, fără diacritice / cu majuscule, EXACT cheia ei (deci fără punctuație repetată, spații
+ * duble sau la capete), cu forma unui nume de sat (FORMA).
+ */
+export function motivFormaSatPublicat(forma) {
+  if (typeof forma !== 'string') return MOTIV.FORMA
+  if (forma.length > LUNGIME_MAX_IDENTIFICATOR) return MOTIV.LUNGIME
+  const cheie = normalizeazaIdentificator(forma)
+  return faraDiacritice(forma).toUpperCase() === cheie && RE_NUME_SAT.test(cheie) ? null : MOTIV.FORMA
 }
 
 /**
  * Satele DECLARATE ale UAT-ului: Map(normalizat → ortografia declarată), din segmentele sate_zi1..3 (despărțite de „,” / „;” / „ și ” /
  * „ – ”, fără parantezele cu tarlale) care au forma unui nume de sat; „Satul X” intră și ca „X”. Indicațiile de program („tarlalele 1–5”,
- * „restul”) nu sunt sate. Prima ortografie declarată a unui sat câștigă.
+ * „restul”) nu sunt sate. O ortografie care nu se poate publica (motivFormaSatPublicat: „Peri.....”, peste 40 de caractere) nu intră.
+ * Prima ortografie declarată a unui sat câștigă.
  */
 export function sateDeclarate(uat = {}) {
   const sate = new Map()
@@ -119,7 +158,7 @@ export function sateDeclarate(uat = {}) {
       const n = normalizeazaIdentificator(declarat)
       if (!n || /[0-9]/.test(n) || RE_SEGMENT_FARA_SAT.test(n)) continue
       for (const [cheie, forma] of [[n, declarat], [n.replace(RE_PREFIX_SAT, ''), declarat.replace(RE_PREFIX_SAT_ORIGINAL, '')]]) {
-        if (RE_NUME_SAT.test(cheie) && !sate.has(cheie)) sate.set(cheie, forma)
+        if (RE_NUME_SAT.test(cheie) && !sate.has(cheie) && motivFormaSatPublicat(forma) === null) sate.set(cheie, forma)
       }
     }
   }
@@ -157,7 +196,10 @@ export function canonizeazaIdentificator(camp, valoare, ctx = {}) {
       if (!RE_NUME_SAT.test(n)) return refuz(MOTIV.FORMA)
       const sate = ctx.sate instanceof Map ? ctx.sate : sateDeclarate(ctx.uat)
       const declarat = sate.get(n) ?? sate.get(n.replace(RE_PREFIX_SAT, ''))
-      return declarat === undefined ? refuz(MOTIV.SAT_NEDECLARAT) : ok(declarat)
+      if (declarat === undefined) return refuz(MOTIV.SAT_NEDECLARAT)
+      // se verifică și reprezentarea RETURNATĂ (ce se publică), nu doar cheia: și pentru o listă `ctx.sate` construită de apelant
+      const motivReturnat = motivFormaSatPublicat(declarat)
+      return motivReturnat ? refuz(motivReturnat) : ok(declarat)
     }
     default: return refuz(MOTIV.CAMP)   // câmp necunoscut = nu se publică
   }

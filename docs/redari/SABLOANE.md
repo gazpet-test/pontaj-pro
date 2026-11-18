@@ -451,9 +451,13 @@ cu terminologia veche; anunțul de sine stătător lipsea din pachetul trimis Tr
   „1#2#” lipit cu „ / ” ar ieși „1 / 2”, forma unei cote); o valoare care ar trebui „reparată” („12//3”) e refuzată. (2) **Cote**: „a/b” cu
   a ≤ b („1/2”, „3/3”, „12/15”) e refuzată în orice câmp, și ca subcâmp TGZ sau între paranteze — o subdiviziune reală are a > b („123/4”);
   formele ambigue (o parcelă chiar numerotată „12/15”) se refuză și se corectează / se decid, nu se ghicesc. (3) **Telefon / CNP**: peste 8
-  cifre într-un subcâmp (ex. „0711/111/111”, „180010/100000/0”), sau cifrele lipite ale subcâmpurilor care dau un telefon (0[237] + 8 cifre,
-  40 / 0040 + 9) ori un CNP (13 cifre). Ce NU se poate deosebi doar după formă (ex. un telefon fără 0 împărțit în subcâmpuri) e listat în
-  descrierea PR-ului #1137, pentru decizie. Lista de corectat poartă motivul („arată ca o cotă”, „prea multe cifre: telefon / CNP?”, „prea lung”).
+  cifre într-un subcâmp (ex. „0711/111/111”, „180010/100000/0”), sau **orice șir de grupuri de cifre consecutive** (runda 4: nu doar toate
+  cifrele valorii; „0711#111111#UA62A”, „180010#100000#0#1”) care, lipite, dau un telefon (0[237] + 8 cifre, 40 / 0040 + 9) ori 13 cifre
+  (forma unui CNP). Un grup de cifre nu se taie: un telefon cu o cifră lipită în față („50711#111111#”) și telefonul fără 0 împărțit în
+  subcâmpuri („711#111111#”) NU sunt prinse; un TGZ real cu 13 cifre pe subcâmpuri consecutive e refuzat (de decis). Lista exactă e în
+  descrierea PR-ului #1137. Lista de corectat poartă motivul („arată ca o cotă”, „prea multe cifre: telefon / CNP?”, „prea lung”).
+  (4) **Satul publicat** (runda 4): se verifică și ortografia declarată care se tipărește (cel mult 40 de caractere, fără punctuație
+  repetată / spații duble), nu doar cheia normalizată.
 - **Unde**: 🏛️ UAT-uri → editare UAT → „Anunț de afișare (DOCX)”, pentru admin și editor (documentul nu are date personale și nu scrie
   nimic); UAT-ul, proiectul (cu starea informării de la server, `cuInformarePublicata`) și parcelele se recitesc din BD înainte de
   generare; aceleași lipsuri apar în 📬 Notificări la modelul „Afișarea la Primărie”.
