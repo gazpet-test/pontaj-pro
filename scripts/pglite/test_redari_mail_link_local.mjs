@@ -524,6 +524,11 @@ async function sectiuneaCost() {
   const alt = argv('--cost-mig')
   console.log(`7. COSTUL: ${COST_PARAM.destinatari} destinatari × ${COST_PARAM.caractere} caractere, ${COST_PARAM.tokenuri} tokenuri sintetice existente (+ fixture-ul); ` +
     `praguri PGlite: RPC ≤ ${PRAG_COST_RPC_MS} ms, lock-ul global ≤ ${PRAG_COST_LOCK_MS} ms; lucrătorul oprit la ${LIMITA_COST_MS} ms${alt ? ' — MIGRAREA ' + alt : ''}`)
+  // r5: fixture-ul de cost respectă regula parcelelor de pe clonă (triggerul 20261129g: id_parcela = {uat3}-{nnnn}), pe care scheletul PGlite nu o are
+  //     (pe 91c0119f clona a refuzat „COST-0001”)
+  const uat3 = /VALUES \(v_uat, v_pr, 'Comuna Sintetica', '([A-Z]{3})'/.exec(COST_SQL)?.[1]
+  const idp = [...(/INSERT INTO public\.red_parcele[^;]*;/.exec(COST_SQL)?.[0] || '').matchAll(/'([^']*-\d+)'/g)].map(m => m[1])
+  ok(uat3 && idp.length === 2 && idp.every(x => new RegExp(`^${uat3}-[0-9]{4}$`).test(x)), `fixture-ul de cost: id_parcela ${idp.join(', ')} = {uat3 ${uat3}}-{nnnn} (regula 20261129g)`)
   const r = await masoaraCost(alt ? readFileSync(alt, 'utf8').replace(/\r/g, '') : MIG)
   const c = citesteCost(r)
   console.log('     ' + (c ? JSON.stringify(c) : JSON.stringify(r).slice(0, 300)))
