@@ -1,13 +1,19 @@
 // fanLot.js — logica PURĂ a ecranului FAN pe un lot de plicuire (src/redari/ui/FanAwbPrevizualizare.jsx): pașii și când sunt activi,
 // etichetele stărilor, borderoul CSV (fără date personale) și marcajul de TEST. Proiectare: docs/redari/FANCOURIER_INTEGRARE.md §3, §6.
 // Cât timp TRANSPORT_REAL_ACTIV = false (redariFanHandler.mjs), TOȚI pașii sunt dezactivați vizibil, cu motivul „transport oprit”.
-import { TRANSPORT_REAL_ACTIV } from '../../supabase/functions/_shared/redariFanHandler.mjs'
+// Activarea pentru Testul 1 (DOAR_PROIECTE_TEST = true): pașii și operațiile sunt active DOAR pe un proiect „TEST-…” cu lotul marcat TEST —
+// ACEEAȘI gardă (transportPermis) ca în funcția edge (L19); butonul de marcaj cere doar proiectul de TEST (lotul nu e încă marcat).
+import { TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST, transportPermis, esteProiectTest, MESAJ_TRANSPORT_OPRIT, MESAJ_DOAR_PROIECT_TEST, MESAJ_DOAR_LOT_TEST } from '../../supabase/functions/_shared/redariFanHandler.mjs'
 import { manifestTiparire, cheieTiraj, tirajDin, tirajNeschimbat, refuzTiraj, destinatarMascat, COD_TIRAJ_SCHIMBAT, COD_TIRAJ_OPRIT, MESAJ_TIRAJ_SCHIMBAT, MESAJ_TIRAJ_OPRIT,
   ASTEPTARE_DUPA_OPRIRE_S, fapteContrazise, ALEGERI_SOLUTIONARE, COD_URMARIRE_SCHIMBATA } from '../../supabase/functions/_shared/redariFan.mjs'
 import { planPachetPlicuire, continutPaginaControl } from './plicuri.js'
-export { TRANSPORT_REAL_ACTIV }
+export { TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST, transportPermis, esteProiectTest, MESAJ_TRANSPORT_OPRIT, MESAJ_DOAR_PROIECT_TEST, MESAJ_DOAR_LOT_TEST }
 
-export const MESAJ_TRANSPORT_OPRIT = 'transport oprit'
+/** Motivul pentru care transportul NU e permis pe acest lot în ecran (null = permis): flag-ul, proiectul de TEST, marcajul lotului. */
+const motivTransport = ({ transportActiv, proiectCod, fanLot, cereMarcaj = true }) => {
+  const p = transportPermis({ proiectCod, fanLot, cereMarcaj, transportActiv })
+  return p.ok ? null : p.motiv
+}
 export const PASI_FAN = Object.freeze([
   { cheie: 'propune', titlu: '1. Propune', ajutor: 'admin / editor: salvează datele verificate ale fiecărui plic (hash), fără cost' },
   { cheie: 'aproba', titlu: '2. Aprobă', ajutor: 'doar owner-ul: lotul (test / real), plafonul pilot, numărul de AWB-uri' },
@@ -20,8 +26,9 @@ export const PASI_FAN = Object.freeze([
 
 const numar = (randuri, stari) => (randuri || []).filter(r => stari.includes(r.stare)).length
 
-/** Pașii cu starea lor: { ...pas, activ, motiv }. transportActiv = flag-ul din cod; evidentaInstalata = tabelul red_fan_awb citibil. */
-export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, poateScrie = false, fanLot = null, randuri = [], gataDePropus = 0 } = {}) {
+/** Pașii cu starea lor: { ...pas, activ, motiv }. transportActiv = flag-ul din cod; evidentaInstalata = tabelul red_fan_awb citibil;
+ *  proiectCod = red_proiecte.cod al lotului (garda „doar TEST”: fără el, cu DOAR_PROIECTE_TEST, nimic nu e activ). */
+export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, poateScrie = false, fanLot = null, randuri = [], gataDePropus = 0, proiectCod = null } = {}) {
   const cuAwb = numar(randuri, ['generat', 'ridicat'])
   const conditii = {
     propune: [[poateScrie, 'doar admin / editor'], [gataDePropus > 0, 'niciun plic cu toate datele cerute de FAN']],
@@ -32,8 +39,9 @@ export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInsta
     urmarire: [[esteOwner, 'doar owner-ul'], [cuAwb > 0, 'niciun AWB generat']],
     confirmari: [[esteOwner, 'doar owner-ul'], [cuAwb > 0, 'niciun AWB generat']],
   }
+  const oprit = motivTransport({ transportActiv, proiectCod, fanLot })
   return PASI_FAN.map(p => {
-    if (!transportActiv) return { ...p, activ: false, motiv: MESAJ_TRANSPORT_OPRIT }
+    if (oprit) return { ...p, motiv: oprit, activ: false }
     if (!evidentaInstalata) return { ...p, activ: false, motiv: 'evidența FAN nu e instalată (migrarea neaplicată)' }
     const pica = conditii[p.cheie].find(([c]) => !c)
     return { ...p, activ: !pica, motiv: pica ? pica[1] : '' }
@@ -42,8 +50,10 @@ export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInsta
 
 /** Marcajul lotului (TEST / real): owner, înainte de PRIMA aprobare din istoricul lotului (Jakarinos #1118 r1 P2: red_fan_loturi.prima_aprobare_la,
  *  pusă de BD la prima aprobare și imuabilă — o re-propunere care readuce rândurile la „propus” nu redeschide marcajul). Separat de „Aprobă”. */
-export function stareMarcaj({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, randuri = [], fanLot = null } = {}) {
-  if (!transportActiv) return { activ: false, motiv: MESAJ_TRANSPORT_OPRIT }
+export function stareMarcaj({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, randuri = [], fanLot = null, proiectCod = null } = {}) {
+  // marcajul se pune ÎNAINTE ca lotul să fie TEST → garda cere aici doar proiectul de TEST (cereMarcaj = false)
+  const oprit = motivTransport({ transportActiv, proiectCod, fanLot, cereMarcaj: false })
+  if (oprit) return { activ: false, motiv: oprit }
   if (!evidentaInstalata) return { activ: false, motiv: 'evidența FAN nu e instalată (migrarea neaplicată)' }
   if (!esteOwner) return { activ: false, motiv: 'doar owner-ul' }
   if (fanLot?.prima_aprobare_la) return { activ: false, motiv: 'lotul a fost aprobat o dată: marcajul TEST / real nu se mai schimbă' }
@@ -61,7 +71,7 @@ export const OPERATII_FAN = Object.freeze([
   { cheie: 'solutionare', titlu: 'Soluționează o contradicție', ajutor: 'owner-ul sau un admin Redări: după verificarea în selfAWB, alegi pentru fiecare fapt contrazis valoarea care rămâne (cea cunoscută sau cea nouă), cu motiv; istoricul rămâne în jurnal' },
 ])
 /** Operațiile cu starea lor: { ...operatie, activ, motiv } (aceleași reguli ca stariPasi: transportul oprit le dezactivează pe toate). */
-export function stariOperatii({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, esteAdmin = false, randuri = [] } = {}) {
+export function stariOperatii({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, esteAdmin = false, randuri = [], fanLot = null, proiectCod = null } = {}) {
   const conditii = {
     // runda 5: soluționarea contradicțiilor urmăririi — owner SAU admin Redări (aceeași poartă ca fn_red_fan_urmarire_solutioneaza)
     solutionare: [[esteOwner || esteAdmin, 'doar owner-ul sau un admin Redări'], [(randuri || []).some(r => fapteContrazise(r).length > 0), 'nicio contradicție de soluționat']],
@@ -71,7 +81,7 @@ export function stariOperatii({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaI
     evenimente: [[esteOwner, 'doar owner-ul']],
     tiraj: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['generat', 'ridicat']) > 0, 'niciun AWB generat']],
   }
-  const oprit = !transportActiv ? MESAJ_TRANSPORT_OPRIT : !evidentaInstalata ? 'evidența FAN nu e instalată (migrarea neaplicată)' : null
+  const oprit = motivTransport({ transportActiv, proiectCod, fanLot }) || (!evidentaInstalata ? 'evidența FAN nu e instalată (migrarea neaplicată)' : null)
   return OPERATII_FAN.map(p => {
     if (oprit) return { ...p, activ: false, motiv: oprit }
     const pica = conditii[p.cheie].find(([c]) => !c)
@@ -235,6 +245,7 @@ export function csvBorderouFan({ lot, fanLot, randuri }) {
 export function mesajEdgeFan(rez) {
   const cod = rez?.data?.cod || rez?.error?.context?.cod || null
   if (cod === 'transport_real_oprit') return 'Transport oprit: funcția FAN nu face niciun apel până la activare.'
+  if (cod === 'transport_real_doar_test') return `Transport permis doar pe proiecte de TEST cu lotul marcat TEST (Testul 1): funcția FAN nu a făcut niciun apel. ${rez?.data?.motiv || ''}`.trim()
   if (cod === 'non_owner') return 'Doar owner-ul poate porni pașii FAN.'
   if (cod === 'manifest_schimbat') return 'Evidența s-a schimbat de la afișare: reîncarcă și verifică din nou pagina de control. Nimic tipărit.'
   if (cod === 'tiraj_schimbat') return `${MESAJ_TIRAJ_SCHIMBAT} Nimic tipărit.`

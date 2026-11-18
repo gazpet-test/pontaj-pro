@@ -1,5 +1,6 @@
-// redariFanTransport.mjs — calea REALĂ a funcției edge redari-fan-awb (FAN Courier). INERTĂ: se cheamă DOAR din raspundeFan
-// (redariFanHandler.mjs), după poarta owner și DOAR dacă TRANSPORT_REAL_ACTIV = true în cod (azi false → 423, fără niciun apel).
+// redariFanTransport.mjs — calea REALĂ a funcției edge redari-fan-awb (FAN Courier). Se cheamă DOAR din raspundeFan
+// (redariFanHandler.mjs), după poarta owner, DOAR dacă TRANSPORT_REAL_ACTIV = true în cod și DOAR pe un lot care trece garda „doar TEST”
+// (DOAR_PROIECTE_TEST: proiect „TEST-…” + lot marcat TEST; activarea pentru Testul 1, docs/redari/FAN_TEST1_PASI.md). Restul: 423, fără apel.
 // Proiectare: docs/redari/FANCOURIER_INTEGRARE.md §3–§5, §9. Fișa a–e: §4. Toate dependențele (BD, rețea, secrete, pauză) sunt injectate:
 // testele rulează cu răspunsuri FAN simulate după documentație, fără rețea.
 // Reguli: L04/L22 — înainte de orice POST /intern-awb plătit, claim atomic în BD (fn_red_fan_claim_lot: aprobat → in_curs, o cheie per

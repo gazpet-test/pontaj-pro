@@ -11,7 +11,7 @@ import { construiestePlicFan, telefonFan, hashPlicFan, jsonCanonic, interpreteaz
   caleEticheta, caleListaAwb, dataEvenimentFan, EVENIMENTE_FAN, pregatestePlicuriFan, estePdf, inBase64, LIMITE_FAN, contactPePlic,
   manifestTiparire, destinatarMascat, interpreteazaStergere, campuriEroareFan, cheieTiraj, idTiraj, tirajDin, VERSIUNE_TIRAJ, MESAJ_TIRAJ_SCHIMBAT,
   MESAJ_TIRAJ_OPRIT, ASTEPTARE_DUPA_OPRIRE_S, tirajNeschimbat, refuzTiraj } from '../../supabase/functions/_shared/redariFan.mjs'
-import { raspundeFan, TRANSPORT_REAL_ACTIV, ACTIUNI_FAN } from '../../supabase/functions/_shared/redariFanHandler.mjs'
+import { raspundeFan, TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST, transportPermis, esteProiectTest, ACTIUNI_FAN } from '../../supabase/functions/_shared/redariFanHandler.mjs'
 import { executaActiuneFan, MAX_BUCATI_PE_APEL, citesteToate } from '../../supabase/functions/_shared/redariFanTransport.mjs'
 import { stariPasi, stareMarcaj, stariOperatii, PASI_FAN, MESAJ_TRANSPORT_OPRIT, csvBorderouFan, prefixLot, titluLot, numeEtichete, numeControl, numeArhiva,
   controlLotFan, pregatestePachetFan, mesajEdgeFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire,
@@ -22,8 +22,10 @@ import FanAwbPrevizualizare from './ui/FanAwbPrevizualizare.jsx'
 import { planPachetPlicuire, ordineConvocari, genereazaPaginaControl, continutPaginaControl, momentBucuresti, docxPaginaControl } from './plicuri.js'
 import { createHash } from 'node:crypto'
 import { genereazaPvB } from './pv.js'
+import { pasiDinDocument, parcurge, lumeNoua, actiuneDin } from './fanProcedura.testutil.js'
 
 const DOC = readFileSync('docs/redari/FANCOURIER_INTEGRARE.md', 'utf8')
+const PASI_DOC = readFileSync('docs/redari/FAN_TEST1_PASI.md', 'utf8')
 const MIG = readFileSync('supabase/migrations/20261212a_redari_fan_awb.sql', 'utf8')
 const plic = { nr_plic: 'PL-TST-0001', destinatar_nume: 'PERSOANA FICTIVA' }
 const contact = { telefon: '0700 000 001', adresa_strada: 'Str. Fictivă nr. 1', adresa_sat: 'Sat Fictiv', adresa_comuna: 'Comuna Fictivă', adresa_judet: 'Prahova', cod_postal: '100000' }
@@ -538,12 +540,27 @@ describe('urmărire / confirmări / etichete / reconciliere (simulat)', () => {
   })
 })
 
-describe('raspundeFan — poarta funcției edge (TRANSPORT_REAL_ACTIV = false)', () => {
+describe('raspundeFan — poarta funcției edge (ACTIVARE Testul 1: TRANSPORT_REAL_ACTIV = true, DOAR_PROIECTE_TEST = true)', () => {
   const ID_LOT = '11111111-2222-4333-8444-555555555555'
-  const deps = (o = {}) => ({ getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: vi.fn(async () => ({ data: { id: ID_LOT } })), ...o })
-  it('transportul real e oprit în cod; comanda curierului nu e acțiune API (manuală în selfAWB)', () => {
-    expect(TRANSPORT_REAL_ACTIV).toBe(false)
+  // implicit: lotul e al unui proiect de TEST și e marcat TEST (garda „doar TEST” trece); testele gărzii suprascriu proiect / fanLot
+  const deps = (o = {}) => ({ getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: vi.fn(async () => ({ data: { id: ID_LOT, proiect_id: 'p1' } })),
+    proiect: vi.fn(async () => ({ data: { id: 'p1', cod: 'TEST-RAZVAN' } })), fanLot: vi.fn(async () => ({ data: { lot_id: ID_LOT, test: true, prima_aprobare_la: null } })), ...o })
+  it('ACTIVARE Testul 1: transportul real e pornit în cod DOAR pentru proiecte de TEST; comanda curierului nu e acțiune API (manuală în selfAWB)', () => {
+    expect(TRANSPORT_REAL_ACTIV).toBe(true)
+    expect(DOAR_PROIECTE_TEST).toBe(true)
     expect(ACTIUNI_FAN).not.toContain('comanda_curier')
+  })
+  it('garda „doar TEST” (o singură definiție, L19): proiect „TEST-…” + lot marcat TEST; marcajul cere doar proiectul', () => {
+    expect(esteProiectTest('TEST-RAZVAN')).toBe(true)
+    for (const c of ['LOT1-PRUNISOR-JUPA', 'test-razvan', ' TEST-X', 'TESTARE', '', null, undefined, 7]) expect([c, esteProiectTest(c)]).toEqual([c, false])
+    expect(transportPermis({ proiectCod: 'TEST-RAZVAN', fanLot: { test: true } })).toEqual({ ok: true, cod: null, motiv: '' })
+    expect(transportPermis({ proiectCod: 'LOT1-X', fanLot: { test: true } })).toMatchObject({ ok: false, cod: 'transport_real_doar_test', motiv: expect.stringMatching(/proiecte de TEST/) })
+    for (const fanLot of [null, undefined, {}, { test: false }, { test: 'true' }, { test: 1 }])
+      expect(transportPermis({ proiectCod: 'TEST-RAZVAN', fanLot })).toMatchObject({ ok: false, cod: 'transport_real_doar_test', motiv: expect.stringMatching(/marcate TEST/) })
+    expect(transportPermis({ proiectCod: 'TEST-RAZVAN', fanLot: null, cereMarcaj: false }).ok).toBe(true)
+    expect(transportPermis({ proiectCod: 'LOT1-X', fanLot: null, cereMarcaj: false }).ok).toBe(false)
+    expect(transportPermis({ proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, transportActiv: false })).toMatchObject({ ok: false, cod: 'transport_real_oprit' })
+    expect(transportPermis({ proiectCod: 'LOT1-X', fanLot: { test: false }, doarTest: false }).ok).toBe(true)   // forma Testului 2 (PR separat)
   })
   it('fără JWT → 401; token respins (4xx) → 401; autentificare indisponibilă → 503 (Jakarinos r1 P2)', async () => {
     expect((await raspundeFan({ jwt: '', corp: {} }, deps())).status).toBe(401)
@@ -566,17 +583,48 @@ describe('raspundeFan — poarta funcției edge (TRANSPORT_REAL_ACTIV = false)',
     expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: 'x' } }, deps())).status).toBe(400)
     expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: ID_LOT } }, deps({ lot: async () => ({ data: null }) }))).status).toBe(404)
   })
-  it('owner + lot valid, ORICE acțiune → 423 transport_real_oprit, fără NICIUN apel (fetch care pică testul, BD, secrete)', async () => {
+  it('GARDA „doar TEST”: owner + lot al unui proiect REAL, ORICE acțiune → 423 transport_real_doar_test, fără NICIUN apel (fetch care pică testul, BD, secrete)', async () => {
     const fetchGlobal = vi.spyOn(globalThis, 'fetch').mockImplementation(() => { throw new Error('APEL DE REȚEA INTERZIS') })
-    const interzis = () => { throw new Error('APEL INTERZIS cât transportul e oprit') }
-    const spioni = { fetch: vi.fn(interzis), rpc: vi.fn(interzis), secrete: vi.fn(interzis), randuriLot: vi.fn(interzis), datePlicuri: vi.fn(interzis), proiect: vi.fn(interzis), pauza: vi.fn(interzis) }
+    const interzis = () => { throw new Error('APEL INTERZIS pe un proiect real') }
+    const spioni = { fetch: vi.fn(interzis), rpc: vi.fn(interzis), secrete: vi.fn(interzis), randuriLot: vi.fn(interzis), datePlicuri: vi.fn(interzis), plicuriLot: vi.fn(interzis), pauza: vi.fn(interzis) }
+    // (a) proiect real, chiar cu lotul marcat TEST
     for (const actiune of ACTIUNI_FAN) {
-      const r = await raspundeFan({ jwt: 'x', corp: { actiune, lot_id: ID_LOT, parte: 1, data: '2026-11-17' } }, deps(spioni))
-      expect(r).toEqual({ status: 423, body: { cod: 'transport_real_oprit' } })
+      const r = await raspundeFan({ jwt: 'x', corp: { actiune, lot_id: ID_LOT, parte: 1, data: '2026-11-18' } }, deps({ ...spioni, proiect: async () => ({ data: { id: 'p1', cod: 'LOT1-PRUNISOR-JUPA' } }) }))
+      expect(r).toMatchObject({ status: 423, body: { cod: 'transport_real_doar_test' } })
     }
+    // (b) proiect de TEST, dar lotul NEmarcat sau marcat REAL
+    for (const fl of [null, { lot_id: ID_LOT, test: false, prima_aprobare_la: null }]) for (const actiune of ACTIUNI_FAN) {
+      const r = await raspundeFan({ jwt: 'x', corp: { actiune, lot_id: ID_LOT, parte: 1, data: '2026-11-18' } }, deps({ ...spioni, fanLot: async () => ({ data: fl }) }))
+      expect(r).toMatchObject({ status: 423, body: { cod: 'transport_real_doar_test' } })
+    }
+    // (c) proiectul invizibil (RLS) sau fără cod = nu e dovedit de test → 423; eroarea de citire ≠ „nu e de test” → 503 (L18)
+    expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'evenimente', lot_id: ID_LOT } }, deps({ ...spioni, proiect: async () => ({ data: null }) }))).body.cod).toBe('transport_real_doar_test')
+    expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'evenimente', lot_id: ID_LOT } }, deps({ ...spioni, proiect: async () => ({ error: { message: 'x' } }) }))).body.cod).toBe('citire_neconfirmata')
+    expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'evenimente', lot_id: ID_LOT } }, deps({ ...spioni, fanLot: async () => ({ error: { message: 'x' } }) }))).body.cod).toBe('citire_neconfirmata')
     for (const s of Object.values(spioni)) expect(s).not.toHaveBeenCalled()
     expect(fetchGlobal).not.toHaveBeenCalled()
     fetchGlobal.mockRestore()
+  })
+  it('garda „doar TEST” lasă să treacă DOAR proiectul de TEST cu lotul marcat TEST: calea reală începe (secretele se citesc; lipsă = 503 transport_neconfigurat, fără rețea)', async () => {
+    const fetchGlobal = vi.spyOn(globalThis, 'fetch').mockImplementation(() => { throw new Error('APEL DE REȚEA INTERZIS') })
+    const secrete = vi.fn(() => null), fetch = vi.fn(() => { throw new Error('APEL INTERZIS fără secrete') })
+    for (const actiune of ACTIUNI_FAN) {
+      const r = await raspundeFan({ jwt: 'x', corp: { actiune, lot_id: ID_LOT, parte: 1, data: '2026-11-18' } }, deps({ secrete, fetch }))
+      expect(r).toEqual({ status: 503, body: { cod: 'transport_neconfigurat' } })
+    }
+    expect(secrete).toHaveBeenCalledTimes(ACTIUNI_FAN.length)
+    expect(fetch).not.toHaveBeenCalled(); expect(fetchGlobal).not.toHaveBeenCalled()
+    fetchGlobal.mockRestore()
+  })
+  it('garda „doar TEST” vine după poarta owner și după lot (un non-owner nu află nimic despre proiect / marcaj)', async () => {
+    const proiect = vi.fn(async () => ({ data: { cod: 'TEST-RAZVAN' } })), fanLot = vi.fn(async () => ({ data: { test: true } }))
+    expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'evenimente', lot_id: ID_LOT } }, deps({ owner: async () => ({ data: false }), proiect, fanLot }))).status).toBe(403)
+    expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'evenimente', lot_id: ID_LOT } }, deps({ lot: async () => ({ data: null }), proiect, fanLot }))).status).toBe(404)
+    expect(proiect).not.toHaveBeenCalled(); expect(fanLot).not.toHaveBeenCalled()
+  })
+  it('funcția edge citește marcajul lotului cu JWT-ul omului (red_fan_loturi, RLS), nu din corp', () => {
+    const idx = readFileSync('supabase/functions/redari-fan-awb/index.ts', 'utf8')
+    expect(idx).toMatch(/fanLot: \(id: string\) => uc\.from\('red_fan_loturi'\)\.select\('lot_id, test, prima_aprobare_la'\)\.eq\('lot_id', id\)\.maybeSingle\(\)/)
   })
   it('funcția edge intră DOAR prin poartă: index.ts nu importă calea reală', () => {
     const idx = readFileSync('supabase/functions/redari-fan-awb/index.ts', 'utf8')
@@ -608,18 +656,33 @@ describe('citesteToate (keyset, L23)', () => {
 
 describe('ecranul: pașii, lotul de test, lotul pilot', () => {
   const awb = [{ stare: 'propus' }, { stare: 'aprobat' }, { stare: 'generat', awb: '2000000001' }]
-  it('TRANSPORT OPRIT → TOȚI pașii dezactivați, cu „transport oprit” (chiar și pentru owner, cu evidența instalată)', () => {
-    const p = stariPasi({ transportActiv: false, evidentaInstalata: true, esteOwner: true, poateScrie: true, fanLot: { test: true }, randuri: awb, gataDePropus: 3 })
+  const TEST = { proiectCod: 'TEST-RAZVAN', fanLot: { test: true } }   // lotul pe care garda „doar TEST” îl lasă să treacă
+  it('TRANSPORT OPRIT → TOȚI pașii dezactivați, cu „transport oprit” (chiar și pentru owner, cu evidența instalată, pe un lot de TEST)', () => {
+    const p = stariPasi({ transportActiv: false, evidentaInstalata: true, esteOwner: true, poateScrie: true, ...TEST, randuri: awb, gataDePropus: 3 })
     expect(p.map(x => x.cheie)).toEqual(['propune', 'aproba', 'genereaza', 'etichete', 'curier', 'urmarire', 'confirmari'])
     expect(p.every(x => x.activ === false && x.motiv === MESAJ_TRANSPORT_OPRIT)).toBe(true)
-    expect(stariPasi({}).every(x => !x.activ)).toBe(true)   // implicit = flag-ul din cod (false)
+    expect(stariPasi({}).every(x => !x.activ)).toBe(true)   // implicit = flag-ul din cod + garda „doar TEST” fără proiect → nimic activ
   })
-  it('transport pornit: editorul doar propune; owner-ul aprobă doar după marcajul test / real', () => {
-    const ed = stariPasi({ transportActiv: true, evidentaInstalata: true, poateScrie: true, randuri: awb, gataDePropus: 1 })
+  it('ACTIVARE Testul 1: pe un proiect REAL sau pe un lot nemarcat TEST, TOȚI pașii și TOATE operațiile rămân dezactivate, cu motivul gărzii', () => {
+    const baza = { transportActiv: true, evidentaInstalata: true, esteOwner: true, esteAdmin: true, poateScrie: true, randuri: awb, gataDePropus: 3 }
+    for (const [caz, re] of [[{ proiectCod: 'LOT1-PRUNISOR-JUPA', fanLot: { test: true } }, /proiecte de TEST/], [{ proiectCod: 'TEST-RAZVAN', fanLot: null }, /marcate TEST/],
+      [{ proiectCod: 'TEST-RAZVAN', fanLot: { test: false } }, /marcate TEST/], [{ fanLot: { test: true } }, /proiecte de TEST/]]) {
+      expect(stariPasi({ ...baza, ...caz }).every(x => !x.activ && re.test(x.motiv))).toBe(true)
+      expect(stariOperatii({ ...baza, ...caz }).every(x => !x.activ && re.test(x.motiv))).toBe(true)
+    }
+    // marcajul: cere proiectul de TEST, nu și lotul deja marcat (altfel n-ar putea fi marcat niciodată)
+    expect(stareMarcaj({ ...baza, proiectCod: 'TEST-RAZVAN', fanLot: null, randuri: [{ stare: 'propus' }] }).activ).toBe(true)
+    expect(stareMarcaj({ ...baza, proiectCod: 'LOT1-X', fanLot: null, randuri: [{ stare: 'propus' }] })).toMatchObject({ activ: false, motiv: expect.stringMatching(/proiecte de TEST/) })
+    // implicit (flag-ul din cod = pornit) pe un lot de TEST: pașii owner-ului sunt activi
+    expect(stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, ...TEST, randuri: awb, gataDePropus: 3 }).filter(x => x.activ).map(x => x.cheie))
+      .toEqual(['propune', 'aproba', 'genereaza', 'etichete', 'curier', 'urmarire', 'confirmari'])
+  })
+  it('transport pornit (lot de TEST): editorul doar propune; owner-ul aprobă doar după marcajul test / real', () => {
+    const ed = stariPasi({ transportActiv: true, evidentaInstalata: true, poateScrie: true, ...TEST, randuri: awb, gataDePropus: 1 })
     expect(ed.filter(x => x.activ).map(x => x.cheie)).toEqual(['propune', 'curier'])
-    const ow = stariPasi({ transportActiv: true, evidentaInstalata: true, esteOwner: true, poateScrie: true, fanLot: null, randuri: awb, gataDePropus: 1 })
-    expect(ow.find(x => x.cheie === 'aproba')).toMatchObject({ activ: false, motiv: expect.stringMatching(/TEST sau lot real/) })
-    expect(stariPasi({ transportActiv: true, evidentaInstalata: false, esteOwner: true }).every(x => /neaplicată/.test(x.motiv))).toBe(true)
+    const ow = stariPasi({ transportActiv: true, evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: null, randuri: awb, gataDePropus: 1 })
+    expect(ow.find(x => x.cheie === 'aproba')).toMatchObject({ activ: false, motiv: expect.stringMatching(/marcate TEST/) })   // activare: garda vine înaintea condiției pasului
+    expect(stariPasi({ transportActiv: true, evidentaInstalata: false, esteOwner: true, ...TEST }).every(x => /neaplicată/.test(x.motiv))).toBe(true)
   })
   it('LOT DE TEST: titlul, prefixul fișierelor și borderoul îl arată; borderoul fără nume / adrese / telefoane', () => {
     const lot = { nr_lot: 'PP-0001' }
@@ -636,28 +699,32 @@ describe('ecranul: pașii, lotul de test, lotul pilot', () => {
     expect(MIG).toMatch(/\(SELECT limita_lot FROM public\.red_fan_setari\) <> 20 THEN RAISE EXCEPTION '20261212a: setarile implicite lipsesc'/)
   })
   it('marcajul TEST / real: owner, înainte de aprobare; transport oprit → dezactivat', () => {
-    expect(stareMarcaj({ transportActiv: false, evidentaInstalata: true, esteOwner: true })).toEqual({ activ: false, motiv: MESAJ_TRANSPORT_OPRIT })
-    expect(stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'propus' }] }).activ).toBe(true)
-    expect(stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'aprobat' }] }).activ).toBe(false)
-    expect(stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: false }).activ).toBe(false)
+    expect(stareMarcaj({ transportActiv: false, evidentaInstalata: true, esteOwner: true, ...TEST })).toEqual({ activ: false, motiv: MESAJ_TRANSPORT_OPRIT })
+    expect(stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', randuri: [{ stare: 'propus' }] }).activ).toBe(true)
+    expect(stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', randuri: [{ stare: 'aprobat' }] }).activ).toBe(false)
+    expect(stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: false, proiectCod: 'TEST-RAZVAN' }).activ).toBe(false)
     // Jakarinos #1118 r1 P2: după PRIMA aprobare (istoric), chiar dacă rândurile au redevenit „propus”
-    expect(stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'propus' }], fanLot: { test: true, prima_aprobare_la: '2026-11-17T08:00:00Z' } }))
+    expect(stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', randuri: [{ stare: 'propus' }], fanLot: { test: true, prima_aprobare_la: '2026-11-17T08:00:00Z' } }))
       .toEqual({ activ: false, motiv: expect.stringMatching(/aprobat o dată/) })
     expect(MIG).toMatch(/IF v_vechi\.prima_aprobare_la IS NOT NULL OR EXISTS/)
   })
-  it('ecranul randat (owner, admin): banner „Transport oprit” și TOATE butoanele de pas dezactivate', () => {
+  it('ecranul randat (owner, admin) pe un lot NEmarcat (evidența necitită încă): banner-ul activării de TEST și TOATE butoanele de pas dezactivate', () => {
     const html = renderToStaticMarkup(React.createElement(FanAwbPrevizualizare, { proiect: { cod: 'TEST-RAZVAN' }, lot: { id: 'l1', nr_lot: 'PP-0001' }, plicuri: [], esteOwner: true, poateScrie: true, onClose: () => {} }))
-    expect(html).toMatch(/Transport oprit/)
+    expect(html).toMatch(/Activare de TEST \(Testul 1\)/); expect(html).not.toMatch(/TRANSPORT REAL PORNIT/)
     const butoane = [...html.matchAll(/<button[^>]*>([^<]*(?:<[^/][^>]*>[^<]*)*)<\/button>/g)].filter(m => /^\s*(1\.|2a\.|2b\.|2c\.|3\.|4\.|6\.|6b\.|7\.)/.test(m[1].replace(/<[^>]+>/g, '')))
     expect(butoane.length).toBe(9)
     expect(butoane.every(m => /disabled=""/.test(m[0]))).toBe(true)
-    expect((html.match(/transport oprit/g) || []).length).toBeGreaterThanOrEqual(PASI_FAN.length)
+    expect((html.match(/marcate TEST/g) || []).length).toBeGreaterThanOrEqual(PASI_FAN.length)
+    // proiect real: motivul gărzii pe fiecare pas, și nimic activ
+    const real = renderToStaticMarkup(React.createElement(FanAwbPrevizualizare, { proiect: { cod: 'LOT1-PRUNISOR-JUPA' }, lot: { id: 'l1', nr_lot: 'PP-0001' }, plicuri: [], esteOwner: true, poateScrie: true, onClose: () => {} }))
+    expect((real.match(/proiecte de TEST/g) || []).length).toBeGreaterThanOrEqual(PASI_FAN.length)
+    expect([...real.matchAll(/<button[^>]*>/g)].filter(m => !/disabled=""/.test(m[0])).length).toBeLessThanOrEqual(1)   // doar „închide” din Modal
   })
   it('operațiile procedurii (Jakarinos #1118 r1 P2): reconciliere, plafon, anulare, evenimente — vizibile, dezactivate cu transportul oprit', () => {
-    expect(stariOperatii({ evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] }).every(o => !o.activ && o.motiv === MESAJ_TRANSPORT_OPRIT)).toBe(true)
-    const on = stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'generat' }] })
+    expect(stariOperatii({ transportActiv: false, evidentaInstalata: true, esteOwner: true, ...TEST, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] }).every(o => !o.activ && o.motiv === MESAJ_TRANSPORT_OPRIT)).toBe(true)
+    const on = stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: true, ...TEST, randuri: [{ stare: 'generat' }] })
     expect(on.filter(o => o.activ).map(o => o.cheie)).toEqual(['plafon', 'anulare', 'evenimente', 'tiraj'])
-    expect(stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: false, randuri: [{ stare: 'necunoscut' }] }).every(o => !o.activ)).toBe(true)
+    expect(stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: false, ...TEST, randuri: [{ stare: 'necunoscut' }] }).every(o => !o.activ)).toBe(true)
     const html = renderToStaticMarkup(React.createElement(FanAwbPrevizualizare, { proiect: { cod: 'TEST-RAZVAN' }, lot: { id: 'l1', nr_lot: 'PP-0001' }, plicuri: [], esteOwner: true, poateScrie: true, onClose: () => {} }))
     for (const t of ['Reconciliază (borderoul zilei)', 'Schimbă plafonul', 'Șterge la FAN', 'Marchează anulat', 'Lista de evenimente FAN', 'Tiraj nou — 1. Oprește descărcările',
       '2. Înlocuiește tirajul', 'Reia descărcările (fără tiraj nou)']) {
@@ -675,6 +742,124 @@ describe('ecranul: pașii, lotul de test, lotul pilot', () => {
   })
   it('PASI_FAN acoperă exact pașii ceruți, în ordine', () => {
     expect(PASI_FAN.map(p => p.titlu)).toEqual(['1. Propune', '2. Aprobă', '3. Generează AWB', '4. Etichete A6', '5. Comandă curier', '6. Urmărire', '7. Confirmări / retururi'])
+  })
+})
+
+// Runda 2 (verdictul Jakarinos pe PR #1130, P2 1): procedura zilei trebuie să fie EXECUTABILĂ din ecran, în ordinea scrisă în document.
+// Runda 3 (al doilea verdict, P2 + P3): procedura COMPLETĂ — primul plic (plafon 1), lotul de 3 (plafon 3) cu istoricul primului lot prezent,
+// încheierea (plafon 20) — legată de coloana „Acțiune” a tabelelor (identificator stabil, nu formularea din „Ce apasă”); precondițiile fără buton
+// (recitirea plafonului, verificarea de dinaintea primei aprobări, selfAWB + tariful, eticheta + pagina de control) sunt reguli ale simulatorului:
+// scoase sau mutate din document, proba pică. Simulatorul (fanProcedura.testutil.js) pornește de la LOT GOL și apasă doar butoanele pe care
+// stariPasi / stareMarcaj / stariOperatii le dau active; documentele de la 9ceea228 și 9fb88b2f pică (dovada: fanCourierMutanti.test.js).
+describe('procedura Testului 1 din document (FAN_TEST1_PASI.md): primul plic (§5–§8), lotul de 3 (§9) și încheierea (§10), executabile din ecran de la lot gol', () => {
+  const FN = { stariPasi, stareMarcaj, stariOperatii }
+  const A = pasiDinDocument(PASI_DOC, '## 5.', '## 9.'), B = pasiDinDocument(PASI_DOC, '## 9.', '## 10.'), C = pasiDinDocument(PASI_DOC, '## 10.', '## 11.')
+  const coduri = pasi => pasi.map(p => p.actiune.text)
+  // prezența ȘI poziția relativă a pașilor dați (fiecare apare, în această ordine); alți pași pot sta între ei
+  const inOrdine = (pasi, ...secventa) => { const idx = secventa.map(c => coduri(pasi).indexOf(c)); expect(idx.every(i => i >= 0)).toBe(true); expect([...idx].sort((x, y) => x - y)).toEqual(idx) }
+  // procedura completă pe o lume nouă: PP-xxxx (un plic), apoi PP-yyyy (3 plicuri, plicul 2 respins de FAN), apoi încheierea
+  const ruleaza = (doc, { respinse = [2] } = {}) => {
+    const lume = lumeNoua()
+    const a = parcurge(pasiDinDocument(doc, '## 5.', '## 9.'), FN, { lume, lot: 'PP-xxxx', plicuri: 1 })
+    const b = parcurge(pasiDinDocument(doc, '## 9.', '## 10.'), FN, { lume, lot: 'PP-yyyy', plicuri: 3, respinse })
+    const c = parcurge(pasiDinDocument(doc, '## 10.', '## 11.'), FN, { lume, lot: 'PP-yyyy' })
+    return { lume, a, b, c }
+  }
+  it('coloana „Acțiune” (identificator stabil, vocabular închis): ordinea și poziția precondițiilor fără buton, în ambele părți; „`1`” vs „1” nu contează', () => {
+    inOrdine(A, 'marcaj-test', 'evenimente', 'plafon=1', 'verifica-plafon=1', 'verifica-fara-aprobari', 'propune', 'aproba', 'genereaza', 'verifica-selfawb', 'verifica-tarif', 'etichete', 'verifica-eticheta', 'verifica-control', 'tipareste')
+    inOrdine(B, 'marcaj-test', 'plafon=3', 'verifica-plafon=3', 'verifica-lot-nou', 'propune', 'aproba', 'genereaza', 'verifica-selfawb', 'verifica-tarif', 'etichete', 'verifica-eticheta', 'verifica-control', 'tipareste')
+    inOrdine(C, 'plafon=20', 'verifica-plafon=20')
+    expect(coduri(A)).not.toContain('verifica-lot-nou'); expect(coduri(B)).not.toContain('verifica-fara-aprobari')   // verificarea GLOBALĂ o singură dată, înaintea primului plic
+    expect(actiuneDin('`plafon=1`')).toEqual(actiuneDin('plafon=1')); expect(actiuneDin('plafon=1')).toMatchObject({ cod: 'plafon', cheie: 'plafon', valoare: 1 })
+    expect(actiuneDin('„1. Propune 1 plicuri”')).toBeNull(); expect(actiuneDin('propune=2')).toBeNull(); expect(actiuneDin('verifica-plafon')).toMatchObject({ cod: 'verifica-plafon', cheie: null, valoare: null })
+    // butoanele numite în document sunt cele din ecran (textele exacte ale lui FanAwbPrevizualizare.jsx)
+    const src = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8')
+    for (const t of ['2a. Marchează TEST', 'Lista de evenimente FAN', 'Schimbă plafonul', '1. Propune', '2c. Aprobă', 'Etichete']) expect(src).toContain(t)
+  })
+  it('procedura COMPLETĂ: primul plic (plafon 1), lotul de 3 (plafon 3) cu istoricul primului lot prezent, plafonul 20 la încheiere; starea ecranului după fiecare buton, scrisă de mână (L25)', () => {
+    const { lume, a, b } = ruleaza(PASI_DOC)
+    const dupa = (j, k) => j.jurnal.find(x => x.actiune === k)
+    // lot gol, nemarcat, un plic complet: SINGURUL buton activ e marcajul (nici „Propune”, nici plafonul — garda „doar TEST”)
+    expect(dupa(a, 'marcaj-test').inainte).toEqual(['marcaj_test'])
+    expect(dupa(a, 'marcaj-test').dupa).toEqual(['evenimente', 'marcaj_test', 'plafon', 'propune'])   // după marcaj: propunerea, plafonul, lista; aprobarea încă nu (niciun plic propus)
+    expect(dupa(a, 'plafon').inainte).toContain('plafon'); expect(dupa(a, 'plafon').inainte).not.toContain('aproba')
+    expect(dupa(a, 'propune').dupa).toEqual(['aproba', 'evenimente', 'marcaj_test', 'plafon', 'propune'])   // după propunere: aprobarea; marcajul încă se poate schimba
+    expect(dupa(a, 'aproba').dupa).toEqual(['evenimente', 'genereaza', 'plafon', 'propune'])   // după aprobare: generarea; marcajul e fixat (prima aprobare)
+    expect(dupa(a, 'genereaza').dupa).toEqual(['anulare', 'confirmari', 'curier', 'etichete', 'evenimente', 'plafon', 'propune', 'tiraj', 'urmarire'])
+    expect(a.lot.randuri).toEqual([{ id: 'r1', stare: 'generat', awb: '3000000001', tarif: 12.5 }]); expect(a.lot.fanLot.test).toBe(true); expect(a.lot.tiraj).toBe(1)
+    // lotul de 3: lot NOU, gol și nemarcat → din nou singurul buton activ e marcajul; plafonul 3; plicul 2 respins de FAN; istoricul lui PP-xxxx neatins
+    expect(dupa(b, 'marcaj-test').inainte).toEqual(['marcaj_test'])
+    expect(dupa(b, 'plafon').inainte).toEqual(['evenimente', 'marcaj_test', 'plafon', 'propune'])
+    expect(dupa(b, 'aproba').dupa).toEqual(['evenimente', 'genereaza', 'plafon', 'propune'])
+    expect(dupa(b, 'genereaza').dupa).toEqual(['anulare', 'confirmari', 'curier', 'etichete', 'evenimente', 'plafon', 'propune', 'tiraj', 'urmarire'])
+    expect(b.lot.randuri.map(r => [r.id, r.stare, r.awb ?? null])).toEqual([['r1', 'generat', '3000000002'], ['r2', 'eroare', null], ['r3', 'generat', '3000000003']])
+    expect(lume.loturi['PP-xxxx'].randuri).toEqual([{ id: 'r1', stare: 'generat', awb: '3000000001', tarif: 12.5 }]); expect(Object.keys(lume.loturi)).toEqual(['PP-xxxx', 'PP-yyyy'])
+    expect(lume.loturi['PP-xxxx'].fanLot.prima_aprobare_la).toBeTruthy(); expect(lume.loturi['PP-yyyy'].fanLot.prima_aprobare_la).toBeTruthy()
+    expect(lume.setari).toEqual({ limita: 20, recitit: true })   // încheierea: 20, recitit din BD
+  })
+  it('precondițiile nu pot fi scoase sau mutate din document fără ca proba să pice; o reformulare nevinovată trece', () => {
+    const fara = cod => PASI_DOC.replace(/\r/g, '').split('\n').filter(l => !l.includes(`| \`${cod}\` |`)).join('\n')
+    expect(() => ruleaza(fara('verifica-plafon=1'))).toThrow(/plafonul nu a fost recitit din BD/)
+    expect(() => ruleaza(fara('verifica-fara-aprobari'))).toThrow(/prima aprobare fără verificarea de dinainte/)
+    expect(() => ruleaza(fara('verifica-plafon=3'))).toThrow(/plafonul nu a fost recitit din BD/)
+    expect(() => ruleaza(fara('verifica-lot-nou'))).toThrow(/prima aprobare fără verificarea de dinainte/)
+    expect(() => ruleaza(fara('verifica-tarif'))).toThrow(/eticheta înaintea verificării în selfAWB și a tarifului/)
+    expect(() => ruleaza(fara('verifica-selfawb'))).toThrow(/eticheta înaintea verificării în selfAWB/)
+    expect(() => ruleaza(fara('verifica-eticheta'))).toThrow(/tipărirea înaintea verificării etichetei/)
+    expect(() => ruleaza(fara('verifica-control'))).toThrow(/tipărirea înaintea verificării etichetei/)
+    expect(() => ruleaza(fara('verifica-plafon=20'))).not.toThrow()   // după încheiere nu urmează nicio aprobare: recitirea lui 20 e cerută de ordinea documentului (testul de mai sus), nu de o regulă a simulatorului
+    // recitirea cu altă valoare decât cea pusă; verificarea GLOBALĂ repetată la lotul de 3 (constatarea rundei 2) — ambele pică
+    expect(() => ruleaza(PASI_DOC.replace('| `verifica-plafon=1` |', '| `verifica-plafon=3` |'))).toThrow(/recitirea din BD arată plafonul 1, documentul așteaptă 3/)
+    expect(() => ruleaza(PASI_DOC.replace('| `verifica-lot-nou` |', '| `verifica-fara-aprobari` |'))).toThrow(/verificarea globală „fără aprobări \/ trimiteri” nu poate trece: PP-xxxx: generat/)
+    // mutare: recitirea ÎNAINTEA schimbării plafonului (recitirea ar arăta 20) — pică
+    const mutat = PASI_DOC.replace(/\r/g, '').split('\n'); const i1 = mutat.findIndex(l => l.includes('| `plafon=1` |')), i2 = mutat.findIndex(l => l.includes('| `verifica-plafon=1` |'))
+    expect(i1).toBeGreaterThan(0); expect(i2).toBeGreaterThan(i1); [mutat[i1], mutat[i2]] = [mutat[i2], mutat[i1]]
+    expect(() => ruleaza(mutat.join('\n'))).toThrow(/recitirea din BD arată plafonul 20, documentul așteaptă 1/)
+    // un cod greșit nu trece drept „pas fără buton”; un tabel de pași fără coloana „Acțiune” e refuzat
+    expect(() => pasiDinDocument(PASI_DOC.replace('| `verifica-lot-nou` |', '| `verifica-lot-nouu` |'), '## 9.', '## 10.')).toThrow(/acțiune necunoscută/)
+    expect(() => pasiDinDocument(PASI_DOC.replace(/\| Acțiune \|/g, '| Pas |'), '## 5.', '## 9.')).toThrow(/nu are coloana „Acțiune”/)
+    // reformulare nevinovată a textului din „Ce apasă” (fără accente grave la valoare, alte cuvinte): identificatorul e codul → trece
+    const reformulat = PASI_DOC.replace('→ `1` → „Schimbă plafonul” → confirmare (RPC', '→ 1 → „Schimbă plafonul” → OK (RPC').replace('„1. Propune 1 plicuri”', '„1. Propune 1 plicuri” (butonul din stânga)')
+    expect(reformulat).not.toBe(PASI_DOC); expect(() => ruleaza(reformulat)).not.toThrow()
+  })
+  it('o ordine imposibilă e prinsă: „Propune” sau plafonul înaintea marcajului, aprobarea fără propunere, generarea fără aprobare, plafonul depășit, proiect real', () => {
+    const pas = (nr, cine, cod, text = cod) => ({ nr, cine, text, actiune: actiuneDin(cod) })
+    const marcaj = pas('1', 'owner', 'marcaj-test', '„2a. Marchează TEST”')
+    expect(() => parcurge([pas('1', 'admin / editor Redări (sau owner-ul)', 'propune', '„1. Propune 1 plicuri”')], FN)).toThrow(/pasul 1 \(propune\): .*nu e activ.*marcate TEST/)
+    expect(() => parcurge([pas('1', 'owner', 'plafon=1')], FN)).toThrow(/pasul 1 \(plafon=1\): .*marcate TEST/)
+    expect(() => parcurge([marcaj, pas('2', 'owner', 'aproba')], FN)).toThrow(/pasul 2 \(aproba\): .*niciun plic propus/)
+    expect(() => parcurge([marcaj, pas('2', 'owner', 'propune'), pas('3', 'owner', 'genereaza')], FN)).toThrow(/pasul 3 \(genereaza\): .*niciun plic aprobat/)
+    // regula BD simulată după fn_red_fan_aproba: plafonul 1 refuză lotul de 3 (aprobarea nu se face); plafonul 3 îl lasă
+    const pregatit = n => [marcaj, pas('2', 'owner', `plafon=${n}`), pas('3', 'coordonator', `verifica-plafon=${n}`), pas('4', 'coordonator', 'verifica-fara-aprobari'), pas('5', 'owner', 'propune'), pas('6', 'owner', 'aproba')]
+    expect(() => parcurge(pregatit(1), FN, { plicuri: 3 })).toThrow(/pasul 6 \(aproba\): 3 plicuri peste plafonul 1/)
+    expect(parcurge(pregatit(3), FN, { plicuri: 3 }).lot.randuri.every(r => r.stare === 'aprobat')).toBe(true)
+    // un proiect real: nici marcajul nu e activ (nimic nu se poate începe)
+    expect(() => parcurge([marcaj], FN, { proiectCod: 'LOT1-PRUNISOR-JUPA' })).toThrow(/proiecte de TEST/)
+    // verificarea lotului nou fără niciun lot anterior = procedura greșită (la primul plic verificarea e cea globală)
+    expect(() => parcurge([marcaj, pas('2', 'coordonator', 'verifica-lot-nou')], FN)).toThrow(/nu există niciun lot anterior/)
+  })
+  it('documentele (reguli, nu formulări): opririle, derogarea doar a proprietarului, plafonul 20 o singură dată, oprirea de urgență ca estimare, lista zilei; integrarea nu mai ține o a doua copie a ordinii', () => {
+    const d = PASI_DOC.replace(/\r/g, '')
+    // opririle: tarif gol / diferit; referința absentă de pe etichetă; scrierea de mână nu e procedură; derogarea doar a proprietarului
+    expect(d).toMatch(/tarif[^\n|]*gol sau diferit[^\n|]*OPRIRE/i); expect(d).toMatch(/NU = OPRIRE/); expect(d).toMatch(/scrierea de mână[^\n]*NU e procedura/)
+    expect(d).not.toMatch(/se scrie de mână pe plic(?! NU)/); expect(d).not.toMatch(/„necunoscut”, de notat/)
+    expect(d).toMatch(/Derogări[^\n]*DOAR proprietarul/)
+    // plafonul 20: un singur moment (încheierea Testului 1), în calendarul din §6, executat ȘI recitit la §10
+    expect(d).toMatch(/Calendarul plafonului/); expect(d).toMatch(/calendarul din §6: 20 la încheierea Testului 1/); expect(d).not.toMatch(/înapoi la[^\n]*20[^\n]*după Testul 2/)
+    // oprirea de urgență: ce NU oprește; absența unei linii în jurnal nu e dovadă; fără reapăsare; durata = estimare cu ce NU include, nu plafon
+    expect(d).toMatch(/cerere deja începută[^\n]*continuă/); expect(d).toMatch(/nu dovedește nimic/); expect(d).toMatch(/fără reapăsare/)
+    expect(d).toMatch(/estimare, NU plafon garantat/); expect(d).toMatch(/NU include[^\n]*login/); expect(d).not.toMatch(/Durata maximă a unei generări/); expect(d).not.toMatch(/cel mult ~3 minute/)
+    // lista omului din ziua testului (verdictul rundei 1): ID-uri, fără redenumiri, commit-ul, probele pe versiunea inertă, contul / clientId / costuri, asocierea, oprirea, anularea
+    for (const t of ['ID-ul proiectului', 'nu se redenumesc proiecte și nu se schimbă marcaje de lot', 'commit-ul publicat', 'versiunea INERTĂ', 'contul de TEST al curierului, `clientId`-ul lui și costurile',
+      'asocierea AWB ↔ plic verificată în selfAWB', 'oprire la orice rezultat ambiguu', 'anularea AWB-urilor înainte de ridicare']) expect(d).toContain(t)
+    // documentul de integrare: O SINGURĂ definiție a ordinii (FAN_TEST1_PASI.md); §11 Testul 1 = criterii de acceptare pe faze, fără tabel de pași
+    const doc = DOC.replace(/\r/g, '')
+    const t1 = doc.slice(doc.indexOf('### Testul 1'), doc.indexOf('### Testul 2'))
+    expect(t1).toMatch(/FAN_TEST1_PASI\.md/); expect(t1).toMatch(/o singură definiție/i)
+    expect(t1).not.toMatch(/\|\s*Ce face omul\s*\|/); expect(t1).not.toMatch(/\|\s*Ce apasă\s*\|/); expect(t1).not.toMatch(/\|\s*Ac[tț]iune\s*\|/)
+    expect(() => pasiDinDocument(DOC, '### Testul 1', '### Testul 2')).toThrow(/niciun pas cu acțiune/)
+    expect(t1).toMatch(/\|\s*\*\*4a[^\n]*BLOCANT/); expect(t1).toMatch(/\|\s*\*\*4b[^\n]*verdictul 4a/)
+    expect(doc).not.toMatch(/altfel numărul plicului se scrie de mână pe plic/); expect(doc).not.toMatch(/se scrie de mână pe plic, lângă etichetă/); expect(doc).toMatch(/lipsa lui = OPRIRE la Testul 1/)
   })
 })
 
@@ -895,7 +1080,7 @@ describe('runda 3: urmărirea nu șterge un eveniment cunoscut (r2 P2)', () => {
   it('documentul (runda 3): garanția rezervării, presupunerea neconfirmată + pasul blocant, tirajul, istoricul livrării, fixture-ul', () => {
     expect(DOC).toMatch(/NU se garantează „datele sunt actuale la COMMIT \/ la POST”/)
     expect(DOC).toMatch(/PRESUPUNERE NECONFIRMATĂ/); expect(DOC).toMatch(/\*\*4a\. BLOCANT: confirmarea asocierii/)   // runda 4: §10 în ordinea recenzentului (fost 8a)
-    expect(DOC).toMatch(/\| 4a \| \*\*\(runda 3, BLOCANT/); expect(DOC).toMatch(/tirajul s-a schimbat; retipărește tot lotul/)
+    expect(DOC).toMatch(/\|\s*\*\*4a[^\n]*BLOCANT/); expect(DOC).toMatch(/tirajul s-a schimbat; retipărește tot lotul/)   // runda 3 a activării: §11 = criterii pe faze, fără tabel de pași
     expect(DOC).toMatch(/Identificatorul tirajului pe ETICHETĂ: nu se poate/)
     expect(DOC).toMatch(/Istoricul livrării la reaplicarea de TEST după revenire/); expect(DOC).toMatch(/Versiunea `20261212120000` e mai VECHE/)
     expect(DOC).toMatch(/--cu-fixture/); for (const s of ['S2a', 'S2b', 'S2c', 'U2', 'T1']) expect(DOC).toContain(`| ${s} |`)
@@ -1071,9 +1256,9 @@ describe('runda 5: soluționarea contradicțiilor urmăririi (Jakarinos #1118 r4
   })
   it('operația „solutionare”: owner SAU admin Redări, doar cu o contradicție; dezactivată cât transportul e oprit', () => {
     const cu = [rand({ stare: 'generat' })], fara = [rand({ stare: 'generat', ridicat_contrazis: null })]
-    const s = o => stariOperatii({ transportActiv: true, evidentaInstalata: true, ...o }).find(x => x.cheie === 'solutionare')
+    const s = o => stariOperatii({ transportActiv: true, evidentaInstalata: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, ...o }).find(x => x.cheie === 'solutionare')
     expect([s({ esteOwner: true, randuri: cu }).activ, s({ esteAdmin: true, randuri: cu }).activ, s({ randuri: cu }).activ, s({ esteOwner: true, randuri: fara }).activ]).toEqual([true, true, false, false])
-    expect(stariOperatii({ evidentaInstalata: true, esteOwner: true, randuri: cu }).find(x => x.cheie === 'solutionare')).toMatchObject({ activ: false, motiv: MESAJ_TRANSPORT_OPRIT })
+    expect(stariOperatii({ transportActiv: false, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: cu }).find(x => x.cheie === 'solutionare')).toMatchObject({ activ: false, motiv: MESAJ_TRANSPORT_OPRIT })
   })
   it('ecranul: acțiunea în caseta „de verificat de om”, cu ambele valori și motivul; garda de generație (executa) și dublu-click; citește versiunea', () => {
     const src = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8').replace(/\r/g, '')

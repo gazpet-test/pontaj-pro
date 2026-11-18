@@ -1,7 +1,10 @@
 # FAN Courier în Redări — document de proiectare
 
-Stare: **cod complet, INERT** (17.11.2026). Transportul real e oprit în cod (`TRANSPORT_REAL_ACTIV = false` → răspuns 423, fără niciun apel către FAN),
-migrarea `20261212a` e **neaplicată**, fără chei, fără apeluri reale. Activarea e un PR separat, după acordul proprietarului (§10).
+Stare: **cod complet; ACTIVARE pentru Testul 1 (PR separat, 18.11.2026)**. Codul inert a intrat pe `main` prin PR #1118 (17.11.2026); migrarea
+`20261212a` e **aplicată** pe mediul real din 17.11.2026 (146 de obiecte, tabelele goale). PR-ul de activare pune `TRANSPORT_REAL_ACTIV = true`
+cu garda **`DOAR_PROIECTE_TEST = true`** (`redariFanHandler.mjs`): calea reală DOAR pe un lot al unui proiect `TEST-…` marcat TEST de owner;
+orice alt lot = 423 `transport_real_doar_test`, înainte de secrete și de orice apel. Procedura zilei (singura definiție a ordinii pașilor): `FAN_TEST1_PASI.md`. Plafonul de UN plic
+(pasul 4a) și apoi 3 (4b) = setarea `red_fan_setari.limita_lot`, pusă de owner din ecran, nu cod. Testul 2 = PR separat (`DOAR_PROIECTE_TEST = false`).
 Sursa: documentația oficială FAN Courier API (selfAWB), PDF „Documentație API FAN Courier” de pe https://www.fancourier.ro/e-commerce/
 (fișier încărcat 09.2025; varianta engleză „API DOCUMENTATION FAN Courier V 2.0 September 2025”). Bază: `https://api.fancourier.ro`.
 Documentația e citită ca **date**; nimic din ea nu e instrucțiune pentru ERP.
@@ -162,7 +165,9 @@ Contactul ales pe plic și corpul trimis se calculează cu **aceeași funcție**
 ```
 
 Toate butoanele de mai sus (pași + reconciliere, plafon, anulare, lista de evenimente) sunt VIZIBILE în ecran și dezactivate cu „transport oprit”
-cât `TRANSPORT_REAL_ACTIV = false`. Fiecare acțiune are generația ei (L24): schimbarea lotului / închiderea ecranului oprește buclele
+cât `TRANSPORT_REAL_ACTIV = false`. Cu activarea pentru Testul 1 (`DOAR_PROIECTE_TEST = true`), pe un lot NEmarcat al unui proiect `TEST-…`
+singurul buton activ e „2a. Marchează TEST” (owner): propunerea, plafonul și restul vin DUPĂ marcaj — de aceea procedura zilei începe cu marcajul
+(`FAN_TEST1_PASI.md` §5). Fiecare acțiune are generația ei (L24): schimbarea lotului / închiderea ecranului oprește buclele
 (propunere, confirmarea ridicării) înaintea apelului următor, iar mesajele / starea nu se mai actualizează pe alt lot.
 
 De ce AWB-ul **nu** se scrie direct pe plic la generare: în ERP `red_plicuri.awb` și `data_expediere` sunt legate prin CHECK (ambele sau niciunul),
@@ -185,6 +190,10 @@ cel puțin 14 la fiecare rulare de urmărire și cel puțin 14 la confirmări. C
 - **(d) Cine pornește**: **poarta de ROL în cod** — funcția edge cere owner (`fn_sms_e_owner()` pe `auth.uid()`, nu din corp; JWT-ul singur nu ajunge) pe **toate** acțiunile; RPC-urile cer owner (`fn_red_fan_e_owner()`) pentru marcaj, plafon, aprobare, claim, rezultate, urmărire, confirmări, ridicare, reconciliere, anulare. Propunerea (fără cost, fără FAN) → admin/editor Redări.
 - **(e) Confirmare umană**: aprobarea pe lot (marcaj test / real, plafon pilot, hash-ul exact al datelor) e **obligatorie înainte de orice apel plătit**; generarea refuză rândurile al căror hash diferă de cel aprobat, iar rezervarea refuză dacă sursele (contactele) s-au schimbat după citire; fiecare rulare (generare, urmărire, confirmări) e un apăsat de om, cu cel mult 5 solicitări de creare pe apăsat; ridicarea, returul, reconcilierea (rând cu rând) și anularea se confirmă de om. Marcajul TEST / real e imuabil după PRIMA aprobare a lotului (în BD: coloana istorică + trigger), iar ecranul îl blochează la fel.
 - Regula tare (a)+(b): citește conținut extern și cheltuie → poartă de rol (owner) + pas de aprobare: **ambele prezente**, plus `TRANSPORT_REAL_ACTIV = false` până la activare.
+- **Activarea pentru Testul 1 (18.11.2026)**: `TRANSPORT_REAL_ACTIV = true` + garda `DOAR_PROIECTE_TEST = true` (`transportPermis`, o singură definiție
+  pentru funcția edge și ecran, L19): după poarta owner și lotul citit cu JWT-ul omului, funcția edge citește `red_proiecte.cod` și `red_fan_loturi.test`
+  (RLS) și răspunde 423 `transport_real_doar_test` dacă proiectul nu începe cu `TEST-` sau lotul nu e marcat TEST — înainte de secrete și de orice
+  apel. Un proiect invizibil / fără cod nu e „de test” (423); o eroare de citire = 503 (L18). Secretele = contul de TEST al curierului (procedura).
 
 Lecții review aplicate: L01/L04 (claim atomic cu o cheie pe solicitare, CAS pe stare și cheie), L02 (rezultatele unei solicitări într-un singur RPC; ridicarea = rând FAN + plic în aceeași tranzacție),
 L05 (timeout/5xx = „necunoscut”: fără retry automat, rularea se oprește, reconciliere prin borderoul zilei după `nr_plic`, confirmată de om), L06 (ordinea lock-urilor scrisă în migrare),
@@ -278,7 +287,7 @@ Sursa răspunsurilor: documentația actuală de la https://api.fancourier.ro/doc
 9. Câmpurile corpului `POST /order` (comanda curierului). Până atunci, comanda se face manual în selfAWB.
 10. Forma răspunsurilor la urmărire, borderou și login, pe un răspuns real: codul acceptă lista ca `data` / `response` / listă directă și `awbNumber` sau `awb`; orice altceva = de verificat. Data evenimentelor fără fus orar e presupusă ora României.
 11. Ordinea elementelor din răspunsul `POST /intern-awb` = ordinea expedierilor trimise? Are fiecare element un identificator al expedierii (referința noastră în `observation` / `content`)? Documentația nu dă un identificator pe element: codul folosește referința DACĂ apare (o referință diferită de plicul de pe poziție = toată solicitarea „necunoscut”) și altfel asociază pe poziție, doar la număr egal de elemente — **PRESUPUNERE NECONFIRMATĂ** (runda 3: rămâne așa în cod, marcată); asocierile pe poziție sunt numărate în mesajul generării. Confirmarea pe primul răspuns real (Testul 1, pașii 4a / 4b) e **pas BLOCANT** în lista de activare (§10 pasul 4a): până atunci niciun lot mai mare de un plic, în afara pasului 4b al Testului 1 (lot de TEST, adrese interne, oprire la orice nepotrivire).
-12. Câmpul `observation` (sau `content`) apare tipărit pe eticheta A6? Limita lui de caractere? De confirmat la Testul 1 (altfel numărul plicului se scrie de mână pe plic, §12).
+12. Câmpul `observation` (sau `content`) apare tipărit pe eticheta A6? Limita lui de caractere? De confirmat la Testul 1; lipsa lui = OPRIRE la Testul 1 (§11, „Oprire imediată”): eticheta nu se mai poate verifica față de pagina de control (§12). Scrierea de mână a numărului pe plic NU e procedura — ar fi o derogare decisă explicit de proprietar, în jurnalul testului, înainte de a continua.
 13. Codul de eveniment pentru „destinatar negăsit / necunoscut la adresă”: nu e în lista de lucru; de luat din `/reports/awb-events`. Până atunci, semnalele de adresă propun „adresă incompletă”, iar omul alege motivul final.
 14. Limita de AWB-uri pe apel la `/awb/label` și dacă PDF-ul păstrează ordinea din `awbs[]`.
 15. Forma răspunsului de succes la `DELETE /awb` (runda 2). Codul acceptă ca „șters” DOAR HTTP 200 + `status: "success"` fără erori (forma generală a răspunsurilor FAN, ca la login); orice altceva păstrează AWB-ul și cere verificarea în selfAWB. De confirmat pe un răspuns real, la Testul 1 (ștergerea unui AWB de test).
@@ -293,7 +302,23 @@ Făcute pe 17.11.2026 (inerte, testate pe răspunsuri simulate):
 3. ✅ **Confirmări în format JSON**: `GET /reports/awb/confirmations` cu `clientId`, `awb[]`, `language=ro`; răspunsul nu se stochează, doar starea (deschisă 7).
 4. ✅ **Lista de evenimente**: acțiunea `evenimente` compară `GET /reports/awb-events` cu `EVENIMENTE_FAN` (coduri lipsă la FAN / coduri FAN neclasificate). Lista din cod rămâne cea din PDF până la comparația pe răspunsul real (§10 pasul 6).
 5. ✅ **Comentariul de sursă** din capul `redariFan.mjs` actualizat (docs-unified 1.1.0 + răspunsurile FAN din 12–13.11.2026).
-6. `TRANSPORT_REAL_ACTIV` rămâne `false` (răspuns 423) până la PR-ul de activare, după acordul owner-ului; testul care o cere rămâne.
+6. ✅ **PR-ul de activare (18.11.2026)**: `TRANSPORT_REAL_ACTIV = true` + `DOAR_PROIECTE_TEST = true` (garda „doar TEST”, §4), ecranul cu același
+   motiv pe butoane și banner-ul „TRANSPORT REAL PORNIT pe acest lot de TEST”; teste: proiect real → 423 chiar cu comutatorul pornit, lot nemarcat →
+   423, lot de TEST → calea reală (secretele se citesc), 6 mutanți ai gărzii prinși, comportamentul cu comutatorul oprit neschimbat (flag mutat pe
+   `false`: 423 `transport_real_oprit` fără nicio citire); proba PGlite: plafonul 1 → 3 → 20 pe aprobare. Procedura: `FAN_TEST1_PASI.md`.
+   **Runda 2 a activării** (verdictul Jakarinos pe PR #1130, 18.11.2026; corecții de procedură, fără cod nou în gardă): procedura zilei reordonată
+   după ce permite ecranul (marcaj TEST pe lotul gol → plafon 1 + recitire din BD + fără aprobări existente → propunere → aprobare → generare), cu un
+   test care parcurge tabelele documentului de la lot gol (`fanProcedura.testutil.js`; documentul vechi și mutanții ordinii din cod PICĂ); opririle
+   Testului 1 păstrate în procedură (tarif gol / diferit, referința absentă de pe etichetă; derogarea doar a proprietarului); plafonul 20 cu un singur
+   moment (încheierea Testului 1); oprirea de urgență descrisă exact (secretele / funcția / flag-ul opresc cererile NOI, nu una începută; cererile
+   în curs: fără reapăsare, BD + selfAWB, reconciliere); lista de control a zilei (§0 din procedură).
+   **Runda 3 a activării** (al doilea verdict Jakarinos pe PR #1130, 18.11.2026; tot fără cod nou în gardă): o SINGURĂ definiție a procedurii —
+   ordinea pașilor e DOAR în `FAN_TEST1_PASI.md`, iar §11 de aici păstrează criteriile de acceptare (cele două copii ale ordinii ajunseseră să se
+   contrazică: plafonul 3 și aprobarea celor trei plicuri înaintea pasului cu UN plic); continuarea cu trei plicuri separată de verificarea
+   inițială globală (lot NOU marcat TEST, plafonul 3 recitit, verificările lotului nou cu istoricul primului lot numit explicit, SQL de citire
+   propriu); plafonul 20 executat și recitit la încheiere (nu doar anunțat); coloana „Acțiune” (identificator stabil al pasului) și proba completă
+   a procedurii (primul plic → lotul de 3 cu istoricul prezent → încheierea; precondițiile fără buton nu pot fi scoase sau mutate; documentul de la
+   9fb88b2f pică pe continuare); durata unei cereri scrisă ca estimare, cu ce NU include.
 
 7. ✅ **Runda 2** (verdictul PR #1118): reconcilierea fără concluzii pe elemente neînțelese, manifestul comun etichete ↔ documente + pagina de control, ștergerea strictă, marcajul imuabil istoric, operațiile în ecran + garda de generație, motivele fără PII, numele din arhivă, amprenta surselor la rezervare, versiunea urmăririi, referința pe element; migrarea și revenirea în forma livrării L15 v2.
 8. ✅ **Runda 3** (re-review PR #1118): tirajul (o cheie de manifest pentru toate descărcările, `fn_red_fan_tiraj`, „Tiraj nou”), pagina de control identică în etichete și arhivă (cu numărul documentelor și tirajul), reverificarea generației după `await` la etichete (L24), urmărirea fără evenimente nu șterge ce se știe, scriptul cu două sesiuni reparat + fixture sintetic, garanția rezervării scrisă exact.
@@ -322,11 +347,12 @@ Rămase pentru activare (după răspunsuri FAN / juridic): validarea adreselor c
 4. ⚑ **Confirmările FAN pe contul de TEST, costurile și contractele API; PR separat de activare; apoi Testul 1 și pasul 4a.**
    - **FAN**: răspunsuri la §8 deschise 2, 3, 4, 6 (limita pe minut, contul de TEST — **decizia proprietarului din 17.11.2026: primul test se face pe contul de TEST**; întrebarea „se facturează AWB-urile create cu el?” se lămurește PE ACEL CONT, cu FAN, înaintea primului apel de creare —, plicul, punctul de lucru). Contract activ pe API.
    - **Secretele** contului de TEST în Supabase → Edge Functions → Secrets (de proprietar): `FAN_SELFAWB_USERNAME`, `FAN_SELFAWB_PASSWORD`, `FAN_CLIENT_ID`.
-   - **PR de activare** (separat, revizuit): `TRANSPORT_REAL_ACTIV = true` și schimbarea testului care cere `false`. Imediat după publicare, owner-ul apasă „Lista de evenimente FAN” (caseta de jos a ecranului) și compară lista; diferențele se pun în `EVENIMENTE_FAN` printr-un PR mic, înainte de prima urmărire reală.
-   - **Testul 1** (§11), pe contul de TEST, lot marcat TEST.
+   - **PR de activare** (separat, revizuit — 18.11.2026): `TRANSPORT_REAL_ACTIV = true` **cu garda `DOAR_PROIECTE_TEST = true`** (doar proiecte `TEST-…` cu lotul marcat TEST; restul 423) și schimbarea testelor care cereau `false`. **Ordinea pașilor din ecran, verificările din BD și SQL-ul lor sunt DOAR în `FAN_TEST1_PASI.md`** (o singură definiție; acest document nu le repetă). Decizia de plafon (setarea `red_fan_setari.limita_lot`, pusă de owner din ecran și recitită din BD la fiecare schimbare): **1** la primul plic, **3** la lotul de 3, **20** la încheierea Testului 1 (precondiția Testului 2) — momentele exacte sunt în calendarul din procedură (§6). După publicare, owner-ul apasă „Lista de evenimente FAN” (pe lotul de TEST marcat) și compară lista; diferențele se pun în `EVENIMENTE_FAN` printr-un PR mic, înainte de prima urmărire reală. Probele 401 / 403 / 423 se refac pe forma activată (423 = lot nemarcat pe `TEST-RAZVAN` și lot al unui proiect real, `FAN_TEST1_PASI.md` §4).
+   - **Testul 1** (§11 = criteriile de acceptare), pe contul de TEST, loturi marcate TEST; pașii zilei, în ordine, cu oprirea la orice formă neașteptată: `FAN_TEST1_PASI.md`.
    - **4a. BLOCANT: confirmarea asocierii răspuns ↔ plic pe primul răspuns real** (§8 deschisă 11), în Testul 1 (pașii 4a / 4b), consemnată în jurnalul testului: (i) poartă fiecare element referința (`observation` / `content`)? (ii) ordinea elementelor = ordinea expedierilor (verificat în selfAWB pe fiecare AWB ↔ numărul plicului din observații, inclusiv pe poziția elementului respins)? Până la confirmare: NICIUN lot mai mare de un plic (în afara pasului 4b al testului), Testul 2 nu pornește. Dacă elementele nu poartă referința și ordinea nu se poate confirma: un PR reduce bucata de creare la UN plic pe solicitare (`imparteInBucati(…, 1)`; codul acceptă 1…100), revizuit înainte de Testul 2.
 5. ⚑ **Numai după acceptarea Testului 1 și „da”-ul juridic: Testul 2; ulterior creșterea plafonului.**
    - **Juridic**: „da” scris pentru FAN + oPOD ca recomandată cu confirmare de primire (§8 deschisă 1). Fără el, convocările rămân la Poșta Română; FAN se poate folosi doar pentru loturi de TEST.
+   - **PR-ul Testului 2** (separat, revizuit): `DOAR_PROIECTE_TEST = false` (lotul real rămâne păzit de marcajul owner-ului, de plafonul pilot și de aprobarea pe hash).
    - **Testul 2** (§11); abia după el plafonul pilot se ridică din ecran (caseta „Plafonul lotului pilot” → „Schimbă plafonul”, owner).
    - Registrul de automatizări + rândul din `public.automatizari` (fișa a–e de la §4), la activare (de chat).
 
@@ -346,30 +372,32 @@ de cont nu se schimbă de aici). Marcajul TEST din ERP NU schimbă contul FAN. (
 **Oprire imediată** (nu se continuă, se reconciliază / se lămurește, apoi se reia de la pasul în cauză) la: orice rezultat „necunoscut”; „tirajul s-a schimbat” neașteptat (în afara pasului 8);
 „asociate pe poziție” > 0 fără verificarea în selfAWB a fiecărui AWB ↔ plic; tarif lipsă sau diferit de oferta FAN; referința (numărul
 plicului) absentă de pe etichetă; ORICE nepotrivire între pagina de control, etichetă și teancul de documente; „manifest schimbat”.
+O continuare după oricare dintre ele e o **derogare**: o decide DOAR proprietarul, explicit, scrisă în jurnalul testului înainte de pasul următor
+(nu coordonatorul, nu „de notat pentru mai târziu”). Procedura zilei: `FAN_TEST1_PASI.md` §12.
 
-| Pas | Ce face omul | Ce se verifică |
-|---|---|---|
-| 1 | În proiectul de test: 3 plicuri, lot de plicuire PP-xxxx, opis atașat pe fiecare. Plicul 2 primește o localitate care NU există în nomenclatorul FAN (ex. un sat inventat), ca FAN să-l respingă la creare | ✉️ Poștă → „📦 AWB FAN”: 3 din 3 plicuri cu toate datele (verificarea ERP e de completitudine); referința pe etichetă = numărul plicului |
-| 2 | Admin/editor: „Propune 3 plicuri” | 3 rânduri „propus” |
-| 3 | Owner: „Marchează TEST”, apoi „Aprobă” | titlul arată „LOT DE TEST”; 3 „aprobat”; „2a. / 2b.” devin inactive (marcajul nu se mai schimbă nici după o re-propunere) |
-| 4a | **(runda 3, BLOCANT pentru tot ce urmează)** ÎNAINTE de lotul cu 3 plicuri: un lot de TEST separat, cu UN singur plic (adresă internă, telefon) → „Propune”, „Marchează TEST”, „Aprobă”, „Generează AWB” | O solicitare cu 1 expediere, 1 AWB. Se notează în jurnal FORMA REALĂ a elementului din răspuns: are referința (`observation` / `content`)? ce alte câmpuri? (§8 deschisă 11) |
-| 4b | Owner: „Generează AWB” pe lotul cu 3 plicuri (singurul lot > 1 plic permis înainte de confirmare) | O solicitare cu 3 expedieri: 1 și 3 „AWB generat” (AWB + tarif), 2 „respins de FAN” cu câmpul semnalat (fără textul FAN). În selfAWB: 2 AWB-uri, cu numărul plicului la observații. **Verificare obligatorie, înainte de orice tipărire**: fiecare AWB din ERP ↔ numărul plicului din observațiile lui în selfAWB, inclusiv că elementul respins e pe poziția plicului 2; „asociate pe poziție” > 0 = oprire până la această verificare. Rezultatul (confirmat / neconfirmat) se scrie în jurnal: e pasul 4a din §10 |
-| 5 | Owner: „Etichete A6 (PDF)” | `TEST_PP-xxxx_tiraj-<ID>_etichete_A6.pdf` cu **2** etichete (PL-…-0001 pe poziția 1, PL-…-0003 pe poziția 2) + `TEST_PP-xxxx_tiraj-<ID>_pagina_de_control.docx`: titlul și primul rând cu „tirajul <ID> (nr. 1)”, 2 rânduri bifabile (cu numărul documentelor) + „rămase: PL-…-0002”. Tipărirea pe imprimanta termică e corectă; **numărul plicului apare pe etichetă** (§8 deschisă 12) |
-| 6 | Loturi → „Documente lot (ZIP, în ordinea plicurilor)” | `TEST_PP-xxxx_tiraj-<ID>_documente_in_ordinea_plicurilor.zip` (ACELAȘI `<ID>`): `TEST_0000_tiraj-<ID>_pagina_de_control.docx`, apoi `TEST_0001_PL-…-0001_000_opis_T<ID>.docx`, `TEST_0001_…_001_C-…_T<ID>.docx`, `TEST_0002_PL-…-0003_000_opis_T<ID>.docx` …; **niciun fișier al plicului 2**; pagina de control IDENTICĂ cu cea de la pasul 5 (aceleași rânduri, același număr de documente) |
-| 7 | Verificarea pe pagina de control (§12): pentru fiecare poziție, eticheta = prima pagină (opisul) = teancul; bifa pe rând; același `<ID>` pe toate foile | toate cele 2 rânduri bifate; plicul 2 rămâne deoparte |
-| 8 | (opțional, ⚑ cost) Corectarea plicului 2 (localitatea reală), „Propune”, „Aprobă”, „Generează” → „Etichete” și „Documente lot” sunt REFUZATE („tirajul s-a schimbat; retipărește tot lotul”, nimic descărcat); owner-ul: „Tiraj nou — 1. Oprește descărcările”; după 30 de secunde se distrug foile ȘI fișierele descărcate ale tirajului `<ID>`; owner-ul: „2. Înlocuiește tirajul”; apoi se descarcă din nou TOT lotul | refuzul apare la ambele descărcări; „Înlocuiește” apăsat înainte de 30 s (sau fără oprire) = refuzat; cât e oprit, o descărcare a tirajului `<ID>` = „descărcările … sunt OPRITE”, nimic descărcat; după înlocuire: tirajul `<ID2>` (nr. 2), manifestul are 3 poziții (PL-…-0003 trece pe poziția 3); pagina de control fără „rămase”; toate fișierele noi poartă `<ID2>` |
-| 9 | Ștergerea unui AWB de test înainte de ridicare (doar dacă se folosește un AWB suplimentar, ⚑ cost): „Anulare AWB” → „Șterge la FAN” | răspunsul real la `DELETE /awb` (se notează forma, §8 deschisă 15): dacă e cea recunoscută → „anulat”; altfel AWB-ul rămâne „generat”, verificare în selfAWB, „Marchează anulat” |
-| 10 | Comanda curierului în selfAWB | curierul ridică plicurile tipărite |
-| 11 | Owner: „Urmărire”, a doua zi | „ridicat (C0): de confirmat”, cu data C0; „Confirmă ridicarea” → rândurile FAN = „ridicat”; **plicurile din Poștă NU devin expediate** (lot de test) |
-| 12 | Colegul destinatar al plicului 3 **refuză** plicul la livrare | „Urmărire” → plicul 3 = „RETUR”, propus „Refuz”; plicul 1 = „livrat (S2)” |
-| 13 | Owner: „Confirmări / retururi” | 1: „confirmare primită: de verificat”; 3: „nicio confirmare”. Se notează forma reală a răspunsului (§8 deschisă 7) |
-| 14 | Reconcilierea „pe uscat”: caseta „Reconciliere”, ziua generării | fără rânduri „necunoscut” butonul e inactiv; dacă a existat un „necunoscut”: propunerile se compară cu selfAWB înainte de orice confirmare; elementele neînțelese apar ca număr (§8 deschisă 16) |
-| 15 | Borderou FAN (CSV) | primul rând „LOT DE TEST”; fără nume / adrese / telefoane |
-| 16 | Factura FAN | exact AWB-urile din ERP, tariful = cel din ERP |
+**Procedura — ordinea pașilor, butoanele, verificările din BD și SQL-ul lor — e DOAR în `FAN_TEST1_PASI.md`: o singură definiție** (L19; runda 3 a
+activării, după ce cele două copii ale ordinii ajunseseră să se contrazică: aici plafonul 3 și aprobarea celor trei plicuri veneau înaintea pasului
+cu UN plic). Acest document păstrează DOAR **criteriile de acceptare**: ce trebuie să fie adevărat, în jurnalul testului, la sfârșitul fiecărei faze;
+altceva = oprire (mai sus). Coloana „Faza” trimite la secțiunile procedurii; referințele „§” din coloana criteriului sunt la acest document.
+
+| Faza (secțiunea din `FAN_TEST1_PASI.md`) | Criteriul de acceptare |
+|---|---|
+| Pregătirea (procedura §0–§4) | lista de control §0 bifată (ID-ul proiectului și ale celor două loturi, codul `TEST-RAZVAN`, conținut fictiv; nimeni nu redenumește proiecte și nu schimbă marcaje); secretele = contul de TEST al curierului, confirmat prin login în selfAWB, `clientId`-ul lui, costurile acceptate explicit (§8 deschisă 3); funcția publicată = SHA-ul de pe `main`, forma activată; probele 401 / 403 / 423 / 400 pe versiunea inertă și pe cea activată, cu dovada din trei (codurile + jurnalul funcției + selfAWB fără AWB nou); lotul PP-xxxx cu UN plic (date ale firmei): „1 din 1 plicuri au toate datele”, singurul buton activ „2a. Marchează TEST” |
+| **4a — primul plic** (BLOCANT pentru tot ce urmează; procedura §5–§8) | lotul marcat TEST pe lotul gol; plafonul 1 setat ȘI recitit din BD; verificarea inițială globală trecută (zero aprobări / trimiteri în orice lot, exact un lot marcat); O solicitare cu UNA expediere → 1 AWB; ce se poate dovedi despre forma elementului din răspuns fără corpul brut (ERP-ul nu îl afișează și nu îl păstrează): mesajul generării (asociere pe referință sau pe poziție) + selfAWB; forma completă a elementului (§8 deschisă 11) rămâne DESCHISĂ și se lămurește printr-un PR separat, nu în Testul 1; **verdictul 4a în jurnal**: „pe referință” sau „pe poziție, confirmată în selfAWB” (altfel Testul 1 se oprește; PR cu bucata de UN plic, §10 pasul 4a); tariful = cel din selfAWB = oferta FAN; eticheta A6 cu AWB-ul din ERP ȘI numărul plicului tipărit (§8 deschisă 12); pagina de control cu un rând și același tiraj; a doua descărcare = același fișier, același `<ID>` |
+| **4b — lotul de 3** (procedura §9) | pornește DOAR cu verdictul 4a confirmat; lot NOU PP-yyyy (3 plicuri; plicul 2 cu o localitate care NU există în nomenclatorul FAN, ca FAN să-l respingă la creare) marcat TEST pe lotul gol; plafonul 3 setat ȘI recitit; verificările lotului NOU trecute (zero rânduri pe el; istoricul lui PP-xxxx exact cel așteptat: un rând generat / anulat, eventual eroare, nimic în curs / necunoscut / aprobat / propus; două loturi marcate); O solicitare cu 3 expedieri: 1 și 3 „AWB generat” (AWB + tarif), 2 „respins de FAN” cu câmpul semnalat, fără textul FAN; în selfAWB 2 AWB-uri cu numărul plicului la observații; **verificarea AWB ↔ plic pe fiecare, inclusiv poziția respinsului, ÎNAINTE de orice tipărire** („asociate pe poziție” > 0 = oprire până atunci; rezultatul în jurnal = §10 pasul 4a); tarifele = selfAWB = oferta; etichete: **2** (PL-…-0001 pe poziția 1, PL-…-0003 pe poziția 2) + pagina de control „tirajul <ID> (nr. 1)” cu 2 rânduri și „rămase: PL-…-0002”; arhiva ZIP cu ACELAȘI `<ID>`, fără fișierele plicului 2, pagina de control IDENTICĂ; verificarea celor trei numere (§12) pe fiecare poziție; plicul 2 rămâne deoparte |
+| Tiraj nou (opțional, ⚑ cost; procedura §9, final) | corectarea plicului 2 → „Propune”, „Aprobă”, „Generează” → „Etichete” și „Documente lot” REFUZATE („tirajul s-a schimbat; retipărește tot lotul”, nimic descărcat); „Tiraj nou — 1. Oprește descărcările” → după 30 s foile ȘI fișierele tirajului `<ID>` distruse → „2. Înlocuiește tirajul”; „Înlocuiește” înainte de 30 s sau fără oprire = refuzat; cât e oprit, orice descărcare a tirajului `<ID>` = „descărcările … sunt OPRITE”, nimic descărcat; după înlocuire: tirajul `<ID2>` (nr. 2), 3 poziții (PL-…-0003 trece pe poziția 3), pagina de control fără „rămase”, toate fișierele noi cu `<ID2>` |
+| Anularea (procedura §11) | forma reală a răspunsului `DELETE /awb` notată (§8 deschisă 15): forma recunoscută → „anulat” și AWB-ul dispare de pe borderoul selfAWB; altfel AWB-ul rămâne „generat” → verificare în selfAWB → „Marchează anulat” cu motiv; plicurile din Poștă neatinse |
+| Comanda curierului și ridicarea (procedura §10) | comanda DOAR manual în selfAWB, cu decizia explicită a proprietarului; a doua zi „Urmărire” → „ridicat (C0): de confirmat” → „Confirmă ridicarea” → rândurile FAN „ridicat”; **plicurile din Poștă NU devin expediate** (lot de test) |
+| Livrarea, returul, confirmările (procedura §10) | plicul 1 „livrat (S2)”; colegul destinatar al plicului 3 refuză → „RETUR”, propus „Refuz”; „Confirmări / retururi”: 1 „confirmare primită: de verificat”, 3 „nicio confirmare”; formele reale ale răspunsurilor notate (§8 deschise 7, 10) |
+| Reconcilierea „pe uscat”, borderoul, factura | fără rânduri „necunoscut” butonul „Reconciliază” e inactiv; dacă a existat unul, propunerile se compară cu selfAWB înainte de orice confirmare, elementele neînțelese apar ca număr (§8 deschisă 16); borderoul CSV: primul rând „LOT DE TEST”, fără nume / adrese / telefoane; factura FAN = exact AWB-urile din ERP, tarifele = cele din ERP |
+| Încheierea Testului 1 (procedura §10, ultimul tabel) | plafonul 20 setat ȘI recitit din BD; jurnalul complet (formele reale ale răspunsurilor, verdictul 4a) predat proprietarului; Testul 2 nu pornește de aici (PR separat, §10 pasul 5) |
 
 ### Testul 2 — lot real, 10–20 plicuri dintr-un UAT
 
 Precondiții: Testul 1 trecut, asocierea răspuns ↔ plic CONFIRMATĂ în jurnalul lui (§10 pasul 4a; altfel bucata = 1 plic prin PR), „da” juridic (§10 pasul 5), plafon pilot 20, telefoanele completate pe plicurile alese.
+
+Tabelul de mai jos e rezumatul criteriilor; lista de pași a Testului 2 (ca `FAN_TEST1_PASI.md`, verificată în același simulator față de ecranul fără
+garda „doar TEST”) vine în PR-ul Testului 2 — până atunci tabelul NU se execută.
 
 | Pas | Ce face omul | Ce se verifică |
 |---|---|---|
@@ -471,8 +499,9 @@ refuză orice descărcare a tirajului („descărcările sunt OPRITE”), chiar 
 3. **Opisul față de conținut**: numerele convocărilor din opis = convocările puse în plic (numărul de documente de pe rând = opis + convocări), și numele destinatarului din opis = numele de pe etichetă.
 
 Toate trebuie să se potrivească; altfel plicul nu se închide și se reface. Plicurile „rămase” (fără AWB) nu au etichetă și nici documente în
-arhivă: nu se plicuiesc în acest lot. Dacă eticheta A6 nu tipărește observațiile (§8 deschisă 12), numărul plicului se scrie de mână pe plic,
-lângă etichetă, înainte de verificare.
+arhivă: nu se plicuiesc în acest lot. Dacă eticheta A6 nu tipărește numărul plicului (§8 deschisă 12), Testul 1 se OPREȘTE (§11) și verificarea
+celor trei numere se reproiectează printr-un PR înainte de orice lot real; scrierea de mână a numărului pe plic NU e procedura (ar fi o derogare
+decisă explicit de proprietar, în jurnalul testului).
 
 ### Decizii ale proprietarului (17.11.2026)
 

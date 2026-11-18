@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { webcrypto } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
+import { pasiDinDocument, parcurge, lumeNoua } from './fanProcedura.testutil.js'
 
 const CAI = {
   'redariFan.mjs': 'supabase/functions/_shared/redariFan.mjs',
@@ -36,6 +37,14 @@ const surseR2 = surseDin(VECHI_R2)
 // runda 4: head-ul revizuit în runda 3 (verdictul Jakarinos #1118 r3)
 const VECHI_R3 = 'fdaa0496171a95d65644c49e17d033c07c1a3457'
 const surseR3 = surseDin(VECHI_R3)
+// activare, runda 2 (verdictul Jakarinos pe PR #1130): procedura zilei din 9ceea228 (plafon înaintea marcajului, „Propune” înaintea „Marchează TEST”)
+// TREBUIE să pice în simulatorul procedurii; runda 3 (al doilea verdict): documentul din 9fb88b2f trece pe primul plic, dar continuarea cu trei
+// plicuri („aceiași pași de la §5 la §8”) TREBUIE să pice pe istoricul primului lot; documentul curent trece COMPLET (primul plic → lotul de 3 → încheierea)
+const DOC_PASI = 'docs/redari/FAN_TEST1_PASI.md'
+const PASI_ACUM = readFileSync(DOC_PASI, 'utf8')
+const docDin = sha => { try { return execFileSync('git', ['show', `${sha}:${DOC_PASI}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) } catch { return null } }
+const PASI_VECHI = docDin('9ceea22800da3cce3c4c072a7314c67cb974c827')
+const PASI_R2 = docDin('9fb88b2f0cfd897375271ac93be6768cae69dd7f')
 // folderul temporar stă în .tmp/ (ignorat de git): pe Windows, calea scurtă din %TEMP% (GAZPET~1) nu se încarcă prin vite
 const TMP = join(process.cwd(), '.tmp')
 mkdirSync(TMP, { recursive: true })
@@ -177,13 +186,13 @@ const VERIFICARI = {
   },
   // 4 (P2): marcajul TEST / real blocat după PRIMA aprobare, chiar dacă rândurile au redevenit „propus”
   async marcajIstoric(M) {
-    return M.lot.stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'propus' }], fanLot: { test: false, prima_aprobare_la: '2026-11-17T10:00:00Z' } }).activ === false
-      && M.lot.stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'propus' }], fanLot: { test: false, prima_aprobare_la: null } }).activ === true
+    return M.lot.stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', randuri: [{ stare: 'propus' }], fanLot: { test: false, prima_aprobare_la: '2026-11-17T10:00:00Z' } }).activ === false
+      && M.lot.stareMarcaj({ transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', randuri: [{ stare: 'propus' }], fanLot: { test: false, prima_aprobare_la: null } }).activ === true
   },
   // 5 (P2): operațiile procedurii (reconciliere, plafon, anulare, evenimente) există și sunt dezactivate cu transportul oprit
   async operatiiEcran(M) {
-    const o = M.lot.stariOperatii({ evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] })
-    const p = M.lot.stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: true, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] })
+    const o = M.lot.stariOperatii({ transportActiv: false, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] })
+    const p = M.lot.stariOperatii({ transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'necunoscut' }, { stare: 'generat' }] })
     // runda 5: „solutionare” cere o contradicție (aici niciuna) — verificată separat (fanCourier.test.js)
     return JSON.stringify(o.map(x => x.cheie).filter(k => !['tiraj', 'solutionare'].includes(k))) === '["reconciliere","plafon","anulare","evenimente"]' && o.every(x => !x.activ)
       && p.filter(x => x.cheie !== 'solutionare').every(x => x.activ)
@@ -337,16 +346,58 @@ const VERIFICARI = {
     const deps = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: false }), lot: async () => ({ data: LOT }) }
     return (await M.h.raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: LOT.id } }, deps)).status === 403
   },
-  async transportOprit(M) {
+  // ACTIVARE Testul 1: flag-ul pornit, DAR calea reală DOAR pe un proiect „TEST-…” cu lotul marcat TEST; orice alt lot = 423, fără secrete / rețea
+  async doarTest(M) {
     const interzis = vi.fn(() => { throw new Error('APEL INTERZIS') })
-    const deps = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: async () => ({ data: LOT }),
-      fetch: interzis, rpc: interzis, secrete: interzis, randuriLot: interzis, datePlicuri: interzis, proiect: interzis }
-    let r
-    try { r = await M.h.raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: LOT.id } }, deps) } catch { return false }
-    return r.status === 423 && r.body.cod === 'transport_real_oprit' && interzis.mock.calls.length === 0 && M.h.TRANSPORT_REAL_ACTIV === false
-      && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, fanLot: { test: false }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).every(p => !p.activ)
+    const baza = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: async () => ({ data: LOT }), fetch: interzis, rpc: interzis, secrete: interzis, randuriLot: interzis, datePlicuri: interzis }
+    const cer = async (cod, test) => { try { return await M.h.raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: LOT.id } }, { ...baza, proiect: async () => ({ data: { id: 'p1', cod } }), fanLot: async () => ({ data: test == null ? null : { test } }) }) } catch { return null } }
+    const real = await cer('LOT1-PRUNISOR-JUPA', true), nemarcat = await cer('TEST-RAZVAN', null), marcatReal = await cer('TEST-RAZVAN', false)
+    const refuz = r => r?.status === 423 && r.body.cod === 'transport_real_doar_test'
+    if (!refuz(real) || !refuz(nemarcat) || !refuz(marcatReal) || interzis.mock.calls.length !== 0) return false
+    // lotul de TEST trece de gardă: calea reală începe cu citirea secretelor (lipsă = 503), fără rețea
+    const secrete = vi.fn(() => null)
+    let ok
+    try { ok = await M.h.raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: LOT.id } }, { ...baza, secrete, proiect: async () => ({ data: { id: 'p1', cod: 'TEST-RAZVAN' } }), fanLot: async () => ({ data: { test: true } }) }) } catch { return false }
+    return ok.status === 503 && ok.body.cod === 'transport_neconfigurat' && secrete.mock.calls.length === 1 && interzis.mock.calls.length === 0
+      && M.h.TRANSPORT_REAL_ACTIV === true && M.h.DOAR_PROIECTE_TEST === true
+      && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'LOT1-PRUNISOR-JUPA', fanLot: { test: true }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).every(p => !p.activ)
+      && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: false }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).every(p => !p.activ)
+      && M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 }).some(p => p.activ)
+  },
+  // ACTIVARE runda 2 + 3 (Jakarinos #1130 P2 / P3): procedura documentului e executabilă din ecran, COMPLET — primul plic (plafon 1), lotul de 3
+  // (plafon 3) cu istoricul primului lot prezent, încheierea (plafon 20) — în ordinea scrisă (coloana „Acțiune”). Pică dacă ordinea din COD se
+  // schimbă (mutanții de mai jos) sau dacă documentul cere o stare imposibilă / sare o verificare a procedurii.
+  async procedura(M, doc = PASI_ACUM) {
+    const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii }
+    const lume = lumeNoua()
+    const a = parcurge(pasiDinDocument(doc, '## 5.', '## 9.'), fn, { lume, lot: 'PP-xxxx' })
+    const b = parcurge(pasiDinDocument(doc, '## 9.', '## 10.'), fn, { lume, lot: 'PP-yyyy', plicuri: 3, respinse: [2] })
+    parcurge(pasiDinDocument(doc, '## 10.', '## 11.'), fn, { lume, lot: 'PP-yyyy' })
+    return JSON.stringify(a.jurnal[0].inainte) === '["marcaj_test"]' && a.lot.randuri.length === 1 && a.lot.randuri[0].stare === 'generat'
+      && JSON.stringify(b.jurnal[0].inainte) === '["marcaj_test"]' && b.lot.randuri.map(r => r.stare).join() === 'generat,eroare,generat' && lume.setari.limita === 20
   },
 }
+
+// comutatorul OPRIT (forma de dinaintea activării, obținută prin mutația flag-ului): comportamentul de pe main rămâne neschimbat —
+// 423 „transport_real_oprit” pe ORICE acțiune, fără NICIO citire în plus (nici proiectul, nici marcajul), fără secrete / rețea; ecranul tot oprit
+describe('comutatorul oprit (TRANSPORT_REAL_ACTIV = false): comportamentul de dinaintea activării, neschimbat', () => {
+  it('toate acțiunile → 423 transport_real_oprit, nicio dependență atinsă; pașii din ecran dezactivați cu „transport oprit”', async () => {
+    const M = await incarca({ fisier: 'redariFanHandler.mjs', din: 'export const TRANSPORT_REAL_ACTIV = true', in: 'export const TRANSPORT_REAL_ACTIV = false' })
+    const interzis = vi.fn(() => { throw new Error('APEL INTERZIS cât transportul e oprit') })
+    const deps = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: async () => ({ data: LOT }),
+      fetch: interzis, rpc: interzis, secrete: interzis, randuriLot: interzis, datePlicuri: interzis, proiect: interzis, fanLot: interzis, plicuriLot: interzis, pauza: interzis }
+    for (const actiune of M.h.ACTIUNI_FAN) {
+      const r = await M.h.raspundeFan({ jwt: 'x', corp: { actiune, lot_id: LOT.id, parte: 1, data: '2026-11-18' } }, deps)
+      expect([actiune, r]).toEqual([actiune, { status: 423, body: { cod: 'transport_real_oprit' } }])
+    }
+    expect(interzis).not.toHaveBeenCalled()
+    expect(M.h.TRANSPORT_REAL_ACTIV).toBe(false)
+    const p = M.lot.stariPasi({ evidentaInstalata: true, esteOwner: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'aprobat' }], gataDePropus: 1 })
+    expect(p.every(x => !x.activ && x.motiv === M.lot.MESAJ_TRANSPORT_OPRIT)).toBe(true)
+    expect(M.lot.stariOperatii({ evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: [{ stare: 'generat' }] }).every(x => !x.activ && x.motiv === M.lot.MESAJ_TRANSPORT_OPRIT)).toBe(true)
+    expect(M.lot.stareMarcaj({ evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN' })).toEqual({ activ: false, motiv: M.lot.MESAJ_TRANSPORT_OPRIT })
+  })
+})
 
 const MUTANTI = [
   ['limita100', 'limita de 100 ridicată la 1000', { fisier: 'redariFan.mjs', din: 'export const MAX_PE_CERERE = 100', in: 'export const MAX_PE_CERERE = 1000' }],
@@ -397,8 +448,18 @@ const MUTANTI = [
   ['lotTest', 'prefixul TEST_ pierdut', { fisier: 'fanLot.js', din: "fanLot?.test === true ? 'TEST_' : ''", in: "''" }],
   ['lotTest', 'borderoul fără marcaj', { fisier: 'fanLot.js', din: "const cap = fanLot?.test === true ? [['LOT DE TEST", in: "const cap = false ? [['LOT DE TEST" }],
   ['poartaRol', 'fără verificarea owner-ului', { fisier: 'redariFanHandler.mjs', din: "if (owner?.data !== true) return out(403, 'non_owner')", in: '' }],
-  ['transportOprit', 'garda 423 scoasă', { fisier: 'redariFanHandler.mjs', din: "if (!TRANSPORT_REAL_ACTIV) return out(423, 'transport_real_oprit')", in: '' }],
-  ['transportOprit', 'flag-ul pornit', { fisier: 'redariFanHandler.mjs', din: 'export const TRANSPORT_REAL_ACTIV = false', in: 'export const TRANSPORT_REAL_ACTIV = true' }],
+  // activare Testul 1: garda „doar TEST”
+  ['doarTest', 'garda „doar TEST” scoasă', { fisier: 'redariFanHandler.mjs', din: '    if (!p.ok) return out(423, p.cod, { motiv: p.motiv })', in: '' }],
+  ['doarTest', 'garda oprită din constantă (forma Testului 2)', { fisier: 'redariFanHandler.mjs', din: 'export const DOAR_PROIECTE_TEST = true', in: 'export const DOAR_PROIECTE_TEST = false' }],
+  ['doarTest', 'orice proiect trece drept de TEST', { fisier: 'redariFanHandler.mjs', din: "export const esteProiectTest = cod => typeof cod === 'string' && cod.startsWith(PREFIX_PROIECT_TEST)", in: 'export const esteProiectTest = cod => true' }],
+  ['doarTest', 'marcajul lotului neverificat', { fisier: 'redariFanHandler.mjs', din: "    if (cereMarcaj && fanLot?.test !== true) return", in: '    if (false) return' }],
+  ['doarTest', 'flag-ul oprit (lotul de TEST n-ar mai trece)', { fisier: 'redariFanHandler.mjs', din: 'export const TRANSPORT_REAL_ACTIV = true', in: 'export const TRANSPORT_REAL_ACTIV = false' }],
+  ['doarTest', 'ecranul ignoră garda (pașii activi pe proiect real)', { fisier: 'fanLot.js', din: '    if (oprit) return { ...p, motiv: oprit, activ: false }', in: '    if (false) return null' }],
+  // activare runda 2: ordinea din cod schimbată → procedura documentului nu mai e executabilă
+  ['procedura', 'marcajul cere lotul deja marcat (nu s-ar putea începe)', { fisier: 'fanLot.js', din: 'const oprit = motivTransport({ transportActiv, proiectCod, fanLot, cereMarcaj: false })', in: 'const oprit = motivTransport({ transportActiv, proiectCod, fanLot, cereMarcaj: true })' }],
+  ['procedura', 'plafonul doar după un AWB generat', { fisier: 'fanLot.js', din: "    plafon: [[esteOwner, 'doar owner-ul']],", in: "    plafon: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['generat']) > 0, 'niciun AWB generat']]," }],
+  ['procedura', 'aprobarea cere rânduri deja aprobate', { fisier: 'fanLot.js', din: "[numar(randuri, ['propus']) > 0, 'niciun plic propus']", in: "[numar(randuri, ['aprobat']) > 0, 'niciun plic propus']" }],
+  ['procedura', 'propunerea doar după prima aprobare', { fisier: 'fanLot.js', din: "    propune: [[poateScrie, 'doar admin / editor'], ", in: "    propune: [[poateScrie, 'doar admin / editor'], [!!fanLot?.prima_aprobare_la, 'lotul nu e aprobat'], " }],
 ]
 
 describe('mutanți FAN (JS)', () => {
@@ -448,5 +509,29 @@ describe('mutanți FAN (JS)', () => {
     let rez
     try { rez = await VERIFICARI[v](M) } catch { rez = false }
     expect(rez).toBe(false)
+  })
+  // activare runda 2: procedura din documentul de la 9ceea228 (ordinea recenzentului: „Propune” înaintea marcajului) PICĂ pe codul real, cu motivul gărzii
+  // (documentele vechi n-au coloana „Acțiune”: modul legacy recunoaște butoanele și verificările din text)
+  it.skipIf(!PASI_VECHI)('documentul FAN_TEST1_PASI.md de la 9ceea228 NU e executabil din ecran (constatarea era reală)', async () => {
+    const M = await incarca(null)
+    const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii }
+    expect(() => parcurge(pasiDinDocument(PASI_VECHI, '## 5.', '## 9.', { legacy: true }), fn)).toThrow(/pasul 1 \(propune\): „„1\. Propune 1 plicuri”” nu e activ în ecran \(transport doar pe loturi marcate TEST/)
+    expect(await VERIFICARI.procedura(M)).toBe(true)
+  })
+  // activare runda 3: documentul de la 9fb88b2f — primul plic trece, dar continuarea „aceiași pași de la §5 la §8” pe lotul de 3 PICĂ: verificarea
+  // GLOBALĂ din §6 (zero aprobări / trimiteri, exact un lot marcat) nu mai poate trece după primul AWB, nici cu plafonul 3 (istoricul rămâne)
+  it.skipIf(!PASI_R2)('documentul FAN_TEST1_PASI.md de la 9fb88b2f: primul plic trece, continuarea cu trei plicuri PICĂ pe istoricul primului lot (constatarea era reală)', async () => {
+    const M = await incarca(null)
+    const fn = { stariPasi: M.lot.stariPasi, stareMarcaj: M.lot.stareMarcaj, stariOperatii: M.lot.stariOperatii }
+    const pasi = pasiDinDocument(PASI_R2, '## 5.', '## 9.', { legacy: true })
+    expect(pasi.map(p => p.actiune?.text || null)).toEqual(['marcaj-test', 'evenimente', 'plafon=1', 'verifica-plafon', 'verifica-fara-aprobari', 'propune', 'aproba', 'genereaza',
+      'verifica-selfawb', 'verifica-tarif', 'etichete', 'verifica-eticheta', 'verifica-control', 'tipareste', 'etichete'])
+    const lume = lumeNoua()
+    expect(parcurge(pasi, fn, { lume, lot: 'PP-xxxx' }).lot.randuri[0].stare).toBe('generat')
+    expect(() => parcurge(pasi, fn, { lume, lot: 'PP-yyyy', plicuri: 3 })).toThrow(/pasul 3 \(verifica-fara-aprobari\): verificarea globală „fără aprobări \/ trimiteri” nu poate trece: PP-xxxx: generat/)
+    // nici cu plafonul 3, cum spunea paragraful final din §8: istoricul tot rămâne
+    const cu3 = pasi.map(p => p.actiune?.cod === 'plafon' ? { ...p, actiune: { ...p.actiune, valoare: 3, text: 'plafon=3' } } : p)
+    const lume2 = lumeNoua(); parcurge(pasi, fn, { lume: lume2, lot: 'PP-xxxx' })
+    expect(() => parcurge(cu3, fn, { lume: lume2, lot: 'PP-yyyy', plicuri: 3 })).toThrow(/verificarea globală „fără aprobări \/ trimiteri” nu poate trece/)
   })
 })

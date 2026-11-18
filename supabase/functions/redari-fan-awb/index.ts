@@ -1,8 +1,10 @@
-// redari-fan-awb — FAN Courier pentru plicurile Redări (transport real OPRIT în cod: TRANSPORT_REAL_ACTIV = false → 423).
+// redari-fan-awb — FAN Courier pentru plicurile Redări. ACTIVARE pentru Testul 1 (docs/redari/FAN_TEST1_PASI.md): TRANSPORT_REAL_ACTIV = true
+// cu garda DOAR_PROIECTE_TEST = true în handler → calea reală DOAR pe un lot al unui proiect „TEST-…”, marcat TEST de owner; restul 423.
 // Fișa a–e (docs/redari/FANCOURIER_INTEGRARE.md §4): (a) răspunsurile FAN = date (afișate / propuneri, nimic ireversibil automat);
 // (b) AWB-uri plătite doar după aprobarea owner-ului pe lot (fn_red_fan_aproba) și claim-ul atomic (fn_red_fan_claim_lot);
-// (c) JWT-ul omului, FĂRĂ service_role; secretele FAN_SELFAWB_USERNAME / FAN_SELFAWB_PASSWORD / FAN_CLIENT_ID se citesc DOAR pe calea
-// reală, după poarta owner și flag; (d) fn_sms_e_owner pe auth.uid(), în handler; (e) aprobare pe hash, fiecare apăsat = decizie umană.
+// (c) JWT-ul omului, FĂRĂ service_role; secretele FAN_SELFAWB_USERNAME / FAN_SELFAWB_PASSWORD / FAN_CLIENT_ID (contul de TEST al
+// curierului la Testul 1) se citesc DOAR pe calea reală, după poarta owner, flag și garda „doar TEST”; (d) fn_sms_e_owner pe auth.uid(),
+// în handler; (e) aprobare pe hash, fiecare apăsat = decizie umană.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { raspundeFan } from '../_shared/redariFanHandler.mjs';
 import { citesteToate } from '../_shared/redariFanTransport.mjs';
@@ -24,7 +26,9 @@ Deno.serve(async (req: Request) => {
       getUser: () => uc.auth.getUser(jwt),
       owner: () => uc.rpc('fn_sms_e_owner'),
       lot: (id: string) => uc.from('red_loturi_plicuire').select('id, proiect_id, nr_lot').eq('id', id).maybeSingle(),
-      // ── doar pe calea reală (după flag) ──
+      // garda „doar TEST” (după flag, ÎNAINTE de secrete): marcajul lotului, citit cu JWT-ul omului (RLS admin / editor Redări)
+      fanLot: (id: string) => uc.from('red_fan_loturi').select('lot_id, test, prima_aprobare_la').eq('lot_id', id).maybeSingle(),
+      // ── doar pe calea reală (după flag și garda „doar TEST”) ──
       secrete: () => ({ username: Deno.env.get('FAN_SELFAWB_USERNAME'), password: Deno.env.get('FAN_SELFAWB_PASSWORD'), clientId: Deno.env.get('FAN_CLIENT_ID') }),
       rpc: (nume: string, args: Record<string, unknown>) => uc.rpc(nume, args),
       randuriLot: (lotId: string) => citesteToate(() => uc.from('red_fan_awb').select(COL_FAN).eq('lot_id', lotId), [lotId]),
