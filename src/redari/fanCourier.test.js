@@ -1,5 +1,5 @@
 // FAN Courier: construirea AWB-ului dintr-un plic, hash-ul aprobat, răspunsurile simulate (creare în loturi de ≤ 100, urmărire,
-// confirmări, evenimente, borderou, etichetă A6), poarta funcției edge (transport oprit = 423 fără niciun apel), ecranul (pași, lot de test),
+// confirmări, evenimente, borderou, etichetă cu format=A6 cerut), poarta funcției edge (transport oprit = 423 fără niciun apel), ecranul (pași, lot de test),
 // pachetul de documente pe lot și returul în PV B. Date fictive. Referința formelor: docs/redari/FANCOURIER_INTEGRARE.md §1 (documentația
 // FAN), nu codul testat (L25). Unde documentul spune „de citit pe un răspuns real”, testele cer „de verificat de om”, nu succes.
 import { describe, it, expect, vi } from 'vitest'
@@ -10,12 +10,13 @@ import { construiestePlicFan, telefonFan, hashPlicFan, jsonCanonic, interpreteaz
   imparteInBucati, MAX_PE_CERERE, FORMAT_ETICHETA, LIMITA_LOT_PILOT_IMPLICITA, interpreteazaUrmarire, interpreteazaConfirmari, comparaEvenimente, cautaInBorderou,
   caleEticheta, caleListaAwb, dataEvenimentFan, EVENIMENTE_FAN, pregatestePlicuriFan, estePdf, inBase64, LIMITE_FAN, contactPePlic,
   manifestTiparire, destinatarMascat, interpreteazaStergere, campuriEroareFan, cheieTiraj, idTiraj, tirajDin, VERSIUNE_TIRAJ, MESAJ_TIRAJ_SCHIMBAT,
-  MESAJ_TIRAJ_OPRIT, ASTEPTARE_DUPA_OPRIRE_S, tirajNeschimbat, refuzTiraj } from '../../supabase/functions/_shared/redariFan.mjs'
+  MESAJ_TIRAJ_OPRIT, ASTEPTARE_DUPA_OPRIRE_S, tirajNeschimbat, refuzTiraj, categorieEveniment } from '../../supabase/functions/_shared/redariFan.mjs'
 import { raspundeFan, TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST, transportPermis, esteProiectTest, ACTIUNI_FAN } from '../../supabase/functions/_shared/redariFanHandler.mjs'
 import { executaActiuneFan, MAX_BUCATI_PE_APEL, citesteToate } from '../../supabase/functions/_shared/redariFanTransport.mjs'
 import { stariPasi, stareMarcaj, stariOperatii, PASI_FAN, MESAJ_TRANSPORT_OPRIT, csvBorderouFan, prefixLot, titluLot, numeEtichete, numeControl, numeArhiva,
   controlLotFan, pregatestePachetFan, mesajEdgeFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire,
-  fapteContrazise, ALEGERI_SOLUTIONARE, optiuniSolutionare, solutioneazaUrmarire, MESAJ_URMARIRE_SCHIMBATA } from './fanLot.js'
+  fapteContrazise, ALEGERI_SOLUTIONARE, optiuniSolutionare, solutioneazaUrmarire, MESAJ_URMARIRE_SCHIMBATA,
+  starePropunere, stareMarcajReal, MESAJ_MARCAJ_REAL_OPRIT, textTarif, textTotalTarif, totalTarifLot, MESAJ_TARIF_NECUNOSCUT, etichetaUrmarire } from './fanLot.js'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import FanAwbPrevizualizare from './ui/FanAwbPrevizualizare.jsx'
@@ -206,8 +207,8 @@ describe('confirmări (GET /reports/awb/confirmations, listă JSON) — forma c�
 
 describe('evenimente (GET /reports/awb-events) și borderou (reconciliere)', () => {
   it('compară lista FAN cu codurile folosite: lipsă la FAN / neclasificate; formă necunoscută → de verificat', () => {
-    const c = comparaEvenimente(200, { data: [{ id: 'C0', name: 'Ridicat' }, { id: 'S2', name: 'Livrat' }, { id: 'S99', name: 'Nou' }] })
-    expect(c.ok).toBe(true); expect(c.lipsa_la_fan).toContain('S6'); expect(c.neclasificate.map(x => x.cod)).toEqual(['S99'])
+    const c = comparaEvenimente(200, { data: [{ id: 'C0', name: 'Ridicat' }, { id: 'S2', name: 'Livrat' }, { id: 'X9', name: 'Nou' }] })   // 18.11: S99 e clasificat acum („de verificat”); X9 = cod necunoscut
+    expect(c.ok).toBe(true); expect(c.lipsa_la_fan).toContain('S6'); expect(c.neclasificate.map(x => x.cod)).toEqual(['X9'])
     expect(comparaEvenimente(200, { x: 1 }).ok).toBe(false); expect(comparaEvenimente(200, [{ foo: 1 }]).ok).toBe(false)
   })
   it('borderoul: nr_plic EXACT în observație → găsit; dublură → de verificat; necitit complet → nu „lipsă”', () => {
@@ -732,7 +733,7 @@ describe('ecranul: pașii, lotul de test, lotul pilot', () => {
       expect([t, !!b && /disabled=""/.test(b[0])]).toEqual([t, true])
     }
     expect(html).toMatch(/Pagina de control/)
-    expect(numeEtichete({ lot: { nr_lot: 'PP-0001' }, fanLot: { test: true }, parte: 2, parti: 3, format: 'A6' })).toBe('TEST_PP-0001_etichete_A6_partea02din03.pdf')
+    expect(numeEtichete({ lot: { nr_lot: 'PP-0001' }, fanLot: { test: true }, parte: 2, parti: 3 })).toBe('TEST_PP-0001_etichete_partea02din03.pdf')   // 18.11: fără „_A6”
   })
   it('L24 în ecran: acțiunile au generația lor, verificată înaintea FIECĂRUI apel din bucle și în catch / finally', () => {
     const src = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8')
@@ -741,7 +742,7 @@ describe('ecranul: pașii, lotul de test, lotul pilot', () => {
     expect(src).not.toMatch(/for \(const r of randuri\.filter\(x => x\.ok\)\)/)   // vechea buclă de propunere, fără gardă
   })
   it('PASI_FAN acoperă exact pașii ceruți, în ordine', () => {
-    expect(PASI_FAN.map(p => p.titlu)).toEqual(['1. Propune', '2. Aprobă', '3. Generează AWB', '4. Etichete A6', '5. Comandă curier', '6. Urmărire', '7. Confirmări / retururi'])
+    expect(PASI_FAN.map(p => p.titlu)).toEqual(['1. Propune', '2. Aprobă', '3. Generează AWB', '4. Etichete', '5. Comandă curier', '6. Urmărire', '7. Confirmări / retururi'])
   })
 })
 
@@ -752,7 +753,7 @@ describe('ecranul: pașii, lotul de test, lotul pilot', () => {
 // scoase sau mutate din document, proba pică. Simulatorul (fanProcedura.testutil.js) pornește de la LOT GOL și apasă doar butoanele pe care
 // stariPasi / stareMarcaj / stariOperatii le dau active; documentele de la 9ceea228 și 9fb88b2f pică (dovada: fanCourierMutanti.test.js).
 describe('procedura Testului 1 din document (FAN_TEST1_PASI.md): primul plic (§5–§8), lotul de 3 (§9) și încheierea (§10), executabile din ecran de la lot gol', () => {
-  const FN = { stariPasi, stareMarcaj, stariOperatii }
+  const FN = { stariPasi, stareMarcaj, stariOperatii, starePropunere, stareMarcajReal }   // 18.11: aceeași definiție a propunerii și a marcajului „real” ca ecranul
   const A = pasiDinDocument(PASI_DOC, '## 5.', '## 9.'), B = pasiDinDocument(PASI_DOC, '## 9.', '## 10.'), C = pasiDinDocument(PASI_DOC, '## 10.', '## 11.')
   const coduri = pasi => pasi.map(p => p.actiune.text)
   // prezența ȘI poziția relativă a pașilor dați (fiecare apare, în această ordine); alți pași pot sta între ei
@@ -783,17 +784,20 @@ describe('procedura Testului 1 din document (FAN_TEST1_PASI.md): primul plic (§
     expect(dupa(a, 'marcaj-test').inainte).toEqual(['marcaj_test'])
     expect(dupa(a, 'marcaj-test').dupa).toEqual(['evenimente', 'marcaj_test', 'plafon', 'propune'])   // după marcaj: propunerea, plafonul, lista; aprobarea încă nu (niciun plic propus)
     expect(dupa(a, 'plafon').inainte).toContain('plafon'); expect(dupa(a, 'plafon').inainte).not.toContain('aproba')
-    expect(dupa(a, 'propune').dupa).toEqual(['aproba', 'evenimente', 'marcaj_test', 'plafon', 'propune'])   // după propunere: aprobarea; marcajul încă se poate schimba
-    expect(dupa(a, 'aproba').dupa).toEqual(['evenimente', 'genereaza', 'plafon', 'propune'])   // după aprobare: generarea; marcajul e fixat (prima aprobare)
-    expect(dupa(a, 'genereaza').dupa).toEqual(['anulare', 'confirmari', 'curier', 'etichete', 'evenimente', 'plafon', 'propune', 'tiraj', 'urmarire'])
-    expect(a.lot.randuri).toEqual([{ id: 'r1', stare: 'generat', awb: '3000000001', tarif: 12.5 }]); expect(a.lot.fanLot.test).toBe(true); expect(a.lot.tiraj).toBe(1)
+    // 18.11.2026: după propunere nimic nu mai e de propus (același hash) → „Propune” inactiv; „2b. Marchează real” nu e activ nicăieri (garda „doar TEST”)
+    expect(dupa(a, 'propune').dupa).toEqual(['aproba', 'evenimente', 'marcaj_test', 'plafon'])   // după propunere: aprobarea; marcajul TEST încă se poate schimba
+    expect(dupa(a, 'aproba').dupa).toEqual(['evenimente', 'genereaza', 'plafon'])   // după aprobare: generarea; marcajul e fixat (prima aprobare)
+    expect(dupa(a, 'genereaza').dupa).toEqual(['anulare', 'confirmari', 'curier', 'etichete', 'evenimente', 'plafon', 'tiraj', 'urmarire'])   // toate plicurile au AWB: nimic de propus
+    expect(a.jurnal.every(j => !j.inainte.includes('marcaj_real') && !j.dupa.includes('marcaj_real'))).toBe(true)
+    expect(a.lot.randuri).toEqual([{ id: 'r1', plic_id: 'pl1', stare: 'generat', hash_date: 'h1', awb: '3000000001', tarif: 12.5 }]); expect(a.lot.fanLot.test).toBe(true); expect(a.lot.tiraj).toBe(1)
     // lotul de 3: lot NOU, gol și nemarcat → din nou singurul buton activ e marcajul; plafonul 3; plicul 2 respins de FAN; istoricul lui PP-xxxx neatins
     expect(dupa(b, 'marcaj-test').inainte).toEqual(['marcaj_test'])
     expect(dupa(b, 'plafon').inainte).toEqual(['evenimente', 'marcaj_test', 'plafon', 'propune'])
-    expect(dupa(b, 'aproba').dupa).toEqual(['evenimente', 'genereaza', 'plafon', 'propune'])
+    expect(dupa(b, 'aproba').dupa).toEqual(['evenimente', 'genereaza', 'plafon'])
+    // plicul 2 e „respins de FAN” (rândul nu mai e viu) → el rămâne DE PROPUS (după corectarea adresei, §9 final); de aceea „Propune” e activ aici
     expect(dupa(b, 'genereaza').dupa).toEqual(['anulare', 'confirmari', 'curier', 'etichete', 'evenimente', 'plafon', 'propune', 'tiraj', 'urmarire'])
     expect(b.lot.randuri.map(r => [r.id, r.stare, r.awb ?? null])).toEqual([['r1', 'generat', '3000000002'], ['r2', 'eroare', null], ['r3', 'generat', '3000000003']])
-    expect(lume.loturi['PP-xxxx'].randuri).toEqual([{ id: 'r1', stare: 'generat', awb: '3000000001', tarif: 12.5 }]); expect(Object.keys(lume.loturi)).toEqual(['PP-xxxx', 'PP-yyyy'])
+    expect(lume.loturi['PP-xxxx'].randuri).toEqual([{ id: 'r1', plic_id: 'pl1', stare: 'generat', hash_date: 'h1', awb: '3000000001', tarif: 12.5 }]); expect(Object.keys(lume.loturi)).toEqual(['PP-xxxx', 'PP-yyyy'])
     expect(lume.loturi['PP-xxxx'].fanLot.prima_aprobare_la).toBeTruthy(); expect(lume.loturi['PP-yyyy'].fanLot.prima_aprobare_la).toBeTruthy()
     expect(lume.setari).toEqual({ limita: 20, recitit: true })   // încheierea: 20, recitit din BD
   })
@@ -860,6 +864,132 @@ describe('procedura Testului 1 din document (FAN_TEST1_PASI.md): primul plic (§
     expect(() => pasiDinDocument(DOC, '### Testul 1', '### Testul 2')).toThrow(/niciun pas cu acțiune/)
     expect(t1).toMatch(/\|\s*\*\*4a[^\n]*BLOCANT/); expect(t1).toMatch(/\|\s*\*\*4b[^\n]*verdictul 4a/)
     expect(doc).not.toMatch(/altfel numărul plicului se scrie de mână pe plic/); expect(doc).not.toMatch(/se scrie de mână pe plic, lângă etichetă/); expect(doc).toMatch(/lipsa lui = OPRIRE la Testul 1/)
+  })
+})
+
+// ── 18.11.2026 — corecții după PRIMUL AWB real (Testul 1, lot de TEST cu un plic); fiecare test de aici PICĂ pe main 2f7fabc1 ──
+// Lista REALĂ întoarsă de GET /reports/awb-events la Testul 1: codurile din PDF (nume de lucru) + cele 37 neclasificate atunci, cu numele dat
+// de curier (fără date personale). Sursa independentă a așteptărilor (L25): numele curierului, nu codul testat.
+const LISTA_FAN_18_11 = [
+  ...['C0', 'S2', 'S3', 'S11', 'S4', 'S10', 'S19', 'S20', 'S25', 'S27', 'S28', 'S42', 'S5', 'S6', 'S16', 'S33', 'S43', 'S50', 'S30'].map(id => ({ id, name: `(cod din PDF-ul 09.2025: ${id})` })),
+  { id: 'C1', name: 'Shipment taken over for delivery' }, { id: 'H0', name: 'Shipment in transit to the destination warehouse' }, { id: 'H1', name: 'Shipment unloaded in the destination warehouse' },
+  { id: 'H10', name: 'Shipment in transit to the destination warehouse' }, { id: 'H11', name: 'Shipment unloaded in the destination warehouse' }, { id: 'H12', name: 'Shipment in the warehouse' },
+  { id: 'H13', name: 'Shipment in the warehouse' }, { id: 'H15', name: 'Shipment in the warehouse' }, { id: 'H17', name: 'Shipment in the destination warehouse' }, { id: 'H2', name: 'Shipment in transit' },
+  { id: 'H3', name: 'Shipment sorted' }, { id: 'H4', name: 'Shipment sorted' }, { id: 'S1', name: 'Delivery in process' }, { id: 'S12', name: 'Contacted; further delivery' },
+  { id: 'S14', name: 'Restricted access to address' }, { id: 'S15', name: 'Collect payment refused / Refused reimbursement' }, { id: 'S21', name: 'Notified, no contact person' },
+  { id: 'S22', name: 'Notified, without reimbursement money' }, { id: 'S24', name: 'Notified, without delegacy/ID' }, { id: 'S35', name: 'Resent for delivery' }, { id: 'S37', name: 'Compensated' },
+  { id: 'S38', name: 'Unsent AWB' }, { id: 'S46', name: 'Shed delivery point' }, { id: 'S47', name: 'Shed extern partner' }, { id: 'S49', name: 'Suspended activity' }, { id: 'S54', name: 'Full Locker' },
+  { id: 'S55', name: 'Box size exceeded' }, { id: 'S56', name: 'Handed over delivery point' }, { id: 'S64', name: 'Absence of customs documents' }, { id: 'S65', name: 'On hold' },
+  { id: 'S67', name: 'Package not found in FANbox' }, { id: 'S69', name: 'Delivery suspended for the address' }, { id: 'S7', name: 'Rejected transportation payment' },
+  { id: 'S8', name: 'Pick up from local FAN Courier' }, { id: 'S9', name: 'Redirected' }, { id: 'S98', name: 'Registered AWB' }, { id: 'S99', name: 'The AWB was deleted from the database' },
+]
+describe('după primul AWB real (18.11.2026): tariful în ecran, „Propune” fără nimic de propus, „Marchează real” oprit, eticheta fără A6, codurile FAN clasificate', () => {
+  const SRC = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8')
+  const doc = DOC.replace(/\r/g, ''), pasiDoc = PASI_DOC.replace(/\r/g, '')
+  it('1. tariful: pe rând în lei cu 2 zecimale (din textul numeric PostgREST), gol = „tarif necunoscut”; totalul pe lot doar pe AWB-urile plătite, INCOMPLET cu necunoscute (L18)', () => {
+    expect(textTarif('27.1600')).toBe('27,16 lei'); expect(textTarif(9.5)).toBe('9,50 lei'); expect(textTarif(1234.567)).toBe('1.234,57 lei'); expect(textTarif(0)).toBe('0,00 lei')
+    for (const v of [null, undefined, '', ' ', 'abc', '27,16', -1, NaN, {}]) expect([v, textTarif(v)]).toEqual([v, MESAJ_TARIF_NECUNOSCUT])
+    const r = [{ stare: 'generat', tarif: '27.1600' }, { stare: 'ridicat', tarif: 10 }, { stare: 'eroare', tarif: 99 }, { stare: 'propus', tarif: null }, { stare: 'anulat', tarif: 5 }]
+    expect(totalTarifLot(r)).toEqual({ awb: 2, cuTarif: 2, necunoscute: 0, total: 37.16 })
+    expect(textTotalTarif(r)).toBe('37,16 lei pentru 2 AWB-uri')
+    const cuGol = [...r, { stare: 'generat', tarif: null }]
+    expect(totalTarifLot(cuGol)).toEqual({ awb: 3, cuTarif: 2, necunoscute: 1, total: 37.16 })
+    expect(textTotalTarif(cuGol)).toBe('37,16 lei pentru 2 AWB-uri · INCOMPLET: 1 AWB cu tarif necunoscut (procedura cere oprire)')
+    expect(totalTarifLot([{ stare: 'generat', tarif: null }])).toEqual({ awb: 1, cuTarif: 0, necunoscute: 1, total: null })
+    expect(textTotalTarif([{ stare: 'generat', tarif: null }])).toBe('necunoscut: AWB-ul generat nu are tarif (procedura cere oprire)')
+    expect(textTotalTarif([{ stare: 'propus' }])).toBe('niciun AWB generat'); expect(textTotalTarif([])).toBe('niciun AWB generat')
+    expect(textTotalTarif([{ stare: 'generat', tarif: '0.1' }, { stare: 'generat', tarif: '0.2' }])).toBe('0,30 lei pentru 2 AWB-uri')
+    // ecranul: tariful lângă AWB (evidențiat când e necunoscut), totalul pe lot, TVA-ul citit și afișat lângă; borderoul CSV are coloana tarifului
+    expect(SRC).toMatch(/const tarif = f\?\.awb \? textTarif\(f\.tarif\) : null/); expect(SRC).toMatch(/tarif === MESAJ_TARIF_NECUNOSCUT \? \{ color: G\.red, background: G\.redDim/)
+    expect(SRC).toMatch(/Tarif FAN pe lot \(fără TVA\): \{textTotalTarif\(awb\)\}/); expect(SRC).toMatch(/const COL_FAN = '[^']*,tarif,tva,/); expect(SRC).toMatch(/\+ TVA \$\{textTarif\(f\.tva\)\}/)
+    const csv = csvBorderouFan({ lot: { nr_lot: 'PP-0001' }, fanLot: { test: true }, randuri: [{ nr_plic: 'PL-TST-0001', awb: '2000000001', stare: 'generat', tarif: '27.1600' }, { nr_plic: 'PL-TST-0002', awb: '2000000002', stare: 'generat', tarif: null }, { nr_plic: 'PL-TST-0003', stare: 'propus' }] })
+    const linii = csv.slice(1).split('\r\n')
+    expect(linii[2]).toMatch(/^"Nr\. plic";"AWB";"Tarif \(lei, fără TVA\)";"Stare"/); expect(linii[3]).toMatch(/^"PL-TST-0001";"2000000001";"27,16 lei";"AWB generat"/)
+    expect(linii[4]).toMatch(/^"PL-TST-0002";"2000000002";"tarif necunoscut"/); expect(linii[5]).toMatch(/^"PL-TST-0003";"";"";"propus"/)
+    // procedura: tariful se verifică în ecran (lângă AWB și în total)
+    expect(pasiDoc).toMatch(/tariful[^\n]*lângă AWB[^\n]*total/i)
+  })
+  it('2. eticheta: cererea trimite parametrul documentat (format=A6), dar butonul, mesajul și fișierul nu mai afirmă A6 (prima probă a venit A4); documentul are întrebarea pentru curier', () => {
+    expect(caleEticheta({ clientId: 'C1', awbs: ['1000000001'] })).toMatch(/format=A6/); expect(FORMAT_ETICHETA).toBe('A6')
+    expect(numeEtichete({ lot: { nr_lot: 'PP-0001' }, fanLot: { test: true }, parte: 1, parti: 1, tiraj: { id: 'ABCDEF01' } })).toBe('TEST_PP-0001_tiraj-ABCDEF01_etichete.pdf')
+    expect(numeEtichete({ lot: { nr_lot: 'PP-0001' }, fanLot: null, parte: 2, parti: 3 })).toBe('PP-0001_etichete_partea02din03.pdf')
+    expect(numeEtichete({ lot: { nr_lot: 'PP-0001' }, fanLot: { test: true }, parte: 1, parti: 1 })).not.toMatch(/A6/)
+    expect(PASI_FAN.find(p => p.cheie === 'etichete')).toMatchObject({ titlu: '4. Etichete', ajutor: expect.stringMatching(/A6 cerut curierului; la prima probă a venit A4/) })
+    expect(SRC).toMatch(/4\. Etichete \(PDF\)/); expect(SRC).not.toMatch(/Etichete A6|Etichete \$\{FORMAT_ETICHETA\}|_A6/); expect(SRC).toMatch(/Formatul paginii \(cerut: \$\{FORMAT_ETICHETA\}\) se verifică pe PDF înainte de tipărire/)
+    expect(SRC).not.toMatch(/format: FORMAT_ETICHETA/)
+    // documentele: întrebarea deschisă pentru curier (parametrul `format` ignorat?), fișierele fără „_A6”, procedura nu mai cere „format A6” ca fapt
+    expect(doc).toMatch(/^17\. [^\n]*format=A6[^\n]*A4/m); expect(doc).toMatch(/_etichete\.pdf/); expect(doc).not.toMatch(/_etichete_A6\.pdf/)
+    expect(pasiDoc).not.toMatch(/4\. Etichete A6/); expect(pasiDoc).not.toMatch(/_etichete_A6/); expect(pasiDoc).toMatch(/formatul paginii[^\n]*A4/i)
+  })
+  it('3. „1. Propune” se dezactivează când nu mai e nimic de propus (fiecare plic are rând FAN viu cu datele de acum); respins / anulat / hash schimbat = de propus; RPC-ul nu face rânduri duble', () => {
+    const preg = [{ ok: true, plic: { id: 'p1' }, hash: 'h1' }, { ok: true, plic: { id: 'p2' }, hash: 'h2' }, { ok: false, plic: { id: 'p3' }, hash: 'h3' }]
+    expect(starePropunere({ pregatite: preg, randuri: [] }).dePropus.map(p => p.plic.id)).toEqual(['p1', 'p2'])
+    const gen = { pregatite: preg, randuri: [{ plic_id: 'p1', stare: 'generat', hash_date: 'h1', awb: '2000000001' }, { plic_id: 'p2', stare: 'propus', hash_date: 'h2' }] }
+    expect(starePropunere(gen)).toEqual({ dePropus: [], motiv: 'nimic de propus: fiecare plic are deja rând FAN cu datele de acum (propus, aprobat sau cu AWB)' })
+    for (const stare of ['propus', 'aprobat', 'in_curs', 'generat', 'necunoscut', 'ridicat']) expect([stare, starePropunere({ pregatite: preg.slice(0, 1), randuri: [{ plic_id: 'p1', stare, hash_date: 'h1' }] }).dePropus.length]).toEqual([stare, 0])
+    for (const stare of ['eroare', 'anulat']) expect([stare, starePropunere({ pregatite: preg.slice(0, 1), randuri: [{ plic_id: 'p1', stare, hash_date: 'h1' }] }).dePropus.length]).toEqual([stare, 1])
+    for (const stare of ['propus', 'aprobat']) expect(starePropunere({ pregatite: preg.slice(0, 1), randuri: [{ plic_id: 'p1', stare, hash_date: 'vechi' }] }).dePropus).toHaveLength(1)   // datele s-au schimbat: re-propunere
+    expect(starePropunere({ pregatite: preg.slice(0, 1), randuri: [{ plic_id: 'p1', stare: 'generat', hash_date: 'vechi' }] }).dePropus).toHaveLength(0)   // cu AWB: niciodată, nici cu date noi
+    expect(starePropunere({ pregatite: [preg[2]], randuri: [] })).toEqual({ dePropus: [], motiv: 'niciun plic cu toate datele cerute de FAN' })
+    expect(starePropunere({})).toEqual({ dePropus: [], motiv: 'niciun plic cu toate datele cerute de FAN' })
+    // pasul: inactiv cu motivul propunerii; activ când e ceva de propus
+    const baza = { transportActiv: true, evidentaInstalata: true, poateScrie: true, proiectCod: 'TEST-RAZVAN', fanLot: { test: true }, randuri: gen.randuri }
+    expect(stariPasi({ ...baza, gataDePropus: 0, motivPropunere: starePropunere(gen).motiv }).find(x => x.cheie === 'propune')).toMatchObject({ activ: false, motiv: expect.stringMatching(/^nimic de propus/) })
+    expect(stariPasi({ ...baza, gataDePropus: 0 }).find(x => x.cheie === 'propune').motiv).toBe('niciun plic cu toate datele cerute de FAN')
+    expect(stariPasi({ ...baza, gataDePropus: 1 }).find(x => x.cheie === 'propune').activ).toBe(true)
+    // ecranul trimite DOAR lista de propus (nu re-propune un rând aprobat cu același hash) și arată numărul ei pe buton; simulatorul folosește aceeași funcție
+    expect(SRC).toMatch(/bucla\(curent, propunere\.dePropus,\s*r => supabase\.rpc\('fn_red_fan_propune'/); expect(SRC).toMatch(/1\. Propune \{propunere\.dePropus\.length\} plicuri/)
+    expect(SRC).toMatch(/gataDePropus: propunere\.dePropus\.length, motivPropunere: propunere\.motiv/); expect(SRC).not.toMatch(/randuri\.filter\(x => x\.ok\),\s*r => supabase\.rpc/)
+    expect(readFileSync('src/redari/fanProcedura.testutil.js', 'utf8')).toMatch(/fn\.starePropunere\(\{ pregatite: pregatite\(lot\), randuri: lot\.randuri \}\)/)
+    // RPC-ul, dacă totuși e apelat pe un plic cu AWB (ecran vechi): refuz P0001, fără rând nou — un singur rând viu pe plic
+    expect(MIG).toMatch(/IF v_rand\.stare NOT IN \('propus', 'aprobat'\) THEN RAISE EXCEPTION 'redari fan: plicul are deja un AWB % \(nu se re-propune\)', v_rand\.stare USING ERRCODE = 'P0001'/)
+    expect(MIG).toMatch(/SELECT id, stare INTO v_rand FROM public\.red_fan_awb WHERE plic_id = p_plic_id AND stare NOT IN \('eroare', 'anulat'\) FOR UPDATE/)   // un singur rând viu pe plic
+  })
+  it('4. „2b. Marchează real” e dezactivat cât garda „doar TEST” e pornită (o singură definiție: ecran + simulatorul procedurii); cu garda oprită (Testul 2) = marcajul obișnuit (L20)', () => {
+    const baza = { transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', fanLot: null, randuri: [] }
+    expect(stareMarcaj(baza).activ).toBe(true)
+    expect(stareMarcajReal(baza)).toEqual({ activ: false, motiv: MESAJ_MARCAJ_REAL_OPRIT })
+    expect(stareMarcajReal({ ...baza, fanLot: { test: true, prima_aprobare_la: null }, randuri: [{ stare: 'propus' }] })).toEqual({ activ: false, motiv: MESAJ_MARCAJ_REAL_OPRIT })
+    expect(stareMarcajReal({ ...baza, doarTest: false })).toEqual({ activ: true, motiv: '' })   // Testul 2: calea legitimă rămâne
+    expect(stareMarcajReal({ ...baza, esteOwner: false })).toEqual({ activ: false, motiv: 'doar owner-ul' })   // celelalte refuzuri au întâietate (același text ca la „2a”)
+    expect(stareMarcajReal({ ...baza, doarTest: false, fanLot: { test: true, prima_aprobare_la: '2026-11-18T09:14:19Z' } }).motiv).toMatch(/aprobat o dată/)
+    expect(stareMarcajReal({ ...baza, proiectCod: 'LOT1-PRUNISOR-JUPA' }).motiv).toMatch(/proiecte de TEST/)
+    expect(DOAR_PROIECTE_TEST).toBe(true)
+    // ecranul: chei separate pentru cele două butoane; documentul procedurii: „2b” nu mai e numit activ nicăieri
+    expect(SRC).toMatch(/<Pas cheie="marcaj_test" onClick=\{\(\) => marcheaza\(true\)\}>2a\. Marchează TEST/); expect(SRC).toMatch(/<Pas cheie="marcaj_real" onClick=\{\(\) => marcheaza\(false\)\}>2b\. Marchează real/)
+    expect(SRC).not.toMatch(/cheie="marcaj"|executa\('marcaj',/); expect(SRC).toMatch(/executa\(test \? 'marcaj_test' : 'marcaj_real'/)
+    expect(pasiDoc).not.toMatch(/2a\. \/ 2b\.” încă active|2a\. \/ 2b\.” devin inactive/); expect(pasiDoc).toMatch(/„2b\. Marchează real” (rămâne|e) dezactivat/)
+    // randat pe un lot de TEST nemarcat (evidența necitită): „2b” e dezactivat
+    const html = renderToStaticMarkup(React.createElement(FanAwbPrevizualizare, { proiect: { cod: 'TEST-RAZVAN' }, lot: { id: 'l1', nr_lot: 'PP-0001' }, plicuri: [], esteOwner: true, poateScrie: true, onClose: () => {} }))
+    const b2 = [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].find(m => m[1].includes('2b. Marchează real'))
+    expect(b2 && /disabled=""/.test(b2[0])).toBe(true)
+  })
+  it('5. lista REALĂ de evenimente (Testul 1): toate cele 37 de coduri sunt clasificate DOAR după numele curierului; cele nelimpezi rămân „de verificat de om”; faptele neschimbate', () => {
+    const c = comparaEvenimente(200, { data: LISTA_FAN_18_11 })
+    expect(c.ok).toBe(true); expect(c.lipsa_la_fan).toEqual([]); expect(c.neclasificate).toEqual([]); expect(c.elemente_stricate).toBe(0)
+    // clasele, scrise de mână după numele curierului (tabelul din raport)
+    expect(EVENIMENTE_FAN.tranzit).toEqual(['C1', 'H0', 'H1', 'H2', 'H3', 'H4', 'H10', 'H11', 'H12', 'H13', 'H15', 'H17', 'S1', 'S35'])
+    expect(EVENIMENTE_FAN.avizat).toEqual(['S3', 'S11', 'S21', 'S22', 'S24']); expect(EVENIMENTE_FAN.neutru).toEqual(['S30', 'S12']); expect(EVENIMENTE_FAN.inregistrat).toEqual(['S98'])
+    expect(EVENIMENTE_FAN.de_verificat).toEqual(['S7', 'S8', 'S9', 'S14', 'S15', 'S37', 'S38', 'S46', 'S47', 'S49', 'S54', 'S55', 'S56', 'S64', 'S65', 'S67', 'S69', 'S99'])
+    expect(EVENIMENTE_FAN.ridicat).toEqual(['C0']); expect(EVENIMENTE_FAN.livrat).toEqual(['S2']); expect(EVENIMENTE_FAN.retur).toEqual(['S16', 'S33', 'S43']); expect(EVENIMENTE_FAN.refuz).toEqual(['S6'])
+    const toate = Object.values(EVENIMENTE_FAN).flat(); expect(new Set(toate).size).toBe(toate.length)   // niciun cod în două categorii
+    for (const [cod] of LISTA_FAN_18_11.map(x => [x.id])) expect([cod, categorieEveniment(cod)]).not.toEqual([cod, null])
+    // efectul în urmărire: tranzitul / înregistrarea / contactul nu schimbă faptele; codul nelimpede ca ultim eveniment = de verificat de om; livrarea ulterioară rezolvă
+    const ev = (...l) => ({ events: l.map(([id, h]) => ({ id, date: `2026-11-${h}` })) })
+    expect(rezumatUrmarireFan(ev(['S98', '18 11:15:00']))).toMatchObject({ urmarire_stare: 'in_tranzit', ultim_eveniment: 'S98', ridicat_propus: null, livrat_la: null })
+    expect(etichetaUrmarire({ urmarire_stare: 'in_tranzit', ultim_eveniment: 'S98' })).toBe('AWB înregistrat la curier (plic neridicat încă)')
+    expect(etichetaUrmarire({ urmarire_stare: 'in_tranzit', ultim_eveniment: 'H2' })).toBe('în tranzit'); expect(etichetaUrmarire({ urmarire_stare: 'retur' })).toBe('RETUR'); expect(etichetaUrmarire(null)).toBe('')
+    expect(rezumatUrmarireFan(ev(['S98', '18 11:15:00'], ['C0', '19 08:00:00'], ['H0', '19 12:00:00'], ['H17', '20 05:00:00'], ['H3', '20 06:00:00'], ['C1', '20 08:00:00'], ['S1', '20 09:00:00'])))
+      .toMatchObject({ urmarire_stare: 'ridicat', ridicat_propus: '2026-11-19', ultim_eveniment: 'S1', retur_propus: null })
+    expect(rezumatUrmarireFan(ev(['C0', '19 08:00:00'], ['S1', '20 09:00:00'], ['S2', '20 10:00:00']))).toMatchObject({ urmarire_stare: 'livrat', livrat_la: '2026-11-20 10:00:00' })
+    expect(rezumatUrmarireFan(ev(['C0', '19 08:00:00'], ['S21', '20 10:00:00'], ['S35', '21 09:00:00']))).toMatchObject({ urmarire_stare: 'ridicat', ultim_eveniment: 'S35' })   // avizat, retrimis: încă nimic definitiv
+    expect(rezumatUrmarireFan(ev(['C0', '19 08:00:00'], ['S24', '20 10:00:00'], ['S16', '25 10:00:00']))).toMatchObject({ urmarire_stare: 'retur', retur_propus: 'avizat_neridicat' })
+    expect(rezumatUrmarireFan(ev(['C0', '19 08:00:00'], ['S12', '20 10:00:00']))).toMatchObject({ urmarire_stare: 'ridicat', ultim_eveniment: 'S12' })
+    for (const cod of EVENIMENTE_FAN.de_verificat) expect([cod, rezumatUrmarireFan(ev(['C0', '19 08:00:00'], [cod, '20 10:00:00']))]).toEqual([cod, expect.objectContaining({ urmarire_stare: 'de_verificat', motiv: expect.stringContaining(`(${cod})`) })])
+    expect(rezumatUrmarireFan(ev(['S14', '19 10:00:00'], ['S2', '20 10:00:00'])).urmarire_stare).toBe('livrat')   // semnalul s-a rezolvat prin livrare
+    expect(rezumatUrmarireFan(ev(['S99', '19 10:00:00'], ['S2', '20 10:00:00'])).urmarire_stare).toBe('livrat')   // regula e pe ULTIMUL eveniment, ca la codurile necunoscute
+    // documentul: clasificarea consemnată, cu regula „nelimpede = de verificat”
+    expect(doc).toMatch(/\*\*de_verificat\*\* \(sens nelimpede/); expect(doc).toMatch(/S99 „The AWB was deleted from the database”/); expect(doc).toMatch(/S98 „Registered AWB”[^\n]*înregistrat/i)
   })
 })
 
@@ -1026,7 +1156,7 @@ describe('runda 3: pagina de control IDENTICĂ în etichete și în arhivă (r2 
     expect(arh.continut.paragrafe.some(p => p.startsWith('Data:'))).toBe(false)
     expect(arh.continut.paragrafe.join(' ')).toMatch(/PL-TST-0002 \(fără AWB FAN\)/)
     const t = arh.tiraj
-    expect(numeEtichete({ lot: LOT, fanLot: { test: false }, parte: 1, parti: 2, format: 'A6', tiraj: t })).toBe(`PP-0001_tiraj-${t.id}_etichete_A6_partea01din02.pdf`)
+    expect(numeEtichete({ lot: LOT, fanLot: { test: false }, parte: 1, parti: 2, tiraj: t })).toBe(`PP-0001_tiraj-${t.id}_etichete_partea01din02.pdf`)   // 18.11: fără „_A6”
     expect(numeControl({ lot: LOT, fanLot: { test: true }, tiraj: t })).toBe(`TEST_PP-0001_tiraj-${t.id}_pagina_de_control.docx`)
     expect(numeControl({ lot: LOT, fanLot: { test: true }, tiraj: t, inArhiva: true })).toBe(`TEST_0000_tiraj-${t.id}_pagina_de_control.docx`)
     expect(numeArhiva({ lot: LOT, fanLot: { test: false }, tiraj: t })).toBe(`PP-0001_tiraj-${t.id}_documente_in_ordinea_plicurilor.zip`)

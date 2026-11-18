@@ -1,6 +1,9 @@
 /* FanAwbPrevizualizare.jsx — FAN Courier pe un lot de plicuire: previzualizarea (ce s-ar trimite pentru fiecare plic și ce lipsește) +
-   pașii propune → aprobă → generează → etichete A6 (toate părțile, cu pagina de control) → comandă curier → urmărire → confirmări / retururi,
+   pașii propune → aprobă → generează → etichete (toate părțile, cu pagina de control) → comandă curier → urmărire → confirmări / retururi,
    plus operațiile procedurii: reconcilierea (cu confirmarea omului), plafonul lotului pilot, anularea AWB-ului, lista de evenimente.
+   După primul AWB real (18.11.2026): tariful fiecărui AWB și totalul lotului sunt afișate (gol = „tarif necunoscut”, evidențiat — procedura
+   cere oprire); „1. Propune” e dezactivat când nu mai e nimic de propus (starePropunere); „2b. Marchează real” e dezactivat cât garda „doar TEST”
+   e pornită (stareMarcajReal); butonul și fișierul etichetelor nu mai afirmă A6 (prima probă a venit A4; formatul se verifică pe PDF).
    Cât timp TRANSPORT_REAL_ACTIV = false (redariFanHandler.mjs) TOȚI pașii și TOATE operațiile sunt vizibile și dezactivate, cu „transport
    oprit”; nu se cheamă funcția edge și nu se scrie nimic. Activarea pentru Testul 1 (DOAR_PROIECTE_TEST = true): activ DOAR pe un proiect
    „TEST-…” cu lotul marcat TEST (aceeași gardă ca funcția edge, transportPermis); pe orice alt lot, pașii rămân dezactivați cu motivul.
@@ -10,9 +13,9 @@ import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { pregatestePlicuriFan, contactPePlic, LIMITA_LOT_PILOT_IMPLICITA, FORMAT_ETICHETA, manifestTiparire, partiManifest, cheieTiraj, idTiraj, tirajDin,
   ASTEPTARE_DUPA_OPRIRE_S } from '../../../supabase/functions/_shared/redariFan.mjs'
-import { stariPasi, stareMarcaj, stariOperatii, TRANSPORT_REAL_ACTIV, transportPermis, MESAJ_TRANSPORT_OPRIT, ETICHETE_STARE_FAN, ETICHETE_URMARIRE, ETICHETE_CONFIRMARE, prefixLot, titluLot,
-  csvBorderouFan, mesajEdgeFan, numeEtichete, numeControl, controlLotFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire,
-  fapteContrazise, optiuniSolutionare, solutioneazaUrmarire } from '../fanLot.js'
+import { stariPasi, stareMarcaj, stareMarcajReal, starePropunere, stariOperatii, TRANSPORT_REAL_ACTIV, transportPermis, MESAJ_TRANSPORT_OPRIT, ETICHETE_STARE_FAN, ETICHETE_URMARIRE, ETICHETE_CONFIRMARE,
+  prefixLot, titluLot, csvBorderouFan, mesajEdgeFan, numeEtichete, numeControl, controlLotFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire,
+  fapteContrazise, optiuniSolutionare, solutioneazaUrmarire, etichetaUrmarire, textTarif, textTotalTarif, totalTarifLot, MESAJ_TARIF_NECUNOSCUT } from '../fanLot.js'
 import { docxPaginaControl } from '../plicuri.js'
 import { descarcaBlob } from '../docx.js'
 import { G, S, Modal, msgEroare, citestePaginat, etichetaRetur, MOTIVE_RETUR } from './comune.jsx'
@@ -20,8 +23,8 @@ import { G, S, Modal, msgEroare, citestePaginat, etichetaRetur, MOTIVE_RETUR } f
 export { contactPePlic }   // compatibil cu testele vechi (definiția e în redariFan.mjs, comună cu funcția edge)
 const LOT_IN = 100
 // runda 4: faptele urmăririi + contradicțiile (Jakarinos #1118 r3 P2)
-const COL_FAN = 'id,plic_id,nr_plic,stare,hash_date,awb,tarif,motiv,urmarire_stare,ultim_eveniment,ultim_eveniment_la,ridicat_propus,livrat_la,retur_propus,'
-  + 'retur_cunoscut,ridicat_contrazis,livrat_contrazis,retur_contrazis,confirmare_stare,versiune_urmarire'   // runda 5: versiunea = CAS-ul soluționării
+const COL_FAN = 'id,plic_id,nr_plic,stare,hash_date,awb,tarif,tva,motiv,urmarire_stare,ultim_eveniment,ultim_eveniment_la,ridicat_propus,livrat_la,retur_propus,'
+  + 'retur_cunoscut,ridicat_contrazis,livrat_contrazis,retur_contrazis,confirmare_stare,versiune_urmarire'   // runda 5: versiunea = CAS-ul soluționării; 18.11: tva (lângă tarif)
 const ETICHETE_RETUR = Object.fromEntries(MOTIVE_RETUR.map(m => [m.cod, etichetaRetur(m.cod)]))
 // tabelul FAN lipsește (migrarea neaplicată) ≠ eroare de citire (L18)
 export const lipsaTabel = e => ['PGRST205', '42P01'].includes(e?.code) || /does not exist|could not find the table/i.test(e?.message || '')
@@ -79,14 +82,19 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   const awb = fan?.randuri || []
   const pePlic = new Map(awb.filter(r => !['eroare', 'anulat'].includes(r.stare)).map(r => [r.plic_id, r]))
   const gata = randuri?.filter(r => r.ok).length ?? 0
+  // 18.11.2026: DE PROPUS = plicurile gata FĂRĂ rând FAN viu cu datele de acum (starePropunere, aceeași definiție ca în simulatorul procedurii)
+  const propunere = starePropunere({ pregatite: randuri || [], randuri: awb })
   // garda „doar TEST” (aceeași ca în funcția edge): proiectul lotului + marcajul lui; marcajul cere doar proiectul de TEST
   const st = { transportActiv: TRANSPORT_REAL_ACTIV, evidentaInstalata: !!fan?.instalata, esteOwner, esteAdmin, randuri: awb, fanLot: fan?.fanLot, proiectCod: proiect?.cod }
-  const pasi = stariPasi({ ...st, poateScrie, gataDePropus: gata })
+  const pasi = stariPasi({ ...st, poateScrie, gataDePropus: propunere.dePropus.length, motivPropunere: propunere.motiv })
   const operatii = stariOperatii(st)
-  const marcaj = stareMarcaj(st)
+  const marcajTest = stareMarcaj(st), marcajReal = stareMarcajReal(st)   // 18.11: „real” e oprit cât garda „doar TEST” e pornită
   const permis = transportPermis({ proiectCod: proiect?.cod, fanLot: fan?.fanLot })
-  const pas = k => (k === 'marcaj' ? { ...marcaj, cheie: 'marcaj', titlu: 'Marcaj', ajutor: 'doar owner-ul, înainte de prima aprobare: lot de TEST sau lot real' }
+  const AJUTOR_MARCAJ = 'doar owner-ul, înainte de prima aprobare: lot de TEST sau lot real'
+  const pas = k => (k === 'marcaj_test' ? { ...marcajTest, cheie: k, titlu: 'Marcaj TEST', ajutor: AJUTOR_MARCAJ }
+    : k === 'marcaj_real' ? { ...marcajReal, cheie: k, titlu: 'Marcaj real', ajutor: AJUTOR_MARCAJ }
     : pasi.find(p => p.cheie === k) || operatii.find(p => p.cheie === k))
+  const tarifLot = totalTarifLot(awb)
   // manifestul COMUN (aceeași funcție ca funcția edge și arhiva documentelor): mulțimea și ordinea etichetelor
   const manifest = manifestTiparire({ randuri: awb, plicuri })
   const parti = partiManifest(manifest.tiparite)
@@ -136,9 +144,10 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
     }
     return `${eticheta}: ${n}; erori: ${erori.length}. ${erori.join('; ')}`
   }
-  const propune = () => executa('propune', curent => bucla(curent, randuri.filter(x => x.ok),
+  // 18.11: se trimit DOAR plicurile de propus (nu și cele deja propuse / aprobate cu același hash: RPC-ul le-ar readuce la „propus”)
+  const propune = () => executa('propune', curent => bucla(curent, propunere.dePropus,
     r => supabase.rpc('fn_red_fan_propune', { p_plic_id: r.plic.id, p_hash: r.hash, p_tarif_estimat: null }), 'Propuse'))
-  const marcheaza = test => executa('marcaj', async curent => {
+  const marcheaza = test => executa(test ? 'marcaj_test' : 'marcaj_real', async curent => {
     if (!window.confirm(test ? `Marchezi ${lot.nr_lot} ca LOT DE TEST? AWB-urile lui nu vor fi expedieri ale convocărilor.` : `Marchezi ${lot.nr_lot} ca lot REAL (convocări cu efect juridic)?`)) return 'Nimic schimbat.'
     if (!curent()) return OPRIT
     const { error } = await supabase.rpc('fn_red_fan_lot_marcheaza', { p_lot_id: lot.id, p_test: test }); if (error) throw error
@@ -178,9 +187,10 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
     // (după pagina de control): oprit / înlocuit între timp = nimic descărcat
     await confirmaTirajFinal({ rpc: (n, a) => supabase.rpc(n, a), lot, tiraj })
     if (!curent()) return OPRIT
-    descarcaBlob(new Blob([bytes], { type: 'application/pdf' }), numeEtichete({ lot, fanLot: fan.fanLot, parte: corp.parte, parti: corp.parti, format: FORMAT_ETICHETA, tiraj }))
+    descarcaBlob(new Blob([bytes], { type: 'application/pdf' }), numeEtichete({ lot, fanLot: fan.fanLot, parte: corp.parte, parti: corp.parti, tiraj }))
     if (control) descarcaBlob(control, numeControl({ lot, fanLot: fan.fanLot, tiraj }))
-    return `Etichete ${FORMAT_ETICHETA}, tirajul ${tiraj.id}: ${corp.nr_plicuri.length} plicuri (pozițiile ${corp.pozitii[0]}…${corp.pozitii.at(-1)})${corp.parti > 1 ? `, partea ${corp.parte} din ${corp.parti}` : ''}.${corp.ramase?.length ? ` Rămase netipărite: ${corp.ramase.join(', ')}.` : ''}`
+    // 18.11: formatul cerut curierului e A6, dar prima probă a venit A4 → mesajul nu afirmă formatul; omul îl verifică pe PDF înainte de tipărire
+    return `Etichete PDF, tirajul ${tiraj.id}: ${corp.nr_plicuri.length} plicuri (pozițiile ${corp.pozitii[0]}…${corp.pozitii.at(-1)})${corp.parti > 1 ? `, partea ${corp.parte} din ${corp.parti}` : ''}.${corp.ramase?.length ? ` Rămase netipărite: ${corp.ramase.join(', ')}.` : ''} Formatul paginii (cerut: ${FORMAT_ETICHETA}) se verifică pe PDF înainte de tipărire.`
   })
   // „Tiraj nou” (owner), runda 4 (Jakarinos #1118 r3 P1) — procedura în ordine, impusă de BD: (1) OPREȘTE descărcările tirajului început
   // (nicio descărcare a lui nu se mai termină, nici cele începute); (2) așteaptă 30 s; (3) distruge foile ȘI fișierele descărcate ale tirajului;
@@ -320,13 +330,13 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
       </div>)}
     </div>
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-      <Pas cheie="propune" onClick={propune}>1. Propune {gata} plicuri</Pas>
-      <Pas cheie="marcaj" onClick={() => marcheaza(true)}>2a. Marchează TEST</Pas>
-      <Pas cheie="marcaj" onClick={() => marcheaza(false)}>2b. Marchează real</Pas>
+      <Pas cheie="propune" onClick={propune}>1. Propune {propunere.dePropus.length} plicuri</Pas>
+      <Pas cheie="marcaj_test" onClick={() => marcheaza(true)}>2a. Marchează TEST</Pas>
+      <Pas cheie="marcaj_real" onClick={() => marcheaza(false)}>2b. Marchează real</Pas>
       <Pas cheie="aproba" onClick={aproba}>2c. Aprobă</Pas>
       <Pas cheie="genereaza" onClick={genereaza} />
       {(parti.length ? parti : [[]]).map((b, i) => <Pas key={i} cheie="etichete" onClick={() => etichete(i + 1)}>
-        4. Etichete {FORMAT_ETICHETA} (PDF){parti.length > 1 ? ` — partea ${i + 1} din ${parti.length} (pozițiile ${b[0].pozitie}…${b.at(-1).pozitie})` : ''}</Pas>)}
+        4. Etichete (PDF){parti.length > 1 ? ` — partea ${i + 1} din ${parti.length} (pozițiile ${b[0].pozitie}…${b.at(-1).pozitie})` : ''}</Pas>)}
       <Pas cheie="urmarire" onClick={urmarire} />
       <Pas cheie="urmarire" onClick={confirmaRidicarea}>6b. Confirmă ridicarea ({deConfirmatRidicare.length})</Pas>
       <Pas cheie="confirmari" onClick={confirmari} />
@@ -395,14 +405,19 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
         </div>}</div>)}
     </div>}
     {randuri && <>
-      <p>{gata} din {randuri.length} plicuri au toate datele cerute de FAN.</p>
+      <p>{gata} din {randuri.length} plicuri au toate datele cerute de FAN.{fan?.instalata && gata > 0 && !propunere.dePropus.length ? ` ${propunere.motiv[0].toUpperCase()}${propunere.motiv.slice(1)}.` : ''}</p>
+      {fan?.instalata && tarifLot.awb > 0 && <p role="status" style={{ margin: '0 0 8px', fontWeight: 700, color: tarifLot.necunoscute ? G.red : G.text }}>
+        Tarif FAN pe lot (fără TVA): {textTotalTarif(awb)}</p>}
       <div style={{ display: 'grid', gap: 8 }}>
         {randuri.map(r => { const f = pePlic.get(r.plic.id)
+          const tarif = f?.awb ? textTarif(f.tarif) : null   // 18.11: tariful lângă AWB; gol = „tarif necunoscut”, evidențiat (procedura cere oprire)
           return <div key={r.plic.id} style={{ ...S.card, borderColor: r.ok ? G.green : G.yellow }}>
             <b>{r.plic.nr_plic}</b> · {r.shipment.recipient.name || '(fără nume)'} · {[r.shipment.recipient.address.street, r.shipment.recipient.address.locality, r.shipment.recipient.address.county].filter(Boolean).join(', ') || '(fără adresă)'}
             {r.ok ? <div style={{ color: G.green }}>✓ gata pentru FAN · referința pe etichetă: {r.shipment.info.observation}</div> : <ul style={{ margin: '4px 0 0', paddingLeft: 18, color: G.yellow }}>{r.probleme.map((x, i) => <li key={i}>{x}</li>)}</ul>}
-            {f && <div style={{ fontSize: 12.5, color: G.muted }}>FAN: {ETICHETE_STARE_FAN[f.stare] || f.stare}{f.awb ? ` · AWB ${f.awb}` : ''}{f.hash_date !== r.hash && ['propus', 'aprobat'].includes(f.stare) ? ' · datele s-au schimbat după propunere: propune din nou' : ''}
-              {f.urmarire_stare && f.urmarire_stare !== 'neurmarit' ? ` · urmărire: ${ETICHETE_URMARIRE[f.urmarire_stare] || f.urmarire_stare}` : ''}
+            {f && <div style={{ fontSize: 12.5, color: G.muted }}>FAN: {ETICHETE_STARE_FAN[f.stare] || f.stare}{f.awb ? ` · AWB ${f.awb}` : ''}
+              {tarif && <> · <b style={tarif === MESAJ_TARIF_NECUNOSCUT ? { color: G.red, background: G.redDim, padding: '0 4px', borderRadius: 4 } : { color: G.text }}>{tarif}</b>{tarif !== MESAJ_TARIF_NECUNOSCUT && f.tva != null ? ` (+ TVA ${textTarif(f.tva)})` : ''}</>}
+              {f.hash_date !== r.hash && ['propus', 'aprobat'].includes(f.stare) ? ' · datele s-au schimbat după propunere: propune din nou' : ''}
+              {f.urmarire_stare && f.urmarire_stare !== 'neurmarit' ? ` · urmărire: ${etichetaUrmarire(f)}` : ''}
               {textFapteUrmarire(f, ETICHETE_RETUR) ? ` · ${textFapteUrmarire(f, ETICHETE_RETUR)}` : ''}
               {f.confirmare_stare && f.confirmare_stare !== 'nesolicitata' ? ` · ${ETICHETE_CONFIRMARE[f.confirmare_stare] || f.confirmare_stare}` : ''}
               {f.motiv ? ` · ${f.motiv}` : ''}</div>}

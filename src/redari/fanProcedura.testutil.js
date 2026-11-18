@@ -82,12 +82,21 @@ export function pasiDinDocument(text, deLa, panaLa, { legacy = false } = {}) {
   return pasi
 }
 
-/** Starea ecranului pentru starea simulată a unui lot: cheile active ale pașilor + operațiilor + marcajul. */
-export function activeIn(lot, { stariPasi, stareMarcaj, stariOperatii }, actor) {
+/** Plicurile lotului simulat, „pregătite” ca în ecran (toate cu datele complete, același hash `h1` cât datele nu se schimbă). */
+const pregatite = lot => Array.from({ length: lot.plicuri }, (_, i) => ({ ok: true, plic: { id: `pl${i + 1}` }, hash: 'h1' }))
+/** Ce e de propus pe lot (18.11.2026): ACEEAȘI definiție ca ecranul (fanLot.starePropunere) — fără rând FAN viu, sau viu „propus” / „aprobat” pe alt
+ *  hash; după generarea tuturor plicurilor „1. Propune” se dezactivează („nimic de propus”). Codul fără starePropunere (forme vechi): toate plicurile. */
+const propunere = (lot, fn) => (fn.starePropunere ? fn.starePropunere({ pregatite: pregatite(lot), randuri: lot.randuri }) : { dePropus: pregatite(lot), motiv: '' })
+const argumentePasi = (lot, fn, comun) => { const p = propunere(lot, fn); return { ...comun, gataDePropus: p.dePropus.length, motivPropunere: p.motiv } }
+
+/** Starea ecranului pentru starea simulată a unui lot: cheile active ale pașilor + operațiilor + marcajul (TEST și, dacă e activ, real). */
+export function activeIn(lot, fn, actor) {
+  const { stariPasi, stareMarcaj, stariOperatii, stareMarcajReal } = fn
   const comun = { transportActiv: true, evidentaInstalata: true, proiectCod: lot.proiectCod, fanLot: lot.fanLot, randuri: lot.randuri, ...actor }
-  const chei = new Set(stariPasi({ ...comun, gataDePropus: lot.plicuri }).filter(p => p.activ).map(p => p.cheie))
+  const chei = new Set(stariPasi(argumentePasi(lot, fn, comun)).filter(p => p.activ).map(p => p.cheie))
   for (const o of stariOperatii(comun)) if (o.activ) chei.add(o.cheie)
   if (stareMarcaj(comun).activ) chei.add('marcaj_test')
+  if (stareMarcajReal && stareMarcajReal(comun).activ) chei.add('marcaj_real')   // 18.11: niciodată activ cât garda „doar TEST” e pornită
   return [...chei].sort()
 }
 
@@ -118,7 +127,7 @@ export function parcurge(pasi, fn, { lume = lumeNoua(), lot: numeLot = 'PP-xxxx'
     if (a.cheie && !inainte.includes(a.cheie)) {
       const comun = { transportActiv: true, evidentaInstalata: true, proiectCod: lot.proiectCod, fanLot: lot.fanLot, randuri: lot.randuri, ...actor }
       const motiv = a.cheie === 'marcaj_test' ? fn.stareMarcaj(comun).motiv
-        : (fn.stariPasi({ ...comun, gataDePropus: lot.plicuri }).find(x => x.cheie === a.cheie) || fn.stariOperatii(comun).find(x => x.cheie === a.cheie) || {}).motiv
+        : (fn.stariPasi(argumentePasi(lot, fn, comun)).find(x => x.cheie === a.cheie) || fn.stariOperatii(comun).find(x => x.cheie === a.cheie) || {}).motiv
       throw eroare(`„${p.text}” nu e activ în ecran (${motiv || 'buton necunoscut'}); active: ${inainte.join(', ') || '-'}`)
     }
     const generate = () => lot.randuri.filter(x => x.stare === 'generat').length
@@ -149,7 +158,13 @@ export function parcurge(pasi, fn, { lume = lumeNoua(), lot: numeLot = 'PP-xxxx'
           if (!l.selfawb) throw eroare(`verdictul 4a lipsește pe lotul ${l.nume}: asocierea AWB ↔ plic nu a fost verificată în selfAWB`)
         }
         lot.verificat = true; break }
-      case 'propune': lot.randuri = Array.from({ length: lot.plicuri }, (_, i) => ({ id: `r${i + 1}`, stare: 'propus' })); break
+      case 'propune': {   // ca fn_red_fan_propune: rândul viu propus / aprobat e rescris „propus”; fără rând viu (sau „eroare” / „anulat”) = rând nou
+        for (const p of propunere(lot, fn).dePropus) {
+          const i = lot.randuri.findIndex(r => r.plic_id === p.plic.id && !['eroare', 'anulat'].includes(r.stare))
+          if (i >= 0) lot.randuri[i] = { ...lot.randuri[i], stare: 'propus', hash_date: p.hash }
+          else lot.randuri.push({ id: `r${p.plic.id.slice(2)}${lot.randuri.some(r => r.plic_id === p.plic.id) ? 'b' : ''}`, plic_id: p.plic.id, stare: 'propus', hash_date: p.hash })
+        }
+        break }
       case 'aproba': {
         if (!lot.fanLot) throw eroare('aprobarea cere marcajul (fn_red_fan_aproba: P0001)')
         const noi = lot.randuri.filter(x => x.stare === 'propus').length
