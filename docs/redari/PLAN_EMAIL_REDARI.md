@@ -164,20 +164,29 @@ Doar plan de design: fără cod de producție, fără scrieri în BD, fără sec
   deținător și parcelă neșterse, 43 de caractere, neexpirat — același predicat ca RPC-urile publice), `fn_red_mail_f2_campuri` (COMUNA = `red_uat.nume`;
   ZILE = `sesiune_zi1..3` ca `ZZ.LL.AAAA` legate cu „, ” și „ și ”; PROGRAM = `program_zi*` doar dacă e același în toate zilele; TEL = `red_proiecte.contact_telefon`
   — aceeași sursă ca convocatorul; NULL = nu se poate deduce sigur), `fn_red_mail_f2_completeaza` (orice `{…}` necunoscut = `camp_necunoscut`, câmp fără valoare
-  = `camp_necompletabil`, ambele 22023 — nimic cu acolade nu ajunge în snapshot); subiectul primește câmpurile lotului (fără link); (2) **deținătorul fără token
+  = `camp_necompletabil`, ambele 22023; **după înlocuire nicio acoladă nu are voie să rămână** — nume de orice lungime, `{}`, `{ X }`, acoladă neînchisă — altfel
+  `camp_necunoscut`; runda 2, Jakarinos #1138 P2: limita de 40 de caractere a parserului lăsa să treacă numele mai lungi), `fn_red_mail_f2_link_strain` (**un link
+  personal literal în subiect sau text = refuz `link_literal`** — un link copiat ar fi ajuns la toți destinatarii; „link personal” = un șir de 43 de caractere
+  base64url într-un `…/redari/raspuns/<token>` pe orice origine SAU un token existent al unui deținător, copiat fără adresă; pe mesajul FINAL fiecare link personal
+  trebuie să fie al destinatarului — `link_strain`; runda 2, Jakarinos #1138 P1); subiectul primește câmpurile lotului (fără link); (2) **deținătorul fără token
   valid e EXCLUS**: inventarul îl arată cu motivul `fara_token`, crearea îl refuză (`destinatari_neeligibili`); un deținător nou are tokenul din momentul adăugării
   (trigger 20261126a), deci intră în orice lot creat după aceea; (3) **token devenit invalid între aprobare și trimitere** (expirat / deținător șters): la
-  rezervare mesajul trece în `anulat` cu `eroare_cod = token_expirat`, nimic rezervat; la autorizarea apelului `apel_incepe` întoarce `false` și anulează
-  mesajul — niciun apel Gmail, nicio retrimitere (linkul mort nu pleacă); (4) **siguranța tokenului**: apare DOAR în snapshotul mesajului deținătorului lui
+  rezervare mesajul trece în `anulat` cu `eroare_cod = token_expirat` și **rezervarea trece la următorul mesaj din coadă** (la fel după anularea pentru opt-out) —
+  un mesaj anulat nu oprește destinatarii valizi rămași (runda 2, Jakarinos #1138 P2: handlerul se oprește la zero rânduri, deci rezervarea întoarce zero rânduri
+  DOAR când chiar nu mai e nimic de rezervat); la autorizarea apelului `apel_incepe` întoarce `false` și anulează mesajul — niciun apel Gmail, nicio retrimitere
+  (linkul mort nu pleacă); (4) **siguranța tokenului**: apare DOAR în snapshotul mesajului deținătorului lui
   (`red_mail_mesaje`, SELECT doar owner — același care citește deja `red_detinatori_token` ca admin; nicio politică lărgită, postcondiția o verifică),
   ecranul îl arată **mascat** (ultimele 6 caractere), jurnalul F2 / evenimentele / mesajele de eroare nu îl conțin; (5) gărzile F2b (doar `TEST-`, căsuța
   conectată, `extern_permis` fals — `fn_red_mail_f2_poate`) rămân neschimbate (postcondiție pe amprentă). Ecranul: lista câmpurilor cu valorile lotului (din
   RPC), avertisment când textul n-are `{LINK_RASPUNS}`, crearea oprită la câmp scris greșit, previzualizarea textului final al fiecărui mesaj cu linkul
   mascat. Urma L14: jurnalul F2 primește `campuri` la fiecare lot creat cu câmpuri — revenirea refuză la orice astfel de rând / mesaj `token_expirat`.
-  Ordinea livrării: **codul întâi** (ecranul vechi ar arunca la motivul nou `fara_token`), apoi migrarea. Probe: `src/redari/mailLinkPersonal.test.js`
-  (paritate JS/SQL pe tabelul comun de cazuri, mascarea, ecranul, dovada pe main), `scripts/pglite/test_redari_mail_link_local.mjs` (20261131h aplicată, apoi
-  20261131i cu pașii L15 v2 ai runnerului: 3 destinatari cu linkul fiecăruia și hash-ul peste textul final, refuzuri, token expirat între aprobare și
-  trimitere, tokenul absent din jurnale, RLS neschimbat, L14, mutanți). Procedura: `MAIL_PROBA_PASI.md` §5a.
+  Ordinea livrării: **codul întâi** (ecranul vechi ar arunca la motivul nou `fara_token`), apoi migrarea. Probe: `src/redari/mailLinkPersonal.test.jsx`
+  (paritate JS/SQL pe tabelul comun de cazuri `campuri_mail_cazuri.json` — numele câmpurilor, refuzul acoladelor rămase, linkul literal; paritate cu
+  convocatorul pe `campuri_lot_cazuri.json`; mascarea, ecranul, dovada istorică pe SHA fix), `scripts/pglite/test_redari_mail_link_local.mjs` (20261131h
+  aplicată, apoi 20261131i cu pașii L15 v2 ai runnerului: 4 destinatari cu linkul fiecăruia și hash-ul peste textul final, refuzuri — inclusiv linkul literal
+  cu `{LINK_RASPUNS}` alături și câmpurile de 41+ caractere —, opt-out + token expirat între aprobare și trimitere cu rezervarea care trece la următorul valid,
+  **handlerul REAL al funcției edge peste RPC-urile din PGlite** (ordinea „expirat, valid” → al doilea trimis în aceeași apăsare), tokenul absent din jurnale,
+  RLS neschimbat, L14, mutanți). Procedura: `MAIL_PROBA_PASI.md` §5a.
 - Rămân deschise, neschimbate: reconcilierea `necunoscut` și decizia owner-ului (`esuat_confirmat`), monitorizarea SENT, opt-out-ul în UI, `extern_permis`
   (§1.3, §1.4, §1.9). Procedura probei pe `TEST-RAZVAN`: `docs/redari/MAIL_PROBA_PASI.md`.
 

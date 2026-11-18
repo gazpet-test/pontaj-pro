@@ -22,13 +22,20 @@
 --   * fn_red_mail_f2_campuri(uuid,uuid) (owner, RPC): valorile câmpurilor lotului din ACEEAȘI sursă ca convocatorul (red_uat.nume / sesiune_zi1..3 /
 --     program_zi1..3, red_proiecte.contact_telefon); NULL = nu se poate deduce sigur (ecranul le arată, crearea refuză dacă textul le folosește);
 --   * fn_red_mail_f2_completeaza(text,jsonb): înlocuirea {NUME} → valoare; orice „{…}” necunoscut = camp_necunoscut (22023), valoare lipsă =
---     camp_necompletabil (22023); nimic cu acolade nu ajunge în snapshot;
+--     camp_necompletabil (22023); după înlocuire NICIO acoladă nu mai are voie să rămână (oricât de lung ar fi numele, forme greșite ca „{ X }”, „{}”,
+--     acolade neînchise) — altfel camp_necunoscut (r2, Jakarinos #1138 P2: limita de 40 de caractere a parserului lăsa să treacă numele mai lungi);
+--   * fn_red_mail_f2_link_strain(text,text): „textul conține un link personal care nu e al deținătorului dat” — orice șir de exact 43 de caractere base64url
+--     care fie stă într-un link de răspuns (…/redari/raspuns/<token>, pe ORICE origine), fie e un token existent în red_detinatori_token; p_token NULL =
+--     orice link personal e străin. O singură definiție (L19) pentru șablon și pentru mesajul final (r2, Jakarinos #1138 P1);
 --   * fn_red_mail_destinatari: motivul nou `fara_token` (deținător fără link personal valid — exclus din lot, vizibil în inventar);
---   * fn_red_mail_lot_creeaza (aceeași semnătură): refuză destinatarii fără token valid (destinatari_neeligibili), completează subiectul cu câmpurile lotului
---     și corpul FIECĂRUI mesaj cu câmpurile lotului + {LINK_RASPUNS} al LUI, apoi hash-ul; limitele snapshotului verificate după completare; jurnalul `campuri`;
---   * fn_red_mail_rezerva / fn_red_mail_apel_incepe (corpurile 20261131h + o condiție): un token devenit invalid între crearea lotului și trimitere
---     (expirat / deținător șters) = mesajul trece în `anulat` cu eroare_cod `token_expirat`, FĂRĂ apel și FĂRĂ retrimitere (la rezervare: nimic rezervat; la
---     autorizare: false, mesajul anulat) — linkul mort nu pleacă niciodată.
+--   * fn_red_mail_lot_creeaza (aceeași semnătură): refuză destinatarii fără token valid (destinatari_neeligibili), REFUZĂ un link personal literal în subiect
+--     sau în text (link_literal — un link copiat ar ajunge la toți destinatarii), completează subiectul cu câmpurile lotului și corpul FIECĂRUI mesaj cu
+--     câmpurile lotului + {LINK_RASPUNS} al LUI, verifică pe mesajul FINAL că fiecare link personal e al destinatarului (link_strain), apoi hash-ul; limitele
+--     snapshotului verificate după completare; jurnalul `campuri`;
+--   * fn_red_mail_rezerva (corpul 20261131h + bucla peste anulările locale): un token devenit invalid între crearea lotului și trimitere (expirat / deținător
+--     șters) = mesajul trece în `anulat` cu eroare_cod `token_expirat`, FĂRĂ apel și FĂRĂ retrimitere, iar rezervarea TRECE LA URMĂTORUL mesaj din coadă
+--     (la fel după anularea pentru opt-out) — un mesaj anulat nu oprește destinatarii valizi rămași (r2, Jakarinos #1138 P2: handlerul se oprește la zero rânduri);
+--     fn_red_mail_apel_incepe (corpul 20261131h + o condiție): token invalid la autorizare = false + mesajul anulat (token_expirat) — linkul mort nu pleacă niciodată.
 --   Siguranța tokenului: apare DOAR în snapshotul mesajului deținătorului lui (red_mail_mesaje, SELECT doar owner — același care citește deja
 --     red_detinatori_token ca admin, 20261126a: NICIO politică / drept nu se lărgește aici, postcondiția o verifică); jurnalul F2 și evenimentele nu au
 --     conținut; mesajele de eroare nu conțin valori; ecranul îl arată mascat.
@@ -75,7 +82,7 @@ BEGIN
   PERFORM set_config('lock_timeout', '100ms', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- reaplicare = refuz
-  IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_red_link_raspuns', 'fn_red_mail_f2_token', 'fn_red_mail_f2_campuri', 'fn_red_mail_f2_completeaza')) THEN
+  IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_red_link_raspuns', 'fn_red_mail_f2_token', 'fn_red_mail_f2_campuri', 'fn_red_mail_f2_completeaza', 'fn_red_mail_f2_link_strain')) THEN
     RAISE EXCEPTION '20261131i: obiectele exista deja (reaplicare)';
   END IF;
   -- coloanele citite / scrise (tipurile din 20261126a / 20261127a / 20261131a)
@@ -245,22 +252,37 @@ BEGIN
 END $fn$;
 COMMENT ON FUNCTION public.fn_red_mail_f2_campuri(uuid,uuid) IS 'Redări e-mail (owner): valorile câmpurilor lotului pentru UAT-ul proiectului — COMUNA (red_uat.nume), ZILE (sesiune_zi1..3 ca ZZ.LL.AAAA, „, ” și „ și ”), PROGRAM (program_zi* doar dacă identic în toate zilele), TEL (red_proiecte.contact_telefon); NULL = nu se poate deduce sigur. Aceeași sursă ca convocatorul. Folosită de ecran și de fn_red_mail_lot_creeaza. 20261131i.';
 
--- ─── 5. completarea {NUME} → valoare; orice „{…}” necunoscut sau fără valoare = refuz; nimic cu acolade în snapshot ────────────────
+-- ─── 5. completarea {NUME} → valoare; orice „{…}” necunoscut sau fără valoare = refuz; NICIO acoladă rămasă în snapshot ─────────────
+-- Ce e un câmp (o singură definiție, aceeași în JS — campuriDinText / acoladeInvalide din redariMailF2.mjs, paritate pe src/redari/__tests__/campuri_mail_cazuri.json):
+--   „{” + nume fără acolade, de ORICE lungime + „}”; după înlocuirea câmpurilor cunoscute, orice acoladă rămasă („{}”, „{ X }”, „{{COMUNA}}”, o acoladă
+--   neînchisă, un nume de 41+ caractere) = refuz. Numele din mesajul de eroare e tăiat la 40 de caractere (nicio valoare în erori).
 CREATE FUNCTION public.fn_red_mail_f2_completeaza(p_text text,p_campuri jsonb) RETURNS text
 LANGUAGE plpgsql IMMUTABLE SET search_path=public,pg_temp AS $fn$
 DECLARE nume text; rez text:=p_text; v text;
 BEGIN
  IF p_text IS NULL OR p_campuri IS NULL OR jsonb_typeof(p_campuri)<>'object' THEN RAISE EXCEPTION 'cerere_invalida' USING ERRCODE='22023'; END IF;
- FOR nume IN SELECT DISTINCT m[1] FROM regexp_matches(p_text,'[{]([^{}]{1,40})[}]','g') m LOOP
-  IF NOT (p_campuri ? nume) THEN RAISE EXCEPTION 'camp_necunoscut: %',nume USING ERRCODE='22023'; END IF;
+ FOR nume IN SELECT DISTINCT m[1] FROM regexp_matches(p_text,'[{]([^{}]+)[}]','g') m LOOP
+  IF NOT (p_campuri ? nume) THEN RAISE EXCEPTION 'camp_necunoscut: %',left(nume,40) USING ERRCODE='22023'; END IF;
   v:=p_campuri->>nume;
   IF v IS NULL OR btrim(v)='' THEN RAISE EXCEPTION 'camp_necompletabil: %',nume USING ERRCODE='22023'; END IF;
   rez:=replace(rez,'{'||nume||'}',v);
  END LOOP;
- IF rez ~ '[{][^{}]{1,40}[}]' THEN RAISE EXCEPTION 'camp_necunoscut' USING ERRCODE='22023'; END IF;
+ IF rez ~ '[{}]' THEN RAISE EXCEPTION 'camp_necunoscut: acolade ramase' USING ERRCODE='22023'; END IF;
  RETURN rez;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_mail_f2_completeaza(text,jsonb) IS 'Redări e-mail (intern): înlocuiește fiecare {NUME} din text cu valoarea din p_campuri; un câmp necunoscut (scris greșit) = camp_necunoscut, un câmp fără valoare = camp_necompletabil (ambele 22023); textul rezultat nu mai conține nicio formă {…}. Mesajele de eroare nu conțin valori. 20261131i.';
+COMMENT ON FUNCTION public.fn_red_mail_f2_completeaza(text,jsonb) IS 'Redări e-mail (intern): înlocuiește fiecare {NUME} din text cu valoarea din p_campuri; un câmp necunoscut (scris greșit) = camp_necunoscut, un câmp fără valoare = camp_necompletabil (ambele 22023); textul rezultat nu mai conține NICIO acoladă (orice formă rămasă, oricât de lungă, = camp_necunoscut). Mesajele de eroare nu conțin valori. 20261131i.';
+
+-- ─── 5b. linkul personal STRĂIN: o singură definiție pentru șablon (p_token NULL) și pentru mesajul final (p_token = al destinatarului) ─────────
+-- Un „link personal” = un șir de exact 43 de caractere base64url (delimitat) care fie stă într-un link de răspuns „…/redari/raspuns/<token>” (pe orice
+-- origine: redari.gazpet.ro, previzualizări, domenii vechi), fie e un token EXISTENT în red_detinatori_token (un token copiat fără adresă e tot secretul
+-- cuiva). Străin = diferit de p_token. Nimic nu se scrie; nicio valoare în rezultat.
+CREATE FUNCTION public.fn_red_mail_f2_link_strain(p_text text,p_token text) RETURNS boolean
+LANGUAGE sql STABLE SET search_path=public,pg_temp AS $fn$
+ SELECT EXISTS(SELECT 1 FROM regexp_matches(p_text,'(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])','g') r
+  WHERE r[1] IS DISTINCT FROM p_token
+  AND (position('/redari/raspuns/'||r[1] IN p_text)>0 OR EXISTS(SELECT 1 FROM public.red_detinatori_token t WHERE t.token_raspuns=r[1])))
+$fn$;
+COMMENT ON FUNCTION public.fn_red_mail_f2_link_strain(text,text) IS 'Redări e-mail (intern): true dacă textul conține un link personal de răspuns (…/redari/raspuns/<token de 43 de caractere>, pe orice origine) sau un token existent al unui deținător, DIFERIT de p_token (NULL = orice link personal e străin). Folosită de fn_red_mail_lot_creeaza pe șablon (refuz link_literal) și pe fiecare mesaj final (refuz link_strain). 20261131i.';
 
 -- ─── 6. inventarul destinatarilor: motivul `fara_token` (corpul 20261131a + o condiție) ─────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.fn_red_mail_destinatari(p_proiect uuid,p_uat uuid,p_dupa uuid DEFAULT NULL)
@@ -292,6 +314,8 @@ BEGIN
  PERFORM public.fn_red_mail_f2_owner();
  IF p_operatie IS NULL OR p_proiect IS NULL OR p_uat IS NULL OR cardinality(p_destinatari) IS NULL OR cardinality(p_destinatari) NOT BETWEEN 1 AND 300 OR array_position(p_destinatari,NULL) IS NOT NULL THEN RAISE EXCEPTION 'cerere_invalida' USING ERRCODE='22023'; END IF;
  IF p_subiect IS NULL OR length(btrim(p_subiect)) NOT BETWEEN 1 AND 400 OR p_subiect ~ '[[:cntrl:]]' OR p_text IS NULL OR length(btrim(p_text)) NOT BETWEEN 1 AND 19000 THEN RAISE EXCEPTION 'continut_invalid' USING ERRCODE='22023'; END IF;
+ -- 20261131i: un link personal LITERAL în șablon (subiect sau text) ar ajunge la TOȚI destinatarii — refuz înainte de orice scriere; linkul intră doar prin {LINK_RASPUNS}
+ IF public.fn_red_mail_f2_link_strain(p_subiect,NULL) OR public.fn_red_mail_f2_link_strain(p_text,NULL) THEN RAISE EXCEPTION 'link_literal' USING ERRCODE='22023'; END IF;
  h:=public.fn_red_mail_f2_hash(jsonb_build_object('proiect',p_proiect,'uat',p_uat,'destinatari',(SELECT jsonb_agg(x ORDER BY x) FROM unnest(p_destinatari)x),'subiect',p_subiect,'text',p_text));
  PERFORM 1 FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
  IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;
@@ -313,6 +337,8 @@ BEGIN
  campuri:=public.fn_red_mail_f2_campuri(p_proiect,p_uat);
  subiect:=public.fn_red_mail_f2_text(public.fn_red_mail_f2_completeaza(p_subiect,campuri));
  IF length(btrim(subiect)) NOT BETWEEN 1 AND 500 OR subiect ~ '[[:cntrl:]]' THEN RAISE EXCEPTION 'continut_invalid' USING ERRCODE='22023'; END IF;
+ -- subiectul final nu are voie să conțină NICIUN link personal (nici din valorile câmpurilor)
+ IF public.fn_red_mail_f2_link_strain(subiect,NULL) THEN RAISE EXCEPTION 'link_strain' USING ERRCODE='22023'; END IF;
  FOR dst IN SELECT d.id,c.email FROM public.red_detinatori d JOIN public.red_detinatori_contact c ON c.detinator_id=d.id WHERE d.id=ANY(p_destinatari) ORDER BY d.id LOOP
   tok:=public.fn_red_mail_f2_token(dst.id);
   IF tok IS NULL OR public.fn_red_link_raspuns(tok) IS NULL THEN RAISE EXCEPTION 'destinatari_neeligibili'; END IF;
@@ -322,6 +348,8 @@ BEGIN
   msg.catre:=lower(dst.email); msg.message_id:='<'||msg.id::text||'@gazpet.ro>';
   msg.subiect_final:=subiect; msg.corp_text_final:=public.fn_red_mail_f2_text(public.fn_red_mail_f2_completeaza(p_text,campuri||jsonb_build_object('LINK_RASPUNS',public.fn_red_link_raspuns(tok)))); msg.corp_html_final:=NULL;
   IF length(btrim(msg.corp_text_final)) NOT BETWEEN 1 AND 20000 THEN RAISE EXCEPTION 'continut_invalid' USING ERRCODE='22023'; END IF;
+  -- 20261131i: pe mesajul FINAL, orice link personal trebuie să fie al ACESTUI destinatar (apărare în adâncime față de refuzul șablonului)
+  IF public.fn_red_mail_f2_link_strain(msg.corp_text_final,tok) THEN RAISE EXCEPTION 'link_strain' USING ERRCODE='22023'; END IF;
   msg.antete_snapshot:=jsonb_build_object('From','redari@gazpet.ro','To',msg.catre,'Message-ID',msg.message_id,'List-Unsubscribe','<mailto:redari@gazpet.ro?subject=dezabonare>');
   msg.mesaj_sha256:=public.fn_red_mail_f2_mesaj_hash(msg);
   INSERT INTO public.red_mail_mesaje(id,lot_id,detinator_id,nr_document,catre,message_id,subiect_final,corp_text_final,antete_snapshot,mesaj_sha256) VALUES(msg.id,msg.lot_id,msg.detinator_id,msg.nr_document,msg.catre,msg.message_id,msg.subiect_final,msg.corp_text_final,msg.antete_snapshot,msg.mesaj_sha256);
@@ -329,9 +357,9 @@ BEGIN
  UPDATE public.red_mail_loturi SET lot_sha256=public.fn_red_mail_f2_lot_hash(p_operatie) WHERE id=p_operatie;
  PERFORM public.fn_red_mail_f2_audit(p_operatie,NULL,'creat'); PERFORM public.fn_red_mail_f2_audit(p_operatie,NULL,'campuri'); RETURN p_operatie;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_mail_lot_creeaza(uuid,uuid,uuid,uuid[],text,text) IS 'Redări e-mail F2 (owner): creează lotul ciornă (idempotent pe p_operatie + hash-ul cererii). 20261131i: destinatarii fără token valid sunt refuzați (destinatari_neeligibili); subiectul primește câmpurile lotului, corpul fiecărui mesaj câmpurile lotului + {LINK_RASPUNS} al destinatarului, ÎN SNAPSHOT, înaintea hash-ului; un câmp necunoscut = camp_necunoscut, fără valoare = camp_necompletabil; jurnalul F2 primește și `campuri`.';
+COMMENT ON FUNCTION public.fn_red_mail_lot_creeaza(uuid,uuid,uuid,uuid[],text,text) IS 'Redări e-mail F2 (owner): creează lotul ciornă (idempotent pe p_operatie + hash-ul cererii). 20261131i: destinatarii fără token valid sunt refuzați (destinatari_neeligibili); un link personal literal în subiect / text = link_literal; subiectul primește câmpurile lotului, corpul fiecărui mesaj câmpurile lotului + {LINK_RASPUNS} al destinatarului, ÎN SNAPSHOT, înaintea hash-ului; un câmp necunoscut sau o acoladă rămasă = camp_necunoscut, fără valoare = camp_necompletabil; un link personal străin în mesajul final = link_strain; jurnalul F2 primește și `campuri`.';
 
--- ─── 8. rezervarea: token devenit invalid = mesaj anulat (token_expirat), nimic rezervat (corpul 20261131h + o condiție) ───────────
+-- ─── 8. rezervarea: anulările locale (opt-out, token devenit invalid = token_expirat) NU opresc coada — se trece la următorul mesaj (corpul 20261131h + bucla) ──
 CREATE OR REPLACE FUNCTION public.fn_red_mail_rezerva(p_lot uuid) RETURNS SETOF public.red_mail_mesaje
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS $fn$
 DECLARE l public.red_mail_loturi; m public.red_mail_mesaje; s public.red_mail_setari; cod text;
@@ -355,17 +383,20 @@ BEGIN
  IF cod IS NOT NULL THEN RETURN; END IF;
  IF (SELECT count(*) FROM public.red_mail_mesaje WHERE stare IN ('rezervat','in_apel','necunoscut'))>=50 THEN RETURN; END IF;
  IF (SELECT count(*) FROM public.red_mail_mesaje WHERE rezervat_la IS NOT NULL AND (rezervat_la AT TIME ZONE 'Europe/Bucharest')::date=(now() AT TIME ZONE 'Europe/Bucharest')::date)>=s.plafon_zi OR (SELECT count(*) FROM public.red_mail_mesaje WHERE rezervat_la IS NOT NULL AND date_trunc('month',rezervat_la AT TIME ZONE 'Europe/Bucharest')=date_trunc('month',now() AT TIME ZONE 'Europe/Bucharest'))>=s.plafon_luna THEN RETURN; END IF;
- SELECT * INTO m FROM public.red_mail_mesaje WHERE lot_id=l.id AND stare='in_coada' ORDER BY id LIMIT 1 FOR UPDATE;
- IF NOT FOUND THEN RETURN; END IF;
- IF EXISTS(SELECT 1 FROM public.red_mail_optout WHERE email=m.catre AND activ) THEN UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='optout' WHERE id=m.id; RETURN; END IF;
- -- 20261131i: linkul personal din snapshot ar fi mort (token expirat / deținător șters între crearea lotului și trimitere): anulat, fără apel, fără retrimitere
- IF public.fn_red_mail_f2_token(m.detinator_id) IS NULL THEN UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='token_expirat' WHERE id=m.id; PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'anulat'); RETURN; END IF;
- IF NOT s.extern_permis AND split_part(m.catre,'@',2)<>'gazpet.ro' THEN RETURN; END IF;
- IF l.stare='aprobat' THEN UPDATE public.red_mail_loturi SET stare='in_trimitere',versiune=versiune+1 WHERE id=l.id; END IF;
- UPDATE public.red_mail_mesaje SET stare='rezervat',lease_token=gen_random_uuid(),lease_pana=now()+interval '2 minutes',rezervat_la=now(),rezervare_nr=rezervare_nr+1 WHERE id=m.id RETURNING * INTO m;
- PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'rezervat'); RETURN NEXT m;
+ -- 20261131i: mesajele în coadă, în ordinea id-ului (toate blocate FOR UPDATE mai sus); o anulare LOCALĂ (opt-out, token expirat) nu oprește coada —
+ -- se trece la următorul; se întoarce cel mult UN mesaj rezervat; zero rânduri = chiar nu mai e nimic de rezervat (coadă goală / plafon / extern oprit)
+ FOR m IN SELECT * FROM public.red_mail_mesaje WHERE lot_id=l.id AND stare='in_coada' ORDER BY id LOOP
+  IF EXISTS(SELECT 1 FROM public.red_mail_optout WHERE email=m.catre AND activ) THEN UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='optout' WHERE id=m.id; CONTINUE; END IF;
+  -- linkul personal din snapshot ar fi mort (token expirat / deținător șters între crearea lotului și trimitere): anulat, fără apel, fără retrimitere
+  IF public.fn_red_mail_f2_token(m.detinator_id) IS NULL THEN UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='token_expirat' WHERE id=m.id; PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'anulat'); CONTINUE; END IF;
+  IF NOT s.extern_permis AND split_part(m.catre,'@',2)<>'gazpet.ro' THEN RETURN; END IF;
+  IF l.stare='aprobat' THEN UPDATE public.red_mail_loturi SET stare='in_trimitere',versiune=versiune+1 WHERE id=l.id; END IF;
+  UPDATE public.red_mail_mesaje SET stare='rezervat',lease_token=gen_random_uuid(),lease_pana=now()+interval '2 minutes',rezervat_la=now(),rezervare_nr=rezervare_nr+1 WHERE id=m.id RETURNING * INTO m;
+  PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'rezervat'); RETURN NEXT m; RETURN;
+ END LOOP;
+ RETURN;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_mail_rezerva(uuid) IS 'Redări e-mail F2 (owner): rezervă următorul mesaj al lotului sub lock (setări → lot → proiect FOR SHARE → mesaje). 20261131h: proiectul FOR SHARE. 20261131i: un mesaj al cărui deținător nu mai are token valid trece în anulat (token_expirat), fără rezervare.';
+COMMENT ON FUNCTION public.fn_red_mail_rezerva(uuid) IS 'Redări e-mail F2 (owner): rezervă următorul mesaj al lotului sub lock (setări → lot → proiect FOR SHARE → mesaje). 20261131h: proiectul FOR SHARE. 20261131i: un mesaj al cărui deținător nu mai are token valid trece în anulat (token_expirat) și rezervarea trece la următorul mesaj din coadă (la fel după opt-out); zero rânduri = nimic de rezervat.';
 
 -- ─── 9. autorizarea apelului: token devenit invalid = false + mesaj anulat (token_expirat), niciun apel (corpul 20261131h + o condiție) ──
 CREATE OR REPLACE FUNCTION public.fn_red_mail_apel_incepe(p_mesaj uuid,p_token uuid) RETURNS boolean
@@ -393,7 +424,8 @@ END $fn$;
 COMMENT ON FUNCTION public.fn_red_mail_apel_incepe(uuid,uuid) IS 'Redări e-mail F2 (owner): autorizează UN apel Gmail pentru mesajul rezervat (CAS pe lease). 20261131h: proiectul FOR SHARE. 20261131i: fără token valid al deținătorului = false, mesajul anulat (token_expirat), niciun apel.';
 
 -- ─── 10. Drepturi: funcțiile interne doar proprietarul; fn_red_mail_f2_campuri = owner (authenticated, verificat în corp); nimic pentru PUBLIC / anon ──
-REVOKE ALL ON FUNCTION public.fn_red_link_raspuns(text), public.fn_red_mail_f2_token(uuid), public.fn_red_mail_f2_campuri(uuid,uuid), public.fn_red_mail_f2_completeaza(text,jsonb)
+REVOKE ALL ON FUNCTION public.fn_red_link_raspuns(text), public.fn_red_mail_f2_token(uuid), public.fn_red_mail_f2_campuri(uuid,uuid), public.fn_red_mail_f2_completeaza(text,jsonb),
+  public.fn_red_mail_f2_link_strain(text,text)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_red_mail_f2_campuri(uuid,uuid) TO authenticated;
 
@@ -408,10 +440,11 @@ BEGIN
       ('public.fn_red_link_raspuns(text)', '6732f7c215cac70f630f08c572a24d65', 'sql', false, 'i', 'text'),
       ('public.fn_red_mail_f2_token(uuid)', '604a8adddf23112c5c0f70c89cff0244', 'sql', false, 's', 'text'),
       ('public.fn_red_mail_f2_campuri(uuid,uuid)', '503dc3c94d4e255ac5e827658b38a0ff', 'plpgsql', true, 's', 'jsonb'),
-      ('public.fn_red_mail_f2_completeaza(text,jsonb)', '4b1b4803851c1670c88b7edd051e4b1c', 'plpgsql', false, 'i', 'text'),
+      ('public.fn_red_mail_f2_completeaza(text,jsonb)', '61331ec6fc15d05e02517825877084d6', 'plpgsql', false, 'i', 'text'),
+      ('public.fn_red_mail_f2_link_strain(text,text)', 'cdd9d19027dd5e22edab160fcdaee5b6', 'sql', false, 's', 'boolean'),
       ('public.fn_red_mail_destinatari(uuid,uuid,uuid)', 'b1fbfaf746f1e05fd88f9204bfbbea68', 'plpgsql', true, 's', 'record'),
-      ('public.fn_red_mail_lot_creeaza(uuid,uuid,uuid,uuid[],text,text)', 'fb7bb034b2b74477fe46f99fd8c99945', 'plpgsql', true, 'v', 'uuid'),
-      ('public.fn_red_mail_rezerva(uuid)', '2b308bdcf75c80be03959158a8a79888', 'plpgsql', true, 'v', 'public.red_mail_mesaje'),
+      ('public.fn_red_mail_lot_creeaza(uuid,uuid,uuid,uuid[],text,text)', 'bff52e712db5084b48eefd3824ca7283', 'plpgsql', true, 'v', 'uuid'),
+      ('public.fn_red_mail_rezerva(uuid)', 'dbd0cbf99e8e2e0715441333ad17664c', 'plpgsql', true, 'v', 'public.red_mail_mesaje'),
       ('public.fn_red_mail_apel_incepe(uuid,uuid)', '9dc0d38f7ad39238618463e0fa7892b6', 'plpgsql', true, 'v', 'boolean')
       -- <<< AMPRENTE-NOI 20261131i
     ) a(semnatura, amprenta, limbaj, definer, volatil, intoarce)
@@ -439,7 +472,8 @@ BEGIN
      OR (SELECT count(*) FROM red_acl_20261131i) <> 4
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public.fn_red_mail_f2_campuri(uuid,uuid)'::regprocedure
                  AND coalesce(p.proacl, acldefault('f', p.proowner))::text IS DISTINCT FROM '{postgres=X/postgres,authenticated=X/postgres}')
-     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid IN ('public.fn_red_link_raspuns(text)'::regprocedure, 'public.fn_red_mail_f2_token(uuid)'::regprocedure, 'public.fn_red_mail_f2_completeaza(text,jsonb)'::regprocedure)
+     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid IN ('public.fn_red_link_raspuns(text)'::regprocedure, 'public.fn_red_mail_f2_token(uuid)'::regprocedure, 'public.fn_red_mail_f2_completeaza(text,jsonb)'::regprocedure,
+                                                        'public.fn_red_mail_f2_link_strain(text,text)'::regprocedure)
                  AND coalesce(p.proacl, acldefault('f', p.proowner))::text IS DISTINCT FROM '{postgres=X/postgres}') THEN
     RAISE EXCEPTION '20261131i: postconditie: drepturile functiilor difera';
   END IF;
@@ -459,6 +493,24 @@ BEGIN
   EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
   BEGIN PERFORM public.fn_red_mail_f2_completeaza('a {X}', '{"X":null}'::jsonb); RAISE EXCEPTION '20261131i: postconditie: campul necompletabil a trecut';
   EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
+  -- r2: nicio acoladă rămasă, oricât de lung ar fi numele (41 de caractere), „{}” gol, acoladă neînchisă, „{ X }” cu spații
+  BEGIN PERFORM public.fn_red_mail_f2_completeaza('a {' || repeat('Y', 41) || '}', '{"X":"1"}'::jsonb); RAISE EXCEPTION '20261131i: postconditie: campul de 41 de caractere a trecut';
+  EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
+  BEGIN PERFORM public.fn_red_mail_f2_completeaza('a {} b', '{"X":"1"}'::jsonb); RAISE EXCEPTION '20261131i: postconditie: acoladele goale au trecut';
+  EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
+  BEGIN PERFORM public.fn_red_mail_f2_completeaza('a {X b', '{"X":"1"}'::jsonb); RAISE EXCEPTION '20261131i: postconditie: acolada neinchisa a trecut';
+  EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
+  BEGIN PERFORM public.fn_red_mail_f2_completeaza('a { X }', '{"X":"1"}'::jsonb); RAISE EXCEPTION '20261131i: postconditie: campul cu spatii a trecut';
+  EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
+  -- r2: linkul străin (valori fictive): link pe orice origine = străin față de NULL și față de alt token; al destinatarului = nu; 44 de caractere = nu e token
+  IF public.fn_red_mail_f2_link_strain('x https://oricare.invalid/redari/raspuns/' || repeat('a', 43) || ' y', NULL) IS NOT TRUE
+     OR public.fn_red_mail_f2_link_strain('x /redari/raspuns/' || repeat('a', 43), repeat('b', 43)) IS NOT TRUE
+     OR public.fn_red_mail_f2_link_strain('x /redari/raspuns/' || repeat('a', 43), repeat('a', 43)) IS NOT FALSE
+     OR public.fn_red_mail_f2_link_strain('x /redari/raspuns/' || repeat('a', 44), NULL) IS NOT FALSE
+     OR public.fn_red_mail_f2_link_strain('fara link ' || repeat('a', 43), NULL) IS NOT FALSE
+     OR public.fn_red_mail_f2_link_strain(NULL, NULL) IS NOT FALSE THEN
+    RAISE EXCEPTION '20261131i: postconditie: fn_red_mail_f2_link_strain';
+  END IF;
   -- tokenul rămâne izolat exact ca înainte (nimic lărgit); mesajele tot doar owner, fără scriere pentru roluri; nicio urmă L14 încă
   IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'red_detinatori_token') <> 1
      OR has_any_column_privilege('authenticated', 'public.red_detinatori_token', 'INSERT') OR has_any_column_privilege('authenticated', 'public.red_detinatori_token', 'UPDATE')

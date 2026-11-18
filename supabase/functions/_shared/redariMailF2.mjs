@@ -36,8 +36,10 @@ export const CAMPURI_MAIL = Object.freeze([
   Object.freeze({ nume: 'TEL', descriere: 'telefonul de contact al proiectului (red_proiecte.contact_telefon), ca în convocator', perMesaj: false }),
 ])
 export const NUME_CAMPURI = Object.freeze(CAMPURI_MAIL.map(c => c.nume))
-// Aceeași formă ca în SQL: orice „{…}” fără acolade înăuntru, 1–40 de caractere, e o încercare de câmp (sensibil la caz, fără spații în plus).
-const RX_CAMP = /\{([^{}]{1,40})\}/g
+// Ce e un câmp — O SINGURĂ definiție, aceeași ca în SQL (fn_red_mail_f2_completeaza, 20261131i): „{” + nume fără acolade, de ORICE lungime + „}”
+// (sensibil la caz, fără spații în plus). Serverul înlocuiește câmpurile cunoscute și REFUZĂ orice acoladă rămasă (nume necunoscut oricât de lung,
+// „{}”, „{ X }”, „{{COMUNA}}”, acoladă neînchisă) — aici: campuriNecunoscute + acoladeInvalide, probate pe același tabel de cazuri ca SQL-ul.
+const RX_CAMP = /\{([^{}]+)\}/g
 /** Numele câmpurilor găsite în text (în ordinea apariției, fără duplicate). */
 export function campuriDinText(text) {
   const gasite = []
@@ -46,12 +48,20 @@ export function campuriDinText(text) {
 }
 /** Câmpurile scrise greșit / necunoscute (serverul le refuză cu camp_necunoscut; ecranul oprește crearea înainte). */
 export const campuriNecunoscute = text => campuriDinText(text).filter(n => !NUME_CAMPURI.includes(n))
+/** Acolade care ar rămâne după completarea câmpurilor cunoscute (serverul refuză: camp_necunoscut) — orice formă, oricât de lungă. */
+export const acoladeInvalide = text => /[{}]/.test(String(text ?? '').replace(RX_CAMP, (tot, nume) => NUME_CAMPURI.includes(nume) ? '' : tot))
 export const areLinkRaspuns = text => campuriDinText(text).includes(CAMP_LINK)
 export const MESAJ_FARA_LINK = `Textul nu conține {${CAMP_LINK}}: proprietarii n-ar primi linkul lor personal de răspuns.`
 // Tokenul e secret: în ecran linkul se arată MASCAT (ultimele 6 caractere), în jurnale / erori / exporturi nu apare deloc.
 const RX_LINK_TOKEN = /(\/redari\/raspuns\/)([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/g
 export const MASCA_TOKEN = '••••••'
 export const mascheazaLink = text => String(text ?? '').replace(RX_LINK_TOKEN, (_, cale, tok) => `${cale}${MASCA_TOKEN}${tok.slice(-6)}`)
+/**
+ * Un link personal LITERAL în șablon (…/redari/raspuns/<token de 43 de caractere>, pe orice origine): ar ajunge la TOȚI destinatarii — serverul refuză
+ * crearea (link_literal; fn_red_mail_f2_link_strain, care prinde în plus și un token copiat fără adresă). Linkul intră doar prin {LINK_RASPUNS}.
+ */
+export const areLinkLiteral = text => new RegExp(RX_LINK_TOKEN.source).test(String(text ?? ''))
+export const MESAJ_LINK_LITERAL = `Textul sau subiectul conține un link personal de răspuns copiat: ar ajunge la toți destinatarii. Scoate-l și folosește {${CAMP_LINK}}.`
 export const STARI_LOT = ['ciorna', 'aprobat', 'in_trimitere', 'blocat_integritate', 'incheiat']
 export const STARI_MESAJ = ['in_coada', 'rezervat', 'in_apel', 'trimis', 'esuat_sigur', 'necunoscut', 'esuat_confirmat', 'anulat']
 export function emailValid(v) {

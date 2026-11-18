@@ -5,6 +5,7 @@ functie	functie public.fn_red_mail_apel_incepe(uuid,uuid)	schimbat
 functie	functie public.fn_red_mail_destinatari(uuid,uuid,uuid)	schimbat
 functie	functie public.fn_red_mail_f2_campuri(uuid,uuid)	creat
 functie	functie public.fn_red_mail_f2_completeaza(text,jsonb)	creat
+functie	functie public.fn_red_mail_f2_link_strain(text,text)	creat
 functie	functie public.fn_red_mail_f2_token(uuid)	creat
 functie	functie public.fn_red_mail_lot_creeaza(uuid,uuid,uuid,uuid[],text,text)	schimbat
 functie	functie public.fn_red_mail_rezerva(uuid)	schimbat

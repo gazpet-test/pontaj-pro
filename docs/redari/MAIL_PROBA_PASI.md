@@ -112,7 +112,7 @@ conectare (pasul 4), prin RPC-ul `fn_red_mail_secret_seteaza` (doar `service_rol
      (`…_ROLLBACK.sql`) e posibilă doar cât trimiterea n-a fost folosită deloc (L14): după prima conectare, întoarcerea = migrare nouă, nu revenire (§8).
    **Migrarea `20261131i_redari_mail_link_personal`** (câmpurile și linkul personal, §5a; NEAPLICATĂ în PR-ul ei): se aplică DUPĂ `20261131h` și DUPĂ
    publicarea codului pe Vercel (ecranul vechi nu cunoaște motivul `fara_token`), prin runner cu plafonul 5000 și amprenta globală; lista obiectelor
-   așteptate: `supabase/tests/20261131i_redari_mail_link_personal.l15.obiecte.tsv` (9 obiecte: 4 funcții noi, 4 înlocuite, CHECK-ul jurnalului F2). Postcondițiile
+   așteptate: `supabase/tests/20261131i_redari_mail_link_personal.l15.obiecte.tsv` (10 obiecte: 5 funcții noi, 4 înlocuite, CHECK-ul jurnalului F2). Postcondițiile
    verifică: `fn_red_mail_f2_poate` neatinsă (gărzile trimiterii), RLS-ul tokenului și al mesajelor neschimbat, linkul exact ca în convocator. Proba:
    `scripts/pglite/test_redari_mail_link_local.mjs`. **Revenirea** ei refuză după primul lot creat cu câmpuri (L14).
 2. GitHub → Actions → **„Deploy edge function (manual)”** → `slug` = `redari-mail-oauth`, apoi din nou cu `slug` = `redari-mail-trimite` (de pe
@@ -196,15 +196,19 @@ Regulile (impuse în bază, nu doar în ecran):
 - **completarea se face la crearea lotului, în snapshotul fiecărui mesaj, înaintea hash-ului**: ce aprobă owner-ul (hash-ul lotului) este exact textul fiecărui
   destinatar, iar funcția edge trimite snapshotul neschimbat (ca până acum). Previzualizarea arată textul final al fiecărui mesaj; **linkul apare mascat**
   (ultimele 6 caractere) — tokenul e secretul proprietarului de teren; nu apare în jurnale, evenimente, erori sau exporturi;
-- **un câmp scris greșit** (`{LINK}`, `{link_raspuns}`, `{ LINK_RASPUNS }`) = lotul **nu se creează** (`camp_necunoscut`); ecranul oprește butonul înainte și spune
-  care e câmpul. Un câmp care nu se poate completa din datele UAT-ului / proiectului (de ex. `{ZILE}` fără zile de sesiune) = refuz (`camp_necompletabil`);
-  `{LINK_RASPUNS}` în subiect = refuz. Un text FĂRĂ `{LINK_RASPUNS}` e permis, dar ecranul avertizează (proprietarii n-ar primi linkul lor);
+- **un câmp scris greșit** (`{LINK}`, `{link_raspuns}`, `{ LINK_RASPUNS }`) sau **orice acoladă rămasă** după completare (un nume de orice lungime, `{}`, o
+  acoladă neînchisă) = lotul **nu se creează** (`camp_necunoscut`); ecranul oprește butonul înainte și spune care e câmpul. Un câmp care nu se poate completa
+  din datele UAT-ului / proiectului (de ex. `{ZILE}` fără zile de sesiune) = refuz (`camp_necompletabil`); `{LINK_RASPUNS}` în subiect = refuz. Un text FĂRĂ
+  `{LINK_RASPUNS}` e permis, dar ecranul avertizează (proprietarii n-ar primi linkul lor);
+- **un link personal copiat în text sau în subiect** (`…/redari/raspuns/<token>`, pe orice adresă, sau tokenul singur) = refuz (`link_literal`): ar fi ajuns
+  la TOȚI destinatarii lotului. Linkul personal intră în mesaj DOAR prin `{LINK_RASPUNS}`; ecranul oprește butonul și explică;
 - **deținătorul fără link valid** (token lipsă, expirat sau deținător / parcelă ștearsă) **nu intră în lot**: inventarul îl arată la „Fără link de răspuns valid
   (token lipsă sau expirat)” (`fara_token`), iar crearea cu el bifat e refuzată (`destinatari_neeligibili`). Un deținător adăugat azi are tokenul din momentul
   adăugării (expirarea = ultima zi de sesiune a UAT-ului + 30 de zile), deci intră în orice lot creat după aceea;
 - **token devenit invalid între aprobare și trimitere** (zilele de sesiune s-au mutat în trecut, deținătorul a fost șters): la „Trimite lotul” mesajul lui trece
-  în `anulat` cu `token_expirat` — **nu se trimite, nu se retrimite**; apare în lot ca `anulat (token_expirat)`. Dacă trebuie totuși anunțat, se corectează
-  datele (sesiunea / deținătorul) și se face un lot nou.
+  în `anulat` cu `token_expirat` — **nu se trimite, nu se retrimite**; apare în lot ca `anulat (token_expirat)`, iar **ceilalți destinatari ai lotului se trimit
+  în aceeași apăsare** (anularea nu oprește coada; la fel la opt-out). Dacă trebuie totuși anunțat, se corectează datele (sesiunea / deținătorul) și se face
+  un lot nou.
 
 **Verificarea coordonatorului (doar citire, SQL)** după pasul 2 din §5, pe lotul creat:
 ```sql
@@ -259,7 +263,8 @@ de transport) și nu șterge nimic: după prima conectare nu mai există „reve
 | `salvare_neconfirmata` / mesaj „răspunsul s-a pierdut” | serverul a primit accesul dar nu a confirmat salvarea, ori răspunsul nu a ajuns în browser | **nu se știe** dacă e conectată și dacă revocarea a reușit: Recitește în Lot e-mail; dacă apare conectată → se continuă; dacă nu → §7 „Rezervă” (contul Google) și apoi „Conectează” din nou |
 | `state_invalid` | pagina de întoarcere a fost reîncărcată sau au trecut peste 10 minute | nimic salvat, codul nu a fost schimbat la Google; se reia §4 pasul 2 (buton nou „Conectează”) |
 | `transport_real_doar_test` | lotul nu e pe un proiect `TEST-` | se verifică lotul; categoria proiectului e păzită de bază (§0.1) |
-| „Câmp necunoscut în text” / `camp_necunoscut` / `camp_necompletabil` la creare | un câmp scris greșit sau fără valoare în datele UAT-ului (§5a) | se corectează textul sau datele UAT-ului; nimic creat |
+| „Câmp necunoscut în text” / „Acolade rămase” / `camp_necunoscut` / `camp_necompletabil` la creare | un câmp scris greșit, acolade rămase sau un câmp fără valoare în datele UAT-ului (§5a) | se corectează textul sau datele UAT-ului; nimic creat |
+| „…conține un link personal de răspuns copiat” / `link_literal` la creare | linkul unui proprietar a fost lipit în text sau subiect (§5a) | se scoate linkul și se lasă `{LINK_RASPUNS}`; nimic creat |
 | mesaj `anulat (token_expirat)` după „Trimite lotul” | linkul personal al destinatarului nu mai era valid la trimitere (§5a) | normal, nu se retrimite; se corectează datele și se face un lot nou dacă e cazul |
 | „categoria codului (TEST- / real) nu se schimba…” la editarea unui proiect | cineva a încercat o redenumire TEST- ↔ real cât proiectul are loturi de e-mail / AWB-uri FAN în lucru | normal: regula din §0.1; se încheie loturile întâi, apoi (doar owner-ul) redenumește |
 | `transport_neconfigurat` / `client_neconfigurat` | lipsește un secret din §2 (numele exact) | §2 |

@@ -37,8 +37,15 @@ notează rolurile de cluster pe care le creează fixture-ul și le șterge la fi
 — aceeași formă ca în codul QR); câmp necunoscut = refuz; deținător fără token valid = exclus (`fara_token`); token invalid la trimitere = `anulat` /
 `token_expirat` în rezervare și în autorizare, fără apel; tokenul doar în snapshot (SELECT owner), mascat în ecran; `fn_red_mail_f2_poate` neatinsă.
 Motivul alegerii „în bază, nu în funcția edge”: hash-ul aprobat trebuie să acopere textul final al fiecărui mesaj (compunerea MIME refuză altfel). Probe:
-`mailLinkPersonal.test.js`, `scripts/pglite/test_redari_mail_link_local.mjs`. Detalii: `PLAN_EMAIL_REDARI.md` (blocul 18.11.2026, punctul „Câmpurile textului”),
+`mailLinkPersonal.test.jsx`, `scripts/pglite/test_redari_mail_link_local.mjs`. Detalii: `PLAN_EMAIL_REDARI.md` (blocul 18.11.2026, punctul „Câmpurile textului”),
 `MAIL_PROBA_PASI.md` §5a.
+**Runda 2 (Jakarinos #1138, NO-GO pe d0286c29):** (P1) un link personal literal în text / subiect ajungea la toți destinatarii → `fn_red_mail_f2_link_strain`
+(o definiție: link `…/redari/raspuns/<token>` pe orice origine sau token existent copiat fără adresă) refuză șablonul (`link_literal`) și verifică mesajul final
+al fiecărui destinatar (`link_strain`); ecranul oprește butonul. (P2) numele de câmp peste 40 de caractere treceau de parser → regexul fără limită + refuzul
+ORICĂREI acolade rămase, aceeași definiție în SQL și JS, tabelul comun de cazuri cu coloanele `refuz` / `link_literal`. (P2) un token expirat la rezervare
+întorcea zero rânduri și handlerul se oprea înaintea destinatarilor valizi → rezervarea trece peste anulările locale (token expirat, opt-out) la următorul mesaj;
+probat prin handlerul REAL peste RPC-urile din PGlite (ordinile „expirat, valid, valid”, „opt-out, expirat, valid”, „valid, expirat, valid”). În plus: paritatea
+celor patru câmpuri cu convocatorul pe tabelul comun `campuri_lot_cazuri.json`; dovezile istorice pe SHA fix (e13e7ef8 / 8e6a3152), nu pe `origin/main`.
 
 # Runda 2 — PR #1000, 05.11.2026
 

@@ -2,19 +2,21 @@ import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { S } from './comune.jsx'
 import { citesteMail, rpcMail, hashLot, hashMesaj, inventarMail, MOTIVE_MAIL, transportPermis, DOAR_PROIECTE_TEST, EXPEDITOR,
-  CAMPURI_MAIL, CAMP_LINK, campuriNecunoscute, areLinkRaspuns, mascheazaLink, MESAJ_FARA_LINK } from '../mailLoturi.js'
+  CAMPURI_MAIL, CAMP_LINK, campuriNecunoscute, acoladeInvalide, areLinkRaspuns, areLinkLiteral, mascheazaLink, MESAJ_FARA_LINK, MESAJ_LINK_LITERAL } from '../mailLoturi.js'
 
 // F2b (18.11.2026): conectarea căsuței redari@ pentru trimitere (OAuth, doar owner), comutatorul de trimitere și „Trimite lotul” — DOAR pe
 // proiecte de TEST (codul începe cu „TEST-”, aceeași gardă ca în funcția edge: transportPermis). Pe proiectele reale butoanele rămân
 // dezactivate cu motivul. Fără atașament PDF în această felie (limită documentată în plan).
 // Câmpurile textului (19.11.2026, migrarea 20261131i): {LINK_RASPUNS} / {COMUNA} / {ZILE} / {PROGRAM} / {TEL} sunt completate de BAZĂ, pe fiecare
 // mesaj, la crearea lotului (în snapshot, înaintea hash-ului) — ecranul doar le listează (valorile lotului vin din RPC-ul fn_red_mail_f2_campuri),
-// oprește crearea la un câmp scris greșit și avertizează când textul n-are {LINK_RASPUNS}. Previzualizarea arată textul final al FIECĂRUI mesaj din
-// snapshot, cu linkul personal MASCAT (tokenul e secretul proprietarului; hash-ul se verifică pe textul întreg, afișarea e mascată).
+// oprește crearea la un câmp scris greșit, la acolade rămase (orice formă, oricât de lungă) și la un link personal copiat în text / subiect (ar ajunge la
+// toți destinatarii), și avertizează când textul n-are {LINK_RASPUNS}. Serverul impune aceleași reguli (camp_necunoscut / link_literal). Previzualizarea
+// arată textul final al FIECĂRUI mesaj din snapshot, cu linkul personal MASCAT (tokenul e secretul proprietarului; hash-ul se verifică pe textul întreg).
 const COL_SETARI = 'trimitere_oprita, extern_permis, doar_proiecte_test, trimitere_conectata_la, trimitere_casuta, pauza_pana, versiune'
 export const MESAJ_FARA_ATASAMENT = 'Fără atașament PDF în această etapă: e-mailul conține doar textul de mai jos. Poșta cu AR rămâne obligatorie.'
 export const MESAJ_CAMP_NECUNOSCUT = necunoscute => `Câmp necunoscut în text: ${necunoscute.map(n => `{${n}}`).join(', ')}. Serverul refuză crearea lotului; corectează numele (vezi lista câmpurilor).`
 export const MESAJ_LINK_IN_SUBIECT = `{${CAMP_LINK}} nu poate sta în subiect (linkul personal intră doar în corpul mesajului).`
+export const MESAJ_ACOLADE = 'Acolade rămase în text sau subiect care nu formează un câmp cunoscut (de ex. „{}”, „{ COMUNA }”, o acoladă neînchisă). Serverul refuză crearea lotului.'
 export const MESAJ_CAMP_NECOMPLETABIL = 'nu se poate completa din datele proiectului / UAT-ului'
 
 export default function MailLoturiEcran({ proiect, uats, profile }) {
@@ -31,10 +33,12 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
   const garda = transportPermis({ proiectCod: proiect?.cod })
   const conectata = !!setari?.trimitere_conectata_la
   const pornita = setari?.trimitere_oprita === false
-  // câmpurile scrise greșit opresc crearea înainte de server (serverul refuză oricum: camp_necunoscut); {LINK_RASPUNS} în subiect = refuz
+  // câmpurile scrise greșit / acoladele rămase / linkul copiat opresc crearea înainte de server (serverul refuză oricum: camp_necunoscut / link_literal);
+  // {LINK_RASPUNS} în subiect = refuz
   const necunoscute = [...new Set([...campuriNecunoscute(subiect), ...campuriNecunoscute(text)])]
   const linkInSubiect = areLinkRaspuns(subiect)
-  const motivCampuri = necunoscute.length ? MESAJ_CAMP_NECUNOSCUT(necunoscute) : linkInSubiect ? MESAJ_LINK_IN_SUBIECT : ''
+  const motivCampuri = necunoscute.length ? MESAJ_CAMP_NECUNOSCUT(necunoscute) : (acoladeInvalide(subiect) || acoladeInvalide(text)) ? MESAJ_ACOLADE
+    : linkInSubiect ? MESAJ_LINK_IN_SUBIECT : (areLinkLiteral(subiect) || areLinkLiteral(text)) ? MESAJ_LINK_LITERAL : ''
   useEffect(() => { activ.current = true; return () => { activ.current = false; generatie.current++ } }, [])
   useEffect(() => {
     const g = ++generatie.current, id = proiect.id

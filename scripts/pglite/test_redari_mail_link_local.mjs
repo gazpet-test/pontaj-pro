@@ -7,11 +7,15 @@
 //   (ROLLBACK), apoi livrarea cu GLOBAL-ul citit + manifestul generat (diferența = exact manifestul) și garda finală REALĂ a runnerului (lm_fin) + COMMIT.
 //   Lista obiectelor = supabase/tests/20261131i_redari_mail_link_personal.l15.obiecte.tsv (--scrie-obiecte o rescrie).
 // 1. Comportamentul (valorile așteptate scrise de mână, L25), ca rolul real al fiecărei căi (owner / editor cu JWT, service_role, postgres):
-//    câmpurile lotului (RPC), crearea unui lot cu 3 destinatari — fiecare mesaj cu linkul LUI, fără acolade, hash-ul peste textul final (paritate cu
-//    hashMesaj din JS), subiectul completat; câmp necunoscut / scris cu minuscule / fără valoare = refuz, nimic creat; {LINK_RASPUNS} în subiect = refuz;
-//    deținător fără token / cu token expirat = fara_token în inventar și refuz la creare; token expirat ÎNTRE aprobare și trimitere: la rezervare mesajul
-//    e anulat (token_expirat) fără rezervare, la autorizare apel_incepe = false + anulat, fără retrimitere; tokenul nu apare în jurnale / evenimente /
-//    mesajele de eroare; RLS-ul tokenului și al mesajelor neschimbat; garda „doar TEST” (fn_red_mail_f2_poate) neatinsă.
+//    câmpurile lotului (RPC, paritate cu convocatorul pe tabelul comun src/redari/__tests__/campuri_lot_cazuri.json), crearea unui lot cu 4 destinatari —
+//    fiecare mesaj cu linkul LUI, fără acolade, hash-ul peste textul final (paritate cu hashMesaj din JS), subiectul completat; câmp necunoscut / scris cu
+//    minuscule / fără valoare = refuz, nimic creat; {LINK_RASPUNS} în subiect = refuz; (r2) orice acoladă rămasă (nume de 41+ caractere, „{}”, acoladă
+//    neînchisă) = refuz; (r2) un link personal LITERAL în text sau subiect (pe orice origine) sau un token copiat fără adresă = refuz link_literal, nimic
+//    creat; deținător fără token / cu token expirat = fara_token în inventar și refuz la creare; token expirat ÎNTRE aprobare și trimitere: la rezervare
+//    mesajul e anulat (token_expirat) și rezervarea TRECE la următorul valid (r2; la fel după opt-out), la autorizare apel_incepe = false + anulat, fără
+//    retrimitere; tokenul nu apare în jurnale / evenimente / mesajele de eroare; RLS-ul tokenului și al mesajelor neschimbat; garda „doar TEST” neatinsă.
+// 1b. (r2) HANDLERUL REAL al funcției edge (redariMailF2Handler.mjs) peste RPC-urile din PGlite, cu transportul Gmail fals: ordinea „expirat, valid, valid”
+//    → într-o singură apăsare primul e anulat și ceilalți doi trimiși; ordinea „opt-out, expirat, valid” → cei doi anulați, al treilea trimis.
 // 2. L14: pe o bază FOLOSITĂ revenirea refuză (ISTORIC_NOU) și nu șterge nimic; pe o bază NEFOLOSITĂ: aplicare → revenire → reaplicare → revenire.
 // 3. Refuzurile migrării și ale revenirii. 4. MUTANȚI (migrare + revenire): fiecare TREBUIE să pice.
 // Ce NU probează PGlite (o singură conexiune): concurența reală (lock-urile sunt cele din 20261131h, neschimbate aici).
@@ -27,14 +31,18 @@ if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, 'crypto', { va
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const { hashMesaj } = await import(pathToFileURL(join(ROOT, 'supabase/functions/_shared/redariMailF2.mjs')).href)
+const { raspundeTrimitere } = await import(pathToFileURL(join(ROOT, 'supabase/functions/_shared/redariMailF2Handler.mjs')).href)
+const { creeazaGmailHttp, GAZDA_OAUTH, GAZDA_GMAIL } = await import(pathToFileURL(join(ROOT, 'supabase/functions/_shared/gmailHttp.mjs')).href)
 const TMP = mkdtempSync(join(tmpdir(), 'maillink_'))
 const citeste = rel => readFileSync(join(ROOT, rel), 'utf8').replace(/\r/g, '')
+const lit = s => `'${String(s).replace(/'/g, "''")}'`
 const md5 = s => createHash('md5').update(s, 'utf8').digest('hex')
 const NUME = '20261131i_redari_mail_link_personal', NUME_H = '20261131h_redari_mail_f2b_trimitere'
 const F_MIG = `supabase/migrations/${NUME}.sql`, F_REV = `supabase/revenire/${NUME}_ROLLBACK.sql`, F_OB = `supabase/tests/${NUME}.l15.obiecte.tsv`
 const SCHELET = citeste('supabase/tests/20261131i_redari_mail_link_schelet.sql')
 const MIG = citeste(F_MIG), REV = citeste(F_REV), MIG_H = citeste(`supabase/migrations/${NUME_H}.sql`)
 const CAZURI = JSON.parse(citeste('src/redari/__tests__/campuri_mail_cazuri.json'))
+const CAZURI_LOT = JSON.parse(citeste('src/redari/__tests__/campuri_lot_cazuri.json'))   // UAT-urile fixture-ului + valorile așteptate (aceleași ca în testul JS al convocatorului)
 let OBIECTE = ''; try { OBIECTE = citeste(F_OB) } catch { /* se scrie cu --scrie-obiecte */ }
 const gen = (...a) => execFileSync('bash', [join(ROOT, 'scripts/livrare_amprenta_gen.sh'), ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 const SECRET = 'REDARI_GMAIL_TRIMITERE_REFRESH_TOKEN'
@@ -102,14 +110,16 @@ const CAP_NOI = [['public.fn_red_link_raspuns(text)', 'CREATE FUNCTION public.fn
   ['public.fn_red_mail_f2_token(uuid)', 'CREATE FUNCTION public.fn_red_mail_f2_token('],
   ['public.fn_red_mail_f2_campuri(uuid,uuid)', 'CREATE FUNCTION public.fn_red_mail_f2_campuri('],
   ['public.fn_red_mail_f2_completeaza(text,jsonb)', 'CREATE FUNCTION public.fn_red_mail_f2_completeaza('],
+  ['public.fn_red_mail_f2_link_strain(text,text)', 'CREATE FUNCTION public.fn_red_mail_f2_link_strain('],
   ['public.fn_red_mail_destinatari(uuid,uuid,uuid)', 'CREATE OR REPLACE FUNCTION public.fn_red_mail_destinatari('],
   ['public.fn_red_mail_lot_creeaza(uuid,uuid,uuid,uuid[],text,text)', 'CREATE OR REPLACE FUNCTION public.fn_red_mail_lot_creeaza('],
   ['public.fn_red_mail_rezerva(uuid)', 'CREATE OR REPLACE FUNCTION public.fn_red_mail_rezerva('],
   ['public.fn_red_mail_apel_incepe(uuid,uuid)', 'CREATE OR REPLACE FUNCTION public.fn_red_mail_apel_incepe(']]
 const blocNoi = t => t.slice(t.indexOf('-- >>> AMPRENTE-NOI 20261131i'), t.indexOf('-- <<< AMPRENTE-NOI 20261131i'))
 for (const [sem, cap] of CAP_NOI) {
-  const m = md5(corp(MIG, cap))
-  ok(blocNoi(MIG).includes(`('${sem}', '${m}'`) && blocNoi(REV).includes(`('${sem}', '${m}'`), `amprenta nouă ${sem} = ${m} (migrare + revenire)`)
+  let m = null
+  try { m = md5(corp(MIG, cap)) } catch { /* funcția lipsește din migrare (de ex. pe un head vechi) → eșec raportat, nu cădere */ }
+  ok(m && blocNoi(MIG).includes(`('${sem}', '${m}'`) && blocNoi(REV).includes(`('${sem}', '${m}'`), `amprenta nouă ${sem} = ${m} (migrare + revenire)`)
 }
 ok(!/AMPRENTA_[A-Z_]+/.test(blocNoi(MIG)) && !/AMPRENTA_[A-Z_]+/.test(blocNoi(REV)), 'fără marcaje AMPRENTA_* rămase')
 const recalculeaza = t => {
@@ -117,9 +127,10 @@ const recalculeaza = t => {
   const bloc = CAP_NOI.reduce((x, [sem, cap]) => x.replace(new RegExp(`(\\('${sem.replace(/[().,\[\]]/g, '\\$&')}', ')[0-9a-f]{32}`), `$1${md5(corp(t, cap))}`), t.slice(a, b))
   return t.slice(0, a) + bloc + t.slice(b)
 }
-// paritate L19: forma „{NUME}” din SQL (regex-ul din migrare) = cea din JS, pe același tabel de cazuri (partea JS: src/redari/mailLinkPersonal.test.js)
+// paritate L19: forma „{NUME}” din SQL (regex-ul din migrare, fără limită de lungime) = cea din JS, pe același tabel de cazuri (partea JS: src/redari/mailLinkPersonal.test.jsx)
 const RX_SQL = /regexp_matches\(p_text,'([^']+)','g'\)/.exec(MIG)?.[1]
-ok(RX_SQL === '[{]([^{}]{1,40})[}]', 'regex-ul câmpurilor din migrare: ' + RX_SQL)
+ok(RX_SQL === '[{]([^{}]+)[}]', 'regex-ul câmpurilor din migrare: ' + RX_SQL)
+ok(MIG.includes(" IF rez ~ '[{}]' THEN RAISE EXCEPTION 'camp_necunoscut") && !MIG.includes('{1,40}'), 'verificarea finală refuză ORICE acoladă rămasă (fără limita veche de 40)')
 const PREFIX_LINK = /'(https:\/\/redari\.gazpet\.ro\/redari\/raspuns\/)'\|\|p_token/.exec(MIG)?.[1]
 ok(PREFIX_LINK === 'https://redari.gazpet.ro/redari/raspuns/', 'prefixul linkului din migrare: ' + PREFIX_LINK)
 
@@ -146,12 +157,19 @@ const P = { TEST: '00000000-0000-0000-0000-00000000b001', REAL: '00000000-0000-0
 const OB = { TEST: '00000000-0000-0000-0000-0000000f0001', REAL: '00000000-0000-0000-0000-0000000f0002' }
 const UAT = { A: '00000000-0000-0000-0000-00000000c001', FARA: '00000000-0000-0000-0000-00000000c002', DIF: '00000000-0000-0000-0000-00000000c003', REAL: '00000000-0000-0000-0000-00000000c004' }
 const PAR = { A1: '00000000-0000-0000-0000-00000000d001', A2: '00000000-0000-0000-0000-00000000d002', FARA: '00000000-0000-0000-0000-00000000d003', REAL: '00000000-0000-0000-0000-00000000d004' }
-// deținătorii UAT-ului A: D1..D3 cu token valid, D4 fără token, D5 cu token expirat, D6 valid dar fără e-mail, D9 valid (lotul fără câmpuri); UAT fără sesiune: D7 valid; proiect real: D8 valid
+// deținătorii UAT-ului A: D1..D3 + D10 cu token valid (lotul mare), D4 fără token, D5 cu token expirat, D6 valid dar fără e-mail, D9 valid (lotul fără câmpuri);
+// UAT fără sesiune: D7 valid; proiect real: D8 valid
 const D = { D1: '00000000-0000-0000-0000-0000000e0001', D2: '00000000-0000-0000-0000-0000000e0002', D3: '00000000-0000-0000-0000-0000000e0003', D4: '00000000-0000-0000-0000-0000000e0004',
-  D5: '00000000-0000-0000-0000-0000000e0005', D6: '00000000-0000-0000-0000-0000000e0006', D7: '00000000-0000-0000-0000-0000000e0007', D8: '00000000-0000-0000-0000-0000000e0008', D9: '00000000-0000-0000-0000-0000000e0009' }
-const T = { D1: 'T1' + 'a'.repeat(41), D2: 'T2' + 'b'.repeat(41), D3: 'T3' + 'c'.repeat(41), D5: 'T5' + 'e'.repeat(41), D6: 'T6' + 'f'.repeat(41), D7: 'T7' + 'g'.repeat(41), D8: 'T8' + 'h'.repeat(41), D9: 'T9' + 'i'.repeat(41) }
+  D5: '00000000-0000-0000-0000-0000000e0005', D6: '00000000-0000-0000-0000-0000000e0006', D7: '00000000-0000-0000-0000-0000000e0007', D8: '00000000-0000-0000-0000-0000000e0008', D9: '00000000-0000-0000-0000-0000000e0009',
+  D10: '00000000-0000-0000-0000-0000000e0010' }
+const T = { D1: 'T1' + 'a'.repeat(41), D2: 'T2' + 'b'.repeat(41), D3: 'T3' + 'c'.repeat(41), D5: 'T5' + 'e'.repeat(41), D6: 'T6' + 'f'.repeat(41), D7: 'T7' + 'g'.repeat(41), D8: 'T8' + 'h'.repeat(41), D9: 'T9' + 'i'.repeat(41),
+  D10: 'T0' + 'j'.repeat(41) }
 const LINK = tok => PREFIX_LINK + tok
-const TEL = '0244 000 000', COMUNA = 'Comuna Testeni'
+// UAT-urile proiectului de TEST vin din tabelul comun cu testul JS al convocatorului (campuri_lot_cazuri.json): A, FARA, DIF — aceleași valori pe ambele căi (L19)
+const CL = Object.fromEntries(CAZURI_LOT.map(c => [c.id, c]))
+const TEL = CL.A.proiect.contact_telefon, COMUNA = CL.A.asteptat.COMUNA
+ok(CAZURI_LOT.every(c => c.proiect.contact_telefon === TEL) && CL.A.asteptat.ZILE === '24.11.2026 și 25.11.2026' && CL.A.asteptat.PROGRAM === '09:00–16:00', 'tabelul comun al câmpurilor lotului: A / FARA / DIF cu același telefon')
+const sqlUat = (id, c) => `('${id}', '${P.TEST}', ${lit(c.uat.nume)}, ${lit(c.uat.uat3)}, ${[1, 2, 3].map(i => c.uat['sesiune_zi' + i] == null ? 'NULL' : `DATE ${lit(c.uat['sesiune_zi' + i])}`).join(', ')}, ${[1, 2, 3].map(i => c.uat['program_zi' + i] == null ? 'NULL' : lit(c.uat['program_zi' + i])).join(', ')})`
 const DATE = `
 INSERT INTO public.profiles (id, name, is_owner) VALUES ('${U.OWNER}', 'OWNER', true), ('${U.ADMIN}', 'ADMIN REDARI', false), ('${U.EDITOR}', 'EDITOR', false);
 INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('${U.ADMIN}', 'redari', 'admin'), ('${U.EDITOR}', 'redari', 'editor');
@@ -160,21 +178,23 @@ INSERT INTO public.red_proiecte (id, cod, denumire, contact_telefon, autorizare_
   ('${P.TEST}', 'TEST-MAIL', 'Proiect de TEST', '${TEL}', '1', current_date, 'TEST-MAIL/autorizare.pdf', '${OB.TEST}', '"t1"'),
   ('${P.REAL}', 'LOT1-REAL', 'Proiect real (fictiv)', '${TEL}', '2', current_date, 'LOT1-REAL/autorizare.pdf', '${OB.REAL}', '"r1"');
 INSERT INTO public.red_uat (id, proiect_id, nume, uat3, sesiune_zi1, sesiune_zi2, sesiune_zi3, program_zi1, program_zi2, program_zi3) VALUES
-  ('${UAT.A}', '${P.TEST}', ' ${COMUNA} ', 'TST', DATE '2026-11-24', DATE '2026-11-25', NULL, ' 09:00–16:00 ', '09:00–16:00', NULL),
-  ('${UAT.FARA}', '${P.TEST}', 'Fără sesiune', 'FRS', NULL, NULL, NULL, NULL, NULL, NULL),
-  ('${UAT.DIF}', '${P.TEST}', 'Programe diferite', 'DIF', DATE '2026-12-01', DATE '2026-12-02', DATE '2026-12-03', '09:00–16:00', '09:00–14:00', '09:00–16:00'),
+  ${sqlUat(UAT.A, CL.A)},
+  ${sqlUat(UAT.FARA, CL.FARA)},
+  ${sqlUat(UAT.DIF, CL.DIF)},
   ('${UAT.REAL}', '${P.REAL}', 'UAT real', 'RLA', DATE '2026-11-24', NULL, NULL, '09:00–16:00', NULL, NULL);
 INSERT INTO public.red_parcele (id, proiect_id, uat_id, id_parcela) VALUES ('${PAR.A1}', '${P.TEST}', '${UAT.A}', 'T1-TST-0001'), ('${PAR.A2}', '${P.TEST}', '${UAT.A}', 'T1-TST-0002'),
   ('${PAR.FARA}', '${P.TEST}', '${UAT.FARA}', 'T1-FRS-0001'), ('${PAR.REAL}', '${P.REAL}', '${UAT.REAL}', 'T1-RLA-0001');
 INSERT INTO public.red_detinatori (id, parcela_id, nume) VALUES ('${D.D1}', '${PAR.A1}', 'UNU FICTIV'), ('${D.D2}', '${PAR.A1}', 'DOI FICTIV'), ('${D.D3}', '${PAR.A2}', 'TREI FICTIV'),
   ('${D.D4}', '${PAR.A2}', 'PATRU FARA TOKEN'), ('${D.D5}', '${PAR.A2}', 'CINCI EXPIRAT'), ('${D.D6}', '${PAR.A2}', 'SASE FARA EMAIL'), ('${D.D7}', '${PAR.FARA}', 'SAPTE FARA SESIUNE'), ('${D.D8}', '${PAR.REAL}', 'OPT REAL'),
-  ('${D.D9}', '${PAR.A2}', 'NOUA FICTIV');
+  ('${D.D9}', '${PAR.A2}', 'NOUA FICTIV'), ('${D.D10}', '${PAR.A1}', 'ZECE FICTIV');
 INSERT INTO public.red_detinatori_contact (detinator_id, email) VALUES ('${D.D1}', 'Unu.Fictiv@gazpet.ro'), ('${D.D2}', 'doi.fictiv@gazpet.ro'), ('${D.D3}', 'trei.fictiv@gazpet.ro'),
-  ('${D.D4}', 'patru.fictiv@gazpet.ro'), ('${D.D5}', 'cinci.fictiv@gazpet.ro'), ('${D.D6}', NULL), ('${D.D7}', 'sapte.fictiv@gazpet.ro'), ('${D.D8}', 'opt.fictiv@gazpet.ro'), ('${D.D9}', 'noua.fictiv@gazpet.ro');
+  ('${D.D4}', 'patru.fictiv@gazpet.ro'), ('${D.D5}', 'cinci.fictiv@gazpet.ro'), ('${D.D6}', NULL), ('${D.D7}', 'sapte.fictiv@gazpet.ro'), ('${D.D8}', 'opt.fictiv@gazpet.ro'), ('${D.D9}', 'noua.fictiv@gazpet.ro'),
+  ('${D.D10}', 'zece.fictiv@gazpet.ro');
 INSERT INTO public.red_detinatori_token (detinator_id, token_raspuns, token_expira_la) VALUES ('${D.D1}', '${T.D1}', now() + interval '30 days'), ('${D.D2}', '${T.D2}', now() + interval '30 days'),
   ('${D.D3}', '${T.D3}', NULL), ('${D.D5}', '${T.D5}', now() - interval '1 day'), ('${D.D6}', '${T.D6}', now() + interval '30 days'), ('${D.D7}', '${T.D7}', NULL), ('${D.D8}', '${T.D8}', now() + interval '30 days'),
-  ('${D.D9}', '${T.D9}', now() + interval '30 days');`
+  ('${D.D9}', '${T.D9}', now() + interval '30 days'), ('${D.D10}', '${T.D10}', now() + interval '30 days');`
 const TOKENI = Object.values(T)
+const NR_TOKENI = TOKENI.length
 async function bazaNoua({ cu31h = true } = {}) {
   const db = new PGlite()
   await db.exec(SCH_A); await db.exec(SQL_FUNCTII); await db.exec(SCH_B); await db.exec(DATE)
@@ -209,7 +229,6 @@ function aplica(text, lista) {
   return t
 }
 const eroare = async p => { try { await p; return null } catch (e) { return e.message } }
-const lit = s => `'${String(s).replace(/'/g, "''")}'`
 // toate mesajele de eroare primite în timpul verificărilor (tokenul nu trebuie să apară în niciunul)
 let ERORI = []
 async function ca(db, rol, uid, sql) {
@@ -219,8 +238,8 @@ async function ca(db, rol, uid, sql) {
   catch (e) { await db.exec('ROLLBACK'); ERORI.push(e.message); return { code: e.code, message: e.message } }
 }
 const setari = async db => (await db.query(`SELECT trimitere_oprita, trimitere_conectata_la, versiune FROM public.red_mail_setari WHERE id = 1`)).rows[0]
-const NOI = `('fn_red_link_raspuns', 'fn_red_mail_f2_token', 'fn_red_mail_f2_campuri', 'fn_red_mail_f2_completeaza')`
-const NR_NOI = 4
+const NOI = `('fn_red_link_raspuns', 'fn_red_mail_f2_token', 'fn_red_mail_f2_campuri', 'fn_red_mail_f2_completeaza', 'fn_red_mail_f2_link_strain')`
+const NR_NOI = 5
 const nrNoi = async db => (await db.query(`SELECT count(*)::int AS n FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ${NOI}`)).rows[0].n
 const amprentaFn = async (db, nume) => (await db.query(`SELECT md5(replace(p.prosrc, chr(13), '')) AS m FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = $1`, [nume])).rows[0]?.m ?? null
 const checkJurnal = async db => (await db.query(`SELECT pg_get_constraintdef(c.oid) AS d FROM pg_constraint c WHERE c.conrelid = 'public.red_mail_jurnal_f2'::regclass AND c.conname = 'red_mail_jurnal_f2_cod_check'`)).rows[0]?.d
@@ -232,6 +251,7 @@ const destinatari = (db, uid, pr, uat) => ca(db, 'authenticated', uid, `SELECT i
 const creeaza = (db, uid, op, pr, uat, dst, subiect, text) => ca(db, 'authenticated', uid, `SELECT public.fn_red_mail_lot_creeaza('${op}', '${pr}', '${uat}', ARRAY[${dst.map(x => `'${x}'`).join(',')}]::uuid[], ${lit(subiect)}, ${lit(text)}) AS r`)
 const aproba = async (db, uid, lot) => { const l = (await db.query(`SELECT versiune, lot_sha256 FROM public.red_mail_loturi WHERE id = $1`, [lot])).rows[0]; return ca(db, 'authenticated', uid, `SELECT public.fn_red_mail_lot_aproba('${lot}', ${l.versiune}, '${l.lot_sha256}') AS r`) }
 const rezerva = (db, uid, lot) => ca(db, 'authenticated', uid, `SELECT id, stare, lease_token, detinator_id FROM public.fn_red_mail_rezerva('${lot}')`)
+const optout = (db, email) => db.exec(`INSERT INTO public.red_mail_optout (email, activ, motiv, sursa, setat_de) VALUES (${lit(email)}, true, 'cerere fictiva de dezabonare', 'cerere_om', '${U.OWNER}')`)
 const apelIncepe = (db, uid, mesaj, token) => ca(db, 'authenticated', uid, `SELECT public.fn_red_mail_apel_incepe('${mesaj}', '${token}') AS r`)
 const rezultat = (db, uid, mesaj, token, stare, gm, th) => ca(db, 'authenticated', uid, `SELECT public.fn_red_mail_rezultat('${mesaj}', '${token}', ${lit(stare)}, ${gm == null ? 'NULL' : lit(gm)}, ${th == null ? 'NULL' : lit(th)}) AS r`)
 const mesaje = async (db, lot) => (await db.query(`SELECT * FROM public.red_mail_mesaje WHERE lot_id = $1 ORDER BY detinator_id`, [lot])).rows
@@ -253,22 +273,34 @@ async function verifica(db) {
   ERORI = []
   const asteptCod = (r, cod, ce, re) => { if (!r.code) ab.push(`${ce}: a trecut (aștepta ${cod})`); else if (r.code !== cod || (re && !re.test(r.message))) ab.push(`${ce}: ${r.code} ${r.message} (aștepta ${cod}${re ? ' ' + re : ''})`) }
   const asteptOk = (r, ce) => { if (r.code) { ab.push(`${ce}: ${r.code} ${r.message}`); return undefined } return r.rows[0] && 'r' in r.rows[0] ? r.rows[0].r : r.rows }
-  // A. câmpurile lotului: owner; editor 42501; UAT al altui proiect = tinta_invalida; UAT fără sesiune = ZILE / PROGRAM null; programe diferite = PROGRAM null
-  const a1 = asteptOk(await campuri(db, U.OWNER, P.TEST, UAT.A), 'A campuri owner')
-  if (JSON.stringify(a1) !== JSON.stringify({ TEL, ZILE: '24.11.2026 și 25.11.2026', COMUNA, PROGRAM: '09:00–16:00' })) ab.push('A câmpurile UAT A: ' + JSON.stringify(a1))
+  // A. câmpurile lotului: owner, pe tabelul comun cu testul JS al convocatorului (A: două zile cu același program; FARA: fără sesiune = ZILE / PROGRAM null;
+  //    DIF: programe diferite = PROGRAM null); editor / admin 42501; UAT al altui proiect = tinta_invalida
+  const cheie = o => JSON.stringify(Object.fromEntries(Object.entries(o).sort()))
+  for (const [id, c] of [[UAT.A, CL.A], [UAT.FARA, CL.FARA], [UAT.DIF, CL.DIF]]) {
+    const a = asteptOk(await campuri(db, U.OWNER, P.TEST, id), `A campuri owner UAT ${c.id}`)
+    if (a && cheie(a) !== cheie(c.asteptat)) ab.push(`A câmpurile UAT ${c.id}: ${JSON.stringify(a)} ≠ ${JSON.stringify(c.asteptat)} (tabelul comun cu convocatorul)`)
+  }
   asteptCod(await campuri(db, U.EDITOR, P.TEST, UAT.A), '42501', 'A campuri editor')
   asteptCod(await campuri(db, U.ADMIN, P.TEST, UAT.A), '42501', 'A campuri admin Redări (ne-owner)')
   asteptCod(await campuri(db, U.OWNER, P.TEST, UAT.REAL), 'P0001', 'A campuri UAT al altui proiect', /tinta_invalida/)
-  const a2 = asteptOk(await campuri(db, U.OWNER, P.TEST, UAT.FARA), 'A campuri UAT fără sesiune')
-  if (JSON.stringify(a2) !== JSON.stringify({ TEL, ZILE: null, COMUNA: 'Fără sesiune', PROGRAM: null })) ab.push('A câmpurile UAT fără sesiune: ' + JSON.stringify(a2))
-  const a3 = asteptOk(await campuri(db, U.OWNER, P.TEST, UAT.DIF), 'A campuri UAT cu programe diferite')
-  if (JSON.stringify(a3) !== JSON.stringify({ TEL, ZILE: '01.12.2026, 02.12.2026 și 03.12.2026', COMUNA: 'Programe diferite', PROGRAM: null })) ab.push('A câmpurile UAT cu programe diferite: ' + JSON.stringify(a3))
-  // paritate L19: regex-ul SQL pe tabelul de cazuri comun
+  // paritate L19 pe tabelul de cazuri comun: regex-ul SQL (numele câmpurilor), refuzul completării (orice acoladă rămasă) și linkul literal
+  const TOATE = JSON.stringify({ LINK_RASPUNS: 'L', COMUNA: 'C', ZILE: 'Z', PROGRAM: 'P', TEL: 'T' })
+  // (funcția lipsă — head vechi — = 'lipsa', ca abaterea să fie raportată, nu să cadă proba)
+  const ls = async (t, tok) => { try { return (await db.query(`SELECT public.fn_red_mail_f2_link_strain($1, $2) AS b`, [t, tok])).rows[0].b } catch { return 'lipsa' } }
   for (const c of CAZURI) {
     const r = (await db.query(`SELECT coalesce(array_agg(rm.m[1] ORDER BY rm.ord), ARRAY[]::text[]) AS a FROM regexp_matches($1, $2, 'g') WITH ORDINALITY AS rm(m, ord)`, [c.text, RX_SQL])).rows[0].a
     const unice = r.filter((v, i) => r.indexOf(v) === i)
     if (JSON.stringify(unice) !== JSON.stringify(c.campuri)) ab.push(`A paritate regex SQL „${c.text.slice(0, 30)}”: ${JSON.stringify(unice)} ≠ ${JSON.stringify(c.campuri)}`)
+    let refuz = false, mesaj = ''
+    try { const x = (await db.query(`SELECT public.fn_red_mail_f2_completeaza($1, $2::jsonb) AS t`, [c.text, TOATE])).rows[0].t; if (/[{}]/.test(x)) ab.push(`A completarea a lăsat acolade: „${c.text.slice(0, 30)}”`) }
+    catch (e) { refuz = true; mesaj = e.message; if (e.code !== '22023') ab.push(`A completarea „${c.text.slice(0, 30)}”: ${e.code} ${e.message}`) }
+    if (refuz !== c.refuz) ab.push(`A paritate refuz SQL „${c.text.slice(0, 30)}”: ${refuz} (${mesaj}) ≠ ${c.refuz}`)
+    const ll = await ls(c.text, null)
+    if (ll !== c.link_literal) ab.push(`A paritate link literal SQL „${c.text.slice(0, 30)}”: ${ll} ≠ ${c.link_literal}`)
   }
+  // link_strain pe tokenurile REALE ale fixture-ului: al destinatarului = nu e străin; al altuia (ca link sau ca token gol, fără adresă) = străin
+  if (await ls('x ' + LINK(T.D1) + ' y', T.D1) !== false || await ls('x ' + LINK(T.D2) + ' y', T.D1) !== true || await ls('token copiat ' + T.D2 + ' fara adresa', T.D1) !== true
+    || await ls('x ' + LINK(T.D1), null) !== true || await ls('nu e token ' + T.D1 + 'x', null) !== false) ab.push('A fn_red_mail_f2_link_strain pe tokenurile fixture-ului')
   // D. inventarul: D4 (fără token) și D5 (expirat) = fara_token; D6 = fara_email (tokenul valid nu ajută); D1..D3 eligibili
   const inv = asteptOk(await destinatari(db, U.OWNER, P.TEST, UAT.A), 'D inventar') || []
   const motive = Object.fromEntries(inv.map(x => [x.id, x.motive]))
@@ -286,18 +318,31 @@ async function verifica(db) {
   asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D4], 'S', 'text {LINK_RASPUNS}'), 'P0001', 'C destinatar fără token', /destinatari_neeligibili/)
   asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D5], 'S', 'text {LINK_RASPUNS}'), 'P0001', 'C destinatar cu token expirat', /destinatari_neeligibili/)
   asteptCod(await creeaza(db, U.EDITOR, LOT.C, P.TEST, UAT.A, [D.D1], 'S', 'text {LINK_RASPUNS}'), '42501', 'C creare de editor')
+  // r2 (P2): acolade rămase — nume de 41 de caractere (peste limita veche a parserului), „{}”, acoladă neînchisă, câmp cunoscut + acoladă = refuz, nimic creat
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1], 'S', `text {${'X'.repeat(41)}} {LINK_RASPUNS}`), '22023', 'C câmp necunoscut de 41 de caractere', /camp_necunoscut/)
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1], 'S', `text {${'X'.repeat(300)}} {LINK_RASPUNS}`), '22023', 'C câmp necunoscut de 300 de caractere', /camp_necunoscut/)
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1], 'S', 'text {} {LINK_RASPUNS}'), '22023', 'C acolade goale', /camp_necunoscut/)
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1], 'S', 'text {LINK_RASPUNS și {COMUNA'), '22023', 'C acoladă neînchisă', /camp_necunoscut/)
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1], `S {${'Y'.repeat(41)}}`, 'text {LINK_RASPUNS}'), '22023', 'C câmp de 41 de caractere în subiect', /camp_necunoscut/)
+  // r2 (P1): un link personal LITERAL în text (al lui D1, lângă {LINK_RASPUNS}, destinatari D1 și D2 — ar ajunge și la D2), în subiect, pe altă origine,
+  //          sau tokenul copiat fără adresă = link_literal, nimic creat
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S', `Răspuns: ${LINK(T.D1)}. Link personal: {LINK_RASPUNS}`), '22023', 'C link literal în text + {LINK_RASPUNS}', /link_literal/)
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1], 'S', `Răspuns: ${LINK(T.D1)}.`), '22023', 'C link literal în text, un singur destinatar (chiar al lui)', /link_literal/)
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], `S ${LINK(T.D1)}`, 'text {LINK_RASPUNS}'), '22023', 'C link literal în subiect', /link_literal/)
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S', `https://pontaj-pro-sooty.vercel.app/redari/raspuns/${T.D2} {LINK_RASPUNS}`), '22023', 'C link literal pe altă origine', /link_literal/)
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S', `token ${T.D2} {LINK_RASPUNS}`), '22023', 'C token copiat fără adresă', /link_literal/)
   if (await nrLoturi(db) !== n0) ab.push('C un refuz a creat lotul')
   // un text fără niciun câmp rămâne permis (ca azi); un text fără {LINK_RASPUNS} e avertisment în ecran, nu refuz în bază
   const c1 = asteptOk(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D9], 'Fără câmpuri', 'Text simplu.'), 'C lot fără câmpuri')
   if (c1 !== LOT.C) ab.push('C lotul fără câmpuri nu s-a creat: ' + c1)
   const mc = await mesaje(db, LOT.C)
   if (mc.length !== 1 || mc[0].corp_text_final !== 'Text simplu.' || mc[0].subiect_final !== 'Fără câmpuri') ab.push('C lotul fără câmpuri: ' + JSON.stringify(mc.map(m => m.corp_text_final)))
-  // B. lotul cu 3 destinatari: fiecare mesaj cu linkul LUI, fără acolade, subiectul completat, hash-ul peste textul final (SQL = JS), lotul pe hash-urile mesajelor
-  const b1 = asteptOk(await creeaza(db, U.OWNER, LOT.A, P.TEST, UAT.A, [D.D1, D.D2, D.D3], SUBIECT, TEXT), 'B creare lot cu 3 destinatari')
+  // B. lotul cu 4 destinatari: fiecare mesaj cu linkul LUI, fără acolade, subiectul completat, hash-ul peste textul final (SQL = JS), lotul pe hash-urile mesajelor
+  const b1 = asteptOk(await creeaza(db, U.OWNER, LOT.A, P.TEST, UAT.A, [D.D1, D.D2, D.D3, D.D10], SUBIECT, TEXT), 'B creare lot cu 4 destinatari')
   if (b1 !== LOT.A) ab.push('B lotul nu s-a creat: ' + b1)
   const ms = await mesaje(db, LOT.A)
-  if (ms.length !== 3) ab.push('B numărul mesajelor: ' + ms.length)
-  for (const [det, tok, email] of [[D.D1, T.D1, 'unu.fictiv@gazpet.ro'], [D.D2, T.D2, 'doi.fictiv@gazpet.ro'], [D.D3, T.D3, 'trei.fictiv@gazpet.ro']]) {
+  if (ms.length !== 4) ab.push('B numărul mesajelor: ' + ms.length)
+  for (const [det, tok, email] of [[D.D1, T.D1, 'unu.fictiv@gazpet.ro'], [D.D2, T.D2, 'doi.fictiv@gazpet.ro'], [D.D3, T.D3, 'trei.fictiv@gazpet.ro'], [D.D10, T.D10, 'zece.fictiv@gazpet.ro']]) {
     const m = ms.find(x => x.detinator_id === det)
     if (!m) { ab.push('B lipsește mesajul ' + det); continue }
     if (m.corp_text_final !== TEXT_ASTEPTAT(tok)) ab.push(`B corpul ${det} diferă: ${JSON.stringify(m.corp_text_final)}`)
@@ -315,65 +360,68 @@ async function verifica(db) {
   const jc = (await db.query(`SELECT count(*)::int AS n FROM public.red_mail_jurnal_f2 WHERE lot_id = $1 AND cod = 'campuri'`, [LOT.A])).rows[0].n
   if (jc !== 1) ab.push('B jurnalul F2 fără „campuri”: ' + jc)
   // idempotența pe aceeași intenție (același hash al cererii) → același lot, fără dublare
-  if (asteptOk(await creeaza(db, U.OWNER, LOT.A, P.TEST, UAT.A, [D.D1, D.D2, D.D3], SUBIECT, TEXT), 'B reluarea aceleiași intenții') !== LOT.A || (await mesaje(db, LOT.A)).length !== 3) ab.push('B reluarea a dublat')
+  if (asteptOk(await creeaza(db, U.OWNER, LOT.A, P.TEST, UAT.A, [D.D1, D.D2, D.D3, D.D10], SUBIECT, TEXT), 'B reluarea aceleiași intenții') !== LOT.A || (await mesaje(db, LOT.A)).length !== 4) ab.push('B reluarea a dublat')
   // G. RLS neschimbat: editorul nu vede mesajele (snapshotul cu link) și nici tokenul altfel decât azi (admin / editor pot, ca în 20261126a); anon nimic
   const g1 = await ca(db, 'authenticated', U.EDITOR, `SELECT count(*)::int AS r FROM public.red_mail_mesaje`)
   if (g1.code || g1.rows[0].r !== 0) ab.push('G editorul vede mesajele: ' + JSON.stringify(g1))
   const g2 = await ca(db, 'authenticated', U.OWNER, `SELECT count(*)::int AS r FROM public.red_mail_mesaje WHERE lot_id = '${LOT.A}'`)
-  if (g2.code || g2.rows[0].r !== 3) ab.push('G owner-ul nu vede mesajele: ' + JSON.stringify(g2))
+  if (g2.code || g2.rows[0].r !== 4) ab.push('G owner-ul nu vede mesajele: ' + JSON.stringify(g2))
   const g3 = await ca(db, 'authenticated', U.EDITOR, `SELECT count(*)::int AS r FROM public.red_detinatori_token`)
-  if (g3.code || g3.rows[0].r !== 8) ab.push('G editorul nu mai citește tokenul ca azi (politica veche): ' + JSON.stringify(g3))
+  if (g3.code || g3.rows[0].r !== NR_TOKENI) ab.push('G editorul nu mai citește tokenul ca azi (politica veche): ' + JSON.stringify(g3))
   asteptCod(await ca(db, 'anon', null, `SELECT count(*) AS r FROM public.red_mail_mesaje`), '42501', 'G anon pe mesaje')
   asteptCod(await ca(db, 'anon', null, `SELECT public.fn_red_mail_f2_campuri('${P.TEST}', '${UAT.A}') AS r`), '42501', 'G anon pe campuri (fără EXECUTE)')
   asteptCod(await ca(db, 'authenticated', U.OWNER, `SELECT public.fn_red_mail_f2_token('${D.D1}') AS r`), '42501', 'G owner-ul nu poate chema direct fn_red_mail_f2_token (intern)')
   asteptCod(await ca(db, 'authenticated', U.OWNER, `SELECT public.fn_red_link_raspuns('x') AS r`), '42501', 'G owner-ul nu poate chema direct fn_red_link_raspuns (intern)')
+  asteptCod(await ca(db, 'authenticated', U.OWNER, `SELECT public.fn_red_mail_f2_link_strain('x', NULL) AS r`), '42501', 'G owner-ul nu poate chema direct fn_red_mail_f2_link_strain (intern)')
   // H. garda „doar TEST” neatinsă: lotul proiectului real e refuzat de f2_poate după pornire; corpul f2_poate = 31h
   await porneste(db)
   const r1 = asteptOk(await creeaza(db, U.OWNER, LOT.R, P.REAL, UAT.REAL, [D.D8], 'S', 'x {LINK_RASPUNS}'), 'H lot pe proiect real (crearea e permisă, trimiterea nu)')
   if (r1 === LOT.R) { await aproba(db, U.OWNER, LOT.R); if (await poate(db, LOT.R) !== 'doar_proiecte_test') ab.push('H garda doar TEST: ' + await poate(db, LOT.R)) }
   if (await amprentaFn(db, 'fn_red_mail_f2_poate') !== '01d3390b765bedc9fd64801f113109c9') ab.push('H fn_red_mail_f2_poate schimbată')
-  // E. trimiterea: aprobare; m1 rezervat → autorizat → trimis; tokenul lui D2 expiră după aprobare → la rezervare m2 e anulat (token_expirat), nimic rezervat;
-  //    m3 rezervat, tokenul lui D3 expiră înaintea autorizării → apel_incepe = false, m3 anulat; nimic nu se retrimite
+  // E. trimiterea: aprobare; q1 rezervat → autorizat → trimis; apoi, în coadă: q2 cu opt-out, q3 cu tokenul expirat după aprobare, q4 valid → O SINGURĂ
+  //    rezervare anulează q2 (optout) și q3 (token_expirat) și întoarce q4 rezervat (r2: anulările locale nu opresc coada); q4: tokenul expiră ÎNTRE
+  //    rezervare și autorizare → apel_incepe = false, q4 anulat; nimic nu se retrimite
   if (asteptOk(await aproba(db, U.OWNER, LOT.A), 'E aprobarea lotului') !== true) ab.push('E aprobarea nu a întors true')
   if (await poate(db, LOT.A) !== null) ab.push('E lotul nu poate trimite: ' + await poate(db, LOT.A))
-  // rezervarea ia mesajele în ordinea id-ului (uuid aleator): următorul se citește din bază, nu se presupune deținătorul
-  const urmatorul = async () => (await db.query(`SELECT detinator_id FROM public.red_mail_mesaje WHERE lot_id = $1 AND stare = 'in_coada' ORDER BY id LIMIT 1`, [LOT.A])).rows[0]?.detinator_id
+  // rezervarea ia mesajele în ordinea id-ului (uuid aleator): coada se citește din bază, nu se presupune deținătorul
+  const coada = async () => (await db.query(`SELECT detinator_id, catre FROM public.red_mail_mesaje WHERE lot_id = $1 AND stare = 'in_coada' ORDER BY id`, [LOT.A])).rows
   const stari = async () => Object.fromEntries((await mesaje(db, LOT.A)).map(m => [m.detinator_id, [m.stare, m.eroare_cod]]))
-  const d1 = await urmatorul()
-  const e1 = asteptOk(await rezerva(db, U.OWNER, LOT.A), 'E rezerva m1')
+  const [q1] = await coada()
+  const e1 = asteptOk(await rezerva(db, U.OWNER, LOT.A), 'E rezerva q1')
   const m1 = e1 && e1[0]
-  if (!m1 || m1.stare !== 'rezervat' || m1.detinator_id !== d1) ab.push('E prima rezervare: ' + JSON.stringify(e1))
+  if (!m1 || m1.stare !== 'rezervat' || m1.detinator_id !== q1.detinator_id) ab.push('E prima rezervare: ' + JSON.stringify(e1))
   if (m1) {
-    if (asteptOk(await apelIncepe(db, U.OWNER, m1.id, m1.lease_token), 'E apel_incepe m1') !== true) ab.push('E apel_incepe m1 nu a întors true')
-    if (asteptOk(await rezultat(db, U.OWNER, m1.id, m1.lease_token, 'trimis', 'gm1', 'th1'), 'E rezultat m1') !== true) ab.push('E rezultatul m1 nu a întors true')
+    if (asteptOk(await apelIncepe(db, U.OWNER, m1.id, m1.lease_token), 'E apel_incepe q1') !== true) ab.push('E apel_incepe q1 nu a întors true')
+    if (asteptOk(await rezultat(db, U.OWNER, m1.id, m1.lease_token, 'trimis', 'gm1', 'th1'), 'E rezultat q1') !== true) ab.push('E rezultatul q1 nu a întors true')
   }
-  // tokenul următorului din coadă expiră DUPĂ aprobare: la rezervare mesajul lui e anulat (token_expirat), nimic rezervat, nimic trimis
-  const d2 = await urmatorul()
-  await expira(db, d2)
+  // q2 → opt-out; q3 → tokenul expiră DUPĂ aprobare; q4 rămâne valid: rezervarea trece peste q2 și q3 și îl rezervă pe q4 în ACEEAȘI apăsare
+  const [q2, q3, q4] = await coada()
+  if (!q4) ab.push('E coada nu are 3 mesaje rămase')
+  await optout(db, q2.catre)
+  await expira(db, q3.detinator_id)
   await db.exec(`UPDATE public.red_mail_setari SET ultim_apel_la = now() - interval '3 seconds' WHERE id = 1`)
-  const e2 = asteptOk(await rezerva(db, U.OWNER, LOT.A), 'E rezerva după expirarea tokenului următorului')
-  if (!e2 || e2.length !== 0) ab.push('E rezervarea cu token expirat a rezervat totuși: ' + JSON.stringify(e2))
+  const e2 = asteptOk(await rezerva(db, U.OWNER, LOT.A), 'E rezerva peste opt-out și token expirat')
+  const m4 = e2 && e2[0]
+  if (!m4 || m4.stare !== 'rezervat' || m4.detinator_id !== q4.detinator_id) ab.push('E rezervarea nu a trecut la primul valid (q4): ' + JSON.stringify(e2) + ' (handlerul s-ar opri la zero rânduri)')
   let st = await stari()
-  if (JSON.stringify(st[d2]) !== JSON.stringify(['anulat', 'token_expirat'])) ab.push('E m2 nu e anulat token_expirat: ' + JSON.stringify(st[d2]))
-  if (JSON.stringify(st[d1]) !== JSON.stringify(['trimis', null])) ab.push('E m1: ' + JSON.stringify(st[d1]))
-  // al treilea: rezervat, apoi tokenul expiră ÎNTRE rezervare și autorizare: apel_incepe = false, mesajul anulat, niciun apel
-  const d3 = await urmatorul()
-  const e3 = asteptOk(await rezerva(db, U.OWNER, LOT.A), 'E rezerva m3')
-  const m3 = e3 && e3[0]
-  if (!m3 || m3.detinator_id !== d3 || m3.stare !== 'rezervat' || [d1, d2].includes(d3)) ab.push('E a treia rezervare: ' + JSON.stringify(e3))
-  if (m3) {
-    await expira(db, d3)
+  if (JSON.stringify(st[q2.detinator_id]) !== JSON.stringify(['anulat', 'optout'])) ab.push('E q2 nu e anulat optout: ' + JSON.stringify(st[q2.detinator_id]))
+  if (JSON.stringify(st[q3.detinator_id]) !== JSON.stringify(['anulat', 'token_expirat'])) ab.push('E q3 nu e anulat token_expirat: ' + JSON.stringify(st[q3.detinator_id]))
+  if (JSON.stringify(st[q1.detinator_id]) !== JSON.stringify(['trimis', null])) ab.push('E q1: ' + JSON.stringify(st[q1.detinator_id]))
+  // q4: rezervat, apoi tokenul expiră ÎNTRE rezervare și autorizare: apel_incepe = false, mesajul anulat, niciun apel
+  if (m4) {
+    await expira(db, q4.detinator_id)
     await db.exec(`UPDATE public.red_mail_setari SET ultim_apel_la = now() - interval '3 seconds' WHERE id = 1`)   // pauza de 2 s dintre apeluri, fără așteptare
-    if (asteptOk(await apelIncepe(db, U.OWNER, m3.id, m3.lease_token), 'E apel_incepe m3 cu token expirat între rezervare și autorizare') !== false) ab.push('E apel_incepe m3 a autorizat apelul cu token expirat')
+    if (asteptOk(await apelIncepe(db, U.OWNER, m4.id, m4.lease_token), 'E apel_incepe q4 cu token expirat între rezervare și autorizare') !== false) ab.push('E apel_incepe q4 a autorizat apelul cu token expirat')
     st = await stari()
-    if (JSON.stringify(st[d3]) !== JSON.stringify(['anulat', 'token_expirat'])) ab.push('E m3 nu e anulat token_expirat: ' + JSON.stringify(st[d3]))
+    if (JSON.stringify(st[q4.detinator_id]) !== JSON.stringify(['anulat', 'token_expirat'])) ab.push('E q4 nu e anulat token_expirat: ' + JSON.stringify(st[q4.detinator_id]))
   }
   const e4 = asteptOk(await rezerva(db, U.OWNER, LOT.A), 'E rezerva după anulări (coadă goală)')
   if (!e4 || e4.length !== 0) ab.push('E ceva s-a retrimis: ' + JSON.stringify(e4))
   st = await stari()
-  if (JSON.stringify(st[d2]) !== JSON.stringify(['anulat', 'token_expirat']) || JSON.stringify(st[d3]) !== JSON.stringify(['anulat', 'token_expirat']) || JSON.stringify(st[d1]) !== JSON.stringify(['trimis', null])) ab.push('E anulările nu sunt definitive: ' + JSON.stringify(st))
+  if (JSON.stringify(st[q2.detinator_id]) !== JSON.stringify(['anulat', 'optout']) || JSON.stringify(st[q3.detinator_id]) !== JSON.stringify(['anulat', 'token_expirat'])
+    || JSON.stringify(st[q4.detinator_id]) !== JSON.stringify(['anulat', 'token_expirat']) || JSON.stringify(st[q1.detinator_id]) !== JSON.stringify(['trimis', null])) ab.push('E anulările nu sunt definitive: ' + JSON.stringify(st))
   const ja = (await db.query(`SELECT count(*)::int AS n FROM public.red_mail_jurnal_f2 WHERE lot_id = $1 AND cod = 'anulat'`, [LOT.A])).rows[0].n
-  if (ja !== 2) ab.push('E jurnalul F2 fără cele două anulări: ' + ja)
+  if (ja !== 2) ab.push('E jurnalul F2 fără cele două anulări token_expirat: ' + ja)
   // F. tokenul nu apare în jurnale / evenimente / erori (apare DOAR în snapshotul mesajului)
   const jurnale = (await db.query(`SELECT string_agg(j::text, ' ') AS t FROM public.red_mail_jurnal_f2 j`)).rows[0].t || ''
   const evenimente = (await db.query(`SELECT string_agg(e::text, ' ') AS t FROM public.red_mail_evenimente e`)).rows[0].t || ''
@@ -396,7 +444,7 @@ console.log('1. înainte de 20261131i (20261131h aplicată = starea de pe main):
   ok(await nrNoi(db) === 0 && (await checkJurnal(db) || '').includes("'optout'::text])") && !(await checkJurnal(db) || '').includes('campuri'), 'înainte: fără funcțiile noi, CHECK-ul jurnalului = 31a')
   ok(await amprentaFn(db, 'fn_red_mail_lot_creeaza') === 'a43632708f4d31f44c50f614c0b5456c' && await amprentaFn(db, 'fn_red_mail_rezerva') === 'd779e03d0644e437db412b0c3721e6c0', 'înainte: lot_creeaza = 31a, rezerva = 31h')
   const inv = (await destinatari(db, U.OWNER, P.TEST, UAT.A)).rows || []
-  ok(inv.length === 7 && inv.every(x => !x.motive.includes('fara_token')), 'înainte (dovada pe main, SQL): deținătorii fără token / cu token expirat sunt „eligibili” — gaura pe care o închide migrarea')
+  ok(inv.length === 8 && inv.every(x => !x.motive.includes('fara_token')), 'înainte (dovada pe main, SQL): deținătorii fără token / cu token expirat sunt „eligibili” — gaura pe care o închide migrarea')
   const r = await creeaza(db, U.OWNER, LOT.A, P.TEST, UAT.A, [D.D1, D.D2, D.D4], SUBIECT, TEXT)
   const ms = await mesaje(db, LOT.A)
   ok(!r.code && ms.length === 3 && ms.every(m => m.corp_text_final.includes('{LINK_RASPUNS}') && m.corp_text_final.includes('{COMUNA}')) && ms.some(m => m.detinator_id === D.D4),
@@ -431,6 +479,69 @@ console.log('2. aplicarea ca la livrare (L15 v2: manifest generat, apoi livrarea
   ok(ab.length === 0, `verificările de comportament (${ab.length} abateri)`)
   const m = await eroare(aplicaMig(db))
   ok(/reaplicare/.test(m || ''), 'reaplicarea refuzată: ' + m)
+  await db.close()
+}
+
+// ── 2b. HANDLERUL REAL al funcției edge peste RPC-urile din PGlite (transportul Gmail fals; „pauza” de 2 s = ceasul ultimului apel mutat în urmă) ──
+function depsPglite(db) {
+  const trimise = []
+  const raspuns = (status, body) => ({ status, ok: status < 300, json: async () => body })
+  const fetch = async (url, init) => {
+    if (url === GAZDA_OAUTH + '/token') return raspuns(200, { access_token: 'at-fictiv', expires_in: 3600, scope: 'https://www.googleapis.com/auth/gmail.send openid https://www.googleapis.com/auth/userinfo.email', token_type: 'Bearer' })
+    if (url === GAZDA_GMAIL + '/gmail/v1/users/me/messages/send') { trimise.push(JSON.parse(init.body).raw); return raspuns(200, { id: 'gm-' + trimise.length, threadId: 'th-' + trimise.length }) }
+    return raspuns(404, {})
+  }
+  const env = n => ({ REDARI_GMAIL_TRIMITERE_CLIENT_ID: 'client-fictiv.apps', REDARI_GMAIL_TRIMITERE_CLIENT_SECRET: 'secret-fictiv' })[n]
+  // RPC-urile: ca owner, cu JWT (ca din funcția edge); eroarea RPC-ului = { error }, ca la supabase-js
+  const rpc = async sql => { const r = await ca(db, 'authenticated', U.OWNER, sql); return r.code ? { error: { message: r.message } } : { data: r.rows[0]?.r ?? null } }
+  const rand = async sql => ({ data: (await db.query(sql)).rows[0]?.r ?? null })
+  return {
+    trimise,
+    getUser: async () => ({ data: { user: { id: U.OWNER } } }), owner: async () => ({ data: true }),
+    lot: id => rand(`SELECT row_to_json(l) AS r FROM public.red_mail_loturi l WHERE l.id = '${id}'`),
+    proiect: id => rand(`SELECT row_to_json(p) AS r FROM public.red_proiecte p WHERE p.id = '${id}'`),
+    setari: () => rand(`SELECT row_to_json(s) AS r FROM public.red_mail_setari s WHERE s.id = 1`),
+    informare: async () => ({ data: true }),
+    secret: async () => ({ data: 'rt-fictiv' }),
+    http: () => creeazaGmailHttp({ modul: 'gmailTrimitere', scop: 'trimitere', env, fetch }),
+    opreste: async () => ({ data: true }),
+    rezerva: async id => { const r = await ca(db, 'authenticated', U.OWNER, `SELECT row_to_json(m) AS r FROM public.fn_red_mail_rezerva('${id}') m`); return r.code ? { error: { message: r.message } } : { data: r.rows.map(x => x.r) } },
+    incepe: (id, lease) => rpc(`SELECT public.fn_red_mail_apel_incepe('${id}', '${lease}') AS r`),
+    rezultat: (id, lease, stare, gm, th) => rpc(`SELECT public.fn_red_mail_rezultat('${id}', '${lease}', ${lit(stare)}, ${gm == null ? 'NULL' : lit(gm)}, ${th == null ? 'NULL' : lit(th)}) AS r`),
+    descarca: async () => { throw new Error('fara atasament in proba') },
+    pauza: async () => { await db.exec(`UPDATE public.red_mail_setari SET ultim_apel_la = now() - interval '3 seconds' WHERE id = 1`) },
+    mesaj: id => rand(`SELECT row_to_json(x) AS r FROM (SELECT stare FROM public.red_mail_mesaje WHERE id = '${id}') x`),
+  }
+}
+console.log('2b. handlerul REAL (redariMailF2Handler.mjs) peste RPC-urile din PGlite: anulările locale nu opresc destinatarii valizi rămași (o singură apăsare)')
+for (const [nume, pregateste, asteptat] of [
+  ['ordinea „expirat, valid, valid”', async (db, q) => { await expira(db, q[0].detinator_id) }, { trimise: 2, rezervate: 2, stari: [['anulat', 'token_expirat'], ['trimis', null], ['trimis', null]] }],
+  ['ordinea „opt-out, expirat, valid”', async (db, q) => { await optout(db, q[0].catre); await expira(db, q[1].detinator_id) }, { trimise: 1, rezervate: 1, stari: [['anulat', 'optout'], ['anulat', 'token_expirat'], ['trimis', null]] }],
+  ['ordinea „valid, expirat, valid”', async (db, q) => { await expira(db, q[1].detinator_id) }, { trimise: 2, rezervate: 2, stari: [['trimis', null], ['anulat', 'token_expirat'], ['trimis', null]] }],
+]) {
+  const db = await bazaNoua()
+  await aplicaMig(db)
+  await porneste(db)
+  const c = await creeaza(db, U.OWNER, LOT.A, P.TEST, UAT.A, [D.D1, D.D2, D.D3], SUBIECT, TEXT)
+  if (c.code) { ok(false, `${nume}: lotul nu s-a creat: ${c.message}`); await db.close(); continue }
+  await aproba(db, U.OWNER, LOT.A)
+  const q = (await db.query(`SELECT id, detinator_id, catre FROM public.red_mail_mesaje WHERE lot_id = $1 ORDER BY id`, [LOT.A])).rows   // ordinea cozii = ordinea id-ului
+  await pregateste(db, q)
+  const d = depsPglite(db)
+  const r = await raspundeTrimitere({ jwt: 'fictiv', corp: { lot_id: LOT.A } }, d)
+  const st = (await db.query(`SELECT stare, eroare_cod FROM public.red_mail_mesaje WHERE lot_id = $1 ORDER BY id`, [LOT.A])).rows.map(m => [m.stare, m.eroare_cod])
+  const corp = r.body || {}
+  ok(r.status === 200 && corp.cod === 'rulat' && corp.trimise === asteptat.trimise && corp.rezervate === asteptat.rezervate && corp.esuate === 0 && corp.necunoscute === 0 && corp.neconfirmate === 0,
+    `${nume}: o apăsare → ${JSON.stringify(corp)} (aștepta rulat, trimise ${asteptat.trimise}, rezervate ${asteptat.rezervate})`)
+  ok(JSON.stringify(st) === JSON.stringify(asteptat.stari), `${nume}: stările mesajelor în ordinea cozii = ${JSON.stringify(st)}`)
+  ok(d.trimise.length === asteptat.trimise, `${nume}: exact ${asteptat.trimise} apeluri Gmail (${d.trimise.length})`)
+  // ce a plecat e snapshotul destinatarului lui: MIME-ul decodat conține linkul LUI și pe al nimănui altcuiva
+  const mime = d.trimise.map(raw => Buffer.from(raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('latin1'))
+  const corpuri = mime.map(t => Buffer.from((t.split('\r\n\r\n')[2] || '').replace(/--.*$/s, '').replace(/\s+/g, ''), 'base64').toString('utf8'))
+  const trimisi = q.filter((_, i) => st[i][0] === 'trimis').map(x => x.detinator_id)
+  const tokDet = Object.fromEntries(Object.entries(D).map(([k, v]) => [v, T[k]]))
+  ok(corpuri.length === trimisi.length && corpuri.every((t, i) => t.includes(LINK(tokDet[trimisi[i]])) && TOKENI.every(tk => tk === tokDet[trimisi[i]] || !t.includes(tk))),
+    `${nume}: fiecare MIME trimis conține DOAR linkul destinatarului lui`)
   await db.close()
 }
 
@@ -528,16 +639,32 @@ console.log('6. MUTANȚI pe migrare (fiecare TREBUIE să pice: la aplicare, la p
 const MUTANTI = [
   ['același link pentru toți (al primului destinatar)', [["campuri||jsonb_build_object('LINK_RASPUNS',public.fn_red_link_raspuns(tok))", "campuri||jsonb_build_object('LINK_RASPUNS',public.fn_red_link_raspuns(public.fn_red_mail_f2_token(p_destinatari[1])))"]]],
   ['subiectul necompletat', [['  msg.subiect_final:=subiect; msg.corp_text_final', '  msg.subiect_final:=public.fn_red_mail_f2_text(p_subiect); msg.corp_text_final']]],
-  ['câmpul necunoscut acceptat (ramura scoasă)', [["  IF NOT (p_campuri ? nume) THEN RAISE EXCEPTION 'camp_necunoscut: %',nume USING ERRCODE='22023'; END IF;\n", '']]],
-  // ambele regex-uri (bucla și verificarea finală „nimic cu acolade”): cu una singură schimbată, a doua prinde oricum (apărare în adâncime, mutant echivalent)
-  ['forma câmpului doar cu majuscule (minusculele trec netulburate)', [["regexp_matches(p_text,'[{]([^{}]{1,40})[}]','g')", "regexp_matches(p_text,'[{]([A-Z_]{1,40})[}]','g')"],
-    [" IF rez ~ '[{][^{}]{1,40}[}]' THEN RAISE EXCEPTION 'camp_necunoscut' USING ERRCODE='22023'; END IF;", " IF rez ~ '[{][A-Z_]{1,40}[}]' THEN RAISE EXCEPTION 'camp_necunoscut' USING ERRCODE='22023'; END IF;"]]],
+  ['câmpul necunoscut acceptat (ramura scoasă)', [["  IF NOT (p_campuri ? nume) THEN RAISE EXCEPTION 'camp_necunoscut: %',left(nume,40) USING ERRCODE='22023'; END IF;\n", '']]],
+  // ambele regex-uri (bucla și verificarea finală „nicio acoladă”): cu una singură schimbată, a doua prinde oricum (apărare în adâncime, mutant echivalent)
+  ['forma câmpului doar cu majuscule (minusculele trec netulburate)', [["regexp_matches(p_text,'[{]([^{}]+)[}]','g')", "regexp_matches(p_text,'[{]([A-Z_]+)[}]','g')"],
+    [" IF rez ~ '[{}]' THEN RAISE EXCEPTION 'camp_necunoscut: acolade ramase' USING ERRCODE='22023'; END IF;", " IF rez ~ '[{][A-Z_]+[}]' THEN RAISE EXCEPTION 'camp_necunoscut: acolade ramase' USING ERRCODE='22023'; END IF;"]]],
+  // r2 (P2): limita veche a parserului (1–40) înapoi, în ambele locuri → numele de 41+ caractere trec netulburate
+  ['limita veche de 40 de caractere (numele mai lungi trec)', [["regexp_matches(p_text,'[{]([^{}]+)[}]','g')", "regexp_matches(p_text,'[{]([^{}]{1,40})[}]','g')"],
+    [" IF rez ~ '[{}]' THEN RAISE EXCEPTION 'camp_necunoscut: acolade ramase' USING ERRCODE='22023'; END IF;", " IF rez ~ '[{][^{}]{1,40}[}]' THEN RAISE EXCEPTION 'camp_necunoscut: acolade ramase' USING ERRCODE='22023'; END IF;"]]],
+  ['verificarea finală a acoladelor scoasă („{}” și acoladele neînchise trec)', [[" IF rez ~ '[{}]' THEN RAISE EXCEPTION 'camp_necunoscut: acolade ramase' USING ERRCODE='22023'; END IF;\n", '']]],
+  // r2 (P1): linkul literal — refuzul șablonului scos (verificarea finală prinde cu alt cod: refuz diferit), ambele scoase (linkul lui A pleacă și la B),
+  //          tokenul copiat fără adresă nescăpat (lookup-ul scos)
+  ['refuzul linkului literal din șablon scos', [[" IF public.fn_red_mail_f2_link_strain(p_subiect,NULL) OR public.fn_red_mail_f2_link_strain(p_text,NULL) THEN RAISE EXCEPTION 'link_literal' USING ERRCODE='22023'; END IF;\n", '']]],
+  ['linkul literal acceptat peste tot (refuzul șablonului ȘI verificarea mesajului final scoase)', [[" IF public.fn_red_mail_f2_link_strain(p_subiect,NULL) OR public.fn_red_mail_f2_link_strain(p_text,NULL) THEN RAISE EXCEPTION 'link_literal' USING ERRCODE='22023'; END IF;\n", ''],
+    ["  IF public.fn_red_mail_f2_link_strain(msg.corp_text_final,tok) THEN RAISE EXCEPTION 'link_strain' USING ERRCODE='22023'; END IF;\n", ''],
+    [" IF public.fn_red_mail_f2_link_strain(subiect,NULL) THEN RAISE EXCEPTION 'link_strain' USING ERRCODE='22023'; END IF;\n", '']]],
+  ['tokenul copiat fără adresă nu e văzut (lookup-ul în red_detinatori_token scos)', [["  AND (position('/redari/raspuns/'||r[1] IN p_text)>0 OR EXISTS(SELECT 1 FROM public.red_detinatori_token t WHERE t.token_raspuns=r[1])))", "  AND position('/redari/raspuns/'||r[1] IN p_text)>0)"]]],
+  ['linkul străin pe altă origine nu e văzut (doar domeniul public)', [["  AND (position('/redari/raspuns/'||r[1] IN p_text)>0 OR EXISTS", "  AND (position('https://redari.gazpet.ro/redari/raspuns/'||r[1] IN p_text)>0 OR EXISTS"]]],
+  ['linkul străin comparat fără token (orice link = al destinatarului)', [['  WHERE r[1] IS DISTINCT FROM p_token\n', '  WHERE p_token IS NULL\n']]],
+  // r2 (P2): rezervarea se oprește la prima anulare locală (RETURN în loc de CONTINUE) → handlerul s-ar opri la zero rânduri înaintea destinatarilor valizi
+  ['rezervarea se oprește la token expirat (RETURN în loc de CONTINUE)', [["PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'anulat'); CONTINUE; END IF;", "PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'anulat'); RETURN; END IF;"]]],
+  ['rezervarea se oprește la opt-out (RETURN în loc de CONTINUE)', [["UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='optout' WHERE id=m.id; CONTINUE; END IF;", "UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='optout' WHERE id=m.id; RETURN; END IF;"]]],
   ['câmpul fără valoare completat cu gol', [["  IF v IS NULL OR btrim(v)='' THEN RAISE EXCEPTION 'camp_necompletabil: %',nume USING ERRCODE='22023'; END IF;\n", "  v:=coalesce(v,'');\n"]]],
   ['inventarul fără fara_token', [[",\n -- 20261131i: fără link personal valid (token lipsă / expirat) = exclus din lot\n CASE WHEN public.fn_red_mail_f2_token(d.id) IS NULL THEN 'fara_token' END\n", '\n']]],
   ['crearea fără refuzul destinatarilor fără token (ambele verificări)', [[" IF EXISTS(SELECT 1 FROM unnest(p_destinatari) x WHERE public.fn_red_mail_f2_token(x) IS NULL) THEN RAISE EXCEPTION 'destinatari_neeligibili'; END IF;\n", ''],
     ["  IF tok IS NULL OR public.fn_red_link_raspuns(tok) IS NULL THEN RAISE EXCEPTION 'destinatari_neeligibili'; END IF;\n", "  tok:=coalesce(tok,repeat('z',43));\n"]]],
   ['tokenul valid fără expirare', [['AND (t.token_expira_la IS NULL OR now()<=t.token_expira_la)\n', '\n']]],
-  ['rezervarea fără oprirea la token expirat', [[" IF public.fn_red_mail_f2_token(m.detinator_id) IS NULL THEN UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='token_expirat' WHERE id=m.id; PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'anulat'); RETURN; END IF;\n", '']]],
+  ['rezervarea fără oprirea la token expirat', [["  IF public.fn_red_mail_f2_token(m.detinator_id) IS NULL THEN UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='token_expirat' WHERE id=m.id; PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'anulat'); CONTINUE; END IF;\n", '']]],
   ['autorizarea apelului fără oprirea la token expirat', [[" IF public.fn_red_mail_f2_token(m.detinator_id) IS NULL THEN UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='token_expirat' WHERE id=m.id; PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'anulat'); RETURN false; END IF;\n", '']]],
   ['programul luat din prima zi chiar dacă zilele diferă', [["  v_program:=CASE WHEN programe[1]<>'' AND (SELECT count(DISTINCT x) FROM unnest(programe) x)=1 THEN programe[1] END;", "  v_program:=nullif(programe[1],'');"]]],
   ['câmpurile acordate și lui anon', [['GRANT EXECUTE ON FUNCTION public.fn_red_mail_f2_campuri(uuid,uuid) TO authenticated;', 'GRANT EXECUTE ON FUNCTION public.fn_red_mail_f2_campuri(uuid,uuid) TO authenticated, anon;']]],
