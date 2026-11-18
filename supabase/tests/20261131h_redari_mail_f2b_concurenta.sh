@@ -18,7 +18,7 @@
 #   FAN existente rulate după migrare, interacțiunea cu triggerele de pe live care lipsesc din fixture (trg_red_autorizare_tgz, 20261130m) — sunt pașii
 #   SEPARAȚI ai coordonatorului (docs/redari/MAIL_PROBA_PASI.md §3, pasul 1b), nu ai acestui script.
 #
-# CUM SE RULEAZĂ (coordonatorul; cere: bash ≥ 4 (coproc), psql ≥ 12 (:SQLSTATE, \warn) în PATH, conectare ca superuser `postgres` (migrarea cere
+# CUM SE RULEAZĂ (coordonatorul; cere: bash ≥ 4 (coproc), psql ≥ 13 (\warn există din psql 13; recomandat clientul 17, ca serverul) în PATH, conectare ca superuser `postgres` (migrarea cere
 #   current_user = postgres; rolurile BYPASSRLS cer superuser), node cu PGlite instalat la rădăcina repo-ului + python3 (pașii 0 / 0b ai probei PGlite,
 #   care generează fixture-ul)):
 #     F2B_CLUSTER_DISPENSABIL=da PGHOST=… PGPORT=… PGUSER=postgres PGPASSWORD=… bash supabase/tests/20261131h_redari_mail_f2b_concurenta.sh <nume_baza_noua>
@@ -64,7 +64,7 @@ MIG="$RADACINA/supabase/migrations/20261131h_redari_mail_f2b_trimitere.sql"
 # ── precondiții pe cluster (nimic creat încă) ──
 PSM=(psql -X -q -w -v ON_ERROR_STOP=1 -d postgres)
 VERS_CLIENT="$(psql --version 2>/dev/null | sed -n 's/^psql (PostgreSQL) \([0-9]*\).*/\1/p')"
-if [ -z "$VERS_CLIENT" ] || [ "$VERS_CLIENT" -lt 12 ]; then echo "refuz: psql >= 12 (:SQLSTATE, \\warn); gasit: $(psql --version 2>&1)" >&2; exit 2; fi
+if [ -z "$VERS_CLIENT" ] || [ "$VERS_CLIENT" -lt 13 ]; then echo "refuz: psql >= 13 (\\warn exista din psql 13); gasit: $(psql --version 2>&1)" >&2; exit 2; fi
 PRE="$("${PSM[@]}" -tAc "SELECT current_setting('server_version_num')::int >= 170000, current_user = 'postgres', (SELECT rolsuper FROM pg_roles WHERE rolname = current_user), EXISTS (SELECT 1 FROM pg_database WHERE datname = '$BAZA')")" || { echo "refuz: nu ma pot conecta la baza postgres (PGHOST / PGPORT / PGUSER / PGPASSWORD)" >&2; exit 2; }
 case "$PRE" in
   t\|t\|t\|f) ;;
@@ -195,7 +195,7 @@ echo "0. baza de unica folosinta + fixture-ul (schelet + functiile reale + date 
 EXISTENTE=" $("${PSM[@]}" -tAc "SELECT string_agg(rolname, ' ') FROM pg_roles WHERE rolname IN ('anon', 'authenticated', 'service_role', 'supabase_auth_admin', 'supabase_storage_admin')") "
 for r in "${ROLURI[@]}"; do case "$EXISTENTE" in *" $r "*) ;; *) ROLURI_CREATE+=("$r");; esac; done
 echo "     roluri de cluster pe care fixture-ul le va crea (si scriptul le va sterge): ${ROLURI_CREATE[*]:-niciunul (toate exista deja; nu vor fi atinse)}"
-"${PSM[@]}" -c "CREATE DATABASE \"$BAZA\"" > /dev/null; ok $? "CREATE DATABASE $BAZA"; BAZA_CREATA=1
+if "${PSM[@]}" -c "CREATE DATABASE \"$BAZA\"" > /dev/null; then BAZA_CREATA=1; ok 0 "CREATE DATABASE $BAZA"; else echo "refuz: CREATE DATABASE $BAZA a esuat (exista deja sau alta eroare); nu se continua si nu se sterge nimic" >&2; exit 2; fi
 node "$RADACINA/scripts/pglite/test_redari_mail_f2b_local.mjs" --scrie-fixture "$FIX" > "$D/fixture.log" 2>&1; ok $? "fixture-ul scris de proba PGlite (--scrie-fixture: pasii 0 / 0b + scriere, fara proba in memorie)"
 [ -s "$FIX" ] || { echo "fixture-ul lipseste: $(tail -n 5 "$D/fixture.log")" >&2; exit 1; }
 $PS -f - < "$FIX" > /dev/null; ok $? "fixture-ul incarcat"
