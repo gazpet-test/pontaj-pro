@@ -31,6 +31,15 @@ notează rolurile de cluster pe care le creează fixture-ul și le șterge la fi
 (și la întrerupere); antetul spune exact ce atinge, iar regresiile pe clona completă sunt descrise separat (`MAIL_PROBA_PASI.md` §3). Nerulat în PR
 (fără PostgreSQL local): îl rulează coordonatorul pe un cluster dispensabil. (3) **Atașamentul: varianta C** scrisă ca decizie luată, nu deschisă.
 
+**Linkul personal și câmpurile pe fiecare mesaj (19.11.2026, PR `redari/mail-link-personal`, migrarea `20261131i` neaplicată):** după primul lot de probă
+(un text pentru toți, nimic completat per destinatar), `fn_red_mail_lot_creeaza` completează în snapshotul fiecărui mesaj, înaintea hash-ului, câmpurile
+`{COMUNA}` / `{ZILE}` / `{PROGRAM}` / `{TEL}` (din aceeași sursă ca convocatorul, `fn_red_mail_f2_campuri`) și `{LINK_RASPUNS}` (linkul personal, `fn_red_link_raspuns`
+— aceeași formă ca în codul QR); câmp necunoscut = refuz; deținător fără token valid = exclus (`fara_token`); token invalid la trimitere = `anulat` /
+`token_expirat` în rezervare și în autorizare, fără apel; tokenul doar în snapshot (SELECT owner), mascat în ecran; `fn_red_mail_f2_poate` neatinsă.
+Motivul alegerii „în bază, nu în funcția edge”: hash-ul aprobat trebuie să acopere textul final al fiecărui mesaj (compunerea MIME refuză altfel). Probe:
+`mailLinkPersonal.test.js`, `scripts/pglite/test_redari_mail_link_local.mjs`. Detalii: `PLAN_EMAIL_REDARI.md` (blocul 18.11.2026, punctul „Câmpurile textului”),
+`MAIL_PROBA_PASI.md` §5a.
+
 # Runda 2 — PR #1000, 05.11.2026
 
 Acest bloc descrie numai runda 2 și prevalează asupra istoricului de mai jos.

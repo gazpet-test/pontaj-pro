@@ -153,6 +153,31 @@ Doar plan de design: fără cod de producție, fără scrieri în BD, fără sec
   FAN). Deci nici conversia pe server (A), nici PDF-ul generat în browser (B) nu se mai fac; MIME-ul, snapshotul și `CHECK`-urile acceptă în continuare un
   PDF (fără flux de atașare), ceea ce nu condiționează livrarea. Contextul deciziei: convocatorul există doar ca DOCX (generat în browser cu biblioteca
   `docx`, stocat în bucketul `redari`), iar un PDF ar fi cerut fie o instalare nouă pe server, fie un document nou, de validat separat de Juridic.
+- **Câmpurile textului, completate PE FIECARE MESAJ (19.11.2026, după primul lot de probă; migrarea `20261131i`, neaplicată; PR `redari/mail-link-personal`)**.
+  Primul lot a arătat că textul lotului e UNUL pentru toți destinatarii și că platforma nu completează nimic per destinatar; modelul de mail aprobat (trimis
+  Transgaz-ului) are câmpurile `{COMUNA}`, `{ZILE}`, `{PROGRAM}`, `{TEL}` și `{LINK_RASPUNS}` — linkul PERSONAL către formularul de răspuns, **același ca în codul
+  QR din convocator** (`linkRaspuns`, `https://redari.gazpet.ro/redari/raspuns/<token>`; tokenul din `red_detinatori_token`, creat automat la adăugarea
+  deținătorului, cu `token_expira_la`). Decizia de proiectare: completarea se face **în bază, la crearea lotului** (`fn_red_mail_lot_creeaza`), în snapshotul
+  fiecărui mesaj, **înaintea hash-ului** — pentru că aprobarea fixează `lot_sha256` peste snapshoturi și compunerea MIME refuză orice text diferit
+  (`snapshot_diferit`); o completare în funcția edge la trimitere ar fi trimis un text neacoperit de hash-ul aprobat (L03 / L16). Funcția edge nu se schimbă.
+  Regulile: (1) definițiile valorilor sunt DOAR în SQL (L19): `fn_red_link_raspuns` (linkul; paritate cu JS testată), `fn_red_mail_f2_token` (tokenul VALID:
+  deținător și parcelă neșterse, 43 de caractere, neexpirat — același predicat ca RPC-urile publice), `fn_red_mail_f2_campuri` (COMUNA = `red_uat.nume`;
+  ZILE = `sesiune_zi1..3` ca `ZZ.LL.AAAA` legate cu „, ” și „ și ”; PROGRAM = `program_zi*` doar dacă e același în toate zilele; TEL = `red_proiecte.contact_telefon`
+  — aceeași sursă ca convocatorul; NULL = nu se poate deduce sigur), `fn_red_mail_f2_completeaza` (orice `{…}` necunoscut = `camp_necunoscut`, câmp fără valoare
+  = `camp_necompletabil`, ambele 22023 — nimic cu acolade nu ajunge în snapshot); subiectul primește câmpurile lotului (fără link); (2) **deținătorul fără token
+  valid e EXCLUS**: inventarul îl arată cu motivul `fara_token`, crearea îl refuză (`destinatari_neeligibili`); un deținător nou are tokenul din momentul adăugării
+  (trigger 20261126a), deci intră în orice lot creat după aceea; (3) **token devenit invalid între aprobare și trimitere** (expirat / deținător șters): la
+  rezervare mesajul trece în `anulat` cu `eroare_cod = token_expirat`, nimic rezervat; la autorizarea apelului `apel_incepe` întoarce `false` și anulează
+  mesajul — niciun apel Gmail, nicio retrimitere (linkul mort nu pleacă); (4) **siguranța tokenului**: apare DOAR în snapshotul mesajului deținătorului lui
+  (`red_mail_mesaje`, SELECT doar owner — același care citește deja `red_detinatori_token` ca admin; nicio politică lărgită, postcondiția o verifică),
+  ecranul îl arată **mascat** (ultimele 6 caractere), jurnalul F2 / evenimentele / mesajele de eroare nu îl conțin; (5) gărzile F2b (doar `TEST-`, căsuța
+  conectată, `extern_permis` fals — `fn_red_mail_f2_poate`) rămân neschimbate (postcondiție pe amprentă). Ecranul: lista câmpurilor cu valorile lotului (din
+  RPC), avertisment când textul n-are `{LINK_RASPUNS}`, crearea oprită la câmp scris greșit, previzualizarea textului final al fiecărui mesaj cu linkul
+  mascat. Urma L14: jurnalul F2 primește `campuri` la fiecare lot creat cu câmpuri — revenirea refuză la orice astfel de rând / mesaj `token_expirat`.
+  Ordinea livrării: **codul întâi** (ecranul vechi ar arunca la motivul nou `fara_token`), apoi migrarea. Probe: `src/redari/mailLinkPersonal.test.js`
+  (paritate JS/SQL pe tabelul comun de cazuri, mascarea, ecranul, dovada pe main), `scripts/pglite/test_redari_mail_link_local.mjs` (20261131h aplicată, apoi
+  20261131i cu pașii L15 v2 ai runnerului: 3 destinatari cu linkul fiecăruia și hash-ul peste textul final, refuzuri, token expirat între aprobare și
+  trimitere, tokenul absent din jurnale, RLS neschimbat, L14, mutanți). Procedura: `MAIL_PROBA_PASI.md` §5a.
 - Rămân deschise, neschimbate: reconcilierea `necunoscut` și decizia owner-ului (`esuat_confirmat`), monitorizarea SENT, opt-out-ul în UI, `extern_permis`
   (§1.3, §1.4, §1.9). Procedura probei pe `TEST-RAZVAN`: `docs/redari/MAIL_PROBA_PASI.md`.
 

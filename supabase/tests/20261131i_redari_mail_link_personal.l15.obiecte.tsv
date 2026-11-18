@@ -1,0 +1,10 @@
+# 20261131i: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+constrangere	constrangere tabel public.red_mail_jurnal_f2.red_mail_jurnal_f2_cod_check	schimbat
+functie	functie public.fn_red_link_raspuns(text)	creat
+functie	functie public.fn_red_mail_apel_incepe(uuid,uuid)	schimbat
+functie	functie public.fn_red_mail_destinatari(uuid,uuid,uuid)	schimbat
+functie	functie public.fn_red_mail_f2_campuri(uuid,uuid)	creat
+functie	functie public.fn_red_mail_f2_completeaza(text,jsonb)	creat
+functie	functie public.fn_red_mail_f2_token(uuid)	creat
+functie	functie public.fn_red_mail_lot_creeaza(uuid,uuid,uuid,uuid[],text,text)	schimbat
+functie	functie public.fn_red_mail_rezerva(uuid)	schimbat

@@ -1,0 +1,10 @@
+[
+  { "text": "Bună ziua, {COMUNA}: zilele {ZILE}, orele {PROGRAM}, tel {TEL}. Răspuns: {LINK_RASPUNS}", "campuri": ["COMUNA", "ZILE", "PROGRAM", "TEL", "LINK_RASPUNS"], "necunoscute": [] },
+  { "text": "fără câmpuri: } și { inversate, apoi {} gol", "campuri": [], "necunoscute": [] },
+  { "text": "{LINK_RASPUNS} de două ori: {LINK_RASPUNS}", "campuri": ["LINK_RASPUNS"], "necunoscute": [] },
+  { "text": "scris greșit {LINK} și {Link_Raspuns} și {link_raspuns}", "campuri": ["LINK", "Link_Raspuns", "link_raspuns"], "necunoscute": ["LINK", "Link_Raspuns", "link_raspuns"] },
+  { "text": "cu spații { LINK_RASPUNS } și {LINK RASPUNS}", "campuri": [" LINK_RASPUNS ", "LINK RASPUNS"], "necunoscute": [" LINK_RASPUNS ", "LINK RASPUNS"] },
+  { "text": "acolade imbricate {{COMUNA}} și {COM{UNA}}", "campuri": ["COMUNA", "UNA"], "necunoscute": ["UNA"] },
+  { "text": "prea lung {AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA} (41) și {BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB} (40)", "campuri": ["BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"], "necunoscute": ["BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"] },
+  { "text": "diacritice {ZILE} și {ȚARĂ}", "campuri": ["ZILE", "ȚARĂ"], "necunoscute": ["ȚARĂ"] }
+]

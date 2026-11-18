@@ -452,7 +452,9 @@ describe('F2b: mutanți pe garda „doar TEST” (fiecare TREBUIE prins) și dov
     let vechi
     try { vechi = Object.fromEntries(['redariMailF2Handler.mjs', 'redariMailF2.mjs'].map(n => [n, execFileSync('git', ['show', `origin/main:${CAI[n]}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })])) } catch { vechi = null }
     if (!vechi) return   // fără origin/main local (CI fără istoric): se sare, nu se simulează
-    const mod = await incarca(null, vechi)
+    // după îmbinarea F2b (#1134) main are deja transportul pornit: dovada era pentru PR-ul care l-a introdus; nu se mai poate reface, se sare
+    if (/TRANSPORT_REAL_ACTIV = true/.test(vechi['redariMailF2.mjs'])) return
+    const mod = await incarca(null, { ...SURSE, ...vechi })   // handlerul vechi își importă vecinii: lipsesc din `vechi`, se iau din sursele curente
     const d = deps()
     const r = await mod.raspundeTrimitere({ jwt: 'f', corp: { lot_id: id } }, d)
     expect(r.status).toBe(423); expect(r.body.cod).toBe('transport_real_oprit'); expect(d.secret).not.toHaveBeenCalled()

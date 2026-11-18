@@ -22,6 +22,11 @@ rămâne fals și în CHECK); fără protecția completă a categoriei pe lanțu
 **Ordinea:** (a) Google Cloud → (b) secretele în Supabase → (c) aplicarea migrării + publicarea funcțiilor → (d) conectarea căsuței (proprietarul, logat
 ca `redari@`) → (e) proba pe `TEST-RAZVAN` cu UN destinatar intern → (f) verificarea livrării → (g) oprirea / revocarea. Fiecare rând bifat în jurnal.
 
+**Completare 19.11.2026 (după primul lot de probă — PR `redari/mail-link-personal`, migrarea `20261131i`, neaplicată):** textul lotului poate avea câmpurile
+`{COMUNA}`, `{ZILE}`, `{PROGRAM}`, `{TEL}` și `{LINK_RASPUNS}` (linkul PERSONAL de răspuns, același ca în codul QR din convocator), completate de **bază, pe
+fiecare mesaj, la crearea lotului**; deținătorii fără link valid sunt excluși. Regulile și pașii: **§5a**. Migrarea `20261131i` se aplică DUPĂ publicarea
+codului (ecranul vechi nu cunoaște motivul `fara_token`) și după `20261131h`.
+
 ---
 
 ## 0. Lista de control (proprietarul + coordonatorul)
@@ -105,6 +110,11 @@ conectare (pasul 4), prin RPC-ul `fn_red_mail_secret_seteaza` (doar `service_rol
    - apoi livrarea prin runner cu plafonul 5000 și amprenta globală (antetul migrării). Postcondițiile verifică: comutatorul tot OFF, căsuța neconectată,
      `doar_proiecte_test = true`, niciun state / secret, triggerul pe `red_proiecte` pus. Fără „da”-ul proprietarului nu se aplică. **Revenirea**
      (`…_ROLLBACK.sql`) e posibilă doar cât trimiterea n-a fost folosită deloc (L14): după prima conectare, întoarcerea = migrare nouă, nu revenire (§8).
+   **Migrarea `20261131i_redari_mail_link_personal`** (câmpurile și linkul personal, §5a; NEAPLICATĂ în PR-ul ei): se aplică DUPĂ `20261131h` și DUPĂ
+   publicarea codului pe Vercel (ecranul vechi nu cunoaște motivul `fara_token`), prin runner cu plafonul 5000 și amprenta globală; lista obiectelor
+   așteptate: `supabase/tests/20261131i_redari_mail_link_personal.l15.obiecte.tsv` (9 obiecte: 4 funcții noi, 4 înlocuite, CHECK-ul jurnalului F2). Postcondițiile
+   verifică: `fn_red_mail_f2_poate` neatinsă (gărzile trimiterii), RLS-ul tokenului și al mesajelor neschimbat, linkul exact ca în convocator. Proba:
+   `scripts/pglite/test_redari_mail_link_local.mjs`. **Revenirea** ei refuză după primul lot creat cu câmpuri (L14).
 2. GitHub → Actions → **„Deploy edge function (manual)”** → `slug` = `redari-mail-oauth`, apoi din nou cu `slug` = `redari-mail-trimite` (de pe
    `main`). Ambele se publică cu `verify_jwt = true` (callback-ul OAuth vine din pagina ERP cu JWT-ul omului, nu direct de la Google).
 3. Identificarea commit-ului publicat (rândul (c) din §0): `git rev-parse origin/main` = SHA-ul din rezumatul workflow-ului; în Supabase, Code:
@@ -147,7 +157,7 @@ altfel aprobarea lotului e refuzată cu `informare_nepublicata`).
 | # | Cine | Ce apasă | Ce trebuie să vadă |
 |---|---|---|---|
 | 1 | admin / owner | pe `TEST-RAZVAN`, deținătorul de test are în contact **e-mailul colegului** (`@gazpet.ro`) | în ✉️ Lot e-mail, la UAT-ul lui, deținătorul apare la „Eligibili” |
-| 2 | owner | UAT → bifează DOAR acel deținător → subiect + text (textul validat de Juridic sau un text de probă marcat „PROBĂ”) → **„Creează ciorna pentru previzualizare”** | lotul apare cu starea `ciorna`, un mesaj `M-nnnnnn`, adresa completă și textul exact |
+| 2 | owner | UAT → bifează DOAR acel deținător → subiect + text (textul validat de Juridic sau un text de probă marcat „PROBĂ”, **cu `{LINK_RASPUNS}` și, la nevoie, celelalte câmpuri din §5a**) → **„Creează ciorna pentru previzualizare”** | lotul apare cu starea `ciorna`, un mesaj `M-nnnnnn`, adresa completă și textul exact, **cu câmpurile completate și linkul personal mascat** (`…/redari/raspuns/••••••XXXXXX`) |
 | 3 | owner | bifa „Aprob explicit acest lot…” → **„Aprobă acest lot”** | starea `aprobat`; butonul „Trimite lotul (până la 20 de mesaje)” devine activ (pe un proiect real ar rămâne „Trimite lotul — transport doar pe proiecte de TEST…”) |
 | 4 | owner | **„Trimite lotul”** → confirmare | mesajul „Rulat: trimise 1, eșuate sigur 0, necunoscute 0, rezervate 1”; mesajul lotului trece în `trimis`. „trimise 1” apare **doar** dacă baza a confirmat scrierea rezultatului; altfel „neconfirmate 1 (starea în server: …)” — §9 |
 | 5 | coordonator | SQL de mai jos (A1, A2) | A1: un rând `trimis`, `gmail_id` și `thread_id` nenule, `trimis_la` = acum; A2: jurnalul `rezervat → apel_inceput → trimis` |
@@ -169,6 +179,44 @@ Alte rezultate posibile la pasul 4 (toate FĂRĂ reapăsare):
   se reconectează (§4) și se pornește din nou;
 - `Refuzat: informare_nepublicata` / `lot_neaprobat` / `aprobare_expirata` / `lot_integritate` → starea lotului; `lot_integritate` = OPRIRE, lot nou;
 - „necunoscute 1” → §9.
+
+## 5a. Câmpurile textului și linkul personal (migrarea `20261131i`, 19.11.2026)
+
+**Ce scrie owner-ul în text** (exact așa, cu acolade, majuscule, fără spații înăuntru; lista e afișată și în ecran, lângă caseta textului, cu valorile curente):
+
+| Câmp | Ce pune serverul | De unde (aceeași sursă ca convocatorul) |
+|---|---|---|
+| `{LINK_RASPUNS}` | linkul PERSONAL de răspuns al destinatarului: `https://redari.gazpet.ro/redari/raspuns/<tokenul lui>` — același ca în codul QR din scrisoare; **diferit pe fiecare mesaj** | `red_detinatori_token` (tokenul creat automat la adăugarea deținătorului) |
+| `{COMUNA}` | numele UAT-ului | `red_uat.nume` |
+| `{ZILE}` | zilele de sesiune, `ZZ.LL.AAAA`, legate cu „, ” și „ și ” (ex. `24.11.2026 și 25.11.2026`) | `red_uat.sesiune_zi1..3` |
+| `{PROGRAM}` | programul sesiunii, **doar dacă e același în toate zilele** UAT-ului; altfel „nu se poate completa” | `red_uat.program_zi1..3` |
+| `{TEL}` | telefonul de contact al proiectului | `red_proiecte.contact_telefon` |
+
+Regulile (impuse în bază, nu doar în ecran):
+- **completarea se face la crearea lotului, în snapshotul fiecărui mesaj, înaintea hash-ului**: ce aprobă owner-ul (hash-ul lotului) este exact textul fiecărui
+  destinatar, iar funcția edge trimite snapshotul neschimbat (ca până acum). Previzualizarea arată textul final al fiecărui mesaj; **linkul apare mascat**
+  (ultimele 6 caractere) — tokenul e secretul proprietarului de teren; nu apare în jurnale, evenimente, erori sau exporturi;
+- **un câmp scris greșit** (`{LINK}`, `{link_raspuns}`, `{ LINK_RASPUNS }`) = lotul **nu se creează** (`camp_necunoscut`); ecranul oprește butonul înainte și spune
+  care e câmpul. Un câmp care nu se poate completa din datele UAT-ului / proiectului (de ex. `{ZILE}` fără zile de sesiune) = refuz (`camp_necompletabil`);
+  `{LINK_RASPUNS}` în subiect = refuz. Un text FĂRĂ `{LINK_RASPUNS}` e permis, dar ecranul avertizează (proprietarii n-ar primi linkul lor);
+- **deținătorul fără link valid** (token lipsă, expirat sau deținător / parcelă ștearsă) **nu intră în lot**: inventarul îl arată la „Fără link de răspuns valid
+  (token lipsă sau expirat)” (`fara_token`), iar crearea cu el bifat e refuzată (`destinatari_neeligibili`). Un deținător adăugat azi are tokenul din momentul
+  adăugării (expirarea = ultima zi de sesiune a UAT-ului + 30 de zile), deci intră în orice lot creat după aceea;
+- **token devenit invalid între aprobare și trimitere** (zilele de sesiune s-au mutat în trecut, deținătorul a fost șters): la „Trimite lotul” mesajul lui trece
+  în `anulat` cu `token_expirat` — **nu se trimite, nu se retrimite**; apare în lot ca `anulat (token_expirat)`. Dacă trebuie totuși anunțat, se corectează
+  datele (sesiunea / deținătorul) și se face un lot nou.
+
+**Verificarea coordonatorului (doar citire, SQL)** după pasul 2 din §5, pe lotul creat:
+```sql
+-- textul fiecărui mesaj conține linkul PROPRIU (tokenul deținătorului lui), fără acolade rămase; hash-ul acoperă textul final
+SELECT m.nr_document, m.detinator_id, position('{' in m.corp_text_final) = 0 AS fara_acolade,
+       m.corp_text_final LIKE '%' || public.fn_red_link_raspuns(t.token_raspuns) || '%' AS are_linkul_lui,
+       m.mesaj_sha256 = public.fn_red_mail_f2_mesaj_hash(m) AS hash_ok
+  FROM public.red_mail_mesaje m JOIN public.red_detinatori_token t ON t.detinator_id = m.detinator_id WHERE m.lot_id = '<uuid lot>' ORDER BY m.id;
+-- jurnalul F2 are și `campuri` (lotul a fost creat cu completarea)
+SELECT cod, creat_la FROM public.red_mail_jurnal_f2 WHERE lot_id = '<uuid lot>' ORDER BY creat_la;
+```
+Ieșirea NU se lipește în chat / jurnal (conține linkurile personale); se notează doar „fara_acolade / are_linkul_lui / hash_ok = true pe N rânduri”.
 
 ## 6. Verificarea livrării (proprietarul + coordonatorul)
 
@@ -211,6 +259,8 @@ de transport) și nu șterge nimic: după prima conectare nu mai există „reve
 | `salvare_neconfirmata` / mesaj „răspunsul s-a pierdut” | serverul a primit accesul dar nu a confirmat salvarea, ori răspunsul nu a ajuns în browser | **nu se știe** dacă e conectată și dacă revocarea a reușit: Recitește în Lot e-mail; dacă apare conectată → se continuă; dacă nu → §7 „Rezervă” (contul Google) și apoi „Conectează” din nou |
 | `state_invalid` | pagina de întoarcere a fost reîncărcată sau au trecut peste 10 minute | nimic salvat, codul nu a fost schimbat la Google; se reia §4 pasul 2 (buton nou „Conectează”) |
 | `transport_real_doar_test` | lotul nu e pe un proiect `TEST-` | se verifică lotul; categoria proiectului e păzită de bază (§0.1) |
+| „Câmp necunoscut în text” / `camp_necunoscut` / `camp_necompletabil` la creare | un câmp scris greșit sau fără valoare în datele UAT-ului (§5a) | se corectează textul sau datele UAT-ului; nimic creat |
+| mesaj `anulat (token_expirat)` după „Trimite lotul” | linkul personal al destinatarului nu mai era valid la trimitere (§5a) | normal, nu se retrimite; se corectează datele și se face un lot nou dacă e cazul |
 | „categoria codului (TEST- / real) nu se schimba…” la editarea unui proiect | cineva a încercat o redenumire TEST- ↔ real cât proiectul are loturi de e-mail / AWB-uri FAN în lucru | normal: regula din §0.1; se încheie loturile întâi, apoi (doar owner-ul) redenumește |
 | `transport_neconfigurat` / `client_neconfigurat` | lipsește un secret din §2 (numele exact) | §2 |
 | mail în Spam / `dkim=fail` | DKIM / DMARC nepornite pentru `gazpet.ro` | se notează; precondiție pentru proiectele reale (planul §0.4), nu pentru proba internă |
