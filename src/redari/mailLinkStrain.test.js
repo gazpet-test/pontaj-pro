@@ -67,15 +67,18 @@ describe('o singură definiție: tabelele și expresiile JS = cele din migrare',
     expect(jsonDin('entitati')).toEqual({ ...ENTITATI_LINK })
   })
   it('expresiile %XX și entități, limita de treceri, calea, prefixul linkului', () => {
-    expect(MIG).toContain("regexp_split_to_array(v,'%[0-9A-Fa-f]{2}')"); expect(MIG).toContain("regexp_matches(v,'%[0-9A-Fa-f]{2}','g')")
+    // r4: expresiile stau o singură dată în constantele rx_pct / rx_ent ale formei de căutare, folosite și la despărțire, și la potriviri
+    expect(MIG).toContain(" rx_pct constant text:='%[0-9A-Fa-f]{2}';")
+    expect(MIG).toContain('regexp_split_to_array(v,rx_pct)'); expect(MIG).toContain("regexp_matches(v,rx_pct,'g')")
     const ent = '&#[0-9]{1,7};?|&#[xX][0-9A-Fa-f]{1,6};?|&[A-Za-z][A-Za-z0-9]{1,31};'
-    expect(MIG).toContain(`regexp_split_to_array(v,'${ent}')`); expect(MIG).toContain(`regexp_matches(v,'${ent}','g')`)
+    expect(MIG).toContain(` rx_ent constant text:='${ent}';`)
+    expect(MIG).toContain('regexp_split_to_array(v,rx_ent)'); expect(MIG).toContain("regexp_matches(v,rx_ent,'g')")
     const sursa = citeste('supabase/functions/_shared/redariMailF2.mjs')
     expect(sursa).toContain(`const RX_ENTITATE = /${ent}/g`); expect(sursa).toContain('const RX_PROCENT = /%[0-9A-Fa-f]{2}/g')
     expect(MIG.split('FOR k IN 1..12 LOOP').length - 1).toBe(2); expect(TRECERI_LINK).toBe(12)
-    expect(MIG).toContain("position('redari/raspuns' IN cale)>0"); expect(sursa).toContain("c.includes('redari/raspuns')")
+    expect(MIG).toContain("position('redari/raspuns' IN pc)>0"); expect(sursa).toContain("c.includes('redari/raspuns')")
     expect(MIG).toContain("regexp_matches(v,'[A-Za-z0-9_-]{43,}','g')"); expect(sursa).toContain('f.matchAll(/[A-Za-z0-9_-]{43,}/g)')
-    expect(MIG).toContain('v:=normalize(v,NFKC);'); expect(sursa).toContain(".normalize('NFKC')")
+    expect(MIG).toContain('v:=normalize(p_text,NFKC);'); expect(sursa).toContain(".normalize('NFKC')")
     for (const t of [TAB.tokeni.A, TAB.tokeni.B]) expect(PREFIX_LINK_RASPUNS + t).toBe(linkRaspuns(t))
   })
 })

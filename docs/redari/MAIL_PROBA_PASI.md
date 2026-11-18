@@ -112,9 +112,14 @@ conectare (pasul 4), prin RPC-ul `fn_red_mail_secret_seteaza` (doar `service_rol
      (`…_ROLLBACK.sql`) e posibilă doar cât trimiterea n-a fost folosită deloc (L14): după prima conectare, întoarcerea = migrare nouă, nu revenire (§8).
    **Migrarea `20261131i_redari_mail_link_personal`** (câmpurile și linkul personal, §5a; NEAPLICATĂ în PR-ul ei): se aplică DUPĂ `20261131h` și DUPĂ
    publicarea codului pe Vercel (ecranul vechi nu cunoaște motivul `fara_token`), prin runner cu plafonul 5000 și amprenta globală; lista obiectelor
-   așteptate: `supabase/tests/20261131i_redari_mail_link_personal.l15.obiecte.tsv` (10 obiecte: 5 funcții noi, 4 înlocuite, CHECK-ul jurnalului F2). Postcondițiile
+   așteptate: `supabase/tests/20261131i_redari_mail_link_personal.l15.obiecte.tsv` (11 obiecte: 6 funcții noi, 4 înlocuite, CHECK-ul jurnalului F2). Postcondițiile
    verifică: `fn_red_mail_f2_poate` neatinsă (gărzile trimiterii), RLS-ul tokenului și al mesajelor neschimbat, linkul exact ca în convocator. Proba:
    `scripts/pglite/test_redari_mail_link_local.mjs`. **Revenirea** ei refuză după primul lot creat cu câmpuri (L14).
+   **Costul pe clonă (runda 4, ÎNAINTE de îmbinare)**: după aplicarea pe clonă, `psql -X -v ON_ERROR_STOP=1 -v clona=da -f supabase/tests/20261131i_redari_mail_link_cost.sql`
+   (implicit 300 de destinatari × 19.000 de caractere, 20.000 de tokenuri sintetice în plus față de cele ale clonei, `statement_timeout` 8 s ca PostgREST,
+   pragul 2000 ms; parametrii `-v destinatari= caractere= tokenuri= timeout= prag_ms=`) — totul într-o tranzacție anulată la final, date sintetice; raportul
+   `COST 20261131i: … rpc_ms … lock_setari_ms … lock_numerotare_ms … verdict=OK`. Cu două sesiuni (cât stă blocată o altă sesiune pe setări / numerotarea M):
+   `COST_CLONA=da bash supabase/tests/20261131i_redari_mail_link_cost_concurenta.sh` → `REZULTAT: OK`. Dacă verdictul e `DEPASIT`, nu se îmbină.
 2. GitHub → Actions → **„Deploy edge function (manual)”** → `slug` = `redari-mail-oauth`, apoi din nou cu `slug` = `redari-mail-trimite` (de pe
    `main`). Ambele se publică cu `verify_jwt = true` (callback-ul OAuth vine din pagina ERP cu JWT-ul omului, nu direct de la Google).
 3. Identificarea commit-ului publicat (rândul (c) din §0): `git rev-parse origin/main` = SHA-ul din rezumatul workflow-ului; în Supabase, Code:
@@ -204,6 +209,8 @@ Regulile (impuse în bază, nu doar în ecran):
   la TOȚI destinatarii lotului. Contează orice formă: cu `%XX` (de ex. `%54` în loc de `T`), dublu codificat, cu entități HTML, cu majuscule, rupt de
   spații / rânduri noi / caractere invizibile; și **adresa formularului fără token** (`…/redari/raspuns/`) e refuzată. Textul obișnuit cu procente („20%”) și
   linkurile către alte site-uri (chiar codificate, `%20`) trec. Linkul personal intră în mesaj DOAR prin `{LINK_RASPUNS}`; ecranul oprește butonul și explică;
+- **lungimea**: textul are cel mult 19.000 de caractere și subiectul cel mult 400, numărate cu tot cu spațiile (ecranul nu lasă mai mult); peste = refuz
+  (`text_prea_lung`), nimic creat;
 - **deținătorul fără link valid** (token lipsă, expirat sau deținător / parcelă ștearsă) **nu intră în lot**: inventarul îl arată la „Fără link de răspuns valid
   (token lipsă sau expirat)” (`fara_token`), iar crearea cu el bifat e refuzată (`destinatari_neeligibili`). Un deținător adăugat azi are tokenul din momentul
   adăugării (expirarea = ultima zi de sesiune a UAT-ului + 30 de zile), deci intră în orice lot creat după aceea;
@@ -267,6 +274,7 @@ de transport) și nu șterge nimic: după prima conectare nu mai există „reve
 | `transport_real_doar_test` | lotul nu e pe un proiect `TEST-` | se verifică lotul; categoria proiectului e păzită de bază (§0.1) |
 | „Câmp necunoscut în text” / „Acolade rămase” / `camp_necunoscut` / `camp_necompletabil` la creare | un câmp scris greșit, acolade rămase sau un câmp fără valoare în datele UAT-ului (§5a) | se corectează textul sau datele UAT-ului; nimic creat |
 | „…conține un link personal de răspuns copiat” / `link_literal` la creare | linkul unui proprietar a fost lipit în text sau subiect (§5a) | se scoate linkul și se lasă `{LINK_RASPUNS}`; nimic creat |
+| `text_prea_lung` la creare | textul are peste 19.000 de caractere sau subiectul peste 400 (cu spații cu tot, §5a) | se scurtează; nimic creat |
 | mesaj `anulat (token_expirat)` după „Trimite lotul” | linkul personal al destinatarului nu mai era valid la trimitere (§5a) | normal, nu se retrimite; se corectează datele și se face un lot nou dacă e cazul |
 | „categoria codului (TEST- / real) nu se schimba…” la editarea unui proiect | cineva a încercat o redenumire TEST- ↔ real cât proiectul are loturi de e-mail / AWB-uri FAN în lucru | normal: regula din §0.1; se încheie loturile întâi, apoi (doar owner-ul) redenumește |
 | `transport_neconfigurat` / `client_neconfigurat` | lipsește un secret din §2 (numele exact) | §2 |

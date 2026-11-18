@@ -55,6 +55,14 @@ litere); tokenul rămâne sensibil la majuscule. Refuzul oricărui `%XX` NU a fo
 în orice formă a fost ales (singura formă permisă e `{LINK_RASPUNS}`). Tabelul comun `link_strain_cazuri.json` (49 de cazuri, valori scrise de mână) e
 rulat identic în JS și în PGlite; tabelele de caractere sunt citite de test din migrare; mutanți pe normalizare (fără decodare, fără entități, fără
 invizibile, fără NFKC, un singur pas, fără ferestre, fără litere mici) — fiecare pică, și cu postcondiția scoasă.
+**Runda 4 (Jakarinos #1138, GO cu condiții pe 84e53dcd; P2 costul):** detectorul pe ferestre de 43 de caractere creștea aproape pătratic (substr pe text
+numără caracterele de la început) și rula pe fiecare din cele 300 de mesaje, sub lock-ul global `red_mail_setari` și numerotarea M. Aceeași regulă (cele 49 de
+cazuri comune identice, SQL și JS), calculată LINIAR: forma de căutare în `fn_red_mail_f2_link_forma` (pură; decodarea printr-o singură agregare; ferestrele
+distincte pe octeți), tokenurile prin indexul unic (`= ANY(ferestre)`); crearea lotului calculează forma O DATĂ (textul cu câmpurile lotului și „#” în locul
+linkului), ÎNAINTEA lock-ului global; sub lock rămân căutarea tokenurilor ei (o dată) și, pe fiecare mesaj, o comparație liniară (mesajul cu linkul lui → „#” =
+forma comună; altfel detectorul complet). Plafon explicit pe lungimea brută: text > 19.000 / subiect > 400 = `text_prea_lung`. Măsurat în PGlite (300 ×
+19.000, 20.000 de tokenuri sintetice): înainte RPC 267 s / lock 267 s, după RPC ~2,8 s / lock ~1,3 s; proba de timp (pragurile PGlite 10 s / 6 s) prinde
+mutanții „costul r3” și „fără index”. Pe clonă: `supabase/tests/20261131i_redari_mail_link_cost.sql` (+ `_cost_concurenta.sh`, două sesiuni) — `MAIL_PROBA_PASI.md` §3.
 
 # Runda 2 — PR #1000, 05.11.2026
 

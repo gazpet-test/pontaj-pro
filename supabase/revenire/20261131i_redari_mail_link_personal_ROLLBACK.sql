@@ -3,7 +3,7 @@
 --   * fn_red_mail_lot_creeaza, fn_red_mail_destinatari = corpurile EXACTE din 20261131a (amprentele a4363270… / 4db265cc…); fn_red_mail_rezerva,
 --     fn_red_mail_apel_incepe = corpurile EXACTE din 20261131h (d779e03d… / 9e8dbac7…), aceleași proprietăți și ACELAȘI ACL (CREATE OR REPLACE nu schimbă
 --     drepturile; postcondiția le compară cu cele de dinainte de revenire);
---   * fn_red_link_raspuns, fn_red_mail_f2_token, fn_red_mail_f2_campuri, fn_red_mail_f2_completeaza, fn_red_mail_f2_link_strain scoase;
+--   * fn_red_link_raspuns, fn_red_mail_f2_token, fn_red_mail_f2_campuri, fn_red_mail_f2_completeaza, fn_red_mail_f2_link_forma (r4), fn_red_mail_f2_link_strain scoase;
 --   * red_mail_jurnal_f2: CHECK-ul codului fără `campuri` (lista din 20261131a).
 -- CONTRACTUL L14 (textual, tiparul 20261131h): revenirea REFUZĂ la ORICE istoric produs după aplicare: un rând `campuri` în jurnalul F2 (append-only —
 --   fiecare lot creat cu câmpuri scrie unul), un eveniment `f2` / `f2_campuri`, un mesaj cu eroare_cod `token_expirat`. Nimic nu se șterge din istoric. Deci
@@ -71,9 +71,10 @@ BEGIN
         ('public.fn_red_mail_f2_token(uuid)', '604a8adddf23112c5c0f70c89cff0244', 'sql', false, 's', 'text'),
         ('public.fn_red_mail_f2_campuri(uuid,uuid)', '503dc3c94d4e255ac5e827658b38a0ff', 'plpgsql', true, 's', 'jsonb'),
         ('public.fn_red_mail_f2_completeaza(text,jsonb)', '61331ec6fc15d05e02517825877084d6', 'plpgsql', false, 'i', 'text'),
-        ('public.fn_red_mail_f2_link_strain(text,text)', 'fee77863c42c77d1d363eae4145ebf2d', 'plpgsql', false, 's', 'boolean'),
+        ('public.fn_red_mail_f2_link_forma(text)', '2edc6ff0b6dd289c61b2ada16cdba025', 'plpgsql', false, 's', 'record'),
+        ('public.fn_red_mail_f2_link_strain(text,text)', 'bc86bcb99b37756246c84e41d4308e05', 'plpgsql', false, 's', 'boolean'),
         ('public.fn_red_mail_destinatari(uuid,uuid,uuid)', 'b1fbfaf746f1e05fd88f9204bfbbea68', 'plpgsql', true, 's', 'record'),
-        ('public.fn_red_mail_lot_creeaza(uuid,uuid,uuid,uuid[],text,text)', 'bff52e712db5084b48eefd3824ca7283', 'plpgsql', true, 'v', 'uuid'),
+        ('public.fn_red_mail_lot_creeaza(uuid,uuid,uuid,uuid[],text,text)', '4b4bb5c43d83d0a3ea8ee41abecff956', 'plpgsql', true, 'v', 'uuid'),
         ('public.fn_red_mail_rezerva(uuid)', 'dbd0cbf99e8e2e0715441333ad17664c', 'plpgsql', true, 'v', 'public.red_mail_mesaje'),
         ('public.fn_red_mail_apel_incepe(uuid,uuid)', '9dc0d38f7ad39238618463e0fa7892b6', 'plpgsql', true, 'v', 'boolean')
         -- <<< AMPRENTE-NOI 20261131i
@@ -92,10 +93,10 @@ BEGIN
        OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_red_mail_f2_campuri(uuid,uuid)')
                    AND coalesce(p.proacl, acldefault('f', p.proowner))::text IS DISTINCT FROM '{postgres=X/postgres,authenticated=X/postgres}')
        OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid IN (to_regprocedure('public.fn_red_link_raspuns(text)'), to_regprocedure('public.fn_red_mail_f2_token(uuid)'), to_regprocedure('public.fn_red_mail_f2_completeaza(text,jsonb)'),
-                                                          to_regprocedure('public.fn_red_mail_f2_link_strain(text,text)'))
+                                                          to_regprocedure('public.fn_red_mail_f2_link_forma(text)'), to_regprocedure('public.fn_red_mail_f2_link_strain(text,text)'))
                    AND coalesce(p.proacl, acldefault('f', p.proowner))::text IS DISTINCT FROM '{postgres=X/postgres}')
        OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-             AND p.proname IN ('fn_red_link_raspuns', 'fn_red_mail_f2_token', 'fn_red_mail_f2_campuri', 'fn_red_mail_f2_completeaza', 'fn_red_mail_f2_link_strain', 'fn_red_mail_destinatari', 'fn_red_mail_lot_creeaza', 'fn_red_mail_rezerva', 'fn_red_mail_apel_incepe')) <> 9 THEN
+             AND p.proname IN ('fn_red_link_raspuns', 'fn_red_mail_f2_token', 'fn_red_mail_f2_campuri', 'fn_red_mail_f2_completeaza', 'fn_red_mail_f2_link_forma', 'fn_red_mail_f2_link_strain', 'fn_red_mail_destinatari', 'fn_red_mail_lot_creeaza', 'fn_red_mail_rezerva', 'fn_red_mail_apel_incepe')) <> 10 THEN
       RAISE EXCEPTION '20261131i revenire: starea nu e cea din 20261131i (pasul %, functii: %)', v_pas, coalesce(v_rau, 'drepturi / variante');
     END IF;
     -- CHECK-ul jurnalului: exact cel pus de 20261131i
@@ -233,6 +234,7 @@ COMMENT ON FUNCTION public.fn_red_mail_apel_incepe(uuid,uuid) IS 'Redări e-mail
 DROP FUNCTION public.fn_red_mail_f2_campuri(uuid,uuid);
 DROP FUNCTION public.fn_red_mail_f2_completeaza(text,jsonb);
 DROP FUNCTION public.fn_red_mail_f2_link_strain(text,text);
+DROP FUNCTION public.fn_red_mail_f2_link_forma(text);
 DROP FUNCTION public.fn_red_mail_f2_token(uuid);
 DROP FUNCTION public.fn_red_link_raspuns(text);
 
@@ -270,7 +272,7 @@ BEGIN
     RAISE EXCEPTION '20261131i revenire: postconditie: drepturile functiilor repuse difera';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-              AND p.proname IN ('fn_red_link_raspuns', 'fn_red_mail_f2_token', 'fn_red_mail_f2_campuri', 'fn_red_mail_f2_completeaza', 'fn_red_mail_f2_link_strain')) THEN
+              AND p.proname IN ('fn_red_link_raspuns', 'fn_red_mail_f2_token', 'fn_red_mail_f2_campuri', 'fn_red_mail_f2_completeaza', 'fn_red_mail_f2_link_forma', 'fn_red_mail_f2_link_strain')) THEN
     RAISE EXCEPTION '20261131i revenire: postconditie: functii ramase';
   END IF;
   SELECT pg_get_constraintdef(c.oid) INTO v_def FROM pg_constraint c WHERE c.conrelid = 'public.red_mail_jurnal_f2'::regclass AND c.conname = 'red_mail_jurnal_f2_cod_check';

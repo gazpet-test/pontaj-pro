@@ -113,6 +113,7 @@ const CAP_NOI = [['public.fn_red_link_raspuns(text)', 'CREATE FUNCTION public.fn
   ['public.fn_red_mail_f2_token(uuid)', 'CREATE FUNCTION public.fn_red_mail_f2_token('],
   ['public.fn_red_mail_f2_campuri(uuid,uuid)', 'CREATE FUNCTION public.fn_red_mail_f2_campuri('],
   ['public.fn_red_mail_f2_completeaza(text,jsonb)', 'CREATE FUNCTION public.fn_red_mail_f2_completeaza('],
+  ['public.fn_red_mail_f2_link_forma(text)', 'CREATE FUNCTION public.fn_red_mail_f2_link_forma('],
   ['public.fn_red_mail_f2_link_strain(text,text)', 'CREATE FUNCTION public.fn_red_mail_f2_link_strain('],
   ['public.fn_red_mail_destinatari(uuid,uuid,uuid)', 'CREATE OR REPLACE FUNCTION public.fn_red_mail_destinatari('],
   ['public.fn_red_mail_lot_creeaza(uuid,uuid,uuid,uuid[],text,text)', 'CREATE OR REPLACE FUNCTION public.fn_red_mail_lot_creeaza('],
@@ -241,8 +242,8 @@ async function ca(db, rol, uid, sql) {
   catch (e) { await db.exec('ROLLBACK'); ERORI.push(e.message); return { code: e.code, message: e.message } }
 }
 const setari = async db => (await db.query(`SELECT trimitere_oprita, trimitere_conectata_la, versiune FROM public.red_mail_setari WHERE id = 1`)).rows[0]
-const NOI = `('fn_red_link_raspuns', 'fn_red_mail_f2_token', 'fn_red_mail_f2_campuri', 'fn_red_mail_f2_completeaza', 'fn_red_mail_f2_link_strain')`
-const NR_NOI = 5
+const NOI = `('fn_red_link_raspuns', 'fn_red_mail_f2_token', 'fn_red_mail_f2_campuri', 'fn_red_mail_f2_completeaza', 'fn_red_mail_f2_link_forma', 'fn_red_mail_f2_link_strain')`
+const NR_NOI = 6
 const nrNoi = async db => (await db.query(`SELECT count(*)::int AS n FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ${NOI}`)).rows[0].n
 const amprentaFn = async (db, nume) => (await db.query(`SELECT md5(replace(p.prosrc, chr(13), '')) AS m FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = $1`, [nume])).rows[0]?.m ?? null
 const checkJurnal = async db => (await db.query(`SELECT pg_get_constraintdef(c.oid) AS d FROM pg_constraint c WHERE c.conrelid = 'public.red_mail_jurnal_f2'::regclass AND c.conname = 'red_mail_jurnal_f2_cod_check'`)).rows[0]?.d
@@ -362,6 +363,13 @@ async function verifica(db) {
     asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S {COMUNA}', 'text {LINK_RASPUNS}'), '22023', `C r3 mesajul final, subiect (${ce})`, /link_strain/)
   }
   await db.exec(`UPDATE public.red_uat SET nume = ${lit(NUME_A)} WHERE id = '${UAT.A}'`)
+  // r4: (1) mesajul care NU e forma comună cu linkul lui trece prin detectorul complet — un semn combinant lipit de {LINK_RASPUNS} se compune (NFC) cu ultima
+  //     literă a tokenului lui D1 („a” + U+0301 = „á”): linkul lui D1 nu mai e întreg, calea rămasă cu alt token = link_strain (la D2, „b” + U+0301 nu se
+  //     compune: linkul rămâne întreg, mesajul = forma comună); (2) plafonul pe lungimea BRUTĂ: textul > 19.000 / subiectul > 400 (și din spații) = text_prea_lung
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1, D.D2], 'S', 'Răspuns: {LINK_RASPUNS}' + String.fromCharCode(0x301) + ' mulțumim'), '22023', 'C r4 linkul alipit de un semn combinant (mesajul ≠ forma comună)', /link_strain/)
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1], 'S', 'x {LINK_RASPUNS}' + ' '.repeat(19000)), '22023', 'C r4 textul peste 19.000 de caractere brute (spații)', /text_prea_lung/)
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1], 'S' + ' '.repeat(400), 'x {LINK_RASPUNS}'), '22023', 'C r4 subiectul peste 400 de caractere brute', /text_prea_lung/)
+  asteptCod(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D1], 'S', 'x'.repeat(19001)), '22023', 'C r4 textul de 19.001 caractere', /text_prea_lung/)
   if (await nrLoturi(db) !== n0) ab.push('C un refuz a creat lotul')
   // un text fără niciun câmp rămâne permis (ca azi); un text fără {LINK_RASPUNS} e avertisment în ecran, nu refuz în bază
   const c1 = asteptOk(await creeaza(db, U.OWNER, LOT.C, P.TEST, UAT.A, [D.D9], 'Fără câmpuri', 'Text simplu.'), 'C lot fără câmpuri')
@@ -392,6 +400,15 @@ async function verifica(db) {
   if (jc !== 1) ab.push('B jurnalul F2 fără „campuri”: ' + jc)
   // idempotența pe aceeași intenție (același hash al cererii) → același lot, fără dublare
   if (asteptOk(await creeaza(db, U.OWNER, LOT.A, P.TEST, UAT.A, [D.D1, D.D2, D.D3, D.D10], SUBIECT, TEXT), 'B reluarea aceleiași intenții') !== LOT.A || (await mesaje(db, LOT.A)).length !== 4) ab.push('B reluarea a dublat')
+  // r4: forma comună se calculează ÎNAINTEA lock-ului și a verificării idempotenței — un refuz al ei (aici {ZILE} necompletabil: UAT-ul fără zile) nu are
+  //     voie să schimbe reluarea: aceeași intenție întoarce tot lotul existent (L04 / L05), nimic dublat
+  {
+    const z = (await db.query(`SELECT sesiune_zi1::text AS a, sesiune_zi2::text AS b, sesiune_zi3::text AS c FROM public.red_uat WHERE id = $1`, [UAT.A])).rows[0]
+    await db.exec(`UPDATE public.red_uat SET sesiune_zi3 = NULL, sesiune_zi2 = NULL, sesiune_zi1 = NULL WHERE id = '${UAT.A}'`)
+    const rr = await creeaza(db, U.OWNER, LOT.A, P.TEST, UAT.A, [D.D1, D.D2, D.D3, D.D10], SUBIECT, TEXT)
+    if (rr.code || rr.rows[0].r !== LOT.A || (await mesaje(db, LOT.A)).length !== 4) ab.push('B r4 reluarea cu forma comună refuzată: ' + (rr.code ? rr.code + ' ' + rr.message : rr.rows[0].r))
+    await db.query(`UPDATE public.red_uat SET sesiune_zi1 = $1::date, sesiune_zi2 = $2::date, sesiune_zi3 = $3::date WHERE id = $4`, [z.a, z.b, z.c, UAT.A])
+  }
   // G. RLS neschimbat: editorul nu vede mesajele (snapshotul cu link) și nici tokenul altfel decât azi (admin / editor pot, ca în 20261126a); anon nimic
   const g1 = await ca(db, 'authenticated', U.EDITOR, `SELECT count(*)::int AS r FROM public.red_mail_mesaje`)
   if (g1.code || g1.rows[0].r !== 0) ab.push('G editorul vede mesajele: ' + JSON.stringify(g1))
@@ -465,9 +482,84 @@ async function verifica(db) {
   return ab
 }
 
+// ── 7. COSTUL (r4, Jakarinos #1138 r3 P2): RPC-ul complet pe lotul mare, prin corpul supabase/tests/20261131i_redari_mail_link_cost.sql (același ca pe
+//    clonă), într-un worker_thread OPRIT la limita de timp (PGlite nu are statement_timeout). Baza = migrarea dată, aplicată ca runnerul, apoi dumpDataDir.
+//    --doar-cost: doar secțiunile 0 / 0b + 7; --cost-mig <fișier>: măsoară alt text de migrare (de ex. head-ul r3, pentru „înainte”), fără mutanți.
+const F_COST = 'supabase/tests/20261131i_redari_mail_link_cost.sql'
+const COST_SQL = citeste(F_COST)
+const COST_CORP = COST_SQL.slice(COST_SQL.indexOf('-- >>> COST-CORP 20261131i'), COST_SQL.indexOf('-- <<< COST-CORP 20261131i'))
+const COST_PARAM = { clona: 'da', destinatari: '300', caractere: '19000', tokenuri: process.env.COST_TOKENURI || '20000', timeout: '0', prag_ms: '0' }
+// pragurile pe PGlite (WASM, un fir; mult mai lent decât PostgreSQL nativ): RPC-ul complet și lock-ul global ținut; peste LIMITA_COST_MS lucrătorul e oprit
+const argv = n => { const i = process.argv.indexOf(n); return i > 0 ? process.argv[i + 1] : null }
+// (r4 pe serverul de lucru: RPC ~2,8 s, lock ~1,3 s; r3 = 267 s — pragurile lasă de ~3,5–4,5 ori loc pentru o mașină mai lentă)
+const PRAG_COST_RPC_MS = 10000, PRAG_COST_LOCK_MS = 6000, LIMITA_COST_MS = Number(argv('--cost-limita') || 30000)
+if (argv('--cost-tokenuri')) COST_PARAM.tokenuri = argv('--cost-tokenuri')
+COST_PARAM.prag_ms = String(PRAG_COST_RPC_MS)
+async function masoaraCost(textMig, { limita = LIMITA_COST_MS, param = COST_PARAM } = {}) {
+  const db = await bazaNoua()
+  try { await aplicaMig(db, textMig) } catch (e) { await db.close(); return { eroare: 'aplicare: ' + e.message } }
+  const dump = await (await db.dumpDataDir('none')).arrayBuffer()
+  await db.close()
+  const { Worker } = await import('node:worker_threads')
+  const w = new Worker(new URL('./redari_mail_link_cost_worker.mjs', import.meta.url), { workerData: { dump, corp: COST_CORP, parametri: param }, transferList: [dump] })
+  const t0 = Date.now()
+  return await new Promise(res => {
+    const oprit = setTimeout(() => { w.terminate(); res({ depasit: true, ms: Date.now() - t0 }) }, limita)
+    w.once('message', m => { clearTimeout(oprit); w.terminate(); res(m) })
+    w.once('error', e => { clearTimeout(oprit); res({ eroare: e.message }) })
+  })
+}
+const citesteCost = r => {
+  const n = (r.note || []).find(x => x.startsWith('COST 20261131i:'))
+  if (!n) return null
+  return Object.fromEntries([...n.matchAll(/(\w+)=([^\s]+)/g)].map(m => [m[1], /^\d+$/.test(m[2]) ? Number(m[2]) : m[2]]))
+}
+async function sectiuneaCost() {
+  const alt = argv('--cost-mig')
+  console.log(`7. COSTUL: ${COST_PARAM.destinatari} destinatari × ${COST_PARAM.caractere} caractere, ${COST_PARAM.tokenuri} tokenuri sintetice existente (+ fixture-ul); ` +
+    `praguri PGlite: RPC ≤ ${PRAG_COST_RPC_MS} ms, lock-ul global ≤ ${PRAG_COST_LOCK_MS} ms; lucrătorul oprit la ${LIMITA_COST_MS} ms${alt ? ' — MIGRAREA ' + alt : ''}`)
+  const r = await masoaraCost(alt ? readFileSync(alt, 'utf8').replace(/\r/g, '') : MIG)
+  const c = citesteCost(r)
+  console.log('     ' + (c ? JSON.stringify(c) : JSON.stringify(r).slice(0, 300)))
+  ok(c && c.verdict !== 'GRESIT' && c.mesaje === Number(COST_PARAM.destinatari) && c.mesaje_cu_linkul_lor === c.mesaje && c.rpc_ms <= PRAG_COST_RPC_MS && c.lock_setari_ms <= PRAG_COST_LOCK_MS,
+    `costul lotului mare: rpc ${c?.rpc_ms} ms, lock setări ${c?.lock_setari_ms} ms, lock numerotare ${c?.lock_numerotare_ms} ms, ${c?.mesaje} mesaje cu linkul lor${r.depasit ? ' — OPRIT LA LIMITĂ' : ''}`)
+  if (alt) return
+  // mutanții de COST: fiecare TREBUIE să depășească pragul (sau limita) — proba de timp prinde întoarcerea la căutarea pătratică / fără index / fără forma comună
+  for (const [nume, lista] of MUTANTI_COST) {
+    let t
+    try { t = recalculeaza(aplica(MIG, lista)) } catch (e) { ok(false, `${nume}: mutantul nu se aplică (${e.message})`); continue }
+    const rm = await masoaraCost(t)
+    const cm = citesteCost(rm)
+    const prins = rm.depasit || (cm && (cm.rpc_ms > PRAG_COST_RPC_MS || cm.lock_setari_ms > PRAG_COST_LOCK_MS))
+    ok(prins, `MUTANT COST ${nume} — ${rm.depasit ? `oprit la limită (${rm.ms} ms)` : cm ? `rpc ${cm.rpc_ms} ms, lock ${cm.lock_setari_ms} ms` : 'eroare: ' + JSON.stringify(rm).slice(0, 200)}`)
+  }
+}
+// mutanții de COST (textul migrării schimbat ca să refacă costul vechi): fiecare trebuie să depășească pragul / limita
+const FARA_FORMA_COMUNA = ["  IF v_x0 IS NOT NULL AND replace(msg.corp_text_final,public.fn_red_link_raspuns(tok),'#')=v_x0 THEN\n", '  IF false THEN\n']
+const MUTANTI_COST = [
+  // ca în r3: ferestrele cu substr pe TEXT (în UTF-8 substr numără caracterele de la început: pătratic) și detectorul complet pe fiecare mesaj
+  ['ferestrele cu substr pe text + detectorul pe fiecare mesaj (costul r3)', [FARA_FORMA_COMUNA,
+    ["  FROM (SELECT convert_from(substring(s.b FROM i FOR 43),'UTF8') AS f\n          FROM (SELECT convert_to(r.m[1],'UTF8') AS b FROM regexp_matches(v,'[A-Za-z0-9_-]{43,}','g') r(m)) s,generate_series(1,octet_length(s.b)-42) i) w;",
+     "  FROM (SELECT substr(s.b,i,43) AS f\n          FROM (SELECT r.m[1] AS b FROM regexp_matches(v,'[A-Za-z0-9_-]{43,}','g') r(m)) s,generate_series(1,length(s.b)-42) i) w;"]]],
+  // fără forma comună: detectorul (liniar) pe fiecare dintre cele 300 de mesaje, sub lock-ul global
+  ['fără forma comună (detectorul complet pe fiecare mesaj, sub lock)', [FARA_FORMA_COMUNA]],
+  // fără index: fiecare token existent comparat cu fiecare fereastră (strpos nu folosește nici indexul, nici hash-ul) — scanarea completă
+  ['fără index: scanarea tuturor tokenurilor pe fiecare fereastră', [
+    [" RETURN EXISTS(SELECT 1 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_fer) AND t.token_raspuns IS DISTINCT FROM p_token);",
+     " RETURN EXISTS(SELECT 1 FROM public.red_detinatori_token t,unnest(v_fer) w WHERE strpos(t.token_raspuns,w)=1 AND t.token_raspuns IS DISTINCT FROM p_token);"],
+    ["  SELECT coalesce(array_agg(t.token_raspuns),ARRAY[]::text[]) INTO v_gasite0 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_fer0);",
+     "  SELECT coalesce(array_agg(DISTINCT t.token_raspuns),ARRAY[]::text[]) INTO v_gasite0 FROM public.red_detinatori_token t,unnest(v_fer0) w WHERE strpos(t.token_raspuns,w)=1;"]]],
+]
+
 // ── manifestul L15: lista obiectelor (familie, etichetă, operație) = diferența generată de pașii runnerului ──
 const listaObiecte = text => text.split('\n').filter(l => l && !l.startsWith('#')).map(l => l.split('\t').slice(0, 3).join('\t')).sort()
 const faraPg18 = l => !/^constrangere\tconstrangere tabel [^\t]*_not_null\tcreat$/.test(l)
+
+if (process.argv.includes('--doar-cost')) {
+  await sectiuneaCost()
+  console.log(esec ? `\nESEC: ${esec} verificări au picat` : '\nPASS: toate verificările au trecut')
+  process.exit(esec ? 1 : 0)
+}
 
 console.log('1. înainte de 20261131i (20261131h aplicată = starea de pe main): textul lotului rămâne cu {LINK_RASPUNS} literal, inventarul nu știe de token, funcțiile noi lipsesc')
 {
@@ -701,22 +793,28 @@ const MUTANTI = [
     [" IF rez ~ '[{}]' THEN RAISE EXCEPTION 'camp_necunoscut: acolade ramase' USING ERRCODE='22023'; END IF;", " IF rez ~ '[{][^{}]{1,40}[}]' THEN RAISE EXCEPTION 'camp_necunoscut: acolade ramase' USING ERRCODE='22023'; END IF;"]]],
   ['verificarea finală a acoladelor scoasă („{}” și acoladele neînchise trec)', [[" IF rez ~ '[{}]' THEN RAISE EXCEPTION 'camp_necunoscut: acolade ramase' USING ERRCODE='22023'; END IF;\n", '']]],
   // r2 (P1): linkul literal — refuzul șablonului scos (verificarea finală prinde cu alt cod: refuz diferit), ambele scoase (linkul lui A pleacă și la B),
-  //          tokenul copiat fără adresă nescăpat (lookup-ul scos)
+  //          tokenul copiat fără adresă nescăpat (lookup-ul scos); r4: textele mutate = codul liniar (forma de căutare + forma comună a lotului)
   ['refuzul linkului literal din șablon scos', [[" IF public.fn_red_mail_f2_link_strain(p_subiect,NULL) OR public.fn_red_mail_f2_link_strain(p_text,NULL) THEN RAISE EXCEPTION 'link_literal' USING ERRCODE='22023'; END IF;\n", '']]],
   ['linkul literal acceptat peste tot (refuzul șablonului ȘI verificarea mesajului final scoase)', [[" IF public.fn_red_mail_f2_link_strain(p_subiect,NULL) OR public.fn_red_mail_f2_link_strain(p_text,NULL) THEN RAISE EXCEPTION 'link_literal' USING ERRCODE='22023'; END IF;\n", ''],
-    ["  IF public.fn_red_mail_f2_link_strain(msg.corp_text_final,tok) THEN RAISE EXCEPTION 'link_strain' USING ERRCODE='22023'; END IF;\n", ''],
+    ["  IF v_strain THEN RAISE EXCEPTION 'link_strain' USING ERRCODE='22023'; END IF;\n", ''],
     [" IF public.fn_red_mail_f2_link_strain(subiect,NULL) THEN RAISE EXCEPTION 'link_strain' USING ERRCODE='22023'; END IF;\n", '']]],
-  ['tokenul copiat fără adresă nu e văzut (lookup-ul în red_detinatori_token scos)', [["  WHERE t.token_raspuns=substr(r[1],i,43) AND t.token_raspuns IS DISTINCT FROM p_token);", '  WHERE false);']]],
-  ['linkul străin pe altă origine nu e văzut (doar domeniul public)', [["position('redari/raspuns' IN cale)>0", "position('redari.gazpet.ro/redari/raspuns' IN cale)>0"]]],
-  ['linkul străin comparat fără token (orice cale = a destinatarului)', [["IF NOT stabil OR position('redari/raspuns' IN cale)>0 THEN RETURN true; END IF;", "IF NOT stabil OR (p_token IS NULL AND position('redari/raspuns' IN cale)>0) THEN RETURN true; END IF;"]]],
+  ['tokenul copiat fără adresă nu e văzut (lookup-ul în red_detinatori_token scos, în detector și în forma comună)', [[" RETURN EXISTS(SELECT 1 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_fer) AND t.token_raspuns IS DISTINCT FROM p_token);", ' RETURN false;'],
+    ["  SELECT coalesce(array_agg(t.token_raspuns),ARRAY[]::text[]) INTO v_gasite0 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_fer0);", '  v_gasite0:=ARRAY[]::text[];']]],
+  // r4: forma comună a lotului — fiecare ramură a ei trebuie să conteze
+  ['forma comună fără căutarea tokenurilor (tokenul altuia dintr-o valoare de câmp nu e văzut)', [["  SELECT coalesce(array_agg(t.token_raspuns),ARRAY[]::text[]) INTO v_gasite0 FROM public.red_detinatori_token t WHERE t.token_raspuns=ANY(v_fer0);", '  v_gasite0:=ARRAY[]::text[];']]],
+  ['forma comună folosită fără comparația cu mesajul (diferențele de după completare nu mai trec prin detectorul complet)', [["  IF v_x0 IS NOT NULL AND replace(msg.corp_text_final,public.fn_red_link_raspuns(tok),'#')=v_x0 THEN\n", '  IF v_x0 IS NOT NULL THEN\n']]],
+  ['forma comună fără prinderea refuzului (reluarea idempotentă a unei intenții existente refuzată înainte de lock)', [[" EXCEPTION WHEN OTHERS THEN v_x0:=NULL; v_cale0:=NULL; v_fer0:=NULL;\n", '']]],
+  ['forma comună fără cale (calea formularului dintr-o valoare de câmp nu e văzută)', [['   v_strain:=v_cale0 OR EXISTS(', '   v_strain:=coalesce(v_cale0 AND false,false) OR EXISTS(']]],
+  ['linkul străin pe altă origine nu e văzut (doar domeniul public)', [["position('redari/raspuns' IN pc)>0", "position('redari.gazpet.ro/redari/raspuns' IN pc)>0"]]],
+  ['linkul străin comparat fără token (orice cale = a destinatarului)', [[' IF v_cale THEN RETURN true; END IF;', ' IF v_cale AND p_token IS NULL THEN RETURN true; END IF;'], ['   v_strain:=v_cale0 OR EXISTS(', '   v_strain:=EXISTS(']]],
   // r3 (Jakarinos #1138 P1): mutanți pe NORMALIZARE — fiecare trebuie să pice (la postcondiții sau pe paritatea cu tabelul comun / refuzurile C r3)
-  ['fără decodarea %XX (căutarea pe textul literal, ca în runda 2)', [["   v:=v||CASE WHEN c BETWEEN 33 AND 126 THEN chr(c) ELSE '' END||parti[n+1];", '   v:=v||potr[n]||parti[n+1];']]],
-  ['fără decodarea entităților HTML', [['   v:=v||x||parti[n+1];', '   v:=v||potr[n]||parti[n+1];']]],
+  ['fără decodarea %XX (căutarea pe textul literal, ca în runda 2)', [["CASE WHEN q.c BETWEEN 33 AND 126 THEN chr(q.c) ELSE '' END AS x", 'r.m[1] AS x']]],
+  ['fără decodarea entităților HTML', [["(SELECT CASE WHEN n.c BETWEEN 33 AND 126 THEN chr(n.c) ELSE '' END\n", '(SELECT r.m[1]\n'], ["ELSE coalesce(entitati->>substring(r.m[1] FROM 2 FOR length(r.m[1])-2),'') END AS x", 'ELSE r.m[1] END AS x']]],
   ['fără eliminarea invizibilelor (spații, linii, zero-width)', [["  v:=regexp_replace(regexp_replace(v,c_inviz,'','g'),c_lin,'-','g');", "  v:=regexp_replace(v,c_lin,'-','g');"]]],
-  ['fără NFKC', [[' v:=normalize(v,NFKC);', ' v:=v;']]],
+  ['fără NFKC', [[' v:=normalize(p_text,NFKC);', ' v:=p_text;']]],
   ['un singur pas de decodare (fără punct fix)', [['  IF v=ant THEN stabil:=true; EXIT; END IF;', '  stabil:=true; EXIT;']]],
-  ['doar prima fereastră (tokenul lipit de text nu e văzut)', [['generate_series(1,length(r[1])-42) i', 'generate_series(1,1) i']]],
-  ['calea cu majuscule nu e văzută (fără litere mici)', [["cale:=replace(translate(v,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'\\','/');", "cale:=replace(v,'\\','/');"]]],
+  ['doar prima fereastră (tokenul lipit de text nu e văzut)', [['generate_series(1,octet_length(s.b)-42) i', 'generate_series(1,1) i']]],
+  ['calea cu majuscule nu e văzută (fără litere mici)', [["pc:=replace(translate(v,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'\\','/');", "pc:=replace(v,'\\','/');"]]],
   // r2 (P2): rezervarea se oprește la prima anulare locală (RETURN în loc de CONTINUE) → handlerul s-ar opri la zero rânduri înaintea destinatarilor valizi
   ['rezervarea se oprește la token expirat (RETURN în loc de CONTINUE)', [["PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'anulat'); CONTINUE; END IF;", "PERFORM public.fn_red_mail_f2_audit(l.id,m.id,'anulat'); RETURN; END IF;"]]],
   ['rezervarea se oprește la opt-out (RETURN în loc de CONTINUE)', [["UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='optout' WHERE id=m.id; CONTINUE; END IF;", "UPDATE public.red_mail_mesaje SET stare='anulat',eroare_cod='optout' WHERE id=m.id; RETURN; END IF;"]]],
@@ -736,7 +834,8 @@ const MUTANTI = [
 ]
 // r3: mutanții pe normalizare prinși deja de postcondiția link_strain se rulează și CU postcondiția scoasă din textul mutat — trebuie să-i prindă și
 //     verificările de comportament (paritatea cu tabelul comun, refuzurile C r3, mesajul final)
-const POST_LS_A = '  -- r2 + r3: linkul străin (valori fictive)', POST_LS_B = "RAISE EXCEPTION '20261131i: postconditie: fn_red_mail_f2_link_strain';\n  END IF;\n"
+// (r4: tăierea cuprinde și postcondiția formei de căutare, care urmează imediat)
+const POST_LS_A = '  -- r2 + r3: linkul străin (valori fictive)', POST_LS_B = "RAISE EXCEPTION '20261131i: postconditie: fn_red_mail_f2_link_forma';\n  END IF;\n"
 const faraPostLs = t => { const a = t.indexOf(POST_LS_A), b = t.indexOf(POST_LS_B, a); if (a < 0 || b < 0) throw new Error('postcondiția link_strain lipsește'); return t.slice(0, a) + t.slice(b + POST_LS_B.length) }
 for (const nume of ['fără decodarea %XX (căutarea pe textul literal, ca în runda 2)', 'fără decodarea entităților HTML', 'fără eliminarea invizibilelor (spații, linii, zero-width)',
   'un singur pas de decodare (fără punct fix)', 'calea cu majuscule nu e văzută (fără litere mici)']) {
@@ -780,6 +879,8 @@ for (const [nume, lista, pregatire] of [
   ok(real !== null && mutant !== real, `MUTANT ${nume} — real: ${real ? real.slice(0, 70) : 'A TRECUT'} | mutant: ${mutant ? mutant.slice(0, 70) : 'A TRECUT'}`)
   await db.close()
 }
+
+await sectiuneaCost()
 
 console.log(esec ? `\nESEC: ${esec} verificări au picat` : '\nPASS: toate verificările au trecut')
 process.exit(esec ? 1 : 0)
