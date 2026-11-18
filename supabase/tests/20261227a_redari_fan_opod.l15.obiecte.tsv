@@ -1,0 +1,4 @@
+# 20261227a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.red_fan_loturi.opod	creat
+functie	functie public.fn_red_fan_lot_opod(uuid,boolean)	creat
+functie	functie public.fn_red_fan_loturi_garda()	schimbat

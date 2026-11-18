@@ -102,12 +102,14 @@ const schimbaTirajul = (stare, cheieNoua) => {
   t.opreste({ p_cheie: vechi, p_opreste: true })
   if (cheieNoua) { stare.acum += 30000; t({ p_cheie: cheieNoua, p_inlocuieste: vechi }) }
 }
-async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza' }, randuriPlus = {}, rpc, stareTiraj, raspUrmarire }) {
+// opodAprobat = alegerea cu care s-au calculat hash-urile aprobate; opodLot = alegerea CURENTĂ a lotului (rândul red_fan_loturi), implicit aceeași
+async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza' }, randuriPlus = {}, rpc, stareTiraj, raspUrmarire, opodAprobat = false, opodLot = opodAprobat }) {
   const tiraj = tirajSimulat(stareTiraj)
   const plicuri = Array.from({ length: n }, (_, i) => ({ id: `pl${i + 1}`, nr_plic: `PL-TST-${String(i + 1).padStart(4, '0')}`, destinatar_nume: 'PERSOANA FICTIVA', stare: 'activ' }))
   const convocari = plicuri.map((p, i) => ({ id: `c${i}`, plic_id: p.id, detinator_id: `d${i}` }))
   const contacte = plicuri.map((p, i) => ({ detinator_id: `d${i}`, ...contact }))
-  const pr = await M.fan.pregatestePlicuriFan({ plicuri, convocari, contacte, proiectCod: 'TEST-RAZVAN', subtle: webcrypto.subtle })
+  // forma veche (9f6fdada) nu cunoaște `opod`: parametrul în plus e ignorat acolo
+  const pr = await M.fan.pregatestePlicuriFan({ plicuri, convocari, contacte, proiectCod: 'TEST-RAZVAN', opod: opodAprobat, subtle: webcrypto.subtle })
   const randuri = pr.map((x, i) => ({ id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, plic_id: x.plic.id, nr_plic: x.plic.nr_plic, stare: stari[i] || 'aprobat',
     hash_date: x.hash, awb: null, versiune_urmarire: 7, ...(randuriPlus[i] || {}) }))
   const apeluri = [], jurnal = []
@@ -119,6 +121,7 @@ async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza
   }
   const deps = {
     secrete: () => ({ username: 'u', password: 'p', clientId: 'C' }), randuriLot: async () => ({ data: randuri }), proiect: async () => ({ data: { cod: 'TEST-RAZVAN' } }),
+    fanLot: async () => ({ data: { lot_id: LOT.id, test: true, prima_aprobare_la: '2026-11-18T08:00:00+00:00', opod: opodLot } }),
     datePlicuri: async () => ({ data: { plicuri, convocari, contacte } }), plicuriLot: async () => ({ data: plicuri }), pauza: async () => {}, subtle: webcrypto.subtle, fetch,
     rpc: rpc || (async (nume, args) => { jurnal.push({ nume, args }); return nume === 'fn_red_fan_claim_lot' ? { data: '99999999-0000-4000-8000-000000000001' }
       : nume === 'fn_red_fan_tiraj' ? tiraj(args) : nume === 'fn_red_fan_tiraj_opreste' ? tiraj.opreste(args)
@@ -406,6 +409,37 @@ const VERIFICARI = {
       && lot.numeEtichete({ lot: LOT, fanLot: null, parte: 1, parti: 1 }) === 'PP-0001_etichete.pdf' && /format=A6/.test(fan.caleEticheta({ clientId: 'C', awbs: ['3000000001'] }))
       && lot.PASI_FAN.find(x => x.cheie === 'etichete').titlu === '4. Etichete'
   },
+  // ── 18.11.2026, oPOD opțional pe lot, implicit oprit (PICĂ pe 9f6fdada: options = ['B'] pleca mereu) ──
+  async opod(M) {
+    const { fan, lot } = M
+    if (!fan.configPlicFan || !fan.cereOpod || !lot.stareOpod || !lot.textAprobare || !lot.textUltimEveniment) return false
+    // 1: fără oPOD (implicit) → fiecare expediere pleacă fără B; cu oPOD pe lot (aprobat cu el) → fiecare cu exact ['B']
+    const fara = await ruleaza(M, 2, { handler: toateOk })
+    const cu = await ruleaza(M, 2, { handler: toateOk, opodAprobat: true })
+    const sFara = fara.apeluri.filter(a => a.cale === '/intern-awb').flatMap(a => a.corp.shipments), sCu = cu.apeluri.filter(a => a.cale === '/intern-awb').flatMap(a => a.corp.shipments)
+    if (sFara.length !== 2 || !sFara.every(s => Array.isArray(s.info.options) && s.info.options.length === 0) || fara.r.body.opod !== false) return false
+    if (sCu.length !== 2 || !sCu.every(s => JSON.stringify(s.info.options) === '["B"]') || cu.r.body.opod !== true) return false
+    // 2: valoarea de la APROBARE e cea folosită: lotul are acum altă alegere decât la aprobare → nimic trimis, nimic rezervat (ambele sensuri)
+    for (const [la, acum] of [[false, true], [true, false]]) {
+      const x = await ruleaza(M, 2, { handler: () => { throw new Error('APEL INTERZIS') }, opodAprobat: la, opodLot: acum })
+      if (x.apeluri.filter(a => a.cale === '/intern-awb').length || x.jurnal.some(j => j.nume === 'fn_red_fan_claim_lot') || x.r.body.excluse?.length !== 2) return false
+    }
+    // 3: corpul implicit fără opțiuni; hash-ul include alegerea
+    const s0 = fan.construiestePlicFan({ plic: { nr_plic: 'PL-TST-0001', destinatar_nume: 'X' }, contact, proiectCod: 'T' }).shipment
+    const s1 = fan.construiestePlicFan({ plic: { nr_plic: 'PL-TST-0001', destinatar_nume: 'X' }, contact, proiectCod: 'T', config: fan.configPlicFan({ opod: true }) }).shipment
+    if (s0.info.options.length !== 0 || JSON.stringify(s1.info.options) !== '["B"]' || fan.cereOpod(s0) || !fan.cereOpod(s1)) return false
+    if (await fan.hashPlicFan(s0, webcrypto.subtle) === await fan.hashPlicFan(s1, webcrypto.subtle)) return false
+    // doar `true` cere oPOD: o valoare necunoscută / de altă formă nu cumpără nimic
+    if (['true', 1, {}, null, undefined].some(v => fan.configPlicFan({ opod: v }).options.length !== 0)) return false
+    // 4: ecranul — bifa doar owner, după marcaj, înainte de prima aprobare; dialogul spune oPOD + costul; ora evenimentului în ora României
+    const baza = { transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', randuri: [{ stare: 'propus' }], fanLot: { test: true, opod: false, prima_aprobare_la: null } }
+    const t = lot.textAprobare({ n: 3, shipments: [s1, s1, s1], titlu: 'x' })
+    return lot.stareOpod(baza).activ === true && lot.stareOpod({ ...baza, esteOwner: false }).activ === false && lot.stareOpod({ ...baza, fanLot: null }).activ === false
+      && lot.stareOpod({ ...baza, fanLot: { ...baza.fanLot, prima_aprobare_la: '2026-11-18T08:00:00Z' } }).activ === false && lot.stareOpod({ ...baza, randuri: [{ stare: 'aprobat' }] }).activ === false
+      && t.ok && t.opod && /42,00 lei/.test(t.text) && lot.textAprobare({ n: 1, shipments: [s0], titlu: 'x' }).opod === false && lot.textAprobare({ n: 2, shipments: [s0, s1], titlu: 'x' }).ok === false
+      && lot.textUltimEveniment({ ultim_eveniment: 'C0', ultim_eveniment_la: '2026-11-18T15:21:00+00:00' }) === 'ridicat de curier (C0) 18.11.2026 17:21'
+      && lot.textUltimEveniment({ ultim_eveniment: 'S2', ultim_eveniment_la: '2026-07-10T22:30:00Z' }) === 'livrat (S2) 11.07.2026 01:30'
+  },
 }
 
 // comutatorul OPRIT (forma de dinaintea activării, obținută prin mutația flag-ului): comportamentul de pe main rămâne neschimbat —
@@ -504,6 +538,18 @@ const MUTANTI = [
   ['dupaTest1', 'numele fișierului afirmă din nou A6 (forma 2f7fabc1)', { fisier: 'fanLot.js', din: "${cuTiraj(tiraj)}_etichete${parti > 1", in: "${cuTiraj(tiraj)}_etichete_A6${parti > 1" }],
   ['dupaTest1', 'eticheta cerută fără parametrul de format documentat', { fisier: 'redariFan.mjs', din: "  q.append('format', FORMAT_ETICHETA)", in: '' }],
   ['dupaTest1', 'S98 afișat ca „în tranzit”', { fisier: 'fanLot.js', din: "  if (r.urmarire_stare === 'in_tranzit' && EVENIMENTE_FAN.inregistrat.includes(r.ultim_eveniment)) return", in: '  if (false) return' }],
+  // 18.11.2026: oPOD opțional pe lot, implicit oprit
+  ['opod', 'opțiunea B pleacă mereu (forma 9f6fdada)', { fisier: 'redariFan.mjs', din: '  options: Object.freeze([]),', in: "  options: Object.freeze(['B'])," }],
+  ['opod', 'generarea ignoră alegerea lotului (mereu fără oPOD)', { fisier: 'redariFanTransport.mjs', din: '  const opod = fl.data.opod', in: '  const opod = false' }],
+  ['opod', 'generarea ignoră alegerea lotului (mereu cu oPOD)', { fisier: 'redariFanTransport.mjs', din: '  const opod = fl.data.opod', in: '  const opod = true' }],
+  ['opod', 'configurația nu pune B când lotul cere oPOD', { fisier: 'redariFan.mjs', din: "export const configPlicFan = ({ opod = false } = {}) => (opod === true ?", in: 'export const configPlicFan = ({ opod = false } = {}) => (false ?' }],
+  ['opod', 'orice valoare „adevărată” cere oPOD (necunoscut tratat ca cerut)', { fisier: 'redariFan.mjs', din: "export const configPlicFan = ({ opod = false } = {}) => (opod === true ?", in: 'export const configPlicFan = ({ opod = false } = {}) => (opod ?' }],
+  // (mutațiile pe o singură linie: fișierele au CRLF la checkout pe Windows)
+  ['opod', 'opțiunile nu mai intră în corp (nici în hash)', { fisier: 'redariFan.mjs', din: '      options: [...config.options],', in: '' }],
+  ['opod', 'bifa oPOD activă după prima aprobare', { fisier: 'fanLot.js', din: "  if (fanLot.prima_aprobare_la) return { activ: false, motiv: 'lotul a fost aprobat o dată: alegerea oPOD nu se mai schimbă' }", in: '' }],
+  ['opod', 'bifa oPOD deschisă ne-owner-ului', { fisier: 'fanLot.js', din: "  if (!esteOwner) return { activ: false, motiv: 'doar owner-ul alege oPOD' }", in: '' }],
+  ['opod', 'dialogul de aprobare nu spune costul oPOD', { fisier: 'fanLot.js', din: 'cost estimat suplimentar ${formatLei(costOpodEstimat(n))} (${n} × ${COST_OPOD_ESTIMAT_LEI} lei), peste transport.', in: 'cost suplimentar.' }],
+  ['opod', 'ora evenimentului fără fusul României (UTC)', { fisier: 'fanLot.js', din: "{ timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })", in: "{ timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })" }],
 ]
 
 describe('mutanți FAN (JS)', () => {
@@ -561,6 +607,15 @@ describe('mutanți FAN (JS)', () => {
     const M = await incarca(null, surseTest1)
     let rez
     try { rez = await VERIFICARI[v](M) } catch { rez = false }
+    expect(rez).toBe(false)
+  })
+  // 18.11.2026 (oPOD): pe main-ul de dinaintea acestei livrări (9f6fdada) verificarea „opod” PICĂ — opțiunea B pleca mereu, fără alegerea owner-ului
+  const VECHI_OPOD = '9f6fdada062083f0850a24576f7d9023d0925921'
+  const surseOpod = surseDin(VECHI_OPOD)
+  it.skipIf(!surseOpod)('pe 9f6fdada verificarea „opod” PICĂ (opțiunea B pleca mereu: 27,16 lei în loc de 13,16)', async () => {
+    const M = await incarca(null, surseOpod)
+    let rez
+    try { rez = await VERIFICARI.opod(M) } catch { rez = false }
     expect(rez).toBe(false)
   })
   // activare runda 2: procedura din documentul de la 9ceea228 (ordinea recenzentului: „Propune” înaintea marcajului) PICĂ pe codul real, cu motivul gărzii

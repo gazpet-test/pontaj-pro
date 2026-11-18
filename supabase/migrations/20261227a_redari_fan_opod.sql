@@ -1,0 +1,263 @@
+-- Version 20261227120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 5000 --amprenta-globala <md5> --diferente-globale
+--   supabase/migrations/20261227a_redari_fan_opod.l15.tsv (DOAR cu plafon ȘI cu amprenta globală L15 v2: fără pasul „înainte” al runnerului în
+--   aceeași tranzacție, migrarea refuză în $pre$ — AMPRENTA_GLOBALA_LIPSA).
+-- L15 v2 (docs/LIVRARE_L15_V2.md): garanția la aplicare = amprenta GLOBALĂ a runnerului; manifestul .l15.tsv îl generează coordonatorul pe clonă
+--   (scripts/livrare_l15_manifest.sh); lista OBIECTELOR pe care trebuie să le conțină (familie, etichetă, operație — verificată pe PGlite cu pașii
+--   reali ai runnerului) e în supabase/tests/20261227a_redari_fan_opod.l15.obiecte.tsv. Pe lângă ea, migrarea verifică pe amprentă (corp fără CR +
+--   proprietăți + drepturi, ÎNAINTE și DUPĂ) funcția pe care o înlocuiește (fn_red_fan_loturi_garda) și funcțiile din 20261212a de care depinde
+--   regula ei (fn_red_fan_e_owner, fn_red_fan_lot_marcheaza, fn_red_fan_aproba, fn_red_fan_claim_lot, fn_red_fan_propune), plus poarta fn_red_nivel.
+-- 20261227a_redari_fan_opod — Redări FAN Courier: confirmarea de primire în ORIGINAL (opțiunea B, „oPOD”, +14 lei / plic după ofertă) devine o
+--   ALEGERE explicită a owner-ului, pe lot, implicit OPRITĂ. De ce (18.11.2026): primul AWB real al Testului 1 a costat 27,16 lei în loc de 13,16,
+--   pentru că codul trimitea mereu options = ['B'] (proiectarea din 06.11.2026), deși la întâlnirea cu curierul din 09.11.2026 proprietarul decisese
+--   „fără oPOD, confirmarea electronică de pe terminalul curierului”. Decizia proprietarului din 18.11.2026: oPOD rămâne posibil, dar doar cerut.
+--   * red_fan_loturi.opod boolean NOT NULL DEFAULT false (coloană nouă; rândurile existente = fără oPOD, exact ce a decis proprietarul pe 09.11);
+--   * fn_red_fan_lot_opod(p_lot_id, p_opod) — DOAR owner, prin RPC (nu UPDATE direct), DOAR pe un lot marcat (TEST / real) și DOAR înainte de
+--     PRIMA aprobare a lotului (istoric: prima_aprobare_la; și fără rânduri aprobate / trimise în stările curente), ca pretul aprobat să nu se
+--     schimbe între aprobare și generare; repetarea aceleiași valori = no-op; fiecare schimbare = un rând în red_jurnal (tabela red_fan_loturi,
+--     evenimentul 'opod_schimbat', valoarea veche → nouă, autorul = auth.uid(), momentul efectiv), în aceeași tranzacție (L02);
+--   * fn_red_fan_loturi_garda() înlocuită (CREATE OR REPLACE, același trigger trg_red_fan_loturi_garda): după prima aprobare NICI opod nu se mai
+--     schimbă, pe ORICE cale (L07), ca marcajul TEST / real.
+--   Unde se folosește valoarea: ecranul și funcția edge construiesc corpul fiecărui plic cu options = ['B'] DOAR dacă lotul are opod = true
+--   (redariFan.mjs::configPlicFan, aceeași funcție în ambele, L19); corpul intră în hash-ul aprobat (red_fan_awb.hash_date) → valoarea folosită la
+--   generare e EXACT cea văzută la aprobare: o alegere diferită după aprobare ar da alt hash, exclus de la generare și refuzat de claim — și oricum
+--   e interzisă de RPC + trigger după prima aprobare. Nicio funcție existentă nu se schimbă în afara gărzii; nicio dată existentă nu se rescrie.
+-- Identitatea = auth.uid() (L08); niciun parametru de utilizator. Ordinea lock-urilor la rulare (L06), ca în 20261212a: red_loturi_plicuire FOR
+--   UPDATE → red_fan_loturi (rândul lotului) FOR UPDATE → INSERT red_jurnal, ultimul.
+-- Lock-uri la aplicare: ALTER TABLE … ADD COLUMN cere ACCESS EXCLUSIVE pe red_fan_loturi (tabel mic: câteva rânduri; ADD COLUMN cu DEFAULT
+--   constant nu rescrie tabelul pe PG ≥ 11). Punct unic de blocare, NOWAIT, bugetul de 1 s de la PRIMA încercare (ca 20261212a), verificat
+--   înaintea fiecărei încercări și după obținere. Lock-uri IMPLICITE după set: CREATE OR REPLACE FUNCTION / CREATE FUNCTION (plpgsql: corpul nu
+--   se analizează la creare — fără lock-uri pe tabele; doar rândul din pg_proc), COMMENT, REVOKE / GRANT (catalog), postcondițiile (catalog +
+--   red_fan_loturi, deja ținut). Nimic pe red_fan_awb, red_plicuri, red_proiecte, red_loturi_plicuire, red_jurnal. Fiecare așteptare implicită
+--   e limitată de lock_timeout = 100 ms.
+-- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, bugetul lock-ului
+--   de 1 s, garda finală a runnerului.
+-- Revenire: supabase/revenire/20261227a_redari_fan_opod_ROLLBACK.sql (prin runner, plafonul 2000; refuză dacă vreun lot are opod = true sau dacă
+--   red_jurnal are evenimente 'opod_schimbat' — istoric nou, L14 textual). Probe: scripts/pglite/test_redari_fan_opod_local.mjs (PGlite, pașii reali
+--   L15 v2 ai runnerului peste 20261212a aplicată: comportament ca roluri, trigger, jurnal, refuzuri, revenire, mutanți).
+DO $pre$
+DECLARE v_plafon text; v_rau text; v_tip text; r record;
+BEGIN
+  IF current_user IS DISTINCT FROM 'postgres'
+     OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261227a_redari_fan_opod:' || txid_current() THEN
+    RAISE EXCEPTION '20261227a: garda start invalida';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.livrare_migrare=%') THEN
+    RAISE EXCEPTION '20261227a: armare persistenta refuzata';
+  END IF;
+  IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN
+    RAISE EXCEPTION '20261227a: necesita READ COMMITTED (acum %)', current_setting('transaction_isolation');
+  END IF;
+  IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION '20261227a: cere PostgreSQL 17 (plafonul tranzactiei)'; END IF;
+  SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
+  IF v_plafon IS DISTINCT FROM '5000/session'
+     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || txid_current() THEN
+    RAISE EXCEPTION '20261227a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 5000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 5000)',
+      coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa');
+  END IF;
+  -- L15 v2: pasul „înainte” al runnerului a rulat în ACEASTĂ tranzacție (tiparul 20261225a / 20261212a)
+  IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = pg_my_temp_schema() AND c.relkind = 'r' AND c.relname ~ '^ag_ina_[0-9a-f]{16}$'
+                    AND c.xmin::text = (txid_current() % 4294967296)::text
+                    AND (SELECT count(*) FROM pg_locks l WHERE l.relation = c.oid AND l.pid = pg_backend_pid() AND l.granted) > 0) THEN
+    RAISE EXCEPTION '20261227a: AMPRENTA_GLOBALA_LIPSA: livrarea cere amprenta globala L15 v2 a runnerului (--amprenta-globala + --diferente-globale); nimic schimbat';
+  END IF;
+  PERFORM set_config('lock_timeout', '100ms', true);
+  PERFORM set_config('search_path', 'public, pg_temp', true);
+  -- baza: 20261212a aplicată (tabelul, coloanele citite, trigger-ul gărzii în forma exactă, exact cele 19 funcții fn_red_fan_*)
+  IF to_regclass('public.red_fan_loturi') IS NULL OR to_regclass('public.red_fan_awb') IS NULL OR to_regclass('public.red_loturi_plicuire') IS NULL
+     OR to_regclass('public.red_jurnal') IS NULL THEN
+    RAISE EXCEPTION '20261227a: tabelele din 20261212a / 20261126a lipsesc (migrarea FAN nu e aplicata)';
+  END IF;
+  FOR r IN SELECT * FROM (VALUES
+      ('red_fan_loturi', 'lot_id', '^uuid$'), ('red_fan_loturi', 'test', '^boolean$'), ('red_fan_loturi', 'prima_aprobare_la', '^timestamp with time zone$'),
+      ('red_fan_loturi', 'prima_aprobare_de', '^uuid$'), ('red_fan_loturi', 'marcat_de', '^uuid$'), ('red_fan_loturi', 'marcat_la', '^timestamp with time zone$'),
+      ('red_fan_loturi', 'proiect_id', '^uuid$'),
+      ('red_fan_awb', 'lot_id', '^uuid$'), ('red_fan_awb', 'stare', '^text$'),
+      ('red_loturi_plicuire', 'id', '^uuid$'),
+      ('red_jurnal', 'tabela', '^text$'), ('red_jurnal', 'inregistrare_id', '^uuid$'), ('red_jurnal', 'actiune', '^text$'),
+      ('red_jurnal', 'date_vechi', '^jsonb$'), ('red_jurnal', 'date_noi', '^jsonb$'), ('red_jurnal', 'user_id', '^uuid$')
+    ) v(t, c, tip) LOOP
+    SELECT data_type INTO v_tip FROM information_schema.columns WHERE table_schema = 'public' AND table_name = r.t AND column_name = r.c;
+    IF v_tip IS NULL OR v_tip !~ r.tip THEN
+      RAISE EXCEPTION '20261227a: coloana %.% lipseste sau are alt tip (%; asteptat %)', r.t, r.c, coalesce(v_tip, 'lipsa'), r.tip;
+    END IF;
+  END LOOP;
+  -- reaplicare = refuz
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_fan_loturi' AND column_name = 'opod')
+     OR to_regprocedure('public.fn_red_fan_lot_opod(uuid, boolean)') IS NOT NULL THEN
+    RAISE EXCEPTION '20261227a: coloana opod / fn_red_fan_lot_opod exista deja (reaplicare)';
+  END IF;
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_red\_fan\_%') <> 19 THEN
+    RAISE EXCEPTION '20261227a: numarul functiilor fn_red_fan_* difera de 19 (baza nu e 20261212a)';
+  END IF;
+  IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_fan_loturi'::regclass AND NOT tgisinternal) <> 1
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.red_fan_loturi'::regclass AND tg.tgname = 'trg_red_fan_loturi_garda'
+                      AND tg.tgenabled = 'O' AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND tg.tgfoid = to_regprocedure('public.fn_red_fan_loturi_garda()')
+                      AND tg.tgtype = (1 | 2 | 8 | 16)) THEN
+    RAISE EXCEPTION '20261227a: trigger-ul trg_red_fan_loturi_garda nu e cel din 20261212a';
+  END IF;
+  -- istoricul nu există încă (L14: revenirea refuză la istoric nou; aici dovada că e al acestei migrări)
+  IF EXISTS (SELECT 1 FROM public.red_jurnal WHERE tabela = 'red_fan_loturi' AND date_noi ->> 'eveniment' = 'opod_schimbat') THEN
+    RAISE EXCEPTION '20261227a: red_jurnal are deja evenimente opod_schimbat';
+  END IF;
+  IF to_regprocedure('auth.uid()') IS NULL
+     OR (SELECT prorettype FROM pg_proc WHERE oid = to_regprocedure('auth.uid()')) IS DISTINCT FROM 'uuid'::regtype::oid
+     OR NOT pg_has_role('postgres', 'authenticated', 'USAGE') OR NOT pg_has_role('postgres', 'anon', 'USAGE') THEN
+    RAISE EXCEPTION '20261227a: dependentele (auth.uid, rolurile aplicatiei) lipsesc sau difera';
+  END IF;
+END $pre$;
+
+-- ── amprentele funcțiilor de care depinde regula (20261212a) + poarta de drept (20261126a), ÎNAINTE (garda = corpul vechi) și DUPĂ (garda = corpul
+-- nou; restul neschimbat). Corp fără CR + limbaj + DEFINER + search_path + proprietar + EXECUTE (anon niciodată; authenticated exact ca în 20261212a).
+CREATE FUNCTION pg_temp.lant_20261227a(p_moment text) RETURNS void
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $lant$
+DECLARE v_rau text;
+BEGIN
+  SELECT string_agg(a.semnatura, ', ' ORDER BY a.semnatura) INTO v_rau
+    FROM (VALUES
+      ('public.fn_red_nivel()', '21db8e5d4b69b7f19e571a7087c361ae', 'sql', true, true, 'text'),
+      ('public.fn_red_fan_e_owner()', '941c20690f2ae0cda77869a1d865ea69', 'sql', true, false, 'boolean'),
+      ('public.fn_red_fan_lot_marcheaza(uuid, boolean)', '7ea87499188a0c7d6a7189b017fa4805', 'plpgsql', true, true, 'boolean'),
+      ('public.fn_red_fan_aproba(uuid, uuid[], text[])', 'e584116e292d5a307041225b2ff27fbc', 'plpgsql', true, true, 'integer'),
+      ('public.fn_red_fan_claim_lot(uuid, uuid[], text[], text[])', '2e10d8103f144fee46ceae430eff8f6f', 'plpgsql', true, true, 'uuid'),
+      ('public.fn_red_fan_propune(uuid, text, numeric)', 'fa0e624dfc9d6a354914ce1da1784b64', 'plpgsql', true, true, 'uuid'),
+      -- >>> GARDA 20261227a (inainte = corpul din 20261212a; dupa = corpul nou, de mai jos)
+      ('public.fn_red_fan_loturi_garda()', CASE WHEN p_moment = 'inainte' THEN '1931e70c3b15a07a6ee485537f27ce93' ELSE '5f167c38850bbfc30cb29c0a0fd734ad' END, 'plpgsql', false, false, 'trigger')
+      -- <<< GARDA 20261227a
+    ) a(semnatura, amprenta, limbaj, definer, exec_auth, intoarce)
+    LEFT JOIN pg_proc p ON p.oid = to_regprocedure(a.semnatura)
+   WHERE p.oid IS NULL
+      OR md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM a.amprenta
+      OR p.prolang IS DISTINCT FROM (SELECT oid FROM pg_language WHERE lanname = a.limbaj)
+      OR p.prosecdef IS DISTINCT FROM a.definer
+      OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
+      OR p.prorettype IS DISTINCT FROM a.intoarce::regtype::oid
+      OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres'
+      OR has_function_privilege('anon', p.oid, 'EXECUTE')
+      OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM a.exec_auth
+      OR EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x WHERE x.grantee = 0);
+  IF v_rau IS NOT NULL THEN
+    RAISE EXCEPTION '20261227a: functiile de care depinde regula (%) difera de amprentele revizuite: %', p_moment, v_rau;
+  END IF;
+END $lant$;
+DO $l15_inainte$ BEGIN PERFORM pg_temp.lant_20261227a('inainte'); END $l15_inainte$;
+
+-- ── punctul UNIC de blocare (L06): ACCESS EXCLUSIVE pe red_fan_loturi (ADD COLUMN), NOWAIT, bugetul de 1 s de la PRIMA încercare ──
+DO $lock$
+DECLARE v_incercari integer := 0; v_t0 timestamptz := clock_timestamp(); v_buget constant interval := interval '1 second';
+BEGIN
+  LOOP
+    IF clock_timestamp() >= v_t0 + v_buget THEN
+      RAISE EXCEPTION '20261227a: BUGET_LOCK: % incercari, % ms de la prima incercare (bugetul lock-urilor e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
+        v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), round(extract(epoch FROM clock_timestamp() - now()) * 1000)
+        USING ERRCODE = '55P03';
+    END IF;
+    v_incercari := v_incercari + 1;
+    BEGIN
+      LOCK TABLE public.red_fan_loturi IN ACCESS EXCLUSIVE MODE NOWAIT;
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      PERFORM pg_sleep(0.05);
+    END;
+  END LOOP;
+  IF clock_timestamp() >= v_t0 + v_buget THEN
+    RAISE EXCEPTION '20261227a: BUGET_LOCK: lock-ul obtinut abia la % ms de la prima incercare (% incercari; bugetul e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
+      round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000)
+      USING ERRCODE = '55P03';
+  END IF;
+  PERFORM set_config('gazpet.lock_puternic_la', round(extract(epoch FROM clock_timestamp()) * 1000000)::bigint::text, true);
+  RAISE NOTICE '20261227a: lock la % ms de la BEGIN (% incercari, % ms de la prima incercare)', round(extract(epoch FROM clock_timestamp() - now()) * 1000),
+    v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+END $lock$;
+
+-- ─── 1. coloana: alegerea oPOD a lotului, implicit OPRITĂ ───
+ALTER TABLE public.red_fan_loturi ADD COLUMN opod boolean NOT NULL DEFAULT false;
+COMMENT ON COLUMN public.red_fan_loturi.opod IS 'Redări FAN: confirmarea de primire în ORIGINAL (opțiunea B, oPOD, cost suplimentar pe plic) e cerută pe lot? Implicit false = confirmarea electronică a curierului (decizia proprietarului, 09.11 + 18.11.2026). Scrisă doar prin fn_red_fan_lot_opod (owner), înainte de prima aprobare; imuabilă după (trigger).';
+
+-- ─── 2. garda (același trigger): după prima aprobare nici opod nu se mai schimbă, pe orice cale (L07) ───
+CREATE OR REPLACE FUNCTION public.fn_red_fan_loturi_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'redari fan: marcajul unui lot nu se sterge' USING ERRCODE = '42501'; END IF;
+  IF NEW.lot_id IS DISTINCT FROM OLD.lot_id OR NEW.proiect_id IS DISTINCT FROM OLD.proiect_id
+     OR (OLD.prima_aprobare_la IS NOT NULL AND (NEW.test IS DISTINCT FROM OLD.test OR NEW.opod IS DISTINCT FROM OLD.opod
+         OR NEW.prima_aprobare_la IS DISTINCT FROM OLD.prima_aprobare_la
+         OR NEW.prima_aprobare_de IS DISTINCT FROM OLD.prima_aprobare_de OR NEW.marcat_de IS DISTINCT FROM OLD.marcat_de OR NEW.marcat_la IS DISTINCT FROM OLD.marcat_la)) THEN
+    RAISE EXCEPTION 'redari fan: lotul a fost aprobat o data; marcajul de test si alegerea oPOD nu se mai schimba' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END $fn$;
+
+-- ─── 3. alegerea oPOD (DOAR owner), după marcaj, înainte de PRIMA aprobare; jurnal. Lock: lot FOR UPDATE → red_fan_loturi → INSERT red_jurnal ───
+CREATE FUNCTION public.fn_red_fan_lot_opod(p_lot_id uuid, p_opod boolean) RETURNS boolean
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_fl record; v_la timestamptz;
+BEGIN
+  IF NOT public.fn_red_fan_e_owner() THEN RAISE EXCEPTION 'redari fan: doar owner-ul alege oPOD' USING ERRCODE = '42501'; END IF;
+  IF p_lot_id IS NULL OR p_opod IS NULL THEN RAISE EXCEPTION 'redari fan: parametri invalizi' USING ERRCODE = '22023'; END IF;
+  PERFORM 1 FROM public.red_loturi_plicuire WHERE id = p_lot_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'redari fan: lot inexistent' USING ERRCODE = 'P0002'; END IF;
+  SELECT lot_id, opod, prima_aprobare_la INTO v_fl FROM public.red_fan_loturi WHERE lot_id = p_lot_id FOR UPDATE;
+  IF v_fl.lot_id IS NULL THEN RAISE EXCEPTION 'redari fan: alege intai daca lotul e de TEST sau real (lot FAN nemarcat)' USING ERRCODE = 'P0001'; END IF;
+  IF v_fl.opod = p_opod THEN RETURN p_opod; END IF;   -- repetare = no-op (nimic in jurnal)
+  IF v_fl.prima_aprobare_la IS NOT NULL OR EXISTS (SELECT 1 FROM public.red_fan_awb WHERE lot_id = p_lot_id AND stare NOT IN ('propus', 'eroare', 'anulat')) THEN
+    RAISE EXCEPTION 'redari fan: lotul a fost aprobat o data; alegerea oPOD nu se mai schimba' USING ERRCODE = 'P0001'; END IF;
+  v_la := clock_timestamp();
+  UPDATE public.red_fan_loturi SET opod = p_opod WHERE lot_id = p_lot_id;
+  INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_vechi, date_noi, user_id)
+  VALUES ('red_fan_loturi', p_lot_id, 'update', jsonb_build_object('opod', v_fl.opod),
+          jsonb_build_object('eveniment', 'opod_schimbat', 'opod', p_opod, 'la', v_la), auth.uid());
+  RETURN p_opod;
+END $fn$;
+COMMENT ON FUNCTION public.fn_red_fan_lot_opod(uuid, boolean) IS 'Redări FAN (owner): cere / renunță la oPOD pe lot, doar după marcajul TEST / real și înainte de prima aprobare; schimbarea intră în red_jurnal (opod_schimbat).';
+REVOKE ALL ON FUNCTION public.fn_red_fan_lot_opod(uuid, boolean) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_red_fan_lot_opod(uuid, boolean) TO authenticated;
+
+-- ── postcondiții ──
+DO $post$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_fan_loturi' AND column_name = 'opod'
+                   AND data_type = 'boolean' AND is_nullable = 'NO' AND column_default = 'false') THEN
+    RAISE EXCEPTION '20261227a post: coloana opod (boolean NOT NULL DEFAULT false)';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.red_fan_loturi WHERE opod IS DISTINCT FROM false) THEN RAISE EXCEPTION '20261227a post: randurile existente trebuie sa aiba opod = false'; END IF;
+  IF EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.red_fan_loturi'::regclass AND a.attnum > 0 AND a.attacl IS NOT NULL) THEN
+    RAISE EXCEPTION '20261227a post: drepturi pe coloane';
+  END IF;
+  -- funcția nouă: DEFINER, search_path fix, proprietar, EXECUTE doar authenticated
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+                  WHERE p.oid = to_regprocedure('public.fn_red_fan_lot_opod(uuid, boolean)') AND l.lanname = 'plpgsql' AND p.prosecdef AND p.provolatile = 'v'
+                    AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
+                    AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
+                    AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                    AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x WHERE x.grantee = 0)) THEN
+    RAISE EXCEPTION '20261227a post: fn_red_fan_lot_opod (limbaj / definer / search_path / owner / EXECUTE)';
+  END IF;
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_red\_fan\_%') <> 20 THEN
+    RAISE EXCEPTION '20261227a post: numarul functiilor fn_red_fan_* difera de 20';
+  END IF;
+  -- trigger-ul: neatins (forma exactă din 20261212a), singurul de pe tabel
+  IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_fan_loturi'::regclass AND NOT tgisinternal) <> 1
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.red_fan_loturi'::regclass AND tg.tgname = 'trg_red_fan_loturi_garda'
+                      AND tg.tgenabled = 'O' AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND tg.tgfoid = 'public.fn_red_fan_loturi_garda()'::regprocedure
+                      AND tg.tgtype = (1 | 2 | 8 | 16)) THEN
+    RAISE EXCEPTION '20261227a post: trigger-ul trg_red_fan_loturi_garda';
+  END IF;
+  -- RLS și drepturile pe red_fan_loturi neschimbate (doar SELECT pentru authenticated / service_role, nimic pentru anon / PUBLIC)
+  IF EXISTS (SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) y(rol), unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) z(drept)
+              WHERE has_table_privilege(y.rol, 'public.red_fan_loturi'::regclass, z.drept) IS DISTINCT FROM (z.drept = 'SELECT' AND y.rol <> 'anon'))
+     OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = 'public.red_fan_loturi'::regclass AND c.relrowsecurity AND NOT c.relforcerowsecurity) THEN
+    RAISE EXCEPTION '20261227a post: drepturile / RLS pe red_fan_loturi s-au schimbat';
+  END IF;
+END $post$;
+
+-- L15: aceeași listă DUPĂ schimbare (garda = corpul nou), garda finală, timpul, apoi funcția pg_temp se șterge
+DO $l15_dupa$ BEGIN
+  PERFORM pg_temp.lant_20261227a('dupa');
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261227a_redari_fan_opod:' || txid_current() OR current_user IS DISTINCT FROM 'postgres' THEN
+    RAISE EXCEPTION '20261227a: garda final invalida';
+  END IF;
+  RAISE NOTICE '20261227a: sfarsit la % ms de la BEGIN; lock-uri puternice tinute de % ms (pana la COMMIT se adauga pasul dupa al runnerului si garda: LOCK_TINUT)',
+    round(extract(epoch FROM clock_timestamp() - now()) * 1000),
+    round(extract(epoch FROM clock_timestamp()) * 1000 - current_setting('gazpet.lock_puternic_la')::numeric / 1000);
+END $l15_dupa$;
+DROP FUNCTION pg_temp.lant_20261227a(text);

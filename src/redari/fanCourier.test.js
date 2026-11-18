@@ -10,13 +10,14 @@ import { construiestePlicFan, telefonFan, hashPlicFan, jsonCanonic, interpreteaz
   imparteInBucati, MAX_PE_CERERE, FORMAT_ETICHETA, LIMITA_LOT_PILOT_IMPLICITA, interpreteazaUrmarire, interpreteazaConfirmari, comparaEvenimente, cautaInBorderou,
   caleEticheta, caleListaAwb, dataEvenimentFan, EVENIMENTE_FAN, pregatestePlicuriFan, estePdf, inBase64, LIMITE_FAN, contactPePlic,
   manifestTiparire, destinatarMascat, interpreteazaStergere, campuriEroareFan, cheieTiraj, idTiraj, tirajDin, VERSIUNE_TIRAJ, MESAJ_TIRAJ_SCHIMBAT,
-  MESAJ_TIRAJ_OPRIT, ASTEPTARE_DUPA_OPRIRE_S, tirajNeschimbat, refuzTiraj, categorieEveniment } from '../../supabase/functions/_shared/redariFan.mjs'
+  MESAJ_TIRAJ_OPRIT, ASTEPTARE_DUPA_OPRIRE_S, tirajNeschimbat, refuzTiraj, categorieEveniment, configPlicFan, cereOpod, OPTIUNE_OPOD, COST_OPOD_ESTIMAT_LEI } from '../../supabase/functions/_shared/redariFan.mjs'
 import { raspundeFan, TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST, transportPermis, esteProiectTest, ACTIUNI_FAN } from '../../supabase/functions/_shared/redariFanHandler.mjs'
 import { executaActiuneFan, MAX_BUCATI_PE_APEL, citesteToate } from '../../supabase/functions/_shared/redariFanTransport.mjs'
 import { stariPasi, stareMarcaj, stariOperatii, PASI_FAN, MESAJ_TRANSPORT_OPRIT, csvBorderouFan, prefixLot, titluLot, numeEtichete, numeControl, numeArhiva,
   controlLotFan, pregatestePachetFan, mesajEdgeFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire,
   fapteContrazise, ALEGERI_SOLUTIONARE, optiuniSolutionare, solutioneazaUrmarire, MESAJ_URMARIRE_SCHIMBATA,
-  starePropunere, stareMarcajReal, MESAJ_MARCAJ_REAL_OPRIT, textTarif, textTotalTarif, totalTarifLot, MESAJ_TARIF_NECUNOSCUT, etichetaUrmarire } from './fanLot.js'
+  starePropunere, stareMarcajReal, MESAJ_MARCAJ_REAL_OPRIT, textTarif, textTotalTarif, totalTarifLot, MESAJ_TARIF_NECUNOSCUT, etichetaUrmarire,
+  stareOpod, TEXT_OPOD, MESAJ_OPOD_NEINSTALAT, opodLot, costOpodEstimat, textAprobare, textUltimEveniment, oraBucuresti } from './fanLot.js'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import FanAwbPrevizualizare from './ui/FanAwbPrevizualizare.jsx'
@@ -36,7 +37,7 @@ describe('construiestePlicFan', () => {
     const r = construiestePlicFan({ plic, contact, proiectCod: 'TEST-RAZVAN' })
     expect(r.ok).toBe(true); expect(r.probleme).toEqual([])
     const s = r.shipment
-    expect(s.info).toMatchObject({ service: 'Standard', payment: 'sender', weight: 1, packages: { parcel: 0, envelope: 1 }, costCenter: 'TEST-RAZVAN', options: ['B'] })
+    expect(s.info).toMatchObject({ service: 'Standard', payment: 'sender', weight: 1, packages: { parcel: 0, envelope: 1 }, costCenter: 'TEST-RAZVAN', options: [] })   // 18.11: fără oPOD implicit
     expect(s.info.dimensions).toEqual({ length: 32, width: 24, height: 1 })
     expect(s.recipient).toEqual({ name: 'PERSOANA FICTIVA', contactPerson: 'PERSOANA FICTIVA', phone: '0700000001',
       address: { county: 'Prahova', locality: 'Sat Fictiv', street: 'Str. Fictivă nr. 1', zipCode: '100000' } })
@@ -252,11 +253,12 @@ describe('eticheta: format A6 FIX, un PDF pe lot, în ordinea dată', () => {
 // ── calea reală (executaActiuneFan) pe un FAN simulat: niciun apel de rețea real ──
 const LOT = { id: '11111111-2222-4333-8444-555555555555', proiect_id: 'p1', nr_lot: 'PP-0001' }
 const nr = i => `PL-TST-${String(i).padStart(4, '0')}`
-async function fixtura(n) {
+// opod = alegerea lotului la APROBARE (hash-urile rândurilor aprobate se calculează cu ea); implicit fără oPOD (18.11.2026)
+async function fixtura(n, { opod = false } = {}) {
   const plicuri = Array.from({ length: n }, (_, i) => ({ id: `pl${i + 1}`, nr_plic: nr(i + 1), destinatar_nume: 'PERSOANA FICTIVA', stare: 'activ' }))
   const convocari = plicuri.map((p, i) => ({ id: `c${i + 1}`, plic_id: p.id, detinator_id: `d${i + 1}` }))
   const contacte = plicuri.map((p, i) => ({ detinator_id: `d${i + 1}`, ...contact }))
-  const pr = await pregatestePlicuriFan({ plicuri, convocari, contacte, proiectCod: 'TEST-RAZVAN', subtle: webcrypto.subtle })
+  const pr = await pregatestePlicuriFan({ plicuri, convocari, contacte, proiectCod: 'TEST-RAZVAN', opod, subtle: webcrypto.subtle })
   const randuri = pr.map((x, i) => ({ id: `r${String(i + 1).padStart(4, '0')}`, plic_id: x.plic.id, nr_plic: x.plic.nr_plic, stare: 'aprobat', hash_date: x.hash, awb: null }))
   return { plicuri, convocari, contacte, randuri }
 }
@@ -309,6 +311,8 @@ function depsFake(fx, fan, o = {}) {
     secrete: () => ({ username: 'utilizator-fictiv', password: 'parola-fictiva', clientId: 'CLIENT-FICTIV' }),
     randuriLot: async () => ({ data: fx.randuri }),
     proiect: async () => ({ data: { cod: 'TEST-RAZVAN' } }),
+    // 18.11: alegerea oPOD a lotului (rândul red_fan_loturi), implicit fără oPOD, lot de TEST aprobat
+    fanLot: async () => ({ data: { lot_id: LOT.id, test: true, prima_aprobare_la: '2026-11-18T08:00:00+00:00', opod: false } }),
     datePlicuri: async () => ({ data: { plicuri: fx.plicuri, convocari: fx.convocari, contacte: fx.contacte } }),
     plicuriLot: async () => ({ data: fx.plicuri }),
     rpc: vi.fn(async (nume, args) => { jurnal.push({ nume, args }); return nume === 'fn_red_fan_claim_lot' ? { data: '99999999-0000-4000-8000-' + String(jurnal.length).padStart(12, '0') }
@@ -623,9 +627,9 @@ describe('raspundeFan — poarta funcției edge (ACTIVARE Testul 1: TRANSPORT_RE
     expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'evenimente', lot_id: ID_LOT } }, deps({ lot: async () => ({ data: null }), proiect, fanLot }))).status).toBe(404)
     expect(proiect).not.toHaveBeenCalled(); expect(fanLot).not.toHaveBeenCalled()
   })
-  it('funcția edge citește marcajul lotului cu JWT-ul omului (red_fan_loturi, RLS), nu din corp', () => {
+  it('funcția edge citește marcajul lotului (și alegerea oPOD) cu JWT-ul omului (red_fan_loturi, RLS), nu din corp', () => {
     const idx = readFileSync('supabase/functions/redari-fan-awb/index.ts', 'utf8')
-    expect(idx).toMatch(/fanLot: \(id: string\) => uc\.from\('red_fan_loturi'\)\.select\('lot_id, test, prima_aprobare_la'\)\.eq\('lot_id', id\)\.maybeSingle\(\)/)
+    expect(idx).toMatch(/fanLot: \(id: string\) => uc\.from\('red_fan_loturi'\)\.select\('lot_id, test, prima_aprobare_la, opod'\)\.eq\('lot_id', id\)\.maybeSingle\(\)/)
   })
   it('funcția edge intră DOAR prin poartă: index.ts nu importă calea reală', () => {
     const idx = readFileSync('supabase/functions/redari-fan-awb/index.ts', 'utf8')
@@ -1172,7 +1176,7 @@ describe('runda 3: pagina de control IDENTICĂ în etichete și în arhivă (r2 
   it('ecranele folosesc funcția comună: etichetele trimit convocările pe plic, arhiva trece prin pregatestePachetFan, evidența citește tirajul', () => {
     const fan = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8'), pe = readFileSync('src/redari/ui/PlicuriEcran.jsx', 'utf8')
     expect(fan).toMatch(/docxPaginaControl\(controlLotFan\(\{ lot, fanLot: fan\?\.fanLot, manifest, plicuri, convocariPePlic, tiraj \}\)\.continut\)/)
-    expect(fan).toMatch(/select\('lot_id,test,prima_aprobare_la,tiraj_cheie,tiraj_nr,tiraj_la,tiraj_oprit_la'\)/)
+    expect(fan).toMatch(/const COL_LOT = 'lot_id,test,prima_aprobare_la,tiraj_cheie,tiraj_nr,tiraj_la,tiraj_oprit_la'/); expect(fan).toMatch(/select\(COL_LOT \+ ',opod'\)/)   // 18.11: + opod
     expect(pe).toMatch(/<FanAwbPrevizualizare proiect=\{proiect\} lot=\{fanLot\} plicuri=\{[^\n]*\} convocariPePlic=\{pePlic\}/)
     expect(pe).toMatch(/const control = await docxPaginaControl\(continut\)\s*\n\s*if \(!curent\(\)\) return/)
     expect(pe).toMatch(/pregatestePachetFan\(\{ rpc: \(n, a\) => supabase\.rpc\(n, a\), lot: rand, fanLot: ev\.fanLot, randuriFan: ev\.randuri, plicuri: lista, convocariPePlic: pePlic \}\)\s*\n\s*if \(!curent\(\)\) return/)
@@ -1456,5 +1460,144 @@ describe('runda 4: urmărirea păstrează FAPTELE; contradicțiile sunt vizibile
     expect(src).toMatch(/r\.stare === 'generat' && r\.ridicat_propus && !r\.ridicat_contrazis/)
     expect(src).toMatch(/retur_cunoscut,ridicat_contrazis,livrat_contrazis,retur_contrazis/)
     expect(src).toMatch(/Urmărire de verificat de om/)
+  })
+})
+
+// ── 18.11.2026 — oPOD (confirmarea de primire în original, opțiunea B) devine o ALEGERE a owner-ului pe lot, implicit OPRITĂ (primul AWB real:
+// 27,16 lei în loc de 13,16); ora ultimului eveniment de urmărire în ecran. Fiecare test de aici PICĂ pe main 9f6fdada (dovada: fanCourierMutanti.test.js).
+describe('oPOD opțional pe lot, implicit oprit (18.11.2026) + ora evenimentului în ecran', () => {
+  const SRC = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8')
+  const MIG27 = readFileSync('supabase/migrations/20261227a_redari_fan_opod.sql', 'utf8')
+  const doc = DOC.replace(/\r/g, ''), pasiDoc = PASI_DOC.replace(/\r/g, '')
+  it('corpul: FĂRĂ opțiuni implicit (lista goală, nicio opțiune ghicită pentru confirmarea electronică); cu oPOD = exact [B]; opțiunea X (ePOD) nefolosită', async () => {
+    expect(CONFIG_FAN_PLIC.options).toEqual([]); expect(Object.isFrozen(CONFIG_FAN_PLIC.options)).toBe(true)
+    expect(OPTIUNE_OPOD).toBe('B'); expect(COST_OPOD_ESTIMAT_LEI).toBe(14)
+    expect(configPlicFan({ opod: true }).options).toEqual(['B']); expect(configPlicFan({ opod: true })).toMatchObject({ service: 'Standard', payment: 'sender', weight: 1 })
+    for (const v of [false, undefined, null, 'true', 1, {}]) expect([v, configPlicFan({ opod: v })]).toEqual([v, CONFIG_FAN_PLIC])   // doar `true` cere oPOD (necunoscut ≠ cerut, dar și ≠ cost)
+    expect(configPlicFan().options).toEqual([])
+    const fara = construiestePlicFan({ plic, contact, proiectCod: 'TEST-RAZVAN' }).shipment
+    const cu = construiestePlicFan({ plic, contact, proiectCod: 'TEST-RAZVAN', config: configPlicFan({ opod: true }) }).shipment
+    expect(fara.info.options).toEqual([]); expect(cu.info.options).toEqual(['B']); expect(JSON.stringify(cu)).not.toMatch(/"X"/)
+    expect(cereOpod(fara)).toBe(false); expect(cereOpod(cu)).toBe(true); expect(cereOpod(null)).toBe(false); expect(cereOpod({ info: {} })).toBe(false)
+    // hash-ul aprobat INCLUDE alegerea: aceleași date, alt oPOD = alt hash (valoarea de la aprobare e cea folosită la generare)
+    expect(await hashPlicFan(fara, webcrypto.subtle)).not.toBe(await hashPlicFan(cu, webcrypto.subtle))
+    const pr0 = await pregatestePlicuriFan({ plicuri: [{ id: 'p1', ...plic }], convocari: [{ plic_id: 'p1', detinator_id: 'd1' }], contacte: [{ detinator_id: 'd1', ...contact }], proiectCod: 'TEST-RAZVAN', subtle: webcrypto.subtle })
+    const pr1 = await pregatestePlicuriFan({ plicuri: [{ id: 'p1', ...plic }], convocari: [{ plic_id: 'p1', detinator_id: 'd1' }], contacte: [{ detinator_id: 'd1', ...contact }], proiectCod: 'TEST-RAZVAN', opod: true, subtle: webcrypto.subtle })
+    expect(pr0[0].shipment.info.options).toEqual([]); expect(pr1[0].shipment.info.options).toEqual(['B']); expect(pr0[0].hash).not.toBe(pr1[0].hash)
+    // documentul: lista goală = Standard fără servicii suplimentare; nu există opțiune documentată pentru confirmarea electronică
+    expect(doc).toMatch(/implicit OPRIT/); expect(doc).toMatch(/lista goală/i)
+  })
+  it('generarea FĂRĂ oPOD (lotul nu îl cere): corpul fiecărei expedieri pleacă fără B; răspunsul spune opod: false', async () => {
+    const fx = await fixtura(3)
+    const fan = fanSimulat((u, init) => raspunsJson(200, okPentru(JSON.parse(init.body))))
+    const r = await executaActiuneFan({ corp: { actiune: 'genereaza' }, lot: LOT }, depsFake(fx, fan).deps)
+    const creari = fan.apeluri.filter(a => a.cale === '/intern-awb')
+    expect(creari).toHaveLength(1); expect(creari[0].corp.shipments).toHaveLength(3)
+    expect(creari[0].corp.shipments.every(s => Array.isArray(s.info.options) && s.info.options.length === 0)).toBe(true)
+    expect(JSON.stringify(creari[0].corp)).not.toMatch(/"B"/)
+    expect(r.body).toMatchObject({ cod: 'ok', generat: 3, opod: false })
+  })
+  it('generarea CU oPOD (lotul îl cere, aprobat cu el): fiecare expediere pleacă cu options = [B]; răspunsul spune opod: true', async () => {
+    const fx = await fixtura(2, { opod: true })
+    const fan = fanSimulat((u, init) => raspunsJson(200, okPentru(JSON.parse(init.body))))
+    const { deps } = depsFake(fx, fan, { fanLot: async () => ({ data: { lot_id: LOT.id, test: true, prima_aprobare_la: '2026-11-18T08:00:00+00:00', opod: true } }) })
+    const r = await executaActiuneFan({ corp: { actiune: 'genereaza' }, lot: LOT }, deps)
+    const creari = fan.apeluri.filter(a => a.cale === '/intern-awb')
+    expect(creari).toHaveLength(1); expect(creari[0].corp.shipments.map(s => s.info.options)).toEqual([['B'], ['B']])
+    expect(r.body).toMatchObject({ cod: 'ok', generat: 2, excluse: [], opod: true })
+  })
+  it('VALOAREA DE LA APROBARE E CEA FOLOSITĂ: lot aprobat FĂRĂ oPOD, dar rândul lotului are acum oPOD → hash diferit → TOATE rândurile excluse, NIMIC trimis, niciun claim (și invers)', async () => {
+    for (const [laAprobare, acum] of [[false, true], [true, false]]) {
+      const fx = await fixtura(2, { opod: laAprobare })
+      const fan = fanSimulat(() => { throw new Error('APEL INTERZIS: corpul nu mai e cel aprobat') })
+      const { deps, jurnal } = depsFake(fx, fan, { fanLot: async () => ({ data: { lot_id: LOT.id, test: true, prima_aprobare_la: 'x', opod: acum } }) })
+      const r = await executaActiuneFan({ corp: { actiune: 'genereaza' }, lot: LOT }, deps)
+      expect(fan.apeluri.filter(a => a.cale === '/intern-awb')).toHaveLength(0)
+      expect(jurnal.filter(j => j.nume === 'fn_red_fan_claim_lot')).toHaveLength(0)
+      expect(r.body).toMatchObject({ cod: 'ok', generat: 0, solicitari: 0, ramase: 0, opod: acum })
+      expect(r.body.excluse).toEqual(fx.randuri.map(x => ({ nr_plic: x.nr_plic, motiv: expect.stringMatching(/schimbat după aprobare/) })))
+    }
+  })
+  it('alegerea oPOD necitibilă = nimic trimis: lot nemarcat → 409 lot_nemarcat; eroare de citire → 503; valoare lipsă / de altă formă → 503 (L18: necunoscut ≠ „fără oPOD”)', async () => {
+    const fx = await fixtura(1)
+    const fan = fanSimulat(() => { throw new Error('APEL INTERZIS') })
+    const cer = async fanLot => executaActiuneFan({ corp: { actiune: 'genereaza' }, lot: LOT }, depsFake(fx, fan, { fanLot }).deps)
+    expect((await cer(async () => ({ data: null }))).body).toEqual({ cod: 'lot_nemarcat' })
+    expect((await cer(async () => ({ error: { message: 'x' } }))).body.cod).toBe('citire_neconfirmata')
+    for (const opod of [undefined, null, 'true', 1, 'false']) expect([opod, (await cer(async () => ({ data: { lot_id: LOT.id, test: true, opod } }))).body.cod]).toEqual([opod, 'citire_neconfirmata'])
+    expect(fan.apeluri.filter(a => a.cale === '/intern-awb')).toHaveLength(0)
+    expect(mesajEdgeFan({ data: { cod: 'lot_nemarcat' } })).toMatch(/nu e marcat/)
+  })
+  it('ecranul: bifa oPOD — doar owner, după marcaj, înainte de prima aprobare (și fără plicuri aprobate); coloana neinstalată = dezactivată cu motiv; transport oprit / proiect real = motivul gărzii', () => {
+    const baza = { transportActiv: true, evidentaInstalata: true, esteOwner: true, proiectCod: 'TEST-RAZVAN', randuri: [{ stare: 'propus' }], fanLot: { test: true, opod: false, prima_aprobare_la: null } }
+    expect(stareOpod(baza)).toEqual({ activ: true, motiv: '' })
+    expect(stareOpod({ ...baza, fanLot: { ...baza.fanLot, opod: true } }).activ).toBe(true)
+    expect(stareOpod({ ...baza, esteOwner: false })).toEqual({ activ: false, motiv: 'doar owner-ul alege oPOD' })
+    expect(stareOpod({ ...baza, fanLot: null })).toEqual({ activ: false, motiv: 'alege întâi: lot de TEST sau lot real' })   // după marcaj (rândul lotului)
+    expect(stareOpod({ ...baza, fanLot: { test: true, prima_aprobare_la: null } })).toEqual({ activ: false, motiv: MESAJ_OPOD_NEINSTALAT })   // coloana lipsă (opod: undefined)
+    expect(stareOpod({ ...baza, fanLot: { test: true, opod: null, prima_aprobare_la: null } })).toEqual({ activ: false, motiv: MESAJ_OPOD_NEINSTALAT })
+    expect(stareOpod({ ...baza, fanLot: { ...baza.fanLot, prima_aprobare_la: '2026-11-18T08:00:00Z' } })).toEqual({ activ: false, motiv: expect.stringMatching(/aprobat o dată/) })
+    for (const stare of ['aprobat', 'in_curs', 'generat', 'necunoscut', 'ridicat']) expect([stare, stareOpod({ ...baza, randuri: [{ stare }] }).activ]).toEqual([stare, false])
+    for (const stare of ['propus', 'eroare', 'anulat']) expect([stare, stareOpod({ ...baza, randuri: [{ stare }] }).activ]).toEqual([stare, true])
+    expect(stareOpod({ ...baza, transportActiv: false })).toEqual({ activ: false, motiv: MESAJ_TRANSPORT_OPRIT })
+    expect(stareOpod({ ...baza, proiectCod: 'LOT1-PRUNISOR-JUPA' })).toMatchObject({ activ: false, motiv: expect.stringMatching(/proiecte de TEST/) })
+    expect(stareOpod({ ...baza, evidentaInstalata: false })).toMatchObject({ activ: false, motiv: expect.stringMatching(/neaplicată/) })
+    expect(stareOpod({})).toMatchObject({ activ: false })
+    // oPOD-ul lotului DOAR din true; lipsa / necunoscut nu cer oPOD (același criteriu ca configPlicFan)
+    expect(opodLot({ opod: true })).toBe(true); for (const v of [{ opod: false }, { opod: null }, {}, null, undefined, { opod: 'true' }]) expect([v, opodLot(v)]).toEqual([v, false])
+    expect(TEXT_OPOD).toBe('Confirmare de primire în original (oPOD, +14 lei / plic)')
+  })
+  it('dialogul de aprobare spune dacă oPOD e cerut și costul estimat suplimentar, DIN corpurile aprobate; corpuri amestecate = nu se aprobă', () => {
+    const cu = construiestePlicFan({ plic, contact, proiectCod: 'X', config: configPlicFan({ opod: true }) }).shipment, fara = construiestePlicFan({ plic, contact, proiectCod: 'X' }).shipment
+    expect(costOpodEstimat(3)).toBe(42); expect(costOpodEstimat(0)).toBe(0); expect(costOpodEstimat(null)).toBe(0)
+    const f = textAprobare({ n: 2, shipments: [fara, fara], titlu: 'LOT DE TEST · PP-0001' })
+    expect(f).toMatchObject({ ok: true, opod: false }); expect(f.text).toMatch(/^Aprobi 2 AWB-uri FAN pentru LOT DE TEST · PP-0001\?/); expect(f.text).toMatch(/FĂRĂ oPOD: confirmarea de primire e cea electronică/); expect(f.text).not.toMatch(/42,00|CERUT/)
+    const c = textAprobare({ n: 3, shipments: [cu, cu, cu], titlu: 'Lot real · PP-0002' })
+    expect(c).toMatchObject({ ok: true, opod: true }); expect(c.text).toMatch(/oPOD CERUT/); expect(c.text).toMatch(/42,00 lei \(3 × 14 lei\)/); expect(c.text).toMatch(/Fiecare AWB generat costă/)
+    expect(textAprobare({ n: 2, shipments: [cu, fara], titlu: 'x' })).toMatchObject({ ok: false, text: expect.stringMatching(/nu au aceeași alegere oPOD \(1 cu, 1 fără\)/) })
+    // ecranul: aprobarea trece prin textAprobare pe corpurile propuse; bifa, RPC-ul, „oPOD” pe rândul plicului (din corp), confirmările
+    expect(SRC).toMatch(/const t = textAprobare\(\{ n: propuse\.length, shipments: randuri\.filter\(r => ids\.has\(r\.plic\.id\)\)\.map\(r => r\.shipment\)/); expect(SRC).toMatch(/if \(!t\.ok\) return t\.text/)
+    expect(SRC).toMatch(/supabase\.rpc\('fn_red_fan_lot_opod', \{ p_lot_id: lot\.id, p_opod: cere \}\)/); expect(SRC).toMatch(/<input type="checkbox" checked=\{opodLot\(fan\?\.fanLot\)\} disabled=\{!opodSt\.activ \|\| lucru\}/)
+    expect(SRC).toMatch(/cereOpod\(r\.shipment\) \? <b style=\{\{ color: G\.orange \}\}> · oPOD<\/b>/)
+    expect(SRC).toMatch(/pregatestePlicuriFan\(\{ plicuri: active, convocari: conv, contacte: cont, proiectCod: proiect\.cod, opod: opodLot\(stare\.fanLot\) \}\)/)   // corpurile cu alegerea CITITĂ a lotului
+    expect(SRC).toMatch(/select\(COL_LOT \+ ',opod'\)/); expect(SRC).toMatch(/lipsaColoana\(e1\)/)
+    // migrarea: coloana implicit false, RPC owner, trigger-ul păzește oPOD după prima aprobare; revenirea există
+    expect(MIG27).toMatch(/ADD COLUMN opod boolean NOT NULL DEFAULT false/); expect(MIG27).toMatch(/CREATE FUNCTION public\.fn_red_fan_lot_opod\(p_lot_id uuid, p_opod boolean\)/)
+    expect(MIG27).toMatch(/NEW\.opod IS DISTINCT FROM OLD\.opod/); expect(MIG27).toMatch(/'opod_schimbat'/)
+    expect(readFileSync('supabase/revenire/20261227a_redari_fan_opod_ROLLBACK.sql', 'utf8')).toMatch(/DROP COLUMN opod/)
+  })
+  it('ecranul randat (owner, lot NEmarcat): bifa oPOD e vizibilă, nebifată și dezactivată; pe proiect real la fel', () => {
+    for (const cod of ['TEST-RAZVAN', 'LOT1-PRUNISOR-JUPA']) {
+      const html = renderToStaticMarkup(React.createElement(FanAwbPrevizualizare, { proiect: { cod }, lot: { id: 'l1', nr_lot: 'PP-0001' }, plicuri: [], esteOwner: true, poateScrie: true, onClose: () => {} }))
+      const bifa = html.match(/<input type="checkbox"[^>]*>/g) || []
+      expect(bifa).toHaveLength(1); expect(bifa[0]).toMatch(/disabled=""/); expect(bifa[0]).not.toMatch(/checked=""/)
+      expect(html).toContain('Confirmare de primire în original (oPOD, +14 lei / plic)'); expect(html).not.toMatch(/· CERUT/)
+    }
+  })
+  it('ora ultimului eveniment: text clar + data ȘI ora României (L17), inclusiv la trecerea la ora de vară / de iarnă; fără oră = spus; fără eveniment = nimic', () => {
+    // timestamptz din PostgREST (UTC) → Europe/Bucharest: iarnă UTC+2, vară UTC+3
+    expect(oraBucuresti('2026-11-18T15:21:00+00:00')).toBe('18.11.2026 17:21'); expect(oraBucuresti('2026-07-10T22:30:00Z')).toBe('11.07.2026 01:30')
+    // trecerea la ora de iarnă: duminică 25.10.2026, 01:00 UTC (03:59:59 EEST → 03:00:00 EET)
+    expect(oraBucuresti('2026-10-25T00:59:00Z')).toBe('25.10.2026 03:59'); expect(oraBucuresti('2026-10-25T01:00:00Z')).toBe('25.10.2026 03:00')
+    // trecerea la ora de vară: duminică 29.03.2026, 01:00 UTC (02:59:59 EET → 04:00:00 EEST)
+    expect(oraBucuresti('2026-03-29T00:59:00Z')).toBe('29.03.2026 02:59'); expect(oraBucuresti('2026-03-29T01:00:00Z')).toBe('29.03.2026 04:00')
+    expect(oraBucuresti('2026-11-18T23:30:00-02:00')).toBe('19.11.2026 03:30')   // alt fus în text → tot ora României (peste miezul nopții)
+    for (const v of ['', null, undefined, 'ieri', '2026-13-40']) expect([v, oraBucuresti(v)]).toEqual([v, ''])
+    expect(textUltimEveniment({ ultim_eveniment: 'C0', ultim_eveniment_la: '2026-11-18T15:21:00+00:00' })).toBe('ridicat de curier (C0) 18.11.2026 17:21')
+    expect(textUltimEveniment({ ultim_eveniment: 'S2', ultim_eveniment_la: '2026-07-10T22:30:00Z' })).toBe('livrat (S2) 11.07.2026 01:30')
+    expect(textUltimEveniment({ ultim_eveniment: 'S98', ultim_eveniment_la: '2026-11-18T10:00:00Z' })).toBe('AWB înregistrat la curier (S98) 18.11.2026 12:00')
+    expect(textUltimEveniment({ ultim_eveniment: 'S6', ultim_eveniment_la: '2026-11-18T10:00:00Z' })).toBe('refuzat de destinatar (S6) 18.11.2026 12:00')
+    expect(textUltimEveniment({ ultim_eveniment: 'H2', ultim_eveniment_la: '2026-11-18T10:00:00Z' })).toBe('în tranzit (H2) 18.11.2026 12:00')
+    expect(textUltimEveniment({ ultim_eveniment: 'S99', ultim_eveniment_la: '2026-11-18T10:00:00Z' })).toBe('de verificat de om (S99) 18.11.2026 12:00')
+    expect(textUltimEveniment({ ultim_eveniment: 'X9', ultim_eveniment_la: '2026-11-18T10:00:00Z' })).toBe('eveniment (X9) 18.11.2026 12:00')   // cod necunoscut: nu se ghicește sensul
+    expect(textUltimEveniment({ ultim_eveniment: 'C0', ultim_eveniment_la: null })).toBe('ridicat de curier (C0) (fără oră)')
+    for (const r of [null, {}, { ultim_eveniment: null }, { ultim_eveniment: '  ' }]) expect(textUltimEveniment(r)).toBe('')
+    // ecranul: pe rândul plicului, lângă „urmărire: …”; evidența citește ultim_eveniment_la
+    expect(SRC).toMatch(/\{f\.ultim_eveniment \? ` · \$\{textUltimEveniment\(f\)\}` : ''\}/); expect(SRC).toMatch(/const COL_FAN = '[^']*,ultim_eveniment,ultim_eveniment_la,/)
+  })
+  it('documentele: oPOD = opțiune per lot, implicit oprită (decizia din 09.11 + 18.11.2026); procedura nu mai spune că opțiunea B pleacă mereu', () => {
+    expect(doc).toMatch(/opțiune[^\n]*pe lot[^\n]*implicit/i); expect(doc).toMatch(/27,16 lei/); expect(doc).toMatch(/fn_red_fan_lot_opod/); expect(doc).toMatch(/20261227a/)
+    expect(doc).not.toMatch(/\| `info\.options` \| `\["B"\]` \(oPOD\) \| dacă juridicul cere/)
+    expect(pasiDoc).not.toMatch(/opțiunea B \(oPOD\), plătește expeditorul/); expect(pasiDoc).toMatch(/fără oPOD/i)
   })
 })
