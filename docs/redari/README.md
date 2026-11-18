@@ -81,6 +81,7 @@ metadatele răspunsurilor, `valoare_lei` și nu scrie nimic. Migrarea NU acordă
 | `src/redari/sentryScrub.js` | tokenul din `/redari/raspuns/<token>` nu ajunge în Sentry (`beforeSend` / `beforeSendTransaction` în `src/main.jsx`): URL-uri, variante `%2F`, `p_token` în payload-uri codificate URL (decodare repetată), chei la orice adâncime; dacă scrub-ul însuși aruncă, evenimentul e eliminat, nu trimis brut |
 | `src/RedariRaspunsPublic.jsx` | formularul public `/redari/raspuns/:token`, fără login, mobile-first, 4 opțiuni, fără date personale |
 | `public/redari/sabloane/*.docx` | șabloanele reale Model_1..5 Final_v2 (03.11.2026) cu placeholder-e (`convocator`, `pv_a`, `pv_b`, `adresa_uat`, `pv_c`), refăcute cu `scripts/redari_sabloane_din_modele.mjs`; originalele în `docs/redari/referinta/` |
+| `public/redari/sabloane/anunt_afisare.docx` | anunțul de afișare la primărie (convocarea pe UAT + lista parcelelor, fără date personale; plan rev. 1 pct. 4.3), construit din `docs/redari/TEXT_ANUNT_AFISARE.md` cu `scripts/redari_sablon_anunt_afisare.mjs` (`--verifica` compară octet cu octet); generator `genereazaAnuntAfisare` în `docx.js`, buton în 🏛️ UAT-uri (SABLOANE.md §2.7) |
 | `scripts/redari_sabloane_verifica.mjs` | verifică placeholder-ele șabloanelor (0 rupte între run-uri) |
 
 `src/App.jsx` primește doar ruta lazy `/redari`, ruta publică `/redari/raspuns/:token` și intrarea în meniu (🌾 Redări teren). Teste vitest

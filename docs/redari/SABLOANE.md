@@ -15,6 +15,7 @@
 | `Model_6_Registru_urmarire_convocari.xlsx` (v3) | — (export xlsx) | — | registrul: foi Registru / Centralizator / Legendă (§5) |
 | `Model_7_Anexa7_Tipizat_v6_final.xlsx` (și v5: `Model_7_Anexa7_Tipizat_date_detinatori_TGZ.xlsx`) | — (import, `red_import_loturi.sursa = 'ANEXA7'`) | — | tipizatul cerut Beneficiarului pentru datele deținătorilor (§6) |
 | `Lot1_Checklist_urmarire.pdf`, `Lot1_Plan_verificare_redari_DRAFT.pdf`, `Lot1_Scrisoare_Transgaz_DRAFT.pdf` (v3) | — | — | context (§7) |
+| — (text propriu: `TEXT_ANUNT_AFISARE.md`, 18.11.2026) | `anunt_afisare.docx` | UAT | anunțul de afișare la intrarea în primărie (convocarea pe UAT + lista parcelelor, fără date personale; planul rev. 1 pct. 4.3 + cap. 8, Anexa 5 = PV-ul de afișare) — §2.7 |
 
 Din Final_v2 NU intră în repo (nu sunt șabloane ERP, doar referință): `A1_Plan_verificare_redari_Lot1_rev49_final.docx` (de aici
 termenul de 10 zile, §8), `A1_Scrisoare_Transgaz_plan_Lot1_rev9_final.docx`, `A3_Adresa_TGZ_acord_art28_v1_final.docx`,
@@ -409,6 +410,54 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `contact_email` | red_proiecte.contact_email |
 | `reprezentant_gazpet` | red_proiecte.reprezentant_gazpet_nume |
 | `functie` | red_proiecte.reprezentant_gazpet_functie |
+
+### 2.7 `anunt_afisare.docx` — anunțul de afișare la primărie (convocarea pe UAT), per UAT, 32 de placeholder-e (18.11.2026)
+
+Planul procedurii de predare rev. 1 (transmis Transgaz pe 18.11.2026), pct. 4.3: „Convocarea pe UAT, cu lista parcelelor (fără date
+personale), se afișează la intrarea în primărie cu cel puțin 10 zile înainte, pentru toți proprietarii, inclusiv cei fără adresă sau
+neidentificați. … Afișarea e publicitate suplimentară; nu valorează acceptare tacită.”; cap. 8: „Convocatorul afișat la primărie conține
+identificarea parcelelor, nu date personale.” Până la 18.11 exista doar Anexa 2 din adresa UAT (Model 4, §2.4), încorporată în adresă și
+cu terminologia veche; anunțul de sine stătător lipsea din pachetul trimis Transgaz (modelul lui: `13b_Model_Anunt_afisare_primarie_rev1`).
+
+- **Textul** (propunere, de validat de Juridic și de Răzvan): `TEXT_ANUNT_AFISARE.md` — adaptat din convocatorul individual rev. 1
+  (titlul „CONVOCARE la predarea terenului”, cele trei opțiuni de răspuns, „În lipsa participării sau a unui răspuns … constatare tehnică
+  documentată”, precizările despre despăgubiri și coproprietari) și din Anexa 2 a adresei UAT; în plus: „Prezenta afișare este o
+  publicitate suplimentară a convocării; ea nu valorează acceptare tacită” (formularea din plan), „Prezentul anunț nu conține date
+  personale”, adresa paginii publice de informare GDPR (`https://redari.gazpet.ro/redari/informare`, aceeași pentru toți) cu codul ei QR
+  (fără link personal: nu există pagină publică de răspuns pe UAT, decizia D1 02.11).
+- **Șablonul** se construiește DOAR din text: `node scripts/redari_sablon_anunt_afisare.mjs` (`--verifica` = comparare octet cu octet).
+  A4 portret, marginile convocatorului (1,27 / 1,5 cm), Calibri 11 pt (titlul 20 pt, mărunt 9 pt), antetul-imagine Gazpet în header-ul
+  primei pagini (`redari_antet.mjs`, excepția (10)), tabelele cu `w:tblHeader` (antetul repetat pe fiecare pagină) și `w:cantSplit`
+  (rândurile nu se rup); `{{qr}}` într-un cadru de 3,2 cm aliniat la dreapta (ca la convocator). Marcajele de formatare ale textului sunt
+  descrise în capul fișierului-sursă. `anuntAfisare.test.js` cere textul din `<w:t>` = textul-sursă, în ordine.
+- **Generatorul**: `genereazaAnuntAfisare` / `verificaDateAnuntAfisare` (`docx.js`). Strict implicit; fără parcele active nu se generează.
+  Nu primește și nu citește deținători; din parcele intră DOAR `CAMPURI_PARCELA_ANUNT` (sat, tarla, nr_cadastral, poz_hg, tronson), iar
+  selectul UI e `COL_PARCELA_ANUNT`. Postcondiție: câmpurile = exact cheile șablonului. Ordinea listei: tarla, nr. cadastral / parcelă
+  (comparare naturală), id_parcela. Nu se numerotează, nu se salvează în storage / BD: afișarea se dovedește prin PV-ul de afișare
+  (`red_uat.afisare_data_start / _end / _pv_nr`, Anexa 5 din plan).
+- **O singură definiție (L19)**: câmpurile comune vin din helper-ele `campuriContractProiect`, `campuriSesiuniUat`, `campuriContactGazpet`
+  (folosite identic de convocator, adresa UAT și anunț; test de paritate + mutant textual) și `areZiCuProgram` (`setari.js`; convocator,
+  adresa UAT, anunț, „Gata de convocare?”).
+- **Unde**: 🏛️ UAT-uri → editare UAT → „Anunț de afișare (DOCX)”, pentru admin și editor (documentul nu are date personale și nu scrie
+  nimic); UAT-ul, proiectul (cu starea informării de la server, `cuInformarePublicata`) și parcelele se recitesc din BD înainte de
+  generare; aceleași lipsuri apar în 📬 Notificări la modelul „Afișarea la Primărie”.
+
+| placeholder | sursă în BD | oblig. | observații |
+|---|---|---|---|
+| `{{contract_nr}}`, `{{contract_data}}`, `{{proiect_denumire}}` ×2 | red_proiecte (campuriContractProiect) | da | antet + „lucrările la {{proiect_denumire}}” |
+| `{{uat}}` ×4, `{{judet}}` | red_uat.nume, .judet | da | |
+| `{{imputernicire_nr}}`, `{{imputernicire_data}}` | red_proiecte | da | |
+| `{{zi1..3}}`, `{{program1..3}}`, `{{sate_zi1..3}}` | red_uat (campuriSesiuniUat) | cel puțin o zi cu program | tabelul celor 3 zile, ca la convocator |
+| `{{contact_nume}}`, `{{contact_telefon}}` ×2, `{{contact_email}}` ×2 | red_proiecte (campuriContactGazpet) | da, toate trei | fiecare e tipărit (regula D3) |
+| `{{reprezentant_tgz}}`, `{{reprezentant_tgz_telefon}}` | reprezentant_tgz_nume + _functie; reprezentant_tgz_telefon | da | „Contact TRANSGAZ (DRFT / ofițer de legătură)” |
+| `{{link_informare}}`, `{{qr}}` | constanta `LINK_INFORMARE_PUBLIC` (pagina publică a informării) + QR-ul ei | informarea publicată (server) | `false` / `null` de la server blochează |
+| `{{semnatar_gazpet}}`, `{{data}}` | reprezentant_gazpet_nume + _functie; data generării (Europe/Bucharest) | da (semnatarul) | |
+| `{{numar_parcele}}` | COUNT parcele active | — | |
+| `{{rand.nr}}`, `{{rand.sat}}`, `{{rand.tarla}}`, `{{rand.nr_cadastral}}`, `{{rand.poz_hg}}`, `{{rand.tronson}}` | red_v_parcele (lista albă) | ≥ 1 parcelă | rând-șablon → `repetaRand` |
+
+Întrebări deschise pentru Juridic (textul e propunere): formularea despre neprezentare (reluată din convocator) și fraza „publicitate
+suplimentară … nu valorează acceptare tacită”; dacă pe afiș se trec numele persoanelor de contact (Gazpet / Transgaz) sau doar
+funcția și telefonul; dacă anunțul trebuie semnat / ștampilat de Antreprenor sau e suficient PV-ul de afișare semnat de UAT.
 
 ## 3. Câmpuri FĂRĂ sursă în contract — de adăugat în schemă / de decis
 
