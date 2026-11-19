@@ -38,8 +38,26 @@
 //    nomenclator de sate în schemă); forma publicată = ortografia DECLARATĂ („Gârnița”), nu valoarea parcelei („GARNITA”).
 // Valoarea goală (NULL / '') e permisă la orice câmp (nu publică nimic). Marcajul „necompletat” al modelelor („____”, doar liniuțe de
 // subliniere, ≥ 2) e acceptat la orice câmp: nu poartă nicio informație (scripts/redari_model_anunt_afisare.mjs).
+//
+// VALORILE NESCHIMBATE DE LA IMPORT (decizia Răzvan 19.11.2026, varianta A): riscul de la care a pornit validatorul e operatorul care
+// scrie MANUAL în Fișa parcelei un telefon / CNP / nume / cotă; valorile aduse de import din lista Transgaz nu sunt acest risc (pe LOT1
+// fondul forestier „97#UP II <loc.>”, UA-urile „##UA 62VV”, codurile de lucrări „#HCN 949#”, topo-urile cu fracție „#1/2#”, listele
+// „51384#1079/1,1079/1/1” etc. sunt identificatori reali refuzați de forma strictă). Regula, DOAR la tarla / nr_cadastral / poz_hg:
+//  - o valoare IDENTICĂ (același șir, exact: majuscule, diacritice, spații) cu cea scrisă la INSERT-ul de import se publică așa cum e,
+//    fără validatorul de formă, dar tot cu plafonul de lungime, fără caractere de control și fără „|”; forma publicată = aceeași
+//    transformare ca pe calea strictă (majuscule, spații simple, fără spații lângă „#”, „##” → nimic);
+//  - orice altă valoare (editată în Fișă, chiar și cu o singură cifră / literă mică schimbată; parcelă fără INSERT de import dovedit)
+//    trece prin validatorul strict de mai sus, NESCHIMBAT; `sat` (satele declarate) și `tronson` (1..11) rămân neschimbate.
+// Sursa „valorii de la import” = rândul INSERT din red_jurnal al parcelei (trg_red_jurnal: to_jsonb(NEW), append-only pentru rolurile
+// aplicației), NU red_parcele.cheie_sursa: cheia e normalizată (majuscule, fără diacritice, punctuație repetată comprimată) și are
+// GRANT UPDATE pentru authenticated (un admin / editor o poate rescrie prin API ca să „acopere” o valoare manuală); rândul de jurnal
+// păstrează șirul brut și nu poate fi modificat de aplicație. INSERT-ul e „de import” doar dacă poartă o cheie_sursa EGALĂ cu cheia
+// recalculată din valorile lui și din uat3-ul UAT-ului (importTgz.cheieSursa — exact ce scrie importul; Fișa nu inserează parcele).
+// Limita (raportul PR-ului): un admin / editor care inserează DELIBERAT prin API o parcelă „ca la import” (cheie + valori fabricate) nu
+// poate fi deosebit de import fără o coloană de proveniență setată de server (migrare propusă, neaplicată) — același risc acceptat la
+// 20261130h (nr_crt_grup).
 import { normalizeazaNume, faraDiacritice } from './idParcela.js'
-import { tronsonOptional, text, cadastruGol } from './importTgz.js'
+import { tronsonOptional, text, cadastruGol, cheieSursa } from './importTgz.js'
 
 /** Marcajul „necompletat” din modele: doar „_” (cel puțin două). */
 export const RE_NECOMPLETAT = /^_{2,}$/
@@ -92,6 +110,53 @@ const REGULA_CAMP = Object.freeze({
   nr_cadastral: { compus: true, slash: true, cifraObligatorie: false, maxCifre: MAX_CIFRE_SUBCAMP, liste: true },
   poz_hg: { compus: false, slash: false, cifraObligatorie: true, maxCifre: 5 },
 })
+
+/** Câmpurile la care o valoare IDENTICĂ cu cea de la import se publică fără validatorul de formă (varianta A, 19.11.2026). */
+export const CAMPURI_DIN_IMPORT = Object.freeze(['tarla', 'nr_cadastral', 'poz_hg'])
+// caractere de control / de formatare (inclusiv cele invizibile: zero-width, bidi, BOM) — refuzate și pe calea „de la import”
+const RE_CONTROL = /[\p{Cc}\p{Cf}]/u
+const RE_UAT3 = /^[A-Z]{3}$/
+
+/** Valorile unui rând INSERT din jurnal, dacă e un INSERT DE IMPORT dovedit (cheie_sursa = cheia recalculată), altfel null. */
+function valoriInsertImport(r, id, uat3) {
+  if (r.tabela !== 'red_parcele' || r.actiune !== 'insert') return null
+  const d = r.date_noi
+  if (!d || typeof d !== 'object' || Array.isArray(d) || typeof d.id !== 'string' || d.id.toLowerCase() !== id) return null
+  const valori = {}
+  for (const camp of CAMPURI_DIN_IMPORT) {
+    const x = d[camp] ?? null
+    if (x !== null && typeof x !== 'string') return null
+    if (x !== null && x.includes('|')) return null   // separatorul cheii chiar în valoare: cheia nu mai dovedește câmpurile → strict
+    valori[camp] = x
+  }
+  if (typeof d.cheie_sursa !== 'string' || d.cheie_sursa === '') return null   // fără cheie = nu e import (importul nu comite fără cheie)
+  if (d.cheie_sursa !== cheieSursa(uat3, valori.poz_hg, valori.nr_cadastral, valori.tarla)) return null
+  return Object.freeze(valori)
+}
+
+/**
+ * Valorile DE LA IMPORT ale parcelelor: Map(id parcelă, minuscule → { tarla, nr_cadastral, poz_hg }) din rândurile red_jurnal
+ * (tabela red_parcele, actiune insert; coloanele id, tabela, actiune, inregistrare_id, date_noi). Intră DOAR parcelele cu exact un
+ * INSERT, de import dovedit (vezi valoriInsertImport); celelalte lipsesc din Map → validare strictă. `uat3` = codul UAT-ului (3 litere).
+ */
+export function valoriImportDinJurnal(randuri = [], uat3) {
+  if (typeof uat3 !== 'string' || !RE_UAT3.test(uat3)) return new Map()
+  const peParcela = new Map()   // id → valori | null (null = nedovedit sau mai multe INSERT-uri)
+  for (const r of Array.isArray(randuri) ? randuri : []) {
+    if (!r || typeof r.inregistrare_id !== 'string' || !r.inregistrare_id) continue
+    const id = r.inregistrare_id.toLowerCase()
+    peParcela.set(id, peParcela.has(id) ? null : valoriInsertImport(r, id, uat3))
+  }
+  return new Map([...peParcela].filter(([, v]) => v !== null))
+}
+
+/** true = `valoare` e EXACT șirul scris la INSERT-ul de import (`laImport` = obiectul din valoriImportDinJurnal), fără control / „|”. */
+function identicaCuImportul(camp, valoare, laImport) {
+  if (!CAMPURI_DIN_IMPORT.includes(camp) || !laImport || typeof laImport !== 'object' || !Object.hasOwn(laImport, camp)) return false
+  if (typeof valoare !== 'string' || RE_CONTROL.test(valoare) || valoare.includes('|')) return false
+  const valoareImport = laImport[camp]
+  return typeof valoareImport === 'string' && valoare === valoareImport
+}
 
 /** Normalizarea folosită la compararea SATULUI cu lista declarată (majuscule, fără diacritice, spații simple — ca la cheia de import). */
 export const normalizeazaIdentificator = v => normalizeazaNume(v)
@@ -180,6 +245,8 @@ export function sateDeclarate(uat = {}) {
 /**
  * Forma CANONICĂ a unei valori publicate: { ok: true, valoare } (valoarea EXACT așa cum se publică; '' = nimic) sau { ok: false, motiv }.
  * Pentru `sat` cere `ctx.sate` (Map din sateDeclarate) sau `ctx.uat`. Nu întoarce niciodată valoarea refuzată.
+ * `ctx.import` = valorile de la import ale parcelei (un element din valoriImportDinJurnal): la tarla / nr_cadastral / poz_hg, o valoare
+ * IDENTICĂ cu ele se publică fără validatorul de formă ({ ok: true, valoare, din_import: true }); orice altă valoare = calea strictă.
  */
 export function canonizeazaIdentificator(camp, valoare, ctx = {}) {
   if (valoare === null || valoare === undefined) return ok('')
@@ -192,6 +259,8 @@ export function canonizeazaIdentificator(camp, valoare, ctx = {}) {
       const regula = REGULA_CAMP[camp]
       // la TGZ-ul compus, spațiile din jurul lui „#” nu poartă informație: „# 44 #” → „#44#” (validarea și publicarea pe ACELAȘI șir)
       const sir = regula.compus ? canon.replace(/ ?# ?/g, '#') : canon
+      // varianta A (19.11.2026): EXACT valoarea de la import → se publică fără validatorul de formă (plafonul de lungime e aplicat mai sus)
+      if (identicaCuImportul(camp, valoare, ctx.import)) return { ok: true, valoare: regula.compus && cadastruGol(sir) ? '' : sir, din_import: true }
       const motiv = motivIdentificatorText(sir, regula)
       if (motiv) return refuz(motiv)
       // se publică EXACT șirul validat (cu „#” cu tot), NU o formă recompusă: lipirea subcâmpurilor validate separat („1#2#” → „1 / 2”)
@@ -225,17 +294,20 @@ export function areFormaIdentificator(camp, valoare, ctx = {}) { return canonize
  *  - probleme = [{ id_parcela, camp, motiv }] (fără valori); goală = toate valorile au forma așteptată;
  *  - randuri = [{ id_parcela, <camp>: forma canonică }] — DOAR formele canonice (niciodată valorile originale) și DOAR dacă `probleme` e
  *    goală (altfel []), ca nimic să nu se poată publica dintr-o listă cu refuzuri.
- * `campuri` = lista albă a coloanelor publicate; `uat` dă satele declarate.
+ * `campuri` = lista albă a coloanelor publicate; `uat` dă satele declarate; `valoriImport` = Map din valoriImportDinJurnal (cheia = `p.id`,
+ * minuscule; lipsă / altceva decât Map = nicio valoare de import, totul pe calea strictă).
  */
-export function canonizeazaParcelePublicate(parcele = [], campuri = [], uat = {}) {
+export function canonizeazaParcelePublicate(parcele = [], campuri = [], uat = {}, valoriImport = null) {
   const sate = sateDeclarate(uat)
+  const importuri = valoriImport instanceof Map ? valoriImport : null
   const probleme = []
   const randuri = []
   for (const p of parcele) {
     if (!p) continue
     const rand = { id_parcela: String(p.id_parcela ?? '?') }
+    const laImport = importuri && typeof p.id === 'string' ? importuri.get(p.id.toLowerCase()) : undefined
     for (const camp of campuri) {
-      const r = canonizeazaIdentificator(camp, p[camp], { sate })
+      const r = canonizeazaIdentificator(camp, p[camp], { sate, import: laImport })
       if (r.ok) rand[camp] = r.valoare
       else probleme.push({ id_parcela: rand.id_parcela, camp, motiv: r.motiv })
     }

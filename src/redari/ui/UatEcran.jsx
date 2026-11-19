@@ -11,6 +11,7 @@ import { CAMPURI_UAT, COL_UAT, ZILE_SESIUNE, normalizeaza, cheiSchimbate, valide
 import FormularCampuri from './FormularCampuri.jsx'
 import { avertismentInformare, cuInformarePublicata } from '../informareGdpr.js'
 import { textProblemeIdentificatori, MESAJ_IDENTIFICATORI_REFUZATI } from '../identificatoriPublici.js'
+import { citesteValoriImport } from '../valoriImport.js'
 
 // audit D8: acordul la singular („1 parcelă”), ca în restul ERP-ului
 export const numarParcele = n => (Number(n) === 1 ? '1 parcelă' : `${n} parcele`)
@@ -232,7 +233,10 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
       if (!curent()) return
       const lipsuriProaspete = verificaDateAnuntAfisare({ proiect: proiectProaspat, uat: uatProaspat })
       if (lipsuriProaspete.length) throw new Error('Datele actuale nu permit generarea: ' + lipsuriProaspete.join('; '))
-      const { blob, randuri } = await genereazaAnuntAfisare({ proiect: proiectProaspat, uat: uatProaspat, parcele, templateArrayBuffer })
+      // valorile de la import (rândul INSERT din jurnal): cele neschimbate de atunci se publică așa cum sunt (decizia 19.11.2026, varianta A)
+      const valoriImport = await citesteValoriImport(supabase, parcele, uatProaspat.uat3, { esteCurent: curent })
+      if (!curent()) return
+      const { blob, randuri } = await genereazaAnuntAfisare({ proiect: proiectProaspat, uat: uatProaspat, parcele, valoriImport, templateArrayBuffer })
       if (!curent()) return
       descarcaBlob(blob, `Anunt_afisare_${uatProaspat.uat3}_${aziBucuresti()}.docx`)
       show(`Anunțul de afișare pentru ${uatProaspat.nume} e generat (${numarParcele(randuri)}). Nu se salvează în ERP: după lipire, treci perioada și nr. PV de afișare în acest formular.`, 'success')
