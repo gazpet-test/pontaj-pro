@@ -5,6 +5,6 @@
 export const TITLU_ANEXA2 = 'ANEXA 2 – CONVOCARE PENTRU AFIȘARE LA SEDIUL PRIMĂRIEI'
 export const TITLU_ANEXA3 = 'ANEXA 3 – PROCES-VERBAL DE AFIȘARE'
 export const TEXT_ANEXA2_DECIZIE = [
-  'Anexa 2 este anunțul de afișare pe comună (convocarea pe UAT), după modelul „Anunț de afișare la primărie”, transmis împreună cu prezentul model.',
+  'Anexa 2 este anunțul de afișare pe comună (convocarea pe UAT), după modelul „Anunț de afișare la primărie”, transmis împreună cu prezenta adresă.',
   'Anunțul conține: zilele și programul sesiunilor (cu satele / tarlalele programate), cum ne pot răspunde deținătorii, precizarea că afișarea este o publicitate suplimentară a convocării și nu valorează acceptare tacită, informarea privind datele personale (pagina publică, cu cod QR) și lista parcelelor din comună (sat, tarla, nr. cadastral / parcelă, poz. HG, tronson), fără date personale.',
 ]

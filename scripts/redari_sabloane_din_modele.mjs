@@ -360,7 +360,7 @@ const ANEXA2_ANUNT = {
     '{{rand.nr}}', '{{rand.sat}}', '{{rand.tarla}}', '{{rand.nr_cadastral}}', '{{rand.poz_hg}}', '{{rand.tronson}}',
   ],
   nou: [
-    'Anexa 2 este anunțul de afișare pe comună (convocarea pe UAT), după modelul „Anunț de afișare la primărie”, transmis împreună cu prezentul model.',
+    'Anexa 2 este anunțul de afișare pe comună (convocarea pe UAT), după modelul „Anunț de afișare la primărie”, transmis împreună cu prezenta adresă.',
     'Anunțul conține: zilele și programul sesiunilor (cu satele / tarlalele programate), cum ne pot răspunde deținătorii, precizarea că afișarea este o publicitate suplimentară a convocării și nu valorează acceptare tacită, informarea privind datele personale (pagina publică, cu cod QR) și lista parcelelor din comună (sat, tarla, nr. cadastral / parcelă, poz. HG, tronson), fără date personale.',
   ],
 }

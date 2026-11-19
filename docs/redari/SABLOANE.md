@@ -138,7 +138,7 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   {{program_text}} …”, „Dacă nu vă puteți prezenta …”, „Convocarea se face …”, plus tabelul „Lista parcelelor (fără date personale)” cu
   rândul-șablon `{{rand.*}}`, excepția (2)) se verifică EXACT și se înlocuiește cu două paragrafe (textul variantei trimise Transgaz
   pe 19.11): „Anexa 2 este anunțul de afișare pe comună (convocarea pe UAT), după modelul „Anunț de afișare la primărie”, transmis
-  împreună cu prezentul model.” și „Anunțul conține: zilele și programul sesiunilor (cu satele / tarlalele programate), cum ne pot
+  împreună cu prezenta adresă.” și „Anunțul conține: zilele și programul sesiunilor (cu satele / tarlalele programate), cum ne pot
   răspunde deținătorii, precizarea că afișarea este o publicitate suplimentară a convocării și nu valorează acceptare tacită,
   informarea privind datele personale (pagina publică, cu cod QR) și lista parcelelor din comună (sat, tarla, nr. cadastral /
   parcelă, poz. HG, tronson), fără date personale.” Paragrafele noi refolosesc primele două paragrafe ale corpului vechi (aceeași
@@ -149,8 +149,7 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   octet în afara `word/document.xml`, iar acolo XML-ul identic înainte și după corpul Anexei 2), `sabloaneA4.test.js`
   (`SCHIMBARI_TEXT.adresa_uat`, cu amprenta de dinainte), `anuntAfisare.test.js` (paritatea generatorului cu origin/main pe restul
   textului, câmpurile fără `program_text`), `docx.test.js` (cheile, nicio valoare de parcelă în adresă, rând-șablon reintrodus =
-  refuz). **De lămurit (nu blochează):** formularea „transmis împreună cu prezentul model” e a variantei pentru pachetul Transgaz;
-  în adresa reală trimisă primăriei ar suna „… transmis împreună cu prezenta adresă” — o schimbare de un cuvânt, dacă Răzvan o vrea.
+  refuz). **Formularea (decizia Răzvan 19.11.2026, varianta B):** în platformă „… transmis împreună cu prezenta adresă”; modelul trimis la Transgaz pe 19.11 („prezentul model”) diferă doar prin aceste două cuvinte.
 - **Documentul COMPLETAT (tot excepția (8), #970 r2–r18)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
   (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`. **Regula LITERALĂ (r18)**, în locul
   decupajului pe propoziții din r7–r17 (unde fiecare rundă găsea alt caz în care se pierdea un câmp GDPR):

@@ -43,7 +43,7 @@ const SCHIMBARI_TEXT = {
     + 'Dacă nu vă puteți prezenta, ne puteți răspunde la telefon {{contact_telefon}}, pe e-mail la {{contact_email}}. În lipsa participării, starea terenului poate fi constatată tehnic de reprezentanții Beneficiarului, ai Antreprenorului și ai Primăriei; această constatare nu reprezintă acceptarea tacită din partea dumneavoastră.'
     + 'Convocarea se face în numele S.N.T.G.N. TRANSGAZ S.A., Beneficiar al investiției. Contact GAZPET INSTAL: {{contact_nume}}, {{contact_telefon}}, {{contact_email}}. Contact TRANSGAZ: {{reprezentant_tgz}}, tel. {{reprezentant_tgz_telefon}}.'
     + 'Lista parcelelor (fără date personale):Nr.SatTarlaNr. cadastral / parcelăPoz. HGTronson{{rand.nr}}{{rand.sat}}{{rand.tarla}}{{rand.nr_cadastral}}{{rand.poz_hg}}{{rand.tronson}}',
-    'Anexa 2 este anunțul de afișare pe comună (convocarea pe UAT), după modelul „Anunț de afișare la primărie”, transmis împreună cu prezentul model.'
+    'Anexa 2 este anunțul de afișare pe comună (convocarea pe UAT), după modelul „Anunț de afișare la primărie”, transmis împreună cu prezenta adresă.'
     + 'Anunțul conține: zilele și programul sesiunilor (cu satele / tarlalele programate), cum ne pot răspunde deținătorii, precizarea că afișarea este o publicitate suplimentară a convocării și nu valorează acceptare tacită, informarea privind datele personale (pagina publică, cu cod QR) și lista parcelelor din comună (sat, tarla, nr. cadastral / parcelă, poz. HG, tronson), fără date personale.',
   ]],
 }
