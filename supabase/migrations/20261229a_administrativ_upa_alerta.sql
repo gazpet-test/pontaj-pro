@@ -363,6 +363,8 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   SELECT ARRAY['furnizor_id', 'furnizor_nume', 'numar_factura', 'data_factura', 'luna', 'valoare', 'descriere', 'document_path']::text[]
 $f$;
 REVOKE ALL ON FUNCTION public.fn_upa_campuri_intentie() FROM PUBLIC, anon, authenticated, service_role;
+-- funcții pure, fără date: EXECUTE pentru rolurile care scriu în upa_achizitii (triggerul și RPC-ul rulează ca apelantul)
+GRANT EXECUTE ON FUNCTION public.fn_upa_campuri_intentie() TO authenticated, service_role;
 -- amprenta intenției: md5 pe obiectul jsonb cu EXACT câmpurile de mai sus (lipsă = null), din rândul TIPIZAT (to_jsonb pe un rând
 --   upa_achizitii: aceleași tipuri și aceeași formă canonică la trigger și la RPC)
 CREATE FUNCTION public.fn_upa_hash_intentie(p jsonb) RETURNS text
@@ -370,6 +372,7 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   SELECT md5(jsonb_object_agg(k.k, p -> k.k)::text) FROM unnest(public.fn_upa_campuri_intentie()) AS k(k)
 $f$;
 REVOKE ALL ON FUNCTION public.fn_upa_hash_intentie(jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_upa_hash_intentie(jsonb) TO authenticated, service_role;
 
 -- sumele în lei, ca în ecran / mail (7.000,00); luna în română (noiembrie 2026); „N zile” cu acordul românesc (20 de zile)
 CREATE FUNCTION public.fn_upa_lei(p numeric) RETURNS text
@@ -767,8 +770,8 @@ BEGIN
       ('public.fn_upa_alerta_proba()', 'plpgsql', true, 's', 'postgres:EXECUTE, service_role:EXECUTE'),
       ('public.fn_upa_alerta_marcheaza(bigint,text,text,text)', 'plpgsql', true, 'v', 'postgres:EXECUTE, service_role:EXECUTE'),
       ('public.fn_upa_luna_inchisa_nemodificabil()', 'plpgsql', false, 'v', 'postgres:EXECUTE'),
-      ('public.fn_upa_campuri_intentie()', 'sql', false, 'i', 'postgres:EXECUTE'),
-      ('public.fn_upa_hash_intentie(jsonb)', 'sql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_upa_campuri_intentie()', 'sql', false, 'i', 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE'),
+      ('public.fn_upa_hash_intentie(jsonb)', 'sql', false, 'i', 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE'),
       ('public.fn_upa_achizitii_intentie()', 'plpgsql', false, 'v', 'postgres:EXECUTE'),
       ('public.fn_upa_achizitie_adauga(uuid,jsonb)', 'plpgsql', false, 'v', 'authenticated:EXECUTE, postgres:EXECUTE')
     ) v(fn, limbaj, definer, volatil, acl) LOOP
@@ -899,9 +902,9 @@ BEGIN
              'fn_upa_campuri_intentie', 'fn_upa_hash_intentie', 'fn_upa_achizitii_intentie', 'fn_upa_achizitie_adauga')
   ) x;
   -- AMPRENTA_20261229a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'AMPRENTA_DE_CALCULAT' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '59c0f9a02655f444dc9c2a7bb2a5783d' THEN
     RAISE NOTICE 'AMPRENTA_20261229a_TEXT %', v_amp;
-    RAISE EXCEPTION '20261229a post: AMPRENTA obiectelor % (asteptat AMPRENTA_DE_CALCULAT)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20261229a post: AMPRENTA obiectelor % (asteptat 59c0f9a02655f444dc9c2a7bb2a5783d)', md5(coalesce(v_amp, ''));
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261229a_administrativ_upa_alerta:' || txid_current() THEN
     RAISE EXCEPTION '20261229a: garda final invalida';

@@ -67,9 +67,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname = 'fn_upa_poate_citi'
   ) x;
   -- AMPRENTA_20261229c_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'AMPRENTA_DE_CALCULAT' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '91c138f7e6265316a94af0e9a2ea1103' THEN
     RAISE NOTICE 'AMPRENTA_20261229c_TEXT %', v_amp;
-    RAISE EXCEPTION '20261229c revenire: AMPRENTA obiectelor migrarii % (asteptat AMPRENTA_DE_CALCULAT): starea nu e cea din 20261229c; nimic schimbat',
+    RAISE EXCEPTION '20261229c revenire: AMPRENTA obiectelor migrarii % (asteptat 91c138f7e6265316a94af0e9a2ea1103): starea nu e cea din 20261229c; nimic schimbat',
       md5(coalesce(v_amp, ''));
   END IF;
 END $pre$;

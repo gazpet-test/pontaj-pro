@@ -124,9 +124,9 @@ BEGIN
              'fn_upa_campuri_intentie', 'fn_upa_hash_intentie', 'fn_upa_achizitii_intentie', 'fn_upa_achizitie_adauga')
   ) x;
   -- AMPRENTA_20261229a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '5cfb266b3a0b8376266318fffc7bf042' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '59c0f9a02655f444dc9c2a7bb2a5783d' THEN
     RAISE NOTICE 'AMPRENTA_20261229a_TEXT %', v_amp;
-    RAISE EXCEPTION '20261229a revenire: AMPRENTA obiectelor migrarii % (asteptat 5cfb266b3a0b8376266318fffc7bf042): starea nu e cea din 20261229a; nimic schimbat',
+    RAISE EXCEPTION '20261229a revenire: AMPRENTA obiectelor migrarii % (asteptat 59c0f9a02655f444dc9c2a7bb2a5783d): starea nu e cea din 20261229a; nimic schimbat',
       md5(coalesce(v_amp, ''));
   END IF;
   -- forma veche a politicii, păstrată de migrare în comentariu (rolurile + clauza WITH CHECK)

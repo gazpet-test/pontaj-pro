@@ -100,6 +100,8 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   SELECT p_numar IS NOT NULL AND p_numar ~ '[^[:space:]]'
 $f$;
 REVOKE ALL ON FUNCTION public.fn_upa_numar_factura_ok(text) FROM PUBLIC, anon, authenticated, service_role;
+-- funcție pură: EXECUTE pentru rolurile care scriu în upa_achizitii (CHECK-ul și triggerul o cheamă ca apelantul)
+GRANT EXECUTE ON FUNCTION public.fn_upa_numar_factura_ok(text) TO authenticated, service_role;
 COMMENT ON FUNCTION public.fn_upa_numar_factura_ok(text) IS 'UPA (20261229b): numarul facturii exista si are cel putin un caracter care nu e spatiu (NULL = fals). Predicatul unic: CHECK + trigger.';
 
 -- ─── 2. CHECK pe rândurile noi / modificate (NOT VALID: rândurile vechi nu se verifică) ──────────────────────────────────
@@ -124,8 +126,9 @@ CREATE TRIGGER trg_upa_achizitii_numar_factura BEFORE INSERT OR UPDATE OF numar_
 DO $post$
 DECLARE r record; v_amp text;
 BEGIN
-  -- funcțiile: limbaj, fără DEFINER, volatilitate, NU STRICT (NULL trebuie să fie fals), search_path, proprietar, drepturile EXACTE (doar postgres)
-  FOR r IN SELECT * FROM (VALUES ('public.fn_upa_numar_factura_ok(text)', 'sql', 'i'), ('public.fn_upa_numar_factura_obligatoriu()', 'plpgsql', 'v')) v(fn, limbaj, volatil) LOOP
+  -- funcțiile: limbaj, fără DEFINER, volatilitate, NU STRICT (NULL trebuie să fie fals), search_path, proprietar, drepturile EXACTE
+  FOR r IN SELECT * FROM (VALUES ('public.fn_upa_numar_factura_ok(text)', 'sql', 'i', 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE'),
+                                 ('public.fn_upa_numar_factura_obligatoriu()', 'plpgsql', 'v', 'postgres:EXECUTE')) v(fn, limbaj, volatil, acl) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
                     WHERE p.oid = to_regprocedure(r.fn) AND l.lanname = r.limbaj AND NOT p.prosecdef AND p.provolatile = r.volatil AND NOT p.proisstrict
                       AND p.prokind = 'f' AND NOT p.proleakproof AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']
@@ -133,7 +136,7 @@ BEGIN
                       AND (SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
                              SELECT CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END || ':' || e.privilege_type
                                     || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
-                               FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = 'postgres:EXECUTE') THEN
+                               FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = r.acl) THEN
       RAISE EXCEPTION '20261229b post: functia % (limbaj / definer / volatil / strict / search_path / owner / drepturi exacte)', r.fn;
     END IF;
   END LOOP;
@@ -152,7 +155,8 @@ BEGIN
      OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.upa_achizitii'::regclass AND t.tgname = 'trg_upa_achizitii_numar_factura'
            AND NOT t.tgisinternal AND t.tgenabled = 'O' AND t.tgfoid = 'public.fn_upa_numar_factura_obligatoriu()'::regprocedure AND t.tgtype = 23
            AND t.tgqual IS NULL AND t.tgnargs = 0
-           AND t.tgattr::int2[] = ARRAY[(SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = 'public.upa_achizitii'::regclass AND a.attname = 'numar_factura')]::int2[]) <> 1 THEN
+           -- (int2vector are indicele de început 0: se compară textul, „<attnum>” = exact o coloană)
+           AND t.tgattr::text = (SELECT a.attnum::text FROM pg_attribute a WHERE a.attrelid = 'public.upa_achizitii'::regclass AND a.attname = 'numar_factura')) <> 1 THEN
     RAISE EXCEPTION '20261229b post: CHECK-ul / triggerul numarului facturii';
   END IF;
   -- AMPRENTA_20261229b_INCEPUT (blocul e IDENTIC în migrare și în revenire; proba PGlite compară textul)
@@ -179,9 +183,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_upa_numar_factura_ok', 'fn_upa_numar_factura_obligatoriu')
   ) x;
   -- AMPRENTA_20261229b_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'AMPRENTA_DE_CALCULAT' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '96b7109570727ea2d0377aa1b02a6418' THEN
     RAISE NOTICE 'AMPRENTA_20261229b_TEXT %', v_amp;
-    RAISE EXCEPTION '20261229b post: AMPRENTA obiectelor % (asteptat AMPRENTA_DE_CALCULAT)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20261229b post: AMPRENTA obiectelor % (asteptat 96b7109570727ea2d0377aa1b02a6418)', md5(coalesce(v_amp, ''));
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261229b_administrativ_upa_numar_factura:' || txid_current() THEN
     RAISE EXCEPTION '20261229b: garda final invalida';

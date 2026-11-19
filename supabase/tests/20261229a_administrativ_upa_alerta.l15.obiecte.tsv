@@ -1,5 +1,6 @@
 # 20261229a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
 coloana	coloana public.upa_achizitii.cheie_intentie	creat
+coloana	coloana public.upa_achizitii.hash_intentie	creat
 coloana	coloana public.upa_alerta_jurnal.actualizat_la	creat
 coloana	coloana public.upa_alerta_jurnal.cheie	creat
 coloana	coloana public.upa_alerta_jurnal.consumat	creat
@@ -8,6 +9,7 @@ coloana	coloana public.upa_alerta_jurnal.eroare	creat
 coloana	coloana public.upa_alerta_jurnal.fel	creat
 coloana	coloana public.upa_alerta_jurnal.id	creat
 coloana	coloana public.upa_alerta_jurnal.luna	creat
+coloana	coloana public.upa_alerta_jurnal.nr_dest_ignorati	creat
 coloana	coloana public.upa_alerta_jurnal.nr_destinatari	creat
 coloana	coloana public.upa_alerta_jurnal.nr_notificari	creat
 coloana	coloana public.upa_alerta_jurnal.plafon	creat
@@ -28,11 +30,13 @@ coloana	coloana public.upa_plafon_lunar.setat_de	creat
 coloana	coloana public.upa_plafon_lunar.setat_la	creat
 coloana	coloana public.upa_plafon_lunar.sursa	creat
 constrangere	constrangere tabel public.upa_achizitii.upa_achizitii_cheie_intentie_uidx	creat
+constrangere	constrangere tabel public.upa_achizitii.upa_achizitii_hash_intentie_cu_cheie	creat
 constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_cheie_uidx	creat
 constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_cod_eroare	creat
 constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_dest	creat
 constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_fel	creat
 constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_forma_cheie	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_ignorati	creat
 constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_pkey	creat
 constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_prima_zi	creat
 constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_resend	creat
@@ -47,13 +51,17 @@ constrangere	constrangere tabel public.upa_plafon_lunar.upa_plafon_lunar_pkey	cr
 constrangere	constrangere tabel public.upa_plafon_lunar.upa_plafon_lunar_prima_zi	creat
 constrangere	constrangere tabel public.upa_plafon_lunar.upa_plafon_lunar_sursa	creat
 constrangere	constrangere tabel public.upa_plafon_lunar.upa_plafon_lunar_valoare	creat
-functie	functie public.fn_upa_alerta_inscrie(text,date,date,numeric,numeric,numeric,integer,text[],text)	creat
+functie	functie public.fn_upa_achizitie_adauga(uuid,jsonb)	creat
+functie	functie public.fn_upa_achizitii_intentie()	creat
+functie	functie public.fn_upa_alerta_inscrie(text,date,date,numeric,numeric,numeric,integer,text[],integer,text)	creat
 functie	functie public.fn_upa_alerta_marcheaza(bigint,text,text,text)	creat
 functie	functie public.fn_upa_alerta_proba()	creat
 functie	functie public.fn_upa_alerta_rezerva()	creat
 functie	functie public.fn_upa_alerta_rezerva_la(date)	creat
+functie	functie public.fn_upa_campuri_intentie()	creat
 functie	functie public.fn_upa_destinatari(text)	creat
 functie	functie public.fn_upa_erori_config(integer,numeric)	creat
+functie	functie public.fn_upa_hash_intentie(jsonb)	creat
 functie	functie public.fn_upa_lei(numeric)	creat
 functie	functie public.fn_upa_luna_inchisa_nemodificabil()	creat
 functie	functie public.fn_upa_luna_text(date)	creat
@@ -86,4 +94,5 @@ tip	tip public.upa_luna_inchisa	creat
 tip	tip public.upa_luna_inchisa[]	creat
 tip	tip public.upa_plafon_lunar	creat
 tip	tip public.upa_plafon_lunar[]	creat
+trigger	trigger public.upa_achizitii.trg_upa_achizitii_intentie	creat
 trigger	trigger public.upa_luna_inchisa.trg_upa_luna_inchisa_nemodificabil	creat

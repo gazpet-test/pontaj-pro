@@ -60,7 +60,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
                   WHERE p.oid = to_regprocedure('public.fn_upa_poate_scrie()') AND l.lanname = 'sql' AND p.prosecdef AND p.provolatile = 's'
                     AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
-                    AND md5(replace(p.prosrc, chr(13), '')) = 'SURSA_POATE_SCRIE_DE_CALCULAT'
+                    AND md5(replace(p.prosrc, chr(13), '')) = 'f471aac26eec8d6dfae5749073a00fc4'
                     AND (SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
                            SELECT CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END || ':' || e.privilege_type
                                   || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
@@ -185,9 +185,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname = 'fn_upa_poate_citi'
   ) x;
   -- AMPRENTA_20261229c_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'AMPRENTA_DE_CALCULAT' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '91c138f7e6265316a94af0e9a2ea1103' THEN
     RAISE NOTICE 'AMPRENTA_20261229c_TEXT %', v_amp;
-    RAISE EXCEPTION '20261229c post: AMPRENTA obiectelor % (asteptat AMPRENTA_DE_CALCULAT)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20261229c post: AMPRENTA obiectelor % (asteptat 91c138f7e6265316a94af0e9a2ea1103)', md5(coalesce(v_amp, ''));
   END IF;
 END $post$;
 
@@ -357,7 +357,8 @@ BEGIN
       EXCEPTION WHEN insufficient_privilege THEN v_n := 0;
       END;
       RESET ROLE;
-      IF v_n <> CASE WHEN x.cls IN ('s', 'c') THEN v_tot ELSE 0 END THEN
+      -- (parantezele: condiția unui IF plpgsql se termină la primul THEN, inclusiv cel dintr-un CASE neîncadrat)
+      IF v_n <> (CASE WHEN x.cls IN ('s', 'c') THEN v_tot ELSE 0 END) THEN
         v_rau := v_rau || x.e || ' vede ' || v_n || ' din ' || v_tot || '; ';
       END IF;
       -- (2) modificarea fără filtru: nimeni
@@ -382,7 +383,7 @@ BEGIN
       RESET ROLE;
       SELECT coalesce(jsonb_object_agg(name, ctid::text), '{}'::jsonb) INTO v_dupa FROM pg_temp.objects;
       v_n := (SELECT count(*) FROM jsonb_object_keys(v_inainte) k WHERE NOT v_dupa ? k);
-      IF v_n <> CASE WHEN x.cls = 's' THEN v_tot ELSE 0 END THEN
+      IF v_n <> (CASE WHEN x.cls = 's' THEN v_tot ELSE 0 END) THEN
         v_rau := v_rau || x.e || ' sterge ' || v_n || ' din ' || v_tot || '; ';
       END IF;
       -- (4) încărcarea, cu și fără proprietar: doar scrierea
