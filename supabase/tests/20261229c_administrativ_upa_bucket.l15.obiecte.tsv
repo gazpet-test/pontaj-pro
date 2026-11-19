@@ -1,0 +1,6 @@
+# 20261229c: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+functie	functie public.fn_upa_poate_citi()	creat
+politica	politica storage.objects."upa docs authenticated all"	sters
+politica	politica storage.objects.upa_docs_adaugare	creat
+politica	politica storage.objects.upa_docs_citire	creat
+politica	politica storage.objects.upa_docs_stergere	creat
