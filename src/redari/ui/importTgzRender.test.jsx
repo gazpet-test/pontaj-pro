@@ -28,6 +28,9 @@ vi.mock('../importTgz.js', async original => ({ ...(await original()), scrieImpo
 afterEach(() => { hooks.current = null; vi.unstubAllGlobals() })
 
 import ImportTgz from './ImportTgz.jsx'
+import * as XLSX from 'xlsx-js-style'
+import { semnalFaraValori } from '../importVerificareFixa.js'
+import { faraDiacritice } from '../idParcela.js'
 
 function harness() {
   const valori = [], efecte = []
@@ -240,7 +243,8 @@ describe('ImportTgz — valorile semnalate ascunse peste tot', () => {
   const MOTIV_CS = 'cadastru suspect (posibilă valoare-umplutură) — de verificat'
   const previewMascare = () => ({
     parcele: [
-      { cheie: 'FIC:1', cheie_sursa: CS1, poz_hg: 'HG 1', nr_cadastral: 'CF 77', tarla: NUME_TARLA, ambigua: true, rand: 4 },
+      // r3: parcela ambiguă poartă și detaliul ambiguității, cum îl scrie parserul (omis în r2 → valoarea scăpa în tab-ul „Parcele”)
+      { cheie: 'FIC:1', cheie_sursa: CS1, poz_hg: 'HG 1', nr_cadastral: 'CF 77', tarla: NUME_TARLA, ambigua: true, motiv_ambiguitate: 'identitate contradictorie sub același Nr.Crt.', detaliu_ambiguitate: DET1, rand: 4 },
       { cheie: 'FIC:2', cheie_sursa: 'FIC|HG 2|CF 78|T 9', poz_hg: 'HG 2', nr_cadastral: 'CF 78', tarla: 'T 9', ambigua: false, rand: 6 },
       { cheie: 'FIC:3', cheie_sursa: CS3, poz_hg: 'HG 3', nr_cadastral: NUME_CADASTRU, tarla: 'T 3', ambigua: false, rand: 7 },
     ],
@@ -283,6 +287,7 @@ describe('ImportTgz — valorile semnalate ascunse peste tot', () => {
       ['FIC|HG 2|CF 78|T 9', 'HG 2', 'CF 78', 'T 9'],          // parcelă fără semnal: neschimbată
       [`FIC|HG 3|${ASCUNS}|T 3`, 'HG 3', ASCUNS, 'T 3'],
     ])
+    expect(parcele[0].detaliu_ambiguitate).toBe(`tarla: ${ASCUNS}; cadastru: „CF 77” / „CF 7”`)   // doar segmentul semnalat
     expect(randuriTab(h, p, 'ambigue')[0]).toMatchObject({ cheie_sursa: `FIC|HG 1|CF 77|${ASCUNS}`, detaliu: `tarla: ${ASCUNS}; cadastru: „CF 77” / „CF 7”`, nume: 'Test Unu' })
     expect(randuriTab(h, p, 'cadastru_suspect').map(x => [x.valoare, x.detaliu])).toEqual([
       ['##', 'cadastru: „##”; parcela NU se importă (ambiguă)'],   // cadastrul parcelei 1 nu e semnalat: se vede
@@ -348,6 +353,101 @@ describe('ImportTgz — valorile semnalate ascunse peste tot', () => {
     elemente(tree, 'button').filter(b => textButon(b).startsWith('⬇ CSV'))[0].props.onClick()
     const csv = await csvuri.at(-1).text()
     for (const v of SENSIBILE) expect(csv).not.toContain(v)
+  })
+})
+
+// r3 (Jakarinos #1140 r2 P1): o parcelă CONTRADICTORIE copia valoarea semnalată în `detaliu_ambiguitate`, afișat nemascat în tab-ul „Parcele”.
+// Aici previzualizarea vine din PARSERUL REAL (butonul „Previzualizează” pe un Excel fictiv): două rânduri ale aceleiași parcele, tarla =
+// un e-mail / numele deținătorului vs o tarla normală. Se verifică TOT ce randează ecranul (textul, orice atribut text — titluri / tooltip-uri —
+// și tabelul TabelPreview randat efectiv), CSV-ul previzualizării, raportul de după import și CSV-ul lui. Date FICTIVE.
+describe('ImportTgz r3 — parcela contradictorie din parserul real: valoarea semnalată nu apare nicăieri', () => {
+  const ANTET = ['Nr.Crt.', 'Poz. HG', 'UAT', 'Județ', 'Nume Deținător', 'Adresa', 'Tarla/Nr. Topo', 'Nr. cadastral/Parcelă']
+  const RANDURI = [
+    ['1/1', '201', 'FIC', 'Prahova', 'ANGHEL RADU', '', 'ana@example.ro', ''],                 // rândul 2: e-mail în tarla
+    ['1/2', '', 'FIC', 'Prahova', 'ANGHEL MARIA', '', 'T 12', ''],                              // rândul 3: tarla normală → contradicție
+    ['2/1', '202', 'FIC', 'Prahova', 'CONSTANTINESCU VLAD', '', 'CONSTANTINESCU VLAD', ''],     // rândul 4: numele deținătorului în tarla
+    ['2/2', '', 'FIC', 'Prahova', 'BARBU ION', '', 'T 13', ''],
+    [3, '203', 'FIC', 'Prahova', 'DOBRE GEO', '', 'T 16', ''],                                  // control, fără semnal
+  ]
+  const EMAIL = ['ANA@EXAMPLE', 'EXAMPLE.RO']; const NUME = 'CONSTANTINESCU'
+  const ASCUNS = '[ascuns: de verificat]'
+  const N = s => faraDiacritice(String(s ?? '')).toUpperCase()
+  const excelFictiv = () => { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([ANTET, ...RANDURI]), 'TGZ'); return XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) }
+  // toate șirurile din arbore: copii text + ORICE prop text (title, aria-label, value…); TabelPreview e randat efectiv (fără hook-uri)
+  const siruri = n => {
+    if (n == null || typeof n === 'boolean') return []
+    if (typeof n === 'string' || typeof n === 'number') return [String(n)]
+    if (Array.isArray(n)) return n.flatMap(siruri)
+    if (typeof n !== 'object') return []
+    const p = n.props || {}
+    const proprii = Object.entries(p).flatMap(([k, v]) => k === 'children' ? siruri(v) : typeof v === 'string' ? [v] : [])
+    return [...proprii, ...(typeof n.type === 'function' && n.type.name === 'TabelPreview' ? siruri(n.type(p)) : [])]
+  }
+  const tabele = n => !n || typeof n !== 'object' ? [] : Array.isArray(n) ? n.flatMap(tabele) : [...(n.type?.name === 'TabelPreview' ? [n] : []), ...tabele(n.props?.children)]
+  const csvuri = []
+  const pregateste = async () => {
+    csvuri.length = 0
+    vi.stubGlobal('URL', { createObjectURL: b => { csvuri.push(b); return 'blob:fictiv' }, revokeObjectURL: () => {} })
+    vi.stubGlobal('document', { createElement: () => ({ click: () => {} }) })
+    const h = harness(); const show = vi.fn(); const p = props('proiect-A', 'TEST-A', show)
+    h.render(ImportTgz, p)
+    const buf = excelFictiv()
+    h.valori[0] = { arrayBuffer: async () => buf }; h.valori[I.versiune] = 'v-fictiv'
+    await buton(h.render(ImportTgz, p), '🔍 Previzualizează').props.onClick()
+    return { h, p, show }
+  }
+  const scurgeriEmail = texte => texte.filter(t => EMAIL.some(e => N(t).includes(e)))
+  it('premisa: parserul real dă parcele contradictorii cu semnal, iar detaliul ambiguității conține valoarea', async () => {
+    const { h } = await pregateste()
+    const pv = h.valori[I.preview]
+    expect(pv.de_verificat.map(v => [v.rand, v.camp, v.motive])).toEqual([[2, 'tarla', ['email_url']], [4, 'tarla', ['nume']]])
+    expect(pv.parcele.map(x => [x.cheie, x.ambigua, x.detaliu_ambiguitate ?? null])).toEqual([
+      ['FIC:1', true, 'tarla: „ANA@EXAMPLE.RO” / „T 12”'], ['FIC:2', true, 'tarla: „CONSTANTINESCU VLAD” / „T 13”'], ['FIC:3', false, null]])
+  })
+  it('fiecare tab: nici textul randat, nici atributele, nici tabelul nu conțin e-mailul; numele apare doar în coloanele de nume', async () => {
+    const { h, p } = await pregateste()
+    for (const tab of ['parcele', 'detinatori', 'contacte', 'dubluri', 'neidentificati', 'fara_cheie', 'ambigue', 'cadastru_suspect', 'de_verificat', 'erori']) {
+      h.valori[9] = tab
+      const tree = h.render(ImportTgz, p)
+      expect(scurgeriEmail(siruri(tree)), tab).toEqual([])
+      for (const t of tabele(tree)) for (const r of t.props.randuri) for (const [k, v] of Object.entries(r)) {
+        const campNume = ['nume', 'nume_normalizat', 'cheie_detinator'].includes(k) || (tab === 'detinatori' && k === 'cheie')   // cheile deținătorului = parcela + numele
+        if (!campNume && typeof v === 'string') expect(N(v), `${tab}.${k}`).not.toContain(NUME)
+      }
+    }
+    h.valori[9] = 'parcele'
+    const [tabel] = tabele(h.render(ImportTgz, p))
+    expect(tabel.props.randuri.map(x => [x.cheie, x.tarla, x.detaliu_ambiguitate ?? null])).toEqual([
+      ['FIC:1', ASCUNS, `tarla: ${ASCUNS}`], ['FIC:2', ASCUNS, `tarla: ${ASCUNS}`], ['FIC:3', 'T 16', null]])
+    // tabelul randat (celulele) are coloana `detaliu_ambiguitate`, mascată
+    const celule = siruri(tabel.type(tabel.props))
+    expect(celule).toContain('detaliu_ambiguitate')
+    expect(celule.filter(c => c === `tarla: ${ASCUNS}`)).toHaveLength(2)
+  })
+  it('CSV-ul previzualizării, raportul de după import și CSV-ul lui: nici e-mailul, nici numele', async () => {
+    const { h, p } = await pregateste()
+    buton(h.render(ImportTgz, p), '⬇ Descarcă rândurile de tratat').props.onClick()
+    const csv = await csvuri[0].text()
+    expect(scurgeriEmail([csv])).toEqual([])
+    expect(N(csv)).not.toContain(NUME)
+    expect(csv).toContain(`tarla: ${ASCUNS}`)
+    // importul (scrieImport e simulat): rezultatul are forma reală — ambigue din previzualizare, lista fără valori în diferente
+    amanate.import = amanat(); amanate.apeluriImport.length = 0
+    vi.stubGlobal('window', { confirm: () => true })
+    h.valori[19] = h.valori[I.preview]   // bifa „am verificat”
+    const pv = h.valori[I.preview]
+    const gata = buton(h.render(ImportTgz, p), '📥 Importă').props.onClick()
+    amanate.import.rezolva({ lotId: 'lot-fictiv', parceleNoi: 1, detinatoriNoi: 1, ambigue: pv.ambigue, fara_cheie: [],
+      diferente: { erori: [], fara_cheie: [], ambigue: pv.ambigue, cadastru_suspect: pv.cadastru_suspect, de_verificat: pv.de_verificat.map(semnalFaraValori), contacte_noi: 0 } })
+    await gata
+    const tree = h.render(ImportTgz, p)
+    const toate = siruri(tree)
+    expect(scurgeriEmail(toate)).toEqual([])
+    expect(toate.some(t => t.includes(`FIC|201||${ASCUNS}`))).toBe(true)
+    buton(tree, '⬇ Rândurile de tratat după import').props.onClick()
+    const csv2 = await csvuri.at(-1).text()
+    expect(scurgeriEmail([csv2])).toEqual([])
+    expect(N(csv2)).not.toContain(NUME)
   })
 })
 
