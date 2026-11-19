@@ -495,8 +495,9 @@ BEGIN
   v_x := public.fn_izo_porti_e4b_definitii();
   IF v_x IS DISTINCT FROM '1aaa23cc057b6d698c74a29c38887cb9' THEN RAISE EXCEPTION '20261230a revenire: definitia fn_izo_porti_e4b_definitii() dupa revenire = % (asteptat 1aaa23cc057b6d698c74a29c38887cb9)', coalesce(v_x, 'NULL'); END IF;
   -- nimic altceva atins: restul funcțiilor (corp, drepturi, proprietăți) și comentariile, identice cu instantaneul de la început
+  -- (EXCEPT și UNION ALL au aceeași precedență: partea din dreapta stă între paranteze)
   IF EXISTS (SELECT tip, cheie, val FROM rec_20261230a_revenire EXCEPT
-             SELECT 'functie'::text, p.oid::text,
+            (SELECT 'functie'::text, p.oid::text,
                     md5(concat_ws('|', p.proname, p.pronamespace::text, pg_get_userbyid(p.proowner), p.prosecdef::text, coalesce(p.proconfig::text, ''),
                                   coalesce(p.proacl::text, ''), p.provolatile::text, p.prolang::text, md5(p.prosrc), coalesce(p.prosqlbody::text, ''),
                                   p.proargtypes::text, p.prorettype::text, p.proisstrict::text, p.proleakproof::text, p.proparallel::text, p.prokind::text,
@@ -510,7 +511,7 @@ BEGIN
               WHERE NOT (d.classoid = 'pg_proc'::regclass AND d.objsubid = 0 AND d.objoid IN (
                       SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.pronargs = 0
                          AND p.proname IN ('fn_izo_porti_definitii', 'fn_izo_porti_e3_definitii', 'fn_izo_porti_e3b_definitii',
-                                           'fn_izo_porti_e4_definitii', 'fn_izo_porti_e4b_definitii'))))
+                                           'fn_izo_porti_e4_definitii', 'fn_izo_porti_e4b_definitii')))))
      OR (SELECT count(*) FROM rec_20261230a_revenire) IS DISTINCT FROM
         ((SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_'
