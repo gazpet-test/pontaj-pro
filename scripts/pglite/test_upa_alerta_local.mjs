@@ -31,7 +31,17 @@ const MIG = citeste(F_MIG)
 const REV = citeste(F_REV)
 const OBIECTE = citeste(F_OBIECTE)
 const gen = (...a) => execFileSync('bash', [join(ROOT, 'scripts/livrare_amprenta_gen.sh'), ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-const { ruleazaAlertaUpa, lei, lunaText, zileText, cheieIdempotenta } = await import(pathToFileURL(join(ROOT, 'supabase/functions/_shared/upaAlerta.mjs')).href)
+const F_EDGE = 'supabase/functions/_shared/upaAlerta.mjs'
+const MOD_EDGE = await import(pathToFileURL(join(ROOT, F_EDGE)).href)
+const { lei, lunaText, zileText, cheieIdempotenta } = MOD_EDGE
+// un mutant al codului edge: textul modificat scris în folderul temporar, cu importul helper-ului comun legat la fișierul real
+const EDGE_TEXT = citeste(F_EDGE)
+let nrMutantEdge = 0
+async function importMutantEdge(text) {
+  const f = join(TMP, `upaAlerta_mutant_${++nrMutantEdge}.mjs`)
+  writeFileSync(f, text.replace("from './polite.mjs'", `from '${pathToFileURL(join(ROOT, 'supabase/functions/_shared/polite.mjs')).href}'`))
+  return import(pathToFileURL(f).href)
+}
 
 let esec = 0
 const ok = (cond, msg) => { if (cond) console.log('  OK  ' + msg); else { esec++; console.log('  NU  ' + msg) } }
@@ -343,7 +353,7 @@ function resendFals(raspunsuri) {
   }
   return { f, apeluri }
 }
-async function verificaEdge(db) {
+async function verificaEdge(db, ruleazaAlertaUpa = MOD_EDGE.ruleazaAlertaUpa) {
   const ab = []
   const tine = (cond, msg) => { if (!cond) ab.push(msg) }
   await db.exec(ISTORIC)
@@ -571,6 +581,24 @@ for (const [nume, lista] of [
     prins = ab.length > 0; cum = `${ab.length} abateri (${(ab[0] || '').slice(0, 110)})`
   }
   ok(prins, `MUTANT ${nume} — prins ${cum}`)
+  await db.close()
+}
+
+console.log('6. MUTANȚI pe codul edge-ului (fiecare TREBUIE prins de verificările edge-ului pe BD-ul migrării)')
+for (const [nume, lista] of [
+  ['5xx tratat ca eroare definitivă', [['rezultat = stareDupaTrimitere({ ok: res.ok, status: res.status })', "rezultat = res.ok ? { stare: 'trimis', eroare: null } : { stare: 'eroare', eroare: 'resend_4xx' }"]]],
+  ['fără cheia de idempotență', [["'Idempotency-Key': await cheieIdempotenta(r.cheie) ", '']]],
+  ['adresele în răspuns', [['rezervate: rez.n, ...contor, ...baza', 'rezervate: rez.n, ...contor, ...baza, dest: rez.randuri.map(x => x.destinatari)']]],
+  ['trimite și fără cheia Resend', [["  if (!resendKey) return raspuns(500, { ok: false, error: 'resend_neconfigurat' })\n", '']]],
+  ['subiectul fără zilele rămase', [[', ${zileText(Number(r.zile_ramase))}`\n  const html', '`\n  const html']]],
+]) {
+  let mod
+  try { mod = await importMutantEdge(aplica(EDGE_TEXT, lista)) } catch (e) { ok(false, `${nume}: mutantul nu se aplică (${e.message})`); continue }
+  const db = await bazaNoua()
+  await aplicaMig(db)
+  let ab
+  try { ab = await verificaEdge(db, mod.ruleazaAlertaUpa) } catch (e) { ab = ['excepție: ' + e.message] }
+  ok(ab.length > 0, `MUTANT edge ${nume} — prins ${ab.length} abateri (${(ab[0] || '').slice(0, 110)})`)
   await db.close()
 }
 
