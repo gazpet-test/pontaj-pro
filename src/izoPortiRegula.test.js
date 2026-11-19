@@ -101,6 +101,51 @@ const NEATINS = [
   // totul doar în comentarii (P2-3: comentariile se scot înainte de analiză)
   '-- ALTER TABLE profiles ADD COLUMN x int;\n/* DROP TABLE public.izo_importuri; /* imbricat */ DROP ROLE izo_x; */\nSELECT 1;',
 ]
+// r3 (Jak r2 P2): literalii folosiți ca DATE nu sunt DDL executat → nicio atingere, nimic de cerut
+const LITERALI_DATE = [
+  "CREATE FUNCTION public.alt_text() RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT 'ALTER TABLE public.executie_proiecte DISABLE ROW LEVEL SECURITY; GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;'::text $$;",
+  "COMMENT ON TABLE public.alt IS 'DROP TABLE public.izo_importuri; GRANT izo_doc_editor TO anon';",
+  "INSERT INTO public.alt (sql) VALUES ('DROP TABLE public.izo_importuri;'), ($q$REVOKE ALL ON SEQUENCE public.magazie_bucati_id_seq FROM anon$q$);",
+  "CREATE TABLE public.alt (nota text DEFAULT 'DROP TABLE public.izo_importuri' CHECK (nota <> 'ALTER TABLE public.profiles ADD COLUMN x int'));",
+  "DO $$ BEGIN RAISE NOTICE 'DROP TABLE public.izo_importuri'; END $$;",
+  "SELECT format('DROP TABLE public.%I', 'izo_importuri');",
+  "SELECT jsonb_build_object('sql', 'GRANT CREATE ON SCHEMA public TO izo_cor_editor');",
+  "SELECT E'DROP ROLE izo_teren_editor;\\n'::text;",
+  "CREATE FUNCTION public.alt_f(p text DEFAULT 'DROP TABLE public.alt CASCADE') RETURNS text LANGUAGE sql AS $$ SELECT p $$;",
+  // view cu literali care seamănă cu tabelele registrului (ca 20261107a, '^izo_e3_ocr:'): poarta leagă view-urile de tabele prin
+  // pg_depend, unde un literal nu intră
+  "CREATE VIEW public.v_alt AS SELECT 'izo_importuri'::text AS x, r.cheie FROM public.alt r WHERE r.cheie ~ '^izo_e3_ocr:[0-9]+$';",
+]
+// exemplul EXACT al lui Jak (r2): fără „DROP TABLE”, fără atingere sigură, excepția declarată acceptată. Rămâne „posibilă” atingerea
+// „corp care numește registrul”: poarta E2 citește prosrc TEXTUAL (cu literali), deci funcția intră în închiderea ei
+const JAK_R2 = "CREATE FUNCTION public.alt_mesaj() RETURNS text\nLANGUAGE sql IMMUTABLE AS $$\n  SELECT 'DROP TABLE public.izo_importuri;'::text\n$$;"
+// același text, dar EXECUTAT (sau citit ca nume de obiect) → atingere; [sql, sigur]
+const LITERALI_ATINSI = [
+  ["DO $$ BEGIN EXECUTE 'DROP TABLE public.izo_importuri;'; END $$;", true],
+  ["CREATE FUNCTION public.alt_exec() RETURNS void LANGUAGE plpgsql AS $$ BEGIN EXECUTE 'DROP TABLE public.izo_importuri;'; END $$;", true],
+  ["DO $$ DECLARE s text := 'DROP TABLE public.izo_importuri;'; BEGIN EXECUTE s; END $$;", true],
+  ["DO $$ BEGIN EXECUTE format('%s', 'DROP TABLE public.izo_importuri;'); END $$;", true],
+  ['DO $$ BEGIN EXECUTE $q$DROP TABLE public.izo_importuri$q$; END $$;', true],
+  ["CREATE FUNCTION public.alt_sql() RETURNS void LANGUAGE sql AS 'DROP TABLE public.izo_importuri';", true],
+  ["DO 'BEGIN DROP TABLE public.izo_importuri; END';", true],
+  ["DO LANGUAGE plpgsql 'BEGIN DROP TABLE public.izo_importuri; END';", true],
+  ["SELECT 'DROP TABLE public.izo_importuri' \\gexec", true],
+  ["\\set q 'DROP TABLE public.izo_importuri'\n:q;", true],
+  ["SELECT public.ruleaza_sql('DROP TABLE public.izo_importuri');", true],
+  ["SELECT public.ruleaza_sql(format('%s', 'DROP TABLE public.izo_importuri'));", true],
+  ["SELECT public.format('DROP TABLE public.izo_importuri');", true],
+  ["SELECT dblink_exec('dbname=x', 'DROP TABLE public.izo_importuri');", true],
+  ["SELECT cron.schedule('j', '0 3 * * *', $c$DROP TABLE public.izo_importuri$c$);", true],
+  // corp DEFINER care numește registrul DOAR într-un literal: poarta citește prosrc textual → DEFINER în închidere = roșu
+  ["CREATE FUNCTION public.alt_def() RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public AS $f$ SELECT 'izo_importuri'::text $f$;", true],
+  // fn_izo_* numit DOAR într-un literal, într-un corp INVOKER / într-un view: poarta caută wrapper-ele registrului TEXTUAL
+  // (prosrc ~* 'fn_izo_(seteaza_nivel|…)', pg_get_ruledef ~* …), deci e roșu, ca un apel scris
+  ["CREATE FUNCTION public.alt_inv() RETURNS text LANGUAGE sql AS $f$ SELECT 'fn_izo_seteaza_nivel'::text $f$;", true],
+  ["CREATE VIEW public.v_alt AS SELECT 'fn_izo_seteaza_nivel'::text AS x;", true],
+  // constanta regclass într-un CHECK = dependență în catalog (ca numele scris)
+  ["CREATE TABLE public.alt (id int CHECK ('public.izo_importuri'::regclass IS NOT NULL));", false],
+]
+
 // ritualul cu o abatere de structură → refuz (P2-3)
 const SCH = 'DROP TABLE public.izo_importuri;'
 const STRUCTURA_GRESITA = [
@@ -145,6 +190,17 @@ function baterie(M) {
   }
   for (const sql of NEATINS) { const r = v(sql); if (r.atinge.length || !r.ok) gresit.push(`fals pozitiv: ${sql} → ${r.atinge.join('; ')}`) }
   for (const [ce, sql] of STRUCTURA_GRESITA) if (v(sql).ok) gresit.push(`structură acceptată greșit: ${ce}`)
+  // r3: literal-dată → neatins; același text executat → atins (sigur: excepția refuzată; ritualul acceptat)
+  for (const sql of LITERALI_DATE) { const r = v(sql); if (r.atinge.length || !r.ok) gresit.push(`literal-dată tratat ca SQL: ${sql} → ${r.atinge.join('; ')}`) }
+  const jr = v(JAK_R2), jre = v(`${JAK_R2}\n${EXCEPTIE}`)
+  if (jr.atinge.some((a) => /DROP/.test(a)) || !jre.ok || !v(ritual(JAK_R2)).ok) gresit.push(`exemplul Jak r2: ${jr.atinge.join('; ')} / excepția ${jre.ok ? 'acceptată' : 'refuzată'}`)
+  if (!jr.atinge.some((a) => a.includes('numește registrul'))) gresit.push('exemplul Jak r2: corpul nu mai e citit textual (ca poarta)')
+  for (const [sql, sigur] of LITERALI_ATINSI) {
+    const r = v(sql)
+    if (!r.atinge.length || r.ok) gresit.push(`literal executat neprins: ${sql}`)
+    if (!v(ritual(sql)).ok) gresit.push(`ritualul refuzat pe: ${sql}`)
+    if (v(`${sql}\n${EXCEPTIE}`).ok !== !sigur) gresit.push(`excepția ${sigur ? 'acceptată la atingere sigură' : 'refuzată la atingere posibilă'}: ${sql}`)
+  }
   // exemplul lui Jak (P2-3): ALTER TABLE profiles + SELECT simplu + ștampile literale; și varianta cu verificările într-un comentariu
   const jak1 = v(`ALTER TABLE profiles ADD COLUMN x int;\nSELECT public.fn_izo_porti_lipsa() = '{}';\n${LITERALE}\n`)
   if (jak1.ok || !jak1.lipsa.some((l) => l.startsWith('PRE')) || !jak1.lipsa.some((l) => l.includes('necalculată')) || !jak1.lipsa.some((l) => l.startsWith('POST'))) gresit.push('exemplul Jak 1 (SELECT + ștampile literale)')
@@ -165,6 +221,25 @@ function baterie(M) {
 describe('regula porților Izometrie — detectorul (P2-2 perimetrul, P2-3 structura)', () => {
   it('bateria completă trece pe detectorul din repo', () => {
     expect(baterie(R)).toEqual([])
+  })
+  it('tabelele vechi rămân neschimbate (42 atingeri / 13 neatingeri / 24 structuri) + cele noi din r3', () => {
+    expect([ATINGE.length, NEATINS.length, STRUCTURA_GRESITA.length]).toEqual([42, 13, 24])
+    expect([LITERALI_DATE.length, LITERALI_ATINSI.length]).toEqual([10, 19])
+  })
+  it('exemplul lui Jak (review r2): literalul returnat nu e DDL; același text în EXECUTE e', () => {
+    const P = R.perimetru(POARTA, MIGRARI)
+    const r = R.verifica(JAK_R2, P)
+    expect(r.atinge).toEqual(['funcție care numește registrul / fn_izo_*: alt_mesaj'])
+    expect(R.verifica(`${JAK_R2}\n${EXCEPTIE}`, P)).toMatchObject({ ok: true, exceptie: expect.any(String) })
+    const e = R.verifica("DO $$ BEGIN EXECUTE 'DROP TABLE public.izo_importuri;'; END $$;", P)
+    expect(e.atinge).toContain('DROP TABLE izo_importuri')
+    expect(R.verifica(`DO $$ BEGIN EXECUTE 'DROP TABLE public.izo_importuri;'; END $$;\n${EXCEPTIE}`, P).ok).toBe(false)
+    // pozițiile se păstrează: `exe` are aceeași lungime și aceleași rânduri ca `cod`
+    const lx = R.lexeaza(`${JAK_R2}\nDO $$ BEGIN EXECUTE 'x'; END $$;`)
+    expect(lx.exe.length).toBe(lx.cod.length)
+    expect(lx.exe.split('\n').length).toBe(lx.cod.split('\n').length)
+    expect(lx.exe).not.toContain('DROP TABLE')
+    expect(lx.exe).toContain("EXECUTE 'x'")
   })
   it('exemplele lui Jak (review r1): fiecare refuzat, cu motivul așteptat', () => {
     const P = R.perimetru(POARTA, MIGRARI)
@@ -316,6 +391,22 @@ const MUTANTI = [
   ['trigger-ele de pe tabelele E4 ca „posibile”', "if (ctx === 'trigger') return TAB_E4.has(n) ? { sigur: true }", "if (ctx === 'trigger') return TAB_E4.has(n) ? { sigur: false }"],
   ['politicile ignorate', "(m, i, sf) => peTabel('CREATE POLICY', normeaza(m[1]), normeaza(m[2]), 'politica', i, sf))", '(m, i, sf) => 0)'],
   ['tipurile de tabel din perimetru goale', "const TAB_SIGUR = new Set(['executie_proiecte', 'executie_tronsoane', 'logistica_depozite'])", 'const TAB_SIGUR = new Set([])'],
+  // r3 (Jak r2 P2): distincția literal-dată / SQL executat — fiecare regulă scoasă trebuie prinsă
+  ['literalii-date tratați ca SQL (fără distincție, ca în r2)', 'if (pastreaza(e)) continue', 'if (true) continue'],
+  ['toți literalii tratați ca date (și cei din EXECUTE)', 'const pastreaza = (e) => {', 'const pastreaza = (e) => { return false;'],
+  ["corpul DO '…' tratat ca dată", "if (/\\bDO(?:\\s+LANGUAGE\\s+[A-Za-z_]\\w*)?\\s*$/i.test(inainte)) return true", 'if (false) return true'],
+  ["corpul de funcție AS '…' tratat ca dată", 'if (/\\bAS\\s*$/i.test(inainte) &&', 'if (false &&'],
+  ['constanta ::regclass tratată ca dată', "if (/^\\s*(?:::\\s*|AS\\s+)\"?(?:pg_catalog\\s*\\.\\s*)?reg[a-z]+/i.test(", 'if (false && ('],
+  ['EXECUTE din corp ignorat', 'if (RE_EXECUTA.test(simplu.slice(e.P.start, e.P.end))) return true', 'if (false) return true'],
+  ['instrucțiunea de sus / psql (\\gexec) ignorate', 'else if (RE_EXECUTA.test(M.slice(s + 1, f)) || (!e.P && psql)) return true', 'else if (false) return true'],
+  ['orice funcție tratată ca pură', "if (FUNCTII_PURE.has(baza) && (!nume.includes('.') || nume.startsWith('pg_catalog.'))) continue", 'continue'],
+  ['funcția pură calificată cu altă schemă (public.format)', "(!nume.includes('.') || nume.startsWith('pg_catalog.'))", 'true'],
+  ['definițiile (CREATE TABLE t (… DEFAULT …)) tratate ca apeluri', 'if (cuv && DEFINITIE.has(cuv[1].toLowerCase())) continue', ''],
+  ['sfârșitul instrucțiunii la \\gexec ignorat', 're = /;|\\\\[A-Za-z]/g', 're = /;/g'],
+  ['bucket-ul izo- citit din literalii goliți', '/izo-/i.test(lx.cod.slice(i, sf))', '/izo-/i.test(cod.slice(i, sf))'],
+  ['corpurile de funcții citite fără literali (altfel decât poarta)', 'corp = lx.cod.slice(rg.start, rg.end)', 'corp = cod.slice(rg.start, rg.end)'],
+  ['view-urile citite fără literali (altfel decât pg_get_ruledef)', 'RE_REF_FN.exec(vedere ? lx.cod.slice(i, i + bucata.length) : bucata)', 'RE_REF_FN.exec(bucata)'],
+  ['corpul INVOKER care numește fn_izo_* ca „posibil”', '{ sigur: definer || numesteFn }', '{ sigur: definer }'],
 ]
 
 describe('regula porților Izometrie — mutanții detectorului', () => {

@@ -154,6 +154,21 @@ La o atingere **posibilă**, migrarea poate declara în loc de ritual un rând `
 (la început de rând, nu într-un `/* */`), care intră în review. La o atingere **sigură** declarația nu se acceptă: se face ritualul (e
 ieftin și, dacă amprentele nu s-au schimbat, ștampilele recalculate ies identice).
 
+**Literalii: date sau SQL executat (runda 3, review r2 P2).** Un text folosit ca DATĂ nu e DDL: `SELECT 'DROP TABLE
+public.izo_importuri;'::text`, un `COMMENT ON … IS '…'`, un `INSERT … VALUES ('…')`, un `DEFAULT` / `CHECK` cu un șir, un `RAISE NOTICE '…'`,
+un `format('…')` / `jsonb_build_object('…')` care doar întoarce text nu cer ritualul. Detectorul golește conținutul acestor literali
+înainte să caute atingerile. Un literal (`'…'`, `E'…'` sau `$q$…$q$` care nu e corp) **rămâne citit ca SQL** dacă:
+(a) e corp de cod (`AS '…'` într-un `CREATE FUNCTION` / `PROCEDURE`, `DO '…'`); (b) e un nume de obiect (`'…'::regclass` și celelalte
+`reg*`: constanta intră în `pg_depend`); (c) contextul lui execută text: corpul `DO` / funcție care îl conține are `EXECUTE`, `dblink`,
+`*_to_xml`, `cron.schedule` … (un literal poate ajunge în `EXECUTE` printr-o variabilă), iar la nivelul de sus instrucțiunea lui are aceste
+cuvinte sau fișierul are meta-comenzi psql (`\gexec`, `\gset`, `:variabila`); (d) e argument al unei funcții care nu e pe lista albă a
+funcțiilor pure de text (`FUNCTII_PURE` în detector): `SELECT public.ruleaza('DROP …')` contează. La orice dubiu literalul rămâne
+(fail-closed). Două locuri citesc în continuare literalii, ca poarta: **corpul funcțiilor** (poarta caută în `prosrc` textual; un corp care
+numește `fn_izo_*` și doar într-un șir e „sigur”, pentru că poarta îl tratează ca wrapper al registrului) și **`fn_izo_*` dintr-un view /
+o regulă** (`pg_get_ruledef` e citit textual). Pe cele 495 de fișiere SQL din depozit, față de runda 2, distincția scoate exact 3 atingeri
+(un regex pe o cheie `'^izo_e3_ocr:…'` într-un view, un mesaj de eroare `'… GRANT rol TO …'`, o listă de amprente într-o funcție
+temporară) și nu adaugă niciuna.
+
 **Verificarea automată (CI):** `.github/workflows/izometrie-porti-regula.yml` rulează la **orice** PR care atinge `supabase/migrations/**`,
 `supabase/revenire/**`, detectorul, testul lui sau lista veche — inclusiv pe draft-uri: (1) `node scripts/izometrie/porti_regula.mjs`
 (fără dependențe; cod 1 la abatere, cu fișierul și ce lipsește), (2) `npx vitest run src/izoPortiRegula` (regresiile: exemplele din
@@ -166,7 +181,9 @@ marcat „required” în setările GitHub ale depozitului (setare de owner).
 **Limita (declarată, nu ascunsă):** e o verificare **textuală**, cu un lexer SQL (comentarii `--` și `/* */` imbricate, literali
 `'…'` / `E'…'` / `"…"`, corpuri `$tag$`, lexate recursiv ca la PostgreSQL). Prinde omisiunile și formele naive; **nu dovedește**:
 * nu vede DDL construit din bucăți de text pe care nu le poate citi (verbul însuși concatenat), cod mort (`RETURN;` înaintea gărzii),
-  obiecte create manual pe producție, schimbări venite din upgrade-uri Supabase, corpuri de funcții care nu sunt `$…$`;
+  obiecte create manual pe producție, schimbări venite din upgrade-uri Supabase;
+* nu urmărește textul prin tabele: un șir inserat azi ca dată și executat mâine de o funcție (`EXECUTE (SELECT sql FROM t)`) se vede doar
+  la funcția care execută (DEFINER cu SQL dinamic = sigur), nu la `INSERT`;
 * lista perimetrului e derivată din definițiile de azi: o poartă nouă / o definiție extinsă cere actualizarea detectorului (testul
   citește listele revizuite din poarta E2, dar tiparele de nume sunt scrise de mână);
 * fals-pozitivele sunt acceptate (fail-closed): din cele 154 de migrări / reveniri de la `20261120a` încolo, 33 ar fi cerut ritualul sau

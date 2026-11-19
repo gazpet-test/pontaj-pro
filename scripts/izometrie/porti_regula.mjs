@@ -6,6 +6,8 @@
 // Ce face, pe fiecare fișier care nu e în lista veche (supabase/tests/izo_porti_regula_vechi.tsv, cu sha256 pe textul fără CR):
 //   1. scoate comentariile cu un lexer SQL (-- și /* */ imbricate; literalii '…', E'…', "…" și corpurile $tag$ … $tag$ recunoscute;
 //      corpurile se lexează la rândul lor, ca la PostgreSQL) — textul din comentarii nu contează nici ca schimbare, nici ca verificare;
+//   1b. golește literalii folosiți ca DATE (un text returnat / inserat / comentat nu e DDL); cei care pot fi executați (EXECUTE,
+//      corp de funcție / DO în '…', \gexec, argument al unei funcții necunoscute, ::regclass) rămân (detaliile la 1b, mai jos);
 //   2. găsește instrucțiunile care ATING perimetrul amprentat de porți (CREATE / ALTER / DROP / GRANT / REVOKE / trigger / politică /
 //      index / regulă / proprietar / redenumire, pe nume; SQL dinamic cu ținta necunoscută; funcții DEFINER cu SQL dinamic; obiecte care
 //      numesc registrul sau cheamă fn_izo_*; drepturi pe secvențe / pe tot schema; DML pe storage.buckets / catalog);
@@ -111,7 +113,11 @@ export function lexeaza(text) {
     }
   }
   lex(0, t.length, null)
-  return { cod: out.join(''), simplu: simplu.join(''), regiuni, linii, literali, eroare }
+  const rez = { cod: out.join(''), simplu: simplu.join(''), regiuni, linii, literali, eroare }
+  // `exe` (vezi 1b) se calculează la cerere: perimetrul lexează toate migrările și nu-l folosește
+  let exe = null
+  Object.defineProperty(rez, 'exe', { enumerable: true, get: () => (exe ??= literaliExecutati(rez)) })
+  return rez
 }
 
 // lanțul de corpuri care conțin poziția (cel mai interior primul)
@@ -136,6 +142,99 @@ const RE_REF_FN = /(?<![A-Za-z0-9_$])(?:public\s*\.\s*)?"?(fn_izo_[a-z0-9_]+)/i
 const RE_REF_TAB = /(?<![A-Za-z0-9_$])(?:public\s*\.\s*)?"?((?:v_)?izo_[a-z0-9_]+|magazie_bucati[a-z0-9_]*)/i
 // SQL dinamic (sau „SQL dat ca text”) — ce face poarta E2 să bage funcția în închidere (20261230a, k_corp / c_fn)
 const RE_DINAMIC = /\bexecute\b|\b(?:query|table|schema|database)_to_xml\w*|\bts_stat\b|\bts_rewrite\b|\bcrosstab\w*|\bconnectby\b|\bdblink\w*|\bpg_read_(?:binary_)?file\b|\blo_import\b|\bget_raw_page\b|\bU&"/i
+
+// ─── 1b. literalii: DATE sau SQL care se poate EXECUTA (PR #1146 r2, Jakarinos P2) ─────────────────────────────────────────
+// `exe` = `cod` cu conținutul literalilor folosiți ca DATE golit (aceleași poziții, rândurile păstrate). Atingerile (pasul 3) se
+// caută în `exe`: un text returnat / inserat / comentat (`SELECT 'DROP TABLE public.izo_importuri;'::text`) nu e DDL executat.
+// Un literal ('…', E'…' sau un $q$…$q$ care nu e corp de funcție / DO) RĂMÂNE în `exe` (= tratat ca SQL care poate rula) dacă:
+//   (a) e CORP de cod: `AS '…'` într-un CREATE FUNCTION / PROCEDURE, `DO '…'` / `DO LANGUAGE x '…'`;
+//   (b) e REFERINȚĂ la obiect: urmat de `::reg…` / `AS reg…` (o constantă regclass dintr-un DEFAULT / CHECK / politică intră
+//       în pg_depend, ca numele scris);
+//   (c) contextul lui EXECUTĂ text: corpul DO / funcție care îl conține are EXECUTE / dblink / *_to_xml / cron.schedule …
+//       (orice literal din corp poate ajunge în EXECUTE printr-o variabilă); la nivelul de sus (sau în SQL-ul unui literal
+//       executat), instrucțiunea lui are aceste cuvinte, ori fișierul are meta-comenzi psql (\gexec, \gset, :variabila);
+//   (d) e argument (la orice adâncime) al unei funcții care NU e pe lista albă a funcțiilor pure de text (FUNCTII_PURE): o
+//       funcție a noastră poate executa textul primit (`SELECT public.ruleaza('DROP …')`).
+// Fail-closed: la orice dubiu literalul rămâne (= comportamentul de dinainte). Corpurile de funcții se judecă în continuare pe
+// `cod` (cu literali): poarta E2 citește prosrc TEXTUAL, deci un corp care numește registrul într-un literal intră în închiderea ei.
+const RE_EXECUTA = new RegExp(`${RE_DINAMIC.source}|\\bcron\\s*\\.\\s*schedule\\w*|\\bpg_background_launch\\b`, 'i')
+const RE_PSQL = /\\[A-Za-z]|(?<![:\w]):['"]?[A-Za-z_]/
+// funcții pure de text / json / dată (pg_catalog): nu execută și nu numesc obiecte; nextval / to_reg* / has_*_privilege NU sunt aici
+export const FUNCTII_PURE = new Set(['format', 'concat', 'concat_ws', 'quote_ident', 'quote_literal', 'quote_nullable', 'replace',
+  'translate', 'lower', 'upper', 'initcap', 'btrim', 'ltrim', 'rtrim', 'md5', 'length', 'char_length', 'octet_length', 'coalesce',
+  'nullif', 'greatest', 'least', 'jsonb_build_object', 'json_build_object', 'jsonb_build_array', 'json_build_array', 'to_jsonb',
+  'to_json', 'jsonb_set', 'array_append', 'array_prepend', 'array_to_string', 'string_to_array', 'string_agg', 'regexp_replace',
+  'regexp_match', 'regexp_matches', 'split_part', 'substr', 'substring', 'left', 'right', 'position', 'strpos', 'starts_with',
+  'to_char', 'to_date', 'to_timestamp', 'to_number', 'date_trunc', 'encode', 'decode', 'set_config', 'current_setting'])
+// cuvinte cheie urmate de „(” (nu sunt apeluri) și cuvintele după care un nume urmat de „(” e o definiție / listă de coloane
+const NU_APEL = new Set(['in', 'values', 'array', 'check', 'using', 'with', 'as', 'on', 'exists', 'any', 'all', 'some', 'not', 'and',
+  'or', 'references', 'key', 'unique', 'filter', 'over', 'partition', 'cast', 'row', 'if', 'when', 'then', 'else', 'case', 'select',
+  'where', 'set', 'into', 'from', 'by', 'conflict', 'do', 'distinct', 'include', 'lateral', 'returning', 'elsif', 'while', 'loop',
+  'return', 'raise', 'perform', 'default', 'primary', 'exclude', 'group', 'order', 'having', 'limit', 'between', 'like', 'ilike',
+  'is', 'enum', 'table', 'returns', 'window', 'escape'])
+const DEFINITIE = new Set(['table', 'function', 'procedure', 'aggregate', 'routine', 'type', 'view', 'into', 'on', 'references',
+  'index', 'trigger', 'only', 'exists', 'using'])
+const RE_APELAT = /((?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)(?:\s*\.\s*(?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*))?)\s*$/
+
+function literaliExecutati(lx) {
+  const { cod, simplu, regiuni, literali } = lx
+  const n = cod.length
+  // masca unui nivel (sus = null, sau corpul unei regiuni): `simplu` cu corpurile copil acoperite (tag-uri incluse)
+  const masti = new Map()
+  const masca = (P) => {
+    if (!masti.has(P)) {
+      const m = simplu.split('')
+      for (const r of regiuni) if (r.parinte === P) for (let k = r.deschis; k < r.inchis; k++) if (m[k] !== '\n') m[k] = ' '
+      masti.set(P, m.join(''))
+    }
+    return masti.get(P)
+  }
+  const psql = RE_PSQL.test(masca(null))
+  // elementele: literalii '…' (conținut = între ghilimele) și regiunile $…$ care nu sunt corpuri, în ordinea deschiderii
+  const el = [
+    ...literali.map(([a, b]) => ({ a, b, c0: a + 1, c1: b - 1, P: lant(regiuni, a)[0] || null, alt: false })),
+    ...regiuni.filter((r) => r.fel === 'alt').map((r) => ({ a: r.deschis, b: r.inchis, c0: r.start, c1: r.end, P: r.parinte, alt: true })),
+  ].sort((x, y) => x.a - y.a)
+  const pastreaza = (e) => {
+    const M = masca(e.P), a0 = e.P ? e.P.start : 0, b0 = e.P ? e.P.end : n
+    let s = M.lastIndexOf(';', e.a - 1); if (s < a0) s = a0 - 1
+    let f = M.indexOf(';', e.b); if (f < 0 || f > b0) f = b0
+    const inainte = M.slice(Math.max(s + 1, e.a - 300), e.a)
+    // (a) corp de cod
+    if (/\bDO(?:\s+LANGUAGE\s+[A-Za-z_]\w*)?\s*$/i.test(inainte)) return true
+    if (/\bAS\s*$/i.test(inainte) && /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i.test(M.slice(s + 1, e.a))) return true
+    // (b) referință la obiect
+    if (/^\s*(?:::\s*|AS\s+)"?(?:pg_catalog\s*\.\s*)?reg[a-z]+/i.test(M.slice(e.b, Math.min(b0, e.b + 100)))) return true
+    // (c) contextul execută text
+    if (e.P && e.P.fel !== 'alt') { if (RE_EXECUTA.test(simplu.slice(e.P.start, e.P.end))) return true }
+    else if (RE_EXECUTA.test(M.slice(s + 1, f)) || (!e.P && psql)) return true
+    // (d) argument al unei funcții necunoscute (fiecare paranteză deschisă care îl cuprinde, din interior spre exterior)
+    let adanc = 0
+    for (let k = e.a - 1; k > s; k--) {
+      if (M[k] === ')') { adanc++; continue }
+      if (M[k] !== '(') continue
+      if (adanc > 0) { adanc--; continue }
+      const pre = M.slice(Math.max(s + 1, k - 300), k), m = RE_APELAT.exec(pre)
+      if (!m) continue                                                   // paranteză de grupare
+      const nume = m[1].replace(/\s+/g, '').replace(/"/g, '').toLowerCase(), baza = nume.split('.').pop()
+      if (NU_APEL.has(baza) && !nume.includes('.')) continue
+      const cuv = /([A-Za-z_]+)\s*$/.exec(pre.slice(0, m.index))
+      if (cuv && DEFINITIE.has(cuv[1].toLowerCase())) continue            // CREATE TABLE t (… DEFAULT '…'), f(p text DEFAULT '…')
+      if (FUNCTII_PURE.has(baza) && (!nume.includes('.') || nume.startsWith('pg_catalog.'))) continue
+      return true
+    }
+    return false
+  }
+  const out = cod.split('')
+  let golitPana = -1
+  for (const e of el) {
+    if (e.a < golitPana) continue                                         // în interiorul unui literal-dată deja golit
+    if (pastreaza(e)) continue
+    for (let k = e.c0; k < e.c1; k++) if (out[k] !== '\n') out[k] = ' '
+    golitPana = e.b
+  }
+  return out.join('')
+}
 
 // identificatori: simpli sau "citați", opțional calificați; %I / %s / %L (format) și ' (concatenare) = țintă NECUNOSCUTĂ
 const ID1 = '(?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)'
@@ -221,10 +320,12 @@ function elemente(s) {
   r.push(cur)
   return r.map((x) => x.trim()).filter(Boolean).map((x) => { const m = new RegExp(`^${CAP}`).exec(x); return normeaza(m ? m[1] : "'") })
 }
-const sfarsit = (cod, i) => { const k = cod.indexOf(';', i); return k < 0 ? cod.length : k }
+// sfârșitul instrucțiunii: `;` sau o meta-comandă psql (`SELECT … \gexec` se termină la `\gexec`, nu la următorul `;`)
+const sfarsit = (cod, i) => { const re = /;|\\[A-Za-z]/g; re.lastIndex = i; const m = re.exec(cod); return m ? m.index : cod.length }
 
 export function atingeri(lx, P) {
-  const { cod, regiuni } = lx
+  // atingerile se caută în `exe` (literalii-date goliți, 1b); `lx.cod` (cu literali) doar unde poarta citește textul literal
+  const { regiuni } = lx, cod = lx.exe
   const r = []
   // opt.sigur = clasificare impusă; opt.ctx = rolul țintei (vezi clasifica)
   const adauga = (ce, n, poz, sf, opt = {}) => {
@@ -327,7 +428,7 @@ export function atingeri(lx, P) {
   scan(g(`\\bSECURITY${S}LABEL\\b`), (m, i, sf) => adauga('SECURITY LABEL', '', i, sf, { sigur: false }))
   // DML pe storage.buckets (E3 amprentează rândul bucket-ului izo-documente) și pe catalog
   scan(g(`\\b(UPDATE|DELETE${S}FROM|INSERT${S}INTO)${S}(?:ONLY${S})?storage\\s*\\.\\s*buckets\\b`), (m, i, sf) => {
-    const izo = /izo-/i.test(cod.slice(i, sf))
+    const izo = /izo-/i.test(lx.cod.slice(i, sf))                        // id-ul bucket-ului e chiar un literal
     if (izo || !/^INSERT/i.test(m[1])) adauga(`${m[1].toUpperCase().replace(/\s+/g, ' ')} storage.buckets`, '', i, sf, { sigur: izo })
   })
   scan(g(`\\b(?:UPDATE|DELETE${S}FROM|INSERT${S}INTO)${S}(?:pg_catalog\\s*\\.\\s*)?pg_(?!temp)[a-z_]+\\b`), (m, i, sf) => adauga('scriere directă în catalog', '', i, sf, { sigur: true }))
@@ -336,19 +437,25 @@ export function atingeri(lx, P) {
   for (const bucata of cod.split(';')) {
     const i = p; p += bucata.length + 1
     if (!/\b(CREATE|ALTER)\b/i.test(bucata) || /\bCREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\b/i.test(bucata)) continue
-    const fn = RE_REF_FN.exec(bucata), tab = RE_REF_TAB.exec(bucata)
     const vedere = /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+|RECURSIVE\s+)?(?:VIEW|RULE)\b/i.test(bucata)
+    // la view / regulă, fn_izo_* se caută și în literali: poarta citește pg_get_ruledef TEXTUAL (wrapper-e ale registrului);
+    // tabelele registrului le leagă prin pg_depend, unde un literal nu intră
+    const fn = RE_REF_FN.exec(vedere ? lx.cod.slice(i, i + bucata.length) : bucata), tab = RE_REF_TAB.exec(bucata)
     if (fn) adauga('instrucțiune care cheamă', normeaza(fn[1]), i, i + bucata.length, { sigur: true })
     else if (tab) adauga('instrucțiune care numește registrul:', normeaza(tab[1]), i, i + bucata.length, { sigur: vedere })
   }
   // corpurile de funcții: DEFINER cu SQL dinamic = intră în închiderea porții E2 (roșu); orice corp care numește registrul / fn_izo_*
   for (const rg of regiuni.filter((x) => x.fel === 'functie')) {
-    const decl = rg.antet + ' ' + rg.coada, corp = cod.slice(rg.start, rg.end)
+    // corpul pe `lx.cod` (cu literali): poarta E2 citește prosrc textual
+    const decl = rg.antet + ' ' + rg.coada, corp = lx.cod.slice(rg.start, rg.end)
     const definer = /\bSECURITY\s+DEFINER\b/i.test(decl)
     const nm = new RegExp(`\\b(?:FUNCTION|PROCEDURE)${S}${CAP}`, 'i').exec(rg.antet)
     const nume = nm ? normeaza(nm[1]) : '?'
     if (definer && RE_DINAMIC.test(corp)) adauga('funcție SECURITY DEFINER cu SQL dinamic (închiderea porții E2):', nume, rg.deschis, rg.inchis, { sigur: true })
-    if (RE_REF_FN.test(corp) || RE_REF_TAB.test(corp)) adauga(`funcție ${definer ? 'DEFINER ' : ''}care numește registrul / fn_izo_*:`, nume, rg.deschis, rg.inchis, { sigur: definer })
+    // un corp care numește fn_izo_* (și doar într-un literal) = wrapper al registrului pentru poartă (prosrc ~* fn_izo_…): sigur,
+    // oricare ar fi DEFINER-ul; unul care numește doar tabelele registrului intră în închiderea citirilor (roșu doar ca DEFINER)
+    const numesteFn = RE_REF_FN.test(corp)
+    if (numesteFn || RE_REF_TAB.test(corp)) adauga(`funcție ${definer ? 'DEFINER ' : ''}care numește registrul / fn_izo_*:`, nume, rg.deschis, rg.inchis, { sigur: definer || numesteFn })
   }
   // funcții DEFINER fără corp $…$ (AS '…', BEGIN ATOMIC, RETURN …): corpul nu se poate citi sigur (cele INVOKER care numesc
   // registrul sunt prinse mai sus, pe instrucțiune)
