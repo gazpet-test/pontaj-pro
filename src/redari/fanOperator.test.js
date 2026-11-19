@@ -19,7 +19,7 @@ import { executaActiuneFan, MAX_BUCATI_PE_APEL, refuzBd, motivCod } from '../../
 import { stareTrimitere, textPlafonAzi, plicuriTrimisibile, registruIntentii, intentieLocalaBlocanta, rezultatDovedit, deciziaIntentiei, mesajTrimitere,
   mesajRefuzComanda, mesajEdgeFan, textExclus, textRespins, textRetras, MESAJ_NON_OPERATOR, MESAJ_LOT_NEINCHEIAT, MESAJ_DOAR_TEST_BD, MESAJ_LEGATURA_CURIER,
   MESAJ_DOAR_OPERATOR, ARENDA_INTENTIE_MIN, ETICHETE_STARE_FAN, ETICHETE_MOTIV_ANULARE, MOTIVE_ANULARE, ziRo, PREFIX_REGISTRU_FAN, MESAJ_OPOD_NEINSTALAT_PASI,
-  decizieDupaApel, textOpodTrimitere } from './fanLot.js'
+  decizieDupaApel, textOpodTrimitere, stergeDacaLamurita, APELURI_FAN_IN_CURS } from './fanLot.js'
 import TrimiteLaCurier, { CereriAprobare, SetariZi } from './ui/FanTrimitere.jsx'
 
 const SPEC = readFileSync('docs/redari/FAN_FLUX_OPERATOR_SPEC.md', 'utf8').replace(/\r/g, '')
@@ -539,6 +539,27 @@ describe('F1 — fanLot.js: starea butonului, plafonul, lista, registrul local a
     // intrarea stricată (JSON invalid) nu aruncă și nu apare
     mem.set(PREFIX_REGISTRU_FAN + K(5), '{stricat'); expect(reg.citeste(K(5))).toBeNull(); expect(reg.toate().map(r => r.cheie)).toEqual([K(2)])
   })
+  it('runda 3 (Jakarinos #1136 r2 P1): termina() notează sfârșitul apelului pe intrarea CURENTĂ (fără s-o recreeze); apasa() îl păstrează; curățarea decide pe intrarea RECITITĂ și sare cheile cu apel în curs', () => {
+    const mem = new Map()
+    const storage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, v), removeItem: k => mem.delete(k), key: i => [...mem.keys()][i] ?? null, get length() { return mem.size } }
+    const reg = registruIntentii(storage), b = { lot_id: LOT.id, plic_ids: [plicId(1)], hash_cerere: 'a'.repeat(64) }
+    expect(reg.scrie(K(1), { ...b, inceput_la: '2026-11-18T09:40:00.000Z' })).toBe(true)
+    expect(reg.citeste(K(1)).terminat_la).toBeUndefined()
+    expect(reg.termina(K(1), '2026-11-18T09:41:00.000Z')).toBe(true); expect(reg.citeste(K(1))).toMatchObject({ apasat_la: '2026-11-18T09:40:00.000Z', terminat_la: '2026-11-18T09:41:00.000Z' })
+    expect(reg.apasa(K(1), '2026-11-18T10:00:00.000Z')).toBe(true); expect(reg.citeste(K(1))).toMatchObject({ inceput_la: '2026-11-18T09:40:00.000Z', apasat_la: '2026-11-18T10:00:00.000Z', terminat_la: '2026-11-18T09:41:00.000Z' })
+    expect(reg.termina(K(9))).toBe(false); expect(reg.citeste(K(9))).toBeNull()   // o intrare ieșită nu se recreează
+    // reproducerea recenzentului, la nivel de funcție: copia memorată (apasat_la 09:40) ar ieși pe o listă proaspătă; intrarea recitită (apasat_la 10:00) rămâne
+    const copie = { cheie: K(1), ...b, inceput_la: '2026-11-18T09:40:00.000Z', apasat_la: '2026-11-18T09:40:00.000Z' }, lista = Date.parse('2026-11-18T10:00:30Z')
+    expect(deciziaIntentiei(copie, null, lista, lista)).toBe('sterge')
+    expect(stergeDacaLamurita(reg, K(1), null, lista, lista, new Set())).toBe(false); expect(reg.citeste(K(1))).not.toBeNull()
+    // cheie cu apel în curs: nici după arendă nu iese; fără apel, după arendă și după sfârșitul notat, iese
+    const tarziu = Date.parse('2026-11-18T10:30:00Z')
+    expect(stergeDacaLamurita(reg, K(1), null, tarziu, tarziu, new Set([K(1)]))).toBe(false); expect(reg.citeste(K(1))).not.toBeNull()
+    expect(stergeDacaLamurita(reg, K(1), undefined, tarziu, tarziu, new Set())).toBe(false)   // lista necitită
+    expect(stergeDacaLamurita(reg, K(1), null, tarziu, tarziu, new Set())).toBe(true); expect(reg.citeste(K(1))).toBeNull()
+    expect(stergeDacaLamurita(reg, K(1), null, tarziu, tarziu, new Set())).toBe(false)   // deja ieșită: nimic de făcut
+    expect(APELURI_FAN_IN_CURS).toBeInstanceOf(Set)
+  })
   it(`dublu-click / al doilea tab: o intrare pe același lot pornită de < ${ARENDA_INTENTIE_MIN} min blochează o cheie nouă local; după arendă sau pe alt lot nu`, () => {
     const acum = Date.parse('2026-11-18T10:00:00Z')
     const e = (min, lot = LOT.id) => ({ cheie: K(1), lot_id: lot, inceput_la: new Date(acum - min * 60000).toISOString() })
@@ -569,6 +590,11 @@ describe('F1 — fanLot.js: starea butonului, plafonul, lista, registrul local a
     // „Reia” mută momentul: arenda se socotește de la ULTIMA apăsare, nu de la prima
     expect(deciziaIntentiei({ ...e, apasat_la: '2026-11-18T10:05:00Z' }, null, acum, Date.parse('2026-11-18T10:10:00Z'))).toBe('reia')
     expect(deciziaIntentiei({ cheie: K(1) }, null, acum, acum + 3600000)).toBe('reia')   // fără moment de apăsare: nimic dovedit
+    // runda 3 (Jakarinos #1136 r2 P1): și după SFÂRȘITUL ultimului apel (terminat_la) — o listă citită cât apelul era în zbor nu dovedește absența
+    expect(deciziaIntentiei({ ...e, terminat_la: '2026-11-18T10:12:00Z' }, null, acum, Date.parse('2026-11-18T10:11:00Z'))).toBe('reia')
+    expect(deciziaIntentiei({ ...e, terminat_la: '2026-11-18T10:12:00Z' }, null, acum, Date.parse('2026-11-18T10:12:00Z'))).toBe('sterge')
+    expect(deciziaIntentiei({ ...e, terminat_la: '2026-11-18T09:59:00Z' }, null, acum, Date.parse('2026-11-18T10:08:00Z'))).toBe('sterge')   // sfârșit înainte de arendă: arenda decide
+    expect(deciziaIntentiei({ ...e, terminat_la: 'stricat' }, null, acum, acum + 3600000)).toBe('reia')   // moment necitibil = nimic dovedit
     expect(deciziaIntentiei(e, { stare: 'in_curs', necunoscute: 2, lucru_pana_la: '2026-11-18T10:05:00Z' }, acum)).toBe('verifica')
     expect(deciziaIntentiei(e, { stare: 'in_curs', necunoscute: '1', lucru_pana_la: '2026-11-18T09:00:00Z' }, acum)).toBe('verifica')   // numărul vine ca text din PostgREST
     expect(deciziaIntentiei(e, { stare: 'in_curs', necunoscute: 0, lucru_pana_la: '2026-11-18T10:05:00Z' }, acum)).toBe('asteapta')
@@ -713,7 +739,10 @@ describe('F1 — ecranul operatorului (FanTrimitere.jsx): butonul unic și secț
     const src = readFileSync('src/redari/ui/FanTrimitere.jsx', 'utf8').replace(/\r/g, '')
     expect(src).toMatch(/if \(!reg\.scrie\(cheie, \{ lot_id: lot\.id, plic_ids: ids, hash_cerere: hash \}\)\) return/)   // scris + verificat ÎNAINTE de apel
     // runda 2 (Jakarinos #1136 r1 P1): iese DOAR pe dovada din BD citită pe cheia exactă DUPĂ răspuns (comportamentul e probat montat: fanTrimitereDom.test.jsx)
-    expect(src).toMatch(/const \{ corp \} = await edge\('trimite', \{ plic_ids: ids, intentie: cheie \}\)[\s\S]{0,400}const cititLa = Date\.now\(\)[\s\S]{0,200}await citesteIntentie\(cheie\)[\s\S]{0,200}if \(decizieDupaApel\(\{ intrare, corp, dinBd, cititLaMs: cititLa \}\) === 'sterge'\) reg\.sterge\(cheie\)/)
+    expect(src).toMatch(/const \{ corp \} = await edge\('trimite', \{ plic_ids: ids, intentie: cheie \}\)[\s\S]{0,400}const cititLa = Date\.now\(\)[\s\S]{0,200}await citesteIntentie\(cheie\)[\s\S]{0,600}else if \(curenta\.apasat_la === intrare\?\.apasat_la && decizieDupaApel\(\{ intrare: curenta, corp, dinBd, cititLaMs: cititLa \}\) === 'sterge'\) reg\.sterge\(cheie\)/)
+    // runda 3 (Jakarinos #1136 r2 P1): cheia „în curs” de înaintea scrierii în registru până în finally; efectul curăță doar prin stergeDacaLamurita
+    expect(src).toMatch(/APELURI_FAN_IN_CURS\.add\(cheie\)[\s\S]{0,400}try \{[\s\S]{0,300}reg\.scrie\(cheie, \{ lot_id: lot\.id[\s\S]*?\} finally \{\n      APELURI_FAN_IN_CURS\.delete\(cheie\)\n      if \(intrare\) reg\.termina\(cheie\)/)
+    expect(src).toMatch(/stergeDacaLamurita\(reg, e\.cheie, [^\n]*APELURI_FAN_IN_CURS\)\) sterse\+\+/); expect(src).not.toMatch(/\{ reg\.sterge\(e\.cheie\); sterse\+\+ \}/)
     expect(src).not.toMatch(/rezultatDovedit\(corp\)\) reg\.sterge/)
     expect(src).toMatch(/trimiteCu\(globalThis\.crypto\.randomUUID\(\), selectate, null\)/); expect(src).toMatch(/onClick=\{\(\) => trimiteCu\(e\.cheie, e\.plic_ids, e, bd\)\}>Reia trimiterea/)   // reluarea = aceeași cheie
     expect(src).toMatch(/edge\('reconciliaza', \{ data: propuneri\.data, confirma: \{ id: p\.id \} \}\)/)

@@ -497,20 +497,28 @@ export function registruIntentii(storage = globalThis.localStorage) {
   return {
     citeste,
     /** scrie + recitește: true doar dacă intrarea e în registru cu exact aceste date (storage plin / blocat = false → NU se trimite) */
-    scrie(cheie, { lot_id, plic_ids, hash_cerere, inceput_la, apasat_la }) {
+    scrie(cheie, { lot_id, plic_ids, hash_cerere, inceput_la, apasat_la, terminat_la }) {
       if (!cheie || !lot_id || !Array.isArray(plic_ids) || !plic_ids.length || !hash_cerere) return false
       const acum = new Date().toISOString()
-      const date = { lot_id, plic_ids: [...plic_ids], hash_cerere, inceput_la: inceput_la || acum, apasat_la: apasat_la || inceput_la || acum }
+      const date = { lot_id, plic_ids: [...plic_ids], hash_cerere, inceput_la: inceput_la || acum, apasat_la: apasat_la || inceput_la || acum, ...(terminat_la ? { terminat_la } : {}) }
       try { storage.setItem(k(cheie), JSON.stringify(date)) } catch { return false }
       const r = citeste(cheie)
       return !!r && r.lot_id === lot_id && r.hash_cerere === hash_cerere && JSON.stringify(r.plic_ids) === JSON.stringify(date.plic_ids) && r.apasat_la === date.apasat_la
+        && (r.terminat_la || null) === (date.terminat_la || null)
     },
     /** Runda 2 pe #1136: momentul ULTIMEI apăsări cu această cheie (prima trimitere sau „Reia”), scris și verificat ÎNAINTEA apelului (eșec = nu se
      *  trimite). Absența cheii din BD dovedește ceva doar după ARENDA_INTENTIE_MIN de la el (deciziaIntentiei): nicio cerere nu mai poate fi în zbor. */
     apasa(cheie, la = new Date().toISOString()) {
       const r = citeste(cheie)
       if (!r) return false
-      return this.scrie(cheie, { lot_id: r.lot_id, plic_ids: r.plic_ids, hash_cerere: r.hash_cerere, inceput_la: r.inceput_la, apasat_la: la })
+      return this.scrie(cheie, { lot_id: r.lot_id, plic_ids: r.plic_ids, hash_cerere: r.hash_cerere, inceput_la: r.inceput_la, apasat_la: la, terminat_la: r.terminat_la })
+    },
+    /** Runda 3 pe #1136 (Jakarinos r2 P1): momentul în care s-a ÎNCHEIAT ultimul apel cu cheia din acest browser (răspuns sau eroare), pe versiunea
+     *  CURENTĂ a intrării (nu o recreează dacă a ieșit). O listă a cărei citire a pornit înaintea lui nu dovedește absența (apelul putea scrie după ea). */
+    termina(cheie, la = new Date().toISOString()) {
+      const r = citeste(cheie)
+      if (!r) return false
+      return this.scrie(cheie, { lot_id: r.lot_id, plic_ids: r.plic_ids, hash_cerere: r.hash_cerere, inceput_la: r.inceput_la, apasat_la: r.apasat_la, terminat_la: la })
     },
     sterge(cheie) { try { storage.removeItem(k(cheie)) } catch { /* nimic */ } return citeste(cheie) === null },
     toate() {
@@ -551,7 +559,9 @@ export function deciziaIntentiei(intrare, dinBd, acumMs = Date.now(), cititLaMs 
   if (dinBd === undefined) return 'necitit'
   if (dinBd === null) {
     const apasat = Date.parse(intrare?.apasat_la || intrare?.inceput_la)
-    return Number.isFinite(cititLaMs) && Number.isFinite(apasat) && cititLaMs >= apasat + ARENDA_INTENTIE_MIN * 60000 ? 'sterge' : 'reia'
+    // runda 3 (Jakarinos #1136 r2 P1): și după sfârșitul ultimului apel cu cheia (terminat_la), dacă e cunoscut — un apel ținut peste arendă poate scrie
+    const terminat = intrare?.terminat_la ? Date.parse(intrare.terminat_la) : -Infinity
+    return Number.isFinite(cititLaMs) && Number.isFinite(apasat) && cititLaMs >= apasat + ARENDA_INTENTIE_MIN * 60000 && cititLaMs >= terminat ? 'sterge' : 'reia'   // terminat_la stricat (NaN) = nimic dovedit
   }
   if (dinBd.stare === 'incheiata' || dinBd.stare === 'neincheiata') return 'sterge'
   if (Number(dinBd.necunoscute) > 0) return 'verifica'
@@ -567,6 +577,20 @@ export function decizieDupaApel({ intrare, corp, dinBd, cititLaMs, acumMs = Date
   if (dinBd === undefined) return 'pastreaza'
   if (dinBd === null) return rezultatDovedit(corp) || deciziaIntentiei(intrare, null, acumMs, cititLaMs) === 'sterge' ? 'sterge' : 'pastreaza'
   return deciziaIntentiei(intrare, dinBd, acumMs, cititLaMs) === 'sterge' ? 'sterge' : 'pastreaza'
+}
+/** Runda 3 pe #1136 (Jakarinos r2 P1): cheile cu un apel `trimite` în curs DIN ACEST BROWSER (puse înaintea scrierii în registru, scoase după
+ *  decizia de după răspuns). La nivel de modul, nu de componentă: o remontare a ecranului (lot schimbat și înapoi) nu le uită. */
+export const APELURI_FAN_IN_CURS = new Set()
+/**
+ * Curățarea registrului din efectul de lămurire (lista `intentii`). Decizia se ia pe versiunea CURENTĂ a intrării, recitită din registru chiar acum
+ * (după un „Reia” sau o apăsare în alt tab, apasat_la e nou; copia memorată de ecran e veche), și niciodată pe o cheie cu apel în curs (inCurs).
+ * dinBd = rândul cheii din listă / null (absentă) / undefined (lista necitită). true = intrarea a ieșit.
+ */
+export function stergeDacaLamurita(reg, cheie, dinBd, acumMs, cititLaMs, inCurs) {
+  if (inCurs?.has(cheie)) return false
+  const curenta = reg.citeste(cheie)
+  if (!curenta || deciziaIntentiei(curenta, dinBd, acumMs, cititLaMs) !== 'sterge') return false
+  return reg.sterge(cheie)
 }
 
 // ── mesajul unic (§8.5): o singură definiție; motivul în BD rămâne codul ──

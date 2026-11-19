@@ -8,7 +8,7 @@
    Dreptul de operator vine din BD (fn_red_fan_e_operator), nu din JS; butonul e dezactivat cu motivul pentru cine nu e operator. */
 import React, { useEffect, useMemo, useState } from 'react'
 import { G, S, msgEroare, citestePaginat } from './comune.jsx'
-import { stareTrimitere, textPlafonAzi, registruIntentii, intentieLocalaBlocanta, deciziaIntentiei, decizieDupaApel, mesajTrimitere, hashCerereFan, plicuriTrimisibile,
+import { stareTrimitere, textPlafonAzi, registruIntentii, intentieLocalaBlocanta, deciziaIntentiei, decizieDupaApel, stergeDacaLamurita, APELURI_FAN_IN_CURS, mesajTrimitere, hashCerereFan, plicuriTrimisibile,
   MOTIVE_ANULARE, ETICHETE_MOTIV_ANULARE, ETICHETE_STARE_FAN, ARENDA_INTENTIE_MIN, titluLot, numeEtichete, numeControl, ziRo, textTarif, textOpodTrimitere } from '../fanLot.js'
 import { descarcaBlob } from '../docx.js'
 
@@ -26,6 +26,8 @@ const Btn = ({ activ = true, motiv = '', titlu = '', lucru, onClick, children, s
  * rpc(nume, args); controlDocx(manifestCheie, tiraj) → Blob | null.
  * Runda 2 pe #1136 (Jakarinos r1): registrul local iese DOAR pe dovada din BD (citirea exactă a cheii pornită după apel — decizieDupaApel; în efectul de
  * lămurire, absența contează doar după arenda de la ultima apăsare — deciziaIntentiei), iar foile / pagina de control nu se descarcă după invalidarea acțiunii.
+ * Runda 3 (Jakarinos r2 P1): curățarea decide pe intrarea RECITITĂ din registru (nu pe copia memorată, veche după „Reia”), sare cheile cu apel în curs
+ * (APELURI_FAN_IN_CURS) și nu socotește dovadă o listă citită înainte de sfârșitul ultimului apel (terminat_la).
  */
 export default function TrimiteLaCurier({ proiect, lot, fanLot, pregatite, awb, esteOwner = false, esteOperator = null, evidentaInstalata = false, opodInstalat = null, plafon = null,
   intentii = null, intentiiCititeLa = null, cereri = null, lucru = false, ruleaza, edge, citesteIntentie, rpc, controlDocx, OPRIT = 'Oprit: lotul s-a schimbat sau ecranul s-a închis; reîncarcă evidența.' }) {
@@ -42,10 +44,12 @@ export default function TrimiteLaCurier({ proiect, lot, fanLot, pregatite, awb, 
   // registrul local față de BD: intrările lămurite (stare terminală, sau absente într-o citire pornită după arenda ultimei apăsări) ies; restul rămân.
   // Jakarinos #1136 r1 P1: lista `intentii` poate fi citită ÎNAINTEA unei apăsări (snapshot vechi) → absența din ea nu șterge nimic proaspăt.
   const locale = useMemo(() => reg.peLot(lot.id), [reg, lot.id, tick])   // eslint-disable-line react-hooks/exhaustive-deps
+  // Jakarinos #1136 r2 P1: `locale` e o copie memorată (după „Reia”, apasat_la din ea e vechi până la răspuns) → decizia se ia pe intrarea RECITITĂ
+  // din registru și niciodată pe o cheie cu apel în curs (stergeDacaLamurita)
   useEffect(() => {
     if (!intentii) return
     let sterse = 0
-    for (const e of locale) if (deciziaIntentiei(e, intentii.find(i => i.cheie === e.cheie) || null, Date.now(), intentiiCititeLa) === 'sterge') { reg.sterge(e.cheie); sterse++ }
+    for (const e of locale) if (stergeDacaLamurita(reg, e.cheie, intentii.find(i => i.cheie === e.cheie) || null, Date.now(), intentiiCititeLa, APELURI_FAN_IN_CURS)) sterse++
     if (sterse) setTick(t => t + 1)
   }, [intentii, intentiiCititeLa, locale, reg])
   const bifeaza = (id, on) => setDebifate(s => { const n = new Set(s); if (on) n.delete(id); else n.add(id); return n })
@@ -70,34 +74,47 @@ export default function TrimiteLaCurier({ proiect, lot, fanLot, pregatite, awb, 
   const trimiteCu = (cheie, ids, reluare, inBd) => ruleaza(async curent => {
     const s2 = !reluare || inBd === null ? stareTrimitere({ evidentaInstalata, opodInstalat, esteOperator, fanLot, proiectCod: proiect?.cod, selectate: ids.length, plafon, intentieVie: reluare ? null : vie }) : null
     if (s2 && !s2.activ) return s2.motiv
+    let hash = null
     if (!reluare) {
       const bloc = intentieLocalaBlocanta(reg.peLot(lot.id), lot.id)
       if (bloc) return `O trimitere pornită din acest browser la ${ora(bloc.inceput_la)} e încă în registru: „Reia trimiterea” sau așteaptă ${ARENDA_INTENTIE_MIN} minute de la pornirea ei.`
       if (!window.confirm(`Trimiți ${ids.length} plicuri la curier pentru ${titluLot(lot, fanLot)}? Fiecare AWB costă. ${textOpodTrimitere(fanLot, ids.length)}${s2.avertisment ? `\n\n${s2.avertisment}` : ''}`)) return 'Nimic trimis.'
-      const hash = await hashCerereFan(ids)
-      if (!reg.scrie(cheie, { lot_id: lot.id, plic_ids: ids, hash_cerere: hash })) return 'Registrul local al trimiterii nu s-a putut scrie (stocarea browserului e blocată): nimic trimis.'
+      hash = await hashCerereFan(ids)
     } else {
       const text = inBd === null
         ? `Retrimiți cererea pornită la ${ora(reluare.inceput_la)} (${ids.length} plicuri), cu aceeași cheie? Evidența nu o arată încă: dacă nu a ajuns, acum se aprobă și se trimite (fiecare AWB costă). ${textOpodTrimitere(fanLot, ids.length)}`
         : `Reiei trimiterea pornită la ${ora(reluare.inceput_la)} (${ids.length} plicuri), cu aceeași cheie? Nimic nu se aprobă din nou; se trimit doar rândurile deja aprobate.`
       if (!window.confirm(text)) return 'Nimic reluat.'
-      // ultima apăsare cu cheia, scrisă ÎNAINTEA apelului (absența din BD se judecă de la ea); eșec = nu se trimite
-      if (!reg.apasa(cheie)) return 'Registrul local al trimiterii nu s-a putut actualiza (stocarea browserului e blocată): nimic trimis.'
     }
-    if (!curent()) { if (!reluare) reg.sterge(cheie); return OPRIT }
-    const intrare = reg.citeste(cheie)
-    const { corp } = await edge('trimite', { plic_ids: ids, intentie: cheie })
-    // Jakarinos #1136 r1 P1: dovada = BD-ul, pe cheia EXACTĂ, cu citirea pornită DUPĂ răspuns (nu lista citită înaintea apăsării); registrul e al
-    // browserului (nu al lotului afișat), deci se ține la zi și după invalidarea acțiunii
-    const cititLa = Date.now()
-    let dinBd
-    try { const r = typeof citesteIntentie === 'function' ? await citesteIntentie(cheie) : null; dinBd = !r || r.error ? undefined : (r.data ?? null) } catch { dinBd = undefined }
-    if (decizieDupaApel({ intrare, corp, dinBd, cititLaMs: cititLa }) === 'sterge') reg.sterge(cheie)
-    else if (intrare && !reg.citeste(cheie)) reg.scrie(cheie, intrare)   // a dispărut între timp (alt tab): nedovedit → se pune la loc
-    setTick(t => t + 1)
-    if (!curent()) return OPRIT   // L24 (Jakarinos #1136 r1 P2): după răspuns, înaintea rezultatului și a oricărei descărcări
-    setRezultat(corp || null)
-    return mesajTrimitere(corp) + await descarcaFoi(corp, curent)
+    // Jakarinos #1136 r2 P1: cheia e „în curs” în acest browser de ÎNAINTEA scrierii în registru până după decizia de după răspuns (efectul de lămurire
+    // n-o atinge între timp); la ieșire, oricum ar ieși (răspuns, eroare), intrarea rămasă primește momentul sfârșitului apelului (terminat_la)
+    APELURI_FAN_IN_CURS.add(cheie)
+    let intrare = null
+    try {
+      if (!reluare) { if (!reg.scrie(cheie, { lot_id: lot.id, plic_ids: ids, hash_cerere: hash })) return 'Registrul local al trimiterii nu s-a putut scrie (stocarea browserului e blocată): nimic trimis.' }
+      // ultima apăsare cu cheia, scrisă ÎNAINTEA apelului (absența din BD se judecă de la ea); eșec = nu se trimite
+      else if (!reg.apasa(cheie)) return 'Registrul local al trimiterii nu s-a putut actualiza (stocarea browserului e blocată): nimic trimis.'
+      setTick(t => t + 1)   // ecranul afișează apăsarea nouă (nu copia memorată)
+      if (!curent()) { if (!reluare) reg.sterge(cheie); return OPRIT }
+      intrare = reg.citeste(cheie)
+      const { corp } = await edge('trimite', { plic_ids: ids, intentie: cheie })
+      // Jakarinos #1136 r1 P1: dovada = BD-ul, pe cheia EXACTĂ, cu citirea pornită DUPĂ răspuns (nu lista citită înaintea apăsării); registrul e al
+      // browserului (nu al lotului afișat), deci se ține la zi și după invalidarea acțiunii
+      const cititLa = Date.now()
+      let dinBd
+      try { const r = typeof citesteIntentie === 'function' ? await citesteIntentie(cheie) : null; dinBd = !r || r.error ? undefined : (r.data ?? null) } catch { dinBd = undefined }
+      // r2 P1: pe versiunea CURENTĂ a intrării; o apăsare mai nouă cu aceeași cheie (alt tab) = alt apel, poate încă în zbor → acest răspuns n-o lămurește
+      const curenta = reg.citeste(cheie)
+      if (!curenta) { if (intrare) reg.scrie(cheie, intrare) }   // a dispărut între timp (alt tab): nedovedit → se pune la loc
+      else if (curenta.apasat_la === intrare?.apasat_la && decizieDupaApel({ intrare: curenta, corp, dinBd, cititLaMs: cititLa }) === 'sterge') reg.sterge(cheie)
+      setTick(t => t + 1)
+      if (!curent()) return OPRIT   // L24 (Jakarinos #1136 r1 P2): după răspuns, înaintea rezultatului și a oricărei descărcări
+      setRezultat(corp || null)
+      return mesajTrimitere(corp) + await descarcaFoi(corp, curent)
+    } finally {
+      APELURI_FAN_IN_CURS.delete(cheie)
+      if (intrare) reg.termina(cheie)   // fără efect dacă intrarea a ieșit (nu o recreează)
+    }
   })
   const trimite = () => trimiteCu(globalThis.crypto.randomUUID(), selectate, null)
   const verifica = () => ruleaza(async curent => {
@@ -171,7 +188,7 @@ export default function TrimiteLaCurier({ proiect, lot, fanLot, pregatite, awb, 
     </div>
     {!st.activ && st.motiv && <div style={{ fontSize: 12, color: G.yellow, marginTop: 4 }}>Butonul e dezactivat: {st.motiv}.</div>}
     {locale.map(e => { const bd = intentii ? intentii.find(i => i.cheie === e.cheie) || null : undefined
-      const d = deciziaIntentiei(e, bd, Date.now(), intentiiCititeLa)
+      const d = deciziaIntentiei(reg.citeste(e.cheie) || e, bd, Date.now(), intentiiCititeLa)   // afișarea, pe intrarea curentă (r2 P1)
       return <div key={e.cheie} style={{ fontSize: 12.5, marginTop: 6, padding: 6, borderRadius: 6, background: G.yellowDim, color: G.yellow }}>
         Trimitere pornită la {ora(e.inceput_la)} ({e.plic_ids.length} plicuri), neîncheiată{bd === null ? ' (nu apare încă în evidență)' : ''}
         {d === 'reia' && <> · <Btn lucru={lucru} activ={op} motiv="doar operatorul ei sau owner-ul" onClick={() => trimiteCu(e.cheie, e.plic_ids, e, bd)}>Reia trimiterea</Btn></>}
