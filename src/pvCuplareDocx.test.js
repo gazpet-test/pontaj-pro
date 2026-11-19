@@ -20,7 +20,7 @@ const ANGAJATI = { 10: { name: 'POPESCU ION' }, 11: { name: 'IONESCU ȘTEFAN' } 
 
 const complet = () => ({
   ...dateInitialePv({ proiect: PROIECT, angajati: ANGAJATI }),
-  nr_pv: '3', data_cuplarii: '2026-11-26', locul: 'Domnești, județul Argeș',
+  executant: 'GAZPET INSTAL S.R.L.', nr_pv: '3', data_cuplarii: '2026-11-26', locul: 'Domnești, județul Argeș',
   sursa_program: 'e-mail Sucursala Mediaș din 19.11.2026',
   intervale: 'punere în siguranță 08:00–09:30\nextragere obturatoare 16:00–17:00',
   srm: 'SRM Domnești AG (SM1104D0)', diametru: '300', exemplare: '4',
@@ -161,10 +161,10 @@ describe('PV cuplare — date lipsă: linii de completat, nimic inventat', () =>
     expect(tabel.match(/<w:tr>/g)).toHaveLength(4)   // antet + 3 rânduri goale de completat de mână
   })
 
-  it('dateInitialePv: proiect fără beneficiar / contract / oameni → câmpuri goale; executantul implicit e firma', () => {
+  it('dateInitialePv: proiect fără beneficiar / contract / oameni → câmpuri goale; executantul ramane gol (fara sursa in proiect, review #1142)', () => {
     const d = dateInitialePv({ proiect: { cod_intern: 'X1', nume: 'Lucrare', beneficiar: null, nr_contract: null, data_contract: '2026-01-12' } })
     expect(d.beneficiar).toBe(''); expect(d.contract).toBe(''); expect(d.locul).toBe(''); expect(d.diametru).toBe('')
-    expect(d.executant).toBe(EXECUTANT_IMPLICIT)
+    expect(d.executant).toBe('')
     expect(d.participanti.map(p => p.calitate)).toEqual(PARTICIPANTI_IMPLICITI)
     expect(d.participanti.every(p => p.nume === '')).toBe(true)
     expect(dateInitialePv().obiectiv).toBe('')
@@ -226,5 +226,18 @@ describe('PV cuplare — diacritice și formate', () => {
   it('modelul nu conține nume de program sau AI', () => {
     const tot = JSON.stringify(modelPvCuplare(complet()))
     expect(tot).not.toMatch(/claude|rocky|\bAI\b|generat automat|pregătit de|ERP/i)
+  })
+})
+
+// review #1142: caracterele interzise in XML 1.0 nu ajung in document
+import { curata as curataXml } from './pvCuplareDocx.js'
+import { describe as descrieXml, it as testXml, expect as asteaptaXml } from 'vitest'
+descrieXml('curata: caractere interzise in XML', () => {
+  testXml('U+0001, U+000B, U+FFFE si surogate izolate se scot; tab / linie noua si diacriticele raman', () => {
+    asteaptaXml(curataXml('Lucru\u0001control')).toBe('Lucrucontrol')
+    asteaptaXml(curataXml('a\u000Bb\uFFFEc')).toBe('abc')
+    asteaptaXml(curataXml('x\uD800y')).toBe('xy')
+    asteaptaXml(curataXml('ș ț\tă\nî')).toBe('ș ț\tă\nî')
+    asteaptaXml(curataXml('emoji 😀')).toBe('emoji 😀')
   })
 })

@@ -96,7 +96,7 @@ dom(numeDom('PvCuplareGenerator'), () => {
     expect(u.camp('obiectiv').value).toBe('Racord de test')
     expect(u.camp('beneficiar').value).toBe('SNTGN TRANSGAZ SA')
     expect(u.camp('contract').value).toBe('nr. 21 din 12.01.2026')
-    expect(u.camp('executant').value).toBe('GAZPET INSTAL S.R.L.')
+    expect(u.camp('executant').value).toBe('')   // review #1142: fara sursa in proiect, gol
     expect(u.camp('locul').value).toBe('')            // nu există localitate în proiect: nu se inventează
     expect(u.camp('diametru').value).toBe('')
     const randuri = [...u.d.querySelectorAll('[data-pv-participant]')].map(r => [...r.querySelectorAll('input')].map(i => i.value))

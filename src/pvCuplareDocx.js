@@ -39,7 +39,8 @@ const SEDILE = [[0x015F, 0x0219], [0x0163, 0x021B], [0x015E, 0x0218], [0x0162, 0
 /** Text curat: null / undefined → '', spații de la capete scoase, diacritice cu virgulă. */
 export function curata(v) {
   if (v === null || v === undefined) return ''
-  let s = String(v).trim()
+  // caracterele interzise in XML 1.0 (control, U+FFFE/U+FFFF, surogate izolate) se scot: altfel word/document.xml iese invalid (review #1142)
+  let s = String(v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '').trim()
   for (const [din, in_] of SEDILE) s = s.split(din).join(in_)
   return s
 }
@@ -99,7 +100,7 @@ export function dateInitialePv({ proiect, angajati = {} } = {}) {
     cod_intern: curata(p.cod_intern),
     nr_pv: '', data_cuplarii: '',
     obiectiv: curata(p.nume), contract, beneficiar: curata(p.beneficiar),
-    executant: EXECUTANT_IMPLICIT, locul: '',
+    executant: '', locul: '',   // review #1142: fara sursa in proiect, executantul ramane gol (de completat; la asocieri lider + asociat)
     sursa_program: '', intervale: '', srm: '', diametru: '', exemplare: '',
     participanti: PARTICIPANTI_IMPLICITI.map(calitate => ({ calitate, nume: persoane[calitate] || '' })),
   }
