@@ -223,8 +223,8 @@ describe('genereazaAnuntAfisare — conținutul', () => {
       expect(Object.keys(x).sort()).toEqual(['nr', ...CAMPURI_PARCELA_ANUNT].sort())
       for (const k of CAMPURI_PARCELA_ANUNT) expect(typeof x[k], k).toBe('string')
     }
-    // selectul din UI nu cere coloane de persoană
-    expect(COL_PARCELA_ANUNT.split(',').map(s => s.trim())).toEqual(['id_parcela', ...CAMPURI_PARCELA_ANUNT, 'sters_la'])
+    // selectul din UI nu cere coloane de persoană (`id` = legătura cu rândul de import din jurnal, nepublicat; anuntImportNeschimbat.test.js)
+    expect(COL_PARCELA_ANUNT.split(',').map(s => s.trim())).toEqual(['id', 'id_parcela', ...CAMPURI_PARCELA_ANUNT, 'sters_la'])
   })
   it('tabel pe mai multe pagini: 150 de parcele → 150 de rânduri după antetul repetat, numerotate 1..150, ordonate (tarla, nr. cadastral) natural; cele șterse lipsesc', async () => {
     const parcele = Array.from({ length: 150 }, (_, i) => parcela(150 - i, { tarla: `T${(i % 12) + 1}`, nr_cadastral: `${(i * 37) % 200 + 1}` }))
@@ -318,7 +318,10 @@ async function incarcaDocx(ref, mutatii = []) {
   const idp = surse.has('identificatoriPublici.js') ? await import(pathToFileURL(join(dir, 'identificatoriPublici.js')).href) : null
   return { mod, idp, fisiere: [...surse.keys()] }
 }
-const areOriginMain = (() => { try { execFileSync('git', ['rev-parse', '--verify', 'origin/main^{commit}'], { stdio: ['ignore', 'pipe', 'ignore'] }); return true } catch { return false } })()
+// Referința paritații = main-ul DINAINTEA lui #1137 (după îmbinare, origin/main conține deja anunțul și referința „expiră”:
+// testul ar compara noul cu el însuși). Commit fixat: părintele lui fcae3635 pe main.
+const REF_DINAINTE_ANUNT = '90cad79ff4237dcfc672ba02e17738e1df06b6d7'
+const areOriginMain = (() => { try { execFileSync('git', ['rev-parse', '--verify', `${REF_DINAINTE_ANUNT}^{commit}`], { stdio: ['ignore', 'pipe', 'ignore'] }); return true } catch { return false } })()
 
 describe('identificatorii publicați (review #1137 P1): forma fiecărui câmp, o singură definiție, refuz cu lista parcelelor', () => {
   // valori contaminate (fictive), câte una pe câmp: nume în sat, adresă în tarla, CNP în nr_cadastral, cotă în poz_hg, telefon în tronson
@@ -798,9 +801,9 @@ describe('PARITATE cu origin/main (referință independentă): convocatorul iese
   // generatorul ȘI șablonul de pe origin/main (git show). Trebuie să coincidă: câmpurile (fără `program_text`, scos), lipsurile și textul
   // documentului paragraf cu paragraf, înainte de corpul Anexei 2 și de la Anexa 3; corpul nou = exact cele două paragrafe din decizie.
   it.skipIf(!areOriginMain)('adresa UAT (Model 4): față de origin/main, aceleași câmpuri (fără program_text), aceleași lipsuri și același text în afara corpului Anexei 2, pe 4 UAT-uri × 2 proiecte', async () => {
-    const { mod: main, fisiere } = await incarcaDocx('origin/main')
+    const { mod: main, fisiere } = await incarcaDocx(REF_DINAINTE_ANUNT)
     expect(fisiere).not.toContain('identificatoriPublici.js')   // chiar e versiunea veche (fără validarea nouă)
-    const sablonMain = execFileSync('git', ['show', 'origin/main:public/redari/sabloane/adresa_uat.docx'], { stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 26 })
+    const sablonMain = execFileSync('git', ['show', `${REF_DINAINTE_ANUNT}:public/redari/sabloane/adresa_uat.docx`], { stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 26 })
     const sablonNou = readFileSync('public/redari/sabloane/adresa_uat.docx')
     // [înainte de corp (cu titlul Anexei 2), corpul Anexei 2, de la titlul Anexei 3]
     const taie = par => {
@@ -832,7 +835,7 @@ describe('PARITATE cu origin/main (referință independentă): convocatorul iese
     expect(cazuriRulate).toBe(8)
   })
   it.skipIf(!areOriginMain)('convocatorul (Model 1): aceleași câmpuri, același DOCX și aceleași lipsuri ca pe origin/main, pe 4 UAT-uri × 2 proiecte', async () => {
-    const { mod: main } = await incarcaDocx('origin/main')
+    const { mod: main } = await incarcaDocx(REF_DINAINTE_ANUNT)
     const sablonConvocator = readFileSync('public/redari/sabloane/convocator.docx')
     const informare = { text: TEXT_INFORMARE_LOT1, publicata: true }
     let cazuriRulate = 0

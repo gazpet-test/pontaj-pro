@@ -948,8 +948,9 @@ export async function salveazaAdresaUat(supabase, { blob, proiectCod, uat, nrDoc
 export const SABLON_ANUNT_AFISARE = '/redari/sabloane/anunt_afisare.docx'
 /** Pagina publică a informării GDPR (aceeași pentru toți — fără link personal); tipărită pe anunț, cu QR-ul ei. */
 export const LINK_INFORMARE_PUBLIC = `${ORIGINE_PUBLICA_REDARI}/redari/informare`
-/** Coloanele citite din red_v_parcele pentru anunț (select explicit) și coloanele care AJUNG în document (lista albă). */
-export const COL_PARCELA_ANUNT = 'id_parcela, sat, tarla, nr_cadastral, poz_hg, tronson, sters_la'
+/** Coloanele citite din red_v_parcele pentru anunț (select explicit) și coloanele care AJUNG în document (lista albă).
+ *  `id` nu se publică: leagă parcela de rândul ei INSERT din red_jurnal (valorile de la import, valoriImport.js). */
+export const COL_PARCELA_ANUNT = 'id, id_parcela, sat, tarla, nr_cadastral, poz_hg, tronson, sters_la'
 export const CAMPURI_PARCELA_ANUNT = ['sat', 'tarla', 'nr_cadastral', 'poz_hg', 'tronson']
 export const CHEI_ANUNT_AFISARE = [
   'contract_nr', 'contract_data', 'proiect_denumire', 'uat', 'judet', 'imputernicire_nr', 'imputernicire_data',
@@ -994,11 +995,12 @@ const cmpNatural = (a, b) => String(a ?? '').localeCompare(String(b ?? ''), 'ro'
  * Rândurile tabelului: { randuri, probleme }. Doar parcelele active, doar coloanele din CAMPURI_PARCELA_ANUNT, fiecare în FORMA CANONICĂ
  * validată (identificatoriPublici.js; review #1137 r2: se publică exact valoarea validată, nu originalul), ordonate (tarla, nr. cadastral, id).
  * `probleme` = [{ id_parcela, camp, motiv }] (fără valori); dacă nu e goală, `randuri` e [] — nu se construiește niciun rând dintr-o listă
- * cu refuzuri. `uat` dă satele declarate la sesiuni (singurele acceptate în coloana „sat”).
+ * cu refuzuri. `uat` dă satele declarate la sesiuni (singurele acceptate în coloana „sat”). `valoriImport` (Map din valoriImportDinJurnal,
+ * cheia = id-ul parcelei): tarla / nr_cadastral / poz_hg IDENTICE cu importul se publică fără validatorul de formă (varianta A, 19.11.2026).
  */
-export function randuriAnuntAfisare(parcele = [], uat = {}) {
+export function randuriAnuntAfisare(parcele = [], uat = {}, valoriImport = null) {
   if (!Array.isArray(parcele)) throw new Error('Lista de parcele trebuie să fie un tablou')
-  const { probleme, randuri } = canonizeazaParcelePublicate(parcele.filter(p => p && p.sters_la == null), CAMPURI_PARCELA_ANUNT, uat || {})
+  const { probleme, randuri } = canonizeazaParcelePublicate(parcele.filter(p => p && p.sters_la == null), CAMPURI_PARCELA_ANUNT, uat || {}, valoriImport)
   return { probleme, randuri: randuri
     .slice().sort((a, b) => cmpNatural(a.tarla, b.tarla) || cmpNatural(a.nr_cadastral, b.nr_cadastral) || cmpNatural(a.id_parcela, b.id_parcela))
     .map((p, i) => ({ nr: i + 1, ...Object.fromEntries(CAMPURI_PARCELA_ANUNT.map(k => [k, p[k]])) })) }
@@ -1009,15 +1011,16 @@ export function randuriAnuntAfisare(parcele = [], uat = {}) {
  * opresc generarea; `strict: false` DOAR pentru previzualizare. Nu primește și nu citește deținători.
  * Identificatorii publicați (CAMPURI_PARCELA_ANUNT) trec prin `canonizeazaParcelePublicate` INDIFERENT de `strict` (review #1137 P1):
  * o valoare fără forma așteptată a câmpului nu se publică niciodată — eroarea poartă `probleme` = [{ id_parcela, camp, motiv }] (fără
- * valori); în document intră DOAR formele canonice întoarse de validare (r2).
+ * valori); în document intră DOAR formele canonice întoarse de validare (r2). `valoriImport` = valorile de la import (valoriImport.js;
+ * lipsă = toate valorile pe calea strictă).
  * @returns {Promise<{ blob: Blob, hash: string, campuri: Record<string,string>, randuri: number, lipsuri: string[] }>}
  */
-export async function genereazaAnuntAfisare({ proiect = {}, uat = {}, parcele = [], templateArrayBuffer, strict = true, dataDocument = aziBucuresti() }) {
+export async function genereazaAnuntAfisare({ proiect = {}, uat = {}, parcele = [], valoriImport = null, templateArrayBuffer, strict = true, dataDocument = aziBucuresti() }) {
   if (!templateArrayBuffer) throw new Error('Lipsește șablonul anunțului de afișare (templateArrayBuffer)')
   const lipsuri = verificaDateAnuntAfisare({ proiect, uat })
   if (strict && lipsuri.length) throw new Error(`Anunțul de afișare nu poate fi generat — lipsesc: ${lipsuri.join('; ')}`)
   const pr = proiect || {}, u = uat || {}
-  const { probleme, randuri: rand } = randuriAnuntAfisare(parcele, u)
+  const { probleme, randuri: rand } = randuriAnuntAfisare(parcele, u, valoriImport)
   if (probleme.length) {
     const err = new Error(`${MESAJ_IDENTIFICATORI_REFUZATI} — ${textProblemeIdentificatori(probleme)}`)
     err.probleme = probleme
