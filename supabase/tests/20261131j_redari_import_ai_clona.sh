@@ -29,7 +29,7 @@ set -o pipefail
 trap '' PIPE   # o scriere spre sesiunea A deja terminată (pasul 4: 25P04) = eroare de scriere, nu oprirea scriptului
 if [ "${IMPORT_AI_CLONA:-}" != "da" ]; then echo "refuz: doar pe clona (IMPORT_AI_CLONA=da)" >&2; exit 2; fi
 command -v psql >/dev/null || { echo "refuz: psql lipseste" >&2; exit 2; }
-RADACINA="$(cd "$(dirname "$0")/../.." && pwd)"
+RADACINA="$(cd "$(dirname "$0")/../.." && { pwd -W 2>/dev/null || pwd; })"   # pwd -W (Git Bash): cale Windows, ca psql.exe sa poata deschide fisierele
 SQL1="$RADACINA/supabase/tests/20261131j_redari_import_ai_clona.sql"
 REV="$RADACINA/supabase/revenire/20261131j_redari_import_verificare_ai_ROLLBACK.sql"
 [ -r "$SQL1" ] && [ -r "$REV" ] || { echo "refuz: lipsesc $SQL1 / $REV" >&2; exit 2; }
