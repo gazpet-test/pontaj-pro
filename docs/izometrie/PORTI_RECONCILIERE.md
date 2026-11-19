@@ -128,7 +128,7 @@ Procedura de mai sus, rulată pe producție de coordonator, cu „da”-ul lui R
   `357c9989000bc325d4206b54d2681549a5ce03058d954f1bfd3d8707111dea83`. Detaliul canonic al manifestului rămâne material de review, în afara depozitului.
 * **Rămâne de confirmat:** o salvare Izometrie reală, făcută de un utilizator (Ctrl+Shift+R înainte). Revenirea e pregătită, NErulată
   (porțile ar redeveni roșii).
-* **Regula pentru migrările viitoare** (forma ritualului: PRE → schimbare → ștampile calculate → POST) și verificarea ei în CI sunt în PR-ul
-  separat #1146 (`izometrie/porti-reconciliere`), încă în review. Până atunci: orice migrare care atinge obiectele amprentate de porți
-  (registrul `izo_*` / `fn_izo_*`, trigger-ele și politicile de pe tabelele Execuție citite de E4 / E4b, drepturile pe secvențele lor, listele
-  revizuite ale porții E2) cere, la review, ritualul de mai sus — altfel salvarea Izometrie se blochează din nou, ca pe 19.11.
+* **Regula pentru migrările viitoare** (forma ritualului: PRE → schimbare → ștampile calculate → POST) și verificarea ei în CI:
+  `docs/izometrie/PORTI_REGULA.md` (adusă de PR #1146). Orice migrare care atinge obiectele amprentate de porți (registrul `izo_*` /
+  `fn_izo_*`, trigger-ele și politicile de pe tabelele Execuție citite de E4 / E4b, drepturile pe secvențele lor, listele revizuite ale
+  porții E2) face ritualul — altfel salvarea Izometrie se blochează din nou, ca pe 19.11.
