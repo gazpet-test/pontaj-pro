@@ -69,7 +69,8 @@ CREATE TABLE public.red_parcele (
   id_parcela text NOT NULL, sters_la timestamptz, UNIQUE (proiect_id, id_parcela));
 CREATE TABLE public.red_detinatori (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), parcela_id uuid NOT NULL REFERENCES public.red_parcele(id), nume text NOT NULL CHECK (btrim(nume) <> ''),
-  calitate text NOT NULL DEFAULT 'proprietar', sters_la timestamptz, created_at timestamptz NOT NULL DEFAULT now());
+  calitate text NOT NULL DEFAULT 'proprietar', sters_la timestamptz, created_at timestamptz NOT NULL DEFAULT now(),
+  nume_normalizat text);  -- pe baza reala NOT NULL fara implicit; aici nullable (fixture-urile vechi ale probei nu il dau), fixture-ul de cost il completeaza
 CREATE TABLE public.red_detinatori_token (
   detinator_id uuid PRIMARY KEY REFERENCES public.red_detinatori(id),
   token_raspuns text NOT NULL UNIQUE CHECK (length(token_raspuns) >= 32),

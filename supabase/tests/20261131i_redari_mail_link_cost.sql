@@ -75,20 +75,22 @@ BEGIN
   -- id_parcela = {uat3}-{nnnn} (triggerul de pe red_parcele, 20261129g)
   INSERT INTO public.red_parcele (id, proiect_id, uat_id, id_parcela) VALUES (v_par, v_pr, v_uat, 'CST-0001'), (v_par2, v_pr, v_uat, 'CST-0002');
   -- id-urile: 0c057001-… = destinatarii (cu e-mail), 0c057002-… = ceilalți deținători (doar token); tokenurile = sha256 sintetic în base64url (43)
-  INSERT INTO public.red_detinatori (id, parcela_id, nume)
-    SELECT ('0c057001-0000-4000-8000-' || lpad(to_hex(i), 12, '0'))::uuid, v_par, 'DESTINATAR SINTETIC ' || i FROM generate_series(1, n_dst) i;
-  INSERT INTO public.red_detinatori (id, parcela_id, nume)
-    SELECT ('0c057002-0000-4000-8000-' || lpad(to_hex(i), 12, '0'))::uuid, v_par2, 'DETINATOR SINTETIC ' || i FROM generate_series(1, n_tok) i;
+  INSERT INTO public.red_detinatori (id, parcela_id, nume, nume_normalizat, calitate)
+    SELECT ('0c057001-0000-4000-8000-' || lpad(to_hex(i), 12, '0'))::uuid, v_par, 'DESTINATAR SINTETIC ' || i, 'DESTINATAR SINTETIC ' || i, 'proprietar' FROM generate_series(1, n_dst) i;
+  INSERT INTO public.red_detinatori (id, parcela_id, nume, nume_normalizat, calitate)
+    SELECT ('0c057002-0000-4000-8000-' || lpad(to_hex(i), 12, '0'))::uuid, v_par2, 'DETINATOR SINTETIC ' || i, 'DETINATOR SINTETIC ' || i, 'proprietar' FROM generate_series(1, n_tok) i;
   INSERT INTO public.red_detinatori_contact (detinator_id, email)
     SELECT ('0c057001-0000-4000-8000-' || lpad(to_hex(i), 12, '0'))::uuid, 'cost' || i || '@gazpet.ro' FROM generate_series(1, n_dst) i;
   INSERT INTO public.red_detinatori_token (detinator_id, token_raspuns, token_expira_la)
     SELECT ('0c057001-0000-4000-8000-' || lpad(to_hex(i), 12, '0'))::uuid,
            rtrim(translate(encode(sha256(convert_to('cost20261131i-d-' || i, 'UTF8')), 'base64'), '+/', '-_'), '='), now() + interval '30 days'
-      FROM generate_series(1, n_dst) i;
+      FROM generate_series(1, n_dst) i
+    ON CONFLICT (detinator_id) DO NOTHING;  -- triggerul trg_red_detinatori_token creeaza deja tokenul (baza reala)
   INSERT INTO public.red_detinatori_token (detinator_id, token_raspuns, token_expira_la)
     SELECT ('0c057002-0000-4000-8000-' || lpad(to_hex(i), 12, '0'))::uuid,
            rtrim(translate(encode(sha256(convert_to('cost20261131i-t-' || i, 'UTF8')), 'base64'), '+/', '-_'), '='), now() + interval '30 days'
-      FROM generate_series(1, n_tok) i;
+      FROM generate_series(1, n_tok) i
+    ON CONFLICT (detinator_id) DO NOTHING;
   v_antet := E'Bună ziua,\n\nLucrările din {COMUNA} s-au încheiat. Vă invităm în zilele {ZILE}, între orele {PROGRAM}; telefon {TEL}.\n'
           || E'Formularul dumneavoastră de răspuns: {LINK_RASPUNS}\nPlanul (100% finalizat): https://exemplu.invalid/docs/Plan%20lucrari.pdf?v=1%2C2\n\n';
   SELECT string_agg(substr(md5('cost20261131i-u-' || i), 1, 7), ' ' ORDER BY i) INTO v_umplutura FROM generate_series(1, n_car / 8 + 2) i;
