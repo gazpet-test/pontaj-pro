@@ -9,11 +9,15 @@
 --   (1) evenimente 'opod_schimbat' (owner-ul a ales ceva); (2) un lot cu opod = true în afara listei din marcaj sau unul din listă ajuns false
 --   (schimbare fără jurnal = stare incoerentă); (3) un lot aprobat după aplicare — orice lot cu prima_aprobare_la în afara listei din marcaj,
 --   inclusiv cel aprobat cu implicitul false (Jakarinos #1135 r1 P2: aprobarea / generarea cu „fără oPOD” e o decizie care depinde de coloană);
---   (4) rânduri FAN aprobate / rezervate / generate după momentul din marcaj (aprobat_la, generat_la, updated_at al unui rând in_curs /
---   necunoscut), și pe loturile deduse true (o generare nouă pe un lot vechi tot după aplicare s-a făcut); (5) marcaje de instalare
+--   (4) rânduri FAN create / scrise după momentul din marcaj (aprobat_la, generat_la, created_at, updated_at — în orice stare, runda 4), și pe
+--   loturile deduse true (o generare / rezervare nouă pe un lot vechi tot după aplicare s-a făcut); (5) marcaje de instalare
 --   dezechilibrate; (6) (runda 3, Jakarinos #1135 r2 P2) ORICE eveniment 'opod_aprobare' în red_jurnal — scris de trigger-ul migrării la fiecare
 --   aprobare a unui rând FAN, pe orice lot (și pe cele deduse true), DURABIL: re-propunerea șterge aprobat_la (20261212a:521) și (3) nu vede un
 --   lot deja în listă, dar evenimentul rămâne (jurnal append-only) → scenariul „lot vechi → aprobare nouă → re-propunere → revenire” = refuz.
+--   RUNDA 4 (Jakarinos #1135 r3 P2): (6) acoperă ORICE pas FAN de după aplicare, nu doar aprobările — evenimentele 'opod_folosire' (propunere,
+--   rezervare / claim, rezultat generat / eroare / necunoscut, reconciliere, ridicare, anulare, ștergere): succesiunea „plic aprobat ÎNAINTE →
+--   aplicare → claim → rezultat 'eroare'” (și „necunoscut → reconciliere fără AWB”) nu mai trece; (4) prinde orice rând creat / scris
+--   (created_at / updated_at) după marcaj, în ORICE stare (înainte: updated_at doar pe in_curs / necunoscut) — inclusiv scrierile de urmărire.
 --   (3) și (4) rămân ca apărare în adâncime (un trigger dezactivat de mentenanță nu scrie evenimentul). Jurnalul e append-only: nu se șterge
 --   nimic; revenirea scrie 'opod_dezinstalat' (cu marcajul citit în date_vechi).
 --   Datele preexistente (loturile deduse true, rândurile lor generate înainte) NU opresc revenirea: ele erau cu B și înainte, și după.
@@ -34,7 +38,9 @@
 -- Probe: scripts/pglite/test_redari_fan_opod_local.mjs (aplicare → revenire → re-aplicare pe bază NEFOLOSITĂ, cu un lot aprobat + generat
 --   înainte de aplicare — datele preexistente nu opresc revenirea; refuz: lot nou aprobat după aplicare cu implicitul false, rând nou aprobat /
 --   generat pe lotul vechi, aprobare nouă pe lotul vechi urmată de re-propunere (scenariul Jakarinos r2 — doar jurnalul 'opod_aprobare' o prinde),
---   rând inserat direct ca aprobat apoi re-propus, opod = true ales de owner / istoric opod_schimbat, true fără jurnal, marcaj lipsă; fără migrare /
+--   rând inserat direct ca aprobat apoi re-propus, runda 4: plic aprobat înainte → claim după aplicare → rezultat 'eroare' (scenariul Jakarinos
+--   r3) și → 'necunoscut' → reconciliere fără AWB, ștergere directă, doar urmărire; opod = true ales de owner / istoric opod_schimbat, true fără
+--   jurnal, marcaj lipsă; fără migrare /
 --   funcție în plus / fără marcajul runnerului / plafon greșit; mutanți: fiecare verificare scoasă lasă DOAR scenariul ei să treacă).
 DO $revenire$
 DECLARE v_plafon text; v_incercari integer := 0; v_pas integer; v_rau text; v_marcaj record; v_la timestamptz; v_n integer; v_noi integer;
@@ -88,8 +94,8 @@ BEGIN
     SELECT string_agg(a.semnatura, ', ' ORDER BY a.semnatura) INTO v_rau
       FROM (VALUES
         ('public.fn_red_fan_lot_opod(uuid, boolean)', 'b591ff764adede2b335b96e89e41aaca', 'plpgsql', true, true, 'boolean'),
-        -- runda 3: trigger-ul de jurnal al aprobărilor (DEFINER, fără EXECUTE pentru roluri)
-        ('public.fn_red_fan_awb_opod_jurnal()', '1786236ff7ae9247d8c23528732a623c', 'plpgsql', true, false, 'trigger'),
+        -- runda 3 + 4: trigger-ul de jurnal al ciclului de viață FAN (DEFINER, fără EXECUTE pentru roluri)
+        ('public.fn_red_fan_awb_opod_jurnal()', '76c319ae5359d29b0056ecb789054fe4', 'plpgsql', true, false, 'trigger'),
         -- >>> GARDA 20261227a (corpul nou)
         ('public.fn_red_fan_loturi_garda()', '5f167c38850bbfc30cb29c0a0fd734ad', 'plpgsql', false, false, 'trigger')
         -- <<< GARDA 20261227a
@@ -117,12 +123,12 @@ BEGIN
                         AND tg.tgtype = (1 | 2 | 8 | 16)) THEN
       RAISE EXCEPTION '20261227a revenire: starea nu e cea din 20261227a (pasul %, trigger)', v_pas;
     END IF;
-    -- runda 3: trigger-ul de jurnal, singurul al aplicației pe red_fan_awb, în forma exactă (AFTER INSERT OR UPDATE OF stare, FOR EACH ROW)
+    -- runda 3 + 4: trigger-ul de jurnal, singurul al aplicației pe red_fan_awb, în forma exactă (AFTER INSERT OR UPDATE OR DELETE, FOR EACH ROW,
+    -- fără coloane / WHEN / argumente)
     IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_fan_awb'::regclass AND NOT tgisinternal) <> 1
        OR NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.red_fan_awb'::regclass AND tg.tgname = 'trg_red_fan_awb_opod_jurnal'
                         AND tg.tgenabled = 'O' AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND tg.tgfoid = to_regprocedure('public.fn_red_fan_awb_opod_jurnal()')
-                        AND tg.tgtype = (1 | 4 | 16)
-                        AND tg.tgattr::text = (SELECT a.attnum::text FROM pg_attribute a WHERE a.attrelid = 'public.red_fan_awb'::regclass AND a.attname = 'stare')) THEN
+                        AND tg.tgtype = (1 | 4 | 8 | 16) AND tg.tgattr::text = '') THEN
       RAISE EXCEPTION '20261227a revenire: starea nu e cea din 20261227a (pasul %, trigger-ul de jurnal pe red_fan_awb)', v_pas;
     END IF;
     -- dependențe străine spre coloana / funcțiile migrării (o vedere, un index, o politică, altă funcție sql care le citește, alt trigger) = refuz;
@@ -164,17 +170,20 @@ BEGIN
   IF v_n > 0 THEN
     RAISE EXCEPTION '20261227a revenire: % lot(uri) aprobat(e) dupa aplicarea migrarii (cu alegerea oPOD din coloana, implicit false) - refuz', v_n;
   END IF;
-  -- (4) rânduri FAN aprobate / rezervate / generate după momentul aplicării (și pe loturile deduse true)
+  -- (4) rânduri FAN create / scrise după momentul aplicării, în ORICE stare (și pe loturile deduse true): aprobare, rezervare, rezultat
+  -- (generat / eroare / necunoscut), reconciliere, urmărire — runda 4: înainte updated_at se citea doar pe in_curs / necunoscut, iar un claim
+  -- de după aplicare încheiat cu 'eroare' (generat_la NULL, aprobat_la de dinainte) trecea
   SELECT count(*) INTO v_n FROM public.red_fan_awb a
-   WHERE a.aprobat_la >= v_la OR a.generat_la >= v_la OR (a.stare IN ('in_curs', 'necunoscut') AND a.updated_at >= v_la);
+   WHERE a.aprobat_la >= v_la OR a.generat_la >= v_la OR a.created_at >= v_la OR a.updated_at >= v_la;
   IF v_n > 0 THEN
-    RAISE EXCEPTION '20261227a revenire: % rand(uri) FAN aprobat(e) / rezervat(e) / generat(e) dupa aplicarea migrarii (%) - refuz', v_n, v_la;
+    RAISE EXCEPTION '20261227a revenire: % rand(uri) FAN create / scrise dupa aplicarea migrarii (%: aprobare, rezervare, rezultat, reconciliere sau urmarire) - refuz', v_n, v_la;
   END IF;
-  -- (6) runda 3: ORICE aprobare de după aplicare, pe orice lot, DURABIL (jurnalul 'opod_aprobare' scris de trigger-ul migrării; re-propunerea
-  -- șterge aprobat_la, dar nu și evenimentul; pe conținut, nu pe timp — prinde și aprobarea „în zbor” cu now() dinaintea marcajului)
-  SELECT count(*) INTO v_n FROM public.red_jurnal j WHERE j.tabela = 'red_fan_awb' AND j.date_noi ->> 'eveniment' = 'opod_aprobare';
+  -- (6) runda 3 + 4: ORICE pas FAN de după aplicare, pe orice lot, DURABIL (jurnalul 'opod_aprobare' / 'opod_folosire' scris de trigger-ul
+  -- migrării la aprobare, propunere, rezervare, rezultat, reconciliere, ridicare, anulare, ștergere; nicio tranziție ulterioară nu șterge
+  -- evenimentul; pe conținut, nu pe timp — prinde și scrierea „în zbor” cu now() dinaintea marcajului)
+  SELECT count(*) INTO v_n FROM public.red_jurnal j WHERE j.tabela = 'red_fan_awb' AND j.date_noi ->> 'eveniment' IN ('opod_aprobare', 'opod_folosire');
   IF v_n > 0 THEN
-    RAISE EXCEPTION '20261227a revenire: % aprobare(i) FAN dupa aplicarea migrarii (jurnal opod_aprobare: randuri aprobate cu alegerea oPOD din coloana, chiar daca re-propuse / anulate intre timp) - refuz (jurnalul nu se sterge)', v_n;
+    RAISE EXCEPTION '20261227a revenire: % pas(i) FAN dupa aplicarea migrarii (jurnal opod_aprobare / opod_folosire: aprobari, rezervari, rezultate, reconcilieri cu alegerea oPOD din coloana, chiar daca randul a ajuns intre timp in alta stare) - refuz (jurnalul nu se sterge)', v_n;
   END IF;
   SELECT count(*) INTO v_noi FROM public.red_fan_loturi l WHERE l.marcat_la >= v_la;
   -- marcajul de dezinstalare (append-only; marcajul citit în date_vechi), ÎNAINTE de DDL — rândul intră în aceeași tranzacție

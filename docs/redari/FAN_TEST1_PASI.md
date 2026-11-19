@@ -37,6 +37,8 @@ review-ul PR #1118: fără probleme de cod restante; decizia proprietarului: Tes
 migrarea (doc §6). Cât coloana `opod` lipsește, ecranul nou NU propune, NU aprobă și NU generează: „1. Propune” / „2c. Aprobă” / „3. Generează AWB”
 sunt dezactivate cu motivul „alegerea oPOD nu e instalată în evidența FAN (migrarea 20261227a neaplicată)…” — asta e și verificarea coordonatorului
 ÎNAINTE de a aplica migrarea (dovada că codul nou e live); după aplicare și Ctrl+Shift+R butoanele revin. Pașii de la §5 încolo presupun migrarea aplicată.
+Revenirea ei (runda 4) e posibilă DOAR cât nu s-a făcut niciun pas FAN pe baza nouă: orice propunere, aprobare, rezervare, rezultat sau urmărire
+după aplicare o face să refuze (intenționat) — dacă ceva nu e în regulă la verificarea de după aplicare, se decide ÎNAINTE de „1. Propune”.
 
 **Ce NU face nimeni în această zi:** lot real; proiect real; mai mult de un plic pe lot înainte de verdictul 4a (§7); comanda curierului
 prin API (se face manual în selfAWB); Testul 2.

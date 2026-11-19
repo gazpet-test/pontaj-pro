@@ -1691,18 +1691,26 @@ describe('oPOD opțional pe lot, implicit oprit (18.11.2026) + ora evenimentului
     expect(REV).toMatch(/loturile cu opod = true difera de lista dedusa la aplicare/); expect(REV).not.toMatch(/exista loturi cu oPOD cerut \(opod = true\) - refuz/)
   })
   // runda 3 (Jakarinos r2 P2): dovada DURABILĂ a folosirii după aplicare — re-propunerea șterge aprobat_la (20261212a), deci revenirea citește jurnalul
-  it('P2 (revenirea): fiecare aprobare lasă un eveniment opod_aprobare în red_jurnal (trigger AFTER pe red_fan_awb, DEFINER), pe care re-propunerea nu-l șterge; revenirea refuză la orice astfel de eveniment', () => {
+  it('P2 (revenirea): fiecare aprobare lasă un eveniment opod_aprobare și orice alt pas FAN (rezervare, rezultat, reconciliere, ștergere — runda 4) unul opod_folosire în red_jurnal (trigger AFTER pe red_fan_awb, DEFINER), pe care nicio tranziție ulterioară nu-l șterge; revenirea refuză la orice astfel de eveniment', () => {
     // premisa constatării: re-propunerea unui rând aprobat golește aprobarea rândului (fn_red_fan_propune din 20261212a)
     expect(MIG).toMatch(/UPDATE public\.red_fan_awb SET stare = 'propus', hash_date = p_hash, tarif_estimat = p_tarif_estimat, propus_de = auth\.uid\(\),\s+aprobat_de = NULL, aprobat_la = NULL, updated_at = now\(\) WHERE id = v_rand\.id;/)
     expect(MIG27).toMatch(/CREATE FUNCTION public\.fn_red_fan_awb_opod_jurnal\(\) RETURNS trigger\s+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp/)
-    expect(MIG27).toMatch(/IF NEW\.stare = 'aprobat' AND \(TG_OP = 'INSERT' OR OLD\.stare IS DISTINCT FROM 'aprobat'\) THEN/)
-    expect(MIG27).toMatch(/jsonb_build_object\('eveniment', 'opod_aprobare', 'lot_id', NEW\.lot_id, 'opod', v_opod, 'hash_date', NEW\.hash_date, 'la', now\(\)\), auth\.uid\(\)\)/)
-    expect(MIG27).toMatch(/CREATE TRIGGER trg_red_fan_awb_opod_jurnal AFTER INSERT OR UPDATE OF stare ON public\.red_fan_awb FOR EACH ROW EXECUTE FUNCTION public\.fn_red_fan_awb_opod_jurnal\(\);/)
+    // runda 4 (Jakarinos r3 P2): trecerea în „aprobat” = opod_aprobare; ORICE alt pas al ciclului de viață (propunere, claim, rezultat, reconciliere,
+    // ștergere) = opod_folosire; filtrul e pe valori (OLD vs NEW), trigger-ul fără listă de coloane, și pe DELETE
+    expect(MIG27).toMatch(/IF \(OLD\.stare, OLD\.hash_date, OLD\.cerere_id, OLD\.awb, OLD\.aprobat_la, OLD\.generat_la, OLD\.lot_id, OLD\.plic_id\)\s+IS NOT DISTINCT FROM \(NEW\.stare, NEW\.hash_date, NEW\.cerere_id, NEW\.awb, NEW\.aprobat_la, NEW\.generat_la, NEW\.lot_id, NEW\.plic_id\) THEN\s+RETURN NULL;/)
+    expect(MIG27).toMatch(/v_ev := 'opod_folosire';\s+IF TG_OP <> 'DELETE' AND v_r\.stare = 'aprobat' AND v_din IS DISTINCT FROM 'aprobat' THEN v_ev := 'opod_aprobare'; END IF;/)
+    expect(MIG27).toMatch(/jsonb_build_object\('eveniment', v_ev, 'lot_id', v_r\.lot_id, 'opod', v_opod, 'hash_date', v_r\.hash_date, 'din', v_din,/)
+    expect(MIG27).toMatch(/CREATE TRIGGER trg_red_fan_awb_opod_jurnal AFTER INSERT OR UPDATE OR DELETE ON public\.red_fan_awb FOR EACH ROW EXECUTE FUNCTION public\.fn_red_fan_awb_opod_jurnal\(\);/)
+    expect(MIG27).not.toMatch(/AFTER INSERT OR UPDATE OF stare ON public\.red_fan_awb/)
     expect(MIG27).toMatch(/REVOKE ALL ON FUNCTION public\.fn_red_fan_awb_opod_jurnal\(\) FROM PUBLIC, anon, authenticated, service_role;/)
-    expect(MIG27).toMatch(/red_jurnal are deja evenimente opod_aprobare/); expect(MIG27).toMatch(/difera de 21/)
+    expect(MIG27).toMatch(/red_jurnal are deja evenimente opod_aprobare \/ opod_folosire/); expect(MIG27).toMatch(/difera de 21/)
     const REV = readFileSync('supabase/revenire/20261227a_redari_fan_opod_ROLLBACK.sql', 'utf8')
-    expect(REV).toMatch(/SELECT count\(\*\) INTO v_n FROM public\.red_jurnal j WHERE j\.tabela = 'red_fan_awb' AND j\.date_noi ->> 'eveniment' = 'opod_aprobare';/)
-    expect(REV).toMatch(/aprobare\(i\) FAN dupa aplicarea migrarii \(jurnal opod_aprobare/); expect(REV).toMatch(/DROP TRIGGER trg_red_fan_awb_opod_jurnal ON public\.red_fan_awb;/)
+    expect(REV).toMatch(/SELECT count\(\*\) INTO v_n FROM public\.red_jurnal j WHERE j\.tabela = 'red_fan_awb' AND j\.date_noi ->> 'eveniment' IN \('opod_aprobare', 'opod_folosire'\);/)
+    expect(REV).toMatch(/pas\(i\) FAN dupa aplicarea migrarii \(jurnal opod_aprobare \/ opod_folosire/); expect(REV).toMatch(/DROP TRIGGER trg_red_fan_awb_opod_jurnal ON public\.red_fan_awb;/)
+    // runda 4: verificarea pe timp prinde orice rând creat / scris după marcaj, în orice stare (înainte: updated_at doar pe in_curs / necunoscut)
+    expect(REV).toMatch(/WHERE a\.aprobat_la >= v_la OR a\.generat_la >= v_la OR a\.created_at >= v_la OR a\.updated_at >= v_la;/)
+    expect(REV).not.toMatch(/a\.stare IN \('in_curs', 'necunoscut'\) AND a\.updated_at >= v_la/)
+    expect(REV).toMatch(/tg\.tgtype = \(1 \| 4 \| 8 \| 16\) AND tg\.tgattr::text = ''/)
     expect(REV).toMatch(/LOCK TABLE public\.red_fan_awb IN ACCESS EXCLUSIVE MODE NOWAIT;/); expect(REV).toMatch(/difera de 21/)
     // ordinea livrării: codul ÎNTÂI (ecranul gardat), apoi migrarea — scrisă în migrare și în document; forma veche („migrarea înainte de cod”) nu mai apare
     expect(MIG27).toMatch(/ORDINEA OBLIGATORIE COD → MIGRARE/)
