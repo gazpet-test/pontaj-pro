@@ -123,7 +123,14 @@ export const fmtNum = (n, dec = 2) => (n === null || n === undefined || n === ''
 export const azi = () => new Date().toISOString().slice(0, 10)
 
 // Mesaj de eroare lizibil din răspunsul supabase / excepție
-export const msgEroare = (e, fallback = 'Eroare necunoscută') => (e?.message || e?.error_description || e?.details || (typeof e === 'string' ? e : null) || fallback)
+// review #1140 r4: `details` / `hint` NU se afișează (pot conține valorile rândului, de ex. o dată personală semnalată la import);
+// fără `message`, doar codul erorii — aceeași regulă ca mesajEroareBd() din importTgz.js
+export const msgEroare = (e, fallback = 'Eroare necunoscută') => {
+  if (typeof e === 'string') return e || fallback
+  const m = (typeof e?.message === 'string' && e.message.trim()) ? e.message : (typeof e?.error_description === 'string' && e.error_description.trim() ? e.error_description : null)
+  if (m) return m
+  return typeof e?.code === 'string' && /^[0-9A-Z]{1,10}$/.test(e.code) ? `${fallback} (cod ${e.code})` : fallback
+}
 
 export const CALITATI = ['proprietar', 'coproprietar', 'mostenitor', 'arendas', 'utilizator', 'neidentificat']
 export const CANALE_CONVOCARE = ['posta', 'sms', 'afisare', 'telefon']
