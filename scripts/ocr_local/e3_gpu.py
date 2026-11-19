@@ -6,8 +6,10 @@ import json
 import math
 import os
 import pathlib
+import random
 import socket
 import subprocess
+import threading
 import time
 import uuid
 from .client import save
@@ -296,3 +298,243 @@ class Coordinator:
             save(self.path, {**old, **state})
         save(self.path, state)
         return 'disponibil' if ready else 'pornire'
+
+    def descarca(self, vram_inainte=None):
+        """La cerere: oprește modelele E3 și eliberează lacătul DOAR după dovada opririi (fără procese; dacă au rulat,
+        VRAM sub max(bază, nivelul de dinainte de încărcare) + 1024 MB). False = lacătul rămâne, se reîncearcă;
+        None = lacătul nu (mai) e al E3: modelele nu se ating (sunt sub lacătul altcuiva)."""
+        if not self.lock.claim():
+            return None
+        running = self.models.processes()
+        for name, pids in running.items():
+            if pids:
+                self.models.stop(name, pids)
+        if any(self.models.processes().values()):
+            return False
+        if any(running.values()):
+            prag = max(self.models.baseline, vram_inainte if isinstance(vram_inainte, (int, float)) else 0) + 1024
+            if self.models.memory_mb() >= prag:
+                return False
+        save(self.path, {})
+        self.lock.release()
+        return True
+
+
+class Pauza:
+    """Backoff: treapta = min(baza * 2^k, plafon) s, plus jitter de cel mult 10%, tot sub plafon.
+    Se resetează la primul succes. Fără oprire definitivă: serviciul revine singur după cădere."""
+    def __init__(self, plafon=300, rnd=random.random, baza=1):
+        self.plafon, self.rnd, self.baza, self.k, self.esecuri = plafon, rnd, baza, 0, 0
+
+    def esec(self):
+        treapta = min(self.baza * 2 ** self.k, self.plafon)
+        if treapta < self.plafon:
+            self.k += 1
+        self.esecuri += 1
+        return treapta, min(self.plafon, treapta * (1 + 0.1 * self.rnd()))
+
+    def reset(self):
+        self.k = self.esecuri = 0
+
+
+class GpuLaCerere:
+    """E3 la cerere (decizia Răzvan 19.11.2026): fără modele încărcate și fără lacăt cât coada e goală.
+
+    Faze: rece (fără lacăt, fără modele) -> incalzire (lacăt luat, modele pornite) -> cald (gata de citit)
+    -> rece după `inactiv_s` fără lucrări; noapte; eroare (fereastră de pauză min(60 * 2^k, 3600) s).
+    `pas()` îl cheamă DOAR firul de întreținere (singurul care atinge Coordinator-ul / WSL-ul); firul de preluare
+    cere GPU-ul cu `cere()`, așteaptă cu `asteapta()` și anunță finalul cu `gata()`.
+    Prioritatea: cât o lucrare așteaptă și lacătul e al altcuiva, E3 scrie gpu.cerere (gpu_cedare.py); celălalt proces
+    cedează după pagina curentă. Lacătul altuia nu se atinge niciodată."""
+    INCALZIRE_POLL_S = 2   # cât de des se verifică modelele în încălzire (WSL + /health)
+    VRAM_POLL_S = 5        # memoria ținută fără lacăt: reverificare la 5 s, nu la fiecare secundă
+    OCUPAT_S = 300         # după o așteptare ratată pe lacătul altcuiva: 5 min „ocupat” (UI merge direct pe fallback)
+
+    def __init__(self, coordinator, cerere, *, inactiv_s=600, pornire_max_s=300, clock=time.monotonic,
+                 jurnal=None, pauza=None):
+        self.c, self.cerere, self.inactiv_s, self.pornire_max_s = coordinator, cerere, inactiv_s, pornire_max_s
+        self.clock, self.jurnal = clock, jurnal or (lambda *a: None)
+        self.pauza = pauza or Pauza(plafon=3600, baza=60)
+        self.cv = threading.Condition()
+        self.faza, self.cerut, self.ultima = 'rece', 0, float('-inf')
+        self.eroare_pana = self.ocupat_pana = self.reverifica_la = float('-inf')
+        self.tine_lacatul, self.de_descarcat, self.prima = False, False, True
+        self.pornit_la = self.ultima_verificare = self.vram_inainte = None
+        self.cerere_scrisa, self._ultim_esec = False, None
+
+    # --- firul de preluare -------------------------------------------------------------------------------------
+    def cere(self):
+        with self.cv:
+            self.cerut += 1
+            self.cv.notify_all()
+
+    def asteapta(self, timeout, stop_event=None):
+        """True dacă modelele sunt calde în cel mult `timeout` secunde. Renunțarea fără să fi primit lacătul
+        (celălalt proces n-a cedat) deschide fereastra OCUPAT_S: fără admiteri noi care ar aștepta degeaba."""
+        end = self.clock() + max(0.0, timeout)
+        with self.cv:
+            while self.faza != 'cald':
+                rest = end - self.clock()
+                if self.faza == 'eroare' or rest <= 0 or (stop_event is not None and stop_event.is_set()):
+                    if self.faza == 'rece' and not self.tine_lacatul and rest <= 0:
+                        self.ocupat_pana = self.clock() + self.OCUPAT_S
+                    return False
+                self.cv.wait(min(rest, 0.5))
+            return True
+
+    def gata(self):
+        with self.cv:
+            self.cerut = max(0, self.cerut - 1)
+            self.ultima = self.clock()
+            self.cv.notify_all()
+
+    def invalidate(self):
+        """Gardă / model / intern / termen în citire: modelele se descarcă; „repornirea” = încărcarea la lucrarea următoare."""
+        with self.cv:
+            self.de_descarcat = True
+
+    # --- starea pentru edge ------------------------------------------------------------------------------------
+    def stare(self, night):
+        with self.cv:
+            if self.faza == 'eroare':
+                return 'eroare'
+            if night:
+                return 'noapte'
+            if self.clock() < self.ocupat_pana:
+                return 'ocupat'
+            return 'disponibil'  # rece / incalzire / cald: admiterea unei lucrări trezește modelele
+
+    def modele_gata(self):
+        with self.cv:
+            return self.faza == 'cald'
+
+    # --- firul de întreținere ----------------------------------------------------------------------------------
+    def _seteaza(self, faza):
+        with self.cv:
+            self.faza = faza
+            self.cv.notify_all()
+
+    def esec(self, cod):
+        """Pauză crescătoare cu plafon: o defecțiune permanentă = cel mult ~24 de încercări pe zi, nu una pe minut.
+        În jurnal: câte o linie pe treaptă (aceeași treaptă + aceeași cauză nu se repetă)."""
+        treapta, asteptare = self.pauza.esec()
+        with self.cv:
+            self.eroare_pana = self.clock() + asteptare
+            repetat = getattr(self, '_ultim_esec', None) == (treapta, cod)
+            self._ultim_esec = (treapta, cod)
+        self._seteaza('eroare')
+        if not repetat:
+            self.jurnal(None, 'gpu_pauza', cod, treapta)
+
+    def _descarca(self, motiv):
+        ok = self.c.descarca(self.vram_inainte)
+        if ok is None:
+            # Lacătul nu mai e al E3 (șters de mână / preluat): nu oprim nimic sub lacătul altcuiva.
+            self.tine_lacatul, self.vram_inainte, self.de_descarcat = False, None, False
+            self.jurnal(None, 'lacat_pierdut', motiv, None)
+            return True
+        if ok:
+            self.tine_lacatul, self.vram_inainte, self.de_descarcat = False, None, False
+            self.jurnal(None, 'descarcat', motiv, None)
+        return ok
+
+    def _retrage_cererea(self):
+        if self.cerere_scrisa:
+            self.cerere.retrage()
+            self.cerere_scrisa = False
+
+    def _cere_prioritate(self):
+        self.cerere.cere()
+        self.cerere_scrisa = True
+
+    def pas(self, night):
+        now = self.clock()
+        with self.cv:
+            cerut, faza, de_descarcat = self.cerut, self.faza, self.de_descarcat
+        if faza == 'eroare':
+            if now < self.eroare_pana:
+                return
+            if self.tine_lacatul and not self._descarca('dupa_eroare'):
+                self.esec('descarcare_neconfirmata')
+                return
+            self._seteaza('rece')
+            faza = 'rece'
+        if self.prima:
+            # Pornirea serviciului: modele E3 rămase după o cădere / lacăt E3 vechi -> oprite, lacăt eliberat.
+            # Lacătul altui deținător nu se atinge (claim refuză).
+            self.prima = False
+            if self.c.lock.claim():
+                self.tine_lacatul = True
+                if not self._descarca('pornire_serviciu'):
+                    self.esec('descarcare_neconfirmata')
+                    return
+        if night:
+            self._retrage_cererea()
+            if self.tine_lacatul and not self._descarca('noapte'):
+                self.esec('descarcare_neconfirmata')
+                return
+            self._seteaza('noapte')
+            return
+        if faza == 'noapte':
+            self._seteaza('rece')
+            faza = 'rece'
+        if faza == 'cald':
+            if de_descarcat or (cerut == 0 and now - self.ultima >= self.inactiv_s):
+                if self._descarca('invalidat' if de_descarcat else 'inactiv'):
+                    self._seteaza('rece')
+                else:
+                    self.esec('descarcare_neconfirmata')
+            return
+        if faza == 'rece':
+            if cerut == 0:
+                self._retrage_cererea()
+                return
+            if now < self.reverifica_la:
+                self._cere_prioritate()
+                return
+            if not self.c.lock.claim():
+                self._cere_prioritate()  # celălalt proces cedează după pagina curentă
+                return
+            self.tine_lacatul = True
+            running = self.c.models.processes()
+            vram = self.c.models.memory_mb()
+            if not any(running.values()) and vram >= self.c.models.baseline + 1024:
+                # Memoria plăcii e ținută de cineva fără lacăt: nu pornim vLLM peste el (OOM). Lucrarea renunță la termen.
+                self.c.lock.release()
+                self.tine_lacatul = False
+                self.reverifica_la = now + self.VRAM_POLL_S
+                self._cere_prioritate()
+                return
+            self._retrage_cererea()
+            self.vram_inainte, self.pornit_la, self.ultima_verificare = vram, now, None
+            with self.cv:
+                self.de_descarcat = False
+            self._seteaza('incalzire')
+            faza = 'incalzire'
+        if faza == 'incalzire':
+            if self.ultima_verificare is not None and now - self.ultima_verificare < self.INCALZIRE_POLL_S:
+                return
+            self.ultima_verificare = now
+            state = self.c.reconcile(False)
+            if state == 'disponibil':
+                with self.cv:
+                    self.ultima = now
+                self.pauza.reset()
+                self._ultim_esec = None
+                self._seteaza('cald')
+                self.jurnal(None, 'incarcat', None, round(now - self.pornit_la, 1))
+            elif state != 'pornire' or now - self.pornit_la >= self.pornire_max_s:
+                # Modelele nu devin gata în plafon (sau lacătul a dispărut): descărcare + pauză, nu reporniri la nesfârșit.
+                if self._descarca('pornire_esuata'):
+                    self.esec('pornire_esuata' if state == 'pornire' else 'pornire_' + str(state))
+                else:
+                    self.esec('descarcare_neconfirmata')
+
+    def opreste_tot(self):
+        """La oprirea serviciului: cererea retrasă, modelele descărcate. True = oprire dovedită."""
+        self._retrage_cererea()
+        if self.tine_lacatul and not self._descarca('oprire_serviciu'):
+            self._seteaza('eroare')
+            return False
+        self._seteaza('noapte')
+        return True

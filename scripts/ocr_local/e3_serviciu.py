@@ -17,7 +17,8 @@ from .e3_aliniere import compara, aplica_arbitraj
 from .e3_pdf import valideaza_pdf, randeaza, cod_pdf
 from .e3_perspectiva import perspectiva
 from .e3_read import Reader, citeste_orientat
-from .e3_gpu import mutex, GpuLock, Coordinator, WslModels
+from .e3_gpu import mutex, GpuLock, Coordinator, WslModels, GpuLaCerere, Pauza
+from .gpu_cedare import CerereGpu
 
 ROOT = pathlib.Path('C:/ProgramData/Gazpet/e3_ocr')
 # Aceeași listă ca ERORI_LOCALE din supabase/functions/izo-e3-ocr-local/contract.ts (test de paritate).
@@ -26,6 +27,26 @@ ROOT = pathlib.Path('C:/ProgramData/Gazpet/e3_ocr')
 ERRORS = {'structura_incerta', 'tabel_negasit', 'garda', 'prea_multe_dezacorduri', 'limita_randuri', 'pdf_invalid', 'multipagina', 'intern',
           'retea', 'model_indisponibil', 'timeout', 'pdf_corupt', 'oprit'}
 PAUZA_PLAFON = 300  # secunde între două încercări preia, la eșecuri consecutive
+# Întreținerea (reconciliere / WSL / descărcare) căzută: pauză min(60 * 2^k, 3600) s, nu o reîncercare pe minut.
+INTRETINERE_BAZA, INTRETINERE_PLAFON = 60, 3600
+# La cerere: modelele trebuie să fie gata cu cel puțin atâtea secunde înainte de termen_local, altfel lucrarea
+# merge pe fallback (`model_indisponibil` = „Serverul local nu e pregătit”). Citirile reale: 10–67 s.
+REZERVA_CITIRE_S = 45
+MODURI_GPU = ('la_cerere', 'zi')
+
+
+class NeincarcatLaTimp(E3Error):
+    """Modelele nu s-au încărcat până la termen_local − REZERVA_CITIRE_S: fallback, fără invalidarea modelelor
+    (încălzirea continuă pentru lucrarea următoare)."""
+    def __init__(self):
+        super().__init__('model_indisponibil')
+
+
+def cod_jurnal(exc):
+    """Cauza locală pentru jurnal (nu pleacă la edge): codul E3Error, altfel numele tipului."""
+    if isinstance(exc, E3Error):
+        return str(exc.cod)[:40]
+    return type(exc).__name__[:40]
 
 
 def cod_eroare(exc):
@@ -37,23 +58,6 @@ def cod_eroare(exc):
         if exc.cod == 'edge_transport' or (exc.cod == 'edge_refuz' and (getattr(exc, 'status', 0) or 0) >= 500):
             return 'retea'
     return 'intern'
-
-
-class Pauza:
-    """Backoff pentru preia: treapta = min(2^k, plafon) s, plus jitter de cel mult 10%, tot sub plafon.
-    Se resetează la primul preia reușit. Fără oprire definitivă: serviciul revine singur după cădere."""
-    def __init__(self, plafon=PAUZA_PLAFON, rnd=random.random):
-        self.plafon, self.rnd, self.k, self.esecuri = plafon, rnd, 0, 0
-
-    def esec(self):
-        treapta = min(2 ** self.k, self.plafon)
-        if treapta < self.plafon:
-            self.k += 1
-        self.esecuri += 1
-        return treapta, min(self.plafon, treapta * (1 + 0.1 * self.rnd()))
-
-    def reset(self):
-        self.k = self.esecuri = 0
 
 
 def noapte(now):
@@ -86,8 +90,10 @@ def curata(work, *, now=None, toate=False, active=None, resturi=None):
 
 class Worker:
     def __init__(self, edge, coordinator, *, root=ROOT, reader=None, clock=None, pdf_validator=valideaza_pdf,
-                 render=randeaza, perspective=perspectiva, rnd=random.random):
+                 render=randeaza, perspective=perspectiva, rnd=random.random, la_cerere=None, monotonic=time.monotonic):
+        # la_cerere (GpuLaCerere) = modul nou: modelele se încarcă doar pentru lucrări. None = modul „zi” (06–22 pornite).
         self.edge, self.coordinator, self.root = edge, coordinator, pathlib.Path(root)
+        self.gpu, self.mono = la_cerere, monotonic
         self.reader, self.now = reader or Reader(), clock or (lambda: dt.datetime.now(dt.timezone.utc))
         self.rnd = rnd
         self.validate_pdf, self.render, self.perspective = pdf_validator, render, perspective
@@ -107,10 +113,12 @@ class Worker:
         with self.mu:
             state = self.state
         from .read import protocol
+        gata = self.gpu.modele_gata() if self.gpu is not None else self.gpu_state == 'disponibil'
         modele = {k: {'nume': v['served_model_name'], 'sha': v['weights_sha256'],
-                      'gata': self.gpu_state == 'disponibil'} for k, v in protocol()['readers'].items()}
+                      'gata': gata} for k, v in protocol()['readers'].items()}
+        # r4: coduri reale de eroare + backoff (E9); r5: GPU la cerere (modelele se încarcă doar pentru lucrări)
         self.edge.call('heartbeat', worker_id=self.worker_id, stare=state, ora_server=self.now().isoformat(),
-                       modele=modele, versiune='e9-b3-r4')  # r4: coduri reale de eroare + backoff (E9)
+                       modele=modele, versiune='e9-b3-r5-la-cerere' if self.gpu is not None else 'e9-b3-r5-zi')
         save(self.root / 'stare.json', {'stare': state, 'la': self.now().isoformat(), 'pid': os.getpid()})
 
     def verifica_continuare(self, end):
@@ -134,6 +142,8 @@ class Worker:
         source = {'perspectiva': 'nesigura', 'dezacorduri': 0}
         with self.mu:
             self.active, self.state = id, 'ocupat'
+        if self.gpu is not None:
+            self.gpu.cere()  # la cerere: încălzirea pornește acum, în paralel cu descărcarea / randarea
         in_citire = False
         try:
             work.mkdir(parents=True, exist_ok=False)
@@ -151,6 +161,14 @@ class Worker:
             # Descărcarea / randarea pot consuma termenul: verificăm ÎNAINTE de citire, ca un termen deja trecut
             # să nu fie socotit „în citire” (și să nu repornească modelele) — Jakarinos r1 P2.
             self.verifica_continuare(end)
+            if self.gpu is not None:
+                # La cerere: modelele trebuie să fie calde cu REZERVA_CITIRE_S înainte de termen; altfel fallback,
+                # fără invalidare (încălzirea continuă pentru lucrarea următoare). Citirea în sine e neschimbată.
+                limita = (end - dt.timedelta(seconds=REZERVA_CITIRE_S) - self.now()).total_seconds()
+                if not self.gpu.asteapta(limita, self.stop_event):
+                    self.verifica_continuare(end)
+                    raise NeincarcatLaTimp()
+                self.verifica_continuare(end)
             remaining = (end - self.now()).total_seconds()
             in_citire = True
             l, m = citeste_orientat(image, request['sablon'], work, self.reader, time.monotonic() + remaining)
@@ -172,8 +190,11 @@ class Worker:
             obj = None
             # Modelele se repornesc numai când citirea le-ar fi putut lăsa blocate (ca până acum la garda / intern),
             # nu la rețea, PDF, noapte sau termenul depășit înainte / după citire.
-            repornire = error in ('garda', 'intern', 'model_indisponibil') or (error == 'timeout' and in_citire)
-            if repornire and self.coordinator is not None:
+            repornire = (error in ('garda', 'intern', 'model_indisponibil') or (error == 'timeout' and in_citire)) \
+                and not isinstance(exc, NeincarcatLaTimp)
+            if repornire and self.gpu is not None:
+                self.gpu.invalidate()  # la cerere: descărcare; încărcarea curată vine cu lucrarea următoare
+            elif repornire and self.coordinator is not None:
                 self.coordinator.invalidate()
                 with self.mu:
                     self.gpu_state = 'eroare'
@@ -190,24 +211,32 @@ class Worker:
             else:
                 self.journal(id, 'esuata' if error else 'gata', error, source['secunde'])
         finally:
+            if self.gpu is not None:
+                self.gpu.gata()
             with self.mu:
                 self.active = None
-                self.state = self.gpu_state
+                self.state = self.gpu.stare(noapte(self.now())) if self.gpu is not None else self.gpu_state
                 self.resturi.add(id)
                 curata(self.root / 'work', active=self.active, resturi=self.resturi)
             if id in self.resturi:
                 self.journal(id, 'cleanup_amanat')
 
     def maintenance(self):
+        if self.gpu is not None:
+            return self.intretinere_la_cerere()
         last_reconcile = last_cleanup = float('-inf')
         last_night = None
+        # Eșecurile reconcilierii (WSL, hash-uri, oprire neconfirmată): pauză min(60 * 2^k, 3600) s, jurnal doar la
+        # schimbarea treptei / a cauzei. Înainte, la pornire și la schimbarea zi / noapte, o reconciliere căzută se
+        # reîncerca la fiecare secundă, cu câte o linie „intern” în jurnal (last_night rămânea vechi).
+        pauza, jurnalizat, retry_at = Pauza(plafon=INTRETINERE_PLAFON, baza=INTRETINERE_BAZA, rnd=self.rnd), None, float('-inf')
         while not self.stop_event.is_set():
-            t, night = time.monotonic(), noapte(self.now())
+            t, night = self.mono(), noapte(self.now())
             if (self.root / 'opreste').exists():
                 self.stop_event.set()
                 break
             try:
-                if t - last_reconcile >= 60 or night != last_night:
+                if t >= retry_at and (t - last_reconcile >= 60 or night != last_night):
                     with self.mu:
                         if night != last_night:
                             self.state = 'ocupat' if self.active else 'pornire'
@@ -217,15 +246,47 @@ class Worker:
                         self.gpu_state = state
                         self.state = 'ocupat' if self.active and state == 'disponibil' else state
                     last_reconcile, last_night = t, night
+                    if pauza.esecuri:
+                        self.journal(None, 'intretinere_reluata')
+                    pauza.reset()
+                    jurnalizat = None
+                if t - last_cleanup >= 3600:
+                    with self.mu:
+                        curata(self.root / 'work', active=self.active, resturi=self.resturi)
+                    last_cleanup = t
+            except Exception as exc:
+                with self.mu:
+                    self.state = self.gpu_state = 'eroare'
+                cod = cod_jurnal(exc)
+                treapta, asteptare = pauza.esec()
+                retry_at, last_reconcile = t + asteptare, t
+                if (treapta, cod) != jurnalizat:
+                    self.journal(None, 'eroare', cod, treapta)
+                    jurnalizat = (treapta, cod)
+            self.stop_event.wait(1)
+
+    def intretinere_la_cerere(self):
+        """Pasul GPU la fiecare secundă (ieftin când nu e nimic de făcut: fără WSL cât e rece), starea pentru edge,
+        curățenia orară. O excepție (WSL, lacăt) = fereastra de eroare a GpuLaCerere, cu pauză crescătoare și plafon."""
+        last_cleanup = float('-inf')
+        while not self.stop_event.is_set():
+            t, night = self.mono(), noapte(self.now())
+            if (self.root / 'opreste').exists():
+                self.stop_event.set()
+                break
+            try:
+                self.gpu.pas(night)
+            except Exception as exc:
+                self.gpu.esec(cod_jurnal(exc))
+            with self.mu:
+                self.state = 'ocupat' if self.active else self.gpu.stare(night)
+            try:
                 if t - last_cleanup >= 3600:
                     with self.mu:
                         curata(self.root / 'work', active=self.active, resturi=self.resturi)
                     last_cleanup = t
             except Exception:
-                with self.mu:
-                    self.state = self.gpu_state = 'eroare'
-                self.journal(None, 'eroare', 'intern')
-                last_reconcile = t
+                last_cleanup = t
             self.stop_event.wait(1)
 
     def heartbeat_loop(self):
@@ -242,7 +303,7 @@ class Worker:
         """Câte o cerere odată, la 1 s când serviciul e disponibil. preia eșuat (rețea, edge indisponibil,
         refuz) = pauză crescătoare min(2^k, 300) s + jitter, resetată la primul succes. În jurnal intră
         doar schimbarea treptei / a cauzei și revenirea, nu câte o linie pe încercare."""
-        pauza, jurnalizat = Pauza(rnd=self.rnd), None
+        pauza, jurnalizat = Pauza(plafon=PAUZA_PLAFON, rnd=self.rnd), None
         while not self.stop_event.is_set():
             with self.mu:
                 available = self.state == 'disponibil'
@@ -287,9 +348,22 @@ class Worker:
                     self.state = 'eroare'
                     self.heartbeat()
                     raise E3Error('vllm_control')  # fără release când oprirea nu e confirmată
-                state = self.coordinator.reconcile(True)
-                self.state = 'oprit' if state == 'noapte' else state
+                if self.gpu is not None:
+                    self.state = 'oprit' if self.gpu.opreste_tot() else 'eroare'
+                else:
+                    state = self.coordinator.reconcile(True)
+                    self.state = 'oprit' if state == 'noapte' else state
                 self.heartbeat()
+
+
+def config_gpu(cfg):
+    """`gpu_mod`: 'la_cerere' (implicit, decizia 19.11.2026) sau 'zi' (comportamentul vechi: modele pornite 06–22,
+    revenirea fără reinstalare). `inactiv_minute`: 1..120, implicit 10. Orice altă valoare = refuz la pornire."""
+    mod = cfg.get('gpu_mod', 'la_cerere')
+    minute = cfg.get('inactiv_minute', 10)
+    if mod not in MODURI_GPU or isinstance(minute, bool) or not isinstance(minute, (int, float)) or not 1 <= minute <= 120:
+        raise E3Error('config_gpu')
+    return mod, float(minute) * 60
 
 
 def main(argv=None):
@@ -310,9 +384,14 @@ def main(argv=None):
             p.error('serveste cere --config cu memoria validată pe server')
         ZoneInfo('Europe/Bucharest')  # eșec înainte de GPU dacă tzdata lipsește pe Windows
         cfg, proto = json.loads(x.config.read_text(encoding='utf-8')), protocol()
+        mod, inactiv_s = config_gpu(cfg)
         models = WslModels(cfg, proto)
-        coordinator = Coordinator(GpuLock(proto['gpu_lock']), models, x.root / 'servicii.json')
+        lock = GpuLock(proto['gpu_lock'])
+        coordinator = Coordinator(lock, models, x.root / 'servicii.json')
         worker = Worker(Edge(citeste_secret()), coordinator, root=x.root)
+        if mod == 'la_cerere':
+            worker.gpu = GpuLaCerere(coordinator, CerereGpu(proto['gpu_lock'], token=lock.token),
+                                     inactiv_s=inactiv_s, jurnal=worker.journal)
         try:
             worker.serve()
         except KeyboardInterrupt:
