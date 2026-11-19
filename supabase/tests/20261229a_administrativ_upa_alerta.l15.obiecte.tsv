@@ -1,0 +1,98 @@
+# 20261229a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.upa_achizitii.cheie_intentie	creat
+coloana	coloana public.upa_achizitii.hash_intentie	creat
+coloana	coloana public.upa_alerta_jurnal.actualizat_la	creat
+coloana	coloana public.upa_alerta_jurnal.cheie	creat
+coloana	coloana public.upa_alerta_jurnal.consumat	creat
+coloana	coloana public.upa_alerta_jurnal.creat_la	creat
+coloana	coloana public.upa_alerta_jurnal.eroare	creat
+coloana	coloana public.upa_alerta_jurnal.fel	creat
+coloana	coloana public.upa_alerta_jurnal.id	creat
+coloana	coloana public.upa_alerta_jurnal.luna	creat
+coloana	coloana public.upa_alerta_jurnal.nr_dest_ignorati	creat
+coloana	coloana public.upa_alerta_jurnal.nr_destinatari	creat
+coloana	coloana public.upa_alerta_jurnal.nr_notificari	creat
+coloana	coloana public.upa_alerta_jurnal.plafon	creat
+coloana	coloana public.upa_alerta_jurnal.ramas	creat
+coloana	coloana public.upa_alerta_jurnal.resend_id	creat
+coloana	coloana public.upa_alerta_jurnal.stare	creat
+coloana	coloana public.upa_alerta_jurnal.zi	creat
+coloana	coloana public.upa_alerta_jurnal.zile_ramase	creat
+coloana	coloana public.upa_luna_inchisa.consumat	creat
+coloana	coloana public.upa_luna_inchisa.inchis_la	creat
+coloana	coloana public.upa_luna_inchisa.luna	creat
+coloana	coloana public.upa_luna_inchisa.nr_achizitii	creat
+coloana	coloana public.upa_luna_inchisa.plafon	creat
+coloana	coloana public.upa_luna_inchisa.ramas_necheltuit	creat
+coloana	coloana public.upa_plafon_lunar.luna	creat
+coloana	coloana public.upa_plafon_lunar.plafon	creat
+coloana	coloana public.upa_plafon_lunar.setat_de	creat
+coloana	coloana public.upa_plafon_lunar.setat_la	creat
+coloana	coloana public.upa_plafon_lunar.sursa	creat
+constrangere	constrangere tabel public.upa_achizitii.upa_achizitii_cheie_intentie_uidx	creat
+constrangere	constrangere tabel public.upa_achizitii.upa_achizitii_hash_intentie_cu_cheie	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_cheie_uidx	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_cod_eroare	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_dest	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_fel	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_forma_cheie	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_ignorati	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_pkey	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_prima_zi	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_resend	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_stare	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_trimis	creat
+constrangere	constrangere tabel public.upa_luna_inchisa.upa_luna_inchisa_pkey	creat
+constrangere	constrangere tabel public.upa_luna_inchisa.upa_luna_inchisa_prima_zi	creat
+constrangere	constrangere tabel public.upa_luna_inchisa.upa_luna_inchisa_ramas	creat
+constrangere	constrangere tabel public.upa_luna_inchisa.upa_luna_inchisa_valori	creat
+constrangere	constrangere tabel public.upa_plafon_lunar.upa_plafon_lunar_autor	creat
+constrangere	constrangere tabel public.upa_plafon_lunar.upa_plafon_lunar_pkey	creat
+constrangere	constrangere tabel public.upa_plafon_lunar.upa_plafon_lunar_prima_zi	creat
+constrangere	constrangere tabel public.upa_plafon_lunar.upa_plafon_lunar_sursa	creat
+constrangere	constrangere tabel public.upa_plafon_lunar.upa_plafon_lunar_valoare	creat
+functie	functie public.fn_upa_achizitie_adauga(uuid,jsonb)	creat
+functie	functie public.fn_upa_achizitii_intentie()	creat
+functie	functie public.fn_upa_alerta_inscrie(text,date,date,numeric,numeric,numeric,integer,text[],integer,text)	creat
+functie	functie public.fn_upa_alerta_marcheaza(bigint,text,text,text)	creat
+functie	functie public.fn_upa_alerta_proba()	creat
+functie	functie public.fn_upa_alerta_rezerva()	creat
+functie	functie public.fn_upa_alerta_rezerva_la(date)	creat
+functie	functie public.fn_upa_campuri_intentie()	creat
+functie	functie public.fn_upa_destinatari(text)	creat
+functie	functie public.fn_upa_erori_config(integer,numeric)	creat
+functie	functie public.fn_upa_hash_intentie(jsonb)	creat
+functie	functie public.fn_upa_lei(numeric)	creat
+functie	functie public.fn_upa_luna_inchisa_nemodificabil()	creat
+functie	functie public.fn_upa_luna_text(date)	creat
+functie	functie public.fn_upa_luni(date,integer)	creat
+functie	functie public.fn_upa_plafon_la(date)	creat
+functie	functie public.fn_upa_plafon_seteaza(numeric,numeric)	creat
+functie	functie public.fn_upa_poate_scrie()	creat
+functie	functie public.fn_upa_zile_text(integer)	creat
+politica	politica public.upa_achizitii.upa_achizitii_adaugare	creat
+politica	politica public.upa_achizitii.upa_achizitii_all	sters
+politica	politica public.upa_achizitii.upa_achizitii_citire	creat
+politica	politica public.upa_achizitii.upa_achizitii_modificare	creat
+politica	politica public.upa_achizitii.upa_achizitii_stergere	creat
+politica	politica public.upa_alerta_jurnal.upa_alerta_jurnal_citire_owner	creat
+politica	politica public.upa_luna_inchisa.upa_luna_inchisa_citire	creat
+politica	politica public.upa_plafon_lunar.upa_plafon_lunar_citire	creat
+relatie	relatie public.upa_achizitii_cheie_intentie_uidx	creat
+relatie	relatie public.upa_alerta_jurnal	creat
+relatie	relatie public.upa_alerta_jurnal_cheie_uidx	creat
+relatie	relatie public.upa_alerta_jurnal_creat_idx	creat
+relatie	relatie public.upa_alerta_jurnal_id_seq	creat
+relatie	relatie public.upa_alerta_jurnal_pkey	creat
+relatie	relatie public.upa_luna_inchisa	creat
+relatie	relatie public.upa_luna_inchisa_pkey	creat
+relatie	relatie public.upa_plafon_lunar	creat
+relatie	relatie public.upa_plafon_lunar_pkey	creat
+tip	tip public.upa_alerta_jurnal	creat
+tip	tip public.upa_alerta_jurnal[]	creat
+tip	tip public.upa_luna_inchisa	creat
+tip	tip public.upa_luna_inchisa[]	creat
+tip	tip public.upa_plafon_lunar	creat
+tip	tip public.upa_plafon_lunar[]	creat
+trigger	trigger public.upa_achizitii.trg_upa_achizitii_intentie	creat
+trigger	trigger public.upa_luna_inchisa.trg_upa_luna_inchisa_nemodificabil	creat

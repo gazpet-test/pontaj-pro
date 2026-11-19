@@ -326,6 +326,12 @@ extensiile, versiunea serverului (și cea minoră: deparsarea). Pentru obiectele
    `--iesire`): aceeași formă a livrării, nimic scris, diferența obținută pe țintă comparată cu manifestul ⇒ `IDENTIC` (0) sau lista
    `DOAR_AICI` / `DOAR_IN_MANIFEST` / `ALTA_AMPRENTA` (6), plus timpii; cu `--amprenta-globala` verifică și GLOBAL-ul dinainte. Se poate
    rula pe orice țintă, inclusiv producția, **cu acordul owner-ului** (ia aceleași lock-uri ca migrarea, apoi ROLLBACK; limita 13).
+   **Ce a arătat prima probă pe țintă (17.11.2026, `20261225a`):** postcondiția care recreează politicile de pe `storage.objects` pe o copie
+   temporară a căzut (`missing FROM-clause entry for table "objects"`, nimic comis): pe țintă unele politici au subinterogări cu rândul
+   exterior calificat (`objects.name`), iar copia avea alt nume. Clona nu a prins fiindcă nu avea politici pe `storage.objects`. Reparația:
+   copia se numește `pg_temp.objects` (detaliile în `docs/executie/USCARE_CONDUCTA_SPEC.md` §11). **Regula:** înaintea probelor unei migrări
+   care citește politicile (sau alte obiecte ale platformei) de pe `storage.objects`, clona de probă trebuie să poarte politicile țintei pe
+   `storage.objects`; altfel o probă verde pe clonă nu spune nimic despre țintă.
 
 **Fail-closed:** dacă totuși diferă la livrare, runnerul refuză (`ALTFEL` / `NEDECLARAT`), nimic comis (DDL + istoric; limita 13).
 

@@ -23,7 +23,7 @@ import { PGlite } from '@electric-sql/pglite'
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { randomUUID, randomBytes } from 'node:crypto'
+import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { amprente, amprenteRevenire, md5 } from '../executie_uscare_amprente.mjs'
@@ -764,6 +764,141 @@ async function probaPartial(db, text = MIG) {
   await db.close()
 }
 
+console.log('2b. politicile PREEXISTENTE pe storage.objects în formele țintei reale (139, nume sintetice; 17.11.2026)')
+// Prima probă pe ținta reală: „missing FROM-clause entry for table "objects"”. pg_get_expr tipărește rândul exterior din subinterogările unei
+// politici ca objects.<coloană>; recreate pe copia sondei cu ALT nume, nu se mai legau. Clona n-avea politici pe storage.objects, deci n-a prins.
+// Forma țintei (dată de coordonator, numărată de mână): 139 de politici, comenzi r 42 / a 38 / d 31 / w 22 / * 6, 17 restrictive, roluri
+// authenticated / public / anon; 8 cu subinterogări pe objects.name / objects.owner_id (USING și WITH CHECK, permisive și restrictive); restul
+// pe bucket_id / name / owner_id / owner, auth.uid(), auth.role(), storage.foldername(name), ( SELECT auth.uid() AS uid). Aici: politica
+// altui bucket din schelet (FOR ALL) + 8 speciale + 130 generate = 139.
+const MIG_VECHE_COMMIT = 'd943e090' // PR #1115 (ultima schimbare pe main): migrarea de pe main, sha256 8b43ed73… (proba pe țintă a picat pe ea)
+const MIG_VECHE = execFileSync('git', ['-C', ROOT, 'show', `${MIG_VECHE_COMMIT}:supabase/migrations/20261225a_executie_uscare.sql`], { encoding: 'utf8' }).replace(/\r/g, '')
+const POL_PREG = `
+CREATE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role' $$;
+GRANT EXECUTE ON FUNCTION auth.role() TO anon, authenticated, service_role;
+CREATE TABLE public.zz_index (cale text, cont uuid);
+CREATE TABLE public.zz_blocate (cale text, cont uuid);
+GRANT SELECT ON public.zz_index, public.zz_blocate TO anon, authenticated;`
+// [nume, comandă, permisivă, rol, USING, WITH CHECK]: cele 8 cu subinterogări pe rândul exterior calificat
+const POL_SPECIALE = [
+  ['zz_s1', 'SELECT', true, 'authenticated', `bucket_id = 'zz-doc' AND EXISTS (SELECT 1 FROM public.zz_index i WHERE i.cale = objects.name AND i.cont = ( SELECT auth.uid() AS uid))`, null],
+  ['zz_s2', 'INSERT', true, 'authenticated', null, `bucket_id = 'zz-doc' AND EXISTS (SELECT 1 FROM public.zz_index i WHERE i.cale = objects.name AND (i.cont)::text = objects.owner_id)`],
+  ['zz_s3', 'UPDATE', true, 'authenticated', `bucket_id = 'zz-doc' AND EXISTS (SELECT 1 FROM public.zz_index i WHERE i.cale = objects.name)`,
+    `bucket_id = 'zz-doc' AND EXISTS (SELECT 1 FROM public.zz_index i WHERE (i.cont)::text = objects.owner_id)`],
+  ['zz_s4', 'DELETE', true, 'authenticated', `bucket_id = 'zz-doc' AND EXISTS (SELECT 1 FROM public.zz_index i WHERE i.cale = objects.name AND (i.cont)::text = objects.owner_id)`, null],
+  ['zz_s5', 'ALL', true, 'public', `bucket_id = 'zz-doc' AND EXISTS (SELECT 1 FROM public.zz_index i WHERE i.cale = objects.name)`,
+    `bucket_id = 'zz-doc' AND EXISTS (SELECT 1 FROM public.zz_index i WHERE i.cale = objects.name)`],
+  ['zz_s6', 'SELECT', false, 'anon', `bucket_id <> 'zz-doc' OR EXISTS (SELECT 1 FROM public.zz_index i WHERE i.cale = objects.name)`, null],
+  ['zz_s7', 'INSERT', false, 'authenticated', null, `NOT EXISTS (SELECT 1 FROM public.zz_blocate b WHERE b.cale = objects.name)`],
+  ['zz_s8', 'ALL', false, 'authenticated', `NOT EXISTS (SELECT 1 FROM public.zz_blocate b WHERE b.cale = objects.name AND (b.cont)::text = objects.owner_id)`,
+    `NOT EXISTS (SELECT 1 FROM public.zz_blocate b WHERE b.cale = objects.name)`],
+]
+// restul: permisive pe bucket-uri străine (zz-b<k>), restrictive adevărate pe bucket-ul uscării (nu închid / nu deschid nimic din el)
+const POL_GENERATE = []
+{
+  const ROLURI = ['authenticated', 'public', 'anon']
+  let k = 0, restr = 0
+  for (const [cmd, n] of [['SELECT', 40], ['INSERT', 36], ['UPDATE', 21], ['DELETE', 30], ['ALL', 3]]) for (let j = 0; j < n; j++) {
+    k++
+    const rol = ROLURI[k % 3], b = `'zz-b${k}'`
+    if (restr < 14 && k % 9 === 1) {
+      restr++
+      const u = `bucket_id <> 'zz-inchis-${k}'`
+      POL_GENERATE.push([`zz_g${k}`, cmd, false, rol, cmd === 'INSERT' ? null : u, ['INSERT', 'UPDATE', 'ALL'].includes(cmd) ? u : null])
+      continue
+    }
+    POL_GENERATE.push({
+      SELECT: [`zz_g${k}`, cmd, true, rol, `bucket_id = ${b} AND (storage.foldername(name))[1] = (auth.uid())::text`, null],
+      INSERT: [`zz_g${k}`, cmd, true, rol, null, `bucket_id = ${b} AND owner_id = (( SELECT auth.uid() AS uid))::text`],
+      UPDATE: [`zz_g${k}`, cmd, true, rol, `bucket_id = ${b} AND owner = auth.uid()`, `bucket_id = ${b}`],
+      DELETE: [`zz_g${k}`, cmd, true, rol, `bucket_id = ${b} AND auth.role() = 'authenticated' AND owner_id = (auth.uid())::text`, null],
+      ALL: [`zz_g${k}`, cmd, true, rol, `bucket_id = ${b} AND auth.role() = 'service_role'`, `bucket_id = ${b}`],
+    }[cmd])
+  }
+}
+const sqlPol = ([nume, cmd, perm, rol, u, c]) =>
+  `CREATE POLICY ${nume} ON storage.objects AS ${perm ? 'PERMISSIVE' : 'RESTRICTIVE'} FOR ${cmd} TO ${rol}${u ? ` USING (${u})` : ''}${c ? ` WITH CHECK (${c})` : ''};`
+const POLITICI_TINTA = POL_PREG + '\n' + [...POL_SPECIALE, ...POL_GENERATE].map(sqlPol).join('\n')
+const msDeLaBegin = j => Number(((j || []).find(x => /sfarsit la \d+ ms de la BEGIN/.test(x)) || '').match(/sfarsit la (\d+) ms/)?.[1])
+const identitati = j => ((j || []).find(m => /sonda storage: identitati probate/.test(m)) || '').split(': ').slice(-1)[0]
+const golDupa = async db => (await db.query(`SELECT to_regclass('public.executie_uscari') IS NULL AND NOT EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'executie-uscare') AS g`)).rows[0].g
+{
+  // codul vechi = exact cel probat pe țintă
+  ok(createHash('sha256').update(MIG_VECHE).digest('hex').startsWith('8b43ed73'), `migrarea veche (${MIG_VECHE_COMMIT}) = cea probată pe țintă (sha256 8b43ed73…)`)
+  // forma setului = forma țintei, numărată din catalog (așteptările scrise de mână, din raportul coordonatorului)
+  const db = await bazaNoua()
+  await db.exec(POLITICI_TINTA)
+  const f = (await db.query(`SELECT count(*)::int AS n, count(*) FILTER (WHERE polcmd = 'r')::int AS r, count(*) FILTER (WHERE polcmd = 'a')::int AS a,
+      count(*) FILTER (WHERE polcmd = 'd')::int AS d, count(*) FILTER (WHERE polcmd = 'w')::int AS w, count(*) FILTER (WHERE polcmd = '*')::int AS t,
+      count(*) FILTER (WHERE NOT polpermissive)::int AS restr,
+      count(*) FILTER (WHERE coalesce(pg_get_expr(polqual, polrelid), '') || ' ' || coalesce(pg_get_expr(polwithcheck, polrelid), '') ~ 'objects\\.(name|owner_id)')::int AS calif,
+      count(*) FILTER (WHERE NOT polpermissive AND coalesce(pg_get_expr(polqual, polrelid), '') || ' ' || coalesce(pg_get_expr(polwithcheck, polrelid), '') ~ 'objects\\.(name|owner_id)')::int AS calif_restr,
+      count(*) FILTER (WHERE polqual IS NULL AND polwithcheck IS NOT NULL)::int AS doar_check,
+      (SELECT string_agg(DISTINCT CASE WHEN r = 0 THEN 'public' ELSE pg_get_userbyid(r) END, ',' ORDER BY CASE WHEN r = 0 THEN 'public' ELSE pg_get_userbyid(r) END)
+         FROM pg_policy p2, unnest(p2.polroles) r WHERE p2.polrelid = 'storage.objects'::regclass) AS roluri
+    FROM pg_policy WHERE polrelid = 'storage.objects'::regclass`)).rows[0]
+  ok(f.n === 139 && f.r === 42 && f.a === 38 && f.d === 31 && f.w === 22 && f.t === 6 && f.restr === 17 && f.calif === 8 && f.calif_restr === 3
+     && f.doar_check === 38 && f.roluri === 'anon,authenticated,public', `setul preexistent are forma țintei: ${JSON.stringify(f)}`)
+  // (1) migrarea NOUĂ trece, cu aceleași verdicte ale sondei ca fără politicile preexistente (7 identități probate, nicio deschidere)
+  const dbB = await bazaNoua()
+  const jB = await aplicaMig(dbB)
+  await dbB.close()
+  let j = null, m = null; try { j = await aplicaMig(db) } catch (e) { m = e.message }
+  ok(m === null && identitati(j) === identitati(jB) && identitati(jB).split('; ').filter(Boolean).length === 7,
+    `migrarea nouă trece cu cele 139 de politici; sonda: ${m || identitati(j)}`)
+  const ab = m === null ? await verifica(db) : ['neaplicată']
+  ok(ab.length === 0, `verificările de comportament ale modulului, cu politicile preexistente (${ab.length} abateri${ab.length ? ': ' + ab[0] : ''})`)
+  const r = (await db.query(`SELECT to_regclass('pg_temp.objects') IS NULL AS copie, (SELECT count(*)::int FROM pg_policy WHERE polrelid = 'storage.objects'::regclass) AS n`)).rows[0]
+  ok(r.copie && r.n === 141, `copia sondei nu rămâne (pg_temp.objects absentă); pe storage.objects: 139 + cele 2 ale modulului = ${r.n}`)
+  // costul (PGlite nu aplică transaction_timeout: îl măsurăm și îl comparăm cu plafonul de mână)
+  const tB = msDeLaBegin(jB), tT = msDeLaBegin(j)
+  ok(Number.isFinite(tT) && tT < PLAFON_LIVRARE, `durata până la sfârșitul migrării: ${tT} ms cu 139 de politici, ${tB} ms fără (plafon ${PLAFON_LIVRARE} ms)`)
+  await db.close()
+}
+for (const [nume, preg, text, re] of [
+  // (2) dovada pe codul vechi: aceeași probă pe migrarea de pe main pică exact cu eroarea de pe țintă, nimic comis; fără politici (clona) trecea
+  ['codul VECHI pe forma țintei', POLITICI_TINTA, MIG_VECHE, /^missing FROM-clause entry for table "objects"$/],
+  // (3) mutant: forma veche a sondei (copia cu numele vechi) în codul nou: refuzul explicit, cu numele politicii și eroarea de pe țintă
+  ['MUTANT copia sondei cu numele vechi', POLITICI_TINTA, () => aplica(MIG, [['pg_temp.objects', 'pg_temp.sonda_obiecte_20261225a']]),
+    /SONDA_CONDITII.*politica zz_s1 nu s-a putut recrea pe copie \(42P01: missing FROM-clause entry for table "objects"\)/],
+  // (4) sonda își face treaba și pe forma țintei: o politică preexistentă cu subinterogare care DESCHIDE bucket-ul uscării e prinsă
+  ['politică preexistentă (subinterogare pe objects.name) care deschide citirea', POLITICI_TINTA + `
+    CREATE POLICY zz_deschide ON storage.objects FOR SELECT TO authenticated
+      USING (EXISTS (SELECT 1 FROM public.zz_index i WHERE i.cale = objects.name) OR objects.owner_id = (( SELECT auth.uid() AS uid))::text);`, MIG,
+    /politicile EFECTIVE .*cont fara drept vede 2/],
+  ['politică preexistentă (subinterogare pe objects.name) care deschide încărcarea', POLITICI_TINTA + `
+    CREATE POLICY zz_deschide_urcare ON storage.objects FOR INSERT TO authenticated
+      WITH CHECK (bucket_id = 'executie-uscare' AND NOT EXISTS (SELECT 1 FROM public.zz_blocate b WHERE b.cale = objects.name));`, MIG,
+    /politicile EFECTIVE .*cont fara drept incarca \(proiect inexistent, proprietar\)/],
+  ['politică restrictivă preexistentă pe objects.owner_id + o permisivă care deschide ștergerea', POLITICI_TINTA + `
+    CREATE POLICY zz_deschide_stergere ON storage.objects FOR DELETE TO authenticated USING (objects.owner_id = (auth.uid())::text);`, MIG,
+    /politicile EFECTIVE .*cont fara drept sterge/],
+  // (5) o formă pe care copia n-o poate purta (rândul întreg, tipat storage.objects) = SONDA_CONDITII cu numele politicii, nu eroare brută
+  ['formă nerecreabilă: funcție pe rândul întreg storage.objects', POLITICI_TINTA + `
+    CREATE FUNCTION public.zz_rand_ok(storage.objects) RETURNS boolean LANGUAGE sql STABLE AS $f$ SELECT $1.bucket_id = 'zz-doc' $f$;
+    CREATE POLICY zz_rand_intreg ON storage.objects FOR SELECT TO authenticated USING (public.zz_rand_ok(objects.*));`, MIG,
+    /SONDA_CONDITII.*politica zz_rand_intreg nu s-a putut recrea pe copie \(42883:/],
+  // (6) numele copiei ocupat în sesiune: refuz clar înaintea sondei, relația străină neatinsă (verificat mai jos)
+  ['sesiunea are deja pg_temp.objects', 'CREATE TEMP TABLE objects (x int);', MIG, /SONDA_CONDITII: sesiunea are deja relatia temporara pg_temp\.objects/],
+]) {
+  const db = await bazaNoua()
+  await db.exec(preg)
+  let m = null; try { await aplicaMig(db, typeof text === 'function' ? text() : text) } catch (e) { m = e.message }
+  const g = await golDupa(db)
+  const tmp = /pg_temp\.objects/.test(String(re)) && /CREATE TEMP TABLE objects/.test(preg)
+    ? (await db.query(`SELECT count(*)::int AS n FROM pg_temp.objects`).then(() => true, () => false)) : true
+  ok(re.test(m || '') && g && tmp, `${nume}: ${(m || 'aplicată!').slice(0, 260)}`)
+  await db.close()
+}
+{
+  // clona fără politici pe storage.objects: codul vechi trecea (de aceea proba pe clonă n-a prins)
+  const db = await bazaNoua()
+  await db.exec(`DROP POLICY altul_tot ON storage.objects;`)
+  let m = null; try { await aplicaMig(db, MIG_VECHE) } catch (e) { m = e.message }
+  ok(m === null, `codul vechi pe o clonă fără politici pe storage.objects trece (${m || 'aplicată'})`)
+  await db.close()
+}
+
 console.log('3. revenirea')
 {
   const a = amprente(), b = amprenteRevenire()
@@ -861,8 +996,8 @@ const MUTANTI = [
       await db.exec(`INSERT INTO storage.objects (bucket_id, name) VALUES ('executie-uscare', '${c}')`)
       const r = await ca(db, 'authenticated', U.CIT_P1, `SELECT count(*)::int AS n FROM storage.objects WHERE name = '${c}'`)
       return !r.code && r.rows[0].n > 0 ? 'cititorul P1 vede un fișier al unui raport inexistent' : null } }],
-  ['M28 copia sondei primește toate drepturile (refuz fals)', [["              WHERE has_table_privilege(r.rol, 'storage.objects', d.drept) LOOP\n      EXECUTE format('GRANT %s ON pg_temp.sonda_obiecte_20261225a TO %I', x.drept, x.rol);",
-    "              WHERE true LOOP\n      EXECUTE format('GRANT %s ON pg_temp.sonda_obiecte_20261225a TO %I', x.drept, x.rol);"]],
+  ['M28 copia sondei primește toate drepturile (refuz fals)', [["              WHERE has_table_privilege(r.rol, 'storage.objects', d.drept) LOOP\n      EXECUTE format('GRANT %s ON pg_temp.objects TO %I', x.drept, x.rol);",
+    "              WHERE true LOOP\n      EXECUTE format('GRANT %s ON pg_temp.objects TO %I', x.drept, x.rol);"]],
     `REVOKE INSERT ON storage.objects FROM anon; CREATE POLICY anon_urca ON storage.objects FOR INSERT TO anon WITH CHECK (true);`],
   ['M29 retragerea nu scrie cheia (cererea pierdută se aplică după „Renunț”)', [["  INSERT INTO public.executie_uscare_jurnal (uscare_id, proiect_id, actiune, valori, cheie, amprenta)\n  VALUES (NULL, v_proiect, 'cheie_retrasa'", "  PERFORM 1 FROM public.executie_uscare_jurnal WHERE false AND (NULL, v_proiect, 'cheie_retrasa'"]]],
   ['M30 retragerea nu întreabă jurnalul (cheia aplicată = „neaplicată”)', [["  SELECT uscare_id, proiect_id, actiune, amprenta INTO j FROM public.executie_uscare_jurnal WHERE creat_de = v_uid AND cheie = p_cheie;\n  IF FOUND THEN\n    IF NOT public.fn_executie_nod_drept(j.proiect_id, false) THEN",
@@ -897,7 +1032,7 @@ const MUTANTI = [
      CREATE POLICY urca_proprii ON storage.objects FOR INSERT TO authenticated WITH CHECK (owner_id = auth.uid()::text)`,
     { aplicaIntai: true, detector: async db => { const r = await ca(db, 'authenticated', U.FARA, `INSERT INTO storage.objects (bucket_id, name, owner, owner_id) VALUES ('executie-uscare', '1/1/${randomUUID()}.jpg', '${U.FARA}', '${U.FARA}')`); return r.code ? null : 'un cont fără drept a încărcat un fișier nerezervat' } }],
   ['M35 copia sondei fără ACL normalizat (privilegiile implicite globale -> refuz fals)',
-    [["      EXECUTE format('REVOKE ALL ON pg_temp.sonda_obiecte_20261225a FROM %s',", "      CONTINUE; EXECUTE format('REVOKE ALL ON pg_temp.sonda_obiecte_20261225a FROM %s',"]],
+    [["      EXECUTE format('REVOKE ALL ON pg_temp.objects FROM %s',", "      CONTINUE; EXECUTE format('REVOKE ALL ON pg_temp.objects FROM %s',"]],
     `ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO authenticated; REVOKE SELECT ON storage.objects FROM authenticated;
      CREATE POLICY citeste_tot ON storage.objects FOR SELECT TO authenticated USING (true);`],
   // runda 5 — fiecare cu scenariul verdictului r4

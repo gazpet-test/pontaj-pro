@@ -18,7 +18,7 @@ export const COLOANE_REGISTRU = [
   ['V','R\u0102SPUNS','Canal r\u0103spuns'], ['W','R\u0102SPUNS','Data r\u0103spuns'], ['X','R\u0102SPUNS','Op\u021biune r\u0103spuns'], ['Y','R\u0102SPUNS','Obiec\u021bii (text)'],
   ['Z','SESIUNE','Ziua programat\u0103'], ['AA','SESIUNE','Prezent?'], ['AB','SESIUNE','Constatare pe teren cerut\u0103? (data)'],
   ['AC','PV','Tip PV'], ['AD','PV','Nr. PV'], ['AE','PV','Data PV'], ['AF','PV','Obiec\u021bii de readucere?'],
-  ['AG','PV','Termen remediere'], ['AH','PV','Remediat la'], ['AI','PV','Trimis spre semnare prin po\u0219t\u0103 (data)'], ['AJ','PV','PV semnat primit (data)'],
+  ['AG','PV','Termen remediere'], ['AH','PV','Remediat la'], ['AI','PV','Trimis spre semnare, electronic (data)'], ['AJ','PV','PV semnat primit (data)'],
   ['AK','STARE','STARE (calculat\u0103)'], ['AL','STARE','Responsabil Gazpet'], ['AM','STARE','Observa\u021bii'],
 ].map(([col, grup, antet]) => ({ col, grup, antet }))
 

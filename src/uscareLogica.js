@@ -161,6 +161,8 @@ export function pozeLipsa(r, poze) {
   for (const n of cant) for (const cat of CU_BURETE) if (!are(cat, n)) out.push(`${cat}:${n}`)
   return out
 }
+/** lipsa fotografiilor cerute e JUSTIFICATĂ (poze_justificare pe rând): singura definiție (L19), folosită de închidere și de etapele pe pași */
+export const pozeJustificate = r => r?.poze_justificare != null
 /** pe rândul salvat (valorile serverului) + pozele înregistrate + câte încărcări sunt nelămurite; întoarce cheile din OBLIGATORII care lipsesc */
 export function lipsaDinRand(r, poze = [], deschise = 0) {
   const gol = v => v == null
@@ -175,7 +177,7 @@ export function lipsaDinRand(r, poze = [], deschise = 0) {
     presiune_bar: gol(r?.presiune_bar), timp_deplasare_min: gol(r?.timp_deplasare_min),
     piston_final_rezultat: gol(r?.piston_final_rezultat), concluzie: gol(r?.concluzie),
     dovada_conform: r?.concluzie === 'conform' && (r?.piston_final_rezultat !== 'uscat' || !(poze || []).some(p => p.categorie === 'piston_final')),
-    poze_justificare: gol(r?.poze_justificare) && pozeLipsa(r, poze).length > 0,
+    poze_justificare: !pozeJustificate(r) && pozeLipsa(r, poze).length > 0,
     incarcari_nelamurite: Number(deschise || 0) > 0,
   }
   return OBLIGATORII.filter(k => verif[k])
@@ -351,8 +353,25 @@ export function payloadDinFormular(f) {
 /** formularul are modificări față de rândul salvat (comparând valorile care s-ar trimite) */
 export function areModificari(f, r) {
   if (!f || !r) return false
-  const a = payloadDinFormular(f), b = payloadDinFormular(formularDinRand(r))
-  return JSON.stringify(a.date) !== JSON.stringify(b.date)
+  return formulareDiferite(f, formularDinRand(r))
+}
+/** două formulare diferă în ce s-ar trimite (aceeași comparație ca areModificari, între formulare: raportul NOU față de propunerea lui) */
+export function formulareDiferite(f, g) {
+  if (!f || !g) return false
+  return JSON.stringify(payloadDinFormular(f).date) !== JSON.stringify(payloadDinFormular(g).date)
+}
+// valoarea BRUTĂ comparabilă: textele fără spațiile de la capete, listele / obiectele pe chei sortate (un rând de utilaj pe jumătate rămâne vizibil)
+const brut = v => (Array.isArray(v) ? v.map(brut)
+  : v != null && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, brut(v[k])])) : String(v ?? '').trim())
+/**
+ * pentru CIORNĂ (o păstrez / o arunc): ce s-ar trimite SAU ce a tastat omul, inclusiv valorile încă invalide sau incomplete (lungimea cu
+ * 2 zecimale, un utilaj fără bucăți, o oră pe jumătate) — ele nu ajung în payload, dar sunt date tastate care nu au voie să se piardă.
+ * Validarea și areModificari rămân neschimbate; momentele se compară pe instant (canonMoment), ca la îmbinare.
+ */
+export function formulareDiferiteBrut(f, g) {
+  if (!f || !g) return false
+  if (formulareDiferite(f, g)) return true
+  return CHEI_FORMULAR.some(k => JSON.stringify(brut(f[k])) !== JSON.stringify(brut(g[k]))) || MOMENTE.some(k => canonMoment(f, k) !== canonMoment(g, k))
 }
 
 // ── conflictul de versiune: îmbinare în trei, pe câmpuri, rezolvată EXPLICIT de om ──
