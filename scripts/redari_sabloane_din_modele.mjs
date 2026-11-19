@@ -21,6 +21,8 @@
 //    (11) terminologia „predare” (titlurile convocatorului, PV A și PV C), „recomandată sau curier / AWB” în PV B, semnarea
 //    de la distanță doar electronic și opțiunea „Nu particip. Am următoarele obiecții” scoasă din convocatoare — deciziile
 //    Răzvan 17.11.2026, textele din modelele rev. 1 ale Juridicului (TERMINOLOGIE_PREDARE).
+//    (12) adresa UAT: Anexa 2 nu mai e convocarea scurtă + lista parcelelor, ci trimiterea la anunțul de afișare (o singură
+//    definiție a textului public; lista parcelelor publică stă DOAR în anunț) — decizia Răzvan 19.11.2026 (ANEXA2_ANUNT).
 import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -340,6 +342,51 @@ function antetLaInceput(xml, antet) {
   asigura(parti.length === 2, 'adresa UAT: <w:body> lipsă sau multiplu')
   return `${parti[0]}<w:body>${antet}${parti[1]}`
 }
+// excepția (12), decizia Răzvan 19.11.2026: o singură definiție a textului public de afișare. Anexa 2 a adresei UAT păstrează titlul,
+// dar corpul ei (convocarea scurtă + tabelul „Lista parcelelor”) se înlocuiește cu trimiterea la anunțul de afișare
+// (public/redari/sabloane/anunt_afisare.docx, §2.7), transmis împreună cu adresa. Textul = varianta trimisă Transgaz pe 19.11.
+// Cele două paragrafe noi refolosesc primele două paragrafe ale corpului vechi (aceeași formatare, se schimbă doar <w:t>);
+// restul corpului se taie până la paragraful cu saltul de pagină dinaintea Anexei 3. Textul tăiat se verifică EXACT.
+const ANEXA2_ANUNT = {
+  titlu: 'ANEXA 2 – CONVOCARE PENTRU AFIȘARE LA SEDIUL PRIMĂRIEI',
+  titluUrmator: 'ANEXA 3 – PROCES-VERBAL DE AFIȘARE',
+  vechi: [
+    'Către toți proprietarii și utilizatorii terenurilor de pe raza comunei {{uat}} afectate temporar de lucrările la conducta de transport gaze naturale Prunișor–Jupa, Lot 1 (lista parcelelor mai jos).',
+    'Lucrările de readucere a terenului la starea inițială au fost executate. Sunteți invitați să constatați starea terenului și să semnați procesul-verbal la sediul Primăriei, în zilele {{zile_sesiune_text}}, între orele {{program_text}}. Aduceți actul de identitate și, dacă e cazul, actul care dovedește calitatea de proprietar, moștenitor sau arendaș.',
+    'Dacă nu vă puteți prezenta, ne puteți răspunde la telefon {{contact_telefon}}, pe e-mail la {{contact_email}}. În lipsa participării, starea terenului poate fi constatată tehnic de reprezentanții Beneficiarului, ai Antreprenorului și ai Primăriei; această constatare nu reprezintă acceptarea tacită din partea dumneavoastră.',
+    'Convocarea se face în numele S.N.T.G.N. TRANSGAZ S.A., Beneficiar al investiției. Contact GAZPET INSTAL: {{contact_nume}}, {{contact_telefon}}, {{contact_email}}. Contact TRANSGAZ: {{reprezentant_tgz}}, tel. {{reprezentant_tgz_telefon}}.',
+    'Lista parcelelor (fără date personale):',
+    'Nr.', 'Sat', 'Tarla', 'Nr. cadastral / parcelă', 'Poz. HG', 'Tronson',
+    '{{rand.nr}}', '{{rand.sat}}', '{{rand.tarla}}', '{{rand.nr_cadastral}}', '{{rand.poz_hg}}', '{{rand.tronson}}',
+  ],
+  nou: [
+    'Anexa 2 este anunțul de afișare pe comună (convocarea pe UAT), după modelul „Anunț de afișare la primărie”, transmis împreună cu prezentul model.',
+    'Anunțul conține: zilele și programul sesiunilor (cu satele / tarlalele programate), cum ne pot răspunde deținătorii, precizarea că afișarea este o publicitate suplimentară a convocării și nu valorează acceptare tacită, informarea privind datele personale (pagina publică, cu cod QR) și lista parcelelor din comună (sat, tarla, nr. cadastral / parcelă, poz. HG, tronson), fără date personale.',
+  ],
+}
+function anexa2Anunt(xml) {
+  const RX_P = /<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>/])[\s\S])*?<\/w:p>/g
+  const cuText = text => [...xml.matchAll(RX_P)].filter(m => m[0].includes(`>${esc(text)}</w:t>`))
+  const [t2, t3] = [cuText(ANEXA2_ANUNT.titlu), cuText(ANEXA2_ANUNT.titluUrmator)]
+  asigura(t2.length === 1 && t3.length === 1, `adresa UAT (12): titlurile Anexei 2 / 3: ${t2.length} / ${t3.length} apariții, așteptată 1`)
+  const start = t2[0].index + t2[0][0].length
+  // paragraful dinaintea titlului Anexei 3 = doar saltul de pagină (rămâne)
+  const inainte = [...xml.slice(0, t3[0].index).matchAll(RX_P)].at(-1)
+  asigura(inainte && inainte.index + inainte[0].length === t3[0].index && /^<w:p[^>]*><w:r><w:br w:type="page"\/><\/w:r><\/w:p>$/.test(inainte[0]),
+    'adresa UAT (12): înaintea Anexei 3 nu mai e paragraful cu saltul de pagină')
+  const corp = xml.slice(start, inainte.index)
+  // textul concatenat din <w:t> (Word a spart unele paragrafe în mai multe run-uri, ex. „Lista ” + „parcelelor” …)
+  asigura([...corp.matchAll(RX_WT)].map(m => m[1]).join('') === esc(ANEXA2_ANUNT.vechi.join('')),
+    'adresa UAT (12): corpul Anexei 2 nu mai e cel așteptat (convocarea scurtă + lista parcelelor)')
+  asigura((corp.match(/<w:tbl>/g) || []).length === 1 && !/<w:drawing>|<w:framePr|<w:sectPr/.test(corp), 'adresa UAT (12): corpul Anexei 2 are altă structură')
+  // primele două paragrafe ale corpului (formatul textului Anexei 2) primesc textul nou; un singur <w:t> în fiecare
+  const p = [...corp.matchAll(RX_P)].slice(0, 2)
+  const nou = p.map((m, i) => {
+    asigura(m.index === (i === 0 ? 0 : p[0][0].length) && [...m[0].matchAll(RX_WT)].length === 1, 'adresa UAT (12): paragrafele de text ale Anexei 2 s-au schimbat')
+    return m[0].replace(RX_WT, () => wt(ANEXA2_ANUNT.nou[i]))
+  })
+  return xml.slice(0, start) + nou.join('') + xml.slice(inainte.index)
+}
 const ANTET_CONVOCATOR = await antetDinConvocator()
 const NR_LOC = ['Nr. ________ / ___.___.2026        Locul încheierii: ______________________', 'Nr. {{nr_pv}} / {{data_pv}}        Locul încheierii: {{locul}}']
 const PARCELA_7 = ['{{uat}}', '{{sat}} / {{tarla}}', '{{nr_cadastral}}', '{{poz_hg}}', '{{suprafata}}', '{{categoria_folosinta}}', '{{tronson}}']
@@ -491,6 +538,8 @@ const RETETE = {
       x = inWt(x, 'Convocarea rămâne afișată până la data de ___.___.2026 (ultima zi de sesiune). Dezafișarea se consemnează mai jos.', [['___.___.2026', '{{afisare_data_end}}']])
       x = inlocuiesteWt(x, 'Primăria ______________ (semnătura și ștampila)', 'Primăria {{uat}} (semnătura și ștampila)')
       x = inlocuiesteWt(x, NCD, ['{{semnatar_uat}}', '{{semnatar_gazpet}}'])
+      // excepția (12), 19.11.2026: corpul Anexei 2 (completat mai sus din model, deci verificat față de model) → trimiterea la anunț
+      x = anexa2Anunt(x)
       return x
     },
   },

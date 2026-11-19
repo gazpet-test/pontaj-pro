@@ -51,9 +51,11 @@ const CHEI_INAINTE = {
   pv_b: [74, '1bfcfa7ea64e6dfae25a1eb77c4acb3b54b5fccc6d6e4a504d6848c2f5faec15'],
   pv_c: [23, '2a3f707a8ae667075a6fec08831017990c3c3f6701476a6c3320cba8a8716886'],
 }
-// Neatinse (așteaptă text de la Juridic): fișierul întreg, octet cu octet, ca pe main @ d943e090
+// Neatinse (așteaptă text de la Juridic): fișierul întreg, octet cu octet, ca pe main @ d943e090.
+// adresa_uat a ieșit de aici pe 19.11.2026 (excepția (12): Anexa 2 = trimiterea la anunțul de afișare, decizia Răzvan): schimbarea
+// e declarată în sabloaneA4.test.js (SCHIMBARI_TEXT.adresa_uat, cu amprenta de dinainte) și în adresaUatAnexa2.test.js
+// (restul arhivei identic cu origin/main, octet cu octet, în afara corpului Anexei 2).
 const NEATINSE = {
-  adresa_uat: '9d0723770020fdbe5194f2683b1ff1b8852ff93cc3c547ed45ccb6f0296d4525',
   cerere_imputernicire: '44545c35df2bb6eb29993643a02a55dd57e6c8c54cbeb2b6ef6ed9f30aa91fb6',
 }
 

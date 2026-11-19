@@ -5,7 +5,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { G, S, Modal, Camp, Gol, fmtDate, msgEroare, motivBlocareConvocator, citestePaginat } from './comune.jsx'
 import { verificaDateAdresaUat, genereazaAdresaUat, salveazaAdresaUat, descarcaBlob, versiuneMaximaInBucket, caleAdresaUat, aziBucuresti, BUCKET_REDARI,
-  verificaDateAnuntAfisare, genereazaAnuntAfisare, SABLON_ANUNT_AFISARE, COL_PARCELA_ANUNT } from '../docx.js'
+  verificaDateAnuntAfisare, genereazaAnuntAfisare, SABLON_ANUNT_AFISARE, COL_PARCELA_ANUNT, COL_PARCELA_ADRESA, INDICIU_ANEXA2_ANUNT } from '../docx.js'
 import { uat3 as uat3Din } from '../idParcela.js'
 import { CAMPURI_UAT, COL_UAT, ZILE_SESIUNE, normalizeaza, cheiSchimbate, valideazaUat, avertismenteUat, recomandariUat, MESAJ_TERMEN_RECOMANDAT, dataTintaRecomandata, lipsuriUat, motiveGataConvocare, rezumatZile, conflicteConcurente } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
@@ -146,8 +146,9 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
         window.open(data.signedUrl, '_blank', 'noopener,noreferrer')
         return
       }
+      // adresa ia din parcele doar NUMĂRUL lor (PV-ul de afișare); lista publică e în anunț (decizia 19.11.2026)
       const parcele = await citestePaginat(() => supabase.from('red_v_parcele')
-        .select('id_parcela, sat, tarla, nr_cadastral, poz_hg, tronson, sters_la')
+        .select(COL_PARCELA_ADRESA)
         .eq('proiect_id', proiect.id).eq('uat_id', id).is('sters_la', null), { cheie: 'id_parcela', esteCurent: curent })
       if (!curent()) return
       const raspuns = await fetch('/redari/sabloane/adresa_uat.docx')
@@ -196,7 +197,7 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
       descarcaBlob(blob, `${nrDocument}.docx`)   // fișierul e deja în bucket (imutabil, versionat), indiferent de verdictul verificării
       if (neverificat) show(`Adresa ${nrDocument} e salvată (${path}), dar NU am putut verifica dacă UAT-ul sau proiectul s-au schimbat între timp. Reîncarcă și, dacă e cazul, apasă „Regenerează”.`, 'error')
       else if (schimbat) show(`Atenție: UAT-ul sau proiectul au fost modificate în timpul generării (${path}). Fișierul e salvat, dar poate avea date vechi — apasă „Regenerează”.`, 'error')
-      else show(`Adresa ${nrDocument} salvată.`, 'success')
+      else show(`Adresa ${nrDocument} salvată. ${INDICIU_ANEXA2_ANUNT}`, 'success')
       onGata()
     } catch (err) { if (curent()) { show('Adresă UAT: ' + msgEroare(err), 'error'); if (rezervat) onGata() } }
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
@@ -334,7 +335,9 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
         {esteAdmin && uat.adresa_nr && <>{' '}<button style={S.btnS} disabled={lucru || nesalvat || lipsuriAdresa.length > 0} onClick={() => adresa()}>Regenerează</button></>}
         {esteAdmin && !uat.adresa_nr && <button style={S.btnP} disabled={lucru || nesalvat || lipsuriAdresa.length > 0} onClick={() => adresa()}>Generează adresa UAT</button>}
         {poateAnunt && <>{' '}<button style={S.btnS} disabled={lucru || nesalvat || lipsuriAnunt.length > 0} onClick={() => anunt()}
-          title="Anunțul lipit la intrarea în primărie: convocarea pe UAT cu zilele de sesiune și lista parcelelor, fără date personale (plan pct. 4.3). Se descarcă, nu se salvează în ERP.">Anunț de afișare (DOCX)</button></>}
+          title="Anunțul lipit la intrarea în primărie: convocarea pe UAT cu zilele de sesiune și lista parcelelor, fără date personale (plan pct. 4.3). Este și Anexa 2 a adresei UAT. Se descarcă, nu se salvează în ERP.">Anunț de afișare (DOCX)</button></>}
+        {/* decizia 19.11.2026: Anexa 2 a adresei = anunțul (lista parcelelor e doar acolo) — indiciu lângă adresă, fluxul nu se schimbă */}
+        {poateAnunt && (esteAdmin || uat.adresa_nr) && <div style={{ color: G.dim, fontSize: 12, marginTop: 4 }}>ℹ {INDICIU_ANEXA2_ANUNT}</div>}
         {esteAdmin && nesalvat && <div style={{ color: G.yellow }}>Salvează modificările înainte de generarea documentelor.</div>}
         {esteAdmin && lipsuriAdresa.length > 0 && <div style={{ color: G.yellow, fontSize: 12 }}>Adresa UAT: {lipsuriAdresa.join('; ')}</div>}
         {poateAnunt && lipsuriAnunt.length > 0 && <div style={{ color: G.yellow, fontSize: 12 }}>Anunț de afișare: {lipsuriAnunt.join('; ')}</div>}

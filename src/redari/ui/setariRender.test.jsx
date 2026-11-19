@@ -28,6 +28,7 @@ import UatEcran, { ModalUat, ModalUatNou, numarParcele } from './UatEcran.jsx'
 import SetariProiect from './SetariProiect.jsx'
 import FormularCampuri from './FormularCampuri.jsx'
 import LegaturaExecutie from './LegaturaExecutie.jsx'
+import { INDICIU_ANEXA2_ANUNT } from '../docx.js'
 import { CAMPURI_UAT } from '../setari.js'
 import { citestePaginat, motivBlocareConvocator } from './comune.jsx'
 
@@ -162,6 +163,15 @@ describe('ecranul UAT', () => {
       expect(h).not.toContain('Descarcă adresa')
       expect(h).not.toContain('Regenerează')
     }
+  })
+  it('19.11.2026: indiciul „Anexa 2 a adresei = anunțul de afișare” apare lângă butoanele adresei (admin; editorul când adresa există), nu la viewer', () => {
+    const randare = (admin, descarca, nr) => renderToString(<ModalUat proiect={proiect} uat={{ ...uats[0], adresa_nr: nr }} uats={uats} esteAdmin={admin} poateDescarca={descarca} show={show} onClose={() => {}} onGata={() => {}} />)
+    const indiciu = 'Anexa 2 a adresei este anunțul de afișare: generează-l cu butonul „Anunț de afișare (DOCX)” și trimite-l împreună cu adresa.'
+    expect(INDICIU_ANEXA2_ANUNT).toBe(indiciu)
+    for (const nr of [null, 'AU-0001']) expect(randare(true, true, nr)).toContain(indiciu)
+    expect(randare(false, true, 'AU-0001')).toContain(indiciu)
+    expect(randare(false, true, null)).not.toContain(indiciu)   // editorul fără adresă: nu are niciun buton de adresă lângă care să stea
+    for (const nr of [null, 'AU-0001']) expect(randare(false, false, nr)).not.toContain(indiciu)
   })
   it('anunțul de afișare: admin și editor îl văd (editor = fără generarea adresei), viewer nu; blocat cu lipsurile butonului, activ pe date complete', () => {
     const randare = (admin, descarca, pr = proiect, u = uats[0]) => renderToString(<ModalUat proiect={pr} uat={u} uats={uats} esteAdmin={admin} poateDescarca={descarca} show={show} onClose={() => {}} onGata={() => {}} />)

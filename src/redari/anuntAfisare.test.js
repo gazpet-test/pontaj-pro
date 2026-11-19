@@ -26,6 +26,7 @@ import {
   MESAJ_IDENTIFICATORI_REFUZATI, MESAJ_SAT_NEDECLARAT, RE_NECOMPLETAT, LUNGIME_MAX_IDENTIFICATOR, MAX_CIFRE_SUBCAMP, MOTIV, ETICHETA_MOTIV,
 } from './identificatoriPublici.js'
 import { tronsonOptional } from './importTgz.js'
+import { TEXT_ANEXA2_DECIZIE, TITLU_ANEXA2, TITLU_ANEXA3 } from './anexa2Anunt.testutil.js'
 
 const SABLON = resolve(process.cwd(), 'public/redari/sabloane/anunt_afisare.docx')
 const SURSA = resolve(process.cwd(), 'docs/redari/TEXT_ANUNT_AFISARE.md')
@@ -777,21 +778,43 @@ describe('identificatorii publicați (review #1137 P1): forma fiecărui câmp, o
   })
 })
 
-describe('PARITATE cu origin/main (referință independentă): convocatorul și adresa UAT ies IDENTIC (câmpuri + hash DOCX)', () => {
+describe('PARITATE cu origin/main (referință independentă): convocatorul iese IDENTIC; adresa UAT identică în afara corpului Anexei 2', () => {
   const PROIECTE = [PROIECT, { ...PROIECT, reprezentant_tgz_functie: '', contact_telefon: null, imputernicire_data: null }]
   const detinator = { id: 'd-fictiv', nume: 'DEȚINĂTOR FICTIV', calitate: 'proprietar' }
   const contactDetinator = { adresa_strada: 'Str. Fictivă 1', adresa_sat: 'Satul A', adresa_comuna: 'Comuna FICTIVĂ', adresa_judet: 'Județ FICTIV', cod_postal: '000000' }
-  it.skipIf(!areOriginMain)('adresa UAT (Model 4): generatorul de pe origin/main și cel din ramură dau aceleași câmpuri și același DOCX pe 4 UAT-uri × 2 proiecte', async () => {
+  // 19.11.2026 (decizia Răzvan, SABLOANE.md §1 excepția (12)): Anexa 2 a adresei = trimiterea la anunțul de afișare. Referința =
+  // generatorul ȘI șablonul de pe origin/main (git show). Trebuie să coincidă: câmpurile (fără `program_text`, scos), lipsurile și textul
+  // documentului paragraf cu paragraf, înainte de corpul Anexei 2 și de la Anexa 3; corpul nou = exact cele două paragrafe din decizie.
+  it.skipIf(!areOriginMain)('adresa UAT (Model 4): față de origin/main, aceleași câmpuri (fără program_text), aceleași lipsuri și același text în afara corpului Anexei 2, pe 4 UAT-uri × 2 proiecte', async () => {
     const { mod: main, fisiere } = await incarcaDocx('origin/main')
     expect(fisiere).not.toContain('identificatoriPublici.js')   // chiar e versiunea veche (fără validarea nouă)
-    const sablonAdresa = readFileSync('public/redari/sabloane/adresa_uat.docx')
+    const sablonMain = execFileSync('git', ['show', 'origin/main:public/redari/sabloane/adresa_uat.docx'], { stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 26 })
+    const sablonNou = readFileSync('public/redari/sabloane/adresa_uat.docx')
+    // [înainte de corp (cu titlul Anexei 2), corpul Anexei 2, de la titlul Anexei 3]
+    const taie = par => {
+      const i = par.indexOf(TITLU_ANEXA2), j = par.indexOf(TITLU_ANEXA3)
+      expect(i).toBeGreaterThan(0); expect(j).toBeGreaterThan(i)
+      return [par.slice(0, i + 1), par.slice(i + 1, j), par.slice(j)]
+    }
+    // valori de parcelă unice, ca să se vadă că erau în lista veche și nu mai sunt nicăieri în adresa nouă
+    const parcele = [parcela(2, { nr_cadastral: 'CF 99002', tarla: 'T9902' }), parcela(1, { nr_cadastral: 'CF 99001', tarla: 'T9901' })]
     let cazuriRulate = 0
     for (const uat of cazuri) for (const pr of PROIECTE) {
-      const arg = { proiect: pr, uat, parcele: [parcela(2), parcela(1)], nrDocument: 'AU-TEST', templateArrayBuffer: sablonAdresa, strict: false, dataDocument: '2026-11-18' }
-      const [vechi, nou] = [await main.genereazaAdresaUat(arg), await genereazaAdresaUat(arg)]
-      expect(nou.campuri).toEqual(vechi.campuri)
-      expect(nou.hash).toBe(vechi.hash)
+      const arg = { proiect: pr, uat, parcele, nrDocument: 'AU-TEST', strict: false, dataDocument: '2026-11-18' }
+      const vechi = await main.genereazaAdresaUat({ ...arg, templateArrayBuffer: sablonMain })
+      const nou = await genereazaAdresaUat({ ...arg, templateArrayBuffer: sablonNou })
+      const { program_text: _scos, ...restVechi } = vechi.campuri
+      expect(nou.campuri).toEqual(restVechi)
       expect(main.verificaDateAdresaUat({ proiect: pr, uat, nrDocument: 'AU-TEST' })).toEqual(verificaDateAdresaUat({ proiect: pr, uat, nrDocument: 'AU-TEST' }))
+      const pVechi = paragrafe((await docDin(vechi.blob)).xml), pNou = paragrafe((await docDin(nou.blob)).xml)
+      const [inainteV, corpV, dupaV] = taie(pVechi), [inainteN, corpN, dupaN] = taie(pNou)
+      expect(inainteN).toEqual(inainteV)
+      expect(dupaN).toEqual(dupaV)
+      expect(corpN).toEqual(TEXT_ANEXA2_DECIZIE)
+      for (const v of ['CF 99001', 'CF 99002', 'T9901', 'T9902']) {
+        expect(corpV.join('\n'), v).toContain(v)       // lista veche chiar le tipărea
+        expect(pNou.join('\n'), v).not.toContain(v)    // adresa nouă nu le mai conține nicăieri
+      }
       cazuriRulate++
     }
     expect(cazuriRulate).toBe(8)
@@ -831,6 +854,8 @@ describe('L19 — aceeași sursă a zilelor / programului / contractului / conta
       expect(alege(adresa.campuri, CHEI_CONTRACT)).toEqual(campuriContractProiect(PROIECT))
       expect(alege(anunt.campuri, CHEI_CONTACT)).toEqual(campuriContactGazpet(PROIECT))
       expect(alege(adresa.campuri, CHEI_CONTACT)).toEqual(campuriContactGazpet(PROIECT))
+      // 19.11.2026: PV-ul de afișare din adresă („pentru N parcele din lista anexată”) numără aceleași parcele ca lista din anunț
+      expect(String(adresa.campuri.numar_parcele)).toBe(anunt.campuri.numar_parcele)
     }
     // valorile așteptate ale helper-ului, independent (din fixture): dată RO, lipsă → ''
     expect(campuriSesiuniUat(cazuri[1])).toEqual({ zi1: '10.12.2026', program1: '09:00 – 16:00', sate_zi1: 'Satul A, tarlalele 1–5', zi2: '', program2: '', sate_zi2: '', zi3: '', program3: '', sate_zi3: '' })

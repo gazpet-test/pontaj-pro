@@ -834,16 +834,23 @@ export async function reincarcaConvocator(supabase, { convocareId, blob, hash, p
 // Final_v2 (03.11.2026) scosese antetul firmei; din 04.11 (excepția (9), DE CONFIRMAT, claude#026 întrebarea 1) antetul e
 // repus din convocator, deci contract_nr / contract_data / proiect_denumire sunt din nou în șablon (43 de chei).
 // verificaDateAdresaUat cere contractul (obligatoriu pe proiect).
+// Din 19.11.2026 (decizia Răzvan, excepția (12) din SABLOANE.md §1): Anexa 2 a adresei NU mai e convocarea scurtă + lista parcelelor,
+// ci trimiterea la anunțul de afișare (genereazaAnuntAfisare, mai jos) — o singură definiție a textului public; lista parcelelor
+// publică stă DOAR în anunț. Din parcele, adresa ia doar NUMĂRUL lor (PV-ul de afișare din Anexa 3): 36 de chei, fără `rand.*`
+// și fără `program_text` (era doar în convocarea scurtă).
 export const CHEI_ADRESA_UAT = [
   'contract_nr', 'contract_data', 'proiect_denumire', 'uat', 'judet', 'nr_document', 'data',
   'imputernicire_nr', 'imputernicire_data', 'zi1', 'zi2', 'zi3', 'program1', 'program2', 'program3',
   'sate_zi1', 'sate_zi2', 'sate_zi3', 'afisare_data_start', 'afisare_data_end', 'afisare_pv_nr',
   'termen_confirmare', 'contact_nume', 'contact_telefon', 'contact_email', 'reprezentant_tgz',
-  'reprezentant_tgz_telefon', 'reprezentant_gazpet', 'zile_sesiune_text', 'program_text',
-  'rand.nr', 'rand.sat', 'rand.tarla', 'rand.nr_cadastral', 'rand.poz_hg', 'rand.tronson',
+  'reprezentant_tgz_telefon', 'reprezentant_gazpet', 'zile_sesiune_text',
   'reprezentant_uat_nume', 'reprezentant_uat_functie', 'reprezentant_gazpet_nume', 'afisare_ora',
   'numar_parcele', 'semnatar_uat', 'semnatar_gazpet',
 ]
+/** Coloanele citite din red_v_parcele pentru adresa UAT: doar ce trebuie numărării (parcelele active), nicio valoare de parcelă. */
+export const COL_PARCELA_ADRESA = 'id_parcela, sters_la'
+/** Indiciul din 🏛️ UAT-uri (sub butoane și după salvarea adresei): Anexa 2 a adresei = anunțul de afișare, generat separat. */
+export const INDICIU_ANEXA2_ANUNT = 'Anexa 2 a adresei este anunțul de afișare: generează-l cu butonul „Anunț de afișare (DOCX)” și trimite-l împreună cu adresa.'
 
 export function verificaDateAdresaUat({ proiect = {}, uat = {}, nrDocument } = {}) {
   const lipsuri = []
@@ -887,8 +894,9 @@ export function zileSesiuneText(uat) {
 export async function genereazaAdresaUat({ proiect = {}, uat = {}, parcele = [], nrDocument, templateArrayBuffer, strict = true, dataDocument = aziBucuresti() }) {
   const lipsuri = verificaDateAdresaUat({ proiect, uat, nrDocument })
   if (strict && lipsuri.length) throw new Error(lipsuri.join('; '))
-  const active = parcele.filter(p => p.sters_la == null).slice().sort((a, b) => a.id_parcela.localeCompare(b.id_parcela))
-  const campuri = Object.fromEntries(CHEI_ADRESA_UAT.filter(k => !k.startsWith('rand.')).map(k => [k, '']))
+  // doar numărul parcelelor active ajunge în adresă (Anexa 3); identificatorii lor (sat, tarla, nr. cadastral …) sunt DOAR în anunț
+  const numarActive = parcele.filter(p => p.sters_la == null).length
+  const campuri = Object.fromEntries(CHEI_ADRESA_UAT.map(k => [k, '']))
   Object.assign(campuri, campuriContractProiect(proiect), campuriSesiuniUat(uat), campuriContactGazpet(proiect), {
     uat: uat.nume ?? '', judet: uat.judet ?? '', nr_document: nrDocument ?? '', data: formatDataRo(dataDocument),
     afisare_data_start: formatDataRo(uat.afisare_data_start), afisare_data_end: formatDataRo(uat.afisare_data_end), afisare_pv_nr: uat.afisare_pv_nr ?? '',
@@ -897,20 +905,10 @@ export async function genereazaAdresaUat({ proiect = {}, uat = {}, parcele = [],
     reprezentant_gazpet_nume: proiect.reprezentant_gazpet_nume ?? '', reprezentant_tgz: proiect.reprezentant_tgz_nume ?? '',
     reprezentant_tgz_telefon: proiect.reprezentant_tgz_telefon ?? '', reprezentant_uat_nume: uat.reprezentant_uat_nume ?? '',
     reprezentant_uat_functie: uat.reprezentant_uat_functie ?? '', semnatar_uat: uat.reprezentant_uat_nume ?? '', semnatar_gazpet: proiect.reprezentant_gazpet_nume ?? '',
-    numar_parcele: active.length, zile_sesiune_text: zileSesiuneText(uat),
+    numar_parcele: numarActive, zile_sesiune_text: zileSesiuneText(uat),
   })
-  const sesiuni = [1, 2, 3].filter(i => uat[`sesiune_zi${i}`])
-  const prima = sesiuni[0]
-  campuri.program_text = prima ? uat[`program_zi${prima}`] ?? '' : ''
-  for (const i of [1, 2, 3]) {
-    if (i !== prima && sesiuni.includes(i) && uat[`program_zi${i}`] && uat[`program_zi${i}`] !== uat[`program_zi${prima}`]) {
-      // Programul poate avea o descriere liberă; nu inventăm o oră dacă nu este un interval.
-      const final = /^[ \t]*\d{2}:\d{2}[ \t]*(?:–|—|-)[ \t]*(\d{2}:\d{2})[ \t]*$/.exec(uat[`program_zi${i}`])?.[1]   // Gemini f2b r1 P3: doar un interval simplu
-      campuri.program_text += final ? `, ziua ${i} până la ${final}` : `, ziua ${i}: ${uat[`program_zi${i}`]}`
-    }
-  }
-  const rand = active.map((p, index) => ({ nr: index + 1, sat: p.sat ?? '', tarla: p.tarla ?? '', nr_cadastral: p.nr_cadastral ?? '', poz_hg: p.poz_hg ?? '', tronson: p.tronson ?? '' }))
-  const blob = await completeazaDocx(templateArrayBuffer, campuri, { randuri: { rand }, strict })
+  // fără `randuri`: șablonul nu mai are rând-șablon de parcele (un `{{rand.*}}` reapărut ar fi refuzat de `strict`)
+  const blob = await completeazaDocx(templateArrayBuffer, campuri, { strict })
   return { blob, hash: await hashBlob(blob), campuri }
 }
 

@@ -143,7 +143,7 @@ export function ghidModele({ proiect = {}, uats = [], smsPanou = null, smsPanouE
     stare: starePvC, nota: 'Aceeași verificare ca butonul din Tronsoane, pe parcelele fiecărui tronson.' })
 
   const lAu = [...fara, ...lipsuriProiectSiUat(uats, u => verificaDateAdresaUat({ proiect, uat: u, nrDocument: u?.adresa_nr || 'AU-martor' }))]
-  out.push({ cod: 'adresa_uat', model: 'Adresa către Primărie (Model 4, AU-nnnn)', ce: 'Înștiințarea Primăriei: afișarea, zilele și sala sesiunii, reprezentantul UAT; anexele cu parcelele.',
+  out.push({ cod: 'adresa_uat', model: 'Adresa către Primărie (Model 4, AU-nnnn)', ce: 'Înștiințarea Primăriei: afișarea, zilele și sala sesiunii, reprezentantul UAT; Anexa 2 este anunțul de afișare (cu lista parcelelor), generat separat, Anexa 3 PV-ul de afișare.',
     cui: 'Primăria fiecărui UAT', canal: 'Registratură / poștă / e-mail (rândul C1 din Corespondență)', unde: '🏛️ UAT-uri → editare UAT → Generează adresa',
     lipsuri: lAu, stare: stare(lAu), nota: '' })
 
