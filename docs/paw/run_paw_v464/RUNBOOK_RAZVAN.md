@@ -96,7 +96,7 @@ if ($manifest.'gemini_pw.py' -ine $GemHashNou) { throw 'gemini_pw.py din pachet 
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel din v4.6.3' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 408 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 411 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -106,13 +106,13 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + '.v463') -Force }
 ```
 
-Asteptat (pachetul FARA intrari de calibrare): 408 linii diferite (11 vechi `<=`, 397 noi `=>`).
+Asteptat (pachetul FARA intrari de calibrare): 411 linii diferite (11 vechi `<=`, 400 noi `=>`).
 Cele 11 linii vechi afisate sunt: antetul, lista de coduri, linia `import`, comentariul selectorilor
 `ATAS`, titlul partii cu browserul, cele doua linii din vechea `_atasamente`, linia `atasamente in
 ciorna` din `stare` si cele trei linii ale vechii verificari din `trimite`. Liniile noi: notele
 v4.6.4 / r2, selectorul `CHIP`, analiza HTML a ciornei, verificarea pozitiva a structurii, paza si
 apelurile ei. Testele: `Ran 79 tests ... OK`. Dupa calibrarea de la pasul 0 numerele se schimba:
-le da raportul de review al commit-ului calibrat (cifrele din raport inlocuiesc 408 / 11 de mai sus).
+le da raportul de review al commit-ului calibrat (cifrele din raport inlocuiesc 411 / 11 de mai sus).
 
 Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
 `C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi

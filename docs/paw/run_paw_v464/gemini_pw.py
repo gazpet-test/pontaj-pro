@@ -258,10 +258,13 @@ def _sub(n, stramos):
 
 # --- r2: verificarea POZITIVA a structurii ciornei (tot ce nu e recunoscut = ciorna_necunoscuta) ---
 
+_LATIME_ZERO = "".join(map(chr, (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF)))     # aceleasi ca in normalizeaza()
+
+
 def _ascii(s):
-    # comparare / afisare: fara diacritice (NFKD), ASCII, litere mici, spatii albe comprimate
+    # comparare / afisare: fara diacritice (NFKD) si caractere de latime zero, ASCII, litere mici, spatii albe comprimate
     t = unicodedata.normalize("NFKD", s or "")
-    t = "".join(c for c in t if not unicodedata.combining(c))
+    t = "".join(c for c in t if not unicodedata.combining(c) and c not in _LATIME_ZERO)
     return " ".join(t.encode("ascii", "replace").decode("ascii").lower().split())
 
 
