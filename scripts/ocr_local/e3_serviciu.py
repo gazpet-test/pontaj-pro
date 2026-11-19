@@ -17,7 +17,7 @@ from .e3_aliniere import compara, aplica_arbitraj
 from .e3_pdf import valideaza_pdf, randeaza, cod_pdf
 from .e3_perspectiva import perspectiva
 from .e3_read import Reader, citeste_orientat
-from .e3_gpu import mutex, GpuLock, Coordinator, WslModels, GpuLaCerere, Pauza
+from .e3_gpu import mutex, GpuLock, Coordinator, WslModels, GpuLaCerere, Pauza, cod_exceptie
 from .gpu_cedare import CerereGpu
 
 ROOT = pathlib.Path('C:/ProgramData/Gazpet/e3_ocr')
@@ -42,11 +42,7 @@ class NeincarcatLaTimp(E3Error):
         super().__init__('model_indisponibil')
 
 
-def cod_jurnal(exc):
-    """Cauza locală pentru jurnal (nu pleacă la edge): codul E3Error, altfel numele tipului."""
-    if isinstance(exc, E3Error):
-        return str(exc.cod)[:40]
-    return type(exc).__name__[:40]
+cod_jurnal = cod_exceptie  # cauza locală pentru jurnal (nu pleacă la edge); o singură definiție, în e3_gpu
 
 
 def cod_eroare(exc):

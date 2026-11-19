@@ -160,7 +160,8 @@ textul neschimbat (0 eliminări, 0 cifre/semne pierdute). Cele 4 benzi cu base64
 - **Greutățile**: la `citeste`, SHA-256 al `model.safetensors` se compară cu `protocol.json`; diferit → refuz (LightOn `cbe12d08…`,
   MinerU `f2650d91…`, calea existentă din folderul Codex — fără copie).
 - **GPU**: `C:/Users/Public/paw-data/gpu.lock` creat exclusiv la începutul citirii (cu `run_id`), șters la final doar dacă e tot al rulării.
-  Lock-ul altcuiva → refuz.
+  Lock-ul altcuiva → refuz. **E3 are prioritate** (19.11.2026): înainte de fiecare bandă, o cerere E3 activă (`gpu.cerere`, vezi
+  „GPU la cerere” mai jos) oprește citirea cu starea `cedat_e3` și eliberează lacătul; `citeste` din nou reia de la banda următoare.
 - **Reluare**: banda cu `result.json` se sare; banda începută și neterminată (`request_started.json` fără rezultat) oprește rularea
   (`interrupted_needs_review`) — nu se reîncearcă automat. Termenul, o eroare de transport sau un rezultat neconfirmat opresc cititorul
   (`stopped_no_retry`, `gpu.lock` păstrat). **O bandă oprită de gardă oprește DOAR banda** (decizie Răzvan 14.10.2026): după ce
@@ -351,6 +352,58 @@ laboratorului nu se modifică (reluare după 5 minute). Lacătul OS `instanta.lo
 exclude două servicii E3 simultane. La 22:00 / restart la 22:05 se opresc modelele,
 se verifică absența proceselor și VRAM < bază + 1024 MB, apoi se eliberează GPU.
 Un refuz / control WSL neconfirmat păstrează lacătul și starea `eroare`.
+O reconciliere căzută se reia după min(60 * 2^k, 3600) s (nu la fiecare secundă, cum
+se întâmpla la pornire și la schimbarea zi / noapte), cu o linie în jurnal doar la
+schimbarea treptei, cu cauza reală (ex. `vllm_control`), și `intretinere_reluata` la revenire.
+
+## GPU la cerere (decizia Răzvan 19.11.2026, `gpu_mod`)
+
+Config: `"gpu_mod": "la_cerere"` (implicit) sau `"zi"` (comportamentul de mai sus,
+modele pornite 06–22 — revenirea fără reinstalare); `"inactiv_minute"`: 1..120,
+implicit 10. Orice altă valoare oprește serviciul la pornire (`config_gpu`).
+
+În modul `la_cerere` (`e3_gpu.GpuLaCerere`, pasul îl face doar firul de întreținere):
+- **rece**: coada goală = fără modele și fără `gpu.lock`; nici un apel WSL. Ziua,
+  edge-ul vede `disponibil` (admiterea rămâne deschisă: lucrarea trezește modelele).
+- **lucrare nouă**: `preia` → încălzirea pornește imediat, în paralel cu descărcarea
+  și randarea PDF-ului. Lacăt liber → E3 îl ia și pornește modelele (`incalzire`).
+  Lacăt ținut de altcineva → E3 scrie `gpu.cerere` (protocolul din `gpu_cedare.py`)
+  și celălalt proces cedează după pagina curentă; lacătul altuia nu se atinge.
+  Memorie ocupată fără lacăt (ex. un model Ollama) → vLLM nu se pornește peste ea.
+- **cald**: modelele gata; jurnalul notează `incarcat` cu durata încărcării (secunde).
+  După `inactiv_minute` fără lucrări: oprire, dovada opririi (fără procese, VRAM sub
+  nivelul de dinainte + 1 GB), `servicii.json` golit, lacăt eliberat (`descarcat`).
+- **termenul**: dacă modelele nu sunt gata cu `REZERVA_CITIRE_S` (45 s) înainte de
+  `termen_local` (BD: 90 s de la upload), lucrarea merge pe fallback cu
+  `model_indisponibil` („Serverul local nu e pregătit”), FĂRĂ invalidare: încălzirea
+  continuă pentru lucrarea următoare. Dacă lacătul altuia n-a fost cedat, E3 anunță
+  `ocupat` 5 minute (UI merge direct pe fallback, fără așteptare).
+- **gardă / intern / model / termen în citire**: modelele se descarcă (repornirea =
+  încărcarea curată la lucrarea următoare). Citirea în sine e neschimbată.
+- **eșecuri** (pornire care pică, modele care nu devin gata în 300 s, descărcare
+  neconfirmată, WSL căzut): fereastră `eroare` min(60 * 2^k, 3600) s, cel mult ~24 de
+  încercări pe zi, o linie `gpu_pauza` pe treaptă; după o pornire picată lacătul se
+  eliberează imediat (dacă oprirea se dovedește), nu după pauză.
+- **noaptea**: modelele (dacă sunt calde) se descarcă la 22:00; noaptea E3 nu mai ia
+  lacătul deloc (înainte îl lua și elibera la fiecare minut pentru verificare).
+- **pornirea serviciului**: modele E3 rămase după o cădere / lacăt E3 vechi →
+  oprite, lacăt eliberat. Lacătul laboratorului nu se atinge.
+
+### Protocolul `gpu.cerere` (pentru ORICE proces care folosește GPU-ul)
+Fișierele stau lângă `gpu.lock` (`protocol.json` → `gpu_lock`). `gpu.cerere` îl scrie
+doar E3, cât așteaptă lacătul, reîmprospătat la ≤ 10 s; e valabil 60 s de la ultima
+reîmprospătare (E3 căzut = nu blochează pe nimeni). Regula pentru ceilalți:
+1. înainte de fiecare pagină / bandă / document: `gpu_cedare.cerere_activa(cale_lock)`;
+2. True → nu începi pagina următoare; eliberezi memoria plăcii (oprești serverul /
+   descarci modelul; Ollama: `keep_alive: 0`), ștergi `gpu.lock` (doar al tău), ieși
+   sau aștepți;
+3. reiei când `cerere_activa` e False ȘI `gpu.lock` e liber.
+`read.run_reader` (citirea Ofertare, `lock=True`) face pasul 1–2 între benzi: ieșire
+cu starea `cedat_e3`, lacăt eliberat; `erp citeste` din nou reia de la banda
+următoare (cele gata se sar). Serverul vLLM al laboratorului îl oprește cine l-a
+pornit; dacă rămâne pe aceleași căi de model, E3 îl oprește la preluare (ca până acum
+pentru orice `vllm serve` neadoptat de pe căile lui). Citirile E3 (`lock=False`) nu
+verifică cererea.
 
 Ambele cititoare primesc cadrul întreg, în paralel. Adaptorul apelează
 `read.run_reader(..., lock=False)` în procese separate, cu garda v5 și termen

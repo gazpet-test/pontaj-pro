@@ -254,7 +254,7 @@ migrările 20261029b / c / e, 20261030d, 20261031c. Detaliile de proiectare:
 | Cererea rulării (`fn_ofertare_ocr_cerere`: licitație, documente cu `pagini_necitite`, plafon ≤ 15 USD) | om din ERP (poarta pe cheltuială) | BD | — |
 | `erp preia / descarca / foaie / plan` | client, server AI | CPU, Storage (egress plafonat) | 0 |
 | Confirmarea orientării paginilor | **om** (foaia de contact) | — | — |
-| Pornirea vLLM (LightOn, apoi MinerU, un singur proces pe GPU, `gpu.lock`) | om / laborator, noaptea | GPU | 0 |
+| Pornirea vLLM (LightOn, apoi MinerU, un singur proces pe GPU, `gpu.lock`) | om / laborator, noaptea (din 19.11 și ziua, cât E3 nu cere GPU-ul: cererea E3 `gpu.cerere` oprește citirea după banda curentă, stare `cedat_e3`, reluabilă) | GPU | 0 |
 | `erp citeste`, `incarca-citiri`, `compara` | client | GPU / CPU / BD | 0 |
 | `erp arbitreaza` | client, cu „da” Razvan pe sumă | edge + Anthropic API | plătit, plafonat în BD |
 | Reluarea unei rulări oprite pe prag (`fn_ofertare_ocr_reia`, max 3) | chat, prin psql, cu „da” Razvan | BD | — |
@@ -354,6 +354,8 @@ lipite se despart doar cu context de deviz: nr. cu zerouri sau o celulă UM / �
 | Apel cu rezultat necunoscut | item → needs_human, socotit la prag | automat la reluare |
 | Migrare | — | `supabase/revenire/*_ROLLBACK.sql`, armată pe tranzacție |
 | Worker E3 (Izometrie): internet / edge căzut | `preia` eșuat → pauză min(2^k, 300) s + jitter; în jurnal doar treptele (`pauza`, `reluat`) | automat la primul `preia` reușit |
+| Worker E3: pornirea modelelor / WSL / descărcarea pică (GPU la cerere) | fereastră `eroare` min(60 * 2^k, 3600) s (≤ ~24 încercări / zi), lacăt eliberat dacă oprirea se dovedește; jurnal `gpu_pauza` doar pe treaptă | automat; revenire la vechiul program: `gpu_mod: zi` în config |
+| Citire Ofertare oprită de o cerere E3 | `read_<cititor>.json` = `cedat_e3`, `gpu.lock` eliberat | `erp citeste` din nou (benzile gata se sar) |
 | Worker E3: eșec pe o cerere | cod real la `rezultat`: `retea`, `model_indisponibil`, `timeout`, `pdf_corupt`, `oprit` (`intern` = defect) → UI pornește un singur fallback, cu cauza spusă simplu | `rezultat` livrat o singură dată (nu e idempotent pe token); nelivratul rămâne în jurnal (`nelivrat`) |
 
 ### 2.12 Banca fără om (`banca.py`, unealtă de laborator — nu scrie în BD, nu cheltuie)
@@ -423,3 +425,4 @@ cu textul (layout pe 2 coloane) sunt ambigue — marcate manual în `banca\v2\ex
 | 01.11.2026 | #908 | Poarta unică pe cheltuială (`fn_ofertare_poate_cheltui`, 20261124a): responsabil 1 / 2 numit de owner / admin Ofertare, nu autoatribuit; ingest-doc, document-nou-citeste, plansa-citeste, cantitati-extrage și celelalte edge-uri ofertare-* cu cost o folosesc prin `_shared/poartaCheltuiala.ts` |
 | 01.11.2026 | #908 r2 | 1A: excepția admin din `ofertare-cantitati-extrage` (modul structurat, `poarta_admin.ts`) scoasă · 2A: dovada numirii în `responsabil*_numitor_autorizat` · 3A: `ofertare_coada_porneste` / `ofertare_coada_opreste`, scrierea directă în cozi revocată, `ofertare-cerinte` fără calea anon · 4A: rezumatul din text prin poartă |
 | 09.11.2026 | #1041 + E9 worker | Izometrie E3: coduri reale de eroare locală (`retea`, `model_indisponibil`, `timeout`, `pdf_corupt`, `oprit`; `intern` numai pentru defecte) în edge (`ERORI_LOCALE`, superset) și în worker (`e3_client` / `e3_pdf` / `e3_read` / `e3_serviciu`); backoff la `preia` min(2^k, 300) s + jitter, resetat la succes, jurnal doar la schimbarea treptei; `rezultat` rămâne o singură livrare. Modelele se repornesc doar la gardă / model / intern / termen în citire. Worker-ul se instalează DUPĂ deploy-ul edge-ului |
+| 19.11.2026 | (acest PR, `infra/ocr-gpu-la-cerere`) | GPU la cerere (decizia Răzvan): E3 ține `gpu.lock` doar cât are lucrări (+10 min), modelele se descarcă la inactivitate; prioritate prin `gpu.cerere` (`gpu_cedare.py`), `read.run_reader` cedează între benzi (`cedat_e3`). Pauze cu plafon min(60 * 2^k, 3600) s la pornire / reconciliere / descărcare picate (înainte: reîncercare la fiecare secundă la pornire și la schimbarea zi-noapte). `gpu_mod: zi` = vechiul program. Fără schimbări în citire, edge sau BD |

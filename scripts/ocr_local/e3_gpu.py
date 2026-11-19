@@ -299,10 +299,10 @@ class Coordinator:
         save(self.path, state)
         return 'disponibil' if ready else 'pornire'
 
-    def descarca(self, vram_inainte=None):
-        """La cerere: oprește modelele E3 și eliberează lacătul DOAR după dovada opririi (fără procese; dacă au rulat,
-        VRAM sub max(bază, nivelul de dinainte de încărcare) + 1024 MB). False = lacătul rămâne, se reîncearcă;
-        None = lacătul nu (mai) e al E3: modelele nu se ating (sunt sub lacătul altcuiva)."""
+    def descarca(self, vram_inainte=None, verifica_memoria=False):
+        """La cerere: oprește modelele E3 și eliberează lacătul DOAR după dovada opririi (fără procese; dacă au rulat
+        sau au fost pornite în acest mandat, VRAM sub max(bază, nivelul de dinainte de încărcare) + 1024 MB).
+        False = lacătul rămâne, se reîncearcă; None = lacătul nu (mai) e al E3: nu se atinge nimic."""
         if not self.lock.claim():
             return None
         running = self.models.processes()
@@ -311,13 +311,20 @@ class Coordinator:
                 self.models.stop(name, pids)
         if any(self.models.processes().values()):
             return False
-        if any(running.values()):
+        if verifica_memoria or any(running.values()):
             prag = max(self.models.baseline, vram_inainte if isinstance(vram_inainte, (int, float)) else 0) + 1024
             if self.models.memory_mb() >= prag:
                 return False
         save(self.path, {})
         self.lock.release()
         return True
+
+
+def cod_exceptie(exc):
+    """Cauza locală pentru jurnal (nu pleacă la edge): codul E3Error, altfel numele tipului."""
+    if isinstance(exc, E3Error):
+        return str(exc.cod)[:40]
+    return type(exc).__name__[:40]
 
 
 class Pauza:
@@ -427,7 +434,9 @@ class GpuLaCerere:
             self.jurnal(None, 'gpu_pauza', cod, treapta)
 
     def _descarca(self, motiv):
-        ok = self.c.descarca(self.vram_inainte)
+        # vram_inainte e setat cât timp modelele au fost pornite de noi: o reîncercare verifică din nou memoria,
+        # chiar dacă procesele au dispărut deja la încercarea anterioară.
+        ok = self.c.descarca(self.vram_inainte, verifica_memoria=self.vram_inainte is not None)
         if ok is None:
             # Lacătul nu mai e al E3 (șters de mână / preluat): nu oprim nimic sub lacătul altcuiva.
             self.tine_lacatul, self.vram_inainte, self.de_descarcat = False, None, False
@@ -515,7 +524,12 @@ class GpuLaCerere:
             if self.ultima_verificare is not None and now - self.ultima_verificare < self.INCALZIRE_POLL_S:
                 return
             self.ultima_verificare = now
-            state = self.c.reconcile(False)
+            try:
+                state = self.c.reconcile(False)
+            except Exception as exc:
+                # Pornirea a picat (WSL, vLLM): lacătul se eliberează acum, dacă oprirea se dovedește, nu după pauză.
+                self._esec_pornire(cod_exceptie(exc))
+                return
             if state == 'disponibil':
                 with self.cv:
                     self.ultima = now
@@ -525,10 +539,14 @@ class GpuLaCerere:
                 self.jurnal(None, 'incarcat', None, round(now - self.pornit_la, 1))
             elif state != 'pornire' or now - self.pornit_la >= self.pornire_max_s:
                 # Modelele nu devin gata în plafon (sau lacătul a dispărut): descărcare + pauză, nu reporniri la nesfârșit.
-                if self._descarca('pornire_esuata'):
-                    self.esec('pornire_esuata' if state == 'pornire' else 'pornire_' + str(state))
-                else:
-                    self.esec('descarcare_neconfirmata')
+                self._esec_pornire('pornire_esuata' if state == 'pornire' else 'pornire_' + str(state))
+
+    def _esec_pornire(self, cod):
+        try:
+            ok = self._descarca('pornire_esuata')
+        except Exception:
+            ok = False
+        self.esec(cod if ok else 'descarcare_neconfirmata')
 
     def opreste_tot(self):
         """La oprirea serviciului: cererea retrasă, modelele descărcate. True = oprire dovedită."""
