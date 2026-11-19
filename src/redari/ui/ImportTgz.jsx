@@ -8,6 +8,8 @@ import { parseazaAnexa7 } from '../importAnexa7.js'
 import { numarRanduriDeVerificat, TITLU_DE_VERIFICAT, indexDeVerificat, mascheazaRand } from '../importVerificareFixa.js'
 import { G, S, fmtNum, msgEroare, Camp, Gol } from './comune.jsx'
 import ImportUtilizatori from './ImportUtilizatori.jsx'   // PR4b: importul utilizatorilor / arendașilor, în aceeași zonă de import (același drept)
+import VerificareAiImport from './VerificareAiImport.jsx'   // pasul 2 (19.11.2026): a doua opinie AI, doar cu dreptul pe proiect (hook-urile lui sunt în componenta lui)
+import { adaugaSemnaleAi } from '../importVerificareAi.js'
 
 const TRONSOANE = Array.from({ length: 11 }, (_, i) => i + 1)
 const MAX_PREVIEW = 50
@@ -30,7 +32,7 @@ const EXPLICATII = {
   identitate_stearsa: 'Identitatea (HG / cadastru) există doar pe o parcelă ștearsă logic: importul nu o reactivează și nu creează alta peste ea. Reactivarea sau re-crearea parcelei se decide manual.',
   nr_crt_incompatibil: 'Identitatea (HG / cadastru) există deja în BD pe o parcelă cu alt grup Nr.Crt.: de ex. „166.1/1” sau „7.2” peste o parcelă importată ca „166” / „7” (regula veche citea „7.2” ca 7/2), ori „166” peste o parcelă „166.1”. NU s-a importat și NU s-a refolosit — verificați cu TGZ care e parcela corectă.',
   fara_cheie: 'Rânduri la care lipsesc ȘI poziția HG, ȘI un nr. cadastral real (un cadastru doar cu „#”, ex. „##”, e gol; tarla singură nu ajunge): nu au o identitate stabilă în Excel, iar un reimport le-ar dubla. NU se importă — necesită completarea poziției HG / nr. cadastral în Excel și reimport.',
-  de_verificat: 'Verificare fixă, fără AI: în poz. HG, nr. cadastral sau tarla apare numele ori adresa unui deținător al aceleiași parcele, un telefon / CNP sau un e-mail / o adresă web — semn că o coloană din Excel poate fi decalată. Lista NU arată valoarea (poate fi chiar data personală): deschideți Excel-ul la rândul indicat. În celelalte taburi, în raportul de după import și în CSV-uri (și în cele din istoric) câmpul semnalat apare „[ascuns: de verificat]”; valoarea se importă totuși în parcelă, așa cum e în Excel. Nu se verifică rândurile din tab-ul „Erori” (respinse înainte, nu intră în import), iar un telefon scris cu „#”, „,”, „+” sau „;” în mijloc nu e prins. Rândurile NU sunt oprite: importul rămâne posibil după ce bifați că le-ați verificat.',
+  de_verificat: 'Verificare fixă, fără AI: în poz. HG, nr. cadastral sau tarla apare numele ori adresa unui deținător al aceleiași parcele, un telefon / CNP sau un e-mail / o adresă web — semn că o coloană din Excel poate fi decalată. Dacă s-a pornit și „Verificare AI (a doua opinie)”, semnalele ei apar aici cu sursa „AI” (aceleași reguli: valoarea ascunsă, bifa obligatorie). Lista NU arată valoarea (poate fi chiar data personală): deschideți Excel-ul la rândul indicat. În celelalte taburi, în raportul de după import și în CSV-uri (și în cele din istoric) câmpul semnalat apare „[ascuns: de verificat]”; valoarea se importă totuși în parcelă, așa cum e în Excel. Nu se verifică rândurile din tab-ul „Erori” (respinse înainte, nu intră în import), iar un telefon scris cu „#”, „,”, „+” sau „;” în mijloc nu e prins. Rândurile NU sunt oprite: importul rămâne posibil după ce bifați că le-ați verificat.',
   ambigue: 'Rânduri cu aceeași identitate (poziție HG / nr. cadastral) pe Nr.Crt. DIFERITE, sau cu identități CONTRADICTORII sub același Nr.Crt.: nu se poate ști care e parcela (vezi coloanele „motiv” și „detaliu” din acest tab). NU se importă — se lămuresc cu TGZ (poziție HG / nr. cadastral corectate în Excel) și se reimportă.',
 }
 // CSV-ul „rânduri de tratat” (fără nume) — același pentru un preview și pentru `diferente` dintr-un lot finalizat
@@ -260,8 +262,11 @@ export default function ImportTgz({ proiect, uats, nivel, profile = null, show, 
             {EXPLICATII[subTab] && <div style={{ ...S.card, borderColor: subTab === 'ambigue' ? G.red : G.orange, fontSize:12.5, color:G.text, marginBottom:8 }}>⚠ {EXPLICATII[subTab]}</div>}
             {/* de_verificat: doar rândul, UAT, Nr.Crt., câmpul și motivul — FĂRĂ valoare (lista albă a coloanelor, nu tot obiectul);
                 celelalte taburi: câmpul semnalat al parcelei semnalate e ascuns (mascheazaRand), restul valorilor rămân vizibile */}
-            <TabelPreview randuri={subTab === 'de_verificat' ? (preview.de_verificat || []).map(v => ({ rand: v.rand, uat: v.uat, nr_crt: v.nr_crt, camp: v.camp, motiv: v.motiv })) : (Array.isArray(preview[subTab]) ? preview[subTab].map(r => mascheazaRand(r, idxVerificare)) : [])} gol="Nimic în această categorie." />
+            <TabelPreview randuri={subTab === 'de_verificat' ? (preview.de_verificat || []).map(v => ({ rand: v.rand, uat: v.uat, nr_crt: v.nr_crt, camp: v.camp, sursa: v.sursa === 'ai' ? 'AI' : 'fixă', motiv: v.motiv })) :(Array.isArray(preview[subTab]) ? preview[subTab].map(r => mascheazaRand(r, idxVerificare)) : [])} gol="Nimic în această categorie." />
           </>)}
+          {/* pasul 2: a doua opinie AI — apare doar cu dreptul pe proiect; rezultatul → o previzualizare NOUĂ (bifa se cere din nou) */}
+          {sursa === 'TGZ' && previewAlProiectului && <VerificareAiImport proiect={proiect} preview={preview} fisier={fisier} fisierNume={fisier?.name || null} show={show}
+            onSemnale={(pv, intrari, rez) => setPreview(p => (p === pv ? adaugaSemnaleAi(p, intrari, rez) : p))} />}
 
           <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:12, alignItems:'center' }}>
             {progres && <span style={{ fontSize:12.5, color:G.muted }}>{progres.etapa ? progres.etapa + ' · ' : ''}{progres.facut} / {progres.total}</span>}

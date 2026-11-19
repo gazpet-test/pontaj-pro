@@ -216,14 +216,14 @@ describe('ImportTgz — bifa pentru rândurile de verificat', () => {
     expect(bifa(tree)).toBeUndefined()
     expect(buton(tree, '📥 Importă').props.disabled).toBe(false)
   })
-  it('tab-ul „De verificat” arată doar rândul, UAT, Nr.Crt., câmpul și motivul (lista albă, fără valoare)', () => {
+  it('tab-ul „De verificat” arată doar rândul, UAT, Nr.Crt., câmpul, sursa (fixă / AI, pasul 2) și motivul (lista albă, fără valoare)', () => {
     const { h, p } = pregateste(cuSemnal())
     h.render(ImportTgz, p)
     h.valori[9] = 'de_verificat'   // subTab
     // TabelPreview e o componentă internă (harness-ul nu o randează): se verifică rândurile primite
     const gaseste = n => !n || typeof n !== 'object' ? [] : Array.isArray(n) ? n.flatMap(gaseste) : [...(n.type?.name === 'TabelPreview' ? [n] : []), ...gaseste(n.props?.children)]
     const [tabel] = gaseste(h.render(ImportTgz, p))
-    expect(tabel.props.randuri).toEqual([{ rand: 4, uat: 'FIC', nr_crt: '1', camp: 'tarla', motiv: 'tarla / nr. topo: pare numele deținătorului' }])
+    expect(tabel.props.randuri).toEqual([{ rand: 4, uat: 'FIC', nr_crt: '1', camp: 'tarla', sursa: 'fixă', motiv: 'tarla / nr. topo: pare numele deținătorului' }])
   })
 })
 

@@ -200,7 +200,7 @@ function mapeazaColoane(chei, cStart) {
  */
 export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiune = null, sursa = 'TGZ' } = {}) {
   const erori = []
-  const gol = { parcele: [], detinatori: [], contacte: [], dubluri: [], neidentificati: [], fara_cheie: [], ambigue: [], cadastru_suspect: [], de_verificat: [], erori }
+  const gol = { parcele: [], detinatori: [], contacte: [], dubluri: [], neidentificati: [], fara_cheie: [], ambigue: [], cadastru_suspect: [], de_verificat: [], identificare: [], erori }
   const statistici = { randuri_total: 0, randuri_goale: 0, parcele: 0, parcele_fara_cheie: 0, parcele_ambigue: 0, detinatori: 0, contacte: 0, dubluri: 0, neidentificati: 0, fara_cheie: 0, ambigue: 0, judet_diferit: 0, erori: 0, cadastru_suspect: 0, de_verificat: 0, randuri_de_verificat: 0, randuri_de_tratat: 0, pe_uat: {} }
 
   let wb
@@ -436,7 +436,10 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
   // r5 (C-P2-04, L12): numitorul fișierului — fiecare rând de date e ori într-un grup de parcelă (inclusiv dublurile), ori o eroare pe rând
   const inParcele = parcele.reduce((n, p) => n + p.randuri.length, 0); const eroriRand = erori.filter(e => e.rand != null).length
   statistici.reconciliere_randuri = { randuri: statistici.randuri_total, in_parcele: inParcele, erori: eroriRand, ok: statistici.randuri_total === inParcele + eroriRand }
-  return { parcele, detinatori, contacte, dubluri, neidentificati, fara_cheie, ambigue, cadastru_suspect, de_verificat, erori, statistici, antet: { rand: antet.rand + 1, coloane: col } }
+  // 19.11.2026 (pasul 2): DOAR coloanele de identificare ale rândurilor grupurilor (fără nume / adresă / contact) — sursa cererii pentru a doua opinie AI
+  // (src/redari/importVerificareAi.js). Nu e un tab și nu intră în lot / BD.
+  const identificare = randuriVerificare.map(r => ({ rand: r.rand, uat: r.uat, nr_crt: r.nr_crt, cheie_parcela: r.cheie_parcela, poz_hg: r.poz_hg, nr_cadastral: r.nr_cadastral, tarla: r.tarla }))
+  return { parcele, detinatori, contacte, dubluri, neidentificati, fara_cheie, ambigue, cadastru_suspect, de_verificat, identificare, erori, statistici, antet: { rand: antet.rand + 1, coloane: col } }
 }
 
 function loturi(arr, n = LOT) {
