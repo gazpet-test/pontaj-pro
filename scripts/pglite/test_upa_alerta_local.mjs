@@ -297,7 +297,8 @@ async function verifica(db) {
   // fără plafon înregistrat: erorile de configurare
   r = await rezervaLa(db, '2020-05-25')
   const fp = (await db.query(`SELECT cheie FROM public.upa_alerta_jurnal WHERE zi = '2020-05-25' ORDER BY cheie`)).rows.map(x => x.cheie)
-  tine(r.n === 0 && JSON.stringify(fp) === '["eroare:2020-05-25:fara_plafon","eroare:2020-05-25:fara_plafon_luna_anterioara"]', `fără plafon: două erori, nicio închidere (${fp})`)
+  tine(r.n === 0 && JSON.stringify(fp) === '["eroare:2020-05-25:fara_plafon"]' && !r.inchis,
+    `fără plafon: o eroare (luna curentă); luna anterioară dinaintea primului plafon nu se închide și nu e eroare (${fp})`)
   // reconcilierea: o rezervare rămasă > 1 h devine „necunoscut” (fără retrimitere)
   const rv = await q1(db, `SELECT id FROM public.upa_alerta_jurnal WHERE stare = 'rezervat' ORDER BY id LIMIT 1`)
   await db.query(`UPDATE public.upa_alerta_jurnal SET creat_la = now() - interval '2 hours' WHERE id = $1`, [rv.id])

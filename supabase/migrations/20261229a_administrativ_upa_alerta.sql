@@ -379,7 +379,6 @@ BEGIN
     v_titlu := 'Alerta fondului de handicap nu a rulat (' || p_cod || ')';
     v_mesaj := CASE p_cod WHEN 'setare_zi_invalida' THEN 'Setarea upa_alerta_zi lipsește sau nu e o zi între 1 și 31.'
                           WHEN 'fara_plafon' THEN 'Plafonul lunii curente nu e înregistrat (Administrativ → Unități protejate → Plafon).'
-                          WHEN 'fara_plafon_luna_anterioara' THEN 'Plafonul lunii trecute nu e înregistrat: luna nu s-a putut închide.'
                           ELSE 'Eroare de configurare.' END;
   END IF;
   INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
@@ -431,10 +430,8 @@ BEGIN
   IF NOT v_activ THEN
     RETURN jsonb_build_object('activ', false, 'zi', p_azi, 'inchis', v_inchis, 'reconciliate', v_reconciliate, 'n', 0, 'randuri', '[]'::jsonb);
   END IF;
-  -- (4) erorile de configurare
-  IF NOT v_a.inchisa AND v_a.plafon IS NULL THEN
-    PERFORM public.fn_upa_alerta_inscrie('eroare', p_azi, v_a.luna, NULL, v_a.consumat, NULL, NULL, NULL, 'fara_plafon_luna_anterioara');
-  END IF;
+  -- (4) erorile de configurare. O lună anterioară FĂRĂ plafon nu e o eroare: fn_upa_plafon_la caută înapoi fără limită, deci NULL înseamnă că
+  --   luna e dinaintea primului plafon înregistrat (de ex. luna dinaintea aplicării) — nu se închide, iar ecranul o arată „plafon neînregistrat”.
   IF v_c.zi_prag IS NULL THEN
     PERFORM public.fn_upa_alerta_inscrie('eroare', p_azi, v_c.luna, NULL, v_c.consumat, NULL, NULL, NULL, 'setare_zi_invalida');
   ELSIF v_c.plafon IS NULL THEN
