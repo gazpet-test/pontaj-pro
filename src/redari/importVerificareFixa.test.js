@@ -6,11 +6,13 @@ import * as XLSX from 'xlsx-js-style'
 import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { parseazaTgz, scrieImport, randuriDeTratat, csvRanduriDeTratat, numarRanduriPuseDeoparte, CAMPURI_GRUP, citat, STARE_ELIGIBILA, RPC_REZERVA_NUMERE } from './importTgz.js'
+import { parseazaTgz, scrieImport, randuriDeTratat, csvRanduriDeTratat, numarRanduriPuseDeoparte, CAMPURI_GRUP, citat, STARE_ELIGIBILA, RPC_REZERVA_NUMERE, MOTIV_NRCRT_INCOMPATIBIL } from './importTgz.js'
 import {
   verificaColoaneDecalate, pareTelefonSauCnp, pareEmailSauUrl, contineNume, contineAdresa, numarRanduriDeVerificat, MOTIV_VERIFICARE as M,
   mascheazaRand, indexDeVerificat, semnalFaraValori, VALOARE_ASCUNSA as A, DETALIU_ASCUNS, ETICHETE_DETALIU, ETICHETA_IN_DETALIU, CAMPURI_VERIFICATE,
+  campClasat, CAMPURI_DETALIU, CAMPURI_FARA_VALORI_PARCELA,
 } from './importVerificareFixa.js'
+import { faraDiacritice } from './idParcela.js'
 import { canonizeazaIdentificator, MOTIV } from './identificatoriPublici.js'
 
 const ANTET = ['Nr.Crt.', 'Poz. HG', 'UAT', 'Județ', 'Nume Deținător', 'Adresa', 'Tarla/Nr. Topo', 'Nr. cadastral/Parcelă']
@@ -364,5 +366,183 @@ describe('mascheazaRand — o singură funcție, cazuri pozitive / negative', ()
   it('paritate: etichetele din detaliu = CAMPURI_GRUP din importTgz.js', () => {
     expect([...ETICHETE_DETALIU]).toEqual(CAMPURI_GRUP.map(([, e]) => e))
     for (const c of CAMPURI_VERIFICATE) expect(ETICHETA_IN_DETALIU[c]).toBe(CAMPURI_GRUP.find(([k]) => k === c)[1])
+  })
+  it('r3: `detaliu_ambiguitate` = același tratament ca `detaliu`; un câmp text necunoscut al unui obiect semnalat se ascunde întreg (L18)', () => {
+    const o = { cheie: 'X:1', detaliu_ambiguitate: 'HG: „1” / „2”; tarla: „POPESCU” / „T 1”; și identitate ambiguă', camp_nou: 'POPESCU', nume: 'POPESCU ION', observatii: 'Regim juridic: privat', rand: 4, ambigua: true }
+    expect(mascheazaRand(o, idx)).toEqual({ ...o, detaliu_ambiguitate: `HG: „1” / „2”; tarla: ${A}; și identitate ambiguă`, camp_nou: A })
+    // fără semnal pe obiect: nimic nu se atinge, nici câmpul necunoscut
+    expect(mascheazaRand({ ...o, cheie: 'X:2', rand: 5 }, idx)).toEqual({ ...o, cheie: 'X:2', rand: 5 })
+    expect(CAMPURI_DETALIU.filter(c => CAMPURI_FARA_VALORI_PARCELA.includes(c) || CAMPURI_VERIFICATE.includes(c))).toEqual([])
+  })
+})
+
+// ── r3 (Jakarinos #1140 r2 P1): parserul copiază valorile contradictorii ale unei parcele ambigue în `detaliu_ambiguitate`, pe care
+// tab-ul „Parcele” îl afișează (TabelPreview arată toate câmpurile scalare). Regresia pornește din PARSERUL REAL, cu Excel fictiv: două
+// rânduri ale aceleiași parcele, tarla = un e-mail / numele deținătorului vs o tarla normală. Date FICTIVE.
+const RANDURI_R3 = [
+  ['1/1', '201', 'Prunisor', 'Mehedinti', 'ANGHEL RADU', '', 'ana@example.ro', ''],                 // 2: e-mail în tarla
+  ['1/2', '', 'Prunisor', 'Mehedinti', 'ANGHEL MARIA', '', 'T 12', ''],                              // 3: tarla normală → contradicție
+  ['2/1', '202', 'Prunisor', 'Mehedinti', 'CONSTANTINESCU VLAD', '', 'CONSTANTINESCU VLAD', ''],     // 4: numele deținătorului în tarla
+  ['2/2', '', 'Prunisor', 'Mehedinti', 'BARBU ION', '', 'T 13', ''],                                 // 5
+  ['3/1', '204', 'Prunisor', 'Mehedinti', 'POPA LUCIAN', '', 'POPA LUCIAN', ''],                     // 6: HG ȘI tarla contradictorii
+  ['3/2', '205', 'Prunisor', 'Mehedinti', 'POPA ELENA', '', 'T 15', ''],                             // 7
+  [4, '206', 'Prunisor', 'Mehedinti', 'DOBRE GEO', '', 'T 16', ''],                                  // 8: control, fără semnal
+]
+const N = s => faraDiacritice(String(s ?? '')).toUpperCase()
+const EMAIL_R3 = ['ANA@EXAMPLE', 'EXAMPLE.RO']                // nu are voie să apară NICĂIERI
+const NUME_IN_TARLA = ['CONSTANTINESCU', 'LUCIAN']             // apar legitim DOAR în câmpurile de nume ale deținătorului
+const CAMPURI_NUME = new Set(['nume', 'nume_normalizat', 'cheie_detinator'])
+const TABURI = ['parcele', 'detinatori', 'contacte', 'dubluri', 'neidentificati', 'fara_cheie', 'ambigue', 'cadastru_suspect', 'erori']
+// ce arată un tab / tabel: aceeași transformare ca ImportTgz.jsx (lista.map(r => mascheazaRand(r, idx))); întoarce „tab.câmp” cu scurgeri
+const scurgeri = (liste, masc, idx) => {
+  const out = new Set()
+  for (const [tab, lista] of liste) for (const o0 of lista || []) {
+    if (!o0 || typeof o0 !== 'object') continue   // ex. diferente.existente = listă de id_parcela
+    const o = masc(o0, idx)
+    for (const [k, v] of Object.entries(o)) {
+      if (v == null || typeof v === 'object') continue
+      const t = N(v)
+      if (EMAIL_R3.some(e => t.includes(e))) out.add(`${tab}.${k}`)
+      const campNume = CAMPURI_NUME.has(k) || (tab === 'detinatori' && k === 'cheie')   // cheia deținătorului = parcela + numele
+      if (!campNume && NUME_IN_TARLA.some(n => t.includes(n))) out.add(`${tab}.${k}`)
+    }
+  }
+  return [...out].sort()
+}
+const tabelePreview = pv => TABURI.map(t => [t, pv[t]])
+const sensibileInText = text => [...EMAIL_R3, ...NUME_IN_TARLA].filter(v => N(text).includes(v))   // CSV-ul „fără nume”: nimic din ele
+
+describe('import TGZ r3 — parcela contradictorie: valoarea semnalată nu scapă prin `detaliu_ambiguitate` (parserul real)', () => {
+  const pv = parseazaTgz(excel(RANDURI_R3), OPT)
+  const idx = indexDeVerificat(pv.de_verificat)
+  it('premisa: semnalele, parcelele contradictorii și detaliul ambiguității (care conține valoarea) ies din parser', () => {
+    expect(pv.erori).toEqual([])
+    expect(pv.de_verificat.map(v => [v.rand, v.camp, v.motive])).toEqual([[2, 'tarla', [M.EMAIL_URL]], [4, 'tarla', [M.NUME]], [6, 'tarla', [M.NUME]]])
+    expect(pv.parcele.map(p => [p.cheie, p.ambigua, p.detaliu_ambiguitate ?? null])).toEqual([
+      ['PRU:1', true, 'tarla: „ANA@EXAMPLE.RO” / „T 12”'],
+      ['PRU:2', true, 'tarla: „CONSTANTINESCU VLAD” / „T 13”'],
+      ['PRU:3', true, 'HG: „204” / „205”; tarla: „POPA LUCIAN” / „T 15”'],
+      ['PRU:4', false, null],
+    ])
+    // fără mascare, valorile apar în parcele (tarla, cheia sursă, detaliul ambiguității) și în ambigue (cheia sursă, detaliul)
+    expect(scurgeri(tabelePreview(pv), o => o)).toEqual(['ambigue.cheie_sursa', 'ambigue.detaliu', 'parcele.cheie_sursa', 'parcele.detaliu_ambiguitate', 'parcele.tarla'])
+  })
+  it('fiecare tab al previzualizării: nicio valoare semnalată; în detaliul ambiguității doar segmentul câmpului semnalat e ascuns', () => {
+    expect(scurgeri(tabelePreview(pv), mascheazaRand, idx)).toEqual([])
+    const parc = pv.parcele.map(p => mascheazaRand(p, idx))
+    expect(parc.map(p => [p.cheie, p.poz_hg, p.tarla, p.detaliu_ambiguitate ?? null])).toEqual([
+      ['PRU:1', '201', A, `tarla: ${A}`],
+      ['PRU:2', '202', A, `tarla: ${A}`],
+      ['PRU:3', '204', A, `HG: „204” / „205”; tarla: ${A}`],   // HG nu e semnalat: segmentul lui rămâne
+      ['PRU:4', '206', 'T 16', null],                            // parcelă fără semnal: neschimbată
+    ])
+    expect(parc[3]).toBe(pv.parcele[3])
+    expect(pv.ambigue.map(a => mascheazaRand(a, idx)).map(a => [a.rand, a.detaliu])).toEqual([
+      [2, `tarla: ${A}`], [3, `tarla: ${A}`], [4, `tarla: ${A}`], [5, `tarla: ${A}`], [6, `HG: „204” / „205”; tarla: ${A}`], [7, `HG: „204” / „205”; tarla: ${A}`],
+    ])
+    expect(pv.parcele[0].detaliu_ambiguitate).toBe('tarla: „ANA@EXAMPLE.RO” / „T 12”')   // previzualizarea însăși rămâne neatinsă (decizia B)
+  })
+  it('CSV-ul previzualizării, cel de după import și cel din istoric + tabelele raportului: nicio valoare semnalată', async () => {
+    expect(sensibileInText(csvRanduriDeTratat(randuriDeTratat(pv)))).toEqual([])
+    const sb = supabaseFals()
+    const rez = await scrieImport(sb, { ...pv, proiect_id_previzualizare: 'proiect-test' }, { proiectId: 'proiect-test', versiune: 'v-test' })
+    const lot = sb.tabele.red_import_loturi[0]
+    expect(lot.stare).toBe('finalizat')
+    for (const [et, d] of [['după import', rez.diferente], ['istoric', lot.diferente]]) {
+      expect(sensibileInText(csvRanduriDeTratat(randuriDeTratat(d))), et).toEqual([])
+      const ix = indexDeVerificat(d.de_verificat)
+      expect(scurgeri(Object.entries(d).filter(([, v]) => Array.isArray(v)), mascheazaRand, ix), et).toEqual([])
+    }
+    // tabelele raportului de după import (ImportTgz.jsx: raport[k].map(x0 => mascheazaRand(x0, idxRaport)))
+    expect(scurgeri([['raport.ambigue', rez.ambigue], ['raport.fara_cheie', rez.fara_cheie]], mascheazaRand, indexDeVerificat(rez.diferente.de_verificat))).toEqual([])
+  })
+  it('mesajul de eroare „două parcele ACTIVE” (afișat și scris în lot.eroare) nu citează cheia sursă', async () => {
+    const dubla = [EXISTENTA_P1, { ...EXISTENTA_P1, id: 'p-a-doua', id_parcela: 'PRU-0901' }]
+    const sb = supabaseFals({ parceleExistente: dubla })
+    const e = await scrieImport(sb, { ...parseazaTgz(excel(), OPT), proiect_id_previzualizare: 'proiect-test' }, { proiectId: 'proiect-test', versiune: 'v-test' }).catch(x => x)
+    expect(e.message).toBe('Două parcele ACTIVE cu aceeași cheie sursă (PRU-0900, PRU-0901; parcela PRU:1 din fișier) — UNIQUE încălcat?; nimic nu a fost scris')
+    expect(sb.tabele.red_import_loturi[0]).toMatchObject({ stare: 'esuat', eroare: e.message })
+    expect(contineSensibil(e.message)).toEqual([])
+  })
+})
+
+// Mutanți pe mascare (sursa copiată, o modificare textuală exactă): fără tratarea câmpului derivat, valoarea iese din nou în tab-ul „Parcele”
+const MUT_R3 = {
+  // `detaliu_ambiguitate` clasat (greșit) ca text fără valori — echivalentul lui ed730c43 (r2: se masca doar `detaliu`)
+  derivatCaSigur: [
+    { fisier: F, din: "Object.freeze(['detaliu', 'detaliu_ambiguitate'])", in: "Object.freeze(['detaliu'])" },
+    { fisier: F, din: "'observatii',", in: "'observatii', 'detaliu_ambiguitate'," },
+  ],
+  // doar scos din clasa „detaliu”: rămâne neclasat → ascuns ÎNTREG de regula pentru câmpuri necunoscute (L18), nu scapă
+  scosDinDetaliu: [{ fisier: F, din: "Object.freeze(['detaliu', 'detaliu_ambiguitate'])", in: "Object.freeze(['detaliu'])" }],
+  // fără regula pentru câmpuri necunoscute: azi nu scapă nimic (toate câmpurile sunt clasate), dar un câmp nou ar scăpa
+  faraNecunoscute: [{ fisier: F, din: 'else if (!CAMPURI_FARA_VALORI_PARCELA.includes(k)) out[k] = VALOARE_ASCUNSA', in: '' }],
+}
+describe('import TGZ r3 — mutanți pe mascare', () => {
+  const ruleaza = async mutatii => {
+    const mod = await incarca('importTgz.js', mutatii)
+    const vf = await incarca(F, mutatii)
+    const pv = mod.parseazaTgz(excel(RANDURI_R3), OPT)
+    return { pv, vf, mod, idx: vf.indexDeVerificat(pv.de_verificat) }
+  }
+  it('intactul (copiat): nicio scurgere', async () => {
+    const { pv, vf, idx } = await ruleaza([])
+    expect(scurgeri(tabelePreview(pv), vf.mascheazaRand, idx)).toEqual([])
+  })
+  it('mutant „câmpul derivat clasat ca sigur” (forma r2): `detaliu_ambiguitate` scoate e-mailul și numele în tab-ul „Parcele”', async () => {
+    const { pv, vf, idx } = await ruleaza(MUT_R3.derivatCaSigur)
+    expect(scurgeri(tabelePreview(pv), vf.mascheazaRand, idx)).toEqual(['parcele.detaliu_ambiguitate'])
+    expect(vf.mascheazaRand(pv.parcele[0], idx).detaliu_ambiguitate).toBe('tarla: „ANA@EXAMPLE.RO” / „T 12”')
+  })
+  it('mutant „scos din clasa detaliu”: nu scapă (câmp necunoscut → ascuns întreg), dar se pierde restul textului', async () => {
+    const { pv, vf, idx } = await ruleaza(MUT_R3.scosDinDetaliu)
+    expect(scurgeri(tabelePreview(pv), vf.mascheazaRand, idx)).toEqual([])
+    expect(vf.mascheazaRand(pv.parcele[2], idx).detaliu_ambiguitate).toBe(A)
+  })
+  it('mutant „fără regula pentru câmpuri necunoscute”: un câmp text nou al parcelei ar scăpa nemascat', async () => {
+    const { pv, vf, idx } = await ruleaza(MUT_R3.faraNecunoscute)
+    expect(scurgeri(tabelePreview(pv), vf.mascheazaRand, idx)).toEqual([])   // azi toate câmpurile sunt clasate
+    const cuCampNou = pv.parcele.map(p => ({ ...p, rezumat_nou: `tarla ${p.tarla}` }))
+    expect(scurgeri([['parcele', cuCampNou]], vf.mascheazaRand, idx)).toEqual(['parcele.rezumat_nou'])
+    expect(scurgeri([['parcele', cuCampNou]], mascheazaRand, indexDeVerificat(pv.de_verificat))).toEqual([])   // intactul îl ascunde
+  })
+})
+
+// Inventarul (cerința 3): fiecare câmp text ieșit din parser și din scrieImport, pe obiectele care trec prin mascare, e clasat în
+// importVerificareFixa.js; un câmp NOU construit din valorile parcelei pică aici până e clasat. Fixture-uri: RANDURI, RANDURI_R3 și
+// scenariile din BD fals (Nr.Crt. incompatibil, identitate ștearsă logic).
+describe('import TGZ r3 — inventarul câmpurilor text', () => {
+  const obiecteCuParcela = async () => {
+    const out = []   // [sursa, obiect]
+    const pv1 = parseazaTgz(excel(), OPT); const pv3 = parseazaTgz(excel(RANDURI_R3), OPT)
+    for (const [et, pv] of [['RANDURI', pv1], ['RANDURI_R3', pv3]]) for (const t of TABURI) for (const o of pv[t] || []) out.push([`${et}.${t}`, o])
+    const { rez, lot } = await importaFictiv()
+    const cheie4 = pv3.parcele.find(p => p.cheie === 'PRU:4').cheie_sursa
+    const sb = supabaseFals({ parceleExistente: [{ id: 'p-stearsa', proiect_id: 'proiect-test', id_parcela: 'PRU-0800', cheie_sursa: cheie4, nr_crt_grup: null, sters_la: '2026-11-01T00:00:00Z' }] })
+    const rez3 = await scrieImport(sb, { ...pv3, proiect_id_previzualizare: 'proiect-test' }, { proiectId: 'proiect-test', versiune: 'v-test' })
+    expect(rez3.identitate_stearsa.map(x => [x.rand, x.detaliu])).toEqual([[8, 'parcela ștearsă logic: PRU-0800']])
+    expect(rez.nr_crt_incompatibil).toHaveLength(1)
+    for (const [et, d] of [['rez', rez], ['lot', lot.diferente], ['rez3', rez3], ['lot3', sb.tabele.red_import_loturi[0].diferente]])
+      for (const [k, v] of Object.entries(d)) if (Array.isArray(v)) for (const o of v) if (o && typeof o === 'object') out.push([`${et}.${k}`, o])
+    return out
+  }
+  it('toate câmpurile text sunt clasate; contactele n-au cheie de parcelă (nu se potrivesc niciodată cu un semnal)', async () => {
+    const neclasate = new Set(); let campuriText = 0
+    for (const [sursa, o] of await obiecteCuParcela()) {
+      if (sursa.endsWith('.contacte')) { expect(['cheie_parcela', 'cheie', 'rand'].filter(k => k in o), sursa).toEqual([]); continue }
+      for (const [k, v] of Object.entries(o)) if (typeof v === 'string') { campuriText++; if (!campClasat(k)) neclasate.add(`${sursa}.${k}`) }
+    }
+    expect(campuriText).toBeGreaterThan(100)
+    expect([...neclasate]).toEqual([])
+  })
+  it('orice câmp care citează valori („…”) pe un obiect de parcelă e în CAMPURI_DETALIU (motivele = texte fixe din cod)', async () => {
+    const cuCitate = new Set(); const motiveCitate = new Set()
+    for (const [, o] of await obiecteCuParcela()) {
+      if (!('cheie_parcela' in o) && !('cheie' in o)) continue
+      for (const [k, v] of Object.entries(o)) if (typeof v === 'string' && /[„”]/.test(v)) { if (k === 'motiv') motiveCitate.add(v); else cuCitate.add(k) }
+    }
+    expect([...cuCitate].sort()).toEqual([...CAMPURI_DETALIU].sort())
+    // singurul motiv cu ghilimele e textul fix al Nr.Crt. incompatibil („x.y” / „x” = exemple din cod, nu valori din fișier)
+    expect([...motiveCitate]).toEqual([MOTIV_NRCRT_INCOMPATIBIL])
   })
 })

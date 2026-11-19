@@ -561,7 +561,9 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
     for (const lotC of loturi([...new Set(parcele.map(p => p.cheie_sursa))], lotCitire)) {
       const data = await citesteTot(() => supabase.from('red_parcele').select('id, id_parcela, cheie_sursa, nr_crt_grup, sters_la').eq('proiect_id', proiectId).in('cheie_sursa', lotC), 'verificare parcele existente', pagina)
       for (const row of data) {
-        if (row.sters_la == null) { if (existentaDupaSursa.has(row.cheie_sursa)) throw new Error(`Două parcele ACTIVE cu aceeași cheie ${row.cheie_sursa} (UNIQUE încălcat?); nimic nu a fost scris`); existentaDupaSursa.set(row.cheie_sursa, row) }
+        // r3 (Jakarinos #1140 r2): mesajul (afișat și scris în lot.eroare) nu citează cheia sursă — poate conține valoarea semnalată „de verificat”;
+        // se dau parcelele din BD (id_parcela) și grupul din fișier (UAT + Nr.Crt.)
+        if (row.sters_la == null) { if (existentaDupaSursa.has(row.cheie_sursa)) throw new Error(`Două parcele ACTIVE cu aceeași cheie sursă (${existentaDupaSursa.get(row.cheie_sursa).id_parcela}, ${row.id_parcela}; parcela ${parcele.find(p => p.cheie_sursa === row.cheie_sursa)?.cheie ?? '-'} din fișier) — UNIQUE încălcat?; nimic nu a fost scris`); existentaDupaSursa.set(row.cheie_sursa, row) }
         else { if (!stearsaDupaSursa.has(row.cheie_sursa)) stearsaDupaSursa.set(row.cheie_sursa, []); stearsaDupaSursa.get(row.cheie_sursa).push(row.id_parcela) }
       }
     }

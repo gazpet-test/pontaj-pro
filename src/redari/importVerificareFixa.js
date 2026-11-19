@@ -224,19 +224,51 @@ function mascheazaDetaliu(d, campuri) {
   return out.join('; ')
 }
 
+// ── r3 (Jakarinos #1140 r2 P1: `detaliu_ambiguitate` scăpa nemascat): INVENTARUL câmpurilor text ale obiectelor care trec prin mascare
+// (toate taburile previzualizării, rezultatul lui scrieImport, `diferente` din lot). Fiecare câmp text are o clasă:
+//  - CAMPURI_VERIFICATE (poz_hg / nr_cadastral / tarla) → ascuns întreg, dacă e semnalat;
+//  - `valoare` (cadastru suspect = nr. cadastral) → ascuns întreg, dacă cadastrul e semnalat;
+//  - `cheie_sursa` (UAT|HG|cadastru|tarla) → doar componenta câmpului semnalat;
+//  - CAMPURI_DETALIU (texte compuse din valorile parcelei, forma „eticheta: „v1” / „v2””) → doar segmentul câmpului semnalat;
+//  - CAMPURI_FARA_VALORI_PARCELA → nu sunt construite din poz. HG / cadastru / tarla (chei interne, Nr.Crt., UAT, nume — arătate
+//    intenționat —, texte fixe, metadate), rămân;
+//  - ORICE alt câmp text al unui obiect semnalat (necunoscut azi — un câmp adăugat mai târziu) → ascuns întreg (L18: necunoscut ≠ sigur).
+// Testul de inventar (importVerificareFixa.test.js) adună cheile reale ieșite din parser și din scrieImport: un câmp nou trebuie clasat aici.
+export const CAMPURI_DETALIU = Object.freeze(['detaliu', 'detaliu_ambiguitate'])
+export const CAMPURI_FARA_VALORI_PARCELA = Object.freeze([
+  // identitate internă / grupare (UAT + Nr.Crt., nu valori de identificare): 'PRU:7', 'PRU:7|POPESCU ION', 'PRU-????'
+  'cheie', 'cheie_parcela', 'cheie_detinator', 'id_parcela', 'nr_crt', 'grup_sub', 'nr_crt_grup', 'uat', 'uat3', 'uat_id', 'id', 'parcela_id', 'proiect_id',
+  // deținătorul (previzualizarea îl arată intenționat) și metadatele lui
+  'nume', 'nume_normalizat', 'calitate', 'cota', 'sursa_date', 'versiune_lista_tgz',
+  // texte fixe din cod (motive, stări) și alte coloane ale parcelei, care nu sunt câmpuri verificate
+  'motiv', 'motiv_ambiguitate', 'stare', 'tronson', 'categoria_folosinta', 'categorie', 'camp',
+  // „Regim juridic: …” + note de județ (adresă / coloana Județ / rând) — fără poz. HG / cadastru / tarla
+  'observatii',
+])
+const CLASE_CUNOSCUTE = new Set([...CAMPURI_VERIFICATE, 'valoare', 'cheie_sursa', ...CAMPURI_DETALIU, ...CAMPURI_FARA_VALORI_PARCELA])
+/** true = câmpul e clasat în inventar (testul de inventar îl folosește pe cheile reale ale parserului / lotului). */
+export const campClasat = k => CLASE_CUNOSCUTE.has(k)
+
 /**
  * mascheazaRand(obj, idx) → copia obiectului cu valorile semnalate ascunse (obiectul original nu se schimbă); fără semnal = același obiect.
- *  idx = indexDeVerificat(previzualizare.de_verificat | diferente.de_verificat). Se ascund: câmpurile poz_hg / nr_cadastral / tarla
- *  semnalate, `valoare` (doar la „cadastru suspect” = nr. cadastral) când cadastrul e semnalat, componenta lor din `cheie_sursa` și
- *  bucata lor din `detaliu`. Numele / adresele / contactele NU se ating aici (previzualizarea le arată intenționat).
+ *  idx = indexDeVerificat(previzualizare.de_verificat | diferente.de_verificat). Pe un obiect al unei parcele semnalate, fiecare câmp text
+ *  e tratat după clasa lui din inventarul de mai sus (câmpul semnalat, `valoare`, componenta din `cheie_sursa`, segmentul din `detaliu` /
+ *  `detaliu_ambiguitate`; câmp necunoscut → ascuns întreg). Numele / adresele / contactele NU se ating (previzualizarea le arată intenționat).
  */
 export function mascheazaRand(obj, idx) {
   if (!obj || typeof obj !== 'object' || !idx || idx.gol) return obj
   const campuri = campuriSemnalate(obj, idx); if (!campuri.size) return obj
   const out = { ...obj }
-  for (const c of campuri) if (out[c] != null && out[c] !== '') out[c] = VALOARE_ASCUNSA
-  if (campuri.has('nr_cadastral') && out.valoare != null && out.valoare !== '') out.valoare = VALOARE_ASCUNSA
-  if (typeof out.cheie_sursa === 'string' && out.cheie_sursa) out.cheie_sursa = mascheazaCheieSursa(out.cheie_sursa, campuri)
-  if (typeof out.detaliu === 'string' && out.detaliu) out.detaliu = mascheazaDetaliu(out.detaliu, campuri)
+  for (const [k, v] of Object.entries(out)) {
+    if (typeof v !== 'string' || v === '') continue
+    if (CAMPURI_VERIFICATE.includes(k)) { if (campuri.has(k)) out[k] = VALOARE_ASCUNSA }
+    else if (k === 'valoare') { if (campuri.has('nr_cadastral')) out[k] = VALOARE_ASCUNSA }
+    else if (k === 'cheie_sursa') out[k] = mascheazaCheieSursa(v, campuri)
+    else if (CAMPURI_DETALIU.includes(k)) out[k] = mascheazaDetaliu(v, campuri)
+    else if (!CAMPURI_FARA_VALORI_PARCELA.includes(k)) out[k] = VALOARE_ASCUNSA
+  }
+  // un câmp verificat ne-text (ex. număr din Excel) se ascunde și el, ca înainte
+  for (const c of campuri) if (out[c] != null && out[c] !== '' && typeof out[c] !== 'string') out[c] = VALOARE_ASCUNSA
+  if (campuri.has('nr_cadastral') && out.valoare != null && out.valoare !== '' && typeof out.valoare !== 'string') out.valoare = VALOARE_ASCUNSA
   return out
 }
