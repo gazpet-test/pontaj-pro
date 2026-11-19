@@ -190,6 +190,8 @@ async function verifica(db) {
     tine(r.rows && r.rows[0].v === astept, `fn_upa_poate_scrie(${uid || 'fără sub'}) = ${astept} (${r.err || r.rows[0].v})`)
   }
   // cheia de intenție (L04 / L16): aceeași cheie a doua oară = 23505 pe constrângerea cheii, un singur rând; fără cheie = mai multe rânduri permise
+  // (împachetat: pe o bază fără coloană — head-ul vechi — se raportează abaterea, nu cade toată proba)
+  try {
   const K = '11111111-2222-4333-8444-555555555555'
   const insK = () => caRol(db, 'authenticated', U.ED, `INSERT INTO public.upa_achizitii (furnizor_id, numar_factura, luna, valoare, cheie_intentie) VALUES (1, 'K-1', '2031-05-01', 10, $1) RETURNING id`, [K])
   const k1 = await insK(), k2 = await insK()
@@ -202,6 +204,7 @@ async function verifica(db) {
   const f1 = await caRol(db, 'authenticated', U.ED, `INSERT INTO public.upa_achizitii (furnizor_id, numar_factura, luna, valoare) VALUES (1, 'N-1', '2031-05-01', 1), (1, 'N-2', '2031-05-01', 1) RETURNING id`)
   tine(!f1.err && f1.rows.length === 2, `fără cheie (Citește Orice, rândurile vechi): mai multe rânduri cu NULL permise (${f1.err || f1.rows.length})`)
   await db.query(`DELETE FROM public.upa_achizitii WHERE numar_factura IN ('N-1', 'N-2')`)
+  } catch (e) { tine(false, 'cheia de intenție: ' + e.message) }
   // 2. tabelele noi: nicio scriere directă; jurnalul doar pentru owner
   for (const rol of ['authenticated', 'service_role', 'anon']) {
     for (const sql of [`INSERT INTO public.upa_plafon_lunar (luna, plafon, sursa) VALUES ('2032-01-01', 1, 'migrare')`,
@@ -621,7 +624,7 @@ for (const [nume, pregatire, o, re] of [
   ['comentariul fără check_vechi (forma din runda 1)', async db => { await aplicaMig(db); await db.exec(`COMMENT ON POLICY upa_achizitii_citire ON public.upa_achizitii IS 'UPA (20261229a): citire. roluri_vechi=authenticated'`) }, {}, /roluri_vechi \/ check_vechi\) lipseste/],
 ]) {
   const db = await bazaNoua()
-  await pregatire(db)
+  try { await pregatire(db) } catch (e) { ok(false, `revenire ${nume}: pregătirea a picat (${e.message})`); await db.close(); continue }
   const stare = async () => JSON.stringify([await q1(db, `SELECT to_regclass('public.upa_plafon_lunar')::text AS t, (SELECT count(*)::int FROM pg_policy WHERE polrelid = 'public.upa_achizitii'::regclass) AS n,
     (SELECT count(*)::int FROM pg_proc WHERE proname LIKE 'fn\\_upa\\_%') AS f`), await areCheie(db), await politiciAchizitii(db)])
   const inainte = await stare()
