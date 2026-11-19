@@ -1,4 +1,5 @@
-# gemini_pw.py - canal Gemini ("gem") pentru run_paw v4.6 (27.10.2026, aprobat de Razvan); v4.6.3: modelul Carbon.
+# gemini_pw.py - canal Gemini ("gem") pentru run_paw v4.6 (27.10.2026, aprobat de Razvan); v4.6.3: modelul Carbon;
+# v4.6.4: paza atasamentelor inainte de chatul nou.
 # Playwright atasat la Edge-ul existent de pe serverul AI (CDP 9333, doar loopback, profil separat in care Razvan
 # s-a logat o data pe gemini.google.com). Model: cgpt_pw.py. NU inchide Edge, NU da reload; navigare la /app sau URL de chat validat de lansator,
 # NU ataseaza fisiere, NU scrie fisiere: brief-ul (citit ca DATE) intra in editor, raspunsul iese pe stdout.
@@ -6,17 +7,24 @@
 #      python gemini_pw.py trimite <brief.md> [secunde_max=600]
 # iesire: stdout UTF-8; la eroare ultima linie "GEM_EROARE <cod> <detaliu>" si exit 3.
 # coduri: fara_tab_gemini, mai_multe_taburi_gemini, model_gresit, gemini_ocupat, editor_lipsa, text_neintrat,
-#         ciorna_cu_atasamente, brief_invalid, timeout_raspuns, cdp_indisponibil, eroare_playwright, comanda_necunoscuta
+#         ciorna_cu_atasamente, ciorna_necitibila, brief_invalid, timeout_raspuns, cdp_indisponibil, eroare_playwright,
+#         comanda_necunoscuta, url_invalid
 # r2 (16.10.2026, dupa Jakarinos r1): ciorna = brief-ul exact (normalizare explicita), refuz cu atasamente in ciorna,
 #   limita de marime pe textul citit inainte de strip.
 # v4.6.3 (13.11.2026, aprobat de Razvan): modelul cerut = Carbon (Argon a disparut din lista Gemini). Eticheta afisata trebuie sa fie
 #   EXACT "Carbon", optional precedata de "Gemini" si / sau de numarul versiunii ("4 Carbon", "Gemini 4 Carbon"); orice sufix
 #   ("Carbon Thinking") sau alt model = model_gresit, fara Enter. In lansator eticheta canalului ramane "argon" / "argon:<lucrare>"
 #   (nume istoric; run_paw.ps1 nu se schimba in v4.6.3, deci certificarea cdx ramane valabila).
+# v4.6.4 (19.11.2026, dupa testul de canal picat): in v4.6.3 trimite() deschidea chatul nou (pg.goto) INAINTE de prima
+#   verificare a atasamentelor; chatul nou goleste ciorna, deci verificarea vedea 0 si brief-ul pleca. Acum ciorna tab-ului
+#   curent se verifica INAINTE de orice actiune (navigare / click / tastatura), apoi din nou pe chatul nou si chiar inainte
+#   de Enter. Numararea: un fisier = un element CHIP (cel mai exterior) in zona de compunere a editorului, citita din
+#   page.content() si analizata in Python (testabila pe HTML sintetic); orice alt semn de atasament fara chip = refuz.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re
 from urllib.parse import urlparse
+from html.parser import HTMLParser
 
 CDP = "http://127.0.0.1:9333"
 GAZDA = "gemini.google.com"
@@ -26,7 +34,19 @@ MODEL = '[data-test-id="bard-mode-menu-button"]'
 STOP = 'button[aria-label*="Stop" i]:visible, button[aria-label*="Opre" i]:visible'
 ZONA = 'input-area-v2, input-container, .input-area-container, .input-area'       # zona de compunere
 ATAS = ('uploader-file-preview, uploader-file-preview-container, file-preview, [data-test-id*="file-preview"], '
-        '[data-test-id*="uploaded-file"], [class*="file-preview"]')                # atasamente in ciorna (de validat cu "stare")
+        '[data-test-id*="uploaded-file"], [class*="file-preview"]')                # SEMNE de atasament (largi, se suprapun)
+# v4.6.4 - selectorul UNIC care numara: elementul Angular <uploader-file-preview> = chip-ul unui fisier pus in ciorna
+#   (zona de compunere; raspunsurile si mesajele trimise nu il folosesc). Se numara doar chip-urile cele mai exterioare
+#   (un chip imbricat in alt chip = acelasi fisier). ATAS de mai sus nu mai numara, e doar semn: in v4.6.3 suma
+#   ZONA>>ATAS + chip-uri globale numara acelasi fisier de mai multe ori (container + chip + clasele interioare
+#   *file-preview* + inca o data chip-ul global), de aici "5" pentru un fisier.
+CHIP = "uploader-file-preview"
+ZONA_TAGURI = ("input-area-v2", "input-container")          # aceeasi lista ca ZONA, pentru analiza HTML in Python
+ZONA_CLASE = ("input-area-container", "input-area")
+SEMN_TAGURI = ("uploader-file-preview", "uploader-file-preview-container", "file-preview")
+SEMN_DATA_TEST = ("file-preview", "uploaded-file")
+SEMN_CLASA = "file-preview"
+VOIDE = ("area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr")
 MODEL_CERUT = "Carbon"
 # forma acceptata a etichetei afisate (dupa normalizarea spatiilor): [Gemini ][<versiune> ]Carbon - nimic dupa numele modelului
 MODEL_FORMA = re.compile(r"(?:Gemini )?(?:[0-9]+(?:\.[0-9]+)? )?" + re.escape(MODEL_CERUT))
@@ -96,6 +116,146 @@ def verifica_ciorna(text_editor, brief, n_atasamente):
         raise GemEroare("text_neintrat", "ciorna difera de brief (%d/%d car. normalizate, prima diferenta la %d)" % (len(a), len(b), i))
 
 
+# --- v4.6.4: ciorna citita din HTML-ul paginii (page.content()), analizata aici, fara browser ---
+
+class _Nod(object):
+    __slots__ = ("tag", "attrs", "parinte", "copii")
+
+    def __init__(self, tag, attrs, parinte):
+        self.tag = tag
+        self.attrs = attrs
+        self.parinte = parinte
+        self.copii = []
+
+
+class _Arbore(HTMLParser):
+    # arbore minim din HTML; etichetele neinchise se inchid la eticheta de sfarsit a unui stramos
+    def __init__(self):
+        HTMLParser.__init__(self, convert_charrefs=True)
+        self.radacina = _Nod("#document", {}, None)
+        self.stiva = [self.radacina]
+
+    def _nod(self, tag, attrs):
+        n = _Nod(tag, dict((k, "" if v is None else v) for k, v in attrs), self.stiva[-1])
+        self.stiva[-1].copii.append(n)
+        return n
+
+    def handle_starttag(self, tag, attrs):
+        n = self._nod(tag, attrs)
+        if tag not in VOIDE:
+            self.stiva.append(n)
+
+    def handle_startendtag(self, tag, attrs):
+        self._nod(tag, attrs)
+
+    def handle_endtag(self, tag):
+        for i in range(len(self.stiva) - 1, 0, -1):
+            if self.stiva[i].tag == tag:
+                del self.stiva[i:]
+                return
+
+
+def _descendenti(n):
+    st = list(reversed(n.copii))
+    while st:
+        x = st.pop()
+        yield x
+        st.extend(reversed(x.copii))
+
+
+def _clase(n):
+    return (n.attrs.get("class") or "").split()
+
+
+def _e_zona(n):
+    # = ZONA: input-area-v2, input-container, .input-area-container, .input-area
+    return n.tag in ZONA_TAGURI or any(c in ZONA_CLASE for c in _clase(n))
+
+
+def _e_editor(n):
+    # = EDITOR: rich-textarea [contenteditable="true"], div.ql-editor[contenteditable="true"] (valoare exacta, ca in CSS)
+    if n.attrs.get("contenteditable") != "true":
+        return False
+    if n.tag == "div" and "ql-editor" in _clase(n):
+        return True
+    p = n.parinte
+    while p is not None:
+        if p.tag == "rich-textarea":
+            return True
+        p = p.parinte
+    return False
+
+
+def _e_semn(n):
+    # = ATAS (semne largi, se pot suprapune; nu numara fisiere)
+    if n.tag in SEMN_TAGURI:
+        return True
+    dt = n.attrs.get("data-test-id")
+    if dt is not None and any(s in dt for s in SEMN_DATA_TEST):
+        return True
+    return SEMN_CLASA in (n.attrs.get("class") or "")
+
+
+def _sub(n, stramos):
+    p = n.parinte
+    while p is not None:
+        if p is stramos:
+            return True
+        p = p.parinte
+    return False
+
+
+def analizeaza_ciorna(html):
+    """HTML-ul paginii -> dict: editoare, zone (zonele de compunere ale editoarelor, cele mai exterioare),
+    atasamente (chip-uri CHIP cele mai exterioare din zone = fisiere), semne (elemente ATAS din zone), detalii."""
+    a = _Arbore()
+    a.feed(html or "")
+    HTMLParser.close(a)                     # inchide parserul HTML (nu browserul: canalul nu inchide nimic in Edge)
+    editoare = [n for n in _descendenti(a.radacina) if _e_editor(n)]
+    zone = []
+    for e in editoare:
+        z, p = None, e.parinte
+        while p is not None:
+            if _e_zona(p):
+                z = p                       # urc pana la zona cea mai exterioara (chip-urile pot sta langa editor, nu in el)
+            p = p.parinte
+        if z is not None and not any(z is x for x in zone):
+            zone.append(z)
+    zone = [z for z in zone if not any(_sub(z, x) for x in zone if x is not z)]
+    atas, semne, detalii = 0, 0, {}
+    for z in zone:
+        for n in _descendenti(z):
+            if n.tag == CHIP:
+                p, exterior = n.parinte, True
+                while p is not None and p is not z:
+                    if p.tag == CHIP:
+                        exterior = False
+                        break
+                    p = p.parinte
+                if exterior:
+                    atas += 1
+            if _e_semn(n):
+                semne += 1
+                c = _clase(n)
+                k = (n.tag + ("." + c[0] if c else ""))[:60].encode("ascii", "replace").decode("ascii")
+                detalii[k] = detalii.get(k, 0) + 1
+    return {"editoare": len(editoare), "zone": len(zone), "atasamente": atas, "semne": semne,
+            "detalii": ["%s x%d" % (k, v) for k, v in sorted(detalii.items())][:12]}
+
+
+def verifica_fara_atasamente(info, semn_locator, moment):
+    # paza ciorna: fail-closed. Zona negasita = nu stiu ce e in ciorna; chip = fisier; orice semn fara chip = refuz
+    if not info["editoare"] or not info["zone"]:
+        raise GemEroare("ciorna_necitibila", "%s: zona de compunere negasita (editoare %d, zone %d) - nu trimit"
+                        % (moment, info["editoare"], info["zone"]))
+    if info["atasamente"]:
+        raise GemEroare("ciorna_cu_atasamente", "%s: %d atasament(e) in ciorna - nu trimit" % (moment, info["atasamente"]))
+    if info["semne"] or semn_locator:
+        raise GemEroare("ciorna_cu_atasamente", "%s: semn de atasament fara chip recunoscut (zona %d, locator %d) - nu trimit"
+                        % (moment, info["semne"], semn_locator))
+    return 0
+
+
 def e_tab_gemini(url):
     try:
         u = urlparse(url)
@@ -143,7 +303,7 @@ def asteapta_raspuns(citeste, genereaza, asteapta, inainte_n, maxs, ceas=time.mo
     return (ultim or ""), False
 
 
-# --- partea cu browserul (nu se executa in teste) ---
+# --- partea cu browserul (in teste doar cu o pagina falsa, fara Playwright) ---
 
 def _pagini(b):
     return [x for c in b.contexts for x in c.pages]
@@ -164,21 +324,47 @@ def _mesaje(pg):
     return pg.locator(RASPUNS).all_inner_texts()
 
 
+def _semn_locator(pg):
+    # v4.6.3 (numara gresit, pastrat doar ca SEMN fail-closed: vede si ce page.content() n-ar serializa, ex. shadow DOM)
+    return pg.locator(ZONA).locator(ATAS).count() + pg.locator(CHIP).count()
+
+
+def _citeste_ciorna(pg):
+    return analizeaza_ciorna(pg.content()), _semn_locator(pg)
+
+
+def _paza_ciorna(pg, moment):
+    # doar citire (content + count); ridica GemEroare daca ciorna are atasamente sau nu poate fi citita
+    info, semn = _citeste_ciorna(pg)
+    return verifica_fara_atasamente(info, semn, moment)
+
+
 def _atasamente(pg):
-    # fisiere/imagini deja puse in ciorna (zona de compunere); uploader-file-preview exista doar in compunere
-    return pg.locator(ZONA).locator(ATAS).count() + pg.locator("uploader-file-preview").count()
+    # chiar inainte de Enter: aceeasi paza (ridica la orice semn), apoi 0 pentru verifica_ciorna
+    return _paza_ciorna(pg, "inainte_de_enter")
 
 
 def stare(pg):
     spune("URL:", pg.url)
     spune("model:", _model_afisat(pg).strip().encode("ascii", "replace").decode("ascii"))
+    info, semn = _citeste_ciorna(pg)
     spune("genereaza:", _genereaza(pg), "| editor:", pg.locator(EDITOR).count(), "| raspunsuri:", pg.locator(RASPUNS).count(),
-          "| atasamente in ciorna:", _atasamente(pg))
+          "| atasamente in ciorna:", info["atasamente"] if info["zone"] else "?")
+    spune("zone compunere:", info["zone"], "| semne atasament: zona", info["semne"], "/ locator", semn,
+          "| detalii:", ", ".join(info["detalii"]) or "-")
+    try:
+        verifica_fara_atasamente(info, semn, "stare")
+        spune("paza ciorna: OK (trimite ar continua)")
+    except GemEroare as e:
+        spune("paza ciorna: REFUZ", e.cod, e.detaliu)
 
 
 def trimite(pg, text, maxs, target="https://gemini.google.com/app"):
     if target != "https://gemini.google.com/app" and not re.fullmatch(r"https://gemini\.google\.com/app/[0-9a-fA-F]+", target):
         raise GemEroare("url_invalid", "tinta refuzata")
+    # v4.6.4: PRIMA operatie pe pagina = paza ciornei din tab-ul curent (doar citire). Chatul nou goleste ciorna, deci
+    # o verificare facuta dupa navigare nu mai vede atasamentele puse de operator (cauza testului de canal picat 19.11.2026).
+    _paza_ciorna(pg, "inainte_de_chat_nou")
     # Chat nou in acelasi tab, sub lock-ul global al lansatorului. Niciun URL din brief.
     if _genereaza(pg):
         raise GemEroare("gemini_ocupat", "Gemini inca scrie - nu navighez peste el")
@@ -202,9 +388,7 @@ def trimite(pg, text, maxs, target="https://gemini.google.com/app"):
     if ed.count() == 0:
         raise GemEroare("editor_lipsa", "editorul nu e vizibil")
     ed = ed.first
-    n = _atasamente(pg)
-    if n:
-        raise GemEroare("ciorna_cu_atasamente", "%d atasament(e) in ciorna inainte de scriere - nu trimit" % n)
+    _paza_ciorna(pg, "pe_chatul_nou")       # defensiv: chatul nou / conversatia tinta, inainte de click si tastatura
     ed.click()
     pg.keyboard.press("Control+A")      # ciorna ramasa in editor se inlocuieste, nu se lipeste in fata brief-ului
     pg.keyboard.press("Delete")

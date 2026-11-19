@@ -1,8 +1,10 @@
-# Teste fara browser pentru gemini_pw.py (run_paw v4.6.3: modelul Carbon, potrivire exacta). Rulare:
-#   python -I docs\paw\run_paw_v463\teste\test_gemini_pw.py
+# Teste fara browser pentru gemini_pw.py (run_paw v4.6.4: paza atasamentelor inainte de chatul nou; v4.6.3: modelul
+# Carbon, potrivire exacta). Rulare:
+#   python -I docs\paw\run_paw_v464\teste\test_gemini_pw.py
 # Nu importa Playwright, nu se ataseaza la Edge, nu trimite nimic la Gemini: logica de selectie tab / model /
-# asteptare stabila / validare brief e testata cu obiecte false. ASCII only.
-import os, sys, tempfile, shutil, unittest, importlib.util
+# asteptare stabila / validare brief / numarare atasamente (HTML sintetic) / ordinea pazei in trimite() (pagina falsa)
+# e testata cu obiecte false. ASCII only.
+import os, sys, io, types, tempfile, shutil, unittest, importlib.util, contextlib
 
 AICI = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("gemini_pw", os.path.join(AICI, "..", "gemini_pw.py"))
@@ -272,6 +274,288 @@ class TestSursa(unittest.TestCase):
         i_ver, i_enter = src.index("verifica_ciorna(ed.inner_text()"), src.index('pg.keyboard.press("Enter")')
         self.assertLess(i_ver, i_enter)
         self.assertNotIn("* 0.8", src)
+
+    def test_paza_e_prima_operatie_din_trimite(self):
+        # v4.6.4: intre "def trimite(" si paza nu exista niciun apel pe pagina; paza vine inaintea navigarii
+        with open(os.path.join(AICI, "..", "gemini_pw.py"), encoding="ascii") as f:
+            src = f.read()
+        i_def = src.index("def trimite(")
+        i_paza = src.index('_paza_ciorna(pg, "inainte_de_chat_nou")')
+        self.assertEqual(src.count('_paza_ciorna(pg, "inainte_de_chat_nou")'), 1)
+        self.assertNotIn("pg.", src[i_def:i_paza])
+        self.assertLess(i_paza, src.index("pg.goto(target,"))
+        self.assertLess(src.index('_paza_ciorna(pg, "pe_chatul_nou")'), src.index("ed.click()"))
+        self.assertEqual(src.count('CHIP = "uploader-file-preview"'), 1)
+
+
+# --- v4.6.4: HTML sintetic al paginii Gemini (scris de mana; forma reala se confirma la testul de canal, pasul 5b) ---
+
+EDITOR_HTML = ('<div class="input-area"><rich-textarea class="text-input-field"><div class="ql-editor textarea" '
+               'contenteditable="true" role="textbox"><p>ciorna</p></div></rich-textarea></div>')
+
+
+def chip(nume):
+    # un fisier pus in ciorna: chip-ul cu iconita, numele si butonul de scoatere (clasele interioare contin "file-preview")
+    return ('<uploader-file-preview class="ng-star-inserted"><div class="file-preview-chip" data-test-id="file-preview">'
+            '<img class="file-icon" src="data:,"><span class="file-name">%s</span>'
+            '<button aria-label="Remove file"><mat-icon>close</mat-icon></button></div></uploader-file-preview>' % nume)
+
+
+def pagina(fisiere=(), conversatie="", editor=EDITOR_HTML, extra_zona=""):
+    previz = ""
+    if fisiere:
+        previz = ('<uploader-file-preview-container><div class="file-preview-container">' + "".join(chip(x) for x in fisiere)
+                  + '</div></uploader-file-preview-container>')
+    return ('<!DOCTYPE html><html><head><title>Gemini</title></head><body><chat-app><main>'
+            '<div class="conversation-container">' + conversatie + '</div>'
+            '<input-area-v2><div class="input-area-container">' + previz + extra_zona + editor + '</div></input-area-v2>'
+            '</main></chat-app></body></html>')
+
+
+CONV_IMAGINI = ('<user-query><div class="query-text">intrebare cu poza</div></user-query>'
+                '<model-response><message-content><p>raspuns</p><img src="https://lh3.googleusercontent.com/a.png" class="image">'
+                '<generated-image><single-image><img class="image loaded"></single-image></generated-image>'
+                '<div class="attachment-container"><img class="file-icon" src="x.png"></div></message-content></model-response>')
+# mesaj trimis anterior cu un fisier (alta conversatie, deschisa manual): chip in conversatie, in afara zonei de compunere
+CONV_CU_CHIP = '<user-query>' + chip("vechi.pdf") + '<p>uite fisierul</p></user-query>'
+
+
+class TestNumarareAtasamente(unittest.TestCase):
+    # valorile asteptate sunt numarate de mana pe HTML-ul de mai sus (cate fisiere a pus "operatorul"), nu din cod
+    def an(self, html):
+        return gp.analizeaza_ciorna(html)
+
+    def test_zero(self):
+        i = self.an(pagina())
+        self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"]), (1, 1, 0, 0))
+        self.assertEqual(gp.verifica_fara_atasamente(i, 0, "t"), 0)
+
+    def test_un_fisier_e_unu(self):
+        i = self.an(pagina(["a.txt"]))
+        self.assertEqual(i["atasamente"], 1)
+        # semnele largi se suprapun (container + chip + div-urile *file-preview*): de aceea nu mai numara fisiere
+        self.assertGreater(i["semne"], 1)
+        with self.assertRaises(gp.GemEroare) as c:
+            gp.verifica_fara_atasamente(i, 0, "t")
+        self.assertEqual(c.exception.cod, "ciorna_cu_atasamente")
+        self.assertIn("1 atasament(e)", c.exception.detaliu)
+
+    def test_doua_fisiere(self):
+        self.assertEqual(self.an(pagina(["a.txt", "b.png"]))["atasamente"], 2)
+
+    def test_raspunsuri_cu_imagini_tot_zero(self):
+        i = self.an(pagina(conversatie=CONV_IMAGINI * 3))
+        self.assertEqual((i["atasamente"], i["semne"]), (0, 0))
+        gp.verifica_fara_atasamente(i, 0, "t")
+
+    def test_raspunsuri_cu_imagini_si_un_fisier(self):
+        self.assertEqual(self.an(pagina(["a.txt"], conversatie=CONV_IMAGINI))["atasamente"], 1)
+
+    def test_chip_in_conversatie_nu_e_in_ciorna(self):
+        i = self.an(pagina(conversatie=CONV_CU_CHIP))
+        self.assertEqual((i["atasamente"], i["semne"]), (0, 0))
+        # dar semnul global (locator, ca in v4.6.3) il vede: paza refuza (fail-closed), nu trimite
+        with self.assertRaises(gp.GemEroare) as c:
+            gp.verifica_fara_atasamente(i, 1, "t")
+        self.assertEqual(c.exception.cod, "ciorna_cu_atasamente")
+
+    def test_chip_imbricat_e_un_fisier(self):
+        imbricat = '<uploader-file-preview><div><uploader-file-preview><span>a.txt</span></uploader-file-preview></div></uploader-file-preview>'
+        self.assertEqual(self.an(pagina(extra_zona=imbricat))["atasamente"], 1)
+
+    def test_chip_langa_editor_in_zona_exterioara(self):
+        # editorul sta in .input-area (zona interioara); chip-ul e in input-area-v2, langa ea: se numara
+        html = ('<html><body><input-area-v2>' + chip("a.txt") + '<input-container>' + EDITOR_HTML
+                + '</input-container></input-area-v2></body></html>')
+        i = self.an(html)
+        self.assertEqual((i["zone"], i["atasamente"]), (1, 1))
+
+    def test_semn_fara_chip_refuzat(self):
+        # Gemini isi schimba eticheta chip-ului: ramane doar o clasa *file-preview* -> 0 fisiere numarate, dar refuz
+        i = self.an(pagina(extra_zona='<div class="file-preview-v3"><span>a.txt</span></div>'))
+        self.assertEqual((i["atasamente"], i["semne"]), (0, 1))
+        with self.assertRaises(gp.GemEroare) as c:
+            gp.verifica_fara_atasamente(i, 0, "t")
+        self.assertEqual(c.exception.cod, "ciorna_cu_atasamente")
+        self.assertIn("fara chip", c.exception.detaliu)
+        for semn in ('<div data-test-id="uploaded-file-1"></div>', '<file-preview></file-preview>'):
+            self.assertEqual(self.an(pagina(extra_zona=semn))["semne"], 1, semn)
+
+    def test_semn_locator_cu_html_curat_refuzat(self):
+        # ex. chip in shadow DOM (nu apare in page.content()): locatorul il vede -> refuz
+        with self.assertRaises(gp.GemEroare) as c:
+            gp.verifica_fara_atasamente(self.an(pagina()), 2, "t")
+        self.assertEqual(c.exception.cod, "ciorna_cu_atasamente")
+
+    def test_fara_editor_sau_fara_zona_necitibila(self):
+        for html in ('<html><body><p>se incarca</p></body></html>',
+                     '<html><body>' + EDITOR_HTML.replace('class="input-area"', 'class="alt"') + chip("a.txt") + '</body></html>',
+                     pagina(editor=EDITOR_HTML.replace('contenteditable="true"', 'contenteditable="false"')),
+                     ""):
+            i = self.an(html)
+            with self.assertRaises(gp.GemEroare, msg=html[:60]) as c:
+                gp.verifica_fara_atasamente(i, 0, "t")
+            self.assertEqual(c.exception.cod, "ciorna_necitibila", msg=html[:60])
+
+    def test_html_neinchis_si_voide(self):
+        # <img> / <br> fara inchidere si un <p> neinchis nu "inghit" chip-ul care urmeaza
+        html = pagina(extra_zona='<p>text<img src="x"><br>' + chip("a.txt") + chip("b.txt"))
+        self.assertEqual(self.an(html)["atasamente"], 2)
+
+    def test_editor_ql_fara_rich_textarea(self):
+        ed = '<div class="input-area"><div class="ql-editor" contenteditable="true"></div></div>'
+        i = self.an(pagina(["a.txt"], editor=ed))
+        self.assertEqual((i["editoare"], i["atasamente"]), (1, 1))
+
+    def test_detalii_ascii_si_scurte(self):
+        i = self.an(pagina(["a" + chr(0x21B) + ".txt"], extra_zona='<div class="file-preview-' + chr(0x219) + "x" * 200 + '"></div>'))
+        for d in i["detalii"]:
+            d.encode("ascii")
+            self.assertLess(len(d), 80)
+
+
+# --- pagina falsa pentru trimite(): actiunile (navigare, click, tastatura) se inregistreaza in ordine ---
+
+class FakeLoc:
+    def __init__(self, pg, sel):
+        self.pg, self.sel = pg, sel
+
+    @property
+    def first(self):
+        return self
+
+    def locator(self, sub):
+        return FakeLoc(self.pg, self.sel + " >> " + sub)
+
+    def count(self):
+        if self.sel == gp.STOP:
+            return 0
+        if self.sel in (gp.EDITOR, gp.MODEL):
+            return 1
+        if self.sel == gp.RASPUNS:
+            return len(self.pg.mesaje)
+        return self.pg.semn                    # selectorii de atasamente (semnul locator)
+
+    def wait_for(self, state=None, timeout=None):
+        pass
+
+    def inner_text(self):
+        return "Carbon" if self.sel == gp.MODEL else self.pg.ciorna
+
+    def all_inner_texts(self):
+        return list(self.pg.mesaje)
+
+    def click(self):
+        self.pg.act.append("click")
+
+
+class FakeKb:
+    def __init__(self, pg):
+        self.pg = pg
+
+    def press(self, k):
+        self.pg.act.append("press " + k)
+        if k == "Delete":
+            self.pg.ciorna = ""
+        if k == "Enter":
+            self.pg.mesaje.append("PAW_GEM_TEST_OK")
+
+    def insert_text(self, t):
+        self.pg.act.append("insert")
+        self.pg.ciorna += t
+        if self.pg.dupa_scriere is not None:
+            self.pg.html = self.pg.dupa_scriere
+
+
+class FakePg:
+    def __init__(self, html, semn=0, dupa_goto=None, dupa_scriere=None):
+        self.url = "https://gemini.google.com/app/abc123"
+        self.html, self.semn = html, semn
+        self.dupa_goto = pagina() if dupa_goto is None else dupa_goto     # chatul nou goleste ciorna (ca pe 19.11)
+        self.dupa_scriere = dupa_scriere
+        self.act, self.mesaje, self.ciorna = [], [], ""
+        self.keyboard = FakeKb(self)
+
+    def content(self):
+        return self.html
+
+    def locator(self, sel):
+        return FakeLoc(self, sel)
+
+    def goto(self, url, **kw):
+        self.act.append("goto")
+        self.html, self.semn, self.url = self.dupa_goto, 0, "https://gemini.google.com/app"
+
+    def wait_for_timeout(self, ms):
+        pass
+
+
+BRIEF_TEST = "Raspunde exact: PAW_GEM_TEST_OK"
+
+
+def ruleaza_trimite(mod, pg):
+    # -> (cod GemEroare sau None, actiunile paginii)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            mod.trimite(pg, BRIEF_TEST, 30)
+        return None, pg.act
+    except mod.GemEroare as e:
+        return e.cod, pg.act
+
+
+def scenariu_atasament_in_tab_curent(mod):
+    # 19.11.2026: operatorul pune UN fisier in ciorna tab-ului curent, apoi "trimite"
+    return ruleaza_trimite(mod, FakePg(pagina(["a.txt"])))
+
+
+class TestTrimiteOrdine(unittest.TestCase):
+    def test_atasament_in_tab_curent_refuz_fara_nicio_actiune(self):
+        cod, act = scenariu_atasament_in_tab_curent(gp)
+        self.assertEqual(cod, "ciorna_cu_atasamente")
+        self.assertEqual(act, [])                # nici chat nou, nici click, nici tastatura
+
+    def test_semn_locator_in_tab_curent_refuz_fara_actiune(self):
+        cod, act = ruleaza_trimite(gp, FakePg(pagina(), semn=1))
+        self.assertEqual((cod, act), ("ciorna_cu_atasamente", []))
+
+    def test_tab_fara_zona_refuz_fara_actiune(self):
+        cod, act = ruleaza_trimite(gp, FakePg("<html><body>se incarca</body></html>"))
+        self.assertEqual((cod, act), ("ciorna_necitibila", []))
+
+    def test_atasament_pe_chatul_nou_refuz_inainte_de_click(self):
+        cod, act = ruleaza_trimite(gp, FakePg(pagina(), dupa_goto=pagina(["a.txt"])))
+        self.assertEqual((cod, act), ("ciorna_cu_atasamente", ["goto"]))
+
+    def test_atasament_aparut_dupa_scriere_fara_enter(self):
+        cod, act = ruleaza_trimite(gp, FakePg(pagina(), dupa_scriere=pagina(["a.txt"])))
+        self.assertEqual(cod, "ciorna_cu_atasamente")
+        self.assertNotIn("press Enter", act)
+        self.assertIn("insert", act)
+
+    def test_ciorna_goala_trimite(self):
+        pg = FakePg(pagina(conversatie=CONV_IMAGINI))
+        cod, act = ruleaza_trimite(gp, pg)
+        self.assertIsNone(cod)
+        self.assertEqual(act, ["goto", "click", "press Control+A", "press Delete", "insert", "press Enter"])
+
+    def test_mutant_paza_dupa_chatul_nou_e_prins(self):
+        # mutant: paza mutata dupa pg.goto (ca in v4.6.3) -> scenariul de pe 19.11 trimite brief-ul => testul de mai sus pica
+        with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
+            src = f.read().decode("ascii")
+        paza = '    _paza_ciorna(pg, "inainte_de_chat_nou")'
+        goto = '    pg.goto(target, wait_until="domcontentloaded", timeout=60000)'
+        linii = src.split("\n")
+        ip = [k for k, l in enumerate(linii) if l.rstrip("\r") == paza]
+        ig = [k for k, l in enumerate(linii) if l.rstrip("\r") == goto]
+        self.assertEqual((len(ip), len(ig)), (1, 1))
+        mutat = linii.pop(ip[0])
+        ig = [k for k, l in enumerate(linii) if l.rstrip("\r") == goto][0]
+        linii.insert(ig + 1, mutat)
+        mut = types.ModuleType("gemini_pw_mutant")
+        exec(compile("\n".join(linii), "gemini_pw_mutant", "exec"), mut.__dict__)
+        cod, act = scenariu_atasament_in_tab_curent(mut)
+        self.assertNotEqual((cod, act), ("ciorna_cu_atasamente", []))
+        self.assertIn("press Enter", act)        # mutantul trimite brief-ul, exact ce s-a intamplat pe 19.11
 
 
 if __name__ == "__main__":
