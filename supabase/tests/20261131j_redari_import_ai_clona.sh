@@ -39,7 +39,7 @@ MARCAJ=c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1
 VERS_CLIENT="$(psql --version 2>/dev/null | sed -n 's/^psql (PostgreSQL) \([0-9]*\).*/\1/p')"
 if [ -z "$VERS_CLIENT" ] || [ "$VERS_CLIENT" -lt 13 ]; then echo "refuz: psql >= 13 (\\warn); gasit: $(psql --version 2>&1)" >&2; exit 2; fi
 PS=(psql -X -q -w -v ON_ERROR_STOP=1)
-q() { "${PS[@]}" -tAc "$1" | tr -d ''; }   # tr: psql.exe (Windows) scrie CRLF
+q() { "${PS[@]}" -tAc "$1" | tr -d '\r'; }   # tr: psql.exe (Windows) scrie CRLF
 
 # ── precondiții (doar citiri) ──
 PRE="$(q "SELECT current_setting('server_version_num')::int >= 170000, current_user = 'postgres', to_regclass('public.red_import_ai_jurnal') IS NOT NULL AND to_regclass('public.red_proiect_drepturi_istoric') IS NOT NULL")" \
@@ -111,7 +111,7 @@ asteaptaA() {
   local marcaj="$1" linie
   A_STARE=''
   while IFS= read -r -t 60 -u "$A_FD_OUT" linie 2>/dev/null; do   # 2>/dev/null: descriptorul închis de bash după terminarea lui A (pasul 4)
-    linie="${linie%$''}"
+    linie="${linie%$'\r'}"
     printf '%s\n' "$linie" >> "$A_ERR"
     case "$linie" in "$marcaj "*) A_STARE="${linie#"$marcaj" }"; return 0;; esac
   done
@@ -122,13 +122,13 @@ pasAval() { local marcaj="$1" sql="$2"; printf '%s\n' "$sql \\gset v_" "\\warn $
 inchideA() {
   local linie c
   { printf '%s\n' '\q' >&"$A_FD_IN"; } 2>/dev/null || true
-  while IFS= read -r -t 60 -u "$A_FD_OUT" linie 2>/dev/null; do linie="${linie%$''}"; printf '%s\n' "$linie" >> "$A_ERR"; done
+  while IFS= read -r -t 60 -u "$A_FD_OUT" linie 2>/dev/null; do linie="${linie%$'\r'}"; printf '%s\n' "$linie" >> "$A_ERR"; done
   wait "$A_PID_C" 2>/dev/null; c=$?; [ "$c" = 127 ] && c=0
   A_DESCHIS=0; return "$c"
 }
 ruleazaB() {
   local marcaj="$1"
-  B_IESIRE="$(psql -X -q -w -v ON_ERROR_STOP=0 -f - 2>&1 | tr -d '')"
+  B_IESIRE="$(psql -X -q -w -v ON_ERROR_STOP=0 -f - 2>&1 | tr -d '\r')"
   printf '── B %s ──\n%s\n' "$marcaj" "$B_IESIRE" >> "$B_LOG"
   B_STARE="$(printf '%s\n' "$B_IESIRE" | sed -n "s/^$marcaj //p" | tail -n 1)"; [ -n "$B_STARE" ] || B_STARE='FARA_MARCAJ'
 }
@@ -146,7 +146,7 @@ EOF
 tine_advisory() { q "SELECT (count(*) = 1)::int FROM pg_locks WHERE pid = $1 AND locktype = 'advisory' AND granted"; }
 
 echo "1. sesiunea unica: $SQL1 (date sintetice, ROLLBACK)"
-"${PS[@]}" -v clona=da -f "$SQL1" > "$D/s1.log" 2>&1; c1=$?; ok $c1 "proba intr-o sesiune a rulat fara eroare"; [ "$c1" = 0 ] || tr -d "" < "$D/s1.log" | grep -E "ERROR|NOTICE|eroare" | head -n 8 | sed "s/^/     s1: /"
+"${PS[@]}" -v clona=da -f "$SQL1" 2>&1 | tr -d '\r' > "$D/s1.log"; c1=$?; ok $c1 "proba intr-o sesiune a rulat fara eroare"; [ "$c1" = 0 ] || grep -E "ERROR|NOTICE|eroare" | head -n 8 | sed "s/^/     s1: /"
 LINIE="$(grep -E 'CLONA 20261131j: verificari=' "$D/s1.log" | tail -n 1)"
 case "$LINIE" in *"verdict=OK"*) ok 0 "${LINIE#*NOTICE:  }";; *) ok 1 "verdict: ${LINIE:-lipsa}"; grep -E 'NU  ' "$D/s1.log" | head -n 20;; esac
 
@@ -237,8 +237,15 @@ else
   T1="$(date +%s%3N)"; ASTEPTARE=$((T1 - T0))
   egal "$B_COD" 0 "B: citirea din profiles a reusit dupa eliberare"
   [ "$ASTEPTARE" -ge 100 ] && [ "$ASTEPTARE" -le 3000 ]; ok $? "B a asteptat $ASTEPTARE ms (blocat de A, eliberat de plafonul de 2000 ms; interval acceptat 100..3000)"
+  A_VIU=1; for _ in $(seq 1 20); do A_VIU="$(q "SELECT count(*) FROM pg_stat_activity WHERE pid = $A_BACKEND")"; [ "$A_VIU" = 0 ] && break; done
+  egal "$A_VIU" 0 "backendul lui A ($A_BACKEND) nu mai exista pe server (terminat, nu doar eliberat)"
   pasA A2_DUPA 'SELECT 1;' || true
-  grep -q '25P04\|transaction timeout' "$A_ERR"; ok $? "A a fost terminata de PostgreSQL cu 25P04 (transaction_timeout)"
+  if grep -q '25P04\|transaction timeout' "$A_ERR"; then ok 0 "A a fost terminata de PostgreSQL cu 25P04 (transaction_timeout)"
+  elif [ -n "${MSYSTEM:-}${CYGWIN:-}" ] && grep -q 'connection to server was lost' "$A_ERR" && [ "$A_VIU" = 0 ] && [ "$ASTEPTARE" -ge 1500 ]; then
+    # psql.exe (Windows): FATAL 25P04 sosește, dar socketul e resetat la următoarea scriere și Windows aruncă bufferul de primire (10053) — mesajul nu
+    # ajunge la client. Dovada aici: backendul lui A dispărut + B eliberat după >= 1500 ms (plafonul de 2000 ms). Pe Linux rămâne verificarea strictă.
+    ok 0 "A terminata de server la plafon (client Windows: mesajul 25P04 pierdut de socket; backend disparut, B eliberat la $ASTEPTARE ms)"
+  else ok 1 "A a fost terminata de PostgreSQL cu 25P04 (transaction_timeout)"; fi
   inchideA || true
   egal "$(obiecte)" 7 "dupa terminarea lui A obiectele sunt la locul lor (revenirea anulata)"
 fi
