@@ -147,7 +147,9 @@ adresele UAT pe seria `AU-0001`.
   CHECK HTTPS/300, amprenta politicilor în pre/post; revenire armată cu lock înaintea gărzii de date; DRY owner/editor/viewer,
   proiecte fictive, montaj existent numai citit, SQLSTATE-uri exacte, CAS/versiune, ROLLBACK final. **Nu a fost rulată aici.**
 - Model 4: `repetaRand`, verificări separate pentru adresă (împuternicire obligatorie), 43 de chei comparate cu șablonul real,
-  zero parcele acceptat, active ordonate; `link_afisare` scos prin script, fără alte modificări de text.
+  zero parcele acceptat, active ordonate; `link_afisare` scos prin script, fără alte modificări de text. Din 19.11.2026 (decizia
+  Răzvan, `SABLOANE.md` §1 excepția (12)): Anexa 2 = trimiterea la anunțul de afișare, fără lista parcelelor → 36 de chei, din
+  parcele doar numărul lor; în 🏛️ UAT-uri un indiciu spre butonul „Anunț de afișare (DOCX)”.
 - Modal UAT, admin: generează AU → upload versionat imutabil → UPDATE cu CAS → descărcare; regenerarea confirmată păstrează AU;
   descărcarea existentului folosește URL semnat și versiunea maximă. Conflictul lasă fișierul în bucket. Numărul rezervat poate rămâne consumat.
 - Setări: legătură montaj și preluare contract doar în formular, cu salvare explicită; link GDPR opțional HTTPS.
