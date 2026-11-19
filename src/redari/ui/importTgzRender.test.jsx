@@ -30,6 +30,8 @@ afterEach(() => { hooks.current = null; vi.unstubAllGlobals() })
 import ImportTgz from './ImportTgz.jsx'
 import * as XLSX from 'xlsx-js-style'
 import { semnalFaraValori } from '../importVerificareFixa.js'
+import VerificareAiImport from './VerificareAiImport.jsx'
+import { cheieRandAi } from '../importVerificareAi.js'
 import { faraDiacritice } from '../idParcela.js'
 
 function harness() {
@@ -216,14 +218,35 @@ describe('ImportTgz — bifa pentru rândurile de verificat', () => {
     expect(bifa(tree)).toBeUndefined()
     expect(buton(tree, '📥 Importă').props.disabled).toBe(false)
   })
-  it('tab-ul „De verificat” arată doar rândul, UAT, Nr.Crt., câmpul și motivul (lista albă, fără valoare)', () => {
+  it('tab-ul „De verificat” arată doar rândul, UAT, Nr.Crt., câmpul, sursa (fixă / AI, pasul 2) și motivul (lista albă, fără valoare)', () => {
     const { h, p } = pregateste(cuSemnal())
     h.render(ImportTgz, p)
     h.valori[9] = 'de_verificat'   // subTab
     // TabelPreview e o componentă internă (harness-ul nu o randează): se verifică rândurile primite
     const gaseste = n => !n || typeof n !== 'object' ? [] : Array.isArray(n) ? n.flatMap(gaseste) : [...(n.type?.name === 'TabelPreview' ? [n] : []), ...gaseste(n.props?.children)]
     const [tabel] = gaseste(h.render(ImportTgz, p))
-    expect(tabel.props.randuri).toEqual([{ rand: 4, uat: 'FIC', nr_crt: '1', camp: 'tarla', motiv: 'tarla / nr. topo: pare numele deținătorului' }])
+    expect(tabel.props.randuri).toEqual([{ rand: 4, uat: 'FIC', nr_crt: '1', camp: 'tarla', sursa: 'fixă', motiv: 'tarla / nr. topo: pare numele deținătorului' }])
+  })
+  it('r2 (#1141 P2): panoul AI → onSemnale cu rândurile acoperite: semnalul AI vechi al unui rând NEacoperit rămâne (previzualizare nouă, bifa din nou); cel acoperit se înlocuiește', () => {
+    const vechiAi = { rand: 7, uat: 'FIC', nr_crt: '2', cheie_parcela: 'FIC:2', camp: 'nr_cadastral', motive: ['ai_telefon_cnp'], motiv: 'nr. cadastral / parcelă: AI: pare telefon / CNP', sursa: 'ai' }
+    const pv = { ...cuSemnal(), de_verificat: [semnal, vechiAi] }
+    const { h, p } = pregateste(pv)
+    const [panou] = elemente(h.render(ImportTgz, p), VerificareAiImport)
+    expect(panou).toBeDefined()
+    // rerulare incompletă: doar rândul 4 acoperit (bucata lui reușită, fără semnale); rândul 7 (bucată eșuată) își păstrează semnalul AI
+    panou.props.onSemnale(pv, [], { complet: false }, new Set([cheieRandAi(semnal)]))
+    const p1 = h.valori[I.preview]
+    expect(p1).not.toBe(pv)
+    expect(p1.de_verificat).toEqual([semnal, vechiAi])
+    expect(p1.verificare_ai).toEqual({ complet: false })
+    expect(buton(h.render(ImportTgz, p), '📥 Importă').props.disabled).toBe(true)   // bifa se cere din nou
+    // rândul 7 acoperit acum (bucata lui reușită fără semnale) → semnalul AI vechi dispare; cel fix rămâne
+    panou.props.onSemnale(p1, [], { complet: true }, new Set([cheieRandAi(vechiAi)]))
+    expect(h.valori[I.preview].de_verificat).toEqual([semnal])
+    // un rezultat întârziat pe o previzualizare veche nu se aplică
+    const curenta = h.valori[I.preview]
+    panou.props.onSemnale(pv, [], { complet: true }, new Set())
+    expect(h.valori[I.preview]).toBe(curenta)
   })
 })
 

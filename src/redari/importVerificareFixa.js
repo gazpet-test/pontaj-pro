@@ -29,11 +29,18 @@ export const CAMPURI_VERIFICATE = Object.freeze(['poz_hg', 'nr_cadastral', 'tarl
 export const ETICHETA_CAMP_VERIFICAT = Object.freeze({ poz_hg: 'poz. HG', nr_cadastral: 'nr. cadastral / parcelă', tarla: 'tarla / nr. topo' })
 /** Motivele semnalului (coduri stabile; niciodată valoarea). */
 export const MOTIV_VERIFICARE = Object.freeze({ NUME: 'nume', ADRESA: 'adresa', TELEFON_CNP: 'telefon_cnp', EMAIL_URL: 'email_url' })
+/** Pasul 2 (a doua opinie AI, 19.11.2026): motivele semnalelor AI = `ai_` + categoria din răspunsul validat (CATEGORII_AI, redariImportAi.mjs). */
+export const MOTIV_VERIFICARE_AI = Object.freeze({ NUME: 'ai_nume_persoana', ADRESA: 'ai_adresa', TELEFON_CNP: 'ai_telefon_cnp', EMAIL_WEB: 'ai_email_web', TEXT_LIBER: 'ai_text_liber' })
 export const ETICHETA_MOTIV_VERIFICARE = Object.freeze({
   nume: 'pare numele deținătorului',
   adresa: 'pare adresa deținătorului',
   telefon_cnp: 'pare telefon / CNP',
   email_url: 'pare e-mail / adresă web',
+  ai_nume_persoana: 'AI: pare nume de persoană / firmă',
+  ai_adresa: 'AI: pare o adresă',
+  ai_telefon_cnp: 'AI: pare telefon / CNP',
+  ai_email_web: 'AI: pare e-mail / adresă web',
+  ai_text_liber: 'AI: text liber, nu un identificator',
 })
 export const MIN_LITERE_CUVANT = 4
 /** Explicația afișată în ecran și titlul secțiunii. */
@@ -146,11 +153,14 @@ export function numarRanduriDeVerificat(semnale = []) {
  */
 export function semnalFaraValori(s) {
   const camp = CAMPURI_VERIFICATE.includes(s?.camp) ? s.camp : ''
-  const coduri = new Set(Object.values(MOTIV_VERIFICARE))
+  // pasul 2: un semnal AI (sursa 'ai') păstrează doar codurile AI; unul fix, doar codurile fixe (motivul se reface din coduri, nu se copiază)
+  const ai = s?.sursa === 'ai'
+  const coduri = new Set(Object.values(ai ? MOTIV_VERIFICARE_AI : MOTIV_VERIFICARE))
   const motive = Array.isArray(s?.motive) ? s.motive.filter(m => coduri.has(m)) : []
   return {
     rand: Number.isInteger(s?.rand) ? s.rand : null, uat: String(s?.uat ?? ''), nr_crt: String(s?.nr_crt ?? ''), cheie_parcela: String(s?.cheie_parcela ?? ''),
-    camp, motive, motiv: `${ETICHETA_CAMP_VERIFICAT[camp] ?? 'câmp necunoscut'}: ${motive.map(m => ETICHETA_MOTIV_VERIFICARE[m]).join(' + ') || 'de verificat'}`,
+    camp, motive, motiv: `${ETICHETA_CAMP_VERIFICAT[camp] ?? 'câmp necunoscut'}: ${motive.map(m => ETICHETA_MOTIV_VERIFICARE[m]).join(' + ') || (ai ? 'AI: de verificat' : 'de verificat')}`,
+    ...(ai ? { sursa: 'ai' } : {}),
   }
 }
 
@@ -241,7 +251,7 @@ export const CAMPURI_FARA_VALORI_PARCELA = Object.freeze([
   // deținătorul (previzualizarea îl arată intenționat) și metadatele lui
   'nume', 'nume_normalizat', 'calitate', 'cota', 'sursa_date', 'versiune_lista_tgz',
   // texte fixe din cod (motive, stări) și alte coloane ale parcelei, care nu sunt câmpuri verificate
-  'motiv', 'motiv_ambiguitate', 'stare', 'tronson', 'categoria_folosinta', 'categorie', 'camp',
+  'motiv', 'motiv_ambiguitate', 'stare', 'tronson', 'categoria_folosinta', 'categorie', 'camp', 'sursa',
   // „Regim juridic: …” + note de județ (adresă / coloana Județ / rând) — fără poz. HG / cadastru / tarla
   'observatii',
 ])
