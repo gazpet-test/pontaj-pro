@@ -3,11 +3,12 @@
 // e probat pe migrarea reală în scripts/pglite/test_upa_alerta_local.mjs; aici BD-ul simulat întoarce ce ar întoarce rezervarea în fiecare caz.
 import { describe, it, expect } from 'vitest'
 import { lei, lunaText, zileText, mailUpa, cheieIdempotenta, ruleazaAlertaUpa } from '../supabase/functions/_shared/upaAlerta.mjs'
-import { validaPlafon, avertismenteAchizitie, starePlafonLuna, lunaDinZi, luniInapoi, ziRO } from './upaLogica.js'
+import { validaPlafon, avertismenteAchizitie, starePlafonLuna, lunaDinZi, luniInapoi, ziRO,
+         stareSalvare, citireDupaSalvare, conflictCheie, pdfExistaDeja, caleaPdf, ordineFurnizori } from './upaLogica.js'
 
 const ZILNIC = { id: 7, cheie: 'zilnic:2031-01-25', fel: 'zilnic', luna: '2031-01-01', plafon: 7000, consumat: 1500, ramas: 5500, zile_ramase: 7, stare: 'rezervat', destinatari: ['ana@gazpet.ro', 'ion@gazpet.ro'] }
 const INCHIDERE = { id: 8, cheie: 'inchidere:2030-12', fel: 'inchidere', luna: '2030-12-01', plafon: 6000, consumat: 2000, ramas: 4000, zile_ramase: null, stare: 'rezervat', destinatari: ['ana@gazpet.ro'] }
-const rez = (randuri, extra = {}) => ({ activ: true, zi: '2031-01-25', inchis: null, reconciliate: 0, furnizori_upa: ['UPA Unu SRL'], n: randuri.length, randuri, ...extra })
+const rez = (randuri, extra = {}) => ({ activ: true, zi: '2031-01-25', inchis: null, reconciliate: 0, furnizori_upa: ['UPA Unu SRL'], erori_config: [], n: randuri.length, randuri, ...extra })
 
 // BD simulat: întoarce rezervările date, pe rând (o rulare = un apel), și înregistrează marcările
 function bdSimulat(rezervari, { marcare = 1, eroareRezervare = null } = {}) {
@@ -143,10 +144,35 @@ describe('edge-ul (ruleazaAlertaUpa) cu BD și Resend simulate', () => {
     expect((await ruleazaAlertaUpa({ sb: bdSimulat([], { eroareRezervare: { code: '42501' } }), fetchFn: rs.fetchFn, resendKey: 'k' })).body.error).toBe('rezervare_indisponibila')
     expect((await ruleazaAlertaUpa({ sb: bdSimulat([{ ...rez([ZILNIC]), n: 2 }]), fetchFn: rs.fetchFn, resendKey: 'k' })).body.error).toBe('rezervare_incompleta')
     expect((await ruleazaAlertaUpa({ sb: bdSimulat([{ activ: true, n: 0 }]), fetchFn: rs.fetchFn, resendKey: 'k' })).body.error).toBe('rezervare_incompleta')
+    // contractul runda 2: erori_config lipsă / nu e listă / coduri ciudate = rezervare incompletă (nu „ziua fără alertă”)
+    for (const ec of [undefined, null, 'fara_plafon', [1], ['Fara Plafon'], ['x'.repeat(41)]]) {
+      const raspuns = await ruleazaAlertaUpa({ sb: bdSimulat([rez([], { erori_config: ec })]), fetchFn: rs.fetchFn, resendKey: 'k' })
+      expect(raspuns).toEqual({ status: 500, body: { ok: false, error: 'rezervare_incompleta' } })
+    }
     expect(rs.trimise).toHaveLength(0)
   })
+  it('configurarea defectă: ok:false + configurare_invalida + codurile, la fiecare rulare (L18)', async () => {
+    const sb = bdSimulat([rez([], { erori_config: ['setare_zi_invalida'] }), rez([], { erori_config: ['setare_zi_invalida'] }),
+      rez([INCHIDERE], { erori_config: ['setare_zi_invalida', 'fara_plafon'] })]), rs = resendSimulat()
+    const r1 = await ruleazaAlertaUpa({ sb, fetchFn: rs.fetchFn, resendKey: 'k' })
+    const r2 = await ruleazaAlertaUpa({ sb, fetchFn: rs.fetchFn, resendKey: 'k' })
+    for (const r of [r1, r2]) {
+      expect(r.status).toBe(200)
+      expect(r.body).toMatchObject({ ok: false, error: 'configurare_invalida', erori_config: ['setare_zi_invalida'], rezervate: 0 })
+    }
+    // închiderea lunii trecute pleacă și când configurarea lunii curente e defectă; răspunsul spune ambele lucruri
+    const r3 = await ruleazaAlertaUpa({ sb, fetchFn: rs.fetchFn, resendKey: 'k' })
+    expect(rs.trimise).toHaveLength(1)
+    expect(r3.body).toMatchObject({ ok: false, error: 'configurare_invalida', erori_config: ['setare_zi_invalida', 'fara_plafon'], trimis: 1 })
+  })
+  it('configurarea în regulă: ok:true, erori_config [] , fără error', async () => {
+    const r = await ruleazaAlertaUpa({ sb: bdSimulat([rez([])]), fetchFn: resendSimulat().fetchFn, resendKey: 'k' })
+    expect(r.body.ok).toBe(true)
+    expect(r.body.erori_config).toEqual([])
+    expect(r.body).not.toHaveProperty('error')
+  })
   it('alerta oprită: skip, niciun mail', async () => {
-    const sb = bdSimulat([{ activ: false, zi: '2031-01-25', inchis: null, n: 0, randuri: [] }]), rs = resendSimulat()
+    const sb = bdSimulat([{ activ: false, zi: '2031-01-25', inchis: null, erori_config: [], n: 0, randuri: [] }]), rs = resendSimulat()
     const r = await ruleazaAlertaUpa({ sb, fetchFn: rs.fetchFn, resendKey: 'k' })
     expect(r.body).toMatchObject({ ok: true, skip: 'alerta_oprita' })
     expect(rs.trimise).toHaveLength(0)
@@ -206,5 +232,59 @@ describe('ecranul (upaLogica)', () => {
       .toEqual({ text: 'plafon consumat ✓ · după închidere +100,00 lei', ton: 'verde' })
     expect(starePlafonLuna({ inchisa: false, plafon: null, consumat: 300 }).text).toBe('plafon neînregistrat pentru luna asta')
     expect(starePlafonLuna({ inchisa: false, plafon: 7000, consumat: 3000 })).toEqual({ text: 'neînchisă · estimat necheltuit 4.000,00 lei', ton: 'galben' })
+  })
+})
+
+// runda 2 (L04 / L05): răspunsurile ca de la postgrest-js (status HTTP păstrat; o excepție de rețea = fără status)
+describe('salvarea din formular: cheia de intenție, PDF-ul doar după refuz sigur', () => {
+  const P = { furnizor_id: 1, numar_factura: 'F-9', luna: '2026-11-01', valoare: 120.5, document_path: 'manual/2026-11/k-1.pdf' }
+  const RAND = { id: 44, furnizor_id: 1, numar_factura: 'F-9', luna: '2026-11-01', valoare: '120.50', document_path: 'manual/2026-11/k-1.pdf' }
+  const CHEIE = { error: { code: '23505', message: 'duplicate key value violates unique constraint "upa_achizitii_cheie_intentie_uidx"' }, status: 409 }
+  it('rândul întors = salvat (fără citire)', () => {
+    const res = { data: [{ id: 44 }], error: null, status: 201 }
+    expect(citireDupaSalvare(res)).toBe(false)
+    expect(stareSalvare(res, null, P)).toBe('salvat')
+  })
+  it('refuz sigur 4xx (drept, constrângere, cerere invalidă) = refuzat: PDF-ul se poate scoate', () => {
+    for (const res of [{ error: { code: '42501', message: 'new row violates row-level security' }, status: 403 },
+      { error: { code: '23514', message: 'check' }, status: 400 }, { error: { code: 'PGRST204', message: 'col' }, status: 400 },
+      { error: { code: '23505', message: 'duplicate key value violates unique constraint "alt_index"' }, status: 409 }]) {
+      expect(citireDupaSalvare(res)).toBe(false)
+      expect(stareSalvare(res, null, P)).toBe('refuzat')
+    }
+  })
+  it('un cod de eroare NU ajunge: 5xx / rețea / fără status = necunoscut (nimic șters), chiar cu cod', () => {
+    for (const res of [{ error: { code: '57014', message: 'canceling statement due to statement timeout' }, status: 500 },
+      { error: { code: 'X', message: 'Bad gateway' }, status: 502 }, { error: { message: 'Failed to fetch' }, status: 0 },
+      { error: new TypeError('fetch failed') }, { error: { code: '42501' } }, undefined, { data: [], error: null, status: 201 }]) {
+      expect(citireDupaSalvare(res)).toBe(true)
+      expect(stareSalvare(res, null, P)).toBe('necunoscut')
+      expect(stareSalvare(res, { data: null, error: null }, P)).toBe('necunoscut')        // rândul nu se vede: nedovedit
+      expect(stareSalvare(res, { data: null, error: { message: 'x' } }, P)).toBe('necunoscut')
+      expect(stareSalvare(res, { data: RAND, error: null }, P)).toBe('salvat')          // rândul cu cheia noastră se vede: intrase
+    }
+  })
+  it('conflictul pe CHEIA noastră = reîncercare după o salvare intrată: se citește rândul, nu e refuz', () => {
+    expect(conflictCheie(CHEIE)).toBe(true)
+    expect(conflictCheie({ error: { code: '23505', message: 'duplicate key ... "alt_index"' }, status: 409 })).toBe(false)
+    expect(citireDupaSalvare(CHEIE)).toBe(true)
+    expect(stareSalvare(CHEIE, { data: RAND, error: null }, P)).toBe('salvat')
+    expect(stareSalvare(CHEIE, { data: null, error: null }, P)).toBe('necunoscut')
+    // aceeași cheie cu alte valori = nu e „salvat”
+    expect(stareSalvare(CHEIE, { data: { ...RAND, valoare: '99' }, error: null }, P)).toBe('diferit')
+    expect(stareSalvare(CHEIE, { data: { ...RAND, numar_factura: 'F-10' }, error: null }, P)).toBe('diferit')
+    expect(stareSalvare(CHEIE, { data: { ...RAND, document_path: null }, error: null }, P)).toBe('diferit')
+  })
+  it('PDF-ul: „există deja” la calea intenției, calea cu cheia și versiunea fișierului', () => {
+    expect(pdfExistaDeja({ statusCode: '409', message: 'The resource already exists' })).toBe(true)
+    expect(pdfExistaDeja({ status: 409, message: 'x' })).toBe(true)
+    expect(pdfExistaDeja({ statusCode: '400', message: 'Duplicate' })).toBe(true)
+    expect(pdfExistaDeja({ statusCode: '403', message: 'new row violates row-level security policy' })).toBe(false)
+    expect(pdfExistaDeja(null)).toBe(false)
+    expect(caleaPdf('2026-11-01', 'abc', 2)).toBe('manual/2026-11/abc-2.pdf')
+  })
+  it('furnizorii: ordonați după nume (alfabet românesc), id la egalitate', () => {
+    const l = [{ id: 3, nume: 'Ţesătoria' }, { id: 1, nume: 'Beta' }, { id: 2, nume: 'Alfa' }, { id: 9, nume: 'Alfa' }, { id: 5, nume: 'Șase' }]
+    expect([...l].sort(ordineFurnizori).map(x => x.id)).toEqual([2, 9, 1, 5, 3])
   })
 })

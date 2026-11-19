@@ -1,6 +1,7 @@
 // Unități protejate (UPA, 20261229a) — logica pură a ecranului (fără rețea; testele: src/upaAlerta.test.js).
 // Ce e „sub plafon după ziua din setări” NU se calculează aici: vine calculat din BD (fn_upa_luni.in_alerta, L19).
 import { lei } from '../supabase/functions/_shared/upaAlerta.mjs'
+import { respingereServer } from './citesteOriceDubluri.js'
 
 // ziua de azi în România (L17: nu UTC, nu new Date('YYYY-MM-DD'))
 export const ziRO = (acum = new Date()) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest' }).format(acum)
@@ -40,6 +41,43 @@ export function avertismenteAchizitie({ dataFactura, luna, arePdf }) {
   if (ld && ll && ld !== ll) a.push({ cod: 'luna_diferita', text: `Factura e din ${numeLuna(ld)}, dar se scade din ${numeLuna(ll)}.` })
   return a
 }
+
+// ─── Salvarea unei achiziții din formular (L04 / L05, runda 2) ───────────────────────────────────────────────────────────
+// Fiecare formular are o cheie de intenție (UUID, coloana cheie_intentie, UNIQUE în BD); reîncercarea trimite ACEEAȘI cheie,
+// deci o salvare intrată cu răspunsul pierdut nu se dublează. Rezultatul:
+//   'salvat'     INSERT-ul a întors rândul, sau rândul cu cheia noastră se vede (după un răspuns pierdut / conflict pe cheie)
+//   'refuzat'    serverul a refuzat SIGUR (4xx, respingereServer) și nu e conflictul cheii noastre: nimic scris, PDF-ul se poate scoate
+//   'necunoscut' rețea / timeout / 5xx / răspuns ciudat și rândul nu se vede (sau citirea a picat): nu se șterge nimic, formularul
+//                rămâne înghețat, singura acțiune e reîncercarea identică
+//   'diferit'    rândul cu cheia noastră există, dar cu alte valori (n-ar trebui să se întâmple: formularul e înghețat) — nimic șters
+export const CONSTRANGERE_CHEIE = 'upa_achizitii_cheie_intentie_uidx'
+export const conflictCheie = res => !!(res && res.error && res.error.code === '23505' && String(res.error.message || '').includes(CONSTRANGERE_CHEIE))
+// trebuie citit rândul după cheie? (tot ce nu e rând întors sau refuz sigur fără legătură cu cheia)
+export function citireDupaSalvare(res) {
+  if (res && !res.error && Array.isArray(res.data) && res.data.length === 1) return false
+  if (conflictCheie(res)) return true
+  return !respingereServer(res)
+}
+// același rând? (valorile pe care le-a scris formularul)
+export function acelasiRand(r, p) {
+  if (!r || !p) return false
+  const n = x => x == null || x === '' ? null : String(x)
+  return n(r.numar_factura) === n(p.numar_factura) && String(r.luna).slice(0, 10) === String(p.luna).slice(0, 10)
+    && Number(r.valoare) === Number(p.valoare) && n(r.furnizor_id) === n(p.furnizor_id) && n(r.document_path) === n(p.document_path)
+}
+// res = răspunsul INSERT-ului ({ data, error, status }; o excepție = { error } fără status); citire = { data: rând | null, error } după cheie
+export function stareSalvare(res, citire, payload) {
+  if (res && !res.error && Array.isArray(res.data) && res.data.length === 1) return 'salvat'
+  if (respingereServer(res) && !conflictCheie(res)) return 'refuzat'
+  const { data: r, error: e } = citire || {}
+  if (!citire || e || !r) return 'necunoscut'
+  return acelasiRand(r, payload) ? 'salvat' : 'diferit'
+}
+// încărcarea PDF-ului: „există deja” la calea intenției (cheia + versiunea fișierului ales) = încărcarea anterioară a ACESTEI intenții
+export const pdfExistaDeja = e => !!e && (String(e.statusCode ?? e.status ?? '') === '409' || /already exists|duplicate/i.test(String(e.message || '')))
+export const caleaPdf = (luna, cheie, versiune) => `manual/${String(luna).slice(0, 7)}/${cheie}-${versiune}.pdf`
+// furnizorii se citesc pe pagini după id (keyset, L23), apoi se ordonează după nume (alfabetul românesc), id la egalitate
+export const ordineFurnizori = (a, b) => String(a.nume ?? '').localeCompare(String(b.nume ?? ''), 'ro') || (Number(a.id) - Number(b.id))
 
 // textul unei luni din istoric (rândurile fn_upa_luni): plafonul ACELEI luni, necheltuitul de la închidere (instantaneul), diferențele de după
 export function starePlafonLuna(l) {

@@ -8,7 +8,9 @@
 //    mail; destinatari invalizi; setare invalidă; comutator oprit; reconcilierea), notificările în aplicație, marcarea (CAS).
 // 4. Edge-ul (supabase/functions/_shared/upaAlerta.mjs, ruleazaAlertaUpa) pe BD-ul migrării cu Resend simulat: mailurile, cheia de idempotență,
 //    5xx / rețea = necunoscut, 4xx = eroare, fără cheie = nimic rezervat. Paritatea textelor JS <-> SQL (lei / luna / zile).
-// 5. Refuzurile migrării și ale revenirii; aplicare -> revenire -> reaplicare (și cu politica veche pe rolul public); MUTANȚI.
+// 5. Refuzurile migrării și ale revenirii; aplicare -> revenire -> reaplicare (cele 4 forme ale politicii vechi); MUTANȚI.
+// Runda 2: codurile de configurare la fiecare rulare (erori_config), cheia de intenție (UNIQUE), proba notificărilor din preflight, amprenta
+//   COMPLETĂ a obiectelor (blocul identic migrare / revenire; refuzurile revenirii pe fiecare familie de abatere).
 // Rulare (din rădăcina repo-ului; cere bash + python3 în PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_upa_alerta_local.mjs
 //   (--scrie-obiecte rescrie lista revizuită L15 din manifestul generat)
 import { PGlite } from '@electric-sql/pglite'
@@ -88,12 +90,25 @@ INSERT INTO public.upa_achizitii (furnizor_id, numar_factura, data_factura, luna
 // plafonul istoric pe luni de probă (scris ca la migrare; în producție lunile vechi nu au plafon înregistrat)
 const ISTORIC = `INSERT INTO public.upa_plafon_lunar (luna, plafon, setat_de, sursa) VALUES ('2030-12-01', 6000, NULL, 'migrare'), ('2031-01-01', 7000, NULL, 'migrare');`
 
-async function bazaNoua({ politicaPublic = false, schelet = SCHELET, date = DATE } = {}) {
+// politica veche: cele 2 x 2 forme acceptate (rolul public / authenticated; fără WITH CHECK / WITH CHECK (auth.uid() IS NOT NULL))
+const LINIE_POLITICA = 'CREATE POLICY upa_achizitii_all ON public.upa_achizitii FOR ALL TO authenticated USING (auth.uid() IS NOT NULL);'
+async function bazaNoua({ politicaPublic = false, checkUid = false, schelet = SCHELET, date = DATE } = {}) {
   const db = new PGlite()
-  await db.exec(politicaPublic ? schelet.replace('upa_achizitii FOR ALL TO authenticated USING', 'upa_achizitii FOR ALL TO public USING') : schelet)
+  if (schelet.split(LINIE_POLITICA).length !== 2) throw new Error('scheletul nu mai are politica veche pe o linie')
+  const pol = `CREATE POLICY upa_achizitii_all ON public.upa_achizitii FOR ALL TO ${politicaPublic ? 'public' : 'authenticated'} USING (auth.uid() IS NOT NULL)`
+    + (checkUid ? ' WITH CHECK (auth.uid() IS NOT NULL);' : ';')
+  await db.exec(schelet.replace(LINIE_POLITICA, pol))
   await db.exec(date)
   return db
 }
+// forma exactă a politicilor pe upa_achizitii (nume | comandă | P/R | roluri | USING | CHECK)
+const politiciAchizitii = async db => (await db.query(`SELECT string_agg(p.polname || ' | ' || p.polcmd::text || ' | ' || CASE WHEN p.polpermissive THEN 'P' ELSE 'R' END
+  || ' | ' || (SELECT string_agg(CASE ro WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(ro) END, ',') FROM unnest(p.polroles) ro) || ' | '
+  || coalesce(pg_get_expr(p.polqual, p.polrelid), '-') || ' | ' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '-'), chr(10) ORDER BY p.polname) AS t
+  FROM pg_policy p WHERE p.polrelid = 'public.upa_achizitii'::regclass`)).rows[0].t
+// blocul AMPRENTA dintr-un fișier (între liniile marcaj)
+const blocAmprenta = t => { const i = t.indexOf('AMPRENTA_20261229a_INCEPUT'), j = t.indexOf('-- AMPRENTA_20261229a_SFARSIT'); return i < 0 || j < 0 ? null : t.slice(t.indexOf('\n', i) + 1, j) }
+const constanteAmprenta = t => [...t.matchAll(/'([0-9a-f]{32})' THEN\n    RAISE NOTICE 'AMPRENTA_20261229a_TEXT/g)].map(x => x[1])
 async function caRunner(db, nume, text, { plafon = PLAFON_LIVRARE, marcajPlafon = true, marcaj = true, l15 = 'inainte', aprobat = '-', manifest = '-', final = 'COMMIT' } = {}) {
   const pre = plafon ? `SET transaction_timeout = ${plafon};` : 'SET transaction_timeout = 0;'
   const mp = marcajPlafon ? `SELECT set_config('gazpet.plafon_tranzactie', '${plafon}:' || txid_current(), true);` : ''
@@ -174,6 +189,19 @@ async function verifica(db) {
     const r = await caRol(db, 'authenticated', uid, 'SELECT public.fn_upa_poate_scrie() AS v')
     tine(r.rows && r.rows[0].v === astept, `fn_upa_poate_scrie(${uid || 'fără sub'}) = ${astept} (${r.err || r.rows[0].v})`)
   }
+  // cheia de intenție (L04 / L16): aceeași cheie a doua oară = 23505 pe constrângerea cheii, un singur rând; fără cheie = mai multe rânduri permise
+  const K = '11111111-2222-4333-8444-555555555555'
+  const insK = () => caRol(db, 'authenticated', U.ED, `INSERT INTO public.upa_achizitii (furnizor_id, numar_factura, luna, valoare, cheie_intentie) VALUES (1, 'K-1', '2031-05-01', 10, $1) RETURNING id`, [K])
+  const k1 = await insK(), k2 = await insK()
+  const nk = await q1(db, 'SELECT count(*)::int AS n FROM public.upa_achizitii WHERE cheie_intentie = $1', [K])
+  tine(!k1.err && k2.err === '23505' && /upa_achizitii_cheie_intentie_uidx/.test(k2.msg || '') && nk.n === 1,
+    `cheia de intenție: a doua salvare = 23505 pe cheie, un rând (${k1.err || 'ok'} / ${k2.err} ${k2.msg || ''} / ${nk.n})`)
+  const vk = await caRol(db, 'authenticated', U.NO, 'SELECT id FROM public.upa_achizitii WHERE cheie_intentie = $1', [K])
+  tine(vk.rows?.length === 1, `rândul se regăsește după cheie de orice cont logat (reconcilierea ecranului) (${vk.err || vk.rows.length})`)
+  await db.query('DELETE FROM public.upa_achizitii WHERE cheie_intentie = $1', [K])
+  const f1 = await caRol(db, 'authenticated', U.ED, `INSERT INTO public.upa_achizitii (furnizor_id, numar_factura, luna, valoare) VALUES (1, 'N-1', '2031-05-01', 1), (1, 'N-2', '2031-05-01', 1) RETURNING id`)
+  tine(!f1.err && f1.rows.length === 2, `fără cheie (Citește Orice, rândurile vechi): mai multe rânduri cu NULL permise (${f1.err || f1.rows.length})`)
+  await db.query(`DELETE FROM public.upa_achizitii WHERE numar_factura IN ('N-1', 'N-2')`)
   // 2. tabelele noi: nicio scriere directă; jurnalul doar pentru owner
   for (const rol of ['authenticated', 'service_role', 'anon']) {
     for (const sql of [`INSERT INTO public.upa_plafon_lunar (luna, plafon, sursa) VALUES ('2032-01-01', 1, 'migrare')`,
@@ -222,6 +250,7 @@ async function verifica(db) {
   tine(r.n === 1 && r.randuri[0].fel === 'inchidere' && r.randuri[0].ramas === 4000 && r.randuri[0].stare === 'rezervat'
     && JSON.stringify(r.randuri[0].destinatari) === '["ana@gazpet.ro","ion@gazpet.ro"]',
     `24.01: un singur rând (închiderea), fără alerta zilei (${JSON.stringify(r.randuri)})`)
+  tine(Array.isArray(r.erori_config) && r.erori_config.length === 0, `24.01: configurarea în regulă = erori_config [] (${JSON.stringify(r.erori_config)})`)
   let nn = await nrNotif(db)
   const tn = await q1(db, `SELECT title, type, modul, link_to FROM public.notifications ORDER BY id DESC LIMIT 1`)
   tine(nn - n0 === 5 && tn.title === 'Fond handicap decembrie 2030: necheltuit 4.000,00 lei' && tn.type === 'error' && tn.modul === 'Administrativ'
@@ -276,8 +305,10 @@ async function verifica(db) {
   r = await rezervaLa(db, '2031-02-27')
   const er = await q1(db, `SELECT stare, eroare, nr_notificari FROM public.upa_alerta_jurnal WHERE cheie = 'eroare:2031-02-27:setare_zi_invalida'`)
   tine(r.n === 0 && er?.stare === 'eroare' && er?.nr_notificari === 1 && await nrNotif(db) - n0 === 1, `setare invalidă: eroare în BD + notificare doar owner-ului (${JSON.stringify(er)})`)
+  tine(JSON.stringify(r.erori_config) === '["setare_zi_invalida"]', `setare invalidă: codul întors explicit (${JSON.stringify(r.erori_config)})`)
   r = await rezervaLa(db, '2031-02-27')
   tine(await nrNotif(db) - n0 === 1, 'setare invalidă: a doua rulare în aceeași zi nu dublează eroarea')
+  tine(r.n === 0 && JSON.stringify(r.erori_config) === '["setare_zi_invalida"]', `setare invalidă: a doua rulare întoarce TOT codul (nu „nimic”) (${JSON.stringify(r.erori_config)})`)
   // pragul 31 într-o lună de 30 de zile = ultima zi
   await setare(db, 'upa_alerta_zi', '31')
   r = await rezervaLa(db, '2031-04-29')
@@ -297,8 +328,16 @@ async function verifica(db) {
   // fără plafon înregistrat: erorile de configurare
   r = await rezervaLa(db, '2020-05-25')
   const fp = (await db.query(`SELECT cheie FROM public.upa_alerta_jurnal WHERE zi = '2020-05-25' ORDER BY cheie`)).rows.map(x => x.cheie)
-  tine(r.n === 0 && JSON.stringify(fp) === '["eroare:2020-05-25:fara_plafon"]' && !r.inchis,
-    `fără plafon: o eroare (luna curentă); luna anterioară dinaintea primului plafon nu se închide și nu e eroare (${fp})`)
+  tine(r.n === 0 && JSON.stringify(fp) === '["eroare:2020-05-25:fara_plafon"]' && !r.inchis && JSON.stringify(r.erori_config) === '["fara_plafon"]',
+    `fără plafon: o eroare (luna curentă), codul întors; luna anterioară dinaintea primului plafon nu se închide și nu e eroare (${fp} ${JSON.stringify(r.erori_config)})`)
+  r = await rezervaLa(db, '2020-05-25')
+  tine(r.n === 0 && JSON.stringify(r.erori_config) === '["fara_plafon"]', `fără plafon, a doua rulare: codul întors din nou (${JSON.stringify(r.erori_config)})`)
+  // ambele defecte deodată: ambele coduri (jurnal + răspuns)
+  await setare(db, 'upa_alerta_zi', '')
+  r = await rezervaLa(db, '2020-06-25')
+  const amb = (await db.query(`SELECT cheie FROM public.upa_alerta_jurnal WHERE zi = '2020-06-25' ORDER BY cheie`)).rows.map(x => x.cheie)
+  tine(JSON.stringify(r.erori_config) === '["setare_zi_invalida","fara_plafon"]' && amb.length === 2, `ambele defecte: ambele coduri (${JSON.stringify(r.erori_config)} ${amb})`)
+  await setare(db, 'upa_alerta_zi', '25')
   // reconcilierea: o rezervare rămasă > 1 h devine „necunoscut” (fără retrimitere)
   const rv = await q1(db, `SELECT id FROM public.upa_alerta_jurnal WHERE stare = 'rezervat' ORDER BY id LIMIT 1`)
   await db.query(`UPDATE public.upa_alerta_jurnal SET creat_la = now() - interval '2 hours' WHERE id = $1`, [rv.id])
@@ -319,7 +358,8 @@ async function verifica(db) {
   const nj = (await q1(db, 'SELECT count(*)::int AS n FROM public.upa_alerta_jurnal')).n
   const pr = await caRol(db, 'service_role', null, 'SELECT public.fn_upa_alerta_proba() AS r')
   tine(pr.rows?.[0].r?.zi === (await q1(db, `SELECT (now() AT TIME ZONE 'Europe/Bucharest')::date::text AS z`)).z
-    && (await q1(db, 'SELECT count(*)::int AS n FROM public.upa_alerta_jurnal')).n === nj, `proba (service_role): ziua din România, nimic scris (${pr.err || ''})`)
+    && (await q1(db, 'SELECT count(*)::int AS n FROM public.upa_alerta_jurnal')).n === nj && Array.isArray(pr.rows?.[0].r?.erori_config),
+    `proba (service_role): ziua din România, erori_config, nimic scris (${pr.err || JSON.stringify(pr.rows?.[0].r?.erori_config)})`)
   const rr = await caRol(db, 'service_role', null, 'SELECT public.fn_upa_alerta_rezerva() AS r')
   tine(rr.rows?.[0].r?.activ === true && rr.rows[0].r.zi === pr.rows?.[0].r?.zi, `fn_upa_alerta_rezerva() ca service_role (${rr.err || rr.rows[0].r.zi})`)
   return ab
@@ -398,6 +438,16 @@ async function verificaEdge(db, ruleazaAlertaUpa = MOD_EDGE.ruleazaAlertaUpa) {
     && r.body.luna_inchisa === '2031-01-01', `01.02: închiderea + mailul (${r.apeluri[0]?.body.subject})`)
   r = await ruleaza()
   tine(r.apeluri.length === 0 && r.body.luna_inchisa === null, '01.02 a doua rulare: nimic (idempotent)')
+  // configurare defectă (L18): ok:false + error configurare_invalida + codul, la FIECARE rulare (și a doua, când jurnalul nu mai scrie nimic)
+  await setare(db, 'upa_alerta_zi', 'abc')
+  stare.zi = '2031-02-26'; r = await ruleaza()
+  const rc2 = await ruleaza()
+  tine(r.status === 200 && r.body.ok === false && r.body.error === 'configurare_invalida' && JSON.stringify(r.body.erori_config) === '["setare_zi_invalida"]'
+    && rc2.body.ok === false && rc2.body.error === 'configurare_invalida' && JSON.stringify(rc2.body.erori_config) === '["setare_zi_invalida"]'
+    && r.apeluri.length === 0 && rc2.apeluri.length === 0, `configurare defectă: răspuns explicit la ambele rulări (${JSON.stringify(r.body)} / ${JSON.stringify(rc2.body)})`)
+  await setare(db, 'upa_alerta_zi', '25')
+  stare.zi = '2031-02-20'; r = await ruleaza()
+  tine(r.body.ok === true && !r.body.error && JSON.stringify(r.body.erori_config) === '[]', `configurare în regulă, zi sub prag: ok:true, erori_config [] (${JSON.stringify(r.body)})`)
   // alerta oprită
   await setare(db, 'upa_alerta_activa', 'false')
   stare.zi = '2031-02-25'; r = await ruleaza()
@@ -408,6 +458,13 @@ async function verificaEdge(db, ruleazaAlertaUpa = MOD_EDGE.ruleazaAlertaUpa) {
   r = await ruleazaAlertaUpa({ sb, fetchFn: async () => { throw new Error('nu') }, resendKey: 'x', dry: true })
   tine(r.status === 200 && r.body.dry === true && typeof r.body.in_alerta !== 'undefined' && (await q1(db, 'SELECT count(*)::int AS n FROM public.upa_alerta_jurnal')).n === nj, 'proba: nimic scris')
   return ab
+}
+
+console.log('0b. blocul AMPRENTA: identic în migrare și în revenire, aceeași constantă revizuită')
+{
+  const bm = blocAmprenta(MIG), br = blocAmprenta(REV), cm = constanteAmprenta(MIG), cr = constanteAmprenta(REV)
+  ok(bm && bm.length > 2000 && bm === br, `blocul de calcul e identic (${bm?.length} / ${br?.length} caractere)`)
+  ok(cm.length === 1 && cr.length === 1 && cm[0] === cr[0], `aceeași constantă în ambele fișiere (${cm} / ${cr})`)
 }
 
 console.log('1. aplicarea ca la livrare (L15 v2): manifestul = lista revizuită; PLAFON_TIMP; LOCK_TINUT')
@@ -433,6 +490,7 @@ let G_MANIFEST = null
     'livrarea aprobată: diferența = manifestul; PLAFON_TIMP (5000)')
   ok(j.some(m => /^20261229a: lock la \d+ ms de la BEGIN \(1 incercari/.test(m)) && j.some(m => new RegExp(`^LOCK_TINUT ${NUME}: `).test(m) && !/nedeclarat/.test(m)),
     'blocul de lock: o încercare; LOCK_TINUT declarat: ' + (j.find(m => /^LOCK_TINUT/.test(m)) || '').slice(0, 120))
+  ok(await nrNotif(db) === 0, 'proba notificărilor din preflight nu a lăsat niciun rând (subtranzacție anulată)')
   const ab = await verifica(db)
   ab.forEach(a => console.log('     ' + a))
   ok(ab.length === 0, `comportamentul după migrare (${ab.length} abateri)`)
@@ -471,8 +529,15 @@ for (const [nume, pregatire, o, re] of [
   ['plafonul din setări invalid', `UPDATE public.logistica_setari SET value = '7.000' WHERE key = 'upa_plafon_lunar';`, {}, /upa_plafon_lunar lipseste, e dublat sau nu e un numar pozitiv/],
   ['plafonul din setări lipsă', `DELETE FROM public.logistica_setari WHERE key = 'upa_plafon_lunar';`, {}, /upa_plafon_lunar lipseste/],
   ['coloana luna cu alt tip', `ALTER TABLE public.upa_achizitii ALTER COLUMN luna TYPE text;`, {}, /coloana upa_achizitii.luna lipseste sau are alt tip/],
-  ['notificările fără modulul Administrativ', `ALTER TABLE public.notifications DROP CONSTRAINT notifications_modul_check; ALTER TABLE public.notifications ADD CONSTRAINT notifications_modul_check CHECK (modul = ANY (ARRAY['general'::text]));`, {}, /nu permite modulul Administrativ/],
-  ['o regulă pe notifications.type fără warning', `ALTER TABLE public.notifications ADD CONSTRAINT notifications_tip_check CHECK (type = ANY (ARRAY['info'::text, 'error'::text]));`, {}, /notifications.type nu permite/],
+  ['notificările fără modulul Administrativ', `ALTER TABLE public.notifications DROP CONSTRAINT notifications_modul_check; ALTER TABLE public.notifications ADD CONSTRAINT notifications_modul_check CHECK (modul = ANY (ARRAY['general'::text]));`, {}, /notificarile alertei nu trec regulile tabelului notifications \(23514/],
+  ['o regulă pe notifications.type fără warning', `ALTER TABLE public.notifications ADD CONSTRAINT notifications_tip_check CHECK (type = ANY (ARRAY['info'::text, 'error'::text]));`, {}, /nu trec regulile tabelului notifications \(23514/],
+  // runda 2 (L15): literalii sunt prezenți, dar regula exclude totuși 'error' — căutarea de text o lăsa să treacă
+  ['o regulă cu warning și error care exclude totuși error', `ALTER TABLE public.notifications ADD CONSTRAINT notifications_tip_check CHECK (type = ANY (ARRAY['warning'::text, 'error'::text]) AND type <> 'error');`, {}, /nu trec regulile tabelului notifications \(23514/],
+  ['o regulă pe lungimea titlului (sub 200)', `ALTER TABLE public.notifications ADD CONSTRAINT notifications_titlu_check CHECK (length(title) <= 150);`, {}, /nu trec regulile tabelului notifications \(23514/],
+  ['un trigger care refuză notificările', `CREATE FUNCTION public.t_refuz() RETURNS trigger LANGUAGE plpgsql AS $t$BEGIN RAISE EXCEPTION 'refuz' USING ERRCODE = '42501'; END$t$; CREATE TRIGGER t_refuz BEFORE INSERT ON public.notifications FOR EACH ROW EXECUTE FUNCTION public.t_refuz();`, {}, /nu trec regulile tabelului notifications \(42501/],
+  ['un trigger care anulează tăcut notificările', `CREATE FUNCTION public.t_nul() RETURNS trigger LANGUAGE plpgsql AS $t$BEGIN RETURN NULL; END$t$; CREATE TRIGGER t_nul BEFORE INSERT ON public.notifications FOR EACH ROW EXECUTE FUNCTION public.t_nul();`, {}, /nu se inscriu intregi in notifications \(proba_notificari:0\)/],
+  ['niciun owner în profiles', `UPDATE public.profiles SET is_owner = false;`, {}, /niciun owner in profiles/],
+  ['coloana cheie_intentie există deja', `ALTER TABLE public.upa_achizitii ADD COLUMN cheie_intentie uuid;`, {}, /reaplicare/],
   ['upa_achizitii ocupat (lock)', 'LOCK', {}, /BUGET_LOCK: upa_achizitii ocupat/],
 ]) {
   const db = await bazaNoua()
@@ -488,20 +553,33 @@ for (const [nume, pregatire, o, re] of [
   await db.close()
 }
 
+console.log('3b. MUTANT preflight: proba notificărilor doar cu „warning” -> regula care exclude „error” nu mai e refuzată (refuzul de mai sus e discriminant)')
+{
+  const db = await bazaNoua()
+  await db.exec(`ALTER TABLE public.notifications ADD CONSTRAINT notifications_tip_check CHECK (type = ANY (ARRAY['warning'::text, 'error'::text]) AND type <> 'error');`)
+  let m
+  try { m = await eroare(aplicaMig(db, aplica(MIG, [["(v_owner, 'error', 'Administrativ', repeat('x', 200)", "(v_owner, 'warning', 'Administrativ', repeat('x', 200)"]]))) }
+  catch (e) { m = 'mutantul nu se aplică: ' + e.message }
+  ok(m === null, `fără proba pe „error”, migrarea trece pe o bază unde alerta de 3 zile ar pica (${m ? m.slice(0, 110) : 'a trecut, cum era de așteptat'})`)
+  await db.close()
+}
+
 console.log('4. revenirea: aplicare -> revenire -> reaplicare; refuzuri')
-for (const politicaPublic of [false, true]) {
-  const db = await bazaNoua({ politicaPublic })
+const areCheie = async db => (await q1(db, `SELECT count(*)::int AS n FROM pg_attribute WHERE attrelid = 'public.upa_achizitii'::regclass AND attname = 'cheie_intentie' AND NOT attisdropped`)).n === 1
+for (const [politicaPublic, checkUid] of [[false, false], [true, false], [false, true], [true, true]]) {
+  const forma = `${politicaPublic ? 'public' : 'authenticated'} / ${checkUid ? 'WITH CHECK uid' : 'fără WITH CHECK'}`
+  const db = await bazaNoua({ politicaPublic, checkUid })
+  // forma veche așteptată, scrisă de mână (nu citită din codul testat)
+  const astept = `upa_achizitii_all | * | P | ${politicaPublic ? 'PUBLIC' : 'authenticated'} | (auth.uid() IS NOT NULL) | ${checkUid ? '(auth.uid() IS NOT NULL)' : '-'}`
+  const inainte = await politiciAchizitii(db)
   await aplicaMig(db)
   const coment = (await q1(db, `SELECT obj_description(oid, 'pg_policy') AS c FROM pg_policy WHERE polname = 'upa_achizitii_citire'`)).c
-  ok(coment.endsWith('roluri_vechi=' + (politicaPublic ? 'public' : 'authenticated')), `rolurile vechi păstrate în comentariu: ${coment}`)
+  ok(coment.endsWith(` roluri_vechi=${politicaPublic ? 'public' : 'authenticated'} check_vechi=${checkUid ? 'uid' : 'gol'}`), `forma veche păstrată în comentariu (${forma}): ${coment}`)
   await revino(db)
-  const pol = await q1(db, `SELECT polname, polcmd::text AS c, (SELECT string_agg(CASE ro WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(ro) END, ',') FROM unnest(polroles) ro) AS r,
-    pg_get_expr(polqual, polrelid) AS q, (SELECT count(*)::int FROM pg_policy p2 WHERE p2.polrelid = 'public.upa_achizitii'::regclass) AS n
-    FROM pg_policy WHERE polrelid = 'public.upa_achizitii'::regclass`)
+  const dupa = await politiciAchizitii(db)
   const ramase = (await q1(db, `SELECT count(*)::int AS n FROM pg_proc WHERE proname LIKE 'fn\\_upa\\_%'`)).n
-  ok(pol.polname === 'upa_achizitii_all' && pol.c === '*' && pol.r === (politicaPublic ? 'PUBLIC' : 'authenticated') && pol.q === '(auth.uid() IS NOT NULL)' && pol.n === 1
-    && ramase === 0 && (await q1(db, `SELECT to_regclass('public.upa_luna_inchisa') IS NULL AS x`)).x,
-    `revenirea (${politicaPublic ? 'public' : 'authenticated'}): politica veche identică, obiectele scoase (${JSON.stringify(pol)}, ${ramase} funcții)`)
+  ok(inainte === astept && dupa === astept && ramase === 0 && (await q1(db, `SELECT to_regclass('public.upa_luna_inchisa') IS NULL AS x`)).x && !(await areCheie(db)),
+    `revenirea (${forma}): politica veche IDENTICĂ în catalog, obiectele + coloana cheie scoase (${dupa}, ${ramase} funcții)`)
   const nu = await caRol(db, 'authenticated', U.NO, `INSERT INTO public.upa_achizitii (luna, valoare, numar_factura) VALUES ('2031-05-01', 1, 'R') RETURNING id`)
   ok(!nu.err, 'după revenire: comportamentul vechi (orice cont logat scrie) — revenirea redeschide exact starea de dinainte')
   await db.exec(`DELETE FROM public.upa_achizitii WHERE numar_factura = 'R'`)
@@ -518,15 +596,38 @@ for (const [nume, pregatire, o, re] of [
   ['o lună închisă (istoric nou)', async db => { await aplicaMig(db); await db.exec(ISTORIC); await rezervaLa(db, '2031-01-02') }, {}, /exista luni inchise/],
   ['jurnalul are rânduri', async db => { await aplicaMig(db); await setare(db, 'upa_alerta_zi', 'x'); await rezervaLa(db, '2020-01-02') }, {}, /jurnalul alertei are randuri/],
   ['plafonul schimbat din ecran', async db => { await aplicaMig(db); await caRol(db, 'authenticated', U.ED, 'SELECT public.fn_upa_plafon_seteaza(8000, 7000)') }, {}, /plafonul a fost schimbat din ecran/],
-  ['o politică schimbată după aplicare', async db => { await aplicaMig(db); await db.exec(`ALTER POLICY upa_achizitii_adaugare ON public.upa_achizitii WITH CHECK (true)`) }, {}, /politicile upa_achizitii/],
-  ['comentariul rolurilor șters', async db => { await aplicaMig(db); await db.exec(`COMMENT ON POLICY upa_achizitii_citire ON public.upa_achizitii IS NULL`) }, {}, /roluri_vechi\) lipsesc/],
+  // runda 2 (L14 / L15): orice abatere de la amprenta COMPLETĂ a obiectelor migrării = refuz, nimic scos
+  ...[
+    ['o politică schimbată după aplicare', `ALTER POLICY upa_achizitii_adaugare ON public.upa_achizitii WITH CHECK (true)`],
+    ['politica de citire refăcută restrictivă (același nume, același comentariu)', `DROP POLICY upa_achizitii_citire ON public.upa_achizitii;
+      CREATE POLICY upa_achizitii_citire ON public.upa_achizitii AS RESTRICTIVE FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+      COMMENT ON POLICY upa_achizitii_citire ON public.upa_achizitii IS 'x roluri_vechi=authenticated check_vechi=gol'`],
+    ['o funcție rescrisă (același nume, alt corp)', `CREATE OR REPLACE FUNCTION public.fn_upa_lei(p numeric) RETURNS text LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$ SELECT 'x' $f$`],
+    ['un drept nou pe o funcție', `GRANT EXECUTE ON FUNCTION public.fn_upa_luni(date, integer) TO anon`],
+    ['proprietarul unei funcții schimbat', `CREATE ROLE altcineva_upa NOLOGIN; ALTER FUNCTION public.fn_upa_poate_scrie() OWNER TO altcineva_upa`],
+    ['o funcție făcută SECURITY DEFINER', `ALTER FUNCTION public.fn_upa_luni(date, integer) SECURITY DEFINER`],
+    ['un drept nou pe un tabel nou', `GRANT INSERT ON public.upa_plafon_lunar TO authenticated`],
+    ['RLS oprit pe un tabel nou', `ALTER TABLE public.upa_alerta_jurnal DISABLE ROW LEVEL SECURITY`],
+    ['RLS forțat pe upa_achizitii', `ALTER TABLE public.upa_achizitii FORCE ROW LEVEL SECURITY`],
+    ['triggerul de nemodificare dezactivat', `ALTER TABLE public.upa_luna_inchisa DISABLE TRIGGER trg_upa_luna_inchisa_nemodificabil`],
+    ['o coloană nouă pe un tabel al migrării', `ALTER TABLE public.upa_alerta_jurnal ADD COLUMN x integer`],
+    ['o constrângere scoasă', `ALTER TABLE public.upa_alerta_jurnal DROP CONSTRAINT upa_alerta_jurnal_resend`],
+    ['un index nou pe un tabel al migrării', `CREATE INDEX upa_x_idx ON public.upa_plafon_lunar (setat_la)`],
+    ['secvența jurnalului schimbată', `ALTER SEQUENCE public.upa_alerta_jurnal_id_seq INCREMENT BY 2`],
+    ['cheia de intenție cu valoare implicită', `ALTER TABLE public.upa_achizitii ALTER COLUMN cheie_intentie SET DEFAULT gen_random_uuid()`],
+  ].map(([n, sql]) => [n, async db => { await aplicaMig(db); await db.exec(sql) }, {}, /AMPRENTA obiectelor migrarii [0-9a-f]{32} \(asteptat [0-9a-f]{32}\)/]),
+  ['UNIQUE-ul cheii scos', async db => { await aplicaMig(db); await db.exec(`ALTER TABLE public.upa_achizitii DROP CONSTRAINT upa_achizitii_cheie_intentie_uidx`) }, {}, /starea nu e cea din 20261229a/],
+  ['comentariul formei vechi șters', async db => { await aplicaMig(db); await db.exec(`COMMENT ON POLICY upa_achizitii_citire ON public.upa_achizitii IS NULL`) }, {}, /roluri_vechi \/ check_vechi\) lipseste/],
+  ['comentariul fără check_vechi (forma din runda 1)', async db => { await aplicaMig(db); await db.exec(`COMMENT ON POLICY upa_achizitii_citire ON public.upa_achizitii IS 'UPA (20261229a): citire. roluri_vechi=authenticated'`) }, {}, /roluri_vechi \/ check_vechi\) lipseste/],
 ]) {
   const db = await bazaNoua()
   await pregatire(db)
-  const inainte = (await q1(db, `SELECT to_regclass('public.upa_plafon_lunar')::text AS t, (SELECT count(*)::int FROM pg_policy WHERE polrelid = 'public.upa_achizitii'::regclass) AS n`))
+  const stare = async () => JSON.stringify([await q1(db, `SELECT to_regclass('public.upa_plafon_lunar')::text AS t, (SELECT count(*)::int FROM pg_policy WHERE polrelid = 'public.upa_achizitii'::regclass) AS n,
+    (SELECT count(*)::int FROM pg_proc WHERE proname LIKE 'fn\\_upa\\_%') AS f`), await areCheie(db), await politiciAchizitii(db)])
+  const inainte = await stare()
   const m = await eroare(revino(db, REV, o))
-  const dupa = (await q1(db, `SELECT to_regclass('public.upa_plafon_lunar')::text AS t, (SELECT count(*)::int FROM pg_policy WHERE polrelid = 'public.upa_achizitii'::regclass) AS n`))
-  ok(m && re.test(m) && JSON.stringify(inainte) === JSON.stringify(dupa), `revenire ${nume}: ${m ? m.slice(0, 140) : 'A TRECUT'}`)
+  const dupa = await stare()
+  ok(m && re.test(m) && inainte === dupa, `revenire ${nume}: ${m ? m.slice(0, 140) : 'A TRECUT'}`)
   await db.close()
 }
 
@@ -551,7 +652,21 @@ const M_RAMAS = ["VALUES (v_a.luna, v_a.plafon, v_a.consumat, greatest(v_a.plafo
 const M_CAS = ['  IF v_acum IS DISTINCT FROM p_vechi THEN', '  IF false THEN']
 const M_DREPT_SET = ['  IF NOT public.fn_upa_poate_scrie() THEN\n    RAISE EXCEPTION \'upa: schimbarea plafonului', '  IF auth.uid() IS NULL THEN\n    RAISE EXCEPTION \'upa: schimbarea plafonului']
 const M_ACTIV = ['  IF NOT v_activ THEN\n    RETURN', '  IF false THEN\n    RETURN']
-for (const [nume, lista] of [
+// runda 2: codurile de configurare scoase din răspuns / doar primul cod
+const M_CFG_RASPUNS = ["'erori_config', to_jsonb(v_cfg), 'n', jsonb_array_length(v_rez)", "'erori_config', '[]'::jsonb, 'n', jsonb_array_length(v_rez)"]
+const M_CFG_UNUL = ["CASE WHEN p_plafon IS NULL THEN 'fara_plafon' END", "CASE WHEN p_plafon IS NULL AND p_zi_prag IS NOT NULL THEN 'fara_plafon' END"]
+// amprenta oprită: fără ea, ORICE schimbare a unui corp de funcție ar fi prinsă deja la aplicare — mutanții de comportament rulează fără ea
+//   (iar un mutant separat arată că, păstrată, amprenta prinde la aplicare schimbarea unui corp)
+const FARA_AMPRENTA = ["IF md5(coalesce(v_amp, '')) IS DISTINCT FROM", "IF false AND md5(coalesce(v_amp, '')) IS DISTINCT FROM"]
+{
+  const db = await bazaNoua()
+  const m = await eroare(aplicaMig(db, aplica(MIG, [M_PRAG])))
+  ok(/AMPRENTA obiectelor [0-9a-f]{32}/.test(m || ''), `MUTANT pragul exclusiv CU amprenta: prins la aplicare de amprentă (${(m || 'A TRECUT').slice(0, 110)})`)
+  await db.close()
+}
+for (const [nume, lista0] of [
+  ['codurile de configurare scoase din răspuns', [M_CFG_RASPUNS]],
+  ['doar primul cod de configurare', [M_CFG_UNUL, FARA_POST]],
   ['politica de adăugare = orice cont logat', [M_POLITICA]],
   ['politica de adăugare = orice cont logat + fără postcondiții', [M_POLITICA, FARA_POST]],
   ['viewer-ul poate scrie', [M_VIEWER]],
@@ -571,6 +686,7 @@ for (const [nume, lista] of [
   ['plafonul fără dreptul de scriere', [M_DREPT_SET, FARA_POST]],
   ['comutatorul ignorat', [M_ACTIV, FARA_POST]],
 ]) {
+  const lista = lista0.includes(FARA_POST) ? lista0 : [...lista0, FARA_AMPRENTA]
   const db = await bazaNoua()
   let t
   try { t = aplica(MIG, lista) } catch (e) { ok(false, `${nume}: mutantul nu se aplică (${e.message})`); await db.close(); continue }
@@ -592,6 +708,7 @@ for (const [nume, lista] of [
   ['adresele în răspuns', [['rezervate: rez.n, ...contor, ...baza', 'rezervate: rez.n, ...contor, ...baza, dest: rez.randuri.map(x => x.destinatari)']]],
   ['trimite și fără cheia Resend', [["  if (!resendKey) return raspuns(500, { ok: false, error: 'resend_neconfigurat' })\n", '']]],
   ['subiectul fără zilele rămase', [[', ${zileText(Number(r.zile_ramase))}`\n  const html', '`\n  const html']]],
+  ['ok:true și cu configurarea defectă', [['ok: contor.nemarcat === 0 && !cfg,', 'ok: contor.nemarcat === 0,']]],
 ]) {
   let mod
   try { mod = await importMutantEdge(aplica(EDGE_TEXT, lista)) } catch (e) { ok(false, `${nume}: mutantul nu se aplică (${e.message})`); continue }

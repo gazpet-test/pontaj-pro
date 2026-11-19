@@ -9,6 +9,7 @@
 // Destinatarii mailului: logistica_setari.upa_alerta_emails, validați în BD (doar @gazpet.ro, cel mult 10; o adresă invalidă = niciun mail).
 // Poarta: cronSauOwner (x-intern-secret din Vault sau owner-ul logat); verify_jwt NU ajunge (cheia anon e un JWT valid). ?dry=1 = ce s-ar face
 //   azi, fără nicio scriere. Erorile de business se scriu în BD (upa_alerta_jurnal + notificare owner) și se întorc, nu se aruncă.
+// Configurarea defectă (ziua pragului invalidă, plafon neînregistrat) = ok:false, error:'configurare_invalida' + erori_config, la FIECARE rulare.
 // Răspunsul (păstrat de pg_net) are doar contoare: fără adrese, fără textul erorii furnizorului. Secrete (doar nume): RESEND_API_KEY,
 //   SUPABASE_SERVICE_ROLE_KEY, INTERN_EDGE_SECRET (Vault, prin poartaIntern). Logica: _shared/upaAlerta.mjs.
 import { createClient } from 'jsr:@supabase/supabase-js@2'

@@ -10,13 +10,16 @@
 // luna încheiată rămâne în upa_luna_inchisa (instantaneul de la închidere).
 // Scrierea (achiziții, plafon) doar owner + Administrativ / Unități protejate
 // admin sau editor (fn_upa_poate_scrie, aceeași regulă ca în BD).
+// Runda 2: salvarea manuală are cheie de intenție (cheie_intentie, UNIQUE) — reîncercarea nu dublează;
+// PDF-ul se scoate doar la refuz sigur (4xx); acțiunile async se aplică doar în epoca lor (L24).
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import CitesteOricePanel from './CitesteOricePanel.jsx'
 import { paginareKeyset } from './hrDeciziiUtil.js'
-import { avertismenteAchizitie, validaPlafon, starePlafonLuna, ziRO, lunaDinZi, luniInapoi } from './upaLogica.js'
+import { avertismenteAchizitie, validaPlafon, starePlafonLuna, ziRO, lunaDinZi, luniInapoi,
+         citireDupaSalvare, stareSalvare, pdfExistaDeja, caleaPdf, ordineFurnizori } from './upaLogica.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#30363D', border2:'#21262D',
@@ -52,21 +55,32 @@ function Mesaj({ mesaj, onClose }) {
 }
 
 // ─── Modal achiziție ────────────────────────────────────────────────────────
+// Salvarea (runda 2, L04 / L05 / L24): o cheie de intenție pe formular, refolosită la reîncercare (UNIQUE în BD: nu se dublează);
+//   PDF-ul se scoate DOAR după un refuz sigur al serverului (4xx, respingereServer); la rezultat necunoscut (rețea / timeout / 5xx)
+//   formularul se îngheață și singura acțiune e reîncercarea identică; rezultatul se aplică doar cât formularul e încă deschis.
 function FormAchizitie({ furnizoriUpa, onSalvat, onClose, setMesaj }) {
   const [f, setF] = useState(() => {
     const zi = ziRO()
     return { furnizor_id:'', furnizor_nume:'', numar_factura:'', data_factura: zi, valoare:'', descriere:'', luna: lunaDin(zi) }
   })
   const [pdf, setPdf] = useState(null)
+  const [pdfVer, setPdfVer] = useState(0)            // versiunea fișierului ales: intră în cale (alt fișier = altă cale)
   const [lucrez, setLucrez] = useState(false)
-  const set = (k, v) => setF(p => ({ ...p, [k]: v }))
+  const [nesigur, setNesigur] = useState(false)      // rezultat necunoscut: câmpurile înghețate, doar „Reîncearcă”
+  const cheie = useRef(null)
+  if (cheie.current == null) cheie.current = crypto.randomUUID()
+  const pdfSus = useRef(null)                        // calea PDF-ului încărcat pentru intenția asta (încă nelegat de un rând salvat)
+  const viu = useRef(true)
+  useEffect(() => { viu.current = true; return () => { viu.current = false } }, [])
+  const set = (k, v) => { if (!nesigur) setF(p => ({ ...p, [k]: v })) }
   const avertismente = avertismenteAchizitie({ dataFactura: f.data_factura, luna: f.luna, arePdf: !!pdf })
 
   const alegePdf = (file) => {
+    if (nesigur) return
     if (!file) { setPdf(null); return }
     if (file.type !== 'application/pdf') { setMesaj({ tip:'warn', text:'Doar fișiere PDF.' }); return }
     if (file.size > MAX_PDF) { setMesaj({ tip:'warn', text:'PDF-ul are peste 10 MB.' }); return }
-    setPdf(file)
+    setPdf(file); setPdfVer(x => x + 1)
   }
 
   const salveaza = async () => {
@@ -75,44 +89,78 @@ function FormAchizitie({ furnizoriUpa, onSalvat, onClose, setMesaj }) {
     const v = Number(f.valoare)
     if (!Number.isFinite(v) || v <= 0) { setMesaj({ tip:'warn', text:'Pune valoarea facturii.' }); return }
     if (!f.furnizor_id && !f.furnizor_nume.trim()) { setMesaj({ tip:'warn', text:'Alege furnizorul sau scrie-i numele.' }); return }
-    // avertismente, nu blocări: omul confirmă că vrea să salveze așa
-    if (avertismente.length && !confirm('Atenție:\n• ' + avertismente.map(a => a.text).join('\n• ') + '\n\nSalvezi oricum?')) return
+    // avertismente, nu blocări: omul confirmă că vrea să salveze așa (la reîncercare a confirmat deja)
+    if (!nesigur && avertismente.length && !confirm('Atenție:\n• ' + avertismente.map(a => a.text).join('\n• ') + '\n\nSalvezi oricum?')) return
     setLucrez(true)
-    let cale = null
-    try {
-      if (pdf) {
-        cale = `manual/${String(f.luna).slice(0,7)}/${crypto.randomUUID()}.pdf`
-        const { error: upErr } = await supabase.storage.from(BUCKET).upload(cale, pdf, { upsert:false, contentType:'application/pdf' })
-        if (upErr) { cale = null; throw new Error('PDF-ul nu s-a încărcat: ' + upErr.message) }
-      }
-      const { error } = await supabase.from('upa_achizitii').insert({
-        furnizor_id: f.furnizor_id ? Number(f.furnizor_id) : null,
-        furnizor_nume: f.furnizor_id ? null : f.furnizor_nume.trim(),
-        numar_factura: f.numar_factura.trim(),
-        data_factura: f.data_factura || null,
-        luna: f.luna, valoare: v,
-        descriere: f.descriere.trim() || null,
-        document_path: cale,
-      })
-      if (error) {
-        // L05: PDF-ul se scoate doar când serverul a răspuns clar cu refuz (cod de eroare); la rețea / timeout rămâne
-        if (cale && error.code) await supabase.storage.from(BUCKET).remove([cale]).catch(() => {})
-        throw error
-      }
-      setMesaj({ tip:'success', text:`Adăugat: ${lei(v)} lei pe ${fmtLuna(f.luna)}${pdf ? '' : ' (fără PDF)'}` })
-      onSalvat(); onClose()
-    } catch (e) {
-      const drept = e?.code === '42501'
-      setMesaj({ tip:'error', text: drept ? 'Nu ai drept să adaugi achiziții (cere acces Administrativ › Unități protejate, editor).' : 'Eroare: ' + (e.message || e) })
+    const cale = pdf ? caleaPdf(f.luna, cheie.current, pdfVer) : null
+    const payload = {
+      furnizor_id: f.furnizor_id ? Number(f.furnizor_id) : null,
+      furnizor_nume: f.furnizor_id ? null : f.furnizor_nume.trim(),
+      numar_factura: f.numar_factura.trim(),
+      data_factura: f.data_factura || null,
+      luna: f.luna, valoare: v,
+      descriere: f.descriere.trim() || null,
+      document_path: cale,
+      cheie_intentie: cheie.current,
     }
-    finally { setLucrez(false) }
+    try {
+      if (cale && pdfSus.current !== cale) {
+        const { error: upErr } = await supabase.storage.from(BUCKET).upload(cale, pdf, { upsert:false, contentType:'application/pdf' })
+        // „există deja” la calea intenției = încărcarea anterioară a acestui formular (cheia + versiunea fișierului sunt în cale)
+        if (upErr && !pdfExistaDeja(upErr)) { if (viu.current) setMesaj({ tip:'error', text:'PDF-ul nu s-a încărcat: ' + upErr.message }); return }
+        pdfSus.current = cale
+      }
+      let res
+      try { res = await supabase.from('upa_achizitii').insert(payload).select('id') } catch (e) { res = { error: e } }
+      let citire = null
+      if (citireDupaSalvare(res)) {
+        try {
+          citire = await supabase.from('upa_achizitii').select('id, numar_factura, luna, valoare, furnizor_id, document_path')
+            .eq('cheie_intentie', cheie.current).maybeSingle()
+        } catch (e) { citire = { data: null, error: e } }
+      }
+      const st = stareSalvare(res, citire, payload)
+      if (st === 'refuzat') {
+        // refuz SIGUR (4xx): nimic scris → PDF-ul încărcat acum se scoate; formularul rămâne de corectat
+        if (pdfSus.current) { const p = pdfSus.current; pdfSus.current = null; await supabase.storage.from(BUCKET).remove([p]).catch(() => {}) }
+        if (!viu.current) return
+        setNesigur(false)
+        const drept = res?.error?.code === '42501'
+        setMesaj({ tip:'error', text: drept ? 'Nu ai drept să adaugi achiziții (cere acces Administrativ › Unități protejate, editor).' : 'Eroare: ' + (res?.error?.message || 'refuzat') })
+        return
+      }
+      if (!viu.current) return
+      if (st === 'salvat') {
+        pdfSus.current = null
+        setMesaj({ tip:'success', text:`Adăugat: ${lei(v)} lei pe ${fmtLuna(f.luna)}${cale ? '' : ' (fără PDF)'}${res?.error ? ' (salvarea anterioară intrase; nu s-a dublat)' : ''}` })
+        onSalvat(); onClose()
+        return
+      }
+      // necunoscut / diferit: nu se șterge nimic; câmpurile rămân înghețate, reîncercarea trimite aceeași cheie
+      setNesigur(true)
+      setMesaj({ tip:'warn', text: st === 'diferit'
+        ? 'Există deja o salvare cu cheia acestui formular, dar cu alte valori. Închide formularul și verifică lista; nu am șters nimic.'
+        : 'Nu știu dacă s-a salvat (rețea sau server). Apasă „Reîncearcă”: aceeași factură nu se dublează.' })
+    } catch (e) {
+      // o excepție neprevăzută după încărcare = rezultat necunoscut: nu se șterge nimic
+      if (viu.current) { setNesigur(true); setMesaj({ tip:'warn', text:'Nu știu dacă s-a salvat: ' + (e.message || e) + '. Apasă „Reîncearcă”.' }) }
+    }
+    finally { if (viu.current) setLucrez(false) }
   }
+  // închiderea: blocată cât lucrez; după un rezultat necunoscut, lista se reîncarcă (să se vadă dacă rândul a intrat)
+  const inchide = () => { if (lucrez) return; if (nesigur) onSalvat(); onClose() }
 
   return (
-    <div onClick={onClose} style={{position:'fixed', inset:0, background:'#000A', zIndex:900, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+    <div onClick={inchide} style={{position:'fixed', inset:0, background:'#000A', zIndex:900, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
       <div onClick={e => e.stopPropagation()} style={{...S.card, width:'min(560px, 96vw)', padding:22}}>
         <div style={{fontSize:17, fontWeight:800, marginBottom:16}}>➕ Achiziție de la unitate protejată</div>
+        {nesigur && (
+          <div style={{...S.card, padding:'9px 12px', marginBottom:14, borderColor:G.yellow+'55', background:G.yellow+'11', fontSize:12, color:G.yellow, lineHeight:1.5}}>
+            Salvarea are rezultat necunoscut. Câmpurile sunt blocate: „Reîncearcă” trimite exact aceeași achiziție (nu se dublează).
+          </div>
+        )}
 
+        <fieldset disabled={nesigur || lucrez} style={{border:'none', padding:0, margin:0}}>
         <div style={{marginBottom:12}}>
           <label style={S.label}>Furnizor UPA</label>
           <select style={S.input} value={f.furnizor_id} onChange={e => set('furnizor_id', e.target.value)}>
@@ -168,10 +216,11 @@ function FormAchizitie({ furnizoriUpa, onSalvat, onClose, setMesaj }) {
             {avertismente.map(a => <div key={a.cod}>⚠️ {a.text}</div>)}
           </div>
         )}
+        </fieldset>
 
         <div style={{display:'flex', gap:10, justifyContent:'flex-end'}}>
-          <button onClick={onClose} style={S.btnS}>Renunță</button>
-          <button onClick={salveaza} disabled={lucrez} style={{...S.btnP, opacity:lucrez ? .6 : 1}}>{lucrez ? 'Salvez…' : 'Adaugă'}</button>
+          <button onClick={inchide} disabled={lucrez} style={{...S.btnS, opacity:lucrez ? .6 : 1}}>{nesigur ? 'Închide (reîncarc lista)' : 'Renunță'}</button>
+          <button onClick={salveaza} disabled={lucrez} style={{...S.btnP, opacity:lucrez ? .6 : 1}}>{lucrez ? 'Salvez…' : nesigur ? 'Reîncearcă' : 'Adaugă'}</button>
         </div>
       </div>
     </div>
@@ -194,7 +243,12 @@ export default function UnitatiProtejate({ profile }) {
   const [editPlafon, setEditPlafon] = useState(false)
   const [plafonNou, setPlafonNou] = useState('')
   const [lunaSel, setLunaSel]     = useState(() => lunaDin(ziRO()).slice(0,7))   // TKT-2026-0177: istoric comenzi pe luni
-  const generatie = useRef(0)   // L24: doar ultima încărcare își aplică rezultatul
+  const [cumulTrunchiat, setCumulTrunchiat] = useState(false)
+  // L24: generatie = doar ultima încărcare își aplică rezultatul; epoca = se schimbă la demontare și la alt profil, iar o acțiune
+  //   (plafon, ștergere, PDF) pornită înainte nu mai aplică nimic după ce s-a schimbat. Ambele se schimbă în curățarea efectului.
+  const generatie = useRef(0)
+  const epoca = useRef(0)
+  const profilId = profile?.id ?? null
 
   const incarca = useCallback(async () => {
     const gen = ++generatie.current
@@ -211,28 +265,54 @@ export default function UnitatiProtejate({ profile }) {
           if (ultim != null) q = q.gt('id', ultim)
           return q
         }),
-        supabase.from('logistica_furnizori').select('id, nume, cui, este_upa, upa_autorizatie, upa_valabil_pana').eq('este_upa', true).eq('activ', true).order('nume'),
+        // L23: furnizorii UPA tot pe pagini (keyset pe id), ordonați apoi după nume
+        paginareKeyset((ultim, pas) => {
+          let q = supabase.from('logistica_furnizori').select('id, nume, cui, este_upa, upa_autorizatie, upa_valabil_pana')
+            .eq('este_upa', true).eq('activ', true).order('id', { ascending:true }).limit(pas)
+          if (ultim != null) q = q.gt('id', ultim)
+          return q
+        }),
         supabase.from('necesar_runde').select('id, saptamana, status').in('status', ['deschisa','blocata']).order('saptamana', { ascending:false }).limit(1),
       ])
       if (ln.error) throw ln.error
-      if (fz.error) throw fz.error
       if (gen !== generatie.current) return
+      const atentie = []
       setLuni(ln.data || [])
       setPoateScrie(ps.error ? null : ps.data === true)
-      if (ps.error) setMesaj({ tip:'warn', text:'Nu am putut verifica dreptul de modificare; butoanele de scriere sunt ascunse.' })
+      if (ps.error) atentie.push('nu am putut verifica dreptul de modificare (butoanele de scriere sunt ascunse)')
       setAchizitii([...ac].sort((a, b) => String(b.luna).localeCompare(String(a.luna)) || b.id - a.id))
-      setFurnizori(fz.data || [])
+      setFurnizori([...fz].sort(ordineFurnizori))
+      // L18: eroarea la citirea rundei NU e „nicio rundă”; cumulul vechi se scoate oricum (runda s-a schimbat / a dispărut)
+      setCumulat([]); setCumulTrunchiat(false)
       const r = rd.error ? null : (rd.data || [])[0] || null
       setRunda(r)
+      if (rd.error) atentie.push('nu am putut citi runda de consumabile (' + (rd.error.message || rd.error.code || 'eroare') + ')')
       if (r) {
-        const { data: cum } = await supabase.from('v_necesar_cumulat').select('categorie, articol, cantitate_totala, um, locatie').eq('runda_id', r.id)
-        if (gen === generatie.current) setCumulat(cum || [])
+        const cum = await supabase.from('v_necesar_cumulat').select('categorie, articol, cantitate_totala, um, locatie', { count:'exact' }).eq('runda_id', r.id)
+        if (gen !== generatie.current) return
+        if (cum.error) atentie.push('nu am putut citi pozițiile rundei (' + (cum.error.message || cum.error.code || 'eroare') + ')')
+        else {
+          const rows = cum.data || []
+          setCumulat(rows)
+          // L23: plafonul de rânduri al serverului poate tăia lista: o arătăm ca incompletă, nu ca toată
+          setCumulTrunchiat(!Number.isFinite(cum.count) || cum.count > rows.length)
+        }
       }
+      if (atentie.length) setMesaj({ tip:'warn', text:'Atenție: ' + atentie.join('; ') + '.' })
     } catch (e) { if (gen === generatie.current) setMesaj({ tip:'error', text:'Nu am putut încărca: ' + (e.message || e) }) }
     finally { if (gen === generatie.current) setLoad(false) }
   }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { incarca() }, [incarca])
+  // la alt profil: stare curată (nimic din contul vechi), formularele închise, încărcare nouă; la demontare / schimbare: tot ce era
+  //   în curs (încărcări și acțiuni) nu mai aplică nimic
+  useEffect(() => {
+    setAchizitii([]); setLuni([]); setPoateScrie(null); setFurnizori([]); setRunda(null); setCumulat([]); setCumulTrunchiat(false)
+    setFormAch(false); setCitesteOpen(false); setEditPlafon(false)
+    incarca()
+    return () => { epoca.current++; generatie.current++ }
+  }, [incarca, profilId])
+  // după o acțiune: doar dacă suntem încă în aceeași epocă (același profil, componenta montată)
+  const actiuneCurenta = (ep) => ep === epoca.current
 
   // luna curentă = rândul calculat de server (ziua din România)
   const cur = luni.find(l => l.e_curenta) || null
@@ -251,8 +331,10 @@ export default function UnitatiProtejate({ profile }) {
   const salveazaPlafon = async () => {
     const v = validaPlafon(plafonNou)
     if (v.eroare) { setMesaj({ tip:'warn', text: v.eroare }); return }
+    const ep = epoca.current
     try {
       const { error } = await supabase.rpc('fn_upa_plafon_seteaza', { p_plafon: v.valoare, p_vechi: plafon })
+      if (!actiuneCurenta(ep)) return
       if (error) {
         if (error.code === '40001') { setMesaj({ tip:'warn', text:'Plafonul s-a schimbat între timp (din alt ecran). Am reîncărcat valoarea curentă.' }); setEditPlafon(false); incarca(); return }
         if (error.code === '42501') throw new Error('nu ai drept de modificare a plafonului (cere acces Administrativ › Unități protejate, editor)')
@@ -261,23 +343,28 @@ export default function UnitatiProtejate({ profile }) {
       setEditPlafon(false)
       setMesaj({ tip:'success', text:`Plafon setat de la ${fmtLuna(luna)}: ${lei(v.valoare)} lei (lunile trecute își păstrează plafonul lor)` })
       incarca()
-    } catch (e) { setMesaj({ tip:'error', text:'Eroare: ' + (e.message || e) }) }
+    } catch (e) { if (actiuneCurenta(ep)) setMesaj({ tip:'error', text:'Eroare: ' + (e.message || e) }) }
   }
 
   const sterge = async (a) => {
     if (!confirm(`Ștergi achiziția de ${lei(a.valoare)} lei${a.numar_factura ? ' (factura ' + a.numar_factura + ')' : ''}?`)) return
+    const ep = epoca.current
     try {
       // RLS filtrează tăcut o ștergere nepermisă (0 rânduri, fără eroare): confirmăm exact un rând
       const { data, error } = await supabase.from('upa_achizitii').delete().eq('id', a.id).select('id')
+      if (!actiuneCurenta(ep)) return
       if (error) throw error
       if ((data || []).length !== 1) throw new Error('nu s-a șters nimic (nu ai drept sau a fost deja ștearsă)')
       setMesaj({ tip:'success', text:'Șters.' })
       incarca()
-    } catch (e) { setMesaj({ tip:'error', text:'Eroare: ' + (e.message || e) }) }
+    } catch (e) { if (actiuneCurenta(ep)) setMesaj({ tip:'error', text:'Eroare: ' + (e.message || e) }) }
   }
 
   const deschidePdf = async (a) => {
-    const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(a.document_path, 60)
+    const ep = epoca.current
+    let data = null, error = null
+    try { ({ data, error } = await supabase.storage.from(BUCKET).createSignedUrl(a.document_path, 60)) } catch (e) { error = e }
+    if (!actiuneCurenta(ep)) return
     if (error || !data?.signedUrl) { setMesaj({ tip:'error', text:'Nu am putut deschide PDF-ul: ' + (error?.message || 'link lipsă') }); return }
     window.open(data.signedUrl, '_blank', 'noopener')
   }
@@ -378,6 +465,7 @@ export default function UnitatiProtejate({ profile }) {
             {potrivitUpa.slice(0, 8).map(c => `${c.articol} (${c.cantitate_totala} ${c.um})`).join(' · ')}
             {potrivitUpa.length > 8 ? ` · …și încă ${potrivitUpa.length - 8}` : ''}
           </div>
+          {cumulTrunchiat && <div style={{fontSize:11, color:G.yellow, marginTop:6}}>⚠️ Lista rundei poate fi incompletă (serverul a întors doar o parte din poziții).</div>}
         </div>
       )}
 

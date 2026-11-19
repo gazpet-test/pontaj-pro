@@ -52,6 +52,7 @@ export async function cheieIdempotenta(cheie) {
 }
 
 const ADRESA = /^[a-z0-9._%+-]{1,64}@gazpet[.]ro$/
+const COD = /^[a-z_]{1,40}$/
 const destinatariValizi = d => Array.isArray(d) && d.length >= 1 && d.length <= 10 && d.every(e => typeof e === 'string' && ADRESA.test(e))
 
 // Pașii unei rulări (după poarta cronSauOwner a edge-ului). Întoarce {status, body}; body fără adrese de mail și fără textul erorilor furnizorului
@@ -67,8 +68,11 @@ export async function ruleazaAlertaUpa({ sb, fetchFn = globalThis.fetch, resendK
   if (!resendKey) return raspuns(500, { ok: false, error: 'resend_neconfigurat' })
   const { data: rez, error } = await sb.rpc('fn_upa_alerta_rezerva', {})
   if (error) return raspuns(500, { ok: false, error: 'rezervare_indisponibila' })
-  if (!rez || typeof rez !== 'object' || !Array.isArray(rez.randuri) || rez.n !== rez.randuri.length) return raspuns(500, { ok: false, error: 'rezervare_incompleta' })
-  const baza = { zi: rez.zi ?? null, luna_inchisa: rez.inchis?.luna ?? null, reconciliate: Number(rez.reconciliate) || 0 }
+  if (!rez || typeof rez !== 'object' || !Array.isArray(rez.randuri) || rez.n !== rez.randuri.length
+      || !Array.isArray(rez.erori_config) || !rez.erori_config.every(c => typeof c === 'string' && COD.test(c))) return raspuns(500, { ok: false, error: 'rezervare_incompleta' })
+  // erori_config = codurile de business ale configurării (setare_zi_invalida / fara_plafon), calculate de BD la FIECARE rulare (nu doar la
+  //   prima din zi, când se scriu în jurnal): o zi cu configurare defectă nu arată ca o zi fără alertă (L18)
+  const baza = { zi: rez.zi ?? null, luna_inchisa: rez.inchis?.luna ?? null, reconciliate: Number(rez.reconciliate) || 0, erori_config: rez.erori_config }
   if (rez.activ !== true) return raspuns(200, { ok: true, skip: 'alerta_oprita', ...baza })
   const contor = { trimis: 0, eroare: 0, necunoscut: 0, fara_mail: 0, nemarcat: 0 }
   for (const r of rez.randuri) {
@@ -96,5 +100,7 @@ export async function ruleazaAlertaUpa({ sb, fetchFn = globalThis.fetch, resendK
     if (em || Number(n) !== 1) { contor.nemarcat++; console.error('marcare', em?.code ?? n) }
     contor[rezultat.stare]++
   }
-  return raspuns(contor.nemarcat ? 500 : 200, { ok: contor.nemarcat === 0, rezervate: rez.n, ...contor, ...baza })
+  // configurare defectă = ok:false + error 'configurare_invalida' (statusul 200: rularea a mers până la capăt, eroarea e de business)
+  const cfg = baza.erori_config.length > 0
+  return raspuns(contor.nemarcat ? 500 : 200, { ok: contor.nemarcat === 0 && !cfg, ...(cfg ? { error: 'configurare_invalida' } : {}), rezervate: rez.n, ...contor, ...baza })
 }

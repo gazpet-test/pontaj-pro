@@ -13,7 +13,24 @@ Deciziile owner-ului (19.11.2026):
 |---|---|
 | BD (migrarea `20261229a`, NEAPLICATĂ) | `upa_plafon_lunar` (plafonul pe lună), `upa_luna_inchisa` (instantaneul lunii încheiate, scris o dată, nemodificabil), `upa_alerta_jurnal` (o alertă pe zi, o închidere pe lună), `fn_upa_luni` (definiția unică a alertei), `fn_upa_alerta_rezerva` / `_proba` / `_marcheaza` (doar service_role), `fn_upa_plafon_seteaza` (ecranul, CAS), `fn_upa_poate_scrie`; `upa_achizitii`: citire ca azi, scriere / ștergere doar owner + `administrativ` / `administrativ.upa` (admin / editor). |
 | Edge `upa-plafon-alerta` v10 (NEPUBLICATĂ) | rulează zilnic; închide luna anterioară, trimite alerta zilei / închiderii, marchează rezultatul. Logica: `supabase/functions/_shared/upaAlerta.mjs`. |
-| Ecran (`src/UnitatiProtejate.jsx`) | istoric pe 12 luni cu plafonul fiecărei luni și necheltuitul de la închidere, banner roșu după ziua din setări, plafonul prin RPC, numărul facturii obligatoriu, avertisment fără PDF / factură din altă lună, butoanele de scriere doar pentru cine are drept. |
+| Ecran (`src/UnitatiProtejate.jsx`) | istoric pe 12 luni cu plafonul fiecărei luni și necheltuitul de la închidere, banner roșu după ziua din setări, plafonul prin RPC, numărul facturii obligatoriu în formularul manual (celelalte căi: decizie în așteptare), avertisment fără PDF / factură din altă lună, butoanele de scriere doar pentru cine are drept. |
+
+### Runda 2 (după review)
+
+- **Salvarea din formular** are o cheie de intenție (`upa_achizitii.cheie_intentie`, UNIQUE, NULL permis pentru Citește Orice și rândurile
+  vechi). Reîncercarea trimite aceeași cheie, deci o salvare intrată cu răspunsul pierdut nu se dublează; după un conflict pe cheie sau un
+  răspuns pierdut, ecranul caută rândul după cheie și compară valorile.
+- **PDF-ul încărcat** se scoate DOAR după un refuz sigur al serverului (răspuns 4xx, `respingereServer`), nu după orice cod de eroare. La
+  rețea / timeout / 5xx rezultatul e „necunoscut”: nimic nu se șterge, formularul se îngheață, singura acțiune e „Reîncearcă” (identic).
+- **Erorile de configurare** (`setare_zi_invalida`, `fara_plafon`) vin în răspunsul rezervării și al probei (`erori_config`) la FIECARE
+  rulare; edge-ul răspunde atunci `ok:false, error:'configurare_invalida'` (status 200: rularea a mers până la capăt). În jurnal + notificarea
+  owner-ului rămân o dată pe zi și cod.
+- **Preflight-ul notificărilor**: migrarea face exact inserarea alertei (ambele tipuri, modulul, linkul, lungimile maxime) într-o
+  subtranzacție anulată, în loc să caute cuvinte în textul regulilor tabelului.
+- **Revenirea** verifică amprenta COMPLETĂ a obiectelor migrării (același bloc de calcul ca în postcondițiile migrării, constanta revizuită) și
+  reface politica veche identic în catalog pentru toate cele 4 forme acceptate (rolurile + clauza WITH CHECK, păstrate în comentariu).
+- **Ecranul**: furnizorii se citesc pe pagini; eroarea la citirea rundei de consumabile se arată (nu mai e „nicio rundă”), cumulul vechi se
+  scoate; acțiunile (salvare, ștergere, plafon, PDF) se aplică doar cât ecranul / profilul sunt aceleași.
 
 ### Reguli
 
@@ -47,7 +64,11 @@ Deciziile owner-ului (19.11.2026):
 5. Destinatarii în `logistica_setari.upa_alerta_emails` (coordonatorul), apoi proba: owner-ul cheamă edge-ul cu `?dry=1` (nimic scris).
 
 Revenire: `supabase/revenire/20261229a_administrativ_upa_alerta_ROLLBACK.sql` (runner cu plafon 2000, fără amprentă globală). Refuză dacă au
-apărut date noi (o lună închisă, un rând în jurnal, un plafon schimbat din ecran). Edge-ul și ecranul se retrag înainte.
+apărut date noi (o lună închisă, un rând în jurnal, un plafon schimbat din ecran) sau dacă amprenta obiectelor migrării diferă de constanta
+revizuită (orice definiție, drept, proprietar, RLS, coloană, constrângere, index, trigger, secvență sau politică schimbată după aplicare).
+Excepție declarată: cheile din `upa_achizitii.cheie_intentie` se pierd odată cu coloana (achizițiile rămân). Edge-ul și ecranul se retrag înainte.
+Constanta amprentei e calculată pe PGlite (PG 18, cu NOT NULL-urile din `pg_constraint` scoase); proba pe clona PG 17 o confirmă — dacă
+diferă, postcondiția migrării refuză aplicarea și tipărește textul amprentei (`AMPRENTA_20261229a_TEXT`) pentru comparare.
 
 ## Fișa de securitate (CLAUDE.md pct. 7)
 

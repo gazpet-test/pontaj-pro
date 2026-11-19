@@ -1,4 +1,5 @@
 # 20261229a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.upa_achizitii.cheie_intentie	creat
 coloana	coloana public.upa_alerta_jurnal.actualizat_la	creat
 coloana	coloana public.upa_alerta_jurnal.cheie	creat
 coloana	coloana public.upa_alerta_jurnal.consumat	creat
@@ -26,6 +27,7 @@ coloana	coloana public.upa_plafon_lunar.plafon	creat
 coloana	coloana public.upa_plafon_lunar.setat_de	creat
 coloana	coloana public.upa_plafon_lunar.setat_la	creat
 coloana	coloana public.upa_plafon_lunar.sursa	creat
+constrangere	constrangere tabel public.upa_achizitii.upa_achizitii_cheie_intentie_uidx	creat
 constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_cheie_uidx	creat
 constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_cod_eroare	creat
 constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_dest	creat
@@ -51,6 +53,7 @@ functie	functie public.fn_upa_alerta_proba()	creat
 functie	functie public.fn_upa_alerta_rezerva()	creat
 functie	functie public.fn_upa_alerta_rezerva_la(date)	creat
 functie	functie public.fn_upa_destinatari(text)	creat
+functie	functie public.fn_upa_erori_config(integer,numeric)	creat
 functie	functie public.fn_upa_lei(numeric)	creat
 functie	functie public.fn_upa_luna_inchisa_nemodificabil()	creat
 functie	functie public.fn_upa_luna_text(date)	creat
@@ -67,6 +70,7 @@ politica	politica public.upa_achizitii.upa_achizitii_stergere	creat
 politica	politica public.upa_alerta_jurnal.upa_alerta_jurnal_citire_owner	creat
 politica	politica public.upa_luna_inchisa.upa_luna_inchisa_citire	creat
 politica	politica public.upa_plafon_lunar.upa_plafon_lunar_citire	creat
+relatie	relatie public.upa_achizitii_cheie_intentie_uidx	creat
 relatie	relatie public.upa_alerta_jurnal	creat
 relatie	relatie public.upa_alerta_jurnal_cheie_uidx	creat
 relatie	relatie public.upa_alerta_jurnal_creat_idx	creat
