@@ -6,6 +6,7 @@ import { Packer } from 'docx'
 import {
   modelPvCuplare, construiestePvCuplare, dateInitialePv, numeFisierPv, formatDataPv, formatDiametru, formatExemplare,
   formatIntervale, curata, PARTICIPANTI_IMPLICITI, EXECUTANT_IMPLICIT,
+  formatNumeIng, formatLocul, executantDinContract, frazaInterval, frazaProgram,
 } from './pvCuplareDocx.js'
 
 const ORA = '____:____'
@@ -54,6 +55,27 @@ describe('PV cuplare — documentul Word se deschide și are structura din speci
     expect(bineFormat(await zip.file('word/styles.xml').async('string'))).toBe(true)
   })
 
+  it('runda 2: titlul 12 pt bold, corpul rămâne 10,5 pt', async () => {
+    const { xml } = await xmlDocument(complet())
+    const ps = xml.match(/<w:p[\s>][\s\S]*?<\/w:p>/g) || []
+    const titlu = ps.find(p => p.includes('PROCES-VERBAL'))
+    expect(titlu).toMatch(/<w:b\/>/)
+    expect(titlu).toMatch(/<w:sz w:val="24"\/>/)
+    expect(titlu).not.toMatch(/<w:sz w:val="21"\/>/)
+    const corp = ps.filter(p => p !== titlu && /<w:t[\s>]/.test(p))
+    expect(corp.length).toBeGreaterThan(20)
+    for (const p of corp) { expect(p).toMatch(/<w:sz w:val="21"\/>/); expect(p).not.toMatch(/<w:sz w:val="24"\/>/) }
+  })
+
+  it('runda 2: metadatele Word au autorul firmei, nu „Un-named” din librărie', async () => {
+    const { zip } = await xmlDocument(complet())
+    const core = await zip.file('docProps/core.xml').async('string')
+    expect(core).toMatch(/<dc:creator>GAZPET INSTAL S\.R\.L\.<\/dc:creator>/)
+    expect(core).toMatch(/<cp:lastModifiedBy>GAZPET INSTAL S\.R\.L\.<\/cp:lastModifiedBy>/)
+    expect(core).not.toMatch(/Un-named/i)
+    expect(core).not.toMatch(/claude|rocky|\bAI\b/i)
+  })
+
   it('A4, Arial 10,5, titlul bold, tabelul de participanți cu chenar, semnăturile fără chenar', async () => {
     const { zip, xml } = await xmlDocument(complet())
     expect(xml).toMatch(/<w:pgSz[^>]*w:w="11906"[^>]*w:h="16838"/)
@@ -83,12 +105,12 @@ describe('PV cuplare — documentul Word se deschide și are structura din speci
       'Participanți',
       'Calitatea', 'Numele și prenumele', 'Semnătura',
       'Partea I – Predarea conductei de către Beneficiar către Executant',
-      'Astăzi, 26.11.2026, conform programului comunicat de SNTGN TRANSGAZ SA (e-mail Sucursala Mediaș din 19.11.2026: punere în siguranță 08:00–09:30; extragere obturatoare 16:00–17:00), s-au constatat următoarele:',
+      'Astăzi, 26.11.2026, conform programului comunicat de SNTGN TRANSGAZ SA (e-mail Sucursala Mediaș din 19.11.2026: operațiuni de punere în siguranță în intervalul 08:00–09:30; operațiuni de extragere obturatoare în intervalul 16:00–17:00), s-au constatat următoarele:',
       `1. Sistarea livrărilor prin SRM Domnești AG (SM1104D0) și manevrele de refulare: finalizate la ora ${ORA}.`,
       `2. Introducerea obturatoarelor pneumatice: finalizată la ora ${ORA}.`,
       `3. Debitarea anti-Ex a conductei: finalizată la ora ${ORA}.`,
       `4. Verificarea lipsei de gaze în zona de lucru (detector, % LIE): rezultat __________, ora ${ORA}.`,
-      'În urma celor de mai sus, Beneficiarul predă, iar Executantul primește tronsoanele de conductă Dn 300 aferente cuplării lipsite de orice sarcină (fără presiune și fără gaze naturale), în condiții de siguranță pentru executarea lucrărilor de cuplare.',
+      'În urma celor de mai sus, Beneficiarul predă, iar Executantul primește tronsoanele de conductă DN300 aferente cuplării lipsite de orice sarcină (fără presiune și fără gaze naturale), în condiții de siguranță pentru executarea lucrărilor de cuplare.',
       `Data și ora predării: 26.11.2026, ora ${ORA}`,
       'Partea II – Executarea cuplării și repredarea conductei către Beneficiar',
       `1. Începerea lucrărilor de cuplare propriu-zise: ora ${ORA}.`,
@@ -110,7 +132,7 @@ describe('PV cuplare — documentul Word se deschide și are structura din speci
     }
     // participanții impliciți, cu numele din proiect pentru șef de șantier și RTE
     for (const c of PARTICIPANTI_IMPLICITI) expect(ps).toContain(c)
-    expect(ps).toContain('POPESCU ION'); expect(ps).toContain('IONESCU ȘTEFAN')
+    expect(ps).toContain('ing. Ion Popescu'); expect(ps).toContain('ing. Ștefan Ionescu')
     // 3 + 2 linii goale în Partea III
     const iAbateri = ps.indexOf('Abateri față de programul comunicat (întârzieri, cauze, partea care le-a generat):')
     expect(ps.slice(iAbateri + 1, iAbateri + 4).every(p => /^_{20,}$/.test(p))).toBe(true)
@@ -145,7 +167,7 @@ describe('PV cuplare — date lipsă: linii de completat, nimic inventat', () =>
     for (const e of ['Obiectiv', 'Contract', 'Beneficiar', 'Executant', 'Locul']) expect(ps).toContain(`${e}: ____________________`)
     expect(tot).toContain('Astăzi, ____________, conform programului comunicat de ____________________ (__________: ____________________), s-au constatat următoarele:')
     expect(tot).toContain('1. Sistarea livrărilor prin ____________________ și manevrele de refulare')
-    expect(tot).toContain('tronsoanele de conductă Dn ______ aferente cuplării')
+    expect(tot).toContain('tronsoanele de conductă DN______ aferente cuplării')
     expect(tot).toContain('s-a încheiat în ____ exemplare')
     expect(ps).toContain('BENEFICIAR – ____________________')
     expect(ps).toContain('EXECUTANT – ____________________')
@@ -161,19 +183,20 @@ describe('PV cuplare — date lipsă: linii de completat, nimic inventat', () =>
     expect(tabel.match(/<w:tr>/g)).toHaveLength(4)   // antet + 3 rânduri goale de completat de mână
   })
 
-  it('dateInitialePv: proiect fără beneficiar / contract / oameni → câmpuri goale; executantul ramane gol (fara sursa in proiect, review #1142)', () => {
+  it('dateInitialePv: proiect fără beneficiar / contract / oameni / carte → câmpuri goale; executantul = implicitul (decizia Răzvan, runda 2)', () => {
     const d = dateInitialePv({ proiect: { cod_intern: 'X1', nume: 'Lucrare', beneficiar: null, nr_contract: null, data_contract: '2026-01-12' } })
     expect(d.beneficiar).toBe(''); expect(d.contract).toBe(''); expect(d.locul).toBe(''); expect(d.diametru).toBe('')
-    expect(d.executant).toBe('')
+    expect(d.executant).toBe('GAZPET INSTAL S.R.L.')
+    expect(EXECUTANT_IMPLICIT).toBe('GAZPET INSTAL S.R.L.')
     expect(d.participanti.map(p => p.calitate)).toEqual(PARTICIPANTI_IMPLICITI)
     expect(d.participanti.every(p => p.nume === '')).toBe(true)
     expect(dateInitialePv().obiectiv).toBe('')
     expect(dateInitialePv({ proiect: { nr_contract: '21/2026' } }).contract).toBe('nr. 21/2026')
   })
 
-  it('dateInitialePv: numele vin din employees așa cum sunt; id fără angajat → gol', () => {
+  it('dateInitialePv: numele din employees („NUME PRENUME”) ies „ing. Prenume Nume”; id fără angajat → gol', () => {
     const d = dateInitialePv({ proiect: { ...PROIECT, rte_employee_id: 99 }, angajati: ANGAJATI })
-    expect(d.participanti.find(p => p.calitate === 'Executant – șef de șantier').nume).toBe('POPESCU ION')
+    expect(d.participanti.find(p => p.calitate === 'Executant – șef de șantier').nume).toBe('ing. Ion Popescu')
     expect(d.participanti.find(p => p.calitate === 'Executant – RTE').nume).toBe('')
     expect(d.contract).toBe('nr. 21 din 12.01.2026')
     expect(d.obiectiv).toBe('Racord și SRM Domnești, județul Argeș')
@@ -206,8 +229,10 @@ describe('PV cuplare — diacritice și formate', () => {
     expect(formatDataPv('2026-01-12T00:00:00')).toBe('12.01.2026')
     expect(formatDataPv('26.11.2026')).toBe('26.11.2026')
     expect(formatDataPv(null)).toBe('')
-    expect(formatDiametru('300')).toBe('Dn 300')
+    expect(formatDiametru('300')).toBe('DN300')
+    for (const v of ['500', 'Dn 500', 'dn500', 'DN 500', ' DN500 ']) expect(formatDiametru(v), v).toBe('DN500')
     expect(formatDiametru('DN 300 / Pn 63')).toBe('DN 300 / Pn 63')
+    for (const v of ['5', '12345', 'DN', 'DN 500 mm', 'Ø500']) expect(formatDiametru(v), v).toBe(curata(v))   // negative: rămân cum sunt scrise
     expect(formatDiametru('')).toBe('')
     expect(formatExemplare('4')).toBe('4')
     for (const v of ['0', '-1', '2.5', 'patru', '100', '', null]) expect(formatExemplare(v)).toBe('')
@@ -215,12 +240,12 @@ describe('PV cuplare — diacritice și formate', () => {
     expect(curata(undefined)).toBe('')
   })
 
-  it('numele fișierului: cod intern fără diacritice + data cuplării; fără dată → ziua de azi în București', () => {
+  it('numele fișierului: cod intern fără diacritice + data cuplării; fără dată → „_fara_data” (nu ziua de azi, runda 2)', () => {
     expect(numeFisierPv('DOMNEȘTI-21', '2026-11-26')).toBe('PV_predare_conducta_cuplare_DOMNESTI-21_2026-11-26.docx')
     expect(numeFisierPv('Lot 1 / Prunișor', '2026-11-26')).toBe('PV_predare_conducta_cuplare_Lot_1_Prunisor_2026-11-26.docx')
-    expect(numeFisierPv(null, '')).toMatch(/^PV_predare_conducta_cuplare_proiect_\d{4}-\d{2}-\d{2}\.docx$/)
-    // 23:30 UTC pe 30.11 = 01.12 în București
-    expect(numeFisierPv('X', '', new Date(Date.UTC(2026, 10, 30, 23, 30)))).toBe('PV_predare_conducta_cuplare_X_2026-12-01.docx')
+    expect(numeFisierPv('PIS_RAU_DOAMNEI', '')).toBe('PV_predare_conducta_cuplare_PIS_RAU_DOAMNEI_fara_data.docx')
+    expect(numeFisierPv(null, null)).toBe('PV_predare_conducta_cuplare_proiect_fara_data.docx')
+    for (const v of ['26.11.2026', '2026-11-2', 'mâine']) expect(numeFisierPv('X', v), v).toBe('PV_predare_conducta_cuplare_X_fara_data.docx')
   })
 
   it('modelul nu conține nume de program sau AI', () => {
@@ -239,5 +264,92 @@ descrieXml('curata: caractere interzise in XML', () => {
     asteaptaXml(curataXml('x\uD800y')).toBe('xy')
     asteaptaXml(curataXml('ș ț\tă\nî')).toBe('ș ț\tă\nî')
     asteaptaXml(curataXml('emoji 😀')).toBe('emoji 😀')
+  })
+})
+
+// ─── Runda 2 (test live 19.11.2026): completarea ca la modelul de la Domnești ───
+// Textele așteptate sunt copiate din PV-ul de referință (referinta\…Domnesti_26.11.2026.docx, analiza_referinta.txt), nu din cod.
+describe('PV cuplare r2 — executant, loc, beneficiar, oameni, din datele reale', () => {
+  const CARTE = { proiect_id: 7, beneficiar_nume: 'SNTGN TRANSGAZ SA Mediaș (carte)', localitate: 'zona Domnești', judet: 'Argeș' }
+  const CONTRACT_LIDER = { id: 40, tip_contract: 'asociere', rol_gazpet: 'lider', beneficiar: { nume: 'SNTGN TRANSGAZ SA Mediaș' } }
+
+  it('executant: fără contract / contract simplu / rol necunoscut = GAZPET INSTAL S.R.L.; asociere = structura cu linia asociatului', () => {
+    for (const c of [null, undefined, {}, { tip_contract: 'subcontractare', rol_gazpet: 'lider' }, { tip_contract: 'asociere', rol_gazpet: 'asociat_unic' },
+      { tip_contract: 'asociere', rol_gazpet: null }, { tip_contract: 'Asociere ', rol_gazpet: 'LIDER' }]) {
+      expect(executantDinContract(c), JSON.stringify(c)).toBe('GAZPET INSTAL S.R.L.')
+    }
+    expect(executantDinContract(CONTRACT_LIDER)).toBe('Asocierea GAZPET INSTAL S.R.L. (lider) – ____________________ (asociat)')
+    expect(executantDinContract({ tip_contract: 'asociere', rol_gazpet: 'asociat_simplu' })).toBe('Asocierea ____________________ (lider) – GAZPET INSTAL S.R.L. (asociat)')
+  })
+
+  it('locul: „amplasamentul lucrării, <localitate>, jud. <județ>” ca în model; ce lipsește se sare; ambele lipsă = gol', () => {
+    expect(formatLocul('zona Domnești', 'Argeș')).toBe('amplasamentul lucrării, zona Domnești, jud. Argeș')   // = rândul „Locul” din model
+    expect(formatLocul('Domnești', 'jud. Argeș')).toBe('amplasamentul lucrării, Domnești, jud. Argeș')
+    expect(formatLocul('Domnești', 'Județul Argeș')).toBe('amplasamentul lucrării, Domnești, jud. Argeș')
+    expect(formatLocul('Domnești', '')).toBe('amplasamentul lucrării, Domnești')
+    expect(formatLocul(null, 'Argeș')).toBe('amplasamentul lucrării, jud. Argeș')
+    expect(formatLocul('Jupa', 'Jurilovca')).toBe('amplasamentul lucrării, Jupa, jud. Jurilovca')   // „Ju…” nu e prefixul „jud.”
+    for (const [l, j] of [[null, null], ['', '  '], [undefined, undefined]]) expect(formatLocul(l, j)).toBe('')
+  })
+
+  it('nume „ing. Prenume Nume” din „NUME_FAMILIE PRENUME”: prenume multiple, cratimă, diacritice, un singur cuvânt, gol', () => {
+    expect(formatNumeIng('NICA EUGEN')).toBe('ing. Eugen Nica')
+    expect(formatNumeIng('DADULESCU COSMIN GRIGORAS')).toBe('ing. Cosmin Grigoras Dadulescu')
+    expect(formatNumeIng('POPESCU-IONESCU ANA-MARIA')).toBe('ing. Ana-Maria Popescu-Ionescu')
+    expect(formatNumeIng('  ȘTEFĂNESCU   ȚICU ')).toBe('ing. Țicu Ștefănescu')
+    expect(formatNumeIng(`${String.fromCharCode(0x015E)}ERBAN ION`)).toBe('ing. Ion Șerban')   // sedilă → virgulă
+    expect(formatNumeIng('POPESCU')).toBe('ing. Popescu')
+    for (const v of [null, undefined, '', '   ']) expect(formatNumeIng(v)).toBe('')
+  })
+
+  it('beneficiar: registrul (prin contract) → cartea tehnică → proiectul; locul din carte; executantul din contract', () => {
+    const tot = dateInitialePv({ proiect: { ...PROIECT, contract_id: 40 }, angajati: ANGAJATI, carte: CARTE, contract: CONTRACT_LIDER })
+    expect(tot.beneficiar).toBe('SNTGN TRANSGAZ SA Mediaș')
+    expect(tot.locul).toBe('amplasamentul lucrării, zona Domnești, jud. Argeș')
+    expect(tot.executant).toBe('Asocierea GAZPET INSTAL S.R.L. (lider) – ____________________ (asociat)')
+    expect(dateInitialePv({ proiect: PROIECT, carte: CARTE }).beneficiar).toBe('SNTGN TRANSGAZ SA Mediaș (carte)')
+    expect(dateInitialePv({ proiect: PROIECT, carte: { ...CARTE, beneficiar_nume: '  ' }, contract: { beneficiar: null } }).beneficiar).toBe('SNTGN TRANSGAZ SA')
+    expect(dateInitialePv({ proiect: PROIECT, contract: { beneficiar: { nume: '' } } }).beneficiar).toBe('SNTGN TRANSGAZ SA')
+    // fără carte: locul gol (numele șantierului NU mai e sugestie); diametrul nu are coloană pe proiect → gol, nu dedus din nume
+    const fara = dateInitialePv({ proiect: { ...PROIECT, nume: 'Punere în siguranță DN500 Schitu Golești', site_name: 'GAzpet - Punere in siguranta - Transgaz' } })
+    expect(fara.locul).toBe(''); expect(fara.diametru).toBe(''); expect(fara.executant).toBe('GAZPET INSTAL S.R.L.')
+  })
+})
+
+describe('PV cuplare r2 — fraza de început din Partea I, ca în model', () => {
+  it('frazaInterval: rândurile care se termină cu HH:MM–HH:MM se recompun; restul rămâne neschimbat', () => {
+    expect(frazaInterval('punere în siguranță 08:00–09:30')).toBe('operațiuni de punere în siguranță în intervalul 08:00–09:30')
+    expect(frazaInterval('extragere obturatoare 16:00-17:00')).toBe('operațiuni de extragere obturatoare în intervalul 16:00–17:00')
+    expect(frazaInterval('punere în siguranță: 8:00 — 9:30')).toBe('operațiuni de punere în siguranță în intervalul 8:00–9:30')
+    expect(frazaInterval('Extragere obturatoare 16:00–17:00')).toBe('Extragere obturatoare în intervalul 16:00–17:00')   // majusculă = textul omului, fără prefix
+    expect(frazaInterval('operațiuni de punere în siguranță 08:00–09:30')).toBe('operațiuni de punere în siguranță în intervalul 08:00–09:30')
+    // deja în forma modelului = neschimbat (fără „în intervalul în intervalul”)
+    expect(frazaInterval('operațiuni de punere în siguranță în intervalul 08:00–09:30')).toBe('operațiuni de punere în siguranță în intervalul 08:00–09:30')
+    expect(frazaInterval('manevre între 10:00–11:00')).toBe('manevre între 10:00–11:00')
+    expect(frazaInterval('08:00–09:30')).toBe('în intervalul 08:00–09:30')
+    // negative: fără interval la final = textul exact, nimic pierdut
+    for (const v of ['verificare la 10:00', 'punere în siguranță 08:00–09:30 (estimat)', 'între 08:00 și 09:30', 'ora 8', '08:00–09:30–10:00x', ''])
+      expect(frazaInterval(v), v).toBe(v)
+  })
+
+  it('fraza completă din model, caracter cu caracter', async () => {
+    const date = { ...complet(), beneficiar: 'Transgaz', sursa_program: 'e-mail Sucursala Mediaș din 19.11.2026', intervale: 'punere în siguranță 08:00–09:30' }
+    const ps = paragrafe((await xmlDocument(date)).xml)
+    expect(ps).toContain('Astăzi, 26.11.2026, conform programului comunicat de Transgaz (e-mail Sucursala Mediaș din 19.11.2026: operațiuni de punere în siguranță în intervalul 08:00–09:30), s-au constatat următoarele:')
+  })
+
+  it('frazaProgram: ce lipsește e linie; mai multe intervale unite cu „; ”', () => {
+    expect(frazaProgram({})).toBe('__________: ____________________')
+    expect(frazaProgram({ sursa_program: 'e-mail' })).toBe('e-mail: ____________________')
+    expect(frazaProgram({ intervale: 'punere în siguranță 08:00–09:30\n\nextragere obturatoare 16:00–17:00' }))
+      .toBe('__________: operațiuni de punere în siguranță în intervalul 08:00–09:30; operațiuni de extragere obturatoare în intervalul 16:00–17:00')
+    expect(frazaProgram(null)).toBe('__________: ____________________')
+  })
+
+  it('documentul cu executant în asociere: rândul din antet și semnătura poartă aceeași structură', async () => {
+    const date = { ...complet(), executant: executantDinContract({ tip_contract: 'asociere', rol_gazpet: 'lider' }) }
+    const ps = paragrafe((await xmlDocument(date)).xml)
+    expect(ps).toContain('Executant: Asocierea GAZPET INSTAL S.R.L. (lider) – ____________________ (asociat)')
+    expect(ps).toContain('EXECUTANT – Asocierea GAZPET INSTAL S.R.L. (lider) – ____________________ (asociat)')
   })
 })

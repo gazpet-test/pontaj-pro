@@ -1,11 +1,12 @@
 // Execuție → proiect → Documente: „📄 PV predare conductă pentru cuplare” (cererea lui Eugen, aprobată de Răzvan 19.11.2026).
-// Butonul deschide un formular cu antetul completat din proiect (executie_proiecte + employees); restul câmpurilor sunt opționale,
+// Butonul deschide un formular cu antetul completat din proiect (executie_proiecte + employees + cartea tehnică ctc_carti + contractul
+// legat din contracte_terti / beneficiari; runda 2, test live 19.11.2026); restul câmpurilor sunt opționale,
 // iar „Descarcă Word” face .docx-ul în browser (pvCuplareDocx.js). Nimic nu se scrie în BD.
 // Acces: butonul stă în ProiectContextView, care se randează doar după verdictul de acces al proiectului (useAccesProiectExecutie).
 // Stări distincte (L18): se încarcă / eroare de citire (cu reîncercare) / formular; numele care nu s-au putut citi = avertisment vizibil.
 // L24: răspunsurile se aplică doar dacă deschiderea e cea curentă și proiectul e același; la schimbarea proiectului formularul se închide.
 import { useEffect, useRef, useState } from 'react'
-import { construiestePvCuplare, dateInitialePv, numeFisierPv } from './pvCuplareDocx.js'
+import { construiestePvCuplare, dateInitialePv, numeFisierPv, frazaProgram, formatDiametru, LINIE } from './pvCuplareDocx.js'
 import { blobDocx } from './OfertareExport.js'
 
 function descarcaBlob(blob, nume) {
@@ -27,28 +28,46 @@ const S = {
   sectiune: { fontSize: 12, fontWeight: 700, color: C.text, margin: '14px 0 6px' },
 }
 
-// Coloanele există în executie_proiecte (vezi salvarea proiectului din Executie.jsx). Fără localitate / județ / diametru în BD:
-// acelea rămân câmpuri de completat.
-export const COLOANE_PROIECT_PV = 'id, cod_intern, nume, beneficiar, nr_contract, data_contract, sef_santier_employee_id, rte_employee_id'
+// Coloanele există în executie_proiecte (vezi salvarea proiectului din Executie.jsx; contract_id = legătura spre contracte_terti).
+// Fără localitate / județ / diametru pe proiect: localitatea și județul vin din cartea tehnică CTC (ctc_carti, 20260930h),
+// diametrul rămâne câmp de completat.
+export const COLOANE_PROIECT_PV = 'id, cod_intern, nume, beneficiar, nr_contract, data_contract, contract_id, sef_santier_employee_id, rte_employee_id'
+export const COLOANE_CARTE_PV = 'proiect_id, beneficiar_nume, localitate, judet'
+// tip_contract / rol_gazpet = cum scrie Administrativ → Contracte (ContracteComerciale.jsx); beneficiarul prin FK beneficiar_id
+export const COLOANE_CONTRACT_PV = 'id, tip_contract, rol_gazpet, beneficiar:beneficiari(nume)'
+
+const mesajEroare = e => e?.message || String(e)
 
 /**
- * Citește proiectul și oamenii. Eroarea pe proiect = aruncă; eroarea pe oameni = avertisment (antetul merge mai departe).
- * `curent()` fals între pași (formular închis / alt proiect) = se oprește și întoarce null, fără a doua cerere.
+ * Citește proiectul, apoi (în paralel) oamenii, cartea tehnică și contractul legat. Eroarea pe proiect = aruncă; eroarea pe o sursă
+ * secundară = avertisment vizibil (antetul merge mai departe, câmpul rămâne de completat). Rând lipsă / ascuns de drepturi = gol (L18:
+ * „nu există” nu e eroare, eroarea nu e „gol”). Rândul întors trebuie să fie al proiectului / contractului cerut, altfel nu se folosește.
+ * `curent()` fals între pași (formular închis / alt proiect) = se oprește și întoarce null, fără cereri noi.
  */
 export async function incarcaDatePv(supabase, proiectId, curent = () => true) {
   const { data: proiect, error } = await supabase.from('executie_proiecte').select(COLOANE_PROIECT_PV).eq('id', proiectId).maybeSingle()
   if (!curent()) return null
-  if (error) throw new Error(error.message || String(error))
+  if (error) throw new Error(mesajEroare(error))
   if (!proiect) throw new Error('Proiectul nu a putut fi citit.')
+  if (String(proiect.id) !== String(proiectId)) throw new Error('Răspunsul nu corespunde proiectului deschis.')   // înaintea cererilor secundare
   const ids = [proiect.sef_santier_employee_id, proiect.rte_employee_id].filter(v => v != null)
+  const [rOameni, rCarte, rContract] = await Promise.all([
+    ids.length ? supabase.from('employees').select('id, name').in('id', ids) : null,
+    supabase.from('ctc_carti').select(COLOANE_CARTE_PV).eq('proiect_id', proiect.id).maybeSingle(),
+    proiect.contract_id != null ? supabase.from('contracte_terti').select(COLOANE_CONTRACT_PV).eq('id', proiect.contract_id).maybeSingle() : null,
+  ])
+  if (!curent()) return null
+  const avertismente = []
   const angajati = {}
-  let avertisment = null
-  if (ids.length) {
-    const { data, error: e2 } = await supabase.from('employees').select('id, name').in('id', ids)
-    if (e2) avertisment = 'Numele șefului de șantier / RTE nu s-au putut citi (' + (e2.message || String(e2)) + '). Completează-le de mână.'
-    else (data || []).forEach(x => { angajati[x.id] = x })
-  }
-  return { proiect, form: dateInitialePv({ proiect, angajati }), avertisment }
+  if (rOameni?.error) avertismente.push('Numele șefului de șantier / RTE nu s-au putut citi (' + mesajEroare(rOameni.error) + '). Completează-le de mână.')
+  else (rOameni?.data || []).forEach(x => { angajati[x.id] = x })
+  let carte = null
+  if (rCarte.error) avertismente.push('Cartea tehnică (localitate / județ) nu s-a putut citi (' + mesajEroare(rCarte.error) + '). Completează locul de mână.')
+  else if (rCarte.data && String(rCarte.data.proiect_id) === String(proiect.id)) carte = rCarte.data
+  let contract = null
+  if (rContract?.error) avertismente.push('Contractul din Administrativ nu s-a putut citi (' + mesajEroare(rContract.error) + '). Verifică beneficiarul și executantul.')
+  else if (rContract?.data && String(rContract.data.id) === String(proiect.contract_id)) contract = rContract.data
+  return { proiect, form: dateInitialePv({ proiect, angajati, carte, contract }), avertisment: avertismente.join(' ') || null }
 }
 
 function Camp({ eticheta, valoare, onChange, tip = 'text', placeholder, rows, nume }) {
@@ -160,15 +179,16 @@ export default function PvCuplareGenerator({ supabase, proiectId, proiect }) {
                     <Camp nume="contract" eticheta="Contract" valoare={form.contract} onChange={v => set('contract', v)} placeholder="ex. nr. 21 din 12.01.2026" />
                     <Camp nume="beneficiar" eticheta="Beneficiar" valoare={form.beneficiar} onChange={v => set('beneficiar', v)} />
                   </div>
-                  <Camp nume="executant" eticheta="Executant (la asociere: lider + asociat)" valoare={form.executant} onChange={v => set('executant', v)} />
                   <div>
-                    <Camp nume="locul" eticheta="Locul (localitate, județ)" valoare={form.locul} onChange={v => set('locul', v)} />
-                    {proiect.site_name && !form.locul && (
-                      <button data-pv-preia-santier onClick={() => set('locul', String(proiect.site_name))} style={{ ...S.buton, fontSize: 11, marginTop: 4, padding: '2px 8px' }}>
-                        Preia numele șantierului: {proiect.site_name}
-                      </button>
+                    <Camp nume="executant" eticheta="Executant (la asociere: lider + asociat)" valoare={form.executant} onChange={v => set('executant', v)} />
+                    {form.executant.includes(LINIE) && (
+                      <div data-pv-nota-executant style={{ fontSize: 11, color: C.yellow, marginTop: 3 }}>
+                        Contractul legat e în asociere, dar ERP-ul nu ține numele celuilalt asociat: scrie-l în locul liniei (sau las-o de completat de mână).
+                      </div>
                     )}
                   </div>
+                  <Camp nume="locul" eticheta="Locul (din cartea tehnică: localitate, județ)" valoare={form.locul} onChange={v => set('locul', v)}
+                    placeholder="ex. amplasamentul lucrării, zona Domnești, jud. Argeș" />
                 </div>
 
                 <div style={S.sectiune}>Programul comunicat de beneficiar</div>
@@ -176,9 +196,13 @@ export default function PvCuplareGenerator({ supabase, proiectId, proiect }) {
                   <Camp nume="sursa_program" eticheta="Sursa programului" valoare={form.sursa_program} onChange={v => set('sursa_program', v)} placeholder="ex. e-mail Sucursala Mediaș din 19.11.2026" />
                   <Camp nume="intervale" eticheta="Intervale programate (unul pe rând)" valoare={form.intervale} onChange={v => set('intervale', v)} rows={3}
                     placeholder={'ex. punere în siguranță 08:00–09:30\nextragere obturatoare 16:00–17:00'} />
+                  <div data-pv-fraza-program style={{ fontSize: 11, color: C.muted }}>
+                    În document: „… conform programului comunicat de {form.beneficiar.trim() || LINIE} ({frazaProgram(form)}), s-au constatat următoarele:”
+                  </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 10 }}>
                     <Camp nume="srm" eticheta="SRM / stația afectată" valoare={form.srm} onChange={v => set('srm', v)} placeholder="ex. SRM Domnești AG (SM1104D0)" />
-                    <Camp nume="diametru" eticheta="Diametrul conductei" valoare={form.diametru} onChange={v => set('diametru', v)} placeholder="ex. 300 → Dn 300" />
+                    <Camp nume="diametru" eticheta={`Diametrul conductei${formatDiametru(form.diametru) ? ` → ${formatDiametru(form.diametru)}` : ''}`}
+                      valoare={form.diametru} onChange={v => set('diametru', v)} placeholder="ex. 500 → DN500" />
                     <Camp nume="exemplare" eticheta="Nr. exemplare" tip="number" valoare={form.exemplare} onChange={v => set('exemplare', v)} placeholder="gol = linie" />
                   </div>
                 </div>
