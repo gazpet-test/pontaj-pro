@@ -12,6 +12,7 @@
 
 import * as XLSX from 'xlsx-js-style'
 import { faraDiacritice, normalizeazaNume } from './idParcela.js'
+import { verificaColoaneDecalate, numarRanduriDeVerificat } from './importVerificareFixa.js'   // ciclu de module sigur: vezi antetul acelui fișier
 
 // Contract 8a: identitatea nu depinde de tronson; helperul legacy ramane in afara feliei.
 export function idParcela(cod3, n) {
@@ -196,8 +197,8 @@ function mapeazaColoane(chei, cStart) {
  */
 export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiune = null, sursa = 'TGZ' } = {}) {
   const erori = []
-  const gol = { parcele: [], detinatori: [], contacte: [], dubluri: [], neidentificati: [], fara_cheie: [], ambigue: [], cadastru_suspect: [], erori }
-  const statistici = { randuri_total: 0, randuri_goale: 0, parcele: 0, parcele_fara_cheie: 0, parcele_ambigue: 0, detinatori: 0, contacte: 0, dubluri: 0, neidentificati: 0, fara_cheie: 0, ambigue: 0, judet_diferit: 0, erori: 0, cadastru_suspect: 0, randuri_de_tratat: 0, pe_uat: {} }
+  const gol = { parcele: [], detinatori: [], contacte: [], dubluri: [], neidentificati: [], fara_cheie: [], ambigue: [], cadastru_suspect: [], de_verificat: [], erori }
+  const statistici = { randuri_total: 0, randuri_goale: 0, parcele: 0, parcele_fara_cheie: 0, parcele_ambigue: 0, detinatori: 0, contacte: 0, dubluri: 0, neidentificati: 0, fara_cheie: 0, ambigue: 0, judet_diferit: 0, erori: 0, cadastru_suspect: 0, de_verificat: 0, randuri_de_verificat: 0, randuri_de_tratat: 0, pe_uat: {} }
 
   let wb
   try {
@@ -240,6 +241,7 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
   const nrProvizoriu = {}
 
   const parcele = []; const detinatori = []; const contacte = []; const dubluri = []; const neidentificati = []; const cadastru_suspect = []; const suspecte = []
+  const randuriVerificare = []             // rândurile grupurilor, cu valorile brute — doar pentru verificaColoaneDecalate (nu se întorc)
   const parcelaDupaCheie = new Map()       // 'HUS:7' → parcela
   const parcelaDupaCheieSursa = new Map()  // cheie_sursa validă → prima parcelă cu ea (pentru detectarea ambiguității)
   const detinatorDupaCheie = new Map()     // 'HUS:7|POPESCU ION' → detinator
@@ -309,6 +311,10 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
       if (!parcela.valori[camp].has(k)) parcela.valori[camp].set(k, v)
     }
     parcela.randuri.push({ rand: randExcel, nr_crt: text(nrCrtBrut), nume: numeBrut })
+    // 19.11.2026: valorile BRUTE ale rândului pentru verificarea fixă a coloanelor decalate (doar în memorie, nu intră în preview / BD)
+    const adresaRand = text(celula(r, col.adresa)); const partiAdresa = imparteAdresa(adresaRand, null)
+    randuriVerificare.push({ rand: randExcel, uat: uat.uat3, nr_crt: text(nrCrtBrut), cheie_parcela: cheieP, poz_hg: brute.poz_hg, nr_cadastral: brute.nr_cadastral, tarla: brute.tarla,
+      nume: numeBrut, adresa: adresaRand, adresa_sat: partiAdresa.adresa_sat, adresa_comuna: partiAdresa.adresa_comuna, uat_nume: uat.nume ?? '' })
 
     // deținătorul
     const numeNorm = normalizeazaNume(numeBrut)
@@ -406,6 +412,9 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
     cadastru_suspect.push({ rand: c.rand, uat: p.uat3, nr_crt: c.nr_crt, cheie_sursa: p.cheie_sursa, cheie_parcela: c.cheie_parcela, valoare: c.valoare, stare, motiv: MOTIV_CADASTRU_SUSPECT, detaliu: `cadastru: „${c.valoare}”; ${stare}` })
   }
   for (const p of parcele) { delete p.valori; delete p.uat_text; delete p.note }   // structuri de lucru, nu fac parte din preview
+  // 19.11.2026 (pasul 1): semnalele „de verificat” — posibilă coloană decalată (nume / adresă / telefon / CNP / e-mail în tarla, cadastru,
+  // poz. HG). NU blochează și NU schimbă nimic din import; fără valori în raport (importVerificareFixa.js)
+  const de_verificat = verificaColoaneDecalate(randuriVerificare)
 
   // P2-1 (r7): ce se va importa efectiv — eligibile = cu cheie_sursa, neambigue; deținătorii deduplicați ai lor; câte un contact per deținător
   const eligibile = new Set(parcele.filter(p => p.cheie_sursa && !p.ambigua).map(p => p.cheie))
@@ -418,12 +427,13 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
   statistici.parcele = parcele.length; statistici.detinatori = detinatori.length; statistici.contacte = contacte.length
   statistici.dubluri = dubluri.length; statistici.neidentificati = neidentificati.length; statistici.erori = erori.length
   statistici.fara_cheie = fara_cheie.length; statistici.ambigue = ambigue.length; statistici.cadastru_suspect = cadastru_suspect.length
+  statistici.de_verificat = de_verificat.length; statistici.randuri_de_verificat = numarRanduriDeVerificat(de_verificat)
   // rândurile DISTINCTE puse deoparte (erori + ambigue + fără cheie), fiecare numărat o singură dată (pct. 1)
   statistici.randuri_de_tratat = numarRanduriPuseDeoparte(randuriDeTratat({ erori, ambigue, fara_cheie }))   // L19: aceeași definiție ca în CSV / UI
   // r5 (C-P2-04, L12): numitorul fișierului — fiecare rând de date e ori într-un grup de parcelă (inclusiv dublurile), ori o eroare pe rând
   const inParcele = parcele.reduce((n, p) => n + p.randuri.length, 0); const eroriRand = erori.filter(e => e.rand != null).length
   statistici.reconciliere_randuri = { randuri: statistici.randuri_total, in_parcele: inParcele, erori: eroriRand, ok: statistici.randuri_total === inParcele + eroriRand }
-  return { parcele, detinatori, contacte, dubluri, neidentificati, fara_cheie, ambigue, cadastru_suspect, erori, statistici, antet: { rand: antet.rand + 1, coloane: col } }
+  return { parcele, detinatori, contacte, dubluri, neidentificati, fara_cheie, ambigue, cadastru_suspect, de_verificat, erori, statistici, antet: { rand: antet.rand + 1, coloane: col } }
 }
 
 function loturi(arr, n = LOT) {
@@ -740,16 +750,24 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
 // Merge pe un preview SAU pe `diferente` dintr-un lot finalizat (aceleași chei: erori / ambigue / fara_cheie / nr_crt_incompatibil / cadastru_suspect).
 // pct. 1 + Copilot r1 P2-02/P2-03/P3-01: UN rând de CSV per rând Excel, cu TOATE diagnosticele lui reunite (contradicție + coliziune, eroare +
 // cadastru suspect); loturile vechi aveau rândurile ambigue și în erori — acelea intră în categoria „ambiguă”, nu se dublează.
-// Intrările fără număr de rând rămân separate (nu se contopesc după motiv). `informativ` = doar „cadastru suspect” (nu e pus deoparte).
+// Intrările fără număr de rând rămân separate (nu se contopesc după motiv). `informativ` = doar marcaje („cadastru suspect” și / sau
+// „de verificat” — 19.11.2026): rândul intră în import, nu e pus deoparte.
 const MOTIVE_AMBIGUE = new Set([MOTIV_AMBIGUU, MOTIV_CONTRADICTORIU])
-const ORDINE_CATEGORII = ['ambiguă', 'fără cheie', 'Nr.Crt. incompatibil', 'identitate ștearsă', 'eroare', 'cadastru suspect']
+const ORDINE_CATEGORII = ['ambiguă', 'fără cheie', 'Nr.Crt. incompatibil', 'identitate ștearsă', 'eroare', 'cadastru suspect', 'de verificat']
+// categoriile care sunt doar MARCAJ (rândul intră în import): un rând numai cu ele nu e „pus deoparte”
+const CATEGORII_INFORMATIVE = new Set(['cadastru suspect', 'de verificat'])
+export const DETALIU_ASCUNS = 'cheia și detaliul ascunse: parcelă cu rânduri de verificat (valorile pot fi date personale)'
 export function randuriDeTratat(preview) {
   const grupuri = new Map()
   let fara = 0
+  // 19.11.2026: pe o parcelă cu semnal „de verificat”, cheia sursă (UAT|HG|cadastru|tarla) și detaliile (care citează valori) pot conține
+  // chiar numele / telefonul ajuns în coloana greșită → în CSV-ul „fără nume” nu se scriu pentru niciun rând al acelei parcele
+  const parceleAscunse = new Set((preview?.de_verificat || []).map(v => v.cheie_parcela).filter(Boolean))
   const adauga = (categorie, r) => {
     const k = r.rand != null ? `r:${r.rand}` : `u:${fara++}`
-    if (!grupuri.has(k)) grupuri.set(k, { rand: r.rand ?? null, categorii: new Set(), uat: '', nr_crt: '', cheie_sursa: '', motive: [], detalii: [] })
+    if (!grupuri.has(k)) grupuri.set(k, { rand: r.rand ?? null, categorii: new Set(), uat: '', nr_crt: '', cheie_sursa: '', motive: [], detalii: [], ascuns: false })
     const g = grupuri.get(k)
+    if (categorie === 'de verificat' || (r.cheie_parcela && parceleAscunse.has(r.cheie_parcela))) g.ascuns = true
     g.categorii.add(categorie)
     if (!g.uat) g.uat = r.uat ?? (r.cheie_sursa ? String(r.cheie_sursa).split('|')[0] : '')
     if (!g.nr_crt && r.nr_crt != null) g.nr_crt = String(r.nr_crt)
@@ -763,9 +781,11 @@ export function randuriDeTratat(preview) {
   for (const n of preview?.nr_crt_incompatibil || []) adauga('Nr.Crt. incompatibil', n)
   for (const n of preview?.identitate_stearsa || []) adauga('identitate ștearsă', n)
   for (const c of preview?.cadastru_suspect || []) adauga('cadastru suspect', c)
+  // 19.11.2026: posibilă coloană decalată — doar câmpul și motivul, fără valoare (de_verificat nu are cheie_sursa / detaliu cu valori)
+  for (const v of preview?.de_verificat || []) adauga('de verificat', { rand: v.rand, uat: v.uat, nr_crt: v.nr_crt, cheie_parcela: v.cheie_parcela, motiv: `de verificat — ${v.motiv}` })
   const out = [...grupuri.values()].map(g => {
     const cat = ORDINE_CATEGORII.filter(c => g.categorii.has(c))
-    return { rand: g.rand, categorie: cat.join(' + '), uat: g.uat || '', nr_crt: g.nr_crt, cheie_sursa: g.cheie_sursa, motiv: g.motive.join(' + '), detaliu: g.detalii.join(' | '), informativ: cat.length === 1 && cat[0] === 'cadastru suspect' }
+    return { rand: g.rand, categorie: cat.join(' + '), uat: g.uat || '', nr_crt: g.nr_crt, cheie_sursa: g.ascuns ? '' : g.cheie_sursa, motiv: g.motive.join(' + '), detaliu: g.ascuns ? DETALIU_ASCUNS : g.detalii.join(' | '), informativ: cat.length > 0 && cat.every(c => CATEGORII_INFORMATIVE.has(c)) }
   })
   return out.sort((a, b) => (a.rand ?? Infinity) - (b.rand ?? Infinity))
 }

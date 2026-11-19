@@ -161,6 +161,69 @@ describe('ImportTgz — previzualizarea e legată de proiect', () => {
   })
 })
 
+// 19.11.2026: rândurile „de verificat” (posibilă coloană decalată) NU blochează importul, dar confirmarea cere bifa „am verificat rândurile
+// semnalate”, legată de previzualizarea curentă; lista nu arată valori
+describe('ImportTgz — bifa pentru rândurile de verificat', () => {
+  const I_VERIFICAT = 19   // ultimul hook (după cele 12 useState, 5 useRef și 2 useEffect)
+  const semnal = { rand: 4, uat: 'FIC', nr_crt: '1', cheie_parcela: 'FIC:1', camp: 'tarla', motive: ['nume'], motiv: 'tarla / nr. topo: pare numele deținătorului' }
+  const cuSemnal = () => ({ parcele: [{ cheie: 'FIC:1', cheie_sursa: 'FIC|HG 1||', ambigua: false }], detinatori: [], contacte: [], erori: [], ambigue: [], fara_cheie: [], de_verificat: [semnal],
+    statistici: { parcele_de_importat: 1, detinatori_de_importat: 1, contacte_de_importat: 1, de_verificat: 1, randuri_de_verificat: 1 }, proiect_id_previzualizare: 'proiect-A' })
+  const bifa = tree => elemente(tree, 'input').find(e => e.props.type === 'checkbox')
+  const pregateste = (preview) => {
+    amanate.import = amanat(); amanate.apeluriImport.length = 0
+    vi.stubGlobal('window', { confirm: () => true })
+    const h = harness(); const show = vi.fn(); const p = props('proiect-A', 'TEST-A', show)
+    h.render(ImportTgz, p)
+    h.valori[I.versiune] = 'v-fictiv'; h.valori[I.preview] = preview
+    return { h, show, p }
+  }
+  it('fără bifă: butonul e dezactivat, iar handlerul refuză (nimic la scrieImport); cu bifă: importul pornește', async () => {
+    const { h, show, p } = pregateste(cuSemnal())
+    const tree = h.render(ImportTgz, p)
+    expect(buton(tree, '📥 Importă').props.disabled).toBe(true)
+    expect(bifa(tree).props.checked).toBe(false)
+    await buton(tree, '📥 Importă').props.onClick()
+    expect(amanate.apeluriImport).toEqual([])
+    expect(show.mock.calls.at(-1)[0]).toMatch(/de verificat/)
+    bifa(tree).props.onChange({ target: { checked: true } })
+    const tree2 = h.render(ImportTgz, p)
+    expect(bifa(tree2).props.checked).toBe(true)
+    expect(buton(tree2, '📥 Importă').props.disabled).toBe(false)
+    const gata = buton(tree2, '📥 Importă').props.onClick()
+    amanate.import.rezolva({ lotId: 'lot-fictiv', parceleNoi: 1, detinatoriNoi: 1, diferente: {} }); await gata
+    expect(amanate.apeluriImport).toHaveLength(1)
+  })
+  it('bifa e legată de previzualizare: o previzualizare nouă (alt obiect) cere bifa din nou', () => {
+    const { h, p } = pregateste(cuSemnal())
+    h.render(ImportTgz, p)
+    h.valori[I_VERIFICAT] = h.valori[I.preview]   // bifat pe previzualizarea veche
+    expect(buton(h.render(ImportTgz, p), '📥 Importă').props.disabled).toBe(false)
+    h.valori[I.preview] = cuSemnal()               // refăcută: alt obiect, aceleași date
+    const tree = h.render(ImportTgz, p)
+    expect(bifa(tree).props.checked).toBe(false)
+    expect(buton(tree, '📥 Importă').props.disabled).toBe(true)
+  })
+  it('statistica lipsă nu scutește de bifă (se numără lista); fără semnale nu apare nicio bifă', () => {
+    const pv = cuSemnal(); delete pv.statistici.randuri_de_verificat
+    const { h, p } = pregateste(pv)
+    expect(buton(h.render(ImportTgz, p), '📥 Importă').props.disabled).toBe(true)
+    const fara = { ...cuSemnal(), de_verificat: [], statistici: { parcele_de_importat: 1, detinatori_de_importat: 1, contacte_de_importat: 1 } }
+    const r = pregateste(fara)
+    const tree = r.h.render(ImportTgz, r.p)
+    expect(bifa(tree)).toBeUndefined()
+    expect(buton(tree, '📥 Importă').props.disabled).toBe(false)
+  })
+  it('tab-ul „De verificat” arată doar rândul, UAT, Nr.Crt., câmpul și motivul (lista albă, fără valoare)', () => {
+    const { h, p } = pregateste(cuSemnal())
+    h.render(ImportTgz, p)
+    h.valori[9] = 'de_verificat'   // subTab
+    // TabelPreview e o componentă internă (harness-ul nu o randează): se verifică rândurile primite
+    const gaseste = n => !n || typeof n !== 'object' ? [] : Array.isArray(n) ? n.flatMap(gaseste) : [...(n.type?.name === 'TabelPreview' ? [n] : []), ...gaseste(n.props?.children)]
+    const [tabel] = gaseste(h.render(ImportTgz, p))
+    expect(tabel.props.randuri).toEqual([{ rand: 4, uat: 'FIC', nr_crt: '1', camp: 'tarla', motiv: 'tarla / nr. topo: pare numele deținătorului' }])
+  })
+})
+
 // r6 (Jakarinos r5 P3, Copilot r5 P2-03): parsarea asincronă terminată după unmount nu mai atinge ecranul
 describe('ImportTgz — previzualizarea terminată după unmount', () => {
   const porneste = async (demonteaza) => {

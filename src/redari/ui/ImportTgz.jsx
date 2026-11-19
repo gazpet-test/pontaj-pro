@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { parseazaTgz, scrieImport, randuriDeTratat, csvRanduriDeTratat, numarRanduriPuseDeoparte } from '../importTgz.js'
 import { parseazaAnexa7 } from '../importAnexa7.js'
+import { numarRanduriDeVerificat, TITLU_DE_VERIFICAT } from '../importVerificareFixa.js'
 import { G, S, fmtNum, msgEroare, Camp, Gol } from './comune.jsx'
 import ImportUtilizatori from './ImportUtilizatori.jsx'   // PR4b: importul utilizatorilor / arendașilor, în aceeași zonă de import (același drept)
 
@@ -29,6 +30,7 @@ const EXPLICATII = {
   identitate_stearsa: 'Identitatea (HG / cadastru) există doar pe o parcelă ștearsă logic: importul nu o reactivează și nu creează alta peste ea. Reactivarea sau re-crearea parcelei se decide manual.',
   nr_crt_incompatibil: 'Identitatea (HG / cadastru) există deja în BD pe o parcelă cu alt grup Nr.Crt.: de ex. „166.1/1” sau „7.2” peste o parcelă importată ca „166” / „7” (regula veche citea „7.2” ca 7/2), ori „166” peste o parcelă „166.1”. NU s-a importat și NU s-a refolosit — verificați cu TGZ care e parcela corectă.',
   fara_cheie: 'Rânduri la care lipsesc ȘI poziția HG, ȘI un nr. cadastral real (un cadastru doar cu „#”, ex. „##”, e gol; tarla singură nu ajunge): nu au o identitate stabilă în Excel, iar un reimport le-ar dubla. NU se importă — necesită completarea poziției HG / nr. cadastral în Excel și reimport.',
+  de_verificat: 'Verificare fixă, fără AI: în poz. HG, nr. cadastral sau tarla apare numele ori adresa unui deținător al aceleiași parcele, un telefon / CNP sau un e-mail / o adresă web — semn că o coloană din Excel poate fi decalată. Lista NU arată valoarea (poate fi chiar data personală): deschideți Excel-ul la rândul indicat. Rândurile NU sunt oprite: importul rămâne posibil după ce bifați că le-ați verificat.',
   ambigue: 'Rânduri cu aceeași identitate (poziție HG / nr. cadastral) pe Nr.Crt. DIFERITE, sau cu identități CONTRADICTORII sub același Nr.Crt.: nu se poate ști care e parcela (vezi coloanele „motiv” și „detaliu” din acest tab). NU se importă — se lămuresc cu TGZ (poziție HG / nr. cadastral corectate în Excel) și se reimportă.',
 }
 // CSV-ul „rânduri de tratat” (fără nume) — același pentru un preview și pentru `diferente` dintr-un lot finalizat
@@ -36,7 +38,10 @@ const descarcaCsvDeTratat = (randuri, eticheta) => {
   const url = URL.createObjectURL(new Blob([csvRanduriDeTratat(randuri)], { type:'text/csv;charset=utf-8' }))
   const a = document.createElement('a'); a.href = url; a.download = `randuri-de-tratat-${String(eticheta || 'tgz').trim().replace(/[^\w.-]+/g, '_')}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
-const SUGESTIE_SARITE = 'necesită completarea poziției HG / nr. cadastral în Excel și reimport (reimportul aceluiași fișier completează doar ce lipsește).'
+// 19.11.2026: rândurile distincte cu semnal „de verificat” (posibilă coloană decalată) — din statistici sau, la un preview fără ele, din listă
+// (cel mai mare dintre cele două: o statistică lipsă / mai mică nu scutește de bifă — L18)
+const randuriDeVerificat = (pv) => Math.max(Number(pv?.statistici?.randuri_de_verificat) || 0, numarRanduriDeVerificat(Array.isArray(pv?.de_verificat) ? pv.de_verificat : []))
+const SUGESTIE_SARITE ='necesită completarea poziției HG / nr. cadastral în Excel și reimport (reimportul aceluiași fișier completează doar ce lipsește).'
 
 export default function ImportTgz({ proiect, uats, nivel, profile = null, show, onImportat }) {
   const poateScrie = nivel === 'admin' || nivel === 'editor'
@@ -69,6 +74,9 @@ export default function ImportTgz({ proiect, uats, nivel, profile = null, show, 
     setPreview(null); setFisier(null); setRaport(null); setProgres(null); setLucru(false); setNota(''); setTronsonPeUat({})
     return () => { genLoturi.current++ }
   }, [proiect?.id])
+  // 19.11.2026: bifa „am verificat rândurile semnalate” e legată de OBIECTUL previzualizării — o previzualizare nouă (alt fișier, alt
+  // proiect, refacere) cere bifa din nou. Declarată după celelalte hook-uri (testele de ecran numără hook-urile în ordine).
+  const [verificatPentru, setVerificatPentru] = useState(null)
 
   const incarcaLoturi = async () => {
     const gen = ++genLoturi.current; const proiectId = proiectRef.current
@@ -114,8 +122,10 @@ export default function ImportTgz({ proiect, uats, nivel, profile = null, show, 
     const cifre = cifreDeImportat(preview)
     const nParc = cifre.parcele
     if (!nParc) { show('Nu e nimic de importat (toate rândurile sunt fără cheie / ambigue sau cu erori).', 'error'); return }
+    const nrDeVerificat = randuriDeVerificat(preview)
+    if (nrDeVerificat > 0 && verificatPentru !== preview) { show(`${nrDeVerificat} rânduri sunt de verificat (posibilă coloană decalată) — bifează „am verificat rândurile semnalate” înainte de import.`, 'error'); return }
     const sarite = (preview.fara_cheie?.length || 0) + (preview.ambigue?.length || 0)
-    if (!window.confirm(`Import ${nParc} parcele, ${cifre.detinatori} deținători și ${cifre.contacte} contacte în ${proiect.cod} (lista „${versiune.trim()}”)${sarite ? `.\n${sarite} rânduri NU se importă (fără cheie / ambigue) — ${SUGESTIE_SARITE}` : '?'}`)) return
+    if (!window.confirm(`Import ${nParc} parcele, ${cifre.detinatori} deținători și ${cifre.contacte} contacte în ${proiect.cod} (lista „${versiune.trim()}”)${sarite ? `.\n${sarite} rânduri NU se importă (fără cheie / ambigue) — ${SUGESTIE_SARITE}` : ''}${nrDeVerificat ? `.\n${nrDeVerificat} rânduri semnalate „de verificat” intră în import așa cum sunt (ați confirmat că le-ați verificat).` : ''}${sarite || nrDeVerificat ? '' : '?'}`)) return
     const judetDiferit = preview.statistici?.judet_diferit || 0
     const proiectImport = proiect.id; const codImport = proiect.cod
     const gen = ++genImport.current
@@ -152,6 +162,7 @@ export default function ImportTgz({ proiect, uats, nivel, profile = null, show, 
   const previewAlProiectului = !!preview && preview.proiect_id_previzualizare === proiect?.id
   const deTratat = useMemo(() => (preview ? randuriDeTratat(preview) : []), [preview])   // Copilot r1 P3-04: o singură dată per preview
   const nrPuseDeoparte = useMemo(() => numarRanduriPuseDeoparte(deTratat), [deTratat])
+  const nrDeVerificat = randuriDeVerificat(preview)
   const nrCoproprietari = useMemo(() => (preview?.detinatori || []).filter(d => d.calitate === 'coproprietar').length, [preview])
   const statCard = (et, val, culoare = G.text) => <div style={{ ...S.card, padding:'10px 14px', minWidth:120 }}><div style={{ fontSize:11.5, color:G.muted }}>{et}</div><div style={{ fontSize:20, fontWeight:700, color: culoare }}>{val ?? '-'}</div></div>
   const celule = (obj) => Object.entries(obj || {}).filter(([k]) => !['id', 'proiect_id', 'uat_id', 'parcela_id', 'detinator_id'].includes(k) && typeof obj[k] !== 'object')
@@ -220,10 +231,11 @@ export default function ImportTgz({ proiect, uats, nivel, profile = null, show, 
             {statCard('Erori', fmtNum(preview.erori?.length || 0), preview.erori?.length ? G.red : G.text)}
             {statCard('Rânduri puse deoparte (distincte, înainte de verificarea în BD)', fmtNum(nrPuseDeoparte), nrPuseDeoparte ? G.orange : G.text)}
             {statCard('Cadastru suspect (doar marcaj)', fmtNum(preview.cadastru_suspect?.length || 0), preview.cadastru_suspect?.length ? G.yellow : G.text)}
+            {statCard(`${TITLU_DE_VERIFICAT} — rânduri`, fmtNum(nrDeVerificat), nrDeVerificat ? G.orange : G.text)}
           </div>
           <div style={{ display:'flex', gap:4, borderBottom:`1px solid ${G.border2}`, marginBottom:8, flexWrap:'wrap' }}>
             {[['parcele', 'Parcele'], ['detinatori', 'Deținători'], ['contacte', 'Contacte'], ['dubluri', 'Dubluri'], ['neidentificati', 'Neidentificați'],
-              ['fara_cheie', 'Fără cheie — nu se importă'], ['ambigue', 'Ambigue — nu se importă'], ['cadastru_suspect', 'Cadastru suspect'], ['erori', 'Erori']].map(([k, et]) => (
+              ['fara_cheie', 'Fără cheie — nu se importă'], ['ambigue', 'Ambigue — nu se importă'], ['cadastru_suspect', 'Cadastru suspect'], ['de_verificat', TITLU_DE_VERIFICAT], ['erori', 'Erori']].map(([k, et]) => (
               <button key={k} onClick={() => setSubTab(k)} style={{ padding:'6px 12px', background:'transparent', border:'none', borderBottom: subTab === k ? `2px solid ${G.green}` : '2px solid transparent', color: subTab === k ? G.text : G.muted, cursor:'pointer', fontSize:12.5, fontWeight:600 }}>
                 {et} ({Array.isArray(preview[k]) ? preview[k].length : 0})
               </button>
@@ -238,18 +250,26 @@ export default function ImportTgz({ proiect, uats, nivel, profile = null, show, 
           ) : (<>
             {subTab === 'parcele' && <div style={{ fontSize:12, color:G.muted, marginBottom:6 }}>ID-urile parcelelor sunt <b>provizorii</b> (numărul apare ca ????) — numerele finale se rezervă în BD la import și apar în raport. Parcelele marcate <span style={S.mono}>ambigua</span> sau fără <span style={S.mono}>cheie_sursa</span> NU se importă (vezi tab-urile dedicate).</div>}
             {EXPLICATII[subTab] && <div style={{ ...S.card, borderColor: subTab === 'ambigue' ? G.red : G.orange, fontSize:12.5, color:G.text, marginBottom:8 }}>⚠ {EXPLICATII[subTab]}</div>}
-            <TabelPreview randuri={Array.isArray(preview[subTab]) ? preview[subTab] : []} gol="Nimic în această categorie." />
+            {/* de_verificat: doar rândul, UAT, Nr.Crt., câmpul și motivul — FĂRĂ valoare (lista albă a coloanelor, nu tot obiectul) */}
+            <TabelPreview randuri={subTab === 'de_verificat' ? (preview.de_verificat || []).map(v => ({ rand: v.rand, uat: v.uat, nr_crt: v.nr_crt, camp: v.camp, motiv: v.motiv })) : (Array.isArray(preview[subTab]) ? preview[subTab] : [])} gol="Nimic în această categorie." />
           </>)}
 
           <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:12, alignItems:'center' }}>
             {progres && <span style={{ fontSize:12.5, color:G.muted }}>{progres.etapa ? progres.etapa + ' · ' : ''}{progres.facut} / {progres.total}</span>}
             {progres && <div style={{ width:160, height:6, background:G.border2, borderRadius:3, overflow:'hidden' }}><div style={{ width:`${progres.total ? Math.min(100, Math.round(progres.facut / progres.total * 100)) : 0}%`, height:'100%', background:G.green }} /></div>}
             {!poateScrie && <span style={{ fontSize:12.5, color:G.muted }}>Doar admin/editor pot importa.</span>}
-            {poateScrie && <button style={S.btnP} onClick={importa} disabled={lucru || !previewAlProiectului || !cifreDeImportat(preview).parcele}>{lucru ? 'Import în curs…' : `📥 Importă ${cifreDeImportat(preview).parcele} parcele / ${cifreDeImportat(preview).detinatori} deținători`}</button>}
+            {poateScrie && nrDeVerificat > 0 && (
+              <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:12.5, color:G.orange, cursor:'pointer' }}>
+                <input type="checkbox" checked={verificatPentru === preview} onChange={e => setVerificatPentru(e.target.checked ? preview : null)} disabled={lucru} />
+                Am verificat rândurile semnalate ({fmtNum(nrDeVerificat)})
+              </label>
+            )}
+            {poateScrie && <button style={S.btnP} onClick={importa} disabled={lucru || !previewAlProiectului || !cifreDeImportat(preview).parcele || (nrDeVerificat > 0 && verificatPentru !== preview)}>{lucru ? 'Import în curs…' : `📥 Importă ${cifreDeImportat(preview).parcele} parcele / ${cifreDeImportat(preview).detinatori} deținători`}</button>}
           </div>
           {preview.erori?.length > 0 && <div style={{ fontSize:12, color:G.yellow, marginTop:6 }}>⚠ Rândurile cu erori nu intră în import; corectează fișierul sau continuă fără ele.</div>}
           {/* fără nume / adrese / contacte — doar rândul din Excel, UAT, Nr.Crt., cheia parcelei și motivul (pentru corectarea fișierului) */}
-          {deTratat.length > 0 && <button style={{ ...S.btnS, marginTop:8 }} onClick={() => descarcaCsvDeTratat(deTratat, versiune || 'tgz')}>⬇ Descarcă rândurile de tratat ({nrPuseDeoparte} rânduri{preview.cadastru_suspect?.length ? ` + ${preview.cadastru_suspect.length} cadastru suspect` : ''}, fără nume)</button>}
+          {deTratat.length > 0 && <button style={{ ...S.btnS, marginTop:8 }} onClick={() => descarcaCsvDeTratat(deTratat, versiune || 'tgz')}>⬇ Descarcă rândurile de tratat ({nrPuseDeoparte} rânduri{preview.cadastru_suspect?.length ? ` + ${preview.cadastru_suspect.length} cadastru suspect` : ''}{nrDeVerificat ? ` + ${nrDeVerificat} de verificat` : ''}, fără nume)</button>}
+          {nrDeVerificat > 0 && <div style={{ fontSize:12, color:G.orange, marginTop:6 }}>⚠ {nrDeVerificat} rânduri de verificat (posibilă coloană decalată) — vezi tab-ul „{TITLU_DE_VERIFICAT}”. Importul rămâne posibil după bifă.</div>}
           {((preview.fara_cheie?.length || 0) + (preview.ambigue?.length || 0)) > 0 && <div style={{ fontSize:12, color:G.yellow, marginTop:6 }}>⚠ {preview.fara_cheie?.length || 0} rânduri fără cheie și {preview.ambigue?.length || 0} ambigue NU se importă — {SUGESTIE_SARITE}</div>}
         </div>
       )}
