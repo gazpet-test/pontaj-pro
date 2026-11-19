@@ -7,7 +7,10 @@
 // - Ce lipsește rămâne LINIE de completat de mână, niciodată „undefined” / „null”.
 // - Orele efective (predare, repredare, fiecare operațiune) NU sunt câmpuri: rămân mereu LINIE_ORA, se scriu de mână pe loc.
 // - Diacritice: ş / ţ cu sedilă (din copy-paste) devin ș / ț cu virgulă.
-// - Fără nume de program / AI în document; autorul e cel care îl semnează.
+// - Fără nume de program / AI în document; autorul e cel care îl semnează (metadatele: firma, nu librăria).
+// - Runda 2 (test live 19.11.2026, modelul de la Domnești): executant implicit / asociere din contractul legat, locul din cartea
+//   tehnică (localitate, județ), beneficiarul complet din registru, „DN500”, „ing. Nume Prenume”, fraza programului ca în model,
+//   titlul 12 pt, fișierul fără dată = „_fara_data”. Ce nu există în ERP rămâne gol / linie (nimic dedus din text liber).
 // ════════════════════════════════════════════════════════════════
 import {
   Document, Packer, Paragraph, TextRun, AlignmentType, Table, TableRow, TableCell, WidthType, BorderStyle,
@@ -15,6 +18,7 @@ import {
 
 export const FONT_PV = 'Arial'
 export const MARIME_PV = 21                  // jumătăți de punct: 10,5 pt
+export const MARIME_TITLU = 24               // 12 pt (runda 2)
 export const LINIE_ORA = '____:____'
 export const LINIE = '____________________'  // câmp text necompletat
 export const LINIE_SCURTA = '__________'
@@ -53,11 +57,42 @@ export function formatDataPv(v) {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : s
 }
 
-/** Diametrul: „300” → „Dn 300”; orice altceva (ex. „DN 300 / Pn 63”) rămâne cum e scris. */
+/** Diametrul, ca în model: „500” / „Dn 500” / „dn500” → „DN500”; orice altceva (ex. „DN 300 / Pn 63”) rămâne cum e scris. */
 export function formatDiametru(v) {
   const s = curata(v)
   if (!s) return ''
-  return /^\d{2,4}$/.test(s) ? `Dn ${s}` : s
+  const m = /^(?:dn[ \t]*)?(\d{2,4})$/i.exec(s)
+  return m ? `DN${m[1]}` : s
+}
+
+/** Numele din employees („NUME_FAMILIE PRENUME…”, primul cuvânt = numele de familie) → „ing. Nume Prenume…” (ca în PV-ul de la Domnești), majuscule doar la inițiale. */
+export function formatNumeIng(v) {
+  const cuvinte = curata(v).split(/\s+/).filter(Boolean)
+  if (!cuvinte.length) return ''
+  // inițiala mare după început, cratimă sau apostrof (POPESCU-IONESCU → Popescu-Ionescu); diacriticele rămân
+  const titlu = w => w.toLocaleLowerCase('ro-RO').replace(/(^|[-'’])(\p{L})/gu, (_, sep, l) => sep + l.toLocaleUpperCase('ro-RO'))
+  const [familie, ...prenume] = cuvinte.map(titlu)
+  return `ing. ${[familie, ...prenume].join(' ')}`   // ordinea din PV-ul de la Domnești: „ing. Nica Eugen” (decizia Răzvan 19.11.2026)
+}
+
+/** Locul, ca în model: „amplasamentul lucrării, <localitate>, jud. <județ>”; ce lipsește se sare; ambele lipsă = gol. */
+export function formatLocul(localitate, judet) {
+  const loc = curata(localitate)
+  const jud = curata(judet).replace(/^jud(?:e[tț]ul)?\.?[ \t]*/i, '')   // „jud. Argeș” / „județul Argeș” / „Argeș” → „Argeș”
+  if (!loc && !jud) return ''
+  return ['amplasamentul lucrării', loc, jud && `jud. ${jud}`].filter(Boolean).join(', ')
+}
+
+/**
+ * Executantul din contractul legat (contracte_terti: tip_contract + rol_gazpet). ERP-ul ține doar ROLUL Gazpet în asociere, nu și
+ * numele asociatului → acela rămâne linie de completat. Fără asociere (sau rol necunoscut) = GAZPET INSTAL S.R.L. (decizia Răzvan).
+ */
+export function executantDinContract(contract) {
+  if (curata(contract?.tip_contract) !== 'asociere') return EXECUTANT_IMPLICIT
+  const rol = curata(contract?.rol_gazpet)
+  if (rol === 'lider') return `Asocierea ${EXECUTANT_IMPLICIT} (lider) – ${LINIE} (asociat)`
+  if (rol === 'asociat_simplu') return `Asocierea ${LINIE} (lider) – ${EXECUTANT_IMPLICIT} (asociat)`
+  return EXECUTANT_IMPLICIT
 }
 
 /** Numărul de exemplare: doar un număr întreg 1–99; altfel linie de completat. */
@@ -66,41 +101,65 @@ export function formatExemplare(v) {
   return /^[1-9]\d?$/.test(s) ? s : ''
 }
 
-/** Intervalele programate: unul pe rând în formular → „a; b” în document. */
+/**
+ * Un rând de interval, ca în model: „punere în siguranță 08:00–09:30” → „operațiuni de punere în siguranță în intervalul 08:00–09:30”.
+ * Doar rândul care SE TERMINĂ cu „HH:MM–HH:MM” se recompune (cratima devine „–”); textul scris rămâne întreg. „operațiuni de” se
+ * pune doar dacă rândul începe cu literă mică și nu începe deja cu „operațiun”; „în intervalul” nu se dublează. Restul = neschimbat.
+ */
+export function frazaInterval(v) {
+  const s = curata(v)
+  const m = /^(.*?)[ \t]*(\d{1,2}:\d{2})[ \t]*[-–—][ \t]*(\d{1,2}:\d{2})$/u.exec(s)
+  if (!m) return s
+  const text = m[1].replace(/[ \t,:;]+$/u, '')
+  const ore = `${m[2]}–${m[3]}`
+  if (!text) return `în intervalul ${ore}`
+  if (/(?:^|[ \t])(?:în[ \t]+intervalul|intervalul|între)$/iu.test(text)) return `${text} ${ore}`
+  const pref = /^\p{Ll}/u.test(text) && !/^operațiun/iu.test(text) ? 'operațiuni de ' : ''
+  return `${pref}${text} în intervalul ${ore}`
+}
+
+/** Intervalele programate: unul pe rând în formular → „a; b” în document, fiecare recompus cu frazaInterval. */
 export function formatIntervale(v) {
-  return curata(v).split(/\r?\n/).map(curata).filter(Boolean).join('; ')
+  return curata(v).split(/\r?\n/).map(frazaInterval).filter(Boolean).join('; ')
 }
 
-/** Data de azi în Europe/Bucharest, 'AAAA-LL-ZZ' (L17: nu UTC). */
-export function aziBucuresti(acum = new Date()) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit' }).format(acum)
+/** Paranteza din fraza de început a Părții I: „<sursa>: <intervale>”; ce lipsește = linie. Folosită și de previzualizarea din formular. */
+export function frazaProgram(d = {}) {
+  return `${sauLinie(d?.sursa_program, LINIE_SCURTA)}: ${formatIntervale(d?.intervale) || LINIE}`
 }
 
-/** Numele fișierului: PV_predare_conducta_cuplare_[cod_intern]_[AAAA-LL-ZZ].docx (data cuplării; dacă lipsește, ziua generării). */
-export function numeFisierPv(codIntern, dataCuplare, acum = new Date()) {
+/** Numele fișierului: PV_predare_conducta_cuplare_[cod_intern]_[AAAA-LL-ZZ].docx (data cuplării); fără dată → „_fara_data” (runda 2). */
+export function numeFisierPv(codIntern, dataCuplare) {
   const cod = curata(codIntern).normalize('NFD').replace(/\p{M}/gu, '')
     .replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'proiect'
   const d = curata(dataCuplare)
-  const zi = /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : aziBucuresti(acum)
+  const zi = /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : 'fara_data'
   return `PV_predare_conducta_cuplare_${cod}_${zi}.docx`
 }
 
 /**
- * Formularul inițial din datele proiectului. `proiect` = rândul din executie_proiecte (cod_intern, nume, beneficiar, nr_contract,
- * data_contract, sef_santier_employee_id, rte_employee_id); `angajati` = { [id]: { name } }. Ce lipsește rămâne gol.
+ * Formularul inițial din datele proiectului (coloane reale, verificate în migrări / ecranele care le scriu):
+ * - `proiect` = rândul din executie_proiecte (cod_intern, nume, beneficiar, nr_contract, data_contract, contract_id,
+ *   sef_santier_employee_id, rte_employee_id); `angajati` = { [id]: { name } };
+ * - `carte` = rândul din ctc_carti al proiectului (beneficiar_nume, localitate, judet; UNIQUE pe proiect_id) sau null;
+ * - `contract` = rândul din contracte_terti legat prin contract_id (tip_contract, rol_gazpet, beneficiar: { nume } din beneficiari) sau null.
+ * Beneficiarul: registrul de beneficiari (prin contract) → cartea tehnică → textul din proiect. Diametrul nu are coloană pe proiect:
+ * rămâne gol (nu se deduce din nume). Ce lipsește rămâne gol.
  */
-export function dateInitialePv({ proiect, angajati = {} } = {}) {
+export function dateInitialePv({ proiect, angajati = {}, carte = null, contract = null } = {}) {
   const p = proiect || {}
-  const nume = id => (id != null && angajati[id] ? curata(angajati[id].name) : '')
+  const nume = id => (id != null && angajati[id] ? formatNumeIng(angajati[id].name) : '')
   const nr = curata(p.nr_contract)
   const dc = formatDataPv(p.data_contract)
-  const contract = nr ? `nr. ${nr}${dc ? ` din ${dc}` : ''}` : ''
+  const contractText = nr ? `nr. ${nr}${dc ? ` din ${dc}` : ''}` : ''
   const persoane = { 'Executant – șef de șantier': nume(p.sef_santier_employee_id), 'Executant – RTE': nume(p.rte_employee_id) }
   return {
     cod_intern: curata(p.cod_intern),
     nr_pv: '', data_cuplarii: '',
-    obiectiv: curata(p.nume), contract, beneficiar: curata(p.beneficiar),
-    executant: '', locul: '',   // review #1142: fara sursa in proiect, executantul ramane gol (de completat; la asocieri lider + asociat)
+    obiectiv: curata(p.nume), contract: contractText,
+    beneficiar: curata(contract?.beneficiar?.nume) || curata(carte?.beneficiar_nume) || curata(p.beneficiar),
+    executant: executantDinContract(contract),
+    locul: formatLocul(carte?.localitate, carte?.judet),
     sursa_program: '', intervale: '', srm: '', diametru: '', exemplare: '',
     participanti: PARTICIPANTI_IMPLICITI.map(calitate => ({ calitate, nume: persoane[calitate] || '' })),
   }
@@ -117,9 +176,7 @@ export function modelPvCuplare(date = {}) {
   const dataC = formatDataPv(d.data_cuplarii) || LINIE_DATA
   const beneficiar = sauLinie(d.beneficiar)
   const executant = sauLinie(d.executant)
-  const intervale = formatIntervale(d.intervale) || LINIE
-  const sursa = sauLinie(d.sursa_program, LINIE_SCURTA)
-  const dn = formatDiametru(d.diametru) || `Dn ${LINIE_NR}`
+  const dn = formatDiametru(d.diametru) || `DN${LINIE_NR}`
   const ex = formatExemplare(d.exemplare) || LINIE_EXEMPLARE
   const antet = (eticheta, v) => par([r(`${eticheta}: `, true), r(sauLinie(v))])
   const participanti = (Array.isArray(d.participanti) ? d.participanti : [])
@@ -138,7 +195,7 @@ export function modelPvCuplare(date = {}) {
     { tip: 'tabel_participanti', cap: ['Calitatea', 'Numele și prenumele', 'Semnătura'], randuri: participanti },
     gol(),
     par([r('Partea I – Predarea conductei de către Beneficiar către Executant', true)]),
-    par(`Astăzi, ${dataC}, conform programului comunicat de ${beneficiar} (${sursa}: ${intervale}), s-au constatat următoarele:`, { align: 'justify' }),
+    par(`Astăzi, ${dataC}, conform programului comunicat de ${beneficiar} (${frazaProgram(d)}), s-au constatat următoarele:`, { align: 'justify' }),
     par(`1. Sistarea livrărilor prin ${sauLinie(d.srm)} și manevrele de refulare: finalizate la ora ${LINIE_ORA}.`),
     par(`2. Introducerea obturatoarelor pneumatice: finalizată la ora ${LINIE_ORA}.`),
     par(`3. Debitarea anti-Ex a conductei: finalizată la ora ${LINIE_ORA}.`),
@@ -204,12 +261,14 @@ function tabelSemnaturi(b) {
 
 export function construiestePvCuplare(date) {
   const copii = modelPvCuplare(date).map(b => {
-    if (b.tip === 'titlu') return new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 120 }, children: [run(r(b.text, true))] })
+    if (b.tip === 'titlu') return new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 120 }, children: [run(r(b.text, true), { size: MARIME_TITLU })] })
     if (b.tip === 'tabel_participanti') return tabelParticipanti(b)
     if (b.tip === 'tabel_semnaturi') return tabelSemnaturi(b)
     return paragraf(b)
   })
   return new Document({
+    // metadatele din Word (Fișier → Informații): firma, nu „Un-named” din librărie
+    creator: EXECUTANT_IMPLICIT, lastModifiedBy: EXECUTANT_IMPLICIT, title: TITLU_PV,
     styles: { default: { document: { run: { font: FONT_PV, size: MARIME_PV } } } },
     sections: [{
       properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1134, bottom: 1134, left: 1134, right: 1134 } } },
