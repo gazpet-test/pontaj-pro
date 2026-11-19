@@ -15,10 +15,21 @@
 #        fn_sms_loturi_reguli / fn_sms_mesaje_reguli / fn_sms_rezerva = amprentele postcondiției 20261130c, fn_sms_lot_aproba / fn_sms_rezultat =
 #        amprentele din 20261130c / 20261130b, triggerele trg_sms_* active, fn_sms_rezerva / fn_sms_rezultat doar pentru service_role;
 #   (24) OWNER is_owner; EDITOR ne-owner și FĂRĂ nivel SMS (fn_sms_nivel_cont = NULL; contul cu redari = editor din proba A e potrivit);
-#   (25) niciun rest al unei rulări anterioare (id-urile b26b0000-… / codul TEST-SMSP-SINT / loturi pe proiect / mesaje către deținătorii probei);
-#   (27) mediul: ora României 08:00–19:45 (altfel fn_sms_rezerva răspunde in_afara_orelor), fără pg_cron / pg_net pe clonă (nimic nu pornește
-#        singur o trimitere cât comutatorul e pornit), un singur rând sms_setari, consumul zi / lună cu loc pentru 5 SMS sub plafoane.
+#   (27) mediul: ora României 08:00–19:45 (altfel fn_sms_rezerva răspunde in_afara_orelor), un singur rând sms_setari, consumul zi / lună cu
+#        loc pentru 5 SMS sub plafoane;
+#   (28) IZOLAREA SMS a clonei (r2, Jakarinos P2): parametrul 'simulator' al probei NU e o barieră (edge-ul își ia furnizorul din SMS_FURNIZOR,
+#        nu din probă), iar comutatoarele probei sunt GLOBALE; bariera e că pe clonă nu există nimic care să poată trimite. Se cere: (a) nicio
+#        altă sesiune client conectată în afara celei care verifică și a sesiunilor probei (PostgREST / authenticator, un worker, o consolă:
+#        prin ele edge-ul sau un cron extern ar ajunge la clonă), (b) fără pg_cron / pg_net / http (nimic nu pornește singur o cerere), (c)
+#        niciun lot în afara probei aprobat / în trimitere, de orice categorie (cronul și butonul „Trimite” rezervă doar din ele; o clonă a
+#        producției are numere REALE), (d) nicio rundă rezervată / trimisă în afara probei în ultimele 15 minute dinaintea pornirii și nici de
+#        atunci încoace (un worker în curs, cu runde deja rezervate). Se verifică la pornire, ÎNAINTEA fiecărei porniri a trimiterii (kill-
+#        switch oprit / comutatorul Redări pornit) și la final (orice rezervare străină apărută în timpul probei = cod 28);
+#   (25) niciun identificator al probei deja folosit pe clonă: TOATE cheile din spațiul b26b0000-0000-4000-8000- (proiect, UAT-uri, parcele,
+#        deținători, contacte, tokenuri, convocări, loturi, mesaje), pe ORICE coloană care le poate purta (id, proiect_id, uat_id, parcela_id,
+#        detinator_id, lot_id, destinatar_id, red_jurnal.inregistrare_id), codul TEST-SMSP-SINT și numerele de document TEST-SMSP-SINT-*.
 # DATELE: SINTETICE, fără date personale. Proiectul de TEST „TEST-SMSP-SINT” (regula șablonului provizoriu: doar TEST-%, 1–5 destinatari),
+#   cu MARCAJUL rulării în denumire (un uuid luat de pe server la pornire: curățenia recunoaște după el ce a creat ACEASTĂ rulare),
 #   contact 0700000999, e-mail de contact .invalid; 5 UAT-uri („Sinteticeni” ZSA + „Vechieni Unu…Patru” ZSB…ZSE), o parcelă pe UAT, 8 deținători
 #   „Persoana Sintetica …” cu mobile SINTETICE valide ca format (0700000901…908), adrese „Strada Fictiva nr. N”, fără e-mail; câte o convocare
 #   activă pe canalul telefon (fără plic / informare); sesiunea: azi + 10 zile, program 09:00-15:00. Inserate ca postgres cu triggerele REALE
@@ -48,7 +59,9 @@
 #       rămâne draft v1; OWNER cu versiunea 1 -> aprobat v2, aprobat_nivel owner, aprobat_autorizare_nr PROBA-CLONA-SMSP.
 #   F4a comutatorul Redări OPRIT pe calea reală: rezervarea (service_role, p_apelant = OWNER, ca butonul „Trimite”) -> motiv redari_neautorizat,
 #       0 mesaje; lotul rămâne aprobat v2, 0 mesaje rezervate. authenticated (OWNER) pe fn_sms_rezerva -> ERR 42501 (doar service_role).
-#   F4b comutatorul pornit din nou; DOUĂ rezervări CONCURENTE (sesiuni reale, p_max = 1): X rezervă și ține tranzacția deschisă până la
+#   F4c (rulează după F4a, înaintea lui F4b) KILL-SWITCH-ul pornit pe calea reală (fn_sms_setari_salveaza, owner), comutatorul Redări pornit:
+#       rezervarea -> motiv kill_switch, 0 mesaje (singura barieră rămasă e kill-switch-ul); lotul rămâne aprobat v2, 0 mesaje rezervate.
+#   F4b kill-switch-ul oprit din nou (după garda 28); DOUĂ rezervări CONCURENTE (sesiuni reale, p_max = 1): X rezervă și ține tranzacția deschisă până la
 #       eliberarea explicită; Y pornește după și e BLOCATĂ de X (pg_blocking_pids(Y) conține PID-ul lui X, wait_event_type Lock); după
 #       COMMIT-ul lui X: X și Y au câte UN mesaj, DIFERITE, motiv ok, textul = cel nou scris de mână; Y vede rezervarea lui X (ramase = 1);
 #       în BD: 2 necunoscut + 1 in_coada, lotul in_trimitere, rezervat_la(Y) > rezervat_la(X) (L05: nicio dublare).
@@ -75,47 +88,34 @@
 #       V4 -> ERR 23514 „sms: lotul e deja inchis (coada_golita)”. Recrearea din șablon (§4): pe UAT-ul lui V3 (anulat) -> previzualizare fără
 #       lot activ / campanie, creare reușită, versiunea nouă, 2 destinatari; pe UAT-ul lui V4 -> campanie_existenta = V4, crearea -> ERR 23505
 #       „campania … exista deja”.
-#   F7  curățenia (trap, și la eroare): sesiunile probei oprite; o tranzacție care șterge DOAR ce a creat proba (după identificatori: mesajele și
-#       loturile proiectului sintetic, jurnalul rândurilor lui, convocările / contactele / tokenurile / deținătorii / parcelele / UAT-urile /
-#       proiectul) cu triggerele USER ale tabelelor atinse oprite DOAR în ea (loturile / mesajele / jurnalul nu se pot șterge altfel), pune la
-#       loc rândul sms_setari EXACT ca la început și VERIFICĂ înainte de COMMIT (nimic rămas, setările = copia, triggerele active); după COMMIT,
-#       a doua verificare din ALTĂ sesiune (0 rânduri, setările = copia, 0 sesiuni ale probei). Abia apoi „PASS”.
+#   F7  curățenia (trap, și la eroare; armată abia după gărzi): sesiunile probei oprite; o tranzacție care șterge DOAR ce a creat ACEASTĂ
+#       rulare: lanțul care pleacă de la proiectul cu id-ul, codul ȘI marcajul ei (UAT-urile și parcelele LUI, deținătorii parcelelor lui,
+#       contactele / tokenurile / convocările acelor deținători, loturile proiectului și mesajele lor, jurnalul acestor rânduri scris de la
+#       pornire) — NICIODATĂ după o listă de id-uri (un rând străin cu un id al probei nu e atins; dacă S0 n-a ajuns la COMMIT, lanțul e gol
+#       și nu se șterge nimic); triggerele USER ale tabelelor atinse oprite DOAR în ea (loturile / mesajele / jurnalul nu se pot șterge altfel);
+#       pune la loc rândul sms_setari EXACT ca la început și VERIFICĂ înainte de COMMIT: pe fiecare tabel numărul de rânduri = cel dinainte
+#       minus EXACT rândurile lanțului (nimic străin șters), setările = copia, triggerele active; după COMMIT, a doua verificare din ALTĂ
+#       sesiune: garda 25 trece din nou (niciun identificator al probei rămas), setările = copia, 0 sesiuni ale probei. Abia apoi „PASS”.
 #       Curățenia picată = cod 26, dosarul temporar PĂSTRAT (copia setărilor, jurnalele sesiunilor; doar date sintetice).
 # CE NU DOVEDEȘTE: furnizorul real (SMSLink), funcția edge sms-trimite (poarta JWT, fereastra 08-20 verificată în edge înaintea fiecărui apel,
 #   bucla de runde), cronul intern (calea p_lot_id = NULL nu se cheamă: pe clonă ar putea atinge alte loturi), nivelul „utilizator” SMS (nu
 #   există un cont sintetic cu sms = editor; vezi raportul), concurența cu un worker care a rezervat ÎNAINTE de COMMIT-ul lui B (procedura
-#   din documentul B §3).
+#   din documentul B §3). Izolarea (28) se dovedește din BAZĂ (sesiuni, extensii, loturi, rezervări); secretele unei funcții edge legate de
+#   clonă nu se văd din SQL: o clonă cu PostgREST / edge pornite e refuzată la (a), nu „verificată”.
 # Ieșire: 0 = toate OK și curățenia verificată; 1 = o verificare a picat (sau o barieră a expirat); 2 = argumente; 22 = altă țintă; 23 = A / B
-#   neaplicate sau lanțul SMS diferit; 24 = OWNER / EDITOR nepotrivite; 25 = resturi ale unei rulări anterioare; 26 = curățenia a picat sau n-a
-#   putut fi verificată (prioritar față de 0 / 1); 27 = mediul (oră, pg_cron / pg_net, setări, plafon).
-set -euo pipefail
-PSQL="${PSQL:-psql}"
-export PGCLIENTENCODING=UTF8
-SISTEM="" H="" P="" U="" D=""
-while [ $# -gt 0 ]; do
-  [ $# -ge 2 ] || { echo "optiunea $1 fara valoare" >&2; exit 2; }
-  case "$1" in
-    --sistem) SISTEM="$2" ;; --host) H="$2" ;; --port) P="$2" ;; --user) U="$2" ;; --db) D="$2" ;;
-    *) echo "argument necunoscut: $1" >&2; exit 2 ;;
-  esac
-  shift 2
-done
-[[ "$SISTEM" =~ ^[0-9]+$ ]] || { echo "lipseste --sistem <system_identifier al clonei>" >&2; exit 2; }
-[ -n "$H" ] && [ -n "$P" ] && [ -n "$U" ] && [ -n "$D" ] || { echo "lipsesc --host / --port / --user / --db" >&2; exit 2; }
-OWNER="${OWNER:-00000000-0000-4000-8000-000000000001}"
-EDITOR="${EDITOR:-}"
-[[ "$OWNER" =~ ^[0-9a-f-]{36}$ ]] || { echo "OWNER invalid" >&2; exit 2; }
-[[ "$EDITOR" =~ ^[0-9a-f-]{36}$ ]] || { echo "EDITOR=<uuid> lipsa (profil ne-owner, fara acces SMS, pe clona)" >&2; exit 2; }
-cd "$(dirname "$0")/../.."
-CONN=(-h "$H" -p "$P" -U "$U" -d "$D")
-TMP="$(mktemp -d ./.clona_20261226b_flux.XXXXXX)"
+#   neaplicate sau lanțul SMS diferit; 24 = OWNER / EDITOR nepotrivite; 25 = identificatori ai probei deja folosiți; 26 = curățenia a picat
+#   sau n-a putut fi verificată (prioritar față de celelalte); 27 = mediul (oră, setări, plafon); 28 = izolarea SMS nedovedită (la pornire,
+#   înaintea unei porniri a trimiterii sau la final).
+# Testul local al gărzilor și al curățeniei (PGlite, fără bază reală): scripts/pglite/test_sms_predare_flux_clona_local.mjs (cheamă
+#   funcțiile sql_* de mai jos cu SMSP_BIBLIOTECA=1, care doar le definește și iese înaintea oricărei conexiuni).
+# ── constantele probei (înaintea argumentelor: le folosesc funcțiile sql_* de mai jos, deci și testul local) ──
 APP_X=proba_smsp_x; APP_Y=proba_smsp_y; APP_ELIB=proba_smsp_elib; APP_CTL=proba_smsp_ctl
 APPS="'$APP_X', '$APP_Y', '$APP_ELIB', '$APP_CTL'"
 VERS_NOUA=provizoriu-2026-11-17; VERS_VECHE=provizoriu-2026-11-03
 COD=TEST-SMSP-SINT; TEL_CONTACT=0700000999; AUT_NR=PROBA-CLONA-SMSP
-RUN="$(date +%s)"
-FID1="PROBA-SMSP-$RUN-1"; FID1B="PROBA-SMSP-$RUN-1b"; FID3="PROBA-SMSP-$RUN-3"; FID_V4="PROBA-SMSP-$RUN-V4"
-# id-urile sintetice (fixe; garda 25 cere să nu existe)
+OWNER="${OWNER:-00000000-0000-4000-8000-000000000001}"
+# id-urile sintetice: fixe, TOATE în spațiul SPATIU (garda 25 îl caută pe orice coloană care poate purta o cheie a probei)
+SPATIU=b26b0000-0000-4000-8000-
 PR=b26b0000-0000-4000-8000-000000000001
 UAT_N=b26b0000-0000-4000-8000-000000000101; UAT_V1=b26b0000-0000-4000-8000-000000000102; UAT_V2=b26b0000-0000-4000-8000-000000000103
 UAT_V3=b26b0000-0000-4000-8000-000000000104; UAT_V4=b26b0000-0000-4000-8000-000000000105
@@ -130,8 +130,201 @@ LV4=b26b0000-0000-4000-8000-000000000504
 MV1=b26b0000-0000-4000-8000-000000000601; MV2=b26b0000-0000-4000-8000-000000000602; MV3A=b26b0000-0000-4000-8000-000000000603
 MV3B=b26b0000-0000-4000-8000-000000000604; MV4=b26b0000-0000-4000-8000-000000000605
 DETS="'$D1','$D2','$D3','$D4','$D5','$D6','$D7','$D8'"
-IDS="'$PR','$UAT_N','$UAT_V1','$UAT_V2','$UAT_V3','$UAT_V4','$PA_N','$PA_V1','$PA_V2','$PA_V3','$PA_V4',$DETS,'${CV}01','${CV}02','${CV}03','${CV}04','${CV}05','${CV}06','${CV}07','${CV}08'"
-PIDS=(); TINTA_OK=0; SNAP=""; ESEC=0
+# MARCAJ = uuid-ul rulării (de pe server, la pornire), T0 = momentul pornirii (clock_timestamp de pe server), SNAP = copia sms_setari
+MARCAJ=""; T0=""; SNAP=""
+denumire() { printf 'Proba SMS predare (sintetic) %s' "$MARCAJ"; }
+
+# garda 25 (și a doua verificare a curățeniei, după COMMIT): tabelele în care apare deja un identificator al probei; gol = niciunul.
+# Spațiul întreg, pe toate coloanele-cheie: un UAT / o parcelă / un rând de jurnal din ALT proiect cu un id al probei = refuz.
+sql_garda_resturi() {
+  local s="'${SPATIU}%'"
+  cat <<SQL
+SELECT concat_ws(',',
+  CASE WHEN EXISTS (SELECT 1 FROM public.red_proiecte x WHERE x.id::text LIKE $s OR x.cod = '$COD') THEN 'red_proiecte' END,
+  CASE WHEN EXISTS (SELECT 1 FROM public.red_uat x WHERE x.id::text LIKE $s OR x.proiect_id::text LIKE $s) THEN 'red_uat' END,
+  CASE WHEN EXISTS (SELECT 1 FROM public.red_parcele x WHERE x.id::text LIKE $s OR x.proiect_id::text LIKE $s OR x.uat_id::text LIKE $s) THEN 'red_parcele' END,
+  CASE WHEN EXISTS (SELECT 1 FROM public.red_detinatori x WHERE x.id::text LIKE $s OR x.parcela_id::text LIKE $s) THEN 'red_detinatori' END,
+  CASE WHEN EXISTS (SELECT 1 FROM public.red_detinatori_contact x WHERE x.detinator_id::text LIKE $s) THEN 'red_detinatori_contact' END,
+  CASE WHEN EXISTS (SELECT 1 FROM public.red_detinatori_token x WHERE x.detinator_id::text LIKE $s) THEN 'red_detinatori_token' END,
+  CASE WHEN EXISTS (SELECT 1 FROM public.red_convocari x WHERE x.id::text LIKE $s OR x.detinator_id::text LIKE $s OR x.nr_document LIKE '$COD-%') THEN 'red_convocari' END,
+  CASE WHEN EXISTS (SELECT 1 FROM public.red_jurnal x WHERE x.inregistrare_id::text LIKE $s) THEN 'red_jurnal' END,
+  CASE WHEN EXISTS (SELECT 1 FROM public.sms_loturi x WHERE x.id::text LIKE $s OR x.proiect_id::text LIKE $s OR x.uat_id::text LIKE $s) THEN 'sms_loturi' END,
+  CASE WHEN EXISTS (SELECT 1 FROM public.sms_mesaje x WHERE x.id::text LIKE $s OR x.lot_id::text LIKE $s OR x.destinatar_id::text LIKE $s) THEN 'sms_mesaje' END)
+SQL
+}
+
+# garda 28: încălcările izolării SMS a clonei; gol = izolată. Nu se numără sesiunea care verifică și sesiunile probei (application_name).
+#   (a) sesiunile client străine; (b) extensiile care pot porni singure o cerere; (c) loturile în afara probei din care se poate rezerva
+#   (cronul + butonul „Trimite”, orice categorie); (d) rezervările / trimiterile în afara probei din cele 15 minute dinaintea pornirii
+#   (T0) încoace: un worker în curs, cu runde deja rezervate, sau unul care a rezervat în timpul probei.
+sql_izolare() {
+  cat <<SQL
+SELECT concat_ws(',',
+  (SELECT 'sesiuni_straine=' || count(*) || ' [' || string_agg(coalesce(a.usename::text, '-') || '/' || coalesce(nullif(a.application_name, ''), '-'), ' ' ORDER BY a.pid) || ']'
+     FROM pg_stat_activity a WHERE a.backend_type = 'client backend' AND a.pid <> pg_backend_pid() AND coalesce(a.application_name, '') NOT IN ($APPS)
+   HAVING count(*) > 0),
+  (SELECT 'extensii=' || string_agg(e.extname::text, '/' ORDER BY e.extname) FROM pg_extension e WHERE e.extname IN ('pg_cron', 'pg_net', 'http') HAVING count(*) > 0),
+  (SELECT 'loturi_trimisibile_in_afara_probei=' || count(*) FROM public.sms_loturi l
+    WHERE l.stare IN ('aprobat', 'in_trimitere') AND l.proiect_id IS DISTINCT FROM '$PR'::uuid HAVING count(*) > 0),
+  (SELECT 'rezervari_in_afara_probei=' || count(*) FROM public.sms_mesaje m
+    WHERE (m.rezervat_la >= '$T0'::timestamptz - interval '15 minutes' OR m.trimis_la >= '$T0'::timestamptz - interval '15 minutes')
+      AND NOT EXISTS (SELECT 1 FROM public.sms_loturi l WHERE l.id = m.lot_id AND l.proiect_id = '$PR'::uuid) HAVING count(*) > 0))
+SQL
+}
+
+# S0: datele sintetice (postgres, triggerele REALE active, comise); proiectul poartă marcajul rulării
+sql_s0() {
+  cat <<SQL
+\\set ON_ERROR_STOP 1
+BEGIN;
+INSERT INTO public.red_proiecte (id, cod, denumire, contact_telefon, contact_email)
+VALUES ('$PR', '$COD', '$(denumire)', '$TEL_CONTACT', 'proba-sms-predare@exemplu.invalid');
+INSERT INTO public.red_uat (id, proiect_id, nume, uat3, sesiune_zi1, program_zi1)
+SELECT u.id, '$PR', u.nume, u.uat3, (now() AT TIME ZONE 'Europe/Bucharest')::date + 10, '09:00-15:00'
+  FROM (VALUES ('$UAT_N'::uuid, 'Sinteticeni', 'ZSA'), ('$UAT_V1'::uuid, 'Vechieni Unu', 'ZSB'), ('$UAT_V2'::uuid, 'Vechieni Doi', 'ZSC'),
+               ('$UAT_V3'::uuid, 'Vechieni Trei', 'ZSD'), ('$UAT_V4'::uuid, 'Vechieni Patru', 'ZSE')) u(id, nume, uat3);
+INSERT INTO public.red_parcele (id, proiect_id, uat_id, id_parcela) VALUES
+  ('$PA_N', '$PR', '$UAT_N', 'ZSA-0001'), ('$PA_V1', '$PR', '$UAT_V1', 'ZSB-0001'), ('$PA_V2', '$PR', '$UAT_V2', 'ZSC-0001'),
+  ('$PA_V3', '$PR', '$UAT_V3', 'ZSD-0001'), ('$PA_V4', '$PR', '$UAT_V4', 'ZSE-0001');
+INSERT INTO public.red_detinatori (id, parcela_id, nume, nume_normalizat, calitate)
+SELECT d.id, d.pa, 'Persoana Sintetica ' || d.n, 'PERSOANA SINTETICA ' || upper(d.n), 'proprietar'
+  FROM (VALUES ('$D1'::uuid, '$PA_N'::uuid, 'Unu'), ('$D2'::uuid, '$PA_N'::uuid, 'Doi'), ('$D3'::uuid, '$PA_N'::uuid, 'Trei'),
+               ('$D4'::uuid, '$PA_V1'::uuid, 'Patru'), ('$D5'::uuid, '$PA_V2'::uuid, 'Cinci'), ('$D6'::uuid, '$PA_V3'::uuid, 'Sase'),
+               ('$D7'::uuid, '$PA_V3'::uuid, 'Sapte'), ('$D8'::uuid, '$PA_V4'::uuid, 'Opt')) d(id, pa, n);
+INSERT INTO public.red_detinatori_contact (detinator_id, telefon, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta)
+SELECT d.id, '07000009' || lpad(d.k::text, 2, '0'), 'Strada Fictiva nr. ' || d.k, 'Sat Fictiv', 'Comuna Fictiva', 'Prahova', '1000' || lpad(d.k::text, 2, '0'), true
+  FROM (VALUES ('$D1'::uuid, 1), ('$D2'::uuid, 2), ('$D3'::uuid, 3), ('$D4'::uuid, 4), ('$D5'::uuid, 5), ('$D6'::uuid, 6), ('$D7'::uuid, 7), ('$D8'::uuid, 8)) d(id, k);
+-- convocările active (canal telefon): auth.uid() = OWNER DOAR pentru această instrucțiune (claim.sub, fără claims), ca fixture-ul FAN
+SELECT set_config('request.jwt.claim.sub', '$OWNER', true) IS NOT NULL AS _ok \\gset
+INSERT INTO public.red_convocari (id, detinator_id, canal, nr_document, calitate_document)
+SELECT ('${CV}' || lpad(c.k::text, 2, '0'))::uuid, c.d, 'telefon', '$COD-' || c.k, 'proprietar'
+  FROM (VALUES ('$D1'::uuid, 1), ('$D2'::uuid, 2), ('$D3'::uuid, 3), ('$D4'::uuid, 4), ('$D5'::uuid, 5), ('$D6'::uuid, 6), ('$D7'::uuid, 7), ('$D8'::uuid, 8)) c(d, k);
+SELECT set_config('request.jwt.claim.sub', '', true) IS NOT NULL AS _ok \\gset
+COMMIT;
+SQL
+}
+
+# F7: tranzacția de curățenie. Șterge DOAR lanțul ACESTEI rulări (proiectul cu id + cod + marcaj -> UAT-urile / parcelele lui -> deținătorii
+# parcelelor -> contacte / tokenuri / convocări; loturile proiectului -> mesajele lor; jurnalul acestor rânduri de la T0), NU o listă de id-uri.
+# Verifică ÎNAINTE de COMMIT că pe fiecare tabel au dispărut EXACT rândurile lanțului; altfel ROLLBACK (nimic șters, setările neatinse).
+sql_curatenie() {
+  cat <<SQL
+\\set ON_ERROR_STOP 1
+BEGIN;
+-- (1) ce a creat rularea, ÎNAINTEA oricărei ștergeri. Fără proiectul ei (S0 n-a ajuns la COMMIT), mulțimile sunt goale: nu se șterge nimic.
+CREATE TEMP TABLE _p_proiect ON COMMIT DROP AS
+  SELECT x.id FROM public.red_proiecte x WHERE x.id = '$PR' AND x.cod = '$COD' AND x.denumire = '$(denumire)' AND '$MARCAJ' ~ '^[0-9a-f-]{36}\$';
+CREATE TEMP TABLE _p_uat ON COMMIT DROP AS SELECT x.id FROM public.red_uat x WHERE x.proiect_id IN (SELECT id FROM _p_proiect);
+CREATE TEMP TABLE _p_parcele ON COMMIT DROP AS SELECT x.id FROM public.red_parcele x WHERE x.proiect_id IN (SELECT id FROM _p_proiect);
+CREATE TEMP TABLE _p_det ON COMMIT DROP AS SELECT x.id FROM public.red_detinatori x WHERE x.parcela_id IN (SELECT id FROM _p_parcele);
+CREATE TEMP TABLE _p_conv ON COMMIT DROP AS SELECT x.id FROM public.red_convocari x WHERE x.detinator_id IN (SELECT id FROM _p_det);
+CREATE TEMP TABLE _p_loturi ON COMMIT DROP AS SELECT x.id FROM public.sms_loturi x WHERE x.proiect_id IN (SELECT id FROM _p_proiect);
+CREATE TEMP TABLE _p_mesaje ON COMMIT DROP AS SELECT x.id FROM public.sms_mesaje x WHERE x.lot_id IN (SELECT id FROM _p_loturi);
+CREATE TEMP TABLE _p_jurnal ON COMMIT DROP AS SELECT j.id FROM public.red_jurnal j
+ WHERE j.created_at >= '$T0'::timestamptz
+   AND ((j.tabela = 'red_proiecte' AND j.inregistrare_id IN (SELECT id FROM _p_proiect))
+     OR (j.tabela = 'red_uat' AND j.inregistrare_id IN (SELECT id FROM _p_uat))
+     OR (j.tabela = 'red_parcele' AND j.inregistrare_id IN (SELECT id FROM _p_parcele))
+     OR (j.tabela IN ('red_detinatori', 'red_detinatori_contact') AND j.inregistrare_id IN (SELECT id FROM _p_det))
+     OR (j.tabela = 'red_convocari' AND j.inregistrare_id IN (SELECT id FROM _p_conv)));
+-- numărul de rânduri ÎNAINTE, pe fiecare tabel, și câte sunt ale rulării (verificarea de la (4))
+CREATE TEMP TABLE _p_numar ON COMMIT DROP AS SELECT * FROM (VALUES
+  ('sms_mesaje', (SELECT count(*) FROM public.sms_mesaje), (SELECT count(*) FROM _p_mesaje)),
+  ('sms_loturi', (SELECT count(*) FROM public.sms_loturi), (SELECT count(*) FROM _p_loturi)),
+  ('red_jurnal', (SELECT count(*) FROM public.red_jurnal), (SELECT count(*) FROM _p_jurnal)),
+  ('red_convocari', (SELECT count(*) FROM public.red_convocari), (SELECT count(*) FROM _p_conv)),
+  ('red_detinatori_contact', (SELECT count(*) FROM public.red_detinatori_contact), (SELECT count(*) FROM public.red_detinatori_contact WHERE detinator_id IN (SELECT id FROM _p_det))),
+  ('red_detinatori_token', (SELECT count(*) FROM public.red_detinatori_token), (SELECT count(*) FROM public.red_detinatori_token WHERE detinator_id IN (SELECT id FROM _p_det))),
+  ('red_detinatori', (SELECT count(*) FROM public.red_detinatori), (SELECT count(*) FROM _p_det)),
+  ('red_parcele', (SELECT count(*) FROM public.red_parcele), (SELECT count(*) FROM _p_parcele)),
+  ('red_uat', (SELECT count(*) FROM public.red_uat), (SELECT count(*) FROM _p_uat)),
+  ('red_proiecte', (SELECT count(*) FROM public.red_proiecte), (SELECT count(*) FROM _p_proiect))) v(tabela, inainte, ale_rularii);
+-- (2) ștergerea, DOAR din mulțimile de la (1), cu triggerele USER oprite DOAR în această tranzacție
+ALTER TABLE public.sms_mesaje DISABLE TRIGGER USER; ALTER TABLE public.sms_loturi DISABLE TRIGGER USER; ALTER TABLE public.sms_setari DISABLE TRIGGER USER;
+ALTER TABLE public.red_jurnal DISABLE TRIGGER USER; ALTER TABLE public.red_convocari DISABLE TRIGGER USER;
+ALTER TABLE public.red_detinatori_contact DISABLE TRIGGER USER; ALTER TABLE public.red_detinatori_token DISABLE TRIGGER USER;
+ALTER TABLE public.red_detinatori DISABLE TRIGGER USER; ALTER TABLE public.red_parcele DISABLE TRIGGER USER;
+ALTER TABLE public.red_uat DISABLE TRIGGER USER; ALTER TABLE public.red_proiecte DISABLE TRIGGER USER;
+DELETE FROM public.sms_mesaje WHERE id IN (SELECT id FROM _p_mesaje);
+DELETE FROM public.sms_loturi WHERE id IN (SELECT id FROM _p_loturi);
+-- (3) rândul de setări EXACT ca la început (toate coloanele, din copia to_jsonb luată înaintea oricărei schimbări)
+DO \$r\$
+DECLARE v_snap jsonb := \$snap\$$SNAP\$snap\$::jsonb; v_cols text;
+BEGIN
+  IF v_snap IS NULL OR jsonb_typeof(v_snap) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'curatenie: copia setarilor lipseste'; END IF;
+  SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum) INTO v_cols FROM pg_attribute a
+   WHERE a.attrelid = 'public.sms_setari'::regclass AND a.attnum > 0 AND NOT a.attisdropped AND a.attname <> 'id';
+  EXECUTE format('UPDATE public.sms_setari s SET (%s) = (SELECT %s FROM jsonb_populate_record(NULL::public.sms_setari, \$1) r) WHERE s.id',
+                 v_cols, (SELECT string_agg('r.' || x, ', ') FROM unnest(string_to_array(v_cols, ', ')) x)) USING v_snap;
+END \$r\$;
+DELETE FROM public.red_jurnal WHERE id IN (SELECT id FROM _p_jurnal);
+DELETE FROM public.red_convocari WHERE id IN (SELECT id FROM _p_conv);
+DELETE FROM public.red_detinatori_contact WHERE detinator_id IN (SELECT id FROM _p_det);
+DELETE FROM public.red_detinatori_token WHERE detinator_id IN (SELECT id FROM _p_det);
+DELETE FROM public.red_detinatori WHERE id IN (SELECT id FROM _p_det);
+DELETE FROM public.red_parcele WHERE id IN (SELECT id FROM _p_parcele);
+DELETE FROM public.red_uat WHERE id IN (SELECT id FROM _p_uat);
+DELETE FROM public.red_proiecte WHERE id IN (SELECT id FROM _p_proiect);
+ALTER TABLE public.red_proiecte ENABLE TRIGGER USER; ALTER TABLE public.red_uat ENABLE TRIGGER USER; ALTER TABLE public.red_parcele ENABLE TRIGGER USER;
+ALTER TABLE public.red_detinatori ENABLE TRIGGER USER; ALTER TABLE public.red_detinatori_token ENABLE TRIGGER USER;
+ALTER TABLE public.red_detinatori_contact ENABLE TRIGGER USER; ALTER TABLE public.red_convocari ENABLE TRIGGER USER;
+ALTER TABLE public.red_jurnal ENABLE TRIGGER USER; ALTER TABLE public.sms_setari ENABLE TRIGGER USER;
+ALTER TABLE public.sms_loturi ENABLE TRIGGER USER; ALTER TABLE public.sms_mesaje ENABLE TRIGGER USER;
+-- (4) verificarea ÎNAINTE de COMMIT: pe fiecare tabel au dispărut EXACT rândurile rulării (nimic străin șters, nimic al ei rămas), setările =
+--     copia, triggerele USER reactivate; altfel ROLLBACK (nimic șters)
+DO \$v\$ DECLARE v_n record; v_acum bigint; BEGIN
+  FOR v_n IN SELECT * FROM _p_numar ORDER BY tabela LOOP
+    EXECUTE format('SELECT count(*) FROM public.%I', v_n.tabela) INTO v_acum;
+    IF v_acum IS DISTINCT FROM v_n.inainte - v_n.ale_rularii THEN
+      RAISE EXCEPTION 'curatenie: % are % randuri, asteptat % - % (doar ale rularii)', v_n.tabela, v_acum, v_n.inainte, v_n.ale_rularii;
+    END IF;
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM public.red_proiecte WHERE id IN (SELECT id FROM _p_proiect)) OR EXISTS (SELECT 1 FROM public.sms_loturi WHERE id IN (SELECT id FROM _p_loturi))
+     OR EXISTS (SELECT 1 FROM public.sms_mesaje WHERE id IN (SELECT id FROM _p_mesaje)) OR EXISTS (SELECT 1 FROM public.red_detinatori WHERE id IN (SELECT id FROM _p_det)) THEN
+    RAISE EXCEPTION 'curatenie: au ramas randuri ale rularii dupa stergere';
+  END IF;
+  IF (SELECT to_jsonb(s) FROM public.sms_setari s WHERE s.id)
+     IS DISTINCT FROM (SELECT to_jsonb(r) FROM jsonb_populate_record(NULL::public.sms_setari, \$snap\$$SNAP\$snap\$::jsonb) r) THEN
+    RAISE EXCEPTION 'curatenie: randul sms_setari nu e cel de la inceput';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgenabled = 'D'
+              AND t.tgrelid IN ('public.sms_mesaje'::regclass, 'public.sms_loturi'::regclass, 'public.sms_setari'::regclass,
+                                'public.red_jurnal'::regclass, 'public.red_convocari'::regclass, 'public.red_detinatori_contact'::regclass,
+                                'public.red_detinatori_token'::regclass, 'public.red_detinatori'::regclass, 'public.red_parcele'::regclass,
+                                'public.red_uat'::regclass, 'public.red_proiecte'::regclass)) THEN
+    RAISE EXCEPTION 'curatenie: un trigger USER a ramas dezactivat';
+  END IF;
+END \$v\$;
+COMMIT;
+SQL
+}
+# testul local: doar definițiile de mai sus, fără nicio conexiune
+if [ "${SMSP_BIBLIOTECA:-}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
+
+set -euo pipefail
+PSQL="${PSQL:-psql}"
+export PGCLIENTENCODING=UTF8
+SISTEM="" H="" P="" U="" D=""
+while [ $# -gt 0 ]; do
+  [ $# -ge 2 ] || { echo "optiunea $1 fara valoare" >&2; exit 2; }
+  case "$1" in
+    --sistem) SISTEM="$2" ;; --host) H="$2" ;; --port) P="$2" ;; --user) U="$2" ;; --db) D="$2" ;;
+    *) echo "argument necunoscut: $1" >&2; exit 2 ;;
+  esac
+  shift 2
+done
+[[ "$SISTEM" =~ ^[0-9]+$ ]] || { echo "lipseste --sistem <system_identifier al clonei>" >&2; exit 2; }
+[ -n "$H" ] && [ -n "$P" ] && [ -n "$U" ] && [ -n "$D" ] || { echo "lipsesc --host / --port / --user / --db" >&2; exit 2; }
+EDITOR="${EDITOR:-}"
+[[ "$OWNER" =~ ^[0-9a-f-]{36}$ ]] || { echo "OWNER invalid" >&2; exit 2; }
+[[ "$EDITOR" =~ ^[0-9a-f-]{36}$ ]] || { echo "EDITOR=<uuid> lipsa (profil ne-owner, fara acces SMS, pe clona)" >&2; exit 2; }
+cd "$(dirname "$0")/../.."
+CONN=(-h "$H" -p "$P" -U "$U" -d "$D")
+TMP="$(mktemp -d ./.clona_20261226b_flux.XXXXXX)"
+RUN="$(date +%s)"
+FID1="PROBA-SMSP-$RUN-1"; FID1B="PROBA-SMSP-$RUN-1b"; FID3="PROBA-SMSP-$RUN-3"; FID_V4="PROBA-SMSP-$RUN-V4"
+# CURATA = 1 abia după gărzi (înaintea primei scrieri): până atunci trap-ul nu atinge clona
+PIDS=(); CURATA=0; ESEC=0
 # SQL-ul pleacă pe stdin / din fișiere, nu ca argument (-c): pe Windows argumentele cu diacritice ajung alterate (lecția 20261226a).
 q() { printf '%s\n' "$1" | PGAPPNAME="$APP_CTL" "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -f - | tr -d '\r'; }
 qf() { PGAPPNAME="$APP_CTL" "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -f "$1" | tr -d '\r'; }
@@ -184,10 +377,26 @@ comutator_redari() {  # $1 = true / false; calea reală (owner), CAS pe versiune
                                  (now() AT TIME ZONE 'Europe/Bucharest')::date, $(setari_versiune)) AS r) x;"
 }
 
+kill_switch() {  # $1 = true / false; calea reală (owner, fn_sms_setari_salveaza), CAS pe versiunea curentă, plafoanele neschimbate
+  apel authenticated "$OWNER" "SELECT (r->>'kill_switch') FROM (SELECT public.fn_sms_setari_salveaza($1, s.plafon_zi, s.plafon_luna, s.versiune) AS r
+                                 FROM public.sms_setari s WHERE s.id) x;"
+}
+# garda 28 la un moment dat: încălcare = REFUZ + cod 28 (trap-ul curăță și pune la loc setările dacă e armat); fără SQL-ul ei nu trece nimic
+izolare_verifica() {
+  local v
+  v="$(q "$(sql_izolare)")" || v="verificarea_a_picat"
+  if [ -n "$v" ]; then
+    echo "REFUZ (28): izolarea SMS a clonei nu e dovedita ($1): $v" >&2
+    echo "  (pe clona nu trebuie sa fie conectat nimic altceva: PostgREST / edge / worker / alta consola; fara pg_cron / pg_net / http; niciun lot aprobat / in trimitere si nicio rezervare in afara probei)" >&2
+    ESEC=1; exit 28
+  fi
+  echo "  OK  izolarea SMS ($1): nicio sesiune straina, fara pg_cron / pg_net / http, niciun lot trimisibil si nicio rezervare in afara probei"
+}
+
 curatenie() {
-  local rc=$? p v
+  local rc=$? p v s
   for p in "${PIDS[@]+"${PIDS[@]}"}"; do kill "$p" 2>/dev/null || true; done
-  if [ "$TINTA_OK" != 1 ]; then
+  if [ "$CURATA" != 1 ]; then
     # gărzile au refuzat înaintea oricărei scrieri: nimic de curățat pe clonă
     rm -rf "$TMP"
     [ "$rc" = 0 ] || echo "ESEC: proba fluxului SMS pe clona 20261226b (cod $rc)" >&2
@@ -195,84 +404,14 @@ curatenie() {
   fi
   q "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE application_name IN ($APPS) AND pid <> pg_backend_pid()" >/dev/null 2>&1 || true
   for p in "${PIDS[@]+"${PIDS[@]}"}"; do wait "$p" 2>/dev/null || true; done
-  cat >"$TMP/curata.sql" <<SQL
-\\set ON_ERROR_STOP 1
-BEGIN;
-ALTER TABLE public.sms_mesaje DISABLE TRIGGER USER; ALTER TABLE public.sms_loturi DISABLE TRIGGER USER; ALTER TABLE public.sms_setari DISABLE TRIGGER USER;
-ALTER TABLE public.red_jurnal DISABLE TRIGGER USER; ALTER TABLE public.red_convocari DISABLE TRIGGER USER;
-ALTER TABLE public.red_detinatori_contact DISABLE TRIGGER USER; ALTER TABLE public.red_detinatori_token DISABLE TRIGGER USER;
-ALTER TABLE public.red_detinatori DISABLE TRIGGER USER; ALTER TABLE public.red_parcele DISABLE TRIGGER USER;
-ALTER TABLE public.red_uat DISABLE TRIGGER USER; ALTER TABLE public.red_proiecte DISABLE TRIGGER USER;
--- loturile probei = toate loturile proiectului sintetic (FK: niciun alt lot nu îl poate referi); mesajele lor, apoi loturile
-DELETE FROM public.sms_mesaje WHERE lot_id IN (SELECT id FROM public.sms_loturi WHERE proiect_id = '$PR');
-DELETE FROM public.sms_loturi WHERE proiect_id = '$PR';
--- rândul de setări EXACT ca la început (toate coloanele, din copia to_jsonb luată înaintea oricărei schimbări)
-DO \$r\$
-DECLARE v_snap jsonb := \$snap\$$SNAP\$snap\$::jsonb; v_cols text;
-BEGIN
-  IF v_snap IS NULL OR jsonb_typeof(v_snap) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'curatenie: copia setarilor lipseste'; END IF;
-  SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum) INTO v_cols FROM pg_attribute a
-   WHERE a.attrelid = 'public.sms_setari'::regclass AND a.attnum > 0 AND NOT a.attisdropped AND a.attname <> 'id';
-  EXECUTE format('UPDATE public.sms_setari s SET (%s) = (SELECT %s FROM jsonb_populate_record(NULL::public.sms_setari, \$1) r) WHERE s.id',
-                 v_cols, (SELECT string_agg('r.' || x, ', ') FROM unnest(string_to_array(v_cols, ', ')) x)) USING v_snap;
-END \$r\$;
-DELETE FROM public.red_jurnal WHERE inregistrare_id IN ($IDS);
-DELETE FROM public.red_convocari WHERE detinator_id IN ($DETS);
-DELETE FROM public.red_detinatori_contact WHERE detinator_id IN ($DETS);
-DELETE FROM public.red_detinatori_token WHERE detinator_id IN ($DETS);
-DELETE FROM public.red_detinatori WHERE id IN ($DETS);
-DELETE FROM public.red_parcele WHERE id IN ($IDS) OR proiect_id = '$PR';
-DELETE FROM public.red_uat WHERE id IN ($IDS) OR proiect_id = '$PR';
-DELETE FROM public.red_proiecte WHERE id = '$PR';
-ALTER TABLE public.red_proiecte ENABLE TRIGGER USER; ALTER TABLE public.red_uat ENABLE TRIGGER USER; ALTER TABLE public.red_parcele ENABLE TRIGGER USER;
-ALTER TABLE public.red_detinatori ENABLE TRIGGER USER; ALTER TABLE public.red_detinatori_token ENABLE TRIGGER USER;
-ALTER TABLE public.red_detinatori_contact ENABLE TRIGGER USER; ALTER TABLE public.red_convocari ENABLE TRIGGER USER;
-ALTER TABLE public.red_jurnal ENABLE TRIGGER USER; ALTER TABLE public.sms_setari ENABLE TRIGGER USER;
-ALTER TABLE public.sms_loturi ENABLE TRIGGER USER; ALTER TABLE public.sms_mesaje ENABLE TRIGGER USER;
--- verificarea ÎNAINTE de COMMIT: nimic sintetic rămas, setările = copia, triggerele USER reactivate; altfel ROLLBACK (nimic șters)
-DO \$v\$ BEGIN
-  IF EXISTS (SELECT 1 FROM public.sms_loturi WHERE proiect_id = '$PR')
-     OR EXISTS (SELECT 1 FROM public.sms_mesaje WHERE destinatar_tip = 'detinator' AND destinatar_id IN ($DETS))
-     OR EXISTS (SELECT 1 FROM public.red_jurnal WHERE inregistrare_id IN ($IDS))
-     OR EXISTS (SELECT 1 FROM public.red_convocari WHERE id IN ($IDS) OR detinator_id IN ($DETS))
-     OR EXISTS (SELECT 1 FROM public.red_detinatori_contact WHERE detinator_id IN ($DETS))
-     OR EXISTS (SELECT 1 FROM public.red_detinatori_token WHERE detinator_id IN ($DETS))
-     OR EXISTS (SELECT 1 FROM public.red_detinatori WHERE id IN ($IDS))
-     OR EXISTS (SELECT 1 FROM public.red_parcele WHERE id IN ($IDS) OR proiect_id = '$PR')
-     OR EXISTS (SELECT 1 FROM public.red_uat WHERE id IN ($IDS) OR proiect_id = '$PR')
-     OR EXISTS (SELECT 1 FROM public.red_proiecte WHERE id = '$PR' OR cod = '$COD') THEN
-    RAISE EXCEPTION 'curatenie: au ramas randuri sintetice dupa stergere';
-  END IF;
-  IF (SELECT to_jsonb(s) FROM public.sms_setari s WHERE s.id)
-     IS DISTINCT FROM (SELECT to_jsonb(r) FROM jsonb_populate_record(NULL::public.sms_setari, \$snap\$$SNAP\$snap\$::jsonb) r) THEN
-    RAISE EXCEPTION 'curatenie: randul sms_setari nu e cel de la inceput';
-  END IF;
-  IF EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgenabled = 'D'
-              AND t.tgrelid IN ('public.sms_mesaje'::regclass, 'public.sms_loturi'::regclass, 'public.sms_setari'::regclass,
-                                'public.red_jurnal'::regclass, 'public.red_convocari'::regclass, 'public.red_detinatori_contact'::regclass,
-                                'public.red_detinatori_token'::regclass, 'public.red_detinatori'::regclass, 'public.red_parcele'::regclass,
-                                'public.red_uat'::regclass, 'public.red_proiecte'::regclass)) THEN
-    RAISE EXCEPTION 'curatenie: un trigger USER a ramas dezactivat';
-  END IF;
-END \$v\$;
-COMMIT;
-SQL
   local ok_cur=0
-  if [ -z "$SNAP" ]; then
-    echo "ATENTIE: copia setarilor SMS lipseste: curatenia nu porneste" >&2
-  elif qf "$TMP/curata.sql" >"$TMP/curata.log" 2>&1; then
-    # a doua verificare, după COMMIT, din altă sesiune (așteptat 0|0|0|0|0|0|0|0|0|t și 0 sesiuni)
-    v="$(q "SELECT concat_ws('|', (SELECT count(*) FROM public.sms_loturi WHERE proiect_id = '$PR'),
-                   (SELECT count(*) FROM public.sms_mesaje WHERE destinatar_tip = 'detinator' AND destinatar_id IN ($DETS)),
-                   (SELECT count(*) FROM public.red_jurnal WHERE inregistrare_id IN ($IDS)),
-                   (SELECT count(*) FROM public.red_convocari WHERE id IN ($IDS) OR detinator_id IN ($DETS)),
-                   (SELECT count(*) FROM public.red_detinatori_contact WHERE detinator_id IN ($DETS)),
-                   (SELECT count(*) FROM public.red_detinatori WHERE id IN ($IDS)),
-                   (SELECT count(*) FROM public.red_parcele WHERE id IN ($IDS) OR proiect_id = '$PR'),
-                   (SELECT count(*) FROM public.red_uat WHERE id IN ($IDS) OR proiect_id = '$PR'),
-                   (SELECT count(*) FROM public.red_proiecte WHERE id = '$PR' OR cod = '$COD'),
-                   ((SELECT to_jsonb(s) FROM public.sms_setari s WHERE s.id)
-                      = (SELECT to_jsonb(r) FROM jsonb_populate_record(NULL::public.sms_setari, \$snap\$$SNAP\$snap\$::jsonb) r))::text)")" || v="eroare"
+  if [ -z "$SNAP" ] || [ -z "$T0" ]; then
+    echo "ATENTIE: copia setarilor SMS / momentul pornirii lipsesc: curatenia nu porneste" >&2
+  elif sql_curatenie >"$TMP/curata.sql" && qf "$TMP/curata.sql" >"$TMP/curata.log" 2>&1; then
+    # a doua verificare, după COMMIT, din altă sesiune: garda 25 trece din nou (niciun identificator al probei), setările = copia, 0 sesiuni
+    v="$(q "$(sql_garda_resturi)")" || v="eroare"
+    s="$(q "SELECT ((SELECT to_jsonb(s) FROM public.sms_setari s WHERE s.id)
+                     = (SELECT to_jsonb(r) FROM jsonb_populate_record(NULL::public.sms_setari, \$snap\$$SNAP\$snap\$::jsonb) r))::text")" || s="eroare"
     # sesiunile probei: terminate mai sus; serverul le scoate în câteva momente (cel mult 10 s, apoi se numără)
     p="$(q "DO \$s\$ DECLARE t0 timestamptz := clock_timestamp(); BEGIN
               LOOP PERFORM pg_stat_clear_snapshot();
@@ -280,25 +419,25 @@ SQL
                        OR clock_timestamp() > t0 + interval '10 seconds';
                 PERFORM pg_sleep(0.05); END LOOP; END \$s\$;
             SELECT count(*) FROM pg_stat_activity WHERE application_name IN ($APPS) AND pid <> pg_backend_pid();")" || p="eroare"
-    if [ "$v" = "0|0|0|0|0|0|0|0|0|true" ] && [ "$p" = 0 ]; then
+    if [ -z "$v" ] && [ "$s" = true ] && [ "$p" = 0 ]; then
       ok_cur=1
-      echo "curatenie: datele sintetice si loturile probei sterse, sms_setari readus exact; verificat dupa COMMIT din alta sesiune (0 randuri, 0 sesiuni)"
+      echo "curatenie: doar randurile rularii sterse (numarat pe fiecare tabel), sms_setari readus exact; verificat dupa COMMIT din alta sesiune (niciun identificator al probei, 0 sesiuni)"
     else
-      echo "ATENTIE: curatenia nu s-a verificat: [$v] (asteptat 0|0|0|0|0|0|0|0|0|true), sesiuni ale probei [$p] (asteptat 0)" >&2
+      echo "ATENTIE: curatenia nu s-a verificat: identificatori ramasi [$v] (asteptat niciunul), setari = copia [$s] (asteptat true), sesiuni ale probei [$p] (asteptat 0)" >&2
     fi
   else
     echo "ATENTIE: tranzactia de curatenie a picat (ROLLBACK: nimic sters, setarile neatinse de ea):" >&2
-    sed 's/^/     curata| /' "$TMP/curata.log" >&2
+    sed 's/^/     curata| /' "$TMP/curata.log" >&2 || true
   fi
   if [ "$ok_cur" != 1 ]; then
-    echo "ATENTIE: de curatat manual pe clona: proiectul $PR ($COD) cu loturile lui SMS, id-urile b26b0000-..., si randul sms_setari (copia: $TMP/setari_initial.json)" >&2
+    echo "ATENTIE: de curatat manual pe clona: proiectul $PR ($COD, marcaj $MARCAJ) cu lantul lui (UAT-uri, parcele, detinatori, loturi SMS), si randul sms_setari (copia: $TMP/setari_initial.json)" >&2
     echo "ATENTIE: dosarul temporar al probei a ramas pentru diagnostic: $TMP (doar date sintetice)" >&2
     echo "ESEC: curatenia probei a picat (cod 26; verificarile de mai sus raman valabile asa cum au fost tiparite)" >&2
     exit 26
   fi
   rm -rf "$TMP"
-  if [ "$rc" = 0 ]; then echo "PASS: proba fluxului SMS pe clona 20261226b (F1-F7 OK, curatenia verificata)"
-  else echo "ESEC: proba fluxului SMS pe clona 20261226b (cod $rc; vezi NU mai sus)" >&2; fi
+  if [ "$rc" = 0 ]; then echo "PASS: proba fluxului SMS pe clona 20261226b (F1-F7 OK, izolarea verificata, curatenia verificata)"
+  else echo "ESEC: proba fluxului SMS pe clona 20261226b (cod $rc; vezi NU / REFUZ mai sus)" >&2; fi
   exit "$rc"
 }
 trap curatenie EXIT
@@ -345,53 +484,28 @@ echo "istoricul migrarilor pe clona (informativ): $(q "SELECT coalesce(string_ag
   || { echo "REFUZ: OWNER ($OWNER, is_owner) sau EDITOR ($EDITOR, ne-owner, FARA nivel SMS: fara user_module_access module = sms) nepotrivite pe clona" >&2; exit 24; }
 G27="$(q "SELECT concat_ws(',',
     CASE WHEN (now() AT TIME ZONE 'Europe/Bucharest')::time NOT BETWEEN '08:00' AND '19:45' THEN 'ora_' || to_char(now() AT TIME ZONE 'Europe/Bucharest', 'HH24:MI') END,
-    CASE WHEN EXISTS (SELECT 1 FROM pg_extension WHERE extname IN ('pg_cron', 'pg_net')) THEN 'pg_cron_sau_pg_net' END,
     CASE WHEN (SELECT count(*) FROM public.sms_setari) <> 1 THEN 'sms_setari' END,
     CASE WHEN (SELECT c.zi + 5 > s.plafon_zi OR c.luna + 5 > s.plafon_luna FROM public.fn_sms_consum_la(clock_timestamp()) c, public.sms_setari s WHERE s.id)
          THEN 'plafon' END)")"
-[ -z "$G27" ] || { echo "REFUZ: mediul probei: $G27 (rulati intre 08:00 si 19:45 ora Romaniei; clona fara pg_cron / pg_net; un rand sms_setari; loc de 5 SMS sub plafoane)" >&2; exit 27; }
+[ -z "$G27" ] || { echo "REFUZ: mediul probei: $G27 (rulati intre 08:00 si 19:45 ora Romaniei; un rand sms_setari; loc de 5 SMS sub plafoane)" >&2; exit 27; }
+# momentul pornirii (T0, de pe server: fereastra rezervărilor străine la 28, jurnalul rulării la curățenie) și marcajul rulării (proiectul S0)
+IFS='|' read -r T0 MARCAJ <<<"$(q "SELECT clock_timestamp()::text || '|' || gen_random_uuid()::text")"
+[[ "$MARCAJ" =~ ^[0-9a-f-]{36}$ ]] && [ -n "$T0" ] || { echo "momentul pornirii / marcajul rularii nu s-au putut lua" >&2; exit 27; }
+izolare_verifica "la pornire"
+REST="$(q "$(sql_garda_resturi)")"
+[ -z "$REST" ] || { echo "REFUZ: identificatori ai probei deja folositi pe clona (spatiul ${SPATIU}... / $COD) in: $REST; nimic scris" >&2; exit 25; }
 # copia INTEGRALĂ a setărilor, ÎNAINTEA oricărei schimbări (curățenia o pune la loc exact)
 SNAP="$(q "SELECT to_jsonb(s)::text FROM public.sms_setari s WHERE s.id")"
 [[ "$SNAP" == \{* ]] && [[ "$SNAP" != *'$snap$'* ]] || { echo "copia setarilor SMS nu s-a putut lua" >&2; SNAP=""; exit 27; }
 printf '%s\n' "$SNAP" >"$TMP/setari_initial.json"
-TINTA_OK=1
-[ "$(q "SELECT (NOT EXISTS (SELECT 1 FROM public.red_proiecte WHERE id = '$PR' OR cod = '$COD')
-          AND NOT EXISTS (SELECT 1 FROM public.red_detinatori WHERE id IN ($DETS))
-          AND NOT EXISTS (SELECT 1 FROM public.sms_loturi WHERE proiect_id = '$PR')
-          AND NOT EXISTS (SELECT 1 FROM public.sms_mesaje WHERE destinatar_tip = 'detinator' AND destinatar_id IN ($DETS)))::text")" = true ] \
-  || { TINTA_OK=0; echo "REFUZ: resturi ale unei rulari anterioare (id-uri b26b0000-... / $COD): curatati intai" >&2; exit 25; }
+# gărzile au trecut: de aici încolo trap-ul curăță (doar lanțul rulării) și pune la loc setările
+CURATA=1
 echo "setarile SMS la pornire (copia completa in dosarul temporar): $(q "SELECT 'redari_autorizat=' || redari_autorizat::text || ' kill_switch=' || kill_switch::text || ' plafon_zi=' || plafon_zi || ' versiune=' || versiune FROM public.sms_setari WHERE id")"
+echo "marcajul rularii: $MARCAJ (T0 $T0)"
 
-# ── S0 datele sintetice (postgres, triggerele REALE active, comise) ──
+# ── S0 datele sintetice (postgres, triggerele REALE active, comise; proiectul cu marcajul rulării) ──
 echo "S0 datele sintetice"
-cat >"$TMP/s0.sql" <<SQL
-\\set ON_ERROR_STOP 1
-BEGIN;
-INSERT INTO public.red_proiecte (id, cod, denumire, contact_telefon, contact_email)
-VALUES ('$PR', '$COD', 'Proba SMS predare (sintetic)', '$TEL_CONTACT', 'proba-sms-predare@exemplu.invalid');
-INSERT INTO public.red_uat (id, proiect_id, nume, uat3, sesiune_zi1, program_zi1)
-SELECT u.id, '$PR', u.nume, u.uat3, (now() AT TIME ZONE 'Europe/Bucharest')::date + 10, '09:00-15:00'
-  FROM (VALUES ('$UAT_N'::uuid, 'Sinteticeni', 'ZSA'), ('$UAT_V1'::uuid, 'Vechieni Unu', 'ZSB'), ('$UAT_V2'::uuid, 'Vechieni Doi', 'ZSC'),
-               ('$UAT_V3'::uuid, 'Vechieni Trei', 'ZSD'), ('$UAT_V4'::uuid, 'Vechieni Patru', 'ZSE')) u(id, nume, uat3);
-INSERT INTO public.red_parcele (id, proiect_id, uat_id, id_parcela) VALUES
-  ('$PA_N', '$PR', '$UAT_N', 'ZSA-0001'), ('$PA_V1', '$PR', '$UAT_V1', 'ZSB-0001'), ('$PA_V2', '$PR', '$UAT_V2', 'ZSC-0001'),
-  ('$PA_V3', '$PR', '$UAT_V3', 'ZSD-0001'), ('$PA_V4', '$PR', '$UAT_V4', 'ZSE-0001');
-INSERT INTO public.red_detinatori (id, parcela_id, nume, nume_normalizat, calitate)
-SELECT d.id, d.pa, 'Persoana Sintetica ' || d.n, 'PERSOANA SINTETICA ' || upper(d.n), 'proprietar'
-  FROM (VALUES ('$D1'::uuid, '$PA_N'::uuid, 'Unu'), ('$D2'::uuid, '$PA_N'::uuid, 'Doi'), ('$D3'::uuid, '$PA_N'::uuid, 'Trei'),
-               ('$D4'::uuid, '$PA_V1'::uuid, 'Patru'), ('$D5'::uuid, '$PA_V2'::uuid, 'Cinci'), ('$D6'::uuid, '$PA_V3'::uuid, 'Sase'),
-               ('$D7'::uuid, '$PA_V3'::uuid, 'Sapte'), ('$D8'::uuid, '$PA_V4'::uuid, 'Opt')) d(id, pa, n);
-INSERT INTO public.red_detinatori_contact (detinator_id, telefon, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta)
-SELECT d.id, '07000009' || lpad(d.k::text, 2, '0'), 'Strada Fictiva nr. ' || d.k, 'Sat Fictiv', 'Comuna Fictiva', 'Prahova', '1000' || lpad(d.k::text, 2, '0'), true
-  FROM (VALUES ('$D1'::uuid, 1), ('$D2'::uuid, 2), ('$D3'::uuid, 3), ('$D4'::uuid, 4), ('$D5'::uuid, 5), ('$D6'::uuid, 6), ('$D7'::uuid, 7), ('$D8'::uuid, 8)) d(id, k);
--- convocările active (canal telefon): auth.uid() = OWNER DOAR pentru această instrucțiune (claim.sub, fără claims), ca fixture-ul FAN
-SELECT set_config('request.jwt.claim.sub', '$OWNER', true) IS NOT NULL AS _ok \\gset
-INSERT INTO public.red_convocari (id, detinator_id, canal, nr_document, calitate_document)
-SELECT ('${CV}' || lpad(c.k::text, 2, '0'))::uuid, c.d, 'telefon', 'TEST-SMSP-SINT-' || c.k, 'proprietar'
-  FROM (VALUES ('$D1'::uuid, 1), ('$D2'::uuid, 2), ('$D3'::uuid, 3), ('$D4'::uuid, 4), ('$D5'::uuid, 5), ('$D6'::uuid, 6), ('$D7'::uuid, 7), ('$D8'::uuid, 8)) c(d, k);
-SELECT set_config('request.jwt.claim.sub', '', true) IS NOT NULL AS _ok \\gset
-COMMIT;
-SQL
+sql_s0 >"$TMP/s0.sql"
 qf "$TMP/s0.sql" >/dev/null
 ZI_ISO="$(q "SELECT to_char(sesiune_zi1, 'YYYY-MM-DD') FROM public.red_uat WHERE id = '$UAT_N'")"
 [[ "$ZI_ISO" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "  NU  S0 ziua sesiunii [$ZI_ISO]"; ESEC=1; exit 1; }
@@ -414,9 +528,10 @@ ok "$(q "SELECT count(*) FROM public.sms_loturi WHERE proiect_id = '$PR'")" 0 "F
 # ── F1 comutatoarele pornite pe calea reală; previzualizarea + crearea cu textul / versiunea NOI ──
 echo "F1 crearea lotului din sablon (OWNER, calea aplicatiei)"
 if [ "$(q "SELECT kill_switch::text FROM public.sms_setari WHERE id")" = true ]; then
-  ok "$(apel authenticated "$OWNER" "SELECT (r->>'kill_switch') FROM (SELECT public.fn_sms_setari_salveaza(false, s.plafon_zi, s.plafon_luna, s.versiune) AS r
-                                       FROM public.sms_setari s WHERE s.id) x;")" "OK false" "F1 kill-switch-ul oprit pe calea reala (owner)"
+  izolare_verifica "F1, inainte de oprirea kill-switch-ului"
+  ok "$(kill_switch false)" "OK false" "F1 kill-switch-ul oprit pe calea reala (owner)"
 fi
+izolare_verifica "F1, inainte de pornirea comutatorului Redari"
 ok "$(comutator_redari true)" "OK true" "F1 comutatorul Redari pornit pe calea reala (owner, nr. $AUT_NR, data de azi) - doar pe clona"
 PV="$(previzualizeaza "$UAT_N")"
 IFS='|' read -r PV_TEXT PV_HASH PV_VERS PV_APROBAT PV_NR PV_LUNG PV_ACTIV PV_CAMP <<<"${PV#OK }"
@@ -461,9 +576,19 @@ ok "$(q "SELECT l.stare || '|' || l.versiune || '|' || (SELECT count(*) FROM pub
    "aprobat|2|0" "F4a nimic rezervat, lotul neschimbat"
 okre "$(apel authenticated "$OWNER" "SELECT public.fn_sms_rezerva('$LOT_N', 5, 'simulator', '$OWNER') ->> 'motiv';")" '^ERR 42501 permission denied for function fn_sms_rezerva' "F4a authenticated (OWNER) pe fn_sms_rezerva -> 42501 (doar service_role)"
 
-# ── F4b comutatorul pornit; două rezervări CONCURENTE ──
+# ── F4c KILL-SWITCH-ul pornit (calea reală), comutatorul Redări pornit: rezervarea refuzată de kill-switch ──
+echo "F4c rezervarea cu kill-switch-ul pornit"
+ok "$(kill_switch true)" "OK true" "F4c kill-switch-ul pornit pe calea reala (owner, fn_sms_setari_salveaza)"
+izolare_verifica "F4c, inainte de pornirea comutatorului Redari"
+ok "$(comutator_redari true)" "OK true" "F4c comutatorul Redari pornit (singura bariera ramasa: kill-switch-ul)"
+ok "$(rezerva "$LOT_N" 5)" "OK kill_switch|-|-|-" "F4c rezervarea (service_role, apelant OWNER) cu kill-switch-ul pornit -> kill_switch, 0 mesaje"
+ok "$(q "SELECT l.stare || '|' || l.versiune || '|' || (SELECT count(*) FROM public.sms_mesaje m WHERE m.lot_id = l.id AND m.rezervat_la IS NOT NULL) FROM public.sms_loturi l WHERE l.id = '$LOT_N'")" \
+   "aprobat|2|0" "F4c nimic rezervat, lotul neschimbat"
+
+# ── F4b kill-switch-ul oprit din nou; două rezervări CONCURENTE ──
 echo "F4b doua rezervari concurente (X tine tranzactia, Y blocata de X)"
-ok "$(comutator_redari true)" "OK true" "F4b comutatorul Redari pornit din nou pe calea reala (owner)"
+izolare_verifica "F4b, inainte de oprirea kill-switch-ului"
+ok "$(kill_switch false)" "OK false" "F4b kill-switch-ul oprit din nou pe calea reala (owner)"
 # bariera: așteaptă PE SERVER o condiție (limită 60 s); expirată = NU + jurnalele sesiunilor + ieșire 1 (curățenia oprește sesiunile)
 asteapta() {
   if ! q "DO \$w\$ DECLARE t0 timestamptz := clock_timestamp(); BEGIN
@@ -674,6 +799,8 @@ ok "$(cut -d'|' -f7,8 <<<"${PV4#OK }")" "-|$LV4" "F6 UAT-ul lui V4: niciun lot a
 okre "$(creeaza "$UAT_V4" "$(cut -d'|' -f1 <<<"${PV4#OK }")" "$(cut -d'|' -f2 <<<"${PV4#OK }")")" '^ERR 23505 sms redari: campania pentru acest UAT si ziua de sesiune [0-9-]+ exista deja' \
    "F6 recrearea pe UAT-ul lui V4 pentru aceeasi zi -> 23505 (campania)"
 ok "$(q "SELECT count(*) FROM pg_stat_activity WHERE application_name IN ($APPS) AND pid <> pg_backend_pid()")" 0 "F7 nicio sesiune a probei ramasa (inainte de curatenie)"
+# izolarea la final: nicio sesiune străină apărută, niciun lot străin trimisibil, nicio rezervare / trimitere străină de la T0 - 15 min încoace
+izolare_verifica "la final, dupa F1-F6"
 
 # verdictul final („PASS” / „ESEC”) îl tipărește curățenia (trap EXIT), DOAR după ce a șters, a pus la loc setările și a verificat
 exit "$ESEC"

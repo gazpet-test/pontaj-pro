@@ -120,13 +120,14 @@ console.log('0c. scriptul pentru clonă (fluxul complet): bash -n + F1-F7 + găr
   const fl = readFileSync(F_FL, 'utf8').replace(/\r/g, '')
   const M30B = citeste('supabase/migrations/20261130b_sms_acces_modul.sql'), DOC_B = citeste('docs/sms/LIVRARE_20261226b_SABLON_PREDARE.md')
   // fiecare scenariu: descris în antet (rezultatul așteptat scris de mână) ȘI verificat (o etichetă OK / NU care începe cu el)
-  const lipsa = ['F1a', 'F1', 'F2', 'F3', 'F4a', 'F4b', 'F5', 'F6', 'F7'].filter(f => !new RegExp(`^#   ${f} `, 'm').test(fl) || !fl.includes(`"${f} `))
-  ok(lipsa.length === 0, 'scenariile F1-F7 au antet + verificări' + (lipsa.length ? ': lipsesc ' + lipsa.join(', ') : ''))
-  // gărzile înaintea oricărei scrieri: ținta (22), A + B aplicate (23), conturile (24), resturile (25), mediul (27); PASS doar din curățenie
+  const lipsa = ['F1a', 'F1', 'F2', 'F3', 'F4a', 'F4c', 'F4b', 'F5', 'F6', 'F7'].filter(f => !new RegExp(`^#   ${f} `, 'm').test(fl) || !fl.includes(`"${f} `))
+  ok(lipsa.length === 0, 'scenariile F1-F7 (cu F4c) au antet + verificări' + (lipsa.length ? ': lipsesc ' + lipsa.join(', ') : ''))
+  // gărzile înaintea oricărei scrieri: ținta (22), A + B aplicate (23), conturile (24), mediul (27), izolarea SMS (28), resturile (25);
+  // PASS doar din curățenie (semantica gărzilor 25 / 28 și a curățeniei: scripts/pglite/test_sms_predare_flux_clona_local.mjs)
   const iS0 = fl.indexOf('# ── S0 datele sintetice')
   const garzi = [/REAL="\$\(q "SELECT system_identifier FROM pg_control_system\(\)"\)"/, /exit 22; \}/, /fn_red_optiune_retrasa\(text\)/, /exit 23; \}/, /exit 24; \}/,
-    /exit 25; \}/, /exit 27; \}/, /pg_cron/]
-  ok(iS0 > 0 && garzi.every(r => { const m = r.exec(fl); return m && m.index < iS0 }), 'gărzile (system_identifier, A + B aplicate, conturi, resturi, mediu) vin înaintea primei scrieri (S0)')
+    /exit 25; \}/, /exit 27; \}/, /pg_cron/, /ESEC=1; exit 28/, /^izolare_verifica "la pornire"$/m]
+  ok(iS0 > 0 && garzi.every(r => { const m = r.exec(fl); return m && m.index < iS0 }), 'gărzile (system_identifier, A + B aplicate, conturi, mediu, izolare SMS, resturi) vin înaintea primei scrieri (S0)')
   ok((fl.match(/PASS: /g) || []).length === 1 && fl.indexOf('PASS: ') > fl.indexOf('curatenie() {') && fl.indexOf('PASS: ') < fl.indexOf('trap curatenie EXIT')
     && /exit 26/.test(fl), 'PASS se tipărește doar din curățenie, după verificare; curățenia picată = 26')
   // amprentele din gărzi = cele din surse (postcondiția 20261226b; 20261130c / 20261130b pentru lanțul SMS)

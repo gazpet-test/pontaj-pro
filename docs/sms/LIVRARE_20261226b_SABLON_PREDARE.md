@@ -184,18 +184,33 @@ Corpurile EXACTE din 20261130c; starea exactă a migrării verificată înainte.
 clonă prin runner, între 08:00 și 19:45 ora României: `PSQL=<psql> EDITOR=<uuid ne-owner, fără acces SMS> bash supabase/tests/20261226b_sms_predare_flux_clona.sh
 --sistem <system_identifier> --host <H> --port <P> --user postgres --db postgres`, `OWNER` implicit profilul sintetic is_owner al clonei).
 Gărzile refuză înaintea oricărei scrieri altă țintă, A / B neaplicate (amprentele postcondiției), lanțul SMS diferit de cel din repo,
-conturile nepotrivite, resturile unei rulări anterioare, ora din afara ferestrei și o clonă cu `pg_cron` / `pg_net`. Pe date SINTETICE
+conturile nepotrivite, ora din afara ferestrei, o clonă NEIZOLATĂ (cod 28, vezi mai jos) și orice identificator al probei deja folosit pe
+clonă (cod 25: tot spațiul de chei `b26b0000-0000-4000-8000-…`, pe orice coloană care îl poate purta — UAT-uri, parcele, deținători,
+contacte, tokenuri, convocări, jurnal, loturi, mesaje —, codul `TEST-SMSP-SINT` și numerele de document ale probei).
+**Izolarea SMS (r2, cod 28)**: `simulator` din probă NU e o barieră (edge-ul își ia furnizorul din `SMS_FURNIZOR`), iar comutatoarele probei
+sunt globale; de aceea proba cere și verifică din bază că pe clonă nu poate trimite nimic altceva: nicio altă sesiune client conectată
+(PostgREST, edge, worker, altă consolă), fără `pg_cron` / `pg_net` / `http`, niciun lot în afara probei aprobat / în trimitere (o clonă a
+producției are numere reale) și nicio rundă rezervată / trimisă în afara probei din cele 15 minute dinaintea pornirii încoace. Verificarea
+se face la pornire, înaintea FIECĂREI porniri a trimiterii (kill-switch oprit / comutator Redări pornit) și la final; o încălcare oprește
+proba (28), iar curățenia pune la loc setările. Ce nu se vede din SQL (secretele unei funcții edge legate de clonă) e acoperit prin
+refuz: o clonă cu PostgREST / edge conectate nu trece de (a). Pe date SINTETICE
 (proiectul `TEST-SMSP-SINT`, mobile 07000009xx, adrese fictive) și pe căile reale — aplicația ca `authenticated` cu JWT-ul contului, workerul
 ca `service_role` — **dovedește**: cu comutatorul Redări oprit (starea producției) nici crearea, nici rezervarea nu trec (42501 /
 `redari_neautorizat`); cu el pornit DOAR în probă (pe calea owner-ului), crearea din șablon dă textul cu „sesiune predare teren”, un
 segment, versiunea `provizoriu-2026-11-17`; un client care trimite textul vechi primește 40001 (UI-ul vechi blochează oricum butonul
 înaintea apelului, `motivBlocareCreare`; 40001 e plasa BD-ului, versiunea nu e un parametru al RPC-ului); aprobarea refuză anon, un cont
-fără nivel SMS și versiunea greșită; două rezervări concurente (sesiuni reale, a doua blocată de prima) nu dublează niciun mesaj; pașii de
+fără nivel SMS și versiunea greșită; cu kill-switch-ul pornit (comutatorul Redări pornit) rezervarea întoarce `kill_switch`, fără niciun
+mesaj rezervat (F4c); două rezervări concurente (sesiuni reale, a doua blocată de prima) nu dublează niciun mesaj; pașii de
 BD ai workerului (`fn_sms_rezultat`) lasă lotul `coada_golita` cu mesajul `necunoscut` nereluat la rezervările următoare, iar lotul ocupă
 UAT-ul (§4); loturile cu versiunea veche (draft / aprobat / în trimitere / `coada_golita`) sunt refuzate la aprobare și la rezervare
 (`sablon_neaprobat`), se anulează cele anulabile, `coada_golita` e refuzat (23514), interogarea §4 le clasifică corect, iar recrearea
 merge pe UAT-ul eliberat și e refuzată pe campania zilei. Loturile vechi se pot face după B doar ca fixture: INSERT cu triggerele active,
 iar istoricul lor de dinainte de B (aprobare, rezervare, rezultat) cu triggerele SMS oprite doar în acea tranzacție, reactivate și verificate
-înainte de COMMIT. Curățenia șterge doar ce a creat proba și pune la loc EXACT rândul `sms_setari` (verificat și din altă sesiune); `PASS`
-apare doar după ea, altfel cod 26. **NU dovedește**: furnizorul real, funcția edge `sms-trimite` (poarta, fereastra verificată în edge,
+înainte de COMMIT. Curățenia șterge doar ce a creat ACEASTĂ rulare: lanțul care pleacă de la proiectul cu id-ul, codul și marcajul rulării
+(un uuid luat de pe server la pornire, scris în denumire) — niciodată după o listă de id-uri; dacă S0 n-a ajuns la COMMIT, lanțul e gol și nu
+se șterge nimic. Înainte de COMMIT verifică pe fiecare tabel că au dispărut EXACT rândurile lanțului, pune la loc EXACT rândul `sms_setari`,
+iar după COMMIT, din altă sesiune, că garda 25 trece din nou; `PASS` apare doar după ea, altfel cod 26. Garda 25 / 28 și curățenia au un test
+local pe PGlite cu SQL-ul luat din script (`scripts/pglite/test_sms_predare_flux_clona_local.mjs`: intruși pe fiecare tabel, S0 picat pe
+cheia unui UAT străin, resturile unei rulări anterioare, rulare completă cu scrieri străine în timpul probei, 13 cazuri de izolare, 19
+mutanți). **NU dovedește**: furnizorul real, funcția edge `sms-trimite` (poarta, fereastra verificată în edge,
 rundele), cronul (calea fără lot nu se cheamă), nivelul „utilizator” SMS și un worker care a rezervat înaintea COMMIT-ului lui B (§3).
