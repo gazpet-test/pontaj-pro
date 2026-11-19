@@ -188,6 +188,19 @@ describe('20261230a: gărzi, ordine, ștampile, livrare', () => {
     expect(REV).toContain('--versiune 20261230120001')
     for (const rel of [MIG_REL, REV_REL]) expect(brut(rel).charCodeAt(0)).not.toBe(0xfeff)
   })
+  it('lista L15 revizuită (procedura de livrare pe producție): exact corpul porții; migrarea nu mai schimbă altceva', () => {
+    const L = citeste('supabase/tests/20261230a_izometrie_porti_reconciliere.l15.obiecte.tsv').split('\n').filter((l) => l && !l.startsWith('#'))
+    expect(L).toEqual(['functie\tfunctie public.fn_izo_porti_lipsa()\tschimbat'])
+    // în afara blocurilor DO: un singur CREATE OR REPLACE (poarta) și niciun alt DDL; COMMENT-urile = cele 5 ștampile canonice
+    const fara = MIG.replace(/^--.*$/gm, '')
+    expect(nr(fara, 'CREATE OR REPLACE FUNCTION')).toBe(1)
+    expect(fara).not.toMatch(/\b(ALTER|DROP|GRANT|REVOKE)\s+(TABLE|FUNCTION|POLICY|TRIGGER|ROLE|SEQUENCE|SCHEMA|ALL|EXECUTE|USAGE|SELECT|INSERT|UPDATE|DELETE)\b/i)
+    expect(fara.match(/COMMENT ON FUNCTION/g)).toHaveLength(5)
+    // revenirea: același perimetru (corpul porții + 5 ștampile literale)
+    const faraR = REV.replace(/^--.*$/gm, '')
+    expect(nr(faraR, 'CREATE OR REPLACE FUNCTION')).toBe(1)
+    expect(faraR.match(/COMMENT ON FUNCTION/g)).toHaveLength(5)
+  })
   it('fișierele = ieșirea generatorului', () => {
     const g = genereaza(fileURLToPath(new URL('..', import.meta.url)))
     expect(g.migrare).toBe(MIG)

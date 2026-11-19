@@ -1,0 +1,44 @@
+name: Izometrie - regula portilor (migrari si reveniri)
+
+# Regula porților Izometrie (docs/izometrie/PORTI_RECONCILIERE.md): orice migrare / revenire care atinge un obiect amprentat de porți
+# rulează poarta înainte și după și reface cele 5 ștampile CALCULATE, în aceeași tranzacție. Verificarea e textuală (limita e scrisă
+# în detector și în document) și rulează la ORICE PR care atinge migrările, revenirile sau detectorul, inclusiv pe draft-uri: o
+# migrare care uită ritualul trebuie văzută înainte de review, nu după aplicare. Fără secrete, fără bază de date.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'supabase/migrations/**'
+      - 'supabase/revenire/**'
+      - 'scripts/izometrie/porti_regula.mjs'
+      - 'src/izoPortiRegula.test.js'
+      - 'supabase/tests/izo_porti_regula_vechi.tsv'
+      - '.github/workflows/izometrie-porti-regula.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regula:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # acțiunile fixate pe SHA complet, cu versiunea în comentariu (ca izometrie-3d.yml)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      # 1. detectorul pe tot depozitul (doar node, fără dependențe): cod 1 = o migrare / revenire încalcă regula
+      - name: Regula portilor - toate migrarile si revenirile
+        run: node scripts/izometrie/porti_regula.mjs
+      # 2. regresiile detectorului (exemplele din review, structura, mutanții, acest workflow)
+      - run: npm ci --ignore-scripts
+      - name: Vitest - regresiile detectorului
+        run: npx vitest run src/izoPortiRegula
