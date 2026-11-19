@@ -1,4 +1,4 @@
-// REGULA porților Izometrie — detectorul (docs/izometrie/PORTI_RECONCILIERE.md, secțiunea „Regula”). Fără dependențe (doar node):
+// REGULA porților Izometrie — detectorul (docs/izometrie/PORTI_REGULA.md). Fără dependențe (doar node):
 //   node scripts/izometrie/porti_regula.mjs                 → verifică toate fișierele din supabase/migrations + supabase/revenire; cod 1 la abatere
 //   node scripts/izometrie/porti_regula.mjs --radacina <R>  → la fel, pe alt arbore (testele)
 // Rulat AUTOMAT în CI la orice PR care atinge migrările, revenirile sau detectorul (.github/workflows/izometrie-porti-regula.yml).
@@ -23,7 +23,7 @@
 // LIMITA (declarată, nu ascunsă): e o verificare TEXTUALĂ. Nu vede ce nu e scris în fișier (DDL construit din bucăți de text pe care nu
 //   le putem citi, cod mort de tipul `RETURN;` înaintea gărzii, obiecte create manual pe producție, schimbări venite din upgrade-uri
 //   Supabase). Prinde omisiunile și formele naive; nu dovedește nimic. Adevărul rămâne poarta (fn_izo_porti_lipsa) + manifestul L15 la
-//   livrare. Detaliile și exemplele: docs/izometrie/PORTI_RECONCILIERE.md.
+//   livrare. Detaliile și exemplele: docs/izometrie/PORTI_REGULA.md.
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join, resolve, dirname } from 'node:path'
@@ -44,8 +44,50 @@ export const DIRECTOARE = ['migrations', 'revenire']
 //   regiuni = corpurile $tag$ … $tag$: { start, end, deschis, inchis, fel: 'do' | 'functie' | 'alt', parinte, antet, coada };
 //   linii   = comentariile de linie de la început de rând (pentru excepția declarată);
 //   eroare  = un comentariu / literal / corp neînchis (fail-closed: fișierul se refuză).
+// Înainte, corpurile de cod scrise ca literal ('…' / E'…' după `AS` într-un CREATE FUNCTION / PROCEDURE sau după `DO`) se rescriu ca
+// $corpN$ … $corpN$, cu ghilimelele decodate (r4, Jak r3 P2-1): PostgreSQL pune în prosrc / execută EXACT textul decodat, deci corpul
+// `AS 'SELECT ''x''::text'` = corpul `AS $$ SELECT 'x'::text $$` și se analizează identic (literalii lui, EXECUTE, poarta).
+// Pozițiile raportate sunt în textul rescris. Un corp E'…' cu alte escape-uri decât \\ și \' (\n, \x27 …) NU se rescrie: rămâne
+// literal și e citit integral ca SQL (regula 1b-a, fail-closed).
 export function lexeaza(text) {
-  const t = String(text).replace(/\r/g, '')
+  let t = String(text).replace(/\r/g, '')
+  let lx = lexeazaSimplu(t)
+  for (let runda = 0; runda < 20 && !lx.eroare; runda++) {      // corpurile din corpuri apar abia după rescrierea părintelui
+    const de = corpuriCitate(t, lx)
+    if (!de.length) break
+    for (const c of de.sort((x, y) => y.a - x.a)) t = t.slice(0, c.a) + c.nou + t.slice(c.b)
+    lx = lexeazaSimplu(t)
+  }
+  return lx
+}
+
+// literalii care sunt corpuri de cod și forma lor $corpN$ (vezi lexeaza); doar cei decodabili sigur
+export const RE_CORP_DO = /\bDO(?:\s+LANGUAGE\s+[A-Za-z_]\w*)?\s*$/i
+function corpuriCitate(t, lx) {
+  const r = []
+  for (const [a, b, esc] of lx.literali) {
+    const st = esc ? a - 1 : a
+    const inainte = lx.cod.slice(Math.max(0, st - 300), st)
+    let corp = RE_CORP_DO.test(inainte)
+    if (!corp && /\bAS\s*$/i.test(inainte)) {
+      const s = lx.cod.lastIndexOf(';', st - 1)
+      corp = /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i.test(lx.cod.slice(s + 1, st))
+    }
+    if (!corp) continue
+    const brut = t.slice(a + 1, b - 1)
+    if (esc && /\\/.test(brut.replace(/''|\\[\\']/g, ''))) continue
+    const decodat = esc ? brut.replace(/''|\\[\\']/g, (m) => (m === '\\\\' ? '\\' : "'")) : brut.replace(/''/g, "'")
+    let tag = null
+    for (let k = 1; k < 1000 && !tag; k++) {
+      const x = `$corp${k}$`
+      if (!t.includes(x) && (decodat + x).indexOf(x) === decodat.length) tag = x
+    }
+    if (tag) r.push({ a: st, b, nou: ` ${tag}${decodat}${tag}` })
+  }
+  return r
+}
+
+function lexeazaSimplu(t) {
   const out = t.split('')
   const simplu = t.split('')
   const regiuni = [], linii = [], literali = []
@@ -87,7 +129,7 @@ export function lexeaza(text) {
           j++
         }
         if (j >= b) { eroare = `literal '…' neînchis (poziția ${i})`; break }
-        literali.push([i, j + 1]); gol(simplu, i + 1, j); i = j + 1; continue
+        literali.push([i, j + 1, esc]); gol(simplu, i + 1, j); i = j + 1; continue
       }
       if (c === '"') {
         let j = i + 1
@@ -147,9 +189,10 @@ const RE_DINAMIC = /\bexecute\b|\b(?:query|table|schema|database)_to_xml\w*|\bts
 // `exe` = `cod` cu conținutul literalilor folosiți ca DATE golit (aceleași poziții, rândurile păstrate). Atingerile (pasul 3) se
 // caută în `exe`: un text returnat / inserat / comentat (`SELECT 'DROP TABLE public.izo_importuri;'::text`) nu e DDL executat.
 // Un literal ('…', E'…' sau un $q$…$q$ care nu e corp de funcție / DO) RĂMÂNE în `exe` (= tratat ca SQL care poate rula) dacă:
-//   (a) e CORP de cod: `AS '…'` într-un CREATE FUNCTION / PROCEDURE, `DO '…'` / `DO LANGUAGE x '…'`;
-//   (b) e REFERINȚĂ la obiect: urmat de `::reg…` / `AS reg…` (o constantă regclass dintr-un DEFAULT / CHECK / politică intră
-//       în pg_depend, ca numele scris);
+//   (a) e CORP de cod: `AS '…'` într-un CREATE FUNCTION / PROCEDURE, `DO '…'` / `DO LANGUAGE x '…'` (de la r4 lexeaza rescrie
+//       corpurile decodabile ca $corpN$, deci aici ajung doar corpurile E'…' cu alte escape-uri: citite integral ca SQL);
+//   (b) e într-o instrucțiune care numește un tip reg* (`::regclass` după paranteze / alt cast, `CAST(… AS regclass)`,
+//       `regclass '…'`): o constantă regclass dintr-un DEFAULT / CHECK / politică intră în pg_depend, ca numele scris;
 //   (c) contextul lui EXECUTĂ text: corpul DO / funcție care îl conține are EXECUTE / dblink / *_to_xml / cron.schedule …
 //       (orice literal din corp poate ajunge în EXECUTE printr-o variabilă); la nivelul de sus (sau în SQL-ul unui literal
 //       executat), instrucțiunea lui are aceste cuvinte, ori fișierul are meta-comenzi psql (\gexec, \gset, :variabila);
@@ -159,6 +202,8 @@ const RE_DINAMIC = /\bexecute\b|\b(?:query|table|schema|database)_to_xml\w*|\bts
 // `cod` (cu literali): poarta E2 citește prosrc TEXTUAL, deci un corp care numește registrul într-un literal intră în închiderea ei.
 const RE_EXECUTA = new RegExp(`${RE_DINAMIC.source}|\\bcron\\s*\\.\\s*schedule\\w*|\\bpg_background_launch\\b`, 'i')
 const RE_PSQL = /\\[A-Za-z]|(?<![:\w]):['"]?[A-Za-z_]/
+// tipurile reg* (o constantă de acest tip dintr-un DEFAULT / CHECK / politică / vedere intră în pg_depend, ca numele scris)
+const RE_REG = /(?<![A-Za-z0-9_$])"?reg(?:class|collation|config|dictionary|namespace|oper|operator|proc|procedure|role|type)"?(?![A-Za-z0-9_$])/i
 // funcții pure de text / json / dată (pg_catalog): nu execută și nu numesc obiecte; nextval / to_reg* / has_*_privilege NU sunt aici
 export const FUNCTII_PURE = new Set(['format', 'concat', 'concat_ws', 'quote_ident', 'quote_literal', 'quote_nullable', 'replace',
   'translate', 'lower', 'upper', 'initcap', 'btrim', 'ltrim', 'rtrim', 'md5', 'length', 'char_length', 'octet_length', 'coalesce',
@@ -192,19 +237,22 @@ function literaliExecutati(lx) {
   const psql = RE_PSQL.test(masca(null))
   // elementele: literalii '…' (conținut = între ghilimele) și regiunile $…$ care nu sunt corpuri, în ordinea deschiderii
   const el = [
-    ...literali.map(([a, b]) => ({ a, b, c0: a + 1, c1: b - 1, P: lant(regiuni, a)[0] || null, alt: false })),
+    ...literali.map(([a, b, esc]) => ({ a, b, esc, c0: a + 1, c1: b - 1, P: lant(regiuni, a)[0] || null, alt: false })),
     ...regiuni.filter((r) => r.fel === 'alt').map((r) => ({ a: r.deschis, b: r.inchis, c0: r.start, c1: r.end, P: r.parinte, alt: true })),
   ].sort((x, y) => x.a - y.a)
   const pastreaza = (e) => {
     const M = masca(e.P), a0 = e.P ? e.P.start : 0, b0 = e.P ? e.P.end : n
     let s = M.lastIndexOf(';', e.a - 1); if (s < a0) s = a0 - 1
     let f = M.indexOf(';', e.b); if (f < 0 || f > b0) f = b0
-    const inainte = M.slice(Math.max(s + 1, e.a - 300), e.a)
+    // fără prefixul E al unui literal E'…' (altfel `DO E'…'` / `AS E'…'` nu s-ar recunoaște drept corp)
+    const inainte = M.slice(Math.max(s + 1, e.a - 300), e.a).replace(e.esc ? /[eE]$/ : /$^/, '')
     // (a) corp de cod
-    if (/\bDO(?:\s+LANGUAGE\s+[A-Za-z_]\w*)?\s*$/i.test(inainte)) return true
+    // (corpurile decodabile sunt deja rescrise ca $corpN$ de lexeaza; aici ajung doar cele E'…' cu alte escape-uri)
+    if (RE_CORP_DO.test(inainte)) return true
     if (/\bAS\s*$/i.test(inainte) && /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i.test(M.slice(s + 1, e.a))) return true
-    // (b) referință la obiect
-    if (/^\s*(?:::\s*|AS\s+)"?(?:pg_catalog\s*\.\s*)?reg[a-z]+/i.test(M.slice(e.b, Math.min(b0, e.b + 100)))) return true
+    // (b) referință la obiect: instrucțiunea numește un tip reg* ORIUNDE (r4, Jak r3 P2-2: `('…')::regclass`, `CAST(('…') AS
+    //     regclass)`, `'…'::text::regclass`, `regclass '…'`) → toți literalii ei rămân (fail-closed; numai cuvântul scris, nu din literali)
+    if (RE_REG.test(M.slice(s + 1, f))) return true
     // (c) contextul execută text
     if (e.P && e.P.fel !== 'alt') { if (RE_EXECUTA.test(simplu.slice(e.P.start, e.P.end))) return true }
     else if (RE_EXECUTA.test(M.slice(s + 1, f)) || (!e.P && psql)) return true
@@ -595,7 +643,7 @@ if (process.argv[1] && resolve(process.argv[1]) === AICI) {
   for (const c of rez.schimbate) console.log(`schimbat față de lista veche (verificat după regulă): ${c}`)
   for (const v of rez.verificate) console.log(`${v.ok ? 'OK ' : 'NU '} ${v.cale}${v.atinge.length ? ` — atinge: ${v.atinge.join('; ')}` : ' — nu atinge perimetrul'}${v.exceptie ? ` — excepție declarată: ${v.exceptie}` : ''}`)
   if (rez.probleme.length) {
-    console.error(`\nIZO_PORTI_REGULA: ${rez.probleme.length} fișier(e) încalcă regula porților (docs/izometrie/PORTI_RECONCILIERE.md):`)
+    console.error(`\nIZO_PORTI_REGULA: ${rez.probleme.length} fișier(e) încalcă regula porților (docs/izometrie/PORTI_REGULA.md):`)
     for (const p of rez.probleme) console.error(`  ✗ ${p}`)
     process.exit(1)
   }

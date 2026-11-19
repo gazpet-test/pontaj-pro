@@ -201,6 +201,24 @@ describe('20261230a: gărzi, ordine, ștampile, livrare', () => {
     expect(nr(faraR, 'CREATE OR REPLACE FUNCTION')).toBe(1)
     expect(faraR.match(/COMMENT ON FUNCTION/g)).toHaveLength(5)
   })
+  it('livrarea din 20.11.2026: migrarea / revenirea = exact fișierele aplicate, manifestul de producție = lista revizuită', () => {
+    // sha256 pe textul fără CR, scrise de mână din jurnalul aplicării (runner-ul compară aceeași formă); orice octet schimbat = alt fișier
+    // decât cel aplicat pe producție
+    const sha = (s) => createHash('sha256').update(s, 'utf8').digest('hex')
+    expect(sha(MIG)).toBe('47439660c3a7a306a78f709eda55791fda3fe50981ac8f0cdbd4d91d6401a7c0')
+    expect(sha(REV)).toBe('f864110e78fad8bb588e3a7d9e73d1369e7ae9da891b083a4682540fc8a01e67')
+    // manifestul: generat pe producție cu ROLLBACK, copiat octet cu octet (LF, .gitattributes); sha256 = cel din jurnalul aplicării
+    const MAN = brut('supabase/migrations/20261230a_izometrie_porti_reconciliere.l15.tsv')
+    expect(MAN).not.toContain('\r')
+    expect(sha(MAN)).toBe('357c9989000bc325d4206b54d2681549a5ce03058d954f1bfd3d8707111dea83')
+    expect(MAN).toContain('migrarea sha256 47439660c3a7a306a78f709eda55791fda3fe50981ac8f0cdbd4d91d6401a7c0')
+    expect(MAN).toContain('GLOBAL inainte e300acd3b24b47fb379ba0b861b07c0c (28245 randuri), dupa 819548e9f6971a36f135b06424d4e6b7 (28245 randuri); 1 obiecte')
+    const randuri = MAN.split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.split('\t'))
+    const lista = citeste('supabase/tests/20261230a_izometrie_porti_reconciliere.l15.obiecte.tsv').split('\n').filter((l) => l && !l.startsWith('#'))
+    expect(randuri.map((r) => r.slice(0, 3).join('\t'))).toEqual(lista)
+    expect(randuri.map((r) => r.length)).toEqual([4])
+    expect(randuri[0][3]).toMatch(/^[0-9a-f]{32}$/)
+  })
   it('fișierele = ieșirea generatorului', () => {
     const g = genereaza(fileURLToPath(new URL('..', import.meta.url)))
     expect(g.migrare).toBe(MIG)

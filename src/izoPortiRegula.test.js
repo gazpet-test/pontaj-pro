@@ -1,4 +1,4 @@
-// REGULA porților Izometrie (docs/izometrie/PORTI_RECONCILIERE.md): regresiile detectorului scripts/izometrie/porti_regula.mjs.
+// REGULA porților Izometrie (docs/izometrie/PORTI_REGULA.md): regresiile detectorului scripts/izometrie/porti_regula.mjs.
 // Rulat în CI de .github/workflows/izometrie-porti-regula.yml la orice PR pe migrări / reveniri / detector (inclusiv draft-uri).
 // Așteptările sunt scrise de mână din amprentele porților (fn_izo_porti_*_definitii) și din exemplele review-ului PR #1146 r1
 // (Jakarinos P2-1..P2-3), nu din codul testat. Mutanții de la final dovedesc că bateria prinde fiecare regulă scoasă.
@@ -146,6 +146,38 @@ const LITERALI_ATINSI = [
   ["CREATE TABLE public.alt (id int CHECK ('public.izo_importuri'::regclass IS NOT NULL));", false],
 ]
 
+// r4 (Jak r3 P2-1): corpul scris ca literal ('…' cu ghilimelele dublate, E'…' cu \') e EXACT textul decodat (ce ajunge în prosrc /
+// se execută) → aceeași judecată ca forma $$; exemplul exact al lui Jak r3 = exemplul r2 în forma AS '…'
+const JAK_R3 = "CREATE FUNCTION public.alt_mesaj() RETURNS text\nLANGUAGE sql IMMUTABLE\nAS 'SELECT ''DROP TABLE public.izo_importuri;''::text';"
+const LITERALI_DATE_R4 = [
+  "CREATE FUNCTION public.alt_text2() RETURNS text LANGUAGE sql IMMUTABLE AS 'SELECT ''ALTER TABLE public.executie_proiecte DISABLE ROW LEVEL SECURITY; GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;''::text';",
+  "DO 'BEGIN RAISE NOTICE ''DROP TABLE public.izo_importuri''; END';",
+  "DO E'BEGIN RAISE NOTICE \\'DROP TABLE public.izo_importuri\\'; END';",
+  "DO LANGUAGE plpgsql 'BEGIN RAISE NOTICE ''GRANT CREATE ON SCHEMA public TO izo_cor_editor''; END';",
+  "CREATE FUNCTION public.alt_f2(p text DEFAULT 'x') RETURNS text LANGUAGE sql AS E'SELECT \\'ALTER TABLE public.executie_proiecte DISABLE ROW LEVEL SECURITY\\' || p';",
+]
+// [sql, sigur]: același text EXECUTAT din corpul AS '…' / DO '…' (P2-1, contrapartea) și referințele regclass ascunse de paranteze /
+// cast-uri (P2-2, exemplul exact al lui Jak r3 primul): atinse
+const LITERALI_ATINSI_R4 = [
+  ["CREATE FUNCTION public.alt_exec2() RETURNS void LANGUAGE plpgsql AS 'BEGIN EXECUTE ''DROP TABLE public.izo_importuri;''; END';", true],
+  ["DO 'BEGIN EXECUTE ''DROP TABLE public.izo_importuri''; END';", true],
+  ["DO E'BEGIN EXECUTE \\'DROP TABLE public.izo_importuri\\'; END';", true],
+  ["CREATE FUNCTION public.alt_exec3() RETURNS void LANGUAGE plpgsql AS 'BEGIN EXECUTE ''ALTER TABLE public.executie_proiecte DISABLE ROW LEVEL SECURITY''; END';", true],
+  // corp E'…' cu alt escape (\n): nu se decodează, e citit integral ca SQL (aici chiar execută DROP)
+  ["DO E'BEGIN\\n DROP TABLE public.izo_importuri; END';", true],
+  ["CREATE FUNCTION public.alt_e() RETURNS void LANGUAGE plpgsql AS E'BEGIN\\n DROP TABLE public.izo_importuri; END';", true],
+  ["CREATE TABLE public.alt (\n  id int CHECK (('public.izo_importuri')::regclass IS NOT NULL)\n);", false],
+  ["CREATE TABLE public.alt (id int CHECK (CAST(('public.izo_importuri') AS regclass) IS NOT NULL));", false],
+  ["CREATE TABLE public.alt (id int CHECK ('public.izo_importuri'::text::regclass IS NOT NULL));", false],
+  ["CREATE TABLE public.alt (id int CHECK ((regclass 'public.izo_importuri') IS NOT NULL));", false],
+  ["CREATE POLICY p ON public.alt USING (((('public.izo_importuri'))::pg_catalog.\"regclass\") IS NOT NULL);", false],
+]
+// fail-closed DECLARAT: corpul E'…' cu \n conține doar un literal-dată, dar nu se decodează → citit ca SQL (fals pozitiv acceptat)
+const FAIL_CLOSED_R4 = ["DO E'BEGIN\\n RAISE NOTICE \\'DROP TABLE public.izo_importuri\\'; END';"]
+// paritatea: orice caz cu corp $tag$…$tag$ după AS / DO, rescris ca '…' (regula de citare SQL: ' → ''), dă aceleași atingeri și același verdict
+const caCitat = (sql) => sql.replace(/(\b(?:AS|DO)\s+)\$([A-Za-z_]*)\$([\s\S]*?)\$\2\$/g, (_, p, tag, corp) => `${p}'${corp.replace(/'/g, "''")}'`)
+const PARITATE = [...ATINGE.map(([s]) => s), ...NEATINS, ...LITERALI_DATE, ...LITERALI_ATINSI.map(([s]) => s), JAK_R2].filter((s) => caCitat(s) !== s)
+
 // ritualul cu o abatere de structură → refuz (P2-3)
 const SCH = 'DROP TABLE public.izo_importuri;'
 const STRUCTURA_GRESITA = [
@@ -201,6 +233,21 @@ function baterie(M) {
     if (!v(ritual(sql)).ok) gresit.push(`ritualul refuzat pe: ${sql}`)
     if (v(`${sql}\n${EXCEPTIE}`).ok !== !sigur) gresit.push(`excepția ${sigur ? 'acceptată la atingere sigură' : 'refuzată la atingere posibilă'}: ${sql}`)
   }
+  // r4 (Jak r3): corpul AS '…' = corpul $$ (exemplul exact + paritatea pe toate cazurile cu corp); regclass ascuns de paranteze / cast-uri
+  const j3 = v(JAK_R3), j3e = v(`${JAK_R3}\n${EXCEPTIE}`)
+  if (j3.atinge.join('|') !== jr.atinge.join('|') || !j3e.ok || !v(ritual(JAK_R3)).ok) gresit.push(`exemplul Jak r3: ${j3.atinge.join('; ')} / excepția ${j3e.ok ? 'acceptată' : 'refuzată'}`)
+  for (const sql of LITERALI_DATE_R4) { const r = v(sql); if (r.atinge.length || !r.ok) gresit.push(`literal-dată din corp '…' tratat ca SQL: ${sql} → ${r.atinge.join('; ')}`) }
+  for (const [sql, sigur] of LITERALI_ATINSI_R4) {
+    const r = v(sql)
+    if (!r.atinge.length || r.ok) gresit.push(`atingere r4 neprinsă: ${sql}`)
+    if (!v(ritual(sql)).ok) gresit.push(`ritualul refuzat pe: ${sql}`)
+    if (v(`${sql}\n${EXCEPTIE}`).ok !== !sigur) gresit.push(`excepția ${sigur ? 'acceptată la atingere sigură' : 'refuzată la atingere posibilă'}: ${sql}`)
+  }
+  for (const sql of FAIL_CLOSED_R4) if (!v(sql).atinge.length) gresit.push(`corpul E'…' nedecodabil tratat ca date: ${sql}`)
+  for (const sql of PARITATE) {
+    const a = v(sql), b = v(caCitat(sql))
+    if (a.atinge.join('|') !== b.atinge.join('|') || a.ok !== b.ok) gresit.push(`paritate $$ / '…': ${sql} → [${a.atinge.join('; ')}] vs [${b.atinge.join('; ')}]`)
+  }
   // exemplul lui Jak (P2-3): ALTER TABLE profiles + SELECT simplu + ștampile literale; și varianta cu verificările într-un comentariu
   const jak1 = v(`ALTER TABLE profiles ADD COLUMN x int;\nSELECT public.fn_izo_porti_lipsa() = '{}';\n${LITERALE}\n`)
   if (jak1.ok || !jak1.lipsa.some((l) => l.startsWith('PRE')) || !jak1.lipsa.some((l) => l.includes('necalculată')) || !jak1.lipsa.some((l) => l.startsWith('POST'))) gresit.push('exemplul Jak 1 (SELECT + ștampile literale)')
@@ -222,9 +269,30 @@ describe('regula porților Izometrie — detectorul (P2-2 perimetrul, P2-3 struc
   it('bateria completă trece pe detectorul din repo', () => {
     expect(baterie(R)).toEqual([])
   })
-  it('tabelele vechi rămân neschimbate (42 atingeri / 13 neatingeri / 24 structuri) + cele noi din r3', () => {
+  it('tabelele vechi rămân neschimbate (42 atingeri / 13 neatingeri / 24 structuri) + cele noi din r3 și r4', () => {
     expect([ATINGE.length, NEATINS.length, STRUCTURA_GRESITA.length]).toEqual([42, 13, 24])
     expect([LITERALI_DATE.length, LITERALI_ATINSI.length]).toEqual([10, 19])
+    expect([LITERALI_DATE_R4.length, LITERALI_ATINSI_R4.length, FAIL_CLOSED_R4.length]).toEqual([5, 11, 1])
+    // paritatea nu e vidă: cazurile cu corp $…$ după AS / DO, fiecare rescris efectiv
+    expect(PARITATE.length).toBe(23)
+  })
+  it('exemplele lui Jak (review r3): corpul AS \'…\' ca forma $$; regclass între paranteze', () => {
+    const P = R.perimetru(POARTA, MIGRARI)
+    expect(R.verifica(JAK_R3, P).atinge).toEqual(['funcție care numește registrul / fn_izo_*: alt_mesaj'])
+    expect(R.verifica(`${JAK_R3}\n${EXCEPTIE}`, P)).toMatchObject({ ok: true, exceptie: expect.any(String) })
+    // contrapartea executată: atingere sigură, declarația refuzată
+    const ex = "CREATE FUNCTION public.alt_exec2() RETURNS void LANGUAGE plpgsql AS 'BEGIN EXECUTE ''DROP TABLE public.izo_importuri;''; END';"
+    expect(R.verifica(ex, P).atinge).toContain('DROP TABLE izo_importuri')
+    expect(R.verifica(`${ex}\n${EXCEPTIE}`, P).ok).toBe(false)
+    const rc = R.verifica("CREATE TABLE public.alt (\n  id int CHECK (('public.izo_importuri')::regclass IS NOT NULL)\n);", P)
+    expect(rc).toMatchObject({ ok: false, atinge: ['instrucțiune care numește registrul: izo_importuri'] })
+    // rescrierea: corpul devine $corpN$ cu textul decodat; corpul E'…' cu \n rămâne literal
+    expect(R.lexeaza(JAK_R3).cod).toContain("$corp1$SELECT 'DROP TABLE public.izo_importuri;'::text$corp1$")
+    expect(R.lexeaza("DO E'a\\nb';").regiuni).toHaveLength(0)
+    expect(R.lexeaza("DO E'BEGIN RAISE NOTICE \\'x\\\\y\\'; END';").cod).toContain("$corp1$BEGIN RAISE NOTICE 'x\\y'; END$corp1$")
+    // tag-ul ales nu apare în text și nu se lipește de finalul corpului
+    expect(R.lexeaza("DO 'BEGIN NULL; END -- $corp1$';").cod).toContain('$corp2$')
+    expect(R.lexeaza("DO 'SELECT 1 -- x$corp1';").cod).toContain('$corp2$')
   })
   it('exemplul lui Jak (review r2): literalul returnat nu e DDL; același text în EXECUTE e', () => {
     const P = R.perimetru(POARTA, MIGRARI)
@@ -394,9 +462,15 @@ const MUTANTI = [
   // r3 (Jak r2 P2): distincția literal-dată / SQL executat — fiecare regulă scoasă trebuie prinsă
   ['literalii-date tratați ca SQL (fără distincție, ca în r2)', 'if (pastreaza(e)) continue', 'if (true) continue'],
   ['toți literalii tratați ca date (și cei din EXECUTE)', 'const pastreaza = (e) => {', 'const pastreaza = (e) => { return false;'],
-  ["corpul DO '…' tratat ca dată", "if (/\\bDO(?:\\s+LANGUAGE\\s+[A-Za-z_]\\w*)?\\s*$/i.test(inainte)) return true", 'if (false) return true'],
-  ["corpul de funcție AS '…' tratat ca dată", 'if (/\\bAS\\s*$/i.test(inainte) &&', 'if (false &&'],
-  ['constanta ::regclass tratată ca dată', "if (/^\\s*(?:::\\s*|AS\\s+)\"?(?:pg_catalog\\s*\\.\\s*)?reg[a-z]+/i.test(", 'if (false && ('],
+  ["corpul DO '…' (nedecodabil) tratat ca dată", 'if (RE_CORP_DO.test(inainte)) return true', 'if (false) return true'],
+  ["corpul de funcție AS '…' (nedecodabil) tratat ca dată", 'if (/\\bAS\\s*$/i.test(inainte) &&', 'if (false &&'],
+  ['constanta regclass tratată ca dată', 'if (RE_REG.test(M.slice(s + 1, f))) return true', 'if (false) return true'],
+  // r4 (Jak r3)
+  ["corpurile '…' nerescrise ca $…$ (comportamentul r3)", 'if (!de.length) break', 'break'],
+  ["corpurile E'…' cu alte escape-uri rescrise oricum", "if (esc && /\\\\/.test(brut.replace(/''|\\\\[\\\\']/g, ''))) continue", ''],
+  ["prefixul E al corpului nedecodabil nerecunoscut", ".replace(e.esc ? /[eE]$/ : /$^/, '')", ''],
+  ['regclass doar imediat după literal (forma r3)', 'if (RE_REG.test(M.slice(s + 1, f))) return true', 'if (/^\\s*(?:::\\s*|AS\\s+)"?(?:pg_catalog\\s*\\.\\s*)?reg[a-z]+/i.test(M.slice(e.b, Math.min(b0, e.b + 100)))) return true'],
+  ["ghilimelele dublate din corpul '…' nedecodate", `brut.replace(/''/g, "'")`, 'brut'],
   ['EXECUTE din corp ignorat', 'if (RE_EXECUTA.test(simplu.slice(e.P.start, e.P.end))) return true', 'if (false) return true'],
   ['instrucțiunea de sus / psql (\\gexec) ignorate', 'else if (RE_EXECUTA.test(M.slice(s + 1, f)) || (!e.P && psql)) return true', 'else if (false) return true'],
   ['orice funcție tratată ca pură', "if (FUNCTII_PURE.has(baza) && (!nume.includes('.') || nume.startsWith('pg_catalog.'))) continue", 'continue'],

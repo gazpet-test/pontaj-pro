@@ -1,6 +1,6 @@
 name: Izometrie - regula portilor (migrari si reveniri)
 
-# Regula porților Izometrie (docs/izometrie/PORTI_RECONCILIERE.md): orice migrare / revenire care atinge un obiect amprentat de porți
+# Regula porților Izometrie (docs/izometrie/PORTI_REGULA.md): orice migrare / revenire care atinge un obiect amprentat de porți
 # rulează poarta înainte și după și reface cele 5 ștampile CALCULATE, în aceeași tranzacție. Verificarea e textuală (limita e scrisă
 # în detector și în document) și rulează la ORICE PR care atinge migrările, revenirile sau detectorul, inclusiv pe draft-uri: o
 # migrare care uită ritualul trebuie văzută înainte de review, nu după aplicare. Fără secrete, fără bază de date.
