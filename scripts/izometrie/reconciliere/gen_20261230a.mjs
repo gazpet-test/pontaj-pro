@@ -206,7 +206,8 @@ export function genereaza(root) {
 -- De ce DOAR cu amprenta globală (L15 v2): refacerea ștampilelor „binecuvântează” catalogul din momentul ei. Gărzile PRE fixează starea
 --   analizată; pasul „după” al runnerului (diferența = exact manifestul ${NUME}.l15.tsv, generat pe clonă: o singură linie, funcția
 --   fn_izo_porti_lipsa() „schimbat”) refuză orice altă schimbare de catalog apărută între timp în aceeași tranzacție. Fără pasul
---   „înainte” al runnerului (tabelul temporar ag_ina_<T>) migrarea refuză (AG_LIPSA; gardă de protocol, nu autorizație).
+--   „înainte” al runnerului (tabelul temporar ag_ina_<T> creat și ținut în ACEASTĂ tranzacție) migrarea refuză (AMPRENTA_GLOBALA_LIPSA; gardă de
+--   protocol, nu autorizație; aceeași formă ca 20261225a / 20261226a / 20261131j).
 -- Lock-uri (L06): niciun lock pe tabele. Lock-ul consultativ al runnerului (gazpet.livrare_migrare, exclusiv) ține pe loc intrările API
 --   Izometrie (îl iau partajat) până la COMMIT; CREATE OR REPLACE / COMMENT iau doar lock-urile de obiect ale funcțiilor atinse.
 -- Timpul: fn_izo_porti_lipsa() rulează o singură dată (POST); costul ei + cele două calcule ale amprentei globale se măsoară pe clonă.
@@ -216,10 +217,11 @@ DO $pre$
 DECLARE v_plafon text; v_x text; v_n integer; r record;
 BEGIN
 ${gardaRunner(E, NUME, 5000)}
-  -- amprenta globală L15 v2: pasul „înainte” al runnerului a rulat în această tranzacție (tabelul lui temporar există)
-  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.relnamespace = pg_catalog.pg_my_temp_schema() AND c.relkind = 'r'
-                   AND c.relname ~ '^ag_ina_[0-9a-f]{16}$') THEN
-    RAISE EXCEPTION '${E}: AG_LIPSA: livrarea cere --amprenta-globala + --diferente-globale (pasul inainte al runnerului nu a rulat)';
+  -- L15 v2: pasul „înainte” al runnerului a rulat în ACEASTĂ tranzacție (tiparul 20261225a / 20261226a / 20261131j, identic)
+  IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = pg_my_temp_schema() AND c.relkind = 'r' AND c.relname ~ '^ag_ina_[0-9a-f]{16}$'
+                    AND c.xmin::text = (txid_current() % 4294967296)::text
+                    AND (SELECT count(*) FROM pg_locks l WHERE l.relation = c.oid AND l.pid = pg_backend_pid() AND l.granted) > 0) THEN
+    RAISE EXCEPTION '${E}: AMPRENTA_GLOBALA_LIPSA: livrarea cere amprenta globala L15 v2 a runnerului (--amprenta-globala + --diferente-globale); nimic schimbat';
   END IF;
   -- >>> BASELINE ${E} (producție, 19.11.2026; sursa: citirea coordonatorului; amprentele independente de mediu se refac și din repo în teste)
   -- 1. ștampilele stocate, exact

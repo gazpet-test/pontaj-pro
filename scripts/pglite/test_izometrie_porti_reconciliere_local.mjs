@@ -227,7 +227,11 @@ await refuz('fără marcajul runnerului', await caRunner(db, NUME, M, { marcaj: 
 await refuz('marcajul altei migrări', await caRunner(db, '20261230b_alta', M), /garda start invalida/)
 await refuz('fără plafon (0)', await caRunner(db, NUME, M, { plafon: 0, marcajPlafon: false }), /PLAFON_TRANZACTIE lipsa/)
 await refuz('plafon 2000 în loc de 5000', await caRunner(db, NUME, M, { plafon: 2000 }), /PLAFON_TRANZACTIE lipsa/)
-await refuz('fără pasul „înainte” al amprentei globale', await caRunner(db, NUME, M, { ag: false }), /AG_LIPSA/)
+await refuz('fără pasul „înainte” al amprentei globale', await caRunner(db, NUME, M, { ag: false }), /AMPRENTA_GLOBALA_LIPSA/)
+// tabelul pasului „înainte” rămas dintr-o tranzacție anterioară (sesiunea refolosită) nu ține loc de pasul de acum
+await db.exec('CREATE TEMP TABLE ag_ina_fedcba9876543210 (familie text);')
+await refuz('tabelul amprentei globale dintr-o tranzacție veche', await caRunner(db, NUME, M, { ag: false }), /AMPRENTA_GLOBALA_LIPSA/)
+await db.exec('DROP TABLE ag_ina_fedcba9876543210;')
 
 console.log('4. gărzile PRE: fiecare valoare diferită = refuz (mutanți pe date, în aceeași tranzacție)')
 const PRE = [

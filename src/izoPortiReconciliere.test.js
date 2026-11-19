@@ -178,7 +178,11 @@ describe('20261230a: gărzi, ordine, ștampile, livrare', () => {
     expect(MIG.split('\n')[0]).toContain('Version 20261230120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 5000')
     expect(MIG).toContain("current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261230a_izometrie_porti_reconciliere:' || txid_current()")
     expect(MIG).toContain("IF v_plafon IS DISTINCT FROM '5000/session'")
-    expect(MIG).toContain("c.relname ~ '^ag_ina_[0-9a-f]{16}$'")
+    // garda amprentei globale: aceeași formă ca 20261131j (tabelul pasului „înainte”, creat și ținut în ACEASTĂ tranzacție)
+    const ag = (t) => { const i = t.indexOf("IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = pg_my_temp_schema()"); return t.slice(i, t.indexOf('THEN', i)) }
+    expect(ag(MIG)).toContain("c.xmin::text = (txid_current() % 4294967296)::text")
+    expect(ag(MIG)).toBe(ag(citeste('supabase/migrations/20261131j_redari_import_verificare_ai.sql')))
+    expect(MIG).toContain('AMPRENTA_GLOBALA_LIPSA')
     expect(REV).toContain("current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261230a_izometrie_porti_reconciliere_ROLLBACK:' || txid_current()")
     expect(REV).toContain("IF v_plafon IS DISTINCT FROM '2000/session'")
     expect(REV).toContain('--versiune 20261230120001')
