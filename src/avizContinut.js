@@ -1,18 +1,17 @@
 // ===========================================================================
-// Conținutul unui transport, așa cum îl arată AVIZUL de însoțire a mărfii.
-// O SINGURĂ definiție (L19, TKT-2026-0379 r2): tabelul din avizul de însoțire
-// (AvizContinutRanduri.jsx, folosit de AvizInsotireMarfaModal) și PV-ul de
-// predare-primire (pvPredareAviz.js) citesc rândurile de aici.
-// Funcție pură: fără React, fără BD. Regulile sunt cele din aviz (mai 2026),
-// păstrate exact — orice schimbare aici schimbă ambele documente.
+// Conținutul unui transport, așa cum îl arată AVIZUL de însoțire a mărfii (TKT-2026-0379 r2, L19).
+// Oglinda, ca date, a tabelului „Conținut transport” din AvizInsotireMarfaModal (Logistica.jsx).
+// Avizul nu se atinge în acest PR (limita din cerere), deci regula există de două ori: în JSX-ul avizului
+// și aici. Paritatea e fixată de pvPredareAvizParitate.test.jsx, care compilează și randează JSX-ul REAL
+// al avizului direct din Logistica.jsx pe același tabel de cazuri (fixe + aleatoare) și îl compară
+// cu aceste rânduri și cu liniile PV-ului. O schimbare în aviz fără schimbarea de aici pică testul.
+// Funcție pură: fără React, fără BD.
 // ===========================================================================
 
-// Câmpurile activului citite pentru aviz și PV (aceleași în ambele).
+// Câmpurile activului — aceeași listă ca selecția avizului (verificată textual în testul de paritate).
 export const SELECT_ACTIV_AVIZ = 'id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special'
-// Rândurile din logistica_transporturi_continut cu activul legat.
+// Rândurile din logistica_transporturi_continut cu activul legat (identic cu .select-ul avizului).
 export const SELECT_CONTINUT_AVIZ = `*, asset:logistica_active!active_id(${SELECT_ACTIV_AVIZ})`
-// Ordinea rândurilor: `ordine`, apoi `id` (fără id, rândurile cu aceeași ordine ieșeau în ordine nedefinită).
-export const ORDINE_CONTINUT_AVIZ = ['ordine', 'id']
 
 // Câmpurile de identificare ale unui activ, în ordinea din aviz. Eticheta numărului de înmatriculare
 // diferă între forma cu conținut multiplu („Nr. înmatr.”) și forma simplă („Nr. înmatriculare”), ca în aviz.
@@ -69,6 +68,6 @@ export function randuriContinutAviz(transport, continutItems) {
     identificare: a ? identificareAviz(a, 'Nr. înmatriculare') : null,
     um: T.tip === 'utilaj' ? 'buc' : '—',
     cantitate: T.tip === 'utilaj' ? '1' : '—',
-    faraBunuri: !a && !(typeof T.continut_descriere === 'string' && /\S/.test(T.continut_descriere)),
+    faraBunuri: !a && !(T.continut_descriere && /\S/.test(String(T.continut_descriere))),
   }]
 }

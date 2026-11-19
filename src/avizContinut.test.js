@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { randuriContinutAviz, SELECT_CONTINUT_AVIZ, ORDINE_CONTINUT_AVIZ } from './avizContinut.js'
+import { randuriContinutAviz, SELECT_CONTINUT_AVIZ } from './avizContinut.js'
 
 // Valorile așteptate sunt scrise de mână după regulile tabelului din AvizInsotireMarfaModal
-// (Logistica.jsx, înainte de mutarea în avizContinut.js), nu calculate din codul testat (L25). Date sintetice.
+// (Logistica.jsx), nu calculate din codul testat (L25). Date sintetice.
 const asset = { id: 'as1', cod_intern: 'EX-01', nr_inventar: 'INV-7', marca: 'Alfa', model: 'X1', nr_inmatriculare: 'PH-01-ABC', serie_sasiu: 'VIN123', regim_transport_special: false }
 
 describe('randuriContinutAviz — forma cu conținut multiplu', () => {
@@ -85,9 +85,8 @@ describe('randuriContinutAviz — forma simplă (un rând)', () => {
   })
 })
 
-describe('selecția și ordinea din BD', () => {
-  it('activul are și regimul de transport special; ordinea e ordine, apoi id', () => {
+describe('selecția din BD', () => {
+  it('activul are și regimul de transport special', () => {
     expect(SELECT_CONTINUT_AVIZ).toBe('*, asset:logistica_active!active_id(id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special)')
-    expect(ORDINE_CONTINUT_AVIZ).toEqual(['ordine', 'id'])
   })
 })

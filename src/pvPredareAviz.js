@@ -5,7 +5,7 @@
 // Nimic nu se scrie în BD sau în Storage: PDF-ul se descarcă doar local.
 // ===========================================================================
 
-import { SELECT_ACTIV_AVIZ, SELECT_CONTINUT_AVIZ, ORDINE_CONTINUT_AVIZ, randuriContinutAviz } from './avizContinut.js'
+import { SELECT_ACTIV_AVIZ, SELECT_CONTINUT_AVIZ, randuriContinutAviz } from './avizContinut.js'
 
 // Coloanele tabelului de bunuri. Lățimile sunt PROCENTE din lățimea utilă A4 (738 px) și trebuie să dea 100.
 export const COLOANE_PV = [
@@ -16,9 +16,11 @@ export const COLOANE_PV = [
   { cheie: 'stare', titlu: 'Stare la predare', latime: 20, align: 'left' },
 ]
 
-// r2 (L19): selecția, ordinea și rândurile vin din avizContinut.js — aceeași definiție ca tabelul din aviz.
+// r2 (L19): selecția și rândurile vin din avizContinut.js — oglinda tabelului din aviz, cu paritatea testată.
 export const SELECT_TRANSPORT_PV = `id, numar_transport, tip, continut_multiplu, continut_descriere, activ_transportat:logistica_active!activ_transportat_id(${SELECT_ACTIV_AVIZ})`
 export const SELECT_CONTINUT_PV = SELECT_CONTINUT_AVIZ
+// Ordinea: `ordine` ca avizul, apoi `id` ca departajare (avizul lasă rândurile cu aceeași `ordine` în ordinea bazei).
+export const ORDINE_CONTINUT_PV = ['ordine', 'id']
 export const CHEI_FIRMA = ['firma_nume', 'firma_cui', 'firma_reg_com', 'firma_adresa', 'firma_telefon', 'firma_email']
 
 export function esc(v) {
@@ -62,7 +64,7 @@ export function liniiPvDinTransport(transport, continut) {
     tipText: r.isUtilaj ? 'Utilaj' : (r.forma === 'multiplu' ? 'Marfă' : ''),
     regimSpecial: r.regimSpecial,
     observatii: txt(r.observatii),
-    identificare: (r.identificare || []).map(i => `${i.eticheta}: ${txt(i.valoare)}`),
+    identificare: (r.identificare || []).map(i => `${i.eticheta}: ${String(i.valoare)}`),  // textul din aviz, neschimbat
     cantitate: cantitatePv(r.cantitate, r.um),
   }))
 }
@@ -77,7 +79,7 @@ export async function incarcaDatePv(db, aviz) {
   let continut = []
   if (T.continut_multiplu) {
     const { data, error, count } = await db.from('logistica_transporturi_continut').select(SELECT_CONTINUT_PV, { count: 'exact' })
-      .eq('transport_id', T.id).order(ORDINE_CONTINUT_AVIZ[0]).order(ORDINE_CONTINUT_AVIZ[1])
+      .eq('transport_id', T.id).order(ORDINE_CONTINUT_PV[0]).order(ORDINE_CONTINUT_PV[1])
     if (error) return { ok: false, mesaj: `Nu am putut citi conținutul transportului: ${error.message || error}` }
     continut = data || []
     // L12/L23: nimic nu dispare tacit — dacă serverul a tăiat lista, nu generăm un PV incomplet.
