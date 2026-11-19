@@ -311,13 +311,72 @@ describe('interfața: răspunsul RPC-ului (L05 / L18)', () => {
       expect(mesajSantier(r).ok).toBe(true)
     }
   })
-  it('reconcilierea finală confirmă proiectul NElegat → eșecul reîncercării, verificat (atunci „fără șantier” e adevărat)', async () => {
-    const c = clientFals({ rpc: [RETEA, REFUZ], citiri: [CITIRE_PICATA, { data: { site_id: null }, error: null }] })
-    const r = await creeazaSantier(c, { nume: 'S', proiectId: 5 })
+  // runda 4 (Jakarinos r3, P2): „nelegat” la reconcilierea finală NU dovedește eșecul — prima cerere poate fi încă în lucru
+  it('reconcilierea finală vede proiectul NElegat după un refuz / funcție lipsă / eroare: tot NECUNOSCUT, fără „fără șantier”', async () => {
+    for (const [r2, re] of [[REFUZ, /reîncercarea: refuzată de baza de date/], [DISPARUT, /reîncercarea: funcția nu e disponibilă/],
+                            [{ data: null, error: { code: 'P0001', message: 'proiectul are deja alt șantier legat' } }, /reîncercarea: eroare: proiectul are deja/],
+                            [RETEA, /reîncercarea: TypeError: Failed to fetch/]]) {
+      const c = clientFals({ rpc: [RETEA, r2], citiri: [CITIRE_PICATA, { data: { site_id: null }, error: null }] })
+      const r = await creeazaSantier(c, { nume: 'S', proiectId: 5 })
+      expect(r.tip).toBe('necunoscut')
+      expect(r.verificat).toBeUndefined()
+      expect(r.motiv).toMatch(re)
+      expect(r.motiv).toMatch(/prima cerere poate fi încă în lucru/)
+      const m = mesajSantier(r)
+      expect(m.ok).toBe(false)
+      expect(m.text).not.toMatch(/fără șantier|nu e încă disponibilă|refuzat crearea/)
+      expect(m.text).toMatch(/Nu se știe dacă șantierul s-a creat .*Verifică în editarea proiectului înainte să creezi altul/)
+    }
+  })
+  // Reproducerea lui Jak, cu o ordine controlată: un „server” fals cu starea proiectului; prima cerere TRECE de verificarea dreptului, apoi
+  // „așteaptă lock-ul” (răspunsul se pierde la client), dreptul e retras, reîncercarea primește 42501, citirea finală vede site_id = NULL,
+  // iar DUPĂ ce clientul a terminat, prima cerere continuă și face COMMIT (proiectul ajunge legat).
+  function serverCuPrimaInCurs() {
+    const st = { drept: true, siteId: null, santiere: [], ramas: null }
+    const rpc = async (fn, args) => {
+      if (!st.drept) return REFUZ
+      if (st.siteId != null) return { data: { site_id: st.siteId, creat: false }, error: null }
+      // autorizarea a trecut; scrierea rămâne în așteptare (lock-ul proiectului), răspunsul nu mai ajunge la client
+      st.ramas = () => { st.siteId = 77; st.santiere.push({ id: 77, proiect_id: args.p_proiect }) }
+      st.drept = false // dreptul retras (comis) înainte de reîncercare
+      throw new Error('TypeError: Failed to fetch')
+    }
+    const from = (t) => ({ select: () => ({ eq: (k, v) => ({ maybeSingle: async () => {
+      if (t === 'executie_proiecte') return { data: { site_id: st.siteId }, error: null }
+      return { data: st.santiere.find(s => s.id === v) || null, error: null }
+    } }) }) })
+    return { st, client: { rpc, from } }
+  }
+  it('scenariul Jak r3: prima cerere încă în lucru, reîncercarea refuzată, citirea finală NULL → NECUNOSCUT; apoi prima face COMMIT', async () => {
+    const { st, client } = serverCuPrimaInCurs()
+    const r = await creeazaSantier(client, { nume: 'S', proiectId: 5 })
+    st.ramas() // prima cerere își termină tranzacția DUPĂ ce clientul a afișat rezultatul
+    expect(st.siteId).toBe(77) // șantierul există: un mesaj „fără șantier” ar fi fost fals
+    expect(r.tip).toBe('necunoscut')
+    const m = mesajSantier(r)
+    expect(m.ok).toBe(false)
+    expect(m.text).not.toMatch(/Proiectul s-a creat fără șantier/)
+    expect(m.text).toMatch(/Nu se știe dacă șantierul s-a creat/)
+  })
+  it('mutantul (regula din r3: „nelegat” + reîncercare refuzată = eșec verificat) PICĂ pe reproducerea lui Jak', async () => {
+    const SRC = readFileSync(new URL('./lib/santiereDrept.js', import.meta.url), 'utf8').replace(/\r/g, '')
+    const din = "  if (fin.tip === 'ok') return fin\n"
+    expect(nr(SRC, din)).toBe(1)
+    const mut = SRC.replace(din, din + "  if (fin.tip === 'nelegat' && r2.tip !== 'necunoscut') return { ...r2, verificat: true }\n")
+    // modulul nu are importuri: mutantul se încarcă direct din text (fără fișier temporar), cu exporturile întoarse explicit
+    expect(/^import /m.test(SRC)).toBe(false)
+    const M = new Function(mut.replace(/^export /gm, '') + '\nreturn { creeazaSantier, mesajSantier }')()
+    const { st, client } = serverCuPrimaInCurs()
+    const r = await M.creeazaSantier(client, { nume: 'S', proiectId: 5 })
+    st.ramas()
+    // mutantul dă exact defectul raportat: refuz „verificat” + „Proiectul s-a creat fără șantier”, deși șantierul a fost comis
     expect(r).toEqual({ tip: 'refuz', verificat: true })
-    expect(mesajSantier(r).text).toMatch(/Proiectul s-a creat fără șantier/)
-    const c2 = clientFals({ rpc: [RETEA, DISPARUT], citiri: [{ data: { site_id: null }, error: null }, { data: { site_id: null }, error: null }] })
-    expect(await creeazaSantier(c2, { nume: 'S', proiectId: 5 })).toEqual({ tip: 'indisponibil', verificat: true })
+    expect(M.mesajSantier(r).text).toMatch(/Proiectul s-a creat fără șantier/)
+    expect(st.siteId).toBe(77)
+    // originalul încărcat la fel (controlul metodei) și originalul importat: necunoscut pe același scenariu
+    const O = new Function(SRC.replace(/^export /gm, '') + '\nreturn { creeazaSantier, mesajSantier }')()
+    expect((await O.creeazaSantier(serverCuPrimaInCurs().client, { nume: 'S', proiectId: 5 })).tip).toBe('necunoscut')
+    expect((await creeazaSantier(serverCuPrimaInCurs().client, { nume: 'S', proiectId: 5 })).tip).toBe('necunoscut')
   })
   it('legat de șantierul ALTUI proiect la reconcilierea finală, după un refuz: necunoscut, nu eșec confirmat', async () => {
     const c = clientFals({ rpc: [RETEA, REFUZ], citiri: [CITIRE_PICATA, { data: { site_id: 9 }, error: null }, { data: { id: 9, proiect_id: 6 }, error: null }] })

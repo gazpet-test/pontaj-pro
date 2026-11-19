@@ -16,6 +16,8 @@
 //   4. refuzurile migrării, L15 între „înainte” și „după” + mutanții porții;
 //      runda 3 (P2-1): W13–W17 — primul apel ambiguu, apoi o schimbare COMISĂ între apeluri (dreptul retras / funcția scoasă): eșecul
 //      reîncercării nu înlocuiește incertitudinea; decide reconcilierea finală (necunoscut dacă nu se poate citi) + mutanții J8–J10;
+//      runda 4 (Jakarinos r3, P2): W18 — prima cerere încă în lucru (emulată: COMMIT după rezultatul afișat), reîncercarea refuzată,
+//      citirea finală NULL → necunoscut; W16 / W17 devin necunoscut (fără dovada terminării primei cereri) + mutantul J11 (regula r3);
 //   5. revenirea (refuzuri, aplicare → revenire → reaplicare, amprenta = baseline, șantierele create rămân) + mutanții ei; runda 3 (P2-2):
 //      deriva după aplicare (drepturi pe orice rol, proprietăți, rândul cheii) = refuz, nimic schimbat + mutanții R2–R5;
 //   6. mutanții migrării (comportament) și ai codului JS — fiecare TREBUIE să pice.
@@ -298,13 +300,35 @@ function client(db, uid, { defect = {} } = {}) {
     catch (e) { return { error: { code: e.code === '42883' ? 'PGRST202' : e.code, message: e.message } } }
   }
   const retea = { data: null, error: { message: 'TypeError: Failed to fetch' } }
+  const sqlRpc = fn => `SELECT public.${fn}(p_nume => $1, p_proiect => $2, p_beneficiar => $3) AS r`
+  let ramas = null
   return {
+    // runda 4 (Jakarinos r3): cererea „încă în lucru” își termină tranzacția DUPĂ ce clientul a afișat rezultatul. EMULARE (PGlite are o
+    // singură conexiune): cererea a trecut de verificarea dreptului ÎNAINTE de retragere, deci tranzacția ei rulează RPC-ul real cu dreptul
+    // prezent (pus înapoi doar în această tranzacție, retras din nou înainte de COMMIT) — efectul comis = cel al cererii reale.
+    termina: async () => {
+      if (!ramas) return null
+      const args = ramas; ramas = null
+      return tx(db, { commit: true }, async ({ q, sudo }) => {
+        const lipsea = (await q(`SELECT count(*)::int AS n FROM public.user_module_access WHERE profile_id = $1 AND module = 'santiere_creare'`, [uid])).rows[0].n === 0
+        if (lipsea) await q(`INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ($1, 'santiere_creare', 'editor')`, [uid])
+        await q(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [uid])
+        await q(`SELECT set_config('request.jwt.claims', $1, true)`, [JSON.stringify({ sub: uid, role: 'authenticated' })])
+        await q('SET LOCAL ROLE authenticated')
+        const r = (await q(sqlRpc('fn_sites_creeaza'), [args.p_nume, args.p_proiect, args.p_beneficiar])).rows[0].r
+        await sudo()
+        if (lipsea) await q(`DELETE FROM public.user_module_access WHERE profile_id = $1 AND module = 'santiere_creare'`, [uid])
+        return r
+      })
+    },
     rpc: async (fn, args) => {
       nr.rpc++
+      // cererea rămâne „în lucru” pe server (a trecut de verificarea dreptului, așteaptă lock-ul); clientul pierde răspunsul
+      if (defect.inCurs?.includes(nr.rpc)) { ramas = { ...args }; return retea }
       // o schimbare COMISĂ (ca postgres) între apeluri: dreptul retras, funcția scoasă (revenirea) — runda 3, P2-1
       if (defect.intre?.[nr.rpc]) await db.exec(defect.intre[nr.rpc])
       if (defect.inainte?.includes(nr.rpc)) return retea
-      const r = await run(`SELECT public.${fn}(p_nume => $1, p_proiect => $2, p_beneficiar => $3) AS r`, [args.p_nume, args.p_proiect, args.p_beneficiar])
+      const r = await run(sqlRpc(fn), [args.p_nume, args.p_proiect, args.p_beneficiar])
       if (defect.dupa?.includes(nr.rpc)) return retea
       if (defect.gol?.includes(nr.rpc)) return { data: null, error: null }
       return r.error ? { data: null, error: r.error } : { data: r.rows[0].r, error: null }
@@ -331,7 +355,10 @@ async function wizard(js, db, uid, { defect, numeProiect = 'Proiect Wizard' } = 
   const { data: proiect, error } = await c.from('executie_proiecte').insert({ nume: numeProiect, cod_intern: 'PW', beneficiar: 'Beneficiar SA', site_id: null, activ: true }).select('id').single()
   if (error) return { eroareProiect: error }
   const r = await js.creeazaSantier(c, { nume: 'Gazpet - ' + numeProiect, proiectId: Number(proiect.id), beneficiar: 'Beneficiar SA' })
-  return { proiect: Number(proiect.id), r, m: js.mesajSantier(r, { cuProiect: true }) }
+  const m = js.mesajSantier(r, { cuProiect: true })
+  // runda 4: cererea rămasă în lucru face COMMIT abia acum, după rezultatul afișat omului
+  const tarziu = await c.termina()
+  return { proiect: Number(proiect.id), r, m, tarziu }
 }
 async function stareWizard(db, proiect) {
   return tx(db, {}, async ({ q }) => {
@@ -363,10 +390,14 @@ const SCEN_W = [
     { dupa: [1], citire: [1], intre: { 2: RETRAGE_TIT } }, { tip: 'ok', verificat: true, legat: true }],
   ['W15 COMMIT + răspuns pierdut, funcția scoasă între apeluri → PGRST202, recitirea finală picată → necunoscut', 'TIT', true, true,
     { dupa: [1], citire: [1, 2], intre: { 2: SCOATE_RPC } }, { tip: 'necunoscut', legat: true, faraSantier: false }],
-  ['W16 rețea picată ÎNAINTE (nimic scris), recitirea picată, dreptul retras → 42501, recitirea finală: nelegat → refuz verificat', 'TIT', true, true,
-    { inainte: [1], citire: [1], intre: { 2: RETRAGE_TIT } }, { tip: 'refuz', verificat: true, legat: false, faraSantier: true }],
-  ['W17 rețea picată ÎNAINTE, funcția scoasă între apeluri, recitirea finală: nelegat → indisponibil verificat', 'TIT', true, true,
-    { inainte: [1], citire: [1], intre: { 2: SCOATE_RPC } }, { tip: 'indisponibil', verificat: true, legat: false, faraSantier: true }],
+  // runda 4 (Jakarinos r3, P2): „nelegat” la reconcilierea finală nu dovedește eșecul primei cereri → necunoscut, fără „fără șantier”
+  // (W16 / W17: aici chiar nu s-a scris nimic, dar clientul nu are cum să o dovedească — prima cerere ar putea fi încă în lucru, ca în W18)
+  ['W16 rețea picată ÎNAINTE (nimic scris), recitirea picată, dreptul retras → 42501, recitirea finală: nelegat → necunoscut', 'TIT', true, true,
+    { inainte: [1], citire: [1], intre: { 2: RETRAGE_TIT } }, { tip: 'necunoscut', legat: false, faraSantier: false }],
+  ['W17 rețea picată ÎNAINTE, funcția scoasă între apeluri, recitirea finală: nelegat → necunoscut', 'TIT', true, true,
+    { inainte: [1], citire: [1], intre: { 2: SCOATE_RPC } }, { tip: 'necunoscut', legat: false, faraSantier: false }],
+  ['W18 reproducerea Jak r3: prima cerere ÎNCĂ ÎN LUCRU, dreptul retras → 42501, recitirea finală NULL → necunoscut; apoi prima face COMMIT', 'TIT', true, true,
+    { inCurs: [1], intre: { 2: RETRAGE_TIT } }, { tip: 'necunoscut', legat: true, faraSantier: false, tarziuCreat: true }],
 ]
 async function ruleazaWizard(js, [nume, cont, migrare, drept, defect, a]) {
   const db = await bazaNoua()
@@ -382,6 +413,9 @@ async function ruleazaWizard(js, [nume, cont, migrare, drept, defect, a]) {
     if ('verificat' in a && w.r.verificat !== a.verificat) ab.push(`verificat ${w.r.verificat}`)
     if (w.m.ok !== (a.tip === 'ok')) ab.push(`mesaj ok=${w.m.ok}: ${w.m.text}`)
     if ('faraSantier' in a && /Proiectul s-a creat fără șantier/.test(w.m.text) !== a.faraSantier) ab.push(`mesaj „fără șantier” ${!a.faraSantier ? 'NEDOVEDIT' : 'lipsă'}: ${w.m.text}`)
+    // W18: emularea a comis într-adevăr șantierul DUPĂ rezultat (altfel scenariul nu ar proba nimic)
+    if ('tarziuCreat' in a && w.tarziu?.creat !== a.tarziuCreat) ab.push(`cererea târzie: ${JSON.stringify(w.tarziu)}`)
+    if (!('tarziuCreat' in a) && w.tarziu != null) ab.push('cerere rămasă în lucru neașteptată')
     if (a.legat) {
       if (st.santiere.length !== 1 || st.site_id !== st.santiere[0].id || st.santiere[0].proiect_id !== w.proiect || st.p !== 5) ab.push('stare ' + JSON.stringify(st))
     } else if (st.santiere.length !== 0 || st.site_id !== null || st.p !== 5) ab.push('stare (aștepta proiect fără șantier) ' + JSON.stringify(st))
@@ -696,8 +730,11 @@ for (const [nume, inl, scen] of [
   // runda 3 (P2-1): comportamentul din r2 — rezultatul determinat al reîncercării înlocuiește incertitudinea primului apel
   ['J8 eșecul reîncercării întors direct (r2), fără reconcilierea finală', [["  if (r2.tip === 'ok') return r2\n", "  if (r2.tip !== 'necunoscut') return r2\n"]], 'W13'],
   ['J8b la fel, cu funcția dispărută între apeluri', [["  if (r2.tip === 'ok') return r2\n", "  if (r2.tip !== 'necunoscut') return r2\n"]], 'W15'],
-  ['J9 recitirea finală picată tratată ca „nelegat”', [["  if (fin.tip === 'nelegat' && r2.tip !== 'necunoscut')", "  if (fin.tip !== 'ok' && r2.tip !== 'necunoscut')"]], 'W13'],
-  ['J10 fără reconcilierea finală (eșecul confirmat nu mai e verificat)', [["  const fin = await stareProiect(client, proiectId)\n", "  const fin = { tip: 'nelegat' }\n"]], 'W14'],
+  // J9 (r3) a dispărut odată cu ramura pe care o muta („nelegat” + reîncercare determinată = eșec verificat); îl înlocuiește J11
+  ['J10 fără reconcilierea finală', [["  const fin = await stareProiect(client, proiectId)\n", "  const fin = { tip: 'nelegat' }\n"]], 'W14'],
+  // runda 4 (Jakarinos r3, P2): regula din r3 pusă la loc — „nelegat” la citirea finală + reîncercare refuzată = eșec verificat
+  ...['W18', 'W16', 'W17'].map(s => [`J11 regula r3 („nelegat” = eșecul reîncercării, verificat) pe ${s}`,
+    [["  if (fin.tip === 'ok') return fin\n", "  if (fin.tip === 'ok') return fin\n  if (fin.tip === 'nelegat' && r2.tip !== 'necunoscut') return { ...r2, verificat: true }\n"]], s]),
 ]) {
   let picat = null
   try {

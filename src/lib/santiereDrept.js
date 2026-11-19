@@ -69,8 +69,11 @@ async function stareProiect(client, proiectId) {
 // fără reîncercare automată — un al doilea apel ar crea alt șantier.
 // Runda 3 (L05 / L18): după un prim apel AMBIGUU, un eșec determinat al reîncercării (refuz, funcția dispărută, eroare) privește DOAR a doua
 // tranzacție — nu dovedește că prima nu a scris (ex.: primul apel a făcut COMMIT, răspunsul s-a pierdut, apoi dreptul a fost retras). Singura
-// dovadă e starea din BD: reconcilierea FINALĂ (proiect + șantier). Legat = ok (verificat); confirmat nelegat = eșecul reîncercării, verificat;
-// starea nu se poate citi = rămâne NECUNOSCUT (niciodată „proiect fără șantier” nedovedit).
+// dovadă e starea din BD: reconcilierea FINALĂ (proiect + șantier).
+// Runda 4 (L05 / L18): nici „proiect nelegat” la reconcilierea finală NU dovedește eșecul: prima cerere poate fi încă în lucru (a trecut de
+// verificarea dreptului și așteaptă lock-ul proiectului, sau e încă pe drum în rețea) și poate face COMMIT după citire. Clientul nu are nicio
+// dovadă pozitivă că prima cerere s-a terminat, deci după un prim apel ambiguu există DOAR două rezultate: ok (șantierul legat, văzut în BD)
+// sau NECUNOSCUT. Eșecul („proiect fără șantier”) se raportează doar când PRIMUL apel a fost refuzat determinat (tranzacția lui anulată).
 export async function creeazaSantier(client, { nume, proiectId = null, beneficiar = null }) {
   const args = { p_nume: nume, p_proiect: proiectId, p_beneficiar: beneficiar }
   const r = clasificaRaspuns(await apel(client, args))
@@ -81,9 +84,16 @@ export async function creeazaSantier(client, { nume, proiectId = null, beneficia
   if (r2.tip === 'ok') return r2
   const fin = await stareProiect(client, proiectId)
   if (fin.tip === 'ok') return fin
-  if (fin.tip === 'nelegat' && r2.tip !== 'necunoscut') return { ...r2, verificat: true }
-  return { tip: 'necunoscut', motiv: fin.tip === 'nelegat' ? r2.motiv
-    : `primul apel fără răspuns, iar starea proiectului nu s-a putut verifica (${fin.motiv})` }
+  return { tip: 'necunoscut', motiv: motivNecunoscut(r2, fin) }
+}
+
+// De ce rezultatul rămâne necunoscut, pe scurt, pentru om: ce a răspuns reîncercarea și ce s-a văzut în BD.
+const REINCERCARE = { refuz: 'refuzată de baza de date (dreptul)', indisponibil: 'funcția nu e disponibilă' }
+function motivNecunoscut(r2, fin) {
+  const a2 = r2.tip === 'eroare' ? `eroare: ${r2.mesaj}` : (REINCERCARE[r2.tip] || r2.motiv || 'fără răspuns')
+  const bd = fin.tip === 'nelegat' ? 'proiectul nu are încă șantier, dar prima cerere poate fi încă în lucru'
+    : `starea proiectului nu s-a putut verifica: ${fin.motiv}`
+  return `prima cerere fără răspuns; reîncercarea: ${a2}; ${bd}`
 }
 
 // Textul pentru om (wizard: cuProiect = true; Admin: false). ok = doar când șantierul există sigur.
