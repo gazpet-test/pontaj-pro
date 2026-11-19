@@ -10,8 +10,11 @@
 --   bash scripts/livrare_migrare.sh --migrare supabase/revenire/20261131j_redari_import_verificare_ai_ROLLBACK.sql --sha256 <sha256 al fișierului>
 --        --versiune 20261131200001 --tinta-db postgres --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P> --user postgres
 --        --plafon-tranzactie-ms 2000
--- Lock (L06), punct unic, NOWAIT: red_proiect_drepturi → red_import_ai_jurnal ACCESS EXCLUSIVE (verificarea „fără date” sub lock, apoi DROP), apoi
---   red_proiecte → profiles SHARE ROW EXCLUSIVE (scoaterea FK-urilor), bugetul 1 s de la prima încercare.
+-- Lock (L06), punct unic, NOWAIT: red_proiect_drepturi → red_import_ai_jurnal → red_proiecte → profiles, toate ACCESS EXCLUSIVE (verificarea „fără
+--   date” sub lock, apoi DROP), bugetul 1 s de la prima încercare. De ce ACCESS EXCLUSIVE și pe red_proiecte / profiles: scoaterea unui FK (DROP TABLE
+--   sau DROP CONSTRAINT) ia ACCESS EXCLUSIVE pe tabela REFERITĂ (măsurat în proba PGlite: pg_locks după DROP); luat aici explicit, NOWAIT, în buget —
+--   altfel DROP-ul l-ar aștepta implicit. Cât e ținut (până la COMMIT, plafonul 2000 ms) sunt oprite și CITIRILE din profiles și red_proiecte (toate
+--   ecranele / politicile care le citesc așteaptă): de rulat doar într-un moment liniștit.
 -- Probe: scripts/pglite/test_redari_import_ai_local.mjs (aplicare -> revenire -> reaplicare pe bază nefolosită; refuzurile revenirii, inclusiv istoricul).
 DO $pre$
 DECLARE v_plafon text; v_incercari integer := 0; v_t0 timestamptz; v_buget constant interval := interval '1 second'; v_pas integer; v_rau text;
@@ -47,8 +50,8 @@ BEGIN
         BEGIN
           LOCK TABLE public.red_proiect_drepturi IN ACCESS EXCLUSIVE MODE NOWAIT;
           LOCK TABLE public.red_import_ai_jurnal IN ACCESS EXCLUSIVE MODE NOWAIT;
-          LOCK TABLE public.red_proiecte IN SHARE ROW EXCLUSIVE MODE NOWAIT;
-          LOCK TABLE public.profiles IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+          LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE NOWAIT;
+          LOCK TABLE public.profiles IN ACCESS EXCLUSIVE MODE NOWAIT;
           EXIT;
         EXCEPTION WHEN lock_not_available THEN
           PERFORM pg_sleep(0.05);
@@ -65,7 +68,7 @@ BEGIN
     SELECT string_agg(a.semnatura, ', ' ORDER BY a.semnatura) INTO v_rau
       FROM (VALUES
         -- >>> AMPRENTE-NOI 20261131j
-        ('public.fn_red_import_ai_poate(uuid)', '162b0c8a6b51fc0d602144bebc5a7174', 'sql', true, 's', 'boolean'),
+        ('public.fn_red_import_ai_poate(uuid)', 'b20a13bf9179b76c00812b63362bf32f', 'sql', true, 's', 'boolean'),
         ('public.fn_red_import_ai_rezerva(uuid,uuid,text,text,integer,integer,integer,integer,integer)', '959e29666c0086ac713cbf3af4bc2318', 'plpgsql', true, 'v', 'jsonb'),
         ('public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)', '33ac8ddf00565721662122fd7d71a3ef', 'plpgsql', true, 'v', 'boolean')
         -- <<< AMPRENTE-NOI 20261131j

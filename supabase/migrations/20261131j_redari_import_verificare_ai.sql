@@ -165,11 +165,11 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
   SELECT auth.uid() IS NOT NULL AND p_proiect IS NOT NULL
      AND EXISTS (SELECT 1 FROM public.red_proiecte pr WHERE pr.id = p_proiect AND pr.activ IS TRUE)
      AND (EXISTS (SELECT 1 FROM public.profiles pf WHERE pf.id = auth.uid() AND pf.is_owner IS TRUE)
-          OR (public.fn_red_nivel() IN ('admin', 'editor')
+          OR (coalesce(public.fn_red_nivel() IN ('admin', 'editor'), false)
               AND EXISTS (SELECT 1 FROM public.red_proiect_drepturi d
                            WHERE d.proiect_id = p_proiect AND d.profile_id = auth.uid() AND d.drept = 'import_verificare_ai')))
 $fn$;
-COMMENT ON FUNCTION public.fn_red_import_ai_poate(uuid) IS 'Redări: true = contul curent (auth.uid()) poate porni verificarea AI plătită a importului pe proiect: owner, sau nivel Redări admin/editor + dreptul import_verificare_ai în red_proiect_drepturi; proiectul trebuie să existe și să fie activ. Fără parametru de identitate. Singura definiție (ecran, funcția edge, rezervare, RLS). 20261131j.';
+COMMENT ON FUNCTION public.fn_red_import_ai_poate(uuid) IS 'Redări: true = contul curent (auth.uid()) poate porni verificarea AI plătită a importului pe proiect: owner, sau nivel Redări admin/editor + dreptul import_verificare_ai în red_proiect_drepturi; proiectul trebuie să existe și să fie activ. Întoarce mereu true / false, niciodată NULL (un cont fără nivel Redări = false). Fără parametru de identitate. Singura definiție (ecran, funcția edge, rezervare, RLS). 20261131j.';
 REVOKE ALL ON FUNCTION public.fn_red_import_ai_poate(uuid) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_red_import_ai_poate(uuid) TO authenticated;
 
@@ -317,7 +317,7 @@ BEGIN
   SELECT string_agg(a.semnatura, ', ' ORDER BY a.semnatura) INTO v_rau
     FROM (VALUES
       -- >>> AMPRENTE-NOI 20261131j
-      ('public.fn_red_import_ai_poate(uuid)', '162b0c8a6b51fc0d602144bebc5a7174', 'sql', true, 's', 'boolean'),
+      ('public.fn_red_import_ai_poate(uuid)', 'b20a13bf9179b76c00812b63362bf32f', 'sql', true, 's', 'boolean'),
       ('public.fn_red_import_ai_rezerva(uuid,uuid,text,text,integer,integer,integer,integer,integer)', '959e29666c0086ac713cbf3af4bc2318', 'plpgsql', true, 'v', 'jsonb'),
       ('public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)', '33ac8ddf00565721662122fd7d71a3ef', 'plpgsql', true, 'v', 'boolean')
       -- <<< AMPRENTE-NOI 20261131j
