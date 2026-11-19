@@ -10,16 +10,39 @@
 //   { "actiune": "eroare",   "id": n, "incercare": uuid, "eroare": "...", "interogari": ["..."] }                 → 200 / 409
 //   { "actiune": "amana",    "id": n, "incercare": uuid }  — doar refuz CERT fără cost (429/529)                 → 200 / 409
 // 409 = preluarea nu mai e cea curentă (expirată / finalizată): rezultatul întârziat nu închide altă preluare.
+//   v3 (13.11.2026, decizia owner-ului A — numele nu pleacă la furnizorul modelului; fără migrare):
+//   { "actiune": "nume" } → 200 { persoane: string[], firme: string[], cui: string[] } — numele din platformă pentru MASCAREA din
+//   worker. Rămân pe serverul nostru (memoria workerului), nu pleacă la furnizor și nu se scriu pe disc. Citire keyset pe id până
+//   la pagina goală (L23); peste plafon sau o eroare de citire → 500, iar workerul nu preia nimic (fail closed) — niciodată o
+//   listă tăiată în tăcere.
+//   v3 r2 (review PR #1086): sursele de nume sunt TOATE registrele de terți / persoane + numele scrise liber din tabelele de lucru
+//   (logic.js, SURSE_NUME — furnizori, subcontractori, terți din contracte, personal extern, deținători Redări …); poarta și
+//   citirea sunt în logic.js, testate în vitest (logic.test.js). Coloanele „verificat: cod” se confirmă în information_schema
+//   ÎNAINTE de deploy (docs/intrebari/MASCARE_SI_VERDICT.md). LIVRARE: edge-ul nou se publică DOAR cu workerul OPRIT.
+//   v3 r3: răspunsul „nume” are și `localitati: string[]` (denumirile UAT + satele programate din red_uat, tabel deja citit) —
+//   workerul NU ascunde un cuvânt care e și localitate cunoscută, scris singur (decizia owner-ului: localitățile rămân vizibile).
+//   index.ts și logic.js se publică ÎMPREUNĂ.
+//   v4 (14.11.2026, fără migrare; r3 15.11.2026): { "actiune": "coada" } → 200 { de_preluat: boolean } sau 500 — DOAR CITIRE (O
+//   SINGURĂ numărătoare pe intrebari_tehnice: stare 'noua' SAU 'in_lucru', fără niciun ceas, prag, plafon sau dată); nu preia,
+//   nu scrie, niciun conținut de întrebare. Garanția: nicio întrebare care există în starea 'noua' sau 'in_lucru' în momentul
+//   citirii nu e sărită; una pusă sau revenită în coadă după citire e luată la rularea următoare (detaliile în logic.js).
+//   Workerul nou o întreabă înaintea listei de nume și sare peste nume doar la
+//   200 { de_preluat: false }; edge-ul VECHI răspunde 400 „Acțiune necunoscută” → workerul nou merge pe fluxul de azi.
+//   Logica și testele: logic.js (coadaDePreluat), logic.test.js.
 //
 // FIȘA DE SECURITATE (CLAUDE.md pct. 7):
 //  (a) conținut EXTERN: întrebările și atașamentele utilizatorilor trec prin edge spre worker — nu sunt interpretate aici;
 //  (b) scrie DOAR răspunsul/eroarea pe rândul „în lucru” (fn_intrebari_raspunde) + notificarea autorului; emite URL-uri semnate de citire
-//      (300 s) doar pentru atașamentele întrebării preluate; fără mail, bani sau drepturi;
+//      (300 s) doar pentru atașamentele întrebării preluate (v3: workerul nu le mai descarcă); v3: CITEȘTE numele angajaților și ale
+//      terților din tabelele din logic.js SURSE_NUME (doar coloanele de nume / CUI, niciodată telefon / e-mail / CNP / IBAN) și le dă
+//      DOAR workerului, pentru mascare; v4: „coada” NUMĂRĂ rânduri (intrebari_tehnice, fără conținut) și
+//      răspunde doar cu un boolean; fără mail, bani sau drepturi;
 //  (c) service_role: apelantul (serverul AI) n-are cont Supabase; RPC-urile și createSignedUrl îl cer;
 //  (d) cine pornește: doar deținătorul INTREBARI_WORKER_SECRET (fn_verifica_secret, fail closed);
 //  (e) confirmare umană: nu e cazul — răspunsul e informativ, ajunge doar la autor.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { citesteCorp, esteId, esteObiect, raspuns } from '../_shared/ocrLocal.ts'
+import { autorizat, numeDinPlatforma, raspunsCoada } from './logic.js'
 
 const ANTET = 'x-intrebari-secret'
 const NUME_SECRET = 'INTREBARI_WORKER_SECRET'
@@ -69,18 +92,38 @@ function curataInterogari(x: unknown): string[] {
   return x.filter(q => typeof q === 'string' && q.trim()).slice(0, INTEROGARI_MAX).map(q => String(q).trim().slice(0, 200))
 }
 
+// v3: numele din platformă, pentru mascarea din worker — sursele, keyset-ul și plafoanele sunt în logic.js (SURSE_NUME).
+// O pagină: 1000 de rânduri (plafonul max-rows), ordonate după id, după ultimul id văzut.
+function paginaNume(sb: ReturnType<typeof createClient>) {
+  return async (tabel: string, coloane: string, dupa: number | string | null) => {
+    let q = sb.from(tabel).select(coloane).order('id', { ascending: true }).limit(1000)
+    if (dupa !== null) q = q.gt('id', dupa)
+    return await q
+  }
+}
+
+// v4 r3: numărătoarea acțiunii „coada” — O SINGURĂ cerere HEAD cu count exact (niciun rând nu se întoarce), un singur SELECT în
+// BD (un instantaneu). Tabelul e fixat aici; filtrul `or` vine din logic.js (filtruOrPostgrest, lista albă eq, fără timp).
+function numaraCoada(sb: ReturnType<typeof createClient>) {
+  return async ({ tabel, or }: { tabel: string; or: string }) => {
+    if (tabel !== 'intrebari_tehnice' || typeof or !== 'string' || !or) return { count: null, error: { message: 'filtru' } }
+    const { count, error } = await sb.from('intrebari_tehnice').select('id', { count: 'exact', head: true }).or(or)
+    return { count, error }
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return raspuns(405, { error: 'Doar POST' })
   const url = Deno.env.get('SUPABASE_URL'), cheie = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
   if (!url || !cheie) return raspuns(500, { error: 'Configurare lipsă' })
   const sb = createClient(url, cheie, { auth: { persistSession: false, autoRefreshToken: false } })
 
-  const antet = req.headers.get(ANTET) || ''
-  if (!/^[0-9a-f]{64}$/.test(antet)) return raspuns(401, { error: 'Neautorizat' })
-  try {
-    const { data, error } = await sb.rpc('fn_verifica_secret', { p_nume: NUME_SECRET, p_secret: antet })
-    if (error || data !== true) return raspuns(401, { error: 'Neautorizat' })
-  } catch (_) { return raspuns(401, { error: 'Neautorizat' }) }
+  // POARTA, înaintea oricărei acțiuni (inclusiv „nume”): doar secretul dedicat; antetul Authorization (JWT de cont / anon) nu contează
+  const verifica = async (s: string) => {
+    const { data, error } = await sb.rpc('fn_verifica_secret', { p_nume: NUME_SECRET, p_secret: s })
+    return error ? false : data
+  }
+  if (!(await autorizat(req.headers.get(ANTET) || '', verifica))) return raspuns(401, { error: 'Neautorizat' })
 
   const c = await citesteCorp(req, 200_000)
   if (!c.ok) return raspuns(c.status, { error: c.error })
@@ -104,6 +147,19 @@ Deno.serve(async (req: Request) => {
     }
     return raspuns(200, { intrebare: { id: data.id, incercare: data.incercare, titlu: data.titlu, intrebare: data.intrebare, context: data.context ?? null,
                                        creat_la: data.creat_la, atasamente } })
+  }
+
+  if (corp.actiune === 'coada') {
+    const r = await raspunsCoada(numaraCoada(sb))
+    return raspuns(r.status, r.corp)
+  }
+
+  if (corp.actiune === 'nume') {
+    try {
+      const nume = await numeDinPlatforma(paginaNume(sb))
+      if (!nume) return raspuns(500, { error: 'Eroare internă' })
+      return raspuns(200, nume)
+    } catch (_) { return raspuns(500, { error: 'Eroare internă' }) }
   }
 
   if ((corp.actiune === 'raspunde' || corp.actiune === 'eroare' || corp.actiune === 'amana')

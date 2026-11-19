@@ -1,6 +1,7 @@
 export * from '../../supabase/functions/_shared/redariMailF2.mjs'
 
-export const MOTIVE_MAIL = Object.freeze({ fara_email: 'Fără e-mail valid', opt_out: 'Opt-out', canal_postal: 'Canal poștal, fără e-mail valid', deja_rezervat_trimis: 'Deja rezervat / trimis' })
+// fara_token (20261131i): deținător fără link personal de răspuns valid (token lipsă sau expirat) — exclus din lot, nu primește mail fără link / cu link mort.
+export const MOTIVE_MAIL = Object.freeze({ fara_email: 'Fără e-mail valid', opt_out: 'Opt-out', canal_postal: 'Canal poștal, fără e-mail valid', deja_rezervat_trimis: 'Deja rezervat / trimis', fara_token: 'Fără link de răspuns valid (token lipsă sau expirat)' })
 // Motivele vin din RPC; un rând poate avea mai multe motive, dar se numără o singură dată la excluși.
 export function inventarMail(randuri) {
   const motive = Object.fromEntries(Object.keys(MOTIVE_MAIL).map(k => [k, 0]))

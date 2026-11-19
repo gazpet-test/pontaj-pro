@@ -11,7 +11,7 @@ import { stariParcele, stariCuParcela, STARI_INCHISE, calculeazaStare, ultimulRa
 import { motivBlocareConvocator } from './ui/comune.jsx'
 import { avertismentInformare } from './informareGdpr.js'
 import { verificaDatePvA, verificaDatePvB, verificaDatePvC, STARI_TEREN, MOTIVE_PV_B } from './pv.js'
-import { verificaDateAdresaUat, verificaDateCerereImputernicire, celulaCsv } from './docx.js'
+import { verificaDateAdresaUat, verificaDateCerereImputernicire, verificaDateAnuntAfisare, celulaCsv } from './docx.js'
 import { areImputernicire, TEXTE_AR } from './plicuri.js'
 import { lipsuriUat } from './setari.js'
 import { motivBlocareRedari } from '../sms/smsLogica.js'
@@ -79,7 +79,7 @@ export function ghidModele({ proiect = {}, uats = [], smsPanou = null, smsPanouE
   // Jakarinos r2 P2 (L18): verificarea informării eșuată → nu „gata”; motivul spune că trebuie reîncărcat
   if (avertismentInformare(proiect)) lConv.push(avertismentInformare(proiect))
   out.push({ cod: 'convocator', model: 'Convocator (Model 1)', ce: 'Convocarea scrisă la constatare: zilele de sesiune, cod QR / link personal spre formular, informarea GDPR pe verso.',
-    cui: 'Fiecare deținător identificat, cu adresă cunoscută', canal: 'Poștă recomandată cu AR (în plicul comun)',
+    cui: 'Fiecare deținător identificat, cu adresă cunoscută', canal: 'Scrisoare recomandată sau curier, cu confirmare de primire (în plicul comun)',
     unde: '📋 Registru → 📄 Convocator (pe rând); ↻ Reîncarcă din 📄 Fișa parcelei', lipsuri: lConv, stare: stare(lConv),
     nota: 'Neidentificații și cei fără adresă nu primesc convocator: sunt convocați prin afișare la Primărie.' })
 
@@ -102,7 +102,7 @@ export function ghidModele({ proiect = {}, uats = [], smsPanou = null, smsPanouE
   if (!plin(proiect?.text_gdpr)) lForm.push('proiect fără text GDPR')
   if (!['contact_nume', 'contact_telefon', 'contact_email'].some(k => plin(proiect?.[k]))) lForm.push('proiect fără persoană de contact')
   const faraZile = sorteazaUat(uats).filter(u => lipsuriUat(u).includes('nicio zi de sesiune cu program')).map(numeUat)
-  out.push({ cod: 'formular', model: 'Formularul public de răspuns (QR / link)', ce: '4 opțiuni: particip (+ zi), nu particip fără obiecții (+ declarație), nu particip cu obiecții, constatare pe teren.',
+  out.push({ cod: 'formular', model: 'Formularul public de răspuns (QR / link)', ce: '3 opțiuni: particip (+ zi), nu particip fără obiecții (+ declarație), constatare pe teren. „Nu particip cu obiecții” e retrasă din 17.11.2026 (răspunsurile vechi rămân valabile).',
     cui: 'Deținătorul convocat (tokenul personal din QR)', canal: 'Online', unde: 'Se creează odată cu convocatorul; răspunsul intră singur în Registru',
     lipsuri: [...lForm, ...(faraZile.length ? [`„particip” indisponibil (fără zile de sesiune): ${faraZile.join(', ')}`] : [])],
     stare: lForm.length ? 'blocat' : faraZile.length ? 'partial' : 'gata', nota: 'Nu trimite nimic și nu generează PV (decizia 6): operatorul lucrează din Registru.' })
@@ -116,7 +116,7 @@ export function ghidModele({ proiect = {}, uats = [], smsPanou = null, smsPanouE
 
   const lPvA = [...fara, ...lipsuriProiectSiUat(uats, u => verificaDatePvA({ proiect, uat: u, parcela: {}, detinator: { nume: 'x' }, pv: PV_MARTOR }))]
   out.push({ cod: 'pv_a', model: 'PV A (Model 2) — constatare per deținător', ce: 'Procesul-verbal de constatare a readucerii terenului, cu propunerea din deviz.',
-    cui: 'Deținătorul (semnează)', canal: 'La sesiune sau trimis spre semnare prin poștă', unde: '📄 Fișa parcelei → PV A; 🗓️ Sesiune → PV A',
+    cui: 'Deținătorul (semnează)', canal: 'La sesiune sau trimis spre semnare, electronic', unde: '📄 Fișa parcelei → PV A; 🗓️ Sesiune → PV A',
     lipsuri: lPvA, stare: stare(lPvA), nota: 'Pe fiecare PV se completează data, locul, modul constatării și starea terenului.' })
 
   const lPvB = [...fara, ...lipsuriProiectSiUat(uats, u => verificaDatePvB({ proiect, uat: u, parcela: PARCELA_MARTOR, pv: PV_MARTOR, detinatori: [], pvs: [] }))]
@@ -143,14 +143,17 @@ export function ghidModele({ proiect = {}, uats = [], smsPanou = null, smsPanouE
     stare: starePvC, nota: 'Aceeași verificare ca butonul din Tronsoane, pe parcelele fiecărui tronson.' })
 
   const lAu = [...fara, ...lipsuriProiectSiUat(uats, u => verificaDateAdresaUat({ proiect, uat: u, nrDocument: u?.adresa_nr || 'AU-martor' }))]
-  out.push({ cod: 'adresa_uat', model: 'Adresa către Primărie (Model 4, AU-nnnn)', ce: 'Înștiințarea Primăriei: afișarea, zilele și sala sesiunii, reprezentantul UAT; anexele cu parcelele.',
+  out.push({ cod: 'adresa_uat', model: 'Adresa către Primărie (Model 4, AU-nnnn)', ce: 'Înștiințarea Primăriei: afișarea, zilele și sala sesiunii, reprezentantul UAT; Anexa 2 este anunțul de afișare (cu lista parcelelor), generat separat, Anexa 3 PV-ul de afișare.',
     cui: 'Primăria fiecărui UAT', canal: 'Registratură / poștă / e-mail (rândul C1 din Corespondență)', unde: '🏛️ UAT-uri → editare UAT → Generează adresa',
     lipsuri: lAu, stare: stare(lAu), nota: '' })
 
-  const lAfis = [...fara, ...lipsuriProiectSiUat(uats, lipsuriAfisare)]
-  out.push({ cod: 'afisare', model: 'Afișarea la Primărie', ce: 'Convocarea prin afișare pentru deținătorii neidentificați sau fără adresă; PV-ul de afișare îl dă Primăria.',
-    cui: 'Neidentificați / fără adresă', canal: 'Afișare', unde: '🏛️ UAT-uri → câmpurile afișării (perioadă, nr. PV afișare)',
-    lipsuri: lAfis, stare: stare(lAfis), nota: 'Termenul: cel puțin 10 zile calendaristice înainte de ziua 1 de sesiune.' })
+  // Anunțul de afișare (generat din 🏛️ UAT-uri, aceeași gardă ca butonul — L19) + consemnarea afișării (perioada + nr. PV; regula de
+  // „afișare completă” rămâne lipsuriAfisare / afisareCompleta, folosită și de centralizator)
+  const lAfis = [...fara, ...lipsuriProiectSiUat(uats, u => [...verificaDateAnuntAfisare({ proiect, uat: u }), ...lipsuriAfisare(u)])]
+  out.push({ cod: 'afisare', model: 'Afișarea la Primărie (anunțul de afișare + PV-ul de afișare)',
+    ce: 'Anunțul lipit la intrarea în primărie: convocarea pe UAT cu zilele de sesiune și lista parcelelor (fără date personale), pentru toți deținătorii, inclusiv neidentificații și cei fără adresă; PV-ul de afișare îl dă Primăria.',
+    cui: 'Toți deținătorii din UAT; obligatoriu pentru neidentificați / fără adresă', canal: 'Afișare', unde: '🏛️ UAT-uri → editare UAT → Anunț de afișare (DOCX); după afișare, câmpurile afișării (perioadă, nr. PV afișare)',
+    lipsuri: lAfis, stare: stare(lAfis), nota: 'Termenul: cel puțin 10 zile calendaristice înainte de ziua 1 de sesiune. Anunțul nu se salvează în ERP; afișarea se dovedește prin PV-ul de afișare.' })
 
   const lCerere = verificaDateCerereImputernicire({ proiect, uats })
   out.push({ cod: 'cerere_imputernicire', model: 'Cererea de împuternicire', ce: 'Cererea către Transgaz (anexă la scrisoarea A1/A2) — DRAFT Juridic.',

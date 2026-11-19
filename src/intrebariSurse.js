@@ -15,7 +15,7 @@ dupa fara intre sub peste cum cand daca acest aceasta aceste acestui acesta cel 
 am ne va vor iar deci doar tot toate fie unde cine cat cate the of and or for to is are be pe`.split(/\s+/))
 export const GENERICE = new Set(`verdict depinde este sunt fie face fac facut facute aplica aplic aplicat aplicabil aplicabila cere cerut ceruta
 cer exista poate pot alt alta alte altul altei acel acea aceea astfel privind referitor caz cazul orice toti fiecare art articol
-articolul articolului alin alineat alineatul pct punct punctul lit litera anexa sursa sursei sursele`.split(/\s+/))
+articolul articolului alin alineat alineatul pct punct punctul lit litera anexa sursa sursei sursele citat citatul citate`.split(/\s+/))
 const FARA_SURSA = 'nu am gasit sursa oficiala'
 
 export const normalizeaza = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -480,6 +480,17 @@ export function prezentareRaspuns({ v2, surse, interogari }) {
   if (v2 !== true) return { v2: false, cercetare: false, eticheta: ETICHETA_VECHE }
   const cercetare = surseAfisabile(surse).length > 0 || interogariAfisabile(interogari).length > 0
   return { v2: true, cercetare, eticheta: cercetare ? ETICHETA_CERCETARE : ETICHETA_VECHE }
+}
+
+/** Mesajul afișat la o întrebare în starea „eroare” (14.11.2026). Textele scrise de worker / edge / RPC se termină de obicei cu punct
+ *  și multe conțin deja îndemnul („Pune întrebarea din nou [mai târziu].”, „Reformulează [sau împarte] întrebarea.”) → nu se mai
+ *  adaugă nici punctul, nici „Poți pune întrebarea din nou.”. Lipsă / gol / doar spații = „eroare”, ca înainte. */
+const INDEMN_DIN_NOU = /\bpune\b[^.!?]*\bdin nou\b|\breformuleaz/
+export function mesajEroareIntrebare(eroare) {
+  const e = String(eroare ?? '').trim() || 'eroare'
+  const fraza = /[.!?…;:]$/.test(e) ? e : `${e}.`
+  const n = normalizeaza(e)
+  return INDEMN_DIN_NOU.test(n) ? `Nu s-a putut răspunde: ${fraza}` : `Nu s-a putut răspunde: ${fraza} Poți pune întrebarea din nou.`
 }
 
 /** Interogările web trimise (audit, doar ownerul le vede): listă de șiruri, max 20 × 200 de caractere. */

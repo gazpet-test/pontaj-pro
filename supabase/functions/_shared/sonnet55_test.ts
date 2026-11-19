@@ -5,7 +5,9 @@
 // Deci: (1) funcțiile care NU trimiteau `thinking` gândeau deja implicit pe Sonnet 5 (vezi comentariile din triere / ingest /
 // parse-certificat-plata: „Sonnet 5 gândește implicit … intră în max_tokens”) și rămân EXACT așa — a le pune `between_tools` ar fi o
 // schimbare de comportament, nu o păstrare; (2) funcțiile care trimiteau `disabled` trec pe `faraGandire(model)` (between_tools pe 5.5);
-// (3) cele cu `adaptive` explicit rămân adaptive. Testul fixează cele trei grupe pe sursă, ca o schimbare viitoare să fie deliberată.
+// (3) cele cu `adaptive` explicit rămân adaptive; (4) genereaza-capitol trimite `between_tools` scris literal (#1030, audit 08.11.2026:
+// fără gândire, ca tot plafonul de ieșire să rămână pentru text). Testul fixează cele patru grupe pe sursă, ca o schimbare viitoare
+// să fie deliberată.
 import { strict as assert } from 'node:assert'
 
 const rad = new URL('../', import.meta.url)
@@ -19,7 +21,9 @@ const ADAPTIV_IMPLICIT = ['citeste-orice/index.ts', 'detect-ordine/index.ts', 'm
   'ofertare-document-nou-citeste/index.ts', 'ofertare-e0-autofill/index.ts', 'ofertare-organigrama-spec/index.ts', 'ofertare-raspuns-set/index.ts',
   'ofertare-rfq-import/index.ts', 'ofertare-verificare-finala/index.ts', 'parse-certificat-plata/index.ts', 'ofertare-cerinte/core.ts']
 // (3) adaptive explicit
-const ADAPTIV_EXPLICIT = ['ofertare-genereaza-capitol/index.ts', 'ofertare-clarificari-propune/core.ts']
+const ADAPTIV_EXPLICIT = ['ofertare-clarificari-propune/core.ts']
+// (4) fără gândire, scris literal: `between_tools` (pe Sonnet 5.5 `disabled` dă 400) — schimbare deliberată din #1030
+const FARA_GANDIRE_LITERAL = ['ofertare-genereaza-capitol/index.ts']
 
 Deno.test('Sonnet 5.5: nicio funcție nu mai trimite thinking disabled pe Sonnet (400); cele 4 de pe disabled trec pe faraGandire(model)', () => {
   for (const f of FARA_GANDIRE) {
@@ -35,13 +39,23 @@ Deno.test('Sonnet 5.5: funcțiile fără thinking rămân fără (adaptive impli
   for (const f of ADAPTIV_EXPLICIT) assert.ok(sursa(f).includes("thinking: { type: 'adaptive' }"), f + ': nu mai e adaptive explicit')
 })
 
+Deno.test('Sonnet 5.5: genereaza-capitol trimite between_tools scris literal (fără gândire), niciodată disabled sau adaptive', () => {
+  for (const f of FARA_GANDIRE_LITERAL) {
+    const s = sursa(f)
+    const trimise = s.split('\n').filter((l) => TRIMITE_THINKING.test(l) && !l.trim().startsWith('//'))
+    assert.equal(trimise.length, 1, f + ': se așteaptă un singur parametru thinking, sunt ' + trimise.length)
+    assert.ok(trimise[0].includes("thinking: { type: 'between_tools' }"), f + ': nu mai trimite between_tools: ' + trimise[0].trim())
+    assert.ok(!/thinking\s*:\s*\{\s*type\s*:\s*'(disabled|adaptive)'/.test(s), f + ': thinking disabled / adaptive literal')
+  }
+})
+
 Deno.test('Sonnet 5.5: toate cele 18 funcții cer claude-sonnet-5-5; claude-sonnet-5 rămâne doar ca istoric / alias', () => {
-  for (const f of [...FARA_GANDIRE.filter((f) => !f.startsWith('ofertare-ocr-arbitreaza/')), ...ADAPTIV_IMPLICIT, ...ADAPTIV_EXPLICIT, 'ofertare-citire-test/index.ts']) {
+  for (const f of [...FARA_GANDIRE.filter((f) => !f.startsWith('ofertare-ocr-arbitreaza/')), ...ADAPTIV_IMPLICIT, ...ADAPTIV_EXPLICIT, ...FARA_GANDIRE_LITERAL, 'ofertare-citire-test/index.ts']) {
     assert.ok(sursa(f).includes("'claude-sonnet-5-5'"), f + ': nu cere claude-sonnet-5-5')
   }
   assert.ok(sursa('ofertare-ocr-arbitreaza/prompt.ts').includes("export const MODEL_ARBITRU = 'claude-sonnet-5-5'"))
   // 'claude-sonnet-5' (exact) apare doar ca alias spre 5.5 sau ca preț istoric al arbitrului
-  for (const f of [...FARA_GANDIRE, ...ADAPTIV_IMPLICIT, ...ADAPTIV_EXPLICIT, 'ofertare-citire-test/index.ts', 'ofertare-ocr-arbitreaza/prompt.ts']) {
+  for (const f of [...FARA_GANDIRE, ...ADAPTIV_IMPLICIT, ...ADAPTIV_EXPLICIT, ...FARA_GANDIRE_LITERAL, 'ofertare-citire-test/index.ts', 'ofertare-ocr-arbitreaza/prompt.ts']) {
     const linii = sursa(f).split('\n').filter((l) => l.includes("'claude-sonnet-5'") && !l.trim().startsWith('//'))
     for (const l of linii) assert.ok(/ALIAS/.test(l), f + ': claude-sonnet-5 în afara aliasului: ' + l.trim())
   }
@@ -58,16 +72,20 @@ Deno.test('Sonnet 5.5, cache: genereaza-capitol taxează cache hit 0,10 $/MTok (
   const citire = s.match(/^const PRICE_CACHE_READ = ([0-9.]+) \/ 1e6/m)
   assert.ok(pret && citire, 'PRICE_IN / PRICE_OUT / PRICE_CACHE_READ negăsite')
   const PRICE_IN = Number(pret![1]) / 1e6, PRICE_OUT = Number(pret![2]) / 1e6, PRICE_CACHE_READ = Number(citire![1]) / 1e6
-  const f = s.match(/cost \+= (\(u\.input_tokens \|\| 0\) \* PRICE_IN \+ cacheW \* PRICE_IN \* [0-9.]+ \+ cacheR \* PRICE_CACHE_READ \+ \(u\.output_tokens \|\| 0\) \* PRICE_OUT)/)
+  // #1030: costul se scrie o dată pe apel — ramura „cunoscut” (usage cu output_tokens finit) = formula; altfel estimarea MAXIMĂ
+  // (toată intrarea la tariful cel mai scump, cache write, + plafonul de ieșire), ca un cost neraportat să nu fie niciodată subestimat.
+  assert.ok(s.includes('const cunoscut = !!u && Number.isFinite(u.output_tokens)'), 'condiția „cunoscut” (output_tokens finit) negăsită')
+  const f = s.match(/const cost = cunoscut\s*\?\s*(\(u\.input_tokens \|\| 0\) \* PRICE_IN \+ cacheW \* PRICE_IN \* [0-9.]+ \+ cacheR \* PRICE_CACHE_READ \+ u\.output_tokens \* PRICE_OUT)\s*:\s*(tin \* PRICE_IN \* [0-9.]+ \+ MAX_OUT \* PRICE_OUT)\n/)
   assert.ok(f, 'formula de cost negăsită')
+  assert.equal(f![2], 'tin * PRICE_IN * 1.25 + MAX_OUT * PRICE_OUT', 'estimarea maximă nu mai e la tariful de cache write (1,25×) + plafonul de ieșire')
   const cost = new Function('u', 'cacheW', 'cacheR', 'PRICE_IN', 'PRICE_OUT', 'PRICE_CACHE_READ', 'return ' + f![1]) as
     (u: any, w: number, r: number, i: number, o: number, c: number) => number
   const c = (u: any, w: number, r: number) => cost(u, w, r, PRICE_IN, PRICE_OUT, PRICE_CACHE_READ)
   const aproape = (a: number, b: number) => Math.abs(a - b) < 1e-9
   // cache hit: 1M tokeni citiți din cache, 2.000 necache-uiți, 500 ieșire
   assert.ok(aproape(c({ input_tokens: 2000, output_tokens: 500 }, 0, 1_000_000), 2000 * 2e-6 + 0.10 + 500 * 10e-6))
-  assert.ok(aproape(c({}, 0, 1_000_000), 0.10))          // cache hit 0,10 $/MTok (0,05 × 2), NU 0,20
-  assert.ok(aproape(c({}, 1_000_000, 0), 2.50))          // cache write 5 min 2,50 $/MTok
+  assert.ok(aproape(c({ output_tokens: 0 }, 0, 1_000_000), 0.10))          // cache hit 0,10 $/MTok (0,05 × 2), NU 0,20
+  assert.ok(aproape(c({ output_tokens: 0 }, 1_000_000, 0), 2.50))          // cache write 5 min 2,50 $/MTok
   assert.ok(aproape(c({ input_tokens: 1_000_000, output_tokens: 1_000_000 }, 0, 0), 12))  // 2 + 10
   assert.ok(!/cacheR \* PRICE_IN \* 0\.1\b/.test(s), 'a rămas rata veche 0,1× pe cache hit')
 })

@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase.js'
 import { motivConvocatorUtilizator } from '../convocareUtilizatori.js'
 import { STARI } from '../stare.js'
 import { MOTIV_INFORMARE_NEPUBLICATA } from '../informareGdpr.js'
+import { areZiCuProgram } from '../setari.js'
 
 export const SABLON_CONVOCATOR = '/redari/sabloane/convocator.docx'
 // Proiecții explicite (review Jakarinos P2-5): fără token_raspuns pe red_detinatori — tokenul stă în red_detinatori_token
@@ -83,7 +84,7 @@ export function motivBlocareConvocator(proiect, uat, rand) {
   if (!String(proiect?.contract_nr || '').trim() || !proiect?.contract_data) lipsa.push('proiect fără nr./dată contract')
   if (!String(proiect?.imputernicire_nr || '').trim() || !proiect?.imputernicire_data) lipsa.push('proiect fără nr./dată împuternicire Transgaz')
   if (!uat) lipsa.push('UAT necunoscut')
-  else if (![1, 2, 3].some(i => uat[`sesiune_zi${i}`] && String(uat[`program_zi${i}`] || '').trim())) lipsa.push('UAT fără zi de sesiune cu program')
+  else if (!areZiCuProgram(uat)) lipsa.push('UAT fără zi de sesiune cu program')
   // D3: șablonul tipărește numele, telefonul și e-mailul de contact + telefonul TGZ → fiecare e obligatoriu (Setări proiect)
   const faraContact = [['contact_nume', 'persoană'], ['contact_telefon', 'telefon'], ['contact_email', 'e-mail']].filter(([k]) => !String(proiect?.[k] || '').trim()).map(([, e]) => e)
   if (faraContact.length) lipsa.push(`proiect fără contact Gazpet: ${faraContact.join(', ')} (Setări proiect → Contact pe convocări)`)
@@ -122,7 +123,14 @@ export const fmtNum = (n, dec = 2) => (n === null || n === undefined || n === ''
 export const azi = () => new Date().toISOString().slice(0, 10)
 
 // Mesaj de eroare lizibil din răspunsul supabase / excepție
-export const msgEroare = (e, fallback = 'Eroare necunoscută') => (e?.message || e?.error_description || e?.details || (typeof e === 'string' ? e : null) || fallback)
+// review #1140 r4: `details` / `hint` NU se afișează (pot conține valorile rândului, de ex. o dată personală semnalată la import);
+// fără `message`, doar codul erorii — aceeași regulă ca mesajEroareBd() din importTgz.js
+export const msgEroare = (e, fallback = 'Eroare necunoscută') => {
+  if (typeof e === 'string') return e || fallback
+  const m = (typeof e?.message === 'string' && e.message.trim()) ? e.message : (typeof e?.error_description === 'string' && e.error_description.trim() ? e.error_description : null)
+  if (m) return m
+  return typeof e?.code === 'string' && /^[0-9A-Z]{1,10}$/.test(e.code) ? `${fallback} (cod ${e.code})` : fallback
+}
 
 export const CALITATI = ['proprietar', 'coproprietar', 'mostenitor', 'arendas', 'utilizator', 'neidentificat']
 export const CANALE_CONVOCARE = ['posta', 'sms', 'afisare', 'telefon']
@@ -135,12 +143,39 @@ export const MOTIVE_RETUR = [
   { cod:'decedat', eticheta:'Decedat' },
   { cod:'altul', eticheta:'Altul (detaliu)' },
 ]
+// `retrasa`: decizia Răzvan 17.11.2026 (juridic#046) — „Nu particip, cu obiecții” nu se mai oferă la înregistrări NOI (cine are
+// obiecții vine la sesiune sau cere constatare pe teren). Răspunsurile vechi cu acest cod rămân valabile: eticheta rămâne aici
+// pentru afișare (registru, fișă, export), iar stare.js / pv.js îl tratează în continuare. Refuzul pe server (CHECK, RPC,
+// trigger) e o schimbare de bază de date, separată.
 export const OPTIUNI_RASPUNS = [
   { cod:'particip', eticheta:'Particip la sesiune' },
   { cod:'nu_particip_fara_obiectii', eticheta:'Nu particip, fără obiecții' },
-  { cod:'nu_particip_cu_obiectii', eticheta:'Nu particip, cu obiecții' },
+  { cod:'nu_particip_cu_obiectii', eticheta:'Nu particip, cu obiecții', retrasa:true },
   { cod:'constatare_teren', eticheta:'Cere constatare la teren' },
 ]
+// opțiunile oferite la un răspuns NOU (fără cele retrase)
+export const OPTIUNI_RASPUNS_NOI = OPTIUNI_RASPUNS.filter(o => !o.retrasa)
+// Validarea + rândul de INSERT în red_raspunsuri pentru un răspuns înregistrat de operator (📞 Răspuns), fără efecte (testabilă).
+// Lista albă = OPTIUNI_RASPUNS_NOI (aceeași regulă ca formularul public): o opțiune retrasă rămasă în stare, gol sau un cod
+// necunoscut întorc { eroare } și NU produc rândul, deci INSERT-ul nu pleacă. Rezultat: { eroare } | { rand }.
+export function pregatesteRaspunsManual({ optiune, zi, zile = [], obiectii, declaratie, canal, detinatorId, createdBy }) {
+  if (!OPTIUNI_RASPUNS_NOI.some(o => o.cod === optiune)) return { eroare: 'Opțiunea aleasă nu se mai înregistrează la un răspuns nou: alege una din listă.' }
+  const cereZi = optiune === 'particip'
+  const cereDeclaratie = optiune === 'nu_particip_fara_obiectii'
+  const cereObiectii = optiune === 'nu_particip_cu_obiectii' || optiune === 'constatare_teren'
+  const obj = String(obiectii ?? '').trim()
+  if (cereObiectii && !obj) return { eroare: 'Pentru această opțiune obiecțiile sunt obligatorii.' }
+  if (cereZi && !zile.length) return { eroare: 'UAT-ul nu are zile de sesiune stabilite — „particip” nu se poate înregistra încă.' }
+  if (cereZi && !zile.includes(zi)) return { eroare: 'Alege ziua de sesiune din lista UAT-ului.' }
+  if (cereDeclaratie && !declaratie) return { eroare: 'Bifează că deținătorul a confirmat verbal textul declarației.' }
+  return { rand: {
+    detinator_id: detinatorId, canal, optiune,
+    zi_sesiune_aleasa: cereZi ? zi : null,                       // doar pentru „particip”
+    obiectii_text: cereObiectii ? obj : null,
+    declaratie_confirmata: cereDeclaratie ? true : null,         // bifa explicită din modal
+    created_by: createdBy || null,
+  } }
+}
 export const etichetaOptiune = (cod) => OPTIUNI_RASPUNS.find(o => o.cod === cod)?.eticheta || cod || '-'
 export const etichetaRetur = (cod) => MOTIVE_RETUR.find(o => o.cod === cod)?.eticheta || cod || '-'
 

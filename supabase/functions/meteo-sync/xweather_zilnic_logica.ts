@@ -14,11 +14,16 @@
 //   - numele exacte ale câmpurilor fiecărei perioade (CAMPURI: lista căilor acceptate, în ordinea priorității — întâi forma conditions);
 //   - parametrii from / to ca timestamp UNIX pentru o zi locală și „closest” + radius pe observations/summary;
 //   - dacă abonamentul dă observations/summary (altfel observatii_stare = 'neautorizat', fără eroare pe zi).
-// LIMITE ASUMATE (spuse și în raportul livrării):
-//   - corecțiile furnizorului se prind automat doar pentru alaltăieri (reverificarea zilnică); o corecție mai târzie intră doar dacă owner-ul
-//     cere reverificarea intervalului: {xweather_backfill:true, site_id, de_la, pana, reverifica:true} (versiune nouă dacă diferă);
-//   - pasul zilnic completează automat doar ultimele ZILE_AUTO zile; o zi mai veche rămasă nesalvată se recuperează cu comanda owner-ului
-//     {xweather_backfill:true, site_id, de_la, pana} pe acel șantier (reluabilă cu `pana` = continua_pana din răspuns).
+// LIMITE ASUMATE (spuse și în raportul livrării; detaliile și cifrele cotei: docs/METEO_XWEATHER_COTA.md):
+//   - r4: corecțiile furnizorului NU se mai prind automat (reverificarea zilnică a lui alaltăieri s-a scos, ca pasul să încapă în cotă);
+//     o corecție intră doar dacă owner-ul cere reverificarea intervalului:
+//     {xweather_backfill:true, site_id, de_la, pana, reverifica:true} (versiune nouă dacă diferă). Un răspuns MAI SĂRAC la reverificare
+//     nu se scrie (garda r3, procesZi);
+//   - r4 / r5: pasul zilnic cere vremea DOAR pentru (a) șantierele active (raport zilnic în ultimele ZILE_ACTIVITATE zile): ieri + zilele
+//     lipsă din ultimele ZILE_RELUARE_ACTIVE, și (b) zilele-șantier cu raport zilnic și fără vreme din ultimele FEREASTRA_RAPOARTE_ZILE zile;
+//     ordinea se rotește (rotesteCoada); plafonul în unități, garda de cotă și termenul opresc rularea, restul se reia a doua zi. O zi mai
+//     veche de fereastră (cu sau fără raport) sau a unui șantier inactiv se recuperează doar cu comanda owner-ului
+//     {xweather_backfill:true, site_id, de_la, pana} (reluabilă cu `pana` = continua_pana din răspuns; zilele fără date sunt sărite și listate).
 import { esteZi, adunaZile, aziBucuresti, coordValide } from './istoric_logica.ts'
 
 export const SURSA_XW = 'Vaisala Xweather'
@@ -26,11 +31,25 @@ export const ENDPOINT_CONDITII = 'conditions/summary'
 export const ENDPOINT_OBSERVATII = 'observations/summary/closest'
 export const RAZA_STATIE_KM = 50
 export const PRIMA_ZI_XW = '2015-01-01'
-export const ZILE_AUTO = 31              // fereastra completării automate (cron): ultimele 31 de zile încheiate
-export const MAX_ZILE_AUTO = 20          // zile vechi lipsă completate pe o rulare de cron (peste ieri + reverificare), pe toate șantierele
 export const MAX_ZILE_APEL = 62          // completarea pornită de owner: cel mult atâtea zile pe apel (reluabilă cu `pana`)
 export const MAX_RASPUNS_OCTETI = 200_000
 export const TIMP_CERERE_MS = 25_000
+
+// ── cota Xweather — TOATE regulile pasului zilnic stau aici (r5: în UNITĂȚI DE COST din antete, xweather_cota_logica.ts) ─────────
+// O zi-șantier = conditions/summary (1 unitate / zi, documentat) + (dacă ziua are valori) observations/summary (nespecificat, estimat 1).
+export const ZILE_ACTIVITATE = 14        // șantier ACTIV = cel puțin un raport zilnic cu data ≥ ieri − 13 (ultimele 14 zile încheiate, plus azi)
+export const ZILE_RELUARE_ACTIVE = 7     // pe șantierele active: ieri + zilele lipsă din ultimele 7 (reluarea după 5xx / plafon / termen);
+                                         // cu 1 = strict „ieri” (o zi neajunsă fără raport s-ar pierde)
+export const FEREASTRA_RAPOARTE_ZILE = 31 // r5: zilele-șantier cu raport și fără vreme intră automat doar din ultimele 31 de zile (≥ ieri − 30);
+                                          // mai vechi = DOAR comanda owner-ului. O zi fără date e reîncercată cel mult cât stă în fereastră.
+export const MAX_UNITATI_XW_APEL = 62    // comanda owner-ului (completare / reverificare, un șantier): plafonul pe apel, în unități = exact apelul
+                                         // implicit (max_zile 31 × 2 cu costurile documentate); peste el restul rămâne „neajunsă” → continua_pana
+export const ACCESE_MAX_ZI = 2           // costul rezervat implicit pentru o zi-șantier (r5: crește dacă antetele arată mai mult, costZiSantier)
+export const BUGET_XW_ZILNIC_MS = 40_000 // pasul zilnic: termenul propriu al buclei Xweather (și termenul global al handlerului, index.ts)
+export const BUGET_XW_APEL_MS = 100_000  // comanda owner-ului (apel separat, nu din cron); tot sub termenul global
+export const MIN_TIMP_ZI_MS = 5_000      // o zi-șantier nouă începe doar dacă mai sunt cel puțin 5 s până la termen
+export const NEAJUNSA_PLAFON = 'neajunsă (plafonul de unități)'
+export const NEAJUNSA_TIMP = 'neajunsă (bugetul de timp)'
 
 // ── timp: ziua locală Europe/Bucharest ──────────────────────────────────────────────────────────────────────────
 const fmtOra = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
@@ -88,6 +107,11 @@ export function clasificaRaspuns(status: number, j: any): Clasa {
 // ── maparea rezumatului ─────────────────────────────────────────────────────────────────────────────────────────
 // coloana din tabel → [căile acceptate în perioada zilei (prima prezentă câștigă), minim, maxim (exclusiv), zecimale]
 // ordinea: întâi numele în stilul endpoint-ului conditions (windSpeed / windGust / humidity), apoi variantele în stilul observations (wind / rh)
+// DOCUMENTAT vs TOLERAT (r3): PRIMA cale din fiecare listă (CAMPURI, CAI_DIRECTIE, CAI_DESCRIERE) e cea din documentația oficială
+//   conditions/summary (temp.minC / maxC / avgC, precip.totalMM, snow.totalCM, windSpeed.maxKPH, windGust.maxKPH, windSpeed.maxDirDEG,
+//   humidity.avg, windSpeed.maxDir, weather.phrase). Celelalte sunt ALIASURI TOLERATE, nedocumentate pentru acest endpoint (numele din
+//   stilul observations: snowDepth, wind.*, windDir.*, rh, `weather` ca șir). Un alias folosit efectiv se întoarce în `aliasuri` și se
+//   numără separat în rezultatul funcției (aliasuri_folosite), ca să-l vedem la prima rulare reală și să-l scoatem dacă nu apare.
 export const CAMPURI: Record<string, [string[], number, number, number]> = {
   tmin_c: [['temp.minC'], -60, 60.0001, 2],
   tmax_c: [['temp.maxC'], -60, 60.0001, 2],
@@ -143,41 +167,45 @@ function perioadaZilei(obj: any, zi: string, forma: Forma): { summary?: any; mot
 }
 
 // conditions/summary → valorile zilei. { valori } | { lipsa } (nicio valoare pentru zi) | { respins } (formă / valoare invalidă: ziua NU se scrie)
-export function valoriDinConditii(j: any, zi: string): { valori?: Record<string, unknown>; lipsa?: string; respins?: string } {
+export function valoriDinConditii(j: any, zi: string): { valori?: Record<string, unknown>; lipsa?: string; respins?: string; aliasuri?: string[] } {
   const obj = primul(j?.response)
   if (!obj || typeof obj !== 'object') return { respins: 'răspuns conditions fără response' }
   const { summary: s, motiv } = perioadaZilei(obj, zi, 'conditions')
   if (motiv) return { respins: motiv }
   if (!s) return { lipsa: 'nicio perioadă pentru ziua cerută' }
   const v: Record<string, unknown> = {}
+  const aliasuri: string[] = []   // căile tolerate (nedocumentate) folosite efectiv: indexul > 0 în listă
   for (const [col, [cai, min, max, zec]] of Object.entries(CAMPURI)) {
     v[col] = null
-    for (const c of cai) {
+    for (const [i, c] of cai.entries()) {
       const x = cale(s, c)
       if (x === null || x === undefined) continue
       if (typeof x !== 'number' || !Number.isFinite(x) || x < min || x >= max) return { respins: `valoare invalidă pentru ${col}` }
       const r = rotunjeste(x, zec)
       if (r < min || r >= max) return { respins: `valoare invalidă pentru ${col}` }
       v[col] = r
+      if (i > 0) aliasuri.push(c)
       break
     }
   }
   if (v.vant_dir_grade === 360) v.vant_dir_grade = 0
   v.vant_dir = null
-  for (const c of CAI_DIRECTIE) {
+  for (const [i, c] of CAI_DIRECTIE.entries()) {
     const x = cale(s, c)
     if (x === null || x === undefined) continue
     if (typeof x !== 'string' || !DIRECTII.includes(x)) return { respins: 'direcția vântului invalidă' }
     v.vant_dir = x
+    if (i > 0) aliasuri.push(c)
     break
   }
   v.descriere = null
-  for (const c of CAI_DESCRIERE) {
+  for (const [i, c] of CAI_DESCRIERE.entries()) {
     const x = cale(s, c)
     if (x === null || x === undefined || (typeof x === 'object' && c === 'weather')) continue
     const t = textScurt(x, 200)
     if (t === undefined) return { respins: 'descrierea vremii invalidă' }
     v.descriere = t
+    if (i > 0) aliasuri.push(c)
     break
   }
   const t = v as Record<string, number | null>
@@ -186,7 +214,7 @@ export function valoriDinConditii(j: any, zi: string): { valori?: Record<string,
   if (['tmin_c', 'tmax_c', 'tmed_c', 'precipitatii_mm', 'zapada_cm', 'vant_max_kmh', 'rafala_max_kmh', 'umiditate_med'].every(c => v[c] == null)) {
     return { lipsa: 'nicio valoare numerică pentru zi' }
   }
-  return { valori: v }
+  return aliasuri.length ? { valori: v, aliasuri } : { valori: v }
 }
 
 // observations/summary/closest → stația (id, nume, distanța dată de API). Lipsa stației NU e eroare: observatii_stare o spune.
@@ -246,18 +274,40 @@ export function valoriEgale(a: Record<string, unknown>, b: Record<string, unknow
 
 // ── planul unei rulări ──────────────────────────────────────────────────────────────────────────────────────────
 // existente: site_id → (zi → ultima versiune a zilei, cu valorile). start: site_id → prima zi de luat în calcul (data_start a proiectului).
-// zilnic : ieri (dacă lipsește) + reverificarea lui alaltăieri (o singură dată în viața zilei: mâine nu mai e alaltăieri) pentru fiecare
-//          șantier, apoi zilele lipsă din ultimele ZILE_AUTO, de la cea mai nouă, cel mult MAX_ZILE_AUTO pe toate șantierele.
+// rapoarte (doar zilnic): site_id → zilele cu raport zilnic (rapoarte_zilnice, UNIQUE (site_id, data)).
+// zilnic (r4, cota): DOAR zile NOI (fără reverificare automată), în ordinea:
+//   (a) „activ”  — șantierele active (santierActiv): ieri + zilele lipsă din ultimele ZILE_RELUARE_ACTIVE (≥ data de start a proiectului),
+//                  chiar fără raport în ziua aceea (o zi nelucrată din cauza vremii e exact ziua pentru care vrem dovada); cele mai noi întâi;
+//   (b) „raport” — zilele-șantier cu raport zilnic și fără vreme (rapoarte întârziate) din fereastra de FEREASTRA_RAPOARTE_ZILE zile
+//                  (r5; mai vechi = doar comanda owner-ului), cele mai noi întâi; fără dubluri cu (a);
+//   nimic altceva. Planul NU taie: plafonul, garda de cotă și termenul le aplică bucla (index.ts), restul apare „neajunsă” și se reia;
+//   ordinea parcurgerii o rotește rotesteCoada (r5), ca zilele care eșuează mereu să nu ocupe plafonul în fiecare zi.
 // backfill (owner): zilele lipsă din [de, pana], de la cea mai nouă, cel mult maxZile (reluabil, idempotent: o zi existentă nu se mai cere);
 //          cu reverifica = true și zilele EXISTENTE din interval se reverifică (o corecție târzie a furnizorului = versiune nouă).
 //          Ziua de reluare NU o dă planul: o dă continuaPana(), după rezultatele scrierii (L05).
-export type Sarcina = { site_id: number; lat: number; lng: number; zi: string; tip: 'nou' | 'verificare'; anterior?: Record<string, unknown> }
+export type Sarcina = { site_id: number; lat: number; lng: number; zi: string; tip: 'nou' | 'verificare'; anterior?: Record<string, unknown>;
+  tinta?: 'activ' | 'raport' }
+// șantier activ = are cel puțin un raport zilnic cu data ≥ ieri − (ZILE_ACTIVITATE − 1)
+export function santierActiv(zile: Set<string> | undefined, ieri: string): boolean {
+  if (!zile || !zile.size) return false
+  const de = adunaZile(ieri, -(ZILE_ACTIVITATE - 1))
+  for (const z of zile) if (esteZi(z) && z >= de) return true
+  return false
+}
+// fereastra pasului zilnic (r5, mărginită): [ieri − (FEREASTRA_RAPOARTE_ZILE − 1), ieri] — cuprinde și reluarea șantierelor active (7 zile)
+// și activitatea (14 zile); rapoartele și vremea existentă se citesc din BD doar pe ea
+export function fereastraZilnica(ieri: string): string {
+  const de = adunaZile(ieri, -(Math.max(FEREASTRA_RAPOARTE_ZILE, ZILE_RELUARE_ACTIVE, ZILE_ACTIVITATE) - 1))
+  return de < PRIMA_ZI_XW ? PRIMA_ZI_XW : de
+}
+const maiNouIntai = (a: Sarcina, b: Sarcina) => (a.zi < b.zi ? 1 : a.zi > b.zi ? -1 : a.site_id - b.site_id)
 export function planXweather(
   sites: { id: number; lat: unknown; lng: unknown; proiect_id?: number | null }[],
   existente: Map<string, Map<string, Record<string, unknown>>>,
   start: Map<string, string | null>,
-  { mod, ieri, deLa = null, pana = null, maxZile = MAX_ZILE_APEL, reverifica = false }:
-    { mod: 'zilnic' | 'backfill'; ieri: string; deLa?: string | null; pana?: string | null; maxZile?: number; reverifica?: boolean },
+  { mod, ieri, deLa = null, pana = null, maxZile = MAX_ZILE_APEL, reverifica = false, rapoarte = new Map() }:
+    { mod: 'zilnic' | 'backfill'; ieri: string; deLa?: string | null; pana?: string | null; maxZile?: number; reverifica?: boolean;
+      rapoarte?: Map<string, Set<string>> },
 ) {
   if (!esteZi(ieri)) throw new Error('ieri invalid')
   if (deLa != null && (!esteZi(deLa) || deLa < PRIMA_ZI_XW || deLa > ieri)) throw new Error('de_la invalid')
@@ -270,34 +320,44 @@ export function planXweather(
   const lipsa = new Map<number, string[]>()   // site → zilele de cerut (lipsă, plus existente la reverificare), de la cea mai nouă
   const valide: { id: number; lat: number; lng: number }[] = []
   const exSite = new Map<number, Map<string, Record<string, unknown>>>()
+  const activ: Sarcina[] = [], dinRaport: Sarcina[] = []
+  const activi: number[] = []
   for (const s of sites) {
     if (!coordValide(s.lat, s.lng)) { sarite.push({ site_id: s.id, motiv: 'fără coordonate (lat / lng)' }); continue }
-    valide.push({ id: s.id, lat: s.lat as number, lng: s.lng as number })
+    const lat = s.lat as number, lng = s.lng as number
+    valide.push({ id: s.id, lat, lng })
     const ex = existente.get(String(s.id)) || new Map()
     exSite.set(s.id, ex)
-    let de: string, sus: string
     const st = s.proiect_id != null ? start.get(String(s.proiect_id)) ?? null : null
     if (mod === 'zilnic') {
-      de = adunaZile(ieri, -(ZILE_AUTO - 1)); sus = adunaZile(ieri, -2)
-      if (st && esteZi(st) && st > de) de = st
-    } else {
-      sus = pana ?? ieri
-      const d0 = deLa ?? (st && esteZi(st) ? st : null)
-      if (!d0) { sarite.push({ site_id: s.id, motiv: 'fără dată de început (proiect fără data_start; se poate da de_la)' }); continue }
-      de = d0 < PRIMA_ZI_XW ? PRIMA_ZI_XW : d0
+      const zr = rapoarte.get(String(s.id))
+      const luate = new Set<string>()
+      if (santierActiv(zr, ieri)) {
+        activi.push(s.id)
+        const jos = adunaZile(ieri, -(ZILE_RELUARE_ACTIVE - 1))
+        for (let d = ieri; d >= jos; d = adunaZile(d, -1)) {
+          if (ex.has(d) || d < PRIMA_ZI_XW || (st && esteZi(st) && d < st)) continue
+          activ.push({ site_id: s.id, lat, lng, zi: d, tip: 'nou', tinta: 'activ' }); luate.add(d)
+        }
+      }
+      const josRap = fereastraZilnica(ieri)
+      for (const d of zr || []) {
+        if (!esteZi(d) || d > ieri || d < PRIMA_ZI_XW || d < josRap || ex.has(d) || luate.has(d)) continue
+        dinRaport.push({ site_id: s.id, lat, lng, zi: d, tip: 'nou', tinta: 'raport' })
+      }
+      continue
     }
+    const sus = pana ?? ieri
+    const d0 = deLa ?? (st && esteZi(st) ? st : null)
+    if (!d0) { sarite.push({ site_id: s.id, motiv: 'fără dată de început (proiect fără data_start; se poate da de_la)' }); continue }
+    const de = d0 < PRIMA_ZI_XW ? PRIMA_ZI_XW : d0
     const z: string[] = []
-    for (let d = sus; d >= de; d = adunaZile(d, -1)) if (!ex.has(d) || (mod === 'backfill' && reverifica)) z.push(d)
+    for (let d = sus; d >= de; d = adunaZile(d, -1)) if (!ex.has(d) || reverifica) z.push(d)
     lipsa.set(s.id, z)
-    if (mod === 'zilnic') {
-      if (!ex.has(ieri) && (!st || !esteZi(st) || st <= ieri)) sarcini.push({ site_id: s.id, lat: s.lat as number, lng: s.lng as number, zi: ieri, tip: 'nou' })
-      const al = adunaZile(ieri, -1)
-      if (ex.has(al)) sarcini.push({ site_id: s.id, lat: s.lat as number, lng: s.lng as number, zi: al, tip: 'verificare', anterior: ex.get(al) })
-      else if (!st || !esteZi(st) || st <= al) sarcini.push({ site_id: s.id, lat: s.lat as number, lng: s.lng as number, zi: al, tip: 'nou' })
-    }
   }
-  // zilele lipsă: pe rând (round-robin) între șantiere, de la cea mai nouă, până la buget
-  const buget = mod === 'zilnic' ? MAX_ZILE_AUTO : maxZile
+  if (mod === 'zilnic') return { sarcini: [...activ.sort(maiNouIntai), ...dinRaport.sort(maiNouIntai)], sarite, ramase: 0, activi }
+  // backfill: zilele lipsă de la cea mai nouă, până la maxZile (un singur șantier pe apel)
+  const buget = maxZile
   let luate = 0
   const idx = new Map<number, number>()
   for (let progres = true; progres && luate < buget;) {
@@ -313,7 +373,92 @@ export function planXweather(
   }
   let ramase = 0
   for (const s of valide) ramase += Math.max(0, (lipsa.get(s.id) || []).length - (idx.get(s.id) || 0))
-  return { sarcini, sarite, ramase }
+  return { sarcini, sarite, ramase, activi: [] as number[] }
+}
+
+// ── r5: coada nu se mai poate înfometa ─────────────────────────────────────────────────────────────────────────────
+// „Ieri” pe șantierele active are partea lui (r6: nu mai e prioritate fixă, vezi partiCoada mai jos). Restul cozii (zilele lipsă ale șantierelor
+// active + zilele cu raport din fereastră, cele mai noi întâi) se parcurge circular dintr-un punct de pornire care se mută determinist cu ziua calendaristică:
+//   pornire = ⌊ fracția(indexul zilei `ieri` × φ) × lungimea cozii ⌋, φ = (√5 − 1) / 2 (șirul lui Weyl / raportul de aur).
+// Fracțiile succesive acoperă uniform [0, 1) oricât s-ar scurta coada între rulări (zilele servite ies din ea), deci zilele care eșuează mereu
+// („furnizorul nu are date”, coordonate greșite) nu mai pot ocupa plafonul în fiecare zi înaintea celorlalte. O pornire „(index × pas) mod
+// lungime” s-a dovedit mai slabă în simulare: se decalează când coada se scurtează (plafon 10: 70 de rulări în cel mai rău caz, față de 26).
+// Dacă toată coada încape sigur în rulare (≤ pas = plafon / costul unei zile), ordinea rămâne „cele mai noi întâi” (nu e nimic de împărțit).
+//
+// r6 (P1 r5: prioritatea fixă „ieri” putea înfometa complet restanțele — plafon 10, zece șantiere active cu câte o zi nouă pe zi → cele 5
+// locuri luate mereu de „ieri”, zero restanțe în 31 de rulări): coada are acum DOUĂ PĂRȚI, „ieri” (ziua nouă a șantierelor active) și
+// „restanțe” (tot restul). Când există amândouă, partiCoada rezervă restanțelor cel puțin o treime din locurile rulării (⌈pas / 3⌉, minimum
+// o zi-șantier), iar restul rămâne lui „ieri”; partea nefolosită a uneia trece celeilalte. Plafon 10 (pas 5): 2 restanțe + 3 ieri; plafon 60
+// (pas 30): 10 + 20. La pas 1 locul alternează după paritatea zilei. Rotația (φ) rămâne în interiorul fiecărei părți, iar cele două părți se
+// împletesc uniform în ORDINEA DE EXECUȚIE (r7: rotunjire, nu ⌊…⌋): în orice prefix al cozii fiecare parte e la cel mult ½ poziție de
+// proporția planificată, deci o oprire după oricâte poziții (gardă de cotă actualizată, termen, cost mai mare) le atinge pe amândouă
+// proporțional, nu doar pe cea de la coadă. (Nu garantează partea ÎNTREAGĂ: o oprire după 2 poziții servește 1 + 1, nu 3 + 2.)
+// r8: când „ieri” are loc în rulare, el începe rularea (prioritatea cerută de owner); restul se împletește ca în r7, cu abatere < 1 poziție.
+export const indexZi = (zi: string) => Math.round(Date.parse(zi + 'T00:00:00Z') / 864e5)
+const PHI = (Math.sqrt(5) - 1) / 2
+export const esteIeri = (s: { tinta?: string; zi: string }, ieri: string) => s.tinta === 'activ' && s.zi === ieri
+export const PARTE_RESTANTE = 3            // restanțele: cel puțin ⌈pas / 3⌉ locuri pe rulare (minimum 1) când există și „ieri”
+export function partiCoada(nIeri: number, nRest: number, pas: number, ieri: string) {
+  const p = Math.max(1, Math.floor(pas))
+  const rezRest = !nRest ? 0 : !nIeri ? p : p >= 2 ? Math.min(p - 1, Math.max(1, Math.ceil(p / PARTE_RESTANTE))) : indexZi(ieri) % 2
+  const rezIeri = p - rezRest
+  return { pas: p, rezervat_restante: rezRest, rezervat_ieri: rezIeri,
+    ieri: Math.min(nIeri, rezIeri + Math.max(0, rezRest - nRest)), restante: Math.min(nRest, rezRest + Math.max(0, rezIeri - nIeri)) }
+}
+export function rotesteCoada(sarcini: Sarcina[], ieri: string, pas: number): { sarcini: Sarcina[]; pornire: number } {
+  if (!esteZi(ieri)) throw new Error('ieri invalid')
+  const prime = sarcini.filter(s => esteIeri(s, ieri))
+  const rest = sarcini.filter(s => !esteIeri(s, ieri))
+  // totul încape: ordinea „ieri, apoi cele mai noi întâi” (nu e nimic de împărțit)
+  if (prime.length + rest.length <= Math.max(1, Math.floor(pas))) return { sarcini: [...prime, ...rest], pornire: 0 }
+  const pt = partiCoada(prime.length, rest.length, pas, ieri)
+  const f = (indexZi(ieri) * PHI) % 1
+  const roteste = (q: Sarcina[], locuri: number) => {
+    const o = q.length > locuri ? Math.min(q.length - 1, Math.floor(f * q.length)) : 0
+    return { q: [...q.slice(o), ...q.slice(0, o)], o }
+  }
+  const R = roteste(rest, pt.restante), I = roteste(prime, pt.ieri)
+  const tot = pt.ieri + pt.restante
+  const out: Sarcina[] = []
+  // r7: restanțele din primele m poziții = round(m × restante / tot) (nu ⌊…⌋): în ORICE prefix (o oprire după k poziții, de gardă /
+  // termen / cost) fiecare parte e la cel mult ½ poziție de proporția planificată. Cu ⌊…⌋ restanțele erau mereu în urmă (pas 5, 3 + 2:
+  // „IIRIR” — o oprire după 2 poziții le lăsa la zero); acum „IRIRI”. La pas întreg, aceleași 2 + 3 (round(tot × r / tot) = r).
+  // r8 (re-review r7: plafon 10, 1 ieri + 4 restanțe dădea „R R I…”; cu 18 s pe zi și pasul de 40 s, „ieri” rămânea neajunsă): când „ieri”
+  // are cel puțin un loc în rulare (pt.ieri ≥ 1), PRIMA poziție e a lui „ieri” → restanțele din primele m poziții = min(round(…), m − 1).
+  // Garanția, în orice prefix de m ≥ 1 poziții (până se epuizează o parte): numărul de restanțe e ⌊m × r / tot⌋ sau ⌈m × r / tot⌉, deci
+  // fiecare parte e la MAI PUȚIN de o poziție de proporția planificată (½ cât timp limita m − 1 nu lucrează). Exemple: 3 + 2 → „IRIRI”
+  // (neschimbat), 1 + 4 → „IRRRR”, 1 + 3 → „IRRR”.
+  const pana = (m: number) => {
+    const c = Math.floor((2 * m * pt.restante + tot) / (2 * tot))
+    return pt.ieri >= 1 ? Math.min(c, Math.max(0, m - 1)) : c
+  }
+  for (let k = 0, i = 0, r = 0; i < I.q.length || r < R.q.length; k++) {
+    const vreaRest = pana(k + 1) > pana(k)
+    if ((vreaRest && r < R.q.length) || i >= I.q.length) out.push(R.q[r++]); else out.push(I.q[i++])
+  }
+  return { sarcini: out, pornire: R.o }
+}
+
+// ── plafonul de unități, termenul și oprirea rulării (aplicate de bucla din index.ts) ─────────────────────────────────
+// o zi-șantier începe doar dacă (1) încape ÎNTREAGĂ sub plafon (costZi: implicit ACCESE_MAX_ZI = 2; r5: maximul văzut în antete) — rularea
+// nu trece de plafon decât dacă un antet arată un cost peste cel rezervat — și (2) mai sunt cel puțin MIN_TIMP_ZI_MS până la termen.
+// null = poate începe; altfel motivul („neajunsă …”, se reia la rularea următoare).
+export function poateIncepeZi(unitati: number, plafon: number, acum: number, termen: number, costZi = ACCESE_MAX_ZI): string | null {
+  if (unitati + costZi > plafon) return NEAJUNSA_PLAFON
+  if (acum + MIN_TIMP_ZI_MS > termen) return NEAJUNSA_TIMP
+  return null
+}
+// timpul unei cereri: cel mult TIMP_CERERE_MS și niciodată după termen (pragul se impune la fiecare cerere, nu se constată la final);
+// ≤ 0 = cererea NU se mai trimite (nu e acces)
+export const timpCerere = (acum: number, termen: number) => Math.min(TIMP_CERERE_MS, termen - acum)
+// răspunsul care oprește TOATĂ rularea: limita de accese a furnizorului (429 / maxhits_*) la orice cerere, sau contul neautorizat la
+// conditions (fără el nicio zi nu se poate lua). Cererile următoare ar consuma accese degeaba; zilele rămase apar „neajunsă (oprit: …)”.
+// „neautorizat” la observations NU oprește: e starea stației (observatii_stare), ziua se scrie.
+export function motivOprire(endpoint: 'conditions' | 'observations', status: number, j: any): string | null {
+  const cod = typeof j?.error?.code === 'string' ? j.error.code : ''
+  if (status === 429 || /^maxhits/.test(cod)) return `limita de accese a furnizorului (${status}${cod ? ' ' + cod.slice(0, 40) : ''})`
+  if (endpoint === 'conditions' && clasificaRaspuns(status, j) === 'neautorizat') return `cont neautorizat la conditions (${status})`
+  return null
 }
 
 // ── reluarea completării (backfill, un șantier pe apel): DUPĂ rezultate, nu după plan (L05) ─────────────────────────────
@@ -329,13 +474,43 @@ export function continuaPana(sarcini: Sarcina[], confirmate: Set<string>, ramase
 }
 // rezultatul unei zile → confirmată sau nu (pentru continuaPana)
 // deno-lint-ignore no-explicit-any
+// Un răspuns mai sărac la reverificare (incomplet) e și el rezultat DOVEDIT: furnizorul a răspuns, versiunea afișată rămâne cea completă;
+// altfel cursorul completării s-ar bloca pe zi la nesfârșit.
 export function zConfirmata(z: any, scriere: 'ok' | 'deja' | 'eroare' | null): boolean {
-  if (z?.neschimbat === true || (typeof z?.lipsa === 'string' && z.lipsa)) return true
+  if (z?.neschimbat === true || (typeof z?.lipsa === 'string' && z.lipsa) || (typeof z?.incomplet === 'string' && z.incomplet)) return true
   return !!z?.rand && (scriere === 'ok' || scriere === 'deja')
 }
 
+// ── garda reverificării (r3): o versiune nouă nu are voie să piardă nimic față de cea afișată ─────────────────────────────
+// Câmpurile stației (în afara VALORI, comparate doar la pierdere): poziția stației, citită și ea din vedere ca versiune anterioară.
+export const STATIE_EXTRA = ['statie_lat', 'statie_lng']
+// câmpurile care aveau valoare în versiunea anterioară și ar deveni NULL în cea nouă (STATIE_EXTRA doar dacă anteriorul le are)
+export function campuriPierdute(anterior: Record<string, unknown>, nou: Record<string, unknown>): string[] {
+  return [...VALORI, ...STATIE_EXTRA.filter(c => c in anterior)].filter(c => anterior[c] != null && nou[c] == null)
+}
+// stația versiunii anterioare se păstrează când reverificarea observațiilor NU aduce o stație: anteriorul avea stație și acum nu mai e
+// (eroare 4xx, neautorizat, fără stație), sau acum e „eroare” peste o stare cunoscută (fara_statie / neautorizat). „eroare” nu e informație.
+export function pastreazaStatia(anterior: Record<string, unknown>, statie: Statie): boolean {
+  if (anterior.observatii_stare === 'ok') return statie.observatii_stare !== 'ok'
+  return statie.observatii_stare === 'eroare' && anterior.observatii_stare != null && anterior.observatii_stare !== 'eroare'
+}
+const statieAnterioara = (a: Record<string, unknown>): Statie => ({
+  observatii_stare: a.observatii_stare as Statie['observatii_stare'],
+  statie_id: (a.statie_id ?? null) as string | null, statie_nume: (a.statie_nume ?? null) as string | null,
+  statie_distanta_km: a.statie_distanta_km == null ? null : Number(a.statie_distanta_km),
+  statie_lat: a.statie_lat == null ? null : Number(a.statie_lat), statie_lng: a.statie_lng == null ? null : Number(a.statie_lng),
+})
+
 // ── o zi: din cele două răspunsuri → rândul de scris, sau motivul pentru care nu se scrie ────────────────────────────
-// { rand } | { lipsa } | { respins } | { tranzitoriu } | { eroare } | { neschimbat }
+// { rand } | { lipsa } | { respins } | { tranzitoriu } | { eroare } | { neschimbat } | { incomplet }
+//   + statie_pastrata (reverificarea observațiilor a eșuat, stația vine din versiunea anterioară) + aliasuri (căi tolerate folosite)
+// GARDA REVERIFICĂRII (r3): la tip 'verificare' o versiune nouă se scrie DOAR dacă nu pierde nimic față de cea afișată:
+//   - observațiile eșuate nu înlocuiesc stația cunoscută: se păstrează stația versiunii anterioare, iar dovada eșecului stă în
+//     raspuns_observatii (obiectul { statie_din_versiunea, reverificare_observatii: 'esuata', status, raspuns }) și în rezultatul funcției;
+//   - dacă vreun câmp care avea valoare ar deveni NULL → { incomplet } — NIMIC scris (tabelul nu admite UPDATE / DELETE, iar orice rând
+//     nou ar deveni versiunea afișată; un rând „marcat” ar cere coloană nouă în migrare), doar consemnat în rezultat (reverificari_incomplete);
+//   - o corecție reală (valori diferite, la fel de complete sau mai complete) = versiune nouă, ca până acum.
+// La tip 'nou' (prima versiune) nu există nimic de degradat: se scrie cu câmpurile lipsă NULL.
 export function procesZi(s: Sarcina, cond: { status: number; json: any; cerere: string }, obs: { status: number; json: any; cerere: string } | null) {
   const cc = clasificaRaspuns(cond.status, cond.json)
   if (cc === 'tranzitoriu') return { tranzitoriu: `conditions ${cond.status || 'rețea / timp depășit'}` }
@@ -344,14 +519,49 @@ export function procesZi(s: Sarcina, cond: { status: number; json: any; cerere: 
   const m = valoriDinConditii(cond.json, s.zi)
   if (m.respins) return { respins: m.respins }
   if (m.lipsa) return { lipsa: m.lipsa }
+  const al = m.aliasuri?.length ? { aliasuri: m.aliasuri } : {}
   if (!obs) return { eroare: 'cererea de observații lipsește' }
   const co = clasificaRaspuns(obs.status, obs.json)
   if (co === 'tranzitoriu') return { tranzitoriu: `observations ${obs.status || 'rețea / timp depășit'}` }
-  const statie = statieDinObservatii(co, obs.json, s.zi)
+  let statie = statieDinObservatii(co, obs.json, s.zi)
+  let jObs: unknown = obs.json
+  let pastrata = false
+  const ant = s.tip === 'verificare' ? s.anterior : undefined
+  if (ant && pastreazaStatia(ant, statie)) {
+    pastrata = true
+    jObs = { statie_din_versiunea: Number(ant.versiune), reverificare_observatii: 'esuata', status: obs.status, stare: statie.observatii_stare, raspuns: obs.json ?? null }
+    statie = statieAnterioara(ant)
+  }
+  const sp = pastrata ? { statie_pastrata: true } : {}
   const nou = { ...m.valori, ...statie }
-  if (s.tip === 'verificare' && s.anterior && valoriEgale(nou, s.anterior)) return { neschimbat: true }
-  const versiune = s.tip === 'verificare' && s.anterior ? Number(s.anterior.versiune) + 1 : 1
+  if (ant) {
+    const pierdute = campuriPierdute(ant, nou)
+    if (pierdute.length) return { incomplet: `răspuns incomplet la reverificare (ar pierde: ${pierdute.join(', ')})`, ...sp, ...al }
+    if (valoriEgale(nou, ant)) return { neschimbat: true, ...sp, ...al }
+  }
+  const versiune = ant ? Number(ant.versiune) + 1 : 1
   if (!Number.isInteger(versiune) || versiune < 1) return { eroare: 'versiunea anterioară invalidă' }
   return { rand: randXweather({ site_id: s.site_id, zi: s.zi, lat: s.lat, lng: s.lng, versiune, valori: m.valori!, statie,
-    cerCond: cond.cerere, cerObs: obs.cerere, jCond: cond.json, jObs: obs.json }) }
+    cerCond: cond.cerere, cerObs: obs.cerere, jCond: cond.json, jObs }), ...sp, ...al }
 }
+
+// ── rezultatul unui lot (r3): spune adevărul despre zilele nesalvate ─────────────────────────────────────────────────
+// motivul pentru care o zi neconfirmată nu s-a salvat (pentru zile_nesalvate)
+// deno-lint-ignore no-explicit-any
+export function motivNesalvat(z: any, scriere: 'ok' | 'deja' | 'eroare' | null): string {
+  if (z?.tranzitoriu) return 'tranzitoriu (se reia): ' + z.tranzitoriu
+  if (z?.respins) return 'respins: ' + z.respins
+  if (scriere === 'eroare') return 'scriere eșuată'
+  if (z?.eroare) return 'eroare: ' + z.eroare
+  return 'eroare'
+}
+export type Nesalvata = { site_id: number; zi: string; motiv: string }
+// complet = fiecare zi cerută are rezultat dovedit; ok = complet și fără erori. Un lot doar cu tranzitorii (5xx / 429 / rețea) = ok:false,
+// complet:false (înainte r2 dădea ok:true). Lista e plafonată (62), numărul nu.
+export function rezultatLot(erori: string[], nesalvate: Nesalvata[]) {
+  const complet = nesalvate.length === 0
+  return { ok: complet && erori.length === 0, complet, nr_nesalvate: nesalvate.length, zile_nesalvate: nesalvate.slice(0, 62) }
+}
+// starea HTTP a răspunsului funcției: 207 când pasul Xweather a rulat și nu e complet (rămâne 2xx pentru apelanții existenți, dar
+// se vede în net._http_response.status_code al cron-ului); 200 altfel
+export const statusHttpXweather = (xw: { ok?: unknown } | null | undefined) => (xw != null && xw.ok !== true ? 207 : 200)

@@ -26,37 +26,50 @@ const CHEI_SARITE = new Set(['snapshot_sha256', 'snapshot_data', 'encrypted_cont
 
 export const caleValida = c => typeof c === 'string' && /^docs\/[A-Za-z0-9_\-./]+\.(md|json)$/.test(c) && !c.includes('..')
 
-/** Taie un text lung în bucăți ≤ max, pe paragrafe (apoi pe rânduri / tare, dacă un paragraf e prea lung). */
-export function taie(text, max = BUCATA_MAX) {
-  const out = []; let cur = ''
-  const pune = p => {
-    if (p.length > max) {
-      if (cur) { out.push(cur); cur = '' }
-      for (let i = 0; i < p.length; i += max) out.push(p.slice(i, i + max))
-      return
+/** Ca taie(), dar fiecare bucată știe și paragraful de DINAINTEA primului ei paragraf în fișierul sursă (r5, regula B din motor):
+ *  [{text, precedent}] — precedent = paragraful brut (fără spațiile de la capete), '' = niciunul (începutul fișierului), null = bucata
+ *  e o felie din mijlocul unui paragraf prea lung (marginea ei oricum nu e sigură). `inainte` = paragraful de dinaintea textului. */
+export function taieCuPrecedent(text, max = BUCATA_MAX, inainte = '') {
+  const out = []
+  let cur = null, prec = inainte
+  const inchide = () => { if (cur) { out.push(cur); cur = null } }
+  for (const p of String(text ?? '').replace(/\r/g, '').split(/\n\s*\n/)) {
+    const t = p.trim()
+    if (!t) continue
+    if (t.length > max) {
+      inchide()
+      for (let i = 0; i < t.length; i += max) out.push({ text: t.slice(i, i + max), precedent: i === 0 ? prec : null })
+    } else {
+      if (cur && cur.text.length + 2 + t.length > max) inchide()
+      if (cur) cur.text += '\n\n' + t
+      else cur = { text: t, precedent: prec }
     }
-    if (cur && cur.length + 2 + p.length > max) { out.push(cur); cur = '' }
-    cur = cur ? cur + '\n\n' + p : p
+    prec = t
   }
-  for (const p of String(text ?? '').replace(/\r/g, '').split(/\n\s*\n/)) { const t = p.trim(); if (t) pune(t) }
-  if (cur) out.push(cur)
+  inchide()
   return out
 }
 
-/** Markdown → bucăți pe secțiuni (titlu = calea titlurilor, max 3 niveluri). */
+/** Taie un text lung în bucăți ≤ max, pe paragrafe (apoi pe rânduri / tare, dacă un paragraf e prea lung). */
+export function taie(text, max = BUCATA_MAX) {
+  return taieCuPrecedent(text, max).map(b => b.text)
+}
+
+/** Markdown → bucăți pe secțiuni (titlu = calea titlurilor, max 3 niveluri). r5: `precedent` = paragraful de dinaintea bucății în
+ *  fișier — un rând de titlu („## …”) e și el un paragraf (o listă introdusă de un titlu care se termină cu „:” rămâne listă). */
 export function bucatiMd(cale, text, max = BUCATA_MAX) {
   const out = [], stiva = []
-  let corp = []
+  let corp = [], inainte = ''
   const inchide = () => {
     const titlu = stiva.filter(Boolean).slice(-3).join(' › ')
-    for (const b of taie(corp.join('\n'), max)) out.push({ cale, titlu, text: b })
+    for (const b of taieCuPrecedent(corp.join('\n'), max, inainte)) out.push({ cale, titlu, text: b.text, precedent: b.precedent })
     corp = []
   }
   let inCod = false
   for (const linie of String(text ?? '').replace(/\r/g, '').split('\n')) {
     if (/^\s*```/.test(linie)) inCod = !inCod
     const m = !inCod && linie.match(/^(#{1,4})\s+(.*)$/)
-    if (m) { inchide(); stiva.length = m[1].length - 1; stiva[m[1].length - 1] = m[2].trim().slice(0, 200); continue }
+    if (m) { inchide(); inainte = linie.trim(); stiva.length = m[1].length - 1; stiva[m[1].length - 1] = m[2].trim().slice(0, 200); continue }
     corp.push(linie)
   }
   inchide()
@@ -80,7 +93,8 @@ export function bucatiJson(cale, date, max = BUCATA_MAX) {
     const titlu = [id, o.locator, o.titlu].filter(x => typeof x === 'string' && x.trim()).join(' · ').slice(0, 300)
     const text = Object.entries(o).filter(([k]) => !CHEI_SARITE.has(k)).map(([k, v]) => { const t = valoareText(v); return t ? `${k}: ${t}` : '' })
       .filter(Boolean).join('\n')
-    if (text.trim()) out.push({ cale, titlu: titlu || cale, text: text.slice(0, max) })
+    // r5: o înregistrare JSON nu are „paragraf precedent” în sens de text → necunoscut (regula B dă Incert pe ea)
+    if (text.trim()) out.push({ cale, titlu: titlu || cale, text: text.slice(0, max), precedent: null })
   }
   return out
 }

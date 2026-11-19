@@ -1,15 +1,17 @@
 // Redări › 📱 SMS proprietari — șablonul fix (decizia lui Razvan, 03.11.2026): reamintirea sesiunii + răspunsul online în același mesaj.
 // Operatorul alege UAT-ul; textul se completează singur din Setări UAT (nume, zilele de sesiune, programul) și Setări proiect (telefonul).
-// Oglinda SQL: public.fn_sms_redari_sablon_model() + fn_sms_redari_sablon_calc(...) din 20261130c_sms_redari_sablon; BD-ul recalculează
-// textul la creare și refuză lotul dacă diferă de cel afișat. Cazurile de paritate sunt aceleași în sablonRedari.test.js și în DRY (TEST2).
+// Oglinda SQL: public.fn_sms_redari_sablon_model() (20261226b) + fn_sms_redari_sablon_calc(...) din 20261130c_sms_redari_sablon; BD-ul
+// recalculează textul la creare și refuză lotul dacă diferă de cel afișat. Cazurile de paritate (CAZURI din sablonRedari.cazuri.js) rulează și pe
+// SQL-ul real în scripts/pglite/test_sms_sablon_predare_local.mjs.
 // Modul pur: fără React, fără Supabase.
 import { verificaText } from '../../supabase/functions/_shared/smsText.mjs'
 
 // Textul PROVIZORIU, singura sursă din UI; se înlocuiește după formularea Juridicului (și, în aceeași livrare, fn_sms_redari_sablon_model).
-export const SABLON_REDARI = 'Gazpet pt Transgaz: sesiune redare teren la Primaria {COMUNA}, {ZI} ora {ORA}. Raspuns si online, cu QR-ul din scrisoare. Tel {TEL}'
+// 17.11.2026 (terminologia „predare”, migrarea 20261226b): „sesiune predare teren” în loc de „sesiune redare teren”, restul identic.
+export const SABLON_REDARI = 'Gazpet pt Transgaz: sesiune predare teren la Primaria {COMUNA}, {ZI} ora {ORA}. Raspuns si online, cu QR-ul din scrisoare. Tel {TEL}'
 // Marcajul de versiune al textului (oglinda fn_sms_redari_sablon_versiune() din SQL, scris si in filtru.sablon_versiune al lotului).
 // provizoriu-* = textul NU e aprobat: comutatorul Redari nu se porneste (docs/sms/ACTIVARE_SMS_REDARI.md).
-export const SABLON_REDARI_VERSIUNE = 'provizoriu-2026-11-03'
+export const SABLON_REDARI_VERSIUNE = 'provizoriu-2026-11-17'
 
 const RX_DATA = /^\d{4}-\d{2}-\d{2}$/
 // ora de început la începutul programului: HH:MM sau H:MM (și cu punct), urmată de altceva decât o cifră; „24:00” sau „9” nu trec

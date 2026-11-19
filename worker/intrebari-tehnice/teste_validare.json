@@ -269,5 +269,20 @@
   {"nume": "r5: pe același rând, o propoziție nesusținută face rândul nesusținut",
    "text": "Da.\nProba trebuie făcută la 6 bar. Sudorul trebuie să fie autorizat. [C1]",
    "surse": [{"id": "C1", "extras": "Proba trebuie făcută la 6 bar. Durata trebuie să fie 2 ore."}], "verdict": "Da.", "fara_sursa": 1, "neconfirmate": 0, "nesustinute": 1, "citate": ["C1"], "necunoscute": [], "temei": false,
-   "final_incert": true, "final_scoase": 1, "final_nu_contine": "autorizat"}
+   "final_incert": true, "final_scoase": 1, "final_nu_contine": "autorizat"},
+  {"nume": "r5 (regula B structurală): paragraful AUTONOM „exclusiv pe podurile metalice” trece regula B, dar NU susține „Da” pentru podurile din lemn — autonomia e necesară, nu suficientă",
+   "text": "Da — montajul conductelor este permis pe podurile din lemn [C1].\nCitat [C1]: „Montajul conductelor este permis exclusiv pe podurile metalice.”",
+   "surse": [{"id": "C1", "titlu": "Poduri", "extras": "Montajul conductelor este permis exclusiv pe podurile metalice."}],
+   "verdict": "Da — montajul conductelor este permis pe podurile din lemn [C1].", "fara_sursa": 1, "neconfirmate": 0, "nesustinute": 1, "citate": ["C1"], "necunoscute": [], "temei": true,
+   "final_incert": true, "final_scoase": 1, "final_nu_contine": "din lemn"},
+  {"nume": "r5 (L20): același paragraf susține „Da” pentru podurile metalice (cazul legitim rămâne Da)",
+   "text": "Da — montajul conductelor este permis pe podurile metalice [C1].\nCitat [C1]: „Montajul conductelor este permis exclusiv pe podurile metalice.”",
+   "surse": [{"id": "C1", "titlu": "Poduri", "extras": "Montajul conductelor este permis exclusiv pe podurile metalice."}],
+   "verdict": "Da — montajul conductelor este permis pe podurile metalice [C1].", "fara_sursa": 0, "neconfirmate": 0, "nesustinute": 0, "citate": ["C1"], "necunoscute": [], "temei": true,
+   "final_incert": false, "final_scoase": 0, "final_incepe": "Da — montajul conductelor este permis pe podurile metalice"},
+  {"nume": "r5: contraexemplul recenzentului trece VALIDAREA (prima propoziție chiar spune „este permis”) — de aceea îl oprește regula B structurală din motor (paragraf cu două propoziții), nu validarea",
+   "text": "Da.\nCitat [C1]: „Montajul conductelor pe poduri este permis.”",
+   "surse": [{"id": "C1", "titlu": "Poduri", "extras": "Montajul conductelor pe poduri este permis. Montajul conductelor pe podurile din lemn este interzis."}],
+   "verdict": "Da.", "fara_sursa": 0, "neconfirmate": 0, "nesustinute": 0, "citate": ["C1"], "necunoscute": [],
+   "final_incert": false, "final_scoase": 0, "final_incepe": "Da."}
 ]

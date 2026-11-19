@@ -1,0 +1,147 @@
+# 20261212a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.red_fan_awb.aprobat_de	creat
+coloana	coloana public.red_fan_awb.aprobat_la	creat
+coloana	coloana public.red_fan_awb.awb	creat
+coloana	coloana public.red_fan_awb.cerere_id	creat
+coloana	coloana public.red_fan_awb.confirmare_stare	creat
+coloana	coloana public.red_fan_awb.created_at	creat
+coloana	coloana public.red_fan_awb.generat_la	creat
+coloana	coloana public.red_fan_awb.hash_date	creat
+coloana	coloana public.red_fan_awb.id	creat
+coloana	coloana public.red_fan_awb.livrat_contrazis	creat
+coloana	coloana public.red_fan_awb.livrat_la	creat
+coloana	coloana public.red_fan_awb.lot_id	creat
+coloana	coloana public.red_fan_awb.motiv	creat
+coloana	coloana public.red_fan_awb.nr_plic	creat
+coloana	coloana public.red_fan_awb.plic_id	creat
+coloana	coloana public.red_fan_awb.proiect_id	creat
+coloana	coloana public.red_fan_awb.propus_de	creat
+coloana	coloana public.red_fan_awb.retur_contrazis	creat
+coloana	coloana public.red_fan_awb.retur_cunoscut	creat
+coloana	coloana public.red_fan_awb.retur_propus	creat
+coloana	coloana public.red_fan_awb.ridicat_contrazis	creat
+coloana	coloana public.red_fan_awb.ridicat_la	creat
+coloana	coloana public.red_fan_awb.ridicat_propus	creat
+coloana	coloana public.red_fan_awb.stare	creat
+coloana	coloana public.red_fan_awb.tarif	creat
+coloana	coloana public.red_fan_awb.tarif_estimat	creat
+coloana	coloana public.red_fan_awb.tva	creat
+coloana	coloana public.red_fan_awb.ultim_eveniment	creat
+coloana	coloana public.red_fan_awb.ultim_eveniment_la	creat
+coloana	coloana public.red_fan_awb.updated_at	creat
+coloana	coloana public.red_fan_awb.urmarire_stare	creat
+coloana	coloana public.red_fan_awb.urmarit_la	creat
+coloana	coloana public.red_fan_awb.versiune_urmarire	creat
+coloana	coloana public.red_fan_loturi.lot_id	creat
+coloana	coloana public.red_fan_loturi.marcat_de	creat
+coloana	coloana public.red_fan_loturi.marcat_la	creat
+coloana	coloana public.red_fan_loturi.prima_aprobare_de	creat
+coloana	coloana public.red_fan_loturi.prima_aprobare_la	creat
+coloana	coloana public.red_fan_loturi.proiect_id	creat
+coloana	coloana public.red_fan_loturi.test	creat
+coloana	coloana public.red_fan_loturi.tiraj_cheie	creat
+coloana	coloana public.red_fan_loturi.tiraj_de	creat
+coloana	coloana public.red_fan_loturi.tiraj_la	creat
+coloana	coloana public.red_fan_loturi.tiraj_nr	creat
+coloana	coloana public.red_fan_loturi.tiraj_oprit_de	creat
+coloana	coloana public.red_fan_loturi.tiraj_oprit_la	creat
+coloana	coloana public.red_fan_setari.actualizat_de	creat
+coloana	coloana public.red_fan_setari.actualizat_la	creat
+coloana	coloana public.red_fan_setari.id	creat
+coloana	coloana public.red_fan_setari.limita_lot	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_aprobare	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_awb_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_confirmare_stare_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_contradictii	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_fapte	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_generat	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_hash_date_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_in_curs	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_lot_id_fkey	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_motiv_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_nr_plic_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_pkey	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_plic_id_fkey	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_proiect_id_fkey	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_retur_contrazis_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_retur_propus_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_ridicat	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_stare_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_tarif_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_tarif_estimat_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_tva_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_ultim_eveniment_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_urmarire	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_urmarire_stare_check	creat
+constrangere	constrangere tabel public.red_fan_awb.red_fan_awb_versiune_urmarire_check	creat
+constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_lot_id_fkey	creat
+constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_pkey	creat
+constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_prima_aprobare	creat
+constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_proiect_id_fkey	creat
+constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_tiraj	creat
+constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_tiraj_cheie_check	creat
+constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_tiraj_nr_check	creat
+constrangere	constrangere tabel public.red_fan_loturi.red_fan_loturi_tiraj_oprit	creat
+constrangere	constrangere tabel public.red_fan_setari.red_fan_setari_autor	creat
+constrangere	constrangere tabel public.red_fan_setari.red_fan_setari_id_check	creat
+constrangere	constrangere tabel public.red_fan_setari.red_fan_setari_limita_lot_check	creat
+constrangere	constrangere tabel public.red_fan_setari.red_fan_setari_pkey	creat
+functie	functie public.fn_red_fan_anulat(uuid,text,text)	creat
+functie	functie public.fn_red_fan_aproba(uuid,uuid[],text[])	creat
+functie	functie public.fn_red_fan_camp(text)	creat
+functie	functie public.fn_red_fan_claim_lot(uuid,uuid[],text[],text[])	creat
+functie	functie public.fn_red_fan_confirmari(uuid,jsonb)	creat
+functie	functie public.fn_red_fan_e_owner()	creat
+functie	functie public.fn_red_fan_lot_marcheaza(uuid,boolean)	creat
+functie	functie public.fn_red_fan_loturi_garda()	creat
+functie	functie public.fn_red_fan_propune(uuid,text,numeric)	creat
+functie	functie public.fn_red_fan_reconciliaza(uuid,text,numeric,numeric,text)	creat
+functie	functie public.fn_red_fan_rezultate(uuid,jsonb)	creat
+functie	functie public.fn_red_fan_ridicat(uuid,date)	creat
+functie	functie public.fn_red_fan_setari_seteaza(integer)	creat
+functie	functie public.fn_red_fan_suma(numeric)	creat
+functie	functie public.fn_red_fan_surse(uuid)	creat
+functie	functie public.fn_red_fan_tiraj(uuid,text,text)	creat
+functie	functie public.fn_red_fan_tiraj_opreste(uuid,text,boolean)	creat
+functie	functie public.fn_red_fan_urmarire(uuid,jsonb)	creat
+functie	functie public.fn_red_fan_urmarire_solutioneaza(uuid,integer,jsonb,text)	creat
+politica	politica public.red_fan_awb.red_fan_awb_citire	creat
+politica	politica public.red_fan_loturi.red_fan_loturi_citire	creat
+politica	politica public.red_fan_setari.red_fan_setari_citire	creat
+relatie	relatie public.red_fan_awb	creat
+relatie	relatie public.red_fan_awb_awb_uq	creat
+relatie	relatie public.red_fan_awb_cerere_ix	creat
+relatie	relatie public.red_fan_awb_lot_ix	creat
+relatie	relatie public.red_fan_awb_pkey	creat
+relatie	relatie public.red_fan_awb_plic_viu_uq	creat
+relatie	relatie public.red_fan_loturi	creat
+relatie	relatie public.red_fan_loturi_pkey	creat
+relatie	relatie public.red_fan_setari	creat
+relatie	relatie public.red_fan_setari_pkey	creat
+tip	tip public.red_fan_awb	creat
+tip	tip public.red_fan_awb[]	creat
+tip	tip public.red_fan_loturi	creat
+tip	tip public.red_fan_loturi[]	creat
+tip	tip public.red_fan_setari	creat
+tip	tip public.red_fan_setari[]	creat
+trigger	trigger public.red_fan_awb intern red_fan_awb_lot_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_fan_awb intern red_fan_awb_lot_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_fan_awb intern red_fan_awb_plic_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_fan_awb intern red_fan_awb_plic_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_fan_awb intern red_fan_awb_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_fan_awb intern red_fan_awb_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_fan_loturi intern red_fan_loturi_lot_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_fan_loturi intern red_fan_loturi_lot_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_fan_loturi intern red_fan_loturi_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_fan_loturi intern red_fan_loturi_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_fan_loturi.trg_red_fan_loturi_garda	creat
+trigger	trigger public.red_loturi_plicuire intern red_fan_awb_lot_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_loturi_plicuire intern red_fan_awb_lot_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.red_loturi_plicuire intern red_fan_loturi_lot_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_loturi_plicuire intern red_fan_loturi_lot_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.red_plicuri intern red_fan_awb_plic_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_plicuri intern red_fan_awb_plic_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.red_proiecte intern red_fan_awb_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_proiecte intern red_fan_awb_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.red_proiecte intern red_fan_loturi_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_proiecte intern red_fan_loturi_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
