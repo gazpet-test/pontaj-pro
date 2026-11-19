@@ -10,9 +10,9 @@
 //   5. Etichetă + filtru Gmail → corespondența pornește singură în max 15 min
 //      (Apps Script syncGmailConfig_ + edge gmail-config citesc executie_proiecte)
 //
-// Ordinea la salvare: proiect → șantier nou (creat DIRECT cu proiect_id) → proiect.site_id → NAS → mutare PDF contract.
-// 20261222a (TKT-2026-0359): „Șantier nou” doar pentru owner sau contul cu dreptul „Creare șantiere” (prop poateCreaSantier);
-// contul cu drept poate doar CREA rândul din sites (nu și modifica), de aceea legătura spre proiect intră în INSERT, nu într-un UPDATE ulterior.
+// Ordinea la salvare: proiect → șantier nou (RPC fn_sites_creeaza: șantierul + proiect.site_id într-o tranzacție) → NAS → mutare PDF contract.
+// 20261222a (TKT-2026-0359): „Șantier nou” doar pentru owner sau contul cu dreptul „Creare șantiere” + Execuție editor (prop poateCreaSantier);
+// BD-ul decide în RPC (și restricțiile pe proiect); contul cu drept nu scrie direct în sites.
 // PDF-ul se încarcă întâi în `_nou/<uuid>/` (nu știm id-ul încă) și se mută la
 // `<id>/contract/` după INSERT; la abandon se șterge.
 // ════════════════════════════════════════════════════════════════
@@ -21,7 +21,7 @@ import { createClient } from '@supabase/supabase-js'
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
 import { optiuniClient } from './lib/sesiuneCereri.js'
 import { norm } from './lib/diacritice.js'
-import { mesajRefuzSantier } from './lib/santiereDrept.js'
+import { creeazaSantier, mesajSantier } from './lib/santiereDrept.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -271,22 +271,12 @@ export default function ProiectNouWizard({ onClose, onCreated, showToast, poateC
       if (errP) throw new Error('Proiect: ' + errP.message)
 
       const pasi = []
-      // 2. Șantier nou: creat DIRECT legat de proiect (proiect_id în INSERT); apoi proiectul primește site_id.
-      // Refuzul bazei (fără dreptul „Creare șantiere” / fără scriere pe proiect) nu oprește proiectul: se spune clar ce n-a mers.
+      // 2. Șantier nou: UN SINGUR apel (RPC fn_sites_creeaza, 20261222a) care creează șantierul legat de proiect ȘI pune proiect.site_id,
+      // fără proiectul automat al triggerului (dublarea din r1). Refuzul / funcția lipsă / rezultatul necunoscut nu opresc proiectul: se spune
+      // clar ce s-a întâmplat (L18); la rezultat necunoscut, creeazaSantier recitește starea și reapelează idempotent (L05).
       if (siteMod === 'nou') {
-        const { data: site, error: errS } = await supabase.from('sites')
-          .insert({ name: siteNumeEfectiv, active: true, beneficiar_principal: f.beneficiar.trim() || null, proiect_id: proiect.id })
-          .select('id').single()
-        if (errS) {
-          pasi.push(`⚠️ ${mesajRefuzSantier(errS)} Proiectul s-a creat fără șantier.`)
-        } else {
-          // L18: UPDATE-ul cu 0 rânduri (RLS) nu e succes → se cere id-ul înapoi
-          const { data: leg, error: errL } = await supabase.from('executie_proiecte')
-            .update({ site_id: site.id }).eq('id', proiect.id).select('id')
-          pasi.push(errL || !leg?.length
-            ? `⚠️ șantier nou creat, dar proiectul nu l-a primit (${errL?.message || 'niciun rând actualizat'}) — leagă-l din editare`
-            : '🏗️ șantier nou creat')
-        }
+        const r = await creeazaSantier(supabase, { nume: siteNumeEfectiv, proiectId: proiect.id, beneficiar: f.beneficiar.trim() || null })
+        pasi.push(mesajSantier(r, { cuProiect: true }).text)
       } else if (siteFinal) {
         pasi.push('🏗️ legat la șantierul existent')
       }
@@ -495,7 +485,7 @@ export default function ProiectNouWizard({ onClose, onCreated, showToast, poateC
             </div>
             {!poateCreaSantier && (
               <div style={{ fontSize:11, color:G.dim, marginBottom:10 }}>
-                Un șantier nou îl poate crea doar un cont cu dreptul „Creare șantiere” (îl acordă owner-ul).
+                Un șantier nou îl poate crea doar un cont cu dreptul „Creare șantiere” și drept de scriere în Execuție (le acordă owner-ul).
               </div>
             )}
             {siteMod === 'nou' && poateCreaSantier && (

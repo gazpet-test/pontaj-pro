@@ -5,7 +5,7 @@ import { tintaRedirectHostPublic } from './redari/domeniuPublic.js'
 import { supabase } from './lib/supabase.js'
 import { pornestePolling, eEroareSesiune } from './lib/sesiuneCereri.js'
 import { logoutProtejat } from './lib/izoLogoutBrowser.js'
-import { poateCreaSantier, mesajRefuzSantier } from './lib/santiereDrept.js'
+import { poateCreaSantier, mesajRefuzSantier, creeazaSantier, mesajSantier } from './lib/santiereDrept.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
 import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
@@ -6736,8 +6736,12 @@ function AdminPage() {
     loadAll()
   }
 
-  // 20261222a: owner SAU contul cu dreptul „Creare șantiere”; refuzul bazei se arată cu motivul (nu un „Eroare” mut)
-  const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true); const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast(mesajRefuzSantier(error),'error'); setAddingSite(false) }
+  // 20261222a: owner = INSERT direct, ca azi (politica lui); contul cu dreptul „Creare șantiere” = RPC fn_sites_creeaza (fără INSERT direct);
+  // refuzul / funcția lipsă / rezultatul necunoscut se arată cu motivul (L18), iar lista se reîncarcă oricum (fără reîncercare automată)
+  const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true)
+    if (isSuperAdmin) { const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast(mesajRefuzSantier(error),'error') }
+    else { const m=mesajSantier(await creeazaSantier(supabase,{nume:siteName.trim()}),{cuProiect:false}); showToast(m.ok?`✓ ${siteName}`:m.text,m.ok?undefined:'error'); if(m.ok) setSiteName(''); loadAll() }
+    setAddingSite(false) }
   const toggleSite=async(s)=>{ await supabase.from('sites').update({active:!s.active}).eq('id',s.id); setSites(prev=>prev.map(x=>x.id===s.id?{...x,active:!x.active}:x)) }
   const saveSiteName=async()=>{ if(!editSiteItem||!editSiteName.trim()) return; const {error}=await supabase.from('sites').update({name:editSiteName.trim()}).eq('id',editSiteItem.id); if(!error){showToast(`✓ Redenumit: ${editSiteName}`);setEditSiteItem(null);loadAll()} else showToast('Eroare','error') }
   const deleteSite=async(s)=>{

@@ -4,14 +4,16 @@
 -- Ce tipărește (același format ca scripts/meteo_xweather_amprente.sql):
 --   eticheta | amprenta (md5 pe „detaliu”) | linie_baseline (de copiat în blocul BASELINE al migrării) | sursa | atentie | detaliu
 --   * tabelul sites: drepturile pe tabel și pe coloane, proprietarul / RLS / FORCE, secvențele, TOATE politicile, triggerele;
---   * funcțiile: ÎNCHIDEREA tranzitivă (blocul INCHIDERE_L15, IDENTIC cu cel din migrare): pornirea = ce cheamă direct predicatul nou
---     fn_sites_drept_creare (auth.uid(), fn_executie_proiect_permis) + funcțiile politicilor și triggerelor lui sites, apoi orice funcție
---     apelată „nume(” din corpurile sql / plpgsql ale lanțului și dependențele din pg_depend, fără limită de adâncime;
+--   * funcțiile: ÎNCHIDEREA tranzitivă (blocul INCHIDERE_L15, IDENTIC cu cel din migrare): pornirea = ce cheamă direct RPC-ul nou
+--     fn_sites_creeaza (auth.uid(), fn_executie_proiect_permis; RPC-ul însuși lipsește înainte de aplicare) + funcțiile politicilor și
+--     triggerelor lui sites (deci și fn_auto_create_executie_proiect / fn_site_name_to_cod_intern), apoi orice funcție apelată „nume(” din
+--     corpurile sql / plpgsql ale lanțului și dependențele din pg_depend, fără limită de adâncime;
 --   * „atentie” = ce trebuie privit cu ochii înainte de a accepta baseline-ul (drepturi pentru anon / PUBLIC, DEFINER fără search_path,
 --     EXECUTE în corp — pe acesta migrarea îl REFUZĂ). Pe sites, „politica USING true” pe INSERT e normală (INSERT are doar CHECK).
--- De privit în mod special în „detaliu” la 'tabel sites | politici': politica de INSERT a owner-ului (sites_insert_owner) și politica de
---   CITIRE (contul cu drept trebuie să-și vadă șantierul nou, altfel INSERT … RETURNING din interfață pică); o politică RESTRICTIVE pe INSERT
---   face migrarea să refuze (dreptul nou n-ar avea efect).
+-- De privit în mod special în „detaliu”: la 'tabel sites | triggere' triggerul tr_auto_create_executie_proiect (AFTER INSERT) și la
+--   'functie fn_auto_create_executie_proiect()' corpul (corp_md5 citit pe 13.11.2026: 22f95c1e3f15cde32a1d2c11e3259089) — RPC-ul se
+--   sprijină pe condiția lui „există deja proiect cu site_id = NEW.id”; la 'tabel sites | politici' politica de CITIRE (contul cu drept își
+--   recitește șantierul la reconciliere) și cele trei politici ale owner-ului (INSERT / UPDATE / DELETE rămân doar ale lui).
 -- Cum se folosește: coloana linie_baseline, în ordinea afișată, se copiază ÎNTREAGĂ între marcajele „>>> BASELINE 20261222a” /
 --   „<<< BASELINE 20261222a” ale migrării (în locul rândului DE_COMPLETAT; singurul loc din migrare cu valori de producție), iar „detaliu”
 --   intră în review. Migrarea refuză până atunci și refuză orice diferență față de el, înainte și după schimbare.
@@ -23,19 +25,21 @@ SET LOCAL search_path = public, pg_temp;
 SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_system()) AS sistem, version() AS versiune, now() AS la;
 
 \echo
-\echo '=== 20261222a_sites_drept_creare — tabelul sites și funcțiile de drept ale predicatului fn_sites_drept_creare ==='
+\echo '=== 20261222a_sites_drept_creare — tabelul sites și funcțiile de drept ale RPC-ului fn_sites_creeaza ==='
 WITH RECURSIVE
 -- >>> INTRARE 20261222a
 amp_tabele(oid) AS (SELECT 'public.sites'::regclass::oid),
 -- <<< INTRARE 20261222a
 -- >>> INCHIDERE_L15 20261222a
--- Pornirea = ce cheamă DIRECT predicatul nou fn_sites_drept_creare (auth.uid(), fn_executie_proiect_permis; postcondiția verifică că nu
---   cheamă altceva) + funcțiile politicilor și triggerelor lui sites. Închiderea se CALCULEAZĂ aici, din catalog, nu se ia din BASELINE:
---   orice funcție (în afara pg_catalog / information_schema) al cărei nume apare ca apel „nume(” în corpul unei funcții sql / plpgsql din
---   lanț (supra-aproximare: un nume potrivit în plus doar intră în amprentă), numele neobișnuite prin căutare de text, plus dependențele din
---   pg_depend (corpurile BEGIN ATOMIC). Fără limită de adâncime: UNION oprește ciclurile. BASELINE-ul trebuie să aibă EXACT această
---   mulțime (o funcție lipsă sau în plus = refuz). EXECUTE dinamic / limbaj neanalizabil în lanț = refuz (amp_verifica).
-amp_pornire(oid) AS (VALUES (to_regprocedure('auth.uid()')::oid), (to_regprocedure('public.fn_executie_proiect_permis(bigint, boolean)')::oid)),
+-- Pornirea = ce cheamă DIRECT RPC-ul nou fn_sites_creeaza (auth.uid(), fn_executie_proiect_permis; postcondiția verifică că nu cheamă altceva),
+--   RPC-ul însuși (există doar „după”; înainte to_regprocedure = NULL și rândul cade) + funcțiile politicilor și triggerelor lui sites.
+--   Închiderea se CALCULEAZĂ aici, din catalog, nu se ia din BASELINE: orice funcție (în afara pg_catalog / information_schema) al cărei nume
+--   apare ca apel „nume(” în corpul unei funcții sql / plpgsql din lanț (supra-aproximare: un nume potrivit în plus doar intră în amprentă),
+--   numele neobișnuite prin căutare de text, plus dependențele din pg_depend (corpurile BEGIN ATOMIC). Fără limită de adâncime: UNION oprește
+--   ciclurile. BASELINE-ul trebuie să aibă EXACT această mulțime (o funcție lipsă sau în plus = refuz). EXECUTE dinamic / limbaj neanalizabil
+--   în lanț = refuz (amp_verifica).
+amp_pornire(oid) AS (VALUES (to_regprocedure('auth.uid()')::oid), (to_regprocedure('public.fn_executie_proiect_permis(bigint, boolean)')::oid),
+                            (to_regprocedure('public.fn_sites_creeaza(text, bigint, text)')::oid)),
 amp_lant(oid) AS (
   SELECT s.oid FROM amp_pornire s WHERE s.oid IS NOT NULL
   UNION
@@ -161,9 +165,28 @@ SELECT c.eticheta, c.amprenta,
 \echo
 \echo '=== 20261222a — controale de stare (nimic nu trebuie să existe înainte de aplicare) ==='
 SELECT (SELECT count(*) FROM public.app_modules WHERE key = 'santiere_creare') AS cheie_santiere_creare_exista,
+       (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_sites_creeaza') AS rpc_exista,
        (SELECT count(*) FROM public.user_module_access WHERE module = 'santiere_creare') AS drepturi_santiere_creare,
        (SELECT count(*) FROM public.user_module_access WHERE module = 'administrativ.locatii') AS drepturi_administrativ_locatii,
-       has_table_privilege('authenticated', 'public.sites', 'INSERT') AS authenticated_insert_sites,
-       (SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sites' AND column_name = 'proiect_id') AS tip_proiect_id;
+       (SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sites' AND column_name = 'proiect_id') AS tip_proiect_id,
+       (SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'executie_proiecte' AND column_name = 'site_id') AS tip_proiect_site_id;
+
+\echo
+\echo '=== 20261222a — presupunerile ordinii din RPC (trebuie: secventa = sites_id_seq, chei_straine_site_id = 0, trigger = 1, santiere_cu_mai_multe_proiecte = 0) ==='
+SELECT pg_get_serial_sequence('public.sites', 'id') AS secventa_sites_id,
+       (SELECT count(*) FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+         WHERE c.conrelid = 'public.executie_proiecte'::regclass AND c.contype = 'f' AND a.attname = 'site_id') AS chei_straine_site_id,
+       (SELECT count(*) FROM pg_trigger tg WHERE tg.tgrelid = 'public.sites'::regclass AND tg.tgname = 'tr_auto_create_executie_proiect'
+         AND tg.tgfoid = to_regprocedure('public.fn_auto_create_executie_proiect()') AND tg.tgtype = 5 AND tg.tgenabled = 'O'
+         AND tg.tgnargs = 0 AND tg.tgqual IS NULL) AS trigger_proiect_automat,
+       (SELECT count(*) FROM (SELECT e.site_id FROM public.executie_proiecte e WHERE e.site_id IS NOT NULL GROUP BY e.site_id HAVING count(*) > 1) d)
+         AS santiere_cu_mai_multe_proiecte,
+       (SELECT string_agg(i.indexdef, ' ; ') FROM pg_indexes i WHERE i.schemaname = 'public' AND i.tablename = 'executie_proiecte'
+         AND i.indexdef ~* '\(site_id') AS indecsi_site_id;
+
+\echo
+\echo '=== 20261222a — triggerele lui executie_proiecte (rulează la UPDATE site_id din RPC; NU sunt în amprentă — de citit în review) ==='
+SELECT tg.tgname, tg.tgfoid::regprocedure AS functie, tg.tgenabled AS stare, pg_get_triggerdef(tg.oid) AS definitie
+  FROM pg_trigger tg WHERE tg.tgrelid = 'public.executie_proiecte'::regclass AND NOT tg.tgisinternal ORDER BY tg.tgname COLLATE "C";
 
 ROLLBACK;

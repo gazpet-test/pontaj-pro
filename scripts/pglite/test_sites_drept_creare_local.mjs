@@ -1,24 +1,30 @@
-// Proba LOCALĂ a migrării 20261222a (dreptul de a crea un șantier, pe cont) pe PGlite (Postgres în WASM, în memorie) — NU atinge nicio bază reală.
-// Baza: schema falsă supabase/tests/20261222a_sites_drept_creare_schelet.sql (politicile de azi pe sites: citire pentru conturile logate,
-//   INSERT / UPDATE / DELETE doar owner) + funcțiile de drept Execuție REALE extrase exact din 20261209a (fn_executie_proiect_permis și
-//   callee-urile lor), cu drepturile lor de acolo.
-// 1. BASELINE-ul L15 calculat pe schema falsă cu scriptul coordonatorului (scripts/sites_drept_creare_amprente.sql, tranzacție READ ONLY) și
-//    pus în blocul marcat, ca după review; migrarea aplicată ca runnerul (--plafon-tranzactie-ms 2000).
-// 2. VERIFICĂRI (valorile așteptate scrise de mână din cerere, L25), ca rolul authenticated cu JWT-ul fiecărui cont: owner DA; contul cu
-//    dreptul (editor / admin) DA, și legat de un proiect pe care poate scrie; cont cu can_manage_contracts FĂRĂ drept NU; nivel viewer NU;
-//    'administrativ.locatii' NU (alt sens); cont restrâns pe proiect: proiectul lui DA, altul NU; fără JWT NU; anon NU; UPDATE / DELETE
-//    rămân ale owner-ului; dreptul retras = refuz imediat.
-// 3. REFUZURI: fără marcaj, fără plafon, baseline necompletat, politică / drept schimbat înainte, RESTRICTIVE pe INSERT, reaplicare; L15:
-//    schimbare între „înainte” și „după”; revenirea: drept acordat, fără plafon / marcaj, funcție schimbată, aplicare -> revenire -> re-aplicare.
-// 4. MUTANȚI (migrare / revenire stricate intenționat): fiecare TREBUIE să pice. La mutanții pe corpul funcției, amprenta corpului din
-//    migrare se recalculează, ca să pice COMPORTAMENTUL (nu doar amprenta).
+// Proba LOCALĂ a migrării 20261222a, runda 2 (dreptul de a crea un șantier, pe cont, prin RPC-ul fn_sites_creeaza) pe PGlite (Postgres în
+// WASM, în memorie) — NU atinge nicio bază reală.
+// Baza: schema falsă supabase/tests/20261222a_sites_drept_creare_schelet.sql — coloanele reale ale lui sites, triggerul REAL de proiect automat
+//   (corpurile din producție; md5-ul lor e verificat mai jos față de valorile citite din producție pe 13.11.2026), RLS-ul REAL pe
+//   executie_proiecte (politica permisivă + cele RESTRICTIVE și garda din 20261209a) — + funcțiile de drept Execuție REALE extrase exact din
+//   20261209a.
+// Secțiuni (valorile așteptate scrise de mână din cerere și din citirea de producție, L25; apelurile ca rolul authenticated cu JWT-ul contului):
+//   0. fidelitatea schemei (md5 corpuri producție, baseline-ul L15 cu etichetele așteptate);
+//   1. matricea RPC-ului (cine / pe ce proiect), ce scrie (doar nume / beneficiar / proiect; restul = valorile implicite), legătura în ambele
+//      sensuri FĂRĂ proiect automat, idempotența, refuzurile de reguli, căile directe (INSERT / UPDATE / DELETE) neschimbate, dreptul retras,
+//      postcondiția RPC-ului la un trigger schimbat;
+//   2. fluxul COMPLET al wizard-ului prin codul JS real (src/lib/santiereDrept.js, creeazaSantier + mesajSantier) peste un adaptor tip
+//      PostgREST: cont cu drept / owner / fără drept / restrâns, răspuns pierdut după COMMIT (reconciliere), rețea picată înainte (reîncercare
+//      idempotentă), migrarea neaplicată (UI nouă), interfața VECHE cu migrarea aplicată și dreptul acordat (fără fals succes);
+//   3. paritatea regulii de cont UI ↔ BD (L19);
+//   4. refuzurile migrării, L15 între „înainte” și „după” + mutanții porții;
+//   5. revenirea (refuzuri, aplicare → revenire → reaplicare, amprenta = baseline, șantierele create rămân) + mutanții ei;
+//   6. mutanții migrării (comportament) și ai codului JS — fiecare TREBUIE să pice.
 // Rulare (din rădăcina repo-ului): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_sites_drept_creare_local.mjs
-// Limită: PGlite nu are timere și nici concurență reală (lock_timeout / plafonul / NOWAIT ocupat se probează pe clonă, cu runnerul).
+// Limită: PGlite are o singură conexiune, fără timere: concurența (două apeluri pe același proiect, lock-ul NOWAIT al migrării / revenirii)
+//   și triggerele reale ale lui executie_proiecte se probează pe clona PG17: supabase/tests/20261222a_sites_drept_creare_clona.sh.
 import { PGlite } from '@electric-sql/pglite'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, resolve, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const citeste = (rel) => readFileSync(join(ROOT, rel), 'utf8').replace(/\r/g, '')
@@ -27,13 +33,16 @@ const ACCES = citeste('supabase/migrations/20261209a_executie_acces_proiect.sql'
 const MIG = citeste('supabase/migrations/20261222a_sites_drept_creare.sql')
 const REV = citeste('supabase/revenire/20261222a_sites_drept_creare_ROLLBACK.sql')
 const SCRIPT = citeste('scripts/sites_drept_creare_amprente.sql')
+const JS_SURSA = citeste('src/lib/santiereDrept.js')
 const BL_A = '  SELECT v.eticheta, v.amprenta FROM (VALUES\n', BL_B = '\n  ) v(eticheta, amprenta)'
 const PLACEHOLDER = (() => { const i0 = MIG.indexOf('-- >>> BASELINE 20261222a'), i = MIG.indexOf(BL_A, i0) + BL_A.length; return MIG.slice(i, MIG.indexOf(BL_B, i)) })()
 if (!PLACEHOLDER.trim()) { console.error('blocul BASELINE 20261222a nu se găsește'); process.exit(1) }
 const MIG_NECOMPLETAT = MIG.split(PLACEHOLDER).join("    ('DE_COMPLETAT', 'DE_COMPLETAT')")
 const md5 = (s) => createHash('md5').update(s, 'utf8').digest('hex')
+// valorile CITITE din producție de coordonator (13.11.2026, brief/prod_sites_trigger_si_coloane_20261113.txt): sursă independentă de schelet
+const MD5_PRODUCTIE = { 'fn_auto_create_executie_proiect()': '22f95c1e3f15cde32a1d2c11e3259089', 'fn_site_name_to_cod_intern(text)': 'b2df9daee02b13aea993b18a721ecba9' }
 
-// funcțiile de drept Execuție, EXACT din 20261209a (corpul până la $f$;), apoi drepturile lor ca acolo
+// funcțiile de drept Execuție + garda, EXACT din 20261209a (corpul până la $f$;), apoi drepturile lor ca acolo
 const functie = (marcaj) => {
   const i = ACCES.indexOf(marcaj)
   if (i < 0) throw new Error('lipsește în 20261209a: ' + marcaj)
@@ -42,12 +51,15 @@ const functie = (marcaj) => {
 const DREPTURI_ACCES = [
   'CREATE FUNCTION public.fn_executie_acces_nerestrans_cont(', 'CREATE FUNCTION public.fn_executie_acces_lista_cont(',
   'CREATE FUNCTION public.fn_executie_acces_nerestrans()', 'CREATE FUNCTION public.fn_executie_acces_lista(',
-  'CREATE FUNCTION public.fn_executie_proiect_permis(',
+  'CREATE FUNCTION public.fn_executie_proiect_permis(', 'CREATE FUNCTION public.fn_executie_acces_garda()',
 ].map(functie).join('\n') + `
 REVOKE ALL ON FUNCTION public.fn_executie_acces_nerestrans_cont(uuid), public.fn_executie_acces_lista_cont(uuid, boolean),
-  public.fn_executie_acces_nerestrans(), public.fn_executie_acces_lista(boolean), public.fn_executie_proiect_permis(bigint, boolean)
-  FROM PUBLIC, anon, authenticated, service_role;
+  public.fn_executie_acces_nerestrans(), public.fn_executie_acces_lista(boolean), public.fn_executie_proiect_permis(bigint, boolean),
+  public.fn_executie_acces_garda() FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_executie_acces_nerestrans(), public.fn_executie_proiect_permis(bigint, boolean) TO authenticated;`
+const PARTE2 = '-- >>> DUPA_FUNCTII_EXECUTIE'
+if (!SCHELET.includes(PARTE2)) { console.error('scheletul nu are marcajul ' + PARTE2); process.exit(1) }
+const [SCHELET_1, SCHELET_2] = [SCHELET.slice(0, SCHELET.indexOf(PARTE2)), SCHELET.slice(SCHELET.indexOf(PARTE2))]
 
 const sectiune = (t) => { const i = t.indexOf('WITH RECURSIVE'); return t.slice(i, t.indexOf('ORDER BY c.eticheta COLLATE "C";', i) + 'ORDER BY c.eticheta COLLATE "C"'.length) }
 async function baseline(db) {
@@ -62,8 +74,8 @@ function aplica(text, lista) {
   }
   return t
 }
-// corpul funcției noi din textul migrării + amprenta lui (la mutanții pe corp, amprenta „după” se pune pe corpul mutat)
-const corpFn = (t) => { const i = t.indexOf('CREATE FUNCTION public.fn_sites_drept_creare('), a = t.indexOf('AS $f$', i) + 6; return t.slice(a, t.indexOf('$f$;', a)) }
+// corpul RPC-ului din textul migrării + amprenta lui (la mutanții pe corp, amprenta „după” se pune pe corpul mutat)
+const corpFn = (t) => { const i = t.indexOf('CREATE FUNCTION public.fn_sites_creeaza('), a = t.indexOf('AS $f$', i) + 6; return t.slice(a, t.indexOf('$f$;', a)) }
 const AMP_CORP = md5(corpFn(MIG))
 const cuAmprentaCorp = (t) => t.split(AMP_CORP).join(md5(corpFn(t)))
 async function caRunner(db, nume, text, { plafon = 2000, marcajPlafon = true, marcaj = true } = {}) {
@@ -83,109 +95,290 @@ const revino = (db, text = REV, o) => caRunner(db, '20261222a_sites_drept_creare
 const U = {
   OWNER: '00000000-0000-0000-0000-0000000000b1', TIT: '00000000-0000-0000-0000-0000000000b2', TIT_ADM: '00000000-0000-0000-0000-0000000000b3',
   TIT_VIEW: '00000000-0000-0000-0000-0000000000b4', CONTR: '00000000-0000-0000-0000-0000000000b5', LOC: '00000000-0000-0000-0000-0000000000b6',
-  TIT_R: '00000000-0000-0000-0000-0000000000b7', STRAIN: '00000000-0000-0000-0000-0000000000b8',
+  TIT_R: '00000000-0000-0000-0000-0000000000b7', STRAIN: '00000000-0000-0000-0000-0000000000b8', TIT_FARA_EX: '00000000-0000-0000-0000-0000000000b9',
+  TIT_EX_VIEW: '00000000-0000-0000-0000-0000000000ba',
 }
+// proiectele: 1 / 2 / 3 fără șantier (3 = absent din lista contului restrâns), 4 = legat de un șantier existent al ALTUI proiect (refuz)
 const DATE = `
 INSERT INTO public.profiles (id, name, role, is_owner, can_manage_contracts) VALUES
   ('${U.OWNER}', 'OWNER', 'admin', true, true), ('${U.TIT}', 'TITULAR', 'manager_santier', false, true),
   ('${U.TIT_ADM}', 'TITULAR ADMIN', 'manager_santier', false, false), ('${U.TIT_VIEW}', 'TITULAR VIEWER', 'manager_santier', false, false),
   ('${U.CONTR}', 'CONTRACTE FARA DREPT', 'manager_santier', false, true), ('${U.LOC}', 'LOCATII', 'administrativ', false, false),
-  ('${U.TIT_R}', 'TITULAR RESTRANS', 'inginer', false, false), ('${U.STRAIN}', 'STRAIN', 'angajat', false, false);
-INSERT INTO public.executie_proiecte (id, nume) VALUES (1, 'Proiect A'), (2, 'Proiect B');
-INSERT INTO public.sites (name, active, proiect_id) VALUES ('Sediu', true, NULL);
+  ('${U.TIT_R}', 'TITULAR RESTRANS', 'inginer', false, false), ('${U.STRAIN}', 'STRAIN', 'angajat', false, false),
+  ('${U.TIT_FARA_EX}', 'TITULAR FARA EXECUTIE', 'inginer', false, false), ('${U.TIT_EX_VIEW}', 'TITULAR EXECUTIE VIEWER', 'inginer', false, false);
+INSERT INTO public.executie_proiecte (id, nume, cod_intern) VALUES (1, 'Proiect A', 'PA'), (2, 'Proiect B', 'PB'), (3, 'Proiect C', 'PC'), (4, 'Proiect D', 'PD');
+INSERT INTO public.sites (name, active, proiect_id) VALUES ('Sediu central', true, NULL), ('Sediu vechi', true, NULL);
+UPDATE public.executie_proiecte SET site_id = (SELECT id FROM public.sites WHERE name = 'Sediu vechi') WHERE id = 4;
 INSERT INTO public.executie_acces_proiect (profile_id, proiect_id, nivel) VALUES ('${U.TIT_R}', 1, 'editor'), ('${U.TIT_R}', 2, 'viewer');
-INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('${U.LOC}', 'administrativ.locatii', 'editor'), ('${U.CONTR}', 'executie', 'editor');`
+INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES
+  ('${U.LOC}', 'administrativ.locatii', 'editor'), ('${U.LOC}', 'executie', 'editor'), ('${U.CONTR}', 'executie', 'editor'), ('${U.TIT}', 'executie', 'editor'),
+  ('${U.TIT_ADM}', 'executie', 'admin'), ('${U.TIT_VIEW}', 'executie', 'editor'), ('${U.TIT_R}', 'executie', 'editor'),
+  ('${U.TIT_EX_VIEW}', 'executie', 'viewer');`
 // dreptul îl acordă coordonatorul DUPĂ migrare (cheia există doar după ea) — aici, ca postgres
 const ACORDA = `INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES
-  ('${U.TIT}', 'santiere_creare', 'editor'), ('${U.TIT_ADM}', 'santiere_creare', 'admin'),
-  ('${U.TIT_VIEW}', 'santiere_creare', 'viewer'), ('${U.TIT_R}', 'santiere_creare', 'editor');`
+  ('${U.TIT}', 'santiere_creare', 'editor'), ('${U.TIT_ADM}', 'santiere_creare', 'admin'), ('${U.TIT_VIEW}', 'santiere_creare', 'viewer'),
+  ('${U.TIT_R}', 'santiere_creare', 'editor'), ('${U.TIT_FARA_EX}', 'santiere_creare', 'editor'), ('${U.TIT_EX_VIEW}', 'santiere_creare', 'editor');`
 
 async function bazaNoua() {
   const db = new PGlite()
-  await db.exec(SCHELET)
+  await db.exec(SCHELET_1)
   await db.exec(DREPTURI_ACCES)
+  await db.exec(SCHELET_2)
   await db.exec(DATE)
   return db
-}
-const BAZA0 = await bazaNoua()
-const B0 = await baseline(BAZA0)
-await BAZA0.close()
-// închiderea + tabelul, pe schema falsă = EXACT ce e scris de mână (sites + pornirea + lanțul din 20261209a + funcția trigger-ului)
-const ETICHETE = ['functie auth.uid()', 'functie fn_executie_acces_lista(boolean)', 'functie fn_executie_acces_lista_cont(uuid,boolean)',
-  'functie fn_executie_acces_nerestrans()', 'functie fn_executie_acces_nerestrans_cont(uuid)', 'functie fn_executie_proiect_permis(bigint,boolean)',
-  'functie fn_schelet_sites_mutat()', 'tabel sites | acl', 'tabel sites | acl coloane', 'tabel sites | politici', 'tabel sites | rls',
-  'tabel sites | secvente', 'tabel sites | triggere']
-if (JSON.stringify(B0.map(r => r.eticheta)) !== JSON.stringify(ETICHETE)) {
-  console.error('baseline: etichetele nu sunt cele așteptate: ' + B0.map(r => r.eticheta).join(', ')); process.exit(1)
-}
-console.log(`baseline L15 20261222a (schema falsă): ${B0.length} etichete — ${B0.map(r => r.eticheta + (r.atentie ? ' [' + r.atentie + ']' : '')).join('; ')}`)
-const linii = (rows) => rows.map((r, i) => (i === 0 ? '    ' : '  , ') + r.linie_baseline.replace(/^\s*,?\s*/, ''))
-const cuBaseline = (text, rows) => aplica(text, [[PLACEHOLDER, linii(rows).join('\n')]])
-const MIG_B = cuBaseline(MIG, B0)
-
-// rulează ca un rol (cu JWT-ul contului, dacă e dat); întoarce { rows } sau { code, message }
-async function ca(db, rol, uid, sql, { pastreaza = false } = {}) {
-  await db.exec(`BEGIN; SET LOCAL ROLE ${rol}; ${uid ? `SELECT set_config('request.jwt.claim.sub', '${uid}', true);` : ''}`)
-  try {
-    const r = await db.query(sql)
-    await db.exec(pastreaza ? 'COMMIT' : 'ROLLBACK')
-    return { rows: r.rows }
-  } catch (e) {
-    await db.exec('ROLLBACK')
-    return { code: e.code, message: e.message }
-  }
-}
-// INSERT ca din interfață (cu RETURNING: interfața cere id-ul înapoi)
-const ins = (proiect) => `INSERT INTO public.sites (name, active, beneficiar_principal, proiect_id) VALUES ('Santier nou', true, 'Beneficiar', ${proiect}) RETURNING id`
-
-// ── verificările de comportament: întoarce lista abaterilor (gol = totul ca în cerere) ──
-async function verifica(db) {
-  const ab = []
-  const asteptRefuz = (r, ce) => { if (!r.code) ab.push(`${ce}: a trecut (aștepta refuz 42501)`); else if (r.code !== '42501') ab.push(`${ce}: ${r.code} ${r.message} (aștepta 42501)`) }
-  const asteptRand = (r, ce) => { if (r.code) ab.push(`${ce}: ${r.code} ${r.message}`); else if (r.rows.length !== 1) ab.push(`${ce}: ${r.rows.length} rânduri (aștepta 1)`) }
-  // migrarea nu acordă nimic: înainte de acordare, nimeni în afară de owner nu creează
-  asteptRefuz(await ca(db, 'authenticated', U.TIT, ins('NULL')), 'A0 titularul ÎNAINTE de acordare')
-  await db.exec(ACORDA)
-  // matricea INSERT (din cerere)
-  for (const [cont, proiect, astept] of [
-    ['OWNER', 'NULL', true], ['OWNER', '2', true],
-    ['TIT', 'NULL', true], ['TIT', '1', true], ['TIT', '2', true], ['TIT_ADM', 'NULL', true],
-    ['TIT_VIEW', 'NULL', false], ['CONTR', 'NULL', false], ['CONTR', '1', false], ['LOC', 'NULL', false], ['STRAIN', 'NULL', false],
-    ['TIT_R', 'NULL', true], ['TIT_R', '1', true], ['TIT_R', '2', false],
-  ]) {
-    const r = await ca(db, 'authenticated', U[cont], ins(proiect))
-    if (astept) asteptRand(r, `I ${cont} proiect ${proiect}`); else asteptRefuz(r, `I ${cont} proiect ${proiect}`)
-  }
-  asteptRefuz(await ca(db, 'authenticated', null, ins('NULL')), 'I fără JWT')
-  asteptRefuz(await ca(db, 'anon', null, ins('NULL')), 'I anon')
-  asteptRefuz(await ca(db, 'anon', U.TIT, ins('NULL')), 'I anon cu JWT-ul titularului')
-  // UPDATE / DELETE rămân ale owner-ului (contul cu drept: 0 rânduri, nimic schimbat)
-  for (const [ce, sql] of [['U redenumire', `UPDATE public.sites SET name = 'Alt nume' WHERE name = 'Sediu' RETURNING id`],
-                           ['U legare de proiect', `UPDATE public.sites SET proiect_id = 2 WHERE name = 'Sediu' RETURNING id`],
-                           ['U dezactivare', `UPDATE public.sites SET active = false WHERE name = 'Sediu' RETURNING id`],
-                           ['D ștergere', `DELETE FROM public.sites WHERE name = 'Sediu' RETURNING id`]]) {
-    const r = await ca(db, 'authenticated', U.TIT, sql)
-    if (r.code || r.rows.length !== 0) ab.push(`${ce} ca titular: ${JSON.stringify(r)} (aștepta 0 rânduri)`)
-    const o = await ca(db, 'authenticated', U.OWNER, sql)
-    if (o.code || o.rows.length !== 1) ab.push(`${ce} ca owner: ${JSON.stringify(o)} (aștepta 1 rând)`)
-  }
-  // predicatul: doar adevărat / fals despre apelant; anon nu-l poate chema
-  const p1 = await ca(db, 'authenticated', U.TIT, `SELECT public.fn_sites_drept_creare(NULL) AS d`)
-  const p2 = await ca(db, 'authenticated', U.CONTR, `SELECT public.fn_sites_drept_creare(NULL) AS d`)
-  if (p1.rows?.[0]?.d !== true || p2.rows?.[0]?.d !== false) ab.push(`P predicatul: titular ${JSON.stringify(p1)}, fără drept ${JSON.stringify(p2)}`)
-  asteptRefuz(await ca(db, 'anon', null, `SELECT public.fn_sites_drept_creare(NULL)`), 'P anon cheamă predicatul')
-  // dreptul retras = refuz imediat (nimic ținut minte)
-  await db.exec(`DELETE FROM public.user_module_access WHERE profile_id = '${U.TIT}' AND module = 'santiere_creare'`)
-  asteptRefuz(await ca(db, 'authenticated', U.TIT, ins('NULL')), 'R titularul după retragerea dreptului')
-  await db.exec(`INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('${U.TIT}', 'santiere_creare', 'editor')`)
-  return ab
 }
 
 let esec = 0
 const ok = (cond, msg) => { if (cond) console.log('  OK  ' + msg); else { esec++; console.log('  NU  ' + msg) } }
 
-// ── 1. aplicarea + verificările ──
-console.log('1. aplicarea migrării (baseline pe schema falsă) + verificările')
+// ── 0. fidelitatea schemei ──
+console.log('0. fidelitatea schemei: corpurile din producție, baseline-ul L15')
+const BAZA0 = await bazaNoua()
+for (const [fn, h] of Object.entries(MD5_PRODUCTIE)) {
+  const r = (await BAZA0.query(`SELECT md5(replace(prosrc, chr(13), '')) AS h FROM pg_proc WHERE oid = to_regprocedure('public.${fn}')`)).rows[0]
+  ok(r?.h === h, `${fn}: corpul din schelet = cel din producție (md5 ${r?.h})`)
+}
+const B0 = await baseline(BAZA0)
+await BAZA0.close()
+// închiderea + tabelul, pe schema falsă = EXACT ce e scris de mână (sites + pornirea + lanțul din 20261209a + funcțiile triggerelor lui sites)
+const ETICHETE = ['functie auth.uid()', 'functie fn_auto_create_executie_proiect()', 'functie fn_executie_acces_lista(boolean)',
+  'functie fn_executie_acces_lista_cont(uuid,boolean)', 'functie fn_executie_acces_nerestrans()', 'functie fn_executie_acces_nerestrans_cont(uuid)',
+  'functie fn_executie_proiect_permis(bigint,boolean)', 'functie fn_schelet_sites_mutat()', 'functie fn_site_name_to_cod_intern(text)',
+  'tabel sites | acl', 'tabel sites | acl coloane', 'tabel sites | politici', 'tabel sites | rls', 'tabel sites | secvente', 'tabel sites | triggere']
+ok(JSON.stringify(B0.map(r => r.eticheta)) === JSON.stringify(ETICHETE), 'baseline: etichetele așteptate — ' + B0.map(r => r.eticheta).join('; '))
+const linii = (rows) => rows.map((r, i) => (i === 0 ? '    ' : '  , ') + r.linie_baseline.replace(/^\s*,?\s*/, ''))
+const cuBaseline = (text, rows) => aplica(text, [[PLACEHOLDER, linii(rows).join('\n')]])
+const MIG_B = cuBaseline(MIG, B0)
+
+// ── tranzacții ca un rol, cu JWT-ul contului (ambele surse ale lui auth.uid()) ──
+async function tx(db, { rol = null, uid = null, commit = false } = {}, fn) {
+  await db.exec('BEGIN')
+  try {
+    if (rol) await db.exec(`SET LOCAL ROLE ${rol}`)
+    if (uid) {
+      await db.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [uid])
+      await db.query(`SELECT set_config('request.jwt.claims', $1, true)`, [JSON.stringify({ sub: uid, role: rol || 'authenticated' })])
+    }
+    const out = await fn({ q: (s, p) => db.query(s, p), sudo: () => db.exec('RESET ROLE') })
+    await db.exec(commit ? 'COMMIT' : 'ROLLBACK')
+    return out
+  } catch (e) { try { await db.exec('ROLLBACK') } catch { /* deja anulată */ } throw e }
+}
+// rulează ca un rol; întoarce { rows } sau { code, message }
+async function ca(db, rol, uid, sql, params) {
+  try { return { rows: await tx(db, { rol, uid }, ({ q }) => q(sql, params).then(r => r.rows)) } }
+  catch (e) { return { code: e.code, message: e.message } }
+}
+const RPC = `SELECT public.fn_sites_creeaza($1, $2, $3) AS r`
+const numara = async (q) => (await q(`SELECT (SELECT count(*)::int FROM public.sites) AS s, (SELECT count(*)::int FROM public.executie_proiecte) AS p`)).rows[0]
+const randSite = async (q, id) => (await q(`SELECT * FROM public.sites WHERE id = $1`, [id])).rows[0]
+const proiecteSite = async (q, id) => (await q(`SELECT id, beneficiar FROM public.executie_proiecte WHERE site_id = $1 ORDER BY id`, [id])).rows.map(r => ({ id: Number(r.id), beneficiar: r.beneficiar }))
+// valorile implicite ale coloanelor administrative (citite din producție: tip / implicit) — ce TREBUIE să rămână după RPC
+const IMPLICITE = { contract_id: null, aliases: [], denumire_qr: null, raport_zilnic_necesar: true, tip_locatie: 'santier', adresa: null,
+  este_inchiriat: false, lat: null, lng: null, localitate_meteo: null, meteo_activ: true, active: true }
+
+// un apel RPC ca un cont, cu verificările de stare în ACEEAȘI tranzacție (ca postgres, după RESET ROLE); întoarce lista abaterilor
+async function cazRpc(db, cont, proiect, astept, { nume = 'Gazpet - Santier nou', benef = 'Beneficiar SA', rol = 'authenticated' } = {}) {
+  const ce = `${cont ?? 'fără JWT'} (${rol}) proiect ${proiect}`
+  const ab = []
+  try {
+    await tx(db, { rol, uid: cont ? U[cont] : null }, async ({ q, sudo }) => {
+      const r = (await q(RPC, [nume, proiect, benef])).rows[0].r
+      await sudo()
+      if (astept !== 'ok') { ab.push(`${ce}: a trecut ${JSON.stringify(r)} (aștepta ${astept})`); return }
+      const n0 = await numara(q)
+      if (!(Number.isSafeInteger(r?.site_id) && r.site_id > 0 && r.creat === true)) ab.push(`${ce}: răspuns ${JSON.stringify(r)}`)
+      const s = await randSite(q, r.site_id)
+      if (!s || s.name !== nume.trim() || s.beneficiar_principal !== benef) ab.push(`${ce}: rândul ${JSON.stringify(s)}`)
+      for (const [k, v] of Object.entries(IMPLICITE)) if (JSON.stringify(s?.[k]) !== JSON.stringify(v)) ab.push(`${ce}: ${k} = ${JSON.stringify(s?.[k])} (aștepta ${JSON.stringify(v)})`)
+      const leg = await proiecteSite(q, r.site_id)
+      if (proiect != null) {
+        if (Number(s?.proiect_id) !== proiect) ab.push(`${ce}: sites.proiect_id = ${s?.proiect_id}`)
+        if (leg.length !== 1 || leg[0].id !== proiect) ab.push(`${ce}: proiectele pe șantier ${JSON.stringify(leg)} (aștepta exact [${proiect}], fără proiect automat)`)
+        if (n0.p !== 4) ab.push(`${ce}: ${n0.p} proiecte (aștepta 4: niciun proiect automat)`)
+      } else {
+        // fără proiect = ca INSERT-ul owner-ului de azi: triggerul real creează proiectul automat (beneficiar NULL)
+        if (s?.proiect_id != null || leg.length !== 1 || leg[0].beneficiar !== null || n0.p !== 5) ab.push(`${ce}: proiectul automat ${JSON.stringify({ leg, p: n0.p, proiect_id: s?.proiect_id })}`)
+      }
+    })
+  } catch (e) {
+    if (astept === 'ok') ab.push(`${ce}: ${e.code} ${e.message}`)
+    else if (e.code !== astept) ab.push(`${ce}: ${e.code} ${e.message} (aștepta ${astept})`)
+  }
+  return ab
+}
+
+// ── 1. verificările pe BD după migrare: întoarce lista abaterilor (gol = totul ca în cerere) ──
+async function verifica(db) {
+  const ab = []
+  const asteptCod = (r, cod, ce, re) => { if (!r.code) ab.push(`${ce}: a trecut (aștepta ${cod})`); else if (r.code !== cod || (re && !re.test(r.message))) ab.push(`${ce}: ${r.code} ${r.message} (aștepta ${cod})`) }
+  // migrarea nu acordă nimic: înainte de acordare titularul e refuzat; owner-ul poate deja
+  ab.push(...await cazRpc(db, 'TIT', 1, '42501'))
+  ab.push(...await cazRpc(db, 'OWNER', 1, 'ok'))
+  await db.exec(ACORDA)
+  for (const [cont, proiect, astept] of [
+    ['OWNER', null, 'ok'], ['OWNER', 2, 'ok'],
+    ['TIT', null, 'ok'], ['TIT', 1, 'ok'], ['TIT', 2, 'ok'], ['TIT', 3, 'ok'], ['TIT_ADM', 3, 'ok'],
+    ['TIT_VIEW', null, '42501'], ['TIT_VIEW', 1, '42501'], ['CONTR', null, '42501'], ['CONTR', 1, '42501'], ['LOC', null, '42501'],
+    ['STRAIN', 1, '42501'], ['TIT_FARA_EX', 1, '42501'], ['TIT_FARA_EX', null, '42501'], ['TIT_EX_VIEW', 1, '42501'],
+    // contul restrâns: proiectul din lista lui de scriere da; cel doar de citire nu; cel ABSENT din listă nu; fără proiect nu (doar nerestrânsul)
+    ['TIT_R', 1, 'ok'], ['TIT_R', 2, '42501'], ['TIT_R', 3, '42501'], ['TIT_R', null, '42501'],
+    // refuzuri de reguli (contul are dreptul): proiect inexistent, proiect legat de ALT șantier
+    ['TIT', 999999, 'P0002'], ['TIT', 4, 'P0001'],
+  ]) ab.push(...await cazRpc(db, cont, proiect, astept))
+  ab.push(...await cazRpc(db, 'TIT', 1, '22023', { nume: '   ' }))
+  ab.push(...await cazRpc(db, null, 1, '42501'))
+  ab.push(...await cazRpc(db, null, null, '42501'))
+  ab.push(...await cazRpc(db, 'TIT', 1, '42501', { rol: 'anon' }))
+  ab.push(...await cazRpc(db, null, 1, '42501', { rol: 'service_role' }))
+  asteptCod(await ca(db, 'anon', U.TIT, RPC, ['x', 1, null]), '42501', 'anon cheamă RPC-ul', /permission denied for function/)
+  // ce scrie: semnătura are DOAR nume / proiect / beneficiar — un parametru administrativ în plus nu există (42883)
+  asteptCod(await ca(db, 'authenticated', U.TIT, `SELECT public.fn_sites_creeaza(p_nume => 'x', p_proiect => 1, p_beneficiar => NULL, p_meteo_activ => true)`), '42883', 'RPC cu parametru meteo în plus')
+  // căile directe: contul cu drept NU are INSERT direct (cu sau fără coloane administrative); UPDATE / DELETE rămân ale owner-ului
+  asteptCod(await ca(db, 'authenticated', U.TIT, `INSERT INTO public.sites (name, active, proiect_id, meteo_activ, lat, lng, contract_id, tip_locatie)
+    VALUES ('Direct', true, 1, true, 44.9, 26.0, NULL, 'depozit') RETURNING id`), '42501', 'INSERT direct cu coloane administrative (titular)', /row-level security/)
+  asteptCod(await ca(db, 'authenticated', U.TIT, `INSERT INTO public.sites (name, active) VALUES ('Direct', true) RETURNING id`), '42501', 'INSERT direct doar cu nume (titular)', /row-level security/)
+  const o = await ca(db, 'authenticated', U.OWNER, `INSERT INTO public.sites (name, active) VALUES ('Sediu nou owner', true) RETURNING id`)
+  if (o.code || o.rows.length !== 1) ab.push(`INSERT direct owner: ${JSON.stringify(o)}`)
+  for (const [ce, sql] of [['U redenumire', `UPDATE public.sites SET name = 'Sediu alt nume' WHERE name = 'Sediu central' RETURNING id`],
+                           ['U legare de proiect', `UPDATE public.sites SET proiect_id = 2 WHERE name = 'Sediu central' RETURNING id`],
+                           ['U meteo', `UPDATE public.sites SET meteo_activ = false WHERE name = 'Sediu central' RETURNING id`],
+                           ['D ștergere', `DELETE FROM public.sites WHERE name = 'Sediu central' RETURNING id`]]) {
+    const r = await ca(db, 'authenticated', U.TIT, sql)
+    if (r.code || r.rows.length !== 0) ab.push(`${ce} ca titular: ${JSON.stringify(r)} (aștepta 0 rânduri)`)
+    const w = await ca(db, 'authenticated', U.OWNER, sql)
+    if (w.code || w.rows.length !== 1) ab.push(`${ce} ca owner: ${JSON.stringify(w)} (aștepta 1 rând)`)
+  }
+  // idempotent pe proiect: al doilea apel întoarce ACELAȘI șantier, creat = false, fără rând nou
+  try {
+    await tx(db, { rol: 'authenticated', uid: U.TIT }, async ({ q, sudo }) => {
+      const r1 = (await q(RPC, ['Gazpet - Idem', 1, null])).rows[0].r
+      const r2 = (await q(RPC, ['Gazpet - Idem', 1, null])).rows[0].r
+      await sudo()
+      const n = await numara(q)
+      if (r1.creat !== true || r2.creat !== false || r2.site_id !== r1.site_id || n.s !== 3 || n.p !== 4) ab.push(`idempotență: ${JSON.stringify({ r1, r2, n })}`)
+    })
+  } catch (e) { ab.push('idempotență: ' + e.message) }
+  // dreptul retras = refuz imediat (nimic ținut minte)
+  await db.exec(`DELETE FROM public.user_module_access WHERE profile_id = '${U.TIT}' AND module = 'santiere_creare'`)
+  ab.push(...await cazRpc(db, 'TIT', 1, '42501'))
+  await db.exec(`INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('${U.TIT}', 'santiere_creare', 'editor')`)
+  // postcondiția RPC-ului: un trigger de proiect automat SCHIMBAT (fără „nu dubla”) nu poate dubla în tăcere — refuz, nimic scris
+  try {
+    await tx(db, {}, async ({ q }) => {
+      await q(`CREATE OR REPLACE FUNCTION public.fn_auto_create_executie_proiect() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+        BEGIN INSERT INTO executie_proiecte (cod_intern, nume, beneficiar, site_id, activ) VALUES ('AUTO_' || NEW.id, upper(NEW.name), NULL, NEW.id, true); RETURN NEW; END $f$`)
+      await q('SAVEPOINT s')
+      await q(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [U.TIT])
+      await q('SET LOCAL ROLE authenticated')
+      let cod = null
+      try { await q(RPC, ['Gazpet - Trigger schimbat', 1, null]) } catch (e) { cod = e.code + ' ' + e.message }
+      await q('ROLLBACK TO SAVEPOINT s')
+      if (!/^P0001 .*nu e unică/.test(cod || '')) ab.push(`postcondiția RPC la trigger schimbat: ${cod || 'a trecut'}`)
+    })
+  } catch (e) { ab.push('postcondiția RPC: ' + e.message) }
+  return ab
+}
+
+// ── 2. fluxul COMPLET al wizard-ului prin codul JS real, peste un adaptor tip PostgREST (fiecare cerere = tranzacția ei, COMISĂ) ──
+async function importJs(sursa) {
+  const d = mkdtempSync(join(tmpdir(), 'santiere-js-'))
+  const f = join(d, 'santiereDrept.mjs')
+  writeFileSync(f, sursa, 'utf8')
+  try { return await import(pathToFileURL(f).href + '?v=' + md5(sursa)) } finally { rmSync(d, { recursive: true, force: true }) }
+}
+function client(db, uid, { defect = {} } = {}) {
+  const nr = { rpc: 0, citire: 0 }
+  const run = async (sql, params) => {
+    try { return { rows: await tx(db, { rol: 'authenticated', uid, commit: true }, ({ q }) => q(sql, params).then(r => r.rows)) } }
+    // PostgREST: funcția lipsă din cache = PGRST202; restul = SQLSTATE-ul din bază
+    catch (e) { return { error: { code: e.code === '42883' ? 'PGRST202' : e.code, message: e.message } } }
+  }
+  const retea = { data: null, error: { message: 'TypeError: Failed to fetch' } }
+  return {
+    rpc: async (fn, args) => {
+      nr.rpc++
+      if (defect.inainte?.includes(nr.rpc)) return retea
+      const r = await run(`SELECT public.${fn}(p_nume => $1, p_proiect => $2, p_beneficiar => $3) AS r`, [args.p_nume, args.p_proiect, args.p_beneficiar])
+      if (defect.dupa?.includes(nr.rpc)) return retea
+      if (defect.gol?.includes(nr.rpc)) return { data: null, error: null }
+      return r.error ? { data: null, error: r.error } : { data: r.rows[0].r, error: null }
+    },
+    from: (t) => ({
+      insert: (obj) => ({ select: (cols) => ({ single: async () => {
+        const k = Object.keys(obj)
+        const r = await run(`INSERT INTO public.${t} (${k.join(', ')}) VALUES (${k.map((_, i) => '$' + (i + 1)).join(', ')}) RETURNING ${cols}`, k.map(x => obj[x]))
+        if (r.error) return { data: null, error: r.error }
+        return r.rows.length === 1 ? { data: r.rows[0], error: null } : { data: null, error: { code: 'PGRST116', message: r.rows.length + ' rânduri' } }
+      } }) }),
+      select: (cols) => ({ eq: (c, v) => ({ maybeSingle: async () => {
+        nr.citire++
+        if (defect.citire?.includes(nr.citire)) return retea
+        const r = await run(`SELECT ${cols} FROM public.${t} WHERE ${c} = $1`, [v])
+        return r.error ? { data: null, error: r.error } : { data: r.rows[0] ?? null, error: null }
+      } }) }),
+    }),
+  }
+}
+// pașii wizard-ului (src/ProiectNouWizard.jsx, creeaza): 1. INSERT proiect … select('id').single(); 2. creeazaSantier(proiect.id) → mesajSantier
+async function wizard(js, db, uid, { defect, numeProiect = 'Proiect Wizard' } = {}) {
+  const c = client(db, uid, { defect })
+  const { data: proiect, error } = await c.from('executie_proiecte').insert({ nume: numeProiect, cod_intern: 'PW', beneficiar: 'Beneficiar SA', site_id: null, activ: true }).select('id').single()
+  if (error) return { eroareProiect: error }
+  const r = await js.creeazaSantier(c, { nume: 'Gazpet - ' + numeProiect, proiectId: Number(proiect.id), beneficiar: 'Beneficiar SA' })
+  return { proiect: Number(proiect.id), r, m: js.mesajSantier(r, { cuProiect: true }) }
+}
+async function stareWizard(db, proiect) {
+  return tx(db, {}, async ({ q }) => {
+    const p = (await q(`SELECT site_id FROM public.executie_proiecte WHERE id = $1`, [proiect])).rows[0]
+    const s = (await q(`SELECT id, proiect_id FROM public.sites WHERE name = 'Gazpet - Proiect Wizard'`)).rows
+    const n = await numara(q)
+    return { site_id: p?.site_id == null ? null : Number(p.site_id), santiere: s.map(x => ({ id: Number(x.id), proiect_id: x.proiect_id == null ? null : Number(x.proiect_id) })), ...n }
+  })
+}
+// scenariile: [nume, cont, migrare aplicată?, drept acordat?, defect, așteptarea]; „bun” = un șantier, legat în ambele sensuri, 5 proiecte (fără automat)
+const SCEN_W = [
+  ['W1 cont cu drept', 'TIT', true, true, {}, { tip: 'ok', creat: true, legat: true }],
+  ['W2 owner', 'OWNER', true, false, {}, { tip: 'ok', creat: true, legat: true }],
+  ['W3 răspuns pierdut DUPĂ commit → reconciliere din BD', 'TIT', true, true, { dupa: [1] }, { tip: 'ok', verificat: true, legat: true }],
+  ['W4 rețea picată ÎNAINTE → reîncercare', 'TIT', true, true, { inainte: [1] }, { tip: 'ok', creat: true, legat: true }],
+  ['W5 răspuns pierdut + citirea picată → reîncercare idempotentă', 'TIT', true, true, { dupa: [1], citire: [1] }, { tip: 'ok', creat: false, legat: true }],
+  ['W6 migrarea NEAPLICATĂ (UI nouă), owner', 'OWNER', false, false, {}, { tip: 'indisponibil', legat: false }],
+  ['W7 cont fără drept (opțiunea ascunsă, cererea forțată)', 'CONTR', true, true, {}, { tip: 'refuz', legat: false }],
+  ['W8 răspuns pierdut de două ori, fără citire → necunoscut, nu succes', 'TIT', true, true, { inainte: [1, 2], citire: [1, 2] }, { tip: 'necunoscut', legat: false }],
+  ['W12 răspuns gol (fără id) de două ori, fără citire → necunoscut, nu succes', 'TIT', true, true, { gol: [1, 2], citire: [1, 2] }, { tip: 'necunoscut', legat: true }],
+]
+async function ruleazaWizard(js, [nume, cont, migrare, drept, defect, a]) {
+  const db = await bazaNoua()
+  try {
+    if (migrare) await aplicaMig(db, MIG_B)
+    if (drept) await db.exec(ACORDA)
+    const w = await wizard(js, db, U[cont], { defect })
+    if (w.eroareProiect) return `${nume}: proiectul n-a putut fi creat: ${w.eroareProiect.code} ${w.eroareProiect.message}`
+    const st = await stareWizard(db, w.proiect)
+    const ab = []
+    if (w.r.tip !== a.tip) ab.push(`tip ${w.r.tip} (aștepta ${a.tip}; ${w.r.motiv || w.r.mesaj || ''})`)
+    if ('creat' in a && w.r.creat !== a.creat) ab.push(`creat ${w.r.creat}`)
+    if ('verificat' in a && w.r.verificat !== a.verificat) ab.push(`verificat ${w.r.verificat}`)
+    if (w.m.ok !== (a.tip === 'ok')) ab.push(`mesaj ok=${w.m.ok}: ${w.m.text}`)
+    if (a.legat) {
+      if (st.santiere.length !== 1 || st.site_id !== st.santiere[0].id || st.santiere[0].proiect_id !== w.proiect || st.p !== 5) ab.push('stare ' + JSON.stringify(st))
+    } else if (st.santiere.length !== 0 || st.site_id !== null || st.p !== 5) ab.push('stare (aștepta proiect fără șantier) ' + JSON.stringify(st))
+    return ab.length ? `${nume}: ${ab.join('; ')}` : null
+  } finally { await db.close() }
+}
+// UI VECHE (origin/main, src/ProiectNouWizard.jsx înainte de PR): 1. INSERT sites (name, active, beneficiar_principal) → id; 2. INSERT proiect cu
+// site_id; 3. UPDATE sites SET proiect_id. Mesajele vechi: eroare la 1 = „⚠️ șantierul NU s-a creat”; 3 fără eroare = „🏗️ șantier nou creat”.
+async function uiVeche(db, uid) {
+  const c = client(db, uid)
+  const s = await c.from('sites').insert({ name: 'Gazpet - Proiect Vechi', active: true, beneficiar_principal: 'Beneficiar SA' }).select('id').single()
+  const p = await c.from('executie_proiecte').insert({ nume: 'Proiect Vechi', cod_intern: 'PV', site_id: s.data ? Number(s.data.id) : null, activ: true }).select('id').single()
+  return { pasSantier: s.error ? `⚠️ șantierul NU s-a creat (${s.error.message})` : 'continuă cu UPDATE sites', santier: s, proiect: p }
+}
+
+// ── rularea ──
+const JS = await importJs(JS_SURSA)
+console.log('1. migrarea aplicată (baseline pe schema falsă) + verificările pe BD')
 {
   const db = await bazaNoua()
   const j = await aplicaMig(db, MIG_B)
@@ -202,78 +395,125 @@ console.log('1. aplicarea migrării (baseline pe schema falsă) + verificările'
   await db.close()
 }
 
-// ── 2. refuzurile migrării ──
-console.log('2. refuzurile migrării')
+console.log('2. fluxul complet al wizard-ului (cod JS real + adaptor PostgREST) și combinațiile de livrare')
+for (const s of SCEN_W) { const r = await ruleazaWizard(JS, s); ok(r == null, r || s[0]) }
+{
+  // cont restrâns: RLS-ul REAL pe executie_proiecte refuză proiectul nou (nu e în lista lui) → wizard-ul se oprește la proiect, nimic creat
+  const db = await bazaNoua(); await aplicaMig(db, MIG_B); await db.exec(ACORDA)
+  const w = await wizard(JS, db, U.TIT_R)
+  const n = await tx(db, {}, ({ q }) => numara(q))
+  ok(w.eroareProiect?.code === '42501' && n.s === 2 && n.p === 4, `W9 cont restrâns: proiectul nou refuzat de RLS (${w.eroareProiect?.code}), nimic creat`)
+  // UI VECHE + migrarea aplicată + dreptul acordat: INSERT-ul direct e refuzat la pasul 1 → mesajul vechi de eșec, NU un fals succes;
+  // UPDATE-ul vechi (pasul 3, care ar fi întors 0 rânduri fără eroare) nu mai e atins
+  const v = await uiVeche(db, U.TIT)
+  const n2 = await tx(db, {}, ({ q }) => numara(q))
+  ok(v.santier.error?.code === '42501' && /NU s-a creat/.test(v.pasSantier) && n2.s === 2, `W10 UI veche + migrare + drept: șantierul refuzat la INSERT (${v.santier.error?.code}), mesaj de eșec, niciun șantier`)
+  await db.close()
+}
+{
+  // owner, UI VECHE: comportamentul de azi (dublarea veche: proiectul automat + proiectul wizard-ului) e ACELAȘI înainte și după migrare —
+  // migrarea nu schimbă calea veche; dublarea dispare doar cu UI nouă (de aceea: merge = UI nouă înainte de acordarea dreptului)
+  const rez = []
+  for (const migrare of [false, true]) {
+    const db = await bazaNoua(); if (migrare) await aplicaMig(db, MIG_B)
+    const v = await uiVeche(db, U.OWNER)
+    const leg = await tx(db, {}, ({ q }) => proiecteSite(q, Number(v.santier.data?.id)))
+    rez.push(leg.length); await db.close()
+  }
+  ok(rez[0] === 2 && rez[1] === 2, `W11 owner + UI veche: ${rez[0]} proiecte pe șantier fără migrare, ${rez[1]} cu migrare (aceeași cale veche, neschimbată)`)
+}
+
+console.log('3. paritatea regulii de cont: interfața (poateCreaSantier) = BD-ul (RPC pe un proiect nerestrâns)')
+{
+  const db = await bazaNoua(); await aplicaMig(db, MIG_B); await db.exec(ACORDA)
+  const dif = []
+  for (const cont of Object.keys(U)) {
+    const prof = await tx(db, {}, async ({ q }) => {
+      const p = (await q(`SELECT is_owner FROM public.profiles WHERE id = $1`, [U[cont]])).rows[0]
+      const ma = (await q(`SELECT module, access_level FROM public.user_module_access WHERE profile_id = $1`, [U[cont]])).rows
+      return { is_owner: p.is_owner, module_access_levels: Object.fromEntries(ma.map(x => [x.module, x.access_level])) }   // ca App.jsx (profilul)
+    })
+    const ui = JS.poateCreaSantier(prof)
+    const bd = (await ca(db, 'authenticated', U[cont], RPC, ['Gazpet - Paritate', 1, null])).rows != null
+    if (ui !== bd) dif.push(`${cont}: UI ${ui}, BD ${bd}`)
+  }
+  ok(dif.length === 0, `paritate pe ${Object.keys(U).length} conturi ${dif.join('; ')}`)
+  await db.close()
+}
+
+// ── 4. refuzurile migrării ──
+console.log('4. refuzurile migrării')
+const gol = async (db) => (await db.query(`SELECT to_regprocedure('public.fn_sites_creeaza(text, bigint, text)') IS NULL
+     AND NOT EXISTS (SELECT 1 FROM public.app_modules WHERE key = 'santiere_creare') AS gol`)).rows[0].gol
+const AUTO_SCHIMBAT = `CREATE OR REPLACE FUNCTION public.fn_auto_create_executie_proiect() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $function$ BEGIN RETURN NEW; END $function$;`
 for (const [nume, fn, re] of [
   ['fără marcajul runnerului', (db) => aplicaMig(db, MIG_B, { marcaj: false }), /garda start invalida/],
   ['fără plafon', (db) => aplicaMig(db, MIG_B, { plafon: 0, marcajPlafon: false }), /PLAFON_TRANZACTIE lipsa/],
   ['plafon fără marcaj', (db) => aplicaMig(db, MIG_B, { marcajPlafon: false }), /PLAFON_TRANZACTIE lipsa/],
   ['baseline necompletat', (db) => aplicaMig(db, MIG_NECOMPLETAT), /baseline L15 necompletat/],
-  ['politică nouă pe sites după baseline', async (db) => {
-    await db.exec(`CREATE POLICY zz_insert_toti ON public.sites FOR INSERT TO authenticated WITH CHECK (true);`)
-    return aplicaMig(db, MIG_B)
-  }, /starea de acces \(inainte\) difera de baseline-ul L15 revizuit: tabel sites \| politici/],
-  ['drept nou pe sites după baseline', async (db) => {
-    await db.exec(`GRANT SELECT ON public.sites TO PUBLIC;`)
-    return aplicaMig(db, MIG_B)
-  }, /difera de baseline-ul L15 revizuit: tabel sites \| acl/],
+  ['politică nouă pe sites după baseline', async (db) => { await db.exec(`CREATE POLICY zz_insert_toti ON public.sites FOR INSERT TO authenticated WITH CHECK (true);`); return aplicaMig(db, MIG_B) },
+    /starea de acces \(inainte\) difera de baseline-ul L15 revizuit: tabel sites \| politici/],
+  ['drept nou pe sites după baseline', async (db) => { await db.exec(`GRANT SELECT ON public.sites TO PUBLIC;`); return aplicaMig(db, MIG_B) }, /difera de baseline-ul L15 revizuit: tabel sites \| acl/],
   ['dependență schimbată după baseline', async (db) => {
-    await db.exec(functie('CREATE FUNCTION public.fn_executie_proiect_permis(').replace(/^CREATE FUNCTION/, 'CREATE OR REPLACE FUNCTION')
-      .replace('SELECT p_scriere IS NOT NULL', 'SELECT true OR p_scriere IS NOT NULL'))
+    await db.exec(functie('CREATE FUNCTION public.fn_executie_proiect_permis(').replace(/^CREATE FUNCTION/, 'CREATE OR REPLACE FUNCTION').replace('SELECT p_scriere IS NOT NULL', 'SELECT true OR p_scriere IS NOT NULL'))
     return aplicaMig(db, MIG_B)
   }, /difera de baseline-ul L15 revizuit: functie fn_executie_proiect_permis/],
-  ['RESTRICTIVE pe INSERT (dreptul nou n-ar avea efect)', async (db) => {
-    await db.exec(`CREATE POLICY zz_restr ON public.sites AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK (auth.uid() IS NOT NULL);`)
-    return aplicaMig(db, cuBaseline(MIG, await baseline(db)))
-  }, /politica RESTRICTIVE pe INSERT/],
-  ['authenticated fără INSERT pe sites', async (db) => {
-    await db.exec(`REVOKE INSERT ON public.sites FROM authenticated;`)
-    return aplicaMig(db, cuBaseline(MIG, await baseline(db)))
-  }, /authenticated nu are INSERT pe sites/],
-  ['cheia există deja (reaplicare parțială)', async (db) => {
-    await db.exec(`INSERT INTO public.app_modules (key, name) VALUES ('santiere_creare', 'x');`)
+  ['corpul triggerului de proiect automat schimbat după baseline', async (db) => { await db.exec(AUTO_SCHIMBAT); return aplicaMig(db, MIG_B) },
+    /difera de baseline-ul L15 revizuit: functie fn_auto_create_executie_proiect/],
+  ['triggerul de proiect automat dezactivat', async (db) => { await db.exec(`ALTER TABLE public.sites DISABLE TRIGGER tr_auto_create_executie_proiect;`); return aplicaMig(db, MIG_B) },
+    /triggerul tr_auto_create_executie_proiect nu e cel asteptat/],
+  ['triggerul de proiect automat cu WHEN', async (db) => {
+    await db.exec(`DROP TRIGGER tr_auto_create_executie_proiect ON public.sites; CREATE TRIGGER tr_auto_create_executie_proiect AFTER INSERT ON public.sites FOR EACH ROW WHEN (NEW.active) EXECUTE FUNCTION public.fn_auto_create_executie_proiect();`)
     return aplicaMig(db, MIG_B)
-  }, /reaplicare/],
+  }, /triggerul tr_auto_create_executie_proiect nu e cel asteptat/],
+  ['cheie străină pe executie_proiecte.site_id (ordinea din RPC n-ar mai merge)', async (db) => {
+    await db.exec(`ALTER TABLE public.executie_proiecte ADD CONSTRAINT zz_fk_site FOREIGN KEY (site_id) REFERENCES public.sites(id);`)
+    return aplicaMig(db, MIG_B)
+  }, /executie_proiecte.site_id are cheie straina/],
+  ['cheia există deja (reaplicare parțială)', async (db) => { await db.exec(`INSERT INTO public.app_modules (key, name) VALUES ('santiere_creare', 'x');`); return aplicaMig(db, MIG_B) }, /reaplicare/],
+  ['o supraîncărcare a RPC-ului există deja', async (db) => { await db.exec(`CREATE FUNCTION public.fn_sites_creeaza(p text) RETURNS jsonb LANGUAGE sql AS $$ SELECT NULL::jsonb $$;`); return aplicaMig(db, MIG_B) }, /reaplicare/],
 ]) {
   const db = await bazaNoua()
   let m = null
   try { await fn(db) } catch (e) { m = e.message }
-  const ramas = (await db.query(`SELECT NOT EXISTS (SELECT 1 FROM pg_policy WHERE polname = 'sites_insert_drept_creare')
-     AND to_regprocedure('public.fn_sites_drept_creare(bigint)') IS NULL AS gol`)).rows[0].gol
-  ok(re.test(m || '') && ramas, `${nume}: ${m}`)
+  // nimic schimbat de migrare: RPC-ul (semnătura nouă) lipsește, iar cheia de modul e cum a lăsat-o pregătirea (lipsă, sau rândul pus de test)
+  const g = (await db.query(`SELECT to_regprocedure('public.fn_sites_creeaza(text, bigint, text)') IS NULL
+     AND (SELECT count(*) FROM public.app_modules WHERE key = 'santiere_creare' AND name = 'Creare șantiere') = 0 AS g`)).rows[0].g
+  ok(re.test(m || '') && g, `${nume}: ${m}`)
   await db.close()
 }
-
-// ── 2b. L15 „după”: schimbare între cele două verificări + mutanții porții ──
-console.log('2b. L15: schimbarea între „înainte” și „după”')
+console.log('4b. L15: schimbarea între „înainte” și „după”')
 const INTRE = (sql) => [['-- ── punctul UNIC de blocare (L06)', sql + '\n-- ── punctul UNIC de blocare (L06)']]
 const PERMIS_LARG = functie('CREATE FUNCTION public.fn_executie_proiect_permis(').replace(/^CREATE FUNCTION/, 'CREATE OR REPLACE FUNCTION')
   .replace('SELECT p_scriere IS NOT NULL', 'SELECT true OR p_scriere IS NOT NULL')
 const SCEN_L15 = [
-  ['funcție din lanț schimbată între verificări', INTRE(PERMIS_LARG), /starea de acces \(dupa\) difera de baseline-ul L15: functie fn_executie_proiect_permis|starea de acces \(dupa\) difera de baseline-ul L15 revizuit: functie fn_executie_proiect_permis/],
-  ['altă politică adăugată între verificări', INTRE('CREATE POLICY zz_upd ON public.sites FOR UPDATE TO authenticated USING (true);'), /politicile lui sites \(dupa\) nu sunt cele de dinainte \+ politica noua/],
-  ['drept pe tabel adăugat între verificări', INTRE('REVOKE TRUNCATE ON public.sites FROM anon;'), /starea de acces \(dupa\) difera de baseline-ul L15 revizuit: tabel sites \| acl/],
+  ['funcție din lanț schimbată între verificări', INTRE(PERMIS_LARG), /starea de acces \(dupa\) difera de baseline-ul L15 revizuit: functie fn_executie_proiect_permis/],
+  ['altă politică adăugată între verificări', INTRE('CREATE POLICY zz_upd ON public.sites FOR UPDATE TO authenticated USING (true);'), /starea de acces \(dupa\) difera de baseline-ul L15 revizuit: tabel sites \| politici/],
+  ['drept pe tabel schimbat între verificări', INTRE('REVOKE TRUNCATE ON public.sites FROM anon;'), /starea de acces \(dupa\) difera de baseline-ul L15 revizuit: tabel sites \| acl/],
   ['trigger nou între verificări', INTRE('CREATE TRIGGER zz_t AFTER INSERT ON public.sites FOR EACH ROW EXECUTE FUNCTION public.fn_schelet_sites_mutat();'), /starea de acces \(dupa\) difera de baseline-ul L15 revizuit: tabel sites \| triggere/],
+  ['triggerul de proiect automat schimbat între verificări', INTRE(AUTO_SCHIMBAT), /starea de acces \(dupa\) difera de baseline-ul L15 revizuit: functie fn_auto_create_executie_proiect/],
 ]
 for (const [nume, mut, re] of SCEN_L15) {
   const db = await bazaNoua()
   let m = null; try { await aplicaMig(db, aplica(MIG_B, mut)) } catch (e) { m = e.message }
-  ok(re.test(m || ''), `${nume}: ${m || 'NU a refuzat'}`)
+  ok(re.test(m || '') && await gol(db), `${nume}: ${m || 'NU a refuzat'}`)
   await db.close()
 }
 console.log('   mutanții porții L15 (originalul refuză, mutantul trece = verificarea e necesară)')
 for (const [nume, scen, mutPoarta] of [
   ['L1 fără verificarea „după”', SCEN_L15[1][1], [["  PERFORM pg_temp.amp_verifica_20261222a('dupa');\n", '']]],
-  ['L2 politicile „după” necomparate', SCEN_L15[1][1], [['       OR md5(coalesce(nullif(array_to_string(v_rest', '       OR false AND md5(coalesce(nullif(array_to_string(v_rest']]],
-  ['L3 restul „după” necomparat', SCEN_L15[2][1], [['  IF v_dif IS NOT NULL THEN', '  IF p_moment = \'inainte\' AND v_dif IS NOT NULL THEN']]],
+  ['L2 restul „după” necomparat', SCEN_L15[2][1], [['  IF v_dif IS NOT NULL THEN', '  IF p_moment = \'inainte\' AND v_dif IS NOT NULL THEN']]],
+  ['L3 detaliul funcției noi necomparat', [[`COMMENT ON FUNCTION public.fn_sites_creeaza(text, bigint, text) IS`,
+    `ALTER FUNCTION public.fn_sites_creeaza(text, bigint, text) STRICT;\nCOMMENT ON FUNCTION public.fn_sites_creeaza(text, bigint, text) IS`]],
+    [["    IF v_fn IS DISTINCT FROM 'tip=f", "    IF false AND v_fn IS DISTINCT FROM 'tip=f"]]],
 ]) {
   const rul = async (extra) => { const db = await bazaNoua(); try { await aplicaMig(db, aplica(MIG_B, [...scen, ...extra])); return null } catch (e) { return e.message } finally { await db.close() } }
   const mOrig = await rul([]), mMut = await rul(mutPoarta)
   ok(mOrig != null && mMut == null, `${nume}: originalul refuză (${(mOrig || 'NU').slice(0, 90)}), mutantul ${mMut == null ? 'trece' : 'refuză și el: ' + mMut.slice(0, 90)}`)
 }
 
-// ── 3. revenirea ──
-console.log('3. revenirea')
+// ── 5. revenirea ──
+console.log('5. revenirea')
 {
   const db = await bazaNoua()
   await aplicaMig(db, MIG_B)
@@ -281,45 +521,94 @@ console.log('3. revenirea')
   ok(/PLAFON_TRANZACTIE lipsa/.test(m || ''), 'revenirea fără plafon refuzată')
   m = null; try { await revino(db, REV, { marcaj: false }) } catch (e) { m = e.message }
   ok(/garda invalida/.test(m || ''), 'revenirea fără marcaj refuzată')
+  // un șantier creat prin RPC (owner) înainte de revenire RĂMÂNE după ea, legat de proiectul lui
+  const r = await ca(db, 'authenticated', U.OWNER, RPC, ['Gazpet - Inainte de revenire', 2, null])
+  await tx(db, { rol: 'authenticated', uid: U.OWNER, commit: true }, ({ q }) => q(RPC, ['Gazpet - Inainte de revenire', 2, null]))
   await revino(db)
-  const r = (await db.query(`SELECT NOT EXISTS (SELECT 1 FROM pg_policy WHERE polname = 'sites_insert_drept_creare')
-     AND to_regprocedure('public.fn_sites_drept_creare(bigint)') IS NULL
-     AND NOT EXISTS (SELECT 1 FROM public.app_modules WHERE key = 'santiere_creare')
-     AND (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.sites'::regclass) = 4 AS gol`)).rows[0].gol
-  ok(r, 'revenirea scoate exact ce a creat migrarea (cele 4 politici de azi rămân)')
+  const g = await gol(db)
+  const pol = (await db.query(`SELECT count(*)::int AS n FROM pg_policy WHERE polrelid = 'public.sites'::regclass`)).rows[0].n
+  ok(r.rows && g && pol === 4, 'revenirea scoate exact funcția și cheia (cele 4 politici de azi rămân)')
+  const ram = (await db.query(`SELECT s.id FROM public.sites s JOIN public.executie_proiecte e ON e.site_id = s.id AND e.id = s.proiect_id WHERE s.name = 'Gazpet - Inainte de revenire'`)).rows
+  ok(ram.length === 1, 'șantierul creat prin RPC înainte de revenire rămâne, legat de proiect')
   const b2 = await baseline(db)
   ok(JSON.stringify(b2.map(x => [x.eticheta, x.amprenta])) === JSON.stringify(B0.map(x => [x.eticheta, x.amprenta])), 'după revenire amprenta L15 = baseline-ul de dinainte')
+  // re-aplicarea pe aceeași bază (proiectul 2 are acum șantier: verificările îl folosesc doar pe owner fără proiect / cu 2 → se mută pe o bază nouă)
   await aplicaMig(db, MIG_B)
-  const ab = await verifica(db)
-  ok(ab.length === 0, `re-aplicarea după revenire + verificările (${ab.length} abateri)`)
+  ok(!(await gol(db)), 're-aplicarea după revenire trece')
   await db.close()
+  const db2 = await bazaNoua(); await aplicaMig(db2, MIG_B); await db2.exec(ACORDA)
+  await db2.exec(`DELETE FROM public.user_module_access WHERE module = 'santiere_creare'`)
+  await revino(db2); await aplicaMig(db2, MIG_B)
+  const ab = await verifica(db2)
+  ab.forEach(a => console.log('     ' + a))
+  ok(ab.length === 0, `aplicare → acordare → retragere → revenire → re-aplicare + verificările (${ab.length} abateri)`)
+  await db2.close()
 }
 {
   const db = await bazaNoua()
   await aplicaMig(db, MIG_B)
-  await db.exec(`CREATE OR REPLACE FUNCTION public.fn_sites_drept_creare(p_proiect bigint) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;`)
+  await db.exec(`CREATE OR REPLACE FUNCTION public.fn_sites_creeaza(p_nume text, p_proiect bigint, p_beneficiar text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN NULL; END $f$;`)
   let m = null; try { await revino(db) } catch (e) { m = e.message }
-  ok(/starea nu e cea din 20261222a \(pasul 1, functia\)/.test(m || ''), 'revenirea refuză o funcție schimbată: ' + m)
+  ok(/starea nu e cea din 20261222a \(pasul 1, functia\)/.test(m || '') && !(await gol(db)), 'revenirea refuză o funcție schimbată: ' + m)
+  await db.close()
+}
+console.log('   mutanții revenirii')
+for (const [nume, inl, pregatire, re] of [
+  ['R1 fără verificarea „niciun drept acordat”', [["  IF EXISTS (SELECT 1 FROM public.user_module_access WHERE module = 'santiere_creare') THEN\n    RAISE EXCEPTION '20261222a revenire: dreptul santiere_creare e acordat (user_module_access); retragerea lui e un pas separat, cu acordul owner-ului';\n  END IF;\n", '']],
+    async (db) => { await db.exec(ACORDA) }, /dreptul santiere_creare e acordat/],
+  ['R2 fără amprenta corpului', [["                      AND md5(replace(p.prosrc, chr(13), '')) =\n                          -- AMPRENTA-START rpc\n                          '" + AMP_CORP + "'\n                          -- AMPRENTA-END rpc\n", '']],
+    async (db) => { await db.exec(`CREATE OR REPLACE FUNCTION public.fn_sites_creeaza(p_nume text, p_proiect bigint, p_beneficiar text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN NULL; END $f$;`) }, /starea nu e cea din 20261222a/],
+  ['R3 fără verificarea drepturilor funcției (anon)', [["                      AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')\n", '']],
+    async (db) => { await db.exec(`GRANT EXECUTE ON FUNCTION public.fn_sites_creeaza(text, bigint, text) TO anon;`) }, /starea nu e cea din 20261222a/],
+]) {
+  const db = await bazaNoua()
+  await aplicaMig(db, MIG_B)
+  await pregatire(db)
+  let mOrig = null; try { await revino(db, REV) } catch (e) { mOrig = e.message }
+  let mMut = null; try { await revino(db, aplica(REV, inl)) } catch (e) { mMut = e.message }
+  ok(re.test(mOrig || '') && mMut == null, `${nume}: originalul refuză (${mOrig}), mutantul trece = verificarea e necesară`)
   await db.close()
 }
 
-// ── 4. mutanții migrării: fiecare TREBUIE să pice ──
-console.log('4. mutanții migrării')
+// ── 6. mutanții migrării (comportament) și ai codului JS: fiecare TREBUIE să pice ──
+console.log('6. mutanții migrării')
 const MUTANTI = [
-  ['M1 nivel viewer acceptat', [["u.access_level IN ('editor', 'admin')", "u.access_level IN ('viewer', 'editor', 'admin')"]]],
-  ['M2 fără verificarea proiectului legat (L09)', [['\n    AND (p_proiect IS NULL OR public.fn_executie_proiect_permis(p_proiect, true))', '']]],
-  ['M3 cheia administrativ.locatii în loc de cheia nouă', [["u.module = 'santiere_creare'", "u.module IN ('santiere_creare', 'administrativ.locatii')"]]],
-  ['M4 lărgit la can_manage_contracts', [["u.access_level IN ('editor', 'admin'))", "u.access_level IN ('editor', 'admin'))\n    OR EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.can_manage_contracts)"]]],
-  ['M5 proiect citit doar pentru citire', [['public.fn_executie_proiect_permis(p_proiect, true)', 'public.fn_executie_proiect_permis(p_proiect, false)']]],
-  ['M6 politica pe ALL (și UPDATE / DELETE)', [['AS PERMISSIVE FOR INSERT TO authenticated\n  WITH CHECK (public.fn_sites_drept_creare(proiect_id::bigint));',
-    'AS PERMISSIVE FOR ALL TO authenticated\n  USING (public.fn_sites_drept_creare(proiect_id::bigint)) WITH CHECK (public.fn_sites_drept_creare(proiect_id::bigint));']]],
-  ['M7 EXECUTE pentru anon', [['GRANT EXECUTE ON FUNCTION public.fn_sites_drept_creare(bigint) TO authenticated;', 'GRANT EXECUTE ON FUNCTION public.fn_sites_drept_creare(bigint) TO authenticated, anon;']]],
-  ['M8 migrarea acordă dreptul cuiva', [['CREATE POLICY sites_insert_drept_creare', `INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('${U.CONTR}', 'santiere_creare', 'editor');\nCREATE POLICY sites_insert_drept_creare`]]],
-  ['M9 politica fără predicat', [['  WITH CHECK (public.fn_sites_drept_creare(proiect_id::bigint));', '  WITH CHECK (true);']]],
-  ['M10 identitatea din altă sursă decât auth.uid()', [["WHERE u.profile_id = auth.uid() AND u.module = 'santiere_creare'", "WHERE u.module = 'santiere_creare'"]]],
+  ['M1 nivel viewer acceptat (santiere_creare)', [["u.module = 'santiere_creare' AND u.access_level IN ('editor', 'admin')", "u.module = 'santiere_creare' AND u.access_level IN ('viewer', 'editor', 'admin')"]]],
+  ['M2 fără verificarea proiectului (L09)', [['\n     OR public.fn_executie_proiect_permis(p_proiect, true) IS NOT TRUE THEN', ' THEN']]],
+  ['M3 cheia administrativ.locatii acceptată', [["u.module = 'santiere_creare'", "u.module IN ('santiere_creare', 'administrativ.locatii')"]]],
+  ['M4 lărgit la can_manage_contracts', [['WHERE p.id = v_uid AND p.is_owner IS TRUE)', 'WHERE p.id = v_uid AND (p.is_owner IS TRUE OR p.can_manage_contracts))']]],
+  ['M5 proiectul verificat doar pentru citire', [['public.fn_executie_proiect_permis(p_proiect, true)', 'public.fn_executie_proiect_permis(p_proiect, false)']]],
+  ['M6 fără modulul executie (verdict P2-3)', [["u.module = 'executie' AND u.access_level IN ('editor', 'admin')", "u.module = 'executie' AND u.access_level IN ('editor', 'admin') OR true"]]],
+  ['M7 EXECUTE pentru anon', [['GRANT EXECUTE ON FUNCTION public.fn_sites_creeaza(text, bigint, text) TO authenticated;', 'GRANT EXECUTE ON FUNCTION public.fn_sites_creeaza(text, bigint, text) TO authenticated, anon;']]],
+  ['M8 migrarea acordă dreptul cuiva', [['-- ── postcondiții ──', `INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('${U.CONTR}', 'santiere_creare', 'editor');\n-- ── postcondiții ──`]]],
+  ['M9 identitatea nu din auth.uid() (orice rând de drept)', [["WHERE u.profile_id = v_uid AND u.module = 'santiere_creare'", "WHERE u.module = 'santiere_creare'"]]],
+  ['M10 ordinea r1 (șantierul înaintea legăturii), cu postcondiția', [["  UPDATE public.executie_proiecte SET site_id = v_site WHERE id = p_proiect;\n  INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id) VALUES (v_site, v_nume, true, v_benef, p_proiect);",
+    "  INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id) VALUES (v_site, v_nume, true, v_benef, p_proiect);\n  UPDATE public.executie_proiecte SET site_id = v_site WHERE id = p_proiect;"]]],
+  ['M11 ordinea r1 fără postcondiție (dublarea tăcută)', [["  UPDATE public.executie_proiecte SET site_id = v_site WHERE id = p_proiect;\n  INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id) VALUES (v_site, v_nume, true, v_benef, p_proiect);",
+    "  INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id) VALUES (v_site, v_nume, true, v_benef, p_proiect);\n  UPDATE public.executie_proiecte SET site_id = v_site WHERE id = p_proiect;"],
+    ['  IF v_n IS DISTINCT FROM 1 OR NOT EXISTS', '  IF false AND v_n IS DISTINCT FROM 1 OR false AND NOT EXISTS']]],
+  ['M12 fără idempotență (proiect legat = șantier nou, relegat)', [['  IF v_leg IS NOT NULL THEN\n    IF EXISTS', '  IF false THEN\n    IF EXISTS']]],
+  ['M13 fără proiect permis și contului restrâns', [['\n     OR public.fn_executie_proiect_permis(p_proiect, true) IS NOT TRUE THEN', '\n     OR (p_proiect IS NOT NULL AND public.fn_executie_proiect_permis(p_proiect, true) IS NOT TRUE) THEN']]],
+  ['M14 fără ocolirea owner-ului', [['NOT (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = v_uid AND p.is_owner IS TRUE)\n             OR', 'NOT (false\n             OR']]],
+  ['M15 coloane administrative în INSERT (meteo / coordonate)', [['INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id) VALUES (v_site, v_nume, true, v_benef, p_proiect);',
+    'INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id, lat, lng) VALUES (v_site, v_nume, true, v_benef, p_proiect, 44.9, 26.0);']]],
+  ['M16 denumirea goală acceptată', [['  IF v_nume IS NULL THEN\n', '  IF false THEN\n']]],
 ]
+// Garda de scriere a lui executie_proiecte (trg_executie_acces_garda, 20261209a) refuză și ea contul restrâns la UPDATE-ul site_id / la
+// proiectul automat — dar NU e în amprenta L15 a migrării, deci RPC-ul nu se poate sprijini pe ea. Mutanții pe verificarea proiectului
+// (M2 / M5 / M13) rulează pe o bază FĂRĂ garda aceea; întâi: originalul trece toate verificările și fără ea (verificarea din RPC ajunge singură).
+const FARA_GARDA = 'DROP TRIGGER trg_executie_acces_garda ON public.executie_proiecte;'
+const PE_PROIECT = new Set(['M2', 'M5', 'M13'])
+{
+  const db = await bazaNoua(); await db.exec(FARA_GARDA); await aplicaMig(db, MIG_B)
+  const ab = await verifica(db)
+  ab.forEach(a => console.log('     ' + a))
+  ok(ab.length === 0, `originalul, fără garda lui executie_proiecte: verificările trec (${ab.length} abateri)`)
+  await db.close()
+}
 for (const [nume, inl] of MUTANTI) {
   const db = await bazaNoua()
+  if (PE_PROIECT.has(nume.split(' ')[0])) await db.exec(FARA_GARDA)
   let picat = null
   try {
     await aplicaMig(db, cuAmprentaCorp(aplica(MIG_B, inl)))
@@ -329,20 +618,28 @@ for (const [nume, inl] of MUTANTI) {
   ok(picat != null, `${nume} pică (${picat || 'NU a picat'})`)
   await db.close()
 }
-console.log('   mutanții revenirii')
-for (const [nume, inl, pregatire, re] of [
-  ['R1 fără verificarea „niciun drept acordat”', [["  IF EXISTS (SELECT 1 FROM public.user_module_access WHERE module = 'santiere_creare') THEN\n    RAISE EXCEPTION '20261222a revenire: dreptul santiere_creare e acordat (user_module_access); retragerea lui e un pas separat, cu acordul owner-ului';\n  END IF;\n", '']],
-    async (db) => { await db.exec(ACORDA) }, /dreptul santiere_creare e acordat/],
-  ['R2 fără amprenta corpului', [["                      AND md5(replace(p.prosrc, chr(13), '')) =\n                          -- AMPRENTA-START predicatul\n                          '" + AMP_CORP + "'\n                          -- AMPRENTA-END predicatul\n", '']],
-    async (db) => { await db.exec(`CREATE OR REPLACE FUNCTION public.fn_sites_drept_creare(p_proiect bigint) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;`) }, /starea nu e cea din 20261222a/],
+console.log('   mutanții codului JS (src/lib/santiereDrept.js)')
+for (const [nume, inl, scen] of [
+  ['J1 funcția lipsă tratată ca eroare oarecare', [["if (cod === 'PGRST202' || cod === '42883') return { tip: 'indisponibil' }", '']], 'W6'],
+  ['J2 fără reconciliere la rezultat necunoscut', [["  if (r.tip !== 'necunoscut' || proiectId == null) return r", '  return r']], 'W3'],
+  ['J3 rețeaua tratată ca eșec determinat', [["  if (SQLSTATE.test(cod) || /^PGRST\\d{3}$/.test(cod)) return", '  if (true) return']], 'W3'],
+  ['J4 răspuns fără id = succes', [["    return { tip: 'necunoscut', motiv: 'răspuns fără id de șantier' }", "    return { tip: 'ok', siteId: id, creat: true }"]], 'W12'],
+  ['J5 necunoscut raportat ca reușită', [["    default:\n      return { ok: false,", "    default:\n      return { ok: true,"]], 'W8'],
+  ['J6 fără reîncercare după citire', [['  const r2 = clasificaRaspuns(await apel(client, args))\n  if (r2.tip', "  const r2 = { tip: 'necunoscut', motiv: 'fără reîncercare' }\n  if (r2.tip"]], 'W4'],
 ]) {
-  const db = await bazaNoua()
-  await aplicaMig(db, MIG_B)
-  await pregatire(db)
-  let mOrig = null; try { await revino(db, REV) } catch (e) { mOrig = e.message }
-  let mMut = null; try { await revino(db, aplica(REV, inl)) } catch (e) { mMut = e.message }
-  ok(re.test(mOrig || '') && mMut == null, `${nume}: originalul refuză (${mOrig}), mutantul trece = verificarea e necesară`)
-  await db.close()
+  let picat = null
+  try {
+    const js = await importJs(aplica(JS_SURSA, inl))
+    const r = await ruleazaWizard(js, SCEN_W.find(s => s[0].startsWith(scen + ' ')))
+    if (r) picat = r
+  } catch (e) { picat = 'eroare: ' + e.message.slice(0, 140) }
+  ok(picat != null, `${nume} pică pe ${scen} (${(picat || 'NU a picat').slice(0, 160)})`)
+}
+{
+  // J7: regula de cont din UI fără Execuție — paritatea UI ↔ BD trebuie să pice
+  const js = await importJs(aplica(JS_SURSA, [['return SCRIERE.includes(n[CHEIE_SANTIERE_CREARE]) && SCRIERE.includes(n.executie)', 'return SCRIERE.includes(n[CHEIE_SANTIERE_CREARE])']]))
+  ok(js.poateCreaSantier({ module_access_levels: { santiere_creare: 'editor' } }) === true && JS.poateCreaSantier({ module_access_levels: { santiere_creare: 'editor' } }) === false,
+    'J7 UI fără verificarea Execuției: mutantul dă „da” unde BD-ul refuză (TIT_FARA_EX), originalul „nu”')
 }
 
 console.log(esec ? `\nEȘEC: ${esec} verificări picate` : '\nTOTUL OK')
