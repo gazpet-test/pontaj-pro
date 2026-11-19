@@ -296,12 +296,28 @@ async function verifica(db) {
     ['eroare', { cod: 'Cod Cu Spatii' }, 'cod invalid'], ['altceva', { cod: 'x' }, 'stare necunoscută'], ['rezervat', { cod: 'x' }, 'stare rezervat'],
     ['ok', { semnale: -1, respinse: 0, tin: 1, tout: 1 }, 'semnale negative'], ['eroare', { cod: 'x', tin: 1 }, 'doar tokenii de intrare']])
     egal(val(await inchide(db, 'service_role', r1?.id, r1?.lease_token, stare, o), 'C ' + ce), false, 'C parametri invalizi: ' + ce)
+  // r3 (#1141 P2): „ok” = FĂRĂ respingeri; „incomplet” = cu respingeri (≥ 1) — combinațiile încrucișate sunt refuzate (false, nimic schimbat)
+  for (const [stare, o, ce] of [['ok', { semnale: 3, respinse: 1, tin: 1, tout: 1 }, 'ok cu respinse 1'], ['incomplet', { semnale: 0, respinse: 0, tin: 1, tout: 1 }, 'incomplet cu respinse 0'],
+    ['incomplet', { semnale: 0, tin: 1, tout: 1 }, 'incomplet fără respinse'], ['incomplet', { semnale: 0, respinse: 2 }, 'incomplet fără tokeni'],
+    ['incomplet', { semnale: 0, respinse: 2, tin: 1, tout: 1, cod: 'x' }, 'incomplet cu cod de eroare'], ['incomplet', { respinse: 2, tin: 1, tout: 1 }, 'incomplet fără semnale']])
+    egal(val(await inchide(db, 'service_role', r1?.id, r1?.lease_token, stare, o), 'C r3 ' + ce), false, 'C r3 parametri invalizi: ' + ce)
   egal(r1?.id && (await rand(db, r1.id)).stare, 'rezervat', 'C parametrii invalizi n-au schimbat rândul')
-  egal(val(await inchide(db, 'service_role', r1?.id, r1?.lease_token, 'ok', { semnale: 3, respinse: 1, tin: 5000, tout: 300 }), 'C închiderea ok'), true, 'C închiderea ok')
+  egal(val(await inchide(db, 'service_role', r1?.id, r1?.lease_token, 'incomplet', { semnale: 3, respinse: 1, tin: 5000, tout: 300 }), 'C închiderea incomplet'), true, 'C r3 închiderea incomplet (respinse 1)')
   const x2 = r1?.id ? await rand(db, r1.id) : null
   egal(x2 && [x2.stare, x2.semnale, x2.respinse, x2.tokeni_in, x2.tokeni_out, x2.cost, x2.rez, x2.inchis, x2.eroare_cod],
-    ['ok', 3, 1, 5000, 300, '0.013000', '0.104000', true, null], 'C rândul închis ok: cost = 5000 × 2 + 300 × 10 USD / MTok = 0,013')
-  egal(val(await inchide(db, 'service_role', r1?.id, r1?.lease_token, 'eroare', { cod: 'a_doua' }), 'C a doua închidere'), false, 'C a doua închidere (deja ok)')
+    ['incomplet', 3, 1, 5000, 300, '0.013000', '0.104000', true, null], 'C r3 rândul închis incomplet: cost final cunoscut = 5000 × 2 + 300 × 10 USD / MTok = 0,013')
+  egal(val(await inchide(db, 'service_role', r1?.id, r1?.lease_token, 'eroare', { cod: 'a_doua' }), 'C a doua închidere'), false, 'C a doua închidere (deja incomplet)')
+  const r1b = val(await rezerva(db, U.EDITOR, { bucata: 2, continut: H('6') }), 'C rezervarea pentru ok')
+  egal(val(await inchide(db, 'service_role', r1b?.id, r1b?.lease_token, 'ok', { semnale: 0, respinse: 0, tin: 4000, tout: 100 }), 'C închiderea ok'), true, 'C închiderea ok (gol valid, respinse 0)')
+  const x2b = r1b?.id ? await rand(db, r1b.id) : null
+  egal(x2b && [x2b.stare, x2b.semnale, x2b.respinse, x2b.cost, x2b.eroare_cod], ['ok', 0, 0, '0.009000', null], 'C rândul închis ok: respinse 0, cost 4000 × 2 + 100 × 10 = 0,009')
+  // CHECK-ul tabelei, independent de funcție (postgres scrie direct): ok cu respinse > 0 și incomplet cu respinse 0 = refuzate
+  for (const [stare, resp, ce] of [['ok', 1, 'ok cu respinse 1'], ['incomplet', 0, 'incomplet cu respinse 0']]) {
+    const e = await eroare(db.exec(`INSERT INTO public.red_import_ai_jurnal (cheie, proiect_id, user_id, ziua, fisier_sha256, continut_sha256, bucata, bucati, randuri, octeti_intrare, max_iesire, model,
+      cost_rezervat_usd, lease_token, stare, inchis_la, semnale, respinse, tokeni_in, tokeni_out, cost_usd) VALUES (gen_random_uuid(), '${P.P6}', '${U.OWNER}', current_date, '${H('a')}', '${H('b')}',
+      1, 1, 1, 1, 1, 'claude-sonnet-5-5', 1, gen_random_uuid(), '${stare}', clock_timestamp(), 0, ${resp}, 1, 1, 0.00001)`))
+    egal(/red_import_ai_jurnal_inchidere_ck/.test(e || ''), true, `C r3 CHECK refuză ${ce} (${(e || 'A TRECUT').slice(0, 80)})`)
+  }
   const r2 = val(await rezerva(db, U.EDITOR, { bucata: 3, continut: H('7') }), 'C rezervarea pentru necunoscut')
   egal(val(await inchide(db, 'service_role', r2?.id, r2?.lease_token, 'necunoscut', { cod: 'ai_timeout', tin: 10, tout: 10 }), 'C necunoscut'), true, 'C închiderea necunoscut')
   const x3 = r2?.id ? await rand(db, r2.id) : null
@@ -564,6 +580,10 @@ const MUTANTI = [
   ['istoricul fără imuabilitate (postcondiția ajustată)', [["CREATE TRIGGER trg_red_proiect_drepturi_istoric_imuabil BEFORE UPDATE OR DELETE OR TRUNCATE ON public.red_proiect_drepturi_istoric\n  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_red_proiect_drepturi_istoric();\n", ''], POST_TRG_OFF]],
   // (un INSERT acordat lui authenticated NU e mutant util: RLS-ul fără politică de INSERT îl refuză oricum cu 42501 — dublă protecție)
   ['istoricul citibil de anon (postcondiția ajustată)', [['GRANT SELECT ON public.red_proiect_drepturi_istoric TO authenticated, service_role;', 'GRANT SELECT ON public.red_proiect_drepturi_istoric TO anon, authenticated, service_role;'], POST_TAB_OFF]],
+  // r3 (#1141 P2): „ok” doar fără respingeri, „incomplet” doar cu respingeri (funcția ȘI CHECK-ul mutate împreună, ca mutantul să ajungă la comportament)
+  ['ok acceptă respinse > 0 (r2: o respingere închisă ca ok)', [["     OR (p_stare = 'ok' AND p_respinse IS DISTINCT FROM 0)\n", ''], ['semnale IS NOT NULL AND respinse = 0 AND', 'semnale IS NOT NULL AND respinse IS NOT NULL AND']]],
+  ['incomplet acceptă respinse 0', [["     OR (p_stare = 'incomplet' AND p_respinse < 1)\n", ''], ['semnale IS NOT NULL AND respinse >= 1 AND', 'semnale IS NOT NULL AND respinse IS NOT NULL AND']]],
+  ['închiderea fără starea incomplet', [["p_stare NOT IN ('ok', 'incomplet', 'eroare', 'necunoscut')", "p_stare NOT IN ('ok', 'eroare', 'necunoscut')"]]],
 ]
 for (const [nume, lista] of MUTANTI) {
   const db = await bazaNoua()

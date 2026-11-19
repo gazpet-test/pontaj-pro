@@ -30,7 +30,9 @@
 --     declarate de client), rezervarea costului MAXIM (intrare ≤ octeți, ieșire = max_tokens). Identitatea = auth.uid() (L08), fără p_user.
 --   * fn_red_import_ai_inchide(...) — închiderea rezervării cu CAS pe (id, token, stare 'rezervat'); EXECUTE doar service_role (funcția edge), ca
 --     un utilizator să nu-și poată „închide” singur rezervările cu un cost mai mic. Costul final îl calculează SQL-ul din tokeni. Rezultat
---     necunoscut (timeout / 5xx / rețea) = stare 'necunoscut', costul rămâne cel rezervat (L22: tombstone, fără reluare automată).
+--     necunoscut (timeout / 5xx / rețea) = stare 'necunoscut', costul rămâne cel rezervat (L22: tombstone, fără reluare automată). r3 (#1141
+--     Jakarinos P2): un răspuns cu elemente respinse la validare = stare 'incomplet' (nu 'ok'): ecranul adaugă semnalele valide, dar NU șterge
+--     semnalele AI vechi ale rândurilor acelei bucăți (respingerea nu e o concluzie negativă despre rând).
 -- Ce NU face: nu atinge tabelele / funcțiile / politicile existente (doar FK-uri spre red_proiecte și profiles); nu scrie în red_jurnal; nu acordă
 --   niciun drept cuiva (rândurile din red_proiect_drepturi = după aplicare, separat); nu creează secrete, cron, mail, SMS.
 -- Identitatea: auth.uid() în fn_red_import_ai_poate / rezerva (L08); inchide = service_role, cu legătura id + token din rezervare (fără identitate
@@ -240,7 +242,7 @@ CREATE TABLE public.red_import_ai_jurnal (
   model text NOT NULL CONSTRAINT red_import_ai_jurnal_model_ck CHECK (model = 'claude-sonnet-5-5'),
   cost_rezervat_usd numeric(12,6) NOT NULL CONSTRAINT red_import_ai_jurnal_rezervat_ck CHECK (cost_rezervat_usd > 0),
   lease_token uuid NOT NULL,
-  stare text NOT NULL DEFAULT 'rezervat' CONSTRAINT red_import_ai_jurnal_stare_ck CHECK (stare IN ('rezervat', 'ok', 'eroare', 'necunoscut')),
+  stare text NOT NULL DEFAULT 'rezervat' CONSTRAINT red_import_ai_jurnal_stare_ck CHECK (stare IN ('rezervat', 'ok', 'incomplet', 'eroare', 'necunoscut')),
   semnale integer CONSTRAINT red_import_ai_jurnal_semnale_ck CHECK (semnale IS NULL OR semnale >= 0),
   respinse integer CONSTRAINT red_import_ai_jurnal_respinse_ck CHECK (respinse IS NULL OR respinse >= 0),
   tokeni_in integer CONSTRAINT red_import_ai_jurnal_tin_ck CHECK (tokeni_in IS NULL OR tokeni_in >= 0),
@@ -249,10 +251,12 @@ CREATE TABLE public.red_import_ai_jurnal (
   eroare_cod text CONSTRAINT red_import_ai_jurnal_eroare_ck CHECK (eroare_cod IS NULL OR eroare_cod ~ '^[a-z0-9_]{1,40}$'),
   inchis_la timestamptz,
   CONSTRAINT red_import_ai_jurnal_bucata_ck CHECK (bucata >= 1 AND bucati BETWEEN 1 AND 100 AND bucata <= bucati),
-  -- stările finale au închiderea; 'ok' are tokenii și semnalele; 'rezervat' nu are nimic din închidere
+  -- stările finale au închiderea; 'ok' are tokenii și semnalele și NICIO respingere; 'incomplet' (r3, #1141) = răspuns valid ca formă, dar cu
+  -- elemente respinse la validare (respinse ≥ 1): bucata NU e verificată complet; 'rezervat' nu are nimic din închidere
   CONSTRAINT red_import_ai_jurnal_inchidere_ck CHECK (
     (stare = 'rezervat' AND inchis_la IS NULL AND semnale IS NULL AND respinse IS NULL AND tokeni_in IS NULL AND tokeni_out IS NULL AND cost_usd IS NULL AND eroare_cod IS NULL)
-    OR (stare = 'ok' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse IS NOT NULL AND tokeni_in IS NOT NULL AND tokeni_out IS NOT NULL AND cost_usd IS NOT NULL AND eroare_cod IS NULL)
+    OR (stare = 'ok' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse = 0 AND tokeni_in IS NOT NULL AND tokeni_out IS NOT NULL AND cost_usd IS NOT NULL AND eroare_cod IS NULL)
+    OR (stare = 'incomplet' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse >= 1 AND tokeni_in IS NOT NULL AND tokeni_out IS NOT NULL AND cost_usd IS NOT NULL AND eroare_cod IS NULL)
     OR (stare = 'eroare' AND inchis_la IS NOT NULL AND eroare_cod IS NOT NULL)
     OR (stare = 'necunoscut' AND inchis_la IS NOT NULL AND eroare_cod IS NOT NULL AND cost_usd IS NULL))
 );
@@ -331,16 +335,20 @@ GRANT EXECUTE ON FUNCTION public.fn_red_import_ai_rezerva(uuid, uuid, text, text
 
 -- ─── 5. Închiderea (doar funcția edge, service_role) ─────────────────────────────────────────────────────────────────────────
 -- CAS (L03): doar rândul cu ACEST id + token, încă 'rezervat'; costul final = tokeni_in × 2 + tokeni_out × 10 USD / MTok, calculat aici. 'necunoscut' =
--- costul rămâne cel rezervat (cost_usd NULL). Rezultat: true = închis acum; false = nimic schimbat (token greșit / deja închis / stare invalidă).
+-- costul rămâne cel rezervat (cost_usd NULL). r3 (#1141): 'ok' = fără nicio respingere (p_respinse = 0); 'incomplet' = răspuns valid ca formă, cu
+-- elemente respinse la validare (p_respinse ≥ 1) — costul se cunoaște, dar bucata nu e verificată complet.
+-- Rezultat: true = închis acum; false = nimic schimbat (token greșit / deja închis / stare invalidă).
 CREATE FUNCTION public.fn_red_import_ai_inchide(p_id uuid, p_token uuid, p_stare text, p_semnale integer, p_respinse integer, p_tokeni_in integer,
                                                 p_tokeni_out integer, p_eroare_cod text) RETURNS boolean
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_n integer;
 BEGIN
-  IF p_id IS NULL OR p_token IS NULL OR p_stare IS NULL OR p_stare NOT IN ('ok', 'eroare', 'necunoscut')
+  IF p_id IS NULL OR p_token IS NULL OR p_stare IS NULL OR p_stare NOT IN ('ok', 'incomplet', 'eroare', 'necunoscut')
      OR (p_eroare_cod IS NOT NULL AND p_eroare_cod !~ '^[a-z0-9_]{1,40}$')
-     OR (p_stare = 'ok' AND (p_semnale IS NULL OR p_respinse IS NULL OR p_tokeni_in IS NULL OR p_tokeni_out IS NULL OR p_eroare_cod IS NOT NULL))
-     OR (p_stare <> 'ok' AND p_eroare_cod IS NULL)
+     OR (p_stare IN ('ok', 'incomplet') AND (p_semnale IS NULL OR p_respinse IS NULL OR p_tokeni_in IS NULL OR p_tokeni_out IS NULL OR p_eroare_cod IS NOT NULL))
+     OR (p_stare = 'ok' AND p_respinse IS DISTINCT FROM 0)
+     OR (p_stare = 'incomplet' AND p_respinse < 1)
+     OR (p_stare NOT IN ('ok', 'incomplet') AND p_eroare_cod IS NULL)
      OR p_semnale < 0 OR p_respinse < 0 OR p_tokeni_in < 0 OR p_tokeni_out < 0
      OR (p_tokeni_in IS NULL) IS DISTINCT FROM (p_tokeni_out IS NULL) THEN
     RETURN false;
@@ -355,7 +363,7 @@ BEGIN
   GET DIAGNOSTICS v_n = ROW_COUNT;
   RETURN v_n = 1;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_import_ai_inchide(uuid, uuid, text, integer, integer, integer, integer, text) IS 'Redări: închiderea unei rezervări AI (20261131j), DOAR funcția edge (service_role): CAS pe id + lease_token + stare rezervat; ok = semnale + tokeni (costul final calculat aici), eroare = cod (+ tokeni dacă se cunosc), necunoscut = cod, costul rămâne cel rezervat. true = închis acum; false = nimic schimbat.';
+COMMENT ON FUNCTION public.fn_red_import_ai_inchide(uuid, uuid, text, integer, integer, integer, integer, text) IS 'Redări: închiderea unei rezervări AI (20261131j), DOAR funcția edge (service_role): CAS pe id + lease_token + stare rezervat; ok = semnale + tokeni (costul final calculat aici), fără respingeri; incomplet = la fel, dar cu elemente respinse la validare (respinse ≥ 1: bucata nu e verificată complet); eroare = cod (+ tokeni dacă se cunosc), necunoscut = cod, costul rămâne cel rezervat. true = închis acum; false = nimic schimbat.';
 REVOKE ALL ON FUNCTION public.fn_red_import_ai_inchide(uuid, uuid, text, integer, integer, integer, integer, text) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_red_import_ai_inchide(uuid, uuid, text, integer, integer, integer, integer, text) TO service_role;
 
@@ -369,7 +377,7 @@ BEGIN
       -- >>> AMPRENTE-NOI 20261131j
       ('public.fn_red_import_ai_poate(uuid)', 'b20a13bf9179b76c00812b63362bf32f', 'sql', true, 's', 'boolean'),
       ('public.fn_red_import_ai_rezerva(uuid,uuid,text,text,integer,integer,integer,integer,integer)', '04dd71b7a3ac5fda4a0cf0ca3e4e6377', 'plpgsql', true, 'v', 'jsonb'),
-      ('public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)', '33ac8ddf00565721662122fd7d71a3ef', 'plpgsql', true, 'v', 'boolean'),
+      ('public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)', '017b22b5041ce26ec83c2ef8b5cdbcff', 'plpgsql', true, 'v', 'boolean'),
       ('public.fn_red_proiect_drepturi_istoric()', '92975fe64ee3f774740cc395cf8384c8', 'plpgsql', true, 'v', 'trigger')
       -- <<< AMPRENTE-NOI 20261131j
     ) a(semnatura, amprenta, limbaj, definer, volatil, intoarce)

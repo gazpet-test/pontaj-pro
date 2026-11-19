@@ -81,16 +81,21 @@ export async function raspundeVerificare({ jwt, corp }, deps) {
   if (!corpCitit) { const j = await inchide('necunoscut', 'ai_corp_ilizibil'); return out(502, 'ai_necunoscut', { jurnal_confirmat: j }) }
   const tok = tokeniDinUsage(d?.usage)
   const val = valideazaRaspuns(d, c.randuri)
+  // r3 (#1141 Jakarinos P2): un element respins la validare NU e o concluzie negativă despre rândul lui → bucata e INCOMPLETĂ (cod 'incomplet', jurnal
+  // 'incomplet'), nu 'ok': ecranul adaugă semnalele valide, dar nu șterge semnalele AI vechi ale rândurilor ei. 'ok' = DOAR fără nicio respingere
+  // (inclusiv {"semnale":[]} valid = curăță legitim). Orice respinse ne-întreg / negativ = tratat ca respingere (fail-safe, L18).
+  const completa = val.ok && val.respinse === 0
+  const codOk = completa ? 'ok' : 'incomplet'
   if (!tok) {
     // costul nu se cunoaște: rezervarea rămâne costul (L22); rezultatul valid se arată totuși (e doar o opinie), marcat
-    const j = await inchide('necunoscut', 'ai_usage_lipsa')
+    const j = await inchide('necunoscut', 'ai_usage_lipsa', val.ok ? { semnale: val.semnale.length, respinse: val.respinse } : {})
     if (!val.ok) return out(502, val.cod, { jurnal_confirmat: j })
-    return out(200, 'ok', { semnale: val.semnale, respinse: val.respinse, cost_usd: null, jurnal_confirmat: j, cost_necunoscut: true })
+    return out(200, codOk, { semnale: val.semnale, respinse: val.respinse, cost_usd: null, jurnal_confirmat: j, cost_necunoscut: true })
   }
   if (!val.ok) {
     const j = await inchide('eroare', val.cod, { tin: tok.tin, tout: tok.tout })
     return out(502, val.cod, { cost_usd: costFinal(tok.tin, tok.tout), jurnal_confirmat: j })
   }
-  const j = await inchide('ok', null, { semnale: val.semnale.length, respinse: val.respinse, tin: tok.tin, tout: tok.tout })
-  return out(200, 'ok', { semnale: val.semnale, respinse: val.respinse, cost_usd: costFinal(tok.tin, tok.tout), jurnal_confirmat: j })
+  const j = await inchide(codOk, null, { semnale: val.semnale.length, respinse: val.respinse, tin: tok.tin, tout: tok.tout })
+  return out(200, codOk, { semnale: val.semnale, respinse: val.respinse, cost_usd: costFinal(tok.tin, tok.tout), jurnal_confirmat: j })
 }

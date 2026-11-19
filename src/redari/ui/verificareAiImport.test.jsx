@@ -152,7 +152,51 @@ describe('panoul AI — pornirea (plătită)', () => {
     const acoperite = r.p.onSemnale.mock.calls[0][3]
     expect(acoperite).toEqual(new Set(Array.from({ length: 100 }, (_, k) => cheieRandAi({ rand: k + 2, uat: 'FIC', nr_crt: String(k + 1), cheie_parcela: `FIC:${k + 1}` }))))
     expect(acoperite.has(cheieRandAi({ rand: 112, uat: 'FIC', nr_crt: '111', cheie_parcela: 'FIC:111' }))).toBe(false)
-    expect(r.p.show).toHaveBeenCalledWith(expect.stringMatching(/Semnalele AI anterioare ale bucăților neverificate acum rămân/), 'error')
+    expect(r.p.show).toHaveBeenCalledWith(expect.stringMatching(/Semnalele AI anterioare ale bucăților neverificate complet acum rămân/), 'error')
+  })
+  // r3 (#1141 Jakarinos P2): răspunsurile cu elemente respinse la validare NU fac bucata „acoperită”
+  const raspuns = (cod, semnale, respinse) => async () => ({ data: { cod, semnale, respinse, cost_usd: 0.003, jurnal_confirmat: true }, error: null })
+  const randuriBucata = (de, la) => new Set(Array.from({ length: la - de + 1 }, (_, k) => cheieRandAi({ rand: de + k, uat: 'FIC', nr_crt: String(de + k - 1), cheie_parcela: `FIC:${de + k - 1}` })))
+  const ruleazaCu = async raspunsuri => {
+    const r = await pornit(async () => ({ data: true, error: null }))
+    vi.stubGlobal('window', { confirm: () => true })
+    let n = 0
+    sb.invoke = () => raspunsuri[n++]()
+    await butonAi(r.tree).props.onClick(); await asteapta()
+    return { ...r, dupa: r.h.render(VerificareAiImport, r.p) }
+  }
+  it('r3: bucata 2 INTEGRAL respinsă (cod incomplet, semnale [], respinse 3) → NU e acoperită; rularea INCOMPLETĂ (ecran + rezumat), mesaj distinct', async () => {
+    const r = await ruleazaCu([raspuns('ok', [], 0), raspuns('incomplet', [], 3)])
+    expect(sb.apeluriInvoke).toHaveLength(2)   // nu e o oprire: bucla merge mai departe
+    const [, intrari, rez, acoperite] = r.p.onSemnale.mock.calls[0]
+    expect(intrari).toEqual([])
+    expect(rez).toMatchObject({ complet: false, bucati: 2, facute: 2, verificate_complet: 1, incomplete: 1, respinse: 3, oprit: null })
+    expect(acoperite).toEqual(randuriBucata(2, 101))   // doar bucata 1
+    expect(r.p.show).toHaveBeenCalledWith(expect.stringMatching(/INCOMPLETĂ \(1 din 2 apeluri verificate complet\).*Apelurile 2 au avut răspunsuri respinse la validare/), 'error')
+    expect(text(r.dupa)).toMatch(/⚠ Verificare AI INCOMPLETĂ/)
+  })
+  it('r3: răspuns MIXT (cod incomplet: 1 semnal valid + 1 respins) → semnalul valid se adaugă, bucata NU e acoperită', async () => {
+    const r = await ruleazaCu([raspuns('incomplet', [{ i: 7, camp: 'nr_cadastral', categorie: 'nume_persoana' }], 1), raspuns('ok', [], 0)])
+    const [, intrari, rez, acoperite] = r.p.onSemnale.mock.calls[0]
+    expect(intrari.map(x => [x.rand, x.camp, x.sursa])).toEqual([[9, 'nr_cadastral', 'ai']])
+    expect(rez).toMatchObject({ complet: false, verificate_complet: 1, incomplete: 1, respinse: 1 })
+    expect(acoperite).toEqual(randuriBucata(102, 151))   // doar bucata 2
+  })
+  it('r3: un edge mai vechi care întoarce cod ok CU respinse > 0 (sau fără respinse) = tot incomplet (fail-safe)', async () => {
+    let r = await ruleazaCu([raspuns('ok', [], 2), raspuns('ok', [], 0)])
+    expect(r.p.onSemnale.mock.calls[0][2]).toMatchObject({ complet: false, incomplete: 1 })
+    expect(r.p.onSemnale.mock.calls[0][3]).toEqual(randuriBucata(102, 151))
+    sb.apeluriInvoke = []
+    r = await ruleazaCu([async () => ({ data: { cod: 'ok', semnale: [], cost_usd: 0.001 }, error: null }), raspuns('ok', [], 0)])
+    expect(r.p.onSemnale.mock.calls[0][3]).toEqual(randuriBucata(102, 151))
+  })
+  it('r3: GOL valid fără respingeri pe ambele bucăți ({"semnale":[]}, cod ok) → rulare completă, TOATE rândurile acoperite (curățarea legitimă)', async () => {
+    const r = await ruleazaCu([raspuns('ok', [], 0), raspuns('ok', [], 0)])
+    const [, , rez, acoperite] = r.p.onSemnale.mock.calls[0]
+    expect(rez).toMatchObject({ complet: true, verificate_complet: 2, incomplete: 0, respinse: 0 })
+    expect(acoperite).toEqual(randuriBucata(2, 151))
+    expect(r.p.show).toHaveBeenCalledWith(expect.stringMatching(/^Verificare AI încheiată/), 'success')
+    expect(text(r.dupa)).not.toMatch(/⚠/)
   })
   it('ecranul închis în timpul buclei → niciun apel în plus, nimic aplicat (L24)', async () => {
     const { h, tree, p } = await pornit(async () => ({ data: true, error: null }))

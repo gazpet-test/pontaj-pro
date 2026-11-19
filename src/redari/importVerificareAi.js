@@ -75,8 +75,23 @@ export function semnaleAiInDeVerificat(semnale, harta) {
 }
 
 /**
- * randuriAcoperite(plan, indiciBucati) → Set(cheieRandAi) al rândurilor Excel ale bucăților VERIFICATE CU SUCCES în rularea curentă (indicii din
- * plan.bucati). Doar pentru ele se înlocuiesc semnalele AI vechi (adaugaSemnaleAi).
+ * clasificaRaspunsBucataAi(data) → 'completa' | 'incompleta' | null — ce înseamnă răspunsul funcției edge pentru O bucată (r3, #1141 Jakarinos P2):
+ *  - 'completa'  = cod 'ok', lista de semnale și respinse === 0 (întreg): bucata a fost verificată COMPLET → semnalele AI vechi ale rândurilor ei se pot
+ *                  înlocui (inclusiv cu nimic: {"semnale":[]} valid fără respingeri e cazul legitim care curăță);
+ *  - 'incompleta' = cod 'incomplet' (sau 'ok' cu respinse > 0 / ne-întreg / lipsă — fail-safe, L18, ex. un edge mai vechi): semnalele valide se ADAUGĂ,
+ *                  dar semnalele AI vechi ale rândurilor ei RĂMÂN (un element respins la validare nu e o concluzie negativă despre rând);
+ *  - null        = orice altceva (refuz, eroare, necunoscut, formă greșită): bucla se oprește (L05), nimic din bucată nu se aplică.
+ */
+export function clasificaRaspunsBucataAi(data) {
+  if (!data || typeof data !== 'object' || !Array.isArray(data.semnale)) return null
+  if (data.cod === 'ok') return Number.isInteger(data.respinse) && data.respinse === 0 ? 'completa' : 'incompleta'
+  if (data.cod === 'incomplet') return 'incompleta'
+  return null
+}
+
+/**
+ * randuriAcoperite(plan, indiciBucati) → Set(cheieRandAi) al rândurilor Excel ale bucăților VERIFICATE COMPLET în rularea curentă (indicii din
+ * plan.bucati; r3: NU și cele 'incompleta'). Doar pentru ele se înlocuiesc semnalele AI vechi (adaugaSemnaleAi).
  */
 export function randuriAcoperite(plan, indiciBucati) {
   const out = new Set()
@@ -91,7 +106,7 @@ export function randuriAcoperite(plan, indiciBucati) {
  * rămân; un semnal AI anterior se scoate DOAR dacă rândul lui e în `acoperite` (bucată verificată cu succes acum — r2, #1141: la o rerulare
  * incompletă, bucățile eșuate / neîncercate își păstrează semnalele AI vechi, deci și mascarea și obligația bifei); semnalele noi se adaugă (fără
  * dubluri pe rând + câmp + coduri); statistica se recalculează. `acoperite` lipsă / ne-Set = nimic acoperit (fail-safe: niciun semnal vechi nu se
- * pierde). `verificare_ai` = rezumatul rulării (complet / bucăți / semnale / respinse / cost — fără valori).
+ * pierde). `verificare_ai` = rezumatul rulării (complet / bucăți / incomplete / semnale / respinse / cost — fără valori).
  */
 export function adaugaSemnaleAi(preview, intrari, rezumat, acoperite) {
   const acop = acoperite instanceof Set ? acoperite : new Set()

@@ -5,11 +5,12 @@
 // doar rândul, UAT, Nr.Crt., câmpul, categoria și o explicație FIXĂ după categorie (r2: niciun text scris de model) — niciodată valoarea.
 // L24: generația + proiectul + previzualizarea curente, verificate înaintea fiecărui apel (bucla plătită se oprește la unmount / schimbare).
 // L05: un rezultat necunoscut oprește bucla, fără reluare. r2 (L12): la o rulare incompletă se înlocuiesc semnalele AI DOAR pe rândurile bucăților
-// verificate cu succes acum (randuriAcoperite); cele ale bucăților eșuate / neîncercate rămân (mascate, cu bifa obligatorie).
+// verificate cu succes acum (randuriAcoperite); cele ale bucăților eșuate / neîncercate rămân (mascate, cu bifa obligatorie). r3 (#1141 P2): o bucată
+// cu elemente respinse la validare (cod 'incomplet') NU e „cu succes”: adaugă semnalele valide, păstrează semnalele AI vechi, rularea = INCOMPLETĂ.
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { sha256Hex } from '../../../supabase/functions/_shared/redariImportAi.mjs'
-import { pregatesteVerificareAi, semnaleAiInDeVerificat, randuriAcoperite, FUNCTIA_EDGE_AI, ETICHETA_CATEGORIE_AI, EXPLICATIE_CATEGORIE_AI, mesajCodAi } from '../importVerificareAi.js'
+import { pregatesteVerificareAi, semnaleAiInDeVerificat, randuriAcoperite, clasificaRaspunsBucataAi, FUNCTIA_EDGE_AI, ETICHETA_CATEGORIE_AI, EXPLICATIE_CATEGORIE_AI, mesajCodAi } from '../importVerificareAi.js'
 import { ETICHETA_CAMP_VERIFICAT } from '../importVerificareFixa.js'
 import { G, S, fmtNum } from './comune.jsx'
 
@@ -64,7 +65,7 @@ export default function VerificareAiImport({ proiect, preview, fisier, fisierNum
     try { sha = await sha256Hex(new Uint8Array(await fisier.arrayBuffer())) } catch { sha = null }
     if (!curent()) return
     if (!sha || typeof globalThis.crypto?.randomUUID !== 'function') { setStare(s => ({ ...s, lucru: false, eroare: 'Nu pot calcula amprenta fișierului în acest browser.' })); return }
-    const semnale = []; const reusite = []; let respinse = 0, cost = 0, costNecunoscut = false, facute = 0, oprit = null, jurnalNeconfirmat = 0
+    const semnale = []; const reusite = []; const incomplete = []; let respinse = 0, cost = 0, costNecunoscut = false, facute = 0, oprit = null, jurnalNeconfirmat = 0
     for (let k = 0; k < plan.bucati.length; k++) {
       if (!curent()) return   // ecran închis / alt proiect / altă previzualizare: nimic nu se mai aplică
       const corp = { proiect_id: proiectStart, fisier_sha256: sha, bucata: k + 1, bucati: plan.bucati.length, cheie: globalThis.crypto.randomUUID(), randuri: plan.bucati[k] }
@@ -72,28 +73,34 @@ export default function VerificareAiImport({ proiect, preview, fisier, fisierNum
       try { ({ data, error } = await supabase.functions.invoke(FUNCTIA_EDGE_AI, { body: corp })) } catch (e) { error = e }
       if (error) { try { data = typeof error.context?.json === 'function' ? await error.context.json() : null } catch { data = null } }
       if (!curent()) return
-      if (data?.cod !== 'ok' || !Array.isArray(data?.semnale)) { oprit = data?.cod || 'ai_necunoscut'; break }   // L05: fără reluare automată
+      const fel = error ? null : clasificaRaspunsBucataAi(data)
+      if (!fel) { oprit = data?.cod || 'ai_necunoscut'; break }   // L05: fără reluare automată
       // doar i / camp / categorie (lista albă): orice alt câmp din răspuns (text) nu se păstrează
       for (const s of data.semnale) semnale.push({ i: s?.i, camp: s?.camp, categorie: s?.categorie })
-      respinse += Number(data.respinse) || 0; facute++; reusite.push(k)
+      // r3 (#1141 P2): o bucată cu elemente respinse NU e „acoperită” — semnalele ei valide se adaugă, cele AI vechi ale rândurilor ei rămân
+      respinse += Number.isInteger(data.respinse) && data.respinse > 0 ? data.respinse : 0; facute++
+      if (fel === 'completa') reusite.push(k); else incomplete.push(k + 1)
       if (Number.isFinite(data.cost_usd)) cost += data.cost_usd; else costNecunoscut = true
       if (data.jurnal_confirmat !== true) jurnalNeconfirmat++
       setStare(s => ({ ...s, facut: facute }))
     }
     if (!curent()) return
     const intrari = semnaleAiInDeVerificat(semnale, plan.harta)
-    const rezumat = { complet: facute === plan.bucati.length, bucati: plan.bucati.length, facute, semnale: semnale.length, randuri_semnalate: new Set(intrari.map(x => x.rand)).size,
+    // r3: completă = TOATE bucățile verificate complet (fără oprire și fără bucăți cu respingeri)
+    const rezumat = { complet: reusite.length === plan.bucati.length, bucati: plan.bucati.length, facute, verificate_complet: reusite.length, incomplete: incomplete.length,
+      semnale: semnale.length, randuri_semnalate: new Set(intrari.map(x => x.rand)).size,
       respinse, cost_usd: costNecunoscut ? null : Math.round(cost * 1e6) / 1e6, oprit, fisier: fisierNume }
     setExplicatii(intrari.map(x => ({ rand: x.rand, uat: x.uat, nr_crt: x.nr_crt, camp: x.camp, categorie: String(x.motive?.[0] || '').replace(/^ai_/, '') })))
-    const mesaj = `${rezumat.complet ? 'Verificare AI încheiată' : `Verificare AI INCOMPLETĂ (${facute} din ${plan.bucati.length} apeluri)`}: ${rezumat.randuri_semnalate} rânduri semnalate`
+    const mesaj = `${rezumat.complet ? 'Verificare AI încheiată' : `Verificare AI INCOMPLETĂ (${reusite.length} din ${plan.bucati.length} apeluri verificate complet)`}: ${rezumat.randuri_semnalate} rânduri semnalate`
       + `${respinse ? `, ${respinse} semnale AI respinse la validare` : ''}; cost ${rezumat.cost_usd == null ? 'necunoscut (socotit cel maxim)' : usd(rezumat.cost_usd)}.`
+      + `${incomplete.length ? ` Apelurile ${incomplete.join(', ')} au avut răspunsuri respinse la validare: sunt INCOMPLETE (semnalele lor valide s-au adăugat).` : ''}`
       + `${jurnalNeconfirmat ? ` Jurnalul n-a confirmat ${jurnalNeconfirmat} apeluri (rămân socotite la costul maxim).` : ''}`
-      + `${rezumat.complet ? '' : ' Semnalele AI anterioare ale bucăților neverificate acum rămân în „De verificat”.'}`
-    setStare({ lucru: false, facut: facute, total: plan.bucati.length, mesaj, eroare: oprit ? mesajCodAi(oprit) : '' })
+      + `${rezumat.complet ? '' : ' Semnalele AI anterioare ale bucăților neverificate complet acum rămân în „De verificat”.'}`
+    setStare({ lucru: false, facut: facute, total: plan.bucati.length, mesaj, eroare: oprit ? mesajCodAi(oprit) : '', incomplet: !rezumat.complet })
     // previzualizare nouă cu semnalele AI (chiar parțiale): bifa „am verificat” se cere din nou; semnalele vechi se înlocuiesc DOAR pe rândurile
-    // bucăților reușite acum (reusite → randuriAcoperite)
+    // bucăților verificate COMPLET acum (reusite → randuriAcoperite); bucățile incomplete / oprite / neîncercate își păstrează semnalele vechi
     if (facute > 0) onSemnale?.(pvStart, intrari, rezumat, randuriAcoperite(plan, reusite))
-    show?.(mesaj, oprit ? 'error' : 'success')
+    show?.(mesaj, rezumat.complet ? 'success' : 'error')
   }
 
   return (
@@ -108,7 +115,7 @@ export default function VerificareAiImport({ proiect, preview, fisier, fisierNum
         Cost estimat: cel mult <b>{usd(plan.cost_max_usd)}</b>. Nu blochează și nu schimbă nimic: rândurile semnalate apar în „De verificat” cu eticheta AI.
         {plan.prea_lungi > 0 && <span style={{ color:G.orange }}> {fmtNum(plan.prea_lungi)} rânduri NU se trimit (valoare prea lungă — verificați-le manual).</span>}
       </div>
-      {stare.mesaj && <div style={{ fontSize:12.5, color: stare.eroare ? G.orange : G.green, marginTop:6 }}>{stare.mesaj}</div>}
+      {stare.mesaj && <div style={{ fontSize:12.5, color: stare.eroare || stare.incomplet ? G.orange : G.green, marginTop:6 }}>{stare.incomplet ? '⚠ ' : ''}{stare.mesaj}</div>}
       {stare.eroare && <div style={{ fontSize:12.5, color:G.red, marginTop:4 }}>{stare.eroare}</div>}
       {Array.isArray(explicatii) && explicatii.length > 0 && (
         <div style={{ overflow:'auto', maxHeight:260, marginTop:8 }}>

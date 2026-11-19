@@ -11,7 +11,7 @@ import {
 } from '../../supabase/functions/_shared/redariImportAi.mjs'
 import * as modulAi from '../../supabase/functions/_shared/redariImportAi.mjs'
 import { raspundeVerificare } from '../../supabase/functions/_shared/redariImportAiHandler.mjs'
-import { pregatesteVerificareAi, semnaleAiInDeVerificat, adaugaSemnaleAi, randuriAcoperite, cheieRandAi, mesajCodAi, EXPLICATIE_CATEGORIE_AI } from './importVerificareAi.js'
+import { pregatesteVerificareAi, semnaleAiInDeVerificat, adaugaSemnaleAi, randuriAcoperite, cheieRandAi, mesajCodAi, EXPLICATIE_CATEGORIE_AI, clasificaRaspunsBucataAi } from './importVerificareAi.js'
 import { parseazaTgz, randuriDeTratat } from './importTgz.js'
 import { CAMPURI_VERIFICATE, mascheazaRand, indexDeVerificat, semnalFaraValori, VALOARE_ASCUNSA, numarRanduriDeVerificat } from './importVerificareFixa.js'
 
@@ -301,7 +301,9 @@ describe('funcția edge: apelul și închiderea în jurnal', () => {
     expect(r.body.semnale).toEqual([{ i: 1, camp: 'tarla', categorie: 'nume_persoana' }])
     expect(r.body.respinse).toBe(1)
     expect(JSON.stringify(r.body)).not.toMatch(/Ionescu|IONESCU|POPESCU|MARIA|motiv/i)
-    expect(r.apeluri.inchide[0]).toMatchObject({ p_stare: 'ok', p_semnale: 1, p_respinse: 1 })
+    // r3 (#1141 P2): o respingere face bucata INCOMPLETĂ (cod + jurnal), nu ok
+    expect(r.body.cod).toBe('incomplet')
+    expect(r.apeluri.inchide[0]).toMatchObject({ p_stare: 'incomplet', p_semnale: 1, p_respinse: 1 })
   })
   it('max_tokens / refuz → eroare (tokenii cunoscuți); fără listă', async () => {
     for (const [stop, cod] of [['max_tokens', 'ai_trunchiat'], ['refusal', 'ai_refuz']]) {
@@ -481,5 +483,102 @@ describe('ecranul: semnalele AI în „De verificat” — aceeași mascare, ace
   })
   it('sha256Hex = SHA-256 (vector cunoscut)', async () => {
     expect(await sha256Hex('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+  })
+})
+
+// r3 (#1141 Jakarinos P2 pe 50bfa8a1): respingerile la validare NU șterg semnalele AI vechi. Drumul real: handlerul edge (dependențe false) → clasificarea
+// răspunsului bucății (aceeași funcție ca panoul) → randuriAcoperite → adaugaSemnaleAi. Datele: 150 de rânduri FICTIVE (2 bucăți: rândurile Excel
+// 2..101 și 102..151); semnalele AI vechi: rândul 9 (bucata 1, tarla) și rândul 112 (bucata 2, tarla); un semnal fix pe rândul 60. Așteptările de mână.
+describe('r3: bucățile cu elemente respinse la validare păstrează semnalele AI vechi (mascare, statistică, bifă)', () => {
+  const id = Array.from({ length: 150 }, (_, k) => ({ rand: k + 2, uat: 'FIC', nr_crt: String(k + 1), cheie_parcela: `FIC:${k + 1}`, poz_hg: String(100 + k), nr_cadastral: String(5000 + k), tarla: 'T ' + k }))
+  const plan = pregatesteVerificareAi({ identificare: id })
+  const fix = { rand: 60, uat: 'FIC', nr_crt: '59', cheie_parcela: 'FIC:59', camp: 'nr_cadastral', motive: ['nume'], motiv: 'nr. cadastral / parcelă: pare numele deținătorului' }
+  const vechi = semnaleAiInDeVerificat([{ i: 7, camp: 'tarla', categorie: 'nume_persoana' }, { i: 110, camp: 'tarla', categorie: 'adresa' }], plan.harta)
+  const p0 = adaugaSemnaleAi({ identificare: id, de_verificat: [fix], statistici: {} }, vechi, { complet: true }, randuriAcoperite(plan, [0, 1]))
+  const ascuns = (p, cheie, camp) => mascheazaRand({ cheie, tarla: 'X', nr_cadastral: 'Y' }, indexDeVerificat(p.de_verificat))[camp] === VALOARE_ASCUNSA
+  // rularea: câte un apel prin handler pe bucată (ca panoul), oprire la primul răspuns neclasificabil
+  const ruleazaBucati = async raspunsuri => {
+    const reusite = [], semnale = [], corpuri = [], inchideri = []
+    for (let k = 0; k < plan.bucati.length; k++) {
+      const r = await ruleaza({ proiect_id: P, fisier_sha256: SHA, bucata: k + 1, bucati: plan.bucati.length, cheie: `44444444-4444-4444-8444-44444444444${k}`, randuri: plan.bucati[k] }, { raspuns: raspunsuri[k] })
+      corpuri.push([r.status, r.body]); inchideri.push(...r.apeluri.inchide)
+      const fel = clasificaRaspunsBucataAi(r.body)
+      if (!fel) break
+      semnale.push(...r.body.semnale)
+      if (fel === 'completa') reusite.push(k)
+    }
+    const p1 = adaugaSemnaleAi(p0, semnaleAiInDeVerificat(semnale, plan.harta), { complet: reusite.length === plan.bucati.length }, randuriAcoperite(plan, reusite))
+    return { p1, corpuri, inchideri, reusite }
+  }
+  it('starea de pornire: 3 semnale (fix 60, AI 9, AI 112), toate trei câmpurile mascate', () => {
+    expect(p0.de_verificat.map(s => [s.rand, s.camp, s.sursa ?? 'fix'])).toEqual([[60, 'nr_cadastral', 'fix'], [9, 'tarla', 'ai'], [112, 'tarla', 'ai']])
+    expect([ascuns(p0, 'FIC:8', 'tarla'), ascuns(p0, 'FIC:111', 'tarla'), ascuns(p0, 'FIC:59', 'nr_cadastral')]).toEqual([true, true, true])
+  })
+  it('reproducerea din verdict: semnalul întors are cheia în plus „motiv” → handlerul: 200, cod INCOMPLET, semnale [], respinse 1, jurnal „incomplet”; semnalul vechi al rândului 9 RĂMÂNE, câmpul rămâne ascuns', async () => {
+    const { p1, corpuri, inchideri, reusite } = await ruleazaBucati([raspunsAi({ semnale: [{ i: 7, camp: 'tarla', categorie: 'nume_persoana', motiv: 'Pare un nume' }] }), raspunsAi({ semnale: [] })])
+    expect(corpuri[0]).toEqual([200, { cod: 'incomplet', semnale: [], respinse: 1, cost_usd: 0.0032, jurnal_confirmat: true }])
+    expect(inchideri[0]).toMatchObject({ p_stare: 'incomplet', p_semnale: 0, p_respinse: 1, p_eroare_cod: null })
+    expect(corpuri[1]).toEqual([200, { cod: 'ok', semnale: [], respinse: 0, cost_usd: 0.0032, jurnal_confirmat: true }])
+    expect(inchideri[1]).toMatchObject({ p_stare: 'ok', p_respinse: 0 })
+    expect(reusite).toEqual([1])
+    // bucata 1 (incompletă): rândul 9 își păstrează semnalul; bucata 2 (gol valid): semnalul rândului 112 dispare (curățare legitimă)
+    expect(p1.de_verificat.map(s => [s.rand, s.camp, s.sursa ?? 'fix'])).toEqual([[60, 'nr_cadastral', 'fix'], [9, 'tarla', 'ai']])
+    expect([ascuns(p1, 'FIC:8', 'tarla'), ascuns(p1, 'FIC:111', 'tarla'), ascuns(p1, 'FIC:59', 'nr_cadastral')]).toEqual([true, false, true])
+    expect(p1.statistici).toMatchObject({ de_verificat: 2, randuri_de_verificat: 2 })
+    expect(p1).not.toBe(p0)   // previzualizare nouă ⇒ bifa „am verificat” se cere din nou (ImportTgz leagă bifa de obiect)
+    expect(p1.verificare_ai).toEqual({ complet: false })
+  })
+  it('INTEGRAL respins (index necunoscut, categorie necunoscută, câmp gol): cod incomplet, respinse 3 → nimic șters în bucata 1', async () => {
+    const { p1, corpuri, inchideri } = await ruleazaBucati([raspunsAi({ semnale: [{ i: 9999, camp: 'tarla', categorie: 'adresa' }, { i: 7, camp: 'tarla', categorie: 'altceva' }, { i: 8, camp: 'necunoscut', categorie: 'adresa' }] }), raspunsAi({ semnale: [] })])
+    expect(corpuri[0]).toEqual([200, { cod: 'incomplet', semnale: [], respinse: 3, cost_usd: 0.0032, jurnal_confirmat: true }])
+    expect(inchideri[0]).toMatchObject({ p_stare: 'incomplet', p_respinse: 3 })
+    expect(p1.de_verificat.map(s => s.rand)).toEqual([60, 9])
+    expect(ascuns(p1, 'FIC:8', 'tarla')).toBe(true)
+  })
+  it('MIXT (un semnal valid pe rândul 20 + unul respins): semnalul valid se ADAUGĂ, cel vechi al rândului 9 rămâne; statistica = 3 rânduri', async () => {
+    const { p1, corpuri } = await ruleazaBucati([raspunsAi({ semnale: [{ i: 18, camp: 'nr_cadastral', categorie: 'telefon_cnp' }, { i: 18, camp: 'nr_cadastral', categorie: 'adresa' }] }), raspunsAi({ semnale: [] })])
+    expect(corpuri[0]).toEqual([200, { cod: 'incomplet', semnale: [{ i: 18, camp: 'nr_cadastral', categorie: 'telefon_cnp' }], respinse: 1, cost_usd: 0.0032, jurnal_confirmat: true }])
+    expect(p1.de_verificat.map(s => [s.rand, s.camp, s.motive.join('+')])).toEqual([[60, 'nr_cadastral', 'nume'], [9, 'tarla', 'ai_nume_persoana'], [20, 'nr_cadastral', 'ai_telefon_cnp']])
+    expect([ascuns(p1, 'FIC:8', 'tarla'), ascuns(p1, 'FIC:19', 'nr_cadastral'), ascuns(p1, 'FIC:111', 'tarla')]).toEqual([true, true, false])
+    expect(p1.statistici).toMatchObject({ de_verificat: 3, randuri_de_verificat: 3 })
+  })
+  it('GOL valid fără respingeri pe ambele bucăți: cod ok, jurnal ok → AMBELE semnale AI vechi dispar (curățarea legitimă), cel fix rămâne', async () => {
+    const { p1, corpuri, inchideri, reusite } = await ruleazaBucati([raspunsAi({ semnale: [] }), raspunsAi({ semnale: [] })])
+    expect(corpuri.map(([s, b]) => [s, b.cod, b.respinse])).toEqual([[200, 'ok', 0], [200, 'ok', 0]])
+    expect(inchideri.map(x => x.p_stare)).toEqual(['ok', 'ok'])
+    expect(reusite).toEqual([0, 1])
+    expect(p1.de_verificat).toEqual([fix])
+    expect([ascuns(p1, 'FIC:8', 'tarla'), ascuns(p1, 'FIC:111', 'tarla'), ascuns(p1, 'FIC:59', 'nr_cadastral')]).toEqual([false, false, true])
+    expect(p1.statistici).toMatchObject({ de_verificat: 1, randuri_de_verificat: 1 })
+    expect(p1.verificare_ai).toEqual({ complet: true })
+  })
+  it('ÎNTRERUPERE între bucăți (bucata 1 gol valid, bucata 2 rețea → necunoscut): doar semnalul rândului 9 dispare; al rândului 112 rămâne ascuns', async () => {
+    const { p1, corpuri, reusite } = await ruleazaBucati([raspunsAi({ semnale: [] }), () => { throw new Error('retea') }])
+    expect(corpuri.map(([s, b]) => [s, b.cod])).toEqual([[200, 'ok'], [502, 'ai_necunoscut']])
+    expect(reusite).toEqual([0])
+    expect(p1.de_verificat.map(s => s.rand)).toEqual([60, 112])
+    expect([ascuns(p1, 'FIC:8', 'tarla'), ascuns(p1, 'FIC:111', 'tarla')]).toEqual([false, true])
+    expect(p1.statistici).toMatchObject({ randuri_de_verificat: 2 })
+  })
+  it('usage lipsă + elemente respinse: cod incomplet, cost necunoscut; jurnalul rămâne „necunoscut” (costul rezervat) cu numărul respingerilor', async () => {
+    const r = await ruleaza(cerereOk(), { raspuns: raspunsAi({ semnale: [{ i: 0, camp: 'tarla', categorie: 'nume_persoana' }, { i: 5, camp: 'tarla', categorie: 'adresa' }] }, { usage: null }) })
+    expect(r.body).toEqual({ cod: 'incomplet', semnale: [{ i: 0, camp: 'tarla', categorie: 'nume_persoana' }], respinse: 1, cost_usd: null, jurnal_confirmat: true, cost_necunoscut: true })
+    expect(r.apeluri.inchide[0]).toMatchObject({ p_stare: 'necunoscut', p_eroare_cod: 'ai_usage_lipsa', p_semnale: 1, p_respinse: 1, p_tokeni_in: null })
+    expect(clasificaRaspunsBucataAi(r.body)).toBe('incompleta')
+  })
+  it('clasificaRaspunsBucataAi: tabelul de cazuri (completă DOAR cu cod ok + respinse === 0 + listă)', () => {
+    for (const [d, astept] of [
+      [{ cod: 'ok', semnale: [], respinse: 0 }, 'completa'], [{ cod: 'ok', semnale: [{ i: 1 }], respinse: 0 }, 'completa'],
+      [{ cod: 'ok', semnale: [], respinse: 1 }, 'incompleta'], [{ cod: 'ok', semnale: [] }, 'incompleta'], [{ cod: 'ok', semnale: [], respinse: '0' }, 'incompleta'],
+      [{ cod: 'ok', semnale: [], respinse: -1 }, 'incompleta'], [{ cod: 'ok', semnale: [], respinse: 0.5 }, 'incompleta'],
+      [{ cod: 'incomplet', semnale: [], respinse: 2 }, 'incompleta'], [{ cod: 'incomplet', semnale: [], respinse: 0 }, 'incompleta'],
+      [{ cod: 'ok', respinse: 0 }, null], [{ cod: 'incomplet' }, null], [{ cod: 'ai_necunoscut', semnale: [] }, null], [null, null], ['ok', null],
+    ]) expect(clasificaRaspunsBucataAi(d), JSON.stringify(d)).toBe(astept)
+  })
+  it('migrarea: „ok” cere respinse = 0, „incomplet” respinse ≥ 1 (CHECK + închiderea); comportamentul e probat în PGlite', () => {
+    expect(MIG).toContain("CHECK (stare IN ('rezervat', 'ok', 'incomplet', 'eroare', 'necunoscut'))")
+    expect(MIG).toContain("OR (stare = 'ok' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse = 0 AND")
+    expect(MIG).toContain("OR (stare = 'incomplet' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse >= 1 AND")
+    expect(MIG).toContain("     OR (p_stare = 'ok' AND p_respinse IS DISTINCT FROM 0)")
   })
 })

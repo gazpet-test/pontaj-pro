@@ -75,7 +75,7 @@ BEGIN
         -- >>> AMPRENTE-NOI 20261131j
         ('public.fn_red_import_ai_poate(uuid)', 'b20a13bf9179b76c00812b63362bf32f', 'sql', true, 's', 'boolean'),
         ('public.fn_red_import_ai_rezerva(uuid,uuid,text,text,integer,integer,integer,integer,integer)', '04dd71b7a3ac5fda4a0cf0ca3e4e6377', 'plpgsql', true, 'v', 'jsonb'),
-        ('public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)', '33ac8ddf00565721662122fd7d71a3ef', 'plpgsql', true, 'v', 'boolean'),
+        ('public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)', '017b22b5041ce26ec83c2ef8b5cdbcff', 'plpgsql', true, 'v', 'boolean'),
         ('public.fn_red_proiect_drepturi_istoric()', '92975fe64ee3f774740cc395cf8384c8', 'plpgsql', true, 'v', 'trigger')
         -- <<< AMPRENTE-NOI 20261131j
       ) a(semnatura, amprenta, limbaj, definer, volatil, intoarce)
