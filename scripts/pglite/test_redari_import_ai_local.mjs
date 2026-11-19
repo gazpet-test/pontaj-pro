@@ -536,6 +536,68 @@ for (const [nume, fn, re] of [
   await db.close()
 }
 
+// ── 4b. r3 (#1141): proba pe CLONĂ (supabase/tests/20261131j_redari_import_ai_clona.sql) rulată aici, ca să-i verificăm logica înainte de clonă:
+//    meta-comenzile psql (\set / \if / :'var') expandate de mână, schema completată cu ce are clona în plus (auth.users, profiles.role) ──
+const F_CLONA = 'supabase/tests/20261131j_redari_import_ai_clona.sql'
+function clonaPeSql(text, clona = 'da') {
+  const vars = { clona }, out = []
+  let sari = 0
+  for (const l of text.split('\n')) {
+    if (/^\\if /.test(l)) { sari = 1; continue }
+    if (sari) { if (/^\\endif/.test(l)) sari = 0; continue }
+    if (/^\\set ON_ERROR_STOP/.test(l)) continue
+    const m = /^\\set (\w+) (.*)$/.exec(l)
+    if (m) { const v = m[2].trim(); vars[m[1]] = v.startsWith("'") ? v.slice(1, -1).replace(/''/g, "'") : v; continue }
+    out.push(l.replace(/:'(\w+)'/g, (x, n) => { if (!(n in vars)) throw new Error('variabila psql nedefinita: ' + n); return lit(vars[n]) }))
+  }
+  return out.join('\n')
+}
+const POL_IST_CAP_4B = 'CREATE POLICY red_proiect_drepturi_istoric_sel ON public.red_proiect_drepturi_istoric FOR SELECT TO authenticated\n'
+const POL_DREPT_USING_4B = "  USING ((SELECT auth.uid()) IS NOT NULL AND (profile_id = (SELECT auth.uid()) OR (SELECT public.fn_red_nivel()) = 'admin'));"
+const POST_POL_OFF_4B = ["  IF v_rau IS DISTINCT FROM\n       'red_import_ai_jurnal.red_import_ai_jurnal_sel", "  IF v_rau IS NULL AND v_rau IS DISTINCT FROM\n       'red_import_ai_jurnal.red_import_ai_jurnal_sel"]
+const SHIM_CLONA = `CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY, email text);
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS role text;`
+async function ruleazaClona(db, text, clona) {
+  const note = []
+  let m = null
+  try { await db.exec(clonaPeSql(text, clona), { onNotice: n => note.push(n.message) }) } catch (e) { m = e.message; try { await db.exec('ROLLBACK') } catch { /* deja */ } }
+  return { note, m, verdict: (note.map(x => x.match(/^CLONA 20261131j: verificari=(\d+) esec=(\d+) verdict=(\w+)/)).find(Boolean) || []) }
+}
+console.log('4b. proba pe clonă (fișierul din supabase/tests), rulată pe PGlite: verdict OK pe migrarea reală, ESEC pe un mutant, refuz fără clona=da')
+{
+  let TEXT_CLONA = null
+  try { TEXT_CLONA = citeste(F_CLONA) } catch (e) { ok(false, 'proba pe clonă lipsește: ' + e.message) }
+  if (TEXT_CLONA) {
+    const db = await bazaNoua()
+    await db.exec(SHIM_CLONA)
+    await aplicaMig(db)
+    const inainte = (await db.query(`SELECT (SELECT count(*) FROM public.red_import_ai_jurnal) + (SELECT count(*) FROM public.red_proiect_drepturi_istoric) + (SELECT count(*) FROM public.red_proiecte) AS n`)).rows[0].n
+    const r = await ruleazaClona(db, TEXT_CLONA)
+    r.note.filter(x => /^NU /.test(x)).forEach(x => console.log('     ' + x))
+    ok(!r.m && r.verdict[3] === 'OK' && Number(r.verdict[1]) >= 80 && r.verdict[2] === '0' && !r.note.some(x => /^NU /.test(x)),
+      `proba pe clonă pe migrarea reală: ${r.m ? 'A CĂZUT ' + r.m.slice(0, 160) : `verificari=${r.verdict[1]} esec=${r.verdict[2]} verdict=${r.verdict[3]}`}`)
+    const dupa = (await db.query(`SELECT (SELECT count(*) FROM public.red_import_ai_jurnal) + (SELECT count(*) FROM public.red_proiect_drepturi_istoric) + (SELECT count(*) FROM public.red_proiecte) AS n`)).rows[0].n
+    ok(dupa === inainte, `proba pe clonă: ROLLBACK — nimic rămas (${inainte} → ${dupa})`)
+    const r2 = await ruleazaClona(db, TEXT_CLONA, 'nu')
+    ok(/doar pe clona/.test(r2.m || ''), 'proba pe clonă fără -v clona=da: refuz (' + (r2.m || 'A TRECUT').slice(0, 80) + ')')
+    await db.close()
+    // mutantul „ok acceptă respinse > 0” (funcția + CHECK) → proba pe clonă trebuie să dea ESEC
+    const db2 = await bazaNoua()
+    await db2.exec(SHIM_CLONA)
+    await aplicaMig(db2, recalculeaza(aplica(MIG, [["     OR (p_stare = 'ok' AND p_respinse IS DISTINCT FROM 0)\n", ''], ['semnale IS NOT NULL AND respinse = 0 AND', 'semnale IS NOT NULL AND respinse IS NOT NULL AND']])))
+    const r3 = await ruleazaClona(db2, TEXT_CLONA)
+    ok(!r3.m && r3.verdict[3] === 'ESEC' && r3.note.some(x => /^NU {2}C r3 ok cu respinse 1/.test(x)), `proba pe clonă pe MUTANTUL „ok cu respinse”: ${r3.m ? 'A CĂZUT ' + r3.m.slice(0, 120) : 'verdict=' + r3.verdict[3]}`)
+    await db2.close()
+    // mutantul „politica istoricului = cea a jurnalului general” → viewerul / alt editor ar vedea istoricul altuia
+    const db3 = await bazaNoua()
+    await db3.exec(SHIM_CLONA)
+    await aplicaMig(db3, recalculeaza(aplica(MIG, [[POL_IST_CAP_4B + POL_DREPT_USING_4B, POL_IST_CAP_4B + '  USING ((SELECT public.fn_red_nivel()) IS NOT NULL);'], POST_POL_OFF_4B])))
+    const r4 = await ruleazaClona(db3, TEXT_CLONA)
+    ok(!r4.m && r4.verdict[3] === 'ESEC' && r4.note.some(x => /^NU {2}D istoricul: (alt editor|viewerul)/.test(x)), `proba pe clonă pe MUTANTUL „istoricul citibil de orice nivel Redări”: ${r4.m ? 'A CĂZUT ' + r4.m.slice(0, 120) : 'verdict=' + r4.verdict[3]}`)
+    await db3.close()
+  }
+}
+
 console.log('5. MUTANȚI (fiecare TREBUIE să pice: la verificările de comportament; amprentele recalculate)')
 const POL_JURNAL = 'USING ((SELECT auth.uid()) IS NOT NULL AND public.fn_red_import_ai_poate(proiect_id));'
 const POST_POL_JURNAL = "'red_import_ai_jurnal.red_import_ai_jurnal_sel|r|true|authenticated|((( SELECT auth.uid() AS uid) IS NOT NULL) AND fn_red_import_ai_poate(proiect_id))|;'"
