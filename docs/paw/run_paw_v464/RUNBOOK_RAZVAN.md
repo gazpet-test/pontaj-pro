@@ -79,7 +79,7 @@ Asteptat: 204 linii diferite (10 vechi `<=`, 194 noi `=>`). Cele 10 linii vechi 
 antetul, lista de coduri, comentariul selectorilor `ATAS`, titlul partii cu browserul, cele doua
 linii din vechea `_atasamente`, linia `atasamente in ciorna` din `stare` si cele trei linii ale
 vechii verificari din `trimite`. Liniile noi: nota v4.6.4, selectorul `CHIP`, analiza HTML a
-ciornei, paza si apelurile ei. Testele: `Ran 56 tests ... OK`.
+ciornei, paza si apelurile ei. Testele: `Ran 57 tests ... OK`.
 
 Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
 `C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi

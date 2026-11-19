@@ -407,6 +407,18 @@ class TestNumarareAtasamente(unittest.TestCase):
         i = self.an(pagina(["a.txt"], editor=ed))
         self.assertEqual((i["editoare"], i["atasamente"]), (1, 1))
 
+    def test_paritate_css_python(self):
+        # L19: selectorii CSS (locator) si regulile din Python (analiza HTML) descriu aceleasi elemente
+        self.assertEqual(gp.ZONA, ", ".join(list(gp.ZONA_TAGURI) + ["." + c for c in gp.ZONA_CLASE]))
+        self.assertEqual(gp.ATAS, ", ".join(list(gp.SEMN_TAGURI) + ['[data-test-id*="%s"]' % s for s in gp.SEMN_DATA_TEST]
+                                            + ['[class*="%s"]' % gp.SEMN_CLASA]))
+        self.assertEqual(gp.EDITOR, 'rich-textarea [contenteditable="true"], div.ql-editor[contenteditable="true"]')
+        self.assertIn(gp.CHIP, gp.SEMN_TAGURI)
+        # clasa de zona = token intreg (ca ".input-area" in CSS), nu subsir
+        i = self.an('<html><body><div class="my-input-area-x">' + EDITOR_HTML.replace('class="input-area"', 'class="x"')
+                    + '</div></body></html>')
+        self.assertEqual(i["zone"], 0)
+
     def test_detalii_ascii_si_scurte(self):
         i = self.an(pagina(["a" + chr(0x21B) + ".txt"], extra_zona='<div class="file-preview-' + chr(0x219) + "x" * 200 + '"></div>'))
         for d in i["detalii"]:
