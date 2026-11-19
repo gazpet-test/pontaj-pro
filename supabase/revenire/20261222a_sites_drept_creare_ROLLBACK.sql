@@ -1,6 +1,7 @@
 -- Revenire 20261222a_sites_drept_creare (runda 2). NEAPLICAT. Fără GO de execuție: doar la cererea explicită a lui Răzvan (supabase/revenire/README.md).
--- Scoate EXACT ce a creat migrarea: funcția fn_sites_creeaza(text, bigint, text) (amprenta corpului + proprietățile + drepturile verificate
--- înainte: altă stare = refuz, nimic schimbat) și cheia de modul santiere_creare din app_modules. Politicile, triggerele și drepturile lui sites,
+-- Scoate EXACT ce a creat migrarea: funcția fn_sites_creeaza(text, bigint, text) (runda 3: detaliul COMPLET — proprietățile, ACL-ul întreg pe
+-- toate rolurile, corpul — egal cu detaliul acceptat „după” de migrare; altă stare = refuz, nimic schimbat) și cheia de modul santiere_creare din
+-- app_modules (rândul exact scris de migrare). Politicile, triggerele și drepturile lui sites,
 -- funcțiile existente și restul tabelelor NU se ating (migrarea nu le-a schimbat).
 -- REFUZĂ dacă dreptul a fost acordat cuiva (rânduri santiere_creare în user_module_access): ștergerea cheii ar șterge în cascadă și dreptul,
 -- fără urmă. Retragerea dreptului = pas separat al coordonatorului (preview → „da” Răzvan → apply), apoi revenirea.
@@ -19,7 +20,7 @@
 --   rămâne, ca mai sus); apelurile de după COMMIT primesc „funcția nu există” (interfața: „nu e încă disponibilă”, fără fals succes).
 -- Un SINGUR bloc DO: un refuz e singura instrucțiune care eșuează.
 DO $revenire$
-DECLARE v_plafon text; v_incercari integer := 0; v_pas integer;
+DECLARE v_plafon text; v_incercari integer := 0; v_pas integer; v_det text;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
      OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261222a_sites_drept_creare_ROLLBACK:' || txid_current() THEN
@@ -56,22 +57,42 @@ BEGIN
         END;
       END LOOP;
     END IF;
-    -- starea exactă: funcția (corpul revizuit + proprietățile + drepturile; o singură semnătură), cheia de modul
-    IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
-                    WHERE p.oid = to_regprocedure('public.fn_sites_creeaza(text, bigint, text)') AND l.lanname = 'plpgsql' AND p.prosecdef
-                      AND md5(replace(p.prosrc, chr(13), '')) =
-                          -- AMPRENTA-START rpc
-                          '7adb03ef93e482804b01fca31a8bd383'
-                          -- AMPRENTA-END rpc
-                      AND pg_get_userbyid(p.proowner) = 'postgres' AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']
-                      AND p.prorettype = 'jsonb'::regtype
-                      AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
-                      AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0))
+    -- starea exactă a funcției (runda 3, Jakarinos r2 P2-2): detaliul COMPLET, calculat cu EXACT expresia rândului „functie” din AMPRENTA_L15 v1
+    -- (tip, limbaj, definer, volatilitate, strict, leakproof, proprietar, config, tipul întors, ACL-ul ÎNTREG pe toate rolurile — inclusiv PUBLIC,
+    -- anon, service_role și GRANT OPTION —, corpul) = EXACT detaliul acceptat „după” de migrare (amp_verifica_20261222a). Orice derivă după
+    -- aplicare (un GRANT nou, o proprietate schimbată) = refuz, nimic schimbat. Testul leagă expresia de AMPRENTA_L15 și constanta de migrare.
+    v_det := NULL;
+    -- >>> DETALIU_FUNCTIE (expresia din AMPRENTA_L15 v1, copiată identic)
+    SELECT 'tip=' || p.prokind::text || ', limbaj=' || l.lanname::text || ', definer=' || p.prosecdef::text || ', volatil=' || p.provolatile::text
+           || ', strict=' || p.proisstrict::text || ', leakproof=' || p.proleakproof::text || ', proprietar=' || pg_get_userbyid(p.proowner)
+           || ', config=' || coalesce(array_to_string(p.proconfig, '; '), '(mostenit)') || ', intoarce=' || coalesce(pg_get_function_result(p.oid), '-')
+           || ', acl=' || coalesce((SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
+                SELECT CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END || ':' || e.privilege_type
+                       || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
+                  FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a), '(niciun drept)')
+           || ', corp_md5=' || md5(replace(p.prosrc, chr(13), ''))
+           || ', sqlbody_md5=' || coalesce(md5(replace(pg_get_function_sqlbody(p.oid), chr(13), '')), '-')
+    -- <<< DETALIU_FUNCTIE
+      INTO v_det
+      FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_sites_creeaza(text, bigint, text)');
+    IF v_det IS DISTINCT FROM
+         -- DETALIU-DUPA-START rpc
+         'tip=f, limbaj=plpgsql, definer=true, volatil=v, strict=false, leakproof=false, proprietar=postgres, config=search_path=public, pg_temp, intoarce=jsonb, acl=authenticated:EXECUTE, postgres:EXECUTE, corp_md5=7adb03ef93e482804b01fca31a8bd383, sqlbody_md5=-'
+         -- DETALIU-DUPA-END rpc
        OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
             WHERE n.nspname = 'public' AND p.proname = 'fn_sites_creeaza') <> 1 THEN
-      RAISE EXCEPTION '20261222a revenire: starea nu e cea din 20261222a (pasul %, functia)', v_pas;
+      RAISE EXCEPTION '20261222a revenire: starea nu e cea din 20261222a (pasul %, functia): %', v_pas, coalesce(v_det, 'LIPSESTE');
     END IF;
-    IF (SELECT count(*) FROM public.app_modules WHERE key = 'santiere_creare') <> 1 THEN
+    -- cheia de modul: exact rândul scris de migrare (coloanele pe care le-a scris; o altă stare = refuz, nu se șterge un rând schimbat de altcineva)
+    IF (SELECT count(*) FROM public.app_modules WHERE key = 'santiere_creare') <> 1
+       OR NOT EXISTS (SELECT 1 FROM public.app_modules m WHERE m.key = 'santiere_creare'
+                        AND (m.parent_key::text, m.name::text, m.icon::text, m.description::text, m.is_active, m.show_on_homepage) IS NOT DISTINCT FROM
+                            -- RAND-CHEIE-START (= VALUES din INSERT-ul migrării; testul le leagă)
+                            (NULL::text, 'Creare șantiere', '🏗️',
+        'Dreptul de a crea un șantier nou (Execuție → Proiect nou și Admin → Șantiere), cu Execuție editor / admin. Nivel editor sau admin. Nu dă drept de modificare sau ștergere. 20261222a.',
+        true, false)
+                            -- RAND-CHEIE-END
+                     ) THEN
       RAISE EXCEPTION '20261222a revenire: starea nu e cea din 20261222a (pasul %, cheia de modul)', v_pas;
     END IF;
     -- nimic din afara migrării nu depinde de funcție (catalog + apeluri textuale: plpgsql nu lasă dependențe)

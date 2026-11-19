@@ -33,6 +33,8 @@
 #   P5 concurență RPC: proiect de probă + dreptul titularului (comise). A: BEGIN; RPC(proiect) → ține proiectul FOR UPDATE. B: același RPC cu
 #      lock_timeout 1 s → 55P03. A: COMMIT. B din nou → creat = false, același șantier. Exact 1 șantier pe proiect, 1 proiect pe șantier.
 #   P6 revenirea cu dreptul acordat → 10 + „dreptul santiere_creare e acordat”; dreptul se retrage (DELETE pe rândul de probă).
+#   P6b (runda 3) deriva după aplicare: GRANT EXECUTE către service_role / către PUBLIC / ALTER … STRICT → revenirea → 10 + „starea nu e cea din
+#      20261222a (pasul 1, functia)”, RPC-ul și cheia rămân; deriva se reface (REVOKE / CALLED ON NULL INPUT) și ACL-ul + strict revin exact.
 #   P7 concurență revenire: A: BEGIN; INSERT dreptul (necomis: FOR KEY SHARE pe cheie) → revenirea → 10 cu BUGET_LOCK. A: ROLLBACK.
 #   P8 revenirea → 0; RPC-ul și cheia lipsesc; baseline-ul L15 recalculat = cel din P1; șantierul din P5 rămâne, legat de proiect.
 #   P9 reaplicarea (istoricul clonei curățat) → 0; P4 din nou.
@@ -77,11 +79,18 @@ IFS='|' read -r P_VER P_PG P_SIS P_NEAPL P_OWN P_TIT <<< "$PRE"
 
 D="$(mktemp -d -t sites_drept_creare_clona_XXXXXX)"
 A_OUT="$D/A.stdout.log"; A_ERR="$D/A.stderr.log"; : > "$A_ERR"
-A_DESCHIS=0; esec=0; A_FD_IN=''; A_FD_OUT=''; A_PID_C=''
+A_DESCHIS=0; esec=0; A_FD_IN=''; A_FD_OUT=''; A_PID_C=''; DERIVA_DESCHISA=0
 curatenie() {
   local cod=$?
   trap - EXIT INT TERM
   if [ "$A_DESCHIS" = 1 ]; then { printf '%s\n' 'ROLLBACK;' '\q' >&"$A_FD_IN"; } 2>/dev/null || true; wait "$A_PID_C" 2>/dev/null || true; fi
+  # P6b întrerupt: deriva de probă (drept / STRICT pe RPC) se reface pe clonă
+  if [ "$DERIVA_DESCHISA" = 1 ]; then
+    "${PS[@]}" -c "DO \$\$ BEGIN IF to_regprocedure('public.fn_sites_creeaza(text, bigint, text)') IS NOT NULL THEN
+      REVOKE EXECUTE ON FUNCTION public.fn_sites_creeaza(text, bigint, text) FROM service_role, PUBLIC;
+      ALTER FUNCTION public.fn_sites_creeaza(text, bigint, text) CALLED ON NULL INPUT; END IF; END \$\$;" > /dev/null 2>&1 \
+      && echo "  OK  curățenie: deriva P6b refăcută" || { echo "  NU  curățenie: deriva P6b (drept / STRICT pe fn_sites_creeaza) de refăcut manual"; cod=1; }
+  fi
   # datele de probă (doar cele cu prefixul și contul de probă)
   "${PS[@]}" -c "BEGIN;
     DELETE FROM public.user_module_access WHERE profile_id = '$TITULAR_ID' AND module = 'santiere_creare';
@@ -248,6 +257,24 @@ livreaza "$REVC" 20261222120001
 egal "$R_COD" "10" "revenirea refuzată (NEAPLICAT)"
 ok "$(printf '%s' "$R_OUT" | grep -q 'dreptul santiere_creare e acordat'; echo $?)" "motivul: dreptul e acordat"
 q "DELETE FROM public.user_module_access WHERE profile_id = '$TITULAR_ID' AND module = 'santiere_creare'" > /dev/null
+
+# ── P6b deriva după aplicare (runda 3, Jakarinos r2 P2-2): un drept / o proprietate în plus față de detaliul „după” = revenirea refuză ──
+echo "P6b deriva după aplicare: revenirea refuză, apoi starea se reface"
+FN="public.fn_sites_creeaza(text, bigint, text)"
+for d in "GRANT EXECUTE ON FUNCTION $FN TO service_role|REVOKE EXECUTE ON FUNCTION $FN FROM service_role" \
+         "GRANT EXECUTE ON FUNCTION $FN TO PUBLIC|REVOKE EXECUTE ON FUNCTION $FN FROM PUBLIC" \
+         "ALTER FUNCTION $FN STRICT|ALTER FUNCTION $FN CALLED ON NULL INPUT"; do
+  STRICA="${d%%|*}"; REFACE="${d#*|}"
+  DERIVA_DESCHISA=1; q "$STRICA" > /dev/null
+  livreaza "$REVC" 20261222120001
+  egal "$R_COD" "10" "revenirea cu deriva „$STRICA”: NEAPLICAT"
+  ok "$(printf '%s' "$R_OUT" | grep -q 'starea nu e cea din 20261222a (pasul 1, functia)'; echo $?)" "motivul: starea nu e cea din 20261222a (functia)"
+  egal "$(q "SELECT to_regprocedure('$FN') IS NOT NULL AND EXISTS (SELECT 1 FROM public.app_modules WHERE key = 'santiere_creare')")" "t" "nimic schimbat (RPC-ul și cheia rămân)"
+  q "$REFACE" > /dev/null; DERIVA_DESCHISA=0
+done
+egal "$(q "SELECT coalesce(string_agg(pg_get_userbyid(e.grantee) || ':' || e.privilege_type || CASE WHEN e.is_grantable THEN '*' ELSE '' END, ', ' ORDER BY pg_get_userbyid(e.grantee) COLLATE \"C\"), '-') || '|' || p.proisstrict
+             FROM pg_proc p LEFT JOIN LATERAL aclexplode(p.proacl) e ON true WHERE p.oid = '$FN'::regprocedure GROUP BY p.proisstrict")" \
+     "authenticated:EXECUTE, postgres:EXECUTE|false" "starea de după migrare refăcută (P8 revine pe ea)"
 
 # ── P7 concurență: revenirea cu o acordare în curs ──
 echo "P7 revenirea în timp ce altă sesiune acordă dreptul (necomis)"

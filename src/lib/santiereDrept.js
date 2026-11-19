@@ -67,6 +67,10 @@ async function stareProiect(client, proiectId) {
 // Creează un șantier prin RPC. Cu proiect: la rezultat necunoscut (L05) recitește starea din BD; dacă nu e legat, reapelează O dată cu
 // ACEIAȘI parametri (RPC-ul e idempotent pe proiect: proiectul care are deja șantierul lui îl întoarce, fără să scrie). Fără proiect (Admin):
 // fără reîncercare automată — un al doilea apel ar crea alt șantier.
+// Runda 3 (L05 / L18): după un prim apel AMBIGUU, un eșec determinat al reîncercării (refuz, funcția dispărută, eroare) privește DOAR a doua
+// tranzacție — nu dovedește că prima nu a scris (ex.: primul apel a făcut COMMIT, răspunsul s-a pierdut, apoi dreptul a fost retras). Singura
+// dovadă e starea din BD: reconcilierea FINALĂ (proiect + șantier). Legat = ok (verificat); confirmat nelegat = eșecul reîncercării, verificat;
+// starea nu se poate citi = rămâne NECUNOSCUT (niciodată „proiect fără șantier” nedovedit).
 export async function creeazaSantier(client, { nume, proiectId = null, beneficiar = null }) {
   const args = { p_nume: nume, p_proiect: proiectId, p_beneficiar: beneficiar }
   const r = clasificaRaspuns(await apel(client, args))
@@ -74,9 +78,12 @@ export async function creeazaSantier(client, { nume, proiectId = null, beneficia
   const st = await stareProiect(client, proiectId)
   if (st.tip === 'ok') return st
   const r2 = clasificaRaspuns(await apel(client, args))
-  if (r2.tip !== 'necunoscut') return r2
-  const st2 = await stareProiect(client, proiectId)
-  return st2.tip === 'ok' ? st2 : r2
+  if (r2.tip === 'ok') return r2
+  const fin = await stareProiect(client, proiectId)
+  if (fin.tip === 'ok') return fin
+  if (fin.tip === 'nelegat' && r2.tip !== 'necunoscut') return { ...r2, verificat: true }
+  return { tip: 'necunoscut', motiv: fin.tip === 'nelegat' ? r2.motiv
+    : `primul apel fără răspuns, iar starea proiectului nu s-a putut verifica (${fin.motiv})` }
 }
 
 // Textul pentru om (wizard: cuProiect = true; Admin: false). ok = doar când șantierul există sigur.

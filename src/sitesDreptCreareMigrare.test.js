@@ -79,10 +79,44 @@ describe('20261222a — L15: o singură definiție, baseline marcat', () => {
   it('amprenta corpului RPC-ului: aceeași în „după” și în revenire, egală cu corpul real; fără caractere de control', () => {
     const h = md5(corp())
     expect(MIG).toContain(`|| 'corp_md5=${h}'`)
-    const m = REV.match(/-- AMPRENTA-START rpc\n\s*'([0-9a-f]{32})'/)
-    expect(m).toBeTruthy()
-    expect(m[1]).toBe(h)
+    expect(detaliuRev()).toContain(`, corp_md5=${h}, `)
     expect([...corp()].filter(c => c.charCodeAt(0) < 32 && c !== '\n')).toEqual([])
+  })
+})
+
+// detaliul acceptat „după” de migrare (literalele concatenate din amp_verifica_20261222a) și cel cerut de revenire (runda 3, P2-2)
+const literale = t => [...fara(t).matchAll(/'((?:[^']|'')*)'/g)].map(m => m[1].replace(/''/g, "'")).join('')
+const detaliuMig = () => { const i = MIG.indexOf('    IF v_fn IS DISTINCT FROM '); return literale(MIG.slice(i + '    IF v_fn IS DISTINCT FROM '.length, MIG.indexOf(' THEN', i))) }
+const detaliuRev = () => { const m = REV.match(/-- DETALIU-DUPA-START rpc\n\s*'([^'\n]*)'\n\s*-- DETALIU-DUPA-END rpc/); return m ? m[1] : null }
+const linii = t => t.split('\n').map(l => l.trim()).filter(Boolean)
+describe('20261222a — revenirea: starea exactă = detaliul acceptat „după” de migrare (runda 3, P2-2)', () => {
+  it('constanta din revenire = detaliul „după” din migrare, cu ACL-ul întreg (doar authenticated + proprietarul)', () => {
+    expect(detaliuMig()).toMatch(/^tip=f, limbaj=plpgsql, definer=true, .*, acl=authenticated:EXECUTE, postgres:EXECUTE, corp_md5=[0-9a-f]{32}, sqlbody_md5=-$/)
+    expect(detaliuRev()).toBe(detaliuMig())
+    expect(nr(REV, '-- DETALIU-DUPA-START rpc')).toBe(1)
+  })
+  it('expresia detaliului din revenire = expresia rândului „functie” din AMPRENTA_L15 v1 (L19), linie cu linie', () => {
+    const canonic = blocuri(SURSA, A, B)[0]
+    const i = canonic.indexOf("           'tip=' || p.prokind::text")
+    const j = canonic.indexOf("'-')\n", canonic.indexOf("|| ', sqlbody_md5=' ||", i)) + 4
+    const expr = canonic.slice(i, j)
+    expect(expr).toMatch(/', acl=' \|\| coalesce\(/)
+    const k = REV.indexOf('-- >>> DETALIU_FUNCTIE'), l = REV.indexOf('-- <<< DETALIU_FUNCTIE')
+    expect(k).toBeGreaterThan(0)
+    const rev = linii(REV.slice(REV.indexOf('\n', k) + 1, l))
+    expect(rev[0].startsWith('SELECT ')).toBe(true)
+    expect([rev[0].slice('SELECT '.length), ...rev.slice(1)]).toEqual(linii(expr))
+    // calculată pe funcția exactă (semnătura), într-o variabilă comparată cu IS DISTINCT FROM (lipsă = NULL = refuz)
+    expect(REV).toContain("FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_sites_creeaza(text, bigint, text)');")
+    expect(REV).toContain('    IF v_det IS DISTINCT FROM\n')
+  })
+  it('rândul cheii de modul: aceleași valori ca INSERT-ul migrării', () => {
+    const ins = MIG.slice(MIG.indexOf("VALUES ('santiere_creare', NULL, "), MIG.indexOf(';', MIG.indexOf("VALUES ('santiere_creare', NULL, ")))
+    const rand = REV.slice(REV.indexOf('-- RAND-CHEIE-START'), REV.indexOf('-- RAND-CHEIE-END'))
+    expect(literale(rand.slice(rand.indexOf('\n')))).toBe(literale(ins).replace(/^santiere_creare/, ''))
+    expect(rand).toMatch(/\(NULL::text, 'Creare șantiere'/)
+    expect(rand.replace(/\s+/g, ' ')).toMatch(/', true, false\) $/)
+    expect(ins.replace(/\s+/g, ' ')).toMatch(/', true, false\)$/)
   })
 })
 
@@ -245,6 +279,51 @@ describe('interfața: răspunsul RPC-ului (L05 / L18)', () => {
     const r = await creeazaSantier(c, { nume: 'S', proiectId: 5 })
     expect(r.tip).toBe('necunoscut')
     expect(mesajSantier(r).ok).toBe(false)
+  })
+  // runda 3 (Jakarinos r2, P2-1): primul apel ambiguu → eșecul determinat al reîncercării NU înlocuiește incertitudinea; decide doar
+  // reconcilierea finală din BD
+  const REFUZ = { data: null, error: { code: '42501', message: 'Crearea șantierului: contul nu are dreptul' } }
+  const DISPARUT = { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } }
+  const CITIRE_PICATA = { data: null, error: { message: 'TypeError: Failed to fetch' } }
+  it('scenariul Jak: commit + răspuns pierdut, recitirea picată, dreptul retras → 42501, recitirea finală picată = NECUNOSCUT, nu „fără șantier”', async () => {
+    const c = clientFals({ rpc: [RETEA, REFUZ], citiri: [CITIRE_PICATA, CITIRE_PICATA] })
+    const r = await creeazaSantier(c, { nume: 'S', proiectId: 5 })
+    expect(r.tip).toBe('necunoscut')
+    expect(r.motiv).toMatch(/nu s-a putut verifica/)
+    const m = mesajSantier(r)
+    expect(m.ok).toBe(false)
+    expect(m.text).not.toMatch(/fără șantier/)
+    expect(m.text).toMatch(/Nu se știe dacă șantierul s-a creat/)
+    // reconcilierea finală a fost încercată: 2 apeluri RPC + 2 citiri ale proiectului
+    expect(c.jurnal.map(x => x[0])).toEqual(['rpc', 'citire', 'rpc', 'citire'])
+  })
+  it('la fel cu funcția dispărută între apeluri (PGRST202): necunoscut, nu „nu e încă disponibilă … fără șantier”', async () => {
+    const c = clientFals({ rpc: [RETEA, DISPARUT], citiri: [CITIRE_PICATA, CITIRE_PICATA] })
+    const r = await creeazaSantier(c, { nume: 'S', proiectId: 5 })
+    expect(r.tip).toBe('necunoscut')
+    expect(mesajSantier(r).text).not.toMatch(/fără șantier|nu e încă disponibilă/)
+  })
+  it('reconcilierea finală găsește șantierul (primul apel scrisese) → ok verificat, chiar dacă reîncercarea a fost refuzată', async () => {
+    for (const r2 of [REFUZ, DISPARUT, { data: null, error: { code: 'P0001', message: 'x' } }]) {
+      const c = clientFals({ rpc: [RETEA, r2], citiri: [CITIRE_PICATA, { data: { site_id: 9 }, error: null }, { data: { id: 9, proiect_id: 5 }, error: null }] })
+      const r = await creeazaSantier(c, { nume: 'S', proiectId: 5 })
+      expect(r).toEqual({ tip: 'ok', siteId: 9, creat: false, verificat: true })
+      expect(mesajSantier(r).ok).toBe(true)
+    }
+  })
+  it('reconcilierea finală confirmă proiectul NElegat → eșecul reîncercării, verificat (atunci „fără șantier” e adevărat)', async () => {
+    const c = clientFals({ rpc: [RETEA, REFUZ], citiri: [CITIRE_PICATA, { data: { site_id: null }, error: null }] })
+    const r = await creeazaSantier(c, { nume: 'S', proiectId: 5 })
+    expect(r).toEqual({ tip: 'refuz', verificat: true })
+    expect(mesajSantier(r).text).toMatch(/Proiectul s-a creat fără șantier/)
+    const c2 = clientFals({ rpc: [RETEA, DISPARUT], citiri: [{ data: { site_id: null }, error: null }, { data: { site_id: null }, error: null }] })
+    expect(await creeazaSantier(c2, { nume: 'S', proiectId: 5 })).toEqual({ tip: 'indisponibil', verificat: true })
+  })
+  it('legat de șantierul ALTUI proiect la reconcilierea finală, după un refuz: necunoscut, nu eșec confirmat', async () => {
+    const c = clientFals({ rpc: [RETEA, REFUZ], citiri: [CITIRE_PICATA, { data: { site_id: 9 }, error: null }, { data: { id: 9, proiect_id: 6 }, error: null }] })
+    const r = await creeazaSantier(c, { nume: 'S', proiectId: 5 })
+    expect(r.tip).toBe('necunoscut')
+    expect(mesajSantier(r).text).not.toMatch(/fără șantier/)
   })
   it('fără proiect (Admin): fără reconciliere și fără reîncercare (un al doilea apel ar crea alt șantier)', async () => {
     const c = clientFals({ rpc: [RETEA] })

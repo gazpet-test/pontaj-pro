@@ -14,7 +14,10 @@
 //      idempotentă), migrarea neaplicată (UI nouă), interfața VECHE cu migrarea aplicată și dreptul acordat (fără fals succes);
 //   3. paritatea regulii de cont UI ↔ BD (L19);
 //   4. refuzurile migrării, L15 între „înainte” și „după” + mutanții porții;
-//   5. revenirea (refuzuri, aplicare → revenire → reaplicare, amprenta = baseline, șantierele create rămân) + mutanții ei;
+//      runda 3 (P2-1): W13–W17 — primul apel ambiguu, apoi o schimbare COMISĂ între apeluri (dreptul retras / funcția scoasă): eșecul
+//      reîncercării nu înlocuiește incertitudinea; decide reconcilierea finală (necunoscut dacă nu se poate citi) + mutanții J8–J10;
+//   5. revenirea (refuzuri, aplicare → revenire → reaplicare, amprenta = baseline, șantierele create rămân) + mutanții ei; runda 3 (P2-2):
+//      deriva după aplicare (drepturi pe orice rol, proprietăți, rândul cheii) = refuz, nimic schimbat + mutanții R2–R5;
 //   6. mutanții migrării (comportament) și ai codului JS — fiecare TREBUIE să pice.
 // Rulare (din rădăcina repo-ului): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_sites_drept_creare_local.mjs
 // Limită: PGlite are o singură conexiune, fără timere: concurența (două apeluri pe același proiect, lock-ul NOWAIT al migrării / revenirii)
@@ -298,6 +301,8 @@ function client(db, uid, { defect = {} } = {}) {
   return {
     rpc: async (fn, args) => {
       nr.rpc++
+      // o schimbare COMISĂ (ca postgres) între apeluri: dreptul retras, funcția scoasă (revenirea) — runda 3, P2-1
+      if (defect.intre?.[nr.rpc]) await db.exec(defect.intre[nr.rpc])
       if (defect.inainte?.includes(nr.rpc)) return retea
       const r = await run(`SELECT public.${fn}(p_nume => $1, p_proiect => $2, p_beneficiar => $3) AS r`, [args.p_nume, args.p_proiect, args.p_beneficiar])
       if (defect.dupa?.includes(nr.rpc)) return retea
@@ -336,7 +341,11 @@ async function stareWizard(db, proiect) {
     return { site_id: p?.site_id == null ? null : Number(p.site_id), santiere: s.map(x => ({ id: Number(x.id), proiect_id: x.proiect_id == null ? null : Number(x.proiect_id) })), ...n }
   })
 }
+// schimbările dintre cele două apeluri (comise, ca postgres): dreptul titularului retras; funcția scoasă (ca după o revenire)
+const RETRAGE_TIT = `DELETE FROM public.user_module_access WHERE profile_id = '${U.TIT}' AND module = 'santiere_creare';`
+const SCOATE_RPC = 'DROP FUNCTION public.fn_sites_creeaza(text, bigint, text);'
 // scenariile: [nume, cont, migrare aplicată?, drept acordat?, defect, așteptarea]; „bun” = un șantier, legat în ambele sensuri, 5 proiecte (fără automat)
+// faraSantier: true = mesajul TREBUIE să spună „Proiectul s-a creat fără șantier”; false = NU are voie să o spună (starea nu e dovedită)
 const SCEN_W = [
   ['W1 cont cu drept', 'TIT', true, true, {}, { tip: 'ok', creat: true, legat: true }],
   ['W2 owner', 'OWNER', true, false, {}, { tip: 'ok', creat: true, legat: true }],
@@ -347,6 +356,17 @@ const SCEN_W = [
   ['W7 cont fără drept (opțiunea ascunsă, cererea forțată)', 'CONTR', true, true, {}, { tip: 'refuz', legat: false }],
   ['W8 răspuns pierdut de două ori, fără citire → necunoscut, nu succes', 'TIT', true, true, { inainte: [1, 2], citire: [1, 2] }, { tip: 'necunoscut', legat: false }],
   ['W12 răspuns gol (fără id) de două ori, fără citire → necunoscut, nu succes', 'TIT', true, true, { gol: [1, 2], citire: [1, 2] }, { tip: 'necunoscut', legat: true }],
+  // runda 3 (Jakarinos r2, P2-1): eșecul determinat al reîncercării după un prim apel ambiguu; decide reconcilierea finală din BD
+  ['W13 scenariul Jak: COMMIT + răspuns pierdut, recitirea picată, dreptul retras → 42501, recitirea finală picată → necunoscut', 'TIT', true, true,
+    { dupa: [1], citire: [1, 2], intre: { 2: RETRAGE_TIT } }, { tip: 'necunoscut', legat: true, faraSantier: false }],
+  ['W14 ca W13, recitirea finală merge → ok verificat (șantierul primului apel)', 'TIT', true, true,
+    { dupa: [1], citire: [1], intre: { 2: RETRAGE_TIT } }, { tip: 'ok', verificat: true, legat: true }],
+  ['W15 COMMIT + răspuns pierdut, funcția scoasă între apeluri → PGRST202, recitirea finală picată → necunoscut', 'TIT', true, true,
+    { dupa: [1], citire: [1, 2], intre: { 2: SCOATE_RPC } }, { tip: 'necunoscut', legat: true, faraSantier: false }],
+  ['W16 rețea picată ÎNAINTE (nimic scris), recitirea picată, dreptul retras → 42501, recitirea finală: nelegat → refuz verificat', 'TIT', true, true,
+    { inainte: [1], citire: [1], intre: { 2: RETRAGE_TIT } }, { tip: 'refuz', verificat: true, legat: false, faraSantier: true }],
+  ['W17 rețea picată ÎNAINTE, funcția scoasă între apeluri, recitirea finală: nelegat → indisponibil verificat', 'TIT', true, true,
+    { inainte: [1], citire: [1], intre: { 2: SCOATE_RPC } }, { tip: 'indisponibil', verificat: true, legat: false, faraSantier: true }],
 ]
 async function ruleazaWizard(js, [nume, cont, migrare, drept, defect, a]) {
   const db = await bazaNoua()
@@ -361,6 +381,7 @@ async function ruleazaWizard(js, [nume, cont, migrare, drept, defect, a]) {
     if ('creat' in a && w.r.creat !== a.creat) ab.push(`creat ${w.r.creat}`)
     if ('verificat' in a && w.r.verificat !== a.verificat) ab.push(`verificat ${w.r.verificat}`)
     if (w.m.ok !== (a.tip === 'ok')) ab.push(`mesaj ok=${w.m.ok}: ${w.m.text}`)
+    if ('faraSantier' in a && /Proiectul s-a creat fără șantier/.test(w.m.text) !== a.faraSantier) ab.push(`mesaj „fără șantier” ${!a.faraSantier ? 'NEDOVEDIT' : 'lipsă'}: ${w.m.text}`)
     if (a.legat) {
       if (st.santiere.length !== 1 || st.site_id !== st.santiere[0].id || st.santiere[0].proiect_id !== w.proiect || st.p !== 5) ab.push('stare ' + JSON.stringify(st))
     } else if (st.santiere.length !== 0 || st.site_id !== null || st.p !== 5) ab.push('stare (aștepta proiect fără șantier) ' + JSON.stringify(st))
@@ -552,14 +573,60 @@ console.log('5. revenirea')
   ok(/starea nu e cea din 20261222a \(pasul 1, functia\)/.test(m || '') && !(await gol(db)), 'revenirea refuză o funcție schimbată: ' + m)
   await db.close()
 }
+// runda 3 (Jakarinos r2, P2-2): deriva DUPĂ aplicare — orice drept nou pe funcție (pe ORICE rol, inclusiv PUBLIC / anon / service_role / GRANT
+// OPTION), orice proprietate schimbată, rândul cheii schimbat = revenirea refuză, nimic schimbat (funcția și cheia rămân)
+const FN_SIG = 'public.fn_sites_creeaza(text, bigint, text)'
+const DERIVA = [
+  ['GRANT EXECUTE către service_role (demonstrația Jak)', `GRANT EXECUTE ON FUNCTION ${FN_SIG} TO service_role;`, /\(pasul 1, functia\): .*acl=authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE/],
+  ['GRANT EXECUTE către PUBLIC', `GRANT EXECUTE ON FUNCTION ${FN_SIG} TO PUBLIC;`, /\(pasul 1, functia\): .*acl=PUBLIC:EXECUTE, authenticated/],
+  ['GRANT EXECUTE către anon', `GRANT EXECUTE ON FUNCTION ${FN_SIG} TO anon;`, /\(pasul 1, functia\): .*acl=anon:EXECUTE, authenticated/],
+  ['authenticated cu GRANT OPTION', `GRANT EXECUTE ON FUNCTION ${FN_SIG} TO authenticated WITH GRANT OPTION;`, /\(pasul 1, functia\): .*acl=authenticated:EXECUTE\*, /],
+  ['EXECUTE retras de la authenticated', `REVOKE EXECUTE ON FUNCTION ${FN_SIG} FROM authenticated;`, /\(pasul 1, functia\): .*acl=postgres:EXECUTE, corp_md5/],
+  ['STRICT', `ALTER FUNCTION ${FN_SIG} STRICT;`, /\(pasul 1, functia\): .*strict=true/],
+  ['STABLE', `ALTER FUNCTION ${FN_SIG} STABLE;`, /\(pasul 1, functia\): .*volatil=s/],
+  ['LEAKPROOF', `ALTER FUNCTION ${FN_SIG} LEAKPROOF;`, /\(pasul 1, functia\): .*leakproof=true/],
+  ['SECURITY INVOKER', `ALTER FUNCTION ${FN_SIG} SECURITY INVOKER;`, /\(pasul 1, functia\): .*definer=false/],
+  ['search_path schimbat', `ALTER FUNCTION ${FN_SIG} SET search_path = public;`, /\(pasul 1, functia\): .*config=search_path=public, intoarce/],
+  ['alt parametru de configurare', `ALTER FUNCTION ${FN_SIG} SET work_mem = '64MB';`, /\(pasul 1, functia\): .*config=search_path=public, pg_temp; work_mem=64MB/],
+  ['alt proprietar', `ALTER FUNCTION ${FN_SIG} OWNER TO service_role;`, /\(pasul 1, functia\): .*proprietar=service_role/],
+  ['corpul schimbat', `CREATE OR REPLACE FUNCTION ${FN_SIG.replace('(text, bigint, text)', '(p_nume text, p_proiect bigint, p_beneficiar text)')} RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN NULL; END $f$;`, new RegExp('\\(pasul 1, functia\\): .*corp_md5=(?!' + AMP_CORP + ')[0-9a-f]{32}')],
+  ['rândul cheii: pe pagina de start', `UPDATE public.app_modules SET show_on_homepage = true WHERE key = 'santiere_creare';`, /\(pasul 1, cheia de modul\)/],
+  ['rândul cheii: altă descriere', `UPDATE public.app_modules SET description = description || ' x' WHERE key = 'santiere_creare';`, /\(pasul 1, cheia de modul\)/],
+  ['rândul cheii: sub alt părinte', `UPDATE public.app_modules SET parent_key = 'executie' WHERE key = 'santiere_creare';`, /\(pasul 1, cheia de modul\)/],
+]
+const intact = async (db) => (await db.query(`SELECT to_regprocedure('${FN_SIG}') IS NOT NULL AND EXISTS (SELECT 1 FROM public.app_modules WHERE key = 'santiere_creare') AS i`)).rows[0].i
+console.log('   deriva după aplicare (runda 3): revenirea refuză, nimic schimbat')
+for (const [nume, sql, re] of DERIVA) {
+  const db = await bazaNoua()
+  await aplicaMig(db, MIG_B)
+  await db.exec(sql)
+  let m = null; try { await revino(db) } catch (e) { m = e.message }
+  ok(re.test(m || '') && /starea nu e cea din 20261222a/.test(m || '') && await intact(db), `${nume}: ${m ? m.slice(0, 200) : 'NU a refuzat'}`)
+  await db.close()
+}
+{
+  // controlul pozitiv: GRANT → REVOKE înapoi = aceeași stare → revenirea trece (proba nu refuză orice)
+  const db = await bazaNoua()
+  await aplicaMig(db, MIG_B)
+  await db.exec(`GRANT EXECUTE ON FUNCTION ${FN_SIG} TO service_role; REVOKE EXECUTE ON FUNCTION ${FN_SIG} FROM service_role;`)
+  let m = null; try { await revino(db) } catch (e) { m = e.message }
+  ok(m == null && await gol(db), `GRANT apoi REVOKE (starea de după migrare refăcută): revenirea trece ${m || ''}`)
+  await db.close()
+}
 console.log('   mutanții revenirii')
 for (const [nume, inl, pregatire, re] of [
   ['R1 fără verificarea „niciun drept acordat”', [["  IF EXISTS (SELECT 1 FROM public.user_module_access WHERE module = 'santiere_creare') THEN\n    RAISE EXCEPTION '20261222a revenire: dreptul santiere_creare e acordat (user_module_access); retragerea lui e un pas separat, cu acordul owner-ului';\n  END IF;\n", '']],
     async (db) => { await db.exec(ACORDA) }, /dreptul santiere_creare e acordat/],
-  ['R2 fără amprenta corpului', [["                      AND md5(replace(p.prosrc, chr(13), '')) =\n                          -- AMPRENTA-START rpc\n                          '" + AMP_CORP + "'\n                          -- AMPRENTA-END rpc\n", '']],
-    async (db) => { await db.exec(`CREATE OR REPLACE FUNCTION public.fn_sites_creeaza(p_nume text, p_proiect bigint, p_beneficiar text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN NULL; END $f$;`) }, /starea nu e cea din 20261222a/],
-  ['R3 fără verificarea drepturilor funcției (anon)', [["                      AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')\n", '']],
-    async (db) => { await db.exec(`GRANT EXECUTE ON FUNCTION public.fn_sites_creeaza(text, bigint, text) TO anon;`) }, /starea nu e cea din 20261222a/],
+  ['R2 fără compararea detaliului funcției', [['    IF v_det IS DISTINCT FROM\n', '    IF false AND v_det IS DISTINCT FROM\n']],
+    async (db) => { await db.exec(DERIVA.find(d => d[0] === 'corpul schimbat')[1]) }, /starea nu e cea din 20261222a/],
+  // r2: drepturile verificate doar pentru o listă de roluri (anon / PUBLIC) — un GRANT către service_role trecea (demonstrația Jak)
+  ['R3 ACL-ul comparat doar pe o listă de roluri (ca în r2)', [["                  FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a), '(niciun drept)')\n           || ', corp_md5='",
+    "                  FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e WHERE e.grantee = 0 OR pg_get_userbyid(e.grantee) IN ('anon', 'authenticated', 'postgres')) a), '(niciun drept)')\n           || ', corp_md5='"]],
+    async (db) => { await db.exec(`GRANT EXECUTE ON FUNCTION ${FN_SIG} TO service_role;`) }, /starea nu e cea din 20261222a/],
+  ['R4 o proprietate necomparată (strict)', [["|| ', strict=' || p.proisstrict::text ||", "|| ', strict=false' ||"]],
+    async (db) => { await db.exec(`ALTER FUNCTION ${FN_SIG} STRICT;`) }, /starea nu e cea din 20261222a/],
+  ['R5 rândul cheii necomparat (doar numărul)', [["    IF (SELECT count(*) FROM public.app_modules WHERE key = 'santiere_creare') <> 1\n       OR NOT EXISTS", "    IF (SELECT count(*) FROM public.app_modules WHERE key = 'santiere_creare') <> 1\n       OR false AND NOT EXISTS"]],
+    async (db) => { await db.exec(`UPDATE public.app_modules SET show_on_homepage = true WHERE key = 'santiere_creare';`) }, /starea nu e cea din 20261222a \(pasul 1, cheia de modul\)/],
 ]) {
   const db = await bazaNoua()
   await aplicaMig(db, MIG_B)
@@ -626,6 +693,11 @@ for (const [nume, inl, scen] of [
   ['J4 răspuns fără id = succes', [["    return { tip: 'necunoscut', motiv: 'răspuns fără id de șantier' }", "    return { tip: 'ok', siteId: id, creat: true }"]], 'W12'],
   ['J5 necunoscut raportat ca reușită', [["    default:\n      return { ok: false,", "    default:\n      return { ok: true,"]], 'W8'],
   ['J6 fără reîncercare după citire', [['  const r2 = clasificaRaspuns(await apel(client, args))\n  if (r2.tip', "  const r2 = { tip: 'necunoscut', motiv: 'fără reîncercare' }\n  if (r2.tip"]], 'W4'],
+  // runda 3 (P2-1): comportamentul din r2 — rezultatul determinat al reîncercării înlocuiește incertitudinea primului apel
+  ['J8 eșecul reîncercării întors direct (r2), fără reconcilierea finală', [["  if (r2.tip === 'ok') return r2\n", "  if (r2.tip !== 'necunoscut') return r2\n"]], 'W13'],
+  ['J8b la fel, cu funcția dispărută între apeluri', [["  if (r2.tip === 'ok') return r2\n", "  if (r2.tip !== 'necunoscut') return r2\n"]], 'W15'],
+  ['J9 recitirea finală picată tratată ca „nelegat”', [["  if (fin.tip === 'nelegat' && r2.tip !== 'necunoscut')", "  if (fin.tip !== 'ok' && r2.tip !== 'necunoscut')"]], 'W13'],
+  ['J10 fără reconcilierea finală (eșecul confirmat nu mai e verificat)', [["  const fin = await stareProiect(client, proiectId)\n", "  const fin = { tip: 'nelegat' }\n"]], 'W14'],
 ]) {
   let picat = null
   try {
