@@ -107,3 +107,8 @@ descrieErori('verifica: eroarea BD fără mesaj nu expune detaliile', () => {
     asteaptaErori(verificaRezultatBd({ data: [1] }, 'x')).toEqual([1])
   })
 })
+import { mesajEroareBd } from './importTgz.js'
+testErori('mesajEroareBd (folosit și de importUtilizatori): fără message → cod, fără details', () => {
+  asteaptaErori(mesajEroareBd({ code: 'PGRST116', details: 'ana@example.ro' })).toBe('eroare a bazei de date (cod PGRST116)')
+  asteaptaErori(mesajEroareBd({ message: '  ', hint: 'ana@example.ro' })).toBe('eroare a bazei de date (cod necunoscut)')
+})

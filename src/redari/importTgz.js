@@ -447,12 +447,11 @@ function loturi(arr, n = LOT) {
 
 // Eroarea BD: doar `message` (texte fixe ale serverului) sau, fără el, un mesaj generic cu codul — NICIODATĂ obiectul serializat:
 // `details` / `hint` pot conține chiar valoarea rândului (review #1140 r3), iar textul ajunge în lot.eroare și pe ecran.
+export function mesajEroareBd(e) {
+  return typeof e?.message === 'string' && e.message.trim() ? e.message : `eroare a bazei de date (cod ${typeof e?.code === 'string' && /^[0-9A-Z]{1,10}$/.test(e.code) ? e.code : 'necunoscut'})`
+}
 export function verifica(rezultat, ce) {
-  if (rezultat?.error) {
-    const e = rezultat.error
-    const mesaj = typeof e.message === 'string' && e.message.trim() ? e.message : `eroare a bazei de date (cod ${typeof e.code === 'string' && /^[0-9A-Z]{1,10}$/.test(e.code) ? e.code : 'necunoscut'})`
-    throw new Error(`${ce}: ${mesaj}`)
-  }
+  if (rezultat?.error) throw new Error(`${ce}: ${mesajEroareBd(rezultat.error)}`)
   return rezultat?.data ?? null
 }
 
