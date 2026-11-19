@@ -14,7 +14,14 @@ A = PowerShell 5.1 admin Gazpet-Ai; N = acelasi cont NE-elevat. Orice eroare = S
 - Numararea: un fisier = un chip `uploader-file-preview` in zona de compunere (nu imaginile din
   raspunsuri). Orice alt semn de atasament fara chip = tot refuz. Zona de compunere negasita =
   `GEM_EROARE ciorna_necitibila` (nu stie ce e in ciorna, deci nu trimite).
-- `stare` mai scrie doua linii: `zone compunere ... | semne atasament ... | detalii ...` si
+- **r2 (dupa review):** "zero chip-uri si zero semne" NU mai inseamna ciorna goala. Ciorna goala
+  se verifica POZITIV: tot ce e in zona de compunere, in afara textului din editor, trebuie sa fie
+  recunoscut (elemente neutre, structura zonei, butonul modelului, plus listele albe completate la
+  pasul 0 din pagina reala). Orice altceva - un card de fisier cu alt nume, o imagine, un buton
+  "Remove", un text de tip `a.txt` - = `GEM_EROARE ciorna_necunoscuta ...`, exit 3, nimic trimis.
+  Un refuz fals e preferat unei trimiteri false: atunci se goleste ciorna de mana sau se reface pasul 0.
+- `stare` mai scrie: `zone compunere ... | semne atasament ... | detalii ...`,
+  `necunoscute in zona: N` urmat de cate o linie `  necunoscut <semnatura>`, si
   `paza ciorna: OK` / `paza ciorna: REFUZ <cod> ...`.
 - Celelalte 11 fisiere sunt copii octet cu octet ale celor instalate acum in `bin` (v4.6.3).
 
@@ -28,6 +35,30 @@ v4.6.3; cel nou se leaga de hash-ul v4.6.4).
 Hash-urile vin din raportul de review, nu din acest fisier. Livrare: folderul din commit-ul
 aprobat ajunge in `$Source` (`git archive` al commit-ului, dezarhivat in
 `C:\Users\Public\livrare\run_paw_v464`); verificarea de mai jos decide.
+
+## 0. Calibrare pe pagina reala (N, DOAR citire, INAINTE de review-ul final si de instalare)
+
+Listele albe din `gemini_pw.py` (`CONTROALE_CUNOSCUTE`, `STRUCTURA_CUNOSCUTA`, `TEXTE_CUNOSCUTE`)
+sunt livrate GOALE: structura reala a ciornei Gemini (butoanele trimite / microfon / incarcare etc.)
+nu se vede fara Edge. Fara calibrare, `stare` si `trimite` vor refuza cu `ciorna_necunoscuta`.
+
+Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
+din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
+`C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
+selectat si niciun `gem` pornit prin lansator:
+
+```powershell
+$Cal = 'C:\Users\Public\livrare\run_paw_v464_calibrare\docs\paw\run_paw_v464'
+& 'C:\Program Files\Python313\python.exe' "$Cal\gemini_pw.py" stare
+```
+
+De trei ori: (i) chat nou (`/app`), ciorna goala; (ii) acelasi chat, cu un cuvant scris DE MANA
+in ciorna (fara Enter; apoi il stergi); (iii) un chat existent, ciorna goala. Pe ecran, in toate
+trei: niciun fisier, nicio imagine, niciun instrument selectat. Copiaza pentru sesiunea de chat
+toate liniile `necunoscute in zona: N` si `  necunoscut ...`. Rocky trece in listele albe EXACT
+acele semnaturi (commit nou, hash-uri noi, review din nou). NU se trec niciodata linii `media:`,
+`fundal:`, `eticheta:`, `text_fisier:`, `..._in_editor:` sau orice seamana a fisier: daca apar
+cu ciorna goala pe ecran, STOP si se lamureste in chat. Pasul 0 nu scrie nimic si nu trimite nimic.
 
 ## 1. Variabile (A si N, in orice consola noua, inclusiv la rollback)
 
@@ -65,7 +96,7 @@ if ($manifest.'gemini_pw.py' -ine $GemHashNou) { throw 'gemini_pw.py din pachet 
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel din v4.6.3' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 204 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 10) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 408 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -75,11 +106,13 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + '.v463') -Force }
 ```
 
-Asteptat: 204 linii diferite (10 vechi `<=`, 194 noi `=>`). Cele 10 linii vechi afisate sunt:
-antetul, lista de coduri, comentariul selectorilor `ATAS`, titlul partii cu browserul, cele doua
-linii din vechea `_atasamente`, linia `atasamente in ciorna` din `stare` si cele trei linii ale
-vechii verificari din `trimite`. Liniile noi: nota v4.6.4, selectorul `CHIP`, analiza HTML a
-ciornei, paza si apelurile ei. Testele: `Ran 57 tests ... OK`.
+Asteptat (pachetul FARA intrari de calibrare): 408 linii diferite (11 vechi `<=`, 397 noi `=>`).
+Cele 11 linii vechi afisate sunt: antetul, lista de coduri, linia `import`, comentariul selectorilor
+`ATAS`, titlul partii cu browserul, cele doua linii din vechea `_atasamente`, linia `atasamente in
+ciorna` din `stare` si cele trei linii ale vechii verificari din `trimite`. Liniile noi: notele
+v4.6.4 / r2, selectorul `CHIP`, analiza HTML a ciornei, verificarea pozitiva a structurii, paza si
+apelurile ei. Testele: `Ran 79 tests ... OK`. Dupa calibrarea de la pasul 0 numerele se schimba:
+le da raportul de review al commit-ului calibrat (cifrele din raport inlocuiesc 408 / 11 de mai sus).
 
 Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
 `C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi
@@ -195,7 +228,9 @@ Orice rezultat diferit de cel cerut mai jos = **STOP**, fara marker; copiaza toa
 `stare` (sau ultima linie a lui `trimite`) pentru sesiunea de chat.
 
 - **5a.** `stare` arata `model: Carbon`, `genereaza: False`, `atasamente in ciorna: 0`,
-  `paza ciorna: OK (trimite ar continua)`.
+  `necunoscute in zona: 0`, `paza ciorna: OK (trimite ar continua)`. Cu ciorna goala pe ecran,
+  `paza ciorna: REFUZ ciorna_necunoscuta ...` = calibrarea (pasul 0) nu acopera pagina: STOP,
+  fara marker, copiaza liniile `necunoscut ...` pentru chat.
 - **5b.** Pune de mana UN fisier mic (de ex. un `.txt`) in ciorna, fara sa trimiti; `stare` din nou:
   trebuie EXACT `atasamente in ciorna: 1` si `paza ciorna: REFUZ ciorna_cu_atasamente ...`.
   `0`, `2`, `5`, `?` sau orice alt numar = STOP (numararea nu se potriveste cu pagina reala).
@@ -204,7 +239,8 @@ Orice rezultat diferit de cel cerut mai jos = **STOP**, fara marker; copiaza toa
   Pe ecran: NU s-a deschis chat nou, nu a plecat niciun mesaj, fisierul e tot in ciorna.
   `stare` din nou: tot `atasamente in ciorna: 1`. (Exact pasul care a picat pe 19.11.)
 - **5d.** Pune al doilea fisier in ciorna; `stare`: EXACT `atasamente in ciorna: 2`.
-- **5e.** Scoate ambele fisiere de mana; `stare`: `atasamente in ciorna: 0`, `paza ciorna: OK ...`.
+- **5e.** Scoate ambele fisiere de mana; `stare`: `atasamente in ciorna: 0`, `necunoscute in zona: 0`,
+  `paza ciorna: OK ...`.
 - **5f.** Selecteaza de mana alt model (4 Hydrogen) si repeta `trimite`: ultima linie
   `GEM_EROARE model_gresit afisat: '...Hydrogen...', cerut: Carbon`; nu a plecat niciun mesaj.
 - **5g.** Revino de mana la Carbon si ruleaza blocul de mai jos: doua trimiteri, fiecare verificata
@@ -229,6 +265,10 @@ foreach ($i in 1, 2) {
 
 Daca 5g da `GEM_EROARE ciorna_necitibila ...` cu ciorna goala: zona de compunere are alt nume in
 pagina reala; STOP, fara marker, copiaza linia `zone compunere ...` din `stare` pentru chat.
+Daca 5g da `GEM_EROARE ciorna_necunoscuta <moment>: N element(e) nerecunoscute in zona ciornei -
+nu trimit (...)` cu ciorna goala (sau doar cu textul brief-ului): pagina are elemente pe care
+calibrarea nu le-a vazut (de ex. butonul de trimitere apare abia dupa scriere); nu a plecat nimic.
+STOP, fara marker, copiaza linia `GEM_EROARE` + liniile `necunoscut ...` din `stare` pentru chat.
 
 Numai dupa ce ai VAZUT rezultatele 5a-5g, markerul - **ne-elevat (N)**, nu din consola admin:
 
