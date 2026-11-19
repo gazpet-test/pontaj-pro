@@ -51,9 +51,11 @@ const CHEI_INAINTE = {
   pv_b: [74, '1bfcfa7ea64e6dfae25a1eb77c4acb3b54b5fccc6d6e4a504d6848c2f5faec15'],
   pv_c: [23, '2a3f707a8ae667075a6fec08831017990c3c3f6701476a6c3320cba8a8716886'],
 }
-// Neatinse (așteaptă text de la Juridic): fișierul întreg, octet cu octet, ca pe main @ d943e090
+// Neatinse (așteaptă text de la Juridic): fișierul întreg, octet cu octet, ca pe main @ d943e090.
+// adresa_uat a ieșit de aici pe 19.11.2026 (excepția (12): Anexa 2 = trimiterea la anunțul de afișare, decizia Răzvan): schimbarea
+// e declarată în sabloaneA4.test.js (SCHIMBARI_TEXT.adresa_uat, cu amprenta de dinainte) și în adresaUatAnexa2.test.js
+// (restul arhivei identic cu origin/main, octet cu octet, în afara corpului Anexei 2).
 const NEATINSE = {
-  adresa_uat: '9d0723770020fdbe5194f2683b1ff1b8852ff93cc3c547ed45ccb6f0296d4525',
   cerere_imputernicire: '44545c35df2bb6eb29993643a02a55dd57e6c8c54cbeb2b6ef6ed9f30aa91fb6',
 }
 
@@ -103,60 +105,9 @@ describe('șabloanele: terminologia „predare” (17.11.2026)', () => {
   })
 })
 
-// Verificator XML minimal, fără librării (review #1117 r2, P3): prolog / PI, comentarii, CDATA, taguri cu atribute între ghilimele
-// (nume unice), entități (doar cele 5 predefinite și referințe numerice), o singură rădăcină, fără text în afara ei; perechile de
-// taguri se verifică cu o stivă. Întoarce null dacă documentul e bine format, altfel motivul. (DOCX-ul nu are DTD: <!DOCTYPE = refuz.)
-const NUME = '[A-Za-z_][A-Za-z0-9_.:-]*'
-const RX_DESCHIDE = new RegExp(`<(${NUME})((?:\\s+${NUME}\\s*=\\s*(?:"[^"<]*"|'[^'<]*'))*)\\s*(/?)>`, 'y')
-const RX_INCHIDE = new RegExp(`</(${NUME})\\s*>`, 'y')
-const RX_ATRIBUT = new RegExp(`(${NUME})\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'g')
-const RX_ENTITATE = /&(?:amp|lt|gt|quot|apos|#[0-9]+|#x[0-9A-Fa-f]+);/y
-function entitateInvalida(t) {
-  for (let k = t.indexOf('&'); k >= 0; k = t.indexOf('&', k + 1)) { RX_ENTITATE.lastIndex = k; if (!RX_ENTITATE.test(t)) return true }
-  return false
-}
-function eroareXml(s) {
-  const stiva = []
-  let radacini = 0, i = s.charCodeAt(0) === 0xFEFF ? 1 : 0
-  while (i < s.length) {
-    const lt = s.indexOf('<', i)
-    const text = s.slice(i, lt < 0 ? s.length : lt)
-    if (text) {
-      if (!stiva.length && text.trim()) return 'text în afara rădăcinii'
-      if (entitateInvalida(text)) return 'entitate invalidă în text'
-      if (text.includes(']]>')) return '„]]>” în text'
-    }
-    if (lt < 0) break
-    if (s.startsWith('<?', lt)) { const f = s.indexOf('?>', lt + 2); if (f < 0) return 'instrucțiune <? neînchisă'; i = f + 2; continue }
-    if (s.startsWith('<!--', lt)) { const f = s.indexOf('-->', lt + 4); if (f < 0) return 'comentariu neînchis'; i = f + 3; continue }
-    if (s.startsWith('<![CDATA[', lt)) { if (!stiva.length) return 'CDATA în afara rădăcinii'; const f = s.indexOf(']]>', lt); if (f < 0) return 'CDATA neînchis'; i = f + 3; continue }
-    if (s.startsWith('<!', lt)) return 'declarație <! neașteptată'
-    if (s[lt + 1] === '/') {
-      RX_INCHIDE.lastIndex = lt
-      const r = RX_INCHIDE.exec(s)
-      if (!r) return `tag de închidere invalid la ${lt}`
-      const sus = stiva.pop()
-      if (sus !== r[1]) return `</${r[1]}> închide <${sus ?? 'nimic'}>`
-      i = RX_INCHIDE.lastIndex
-      continue
-    }
-    RX_DESCHIDE.lastIndex = lt
-    const r = RX_DESCHIDE.exec(s)
-    if (!r) return `tag de deschidere invalid la ${lt}`
-    const nume = new Set()
-    for (const a of r[2].matchAll(RX_ATRIBUT)) {
-      if (nume.has(a[1])) return `atribut dublu ${a[1]}`
-      nume.add(a[1])
-      if (entitateInvalida(a[2] ?? a[3])) return `entitate invalidă în atributul ${a[1]}`
-    }
-    if (!stiva.length && radacini++) return 'mai multe elemente rădăcină'
-    if (!r[3]) stiva.push(r[1])
-    i = RX_DESCHIDE.lastIndex
-  }
-  if (stiva.length) return `taguri neînchise: ${stiva.slice(-3).join(' > ')}`
-  if (!radacini) return 'fără element rădăcină'
-  return null
-}
+// Verificatorul XML minimal (review #1117 r2, P3) stă în xmlBineFormat.testutil.js (18.11.2026: folosit și de anuntAfisare.test.js);
+// mutanții lui rămân aici.
+import { eroareXml } from './xmlBineFormat.testutil.js'
 
 describe('verificatorul XML din test (mutanți: trebuie să pice)', () => {
   it('acceptă XML valid mic (prolog, comentariu, CDATA, entități, auto-închis)', () => {

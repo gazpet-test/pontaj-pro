@@ -316,10 +316,13 @@ export function valideazaProiect(form) {
   return erori
 }
 
+/** UAT-ul are cel puțin o zi de sesiune cu program (o singură definiție — L19: convocator, adresa UAT, anunțul de afișare, „Gata de convocare?”). */
+export const areZiCuProgram = uat => [1, 2, 3].some(i => !gol(uat?.[`sesiune_zi${i}`]) && !gol(uat?.[`program_zi${i}`]))
+
 /** Ce lipsește ca UAT-ul să poată primi convocatoare (zile + program); restul ține de proiect (motivBlocareConvocator). */
 export function lipsuriUat(uat) {
   const l = []
-  if (![1, 2, 3].some(i => !gol(uat?.[`sesiune_zi${i}`]) && !gol(uat?.[`program_zi${i}`]))) l.push('nicio zi de sesiune cu program')
+  if (!areZiCuProgram(uat)) l.push('nicio zi de sesiune cu program')
   if (gol(uat?.reprezentant_uat_nume)) l.push('fără reprezentant nominalizat de primărie')
   const t = termenAfisare(uat)
   if (t.depasit) l.push(`afișarea începe după ${dataRo(t.limita)} (sub ${TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1)`)
