@@ -75,8 +75,8 @@ const RE_FARA_VALOARE = /^[-–—]$/
 const SUFIX_FRACTIE = String.raw`(?:'{1,3}|’{1,3})?(?:[A-Z]{1,3}| [A-Z]| BIS)?`
 const RE_FRACTIE = new RegExp(String.raw`^([0-9]+)${SUFIX_FRACTIE}/([0-9]+)${SUFIX_FRACTIE}$`)
 const RE_SEPARATOR_BUCATI = /[(),+]/
-// componente consecutive lipite: telefon RO (0[237] + 8 cifre), internațional (+40 / 0040 / 40 + 9 cifre), CNP (13 cifre)
-const RE_TELEFON_SAU_CNP = /^(?:0[237][0-9]{8}|(?:00)?40[0-9]{9}|[1-9][0-9]{12})$/
+// componente consecutive lipite: telefon RO (0[237] + 8 cifre), internațional (+40 / 0040 / 40 + 9 cifre), CNP (orice 13 cifre)
+const RE_TELEFON_SAU_CNP = /^(?:0[237][0-9]{8}|(?:00)?40[0-9]{9}|[0-9]{13})$/   // CNP: ORICE 13 cifre, și cu 0 inițial (decizia Răzvan 19.11.2026, varianta A)
 /** Cea mai lungă formă căutată (CNP / 0040 + 9 cifre): o fereastră mai lungă nu se mai potrivește. */
 const MAX_CIFRE_FEREASTRA = 13
 // numele unui sat (segment din „Sate / tarlale ziua N”, normalizat): litere, spații, cratimă, apostrof, punct; fără cifre; 2–40 de caractere

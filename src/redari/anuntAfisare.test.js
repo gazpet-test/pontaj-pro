@@ -416,6 +416,7 @@ describe('identificatorii publicați (review #1137 P1): forma fiecărui câmp, o
     ['nr_cadastral', '180010#100000#0(12)', nu(MOTIV.TELEFON_CNP), 'FEREASTRĂ (verdict r3): 13 cifre + numerotare în paranteze'], ['nr_cadastral', '180010#100000#0#1', nu(MOTIV.TELEFON_CNP), 'FEREASTRĂ (verdict r3): 13 cifre + subcâmp'],
     ['nr_cadastral', '12#0711#111111#', nu(MOTIV.TELEFON_CNP), 'FEREASTRĂ: telefonul nu începe la prima componentă'], ['nr_cadastral', '#1000/0711#111111#', nu(MOTIV.TELEFON_CNP), 'FEREASTRĂ: telefon început în a doua parte a unui subcâmp'],
     ['nr_cadastral', '1#0040#7111#11111#', nu(MOTIV.TELEFON_CNP), 'FEREASTRĂ: 0040 + 9 cifre în mijloc'], ['nr_cadastral', '1#180010#100000#0', nu(MOTIV.TELEFON_CNP), 'FEREASTRĂ: 13 cifre după alt subcâmp'],
+    ['nr_cadastral', '#0#123456#789012#', nu(MOTIV.TELEFON_CNP), 'CNP lipit din subcâmpuri, cu 0 inițial (verdict r6, decizia A)'], ['nr_cadastral', '0123456789012', nu(MOTIV.TELEFON_CNP), '13 cifre cu 0 inițial (decizia A)'],
     ['nr_cadastral', '0711##111111#', nu(MOTIV.TELEFON_CNP), 'subcâmp gol între componente: tot consecutive'], ['nr_cadastral', '123456#1234/123#', nu(MOTIV.TELEFON_CNP), '13 cifre pe componente consecutive: refuz și dacă ar fi real (raport)'],
     // ce trece (legitim sau, documentat, NEPRINS — raportul rundei 4)
     ['nr_cadastral', '50029#30#UA 62A', ok('50029#30#UA 62A'), 'TGZ: cadastral + parcelă + UA'], ['nr_cadastral', '123456#1234/12#', ok('123456#1234/12#'), '12 cifre: nici telefon, nici 13'],
@@ -516,7 +517,7 @@ describe('identificatorii publicați (review #1137 P1): forma fiecărui câmp, o
     const rc = await mCota.genereazaAnuntAfisare({ proiect: PROIECT, uat: UAT, parcele: [parcela(1), parcela(2, { tarla: '1/2', nr_cadastral: '#1/2#' })], templateArrayBuffer: sablon() })
     expect(await xmlLista(rc.blob)).toContain('>1/2<')
     // telefonul / CNP-ul lipit din componente (fiecare subcâmp ≤ 8 cifre): exact rândurile „lipite” (toată valoarea) + cele „FEREASTRĂ”
-    const LIPITE = ['0711#111#111', '0711#111111#', '180010#100000#0', '0711##111111#', '123456#1234/123#']
+    const LIPITE = ['0711#111#111', '0711#111111#', '180010#100000#0', '0711##111111#', '123456#1234/123#', '#0#123456#789012#']
     const FERESTRE = TABEL.filter(r => r[3].startsWith('FEREASTRĂ')).map(r => r[1])
     expect(FERESTRE).toHaveLength(9)
     const { mod: mTel, idp: iTel } = await incarcaDocx('lucru', M.telefonLipit)
@@ -551,6 +552,17 @@ describe('identificatorii publicați (review #1137 P1): forma fiecărui câmp, o
     for (const [camp, v] of LEGITIME) expect(canonizeazaIdentificator(camp, v, { uat: UAT }), v).toEqual(ok(v))
     const r = await genereaza([parcela(1, { nr_cadastral: '50029#30#UA 62A' }), parcela(2, { tarla: 'T1#', nr_cadastral: '##UA 62A' })])
     expect(textWt(await xmlLista(r.blob))).toEqual(expect.arrayContaining(['50029#30#UA 62A', 'T1#', '##UA 62A']))
+  })
+  it('verdictul r6 (decizia A, 19.11.2026): CNP = ORICE 13 cifre, și cu 0 inițial — „#0#123456#789012#”, „0123456789012”, „012345#1234/123#” refuzate, generarea BLOCATĂ și cu strict=false', async () => {
+    for (const v of ['#0#123456#789012#', '0123456789012', '012345#1234/123#']) {
+      expect(canonizeazaIdentificator('nr_cadastral', v, { uat: UAT }), v).toEqual(nu(MOTIV.TELEFON_CNP))
+      for (const strict of [true, false]) {
+        const err = await genereaza([parcela(1), parcela(2, { nr_cadastral: v })], { strict }).catch(e => e)
+        expect(err, `${v} strict=${strict}`).toBeInstanceOf(Error)
+        expect(err.probleme).toEqual([{ id_parcela: 'T1-FIC-0002', camp: 'nr_cadastral', motiv: MOTIV.TELEFON_CNP }])
+        expect(err.message).not.toContain(v)
+      }
+    }
   })
   it('ferestrele: toate lipirile de componente CONSECUTIVE, granițele păstrate (niciun grup tăiat), până la 13 cifre', async () => {
     const { idp } = await incarcaDocx('lucru')
