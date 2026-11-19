@@ -132,7 +132,7 @@ describe('PV cuplare — documentul Word se deschide și are structura din speci
     }
     // participanții impliciți, cu numele din proiect pentru șef de șantier și RTE
     for (const c of PARTICIPANTI_IMPLICITI) expect(ps).toContain(c)
-    expect(ps).toContain('ing. Ion Popescu'); expect(ps).toContain('ing. Ștefan Ionescu')
+    expect(ps).toContain('ing. Popescu Ion'); expect(ps).toContain('ing. Ionescu Ștefan')
     // 3 + 2 linii goale în Partea III
     const iAbateri = ps.indexOf('Abateri față de programul comunicat (întârzieri, cauze, partea care le-a generat):')
     expect(ps.slice(iAbateri + 1, iAbateri + 4).every(p => /^_{20,}$/.test(p))).toBe(true)
@@ -196,7 +196,7 @@ describe('PV cuplare — date lipsă: linii de completat, nimic inventat', () =>
 
   it('dateInitialePv: numele din employees („NUME PRENUME”) ies „ing. Prenume Nume”; id fără angajat → gol', () => {
     const d = dateInitialePv({ proiect: { ...PROIECT, rte_employee_id: 99 }, angajati: ANGAJATI })
-    expect(d.participanti.find(p => p.calitate === 'Executant – șef de șantier').nume).toBe('ing. Ion Popescu')
+    expect(d.participanti.find(p => p.calitate === 'Executant – șef de șantier').nume).toBe('ing. Popescu Ion')
     expect(d.participanti.find(p => p.calitate === 'Executant – RTE').nume).toBe('')
     expect(d.contract).toBe('nr. 21 din 12.01.2026')
     expect(d.obiectiv).toBe('Racord și SRM Domnești, județul Argeș')
@@ -293,11 +293,11 @@ describe('PV cuplare r2 — executant, loc, beneficiar, oameni, din datele reale
   })
 
   it('nume „ing. Prenume Nume” din „NUME_FAMILIE PRENUME”: prenume multiple, cratimă, diacritice, un singur cuvânt, gol', () => {
-    expect(formatNumeIng('NICA EUGEN')).toBe('ing. Eugen Nica')
-    expect(formatNumeIng('DADULESCU COSMIN GRIGORAS')).toBe('ing. Cosmin Grigoras Dadulescu')
-    expect(formatNumeIng('POPESCU-IONESCU ANA-MARIA')).toBe('ing. Ana-Maria Popescu-Ionescu')
-    expect(formatNumeIng('  ȘTEFĂNESCU   ȚICU ')).toBe('ing. Țicu Ștefănescu')
-    expect(formatNumeIng(`${String.fromCharCode(0x015E)}ERBAN ION`)).toBe('ing. Ion Șerban')   // sedilă → virgulă
+    expect(formatNumeIng('NICA EUGEN')).toBe('ing. Nica Eugen')
+    expect(formatNumeIng('DADULESCU COSMIN GRIGORAS')).toBe('ing. Dadulescu Cosmin Grigoras')
+    expect(formatNumeIng('POPESCU-IONESCU ANA-MARIA')).toBe('ing. Popescu-Ionescu Ana-Maria')
+    expect(formatNumeIng('  ȘTEFĂNESCU   ȚICU ')).toBe('ing. Ștefănescu Țicu')
+    expect(formatNumeIng(`${String.fromCharCode(0x015E)}ERBAN ION`)).toBe('ing. Șerban Ion')   // sedilă → virgulă
     expect(formatNumeIng('POPESCU')).toBe('ing. Popescu')
     for (const v of [null, undefined, '', '   ']) expect(formatNumeIng(v)).toBe('')
   })

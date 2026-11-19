@@ -9,7 +9,7 @@
 // - Diacritice: ş / ţ cu sedilă (din copy-paste) devin ș / ț cu virgulă.
 // - Fără nume de program / AI în document; autorul e cel care îl semnează (metadatele: firma, nu librăria).
 // - Runda 2 (test live 19.11.2026, modelul de la Domnești): executant implicit / asociere din contractul legat, locul din cartea
-//   tehnică (localitate, județ), beneficiarul complet din registru, „DN500”, „ing. Prenume Nume”, fraza programului ca în model,
+//   tehnică (localitate, județ), beneficiarul complet din registru, „DN500”, „ing. Nume Prenume”, fraza programului ca în model,
 //   titlul 12 pt, fișierul fără dată = „_fara_data”. Ce nu există în ERP rămâne gol / linie (nimic dedus din text liber).
 // ════════════════════════════════════════════════════════════════
 import {
@@ -65,14 +65,14 @@ export function formatDiametru(v) {
   return m ? `DN${m[1]}` : s
 }
 
-/** Numele din employees („NUME_FAMILIE PRENUME…”, primul cuvânt = numele de familie) → „ing. Prenume… Nume”, majuscule doar la inițiale. */
+/** Numele din employees („NUME_FAMILIE PRENUME…”, primul cuvânt = numele de familie) → „ing. Nume Prenume…” (ca în PV-ul de la Domnești), majuscule doar la inițiale. */
 export function formatNumeIng(v) {
   const cuvinte = curata(v).split(/\s+/).filter(Boolean)
   if (!cuvinte.length) return ''
   // inițiala mare după început, cratimă sau apostrof (POPESCU-IONESCU → Popescu-Ionescu); diacriticele rămân
   const titlu = w => w.toLocaleLowerCase('ro-RO').replace(/(^|[-'’])(\p{L})/gu, (_, sep, l) => sep + l.toLocaleUpperCase('ro-RO'))
   const [familie, ...prenume] = cuvinte.map(titlu)
-  return `ing. ${[...prenume, familie].join(' ')}`
+  return `ing. ${[familie, ...prenume].join(' ')}`   // ordinea din PV-ul de la Domnești: „ing. Nica Eugen” (decizia Răzvan 19.11.2026)
 }
 
 /** Locul, ca în model: „amplasamentul lucrării, <localitate>, jud. <județ>”; ce lipsește se sare; ambele lipsă = gol. */
