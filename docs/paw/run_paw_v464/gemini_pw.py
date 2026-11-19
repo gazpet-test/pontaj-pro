@@ -7,8 +7,8 @@
 #      python gemini_pw.py trimite <brief.md> [secunde_max=600]
 # iesire: stdout UTF-8; la eroare ultima linie "GEM_EROARE <cod> <detaliu>" si exit 3.
 # coduri: fara_tab_gemini, mai_multe_taburi_gemini, model_gresit, gemini_ocupat, editor_lipsa, text_neintrat,
-#         ciorna_cu_atasamente, ciorna_necitibila, brief_invalid, timeout_raspuns, cdp_indisponibil, eroare_playwright,
-#         comanda_necunoscuta, url_invalid
+#         ciorna_cu_atasamente, ciorna_necitibila, ciorna_necunoscuta, brief_invalid, timeout_raspuns, cdp_indisponibil,
+#         eroare_playwright, comanda_necunoscuta, url_invalid
 # r2 (16.10.2026, dupa Jakarinos r1): ciorna = brief-ul exact (normalizare explicita), refuz cu atasamente in ciorna,
 #   limita de marime pe textul citit inainte de strip.
 # v4.6.3 (13.11.2026, aprobat de Razvan): modelul cerut = Carbon (Argon a disparut din lista Gemini). Eticheta afisata trebuie sa fie
@@ -20,9 +20,16 @@
 #   curent se verifica INAINTE de orice actiune (navigare / click / tastatura), apoi din nou pe chatul nou si chiar inainte
 #   de Enter. Numararea: un fisier = un element CHIP (cel mai exterior) in zona de compunere a editorului, citita din
 #   page.content() si analizata in Python (testabila pe HTML sintetic); orice alt semn de atasament fara chip = refuz.
+# v4.6.4 r2 (Jakarinos NO-GO pe 51b659c4): "0 chip-uri + 0 semne" NU mai inseamna ciorna goala. Ciorna goala se verifica
+#   POZITIV: fiecare element si fiecare text din zona de compunere (in afara editorului) trebuie sa fie recunoscut - element
+#   neutru fara eticheta / rol / actiune, structura stiuta a zonei, sau intrare din listele albe (CONTROALE_CUNOSCUTE,
+#   STRUCTURA_CUNOSCUTA, TEXTE_CUNOSCUTE). Orice altceva (ex. <attachment-card>, img, buton "Remove ...", text "a.txt")
+#   = GEM_EROARE ciorna_necunoscuta, exit 3. Listele albe se completeaza DOAR din calibrarea pe pagina reala (RUNBOOK,
+#   pasul 0), nu din presupuneri: un refuz fals (operatorul goleste ciorna de mana / se completeaza lista) e preferat
+#   unei trimiteri false.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
-import sys, time, os, re
+import sys, time, os, re, unicodedata
 from urllib.parse import urlparse
 from html.parser import HTMLParser
 
@@ -47,6 +54,44 @@ SEMN_TAGURI = ("uploader-file-preview", "uploader-file-preview-container", "file
 SEMN_DATA_TEST = ("file-preview", "uploaded-file")
 SEMN_CLASA = "file-preview"
 VOIDE = ("area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr")
+# --- v4.6.4 r2: structura RECUNOSCUTA a ciornei goale (verificare pozitiva; orice alt element / text = ciorna_necunoscuta) ---
+# elemente fara continut propriu: trec doar FARA eticheta / rol / actiune (vezi _semnificativ) si fara cuvinte de atasament
+NEUTRE = ("div", "span", "p", "br", "mat-icon", "svg", "path", "g", "circle", "rect", "line", "polyline", "polygon",
+          "ellipse", "defs", "clippath", "lineargradient", "radialgradient", "stop", "mask", "use", "symbol")
+STRUCTURA_TAGURI = ZONA_TAGURI + ("rich-textarea",)       # zona si invelisul editorului (aceleasi nume ca selectorii)
+NEVIZIBILE = ("script", "style", "template", "noscript")   # nu se afiseaza; subarborele lor nu se citeste
+MEDIA = ("img", "picture", "video", "audio", "canvas", "object", "embed", "iframe", "image", "source", "track")
+# in editor (contenteditable) intra doar textul brief-ului: Quill produce p / br; restul etichetelor de text sunt tolerate
+EDITOR_TAGURI = ("p", "br", "span", "div", "strong", "b", "em", "i", "u", "s", "code", "pre", "ol", "ul", "li",
+                 "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "sub", "sup")
+# atribute care fac un element "semnificativ" (eticheta, rol, actiune): elementul trebuie sa fie in listele albe
+SEMN_ATR_VALOARE = ("role", "aria-label", "data-test-id", "data-testid", "type", "name", "title", "alt", "placeholder",
+                    "mattooltip", "data-tooltip")              # in semnatura cu valoare
+SEMN_ATR_CHEIE = ("tabindex", "jsaction", "onclick", "href", "src", "srcset", "draggable", "contenteditable",
+                  "aria-labelledby", "aria-describedby", "aria-description", "aria-roledescription")  # doar cheia
+ROLURI_NEUTRE = ("presentation", "none")
+ICON_TAGURI = ("mat-icon", "svg")                             # role="img" pe o iconita (Angular Material) = neutru
+# cuvinte de atasament (ASCII, litere mici, dupa scoaterea diacriticelor): in clasa / id / atributele data-* ale unui element
+# neutru sau in ligatura unei iconite (in afara unui control recunoscut) = nerecunoscut
+TOKENI_ATAS = ("file", "fisier", "attach", "atasa", "upload", "incarca", "remove", "elimin", "sterge", "delete",
+               "preview", "previz", "thumb", "miniatur", "document", "image", "imagin", "photo", "poza", "media", "chip",
+               "card", "pdf")
+TOKENI_ELIMINA = ("remove", "elimin", "terge", "delete")     # eticheta unui buton de scoatere ("terge" = sterge cu / fara diacritice)
+# eticheta pe care NICIO intrare din listele albe nu o poate acoperi (scoatere / previzualizare a unui fisier, nume.extensie);
+# "upload" / "file" raman permise pentru un control recunoscut exact (butonul de incarcare din ciorna goala)
+TOKENI_ETICHETA_INTERZISA = TOKENI_ELIMINA + ("preview", "previz", "thumb", "miniatur")
+RE_FISIER = re.compile(r"(?<![a-z0-9])[a-z0-9][a-z0-9_-]*\.[a-z][a-z0-9]{0,4}(?![a-z0-9])")   # nume.extensie in text
+RE_LIGATURA = re.compile(r"[a-z0-9_]{1,40}")                 # textul unei iconite mat-icon (ex. "send", "add_2")
+MODEL_DATA_TEST = "bard-mode-menu-button"                     # butonul modelului (= MODEL), verificat separat
+# LISTE ALBE - goale pana la calibrarea pe pagina reala (RUNBOOK pasul 0). Se adauga EXACT semnatura afisata de `stare`
+# (linia "necunoscute"), doar pentru elemente vazute de om pe ecran cu ciorna goala / doar text, niciodata pentru ceva ce
+# seamana a fisier. CONTROALE = butoane (textul si iconitele din ele sunt eticheta lor); STRUCTURA = invelisuri (continutul
+# lor se verifica in continuare element cu element); TEXTE = texte afisate in zona, in afara controalelor.
+CONTROALE_CUNOSCUTE = ()
+STRUCTURA_CUNOSCUTA = ()
+TEXTE_CUNOSCUTE = ()
+# acelasi lucru vazut de locator (strapunge shadow DOM-ul deschis, pe care page.content() nu il serializeaza): semn = refuz
+SEMN_EXTRA = ", ".join(list(MEDIA) + ['[aria-label*="%s" i]' % t for t in TOKENI_ELIMINA])
 MODEL_CERUT = "Carbon"
 # forma acceptata a etichetei afisate (dupa normalizarea spatiilor): [Gemini ][<versiune> ]Carbon - nimic dupa numele modelului
 MODEL_FORMA = re.compile(r"(?:Gemini )?(?:[0-9]+(?:\.[0-9]+)? )?" + re.escape(MODEL_CERUT))
@@ -119,13 +164,14 @@ def verifica_ciorna(text_editor, brief, n_atasamente):
 # --- v4.6.4: ciorna citita din HTML-ul paginii (page.content()), analizata aici, fara browser ---
 
 class _Nod(object):
-    __slots__ = ("tag", "attrs", "parinte", "copii")
+    __slots__ = ("tag", "attrs", "parinte", "copii", "date")
 
-    def __init__(self, tag, attrs, parinte):
+    def __init__(self, tag, attrs, parinte, date=""):
         self.tag = tag
         self.attrs = attrs
         self.parinte = parinte
         self.copii = []
+        self.date = date                    # r2: textul unui nod "#text"
 
 
 class _Arbore(HTMLParser):
@@ -153,6 +199,11 @@ class _Arbore(HTMLParser):
             if self.stiva[i].tag == tag:
                 del self.stiva[i:]
                 return
+
+    def handle_data(self, data):
+        # r2: textul afisat (ex. numele unui fisier) intra in arbore ca nod "#text" sub elementul curent
+        if data:
+            self.stiva[-1].copii.append(_Nod("#text", {}, self.stiva[-1], data))
 
 
 def _descendenti(n):
@@ -205,6 +256,144 @@ def _sub(n, stramos):
     return False
 
 
+# --- r2: verificarea POZITIVA a structurii ciornei (tot ce nu e recunoscut = ciorna_necunoscuta) ---
+
+def _ascii(s):
+    # comparare / afisare: fara diacritice (NFKD), ASCII, litere mici, spatii albe comprimate
+    t = unicodedata.normalize("NFKD", s or "")
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return " ".join(t.encode("ascii", "replace").decode("ascii").lower().split())
+
+
+def _semnatura(n):
+    # forma exacta folosita de listele albe si afisata de `stare`: tag[atr=valoare]...[cheie]...
+    s = _ascii(n.tag)[:40]
+    for k in SEMN_ATR_VALOARE:
+        if k in n.attrs:
+            s += "[%s=%s]" % (k, _ascii(n.attrs[k])[:60])
+    for k in SEMN_ATR_CHEIE:
+        if k in n.attrs:
+            s += "[%s]" % k
+    return s
+
+
+def _semnificativ(n):
+    # element cu eticheta, rol, actiune sau sursa: nu e "neutru", trebuie recunoscut explicit
+    rol = _ascii(n.attrs.get("role"))
+    if rol and rol not in ROLURI_NEUTRE and not (rol == "img" and n.tag in ICON_TAGURI):
+        return True
+    if any(k in n.attrs for k in SEMN_ATR_VALOARE if k != "role") or any(k in n.attrs for k in SEMN_ATR_CHEIE):
+        return True
+    return any(k.startswith("aria-") and k != "aria-hidden" for k in n.attrs)
+
+
+def _token(n):
+    # cuvant de atasament in clasa / id / numele atributelor / valorile data-* ale unui element neutru (sau None)
+    parti = [n.attrs.get("class"), n.attrs.get("id")] + list(n.attrs.keys())
+    parti += [v for k, v in n.attrs.items() if k.startswith("data-")]
+    t = _ascii(" ".join(p for p in parti if p))
+    return next((x for x in TOKENI_ATAS if x in t), None)
+
+
+def _semnatura_token(n):
+    # semnatura unui element neutru cu cuvant de atasament: + clasele (fara cele generate ng-*), id-ul, atributele data-*
+    clase = [c for c in _clase(n) if not c.startswith(("ng-", "_ng"))]
+    parti = clase + (["#" + n.attrs["id"]] if n.attrs.get("id") else []) + sorted(k for k in n.attrs if k.startswith("data-"))
+    return _semnatura(n) + "{" + _ascii(" ".join(parti))[:80] + "}"
+
+
+def _are_eticheta_interzisa(n):
+    # eticheta (aria-label, title, alt...) de scoatere / previzualizare sau cu nume de fisier: nicio lista alba nu o acopera
+    t = _ascii(" ".join(n.attrs.get(k) or "" for k in SEMN_ATR_VALOARE if k not in ("role", "type")))
+    return any(x in t for x in TOKENI_ETICHETA_INTERZISA) or RE_FISIER.search(t) is not None
+
+
+def _motiv_text(nod, in_control):
+    a = _ascii(nod.date)
+    if not a:
+        return None
+    if RE_FISIER.search(a):
+        return "text_fisier:" + a[:40]                  # nume.extensie: refuz chiar si intr-un control cunoscut
+    if in_control:
+        return None                                     # eticheta unui control recunoscut
+    p = nod.parinte
+    if p is not None and p.tag == "mat-icon" and RE_LIGATURA.fullmatch(a) and not any(x in a for x in TOKENI_ATAS):
+        return None                                     # ligatura unei iconite ("send", "mic", "add_2")
+    if a in TEXTE_CUNOSCUTE:
+        return None
+    return "text:" + a[:40]
+
+
+def _motiv_editor(ed):
+    # in editor intra doar textul brief-ului (comparat separat cu verifica_ciorna): orice alt element = nerecunoscut
+    out = []
+    st = list(reversed(ed.copii))
+    while st:
+        n = st.pop()
+        if n.tag == "#text" or n.tag in NEVIZIBILE:
+            continue
+        if n.tag in MEDIA or "url(" in _ascii(n.attrs.get("style")):
+            out.append("media_in_editor:" + _semnatura(n))
+        elif n.tag not in EDITOR_TAGURI:
+            out.append("element_in_editor:" + _semnatura(n))
+        st.extend(reversed(n.copii))
+    return out
+
+
+def _motiv_element(n, in_control):
+    # -> (motiv sau None, in_control pentru copii)
+    sem = _semnatura(n)
+    if n.tag in MEDIA:
+        return "media:" + sem, in_control
+    if "url(" in _ascii(n.attrs.get("style")):
+        return "fundal:" + sem, in_control              # miniatura pusa ca imagine de fundal
+    if n.tag in STRUCTURA_TAGURI:
+        return None, in_control                         # zona si invelisul editorului (aceleasi nume ca selectorii)
+    if n.attrs.get("data-test-id") == MODEL_DATA_TEST and not _are_eticheta_interzisa(n):
+        return None, True                               # butonul modelului: verificat separat (verifica_model)
+    if n.tag in NEUTRE and not _semnificativ(n):
+        # element neutru: trece, afara de cazul cu cuvant de atasament in clasa / id / data-* (in afara unui control)
+        if in_control:
+            return None, in_control
+        t = _token(n)
+        if not t:
+            return None, in_control
+        sem_t = _semnatura_token(n)
+        if sem_t in STRUCTURA_CUNOSCUTA:
+            return None, in_control                     # invelis vazut de om (ex. clasa "upload-..." a butonului de incarcare)
+        return "token_%s:%s" % (t, sem_t), in_control
+    cunoscut_ctrl, cunoscut_str = sem in CONTROALE_CUNOSCUTE, sem in STRUCTURA_CUNOSCUTA
+    if cunoscut_ctrl or cunoscut_str:
+        if _are_eticheta_interzisa(n):
+            return "eticheta:" + sem, in_control        # o intrare din lista alba nu poate acoperi un buton "Remove"
+        return None, (in_control or cunoscut_ctrl)
+    return "element:" + sem, in_control
+
+
+def _necunoscute(zona, editoare):
+    """Elementele / textele din zona care NU fac parte din structura recunoscuta a ciornei goale (lista de motive).
+    Chip-urile si semnele (numarate separat) si ce nu se afiseaza (script / style / template) se sar."""
+    out = []
+    st = [(c, False) for c in reversed(zona.copii)]
+    while st:
+        n, ctrl = st.pop()
+        if n.tag == "#text":
+            m = _motiv_text(n, ctrl)
+            if m:
+                out.append(m)
+            continue
+        if n.tag in NEVIZIBILE or n.tag == CHIP or _e_semn(n):
+            continue
+        if any(n is e for e in editoare):
+            out.extend(_motiv_editor(n))
+            continue
+        m, ctrl_copii = _motiv_element(n, ctrl)
+        if m:
+            out.append(m)
+        st.extend((c, ctrl_copii) for c in reversed(n.copii))
+    return out
+
+
 def analizeaza_ciorna(html):
     """HTML-ul paginii -> dict: editoare, zone (zonele de compunere ale editoarelor, cele mai exterioare),
     atasamente (chip-uri CHIP cele mai exterioare din zone = fisiere), semne (elemente ATAS din zone), detalii."""
@@ -239,8 +428,12 @@ def analizeaza_ciorna(html):
                 c = _clase(n)
                 k = (n.tag + ("." + c[0] if c else ""))[:60].encode("ascii", "replace").decode("ascii")
                 detalii[k] = detalii.get(k, 0) + 1
+    necunoscute = []                        # r2: verificarea pozitiva (tot ce nu e structura recunoscuta a ciornei goale)
+    for z in zone:
+        necunoscute.extend(_necunoscute(z, editoare))
     return {"editoare": len(editoare), "zone": len(zone), "atasamente": atas, "semne": semne,
-            "detalii": ["%s x%d" % (k, v) for k, v in sorted(detalii.items())][:12]}
+            "detalii": ["%s x%d" % (k, v) for k, v in sorted(detalii.items())][:12],
+            "necunoscute": len(necunoscute), "necunoscute_detalii": [m[:120] for m in necunoscute[:60]]}
 
 
 def verifica_fara_atasamente(info, semn_locator, moment):
@@ -253,6 +446,10 @@ def verifica_fara_atasamente(info, semn_locator, moment):
     if info["semne"] or semn_locator:
         raise GemEroare("ciorna_cu_atasamente", "%s: semn de atasament fara chip recunoscut (zona %d, locator %d) - nu trimit"
                         % (moment, info["semne"], semn_locator))
+    # r2: 0 chip-uri + 0 semne NU dovedeste ciorna goala; trebuie ca TOT ce e in zona sa fie structura recunoscuta
+    if info["necunoscute"]:
+        raise GemEroare("ciorna_necunoscuta", "%s: %d element(e) nerecunoscute in zona ciornei - nu trimit (%s)"
+                        % (moment, info["necunoscute"], "; ".join(info["necunoscute_detalii"][:3])))
     return 0
 
 
@@ -326,7 +523,8 @@ def _mesaje(pg):
 
 def _semn_locator(pg):
     # v4.6.3 (numara gresit, pastrat doar ca SEMN fail-closed: vede si ce page.content() n-ar serializa, ex. shadow DOM)
-    return pg.locator(ZONA).locator(ATAS).count() + pg.locator(CHIP).count()
+    # r2: + media / butoane de scoatere din zona (SEMN_EXTRA), vazute si in shadow DOM
+    return pg.locator(ZONA).locator(ATAS).count() + pg.locator(CHIP).count() + pg.locator(ZONA).locator(SEMN_EXTRA).count()
 
 
 def _citeste_ciorna(pg):
@@ -352,6 +550,10 @@ def stare(pg):
           "| atasamente in ciorna:", info["atasamente"] if info["zone"] else "?")
     spune("zone compunere:", info["zone"], "| semne atasament: zona", info["semne"], "/ locator", semn,
           "| detalii:", ", ".join(info["detalii"]) or "-")
+    # r2: calibrarea listelor albe (RUNBOOK pasul 0) copiaza EXACT aceste semnaturi, cate una pe linie
+    spune("necunoscute in zona:", info["necunoscute"])
+    for m in info["necunoscute_detalii"]:
+        spune("  necunoscut", m)
     try:
         verifica_fara_atasamente(info, semn, "stare")
         spune("paza ciorna: OK (trimite ar continua)")

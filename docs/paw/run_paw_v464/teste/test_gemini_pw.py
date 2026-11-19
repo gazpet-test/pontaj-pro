@@ -5,6 +5,7 @@
 # asteptare stabila / validare brief / numarare atasamente (HTML sintetic) / ordinea pazei in trimite() (pagina falsa)
 # e testata cu obiecte false. ASCII only.
 import os, sys, io, types, tempfile, shutil, unittest, importlib.util, contextlib
+from unittest import mock
 
 AICI = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("gemini_pw", os.path.join(AICI, "..", "gemini_pw.py"))
@@ -568,6 +569,271 @@ class TestTrimiteOrdine(unittest.TestCase):
         cod, act = scenariu_atasament_in_tab_curent(mut)
         self.assertNotEqual((cod, act), ("ciorna_cu_atasamente", []))
         self.assertIn("press Enter", act)        # mutantul trimite brief-ul, exact ce s-a intamplat pe 19.11
+
+
+# --- v4.6.4 r2 (Jakarinos NO-GO pe 51b659c4): verificarea POZITIVA a ciornei goale ---
+# Structura reala nu e cunoscuta (fara Edge); fixture-urile sunt scrise de mana. Cazul din verdict, copiat exact:
+CARD_VERDICT = ('<attachment-card>\n  <span>a.txt</span>\n  <button aria-label="Remove attachment">x</button>\n'
+                '</attachment-card>')
+# ciorna goala cu elemente legitime: butonul modelului (selectorul MODEL), o iconita svg, o ligatura mat-icon, script/style
+GOALA_CU_CONTROALE = ('<div class="leading-actions"><mat-icon role="img" aria-hidden="true">add_2</mat-icon></div>'
+                      '<div class="trailing-actions"><button data-test-id="bard-mode-menu-button" aria-label="Open mode picker">'
+                      '<span class="mode-title">Carbon</span><mat-icon role="img" aria-hidden="true" fonticon="keyboard_arrow_down">'
+                      'keyboard_arrow_down</mat-icon></button>'
+                      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M0 0h24v24H0z"></path></svg></div>'
+                      '<script>var file = "a.txt";</script><style>.file-preview{}</style><span class="cdk-visually-hidden"></span>')
+# fiecare = ceva ce NU face parte din ciorna goala recunoscuta (asteptat: ciorna_necunoscuta), scris de mana
+NECUNOSCUTE = {
+    "card_verdict": CARD_VERDICT,
+    "img": '<div><img src="data:,"></div>',
+    "buton_remove": '<div><button aria-label="Remove file">x</button></div>',
+    "buton_remove_fara_text": '<button aria-label="Remove attachment"><mat-icon>close</mat-icon></button>',
+    "buton_sterge_ro": '<button aria-label="\u0218terge fi\u0219ierul"><mat-icon>close</mat-icon></button>',
+    "text_cu_extensie": '<div><span>raport final.PDF</span></div>',
+    "text_cu_extensie_ro": '<div>fi\u0219ier_\u021b.docx</div>',
+    "text_necunoscut": '<span>Incarcat</span>',
+    "card_fara_text": '<attachment-card><mat-icon>close</mat-icon></attachment-card>',
+    "clasa_atasament": '<div class="attachment-thumb"></div>',
+    "atribut_fisier": '<div data-file-id="7"></div>',
+    "fundal_miniatura": '<div style="background-image: url(blob:x)"></div>',
+    "rol_listitem": '<div role="listitem"></div>',
+    "div_clickabil": '<div jsaction="click:abc"><mat-icon>close</mat-icon></div>',
+    "div_etichetat": '<div aria-label="a"></div>',
+    "canvas": '<canvas></canvas>',
+    "video": '<video src="x"></video>',
+    "ligatura_fisier": '<div><mat-icon>attach_file</mat-icon></div>',
+    "input_ascuns": '<input type="file" hidden>',
+}
+
+
+def zona_cu(extra="", editor=EDITOR_HTML):
+    return pagina(extra_zona=GOALA_CU_CONTROALE + extra, editor=editor)
+
+
+def mutant(inlocuiri, nume="gemini_pw_mutant"):
+    # copia sursei cu inlocuiri exacte (fiecare text vechi apare o singura data), executata ca modul separat
+    with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
+        src = f.read().decode("ascii")
+    for vechi, nou in inlocuiri:
+        if src.count(vechi) != 1:
+            raise AssertionError("mutant: %r apare de %d ori" % (vechi, src.count(vechi)))
+        src = src.replace(vechi, nou)
+    mod = types.ModuleType(nume)
+    exec(compile(src, nume, "exec"), mod.__dict__)
+    return mod
+
+
+class TestStructuraCiorna(unittest.TestCase):
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def refuz(self, html, mod=gp):
+        i = self.an(html, mod)
+        with self.assertRaises(mod.GemEroare) as c:
+            mod.verifica_fara_atasamente(i, 0, "t")
+        return i, c.exception
+
+    def test_ciorna_goala_reala_trece(self):
+        # fixture-urile ciornei goale din testele existente + controalele legitime: 0 necunoscute, paza trece
+        for html in (pagina(), pagina(conversatie=CONV_IMAGINI * 2), pagina(conversatie=CONV_IMAGINI, extra_zona=GOALA_CU_CONTROALE),
+                     '<html><body><input-area-v2><input-container>' + EDITOR_HTML + '</input-container></input-area-v2></body></html>'):
+            i = self.an(html)
+            self.assertEqual((i["atasamente"], i["semne"], i["necunoscute"]), (0, 0, 0), msg=i["necunoscute_detalii"])
+            self.assertEqual(gp.verifica_fara_atasamente(i, 0, "t"), 0)
+
+    def test_cazul_din_verdict_refuzat(self):
+        i, e = self.refuz(zona_cu(CARD_VERDICT))
+        self.assertEqual((i["atasamente"], i["semne"]), (0, 0))          # exact ce a gasit Jakarinos: 0 / 0
+        self.assertEqual(e.cod, "ciorna_necunoscuta")
+        self.assertIn("nerecunoscute in zona ciornei - nu trimit", e.detaliu)
+        self.assertEqual(i["necunoscute_detalii"],
+                         ["element:attachment-card", "text_fisier:a.txt", "element:button[aria-label=remove attachment]", "text:x"])
+
+    def test_fiecare_structura_necunoscuta_refuzata(self):
+        for k, extra in sorted(NECUNOSCUTE.items()):
+            i, e = self.refuz(zona_cu(extra))
+            self.assertEqual(e.cod, "ciorna_necunoscuta", msg=k)
+            self.assertGreaterEqual(i["necunoscute"], 1, msg=k)
+
+    def test_motivele_sunt_cele_asteptate(self):
+        # motivul primului element nerecunoscut, scris de mana pentru fiecare caz
+        asteptat = {
+            "img": "media:img[src]",
+            "buton_remove": "element:button[aria-label=remove file]",
+            "buton_sterge_ro": "element:button[aria-label=sterge fisierul]",
+            "text_cu_extensie": "text_fisier:raport final.pdf",
+            "text_cu_extensie_ro": "text_fisier:fisier_t.docx",
+            "text_necunoscut": "text:incarcat",
+            "card_fara_text": "element:attachment-card",
+            "clasa_atasament": "token_attach:div{attachment-thumb}",
+            "atribut_fisier": "token_file:div{data-file-id}",
+            "fundal_miniatura": "fundal:div",
+            "rol_listitem": "element:div[role=listitem]",
+            "div_clickabil": "element:div[jsaction]",
+            "div_etichetat": "element:div[aria-label=a]",
+            "canvas": "media:canvas",
+            "video": "media:video[src]",
+            "ligatura_fisier": "text:attach_file",
+            "input_ascuns": "element:input[type=file]",
+        }
+        for k, m in asteptat.items():
+            self.assertEqual(self.an(zona_cu(NECUNOSCUTE[k]))["necunoscute_detalii"][0], m, msg=k)
+
+    def test_in_editor_doar_text(self):
+        # in editor intra brief-ul (text, comparat separat): o imagine sau un card in editor = refuz
+        for ed, m in ((EDITOR_HTML.replace("<p>ciorna</p>", '<p>ciorna<img src="x"></p>'), "media_in_editor:img[src]"),
+                      (EDITOR_HTML.replace("<p>ciorna</p>", "<p>ciorna</p><attachment-card></attachment-card>"),
+                       "element_in_editor:attachment-card")):
+            i, e = self.refuz(zona_cu(editor=ed))
+            self.assertEqual((e.cod, i["necunoscute_detalii"]), ("ciorna_necunoscuta", [m]))
+        # textul brief-ului (cu nume de fisiere, linii, formatare Quill) NU e verificat aici
+        ed = EDITOR_HTML.replace("<p>ciorna</p>", "<p>vezi raport.pdf</p><p><br></p><p><strong>x</strong> a.txt</p>")
+        self.assertEqual(self.an(zona_cu(editor=ed))["necunoscute"], 0)
+
+    def test_langa_editor_in_rich_textarea(self):
+        ed = EDITOR_HTML.replace("</rich-textarea>", "<span>b.docx</span></rich-textarea>")
+        i, e = self.refuz(pagina(editor=ed))
+        self.assertEqual(i["necunoscute_detalii"], ["text_fisier:b.docx"])
+
+    def test_ordinea_codurilor(self):
+        # chip -> ciorna_cu_atasamente (ca inainte); fara zona -> ciorna_necitibila; necunoscutul vine ultimul
+        self.assertEqual(self.refuz(pagina(["a.txt"], extra_zona=CARD_VERDICT))[1].cod, "ciorna_cu_atasamente")
+        self.assertEqual(self.refuz('<html><body>' + CARD_VERDICT + '</body></html>')[1].cod, "ciorna_necitibila")
+
+    def test_semnatura_si_ascii(self):
+        # scrise de mana: ordinea atributelor = SEMN_ATR_VALOARE apoi SEMN_ATR_CHEIE; diacritice scoase, litere mici
+        a = gp._Arbore()
+        a.feed('<button tabindex="0" type="button" aria-label="  \u0218terge   Fi\u0219ierul " jsaction="x"></button>')
+        self.assertEqual(gp._semnatura(a.radacina.copii[0]), "button[aria-label=sterge fisierul][type=button][tabindex][jsaction]")
+        self.assertEqual(gp._ascii("A\u00a0\u0103\u00ee\u021b\n b"), "a ait b")
+
+    def test_regex_nume_de_fisier(self):
+        for t in ("a.txt", "raport final.pdf", "x.tar.gz", "vezi (poza_1.jpeg)", "google.com"):
+            self.assertIsNotNone(gp.RE_FISIER.search(t), t)
+        for t in ("4.5 carbon", "gemini 2.5", "add_2", "ask gemini...", "carbon", "", "1.000", "v4.6.4"):
+            self.assertIsNone(gp.RE_FISIER.search(t), t)
+
+    def test_liste_albe_recunosc_doar_exact(self):
+        # o intrare de calibrare (forma afisata de `stare`) recunoaste exact acel control; textul / iconita din el = eticheta
+        trimite_btn = ('<button aria-label="Send message" type="button" jsaction="click:x">'
+                       '<mat-icon>send</mat-icon><span>Trimite</span></button>')
+        sem = "button[aria-label=send message][type=button][jsaction]"
+        self.assertEqual(self.an(zona_cu(trimite_btn))["necunoscute_detalii"], ["element:" + sem, "text:trimite"])
+        with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", (sem,)):
+            self.assertEqual(self.an(zona_cu(trimite_btn))["necunoscute"], 0)
+            # alt buton, alta eticheta / alt atribut = tot necunoscut
+            self.assertEqual(self.an(zona_cu(trimite_btn.replace("Send message", "Send")))["necunoscute"], 2)
+            self.assertEqual(self.an(zona_cu(trimite_btn.replace(' type="button"', "")))["necunoscute"], 2)
+            # un nume de fisier in controlul recunoscut = refuz; un element necunoscut in el = refuz
+            self.assertEqual(self.an(zona_cu(trimite_btn.replace("Trimite", "a.txt")))["necunoscute_detalii"], ["text_fisier:a.txt"])
+            self.assertEqual(self.an(zona_cu(trimite_btn.replace("<span>", "<attachment-card></attachment-card><span>")))
+                             ["necunoscute_detalii"], ["element:attachment-card"])
+        # structura cunoscuta: elementul trece, dar continutul lui se verifica in continuare
+        with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", ("toolbox-drawer",)):
+            self.assertEqual(self.an(zona_cu("<toolbox-drawer><div></div></toolbox-drawer>"))["necunoscute"], 0)
+            self.assertEqual(self.an(zona_cu("<toolbox-drawer><span>a</span></toolbox-drawer>"))["necunoscute_detalii"], ["text:a"])
+        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", ("gemini poate gresi",)):
+            self.assertEqual(self.an(zona_cu("<div>Gemini poate gre\u0219i</div>"))["necunoscute"], 0)
+
+    def test_butonul_de_incarcare_se_poate_recunoaste(self):
+        # ciorna goala reala are (probabil) un buton de incarcare: eticheta cu "upload file" si iconita "attach_file" sunt
+        # permise unui control recunoscut exact; invelisul neutru cu clasa "upload-..." se recunoaste dupa clasa lui
+        inc = ('<div class="upload-wrapper ng-tns-c1-2"><button aria-label="Open upload file menu">'
+               '<mat-icon>attach_file</mat-icon></button></div>')
+        self.assertEqual(self.an(zona_cu(inc))["necunoscute_detalii"],
+                         ["token_upload:div{upload-wrapper}", "element:button[aria-label=open upload file menu]", "text:attach_file"])
+        with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", ("button[aria-label=open upload file menu]",)), \
+                mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", ("div{upload-wrapper}",)):
+            self.assertEqual(self.an(zona_cu(inc))["necunoscute"], 0)
+            # aceeasi clasa pe alt element / alta clasa = tot necunoscut
+            self.assertEqual(self.an(zona_cu('<div class="upload-preview"></div>'))["necunoscute_detalii"],
+                             ["token_upload:div{upload-preview}"])
+        # o intrare "div" goala nu dezactiveaza verificarea cuvintelor pe toate div-urile
+        with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", ("div", "div{}")):
+            self.assertEqual(self.an(zona_cu(NECUNOSCUTE["clasa_atasament"]))["necunoscute"], 1)
+
+    def test_lista_alba_nu_poate_acoperi_atasamente(self):
+        # chiar daca cineva trece din greseala in lista alba un buton "Remove" sau o imagine, refuzul ramane
+        with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", ("button[aria-label=remove attachment]", "img[src]")), \
+                mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", ("div[aria-label=fisier.pdf]",)):
+            for extra, m in (('<button aria-label="Remove attachment"></button>', "eticheta:button[aria-label=remove attachment]"),
+                             ('<img src="x">', "media:img[src]"),
+                             ('<div aria-label="fisier.pdf"></div>', "eticheta:div[aria-label=fisier.pdf]")):
+                self.assertEqual(self.an(zona_cu(extra))["necunoscute_detalii"], [m], msg=extra)
+
+    def test_listele_livrate_si_locatorul(self):
+        # listele albe livrate nu contin nimic ce seamana a fisier / scoatere (calibrarea le poate completa, nu cu astfel de intrari)
+        for x in gp.CONTROALE_CUNOSCUTE + gp.STRUCTURA_CUNOSCUTA + gp.TEXTE_CUNOSCUTE:
+            self.assertFalse(any(t in gp._ascii(x) for t in gp.TOKENI_ETICHETA_INTERZISA), x)
+            self.assertIsNone(gp.RE_FISIER.search(gp._ascii(x)), x)
+        for x in gp.TEXTE_CUNOSCUTE:
+            self.assertFalse(any(t in x for t in gp.TOKENI_ATAS), x)
+        # L19: semnul locator (vede si shadow DOM) = aceleasi media + aceleasi etichete de scoatere ca analiza HTML
+        self.assertEqual(gp.SEMN_EXTRA, 'img, picture, video, audio, canvas, object, embed, iframe, image, source, track, '
+                         '[aria-label*="remove" i], [aria-label*="elimin" i], [aria-label*="terge" i], [aria-label*="delete" i]')
+        self.assertTrue(all(t in gp.TOKENI_ATAS or t == "terge" for t in gp.TOKENI_ELIMINA))
+
+    def test_stare_afiseaza_semnaturile(self):
+        pg = FakePg(zona_cu(CARD_VERDICT))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            gp.stare(pg)
+        linii = out.getvalue().splitlines()
+        self.assertIn("necunoscute in zona: 4", linii)
+        self.assertIn("  necunoscut element:attachment-card", linii)
+        self.assertTrue(any(l.startswith("paza ciorna: REFUZ ciorna_necunoscuta stare: 4 element(e)") for l in linii), linii)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            gp.stare(FakePg(zona_cu()))
+        self.assertIn("necunoscute in zona: 0", out.getvalue().splitlines())
+        self.assertIn("paza ciorna: OK (trimite ar continua)", out.getvalue().splitlines())
+
+
+class TestTrimiteStructura(unittest.TestCase):
+    def test_necunoscut_in_tab_curent_refuz_fara_nicio_actiune(self):
+        for k, extra in sorted(NECUNOSCUTE.items()):
+            cod, act = ruleaza_trimite(gp, FakePg(zona_cu(extra)))
+            self.assertEqual((cod, act), ("ciorna_necunoscuta", []), msg=k)
+
+    def test_necunoscut_pe_chatul_nou_refuz_inainte_de_click(self):
+        cod, act = ruleaza_trimite(gp, FakePg(zona_cu(), dupa_goto=zona_cu(CARD_VERDICT)))
+        self.assertEqual((cod, act), ("ciorna_necunoscuta", ["goto"]))
+
+    def test_necunoscut_aparut_dupa_scriere_fara_enter(self):
+        cod, act = ruleaza_trimite(gp, FakePg(zona_cu(), dupa_scriere=zona_cu(CARD_VERDICT)))
+        self.assertEqual(cod, "ciorna_necunoscuta")
+        self.assertIn("insert", act)
+        self.assertNotIn("press Enter", act)
+
+    def test_ciorna_goala_cu_controale_trimite(self):
+        cod, act = ruleaza_trimite(gp, FakePg(zona_cu(), dupa_goto=zona_cu()))
+        self.assertIsNone(cod)
+        self.assertEqual(act, ["goto", "click", "press Control+A", "press Delete", "insert", "press Enter"])
+
+
+class TestMutantiStructura(unittest.TestCase):
+    # fiecare mutant scoate o parte a verificarii pozitive; scenariul lui trece la Enter pe mutant si e refuzat pe cod
+    def verifica(self, inlocuiri, extra):
+        cod, act = ruleaza_trimite(gp, FakePg(zona_cu(extra)))
+        self.assertEqual((cod, act), ("ciorna_necunoscuta", []))
+        mut = mutant(inlocuiri)
+        cod_m, act_m = ruleaza_trimite(mut, FakePg(zona_cu(extra)))
+        self.assertIsNone(cod_m)
+        self.assertIn("press Enter", act_m)
+
+    def test_fara_verificarea_pozitiva_cazul_din_verdict_pleaca(self):
+        # mutantul = comportamentul de pe 51b659c4 (0 chip-uri + 0 semne = goala); cazul din verdict trimite brief-ul
+        self.verifica([('    if info["necunoscute"]:', "    if False:")], CARD_VERDICT)
+
+    def test_fara_regula_de_element(self):
+        self.verifica([('return "element:" + sem, in_control', "return None, in_control")], NECUNOSCUTE["card_fara_text"])
+
+    def test_fara_regula_de_text(self):
+        self.verifica([('return "text_fisier:" + a[:40]', "return None"), ('return "text:" + a[:40]', "return None")],
+                      NECUNOSCUTE["text_cu_extensie"])
+
+    def test_fara_regula_de_cuvinte(self):
+        self.verifica([("        t = _token(n)", "        t = None")], NECUNOSCUTE["clasa_atasament"])
 
 
 if __name__ == "__main__":
