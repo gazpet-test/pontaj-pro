@@ -5,6 +5,8 @@
 // Nimic nu se scrie în BD sau în Storage: PDF-ul se descarcă doar local.
 // ===========================================================================
 
+import { SELECT_ACTIV_AVIZ, SELECT_CONTINUT_AVIZ, ORDINE_CONTINUT_AVIZ, randuriContinutAviz } from './avizContinut.js'
+
 // Coloanele tabelului de bunuri. Lățimile sunt PROCENTE din lățimea utilă A4 (738 px) și trebuie să dea 100.
 export const COLOANE_PV = [
   { cheie: 'nr', titlu: 'Nr.', latime: 6, align: 'center' },
@@ -14,10 +16,9 @@ export const COLOANE_PV = [
   { cheie: 'stare', titlu: 'Stare la predare', latime: 20, align: 'left' },
 ]
 
-// Aceeași selecție de activ ca în AvizInsotireMarfaModal (Logistica.jsx).
-const SELECT_ACTIV = 'id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu'
-export const SELECT_TRANSPORT_PV = `id, numar_transport, tip, continut_multiplu, continut_descriere, activ_transportat:logistica_active!activ_transportat_id(${SELECT_ACTIV})`
-export const SELECT_CONTINUT_PV = `*, asset:logistica_active!active_id(${SELECT_ACTIV})`
+// r2 (L19): selecția, ordinea și rândurile vin din avizContinut.js — aceeași definiție ca tabelul din aviz.
+export const SELECT_TRANSPORT_PV = `id, numar_transport, tip, continut_multiplu, continut_descriere, activ_transportat:logistica_active!activ_transportat_id(${SELECT_ACTIV_AVIZ})`
+export const SELECT_CONTINUT_PV = SELECT_CONTINUT_AVIZ
 export const CHEI_FIRMA = ['firma_nume', 'firma_cui', 'firma_reg_com', 'firma_adresa', 'firma_telefon', 'firma_email']
 
 export function esc(v) {
@@ -44,56 +45,26 @@ export function verificaColoane(coloane = COLOANE_PV) {
   return true
 }
 
-function identificareActiv(a) {
-  if (!a) return []
-  const r = []
-  if (areText(a.nr_inventar)) r.push(`Nr. inventar: ${txt(a.nr_inventar)}`)
-  if (areText(a.cod_intern)) r.push(`Cod intern: ${txt(a.cod_intern)}`)
-  if (areText(a.nr_inmatriculare)) r.push(`Nr. înmatr.: ${txt(a.nr_inmatriculare)}`)
-  if (areText(a.serie_sasiu)) r.push(`Serie: ${txt(a.serie_sasiu)}`)
-  return r
+// Cantitatea PV dintr-un rând de aviz: avizul are coloane separate UM / Cant. („—” = lipsă), PV-ul una singură.
+function cantitatePv(cant, um) {
+  if (!areText(cant) || cant === '—') return ''
+  return areText(um) && um !== '—' ? `${cant} ${um}` : cant
 }
 
-function denumireActiv(a) {
-  if (!a) return ''
-  const mm = `${txt(a.marca)} ${txt(a.model)}`.trim()
-  return mm || txt(a.cod_intern) || txt(a.nr_inmatriculare)
-}
-
-function cantitateText(cant, um, implicitUtilaj) {
-  const n = (cant === null || cant === undefined || cant === '') ? NaN : Number(cant)
-  if (Number.isFinite(n)) {
-    const s = n.toLocaleString('ro-RO', { maximumFractionDigits: 6 })
-    return areText(um) ? `${s} ${txt(um)}` : s
-  }
-  return implicitUtilaj ? '1 buc' : ''
-}
-
-// Liniile PV — aceeași regulă ca avizul: conținut multiplu cu rânduri → câte o linie pe rând;
-// altfel utilajul de pe transport; altfel descrierea text a transportului; altfel nimic (PV-ul nu se generează).
+// Liniile PV = rândurile avizului (randuriContinutAviz, aceeași definiție), cu două reguli proprii PV-ului:
+//  (1) rândul simplu fără niciun bun (fără utilaj, fără descriere text) → nicio linie: PV-ul nu se generează gol;
+//  (2) o denumire goală de utilaj (marcă și model necompletate) se scrie „—”, ca celula să nu rămână albă.
 export function liniiPvDinTransport(transport, continut) {
-  const T = transport || {}
-  if (T.continut_multiplu && Array.isArray(continut) && continut.length > 0) {
-    return continut.map(it => {
-      const utilaj = it.tip === 'utilaj'
-      const a = utilaj ? it.asset : null
-      return {
-        denumire: (utilaj ? denumireActiv(a) : '') || txt(it.denumire) || '—',
-        tipText: utilaj ? 'Utilaj' : 'Marfă',
-        observatii: txt(it.observatii),
-        identificare: identificareActiv(a),
-        cantitate: cantitateText(it.cantitate, it.um || (utilaj ? 'buc' : ''), utilaj),
-      }
-    })
-  }
-  if (T.tip === 'utilaj' && T.activ_transportat) {
-    const a = T.activ_transportat
-    return [{ denumire: denumireActiv(a) || '—', tipText: 'Utilaj', observatii: '', identificare: identificareActiv(a), cantitate: '1 buc' }]
-  }
-  if (areText(T.continut_descriere)) {
-    return [{ denumire: txt(T.continut_descriere), tipText: '', observatii: '', identificare: [], cantitate: '' }]
-  }
-  return []
+  const randuri = randuriContinutAviz(transport, continut)
+  if (randuri.length === 1 && randuri[0].faraBunuri) return []
+  return randuri.map(r => ({
+    denumire: (r.forma === 'simplu' && !r.isUtilaj ? txt(r.descriere) : txt(r.denumire)) || '—',
+    tipText: r.isUtilaj ? 'Utilaj' : (r.forma === 'multiplu' ? 'Marfă' : ''),
+    regimSpecial: r.regimSpecial,
+    observatii: txt(r.observatii),
+    identificare: (r.identificare || []).map(i => `${i.eticheta}: ${txt(i.valoare)}`),
+    cantitate: cantitatePv(r.cantitate, r.um),
+  }))
 }
 
 // Citirea datelor pentru PV. Întoarce { ok:false, mesaj } la orice problemă (eroare ≠ gol, L18), niciodată un PV gol.
@@ -106,7 +77,7 @@ export async function incarcaDatePv(db, aviz) {
   let continut = []
   if (T.continut_multiplu) {
     const { data, error, count } = await db.from('logistica_transporturi_continut').select(SELECT_CONTINUT_PV, { count: 'exact' })
-      .eq('transport_id', T.id).order('ordine').order('id')
+      .eq('transport_id', T.id).order(ORDINE_CONTINUT_AVIZ[0]).order(ORDINE_CONTINUT_AVIZ[1])
     if (error) return { ok: false, mesaj: `Nu am putut citi conținutul transportului: ${error.message || error}` }
     continut = data || []
     // L12/L23: nimic nu dispare tacit — dacă serverul a tăiat lista, nu generăm un PV incomplet.
@@ -152,8 +123,9 @@ export function construiesteHtmlPv({ aviz, linii, firma = {}, logo = '', dataPv 
   const colgroup = `<colgroup>${COLOANE_PV.map(c => `<col data-col="${c.cheie}" style="width:${c.latime}%">`).join('')}</colgroup>`
   const cap = `<tr>${COLOANE_PV.map(c => `<th style="${ST_TH};text-align:${c.align}">${esc(c.titlu)}</th>`).join('')}</tr>`
   const randuri = linii.map((l, i) => {
-    const den = `<div style="font-weight:700">${esc(l.denumire)}</div>`
+    const den = `<div style="font-weight:700;white-space:pre-wrap">${esc(l.denumire)}</div>`
       + (l.tipText ? `<div style="font-size:9px;color:#6B7280;margin-top:2px">${esc(l.tipText)}</div>` : '')
+      + (l.regimSpecial ? `<div data-pv-regim style="font-size:9px;color:#DC2626;font-weight:700;margin-top:2px">REGIM TRANSPORT SPECIAL</div>` : '')
       + (l.observatii ? `<div style="font-size:9px;color:#6B7280;margin-top:2px;font-style:italic">${esc(l.observatii)}</div>` : '')
     const ident = (l.identificare || []).length ? l.identificare.map(x => `<div>${esc(x)}</div>`).join('') : '—'
     return `<tr data-pv-linie="${i + 1}">`

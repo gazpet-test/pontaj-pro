@@ -134,26 +134,41 @@ describe('liniiPvDinTransport (aceeași regulă ca avizul)', () => {
       { tip: 'marfa', denumire: 'Robinet DN50', cantitate: '4', um: 'buc' },
     ])
     expect(L.length).toBe(3)
-    expect(L[0]).toMatchObject({ denumire: 'Alfa X1', cantitate: '1 buc' })
-    expect(L[0].identificare).toEqual(['Nr. inventar: INV-7', 'Cod intern: EX-01', 'Nr. înmatr.: PH-01-ABC', 'Serie: VIN123'])
-    expect(L[1]).toMatchObject({ denumire: 'Țeavă PE 110', cantitate: '120,5 m', observatii: 'colac' })
+    expect(L[0]).toMatchObject({ denumire: 'Alfa X1', cantitate: '1 buc', tipText: 'Utilaj', regimSpecial: false })
+    expect(L[0].identificare).toEqual(['Nr. inventar: INV-7', 'Cod intern: EX-01', 'Nr. înmatr.: PH-01-ABC', 'Serie șasiu: VIN123'])
+    expect(L[1]).toMatchObject({ denumire: 'Țeavă PE 110', cantitate: '120,5 m', observatii: 'colac', tipText: 'Marfă' })
     expect(L[2]).toMatchObject({ denumire: 'Robinet DN50', cantitate: '4 buc' })
   })
 
-  it('fără conținut multiplu → activul de pe transport', () => {
+  it('fără conținut multiplu → activul de pe transport (etichetele formei simple din aviz)', () => {
     const L = liniiPvDinTransport({ continut_multiplu: false, tip: 'utilaj', activ_transportat: asset }, [])
-    expect(L).toEqual([{ denumire: 'Alfa X1', tipText: 'Utilaj', observatii: '', identificare: ['Nr. inventar: INV-7', 'Cod intern: EX-01', 'Nr. înmatr.: PH-01-ABC', 'Serie: VIN123'], cantitate: '1 buc' }])
+    expect(L).toEqual([{ denumire: 'Alfa X1', tipText: 'Utilaj', regimSpecial: false, observatii: '', identificare: ['Nr. inventar: INV-7', 'Cod intern: EX-01', 'Nr. înmatriculare: PH-01-ABC', 'Serie șasiu: VIN123'], cantitate: '1 buc' }])
   })
 
   it('multiplu fără rânduri → cade pe activul / descrierea transportului, ca avizul', () => {
     expect(liniiPvDinTransport({ continut_multiplu: true, tip: 'utilaj', activ_transportat: asset }, [])[0].denumire).toBe('Alfa X1')
-    expect(liniiPvDinTransport({ continut_multiplu: false, tip: 'materiale', continut_descriere: '10 saci ciment' }, [])[0].denumire).toBe('10 saci ciment')
+    expect(liniiPvDinTransport({ continut_multiplu: false, tip: 'materiale', continut_descriere: '10 saci ciment' }, [])[0])
+      .toEqual({ denumire: '10 saci ciment', tipText: '', regimSpecial: false, observatii: '', identificare: [], cantitate: '' })
   })
 
-  it('nimic de predat → listă goală', () => {
+  it('utilaj fără marcă / model → „—” în PV (avizul lasă celula albă), identificarea rămâne', () => {
+    const L = liniiPvDinTransport({ continut_multiplu: true }, [{ tip: 'utilaj', asset: { cod_intern: 'EX-09' } }])
+    expect(L).toEqual([{ denumire: '—', tipText: 'Utilaj', regimSpecial: false, observatii: '', identificare: ['Cod intern: EX-09'], cantitate: '1 buc' }])
+  })
+
+  it('NEGATIV: nimic de predat → listă goală (PV-ul nu se generează)', () => {
     expect(liniiPvDinTransport({ tip: 'materiale', continut_descriere: '   ' }, [])).toEqual([])
     expect(liniiPvDinTransport({ tip: 'utilaj', activ_transportat: null }, [])).toEqual([])
+    expect(liniiPvDinTransport({ continut_multiplu: true, tip: 'materiale', continut_descriere: '' }, [])).toEqual([])
     expect(liniiPvDinTransport(null, null)).toEqual([])
+  })
+
+  it('regim de transport special → marcat în PV', () => {
+    const L = liniiPvDinTransport({ tip: 'utilaj', activ_transportat: { ...asset, regim_transport_special: true } }, [])
+    expect(L[0].regimSpecial).toBe(true)
+    const h = construiesteHtmlPv({ aviz: AVIZ, linii: L, dataPv: '2026-11-19' })
+    expect(h).toContain('REGIM TRANSPORT SPECIAL')
+    expect(construiesteHtmlPv({ aviz: AVIZ, linii: LINII, dataPv: '2026-11-19' })).not.toContain('REGIM TRANSPORT SPECIAL')
   })
 })
 
@@ -247,7 +262,8 @@ describe('incarcaDatePv', () => {
     expect(r.firma).toEqual({ firma_nume: 'GAZPET INSTAL SRL' })
     expect(db.cereri[0].pasi).toContainEqual(['eq', 'id', 't1'])
     expect(db.cereri[1].pasi).toContainEqual(['eq', 'transport_id', 't1'])
-    expect(db.cereri[1].pasi).toContainEqual(['order', 'ordine'])
+    expect(db.cereri[1].pasi.filter(p => p[0] === 'order')).toEqual([['order', 'ordine'], ['order', 'id']])
+    expect(db.cereri[1].pasi).toContainEqual(['select', '*, asset:logistica_active!active_id(id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special)', { count: 'exact' }])
     expect(db.cereri.map(c => c.tabel)).toEqual(['logistica_transporturi', 'logistica_transporturi_continut', 'logistica_setari'])
   })
 })

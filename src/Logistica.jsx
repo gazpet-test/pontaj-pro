@@ -8,6 +8,9 @@ import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
 import { confirmaCitiriAlimentari, confirmaAjustareManuala, incarcaSurseMaxime, textSursaValoriiActiv } from './lib/citiriBord.js'
 import { STATUS_DESCHIS, FILTRU_BLOCATE, esteTransportBlocat, incarcaTransporturi, filtreazaTransporturi } from './lib/logisticaTransporturi.js'
 import { ziBucuresti } from './adminAlerte.js'
+import { SELECT_CONTINUT_AVIZ, ORDINE_CONTINUT_AVIZ } from './avizContinut.js'
+import AvizContinutRanduri from './AvizContinutRanduri.jsx'
+import { creeazaActiunePv, mesajRezultatPv } from './pvPredareAvizActiune.js'
 import { citesteArhivaCompleta, ARHIVA_INSTABILA, incarcaNumeAngajati, proprietariDisponibili, numeAngajat, esteComodatNeatribuit, proprietarComodatId, COMODAT_NEATRIBUIT, SURSA_ROMPETROL_TOATE, surseRompetrol, potrivesteSursa } from './lib/arhivaAlimentari.js'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -6233,16 +6236,18 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
   
   useEffect(() => {
     if (T?.id && T?.continut_multiplu) {
+      // TKT-2026-0379 r2: selecția și ordinea vin din avizContinut.js (aceleași ca la PV-ul de predare-primire)
       supabase.from('logistica_transporturi_continut')
-        .select('*, asset:logistica_active!active_id(id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special)')
+        .select(SELECT_CONTINUT_AVIZ)
         .eq('transport_id', T.id)
-        .order('ordine')
+        .order(ORDINE_CONTINUT_AVIZ[0])
+        .order(ORDINE_CONTINUT_AVIZ[1])
         .then(({ data }) => setContinutItems(data || []))
     } else {
       setContinutItems([])
     }
   }, [T?.id, T?.continut_multiplu])
-  
+
   // Pas 4: Semnături electronice
   const [showSemnatura, setShowSemnatura] = useState(null)  // 'expeditor' | 'sofer' | 'destinatar' | null
   const [semnExpData, setSemnExpData] = useState(T.semnatura_expeditor_data || null)
@@ -6758,76 +6763,8 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
                   </tr>
                 </thead>
                 <tbody>
-                  {T.continut_multiplu && continutItems.length > 0 ? (
-                    // 27.05.2026: Iterația 2 - render N rânduri pentru conținut multiplu
-                    continutItems.map((it, idx) => {
-                      const isUtilaj = it.tip === 'utilaj'
-                      const asset = it.asset
-                      const denumire = isUtilaj && asset 
-                        ? `${asset.marca || ''} ${asset.model || ''}`.trim()
-                        : (it.denumire || '—')
-                      return (
-                        <tr key={it.id || idx}>
-                          <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>{idx + 1}</td>
-                          <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>
-                            <div style={{fontWeight:'bold'}}>{denumire}</div>
-                            <div style={{fontSize:9, color:'#6B7280', marginTop:2}}>
-                              {isUtilaj ? '🚛 Utilaj' : '📦 Marfă'}
-                            </div>
-                            {isUtilaj && asset?.regim_transport_special && (
-                              <div style={{fontSize:9, color:'#DC2626', fontWeight:'bold', marginTop:2}}>⚠️ REGIM TRANSPORT SPECIAL</div>
-                            )}
-                            {it.observatii && (
-                              <div style={{fontSize:9, color:'#6B7280', marginTop:2, fontStyle:'italic'}}>{it.observatii}</div>
-                            )}
-                          </td>
-                          <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontFamily:'monospace', fontSize:10}}>
-                            {isUtilaj && asset ? (
-                              <>
-                                {asset.nr_inventar && <div style={{fontWeight:'bold', color:'#1E40AF'}}>Nr. inventar: <strong>{asset.nr_inventar}</strong></div>}
-                                {asset.cod_intern && <div>Cod intern: <strong>{asset.cod_intern}</strong></div>}
-                                {asset.nr_inmatriculare && <div>Nr. înmatr.: {asset.nr_inmatriculare}</div>}
-                                {asset.serie_sasiu && <div style={{color:'#6B7280'}}>Serie șasiu: {asset.serie_sasiu}</div>}
-                              </>
-                            ) : '—'}
-                          </td>
-                          <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>
-                            {it.um || (isUtilaj ? 'buc' : '—')}
-                          </td>
-                          <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontWeight:'bold'}}>
-                            {it.cantitate ? Number(it.cantitate).toLocaleString('ro-RO', {maximumFractionDigits: 2}) : (isUtilaj ? '1' : '—')}
-                          </td>
-                        </tr>
-                      )
-                    })
-                  ) : (
-                    // Single item legacy (utilaj sau materiale text)
-                    <tr>
-                      <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>1</td>
-                      <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>
-                        {T.tip === 'utilaj' && T.activ_transportat ? (
-                          <>
-                            <div style={{fontWeight:'bold'}}>{T.activ_transportat.marca} {T.activ_transportat.model}</div>
-                            {T.activ_transportat.regim_transport_special && <div style={{fontSize:9, color:'#DC2626', fontWeight:'bold', marginTop:2}}>⚠️ REGIM TRANSPORT SPECIAL</div>}
-                          </>
-                        ) : (
-                          <div style={{whiteSpace:'pre-wrap'}}>{T.continut_descriere || '—'}</div>
-                        )}
-                      </td>
-                      <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontFamily:'monospace', fontSize:10}}>
-                        {T.tip === 'utilaj' && T.activ_transportat ? (
-                          <>
-                            {T.activ_transportat.nr_inventar && <div style={{fontWeight:'bold', color:'#1E40AF'}}>Nr. inventar: <strong>{T.activ_transportat.nr_inventar}</strong></div>}
-                            {T.activ_transportat.cod_intern && <div>Cod intern: <strong>{T.activ_transportat.cod_intern}</strong></div>}
-                            {T.activ_transportat.nr_inmatriculare && <div>Nr. înmatriculare: {T.activ_transportat.nr_inmatriculare}</div>}
-                            {T.activ_transportat.serie_sasiu && <div style={{color:'#6B7280'}}>Serie șasiu: {T.activ_transportat.serie_sasiu}</div>}
-                          </>
-                        ) : '—'}
-                      </td>
-                      <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>{T.tip === 'utilaj' ? 'buc' : '—'}</td>
-                      <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontWeight:'bold'}}>{T.tip === 'utilaj' ? '1' : '—'}</td>
-                    </tr>
-                  )}
+                  {/* TKT-2026-0379 r2: rândurile vin din avizContinut.js (aceeași definiție ca PV-ul de predare-primire) */}
+                  <AvizContinutRanduri transport={T} continutItems={continutItems} />
                 </tbody>
               </table>
             </div>
@@ -7525,22 +7462,29 @@ function ArhivaAvizePage({ canDelete, profile, showToast }) {
   const [showDeleteLuna, setShowDeleteLuna] = useState(false)  // modal bulk delete pe lună
   // TKT-2026-0379: PV predare-primire generat din aviz (PDF descărcat local, nu se salvează nicăieri)
   const [pvId, setPvId] = useState(null)
-  const pvBusy = useRef(false)
-  const handlePvPredare = async (arhAviz) => {
-    if (pvBusy.current) return
-    pvBusy.current = true
-    setPvId(arhAviz.id)
-    try {
-      const { genereazaPvPredareAviz } = await import('./pvPredareAvizPdf.js')
-      const r = await genereazaPvPredareAviz({ supabase, aviz: arhAviz })
-      if (!r.ok) showToast(r.mesaj, 'warn')
-      else showToast(`✓ ${r.fisier} descărcat (${r.nrLinii} ${r.nrLinii === 1 ? 'bun' : 'bunuri'})`)
-    } catch (e) {
-      showToast('Eroare generare PV: ' + (e.message || e), 'error')
-    } finally {
-      pvBusy.current = false
-      setPvId(null)
-    }
+  // r2 (L24): o acțiune pe montare; la părăsirea ecranului operația în curs e invalidată
+  // (nu mai capturează, nu mai descarcă, nu mai afișează mesaje și nu mai atinge starea).
+  const pvActiune = useRef(null)
+  useEffect(() => {
+    const a = creeazaActiunePv()
+    pvActiune.current = a
+    return () => { a.opreste(); if (pvActiune.current === a) pvActiune.current = null }
+  }, [])
+  const handlePvPredare = (arhAviz) => {
+    const a = pvActiune.current
+    if (!a) return
+    a.porneste(arhAviz, {
+      genereaza: async (aviz, esteCurent) => {
+        const { genereazaPvPredareAviz } = await import('./pvPredareAvizPdf.js')
+        if (!esteCurent()) return { ok: false, anulat: true }
+        return genereazaPvPredareAviz({ supabase, aviz, esteCurent })
+      },
+      laStare: setPvId,
+      laRezultat: (r) => {
+        const m = mesajRezultatPv(r)
+        if (m) showToast(m.text, m.tip)
+      },
+    })
   }
 
   
