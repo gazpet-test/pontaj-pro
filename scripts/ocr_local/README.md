@@ -371,20 +371,34 @@ implicit 10. Orice altă valoare oprește serviciul la pornire (`config_gpu`).
   și celălalt proces cedează după pagina curentă; lacătul altuia nu se atinge.
   Memorie ocupată fără lacăt (ex. un model Ollama) → vLLM nu se pornește peste ea.
 - **cald**: modelele gata; jurnalul notează `incarcat` cu durata încărcării (secunde).
-  După `inactiv_minute` fără lucrări: oprire, dovada opririi (fără procese, VRAM sub
-  nivelul de dinainte + 1 GB), `servicii.json` golit, lacăt eliberat (`descarcat`).
+  O lucrare e **admisă** la citire (`asteapta(bilet)` = True) și ține modelele până la
+  `gata(bilet)`. După `inactiv_minute` fără lucrări: faza trece în **descarcare**
+  (indisponibilă citirii) în ACELAȘI pas cu decizia, sub același lacăt de fir ca
+  admiterea (r2, Jakarinos #1147 P1-1: înainte faza rămânea `cald` cât dura oprirea și
+  o lucrare sosită atunci era admisă pe modele care se opreau). Apoi oprire, dovada
+  opririi (fără procese, VRAM sub nivelul de dinainte + 1 GB), `servicii.json` golit,
+  lacăt eliberat (`descarcat`). Lucrarea sosită în `descarcare` așteaptă reîncărcarea.
+- **dovada VRAM** (r2, P1-2): obligația de a citi memoria stă pe disc, în
+  `servicii.json` (modele pornite sau marcajul `vram_neconfirmat`, scris ÎNAINTE de
+  oprire); se șterge doar odată cu eliberarea lacătului. O reîncercare în care procesele
+  au dispărut deja, sau o repornire după cădere, citește din nou memoria; fișier stricat
+  = obligație. Fără urme E3 (lipsă / `{}`), memoria altcuiva nu ține lacătul.
 - **termenul**: dacă modelele nu sunt gata cu `REZERVA_CITIRE_S` (45 s) înainte de
-  `termen_local` (BD: 90 s de la upload), lucrarea merge pe fallback cu
-  `model_indisponibil` („Serverul local nu e pregătit”), FĂRĂ invalidare: încălzirea
-  continuă pentru lucrarea următoare. Dacă lacătul altuia n-a fost cedat, E3 anunță
-  `ocupat` 5 minute (UI merge direct pe fallback, fără așteptare).
+  `termen_local` (BD: 90 s de la upload), lucrarea (deja admisă de edge) merge pe
+  fallback-ul Haiku din `izo-e3-ocr-local` cu `model_indisponibil` („Serverul local nu
+  e pregătit”), FĂRĂ invalidare: încălzirea continuă pentru lucrarea următoare. Dacă
+  lacătul altuia n-a fost cedat, E3 anunță `ocupat` 5 minute: cererile noi sunt
+  refuzate la admitere și UI-ul citește direct cu Sonnet (`aviz_e3`), fără așteptare.
 - **gardă / intern / model / termen în citire**: modelele se descarcă (repornirea =
-  încărcarea curată la lucrarea următoare). Citirea în sine e neschimbată.
+  încărcarea curată la lucrarea următoare). `invalidate()` trece faza în `descarcare`
+  imediat (nicio admitere nouă pe modelele invalidate); oprirea începe după `gata`.
+  Citirea în sine e neschimbată.
 - **eșecuri** (pornire care pică, modele care nu devin gata în 300 s, descărcare
   neconfirmată, WSL căzut): fereastră `eroare` min(60 * 2^k, 3600) s, cel mult ~24 de
   încercări pe zi, o linie `gpu_pauza` pe treaptă; după o pornire picată lacătul se
   eliberează imediat (dacă oprirea se dovedește), nu după pauză.
-- **noaptea**: modelele (dacă sunt calde) se descarcă la 22:00; noaptea E3 nu mai ia
+- **noaptea**: modelele (dacă sunt calde) se descarcă la 22:00 — fără admiteri noi din
+  prima secundă, oprirea după citirea deja admisă (are termen); noaptea E3 nu mai ia
   lacătul deloc (înainte îl lua și elibera la fiecare minut pentru verificare).
 - **pornirea serviciului**: modele E3 rămase după o cădere / lacăt E3 vechi →
   oprite, lacăt eliberat. Lacătul laboratorului nu se atinge.

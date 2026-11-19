@@ -138,8 +138,8 @@ class Worker:
         source = {'perspectiva': 'nesigura', 'dezacorduri': 0}
         with self.mu:
             self.active, self.state = id, 'ocupat'
-        if self.gpu is not None:
-            self.gpu.cere()  # la cerere: încălzirea pornește acum, în paralel cu descărcarea / randarea
+        # la cerere: încălzirea pornește acum, în paralel cu descărcarea / randarea; biletul ține admiterea la citire
+        bilet = self.gpu.cere() if self.gpu is not None else None
         in_citire = False
         try:
             work.mkdir(parents=True, exist_ok=False)
@@ -160,8 +160,9 @@ class Worker:
             if self.gpu is not None:
                 # La cerere: modelele trebuie să fie calde cu REZERVA_CITIRE_S înainte de termen; altfel fallback,
                 # fără invalidare (încălzirea continuă pentru lucrarea următoare). Citirea în sine e neschimbată.
+                # Admisă = modelele nu se descarcă (inactivitate / invalidare / noapte) până la gata(bilet).
                 limita = (end - dt.timedelta(seconds=REZERVA_CITIRE_S) - self.now()).total_seconds()
-                if not self.gpu.asteapta(limita, self.stop_event):
+                if not self.gpu.asteapta(bilet, limita, self.stop_event):
                     self.verifica_continuare(end)
                     raise NeincarcatLaTimp()
                 self.verifica_continuare(end)
@@ -208,7 +209,7 @@ class Worker:
                 self.journal(id, 'esuata' if error else 'gata', error, source['secunde'])
         finally:
             if self.gpu is not None:
-                self.gpu.gata()
+                self.gpu.gata(bilet)
             with self.mu:
                 self.active = None
                 self.state = self.gpu.stare(noapte(self.now())) if self.gpu is not None else self.gpu_state
