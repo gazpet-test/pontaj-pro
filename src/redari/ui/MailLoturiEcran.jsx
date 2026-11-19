@@ -1,13 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { S } from './comune.jsx'
-import { citesteMail, rpcMail, hashLot, hashMesaj, inventarMail, MOTIVE_MAIL, transportPermis, DOAR_PROIECTE_TEST, EXPEDITOR } from '../mailLoturi.js'
+import { citesteMail, rpcMail, hashLot, hashMesaj, inventarMail, MOTIVE_MAIL, transportPermis, DOAR_PROIECTE_TEST, EXPEDITOR,
+  CAMPURI_MAIL, CAMP_LINK, campuriNecunoscute, acoladeInvalide, areLinkRaspuns, areLinkLiteral, mascheazaLink, MESAJ_FARA_LINK, MESAJ_LINK_LITERAL } from '../mailLoturi.js'
 
 // F2b (18.11.2026): conectarea căsuței redari@ pentru trimitere (OAuth, doar owner), comutatorul de trimitere și „Trimite lotul” — DOAR pe
 // proiecte de TEST (codul începe cu „TEST-”, aceeași gardă ca în funcția edge: transportPermis). Pe proiectele reale butoanele rămân
 // dezactivate cu motivul. Fără atașament PDF în această felie (limită documentată în plan).
+// Câmpurile textului (19.11.2026, migrarea 20261131i): {LINK_RASPUNS} / {COMUNA} / {ZILE} / {PROGRAM} / {TEL} sunt completate de BAZĂ, pe fiecare
+// mesaj, la crearea lotului (în snapshot, înaintea hash-ului) — ecranul doar le listează (valorile lotului vin din RPC-ul fn_red_mail_f2_campuri),
+// oprește crearea la un câmp scris greșit, la acolade rămase (orice formă, oricât de lungă) și la un link personal copiat în text / subiect (ar ajunge la
+// toți destinatarii), și avertizează când textul n-are {LINK_RASPUNS}. Serverul impune aceleași reguli (camp_necunoscut / link_literal). Previzualizarea
+// arată textul final al FIECĂRUI mesaj din snapshot, cu linkul personal MASCAT (tokenul e secretul proprietarului; hash-ul se verifică pe textul întreg).
 const COL_SETARI = 'trimitere_oprita, extern_permis, doar_proiecte_test, trimitere_conectata_la, trimitere_casuta, pauza_pana, versiune'
 export const MESAJ_FARA_ATASAMENT = 'Fără atașament PDF în această etapă: e-mailul conține doar textul de mai jos. Poșta cu AR rămâne obligatorie.'
+export const MESAJ_CAMP_NECUNOSCUT = necunoscute => `Câmp necunoscut în text: ${necunoscute.map(n => `{${n}}`).join(', ')}. Serverul refuză crearea lotului; corectează numele (vezi lista câmpurilor).`
+export const MESAJ_LINK_IN_SUBIECT = `{${CAMP_LINK}} nu poate sta în subiect (linkul personal intră doar în corpul mesajului).`
+export const MESAJ_ACOLADE = 'Acolade rămase în text sau subiect care nu formează un câmp cunoscut (de ex. „{}”, „{ COMUNA }”, o acoladă neînchisă). Serverul refuză crearea lotului.'
+export const MESAJ_CAMP_NECOMPLETABIL = 'nu se poate completa din datele proiectului / UAT-ului'
 
 export default function MailLoturiEcran({ proiect, uats, profile }) {
   const owner = profile?.is_owner === true
@@ -17,16 +27,23 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
   const [eroare, setEroare] = useState(''), [ocupat, setOcupat] = useState(false), [reload, setReload] = useState(0)
   const [confirm, setConfirm] = useState(false), [integru, setIntegru] = useState(false)
   const [inventar, setInventar] = useState(null), [setari, setSetari] = useState(null), [rezultat, setRezultat] = useState('')
+  const [campuri, setCampuri] = useState(null)   // valorile câmpurilor lotului pentru UAT-ul ales (din RPC; null = necitite)
   const generatie = useRef(0), intentie = useRef(null), activ = useRef(true)
   const lot = loturi.find(l => l.id === lotId)
   const garda = transportPermis({ proiectCod: proiect?.cod })
   const conectata = !!setari?.trimitere_conectata_la
   const pornita = setari?.trimitere_oprita === false
+  // câmpurile scrise greșit / acoladele rămase / linkul copiat opresc crearea înainte de server (serverul refuză oricum: camp_necunoscut / link_literal);
+  // {LINK_RASPUNS} în subiect = refuz
+  const necunoscute = [...new Set([...campuriNecunoscute(subiect), ...campuriNecunoscute(text)])]
+  const linkInSubiect = areLinkRaspuns(subiect)
+  const motivCampuri = necunoscute.length ? MESAJ_CAMP_NECUNOSCUT(necunoscute) : (acoladeInvalide(subiect) || acoladeInvalide(text)) ? MESAJ_ACOLADE
+    : linkInSubiect ? MESAJ_LINK_IN_SUBIECT : (areLinkLiteral(subiect) || areLinkLiteral(text)) ? MESAJ_LINK_LITERAL : ''
   useEffect(() => { activ.current = true; return () => { activ.current = false; generatie.current++ } }, [])
   useEffect(() => {
     const g = ++generatie.current, id = proiect.id
     const curent = () => activ.current && g === generatie.current && id === proiect.id
-    setMesaje([]); setDestinatari([]); setLoturi([]); setIntegru(false); setConfirm(false); setEroare(''); setInventar(null); setSelectie([]); setSetari(null)
+    setMesaje([]); setDestinatari([]); setLoturi([]); setIntegru(false); setConfirm(false); setEroare(''); setInventar(null); setSelectie([]); setSetari(null); setCampuri(null)
     if (!owner) return
     ;(async () => {
       try {
@@ -57,6 +74,10 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
           }
           const rezumat = inventarMail(tot)
           if (curent()) { setInventar(rezumat); setDestinatari(tot.filter(d => d.motive.length === 0)) }
+          // valorile câmpurilor lotului (COMUNA / ZILE / PROGRAM / TEL), definite o singură dată în bază — aceeași funcție o folosește și crearea
+          const c = await rpcMail(supabase, 'fn_red_mail_f2_campuri', { p_proiect: id, p_uat: uat })
+          if (!c || typeof c !== 'object' || Array.isArray(c)) throw new Error('Câmpurile textului nu au putut fi citite.')
+          if (curent()) setCampuri(c)
         }
       } catch (e) { if (curent()) setEroare(e.message) }
     })()
@@ -123,10 +144,19 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
       <p>{MESAJ_FARA_ATASAMENT}</p>
       <input aria-label="Subiect e-mail" style={S.input} value={subiect} maxLength={400} onChange={e => { setSubiect(e.target.value); intentie.current = null }} placeholder="Subiectul validat de Juridic" disabled={ocupat} />
       <textarea aria-label="Text e-mail" style={{ ...S.input, width: '100%', minHeight: 150 }} value={text} maxLength={19000} onChange={e => { setText(e.target.value); intentie.current = null }} placeholder="Textul exact al convocării" disabled={ocupat} />
+      <div aria-label="Câmpurile textului" style={S.card}>
+        <b>Câmpuri completate automat de server pe fiecare mesaj</b> (se scriu exact așa, cu acolade; un nume greșit = lotul nu se creează):
+        <ul>{CAMPURI_MAIL.map(c => <li key={c.nume}><code>{`{${c.nume}}`}</code> — {c.descriere}
+          {!c.perMesaj && <> → <i>{campuri === null ? 'se citește…' : campuri[c.nume] ? campuri[c.nume] : MESAJ_CAMP_NECOMPLETABIL}</i></>}
+          {c.perMesaj && <> → <i>diferit pe fiecare destinatar; în previzualizare apare mascat</i></>}</li>)}</ul>
+        <p>Destinatarii fără link personal valid (token lipsă sau expirat) sunt excluși din lot: {MOTIVE_MAIL.fara_token}.</p>
+      </div>
+      {text.trim() && !areLinkRaspuns(text) && <p role="alert">{MESAJ_FARA_LINK}</p>}
+      {motivCampuri && <p role="alert">{motivCampuri}</p>}
       {destinatari.map(d => <label key={d.id} style={{ display: 'block' }}>
         <input type="checkbox" disabled={ocupat || (!selectie.includes(d.id) && selectie.length >= 300)} checked={selectie.includes(d.id)} onChange={e => { intentie.current = null; setSelectie(xs => e.target.checked ? [...xs, d.id] : xs.filter(x => x !== d.id)) }} />{d.nume} · {d.email}
       </label>)}
-      <button style={S.btnP} disabled={ocupat || !selectie.length || !text.trim() || !subiect.trim()} onClick={() => actiune(async curent => {
+      <button style={S.btnP} disabled={ocupat || !selectie.length || !text.trim() || !subiect.trim() || !!motivCampuri} title={motivCampuri} onClick={() => actiune(async curent => {
         if (!intentie.current) intentie.current = { id: crypto.randomUUID(), proiect: proiect.id, uat, destinatari: [...selectie], subiect, text }
         const i = intentie.current
         const id = await rpcMail(supabase, 'fn_red_mail_lot_creeaza', { p_operatie: i.id, p_proiect: i.proiect, p_uat: i.uat, p_destinatari: i.destinatari, p_subiect: i.subiect, p_text: i.text })
@@ -136,7 +166,8 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
     {lot && <>
       <p>UAT lot: {uats.find(u => u.id === lot.uat_id)?.nume || lot.uat_id}</p>
       <p>Stare lot: {lot.stare} · {mesaje.length} destinatari · {mesaje.filter(m => m.stare === 'in_apel').length} trimiteri deja autorizate în curs · {mesaje.filter(m => m.stare === 'necunoscut').length} cu rezultat necunoscut (de reconciliat, nu se retrimit).</p>
-      {mesaje.map(m => <div style={S.card} key={m.id}><b>{m.nr_document} · {m.catre || 'conținut golit'}</b> · {m.stare}{m.eroare_cod ? ` (${m.eroare_cod})` : ''}<p>{m.subiect_final}</p><pre style={{ whiteSpace: 'pre-wrap' }}>{m.corp_text_final}</pre>{m.atasament_path && <p>Atașament: {m.atasament_nume}</p>}</div>)}
+      <p>Textul fiecărui mesaj e cel din snapshot (completat pe destinatar); linkul personal de răspuns apare mascat (ultimele 6 caractere), hash-ul se verifică pe textul întreg.</p>
+      {mesaje.map(m => <div style={S.card} key={m.id}><b>{m.nr_document} · {m.catre || 'conținut golit'}</b> · {m.stare}{m.eroare_cod ? ` (${m.eroare_cod})` : ''}<p>{mascheazaLink(m.subiect_final)}</p><pre style={{ whiteSpace: 'pre-wrap' }}>{mascheazaLink(m.corp_text_final)}</pre>{m.atasament_path && <p>Atașament: {m.atasament_nume}</p>}</div>)}
       {lot.stare === 'ciorna' && <>
         <label><input type="checkbox" checked={confirm} disabled={ocupat} onChange={e => setConfirm(e.target.checked)} />Aprob explicit acest lot, destinatarii și textele afișate.</label>
         <button style={S.btnP} disabled={ocupat || !confirm || !integru} onClick={() => actiune(async () => {

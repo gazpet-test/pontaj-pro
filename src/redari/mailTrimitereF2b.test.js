@@ -448,11 +448,13 @@ describe('F2b: mutanți pe garda „doar TEST” (fiecare TREBUIE prins) și dov
     const prins = r.body.cod !== 'transport_real_doar_test' || d.secret.mock.calls.length > 0
     expect(prins).toBe(true)   // mutantul chiar schimbă comportamentul (altfel testul de mai sus n-ar păzi nimic)
   })
-  it('DOVADA PE MAIN: handlerul de pe origin/main refuză lotul de TEST cu 423 transport_real_oprit (fără secret); cel nou îl trimite', async () => {
+  it('DOVADA ISTORICĂ: handlerul de pe main dinaintea F2b (SHA fix 8e6a3152) refuza lotul de TEST cu 423 transport_real_oprit (fără secret); cel nou îl trimite', async () => {
+    // SHA fix, nu origin/main: după îmbinarea F2b (#1134) main are transportul pornit, iar dovada ar fi apărut „trecută” printr-un return fără verificare
     let vechi
-    try { vechi = Object.fromEntries(['redariMailF2Handler.mjs', 'redariMailF2.mjs'].map(n => [n, execFileSync('git', ['show', `origin/main:${CAI[n]}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })])) } catch { vechi = null }
-    if (!vechi) return   // fără origin/main local (CI fără istoric): se sare, nu se simulează
-    const mod = await incarca(null, vechi)
+    try { vechi = Object.fromEntries(['redariMailF2Handler.mjs', 'redariMailF2.mjs'].map(n => [n, execFileSync('git', ['show', `8e6a3152:${CAI[n]}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })])) } catch { vechi = null }
+    if (!vechi) return   // fără istoric local (CI cu clonă superficială): se sare, nu se simulează
+    expect(vechi['redariMailF2.mjs']).toContain('TRANSPORT_REAL_ACTIV = false')   // SHA-ul e chiar cel dinaintea pornirii transportului
+    const mod = await incarca(null, { ...SURSE, ...vechi })   // handlerul vechi își importă vecinii: lipsesc din `vechi`, se iau din sursele curente
     const d = deps()
     const r = await mod.raspundeTrimitere({ jwt: 'f', corp: { lot_id: id } }, d)
     expect(r.status).toBe(423); expect(r.body.cod).toBe('transport_real_oprit'); expect(d.secret).not.toHaveBeenCalled()

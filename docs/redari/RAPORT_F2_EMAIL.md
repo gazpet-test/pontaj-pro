@@ -31,6 +31,47 @@ notează rolurile de cluster pe care le creează fixture-ul și le șterge la fi
 (și la întrerupere); antetul spune exact ce atinge, iar regresiile pe clona completă sunt descrise separat (`MAIL_PROBA_PASI.md` §3). Nerulat în PR
 (fără PostgreSQL local): îl rulează coordonatorul pe un cluster dispensabil. (3) **Atașamentul: varianta C** scrisă ca decizie luată, nu deschisă.
 
+**Linkul personal și câmpurile pe fiecare mesaj (19.11.2026, PR `redari/mail-link-personal`, migrarea `20261131i` neaplicată):** după primul lot de probă
+(un text pentru toți, nimic completat per destinatar), `fn_red_mail_lot_creeaza` completează în snapshotul fiecărui mesaj, înaintea hash-ului, câmpurile
+`{COMUNA}` / `{ZILE}` / `{PROGRAM}` / `{TEL}` (din aceeași sursă ca convocatorul, `fn_red_mail_f2_campuri`) și `{LINK_RASPUNS}` (linkul personal, `fn_red_link_raspuns`
+— aceeași formă ca în codul QR); câmp necunoscut = refuz; deținător fără token valid = exclus (`fara_token`); token invalid la trimitere = `anulat` /
+`token_expirat` în rezervare și în autorizare, fără apel; tokenul doar în snapshot (SELECT owner), mascat în ecran; `fn_red_mail_f2_poate` neatinsă.
+Motivul alegerii „în bază, nu în funcția edge”: hash-ul aprobat trebuie să acopere textul final al fiecărui mesaj (compunerea MIME refuză altfel). Probe:
+`mailLinkPersonal.test.jsx`, `scripts/pglite/test_redari_mail_link_local.mjs`. Detalii: `PLAN_EMAIL_REDARI.md` (blocul 18.11.2026, punctul „Câmpurile textului”),
+`MAIL_PROBA_PASI.md` §5a.
+**Runda 2 (Jakarinos #1138, NO-GO pe d0286c29):** (P1) un link personal literal în text / subiect ajungea la toți destinatarii → `fn_red_mail_f2_link_strain`
+(o definiție: link `…/redari/raspuns/<token>` pe orice origine sau token existent copiat fără adresă) refuză șablonul (`link_literal`) și verifică mesajul final
+al fiecărui destinatar (`link_strain`); ecranul oprește butonul. (P2) numele de câmp peste 40 de caractere treceau de parser → regexul fără limită + refuzul
+ORICĂREI acolade rămase, aceeași definiție în SQL și JS, tabelul comun de cazuri cu coloanele `refuz` / `link_literal`. (P2) un token expirat la rezervare
+întorcea zero rânduri și handlerul se oprea înaintea destinatarilor valizi → rezervarea trece peste anulările locale (token expirat, opt-out) la următorul mesaj;
+probat prin handlerul REAL peste RPC-urile din PGlite (ordinile „expirat, valid, valid”, „opt-out, expirat, valid”, „valid, expirat, valid”). În plus: paritatea
+celor patru câmpuri cu convocatorul pe tabelul comun `campuri_lot_cazuri.json`; dovezile istorice pe SHA fix (e13e7ef8 / 8e6a3152), nu pe `origin/main`.
+**Runda 3 (Jakarinos #1138, NO-GO pe b6f0f85b):** (P1) tokenul procent-codificat (`%54…`, tot codificat, dublu codificat) trecea de căutarea literală, iar
+routerul îl decodează → `fn_red_mail_f2_link_strain` caută pe FORMA DE CĂUTARE (o singură definiție, aceeași în JS: `formaCautareLink` / `linkStrain`):
+linkul EXACT al destinatarului scos întâi, NFKC, apoi până la punct fix (cel mult 12 treceri; nestabil = străin) fără spații / rupturi de linie / invizibile /
+semne combinante, liniuțele Unicode = „-”, `%XX` și entitățile HTML decodate; străin = **orice apariție a căii `redari/raspuns`** (litere mici, `\`, `//`, `.`,
+`..` rezolvate) în afara linkului exact al destinatarului, SAU un token existent (≠ al destinatarului) în orice fereastră de 43 de caractere (și lipit de alte
+litere); tokenul rămâne sensibil la majuscule. Refuzul oricărui `%XX` NU a fost ales: ar fi oprit URL-uri străine legitime (documente, hărți); refuzul căii
+în orice formă a fost ales (singura formă permisă e `{LINK_RASPUNS}`). Tabelul comun `link_strain_cazuri.json` (49 de cazuri, valori scrise de mână) e
+rulat identic în JS și în PGlite; tabelele de caractere sunt citite de test din migrare; mutanți pe normalizare (fără decodare, fără entități, fără
+invizibile, fără NFKC, un singur pas, fără ferestre, fără litere mici) — fiecare pică, și cu postcondiția scoasă.
+**Runda 4 (Jakarinos #1138, GO cu condiții pe 84e53dcd; P2 costul):** detectorul pe ferestre de 43 de caractere creștea aproape pătratic (substr pe text
+numără caracterele de la început) și rula pe fiecare din cele 300 de mesaje, sub lock-ul global `red_mail_setari` și numerotarea M. Aceeași regulă (cele 49 de
+cazuri comune identice, SQL și JS), calculată LINIAR: forma de căutare în `fn_red_mail_f2_link_forma` (pură; decodarea printr-o singură agregare; ferestrele
+distincte pe octeți), tokenurile prin indexul unic (`= ANY(ferestre)`); crearea lotului calculează forma O DATĂ (textul cu câmpurile lotului și „#” în locul
+linkului), ÎNAINTEA lock-ului global; sub lock rămân căutarea tokenurilor ei (o dată) și, pe fiecare mesaj, o comparație liniară (mesajul cu linkul lui → „#” =
+forma comună; altfel detectorul complet). Plafon explicit pe lungimea brută: text > 19.000 / subiect > 400 = `text_prea_lung`. Măsurat în PGlite (300 ×
+19.000, 20.000 de tokenuri sintetice): înainte RPC 267 s / lock 267 s, după RPC ~2,8 s / lock ~1,3 s; proba de timp (pragurile PGlite 10 s / 6 s) prinde
+mutanții „costul r3”, „fără forma comună” și „fără index”. Pe clonă: `supabase/tests/20261131i_redari_mail_link_cost.sql` (+ `_cost_concurenta.sh`, două sesiuni) — `MAIL_PROBA_PASI.md` §3.
+**Runda 5 (Jakarinos #1138 r4, NO-GO pe 91c0119f; două P2):** (1) plannerul muta conversia în octeți a șirului întreg în bucla ferestrelor (pătratic:
+55 / 197 / 722 ms la 4k / 8k / 16k), iar `= ANY(toate ferestrele)` putea alege scanarea tuturor tokenurilor. Acum: fiecare șir e convertit o singură dată
+(CTE MATERIALIZED), fără DISTINCT, iar tokenurile se caută pe bucăți de cel mult 64 de ferestre (`= ANY(bucată)` → indexul unic; o bucată costă cel mult 64
+de coborâri în index, deci scanarea tabelului e aleasă doar pe un tabel mic). Regula și cele 49 de cazuri neschimbate. Proba PGlite §7b: timpii pe 4k / 8k /
+16k / 19k cresc liniar, zero scanări secvențiale ale tokenurilor, EXPLAIN pe interogările exacte = indexul (cu valori și generic); mutantul „fără conversia
+unică” depășește pragul. (2) Scriptul cu două sesiuni compară explicit cu pragul (2000 ms) fiecare durată — A: RPC + lock-urile până la ROLLBACK, B: blocarea
+văzută pe setări și pe numerotare (acum prin același UPSERT ca RPC-ul, ca să vadă și rândul M nou) — și iese cu ESEC peste prag; testul mecanicii (psql fals)
++ mutanții comparației: `src/redari/mailLinkCostConcurenta.test.js`. Fixture-ul de cost folosește `id_parcela` = `CST-0001` (regula UAT a parcelelor).
+
 # Runda 2 — PR #1000, 05.11.2026
 
 Acest bloc descrie numai runda 2 și prevalează asupra istoricului de mai jos.
