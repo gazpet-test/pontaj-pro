@@ -12,7 +12,10 @@
 
 import * as XLSX from 'xlsx-js-style'
 import { faraDiacritice, normalizeazaNume } from './idParcela.js'
-import { verificaColoaneDecalate, numarRanduriDeVerificat } from './importVerificareFixa.js'   // ciclu de module sigur: vezi antetul acelui fișier
+import { verificaColoaneDecalate, numarRanduriDeVerificat, semnalFaraValori, indexDeVerificat, mascheazaRand } from './importVerificareFixa.js'   // ciclu de module sigur: vezi antetul acelui fișier
+// 19.11.2026 (r2): o valoare citată în detaliu, fără „ ” în interior (înlocuite cu "): mascarea taie detaliul pe ghilimele, iar o valoare
+// nu are voie să le închidă și să fabrice un segment nou
+export const citat = v => `„${String(v ?? '').replace(/[„”]/g, '"')}”`
 
 // Contract 8a: identitatea nu depinde de tronson; helperul legacy ramane in afara feliei.
 export function idParcela(cod3, n) {
@@ -53,7 +56,7 @@ export const grupNrCrtValid = g => typeof g === 'string' && g.length <= NR_CRT_G
 export const MOTIV_IDENTITATE_STEARSA = 'identitate ștearsă logic: o parcelă cu aceeași cheie a fost ștearsă — reactivare sau re-creare doar manual, nu se importă'
 export const STARE_NECONFIRMATA = 'necunoscut — importul s-a oprit înainte de confirmare; verificați parcela în BD'
 // câmpurile consolidate pe grupul Nr.Crt. x (P1-2 r7): [câmp, eticheta din detaliu]
-const CAMPURI_GRUP = [['poz_hg', 'HG'], ['nr_cadastral', 'cadastru'], ['tarla', 'tarla'], ['suprafata_temporara_mp', 'suprafață'], ['categoria_folosinta', 'categorie'], ['regim', 'regim']]
+export const CAMPURI_GRUP = [['poz_hg', 'HG'], ['nr_cadastral', 'cadastru'], ['tarla', 'tarla'], ['suprafata_temporara_mp', 'suprafață'], ['categoria_folosinta', 'categorie'], ['regim', 'regim']]
 export const MAX_NUMAR_PARCELA = 9999   // id_parcela are fix 4 cifre
 const MAX_RAND_ANTET = 30       // căutăm antetul în primele 30 de rânduri
 
@@ -369,7 +372,7 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
       const valoare = m.size ? m.values().next().value : null
       if (camp === 'regim') p.observatii = [valoare ? `Regim juridic: ${valoare}` : null, ...p.note].filter(Boolean).join('; ') || null
       else p[camp] = valoare
-      if (m.size > 1) contradictorii.push(`${eticheta}: ${[...m.keys()].map(v => `„${v}”`).join(' / ')}`)
+      if (m.size > 1) contradictorii.push(`${eticheta}: ${[...m.keys()].map(citat).join(' / ')}`)
     }
     p.cheie_sursa = cheieSursa(p.uat3, p.poz_hg, p.nr_cadastral, p.tarla)   // DUPĂ consolidare — independent de ordinea rândurilor
     if (!p.cheie_sursa) statistici.parcele_fara_cheie++
@@ -409,7 +412,7 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
     const p = parcelaDupaCheie.get(c.cheie_parcela)
     // r3 (J-P2-3 / C-P2-04): în preview doar „eligibilă … sub rezerva verificării în BD”; starea efectivă o scrie scrieImport (reconciliereSuspect)
     const stare = p.ambigua ? 'parcela NU se importă (ambiguă)' : (!p.cheie_sursa ? 'parcela NU se importă (fără cheie)' : STARE_ELIGIBILA)
-    cadastru_suspect.push({ rand: c.rand, uat: p.uat3, nr_crt: c.nr_crt, cheie_sursa: p.cheie_sursa, cheie_parcela: c.cheie_parcela, valoare: c.valoare, stare, motiv: MOTIV_CADASTRU_SUSPECT, detaliu: `cadastru: „${c.valoare}”; ${stare}` })
+    cadastru_suspect.push({ rand: c.rand, uat: p.uat3, nr_crt: c.nr_crt, cheie_sursa: p.cheie_sursa, cheie_parcela: c.cheie_parcela, valoare: c.valoare, stare, motiv: MOTIV_CADASTRU_SUSPECT, detaliu: `cadastru: ${citat(c.valoare)}; ${stare}` })
   }
   for (const p of parcele) { delete p.valori; delete p.uat_text; delete p.note }   // structuri de lucru, nu fac parte din preview
   // 19.11.2026 (pasul 1): semnalele „de verificat” — posibilă coloană decalată (nume / adresă / telefon / CNP / e-mail în tarla, cadastru,
@@ -503,18 +506,22 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
   const intrare = d => ({ rand: d.rand ?? null, nr_crt: d.nr_crt ?? null, nume: d.nume })
   // ambigue = TOATE rândurile grupurilor ambigue (din preview, inclusiv dublurile de nume — P2-2); fallback pe deținători pentru preview-uri vechi
   const ambigue = Array.isArray(preview?.ambigue)
-    ? preview.ambigue.map(a => ({ rand: a.rand ?? null, nr_crt: a.nr_crt ?? null, nume: a.nume, ...(a.uat ? { uat: a.uat } : {}), ...(a.cheie_sursa ? { cheie_sursa: a.cheie_sursa } : {}), motiv: a.motiv ?? MOTIV_AMBIGUU, ...(a.detaliu ? { detaliu: a.detaliu } : {}) }))
+    ? preview.ambigue.map(a => ({ rand: a.rand ?? null, nr_crt: a.nr_crt ?? null, nume: a.nume, ...(a.uat ? { uat: a.uat } : {}), ...(a.cheie_parcela ? { cheie_parcela: a.cheie_parcela } : {}), ...(a.cheie_sursa ? { cheie_sursa: a.cheie_sursa } : {}), motiv: a.motiv ?? MOTIV_AMBIGUU, ...(a.detaliu ? { detaliu: a.detaliu } : {}) }))
     : detinatoriToti.filter(d => parcelaPreview(d)?.ambigua).map(d => ({ ...intrare(d), motiv: parcelaPreview(d).motiv_ambiguitate ?? MOTIV_AMBIGUU }))
   // Jakarinos r1 P2-4: din preview (TOATE rândurile grupului, ca la ambigue); fallback pe deținători pentru preview-uri vechi
   const fara_cheie = Array.isArray(preview?.fara_cheie)
-    ? preview.fara_cheie.map(f => ({ rand: f.rand ?? null, nr_crt: f.nr_crt ?? null, nume: f.nume, ...(f.uat ? { uat: f.uat } : {}) }))
+    ? preview.fara_cheie.map(f => ({ rand: f.rand ?? null, nr_crt: f.nr_crt ?? null, nume: f.nume, ...(f.uat ? { uat: f.uat } : {}), ...(f.cheie_parcela ? { cheie_parcela: f.cheie_parcela } : {}) }))
     : detinatoriToti.filter(d => { const p = parcelaPreview(d); return p && !p.ambigua && !p.cheie_sursa }).map(intrare)
   const nr_crt_incompatibil = []   // r3 C-P1-01 — completat după citirea parcelelor existente
   const identitate_stearsa = []   // r6: rânduri cu identitatea doar pe parcele șterse logic — „de tratat”
   const refolosite_fara_nr_crt = []   // r4 C-P2-01 — Anexa 7 (fără Nr.Crt.) pe o parcelă existentă cu grup x.y: refolosită, raportată
   // r4 (J-P2-01 / C-P2-02): starea efectivă a fiecărei parcele, din ce s-a CONFIRMAT (oprit la verificare / refolosit / INSERT reușit / necunoscut)
   const stari = { oprite: new Set(), parcelaDupaCheie: null, inserate: new Set(), inCurs: new Set(), gata: false }
-  const diferenteBaza = { erori: preview?.erori ?? [], fara_cheie, ambigue, ...(Array.isArray(preview?.cadastru_suspect) ? { cadastru_suspect: preview.cadastru_suspect } : {}) }
+  // r2 (Jakarinos #1140 P1, decizia B): lista „de verificat” intră în lot, FĂRĂ valori (lista albă semnalFaraValori) — CSV-ul de după import
+  // și cel din istoric ascund cu ea aceleași câmpuri ca previzualizarea. Lipsa listei (lot vechi / Anexa 7) = lot fără verificarea fixă.
+  // Intrările de mai jos poartă și `cheie_parcela` (nu e dată personală: UAT + grupul Nr.Crt.), după care se face mascarea.
+  const diferenteBaza = { erori: preview?.erori ?? [], fara_cheie, ambigue, ...(Array.isArray(preview?.cadastru_suspect) ? { cadastru_suspect: preview.cadastru_suspect } : {}),
+    ...(Array.isArray(preview?.de_verificat) ? { de_verificat: preview.de_verificat.map(semnalFaraValori) } : {}) }
   // P2-1: contoarele scrise până acum — actualizate după FIECARE lot și păstrate la 'esuat'
   const scrise = { parcele_noi: 0, detinatori_noi: 0, contacte_noi: 0 }
   const stareParcela = cheie => {
@@ -528,7 +535,7 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
   const diferente = () => ({ ...diferenteBaza, ...(Array.isArray(diferenteBaza.cadastru_suspect) ? { cadastru_suspect: diferenteBaza.cadastru_suspect.map(c => {
     if (c.stare !== STARE_ELIGIBILA || !c.cheie_parcela) return c
     const stare = stareParcela(c.cheie_parcela)
-    return { ...c, stare, detaliu: `cadastru: „${c.valoare}”; ${stare}` }
+    return { ...c, stare, detaliu: `cadastru: ${citat(c.valoare)}; ${stare}` }
   }) } : {}) })
   const valoriLot = () => ({ parcele_noi: scrise.parcele_noi, detinatori_noi: scrise.detinatori_noi, diferente: { ...diferente(), contacte_noi: scrise.contacte_noi } })
 
@@ -566,7 +573,7 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
     const opriteNrCrt = new Set(); const motivOprire = new Map()
     const opreste = (p, motiv, detaliu, lista = nr_crt_incompatibil) => {
       opriteNrCrt.add(p.cheie); motivOprire.set(p.cheie, motiv)
-      for (const r of (p.randuri || [{ rand: p.rand ?? null, nr_crt: String(p.nr_crt ?? '') }])) lista.push({ rand: r.rand ?? null, nr_crt: r.nr_crt ?? null, uat: p.uat3, cheie_sursa: p.cheie_sursa, motiv, detaliu })
+      for (const r of (p.randuri || [{ rand: p.rand ?? null, nr_crt: String(p.nr_crt ?? '') }])) lista.push({ rand: r.rand ?? null, nr_crt: r.nr_crt ?? null, uat: p.uat3, cheie_parcela: p.cheie, cheie_sursa: p.cheie_sursa, motiv, detaliu })
     }
     for (const p of parcele) {
       if (!sursaAnexa7 && p.nr_crt == null) { opreste(p, MOTIV_NRCRT_INCOMPATIBIL, 'Nr.Crt. lipsă în previzualizarea TGZ (grup nedovedit)'); continue }
@@ -580,7 +587,7 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
       const grupBd = row.nr_crt_grup ?? null
       const grupFisier = p.grup_sub ?? null
       if (sursaAnexa7 && p.nr_crt == null) {
-        if (grupBd != null) refolosite_fara_nr_crt.push({ id_parcela: row.id_parcela, nr_crt_grup: grupBd, cheie_sursa: p.cheie_sursa, rand: p.rand ?? null })
+        if (grupBd != null) refolosite_fara_nr_crt.push({ id_parcela: row.id_parcela, nr_crt_grup: grupBd, cheie_parcela: p.cheie, cheie_sursa: p.cheie_sursa, rand: p.rand ?? null })
       } else if (grupFisier !== grupBd) {
         opreste(p, MOTIV_NRCRT_INCOMPATIBIL, `parcela existentă ${row.id_parcela} (${grupBd ? `grup ${grupBd}` : 'fără subnumăr'}) ≠ grupul din fișier ${p.grup_sub ?? p.nr_crt ?? '-'}`)
         continue
@@ -756,18 +763,18 @@ const MOTIVE_AMBIGUE = new Set([MOTIV_AMBIGUU, MOTIV_CONTRADICTORIU])
 const ORDINE_CATEGORII = ['ambiguă', 'fără cheie', 'Nr.Crt. incompatibil', 'identitate ștearsă', 'eroare', 'cadastru suspect', 'de verificat']
 // categoriile care sunt doar MARCAJ (rândul intră în import): un rând numai cu ele nu e „pus deoparte”
 const CATEGORII_INFORMATIVE = new Set(['cadastru suspect', 'de verificat'])
-export const DETALIU_ASCUNS = 'cheia și detaliul ascunse: parcelă cu rânduri de verificat (valorile pot fi date personale)'
 export function randuriDeTratat(preview) {
   const grupuri = new Map()
   let fara = 0
-  // 19.11.2026: pe o parcelă cu semnal „de verificat”, cheia sursă (UAT|HG|cadastru|tarla) și detaliile (care citează valori) pot conține
-  // chiar numele / telefonul ajuns în coloana greșită → în CSV-ul „fără nume” nu se scriu pentru niciun rând al acelei parcele
-  const parceleAscunse = new Set((preview?.de_verificat || []).map(v => v.cheie_parcela).filter(Boolean))
-  const adauga = (categorie, r) => {
+  // 19.11.2026 (r2, decizia B): pe o parcelă cu semnal „de verificat”, câmpul semnalat poate fi chiar numele / telefonul ajuns în coloana
+  // greșită → componenta lui din cheia sursă și bucata lui din detaliu se ascund cu mascheazaRand (aceeași funcție ca în taburile ecranului),
+  // pe previzualizare ȘI pe `diferente` dintr-un lot (unde lista e păstrată la import). Lot fără listă = neschimbat (lot fără verificare).
+  const idx = indexDeVerificat(preview?.de_verificat)
+  const adauga = (categorie, r0) => {
+    const r = mascheazaRand(r0, idx)
     const k = r.rand != null ? `r:${r.rand}` : `u:${fara++}`
-    if (!grupuri.has(k)) grupuri.set(k, { rand: r.rand ?? null, categorii: new Set(), uat: '', nr_crt: '', cheie_sursa: '', motive: [], detalii: [], ascuns: false })
+    if (!grupuri.has(k)) grupuri.set(k, { rand: r.rand ?? null, categorii: new Set(), uat: '', nr_crt: '', cheie_sursa: '', motive: [], detalii: [] })
     const g = grupuri.get(k)
-    if (categorie === 'de verificat' || (r.cheie_parcela && parceleAscunse.has(r.cheie_parcela))) g.ascuns = true
     g.categorii.add(categorie)
     if (!g.uat) g.uat = r.uat ?? (r.cheie_sursa ? String(r.cheie_sursa).split('|')[0] : '')
     if (!g.nr_crt && r.nr_crt != null) g.nr_crt = String(r.nr_crt)
@@ -785,7 +792,7 @@ export function randuriDeTratat(preview) {
   for (const v of preview?.de_verificat || []) adauga('de verificat', { rand: v.rand, uat: v.uat, nr_crt: v.nr_crt, cheie_parcela: v.cheie_parcela, motiv: `de verificat — ${v.motiv}` })
   const out = [...grupuri.values()].map(g => {
     const cat = ORDINE_CATEGORII.filter(c => g.categorii.has(c))
-    return { rand: g.rand, categorie: cat.join(' + '), uat: g.uat || '', nr_crt: g.nr_crt, cheie_sursa: g.ascuns ? '' : g.cheie_sursa, motiv: g.motive.join(' + '), detaliu: g.ascuns ? DETALIU_ASCUNS : g.detalii.join(' | '), informativ: cat.length > 0 && cat.every(c => CATEGORII_INFORMATIVE.has(c)) }
+    return { rand: g.rand, categorie: cat.join(' + '), uat: g.uat || '', nr_crt: g.nr_crt, cheie_sursa: g.cheie_sursa, motiv: g.motive.join(' + '), detaliu: g.detalii.join(' | '), informativ: cat.length > 0 && cat.every(c => CATEGORII_INFORMATIVE.has(c)) }
   })
   return out.sort((a, b) => (a.rand ?? Infinity) - (b.rand ?? Infinity))
 }

@@ -6,9 +6,10 @@ import * as XLSX from 'xlsx-js-style'
 import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { parseazaTgz, randuriDeTratat, csvRanduriDeTratat, numarRanduriPuseDeoparte, DETALIU_ASCUNS } from './importTgz.js'
+import { parseazaTgz, scrieImport, randuriDeTratat, csvRanduriDeTratat, numarRanduriPuseDeoparte, CAMPURI_GRUP, citat, STARE_ELIGIBILA, RPC_REZERVA_NUMERE } from './importTgz.js'
 import {
   verificaColoaneDecalate, pareTelefonSauCnp, pareEmailSauUrl, contineNume, contineAdresa, numarRanduriDeVerificat, MOTIV_VERIFICARE as M,
+  mascheazaRand, indexDeVerificat, semnalFaraValori, VALOARE_ASCUNSA as A, DETALIU_ASCUNS, ETICHETE_DETALIU, ETICHETA_IN_DETALIU, CAMPURI_VERIFICATE,
 } from './importVerificareFixa.js'
 import { canonizeazaIdentificator, MOTIV } from './identificatoriPublici.js'
 
@@ -77,15 +78,18 @@ describe('import TGZ — verificarea fixă a coloanelor decalate (previzualizare
     // „www.exemplu.ro” în cadastru n-are nicio cifră → e și „cadastru suspect” (marcajul vechi); două marcaje = tot informativ
     expect(dt.find(r => r.rand === 12)).toMatchObject({ categorie: 'cadastru suspect + de verificat', informativ: true })
   })
-  it('CSV-ul „fără nume”: pe parcelele cu semnal, cheia sursă și detaliul (care citează valori) sunt ascunse', () => {
+  it('CSV-ul „fără nume”: pe parcelele cu semnal se ascunde EXACT câmpul semnalat (în cheia sursă și în detaliu); restul se vede', () => {
     const dt = randuriDeTratat(p)
-    for (const r of dt.filter(r => [2, 3, 4, 5, 9, 10, 11, 12].includes(r.rand))) { expect(r.cheie_sursa, String(r.rand)).toBe(''); expect(r.detaliu).toBe(DETALIU_ASCUNS) }
+    // parcela 8 (rândurile 9–10): tarla semnalată (rândul 10) → doar componenta tarla și segmentul „tarla” din detaliu; HG / cadastru rămân
+    for (const rand of [9, 10]) expect(dt.find(r => r.rand === rand), String(rand)).toMatchObject({ cheie_sursa: `PRU|108|2345#|${A}`, detaliu: `tarla: ${A}` })
+    // parcela 10 (rândul 12): cadastru și tarla semnalate → ambele componente; starea parcelei (text fix) rămâne
+    expect(dt.find(r => r.rand === 12)).toMatchObject({ cheie_sursa: `PRU|110|${A}|${A}`, detaliu: `cadastru: ${A}; ${STARE_ELIGIBILA}` })
     const csv = csvRanduriDeTratat(dt).toUpperCase()
     for (const v of VALORI_SENSIBILE) expect(csv, v).not.toContain(v.toUpperCase())
     expect(csv).toContain('DE VERIFICAT — TARLA / NR. TOPO: PARE NUMELE DEȚINĂTORULUI')
     // fără semnale: CSV-ul rămâne ca înainte (cheia sursă și detaliul ambiguității se văd)
     const fara = randuriDeTratat({ ...p, de_verificat: [] })
-    expect(fara.find(r => r.rand === 9).cheie_sursa).toMatch(/^PRU\|/)
+    expect(fara.find(r => r.rand === 9)).toMatchObject({ cheie_sursa: 'PRU|108|2345#|40123#1234/5/6', detaliu: 'tarla: „40123#1234/5/6” / „IONESCU”' })
     expect(fara.some(r => r.categorie.includes('de verificat'))).toBe(false)
   })
   it('fișier fără semnale: listă goală, statistici 0', () => {
@@ -155,6 +159,9 @@ describe('regulile, pe tabel', () => {
     expect(pareEmailSauUrl('a@b')).toBe(false)
     expect(pareEmailSauUrl('a@b.ro')).toBe(true)
     expect(pareTelefonSauCnp(null)).toBe(false)
+    // limita asumată (Jakarinos #1140): un separator de articol în mijlocul telefonului întrerupe detecția — documentată, nu ascunsă
+    for (const s of ['#', ',', '+', ';']) expect(pareTelefonSauCnp(`0722${s}123456`), s).toBe(false)
+    expect(pareTelefonSauCnp('0722123456')).toBe(true)
   })
   it('telefonul / CNP-ul: aceeași formă ca detectorul anunțului (identificatoriPublici.js) pe valorile pe care acela le judecă doar după ferestre', () => {
     // valori cu forma subcâmpurilor de tarla (≤ 6 cifre pe subcâmp, fără „,” / „+”), într-un singur articol: cele două detectoare trebuie să coincidă
@@ -209,15 +216,153 @@ describe('mutanți', () => {
     expect(diferente(await incarca(F, [MUT.minLitere]))).toEqual(['nume scurt parțial'])
     expect(diferente(await incarca(F, [MUT.generice]))).toEqual(['generic TGZ'])
   })
-  it('fără apelul din parseazaTgz nu mai iese niciun semnal; fără ascunderea cheii, CSV-ul scoate numele', async () => {
+  it('fără apelul din parseazaTgz nu mai iese niciun semnal; fără mascarea în randuriDeTratat, CSV-ul scoate numele', async () => {
     const fara = await incarca('importTgz.js', [{ fisier: 'importTgz.js', din: 'const de_verificat = verificaColoaneDecalate(randuriVerificare)', in: 'const de_verificat = []' }])
     expect(fara.parseazaTgz(excel(), OPT).de_verificat).toEqual([])
     const intact = await incarca('importTgz.js')
     expect(intact.parseazaTgz(excel(), OPT).de_verificat.map(v => [v.rand, v.camp, v.motive])).toEqual(ASTEPTAT)
-    const neascuns = await incarca('importTgz.js', [{ fisier: 'importTgz.js', din: "cheie_sursa: g.ascuns ? '' : g.cheie_sursa,", in: 'cheie_sursa: g.cheie_sursa,' }])
+    const neascuns = await incarca('importTgz.js', [{ fisier: 'importTgz.js', din: 'const r = mascheazaRand(r0, idx)', in: 'const r = r0' }])
     const pv = neascuns.parseazaTgz(excel(), OPT)
     // rândul 12 e „cadastru suspect”: cheia lui (UAT|HG|cadastru|tarla) cuprinde e-mailul ajuns în tarla
     expect(neascuns.csvRanduriDeTratat(neascuns.randuriDeTratat(pv))).toContain('ELENA.D@EXEMPLU.RO')
     expect(intact.csvRanduriDeTratat(intact.randuriDeTratat(intact.parseazaTgz(excel(), OPT))).toUpperCase()).not.toContain('EXEMPLU')
+  })
+})
+
+// ── r2 (Jakarinos #1140 P1, decizia Răzvan 19.11.2026 = B): lista „de verificat” păstrată în lot; CSV-ul de după import și cel din istoric
+// ascund aceleași câmpuri ca previzualizarea. Supabase fals în memorie (forma din __tests__/importTgz.test.js), fără bază reală.
+function supabaseFals({ parceleExistente = [] } = {}) {
+  const tabele = { red_parcele: parceleExistente.map(r => ({ ...r })), red_detinatori: [], red_detinatori_contact: [], red_import_loturi: [] }
+  const inserariLot = []; let nr = 0
+  class Q {
+    constructor(t) { this.t = t; this.op = null; this.filtre = []; this.unu = false; this.interval = null }
+    insert(r) { this.op = 'insert'; this.randuri = Array.isArray(r) ? r : [r]; return this }
+    update(v) { this.op = 'update'; this.valori = v; return this }
+    select(c) { if (!this.op) this.op = 'select'; this.col = c; return this }
+    eq(c, v) { this.filtre.push(r => r[c] === v); return this }
+    in(c, l) { const s = new Set(l); this.filtre.push(r => s.has(r[c])); return this }
+    is(c, v) { this.filtre.push(r => (v === null ? r[c] == null : r[c] === v)); return this }
+    range(a, b) { this.interval = [a, b]; return this }
+    single() { this.unu = true; return this }
+    then(ok, ko) {
+      const t = tabele[this.t]; let rez
+      if (this.op === 'insert') {
+        const ins = this.randuri.map(r => ({ id: `uuid-${++nr}`, sters_la: null, ...JSON.parse(JSON.stringify(r)) }))
+        if (this.t === 'red_import_loturi') inserariLot.push(JSON.parse(JSON.stringify(this.randuri[0])))
+        t.push(...ins); rez = { data: this.col ? (this.unu ? ins[0] : ins) : null, error: null }
+      } else if (this.op === 'update') {
+        for (const r of t.filter(r => this.filtre.every(f => f(r)))) Object.assign(r, JSON.parse(JSON.stringify(this.valori)))
+        rez = { data: null, error: null }
+      } else {
+        let d = t.filter(r => this.filtre.every(f => f(r))); if (this.interval) d = d.slice(this.interval[0], this.interval[1] + 1)
+        rez = { data: this.unu ? d[0] ?? null : d, error: null }
+      }
+      return Promise.resolve(rez).then(ok, ko)
+    }
+  }
+  const numere = {}
+  const rpc = async (n, a) => { if (n !== RPC_REZERVA_NUMERE) return { data: null, error: { message: n } }; const s = (numere[a.p_uat3] ?? 0) + 1; numere[a.p_uat3] = s + a.p_n - 1; return { data: s, error: null } }
+  return { from: t => new Q(t), rpc, tabele, inserariLot }
+}
+// parcela 1 (rândul 2, numele în tarla) există deja în BD cu ALT grup Nr.Crt. → oprită „Nr.Crt. incompatibil”: intrarea din lot citează
+// cheia sursă, adică exact numele ajuns în tarla
+const CHEIE_P1 = 'PRU|101|51384#1079/1,1079/1/1|POPESCU MARIN'
+const EXISTENTA_P1 = { id: 'p-existenta', proiect_id: 'proiect-test', id_parcela: 'PRU-0900', cheie_sursa: CHEIE_P1, nr_crt_grup: '1.1', sters_la: null }
+const importaFictiv = async (mod = { parseazaTgz, scrieImport }) => {
+  const sb = supabaseFals({ parceleExistente: [EXISTENTA_P1] })
+  const pv = { ...mod.parseazaTgz(excel(), OPT), proiect_id_previzualizare: 'proiect-test' }
+  const rez = await mod.scrieImport(sb, pv, { proiectId: 'proiect-test', versiune: 'v-test' })
+  return { sb, rez, lot: sb.tabele.red_import_loturi[0] }
+}
+const contineSensibil = text => VALORI_SENSIBILE.filter(v => String(text).toUpperCase().includes(v.toUpperCase()))
+
+describe('import TGZ r2 — lista „de verificat” în lot; CSV-ul de după import și din istoric', () => {
+  it('lotul (și la creare, și la final) păstrează lista, fără valori; mascarea se face cu ea', async () => {
+    const { sb, rez, lot } = await importaFictiv()
+    expect(lot.stare).toBe('finalizat')
+    expect(rez.nr_crt_incompatibil.map(x => [x.rand, x.cheie_parcela])).toEqual([[2, 'PRU:1']])
+    for (const d of [sb.inserariLot[0].diferente, lot.diferente, rez.diferente]) {
+      expect(d.de_verificat.map(v => [v.rand, v.camp, v.motive])).toEqual(ASTEPTAT)
+      for (const v of d.de_verificat) expect(Object.keys(v).sort()).toEqual(['camp', 'cheie_parcela', 'motiv', 'motive', 'nr_crt', 'rand', 'uat'])
+      expect(contineSensibil(JSON.stringify(d.de_verificat))).toEqual([])
+    }
+    expect(lot.diferente.de_verificat[0]).toEqual({ rand: 2, uat: 'PRU', nr_crt: '1', cheie_parcela: 'PRU:1', camp: 'tarla', motive: [M.NUME], motiv: 'tarla / nr. topo: pare numele deținătorului' })
+    // decizia B: valoarea se importă totuși în parcelă, cum e în Excel
+    expect(sb.tabele.red_parcele.find(x => x.cheie_sursa === 'PRU|110|WWW.EXEMPLU.RO|ELENA.D@EXEMPLU.RO')).toMatchObject({ tarla: 'elena.d@exemplu.ro', nr_crt_grup: null })
+  })
+  it('CSV-ul de după import (rezultatul) și cel din istoric (lotul citit din BD) ascund EXACT câmpurile semnalate', async () => {
+    const { rez, lot } = await importaFictiv()
+    for (const [eticheta, d] of [['după import', rez.diferente], ['istoric', lot.diferente]]) {
+      const dt = randuriDeTratat(d)
+      expect(contineSensibil(csvRanduriDeTratat(dt)), eticheta).toEqual([])
+      expect(dt.find(r => r.rand === 2), eticheta).toMatchObject({ categorie: 'Nr.Crt. incompatibil + de verificat', cheie_sursa: `PRU|101|51384#1079/1,1079/1/1|${A}` })
+      expect(dt.find(r => r.rand === 10), eticheta).toMatchObject({ cheie_sursa: `PRU|108|2345#|${A}`, detaliu: `tarla: ${A}` })
+      expect(dt.find(r => r.rand === 12), eticheta).toMatchObject({ cheie_sursa: `PRU|110|${A}|${A}` })
+      expect(dt.find(r => r.rand === 12).detaliu, eticheta).toMatch(/^cadastru: \[ascuns: de verificat\]; parcela /)
+    }
+  })
+  it('lot vechi (fără listă): CSV-ul rămâne cel de dinainte (comportament neschimbat)', async () => {
+    const { lot } = await importaFictiv()
+    const { de_verificat, ...vechi } = lot.diferente
+    const dt = randuriDeTratat(vechi)
+    expect(dt.find(r => r.rand === 2).cheie_sursa).toBe(CHEIE_P1)
+    expect(dt.some(r => r.categorie.includes('de verificat'))).toBe(false)
+  })
+  it('mutant: fără lista în lot, CSV-ul de după import și cel din istoric scot din nou numele', async () => {
+    const mut = await incarca('importTgz.js', [{ fisier: 'importTgz.js', din: '...(Array.isArray(preview?.de_verificat) ? { de_verificat: preview.de_verificat.map(semnalFaraValori) } : {}) }', in: '}' }])
+    const { rez, lot } = await importaFictiv(mut)
+    expect(lot.diferente.de_verificat).toBeUndefined()
+    expect(contineSensibil(mut.csvRanduriDeTratat(mut.randuriDeTratat(rez.diferente)))).toContain('POPESCU')
+    expect(contineSensibil(mut.csvRanduriDeTratat(mut.randuriDeTratat(lot.diferente)))).toContain('POPESCU')
+  })
+})
+
+describe('mascheazaRand — o singură funcție, cazuri pozitive / negative', () => {
+  const idx = indexDeVerificat([{ rand: 4, cheie_parcela: 'X:1', camp: 'tarla' }])
+  it('fără semnal pe obiect → același obiect; cu semnal → copie (originalul neatins)', () => {
+    const o = { cheie_parcela: 'X:2', tarla: 'POPESCU', cheie_sursa: 'X|1|2|POPESCU' }
+    expect(mascheazaRand(o, idx)).toBe(o)
+    expect(mascheazaRand(o, indexDeVerificat([]))).toBe(o)
+    const s = { cheie_parcela: 'X:1', tarla: 'POPESCU', poz_hg: 'HG 1', cheie_sursa: 'X|HG 1|C 2|POPESCU' }
+    expect(mascheazaRand(s, idx)).toEqual({ cheie_parcela: 'X:1', tarla: A, poz_hg: 'HG 1', cheie_sursa: `X|HG 1|C 2|${A}` })
+    expect(s.tarla).toBe('POPESCU')
+  })
+  it('obiectul-parcelă (cheie) și rezerva pe rând (fără cheie_parcela)', () => {
+    expect(mascheazaRand({ cheie: 'X:1', tarla: 'POPESCU' }, idx).tarla).toBe(A)
+    expect(mascheazaRand({ rand: 4, cheie_sursa: 'X|1|2|POPESCU' }, idx).cheie_sursa).toBe(`X|1|2|${A}`)
+    expect(mascheazaRand({ rand: 5, cheie_sursa: 'X|1|2|POPESCU' }, idx).cheie_sursa).toBe('X|1|2|POPESCU')
+  })
+  it('cheia cu „|” în valoare: nu se ghicește poziția, se ascunde tot după UAT', () => {
+    expect(mascheazaRand({ cheie_parcela: 'X:1', cheie_sursa: 'X|1|A|B|POPESCU' }, idx).cheie_sursa).toBe(`X|${A}`)
+  })
+  it('detaliul: doar segmentul câmpului semnalat; formă necunoscută / ghilimele dezechilibrate → tot detaliul', () => {
+    const m = d => mascheazaRand({ cheie_parcela: 'X:1', detaliu: d }, idx).detaliu
+    expect(m('HG: „1” / „2”; tarla: „POPESCU” / „T 1”; și identitate ambiguă')).toBe(`HG: „1” / „2”; tarla: ${A}; și identitate ambiguă`)
+    expect(m('cadastru: „##”; parcela eligibilă')).toBe('cadastru: „##”; parcela eligibilă')
+    expect(m('tarla: „POPESCU; ION” / „T 1”')).toBe(`tarla: ${A}`)                  // „; ” în valoare nu taie segmentul
+    expect(m('tarla: „POPESCU / „T 1”')).toBe(DETALIU_ASCUNS)                       // ghilimele dezechilibrate
+    expect(m('grup Nr.Crt. invalid „7.1” (max 9 + 9 cifre)')).toBe(DETALIU_ASCUNS)  // etichetă necunoscută cu valoare citată
+    // o valoare care încearcă să închidă ghilimelele și să fabrice un segment: citat() o neutralizează
+    const fabricat = `tarla: ${citat('X”; HG: „POPESCU')}`
+    expect(fabricat).toBe('tarla: „X"; HG: "POPESCU”')
+    expect(m(fabricat)).toBe(`tarla: ${A}`)
+  })
+  it('„valoare” (cadastru suspect) se ascunde doar când cadastrul e semnalat', () => {
+    const c = { cheie_parcela: 'X:1', valoare: '##', detaliu: 'cadastru: „##”; s' }
+    expect(mascheazaRand(c, idx)).toEqual(c)
+    expect(mascheazaRand(c, indexDeVerificat([{ cheie_parcela: 'X:1', camp: 'nr_cadastral' }]))).toEqual({ cheie_parcela: 'X:1', valoare: A, detaliu: `cadastru: ${A}; s` })
+  })
+  it('semnal cu câmp necunoscut → se ascund toate cele trei câmpuri (L18)', () => {
+    const o = mascheazaRand({ cheie_parcela: 'X:1', poz_hg: 'a', nr_cadastral: 'b', tarla: 'c' }, indexDeVerificat([{ cheie_parcela: 'X:1', camp: 'altceva' }]))
+    expect([o.poz_hg, o.nr_cadastral, o.tarla]).toEqual([A, A, A])
+  })
+  it('semnalFaraValori: lista albă, motivul refăcut din coduri (nimic copiat din câmpuri străine)', () => {
+    const s = semnalFaraValori({ rand: 3, uat: 'X', nr_crt: '1', cheie_parcela: 'X:1', camp: 'tarla', motive: ['nume', 'POPESCU'], motiv: 'POPESCU', valoare: 'POPESCU', detaliu: 'POPESCU' })
+    expect(s).toEqual({ rand: 3, uat: 'X', nr_crt: '1', cheie_parcela: 'X:1', camp: 'tarla', motive: ['nume'], motiv: 'tarla / nr. topo: pare numele deținătorului' })
+    expect(semnalFaraValori({ camp: 'POPESCU' })).toMatchObject({ camp: '', motive: [] })
+  })
+  it('paritate: etichetele din detaliu = CAMPURI_GRUP din importTgz.js', () => {
+    expect([...ETICHETE_DETALIU]).toEqual(CAMPURI_GRUP.map(([, e]) => e))
+    for (const c of CAMPURI_VERIFICATE) expect(ETICHETA_IN_DETALIU[c]).toBe(CAMPURI_GRUP.find(([k]) => k === c)[1])
   })
 })

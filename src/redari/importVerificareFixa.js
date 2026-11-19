@@ -14,7 +14,10 @@
 //     (minim 2 cuvinte, dintre care unul de minim 4 litere, minim 8 caractere).
 //  3. TELEFON / CNP: detectorul din identificatoriPublici.js (aceleași ferestre de componente numerice consecutive și aceeași formă:
 //     0[237] + 8 cifre, 40 / 0040 + 9 cifre, 13 cifre), aplicat pe fiecare articol al valorii (despărțit de „#”, „,”, „+”, „;”):
-//     un cadastru compus („40123#1234/5/6”) nu se lipește peste „#” într-un fals telefon.
+//     un cadastru compus („40123#1234/5/6”) nu se lipește peste „#” într-un fals telefon. Limita asumată (Jakarinos #1140): un telefon
+//     scris CU unul dintre acești separatori în mijloc („0722#123456”, „0722,123456”, „0722+123456”, „0722;123456”) nu e prins.
+//  Limita de acoperire: se verifică DOAR rândurile ajunse într-un grup de parcelă; rândurile respinse înainte de grupare (Nr.Crt. invalid,
+//  nume gol, UAT necunoscut, tronson invalid — tab-ul „Erori”) nu sunt verificate și nu intră în import.
 //  4. E-MAIL / URL: „ceva@domeniu.tld”, „http(s)://”, „www.”, „domeniu.ro / .com / …”.
 import { faraDiacritice } from './idParcela.js'
 import { canonizeazaIdentificator, componenteNumerice, ferestreConsecutive, MOTIV } from './identificatoriPublici.js'
@@ -135,4 +138,105 @@ export function numarRanduriDeVerificat(semnale = []) {
   const vazute = new Set(); let faraRand = 0
   for (const s of semnale) { if (s?.rand == null) faraRand++; else vazute.add(s.rand) }
   return vazute.size + faraRand
+}
+
+/**
+ * Semnalul în forma păstrată în lot (diferente.de_verificat, runda 2 — decizia Răzvan 19.11.2026 = varianta B): DOAR lista albă de
+ * câmpuri, motivul refăcut din coduri (nu copiat), niciodată valoarea. Un câmp necunoscut rămâne „” → la mascare ascunde toate cele trei.
+ */
+export function semnalFaraValori(s) {
+  const camp = CAMPURI_VERIFICATE.includes(s?.camp) ? s.camp : ''
+  const coduri = new Set(Object.values(MOTIV_VERIFICARE))
+  const motive = Array.isArray(s?.motive) ? s.motive.filter(m => coduri.has(m)) : []
+  return {
+    rand: Number.isInteger(s?.rand) ? s.rand : null, uat: String(s?.uat ?? ''), nr_crt: String(s?.nr_crt ?? ''), cheie_parcela: String(s?.cheie_parcela ?? ''),
+    camp, motive, motiv: `${ETICHETA_CAMP_VERIFICAT[camp] ?? 'câmp necunoscut'}: ${motive.map(m => ETICHETA_MOTIV_VERIFICARE[m]).join(' + ') || 'de verificat'}`,
+  }
+}
+
+// ── Mascarea valorilor semnalate (runda 2): O SINGURĂ funcție, folosită de toate taburile previzualizării, de raportul de după import,
+// de CSV-ul previzualizării, de CSV-ul de după import și de CSV-ul din istoric. Se ascunde EXACT câmpul semnalat (poz. HG / cadastru /
+// tarla) al parcelei semnalate — în câmpul propriu-zis, în componenta lui din cheia sursă și în bucata lui din detaliu; restul rămâne vizibil.
+// Granularitatea e parcela (cheie_parcela): valorile se consolidează pe grupul Nr.Crt. (P1-2 r7), deci valoarea semnalată a unui rând
+// poate fi cea afișată pe parcelă și pe orice alt rând al ei. Valoarea în sine se scrie în continuare în parcelă (decizia B, nu C).
+export const VALOARE_ASCUNSA = '[ascuns: de verificat]'
+export const DETALIU_ASCUNS = 'detaliu ascuns: parcelă cu rânduri de verificat (valorile pot fi date personale)'
+// poziția câmpului în cheia sursă `UAT|HG|cadastru|tarla` (cheieSursa din importTgz.js) și eticheta lui în detaliu (CAMPURI_GRUP — testul de paritate)
+const POZITIE_IN_CHEIE = Object.freeze({ poz_hg: 1, nr_cadastral: 2, tarla: 3 })
+export const ETICHETA_IN_DETALIU = Object.freeze({ poz_hg: 'HG', nr_cadastral: 'cadastru', tarla: 'tarla' })
+/** Etichetele tuturor câmpurilor consolidate care pot apărea în detaliu (= CAMPURI_GRUP din importTgz.js; testul de paritate). */
+export const ETICHETE_DETALIU = Object.freeze(['HG', 'cadastru', 'tarla', 'suprafață', 'categorie', 'regim'])
+
+/** Indexul semnalelor: parcelă → câmpuri, rând → câmpuri. Un semnal cu câmp necunoscut ascunde toate cele trei câmpuri (L18). */
+export function indexDeVerificat(semnale) {
+  const peParcela = new Map(); const peRand = new Map()
+  const pune = (m, k, campuri) => { if (!m.has(k)) m.set(k, new Set()); for (const c of campuri) m.get(k).add(c) }
+  for (const s of Array.isArray(semnale) ? semnale : []) {
+    if (!s || typeof s !== 'object') continue
+    const campuri = CAMPURI_VERIFICATE.includes(s.camp) ? [s.camp] : CAMPURI_VERIFICATE
+    if (s.cheie_parcela) pune(peParcela, String(s.cheie_parcela), campuri)
+    if (s.rand != null) pune(peRand, String(s.rand), campuri)
+  }
+  return { peParcela, peRand, gol: peParcela.size === 0 && peRand.size === 0 }
+}
+
+// câmpurile semnalate pentru un obiect din previzualizare / din lot: după parcela lui (`cheie_parcela`; obiectul-parcelă are `cheie`)
+// și, ca rezervă, după rândul Excel (un rând aparține unei singure parcele)
+function campuriSemnalate(obj, idx) {
+  const out = new Set()
+  for (const k of [obj.cheie_parcela, obj.cheie]) if (typeof k === 'string' && idx.peParcela.has(k)) for (const c of idx.peParcela.get(k)) out.add(c)
+  if (obj.rand != null && idx.peRand.has(String(obj.rand))) for (const c of idx.peRand.get(String(obj.rand))) out.add(c)
+  return out
+}
+
+function mascheazaCheieSursa(cheie, campuri) {
+  const p = cheie.split('|')
+  if (p.length !== 4) return `${p[0]}|${VALOARE_ASCUNSA}`   // o valoare cu „|” decalează pozițiile → nu se ghicește, se ascunde tot după UAT
+  for (const c of campuri) if (p[POZITIE_IN_CHEIE[c]]) p[POZITIE_IN_CHEIE[c]] = VALOARE_ASCUNSA
+  return p.join('|')
+}
+
+// detaliul = segmente „eticheta: „v1” / „v2”” sau texte fixe (starea parcelei, „și …”), despărțite de „; ” ÎN AFARA ghilimelelor.
+// Valorile sunt scrise cu citat() din importTgz.js (fără „ ” în interior), deci o valoare nu poate închide ghilimelele și nu poate
+// fabrica un segment. Orice formă necunoscută (ghilimele dezechilibrate, etichetă străină cu valoare) → tot detaliul se ascunde.
+const RE_SEGMENT = /^([^:„”]+): „[^„”]*”(?: \/ „[^„”]*”)*$/
+function segmenteDetaliu(d) {
+  const seg = []; let cur = ''; let inCitat = false
+  for (let i = 0; i < d.length; i++) {
+    const ch = d[i]
+    if (ch === '„') { if (inCitat) return null; inCitat = true } else if (ch === '”') { if (!inCitat) return null; inCitat = false }
+    if (!inCitat && ch === ';' && d[i + 1] === ' ') { seg.push(cur); cur = ''; i++; continue }
+    cur += ch
+  }
+  if (inCitat) return null
+  seg.push(cur); return seg
+}
+function mascheazaDetaliu(d, campuri) {
+  const seg = segmenteDetaliu(d); if (!seg) return DETALIU_ASCUNS
+  const ascunse = new Set([...campuri].map(c => ETICHETA_IN_DETALIU[c]))
+  const out = []
+  for (const s of seg) {
+    if (!/[„”]/.test(s)) { out.push(s); continue }   // text fix, fără valori citate
+    const m = s.match(RE_SEGMENT)
+    if (!m || !ETICHETE_DETALIU.includes(m[1])) return DETALIU_ASCUNS
+    out.push(ascunse.has(m[1]) ? `${m[1]}: ${VALOARE_ASCUNSA}` : s)
+  }
+  return out.join('; ')
+}
+
+/**
+ * mascheazaRand(obj, idx) → copia obiectului cu valorile semnalate ascunse (obiectul original nu se schimbă); fără semnal = același obiect.
+ *  idx = indexDeVerificat(previzualizare.de_verificat | diferente.de_verificat). Se ascund: câmpurile poz_hg / nr_cadastral / tarla
+ *  semnalate, `valoare` (doar la „cadastru suspect” = nr. cadastral) când cadastrul e semnalat, componenta lor din `cheie_sursa` și
+ *  bucata lor din `detaliu`. Numele / adresele / contactele NU se ating aici (previzualizarea le arată intenționat).
+ */
+export function mascheazaRand(obj, idx) {
+  if (!obj || typeof obj !== 'object' || !idx || idx.gol) return obj
+  const campuri = campuriSemnalate(obj, idx); if (!campuri.size) return obj
+  const out = { ...obj }
+  for (const c of campuri) if (out[c] != null && out[c] !== '') out[c] = VALOARE_ASCUNSA
+  if (campuri.has('nr_cadastral') && out.valoare != null && out.valoare !== '') out.valoare = VALOARE_ASCUNSA
+  if (typeof out.cheie_sursa === 'string' && out.cheie_sursa) out.cheie_sursa = mascheazaCheieSursa(out.cheie_sursa, campuri)
+  if (typeof out.detaliu === 'string' && out.detaliu) out.detaliu = mascheazaDetaliu(out.detaliu, campuri)
+  return out
 }

@@ -567,8 +567,9 @@ describe('scrieImport — fake supabase', () => {
     const sb = creeazaFakeSupabase()
     const r = await scrieImport(sb, preview, { proiectId: 'proiect-1', versiune: 'v1' })
     expect(r).toMatchObject({ parceleNoi: 1, detinatoriNoi: 1, contacteNoi: 1 })
-    expect(r.ambigue).toEqual([{ rand: 4, nr_crt: '1', nume: 'Test Ambiguu A', uat: 'HUS', cheie_sursa: 'HUS|HG 1|CF 1|T1', motiv: MOTIV_AMBIGUU }, { rand: 5, nr_crt: '2', nume: 'Test Ambiguu B', uat: 'HUS', cheie_sursa: 'HUS|HG 1|CF 1|T1', motiv: MOTIV_AMBIGUU }])
-    expect(r.fara_cheie).toEqual([{ rand: 6, nr_crt: '3', nume: 'Test Fără Cheie', uat: 'HUS' }])
+    // r2 (#1140): intrările poartă și cheie_parcela (UAT + grup Nr.Crt., nu e dată personală) — după ea se ascund valorile semnalate
+    expect(r.ambigue).toEqual([{ rand: 4, nr_crt: '1', nume: 'Test Ambiguu A', uat: 'HUS', cheie_parcela: 'HUS:1', cheie_sursa: 'HUS|HG 1|CF 1|T1', motiv: MOTIV_AMBIGUU }, { rand: 5, nr_crt: '2', nume: 'Test Ambiguu B', uat: 'HUS', cheie_parcela: 'HUS:2', cheie_sursa: 'HUS|HG 1|CF 1|T1', motiv: MOTIV_AMBIGUU }])
+    expect(r.fara_cheie).toEqual([{ rand: 6, nr_crt: '3', nume: 'Test Fără Cheie', uat: 'HUS', cheie_parcela: 'HUS:3' }])
     expect(sb.tabele.red_parcele.map(p => p.id_parcela)).toEqual(['HUS-0001'])
     expect(sb.tabele.red_detinatori.map(d => d.nume)).toEqual(['Test Bun'])
     expect(sb.apeluri.filter(a => a.op === 'rpc')[0].args.p_n).toBe(1)
@@ -927,7 +928,7 @@ describe('04.11.2026 r4 — reimport: chei neschimbate; grupul Nr.Crt. comparat 
     } else {
       expect(r).toMatchObject({ parceleRefolosite: 0, parceleNoi: 1, detinatoriNoi: 1 })
       const grupFisier = nou.includes('.') ? nou.split(/[\/-]/)[0] : nou.split(/[\/-]/)[0]
-      expect(r.nr_crt_incompatibil).toEqual([{ rand: 4, nr_crt: nou, uat: 'HUS', cheie_sursa: 'HUS|HG 1|123##|T1#', motiv: MOTIV_NRCRT_INCOMPATIBIL,
+      expect(r.nr_crt_incompatibil).toEqual([{ rand: 4, nr_crt: nou, uat: 'HUS', cheie_parcela: `HUS:${grupFisier}`, cheie_sursa: 'HUS|HG 1|123##|T1#', motiv: MOTIV_NRCRT_INCOMPATIBIL,
         detaliu: `parcela existentă HUS-0001 (${grupBd ? `grup ${grupBd}` : 'fără subnumăr'}) ≠ grupul din fișier ${grupFisier}` }])
       expect(sb.tabele.red_parcele.map(p => p.id_parcela)).toEqual(['HUS-0001', 'HUS-0002'])
       expect(sb.tabele.red_detinatori.map(d => d.nume)).toEqual(['Test Vechi', 'Test Opt'])   // „Test Nou” NU s-a lipit pe parcela existentă
@@ -962,7 +963,7 @@ describe('04.11.2026 r4 — reimport: chei neschimbate; grupul Nr.Crt. comparat 
     const anexa = { ...pv, parcele: pv.parcele.map(p => ({ ...p, nr_crt: null, grup_sub: null })) }
     const r = await scrieImport(sb, anexa, { proiectId: 'proiect-1', versiune: 'a7', sursa: 'ANEXA7' })
     expect(r).toMatchObject({ parceleRefolosite: 1, parceleNoi: 1, nr_crt_incompatibil: [] })
-    expect(r.refolosite_fara_nr_crt).toEqual([{ id_parcela: 'HUS-0001', nr_crt_grup: '166.1', cheie_sursa: 'HUS|HG 1|123##|T1#', rand: 4 }])
+    expect(r.refolosite_fara_nr_crt).toEqual([{ id_parcela: 'HUS-0001', nr_crt_grup: '166.1', cheie_parcela: 'HUS:1', cheie_sursa: 'HUS|HG 1|123##|T1#', rand: 4 }])
     expect(sb.tabele.red_parcele.map(p => [p.id_parcela, p.nr_crt_grup])).toEqual([['HUS-0001', '166.1'], ['HUS-0002', null]])
     expect(sb.tabele.red_import_loturi.at(-1).diferente.refolosite_fara_nr_crt).toEqual(r.refolosite_fara_nr_crt)
   })
