@@ -4,6 +4,11 @@
    După primul AWB real (18.11.2026): tariful fiecărui AWB și totalul lotului sunt afișate (gol = „tarif necunoscut”, evidențiat — procedura
    cere oprire); „1. Propune” e dezactivat când nu mai e nimic de propus (starePropunere); „2b. Marchează real” e dezactivat cât garda „doar TEST”
    e pornită (stareMarcajReal); butonul și fișierul etichetelor nu mai afirmă A6 (prima probă a venit A4; formatul se verifică pe PDF).
+   oPOD (18.11.2026, 27,16 lei în loc de 13,16 pe primul AWB): bifa „Confirmare de primire în original (oPOD)” e a owner-ului, pe lot, după
+   marcaj și înainte de prima aprobare (fn_red_fan_lot_opod; red_fan_loturi.opod, implicit oprit), intră în corp și în hash; dialogul de aprobare
+   spune dacă oPOD e cerut și costul estimat; rândul plicului arată „oPOD” și ultimul eveniment de urmărire cu ora României (textUltimEveniment).
+   Cât coloana `opod` lipsește (codul publicat înaintea migrării 20261227a), „1. Propune” / „2c. Aprobă” / „3. Generează AWB” sunt dezactivate cu
+   motivul lor (citesteEvidentaFan.opodInstalat → stariPasi): nicio aprobare „fără B” înaintea deducerii istorice a migrării; restul merge.
    Cât timp TRANSPORT_REAL_ACTIV = false (redariFanHandler.mjs) TOȚI pașii și TOATE operațiile sunt vizibile și dezactivate, cu „transport
    oprit”; nu se cheamă funcția edge și nu se scrie nimic. Activarea pentru Testul 1 (DOAR_PROIECTE_TEST = true): activ DOAR pe un proiect
    „TEST-…” cu lotul marcat TEST (aceeași gardă ca funcția edge, transportPermis); pe orice alt lot, pașii rămân dezactivați cu motivul.
@@ -12,10 +17,11 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { pregatestePlicuriFan, contactPePlic, LIMITA_LOT_PILOT_IMPLICITA, FORMAT_ETICHETA, manifestTiparire, partiManifest, cheieTiraj, idTiraj, tirajDin,
-  ASTEPTARE_DUPA_OPRIRE_S } from '../../../supabase/functions/_shared/redariFan.mjs'
+  ASTEPTARE_DUPA_OPRIRE_S, COST_OPOD_ESTIMAT_LEI, citesteLotFan, lipsaColoana } from '../../../supabase/functions/_shared/redariFan.mjs'
 import { stariPasi, stareMarcaj, stareMarcajReal, starePropunere, stariOperatii, TRANSPORT_REAL_ACTIV, transportPermis, MESAJ_TRANSPORT_OPRIT, ETICHETE_STARE_FAN, ETICHETE_URMARIRE, ETICHETE_CONFIRMARE,
   prefixLot, titluLot, csvBorderouFan, mesajEdgeFan, numeEtichete, numeControl, controlLotFan, confirmaTirajFinal, stareOprireTiraj, textFapteUrmarire,
-  fapteContrazise, optiuniSolutionare, solutioneazaUrmarire, etichetaUrmarire, textTarif, textTotalTarif, totalTarifLot, MESAJ_TARIF_NECUNOSCUT } from '../fanLot.js'
+  fapteContrazise, optiuniSolutionare, solutioneazaUrmarire, etichetaUrmarire, textTarif, textTotalTarif, totalTarifLot, MESAJ_TARIF_NECUNOSCUT,
+  stareOpod, TEXT_OPOD, opodLot, textAprobare, textUltimEveniment, textOpodRand } from '../fanLot.js'
 import { docxPaginaControl } from '../plicuri.js'
 import { descarcaBlob } from '../docx.js'
 import { G, S, Modal, msgEroare, citestePaginat, etichetaRetur, MOTIVE_RETUR } from './comune.jsx'
@@ -27,33 +33,47 @@ const LOT_IN = 100
 const COL_FAN = 'id,plic_id,nr_plic,stare,hash_date,awb,tarif,tva,motiv,urmarire_stare,ultim_eveniment,ultim_eveniment_la,ridicat_propus,livrat_la,retur_propus,'
   + 'retur_cunoscut,ridicat_contrazis,livrat_contrazis,retur_contrazis,confirmare_stare,versiune_urmarire'   // runda 5: versiunea = CAS-ul soluționării; 18.11: tva (lângă tarif)
 const ETICHETE_RETUR = Object.fromEntries(MOTIVE_RETUR.map(m => [m.cod, etichetaRetur(m.cod)]))
+const COST_OPOD_TEXT = `${COST_OPOD_ESTIMAT_LEI} lei`   // 18.11: costul estimat al oPOD-ului (oferta), doar în dialoguri
 // tabelul FAN lipsește (migrarea neaplicată) ≠ eroare de citire (L18)
 export const lipsaTabel = e => ['PGRST205', '42P01'].includes(e?.code) || /does not exist|could not find the table/i.test(e?.message || '')
 
-/** Evidența FAN a unui lot, citită cu JWT-ul omului: { instalata, fanLot, randuri, limita }. Tabel lipsă = neinstalată; altă eroare = aruncată (L18).
- *  Folosită și de ecranul Plicuri (arhiva documentelor pe manifestul comun). */
+// coloana lipsește (migrarea 20261227a neaplicată încă) ≠ eroare de citire: evidența rămâne citibilă, alegerea oPOD e „neinstalată” (opod: null);
+// definiția e în redariFan.mjs (comună cu funcția edge, L19), re-exportată pentru testele vechi
+export { lipsaColoana }
+const COL_LOT = 'lot_id,test,prima_aprobare_la,tiraj_cheie,tiraj_nr,tiraj_la,tiraj_oprit_la'
+
+/** Evidența FAN a unui lot, citită cu JWT-ul omului: { instalata, fanLot, randuri, limita, opodInstalat }. Tabel lipsă = neinstalată; altă eroare =
+ *  aruncată (L18). fanLot.opod (18.11.2026): alegerea oPOD a lotului (boolean); null = coloana nu e instalată încă (bifa dezactivată) — aceeași
+ *  citire ca în funcția edge (citesteLotFan). opodInstalat (runda 3) = coloana `opod` există, confirmat de citire (și pe un lot nemarcat, fără
+ *  rând); cât e false, ecranul nu propune / nu aprobă / nu generează (stariPasi). Folosită și de ecranul Plicuri (arhiva documentelor). */
 export async function citesteEvidentaFan(client, lotId, esteCurent = () => true) {
   try {
     const randuri = await citestePaginat(() => client.from('red_fan_awb').select(COL_FAN).eq('lot_id', lotId), { cheie: 'id', esteCurent })
-    const { data: fl, error: e1 } = await client.from('red_fan_loturi').select('lot_id,test,prima_aprobare_la,tiraj_cheie,tiraj_nr,tiraj_la,tiraj_oprit_la').eq('lot_id', lotId).maybeSingle()
+    const { data: fl, error: e1, opodInstalat } = await citesteLotFan(coloane => client.from('red_fan_loturi').select(coloane).eq('lot_id', lotId).maybeSingle(), COL_LOT)
     if (e1) throw e1
     const { data: st, error: e2 } = await client.from('red_fan_setari').select('limita_lot').maybeSingle()
     if (e2) throw e2
-    return { instalata: true, randuri, fanLot: fl || null, limita: st?.limita_lot ?? null }
-  } catch (e) { if (lipsaTabel(e)) return { instalata: false, randuri: [], fanLot: null, limita: null }; throw e }
+    return { instalata: true, randuri, fanLot: fl || null, limita: st?.limita_lot ?? null, opodInstalat: opodInstalat === true }
+  } catch (e) { if (lipsaTabel(e)) return { instalata: false, randuri: [], fanLot: null, limita: null, opodInstalat: false }; throw e }
 }
 /** F1: dreptul de operator (fn_red_fan_e_operator, BD), plafonul zilei (v_red_fan_plafon_azi), intențiile și cererile lotului — fiecare citire separat; o eroare
  *  lasă câmpul null (= „necitit”, afișat ca atare: L18), nu „fals” / „0”. Evidența veche (20261212a) fără F1 (20261228a) = toate null. */
+export const COL_INTENTII = 'cheie,lot_id,operator,stare,lucru_pana_la,inceput_la,incheiata_la,incheiata_de,rezultat,ramase,necunoscute,generate,de_aprobat'
 export async function citesteStareF1(client, lotId) {
   const incearca = async f => { try { const { data, error } = await f(); return error ? null : data } catch { return null } }
+  // runda 2 pe #1136: momentul în care PORNEȘTE citirea intențiilor — absența unei chei din ea contează doar dacă citirea a pornit după arenda apăsării
+  const intentiiCititeLa = Date.now()
   const [op, plafon, intentii, cereri] = await Promise.all([
     incearca(() => client.rpc('fn_red_fan_e_operator')),
     incearca(() => client.from('v_red_fan_plafon_azi').select('limita_zi,aprobate,incap,presupunere_429,doar_proiecte_test,limita_lot').maybeSingle()),
-    incearca(() => client.from('v_red_fan_intentii').select('cheie,lot_id,operator,stare,lucru_pana_la,inceput_la,incheiata_la,incheiata_de,rezultat,ramase,necunoscute,generate,de_aprobat').eq('lot_id', lotId).order('inceput_la', { ascending: false }).limit(50)),
+    incearca(() => client.from('v_red_fan_intentii').select(COL_INTENTII).eq('lot_id', lotId).order('inceput_la', { ascending: false }).limit(50)),
     incearca(() => client.from('red_fan_cereri_aprobare').select('id,lot_id,cerut_de,cerut_la,intentie,n,zi_ro,stare,decis_de,decis_la,motiv').eq('lot_id', lotId).order('cerut_la', { ascending: false }).limit(50)),
   ])
-  return { esteOperator: typeof op === 'boolean' ? op : null, plafon: plafon || null, intentii: Array.isArray(intentii) ? intentii : null, cereri: Array.isArray(cereri) ? cereri : null }
+  return { esteOperator: typeof op === 'boolean' ? op : null, plafon: plafon || null, intentii: Array.isArray(intentii) ? intentii : null, cereri: Array.isArray(cereri) ? cereri : null,
+    intentiiCititeLa: Array.isArray(intentii) ? intentiiCititeLa : null }
 }
+/** Intenția cu cheia EXACTĂ (Jakarinos #1136 r1 P1): citirea de după un apel `trimite`, pornită după răspuns. { data: rândul | null, error }. */
+export const citesteIntentie = (client, cheie) => client.from('v_red_fan_intentii').select(COL_INTENTII).eq('cheie', cheie).maybeSingle()
 
 // convocariPePlic = convocările pe plic din ecranul Plicuri (aceleași citiri ca arhiva documentelor): numărul documentelor pe pagina de control
 export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariPePlic = {}, esteOwner = false, esteAdmin = false, poateScrie = false, onClose, onRetur }) {
@@ -63,7 +83,7 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   // runda 5: formularul de soluționare a unei contradicții — rândul EXACT văzut (valori + versiune), alegerile și motivul; unul odată
   const [sol, setSol] = useState(null)
   // F1: dreptul de operator (din BD), plafonul zilei, intențiile și cererile lotului (null = necitit)
-  const [f1, setF1] = useState({ esteOperator: null, plafon: null, intentii: null, cereri: null })
+  const [f1, setF1] = useState({ esteOperator: null, plafon: null, intentii: null, cereri: null, intentiiCititeLa: null })
   const gen = useRef(0), ocupat = useRef(false)
   // L24 (Jakarinos #1118 r1 P2): acțiunile au generația lor + lotul pentru care au pornit; schimbarea lotului / închiderea le invalidează
   const genActiune = useRef(0), lotCurent = useRef(lot.id)
@@ -86,9 +106,10 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
       const cont = []
       for (let i = 0; i < det.length; i += LOT_IN) cont.push(...await citestePaginat(() => supabase.from('red_detinatori_contact')
         .select('detinator_id,telefon,adresa_strada,adresa_sat,adresa_comuna,adresa_judet,cod_postal').in('detinator_id', det.slice(i, i + LOT_IN)), { cheie: 'detinator_id', esteCurent: curent }))
-      const pregatite = await pregatestePlicuriFan({ plicuri: active, convocari: conv, contacte: cont, proiectCod: proiect.cod })
-      const stare = await citesteEvidentaFan(supabase, lot.id, curent)   // evidența FAN (după migrare): rândurile, marcajul, plafonul
-      const f1Nou = stare.instalata ? await citesteStareF1(supabase, lot.id) : { esteOperator: null, plafon: null, intentii: null, cereri: null }
+      const stare = await citesteEvidentaFan(supabase, lot.id, curent)   // evidența FAN (după migrare): rândurile, marcajul, oPOD-ul, plafonul
+      // corpurile (și hash-urile) se construiesc cu alegerea oPOD a lotului CITITĂ acum: ce se propune / aprobă = ce va pleca (aceeași funcție ca în edge)
+      const pregatite = await pregatestePlicuriFan({ plicuri: active, convocari: conv, contacte: cont, proiectCod: proiect.cod, opod: opodLot(stare.fanLot) })
+      const f1Nou = stare.instalata ? await citesteStareF1(supabase, lot.id) : { esteOperator: null, plafon: null, intentii: null, cereri: null, intentiiCititeLa: null }
       if (!curent()) return
       setRanduri(pregatite); setFan(stare); setF1(f1Nou)
     })().catch(e => { if (curent()) setEroare(msgEroare(e)) })
@@ -103,13 +124,17 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
   // garda „doar TEST” (aceeași ca în funcția edge): proiectul lotului + marcajul lui; marcajul cere doar proiectul de TEST
   // F1: esteOperator = fn_red_fan_e_operator (owner-ul e inclus în BD); deschide pașii pe care funcția edge îi permite operatorului
   const st = { transportActiv: TRANSPORT_REAL_ACTIV, evidentaInstalata: !!fan?.instalata, esteOwner, esteOperator: f1.esteOperator === true, esteAdmin, randuri: awb, fanLot: fan?.fanLot, proiectCod: proiect?.cod }
-  const pasi = stariPasi({ ...st, poateScrie, gataDePropus: propunere.dePropus.length, motivPropunere: propunere.motiv })
+  // runda 3 #1135: fără coloana opod (migrarea 20261227a neaplicată) nu se propune / aprobă / generează — doar ce e confirmat de citire trece
+  const pasi = stariPasi({ ...st, poateScrie, gataDePropus: propunere.dePropus.length, motivPropunere: propunere.motiv, opodInstalat: fan?.opodInstalat === true })
   const operatii = stariOperatii(st)
   const marcajTest = stareMarcaj(st), marcajReal = stareMarcajReal(st)   // 18.11: „real” e oprit cât garda „doar TEST” e pornită
+  const opodSt = stareOpod(st)   // 18.11: alegerea oPOD (owner, după marcaj, înainte de prima aprobare)
   const permis = transportPermis({ proiectCod: proiect?.cod, fanLot: fan?.fanLot })
   const AJUTOR_MARCAJ = 'doar owner-ul, înainte de prima aprobare: lot de TEST sau lot real'
+  const AJUTOR_OPOD = 'doar owner-ul, după marcaj și înainte de prima aprobare: confirmarea de primire se întoarce în original (cost suplimentar pe plic); implicit oprit = confirmarea electronică de pe terminalul curierului'
   const pas = k => (k === 'marcaj_test' ? { ...marcajTest, cheie: k, titlu: 'Marcaj TEST', ajutor: AJUTOR_MARCAJ }
     : k === 'marcaj_real' ? { ...marcajReal, cheie: k, titlu: 'Marcaj real', ajutor: AJUTOR_MARCAJ }
+    : k === 'opod' ? { ...opodSt, cheie: k, titlu: 'oPOD', ajutor: AJUTOR_OPOD }
     : pasi.find(p => p.cheie === k) || operatii.find(p => p.cheie === k))
   const tarifLot = totalTarifLot(awb)
   // manifestul COMUN (aceeași funcție ca funcția edge și arhiva documentelor): mulțimea și ordinea etichetelor
@@ -175,11 +200,25 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
     const { error } = await supabase.rpc('fn_red_fan_lot_marcheaza', { p_lot_id: lot.id, p_test: test }); if (error) throw error
     return test ? 'Lot marcat: TEST.' : 'Lot marcat: real.'
   })
+  // 18.11: alegerea oPOD a lotului (owner, după marcaj, înainte de prima aprobare): RPC-ul refuză după prima aprobare; schimbarea = alte corpuri /
+  // hash-uri → plicurile deja propuse se re-propun (ecranul le arată „datele s-au schimbat după propunere”)
+  const schimbaOpod = cere => executa('opod', async curent => {
+    if (!window.confirm(cere ? `Ceri oPOD pentru ${lot.nr_lot}: confirmarea de primire semnată se întoarce în ORIGINAL, cu cost suplimentar estimat de ${COST_OPOD_TEXT} pe plic? Plicurile deja propuse trebuie propuse din nou.`
+      : `Renunți la oPOD pentru ${lot.nr_lot}: confirmarea de primire rămâne cea electronică, de pe terminalul curierului (fără cost suplimentar)? Plicurile deja propuse trebuie propuse din nou.`)) return 'Nimic schimbat.'
+    if (!curent()) return OPRIT
+    const { data, error } = await supabase.rpc('fn_red_fan_lot_opod', { p_lot_id: lot.id, p_opod: cere }); if (error) throw error
+    if (data !== cere) throw new Error('rezultat neconfirmat')
+    return cere ? 'oPOD cerut pe lot: confirmarea de primire în original (+ cost pe plic). Propune din nou plicurile.' : 'Fără oPOD pe lot: confirmarea electronică a curierului. Propune din nou plicurile.'
+  })
   const aproba = () => executa('aproba', async curent => {
     const h = new Map(randuri.filter(r => r.ok).map(r => [r.plic.id, r.hash]))
     const propuse = awb.filter(r => r.stare === 'propus' && h.get(r.plic_id) === r.hash_date)
     if (!propuse.length) return 'Niciun plic propus cu datele de acum: propune din nou.'
-    if (!window.confirm(`Aprobi ${propuse.length} AWB-uri FAN pentru ${titluLot(lot, fan.fanLot)}? Fiecare AWB generat costă (tariful vine de la FAN).`)) return 'Nimic aprobat.'
+    // dialogul spune dacă oPOD e cerut și costul estimat suplimentar, DIN corpurile care se aprobă (ce intră în hash), nu din rândul lotului
+    const ids = new Set(propuse.map(r => r.plic_id))
+    const t = textAprobare({ n: propuse.length, shipments: randuri.filter(r => ids.has(r.plic.id)).map(r => r.shipment), titlu: titluLot(lot, fan.fanLot) })
+    if (!t.ok) return t.text
+    if (!window.confirm(t.text)) return 'Nimic aprobat.'
     if (!curent()) return OPRIT
     const { data, error } = await supabase.rpc('fn_red_fan_aproba', { p_lot_id: lot.id, p_ids: propuse.map(r => r.id), p_hashuri: propuse.map(r => r.hash_date) })
     if (error) throw error
@@ -358,7 +397,8 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
       TRANSPORT REAL PORNIT pe acest lot de TEST: „Trimite la curier” / „Generează AWB” trimit expedieri către curier (pe contul configurat în secretele funcției) și fiecare AWB poate costa. Urmează pașii din procedura Testului 1.</p>}
     {/* F1 (spec §1, §13): ecranul operatorului — butonul unic, plafonul zilei, registrul intenției, „Verifică la curier”, retragerea, anularea în doi pași */}
     <TrimiteLaCurier proiect={proiect} lot={lot} fanLot={fan?.fanLot} pregatite={randuri || []} awb={awb} esteOwner={esteOwner} esteOperator={f1.esteOperator} evidentaInstalata={!!fan?.instalata}
-      plafon={f1.plafon} intentii={f1.intentii} cereri={f1.cereri} lucru={lucru} ruleaza={ruleaza} edge={edge} rpc={(n, a) => supabase.rpc(n, a)} controlDocx={controlDupaTrimitere} OPRIT={OPRIT} />
+      opodInstalat={fan?.opodInstalat === true} plafon={f1.plafon} intentii={f1.intentii} intentiiCititeLa={f1.intentiiCititeLa} cereri={f1.cereri} lucru={lucru} ruleaza={ruleaza}
+      edge={edge} citesteIntentie={cheie => citesteIntentie(supabase, cheie)} rpc={(n, a) => supabase.rpc(n, a)} controlDocx={controlDupaTrimitere} OPRIT={OPRIT} />
     {fan?.instalata && manifest.tiparite.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8, alignItems: 'center' }}>
       <span style={{ fontSize: 12.5 }}>Foile AWB ale lotului (tirajul curent):</span>
       {parti.map((b, i) => <Pas key={i} cheie="etichete" onClick={() => etichete(i + 1)}>Descarcă AWB-urile{parti.length > 1 ? ` — partea ${i + 1} din ${parti.length}` : ''}</Pas>)}
@@ -382,6 +422,9 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
       <Pas cheie="propune" onClick={propune}>1. Propune {propunere.dePropus.length} plicuri</Pas>
       <Pas cheie="marcaj_test" onClick={() => marcheaza(true)}>2a. Marchează TEST</Pas>
       <Pas cheie="marcaj_real" onClick={() => marcheaza(false)}>2b. Marchează real</Pas>
+      <label title={opodSt.activ ? AJUTOR_OPOD : `${AJUTOR_OPOD} — ${opodSt.motiv}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12.5, opacity: opodSt.activ ? 1 : 0.6, padding: '0 6px' }}>
+        <input type="checkbox" checked={opodLot(fan?.fanLot)} disabled={!opodSt.activ || lucru} onChange={e => schimbaOpod(e.target.checked)} aria-label={TEXT_OPOD} />
+        {TEXT_OPOD}{fan?.fanLot && opodLot(fan.fanLot) ? <b style={{ color: G.orange }}> · CERUT</b> : ''}</label>
       <Pas cheie="aproba" onClick={aproba}>2c. Aprobă</Pas>
       <Pas cheie="genereaza" onClick={genereaza} />
       {(parti.length ? parti : [[]]).map((b, i) => <Pas key={i} cheie="etichete" onClick={() => etichete(i + 1)}>
@@ -461,13 +504,16 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
       <div style={{ display: 'grid', gap: 8 }}>
         {randuri.map(r => { const f = pePlic.get(r.plic.id)
           const tarif = f?.awb ? textTarif(f.tarif) : null   // 18.11: tariful lângă AWB; gol = „tarif necunoscut”, evidențiat (procedura cere oprire)
+          // oPOD-ul rândului: pe un rând trimis = alegerea înghețată a lotului (ce a plecat), nu corpul reconstruit acum (Jakarinos #1135 r1 P2)
+          const opodTxt = textOpodRand({ fanLot: fan?.fanLot, rand: f, shipment: r.shipment })
           return <div key={r.plic.id} style={{ ...S.card, borderColor: r.ok ? G.green : G.yellow }}>
             <b>{r.plic.nr_plic}</b> · {r.shipment.recipient.name || '(fără nume)'} · {[r.shipment.recipient.address.street, r.shipment.recipient.address.locality, r.shipment.recipient.address.county].filter(Boolean).join(', ') || '(fără adresă)'}
-            {r.ok ? <div style={{ color: G.green }}>✓ gata pentru FAN · referința pe etichetă: {r.shipment.info.observation}</div> : <ul style={{ margin: '4px 0 0', paddingLeft: 18, color: G.yellow }}>{r.probleme.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+            {r.ok ? <div style={{ color: G.green }}>✓ gata pentru FAN · referința pe etichetă: {r.shipment.info.observation}{opodTxt ? <b style={{ color: G.orange }}> · {opodTxt}</b> : ''}</div> : <ul style={{ margin: '4px 0 0', paddingLeft: 18, color: G.yellow }}>{r.probleme.map((x, i) => <li key={i}>{x}</li>)}</ul>}
             {f && <div style={{ fontSize: 12.5, color: G.muted }}>FAN: {ETICHETE_STARE_FAN[f.stare] || f.stare}{f.awb ? ` · AWB ${f.awb}` : ''}
               {tarif && <> · <b style={tarif === MESAJ_TARIF_NECUNOSCUT ? { color: G.red, background: G.redDim, padding: '0 4px', borderRadius: 4 } : { color: G.text }}>{tarif}</b>{tarif !== MESAJ_TARIF_NECUNOSCUT && f.tva != null ? ` (+ TVA ${textTarif(f.tva)})` : ''}</>}
               {f.hash_date !== r.hash && ['propus', 'aprobat'].includes(f.stare) ? ' · datele s-au schimbat după propunere: propune din nou' : ''}
               {f.urmarire_stare && f.urmarire_stare !== 'neurmarit' ? ` · urmărire: ${etichetaUrmarire(f)}` : ''}
+              {f.ultim_eveniment ? ` · ${textUltimEveniment(f)}` : ''}
               {textFapteUrmarire(f, ETICHETE_RETUR) ? ` · ${textFapteUrmarire(f, ETICHETE_RETUR)}` : ''}
               {f.confirmare_stare && f.confirmare_stare !== 'nesolicitata' ? ` · ${ETICHETE_CONFIRMARE[f.confirmare_stare] || f.confirmare_stare}` : ''}
               {f.motiv ? ` · ${f.motiv}` : ''}</div>}

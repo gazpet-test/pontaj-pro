@@ -3,7 +3,7 @@
 -- (clasa A, clasa B, interne), tabelele red_fan_zi_consum / red_fan_zi (cu trigger-ul ei) / red_fan_cereri_aprobare / red_fan_intentii /
 -- red_fan_operatori, cele 14 coloane noi și CHECK-urile noi din red_fan_awb (indexul viu readus la forma veche, CHECK-urile stare / aprobare / generat
 -- readuse textual), cele 3 coloane noi din red_fan_setari; readuce TEXTUAL corpurile din 20261212a ale celor 11 funcții înlocuite (extrase din
--- fișierul 20261212a de scripts generator; amprenta md5 verificată DUPĂ revenire, împreună cu proprietățile și EXECUTE-ul celor 19 funcții).
+-- fișierul 20261212a de scripts generator; amprenta md5 verificată DUPĂ revenire, împreună cu proprietățile și EXECUTE-ul celor 21 de funcții ale bazei 20261212a + 20261227a).
 -- REFUZĂ (L14, textual) dacă există ORICE urmă a fluxului nou: operatori numiți, zile / consum de plafon, cereri de aprobare, intenții, rânduri
 -- de_aprobat / retras, intentie_cheie / aprobare_owner_la / anulare_ceruta_la / retras_la nenule, anulat_de nenul în afara rândurilor completate de
 -- backfill (motiv_anulare = alt_motiv AND anulat_la = updated_at: acestea se golesc odată cu coloanele), setări schimbate (limita_zi <> 20,
@@ -18,7 +18,7 @@
 -- Probe: scripts/pglite/test_redari_fan_operator_local.mjs (aplicare → revenire → re-aplicare pe bază curată; refuz la fiecare urmă).
 DO $garda$
 DECLARE v_plafon text; v_incercari integer := 0; v_pas integer; v_rau text;
-  v_functii constant text[] := ARRAY['fn_red_fan_srv_intentie_incheie(uuid,uuid,jsonb)', 'fn_red_fan_srv_anuleaza(uuid,uuid,text,text)', 'fn_red_fan_srv_reconciliaza(uuid,uuid,text,numeric,numeric)', 'fn_red_fan_srv_confirmari(uuid,uuid,uuid,jsonb)', 'fn_red_fan_srv_urmarire(uuid,uuid,uuid,jsonb)', 'fn_red_fan_srv_rezultate(uuid,uuid,uuid,jsonb,integer)', 'fn_red_fan_srv_claim(uuid,uuid,uuid,uuid[],text[],text[])', 'fn_red_fan_srv_poarta(uuid,boolean)', 'fn_red_fan_comanda(uuid,uuid,jsonb,text)', 'fn_red_fan_anulare_cere(uuid,text,text,text)', 'fn_red_fan_cerere_retrage(uuid)', 'fn_red_fan_cerere_decide(uuid,boolean,text)', 'fn_red_fan_retrage(uuid,text)', 'fn_red_fan_setari_presupunere_429(boolean,text)', 'fn_red_fan_setari_doar_test(boolean)', 'fn_red_fan_setari_limita_zi(integer)', 'fn_red_fan_operator_seteaza(uuid,boolean,text)', 'fn_red_fan_e_operator()', 'fn_red_fan_reconciliaza_intern(uuid,text,numeric,numeric,text,uuid,boolean)', 'fn_red_fan_confirmari_intern(uuid,jsonb)', 'fn_red_fan_urmarire_intern(uuid,jsonb)', 'fn_red_fan_rezultate_intern(uuid,jsonb,integer,uuid,uuid)', 'fn_red_fan_claim_intern(uuid,uuid[],text[],text[],uuid,uuid,boolean)', 'fn_red_fan_intentie_incheie_intern(uuid,text,jsonb)', 'fn_red_fan_intentie_sumar(uuid)', 'fn_red_fan_e_operator_profil(uuid)', 'fn_red_fan_lot_incheiat(uuid)', 'fn_red_fan_lot_permis(uuid)', 'fn_red_fan_lot_permis_valori(boolean,text,boolean)', 'fn_red_fan_zi_garda()', 'fn_red_fan_awb_garda()', 'fn_red_fan_anulat(uuid,text,text)', 'fn_red_fan_aproba(uuid,uuid[],text[])', 'fn_red_fan_camp(text)', 'fn_red_fan_claim_lot(uuid,uuid[],text[],text[])', 'fn_red_fan_confirmari(uuid,jsonb)', 'fn_red_fan_e_owner()', 'fn_red_fan_lot_marcheaza(uuid,boolean)', 'fn_red_fan_loturi_garda()', 'fn_red_fan_propune(uuid,text,numeric)', 'fn_red_fan_reconciliaza(uuid,text,numeric,numeric,text)', 'fn_red_fan_rezultate(uuid,jsonb)', 'fn_red_fan_ridicat(uuid,date)', 'fn_red_fan_setari_seteaza(integer)', 'fn_red_fan_suma(numeric)', 'fn_red_fan_surse(uuid)', 'fn_red_fan_tiraj(uuid,text,text)', 'fn_red_fan_tiraj_opreste(uuid,text,boolean)', 'fn_red_fan_urmarire(uuid,jsonb)', 'fn_red_fan_urmarire_solutioneaza(uuid,integer,jsonb,text)'];
+  v_functii constant text[] := ARRAY['fn_red_fan_srv_intentie_incheie(uuid,uuid,jsonb)', 'fn_red_fan_srv_anuleaza(uuid,uuid,text,text)', 'fn_red_fan_srv_reconciliaza(uuid,uuid,text,numeric,numeric)', 'fn_red_fan_srv_confirmari(uuid,uuid,uuid,jsonb)', 'fn_red_fan_srv_urmarire(uuid,uuid,uuid,jsonb)', 'fn_red_fan_srv_rezultate(uuid,uuid,uuid,jsonb,integer)', 'fn_red_fan_srv_claim(uuid,uuid,uuid,uuid[],text[],text[])', 'fn_red_fan_srv_poarta(uuid,boolean)', 'fn_red_fan_comanda(uuid,uuid,jsonb,text,boolean)', 'fn_red_fan_anulare_cere(uuid,text,text,text)', 'fn_red_fan_cerere_retrage(uuid)', 'fn_red_fan_cerere_decide(uuid,boolean,text)', 'fn_red_fan_retrage(uuid,text)', 'fn_red_fan_setari_presupunere_429(boolean,text)', 'fn_red_fan_setari_doar_test(boolean)', 'fn_red_fan_setari_limita_zi(integer)', 'fn_red_fan_operator_seteaza(uuid,boolean,text)', 'fn_red_fan_e_operator()', 'fn_red_fan_reconciliaza_intern(uuid,text,numeric,numeric,text,uuid,boolean)', 'fn_red_fan_confirmari_intern(uuid,jsonb)', 'fn_red_fan_urmarire_intern(uuid,jsonb)', 'fn_red_fan_rezultate_intern(uuid,jsonb,integer,uuid,uuid)', 'fn_red_fan_claim_intern(uuid,uuid[],text[],text[],uuid,uuid,boolean)', 'fn_red_fan_intentie_incheie_intern(uuid,text,jsonb)', 'fn_red_fan_intentie_sumar(uuid)', 'fn_red_fan_e_operator_profil(uuid)', 'fn_red_fan_lot_incheiat(uuid)', 'fn_red_fan_lot_permis(uuid)', 'fn_red_fan_lot_permis_valori(boolean,text,boolean)', 'fn_red_fan_zi_garda()', 'fn_red_fan_awb_garda()', 'fn_red_fan_anulat(uuid,text,text)', 'fn_red_fan_aproba(uuid,uuid[],text[])', 'fn_red_fan_camp(text)', 'fn_red_fan_claim_lot(uuid,uuid[],text[],text[])', 'fn_red_fan_confirmari(uuid,jsonb)', 'fn_red_fan_e_owner()', 'fn_red_fan_lot_marcheaza(uuid,boolean)', 'fn_red_fan_loturi_garda()', 'fn_red_fan_propune(uuid,text,numeric)', 'fn_red_fan_reconciliaza(uuid,text,numeric,numeric,text)', 'fn_red_fan_rezultate(uuid,jsonb)', 'fn_red_fan_ridicat(uuid,date)', 'fn_red_fan_setari_seteaza(integer)', 'fn_red_fan_suma(numeric)', 'fn_red_fan_surse(uuid)', 'fn_red_fan_tiraj(uuid,text,text)', 'fn_red_fan_tiraj_opreste(uuid,text,boolean)', 'fn_red_fan_urmarire(uuid,jsonb)', 'fn_red_fan_urmarire_solutioneaza(uuid,integer,jsonb,text)', 'fn_red_fan_lot_opod(uuid,boolean)', 'fn_red_fan_awb_opod_jurnal()'];
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
      OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261228a_redari_fan_operator_ROLLBACK:' || txid_current() THEN
@@ -68,7 +68,7 @@ BEGIN
           round(extract(epoch FROM clock_timestamp() - now()) * 1000), v_incercari USING ERRCODE = '55P03';
       END IF;
     END IF;
-    -- starea = cea de după 20261228a: tabelele, view-urile, exact cele 50 de funcții (nicio altă fn_red_fan_*), trigger-ele
+    -- starea = cea de după 20261228a: tabelele, view-urile, exact cele 52 de funcții (nicio altă fn_red_fan_*; 2 sunt ale 20261227a și rămân), trigger-ele
     IF to_regclass('public.red_fan_operatori') IS NULL OR to_regclass('public.red_fan_zi') IS NULL OR to_regclass('public.red_fan_zi_consum') IS NULL
        OR to_regclass('public.red_fan_cereri_aprobare') IS NULL OR to_regclass('public.red_fan_intentii') IS NULL
        OR to_regclass('public.v_red_fan_plafon_azi') IS NULL OR to_regclass('public.v_red_fan_anulari') IS NULL OR to_regclass('public.v_red_fan_intentii') IS NULL
@@ -133,7 +133,7 @@ DROP FUNCTION public.fn_red_fan_srv_urmarire(uuid, uuid, uuid, jsonb);
 DROP FUNCTION public.fn_red_fan_srv_rezultate(uuid, uuid, uuid, jsonb, integer);
 DROP FUNCTION public.fn_red_fan_srv_claim(uuid, uuid, uuid, uuid[], text[], text[]);
 DROP FUNCTION public.fn_red_fan_srv_poarta(uuid, boolean);
-DROP FUNCTION public.fn_red_fan_comanda(uuid, uuid, jsonb, text);
+DROP FUNCTION public.fn_red_fan_comanda(uuid, uuid, jsonb, text, boolean);
 DROP FUNCTION public.fn_red_fan_anulare_cere(uuid, text, text, text);
 DROP FUNCTION public.fn_red_fan_cerere_retrage(uuid);
 DROP FUNCTION public.fn_red_fan_cerere_decide(uuid, boolean, text);
@@ -499,7 +499,8 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'redari fan: doar un AWB generat, neridicat, se anuleaza (CAS)' USING ERRCODE = 'P0001'; END IF;
 END $fn$;
 
--- ── postcondiții: starea = cea din 20261212a (19 funcții cu amprentele, proprietățile și EXECUTE-ul lor; tabelele, coloanele și view-urile noi dispărute) ──
+-- ── postcondiții: starea = cea din 20261212a + 20261227a (21 de funcții cu amprentele, proprietățile și EXECUTE-ul lor; trigger-ul de jurnal oPOD
+-- singurul de pe red_fan_awb; tabelele, coloanele și view-urile noi dispărute) ──
 DO $post$
 DECLARE v_rau text;
 BEGIN
@@ -512,7 +513,10 @@ BEGIN
       ('public.fn_red_fan_confirmari(uuid,jsonb)', '38126aa49c67e10ead3106dbdfee3e02', 'plpgsql', true, 'v', 'jsonb', true),
       ('public.fn_red_fan_e_owner()', '941c20690f2ae0cda77869a1d865ea69', 'sql', true, 's', 'boolean', false),
       ('public.fn_red_fan_lot_marcheaza(uuid,boolean)', '7ea87499188a0c7d6a7189b017fa4805', 'plpgsql', true, 'v', 'boolean', true),
-      ('public.fn_red_fan_loturi_garda()', '1931e70c3b15a07a6ee485537f27ce93', 'plpgsql', false, 'v', 'trigger', false),
+      -- garda loturilor în forma din 20261227a (neatinsă de 20261228a) + cele două funcții ale 20261227a, care rămân
+      ('public.fn_red_fan_loturi_garda()', '5f167c38850bbfc30cb29c0a0fd734ad', 'plpgsql', false, 'v', 'trigger', false),
+      ('public.fn_red_fan_lot_opod(uuid,boolean)', 'b591ff764adede2b335b96e89e41aaca', 'plpgsql', true, 'v', 'boolean', true),
+      ('public.fn_red_fan_awb_opod_jurnal()', '76c319ae5359d29b0056ecb789054fe4', 'plpgsql', true, 'v', 'trigger', false),
       ('public.fn_red_fan_propune(uuid,text,numeric)', 'fa0e624dfc9d6a354914ce1da1784b64', 'plpgsql', true, 'v', 'uuid', true),
       ('public.fn_red_fan_reconciliaza(uuid,text,numeric,numeric,text)', '156b02110854f35d8817d65c11a12274', 'plpgsql', true, 'v', 'text', true),
       ('public.fn_red_fan_rezultate(uuid,jsonb)', 'd6aa943671b05296d0bf9548030c7c85', 'plpgsql', true, 'v', 'integer', true),
@@ -536,8 +540,8 @@ BEGIN
       OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres'
       OR has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('service_role', p.oid, 'EXECUTE')
       OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM a.exec_auth;
-  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20261228a revenire post: functiile nu sunt cele din 20261212a: %', v_rau; END IF;
-  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_red\_fan\_%') <> 19
+  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20261228a revenire post: functiile nu sunt cele din 20261212a + 20261227a: %', v_rau; END IF;
+  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_red\_fan\_%') <> 21
      OR to_regclass('public.red_fan_operatori') IS NOT NULL OR to_regclass('public.red_fan_zi') IS NOT NULL OR to_regclass('public.red_fan_zi_consum') IS NOT NULL
      OR to_regclass('public.red_fan_cereri_aprobare') IS NOT NULL OR to_regclass('public.red_fan_intentii') IS NOT NULL
      OR to_regclass('public.v_red_fan_plafon_azi') IS NOT NULL OR to_regclass('public.v_red_fan_anulari') IS NOT NULL OR to_regclass('public.v_red_fan_intentii') IS NOT NULL
@@ -545,8 +549,11 @@ BEGIN
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_fan_awb'
                  AND column_name IN ('cerere_aprobare_id', 'aprobare_owner_la', 'intentie_cheie', 'retras_de', 'retras_la', 'motiv_retragere', 'anulare_ceruta_de', 'anulare_ceruta_la',
                                      'anulare_ceruta_motiv', 'anulare_ceruta_nota', 'anulat_de', 'anulat_la', 'motiv_anulare', 'anulare_nota'))
-     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.red_fan_awb'::regclass AND NOT tgisinternal) THEN
-    RAISE EXCEPTION '20261228a revenire post: au ramas obiecte ale migrarii';
+     OR (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_fan_awb'::regclass AND NOT tgisinternal) <> 1
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.red_fan_awb'::regclass AND tg.tgname = 'trg_red_fan_awb_opod_jurnal' AND tg.tgenabled = 'O'
+                      AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND tg.tgfoid = 'public.fn_red_fan_awb_opod_jurnal()'::regprocedure AND tg.tgtype = (1 | 4 | 8 | 16)
+                      AND tg.tgattr::text = '') THEN
+    RAISE EXCEPTION '20261228a revenire post: au ramas obiecte ale migrarii (sau trigger-ul de jurnal 20261227a nu mai e cel exact)';
   END IF;
   IF (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = 'public.red_fan_awb'::regclass AND c.conname = 'red_fan_awb_stare_check')
        IS DISTINCT FROM 'CHECK ((stare = ANY (ARRAY[''propus''::text, ''aprobat''::text, ''in_curs''::text, ''generat''::text, ''eroare''::text, ''necunoscut''::text, ''anulat''::text, ''ridicat''::text])))'

@@ -95,9 +95,10 @@ export function refuzBd(error, codNeconfirmat = 'scriere_neconfirmata') {
 /**
  * Execută o acțiune pe un lot. ctx = { corp, lot: { id, proiect_id, nr_lot }, uid (id-ul omului din JWT-ul verificat), proiectCod } (lotul a fost deja citit
  * cu JWT-ul omului — RLS, L09). deps: { rpc(nume, args) → {data,error} (JWT-ul omului), rpcServer(nume, args) → {data,error} (service_role, DOAR clasa B),
- * randuriLot(lotId), datePlicuri(plicIds) → {data:{plicuri,convocari,contacte},error}, plicuriLot(lotId), proiect(proiectId) → {data:{cod},error},
- * fanLot(lotId) → {data:{test,…},error}, transportPermisDupaRpc({ proiectCod, fanLot }) → { ok, cod, motiv } (garda completă, cereMarcaj: true),
- * fetch, secrete() → {username,password,clientId}|null, pauza(ms), subtle }. Întoarce { status, body }.
+ * randuriLot(lotId), datePlicuri(plicIds) → {data:{plicuri,convocari,contacte},error}, plicuriLot(lotId) → {data:[{id,nr_plic,stare}],error} (manifestul
+ * etichetelor), proiect(proiectId) → {data:{cod},error}, fanLot(lotId) → {data:{lot_id,test,prima_aprobare_la,opod}|null,error,opodInstalat} (marcajul +
+ * alegerea oPOD a lotului, citesteLotFan cu JWT-ul omului), transportPermisDupaRpc({ proiectCod, fanLot }) → { ok, cod, motiv } (garda completă,
+ * cereMarcaj: true), fetch, secrete() → {username,password,clientId}|null, pauza(ms), subtle }. Întoarce { status, body }.
  */
 export async function executaActiuneFan({ corp, lot, uid = null, proiectCod = null }, deps) {
   const out = (status, cod, extra = {}) => ({ status, body: { cod, ...extra } })
@@ -132,10 +133,18 @@ async function trimite({ corp, lot, uid, proiectCod, deps, out }) {
   const ids = Array.isArray(corp.plic_ids) ? corp.plic_ids : null
   if (!ids || !ids.length || ids.length > MAX_PLICURI_TRIMITE || ids.some(x => typeof x !== 'string' || !UUID.test(x)) || new Set(ids).size !== ids.length
       || typeof corp.intentie !== 'string' || !UUID.test(corp.intentie) || !uid) return out(400, 'cerere_invalida')
+  // alegerea oPOD a lotului (20261227a, runda 2 pe #1136): intră în corpul fiecărui plic și deci în hash → se citește ÎNAINTEA hash-urilor (aceeași
+  // citire ca ecranul și generarea: citesteLotFan). Rând lipsă (lot nemarcat) = false, implicitul pe care îl primește marcajul automat al comenzii.
+  // Coloana neinstalată / valoare de altă formă / eroare = 503, nimic trimis (L18: necunoscut ≠ „fără oPOD”). Comanda o reverifică sub lock (RD038).
+  const fl0 = await deps.fanLot(lot.id)
+  if (fl0?.error) return out(503, 'citire_neconfirmata')
+  if (fl0?.opodInstalat !== true) return out(503, 'citire_neconfirmata', { motiv: 'alegerea oPOD a lotului nu e instalată în evidența FAN (migrarea 20261227a)' })
+  const opod = fl0.data ? fl0.data.opod : false
+  if (typeof opod !== 'boolean') return out(503, 'citire_neconfirmata', { motiv: 'alegerea oPOD a lotului nu s-a putut citi' })
   // citirile cu JWT-ul omului (aceleași ca ecranul): plicurile, convocările, contactele → corpul + hash-ul fiecărui plic (L19)
   const d = await deps.datePlicuri(ids)
   if (d?.error || !d?.data) return out(503, 'citire_neconfirmata')
-  const pregatite = await pregatestePlicuriFan({ ...d.data, proiectCod, subtle: deps.subtle })
+  const pregatite = await pregatestePlicuriFan({ ...d.data, proiectCod, opod, subtle: deps.subtle })
   const pePlic = new Map(pregatite.map(p => [p.plic.id, p]))
   const excluseLocal = [], pentruRpc = []
   for (const id of ids) {
@@ -145,9 +154,12 @@ async function trimite({ corp, lot, uid, proiectCod, deps, out }) {
     else pentruRpc.push({ plic_id: id, hash: p.hash })
   }
   const hashCerere = await hashCerereFan(ids, deps.subtle)
-  if (!pentruRpc.length) return out(200, 'ok', { incheiata: true, replay: false, mod: 'nimic', generate: 0, nimic_de_trimis: true, excluse: excluseLocal, retrase: [], respinse: [], intentie: corp.intentie, hash_cerere: hashCerere })
-  // 3. COMANDA (JWT-ul omului): fazele L → V → M în BD; garda completă pe valori (RD032 → 423), marcajul automat în M
-  const c = await deps.rpc('fn_red_fan_comanda', { p_lot_id: lot.id, p_intentie: corp.intentie, p_plicuri: pentruRpc, p_hash_cerere: hashCerere })
+  // Jakarinos #1136 r1 P1: niciun plic valid acum NU dovedește că cheia n-are deja o trimitere (o încercare anterioară ambiguă cu ACEEAȘI cheie poate
+  // fi scris rânduri în BD) → cheia se RECONCILIAZĂ cu BD-ul înaintea oricărui rezultat terminal (L05): absentă = nimic de trimis, încheiat;
+  // existentă = starea ei (încheiată = replay; închisă = RD034; în curs = neîncheiat, „Verifică la curier” / „Reia”); necitibilă = 503.
+  if (!pentruRpc.length) return await faraPlicuriValide({ corp, lot, deps, out, excluse: excluseLocal, hashCerere })
+  // 3. COMANDA (JWT-ul omului): fazele L → V → M în BD; garda completă pe valori (RD032 → 423), alegerea oPOD (RD038), marcajul automat în M
+  const c = await deps.rpc('fn_red_fan_comanda', { p_lot_id: lot.id, p_intentie: corp.intentie, p_plicuri: pentruRpc, p_hash_cerere: hashCerere, p_opod: opod })
   if (c?.error) return refuzBd(c.error, 'comanda_neconfirmata')
   const cmd = c?.data
   if (!cmd || typeof cmd !== 'object' || typeof cmd.replay !== 'boolean') return out(503, 'comanda_neconfirmata')
@@ -167,6 +179,8 @@ async function trimite({ corp, lot, uid, proiectCod, deps, out }) {
     if (fl?.error) return out(503, 'citire_neconfirmata', { ...baza })
     const g = deps.transportPermisDupaRpc({ proiectCod, fanLot: fl?.data })
     if (!g?.ok) return out(423, g?.cod || 'transport_real_doar_test', { motiv: g?.motiv, ...baza })
+    // apărare în adâncime (comanda a comparat deja p_opod sub lock, iar după prima aprobare alegerea e înghețată în BD): alta = defect, nimic plătit
+    if (fl?.data?.opod !== opod) return out(503, 'citire_neconfirmata', { motiv: 'alegerea oPOD a lotului diferă de cea cu care s-au calculat hash-urile', ...baza })
     // 5. abia acum secretele curierului → bucla claim → POST → rezultate, cu clientul service_role (clasa B)
     const s = deps.secrete()
     if (!s?.username || !s?.password || !s?.clientId) return out(503, 'transport_neconfigurat', { ...baza })
@@ -231,6 +245,32 @@ async function trimite({ corp, lot, uid, proiectCod, deps, out }) {
   const et = await etichetePentruLot({ lot, randuri: [...r2.data].sort(comparaPlic), deps, out })
   return out(200, 'ok', { ...raspuns, ...et })
 }
+/**
+ * `trimite` fără niciun plic valid acum (plicuri anulate / mutate / date incomplete): rezultatul se decide DIN BD, pe cheia exactă (Jakarinos #1136
+ * r1 P1, L05 / L18 / L25). deps.intentie(cheie) → { data: rândul v_red_fan_intentii | null, error } (JWT-ul omului, RLS). Nicio scriere, niciun RPC.
+ *  - eroare de citire → 503 citire_neconfirmata (nimic dovedit: ecranul păstrează registrul local);
+ *  - cheia nu există → 200 ok, încheiat, nimic de trimis (singurul caz terminal fără rând în BD; ecranul îl reverifică și el pe cheie);
+ *  - cheia e a altui lot → 409 comanda_refuzata 22023 (ca în comandă);
+ *  - încheiată → 200 ok replay (rezultatul din BD); închisă (neincheiata) → 409 comanda_refuzata RD034 (ca în comandă);
+ *  - în curs → 409 intentie_neincheiata, incheiata: false, cu rândurile nelămurite / rămase din BD (ecranul: „Verifică la curier” / „Reia trimiterea”).
+ */
+async function faraPlicuriValide({ corp, lot, deps, out, excluse, hashCerere }) {
+  const baza = { intentie: corp.intentie, hash_cerere: hashCerere, excluse, retrase: [], respinse: [], pdf_parti: [], tiraj: null }
+  if (typeof deps.intentie !== 'function') return out(503, 'citire_neconfirmata', { ...baza, incheiata: false })
+  const ic = await deps.intentie(corp.intentie)
+  if (ic?.error || !ic || !('data' in ic)) return out(503, 'citire_neconfirmata', { ...baza, incheiata: false })
+  const i = ic.data
+  if (i === null) return out(200, 'ok', { ...baza, incheiata: true, replay: false, mod: 'nimic', generate: 0, nimic_de_trimis: true, cheie_in_bd: false })
+  if (!i || typeof i !== 'object' || typeof i.stare !== 'string') return out(503, 'citire_neconfirmata', { ...baza, incheiata: false })
+  if (i.lot_id !== lot.id) return out(409, 'comanda_refuzata', { ...baza, cod_bd: '22023', motiv: null, mesaj: 'cheia intentiei apartine altei trimiteri', incheiata: false })
+  const n = k => (Number.isFinite(Number(i[k])) ? Number(i[k]) : 0)
+  if (i.stare === 'incheiata') {
+    return out(200, 'ok', { ...baza, incheiata: true, replay: true, mod: 'replay', incheiata_la: i.incheiata_la ?? null, cheie_in_bd: true, generate: n('generate'), de_aprobat: n('de_aprobat'),
+      necunoscute: 0, ramase: n('ramase'), tarif_total: i.rezultat?.tarif_total ?? null, nimic_de_trimis: n('generate') === 0 && n('de_aprobat') === 0 })
+  }
+  if (i.stare === 'neincheiata') return out(409, 'comanda_refuzata', { ...baza, cod_bd: 'RD034', motiv: CODURI_FAN.RD034, mesaj: 'trimiterea anterioara a fost inchisa', incheiata: false })
+  return out(409, 'intentie_neincheiata', { ...baza, incheiata: false, stare: i.stare, cheie_in_bd: true, necunoscute: n('necunoscute'), ramase: n('ramase'), lucru_pana_la: i.lucru_pana_la ?? null })
+}
 /** Motivul unui refuz al curierului → codul pentru ecran (spec §8.5): câmpul semnalat (phone / adresa / name) sau necunoscut; fără texte FAN. */
 export function motivCod(motiv) {
   const m = String(motiv || '')
@@ -274,9 +314,17 @@ async function genereaza({ lot, randuri, s, fan, deps, out }) {
   if (!aprobate.length) return out(409, 'nimic_de_generat')
   const pr = await deps.proiect(lot.proiect_id)
   if (pr?.error || !pr?.data?.cod) return out(503, 'citire_neconfirmata')
+  // alegerea oPOD a lotului (18.11.2026): intră în corp și în hash, deci corpul recalculat aici = cel aprobat DOAR dacă lotul are aceeași alegere
+  // ca la aprobare (imuabilă în BD după prima aprobare). Fără rândul lotului = nemarcat (claim-ul ar refuza oricum); valoare lipsă / de altă
+  // formă = citire neconfirmată (L18: necunoscut ≠ „fără oPOD”), nimic trimis.
+  const fl = await deps.fanLot(lot.id)
+  if (fl?.error) return out(503, 'citire_neconfirmata')
+  if (!fl?.data) return out(409, 'lot_nemarcat')
+  if (typeof fl.data.opod !== 'boolean') return out(503, 'citire_neconfirmata', { motiv: 'alegerea oPOD a lotului nu s-a putut citi (evidența FAN fără coloana opod?)' })
+  const opod = fl.data.opod
   const d = await deps.datePlicuri(aprobate.map(x => x.plic_id))
   if (d?.error || !d?.data) return out(503, 'citire_neconfirmata')
-  const pregatite = await pregatestePlicuriFan({ ...d.data, proiectCod: pr.data.cod, subtle: deps.subtle })
+  const pregatite = await pregatestePlicuriFan({ ...d.data, proiectCod: pr.data.cod, opod, subtle: deps.subtle })
   // amprenta SURSELOR din aceleași citiri (Jakarinos #1118 r1): claim-ul o recalculează în BD, în tranzacția rezervării; o schimbare a
   // contactelor între citirea de aici și claim = refuz, nimic plătit
   const surse = await amprenteSurse({ ...d.data, proiectCod: pr.data.cod, subtle: deps.subtle })
@@ -309,7 +357,7 @@ async function genereaza({ lot, randuri, s, fan, deps, out }) {
     if (raspuns.status === COD_PAUZA_FAN) { oprit = 'FAN: prea multe solicitări; rularea s-a oprit, se reia de om'; break }
   }
   const ramase = deTrimis.length - bucati.slice(0, trimise).reduce((n, b) => n + b.length, 0)
-  return out(200, 'ok', { ...raport, solicitari: trimise, excluse, ramase, oprit })
+  return out(200, 'ok', { ...raport, solicitari: trimise, excluse, ramase, oprit, opod })
 }
 // rezultatul fn_red_fan_urmarire / fn_red_fan_confirmari: { scrise, depasite } cu suma = rândurile trimise (altfel scriere neconfirmată)
 const rezScriere = (w, n) => !w?.error && w?.data && typeof w.data === 'object' && Number.isInteger(w.data.scrise) && Number.isInteger(w.data.depasite)

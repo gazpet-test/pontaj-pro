@@ -1,6 +1,6 @@
 // Proba LOCALĂ a migrării 20261228a (Redări FAN, F1: operatorii numiți + butonul unic) pe PGlite — NU atinge nicio bază reală.
-// Baza: schema falsă supabase/tests/20261212a_redari_fan_awb_schelet.sql + fn_red_nivel() EXACT din 20261126a + migrarea 20261212a aplicată ca runnerul,
-//   apoi 20261228a aplicată ca runnerul (marcaj + plafon 5000 + pașii L15 v2 generați de scripts/livrare_amprenta_gen.sh; manifestul generat se compară
+// Baza: schema falsă supabase/tests/20261212a_redari_fan_awb_schelet.sql + fn_red_nivel() EXACT din 20261126a + migrările 20261212a și 20261227a (oPOD)
+//   aplicate ca runnerul (runda 2: re-bazare după îmbinarea #1135), apoi 20261228a aplicată ca runnerul (marcaj + plafon 5000 + pașii L15 v2 generați de scripts/livrare_amprenta_gen.sh; manifestul generat se compară
 //   cu lista revizuită supabase/tests/20261228a_redari_fan_operator.l15.obiecte.tsv; `--scrie-obiecte` o regenerează).
 // 1. Comportamentul, ca rolul authenticated cu JWT-ul fiecărui cont (owner, operator numit, editor nenumit, al doilea operator, viewer, cont fără
 //    drept) și ca service_role (clasa B); așteptările sunt scrise de mână din spec (L25): operatorii (§7.1), plafonul zilei P1–P14 fără P5 (§7.2),
@@ -26,6 +26,8 @@ const TMP = mkdtempSync(join(tmpdir(), 'fan_op_'))
 const citeste = rel => readFileSync(join(ROOT, rel), 'utf8').replace(/\r/g, '')
 const SCHELET = citeste('supabase/tests/20261212a_redari_fan_awb_schelet.sql')
 const MIG12 = citeste('supabase/migrations/20261212a_redari_fan_awb.sql')
+// runda 2 pe #1136: baza = 20261212a + 20261227a (oPOD, #1135 îmbinat în main), aplicate ca runnerul în această ordine
+const MIG27 = citeste('supabase/migrations/20261227a_redari_fan_opod.sql')
 const MIG = citeste('supabase/migrations/20261228a_redari_fan_operator.sql')
 const REV = citeste('supabase/revenire/20261228a_redari_fan_operator_ROLLBACK.sql')
 const OBIECTE_CALE = 'supabase/tests/20261228a_redari_fan_operator.l15.obiecte.tsv'
@@ -108,10 +110,11 @@ async function caRunner(db, nume, text, { plafon = PLAFON_LIVRARE, marcajPlafon 
   } catch (e) { try { await db.exec('ROLLBACK') } catch { /* deja anulată */ } e.jurnal = jurnal; throw e } finally { await db.exec('SET transaction_timeout = 0;') }
   return jurnal
 }
-async function bazaVeche() {   // schelet + nivel + date + 20261212a (ca runnerul)
+async function bazaVeche({ cuOpod = true } = {}) {   // schelet + nivel + date + 20261212a + 20261227a (ca runnerul)
   const db = new PGlite()
   await db.exec(SCHELET); await db.exec(NIVEL); await db.exec(DATE)
   await caRunner(db, '20261212a_redari_fan_awb', MIG12)
+  if (cuOpod) await caRunner(db, '20261227a_redari_fan_opod', MIG27)
   return db
 }
 const aplicaMig = (db, text = MIG, o) => caRunner(db, '20261228a_redari_fan_operator', text, o)
@@ -144,7 +147,8 @@ async function verificari(db, log, fail = []) {
   const ok = (c, m) => { if (!c) fail.push(m); if (log) console.log((c ? '  OK  ' : '  NU  ') + m) }
   const rand = async n => val(db, `SELECT * FROM public.red_fan_awb WHERE plic_id = $1 AND stare NOT IN ('eroare', 'anulat', 'retras')`, [plicId(n)])
   const toate = async n => (await db.query(`SELECT * FROM public.red_fan_awb WHERE plic_id = $1 ORDER BY created_at`, [plicId(n)])).rows
-  const comanda = (uid, lot, k, plicuri, hash = HX('c')) => ca(db, uid, 'SELECT public.fn_red_fan_comanda($1, $2, $3::jsonb, $4) AS r', [lot, k, JSON.stringify(plicuri), hash])
+  // p_opod = alegerea cu care s-au „calculat” hash-urile (loturile acestei probe nu cer oPOD → false; RD038 are proba lui: verificariOpod)
+  const comanda = (uid, lot, k, plicuri, hash = HX('c'), opod = false) => ca(db, uid, 'SELECT public.fn_red_fan_comanda($1, $2, $3::jsonb, $4, $5) AS r', [lot, k, JSON.stringify(plicuri), hash, opod])
   const cmd = async (...a) => (await comanda(...a)).rows[0].r
   const pl = (ns, h = HX('a')) => ns.map(n => ({ plic_id: plicId(n), hash: h }))
   const zi = async () => (await db.query('SELECT zi_ro::text, aprobate FROM public.red_fan_zi')).rows
@@ -489,7 +493,7 @@ async function verificari(db, log, fail = []) {
   ok(await cod(ca(db, ID.editor, `UPDATE public.red_fan_awb SET motiv = 'x' WHERE id = $1`, [(await rand(6)).id])) === '42501' && await cod(ca(db, ID.editor, `UPDATE public.red_fan_intentii SET stare = 'incheiata'`)) === '42501'
     && await cod(ca(db, ID.editor, `INSERT INTO public.red_fan_cereri_aprobare (id, lot_id, proiect_id, cerut_de, cerut_la, intentie, n, zi_ro) VALUES (gen_random_uuid(), '${ID.L3}', '${ID.proiect}', '${ID.editor}', now(), gen_random_uuid(), 1, current_date)`)) === '42501',
     'PATCH / INSERT direct pe tabelele FAN ca operator → 42501')
-  ok(await cod(ca(db, null, 'SELECT public.fn_red_fan_comanda($1, $2, $3::jsonb, $4)', [ID.L3, K(30), '[]', HX('c')])) === '42501' && await cod(ca(db, null, 'SELECT public.fn_red_fan_e_operator()')) === '42501', 'anonim: comanda / e_operator → 42501 (fără EXECUTE)')
+  ok(await cod(ca(db, null, 'SELECT public.fn_red_fan_comanda($1, $2, $3::jsonb, $4, $5)', [ID.L3, K(30), '[]', HX('c'), false])) === '42501' && await cod(ca(db, null, 'SELECT public.fn_red_fan_e_operator()')) === '42501', 'anonim: comanda / e_operator → 42501 (fără EXECUTE)')
   ok(await cod(ca(db, ID.editor, 'SELECT public.fn_red_fan_lot_permis($1)', [ID.L3])) === '42501' && await cod(ca(db, ID.editor, 'SELECT public.fn_red_fan_lot_incheiat($1)', [ID.L3])) === '42501' && await cod(ca(db, ID.editor, 'SELECT public.fn_red_fan_claim_intern($1,$2,$3,$4,$5,$6,$7)', [ID.L3, [], [], [], null, null, false])) === '42501',
     'funcțiile interne nu sunt apelabile din API')
   ok(await cod(ca(db, ID.owner, 'SELECT public.fn_red_fan_operator_seteaza($1, false, NULL)', [ID.editor])) === 'OK' && await cod(comanda(ID.editor, ID.L3, K(31), pl([6], HX('e')))) === '42501', 'E18: operatorul retras → comanda nouă 42501')
@@ -499,11 +503,37 @@ async function verificari(db, log, fail = []) {
   return fail
 }
 
+// ─── runda 2 pe #1136 (re-bazarea pe 20261227a): alegerea oPOD în comandă (RD038), pe un lot nou, fără alte urme; rulează după verificari (și pe mutanți) ───
+// Așteptările din regula scrisă (spec + migrarea 20261227a), nu din cod: hash-urile se calculează cu alegerea lotului; altă alegere = nimic scris.
+async function verificariOpod(db, log, fail = []) {
+  const ok = (c, m) => { if (!c) fail.push(m); if (log) console.log((c ? '  OK  ' : '  NU  ') + m) }
+  const L5 = '20000000-0000-4000-8000-000000000005'
+  await db.exec(`RESET ROLE; INSERT INTO public.red_loturi_plicuire (id, proiect_id, nr_lot) VALUES ('${L5}', '${ID.proiect}', 'PP-0005');
+    INSERT INTO public.red_plicuri (id, proiect_id, lot_id, nr_plic, destinatar_nume, stare) VALUES ('${plicId(18)}', '${ID.proiect}', '${L5}', '${nrPlic(18)}', 'PERSOANA 18', 'activ');`)
+  if ((await ca(db, ID.editor, 'SELECT public.fn_red_fan_e_operator() AS e')).rows[0].e !== true) await ca(db, ID.owner, 'SELECT public.fn_red_fan_operator_seteaza($1, true, NULL)', [ID.editor])
+  const cmd = (k, opod) => ca(db, ID.editor, 'SELECT public.fn_red_fan_comanda($1, $2, $3::jsonb, $4, $5) AS r', [L5, k, JSON.stringify([{ plic_id: plicId(18), hash: HX('b') }]), HX('d'), opod])
+  const stare = async () => [await sha(db, 'red_fan_awb'), await sha(db, 'red_fan_loturi'), await sha(db, 'red_fan_intentii'), await sha(db, 'red_jurnal'), await sha(db, 'red_fan_zi'), await sha(db, 'red_fan_cereri_aprobare')].join()
+  const s0 = await stare()
+  ok(await cod(cmd(K(90), true)) === 'RD038' && await stare() === s0, 'RD038: lot NEMARCAT (marcajul automat = fără oPOD) + hash-uri calculate CU oPOD → refuz, nimic scris (rânduri, marcaj, intenție, jurnal, zi, cereri)')
+  ok(await cod(ca(db, ID.owner, 'SELECT public.fn_red_fan_lot_marcheaza($1, true)', [L5])) === 'OK' && await cod(ca(db, ID.owner, 'SELECT public.fn_red_fan_lot_opod($1, true)', [L5])) === 'OK',
+    'owner: lotul marcat TEST, apoi oPOD cerut (fn_red_fan_lot_opod din 20261227a, înainte de prima aprobare)')
+  const s1 = await stare()
+  ok(await cod(cmd(K(91), false)) === 'RD038' && await stare() === s1, 'RD038: lotul cere oPOD, hash-urile calculate FĂRĂ oPOD → refuz, nimic scris')
+  let r = null; try { r = (await cmd(K(92), true)).rows[0].r } catch (e) { r = { eroare: e.code || e.message } }
+  const rd = await val(db, `SELECT stare, intentie_cheie FROM public.red_fan_awb WHERE plic_id = $1 AND stare NOT IN ('eroare', 'anulat', 'retras')`, [plicId(18)])
+  ok(r?.replay === false && ['aprobat', 'de_aprobat'].includes(rd?.stare) && rd.intentie_cheie === K(92), `aceeași alegere (lotul cu oPOD, p_opod = true) → comanda trece: ${JSON.stringify({ mod: r?.mod, eroare: r?.eroare, stare: rd?.stare })}`)
+  ok(await cod(ca(db, ID.owner, 'SELECT public.fn_red_fan_lot_opod($1, false)', [L5])) === 'P0001', 'după comandă (rândul aprobat / de_aprobat) alegerea oPOD nu se mai schimbă (fn_red_fan_lot_opod din 20261227a, neschimbată)')
+  const ev = await val(db, `SELECT count(*)::int AS n FROM public.red_jurnal WHERE tabela = 'red_fan_awb' AND date_noi ->> 'eveniment' IN ('opod_aprobare', 'opod_folosire')
+    AND date_noi ->> 'lot_id' = $1 AND (date_noi ->> 'opod')::boolean`, [L5])
+  ok(ev.n >= 1, `trigger-ul de jurnal al 20261227a rulează și în scrierile comenzii F1 (${ev.n} evenimente cu opod = true pe lot)`)
+  return fail
+}
+
 // ── manifestul L15: lista obiectelor (familie, etichetă, operație) ──
 const listaObiecte = text => text.split('\n').filter(l => l && !l.startsWith('#')).map(l => l.split('\t').slice(0, 3).join('\t')).sort()
 const faraPg18 = l => !/^constrangere\tconstrangere tabel [^\t]*_not_null\tcreat$/.test(l)
 
-console.log('1. aplicarea ca la livrare (L15 v2: manifest generat, apoi livrarea aprobată) peste 20261212a + comportamentul')
+console.log('1. aplicarea ca la livrare (L15 v2: manifest generat, apoi livrarea aprobată) peste 20261212a + 20261227a + comportamentul')
 {
   const db = await bazaVeche()
   let jg = []
@@ -512,7 +542,7 @@ console.log('1. aplicarea ca la livrare (L15 v2: manifest generat, apoi livrarea
   const manifest = jg.filter(m => m.startsWith('L15_DIF ')).map(m => m.slice('L15_DIF '.length)).join('\n') + '\n'
   const gener = listaObiecte(manifest).filter(faraPg18), revizuit = listaObiecte(OBIECTE)
   if (process.argv.includes('--scrie-obiecte')) writeFileSync(join(ROOT, OBIECTE_CALE),
-    '# 20261228a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase); baza = 20261212a aplicata\n' + gener.join('\n') + '\n')
+    '# 20261228a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase); baza = 20261212a + 20261227a aplicate\n' + gener.join('\n') + '\n')
   const lipsa = revizuit.filter(x => !gener.includes(x)), plus = gener.filter(x => !revizuit.includes(x))
   ok(G0 && gener.length > 100 && !lipsa.length && !plus.length, `manifestul generat (${gener.length} obiecte) = lista revizuită; lipsă [${lipsa.slice(0, 5).join(' | ')}] în plus [${plus.slice(0, 5).join(' | ')}]`)
   const FMANIFEST = join(TMP, '20261228a_redari_fan_operator.l15.tsv')
@@ -522,6 +552,8 @@ console.log('1. aplicarea ca la livrare (L15 v2: manifest generat, apoi livrarea
     'livrarea aprobată: diferența = manifestul; garda finală a runnerului (PLAFON_TIMP + LOCK_TINUT): ' + j.filter(m => /ms de la BEGIN/.test(m)).map(m => m.slice(0, 90)).join(' | '))
   const f = []
   try { await verificari(db, true, f) } catch (e) { ok(false, `excepție în verificări: ${e.code || ''} ${String(e.message).slice(0, 200)}`) }
+  console.log('1b. alegerea oPOD în comandă (RD038; baza 20261227a)')
+  try { await verificariOpod(db, true, f) } catch (e) { ok(false, `excepție în verificările oPOD: ${e.code || ''} ${String(e.message).slice(0, 200)}`) }
   esec += f.length
   let m = null; try { await aplicaMig(db) } catch (e) { m = e.message }
   ok(/reaplicare/.test(m || ''), 'reaplicarea refuzată: ' + m)
@@ -535,9 +567,11 @@ for (const [nume, fn, re] of [
   ['fără marcajul runnerului', db => aplicaMig(db, MIG, { marcaj: false }), /garda start invalida/],
   ['fără plafon', db => aplicaMig(db, MIG, { plafon: 0, marcajPlafon: false }), /PLAFON_TRANZACTIE lipsa/],
   ['fără amprenta globală L15 v2', db => aplicaMig(db, MIG, { l15: 'nimic' }), /AMPRENTA_GLOBALA_LIPSA/],
-  ['o funcție fn_red_fan_* străină (20 în loc de 19)', async db => { await db.exec(`CREATE FUNCTION public.fn_red_fan_alta() RETURNS int LANGUAGE sql AS $f$ SELECT 1 $f$;`); return aplicaMig(db) }, /numarul functiilor fn_red_fan_\* nu e 19/],
+  ['o funcție fn_red_fan_* străină (22 în loc de 21)', async db => { await db.exec(`CREATE FUNCTION public.fn_red_fan_alta() RETURNS int LANGUAGE sql AS $f$ SELECT 1 $f$;`); return aplicaMig(db) }, /numarul functiilor fn_red_fan_\* nu e 21/],
+  ['garda loturilor în forma VECHE (20261212a, fără opod)', async db => { await db.exec(`CREATE OR REPLACE FUNCTION public.fn_red_fan_loturi_garda() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$ BEGIN RETURN NEW; END $f$;`); return aplicaMig(db) }, /lantul \(inainte\) difera.*fn_red_fan_loturi_garda/],
+  ['trigger-ul de jurnal 20261227a scos de pe red_fan_awb', async db => { await db.exec(`DROP TRIGGER trg_red_fan_awb_opod_jurnal ON public.red_fan_awb;`); return aplicaMig(db) }, /nu are exact trigger-ul de jurnal din 20261227a/],
   ['o funcție veche cu alt corp (lanțul înainte)', async db => { await db.exec(`CREATE OR REPLACE FUNCTION public.fn_red_fan_e_owner() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;`); return aplicaMig(db) }, /lantul \(inainte\) difera.*fn_red_fan_e_owner/],
-  ['un trigger străin pe red_fan_awb', async db => { await db.exec(`CREATE TRIGGER t_x BEFORE UPDATE ON public.red_fan_awb FOR EACH ROW EXECUTE FUNCTION public.fn_red_fan_loturi_garda();`); return aplicaMig(db) }, /are deja trigger-e/],
+  ['un trigger străin pe red_fan_awb', async db => { await db.exec(`CREATE TRIGGER t_x BEFORE UPDATE ON public.red_fan_awb FOR EACH ROW EXECUTE FUNCTION public.fn_red_fan_loturi_garda();`); return aplicaMig(db) }, /nu are exact trigger-ul de jurnal din 20261227a/],
 ]) {
   const db = await bazaVeche()
   let m = null
@@ -552,6 +586,13 @@ for (const [nume, fn, re] of [
   ok(/20261212a nu e aplicata/.test(m || ''), 'fără 20261212a: ' + m)
   await db.close()
 }
+{
+  const db = await bazaVeche({ cuOpod: false })
+  let m = null; try { await aplicaMig(db) } catch (e) { m = e.message }
+  const gol = (await val(db, `SELECT to_regclass('public.red_fan_operatori') IS NULL AND NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_red_fan_comanda') AS g`)).g
+  ok(/20261227a \(oPOD\) nu e aplicata/.test(m || '') && gol, 'fără 20261227a (doar 20261212a): ' + m)
+  await db.close()
+}
 
 console.log('3. revenirea (prin runner, plafonul 2000): refuz la fiecare urmă; aplicare → revenire → re-aplicare')
 const K1 = '70000000-0000-4000-8000-000000000001'
@@ -562,7 +603,7 @@ for (const [nume, pregateste, re] of [
   ['presupunerea P429 oprită', db => db.exec(`SELECT set_config('request.jwt.claim.sub', '${ID.owner}', false); SELECT public.fn_red_fan_setari_presupunere_429(false, 'x');`), /setarile noi au fost schimbate/],
   ['un rând de_aprobat (comandă peste plafon)', async db => {
     await db.exec(`SELECT set_config('request.jwt.claim.sub', '${ID.owner}', false); SELECT public.fn_red_fan_operator_seteaza('${ID.editor}', true, NULL); SELECT public.fn_red_fan_setari_limita_zi(0);`)
-    await ca(db, ID.editor, 'SELECT public.fn_red_fan_comanda($1, $2, $3::jsonb, $4)', [ID.L1, K1, JSON.stringify([{ plic_id: plicId(1), hash: HX('a') }]), HX('c')])
+    await ca(db, ID.editor, 'SELECT public.fn_red_fan_comanda($1, $2, $3::jsonb, $4, $5)', [ID.L1, K1, JSON.stringify([{ plic_id: plicId(1), hash: HX('a') }]), HX('c'), false])
     await db.exec(`DELETE FROM public.red_fan_operatori; UPDATE public.red_fan_setari SET limita_zi = 20;`)   // rămân: rândul, cererea, intenția, jurnalul
   }, /exista cereri de aprobare|red_fan_awb are randuri scrise|exista intentii|evenimente ale fluxului nou/],
   ['un eveniment nou în red_jurnal', db => db.exec(`INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_noi) VALUES ('red_fan_intentii', '${K1}', 'insert', '{"eveniment":"comanda"}');`), /evenimente ale fluxului nou/],
@@ -586,12 +627,14 @@ for (const [nume, pregateste, re] of [
   await db2.close()
   const j = await revino(db)
   ok(j.some(x => /revenire: sfarsit la \d+ ms/.test(x)), 'revenirea pe aplicarea curată trece (amprentele vechi verificate în postcondiție)')
-  ok((await val(db, `SELECT count(*)::int AS n FROM pg_proc WHERE proname LIKE 'fn_red_fan_%'`)).n === 19 && (await val(db, `SELECT to_regclass('public.red_fan_intentii') IS NULL AS e`)).e
-    && (await val(db, `SELECT count(*)::int AS n FROM information_schema.columns WHERE table_name = 'red_fan_awb' AND column_name LIKE 'anul%'`)).n === 0, 'după revenire: 19 funcții, fără tabele / coloane noi')
+  ok((await val(db, `SELECT count(*)::int AS n FROM pg_proc WHERE proname LIKE 'fn_red_fan_%'`)).n === 21 && (await val(db, `SELECT to_regclass('public.red_fan_intentii') IS NULL AS e`)).e
+    && (await val(db, `SELECT count(*)::int AS n FROM information_schema.columns WHERE table_name = 'red_fan_awb' AND column_name LIKE 'anul%'`)).n === 0
+    && (await val(db, `SELECT array_agg(tgname::text ORDER BY tgname) AS t FROM pg_trigger WHERE tgrelid = 'public.red_fan_awb'::regclass AND NOT tgisinternal`)).t.join() === 'trg_red_fan_awb_opod_jurnal',
+    'după revenire: 21 de funcții (baza 20261212a + 20261227a), fără tabele / coloane noi; pe red_fan_awb rămâne doar jurnalul oPOD')
   m = null; try { await aplicaMig(db) } catch (e) { m = e.message }
   ok(m === null, 're-aplicarea după revenire trece' + (m ? ': ' + m : ''))
   let f2 = []
-  try { await verificari(db, false, f2) } catch (e) { f2.push('excepție: ' + (e.code || e.message)) }
+  try { await verificari(db, false, f2); await verificariOpod(db, false, f2) } catch (e) { f2.push('excepție: ' + (e.code || e.message)) }
   ok(f2.length === 0, 'comportamentul identic după re-aplicare' + (f2[0] ? ': ' + f2[0].slice(0, 120) : ''))
   await db.close()
 }
@@ -610,7 +653,9 @@ const MUTANTI = [
   ['trigger: motivul cerut se poate schimba cât cererea e deschisă', "      RAISE EXCEPTION 'redari fan: schimbarea neautorizata a cererii de anulare e refuzata' USING ERRCODE = '42501';", "      NULL;"],
   ['clasa B deschisă omului (auth.uid() neverificat)', "  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'redari fan: inscrierea rezultatelor externe nu e apelabila de un om' USING ERRCODE = '42501'; END IF;", ''],
   ['garda doar TEST pe valori ignorată de comandă', "  IF NOT public.fn_red_fan_lot_permis_valori(v_test, v_cod, v_set.doar_proiecte_test) THEN RAISE EXCEPTION 'redari fan: doar proiecte de TEST' USING ERRCODE = 'RD032'; END IF;\n  v_tiparit", '  v_tiparit'],
-  ['RD031 scos din tiraj', "      IF NOT public.fn_red_fan_lot_incheiat(p_lot_id) THEN", '      IF false THEN'],
+  ['RD038 scos (comanda aprobă hash-uri calculate cu altă alegere oPOD decât a lotului)', "  IF coalesce(v_fl.opod, false) IS DISTINCT FROM p_opod THEN", '  IF false THEN'],
+  ['RD038 cu lotul nemarcat socotit „cu oPOD”', "  IF coalesce(v_fl.opod, false) IS DISTINCT FROM p_opod THEN", '  IF coalesce(v_fl.opod, true) IS DISTINCT FROM p_opod THEN'],
+  ['RD031 scos din tiraj',"      IF NOT public.fn_red_fan_lot_incheiat(p_lot_id) THEN", '      IF false THEN'],
   ['RD033 scos (reluarea peste rânduri nelămurite)', "  IF v_cheie_veche IS NOT NULL AND EXISTS (SELECT 1 FROM public.red_fan_awb WHERE intentie_cheie = v_cheie_veche AND stare IN ('in_curs', 'necunoscut')) THEN", '  IF false THEN'],
   ['e_operator fără rândul din listă (orice editor trimite)', "          AND EXISTS (SELECT 1 FROM public.red_fan_operatori o WHERE o.profile_id = auth.uid() AND o.retras_la IS NULL));", ');'],
   ['decizia owner-ului consumă plafonul? (aprobarea cererii scrie în zi)', "    UPDATE public.red_fan_loturi SET prima_aprobare_la = v_now, prima_aprobare_de = auth.uid() WHERE lot_id = v_c.lot_id AND prima_aprobare_la IS NULL;\n  END IF;\n  UPDATE public.red_fan_cereri_aprobare",
@@ -629,7 +674,7 @@ for (const [nume, ...perechi] of MUTANTI) {
     "      OR p.prolang IS DISTINCT FROM (SELECT oid FROM pg_language WHERE lanname = a.limbaj)\n      OR p.prosecdef IS DISTINCT FROM a.definer\n      OR p.provolatile IS DISTINCT FROM a.volatil\n      OR p.prorettype IS DISTINCT FROM a.intoarce::regtype::oid\n      OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']\n      OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres'\n      OR has_function_privilege('anon', p.oid, 'EXECUTE')\n      OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM a.exec_auth")
   const f = []
   let db = null
-  try { db = await bazaVeche(); await aplicaMig(db, m); await verificari(db, false, f) } catch (e) { f.push('excepție la aplicare / verificare: ' + (e.code || e.message)) }
+  try { db = await bazaVeche(); await aplicaMig(db, m); await verificari(db, false, f); await verificariOpod(db, false, f) } catch (e) { f.push('excepție la aplicare / verificare: ' + (e.code || e.message)) }
   finally { if (db) await db.close() }
   ok(f.length > 0, `mutant „${nume}” prins (${f.length} verificări picate${f[0] ? ': ' + f[0].slice(0, 110) : ''})`)
 }

@@ -1256,12 +1256,14 @@ const sablonAdresa = () => readFileSync(resolve(process.cwd(), 'public/redari/sa
 const pTest = i => ({ id_parcela: `T1-TST-000${i}`, sat: `Sat ${i} <&>`, tarla: `Tarla ${i}`, nr_cadastral: `CAD-${i}`, poz_hg: `HG-${i}`, tronson: 1, sters_la: null })
 
 describe('Model 4: adresă UAT', () => {
-  it('CHEI_ADRESA_UAT coincide exact cu cele 43 de chei din șablonul real (antetul firmei repus, excepția (9)); fără link și relații externe', async () => {
+  // 19.11.2026 (excepția (12)): Anexa 2 = trimiterea la anunțul de afișare → 43 − 6 `rand.*` − `program_text` = 36 de chei
+  it('CHEI_ADRESA_UAT coincide exact cu cele 36 de chei din șablonul real (antetul firmei repus, excepția (9); Anexa 2 fără listă, excepția (12)); fără link și relații externe', async () => {
     const zip = await JSZip.loadAsync(sablonAdresa())
     const xml = await zip.file('word/document.xml').async('string')
     const chei = [...new Set([...xml.matchAll(/\{\{([\w.]+)\}\}/g)].map(m => m[1]))].sort()
-    expect(chei).toHaveLength(43)
+    expect(chei).toHaveLength(36)
     expect([...CHEI_ADRESA_UAT].sort()).toEqual(chei)
+    expect(chei.filter(k => k.startsWith('rand.') || ['sat', 'tarla', 'nr_cadastral', 'poz_hg', 'tronson', 'program_text'].includes(k))).toEqual([])
     expect(xml).not.toContain('link_afisare')
     for (const f of Object.keys(zip.files).filter(f => f.endsWith('.rels'))) expect(await zip.file(f).async('string')).not.toContain('TargetMode="External"')
   })
@@ -1286,26 +1288,34 @@ describe('Model 4: adresă UAT', () => {
     await expect(completeazaDocx(b, {}, { strict: true })).rejects.toThrow('rand.necunoscut')
     await expect(completeazaDocx(b, {}, { randuri: { rand: [{ nr: 1 }] }, strict: true })).rejects.toThrow('rand.necunoscut')
   })
-  it.each([0, 1, 3])('generează șablonul real cu %i parcele și zip recitibil', async n => {
+  it.each([0, 1, 3])('generează șablonul real cu %i parcele și zip recitibil; din parcele intră doar numărul lor (19.11.2026)', async n => {
     const { blob, hash, campuri } = await genereazaAdresaUat({ proiect: PR_ADRESA, uat: UAT_ADRESA, parcele: Array.from({ length: n }, (_, i) => pTest(n - i)), nrDocument: 'AU-0001', templateArrayBuffer: sablonAdresa() })
     const { xml } = await xmlDin(blob, 'word/document.xml')
     expect(hash).toMatch(/^[a-f0-9]{64}$/)
     expect(xml).not.toContain('{{')
     expect(campuri.numar_parcele).toBe(n)
     expect(campuri.zile_sesiune_text).toBe('10, 11 și 12 decembrie 2026')
-    expect(campuri.program_text).toBe('09:00 – 16:00, ziua 2 până la 19:00')
+    expect(campuri).not.toHaveProperty('program_text')   // era doar în convocarea scurtă din Anexa 2, scoasă
     expect(campuri.contract_data).toBe('22.01.2025')
     expect(campuri.termen_confirmare).toBe('01.12.2026')
     expect(campuri.afisare_ora).toBe('09:30')
     expect(campuri.reprezentant_gazpet).toBe('Semnatar FICTIV, coordonator')
     expect(campuri.semnatar_uat).toBe('')
-    if (n) expect(xml).toContain('Sat 1 &lt;&amp;&gt;')
-    if (n === 3) expect(xml.indexOf('CAD-1')).toBeLessThan(xml.indexOf('CAD-3'))
+    // nicio valoare de parcelă (sat, tarla, nr. cadastral, poz. HG, cod) în adresă: lista publică e DOAR în anunțul de afișare
+    for (const v of ['Sat ', 'Tarla ', 'CAD-', 'HG-', 'T1-TST-', '(nicio parcela importata)']) expect(xml, v).not.toContain(v)
+    expect(xml).toContain(`pentru ${n} parcele din lista anexată`)
   })
-  it('parcelele șterse nu intră în număr sau tabel', async () => {
-    const r = await genereazaAdresaUat({ proiect: PR_ADRESA, uat: UAT_ADRESA, parcele: [{ ...pTest(1), sters_la: '2026-11-01T00:00:00Z' }], nrDocument: 'AU-0001', templateArrayBuffer: sablonAdresa() })
-    expect(r.campuri.numar_parcele).toBe(0)
-    expect((await xmlDin(r.blob, 'word/document.xml')).xml).not.toContain('CAD-1')
+  it('parcelele șterse nu intră în număr', async () => {
+    const r = await genereazaAdresaUat({ proiect: PR_ADRESA, uat: UAT_ADRESA, parcele: [{ ...pTest(1), sters_la: '2026-11-01T00:00:00Z' }, pTest(2)], nrDocument: 'AU-0001', templateArrayBuffer: sablonAdresa() })
+    expect(r.campuri.numar_parcele).toBe(1)
+    expect((await xmlDin(r.blob, 'word/document.xml')).xml).not.toMatch(/CAD-|Sat \d/)
+  })
+  it('un rând-șablon de parcele reintrodus în șablon e refuzat (strict), nu completat pe tăcute', async () => {
+    const zip = await JSZip.loadAsync(sablonAdresa())
+    const xml = await zip.file('word/document.xml').async('string')
+    zip.file('word/document.xml', xml.replace('</w:body>', '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>{{rand.sat}}</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body>'))
+    const mutant = await zip.generateAsync({ type: 'uint8array' })
+    await expect(genereazaAdresaUat({ proiect: PR_ADRESA, uat: UAT_ADRESA, parcele: [pTest(1)], nrDocument: 'AU-0001', templateArrayBuffer: mutant })).rejects.toThrow('rand.sat')
   })
   it('fără parcele este legitim; toate lipsurile obligatorii blochează, împuternicirea inclusă', () => {
     const complet = { proiect: PR_ADRESA, uat: UAT_ADRESA, parcele: [], nrDocument: 'AU-0001' }

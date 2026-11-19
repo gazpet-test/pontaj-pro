@@ -1,4 +1,4 @@
-# 20261228a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase); baza = 20261212a aplicata
+# 20261228a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase); baza = 20261212a + 20261227a aplicate
 coloana	coloana public.red_fan_awb.anulare_ceruta_de	creat
 coloana	coloana public.red_fan_awb.anulare_ceruta_la	creat
 coloana	coloana public.red_fan_awb.anulare_ceruta_motiv	creat
@@ -132,7 +132,7 @@ functie	functie public.fn_red_fan_cerere_decide(uuid,boolean,text)	creat
 functie	functie public.fn_red_fan_cerere_retrage(uuid)	creat
 functie	functie public.fn_red_fan_claim_intern(uuid,uuid[],text[],text[],uuid,uuid,boolean)	creat
 functie	functie public.fn_red_fan_claim_lot(uuid,uuid[],text[],text[])	schimbat
-functie	functie public.fn_red_fan_comanda(uuid,uuid,jsonb,text)	creat
+functie	functie public.fn_red_fan_comanda(uuid,uuid,jsonb,text,boolean)	creat
 functie	functie public.fn_red_fan_confirmari(uuid,jsonb)	schimbat
 functie	functie public.fn_red_fan_confirmari_intern(uuid,jsonb)	creat
 functie	functie public.fn_red_fan_e_operator()	creat

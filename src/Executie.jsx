@@ -24,6 +24,7 @@ import ProbeTronsoane from './ProbeTronsoane.jsx'       // probele pe tronsoane:
 import UscareConducta from './UscareConducta.jsx'       // raportul de uscare a conductei, pe tronsoanele de probă (20261225a)
 import FibraOptica from './FibraOptica.jsx'             // fibra optică pe tronsoane: camerete + monotub / validat / suflat pe km (20261211a)
 import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
+import PvCuplareGenerator from './PvCuplareGenerator.jsx'   // „📄 PV predare conductă pentru cuplare” → Word, în tab-ul Documente (19.11.2026)
 import TabMeteoIstoric from './TabMeteoIstoric.jsx'        // 🌧️ Meteo: istoric zilnic + zile nelucrabile + Excel (20261206a)
 import ExecutieGrafic from './ExecutieGrafic.jsx'   // „📅 Grafic”: graficul de execuție importat din MS Project (20261204a)
 import DevizVsExecutatTab from './DevizVsExecutatTab.jsx'   // „📋 Deviz vs executat”: ținte din deviz, executat, rest, alerte, Excel (20261208a)
@@ -392,7 +393,7 @@ function ProiectContextView({ proiectId, tab, onBack, onSubTab, canEdit, acces }
       {tab === 'situatii_plata' && <TabSituatiiPlata proiectId={proiectId} />}
       {tab === 'cereri'         && <CereriInterneProiect proiectId={proiectId} />}
       {tab === 'consumuri'      && <ConsumuriBonuriTab proiectId={proiectId} mode="executie" />}
-      {tab === 'documente'      && (<><CorespondentaEmailSection proiectId={proiectId} /><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
+      {tab === 'documente'      && (<><PvCuplareGenerator supabase={supabase} proiectId={proiectId} proiect={proiect} /><CorespondentaEmailSection proiectId={proiectId} /><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
       {tab === 'meteo'          && <TabMeteoIstoric proiectId={Number(proiectId)} codProiect={proiect?.cod_intern} client={supabase} />}
       {tab === 'contract'       && <ContractProiectTab proiectId={proiectId} />}
 

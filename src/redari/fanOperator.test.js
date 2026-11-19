@@ -5,10 +5,12 @@
 // intenției ÎNAINTEA etichetelor, pe TOATE ieșirile buclei), clasa B DOAR prin clientul service_role (deps.rpcServer) și DOAR după comandă,
 // `neincercat` DOAR la 429 fără AWB, replay-ul fără POST, tirajul doar pe lotul încheiat (RD031 = fără etichete), mesajele §8.5 ca tabel de cazuri,
 // registrul local al intenției (L05 în UI) și ecranul operatorului (butonul dezactivat cu motivul; secțiunile owner-ului).
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterAll } from 'vitest'
 vi.mock('../lib/supabase.js', () => ({ supabase: {} }))
 import { webcrypto } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { pregatestePlicuriFan, hashCerereFan, COD_PAUZA_FAN, OBSERVATIE_NEINCERCAT, MAX_PE_CERERE, CODURI_FAN } from '../../supabase/functions/_shared/redariFan.mjs'
@@ -16,7 +18,8 @@ import { raspundeFan } from '../../supabase/functions/_shared/redariFanHandler.m
 import { executaActiuneFan, MAX_BUCATI_PE_APEL, refuzBd, motivCod } from '../../supabase/functions/_shared/redariFanTransport.mjs'
 import { stareTrimitere, textPlafonAzi, plicuriTrimisibile, registruIntentii, intentieLocalaBlocanta, rezultatDovedit, deciziaIntentiei, mesajTrimitere,
   mesajRefuzComanda, mesajEdgeFan, textExclus, textRespins, textRetras, MESAJ_NON_OPERATOR, MESAJ_LOT_NEINCHEIAT, MESAJ_DOAR_TEST_BD, MESAJ_LEGATURA_CURIER,
-  MESAJ_DOAR_OPERATOR, ARENDA_INTENTIE_MIN, ETICHETE_STARE_FAN, ETICHETE_MOTIV_ANULARE, MOTIVE_ANULARE, ziRo, PREFIX_REGISTRU_FAN } from './fanLot.js'
+  MESAJ_DOAR_OPERATOR, ARENDA_INTENTIE_MIN, ETICHETE_STARE_FAN, ETICHETE_MOTIV_ANULARE, MOTIVE_ANULARE, ziRo, PREFIX_REGISTRU_FAN, MESAJ_OPOD_NEINSTALAT_PASI,
+  decizieDupaApel, textOpodTrimitere } from './fanLot.js'
 import TrimiteLaCurier, { CereriAprobare, SetariZi } from './ui/FanTrimitere.jsx'
 
 const SPEC = readFileSync('docs/redari/FAN_FLUX_OPERATOR_SPEC.md', 'utf8').replace(/\r/g, '')
@@ -110,11 +113,16 @@ function bd(fx, { comanda, presupunere429 = true, fanLotInainte = { lot_id: LOT.
     if (u.pathname === '/awb/label') { pas.push({ cine: 'fan', nume: 'GET /awb/label' }); return raspunsPdf() }
     throw new Error('cale FAN neașteptată: ' + u.pathname)
   })
-  let fanLotApel = 0
+  // runda 2 (merge cu #1135): citirea lotului = citesteLotFan → { data (cu opod; implicit false), error, opodInstalat }; „înainte” / „după” = față de comandă
+  const cuOpod = x => (x ? { opod: false, ...x } : x)
   const deps = {
     getUser: async () => ({ data: { user: { id: UID } } }), owner: async () => ({ data: false }), operator: async () => ({ data: true }),
     lot: async () => ({ data: LOT }), proiect: async () => ({ data: { id: 'p1', cod: 'TEST-RAZVAN' } }),
-    fanLot: vi.fn(async () => { pas.push({ cine: 'bd', nume: 'fanLot' }); return { data: fanLotApel++ === 0 ? fanLotInainte : fanLotDupa } }),
+    fanLot: vi.fn(async () => { const dupa = pas.some(x => x.nume === 'fn_red_fan_comanda'); pas.push({ cine: 'bd', nume: 'fanLot' })
+      return { data: cuOpod(dupa ? fanLotDupa : fanLotInainte), error: null, opodInstalat: true } }),
+    // runda 2 (Jakarinos #1136 r1 P1): intenția pe cheia EXACTĂ (v_red_fan_intentii simulat din aceeași hartă ca a comenzii)
+    intentie: vi.fn(async cheie => { pas.push({ cine: 'bd', nume: 'intentie' }); const i = intentii.get(cheie)
+      return { data: i ? { cheie, lot_id: LOT.id, lucru_pana_la: null, incheiata_la: null, rezultat: null, ...sumar(cheie), ...i } : null, error: null } }),
     transportPermisDupaRpc: vi.fn(transportDupa || (({ proiectCod, fanLot }) => { pas.push({ cine: 'handler', nume: 'transportPermis(cereMarcaj:true)' }); return proiectCod === 'TEST-RAZVAN' && fanLot?.test === true ? { ok: true } : { ok: false, cod: 'transport_real_doar_test', motiv: 'lot nemarcat' } })),
     secrete: vi.fn(secrete || (() => { pas.push({ cine: 'edge', nume: 'secrete' }); return { username: 'u', password: 'p', clientId: 'C' } })),
     datePlicuri: async () => ({ data: { plicuri: fx.plicuri, convocari: fx.convocari, contacte: fx.contacte } }),
@@ -142,7 +150,7 @@ describe('F1 — `trimite`: ordinea pașilor (spec §8.1) și clasele RPC (§7.3
     const t = trimite(fx)
     const r = await t.p
     expect(r.status).toBe(200)
-    expect(numePasi(t.pas)).toEqual(['fn_red_fan_comanda', 'fanLot', 'transportPermis(cereMarcaj:true)', 'secrete', 'fn_red_fan_srv_claim', 'POST /intern-awb', 'fn_red_fan_srv_rezultate',
+    expect(numePasi(t.pas)).toEqual(['fanLot', 'fn_red_fan_comanda', 'fanLot', 'transportPermis(cereMarcaj:true)', 'secrete', 'fn_red_fan_srv_claim', 'POST /intern-awb', 'fn_red_fan_srv_rezultate',
       'fn_red_fan_srv_intentie_incheie', 'fn_red_fan_tiraj', 'secrete', 'GET /awb/label', 'fn_red_fan_tiraj'])
     expect(r.body).toMatchObject({ cod: 'ok', incheiata: true, generate: 3, necunoscute: 0, ramase: 0, oprit: null, nimic_de_trimis: false, replay: false, mod: 'noua' })
     expect(r.body.pdf_parti).toHaveLength(1); expect(r.body.tiraj).toMatchObject({ nr: 1, cheie: expect.stringMatching(/^[0-9a-f]{64}$/) }); expect(r.body.manifest_cheie).toBeTruthy()
@@ -160,8 +168,8 @@ describe('F1 — `trimite`: ordinea pașilor (spec §8.1) și clasele RPC (§7.3
     const b = bd(fx, { fanLotInainte: null, fanLotDupa: { lot_id: LOT.id, test: true } })
     const r = await raspundeFan({ jwt: 'x', corp: { actiune: 'trimite', lot_id: LOT.id, plic_ids: fx.plicuri.map(x => x.id), intentie: K(1) } }, b.deps)
     expect([r.status, r.body.cod, r.body.generate]).toEqual([200, 'ok', 2])
-    expect(numePasi(b.pas).slice(0, 5)).toEqual(['fanLot', 'fn_red_fan_comanda', 'fanLot', 'transportPermis(cereMarcaj:true)', 'secrete'])
-    expect(b.deps.fanLot).toHaveBeenCalledTimes(2)
+    expect(numePasi(b.pas).slice(0, 6)).toEqual(['fanLot', 'fanLot', 'fn_red_fan_comanda', 'fanLot', 'transportPermis(cereMarcaj:true)', 'secrete'])   // garda handlerului, oPOD-ul (înaintea hash-urilor), recitirea
+    expect(b.deps.fanLot).toHaveBeenCalledTimes(3)
     // (c) marcajul nu apare nici după RPC (defect): oprire la pasul 4 cu 423, secretele necitite, nimic plătit
     const fx2 = await fixtura(2)
     const b2 = bd(fx2, { fanLotInainte: null, fanLotDupa: null })
@@ -188,7 +196,7 @@ describe('F1 — `trimite`: ordinea pașilor (spec §8.1) și clasele RPC (§7.3
     const rez = t.rpcServer.mock.calls.find(c => c[0] === 'fn_red_fan_srv_rezultate')[1]
     expect(rez.p_http).toBe(429); expect(rez.p_rezultate.map(x => x.stare)).toEqual([OBSERVATIE_NEINCERCAT, OBSERVATIE_NEINCERCAT, OBSERVATIE_NEINCERCAT]); expect(rez.p_rezultate.every(x => x.awb === null)).toBe(true)
     expect(r.body).toMatchObject({ cod: 'ok', incheiata: true, generate: 0, ramase: 3, oprit: '429', necunoscute: 0, tiraj: null, pdf_parti: [] })
-    expect(numePasi(t.pas)).toEqual(['fn_red_fan_comanda', 'fanLot', 'transportPermis(cereMarcaj:true)', 'secrete', 'fn_red_fan_srv_claim', 'POST /intern-awb', 'fn_red_fan_srv_rezultate', 'fn_red_fan_srv_intentie_incheie'])
+    expect(numePasi(t.pas)).toEqual(['fanLot', 'fn_red_fan_comanda', 'fanLot', 'transportPermis(cereMarcaj:true)', 'secrete', 'fn_red_fan_srv_claim', 'POST /intern-awb', 'fn_red_fan_srv_rezultate', 'fn_red_fan_srv_intentie_incheie'])
     expect(t.rpcServer.mock.calls.at(-1)[1].p_rezultat).toMatchObject({ oprit: true, motiv_oprire: '429' })
     expect(fx.randuri.map(x => x.stare)).toEqual(['aprobat', 'aprobat', 'aprobat'])
     expect(mesajTrimitere(r.body)).toMatch(/Curierul a cerut o pauză; restul \(3 plicuri\) se trimite mai târziu/)
@@ -268,7 +276,7 @@ describe('F1 — `trimite`: ordinea pașilor (spec §8.1) și clasele RPC (§7.3
     const t = trimite(fx, { comanda: () => ({ data: { intentie: K(1), replay: true, mod: 'replay', stare: 'incheiata', incheiata: true, rezultat: { generate: 2, respinse: 0, ramase: 0, tarif_total: 19 }, incheiata_la: '2026-11-18T10:00:00Z' } }) })
     const r = await t.p
     expect(t.rpcServer).not.toHaveBeenCalled(); expect(t.apeluri.some(a => a.cale === '/intern-awb')).toBe(false); expect(t.deps.secrete).toHaveBeenCalledTimes(1)   // doar pentru etichete
-    expect(numePasi(t.pas)).toEqual(['fn_red_fan_comanda', 'fn_red_fan_tiraj', 'secrete', 'GET /awb/label', 'fn_red_fan_tiraj'])
+    expect(numePasi(t.pas)).toEqual(['fanLot', 'fn_red_fan_comanda', 'fn_red_fan_tiraj', 'secrete', 'GET /awb/label', 'fn_red_fan_tiraj'])
     expect(r.body).toMatchObject({ cod: 'ok', replay: true, incheiata: true, generate: 2, tiraj: { nr: 1 } }); expect(r.body.pdf_parti).toHaveLength(1)
     expect(mesajTrimitere({ ...r.body, incheiata_la: '2026-11-18T10:00:00Z' })).toMatch(/Rezultat deja înregistrat la 12:00 \(aceeași apăsare\): nimic retrimis/)
     // replay cu generate 0 (toate respinse): nimic cerut la curier, niciun tiraj
@@ -283,7 +291,7 @@ describe('F1 — `trimite`: ordinea pașilor (spec §8.1) și clasele RPC (§7.3
     const t = trimite(fx, { comanda: ({ args }) => ({ data: { intentie: args.p_intentie, mod: 'noua', replay: false, incheiata: true, aprobate: [], numarate: 0, de_trimis: [], preluate: 0, de_aprobat: 3, cerere_id: K(9),
       excluse: [], retrase: [], rezultat: { generate: 0, de_aprobat: 3, mod: 'noua', nimic_de_trimis: false }, azi: { limita: 20, aprobate_inainte: 19, incapeau: 1 } } }) })
     const r = await t.p
-    expect(numePasi(t.pas)).toEqual(['fn_red_fan_comanda'])
+    expect(numePasi(t.pas)).toEqual(['fanLot', 'fn_red_fan_comanda'])
     expect(r.body).toMatchObject({ cod: 'ok', incheiata: true, generate: 0, de_aprobat: 3, cerere_id: K(9), nimic_de_trimis: false, tiraj: null })
     expect(mesajTrimitere(r.body)).toBe('Toate cele 3 plicuri așteaptă aprobarea proprietarului (azi mai încăpeau 1). După aprobare, apasă din nou „Trimite la curier”.')
     // „nimic de trimis” (lot complet / toate excluse) → mesajul §8.5 + motivele; fără apel la curier
@@ -321,7 +329,8 @@ describe('F1 — `trimite`: ordinea pașilor (spec §8.1) și clasele RPC (§7.3
     const fx2 = await fixtura(1, { faraTelefon: [1] })
     const t2 = trimite(fx2)
     const r2 = await t2.p
-    expect(r2.body).toMatchObject({ cod: 'ok', incheiata: true, nimic_de_trimis: true, generate: 0, mod: 'nimic' }); expect(t2.rpc).not.toHaveBeenCalled()
+    expect(r2.body).toMatchObject({ cod: 'ok', incheiata: true, nimic_de_trimis: true, generate: 0, mod: 'nimic', cheie_in_bd: false }); expect(t2.rpc).not.toHaveBeenCalled()
+    expect(t2.deps.intentie).toHaveBeenCalledWith(K(1))   // runda 2: terminal DOAR după ce cheia exactă nu apare în BD
     expect(rezultatDovedit(r2.body)).toBe(true)   // nimic scris în BD, cheia iese din registru
   })
   it('respingerea de curier pe un element: motivul = codul câmpului (phone / adresa / name / necunoscut), fără textul curierului; mesajul §8.5 pe fiecare plic + sfatul „lot nou”', async () => {
@@ -348,10 +357,136 @@ describe('F1 — `trimite`: ordinea pașilor (spec §8.1) și clasele RPC (§7.3
   })
 })
 
+// ── runda 2 pe #1136 (verdictul Jakarinos pe ccbf456e + re-bazarea pe #1135 / oPOD) ──
+// Mutanții pe sursa transportului: modulul copiat în .tmp/ (ignorat de git) cu mutația; redariFan.mjs alături (importul relativ).
+const TMP_MUT = join(process.cwd(), '.tmp')
+const SURSA_TR = readFileSync('supabase/functions/_shared/redariFanTransport.mjs', 'utf8'), SURSA_FAN = readFileSync('supabase/functions/_shared/redariFan.mjs', 'utf8')
+const foldereMut = []
+afterAll(() => { for (const f of foldereMut) rmSync(f, { recursive: true, force: true }) })
+async function transportMutant(perechi) {
+  mkdirSync(TMP_MUT, { recursive: true })
+  const dir = mkdtempSync(join(TMP_MUT, 'fan_tr_mutant_')); foldereMut.push(dir)
+  let t = SURSA_TR
+  for (const [din, in_] of perechi) { if (t.split(din).length !== 2) throw new Error('mutația nu se aplică exact o dată: ' + din); t = t.replace(din, in_) }
+  writeFileSync(join(dir, 'redariFan.mjs'), SURSA_FAN); writeFileSync(join(dir, 'redariFanTransport.mjs'), t)
+  return (await import(/* @vite-ignore */ pathToFileURL(join(dir, 'redariFanTransport.mjs')).href)).executaActiuneFan
+}
+const MUT_TR = {
+  // P1 #2: ramura „niciun plic valid” declară încheiat fără să citească cheia (forma de pe ccbf456e)
+  faraReconciliere: [['  if (!pentruRpc.length) return await faraPlicuriValide({ corp, lot, deps, out, excluse: excluseLocal, hashCerere })',
+    "  if (!pentruRpc.length) return out(200, 'ok', { incheiata: true, replay: false, mod: 'nimic', generate: 0, nimic_de_trimis: true, excluse: excluseLocal, retrase: [], respinse: [], intentie: corp.intentie, hash_cerere: hashCerere })"]],
+  // oPOD: hash-urile calculate fără alegerea lotului (corpul implicit) și comanda fără p_opod
+  opodIgnorat: [['  const pregatite = await pregatestePlicuriFan({ ...d.data, proiectCod, opod, subtle: deps.subtle })', '  const pregatite = await pregatestePlicuriFan({ ...d.data, proiectCod, subtle: deps.subtle })']],
+  // oPOD: coloana neinstalată socotită „fără oPOD” (L18)
+  opodNeinstalatFalse: [["  if (fl0?.opodInstalat !== true) return out(503, 'citire_neconfirmata', { motiv: 'alegerea oPOD a lotului nu e instalată în evidența FAN (migrarea 20261227a)' })", '']],
+}
+/** P1 #2, scenariul recenzentului: prima încercare AMBIGUĂ (POST fără răspuns → rânduri necunoscut, intenția în curs în BD), apoi plicurile devin
+ *  nevalide (anulate / date incomplete) și se reapasă cu ACEEAȘI cheie. Corect: niciun rezultat terminal, starea vine din BD (409 intentie_neincheiata,
+ *  incheiata:false, 2 necunoscute), rezultatDovedit = false, nicio comandă / niciun POST nou. */
+async function reluareFaraPlicuriValide(executa, { cum = 'anulate' } = {}) {
+  const fx = await fixtura(2)
+  const b = bd(fx, { raspunsPost: () => raspunsJson(0, null) })
+  const corp = { actiune: 'trimite', lot_id: LOT.id, plic_ids: fx.plicuri.map(x => x.id), intentie: K(1) }
+  const r1 = await executa({ corp, lot: LOT, uid: UID, proiectCod: 'TEST-RAZVAN' }, b.deps)
+  if (r1.body.incheiata !== false || b.intentii.get(K(1))?.stare !== 'in_curs') return 'prima încercare nu e ambiguă: ' + JSON.stringify(r1.body).slice(0, 120)
+  const comenzi = b.rpc.mock.calls.filter(c => c[0] === 'fn_red_fan_comanda').length, posturi = b.apeluri.filter(a => a.cale === '/intern-awb').length
+  b.deps.datePlicuri = async () => ({ data: cum === 'anulate' ? { plicuri: [], convocari: [], contacte: [] } : { plicuri: fx.plicuri, convocari: fx.convocari, contacte: fx.contacte.map(c => ({ ...c, telefon: null })) } })
+  const r2 = await executa({ corp, lot: LOT, uid: UID, proiectCod: 'TEST-RAZVAN' }, b.deps)
+  const ok = r2.status === 409 && r2.body.cod === 'intentie_neincheiata' && r2.body.incheiata === false && r2.body.necunoscute === 2 && rezultatDovedit(r2.body) === false
+    && b.rpc.mock.calls.filter(c => c[0] === 'fn_red_fan_comanda').length === comenzi && b.apeluri.filter(a => a.cale === '/intern-awb').length === posturi
+    && /NU retrimite/.test(mesajTrimitere(r2.body))
+  return ok || 'reapăsarea: ' + JSON.stringify([r2.status, r2.body]).slice(0, 200)
+}
+
+describe('runda 2 (#1136): reconcilierea cheii înaintea oricărui rezultat terminal (Jakarinos r1 P1 #2) + alegerea oPOD în `trimite` (re-bazarea pe #1135)', () => {
+  it('P1 #2: prima încercare ambiguă, apoi plicurile anulate SAU cu date incomplete, reapăsare cu aceeași cheie → starea din BD, neîncheiat, nimic trimis', async () => {
+    expect(await reluareFaraPlicuriValide(executaActiuneFan, { cum: 'anulate' })).toBe(true)
+    expect(await reluareFaraPlicuriValide(executaActiuneFan, { cum: 'incomplete' })).toBe(true)
+  })
+  it('mutantul „fără reconciliere” (forma ccbf456e: încheiat fără citirea cheii) e PRINS de aceeași probă', async () => {
+    const m = await transportMutant(MUT_TR.faraReconciliere)
+    expect(await reluareFaraPlicuriValide(m, { cum: 'anulate' })).not.toBe(true)
+    expect(await reluareFaraPlicuriValide(m, { cum: 'incomplete' })).not.toBe(true)
+  })
+  it('fără plicuri valide, pe fiecare stare a cheii în BD: absentă = încheiat; încheiată = replay; închisă = RD034; alt lot = 22023; citire picată = 503 — nicio comandă', async () => {
+    const fx = await fixtura(1, { faraTelefon: [1] })
+    const cu = async intentie => { const b = bd(fx); b.deps.intentie = vi.fn(async () => intentie); const r = await executaActiuneFan({ corp: { actiune: 'trimite', lot_id: LOT.id, plic_ids: [plicId(1)], intentie: K(3) }, lot: LOT, uid: UID, proiectCod: 'TEST-RAZVAN' }, b.deps)
+      expect(b.rpc).not.toHaveBeenCalled(); expect(b.deps.intentie).toHaveBeenCalledWith(K(3)); return r }
+    expect((await cu({ data: null, error: null })).body).toMatchObject({ cod: 'ok', incheiata: true, mod: 'nimic', cheie_in_bd: false })
+    const inc = await cu({ data: { cheie: K(3), lot_id: LOT.id, stare: 'incheiata', generate: 2, de_aprobat: 0, ramase: 0, incheiata_la: '2026-11-19T10:00:00Z', rezultat: { tarif_total: 19 } }, error: null })
+    expect(inc.body).toMatchObject({ cod: 'ok', incheiata: true, replay: true, generate: 2, tarif_total: 19, cheie_in_bd: true }); expect(rezultatDovedit(inc.body)).toBe(true)
+    const nei = await cu({ data: { cheie: K(3), lot_id: LOT.id, stare: 'neincheiata' }, error: null })
+    expect(nei).toMatchObject({ status: 409, body: { cod: 'comanda_refuzata', cod_bd: 'RD034', incheiata: false } })
+    expect((await cu({ data: { cheie: K(3), lot_id: 'alt-lot', stare: 'in_curs' }, error: null })).body).toMatchObject({ cod: 'comanda_refuzata', cod_bd: '22023' })
+    const e = await cu({ data: null, error: { code: '500' } }); expect([e.status, e.body.cod, rezultatDovedit(e.body)]).toEqual([503, 'citire_neconfirmata', false])
+    const fara = bd(fx); delete fara.deps.intentie
+    expect((await executaActiuneFan({ corp: { actiune: 'trimite', lot_id: LOT.id, plic_ids: [plicId(1)], intentie: K(3) }, lot: LOT, uid: UID, proiectCod: 'TEST-RAZVAN' }, fara.deps)).status).toBe(503)
+  })
+  it('decizieDupaApel: stare terminală în BD = iese; cheie absentă = iese DOAR la rezultat dovedit; citire picată / în curs = rămâne', () => {
+    const e = { cheie: K(1), inceput_la: new Date().toISOString(), apasat_la: new Date().toISOString() }, acum = Date.now()
+    expect(decizieDupaApel({ intrare: e, corp: { cod: 'comanda_neconfirmata' }, dinBd: { stare: 'incheiata' }, cititLaMs: acum })).toBe('sterge')
+    expect(decizieDupaApel({ intrare: e, corp: { cod: 'comanda_neconfirmata' }, dinBd: { stare: 'neincheiata' }, cititLaMs: acum })).toBe('sterge')
+    expect(decizieDupaApel({ intrare: e, corp: { cod: 'ok', incheiata: true }, dinBd: { stare: 'in_curs', necunoscute: 0, lucru_pana_la: new Date(acum + 6e5).toISOString() }, cititLaMs: acum })).toBe('pastreaza')
+    expect(decizieDupaApel({ intrare: e, corp: { cod: 'ok', incheiata: true }, dinBd: undefined, cititLaMs: acum })).toBe('pastreaza')
+    expect(decizieDupaApel({ intrare: e, corp: { cod: 'cerere_invalida' }, dinBd: null, cititLaMs: acum })).toBe('sterge')
+    for (const corp of [{ cod: 'comanda_neconfirmata' }, { cod: 'citire_neconfirmata' }, null, { cod: 'intentie_neincheiata' }]) expect(decizieDupaApel({ intrare: e, corp, dinBd: null, cititLaMs: acum })).toBe('pastreaza')
+  })
+  it('oPOD: hash-urile se calculează cu alegerea lotului citită ÎNAINTEA comenzii, iar comanda primește p_opod; lotul nemarcat = false; coloana neinstalată / citire picată = 503, nimic chemat', async () => {
+    const fx = await fixtura(2)
+    const cuOpod = await pregatestePlicuriFan({ plicuri: fx.plicuri, convocari: fx.convocari, contacte: fx.contacte, proiectCod: 'TEST-RAZVAN', opod: true, subtle: webcrypto.subtle })
+    // (a) lotul cere oPOD: rândurile aprobate au hash-urile CU oPOD; comanda primește p_opod: true și hash-urile cu B; POST-ul are opțiunea B
+    fx.randuri.forEach((r, i) => { r.hash_date = cuOpod[i].hash })
+    const ta = trimite(fx, { fanLotInainte: { lot_id: LOT.id, test: true, opod: true }, fanLotDupa: { lot_id: LOT.id, test: true, opod: true } })
+    const ra = await ta.p
+    const argA = ta.rpc.mock.calls.find(c => c[0] === 'fn_red_fan_comanda')[1]
+    expect(argA.p_opod).toBe(true); expect(argA.p_plicuri.map(p => p.hash)).toEqual(cuOpod.map(x => x.hash))
+    expect(ra.body).toMatchObject({ cod: 'ok', generate: 2 }); expect(ta.apeluri.filter(a => a.cale === '/intern-awb')).toHaveLength(1)
+    const post = ta.fetch.mock.calls.find(c => new URL(c[0]).pathname === '/intern-awb')[1]
+    expect(JSON.parse(post.body).shipments.every(s => s.info.options.includes('B'))).toBe(true)
+    // (b) lot nemarcat (fără rând): p_opod = false (implicitul marcajului automat)
+    const fx2 = await fixtura(1)
+    const tb = trimite(fx2, { fanLotInainte: null })
+    await tb.p
+    expect(tb.rpc.mock.calls.find(c => c[0] === 'fn_red_fan_comanda')[1].p_opod).toBe(false)
+    // (c) coloana neinstalată / citire picată / valoare de altă formă → 503 înaintea comenzii
+    for (const fl of [{ data: { lot_id: LOT.id, test: true, opod: null }, error: null, opodInstalat: false }, { data: null, error: { code: '42501' }, opodInstalat: null },
+      { data: { lot_id: LOT.id, test: true, opod: 'da' }, error: null, opodInstalat: true }]) {
+      const b = bd(fx2); b.deps.fanLot = vi.fn(async () => fl)
+      const r = await executaActiuneFan({ corp: { actiune: 'trimite', lot_id: LOT.id, plic_ids: [plicId(1)], intentie: K(1) }, lot: LOT, uid: UID, proiectCod: 'TEST-RAZVAN' }, b.deps)
+      expect([r.status, r.body.cod]).toEqual([503, 'citire_neconfirmata']); expect(b.rpc).not.toHaveBeenCalled(); expect(b.deps.secrete).not.toHaveBeenCalled()
+    }
+    // (d) recitirea de după comandă arată altă alegere (defect: BD-ul o compară sub lock) → 503, secretele necitite, nimic plătit
+    const fx3 = await fixtura(1)
+    const td = trimite(fx3, { fanLotInainte: { lot_id: LOT.id, test: true, opod: false }, fanLotDupa: { lot_id: LOT.id, test: true, opod: true } })
+    const rd = await td.p
+    expect([rd.status, rd.body.cod]).toEqual([503, 'citire_neconfirmata']); expect(td.deps.secrete).not.toHaveBeenCalled(); expect(td.fetch).not.toHaveBeenCalled()
+    // (e) RD038 din BD → 409 comanda_refuzata, mesajul §8.5, rezultat dovedit (refuz în faza V, nimic scris)
+    const te = trimite(await fixtura(1), { comanda: () => ({ error: { code: 'RD038', message: 'redari fan: alegerea oPOD a lotului s-a schimbat' } }) })
+    const re = await te.p
+    expect(re).toMatchObject({ status: 409, body: { cod: 'comanda_refuzata', cod_bd: 'RD038', motiv: 'opod_schimbat' } })
+    expect(mesajTrimitere(re.body)).toMatch(/^Alegerea oPOD a lotului .* s-a schimbat între timp: nimic trimis/); expect(rezultatDovedit(re.body)).toBe(true)
+    expect(textOpodTrimitere({ opod: true }, 3)).toMatch(/Lotul cere oPOD .* estimat 42,00 lei pentru 3 plicuri/); expect(textOpodTrimitere({ opod: false }, 3)).toMatch(/^Fără oPOD/); expect(textOpodTrimitere(null, 3)).toMatch(/^Fără oPOD/)
+  })
+  it('mutanții oPOD sunt PRINȘI: hash-urile fără alegerea lotului; coloana neinstalată socotită „fără oPOD”', async () => {
+    const fx = await fixtura(2)
+    const cuOpod = await pregatestePlicuriFan({ plicuri: fx.plicuri, convocari: fx.convocari, contacte: fx.contacte, proiectCod: 'TEST-RAZVAN', opod: true, subtle: webcrypto.subtle })
+    const m1 = await transportMutant(MUT_TR.opodIgnorat)
+    const b1 = bd(fx, { fanLotInainte: { lot_id: LOT.id, test: true, opod: true }, fanLotDupa: { lot_id: LOT.id, test: true, opod: true } })
+    await m1({ corp: { actiune: 'trimite', lot_id: LOT.id, plic_ids: fx.plicuri.map(x => x.id), intentie: K(1) }, lot: LOT, uid: UID, proiectCod: 'TEST-RAZVAN' }, b1.deps)
+    expect(b1.rpc.mock.calls.find(c => c[0] === 'fn_red_fan_comanda')[1].p_plicuri.map(p => p.hash)).not.toEqual(cuOpod.map(x => x.hash))
+    const m2 = await transportMutant(MUT_TR.opodNeinstalatFalse)
+    const b2 = bd(await fixtura(1)); b2.deps.fanLot = vi.fn(async () => ({ data: null, error: null, opodInstalat: false }))
+    const r2 = await m2({ corp: { actiune: 'trimite', lot_id: LOT.id, plic_ids: [plicId(1)], intentie: K(1) }, lot: LOT, uid: UID, proiectCod: 'TEST-RAZVAN' }, b2.deps)
+    expect(r2.status === 503 && !b2.rpc.mock.calls.length).toBe(false)   // mutantul trimite comanda fără coloana instalată
+  })
+})
+
 describe('F1 — fanLot.js: starea butonului, plafonul, lista, registrul local al intenției (§1, §7.2, §8.3)', () => {
-  const baza = { evidentaInstalata: true, esteOperator: true, fanLot: { test: true }, proiectCod: 'TEST-RAZVAN', selectate: 3, plafon: { limita_zi: 20, aprobate: 2, incap: 18 } }
+  const baza = { evidentaInstalata: true, opodInstalat: true, esteOperator: true, fanLot: { test: true }, proiectCod: 'TEST-RAZVAN', selectate: 3, plafon: { limita_zi: 20, aprobate: 2, incap: 18 } }
   it('stareTrimitere: activ doar pentru operator (din BD), pe proiect TEST, cu evidența instalată, lot netipărit, fără intenție vie, cu plicuri alese; motivele sunt numite', () => {
     expect(stareTrimitere(baza)).toEqual({ activ: true, motiv: '', avertisment: '' })
+    // runda 2 (merge cu #1135 r3): fără coloana opod confirmată de citire (false / necunoscut / lipsă) butonul nu propune / aprobă / generează
+    for (const opodInstalat of [false, null, undefined]) expect(stareTrimitere({ ...baza, opodInstalat })).toMatchObject({ activ: false, motiv: MESAJ_OPOD_NEINSTALAT_PASI })
     expect(stareTrimitere({ ...baza, fanLot: null })).toMatchObject({ activ: true })   // lotul nemarcat: marcajul îl pune comanda (cereMarcaj: false)
     expect(stareTrimitere({ ...baza, proiectCod: 'LOT1-X' })).toMatchObject({ activ: false, motiv: expect.stringMatching(/proiecte de TEST/) })
     expect(stareTrimitere({ ...baza, transportActiv: false })).toMatchObject({ activ: false, motiv: 'transport oprit' })
@@ -416,16 +551,24 @@ describe('F1 — fanLot.js: starea butonului, plafonul, lista, registrul local a
   })
   it('rezultatDovedit (§8.3): iese din registru DOAR la rezultat dovedit — ok + incheiata, refuz determinist al BD fără scriere, cerere invalidă, garda înaintea comenzii; NU la incheiata:false / RD030 / RD033 / 403 / 503 / lipsă', () => {
     const da = [{ cod: 'ok', incheiata: true }, { cod: 'ok', incheiata: true, replay: true }, { cod: 'cerere_invalida' }, { cod: 'transport_real_doar_test' },
-      ...['RD034', 'RD036', 'RD037', '22023', 'P0001', 'P0002', '23505'].map(cod_bd => ({ cod: 'comanda_refuzata', cod_bd }))]
+      ...['RD034', 'RD036', 'RD037', 'RD038', '22023', 'P0001', 'P0002', '23505'].map(cod_bd => ({ cod: 'comanda_refuzata', cod_bd }))]
     const nu = [{ cod: 'ok', incheiata: false }, { cod: 'ok' }, { cod: 'ok', incheiata: false, incheiere_neconfirmata: true }, { cod: 'comanda_refuzata', cod_bd: 'RD030' }, { cod: 'comanda_refuzata', cod_bd: 'RD033' },
       { cod: 'comanda_refuzata', cod_bd: 'RD032' }, { cod: 'transport_real_doar_test', mod: 'noua' }, { cod: 'transport_real_doar_test', cod_bd: 'RD032', mod: 'noua' }, { cod: 'non_operator' }, { cod: 'comanda_neconfirmata' },
-      { cod: 'scriere_neconfirmata' }, { cod: 'citire_neconfirmata' }, { cod: 'transport_neconfigurat' }, null, undefined, 'text', {}]
+      { cod: 'scriere_neconfirmata' }, { cod: 'citire_neconfirmata' }, { cod: 'transport_neconfigurat' }, { cod: 'intentie_neincheiata', incheiata: false }, null, undefined, 'text', {}]
     for (const c of da) expect([c, rezultatDovedit(c)]).toEqual([c, true])
     for (const c of nu) expect([c, rezultatDovedit(c)]).toEqual([c, false])
   })
-  it('deciziaIntentiei: cheia lipsă / încheiată / neîncheiată → iese; rânduri nelămurite → „Verifică la curier”; in_curs cu arenda în viitor → așteaptă; expirată → „Reia trimiterea”', () => {
-    const acum = Date.parse('2026-11-18T10:00:00Z'), e = { cheie: K(1) }
-    expect(deciziaIntentiei(e, null, acum)).toBe('sterge'); expect(deciziaIntentiei(e, { stare: 'incheiata' }, acum)).toBe('sterge'); expect(deciziaIntentiei(e, { stare: 'neincheiata' }, acum)).toBe('sterge')
+  it('deciziaIntentiei: încheiată / neîncheiată → iese; cheia ABSENTĂ iese doar dacă citirea a pornit după arenda ultimei apăsări (altfel „Reia”, Jakarinos #1136 r1 P1); nelămurite → „Verifică”; arenda în viitor → așteaptă; expirată → „Reia”', () => {
+    const acum = Date.parse('2026-11-18T10:00:00Z'), e = { cheie: K(1), inceput_la: '2026-11-18T09:58:00Z', apasat_la: '2026-11-18T09:58:00Z' }
+    expect(deciziaIntentiei(e, { stare: 'incheiata' }, acum)).toBe('sterge'); expect(deciziaIntentiei(e, { stare: 'neincheiata' }, acum)).toBe('sterge')
+    expect(deciziaIntentiei(e, undefined, acum)).toBe('necitit')
+    // absența: o listă citită ÎNAINTEA apăsării (sau fără momentul citirii) nu dovedește nimic; după arendă (nicio cerere în zbor) da
+    expect(deciziaIntentiei(e, null, acum)).toBe('reia'); expect(deciziaIntentiei(e, null, acum, Date.parse('2026-11-18T09:57:00Z'))).toBe('reia')
+    expect(deciziaIntentiei(e, null, acum, Date.parse('2026-11-18T10:07:59Z'))).toBe('reia')
+    expect(deciziaIntentiei(e, null, acum, Date.parse('2026-11-18T10:08:00Z'))).toBe('sterge')
+    // „Reia” mută momentul: arenda se socotește de la ULTIMA apăsare, nu de la prima
+    expect(deciziaIntentiei({ ...e, apasat_la: '2026-11-18T10:05:00Z' }, null, acum, Date.parse('2026-11-18T10:10:00Z'))).toBe('reia')
+    expect(deciziaIntentiei({ cheie: K(1) }, null, acum, acum + 3600000)).toBe('reia')   // fără moment de apăsare: nimic dovedit
     expect(deciziaIntentiei(e, { stare: 'in_curs', necunoscute: 2, lucru_pana_la: '2026-11-18T10:05:00Z' }, acum)).toBe('verifica')
     expect(deciziaIntentiei(e, { stare: 'in_curs', necunoscute: '1', lucru_pana_la: '2026-11-18T09:00:00Z' }, acum)).toBe('verifica')   // numărul vine ca text din PostgREST
     expect(deciziaIntentiei(e, { stare: 'in_curs', necunoscute: 0, lucru_pana_la: '2026-11-18T10:05:00Z' }, acum)).toBe('asteapta')
@@ -511,7 +654,7 @@ describe('F1 — mesajul unic al operatorului (spec §8.5), o singură definiți
 describe('F1 — ecranul operatorului (FanTrimitere.jsx): butonul unic și secțiunile owner-ului', () => {
   const nimic = () => {}
   const props = async (o = {}) => { const fx = await fixtura(2); return { proiect: { cod: 'TEST-RAZVAN' }, lot: { id: LOT.id, nr_lot: 'PP-0001' }, fanLot: { test: true }, pregatite: fx.pregatite, awb: fx.randuri.map(r => ({ ...r, stare: 'propus' })),
-    esteOwner: false, esteOperator: true, evidentaInstalata: true, plafon: { limita_zi: 20, aprobate: 2, incap: 18, presupunere_429: true, doar_proiecte_test: true }, intentii: [], cereri: [], ruleaza: nimic, edge: nimic, rpc: nimic, ...o } }
+    esteOwner: false, esteOperator: true, evidentaInstalata: true, opodInstalat: true, plafon: { limita_zi: 20, aprobate: 2, incap: 18, presupunere_429: true, doar_proiecte_test: true }, intentii: [], cereri: [], ruleaza: nimic, edge: nimic, rpc: nimic, ...o } }
   const butonTrimite = html => [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].find(m => /^Trimite la curier/.test(m[1]))
   it('operatorul numit: lista cu „gata” pe fiecare plic, plafonul zilei, butonul activ cu numărul plicurilor bifate', async () => {
     const html = renderToStaticMarkup(React.createElement(TrimiteLaCurier, await props()))
@@ -569,8 +712,10 @@ describe('F1 — ecranul operatorului (FanTrimitere.jsx): butonul unic și secț
   it('ecranul cheamă „trimite” cu cheia din registru și plicurile bifate; „Confirmă: găsit” trece prin reconciliaza cu confirma:{id}; anularea prin sterge_awb cu motiv_cod — toate prin funcția edge (sursa)', () => {
     const src = readFileSync('src/redari/ui/FanTrimitere.jsx', 'utf8').replace(/\r/g, '')
     expect(src).toMatch(/if \(!reg\.scrie\(cheie, \{ lot_id: lot\.id, plic_ids: ids, hash_cerere: hash \}\)\) return/)   // scris + verificat ÎNAINTE de apel
-    expect(src).toMatch(/const \{ corp \} = await edge\('trimite', \{ plic_ids: ids, intentie: cheie \}\)\n    if \(rezultatDovedit\(corp\)\) reg\.sterge\(cheie\)/)   // iese DOAR la rezultat dovedit
-    expect(src).toMatch(/trimiteCu\(globalThis\.crypto\.randomUUID\(\), selectate, null\)/); expect(src).toMatch(/onClick=\{\(\) => trimiteCu\(e\.cheie, e\.plic_ids, e\)\}>Reia trimiterea/)   // reluarea = aceeași cheie
+    // runda 2 (Jakarinos #1136 r1 P1): iese DOAR pe dovada din BD citită pe cheia exactă DUPĂ răspuns (comportamentul e probat montat: fanTrimitereDom.test.jsx)
+    expect(src).toMatch(/const \{ corp \} = await edge\('trimite', \{ plic_ids: ids, intentie: cheie \}\)[\s\S]{0,400}const cititLa = Date\.now\(\)[\s\S]{0,200}await citesteIntentie\(cheie\)[\s\S]{0,200}if \(decizieDupaApel\(\{ intrare, corp, dinBd, cititLaMs: cititLa \}\) === 'sterge'\) reg\.sterge\(cheie\)/)
+    expect(src).not.toMatch(/rezultatDovedit\(corp\)\) reg\.sterge/)
+    expect(src).toMatch(/trimiteCu\(globalThis\.crypto\.randomUUID\(\), selectate, null\)/); expect(src).toMatch(/onClick=\{\(\) => trimiteCu\(e\.cheie, e\.plic_ids, e, bd\)\}>Reia trimiterea/)   // reluarea = aceeași cheie
     expect(src).toMatch(/edge\('reconciliaza', \{ data: propuneri\.data, confirma: \{ id: p\.id \} \}\)/)
     expect(src).toMatch(/edge\('sterge_awb', \{ rand_id: a\.rand\.id, motiv_cod: a\.motiv, nota:/)
     expect(src).toMatch(/rpc\('fn_red_fan_retrage', \{ p_id: r\.id, p_motiv_cod: esteOwner \? 'owner' : 'operator' \}\)/); expect(src).toMatch(/rpc\('fn_red_fan_cerere_retrage', \{ p_id: c\.id \}\)/)

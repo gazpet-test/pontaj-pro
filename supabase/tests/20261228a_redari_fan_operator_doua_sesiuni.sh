@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Proba de CONCURENȚĂ pentru 20261228a (Redări FAN, felia F1: butonul unic al operatorului) — DOAR pe o CLONĂ DE ARUNCAT, cu DOUĂ (la E22 trei)
 # sesiuni psql reale (L25). Tiparul: supabase/tests/20261212a_redari_fan_doua_sesiuni.sh. PGlite are o singură conexiune: scenariile de aici NU
-# sunt probate local; scriptul e NETESTAT pe PostgreSQL de autor (serverul de cod nu are psql) — îl rulează coordonatorul pe clonă, cu 20261212a
-# ȘI 20261228a aplicate acolo. Scriptul cere o clonă FĂRĂ date Redări: fixture-ul sintetic 20261212a (--cu-fixture, obligatoriu) + extensia lui de
+# sunt probate local; scriptul e NETESTAT pe PostgreSQL de autor (serverul de cod nu are psql) — îl rulează coordonatorul pe clonă, cu 20261212a,
+# 20261227a (oPOD) ȘI 20261228a aplicate acolo (runda 2: comanda are p_opod; loturile fixture-ului sunt nemarcate sau marcate fără oPOD → false). Scriptul cere o clonă FĂRĂ date Redări: fixture-ul sintetic 20261212a (--cu-fixture, obligatoriu) + extensia lui de
 # aici (al doilea operator, 10 loturi, 19 plicuri sintetice), create la început și șterse la final (trap EXIT), cu verificarea dispariției.
 # Rulare din Git Bash, cu psql de Windows; conexiunea după `--` (parola din pgpass, niciodată pe linia de comandă):
 #   PSQL=/c/Users/Public/pgsql/bin/psql.exe bash supabase/tests/20261228a_redari_fan_operator_doua_sesiuni.sh --sistem <system_identifier clonă> --cu-fixture \
@@ -168,7 +168,7 @@ SQL
 mutant_scoate() {   # repune textul ORIGINAL al comenzii și verifică amprenta corpului
   [ "$MUTANT_ACTIV" = 1 ] || return 0
   q -f "$TMP/comanda_orig.sql" > "$TMP/comanda_restaurare.out" 2>&1 || return 1
-  [ "$(q -c "SELECT md5(replace(prosrc, chr(13), '')) FROM pg_proc WHERE oid = 'public.fn_red_fan_comanda(uuid, uuid, jsonb, text)'::regprocedure")" = "$MD5_COMANDA" ] && MUTANT_ACTIV=0
+  [ "$(q -c "SELECT md5(replace(prosrc, chr(13), '')) FROM pg_proc WHERE oid = 'public.fn_red_fan_comanda(uuid, uuid, jsonb, text, boolean)'::regprocedure")" = "$MD5_COMANDA" ] && MUTANT_ACTIV=0
 }
 curata() {
   local rc=$? ok=1
@@ -185,7 +185,7 @@ curata() {
 }
 REAL="$(q -c "SELECT system_identifier FROM pg_control_system()")"
 if [ "$REAL" != "$SISTEM" ]; then echo "REFUZ: system_identifier al bazei ($REAL) <> --sistem ($SISTEM)" >&2; rm -rf "$TMP"; exit 22; fi
-if [ "$(q -c "SELECT to_regprocedure('public.fn_red_fan_comanda(uuid, uuid, jsonb, text)') IS NOT NULL AND to_regprocedure('public.fn_red_fan_operator_seteaza(uuid, boolean, text)') IS NOT NULL
+if [ "$(q -c "SELECT to_regprocedure('public.fn_red_fan_comanda(uuid, uuid, jsonb, text, boolean)') IS NOT NULL AND to_regprocedure('public.fn_red_fan_operator_seteaza(uuid, boolean, text)') IS NOT NULL
                AND to_regprocedure('public.fn_red_fan_retrage(uuid, text)') IS NOT NULL AND to_regprocedure('public.fn_red_fan_tiraj(uuid, text, text)') IS NOT NULL
                AND to_regclass('public.red_fan_intentii') IS NOT NULL AND to_regclass('public.red_fan_zi') IS NOT NULL")" != t ]; then
   echo "REFUZ: 20261228a nu e aplicata pe clona" >&2; rm -rf "$TMP"; exit 23
@@ -197,7 +197,7 @@ if [ "$(q -c "SELECT NOT EXISTS (SELECT 1 FROM public.red_fan_zi WHERE zi_ro = $
 fi
 JURNAL0="$(q -c "SELECT coalesce(max(id), 0) FROM public.red_jurnal")"; LIMITA0="$(q -c "SELECT limita_zi FROM public.red_fan_setari")"
 [[ "$JURNAL0" =~ ^[0-9]+$ ]] && [[ "$LIMITA0" =~ ^[0-9]+$ ]] || { echo "REFUZ: maximul red_jurnal / limita zilei nu s-au putut citi" >&2; rm -rf "$TMP"; exit 23; }
-MD5_COMANDA="$(q -c "SELECT md5(replace(prosrc, chr(13), '')) FROM pg_proc WHERE oid = 'public.fn_red_fan_comanda(uuid, uuid, jsonb, text)'::regprocedure")"
+MD5_COMANDA="$(q -c "SELECT md5(replace(prosrc, chr(13), '')) FROM pg_proc WHERE oid = 'public.fn_red_fan_comanda(uuid, uuid, jsonb, text, boolean)'::regprocedure")"
 # textul comenzii din migrare (pentru E22c): un singur CREATE FUNCTION … END $fn$; poziția 3 apare exact o dată
 awk '/^CREATE FUNCTION public\.fn_red_fan_comanda\(/{p=1} p{print} p&&/^END \$fn\$;/{exit}' "$MIG" | tr -d '\r' | sed '1s/^CREATE FUNCTION/CREATE OR REPLACE FUNCTION/' > "$TMP/comanda_orig.sql"
 POZ3='AND (lot_id = p_lot_id OR plic_id = ANY (v_ids)) ORDER BY id FOR UPDATE;'
@@ -248,7 +248,7 @@ singur() {   # $1 eticheta, $2 preambul, $3 corpul, $4 finalul (ROLLBACK implici
 }
 PJ() { local j="" i; for i in "$@"; do j="$j{\"plic_id\":\"$(plic "$i")\",\"hash\":\"$H\"},"; done; echo "[${j%,}]"; }   # payloadul comenzii
 PJ2() { echo "[{\"plic_id\":\"$(plic "$1")\",\"hash\":\"$H2\"}]"; }
-CMD() { echo "public.fn_red_fan_comanda('$1', '$2', '$3'::jsonb, '$HC')"; }
+CMD() { echo "public.fn_red_fan_comanda('$1', '$2', '$3'::jsonb, '$HC', false)"; }
 STARI() { q -c "SELECT string_agg(stare, ',' ORDER BY nr_plic) FROM public.red_fan_awb WHERE lot_id = '$1' AND stare NOT IN ('eroare', 'anulat', 'retras')"; }
 ZI() { q -c "SELECT coalesce((SELECT aprobate::text FROM public.red_fan_zi WHERE zi_ro = $AZI), '-') || '/' || (SELECT count(*) FROM public.red_fan_zi_consum WHERE zi_ro = $AZI)"; }
 INT() { q -c "SELECT coalesce(stare || '/' || coalesce(incheiata_de, '-'), 'absenta') FROM public.red_fan_intentii WHERE cheie = '$1'"; }

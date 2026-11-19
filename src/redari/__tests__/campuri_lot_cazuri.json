@@ -1,0 +1,14 @@
+[
+  { "id": "A", "nota": "două zile cu același program (cu spații în plus în nume și în program), a treia lipsă",
+    "uat": { "nume": " Comuna Testeni ", "uat3": "TST", "sesiune_zi1": "2026-11-24", "sesiune_zi2": "2026-11-25", "sesiune_zi3": null, "program_zi1": " 09:00–16:00 ", "program_zi2": "09:00–16:00", "program_zi3": null },
+    "proiect": { "contact_telefon": "0244 000 000" },
+    "asteptat": { "COMUNA": "Comuna Testeni", "ZILE": "24.11.2026 și 25.11.2026", "PROGRAM": "09:00–16:00", "TEL": "0244 000 000" } },
+  { "id": "FARA", "nota": "fără zile de sesiune: ZILE și PROGRAM nu se pot completa",
+    "uat": { "nume": "Fără sesiune", "uat3": "FRS", "sesiune_zi1": null, "sesiune_zi2": null, "sesiune_zi3": null, "program_zi1": null, "program_zi2": null, "program_zi3": null },
+    "proiect": { "contact_telefon": "0244 000 000" },
+    "asteptat": { "COMUNA": "Fără sesiune", "ZILE": null, "PROGRAM": null, "TEL": "0244 000 000" } },
+  { "id": "DIF", "nota": "trei zile, programe diferite: PROGRAM nu se poate completa",
+    "uat": { "nume": "Programe diferite", "uat3": "DIF", "sesiune_zi1": "2026-12-01", "sesiune_zi2": "2026-12-02", "sesiune_zi3": "2026-12-03", "program_zi1": "09:00–16:00", "program_zi2": "09:00–14:00", "program_zi3": "09:00–16:00" },
+    "proiect": { "contact_telefon": "0244 000 000" },
+    "asteptat": { "COMUNA": "Programe diferite", "ZILE": "01.12.2026, 02.12.2026 și 03.12.2026", "PROGRAM": null, "TEL": "0244 000 000" } }
+]

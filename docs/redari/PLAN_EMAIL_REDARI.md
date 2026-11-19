@@ -100,6 +100,99 @@ Doar plan de design: fără cod de producție, fără scrieri în BD, fără sec
   2. formularea „o singură ședință” din decizia 2A, înlocuită de (g) cu conectări separate (din r19e: trei de producție + căsuța de test);
   3. probele din §8 (fixture-uri Gmail reale, validarea Juridic a metadatelor de audit — domeniul (k) închis pe 04.11, durata backup-urilor, durata maximă a worker-ului Supabase).
 
+**Deciziile lui Răzvan (18.11.2026) — felia F2b, TRIMITEREA (schimbă planul; implementate în PR-ul F2b, migrarea `20261131h`, neaplicată)**
+- **(w) Fără căsuță de test separată pentru TRIMITERE** (înlocuiește decizia implicită **(l)** DOAR pentru trimitere; pentru citire (F1) (l) rămâne cum e):
+  proba se face **direct din `redari@gazpet.ro`**, iar transportul real e permis **DOAR pentru loturile proiectelor cu codul care începe cu `TEST-`**
+  (aceeași convenție ca FAN — PR #1130, `redariFanHandler.mjs`, `DOAR_PROIECTE_TEST` — și ca SMS-urile Redări, 20261130c). Garda e **dublă**:
+  (1) în funcția edge `redari-mail-trimite` (`redariMailF2.mjs`: `TRANSPORT_REAL_ACTIV = true`, `DOAR_PROIECTE_TEST = true`), verificată pe proiectul
+  lotului citit din bază cu JWT-ul omului, **înaintea oricărei citiri de secrete și a oricărui apel către Google** (423 `transport_real_doar_test`);
+  (2) în bază, `fn_red_mail_f2_poate` (chemată sub lock de rezervare și de `apel_incepe`) refuză `doar_proiecte_test` cât `red_mail_setari.doar_proiecte_test`
+  e adevărat (coloană cu `CHECK IS TRUE`: se scoate doar prin migrare revizuită). Orice proiect real → refuz explicit. Poarta pentru proiectele reale
+  rămâne închisă până la „da”-urile cerute de plan: textul juridic (§2.7), DKIM / DMARC (§0.4), autorizarea Transgaz, `extern_permis` (rămâne fals și prin
+  `CHECK`, `red_mail_f2b_extern_ck`). Testele: garda înaintea secretelor (spioni), mutanți (garda scoasă / flag oprit / prefix fără majuscule / garda după secret),
+  paritate cu garda FAN pe același tabel de cazuri (`mailTrimitereF2b.test.js`), proba PGlite a migrării (`scripts/pglite/test_redari_mail_f2b_local.mjs`).
+- **(x) Doar trimiterea în această felie**: un singur client OAuth („ERP Redări trimitere”, scope `gmail.send` + `openid email`, proiect GCP propriu, maparea
+  §2.3); citirea (F1) și golirea (clienții `citire` / `golire`) rămân neatinse. Modul `gmailOauth` din wrapper acceptă azi un singur scop (`trimitere`);
+  `fn_red_mail_oauth_start` acceptă doar `trimitere` (F1 își adaugă scopurile în migrarea ei).
+- **Callback-ul OAuth = pagina ERP `/redari/mail-oauth`** (precizare la §2.3 (d)): Google întoarce `code` + `state` în browserul owner-ului (redirect URI
+  fix, înregistrat în clientul GCP), iar pagina le trimite funcției edge `redari-mail-oauth` cu JWT-ul lui (aceeași schemă ca ViCare). Deci callback-ul
+  **nu e un endpoint public fără JWT**; state-ul e consumat atomic în bază (`fn_red_mail_oauth_consuma`: o singură dată, neexpirat, doar al owner-ului
+  curent), căsuța e dovedită din `id_token` validat local (RS256 cu cheile JWKS Google, `iss` / `aud` / `exp` / `iat` / `email_verified` / `email` / `hd`),
+  scope-urile ca set canonic exact; orice nepotrivire → revocare la Google, eveniment `oauth_respins`, nimic salvat. Refresh token-ul stă în Vault
+  (`REDARI_GMAIL_TRIMITERE_REFRESH_TOKEN`), scris / citit DOAR prin RPC-uri cu `EXECUTE` pentru `service_role` (`fn_red_mail_secret_seteaza` / `_citeste`,
+  `p_apelant` = uid-ul din `getUser`, re-verificat owner — regula (ii) din §2.4). Secretele clientului (`REDARI_GMAIL_TRIMITERE_CLIENT_ID` / `_SECRET`) se
+  citesc doar în wrapperul HTTP unic (`gmailHttp.mjs`), la cererile de token.
+- **Pornirea trimiterii** cere căsuța conectată: RPC (`fn_red_mail_f2_setari`: `casuta_neconectata`) **și** `CHECK` (`red_mail_f2b_pornire_ck`); revocarea
+  (`fn_red_mail_secret_seteaza('')`) golește secretul, oprește trimiterea și șterge starea conectării. Refresh respins (`invalid_grant`) înaintea oricărei
+  rezervări → trimiterea se oprește din bază, nimic `in_apel`.
+- **Categoria proiectului e garantată tehnic pe durata trimiterii (runda 2, Jakarinos #1134 P1; necesită aprobarea proprietarului odată cu migrarea)**:
+  convenția `TEST-` are o singură definiție SQL (`fn_red_proiect_e_test`, L19); `fn_red_mail_rezerva` / `fn_red_mail_apel_incepe` iau rândul proiectului
+  `FOR SHARE` (setări → lot → proiect → mesaje), deci decizia „doar TEST” e serializată cu orice `UPDATE` al proiectului; triggerul
+  `trg_red_proiect_cod_test` (`BEFORE UPDATE OF cod`, SECURITY DEFINER) refuză schimbarea categoriei `TEST-` ↔ real cât proiectul are loturi de e-mail
+  neîncheiate / mesaje rezervate sau în apel **sau AWB-uri FAN propuse / aprobate / în curs / necunoscute** și cere owner în contextul aplicației (admin
+  Redări → 42501); redenumirile în aceeași categorie rămân libere. **Pentru e-mail contractul e complet** (cursa redenumire ↔ autorizare ↔ apel HTTP e
+  închisă pe toate căile de trimitere; confirmat de Jakarinos la runda 2). Celelalte două corecții ale rundei: `id_token` malformat = refuz controlat cu
+  revocarea grantului (`id_token_forma`, fără excepție); rezultatul RPC-ului de persistare ≠ `true` = `persistare_neconfirmata` (oprire, recitirea stării din
+  server, nimic „trimis”). Revenirea respectă L14 textual: refuză la orice istoric nou (state-uri, evenimente OAuth ale trimiterii, rândul Vault, mesaje /
+  jurnal de transport), nu șterge nimic — după prima conectare întoarcerea e o migrare nouă. Probe: PGlite cu RPC-urile reale
+  (`scripts/pglite/test_redari_mail_f2b_local.mjs`) + două sesiuni psql reale cu barieră explicită, pe un cluster PostgreSQL complet dispensabil
+  (`supabase/tests/20261131h_redari_mail_f2b_concurenta.sh`: ambele sensuri TEST → real / real → TEST concurente cu rezervarea, UPDATE-ul proiectului
+  concurent cu autorizarea apelului, SQLSTATE-urile promise; de rulat de coordonator, nerulat în PR).
+- **Lanțul FAN — contract PARȚIAL, declarat (runda 3, Jakarinos #1134 r2 P1; decizia coordonatorului: contractul se restrânge, felia nu se extinde;
+  niciun cod FAN modificat în PR-ul F2b).** Condiția pe `red_fan_awb` din trigger **acoperă doar atât**: cât proiectul are AWB-uri `propus` / `aprobat` /
+  `in_curs` / `necunoscut`, categoria nu se schimbă — deci și intervalul în care un AWB aprobat e deja rezervat `in_curs` de `fn_red_fan_claim_lot` și
+  apelul POST e în desfășurare. **Nu acoperă**: (a) intervalul verificare categorie → autorizare (claim) → HTTP din handler-ul FAN când la momentul
+  verificării nu există încă AWB-uri în stările protejate (handler-ul citește codul `TEST-` și lotul marcat TEST; categoria se schimbă în real — triggerul
+  permite, nimic în lucru; AWB-uri noi sunt propuse / aprobate cu codul real; `fn_red_fan_claim_lot` verifică aprobarea, hash-urile și sursele, nu
+  categoria, deci apelul poate continua); (b) acțiunea `evenimente` (GET fără niciun AWB); (c) urmărirea / confirmările / etichetele / ștergerea pe
+  AWB-uri `generat` / `ridicat`, stări pe care triggerul nu le consideră blocante. **Lucru rămas — PR FAN separat**: proiectul `FOR SHARE` + verificarea
+  categoriei în `fn_red_fan_claim_lot` și în celelalte căi (`evenimente`, urmărire / etichete / confirmări), cu proba lui de concurență. Până atunci, pe FAN
+  categoria proiectului e păzită de gărzile FAN existente (handler + lot marcat TEST) plus efectul secundar al triggerului de mai sus.
+- **Atașamentul — DECIS: varianta C (Răzvan, 18.11.2026)**: **fără atașament, inclusiv pe proiectele reale**: e-mailul are textul (validat de Juridic
+  înaintea proiectelor reale, §2.7) și linkul formularului public; **convocarea oficială rămâne cea din plic** (convocatorul tipărit, canalul poștal /
+  FAN). Deci nici conversia pe server (A), nici PDF-ul generat în browser (B) nu se mai fac; MIME-ul, snapshotul și `CHECK`-urile acceptă în continuare un
+  PDF (fără flux de atașare), ceea ce nu condiționează livrarea. Contextul deciziei: convocatorul există doar ca DOCX (generat în browser cu biblioteca
+  `docx`, stocat în bucketul `redari`), iar un PDF ar fi cerut fie o instalare nouă pe server, fie un document nou, de validat separat de Juridic.
+- **Câmpurile textului, completate PE FIECARE MESAJ (19.11.2026, după primul lot de probă; migrarea `20261131i`, neaplicată; PR `redari/mail-link-personal`)**.
+  Primul lot a arătat că textul lotului e UNUL pentru toți destinatarii și că platforma nu completează nimic per destinatar; modelul de mail aprobat (trimis
+  Transgaz-ului) are câmpurile `{COMUNA}`, `{ZILE}`, `{PROGRAM}`, `{TEL}` și `{LINK_RASPUNS}` — linkul PERSONAL către formularul de răspuns, **același ca în codul
+  QR din convocator** (`linkRaspuns`, `https://redari.gazpet.ro/redari/raspuns/<token>`; tokenul din `red_detinatori_token`, creat automat la adăugarea
+  deținătorului, cu `token_expira_la`). Decizia de proiectare: completarea se face **în bază, la crearea lotului** (`fn_red_mail_lot_creeaza`), în snapshotul
+  fiecărui mesaj, **înaintea hash-ului** — pentru că aprobarea fixează `lot_sha256` peste snapshoturi și compunerea MIME refuză orice text diferit
+  (`snapshot_diferit`); o completare în funcția edge la trimitere ar fi trimis un text neacoperit de hash-ul aprobat (L03 / L16). Funcția edge nu se schimbă.
+  Regulile: (1) definițiile valorilor sunt DOAR în SQL (L19): `fn_red_link_raspuns` (linkul; paritate cu JS testată), `fn_red_mail_f2_token` (tokenul VALID:
+  deținător și parcelă neșterse, 43 de caractere, neexpirat — același predicat ca RPC-urile publice), `fn_red_mail_f2_campuri` (COMUNA = `red_uat.nume`;
+  ZILE = `sesiune_zi1..3` ca `ZZ.LL.AAAA` legate cu „, ” și „ și ”; PROGRAM = `program_zi*` doar dacă e același în toate zilele; TEL = `red_proiecte.contact_telefon`
+  — aceeași sursă ca convocatorul; NULL = nu se poate deduce sigur), `fn_red_mail_f2_completeaza` (orice `{…}` necunoscut = `camp_necunoscut`, câmp fără valoare
+  = `camp_necompletabil`, ambele 22023; **după înlocuire nicio acoladă nu are voie să rămână** — nume de orice lungime, `{}`, `{ X }`, acoladă neînchisă — altfel
+  `camp_necunoscut`; runda 2, Jakarinos #1138 P2: limita de 40 de caractere a parserului lăsa să treacă numele mai lungi), `fn_red_mail_f2_link_strain` (**un link
+  personal literal în subiect sau text = refuz `link_literal`** — un link copiat ar fi ajuns la toți destinatarii; „link personal” = un șir de 43 de caractere
+  base64url într-un `…/redari/raspuns/<token>` pe orice origine SAU un token existent al unui deținător, copiat fără adresă; pe mesajul FINAL fiecare link personal
+  trebuie să fie al destinatarului — `link_strain`; runda 2, Jakarinos #1138 P1; **runda 3, P1: căutarea se face pe forma normalizată** — `%XX` și entități
+  HTML decodate până la punct fix, fără spații / rupturi de linie / caractere invizibile, NFKC — iar **orice apariție a căii formularului** (`redari/raspuns`,
+  oricum scrisă) în afara linkului exact al destinatarului = refuz; tokenurile existente se caută în orice fereastră de 43 de caractere, sensibil la majuscule;
+  aceeași definiție în JS, pe tabelul comun `src/redari/__tests__/link_strain_cazuri.json`); subiectul primește câmpurile lotului (fără link); (2) **deținătorul fără token
+  valid e EXCLUS**: inventarul îl arată cu motivul `fara_token`, crearea îl refuză (`destinatari_neeligibili`); un deținător nou are tokenul din momentul adăugării
+  (trigger 20261126a), deci intră în orice lot creat după aceea; (3) **token devenit invalid între aprobare și trimitere** (expirat / deținător șters): la
+  rezervare mesajul trece în `anulat` cu `eroare_cod = token_expirat` și **rezervarea trece la următorul mesaj din coadă** (la fel după anularea pentru opt-out) —
+  un mesaj anulat nu oprește destinatarii valizi rămași (runda 2, Jakarinos #1138 P2: handlerul se oprește la zero rânduri, deci rezervarea întoarce zero rânduri
+  DOAR când chiar nu mai e nimic de rezervat); la autorizarea apelului `apel_incepe` întoarce `false` și anulează mesajul — niciun apel Gmail, nicio retrimitere
+  (linkul mort nu pleacă); (4) **siguranța tokenului**: apare DOAR în snapshotul mesajului deținătorului lui
+  (`red_mail_mesaje`, SELECT doar owner — același care citește deja `red_detinatori_token` ca admin; nicio politică lărgită, postcondiția o verifică),
+  ecranul îl arată **mascat** (ultimele 6 caractere), jurnalul F2 / evenimentele / mesajele de eroare nu îl conțin; (5) gărzile F2b (doar `TEST-`, căsuța
+  conectată, `extern_permis` fals — `fn_red_mail_f2_poate`) rămân neschimbate (postcondiție pe amprentă). Ecranul: lista câmpurilor cu valorile lotului (din
+  RPC), avertisment când textul n-are `{LINK_RASPUNS}`, crearea oprită la câmp scris greșit, previzualizarea textului final al fiecărui mesaj cu linkul
+  mascat. Urma L14: jurnalul F2 primește `campuri` la fiecare lot creat cu câmpuri — revenirea refuză la orice astfel de rând / mesaj `token_expirat`.
+  Ordinea livrării: **codul întâi** (ecranul vechi ar arunca la motivul nou `fara_token`), apoi migrarea. Probe: `src/redari/mailLinkPersonal.test.jsx`
+  (paritate JS/SQL pe tabelul comun de cazuri `campuri_mail_cazuri.json` — numele câmpurilor, refuzul acoladelor rămase, linkul literal; paritate cu
+  convocatorul pe `campuri_lot_cazuri.json`; mascarea, ecranul, dovada istorică pe SHA fix), `scripts/pglite/test_redari_mail_link_local.mjs` (20261131h
+  aplicată, apoi 20261131i cu pașii L15 v2 ai runnerului: 4 destinatari cu linkul fiecăruia și hash-ul peste textul final, refuzuri — inclusiv linkul literal
+  cu `{LINK_RASPUNS}` alături și câmpurile de 41+ caractere —, opt-out + token expirat între aprobare și trimitere cu rezervarea care trece la următorul valid,
+  **handlerul REAL al funcției edge peste RPC-urile din PGlite** (ordinea „expirat, valid” → al doilea trimis în aceeași apăsare), tokenul absent din jurnale,
+  RLS neschimbat, L14, mutanți). Procedura: `MAIL_PROBA_PASI.md` §5a.
+- Rămân deschise, neschimbate: reconcilierea `necunoscut` și decizia owner-ului (`esuat_confirmat`), monitorizarea SENT, opt-out-ul în UI, `extern_permis`
+  (§1.3, §1.4, §1.9). Procedura probei pe `TEST-RAZVAN`: `docs/redari/MAIL_PROBA_PASI.md`.
+
 **Deciziile lui Razvan (03.11.2026)**
 - Căsuța `redari@gazpet.ro` există (Google Workspace). Autorizarea Gmail API o facem împreună (formularea inițială „într-o singură ședință” e înlocuită de *implicit (g)*. Din r19e sunt trei conectări de producție — citire (F1), golire (la activarea golirilor din Gmail), trimitere (F2) — plus autorizarea căsuței de test, §2.3, §7.1).
 - **Trimitere** ERP → proprietari: **fără niciun automatism**. Fluxul: lot → aprobare → trimitere, ca la SMS. Mailurile către instituții rămân în 📨 Corespondență (`red_corespondenta`), cu „da” pe fiecare rând.
@@ -848,6 +941,13 @@ Porți comune: branch din `origin/main`; GO Jakarinos + Copilot pe diff; DRY ver
 - DRY + teste ca anon: injecție, adresă invalidă, prima introducere malițioasă (contact gol → rămâne gol, lotul F2 nu o vede).
 
 ### F2 — Trimiterea în loturi + reconcilierea + SENT
+**F2b (18.11.2026) — trimiterea din `redari@` pe proiecte de TEST, PR separat:** OAuth de trimitere (`redari-mail-oauth` + `_shared/gmailOauthTrimitere.mjs`),
+wrapperul HTTP unic cu liste închise (`_shared/gmailHttp.mjs`: modulele `gmailTrimitere` / `gmailOauth`, scopul `trimitere`), transportul
+(`_shared/gmailTrimitere.mjs`, `redari-mail-trimite` complet), UI (conectare / revocare / pornire / „Trimite lotul” doar pe `TEST-…`, pagina `/redari/mail-oauth`),
+migrarea `20261131h` (neaplicată: gărzile în bază, state-ul OAuth, Vault prin RPC). Deciziile (w) / (x), decizia C pentru atașament (fără, și pe proiectele
+reale) și contractul parțial FAN al triggerului: blocul „Deciziile lui Răzvan (18.11.2026)” de la început. Procedura probei: `MAIL_PROBA_PASI.md`. Rămân în
+afara F2b: reconcilierea / SENT (cer cititorul F1), opt-out UI, `extern_permis`, protecția completă a categoriei pe lanțul FAN (PR FAN separat).
+
 **Worktree 05.11.2026 — implementare PARȚIALĂ, neaplicată, nedeployată; nu este GO de activare.**
 Decizia din brief permite construirea F2 acum, cu **trimiterea reală oprită**. Există un nucleu de loturi
 în `20261131a_redari_mail_f2_loturi.sql`, modulul comun `redariMailF2.mjs`, UI owner „✉️ Lot e-mail” și

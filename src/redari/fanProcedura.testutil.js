@@ -90,9 +90,10 @@ const propunere = (lot, fn) => (fn.starePropunere ? fn.starePropunere({ pregatit
 const argumentePasi = (lot, fn, comun) => { const p = propunere(lot, fn); return { ...comun, gataDePropus: p.dePropus.length, motivPropunere: p.motiv } }
 
 /** Starea ecranului pentru starea simulată a unui lot: cheile active ale pașilor + operațiilor + marcajul (TEST și, dacă e activ, real). */
+// lumea simulată are migrarea 20261227a aplicată (precondiția procedurii, FAN_TEST1_PASI.md): coloana `opod` există → opodInstalat: true
 export function activeIn(lot, fn, actor) {
   const { stariPasi, stareMarcaj, stariOperatii, stareMarcajReal } = fn
-  const comun = { transportActiv: true, evidentaInstalata: true, proiectCod: lot.proiectCod, fanLot: lot.fanLot, randuri: lot.randuri, ...actor }
+  const comun = { transportActiv: true, evidentaInstalata: true, opodInstalat: true, proiectCod: lot.proiectCod, fanLot: lot.fanLot, randuri: lot.randuri, ...actor }
   const chei = new Set(stariPasi(argumentePasi(lot, fn, comun)).filter(p => p.activ).map(p => p.cheie))
   for (const o of stariOperatii(comun)) if (o.activ) chei.add(o.cheie)
   if (stareMarcaj(comun).activ) chei.add('marcaj_test')
@@ -125,7 +126,7 @@ export function parcurge(pasi, fn, { lume = lumeNoua(), lot: numeLot = 'PP-xxxx'
     if (!a) { jurnal.push({ nr: p.nr, actiune: null, inainte }); continue }   // legacy: rând nerecunoscut (verificare în text liber)
     const eroare = m => new Error(`pasul ${p.nr} (${a.text}): ${m}`)
     if (a.cheie && !inainte.includes(a.cheie)) {
-      const comun = { transportActiv: true, evidentaInstalata: true, proiectCod: lot.proiectCod, fanLot: lot.fanLot, randuri: lot.randuri, ...actor }
+      const comun = { transportActiv: true, evidentaInstalata: true, opodInstalat: true, proiectCod: lot.proiectCod, fanLot: lot.fanLot, randuri: lot.randuri, ...actor }
       const motiv = a.cheie === 'marcaj_test' ? fn.stareMarcaj(comun).motiv
         : (fn.stariPasi(argumentePasi(lot, fn, comun)).find(x => x.cheie === a.cheie) || fn.stariOperatii(comun).find(x => x.cheie === a.cheie) || {}).motiv
       throw eroare(`„${p.text}” nu e activ în ecran (${motiv || 'buton necunoscut'}); active: ${inainte.join(', ') || '-'}`)

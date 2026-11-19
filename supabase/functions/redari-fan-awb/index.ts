@@ -14,6 +14,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { raspundeFan, transportPermis } from '../_shared/redariFanHandler.mjs';
 import { citesteToate } from '../_shared/redariFanTransport.mjs';
+import { citesteLotFan } from '../_shared/redariFan.mjs';
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
 const COL_FAN = 'id, plic_id, nr_plic, stare, hash_date, awb, versiune_urmarire, intentie_cheie, motiv';
 Deno.serve(async (req: Request) => {
@@ -37,8 +38,11 @@ Deno.serve(async (req: Request) => {
       // F1: operator numit SAU owner — o singură definiție, în BD (fn_red_fan_e_operator pe auth.uid())
       operator: () => uc.rpc('fn_red_fan_e_operator'),
       lot: (id: string) => uc.from('red_loturi_plicuire').select('id, proiect_id, nr_lot').eq('id', id).maybeSingle(),
-      // garda „doar TEST” (după flag, ÎNAINTE de secrete): marcajul lotului, citit cu JWT-ul omului (RLS admin / editor Redări)
-      fanLot: (id: string) => uc.from('red_fan_loturi').select('lot_id, test, prima_aprobare_la').eq('lot_id', id).maybeSingle(),
+      // garda „doar TEST” (după flag, ÎNAINTE de secrete): marcajul lotului, citit cu JWT-ul omului (RLS admin / editor Redări);
+      // + alegerea oPOD a lotului (18.11.2026, migrarea 20261227a), recitită de generare și de `trimite`: intră în corp și în hash. Aceeași citire ca
+      // ecranul (citesteLotFan, L19): fără coloana opod (migrarea neaplicată) rândul vine cu opod = null → toate acțiunile în afara generării și a
+      // trimiterii merg ca înainte; generarea / trimiterea refuză (503), nimic trimis (Jakarinos #1135 r1 P1)
+      fanLot: (id: string) => citesteLotFan((coloane: string) => uc.from('red_fan_loturi').select(coloane).eq('lot_id', id).maybeSingle(), 'lot_id, test, prima_aprobare_la'),
       // `trimite`, pasul 4: garda COMPLETĂ (cereMarcaj: true) pe marcajul recitit după RPC-ul comenzii — aceeași funcție ca în handler (L19)
       transportPermisDupaRpc: (x: { proiectCod: string | null, fanLot: unknown }) => transportPermis({ proiectCod: x.proiectCod, fanLot: x.fanLot, cereMarcaj: true }),
       // ── doar pe calea reală (după flag și garda „doar TEST”) ──
@@ -46,6 +50,8 @@ Deno.serve(async (req: Request) => {
       rpc: (nume: string, args: Record<string, unknown>) => uc.rpc(nume, args),
       // clasa B (fn_red_fan_srv_*): DOAR cu service_role, DOAR după poarta omului; p_actor îl pune transportul din user.id (JWT verificat)
       rpcServer: (nume: string, args: Record<string, unknown>) => server().rpc(nume, args),
+      // `trimite` fără plic valid: intenția cu cheia EXACTĂ (Jakarinos #1136 r1 P1 — reconcilierea cheii înaintea oricărui rezultat terminal), JWT-ul omului
+      intentie: (cheie: string) => uc.from('v_red_fan_intentii').select('cheie, lot_id, stare, lucru_pana_la, incheiata_la, rezultat, ramase, necunoscute, generate, de_aprobat').eq('cheie', cheie).maybeSingle(),
       randuriLot: (lotId: string) => citesteToate(() => uc.from('red_fan_awb').select(COL_FAN).eq('lot_id', lotId), [lotId]),
       proiect: (id: string) => uc.from('red_proiecte').select('id, cod').eq('id', id).maybeSingle(),
       // manifestul etichetelor: TOATE plicurile lotului (și cele anulate: un AWB viu pe un plic anulat se semnalează, nu se tipărește)

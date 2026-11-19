@@ -75,6 +75,8 @@ import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucat
   mesajBlocareHR, dosarInVerificare, rezultatProvenienta, provenientaLaAltAngajat, mesajProvenienta, pastreazaEditari,
   STATUS_COADA, rezultatInserareHR, MESAJ_MIGRARE_SURSA, copieDeSters, mesajRefuzSursa,
   fisierDinRand, faraMetadateSursa, MESAJ_SURSA_FARA_METADATE } from './citesteOriceDubluri.js'
+// UPA (20261229b): numărul facturii obligatoriu pe card + refuzul gărzii din BD tradus
+import { numarFacturaUpa, mesajInsertUpa } from './upaLogica.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -786,17 +788,20 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     const valoare = Number(row._editValoare ?? dd.valoare_totala)
     if (!valoare || valoare <= 0) { flash('err', 'Completează valoarea facturii (lei, cu TVA).'); return }
     const lunaStr = row._editLuna || (dd.data_emitere ? dd.data_emitere.slice(0, 7) : new Date().toISOString().slice(0, 7))
+    // 20261229b: numărul facturii e obligatoriu (garda în BD pe rândurile noi); de pe card: editat de om, altfel cel citit de AI
+    const numar = numarFacturaUpa(row._editNumar, dd.numar)
+    if (!numar) { flash('err', 'Completează numărul facturii pe card: fără el factura nu se poate scădea din plafon.'); return }
     setBusyId(row.id)
     try {
       const destPath = await mutaFisier(row, cfg.bucket, String(furnizorId))
       const { data: created, error: insErr } = await supabase.from('upa_achizitii').insert({
         furnizor_id: furnizorId, furnizor_nume: fz.nume || fz.label,
-        luna: lunaStr + '-01', numar_factura: dd.numar || null, data_factura: dd.data_emitere || null,
+        luna: lunaStr + '-01', numar_factura: numar, data_factura: dd.data_emitere || null,
         valoare, descriere: row.payload_ai?.titlu_scurt || null,
         document_path: destPath, created_by: profile.id,
       }).select('id').single()
-      if (insErr) throw new Error('Insert achiziție UPA: ' + insErr.message)
-      await inchideRandSiReimprospateaza(row, `Factura ${dd.numar || ''} — ${valoare.toLocaleString('ro-RO')} lei scăzută din plafonul lunii ✓`, 'upa', 'factura', 'furnizor', furnizorId, created.id)
+      if (insErr) throw new Error(mesajInsertUpa(insErr))
+      await inchideRandSiReimprospateaza(row, `Factura ${numar} — ${valoare.toLocaleString('ro-RO')} lei scăzută din plafonul lunii ✓`, 'upa', 'factura', 'furnizor', furnizorId, created.id)
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
@@ -1138,11 +1143,17 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                               )
                             })()}
 
-                            {/* UPA: valoarea și luna deducerii, editabile */}
+                            {/* UPA: numărul facturii (obligatoriu, 20261229b), valoarea și luna deducerii, editabile */}
                             {modul === 'upa' && (() => {
                               const dd = row.payload_ai?.date_document || {}
+                              const numar = numarFacturaUpa(row._editNumar, dd.numar)
                               return (
                                 <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
+                                  <label style={{ flex:'1 1 140px', fontSize:12 }}>
+                                    <span style={{ color: numar ? G.muted : G.yellow, display:'block', marginBottom:4 }}>Nr. factură *{numar ? '' : ' (obligatoriu)'}</span>
+                                    <input value={row._editNumar ?? dd.numar ?? ''} onChange={e => patch(row.id, '_editNumar', e.target.value)}
+                                      style={{ ...sel, borderColor: numar ? undefined : G.yellow }} placeholder="ex: GZ 1234" />
+                                  </label>
                                   <label style={{ flex:'1 1 160px', fontSize:12 }}>
                                     <span style={{ color:G.muted, display:'block', marginBottom:4 }}>Valoare factură (lei, cu TVA)</span>
                                     <input type="number" step="0.01" value={row._editValoare ?? dd.valoare_totala ?? ''}
@@ -1153,7 +1164,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                     <input type="month" value={row._editLuna ?? (dd.data_emitere ? dd.data_emitere.slice(0,7) : new Date().toISOString().slice(0,7))}
                                       onChange={e => patch(row.id, '_editLuna', e.target.value)} style={sel} />
                                   </label>
-                                  {dd.numar && <div style={{ alignSelf:'flex-end', fontSize:11, color:G.dim, paddingBottom:9 }}>Factura nr. <b style={{color:G.text}}>{dd.numar}</b>{dd.data_emitere ? ` din ${fmtD(dd.data_emitere)}` : ''}</div>}
+                                  {dd.data_emitere && <div style={{ alignSelf:'flex-end', fontSize:11, color:G.dim, paddingBottom:9 }}>Factura din <b style={{color:G.text}}>{fmtD(dd.data_emitere)}</b></div>}
                                 </div>
                               )
                             })()}
@@ -1261,10 +1272,17 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                   {ocupat ? '⏳…' : 'Adaugă ca document nou'}
                                 </button>
                               ) : (
-                                <button onClick={() => handleConfirm(row)} disabled={busyId === row.id}
-                                  style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: busyId === row.id ? 0.5 : 1 }}>
-                                  {busyId === row.id ? '⏳…' : `✓ Confirmă → ${meta.label}`}
-                                </button>
+                                (() => {
+                                  // UPA (20261229b): confirmarea oprită cât numărul facturii e gol; celelalte module neschimbate
+                                  const faraNumarUpa = modul === 'upa' && !numarFacturaUpa(row._editNumar, row.payload_ai?.date_document?.numar)
+                                  const oprit = busyId === row.id || faraNumarUpa
+                                  return (
+                                    <button onClick={() => handleConfirm(row)} disabled={oprit} title={faraNumarUpa ? 'Completează numărul facturii' : undefined}
+                                      style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor: faraNumarUpa ? 'not-allowed' : 'pointer', opacity: oprit ? 0.5 : 1 }}>
+                                      {busyId === row.id ? '⏳…' : `✓ Confirmă → ${meta.label}`}
+                                    </button>
+                                  )
+                                })()
                               )}
                             </div>
                           </>
