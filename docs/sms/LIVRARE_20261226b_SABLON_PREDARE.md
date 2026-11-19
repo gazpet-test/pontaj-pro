@@ -187,13 +187,29 @@ Gărzile refuză înaintea oricărei scrieri altă țintă, A / B neaplicate (am
 conturile nepotrivite, ora din afara ferestrei, o clonă NEIZOLATĂ (cod 28, vezi mai jos) și orice identificator al probei deja folosit pe
 clonă (cod 25: tot spațiul de chei `b26b0000-0000-4000-8000-…`, pe orice coloană care îl poate purta — UAT-uri, parcele, deținători,
 contacte, tokenuri, convocări, jurnal, loturi, mesaje —, codul `TEST-SMSP-SINT` și numerele de document ale probei).
-**Izolarea SMS (r2, cod 28)**: `simulator` din probă NU e o barieră (edge-ul își ia furnizorul din `SMS_FURNIZOR`), iar comutatoarele probei
-sunt globale; de aceea proba cere și verifică din bază că pe clonă nu poate trimite nimic altceva: nicio altă sesiune client conectată
-(PostgREST, edge, worker, altă consolă), fără `pg_cron` / `pg_net` / `http`, niciun lot în afara probei aprobat / în trimitere (o clonă a
-producției are numere reale) și nicio rundă rezervată / trimisă în afara probei din cele 15 minute dinaintea pornirii încoace. Verificarea
-se face la pornire, înaintea FIECĂREI porniri a trimiterii (kill-switch oprit / comutator Redări pornit) și la final; o încălcare oprește
-proba (28), iar curățenia pune la loc setările. Ce nu se vede din SQL (secretele unei funcții edge legate de clonă) e acoperit prin
-refuz: o clonă cu PostgREST / edge conectate nu trece de (a). Pe date SINTETICE
+**Bariera de trimitere (r3, cod 29) — ținută pe TOATĂ rularea.** Singura cale prin care pleacă un SMS e funcția edge `sms-trimite`, care
+trimite doar mesajele întoarse de `fn_sms_rezerva` (rezervarea = UPDATE pe `sms_mesaje`). Înaintea oricărei schimbări (înaintea gărzii 28,
+a copiei setărilor, a lui S0, a kill-switch-ului și a comutatorului), proba pune pe `sms_mesaje` un trigger BEFORE UPDATE (schema proprie
+`smsp_bariera`, `ENABLE ALWAYS`, deci trage și cu `session_replication_role = replica`) care refuză (42501, `smsp_bariera: …`) orice
+scoatere din coadă în altă stare decât `anulat` și orice scriere a furnizorului / momentelor de rezervare-trimitere, în afara sesiunilor
+probei (o cheie de 128 de biți generată local, trimisă doar ca parametru de conexiune prin `PGOPTIONS`, niciodată într-o interogare; în
+bază stă doar sha256-ul ei) ȘI în afara loturilor proiectului probei (nici proba nu poate rezerva un lot străin). Un worker / edge / cron
+care se conectează ORICÂND în timpul probei primește eroare la rezervare, deci nu are ce trimite. Anularea și confirmările de livrare trec.
+Înaintea fiecărei porniri a trimiterii și la final, proba verifică (29) că bariera e în vigoare: triggerul exact și funcția cu amprenta de
+la punere, plus o rezervare reală fără cheie, anulată, refuzată de EA. Bariera se scoate DOAR în tranzacția de curățenie, după ce setările
+sunt puse la loc (la COMMIT dispar deodată); dacă proba se oprește înaintea oricărei schimbări, o scoate trap-ul; o curățenie picată o
+LASĂ pe clonă (rezervările blocate, sigur) și tipărește cum se scoate. O barieră rămasă de la altă rulare = refuz 29. Cheia trebuie să
+ajungă în sesiune (verificat pe sha256 înaintea punerii): conexiune DIRECTĂ la clonă, nu prin pooler. **Condiția de rulare rămâne**: pe
+clonă nu e configurat furnizorul real (fără `SMSLINK_*`, fără `SMS_FURNIZOR=smslink` pe o funcție edge legată de clonă) — bariera nu
+depinde de asta, dar un sistem care trimite fără să treacă prin baza clonei nu e acoperit de ea.
+**Izolarea SMS (r2, cod 28) — verificare SUPLIMENTARĂ (instantaneu, nu barieră)**: `simulator` din probă NU e o barieră (edge-ul își ia
+furnizorul din `SMS_FURNIZOR`), iar comutatoarele probei sunt globale; proba verifică și din bază că pe clonă nu e nimic altceva conectat:
+nicio altă sesiune client (PostgREST, edge, worker, altă consolă), fără `pg_cron` / `pg_net` / `http`, niciun lot în afara probei aprobat /
+în trimitere (o clonă a producției are numere reale) și nicio rundă rezervată / trimisă în afara probei din cele 15 minute dinaintea
+pornirii încoace (rundele rezervate înaintea barierei: edge-ul trimite lista primită în cel mult ~2 minute). Verificarea se face la pornire
+(după punerea barierei), înaintea FIECĂREI porniri a trimiterii (kill-switch oprit / comutator Redări pornit) și la final; o încălcare
+oprește proba (28), iar curățenia pune la loc setările. Ea singură nu oprește o conexiune apărută între două verificări (review r2): asta o
+face bariera. Pe date SINTETICE
 (proiectul `TEST-SMSP-SINT`, mobile 07000009xx, adrese fictive) și pe căile reale — aplicația ca `authenticated` cu JWT-ul contului, workerul
 ca `service_role` — **dovedește**: cu comutatorul Redări oprit (starea producției) nici crearea, nici rezervarea nu trec (42501 /
 `redari_neautorizat`); cu el pornit DOAR în probă (pe calea owner-ului), crearea din șablon dă textul cu „sesiune predare teren”, un
@@ -209,8 +225,11 @@ iar istoricul lor de dinainte de B (aprobare, rezervare, rezultat) cu triggerele
 înainte de COMMIT. Curățenia șterge doar ce a creat ACEASTĂ rulare: lanțul care pleacă de la proiectul cu id-ul, codul și marcajul rulării
 (un uuid luat de pe server la pornire, scris în denumire) — niciodată după o listă de id-uri; dacă S0 n-a ajuns la COMMIT, lanțul e gol și nu
 se șterge nimic. Înainte de COMMIT verifică pe fiecare tabel că au dispărut EXACT rândurile lanțului, pune la loc EXACT rândul `sms_setari`,
-iar după COMMIT, din altă sesiune, că garda 25 trece din nou; `PASS` apare doar după ea, altfel cod 26. Garda 25 / 28 și curățenia au un test
-local pe PGlite cu SQL-ul luat din script (`scripts/pglite/test_sms_predare_flux_clona_local.mjs`: intruși pe fiecare tabel, S0 picat pe
-cheia unui UAT străin, resturile unei rulări anterioare, rulare completă cu scrieri străine în timpul probei, 13 cazuri de izolare, 19
-mutanți). **NU dovedește**: furnizorul real, funcția edge `sms-trimite` (poarta, fereastra verificată în edge,
+iar după COMMIT, din altă sesiune, că garda 25 trece din nou și bariera e scoasă; `PASS` apare doar după ea, altfel cod 26. Garda 25 / 28,
+bariera și curățenia au un test local pe PGlite cu SQL-ul luat din script (`scripts/pglite/test_sms_predare_flux_clona_local.mjs`: intruși
+pe fiecare tabel, S0 picat pe cheia unui UAT străin, resturile unei rulări anterioare, rulare completă cu scrieri străine în timpul probei,
+13 cazuri de izolare; bariera pe lanțul SMS REAL 20261130a + 20261130b: scenariul din review r2 — fără barieră workerul rezervă mesajele
+probei, iar garda 28 e goală înainte și după; cu barieră, refuzat —, lotul intern străin, cronul, cheia greșită, proba pe un lot străin,
+`replica`, anularea legitimă, aceeași secvență a probei cu și fără barieră, verificarea „în vigoare”, curățenia picată care o lasă; plus
+mutanții). **NU dovedește**: furnizorul real, funcția edge `sms-trimite` (poarta, fereastra verificată în edge,
 rundele), cronul (calea fără lot nu se cheamă), nivelul „utilizator” SMS și un worker care a rezervat înaintea COMMIT-ului lui B (§3).

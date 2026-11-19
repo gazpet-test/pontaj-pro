@@ -17,13 +17,30 @@
 #   (24) OWNER is_owner; EDITOR ne-owner și FĂRĂ nivel SMS (fn_sms_nivel_cont = NULL; contul cu redari = editor din proba A e potrivit);
 #   (27) mediul: ora României 08:00–19:45 (altfel fn_sms_rezerva răspunde in_afara_orelor), un singur rând sms_setari, consumul zi / lună cu
 #        loc pentru 5 SMS sub plafoane;
-#   (28) IZOLAREA SMS a clonei (r2, Jakarinos P2): parametrul 'simulator' al probei NU e o barieră (edge-ul își ia furnizorul din SMS_FURNIZOR,
-#        nu din probă), iar comutatoarele probei sunt GLOBALE; bariera e că pe clonă nu există nimic care să poată trimite. Se cere: (a) nicio
+#   (29) BARIERA DE TRIMITERE, ținută pe TOATĂ rularea (r3, Jakarinos P2 r2: garda 28 e un instantaneu, nu oprește o conexiune ulterioară).
+#        Singura cale prin care pleacă un SMS e funcția edge sms-trimite, care trimite DOAR mesajele întoarse de fn_sms_rezerva (rezervarea =
+#        UPDATE pe sms_mesaje: in_coada -> necunoscut, furnizor, rezervat_la; logica.ts: rezervarea, apoi trimiterea listei primite); sms-dlr
+#        și sms-sold nu trimit. Bariera = un trigger BEFORE UPDATE pe sms_mesaje (schema proprie smsp_bariera, ENABLE ALWAYS: trage și cu
+#        session_replication_role = replica) care REFUZĂ (42501, „smsp_bariera: …”) orice scoatere din coadă în altă stare decât anulat și
+#        orice scriere a furnizorului / momentelor de rezervare-trimitere, în afara sesiunilor probei (cheia rulării: 128 de biți aleatori
+#        generați LOCAL, trimiși doar prin PGOPTIONS = parametrul de conexiune smsp.cheie, niciodată în textul unei interogări; în trigger
+#        stă doar sha256-ul ei) ȘI în afara loturilor proiectului probei (nici proba nu poate rezerva un lot străin). Un worker / edge / cron
+#        care se conectează ORICÂND în timpul probei primește eroare la rezervare, deci nu are ce trimite (edge-ul: 42501 -> acces_refuzat).
+#        Se pune ÎNAINTEA oricărei schimbări (înaintea gărzii 28 de la pornire, a copiei setărilor, a lui S0, a kill-switch-ului și a
+#        comutatorului) și se scoate DOAR în tranzacția de curățenie, după ce setările sunt puse la loc (aceeași tranzacție: nu există niciun
+#        moment cu trimiterea pornită fără barieră); dacă proba se oprește înainte de a schimba ceva, trap-ul o scoate singură. Curățenia
+#        picată o LASĂ pe clonă (sigur: blochează rezervările) și spune cum se scoate. Înaintea fiecărei porniri a trimiterii și la final se
+#        verifică (29) că e încă în vigoare: triggerul exact (BEFORE UPDATE ROW, ALWAYS, funcția cu amprenta de la punere) ȘI o încercare
+#        reală fără cheie, anulată, refuzată de ea. O barieră rămasă de la o rulare anterioară = refuz 29 (nu se refolosește, nu se scoate).
+#   (28) IZOLAREA SMS a clonei, verificare SUPLIMENTARĂ (r2; instantaneu, NU barieră — bariera e 29): parametrul 'simulator' al probei NU e
+#        o barieră (edge-ul își ia furnizorul din SMS_FURNIZOR, nu din probă), iar comutatoarele probei sunt GLOBALE. Se cere: (a) nicio
 #        altă sesiune client conectată în afara celei care verifică și a sesiunilor probei (PostgREST / authenticator, un worker, o consolă:
 #        prin ele edge-ul sau un cron extern ar ajunge la clonă), (b) fără pg_cron / pg_net / http (nimic nu pornește singur o cerere), (c)
 #        niciun lot în afara probei aprobat / în trimitere, de orice categorie (cronul și butonul „Trimite” rezervă doar din ele; o clonă a
 #        producției are numere REALE), (d) nicio rundă rezervată / trimisă în afara probei în ultimele 15 minute dinaintea pornirii și nici de
-#        atunci încoace (un worker în curs, cu runde deja rezervate). Se verifică la pornire, ÎNAINTEA fiecărei porniri a trimiterii (kill-
+#        atunci încoace (un worker în curs, cu runde deja rezervate ÎNAINTEA barierei: edge-ul trimite lista primită în cel mult ~2 minute —
+#        BUGET_MS 100 s pentru runde noi + 20 s timeout pe cerere —, deci fereastra de 15 minute le prinde pe toate; ce se rezervă după
+#        punerea barierei e refuzat de ea). Se verifică la pornire (DUPĂ punerea barierei), ÎNAINTEA fiecărei porniri a trimiterii (kill-
 #        switch oprit / comutatorul Redări pornit) și la final (orice rezervare străină apărută în timpul probei = cod 28);
 #   (25) niciun identificator al probei deja folosit pe clonă: TOATE cheile din spațiul b26b0000-0000-4000-8000- (proiect, UAT-uri, parcele,
 #        deținători, contacte, tokenuri, convocări, loturi, mesaje), pe ORICE coloană care le poate purta (id, proiect_id, uat_id, parcela_id,
@@ -93,21 +110,27 @@
 #       contactele / tokenurile / convocările acelor deținători, loturile proiectului și mesajele lor, jurnalul acestor rânduri scris de la
 #       pornire) — NICIODATĂ după o listă de id-uri (un rând străin cu un id al probei nu e atins; dacă S0 n-a ajuns la COMMIT, lanțul e gol
 #       și nu se șterge nimic); triggerele USER ale tabelelor atinse oprite DOAR în ea (loturile / mesajele / jurnalul nu se pot șterge altfel);
-#       pune la loc rândul sms_setari EXACT ca la început și VERIFICĂ înainte de COMMIT: pe fiecare tabel numărul de rânduri = cel dinainte
-#       minus EXACT rândurile lanțului (nimic străin șters), setările = copia, triggerele active; după COMMIT, a doua verificare din ALTĂ
-#       sesiune: garda 25 trece din nou (niciun identificator al probei rămas), setările = copia, 0 sesiuni ale probei. Abia apoi „PASS”.
-#       Curățenia picată = cod 26, dosarul temporar PĂSTRAT (copia setărilor, jurnalele sesiunilor; doar date sintetice).
+#       pune la loc rândul sms_setari EXACT ca la început, scoate bariera (29) ABIA DUPĂ aceea, în aceeași tranzacție, și VERIFICĂ înainte
+#       de COMMIT: pe fiecare tabel numărul de rânduri = cel dinainte minus EXACT rândurile lanțului (nimic străin șters), setările = copia,
+#       triggerele active, bariera scoasă; după COMMIT, a doua verificare din ALTĂ sesiune: garda 25 trece din nou (niciun identificator al
+#       probei rămas), setările = copia, bariera scoasă, 0 sesiuni ale probei. Abia apoi „PASS”. Curățenia picată = cod 26, dosarul temporar
+#       PĂSTRAT (copia setărilor, jurnalele sesiunilor; doar date sintetice), bariera RĂMASĂ pe clonă (rezervările blocate până la scoaterea
+#       ei manuală, după curățenia manuală: sql_bariera_scoate).
 # CE NU DOVEDEȘTE: furnizorul real (SMSLink), funcția edge sms-trimite (poarta JWT, fereastra 08-20 verificată în edge înaintea fiecărui apel,
 #   bucla de runde), cronul intern (calea p_lot_id = NULL nu se cheamă: pe clonă ar putea atinge alte loturi), nivelul „utilizator” SMS (nu
 #   există un cont sintetic cu sms = editor; vezi raportul), concurența cu un worker care a rezervat ÎNAINTE de COMMIT-ul lui B (procedura
-#   din documentul B §3). Izolarea (28) se dovedește din BAZĂ (sesiuni, extensii, loturi, rezervări); secretele unei funcții edge legate de
-#   clonă nu se văd din SQL: o clonă cu PostgREST / edge pornite e refuzată la (a), nu „verificată”.
+#   din documentul B §3). Bariera (29) ține DOAR în baza clonei: un SMS care nu trece prin rezervare (un alt sistem, cu propria listă de
+#   numere) nu e al acestei baze; secretele unei funcții edge legate de clonă nu se văd din SQL — de aceea condiția de rulare rămâne ca
+#   pe clonă să NU fie configurat furnizorul real (fără SMSLINK_* / SMS_FURNIZOR=smslink), iar o clonă cu PostgREST / edge conectate e
+#   refuzată la (28a). Bariera nu depinde de ele: chiar dacă o componentă se conectează după verificare, rezervarea ei e refuzată.
 # Ieșire: 0 = toate OK și curățenia verificată; 1 = o verificare a picat (sau o barieră a expirat); 2 = argumente; 22 = altă țintă; 23 = A / B
 #   neaplicate sau lanțul SMS diferit; 24 = OWNER / EDITOR nepotrivite; 25 = identificatori ai probei deja folosiți; 26 = curățenia a picat
-#   sau n-a putut fi verificată (prioritar față de celelalte); 27 = mediul (oră, setări, plafon); 28 = izolarea SMS nedovedită (la pornire,
-#   înaintea unei porniri a trimiterii sau la final).
-# Testul local al gărzilor și al curățeniei (PGlite, fără bază reală): scripts/pglite/test_sms_predare_flux_clona_local.mjs (cheamă
-#   funcțiile sql_* de mai jos cu SMSP_BIBLIOTECA=1, care doar le definește și iese înaintea oricărei conexiuni).
+#   sau n-a putut fi verificată (prioritar față de celelalte; bariera rămâne pe clonă); 27 = mediul (oră, setări, plafon); 28 = izolarea SMS
+#   nedovedită (la pornire, înaintea unei porniri a trimiterii sau la final); 29 = bariera de trimitere nu s-a putut pune (inclusiv una
+#   rămasă de la altă rulare) sau nu mai e în vigoare la o verificare.
+# Testul local al gărzilor, al barierei și al curățeniei (PGlite, fără bază reală): scripts/pglite/test_sms_predare_flux_clona_local.mjs
+#   (cheamă funcțiile sql_* / cheie_noua de mai jos cu SMSP_BIBLIOTECA=1, care doar le definește și iese înaintea oricărei conexiuni);
+#   bariera e probată acolo și pe lanțul SMS REAL (20261130a + 20261130b: fn_sms_rezerva, triggerele mesajelor), cu scenariul din review.
 # ── constantele probei (înaintea argumentelor: le folosesc funcțiile sql_* de mai jos, deci și testul local) ──
 APP_X=proba_smsp_x; APP_Y=proba_smsp_y; APP_ELIB=proba_smsp_elib; APP_CTL=proba_smsp_ctl
 APPS="'$APP_X', '$APP_Y', '$APP_ELIB', '$APP_CTL'"
@@ -133,6 +156,89 @@ DETS="'$D1','$D2','$D3','$D4','$D5','$D6','$D7','$D8'"
 # MARCAJ = uuid-ul rulării (de pe server, la pornire), T0 = momentul pornirii (clock_timestamp de pe server), SNAP = copia sms_setari
 MARCAJ=""; T0=""; SNAP=""
 denumire() { printf 'Proba SMS predare (sintetic) %s' "$MARCAJ"; }
+# bariera (29): CHEIE = cheia rulării (128 de biți aleatori, generată LOCAL; ajunge în sesiunile probei doar prin PGOPTIONS), CHEIE_SHA =
+# sha256-ul ei (singurul care ajunge în bază, în corpul funcției barierei), BAR_MD5 = amprenta funcției citită de pe server la punere
+CHEIE=""; CHEIE_SHA=""; BAR_MD5=""
+cheie_noua() {
+  CHEIE="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  CHEIE_SHA="$(printf '%s' "$CHEIE" | sha256sum | cut -d' ' -f1)"
+  [[ "$CHEIE" =~ ^[0-9a-f]{32}$ ]] && [[ "$CHEIE_SHA" =~ ^[0-9a-f]{64}$ ]]
+}
+# sha256-ul cheii pe care o vede sesiunea (comparat cu CHEIE_SHA: cheia nu apare în nicio interogare și în niciun rezultat)
+sql_cheie_sesiune() { echo "SELECT encode(sha256(convert_to(coalesce(current_setting('smsp.cheie', true), ''), 'UTF8')), 'hex')"; }
+
+# bariera de trimitere (29): un trigger BEFORE UPDATE pe sms_mesaje (ENABLE ALWAYS) care refuză orice scoatere din coadă în altă stare decât
+# anulat și orice scriere a furnizorului / momentelor de rezervare-trimitere, în afara sesiunilor cu cheia rulării ȘI a loturilor proiectului
+# probei. Anularea (in_coada -> anulat) și confirmările de livrare (livrat_la) nu trimit nimic și trec. CREATE SCHEMA fără IF NOT EXISTS: o
+# barieră rămasă de la altă rulare face punerea să pice (refuz 29), nu e refolosită.
+sql_bariera_pune() {
+  [[ "$CHEIE_SHA" =~ ^[0-9a-f]{64}$ ]] && [[ "$PR" =~ ^[0-9a-f-]{36}$ ]] || return 1
+  cat <<SQL
+\\set ON_ERROR_STOP 1
+BEGIN;
+SET LOCAL lock_timeout = '10s';
+CREATE SCHEMA smsp_bariera;
+CREATE FUNCTION smsp_bariera.fn_refuza_rezervarea() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS \$b\$
+BEGIN
+  IF (OLD.stare = 'in_coada' AND NEW.stare IS DISTINCT FROM 'in_coada' AND NEW.stare IS DISTINCT FROM 'anulat')
+     OR NEW.furnizor IS DISTINCT FROM OLD.furnizor OR NEW.furnizor_id IS DISTINCT FROM OLD.furnizor_id
+     OR NEW.rezervat_la IS DISTINCT FROM OLD.rezervat_la OR NEW.trimis_la IS DISTINCT FROM OLD.trimis_la THEN
+    IF encode(sha256(convert_to(coalesce(current_setting('smsp.cheie', true), ''), 'UTF8')), 'hex') IS DISTINCT FROM '$CHEIE_SHA'
+       OR NOT EXISTS (SELECT 1 FROM public.sms_loturi l WHERE l.id = NEW.lot_id AND l.proiect_id = '$PR'::uuid) THEN
+      RAISE EXCEPTION 'smsp_bariera: clona e in proba SMS 20261226b - rezervarea / trimiterea e refuzata in afara probei' USING ERRCODE = '42501';
+    END IF;
+  END IF;
+  RETURN NEW;
+END \$b\$;
+CREATE TRIGGER smsp_bariera BEFORE UPDATE ON public.sms_mesaje FOR EACH ROW EXECUTE FUNCTION smsp_bariera.fn_refuza_rezervarea();
+ALTER TABLE public.sms_mesaje ENABLE ALWAYS TRIGGER smsp_bariera;
+COMMIT;
+SQL
+}
+sql_bariera_amprenta() { echo "SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = to_regprocedure('smsp_bariera.fn_refuza_rezervarea()')"; }
+# bariera în vigoare: (1) o REZERVARE reală fără cheie (forma UPDATE-ului din fn_sms_rezerva: necunoscut + furnizor + rezervat_la mutat,
+# deci bariera trage pe orice rând; cheia golită doar în tranzacția ei, cu lock_timeout), anulată, trebuie refuzată de EA (refuzul altui
+# trigger sau nicio eroare = cădere; fără niciun mesaj pe clonă nu are ce rezerva, rămâne (2)); (2) triggerul exact (BEFORE UPDATE ROW =
+# tgtype 19, ALWAYS, fără condiție / argumente / coloane, funcția barierei) și funcția cu amprenta de la punere. Gol = în vigoare.
+sql_bariera_verifica() {
+  cat <<SQL
+DO \$p\$
+DECLARE v_id uuid; v_refuz boolean := false;
+BEGIN
+  PERFORM set_config('smsp.cheie', '', true), set_config('lock_timeout', '5s', true);
+  SELECT m.id INTO v_id FROM public.sms_mesaje m ORDER BY m.id LIMIT 1;
+  IF v_id IS NULL THEN RETURN; END IF;
+  BEGIN
+    UPDATE public.sms_mesaje SET stare = 'necunoscut', furnizor = 'simulator', rezervat_la = coalesce(rezervat_la, clock_timestamp()) + interval '1 second'
+     WHERE id = v_id;
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM LIKE 'smsp_bariera:%' THEN v_refuz := true; ELSE RAISE; END IF;
+  END;
+  IF NOT v_refuz THEN RAISE EXCEPTION 'smsp_proba_bariera: o rezervare fara cheia probei NU a fost refuzata de bariera'; END IF;
+END \$p\$;
+SELECT concat_ws(',',
+  CASE WHEN NOT EXISTS (SELECT 1 FROM pg_trigger t
+                         WHERE t.tgrelid = 'public.sms_mesaje'::regclass AND t.tgname = 'smsp_bariera' AND NOT t.tgisinternal AND t.tgenabled = 'A'
+                           AND t.tgtype = 19 AND t.tgqual IS NULL AND t.tgnargs = 0 AND t.tgattr::text = ''
+                           AND t.tgfoid = to_regprocedure('smsp_bariera.fn_refuza_rezervarea()'))
+       THEN 'trigger_lipsa_sau_schimbat' END,
+  CASE WHEN '$BAR_MD5' !~ '^[0-9a-f]{32}\$'
+         OR (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = to_regprocedure('smsp_bariera.fn_refuza_rezervarea()')) IS DISTINCT FROM '$BAR_MD5'
+       THEN 'functia_barierei_schimbata' END)
+SQL
+}
+# scoaterea barierei: aceleași trei instrucțiuni în curățenie (după setări) și în trap când proba nu a schimbat nimic altceva
+sql_bariera_drop() {
+  printf '%s\n' 'DROP TRIGGER smsp_bariera ON public.sms_mesaje;' 'DROP FUNCTION smsp_bariera.fn_refuza_rezervarea();' 'DROP SCHEMA smsp_bariera;'
+}
+sql_bariera_scoate() {
+  printf '%s\n' '\set ON_ERROR_STOP 1' 'BEGIN;' "SET LOCAL lock_timeout = '10s';"
+  sql_bariera_drop
+  printf '%s\n' 'COMMIT;'
+}
+sql_bariera_absenta() {
+  echo "SELECT (to_regnamespace('smsp_bariera') IS NULL AND NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgname = 'smsp_bariera' AND t.tgrelid = 'public.sms_mesaje'::regclass))::text"
+}
 
 # garda 25 (și a doua verificare a curățeniei, după COMMIT): tabelele în care apare deja un identificator al probei; gol = niciunul.
 # Spațiul întreg, pe toate coloanele-cheie: un UAT / o parcelă / un rând de jurnal din ALT proiect cu un id al probei = refuz.
@@ -270,8 +376,11 @@ ALTER TABLE public.red_detinatori ENABLE TRIGGER USER; ALTER TABLE public.red_de
 ALTER TABLE public.red_detinatori_contact ENABLE TRIGGER USER; ALTER TABLE public.red_convocari ENABLE TRIGGER USER;
 ALTER TABLE public.red_jurnal ENABLE TRIGGER USER; ALTER TABLE public.sms_setari ENABLE TRIGGER USER;
 ALTER TABLE public.sms_loturi ENABLE TRIGGER USER; ALTER TABLE public.sms_mesaje ENABLE TRIGGER USER;
+-- (3b) bariera de trimitere (29) se scoate ABIA ACUM, după ce setările sunt puse la loc, în ACEEAȘI tranzacție: la COMMIT setările probei
+--      și bariera dispar deodată (nimeni nu vede trimiterea pornită fără barieră); o curățenie picată (ROLLBACK) o lasă pe clonă
+$(sql_bariera_drop)
 -- (4) verificarea ÎNAINTE de COMMIT: pe fiecare tabel au dispărut EXACT rândurile rulării (nimic străin șters, nimic al ei rămas), setările =
---     copia, triggerele USER reactivate; altfel ROLLBACK (nimic șters)
+--     copia, triggerele USER reactivate, bariera scoasă; altfel ROLLBACK (nimic șters, bariera rămâne)
 DO \$v\$ DECLARE v_n record; v_acum bigint; BEGIN
   FOR v_n IN SELECT * FROM _p_numar ORDER BY tabela LOOP
     EXECUTE format('SELECT count(*) FROM public.%I', v_n.tabela) INTO v_acum;
@@ -293,6 +402,9 @@ DO \$v\$ DECLARE v_n record; v_acum bigint; BEGIN
                                 'public.red_detinatori_token'::regclass, 'public.red_detinatori'::regclass, 'public.red_parcele'::regclass,
                                 'public.red_uat'::regclass, 'public.red_proiecte'::regclass)) THEN
     RAISE EXCEPTION 'curatenie: un trigger USER a ramas dezactivat';
+  END IF;
+  IF to_regnamespace('smsp_bariera') IS NOT NULL OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgname = 'smsp_bariera' AND t.tgrelid = 'public.sms_mesaje'::regclass) THEN
+    RAISE EXCEPTION 'curatenie: bariera de trimitere a ramas';
   END IF;
 END \$v\$;
 COMMIT;
@@ -319,12 +431,17 @@ EDITOR="${EDITOR:-}"
 [[ "$OWNER" =~ ^[0-9a-f-]{36}$ ]] || { echo "OWNER invalid" >&2; exit 2; }
 [[ "$EDITOR" =~ ^[0-9a-f-]{36}$ ]] || { echo "EDITOR=<uuid> lipsa (profil ne-owner, fara acces SMS, pe clona)" >&2; exit 2; }
 cd "$(dirname "$0")/../.."
+# cheia rulării (bariera 29), ÎNAINTEA primei conexiuni: TOATE sesiunile probei (q / qf / apel / fundal) o primesc ca parametru de conexiune
+# smsp.cheie prin PGOPTIONS; nu apare în nicio interogare, în niciun argument și în niciun fișier al probei
+cheie_noua || { echo "cheia rularii nu s-a putut genera (od / sha256sum)" >&2; exit 2; }
+export PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c smsp.cheie=$CHEIE"
 CONN=(-h "$H" -p "$P" -U "$U" -d "$D")
 TMP="$(mktemp -d ./.clona_20261226b_flux.XXXXXX)"
 RUN="$(date +%s)"
 FID1="PROBA-SMSP-$RUN-1"; FID1B="PROBA-SMSP-$RUN-1b"; FID3="PROBA-SMSP-$RUN-3"; FID_V4="PROBA-SMSP-$RUN-V4"
-# CURATA = 1 abia după gărzi (înaintea primei scrieri): până atunci trap-ul nu atinge clona
-PIDS=(); CURATA=0; ESEC=0
+# CURATA = 1 abia după gărzi (înaintea primei scrieri de date): până atunci trap-ul nu atinge datele clonei; BARIERA = 1 imediat după ce
+# ACEASTĂ rulare a pus bariera (29): cu CURATA = 0, trap-ul o scoate singur (nimic altceva schimbat), cu CURATA = 1 o scoate curățenia
+PIDS=(); CURATA=0; BARIERA=0; ESEC=0
 # SQL-ul pleacă pe stdin / din fișiere, nu ca argument (-c): pe Windows argumentele cu diacritice ajung alterate (lecția 20261226a).
 q() { printf '%s\n' "$1" | PGAPPNAME="$APP_CTL" "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -f - | tr -d '\r'; }
 qf() { PGAPPNAME="$APP_CTL" "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" -f "$1" | tr -d '\r'; }
@@ -381,23 +498,46 @@ kill_switch() {  # $1 = true / false; calea reală (owner, fn_sms_setari_salveaz
   apel authenticated "$OWNER" "SELECT (r->>'kill_switch') FROM (SELECT public.fn_sms_setari_salveaza($1, s.plafon_zi, s.plafon_luna, s.versiune) AS r
                                  FROM public.sms_setari s WHERE s.id) x;"
 }
-# garda 28 la un moment dat: încălcare = REFUZ + cod 28 (trap-ul curăță și pune la loc setările dacă e armat); fără SQL-ul ei nu trece nimic
+# bariera 29 + garda 28 la un moment dat: ÎNTÂI bariera (în vigoare, cu proba funcțională), apoi izolarea (verificare suplimentară);
+# încălcare = REFUZ + cod 29 / 28 (trap-ul curăță și pune la loc setările dacă e armat); o verificare care nu se poate face = refuz
 izolare_verifica() {
-  local v
+  local v b
+  b="$(q "$(sql_bariera_verifica)")" || b="verificarea_barierei_a_picat"
+  if [ -n "$b" ]; then
+    echo "REFUZ (29): bariera de trimitere nu mai e in vigoare ($1): $b" >&2
+    ESEC=1; exit 29
+  fi
+  echo "  OK  bariera de trimitere in vigoare ($1): triggerul exact, functia neschimbata, o rezervare fara cheia probei refuzata"
   v="$(q "$(sql_izolare)")" || v="verificarea_a_picat"
   if [ -n "$v" ]; then
     echo "REFUZ (28): izolarea SMS a clonei nu e dovedita ($1): $v" >&2
     echo "  (pe clona nu trebuie sa fie conectat nimic altceva: PostgREST / edge / worker / alta consola; fara pg_cron / pg_net / http; niciun lot aprobat / in trimitere si nicio rezervare in afara probei)" >&2
     ESEC=1; exit 28
   fi
-  echo "  OK  izolarea SMS ($1): nicio sesiune straina, fara pg_cron / pg_net / http, niciun lot trimisibil si nicio rezervare in afara probei"
+  echo "  OK  izolarea SMS ($1, suplimentar): nicio sesiune straina, fara pg_cron / pg_net / http, niciun lot trimisibil si nicio rezervare in afara probei"
+}
+# instrucțiunile de scoatere manuală a barierei (când nu s-a putut scoate automat)
+bariera_manual() {
+  echo "ATENTIE: bariera de trimitere (schema smsp_bariera) a ramas pe clona: rezervarile SMS sunt BLOCATE (sigur). Se scoate, DUPA curatenia manuala a probei, cu:" >&2
+  sql_bariera_drop | sed 's/^/     /' >&2
 }
 
 curatenie() {
-  local rc=$? p v s
+  local rc=$? p v s b
   for p in "${PIDS[@]+"${PIDS[@]}"}"; do kill "$p" 2>/dev/null || true; done
   if [ "$CURATA" != 1 ]; then
-    # gărzile au refuzat înaintea oricărei scrieri: nimic de curățat pe clonă
+    # gărzile au refuzat înaintea oricărei scrieri de date: pe clonă e cel mult bariera ACESTEI rulări (setările neatinse) -> o scoate
+    if [ "$BARIERA" = 1 ]; then
+      if sql_bariera_scoate >"$TMP/bariera_scoate.sql" && qf "$TMP/bariera_scoate.sql" >"$TMP/bariera_scoate.log" 2>&1 \
+         && [ "$(q "$(sql_bariera_absenta)" 2>/dev/null)" = true ]; then
+        echo "bariera de trimitere scoasa (proba s-a oprit inaintea oricarei schimbari de date / setari)"
+      else
+        sed 's/^/     bariera| /' "$TMP/bariera_scoate.log" >&2 2>/dev/null || true
+        bariera_manual
+        echo "ESEC: bariera probei nu s-a putut scoate (cod 26; motivul initial: cod $rc)" >&2
+        exit 26
+      fi
+    fi
     rm -rf "$TMP"
     [ "$rc" = 0 ] || echo "ESEC: proba fluxului SMS pe clona 20261226b (cod $rc)" >&2
     exit "$rc"
@@ -419,11 +559,12 @@ curatenie() {
                        OR clock_timestamp() > t0 + interval '10 seconds';
                 PERFORM pg_sleep(0.05); END LOOP; END \$s\$;
             SELECT count(*) FROM pg_stat_activity WHERE application_name IN ($APPS) AND pid <> pg_backend_pid();")" || p="eroare"
-    if [ -z "$v" ] && [ "$s" = true ] && [ "$p" = 0 ]; then
+    b="$(q "$(sql_bariera_absenta)")" || b="eroare"
+    if [ -z "$v" ] && [ "$s" = true ] && [ "$p" = 0 ] && [ "$b" = true ]; then
       ok_cur=1
-      echo "curatenie: doar randurile rularii sterse (numarat pe fiecare tabel), sms_setari readus exact; verificat dupa COMMIT din alta sesiune (niciun identificator al probei, 0 sesiuni)"
+      echo "curatenie: doar randurile rularii sterse (numarat pe fiecare tabel), sms_setari readus exact, apoi bariera scoasa (aceeasi tranzactie); verificat dupa COMMIT din alta sesiune (niciun identificator al probei, bariera scoasa, 0 sesiuni)"
     else
-      echo "ATENTIE: curatenia nu s-a verificat: identificatori ramasi [$v] (asteptat niciunul), setari = copia [$s] (asteptat true), sesiuni ale probei [$p] (asteptat 0)" >&2
+      echo "ATENTIE: curatenia nu s-a verificat: identificatori ramasi [$v] (asteptat niciunul), setari = copia [$s] (asteptat true), sesiuni ale probei [$p] (asteptat 0), bariera scoasa [$b] (asteptat true)" >&2
     fi
   else
     echo "ATENTIE: tranzactia de curatenie a picat (ROLLBACK: nimic sters, setarile neatinse de ea):" >&2
@@ -431,6 +572,7 @@ curatenie() {
   fi
   if [ "$ok_cur" != 1 ]; then
     echo "ATENTIE: de curatat manual pe clona: proiectul $PR ($COD, marcaj $MARCAJ) cu lantul lui (UAT-uri, parcele, detinatori, loturi SMS), si randul sms_setari (copia: $TMP/setari_initial.json)" >&2
+    [ "$(q "$(sql_bariera_absenta)" 2>/dev/null)" = true ] || bariera_manual
     echo "ATENTIE: dosarul temporar al probei a ramas pentru diagnostic: $TMP (doar date sintetice)" >&2
     echo "ESEC: curatenia probei a picat (cod 26; verificarile de mai sus raman valabile asa cum au fost tiparite)" >&2
     exit 26
@@ -491,6 +633,20 @@ G27="$(q "SELECT concat_ws(',',
 # momentul pornirii (T0, de pe server: fereastra rezervărilor străine la 28, jurnalul rulării la curățenie) și marcajul rulării (proiectul S0)
 IFS='|' read -r T0 MARCAJ <<<"$(q "SELECT clock_timestamp()::text || '|' || gen_random_uuid()::text")"
 [[ "$MARCAJ" =~ ^[0-9a-f-]{36}$ ]] && [ -n "$T0" ] || { echo "momentul pornirii / marcajul rularii nu s-au putut lua" >&2; exit 27; }
+# ── bariera de trimitere (29), ÎNAINTEA oricărei alte scrieri: de aici încolo nicio sesiune fără cheia rulării nu mai poate rezerva ──
+# cheia trebuie să ajungă în sesiune (PGOPTIONS ignorat, ex. un pooler = proba s-ar bloca singură): comparat pe sha256, cheia nu se afișează
+[ "$(q "$(sql_cheie_sesiune)")" = "$CHEIE_SHA" ] \
+  || { echo "REFUZ (29): cheia rularii nu ajunge in sesiune prin PGOPTIONS (conexiune prin pooler? conectati-va DIRECT la clona); nimic scris" >&2; exit 29; }
+sql_bariera_pune >"$TMP/bariera.sql" || { echo "REFUZ (29): SQL-ul barierei nu s-a putut genera" >&2; exit 29; }
+if ! qf "$TMP/bariera.sql" >"$TMP/bariera.log" 2>&1; then
+  echo "REFUZ (29): bariera de trimitere nu s-a putut pune (o bariera ramasa de la alta rulare = schema smsp_bariera deja existenta; nu se refoloseste): $(tr -d '\r' <"$TMP/bariera.log" | grep -m 1 'ERROR' || true)" >&2
+  exit 29
+fi
+BARIERA=1
+BAR_MD5="$(q "$(sql_bariera_amprenta)")"
+[[ "$BAR_MD5" =~ ^[0-9a-f]{32}$ ]] || { echo "REFUZ (29): amprenta barierei nu s-a putut citi" >&2; exit 29; }
+echo "bariera de trimitere pusa (smsp_bariera, ENABLE ALWAYS; doar sesiunile cu cheia rularii, doar loturile proiectului $COD)"
+# garda 28 DUPĂ barieră: rezervările străine dinaintea ei (fereastra de 15 minute) + starea clonei; ce vine după e refuzat de barieră
 izolare_verifica "la pornire"
 REST="$(q "$(sql_garda_resturi)")"
 [ -z "$REST" ] || { echo "REFUZ: identificatori ai probei deja folositi pe clona (spatiul ${SPATIU}... / $COD) in: $REST; nimic scris" >&2; exit 25; }
