@@ -255,8 +255,8 @@ CREATE TABLE public.red_import_ai_jurnal (
   -- elemente respinse la validare (respinse ≥ 1): bucata NU e verificată complet; 'rezervat' nu are nimic din închidere
   CONSTRAINT red_import_ai_jurnal_inchidere_ck CHECK (
     (stare = 'rezervat' AND inchis_la IS NULL AND semnale IS NULL AND respinse IS NULL AND tokeni_in IS NULL AND tokeni_out IS NULL AND cost_usd IS NULL AND eroare_cod IS NULL)
-    OR (stare = 'ok' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse = 0 AND tokeni_in IS NOT NULL AND tokeni_out IS NOT NULL AND cost_usd IS NOT NULL AND eroare_cod IS NULL)
-    OR (stare = 'incomplet' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse >= 1 AND tokeni_in IS NOT NULL AND tokeni_out IS NOT NULL AND cost_usd IS NOT NULL AND eroare_cod IS NULL)
+    OR (stare = 'ok' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse IS NOT NULL AND respinse = 0 AND tokeni_in IS NOT NULL AND tokeni_out IS NOT NULL AND cost_usd IS NOT NULL AND eroare_cod IS NULL)
+    OR (stare = 'incomplet' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse IS NOT NULL AND respinse >= 1 AND tokeni_in IS NOT NULL AND tokeni_out IS NOT NULL AND cost_usd IS NOT NULL AND eroare_cod IS NULL)
     OR (stare = 'eroare' AND inchis_la IS NOT NULL AND eroare_cod IS NOT NULL)
     OR (stare = 'necunoscut' AND inchis_la IS NOT NULL AND eroare_cod IS NOT NULL AND cost_usd IS NULL))
 );
