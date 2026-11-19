@@ -190,6 +190,11 @@ describe('panoul AI — pornirea (plătită)', () => {
     r = await ruleazaCu([async () => ({ data: { cod: 'ok', semnale: [], cost_usd: 0.001 }, error: null }), raspuns('ok', [], 0)])
     expect(r.p.onSemnale.mock.calls[0][3]).toEqual(randuriBucata(102, 151))
   })
+  it('r3: un răspuns cu eroare HTTP al cărui corp pretinde „ok” NU se aplică (fail-safe): bucla se oprește la bucata 1', async () => {
+    const r = await ruleazaCu([async () => ({ data: null, error: { context: { json: async () => ({ cod: 'ok', semnale: [], respinse: 0 }) } } }), raspuns('ok', [], 0)])
+    expect(sb.apeluriInvoke).toHaveLength(1)
+    expect(r.p.onSemnale).not.toHaveBeenCalled()
+  })
   it('r3: GOL valid fără respingeri pe ambele bucăți ({"semnale":[]}, cod ok) → rulare completă, TOATE rândurile acoperite (curățarea legitimă)', async () => {
     const r = await ruleazaCu([raspuns('ok', [], 0), raspuns('ok', [], 0)])
     const [, , rez, acoperite] = r.p.onSemnale.mock.calls[0]
