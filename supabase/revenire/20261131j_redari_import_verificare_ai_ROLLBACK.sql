@@ -1,20 +1,24 @@
 -- Revenire 20261131j_redari_import_verificare_ai. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a owner-ului (supabase/revenire/README.md).
--- Readuce starea de dinainte de 20261131j: scoate tabelele red_proiect_drepturi și red_import_ai_jurnal (cu politicile, triggerul de jurnal și
---   FK-urile lor) și funcțiile fn_red_import_ai_poate / fn_red_import_ai_rezerva / fn_red_import_ai_inchide. Nimic altceva nu fusese schimbat.
+-- Readuce starea de dinainte de 20261131j: scoate tabelele red_proiect_drepturi, red_proiect_drepturi_istoric și red_import_ai_jurnal (cu
+--   politicile, triggerele și FK-urile lor) și funcțiile fn_red_import_ai_poate / fn_red_import_ai_rezerva / fn_red_import_ai_inchide /
+--   fn_red_proiect_drepturi_istoric. Nimic altceva nu fusese schimbat.
 -- CONTRACTUL L14 (textual): revenirea REFUZĂ la ORICE urmă de folosire după aplicare: un rând în red_proiect_drepturi (un drept acordat), un rând
---   în red_import_ai_jurnal (un apel rezervat / plătit) sau un rând în red_jurnal pentru tabela red_proiect_drepturi (un drept acordat și retras
---   între timp). Nimic nu se șterge din istoric: după primul drept acordat sau primul apel, întoarcerea = migrare nouă, revizuită.
+--   în red_proiect_drepturi_istoric (un drept acordat, chiar retras între timp), un rând în red_import_ai_jurnal (un apel rezervat / plătit) sau
+--   (apărare în plus, r1) un rând în red_jurnal pentru tabela red_proiect_drepturi. Nimic nu se șterge din istoric: după primul drept acordat sau
+--   primul apel, întoarcerea = migrare nouă, revizuită (sau migrarea de dezactivare — vezi raportul r2).
 -- Starea EXACTĂ a migrării e verificată de două ori (înainte și după lock): corpurile (AMPRENTE-NOI 20261131j) + proprietăți + ACL, tabelele.
 --
 -- LIVRAREA = prin runner, DOAR cu plafon (revenirile se livrează fără amprenta globală, docs/LIVRARE_L15_V2.md §9):
 --   bash scripts/livrare_migrare.sh --migrare supabase/revenire/20261131j_redari_import_verificare_ai_ROLLBACK.sql --sha256 <sha256 al fișierului>
 --        --versiune 20261131200001 --tinta-db postgres --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P> --user postgres
 --        --plafon-tranzactie-ms 2000
--- Lock (L06), punct unic, NOWAIT: red_proiect_drepturi → red_import_ai_jurnal → red_proiecte → profiles, toate ACCESS EXCLUSIVE (verificarea „fără
+-- Lock (L06), punct unic, NOWAIT: red_proiect_drepturi → red_proiect_drepturi_istoric → red_import_ai_jurnal → red_proiecte → profiles, toate
+--   ACCESS EXCLUSIVE (verificarea „fără
 --   date” sub lock, apoi DROP), bugetul 1 s de la prima încercare. De ce ACCESS EXCLUSIVE și pe red_proiecte / profiles: scoaterea unui FK (DROP TABLE
 --   sau DROP CONSTRAINT) ia ACCESS EXCLUSIVE pe tabela REFERITĂ (măsurat în proba PGlite: pg_locks după DROP); luat aici explicit, NOWAIT, în buget —
 --   altfel DROP-ul l-ar aștepta implicit. Cât e ținut (până la COMMIT, plafonul 2000 ms) sunt oprite și CITIRILE din profiles și red_proiecte (toate
---   ecranele / politicile care le citesc așteaptă): de rulat doar într-un moment liniștit.
+--   ecranele / politicile care le citesc așteaptă): de rulat doar într-un moment liniștit, prin runner (plafonul 2000 ms), după proba de blocare pe
+--   clonă (vezi raportul r2: condițiile și alternativa „migrare de dezactivare”, care păstrează tabelele și nu ia lock-uri pe red_proiecte / profiles).
 -- Probe: scripts/pglite/test_redari_import_ai_local.mjs (aplicare -> revenire -> reaplicare pe bază nefolosită; refuzurile revenirii, inclusiv istoricul).
 DO $pre$
 DECLARE v_plafon text; v_incercari integer := 0; v_t0 timestamptz; v_buget constant interval := interval '1 second'; v_pas integer; v_rau text;
@@ -49,6 +53,7 @@ BEGIN
         v_incercari := v_incercari + 1;
         BEGIN
           LOCK TABLE public.red_proiect_drepturi IN ACCESS EXCLUSIVE MODE NOWAIT;
+          LOCK TABLE public.red_proiect_drepturi_istoric IN ACCESS EXCLUSIVE MODE NOWAIT;
           LOCK TABLE public.red_import_ai_jurnal IN ACCESS EXCLUSIVE MODE NOWAIT;
           LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE NOWAIT;
           LOCK TABLE public.profiles IN ACCESS EXCLUSIVE MODE NOWAIT;
@@ -69,8 +74,9 @@ BEGIN
       FROM (VALUES
         -- >>> AMPRENTE-NOI 20261131j
         ('public.fn_red_import_ai_poate(uuid)', 'b20a13bf9179b76c00812b63362bf32f', 'sql', true, 's', 'boolean'),
-        ('public.fn_red_import_ai_rezerva(uuid,uuid,text,text,integer,integer,integer,integer,integer)', '959e29666c0086ac713cbf3af4bc2318', 'plpgsql', true, 'v', 'jsonb'),
-        ('public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)', '33ac8ddf00565721662122fd7d71a3ef', 'plpgsql', true, 'v', 'boolean')
+        ('public.fn_red_import_ai_rezerva(uuid,uuid,text,text,integer,integer,integer,integer,integer)', '04dd71b7a3ac5fda4a0cf0ca3e4e6377', 'plpgsql', true, 'v', 'jsonb'),
+        ('public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)', '33ac8ddf00565721662122fd7d71a3ef', 'plpgsql', true, 'v', 'boolean'),
+        ('public.fn_red_proiect_drepturi_istoric()', '92975fe64ee3f774740cc395cf8384c8', 'plpgsql', true, 'v', 'trigger')
         -- <<< AMPRENTE-NOI 20261131j
       ) a(semnatura, amprenta, limbaj, definer, volatil, intoarce)
       LEFT JOIN pg_proc p ON p.oid = to_regprocedure(a.semnatura)
@@ -85,19 +91,26 @@ BEGIN
     -- (to_regprocedure / to_regclass, nu ::regprocedure / ::regclass: pe o bază fără migrare refuzul trebuie să fie al gărzii, nu o eroare de cast)
     IF v_rau IS NOT NULL
        OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-             AND p.proname IN ('fn_red_import_ai_poate', 'fn_red_import_ai_rezerva', 'fn_red_import_ai_inchide')) <> 3
+             AND p.proname IN ('fn_red_import_ai_poate', 'fn_red_import_ai_rezerva', 'fn_red_import_ai_inchide', 'fn_red_proiect_drepturi_istoric')) <> 4
        OR (SELECT string_agg(p.proname || '=' || coalesce((SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(p.proacl::text[]) x)::text, ''), ';' ORDER BY p.proname COLLATE "C")
-             FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_red_import_ai_poate', 'fn_red_import_ai_rezerva', 'fn_red_import_ai_inchide'))
-          IS DISTINCT FROM 'fn_red_import_ai_inchide={postgres=X/postgres,service_role=X/postgres};fn_red_import_ai_poate={authenticated=X/postgres,postgres=X/postgres};fn_red_import_ai_rezerva={authenticated=X/postgres,postgres=X/postgres}'
-       OR to_regclass('public.red_proiect_drepturi') IS NULL OR to_regclass('public.red_import_ai_jurnal') IS NULL
-       OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid IN (to_regclass('public.red_proiect_drepturi'), to_regclass('public.red_import_ai_jurnal')) AND NOT t.tgisinternal) <> 1
-       OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = to_regclass('public.red_proiect_drepturi') AND t.tgname = 'trg_red_jurnal'
-                        AND t.tgfoid = to_regprocedure('public.fn_red_jurnal()') AND t.tgtype = 29 AND t.tgqual IS NULL AND t.tgnargs = 0)
-       OR (SELECT count(*) FROM pg_policy WHERE polrelid IN (to_regclass('public.red_proiect_drepturi'), to_regclass('public.red_import_ai_jurnal'))) <> 2 THEN
+             FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+              AND p.proname IN ('fn_red_import_ai_poate', 'fn_red_import_ai_rezerva', 'fn_red_import_ai_inchide', 'fn_red_proiect_drepturi_istoric'))
+          IS DISTINCT FROM 'fn_red_import_ai_inchide={postgres=X/postgres,service_role=X/postgres};fn_red_import_ai_poate={authenticated=X/postgres,postgres=X/postgres};fn_red_import_ai_rezerva={authenticated=X/postgres,postgres=X/postgres};fn_red_proiect_drepturi_istoric={postgres=X/postgres}'
+       OR to_regclass('public.red_proiect_drepturi') IS NULL OR to_regclass('public.red_import_ai_jurnal') IS NULL OR to_regclass('public.red_proiect_drepturi_istoric') IS NULL
+       -- triggerele EXACTE (nume, funcție, tip, fără condiție / argumente), aceleași ca în postcondiția migrării
+       OR (SELECT string_agg(t.tgrelid::regclass::text || '.' || t.tgname::text || '=' || t.tgfoid::regprocedure::text || '/' || t.tgenabled::text || '/' || t.tgtype::text
+                             || '/' || coalesce(pg_get_expr(t.tgqual, t.tgrelid), '') || '/' || t.tgnargs::text, ';' ORDER BY t.tgrelid::regclass::text || '.' || t.tgname::text COLLATE "C")
+             FROM pg_trigger t WHERE t.tgrelid IN (to_regclass('public.red_proiect_drepturi'), to_regclass('public.red_proiect_drepturi_istoric'), to_regclass('public.red_import_ai_jurnal'))
+              AND NOT t.tgisinternal)
+          IS DISTINCT FROM 'red_proiect_drepturi.trg_red_proiect_drepturi_fara_update=fn_red_proiect_drepturi_istoric()/O/50//0;'
+                        || 'red_proiect_drepturi.trg_red_proiect_drepturi_istoric=fn_red_proiect_drepturi_istoric()/O/13//0;'
+                        || 'red_proiect_drepturi_istoric.trg_red_proiect_drepturi_istoric_imuabil=fn_red_proiect_drepturi_istoric()/O/58//0'
+       OR (SELECT count(*) FROM pg_policy WHERE polrelid IN (to_regclass('public.red_proiect_drepturi'), to_regclass('public.red_proiect_drepturi_istoric'), to_regclass('public.red_import_ai_jurnal'))) <> 3 THEN
       RAISE EXCEPTION '20261131j revenire: starea nu e cea din 20261131j (pasul %, functii: %)', v_pas, coalesce(v_rau, 'drepturi / variante / tabele / triggere / politici');
     END IF;
     -- L14: refuz pe ORICE urmă de folosire după aplicare (nimic nu se șterge)
     IF EXISTS (SELECT 1 FROM public.red_proiect_drepturi) OR EXISTS (SELECT 1 FROM public.red_import_ai_jurnal)
+       OR EXISTS (SELECT 1 FROM public.red_proiect_drepturi_istoric)
        OR EXISTS (SELECT 1 FROM public.red_jurnal j WHERE j.tabela = 'red_proiect_drepturi') THEN
       RAISE EXCEPTION '20261131j revenire: ISTORIC_NOU (L14): drepturi acordate (sau acordate si retrase) / apeluri AI dupa aplicare — nimic sters; intoarcerea = migrare noua, revizuita (pasul %)', v_pas;
     END IF;
@@ -110,13 +123,16 @@ DROP FUNCTION public.fn_red_import_ai_rezerva(uuid, uuid, text, text, integer, i
 DROP TABLE public.red_import_ai_jurnal;
 DROP FUNCTION public.fn_red_import_ai_poate(uuid);
 DROP TABLE public.red_proiect_drepturi;
+DROP TABLE public.red_proiect_drepturi_istoric;
+DROP FUNCTION public.fn_red_proiect_drepturi_istoric();
 
 -- ─── 2. Postcondiții ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 DO $post$
 BEGIN
   IF to_regclass('public.red_proiect_drepturi') IS NOT NULL OR to_regclass('public.red_import_ai_jurnal') IS NOT NULL
+     OR to_regclass('public.red_proiect_drepturi_istoric') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-                 AND p.proname IN ('fn_red_import_ai_poate', 'fn_red_import_ai_rezerva', 'fn_red_import_ai_inchide'))
+                 AND p.proname IN ('fn_red_import_ai_poate', 'fn_red_import_ai_rezerva', 'fn_red_import_ai_inchide', 'fn_red_proiect_drepturi_istoric'))
      OR EXISTS (SELECT 1 FROM pg_constraint c WHERE c.confrelid IN ('public.red_proiecte'::regclass, 'public.profiles'::regclass)
                  AND c.conname LIKE ANY (ARRAY['red_proiect_drepturi%', 'red_import_ai_jurnal%'])) THEN
     RAISE EXCEPTION '20261131j revenire: postconditie: obiecte ramase';

@@ -11,7 +11,20 @@ export const FUNCTIA_EDGE_AI = 'redari-import-verificare-ai'
 export const ETICHETA_CATEGORIE_AI = Object.freeze({
   nume_persoana: 'nume de persoană / firmă', adresa: 'adresă', telefon_cnp: 'telefon / CNP', email_web: 'e-mail / adresă web', text_liber: 'text liber',
 })
+/**
+ * r2 (#1141): explicația afișată pentru un semnal AI = text FIX din cod, după categoria validată. Modelul nu mai scrie niciun text liber (un text al
+ * lui putea repeta date personale din alt rând); o categorie necunoscută nu are explicație (semnalul se ignoră înainte, în semnaleAiInDeVerificat).
+ */
+export const EXPLICATIE_CATEGORIE_AI = Object.freeze({
+  nume_persoana: 'Valoarea pare un nume de persoană sau denumirea unei firme, nu un identificator (posibilă coloană decalată).',
+  adresa: 'Valoarea pare o adresă poștală (stradă, număr, bloc), nu un identificator.',
+  telefon_cnp: 'Valoarea pare un număr de telefon sau un CNP, nu un identificator.',
+  email_web: 'Valoarea pare o adresă de e-mail sau o adresă web, nu un identificator.',
+  text_liber: 'Valoarea pare text liber (propoziție, observație, mesaj), nu un identificator.',
+})
 const nevid = v => typeof v === 'string' && v.trim() !== ''
+/** Cheia unui rând Excel în „De verificat” (aceleași câmpuri ca în harta din pregatesteVerificareAi), fără valori. */
+export const cheieRandAi = r => JSON.stringify([Number.isInteger(r?.rand) ? r.rand : null, String(r?.uat ?? ''), String(r?.nr_crt ?? ''), String(r?.cheie_parcela ?? '')])
 
 /**
  * pregatesteVerificareAi(preview) → { bucati: [[{ i, poz_hg, nr_cadastral, tarla }]], harta: Map(i → [{ rand, uat, nr_crt, cheie_parcela }]),
@@ -46,8 +59,8 @@ export function pregatesteVerificareAi(preview) {
 
 /**
  * semnaleAiInDeVerificat(semnale, harta) → intrările „de verificat” (sursa 'ai'), câte una pe fiecare rând Excel cu aceeași triplă de valori.
- * semnale = cele validate de funcția edge ({ i, camp, categorie, motiv }); un element cu i / camp / categorie necunoscute se ignoră (L18: nu se
- * ghicește rândul). Motivul AI (text) NU intră aici: rămâne doar în panoul AI (nu în CSV / lot); `motiv` = eticheta fixă din cod.
+ * semnale = cele validate de funcția edge ({ i, camp, categorie }); un element cu i / camp / categorie necunoscute se ignoră (L18: nu se
+ * ghicește rândul). Orice altă cheie a elementului (ex. un text al modelului) NU se copiază; `motiv` = eticheta fixă din cod.
  */
 export function semnaleAiInDeVerificat(semnale, harta) {
   const out = []
@@ -62,13 +75,30 @@ export function semnaleAiInDeVerificat(semnale, harta) {
 }
 
 /**
- * adaugaSemnaleAi(preview, intrari, rezumat) → o previzualizare NOUĂ (obiect nou ⇒ bifa „am verificat” se cere din nou): semnalele fixe rămân,
- * semnalele AI anterioare se înlocuiesc cu cele noi, statistica rândurilor de verificat se recalculează; `verificare_ai` = rezumatul rulării
- * (complet / bucăți / semnale / respinse / cost — fără valori).
+ * randuriAcoperite(plan, indiciBucati) → Set(cheieRandAi) al rândurilor Excel ale bucăților VERIFICATE CU SUCCES în rularea curentă (indicii din
+ * plan.bucati). Doar pentru ele se înlocuiesc semnalele AI vechi (adaugaSemnaleAi).
  */
-export function adaugaSemnaleAi(preview, intrari, rezumat) {
-  const fixe = (Array.isArray(preview?.de_verificat) ? preview.de_verificat : []).filter(s => s?.sursa !== 'ai')
-  const de_verificat = [...fixe, ...(Array.isArray(intrari) ? intrari : [])]
+export function randuriAcoperite(plan, indiciBucati) {
+  const out = new Set()
+  for (const k of Array.isArray(indiciBucati) ? indiciBucati : []) {
+    for (const r of plan?.bucati?.[k] || []) for (const x of plan.harta?.get(r.i) || []) out.add(cheieRandAi(x))
+  }
+  return out
+}
+
+/**
+ * adaugaSemnaleAi(preview, intrari, rezumat, acoperite) → o previzualizare NOUĂ (obiect nou ⇒ bifa „am verificat” se cere din nou): semnalele fixe
+ * rămân; un semnal AI anterior se scoate DOAR dacă rândul lui e în `acoperite` (bucată verificată cu succes acum — r2, #1141: la o rerulare
+ * incompletă, bucățile eșuate / neîncercate își păstrează semnalele AI vechi, deci și mascarea și obligația bifei); semnalele noi se adaugă (fără
+ * dubluri pe rând + câmp + coduri); statistica se recalculează. `acoperite` lipsă / ne-Set = nimic acoperit (fail-safe: niciun semnal vechi nu se
+ * pierde). `verificare_ai` = rezumatul rulării (complet / bucăți / semnale / respinse / cost — fără valori).
+ */
+export function adaugaSemnaleAi(preview, intrari, rezumat, acoperite) {
+  const acop = acoperite instanceof Set ? acoperite : new Set()
+  const vechi = (Array.isArray(preview?.de_verificat) ? preview.de_verificat : []).filter(s => s?.sursa !== 'ai' || !acop.has(cheieRandAi(s)))
+  const cheie = s => `${cheieRandAi(s)}|${s?.camp}|${s?.sursa === 'ai' ? 'ai' : 'fix'}|${(Array.isArray(s?.motive) ? s.motive : []).join('+')}`
+  const vazute = new Set(vechi.map(cheie)); const de_verificat = [...vechi]
+  for (const s of Array.isArray(intrari) ? intrari : []) { const k = cheie(s); if (!vazute.has(k)) { vazute.add(k); de_verificat.push(s) } }
   return { ...preview, de_verificat, verificare_ai: rezumat ?? null,
     statistici: { ...(preview?.statistici || {}), de_verificat: de_verificat.length, randuri_de_verificat: numarRanduriDeVerificat(de_verificat) } }
 }

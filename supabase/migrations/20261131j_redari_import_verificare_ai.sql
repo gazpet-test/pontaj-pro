@@ -12,29 +12,37 @@
 --   * red_proiect_drepturi — lista utilizatorilor ERP cu drepturi PE PROIECT în Redări (până azi accesul era doar pe modul: fn_red_nivel /
 --     user_module_access 'redari'; trg_red_proiect_utilizatori privește arendașii, nu conturile ERP). Un rând = (proiect, cont, drept); azi un singur
 --     drept: 'import_verificare_ai'. NICIUN drept de scriere pentru rolurile aplicației: rândurile le scrie coordonatorul (postgres), cu „da”-ul lui
---     Răzvan, după aplicare (primul: Janeta pe LOT1). Fiecare acordare / retragere intră în red_jurnal (trg_red_jurnal, cu cine și când).
+--     Răzvan, după aplicare (primul: Janeta pe LOT1). Acordarea = INSERT, retragerea = DELETE; UPDATE / TRUNCATE refuzate (o schimbare = retragere +
+--     acordare), ca istoricul să le vadă pe toate.
+--   * red_proiect_drepturi_istoric (r2, #1141 Jakarinos P2) — istoricul PROPRIU al drepturilor (acordat / retras, cine, când), append-only, cu
+--     ACEEAȘI regulă de citire ca dreptul (contul propriu sau adminii Redări). NU se mai copiază în red_jurnal: politica red_jurnal_sel lasă orice
+--     nivel Redări (și viewer) să citească jurnalul general, deci copia ar fi ocolit RLS-ul drepturilor (L07). Scris de triggerul
+--     fn_red_proiect_drepturi_istoric (DEFINER, fără EXECUTE pentru nimeni).
 --   * fn_red_import_ai_poate(uuid) — SINGURA definiție a dreptului (L19): auth.uid() nenul ȘI proiectul există și e activ ȘI (owner SAU nivel
 --     Redări admin/editor + rândul din red_proiect_drepturi). O cheamă ecranul (butonul), funcția edge (decizia, cu JWT-ul omului), RPC-ul de
 --     rezervare și politica RLS a jurnalului.
---   * red_import_ai_jurnal — jurnalul apelurilor plătite (cine, când, proiect, fișier sha256, bucata, rânduri trimise, semnale, model, tokeni, cost
---     rezervat / final, stare, cod de eroare FĂRĂ valori). Citire: cine are dreptul pe proiect (RLS). Scriere: doar prin cele două RPC-uri.
+--   * red_import_ai_jurnal — jurnalul apelurilor plătite (cine, când, proiect, fișier sha256, bucata, amprenta conținutului, rânduri trimise, semnale,
+--     model, tokeni, cost rezervat / final, stare, cod de eroare FĂRĂ valori). Citire: cine are dreptul pe proiect (RLS). Scriere: doar prin cele
+--     două RPC-uri.
 --   * fn_red_import_ai_rezerva(...) — pasul atomic durabil DINAINTEA apelului plătit (L22, L01, L04): lock consultativ pe proiect, cheia de intenție
---     (UUID, aceeași la reluare; aceeași cheie + alt conținut = refuz), dreptul, plafoanele (apeluri / zi / proiect, cost / zi / proiect, reluări /
---     bucată de fișier / zi), rezervarea costului MAXIM (intrare ≤ octeți, ieșire = max_tokens). Identitatea = auth.uid() (L08), fără p_user.
+--     (UUID, aceeași la reluare; aceeași cheie + alt conținut = refuz), dreptul, plafoanele (apeluri / zi / proiect, cost / zi / proiect, reluări ale
+--     ACELUIAȘI CONȚINUT / zi — r2: pe continut_sha256, amprenta calculată de funcția edge pe valorile normalizate, nu pe fișier + număr de bucată
+--     declarate de client), rezervarea costului MAXIM (intrare ≤ octeți, ieșire = max_tokens). Identitatea = auth.uid() (L08), fără p_user.
 --   * fn_red_import_ai_inchide(...) — închiderea rezervării cu CAS pe (id, token, stare 'rezervat'); EXECUTE doar service_role (funcția edge), ca
 --     un utilizator să nu-și poată „închide” singur rezervările cu un cost mai mic. Costul final îl calculează SQL-ul din tokeni. Rezultat
 --     necunoscut (timeout / 5xx / rețea) = stare 'necunoscut', costul rămâne cel rezervat (L22: tombstone, fără reluare automată).
--- Ce NU face: nu atinge tabelele / funcțiile / politicile existente (doar FK-uri spre red_proiecte și profiles și triggerul generic de jurnal pe
---   tabelul nou); nu acordă niciun drept cuiva (rândurile din red_proiect_drepturi = după aplicare, separat); nu creează secrete, cron, mail, SMS.
+-- Ce NU face: nu atinge tabelele / funcțiile / politicile existente (doar FK-uri spre red_proiecte și profiles); nu scrie în red_jurnal; nu acordă
+--   niciun drept cuiva (rândurile din red_proiect_drepturi = după aplicare, separat); nu creează secrete, cron, mail, SMS.
 -- Identitatea: auth.uid() în fn_red_import_ai_poate / rezerva (L08); inchide = service_role, cu legătura id + token din rezervare (fără identitate
 --   din parametri: rândul își păstrează user_id-ul scris la rezervare).
--- Ordinea lock-urilor la rulare (L06): rezerva = pg_advisory_xact_lock(proiect) → (citiri) → INSERT în red_import_ai_jurnal; inchide = UPDATE pe
---   rândul propriu (fără alte lock-uri). Niciun lock pe red_proiecte / profiles la rulare (doar citiri).
+-- Ordinea lock-urilor la rulare (L06): rezerva = pg_advisory_xact_lock(proiect) → (citiri) → INSERT în red_import_ai_jurnal (+ FK: FOR KEY SHARE pe
+--   rândul din red_proiecte); inchide = UPDATE pe rândul propriu (fără alte lock-uri). Acordare / retragere (postgres): rândul din
+--   red_proiect_drepturi (+ FK: FOR KEY SHARE pe red_proiecte / profiles) → INSERT în red_proiect_drepturi_istoric (fără FK). Altfel doar citiri.
 -- Lock-uri la aplicare (punct unic, NOWAIT): red_proiecte SHARE ROW EXCLUSIVE → profiles SHARE ROW EXCLUSIVE (cerute de FK-urile noi; nu opresc
 --   citirile, opresc scrierile pe cele două tabele până la COMMIT). Bugetul = 1 s cu ceasul pornit IMEDIAT ÎNAINTEA PRIMEI ÎNCERCĂRI.
 -- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, bugetul lock-urilor 1 s.
--- Revenire: supabase/revenire/20261131j_redari_import_verificare_ai_ROLLBACK.sql (L14: refuză la ORICE rând în tabelele noi sau în red_jurnal pentru
---   red_proiect_drepturi — după primul drept acordat / primul apel, întoarcerea = migrare nouă). Probe: scripts/pglite/test_redari_import_ai_local.mjs.
+-- Revenire: supabase/revenire/20261131j_redari_import_verificare_ai_ROLLBACK.sql (L14: refuză la ORICE rând în tabelele noi, inclusiv istoricul
+--   drepturilor — după primul drept acordat (chiar retras) / primul apel, întoarcerea = migrare nouă). Probe: scripts/pglite/test_redari_import_ai_local.mjs.
 DO $pre$
 DECLARE v_plafon text; v_rau text;
 BEGIN
@@ -65,14 +73,14 @@ BEGIN
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- reaplicare = refuz (orice obiect cu numele noi, inclusiv alte semnături)
   IF to_regclass('public.red_proiect_drepturi') IS NOT NULL OR to_regclass('public.red_import_ai_jurnal') IS NOT NULL
+     OR to_regclass('public.red_proiect_drepturi_istoric') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-                 AND p.proname IN ('fn_red_import_ai_poate', 'fn_red_import_ai_rezerva', 'fn_red_import_ai_inchide')) THEN
+                 AND p.proname IN ('fn_red_import_ai_poate', 'fn_red_import_ai_rezerva', 'fn_red_import_ai_inchide', 'fn_red_proiect_drepturi_istoric')) THEN
     RAISE EXCEPTION '20261131j: obiectele exista deja (reaplicare)';
   END IF;
   -- coloanele citite (tipurile exacte)
   SELECT string_agg(a.t || '.' || a.c, ', ') INTO v_rau
-    FROM (VALUES ('red_proiecte', 'id', 'uuid'), ('red_proiecte', 'activ', 'boolean'), ('profiles', 'id', 'uuid'), ('profiles', 'is_owner', 'boolean'),
-                 ('red_jurnal', 'tabela', 'text'), ('red_jurnal', 'inregistrare_id', 'uuid')) a(t, c, tip)
+    FROM (VALUES ('red_proiecte', 'id', 'uuid'), ('red_proiecte', 'activ', 'boolean'), ('profiles', 'id', 'uuid'), ('profiles', 'is_owner', 'boolean')) a(t, c, tip)
    WHERE NOT EXISTS (SELECT 1 FROM information_schema.columns ic WHERE ic.table_schema = 'public' AND ic.table_name = a.t AND ic.column_name = a.c AND ic.data_type = a.tip);
   IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20261131j: coloane lipsa / alt tip: %', v_rau; END IF;
   -- PK-urile țintă ale FK-urilor
@@ -81,10 +89,10 @@ BEGIN
     RAISE EXCEPTION '20261131j: red_proiecte.id / profiles.id nu sunt cheie primara';
   END IF;
   -- funcțiile existente chemate (L15): corp fără CR + limbaj / DEFINER / volatilitate / search_path / owner / ACL — baseline-ul din 20261131c / 20261226a
+  -- (r2: fn_red_jurnal nu mai e chemată — drepturile au istoricul lor, nu se copiază în red_jurnal)
   SELECT string_agg(a.semnatura, ', ' ORDER BY a.semnatura) INTO v_rau
     FROM (VALUES
       ('public.fn_red_nivel()', '21db8e5d4b69b7f19e571a7087c361ae', 'sql', true, 's', '{"search_path=public, pg_temp"}', '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-      ('public.fn_red_jurnal()', '41ab451b7fcb499a2284c9c82367069e', 'plpgsql', true, 'v', '{"search_path=public, pg_temp"}', '{postgres=X/postgres}'),
       ('auth.uid()', 'cdef18c69c4f4cbbced2eaf81e628b49', 'sql', false, 's', '', '{=X/supabase_auth_admin,dashboard_user=X/supabase_auth_admin,supabase_auth_admin=X/supabase_auth_admin}')
     ) a(semnatura, amprenta, limbaj, definer, volatil, config, acl)
     LEFT JOIN pg_proc p ON p.oid = to_regprocedure(a.semnatura)
@@ -96,11 +104,6 @@ BEGIN
       OR coalesce(p.proconfig::text, '') IS DISTINCT FROM a.config
       OR coalesce((SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(p.proacl::text[]) x)::text, '') IS DISTINCT FROM a.acl;
   IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20261131j: functiile chemate nu au amprenta revizuita: %', v_rau; END IF;
-  -- jurnalul generic: append-only, fără drept de scriere pentru rolurile aplicației (triggerul nou scrie în el ca DEFINER)
-  IF to_regclass('public.red_jurnal') IS NULL
-     OR has_table_privilege('authenticated', 'public.red_jurnal', 'INSERT') OR has_table_privilege('anon', 'public.red_jurnal', 'INSERT') THEN
-    RAISE EXCEPTION '20261131j: red_jurnal lipseste sau e scriibil de rolurile aplicatiei';
-  END IF;
   IF to_regprocedure('pg_catalog.gen_random_uuid()') IS NULL OR to_regprocedure('pg_catalog.hashtextextended(text,bigint)') IS NULL THEN
     RAISE EXCEPTION '20261131j: gen_random_uuid / hashtextextended lipsesc din pg_catalog';
   END IF;
@@ -150,14 +153,60 @@ CREATE TABLE public.red_proiect_drepturi (
   created_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT red_proiect_drepturi_unic UNIQUE (proiect_id, profile_id, drept)
 );
-COMMENT ON TABLE public.red_proiect_drepturi IS 'Redări: drepturile unui cont ERP PE PROIECT (în plus față de nivelul pe modul, fn_red_nivel). Azi: import_verificare_ai = poate porni verificarea AI plătită a importului TGZ (20261131j). Scrie doar coordonatorul (postgres), cu acordul lui Răzvan; retragerea = DELETE. Fiecare schimbare intră în red_jurnal (cine, când). Citire: contul propriu și adminii Redări.';
+COMMENT ON TABLE public.red_proiect_drepturi IS 'Redări: drepturile unui cont ERP PE PROIECT (în plus față de nivelul pe modul, fn_red_nivel). Azi: import_verificare_ai = poate porni verificarea AI plătită a importului TGZ (20261131j). Scrie doar coordonatorul (postgres), cu acordul lui Răzvan: acordarea = INSERT, retragerea = DELETE (UPDATE / TRUNCATE refuzate). Fiecare acordare / retragere intră în red_proiect_drepturi_istoric (NU în red_jurnal). Citire: contul propriu și adminii Redări.';
 ALTER TABLE public.red_proiect_drepturi ENABLE ROW LEVEL SECURITY;
 CREATE POLICY red_proiect_drepturi_sel ON public.red_proiect_drepturi FOR SELECT TO authenticated
   USING ((SELECT auth.uid()) IS NOT NULL AND (profile_id = (SELECT auth.uid()) OR (SELECT public.fn_red_nivel()) = 'admin'));
 REVOKE ALL ON public.red_proiect_drepturi FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON public.red_proiect_drepturi TO authenticated, service_role;
-CREATE TRIGGER trg_red_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.red_proiect_drepturi
-  FOR EACH ROW EXECUTE FUNCTION public.fn_red_jurnal();
+
+-- istoricul drepturilor (r2, #1141): append-only, aceeași regulă de citire ca red_proiect_drepturi (L07: nicio copie citibilă mai larg decât dreptul)
+CREATE TABLE public.red_proiect_drepturi_istoric (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  drept_id uuid NOT NULL,
+  proiect_id uuid NOT NULL,
+  profile_id uuid NOT NULL,
+  drept text NOT NULL,
+  nota text,
+  actiune text NOT NULL CONSTRAINT red_proiect_drepturi_istoric_actiune_ck CHECK (actiune IN ('acordat', 'retras')),
+  autor_id uuid,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+COMMENT ON TABLE public.red_proiect_drepturi_istoric IS 'Redări: istoricul drepturilor pe proiect (20261131j r2): un rând pe acordare (INSERT în red_proiect_drepturi) sau retragere (DELETE), scris de triggerul fn_red_proiect_drepturi_istoric; autor_id = auth.uid() (NULL = coordonatorul, postgres). Append-only (UPDATE / DELETE / TRUNCATE refuzate). Fără FK (rămâne după retragere). Citire: ca red_proiect_drepturi — contul propriu și adminii Redări.';
+ALTER TABLE public.red_proiect_drepturi_istoric ENABLE ROW LEVEL SECURITY;
+CREATE POLICY red_proiect_drepturi_istoric_sel ON public.red_proiect_drepturi_istoric FOR SELECT TO authenticated
+  USING ((SELECT auth.uid()) IS NOT NULL AND (profile_id = (SELECT auth.uid()) OR (SELECT public.fn_red_nivel()) = 'admin'));
+REVOKE ALL ON public.red_proiect_drepturi_istoric FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON public.red_proiect_drepturi_istoric TO authenticated, service_role;
+-- Ordinea lock-urilor (L06): triggerul AFTER pe rândul din red_proiect_drepturi (deja blocat de INSERT / DELETE) → INSERT în istoric (fără FK).
+CREATE FUNCTION public.fn_red_proiect_drepturi_istoric() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  IF TG_RELID = 'public.red_proiect_drepturi_istoric'::regclass THEN
+    RAISE EXCEPTION 'red_proiect_drepturi_istoric este append-only (% refuzat)', TG_OP USING ERRCODE = '42501';
+  END IF;
+  IF TG_RELID IS DISTINCT FROM 'public.red_proiect_drepturi'::regclass THEN
+    RAISE EXCEPTION 'fn_red_proiect_drepturi_istoric: tabela neasteptata' USING ERRCODE = '42501';
+  END IF;
+  IF TG_LEVEL = 'ROW' AND TG_WHEN = 'AFTER' AND TG_OP = 'INSERT' THEN
+    INSERT INTO public.red_proiect_drepturi_istoric (drept_id, proiect_id, profile_id, drept, nota, actiune, autor_id)
+    VALUES (NEW.id, NEW.proiect_id, NEW.profile_id, NEW.drept, NEW.nota, 'acordat', auth.uid());
+  ELSIF TG_LEVEL = 'ROW' AND TG_WHEN = 'AFTER' AND TG_OP = 'DELETE' THEN
+    INSERT INTO public.red_proiect_drepturi_istoric (drept_id, proiect_id, profile_id, drept, nota, actiune, autor_id)
+    VALUES (OLD.id, OLD.proiect_id, OLD.profile_id, OLD.drept, OLD.nota, 'retras', auth.uid());
+  ELSE
+    RAISE EXCEPTION 'red_proiect_drepturi: % refuzat (schimbarea unui drept = retragere cu DELETE + acordare cu INSERT)', TG_OP USING ERRCODE = '42501';
+  END IF;
+  RETURN NULL;
+END $fn$;
+COMMENT ON FUNCTION public.fn_red_proiect_drepturi_istoric() IS 'Redări (20261131j r2): triggerul istoricului drepturilor pe proiect — AFTER INSERT / DELETE pe red_proiect_drepturi scrie acordat / retras în red_proiect_drepturi_istoric; UPDATE / TRUNCATE pe drepturi și orice UPDATE / DELETE / TRUNCATE pe istoric = refuz. Fără EXECUTE pentru nimeni.';
+REVOKE ALL ON FUNCTION public.fn_red_proiect_drepturi_istoric() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER trg_red_proiect_drepturi_istoric AFTER INSERT OR DELETE ON public.red_proiect_drepturi
+  FOR EACH ROW EXECUTE FUNCTION public.fn_red_proiect_drepturi_istoric();
+CREATE TRIGGER trg_red_proiect_drepturi_fara_update BEFORE UPDATE OR TRUNCATE ON public.red_proiect_drepturi
+  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_red_proiect_drepturi_istoric();
+CREATE TRIGGER trg_red_proiect_drepturi_istoric_imuabil BEFORE UPDATE OR DELETE OR TRUNCATE ON public.red_proiect_drepturi_istoric
+  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_red_proiect_drepturi_istoric();
 
 -- ─── 2. Dreptul: o singură definiție (L19) ───────────────────────────────────────────────────────────────────────────────────
 CREATE FUNCTION public.fn_red_import_ai_poate(p_proiect uuid) RETURNS boolean
@@ -208,8 +257,8 @@ CREATE TABLE public.red_import_ai_jurnal (
     OR (stare = 'necunoscut' AND inchis_la IS NOT NULL AND eroare_cod IS NOT NULL AND cost_usd IS NULL))
 );
 CREATE INDEX red_import_ai_jurnal_zi_idx ON public.red_import_ai_jurnal (proiect_id, ziua);
-CREATE INDEX red_import_ai_jurnal_fisier_idx ON public.red_import_ai_jurnal (proiect_id, fisier_sha256, bucata, ziua);
-COMMENT ON TABLE public.red_import_ai_jurnal IS 'Redări: jurnalul verificărilor AI plătite ale importului TGZ (20261131j): un rând = un apel (o bucată de rânduri), rezervat ÎNAINTE de apel (fn_red_import_ai_rezerva, cu costul maxim) și închis după (fn_red_import_ai_inchide, doar funcția edge). Fără valori din fișier: doar numere, hash-uri, coduri. Costul unei zile = suma costului final, sau a celui rezervat cât e necunoscut. Citire: cine are dreptul pe proiect.';
+CREATE INDEX red_import_ai_jurnal_continut_idx ON public.red_import_ai_jurnal (proiect_id, continut_sha256, ziua);
+COMMENT ON TABLE public.red_import_ai_jurnal IS 'Redări: jurnalul verificărilor AI plătite ale importului TGZ (20261131j): un rând = un apel (o bucată de rânduri), rezervat ÎNAINTE de apel (fn_red_import_ai_rezerva, cu costul maxim) și închis după (fn_red_import_ai_inchide, doar funcția edge). Fără valori din fișier: doar numere, hash-uri, coduri. continut_sha256 = amprenta conținutului calculată de funcția edge (valori normalizate, fără index / ordine) — pe ea se numără reluările aceluiași conținut; fisier_sha256 / bucata sunt doar informative (declarate de ecran). Costul unei zile = suma costului final, sau a celui rezervat cât e necunoscut. Citire: cine are dreptul pe proiect.';
 ALTER TABLE public.red_import_ai_jurnal ENABLE ROW LEVEL SECURITY;
 CREATE POLICY red_import_ai_jurnal_sel ON public.red_import_ai_jurnal FOR SELECT TO authenticated
   USING ((SELECT auth.uid()) IS NOT NULL AND public.fn_red_import_ai_poate(proiect_id));
@@ -218,7 +267,8 @@ GRANT SELECT ON public.red_import_ai_jurnal TO authenticated, service_role;
 
 -- ─── 4. Rezervarea (înaintea apelului plătit) ────────────────────────────────────────────────────────────────────────────────
 -- Plafoane (L22, L20): ≤ 60 de apeluri / zi / proiect, ≤ 10 USD / zi / proiect (costul final sau, cât e necunoscut, cel rezervat), ≤ 2 apeluri / zi pe
--- aceeași bucată a aceluiași fișier; ≤ 300 de rânduri / apel. Ziua = Europe/Bucharest (L17). Tarif Sonnet 5.5: 2 USD / MTok intrare, 10 USD / MTok ieșire;
+-- ACELAȘI CONȚINUT (continut_sha256, calculat de funcția edge pe valorile trimise, normalizate; r2: nu fisier_sha256 + bucata, care vin de la client
+-- și se pot schimba la fiecare cerere); ≤ 300 de rânduri / apel. Ziua = Europe/Bucharest (L17). Tarif Sonnet 5.5: 2 USD / MTok intrare, 10 USD / MTok ieșire;
 -- rezervarea = (octeți + 2000) × intrare + max_iesire × ieșire (tokenii ≤ octeții UTF-8 ai cererii: nu se subestimează).
 -- Ordinea lock-urilor (L06): advisory(proiect) → INSERT în red_import_ai_jurnal (cheia unică). Fără alte lock-uri.
 CREATE FUNCTION public.fn_red_import_ai_rezerva(p_cheie uuid, p_proiect uuid, p_fisier_sha256 text, p_continut_sha256 text, p_bucata integer, p_bucati integer,
@@ -256,7 +306,7 @@ BEGIN
   IF v_n >= 60 THEN RETURN jsonb_build_object('ok', false, 'cod', 'plafon_apeluri_zi', 'limita', 60); END IF;
   IF v_suma + v_cost > 10 THEN RETURN jsonb_build_object('ok', false, 'cod', 'plafon_cost_zi', 'limita_usd', 10); END IF;
   SELECT count(*) INTO v_n FROM public.red_import_ai_jurnal j
-   WHERE j.proiect_id = p_proiect AND j.fisier_sha256 = p_fisier_sha256 AND j.bucata = p_bucata AND j.ziua = v_zi;
+   WHERE j.proiect_id = p_proiect AND j.continut_sha256 = p_continut_sha256 AND j.ziua = v_zi;
   IF v_n >= 2 THEN RETURN jsonb_build_object('ok', false, 'cod', 'plafon_bucata_zi', 'limita', 2); END IF;
   INSERT INTO public.red_import_ai_jurnal (cheie, proiect_id, user_id, ziua, fisier_sha256, continut_sha256, bucata, bucati, randuri, octeti_intrare,
                                            max_iesire, model, cost_rezervat_usd, lease_token)
@@ -275,7 +325,7 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'nou', true, 'id', v_r.id, 'lease_token', v_r.lease_token, 'model', v_r.model,
                             'cost_rezervat_usd', v_r.cost_rezervat_usd, 'ziua', v_r.ziua);
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_import_ai_rezerva(uuid, uuid, text, text, integer, integer, integer, integer, integer) IS 'Redări: rezervarea DURABILĂ a unui apel AI plătit (verificarea importului, 20261131j), ÎNAINTEA apelului: lock consultativ pe proiect, cheia de intenție (UUID; aceeași cheie + același conținut = rândul existent cu nou=false, deci FĂRĂ al doilea apel; alt conținut = cheie_refolosita), dreptul (fn_red_import_ai_poate), plafoanele (60 de apeluri și 10 USD / zi / proiect, 2 apeluri / zi / bucată de fișier), costul maxim rezervat. Refuzurile se întorc ca jsonb {ok:false, cod}, fără scriere. Identitatea = auth.uid().';
+COMMENT ON FUNCTION public.fn_red_import_ai_rezerva(uuid, uuid, text, text, integer, integer, integer, integer, integer) IS 'Redări: rezervarea DURABILĂ a unui apel AI plătit (verificarea importului, 20261131j), ÎNAINTEA apelului: lock consultativ pe proiect, cheia de intenție (UUID; aceeași cheie + același conținut = rândul existent cu nou=false, deci FĂRĂ al doilea apel; alt conținut = cheie_refolosita), dreptul (fn_red_import_ai_poate), plafoanele (60 de apeluri și 10 USD / zi / proiect, 2 apeluri / zi pe același conținut — continut_sha256 al funcției edge), costul maxim rezervat. Refuzurile se întorc ca jsonb {ok:false, cod}, fără scriere. Identitatea = auth.uid().';
 REVOKE ALL ON FUNCTION public.fn_red_import_ai_rezerva(uuid, uuid, text, text, integer, integer, integer, integer, integer) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_red_import_ai_rezerva(uuid, uuid, text, text, integer, integer, integer, integer, integer) TO authenticated;
 
@@ -318,8 +368,9 @@ BEGIN
     FROM (VALUES
       -- >>> AMPRENTE-NOI 20261131j
       ('public.fn_red_import_ai_poate(uuid)', 'b20a13bf9179b76c00812b63362bf32f', 'sql', true, 's', 'boolean'),
-      ('public.fn_red_import_ai_rezerva(uuid,uuid,text,text,integer,integer,integer,integer,integer)', '959e29666c0086ac713cbf3af4bc2318', 'plpgsql', true, 'v', 'jsonb'),
-      ('public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)', '33ac8ddf00565721662122fd7d71a3ef', 'plpgsql', true, 'v', 'boolean')
+      ('public.fn_red_import_ai_rezerva(uuid,uuid,text,text,integer,integer,integer,integer,integer)', '04dd71b7a3ac5fda4a0cf0ca3e4e6377', 'plpgsql', true, 'v', 'jsonb'),
+      ('public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)', '33ac8ddf00565721662122fd7d71a3ef', 'plpgsql', true, 'v', 'boolean'),
+      ('public.fn_red_proiect_drepturi_istoric()', '92975fe64ee3f774740cc395cf8384c8', 'plpgsql', true, 'v', 'trigger')
       -- <<< AMPRENTE-NOI 20261131j
     ) a(semnatura, amprenta, limbaj, definer, volatil, intoarce)
     LEFT JOIN pg_proc p ON p.oid = to_regprocedure(a.semnatura)
@@ -334,48 +385,56 @@ BEGIN
   IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20261131j: postconditie: functiile (corp / proprietati) difera: %', v_rau; END IF;
   -- o singură variantă a fiecărei funcții noi
   IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-        AND p.proname IN ('fn_red_import_ai_poate', 'fn_red_import_ai_rezerva', 'fn_red_import_ai_inchide')) <> 3 THEN
+        AND p.proname IN ('fn_red_import_ai_poate', 'fn_red_import_ai_rezerva', 'fn_red_import_ai_inchide', 'fn_red_proiect_drepturi_istoric')) <> 4 THEN
     RAISE EXCEPTION '20261131j: postconditie: variante in plus ale functiilor noi';
   END IF;
-  -- drepturile EXACTE pe funcții: poate / rezerva = authenticated; inchide = service_role; nimic pentru PUBLIC / anon
+  -- drepturile EXACTE pe funcții: poate / rezerva = authenticated; inchide = service_role; triggerul istoricului = nimeni; nimic pentru PUBLIC / anon
   SELECT string_agg(f, ';' ORDER BY f COLLATE "C") INTO v_rau FROM (
     SELECT p.proname || '=' || coalesce((SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(p.proacl::text[]) x)::text, '') AS f
-      FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_red_import_ai_poate', 'fn_red_import_ai_rezerva', 'fn_red_import_ai_inchide')) z;
-  IF v_rau IS DISTINCT FROM 'fn_red_import_ai_inchide={postgres=X/postgres,service_role=X/postgres};fn_red_import_ai_poate={authenticated=X/postgres,postgres=X/postgres};fn_red_import_ai_rezerva={authenticated=X/postgres,postgres=X/postgres}' THEN
+      FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+       AND p.proname IN ('fn_red_import_ai_poate', 'fn_red_import_ai_rezerva', 'fn_red_import_ai_inchide', 'fn_red_proiect_drepturi_istoric')) z;
+  IF v_rau IS DISTINCT FROM 'fn_red_import_ai_inchide={postgres=X/postgres,service_role=X/postgres};fn_red_import_ai_poate={authenticated=X/postgres,postgres=X/postgres};fn_red_import_ai_rezerva={authenticated=X/postgres,postgres=X/postgres};fn_red_proiect_drepturi_istoric={postgres=X/postgres}' THEN
     RAISE EXCEPTION '20261131j: postconditie: drepturile functiilor: %', v_rau;
   END IF;
   -- tabelele: RLS activ (fără FORCE), owner postgres, drepturile EXACTE (doar SELECT pentru authenticated / service_role), fără drepturi pe coloane
   SELECT string_agg(f, ';' ORDER BY f COLLATE "C") INTO v_rau FROM (
     SELECT c.relname || '|' || c.relrowsecurity::text || '|' || c.relforcerowsecurity::text || '|' || pg_get_userbyid(c.relowner) || '|'
            || coalesce((SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(c.relacl::text[]) x)::text, '') AS f
-      FROM pg_class c WHERE c.oid IN ('public.red_proiect_drepturi'::regclass, 'public.red_import_ai_jurnal'::regclass)) z;
+      FROM pg_class c WHERE c.oid IN ('public.red_proiect_drepturi'::regclass, 'public.red_proiect_drepturi_istoric'::regclass, 'public.red_import_ai_jurnal'::regclass)) z;
   IF v_rau IS DISTINCT FROM 'red_import_ai_jurnal|true|false|postgres|{authenticated=r/postgres,postgres=arwdDxtm/postgres,service_role=r/postgres};'
+                         || 'red_proiect_drepturi_istoric|true|false|postgres|{authenticated=r/postgres,postgres=arwdDxtm/postgres,service_role=r/postgres};'
                          || 'red_proiect_drepturi|true|false|postgres|{authenticated=r/postgres,postgres=arwdDxtm/postgres,service_role=r/postgres}'
-     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid IN ('public.red_proiect_drepturi'::regclass, 'public.red_import_ai_jurnal'::regclass)
+     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid IN ('public.red_proiect_drepturi'::regclass, 'public.red_proiect_drepturi_istoric'::regclass, 'public.red_import_ai_jurnal'::regclass)
                  AND a.attnum > 0 AND a.attacl IS NOT NULL) THEN
     RAISE EXCEPTION '20261131j: postconditie: RLS / owner / drepturile tabelelor: %', v_rau;
   END IF;
-  -- politicile EXACTE (doar SELECT pentru authenticated)
+  -- politicile EXACTE (doar SELECT pentru authenticated); istoricul drepturilor = ACEEAȘI expresie ca drepturile
   SELECT string_agg(f, ';' ORDER BY f COLLATE "C") INTO v_rau FROM (
     SELECT polrelid::regclass::text || '.' || polname::text || '|' || polcmd::text || '|' || polpermissive::text || '|'
            || (SELECT string_agg(r::regrole::text, ',' ORDER BY r::regrole::text COLLATE "C") FROM unnest(polroles) r) || '|'
            || coalesce(pg_get_expr(polqual, polrelid), '') || '|' || coalesce(pg_get_expr(polwithcheck, polrelid), '') AS f
-      FROM pg_policy WHERE polrelid IN ('public.red_proiect_drepturi'::regclass, 'public.red_import_ai_jurnal'::regclass)) z;
+      FROM pg_policy WHERE polrelid IN ('public.red_proiect_drepturi'::regclass, 'public.red_proiect_drepturi_istoric'::regclass, 'public.red_import_ai_jurnal'::regclass)) z;
   IF v_rau IS DISTINCT FROM
        'red_import_ai_jurnal.red_import_ai_jurnal_sel|r|true|authenticated|((( SELECT auth.uid() AS uid) IS NOT NULL) AND fn_red_import_ai_poate(proiect_id))|;'
-    || 'red_proiect_drepturi.red_proiect_drepturi_sel|r|true|authenticated|((( SELECT auth.uid() AS uid) IS NOT NULL) AND ((profile_id = ( SELECT auth.uid() AS uid)) OR (( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text)))|' THEN
+    || 'red_proiect_drepturi.red_proiect_drepturi_sel|r|true|authenticated|((( SELECT auth.uid() AS uid) IS NOT NULL) AND ((profile_id = ( SELECT auth.uid() AS uid)) OR (( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text)))|;'
+    || 'red_proiect_drepturi_istoric.red_proiect_drepturi_istoric_sel|r|true|authenticated|((( SELECT auth.uid() AS uid) IS NOT NULL) AND ((profile_id = ( SELECT auth.uid() AS uid)) OR (( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text)))|' THEN
     RAISE EXCEPTION '20261131j: postconditie: politicile RLS: %', v_rau;
   END IF;
-  -- triggerele: doar jurnalul generic pe red_proiect_drepturi (AFTER INSERT OR UPDATE OR DELETE pe rând), nimic pe jurnalul AI
+  -- triggerele: istoricul drepturilor (AFTER INSERT / DELETE pe rând), refuzul UPDATE / TRUNCATE pe drepturi, imuabilitatea istoricului; NIMIC spre
+  -- red_jurnal (fn_red_jurnal nu e atașată), nimic pe jurnalul AI
   SELECT string_agg(f, ';' ORDER BY f COLLATE "C") INTO v_rau FROM (
     SELECT t.tgrelid::regclass::text || '.' || t.tgname::text || '=' || t.tgfoid::regprocedure::text || '/' || t.tgenabled::text || '/' || t.tgtype::text || '/'
            || coalesce(pg_get_expr(t.tgqual, t.tgrelid), '') || '/' || t.tgnargs::text AS f
-      FROM pg_trigger t WHERE t.tgrelid IN ('public.red_proiect_drepturi'::regclass, 'public.red_import_ai_jurnal'::regclass) AND NOT t.tgisinternal) z;
-  IF v_rau IS DISTINCT FROM 'red_proiect_drepturi.trg_red_jurnal=fn_red_jurnal()/O/29//0' THEN
+      FROM pg_trigger t WHERE t.tgrelid IN ('public.red_proiect_drepturi'::regclass, 'public.red_proiect_drepturi_istoric'::regclass, 'public.red_import_ai_jurnal'::regclass)
+       AND NOT t.tgisinternal) z;
+  IF v_rau IS DISTINCT FROM 'red_proiect_drepturi.trg_red_proiect_drepturi_fara_update=fn_red_proiect_drepturi_istoric()/O/50//0;'
+                         || 'red_proiect_drepturi.trg_red_proiect_drepturi_istoric=fn_red_proiect_drepturi_istoric()/O/13//0;'
+                         || 'red_proiect_drepturi_istoric.trg_red_proiect_drepturi_istoric_imuabil=fn_red_proiect_drepturi_istoric()/O/58//0' THEN
     RAISE EXCEPTION '20261131j: postconditie: triggerele: %', v_rau;
   END IF;
   -- tabelele noi sunt goale (nimeni nu primește dreptul aici)
-  IF EXISTS (SELECT 1 FROM public.red_proiect_drepturi) OR EXISTS (SELECT 1 FROM public.red_import_ai_jurnal) THEN
+  IF EXISTS (SELECT 1 FROM public.red_proiect_drepturi) OR EXISTS (SELECT 1 FROM public.red_import_ai_jurnal)
+     OR EXISTS (SELECT 1 FROM public.red_proiect_drepturi_istoric) THEN
     RAISE EXCEPTION '20261131j: postconditie: tabelele noi nu sunt goale';
   END IF;
   -- fără sesiune: dreptul e fals, rezervarea refuză fără scriere

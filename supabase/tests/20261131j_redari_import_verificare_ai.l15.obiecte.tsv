@@ -29,6 +29,15 @@ coloana	coloana public.red_proiect_drepturi.id	creat
 coloana	coloana public.red_proiect_drepturi.nota	creat
 coloana	coloana public.red_proiect_drepturi.profile_id	creat
 coloana	coloana public.red_proiect_drepturi.proiect_id	creat
+coloana	coloana public.red_proiect_drepturi_istoric.actiune	creat
+coloana	coloana public.red_proiect_drepturi_istoric.autor_id	creat
+coloana	coloana public.red_proiect_drepturi_istoric.created_at	creat
+coloana	coloana public.red_proiect_drepturi_istoric.drept	creat
+coloana	coloana public.red_proiect_drepturi_istoric.drept_id	creat
+coloana	coloana public.red_proiect_drepturi_istoric.id	creat
+coloana	coloana public.red_proiect_drepturi_istoric.nota	creat
+coloana	coloana public.red_proiect_drepturi_istoric.profile_id	creat
+coloana	coloana public.red_proiect_drepturi_istoric.proiect_id	creat
 constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_bucata_ck	creat
 constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_cheie_unic	creat
 constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_continut_ck	creat
@@ -54,23 +63,31 @@ constrangere	constrangere tabel public.red_proiect_drepturi.red_proiect_drepturi
 constrangere	constrangere tabel public.red_proiect_drepturi.red_proiect_drepturi_profile_id_fkey	creat
 constrangere	constrangere tabel public.red_proiect_drepturi.red_proiect_drepturi_proiect_id_fkey	creat
 constrangere	constrangere tabel public.red_proiect_drepturi.red_proiect_drepturi_unic	creat
+constrangere	constrangere tabel public.red_proiect_drepturi_istoric.red_proiect_drepturi_istoric_actiune_ck	creat
+constrangere	constrangere tabel public.red_proiect_drepturi_istoric.red_proiect_drepturi_istoric_pkey	creat
 functie	functie public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)	creat
 functie	functie public.fn_red_import_ai_poate(uuid)	creat
 functie	functie public.fn_red_import_ai_rezerva(uuid,uuid,text,text,integer,integer,integer,integer,integer)	creat
+functie	functie public.fn_red_proiect_drepturi_istoric()	creat
 politica	politica public.red_import_ai_jurnal.red_import_ai_jurnal_sel	creat
 politica	politica public.red_proiect_drepturi.red_proiect_drepturi_sel	creat
+politica	politica public.red_proiect_drepturi_istoric.red_proiect_drepturi_istoric_sel	creat
 relatie	relatie public.red_import_ai_jurnal	creat
 relatie	relatie public.red_import_ai_jurnal_cheie_unic	creat
-relatie	relatie public.red_import_ai_jurnal_fisier_idx	creat
+relatie	relatie public.red_import_ai_jurnal_continut_idx	creat
 relatie	relatie public.red_import_ai_jurnal_pkey	creat
 relatie	relatie public.red_import_ai_jurnal_zi_idx	creat
 relatie	relatie public.red_proiect_drepturi	creat
+relatie	relatie public.red_proiect_drepturi_istoric	creat
+relatie	relatie public.red_proiect_drepturi_istoric_pkey	creat
 relatie	relatie public.red_proiect_drepturi_pkey	creat
 relatie	relatie public.red_proiect_drepturi_unic	creat
 tip	tip public.red_import_ai_jurnal	creat
 tip	tip public.red_import_ai_jurnal[]	creat
 tip	tip public.red_proiect_drepturi	creat
 tip	tip public.red_proiect_drepturi[]	creat
+tip	tip public.red_proiect_drepturi_istoric	creat
+tip	tip public.red_proiect_drepturi_istoric[]	creat
 trigger	trigger public.profiles intern red_proiect_drepturi_profile_id_fkey "RI_FKey_noaction_del"() 9	creat
 trigger	trigger public.profiles intern red_proiect_drepturi_profile_id_fkey "RI_FKey_noaction_upd"() 17	creat
 trigger	trigger public.red_import_ai_jurnal intern red_import_ai_jurnal_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
@@ -79,7 +96,9 @@ trigger	trigger public.red_proiect_drepturi intern red_proiect_drepturi_profile_
 trigger	trigger public.red_proiect_drepturi intern red_proiect_drepturi_profile_id_fkey "RI_FKey_check_upd"() 17	creat
 trigger	trigger public.red_proiect_drepturi intern red_proiect_drepturi_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
 trigger	trigger public.red_proiect_drepturi intern red_proiect_drepturi_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
-trigger	trigger public.red_proiect_drepturi.trg_red_jurnal	creat
+trigger	trigger public.red_proiect_drepturi.trg_red_proiect_drepturi_fara_update	creat
+trigger	trigger public.red_proiect_drepturi.trg_red_proiect_drepturi_istoric	creat
+trigger	trigger public.red_proiect_drepturi_istoric.trg_red_proiect_drepturi_istoric_imuabil	creat
 trigger	trigger public.red_proiecte intern red_import_ai_jurnal_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
 trigger	trigger public.red_proiecte intern red_import_ai_jurnal_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
 trigger	trigger public.red_proiecte intern red_proiect_drepturi_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat

@@ -21,6 +21,7 @@ vi.mock('../../lib/supabase.js', () => ({ supabase: {
 afterEach(() => { hooks.current = null; vi.unstubAllGlobals(); sb.apeluriRpc = []; sb.apeluriInvoke = [] })
 
 import VerificareAiImport from './VerificareAiImport.jsx'
+import { cheieRandAi, EXPLICATIE_CATEGORIE_AI } from '../importVerificareAi.js'
 
 function harness() {
   const valori = [], efecte = []
@@ -117,6 +118,21 @@ describe('panoul AI — pornirea (plătită)', () => {
     expect(pvArg).toBe(pv)
     expect(intrari).toEqual([{ rand: 9, uat: 'FIC', nr_crt: '8', cheie_parcela: 'FIC:8', camp: 'nr_cadastral', motive: ['ai_nume_persoana'], motiv: 'nr. cadastral / parcelă: AI: pare nume de persoană / firmă', sursa: 'ai' }])
     expect(rez).toMatchObject({ complet: true, bucati: 2, facute: 2, semnale: 1, randuri_semnalate: 1, respinse: 0, oprit: null })
+    // rulare completă: ambele bucăți acoperite (toate cele 150 de rânduri) → semnalele AI vechi se pot înlocui peste tot
+    expect(p.onSemnale.mock.calls[0][3]).toEqual(new Set(Array.from({ length: 150 }, (_, k) => cheieRandAi({ rand: k + 2, uat: 'FIC', nr_crt: String(k + 1), cheie_parcela: `FIC:${k + 1}` }))))
+  })
+  it('r2 (#1141 P2), reproducerea din verdict: un text al modelului (alt nume) în răspuns NU ajunge în ecran; explicația afișată e cea FIXĂ a categoriei', async () => {
+    const pv = preview()
+    const { h, tree, p } = await pornit(async () => ({ data: true, error: null }), pv)
+    vi.stubGlobal('window', { confirm: () => true })
+    let n = 0
+    sb.invoke = async () => (n++ === 0 ? ok([{ i: 7, camp: 'nr_cadastral', categorie: 'nume_persoana', motiv: 'Pare numele Popescu de pe alt rand' }]) : ok([]))()
+    await butonAi(tree).props.onClick(); await asteapta()
+    const dupa = h.render(VerificareAiImport, p)
+    const t = text(dupa)
+    expect(t).not.toMatch(/Popescu|alt rand/)
+    expect(t).toContain(EXPLICATIE_CATEGORIE_AI.nume_persoana)
+    expect(JSON.stringify(p.onSemnale.mock.calls)).not.toMatch(/Popescu|alt rand/)
   })
   it('un refuz / rezultat necunoscut la bucata 1 → bucla se OPREȘTE (fără reluare), nimic aplicat; la bucata 2 → rezultat parțial, marcat incomplet', async () => {
     let r = await pornit(async () => ({ data: true, error: null }))
@@ -132,6 +148,11 @@ describe('panoul AI — pornirea (plătită)', () => {
     await butonAi(r.tree).props.onClick(); await asteapta()
     expect(sb.apeluriInvoke).toHaveLength(2)
     expect(r.p.onSemnale.mock.calls[0][2]).toMatchObject({ complet: false, facute: 1, oprit: 'ai_necunoscut' })
+    // r2 (#1141 P2): acoperite = DOAR rândurile bucății 1 (rândurile Excel 2..101); cele ale bucății 2 (eșuată) își păstrează semnalele AI vechi
+    const acoperite = r.p.onSemnale.mock.calls[0][3]
+    expect(acoperite).toEqual(new Set(Array.from({ length: 100 }, (_, k) => cheieRandAi({ rand: k + 2, uat: 'FIC', nr_crt: String(k + 1), cheie_parcela: `FIC:${k + 1}` }))))
+    expect(acoperite.has(cheieRandAi({ rand: 112, uat: 'FIC', nr_crt: '111', cheie_parcela: 'FIC:111' }))).toBe(false)
+    expect(r.p.show).toHaveBeenCalledWith(expect.stringMatching(/Semnalele AI anterioare ale bucăților neverificate acum rămân/), 'error')
   })
   it('ecranul închis în timpul buclei → niciun apel în plus, nimic aplicat (L24)', async () => {
     const { h, tree, p } = await pornit(async () => ({ data: true, error: null }))

@@ -4,12 +4,14 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import * as XLSX from 'xlsx-js-style'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import {
-  validaCerere, construiesteCerere, valideazaRaspuns, motivRepetaValori, costRezervatMaxim, costFinal, tokeniDinUsage, amprentaContinut, sha256Hex,
+  validaCerere, construiesteCerere, valideazaRaspuns, costRezervatMaxim, costFinal, tokeniDinUsage, amprentaContinut, sha256Hex, SCHEMA_RASPUNS,
   CAMPURI_AI, CATEGORII_AI, MODEL_AI, MAX_RANDURI_APEL, MAX_IESIRE, MAX_LUNGIME_VALOARE, MAX_OCTETI_CERERE, SECRET_CHEIE_AI, URL_ANTHROPIC, PROMPT_SISTEM,
 } from '../../supabase/functions/_shared/redariImportAi.mjs'
+import * as modulAi from '../../supabase/functions/_shared/redariImportAi.mjs'
 import { raspundeVerificare } from '../../supabase/functions/_shared/redariImportAiHandler.mjs'
-import { pregatesteVerificareAi, semnaleAiInDeVerificat, adaugaSemnaleAi, mesajCodAi } from './importVerificareAi.js'
+import { pregatesteVerificareAi, semnaleAiInDeVerificat, adaugaSemnaleAi, randuriAcoperite, cheieRandAi, mesajCodAi, EXPLICATIE_CATEGORIE_AI } from './importVerificareAi.js'
 import { parseazaTgz, randuriDeTratat } from './importTgz.js'
 import { CAMPURI_VERIFICATE, mascheazaRand, indexDeVerificat, semnalFaraValori, VALOARE_ASCUNSA, numarRanduriDeVerificat } from './importVerificareFixa.js'
 
@@ -86,7 +88,7 @@ describe('construcția cererii către Anthropic (payload-ul)', () => {
 describe('validarea răspunsului AI (L21)', () => {
   const R = [{ i: 0, poz_hg: '101', nr_cadastral: '51384', tarla: 'POPESCU MARIN' }, { i: 1, poz_hg: '102', nr_cadastral: null, tarla: 'UP II Garnita' }]
   const ras = (obj, extra = {}) => ({ stop_reason: 'end_turn', content: [{ type: 'thinking', thinking: '...' }, { type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj) }], usage: { input_tokens: 1000, output_tokens: 50 }, ...extra })
-  const S0 = { i: 0, camp: 'tarla', categorie: 'nume_persoana', motiv: 'pare un nume de persoană, nu un număr de tarla' }
+  const S0 = { i: 0, camp: 'tarla', categorie: 'nume_persoana' }
   it('acceptă un răspuns corect (textul doar din blocurile text)', () => {
     expect(valideazaRaspuns(ras({ semnale: [S0] }), R)).toEqual({ ok: true, semnale: [S0], respinse: 0 })
     expect(valideazaRaspuns(ras({ semnale: [] }), R)).toEqual({ ok: true, semnale: [], respinse: 0 })
@@ -101,26 +103,33 @@ describe('validarea răspunsului AI (L21)', () => {
     expect(valideazaRaspuns(ras({ semnale: Array.from({ length: 7 }, () => S0) }), R).cod).toBe('ai_raspuns_prea_mare')   // 2 rânduri × 3 câmpuri = 6
     expect(valideazaRaspuns(null, R).cod).toBe('ai_corp_invalid')
   })
-  it('aruncă (și numără) elementele invalide fără să pice lotul: index / câmp / categorie necunoscute, câmp gol, chei în plus, dublură, motiv gol / lung', () => {
+  it('aruncă (și numără) elementele invalide fără să pice lotul: index / câmp / categorie necunoscute, câmp gol, chei în plus, dublură, index ne-întreg', () => {
     const rau = [
-      { ...S0, i: 9 }, { ...S0, camp: 'nume' }, { ...S0, categorie: 'altceva' }, { i: 1, camp: 'nr_cadastral', categorie: 'adresa', motiv: 'pare o adresă' },
-      { ...S0, valoare: 'POPESCU MARIN' }, { ...S0 }, { ...S0, camp: 'poz_hg', motiv: '   ' }, { ...S0, camp: 'nr_cadastral', motiv: 'x'.repeat(121) },
+      { ...S0, i: 9 }, { ...S0, camp: 'nume' }, { ...S0, categorie: 'altceva' }, { i: 1, camp: 'nr_cadastral', categorie: 'adresa' },
+      { ...S0, valoare: 'POPESCU MARIN' }, { ...S0 }, { ...S0, camp: 'poz_hg', motiv: 'pare o poziție greșită' }, { ...S0, camp: 'nr_cadastral', i: '0' },
     ]
     const R3 = [...R, { i: 2, poz_hg: '103', nr_cadastral: '51386', tarla: 'T 3' }]   // 3 rânduri × 3 câmpuri = 9 ≥ 1 + 8 elemente
     expect(valideazaRaspuns(ras({ semnale: [S0, ...rau] }), R3)).toEqual({ ok: true, semnale: [S0], respinse: 8 })
   })
-  it('respinge motivul care REPETĂ valori (valoarea semnalată, un cuvânt din ea, valoarea altui rând, cifre, e-mail / web)', () => {
-    const cu = motiv => valideazaRaspuns(ras({ semnale: [{ ...S0, motiv }] }), R)
-    expect(cu('valoarea POPESCU MARIN e un nume').respinse).toBe(1)
-    expect(cu('pare numele Popescu').respinse).toBe(1)
-    expect(cu('seamănă cu UP II Garnita din alt rând').respinse).toBe(1)
-    expect(cu('are 51384 cifre').respinse).toBe(1)
-    expect(cu('scrie la a@b.ro').respinse).toBe(1)
-    expect(cu('vezi www.exemplu').respinse).toBe(1)
-    expect(cu('pare un nume de persoană, nu un număr de tarla').respinse).toBe(0)
-    // vocabularul motivelor nu e „repetare”, chiar dacă valoarea conține aceleași cuvinte
-    expect(motivRepetaValori('pare o adresă de stradă', 'STRADA MARE 5', ['STRADA MARE 5'])).toBe(false)
-    expect(motivRepetaValori('pare o adresă pe strada Mare', 'STRADA MARE 5', ['STRADA MARE 5'])).toBe(true)
+  it('r2 (#1141 P2): contractul NU mai are text liber — schema cere doar i / camp / categorie, promptul nu cere explicații, modulul nu mai exportă filtrul de motive', () => {
+    const item = SCHEMA_RASPUNS.properties.semnale.items
+    expect(Object.keys(item.properties).sort()).toEqual(['camp', 'categorie', 'i'])
+    expect([...item.required].sort()).toEqual(['camp', 'categorie', 'i'])
+    expect(item.additionalProperties).toBe(false)
+    expect(PROMPT_SISTEM).not.toMatch(/"motiv"/)
+    expect(PROMPT_SISTEM).toMatch(/Nu adăuga explicații/)
+    expect('motivRepetaValori' in modulAi).toBe(false)
+    expect('MAX_MOTIV' in modulAi).toBe(false)
+  })
+  it('r2 (#1141 P2), reproducerea din verdict: rândul semnalat MARIA POPESCU, alt rând ANA IONESCU, „motiv” cu numele celuilalt rând → elementul aruncat, nimic din text nu rămâne', () => {
+    const RR = [{ i: 0, poz_hg: '101', nr_cadastral: null, tarla: 'MARIA POPESCU' }, { i: 1, poz_hg: '102', nr_cadastral: null, tarla: 'ANA IONESCU' }]
+    const v = valideazaRaspuns(ras({ semnale: [{ i: 0, camp: 'tarla', categorie: 'nume_persoana', motiv: 'Pare numele Ionescu' }] }), RR)
+    expect(v).toEqual({ ok: true, semnale: [], respinse: 1 })
+    expect(JSON.stringify(v)).not.toMatch(/Ionescu|IONESCU|POPESCU|motiv/i)
+    // fără text: semnalul trece, cu EXACT cele trei chei (obiect nou, nu cel al modelului)
+    const ok = valideazaRaspuns(ras({ semnale: [{ i: 0, camp: 'tarla', categorie: 'nume_persoana' }] }), RR)
+    expect(ok.semnale).toEqual([{ i: 0, camp: 'tarla', categorie: 'nume_persoana' }])
+    expect(Object.keys(ok.semnale[0]).sort()).toEqual(['camp', 'categorie', 'i'])
   })
 })
 
@@ -179,7 +188,7 @@ function deps({ poate = { data: true, error: null }, rezerva, raspuns, cheie = '
     cheieApi: () => cheie,
     rezerva: async p => { apeluri.rezerva.push(p); return rezerva ?? { data: { ok: true, nou: true, id: 'r-1', lease_token: '33333333-3333-4333-8333-333333333333', model: 'claude-sonnet-5-5', cost_rezervat_usd: 0.1 }, error: null } },
     inchide: async p => { apeluri.inchide.push(p); return inchide ?? { data: true, error: null } },
-    fetch: async (u, i) => { apeluri.fetch.push({ u, i }); if (typeof raspuns === 'function') return raspuns(); return raspuns ?? raspunsAi({ semnale: [{ i: 0, camp: 'tarla', categorie: 'nume_persoana', motiv: 'pare un nume de persoană, nu o tarla' }] }) },
+    fetch: async (u, i) => { apeluri.fetch.push({ u, i }); if (typeof raspuns === 'function') return raspuns(); return raspuns ?? raspunsAi({ semnale: [{ i: 0, camp: 'tarla', categorie: 'nume_persoana' }] }) },
   }
   return { d, apeluri }
 }
@@ -232,11 +241,45 @@ describe('funcția edge: ordinea gărzilor (nimic plătit înaintea dreptului ș
   })
 })
 
+// r2 (#1141 P2): plafonul „aceeași bucată de cel mult 2 ori / zi” se socotește pe amprenta CONȚINUTULUI, calculată de edge (nu pe fișier + bucată)
+describe('amprenta conținutului (identitatea bucății pentru plafon)', () => {
+  // oracol independent: forma canonică scrisă de mână (prefix + triplele normalizate, sortate, câte una pe linie) → sha256 din node:crypto
+  const sha = s => createHash('sha256').update(s, 'utf8').digest('hex')
+  it('= sha256 pe triplele normalizate (NFKC, fără caractere de format, spații comasate, majuscule, gol = null), sortate, fără index', async () => {
+    const randuri = [{ i: 7, poz_hg: ' 102 ', nr_cadastral: '', tarla: 'up  ii\tgarnita' }, { i: 3, poz_hg: '101', nr_cadastral: '51384', tarla: 'popescu' + String.fromCharCode(0x200b) + ' marin' }]
+    expect(await amprentaContinut(randuri)).toBe(sha('redari_import_ai_continut_v1\n["101","51384","POPESCU MARIN"]\n["102",null,"UP II GARNITA"]'))
+  })
+  it('NU depinde de indicii i, de ordinea rândurilor sau de dubluri; depinde de valori', async () => {
+    const a = [{ i: 0, poz_hg: '101', nr_cadastral: '51384', tarla: 'T 12' }, { i: 1, poz_hg: '102', nr_cadastral: null, tarla: 'BUNICA LUI' }]
+    const b = [{ i: 55, poz_hg: '102', nr_cadastral: null, tarla: 'bunica lui' }, { i: 9, poz_hg: '101', nr_cadastral: '51384', tarla: 'T  12' }, { i: 10, poz_hg: '101', nr_cadastral: '51384', tarla: 't 12' }]
+    expect(await amprentaContinut(b)).toBe(await amprentaContinut(a))
+    expect(await amprentaContinut([{ ...a[0], tarla: 'T 13' }, a[1]])).not.toBe(await amprentaContinut(a))
+    expect(await amprentaContinut([a[0]])).not.toBe(await amprentaContinut(a))
+    // câmpurile nu se amestecă: aceeași valoare în altă coloană = alt conținut
+    expect(await amprentaContinut([{ i: 0, poz_hg: 'X', nr_cadastral: null, tarla: null }])).not.toBe(await amprentaContinut([{ i: 0, poz_hg: null, nr_cadastral: null, tarla: 'X' }]))
+  })
+  it('reproducerea din verdict: același conținut trimis cu bucata 1, 2, 3, alt fișier, alți indici și chei noi → ACEEAȘI p_continut_sha256 la rezervare', async () => {
+    const randuri = [{ i: 0, poz_hg: '101', nr_cadastral: '51384', tarla: 'POPESCU MARIN' }, { i: 1, poz_hg: '102', nr_cadastral: null, tarla: 'UP II Garnita' }]
+    const cereri = [
+      { ...cerereOk(randuri), bucata: 1, bucati: 3, cheie: '44444444-4444-4444-8444-444444444441' },
+      { ...cerereOk(randuri.map(r => ({ ...r, i: r.i + 100 })).reverse()), bucata: 2, bucati: 3, cheie: '44444444-4444-4444-8444-444444444442' },
+      { ...cerereOk(randuri), bucata: 3, bucati: 3, fisier_sha256: 'b'.repeat(64), cheie: '44444444-4444-4444-8444-444444444443' },
+    ]
+    const amprente = []
+    for (const c of cereri) { const r = await ruleaza(c); amprente.push(r.apeluri.rezerva[0].p_continut_sha256) }
+    expect(new Set(amprente).size).toBe(1)
+    expect(amprente[0]).toBe(sha('redari_import_ai_continut_v1\n["101","51384","POPESCU MARIN"]\n["102",null,"UP II GARNITA"]'))
+    // iar SQL-ul numără pe ea, nu pe fișier + bucată (migrarea; comportamentul e în proba PGlite)
+    expect(MIG).toContain('WHERE j.proiect_id = p_proiect AND j.continut_sha256 = p_continut_sha256 AND j.ziua = v_zi;')
+    expect(MIG).not.toMatch(/j\.fisier_sha256 = p_fisier_sha256 AND j\.bucata = p_bucata/)
+  })
+})
+
 describe('funcția edge: apelul și închiderea în jurnal', () => {
   it('drumul fericit: un singur apel (URL, cheie, versiune, corpul construit), jurnal ok cu tokeni și semnale', async () => {
     const r = await ruleaza(cerereOk())
     expect(r.status).toBe(200)
-    expect(r.body).toEqual({ cod: 'ok', semnale: [{ i: 0, camp: 'tarla', categorie: 'nume_persoana', motiv: 'pare un nume de persoană, nu o tarla' }], respinse: 0, cost_usd: 0.0032, jurnal_confirmat: true })
+    expect(r.body).toEqual({ cod: 'ok', semnale: [{ i: 0, camp: 'tarla', categorie: 'nume_persoana' }], respinse: 0, cost_usd: 0.0032, jurnal_confirmat: true })
     expect(r.apeluri.fetch).toHaveLength(1)
     const { u, i } = r.apeluri.fetch[0]
     expect(u).toBe('https://api.anthropic.com/v1/messages'); expect(URL_ANTHROPIC).toBe(u)
@@ -249,12 +292,15 @@ describe('funcția edge: apelul și închiderea în jurnal', () => {
     expect([r.status, r.body.cod, r.body.semnale]).toEqual([502, 'ai_raspuns_invalid', undefined])
     expect(r.apeluri.inchide[0]).toMatchObject({ p_stare: 'eroare', p_eroare_cod: 'ai_raspuns_invalid', p_tokeni_in: 1200, p_tokeni_out: 80 })
   })
-  it('răspuns AI cu valori repetate în motiv → elementul respins (numărat), restul rămân', async () => {
-    const r = await ruleaza(cerereOk(), { raspuns: raspunsAi({ semnale: [
-      { i: 0, camp: 'tarla', categorie: 'nume_persoana', motiv: 'tarla conține POPESCU MARIN' },
-      { i: 0, camp: 'poz_hg', categorie: 'text_liber', motiv: 'nu pare o poziție din HG' }] }) })
-    expect(r.body.semnale).toEqual([{ i: 0, camp: 'poz_hg', categorie: 'text_liber', motiv: 'nu pare o poziție din HG' }])
+  it('r2 (#1141 P2), reproducerea din verdict prin handler: un „motiv” cu numele altui rând → HTTP 200 FĂRĂ niciun text al modelului (elementul aruncat), restul rămân', async () => {
+    const randuri = [{ i: 0, poz_hg: '101', nr_cadastral: null, tarla: 'MARIA POPESCU' }, { i: 1, poz_hg: '102', nr_cadastral: null, tarla: 'ANA IONESCU' }]
+    const r = await ruleaza(cerereOk(randuri), { raspuns: raspunsAi({ semnale: [
+      { i: 0, camp: 'tarla', categorie: 'nume_persoana', motiv: 'Pare numele Ionescu' },
+      { i: 1, camp: 'tarla', categorie: 'nume_persoana' }] }) })
+    expect(r.status).toBe(200)
+    expect(r.body.semnale).toEqual([{ i: 1, camp: 'tarla', categorie: 'nume_persoana' }])
     expect(r.body.respinse).toBe(1)
+    expect(JSON.stringify(r.body)).not.toMatch(/Ionescu|IONESCU|POPESCU|MARIA|motiv/i)
     expect(r.apeluri.inchide[0]).toMatchObject({ p_stare: 'ok', p_semnale: 1, p_respinse: 1 })
   })
   it('max_tokens / refuz → eroare (tokenii cunoscuți); fără listă', async () => {
@@ -365,17 +411,51 @@ describe('ecranul: semnalele AI în „De verificat” — aceeași mascare, ace
     expect(intrari[1].motiv).toBe('tarla / nr. topo: AI: text liber, nu un identificator')
     expect(JSON.stringify(intrari)).not.toMatch(/număr de telefon|text liber, nu un număr/)
   })
-  it('previzualizare NOUĂ (bifa se cere din nou), semnalele fixe păstrate, cele AI vechi înlocuite, statistica refăcută', () => {
+  it('previzualizare NOUĂ (bifa se cere din nou), semnalele fixe păstrate, cele AI vechi înlocuite pe rândurile acoperite, statistica refăcută', () => {
     const fix = { rand: 9, uat: 'PRU', nr_crt: '8', cheie_parcela: 'PRU:8', camp: 'tarla', motive: ['nume'], motiv: 'tarla / nr. topo: pare numele deținătorului' }
     const p0 = { ...pv, de_verificat: [fix], statistici: { ...pv.statistici, randuri_de_verificat: 1 } }
-    const p1 = adaugaSemnaleAi(p0, intrari, { complet: true })
+    const tot = randuriAcoperite(plan, [0])
+    const p1 = adaugaSemnaleAi(p0, intrari, { complet: true }, tot)
     expect(p1).not.toBe(p0)
     expect(p1.de_verificat).toEqual([fix, ...intrari])
     expect(p1.statistici.randuri_de_verificat).toBe(4)
-    const p2 = adaugaSemnaleAi(p1, intrari.slice(0, 1), { complet: false })
+    // rerulare COMPLETĂ (bucata unică acoperită) cu un singur semnal: celelalte semnale AI vechi dispar (rândurile au fost reverificate)
+    const p2 = adaugaSemnaleAi(p1, intrari.slice(0, 1), { complet: true }, tot)
     expect(p2.de_verificat).toEqual([fix, intrari[0]])
-    expect(p2.verificare_ai).toEqual({ complet: false })
+    expect(p2.verificare_ai).toEqual({ complet: true })
     expect(numarRanduriDeVerificat(p2.de_verificat)).toBe(2)
+    // fără `acoperite` (sau ne-Set): niciun semnal AI vechi nu se pierde, iar cele noi identice nu se dublează
+    expect(adaugaSemnaleAi(p1, intrari.slice(0, 1), { complet: false }).de_verificat).toEqual([fix, ...intrari])
+    expect(adaugaSemnaleAi(p1, [], { complet: false }, [...tot]).de_verificat).toEqual([fix, ...intrari])
+  })
+  it('r2 (#1141 P2), reproducerea din verdict: semnal AI vechi în bucata 2; rerulare cu bucata 1 fără semnale și bucata 2 eșuată → semnalul vechi RĂMÂNE (mascare + bifă)', () => {
+    // 150 de valori unice → 2 bucăți (100 + 50); valori FICTIVE
+    const id = Array.from({ length: 150 }, (_, k) => ({ rand: k + 2, uat: 'FIC', nr_crt: String(k + 1), cheie_parcela: `FIC:${k + 1}`, poz_hg: String(100 + k), nr_cadastral: String(5000 + k), tarla: 'T ' + k }))
+    const pl = pregatesteVerificareAi({ identificare: id })
+    expect(pl.bucati.map(b => b.length)).toEqual([100, 50])
+    const iVechi = pl.bucati[1][10].i   // rândul Excel 112, în bucata 2
+    const vechi = semnaleAiInDeVerificat([{ i: iVechi, camp: 'tarla', categorie: 'nume_persoana' }], pl.harta)
+    expect(vechi.map(x => x.rand)).toEqual([112])
+    const p0 = adaugaSemnaleAi({ identificare: id, de_verificat: [], statistici: {} }, vechi, { complet: true }, randuriAcoperite(pl, [0, 1]))
+    // rerularea: bucata 1 (index 0) reușită fără semnale, bucata 2 eșuată (nu e în acoperite)
+    const p1 = adaugaSemnaleAi(p0, [], { complet: false, facute: 1 }, randuriAcoperite(pl, [0]))
+    expect(p1).not.toBe(p0)
+    expect(p1.de_verificat).toEqual(vechi)
+    expect(p1.statistici.randuri_de_verificat).toBe(1)
+    const idx = indexDeVerificat(p1.de_verificat)
+    expect(mascheazaRand({ cheie: 'FIC:111', tarla: 'T 110', nr_cadastral: '5110' }, idx).tarla).toBe(VALOARE_ASCUNSA)
+    // aceeași rerulare cu bucata 2 reușită (fără semnale) → abia acum semnalul vechi dispare
+    expect(adaugaSemnaleAi(p0, [], { complet: true }, randuriAcoperite(pl, [0, 1])).de_verificat).toEqual([])
+  })
+  it('randuriAcoperite: rândurile Excel (toate, prin hartă) ale bucăților date; cheia = rând + UAT + Nr.Crt. + cheia parcelei, fără valori', () => {
+    expect([...randuriAcoperite(plan, [0])].sort()).toEqual([2, 3, 4].map(r => cheieRandAi(pv.identificare.find(x => x.rand === r))).sort())
+    expect(randuriAcoperite(plan, []).size).toBe(0)
+    expect(randuriAcoperite(plan, [5]).size).toBe(0)
+    expect(cheieRandAi({ rand: 2, uat: 'PRU', nr_crt: '1', cheie_parcela: 'PRU:1', tarla: 'BUNICA LUI' })).toBe('[2,"PRU","1","PRU:1"]')
+  })
+  it('explicațiile AI sunt FIXE, din cod, câte una pe fiecare categorie (r2: niciun text al modelului)', () => {
+    expect(Object.keys(EXPLICATIE_CATEGORIE_AI).sort()).toEqual([...CATEGORII_AI].sort())
+    for (const t of Object.values(EXPLICATIE_CATEGORIE_AI)) expect(t).toMatch(/^Valoarea pare .+\.$/)
   })
   it('mascarea: câmpul semnalat de AI apare „[ascuns: de verificat]” în taburi și în CSV, exact ca la semnalele fixe', () => {
     const p1 = adaugaSemnaleAi(pv, intrari, { complet: true })

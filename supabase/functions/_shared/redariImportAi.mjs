@@ -5,9 +5,14 @@
 //    într-un câmp de identificare pleacă împreună cu el (exact ce vrem să prindem).
 //  - Valorile sunt DATE scrise de terți (pot conține text ostil): promptul de sistem le declară date, nu instrucțiuni; ele stau doar în mesajul
 //    utilizatorului, ca JSON între marcaje, cu „<” / „>” scrise ca escape JSON (o valoare nu poate închide marcajul).
-//  - Răspunsul e cerut structurat (output_config.format = json_schema) ȘI e validat aici (L21): stop_reason end_turn, exact cheile din contract,
-//    indicii trimiși, câmpurile nevide, categoriile din listă, motivul scurt FĂRĂ valorile trimise (element invalid = aruncat și numărat, nu pică lotul;
-//    forma greșită / prea multe elemente = refuz întreg, fără slice()).
+//  - Răspunsul e cerut structurat (output_config.format = json_schema) ȘI e validat aici (L21): stop_reason end_turn, exact cheile din contract
+//    (i, camp, categorie — FĂRĂ text liber), indicii trimiși, câmpurile nevide, categoriile din listă (element invalid = aruncat și numărat, nu pică
+//    lotul; forma greșită / prea multe elemente = refuz întreg, fără slice()).
+//  - r2 (#1141, Jakarinos P2): modelul NU mai scrie niciun text liber („motiv”): un text al lui poate repeta date personale din alt rând, iar nicio
+//    comparație nu le prinde pe toate. Explicația din ecran e FIXĂ, derivată din categoria validată (EXPLICATIE_CATEGORIE_AI); un element cu
+//    „motiv” (sau orice altă cheie) e aruncat, deci nimic din textul modelului nu ajunge la client.
+//  - r2: plafonul „aceeași bucată de cel mult 2 ori / zi” se socotește pe amprenta CONȚINUTULUI calculată aici (amprentaContinut: valorile
+//    normalizate, fără index și fără ordine), nu pe (fișier, bucată) declarate de client.
 //  - Costul: rezervarea din SQL (fn_red_import_ai_rezerva) = (octeții cererii + 2000) × 2 USD / MTok + max_tokens × 10 USD / MTok — aceeași formulă
 //    aici (costRezervatMaxim), folosită de ecran pentru estimarea afișată înainte de pornire (L19; testul de paritate citește migrarea).
 // Fără temperature: pe modelele 5.5 parametrii de eșantionare ne-impliciți dau 400 (vezi extractorA.ts / extract-talon-ai); stabilitatea vine din
@@ -25,7 +30,6 @@ export const MAX_LUNGIME_VALOARE = 500
 export const MAX_IESIRE = 8000
 /** Octeții corpului unei cereri (= CHECK octeti_intrare ≤ 120000 din 20261131j): edge-ul refuză peste, ecranul împarte bucățile ca să nu ajungă acolo. */
 export const MAX_OCTETI_CERERE = 120000
-export const MAX_MOTIV = 120
 export const MAX_BUCATI = 100
 export const TIMEOUT_AI_MS = 100000
 export const PRET_IN_USD = 2 / 1e6
@@ -84,8 +88,7 @@ Sarcina: găsește valorile care NU par identificatori (cadastrali, silvici, de 
 - text_liber: propoziții, observații, mesaje, orice text care nu e un identificator.
 Valori LEGITIME, care NU se semnalează: numere de tarla / parcelă / cadastru / topo (ex. 12, 345/2, 1234/5/6, 40123#1234, liste despărțite de virgulă, punct și virgulă sau #), coduri de parcelă (A 123, Cc 45, De 12, N 7, Hb 3, Ps 2), unități silvice (UP II, UA 12A, u.a. 5B), coduri de lucrare (HCN…, HR_…, PD_…), poziții din HG (numere, numere cu litere), „#”, valori goale. Numele unei localități în interiorul unui identificator (ex. „UP II” urmat de numele localității) e legitim. Nu semnala o valoare doar pentru că are un format neobișnuit: semnalează doar ce pare altă informație decât un identificator.
 
-Răspunsul: obiectul JSON din schemă, {"semnale":[{"i","camp","categorie","motiv"}]}, câte un element pentru fiecare valoare suspectă (i = indexul rândului primit, camp = poz_hg | nr_cadastral | tarla, categorie = una din cele de mai sus). Fără nimic suspect: {"semnale":[]}. Nu inventa indici și nu semnala câmpuri goale.
-"motiv" = o frază scurtă în română (cel mult 100 de caractere) care spune DE CE pare suspectă valoarea, FĂRĂ să repete, să citeze sau să parafrazeze valoarea și FĂRĂ cifre, nume, adrese sau alte date din rânduri (ex. „pare un nume de persoană, nu un număr de tarla”).`
+Răspunsul: obiectul JSON din schemă, {"semnale":[{"i","camp","categorie"}]}, câte un element pentru fiecare valoare suspectă (i = indexul rândului primit, camp = poz_hg | nr_cadastral | tarla, categorie = una din cele de mai sus). Fără nimic suspect: {"semnale":[]}. Nu inventa indici și nu semnala câmpuri goale. Nu adăuga explicații, texte sau alte câmpuri: doar cele trei chei ale fiecărui element.`
 
 export const SCHEMA_RASPUNS = Object.freeze({
   type: 'object',
@@ -98,9 +101,8 @@ export const SCHEMA_RASPUNS = Object.freeze({
           i: { type: 'integer' },
           camp: { type: 'string', enum: [...CAMPURI_AI] },
           categorie: { type: 'string', enum: [...CATEGORII_AI] },
-          motiv: { type: 'string' },
         },
-        required: ['i', 'camp', 'categorie', 'motiv'],
+        required: ['i', 'camp', 'categorie'],
         additionalProperties: false,
       },
     },
@@ -146,24 +148,8 @@ export function tokeniDinUsage(u) {
 }
 
 // ── validarea răspunsului ──
-const norm = s => String(s ?? '').normalize('NFD').replace(/\p{M}/gu, '').toUpperCase()
-const atomi = s => norm(s).match(/[\p{L}\p{N}]+/gu) ?? []
-// vocabularul motivelor („pare un nume de persoană, nu o adresă de stradă”): cuvintele astea pot apărea și în valoare fără ca motivul să o repete
-const VOCABULAR_MOTIV = new Set(['PARE', 'NUME', 'NUMELE', 'PRENUME', 'PERSOANA', 'PERSOANE', 'FIRMA', 'FIRME', 'INSTITUTIE', 'ADRESA', 'ADRESE', 'STRADA', 'STRAZII',
-  'POSTALA', 'TELEFON', 'NUMAR', 'NUMARUL', 'EMAIL', 'MAIL', 'WEB', 'SITE', 'TEXT', 'LIBER', 'PROPOZITIE', 'OBSERVATIE', 'MESAJ', 'TARLA', 'PARCELA', 'CADASTRAL',
-  'CADASTRU', 'TOPO', 'IDENTIFICATOR', 'COLOANA', 'DECALATA', 'VALOARE', 'VALOAREA', 'CAMP', 'CAMPUL', 'COMUNA', 'SATUL', 'LOCALITATE', 'CONTINE', 'ESTE', 'NU',
-  'UNEI', 'UNUI', 'DATE', 'PERSONALE', 'DETINATOR', 'DETINATORULUI', 'CODUL', 'POZITIE', 'POZITIA', 'LUCRARE'])
-/**
- * true = motivul (textul AI) repetă date: o secvență de ≥ 3 cifre, „@”, „http” / „www”, o valoare trimisă întreagă (≥ 4 caractere, pe atomi), sau un
- * cuvânt de ≥ 4 litere din valoarea semnalată (în afara vocabularului motivelor).
- */
-export function motivRepetaValori(motiv, valoareSemnalata, toateValorile) {
-  const m = String(motiv)
-  if (/\d{3,}/.test(m) || m.includes('@') || /https?:|www\./i.test(m)) return true
-  const am = atomi(m); const sm = ` ${am.join(' ')} `; const setM = new Set(am)
-  for (const v of toateValorile) { const av = atomi(v); if (av.join('').length >= 4 && sm.includes(` ${av.join(' ')} `)) return true }
-  return atomi(valoareSemnalata).some(w => /^\p{L}{4,}$/u.test(w) && !VOCABULAR_MOTIV.has(w) && setM.has(w))
-}
+/** Cheile EXACTE ale unui element din răspuns (sortate): fără text liber al modelului (r2: „motiv” a fost scos din contract). */
+export const CHEI_SEMNAL_AI = Object.freeze(['camp', 'categorie', 'i'])
 
 /** Textul răspunsului: DOAR blocurile `text` (gândirea poate veni înainte), lipite. */
 export const textRaspuns = d => (Array.isArray(d?.content) ? d.content : []).filter(b => b?.type === 'text').map(b => (typeof b.text === 'string' ? b.text : '')).join('')
@@ -171,6 +157,8 @@ export const textRaspuns = d => (Array.isArray(d?.content) ? d.content : []).fil
 /**
  * valideazaRaspuns(d, randuri) → { ok: true, semnale, respinse } | { ok: false, cod }.
  * d = corpul JSON al răspunsului Messages API (200). randuri = cele trimise. Un element invalid e aruncat (respinse++); forma greșită = refuz întreg.
+ * Un element cu altă cheie decât i / camp / categorie (de ex. un „motiv” scris de model) e aruncat întreg: semnalele întoarse sunt obiecte NOI, cu
+ * exact cele trei chei, deci niciun text al modelului nu ajunge la client.
  */
 export function valideazaRaspuns(d, randuri) {
   if (!esteObiect(d)) return { ok: false, cod: 'ai_corp_invalid' }
@@ -182,18 +170,15 @@ export function valideazaRaspuns(d, randuri) {
   if (!esteObiect(o) || Object.keys(o).length !== 1 || !Array.isArray(o.semnale)) return { ok: false, cod: 'ai_raspuns_invalid' }
   if (o.semnale.length > randuri.length * CAMPURI_AI.length) return { ok: false, cod: 'ai_raspuns_prea_mare' }
   const dupaI = new Map(randuri.map(r => [r.i, r]))
-  const toate = randuri.flatMap(r => CAMPURI_AI.map(c => r[c]).filter(v => typeof v === 'string' && v.trim() !== ''))
   const vazute = new Set(); const semnale = []; let respinse = 0
   for (const s of o.semnale) {
-    const r = esteObiect(s) ? dupaI.get(s.i) : undefined
+    const r = esteObiect(s) && Number.isInteger(s.i) ? dupaI.get(s.i) : undefined
     const chei = esteObiect(s) ? Object.keys(s).sort().join(',') : ''
-    const motiv = typeof s?.motiv === 'string' ? s.motiv.trim() : ''
     const valoare = r && CAMPURI_AI.includes(s.camp) ? r[s.camp] : null
-    if (chei !== 'camp,categorie,i,motiv' || !r || typeof valoare !== 'string' || valoare.trim() === '' || !CATEGORII_AI.includes(s.categorie)
-        || !motiv || motiv.length > MAX_MOTIV || /[\u0000-\u001f\u007f]/.test(motiv) || vazute.has(`${s.i}|${s.camp}`)
-        || motivRepetaValori(motiv, valoare, toate)) { respinse++; continue }
+    if (chei !== CHEI_SEMNAL_AI.join(',') || !r || typeof valoare !== 'string' || valoare.trim() === '' || !CATEGORII_AI.includes(s.categorie)
+        || vazute.has(`${s.i}|${s.camp}`)) { respinse++; continue }
     vazute.add(`${s.i}|${s.camp}`)
-    semnale.push({ i: s.i, camp: s.camp, categorie: s.categorie, motiv })
+    semnale.push({ i: s.i, camp: s.camp, categorie: s.categorie })
   }
   return { ok: true, semnale, respinse }
 }
@@ -204,5 +189,20 @@ export async function sha256Hex(date) {
   const h = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', b))
   return Array.from(h, x => x.toString(16).padStart(2, '0')).join('')
 }
-/** Amprenta conținutului unei cereri (rândurile validate, în ordine): legată de cheia de intenție în jurnal (aceeași cheie + alt conținut = refuz). */
-export const amprentaContinut = randuri => sha256Hex(JSON.stringify(randuri.map(r => [r.i, r.poz_hg ?? null, r.nr_cadastral ?? null, r.tarla ?? null])))
+// Normalizarea unei valori pentru amprentă: NFKC, fără caractere de format (ex. spațiu de lățime zero), spațiile comasate, capetele tăiate, majuscule;
+// gol = null. Două valori pe care modelul le-ar citi la fel dau aceeași formă (o majusculă / un spațiu în plus nu fac din ea alt conținut).
+const formaAmprenta = v => {
+  if (typeof v !== 'string') return null
+  const t = v.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/\s+/gu, ' ').trim().toUpperCase()
+  return t === '' ? null : t
+}
+/**
+ * Amprenta CONȚINUTULUI unei cereri (r2, #1141): sha256 pe mulțimea triplelor (poz_hg, nr_cadastral, tarla) NORMALIZATE, fără index, sortate și fără
+ * dubluri — deci NU depinde de numărul bucății, de indicii `i`, de ordinea rândurilor, de cheia de intenție sau de amprenta fișierului (toate declarate
+ * de client). O calculează funcția edge pe rândurile validate pe care le trimite; plafonul „aceeași bucată de cel mult 2 ori / zi” din
+ * fn_red_import_ai_rezerva numără pe ea, iar cheia de intenție e legată de ea (aceeași cheie + alt conținut = cheie_refolosita).
+ */
+export const amprentaContinut = randuri => {
+  const triple = [...new Set(randuri.map(r => JSON.stringify(CAMPURI_AI.map(c => formaAmprenta(r[c])))))].sort()
+  return sha256Hex('redari_import_ai_continut_v1\n' + triple.join('\n'))
+}

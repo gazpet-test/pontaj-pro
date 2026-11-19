@@ -5,6 +5,8 @@
 // (fn_red_import_ai_inchide, service_role, CAS pe id + token). Orice refuz de dinainte = NICIUN apel către Anthropic, nicio rezervare consumată.
 // Erorile de business se scriu în jurnal (stare eroare / necunoscut + cod) și se ÎNTORC (nu se aruncă). Nimic din valori nu se loghează.
 // Rezultat ambiguu (rețea / timeout / 5xx / corp ilizibil / usage lipsă) = `necunoscut`: costul rămâne cel rezervat, fără reluare automată (L05, L22).
+// r2 (#1141): p_continut_sha256 = amprentaContinut, calculată AICI pe rândurile validate (valori normalizate, fără index / ordine / număr de bucată):
+// pe ea numără plafonul „aceeași bucată de cel mult 2 ori / zi”. Semnalele întoarse au doar i / camp / categorie (niciun text al modelului).
 import { MODEL_AI, URL_ANTHROPIC, VERSIUNE_API, TIMEOUT_AI_MS, MAX_OCTETI_CERERE, validaCerere, construiesteCerere, valideazaRaspuns, tokeniDinUsage, costFinal, amprentaContinut } from './redariImportAi.mjs'
 
 const STATUS_REFUZ = { neautentificat: 401, cerere_invalida: 400, fara_drept: 403, cheie_refolosita: 409, plafon_apeluri_zi: 429, plafon_cost_zi: 429, plafon_bucata_zi: 429 }

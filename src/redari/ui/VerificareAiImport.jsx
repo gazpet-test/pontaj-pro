@@ -2,12 +2,14 @@
 // Butonul apare DOAR cu dreptul (fn_red_import_ai_poate: owner sau dreptul import_verificare_ai pe proiect); funcția edge verifică ea însăși dreptul.
 // Înainte de pornire: ce pleacă (doar poz. HG / nr. cadastral / tarla, valorile unice) și costul MAXIM estimat; pornirea cere confirmare.
 // Rezultatul intră în „De verificat” cu eticheta AI (prin onSemnale → adaugaSemnaleAi), deci e mascat și bifat ca semnalele fixe; aici se arată
-// doar rândul, UAT, Nr.Crt., câmpul, categoria și explicația AI — niciodată valoarea. L24: generația + proiectul + previzualizarea curente,
-// verificate înaintea fiecărui apel (bucla plătită se oprește la unmount / schimbare). L05: un rezultat necunoscut oprește bucla, fără reluare.
+// doar rândul, UAT, Nr.Crt., câmpul, categoria și o explicație FIXĂ după categorie (r2: niciun text scris de model) — niciodată valoarea.
+// L24: generația + proiectul + previzualizarea curente, verificate înaintea fiecărui apel (bucla plătită se oprește la unmount / schimbare).
+// L05: un rezultat necunoscut oprește bucla, fără reluare. r2 (L12): la o rulare incompletă se înlocuiesc semnalele AI DOAR pe rândurile bucăților
+// verificate cu succes acum (randuriAcoperite); cele ale bucăților eșuate / neîncercate rămân (mascate, cu bifa obligatorie).
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { sha256Hex } from '../../../supabase/functions/_shared/redariImportAi.mjs'
-import { pregatesteVerificareAi, semnaleAiInDeVerificat, FUNCTIA_EDGE_AI, ETICHETA_CATEGORIE_AI, mesajCodAi } from '../importVerificareAi.js'
+import { pregatesteVerificareAi, semnaleAiInDeVerificat, randuriAcoperite, FUNCTIA_EDGE_AI, ETICHETA_CATEGORIE_AI, EXPLICATIE_CATEGORIE_AI, mesajCodAi } from '../importVerificareAi.js'
 import { ETICHETA_CAMP_VERIFICAT } from '../importVerificareFixa.js'
 import { G, S, fmtNum } from './comune.jsx'
 
@@ -18,7 +20,7 @@ const usd = v => (Number.isFinite(v) ? `${v.toFixed(v < 0.1 ? 4 : 2)} USD` : '�
 export default function VerificareAiImport({ proiect, preview, fisier, fisierNume = null, show, onSemnale }) {
   const [drept, setDrept] = useState(null)            // null = se citește | true | false | 'lipsa' | { eroare }
   const [stare, setStare] = useState({ lucru: false, facut: 0, total: 0, mesaj: '', eroare: '' })
-  const [explicatii, setExplicatii] = useState(null)  // [{ rand, uat, nr_crt, camp, categorie, motiv }] — ultima rulare (fără valori)
+  const [explicatii, setExplicatii] = useState(null)  // [{ rand, uat, nr_crt, camp, categorie }] — ultima rulare (fără valori, fără text AI)
   const gen = useRef(0)          // generația rulării AI (bucla plătită)
   const genDrept = useRef(0)     // generația citirii dreptului
   const montat = useRef(true)
@@ -62,7 +64,7 @@ export default function VerificareAiImport({ proiect, preview, fisier, fisierNum
     try { sha = await sha256Hex(new Uint8Array(await fisier.arrayBuffer())) } catch { sha = null }
     if (!curent()) return
     if (!sha || typeof globalThis.crypto?.randomUUID !== 'function') { setStare(s => ({ ...s, lucru: false, eroare: 'Nu pot calcula amprenta fișierului în acest browser.' })); return }
-    const semnale = []; let respinse = 0, cost = 0, costNecunoscut = false, facute = 0, oprit = null, jurnalNeconfirmat = 0
+    const semnale = []; const reusite = []; let respinse = 0, cost = 0, costNecunoscut = false, facute = 0, oprit = null, jurnalNeconfirmat = 0
     for (let k = 0; k < plan.bucati.length; k++) {
       if (!curent()) return   // ecran închis / alt proiect / altă previzualizare: nimic nu se mai aplică
       const corp = { proiect_id: proiectStart, fisier_sha256: sha, bucata: k + 1, bucati: plan.bucati.length, cheie: globalThis.crypto.randomUUID(), randuri: plan.bucati[k] }
@@ -71,7 +73,9 @@ export default function VerificareAiImport({ proiect, preview, fisier, fisierNum
       if (error) { try { data = typeof error.context?.json === 'function' ? await error.context.json() : null } catch { data = null } }
       if (!curent()) return
       if (data?.cod !== 'ok' || !Array.isArray(data?.semnale)) { oprit = data?.cod || 'ai_necunoscut'; break }   // L05: fără reluare automată
-      semnale.push(...data.semnale); respinse += Number(data.respinse) || 0; facute++
+      // doar i / camp / categorie (lista albă): orice alt câmp din răspuns (text) nu se păstrează
+      for (const s of data.semnale) semnale.push({ i: s?.i, camp: s?.camp, categorie: s?.categorie })
+      respinse += Number(data.respinse) || 0; facute++; reusite.push(k)
       if (Number.isFinite(data.cost_usd)) cost += data.cost_usd; else costNecunoscut = true
       if (data.jurnal_confirmat !== true) jurnalNeconfirmat++
       setStare(s => ({ ...s, facut: facute }))
@@ -80,13 +84,15 @@ export default function VerificareAiImport({ proiect, preview, fisier, fisierNum
     const intrari = semnaleAiInDeVerificat(semnale, plan.harta)
     const rezumat = { complet: facute === plan.bucati.length, bucati: plan.bucati.length, facute, semnale: semnale.length, randuri_semnalate: new Set(intrari.map(x => x.rand)).size,
       respinse, cost_usd: costNecunoscut ? null : Math.round(cost * 1e6) / 1e6, oprit, fisier: fisierNume }
-    setExplicatii(semnale.flatMap(s => (plan.harta.get(s.i) || []).map(r => ({ rand: r.rand, uat: r.uat, nr_crt: r.nr_crt, camp: s.camp, categorie: s.categorie, motiv: s.motiv }))).sort((a, b) => (a.rand ?? Infinity) - (b.rand ?? Infinity)))
+    setExplicatii(intrari.map(x => ({ rand: x.rand, uat: x.uat, nr_crt: x.nr_crt, camp: x.camp, categorie: String(x.motive?.[0] || '').replace(/^ai_/, '') })))
     const mesaj = `${rezumat.complet ? 'Verificare AI încheiată' : `Verificare AI INCOMPLETĂ (${facute} din ${plan.bucati.length} apeluri)`}: ${rezumat.randuri_semnalate} rânduri semnalate`
       + `${respinse ? `, ${respinse} semnale AI respinse la validare` : ''}; cost ${rezumat.cost_usd == null ? 'necunoscut (socotit cel maxim)' : usd(rezumat.cost_usd)}.`
       + `${jurnalNeconfirmat ? ` Jurnalul n-a confirmat ${jurnalNeconfirmat} apeluri (rămân socotite la costul maxim).` : ''}`
+      + `${rezumat.complet ? '' : ' Semnalele AI anterioare ale bucăților neverificate acum rămân în „De verificat”.'}`
     setStare({ lucru: false, facut: facute, total: plan.bucati.length, mesaj, eroare: oprit ? mesajCodAi(oprit) : '' })
-    // previzualizare nouă cu semnalele AI (chiar parțiale): bifa „am verificat” se cere din nou
-    if (facute > 0) onSemnale?.(pvStart, intrari, rezumat)
+    // previzualizare nouă cu semnalele AI (chiar parțiale): bifa „am verificat” se cere din nou; semnalele vechi se înlocuiesc DOAR pe rândurile
+    // bucăților reușite acum (reusite → randuriAcoperite)
+    if (facute > 0) onSemnale?.(pvStart, intrari, rezumat, randuriAcoperite(plan, reusite))
     show?.(mesaj, oprit ? 'error' : 'success')
   }
 
@@ -107,8 +113,8 @@ export default function VerificareAiImport({ proiect, preview, fisier, fisierNum
       {Array.isArray(explicatii) && explicatii.length > 0 && (
         <div style={{ overflow:'auto', maxHeight:260, marginTop:8 }}>
           <table style={{ width:'100%', borderCollapse:'collapse' }}>
-            <thead><tr>{['Rând', 'UAT', 'Nr.Crt.', 'Câmp', 'Categorie (AI)', 'Explicația AI'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
-            <tbody>{explicatii.slice(0, 200).map((x, i) => <tr key={i}><td style={S.td}>{x.rand ?? '-'}</td><td style={S.td}>{x.uat}</td><td style={S.td}>{x.nr_crt}</td><td style={S.td}>{ETICHETA_CAMP_VERIFICAT[x.camp]}</td><td style={S.td}>{ETICHETA_CATEGORIE_AI[x.categorie]}</td><td style={{ ...S.td, fontSize:12 }}>{x.motiv}</td></tr>)}</tbody>
+            <thead><tr>{['Rând', 'UAT', 'Nr.Crt.', 'Câmp', 'Categorie (AI)', 'Explicație'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>{explicatii.slice(0, 200).map((x, i) => <tr key={i}><td style={S.td}>{x.rand ?? '-'}</td><td style={S.td}>{x.uat}</td><td style={S.td}>{x.nr_crt}</td><td style={S.td}>{ETICHETA_CAMP_VERIFICAT[x.camp]}</td><td style={S.td}>{ETICHETA_CATEGORIE_AI[x.categorie]}</td><td style={{ ...S.td, fontSize:12 }}>{EXPLICATIE_CATEGORIE_AI[x.categorie]}</td></tr>)}</tbody>
           </table>
           {explicatii.length > 200 && <div style={{ fontSize:12, color:G.muted, padding:6 }}>… încă {explicatii.length - 200} (toate sunt în tab-ul „De verificat”).</div>}
         </div>

@@ -59,7 +59,8 @@ const M26 = M('20261126a_redari_teren.sql'), M30J = M('20261130j_redari_mail_f1_
 const FUNCTII = [
   [M26, 'CREATE FUNCTION public.fn_red_nivel()', '21db8e5d4b69b7f19e571a7087c361ae'],
   [M26, 'CREATE FUNCTION public.fn_red_jurnal_imuabil()'],
-  [M30J, 'CREATE OR REPLACE FUNCTION public.fn_red_jurnal()', '41ab451b7fcb499a2284c9c82367069e'],
+  // r2: fn_red_jurnal nu mai e chemată de migrare (drepturile au istoricul lor); rămâne în schelet pentru triggerul de pe red_proiecte
+  [M30J, 'CREATE OR REPLACE FUNCTION public.fn_red_jurnal()'],
 ]
 console.log('0. funcțiile extrase din migrările lor (amprentele = constantele din 20261131j)')
 let SQL_FUNCTII = ''
@@ -79,7 +80,9 @@ ok(SCH_B !== undefined, 'scheletul are marcajul funcțiilor')
 // amprentele corpurilor noi (blocul AMPRENTE-NOI 20261131j: aceleași în migrare și în revenire)
 const CAP_NOI = [['public.fn_red_import_ai_poate(uuid)', 'CREATE FUNCTION public.fn_red_import_ai_poate('],
   ['public.fn_red_import_ai_rezerva(uuid,uuid,text,text,integer,integer,integer,integer,integer)', 'CREATE FUNCTION public.fn_red_import_ai_rezerva('],
-  ['public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)', 'CREATE FUNCTION public.fn_red_import_ai_inchide(']]
+  ['public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)', 'CREATE FUNCTION public.fn_red_import_ai_inchide('],
+  ['public.fn_red_proiect_drepturi_istoric()', 'CREATE FUNCTION public.fn_red_proiect_drepturi_istoric(']]
+ok(!MIG.includes("'41ab451b7fcb499a2284c9c82367069e'") && !/EXECUTE FUNCTION public\.fn_red_jurnal\(\)/.test(MIG), 'r2: migrarea nu mai atașează fn_red_jurnal (nicio copie a drepturilor în red_jurnal)')
 const blocNoi = t => t.slice(t.indexOf('-- >>> AMPRENTE-NOI 20261131j'), t.indexOf('-- <<< AMPRENTE-NOI 20261131j'))
 for (const [sem, cap] of CAP_NOI) {
   const m = md5(corp(MIG, cap))
@@ -252,12 +255,14 @@ async function verifica(db) {
   egal(val(await rezerva(db, U.OWNER, { cheie: K1 }), 'B aceeași cheie, alt cont'), { ok: false, cod: 'cheie_refolosita' }, 'B aceeași cheie, alt cont')
   egal(val(await rezerva(db, U.EDITOR, { cheie: K1, bucata: 2 }), 'B aceeași cheie, altă bucată'), { ok: false, cod: 'cheie_refolosita' }, 'B aceeași cheie, altă bucată')
   if (await nrJurnal(db) !== n1) ab.push('B reluarea / cheia refolosită a scris în jurnal')
-  // plafonul pe bucată: 2 / zi pe aceeași bucată a aceluiași fișier (alte chei); altă bucată / alt fișier = permis
-  egal(val(await rezerva(db, U.EDITOR), 'B a doua pe bucata 1')?.nou, true, 'B a doua rezervare pe bucata 1')
-  egal(val(await rezerva(db, U.EDITOR), 'B a treia pe bucata 1'), { ok: false, cod: 'plafon_bucata_zi', limita: 2 }, 'B a treia rezervare pe bucata 1')
-  egal(val(await rezerva(db, U.EDITOR, { bucata: 2 }), 'B bucata 2')?.nou, true, 'B bucata 2 (altă bucată)')
-  egal(val(await rezerva(db, U.EDITOR, { fisier: H('f') }), 'B alt fișier, bucata 1')?.nou, true, 'B alt fișier, bucata 1')
-  egal(val(await rezerva(db, U.OWNER, { proiect: P.P6 }), 'B owner pe proiect fără drepturi')?.nou, true, 'B owner pe proiect fără drepturi')
+  // plafonul pe CONȚINUT (r2, #1141): 2 / zi pe același continut_sha256 (amprenta funcției edge), ORICARE ar fi fișierul / bucata / cheia declarate
+  // de client (reproducerea din verdict: același conținut cu bucata 1, 2, 3 și chei noi → al treilea refuzat); alt conținut pe aceeași bucată = permis
+  egal(val(await rezerva(db, U.EDITOR, { bucata: 2, fisier: H('f') }), 'B același conținut, bucata 2, alt fișier, cheie nouă')?.nou, true, 'B a doua rezervare pe același conținut (bucata 2, alt fișier)')
+  egal(val(await rezerva(db, U.EDITOR, { bucata: 3 }), 'B același conținut, bucata 3, cheie nouă'), { ok: false, cod: 'plafon_bucata_zi', limita: 2 }, 'B a treia rezervare pe același conținut (bucata 3, cheie nouă) = refuz')
+  egal(val(await rezerva(db, U.EDITOR, { bucata: 1, bucati: 100, fisier: H('0') }), 'B același conținut, alt număr de bucăți / fișier'), { ok: false, cod: 'plafon_bucata_zi', limita: 2 }, 'B același conținut sub alt fișier / alt număr de bucăți = refuz')
+  egal(val(await rezerva(db, U.EDITOR, { continut: H('e') }), 'B alt conținut, aceeași bucată 1 a aceluiași fișier')?.nou, true, 'B alt conținut pe aceeași bucată a aceluiași fișier = permis')
+  egal(val(await rezerva(db, U.EDITOR, { continut: H('e'), bucata: 2 }), 'B al doilea pe conținutul e')?.nou, true, 'B al doilea apel pe conținutul e')
+  egal(val(await rezerva(db, U.OWNER, { proiect: P.P6 }), 'B owner pe proiect fără drepturi')?.nou, true, 'B owner pe proiect fără drepturi (același conținut, alt proiect)')
   // plafonul de apeluri: 60 / zi / proiect (59 existente → al 60-lea trece, al 61-lea nu); rândurile de IERI nu contează
   await umple(db, P.P2, 59)
   await umple(db, P.P2, 30, { zi: 'ieri' })
@@ -295,11 +300,11 @@ async function verifica(db) {
   egal(x2 && [x2.stare, x2.semnale, x2.respinse, x2.tokeni_in, x2.tokeni_out, x2.cost, x2.rez, x2.inchis, x2.eroare_cod],
     ['ok', 3, 1, 5000, 300, '0.013000', '0.104000', true, null], 'C rândul închis ok: cost = 5000 × 2 + 300 × 10 USD / MTok = 0,013')
   egal(val(await inchide(db, 'service_role', r1?.id, r1?.lease_token, 'eroare', { cod: 'a_doua' }), 'C a doua închidere'), false, 'C a doua închidere (deja ok)')
-  const r2 = val(await rezerva(db, U.EDITOR, { bucata: 3 }), 'C rezervarea pentru necunoscut')
+  const r2 = val(await rezerva(db, U.EDITOR, { bucata: 3, continut: H('7') }), 'C rezervarea pentru necunoscut')
   egal(val(await inchide(db, 'service_role', r2?.id, r2?.lease_token, 'necunoscut', { cod: 'ai_timeout', tin: 10, tout: 10 }), 'C necunoscut'), true, 'C închiderea necunoscut')
   const x3 = r2?.id ? await rand(db, r2.id) : null
   egal(x3 && [x3.stare, x3.cost, x3.tokeni_in, x3.tokeni_out, x3.eroare_cod, x3.rez], ['necunoscut', null, null, null, 'ai_timeout', '0.104000'], 'C necunoscut: costul rămâne cel rezervat (cost_usd NULL)')
-  const r3 = val(await rezerva(db, U.EDITOR, { bucata: 3, fisier: H('9') }), 'C rezervarea pentru eroare 4xx')
+  const r3 = val(await rezerva(db, U.EDITOR, { bucata: 3, fisier: H('9'), continut: H('8') }), 'C rezervarea pentru eroare 4xx')
   egal(val(await inchide(db, 'service_role', r3?.id, r3?.lease_token, 'eroare', { cod: 'ai_http_4xx', tin: 0, tout: 0 }), 'C eroare 4xx'), true, 'C închiderea eroare (4xx, tokeni 0)')
   const x4 = r3?.id ? await rand(db, r3.id) : null
   egal(x4 && [x4.stare, x4.cost, x4.eroare_cod], ['eroare', '0.000000', 'ai_http_4xx'], 'C eroare cu tokeni cunoscuți: cost final 0')
@@ -320,12 +325,34 @@ async function verifica(db) {
   egal(await vede(U.VIEWER, drN), `${U.VIEWER}@1`, 'D drepturile: viewerul își vede rândul')
   asteptCod(await ca(db, 'anon', null, drN), '42501', 'D anon citește drepturile')
   asteptCod(await ca(db, 'anon', null, jP1), '42501', 'D anon citește jurnalul')
-  // E. acordarea / retragerea (postgres) intră în red_jurnal
-  const jr = (await db.query(`SELECT actiune, count(*)::int AS n FROM public.red_jurnal WHERE tabela = 'red_proiect_drepturi' GROUP BY 1 ORDER BY 1`)).rows
-  egal(jr, [{ actiune: 'insert', n: 7 }], 'E cele 7 acordări sunt în red_jurnal')
+  // E. acordarea / retragerea (postgres) intră în ISTORICUL PROPRIU (r2, #1141), NU în red_jurnal (pe care îl citește orice nivel Redări, și viewer)
+  const ist = async () => (await db.query(`SELECT actiune, count(*)::int AS n, count(autor_id)::int AS cu_autor FROM public.red_proiect_drepturi_istoric GROUP BY 1 ORDER BY 1`)).rows
+  egal(await ist(), [{ actiune: 'acordat', n: 7, cu_autor: 0 }], 'E cele 7 acordări sunt în istoricul drepturilor (autor NULL = coordonatorul, postgres)')
   await db.exec(`DELETE FROM public.red_proiect_drepturi WHERE proiect_id = '${P.P1}' AND profile_id = '${U.FARA}'`)
-  const jd = (await db.query(`SELECT count(*)::int AS n FROM public.red_jurnal WHERE tabela = 'red_proiect_drepturi' AND actiune = 'delete' AND date_vechi ->> 'profile_id' = '${U.FARA}'`)).rows[0].n
-  egal(jd, 1, 'E retragerea e în red_jurnal (rândul vechi)')
+  const jd = (await db.query(`SELECT count(*)::int AS n FROM public.red_proiect_drepturi_istoric WHERE actiune = 'retras' AND profile_id = '${U.FARA}' AND proiect_id = '${P.P1}' AND drept = 'import_verificare_ai'`)).rows[0].n
+  egal(jd, 1, 'E retragerea e în istoricul drepturilor (rândul vechi: proiect, cont, drept)')
+  egal((await db.query(`SELECT count(*)::int AS n FROM public.red_jurnal WHERE tabela = 'red_proiect_drepturi'`)).rows[0].n, 0, 'E NIMIC din drepturi în red_jurnal (nici acordările, nici retragerea)')
+  // citirea ca alt editor / viewer (reproducerea din verdict): jurnalul general nu are nimic despre drepturi; istoricul = aceeași regulă ca dreptul
+  const jrD = `SELECT count(*)::text AS k FROM public.red_jurnal WHERE tabela = 'red_proiect_drepturi'`
+  egal([await vede(U.VIEWER, jrD), await vede(U.EDITOR2, jrD), await vede(U.EDITOR, jrD), await vede(U.ADMIN, jrD)], ['0', '0', '0', '0'], 'E red_jurnal: viewer / alt editor / editor / admin nu văd nicio urmă a drepturilor')
+  const istN = `SELECT d.profile_id::text || '@' || right(d.proiect_id::text, 1) || ':' || d.actiune AS k FROM public.red_proiect_drepturi_istoric d ORDER BY d.proiect_id, d.profile_id, d.actiune`
+  egal(await vede(U.EDITOR2, istN), '', 'E istoricul: alt editor (fără drept) nu vede nimic')
+  egal(await vede(U.VIEWER, istN), `${U.VIEWER}@1:acordat`, 'E istoricul: viewerul își vede doar rândul lui')
+  egal(await vede(U.EDITOR, istN), [`${U.EDITOR}@1:acordat`, `${U.EDITOR}@3:acordat`, `${U.EDITOR}@4:acordat`, `${U.EDITOR}@5:acordat`].join(','), 'E istoricul: editorul își vede doar rândurile lui (nu pe ale viewerului / altor conturi)')
+  egal(await vede(U.EDITOR_P2, istN), `${U.EDITOR_P2}@2:acordat`, 'E istoricul: editorul P2 își vede doar rândul lui')
+  egal((await vede(U.ADMIN, istN)).split(',').length, 8, 'E istoricul: adminul Redări le vede pe toate (7 acordări + 1 retragere)')
+  egal((await vede(U.OWNER, istN)).split(',').length, 8, 'E istoricul: owner-ul (nivel admin) le vede pe toate')
+  asteptCod(await ca(db, 'anon', null, istN), '42501', 'E anon citește istoricul')
+  egal(await vede(null, istN), '', 'E istoricul fără JWT: nimic')
+  // scrierea în istoric: niciun drept pentru rolurile aplicației; append-only și pentru postgres; drepturile: UPDATE / TRUNCATE refuzate
+  asteptCod(await ca(db, 'authenticated', U.ADMIN, `INSERT INTO public.red_proiect_drepturi_istoric (drept_id, proiect_id, profile_id, drept, actiune) VALUES (gen_random_uuid(), '${P.P1}', '${U.EDITOR2}', 'import_verificare_ai', 'acordat')`), '42501', 'E INSERT în istoric (admin Redări)')
+  asteptCod(await ca(db, 'service_role', null, `DELETE FROM public.red_proiect_drepturi_istoric`), '42501', 'E DELETE din istoric (service_role)')
+  for (const [sql, ce] of [[`UPDATE public.red_proiect_drepturi_istoric SET actiune = 'acordat'`, 'UPDATE istoric'], [`DELETE FROM public.red_proiect_drepturi_istoric`, 'DELETE istoric'],
+    [`TRUNCATE public.red_proiect_drepturi_istoric`, 'TRUNCATE istoric'], [`UPDATE public.red_proiect_drepturi SET nota = 'x'`, 'UPDATE drept (postgres)'],
+    [`TRUNCATE public.red_proiect_drepturi`, 'TRUNCATE drepturi (postgres)']])
+    egal(/refuzat/.test(await eroare(db.exec(sql)) || ''), true, `E ${ce}: refuzat`)
+  egal((await ist()).map(x => [x.actiune, x.n]), [['acordat', 7], ['retras', 1]], 'E istoricul neschimbat după încercări (7 acordări + 1 retragere)')
+  egal((await db.query(`SELECT count(*)::int AS n FROM public.red_proiect_drepturi`)).rows[0].n, 6, 'E drepturile neschimbate după UPDATE / TRUNCATE refuzate (6)')
   // unicitatea (proiect, cont, drept) și CHECK-ul dreptului
   egal(await eroare(db.exec(`INSERT INTO public.red_proiect_drepturi (proiect_id, profile_id, drept) VALUES ('${P.P1}', '${U.EDITOR}', 'import_verificare_ai')`)) !== null, true, 'E dreptul dublu refuzat (UNIQUE)')
   egal(await eroare(db.exec(`INSERT INTO public.red_proiect_drepturi (proiect_id, profile_id, drept) VALUES ('${P.P1}', '${U.EDITOR2}', 'alt_drept')`)) !== null, true, 'E drept necunoscut refuzat (CHECK)')
@@ -336,7 +363,8 @@ async function verifica(db) {
 const listaObiecte = text => text.split('\n').filter(l => l && !l.startsWith('#')).map(l => l.split('\t').slice(0, 3).join('\t')).sort()
 const faraPg18 = l => !/^constrangere\tconstrangere tabel [^\t]*_not_null\tcreat$/.test(l)
 const exista = async db => (await db.query(`SELECT (to_regclass('public.red_proiect_drepturi') IS NOT NULL)::int + (to_regclass('public.red_import_ai_jurnal') IS NOT NULL)::int
-  + (SELECT count(*)::int FROM pg_proc WHERE proname LIKE 'fn_red_import_ai_%') AS n`)).rows[0].n
+  + (to_regclass('public.red_proiect_drepturi_istoric') IS NOT NULL)::int
+  + (SELECT count(*)::int FROM pg_proc WHERE proname LIKE 'fn_red_import_ai_%' OR proname = 'fn_red_proiect_drepturi_istoric') AS n`)).rows[0].n
 
 console.log('1. aplicarea ca la livrare (L15 v2: manifest generat, apoi livrarea aprobată) + verificările de comportament')
 {
@@ -387,7 +415,7 @@ const LOCKS = `DO $l$ BEGIN RAISE NOTICE 'LOCKS %', (SELECT string_agg(c.relname
   // AccessShare = citirile din gărzi / funcții; cel mai tare = SHARE ROW EXCLUSIVE (cerut de FK-urile noi), citirile din profiles / red_proiecte NU sunt oprite
   ok(lm === 'profiles=AccessShareLock,profiles=ShareRowExclusiveLock,red_proiecte=AccessShareLock,red_proiecte=ShareRowExclusiveLock',
     'migrarea: cel mai tare lock pe red_proiecte / profiles = SHARE ROW EXCLUSIVE (FK-urile), nu ACCESS EXCLUSIVE')
-  ok(await exista(db) === 5, 'aplicată: 2 tabele + 3 funcții')
+  ok(await exista(db) === 7, 'aplicată: 3 tabele + 4 funcții')
   j = await revino(db, REV, { final: LOCKS })
   const lr = (j.find(m => m.startsWith('LOCKS ')) || '').slice(6)
   console.log('     lock-urile revenirii pe red_proiecte / profiles (după DROP, înainte de COMMIT): ' + lr)
@@ -400,7 +428,7 @@ const LOCKS = `DO $l$ BEGIN RAISE NOTICE 'LOCKS %', (SELECT string_agg(c.relname
   const fk = (await db.query(`SELECT count(*)::int AS n FROM pg_constraint WHERE confrelid IN ('public.red_proiecte'::regclass, 'public.profiles'::regclass) AND conrelid NOT IN ('public.user_module_access'::regclass)`)).rows[0].n
   ok(fk === 0, 'revenirea: niciun FK rămas spre red_proiecte / profiles')
   await aplicaMig(db)
-  ok(await exista(db) === 5, 'reaplicarea pe baza nefolosită')
+  ok(await exista(db) === 7, 'reaplicarea pe baza nefolosită')
   const r = await rezerva(db, U.OWNER)
   ok(!r.code && r.rows[0].r.nou === true, 'reaplicarea: owner-ul rezervă (dreptul merge)')
   await db.exec(`DELETE FROM public.red_import_ai_jurnal`)   // postgres (curățenie de test): baza redevine nefolosită
@@ -414,7 +442,7 @@ for (const [nume, pregatire, o, re] of [
   ['migrarea neaplicată', async () => {}, {}, /starea nu e cea din 20261131j \(pasul 1/],
   ['un drept acordat', async db => { await aplicaMig(db); await db.exec(`INSERT INTO public.red_proiect_drepturi (proiect_id, profile_id, drept) VALUES ('${P.P1}', '${U.EDITOR}', 'import_verificare_ai')`) }, {}, /ISTORIC_NOU/],
   ['un apel în jurnalul AI (owner)', async db => { await aplicaMig(db); const r = await rezerva(db, U.OWNER); if (r.code || r.rows[0].r.nou !== true) throw new Error('rezervarea n-a mers') }, {}, /ISTORIC_NOU/],
-  ['un drept acordat și retras (urma din red_jurnal)', async db => {
+  ['un drept acordat și retras (urma din istoricul drepturilor)', async db => {
     await aplicaMig(db)
     await db.exec(`INSERT INTO public.red_proiect_drepturi (proiect_id, profile_id, drept) VALUES ('${P.P1}', '${U.EDITOR}', 'import_verificare_ai'); DELETE FROM public.red_proiect_drepturi;`)
   }, {}, /ISTORIC_NOU/],
@@ -429,6 +457,8 @@ for (const [nume, pregatire, o, re] of [
   ['inchide primită de authenticated', async db => { await aplicaMig(db); await db.exec(`GRANT EXECUTE ON FUNCTION public.fn_red_import_ai_inchide(uuid, uuid, text, integer, integer, integer, integer, text) TO authenticated`) }, {},
     /starea nu e cea din 20261131j \(pasul 1, functii: drepturi/],
   ['o politică în plus pe jurnal', async db => { await aplicaMig(db); await db.exec(`CREATE POLICY x_ins ON public.red_import_ai_jurnal FOR INSERT TO authenticated WITH CHECK (true)`) }, {}, /starea nu e cea din 20261131j/],
+  ['triggerul istoricului dezactivat', async db => { await aplicaMig(db); await db.exec(`ALTER TABLE public.red_proiect_drepturi DISABLE TRIGGER trg_red_proiect_drepturi_istoric`) }, {}, /starea nu e cea din 20261131j/],
+  ['un trigger în plus spre red_jurnal pe drepturi', async db => { await aplicaMig(db); await db.exec(`CREATE TRIGGER trg_red_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.red_proiect_drepturi FOR EACH ROW EXECUTE FUNCTION public.fn_red_jurnal()`) }, {}, /starea nu e cea din 20261131j/],
 ]) {
   const db = await bazaNoua()
   let mp = null
@@ -436,6 +466,17 @@ for (const [nume, pregatire, o, re] of [
   const inainte = await exista(db)
   const m = await eroare(revino(db, REV, o))
   ok(!mp && m && re.test(m) && await exista(db) === inainte, `${nume}: ${mp ? 'PREGĂTIREA A PICAT ' + mp : m ? m.slice(0, 160) : 'A TRECUT'}`)
+  await db.close()
+}
+
+console.log('3b. MUTANTUL revenirii: fără verificarea istoricului drepturilor, un drept acordat și retras NU mai e refuzat (deci verificarea e necesară)')
+{
+  const db = await bazaNoua()
+  await aplicaMig(db)
+  await db.exec(`INSERT INTO public.red_proiect_drepturi (proiect_id, profile_id, drept) VALUES ('${P.P1}', '${U.EDITOR}', 'import_verificare_ai'); DELETE FROM public.red_proiect_drepturi;`)
+  let t = null
+  try { t = aplica(REV, [['       OR EXISTS (SELECT 1 FROM public.red_proiect_drepturi_istoric)\n', '']]) } catch (e) { ok(false, 'mutantul revenirii nu se aplică: ' + e.message) }
+  if (t) { const m = await eroare(revino(db, t)); ok(!m && await exista(db) === 0, 'MUTANT revenire fără istoric: trece (și ar șterge istoricul) — ' + (m ? m.slice(0, 120) : 'deci proba de la 3 e prinsă de verificarea istoricului')) }
   await db.close()
 }
 
@@ -455,12 +496,8 @@ for (const [nume, fn, re] of [
     return aplicaMig(db)
   }, /functiile chemate nu au amprenta revizuita: public\.fn_red_nivel\(\)/],
   ['fn_red_nivel primită de anon', async db => { await db.exec(`GRANT EXECUTE ON FUNCTION public.fn_red_nivel() TO anon`); return aplicaMig(db) }, /functiile chemate nu au amprenta revizuita: public\.fn_red_nivel\(\)/],
-  ['fn_red_jurnal cu altă amprentă', async db => {
-    await db.exec(`CREATE OR REPLACE FUNCTION public.fn_red_jurnal() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN NULL; END $f$;`)
-    return aplicaMig(db)
-  }, /functiile chemate nu au amprenta revizuita: public\.fn_red_jurnal\(\)/],
-  ['red_jurnal scriibil de authenticated', async db => { await db.exec(`GRANT INSERT ON public.red_jurnal TO authenticated`); return aplicaMig(db) }, /red_jurnal lipseste sau e scriibil/],
   ['o funcție cu numele nou existentă (altă semnătură)', async db => { await db.exec(`CREATE FUNCTION public.fn_red_import_ai_poate(text) RETURNS boolean LANGUAGE sql AS $f$ SELECT true $f$;`); return aplicaMig(db) }, /reaplicare/],
+  ['o funcție cu numele triggerului istoricului existentă', async db => { await db.exec(`CREATE FUNCTION public.fn_red_proiect_drepturi_istoric(int) RETURNS int LANGUAGE sql AS $f$ SELECT 1 $f$;`); return aplicaMig(db) }, /reaplicare/],
   ['red_proiecte.activ lipsă', async db => { await db.exec(`ALTER TABLE public.red_proiecte DROP COLUMN activ`); return aplicaMig(db) }, /coloane lipsa \/ alt tip: red_proiecte\.activ/],
   ['setul de lock-uri obținut după termen, fără coliziune', db => aplicaMig(db, aplica(MIG, [['      LOCK TABLE public.profiles IN SHARE ROW EXCLUSIVE MODE NOWAIT;\n      EXIT;\n',
     '      LOCK TABLE public.profiles IN SHARE ROW EXCLUSIVE MODE NOWAIT;\n      PERFORM pg_sleep(1.05);\n      EXIT;\n']])), /BUGET_LOCK: lock-urile obtinute abia la \d+ ms de la prima incercare \(1 incercari/],
@@ -469,7 +506,8 @@ for (const [nume, fn, re] of [
 ]) {
   const db = await bazaNoua()
   const m = await eroare(fn(db))
-  const noi = (await db.query(`SELECT (to_regclass('public.red_proiect_drepturi') IS NOT NULL)::int + (to_regclass('public.red_import_ai_jurnal') IS NOT NULL)::int AS n`)).rows[0].n
+  const noi = (await db.query(`SELECT (to_regclass('public.red_proiect_drepturi') IS NOT NULL)::int + (to_regclass('public.red_import_ai_jurnal') IS NOT NULL)::int
+    + (to_regclass('public.red_proiect_drepturi_istoric') IS NOT NULL)::int AS n`)).rows[0].n
   ok(m && re.test(m) && noi === 0, `${nume}: ${m ? m.slice(0, 160) : 'A TRECUT'}${noi === 0 ? '' : ' (STAREA S-A SCHIMBAT)'}`)
   await db.close()
 }
@@ -477,6 +515,15 @@ for (const [nume, fn, re] of [
 console.log('5. MUTANȚI (fiecare TREBUIE să pice: la verificările de comportament; amprentele recalculate)')
 const POL_JURNAL = 'USING ((SELECT auth.uid()) IS NOT NULL AND public.fn_red_import_ai_poate(proiect_id));'
 const POST_POL_JURNAL = "'red_import_ai_jurnal.red_import_ai_jurnal_sel|r|true|authenticated|((( SELECT auth.uid() AS uid) IS NOT NULL) AND fn_red_import_ai_poate(proiect_id))|;'"
+// r2: textele unice ale politicilor / triggerelor noi și „oprirea” postcondițiilor (un mutant care schimbă intenționat o politică / un trigger trebuie
+// să pice la COMPORTAMENT, nu la postcondiție)
+const POL_DREPT_CAP = 'CREATE POLICY red_proiect_drepturi_sel ON public.red_proiect_drepturi FOR SELECT TO authenticated\n'
+const POL_IST_CAP = 'CREATE POLICY red_proiect_drepturi_istoric_sel ON public.red_proiect_drepturi_istoric FOR SELECT TO authenticated\n'
+const POL_DREPT_USING = "  USING ((SELECT auth.uid()) IS NOT NULL AND (profile_id = (SELECT auth.uid()) OR (SELECT public.fn_red_nivel()) = 'admin'));"
+const TRG_ISTORIC = 'CREATE TRIGGER trg_red_proiect_drepturi_istoric AFTER INSERT OR DELETE ON public.red_proiect_drepturi\n'
+const POST_POL_OFF = ["  IF v_rau IS DISTINCT FROM\n       'red_import_ai_jurnal.red_import_ai_jurnal_sel", "  IF v_rau IS NULL AND v_rau IS DISTINCT FROM\n       'red_import_ai_jurnal.red_import_ai_jurnal_sel"]
+const POST_TRG_OFF = ["  IF v_rau IS DISTINCT FROM 'red_proiect_drepturi.trg_red_proiect_drepturi_fara_update", "  IF v_rau IS NULL AND v_rau IS DISTINCT FROM 'red_proiect_drepturi.trg_red_proiect_drepturi_fara_update"]
+const POST_TAB_OFF = ["  IF v_rau IS DISTINCT FROM 'red_import_ai_jurnal|true|false|postgres|", "  IF v_rau IS NULL AND v_rau IS DISTINCT FROM 'red_import_ai_jurnal|true|false|postgres|"]
 const MUTANTI = [
   ['rezerva fără verificarea dreptului', [["  IF public.fn_red_import_ai_poate(p_proiect) IS NOT TRUE THEN RETURN jsonb_build_object('ok', false, 'cod', 'fara_drept'); END IF;\n", '']]],
   ['plafonul bucății 2 → 3', [["  IF v_n >= 2 THEN RETURN jsonb_build_object('ok', false, 'cod', 'plafon_bucata_zi', 'limita', 2); END IF;", "  IF v_n >= 3 THEN RETURN jsonb_build_object('ok', false, 'cod', 'plafon_bucata_zi', 'limita', 2); END IF;"]]],
@@ -496,11 +543,19 @@ const MUTANTI = [
   ['poate fără activ', [[' AND pr.activ IS TRUE)', ')']]],
   ['poate fără proiectul dreptului', [['WHERE d.proiect_id = p_proiect AND d.profile_id = auth.uid()', 'WHERE d.profile_id = auth.uid()']]],
   ['politica jurnalului USING (true) (postcondiția ajustată)', [[POL_JURNAL, 'USING (true);'], [POST_POL_JURNAL, "'red_import_ai_jurnal.red_import_ai_jurnal_sel|r|true|authenticated|true|;'"]]],
-  ['politica drepturilor: toți văd tot (postcondiția ajustată)', [["  USING ((SELECT auth.uid()) IS NOT NULL AND (profile_id = (SELECT auth.uid()) OR (SELECT public.fn_red_nivel()) = 'admin'));", '  USING (true);'],
-    ["    || 'red_proiect_drepturi.red_proiect_drepturi_sel|r|true|authenticated|((( SELECT auth.uid() AS uid) IS NOT NULL) AND ((profile_id = ( SELECT auth.uid() AS uid)) OR (( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text)))|' THEN",
-     "    || 'red_proiect_drepturi.red_proiect_drepturi_sel|r|true|authenticated|true|' THEN"]]],
-  ['fără jurnalul generic pe drepturi (postcondiția ajustată)', [["CREATE TRIGGER trg_red_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.red_proiect_drepturi\n  FOR EACH ROW EXECUTE FUNCTION public.fn_red_jurnal();\n", ''],
-    ["  IF v_rau IS DISTINCT FROM 'red_proiect_drepturi.trg_red_jurnal=fn_red_jurnal()/O/29//0' THEN", '  IF v_rau IS NOT NULL THEN']]],
+  ['politica drepturilor: toți văd tot (postcondiția ajustată)', [[POL_DREPT_CAP + POL_DREPT_USING, POL_DREPT_CAP + '  USING (true);'], POST_POL_OFF]],
+  // r2 (#1141): plafonul pe conținut, istoricul drepturilor cu RLS-ul dreptului, fără copie în red_jurnal
+  ['plafonul bucății pe fișier + bucată declarate de client (r1)', [['   WHERE j.proiect_id = p_proiect AND j.continut_sha256 = p_continut_sha256 AND j.ziua = v_zi;',
+    '   WHERE j.proiect_id = p_proiect AND j.fisier_sha256 = p_fisier_sha256 AND j.bucata = p_bucata AND j.ziua = v_zi;']]],
+  ['drepturile copiate și în red_jurnal (r1; postcondiția ajustată)', [[TRG_ISTORIC, 'CREATE TRIGGER trg_red_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.red_proiect_drepturi FOR EACH ROW EXECUTE FUNCTION public.fn_red_jurnal();\n' + TRG_ISTORIC], POST_TRG_OFF]],
+  ['politica istoricului USING (true) (postcondiția ajustată)', [[POL_IST_CAP + POL_DREPT_USING, POL_IST_CAP + '  USING (true);'], POST_POL_OFF]],
+  ['politica istoricului = cea a jurnalului general (orice nivel Redări; postcondiția ajustată)', [[POL_IST_CAP + POL_DREPT_USING, POL_IST_CAP + '  USING ((SELECT public.fn_red_nivel()) IS NOT NULL);'], POST_POL_OFF]],
+  ['istoricul fără retragere', [["    VALUES (OLD.id, OLD.proiect_id, OLD.profile_id, OLD.drept, OLD.nota, 'retras', auth.uid());", "    NULL;"],
+    ["    INSERT INTO public.red_proiect_drepturi_istoric (drept_id, proiect_id, profile_id, drept, nota, actiune, autor_id)\n    NULL;", '    NULL;']]],
+  ['drepturile: UPDATE permis (fără triggerul de refuz; postcondiția ajustată)', [["CREATE TRIGGER trg_red_proiect_drepturi_fara_update BEFORE UPDATE OR TRUNCATE ON public.red_proiect_drepturi\n  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_red_proiect_drepturi_istoric();\n", ''], POST_TRG_OFF]],
+  ['istoricul fără imuabilitate (postcondiția ajustată)', [["CREATE TRIGGER trg_red_proiect_drepturi_istoric_imuabil BEFORE UPDATE OR DELETE OR TRUNCATE ON public.red_proiect_drepturi_istoric\n  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_red_proiect_drepturi_istoric();\n", ''], POST_TRG_OFF]],
+  // (un INSERT acordat lui authenticated NU e mutant util: RLS-ul fără politică de INSERT îl refuză oricum cu 42501 — dublă protecție)
+  ['istoricul citibil de anon (postcondiția ajustată)', [['GRANT SELECT ON public.red_proiect_drepturi_istoric TO authenticated, service_role;', 'GRANT SELECT ON public.red_proiect_drepturi_istoric TO anon, authenticated, service_role;'], POST_TAB_OFF]],
 ]
 for (const [nume, lista] of MUTANTI) {
   const db = await bazaNoua()

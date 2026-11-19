@@ -264,9 +264,10 @@ export default function ImportTgz({ proiect, uats, nivel, profile = null, show, 
                 celelalte taburi: câmpul semnalat al parcelei semnalate e ascuns (mascheazaRand), restul valorilor rămân vizibile */}
             <TabelPreview randuri={subTab === 'de_verificat' ? (preview.de_verificat || []).map(v => ({ rand: v.rand, uat: v.uat, nr_crt: v.nr_crt, camp: v.camp, sursa: v.sursa === 'ai' ? 'AI' : 'fixă', motiv: v.motiv })) :(Array.isArray(preview[subTab]) ? preview[subTab].map(r => mascheazaRand(r, idxVerificare)) : [])} gol="Nimic în această categorie." />
           </>)}
-          {/* pasul 2: a doua opinie AI — apare doar cu dreptul pe proiect; rezultatul → o previzualizare NOUĂ (bifa se cere din nou) */}
+          {/* pasul 2: a doua opinie AI — apare doar cu dreptul pe proiect; rezultatul → o previzualizare NOUĂ (bifa se cere din nou); semnalele AI
+              vechi se înlocuiesc doar pe rândurile bucăților reușite acum (acoperite), restul rămân */}
           {sursa === 'TGZ' && previewAlProiectului && <VerificareAiImport proiect={proiect} preview={preview} fisier={fisier} fisierNume={fisier?.name || null} show={show}
-            onSemnale={(pv, intrari, rez) => setPreview(p => (p === pv ? adaugaSemnaleAi(p, intrari, rez) : p))} />}
+            onSemnale={(pv, intrari, rez, acoperite) => setPreview(p => (p === pv ? adaugaSemnaleAi(p, intrari, rez, acoperite) : p))} />}
 
           <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:12, alignItems:'center' }}>
             {progres && <span style={{ fontSize:12.5, color:G.muted }}>{progres.etapa ? progres.etapa + ' · ' : ''}{progres.facut} / {progres.total}</span>}
