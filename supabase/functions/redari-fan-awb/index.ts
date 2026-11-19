@@ -8,6 +8,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { raspundeFan } from '../_shared/redariFanHandler.mjs';
 import { citesteToate } from '../_shared/redariFanTransport.mjs';
+import { citesteLotFan } from '../_shared/redariFan.mjs';
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
 const COL_FAN = 'id, plic_id, nr_plic, stare, hash_date, awb, versiune_urmarire';
 Deno.serve(async (req: Request) => {
@@ -26,8 +27,11 @@ Deno.serve(async (req: Request) => {
       getUser: () => uc.auth.getUser(jwt),
       owner: () => uc.rpc('fn_sms_e_owner'),
       lot: (id: string) => uc.from('red_loturi_plicuire').select('id, proiect_id, nr_lot').eq('id', id).maybeSingle(),
-      // garda „doar TEST” (după flag, ÎNAINTE de secrete): marcajul lotului, citit cu JWT-ul omului (RLS admin / editor Redări)
-      fanLot: (id: string) => uc.from('red_fan_loturi').select('lot_id, test, prima_aprobare_la').eq('lot_id', id).maybeSingle(),
+      // garda „doar TEST” (după flag, ÎNAINTE de secrete): marcajul lotului, citit cu JWT-ul omului (RLS admin / editor Redări);
+      // + alegerea oPOD a lotului (18.11.2026, migrarea 20261227a), recitită de generare: intră în corp și în hash. Aceeași citire ca ecranul
+      // (citesteLotFan, L19): fără coloana opod (migrarea neaplicată) rândul vine cu opod = null → toate acțiunile în afara generării merg ca
+      // înainte; generarea refuză (503), nimic trimis (Jakarinos #1135 r1 P1)
+      fanLot: (id: string) => citesteLotFan((coloane: string) => uc.from('red_fan_loturi').select(coloane).eq('lot_id', id).maybeSingle(), 'lot_id, test, prima_aprobare_la'),
       // ── doar pe calea reală (după flag și garda „doar TEST”) ──
       secrete: () => ({ username: Deno.env.get('FAN_SELFAWB_USERNAME'), password: Deno.env.get('FAN_SELFAWB_PASSWORD'), clientId: Deno.env.get('FAN_CLIENT_ID') }),
       rpc: (nume: string, args: Record<string, unknown>) => uc.rpc(nume, args),

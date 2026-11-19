@@ -79,7 +79,8 @@ export async function citesteToate(fabrica, ids, cheie = 'id') {
 /**
  * Execută o acțiune pe un lot. ctx = { corp, lot: { id, proiect_id, nr_lot } } (lotul a fost deja citit cu JWT-ul omului — RLS, L09).
  * deps: { rpc(nume, args) → {data,error}, randuriLot(lotId) → {data,error}, datePlicuri(plicIds) → {data:{plicuri,convocari,contacte},error},
- *         plicuriLot(lotId) → {data:[{id,nr_plic,stare}],error} (manifestul etichetelor), proiect(proiectId) → {data:{cod},error}, fetch,
+ *         plicuriLot(lotId) → {data:[{id,nr_plic,stare}],error} (manifestul etichetelor), proiect(proiectId) → {data:{cod},error},
+ *         fanLot(lotId) → {data:{lot_id,test,prima_aprobare_la,opod}|null,error} (alegerea oPOD a lotului, citită cu JWT-ul omului), fetch,
  *         secrete() → {username,password,clientId}|null, pauza(ms), subtle }
  * Întoarce { status, body }.
  */
@@ -114,9 +115,17 @@ async function genereaza({ lot, randuri, s, fan, deps, out }) {
   if (!aprobate.length) return out(409, 'nimic_de_generat')
   const pr = await deps.proiect(lot.proiect_id)
   if (pr?.error || !pr?.data?.cod) return out(503, 'citire_neconfirmata')
+  // alegerea oPOD a lotului (18.11.2026): intră în corp și în hash, deci corpul recalculat aici = cel aprobat DOAR dacă lotul are aceeași alegere
+  // ca la aprobare (imuabilă în BD după prima aprobare). Fără rândul lotului = nemarcat (claim-ul ar refuza oricum); valoare lipsă / de altă
+  // formă = citire neconfirmată (L18: necunoscut ≠ „fără oPOD”), nimic trimis.
+  const fl = await deps.fanLot(lot.id)
+  if (fl?.error) return out(503, 'citire_neconfirmata')
+  if (!fl?.data) return out(409, 'lot_nemarcat')
+  if (typeof fl.data.opod !== 'boolean') return out(503, 'citire_neconfirmata', { motiv: 'alegerea oPOD a lotului nu s-a putut citi (evidența FAN fără coloana opod?)' })
+  const opod = fl.data.opod
   const d = await deps.datePlicuri(aprobate.map(x => x.plic_id))
   if (d?.error || !d?.data) return out(503, 'citire_neconfirmata')
-  const pregatite = await pregatestePlicuriFan({ ...d.data, proiectCod: pr.data.cod, subtle: deps.subtle })
+  const pregatite = await pregatestePlicuriFan({ ...d.data, proiectCod: pr.data.cod, opod, subtle: deps.subtle })
   // amprenta SURSELOR din aceleași citiri (Jakarinos #1118 r1): claim-ul o recalculează în BD, în tranzacția rezervării; o schimbare a
   // contactelor între citirea de aici și claim = refuz, nimic plătit
   const surse = await amprenteSurse({ ...d.data, proiectCod: pr.data.cod, subtle: deps.subtle })
@@ -149,7 +158,7 @@ async function genereaza({ lot, randuri, s, fan, deps, out }) {
     if (raspuns.status === 429) { oprit = 'FAN: prea multe solicitări; rularea s-a oprit, se reia de om'; break }
   }
   const ramase = deTrimis.length - bucati.slice(0, trimise).reduce((n, b) => n + b.length, 0)
-  return out(200, 'ok', { ...raport, solicitari: trimise, excluse, ramase, oprit })
+  return out(200, 'ok', { ...raport, solicitari: trimise, excluse, ramase, oprit, opod })
 }
 // rezultatul fn_red_fan_urmarire / fn_red_fan_confirmari: { scrise, depasite } cu suma = rândurile trimise (altfel scriere neconfirmată)
 const rezScriere = (w, n) => !w?.error && w?.data && typeof w.data === 'object' && Number.isInteger(w.data.scrise) && Number.isInteger(w.data.depasite)
