@@ -85,7 +85,9 @@ const CAP_NOI = [['public.fn_red_import_ai_poate(uuid)', 'CREATE FUNCTION public
 ok(!MIG.includes("'41ab451b7fcb499a2284c9c82367069e'") && !/EXECUTE FUNCTION public\.fn_red_jurnal\(\)/.test(MIG), 'r2: migrarea nu mai atașează fn_red_jurnal (nicio copie a drepturilor în red_jurnal)')
 const blocNoi = t => t.slice(t.indexOf('-- >>> AMPRENTE-NOI 20261131j'), t.indexOf('-- <<< AMPRENTE-NOI 20261131j'))
 for (const [sem, cap] of CAP_NOI) {
-  const m = md5(corp(MIG, cap))
+  // o funcție lipsă (ex. proba rulată pe un head vechi) = verificare picată, nu cădere a probei
+  let m = null
+  try { m = md5(corp(MIG, cap)) } catch (e) { ok(false, `amprenta nouă ${sem}: ${e.message}`); continue }
   ok(blocNoi(MIG).includes(`('${sem}', '${m}'`) && blocNoi(REV).includes(`('${sem}', '${m}'`), `amprenta nouă ${sem} = ${m} (migrare + revenire)`)
 }
 // pe un mutant: amprentele recalculate din corpurile mutate (ca să pice comportamentul, nu postcondiția de amprentă), DOAR în blocul AMPRENTE-NOI
@@ -325,7 +327,14 @@ async function verifica(db) {
   egal(await vede(U.VIEWER, drN), `${U.VIEWER}@1`, 'D drepturile: viewerul își vede rândul')
   asteptCod(await ca(db, 'anon', null, drN), '42501', 'D anon citește drepturile')
   asteptCod(await ca(db, 'anon', null, jP1), '42501', 'D anon citește jurnalul')
+  try { await verificaE(db, ab, { egal, asteptCod, vede }) } catch (e) { ab.push('E a căzut (obiect lipsă?): ' + e.message) }
+  return ab
+}
+async function verificaE(db, ab, { egal, asteptCod, vede }) {
   // E. acordarea / retragerea (postgres) intră în ISTORICUL PROPRIU (r2, #1141), NU în red_jurnal (pe care îl citește orice nivel Redări, și viewer)
+  // întâi reproducerea din verdict: după cele 7 acordări, viewerul / alt editor citesc red_jurnal → nicio urmă a drepturilor
+  const jrD0 = `SELECT count(*)::text AS k FROM public.red_jurnal WHERE tabela = 'red_proiect_drepturi'`
+  egal([await vede(U.VIEWER, jrD0), await vede(U.EDITOR2, jrD0)], ['0', '0'], 'E red_jurnal după acordări: viewerul și alt editor nu văd drepturile altora')
   const ist = async () => (await db.query(`SELECT actiune, count(*)::int AS n, count(autor_id)::int AS cu_autor FROM public.red_proiect_drepturi_istoric GROUP BY 1 ORDER BY 1`)).rows
   egal(await ist(), [{ actiune: 'acordat', n: 7, cu_autor: 0 }], 'E cele 7 acordări sunt în istoricul drepturilor (autor NULL = coordonatorul, postgres)')
   await db.exec(`DELETE FROM public.red_proiect_drepturi WHERE proiect_id = '${P.P1}' AND profile_id = '${U.FARA}'`)
@@ -356,7 +365,6 @@ async function verifica(db) {
   // unicitatea (proiect, cont, drept) și CHECK-ul dreptului
   egal(await eroare(db.exec(`INSERT INTO public.red_proiect_drepturi (proiect_id, profile_id, drept) VALUES ('${P.P1}', '${U.EDITOR}', 'import_verificare_ai')`)) !== null, true, 'E dreptul dublu refuzat (UNIQUE)')
   egal(await eroare(db.exec(`INSERT INTO public.red_proiect_drepturi (proiect_id, profile_id, drept) VALUES ('${P.P1}', '${U.EDITOR2}', 'alt_drept')`)) !== null, true, 'E drept necunoscut refuzat (CHECK)')
-  return ab
 }
 
 // ── manifestul L15: lista obiectelor (familie, etichetă, operație) = diferența generată de pașii runnerului ──
