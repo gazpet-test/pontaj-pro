@@ -30,8 +30,10 @@ function imparte(xml) {
   const capat = baza + blocuri[i].index + blocuri[i][0].length
   return { inainte: xml.slice(0, capat), corp: blocuri.slice(i + 1, j - 1).map(b => b[0]), dupa: xml.slice(baza + salt.index) }
 }
-const areOriginMain = (() => { try { execFileSync('git', ['rev-parse', '--verify', 'origin/main^{commit}'], { stdio: ['ignore', 'pipe', 'ignore'] }); return true } catch { return false } })()
-const sablonMain = () => execFileSync('git', ['show', `origin/main:${CALE}`], { stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 26 })
+// Referința = main-ul DINAINTEA lui #1137 (după îmbinare, origin/main are deja Anexa 2 nouă: paritatea ar compara noul cu el însuși).
+const REF_DINAINTE_ANUNT = '90cad79ff4237dcfc672ba02e17738e1df06b6d7'
+const areOriginMain = (() => { try { execFileSync('git', ['rev-parse', '--verify', `${REF_DINAINTE_ANUNT}^{commit}`], { stdio: ['ignore', 'pipe', 'ignore'] }); return true } catch { return false } })()
+const sablonMain = () => execFileSync('git', ['show', `${REF_DINAINTE_ANUNT}:${CALE}`], { stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 26 })
 
 describe('adresa UAT (Model 4), Anexa 2 = anunțul de afișare (19.11.2026)', () => {
   it('șablonul: după titlul Anexei 2 vin EXACT cele două paragrafe din decizie, apoi saltul de pagină și Anexa 3; fără tabel și fără câmpuri de parcelă', async () => {
