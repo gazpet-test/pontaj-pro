@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from 'vitest'
 import { webcrypto } from 'node:crypto'
-import { canonic, emailValid, gardaTrimitere, hashMesaj, hashLot, compuneMime, proceseazaMesaj, rezultatSend, potrivesteSent, TRANSPORT_REAL_ACTIV } from './mailLoturi.js'
+import { canonic, emailValid, gardaTrimitere, hashMesaj, hashLot, compuneMime, proceseazaMesaj, rezultatSend, potrivesteSent, TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST } from './mailLoturi.js'
 import { raspundeTrimitere } from '../../supabase/functions/_shared/redariMailF2Handler.mjs'
 import { citesteMail } from './mailLoturi.js'
 if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, 'crypto', { value: webcrypto })
 const id = '00000000-0000-4000-8000-000000000001'
 const mesaj = () => ({ id, lot_id: id, catre: 'destinatar.fictiv@example.invalid', subiect_final: 'Convocare fictivă', corp_text_final: 'Text fictiv\nLinia 2', corp_html_final: null, message_id: `<${id}@gazpet.ro>`, stare: 'rezervat' })
 const lot = () => ({ id, proiect_id: id, stare: 'aprobat', aprobat_de: id, aprobat_la: new Date().toISOString(), lot_sha256: 'a'.repeat(64), aprobat_lot_sha256: 'a'.repeat(64) })
-const garda = extra => gardaTrimitere({ owner: true, informare: true, setari: { trimitere_oprita: false }, lot: lot(), ...extra })
+// F2b: căsuța conectată face parte din setările „bune” (trimitere_conectata_la), ca în BD (red_mail_f2b_pornire_ck)
+const garda = extra => gardaTrimitere({ owner: true, informare: true, setari: { trimitere_oprita: false, trimitere_conectata_la: '2026-11-18T10:00:00Z' }, lot: lot(), ...extra })
 // Aceiași vectori ca DRY $hash_r2$. Expected din SHA256 .NET pe JSON canonic scris manual.
 it.each([
   [false, '84926e2cb15dd2b2d219e296f441177f6a6087a672deabf0a585855e17937604'],
@@ -18,10 +19,11 @@ it.each([
   expect(await hashMesaj(m)).toBe(expected)
 })
 describe('F2: garzi', () => {
-  it('transportul real este oprit în cod', () => expect(TRANSPORT_REAL_ACTIV).toBe(false))
+  it('F2b: transportul real e pornit în cod DOAR cu garda „doar proiecte TEST”', () => { expect(TRANSPORT_REAL_ACTIV).toBe(true); expect(DOAR_PROIECTE_TEST).toBe(true) })
   it('calea legitimă trece gărzile de business', () => expect(garda()).toBe(null))
   it.each([null, false, undefined])('non-owner %s este refuzat', owner => expect(garda({ owner })).toBe('non_owner'))
   it.each([null, {}, { trimitere_oprita: true }])('comutator oprit sau necunoscut', setari => expect(garda({ setari })).toBe('trimitere_oprita'))
+  it('căsuța neconectată este refuzată înaintea informării', () => expect(garda({ setari: { trimitere_oprita: false }, informare: false })).toBe('casuta_neconectata'))
   it.each([null, false, undefined])('informare nepublicata %s', informare => expect(garda({ informare })).toBe('informare_nepublicata'))
   it('aprobare expirată la timestamp exact', () => expect(garda({ acum: Date.parse('2026-11-12T00:00:00Z'), lot: { ...lot(), aprobat_la: '2026-11-05T00:00:00Z' } })).toBe('aprobare_expirata'))
   it('hash diferit', () => expect(garda({ lot: { ...lot(), aprobat_lot_sha256: 'b'.repeat(64) } })).toBe('lot_integritate'))
@@ -71,15 +73,30 @@ describe('F2: rezultat ambiguu / CAS / retry', () => {
     expect(rezultatSend(403, {}).stare).toBe('esuat_sigur')
     expect(rezultatSend(200, { id: 'fake-id', threadId: 'fake-thread' }).stare).toBe('trimis')
   })
-  it.each([null, mesaj()])('OFF refuză înainte de validare sau efecte, chiar cu incepe=true: %s', async m => {
+  it('un mesaj care nu e rezervat e sărit fără efecte, chiar cu incepe=true', async () => {
     const deps = { incepe: vi.fn(async () => true), send: vi.fn(), rezultat: vi.fn(), descarca: vi.fn() }
-    expect(await proceseazaMesaj(m, deps)).toEqual({ sarit: true, cod: 'transport_real_oprit' })
+    expect(await proceseazaMesaj({ ...mesaj(), stare: 'in_coada' }, deps)).toEqual({ stare: 'in_coada', sarit: true })
     for (const f of Object.values(deps)) expect(f).not.toHaveBeenCalled()
+  })
+  it('snapshot diferit: esuat_sigur persistat, niciun apel_incepe și niciun send', async () => {
+    const m = mesaj(); m.mesaj_sha256 = 'b'.repeat(64)
+    const deps = { incepe: vi.fn(async () => true), send: vi.fn(), rezultat: vi.fn(async (x, r) => r), descarca: vi.fn() }
+    expect(await proceseazaMesaj(m, deps)).toEqual({ stare: 'esuat_sigur', cod: 'snapshot_diferit' })
+    expect(deps.incepe).not.toHaveBeenCalled(); expect(deps.send).not.toHaveBeenCalled()
+  })
+  it('send ambiguu: un singur send, rezultatul necunoscut persistat cu retry doar pe persistare', async () => {
+    const m = mesaj(); m.mesaj_sha256 = await hashMesaj(m)
+    const rezultat = vi.fn().mockRejectedValueOnce(new Error('bd')).mockImplementation(async (x, r) => r)
+    const deps = { incepe: vi.fn(async () => true), send: vi.fn(async () => ({ status: 503, json: async () => ({}) })), rezultat, descarca: vi.fn() }
+    expect(await proceseazaMesaj(m, deps)).toEqual({ stare: 'necunoscut', cod: 'rezultat_ambiguu' })
+    expect(deps.send).toHaveBeenCalledTimes(1); expect(rezultat).toHaveBeenCalledTimes(2)
   })
 })
 describe('F2: handler identitate și oprire', () => {
   const deps = () => ({ getUser: vi.fn(async () => ({ data: { user: { id } } })), owner: vi.fn(async () => ({ data: true })),
-    lot: vi.fn(async () => ({ data: lot() })), setari: vi.fn(async () => ({ data: { trimitere_oprita: false } })), informare: vi.fn(async () => ({ data: true })) })
+    lot: vi.fn(async () => ({ data: lot() })), proiect: vi.fn(async () => ({ data: { id, cod: 'LOT1-REAL' } })),
+    setari: vi.fn(async () => ({ data: { trimitere_oprita: false, trimitere_conectata_la: '2026-11-18T10:00:00Z' } })), informare: vi.fn(async () => ({ data: true })),
+    secret: vi.fn(async () => ({ data: 'rt' })), http: vi.fn(), rezerva: vi.fn(), incepe: vi.fn(), rezultat: vi.fn(), opreste: vi.fn(), descarca: vi.fn(), pauza: vi.fn() })
   it('anon JWT nu este utilizator; uid fals în body ignorat', async () => {
     const d = deps(); d.getUser.mockResolvedValue({ data: { user: null } })
     expect((await raspundeTrimitere({ jwt: 'fictiv', corp: { lot_id: id, is_owner: true, uid: id } }, d)).status).toBe(401)
@@ -90,13 +107,16 @@ describe('F2: handler identitate și oprire', () => {
     expect((await raspundeTrimitere({ jwt: 'fictiv', corp: { lot_id: id, is_owner: true } }, d)).status).toBe(403)
     expect(d.lot).not.toHaveBeenCalled()
   })
-  it('setările/informarea eșuate nu sunt confundate cu zero', async () => {
-    const d = deps(); d.informare.mockResolvedValue({ error: true })
+  it('setările/informarea eșuate nu sunt confundate cu zero (pe un proiect de TEST)', async () => {
+    const d = deps(); d.proiect.mockResolvedValue({ data: { id, cod: 'TEST-RAZVAN' } }); d.informare.mockResolvedValue({ error: true })
     expect((await raspundeTrimitere({ jwt: 'fictiv', corp: { lot_id: id } }, d)).status).toBe(503)
+    expect(d.secret).not.toHaveBeenCalled()
   })
-  it('și cu toate porțile trecute, transportul real rămâne imposibil', async () => {
+  it('F2b: pe un proiect REAL, cu toate porțile trecute, transportul rămâne imposibil (423, înaintea setărilor și a secretului)', async () => {
     const d = deps()
-    expect(await raspundeTrimitere({ jwt: 'fictiv', corp: { lot_id: id } }, d)).toEqual({ status: 423, body: { cod: 'transport_real_oprit', trimise: 0 } })
+    const r = await raspundeTrimitere({ jwt: 'fictiv', corp: { lot_id: id } }, d)
+    expect(r.status).toBe(423); expect(r.body.cod).toBe('transport_real_doar_test')
+    expect(d.setari).not.toHaveBeenCalled(); expect(d.secret).not.toHaveBeenCalled(); expect(d.http).not.toHaveBeenCalled()
   })
 })
 describe('F2: reconciliere fără încredere în antetul h', () => {

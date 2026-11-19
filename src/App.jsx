@@ -67,6 +67,7 @@ const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner 
 const IntrebariTehnice = lazy(() => import('./IntrebariTehnice.jsx'))   // ❓ Întreabă echipa — spețe tehnice → răspuns AI informativ (20261105a); modulul 'intrebari_tehnice'
 const MesajVocal = lazy(() => import('./MesajVocal.jsx'))   // 🎙 text → voce (Google TTS, vocea Aoede); owner sau modulul mesaj_vocal
 const Redari = lazy(() => import('./Redari.jsx'))   // 🌾 Redări teren (Lot 1 Transgaz) — docs/redari/CONTRACT_SCHEMA.md; modulul 'redari'
+const RedariMailOauthRetur = lazy(() => import('./redari/ui/MailOauthRetur.jsx'))   // întoarcerea de la Google (OAuth trimitere redari@), doar owner logat; F2b
 const RedariRaspunsPublic = lazy(() => import('./RedariRaspunsPublic.jsx'))   // formular public de răspuns cu token, fără login
 const RedariInformarePublic = lazy(() => import('./RedariInformarePublic.jsx'))   // informarea GDPR completă (țintă QR/link din convocator), fără login
 // 📱 SMS (20261130b): ruta proprie /sms pentru owner și modulul 'sms' (utilizator / test); nivelul real îl dă BD-ul (fn_sms_nivel)
@@ -9038,6 +9039,7 @@ export default function App() {
         <Route path="/achizitii" element={<ProtectedRoute requireModule="achizitii"><Layout><AchizitiiPage/></Layout></ProtectedRoute>}/>
         <Route path="/ofertare" element={<ProtectedRoute requireModule="ofertare"><Layout><OfertarePage/></Layout></ProtectedRoute>}/>
         <Route path="/redari" element={<ProtectedRoute requireModule="redari"><Layout><Suspense fallback={<LoadingScreen/>}><Redari/></Suspense></Layout></ProtectedRoute>}/>
+        <Route path="/redari/mail-oauth" element={<ProtectedRoute requireModule="redari"><Layout><Suspense fallback={<LoadingScreen/>}><RedariMailOauthRetur/></Suspense></Layout></ProtectedRoute>}/>
         <Route path="/ctc" element={<ProtectedRoute requireModule="ctc"><Layout><CTCPage/></Layout></ProtectedRoute>}/>
         <Route path="/magazie" element={<ProtectedRoute requireModule="magazie"><Layout><MagaziePage/></Layout></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute requireModule="pontajpro"><ReportsPage/></ProtectedRoute>}/>

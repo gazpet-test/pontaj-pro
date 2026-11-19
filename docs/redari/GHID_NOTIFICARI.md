@@ -28,8 +28,8 @@ deținătorului).
 | **PV A** (Model 2) | Constatarea per deținător, cu propunerea din deviz | Deținătorul semnează | La sesiune, sau trimis spre semnare, electronic | 📄 Fișa parcelei → PV A. 🗓️ Sesiune → PV A | admin / editor |
 | **PV B** (Model 3) | Constatarea per parcelă: deținătorul lipsește, refuză sau cere constatare pe teren | Comisia: Gazpet, TGZ, UAT | Pe teren sau la sesiune | 📄 Fișa parcelei → PV B (parcela) | admin / editor |
 | **PV C** (Model 5) | PV-ul pe tronson, după ce toate parcelele au PV A semnat sau PV B | Transgaz | Predare la Beneficiar | 🛤️ Tronsoane / PV C | admin / editor |
-| **Adresa către Primărie** (Model 4, AU-nnnn) | Înștiințarea Primăriei: afișarea, zilele și sala sesiunii, reprezentantul UAT, anexele | Primăria fiecărui UAT | Registratură, poștă sau e-mail (rândul C1 din Corespondență) | 🏛️ UAT-uri → editare UAT → Generează adresa | admin |
-| **Afișarea la Primărie** | Convocarea neidentificaților și a celor fără adresă | Neidentificați / fără adresă | Afișare; PV-ul de afișare îl dă Primăria | 🏛️ UAT-uri → perioada afișării și nr. PV de afișare | admin |
+| **Adresa către Primărie** (Model 4, AU-nnnn) | Înștiințarea Primăriei: afișarea, zilele și sala sesiunii, reprezentantul UAT. Anexa 2 = anunțul de afișare (rândul următor; lista parcelelor e doar acolo, din 19.11.2026), Anexa 3 = PV-ul de afișare | Primăria fiecărui UAT | Registratură, poștă sau e-mail (rândul C1 din Corespondență) | 🏛️ UAT-uri → editare UAT → Generează adresa | admin |
+| **Afișarea la Primărie** (anunțul de afișare + PV-ul de afișare) | Anunțul lipit la intrarea în primărie: convocarea pe UAT, zilele de sesiune, lista parcelelor (fără date personale), adresa paginii de informare GDPR cu QR; pentru toți deținătorii, obligatoriu pentru neidentificați și cei fără adresă (plan rev. 1, pct. 4.3 + cap. 8) | Toți deținătorii din UAT | Afișare; PV-ul de afișare îl dă Primăria | 🏛️ UAT-uri → editare UAT → **Anunț de afișare (DOCX)** (se descarcă, nu se salvează în ERP); după lipire, perioada afișării și nr. PV de afișare pe UAT | admin / editor (anunțul); admin (câmpurile afișării) |
 | **Cererea de împuternicire** | Cererea către Transgaz (anexă la A1 / A2), DRAFT Juridic | Transgaz | Corespondență (A2) | ⚙️ Setări proiect → Generează cererea (DOCX) | admin |
 | **Corespondența** (planul, scrisorile, înștiințările A1–C2) | Planul de verificare, scrisorile către Transgaz, ISC, DAJ, Primării; evidența trimiterii | Instituții | E-mail, registratură, poștă | 📨 Corespondență. Aprobarea o dă owner-ul; „📧 Pregătește mailul” apare pe rândul aprobat | aprobă owner-ul; pregătesc admin / editor |
 | **SMS Redări pe UAT** (șablon fix) | Reamintirea zilei și orei sesiunii, cu telefonul de contact; un SMS de persoană | Deținătorii convocați din UAT, fără răspuns și fără PV semnat | SMS | 📋 Registru → 📱 SMS proprietari (lot draft), apoi 📱 SMS → Istoric (aprobare, trimitere) | creează admin / editor cu nivel SMS; aprobă owner-ul |
@@ -39,7 +39,11 @@ Ce blochează azi (verificat în tab, 04.11.2026):
 - **Împuternicirea Transgaz** (nr. + dată în ⚙️ Setări proiect) blochează convocatorul, plicul, AR-ul și adresa către Primărie.
 - **Zilele de sesiune cu program** pe fiecare UAT (🏛️ UAT-uri) blochează convocatorul, adresa către Primărie, alegerea „particip” din
   formular și SMS-ul.
-- **Afișarea**: perioada și nr. PV de afișare, pe fiecare UAT.
+- **Afișarea**: anunțul de afișare cere aceleași date ca butonul lui (contract, împuternicire, UAT + județ, o zi cu program, contactul
+  Gazpet, reprezentantul Transgaz cu telefon, semnatarul Gazpet, informarea GDPR publicată); apoi perioada și nr. PV de afișare, pe
+  fiecare UAT (18.11.2026). La generare, fiecare identificator de parcelă tipărit (sat, tarla, nr. cadastral, poz. HG, tronson) trebuie să
+  aibă forma câmpului, iar satul să fie unul dintre cele scrise la „Sate / tarlale ziua 1–3”; altfel anunțul nu se generează și sub buton
+  apare lista parcelelor de corectat (cod + câmp), de corectat în Fișa parcelei (SABLOANE.md §2.7).
 - **SMS**: așteaptă autorizarea scrisă a Transgaz și textul final aprobat de Juridic + Răzvan. Trimiterea e oprită din kill-switch.
 - **Textul AR** e validat juridic doar pentru LOT1. Pe alt proiect nu se generează AR.
 - **Pagina web GDPR**: PR #939 e draft și așteaptă aprobarea TGZ a textului. Verso-ul convocatorului are deja textul.

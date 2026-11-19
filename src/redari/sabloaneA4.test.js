@@ -35,6 +35,17 @@ const SCHIMBARI_TEXT = {
     ['adresa Beneficiar nr. {{reluare_adresa_tgz_nr}} / recomandată nr. {{reluare_nr_tracking}}', 'adresa Beneficiar nr. {{reluare_adresa_tgz_nr}} / recomandată sau AWB nr. {{reluare_nr_tracking}}'],
   ],
   pv_c: [['PROCES-VERBAL DE RECEPȚIE A READUCERII TERENULUI LA STAREA INIȚIALĂpe tronson', 'PROCES-VERBAL DE FINALIZARE A PREDĂRII TERENURILORpe tronson']],
+  // Din 19.11.2026 (excepția (12), decizia Răzvan): corpul Anexei 2 (convocarea scurtă + tabelul „Lista parcelelor”, cu rândul-șablon)
+  // → cele două paragrafe ale variantei trimise Transgaz (Anexa 2 = anunțul de afișare). Refăcut înapoi, textul dă amprenta de dinainte.
+  adresa_uat: [[
+    'Către toți proprietarii și utilizatorii terenurilor de pe raza comunei {{uat}} afectate temporar de lucrările la conducta de transport gaze naturale Prunișor–Jupa, Lot 1 (lista parcelelor mai jos).'
+    + 'Lucrările de readucere a terenului la starea inițială au fost executate. Sunteți invitați să constatați starea terenului și să semnați procesul-verbal la sediul Primăriei, în zilele {{zile_sesiune_text}}, între orele {{program_text}}. Aduceți actul de identitate și, dacă e cazul, actul care dovedește calitatea de proprietar, moștenitor sau arendaș.'
+    + 'Dacă nu vă puteți prezenta, ne puteți răspunde la telefon {{contact_telefon}}, pe e-mail la {{contact_email}}. În lipsa participării, starea terenului poate fi constatată tehnic de reprezentanții Beneficiarului, ai Antreprenorului și ai Primăriei; această constatare nu reprezintă acceptarea tacită din partea dumneavoastră.'
+    + 'Convocarea se face în numele S.N.T.G.N. TRANSGAZ S.A., Beneficiar al investiției. Contact GAZPET INSTAL: {{contact_nume}}, {{contact_telefon}}, {{contact_email}}. Contact TRANSGAZ: {{reprezentant_tgz}}, tel. {{reprezentant_tgz_telefon}}.'
+    + 'Lista parcelelor (fără date personale):Nr.SatTarlaNr. cadastral / parcelăPoz. HGTronson{{rand.nr}}{{rand.sat}}{{rand.tarla}}{{rand.nr_cadastral}}{{rand.poz_hg}}{{rand.tronson}}',
+    'Anexa 2 este anunțul de afișare pe comună (convocarea pe UAT), după modelul „Anunț de afișare la primărie”, transmis împreună cu prezenta adresă.'
+    + 'Anunțul conține: zilele și programul sesiunilor (cu satele / tarlalele programate), cum ne pot răspunde deținătorii, precizarea că afișarea este o publicitate suplimentară a convocării și nu valorează acceptare tacită, informarea privind datele personale (pagina publică, cu cod QR) și lista parcelelor din comună (sat, tarla, nr. cadastral / parcelă, poz. HG, tronson), fără date personale.',
+  ]],
 }
 // Text ADĂUGAT la începutul documentului (excepția (9) din SABLOANE.md §1, 04.11, DE CONFIRMAT — claude#026 întrebarea 1):
 // antetul firmei din convocator, repus pe adresa UAT. Scos de la început, textul trebuie să dea amprenta de dinainte.

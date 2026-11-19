@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase.js'
 import { motivConvocatorUtilizator } from '../convocareUtilizatori.js'
 import { STARI } from '../stare.js'
 import { MOTIV_INFORMARE_NEPUBLICATA } from '../informareGdpr.js'
+import { areZiCuProgram } from '../setari.js'
 
 export const SABLON_CONVOCATOR = '/redari/sabloane/convocator.docx'
 // Proiecții explicite (review Jakarinos P2-5): fără token_raspuns pe red_detinatori — tokenul stă în red_detinatori_token
@@ -83,7 +84,7 @@ export function motivBlocareConvocator(proiect, uat, rand) {
   if (!String(proiect?.contract_nr || '').trim() || !proiect?.contract_data) lipsa.push('proiect fără nr./dată contract')
   if (!String(proiect?.imputernicire_nr || '').trim() || !proiect?.imputernicire_data) lipsa.push('proiect fără nr./dată împuternicire Transgaz')
   if (!uat) lipsa.push('UAT necunoscut')
-  else if (![1, 2, 3].some(i => uat[`sesiune_zi${i}`] && String(uat[`program_zi${i}`] || '').trim())) lipsa.push('UAT fără zi de sesiune cu program')
+  else if (!areZiCuProgram(uat)) lipsa.push('UAT fără zi de sesiune cu program')
   // D3: șablonul tipărește numele, telefonul și e-mailul de contact + telefonul TGZ → fiecare e obligatoriu (Setări proiect)
   const faraContact = [['contact_nume', 'persoană'], ['contact_telefon', 'telefon'], ['contact_email', 'e-mail']].filter(([k]) => !String(proiect?.[k] || '').trim()).map(([, e]) => e)
   if (faraContact.length) lipsa.push(`proiect fără contact Gazpet: ${faraContact.join(', ')} (Setări proiect → Contact pe convocări)`)
@@ -122,7 +123,14 @@ export const fmtNum = (n, dec = 2) => (n === null || n === undefined || n === ''
 export const azi = () => new Date().toISOString().slice(0, 10)
 
 // Mesaj de eroare lizibil din răspunsul supabase / excepție
-export const msgEroare = (e, fallback = 'Eroare necunoscută') => (e?.message || e?.error_description || e?.details || (typeof e === 'string' ? e : null) || fallback)
+// review #1140 r4: `details` / `hint` NU se afișează (pot conține valorile rândului, de ex. o dată personală semnalată la import);
+// fără `message`, doar codul erorii — aceeași regulă ca mesajEroareBd() din importTgz.js
+export const msgEroare = (e, fallback = 'Eroare necunoscută') => {
+  if (typeof e === 'string') return e || fallback
+  const m = (typeof e?.message === 'string' && e.message.trim()) ? e.message : (typeof e?.error_description === 'string' && e.error_description.trim() ? e.error_description : null)
+  if (m) return m
+  return typeof e?.code === 'string' && /^[0-9A-Z]{1,10}$/.test(e.code) ? `${fallback} (cod ${e.code})` : fallback
+}
 
 export const CALITATI = ['proprietar', 'coproprietar', 'mostenitor', 'arendas', 'utilizator', 'neidentificat']
 export const CANALE_CONVOCARE = ['posta', 'sms', 'afisare', 'telefon']
