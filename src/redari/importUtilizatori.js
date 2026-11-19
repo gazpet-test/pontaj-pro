@@ -18,7 +18,7 @@
 // Ecranul: src/redari/ui/ImportUtilizatori.jsx (previzualizare, raport, confirmare dublă). Pași și anulare: docs/redari/IMPORT_UTILIZATORI_ECRAN.md.
 import * as XLSX from 'xlsx-js-style'
 import { normalizeazaNume } from './idParcela.js'
-import { cheieSursa, imparteAdresa, text, LOT, LOT_CITIRE, PAGINA } from './importTgz.js'
+import { cheieSursa, imparteAdresa, text, LOT, LOT_CITIRE, PAGINA, mesajEroareBd } from './importTgz.js'
 
 export const IMPORT_UTILIZATORI_ACTIV = true
 export const SURSA_UTILIZATORI = 'TGZ_UTILIZATORI'
@@ -143,7 +143,8 @@ export const eroareDeterminista = e => {
   return false
 }
 function verifica(rezultat, ce) {
-  if (rezultat?.error) { const e = new Error(`${ce}: ${rezultat.error.message || JSON.stringify(rezultat.error)}`); e.code = rezultat.error.code; throw e }
+  // review #1140 r4: fără `message` NU se serializează obiectul (details / hint pot conține valori) — același mesaj ca verifica() din importTgz
+  if (rezultat?.error) { const e = new Error(`${ce}: ${mesajEroareBd(rezultat.error)}`); e.code = rezultat.error.code; throw e }
   return rezultat?.data ?? null
 }
 // r2 (Jak P2-4): paginare keyset pe id până la pagina GOALĂ — o limită de server mai mică decât pagina cerută nu mai taie tacit rezultatul

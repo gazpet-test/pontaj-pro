@@ -90,3 +90,25 @@ describe('randuri de tratat (export fara nume)', () => {
     expect(inj2).toContain("\"'\n=C1\"")
   })
 })
+
+// review #1140 r3: eroarea BD fără `message` nu se serializează (details / hint pot conține valoarea rândului)
+import { verifica as verificaRezultatBd } from './importTgz.js'
+import { describe as descrieErori, it as testErori, expect as asteaptaErori } from 'vitest'
+descrieErori('verifica: eroarea BD fără mesaj nu expune detaliile', () => {
+  testErori('fără message → mesaj generic cu codul, fără details / hint; cu message → doar message', () => {
+    const fara = { error: { code: '23514', details: 'Failing row contains (ana@example.ro, Strada Exemplu 1)', hint: 'ana@example.ro' } }
+    let e = null; try { verificaRezultatBd(fara, 'scriere parcele') } catch (x) { e = x }
+    asteaptaErori(e.message).toBe('scriere parcele: eroare a bazei de date (cod 23514)')
+    asteaptaErori(e.message).not.toContain('example')
+    let e2 = null; try { verificaRezultatBd({ error: { message: 'new row violates check constraint "x"', details: 'ana@example.ro' } }, 'scriere') } catch (x) { e2 = x }
+    asteaptaErori(e2.message).toBe('scriere: new row violates check constraint "x"')
+    let e3 = null; try { verificaRezultatBd({ error: { code: 'ana@example.ro' } }, 'scriere') } catch (x) { e3 = x }
+    asteaptaErori(e3.message).toBe('scriere: eroare a bazei de date (cod necunoscut)')
+    asteaptaErori(verificaRezultatBd({ data: [1] }, 'x')).toEqual([1])
+  })
+})
+import { mesajEroareBd } from './importTgz.js'
+testErori('mesajEroareBd (folosit și de importUtilizatori): fără message → cod, fără details', () => {
+  asteaptaErori(mesajEroareBd({ code: 'PGRST116', details: 'ana@example.ro' })).toBe('eroare a bazei de date (cod PGRST116)')
+  asteaptaErori(mesajEroareBd({ message: '  ', hint: 'ana@example.ro' })).toBe('eroare a bazei de date (cod necunoscut)')
+})
