@@ -42,42 +42,55 @@ export function avertismenteAchizitie({ dataFactura, luna, arePdf }) {
   return a
 }
 
-// ─── Salvarea unei achiziții din formular (L04 / L05, runda 2) ───────────────────────────────────────────────────────────
-// Fiecare formular are o cheie de intenție (UUID, coloana cheie_intentie, UNIQUE în BD); reîncercarea trimite ACEEAȘI cheie,
-// deci o salvare intrată cu răspunsul pierdut nu se dublează. Rezultatul:
-//   'salvat'     INSERT-ul a întors rândul, sau rândul cu cheia noastră se vede (după un răspuns pierdut / conflict pe cheie)
-//   'refuzat'    serverul a refuzat SIGUR (4xx, respingereServer) și nu e conflictul cheii noastre: nimic scris, PDF-ul se poate scoate
-//   'necunoscut' rețea / timeout / 5xx / răspuns ciudat și rândul nu se vede (sau citirea a picat): nu se șterge nimic, formularul
-//                rămâne înghețat, singura acțiune e reîncercarea identică
-//   'diferit'    rândul cu cheia noastră există, dar cu alte valori (n-ar trebui să se întâmple: formularul e înghețat) — nimic șters
-export const CONSTRANGERE_CHEIE = 'upa_achizitii_cheie_intentie_uidx'
-export const conflictCheie = res => !!(res && res.error && res.error.code === '23505' && String(res.error.message || '').includes(CONSTRANGERE_CHEIE))
-// trebuie citit rândul după cheie? (tot ce nu e rând întors sau refuz sigur fără legătură cu cheia)
-export function citireDupaSalvare(res) {
-  if (res && !res.error && Array.isArray(res.data) && res.data.length === 1) return false
-  if (conflictCheie(res)) return true
-  return !respingereServer(res)
+// ─── Salvarea unei achiziții din formular (runda 3: L04 / L05 / L16; P1 + P2 din review) ──────────────────────────────────
+// Prin RPC-ul idempotent fn_upa_achizitie_adauga(p_cheie, p_rand): cheia de intenție (UUID per formular, refolosită la reîncercare)
+// + amprenta DURABILĂ a valorilor, ținută de BD pe TOATE câmpurile intenției (hash_intentie). Reconcilierea e pe server: o reîncercare cu
+// aceeași cheie găsește rândul intrat și întoarce 'existent', chiar dacă între timp dreptul de scriere s-a retras. Rezultatul unei încercări:
+//   'salvat'          { stare: 'nou' | 'existent', id }: rândul cheii există cu EXACT valorile formularului
+//   'diferit'         UPA02: cheia există cu ALTE valori — nimic scris, nimic șters, formularul rămâne înghețat
+//   'refuzat'         refuz SIGUR (4xx: drept, reguli) și NICIO încercare anterioară a intenției cu rezultat nesigur: PDF-ul se poate scoate
+//   'refuzat_nesigur' refuz acum, dar o încercare anterioară a avut rezultat nesigur: refuzul reîncercării NU dovedește refuzul ei
+//                     (rândul ei poate exista și trimite la PDF) → nimic șters, formularul rămâne înghețat
+//   'necunoscut'      rețea / timeout / 5xx / răspuns în afara contractului / conflict tranzitoriu (40001…): nimic șters, reîncercarea identică
+export const CAMPURI_INTENTIE = ['furnizor_id', 'furnizor_nume', 'numar_factura', 'data_factura', 'luna', 'valoare', 'descriere', 'document_path']
+export const COD_DIFERIT = 'UPA02'
+const CODURI_TRANZITORII = new Set(['40001', '40P01', '55P03', '57014'])
+export function stareSalvare(res, ambiguuAnterior = false) {
+  const d = res && !res.error ? res.data : null
+  if (d && (d.stare === 'nou' || d.stare === 'existent') && Number.isSafeInteger(Number(d.id)) && Number(d.id) > 0) return 'salvat'
+  const cod = res?.error?.code
+  if (cod === COD_DIFERIT) return 'diferit'
+  if (respingereServer(res) && !CODURI_TRANZITORII.has(cod) && res.status !== 408) return ambiguuAnterior ? 'refuzat_nesigur' : 'refuzat'
+  return 'necunoscut'
 }
-// același rând? (valorile pe care le-a scris formularul)
-export function acelasiRand(r, p) {
-  if (!r || !p) return false
-  const n = x => x == null || x === '' ? null : String(x)
-  return n(r.numar_factura) === n(p.numar_factura) && String(r.luna).slice(0, 10) === String(p.luna).slice(0, 10)
-    && Number(r.valoare) === Number(p.valoare) && n(r.furnizor_id) === n(p.furnizor_id) && n(r.document_path) === n(p.document_path)
+// după o încercare cu rezultatul ăsta intenția rămâne NESIGURĂ pentru totdeauna (formularul înghețat, PDF-ul nu se mai scoate niciodată)
+export const rezultatNesigur = st => st === 'necunoscut' || st === 'diferit' || st === 'refuzat_nesigur'
+// PDF-ul încărcat se scoate DOAR la un refuz sigur al unei intenții fără nicio încercare nesigură (L02 / L05)
+export const poateScoatePdf = st => st === 'refuzat'
+// textul refuzului (drept / numărul facturii / altceva)
+export function mesajRefuzAchizitie(err) {
+  if (err?.code === '42501') return 'Nu ai drept să adaugi achiziții (cere acces Administrativ › Unități protejate, editor).'
+  if (refuzNumarFactura(err)) return 'Completează numărul facturii (e obligatoriu).'
+  return 'Eroare: ' + (err?.message || 'refuzat')
 }
-// res = răspunsul INSERT-ului ({ data, error, status }; o excepție = { error } fără status); citire = { data: rând | null, error } după cheie
-export function stareSalvare(res, citire, payload) {
-  if (res && !res.error && Array.isArray(res.data) && res.data.length === 1) return 'salvat'
-  if (respingereServer(res) && !conflictCheie(res)) return 'refuzat'
-  const { data: r, error: e } = citire || {}
-  if (!citire || e || !r) return 'necunoscut'
-  return acelasiRand(r, payload) ? 'salvat' : 'diferit'
-}
+
+// ─── Numărul facturii (20261229b: obligatoriu pe rândurile noi, în BD) ────────────────────────────────────────────────────
+// Citește Orice (UPA): numărul de pe card = cel editat de om, altfel cel citit de AI; fără spații la capete; '' = lipsă (confirmarea oprită)
+export const numarFacturaUpa = (editat, citit) => String(editat ?? citit ?? '').trim()
+// refuzul gărzii din BD: 23514 de la triggerul trg_upa_achizitii_numar_factura sau de la CHECK-ul upa_achizitii_numar_factura_nevid
+export const refuzNumarFactura = err => !!err && err.code === '23514'
+  && /numar_factura|numarul facturii/i.test(`${err.message || ''} ${err.details || ''} ${err.constraint || ''}`)
+export const mesajInsertUpa = err => refuzNumarFactura(err)
+  ? 'Completează numărul facturii pe card: fără el factura nu se poate scădea din plafon.'
+  : 'Insert achiziție UPA: ' + (err?.message || 'eroare')
 // încărcarea PDF-ului: „există deja” la calea intenției (cheia + versiunea fișierului ales) = încărcarea anterioară a ACESTEI intenții
 export const pdfExistaDeja = e => !!e && (String(e.statusCode ?? e.status ?? '') === '409' || /already exists|duplicate/i.test(String(e.message || '')))
 export const caleaPdf = (luna, cheie, versiune) => `manual/${String(luna).slice(0, 7)}/${cheie}-${versiune}.pdf`
 // furnizorii se citesc pe pagini după id (keyset, L23), apoi se ordonează după nume (alfabetul românesc), id la egalitate
 export const ordineFurnizori = (a, b) => String(a.nume ?? '').localeCompare(String(b.nume ?? ''), 'ro') || (Number(a.id) - Number(b.id))
+// L24 (runda 3): o buclă de paginare se oprește la invalidarea generației — cererea paginii următoare nu mai pleacă
+export class Oprit extends Error { constructor() { super('oprit'); this.oprit = true } }
+export const paginaCuGarda = (curent, cerePagina) => (ultim, pas) => { if (!curent()) throw new Oprit(); return cerePagina(ultim, pas) }
 
 // textul unei luni din istoric (rândurile fn_upa_luni): plafonul ACELEI luni, necheltuitul de la închidere (instantaneul), diferențele de după
 export function starePlafonLuna(l) {

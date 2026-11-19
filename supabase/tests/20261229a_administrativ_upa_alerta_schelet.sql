@@ -64,3 +64,33 @@ BEGIN
   END LOOP;
 END $t$;
 REVOKE ALL ON SEQUENCE public.upa_achizitii_id_seq FROM anon;
+
+-- Storage (runda 3, pentru 20261229c): coloanele ca în Supabase (owner_id, metadate, path_tokens generat), RLS ca în Supabase, drepturile
+-- rolurilor API ca în Supabase (filtrate de politici); bucketul documente-upa cu politica veche EXACT ca în baseline
+-- (supabase/tests/izometrie_e3_schelet_baseline.sql) și politica altui bucket (permisivă, nu trebuie să deschidă documente-upa)
+CREATE SCHEMA storage;
+GRANT USAGE ON SCHEMA storage TO anon, authenticated, service_role;
+CREATE TABLE storage.buckets (id text PRIMARY KEY, name text NOT NULL, public boolean DEFAULT false, file_size_limit bigint, allowed_mime_types text[]);
+CREATE TABLE storage.objects (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  bucket_id text REFERENCES storage.buckets(id),
+  name text,
+  owner uuid,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  last_accessed_at timestamptz DEFAULT now(),
+  metadata jsonb,
+  path_tokens text[] GENERATED ALWAYS AS (string_to_array(name, '/')) STORED,
+  version text,
+  owner_id text,
+  user_metadata jsonb,
+  CONSTRAINT objects_bucket_name_uq UNIQUE (bucket_id, name)
+);
+ALTER TABLE storage.buckets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+GRANT SELECT ON storage.buckets TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON storage.objects TO anon, authenticated, service_role;
+CREATE POLICY buckets_citire ON storage.buckets FOR SELECT TO authenticated USING (true);
+INSERT INTO storage.buckets (id, name, public) VALUES ('documente-upa', 'documente-upa', false), ('altul', 'altul', false);
+CREATE POLICY "upa docs authenticated all" ON storage.objects AS PERMISSIVE FOR ALL TO public USING (((bucket_id = 'documente-upa'::text) AND (auth.uid() IS NOT NULL))) WITH CHECK (((bucket_id = 'documente-upa'::text) AND (auth.uid() IS NOT NULL)));
+CREATE POLICY altul_tot ON storage.objects FOR ALL TO authenticated USING (bucket_id = 'altul') WITH CHECK (bucket_id = 'altul');

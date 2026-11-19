@@ -51,9 +51,13 @@ export async function cheieIdempotenta(cheie) {
   return 'upa-' + [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 48)
 }
 
-const ADRESA = /^[a-z0-9._%+-]{1,64}@gazpet[.]ro$/
+// Doar adrese INTERNE primesc mailul (decizia owner-ului, 19.11.2026). BD-ul (fn_upa_destinatari) le alege deja și le ignoră pe celelalte
+//   (numărul lor e jurnalizat); edge-ul reverifică fiecare adresă înainte de trimitere, cu ACEEAȘI formă (paritate testată pe un tabel de
+//   cazuri, L19): un rând rezervat cu o adresă din afara domeniului = contract încălcat -> nu se trimite NIMIC (eroare rezervare_invalida).
+export const DOMENIU_INTERN = 'gazpet.ro'
+export const ADRESA_INTERNA = new RegExp('^[a-z0-9._%+-]{1,64}@' + DOMENIU_INTERN.replace(/[.]/g, '[.]') + '$')
 const COD = /^[a-z_]{1,40}$/
-const destinatariValizi = d => Array.isArray(d) && d.length >= 1 && d.length <= 10 && d.every(e => typeof e === 'string' && ADRESA.test(e))
+export const destinatariValizi = d => Array.isArray(d) && d.length >= 1 && d.length <= 10 && d.every(e => typeof e === 'string' && ADRESA_INTERNA.test(e))
 
 // Pașii unei rulări (după poarta cronSauOwner a edge-ului). Întoarce {status, body}; body fără adrese de mail și fără textul erorilor furnizorului
 //   (răspunsul cronului e păstrat de pg_net), în afara probei (?dry=1, doar owner-ul ajunge aici cu dry).
@@ -69,10 +73,13 @@ export async function ruleazaAlertaUpa({ sb, fetchFn = globalThis.fetch, resendK
   const { data: rez, error } = await sb.rpc('fn_upa_alerta_rezerva', {})
   if (error) return raspuns(500, { ok: false, error: 'rezervare_indisponibila' })
   if (!rez || typeof rez !== 'object' || !Array.isArray(rez.randuri) || rez.n !== rez.randuri.length
-      || !Array.isArray(rez.erori_config) || !rez.erori_config.every(c => typeof c === 'string' && COD.test(c))) return raspuns(500, { ok: false, error: 'rezervare_incompleta' })
+      || !Array.isArray(rez.erori_config) || !rez.erori_config.every(c => typeof c === 'string' && COD.test(c))
+      || !Number.isSafeInteger(rez.destinatari_ignorati) || rez.destinatari_ignorati < 0) return raspuns(500, { ok: false, error: 'rezervare_incompleta' })
   // erori_config = codurile de business ale configurării (setare_zi_invalida / fara_plafon), calculate de BD la FIECARE rulare (nu doar la
   //   prima din zi, când se scriu în jurnal): o zi cu configurare defectă nu arată ca o zi fără alertă (L18)
-  const baza = { zi: rez.zi ?? null, luna_inchisa: rez.inchis?.luna ?? null, reconciliate: Number(rez.reconciliate) || 0, erori_config: rez.erori_config }
+  // destinatari_ignorati = câte adrese din setări NU sunt interne (nu primesc nimic); doar numărul, fără adrese
+  const baza = { zi: rez.zi ?? null, luna_inchisa: rez.inchis?.luna ?? null, reconciliate: Number(rez.reconciliate) || 0, erori_config: rez.erori_config,
+                 destinatari_ignorati: rez.destinatari_ignorati }
   if (rez.activ !== true) return raspuns(200, { ok: true, skip: 'alerta_oprita', ...baza })
   const contor = { trimis: 0, eroare: 0, necunoscut: 0, fara_mail: 0, nemarcat: 0 }
   for (const r of rez.randuri) {

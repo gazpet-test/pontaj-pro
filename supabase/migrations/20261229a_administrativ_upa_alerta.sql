@@ -29,22 +29,37 @@
 --   * upa_achizitii: politica veche upa_achizitii_all (ALL, orice cont logat) se înlocuiește: citire ca azi (orice cont logat), adăugare /
 --     modificare / ștergere doar cu fn_upa_poate_scrie(). Forma veche a politicii (rolurile ȘI clauza WITH CHECK, cele două forme acceptate)
 --     se păstrează în comentariul politicii de citire (roluri_vechi=... check_vechi=...), ca revenirea să o refacă identic în catalog.
---   * upa_achizitii.cheie_intentie (uuid, UNIQUE, NULL permis): cheia de intenție a salvării din formular (L04): reîncercarea cu aceeași cheie
---     nu dublează achiziția; Citește Orice și rândurile vechi rămân cu NULL.
+--   * upa_achizitii.cheie_intentie (uuid, UNIQUE, NULL permis) + hash_intentie (text): cheia de intenție a salvării din formular și amprenta
+--     DURABILĂ a valorilor ei (L04 / L16; runda 3): hash_intentie = md5 pe TOATE câmpurile semantice (fn_upa_campuri_intentie, definiția
+--     unică), pus de server (trigger BEFORE INSERT, L08), nemodificabil împreună cu cheia (BEFORE UPDATE); NULL <=> cheie NULL (CHECK).
+--     Citește Orice și rândurile vechi rămân cu NULL.
+--   * fn_upa_achizitie_adauga(p_cheie, p_rand) (SECURITY INVOKER: politicile tabelului se aplică apelantului): salvarea idempotentă din
+--     formular. ÎNTÂI caută cheia (orice cont logat citește): există cu aceeași amprentă -> 'existent' (reluarea unei salvări intrate NU
+--     depinde de dreptul de acum: un drept retras între timp nu mai poate face o reluare să pară „refuzată”, runda 3 P1); există cu altă
+--     amprentă -> UPA02 (aceeași cheie + alt payload = eroare); altfel INSERT .. ON CONFLICT (cheie_intentie) DO NOTHING RETURNING + recitire.
 --   * fn_upa_erori_config(zi_prag, plafon): codurile de business ale configurării (setare_zi_invalida / fara_plafon), întoarse de rezervare și
 --     de probă la FIECARE rulare (erori_config), nu doar scrise în jurnal la prima rulare din zi (L18).
--- AMPRENTA (L14 / L15): postcondițiile calculează amprenta COMPLETĂ a obiectelor migrării (definiții, proprietari, ACL, RLS, coloane,
---   constrângeri, indecși, trigger, secvență, politicile pe upa_achizitii și pe tabelele noi, sursa funcțiilor) și o compară cu constanta
---   revizuită; revenirea recalculează aceeași amprentă (bloc de text identic, verificat de proba PGlite) și refuză la orice abatere.
+--   * Destinatarii mailului (runda 3, decizia owner-ului 19.11.2026): DOAR adrese interne (@gazpet.ro). fn_upa_destinatari întoarce adresele
+--     interne (fără dubluri, cel mult 10, altfel NULL) și pe cele IGNORATE (alt domeniu / formă invalidă): ignoratele nu primesc nimic, numărul
+--     lor intră în jurnal (nr_dest_ignorati) și în răspuns; adresele lor apar doar în proba owner-ului (?dry=1). Fără adrese în repo.
+--   * Lunile vechi (decizia owner-ului 19.11.2026): alerta privește DOAR luna curentă și luna tocmai încheiată (luna anterioară zilei de
+--     rulare); nicio recuperare / alertă retroactivă pentru lunile dinainte de aplicare (n-au plafon înregistrat) sau pentru o lună sărită.
+-- AMPRENTA (L14 / L15): postcondițiile calculează amprenta COMPLETĂ a obiectelor migrării (definiții, proprietari, ACL pe tabele ȘI pe
+--   coloane, RLS, coloane, constrângeri, indecși, triggere, secvență, politicile pe upa_achizitii și pe tabelele noi, sursa funcțiilor, plus
+--   TOATE obiectele care depind de coloanele noi din upa_achizitii, oricum s-ar numi — pg_depend) și o compară cu constanta revizuită;
+--   revenirea recalculează aceeași amprentă (bloc de text identic, verificat de proba PGlite) și refuză la orice abatere.
 -- Ce NU face: nu atinge logistica_setari (upa_plafon_lunar rămâne acolo ca valoare veche, necitită de codul nou; upa_alerta_activa /
 --   upa_alerta_emails / upa_alerta_zi se citesc ca azi), nu schimbă cronul (jobid 29), nu trimite nimic, nu schimbă drepturi pe module.
--- ORDINEA LIVRĂRII: migrarea -> funcția edge upa-plafon-alerta (verify_jwt neschimbat, poarta cronSauOwner) -> cronul zilnic propus
---   (0 6 * * *, de coordonator) -> merge-ul ecranului. Între migrare și merge, ecranul vechi: butonul de plafon scrie în logistica_setari
---   (valoare care NU mai e citită: se reface din ecranul nou), adăugarea / ștergerea respectă deja politicile noi.
+-- ORDINEA LIVRĂRII (docs/administrativ/UPA_FOND_HANDICAP.md): migrarea -> merge-ul ecranului (salvează prin fn_upa_achizitie_adauga) ->
+--   20261229b (numărul facturii) / 20261229c (bucketul, după verificarea de pe live) -> funcția edge upa-plafon-alerta (verify_jwt neschimbat,
+--   poarta cronSauOwner) -> destinatarii în setări -> cronul zilnic propus (0 6 * * *, de coordonator). Între migrare și merge, ecranul vechi:
+--   butonul de plafon scrie în logistica_setari (valoare care NU mai e citită: se reface din ecranul nou), adăugarea / ștergerea respectă deja
+--   politicile noi (inserarea directă, fără cheie, rămâne permisă cu dreptul de scriere).
 -- Ordinea lock-urilor (L06), aceeași pe toate căile: lock consultativ hashtext('upa_alerta_jurnal') -> upa_luna_inchisa (INSERT) ->
 --   upa_alerta_jurnal (UPDATE / INSERT) -> notifications (INSERT). fn_upa_plafon_seteaza: lock consultativ hashtext('upa_plafon_lunar') -> rândul
---   lunii (INSERT .. ON CONFLICT). Nicio cale nu blochează upa_achizitii (suma se citește în READ COMMITTED: o factură adăugată după închidere
---   apare în ecran ca diferență față de instantaneul închis, nu se pierde).
+--   lunii (INSERT .. ON CONFLICT). fn_upa_achizitie_adauga: doar rândul nou din upa_achizitii (o inserare concurentă cu aceeași cheie așteaptă
+--   doar pe indexul UNIQUE al cheii, apoi ON CONFLICT DO NOTHING + recitire); nicio altă cale nu blochează upa_achizitii (suma se citește în
+--   READ COMMITTED: o factură adăugată după închidere apare în ecran ca diferență față de instantaneul închis, nu se pierde).
 -- Lock-uri la aplicare (punct unic, NOWAIT, bugetul 1 s de la prima încercare, docs/LIVRARE_L15_V2.md §9): upa_achizitii ACCESS EXCLUSIVE
 --   (DROP / CREATE / COMMENT POLICY, ADD COLUMN cheie_intentie + UNIQUE: indexul se construiește pe tabelul mic, coloana nouă e NULL, fără
 --   rescriere). Lock-urile implicite de după set: citiri (ACCESS SHARE) pe logistica_setari, notifications, profiles, user_module_access,
@@ -86,16 +101,24 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (ARRAY['fn_upa_poate_scrie', 'fn_upa_plafon_la',
                   'fn_upa_luni', 'fn_upa_destinatari', 'fn_upa_lei', 'fn_upa_luna_text', 'fn_upa_zile_text', 'fn_upa_erori_config', 'fn_upa_plafon_seteaza',
                   'fn_upa_alerta_inscrie', 'fn_upa_alerta_rezerva_la', 'fn_upa_alerta_rezerva', 'fn_upa_alerta_proba', 'fn_upa_alerta_marcheaza',
-                  'fn_upa_luna_inchisa_nemodificabil']))
-     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.upa_achizitii'::regclass AND a.attname = 'cheie_intentie' AND NOT a.attisdropped)
-     OR EXISTS (SELECT 1 FROM pg_constraint c WHERE c.connamespace = 'public'::regnamespace AND c.conname = 'upa_achizitii_cheie_intentie_uidx')
+                  'fn_upa_luna_inchisa_nemodificabil', 'fn_upa_campuri_intentie', 'fn_upa_hash_intentie', 'fn_upa_achizitii_intentie',
+                  'fn_upa_achizitie_adauga']))
+     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.upa_achizitii'::regclass AND a.attname IN ('cheie_intentie', 'hash_intentie') AND NOT a.attisdropped)
+     OR EXISTS (SELECT 1 FROM pg_constraint c WHERE c.connamespace = 'public'::regnamespace
+                  AND c.conname IN ('upa_achizitii_cheie_intentie_uidx', 'upa_achizitii_hash_intentie_cu_cheie'))
+     OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.upa_achizitii'::regclass AND t.tgname = 'trg_upa_achizitii_intentie')
      OR to_regclass('public.upa_achizitii_cheie_intentie_uidx') IS NOT NULL THEN
     RAISE EXCEPTION '20261229a: obiectele exista deja (reaplicare)';
   END IF;
-  -- coloanele citite / scrise, cu tipurile acceptate (tabelele UPA / Logistică sunt create direct în producție: se verifică, nu se presupun)
+  -- coloanele citite / scrise, cu tipurile acceptate (tabelele UPA / Logistică sunt create direct în producție: se verifică, nu se presupun);
+  --   runda 3: și toate coloanele pe care le scrie fn_upa_achizitie_adauga (câmpurile intenției + created_by)
   FOR r IN SELECT * FROM (VALUES
       ('upa_achizitii', 'id', 'bigint|integer'), ('upa_achizitii', 'luna', 'date'),
       ('upa_achizitii', 'valoare', 'numeric|double precision|real|integer|bigint'),
+      ('upa_achizitii', 'furnizor_id', 'bigint|integer'), ('upa_achizitii', 'furnizor_nume', 'text|character varying'),
+      ('upa_achizitii', 'numar_factura', 'text|character varying'), ('upa_achizitii', 'data_factura', 'date'),
+      ('upa_achizitii', 'descriere', 'text|character varying'), ('upa_achizitii', 'document_path', 'text|character varying'),
+      ('upa_achizitii', 'created_by', 'uuid'),
       ('logistica_setari', 'key', 'text|character varying'), ('logistica_setari', 'value', 'text|character varying'),
       ('logistica_furnizori', 'nume', 'text|character varying'), ('logistica_furnizori', 'este_upa', 'boolean'),
       ('logistica_furnizori', 'activ', 'boolean'), ('logistica_furnizori', 'upa_valabil_pana', 'date'),
@@ -220,6 +243,7 @@ CREATE TABLE public.upa_alerta_jurnal (
   zile_ramase integer,
   nr_destinatari integer NOT NULL DEFAULT 0,
   nr_notificari integer NOT NULL DEFAULT 0,
+  nr_dest_ignorati integer NOT NULL DEFAULT 0,
   stare text NOT NULL,
   eroare text,
   resend_id text,
@@ -236,10 +260,11 @@ CREATE TABLE public.upa_alerta_jurnal (
   CONSTRAINT upa_alerta_jurnal_cod_eroare CHECK (eroare IS NULL OR eroare ~ '^[a-z0-9_]{1,60}$'),
   CONSTRAINT upa_alerta_jurnal_resend CHECK (resend_id IS NULL OR resend_id ~ '^[A-Za-z0-9_-]{1,100}$'),
   CONSTRAINT upa_alerta_jurnal_trimis CHECK ((stare = 'trimis') = (eroare IS NULL AND stare <> 'rezervat') OR stare = 'rezervat'),
-  CONSTRAINT upa_alerta_jurnal_dest CHECK (nr_destinatari BETWEEN 0 AND 10 AND (stare <> 'rezervat' OR nr_destinatari > 0))
+  CONSTRAINT upa_alerta_jurnal_dest CHECK (nr_destinatari BETWEEN 0 AND 10 AND (stare <> 'rezervat' OR nr_destinatari > 0)),
+  CONSTRAINT upa_alerta_jurnal_ignorati CHECK (nr_dest_ignorati >= 0)
 );
 CREATE INDEX upa_alerta_jurnal_creat_idx ON public.upa_alerta_jurnal (creat_la DESC);
-COMMENT ON TABLE public.upa_alerta_jurnal IS 'UPA (20261229a): jurnalul alertei fondului de handicap (o rezervare pe cheie: zilnic:<zi> / inchidere:<luna> / eroare:<zi>:<cod>). rezervat -> trimis / eroare / necunoscut (fara retrimitere automata); fara_mail = destinatari lipsa / invalizi. Scris doar prin RPC-uri.';
+COMMENT ON TABLE public.upa_alerta_jurnal IS 'UPA (20261229a): jurnalul alertei fondului de handicap (o rezervare pe cheie: zilnic:<zi> / inchidere:<luna> / eroare:<zi>:<cod>). rezervat -> trimis / eroare / necunoscut (fara retrimitere automata); fara_mail = fara destinatari interni; nr_dest_ignorati = adresele din setari ignorate (alt domeniu / invalide, nu primesc nimic). Scris doar prin RPC-uri.';
 
 -- instantaneul unei luni închise nu se schimbă pe nicio cale (L07)
 CREATE FUNCTION public.fn_upa_luna_inchisa_nemodificabil() RETURNS trigger
@@ -307,23 +332,44 @@ REVOKE ALL ON FUNCTION public.fn_upa_luni(date, integer) FROM PUBLIC, anon, auth
 GRANT EXECUTE ON FUNCTION public.fn_upa_luni(date, integer) TO authenticated;
 COMMENT ON FUNCTION public.fn_upa_luni(date, integer) IS 'UPA (20261229a): situatia pe luni (plafonul lunii, cheltuit, inchiderea; pentru luna curenta zilele ramase, pragul si in_alerta). Definitia unica a alertei: ecran + fn_upa_alerta_rezerva.';
 
--- destinatarii mailului din upa_alerta_emails: lista separată prin virgulă; '' / NULL = fără destinatari ('{}'); ORICE adresă invalidă sau în
---   afara @gazpet.ro, ori peste 10 adrese = NULL (lista refuzată întreagă, fail-closed). Litere mici, fără dubluri, ordinea păstrată.
-CREATE FUNCTION public.fn_upa_destinatari(p_text text) RETURNS text[]
+-- destinatarii mailului din upa_alerta_emails (runda 3, decizia owner-ului: DOAR adrese interne): lista separată prin virgulă, litere mici,
+--   fără dubluri, ordinea păstrată. interni = adresele @gazpet.ro (forma ^[a-z0-9._%+-]{1,64}@gazpet[.]ro$, ancorată: nici subdomenii, nici
+--   „@gazpet.ro.altceva”); peste 10 interne = NULL (lista refuzată întreagă, fail-closed). ignorate = tot restul (alt domeniu, formă invalidă,
+--   cel mult 200 de caractere fiecare): NU primesc nimic; numărul lor se jurnalizează. '' / NULL = ambele goale. Definiția unică (L19) pentru
+--   rezervare și probă; edge-ul reverifică domeniul înainte de trimitere (DOMENIU_INTERN, aceeași formă, paritate testată).
+CREATE FUNCTION public.fn_upa_destinatari(p_text text, OUT interni text[], OUT ignorate text[])
 LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $f$
-DECLARE v_e text; v_rez text[] := '{}';
+DECLARE v_e text;
 BEGIN
-  IF p_text IS NULL OR btrim(p_text) = '' THEN RETURN v_rez; END IF;
+  interni := '{}'; ignorate := '{}';
+  IF p_text IS NULL OR btrim(p_text) = '' THEN RETURN; END IF;
   FOREACH v_e IN ARRAY string_to_array(p_text, ',') LOOP
     v_e := lower(btrim(v_e));
     IF v_e = '' THEN CONTINUE; END IF;
-    IF v_e !~ '^[a-z0-9._%+-]{1,64}@gazpet[.]ro$' THEN RETURN NULL; END IF;
-    IF NOT (v_e = ANY (v_rez)) THEN v_rez := v_rez || v_e; END IF;
+    IF v_e ~ '^[a-z0-9._%+-]{1,64}@gazpet[.]ro$' THEN
+      IF NOT (v_e = ANY (interni)) THEN interni := interni || v_e; END IF;
+    ELSIF NOT (left(v_e, 200) = ANY (ignorate)) THEN
+      ignorate := ignorate || left(v_e, 200);
+    END IF;
   END LOOP;
-  IF cardinality(v_rez) > 10 THEN RETURN NULL; END IF;
-  RETURN v_rez;
+  IF cardinality(interni) > 10 THEN interni := NULL; END IF;
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_upa_destinatari(text) FROM PUBLIC, anon, authenticated, service_role;
+
+-- ── Salvarea idempotentă a unei achiziții din formular (runda 3: L04 / L05 / L16, P1 + P2 din review) ──
+-- câmpurile SEMANTICE ale intenției = singurele pe care le primește fn_upa_achizitie_adauga și singurele din amprentă (definiția unică, L19)
+CREATE FUNCTION public.fn_upa_campuri_intentie() RETURNS text[]
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
+  SELECT ARRAY['furnizor_id', 'furnizor_nume', 'numar_factura', 'data_factura', 'luna', 'valoare', 'descriere', 'document_path']::text[]
+$f$;
+REVOKE ALL ON FUNCTION public.fn_upa_campuri_intentie() FROM PUBLIC, anon, authenticated, service_role;
+-- amprenta intenției: md5 pe obiectul jsonb cu EXACT câmpurile de mai sus (lipsă = null), din rândul TIPIZAT (to_jsonb pe un rând
+--   upa_achizitii: aceleași tipuri și aceeași formă canonică la trigger și la RPC)
+CREATE FUNCTION public.fn_upa_hash_intentie(p jsonb) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
+  SELECT md5(jsonb_object_agg(k.k, p -> k.k)::text) FROM unnest(public.fn_upa_campuri_intentie()) AS k(k)
+$f$;
+REVOKE ALL ON FUNCTION public.fn_upa_hash_intentie(jsonb) FROM PUBLIC, anon, authenticated, service_role;
 
 -- sumele în lei, ca în ecran / mail (7.000,00); luna în română (noiembrie 2026); „N zile” cu acordul românesc (20 de zile)
 CREATE FUNCTION public.fn_upa_lei(p numeric) RETURNS text
@@ -380,21 +426,24 @@ COMMENT ON FUNCTION public.fn_upa_plafon_seteaza(numeric, numeric) IS 'UPA (2026
 -- ─── 5. Alerta: înscrierea unui rând + notificările (intern) ─────────────────────────────────────────────────────────────
 -- Un rând nou în jurnal (ON CONFLICT DO NOTHING: aceeași cheie = nimic, nici notificări); notificările în aplicație pleacă în aceeași
 --   instrucțiune, doar pentru rândul nou: owner-ii + cei cu administrativ / administrativ.upa (orice nivel); la 'eroare' doar owner-ii.
+-- p_dest = adresele INTERNE (fn_upa_destinatari.interni; NULL = peste 10), p_ignorati = câte adrese din setări au fost ignorate (jurnalizat).
 CREATE FUNCTION public.fn_upa_alerta_inscrie(p_fel text, p_zi date, p_luna date, p_plafon numeric, p_consumat numeric, p_ramas numeric,
-                                             p_zile integer, p_dest text[], p_cod text) RETURNS bigint
+                                             p_zile integer, p_dest text[], p_ignorati integer, p_cod text) RETURNS bigint
 LANGUAGE plpgsql VOLATILE SET search_path = public, pg_temp AS $f$
 DECLARE v_id bigint; v_cheie text; v_stare text; v_eroare text; v_nd integer := 0; v_tip text; v_titlu text; v_mesaj text; v_n integer;
+        v_ign integer := greatest(coalesce(p_ignorati, 0), 0);
 BEGIN
   v_cheie := CASE p_fel WHEN 'zilnic' THEN 'zilnic:' || to_char(p_zi, 'YYYY-MM-DD')
                         WHEN 'inchidere' THEN 'inchidere:' || to_char(p_luna, 'YYYY-MM')
                         ELSE 'eroare:' || to_char(p_zi, 'YYYY-MM-DD') || ':' || p_cod END;
-  IF p_fel = 'eroare' THEN v_stare := 'eroare'; v_eroare := p_cod;
-  ELSIF p_dest IS NULL THEN v_stare := 'fara_mail'; v_eroare := 'destinatari_invalizi';
+  IF p_fel = 'eroare' THEN v_stare := 'eroare'; v_eroare := p_cod; v_ign := 0;
+  ELSIF p_dest IS NULL THEN v_stare := 'fara_mail'; v_eroare := 'prea_multi_destinatari';
+  ELSIF cardinality(p_dest) = 0 AND v_ign > 0 THEN v_stare := 'fara_mail'; v_eroare := 'doar_destinatari_externi';
   ELSIF cardinality(p_dest) = 0 THEN v_stare := 'fara_mail'; v_eroare := 'fara_destinatari';
   ELSE v_stare := 'rezervat'; v_nd := cardinality(p_dest);
   END IF;
-  INSERT INTO public.upa_alerta_jurnal AS j (cheie, fel, zi, luna, plafon, consumat, ramas, zile_ramase, nr_destinatari, stare, eroare)
-  VALUES (v_cheie, p_fel, p_zi, p_luna, p_plafon, p_consumat, p_ramas, p_zile, v_nd, v_stare, v_eroare)
+  INSERT INTO public.upa_alerta_jurnal AS j (cheie, fel, zi, luna, plafon, consumat, ramas, zile_ramase, nr_destinatari, nr_dest_ignorati, stare, eroare)
+  VALUES (v_cheie, p_fel, p_zi, p_luna, p_plafon, p_consumat, p_ramas, p_zile, v_nd, v_ign, v_stare, v_eroare)
   ON CONFLICT (cheie) DO NOTHING
   RETURNING j.id INTO v_id;
   IF v_id IS NULL THEN RETURN NULL; END IF;
@@ -426,7 +475,7 @@ BEGIN
   UPDATE public.upa_alerta_jurnal j SET nr_notificari = v_n WHERE j.id = v_id;
   RETURN v_id;
 END $f$;
-REVOKE ALL ON FUNCTION public.fn_upa_alerta_inscrie(text, date, date, numeric, numeric, numeric, integer, text[], text) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_upa_alerta_inscrie(text, date, date, numeric, numeric, numeric, integer, text[], integer, text) FROM PUBLIC, anon, authenticated, service_role;
 
 -- ─── 6. Alerta: rezervarea zilei (intern, cu ziua dată; cronul trece prin fn_upa_alerta_rezerva = ziua din România) ───────
 -- (1) reconcilierea rezervărilor rămase (> 1 h -> necunoscut, fără retrimitere); (2) închiderea lunii anterioare dacă nu e închisă (independent
@@ -436,8 +485,8 @@ REVOKE ALL ON FUNCTION public.fn_upa_alerta_inscrie(text, date, date, numeric, n
 --   validați) — nu un set, ca plafonul max-rows al PostgREST să nu-l poată tăia.
 CREATE FUNCTION public.fn_upa_alerta_rezerva_la(p_azi date) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SET search_path = public, pg_temp AS $f$
-DECLARE v_activ boolean; v_dest text[]; v_c record; v_a record; v_l date; v_ids bigint[] := '{}'; v_id bigint; v_rez jsonb; v_inchis jsonb := NULL;
-        v_furn jsonb; v_reconciliate integer; v_cfg text[]; v_cod text;
+DECLARE v_activ boolean; v_dest text[]; v_ign integer; v_c record; v_a record; v_l date; v_ids bigint[] := '{}'; v_id bigint; v_rez jsonb;
+        v_inchis jsonb := NULL; v_furn jsonb; v_reconciliate integer; v_cfg text[]; v_cod text;
 BEGIN
   IF p_azi IS NULL THEN RAISE EXCEPTION 'upa: ziua lipseste' USING ERRCODE = '22023'; END IF;
   PERFORM pg_advisory_xact_lock(hashtext('upa_alerta_jurnal'));
@@ -445,7 +494,9 @@ BEGIN
    WHERE j.stare = 'rezervat' AND j.creat_la < now() - interval '1 hour';
   GET DIAGNOSTICS v_reconciliate = ROW_COUNT;
   v_activ := (SELECT s.value FROM public.logistica_setari s WHERE s.key = 'upa_alerta_activa') IS NOT DISTINCT FROM 'true';
-  v_dest := public.fn_upa_destinatari((SELECT s.value FROM public.logistica_setari s WHERE s.key = 'upa_alerta_emails'));
+  -- doar adresele interne primesc mail; cele ignorate se numără (jurnal + răspuns), fără adrese
+  SELECT d.interni, cardinality(d.ignorate) INTO v_dest, v_ign
+    FROM public.fn_upa_destinatari((SELECT s.value FROM public.logistica_setari s WHERE s.key = 'upa_alerta_emails')) d;
   SELECT * INTO v_c FROM public.fn_upa_luni(p_azi, 2) f WHERE f.e_curenta;
   SELECT * INTO v_a FROM public.fn_upa_luni(p_azi, 2) f WHERE NOT f.e_curenta;
   v_cfg := public.fn_upa_erori_config(v_c.zi_prag, v_c.plafon);
@@ -458,24 +509,24 @@ BEGIN
     IF v_l IS NOT NULL THEN
       v_inchis := jsonb_build_object('luna', v_a.luna, 'plafon', v_a.plafon, 'consumat', v_a.consumat, 'ramas', greatest(v_a.plafon - v_a.consumat, 0));
       IF v_activ AND v_a.plafon > v_a.consumat THEN
-        v_id := public.fn_upa_alerta_inscrie('inchidere', p_azi, v_a.luna, v_a.plafon, v_a.consumat, v_a.plafon - v_a.consumat, NULL, v_dest, NULL);
+        v_id := public.fn_upa_alerta_inscrie('inchidere', p_azi, v_a.luna, v_a.plafon, v_a.consumat, v_a.plafon - v_a.consumat, NULL, v_dest, v_ign, NULL);
         IF v_id IS NOT NULL THEN v_ids := v_ids || v_id; END IF;
       END IF;
     END IF;
   END IF;
   IF NOT v_activ THEN
     RETURN jsonb_build_object('activ', false, 'zi', p_azi, 'inchis', v_inchis, 'reconciliate', v_reconciliate, 'erori_config', to_jsonb(v_cfg),
-                              'n', 0, 'randuri', '[]'::jsonb);
+                              'destinatari_ignorati', v_ign, 'n', 0, 'randuri', '[]'::jsonb);
   END IF;
   -- (4) erorile de configurare: în jurnal (+ notificarea owner-ului) o dată pe zi și cod; în răspuns la fiecare rulare (erori_config).
   --   O lună anterioară FĂRĂ plafon nu e o eroare: fn_upa_plafon_la caută înapoi fără limită, deci NULL înseamnă că luna e dinaintea primului
   --   plafon înregistrat (de ex. luna dinaintea aplicării) — nu se închide, iar ecranul o arată „plafon neînregistrat”.
   FOREACH v_cod IN ARRAY v_cfg LOOP
-    PERFORM public.fn_upa_alerta_inscrie('eroare', p_azi, v_c.luna, NULL, v_c.consumat, NULL, NULL, NULL, v_cod);
+    PERFORM public.fn_upa_alerta_inscrie('eroare', p_azi, v_c.luna, NULL, v_c.consumat, NULL, NULL, NULL, NULL, v_cod);
   END LOOP;
   IF cardinality(v_cfg) = 0 AND v_c.in_alerta IS TRUE THEN
     -- (5) alerta zilei: cel mult una pe zi (cheia zilnic:<zi>)
-    v_id := public.fn_upa_alerta_inscrie('zilnic', p_azi, v_c.luna, v_c.plafon, v_c.consumat, v_c.plafon - v_c.consumat, v_c.zile_ramase, v_dest, NULL);
+    v_id := public.fn_upa_alerta_inscrie('zilnic', p_azi, v_c.luna, v_c.plafon, v_c.consumat, v_c.plafon - v_c.consumat, v_c.zile_ramase, v_dest, v_ign, NULL);
     IF v_id IS NOT NULL THEN v_ids := v_ids || v_id; END IF;
   END IF;
   -- furnizorii UPA activi cu autorizația valabilă (doar numele; pentru mail)
@@ -485,10 +536,11 @@ BEGIN
              AND fz.nume IS NOT NULL ORDER BY 1 LIMIT 15) f;
   SELECT coalesce(jsonb_agg(jsonb_build_object('id', j.id, 'cheie', j.cheie, 'fel', j.fel, 'luna', j.luna, 'plafon', j.plafon, 'consumat', j.consumat,
                                                'ramas', j.ramas, 'zile_ramase', j.zile_ramase, 'stare', j.stare, 'eroare', j.eroare,
+                                               'dest_ignorati', j.nr_dest_ignorati,
                                                'destinatari', CASE WHEN j.stare = 'rezervat' THEN to_jsonb(v_dest) ELSE '[]'::jsonb END) ORDER BY j.id), '[]'::jsonb)
     INTO v_rez FROM public.upa_alerta_jurnal j WHERE j.id = ANY (v_ids);
   RETURN jsonb_build_object('activ', true, 'zi', p_azi, 'inchis', v_inchis, 'reconciliate', v_reconciliate, 'furnizori_upa', v_furn,
-                            'erori_config', to_jsonb(v_cfg), 'n', jsonb_array_length(v_rez), 'randuri', v_rez);
+                            'erori_config', to_jsonb(v_cfg), 'destinatari_ignorati', v_ign, 'n', jsonb_array_length(v_rez), 'randuri', v_rez);
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_upa_alerta_rezerva_la(date) FROM PUBLIC, anon, authenticated, service_role;
 
@@ -503,11 +555,12 @@ COMMENT ON FUNCTION public.fn_upa_alerta_rezerva() IS 'UPA (20261229a): edge upa
 -- ce s-ar face azi, FĂRĂ nicio scriere (?dry=1 al owner-ului): aceleași predicate (fn_upa_luni + fn_upa_destinatari)
 CREATE FUNCTION public.fn_upa_alerta_proba() RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_azi date := (now() AT TIME ZONE 'Europe/Bucharest')::date; v_c record; v_a record; v_dest text[];
+DECLARE v_azi date := (now() AT TIME ZONE 'Europe/Bucharest')::date; v_c record; v_a record; v_dest text[]; v_ignorate text[];
 BEGIN
   SELECT * INTO v_c FROM public.fn_upa_luni(v_azi, 2) f WHERE f.e_curenta;
   SELECT * INTO v_a FROM public.fn_upa_luni(v_azi, 2) f WHERE NOT f.e_curenta;
-  v_dest := public.fn_upa_destinatari((SELECT s.value FROM public.logistica_setari s WHERE s.key = 'upa_alerta_emails'));
+  SELECT d.interni, d.ignorate INTO v_dest, v_ignorate
+    FROM public.fn_upa_destinatari((SELECT s.value FROM public.logistica_setari s WHERE s.key = 'upa_alerta_emails')) d;
   RETURN jsonb_build_object(
     'zi', v_azi,
     'activ', (SELECT s.value FROM public.logistica_setari s WHERE s.key = 'upa_alerta_activa') IS NOT DISTINCT FROM 'true',
@@ -515,7 +568,9 @@ BEGIN
     'erori_config', to_jsonb(public.fn_upa_erori_config(v_c.zi_prag, v_c.plafon)),
     'alerta_azi_deja', EXISTS (SELECT 1 FROM public.upa_alerta_jurnal j WHERE j.cheie = 'zilnic:' || to_char(v_azi, 'YYYY-MM-DD')),
     'luna_anterioara', v_a.luna, 'luna_anterioara_inchisa', v_a.inchisa, 'luna_anterioara_plafon', v_a.plafon, 'luna_anterioara_consumat', v_a.consumat,
-    'destinatari_valizi', v_dest IS NOT NULL, 'destinatari', coalesce(to_jsonb(v_dest), '[]'::jsonb));
+    'destinatari_valizi', v_dest IS NOT NULL, 'destinatari', coalesce(to_jsonb(v_dest), '[]'::jsonb),
+    -- doar în proba owner-ului: adresele ignorate (alt domeniu / invalide), ca să poată corecta setarea
+    'destinatari_ignorate', to_jsonb(v_ignorate));
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_upa_alerta_proba() FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_upa_alerta_proba() TO service_role;
@@ -570,6 +625,65 @@ END $pol$;
 ALTER TABLE public.upa_achizitii ADD COLUMN cheie_intentie uuid;
 ALTER TABLE public.upa_achizitii ADD CONSTRAINT upa_achizitii_cheie_intentie_uidx UNIQUE (cheie_intentie);
 COMMENT ON COLUMN public.upa_achizitii.cheie_intentie IS 'UPA (20261229a): cheia de intentie a salvarii din formular (reincercarea cu aceeasi cheie nu dubleaza); NULL = alta cale.';
+-- runda 3: amprenta DURABILĂ a valorilor intenției (pusă de server, nemodificabilă împreună cu cheia; NULL <=> cheie NULL)
+ALTER TABLE public.upa_achizitii ADD COLUMN hash_intentie text;
+ALTER TABLE public.upa_achizitii ADD CONSTRAINT upa_achizitii_hash_intentie_cu_cheie CHECK ((cheie_intentie IS NULL) = (hash_intentie IS NULL));
+COMMENT ON COLUMN public.upa_achizitii.hash_intentie IS 'UPA (20261229a): md5 pe campurile semantice ale intentiei (fn_upa_hash_intentie), pus de trigger la INSERT; nemodificabil.';
+-- INSERT: amprenta din rândul care se scrie (orice valoare trimisă de client e înlocuită, L08); UPDATE: cheia și amprenta nu se schimbă
+--   (amprenta rămâne cea a intenției salvate, chiar dacă rândul e corectat ulterior). Nu blochează nimic în afara rândului.
+CREATE FUNCTION public.fn_upa_achizitii_intentie() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.hash_intentie := CASE WHEN NEW.cheie_intentie IS NULL THEN NULL ELSE public.fn_upa_hash_intentie(to_jsonb(NEW)) END;
+  ELSIF NEW.cheie_intentie IS DISTINCT FROM OLD.cheie_intentie OR NEW.hash_intentie IS DISTINCT FROM OLD.hash_intentie THEN
+    RAISE EXCEPTION 'upa: cheia si amprenta intentiei nu se modifica' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_upa_achizitii_intentie() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER trg_upa_achizitii_intentie BEFORE INSERT OR UPDATE ON public.upa_achizitii
+  FOR EACH ROW EXECUTE FUNCTION public.fn_upa_achizitii_intentie();
+-- salvarea din formular. SECURITY INVOKER: citirea după cheie și adăugarea trec prin politicile tabelului, ca apelantul (L07 / L08).
+--   (1) cheia există: aceeași amprentă -> 'existent' (fără să ceară dreptul de scriere: reluarea unei salvări intrate, cu răspunsul pierdut,
+--       nu poate deveni „refuzată” pentru că dreptul s-a retras între timp — runda 3 P1); altă amprentă -> UPA02 (nimic scris);
+--   (2) altfel INSERT .. ON CONFLICT (cheie_intentie) DO NOTHING RETURNING (dreptul și regulile tabelului se aplică AICI: 42501 / 23514);
+--       o inserare concurentă cu aceeași cheie -> recitire (1). 40001 = conflict fără rând vizibil (n-ar trebui să se întâmple).
+-- Lock-uri (L06): doar rândul nou din upa_achizitii (și așteptarea pe indexul UNIQUE al cheii la o inserare concurentă).
+CREATE FUNCTION public.fn_upa_achizitie_adauga(p_cheie uuid, p_rand jsonb) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SET search_path = public, pg_temp AS $f$
+DECLARE v_r public.upa_achizitii; v_hash text; v_ex record; v_id bigint; v_k text;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'upa: cont neautentificat' USING ERRCODE = '42501'; END IF;
+  IF p_cheie IS NULL OR p_rand IS NULL OR jsonb_typeof(p_rand) IS DISTINCT FROM 'object' THEN
+    RAISE EXCEPTION 'upa: cheia si campurile achizitiei sunt obligatorii' USING ERRCODE = '22023';
+  END IF;
+  SELECT k.k INTO v_k FROM jsonb_object_keys(p_rand) AS k(k) WHERE NOT (k.k = ANY (public.fn_upa_campuri_intentie())) LIMIT 1;
+  IF v_k IS NOT NULL THEN RAISE EXCEPTION 'upa: camp nepermis in achizitie (%)', left(v_k, 40) USING ERRCODE = '22023'; END IF;
+  v_r := jsonb_populate_record(NULL::public.upa_achizitii, p_rand);
+  v_hash := public.fn_upa_hash_intentie(to_jsonb(v_r));
+  FOR v_pas IN 1..2 LOOP
+    SELECT a.id, a.hash_intentie INTO v_ex FROM public.upa_achizitii a WHERE a.cheie_intentie = p_cheie;
+    IF FOUND THEN
+      IF v_ex.hash_intentie IS DISTINCT FROM v_hash THEN
+        RAISE EXCEPTION 'upa: cheia intentiei exista deja cu alte valori; nimic scris' USING ERRCODE = 'UPA02';
+      END IF;
+      RETURN jsonb_build_object('stare', 'existent', 'id', v_ex.id);
+    END IF;
+    EXIT WHEN v_pas = 2;
+    INSERT INTO public.upa_achizitii AS a (furnizor_id, furnizor_nume, numar_factura, data_factura, luna, valoare, descriere, document_path,
+                                           cheie_intentie, created_by)
+    VALUES (v_r.furnizor_id, v_r.furnizor_nume, v_r.numar_factura, v_r.data_factura, v_r.luna, v_r.valoare, v_r.descriere, v_r.document_path,
+            p_cheie, auth.uid())
+    ON CONFLICT (cheie_intentie) DO NOTHING
+    RETURNING a.id INTO v_id;
+    IF v_id IS NOT NULL THEN RETURN jsonb_build_object('stare', 'nou', 'id', v_id); END IF;
+  END LOOP;
+  RAISE EXCEPTION 'upa: cheia intentiei in conflict, fara rand vizibil; reincearca' USING ERRCODE = '40001';
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_upa_achizitie_adauga(uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_upa_achizitie_adauga(uuid, jsonb) TO authenticated;
+COMMENT ON FUNCTION public.fn_upa_achizitie_adauga(uuid, jsonb) IS 'UPA (20261229a): salvarea idempotenta din formular (cheie de intentie + amprenta durabila). existent / nou; UPA02 = aceeasi cheie, alte valori. SECURITY INVOKER.';
 
 -- ─── 9. Plafonul lunii curente = valoarea de azi din logistica_setari ─────────────────────────────────────────────────────
 INSERT INTO public.upa_plafon_lunar (luna, plafon, setat_de, setat_la, sursa)
@@ -626,6 +740,16 @@ BEGIN
                       AND k.contype = 'u' AND pg_get_constraintdef(k.oid) = 'UNIQUE (cheie_intentie)') THEN
     RAISE EXCEPTION '20261229a post: upa_achizitii.cheie_intentie (uuid, NULL permis, UNIQUE)';
   END IF;
+  -- amprenta intenției: coloana text, CHECK-ul exact, triggerul exact (BEFORE INSERT OR UPDATE, pe rând, activ, fără WHEN / argumente / coloane)
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.upa_achizitii'::regclass AND a.attname = 'hash_intentie' AND NOT a.attisdropped
+                   AND a.atttypid = 'text'::regtype AND NOT a.attnotnull AND a.attacl IS NULL)
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = 'public.upa_achizitii'::regclass AND k.conname = 'upa_achizitii_hash_intentie_cu_cheie'
+                      AND k.contype = 'c' AND k.convalidated AND pg_get_constraintdef(k.oid) = 'CHECK (((cheie_intentie IS NULL) = (hash_intentie IS NULL)))')
+     OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.upa_achizitii'::regclass AND t.tgname = 'trg_upa_achizitii_intentie'
+           AND NOT t.tgisinternal AND t.tgenabled = 'O' AND t.tgfoid = 'public.fn_upa_achizitii_intentie()'::regprocedure AND t.tgtype = 23
+           AND t.tgqual IS NULL AND t.tgnargs = 0 AND coalesce(array_length(t.tgattr::int2[], 1), 0) = 0) <> 1 THEN
+    RAISE EXCEPTION '20261229a post: upa_achizitii.hash_intentie (coloana / CHECK / trigger)';
+  END IF;
   -- funcțiile noi: limbaj, definer, volatilitate, search_path, proprietar, drepturile EXACTE
   FOR r IN SELECT * FROM (VALUES
       ('public.fn_upa_poate_scrie()', 'sql', true, 's', 'authenticated:EXECUTE, postgres:EXECUTE'),
@@ -637,12 +761,16 @@ BEGIN
       ('public.fn_upa_zile_text(integer)', 'sql', false, 'i', 'postgres:EXECUTE'),
       ('public.fn_upa_erori_config(integer,numeric)', 'sql', false, 'i', 'postgres:EXECUTE'),
       ('public.fn_upa_plafon_seteaza(numeric,numeric)', 'plpgsql', true, 'v', 'authenticated:EXECUTE, postgres:EXECUTE'),
-      ('public.fn_upa_alerta_inscrie(text,date,date,numeric,numeric,numeric,integer,text[],text)', 'plpgsql', false, 'v', 'postgres:EXECUTE'),
+      ('public.fn_upa_alerta_inscrie(text,date,date,numeric,numeric,numeric,integer,text[],integer,text)', 'plpgsql', false, 'v', 'postgres:EXECUTE'),
       ('public.fn_upa_alerta_rezerva_la(date)', 'plpgsql', false, 'v', 'postgres:EXECUTE'),
       ('public.fn_upa_alerta_rezerva()', 'sql', true, 'v', 'postgres:EXECUTE, service_role:EXECUTE'),
       ('public.fn_upa_alerta_proba()', 'plpgsql', true, 's', 'postgres:EXECUTE, service_role:EXECUTE'),
       ('public.fn_upa_alerta_marcheaza(bigint,text,text,text)', 'plpgsql', true, 'v', 'postgres:EXECUTE, service_role:EXECUTE'),
-      ('public.fn_upa_luna_inchisa_nemodificabil()', 'plpgsql', false, 'v', 'postgres:EXECUTE')
+      ('public.fn_upa_luna_inchisa_nemodificabil()', 'plpgsql', false, 'v', 'postgres:EXECUTE'),
+      ('public.fn_upa_campuri_intentie()', 'sql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_upa_hash_intentie(jsonb)', 'sql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_upa_achizitii_intentie()', 'plpgsql', false, 'v', 'postgres:EXECUTE'),
+      ('public.fn_upa_achizitie_adauga(uuid,jsonb)', 'plpgsql', false, 'v', 'authenticated:EXECUTE, postgres:EXECUTE')
     ) v(fn, limbaj, definer, volatil, acl) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
                     WHERE p.oid = to_regprocedure(r.fn) AND l.lanname = r.limbaj AND p.prosecdef = r.definer AND p.provolatile = r.volatil
@@ -659,8 +787,8 @@ BEGIN
   SELECT count(*) INTO v_n FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (ARRAY['fn_upa_poate_scrie', 'fn_upa_plafon_la',
     'fn_upa_luni', 'fn_upa_destinatari', 'fn_upa_lei', 'fn_upa_luna_text', 'fn_upa_zile_text', 'fn_upa_erori_config', 'fn_upa_plafon_seteaza',
     'fn_upa_alerta_inscrie', 'fn_upa_alerta_rezerva_la', 'fn_upa_alerta_rezerva', 'fn_upa_alerta_proba', 'fn_upa_alerta_marcheaza',
-    'fn_upa_luna_inchisa_nemodificabil']);
-  IF v_n <> 15 THEN RAISE EXCEPTION '20261229a post: % functii cu numele noi (asteptat 15)', v_n; END IF;
+    'fn_upa_luna_inchisa_nemodificabil', 'fn_upa_campuri_intentie', 'fn_upa_hash_intentie', 'fn_upa_achizitii_intentie', 'fn_upa_achizitie_adauga']);
+  IF v_n <> 19 THEN RAISE EXCEPTION '20261229a post: % functii cu numele noi (asteptat 19)', v_n; END IF;
   -- triggerul de nemodificare
   IF (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.upa_luna_inchisa'::regclass AND NOT t.tgisinternal) <> 1
      OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.upa_luna_inchisa'::regclass AND t.tgname = 'trg_upa_luna_inchisa_nemodificabil'
@@ -683,9 +811,20 @@ BEGIN
      OR public.fn_upa_zile_text(6) IS DISTINCT FROM 'mai sunt 6 zile' OR public.fn_upa_zile_text(21) IS DISTINCT FROM 'mai sunt 21 de zile' THEN
     RAISE EXCEPTION '20261229a post: textele (lei / luna / zile)';
   END IF;
-  IF public.fn_upa_destinatari(' A@gazpet.ro, b@gazpet.ro ,a@gazpet.ro,') IS DISTINCT FROM ARRAY['a@gazpet.ro', 'b@gazpet.ro']
-     OR public.fn_upa_destinatari('a@gazpet.ro, x@altundeva.ro') IS NOT NULL OR public.fn_upa_destinatari('') IS DISTINCT FROM '{}'::text[] THEN
+  -- destinatarii: doar interni; restul ignorat (nu refuză lista); peste 10 interne = NULL
+  IF (SELECT d.interni = ARRAY['a@gazpet.ro', 'b@gazpet.ro'] AND d.ignorate = '{}'::text[]
+        FROM public.fn_upa_destinatari(' A@gazpet.ro, b@gazpet.ro ,a@gazpet.ro,') d) IS NOT TRUE
+     OR (SELECT d.interni = ARRAY['a@gazpet.ro'] AND d.ignorate = ARRAY['x@altundeva.ro', 'b@gazpet.ro.ro', 'c@sub.gazpet.ro', 'fara-arond']
+           FROM public.fn_upa_destinatari('a@gazpet.ro, X@altundeva.ro, b@gazpet.ro.ro, c@sub.gazpet.ro, fara-arond') d) IS NOT TRUE
+     OR (SELECT d.interni = '{}'::text[] AND d.ignorate = '{}'::text[] FROM public.fn_upa_destinatari('') d) IS NOT TRUE
+     OR (SELECT d.interni IS NULL FROM public.fn_upa_destinatari((SELECT string_agg('a' || g || '@gazpet.ro', ',') FROM generate_series(1, 11) g)) d) IS NOT TRUE THEN
     RAISE EXCEPTION '20261229a post: validarea destinatarilor';
+  END IF;
+  -- amprenta intenției: aceleași câmpuri, aceeași valoare pentru tipuri echivalente, alt câmp = altă amprentă
+  IF public.fn_upa_campuri_intentie() IS DISTINCT FROM ARRAY['furnizor_id', 'furnizor_nume', 'numar_factura', 'data_factura', 'luna', 'valoare', 'descriere', 'document_path']
+     OR public.fn_upa_hash_intentie('{"luna": "2031-05-01", "valoare": 10}') IS DISTINCT FROM public.fn_upa_hash_intentie('{"valoare": 10, "luna": "2031-05-01", "x": 1}')
+     OR public.fn_upa_hash_intentie('{"luna": "2031-05-01", "valoare": 10}') = public.fn_upa_hash_intentie('{"luna": "2031-05-01", "valoare": 10, "descriere": "x"}') THEN
+    RAISE EXCEPTION '20261229a post: amprenta intentiei';
   END IF;
   IF public.fn_upa_erori_config(25, 7000) IS DISTINCT FROM '{}'::text[] OR public.fn_upa_erori_config(NULL, 7000) IS DISTINCT FROM ARRAY['setare_zi_invalida']
      OR public.fn_upa_erori_config(25, NULL) IS DISTINCT FROM ARRAY['fara_plafon']
@@ -706,14 +845,18 @@ BEGIN
     UNION ALL
     SELECT 'col ' || c.relname || '.' || a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || ' nn=' || a.attnotnull || ' id=' || a.attidentity::text
            || ' gen=' || a.attgenerated::text || ' def=' || coalesce(pg_get_expr(d.adbin, d.adrelid), '-')
+           || ' acl=' || coalesce((SELECT string_agg(e.d, ',' ORDER BY e.d COLLATE "C") FROM (
+                SELECT CASE x.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(x.grantee) END || ':' || x.privilege_type
+                       || CASE WHEN x.is_grantable THEN '*' ELSE '' END AS d FROM aclexplode(a.attacl) x) e), '-')
       FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
      WHERE a.attnum > 0 AND NOT a.attisdropped AND c.relnamespace = 'public'::regnamespace
-       AND (c.relname IN ('upa_plafon_lunar', 'upa_luna_inchisa', 'upa_alerta_jurnal') OR (c.relname = 'upa_achizitii' AND a.attname = 'cheie_intentie'))
+       AND (c.relname IN ('upa_plafon_lunar', 'upa_luna_inchisa', 'upa_alerta_jurnal') OR (c.relname = 'upa_achizitii' AND a.attname IN ('cheie_intentie', 'hash_intentie')))
     UNION ALL
     SELECT 'con ' || c.relname || ' ' || k.conname || ' ' || k.contype::text || ' ' || pg_get_constraintdef(k.oid)
       FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
      WHERE k.contype <> 'n' AND c.relnamespace = 'public'::regnamespace
-       AND (c.relname IN ('upa_plafon_lunar', 'upa_luna_inchisa', 'upa_alerta_jurnal') OR (c.relname = 'upa_achizitii' AND k.conname = 'upa_achizitii_cheie_intentie_uidx'))
+       AND (c.relname IN ('upa_plafon_lunar', 'upa_luna_inchisa', 'upa_alerta_jurnal')
+            OR (c.relname = 'upa_achizitii' AND k.conname IN ('upa_achizitii_cheie_intentie_uidx', 'upa_achizitii_hash_intentie_cu_cheie')))
     UNION ALL
     SELECT 'idx ' || pg_get_indexdef(i.indexrelid) || ' own=' || pg_get_userbyid(ic.relowner)
       FROM pg_index i JOIN pg_class t ON t.oid = i.indrelid JOIN pg_class ic ON ic.oid = i.indexrelid
@@ -722,7 +865,14 @@ BEGIN
     UNION ALL
     SELECT 'trg ' || c.relname || ' ' || pg_get_triggerdef(t.oid) || ' en=' || t.tgenabled::text
       FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
-     WHERE NOT t.tgisinternal AND c.relnamespace = 'public'::regnamespace AND c.relname IN ('upa_plafon_lunar', 'upa_luna_inchisa', 'upa_alerta_jurnal')
+     WHERE NOT t.tgisinternal AND c.relnamespace = 'public'::regnamespace
+       AND (c.relname IN ('upa_plafon_lunar', 'upa_luna_inchisa', 'upa_alerta_jurnal') OR (c.relname = 'upa_achizitii' AND t.tgname = 'trg_upa_achizitii_intentie'))
+    UNION ALL
+    -- runda 3 (L14 / L15): ORICE obiect care depinde de coloanele noi din upa_achizitii (index / constrângere / statistică / vedere / politică /
+    --   trigger, oricum s-ar numi) — DROP COLUMN ar scoate tăcut dependențele automate, deci orice dependență în plus schimbă amprenta
+    SELECT 'dep ' || pg_describe_object(d.classid, d.objid, d.objsubid) || ' -> upa_achizitii.' || a.attname || ' ' || d.deptype::text
+      FROM pg_depend d JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+     WHERE d.refclassid = 'pg_class'::regclass AND d.refobjid = 'public.upa_achizitii'::regclass AND a.attname IN ('cheie_intentie', 'hash_intentie')
     UNION ALL
     SELECT 'pol ' || c.relname || ' ' || p.polname || ' ' || p.polcmd::text || ' perm=' || p.polpermissive
            || ' roles=' || coalesce((SELECT string_agg(rl.nume, ',' ORDER BY rl.nume COLLATE "C") FROM (
@@ -745,12 +895,13 @@ BEGIN
       FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_upa_poate_scrie', 'fn_upa_plafon_la', 'fn_upa_luni', 'fn_upa_destinatari',
              'fn_upa_lei', 'fn_upa_luna_text', 'fn_upa_zile_text', 'fn_upa_erori_config', 'fn_upa_plafon_seteaza', 'fn_upa_alerta_inscrie',
-             'fn_upa_alerta_rezerva_la', 'fn_upa_alerta_rezerva', 'fn_upa_alerta_proba', 'fn_upa_alerta_marcheaza', 'fn_upa_luna_inchisa_nemodificabil')
+             'fn_upa_alerta_rezerva_la', 'fn_upa_alerta_rezerva', 'fn_upa_alerta_proba', 'fn_upa_alerta_marcheaza', 'fn_upa_luna_inchisa_nemodificabil',
+             'fn_upa_campuri_intentie', 'fn_upa_hash_intentie', 'fn_upa_achizitii_intentie', 'fn_upa_achizitie_adauga')
   ) x;
   -- AMPRENTA_20261229a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '5cfb266b3a0b8376266318fffc7bf042' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'AMPRENTA_DE_CALCULAT' THEN
     RAISE NOTICE 'AMPRENTA_20261229a_TEXT %', v_amp;
-    RAISE EXCEPTION '20261229a post: AMPRENTA obiectelor % (asteptat 5cfb266b3a0b8376266318fffc7bf042)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20261229a post: AMPRENTA obiectelor % (asteptat AMPRENTA_DE_CALCULAT)', md5(coalesce(v_amp, ''));
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261229a_administrativ_upa_alerta:' || txid_current() THEN
     RAISE EXCEPTION '20261229a: garda final invalida';

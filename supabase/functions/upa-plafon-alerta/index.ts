@@ -6,7 +6,8 @@
 //   * de la ziua upa_alerta_zi până la sfârșitul lunii, cât cheltuit < plafonul lunii: „Fond handicap <luna>: cheltuit X din Y lei, rămân
 //     Z lei, mai sunt N zile” — cel mult un mail pe zi (cheia zilnic:<zi>, UNIQUE în BD);
 //   * notificările în aplicație (owner + administrativ / administrativ.upa) le pune BD-ul, odată cu rezervarea.
-// Destinatarii mailului: logistica_setari.upa_alerta_emails, validați în BD (doar @gazpet.ro, cel mult 10; o adresă invalidă = niciun mail).
+// Destinatarii mailului: logistica_setari.upa_alerta_emails, aleși în BD (doar adrese interne @gazpet.ro, cel mult 10); celelalte sunt
+//   ignorate (nu primesc nimic) și numărate în jurnal / răspuns; edge-ul reverifică domeniul înainte de trimitere (DOMENIU_INTERN).
 // Poarta: cronSauOwner (x-intern-secret din Vault sau owner-ul logat); verify_jwt NU ajunge (cheia anon e un JWT valid). ?dry=1 = ce s-ar face
 //   azi, fără nicio scriere. Erorile de business se scriu în BD (upa_alerta_jurnal + notificare owner) și se întorc, nu se aruncă.
 // Configurarea defectă (ziua pragului invalidă, plafon neînregistrat) = ok:false, error:'configurare_invalida' + erori_config, la FIECARE rulare.

@@ -2,13 +2,16 @@
 // Valorile așteptate sunt scrise de mână (nu din codul testat). Comportamentul real al BD-ului (pragul, o alertă pe zi, închiderea idempotentă)
 // e probat pe migrarea reală în scripts/pglite/test_upa_alerta_local.mjs; aici BD-ul simulat întoarce ce ar întoarce rezervarea în fiecare caz.
 import { describe, it, expect } from 'vitest'
-import { lei, lunaText, zileText, mailUpa, cheieIdempotenta, ruleazaAlertaUpa } from '../supabase/functions/_shared/upaAlerta.mjs'
+import { lei, lunaText, zileText, mailUpa, cheieIdempotenta, ruleazaAlertaUpa, ADRESA_INTERNA, DOMENIU_INTERN, destinatariValizi } from '../supabase/functions/_shared/upaAlerta.mjs'
 import { validaPlafon, avertismenteAchizitie, starePlafonLuna, lunaDinZi, luniInapoi, ziRO,
-         stareSalvare, citireDupaSalvare, conflictCheie, pdfExistaDeja, caleaPdf, ordineFurnizori } from './upaLogica.js'
+         stareSalvare, rezultatNesigur, poateScoatePdf, mesajRefuzAchizitie, CAMPURI_INTENTIE, numarFacturaUpa, refuzNumarFactura, mesajInsertUpa,
+         pdfExistaDeja, caleaPdf, ordineFurnizori, paginaCuGarda } from './upaLogica.js'
+import { paginareKeyset } from './hrDeciziiUtil.js'
 
 const ZILNIC = { id: 7, cheie: 'zilnic:2031-01-25', fel: 'zilnic', luna: '2031-01-01', plafon: 7000, consumat: 1500, ramas: 5500, zile_ramase: 7, stare: 'rezervat', destinatari: ['ana@gazpet.ro', 'ion@gazpet.ro'] }
 const INCHIDERE = { id: 8, cheie: 'inchidere:2030-12', fel: 'inchidere', luna: '2030-12-01', plafon: 6000, consumat: 2000, ramas: 4000, zile_ramase: null, stare: 'rezervat', destinatari: ['ana@gazpet.ro'] }
-const rez = (randuri, extra = {}) => ({ activ: true, zi: '2031-01-25', inchis: null, reconciliate: 0, furnizori_upa: ['UPA Unu SRL'], erori_config: [], n: randuri.length, randuri, ...extra })
+const rez = (randuri, extra = {}) => ({ activ: true, zi: '2031-01-25', inchis: null, reconciliate: 0, furnizori_upa: ['UPA Unu SRL'], erori_config: [],
+  destinatari_ignorati: 0, n: randuri.length, randuri, ...extra })
 
 // BD simulat: întoarce rezervările date, pe rând (o rulare = un apel), și înregistrează marcările
 function bdSimulat(rezervari, { marcare = 1, eroareRezervare = null } = {}) {
@@ -151,6 +154,27 @@ describe('edge-ul (ruleazaAlertaUpa) cu BD și Resend simulate', () => {
     }
     expect(rs.trimise).toHaveLength(0)
   })
+  it('runda 3: destinatari_ignorati lipsă / negativ / nenumăr = rezervare incompletă; altfel numărul ajunge în răspuns (fără adrese)', async () => {
+    const rs = resendSimulat()
+    for (const di of [undefined, null, -1, 1.5, '2']) {
+      const raspuns = await ruleazaAlertaUpa({ sb: bdSimulat([rez([], { destinatari_ignorati: di })]), fetchFn: rs.fetchFn, resendKey: 'k' })
+      expect(raspuns).toEqual({ status: 500, body: { ok: false, error: 'rezervare_incompleta' } })
+    }
+    const r = await ruleazaAlertaUpa({ sb: bdSimulat([rez([ZILNIC], { destinatari_ignorati: 2 })]), fetchFn: rs.fetchFn, resendKey: 'k' })
+    expect(r.body).toMatchObject({ ok: true, trimis: 1, destinatari_ignorati: 2 })
+    expect(rs.trimise[0].body.to).toEqual(['ana@gazpet.ro', 'ion@gazpet.ro'])
+    expect(JSON.stringify(r.body)).not.toMatch(/@/)
+  })
+  it('runda 3: domeniul intern (o singură constantă) — doar adrese @gazpet.ro, ancorat (nici subdomenii, nici sufixe)', () => {
+    expect(DOMENIU_INTERN).toBe('gazpet.ro')
+    for (const a of ['ana@gazpet.ro', 'a.b-c_d+e%f@gazpet.ro']) expect(ADRESA_INTERNA.test(a)).toBe(true)
+    for (const a of ['ana@gazpet.ro.ro', 'ana@sub.gazpet.ro', 'ana@gazpetxro', 'ana@yahoo.com', 'Ana@gazpet.ro', ' ana@gazpet.ro', 'ana@gazpet.ro\n', '@gazpet.ro'])
+      expect(ADRESA_INTERNA.test(a)).toBe(false)
+    expect(destinatariValizi(['ana@gazpet.ro'])).toBe(true)
+    expect(destinatariValizi(['ana@gazpet.ro', 'x@yahoo.com'])).toBe(false)   // una din afară = rândul nu pleacă deloc
+    expect(destinatariValizi([])).toBe(false)
+    expect(destinatariValizi(Array.from({ length: 11 }, (_, i) => `a${i}@gazpet.ro`))).toBe(false)
+  })
   it('configurarea defectă: ok:false + configurare_invalida + codurile, la fiecare rulare (L18)', async () => {
     const sb = bdSimulat([rez([], { erori_config: ['setare_zi_invalida'] }), rez([], { erori_config: ['setare_zi_invalida'] }),
       rez([INCHIDERE], { erori_config: ['setare_zi_invalida', 'fara_plafon'] })]), rs = resendSimulat()
@@ -172,14 +196,14 @@ describe('edge-ul (ruleazaAlertaUpa) cu BD și Resend simulate', () => {
     expect(r.body).not.toHaveProperty('error')
   })
   it('alerta oprită: skip, niciun mail', async () => {
-    const sb = bdSimulat([{ activ: false, zi: '2031-01-25', inchis: null, erori_config: [], n: 0, randuri: [] }]), rs = resendSimulat()
+    const sb = bdSimulat([{ activ: false, zi: '2031-01-25', inchis: null, erori_config: [], destinatari_ignorati: 0, n: 0, randuri: [] }]), rs = resendSimulat()
     const r = await ruleazaAlertaUpa({ sb, fetchFn: rs.fetchFn, resendKey: 'k' })
     expect(r.body).toMatchObject({ ok: true, skip: 'alerta_oprita' })
     expect(rs.trimise).toHaveLength(0)
   })
-  it('rânduri fără mail (destinatari invalizi în BD) nu pleacă; destinatari stricați în rezervare = eroare marcată, nimic trimis', async () => {
-    const faraMail = { ...ZILNIC, stare: 'fara_mail', eroare: 'destinatari_invalizi', destinatari: [] }
-    const stricat = { ...ZILNIC, id: 9, destinatari: ['cineva@yahoo.com'] }
+  it('rânduri fără mail (doar adrese externe în setări) nu pleacă; o adresă externă în rezervare = eroare marcată, nimic trimis NIMĂNUI', async () => {
+    const faraMail = { ...ZILNIC, stare: 'fara_mail', eroare: 'doar_destinatari_externi', destinatari: [] }
+    const stricat = { ...ZILNIC, id: 9, destinatari: ['ana@gazpet.ro', 'cineva@yahoo.com'] }
     const sb = bdSimulat([rez([faraMail, stricat])]), rs = resendSimulat()
     const r = await ruleazaAlertaUpa({ sb, fetchFn: rs.fetchFn, resendKey: 'k' })
     expect(rs.trimise).toHaveLength(0)
@@ -235,46 +259,102 @@ describe('ecranul (upaLogica)', () => {
   })
 })
 
-// runda 2 (L04 / L05): răspunsurile ca de la postgrest-js (status HTTP păstrat; o excepție de rețea = fără status)
-describe('salvarea din formular: cheia de intenție, PDF-ul doar după refuz sigur', () => {
-  const P = { furnizor_id: 1, numar_factura: 'F-9', luna: '2026-11-01', valoare: 120.5, document_path: 'manual/2026-11/k-1.pdf' }
-  const RAND = { id: 44, furnizor_id: 1, numar_factura: 'F-9', luna: '2026-11-01', valoare: '120.50', document_path: 'manual/2026-11/k-1.pdf' }
-  const CHEIE = { error: { code: '23505', message: 'duplicate key value violates unique constraint "upa_achizitii_cheie_intentie_uidx"' }, status: 409 }
-  it('rândul întors = salvat (fără citire)', () => {
-    const res = { data: [{ id: 44 }], error: null, status: 201 }
-    expect(citireDupaSalvare(res)).toBe(false)
-    expect(stareSalvare(res, null, P)).toBe('salvat')
+// runda 3 (L04 / L05): salvarea prin RPC-ul fn_upa_achizitie_adauga; răspunsurile ca de la postgrest-js (status HTTP păstrat;
+//   o excepție de rețea = fără status). Comportamentul RPC-ului pe BD-ul real: scripts/pglite/test_upa_alerta_local.mjs.
+describe('salvarea din formular: RPC idempotent, PDF-ul doar după refuz sigur fără încercări nesigure', () => {
+  const NOU = { data: { stare: 'nou', id: 44 }, error: null, status: 200 }
+  const EXISTENT = { data: { stare: 'existent', id: 44 }, error: null, status: 200 }
+  const DREPT = { error: { code: '42501', message: 'new row violates row-level security policy for table "upa_achizitii"' }, status: 403 }
+  const PIERDUT = { error: { message: 'TypeError: Failed to fetch' }, status: 0 }
+  it('nou / existent = salvat; contractul răspunsului verificat (id, stare)', () => {
+    expect(stareSalvare(NOU)).toBe('salvat')
+    expect(stareSalvare(EXISTENT)).toBe('salvat')
+    expect(stareSalvare(EXISTENT, true)).toBe('salvat')
+    for (const d of [null, {}, { stare: 'nou' }, { stare: 'nou', id: 0 }, { stare: 'nou', id: 'x' }, { stare: 'alt', id: 4 }, [{ id: 44 }]])
+      expect(stareSalvare({ data: d, error: null, status: 200 })).toBe('necunoscut')
   })
-  it('refuz sigur 4xx (drept, constrângere, cerere invalidă) = refuzat: PDF-ul se poate scoate', () => {
-    for (const res of [{ error: { code: '42501', message: 'new row violates row-level security' }, status: 403 },
-      { error: { code: '23514', message: 'check' }, status: 400 }, { error: { code: 'PGRST204', message: 'col' }, status: 400 },
-      { error: { code: '23505', message: 'duplicate key value violates unique constraint "alt_index"' }, status: 409 }]) {
-      expect(citireDupaSalvare(res)).toBe(false)
-      expect(stareSalvare(res, null, P)).toBe('refuzat')
+  it('refuz sigur 4xx (drept, numărul facturii, cerere invalidă), fără încercări nesigure = refuzat: PDF-ul se poate scoate', () => {
+    for (const res of [DREPT, { error: { code: '23514', message: 'upa: numarul facturii e obligatoriu (numar_factura)' }, status: 400 },
+      { error: { code: '22023', message: 'upa: camp nepermis' }, status: 400 }, { error: { code: 'PGRST202', message: 'fn' }, status: 404 }]) {
+      expect(stareSalvare(res)).toBe('refuzat')
+      expect(poateScoatePdf(stareSalvare(res))).toBe(true)
+      expect(rezultatNesigur(stareSalvare(res))).toBe(false)
     }
   })
-  it('un cod de eroare NU ajunge: 5xx / rețea / fără status = necunoscut (nimic șters), chiar cu cod', () => {
+  it('P1 (review r2): după o încercare NESIGURĂ, un refuz al reîncercării nu dovedește nimic — refuzat_nesigur, PDF-ul rămâne', () => {
+    // pasul 1: răspunsul s-a pierdut (rândul poate fi intrat) -> necunoscut, intenția devine nesigură
+    const st1 = stareSalvare(PIERDUT, false)
+    expect(st1).toBe('necunoscut')
+    expect(rezultatNesigur(st1)).toBe(true)
+    // pasul 2: între timp i s-a retras dreptul; reîncercarea primește 403 -> NU e refuzat
+    const st2 = stareSalvare(DREPT, true)
+    expect(st2).toBe('refuzat_nesigur')
+    expect(poateScoatePdf(st2)).toBe(false)
+    expect(rezultatNesigur(st2)).toBe(true)
+    // (pe BD-ul real RPC-ul întoarce chiar 'existent' în cazul ăsta: cheia e căutată înaintea dreptului — proba PGlite)
+    expect(stareSalvare(EXISTENT, true)).toBe('salvat')
+  })
+  it('UPA02 = aceeași cheie cu alte valori: diferit (nimic șters), chiar dacă statusul e 4xx', () => {
+    const res = { error: { code: 'UPA02', message: 'upa: cheia intentiei exista deja cu alte valori; nimic scris' }, status: 400 }
+    expect(stareSalvare(res)).toBe('diferit')
+    expect(poateScoatePdf(stareSalvare(res))).toBe(false)
+    expect(rezultatNesigur('diferit')).toBe(true)
+  })
+  it('un cod de eroare NU ajunge: 5xx / rețea / fără status / conflict tranzitoriu = necunoscut (nimic șters)', () => {
     for (const res of [{ error: { code: '57014', message: 'canceling statement due to statement timeout' }, status: 500 },
-      { error: { code: 'X', message: 'Bad gateway' }, status: 502 }, { error: { message: 'Failed to fetch' }, status: 0 },
-      { error: new TypeError('fetch failed') }, { error: { code: '42501' } }, undefined, { data: [], error: null, status: 201 }]) {
-      expect(citireDupaSalvare(res)).toBe(true)
-      expect(stareSalvare(res, null, P)).toBe('necunoscut')
-      expect(stareSalvare(res, { data: null, error: null }, P)).toBe('necunoscut')        // rândul nu se vede: nedovedit
-      expect(stareSalvare(res, { data: null, error: { message: 'x' } }, P)).toBe('necunoscut')
-      expect(stareSalvare(res, { data: RAND, error: null }, P)).toBe('salvat')          // rândul cu cheia noastră se vede: intrase
+      { error: { code: 'X', message: 'Bad gateway' }, status: 502 }, PIERDUT, { error: new TypeError('fetch failed') }, { error: { code: '42501' } },
+      undefined, { error: { code: '40001', message: 'upa: cheia intentiei in conflict' }, status: 409 }, { error: { code: '55P03' }, status: 409 },
+      { error: { code: 'X' }, status: 408 }]) {
+      expect(stareSalvare(res)).toBe('necunoscut')
+      expect(poateScoatePdf(stareSalvare(res))).toBe(false)
     }
   })
-  it('conflictul pe CHEIA noastră = reîncercare după o salvare intrată: se citește rândul, nu e refuz', () => {
-    expect(conflictCheie(CHEIE)).toBe(true)
-    expect(conflictCheie({ error: { code: '23505', message: 'duplicate key ... "alt_index"' }, status: 409 })).toBe(false)
-    expect(citireDupaSalvare(CHEIE)).toBe(true)
-    expect(stareSalvare(CHEIE, { data: RAND, error: null }, P)).toBe('salvat')
-    expect(stareSalvare(CHEIE, { data: null, error: null }, P)).toBe('necunoscut')
-    // aceeași cheie cu alte valori = nu e „salvat”
-    expect(stareSalvare(CHEIE, { data: { ...RAND, valoare: '99' }, error: null }, P)).toBe('diferit')
-    expect(stareSalvare(CHEIE, { data: { ...RAND, numar_factura: 'F-10' }, error: null }, P)).toBe('diferit')
-    expect(stareSalvare(CHEIE, { data: { ...RAND, document_path: null }, error: null }, P)).toBe('diferit')
+  it('câmpurile intenției = lista din BD (fn_upa_campuri_intentie), mesajele refuzului', () => {
+    expect(CAMPURI_INTENTIE).toEqual(['furnizor_id', 'furnizor_nume', 'numar_factura', 'data_factura', 'luna', 'valoare', 'descriere', 'document_path'])
+    expect(mesajRefuzAchizitie(DREPT.error)).toMatch(/Nu ai drept/)
+    expect(mesajRefuzAchizitie({ code: '23514', message: 'upa: numarul facturii e obligatoriu (numar_factura)' })).toBe('Completează numărul facturii (e obligatoriu).')
+    expect(mesajRefuzAchizitie({ code: '23514', message: 'new row for relation "upa_achizitii" violates check constraint "alt_check"' })).toMatch(/^Eroare: /)
   })
+})
+
+describe('numărul facturii (20261229b) în Citește Orice și refuzul gărzii din BD', () => {
+  it('numărul de pe card: editat > citit de AI, fără spații; gol = lipsă', () => {
+    expect(numarFacturaUpa(undefined, ' GZ 12 ')).toBe('GZ 12')
+    expect(numarFacturaUpa('F-9', 'GZ 12')).toBe('F-9')
+    expect(numarFacturaUpa('', 'GZ 12')).toBe('')              // omul l-a șters: lipsă (nu revine la cel citit)
+    expect(numarFacturaUpa('   ', undefined)).toBe('')
+    expect(numarFacturaUpa(undefined, null)).toBe('')
+  })
+  it('refuzul 23514 al triggerului / CHECK-ului se recunoaște; alt 23514 / alt cod nu', () => {
+    const trig = { code: '23514', message: 'upa: numarul facturii e obligatoriu (numar_factura)', hint: 'Completeaza numarul facturii.' }
+    const chk = { code: '23514', message: 'new row for relation "upa_achizitii" violates check constraint "upa_achizitii_numar_factura_nevid"' }
+    expect(refuzNumarFactura(trig)).toBe(true)
+    expect(refuzNumarFactura(chk)).toBe(true)
+    expect(refuzNumarFactura({ code: '23514', message: 'violates check constraint "upa_valoare"' })).toBe(false)
+    expect(refuzNumarFactura({ code: '42501', message: 'numar_factura' })).toBe(false)
+    expect(refuzNumarFactura(null)).toBe(false)
+    expect(mesajInsertUpa(chk)).toMatch(/^Completează numărul facturii/)
+    expect(mesajInsertUpa({ code: '23502', message: 'null value' })).toBe('Insert achiziție UPA: null value')
+  })
+})
+
+describe('L24: paginarea se oprește la invalidarea generației', () => {
+  it('pagina următoare NU mai pleacă după ce generația s-a schimbat; eroarea e „oprit”, nu o listă parțială', async () => {
+    let gen = 1, cereri = 0
+    const curent = ((g) => () => g === gen)(1)
+    const cerePagina = async (ultim) => { cereri++; if (cereri === 1) gen = 2; return { data: [{ id: (ultim || 0) + 1 }], error: null } }
+    await expect(paginareKeyset(paginaCuGarda(curent, cerePagina), 1)).rejects.toMatchObject({ oprit: true })
+    expect(cereri).toBe(1)
+  })
+  it('generația neschimbată: paginarea merge până la pagina goală', async () => {
+    const date = [[{ id: 1 }, { id: 2 }], [{ id: 3 }], []]
+    let i = 0
+    const r = await paginareKeyset(paginaCuGarda(() => true, async () => ({ data: date[i++], error: null })), 2)
+    expect(r.map(x => x.id)).toEqual([1, 2, 3])
+  })
+})
+
+describe('PDF-ul și furnizorii', () => {
   it('PDF-ul: „există deja” la calea intenției, calea cu cheia și versiunea fișierului', () => {
     expect(pdfExistaDeja({ statusCode: '409', message: 'The resource already exists' })).toBe(true)
     expect(pdfExistaDeja({ status: 409, message: 'x' })).toBe(true)
