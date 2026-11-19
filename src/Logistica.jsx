@@ -7523,7 +7523,26 @@ function ArhivaAvizePage({ canDelete, profile, showToast }) {
   const [perioadaFilter, setPerioadaFilter] = useState('toate')  // toate | luna | sapt | azi
   const [downloadingId, setDownloadingId] = useState(null)
   const [showDeleteLuna, setShowDeleteLuna] = useState(false)  // modal bulk delete pe lună
-  
+  // TKT-2026-0379: PV predare-primire generat din aviz (PDF descărcat local, nu se salvează nicăieri)
+  const [pvId, setPvId] = useState(null)
+  const pvBusy = useRef(false)
+  const handlePvPredare = async (arhAviz) => {
+    if (pvBusy.current) return
+    pvBusy.current = true
+    setPvId(arhAviz.id)
+    try {
+      const { genereazaPvPredareAviz } = await import('./pvPredareAvizPdf.js')
+      const r = await genereazaPvPredareAviz({ supabase, aviz: arhAviz })
+      if (!r.ok) showToast(r.mesaj, 'warn')
+      else showToast(`✓ ${r.fisier} descărcat (${r.nrLinii} ${r.nrLinii === 1 ? 'bun' : 'bunuri'})`)
+    } catch (e) {
+      showToast('Eroare generare PV: ' + (e.message || e), 'error')
+    } finally {
+      pvBusy.current = false
+      setPvId(null)
+    }
+  }
+
   
   // Delete individual aviz (admin only)
   const handleDelete = async (arhAviz) => {
@@ -7781,6 +7800,16 @@ function ArhivaAvizePage({ canDelete, profile, showToast }) {
                         >
                           {downloadingId === a.id ? '...' : '⬇️ Descarcă'}
                         </button>
+                        {a.transport_id && (
+                          <button
+                            onClick={() => handlePvPredare(a)}
+                            disabled={!!pvId}
+                            style={{padding:'5px 10px', background:G.purple+'22', color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:5, fontSize:11, cursor: pvId ? 'wait' : 'pointer', fontWeight:600, whiteSpace:'nowrap'}}
+                            title="Generează procesul-verbal de predare-primire din acest aviz (PDF descărcat local)"
+                          >
+                            {pvId === a.id ? '⏳ PV...' : '📝 PV predare-primire'}
+                          </button>
+                        )}
                         {canDelete && (
                           <button 
                             onClick={() => handleDelete(a)} 
