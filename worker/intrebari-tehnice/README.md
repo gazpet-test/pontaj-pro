@@ -318,7 +318,7 @@ al echipei Paw).
   mutantul „worker care ignoră regula B”, termenul scrierii): `test_worker.py`, `test_motor.py`.
   r8 (20.11.2026): în `npm test` rulează eșantionul acoperitor (familiile mici complet, la cele mari toate tripletele de valori),
   în ambele rulări; produsul complet rulează în jobul `.github/workflows/intrebari-generativ.yml` (4 părți, pe PR-urile care ating
-  motorul / generatorul, noaptea, la cerere). Local, produsul complet: `INTREBARI_GENERATIV_COMPLET=1 npx vitest run
+  motorul / generatorul / configurația vitest, noaptea, la cerere). Local, produsul complet: `INTREBARI_GENERATIV_COMPLET=1 npx vitest run
   src/intrebariMascare.generativ.test.js` (opțional `INTREBARI_GENERATIV_PARTE=s/N`).
 - r6 — matricea are acum FIECARE formă juridică din contract (37 de valori), reprezentarea (litere obișnuite / late, încrucișată cu
   formele lipite, „SC”, flexiunile și invizibilele) și persoanele alăturate (perechi, triplete, persoană + componenta comună a

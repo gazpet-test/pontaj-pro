@@ -460,8 +460,13 @@ celelalte teste în paralel) produsul complet, rulat de două ori, depășea 900
 - **produsul complet** (testul de dinainte, neschimbat, aceleași amprente pe lot) rulează cu `INTREBARI_GENERATIV_COMPLET=1` în
   jobul separat `.github/workflows/intrebari-generativ.yml`, în 4 părți paralele (loturile `i % 4`): pe orice PR care atinge un
   fișier de care depinde rezultatul — închiderea importurilor testului și a procesului (motorul, generatorul, cele trei JSON-uri,
-  testul), plus acest document, `package*.json` și fișierele de workflow; testul verifică el însuși că lista de căi conține toată
-  închiderea, că părțile sunt 0..N−1 și că Node e același ca la „verificare” —, în fiecare noapte și la cerere.
+  testul), plus acest document, `package*.json`, fișierele de workflow și configurația runnerului (`vite.config.js` explicit și
+  modelele `vite.config.*`, `vitest.config.*`, `vitest.workspace.*`, `vitest.projects.*`); testul verifică el însuși că lista de
+  căi conține toată închiderea, că fiecare nume de configurație căutat de vitest-ul instalat (citit din pachet) e prins de un model,
+  că configurația existentă, importurile ei din repo și eventualele `setupFiles` / `globalSetup` sunt scrise explicit, că nu
+  apar alte chei `test` / `envPrefix` / `envDir` / `define` (altfel testul cere să fie extins), că închiderea citește din mediu
+  doar cele două variabile ale jobului (deci fișierele `.env*` nu pot schimba rezultatul), că părțile sunt 0..N−1 și că Node e
+  același ca la „verificare” —, în fiecare noapte și la cerere.
 Rezultatul e determinist (aceleași fișiere + același Node = aceleași ieșiri), deci un PR care nu atinge niciunul din fișierele
 listate nu poate schimba ce verifică produsul complet; schimbările de mediu (Node, mașina) le prinde rularea de noapte. Ce s-a
 mutat: pe PR-urile care NU ating motorul, produsul complet nu mai rulează (a rulat pe ultimul PR care l-a atins și rulează în

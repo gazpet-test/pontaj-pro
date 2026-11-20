@@ -7,6 +7,9 @@ name: Întreabă echipa - matricea generativă completă
 # paralele (loturile i % 4 = parte), pe:
 #   - orice PR care atinge un fișier de care depinde rezultatul (închiderea importurilor testului și a procesului — testul
 #     „jobul produsului complet există…” cere ca fiecare fișier din ea să fie în lista de mai jos), și pe draft-uri;
+#     plus configurația runnerului: fișierele de configurare pe care le caută vitest (vitest.config.*, vite.config.*,
+#     vitest.workspace.*, vitest.projects.* — lista se citește în test din vitest-ul instalat), cea existentă scrisă explicit,
+#     cu importurile ei și fișierele de setup / globalSetup declarate în ea;
 #   - în fiecare noapte (prinde și schimbările mediului: Node, imaginea mașinii);
 #   - la cerere (Actions → „Run workflow”, după ce fișierul e pe main).
 # Fără secrete. Rezultatul e determinist: un PR care nu atinge niciun fișier din listă nu poate schimba ieșirile.
@@ -25,6 +28,11 @@ on:
       - '.github/workflows/admin-alerte.yml'
       - 'package.json'
       - 'package-lock.json'
+      - 'vite.config.js'
+      - 'vite.config.*'
+      - 'vitest.config.*'
+      - 'vitest.workspace.*'
+      - 'vitest.projects.*'
   schedule:
     - cron: '40 1 * * *'   # 03:40 / 04:40 ora României
   workflow_dispatch:

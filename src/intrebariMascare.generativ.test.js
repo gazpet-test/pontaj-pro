@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseAst } from 'vite'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { Worker } from 'node:worker_threads'
 import { cpus } from 'node:os'
@@ -207,8 +207,9 @@ describe('matricea generativă r5 (L25): produsul complet al dimensiunilor contr
     console.log(`matricea generativă (produsul complet, partea ${PARTE.s}/${PARTE.n}): ${total} cazuri în ${PARTEA.length} loturi (fire: ${K}, procese: ${K})`)
   }, 3600000)
 
-  it('r8: jobul produsului complet există, rulează pe toate părțile și pornește pe orice PR care atinge un fișier de care depinde rezultatul', () => {
+  it('r8: jobul produsului complet există, rulează pe toate părțile și pornește pe orice PR care atinge un fișier de care depinde rezultatul', async () => {
     const y = readFileSync(WORKFLOW, 'utf8').replace(/\r/g, '')
+    const env = []                                           // variabilele de mediu citite de fișierele din închidere
     // închiderea importurilor (statice, dinamice cu text fix, re-exporturi) a testului și a procesului, în repo
     const inchidere = new Set(), coada = ['src/intrebariMascare.generativ.test.js', relative(RAD, PROC).replace(/\\/g, '/')]
     while (coada.length) {
@@ -217,6 +218,9 @@ describe('matricea generativă r5 (L25): produsul complet al dimensiunilor contr
       expect(existsSync(f), f).toBe(true)
       inchidere.add(f)
       if (f.endsWith('.json')) continue
+      const text = readFileSync(f, 'utf8')
+      expect(/import\.meta\.env/.test(text), `${f}: citește mediul prin Vite (atunci fișierele .env* intră în filtru)`).toBe(false)
+      for (const m of text.matchAll(/process\.env(\.[A-Za-z_$][\w$]*)?/g)) env.push(`${f}: ${m[1] ? m[1].slice(1) : '(acces calculat)'}`)
       const surse = []
       const viziteaza = n => {
         if (!n || typeof n.type !== 'string') return
@@ -229,7 +233,7 @@ describe('matricea generativă r5 (L25): produsul complet al dimensiunilor contr
           else if (v && typeof v === 'object' && typeof v.type === 'string') viziteaza(v)
         }
       }
-      viziteaza(parseAst(readFileSync(f, 'utf8')))
+      viziteaza(parseAst(text))
       for (const s of surse) if (s.startsWith('.')) coada.push(relative(RAD, resolve(dirname(f), s)).replace(/\\/g, '/'))
         else expect(/^(node:|vitest$|vite$)/.test(s), `${f}: pachet ${s} (se adaugă package*.json / calea lui în filtru)`).toBe(true)
     }
@@ -239,6 +243,64 @@ describe('matricea generativă r5 (L25): produsul complet al dimensiunilor contr
     expect(pr, 'pull_request.paths').not.toBe(null)
     const cai = [...pr[1].matchAll(/'([^']+)'/g)].map(m => m[1])
     for (const f of [...inchidere, 'docs/intrebari/MASCARE_SI_VERDICT.md', WORKFLOW, 'package.json', 'package-lock.json']) expect(cai, f).toContain(f)
+    // mediul: doar cele două variabile ale jobului (procesul real pornește cu env gol); cu prefixul implicit VITE_ al lui Vite,
+    // fișierele .env* nu pot schimba nimic din ce citește închiderea
+    expect(env.filter(e => !/: INTREBARI_GENERATIV_(COMPLET|PARTE)$/.test(e)), 'variabile de mediu citite').toEqual([])
+    expect(env.length).toBeGreaterThan(0)
+
+    // r9 (Jakarinos #1153, P2 L25): și CONFIGURAȚIA RUNNERULUI e în filtru. (a) Numele pe care le caută vitest-ul instalat
+    // (configFiles + workspacesFiles, citite din pachet, nu copiate aici): fiecare e prins de un model din filtru, chiar dacă
+    // fișierul nu există azi (un vitest.config.js nou ar avea prioritate față de vite.config.js).
+    const cuNegatie = cai.filter(c => c.startsWith('!'))
+    expect(cuNegatie, 'filtrul nu exclude căi').toEqual([])
+    const model = c => new RegExp('^' + c.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '\0').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\0/g, '.*') + '$')
+    const prins = f => cai.some(c => model(c).test(f))
+    const dirChunks = join(RAD, 'node_modules/vitest/dist/chunks')
+    const constante = readdirSync(dirChunks).filter(n => n.endsWith('.js')).map(n => readFileSync(join(dirChunks, n), 'utf8')).filter(t => t.includes('const CONFIG_NAMES = ['))
+    expect(constante.length, 'constantele de configurare din vitest (s-a schimbat pachetul: actualizează testul)').toBe(1)
+    const lista = nume => {
+      const m = new RegExp(`\\nconst ${nume} = (\\[[^\\]]*\\]);`).exec(constante[0])
+      expect(m, nume).not.toBe(null)
+      return JSON.parse(m[1].replace(/,\s*\]$/, ']'))
+    }
+    expect(constante[0]).toMatch(/\nconst configFiles = CONFIG_NAMES\.flatMap\(\s*\(name\) => CONFIG_EXTENSIONS\.map\(\(ext\) => name \+ ext\)\s*\);/)
+    expect(constante[0]).toMatch(/\nconst WORKSPACES_EXTENSIONS = \[\.\.\.CONFIG_EXTENSIONS, "\.json"\];/)
+    expect(constante[0]).toMatch(/\nconst workspacesFiles = WORKSPACES_NAMES\.flatMap\(\s*\(name\) => WORKSPACES_EXTENSIONS\.map\(\(ext\) => name \+ ext\)\s*\);/)
+    const ext = lista('CONFIG_EXTENSIONS')
+    const configFiles = lista('CONFIG_NAMES').flatMap(n => ext.map(e => n + e))
+    const workspacesFiles = lista('WORKSPACES_NAMES').flatMap(n => [...ext, '.json'].map(e => n + e))
+    expect(configFiles).toContain('vite.config.js')
+    expect(configFiles).toContain('vitest.config.js')
+    expect(workspacesFiles).toContain('vitest.workspace.js')
+    for (const f of [...configFiles, ...workspacesFiles]) expect(prins(f), `${f} (configurație vitest) nu e prins de filtru`).toBe(true)
+    // (b) o configurație de spațiu de lucru (mai multe proiecte) schimbă ce rulează: azi nu există; dacă apare, se extinde testul
+    expect(workspacesFiles.filter(f => existsSync(f)), 'vitest.workspace / vitest.projects').toEqual([])
+    // (c) configurația existentă (vitest ia primul nume găsit) e scrisă EXPLICIT în filtru, cu importurile ei din repo
+    // (dependencies = intrările bundle-ului făcut de Vite la încărcare; pachetele din node_modules țin de package-lock.json)
+    const existente = configFiles.filter(f => existsSync(f))
+    expect(existente, 'configurația vitest folosită de npm test').toEqual(['vite.config.js'])
+    for (const f of existente) expect(cai, `${f} explicit în filtru`).toContain(f)
+    const { loadConfigFromFile } = await import('vite')
+    const inc = await loadConfigFromFile({ command: 'serve', mode: 'test' }, join(RAD, existente[0]), RAD, 'silent')
+    expect(inc, existente[0]).not.toBe(null)
+    const dep = inc.dependencies.map(d => relative(RAD, resolve(RAD, d)).replace(/\\/g, '/'))
+    expect(dep).toContain(existente[0])
+    for (const d of dep) {
+      expect(d.startsWith('..'), `${d}: în afara repo-ului`).toBe(false)
+      if (!d.startsWith('node_modules/')) expect(cai, `${d} (importat de ${existente[0]})`).toContain(d)
+    }
+    // (d) ce declară configurația pentru teste: setupFiles / globalSetup (fișiere încărcate înaintea testului) în filtru; orice
+    // altă cheie din `test` sau o schimbare a mediului (envPrefix / envDir / define) cere actualizarea acestui test
+    const t = inc.config.test || {}
+    for (const k of ['setupFiles', 'globalSetup']) {
+      for (const s of [].concat(t[k] || [])) {
+        const r = relative(RAD, resolve(RAD, s)).replace(/\\/g, '/')
+        expect(existsSync(r), `${k}: ${r}`).toBe(true)
+        expect(cai, `${k}: ${r}`).toContain(r)
+      }
+    }
+    expect(Object.keys(t).filter(k => !['setupFiles', 'globalSetup'].includes(k)), `${existente[0]}: chei noi în test`).toEqual([])
+    for (const k of ['envPrefix', 'envDir', 'define', 'root', 'mode']) expect(inc.config[k], `${existente[0]}: ${k}`).toBe(undefined)
     expect(y).toMatch(/\n {2}schedule:\n {4}- cron: '[^']+'/)
     expect(y).toContain('\n  workflow_dispatch:')
     // părțile: matricea 0..N-1 și INTREBARI_GENERATIV_PARTE = „parte/N” cu același N → reuniunea părților = toate loturile
