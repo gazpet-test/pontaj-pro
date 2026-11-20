@@ -8,6 +8,7 @@ import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
 import { confirmaCitiriAlimentari, confirmaAjustareManuala, incarcaSurseMaxime, textSursaValoriiActiv } from './lib/citiriBord.js'
 import { STATUS_DESCHIS, FILTRU_BLOCATE, esteTransportBlocat, incarcaTransporturi, filtreazaTransporturi } from './lib/logisticaTransporturi.js'
 import { ziBucuresti } from './adminAlerte.js'
+import { creeazaActiunePv, mesajRezultatPv } from './pvPredareAvizActiune.js'  // TKT-2026-0379 r2 (L24), mic și fără dependențe
 import { citesteArhivaCompleta, ARHIVA_INSTABILA, incarcaNumeAngajati, proprietariDisponibili, numeAngajat, esteComodatNeatribuit, proprietarComodatId, COMODAT_NEATRIBUIT, SURSA_ROMPETROL_TOATE, surseRompetrol, potrivesteSursa } from './lib/arhivaAlimentari.js'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -7523,7 +7524,33 @@ function ArhivaAvizePage({ canDelete, profile, showToast }) {
   const [perioadaFilter, setPerioadaFilter] = useState('toate')  // toate | luna | sapt | azi
   const [downloadingId, setDownloadingId] = useState(null)
   const [showDeleteLuna, setShowDeleteLuna] = useState(false)  // modal bulk delete pe lună
-  
+  // TKT-2026-0379: PV predare-primire generat din aviz (PDF descărcat local, nu se salvează nicăieri)
+  const [pvId, setPvId] = useState(null)
+  // r2 (L24): o acțiune pe montare; la părăsirea ecranului operația în curs e invalidată
+  // (nu mai capturează, nu mai descarcă, nu mai afișează mesaje și nu mai atinge starea).
+  const pvActiune = useRef(null)
+  useEffect(() => {
+    const a = creeazaActiunePv()
+    pvActiune.current = a
+    return () => { a.opreste(); if (pvActiune.current === a) pvActiune.current = null }
+  }, [])
+  const handlePvPredare = (arhAviz) => {
+    const a = pvActiune.current
+    if (!a) return
+    a.porneste(arhAviz, {
+      genereaza: async (aviz, esteCurent) => {
+        const { genereazaPvPredareAviz } = await import('./pvPredareAvizPdf.js')
+        if (!esteCurent()) return { ok: false, anulat: true }
+        return genereazaPvPredareAviz({ supabase, aviz, esteCurent })
+      },
+      laStare: setPvId,
+      laRezultat: (r) => {
+        const m = mesajRezultatPv(r)
+        if (m) showToast(m.text, m.tip)
+      },
+    })
+  }
+
   
   // Delete individual aviz (admin only)
   const handleDelete = async (arhAviz) => {
@@ -7781,6 +7808,16 @@ function ArhivaAvizePage({ canDelete, profile, showToast }) {
                         >
                           {downloadingId === a.id ? '...' : '⬇️ Descarcă'}
                         </button>
+                        {a.transport_id && (
+                          <button
+                            onClick={() => handlePvPredare(a)}
+                            disabled={!!pvId}
+                            style={{padding:'5px 10px', background:G.purple+'22', color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:5, fontSize:11, cursor: pvId ? 'wait' : 'pointer', fontWeight:600, whiteSpace:'nowrap'}}
+                            title="Generează procesul-verbal de predare-primire din acest aviz (PDF descărcat local)"
+                          >
+                            {pvId === a.id ? '⏳ PV...' : '📝 PV predare-primire'}
+                          </button>
+                        )}
                         {canDelete && (
                           <button 
                             onClick={() => handleDelete(a)} 

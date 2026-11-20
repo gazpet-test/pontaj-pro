@@ -1,0 +1,4 @@
+# 20261230a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17. Asteptat EXACT un rand: corpul portii E2.
+# Cele 5 stampile (COMMENT ON FUNCTION) NU apar: amprenta globala nu are familia comentariilor (scripts/amprenta_globala_v2.sql). Le verifica
+# POST-ul migrarii: fiecare stampila = definitia ei, iar toate celelalte comentarii si functii = instantaneul de la inceput (rec_20261230a_inainte).
+functie	functie public.fn_izo_porti_lipsa()	schimbat
