@@ -2,8 +2,9 @@
 // Valorile așteptate sunt scrise de mână (nu din codul testat). Comportamentul real al BD-ului (pragul, o alertă pe zi, închiderea idempotentă)
 // e probat pe migrarea reală în scripts/pglite/test_upa_alerta_local.mjs; aici BD-ul simulat întoarce ce ar întoarce rezervarea în fiecare caz.
 import { describe, it, expect } from 'vitest'
-import { lei, lunaText, zileText, mailUpa, cheieIdempotenta, ruleazaAlertaUpa, ADRESA_INTERNA, DOMENIU_INTERN, destinatariValizi } from '../supabase/functions/_shared/upaAlerta.mjs'
-import { validaPlafon, avertismenteAchizitie, starePlafonLuna, lunaDinZi, luniInapoi, ziRO,
+import { lei, lunaText, zileText, mailUpa, cheieIdempotenta, ruleazaAlertaUpa, ADRESA_INTERNA, DOMENIU_INTERN, destinatariValizi, areCalcul, ziText } from '../supabase/functions/_shared/upaAlerta.mjs'
+import { validaSuma, validaFaraTva, stareCalculLuna, etichetaStare, textCod, leiSauLipsa, validaParametru, valoareVazuta, mesajParametru,
+         avertismenteAchizitie, lunaDinZi, luniInapoi, ziRO,
          stareSalvare, rezultatNesigur, poateScoatePdf, mesajRefuzAchizitie, CAMPURI_INTENTIE, numarFacturaUpa, refuzNumarFactura, mesajInsertUpa,
          pdfExistaDeja, caleaPdf, ordineFurnizori, paginaCuGarda } from './upaLogica.js'
 import { paginareKeyset } from './hrDeciziiUtil.js'
@@ -235,10 +236,16 @@ describe('ecranul (upaLogica)', () => {
     // 23:30 UTC pe 30.11 = 01:30 pe 01.12 în România
     expect(ziRO(new Date('2026-11-30T23:30:00Z'))).toBe('2026-12-01')
   })
-  it('plafonul scris în ecran', () => {
-    expect(validaPlafon('7000')).toEqual({ valoare: 7000 })
-    expect(validaPlafon(' 7500.5 ')).toEqual({ valoare: 7500.5 })
-    for (const t of ['0', '7000.555', '-5', 'abc', '', '7.000,00', '1e5', '12345678']) expect(validaPlafon(t).eroare).toBeTruthy()
+  it('sumele scrise în ecran; valoarea fără TVA (obligatorie, cel mult cea cu TVA)', () => {
+    expect(validaSuma('7000')).toEqual({ valoare: 7000 })
+    expect(validaSuma(' 7500.5 ')).toEqual({ valoare: 7500.5 })
+    for (const t of ['0', '7000.555', '-5', 'abc', '', '7.000,00', '1e5', '12345678']) expect(validaSuma(t).eroare).toBeTruthy()
+    expect(validaSuma('0', { zero: true })).toEqual({ valoare: 0 })
+    expect(validaFaraTva('100', 119)).toEqual({ valoare: 100 })
+    expect(validaFaraTva('119', 119)).toEqual({ valoare: 119 })
+    expect(validaFaraTva('119.01', 119).eroare).toMatch(/nu poate fi mai mare/)
+    expect(validaFaraTva('', 119).eroare).toMatch(/Valoarea fără TVA/)
+    expect(validaFaraTva('0', 119).eroare).toBeTruthy()
   })
   it('avertismentele la adăugare: fără PDF, factură din altă lună (nu blocări)', () => {
     expect(avertismenteAchizitie({ dataFactura: '2026-11-03', luna: '2026-11-01', arePdf: true })).toEqual([])
@@ -247,15 +254,89 @@ describe('ecranul (upaLogica)', () => {
     expect(a.map(x => x.cod)).toEqual(['luna_diferita'])
     expect(a[0].text).toBe('Factura e din octombrie 2026, dar se scade din noiembrie 2026.')
   })
-  it('istoricul: plafonul lunii, necheltuitul de la închidere, diferențele de după', () => {
-    expect(starePlafonLuna({ e_curenta: true, plafon: 7000, consumat: 1500, in_alerta: true })).toEqual({ text: 'în curs · rămân 5.500,00 lei', ton: 'rosu' })
-    expect(starePlafonLuna({ e_curenta: true, plafon: null, consumat: 0 }).ton).toBe('galben')
-    expect(starePlafonLuna({ inchisa: true, plafon: 6000, consumat: 2000, plafon_inchis: 6000, consumat_inchis: 2000, ramas_necheltuit: 4000 }))
-      .toEqual({ text: 'necheltuit 4.000,00 lei (de plătit la bugetul de stat, plafon 6.000,00)', ton: 'rosu' })
-    expect(starePlafonLuna({ inchisa: true, plafon: 7000, consumat: 7100, plafon_inchis: 7000, consumat_inchis: 7000, ramas_necheltuit: 0 }))
-      .toEqual({ text: 'plafon consumat ✓ · după închidere +100,00 lei', ton: 'verde' })
-    expect(starePlafonLuna({ inchisa: false, plafon: null, consumat: 300 }).text).toBe('plafon neînregistrat pentru luna asta')
-    expect(starePlafonLuna({ inchisa: false, plafon: 7000, consumat: 3000 })).toEqual({ text: 'neînchisă · estimat necheltuit 4.000,00 lei', ton: 'galben' })
+  it('istoricul (20270101a): previziune / de completat / gata de închis / închis, din rândul calculat de BD', () => {
+    // cazul expertului „peste jumătate”: D 4.325, achiziții 3.000 -> de plată 2.162,50, report 837,50
+    const prev = { stare: 'previziune', pontaj_inchis: false, poate_inchide: false, de_plata: 2162.5, report_iesit: 837.5, blocaje: [] }
+    expect(stareCalculLuna(prev)).toEqual({ text: 'previziune · de plată estimat 2.162,50 lei · report estimat 837,50 lei', ton: 'galben' })
+    expect(etichetaStare(prev)).toBe('PREVIZIUNE')
+    expect(stareCalculLuna({ ...prev, pontaj_inchis: true, poate_inchide: true })).toEqual({ text: 'gata de închis · de plată 2.162,50 lei · report 837,50 lei', ton: 'verde' })
+    expect(stareCalculLuna({ ...prev, pontaj_inchis: true, blocaje: ['achizitii_fara_tva:2'] }).text).toMatch(/^de completat înainte de închidere/)
+    expect(etichetaStare({ ...prev, pontaj_inchis: true })).toBe('DE ÎNCHIS')
+    // cazul „sub jumătate”: de plată 3.325, nimic reportat
+    expect(stareCalculLuna({ stare: 'definitiv', de_plata: 3325, report_iesit: 0, termen_stat: '2026-11-25' }))
+      .toEqual({ text: 'închis · de plată la stat 3.325,00 lei până pe 25.11.2026', ton: 'rosu' })
+    expect(stareCalculLuna({ stare: 'definitiv', de_plata: 0, report_iesit: 100, termen_stat: '2026-11-25' }))
+      .toEqual({ text: 'închis · de plată la stat 0,00 lei până pe 25.11.2026 · se reportează 100,00 lei', ton: 'verde' })
+    expect(etichetaStare({ stare: 'definitiv' })).toBe('EXACT (închis)')
+    // necunoscut != 0 (L18): fără salariul minim nu se arată nicio sumă de plată
+    expect(stareCalculLuna({ stare: 'previziune', de_plata: null, blocaje: ['fara_salariu_minim', 'fara_nr_handicap'] }))
+      .toEqual({ text: 'calcul incomplet: salariul minim al lunii nu e înregistrat (Parametri); numărul angajaților cu handicap nu e înregistrat (Parametri)', ton: 'galben' })
+    expect(stareCalculLuna({ stare: 'in_afara_calculului' }).ton).toBe('gri')
+    expect(stareCalculLuna(null).text).toBe('—')
+    expect(leiSauLipsa(null)).toBe('—')
+    expect(leiSauLipsa(0)).toBe('0,00')
+  })
+  it('codurile calculului -> text pentru oameni (cu număr, singular / plural, cod necunoscut lizibil)', () => {
+    expect(textCod('achizitii_fara_tva:1')).toBe('1 factură fără valoarea fără TVA')
+    expect(textCod('achizitii_fara_tva:3')).toBe('3 facturi fără valoarea fără TVA')
+    expect(textCod('achizitii_fara_data_platii:2')).toBe('2 facturi fără data plății')
+    expect(textCod('achizitii_platite_dupa_termen:1')).toBe('1 factură plătită după sfârșitul lunii (nu intră în deducere)')
+    expect(textCod('inactivi_fara_data_incetarii_cu_pontaj:2')).toBe('2 angajați inactivi fără data încetării, cu pontaj în lună (nu intră în calcul)')
+    expect(textCod('pontaj_neinchis')).toMatch(/pontajul lunii nu e încă închis/)
+    expect(textCod('cod_nou_necunoscut')).toBe('cod nou necunoscut')
+    expect(textCod('<b>x</b>')).toBe('<b>x</b>')
+  })
+  it('parametrii pe perioade: validarea, valoarea văzută (CAS), mesajele refuzului', () => {
+    expect(validaParametru('salariu_minim', '2026-07', '4325')).toEqual({ de_la: '2026-07-01', valoare: 4325 })
+    expect(validaParametru('salariu_minim', '2026-07', '0').eroare).toBeTruthy()
+    expect(validaParametru('angajati_handicap', '2026-10', '0')).toEqual({ de_la: '2026-10-01', valoare: 0 })
+    expect(validaParametru('angajati_handicap', '2026-10', '1.5').eroare).toMatch(/întreg/)
+    expect(validaParametru('report_initial', '2026-10', '0')).toEqual({ de_la: '2026-10-01', valoare: 0 })
+    expect(validaParametru('alt', '2026-10', '1').eroare).toBeTruthy()
+    expect(validaParametru('salariu_minim', '2026-13', '1').eroare).toBeTruthy()
+    expect(validaParametru('salariu_minim', '', '1').eroare).toBeTruthy()
+    const p = [{ cheie: 'salariu_minim', de_la: '2026-07-01', valoare: '4325.00' }, { cheie: 'report_initial', de_la: '2026-10-01', valoare: '0.00' }]
+    expect(valoareVazuta(p, 'salariu_minim', '2026-07-01')).toBe(4325)
+    expect(valoareVazuta(p, 'report_initial', '2026-10-01')).toBe(0)
+    expect(valoareVazuta(p, 'salariu_minim', '2027-01-01')).toBe(null)
+    expect(valoareVazuta(null, 'salariu_minim', '2026-07-01')).toBe(null)
+    expect(mesajParametru({ code: '42501' })).toMatch(/Nu ai drept/)
+    expect(mesajParametru({ code: '40001' })).toMatch(/schimbat între timp/)
+    expect(mesajParametru({ code: 'UPA03' })).toMatch(/lună deja închisă/)
+  })
+})
+
+describe('mailul pe calculul expertului (20270101a, rândul are `calcul`)', () => {
+  const CALC_OCT = { stare: 'definitiv', luna: '2026-10-01', nma: 64.08, locuri: 2, salariu_minim: 4325, suma_datorata: 4325, achizitii_fara_tva: 3000, report_intrat: 0,
+    deducere: 2162.5, de_plata: 2162.5, report_iesit: 837.5, termen_stat: '2026-11-25', termen_upa: '2026-10-31', jumatate: 2162.5 }
+  const CALC_NOV = { stare: 'previziune', luna: '2026-11-01', suma_datorata: 4325, jumatate: 2162.5, report_intrat: 837.5, achizitii_fara_tva: 0,
+    termen_stat: '2026-12-25', termen_upa: '2026-11-30' }
+  it('închiderea: de plată la stat până pe 25, reportul, fără „necheltuit”', () => {
+    const r = { id: 1, cheie: 'inchidere:2026-10', fel: 'inchidere', luna: '2026-10-01', plafon: 4325, consumat: 3000, ramas: 2162.5, calcul: CALC_OCT }
+    expect(areCalcul(r)).toBe(true)
+    const m = mailUpa(r)
+    expect(m.subiect).toBe('Fond handicap octombrie 2026: de plată la bugetul de stat 2.162,50 lei până pe 25.11.2026')
+    expect(m.html).toContain('837,50 lei')
+    expect(m.html).toContain('64.08')
+    expect(m.html).not.toMatch(/necheltuit/)
+  })
+  it('alerta zilei: PREVIZIUNE, rămas de cumpărat, termenele', () => {
+    const r = { id: 2, cheie: 'zilnic:2026-11-25', fel: 'zilnic', luna: '2026-11-01', plafon: 1325, consumat: 0, ramas: 1325, zile_ramase: 6, calcul: CALC_NOV }
+    const m = mailUpa(r, { furnizori: ['UPA <Unu>'] })
+    expect(m.subiect).toBe('Fond handicap noiembrie 2026 (previziune): mai sunt 1.325,00 lei de cumpărat de la unități protejate, mai sunt 6 zile')
+    expect(m.html).toContain('30.11.2026')
+    expect(m.html).toContain('25.12.2026')
+    expect(m.html).toContain('UPA &lt;Unu&gt;')
+    expect(m.html).toMatch(/Previziune/)
+  })
+  it('fără calcul complet -> forma veche (rezervarea din 20261229a); calcul cu numere lipsă -> nu se folosește', () => {
+    expect(areCalcul(ZILNIC)).toBe(false)
+    expect(mailUpa(ZILNIC).subiect).toBe(mailUpa({ ...ZILNIC, calcul: null }).subiect)
+    expect(areCalcul({ fel: 'inchidere', ramas: 1, calcul: { ...CALC_OCT, de_plata: null } })).toBe(false)
+    expect(areCalcul({ fel: 'inchidere', ramas: 1, calcul: { ...CALC_OCT, stare: 'previziune' } })).toBe(false)
+    expect(areCalcul({ fel: 'zilnic', ramas: 5, calcul: { ...CALC_NOV, jumatate: null } })).toBe(false)
+    expect(ziText('2026-11-25')).toBe('25.11.2026')
+    expect(ziText(null)).toBe('—')
   })
 })
 
@@ -310,7 +391,9 @@ describe('salvarea din formular: RPC idempotent, PDF-ul doar după refuz sigur f
     }
   })
   it('câmpurile intenției = lista din BD (fn_upa_campuri_intentie), mesajele refuzului', () => {
-    expect(CAMPURI_INTENTIE).toEqual(['furnizor_id', 'furnizor_nume', 'numar_factura', 'data_factura', 'luna', 'valoare', 'descriere', 'document_path'])
+    // 20270101a: + valoare_fara_tva, data_plata (fn_upa_campuri_intentie înlocuită de migrare)
+    expect(CAMPURI_INTENTIE).toEqual(['furnizor_id', 'furnizor_nume', 'numar_factura', 'data_factura', 'luna', 'valoare', 'descriere', 'document_path',
+      'valoare_fara_tva', 'data_plata'])
     expect(mesajRefuzAchizitie(DREPT.error)).toMatch(/Nu ai drept/)
     expect(mesajRefuzAchizitie({ code: '23514', message: 'upa: numarul facturii e obligatoriu (numar_factura)' })).toBe('Completează numărul facturii (e obligatoriu).')
     expect(mesajRefuzAchizitie({ code: '23514', message: 'new row for relation "upa_achizitii" violates check constraint "alt_check"' })).toMatch(/^Eroare: /)

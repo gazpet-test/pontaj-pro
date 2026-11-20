@@ -1,0 +1,87 @@
+# 20270101a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.upa_achizitii.data_plata	creat
+coloana	coloana public.upa_achizitii.valoare_fara_tva	creat
+coloana	coloana public.upa_calcul_angajat.contributie	creat
+coloana	coloana public.upa_calcul_angajat.employee_id	creat
+coloana	coloana public.upa_calcul_angajat.luna	creat
+coloana	coloana public.upa_calcul_angajat.norma	creat
+coloana	coloana public.upa_calcul_angajat.zile_calcul	creat
+coloana	coloana public.upa_calcul_angajat.zile_cfs	creat
+coloana	coloana public.upa_calcul_angajat.zile_suspendare	creat
+coloana	coloana public.upa_calcul_lunar.achizitii_fara_tva	creat
+coloana	coloana public.upa_calcul_lunar.angajati_handicap	creat
+coloana	coloana public.upa_calcul_lunar.avertismente	creat
+coloana	coloana public.upa_calcul_lunar.de_plata	creat
+coloana	coloana public.upa_calcul_lunar.deducere	creat
+coloana	coloana public.upa_calcul_lunar.inchis_la	creat
+coloana	coloana public.upa_calcul_lunar.locuri	creat
+coloana	coloana public.upa_calcul_lunar.luna	creat
+coloana	coloana public.upa_calcul_lunar.nma	creat
+coloana	coloana public.upa_calcul_lunar.nr_achizitii	creat
+coloana	coloana public.upa_calcul_lunar.nr_angajati	creat
+coloana	coloana public.upa_calcul_lunar.report_iesit	creat
+coloana	coloana public.upa_calcul_lunar.report_intrat	creat
+coloana	coloana public.upa_calcul_lunar.salariu_minim	creat
+coloana	coloana public.upa_calcul_lunar.suma_datorata	creat
+coloana	coloana public.upa_calcul_lunar.termen_stat	creat
+coloana	coloana public.upa_calcul_lunar.versiune	creat
+coloana	coloana public.upa_calcul_lunar.zile_luna	creat
+coloana	coloana public.upa_parametri.cheie	creat
+coloana	coloana public.upa_parametri.de_la	creat
+coloana	coloana public.upa_parametri.nota	creat
+coloana	coloana public.upa_parametri.setat_de	creat
+coloana	coloana public.upa_parametri.setat_la	creat
+coloana	coloana public.upa_parametri.sursa	creat
+coloana	coloana public.upa_parametri.valoare	creat
+constrangere	constrangere tabel public.upa_achizitii.upa_achizitii_fara_tva_interval	creat
+constrangere	constrangere tabel public.upa_calcul_angajat.upa_calcul_angajat_luna_fkey	creat
+constrangere	constrangere tabel public.upa_calcul_angajat.upa_calcul_angajat_pk	creat
+constrangere	constrangere tabel public.upa_calcul_angajat.upa_calcul_angajat_valori	creat
+constrangere	constrangere tabel public.upa_calcul_lunar.upa_calcul_lunar_pkey	creat
+constrangere	constrangere tabel public.upa_calcul_lunar.upa_calcul_lunar_prima_zi	creat
+constrangere	constrangere tabel public.upa_calcul_lunar.upa_calcul_lunar_regula	creat
+constrangere	constrangere tabel public.upa_calcul_lunar.upa_calcul_lunar_termen	creat
+constrangere	constrangere tabel public.upa_calcul_lunar.upa_calcul_lunar_valori	creat
+constrangere	constrangere tabel public.upa_parametri.upa_parametri_autor	creat
+constrangere	constrangere tabel public.upa_parametri.upa_parametri_cheie	creat
+constrangere	constrangere tabel public.upa_parametri.upa_parametri_nota	creat
+constrangere	constrangere tabel public.upa_parametri.upa_parametri_pk	creat
+constrangere	constrangere tabel public.upa_parametri.upa_parametri_prima_zi	creat
+constrangere	constrangere tabel public.upa_parametri.upa_parametri_sursa	creat
+constrangere	constrangere tabel public.upa_parametri.upa_parametri_valoare	creat
+functie	functie public.fn_upa_achizitie_adauga(uuid,jsonb)	schimbat
+functie	functie public.fn_upa_alerta_inscrie(text,date,date,numeric,numeric,numeric,integer,text[],integer,text)	schimbat
+functie	functie public.fn_upa_alerta_proba()	schimbat
+functie	functie public.fn_upa_alerta_rezerva_la(date)	schimbat
+functie	functie public.fn_upa_calcul_detaliu(date)	creat
+functie	functie public.fn_upa_calcul_inchide(date)	creat
+functie	functie public.fn_upa_calcul_inchide_la(date,date)	creat
+functie	functie public.fn_upa_calcul_la(date,date,integer)	creat
+functie	functie public.fn_upa_campuri_intentie()	schimbat
+functie	functie public.fn_upa_inceput_calcul()	creat
+functie	functie public.fn_upa_nma_angajati(date)	creat
+functie	functie public.fn_upa_parametru_la(text,date)	creat
+functie	functie public.fn_upa_parametru_seteaza(text,date,numeric,numeric,text)	creat
+functie	functie public.fn_upa_pontaj_inchis(date,date)	creat
+functie	functie public.fn_upa_situatie(date,integer)	creat
+politica	politica public.upa_calcul_angajat.upa_calcul_angajat_citire_owner	creat
+politica	politica public.upa_calcul_lunar.upa_calcul_lunar_citire	creat
+politica	politica public.upa_parametri.upa_parametri_citire	creat
+relatie	relatie public.upa_calcul_angajat	creat
+relatie	relatie public.upa_calcul_angajat_pk	creat
+relatie	relatie public.upa_calcul_lunar	creat
+relatie	relatie public.upa_calcul_lunar_pkey	creat
+relatie	relatie public.upa_parametri	creat
+relatie	relatie public.upa_parametri_pk	creat
+tip	tip public.upa_calcul_angajat	creat
+tip	tip public.upa_calcul_angajat[]	creat
+tip	tip public.upa_calcul_lunar	creat
+tip	tip public.upa_calcul_lunar[]	creat
+tip	tip public.upa_parametri	creat
+tip	tip public.upa_parametri[]	creat
+trigger	trigger public.upa_calcul_angajat intern upa_calcul_angajat_luna_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.upa_calcul_angajat intern upa_calcul_angajat_luna_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.upa_calcul_angajat.trg_upa_calcul_angajat_nemodificabil	creat
+trigger	trigger public.upa_calcul_lunar intern upa_calcul_angajat_luna_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.upa_calcul_lunar intern upa_calcul_angajat_luna_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.upa_calcul_lunar.trg_upa_calcul_lunar_nemodificabil	creat

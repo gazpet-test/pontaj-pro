@@ -17,8 +17,52 @@ export function lunaText(iso) {
 }
 export const zileText = n => n === 1 ? 'mai este 1 zi' : (n % 100 === 0 || n % 100 >= 20) ? `mai sunt ${n} de zile` : `mai sunt ${n} zile`
 
+// 'AAAA-LL-ZZ' -> 'ZZ.LL.AAAA' (termenele din calcul); altceva -> '—'
+export const ziText = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso ?? '')); return m ? `${m[3]}.${m[2]}.${m[1]}` : '—' }
+// un număr din calcul (jsonb): finit sau null (L18: necunoscut != 0)
+const nr = v => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v))) ? null : Number(v)
+// 20270101a: rândul are `calcul` (fn_upa_calcul_la) cu toate numerele -> mailul pe calculul expertului; altfel (rezervarea veche) forma veche
+export const areCalcul = r => !!r && typeof r.calcul === 'object' && r.calcul !== null && (r.calcul.stare === 'previziune' || r.calcul.stare === 'definitiv')
+  && (r.fel !== 'inchidere' || (r.calcul.stare === 'definitiv' && nr(r.calcul.de_plata) !== null && nr(r.calcul.suma_datorata) !== null))
+  && (r.fel !== 'zilnic' || (nr(r.calcul.jumatate) !== null && nr(r.calcul.report_intrat) !== null && nr(r.ramas) !== null))
+
+function mailCalcul(r, { furnizori, app }) {
+  const c = r.calcul, luna = lunaText(r.luna)
+  const link = `<p style="margin-top:16px"><a href="${esc(app)}/administrativ?tab=upa" style="color:#1f6f8b">Deschide Administrativ → Unități protejate</a> (calculul pe luni și facturile)</p>`
+  const subsol = `<p style="color:#8a99a8;font-size:12px;margin-top:18px">Mesaj trimis din platforma Gazpet ERP · nu răspundeți la acest mesaj.</p>`
+  const tabel = (randuri) => `<table style="border-collapse:collapse;font-size:14px;margin:8px 0">${randuri.map(([e, v, rosu]) =>
+    `<tr><td style="padding:5px 12px 5px 0;color:#44515c">${e}</td><td style="padding:5px 0;font-weight:700;text-align:right${rosu ? ';color:#b3261e' : ''}">${v}</td></tr>`).join('')}</table>`
+  const fz = Array.isArray(furnizori) && furnizori.length
+    ? `<p style="margin:14px 0 4px;font-weight:700">Furnizori UPA cu autorizația valabilă</p><ul style="margin:0;padding-left:18px">${furnizori.slice(0, 15).map(f => `<li>${esc(f)}</li>`).join('')}</ul>`
+    : ''
+  if (r.fel === 'inchidere') {
+    const subiect = `Fond handicap ${luna}: de plată la bugetul de stat ${lei(c.de_plata)} lei până pe ${ziText(c.termen_stat)}`
+    const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1a232c;max-width:680px">` +
+      `<p>Bună ziua,</p><p>Calculul contribuției pentru persoanele cu handicap pe <b>${esc(luna)}</b> s-a încheiat, după închiderea pontajului:</p>` +
+      tabel([['Număr mediu de angajați', esc(String(c.nma))], ['Locuri de muncă neocupate', esc(String(c.locuri))],
+        ['Salariul minim brut al lunii', `${lei(c.salariu_minim)} lei`], ['Contribuția datorată', `${lei(c.suma_datorata)} lei`],
+        ['Achiziții de la unități protejate (fără TVA)', `${lei(c.achizitii_fara_tva)} lei`], ['Report din lunile anterioare', `${lei(c.report_intrat)} lei`],
+        ['Deducere (cel mult jumătate din contribuție)', `${lei(c.deducere)} lei`], [`De plată la bugetul de stat până pe ${esc(ziText(c.termen_stat))}`, `${lei(c.de_plata)} lei`, true],
+        ['Se reportează pe lunile următoare', `${lei(c.report_iesit)} lei`]]) +
+      link + subsol + `</div>`
+    return { subiect: subiect.replace(/[\r\n]+/g, ' ').slice(0, 200), html }
+  }
+  const zile = zileText(Number(r.zile_ramase))
+  const subiect = `Fond handicap ${luna} (previziune): mai sunt ${lei(r.ramas)} lei de cumpărat de la unități protejate, ${zile}`
+  const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1a232c;max-width:680px">` +
+    `<p>Bună ziua,</p><p>Pentru <b>${esc(luna)}</b>, <b>previziunea</b> contribuției pentru persoanele cu handicap arată că deducerea din achiziții de la unități protejate nu e folosită integral:</p>` +
+    tabel([['Contribuția estimată', nr(c.suma_datorata) === null ? '—' : `${lei(c.suma_datorata)} lei`], ['Deducerea maximă (jumătate din contribuție)', `${lei(c.jumatate)} lei`],
+      ['Report din lunile anterioare', `${lei(c.report_intrat)} lei`], ['Cumpărat până acum (fără TVA)', `${lei(c.achizitii_fara_tva)} lei`],
+      ['Rămas de cumpărat', `${lei(r.ramas)} lei`, true], ['Zile rămase din lună', esc(zile.replace(/^mai (sunt|este) /, ''))]]) +
+    `<p>Facturile se plătesc unității protejate până la sfârșitul lunii (${esc(ziText(c.termen_upa))}); ce nu se deduce se plătește la bugetul de stat până pe ${esc(ziText(c.termen_stat))}. ` +
+    `Previziune: suma exactă se calculează după închiderea pontajului.</p>` +
+    fz + link + subsol + `</div>`
+  return { subiect: subiect.replace(/[\r\n]+/g, ' ').slice(0, 200), html }
+}
+
 // un rând rezervat -> {subiect, html}
 export function mailUpa(r, { furnizori = [], app = APP } = {}) {
+  if (areCalcul(r)) return mailCalcul(r, { furnizori, app })
   const luna = lunaText(r.luna)
   const link = `<p style="margin-top:16px"><a href="${esc(app)}/administrativ?tab=upa" style="color:#1f6f8b">Deschide Administrativ → Unități protejate</a> (acolo se înregistrează facturile)</p>`
   const fz = Array.isArray(furnizori) && furnizori.length

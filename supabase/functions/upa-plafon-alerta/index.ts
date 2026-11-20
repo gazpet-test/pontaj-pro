@@ -1,5 +1,9 @@
 // upa-plafon-alerta — fondul de handicap / unități protejate (L448/2006: achizițiile de la unități protejate autorizate se deduc din
-// contribuția lunară; plafonul nu se reportează, ce nu se cheltuie se plătește la bugetul de stat).
+// contribuția lunară).
+// v11 (20270101a, răspunsul expertului contabil 20.11.2026): contribuția e CALCULATĂ în BD (NMA din pontaj, salariul minim pe perioade,
+//   deducerea = cel mult jumătate din contribuție, excedentul se reportează). Rândurile rezervate au `calcul` (fn_upa_calcul_la): alerta zilei
+//   = PREVIZIUNE „mai sunt X lei de cumpărat”; închiderea (după închiderea pontajului, din 13 a lunii următoare) = „de plată la bugetul de
+//   stat Y lei până pe 25”. Fără `calcul` (BD-ul încă pe 20261229a) mailul are forma v10 de mai jos — v11 se publică ÎNAINTEA migrării.
 // v10 (20261229a, decizia owner-ului 19.11.2026): rulează ZILNIC (cronul propus 0 6 * * *); decizia e în BD (fn_upa_alerta_rezerva):
 //   * în fiecare zi: dacă luna anterioară nu e închisă -> o închide în upa_luna_inchisa (o dată) și, cu alerta pornită și necheltuit > 0,
 //     trimite „Fond handicap <luna>: necheltuit Z lei - se plătește la bugetul de stat”;
