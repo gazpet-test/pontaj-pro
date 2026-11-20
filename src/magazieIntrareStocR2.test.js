@@ -223,7 +223,7 @@ describe('r2 P4: aceeași referință cu alt conținut nu e raportată ca succes
   })
   // r3: creatDeja (doar după ref) a fost înlocuit de judecaRandFactura (ref + conținut); testele r3 acoperă și respingerea.
   it('judecaRandFactura: rândul nou creat la o încercare cu rezultat necunoscut se recunoaște după ref (și doar după ref-ul lui)', () => {
-    const rand = r => ({ k: 1, denumire: 'Cască', cantitate: '5', um: 'buc', ref: r, tinta: 'nou' })
+    const rand = r => ({ k: 1, denumire: 'Cască', cantitate: '5', um: 'buc', ref: r, cheie: `${r}-0000-4000-8000-000000000000`, tinta: 'nou' })
     const FACT = { nr: 'F1', data: AZI, furnizor: '', categorie: 'eip' }
     const ech = { id: 9, ...randNou(rand(REF), FACT).payload, activ: true }
     const lista = [ech, { id: 10, denumire: 'Vestă', observatii: null }]
@@ -234,7 +234,7 @@ describe('r2 P4: aceeași referință cu alt conținut nu e raportată ca succes
     expect(judecaRandFactura(rand(REF), randNou(rand(REF), FACT), [])).toEqual({ stare: 'absent' })
   })
   it('scenariul: inserarea „Cască” 5 a ajuns, rezultatul s-a pierdut; după reîncărcare rândul creat apare ca potrivire — fără ref s-ar aduna +5 (10); cu ref e recunoscut, iar scrierea directă pe el e refuzată', async () => {
-    const rand = { k: 1, denumire: 'Cască', um: 'buc', cantitate: '5', ref: REF, tinta: 'nou' }
+    const rand = { k: 1, denumire: 'Cască', um: 'buc', cantitate: '5', ref: REF, cheie: `${REF}-0000-4000-8000-000000000000`, tinta: 'nou' }
     const FACT = { nr: 'F1', data: '', furnizor: '', categorie: 'eip' }
     const creat = { id: 9, ...randNou(rand, FACT).payload, activ: true }
     expect(creat.observatii).toBe(`Intrare inițială 5 buc · Factura F1 · ref ${REF}`)

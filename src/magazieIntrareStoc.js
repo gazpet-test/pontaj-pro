@@ -1,7 +1,8 @@
 // TKT-0353 (etapa 2): intrare nouă PESTE stocul existent la Magazie → Echipamente.
 // Logică pură (fără ceas, fără aleator propriu); singura funcție cu acces la BD (aplicaIntrare)
 // primește clientul ca parametru, ca să poată fi testată cu un client fals.
-// Fără coloane noi: urma intrării (cantitate, factură, furnizor, preț, data) e o linie adăugată la `observatii`.
+// Urma intrării (cantitate, factură, furnizor, preț, data) e o linie adăugată la `observatii`. Singura coloană nouă (r5, migrarea
+// 20261231a): `referinta_intentie` pe rândurile noi din factură, UNIQUE în BD, ca aceeași intrare să nu poată fi salvată de două ori.
 import { normalizeazaNumar } from './eipIntrareLogica.js'
 import { dataCalendaristicaValida } from './magazieEipLogica.js'
 import { paginareKeyset } from './hrDeciziiUtil.js'
@@ -79,6 +80,18 @@ export function validareIntrare(form, azi) {
 export function refNou(octeti) {
   if (!octeti || octeti.length < 4) throw new Error('Lipsesc octeții aleatori pentru referința intrării.')
   return Array.from(octeti.slice(0, 4), b => (b & 255).toString(16).padStart(2, '0')).join('')
+}
+
+// r5 (decizia owner-ului 20.11.2026, migrarea 20261231a): cheia intenției „rând nou din factură” = UUID v4 din 16 octeți aleatori,
+// scrisă în magazie_echipamente.referinta_intentie (UNIQUE în BD). Ref-ul scurt din observații = primele 8 cifre ale cheii.
+export const UUID_VALID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+export function cheieIntentie(octeti) {
+  if (!octeti || octeti.length < 16) throw new Error('Lipsesc octeții aleatori pentru cheia intrării.')
+  const b = Array.from(octeti.slice(0, 16), x => x & 255)
+  b[6] = (b[6] & 0x0f) | 0x40
+  b[8] = (b[8] & 0x3f) | 0x80
+  const h = b.map(x => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
 // Linia de urmă: „Intrare +10 buc · Factura X din AAAA-LL-ZZ · furnizor Z · preț unitar P lei · AAAA-LL-ZZ · ref abcd1234”.
@@ -175,19 +188,25 @@ export function randNou(rand, fact) {
   const cantitate = Number(String(rand?.cantitate).replace(',', '.')) || 0
   const antet = [unRand(fact?.nr) && `Factura ${unRand(fact.nr)}`, fact?.data && `din ${fact.data}`, unRand(fact?.furnizor) && `furnizor ${unRand(fact.furnizor)}`].filter(Boolean).join(' ')
   const linie = [`Intrare inițială ${fmtCantitate(cantitate)} ${um}`, antet, pret != null && `preț unitar ${fmtCantitate(pret)} lei`, `ref ${rand?.ref}`].filter(Boolean).join(' · ')
+  // r5: referinta_intentie = cheia rândului (UUID), aceeași la orice retrimitere a intenției (rândul blocat păstrează rândul trimis)
+  const cheie = typeof rand?.cheie === 'string' ? rand.cheie.toLowerCase() : null
   return {
     linie,
-    payload: { denumire: unRand(rand?.denumire), categorie: fact?.categorie, este_eip: fact?.categorie === 'eip', um, serie: unRand(rand?.serie) || null, cantitate_total: cantitate, stare: 'functional', observatii: linie },
+    ref: rand?.ref,
+    payload: { denumire: unRand(rand?.denumire), categorie: fact?.categorie, este_eip: fact?.categorie === 'eip', um, serie: unRand(rand?.serie) || null, cantitate_total: cantitate, stare: 'functional', observatii: linie, referinta_intentie: cheie },
   }
 }
 
 // Rândul nou creat de ACEEAȘI intenție: ref-ul o singură dată, linia identică, aceleași denumire / categorie / UM / serie / EIP,
 // rând activ. Cantitatea curentă nu se compară (o intrare ulterioară legitimă o poate schimba): cantitatea inițială e în linie.
+// r5: dacă rândul citit are coloana referinta_intentie (recitirea din tabel; vederea listei nu o are), ea trebuie să fie cheia intenției.
+const cheieEgala = (e, p) => !Object.prototype.hasOwnProperty.call(e, 'referinta_intentie') ||
+  (e.referinta_intentie != null && String(e.referinta_intentie).toLowerCase() === p.referinta_intentie)
 function eRandulNou(e, intentie, ref) {
   const p = intentie?.payload
   return !!p && e.activ !== false && stareRef(e.observatii, intentie.linie, ref) === 'aceeasi' &&
     unRand(e.denumire) === p.denumire && e.categorie === p.categorie && (unRand(e.um) || 'buc') === p.um &&
-    (unRand(e.serie) || null) === p.serie && !!e.este_eip === p.este_eip
+    (unRand(e.serie) || null) === p.serie && !!e.este_eip === p.este_eip && cheieEgala(e, p)
 }
 
 // Judecata unui rând din factură pe lista RECITITĂ, înaintea oricărei scrieri. `intentie` = randNou(...) al rândului.
@@ -303,14 +322,49 @@ export async function aplicaLot(db, pasi) {
 
 // ── r3 P2: inserarea rândurilor noi, clasificată ca la UPDATE (L05) ──
 // 'ok' | 'eroare' (refuz 4xx: nimic scris, rândurile rămân editabile) | 'necunoscut' (rețea / 5xx / excepție: rândurile se blochează).
-export async function insereazaNoi(db, payload) {
+// ── r5 (L04, L16; migrarea 20261231a): fiecare rând nou poartă referinta_intentie (UUID, UNIQUE în BD). Inserarea =
+// INSERT … ON CONFLICT (referinta_intentie) DO NOTHING (upsert cu ignoreDuplicates): o retrimitere a aceleiași intenții, oricând ar
+// ajunge cererea anterioară, nu mai poate crea al doilea rând. După un răspuns fără eroare, RECITIREA pe referință decide fiecare rând:
+// exact un rând cu conținutul intenției = 'ok' (creat acum sau la o încercare anterioară, nu dublură); aceeași referință cu alt conținut
+// = 'alta' (nimic scris pentru rândul acela); negăsit / recitire eșuată = 'necunoscut' (retrimiterea rămâne sigură).
+// intentii: [{ ref, linie, payload }] (randNou); rezultat: { stare, mesaj?, stari?: ['ok'|'alta'|'necunoscut', … în ordinea intențiilor] }.
+const COLOANE_RECITIRE = 'id,denumire,categorie,um,serie,este_eip,activ,observatii,referinta_intentie'
+export async function insereazaNoi(db, intentii, uid) {
+  const lista = intentii || []
+  const chei = lista.map(i => i?.payload?.referinta_intentie)
+  if (!lista.length || chei.some(c => !UUID_VALID.test(String(c ?? ''))) || new Set(chei).size !== chei.length ||
+      lista.some(i => !REF_VALID.test(String(i?.ref ?? '')) || stareRef(i.linie, i.linie, i.ref) !== 'aceeasi' || i.payload.observatii !== i.linie)) {
+    return { stare: 'eroare', mesaj: 'Rândurile noi nu au referința intrării. Redeschide formularul. Nimic nu a fost scris.' }
+  }
+  const toate = cuStare => ({ stari: lista.map(() => cuStare) })
   let r
-  try { r = await db.from('magazie_echipamente').insert(payload) }
-  catch (e) { return { stare: 'necunoscut', mesaj: `Rezultatul inserării nu poate fi confirmat (${e?.message || 'eroare'}).` } }
-  if (r && !r.error) return { stare: 'ok' }
-  const m = r?.error?.message || 'eroare necunoscută'
-  if (esecCert(r)) return { stare: 'eroare', mesaj: `${m}. Rândurile noi nu au fost scrise.` }
-  return { stare: 'necunoscut', mesaj: `Rezultatul inserării nu poate fi confirmat (${m}).` }
+  try {
+    r = await db.from('magazie_echipamente').upsert(lista.map(i => ({ ...i.payload, created_by: uid })), { onConflict: 'referinta_intentie', ignoreDuplicates: true })
+  } catch (e) { return { stare: 'necunoscut', mesaj: `Rezultatul inserării nu poate fi confirmat (${e?.message || 'eroare'}).`, ...toate('necunoscut') } }
+  if (!r || r.error) {
+    const m = r?.error?.message || 'eroare necunoscută'
+    if (esecCert(r)) return { stare: 'eroare', mesaj: `${m}. Rândurile noi nu au fost scrise.` }
+    return { stare: 'necunoscut', mesaj: `Rezultatul inserării nu poate fi confirmat (${m}).`, ...toate('necunoscut') }
+  }
+  // recitirea pe referință (L04), pe bucăți (cererea rămâne scurtă; cel mult un rând pe cheie, deci sub plafonul serverului)
+  const gasite = []
+  try {
+    for (let i = 0; i < chei.length; i += 100) {
+      const q = await db.from('magazie_echipamente').select(COLOANE_RECITIRE).in('referinta_intentie', chei.slice(i, i + 100))
+      if (q.error || !Array.isArray(q.data)) throw new Error(q.error?.message || 'răspuns fără listă')
+      gasite.push(...q.data)
+    }
+  } catch (e) {
+    return { stare: 'necunoscut', mesaj: `Inserarea a răspuns, dar rândurile nu au putut fi recitite (${e?.message || 'eroare'}). Retrimiterea aceleiași intrări nu creează al doilea rând.`, ...toate('necunoscut') }
+  }
+  const stari = lista.map((i, j) => {
+    const cu = gasite.filter(e => e && String(e.referinta_intentie ?? '').toLowerCase() === chei[j])
+    if (!cu.length) return 'necunoscut'
+    return cu.length === 1 && eRandulNou(cu[0], i, i.ref) ? 'ok' : 'alta'
+  })
+  const stare = stari.every(s => s === 'ok') ? 'ok' : stari.includes('necunoscut') ? 'necunoscut' : 'alta'
+  const mesaj = stari.includes('necunoscut') ? 'Rezultatul inserării nu poate fi confirmat (rândul nu apare la recitire).' : undefined
+  return { stare, ...(mesaj ? { mesaj } : {}), stari }
 }
 
 // Intenția „rând nou” a unui rând din factură: după un rezultat necunoscut se folosesc valorile ȘI antetul primei încercări.
@@ -322,7 +376,8 @@ export const intentieRand = (r, fact) => randNou(r.fixat?.rand || r, r.fixat?.fa
 // Dacă ref-ul intenției apare în lista recitită cu exact acest conținut → „creat” (nu se trimite). Dacă NU apare,
 // retrimiterea cere confirmarea explicită a omului (`r.retrimitereConfirmata === true`), dată DUPĂ rezultatul necunoscut.
 export const MESAJ_INSERARE_NECUNOSCUTA = 'Nu se știe dacă intrarea s-a salvat — verifică lista (reîncărcată) înainte să trimiți din nou.'
-export const MESAJ_CERE_CONFIRMARE = 'Rândul nu apare în lista reîncărcată. Trimiterea din nou se face doar după ce confirmi că ai verificat lista (bifa de la rând); dacă cererea anterioară ajunge totuși mai târziu, rândul poate apărea de două ori. Nimic nu a fost scris.'
+// r5: plasa r4 rămâne (omul verifică lista înainte), dar retrimiterea e acum sigură: aceeași referință nu se salvează de două ori (BD).
+export const MESAJ_CERE_CONFIRMARE = 'Rândul nu apare în lista reîncărcată. Trimiterea din nou se face doar după ce confirmi că ai verificat lista (bifa de la rând); aceeași intrare nu poate fi salvată de două ori, chiar dacă cererea anterioară ajunge mai târziu. Nimic nu a fost scris.'
 export const inserareNecunoscuta = r => r?.fixat?.inserare === 'necunoscuta'
 
 // Rezultatul salvării aplicat pe rândurile din ecran (pur, folosit de modal): rândurile aplicate ies; cele cu rezultat
@@ -379,17 +434,18 @@ export async function salveazaFactura(db, { rows, fact, uid, azi, echipamente, c
       return gata(`„${pas.denumire}”: ${lot.oprit.stare === 'conflict' ? MESAJ_CONFLICT : lot.oprit.mesaj}`)
     }
     if (noi.length) {
-      const ins = await insereazaNoi(db, noi.map(({ i }) => ({ ...i.payload, created_by: uid })))
-      if (ins.stare !== 'ok') {
-        // necunoscut: rândurile se blochează pe valorile ȘI antetul trimise și se marchează „inserare necunoscută” (r4):
-        // la salvarea următoare cele create se recunosc ('creat'), iar cele negăsite cer confirmarea omului, nu reinserare automată.
-        if (ins.stare === 'necunoscut') {
-          necunoscute.push(...noi.map(({ r }) => ({ k: r.k, fixat: { ...(r.fixat || { tinta: 'nou', rand: { ...r, fixat: undefined, retrimitereConfirmata: undefined }, fact: { ...fact } }), inserare: 'necunoscuta' } })))
-          return gata(`${MESAJ_INSERARE_NECUNOSCUTA} (${ins.mesaj})`)
-        }
-        return gata(ins.mesaj)
-      }
-      aplicate.push(...noi.map(({ r }) => r.k))
+      const ins = await insereazaNoi(db, noi.map(({ i }) => i), uid)
+      if (ins.stare === 'eroare') return gata(ins.mesaj)
+      // r5: fiecare rând după starea lui la recitire. 'ok' iese din formular; 'alta' = refuz (nimic scris pentru el);
+      // 'necunoscut': rândul se blochează pe valorile ȘI antetul trimise și se marchează „inserare necunoscută” (r4):
+      // la salvarea următoare cel creat se recunoaște ('creat'), iar cel negăsit cere confirmarea omului; retrimiterea e apărată de BD.
+      const cu = s => noi.filter((_, j) => ins.stari?.[j] === s)
+      aplicate.push(...cu('ok').map(({ r }) => r.k))
+      necunoscute.push(...cu('necunoscut').map(({ r }) => ({ k: r.k, fixat: { ...(r.fixat || { tinta: 'nou', rand: { ...r, fixat: undefined, retrimitereConfirmata: undefined }, fact: { ...fact } }), inserare: 'necunoscuta' } })))
+      const erori = []
+      if (cu('alta').length) erori.push(`${cu('alta').map(({ r }) => `„${unRand(r.denumire)}”`).join(', ')}: ${MESAJ_REF_ALT}`)
+      if (cu('necunoscut').length) erori.push(`${MESAJ_INSERARE_NECUNOSCUTA} (${ins.mesaj})`)
+      if (erori.length) return gata(erori.join(' '))
     }
     return gata(null, { laStoc: pasi.length, noi: noi.length })
   } catch (e) {

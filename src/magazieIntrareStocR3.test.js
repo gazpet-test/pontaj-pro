@@ -13,7 +13,9 @@ const REF = '0a1b2c3d'
 const REF2 = '99887766'
 const RETEA = { data: null, error: { message: 'TypeError: Failed to fetch', details: '', hint: '', code: '' }, status: 0, statusText: '' }
 const F1 = { nr: 'F1', data: AZI, furnizor: 'Furnizor SRL', categorie: 'scule' }
-const rand5 = (v = {}) => ({ k: 1, denumire: 'Cheie dinamometrică', cantitate: '5', um: 'buc', pret: '', serie: '', ref: REF, tinta: 'nou', vazute: [], ...v })
+// r5: cheia rândului (referinta_intentie, UUID) începe cu ref-ul, ca în ecran (cheieIntentie → ref = primele 8 cifre)
+const cheieDin = ref => `${ref}-0000-4000-8000-000000000000`
+const rand5 = (v = {}) => { const r = { k: 1, denumire: 'Cheie dinamometrică', cantitate: '5', um: 'buc', pret: '', serie: '', ref: REF, tinta: 'nou', vazute: [], ...v }; return { cheie: cheieDin(r.ref), ...r } }
 const salv = (db, rows, extra = {}) => salveazaFactura(db, { rows, fact: F1, uid: 'u-1', azi: AZI, echipamente: [], catalogIds: new Set(), ...extra })
 // rândul creat de inserarea cu rezultat necunoscut (exact payload-ul trimis)
 const creatDin = (r, fact = F1, id = 9) => ({ id, ...randNou(r, fact).payload, created_by: 'u-1', activ: true })
@@ -23,7 +25,8 @@ describe('r3 P1: rândul din factură deja creat se recunoaște doar dacă are e
   it('payload-ul și linia: cantitatea inițială, factura, furnizorul, prețul și ref-ul stau în linie', () => {
     const { payload, linie } = randNou(rand5({ pret: '12,5' }), F1)
     expect(linie).toBe(`Intrare inițială 5 buc · Factura F1 din ${AZI} furnizor Furnizor SRL · preț unitar 12,5 lei · ref ${REF}`)
-    expect(payload).toEqual({ denumire: 'Cheie dinamometrică', categorie: 'scule', este_eip: false, um: 'buc', serie: null, cantitate_total: 5, stare: 'functional', observatii: linie })
+    expect(payload).toEqual({ denumire: 'Cheie dinamometrică', categorie: 'scule', este_eip: false, um: 'buc', serie: null, cantitate_total: 5, stare: 'functional', observatii: linie,
+      referinta_intentie: '0a1b2c3d-0000-4000-8000-000000000000' })
   })
 
   it('cazul din verdict: salvat cu 5 / F1, apoi formularul cu ACEEAȘI referință are 15 / F2 → eroare, nu „deja salvat”; zero scrieri, stocul rămâne 5', async () => {
@@ -188,11 +191,12 @@ describe('r3 P2: o eroare fără refuz 4xx (rețea, 5xx, 408) e NECUNOSCUT, nu e
   })
 
   it('insereazaNoi: 201 → ok; 4xx → eroare; status 0, 5xx, excepție → necunoscut', async () => {
-    expect(await insereazaNoi(dbFals([]).db, [{ denumire: 'x' }])).toEqual({ stare: 'ok' })
-    expect((await insereazaNoi(dbFals([], { laInsert: () => ({ data: null, error: { message: 'denied', code: '42501' }, status: 403 }) }).db, [{}])).stare).toBe('eroare')
-    expect((await insereazaNoi(dbFals([], { laInsert: () => RETEA }).db, [{}])).stare).toBe('necunoscut')
-    expect((await insereazaNoi(dbFals([], { laInsert: () => ({ data: null, error: { message: 'x' }, status: 503 }) }).db, [{}])).stare).toBe('necunoscut')
-    expect((await insereazaNoi(dbFals([], { laInsert: () => { throw new Error('Failed to fetch') } }).db, [{}])).stare).toBe('necunoscut')
+    const i = [randNou(rand5(), F1)]
+    expect(await insereazaNoi(dbFals([]).db, i, 'u-1')).toEqual({ stare: 'ok', stari: ['ok'] })
+    expect((await insereazaNoi(dbFals([], { laInsert: () => ({ data: null, error: { message: 'denied', code: '42501' }, status: 403 }) }).db, i, 'u-1')).stare).toBe('eroare')
+    expect((await insereazaNoi(dbFals([], { laInsert: () => RETEA }).db, i, 'u-1')).stare).toBe('necunoscut')
+    expect((await insereazaNoi(dbFals([], { laInsert: () => ({ data: null, error: { message: 'x' }, status: 503 }) }).db, i, 'u-1')).stare).toBe('necunoscut')
+    expect((await insereazaNoi(dbFals([], { laInsert: () => { throw new Error('Failed to fetch') } }).db, i, 'u-1')).stare).toBe('necunoscut')
   })
 
   it('inserarea ajunge, răspunsul e eroare de rețea → rândurile se blochează pe valori + antet; reîncercarea (antetul din ecran schimbat între timp) le recunoaște, o singură inserare', async () => {

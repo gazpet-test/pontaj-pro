@@ -13,7 +13,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { dataAziBucuresti, eroareTotalEchipament, eroareCantitatePredare, eroareDataPredare } from './magazieEipLogica.js'
-import { aplicaIntrare, citesteEchipamente, eroareCantitateIntrare, fmtCantitate, inserareNecunoscuta, intentieRand, judecaRandFactura, MESAJ_CONFLICT, MESAJ_INSERARE_NECUNOSCUTA, MESAJ_REF_ALT, motivFaraIntrare, potrivireExistente, pregatesteIntrare, randuriDupaSalvare, refNou, salveazaFactura, sumaStoc, tintaRand, validareIntrare } from './magazieIntrareStoc.js'
+import { aplicaIntrare, cheieIntentie, citesteEchipamente, eroareCantitateIntrare, fmtCantitate, inserareNecunoscuta, intentieRand, judecaRandFactura, MESAJ_CONFLICT, MESAJ_INSERARE_NECUNOSCUTA, MESAJ_REF_ALT, motivFaraIntrare, potrivireExistente, pregatesteIntrare, randuriDupaSalvare, refNou, salveazaFactura, sumaStoc, tintaRand, validareIntrare } from './magazieIntrareStoc.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
 import EipIntrareActiune from './EipIntrareModal.jsx'
 import ProductieTab from './MagazieProductie.jsx'
@@ -912,8 +912,10 @@ function IntrareModal({ echip, busy, onSave, onClose }) {
 // ── TKT-0279: Modal adăugare în bloc (din factură) ──
 // Lipire din Excel: coloane separate prin TAB sau ; → denumire, cantitate, UM, preț, serie
 // TKT-0353: fiecare rând are o cheie (k) și o referință de intrare (ref); alegere = undefined (implicit) | 'nou' | id existent.
+// r5: cheie = referința intenției „rând nou” (UUID, unică în BD: aceeași intrare nu se salvează de două ori); ref = primele 8 cifre ale ei.
 let cheieRand = 0
-const RAND_GOL = (v = {}) => ({ denumire:'', cantitate:'1', um:'buc', pret:'', serie:'', ...v, k: ++cheieRand, ref: refAleator(), alegere: undefined })
+const cheiRand = () => { const cheie = cheieIntentie(globalThis.crypto.getRandomValues(new Uint8Array(16))); return { cheie, ref: cheie.slice(0, 8) } }
+const RAND_GOL = (v = {}) => ({ denumire:'', cantitate:'1', um:'buc', pret:'', serie:'', ...v, k: ++cheieRand, ...cheiRand(), alegere: undefined })
 function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaError }) {
   const [fact, setFact] = useState({ nr:'', data:dataAziBucuresti(new Date()), furnizor:'', categorie:'echipament' })
   const [rows, setRows] = useState(() => [RAND_GOL(), RAND_GOL(), RAND_GOL()])
@@ -1023,7 +1025,7 @@ function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaE
               {nesigur && !creat && !eroare && (
                 <div role="status" style={{ fontSize:11.5, color:G.orange, margin:'3px 0 0 2px' }}>
                   <div style={{ fontWeight:700 }}>{MESAJ_INSERARE_NECUNOSCUTA}</div>
-                  <div>Rândul nu apare acum în lista reîncărcată. Caută „{r.denumire}” în lista de echipamente; dacă nu e acolo, bifează și salvează din nou (dacă cererea anterioară ajunge totuși mai târziu, rândul poate apărea de două ori).</div>
+                  <div>Rândul nu apare acum în lista reîncărcată. Caută „{r.denumire}” în lista de echipamente; dacă nu e acolo, bifează și salvează din nou (aceeași intrare nu poate fi salvată de două ori, chiar dacă cererea anterioară ajunge mai târziu).</div>
                   <label style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, color:G.text, cursor: (busy || listaError) ? 'default' : 'pointer' }}>
                     <input type="checkbox" checked={r.retrimitereConfirmata === true} disabled={busy || !!listaError} onChange={e => setConfirmare(i, e.target.checked)} />
                     Am verificat lista reîncărcată: rândul nu există, trimite-l din nou

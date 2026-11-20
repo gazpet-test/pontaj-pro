@@ -13,7 +13,9 @@ const REF = '0a1b2c3d'
 const REF2 = '99887766'
 const RETEA = { data: null, error: { message: 'TypeError: Failed to fetch', details: '', hint: '', code: '' }, status: 0, statusText: '' }
 const F1 = { nr: 'F1', data: AZI, furnizor: 'Furnizor SRL', categorie: 'scule' }
-const rand5 = (v = {}) => ({ k: 1, denumire: 'Cheie dinamometrică', cantitate: '5', um: 'buc', pret: '', serie: '', ref: REF, tinta: 'nou', vazute: [], ...v })
+// r5: cheia rândului (referinta_intentie, UUID) începe cu ref-ul, ca în ecran (cheieIntentie → ref = primele 8 cifre)
+const cheieDin = ref => `${ref}-0000-4000-8000-000000000000`
+const rand5 = (v = {}) => { const r = { k: 1, denumire: 'Cheie dinamometrică', cantitate: '5', um: 'buc', pret: '', serie: '', ref: REF, tinta: 'nou', vazute: [], ...v }; return { cheie: cheieDin(r.ref), ...r } }
 const salv = (db, rows, extra = {}) => salveazaFactura(db, { rows, fact: F1, uid: 'u-1', azi: AZI, echipamente: [], catalogIds: new Set(), ...extra })
 // ecranul după salvare: aceeași funcție ca modalul
 const ecran = (rows, res) => randuriDupaSalvare(rows, res, () => ({ k: 'gol', denumire: '' }))

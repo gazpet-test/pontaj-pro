@@ -110,7 +110,7 @@ async function incalcari(m) {
   }
   // ── r3 ──
   const FACT1 = { nr: 'F1', data: '2026-11-20', furnizor: '', categorie: 'scule' }
-  const r5 = { k: 1, denumire: 'Cheie', cantitate: '5', um: 'buc', ref: REF, tinta: 'nou' }
+  const r5 = { k: 1, denumire: 'Cheie', cantitate: '5', um: 'buc', ref: REF, cheie: `${REF}-0000-4000-8000-000000000000`, tinta: 'nou' }
   const creat5 = () => ({ id: 9, ...m.randNou(r5, FACT1).payload, activ: true })
   const salv = (db, rows, fact = FACT1) => m.salveazaFactura(db, { rows, fact, uid: 'u', azi: '2026-11-20', echipamente: [], catalogIds: new Set() })
   {
@@ -138,9 +138,9 @@ async function incalcari(m) {
     }
     const { db } = dbFals([rand()], { laUpdate: () => ({ data: null, error: { message: 'permission denied', code: '42501' }, status: 403 }) })
     if ((await m.aplicaIntrare(db, cerere)).stare !== 'eroare') out.push('r3 P2: refuzul 4xx nu mai e eșec cert')
-    const ins0 = await m.insereazaNoi(dbFals([], { laInsert: (t, p, ins) => { ins(p); return { data: null, error: { message: 'TypeError: Failed to fetch' }, status: 0 } } }).db, [{ denumire: 'x' }])
+    const ins0 = await m.insereazaNoi(dbFals([], { laInsert: (t, p, ins) => { ins(p); return { data: null, error: { message: 'TypeError: Failed to fetch' }, status: 0 } } }).db, [m.randNou(r5, FACT1)], 'u')
     if (ins0.stare !== 'necunoscut') out.push('r3 P2: inserarea cu eroare de rețea declarată eșec cert')
-    const ins4 = await m.insereazaNoi(dbFals([], { laInsert: () => ({ data: null, error: { message: 'denied' }, status: 403 }) }).db, [{ denumire: 'x' }])
+    const ins4 = await m.insereazaNoi(dbFals([], { laInsert: () => ({ data: null, error: { message: 'denied' }, status: 403 }) }).db, [m.randNou(r5, FACT1)], 'u')
     if (ins4.stare !== 'eroare') out.push('r3 P2: inserarea refuzată 4xx nu e eșec cert')
   }
   {
@@ -184,6 +184,50 @@ async function incalcari(m) {
     const dupa = ecran([{ ...r5, fixat, retrimitereConfirmata: true }], { aplicate: [], necunoscute: [{ k: 1, fixat }] })
     if (dupa[0].retrimitereConfirmata !== false) out.push('r4: confirmarea rămâne după un nou rezultat necunoscut')
   }
+  // ── r5 (regula din BD: referinta_intentie UNIQUE; falsul o aplică la fel ca migrarea) ──
+  {
+    // verdict r4: retrimiterea CONFIRMATĂ + cererea inițială sosită mai târziu → un singur rând
+    let inZbor = null
+    const f = dbFals([], { laInsert: (t, p, ins) => { if (f.jurnal.insert.length === 1) { inZbor = () => ins(p); return RETEA } } })
+    const rows = ecran([r5], await salv(f.db, [r5]))
+    const r2 = await salv(f.db, [{ ...rows[0], retrimitereConfirmata: true }])
+    if (inZbor) inZbor()
+    if (r2.eroare || r2.aplicate[0] !== 1 || f.tabel.size !== 1) out.push('r5: retrimiterea confirmată + cererea întârziată = rând dublat / nesalvat')
+  }
+  {
+    // ordinea inversă: cererea inițială ajunge între recitirea listei și retrimitere → retrimiterea e sărită (ON CONFLICT) și recunoscută
+    let prima = null
+    const f = dbFals([], { laInsert: (t, p, ins) => { const n = f.jurnal.insert.length; if (n === 1) { prima = p; return RETEA } if (n === 2) ins(prima) } })
+    const rows = ecran([r5], await salv(f.db, [r5]))
+    const r2 = await salv(f.db, [{ ...rows[0], retrimitereConfirmata: true }])
+    if (r2.eroare || r2.aplicate[0] !== 1 || f.tabel.size !== 1) out.push('r5: cererea inițială sosită înaintea retrimiterii = refuz / dublură')
+  }
+  {
+    // aceeași cheie în BD cu ALT conținut (observațiile rândului nu mai au linia) → refuz, nimic scris, rândul existent neatins
+    // (altă denumire: altfel potrivirea nevăzută din listă ar refuza înaintea inserării și proprietatea n-ar testa recitirea)
+    const strain = { id: 9, ...m.randNou({ ...r5, denumire: 'Cheie veche', cantitate: '6' }, FACT1).payload, observatii: 'editat de mână', activ: true }
+    const f = dbFals([strain])
+    const res = await salv(f.db, [r5])
+    if (!res.eroare || res.aplicate.length || f.tabel.size !== 1 || f.tabel.get(9).cantitate_total !== 6) out.push('r5: aceeași cheie cu alt conținut trece drept salvat')
+  }
+  {
+    // răspuns fără eroare, dar rândul nu apare la recitire → necunoscut (nu salvat)
+    const f = dbFals([], { laInsert: () => ({ data: null, error: null, status: 201 }) })
+    const res = await salv(f.db, [r5])
+    if (res.aplicate.length || !(res.necunoscute || []).some(x => x.k === 1)) out.push('r5: rândul negăsit la recitire trece drept salvat')
+    // recitirea eșuată → necunoscut
+    const g = dbFals([], { laRecitire: () => ({ data: null, error: { message: 'timeout' }, status: 504 }) })
+    const res2 = await salv(g.db, [r5])
+    if (res2.aplicate.length || !(res2.necunoscute || []).some(x => x.k === 1)) out.push('r5: recitirea eșuată trece drept salvat')
+  }
+  {
+    // rândul fără cheie nu se trimite; rândul din tabel cu linia noastră dar ALTĂ cheie nu e „al nostru”
+    const f = dbFals([])
+    const res = await salv(f.db, [{ ...r5, cheie: undefined }])
+    if (f.jurnal.insert.length || !res.eroare) out.push('r5: rândul fără cheie e trimis')
+    const altaCheie = { id: 9, ...m.randNou(r5, FACT1).payload, referinta_intentie: '99999999-0000-4000-8000-000000000000', activ: true }
+    if (m.judecaRandFactura(r5, m.randNou(r5, FACT1), [altaCheie]).stare === 'creat') out.push('r5: rândul cu altă cheie recunoscut ca propriu')
+  }
   return out
 }
 
@@ -213,14 +257,23 @@ const MUTANTI = [
   ['r3 P2: eroarea fără 4xx = eșec cert (forma r2)', "if (r1.error ? !esecCert(r1) : !Array.isArray(r1.data)) return { stare: 'necunoscut', mesaj: MESAJ_NECUNOSCUT(ref) }", ''],
   ['r3 P2: status 0 (rețea) = refuz 4xx', 'Number.isInteger(s) && s >= 400 && s < 500', 'Number.isInteger(s) && s < 500'],
   ['r3 P2: 5xx = refuz 4xx', 's >= 400 && s < 500', 's >= 400 && s < 600'],
-  ['r3 P2: inserarea necunoscută tratată ca eroare', 'return { stare: \'necunoscut\', mesaj: `Rezultatul inserării nu poate fi confirmat (${m}).` }', "return { stare: 'eroare', mesaj: m }"],
-  ['r3 P2: rândurile cu inserare necunoscută nu se blochează', 'necunoscute.push(...noi.map(({ r }) =>', '[].push(...noi.map(({ r }) =>'],
+  ['r3 P2: inserarea necunoscută tratată ca eroare', 'return { stare: \'necunoscut\', mesaj: `Rezultatul inserării nu poate fi confirmat (${m}).`, ...toate(\'necunoscut\') }', "return { stare: 'eroare', mesaj: m }"],
+  ['r3 P2: rândurile cu inserare necunoscută nu se blochează', "necunoscute.push(...cu('necunoscut').map(({ r }) =>", "Array.of().push(...cu('necunoscut').map(({ r }) =>"],
   // r4 (NO-GO Jak r3 pe 3d059fe7)
   ['r4: inserarea necunoscută retrimisă fără confirmare (forma r3)', 'if (neconfirmate.length) return gata(', 'if (false) return gata('],
   ['r4: confirmarea omului ignorată (refuz mereu)', 'inserareNecunoscuta(x.r) && x.r.retrimitereConfirmata !== true', 'inserareNecunoscuta(x.r)'],
   ['r4: rândul ajuns cere totuși confirmare', "x.j.stare !== 'creat' && inserareNecunoscuta(x.r)", 'inserareNecunoscuta(x.r)'],
   ['r4: inserarea necunoscută nemarcată', "), inserare: 'necunoscuta' } })))", ') } })))'],
   ['r4: confirmarea păstrată după un nou rezultat necunoscut', '{ ...r, fixat: nec.get(r.k), retrimitereConfirmata: false }', '{ ...r, fixat: nec.get(r.k) }'],
+  // r5 (decizia owner-ului: regula din BD, migrarea 20261231a)
+  ['r5: INSERT simplu în loc de ON CONFLICT DO NOTHING', "r = await db.from('magazie_echipamente').upsert(lista.map(i => ({ ...i.payload, created_by: uid })), { onConflict: 'referinta_intentie', ignoreDuplicates: true })", "r = await db.from('magazie_echipamente').insert(lista.map(i => ({ ...i.payload, created_by: uid })))"],
+  ['r5: cheia intenției lipsește din rândul trimis', 'observatii: linie, referinta_intentie: cheie },', 'observatii: linie, referinta_intentie: null },'],
+  ['r5: fără recitirea pe referință (răspunsul fără eroare = salvat)', "return cu.length === 1 && eRandulNou(cu[0], i, i.ref) ? 'ok' : 'alta'", "return 'ok'"],
+  ['r5: aceeași referință cu alt conținut = salvat', "return cu.length === 1 && eRandulNou(cu[0], i, i.ref) ? 'ok' : 'alta'", "return cu.length >= 1 ? 'ok' : 'alta'"],
+  ['r5: rândul negăsit la recitire = salvat', "if (!cu.length) return 'necunoscut'", "if (!cu.length) return 'ok'"],
+  ['r5: recitirea eșuată = salvat', "nu creează al doilea rând.`, ...toate('necunoscut') }", "nu creează al doilea rând.`, ...toate('ok') }"],
+  ['r5: cheia din rândul recitit nu se compară', '(e.referinta_intentie != null && String(e.referinta_intentie).toLowerCase() === p.referinta_intentie)', 'true'],
+  ['r5: rânduri fără cheie trimise totuși', "if (!lista.length || chei.some(c => !UUID_VALID.test(String(c ?? ''))) || new Set(chei).size !== chei.length ||", 'if (!lista.length ||'],
   ['P4: ref doar la final de linie (editarea îl ascunde)', 'const token = new RegExp(`(?:^|[^0-9A-Za-z])ref ${ref}(?![0-9A-Za-z])`)', 'const token = new RegExp(`(?:^|[^0-9A-Za-z])ref ${ref}$`)'],
   ['observațiile vechi înlocuite', 'return v ? `${v}\\n${linie}` : linie', 'return linie'],
   ['cantitate 0 acceptată', 'if (!(q > 0)) return', 'if (!(q >= 0)) return'],
