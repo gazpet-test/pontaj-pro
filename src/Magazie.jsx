@@ -13,7 +13,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { dataAziBucuresti, eroareTotalEchipament, eroareCantitatePredare, eroareDataPredare } from './magazieEipLogica.js'
-import { aplicaIntrare, citesteEchipamente, eroareCantitateIntrare, fmtCantitate, intentieRand, judecaRandFactura, MESAJ_CONFLICT, MESAJ_REF_ALT, motivFaraIntrare, potrivireExistente, pregatesteIntrare, refNou, salveazaFactura, sumaStoc, tintaRand, validareIntrare } from './magazieIntrareStoc.js'
+import { aplicaIntrare, citesteEchipamente, eroareCantitateIntrare, fmtCantitate, inserareNecunoscuta, intentieRand, judecaRandFactura, MESAJ_CONFLICT, MESAJ_INSERARE_NECUNOSCUTA, MESAJ_REF_ALT, motivFaraIntrare, potrivireExistente, pregatesteIntrare, randuriDupaSalvare, refNou, salveazaFactura, sumaStoc, tintaRand, validareIntrare } from './magazieIntrareStoc.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
 import EipIntrareActiune from './EipIntrareModal.jsx'
 import ProductieTab from './MagazieProductie.jsx'
@@ -648,7 +648,8 @@ function EchipamenteTab() {
       if (!res.eroare) setBulkOpen(false)
       await loadAll()
       if (!res.eroare) alert(`✓ ${res.laStoc} adăugate la stocul existent, ${res.noi} echipamente noi.`)
-      else alert(`Eroare salvare: ${res.eroare}${res.aplicate.length ? `\n${res.aplicate.length} rânduri au fost deja salvate și au fost scoase din listă.` : ''}${res.necunoscute.length ? '\nRândurile cu rezultat necunoscut au rămas blocate: reîncercarea le trimite identic (nu se adună de două ori).' : ''}`)
+      // r4: inserarea necunoscută NU se retrimite automat (lista e reîncărcată mai sus; omul verifică și confirmă la rând)
+      else alert(`Eroare salvare: ${res.eroare}${res.aplicate.length ? `\n${res.aplicate.length} rânduri au fost deja salvate și au fost scoase din listă.` : ''}${res.necunoscute.some(x => x.fixat?.inserare === 'necunoscuta') ? `\nRândurile noi cu rezultat necunoscut au rămas blocate. ${MESAJ_INSERARE_NECUNOSCUTA}` : res.necunoscute.length ? '\nRândurile cu rezultat necunoscut au rămas blocate: reîncercarea le trimite identic (nu se adună de două ori).' : ''}`)
     } catch (e) { alert('Eroare salvare: ' + e.message) } finally { setBusy(false) }
     return res
   }
@@ -945,24 +946,31 @@ function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaE
       : tinta === null ? 'Există mai multe rânduri cu această denumire: alege unde se adaugă.'
       : v ? (v.ok ? '' : v.eroare)
       : Number(String(r.cantitate).replace(',', '.')) >= 0 ? '' : 'Cantitate invalidă.'
-    return { potriviri, tinta, eroare }
+    // r4: inserare cu rezultat necunoscut, ref-ul negăsit în lista reîncărcată → se trimite doar cu confirmarea omului
+    return { potriviri, tinta, eroare, nesigur: inserareNecunoscuta(r) }
   })
+  const deConfirmat = (r, i) => analiza[i].nesigur && r.retrimitereConfirmata !== true
   // vazute = rândurile existente arătate omului pentru acest rând (r2 P1: la salvare se compară cu lista completă recitită)
-  const valide = rows.map((r, i) => ({ ...r, tinta: analiza[i].tinta, vazute: analiza[i].potriviri.map(p => p.id) })).filter((r, i) => r.denumire.trim() && !analiza[i].eroare && !analiza[i].creat)
+  const valide = rows.map((r, i) => ({ ...r, tinta: analiza[i].tinta, vazute: analiza[i].potriviri.map(p => p.id) })).filter((r, i) => r.denumire.trim() && !analiza[i].eroare && !analiza[i].creat && !deConfirmat(r, i))
   const invalide = rows.filter((r, i) => r.denumire.trim() && analiza[i].eroare).length
+  const neconfirmate = rows.filter((r, i) => r.denumire.trim() && !analiza[i].eroare && !analiza[i].creat && deConfirmat(r, i)).length
   const laStoc = valide.filter(r => r.tinta !== 'nou').length
+  // bifa de confirmare: doar pe rândurile cu inserare necunoscută; orice rezultat necunoscut nou o șterge (randuriDupaSalvare)
+  const setConfirmare = (i, v) => setRows(prev => prev.map((r, j) => j === i && inserareNecunoscuta(r) ? { ...r, retrimitereConfirmata: v } : r))
   const salveaza = async () => {
     const res = await onSave(valide, fact)
-    const gata = new Set(res?.aplicate || [])
-    const nec = new Map((res?.necunoscute || []).map(x => [x.k, x.fixat]))
-    if (gata.size || nec.size) setRows(prev => {
-      const rest = prev.filter(r => !gata.has(r.k)).map(r => nec.has(r.k) && !r.fixat ? { ...r, fixat: nec.get(r.k) } : r)
-      return rest.length ? rest : [RAND_GOL()]
-    })
+    if (res?.aplicate?.length || res?.necunoscute?.length) setRows(prev => randuriDupaSalvare(prev, res, RAND_GOL))
+  }
+  // închiderea / ștergerea unui rând cu inserare necunoscută nerezolvată se confirmă (rândul poate exista deja în evidență)
+  const ramaseNesigure = rows.some((r, i) => analiza[i].nesigur && !analiza[i].creat)
+  const inchide = () => { if (busy) return; if (!ramaseNesigure || window.confirm(`${MESAJ_INSERARE_NECUNOSCUTA}\nÎnchizi formularul?`)) onClose() }
+  const stergeRand = i => {
+    if (analiza[i].nesigur && !analiza[i].creat && !window.confirm(`${MESAJ_INSERARE_NECUNOSCUTA}\nȘtergi rândul din formular?`)) return
+    setRows(prev => prev.length > 1 ? prev.filter((_, j) => j !== i) : [RAND_GOL()])
   }
   const col = '1fr 80px 70px 90px 130px 30px'
   return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:20 }} onClick={onClose}>
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:20 }} onClick={inchide}>
       <div style={{ ...S.card, padding:22, maxWidth:900, width:'100%', maxHeight:'90vh', overflowY:'auto' }} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize:17, fontWeight:800, marginBottom:14 }}>📄 Adaugă echipamente din factură</div>
         <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
@@ -986,7 +994,7 @@ function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaE
           <div>Denumire *</div><div>Cant.</div><div>UM</div><div>Preț unit.</div><div>Serie / nr. inv.</div><div />
         </div>
         {rows.map((r, i) => {
-          const { potriviri, tinta, eroare, creat } = analiza[i]
+          const { potriviri, tinta, eroare, creat, nesigur } = analiza[i]
           return (
             <div key={r.k} style={{ marginBottom:6 }}>
               <div style={{ display:'grid', gridTemplateColumns:col, gap:6 }}>
@@ -995,7 +1003,7 @@ function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaE
                 <input style={S.input} readOnly={!!r.fixat} value={r.um} onChange={e => setRow(i, 'um', e.target.value)} />
                 <input style={S.input} readOnly={!!r.fixat} value={r.pret} onChange={e => setRow(i, 'pret', e.target.value)} placeholder="lei" />
                 <input style={S.input} readOnly={!!r.fixat} value={r.serie} onChange={e => setRow(i, 'serie', e.target.value)} placeholder="opțional" />
-                <button onClick={() => setRows(prev => prev.length > 1 ? prev.filter((_, j) => j !== i) : [RAND_GOL()])} style={{ ...S.btnS, padding:'4px 6px' }} title="Șterge rândul">✕</button>
+                <button onClick={() => stergeRand(i)} disabled={busy} style={{ ...S.btnS, padding:'4px 6px' }} title="Șterge rândul">✕</button>
               </div>
               {potriviri.length > 0 && (
                 <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:12, color:G.orange, margin:'4px 0 0 2px' }}>
@@ -1010,7 +1018,18 @@ function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaE
                 </div>
               )}
               {creat && <div role="status" style={{ fontSize:11.5, color:G.green, margin:'3px 0 0 2px' }}>✓ Deja salvat la încercarea anterioară („{creat.denumire}”, acum {fmtNr(creat.cantitate_total)} {creat.um}): rândul nu se mai trimite. Îl poți șterge din listă.</div>}
-              {r.fixat && <div role="status" style={{ fontSize:11.5, color:G.orange, margin:'3px 0 0 2px' }}>Rezultat neconfirmat la încercarea anterioară: rândul se retrimite identic (aceeași factură și dată), nu se adună de două ori. Nu se mai poate modifica; dacă vrei altceva, șterge-l și verifică întâi stocul.</div>}
+              {r.fixat && !nesigur && <div role="status" style={{ fontSize:11.5, color:G.orange, margin:'3px 0 0 2px' }}>Rezultat neconfirmat la încercarea anterioară: rândul se retrimite identic (aceeași factură și dată), nu se adună de două ori. Nu se mai poate modifica; dacă vrei altceva, șterge-l și verifică întâi stocul.</div>}
+              {/* r4: inserarea necunoscută nu se retrimite automat; omul verifică lista reîncărcată și confirmă explicit */}
+              {nesigur && !creat && !eroare && (
+                <div role="status" style={{ fontSize:11.5, color:G.orange, margin:'3px 0 0 2px' }}>
+                  <div style={{ fontWeight:700 }}>{MESAJ_INSERARE_NECUNOSCUTA}</div>
+                  <div>Rândul nu apare acum în lista reîncărcată. Caută „{r.denumire}” în lista de echipamente; dacă nu e acolo, bifează și salvează din nou (dacă cererea anterioară ajunge totuși mai târziu, rândul poate apărea de două ori).</div>
+                  <label style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, color:G.text, cursor: (busy || listaError) ? 'default' : 'pointer' }}>
+                    <input type="checkbox" checked={r.retrimitereConfirmata === true} disabled={busy || !!listaError} onChange={e => setConfirmare(i, e.target.checked)} />
+                    Am verificat lista reîncărcată: rândul nu există, trimite-l din nou
+                  </label>
+                </div>
+              )}
               {eroare && <div role="alert" style={{ fontSize:11.5, color:G.red, margin:'3px 0 0 2px' }}>{eroare}</div>}
             </div>
           )
@@ -1019,9 +1038,10 @@ function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaE
         <div style={{ fontSize:11, color:G.dim, marginTop:10 }}>Factura, furnizorul și prețul se salvează în „Observații" la fiecare echipament. Rândurile fără denumire se ignoră. Dacă denumirea există deja (aceeași categorie și UM), cantitatea se adună implicit la stocul existent.</div>
         {listaError && <div role="alert" style={{ fontSize:12, color:G.red, marginTop:8 }}>Lista de echipamente nu s-a încărcat, deci nu pot verifica dublurile. Închide și reîncarcă înainte de a salva.</div>}
         {invalide > 0 && <div role="alert" style={{ fontSize:12, color:G.red, marginTop:8 }}>{invalide} {invalide === 1 ? 'rând are' : 'rânduri au'} probleme (vezi mesajele roșii). Corectează-le sau șterge-le înainte de a salva.</div>}
+        {neconfirmate > 0 && <div role="alert" style={{ fontSize:12, color:G.orange, marginTop:8 }}>{neconfirmate} {neconfirmate === 1 ? 'rând nou are' : 'rânduri noi au'} rezultat necunoscut: verifică lista și bifează confirmarea (sau șterge rândul) înainte de a salva.</div>}
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:14 }}>
-          <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
-          <button onClick={salveaza} disabled={!valide.length || invalide > 0 || !!listaError || busy} style={{ ...S.btnP, opacity: (!valide.length || invalide > 0 || listaError || busy) ? .5 : 1 }}>
+          <button onClick={inchide} disabled={busy} style={S.btnS}>Anulează</button>
+          <button onClick={salveaza} disabled={!valide.length || invalide > 0 || neconfirmate > 0 || !!listaError || busy} style={{ ...S.btnP, opacity: (!valide.length || invalide > 0 || neconfirmate > 0 || listaError || busy) ? .5 : 1 }}>
             {busy ? 'Se salvează...' : `✓ Salvează ${valide.length} rânduri${laStoc ? ` (${laStoc} la stoc existent)` : ''}`}</button>
         </div>
       </div>

@@ -316,12 +316,33 @@ export async function insereazaNoi(db, payload) {
 // Intenția „rând nou” a unui rând din factură: după un rezultat necunoscut se folosesc valorile ȘI antetul primei încercări.
 export const intentieRand = (r, fact) => randNou(r.fixat?.rand || r, r.fixat?.fact || fact)
 
+// ── r4 (NO-GO Jak r3; L04, L05, L16): fără index unic în BD, o REINSERARE după un rezultat necunoscut poate dubla rândul
+// (cererea inițială întârziată + retrimiterea ajung amândouă). Deci după ORICE inserare cu rezultat necunoscut nu se mai
+// reinserează automat: rândul se marchează `fixat.inserare = 'necunoscuta'`, lista se reîncarcă, omul verifică.
+// Dacă ref-ul intenției apare în lista recitită cu exact acest conținut → „creat” (nu se trimite). Dacă NU apare,
+// retrimiterea cere confirmarea explicită a omului (`r.retrimitereConfirmata === true`), dată DUPĂ rezultatul necunoscut.
+export const MESAJ_INSERARE_NECUNOSCUTA = 'Nu se știe dacă intrarea s-a salvat — verifică lista (reîncărcată) înainte să trimiți din nou.'
+export const MESAJ_CERE_CONFIRMARE = 'Rândul nu apare în lista reîncărcată. Trimiterea din nou se face doar după ce confirmi că ai verificat lista (bifa de la rând); dacă cererea anterioară ajunge totuși mai târziu, rândul poate apărea de două ori. Nimic nu a fost scris.'
+export const inserareNecunoscuta = r => r?.fixat?.inserare === 'necunoscuta'
+
+// Rezultatul salvării aplicat pe rândurile din ecran (pur, folosit de modal): rândurile aplicate ies; cele cu rezultat
+// necunoscut se blochează pe valorile trimise, iar confirmarea de retrimitere se ȘTERGE (fiecare rezultat necunoscut
+// cere o verificare nouă). `randGol` = fabrica de rând gol (lista nu rămâne niciodată fără rânduri).
+export function randuriDupaSalvare(rows, res, randGol) {
+  const gata = new Set(res?.aplicate || [])
+  const nec = new Map((res?.necunoscute || []).map(x => [x.k, x.fixat]))
+  const rest = (rows || []).filter(r => !gata.has(r.k)).map(r => nec.has(r.k) ? { ...r, fixat: nec.get(r.k), retrimitereConfirmata: false } : r)
+  return rest.length ? rest : [randGol()]
+}
+
 // ── r3: salvarea din factură, ca funcție testabilă (Magazie.jsx doar o apelează și arată rezultatul) ──
 // rows: rândurile valide din ecran { k, ref, tinta, vazute, denumire, cantitate, um, pret, serie, fixat? };
 // echipamente: lista din ecran (totalul VĂZUT de om pentru țintă); azi: ziua (Europe/Bucharest), dată de apelant.
 // Ordinea: lista completă recitită → judecata ref-urilor (alt conținut = refuz, nimic scris) → validare → dubluri nevăzute
 // → adunări (aplicaLot, oprire la primul eșec) → inserarea rândurilor noi. Nu aruncă: { aplicate, necunoscute, eroare, laStoc, noi }.
-// necunoscute: [{ k, fixat }] = rândurile cu rezultat necunoscut, de blocat pe valorile trimise (retrimitere identică).
+// necunoscute: [{ k, fixat }] = rândurile cu rezultat necunoscut, de blocat pe valorile trimise. Adunarea (UPDATE) se
+// retrimite identic (apărată de CAS); inserarea NU (r4): fixat.inserare = 'necunoscuta' → verificare + confirmare umană.
+// deConfirmat: [k] (doar la refuzul r4) = rândurile cu inserare necunoscută, negăsite în listă, fără confirmarea omului.
 export async function salveazaFactura(db, { rows, fact, uid, azi, echipamente, catalogIds }) {
   const aplicate = [], necunoscute = []
   const gata = (eroare, extra = {}) => ({ aplicate, necunoscute, eroare, ...extra })
@@ -333,6 +354,9 @@ export async function salveazaFactura(db, { rows, fact, uid, azi, echipamente, c
     const alte = judecate.filter(x => x.j.stare === 'alta')
     if (alte.length) return gata(`${alte.map(x => `„${unRand(x.r.denumire)}”`).join(', ')}: ${MESAJ_REF_ALT}`)
     for (const x of judecate) if (x.j.stare === 'creat') aplicate.push(x.r.k)
+    // r4: rândul cu inserare necunoscută care NU apare în lista recitită nu se mai trimite fără confirmarea omului (nimic scris).
+    const neconfirmate = judecate.filter(x => x.j.stare !== 'creat' && inserareNecunoscuta(x.r) && x.r.retrimitereConfirmata !== true).map(x => x.r)
+    if (neconfirmate.length) return gata(`${neconfirmate.map(r => `„${unRand(r.denumire)}”`).join(', ')}: ${MESAJ_CERE_CONFIRMARE}`, { deConfirmat: neconfirmate.map(r => r.k) })
     const rest = judecate.filter(x => x.j.stare !== 'creat').map(x => x.r)
     const pasi = []
     for (const r of rest.filter(x => x.tinta !== 'nou')) {
@@ -357,8 +381,12 @@ export async function salveazaFactura(db, { rows, fact, uid, azi, echipamente, c
     if (noi.length) {
       const ins = await insereazaNoi(db, noi.map(({ i }) => ({ ...i.payload, created_by: uid })))
       if (ins.stare !== 'ok') {
-        // necunoscut: rândurile se blochează pe valorile ȘI antetul trimise; la reîncercare cele create se recunosc ('creat')
-        if (ins.stare === 'necunoscut') necunoscute.push(...noi.map(({ r }) => ({ k: r.k, fixat: r.fixat || { tinta: 'nou', rand: { ...r, fixat: undefined }, fact: { ...fact } } })))
+        // necunoscut: rândurile se blochează pe valorile ȘI antetul trimise și se marchează „inserare necunoscută” (r4):
+        // la salvarea următoare cele create se recunosc ('creat'), iar cele negăsite cer confirmarea omului, nu reinserare automată.
+        if (ins.stare === 'necunoscut') {
+          necunoscute.push(...noi.map(({ r }) => ({ k: r.k, fixat: { ...(r.fixat || { tinta: 'nou', rand: { ...r, fixat: undefined, retrimitereConfirmata: undefined }, fact: { ...fact } }), inserare: 'necunoscuta' } })))
+          return gata(`${MESAJ_INSERARE_NECUNOSCUTA} (${ins.mesaj})`)
+        }
         return gata(ins.mesaj)
       }
       aplicate.push(...noi.map(({ r }) => r.k))

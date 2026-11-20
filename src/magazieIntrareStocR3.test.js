@@ -221,10 +221,13 @@ describe('r3 P2: o eroare fără refuz 4xx (rețea, 5xx, 408) e NECUNOSCUT, nu e
     expect(tabel.size).toBe(0)
   })
 
-  it('inserarea NU a ajuns (rețea): reîncercarea blocată o trimite o dată, identic', async () => {
+  it('inserarea NU a ajuns (rețea): reîncercarea blocată NU se trimite singură (r4); cu confirmarea omului se trimite o dată, identic', async () => {
     const { db, tabel, jurnal } = dbFals([], { laInsert: () => (jurnal.insert.length === 1 ? RETEA : null) })
     const r1 = await salv(db, [rand5()])
-    const r2 = await salv(db, [{ ...rand5(), fixat: r1.necunoscute[0].fixat }])
+    const r2a = await salv(db, [{ ...rand5(), fixat: r1.necunoscute[0].fixat }])
+    expect(r2a.deConfirmat).toEqual([1])
+    expect(jurnal.insert).toHaveLength(1)
+    const r2 = await salv(db, [{ ...rand5(), fixat: r1.necunoscute[0].fixat, retrimitereConfirmata: true }])
     expect(r2.eroare).toBe(null)
     expect(jurnal.insert).toHaveLength(2)
     expect(jurnal.insert[1]).toEqual(jurnal.insert[0])

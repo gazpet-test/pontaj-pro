@@ -154,6 +154,36 @@ async function incalcari(m) {
       if (r2.eroare || r2.aplicate[0] !== 1 || jurnal.insert.length !== 1 || tabel.size !== 1) out.push('r3 P2: reîncercarea după inserare necunoscută nu recunoaște rândul creat')
     }
   }
+  // ── r4 (NO-GO Jak r3 pe 3d059fe7) ──
+  const RETEA = { data: null, error: { message: 'TypeError: Failed to fetch' }, status: 0 }
+  const ecran = (rows, res) => m.randuriDupaSalvare(rows, res, () => ({ k: 'gol', denumire: '' }))
+  {
+    // verdict: 5 buc, rețea, cererea întârziată; retrimiterea fără confirmare; cererea ajunge → un singur rând
+    let inZbor = null
+    const f = dbFals([], { laInsert: (t, p, ins) => { if (f.jurnal.insert.length === 1) { inZbor = () => ins(p); return RETEA } } })
+    const r1 = await salv(f.db, [r5])
+    const rows = ecran([r5], r1)
+    const r2 = await salv(f.db, rows)
+    if (inZbor) inZbor()
+    if (f.tabel.size !== 1 || f.jurnal.insert.length !== 1) out.push('r4: inserarea necunoscută reinserată fără confirmare (rând dublat)')
+    if (!(r2.deConfirmat || []).includes(1)) out.push('r4: refuzul fără confirmare nu e raportat')
+    // după ce cererea a ajuns, salvarea fără confirmare îl recunoaște (nu cere confirmare)
+    const r3 = await salv(f.db, rows)
+    if (r3.eroare || r3.aplicate[0] !== 1 || f.jurnal.insert.length !== 1) out.push('r4: rândul ajuns nu e recunoscut fără confirmare')
+  }
+  {
+    // calea legitimă: inserarea n-a ajuns, omul confirmă → o retrimitere identică
+    const f = dbFals([], { laInsert: () => (f.jurnal.insert.length === 1 ? RETEA : null) })
+    const rows = ecran([r5], await salv(f.db, [r5]))
+    const r2 = await salv(f.db, [{ ...rows[0], retrimitereConfirmata: true }])
+    if (r2.eroare || f.tabel.size !== 1 || f.jurnal.insert.length !== 2) out.push('r4: retrimiterea confirmată nu se face')
+  }
+  {
+    // confirmarea veche nu supraviețuiește unui nou rezultat necunoscut
+    const fixat = { tinta: 'nou', inserare: 'necunoscuta' }
+    const dupa = ecran([{ ...r5, fixat, retrimitereConfirmata: true }], { aplicate: [], necunoscute: [{ k: 1, fixat }] })
+    if (dupa[0].retrimitereConfirmata !== false) out.push('r4: confirmarea rămâne după un nou rezultat necunoscut')
+  }
   return out
 }
 
@@ -184,7 +214,13 @@ const MUTANTI = [
   ['r3 P2: status 0 (rețea) = refuz 4xx', 'Number.isInteger(s) && s >= 400 && s < 500', 'Number.isInteger(s) && s < 500'],
   ['r3 P2: 5xx = refuz 4xx', 's >= 400 && s < 500', 's >= 400 && s < 600'],
   ['r3 P2: inserarea necunoscută tratată ca eroare', 'return { stare: \'necunoscut\', mesaj: `Rezultatul inserării nu poate fi confirmat (${m}).` }', "return { stare: 'eroare', mesaj: m }"],
-  ['r3 P2: rândurile cu inserare necunoscută nu se blochează', "if (ins.stare === 'necunoscut') necunoscute.push(", 'if (false) necunoscute.push('],
+  ['r3 P2: rândurile cu inserare necunoscută nu se blochează', 'necunoscute.push(...noi.map(({ r }) =>', '[].push(...noi.map(({ r }) =>'],
+  // r4 (NO-GO Jak r3 pe 3d059fe7)
+  ['r4: inserarea necunoscută retrimisă fără confirmare (forma r3)', 'if (neconfirmate.length) return gata(', 'if (false) return gata('],
+  ['r4: confirmarea omului ignorată (refuz mereu)', 'inserareNecunoscuta(x.r) && x.r.retrimitereConfirmata !== true', 'inserareNecunoscuta(x.r)'],
+  ['r4: rândul ajuns cere totuși confirmare', "x.j.stare !== 'creat' && inserareNecunoscuta(x.r)", 'inserareNecunoscuta(x.r)'],
+  ['r4: inserarea necunoscută nemarcată', "), inserare: 'necunoscuta' } })))", ') } })))'],
+  ['r4: confirmarea păstrată după un nou rezultat necunoscut', '{ ...r, fixat: nec.get(r.k), retrimitereConfirmata: false }', '{ ...r, fixat: nec.get(r.k) }'],
   ['P4: ref doar la final de linie (editarea îl ascunde)', 'const token = new RegExp(`(?:^|[^0-9A-Za-z])ref ${ref}(?![0-9A-Za-z])`)', 'const token = new RegExp(`(?:^|[^0-9A-Za-z])ref ${ref}$`)'],
   ['observațiile vechi înlocuite', 'return v ? `${v}\\n${linie}` : linie', 'return linie'],
   ['cantitate 0 acceptată', 'if (!(q > 0)) return', 'if (!(q >= 0)) return'],
