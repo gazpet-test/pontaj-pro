@@ -7,7 +7,8 @@
 #   * schema: aplică migrarea (o dată), o revine, o reaplică (prin runner, cu istoricul în supabase_migrations.schema_migrations; între revenire și
 #     reaplicare șterge rândurile de istoric ale versiunilor 20261222120000 / 20261222120001 — DOAR pe clonă, cu CLONA_ISTORIC_STERGE=da);
 #   * date de probă, cu prefixul „TEST 20261222A”: un proiect, șantierele create prin RPC, rândul de drept santiere_creare al contului TITULAR_ID;
-#     șterse la final (trap EXIT / INT / TERM). Pașii de comportament fără concurență rulează în tranzacții ANULATE (ROLLBACK).
+#     șterse la final (trap EXIT / INT / TERM), împreună cu magazia de șantier pe care trg_magazie_auto o deschide pentru proiectul din P5
+#     (runda 7). Pașii de comportament fără concurență rulează în tranzacții ANULATE (ROLLBACK).
 #   * fișiere: un folder temporar (mktemp -d) cu baseline-ul, copiile completate ale migrării / revenirii și jurnalele; șters la final.
 #   * NIMIC altceva: niciun mail, niciun apel extern, niciun cont nou; conturile OWNER_ID / TITULAR_ID trebuie să existe pe clonă.
 #
@@ -17,6 +18,11 @@
 #   CLONA_SISTEM=<system_identifier al clonei> CLONA_ISTORIC_STERGE=da OWNER_ID=<uuid owner> TITULAR_ID=<uuid cont NErestrâns, executie editor>
 #   PGHOST=<clona> PGPORT=<port> PGUSER=postgres PGDATABASE=postgres bash supabase/tests/20261222a_sites_drept_creare_clona.sh
 #   (id-urile conturilor NU intră în repo, în PR sau în rapoarte publice.)
+#   PG* de mai sus sunt DOAR pentru psql-ul driverului: runner-ul pornește fără nicio variabilă PG* în mediu (în afară de PGPASSFILE), cu ținta
+#   din --tinta-db / --tinta-host / --tinta-port / --tinta-sistem (runda 7). PGPASSWORD / PGOPTIONS / PSQLRC / PGSERVICE* … setate = refuz.
+# LIVRARE: 20261222a e o migrare L15 v1 (BASELINE propriu lipit din producție, L15 înainte / după în interiorul ei), livrată cu
+#   livrare_migrare.sh --plafon-tranzactie-ms 2000 FĂRĂ --amprenta-globala / --diferente-globale: nu are manifest L15 v2 și nici listă
+#   supabase/tests/20261222a_*.l15.obiecte.tsv (runner-ul cere plafon 5000 cu amprenta globală, migrarea cere exact 2000).
 # IEȘIRE: 0 = toate așteptările se țin + curățenia a reușit; 1 = cel puțin o așteptare nu se ține; 2 = refuz / folosire greșită.
 #
 # PAȘI (așteptările scrise de mână, independent de cod):
@@ -49,6 +55,15 @@ refuz() { echo "refuz: $*" >&2; exit 2; }
 [ "${CLONA_ISTORIC_STERGE:-}" = "da" ] || refuz "scriptul aplică / revine / reaplică pe CLONĂ și șterge istoricul versiunilor 20261222120000/1 acolo; pune CLONA_ISTORIC_STERGE=da"
 for v in CLONA_SISTEM OWNER_ID TITULAR_ID PGHOST PGPORT PGDATABASE; do [ -n "${!v:-}" ] || refuz "lipsește $v"; done
 [ "${PGUSER:-}" = "postgres" ] || refuz "PGUSER trebuie să fie postgres"
+# runda 7: variabilele pe care runner-ul le refuză (în afară de PGDATABASE, care e a driverului și se scoate la apel) nu au ce căuta
+# nici în psql-ul driverului: parola doar din ~/.pgpass / PGPASSFILE, fără servicii libpq și fără opțiuni ascunse
+for v in PGPASSWORD PGOPTIONS PSQLRC PGHOSTADDR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS PGSERVICE PGSERVICEFILE PGSYSCONFDIR; do
+  [ -z "${!v+x}" ] || refuz "variabila $v e setată (parola: ~/.pgpass / PGPASSFILE; fără servicii libpq; nimic care schimbă execuția / ținta)"
+done
+# runda 7 (proba pe clonă, 20.11.2026): runner-ul refuză PGDATABASE din mediu (cod 2) și ia ținta DOAR din --tinta-*; mediul runner-ului
+# e deci cel al driverului FĂRĂ nicio variabilă PG* (PGHOST / PGPORT / PGUSER / PGDATABASE / PGSSL* …), cu o singură excepție: PGPASSFILE
+FARA_PG=(env)
+while IFS= read -r v; do [ "$v" = PGPASSFILE ] || FARA_PG+=(-u "$v"); done < <(compgen -e | grep '^PG' || true)
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 [[ "$OWNER_ID" =~ $UUID_RE ]] && [[ "$TITULAR_ID" =~ $UUID_RE ]] || refuz "OWNER_ID / TITULAR_ID trebuie să fie uuid-uri (litere mici)"
 [[ "$CLONA_SISTEM" =~ ^[0-9]{10,25}$ ]] || refuz "CLONA_SISTEM trebuie să fie system_identifier-ul numeric al clonei"
@@ -96,12 +111,24 @@ curatenie() {
       && echo "  OK  curățenie: deriva P6b refăcută" || { echo "  NU  curățenie: deriva P6b (drept / STRICT pe fn_sites_creeaza) de refăcut manual"; cod=1; }
   fi
   # datele de probă (doar cele cu prefixul și contul de probă)
+  # runda 7: proiectul comis în P5 primește de la trg_magazie_auto o magazie de șantier cu același nume; se șterge ÎNAINTEA proiectului
+  # (după ștergerea proiectului ar rămâne cu executie_proiect_id NULL), inclusiv cele rămase așa din rulările dinainte de runda 7;
+  # la final nu trebuie să mai existe niciun rând TEST 20261222A în sites / executie_proiecte / magazii (altfel tranzacția se anulează)
   "${PS[@]}" -c "BEGIN;
     DELETE FROM public.user_module_access WHERE profile_id = '$TITULAR_ID' AND module = 'santiere_creare';
+    DELETE FROM public.magazii WHERE tip = 'santier' AND denumire LIKE 'TEST 20261222A%'
+      AND (executie_proiect_id IS NULL OR executie_proiect_id IN (SELECT id FROM public.executie_proiecte WHERE nume LIKE 'TEST 20261222A%'));
     UPDATE public.executie_proiecte SET site_id = NULL WHERE nume LIKE 'TEST 20261222A%';
     DELETE FROM public.sites WHERE name LIKE 'TEST 20261222A%';
     DELETE FROM public.executie_proiecte WHERE nume LIKE 'TEST 20261222A%';
-    COMMIT;" > /dev/null 2>&1 && echo "  OK  curățenie: datele de probă TEST 20261222A" || { echo "  NU  curățenie: datele de probă (de șters manual, prefix TEST 20261222A)"; cod=1; }
+    DO \$\$ BEGIN
+      IF EXISTS (SELECT 1 FROM public.sites WHERE name LIKE 'TEST 20261222A%')
+         OR EXISTS (SELECT 1 FROM public.executie_proiecte WHERE nume LIKE 'TEST 20261222A%')
+         OR EXISTS (SELECT 1 FROM public.magazii WHERE denumire LIKE 'TEST 20261222A%') THEN
+        RAISE EXCEPTION 'curatenie incompleta: raman randuri TEST 20261222A';
+      END IF; END \$\$;
+    COMMIT;" > /dev/null 2>&1 && echo "  OK  curățenie: datele de probă TEST 20261222A (proiect, șantiere, magazia automată, dreptul)" \
+    || { echo "  NU  curățenie: datele de probă (de șters manual, prefix TEST 20261222A: sites / magazii / executie_proiecte)"; cod=1; }
   if [ "$cod" != 0 ] || [ "$esec" != 0 ]; then echo "── jurnalul sesiunii A (ultimele 30 de linii) ──"; tail -n 30 "$A_ERR" 2>/dev/null; fi
   rm -rf "$D"
   if [ "$cod" = 0 ] && [ "$esec" != 0 ]; then cod=1; fi
@@ -137,7 +164,7 @@ pasB() {
 livreaza() {
   local f="$1" v="$2" sha
   sha="$(sha256sum "$f" | cut -d' ' -f1)"
-  R_OUT="$(bash "$RUNNER" --migrare "$f" --sha256 "$sha" --versiune "$v" --tinta-db "$PGDATABASE" --tinta-sistem "$CLONA_SISTEM" \
+  R_OUT="$("${FARA_PG[@]}" bash "$RUNNER" --migrare "$f" --sha256 "$sha" --versiune "$v" --tinta-db "$PGDATABASE" --tinta-sistem "$CLONA_SISTEM" \
              --tinta-host "$PGHOST" --tinta-port "$PGPORT" --user postgres --plafon-tranzactie-ms 2000 2>&1)"; R_COD=$?
 }
 
@@ -177,7 +204,7 @@ CTRL="$(q "SELECT (SELECT count(*) FROM pg_constraint c JOIN pg_attribute a ON a
   (SELECT md5(replace(prosrc, chr(13), '')) FROM pg_proc WHERE oid = to_regprocedure('public.fn_auto_create_executie_proiect()'))")"
 egal "$CTRL" "1|t|1|0|$AUTO_AZI" "chei străine site_id | cheia exactă (nedeferabilă) | trigger | șantiere cu 2 proiecte | corpul triggerului (de azi)"
 echo "  ── triggerele lui executie_proiecte (rulează la UPDATE site_id din RPC; de citit în review) ──"
-q "SELECT '     ' || tgname || ' | ' || tgfoid::regprocedure || ' | ' || tgenabled FROM pg_trigger WHERE tgrelid = 'public.executie_proiecte'::regclass AND NOT tgisinternal ORDER BY tgname"
+q "SELECT '     ' || tgname || ' | ' || tgfoid::regprocedure || ' | ' || tgenabled::text FROM pg_trigger WHERE tgrelid = 'public.executie_proiecte'::regclass AND NOT tgisinternal ORDER BY tgname"
 
 # ── P2 concurență: migrarea cu sites ocupat ──
 echo "P2 migrarea cu sites ținut de altă sesiune (ROW EXCLUSIVE)"
