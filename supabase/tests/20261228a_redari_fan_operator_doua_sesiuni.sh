@@ -26,16 +26,23 @@
 #   E15 tiraj ∥ comandă pe L4 (un rând generat sintetic + plicul nou P24): A (OP1) comanda P24 (deschisă), B (OP1) fn_red_fan_tiraj → B așteaptă la 1,
 #       apoi RD031 (lotul nu e încheiat: P24 aprobat). Invers (P24 retras de operator, K4 expirată): A tirajul (deschisă, „inceput”), B comanda P24 cu
 #       hash nou → B așteaptă la 1, apoi {incheiata: true, excluse: [lot_tiparit], de_trimis: []}, niciun rând viu nou pe P24.
+#   LOCUL așteptării (runda 4): LOC = „poziție/lock neacordat/blocant/tupluri”, citit din pg_locks + pg_blocking_pids cât H încă ține (H eliberează
+#       abia după citire, la semnalul sesiunii „e22_gata”); poziția = ultima relație din §6.2 blocată deja de sesiune (3 red_fan_awb, 4 red_fan_loturi,
+#       5 red_fan_setari). Rândul R e fixat înainte de pornire: mulțimea pasului (3) a ambelor comenzi = exact {R}.
 #   E22a două loturi, un plic mutat (P propus în LV — rândul R —, mutat în LN), coregrafia S1 → S2 cu H pe 5: S1 (OP1, LV, Q1 + Q2) ține R și așteaptă la
-#       5; S2 (OP2, LN, P) așteaptă la 3 pe un TUPLU din red_fan_awb (pg_locks), nu pe red_fan_setari; H eliberează → fără 40P01: R retras (plic_mutat),
+#       5 (LOC 5/transactionid/e22_h); S2 (OP2, LN, P) așteaptă la 3 pe tranzacția lui S1 (LOC 3/transactionid/e22_s1: n-are încă lock pe red_fan_loturi /
+#       red_fan_setari, iar singurul rând comun al pasului 3 e R); H eliberează → fără 40P01: R retras (plic_mutat),
 #       Q1 / Q2 aprobat pe LV, rând nou R2 aprobat pe LN, un singur rând viu pe P.
-#   E22b coregrafia S2 → S1: S2 ține R, așteaptă la 5; S1 așteaptă la 3 pe R; H eliberează → fără 40P01: R REFOLOSIT (lot_id = LN, aprobat, cheia KN),
-#       Q1 / Q2 aprobat, R neretras; un singur rând viu pe P.
+#   E22b coregrafia S2 → S1: S2 ține R, așteaptă la 5 (5/transactionid/e22_h); S1 așteaptă la 3 pe R (3/transactionid/e22_s2); H eliberează → fără 40P01:
+#       R REFOLOSIT (lot_id = LN, aprobat, cheia KN), Q1 / Q2 aprobat, R neretras; un singur rând viu pe P.
 #   E22c MUTANTUL fazei L (poziția 3 doar cu rândurile lotului, fără rândurile vii ale plicurilor cerute), aceeași coregrafie ca E22b → S2 nu ține R,
-#       așteaptă la 5; S1 ține R, așteaptă la 5 (coada S2, S1); H eliberează → S2 ajunge în faza M la UPDATE R (ținut de S1), S1 așteaptă 5 (ținut de
-#       S2) → ciclu → EXACT una dintre sesiuni primește 40P01 (deadlock_timeout 300 ms, pus ca superuser înaintea rolului). Mutantul se pune cu
+#       așteaptă la 5 (5/transactionid/e22_h); S1 ține R, așteaptă la 5 după S2 (5/…/e22_s2…); H eliberează → S2 ajunge în faza M la UPDATE R (ținut de S1),
+#       S1 așteaptă 5 (ținut de S2) → ciclu → EXACT una dintre sesiuni primește 40P01 (deadlock_timeout-ul serverului, implicit 1 s: pe clonă postgres
+#       nu e superuser și nu-l poate schimba). Mutantul se pune cu
 #       CREATE OR REPLACE din textul migrării (verificat: un singur loc) și se SCOATE la final (și în curățenie), cu amprenta corpului verificată =
 #       cea de la început.
+# Curățenia (runda 4): extensia, apoi fixture-ul, apoi jurnalul scris după pornire (ULTIMUL: ștergerile scriu și ele în red_jurnal) și rândul de setări
+#   readus exact (limita_zi + actualizat_de / actualizat_la); verificat: zero rânduri red_jurnal noi (din orice sursă) și md5-ul rândului de setări = pornirea.
 # Ieșire: 0 = toate OK; 1 = un scenariu a picat; 2 = argumente; 3 = curățenia a picat (VIZIBIL; fișierele de diagnostic rămân); 22 = altă țintă;
 #   23 = 20261228a neaplicată; 24 = starea de pornire nu e curată; 25 = fixture-ul nu s-a putut crea; 26 / 27 / 28 = precondițiile FX001 / FX002 /
 #   FX003 ale fixture-ului 20261212a (antetul lui). Durata: ~40 s (fiecare scenariu cu barieră ~3–4 s).
@@ -64,7 +71,10 @@ fid() { printf 'f1280000-0000-4000-8000-%012x' "$1"; }
 plic() { fid $((200 + $1)); }; lot() { fid $((400 + $1)); }
 LA=$(lot 1); LB=$(lot 2); L5=$(lot 3); L4=$(lot 4); LV1=$(lot 5); LN1=$(lot 6); LV2=$(lot 7); LN2=$(lot 8); LV3=$(lot 9); LN3=$(lot 10)
 kid() { printf 'f128ffff-0000-4000-8000-%012x' "$1"; }
-cd "$(dirname "$0")/../.."
+# runda 4 (proba pe clonă): rădăcina repo-ului după calea ABSOLUTĂ a scriptului (merge și pornit din alt director / dintr-o copie din worktree)
+RADACINA="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || { echo "nu gasesc radacina repo-ului dupa calea scriptului" >&2; exit 2; }
+cd "$RADACINA"
+[ -f "$FIXTURE_SQL" ] && [ -f "$MIG" ] || { echo "radacina $RADACINA nu are $FIXTURE_SQL / $MIG (scriptul trebuie rulat din depozit)" >&2; exit 2; }
 TMP="$(mktemp -d ./.concurenta_20261228a.XXXXXX)"
 q() { "$PSQL" -X -q -At -v ON_ERROR_STOP=1 "${CONN[@]}" "$@" | tr -d '\r'; }
 BAZA=$(( ($$ % 30000) * 65536 + (RANDOM % 4096) * 16 ))
@@ -95,8 +105,9 @@ SELECT ('f1280000-0000-4000-8000-' || lpad(to_hex(100 + i), 12, '0'))::uuid, '07
 DO \$s\$ BEGIN IF EXISTS (SELECT 1 FROM generate_series(1, 19) i WHERE public.fn_red_cheie_persoana(('f1280000-0000-4000-8000-' || lpad(to_hex(100 + i), 12, '0'))::uuid) IS NULL) THEN
   RAISE EXCEPTION 'FIXTURE_PRECONDITIE FX002: fn_red_cheie_persoana intoarce NULL' USING ERRCODE = 'FX002'; END IF; END \$s\$;
 -- plicurile: 1-3 LA, 4-6 LB, 7-8 L5, 9-10 L4, 11-13 LV1, 14-16 LV2, 17-19 LV3 (loturile LN* pornesc goale)
+-- runda 4: nr_plic în forma CHECK-ului red_plicuri_nr_plic_check (^PL-[A-Z]{3}-[0-9]{4}$): PL-ZFX-9101 … 9119 (fixture-ul 20261212a are 0001 … 0003)
 INSERT INTO public.red_plicuri (id, proiect_id, uat_id, nr_plic, cheie_persoana, destinatar_nume, lot_id)
-SELECT ('f1280000-0000-4000-8000-' || lpad(to_hex(200 + i), 12, '0'))::uuid, '$PROIECT', '$UAT', 'PL-ZFX-F1' || lpad(i::text, 2, '0'),
+SELECT ('f1280000-0000-4000-8000-' || lpad(to_hex(200 + i), 12, '0'))::uuid, '$PROIECT', '$UAT', 'PL-ZFX-' || (9100 + i)::text,
        public.fn_red_cheie_persoana(('f1280000-0000-4000-8000-' || lpad(to_hex(100 + i), 12, '0'))::uuid), 'FIXTURE F1 ' || i,
        ('f1280000-0000-4000-8000-' || lpad(to_hex(400 + CASE WHEN i <= 3 THEN 1 WHEN i <= 6 THEN 2 WHEN i <= 8 THEN 3 WHEN i <= 10 THEN 4 WHEN i <= 13 THEN 5 WHEN i <= 16 THEN 7 ELSE 9 END), 12, '0'))::uuid
   FROM generate_series(1, 19) i;
@@ -133,12 +144,10 @@ DELETE FROM public.red_fan_intentii WHERE lot_id IN ($LOTURI);
 DELETE FROM public.red_fan_loturi WHERE lot_id IN ($LOTURI);
 DELETE FROM public.red_fan_zi WHERE zi_ro = $AZI;
 DELETE FROM public.red_fan_operatori WHERE profile_id IN ('$OP1', '$OP2');
-UPDATE public.red_fan_setari SET limita_zi = ${LIMITA0:-limita_zi};
+-- runda 4: setările readuse EXACT (limita_zi + actualizat_de / actualizat_la de la început; verificat pe md5-ul rândului în curata)
+${SETARI0_SQL:-SELECT 1;}
 ALTER TABLE public.red_fan_zi ENABLE TRIGGER trg_red_fan_zi_garda;
 ALTER TABLE public.red_fan_loturi ENABLE TRIGGER trg_red_fan_loturi_garda;
-ALTER TABLE public.red_jurnal DISABLE TRIGGER trg_red_jurnal_imuabil;
-DELETE FROM public.red_jurnal WHERE id > ${JURNAL0:-9223372036854775807} AND (tabela LIKE 'red_fan_%' OR inregistrare_id IN ($IDS_EXT));
-ALTER TABLE public.red_jurnal ENABLE TRIGGER trg_red_jurnal_imuabil;
 DELETE FROM public.red_convocari WHERE plic_id IN ($PLICURI) OR detinator_id IN ($IDS_EXT);
 DELETE FROM public.red_plicuri WHERE id IN ($PLICURI);
 DELETE FROM public.red_loturi_plicuire WHERE id IN ($LOTURI);
@@ -152,6 +161,11 @@ ALTER TABLE public.conturi_tip_jurnal DISABLE TRIGGER ALL;
 DELETE FROM public.conturi_tip_jurnal WHERE auth_user_id = '$OP2';
 ALTER TABLE public.conturi_tip_jurnal ENABLE TRIGGER ALL;
 DELETE FROM public.profiles WHERE id = '$OP2';
+-- runda 4 (proba pe clonă: 86 de rânduri rămase): jurnalul se curăță ULTIMUL, după toate ștergerile de mai sus — ele scriu la rândul lor în
+-- red_jurnal (trigger-ul oPOD 20261227a la DELETE red_fan_awb, trigger-ele de jurnal Redări pe plicuri / convocări / deținători / loturi)
+ALTER TABLE public.red_jurnal DISABLE TRIGGER trg_red_jurnal_imuabil;
+DELETE FROM public.red_jurnal WHERE id > ${JURNAL0:-9223372036854775807} AND (tabela LIKE 'red_fan_%' OR inregistrare_id IN ($IDS_EXT) OR inregistrare_id::text LIKE 'f128ffff-%');
+ALTER TABLE public.red_jurnal ENABLE TRIGGER trg_red_jurnal_imuabil;
 COMMIT;
 SQL
   q -f "$TMP/ext_sterge.sql" > "$TMP/ext_sterge.out" 2>&1 || return 1
@@ -178,7 +192,8 @@ curata() {
   if [ "$FIXTURE_CREAT" = 1 ]; then
     q -v sistem="$SISTEM" -v actiune=sterge -f "$FIXTURE_SQL" > "$TMP/fixture_sterge.out" 2>&1 || { echo "ATENTIE: stergerea fixture-ului 20261212a a picat" >&2; ok=0; }
   fi
-  [ "$ok" = 1 ] && echo "curatenie: randurile probei sterse dupa identificatori; fixture-ul si extensia F1 sterse si verificate; mutantul scos"
+  if [ "$EXT_CREATA" = 1 ] || [ "$FIXTURE_CREAT" = 1 ]; then final_curat || { echo "ATENTIE: curatenia finala (red_jurnal / red_fan_setari) a picat" >&2; ok=0; }; fi
+  [ "$ok" = 1 ] && echo "curatenie: randurile probei sterse dupa identificatori; fixture-ul si extensia F1 sterse si verificate; mutantul scos; red_jurnal si red_fan_setari ca la pornire"
   if [ "$ok" = 1 ] && [ "$rc" = 0 ] && [ "$ESEC" = 0 ]; then rm -rf "$TMP"; else echo "fisierele de diagnostic raman in $TMP" >&2; fi
   if [ "$ok" = 0 ]; then echo "ATENTIE: CURATENIA A PICAT (cod 3); de verificat manual pe clona" >&2; exit 3; fi
   exit "$rc"
@@ -197,6 +212,23 @@ if [ "$(q -c "SELECT NOT EXISTS (SELECT 1 FROM public.red_fan_zi WHERE zi_ro = $
 fi
 JURNAL0="$(q -c "SELECT coalesce(max(id), 0) FROM public.red_jurnal")"; LIMITA0="$(q -c "SELECT limita_zi FROM public.red_fan_setari")"
 [[ "$JURNAL0" =~ ^[0-9]+$ ]] && [[ "$LIMITA0" =~ ^[0-9]+$ ]] || { echo "REFUZ: maximul red_jurnal / limita zilei nu s-au putut citi" >&2; rm -rf "$TMP"; exit 23; }
+# runda 4: rândul de setări de la pornire (amprenta + instrucțiunea care îl reface: limita_zi, actualizat_de, actualizat_la — fn_red_fan_setari_limita_zi le scrie pe toate trei)
+SETARI0_MD5="$(q -c "SELECT md5(s::text) FROM public.red_fan_setari s")"
+SETARI0_SQL="$(q -c "SELECT format('UPDATE public.red_fan_setari SET limita_zi = %s, actualizat_de = %L::uuid, actualizat_la = %L::timestamptz WHERE id;', limita_zi, actualizat_de, actualizat_la) FROM public.red_fan_setari")"
+[[ "$SETARI0_MD5" =~ ^[0-9a-f]{32}$ ]] && [[ "$SETARI0_SQL" == "UPDATE public.red_fan_setari SET limita_zi = $LIMITA0, actualizat_de = "* ]] \
+  || { echo "REFUZ: randul red_fan_setari de la pornire nu s-a putut citi" >&2; rm -rf "$TMP"; exit 23; }
+final_curat() {   # după fixture: niciun rând red_jurnal scris după pornire (din ORICE sursă) și red_fan_setari identic cu pornirea; altfel lista a ce a rămas
+  q -c "BEGIN; ALTER TABLE public.red_jurnal DISABLE TRIGGER trg_red_jurnal_imuabil;
+        DELETE FROM public.red_jurnal WHERE id > $JURNAL0 AND (tabela LIKE 'red_fan_%' OR inregistrare_id::text LIKE 'f12a0000-%' OR inregistrare_id::text LIKE 'f1280000-%' OR inregistrare_id::text LIKE 'f128ffff-%');
+        ALTER TABLE public.red_jurnal ENABLE TRIGGER trg_red_jurnal_imuabil; COMMIT;" > "$TMP/final_curat.out" 2>&1 || return 1
+  local rj st tg
+  rj="$(q -c "SELECT count(*) FROM public.red_jurnal WHERE id > $JURNAL0")" || return 1
+  st="$(q -c "SELECT md5(s::text) FROM public.red_fan_setari s")" || return 1
+  tg="$(q -c "SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_red_jurnal_imuabil' AND tgenabled = 'O'")" || return 1
+  if [ "$rj" = 0 ] && [ "$st" = "$SETARI0_MD5" ] && [ "$tg" -ge 1 ]; then echo "curatenie finala: red_jurnal fara randuri noi (max = $JURNAL0), red_fan_setari identic cu pornirea ($st)"; return 0; fi
+  echo "ATENTIE: dupa curatenie: red_jurnal noi = $rj ($(q -c "SELECT coalesce(string_agg(tabela || ':' || actiune || '=' || n, ', '), '-') FROM (SELECT tabela, actiune, count(*) n FROM public.red_jurnal WHERE id > $JURNAL0 GROUP BY 1, 2) x")); red_fan_setari md5 $st (pornire $SETARI0_MD5); trigger imuabil activ: $tg" >&2
+  return 1
+}
 MD5_COMANDA="$(q -c "SELECT md5(replace(prosrc, chr(13), '')) FROM pg_proc WHERE oid = 'public.fn_red_fan_comanda(uuid, uuid, jsonb, text, boolean)'::regprocedure")"
 # textul comenzii din migrare (pentru E22c): un singur CREATE FUNCTION … END $fn$; poziția 3 apare exact o dată
 awk '/^CREATE FUNCTION public\.fn_red_fan_comanda\(/{p=1} p{print} p&&/^END \$fn\$;/{exit}' "$MIG" | tr -d '\r' | sed '1s/^CREATE FUNCTION/CREATE OR REPLACE FUNCTION/' > "$TMP/comanda_orig.sql"
@@ -251,7 +283,7 @@ PJ2() { echo "[{\"plic_id\":\"$(plic "$1")\",\"hash\":\"$H2\"}]"; }
 CMD() { echo "public.fn_red_fan_comanda('$1', '$2', '$3'::jsonb, '$HC', false)"; }
 STARI() { q -c "SELECT string_agg(stare, ',' ORDER BY nr_plic) FROM public.red_fan_awb WHERE lot_id = '$1' AND stare NOT IN ('eroare', 'anulat', 'retras')"; }
 ZI() { q -c "SELECT coalesce((SELECT aprobate::text FROM public.red_fan_zi WHERE zi_ro = $AZI), '-') || '/' || (SELECT count(*) FROM public.red_fan_zi_consum WHERE zi_ro = $AZI)"; }
-INT() { q -c "SELECT coalesce(stare || '/' || coalesce(incheiata_de, '-'), 'absenta') FROM public.red_fan_intentii WHERE cheie = '$1'"; }
+INT() { q -c "SELECT coalesce((SELECT stare || '/' || coalesce(incheiata_de, '-') FROM public.red_fan_intentii WHERE cheie = '$1'), 'absenta')"; }   # zero rânduri = „absenta” (subinterogare scalară)
 EXPIRA() { q -c "UPDATE public.red_fan_intentii SET lucru_pana_la = clock_timestamp() - interval '1 minute' WHERE cheie = '$1'" >/dev/null; }
 
 # pregătirea comună: owner-ul numește operatorii și pune plafonul zilei pe 5 (P5 pe muchie)
@@ -310,8 +342,8 @@ pregateste_e22() {   # $1 LV, $2 LN, $3 plicul P: owner propune P în LV (rându
   q -c "UPDATE public.red_plicuri SET lot_id = '$2' WHERE id = '$(plic "$3")'" >/dev/null
   [ "$(q -c "SELECT count(*) FROM public.red_fan_awb WHERE plic_id = '$(plic "$3")' AND stare = 'propus' AND lot_id = '$1'")" = 1 ]
 }
-sesiune_e22() {   # $1 fișier, $2 uid, $3 expresia: deadlock_timeout scurt (superuser, înaintea rolului), R= / E= / M=
-  printf '%s\n' "\\set ON_ERROR_STOP 0" "BEGIN;" "SET LOCAL deadlock_timeout = '300ms';" "$(JWT "$2")" "SET LOCAL lock_timeout = '60s';" \
+sesiune_e22() {   # $1 fișier, $2 uid, $3 expresia: R= / E= / M=; deadlock_timeout = al serverului (runda 4: pe clonă postgres nu e superuser, SET-ul lui dădea „permission denied”)
+  printf '%s\n' "\\set ON_ERROR_STOP 0" "BEGIN;" "$(JWT "$2")" "SET LOCAL lock_timeout = '60s';" \
     "SELECT 'R=' || ($3)::text;" '\echo E=:LAST_ERROR_SQLSTATE' '\echo M=:LAST_ERROR_MESSAGE' "COMMIT;" > "$1"
 }
 asteapta_lock() {   # sesiunea cu application_name $1 așteaptă un lock (pg_stat_activity), ≤ 20 s
@@ -319,14 +351,36 @@ asteapta_lock() {   # sesiunea cu application_name $1 așteaptă un lock (pg_sta
     [ "$(q -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = '$1' AND wait_event_type = 'Lock'")" = 1 ] && return 0; sleep 0.05
   done; return 1
 }
-TUPLU() { q -c "SELECT coalesce(string_agg(DISTINCT l.relation::regclass::text, ','), '-') FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = '$1' AND l.locktype = 'tuple'"; }
+# runda 4 (proba pe clonă: textul „public.red_fan_setari” nu apărea — regclass::text omite schema din search_path — iar a doua sesiune din E22a/b
+# nu avea niciun lock „tuple”): LOCUL așteptării, dovedit din pg_locks + pg_blocking_pids, nu din lock-ul de tuplu:
+#   poz = ultima poziție din §6.2 a cărei relație e deja blocată de sesiune (3 red_fan_awb, 4 red_fan_loturi, 5 red_fan_setari: fiecare pas al fazei L
+#         ia lock-ul de relație la execuție, deci o sesiune oprită la (3) n-are încă nimic pe red_fan_loturi / red_fan_setari);
+#   astept = tipul lock-ului NEACORDAT (transactionid = așteaptă un rând ținut de tranzacția blocantului; tuple = la coadă pe un rând);
+#   blocant = application_name-urile din pg_blocking_pids; tuplu = relname-ul lock-urilor de tuplu ținute (informativ, fără schemă).
+# Ieșire: „poz/astept/blocant/tuplu”, ex. „3/transactionid/e22_s1/-”.
+LOC() {
+  q -c "SELECT CASE WHEN bool_or(c.relname = 'red_fan_setari') THEN '5' WHEN bool_or(c.relname = 'red_fan_loturi') THEN '4' WHEN bool_or(c.relname = 'red_fan_awb') THEN '3' ELSE '?' END
+           || '/' || coalesce((SELECT string_agg(DISTINCT n.locktype, ',' ORDER BY n.locktype) FROM pg_locks n WHERE n.pid = a.pid AND NOT n.granted), '-')
+           || '/' || coalesce((SELECT string_agg(DISTINCT b.application_name, ',' ORDER BY b.application_name) FROM pg_stat_activity b WHERE b.pid = ANY (pg_blocking_pids(a.pid))), '-')
+           || '/' || coalesce((SELECT string_agg(DISTINCT t.relname, ',' ORDER BY t.relname) FROM pg_locks u JOIN pg_class t ON t.oid = u.relation WHERE u.pid = a.pid AND u.locktype = 'tuple'), '-')
+         FROM pg_stat_activity a
+         LEFT JOIN pg_locks l ON l.pid = a.pid AND l.locktype = 'relation' AND l.granted
+         LEFT JOIN pg_class c ON c.oid = l.relation AND c.relnamespace = 'public'::regnamespace
+        WHERE a.application_name = '$1' GROUP BY a.pid"
+}
+# rândurile vii pe care pasul (3) al comenzii le-ar bloca pentru (lot, plicuri): aceeași condiție ca în fn_red_fan_comanda (poziția 3)
+POZ3_RANDURI() { q -c "SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '-') FROM public.red_fan_awb WHERE stare NOT IN ('eroare', 'anulat', 'retras') AND (lot_id = '$1' OR plic_id IN ($2))"; }
 e22() {   # $1 varianta (a/b/c), $2 LV, $3 LN, $4 P, $5 Q1, $6 Q2, $7 prima sesiune (s1/s2)
-  local v=$1 LV=$2 LN=$3 P=$4 KV KN prima=$7 a doua h ca=0 cb=0 ch=0 T1 T2
+  local v=$1 LV=$2 LN=$3 P=$4 KV KN prima=$7 a doua h ca=0 cb=0 ch=0 T1 T2 RID S1SET S2SET
   case $v in a) KV=$(kid 21); KN=$(kid 31) ;; b) KV=$(kid 22); KN=$(kid 32) ;; *) KV=$(kid 23); KN=$(kid 33) ;; esac   # chei distincte pe variantă
+  # rândul R și mulțimile pasului (3) ale celor două comenzi, ÎNAINTE de pornire: singurul rând comun e R (forma nemutată a poziției 3)
+  RID="$(q -c "SELECT coalesce(string_agg(id::text, ','), '-') FROM public.red_fan_awb WHERE plic_id = '$(plic "$P")' AND stare = 'propus' AND lot_id = '$LV'")"
+  S1SET="$(POZ3_RANDURI "$LV" "'$(plic "$5")','$(plic "$6")'")"; S2SET="$(POZ3_RANDURI "$LN" "'$(plic "$P")'")"
   printf '%s\n' "\\set ON_ERROR_STOP 1" "BEGIN;" "SELECT id FROM public.red_fan_setari WHERE id FOR UPDATE;" \
     "DO \$b\$ DECLARE i int := 0; BEGIN LOOP
-       IF (SELECT count(*) FROM pg_stat_activity WHERE application_name IN ('e22_s1', 'e22_s2') AND wait_event_type = 'Lock') = 2 THEN EXIT; END IF;
-       PERFORM pg_sleep(0.05); i := i + 1; IF i > 1200 THEN RAISE EXCEPTION 'E22: sesiunile nu au ajuns amandoua in asteptare'; END IF; END LOOP; END \$b\$;" \
+       IF (SELECT count(*) FROM pg_stat_activity WHERE application_name IN ('e22_s1', 'e22_s2') AND wait_event_type = 'Lock') = 2
+          AND EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'e22_gata') THEN EXIT; END IF;
+       PERFORM pg_sleep(0.05); PERFORM pg_stat_clear_snapshot(); i := i + 1; IF i > 1200 THEN RAISE EXCEPTION 'E22: sesiunile nu au ajuns amandoua in asteptare'; END IF; END LOOP; END \$b\$;" \
     "SELECT 'H_ELIBERAT=' || clock_timestamp();" "COMMIT;" > "$TMP/h$v.sql"
   sesiune_e22 "$TMP/s1$v.sql" "$OP1" "$(CMD "$LV" "$KV" "$(PJ "$5" "$6")")"
   sesiune_e22 "$TMP/s2$v.sql" "$OP2" "$(CMD "$LN" "$KN" "$(PJ "$P")")"
@@ -335,42 +389,53 @@ e22() {   # $1 varianta (a/b/c), $2 LV, $3 LN, $4 P, $5 Q1, $6 Q2, $7 prima sesi
   if [ "$prima" = s1 ]; then a=s1; doua=s2; else a=s2; doua=s1; fi
   PGAPPNAME=e22_$a "$PSQL" -X -q -At "${CONN[@]}" -f "$TMP/$a$v.sql" > "$TMP/$a$v.out" 2>&1 & local pa=$!
   asteapta_lock "e22_$a" || rez esec "E22$v: prima sesiune ($a) nu a ajuns in asteptare"
-  T1="$(TUPLU "e22_$a")"
   PGAPPNAME=e22_$doua "$PSQL" -X -q -At "${CONN[@]}" -f "$TMP/$doua$v.sql" > "$TMP/$doua$v.out" 2>&1 & local pb=$!
   asteapta_lock "e22_$doua" || rez esec "E22$v: a doua sesiune ($doua) nu a ajuns in asteptare"
-  T2="$(TUPLU "e22_$doua")"
-  wait "$pa" || ca=$?; wait "$pb" || cb=$?; wait "$h" || ch=$?
-  echo "$ca $cb $ch|$T1|$T2"
+  # locul așteptării, pentru AMBELE, cât H încă ține red_fan_setari: H eliberează DOAR după ce le vede pe amândouă în așteptare ȘI vede sesiunea
+  # semnal „e22_gata”, pornită aici abia DUPĂ citire (fără cursă între citire și eliberare)
+  T1="$(LOC "e22_$a")"; T2="$(LOC "e22_$doua")"
+  { echo "E22$v R=$RID pozitia3 $a/$doua: S1=$S1SET S2=$S2SET"; echo "E22$v loc $a: $T1"; echo "E22$v loc $doua: $T2"; } >> "$TMP/e22_locuri.txt"
+  PGAPPNAME=e22_gata "$PSQL" -X -q -At "${CONN[@]}" -c "SELECT pg_sleep(1.5)" > "$TMP/gata$v.out" 2>&1 & local pg=$!
+  local cg=0
+  wait "$pa" || ca=$?; wait "$pb" || cb=$?; wait "$h" || ch=$?; wait "$pg" || cg=$?
+  [ "$cg" = 0 ] || ch="$ch+gata$cg"
+  echo "$ca $cb $ch|$T1|$T2|$RID|$S1SET|$S2SET"
 }
 VIU() { q -c "SELECT count(*) FROM public.red_fan_awb WHERE plic_id = '$(plic "$1")' AND stare NOT IN ('eroare', 'anulat', 'retras')"; }
 R_STARE() { q -c "SELECT string_agg(stare || '@' || CASE WHEN lot_id = '$2' THEN 'LV' WHEN lot_id = '$3' THEN 'LN' ELSE '?' END || coalesce('/' || motiv_retragere, ''), ' ' ORDER BY created_at) FROM public.red_fan_awb WHERE plic_id = '$(plic "$1")'"; }
 # E22a: S1 întâi (ține R, așteaptă la 5), S2 așteaptă la 3 pe R (tuplu din red_fan_awb)
 if pregateste_e22 "$LV1" "$LN1" 11 a; then
-  IFS='|' read -r CODURI TA TB < <(e22 a "$LV1" "$LN1" 11 12 13 s1); read -r CA CB CH <<< "$CODURI"
+  IFS='|' read -r CODURI TA TB RID S1SET S2SET < <(e22 a "$LV1" "$LN1" 11 12 13 s1); read -r CA CB CH <<< "$CODURI"
   RS="$(R_STARE 11 "$LV1" "$LN1")"; SV="$(STARI "$LV1")"
-  [ "$CA" = 0 ] && [ "$CB" = 0 ] && [ "$CH" = 0 ] && [ "$(val E "$TMP/s1a.out")" = 00000 ] && [ "$(val E "$TMP/s2a.out")" = 00000 ] && [ "$TA" = public.red_fan_setari ] && [ "$TB" = public.red_fan_awb ] \
+  # locul: S1 la (5), în așteptarea tranzacției lui H (rândul red_fan_setari); S2 la (3) — n-are încă lock pe red_fan_loturi / red_fan_setari —, în
+  # așteptarea tranzacției lui S1; singurul rând pe care pasul (3) al ambelor îl atinge e R (RID = S1SET = S2SET) ⇒ S2 așteaptă pe R
+  [ "$CA" = 0 ] && [ "$CB" = 0 ] && [ "$CH" = 0 ] && [ "$(val E "$TMP/s1a.out")" = 00000 ] && [ "$(val E "$TMP/s2a.out")" = 00000 ] \
+    && [[ "$TA" == 5/transactionid/e22_h/* ]] && [[ "$TB" == 3/transactionid/e22_s1/* ]] && [[ "$RID" =~ ^[0-9a-f-]{36}$ ]] && [ "$S1SET" = "$RID" ] && [ "$S2SET" = "$RID" ] \
     && [ "$RS" = "retras@LV/plic_mutat aprobat@LN" ] && [ "$SV" = "aprobat,aprobat" ] && [ "$(VIU 11)" = 1 ] && grep -q '"retrase": \[{' "$TMP/s1a.out" \
-    && rez ok "E22a S1 -> S2: fara 40P01; S1 a asteptat pe red_fan_setari, S2 pe un tuplu din red_fan_awb; R retras (plic_mutat), R2 aprobat pe LN, Q1/Q2 aprobat, un rand viu pe P" \
-    || rez esec "E22a (S1=$CA S2=$CB H=$CH tupluri=$TA/$TB R=$RS LV=$SV): $(cat "$TMP/s1a.out" "$TMP/s2a.out" "$TMP/ha.out" | tr '\n' ' ')"
+    && rez ok "E22a S1 -> S2: fara 40P01; S1 a asteptat la (5) pe H ($TA), S2 la (3) pe S1 ($TB), singurul rand comun al pasului 3 = R; R retras (plic_mutat), R2 aprobat pe LN, Q1/Q2 aprobat, un rand viu pe P" \
+    || rez esec "E22a (S1=$CA S2=$CB H=$CH loc S1=$TA S2=$TB R=$RID pas3 S1=$S1SET S2=$S2SET R=$RS LV=$SV): $(cat "$TMP/s1a.out" "$TMP/s2a.out" "$TMP/ha.out" | tr '\n' ' ')"
 else rez esec "E22a: pregatirea a picat"; fi
 # E22b: S2 întâi (ține R, așteaptă la 5), S1 așteaptă la 3 pe R → R refolosit pe LN
 if pregateste_e22 "$LV2" "$LN2" 14 b; then
-  IFS='|' read -r CODURI TA TB < <(e22 b "$LV2" "$LN2" 14 15 16 s2); read -r CA CB CH <<< "$CODURI"
+  IFS='|' read -r CODURI TA TB RID S1SET S2SET < <(e22 b "$LV2" "$LN2" 14 15 16 s2); read -r CA CB CH <<< "$CODURI"
   RS="$(R_STARE 14 "$LV2" "$LN2")"; SV="$(STARI "$LV2")"
-  [ "$CA" = 0 ] && [ "$CB" = 0 ] && [ "$CH" = 0 ] && [ "$(val E "$TMP/s1b.out")" = 00000 ] && [ "$(val E "$TMP/s2b.out")" = 00000 ] && [ "$TA" = public.red_fan_setari ] && [ "$TB" = public.red_fan_awb ] \
+  # locul: S2 la (5) pe H; S1 la (3) pe S2; singurul rând comun al pasului (3) = R ⇒ S1 așteaptă pe R
+  [ "$CA" = 0 ] && [ "$CB" = 0 ] && [ "$CH" = 0 ] && [ "$(val E "$TMP/s1b.out")" = 00000 ] && [ "$(val E "$TMP/s2b.out")" = 00000 ] \
+    && [[ "$TA" == 5/transactionid/e22_h/* ]] && [[ "$TB" == 3/transactionid/e22_s2/* ]] && [[ "$RID" =~ ^[0-9a-f-]{36}$ ]] && [ "$S1SET" = "$RID" ] && [ "$S2SET" = "$RID" ] \
     && [ "$RS" = "aprobat@LN" ] && [ "$SV" = "aprobat,aprobat" ] && [ "$(VIU 14)" = 1 ] && grep -q '"retrase": \[\]' "$TMP/s1b.out" \
-    && rez ok "E22b S2 -> S1: fara 40P01; R refolosit si realiniat (aprobat pe LN), Q1/Q2 aprobat fara sa atinga R, un rand viu pe P" \
-    || rez esec "E22b (S2=$CA S1=$CB H=$CH tupluri=$TA/$TB R=$RS LV=$SV): $(cat "$TMP/s1b.out" "$TMP/s2b.out" "$TMP/hb.out" | tr '\n' ' ')"
+    && rez ok "E22b S2 -> S1: fara 40P01; S2 a asteptat la (5) pe H ($TA), S1 la (3) pe S2 ($TB), singurul rand comun al pasului 3 = R; R refolosit si realiniat (aprobat pe LN), Q1/Q2 aprobat fara sa atinga R, un rand viu pe P" \
+    || rez esec "E22b (S2=$CA S1=$CB H=$CH loc S2=$TA S1=$TB R=$RID pas3 S1=$S1SET S2=$S2SET R=$RS LV=$SV): $(cat "$TMP/s1b.out" "$TMP/s2b.out" "$TMP/hb.out" | tr '\n' ' ')"
 else rez esec "E22b: pregatirea a picat"; fi
 # E22c: mutantul fazei L (poziția 3 fără rândurile plicurilor cerute) cu coregrafia S2 -> S1 → ciclu → exact un 40P01
 if q -f "$TMP/comanda_mutant.sql" > "$TMP/comanda_mutant.out" 2>&1; then
   MUTANT_ACTIV=1
   if pregateste_e22 "$LV3" "$LN3" 17 c; then
-    IFS='|' read -r CODURI TA TB < <(e22 c "$LV3" "$LN3" 17 18 19 s2); read -r CA CB CH <<< "$CODURI"
+    IFS='|' read -r CODURI TA TB RID S1SET S2SET < <(e22 c "$LV3" "$LN3" 17 18 19 s2); read -r CA CB CH <<< "$CODURI"
     E1="$(val E "$TMP/s1c.out")"; E2="$(val E "$TMP/s2c.out")"; N40=0; [ "$E1" = 40P01 ] && N40=$((N40 + 1)); [ "$E2" = 40P01 ] && N40=$((N40 + 1))
-    [ "$CA" = 0 ] && [ "$CB" = 0 ] && [ "$CH" = 0 ] && [ "$N40" = 1 ] && [ "$TA" = public.red_fan_setari ] && [ "$TB" = public.red_fan_setari ] \
-      && rez ok "E22c mutantul fazei L: ambele au asteptat la red_fan_setari, apoi EXACT una a primit 40P01 (S1=$E1 S2=$E2) — proba prinde defectul" \
-      || rez esec "E22c (S2=$CA S1=$CB H=$CH E1=$E1 E2=$E2 tupluri=$TA/$TB): $(cat "$TMP/s1c.out" "$TMP/s2c.out" "$TMP/hc.out" | tr '\n' ' ')"
+    # locul: cu mutantul, S2 nu ține R și ajunge la (5) pe H; S1 ține R și ajunge tot la (5), la coadă după S2 (tuplul rândului red_fan_setari)
+    [ "$CA" = 0 ] && [ "$CB" = 0 ] && [ "$CH" = 0 ] && [ "$N40" = 1 ] && [[ "$TA" == 5/transactionid/e22_h/* ]] && [[ "$TB" == 5/* ]] && [[ "$(cut -d/ -f3 <<< "$TB")" == *e22_s2* ]] \
+      && rez ok "E22c mutantul fazei L: ambele au asteptat la (5) (S2 pe H: $TA; S1 dupa S2: $TB), apoi EXACT una a primit 40P01 (S1=$E1 S2=$E2) — proba prinde defectul" \
+      || rez esec "E22c (S2=$CA S1=$CB H=$CH E1=$E1 E2=$E2 loc S2=$TA S1=$TB): $(cat "$TMP/s1c.out" "$TMP/s2c.out" "$TMP/hc.out" | tr '\n' ' ')"
   else rez esec "E22c: pregatirea a picat"; fi
   mutant_scoate && rez ok "E22c: mutantul scos, amprenta fn_red_fan_comanda = cea de la inceput" || rez esec "E22c: mutantul NU s-a scos / amprenta diferita"
 else rez esec "E22c: mutantul nu s-a putut pune: $(tr '\n' ' ' < "$TMP/comanda_mutant.out")"; fi

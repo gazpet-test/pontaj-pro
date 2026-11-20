@@ -56,6 +56,13 @@
 --   motiv_anulare = 'alt_motiv', anulare_nota = motivul vechi tăiat la 200) ÎNAINTEA CHECK-ului red_fan_awb_anulat; numărul lor în NOTICE.
 -- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, bugetul lock-urilor
 --   de 1 s și garda finală a runnerului.
+-- RUNDA 4 (proba pe clonă, 20.11.2026): (1) poarta 0e a runnerului (cod 30) găsea 5 funcții expuse care scriau marcajul gărzii rândului FAN cu
+--   funcția de configurare, iar (2) poarta Izometrie E2 (fn_izo_porti_lipsa) socotea cele 7 funcții care îl scriu „mutatori de cale” și
+--   trigger-ul trg_red_fan_awb_garda (care le numește în listele lui) „invocare implicită neanalizată”. Acum marcajul se scrie cu instrucțiunea
+--   statică SET LOCAL (precedentul 20261130l), fără id-ul rândului; postcondiția cere că doar cele 7 îl scriu și că niciun corp fn_red_fan_* nu
+--   mai are tiparele porților (configurare / cale de căutare / SQL dinamic). Migrarea NU atinge perimetrul porților Izometrie (detectorul
+--   scripts/izometrie/porti_regula.mjs: „nu atinge”), deci fără ritualul PRE / ștampile / POST. (3) Comanda pune marcajul automat al lotului
+--   ÎNAINTEA scrierilor pe rânduri: primul eveniment de jurnal 20261227a al unui lot nemarcat are opod = false, nu NULL.
 -- Revenire: supabase/revenire/20261228a_redari_fan_operator_ROLLBACK.sql (prin runner, plafonul 2000; LOCK … NOWAIT în ordinea §6.2; refuză cu
 --   operatori numiți, zile / consum, cereri, intenții, rânduri de_aprobat / retras, coloane noi nenule, setări schimbate sau evenimente noi în
 --   red_jurnal; readuce TEXTUAL corpurile vechi ale funcțiilor înlocuite, cu amprenta verificată DUPĂ).
@@ -457,17 +464,21 @@ END $fn$;
 CREATE TRIGGER trg_red_fan_zi_garda BEFORE INSERT OR UPDATE ON public.red_fan_zi FOR EACH ROW EXECUTE FUNCTION public.fn_red_fan_zi_garda();
 
 -- Garda rândului FAN (spec §8.4.1, L07 / L08): TREI liste de coloane, fiecare scrisă DOAR din funcțiile numite, identificate prin marcajul de
--- tranzacție `redari_fan.garda = '<functie>:<id rand>'` pus de funcția DEFINER imediat înaintea UPDATE-ului ei și șters imediat după (nu
--- current_user, nu pg_trigger_depth). (a) cererea de anulare: punerea (toate împreună) doar din fn_red_fan_anulare_cere, golirea (toate împreună)
+-- tranzacție `redari_fan.garda = '<functie>'` pus de funcția DEFINER cu instrucțiunea STATICĂ `SET LOCAL redari_fan.garda = '<functie>'`
+-- imediat înaintea SINGURULUI ei UPDATE pe rândul blocat (WHERE id = rândul) și golit (`SET LOCAL … = ''`) imediat după (nu current_user, nu
+-- pg_trigger_depth). Runda 4 (proba pe clonă): marcajul nu mai e scris cu funcția de configurare: poarta 0e a runnerului refuză orice funcție
+-- expusă care o cheamă, iar poarta Izometrie E2 socotește corpul care o cheamă „mutator de cale” și trigger-ul care le numește „invocare
+-- implicită”. Forma statică e precedentul 20261130l (fără clauză SET pe funcție: pe Supabase cere superuser); valoarea nu mai poartă id-ul
+-- rândului (o instrucțiune statică nu-l poate primi), legătura cu rândul o dă UPDATE-ul unic dintre cele două instrucțiuni; postcondiția verifică
+-- că marcajul e scris DOAR de cele 7 funcții de pe liste. (a) cererea de anulare: punerea (toate împreună) doar din fn_red_fan_anulare_cere, golirea (toate împreună)
 -- doar din fn_red_fan_srv_anuleaza; ORICE altă schimbare (alt motiv / altă notă cât cererea e deschisă, parțial, altă funcție) = 42501.
 -- (b) confirmarea (anulat_de, anulat_la, motiv_anulare, anulare_nota) + trecerea stare → anulat: toate odată, doar din fn_red_fan_srv_anuleaza /
 -- fn_red_fan_anulat; imuabile după scriere. fn_red_fan_anulare_cere NU e pe lista (b): nu poate fabrica `anulat`. (c) retras_* + stare → retras:
 -- doar din fn_red_fan_comanda / _retrage / _cerere_decide / _srv_claim; imuabile după scriere. UPDATE-ul direct cade oricum la 42501 (fără GRANT).
 CREATE FUNCTION public.fn_red_fan_awb_garda() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
-DECLARE v_m text := coalesce(current_setting('redari_fan.garda', true), ''); v_fn text := '';
+DECLARE v_fn text := coalesce(current_setting('redari_fan.garda', true), '');
 BEGIN
-  IF split_part(v_m, ':', 2) = NEW.id::text THEN v_fn := split_part(v_m, ':', 1); END IF;
   -- (a) cererea de anulare
   IF NEW.anulare_ceruta_de IS DISTINCT FROM OLD.anulare_ceruta_de OR NEW.anulare_ceruta_la IS DISTINCT FROM OLD.anulare_ceruta_la
      OR NEW.anulare_ceruta_motiv IS DISTINCT FROM OLD.anulare_ceruta_motiv OR NEW.anulare_ceruta_nota IS DISTINCT FROM OLD.anulare_ceruta_nota THEN
@@ -601,9 +612,9 @@ BEGIN
   SELECT id, stare, lot_id, nr_plic INTO v_r FROM public.red_fan_awb WHERE id = p_id FOR UPDATE;
   IF v_r.stare NOT IN ('propus', 'aprobat') THEN RAISE EXCEPTION 'redari fan: doar un rand propus sau aprobat se retrage (stare %)', v_r.stare USING ERRCODE = 'P0001'; END IF;
   v_now := clock_timestamp();
-  PERFORM set_config('redari_fan.garda', 'fn_red_fan_retrage:' || p_id::text, true);
+  SET LOCAL redari_fan.garda = 'fn_red_fan_retrage';
   UPDATE public.red_fan_awb SET stare = 'retras', retras_de = auth.uid(), retras_la = v_now, motiv_retragere = p_motiv_cod, updated_at = v_now WHERE id = p_id;
-  PERFORM set_config('redari_fan.garda', '', true);
+  SET LOCAL redari_fan.garda = '';
   INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_vechi, date_noi, user_id)
   VALUES ('red_fan_awb', p_id, 'update', jsonb_build_object('stare', v_r.stare), jsonb_build_object('eveniment', 'retragere', 'motiv', p_motiv_cod, 'lot_id', v_r.lot_id, 'la', v_now), auth.uid());
   RETURN 'retras';
@@ -632,10 +643,10 @@ BEGIN
              FROM public.red_fan_awb a LEFT JOIN public.red_plicuri pl ON pl.id = a.plic_id
             WHERE a.cerere_aprobare_id = p_id AND a.stare = 'de_aprobat' ORDER BY a.id LOOP
     IF r.plic_stare IS DISTINCT FROM 'activ' OR r.plic_lot IS DISTINCT FROM v_c.lot_id OR r.plic_awb IS NOT NULL OR r.data_expediere IS NOT NULL THEN
-      PERFORM set_config('redari_fan.garda', 'fn_red_fan_cerere_decide:' || r.id::text, true);
+      SET LOCAL redari_fan.garda = 'fn_red_fan_cerere_decide';
       UPDATE public.red_fan_awb SET stare = 'retras', retras_de = auth.uid(), retras_la = v_now, updated_at = v_now,
              motiv_retragere = CASE WHEN r.plic_stare IS DISTINCT FROM 'activ' OR r.plic_awb IS NOT NULL OR r.data_expediere IS NOT NULL THEN 'plic_anulat' ELSE 'plic_mutat' END WHERE id = r.id;
-      PERFORM set_config('redari_fan.garda', '', true);
+      SET LOCAL redari_fan.garda = '';
       v_retrase := v_retrase + 1;
     ELSIF p_aproba THEN
       UPDATE public.red_fan_awb SET stare = 'aprobat', aprobat_de = auth.uid(), aprobat_la = v_now, aprobare_owner_la = v_now, updated_at = v_now WHERE id = r.id;
@@ -700,9 +711,9 @@ BEGIN
   IF v_r.stare <> 'generat' OR v_r.awb IS DISTINCT FROM p_awb OR v_r.ridicat_la IS NOT NULL OR v_r.ridicat_contrazis IS NOT NULL THEN
     RAISE EXCEPTION 'redari fan: doar un AWB generat, neridicat, cu acelasi numar se poate anula (CAS)' USING ERRCODE = 'P0001'; END IF;
   v_now := clock_timestamp();
-  PERFORM set_config('redari_fan.garda', 'fn_red_fan_anulare_cere:' || p_id::text, true);
+  SET LOCAL redari_fan.garda = 'fn_red_fan_anulare_cere';
   UPDATE public.red_fan_awb SET anulare_ceruta_de = auth.uid(), anulare_ceruta_la = v_now, anulare_ceruta_motiv = p_motiv_cod, anulare_ceruta_nota = v_nota, updated_at = v_now WHERE id = p_id;
-  PERFORM set_config('redari_fan.garda', '', true);
+  SET LOCAL redari_fan.garda = '';
   INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_vechi, date_noi, user_id)
   VALUES ('red_fan_awb', p_id, 'update', jsonb_build_object('stare', 'generat'), jsonb_build_object('eveniment', 'anulare_ceruta', 'motiv', p_motiv_cod, 'lot_id', v_r.lot_id, 'la', v_now), auth.uid());
   RETURN 'ceruta';
@@ -725,8 +736,9 @@ END $fn$;
 --   lotul tipărit (Q5 A: exclus lot_tiparit + de retras); clasificarea fiecărui plic cerut → A (de aprobat acum) și N ⊆ A (de numărat: fără consum
 --   pe azi); rândurile lotului de retras (plic anulat / mutat); plafonul pe lot (P0001); decizia plafonului zilei o SINGURĂ dată
 --   (v_peste := v_n > 0 AND v_acum + v_n > limita; RD037 dacă v_peste și există cerere deschisă); de_trimis := A ∪ „deja aprobat” sau ∅ (Q2 A literal).
--- Faza M — mutațiile, în ordinea tabelelor, fără niciun lock disputabil nou: (3) retrageri (marcaj pe rând), rânduri noi, refolosiri, aprobări pe
---   TOT A sau de_aprobat pe tot A, intentie_cheie pe de_trimis; (4) marcajul automat / prima aprobare + postcondiția fn_red_fan_lot_permis;
+-- Faza M — mutațiile, fără niciun lock disputabil nou: (4) marcajul automat ÎNTÂI (rândul nou al lotului, ca primul eveniment de jurnal 20261227a
+--   să vadă opod = false, nu NULL — runda 4); (3) retrageri (marcaj pe rând), rânduri noi, refolosiri, aprobări pe
+--   TOT A sau de_aprobat pe tot A, intentie_cheie pe de_trimis; (4) prima aprobare + postcondiția fn_red_fan_lot_permis;
 --   (6) contorul zilei + registrul consumului DOAR pentru N și DOAR sub plafon, cu postcondiție; (7) cererea (doar peste plafon); (8) intenția
 --   (preluare = cea veche neincheiata; cheie nouă = INSERT … ON CONFLICT DO NOTHING; reluare = arenda reînnoită; de_trimis gol = încheiată de RPC);
 --   (11) jurnalul, ULTIMUL. Răspunsul = ce s-a făcut EFECTIV (condiția P2-1 a recenzentului): aprobate = rândurile puse aprobat în ACEASTĂ comandă
@@ -853,11 +865,19 @@ BEGIN
   IF v_peste AND v_cer.id IS NOT NULL THEN
     RAISE EXCEPTION 'redari fan: lotul are deja o cerere de aprobare deschisa; asteapta decizia proprietarului sau retrage cererea' USING ERRCODE = 'RD037'; END IF;
   -- ── Faza M ──
+  -- (4) marcajul automat la prima trimitere, ÎNAINTEA scrierilor pe rânduri (runda 4, observația probei pe clonă): trigger-ul de jurnal al
+  -- 20261227a citește alegerea oPOD a lotului la fiecare scriere red_fan_awb, deci cu rândul lotului deja inserat primul eveniment are opod =
+  -- false (implicitul coloanei, aceeași valoare ca RD038 de mai sus), nu NULL. Rândul nou nu e ținut de nimeni (cheia lot_id e serializată de
+  -- (1)); INSERT: trigger-ul gărzii loturilor e BEFORE UPDATE OR DELETE
+  IF v_fl.lot_id IS NULL THEN
+    INSERT INTO public.red_fan_loturi (lot_id, proiect_id, test, marcat_de) VALUES (p_lot_id, v_lot.proiect_id, v_test, v_uid);
+    v_marcaj := true;
+  END IF;
   -- (3) retragerile (marcaj pe rând, lista (c) a trigger-ului)
   FOR r IN SELECT (d ->> 'id')::uuid AS id, d ->> 'nr_plic' AS nr_plic, d ->> 'motiv_cod' AS motiv_cod, d ->> 'stare' AS stare FROM jsonb_array_elements(v_de_retras) d LOOP
-    PERFORM set_config('redari_fan.garda', 'fn_red_fan_comanda:' || r.id::text, true);
+    SET LOCAL redari_fan.garda = 'fn_red_fan_comanda';
     UPDATE public.red_fan_awb SET stare = 'retras', retras_de = v_uid, retras_la = v_now, motiv_retragere = r.motiv_cod, updated_at = v_now WHERE id = r.id;
-    PERFORM set_config('redari_fan.garda', '', true);
+    SET LOCAL redari_fan.garda = '';
     v_retrase := v_retrase || jsonb_build_object('nr_plic', r.nr_plic, 'motiv_cod', r.motiv_cod);
     IF r.stare = 'de_aprobat' AND v_cer.id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.red_fan_awb WHERE cerere_aprobare_id = v_cer.id AND stare = 'de_aprobat') THEN
       UPDATE public.red_fan_cereri_aprobare SET stare = 'retrasa', decis_de = v_uid, decis_la = v_now, motiv = 'toate randurile retrase' WHERE id = v_cer.id;   -- (7, rândul deja blocat)
@@ -891,11 +911,7 @@ BEGIN
     UPDATE public.red_fan_awb SET intentie_cheie = p_intentie, updated_at = v_now WHERE id = ANY (v_deja);
   END IF;
   IF NOT v_peste THEN v_trimis := v_a || v_deja; END IF;
-  -- (4) marcajul automat la prima trimitere (INSERT: trigger-ul gărzii e BEFORE UPDATE OR DELETE) și prima aprobare
-  IF v_fl.lot_id IS NULL THEN
-    INSERT INTO public.red_fan_loturi (lot_id, proiect_id, test, marcat_de) VALUES (p_lot_id, v_lot.proiect_id, v_test, v_uid);
-    v_marcaj := true;
-  END IF;
+  -- (4) prima aprobare (marcajul automat e la începutul fazei M)
   IF NOT v_peste AND cardinality(v_a) > 0 THEN
     UPDATE public.red_fan_loturi SET prima_aprobare_la = v_now, prima_aprobare_de = v_uid WHERE lot_id = p_lot_id AND prima_aprobare_la IS NULL;
     v_prima := FOUND;
@@ -1006,11 +1022,11 @@ BEGIN
   -- M
   v_now := clock_timestamp();
   FOREACH r.id IN ARRAY v_de_retras LOOP
-    PERFORM set_config('redari_fan.garda', 'fn_red_fan_srv_claim:' || r.id::text, true);
+    SET LOCAL redari_fan.garda = 'fn_red_fan_srv_claim';
     UPDATE public.red_fan_awb a SET stare = 'retras', retras_de = p_actor, retras_la = v_now, updated_at = v_now,
            motiv_retragere = CASE WHEN EXISTS (SELECT 1 FROM public.red_plicuri pl WHERE pl.id = a.plic_id AND pl.stare = 'activ' AND pl.awb IS NULL AND pl.data_expediere IS NULL) THEN 'plic_mutat' ELSE 'plic_anulat' END
      WHERE a.id = r.id;
-    PERFORM set_config('redari_fan.garda', '', true);
+    SET LOCAL redari_fan.garda = '';
   END LOOP;
   IF cardinality(v_ramase) > 0 THEN
     -- ceasul (20261212a runda 5): updated_at al rezervării = începutul celor 10 minute ale reconcilierii → clock_timestamp() după lock-uri
@@ -1270,14 +1286,14 @@ BEGIN
     RAISE EXCEPTION 'redari fan: nicio cerere de anulare deschisa pe acest AWB generat (CAS)' USING ERRCODE = 'P0001'; END IF;
   IF p_rezultat = 'ambiguu' THEN RETURN 'ambiguu'; END IF;
   v_now := clock_timestamp();
-  PERFORM set_config('redari_fan.garda', 'fn_red_fan_srv_anuleaza:' || p_id::text, true);
+  SET LOCAL redari_fan.garda = 'fn_red_fan_srv_anuleaza';
   IF p_rezultat = 'sters' THEN
     UPDATE public.red_fan_awb SET stare = 'anulat', anulat_de = v_r.anulare_ceruta_de, anulat_la = v_now, motiv_anulare = v_r.anulare_ceruta_motiv, anulare_nota = v_r.anulare_ceruta_nota,
            motiv = left('AWB sters la curier (DELETE confirmat), cerut de operator: ' || v_r.anulare_ceruta_motiv, 500), updated_at = v_now WHERE id = p_id;
   ELSE
     UPDATE public.red_fan_awb SET anulare_ceruta_de = NULL, anulare_ceruta_la = NULL, anulare_ceruta_motiv = NULL, anulare_ceruta_nota = NULL, updated_at = v_now WHERE id = p_id;
   END IF;
-  PERFORM set_config('redari_fan.garda', '', true);
+  SET LOCAL redari_fan.garda = '';
   INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_vechi, date_noi, user_id)
   VALUES ('red_fan_awb', p_id, 'update', jsonb_build_object('stare', 'generat', 'anulare_ceruta_motiv', v_r.anulare_ceruta_motiv, 'anulare_ceruta_de', v_r.anulare_ceruta_de),
           jsonb_build_object('eveniment', CASE WHEN p_rezultat = 'sters' THEN 'anulat' ELSE 'anulare_golita' END, 'rezultat', p_rezultat, 'lot_id', v_r.lot_id, 'actor', p_actor, 'la', v_now), p_actor);
@@ -1451,12 +1467,12 @@ BEGIN
   SELECT id, lot_id, anulare_ceruta_motiv, anulare_ceruta_nota INTO v_r FROM public.red_fan_awb WHERE id = p_id FOR UPDATE;
   IF NOT public.fn_red_fan_lot_permis(v_r.lot_id) THEN RAISE EXCEPTION 'redari fan: doar proiecte de TEST' USING ERRCODE = 'RD032'; END IF;
   v_now := clock_timestamp();
-  PERFORM set_config('redari_fan.garda', 'fn_red_fan_anulat:' || p_id::text, true);
+  SET LOCAL redari_fan.garda = 'fn_red_fan_anulat';
   UPDATE public.red_fan_awb SET stare = 'anulat', motiv = left(p_motiv, 500), updated_at = now(), anulat_de = auth.uid(), anulat_la = v_now,
          motiv_anulare = coalesce(v_r.anulare_ceruta_motiv, 'alt_motiv'), anulare_nota = coalesce(v_r.anulare_ceruta_nota, left(btrim(p_motiv), 200))
    WHERE id = p_id AND stare = 'generat' AND awb = p_awb;
   IF NOT FOUND THEN RAISE EXCEPTION 'redari fan: doar un AWB generat, neridicat, se anuleaza (CAS)' USING ERRCODE = 'P0001'; END IF;
-  PERFORM set_config('redari_fan.garda', '', true);
+  SET LOCAL redari_fan.garda = '';
   INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_vechi, date_noi, user_id)
   VALUES ('red_fan_awb', p_id, 'update', jsonb_build_object('stare', 'generat'), jsonb_build_object('eveniment', 'anulat', 'rezultat', 'owner', 'lot_id', v_r.lot_id, 'motiv_anulare', coalesce(v_r.anulare_ceruta_motiv, 'alt_motiv'), 'la', v_now), auth.uid());
 END $fn$;
@@ -1612,16 +1628,16 @@ BEGIN
   SELECT string_agg(a.semnatura, ', ' ORDER BY a.semnatura) INTO v_rau
     FROM (VALUES
       -- >>> AMPRENTE-NOI 20261228a (semnătura, md5(replace(prosrc, chr(13), '')), limbaj, DEFINER, volatilitate, tipul întors, EXECUTE authenticated, EXECUTE service_role)
-      ('public.fn_red_fan_anulare_cere(uuid,text,text,text)', '47a381a23aa4f4c27cdc83ffac92ba2f', 'plpgsql', true, 'v', 'text', true, false),
-      ('public.fn_red_fan_anulat(uuid,text,text)', 'b50798c2c70199809baca4bd1748f416', 'plpgsql', true, 'v', 'void', true, false),
+      ('public.fn_red_fan_anulare_cere(uuid,text,text,text)', 'ca53da3cbf13b5dc8edb2e24ddfe2f85', 'plpgsql', true, 'v', 'text', true, false),
+      ('public.fn_red_fan_anulat(uuid,text,text)', '6af4ea9ab74f812a29a82ee076550ff2', 'plpgsql', true, 'v', 'void', true, false),
       ('public.fn_red_fan_aproba(uuid,uuid[],text[])', 'f19e630e2e105cab2f0d65f18dcf47d8', 'plpgsql', true, 'v', 'integer', true, false),
-      ('public.fn_red_fan_awb_garda()', 'fd1a037c9211c9069625d8cd28b4c89a', 'plpgsql', false, 'v', 'trigger', false, false),
+      ('public.fn_red_fan_awb_garda()', '7e8e1302f342d268bcd4a8c9906bce4f', 'plpgsql', false, 'v', 'trigger', false, false),
       ('public.fn_red_fan_camp(text)', 'b3a822a4a5f35ccdd65460af7e81d635', 'sql', false, 'i', 'text', false, false),
-      ('public.fn_red_fan_cerere_decide(uuid,boolean,text)', '2c5a6081a5151df2ccf42befea6de378', 'plpgsql', true, 'v', 'jsonb', true, false),
+      ('public.fn_red_fan_cerere_decide(uuid,boolean,text)', '7515320fedb0b29fa2c23bc9d685966f', 'plpgsql', true, 'v', 'jsonb', true, false),
       ('public.fn_red_fan_cerere_retrage(uuid)', '1825378bc3b3ae1f799186cd53e8c409', 'plpgsql', true, 'v', 'jsonb', true, false),
-      ('public.fn_red_fan_claim_intern(uuid,uuid[],text[],text[],uuid,uuid,boolean)', 'ff04649ab0579a30357eace93a2c2c29', 'plpgsql', true, 'v', 'jsonb', false, false),
+      ('public.fn_red_fan_claim_intern(uuid,uuid[],text[],text[],uuid,uuid,boolean)', 'c36df6081bb2e28766f0d5e6e31def02', 'plpgsql', true, 'v', 'jsonb', false, false),
       ('public.fn_red_fan_claim_lot(uuid,uuid[],text[],text[])', 'bb7fe9239528916d08e5e9a905fe587f', 'plpgsql', true, 'v', 'uuid', true, false),
-      ('public.fn_red_fan_comanda(uuid,uuid,jsonb,text,boolean)', '2fbdceab3a5a9e87bc5e48c3482420fd', 'plpgsql', true, 'v', 'jsonb', true, false),
+      ('public.fn_red_fan_comanda(uuid,uuid,jsonb,text,boolean)', '437ae4f2662ea5626aa0dff220fdfa3c', 'plpgsql', true, 'v', 'jsonb', true, false),
       ('public.fn_red_fan_confirmari(uuid,jsonb)', 'da2e4ec6ab90886ffcf40a7dbc5562ca', 'plpgsql', true, 'v', 'jsonb', true, false),
       ('public.fn_red_fan_confirmari_intern(uuid,jsonb)', 'f34677deebaf08abb03deec737e9db05', 'plpgsql', true, 'v', 'jsonb', false, false),
       ('public.fn_red_fan_e_operator()', 'e1c0af5d6997c9c751929bcf652edc10', 'sql', true, 's', 'boolean', true, false),
@@ -1640,7 +1656,7 @@ BEGIN
       ('public.fn_red_fan_propune(uuid,text,numeric)', '98ed533dba82a221c3e874aee2af62d5', 'plpgsql', true, 'v', 'uuid', true, false),
       ('public.fn_red_fan_reconciliaza(uuid,text,numeric,numeric,text)', '95d5b20b47d04dd11ba230017d8fde85', 'plpgsql', true, 'v', 'text', true, false),
       ('public.fn_red_fan_reconciliaza_intern(uuid,text,numeric,numeric,text,uuid,boolean)', '64afc6f76bcd26692ad694f8297d6334', 'plpgsql', true, 'v', 'text', false, false),
-      ('public.fn_red_fan_retrage(uuid,text)', 'c1b59748eea1bbee982899af9e7b2652', 'plpgsql', true, 'v', 'text', true, false),
+      ('public.fn_red_fan_retrage(uuid,text)', '1c786f1641f82f0287f2e8ee943465e9', 'plpgsql', true, 'v', 'text', true, false),
       ('public.fn_red_fan_rezultate(uuid,jsonb)', 'f2a5a8d722a06dc34e5060321be15e12', 'plpgsql', true, 'v', 'integer', true, false),
       ('public.fn_red_fan_rezultate_intern(uuid,jsonb,integer,uuid,uuid)', 'c46607410f5b6c8cdcb6710d0f9f2982', 'plpgsql', true, 'v', 'integer', false, false),
       ('public.fn_red_fan_ridicat(uuid,date)', '99fc55589bdf77c775d7ae1046edd537', 'plpgsql', true, 'v', 'void', true, false),
@@ -1648,7 +1664,7 @@ BEGIN
       ('public.fn_red_fan_setari_limita_zi(integer)', 'e6b5c61362b113c681298a8a66c0e2ca', 'plpgsql', true, 'v', 'integer', true, false),
       ('public.fn_red_fan_setari_presupunere_429(boolean,text)', 'd7aa9ac982db4139f048452b7e71ff9f', 'plpgsql', true, 'v', 'boolean', true, false),
       ('public.fn_red_fan_setari_seteaza(integer)', 'c1be717db01d6bfd7a4c05ec18a7e24f', 'plpgsql', true, 'v', 'integer', true, false),
-      ('public.fn_red_fan_srv_anuleaza(uuid,uuid,text,text)', 'acb9674a52671a5473863b27f45c26d6', 'plpgsql', true, 'v', 'text', false, true),
+      ('public.fn_red_fan_srv_anuleaza(uuid,uuid,text,text)', '08958a14896e5b07c0892567f012c90d', 'plpgsql', true, 'v', 'text', false, true),
       ('public.fn_red_fan_srv_claim(uuid,uuid,uuid,uuid[],text[],text[])', 'b8625e36c2dfec0a549287391b83374e', 'plpgsql', true, 'v', 'jsonb', false, true),
       ('public.fn_red_fan_srv_confirmari(uuid,uuid,uuid,jsonb)', 'a142ed8f327967633ed3b1e1bc334e87', 'plpgsql', true, 'v', 'jsonb', false, true),
       ('public.fn_red_fan_srv_intentie_incheie(uuid,uuid,jsonb)', '1017ae767ed3d8f947a18f8d3b9c2c6d', 'plpgsql', true, 'v', 'jsonb', false, true),
@@ -1682,6 +1698,25 @@ BEGIN
   IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20261228a post: functiile (corp / proprietati / EXECUTE) difera: %', v_rau; END IF;
   SELECT count(*) INTO v_n FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_red\_fan\_%';
   IF v_n <> 52 THEN RAISE EXCEPTION '20261228a post: numarul functiilor fn_red_fan_* este %, asteptat 52', v_n; END IF;
+  -- runda 4 (proba pe clonă: poarta 0e a runnerului + poarta Izometrie E2): (a) marcajul gărzii rândului FAN e scris DOAR de cele 7 funcții ale
+  -- listelor trigger-ului (valoarea fn_red_fan_srv_claim o scrie corpul comun fn_red_fan_claim_intern), cu instrucțiunea statică SET LOCAL, în toate schemele non-sistem, și nu apare în proconfig-ul niciunei funcții (ca la
+  -- 20261130l); (b) niciun corp fn_red_fan_* nu cheamă funcția de configurare și nu numește calea de căutare (sămânța „mutatorilor de cale” a
+  -- porții E2: un trigger peste un astfel de corp e „invocare implicită neanalizată”) și nu are SQL dinamic (sămânța închiderii citirilor E2;
+  -- motivul „execute” al porții 0e). Sunt aceleași tipare ca în porți, pe corpul fără CR.
+  IF (SELECT array_agg(p.proname::text ORDER BY p.proname::text COLLATE "C") FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_toast'
+         AND (p.prosrc ~* 'set\s+(local\s+|session\s+)?redari_fan\.garda' OR p.prosrc ~* 'set_config\s*\(\s*''redari_fan\.garda'))
+     IS DISTINCT FROM ARRAY['fn_red_fan_anulare_cere', 'fn_red_fan_anulat', 'fn_red_fan_cerere_decide', 'fn_red_fan_claim_intern', 'fn_red_fan_comanda',
+                            'fn_red_fan_retrage', 'fn_red_fan_srv_anuleaza']::text[]
+     OR EXISTS (SELECT 1 FROM pg_proc p, unnest(p.proconfig) c WHERE c ILIKE 'redari_fan.garda=%') THEN
+    RAISE EXCEPTION '20261228a post: marcajul redari_fan.garda e scris de alte functii decat cele 7 de pe listele trigger-ului (sau apare in proconfig)';
+  END IF;
+  SELECT string_agg(p.proname, ', ' ORDER BY p.proname) INTO v_rau FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_red\_fan\_%'
+     AND (p.prosrc ~* '(set_config|search_path)' OR p.prosrc ~* '\mexecute\M');
+  IF v_rau IS NOT NULL THEN
+    RAISE EXCEPTION '20261228a post: corpuri fn_red_fan_* prinse de portile 0e / Izometrie E2 (configurare, cale de cautare sau SQL dinamic): %', v_rau;
+  END IF;
   -- trigger-ele: exact (tgqual NULL, fără argumente, tipul), activ; red_fan_awb are garda F1 + jurnalul 20261227a neatins; red_fan_zi DOAR garda;
   -- red_fan_loturi neschimbat
   IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_fan_awb'::regclass AND NOT tgisinternal) <> 2
