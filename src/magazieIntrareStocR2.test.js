@@ -2,7 +2,7 @@
 // și cazurile legitime (L20). Valorile așteptate sunt scrise de mână (L25); clientul e falsul cu filtre ca PostgREST.
 import { describe, it, expect } from 'vitest'
 import {
-  aplicaIntrare, aplicaLot, citesteEchipamente, dubluriNevazute, eroareCantitateIntrare, linieIntrare, MESAJ_REF_ALT,
+  aplicaIntrare, aplicaLot, citesteEchipamente, creatDeja, dubluriNevazute, eroareCantitateIntrare, linieIntrare, MESAJ_REF_ALT,
   potrivireExistente, pregatesteIntrare, stareRef, sumaStoc, validareIntrare,
 } from './magazieIntrareStoc.js'
 import { dbFals } from './magazieIntrareStocDbFals.testutil.js'
@@ -220,6 +220,27 @@ describe('r2 P4: aceeași referință cu alt conținut nu e raportată ca succes
       laUpdate: (t, q) => { Object.assign(t.get(7), q.valori); return { data: null, error: { message: 'Failed to fetch' } } },
     })
     expect(await aplicaIntrare(db, { id: 7, totalVazut: 29, primit: 10, linie: L10, ref: REF })).toEqual({ stare: 'deja', total: 39 })
+  })
+  it('creatDeja: rândul nou creat la o încercare cu rezultat necunoscut se recunoaște după ref (și doar după ref-ul lui)', () => {
+    const lista = [{ id: 9, denumire: 'Cască', observatii: `Factura F1 din ${AZI} · ref ${REF}` }, { id: 10, denumire: 'Vestă', observatii: null }]
+    expect(creatDeja({ ref: REF }, lista)).toMatchObject({ id: 9 })
+    expect(creatDeja({ ref: REF2 }, lista)).toBe(null)
+    expect(creatDeja({ ref: '.*' }, lista)).toBe(null)
+    expect(creatDeja({ ref: REF }, [{ id: 9, observatii: `ref ${REF}0` }])).toBe(null)
+    expect(creatDeja({ ref: REF }, [])).toBe(null)
+  })
+  it('scenariul: inserarea „Cască” 5 a ajuns, rezultatul s-a pierdut; după reîncărcare rândul creat apare ca potrivire — fără ref s-ar aduna +5 (10); cu ref e recunoscut, iar scrierea directă pe el e refuzată', async () => {
+    const creat = { id: 9, denumire: 'Cască', categorie: 'eip', um: 'buc', cantitate_total: 5, observatii: `Factura F1 · ref ${REF}`, activ: true }
+    const rand = { k: 1, denumire: 'Cască', um: 'buc', cantitate: '5', ref: REF }
+    // fără recunoaștere, potrivirea implicită ar fi rândul tocmai creat
+    expect(potrivireExistente(rand, 'eip', [creat], new Set()).map(p => p.id)).toEqual([9])
+    expect(creatDeja(rand, [creat])).toMatchObject({ id: 9 })
+    // apărare în adâncime: chiar dacă ecranul n-ar recunoaște rândul, adunarea pe el cu același ref e refuzată
+    const { db, tabel, jurnal } = dbFals([creat])
+    const p = pregatesteIntrare({ um: 'buc', form: { cantitate: '5', facturaNr: 'F1' }, azi: AZI, ref: REF })
+    expect((await aplicaIntrare(db, { id: 9, totalVazut: 5, primit: p.cantitate, linie: p.linie, ref: REF })).stare).toBe('eroare')
+    expect(jurnal.update).toHaveLength(0)
+    expect(tabel.get(9).cantitate_total).toBe(5)
   })
   it('ref invalid (nu 8 hex) sau linie pe mai multe rânduri → refuz înainte de orice citire', async () => {
     const { db, jurnal } = dbFals([{ id: 7, cantitate_total: 29, observatii: null, activ: true }])

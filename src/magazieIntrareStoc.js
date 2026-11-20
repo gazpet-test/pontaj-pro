@@ -150,16 +150,28 @@ const egalNr = (a, b) => a != null && b != null && Number(a) === Number(b)
 // r2 P4 (L04): referința e legată de CONȚINUTUL liniei (cantitate, UM, factură, furnizor, preț, data).
 // Orice apariție a „ref X” în observații înseamnă că referința a fost folosită; e „aceeași” intrare doar dacă
 // există o singură linie cu ref-ul și ea e IDENTICĂ cu linia trimisă acum. Altfel = alt conținut cu aceeași cheie → refuz.
-export function stareRef(observatii, linie, ref) {
+const REF_VALID = /^[0-9a-f]{8}$/
+function liniiCuRef(observatii, ref) {
+  if (!REF_VALID.test(String(ref ?? ''))) return []
   const token = new RegExp(`(?:^|[^0-9A-Za-z])ref ${ref}(?![0-9A-Za-z])`)
-  const cu = String(observatii ?? '').split('\n').map(l => l.replace(/\r$/, '')).filter(l => token.test(l))
+  return String(observatii ?? '').split('\n').map(l => l.replace(/\r$/, '')).filter(l => token.test(l))
+}
+export function stareRef(observatii, linie, ref) {
+  const cu = liniiCuRef(observatii, ref)
   if (!cu.length) return 'absent'
   return cu.length === 1 && cu[0].trim() === String(linie).trim() ? 'aceeasi' : 'alta'
+}
+
+// Rândul din factură deja CREAT de aceeași intenție (inserare cu rezultat necunoscut): observațiile rândului nou poartă
+// ref-ul rândului din factură. Întoarce echipamentul găsit sau null. La reîncercare rândul nu se mai trimite: altfel,
+// după reîncărcare, rândul creat ar apărea ca „există deja” și cantitatea s-ar aduna a doua oară.
+export function creatDeja(rand, lista) {
+  return (lista || []).find(e => e && liniiCuRef(e.observatii, rand?.ref).length > 0) || null
 }
 export const MESAJ_REF_ALT = 'Referința acestei intrări apare deja în observații cu alt conținut (altă cantitate, factură sau dată). Nimic nu a fost scris. Închide formularul, verifică observațiile și, dacă e nevoie, deschide o intrare nouă.'
 
 export async function aplicaIntrare(db, { id, totalVazut, primit, linie, ref }) {
-  if (!/^[0-9a-f]{8}$/.test(String(ref ?? '')) || /[\r\n]/.test(String(linie ?? '')) || stareRef(linie, linie, ref) !== 'aceeasi') {
+  if (!REF_VALID.test(String(ref ?? '')) || /[\r\n]/.test(String(linie ?? '')) || stareRef(linie, linie, ref) !== 'aceeasi') {
     return { stare: 'eroare', mesaj: 'Linia intrării nu are referința. Redeschide formularul.' }
   }
   const citeste = () => db.from('magazie_echipamente').select('id,cantitate_total,observatii,activ').eq('id', id).maybeSingle()

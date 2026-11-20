@@ -108,6 +108,11 @@ async function incalcari(m) {
     const r = await m.aplicaIntrare(db, { ...cerere, totalVazut: 39 })
     if (r.stare === 'ok' || tabel.get(7).cantitate_total !== 39) out.push('P4: ref-ul editat permite a doua adunare')
   }
+  {
+    // P4b: rândul nou deja creat (inserare cu rezultat necunoscut) se recunoaște după ref
+    if (!m.creatDeja({ ref: REF }, [{ id: 9, observatii: 'Factura F1 · ref ' + REF }])) out.push('P4b: rândul creat nu e recunoscut')
+    if (m.creatDeja({ ref: '99887766' }, [{ id: 9, observatii: 'Factura F1 · ref ' + REF }])) out.push('P4b: alt ref recunoscut ca propriu')
+  }
   return out
 }
 
@@ -126,6 +131,7 @@ const MUTANTI = [
   ['P3: numărul validat tratat iar ca text ambiguu', "typeof valoare === 'string' && /^\\d{1,3}\\.\\d{3}$/.test(valoare.trim())", "/^\\d{1,3}\\.\\d{3}$/.test(String(valoare ?? '').trim())"],
   ['P4: orice linie cu ref-ul = „deja”', "cu.length === 1 && cu[0].trim() === String(linie).trim() ? 'aceeasi' : 'alta'", "'aceeasi'"],
   ['P4: ref cu alt conținut nu oprește scrierea', "if (s0 === 'alta') return { stare: 'eroare', mesaj: MESAJ_REF_ALT }", ''],
+  ['P4b: rândul creat nu se recunoaște', 'return (lista || []).find(e => e && liniiCuRef(e.observatii, rand?.ref).length > 0) || null', 'return null'],
   ['P4: ref doar la final de linie (editarea îl ascunde)', 'const token = new RegExp(`(?:^|[^0-9A-Za-z])ref ${ref}(?![0-9A-Za-z])`)', 'const token = new RegExp(`(?:^|[^0-9A-Za-z])ref ${ref}$`)'],
   ['observațiile vechi înlocuite', 'return v ? `${v}\\n${linie}` : linie', 'return linie'],
   ['cantitate 0 acceptată', 'if (!(q > 0)) return', 'if (!(q >= 0)) return'],

@@ -13,7 +13,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { dataAziBucuresti, eroareTotalEchipament, eroareCantitatePredare, eroareDataPredare } from './magazieEipLogica.js'
-import { aplicaIntrare, aplicaLot, citesteEchipamente, dubluriNevazute, eroareCantitateIntrare, fmtCantitate, MESAJ_CONFLICT, motivFaraIntrare, potrivireExistente, pregatesteIntrare, refNou, sumaStoc, tintaRand, validareIntrare } from './magazieIntrareStoc.js'
+import { aplicaIntrare, aplicaLot, citesteEchipamente, creatDeja, dubluriNevazute, eroareCantitateIntrare, fmtCantitate, MESAJ_CONFLICT, motivFaraIntrare, potrivireExistente, pregatesteIntrare, refNou, sumaStoc, tintaRand, validareIntrare } from './magazieIntrareStoc.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
 import EipIntrareActiune from './EipIntrareModal.jsx'
 import ProductieTab from './MagazieProductie.jsx'
@@ -644,6 +644,14 @@ function EchipamenteTab() {
     let necunoscut = null
     try {
       const aziNou = dataAziBucuresti(new Date())
+      // Lista completă recitită din BD (P1); rândurile deja salvate la o încercare cu rezultat necunoscut (ref-ul lor e
+      // în observațiile unui echipament) nu se mai trimit. Rândurile „fixate” le judecă aplicaIntrare (deja / alt conținut).
+      let proaspata
+      try { proaspata = await citesteEchipamente(supabase) }
+      catch (e) { throw new Error(`Nu am putut verifica lista completă de echipamente (${e?.message || 'eroare necunoscută'}). Nimic nu a fost scris.`) }
+      const salvateDeja = rows.filter(r => !r.fixat && creatDeja(r, proaspata))
+      aplicate.push(...salvateDeja.map(r => r.k))
+      rows = rows.filter(r => !salvateDeja.includes(r))
       const deAdunat = rows.filter(r => r.tinta !== 'nou')
       const noi = rows.filter(r => r.tinta === 'nou')
       // Validăm tot înainte de prima scriere.
@@ -656,13 +664,8 @@ function EchipamenteTab() {
         if (!p.ok) throw new Error(`„${r.denumire.trim()}”: ${p.eroare}`)
         return { k:r.k, id:echip.id, totalVazut:echip.cantitate_total, primit:p.cantitate, linie:p.linie, ref:r.ref, azi, form, denumire:r.denumire.trim() }
       })
-      if (noi.length) {
-        let proaspata
-        try { proaspata = await citesteEchipamente(supabase) }
-        catch (e) { throw new Error(`Nu am putut verifica dublurile pe lista completă (${e?.message || 'eroare necunoscută'}). Nimic nu a fost scris.`) }
-        const dubluri = dubluriNevazute(noi, fact.categorie, proaspata)
-        if (dubluri.length) throw new Error(`${dubluri.map(d => `„${d.denumire.trim()}”`).join(', ')} există deja în evidență (rând pe care nu l-ai văzut în listă). Nimic nu a fost scris: reîncarcă și alege unde se adaugă.`)
-      }
+      const dubluri = dubluriNevazute(noi, fact.categorie, proaspata)
+      if (dubluri.length) throw new Error(`${dubluri.map(d => `„${d.denumire.trim()}”`).join(', ')} există deja în evidență (rând pe care nu l-ai văzut în listă). Nimic nu a fost scris: reîncarcă și alege unde se adaugă.`)
       const lot = await aplicaLot(supabase, pasi)
       aplicate.push(...lot.aplicate)
       if (lot.oprit) {
@@ -674,7 +677,8 @@ function EchipamenteTab() {
       const payload = noi.map(r => {
         const pv = String(r.pret || '').replace(',', '.').trim()
         const pret = pv !== '' && !isNaN(Number(pv)) ? Number(pv) : null
-        const obs = [antet, pret != null && `preț unitar ${pret} lei`].filter(Boolean).join(' · ')
+        // r2: ref-ul rândului din factură rămâne în observații → o reîncercare după rezultat necunoscut nu-l creează / adună din nou (creatDeja)
+        const obs = [antet, pret != null && `preț unitar ${pret} lei`, `ref ${r.ref}`].filter(Boolean).join(' · ')
         return {
           denumire: r.denumire.trim(),
           categorie: fact.categorie,
@@ -980,6 +984,9 @@ function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaE
   // TKT-0353: denumire existentă (fără diacritice/majuscule, aceeași categorie și UM) → implicit se adună la stocul ei.
   const azi = dataAziBucuresti(new Date())
   const analiza = rows.map(r => {
+    // r2: rândul deja salvat la o încercare cu rezultat necunoscut (ref-ul lui e în lista reîncărcată) nu se mai trimite
+    const creat = r.denumire.trim() && !r.fixat ? creatDeja(r, echipamente) : null
+    if (creat) return { potriviri: [], tinta: 'nou', eroare: '', creat }
     const potriviri = r.denumire.trim() ? potrivireExistente(r, fact.categorie, echipamente, catalogIds) : []
     const tinta = r.fixat ? r.fixat.tinta : tintaRand(r.alegere, potriviri)
     const v = tinta !== 'nou' && tinta !== null
@@ -990,7 +997,7 @@ function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaE
     return { potriviri, tinta, eroare }
   })
   // vazute = rândurile existente arătate omului pentru acest rând (r2 P1: la salvare se compară cu lista completă recitită)
-  const valide = rows.map((r, i) => ({ ...r, tinta: analiza[i].tinta, vazute: analiza[i].potriviri.map(p => p.id) })).filter((r, i) => r.denumire.trim() && !analiza[i].eroare)
+  const valide = rows.map((r, i) => ({ ...r, tinta: analiza[i].tinta, vazute: analiza[i].potriviri.map(p => p.id) })).filter((r, i) => r.denumire.trim() && !analiza[i].eroare && !analiza[i].creat)
   const invalide = rows.filter((r, i) => r.denumire.trim() && analiza[i].eroare).length
   const laStoc = valide.filter(r => r.tinta !== 'nou').length
   const salveaza = async () => {
@@ -1028,7 +1035,7 @@ function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaE
           <div>Denumire *</div><div>Cant.</div><div>UM</div><div>Preț unit.</div><div>Serie / nr. inv.</div><div />
         </div>
         {rows.map((r, i) => {
-          const { potriviri, tinta, eroare } = analiza[i]
+          const { potriviri, tinta, eroare, creat } = analiza[i]
           return (
             <div key={r.k} style={{ marginBottom:6 }}>
               <div style={{ display:'grid', gridTemplateColumns:col, gap:6 }}>
@@ -1051,6 +1058,7 @@ function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaE
                   </select>
                 </div>
               )}
+              {creat && <div role="status" style={{ fontSize:11.5, color:G.green, margin:'3px 0 0 2px' }}>✓ Deja salvat la încercarea anterioară („{creat.denumire}”, acum {fmtNr(creat.cantitate_total)} {creat.um}): rândul nu se mai trimite. Îl poți șterge din listă.</div>}
               {r.fixat && <div role="status" style={{ fontSize:11.5, color:G.orange, margin:'3px 0 0 2px' }}>Rezultat neconfirmat la încercarea anterioară: rândul se retrimite identic (aceeași factură și dată), nu se adună de două ori. Nu se mai poate modifica; dacă vrei altceva, șterge-l și verifică întâi stocul.</div>}
               {eroare && <div role="alert" style={{ fontSize:11.5, color:G.red, margin:'3px 0 0 2px' }}>{eroare}</div>}
             </div>
