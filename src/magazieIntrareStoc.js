@@ -162,13 +162,53 @@ export function stareRef(observatii, linie, ref) {
   return cu.length === 1 && cu[0].trim() === String(linie).trim() ? 'aceeasi' : 'alta'
 }
 
-// Rândul din factură deja CREAT de aceeași intenție (inserare cu rezultat necunoscut): observațiile rândului nou poartă
-// ref-ul rândului din factură. Întoarce echipamentul găsit sau null. La reîncercare rândul nu se mai trimite: altfel,
-// după reîncărcare, rândul creat ar apărea ca „există deja” și cantitatea s-ar aduna a doua oară.
-export function creatDeja(rand, lista) {
-  return (lista || []).find(e => e && liniiCuRef(e.observatii, rand?.ref).length > 0) || null
-}
 export const MESAJ_REF_ALT = 'Referința acestei intrări apare deja în observații cu alt conținut (altă cantitate, factură sau dată). Nimic nu a fost scris. Închide formularul, verifică observațiile și, dacă e nevoie, deschide o intrare nouă.'
+
+// ── r3 P1 (L04, L19): rândul NOU din factură = un singur payload, construit AICI și folosit și la inserare, și la
+// recunoașterea lui după un rezultat necunoscut. Linia din observații poartă cantitatea inițială și ref-ul, deci
+// identitatea intenției e legată de conținut (cantitate, UM, factură, dată, furnizor, preț), nu doar de referință.
+// Prețul se citește ca în TKT-0279 (neschimbat aici). `fact` = antetul facturii (nr, data, furnizor, categorie).
+export function randNou(rand, fact) {
+  const pv = String(rand?.pret || '').replace(',', '.').trim()
+  const pret = pv !== '' && !isNaN(Number(pv)) ? Number(pv) : null
+  const um = unRand(rand?.um) || 'buc'
+  const cantitate = Number(String(rand?.cantitate).replace(',', '.')) || 0
+  const antet = [unRand(fact?.nr) && `Factura ${unRand(fact.nr)}`, fact?.data && `din ${fact.data}`, unRand(fact?.furnizor) && `furnizor ${unRand(fact.furnizor)}`].filter(Boolean).join(' ')
+  const linie = [`Intrare inițială ${fmtCantitate(cantitate)} ${um}`, antet, pret != null && `preț unitar ${fmtCantitate(pret)} lei`, `ref ${rand?.ref}`].filter(Boolean).join(' · ')
+  return {
+    linie,
+    payload: { denumire: unRand(rand?.denumire), categorie: fact?.categorie, este_eip: fact?.categorie === 'eip', um, serie: unRand(rand?.serie) || null, cantitate_total: cantitate, stare: 'functional', observatii: linie },
+  }
+}
+
+// Rândul nou creat de ACEEAȘI intenție: ref-ul o singură dată, linia identică, aceleași denumire / categorie / UM / serie / EIP,
+// rând activ. Cantitatea curentă nu se compară (o intrare ulterioară legitimă o poate schimba): cantitatea inițială e în linie.
+function eRandulNou(e, intentie, ref) {
+  const p = intentie?.payload
+  return !!p && e.activ !== false && stareRef(e.observatii, intentie.linie, ref) === 'aceeasi' &&
+    unRand(e.denumire) === p.denumire && e.categorie === p.categorie && (unRand(e.um) || 'buc') === p.um &&
+    (unRand(e.serie) || null) === p.serie && !!e.este_eip === p.este_eip
+}
+
+// Judecata unui rând din factură pe lista RECITITĂ, înaintea oricărei scrieri. `intentie` = randNou(...) al rândului.
+// 'absent' = ref-ul nu apare nicăieri; 'creat' = rândul nou cu exact acest conținut există deja (nu se mai trimite);
+// 'tinta' = ref-ul apare doar pe echipamentul ales (judecă aplicaIntrare: „deja” sau alt conținut);
+// 'alta' = ref-ul e folosit cu alt conținut sau pe alt echipament → refuz, nimic nu se scrie (nu „deja salvat”).
+export function judecaRandFactura({ ref, tinta }, intentie, lista) {
+  const cu = (lista || []).filter(e => e && liniiCuRef(e.observatii, ref).length > 0)
+  if (!cu.length) return { stare: 'absent' }
+  if (cu.length === 1 && eRandulNou(cu[0], intentie, ref)) return { stare: 'creat', echip: cu[0] }
+  if (tinta != null && tinta !== 'nou' && cu.every(e => String(e.id) === String(tinta))) return { stare: 'tinta' }
+  return { stare: 'alta', echip: cu[0] }
+}
+
+// ── r3 P2 (L05, L18): doar un răspuns 4xx (cererea a ajuns și a fost refuzată, tranzacția anulată) dovedește că nu s-a scris
+// nimic. Fără status (rețea: „Failed to fetch” vine cu status 0), 408, 5xx sau excepție = NECUNOSCUT: scrierea poate încă ajunge.
+export function esecCert(res) {
+  const s = res?.status
+  return !!res?.error && Number.isInteger(s) && s >= 400 && s < 500 && s !== 408
+}
+const MESAJ_NECUNOSCUT = ref => 'Rezultatul nu poate fi confirmat (scrierea poate încă să ajungă). Reîncearcă ACEEAȘI intrare (nu se adună de două ori) sau reîncarcă și verifică dacă observațiile conțin „ref ' + ref + '”.'
 
 export async function aplicaIntrare(db, { id, totalVazut, primit, linie, ref }) {
   if (!REF_VALID.test(String(ref ?? '')) || /[\r\n]/.test(String(linie ?? '')) || stareRef(linie, linie, ref) !== 'aceeasi') {
@@ -194,10 +234,13 @@ export async function aplicaIntrare(db, { id, totalVazut, primit, linie, ref }) 
   if (!r1.error && Array.isArray(r1.data) && r1.data.length === 1 && String(r1.data[0]?.id) === String(id)) return { stare: 'ok', total: suma.total }
   // Rezultat neconfirmat: recitim, nu reîncercăm.
   const r2 = await citeste()
-  if (r2.error || !r2.data) return { stare: 'necunoscut', mesaj: 'Rezultatul nu poate fi confirmat. Reîncarcă și verifică dacă observațiile conțin „ref ' + ref + '” înainte de a reîncerca.' }
+  if (r2.error || !r2.data) return { stare: 'necunoscut', mesaj: MESAJ_NECUNOSCUT(ref) }
   const s2 = stareRef(r2.data.observatii, linie, ref)
   if (s2 === 'aceeasi') return { stare: 'deja', total: r2.data.cantitate_total }
   if (s2 === 'alta') return { stare: 'eroare', mesaj: MESAJ_REF_ALT }
+  // r3 P2: recitirea care NU vede ref-ul nu dovedește nimic dacă cererea n-a primit un refuz 4xx (commit întârziat):
+  // rămâne necunoscut, formularul se blochează, iar reîncercarea identică e apărată de CAS (total + observații).
+  if (r1.error ? !esecCert(r1) : !Array.isArray(r1.data)) return { stare: 'necunoscut', mesaj: MESAJ_NECUNOSCUT(ref) }
   if (r1.error) return { stare: 'eroare', mesaj: (r1.error.message || 'eroare necunoscută') + '. Nimic nu a fost scris.' }
   const neschimbat = egalNr(r2.data.cantitate_total, b.cantitate_total) && (r2.data.observatii ?? null) === (b.observatii ?? null) && r2.data.activ !== false
   if (neschimbat) return { stare: 'refuzat', mesaj: 'Scrierea nu a fost acceptată (posibil fără drept de modificare). Nimic nu a fost scris.' }
@@ -231,7 +274,7 @@ export async function citesteEchipamente(db, pas = 1000) {
 export function dubluriNevazute(randuri, categorie, listaProaspata) {
   return (randuri || []).filter(r => r.tinta === 'nou').flatMap(r => {
     const vazute = new Set((r.vazute || []).map(String))
-    const noi = potrivireExistente(r, categorie, listaProaspata, new Set()).filter(p => !vazute.has(String(p.id)))
+    const noi = potrivireExistente(r, r.categorie ?? categorie, listaProaspata, new Set()).filter(p => !vazute.has(String(p.id)))
     return noi.length ? [{ k: r.k, denumire: r.denumire, ids: noi.map(p => p.id) }] : []
   })
 }
@@ -256,4 +299,73 @@ export async function aplicaLot(db, pasi) {
     aplicate.push(p.k)
   }
   return { aplicate, oprit: null }
+}
+
+// ── r3 P2: inserarea rândurilor noi, clasificată ca la UPDATE (L05) ──
+// 'ok' | 'eroare' (refuz 4xx: nimic scris, rândurile rămân editabile) | 'necunoscut' (rețea / 5xx / excepție: rândurile se blochează).
+export async function insereazaNoi(db, payload) {
+  let r
+  try { r = await db.from('magazie_echipamente').insert(payload) }
+  catch (e) { return { stare: 'necunoscut', mesaj: `Rezultatul inserării nu poate fi confirmat (${e?.message || 'eroare'}).` } }
+  if (r && !r.error) return { stare: 'ok' }
+  const m = r?.error?.message || 'eroare necunoscută'
+  if (esecCert(r)) return { stare: 'eroare', mesaj: `${m}. Rândurile noi nu au fost scrise.` }
+  return { stare: 'necunoscut', mesaj: `Rezultatul inserării nu poate fi confirmat (${m}).` }
+}
+
+// Intenția „rând nou” a unui rând din factură: după un rezultat necunoscut se folosesc valorile ȘI antetul primei încercări.
+export const intentieRand = (r, fact) => randNou(r.fixat?.rand || r, r.fixat?.fact || fact)
+
+// ── r3: salvarea din factură, ca funcție testabilă (Magazie.jsx doar o apelează și arată rezultatul) ──
+// rows: rândurile valide din ecran { k, ref, tinta, vazute, denumire, cantitate, um, pret, serie, fixat? };
+// echipamente: lista din ecran (totalul VĂZUT de om pentru țintă); azi: ziua (Europe/Bucharest), dată de apelant.
+// Ordinea: lista completă recitită → judecata ref-urilor (alt conținut = refuz, nimic scris) → validare → dubluri nevăzute
+// → adunări (aplicaLot, oprire la primul eșec) → inserarea rândurilor noi. Nu aruncă: { aplicate, necunoscute, eroare, laStoc, noi }.
+// necunoscute: [{ k, fixat }] = rândurile cu rezultat necunoscut, de blocat pe valorile trimise (retrimitere identică).
+export async function salveazaFactura(db, { rows, fact, uid, azi, echipamente, catalogIds }) {
+  const aplicate = [], necunoscute = []
+  const gata = (eroare, extra = {}) => ({ aplicate, necunoscute, eroare, ...extra })
+  try {
+    let proaspata
+    try { proaspata = await citesteEchipamente(db) }
+    catch (e) { return gata(`Nu am putut verifica lista completă de echipamente (${e?.message || 'eroare necunoscută'}). Nimic nu a fost scris.`) }
+    const judecate = (rows || []).map(r => ({ r, j: judecaRandFactura(r, intentieRand(r, fact), proaspata) }))
+    const alte = judecate.filter(x => x.j.stare === 'alta')
+    if (alte.length) return gata(`${alte.map(x => `„${unRand(x.r.denumire)}”`).join(', ')}: ${MESAJ_REF_ALT}`)
+    for (const x of judecate) if (x.j.stare === 'creat') aplicate.push(x.r.k)
+    const rest = judecate.filter(x => x.j.stare !== 'creat').map(x => x.r)
+    const pasi = []
+    for (const r of rest.filter(x => x.tinta !== 'nou')) {
+      const echip = (echipamente || []).find(e => e.id === r.tinta)
+      if (!echip || motivFaraIntrare(echip, catalogIds)) return gata(`„${unRand(r.denumire)}”: rândul existent ales nu mai poate primi intrări. Reîncarcă.`)
+      const ziua = r.fixat?.azi || azi
+      const form = r.fixat?.form || { cantitate: r.cantitate, facturaNr: fact.nr, facturaData: fact.data, furnizor: fact.furnizor, pret: r.pret }
+      const p = pregatesteIntrare({ um: echip.um, form, azi: ziua, ref: r.ref })
+      if (!p.ok) return gata(`„${unRand(r.denumire)}”: ${p.eroare}`)
+      pasi.push({ k: r.k, id: echip.id, totalVazut: echip.cantitate_total, primit: p.cantitate, linie: p.linie, ref: r.ref, azi: ziua, form, denumire: unRand(r.denumire) })
+    }
+    const noi = rest.filter(x => x.tinta === 'nou').map(r => ({ r, i: intentieRand(r, fact) }))
+    const dubluri = dubluriNevazute(noi.map(({ r, i }) => ({ ...r, categorie: i.payload.categorie })), fact.categorie, proaspata)
+    if (dubluri.length) return gata(`${dubluri.map(d => `„${unRand(d.denumire)}”`).join(', ')} există deja în evidență (rând pe care nu l-ai văzut în listă). Nimic nu a fost scris: reîncarcă și alege unde se adaugă.`)
+    const lot = await aplicaLot(db, pasi)
+    aplicate.push(...lot.aplicate)
+    if (lot.oprit) {
+      const pas = pasi.find(x => x.k === lot.oprit.k)
+      if (lot.oprit.stare === 'necunoscut') necunoscute.push({ k: pas.k, fixat: { azi: pas.azi, form: pas.form, tinta: pas.id } })
+      return gata(`„${pas.denumire}”: ${lot.oprit.stare === 'conflict' ? MESAJ_CONFLICT : lot.oprit.mesaj}`)
+    }
+    if (noi.length) {
+      const ins = await insereazaNoi(db, noi.map(({ i }) => ({ ...i.payload, created_by: uid })))
+      if (ins.stare !== 'ok') {
+        // necunoscut: rândurile se blochează pe valorile ȘI antetul trimise; la reîncercare cele create se recunosc ('creat')
+        if (ins.stare === 'necunoscut') necunoscute.push(...noi.map(({ r }) => ({ k: r.k, fixat: r.fixat || { tinta: 'nou', rand: { ...r, fixat: undefined }, fact: { ...fact } } })))
+        return gata(ins.mesaj)
+      }
+      aplicate.push(...noi.map(({ r }) => r.k))
+    }
+    return gata(null, { laStoc: pasi.length, noi: noi.length })
+  } catch (e) {
+    // neprevăzut: ce s-a aplicat până aici rămâne raportat; nimic nu se declară „nescris”
+    return gata(`Eroare neprevăzută (${e?.message || 'eroare'}). Reîncarcă și verifică stocul înainte de a reîncerca.`)
+  }
 }

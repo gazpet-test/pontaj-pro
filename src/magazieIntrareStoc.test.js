@@ -192,7 +192,8 @@ describe('aplicaIntrare: scrierea protejată la concurență', () => {
     expect((await aplicaIntrare(db, cerere)).stare).toBe('refuzat')
   })
   it('eroare la UPDATE fără efect → „eroare” cu mesajul, nu succes', async () => {
-    const { db, tabel } = dbFals([rand()], { laUpdate: () => ({ data: null, error: { message: 'permission denied' } }) })
+    // r3: refuzul cert vine de la server cu status 4xx (PostgREST: 42501 → 403); fără status ar fi „necunoscut” (vezi r3 P2)
+    const { db, tabel } = dbFals([rand()], { laUpdate: () => ({ data: null, error: { message: 'permission denied', code: '42501' }, status: 403 }) })
     const r = await aplicaIntrare(db, cerere)
     expect(r.stare).toBe('eroare')
     expect(r.mesaj).toMatch(/permission denied/)

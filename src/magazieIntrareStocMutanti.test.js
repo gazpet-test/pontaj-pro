@@ -108,10 +108,51 @@ async function incalcari(m) {
     const r = await m.aplicaIntrare(db, { ...cerere, totalVazut: 39 })
     if (r.stare === 'ok' || tabel.get(7).cantitate_total !== 39) out.push('P4: ref-ul editat permite a doua adunare')
   }
+  // ── r3 ──
+  const FACT1 = { nr: 'F1', data: '2026-11-20', furnizor: '', categorie: 'scule' }
+  const r5 = { k: 1, denumire: 'Cheie', cantitate: '5', um: 'buc', ref: REF, tinta: 'nou' }
+  const creat5 = () => ({ id: 9, ...m.randNou(r5, FACT1).payload, activ: true })
+  const salv = (db, rows, fact = FACT1) => m.salveazaFactura(db, { rows, fact, uid: 'u', azi: '2026-11-20', echipamente: [], catalogIds: new Set() })
   {
-    // P4b: rândul nou deja creat (inserare cu rezultat necunoscut) se recunoaște după ref
-    if (!m.creatDeja({ ref: REF }, [{ id: 9, observatii: 'Factura F1 · ref ' + REF }])) out.push('P4b: rândul creat nu e recunoscut')
-    if (m.creatDeja({ ref: '99887766' }, [{ id: 9, observatii: 'Factura F1 · ref ' + REF }])) out.push('P4b: alt ref recunoscut ca propriu')
+    // P4b: rândul nou deja creat (inserare cu rezultat necunoscut) se recunoaște după ref + conținut
+    if (m.judecaRandFactura(r5, m.randNou(r5, FACT1), [creat5()]).stare !== 'creat') out.push('P4b: rândul creat nu e recunoscut')
+    if (m.judecaRandFactura({ ...r5, ref: '99887766' }, m.randNou({ ...r5, ref: '99887766' }, FACT1), [creat5()]).stare !== 'absent') out.push('P4b: alt ref recunoscut ca propriu')
+  }
+  {
+    // r3 P1 (verdict): creat cu 5 / F1, apoi aceeași referință cu 15 / F2 → nu „deja salvat”, nimic scris, stocul rămâne 5
+    const { db, tabel, jurnal } = dbFals([creat5()])
+    const res = await salv(db, [{ ...r5, cantitate: '15' }], { ...FACT1, nr: 'F2' })
+    if (res.aplicate.length || !res.eroare || jurnal.insert.length || jurnal.update.length || tabel.get(9).cantitate_total !== 5) out.push('r3 P1: același ref cu alt conținut trece drept „deja salvat”')
+    if (m.judecaRandFactura(r5, m.randNou({ ...r5, denumire: 'Cheie mare' }, FACT1), [creat5()]).stare !== 'alta') out.push('r3 P1: denumirea diferită nu e respinsă')
+    if (m.judecaRandFactura({ ref: REF, tinta: 7 }, m.randNou({ ...r5, cantitate: '7' }, FACT1), [creat5()]).stare !== 'alta') out.push('r3 P1: ref-ul de pe alt echipament nu e respins')
+    // calea legitimă: identic → recunoscut, fără a doua inserare
+    const d2 = dbFals([creat5()])
+    const ok = await salv(d2.db, [r5])
+    if (ok.eroare || ok.aplicate[0] !== 1 || d2.jurnal.insert.length) out.push('r3 P1: rândul creat identic nu e recunoscut')
+  }
+  {
+    // r3 P2 (verdict): eroare de rețea (status 0) / 5xx, recitirea nu vede ref-ul → necunoscut, nu „nimic scris”
+    for (const [status, nume] of [[0, 'rețea'], [503, '5xx']]) {
+      const { db } = dbFals([rand()], { laUpdate: () => ({ data: null, error: { message: 'TypeError: Failed to fetch' }, status }) })
+      if ((await m.aplicaIntrare(db, cerere)).stare !== 'necunoscut') out.push(`r3 P2: eroarea ${nume} declarată eșec cert`)
+    }
+    const { db } = dbFals([rand()], { laUpdate: () => ({ data: null, error: { message: 'permission denied', code: '42501' }, status: 403 }) })
+    if ((await m.aplicaIntrare(db, cerere)).stare !== 'eroare') out.push('r3 P2: refuzul 4xx nu mai e eșec cert')
+    const ins0 = await m.insereazaNoi(dbFals([], { laInsert: (t, p, ins) => { ins(p); return { data: null, error: { message: 'TypeError: Failed to fetch' }, status: 0 } } }).db, [{ denumire: 'x' }])
+    if (ins0.stare !== 'necunoscut') out.push('r3 P2: inserarea cu eroare de rețea declarată eșec cert')
+    const ins4 = await m.insereazaNoi(dbFals([], { laInsert: () => ({ data: null, error: { message: 'denied' }, status: 403 }) }).db, [{ denumire: 'x' }])
+    if (ins4.stare !== 'eroare') out.push('r3 P2: inserarea refuzată 4xx nu e eșec cert')
+  }
+  {
+    // r3 P2: inserarea ajunge, răspunsul e eroare de rețea → rândul blocat; reîncercarea (antetul din ecran schimbat) → recunoscut, o singură inserare
+    const { db, tabel, jurnal } = dbFals([], { laInsert: (t, p, ins) => { if (jurnal.insert.length === 1) { ins(p); return { data: null, error: { message: 'TypeError: Failed to fetch' }, status: 0 } } } })
+    const r1 = await salv(db, [r5])
+    const nec = r1.necunoscute.find(x => x.k === 1)
+    if (!nec) out.push('r3 P2: rândul cu inserare necunoscută nu se blochează')
+    else {
+      const r2 = await salv(db, [{ ...r5, fixat: nec.fixat }], { ...FACT1, nr: 'F2' })
+      if (r2.eroare || r2.aplicate[0] !== 1 || jurnal.insert.length !== 1 || tabel.size !== 1) out.push('r3 P2: reîncercarea după inserare necunoscută nu recunoaște rândul creat')
+    }
   }
   return out
 }
@@ -131,7 +172,19 @@ const MUTANTI = [
   ['P3: numărul validat tratat iar ca text ambiguu', "typeof valoare === 'string' && /^\\d{1,3}\\.\\d{3}$/.test(valoare.trim())", "/^\\d{1,3}\\.\\d{3}$/.test(String(valoare ?? '').trim())"],
   ['P4: orice linie cu ref-ul = „deja”', "cu.length === 1 && cu[0].trim() === String(linie).trim() ? 'aceeasi' : 'alta'", "'aceeasi'"],
   ['P4: ref cu alt conținut nu oprește scrierea', "if (s0 === 'alta') return { stare: 'eroare', mesaj: MESAJ_REF_ALT }", ''],
-  ['P4b: rândul creat nu se recunoaște', 'return (lista || []).find(e => e && liniiCuRef(e.observatii, rand?.ref).length > 0) || null', 'return null'],
+  ['P4b: rândul creat nu se recunoaște', "if (cu.length === 1 && eRandulNou(cu[0], intentie, ref)) return { stare: 'creat', echip: cu[0] }", ''],
+  // r3 (NO-GO Jak r2 pe 3f7e3a53)
+  ['r3 P1: rândul creat recunoscut doar după ref (forma r2)', "if (cu.length === 1 && eRandulNou(cu[0], intentie, ref)) return { stare: 'creat', echip: cu[0] }", "return { stare: 'creat', echip: cu[0] }"],
+  ['r3 P1: linia (cantitate / factură) nu se compară', "stareRef(e.observatii, intentie.linie, ref) === 'aceeasi' &&", ''],
+  ['r3 P1: denumirea nu se compară', 'unRand(e.denumire) === p.denumire &&', ''],
+  ['r3 P1: alt conținut tratat ca absent', "return { stare: 'alta', echip: cu[0] }", "return { stare: 'absent' }"],
+  ['r3 P1: ref-ul de pe alt echipament acceptat', 'cu.every(e => String(e.id) === String(tinta))', 'true'],
+  ['r3 P1: reîncercarea ignoră valorile fixate', 'export const intentieRand = (r, fact) => randNou(r.fixat?.rand || r, r.fixat?.fact || fact)', 'export const intentieRand = (r, fact) => randNou(r, fact)'],
+  ['r3 P2: eroarea fără 4xx = eșec cert (forma r2)', "if (r1.error ? !esecCert(r1) : !Array.isArray(r1.data)) return { stare: 'necunoscut', mesaj: MESAJ_NECUNOSCUT(ref) }", ''],
+  ['r3 P2: status 0 (rețea) = refuz 4xx', 'Number.isInteger(s) && s >= 400 && s < 500', 'Number.isInteger(s) && s < 500'],
+  ['r3 P2: 5xx = refuz 4xx', 's >= 400 && s < 500', 's >= 400 && s < 600'],
+  ['r3 P2: inserarea necunoscută tratată ca eroare', 'return { stare: \'necunoscut\', mesaj: `Rezultatul inserării nu poate fi confirmat (${m}).` }', "return { stare: 'eroare', mesaj: m }"],
+  ['r3 P2: rândurile cu inserare necunoscută nu se blochează', "if (ins.stare === 'necunoscut') necunoscute.push(", 'if (false) necunoscute.push('],
   ['P4: ref doar la final de linie (editarea îl ascunde)', 'const token = new RegExp(`(?:^|[^0-9A-Za-z])ref ${ref}(?![0-9A-Za-z])`)', 'const token = new RegExp(`(?:^|[^0-9A-Za-z])ref ${ref}$`)'],
   ['observațiile vechi înlocuite', 'return v ? `${v}\\n${linie}` : linie', 'return linie'],
   ['cantitate 0 acceptată', 'if (!(q > 0)) return', 'if (!(q >= 0)) return'],

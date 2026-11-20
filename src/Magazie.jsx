@@ -13,7 +13,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { dataAziBucuresti, eroareTotalEchipament, eroareCantitatePredare, eroareDataPredare } from './magazieEipLogica.js'
-import { aplicaIntrare, aplicaLot, citesteEchipamente, creatDeja, dubluriNevazute, eroareCantitateIntrare, fmtCantitate, MESAJ_CONFLICT, motivFaraIntrare, potrivireExistente, pregatesteIntrare, refNou, sumaStoc, tintaRand, validareIntrare } from './magazieIntrareStoc.js'
+import { aplicaIntrare, citesteEchipamente, eroareCantitateIntrare, fmtCantitate, intentieRand, judecaRandFactura, MESAJ_CONFLICT, MESAJ_REF_ALT, motivFaraIntrare, potrivireExistente, pregatesteIntrare, refNou, salveazaFactura, sumaStoc, tintaRand, validareIntrare } from './magazieIntrareStoc.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
 import EipIntrareActiune from './EipIntrareModal.jsx'
 import ProductieTab from './MagazieProductie.jsx'
@@ -638,72 +638,19 @@ function EchipamenteTab() {
   // r2: (P1) rândurile „nou” se reverifică pe lista completă recitită din BD înaintea oricărei scrieri;
   // (P2) mai multe rânduri pe același echipament se înlănțuie (aplicaLot); (P4) rândul cu rezultat necunoscut se
   // întoarce ca „fixat” (formularul și ziua primei încercări), ca reîncercarea să trimită exact aceeași intrare.
+  // r3: toată logica stă în salveazaFactura (magazieIntrareStoc.js, testată): rândul nou deja creat se recunoaște după
+  // ref + CONȚINUT (alt conținut = refuz, nu „deja salvat”); inserarea cu rezultat necunoscut (rețea / 5xx) blochează rândurile.
   const saveBulk = async (rows, fact) => {
     setBusy(true)
-    const aplicate = []
-    let necunoscut = null
+    let res = { aplicate: [], necunoscute: [], eroare: null }
     try {
-      const aziNou = dataAziBucuresti(new Date())
-      // Lista completă recitită din BD (P1); rândurile deja salvate la o încercare cu rezultat necunoscut (ref-ul lor e
-      // în observațiile unui echipament) nu se mai trimit. Rândurile „fixate” le judecă aplicaIntrare (deja / alt conținut).
-      let proaspata
-      try { proaspata = await citesteEchipamente(supabase) }
-      catch (e) { throw new Error(`Nu am putut verifica lista completă de echipamente (${e?.message || 'eroare necunoscută'}). Nimic nu a fost scris.`) }
-      const salvateDeja = rows.filter(r => !r.fixat && creatDeja(r, proaspata))
-      aplicate.push(...salvateDeja.map(r => r.k))
-      rows = rows.filter(r => !salvateDeja.includes(r))
-      const deAdunat = rows.filter(r => r.tinta !== 'nou')
-      const noi = rows.filter(r => r.tinta === 'nou')
-      // Validăm tot înainte de prima scriere.
-      const pasi = deAdunat.map(r => {
-        const echip = echipamente.find(e => e.id === r.tinta)
-        if (!echip || motivFaraIntrare(echip, catalogIds)) throw new Error(`„${r.denumire.trim()}”: rândul existent ales nu mai poate primi intrări. Reîncarcă.`)
-        const azi = r.fixat?.azi || aziNou
-        const form = r.fixat?.form || { cantitate:r.cantitate, facturaNr:fact.nr, facturaData:fact.data, furnizor:fact.furnizor, pret:r.pret }
-        const p = pregatesteIntrare({ um:echip.um, form, azi, ref:r.ref })
-        if (!p.ok) throw new Error(`„${r.denumire.trim()}”: ${p.eroare}`)
-        return { k:r.k, id:echip.id, totalVazut:echip.cantitate_total, primit:p.cantitate, linie:p.linie, ref:r.ref, azi, form, denumire:r.denumire.trim() }
-      })
-      const dubluri = dubluriNevazute(noi, fact.categorie, proaspata)
-      if (dubluri.length) throw new Error(`${dubluri.map(d => `„${d.denumire.trim()}”`).join(', ')} există deja în evidență (rând pe care nu l-ai văzut în listă). Nimic nu a fost scris: reîncarcă și alege unde se adaugă.`)
-      const lot = await aplicaLot(supabase, pasi)
-      aplicate.push(...lot.aplicate)
-      if (lot.oprit) {
-        const pas = pasi.find(x => x.k === lot.oprit.k)
-        if (lot.oprit.stare === 'necunoscut') necunoscut = { k:pas.k, fixat:{ azi:pas.azi, form:pas.form, tinta:pas.id } }
-        throw new Error(`„${pas.denumire}”: ${lot.oprit.stare === 'conflict' ? MESAJ_CONFLICT : lot.oprit.mesaj}`)
-      }
-      const antet = [fact.nr.trim() && `Factura ${fact.nr.trim()}`, fact.data && `din ${fact.data}`, fact.furnizor.trim() && `furnizor ${fact.furnizor.trim()}`].filter(Boolean).join(' ')
-      const payload = noi.map(r => {
-        const pv = String(r.pret || '').replace(',', '.').trim()
-        const pret = pv !== '' && !isNaN(Number(pv)) ? Number(pv) : null
-        // r2: ref-ul rândului din factură rămâne în observații → o reîncercare după rezultat necunoscut nu-l creează / adună din nou (creatDeja)
-        const obs = [antet, pret != null && `preț unitar ${pret} lei`, `ref ${r.ref}`].filter(Boolean).join(' · ')
-        return {
-          denumire: r.denumire.trim(),
-          categorie: fact.categorie,
-          este_eip: fact.categorie === 'eip',
-          um: (r.um || '').trim() || 'buc',
-          serie: r.serie?.trim() || null,
-          cantitate_total: Number(String(r.cantitate).replace(',', '.')) || 0,
-          stare: 'functional',
-          observatii: obs || null,
-          created_by: uid,
-        }
-      })
-      if (payload.length) {
-        const { error } = await supabase.from('magazie_echipamente').insert(payload)
-        if (error) throw error
-        aplicate.push(...noi.map(r => r.k))
-      }
-      setBulkOpen(false)
+      res = await salveazaFactura(supabase, { rows, fact, uid, azi: dataAziBucuresti(new Date()), echipamente, catalogIds })
+      if (!res.eroare) setBulkOpen(false)
       await loadAll()
-      alert(`✓ ${pasi.length} adăugate la stocul existent, ${payload.length} echipamente noi.`)
-    } catch (e) {
-      await loadAll()
-      alert(`Eroare salvare: ${e.message}${aplicate.length ? `\n${aplicate.length} rânduri au fost deja salvate și au fost scoase din listă.` : ''}${necunoscut ? '\nRândul cu rezultat necunoscut a rămas blocat: reîncercarea îl trimite identic (nu se adună de două ori).' : ''}`)
-    } finally { setBusy(false) }
-    return { aplicate, necunoscut }
+      if (!res.eroare) alert(`✓ ${res.laStoc} adăugate la stocul existent, ${res.noi} echipamente noi.`)
+      else alert(`Eroare salvare: ${res.eroare}${res.aplicate.length ? `\n${res.aplicate.length} rânduri au fost deja salvate și au fost scoase din listă.` : ''}${res.necunoscute.length ? '\nRândurile cu rezultat necunoscut au rămas blocate: reîncercarea le trimite identic (nu se adună de două ori).' : ''}`)
+    } catch (e) { alert('Eroare salvare: ' + e.message) } finally { setBusy(false) }
+    return res
   }
 
   const stergeEchip = async (e) => {
@@ -984,14 +931,18 @@ function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaE
   // TKT-0353: denumire existentă (fără diacritice/majuscule, aceeași categorie și UM) → implicit se adună la stocul ei.
   const azi = dataAziBucuresti(new Date())
   const analiza = rows.map(r => {
-    // r2: rândul deja salvat la o încercare cu rezultat necunoscut (ref-ul lui e în lista reîncărcată) nu se mai trimite
-    const creat = r.denumire.trim() && !r.fixat ? creatDeja(r, echipamente) : null
-    if (creat) return { potriviri: [], tinta: 'nou', eroare: '', creat }
-    const potriviri = r.denumire.trim() ? potrivireExistente(r, fact.categorie, echipamente, catalogIds) : []
+    // r2/r3: rândul deja salvat la o încercare cu rezultat necunoscut nu se mai trimite — DOAR dacă rândul găsit după ref are
+    // exact conținutul acestei intenții (judecaRandFactura, aceeași funcție ca la salvare); alt conținut = eroare, nu „deja salvat”.
+    if (!r.denumire.trim()) return { potriviri: [], tinta: 'nou', eroare: '' }
+    const j0 = judecaRandFactura({ ref:r.ref, tinta:'nou' }, intentieRand(r, fact), echipamente)
+    if (j0.stare === 'creat') return { potriviri: [], tinta: 'nou', eroare: '', creat: j0.echip }
+    const potriviri = potrivireExistente(r, (r.fixat?.fact || fact).categorie, echipamente, catalogIds)
     const tinta = r.fixat ? r.fixat.tinta : tintaRand(r.alegere, potriviri)
+    const j = j0.stare === 'absent' ? j0 : judecaRandFactura({ ref:r.ref, tinta }, intentieRand(r, fact), echipamente)
     const v = tinta !== 'nou' && tinta !== null
-      ? validareIntrare(r.fixat ? r.fixat.form : { cantitate:r.cantitate, facturaNr:fact.nr, facturaData:fact.data, furnizor:fact.furnizor, pret:r.pret }, r.fixat ? r.fixat.azi : azi) : null
-    const eroare = !r.denumire.trim() ? '' : tinta === null ? 'Există mai multe rânduri cu această denumire: alege unde se adaugă.'
+      ? validareIntrare(r.fixat?.form ? r.fixat.form : { cantitate:r.cantitate, facturaNr:fact.nr, facturaData:fact.data, furnizor:fact.furnizor, pret:r.pret }, r.fixat?.azi || azi) : null
+    const eroare = j.stare === 'alta' ? MESAJ_REF_ALT
+      : tinta === null ? 'Există mai multe rânduri cu această denumire: alege unde se adaugă.'
       : v ? (v.ok ? '' : v.eroare)
       : Number(String(r.cantitate).replace(',', '.')) >= 0 ? '' : 'Cantitate invalidă.'
     return { potriviri, tinta, eroare }
@@ -1003,9 +954,9 @@ function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaE
   const salveaza = async () => {
     const res = await onSave(valide, fact)
     const gata = new Set(res?.aplicate || [])
-    const nec = res?.necunoscut
-    if (gata.size || nec) setRows(prev => {
-      const rest = prev.filter(r => !gata.has(r.k)).map(r => nec && r.k === nec.k && !r.fixat ? { ...r, fixat: nec.fixat } : r)
+    const nec = new Map((res?.necunoscute || []).map(x => [x.k, x.fixat]))
+    if (gata.size || nec.size) setRows(prev => {
+      const rest = prev.filter(r => !gata.has(r.k)).map(r => nec.has(r.k) && !r.fixat ? { ...r, fixat: nec.get(r.k) } : r)
       return rest.length ? rest : [RAND_GOL()]
     })
   }
