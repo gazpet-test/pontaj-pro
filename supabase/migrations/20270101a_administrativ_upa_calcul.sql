@@ -7,6 +7,9 @@
 --   expertului contabil (decizia owner-ului, 20.11.2026; docs/administrativ/UPA_CALCUL_EXPERT.md). Înlocuiește plafonul fix din setări.
 --   Runda 2 (review PR #1154, 8 x P1 + P2): baza integrală, posturile cu 2 zecimale, suspendările și zilele nelucrătoare, închiderea
 --   confirmată de owner pe amprenta datelor, intențiile vechi compatibile, alerta exactă recuperată, factura neplătită, termenul din decembrie.
+--   Runda 3 (2 x P1 + P2): închiderea citește calculul și detaliul într-un singur instantaneu și reface după scriere calculul COMPLET
+--   (blocajele de completitudine incluse) din sursele de acum (fn_upa_calcul_previziune_la); alerta exactă se recuperează pentru orice lună
+--   închisă fără ea, și după scadență (mesaj „termenul a trecut”); calendarul cere și sărbătorile mobile din zile lucrătoare.
 --
 -- Formula (pe luna M; o singură definiție: fn_upa_calcul_la, L19):
 --   NMA = Σ_angajați Σ_zile normă(r) / zilele calendaristice ale lunii, rotunjit la 2 zecimale, unde pentru fiecare zi d a contractului
@@ -44,8 +47,8 @@
 -- Ordinea lock-urilor (L06), aceeași pe toate căile: lock consultativ hashtext('upa_alerta_jurnal') (doar rularea cronului) -> lock consultativ
 --   hashtext('upa_calcul_lunar') (închiderea, parametrii, corecțiile HR) -> upa_achizitii SHARE (doar închiderea) -> upa_calcul_lunar ->
 --   upa_calcul_angajat -> upa_angajat_perioade -> upa_alerta_jurnal -> notifications. Cronul nu ia lock-ul calculului (nu mai închide).
---   employees / pontaj_records / calendar_days nu se blochează: închiderea reverifică în aceeași tranzacție că detaliul scris dă exact
---   amprenta și NMA-ul calculate, altfel refuză (40001).
+--   employees / pontaj_records / calendar_days nu se blochează: închiderea citește calculul și detaliul într-o singură instrucțiune, apoi,
+--   după scriere, reface calculul complet (cu blocajele de completitudine) din sursele de acum și refuză (40001) la orice diferență.
 -- Lock-uri la aplicare (punct unic, NOWAIT, bugetul 1 s de la prima încercare, ordinea upa_achizitii -> upa_alerta_jurnal): ACCESS EXCLUSIVE
 --   (3 coloane NULL fără rescriere + 2 CHECK-uri triviale pe upa_achizitii; 2 CHECK-uri înlocuite pe upa_alerta_jurnal, validate pe rândurile lui).
 -- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, garda finală.
@@ -83,7 +86,7 @@ BEGIN
      OR to_regclass('public.upa_angajat_perioade') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (ARRAY['fn_upa_parametru_la', 'fn_upa_inceput_calcul',
                   'fn_upa_pontaj_inchis', 'fn_upa_zi_lucratoare', 'fn_upa_calendar_lipsa', 'fn_upa_termen_stat', 'fn_upa_cauza_cod', 'fn_upa_nma_angajati',
-                  'fn_upa_rand_amprenta', 'fn_upa_amprenta_achizitii', 'fn_upa_calcul_la', 'fn_upa_situatie_la', 'fn_upa_situatie', 'fn_upa_calcul_inchide_la',
+                  'fn_upa_rand_amprenta', 'fn_upa_amprenta_achizitii', 'fn_upa_calcul_previziune_la', 'fn_upa_calcul_la', 'fn_upa_situatie_la', 'fn_upa_situatie', 'fn_upa_calcul_inchide_la',
                   'fn_upa_calcul_inchide', 'fn_upa_calcul_detaliu', 'fn_upa_parametru_seteaza', 'fn_upa_perioada_adauga', 'fn_upa_perioada_sterge',
                   'fn_upa_campuri_intentie_v2', 'fn_upa_hash_intentie_v2']))
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.upa_achizitii'::regclass AND a.attname IN ('valoare_fara_tva', 'data_plata', 'stare_plata') AND NOT a.attisdropped)
@@ -334,13 +337,20 @@ CREATE FUNCTION public.fn_upa_zi_lucratoare(p date) RETURNS boolean
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
   SELECT extract(isodow FROM p) < 6 AND NOT EXISTS (SELECT 1 FROM public.calendar_days c WHERE c.date = p AND c.type = 'legal')
 $f$;
--- câte dintre sărbătorile legale cu dată fixă ale anului (Codul muncii art. 139) LIPSESC din calendar_days: > 0 = calendarul anului nu e
---   încărcat, deci zilele nelucrătoare nu se cunosc (blocaj calendar_incomplet, L12: numitor determinist)
+-- câte dintre sărbătorile legale ale anului (Codul muncii art. 139) LIPSESC din calendar_days: > 0 = calendarul anului nu e încărcat, deci
+--   zilele nelucrătoare nu se cunosc (blocaj calendar_incomplet, L12: numitor determinist). Lista = datele fixe + sărbătorile MOBILE care
+--   cad în zile lucrătoare (runda 3, P2): Vinerea Mare, a doua zi de Paște, a doua zi de Rusalii (Paștele ortodox = algoritmul iulian
+--   Meeus + 13 zile, valabil 1900–2099; în afara intervalului anul nu se poate verifica -> 99 = blocaj). Duminicile de Paște / Rusalii nu
+--   se cer: sunt nelucrătoare oricum, lipsa lor nu schimbă calculul. Datele care coincid (Rusalii = 1 iunie) se numără o dată.
 CREATE FUNCTION public.fn_upa_calendar_lipsa(p_an integer) RETURNS integer
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
-  SELECT count(*)::integer FROM unnest(ARRAY['01-01', '01-02', '01-06', '01-07', '01-24', '05-01', '06-01', '08-15', '11-30', '12-01', '12-25', '12-26']) AS m(md)
-   WHERE NOT EXISTS (SELECT 1 FROM public.calendar_days c
-                      WHERE c.date = make_date(p_an, split_part(m.md, '-', 1)::integer, split_part(m.md, '-', 2)::integer) AND c.type = 'legal')
+  WITH j AS (SELECT (19 * (p_an % 19) + 15) % 30 AS d, p_an % 4 AS a, p_an % 7 AS b),
+  p AS (SELECT make_date(p_an, (j.d + (2 * j.a + 4 * j.b - j.d + 34) % 7 + 114) / 31, (j.d + (2 * j.a + 4 * j.b - j.d + 34) % 7 + 114) % 31 + 1) + 13 AS paste FROM j),
+  z AS (SELECT make_date(p_an, split_part(m.md, '-', 1)::integer, split_part(m.md, '-', 2)::integer) AS zi
+          FROM unnest(ARRAY['01-01', '01-02', '01-06', '01-07', '01-24', '05-01', '06-01', '08-15', '11-30', '12-01', '12-25', '12-26']) AS m(md)
+        UNION SELECT p.paste - 2 FROM p UNION SELECT p.paste + 1 FROM p UNION SELECT p.paste + 50 FROM p)
+  SELECT CASE WHEN p_an IS NULL OR p_an < 1900 OR p_an > 2099 THEN 99
+              ELSE (SELECT count(*)::integer FROM z WHERE NOT EXISTS (SELECT 1 FROM public.calendar_days c WHERE c.date = z.zi AND c.type = 'legal')) END
 $f$;
 -- termenul plății la stat pentru luna dată: 25 a lunii următoare, mutat pe prima zi lucrătoare următoare dacă e nelucrătoare; scadența din
 --   decembrie (luna noiembrie) = 21 decembrie, mutat pe ziua lucrătoare ANTERIOARĂ dacă e nelucrătoare (Codul de procedură fiscală art. 155
@@ -436,9 +446,11 @@ $f$;
 --   și, pentru cele plătite la termen, valoarea fără TVA lipsă = blocaj. Reportul intrat: luna anterioară închisă; la prima lună =
 --   report_initial; altfel = previziunea ei (cel mult 2 niveluri, p_adancime), cu blocajul luna_anterioara_neinchisa.
 --   amprenta = md5 pe intrări (detaliul pe angajat, achizițiile, parametrii, reportul, termenul, versiunea): închiderea cere exact valoarea văzută.
-CREATE FUNCTION public.fn_upa_calcul_la(p_luna date, p_azi date, p_adancime integer DEFAULT 0) RETURNS jsonb
+-- fn_upa_calcul_previziune_la = calculul din sursele de ACUM, și pentru o lună deja închisă (runda 3: închiderea îl reverifică după scriere,
+--   iar luna închisă îl compară cu instantaneul); fn_upa_calcul_la = instantaneul dacă luna e închisă, altfel previziunea.
+CREATE FUNCTION public.fn_upa_calcul_previziune_la(p_luna date, p_azi date, p_adancime integer DEFAULT 0) RETURNS jsonb
 LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $f$
-DECLARE v_l date; v_l1 date; v_s public.upa_calcul_lunar; v_start date; v_zile integer; v_sum numeric; v_n integer; v_fa integer; v_fn integer;
+DECLARE v_l date; v_l1 date; v_start date; v_zile integer; v_sum numeric; v_n integer; v_fa integer; v_fn integer;
         v_fp integer; v_cor integer; v_amp_ang text; v_amp_ach text; v_inact integer; v_nma numeric; v_sal numeric; v_hand numeric; v_post numeric;
         v_loc numeric; v_d numeric; v_jum numeric; v_a numeric; v_na integer; v_astept numeric; v_fstare integer; v_nepl integer; v_tarziu integer;
         v_ftva integer; v_ftva_t integer; v_rin numeric; v_ant jsonb; v_ded numeric; v_plata numeric; v_rout numeric; v_ramas numeric;
@@ -450,17 +462,6 @@ BEGIN
   v_l1 := (v_l + interval '1 month' - interval '1 day')::date;
   SELECT coalesce(sum(a.valoare_fara_tva), 0) INTO v_acum FROM public.upa_achizitii a WHERE a.luna >= v_l AND a.luna <= v_l1;
   v_amp_ach := public.fn_upa_amprenta_achizitii(v_l);
-  SELECT * INTO v_s FROM public.upa_calcul_lunar c WHERE c.luna = v_l;
-  IF FOUND THEN
-    SELECT md5(coalesce(string_agg(public.fn_upa_rand_amprenta(x.employee_id, x.zile_calcul, x.zile_cfs, x.zile_suspendare, x.zile_administrator,
-                                     x.zile_fara_efectiv, x.zile_numarate, x.contributie), ',' ORDER BY x.employee_id), ''))
-      INTO v_amp_ang FROM public.fn_upa_nma_angajati(v_l) x;
-    RETURN to_jsonb(v_s) || jsonb_build_object('stare', 'definitiv', 'pontaj_inchis', true, 'poate_inchide', false,
-      'ramas_de_cumparat', 0, 'termen_upa', v_l1, 'achizitii_acum', v_acum,
-      'surse_schimbate', jsonb_build_object('angajati', v_amp_ang IS DISTINCT FROM v_s.amprenta_angajati,
-                                            'achizitii', v_amp_ach IS DISTINCT FROM v_s.amprenta_achizitii),
-      'blocaje', '[]'::jsonb, 'avertismente', to_jsonb(v_s.avertismente));
-  END IF;
   v_start := public.fn_upa_inceput_calcul();
   IF v_start IS NULL OR v_l < v_start THEN
     RETURN jsonb_build_object('luna', v_l, 'stare', 'in_afara_calculului', 'poate_inchide', false, 'termen_upa', v_l1,
@@ -562,6 +563,28 @@ BEGIN
     'amprenta', md5(concat_ws('|', v_amp_ang, v_amp_ach, coalesce(v_sal::text, '-'), coalesce(v_hand::text, '-'), coalesce(v_rin::text, '-'),
                               v_termen::text, v_vers)));
 END $f$;
+-- luna închisă = instantaneul + surse_schimbate: ce arată ACUM sursele față de închidere (detaliul pe angajat, achizițiile) și dacă datele
+--   lunii mai sunt complete (runda 3, P1: o zi de pontaj ștearsă după închidere se numără la fel ca una pontată, deci se semnalează din
+--   blocajele calculului de acum: pontaj lipsă, contract fără dată / normă, inactiv fără dată, calendar incomplet)
+CREATE FUNCTION public.fn_upa_calcul_la(p_luna date, p_azi date, p_adancime integer DEFAULT 0) RETURNS jsonb
+LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $f$
+DECLARE v_l date; v_s public.upa_calcul_lunar; v_p jsonb; v_bl text[];
+BEGIN
+  IF p_luna IS NULL OR p_azi IS NULL THEN RAISE EXCEPTION 'upa: luna si ziua sunt obligatorii' USING ERRCODE = '22023'; END IF;
+  v_l := date_trunc('month', p_luna::timestamp)::date;
+  v_p := public.fn_upa_calcul_previziune_la(v_l, p_azi, p_adancime);
+  SELECT * INTO v_s FROM public.upa_calcul_lunar c WHERE c.luna = v_l;
+  IF NOT FOUND THEN RETURN v_p; END IF;
+  v_bl := ARRAY(SELECT jsonb_array_elements_text(v_p -> 'blocaje'));
+  RETURN to_jsonb(v_s) || jsonb_build_object('stare', 'definitiv', 'pontaj_inchis', true, 'poate_inchide', false,
+    'ramas_de_cumparat', 0, 'termen_upa', (v_l + interval '1 month' - interval '1 day')::date, 'achizitii_acum', v_p -> 'achizitii_acum',
+    'surse_schimbate', jsonb_build_object(
+      'angajati', (v_p ->> 'amprenta_angajati') IS DISTINCT FROM v_s.amprenta_angajati
+                  OR EXISTS (SELECT 1 FROM unnest(v_bl) AS b(b) WHERE b.b ~ '^(pontaj_lipsa|angajati_fara_|inactivi_fara_|calendar_incomplet)'),
+      'achizitii', (v_p ->> 'amprenta_achizitii') IS DISTINCT FROM v_s.amprenta_achizitii,
+      'complet', (v_p ->> 'poate_inchide')::boolean IS TRUE, 'blocaje_acum', v_p -> 'blocaje'),
+    'blocaje', '[]'::jsonb, 'avertismente', to_jsonb(v_s.avertismente));
+END $f$;
 
 -- ─── 6. Situația (lunile + luna curentă cu in_alerta: SINGURA definiție a alertei, folosită și de rezervare) ─────────────────
 -- in_alerta (luna curentă, previziune): ziua >= pragul (upa_alerta_zi, plafonat la ultima zi) ȘI mai e de cumpărat (ramas_de_cumparat > 0)
@@ -604,17 +627,26 @@ COMMENT ON FUNCTION public.fn_upa_situatie(date, integer) IS 'UPA (20270101a): s
 -- ─── 7. Închiderea calculului: owner-ul, din ecran, pe amprenta datelor văzute ──────────────────────────────────────────────
 -- Lock-uri (L06): lock consultativ hashtext('upa_calcul_lunar') -> upa_achizitii SHARE (nicio factură nu se schimbă între calcul și scriere)
 --   -> upa_calcul_lunar (INSERT) -> upa_calcul_angajat (INSERT). Pașii: luna deja închisă = 'deja'; nu se poate închide (blocaje, înainte de 13)
---   = nimic scris, cu calculul; amprenta diferită de cea văzută de om = 40001 (nimic scris); altfel instantaneul + detaliul, reverificat:
---   detaliul scris (o a doua citire a pontajului) trebuie să dea exact amprenta și NMA-ul calculate, altfel 40001 și nimic scris.
+--   = nimic scris, cu calculul; amprenta diferită de cea văzută de om = 40001 (nimic scris); altfel instantaneul + detaliul.
+-- Runda 3 (P1, cursa dintre citiri): (1) calculul și detaliul pe angajat se citesc într-o SINGURĂ instrucțiune (același instantaneu al
+--   surselor: nu mai există o a doua citire a pontajului pentru detaliu); (2) după scriere, calculul COMPLET se refa din sursele de acum
+--   (fn_upa_calcul_previziune_la: blocajele de completitudine incluse — pontaj lipsă, contract fără dată / normă, inactiv fără dată,
+--   calendar) și trebuie să dea aceeași amprentă ȘI poate_inchide, altfel 40001 și nimic scris: o zi de pontaj ștearsă în timpul închiderii
+--   (numărată la fel ca una pontată, deci invizibilă în cifre) oprește închiderea; (3) rândurile scrise dau exact amprenta și NMA-ul.
+--   employees / pontaj_records / calendar_days nu se blochează (tabele folosite zilnic): o schimbare comisă DUPĂ pasul (2) e ulterioară
+--   instantaneului și apare în surse_schimbate (fn_upa_calcul_la), inclusiv pierderea completitudinii.
 CREATE FUNCTION public.fn_upa_calcul_inchide_la(p_luna date, p_azi date, p_amprenta text, p_uid uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SET search_path = public, pg_temp AS $f$
-DECLARE v_c jsonb; v_l date; v_amp text; v_nma numeric; v_n integer;
+DECLARE v_c jsonb; v_det jsonb; v_v jsonb; v_l date; v_amp text; v_nma numeric; v_n integer;
 BEGIN
   IF p_uid IS NULL THEN RAISE EXCEPTION 'upa: confirmarea cere un cont' USING ERRCODE = '42501'; END IF;
   IF p_luna IS NULL OR p_azi IS NULL THEN RAISE EXCEPTION 'upa: luna si ziua sunt obligatorii' USING ERRCODE = '22023'; END IF;
   PERFORM pg_advisory_xact_lock(hashtext('upa_calcul_lunar'));
   LOCK TABLE public.upa_achizitii IN SHARE MODE;
-  v_c := public.fn_upa_calcul_la(p_luna, p_azi);
+  -- (1) o singură instrucțiune = un singur instantaneu: funcțiile STABLE folosesc instantaneul instrucțiunii care le cheamă
+  SELECT public.fn_upa_calcul_la(p_luna, p_azi),
+         (SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY x.employee_id), '[]'::jsonb) FROM public.fn_upa_nma_angajati(date_trunc('month', p_luna::timestamp)::date) x)
+    INTO v_c, v_det;
   IF v_c ->> 'stare' = 'definitiv' THEN RETURN jsonb_build_object('inchis', true, 'deja', true, 'calcul', v_c); END IF;
   IF v_c ->> 'stare' IS DISTINCT FROM 'previziune' OR (v_c ->> 'poate_inchide')::boolean IS NOT TRUE THEN
     RETURN jsonb_build_object('inchis', false, 'deja', false, 'calcul', v_c);
@@ -634,7 +666,13 @@ BEGIN
   RETURNING c.luna INTO v_l;
   INSERT INTO public.upa_calcul_angajat (luna, employee_id, zile_calcul, zile_cfs, zile_suspendare, zile_administrator, zile_fara_efectiv, zile_numarate, contributie)
   SELECT v_l, x.employee_id, x.zile_calcul, x.zile_cfs, x.zile_suspendare, x.zile_administrator, x.zile_fara_efectiv, x.zile_numarate, x.contributie
-    FROM public.fn_upa_nma_angajati(v_l) x;
+    FROM jsonb_populate_recordset(NULL::public.upa_calcul_angajat, v_det) x;
+  -- (2) reverificarea pe sursele de acum, cu completitudinea (instrucțiune nouă = instantaneu nou: vede ce s-a comis între timp)
+  v_v := public.fn_upa_calcul_previziune_la(v_l, p_azi, 0);
+  IF (v_v ->> 'poate_inchide')::boolean IS NOT TRUE OR (v_v ->> 'amprenta') IS DISTINCT FROM (v_c ->> 'amprenta') THEN
+    RAISE EXCEPTION 'upa: datele lunii (pontaj, contracte, calendar) s-au schimbat in timpul inchiderii; reincarca si verifica din nou' USING ERRCODE = '40001';
+  END IF;
+  -- (3) rândurile scrise
   SELECT md5(coalesce(string_agg(public.fn_upa_rand_amprenta(a.employee_id, a.zile_calcul, a.zile_cfs, a.zile_suspendare, a.zile_administrator,
                                    a.zile_fara_efectiv, a.zile_numarate, a.contributie), ',' ORDER BY a.employee_id), '')),
          round(coalesce(sum(a.contributie), 0) / (v_c ->> 'zile_luna')::integer, 2), count(*)::integer
@@ -880,9 +918,16 @@ BEGIN
   ELSIF p_fel = 'calcul' THEN
     SELECT c.termen_stat INTO v_termen FROM public.upa_calcul_lunar c WHERE c.luna = p_luna;
     v_tip := 'error';
-    v_titlu := 'Fond handicap ' || public.fn_upa_luna_text(p_luna) || ': de plată la bugetul de stat ' || public.fn_upa_lei(p_ramas)
-               || ' lei până pe ' || coalesce(to_char(v_termen, 'DD.MM.YYYY'), '—');
-    v_mesaj := 'Calcul exact, confirmat după închiderea pontajului: contribuția integrală ' || public.fn_upa_lei(p_plafon) || ' lei, achiziții de la unități '
+    -- runda 3 (P1): luna închisă după scadență (sau cronul oprit până după ea) primește alerta, cu termenul declarat depășit
+    IF v_termen < p_zi THEN
+      v_titlu := 'Fond handicap ' || public.fn_upa_luna_text(p_luna) || ': de plată la bugetul de stat ' || public.fn_upa_lei(p_ramas)
+                 || ' lei; termenul ' || to_char(v_termen, 'DD.MM.YYYY') || ' a trecut';
+    ELSE
+      v_titlu := 'Fond handicap ' || public.fn_upa_luna_text(p_luna) || ': de plată la bugetul de stat ' || public.fn_upa_lei(p_ramas)
+                 || ' lei până pe ' || coalesce(to_char(v_termen, 'DD.MM.YYYY'), '—');
+    END IF;
+    v_mesaj := CASE WHEN v_termen < p_zi THEN 'Termenul de plată la bugetul de stat (' || to_char(v_termen, 'DD.MM.YYYY') || ') a trecut: plata se face cât mai curând. ' ELSE '' END
+               || 'Calcul exact, confirmat după închiderea pontajului: contribuția integrală ' || public.fn_upa_lei(p_plafon) || ' lei, achiziții de la unități '
                || 'protejate ' || public.fn_upa_lei(p_consumat) || ' lei fără TVA. Reportul pe lunile următoare: Administrativ → Unități protejate.';
   ELSE
     v_tip := 'error';
@@ -909,7 +954,9 @@ BEGIN
 END $f$;
 
 -- Rularea zilei: (1) reconcilierea rezervărilor rămase (> 1 h -> necunoscut); (2) alerta EXACTĂ pentru fiecare lună închisă (oricine a
---   închis-o) care nu o are încă în jurnal (cheia calcul:AAAA-LL), cu contribuția > 0 și termenul la stat încă înainte (alerta pornită);
+--   închis-o, oricât de târziu) care nu o are încă în jurnal (cheia calcul:AAAA-LL), cu contribuția > 0 (alerta pornită); runda 3 (P1):
+--   fără filtru pe termen sau pe fereastră — o lună închisă după scadență sau cu cronul oprit primește alerta la prima rulare, cu
+--   termen_depasit = true (mesajul spune că termenul a trecut);
 --   (3) prima lună de la începutul calculului care nu e închisă, cu data de 13 trecută: gata = calcul_de_confirmat (owner), date lipsă =
 --   calcul_neinchis (owner + Administrativ / UPA); (4) comutatorul oprit -> doar atât; (5) erorile — în jurnal o dată pe zi și cod, în
 --   răspuns la fiecare rulare; (6) alerta zilei pe in_alerta din fn_upa_situatie_la. Cronul NU închide luni.
@@ -932,7 +979,7 @@ BEGIN
   -- (2) alerta exactă a lunilor închise, recuperată (închiderea din ecran nu trimite nimic; aici se trimite o dată)
   IF v_activ THEN
     FOR r IN SELECT c.luna, c.suma_datorata, c.achizitii_fara_tva, c.de_plata FROM public.upa_calcul_lunar c
-              WHERE c.luna < v_lc AND c.luna >= (v_lc - interval '36 months')::date AND c.suma_datorata > 0 AND c.termen_stat >= p_azi
+              WHERE c.luna < v_lc AND c.suma_datorata > 0
                 AND NOT EXISTS (SELECT 1 FROM public.upa_alerta_jurnal j WHERE j.cheie = 'calcul:' || to_char(c.luna, 'YYYY-MM'))
               ORDER BY c.luna LOOP
       v_id := public.fn_upa_alerta_inscrie('calcul', p_azi, r.luna, r.suma_datorata, r.achizitii_fara_tva, r.de_plata, NULL, v_dest, v_ign, NULL);
@@ -978,6 +1025,8 @@ BEGIN
   SELECT coalesce(jsonb_agg(jsonb_build_object('id', j.id, 'cheie', j.cheie, 'fel', j.fel, 'luna', j.luna, 'plafon', j.plafon, 'consumat', j.consumat,
                                                'ramas', j.ramas, 'zile_ramase', j.zile_ramase, 'stare', j.stare, 'eroare', j.eroare,
                                                'dest_ignorati', j.nr_dest_ignorati,
+                                               'termen_depasit', CASE WHEN j.fel = 'calcul' THEN
+                                                 (SELECT c.termen_stat < j.zi FROM public.upa_calcul_lunar c WHERE c.luna = j.luna) END,
                                                'calcul', CASE WHEN j.fel = 'zilnic' THEN v_cur ELSE public.fn_upa_calcul_la(j.luna, p_azi) END,
                                                'destinatari', CASE WHEN j.stare = 'rezervat' THEN to_jsonb(v_dest) ELSE '[]'::jsonb END) ORDER BY j.id), '[]'::jsonb)
     INTO v_rez FROM public.upa_alerta_jurnal j WHERE j.id = ANY (v_ids);
@@ -1013,7 +1062,8 @@ END $f$;
 REVOKE ALL ON FUNCTION public.fn_upa_parametru_la(text, date), public.fn_upa_inceput_calcul(), public.fn_upa_pontaj_inchis(date, date),
   public.fn_upa_zi_lucratoare(date), public.fn_upa_calendar_lipsa(integer), public.fn_upa_termen_stat(date), public.fn_upa_cauza_cod(text),
   public.fn_upa_nma_angajati(date), public.fn_upa_rand_amprenta(integer, integer, integer, integer, integer, integer, integer, numeric),
-  public.fn_upa_amprenta_achizitii(date), public.fn_upa_calcul_la(date, date, integer), public.fn_upa_situatie_la(date, integer),
+  public.fn_upa_amprenta_achizitii(date), public.fn_upa_calcul_previziune_la(date, date, integer), public.fn_upa_calcul_la(date, date, integer),
+  public.fn_upa_situatie_la(date, integer),
   public.fn_upa_situatie(date, integer), public.fn_upa_calcul_inchide_la(date, date, text, uuid), public.fn_upa_calcul_inchide(date, text),
   public.fn_upa_calcul_detaliu(date), public.fn_upa_parametru_seteaza(text, date, numeric, numeric, text),
   public.fn_upa_perioada_adauga(integer, date, date, numeric, boolean, boolean, text), public.fn_upa_perioada_sterge(bigint),
@@ -1087,6 +1137,7 @@ BEGIN
       ('public.fn_upa_nma_angajati(date)', 'sql', false, 's', 'postgres:EXECUTE'),
       ('public.fn_upa_rand_amprenta(integer,integer,integer,integer,integer,integer,integer,numeric)', 'sql', false, 'i', 'postgres:EXECUTE'),
       ('public.fn_upa_amprenta_achizitii(date)', 'sql', false, 's', 'postgres:EXECUTE'),
+      ('public.fn_upa_calcul_previziune_la(date,date,integer)', 'plpgsql', false, 's', 'postgres:EXECUTE'),
       ('public.fn_upa_calcul_la(date,date,integer)', 'plpgsql', false, 's', 'postgres:EXECUTE'),
       ('public.fn_upa_situatie_la(date,integer)', 'plpgsql', false, 's', 'postgres:EXECUTE'),
       ('public.fn_upa_situatie(date,integer)', 'plpgsql', true, 's', 'authenticated:EXECUTE, postgres:EXECUTE'),
@@ -1117,11 +1168,11 @@ BEGIN
   END LOOP;
   SELECT count(*) INTO v_n FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (ARRAY['fn_upa_parametru_la', 'fn_upa_inceput_calcul',
     'fn_upa_pontaj_inchis', 'fn_upa_zi_lucratoare', 'fn_upa_calendar_lipsa', 'fn_upa_termen_stat', 'fn_upa_cauza_cod', 'fn_upa_nma_angajati',
-    'fn_upa_rand_amprenta', 'fn_upa_amprenta_achizitii', 'fn_upa_calcul_la', 'fn_upa_situatie_la', 'fn_upa_situatie', 'fn_upa_calcul_inchide_la',
+    'fn_upa_rand_amprenta', 'fn_upa_amprenta_achizitii', 'fn_upa_calcul_previziune_la', 'fn_upa_calcul_la', 'fn_upa_situatie_la', 'fn_upa_situatie', 'fn_upa_calcul_inchide_la',
     'fn_upa_calcul_inchide', 'fn_upa_calcul_detaliu', 'fn_upa_parametru_seteaza', 'fn_upa_perioada_adauga', 'fn_upa_perioada_sterge',
     'fn_upa_campuri_intentie_v2', 'fn_upa_hash_intentie_v2', 'fn_upa_achizitii_intentie', 'fn_upa_achizitie_adauga', 'fn_upa_alerta_inscrie',
     'fn_upa_alerta_rezerva_la', 'fn_upa_alerta_proba']);
-  IF v_n <> 26 THEN RAISE EXCEPTION '20270101a post: % functii cu numele noi / inlocuite (asteptat 26)', v_n; END IF;
+  IF v_n <> 27 THEN RAISE EXCEPTION '20270101a post: % functii cu numele noi / inlocuite (asteptat 27)', v_n; END IF;
   IF (SELECT count(*) FROM public.upa_parametri) <> 2 OR EXISTS (SELECT 1 FROM public.upa_calcul_lunar) OR EXISTS (SELECT 1 FROM public.upa_angajat_perioade) THEN
     RAISE EXCEPTION '20270101a post: parametrii de start / calculul gol';
   END IF;
@@ -1204,15 +1255,15 @@ BEGIN
       FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_upa_parametru_la', 'fn_upa_inceput_calcul', 'fn_upa_pontaj_inchis',
              'fn_upa_zi_lucratoare', 'fn_upa_calendar_lipsa', 'fn_upa_termen_stat', 'fn_upa_cauza_cod', 'fn_upa_nma_angajati', 'fn_upa_rand_amprenta',
-             'fn_upa_amprenta_achizitii', 'fn_upa_calcul_la', 'fn_upa_situatie_la', 'fn_upa_situatie', 'fn_upa_calcul_inchide_la', 'fn_upa_calcul_inchide',
+             'fn_upa_amprenta_achizitii', 'fn_upa_calcul_previziune_la', 'fn_upa_calcul_la', 'fn_upa_situatie_la', 'fn_upa_situatie', 'fn_upa_calcul_inchide_la', 'fn_upa_calcul_inchide',
              'fn_upa_calcul_detaliu', 'fn_upa_parametru_seteaza', 'fn_upa_perioada_adauga', 'fn_upa_perioada_sterge', 'fn_upa_campuri_intentie_v2',
              'fn_upa_hash_intentie_v2', 'fn_upa_achizitii_intentie', 'fn_upa_achizitie_adauga', 'fn_upa_alerta_inscrie', 'fn_upa_alerta_rezerva_la',
              'fn_upa_alerta_proba')
   ) x;
   -- AMPRENTA_20270101a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '464438177fc66a0c60238612d7ed9d1f' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '57ae05bcb155359311a6936e127480a8' THEN
     RAISE NOTICE 'AMPRENTA_20270101a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270101a post: AMPRENTA obiectelor % (asteptat 464438177fc66a0c60238612d7ed9d1f)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270101a post: AMPRENTA obiectelor % (asteptat 57ae05bcb155359311a6936e127480a8)', md5(coalesce(v_amp, ''));
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270101a_administrativ_upa_calcul:' || txid_current() THEN
     RAISE EXCEPTION '20270101a: garda final invalida';

@@ -2,7 +2,7 @@
 -- Reface IDENTIC (sursa, din 20261229a) cele 5 funcții înlocuite: fn_upa_achizitii_intentie (triggerul), fn_upa_achizitie_adauga,
 --   fn_upa_alerta_inscrie, fn_upa_alerta_rezerva_la, fn_upa_alerta_proba, și CHECK-urile upa_alerta_jurnal_fel / _forma_cheie (textul din
 --   20261229a); scoate tot ce a creat migrarea: upa_parametri, upa_calcul_lunar, upa_calcul_angajat, upa_angajat_perioade (cu politicile,
---   indecșii și triggerele lor), cele 21 de funcții noi, coloanele upa_achizitii.valoare_fara_tva / data_plata / stare_plata (cu CHECK-urile lor).
+--   indecșii și triggerele lor), cele 22 de funcții noi, coloanele upa_achizitii.valoare_fara_tva / data_plata / stare_plata (cu CHECK-urile lor).
 --   fn_upa_campuri_intentie / fn_upa_hash_intentie nu au fost atinse: amprentele intențiilor fără valorile noi sunt EXACT cele din 20261229a,
 --   deci reîncercările lor rămân 'existent' și după revenire.
 -- REFUZĂ (nimic schimbat) dacă: amprenta COMPLETĂ a obiectelor migrării (blocul AMPRENTA, identic cu cel din postcondițiile migrării) diferă
@@ -42,7 +42,8 @@ BEGIN
   PERFORM set_config('search_path', 'public, pg_temp', true);
   IF to_regclass('public.upa_parametri') IS NULL OR to_regclass('public.upa_calcul_lunar') IS NULL OR to_regclass('public.upa_calcul_angajat') IS NULL
      OR to_regclass('public.upa_angajat_perioade') IS NULL
-     OR to_regprocedure('public.fn_upa_calcul_la(date, date, integer)') IS NULL OR to_regprocedure('public.fn_upa_situatie(date, integer)') IS NULL
+     OR to_regprocedure('public.fn_upa_calcul_la(date, date, integer)') IS NULL OR to_regprocedure('public.fn_upa_calcul_previziune_la(date, date, integer)') IS NULL
+     OR to_regprocedure('public.fn_upa_situatie(date, integer)') IS NULL
      OR to_regprocedure('public.fn_upa_hash_intentie_v2(jsonb)') IS NULL THEN
     RAISE EXCEPTION '20270101a revenire: starea nu e cea din 20270101a (tabelele / functiile migrarii lipsesc)';
   END IF;
@@ -117,15 +118,15 @@ BEGIN
       FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_upa_parametru_la', 'fn_upa_inceput_calcul', 'fn_upa_pontaj_inchis',
              'fn_upa_zi_lucratoare', 'fn_upa_calendar_lipsa', 'fn_upa_termen_stat', 'fn_upa_cauza_cod', 'fn_upa_nma_angajati', 'fn_upa_rand_amprenta',
-             'fn_upa_amprenta_achizitii', 'fn_upa_calcul_la', 'fn_upa_situatie_la', 'fn_upa_situatie', 'fn_upa_calcul_inchide_la', 'fn_upa_calcul_inchide',
+             'fn_upa_amprenta_achizitii', 'fn_upa_calcul_previziune_la', 'fn_upa_calcul_la', 'fn_upa_situatie_la', 'fn_upa_situatie', 'fn_upa_calcul_inchide_la', 'fn_upa_calcul_inchide',
              'fn_upa_calcul_detaliu', 'fn_upa_parametru_seteaza', 'fn_upa_perioada_adauga', 'fn_upa_perioada_sterge', 'fn_upa_campuri_intentie_v2',
              'fn_upa_hash_intentie_v2', 'fn_upa_achizitii_intentie', 'fn_upa_achizitie_adauga', 'fn_upa_alerta_inscrie', 'fn_upa_alerta_rezerva_la',
              'fn_upa_alerta_proba')
   ) x;
   -- AMPRENTA_20270101a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '464438177fc66a0c60238612d7ed9d1f' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '57ae05bcb155359311a6936e127480a8' THEN
     RAISE NOTICE 'AMPRENTA_20270101a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270101a revenire: AMPRENTA obiectelor % (asteptat 464438177fc66a0c60238612d7ed9d1f); nimic schimbat', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270101a revenire: AMPRENTA obiectelor % (asteptat 57ae05bcb155359311a6936e127480a8); nimic schimbat', md5(coalesce(v_amp, ''));
   END IF;
   -- date noi = refuz (calculul închis, parametrii schimbați, corecțiile HR, achizițiile cu valori în coloanele noi, alerta exactă)
   IF EXISTS (SELECT 1 FROM public.upa_calcul_lunar) OR EXISTS (SELECT 1 FROM public.upa_calcul_angajat) THEN
@@ -339,6 +340,7 @@ DROP FUNCTION public.fn_upa_calcul_inchide_la(date, date, text, uuid);
 DROP FUNCTION public.fn_upa_situatie(date, integer);
 DROP FUNCTION public.fn_upa_situatie_la(date, integer);
 DROP FUNCTION public.fn_upa_calcul_la(date, date, integer);
+DROP FUNCTION public.fn_upa_calcul_previziune_la(date, date, integer);
 DROP FUNCTION public.fn_upa_amprenta_achizitii(date);
 DROP FUNCTION public.fn_upa_rand_amprenta(integer, integer, integer, integer, integer, integer, integer, numeric);
 DROP FUNCTION public.fn_upa_nma_angajati(date);
@@ -396,7 +398,7 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.upa_achizitii'::regclass AND a.attname IN ('valoare_fara_tva', 'data_plata', 'stare_plata') AND NOT a.attisdropped)
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (ARRAY['fn_upa_parametru_la', 'fn_upa_inceput_calcul',
                   'fn_upa_pontaj_inchis', 'fn_upa_zi_lucratoare', 'fn_upa_calendar_lipsa', 'fn_upa_termen_stat', 'fn_upa_cauza_cod', 'fn_upa_nma_angajati',
-                  'fn_upa_rand_amprenta', 'fn_upa_amprenta_achizitii', 'fn_upa_calcul_la', 'fn_upa_situatie_la', 'fn_upa_situatie', 'fn_upa_calcul_inchide_la',
+                  'fn_upa_rand_amprenta', 'fn_upa_amprenta_achizitii', 'fn_upa_calcul_previziune_la', 'fn_upa_calcul_la', 'fn_upa_situatie_la', 'fn_upa_situatie', 'fn_upa_calcul_inchide_la',
                   'fn_upa_calcul_inchide', 'fn_upa_calcul_detaliu', 'fn_upa_parametru_seteaza', 'fn_upa_perioada_adauga', 'fn_upa_perioada_sterge',
                   'fn_upa_campuri_intentie_v2', 'fn_upa_hash_intentie_v2'])) THEN
     RAISE EXCEPTION '20270101a revenire post: au ramas obiecte ale migrarii';

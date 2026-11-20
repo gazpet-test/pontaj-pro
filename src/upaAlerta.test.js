@@ -313,7 +313,7 @@ describe('mailul pe calculul expertului (20270101a, rândul are `calcul`)', () =
   // NMA 64 -> 2,56 posturi, contribuția 11.072, deducerea maximă 5.536; report 1.512,50 -> mai sunt 4.023,50 de cumpărat; termenul 21.12
   const CALC_NOV = { stare: 'previziune', luna: '2026-11-01', suma_datorata: 11072, jumatate: 5536, report_intrat: 1512.5, achizitii_fara_tva: 0,
     termen_stat: '2026-12-21', termen_upa: '2026-11-30' }
-  const EXACT = { id: 1, cheie: 'calcul:2026-10', fel: 'calcul', luna: '2026-10-01', plafon: 12975, consumat: 8000, ramas: 6487.5, calcul: CALC_OCT }
+  const EXACT = { id: 1, cheie: 'calcul:2026-10', fel: 'calcul', luna: '2026-10-01', plafon: 12975, consumat: 8000, ramas: 6487.5, termen_depasit: false, calcul: CALC_OCT }
   const PREV = { id: 2, cheie: 'zilnic:2026-11-25', fel: 'zilnic', luna: '2026-11-01', plafon: 4023.5, consumat: 0, ramas: 4023.5, zile_ramase: 6, calcul: CALC_NOV }
   it('alerta exactă (felul calcul): de plată la stat până la termen, contribuția integrală, posturile cu 2 zecimale, reportul', () => {
     expect(areCalcul(EXACT)).toBe(true)
@@ -325,6 +325,13 @@ describe('mailul pe calculul expertului (20270101a, rândul are `calcul`)', () =
     expect(m.html).toContain('Contribuția integrală')
     expect(m.html).not.toMatch(/necheltuit/)
     expect(mailUpa({ ...EXACT, calcul: { ...CALC_OCT, nma: 64.08, posturi: 2.56, locuri: 2.56 } }).html).toMatch(/64,08[\s\S]*2,56/)
+    expect(m.html).not.toMatch(/a trecut/)
+  })
+  it('runda 3: luna închisă după scadență -> alerta spune că termenul a trecut (nu „până pe”)', () => {
+    const m = mailUpa({ ...EXACT, termen_depasit: true })
+    expect(m.subiect).toBe('Fond handicap octombrie 2026: de plată la bugetul de stat 6.487,50 lei; termenul 25.11.2026 a trecut')
+    expect(m.html).toMatch(/Termenul de plată la bugetul de stat \(25\.11\.2026\) a trecut/)
+    expect(m.subiect).not.toMatch(/până pe/)
   })
   it('alerta zilei: PREVIZIUNE, rămas de cumpărat, termenele (21.12 pentru noiembrie)', () => {
     const m = mailUpa(PREV, { furnizori: ['UPA <Unu>'] })
@@ -339,7 +346,8 @@ describe('mailul pe calculul expertului (20270101a, rândul are `calcul`)', () =
     for (const r of [{ ...EXACT, calcul: null }, { ...EXACT, calcul: { ...CALC_OCT, de_plata: null } }, { ...EXACT, calcul: { ...CALC_OCT, stare: 'previziune' } },
       { ...EXACT, calcul: { ...CALC_OCT, termen_stat: '25.11.2026' } }, { ...EXACT, calcul: { ...CALC_OCT, posturi: 'x' } }, { ...EXACT, calcul: [] },
       { ...PREV, calcul: { ...CALC_NOV, jumatate: null } }, { ...PREV, ramas: null }, { ...PREV, calcul: { ...CALC_NOV, stare: 'definitiv' } },
-      { ...EXACT, fel: 'inchidere' }, { ...EXACT, fel: 'eroare' }]) {
+      { ...EXACT, fel: 'inchidere' }, { ...EXACT, fel: 'eroare' }, { ...EXACT, termen_depasit: undefined }, { ...EXACT, termen_depasit: null },
+      { ...EXACT, termen_depasit: 'false' }]) {
       expect(areCalcul(r)).toBe(true)
       expect(mailUpa(r)).toBe(null)
     }

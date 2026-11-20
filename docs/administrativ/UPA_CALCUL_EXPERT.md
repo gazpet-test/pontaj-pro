@@ -70,27 +70,34 @@ Verificat și pe exemplul din review (NMA 75, 3 posturi): fără achiziții 12.9
   - confirmarea e pe **amprenta** datelor pe care le-a văzut: pontajul fiecărei zile, corecțiile HR, facturile, parametrii, reportul;
     dacă s-a schimbat ceva între afișare și clic, BD-ul refuză și ecranul se reîncarcă;
   - se scriu o singură dată `upa_calcul_lunar` și detaliul pe angajat `upa_calcul_angajat` (nemodificabile), cu cine a confirmat;
+  - (runda 3) calculul și detaliul se citesc odată (același moment al datelor); după scriere calculul se reface din datele de acum, cu
+    toate blocajele: dacă între timp altcineva a șters o zi de pontaj, a scos norma, data încetării sau o sărbătoare din calendar, închiderea
+    se refuză și nu rămâne nimic scris (o zi fără pontaj se numără la fel ca una pontată, deci cifrele singure nu ar fi arătat-o);
   - lunile se închid în ordine;
   - cronul NU mai închide: ERP-ul nu are istoricul normei și al administratorilor, deci un om confirmă. Cronul îl anunță zilnic pe
     owner („calcul_de_confirmat”) sau, dacă lipsesc date, și Administrativ / UPA („calcul_neinchis”).
 - **Blocaje** (luna nu se închide):
   - o zi lucrătoare fără pontaj pentru un angajat cu contract (`pontaj_lipsa`);
   - angajat fără data angajării, fără normă, inactiv fără data încetării dar cu pontaj în lună;
-  - calendarul sărbătorilor legale al anului neîncărcat (`calendar_incomplet`: lipsește vreo sărbătoare cu dată fixă);
+  - calendarul sărbătorilor legale al anului neîncărcat (`calendar_incomplet`: lipsește vreo sărbătoare cu dată fixă sau una mobilă
+    care cade în zi lucrătoare — Vinerea Mare, a doua zi de Paște, a doua zi de Rusalii, calculate din Paștele ortodox);
   - factură cu plata necompletată, sau plătită la termen fără valoarea fără TVA;
   - salariul minim sau numărul angajaților cu handicap neînregistrat;
   - luna anterioară neînchisă.
 - **Avertismente** (se văd, nu opresc închiderea):
   - factură neplătită în lună (nu se deduce) sau plătită după termen (nu se deduce);
   - angajați cu corecții HR.
-- **După închidere:** ecranul arată dacă sursele lunii (pontaj / facturi) s-au schimbat. Calculul închis rămâne; o rectificare se discută
+- **După închidere:** ecranul arată dacă sursele lunii (pontaj / facturi) s-au schimbat, inclusiv dacă datele nu mai sunt complete (o zi de
+  pontaj ștearsă după închidere). Calculul închis rămâne; o rectificare se discută
   cu contabilul (mecanismul de rectificare nu e în această migrare).
 
 ## Alerta
 
 - **Alerta zilei** (previziune, din ziua `upa_alerta_zi`): „mai sunt X lei de cumpărat” = deducerea maximă − report − achiziții.
 - **Alerta exactă** (felul nou `calcul`, cheia `calcul:AAAA-LL`): la prima rulare a cronului de după închidere, oricine a închis luna și
-  chiar dacă jurnalul are deja rândul vechi `inchidere:AAAA-LL` (v10). Doar cu alerta pornită, contribuția > 0 și termenul încă înainte.
+  chiar dacă jurnalul are deja rândul vechi `inchidere:AAAA-LL` (v10). Doar cu alerta pornită și contribuția > 0.
+  - (runda 3) și pentru o lună închisă după scadență, sau dacă cronul / alerta au fost oprite până după ea: alerta vine la prima rulare,
+    cu „termenul ZZ.LL.AAAA a trecut” în subiect și în notificare (rândul are `termen_depasit`; fără el edge-ul nu trimite).
 - Edge-ul v11 refuză un rând nou cu calcul incomplet (`calcul_invalid`, fără mail); rezervarea veche (fără `calcul`) are forma v10.
 
 ## Corecțiile HR (owner, „Detaliu NMA”)
@@ -170,6 +177,11 @@ Tabelul `upa_plafon_lunar`, `fn_upa_luni` și `fn_upa_plafon_seteaza` rămân ne
   - tranzițiile: intenția de dinainte de migrare, jurnalul legacy + închiderea din ecran înaintea cronului;
   - edge-ul cu Resend simulat; drepturile ca non-owner și fără identitate; refuzurile migrării și ale revenirii;
   - aplicare → revenire → reaplicare (cu intențiile vechi „existent” peste revenire), apoi revenirile c → b → a;
+  - (runda 3) cursa în timpul închiderii: 5 schimbări care nu mișcă cifrele (zi de pontaj ștearsă, normă ștearsă, data încetării ștearsă
+    la un inactiv cu pontaj, o sărbătoare fixă și una mobilă scoase), injectate exact între citire și reverificare → refuz, nimic scris;
+    alerta exactă la prima rulare după 40 de luni, cu termenul depășit; sărbătorile mobile 2026 / 2027 (Paștele de mână);
   - mutanți de comportament, rulați cu amprenta oprită.
-- `src/upaAlerta.test.js` (vitest): textele ecranului, plata, corecțiile, mailul exact / previziunea, refuzul calculului invalid (P2).
-- Rămân pentru clonă (chat-ul): PG17 real, manifestul L15, concurența cu două sesiuni (închiderea în paralel cu o corectură de pontaj).
+- `src/upaAlerta.test.js` (vitest): textele ecranului, plata, corecțiile, mailul exact / previziunea / termenul depășit, refuzul calculului invalid.
+- `supabase/tests/20270101a_upa_calcul_concurenta.sh`: aceeași cursă în DOUĂ sesiuni reale (barieră pe lock consultativ, fără sleep),
+  plus martorul; doar pe un cluster PostgreSQL 17 de unică folosință.
+- Rămân pentru chat: PG17 real (inclusiv scriptul de concurență), manifestul L15, aplicare → revenire → reaplicare.

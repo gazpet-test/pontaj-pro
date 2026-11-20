@@ -31,7 +31,8 @@ export function calculValid(r) {
   const c = r?.calcul
   if (!c || typeof c !== 'object' || Array.isArray(c)) return false
   if (r.fel === 'calcul') {
-    return c.stare === 'definitiv' && ZI_ISO.test(String(c.termen_stat ?? ''))
+    // runda 3: termen_depasit vine din BD (termenul la stat < ziua rezervării); lipsă / alt tip = necunoscut -> refuz (L18)
+    return c.stare === 'definitiv' && ZI_ISO.test(String(c.termen_stat ?? '')) && typeof r.termen_depasit === 'boolean'
       && [c.nma, c.posturi, c.locuri, c.salariu_minim, c.suma_datorata, c.achizitii_fara_tva, c.report_intrat, c.deducere, c.de_plata, c.report_iesit].every(v => nr(v) !== null)
   }
   if (r.fel === 'zilnic') {
@@ -51,9 +52,13 @@ function mailCalcul(r, { furnizori, app }) {
     ? `<p style="margin:14px 0 4px;font-weight:700">Furnizori UPA cu autorizația valabilă</p><ul style="margin:0;padding-left:18px">${furnizori.slice(0, 15).map(f => `<li>${esc(f)}</li>`).join('')}</ul>`
     : ''
   if (r.fel === 'calcul') {
-    const subiect = `Fond handicap ${luna}: de plată la bugetul de stat ${lei(c.de_plata)} lei până pe ${ziText(c.termen_stat)}`
+    const depasit = r.termen_depasit === true
+    const subiect = depasit
+      ? `Fond handicap ${luna}: de plată la bugetul de stat ${lei(c.de_plata)} lei; termenul ${ziText(c.termen_stat)} a trecut`
+      : `Fond handicap ${luna}: de plată la bugetul de stat ${lei(c.de_plata)} lei până pe ${ziText(c.termen_stat)}`
     const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1a232c;max-width:680px">` +
       `<p>Bună ziua,</p><p>Calculul contribuției pentru persoanele cu handicap pe <b>${esc(luna)}</b> s-a încheiat, după închiderea pontajului:</p>` +
+      (depasit ? `<p style="color:#b3261e;font-weight:700">Termenul de plată la bugetul de stat (${esc(ziText(c.termen_stat))}) a trecut: plata se face cât mai curând.</p>` : '') +
       tabel([['Număr mediu de angajați', esc(zecimale(c.nma))], ['Posturi (4% din numărul mediu)', esc(zecimale(c.posturi))],
         ['Locuri de muncă neocupate', esc(zecimale(c.locuri))], ['Salariul minim brut al lunii', `${lei(c.salariu_minim)} lei`],
         ['Contribuția integrală', `${lei(c.suma_datorata)} lei`],

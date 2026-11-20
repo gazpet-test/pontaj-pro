@@ -86,6 +86,7 @@ functie	functie public.fn_upa_calcul_detaliu(date)	creat
 functie	functie public.fn_upa_calcul_inchide(date,text)	creat
 functie	functie public.fn_upa_calcul_inchide_la(date,date,text,uuid)	creat
 functie	functie public.fn_upa_calcul_la(date,date,integer)	creat
+functie	functie public.fn_upa_calcul_previziune_la(date,date,integer)	creat
 functie	functie public.fn_upa_calendar_lipsa(integer)	creat
 functie	functie public.fn_upa_campuri_intentie_v2()	creat
 functie	functie public.fn_upa_cauza_cod(text)	creat
