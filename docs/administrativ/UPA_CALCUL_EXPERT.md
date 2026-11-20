@@ -3,6 +3,7 @@
 Decizia owner-ului (20.11.2026): contribuția pentru fondul de handicap se **calculează** în platformă după răspunsul expertului contabil,
 în locul plafonului fix din setări (7.000 lei). Migrarea `20270101a_administrativ_upa_calcul` (NEAPLICATĂ) + ecranul + edge-ul v11.
 Contextul (alerta, jurnalul, drepturile, bucketul) rămâne cel din `docs/administrativ/UPA_FOND_HANDICAP.md` (20261229a / b / c).
+Runda 2 (review PR #1154, 8 x P1 + P2) a corectat formula, numărul mediu de angajați, închiderea, tranzițiile și termenul din decembrie.
 
 ## Răspunsul expertului (date, 20.11.2026)
 
@@ -15,130 +16,160 @@ Contextul (alerta, jurnalul, drepturile, bucketul) rămâne cel din `docs/admini
    Achiziții > jumătate → se plătește jumătate din suma datorată, iar diferența se reportează pe lunile următoare. Plata la stat până pe 25
    a lunii următoare; plata către unitatea protejată până la sfârșitul lunii pentru care se calculează.
 
+„Suma datorată” din răspuns = **contribuția integrală** (Legea 448/2006 art. 78: salariul minim × locurile neocupate). Runda 1 o înjumătățea
+de două ori (50% din salariu, apoi jumătate din asta); runda 2 aplică jumătatea o singură dată, pe contribuția integrală.
+
 ## Formula (o singură definiție: `fn_upa_calcul_la`, în BD)
 
 | Pas | Ce | Sursa în ERP |
 |---|---|---|
-| zile calcul | zilele lunii între `employees.hire_date` și `employees.termination_date` (ziua încetării inclusă, ca în `src/pontajOreSuplimentare.js`) | `employees` |
-| CFS | zilele cu codul de pontaj `CFP` (concediu fără plată) | `pontaj_records.norma` |
-| suspendare | zilele cu codul de pontaj `SUSP` (cod **nou propus**, vezi „Ce lipsește”) | `pontaj_records.norma` |
-| normă | `employees.procent_ocupare / 100` (= ore normă / 8 ore, durata normală); NULL = 100% cu avertisment | `employees` |
-| administratori | scoși: `hr_decizii_semnatari` activ cu calitatea „Administrator” | `hr_decizii_semnatari` |
-| NMA | Σ (zile calcul − CFS − suspendare) × normă / zilele lunii, rotunjit la 2 zecimale | — |
-| locuri neocupate | max(⌊4% × NMA⌋ − angajați cu handicap, 0); 0 dacă NMA < 50 (art. 78) | `upa_parametri.angajati_handicap` |
-| suma datorată D | locuri × 50% × salariul minim al lunii (rotunjit la bani) | `upa_parametri.salariu_minim` |
-| achiziții A | Σ `upa_achizitii.valoare_fara_tva` ale lunii, cu `data_plata` ≤ ultima zi a lunii | `upa_achizitii` |
-| report intrat | reportul ieșit al lunii anterioare închise; la prima lună a calculului = `report_initial` | `upa_calcul_lunar`, `upa_parametri` |
-| deducere | min(A + report intrat, D / 2) | — |
-| de plată la stat | D − deducere, până pe 25 a lunii următoare | — |
+| zilele contractului | zilele lunii între `employees.hire_date` și `employees.termination_date` (ambele incluse) | `employees` |
+| ziua de referință | pentru o zi lucrătoare, ea însăși; pentru weekend / sărbătoare legală, ultima zi lucrătoare dinainte (efectivul zilei nelucrătoare = efectivul zilei lucrătoare precedente) | `calendar_days` ('legal') |
+| zile scoase | în ziua de referință: CFS (`CFP`), suspendare de drept (`CM`, `BO`, `BP`, `AM` = incapacitate de muncă, `M` = maternitate), suspendare fără cod (corecție HR), administrator, contract inexistent | `pontaj_records.norma`, `upa_angajat_perioade`, `hr_decizii_semnatari` |
+| normă | `employees.procent_ocupare / 100`, sau corecția HR pe interval (act adițional) | `employees`, `upa_angajat_perioade` |
+| NMA | Σ normele zilelor numărate / zilele lunii, rotunjit la 2 zecimale | — |
+| posturi | 4% × NMA, cu 2 zecimale (fără rotunjire la întreg); 0 sub 50 de angajați | — |
+| locuri neocupate | max(posturi − angajați cu handicap, 0) | `upa_parametri.angajati_handicap` |
+| contribuția integrală B | locuri × salariul minim al lunii (rotunjit la bani) | `upa_parametri.salariu_minim` |
+| deducerea maximă | jumătate din B (trunchiat la bani: la stat rămâne cel puțin jumătate) | — |
+| achiziții A | Σ `valoare_fara_tva` ale lunii **plătite** (`stare_plata` = plătită) până la ultima zi a lunii | `upa_achizitii` |
+| report intrat | reportul ieșit al lunii anterioare închise; la prima lună = `report_initial` | `upa_calcul_lunar`, `upa_parametri` |
+| deducere | min(A + report intrat, deducerea maximă) | — |
+| de plată la stat | B − deducere | — |
 | report ieșit | A + report intrat − deducere | — |
+| termenul la stat | 25 a lunii următoare (zi nelucrătoare → prima zi lucrătoare de după); pentru noiembrie: 21 decembrie (zi nelucrătoare → ziua lucrătoare dinainte), Codul de procedură fiscală art. 155 alin. (2) | `fn_upa_termen_stat` |
 
-Cazurile expertului, verificate în proba PGlite cu valori calculate de mână:
-- **Peste jumătate:** D = 4.325, A = 3.000. De plată 2.162,50, report 837,50.
-- **Report consumat:** în luna următoare, report 837,50 + 500 = 1.337,50 < 2.162,50. Se deduce tot, nu rămâne report.
-- **Sub jumătate:** A = 1.000. De plată 3.325, report 0.
+### Exemplul pentru expert: noiembrie 2026 (NMA ≈ 64)
 
-Tot în proba PGlite: angajatul intrat la mijloc de lună, norma parțială, CFS, suspendarea, administratorul, angajatul încetat, cel inactiv fără dată de încetare și firma sub 50 de angajați.
+Presupunem NMA = 64,00, niciun angajat cu handicap, salariul minim 4.325 lei, report intrat 0:
+
+| Pas | Calcul | Rezultat |
+|---|---|---|
+| posturi | 4% × 64,00 | **2,56** |
+| locuri neocupate | 2,56 − 0 | 2,56 |
+| contribuția integrală | 2,56 × 4.325 | **11.072,00 lei** |
+| la stat, cel puțin | 11.072,00 / 2 | 5.536,00 lei |
+| deducerea maximă | 11.072,00 − 5.536,00 | **5.536,00 lei** |
+
+| Achiziții fără TVA plătite în noiembrie | Deducere | De plată la stat până pe 21.12.2026 | Se reportează |
+|---:|---:|---:|---:|
+| 0 | 0,00 | 11.072,00 | 0,00 |
+| 3.000,00 | 3.000,00 | 8.072,00 | 0,00 |
+| 5.536,00 | 5.536,00 | 5.536,00 | 0,00 |
+| 8.000,00 | 5.536,00 | 5.536,00 | 2.464,00 |
+
+Verificat și pe exemplul din review (NMA 75, 3 posturi): fără achiziții 12.975,00 lei la stat; cu 8.000 lei achiziții 6.487,50 lei la stat
+și 1.512,50 lei reportați.
 
 ## Stări
 
-- **Previziune:** cât pontajul lunii nu e închis. Corecturile libere țin până pe 12 a lunii următoare (`src/pontajLunaInchisa.js`), deci pontajul e închis de pe 13.
-  - Luna în curs numără și facturile încă neplătite: se presupune plata la termen, cu avertisment.
-  - După ultima zi a lunii se numără doar facturile plătite până în ultima zi.
-- **Închis (exact):** din 13 a lunii următoare, luna se închide o singură dată în `upa_calcul_lunar`, cu detaliul pe angajat în `upa_calcul_angajat` (ambele nemodificabile), dacă nimic nu blochează.
-  - Închiderea o face rularea zilnică a alertei sau un editor, din ecran („Închide calculul”).
-  - Lunile se închid în ordine.
-- **Blocaje** (luna nu se închide, iar owner-ul și Administrativ / UPA primesc zilnic notificarea `calcul_neinchis`):
-  - facturi fără valoarea fără TVA;
-  - facturi fără data plății (după ultima zi a lunii);
+- **Previziune:** cât luna nu e închisă.
+  - Luna în curs numără și facturile cu plata necompletată sau neplătite încă: se presupune plata la termen, cu avertisment.
+  - După ultima zi a lunii se deduc doar facturile plătite până în ultima zi.
+- **Închis (exact):** din 13 a lunii următoare, doar **owner-ul**, din ecran („Închide calculul”), confirmă luna:
+  - confirmarea e pe **amprenta** datelor pe care le-a văzut: pontajul fiecărei zile, corecțiile HR, facturile, parametrii, reportul;
+    dacă s-a schimbat ceva între afișare și clic, BD-ul refuză și ecranul se reîncarcă;
+  - se scriu o singură dată `upa_calcul_lunar` și detaliul pe angajat `upa_calcul_angajat` (nemodificabile), cu cine a confirmat;
+  - lunile se închid în ordine;
+  - cronul NU mai închide: ERP-ul nu are istoricul normei și al administratorilor, deci un om confirmă. Cronul îl anunță zilnic pe
+    owner („calcul_de_confirmat”) sau, dacă lipsesc date, și Administrativ / UPA („calcul_neinchis”).
+- **Blocaje** (luna nu se închide):
+  - o zi lucrătoare fără pontaj pentru un angajat cu contract (`pontaj_lipsa`);
+  - angajat fără data angajării, fără normă, inactiv fără data încetării dar cu pontaj în lună;
+  - calendarul sărbătorilor legale al anului neîncărcat (`calendar_incomplet`: lipsește vreo sărbătoare cu dată fixă);
+  - factură cu plata necompletată, sau plătită la termen fără valoarea fără TVA;
   - salariul minim sau numărul angajaților cu handicap neînregistrat;
   - luna anterioară neînchisă.
 - **Avertismente** (se văd, nu opresc închiderea):
-  - facturi plătite după termen (nu intră în deducere);
-  - angajați fără data angajării sau fără normă;
-  - angajați inactivi fără data încetării, dar cu pontaj în lună.
+  - factură neplătită în lună (nu se deduce) sau plătită după termen (nu se deduce);
+  - angajați cu corecții HR.
+- **După închidere:** ecranul arată dacă sursele lunii (pontaj / facturi) s-au schimbat. Calculul închis rămâne; o rectificare se discută
+  cu contabilul (mecanismul de rectificare nu e în această migrare).
+
+## Alerta
+
+- **Alerta zilei** (previziune, din ziua `upa_alerta_zi`): „mai sunt X lei de cumpărat” = deducerea maximă − report − achiziții.
+- **Alerta exactă** (felul nou `calcul`, cheia `calcul:AAAA-LL`): la prima rulare a cronului de după închidere, oricine a închis luna și
+  chiar dacă jurnalul are deja rândul vechi `inchidere:AAAA-LL` (v10). Doar cu alerta pornită, contribuția > 0 și termenul încă înainte.
+- Edge-ul v11 refuză un rând nou cu calcul incomplet (`calcul_invalid`, fără mail); rezervarea veche (fără `calcul`) are forma v10.
+
+## Corecțiile HR (owner, „Detaliu NMA”)
+
+`upa_angajat_perioade`: pe interval, pentru un angajat — norma (act adițional), administrator da / nu, suspendat fără cod de pontaj
+(ex. creșterea copilului). Motivul e obligatoriu. Fără suprapuneri; o lună închisă nu se mai atinge.
+
+## Intențiile salvate din formular (compatibilitate)
+
+Amprenta intenției e **versionată** (`fn_upa_hash_intentie_v2`): fără valorile noi (valoare fără TVA, starea și data plății) e EXACT amprenta
+din 20261229a, deci reîncercarea unei salvări de dinainte de migrare (sau a ecranului vechi) dă „existent”, și după revenire. Cu valorile noi:
+`v2:` + md5 pe toate câmpurile. `fn_upa_campuri_intentie` / `fn_upa_hash_intentie` rămân neatinse.
 
 ## Plafonul fix de 7.000 lei: scos din calcul
 
-Plafonul din setări nu mai e citit de alertă și nici de ecran. Îl înlocuiește deducerea calculată: jumătate din suma datorată, minus reportul. De ce nu l-am păstrat nici ca rezervă:
-- O valoare fixă se depărtează în tăcere de cea legală. Cu NMA ≈ 64 ies 2 locuri, deci D = 4.325 și o deducere maximă de 2.162,50 lei/lună, nu 7.000.
-- O rezervă care „merge” când lipsesc date ar ascunde lipsa (L18). Când lipsește o intrare, calculul arată „incomplet” și spune exact ce lipsește.
+Plafonul din setări nu mai e citit de alertă și nici de ecran. Îl înlocuiește deducerea calculată. O rezervă fixă ar ascunde datele lipsă (L18).
+Tabelul `upa_plafon_lunar`, `fn_upa_luni` și `fn_upa_plafon_seteaza` rămân neatinse (ecranul vechi, până la merge); retragerea = migrare separată.
 
-Tabelul `upa_plafon_lunar`, `fn_upa_luni` și `fn_upa_plafon_seteaza` rămân neatinse: le folosește doar ecranul vechi, până la merge. Retragerea lor se face într-o migrare separată, după deploy (regula „retragerea unui drept folosit de clientul vechi = separat”).
+## Ce lipsește din ERP (și ce face calculul)
 
-## Ce lipsește din ERP (și propunerea)
+| Lipsă | Acum |
+|---|---|
+| Istoricul normei, al calității de administrator, suspendările fără cod | corecții HR pe interval (owner) + confirmarea owner-ului la închidere |
+| Numărul angajaților cu handicap | parametru pe perioade; până se înregistrează (și 0), calculul e blocat |
+| Calendarul sărbătorilor pe anii următori | blocaj până se încarcă (Setări → Calendar) |
+| Lacătul pontajului în BD | nu există: închiderea folosește amprenta, iar ecranul semnalează schimbările de după |
+| Valoarea fără TVA și plata pe facturile vechi / din Citește Orice | se completează din listă („fără TVA?”, „plătită ✓” / „neplătită”) |
 
-| Lipsă | Acum | Propunere |
-|---|---|---|
-| Suspendările contractului (creșterea copilului, suspendări disciplinare, detașări) | nu există nicio evidență; calculul citește codul de pontaj `SUSP`, pe care încă nu-l pune nimeni | A) codul `SUSP` în lista de pontaj (App.jsx, exporturile BRUT / NET), PR separat; sau B) un tabel HR de suspendări cu interval (mai bun la suspendările lungi) |
-| Numărul angajaților cu handicap | nu există niciun câmp (e o dată de sănătate) | parametru pe perioade în ecran (`angajati_handicap`); până se înregistrează (și 0), calculul e blocat |
-| Istoricul normei (acte adiționale) | doar norma de azi (`employees.procent_ocupare`); există și `employee_salaries.work_hours_per_day`, folosit doar la exportul NET | o schimbare de normă în cursul lunii nu se vede; propunere: normă cu dată de la care se aplică |
-| Administratorii | doar semnatarii deciziilor HR (`hr_decizii_semnatari`, „Administrator”), fără istoric | dacă administratorul are contract de mandat (nu CIM), e oricum în afara calculului; altfel un câmp „administrator” cu perioadă |
-| Închiderea pontajului | nu există lacăt în BD; regula e „corecturi până pe 12” (doar în UI) | o corectură după 12 (prin tichet HR) nu schimbă calculul închis; propunere: lacătul de pontaj din runda 2 (trigger) |
-| Valoarea fără TVA și data plății pe facturile vechi | coloane noi, goale | se completează din ecran (lista achizițiilor, „fără TVA?” / „plătită ✓”); octombrie 2026 se poate închide doar după completare |
-| Salariul minim înainte de 01.07.2026 | neînregistrat (doar valoarea confirmată de expert e pusă) | dacă se calculează luni dinainte, se adaugă din ecran (4.050 lei în 2025–06.2026, de confirmat) |
+## Întrebări pentru expert (de confirmat înainte de aplicare)
 
-## Întrebări pentru expert (decizii luate în cod, de confirmat)
-
-1. Rotunjirea: ⌊4% × NMA⌋ (în jos, la întreg), iar NMA cu 2 zecimale. E corect? Suma datorată se rotunjește la leu în declarație?
-2. Ziua încetării contractului se numără (inclusiv)?
-3. Ce coduri de pontaj sunt „suspendare”? Azi doar CFS (`CFP`) și `SUSP` scad. Concediul medical (CM, BO), maternitatea (M) și absențele nemotivate (N) se numără ca zile lucrate. Maternitatea și creșterea copilului?
-4. Reportul expiră (de exemplu la sfârșitul anului) sau rămâne nelimitat?
-5. O factură plătită după sfârșitul lunii se pierde sau se mută în luna plății? Azi nu intră în deducere și apare ca avertisment.
-6. Prima lună a calculului e octombrie 2026, cu report inițial 0. Există un excedent din lunile anterioare?
-7. Termenul de 25: când cade într-o zi nelucrătoare, ecranul arată tot 25. Nu calculăm ziua lucrătoare următoare.
+1. Exemplul de mai sus (contribuția integrală, posturi cu 2 zecimale, jumătate la stat) e corect? Suma se rotunjește la leu în declarație?
+2. Rotunjirea celor 4% × NMA la 2 zecimale: matematic (2,5652 → 2,57) sau prin trunchiere?
+3. Absențele nemotivate (N) se numără ca zile lucrate (contractul nu e suspendat până la o decizie)? Concediul paternal / de îngrijire a
+   copilului bolnav au coduri proprii în pontaj?
+4. Reportul expiră (de exemplu la sfârșitul anului)?
+5. 21 decembrie nelucrător: termenul se mută pe ziua lucrătoare dinainte (cum e în cod) sau după? În 2026 și 2027 ziua e lucrătoare.
+6. Angajatul cu contract din ziua de sâmbătă: regula „efectivul zilei lucrătoare precedente” îl scoate pentru sâmbăta și duminica de început.
+7. Prima lună a calculului e octombrie 2026, cu report inițial 0. Există un excedent din lunile anterioare?
 
 ## Ordinea livrării (de coordonator, după review și „da”)
 
-1. **Edge-ul `upa-plafon-alerta` v11**, publicat înainte. Merge și cu rezervarea veche: fără câmpul `calcul` trimite mailul în forma v10.
+1. **Edge-ul `upa-plafon-alerta` v11**, publicat înainte. Merge și cu rezervarea veche (fără `calcul` → forma v10).
 2. **Migrarea `20270101a`** (versiune 20270101120000), prin runner, cu plafon 5000 și amprenta globală L15 v2.
    - Lista obiectelor: `supabase/tests/20270101a_administrativ_upa_calcul.l15.obiecte.tsv`.
-   - Lock: `upa_achizitii` ACCESS EXCLUSIVE, pentru cele 2 coloane noi și CHECK.
-   - Preflight-ul cere ca cele 12 funcții din 20261229a folosite sau înlocuite să fie EXACT cele revizuite (md5 sursă, drepturi, proprietar).
-3. **Merge-ul ecranului.** Ecranul folosește `fn_upa_situatie` și formularul trimite câmpurile noi, deci merge doar după migrare.
-4. **Parametrii, din ecran:**
-   - numărul angajaților cu handicap (de la 01.10.2026; 0 dacă nu sunt);
-   - completarea valorii fără TVA și a datei plății pe facturile din octombrie / noiembrie.
+   - Lock: `upa_achizitii` și `upa_alerta_jurnal` ACCESS EXCLUSIVE (3 coloane noi + 2 CHECK-uri; 2 CHECK-uri înlocuite în jurnal).
+   - Preflight-ul cere ca cele 13 funcții din 20261229a folosite sau înlocuite și cele 2 CHECK-uri ale jurnalului să fie EXACT cele revizuite.
+3. **Merge-ul ecranului** (după migrare: ecranul cheamă RPC-urile noi).
+4. **Din ecran:** numărul angajaților cu handicap (de la 01.10.2026; 0 dacă nu sunt); valoarea fără TVA și plata pe facturile din
+   octombrie / noiembrie; corecțiile HR, dacă e cazul; calendarul 2027 înainte de calculul lui decembrie 2026.
 5. Cronul (jobid 29, zilnic) nu se schimbă.
 
 **Revenire:** `supabase/revenire/20270101a_administrativ_upa_calcul_ROLLBACK.sql` (versiune 20270101120001), prin runner cu plafon 2000.
-- **Ce face:**
-  - reface IDENTIC cele 5 funcții din 20261229a (sursa copiată de `scripts/pglite/upa_calcul_genereaza_revenire.mjs`, verificată prin md5);
-  - scoate tabelele, funcțiile și coloanele noi.
-- **Când refuză:**
-  - o lună închisă;
-  - un parametru schimbat sau adăugat din ecran;
-  - o achiziție cu valoarea fără TVA sau data plății completate;
-  - orice abatere de la amprenta obiectelor.
-- **Ordinea:** se face ÎNAINTEA revenirilor 20261229c → b → a. Proba verifică că după ea trec toate trei.
-- **Alte componente:** ecranul se retrage înainte. Edge-ul v11 poate rămâne.
+- Reface IDENTIC cele 5 funcții înlocuite din 20261229a și CHECK-urile jurnalului; scoate tabelele, funcțiile și coloanele noi.
+- Refuză: o lună închisă, un parametru din ecran, o corecție HR, o achiziție cu valorile noi (sau amprenta v2), o alertă exactă în jurnal,
+  orice abatere de la amprenta obiectelor.
+- Se face ÎNAINTEA revenirilor 20261229c → b → a. Ecranul se retrage înainte; edge-ul v11 poate rămâne.
 
 ## Fișa de securitate (CLAUDE.md pct. 7) — schimbările față de v10
 
-- **(a) Conținut extern:** niciunul. Calculul citește doar BD-ul: pontaj, angajați, semnatari, achiziții, parametri.
-- **(b) Ce scrie:**
-  - `upa_calcul_lunar` și `upa_calcul_angajat`, o dată pe lună, prin RPC-ul de închidere;
-  - jurnalul și notificările, ca înainte;
-  - mailul intern conține acum suma de plată, reportul, NMA-ul și numărul de locuri. Fără nume de angajați.
-  - Detaliul pe angajat se citește doar de owner (`fn_upa_calcul_detaliu`, politica owner pe `upa_calcul_angajat`).
-- **(c) Identitate:**
-  - edge-ul folosește `service_role`, neschimbat;
-  - funcțiile de calcul sunt interne (fără EXECUTE pentru roluri);
-  - ecranul trece prin `fn_upa_situatie`, SECURITY DEFINER, care întoarce doar agregate.
-- **(d) Cine pornește:**
-  - edge-ul: cronul sau owner-ul, ca în v10;
-  - închiderea din ecran: owner + Administrativ / UPA editor sau admin (`fn_upa_poate_scrie`).
-- **(e) Confirmare umană:** pentru alertă nu e nevoie. Închiderea unei luni din ecran are confirmare explicită (`confirm`).
+- **(a) Conținut extern:** niciunul. Calculul citește doar BD-ul: pontaj, angajați, semnatari, calendar, achiziții, parametri, corecții.
+- **(b) Ce scrie:** `upa_calcul_lunar` / `upa_calcul_angajat` (o dată pe lună, la confirmarea owner-ului); `upa_angajat_perioade` (owner);
+  jurnalul și notificările, ca înainte. Mailul intern conține sumele, NMA-ul, posturile; fără nume de angajați.
+- **(c) Identitate:** edge-ul folosește `service_role`, neschimbat; funcțiile de calcul sunt interne (fără EXECUTE pentru roluri); ecranul
+  trece prin funcții SECURITY DEFINER care cer `auth.uid()` (agregatele: orice cont logat; detaliul, corecțiile și închiderea: doar owner-ul).
+- **(d) Cine pornește:** edge-ul: cronul sau owner-ul, ca în v10; închiderea: owner-ul.
+- **(e) Confirmare umană:** închiderea unei luni = confirmarea owner-ului, cu textul a ce confirmă, pe amprenta datelor văzute.
 
 ## Probe
 
-- `scripts/pglite/test_upa_calcul_local.mjs` (PGlite, schelet Supabase + `supabase/tests/20270101a_administrativ_upa_calcul_schelet.sql`) acoperă:
-  - validatorul runnerului;
-  - blocul AMPRENTA identic în migrare și revenire, plus sursele refăcute;
+- `scripts/pglite/test_upa_calcul_local.mjs` (PGlite, schelet Supabase + `supabase/tests/20270101a_administrativ_upa_calcul_schelet.sql`):
+  - validatorul runnerului; blocul AMPRENTA identic în migrare și revenire; sursele și CHECK-urile refăcute;
   - aplicarea ca la livrare (L15 v2, după 20261229a / b / c);
-  - cazurile expertului, stările, blocajele, alerta și edge-ul cu Resend simulat;
-  - drepturile ca non-owner;
-  - refuzurile migrării și ale revenirii;
-  - aplicare → revenire → reaplicare, apoi revenirile c → b → a;
-  - 24 de mutanți de comportament, rulați cu amprenta oprită, ca să se vadă că îi prind probele, nu doar amprenta.
-- `src/upaAlerta.test.js` (vitest): textele ecranului (stări, coduri, parametri, validări) și mailul pe calcul (închiderea, previziunea, forma veche de rezervă).
+  - scenariul octombrie / noiembrie 2026 cu valori calculate de mână: CFS L–V + weekend, CM, maternitate, BO de vineri care trece în
+    luna următoare, normă schimbată, administrator de la jumătatea lunii, suspendare fără cod, angajat încetat sâmbăta, Sf. Andrei;
+  - exemplele din review (NMA 75 și 64), un angajat cu handicap, factura neplătită, plata necunoscută, sub 50 de angajați;
+  - toate blocajele, închiderea pe amprentă (greșită / veche / pontaj schimbat = refuz), editorul refuzat;
+  - tranzițiile: intenția de dinainte de migrare, jurnalul legacy + închiderea din ecran înaintea cronului;
+  - edge-ul cu Resend simulat; drepturile ca non-owner și fără identitate; refuzurile migrării și ale revenirii;
+  - aplicare → revenire → reaplicare (cu intențiile vechi „existent” peste revenire), apoi revenirile c → b → a;
+  - mutanți de comportament, rulați cu amprenta oprită.
+- `src/upaAlerta.test.js` (vitest): textele ecranului, plata, corecțiile, mailul exact / previziunea, refuzul calculului invalid (P2).
+- Rămân pentru clonă (chat-ul): PG17 real, manifestul L15, concurența cu două sesiuni (închiderea în paralel cu o corectură de pontaj).

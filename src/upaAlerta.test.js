@@ -6,7 +6,7 @@ import { lei, lunaText, zileText, mailUpa, cheieIdempotenta, ruleazaAlertaUpa, A
 import { validaSuma, validaFaraTva, stareCalculLuna, etichetaStare, textCod, leiSauLipsa, validaParametru, valoareVazuta, mesajParametru,
          avertismenteAchizitie, lunaDinZi, luniInapoi, ziRO,
          stareSalvare, rezultatNesigur, poateScoatePdf, mesajRefuzAchizitie, CAMPURI_INTENTIE, numarFacturaUpa, refuzNumarFactura, mesajInsertUpa,
-         pdfExistaDeja, caleaPdf, ordineFurnizori, paginaCuGarda } from './upaLogica.js'
+         pdfExistaDeja, caleaPdf, ordineFurnizori, paginaCuGarda, validaPlata, textPlata, validaPerioada, mesajPerioada, mesajInchidere } from './upaLogica.js'
 import { paginareKeyset } from './hrDeciziiUtil.js'
 
 const ZILNIC = { id: 7, cheie: 'zilnic:2031-01-25', fel: 'zilnic', luna: '2031-01-01', plafon: 7000, consumat: 1500, ramas: 5500, zile_ramase: 7, stare: 'rezervat', destinatari: ['ana@gazpet.ro', 'ion@gazpet.ro'] }
@@ -281,7 +281,7 @@ describe('ecranul (upaLogica)', () => {
     expect(textCod('achizitii_fara_tva:3')).toBe('3 facturi fără valoarea fără TVA')
     expect(textCod('achizitii_fara_data_platii:2')).toBe('2 facturi fără data plății')
     expect(textCod('achizitii_platite_dupa_termen:1')).toBe('1 factură plătită după sfârșitul lunii (nu intră în deducere)')
-    expect(textCod('inactivi_fara_data_incetarii_cu_pontaj:2')).toBe('2 angajați inactivi fără data încetării, cu pontaj în lună (nu intră în calcul)')
+    expect(textCod('inactivi_fara_data_incetarii_cu_pontaj:2')).toBe('2 angajați inactivi fără data încetării, cu pontaj în lună (se completează data în HR)')
     expect(textCod('pontaj_neinchis')).toMatch(/pontajul lunii nu e încă închis/)
     expect(textCod('cod_nou_necunoscut')).toBe('cod nou necunoscut')
     expect(textCod('<b>x</b>')).toBe('<b>x</b>')
@@ -307,36 +307,102 @@ describe('ecranul (upaLogica)', () => {
 })
 
 describe('mailul pe calculul expertului (20270101a, rândul are `calcul`)', () => {
-  const CALC_OCT = { stare: 'definitiv', luna: '2026-10-01', nma: 64.08, locuri: 2, salariu_minim: 4325, suma_datorata: 4325, achizitii_fara_tva: 3000, report_intrat: 0,
-    deducere: 2162.5, de_plata: 2162.5, report_iesit: 837.5, termen_stat: '2026-11-25', termen_upa: '2026-10-31', jumatate: 2162.5 }
-  const CALC_NOV = { stare: 'previziune', luna: '2026-11-01', suma_datorata: 4325, jumatate: 2162.5, report_intrat: 837.5, achizitii_fara_tva: 0,
-    termen_stat: '2026-12-25', termen_upa: '2026-11-30' }
-  it('închiderea: de plată la stat până pe 25, reportul, fără „necheltuit”', () => {
-    const r = { id: 1, cheie: 'inchidere:2026-10', fel: 'inchidere', luna: '2026-10-01', plafon: 4325, consumat: 3000, ramas: 2162.5, calcul: CALC_OCT }
-    expect(areCalcul(r)).toBe(true)
-    const m = mailUpa(r)
-    expect(m.subiect).toBe('Fond handicap octombrie 2026: de plată la bugetul de stat 2.162,50 lei până pe 25.11.2026')
-    expect(m.html).toContain('837,50 lei')
-    expect(m.html).toContain('64.08')
+  // exemplul din review: NMA 75 -> 3 posturi, contribuția integrală 3 x 4.325 = 12.975; 8.000 achiziții -> de plată 6.487,50, report 1.512,50
+  const CALC_OCT = { stare: 'definitiv', luna: '2026-10-01', nma: 75, posturi: 3, locuri: 3, salariu_minim: 4325, suma_datorata: 12975, achizitii_fara_tva: 8000,
+    report_intrat: 0, deducere: 6487.5, de_plata: 6487.5, report_iesit: 1512.5, termen_stat: '2026-11-25', termen_upa: '2026-10-31', jumatate: 6487.5 }
+  // NMA 64 -> 2,56 posturi, contribuția 11.072, deducerea maximă 5.536; report 1.512,50 -> mai sunt 4.023,50 de cumpărat; termenul 21.12
+  const CALC_NOV = { stare: 'previziune', luna: '2026-11-01', suma_datorata: 11072, jumatate: 5536, report_intrat: 1512.5, achizitii_fara_tva: 0,
+    termen_stat: '2026-12-21', termen_upa: '2026-11-30' }
+  const EXACT = { id: 1, cheie: 'calcul:2026-10', fel: 'calcul', luna: '2026-10-01', plafon: 12975, consumat: 8000, ramas: 6487.5, calcul: CALC_OCT }
+  const PREV = { id: 2, cheie: 'zilnic:2026-11-25', fel: 'zilnic', luna: '2026-11-01', plafon: 4023.5, consumat: 0, ramas: 4023.5, zile_ramase: 6, calcul: CALC_NOV }
+  it('alerta exactă (felul calcul): de plată la stat până la termen, contribuția integrală, posturile cu 2 zecimale, reportul', () => {
+    expect(areCalcul(EXACT)).toBe(true)
+    const m = mailUpa(EXACT)
+    expect(m.subiect).toBe('Fond handicap octombrie 2026: de plată la bugetul de stat 6.487,50 lei până pe 25.11.2026')
+    expect(m.html).toContain('12.975,00 lei')
+    expect(m.html).toContain('1.512,50 lei')
+    expect(m.html).toContain('75,00')
+    expect(m.html).toContain('Contribuția integrală')
     expect(m.html).not.toMatch(/necheltuit/)
+    expect(mailUpa({ ...EXACT, calcul: { ...CALC_OCT, nma: 64.08, posturi: 2.56, locuri: 2.56 } }).html).toMatch(/64,08[\s\S]*2,56/)
   })
-  it('alerta zilei: PREVIZIUNE, rămas de cumpărat, termenele', () => {
-    const r = { id: 2, cheie: 'zilnic:2026-11-25', fel: 'zilnic', luna: '2026-11-01', plafon: 1325, consumat: 0, ramas: 1325, zile_ramase: 6, calcul: CALC_NOV }
-    const m = mailUpa(r, { furnizori: ['UPA <Unu>'] })
-    expect(m.subiect).toBe('Fond handicap noiembrie 2026 (previziune): mai sunt 1.325,00 lei de cumpărat de la unități protejate, mai sunt 6 zile')
+  it('alerta zilei: PREVIZIUNE, rămas de cumpărat, termenele (21.12 pentru noiembrie)', () => {
+    const m = mailUpa(PREV, { furnizori: ['UPA <Unu>'] })
+    expect(m.subiect).toBe('Fond handicap noiembrie 2026 (previziune): mai sunt 4.023,50 lei de cumpărat de la unități protejate, mai sunt 6 zile')
     expect(m.html).toContain('30.11.2026')
-    expect(m.html).toContain('25.12.2026')
+    expect(m.html).toContain('21.12.2026')
+    expect(m.html).not.toContain('25.12.2026')
     expect(m.html).toContain('UPA &lt;Unu&gt;')
     expect(m.html).toMatch(/Previziune/)
   })
-  it('fără calcul complet -> forma veche (rezervarea din 20261229a); calcul cu numere lipsă -> nu se folosește', () => {
+  it('P2: rândul NOU (are cheia calcul) cu calcul invalid -> niciun mail (null), fără forma veche', () => {
+    for (const r of [{ ...EXACT, calcul: null }, { ...EXACT, calcul: { ...CALC_OCT, de_plata: null } }, { ...EXACT, calcul: { ...CALC_OCT, stare: 'previziune' } },
+      { ...EXACT, calcul: { ...CALC_OCT, termen_stat: '25.11.2026' } }, { ...EXACT, calcul: { ...CALC_OCT, posturi: 'x' } }, { ...EXACT, calcul: [] },
+      { ...PREV, calcul: { ...CALC_NOV, jumatate: null } }, { ...PREV, ramas: null }, { ...PREV, calcul: { ...CALC_NOV, stare: 'definitiv' } },
+      { ...EXACT, fel: 'inchidere' }, { ...EXACT, fel: 'eroare' }]) {
+      expect(areCalcul(r)).toBe(true)
+      expect(mailUpa(r)).toBe(null)
+    }
+  })
+  it('rezervarea veche (fără cheia calcul) -> forma v10 doar pentru felurile vechi; felul calcul fără calcul -> null', () => {
     expect(areCalcul(ZILNIC)).toBe(false)
-    expect(mailUpa(ZILNIC).subiect).toBe(mailUpa({ ...ZILNIC, calcul: null }).subiect)
-    expect(areCalcul({ fel: 'inchidere', ramas: 1, calcul: { ...CALC_OCT, de_plata: null } })).toBe(false)
-    expect(areCalcul({ fel: 'inchidere', ramas: 1, calcul: { ...CALC_OCT, stare: 'previziune' } })).toBe(false)
-    expect(areCalcul({ fel: 'zilnic', ramas: 5, calcul: { ...CALC_NOV, jumatate: null } })).toBe(false)
+    expect(mailUpa(ZILNIC).subiect).toMatch(/^Fond handicap ianuarie 2031: cheltuit/)
+    expect(mailUpa(INCHIDERE).subiect).toMatch(/necheltuit/)
+    const { calcul, ...faraCalcul } = EXACT
+    expect(calcul).toBeTruthy()
+    expect(mailUpa(faraCalcul)).toBe(null)
     expect(ziText('2026-11-25')).toBe('25.11.2026')
     expect(ziText(null)).toBe('—')
+  })
+  it('edge-ul: un rând nou cu calcul invalid se marchează eroare calcul_invalid, fără niciun apel la Resend', async () => {
+    const bd = bdSimulat([rez([{ ...EXACT, stare: 'rezervat', destinatari: ['ana@gazpet.ro'], calcul: { ...CALC_OCT, de_plata: null } },
+      { ...PREV, id: 3, stare: 'rezervat', destinatari: ['ana@gazpet.ro'] }])])
+    const trimise = []
+    const fetchFn = async (url, o) => { trimise.push(JSON.parse(o.body)); return { ok: true, status: 200, json: async () => ({ id: 're_1' }) } }
+    const r = await ruleazaAlertaUpa({ sb: bd, fetchFn, resendKey: 'k' })
+    expect(trimise.length).toBe(1)
+    expect(trimise[0].subject).toMatch(/previziune/)
+    expect(bd.marcari).toEqual([{ p_id: 1, p_stare: 'eroare', p_resend_id: null, p_eroare: 'calcul_invalid' }, { p_id: 3, p_stare: 'trimis', p_resend_id: 're_1', p_eroare: null }])
+    expect(r.body.eroare).toBe(1)
+    expect(r.body.trimis).toBe(1)
+  })
+})
+
+describe('plata facturii, corecțiile HR și închiderea (20270101a runda 2)', () => {
+  it('starea plății: plătită cere data; neplătită / necompletat fără dată (ca CHECK-ul din BD)', () => {
+    expect(validaPlata('platita', '2026-10-28')).toEqual({ stare_plata: 'platita', data_plata: '2026-10-28' })
+    expect(validaPlata('platita', '').eroare).toMatch(/data plății/)
+    expect(validaPlata('neplatita', '2026-10-28')).toEqual({ stare_plata: 'neplatita', data_plata: null })
+    expect(validaPlata('', '2026-10-28')).toEqual({ stare_plata: null, data_plata: null })
+    expect(validaPlata('altceva', '').eroare).toBeTruthy()
+    expect(textPlata({ stare_plata: 'platita', data_plata: '2026-11-03', luna: '2026-10-01' }).text).toMatch(/după sfârșitul lunii: nu se deduce/)
+    expect(textPlata({ stare_plata: 'platita', data_plata: '2026-10-28', luna: '2026-10-01' })).toEqual({ text: 'plătită 28.10.2026', ton: 'gri' })
+    expect(textPlata({ stare_plata: 'neplatita', luna: '2026-10-01' }).text).toMatch(/^neplătită/)
+    expect(textPlata({ stare_plata: null, luna: '2026-10-01' }).text).toMatch(/luna nu se poate închide/)
+  })
+  it('codurile noi (pontaj lipsă, calendar, plata necompletată, neplătite excluse, corecții)', () => {
+    expect(textCod('pontaj_lipsa:1')).toBe('1 zi lucrătoare fără pontaj (angajat × zi): se completează pontajul înainte de închidere')
+    expect(textCod('pontaj_lipsa:4')).toMatch(/^4 zile lucrătoare fără pontaj/)
+    expect(textCod('calendar_incomplet:2026')).toMatch(/pe 2026 nu e încărcat/)
+    expect(textCod('achizitii_fara_stare_plata:2')).toBe('2 facturi cu plata necompletată (plătită / neplătită)')
+    expect(textCod('achizitii_neplatite_excluse:1')).toBe('1 factură neplătită în lună (nu intră în deducere)')
+    expect(textCod('angajati_cu_corectii:3')).toMatch(/^3 angajați cu corecții HR/)
+    expect(textCod('angajati_fara_data_angajarii:1')).toMatch(/se completează în HR/)
+  })
+  it('corecția HR: validarea (normă în (0, 1], cel puțin o schimbare, motivul) și mesajele refuzului', () => {
+    const baza = { employee_id: '72', de_la: '2026-10-01', pana_la: '2026-10-15', norma: '1', administrator: '', suspendat: false, nota: ' act adițional 12 ' }
+    expect(validaPerioada(baza)).toEqual({ p_employee_id: 72, p_de_la: '2026-10-01', p_pana_la: '2026-10-15', p_norma: 1, p_administrator: null, p_suspendat: false, p_nota: 'act adițional 12' })
+    expect(validaPerioada({ ...baza, norma: '0.5' }).p_norma).toBe(0.5)
+    expect(validaPerioada({ ...baza, norma: '', administrator: 'da' }).p_administrator).toBe(true)
+    expect(validaPerioada({ ...baza, norma: '', suspendat: true }).p_suspendat).toBe(true)
+    for (const gresit of [{ norma: '0' }, { norma: '1.5' }, { norma: '50' }, { norma: '', administrator: '' }, { nota: '  ' }, { pana_la: '2026-09-30' },
+      { employee_id: '' }, { de_la: '1.10.2026' }])
+      expect(validaPerioada({ ...baza, ...gresit }).eroare).toBeTruthy()
+    expect(mesajPerioada({ code: 'UPA05' })).toMatch(/suprapune/)
+    expect(mesajPerioada({ code: 'UPA03' })).toMatch(/închisă/)
+    expect(mesajPerioada({ code: '42501' })).toMatch(/owner/)
+    expect(mesajInchidere({ code: '40001' })).toMatch(/s-au schimbat de la afișare/)
+    expect(mesajInchidere({ code: '42501' })).toMatch(/owner/)
   })
 })
 
@@ -390,10 +456,10 @@ describe('salvarea din formular: RPC idempotent, PDF-ul doar după refuz sigur f
       expect(poateScoatePdf(stareSalvare(res))).toBe(false)
     }
   })
-  it('câmpurile intenției = lista din BD (fn_upa_campuri_intentie), mesajele refuzului', () => {
-    // 20270101a: + valoare_fara_tva, data_plata (fn_upa_campuri_intentie înlocuită de migrare)
+  it('câmpurile intenției = lista din BD (fn_upa_campuri_intentie_v2), mesajele refuzului', () => {
+    // 20270101a: + valoare_fara_tva, data_plata, stare_plata (funcție NOUĂ: fn_upa_campuri_intentie din 20261229a rămâne neatinsă)
     expect(CAMPURI_INTENTIE).toEqual(['furnizor_id', 'furnizor_nume', 'numar_factura', 'data_factura', 'luna', 'valoare', 'descriere', 'document_path',
-      'valoare_fara_tva', 'data_plata'])
+      'valoare_fara_tva', 'data_plata', 'stare_plata'])
     expect(mesajRefuzAchizitie(DREPT.error)).toMatch(/Nu ai drept/)
     expect(mesajRefuzAchizitie({ code: '23514', message: 'upa: numarul facturii e obligatoriu (numar_factura)' })).toBe('Completează numărul facturii (e obligatoriu).')
     expect(mesajRefuzAchizitie({ code: '23514', message: 'new row for relation "upa_achizitii" violates check constraint "alt_check"' })).toMatch(/^Eroare: /)

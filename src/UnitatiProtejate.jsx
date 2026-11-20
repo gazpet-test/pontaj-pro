@@ -2,18 +2,20 @@
 // UNITĂȚI PROTEJATE — contribuția pentru fondul de handicap
 // ═══════════════════════════════════════════════════════════════════════════
 // Legea 448/2006 art. 78: neavând 4% angajați cu dizabilități, firma datorează lunar
-// 50% din salariul minim × locurile neocupate și poate deduce din ea achizițiile
-// de la unități protejate autorizate (UPA).
-// 20270101a (răspunsul expertului contabil, 20.11.2026): contribuția e CALCULATĂ în BD
-// (fn_upa_situatie / fn_upa_calcul_la = o singură definiție, L19): numărul mediu de
-// angajați din pontaj și contracte, salariul minim pe perioade, achizițiile FĂRĂ TVA
-// plătite până la sfârșitul lunii; deducerea e cel mult jumătate din contribuție,
-// excedentul se reportează pe lunile următoare; plata la stat până pe 25 a lunii
-// următoare. Până la închiderea pontajului (12 a lunii următoare) cifrele sunt
-// PREVIZIUNE; apoi luna se închide o dată (upa_calcul_lunar) cu valoarea exactă.
+// salariul minim × locurile neocupate (contribuția integrală); cel puțin jumătate se
+// plătește la stat, iar cealaltă jumătate se poate acoperi cu achiziții de la unități
+// protejate autorizate (UPA).
+// 20270101a (răspunsul expertului contabil, 20.11.2026; runda 2): contribuția e CALCULATĂ
+// în BD (fn_upa_situatie / fn_upa_calcul_la = o singură definiție, L19): numărul mediu de
+// angajați pe zile (zilele nelucrătoare iau efectivul zilei lucrătoare precedente; CFS,
+// CM / BO / M și suspendările scad), posturile = 4% cu 2 zecimale, salariul minim pe
+// perioade, achizițiile FĂRĂ TVA plătite până la sfârșitul lunii; excedentul se reportează;
+// plata la stat până pe 25 a lunii următoare (21.12 pentru noiembrie). Luna rămâne
+// PREVIZIUNE până o închide OWNER-ul din ecran (din 13 a lunii următoare, fără blocaje),
+// pe amprenta datelor pe care le vede (o schimbare între timp = reîncarcă).
 // Plafonul fix din setări (7.000) nu mai e folosit: îl înlocuiește calculul.
-// Scrierea (achiziții, parametri, închiderea) doar owner + Administrativ / Unități
-// protejate admin sau editor (fn_upa_poate_scrie, aceeași regulă ca în BD).
+// Scrierea (achiziții, parametri) doar owner + Administrativ / Unități protejate admin
+// sau editor (fn_upa_poate_scrie); închiderea și corecțiile HR doar owner-ul.
 // Salvarea manuală (runda 3, 20261229a): RPC-ul idempotent fn_upa_achizitie_adauga
 // (cheie de intenție + amprenta valorilor); după un rezultat nesigur nimic nu se mai
 // șterge; acțiunile async se aplică doar în epoca lor (L24).
@@ -26,7 +28,8 @@ import { paginareKeyset } from './hrDeciziiUtil.js'
 import { avertismenteAchizitie, ziRO, lunaDinZi, luniInapoi,
          stareSalvare, rezultatNesigur, poateScoatePdf, mesajRefuzAchizitie, pdfExistaDeja, caleaPdf, ordineFurnizori,
          paginaCuGarda, validaSuma, validaFaraTva, esteNumar, leiSauLipsa, textCod, stareCalculLuna, etichetaStare,
-         CHEI_PARAMETRI, NUME_PARAMETRU, validaParametru, valoareVazuta, mesajParametru } from './upaLogica.js'
+         CHEI_PARAMETRI, NUME_PARAMETRU, validaParametru, valoareVazuta, mesajParametru,
+         validaPlata, textPlata, validaPerioada, mesajPerioada, mesajInchidere } from './upaLogica.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#30363D', border2:'#21262D',
@@ -89,9 +92,10 @@ function CifreLuna({ c }) {
   return (
     <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:14, marginTop:12}}>
       <Cifra eticheta="Număr mediu angajați" valoare={esteNumar(c.nma) ? Number(c.nma).toLocaleString('ro-RO', { maximumFractionDigits:2 }) : '—'} mic />
-      <Cifra eticheta="Locuri neocupate" valoare={esteNumar(c.locuri) ? c.locuri : '—'} mic />
+      <Cifra eticheta="Posturi (4%)" valoare={esteNumar(c.posturi) ? Number(c.posturi).toLocaleString('ro-RO', { minimumFractionDigits:2, maximumFractionDigits:2 }) : '—'} mic />
+      <Cifra eticheta="Locuri neocupate" valoare={esteNumar(c.locuri) ? Number(c.locuri).toLocaleString('ro-RO', { minimumFractionDigits:2, maximumFractionDigits:2 }) : '—'} mic />
       <Cifra eticheta="Salariu minim" valoare={leiSauLipsa(c.salariu_minim) + ' lei'} mic />
-      <Cifra eticheta="Contribuția datorată" valoare={leiSauLipsa(c.suma_datorata) + ' lei'} />
+      <Cifra eticheta="Contribuția integrală" valoare={leiSauLipsa(c.suma_datorata) + ' lei'} />
       <Cifra eticheta="Deducere maximă (½)" valoare={leiSauLipsa(c.jumatate) + ' lei'} />
       <Cifra eticheta="Report intrat" valoare={leiSauLipsa(c.report_intrat) + ' lei'} />
       <Cifra eticheta="Achiziții fără TVA" valoare={leiSauLipsa(c.achizitii_fara_tva) + ' lei'} culoare={G.green} />
@@ -112,7 +116,7 @@ function CifreLuna({ c }) {
 function FormAchizitie({ furnizoriUpa, onSalvat, onClose, setMesaj, inEpoca }) {
   const [f, setF] = useState(() => {
     const zi = ziRO()
-    return { furnizor_id:'', furnizor_nume:'', numar_factura:'', data_factura: zi, valoare:'', valoare_fara_tva:'', data_plata:'', descriere:'', luna: lunaDin(zi) }
+    return { furnizor_id:'', furnizor_nume:'', numar_factura:'', data_factura: zi, valoare:'', valoare_fara_tva:'', stare_plata:'', data_plata:'', descriere:'', luna: lunaDin(zi) }
   })
   const [pdf, setPdf] = useState(null)
   const [pdfVer, setPdfVer] = useState(0)            // versiunea fișierului ales: intră în cale (alt fișier = altă cale)
@@ -143,6 +147,8 @@ function FormAchizitie({ furnizoriUpa, onSalvat, onClose, setMesaj, inEpoca }) {
     if (vc.eroare) { setMesaj({ tip:'warn', text: vc.eroare }); return }
     const vf = validaFaraTva(f.valoare_fara_tva, vc.valoare)
     if (vf.eroare) { setMesaj({ tip:'warn', text: vf.eroare }); return }
+    const vp = validaPlata(f.stare_plata, f.data_plata)
+    if (vp.eroare) { setMesaj({ tip:'warn', text: vp.eroare }); return }
     if (!f.furnizor_id && !f.furnizor_nume.trim()) { setMesaj({ tip:'warn', text:'Alege furnizorul sau scrie-i numele.' }); return }
     // avertismente, nu blocări: omul confirmă că vrea să salveze așa (la reîncercare a confirmat deja)
     if (!nesigur && avertismente.length && !confirm('Atenție:\n• ' + avertismente.map(a => a.text).join('\n• ') + '\n\nSalvezi oricum?')) return
@@ -159,7 +165,8 @@ function FormAchizitie({ furnizoriUpa, onSalvat, onClose, setMesaj, inEpoca }) {
       descriere: f.descriere.trim() || null,
       document_path: cale,
       valoare_fara_tva: vf.valoare,
-      data_plata: f.data_plata || null,
+      data_plata: vp.data_plata,
+      stare_plata: vp.stare_plata,
     }
     try {
       if (cale && pdfSus.current !== cale) {
@@ -184,7 +191,7 @@ function FormAchizitie({ furnizoriUpa, onSalvat, onClose, setMesaj, inEpoca }) {
       if (st === 'refuzat') { setNesigur(false); setMesaj({ tip:'error', text: mesajRefuzAchizitie(res?.error) }); return }
       if (st === 'salvat') {
         pdfSus.current = null
-        setMesaj({ tip:'success', text:`Adăugat: ${lei(vf.valoare)} lei fără TVA pe ${fmtLuna(f.luna)}${cale ? '' : ' (fără PDF)'}${rand.data_plata ? '' : ' · data plății de completat'}${res.data.stare === 'existent' ? ' (salvarea anterioară intrase; nu s-a dublat)' : ''}` })
+        setMesaj({ tip:'success', text:`Adăugat: ${lei(vf.valoare)} lei fără TVA pe ${fmtLuna(f.luna)}${cale ? '' : ' (fără PDF)'}${rand.stare_plata ? '' : ' · plata de completat'}${res.data.stare === 'existent' ? ' (salvarea anterioară intrase; nu s-a dublat)' : ''}` })
         onSalvat(); onClose()
         return
       }
@@ -257,9 +264,16 @@ function FormAchizitie({ furnizoriUpa, onSalvat, onClose, setMesaj, inEpoca }) {
                    value={f.valoare_fara_tva} onChange={e => set('valoare_fara_tva', e.target.value)} title="Se deduce valoarea fără TVA" />
           </div>
           <div>
-            <label style={S.label}>Data plății</label>
-            <input style={S.input} type="date" value={f.data_plata} onChange={e => set('data_plata', e.target.value)}
-                   title="Factura se deduce doar dacă e plătită unității protejate până la sfârșitul lunii" />
+            <label style={S.label}>Plata</label>
+            <select style={S.input} value={f.stare_plata} onChange={e => { set('stare_plata', e.target.value); if (e.target.value !== 'platita') set('data_plata', '') }}
+                    title="Factura se deduce doar dacă e plătită unității protejate până la sfârșitul lunii">
+              <option value="">— completez mai târziu —</option>
+              <option value="platita">Plătită</option>
+              <option value="neplatita">Neplătită încă</option>
+            </select>
+            {f.stare_plata === 'platita' && (
+              <input style={{...S.input, marginTop:6}} type="date" value={f.data_plata} onChange={e => set('data_plata', e.target.value)} title="Data plății către unitatea protejată" />
+            )}
           </div>
         </div>
 
@@ -280,7 +294,7 @@ function FormAchizitie({ furnizoriUpa, onSalvat, onClose, setMesaj, inEpoca }) {
         </div>
 
         <div style={{fontSize:11.5, color:G.dim, marginBottom:12, lineHeight:1.5}}>
-          Se deduce valoarea <b>fără TVA</b>, doar dacă factura e plătită unității protejate până la sfârșitul lunii. Data plății se poate completa și mai târziu, din listă.
+          Se deduce valoarea <b>fără TVA</b>, doar dacă factura e plătită unității protejate până la sfârșitul lunii. O factură neplătită nu blochează închiderea (nu se deduce); plata necompletată o blochează. Se poate completa și mai târziu, din listă.
         </div>
 
         {avertismente.length > 0 && (
@@ -300,24 +314,32 @@ function FormAchizitie({ furnizoriUpa, onSalvat, onClose, setMesaj, inEpoca }) {
 }
 const lunaDin = (zi) => lunaDinZi(zi) || lunaDinZi(ziRO())
 
-// ─── Completarea unei achiziții (valoarea fără TVA / data plății), doar câmpurile goale ───
-// UPDATE = CAS pe câmpul gol (.is(null) + .select('id')): 0 rânduri = completat între timp sau fără drept → reîncarc (L01)
+// ─── Completarea unei achiziții (valoarea fără TVA / plata) ───
+// UPDATE = CAS pe valoarea văzută (.is(null) / .eq('stare_plata', 'neplatita') + .select('id')): 0 rânduri = schimbat între timp sau fără
+//   drept → reîncarc (L01). Plata: necompletată -> plătită (cu data) sau neplătită; neplătită -> plătită.
 function CompletareAchizitie({ a, onGata, setMesaj, inEpoca }) {
   const [tva, setTva] = useState('')
   const [plata, setPlata] = useState('')
   const [lucrez, setLucrez] = useState(false)
-  const salveaza = async (camp) => {
+  const salveaza = async (ce) => {
     if (lucrez) return
-    let val
-    if (camp === 'valoare_fara_tva') { const v = validaFaraTva(tva, a.valoare); if (v.eroare) { setMesaj({ tip:'warn', text: v.eroare }); return } val = v.valoare }
-    else { if (!/^\d{4}-\d{2}-\d{2}$/.test(plata)) { setMesaj({ tip:'warn', text:'Alege data plății.' }); return } val = plata }
+    let schimbare, mesajOk
+    if (ce === 'valoare_fara_tva') {
+      const v = validaFaraTva(tva, a.valoare); if (v.eroare) { setMesaj({ tip:'warn', text: v.eroare }); return }
+      schimbare = { valoare_fara_tva: v.valoare }; mesajOk = `Valoarea fără TVA: ${lei(v.valoare)} lei.`
+    } else {
+      const v = validaPlata(ce, plata); if (v.eroare) { setMesaj({ tip:'warn', text: v.eroare }); return }
+      schimbare = v; mesajOk = ce === 'platita' ? `Plătită pe ${fmtData(v.data_plata)}.` : 'Marcată neplătită (nu se deduce dacă nu se plătește în lună).'
+    }
     setLucrez(true)
     try {
-      const { data, error } = await supabase.from('upa_achizitii').update({ [camp]: val }).eq('id', a.id).is(camp, null).select('id')
+      let q = supabase.from('upa_achizitii').update(schimbare).eq('id', a.id)
+      q = ce === 'valoare_fara_tva' ? q.is('valoare_fara_tva', null) : a.stare_plata == null ? q.is('stare_plata', null) : q.eq('stare_plata', a.stare_plata)
+      const { data, error } = await q.select('id')
       if (!inEpoca()) return
       if (error) { setMesaj({ tip:'error', text:'Nu am putut completa: ' + (error.message || error.code) }); return }
       if ((data || []).length !== 1) { setMesaj({ tip:'warn', text:'Nu s-a schimbat nimic (completat între timp sau fără drept). Am reîncărcat lista.' }); onGata(); return }
-      setMesaj({ tip:'success', text: camp === 'valoare_fara_tva' ? `Valoarea fără TVA: ${lei(val)} lei.` : `Plătită pe ${fmtData(val)}.` })
+      setMesaj({ tip:'success', text: mesajOk })
       onGata()
     } catch (e) { if (inEpoca()) setMesaj({ tip:'error', text:'Nu știu dacă s-a salvat: ' + (e.message || e) + '. Reîncarc lista.' }); onGata() }
     finally { setLucrez(false) }
@@ -331,31 +353,69 @@ function CompletareAchizitie({ a, onGata, setMesaj, inEpoca }) {
           <button onClick={() => salveaza('valoare_fara_tva')} disabled={lucrez} style={{...S.btnS, padding:'2px 7px', fontSize:11}}>✓</button>
         </span>
       )}
-      {a.data_plata == null && (
+      {a.stare_plata !== 'platita' && (
         <span style={{display:'flex', gap:4, alignItems:'center'}}>
           <input style={{...mic, width:130}} type="date" value={plata} onChange={e => setPlata(e.target.value)} disabled={lucrez} title="Data plății către unitatea protejată" />
-          <button onClick={() => salveaza('data_plata')} disabled={lucrez} style={{...S.btnS, padding:'2px 7px', fontSize:11}}>plătită ✓</button>
+          <button onClick={() => salveaza('platita')} disabled={lucrez} style={{...S.btnS, padding:'2px 7px', fontSize:11}}>plătită ✓</button>
+          {a.stare_plata == null && <button onClick={() => salveaza('neplatita')} disabled={lucrez} style={{...S.btnS, padding:'2px 7px', fontSize:11}} title="Știm că nu e plătită: nu se deduce, dar nu blochează închiderea">neplătită</button>}
         </span>
       )}
     </div>
   )
 }
 
-// ─── Detaliul NMA pe angajat (owner) ───
-function DetaliuNma({ luna, onClose }) {
+// ─── Detaliul NMA pe angajat + corecțiile HR (owner) ───
+// Corecțiile (normă / administrator / suspendare fără cod de pontaj, pe interval) le scrie doar owner-ul, prin RPC; o lună închisă nu se
+//   mai atinge (UPA03), suprapunerile se refuză (UPA05). L24: citirea și acțiunile se aplică doar în generația și epoca lor.
+const FORM_PERIOADA = { employee_id:'', de_la:'', pana_la:'', norma:'', administrator:'', suspendat:false, nota:'' }
+function DetaliuNma({ luna, onClose, onSchimbat, setMesaj, inEpoca }) {
   const [d, setD] = useState(null)
   const [err, setErr] = useState(null)
+  const [reload, setReload] = useState(0)
+  const [form, setForm] = useState(null)
+  const [lucrez, setLucrez] = useState(false)
+  const gen = useRef(0)
   useEffect(() => {
-    let viu = true
-    supabase.rpc('fn_upa_calcul_detaliu', { p_luna: luna }).then(({ data, error }) => { if (!viu) return; if (error) setErr(error.message || error.code); else setD(data) },
-      e => { if (viu) setErr(e.message || String(e)) })
-    return () => { viu = false }
-  }, [luna])
+    const g = ++gen.current
+    setErr(null)
+    supabase.rpc('fn_upa_calcul_detaliu', { p_luna: luna }).then(({ data, error }) => { if (g !== gen.current) return; if (error) setErr(error.message || error.code); else setD(data) },
+      e => { if (g === gen.current) setErr(e.message || String(e)) })
+    return () => { gen.current++ }
+  }, [luna, reload])
   const rand = lst(d?.angajati)
+  const perioade = lst(d?.perioade)
   const total = rand.reduce((s, x) => s + Number(x.contributie || 0), 0)
+  const fara = rand.filter(x => Number(x.zile_fara_pontaj) > 0)
+  const nr = v => Number(v || 0) ? Number(v).toLocaleString('ro-RO', { maximumFractionDigits:4 }) : ''
+  const adauga = async () => {
+    if (lucrez || !form) return
+    const v = validaPerioada(form)
+    if (v.eroare) { setMesaj({ tip:'warn', text: v.eroare }); return }
+    setLucrez(true)
+    try {
+      const { error } = await supabase.rpc('fn_upa_perioada_adauga', v)
+      if (!inEpoca()) return
+      if (error) { setMesaj({ tip:'error', text: mesajPerioada(error) }); return }
+      setMesaj({ tip:'success', text:'Corecția HR a fost înregistrată.' }); setForm(null); setReload(x => x + 1); onSchimbat()
+    } catch (e) { if (inEpoca()) setMesaj({ tip:'error', text:'Nu știu dacă s-a salvat: ' + (e.message || e) + '. Reîncarc.' }); setReload(x => x + 1) }
+    finally { setLucrez(false) }
+  }
+  const sterge = async (p) => {
+    if (lucrez || !confirm(`Ștergi corecția pentru ${p.nume || '#' + p.employee_id} (${fmtData(p.de_la)} – ${fmtData(p.pana_la)})?`)) return
+    setLucrez(true)
+    try {
+      const { data, error } = await supabase.rpc('fn_upa_perioada_sterge', { p_id: p.id })
+      if (!inEpoca()) return
+      if (error) { setMesaj({ tip:'error', text: mesajPerioada(error) }); return }
+      setMesaj({ tip: Number(data?.sters) === 1 ? 'success' : 'warn', text: Number(data?.sters) === 1 ? 'Corecția a fost ștearsă.' : 'Corecția era deja ștearsă.' })
+      setReload(x => x + 1); onSchimbat()
+    } catch (e) { if (inEpoca()) setMesaj({ tip:'error', text:'Nu știu dacă s-a șters: ' + (e.message || e) + '. Reîncarc.' }); setReload(x => x + 1) }
+    finally { setLucrez(false) }
+  }
+  const th = h => <th key={h} style={{padding:'5px 6px', borderBottom:`1px solid ${G.border}`}}>{h}</th>
   return (
     <div onClick={onClose} style={{position:'fixed', inset:0, background:'#000A', zIndex:900, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
-      <div onClick={e => e.stopPropagation()} style={{...S.card, width:'min(820px, 96vw)', maxHeight:'86vh', overflow:'auto', padding:20}}>
+      <div onClick={e => e.stopPropagation()} style={{...S.card, width:'min(980px, 97vw)', maxHeight:'88vh', overflow:'auto', padding:20}}>
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12}}>
           <div style={{fontSize:16, fontWeight:800}}>👥 Numărul mediu de angajați · {fmtLuna(luna)}{d ? (d.definitiv ? ' · închis' : ' · calcul de acum') : ''}</div>
           <button onClick={onClose} style={{...S.btnS, padding:'3px 9px'}}>✕</button>
@@ -364,24 +424,81 @@ function DetaliuNma({ luna, onClose }) {
         {!d && !err && <div style={{color:G.muted, fontSize:13}}>Se încarcă…</div>}
         {d && (
           <>
-            <div style={{fontSize:12, color:G.muted, marginBottom:8}}>
-              (zile calcul − CFS − suspendare) × normă, pe angajat; suma {total.toLocaleString('ro-RO', { maximumFractionDigits:4 })} împărțită la zilele lunii = NMA. Administratorii nu apar.
+            <div style={{fontSize:12, color:G.muted, marginBottom:8, lineHeight:1.5}}>
+              Pe fiecare zi din contract: zilele nelucrătoare (weekend, sărbători) iau situația zilei lucrătoare dinainte. Nu se numără zilele de CFS,
+              de suspendare (CM, BO, BP, AM, maternitate sau corecție HR) și cele ca administrator. Contribuția = suma normelor zilelor numărate;
+              total {total.toLocaleString('ro-RO', { maximumFractionDigits:4 })} împărțit la zilele lunii = NMA.
             </div>
+            {fara.length > 0 && (
+              <div style={{fontSize:12, color:G.red, marginBottom:8}}>⛔ Fără pontaj în zile lucrătoare: {fara.map(x => `${x.nume || '#' + x.employee_id} (${x.zile_fara_pontaj})`).join(', ')}.</div>
+            )}
             <table style={{width:'100%', borderCollapse:'collapse', fontSize:12}}>
               <thead><tr style={{color:G.muted, textAlign:'left'}}>
-                {['Angajat', 'Zile calcul', 'CFS', 'Suspendare', 'Normă', 'Contribuție'].map(h => <th key={h} style={{padding:'5px 6px', borderBottom:`1px solid ${G.border}`}}>{h}</th>)}
+                {['Angajat', 'Zile contract', 'CFS', 'Suspendare', 'Administrator', 'Fără efectiv', 'Numărate', 'Contribuție'].map(th)}
               </tr></thead>
               <tbody>{rand.map(x => (
                 <tr key={x.employee_id} style={{borderBottom:`1px solid ${G.border2}`}}>
-                  <td style={{padding:'4px 6px'}}>{x.nume || '#' + x.employee_id}{x.fara_data_angajare ? <span style={{color:G.yellow}}> · fără dată angajare</span> : null}{x.fara_norma ? <span style={{color:G.yellow}}> · fără normă</span> : null}</td>
+                  <td style={{padding:'4px 6px'}}>{x.nume || '#' + x.employee_id}
+                    {x.fara_data_angajare ? <span style={{color:G.red}}> · fără dată angajare</span> : null}
+                    {x.fara_norma ? <span style={{color:G.red}}> · fără normă</span> : null}
+                    {x.corectii ? <span style={{color:G.purple}}> · corecție HR</span> : null}</td>
                   <td style={{padding:'4px 6px'}}>{x.zile_calcul}</td>
-                  <td style={{padding:'4px 6px'}}>{x.zile_cfs || ''}</td>
-                  <td style={{padding:'4px 6px'}}>{x.zile_suspendare || ''}</td>
-                  <td style={{padding:'4px 6px'}}>{Number(x.norma).toLocaleString('ro-RO', { maximumFractionDigits:4 })}</td>
+                  <td style={{padding:'4px 6px'}}>{nr(x.zile_cfs)}</td>
+                  <td style={{padding:'4px 6px'}}>{nr(x.zile_suspendare)}</td>
+                  <td style={{padding:'4px 6px'}}>{nr(x.zile_administrator)}</td>
+                  <td style={{padding:'4px 6px'}}>{nr(x.zile_fara_efectiv)}</td>
+                  <td style={{padding:'4px 6px'}}>{x.zile_numarate}</td>
                   <td style={{padding:'4px 6px', fontVariantNumeric:'tabular-nums'}}>{Number(x.contributie).toLocaleString('ro-RO', { maximumFractionDigits:4 })}</td>
                 </tr>
               ))}</tbody>
             </table>
+
+            <div style={{marginTop:16, display:'flex', justifyContent:'space-between', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+              <div style={{fontSize:13, fontWeight:800}}>Corecții HR (normă / administrator / suspendare fără cod de pontaj)</div>
+              {!d.definitiv && !form && <button onClick={() => setForm({ ...FORM_PERIOADA, de_la: String(luna).slice(0,10) })} style={{...S.btnS, padding:'4px 10px', fontSize:12}}>➕ Corecție</button>}
+            </div>
+            <div style={{fontSize:11.5, color:G.dim, margin:'4px 0 8px', lineHeight:1.5}}>
+              ERP-ul are doar norma de azi și administratorii de azi. Dacă în lună s-a schimbat norma (act adițional), calitatea de administrator sau
+              contractul a fost suspendat fără cod în pontaj (ex. creșterea copilului), înregistrează aici intervalul, cu motivul.
+            </div>
+            {form && (
+              <div style={{display:'flex', gap:8, flexWrap:'wrap', alignItems:'flex-end', marginBottom:10, padding:10, border:`1px solid ${G.border2}`, borderRadius:8}}>
+                <label style={{flex:'1 1 200px'}}><span style={S.label}>Angajat</span>
+                  <select style={S.input} value={form.employee_id} onChange={e => setForm(f => ({ ...f, employee_id: e.target.value }))}>
+                    <option value="">— alege —</option>
+                    {rand.map(x => <option key={x.employee_id} value={x.employee_id}>{x.nume || '#' + x.employee_id}</option>)}
+                  </select></label>
+                <label style={{flex:'0 1 140px'}}><span style={S.label}>De la</span>
+                  <input style={S.input} type="date" value={form.de_la} onChange={e => setForm(f => ({ ...f, de_la: e.target.value }))} /></label>
+                <label style={{flex:'0 1 140px'}}><span style={S.label}>Până la</span>
+                  <input style={S.input} type="date" value={form.pana_la} onChange={e => setForm(f => ({ ...f, pana_la: e.target.value }))} /></label>
+                <label style={{flex:'0 1 100px'}}><span style={S.label}>Normă</span>
+                  <input style={S.input} type="number" step="0.0001" min="0" max="1" placeholder="ex. 0.5" value={form.norma} onChange={e => setForm(f => ({ ...f, norma: e.target.value }))} /></label>
+                <label style={{flex:'0 1 130px'}}><span style={S.label}>Administrator</span>
+                  <select style={S.input} value={form.administrator} onChange={e => setForm(f => ({ ...f, administrator: e.target.value }))}>
+                    <option value="">ca în ERP</option><option value="da">da</option><option value="nu">nu</option>
+                  </select></label>
+                <label style={{flex:'0 1 120px', fontSize:12, display:'flex', gap:6, alignItems:'center', paddingBottom:8}}>
+                  <input type="checkbox" checked={form.suspendat} onChange={e => setForm(f => ({ ...f, suspendat: e.target.checked }))} /> suspendat</label>
+                <label style={{flex:'1 1 220px'}}><span style={S.label}>Motiv (act / decizie) *</span>
+                  <input style={S.input} value={form.nota} maxLength={300} onChange={e => setForm(f => ({ ...f, nota: e.target.value }))} /></label>
+                <button onClick={adauga} disabled={lucrez} style={S.btnP}>Salvează</button>
+                <button onClick={() => setForm(null)} style={S.btnS}>✕</button>
+              </div>
+            )}
+            {perioade.length === 0
+              ? <div style={{fontSize:12, color:G.muted}}>Nicio corecție pentru luna asta.</div>
+              : perioade.map(p => (
+                <div key={p.id} style={{fontSize:12, padding:'5px 0', borderBottom:`1px solid ${G.border2}`, display:'flex', gap:10, alignItems:'center', flexWrap:'wrap'}}>
+                  <b>{p.nume || '#' + p.employee_id}</b>
+                  <span style={{color:G.muted}}>{fmtData(p.de_la)} – {fmtData(p.pana_la)}</span>
+                  {p.norma != null && <span>normă {Number(p.norma).toLocaleString('ro-RO', { maximumFractionDigits:4 })}</span>}
+                  {p.administrator != null && <span>{p.administrator ? 'administrator' : 'nu e administrator'}</span>}
+                  {p.suspendat && <span style={{color:G.yellow}}>suspendat</span>}
+                  <span style={{color:G.dim, flex:'1 1 200px'}}>{p.nota}</span>
+                  {!d.definitiv && <button onClick={() => sterge(p)} disabled={lucrez} style={{...S.btnS, padding:'2px 8px', fontSize:11, color:G.red, borderColor:G.red+'44'}}>✕</button>}
+                </div>
+              ))}
           </>
         )}
       </div>
@@ -520,16 +637,18 @@ export default function UnitatiProtejate({ profile }) {
     finally { setLucrez(false) }
   }
 
-  // închiderea calculului unei luni (după pontaj, fără blocaje); altfel o face rularea de dimineață
-  const inchideLuna = async (l) => {
-    if (lucrez) return
-    if (!confirm(`Închizi calculul pentru ${fmtLuna(l)}? Valorile rămân fixe (nu se mai recalculează).`)) return
+  // închiderea calculului unei luni (owner-ul, din 13 a lunii următoare, fără blocaje), pe AMPRENTA calculului afișat: dacă pontajul,
+  //   facturile sau corecțiile s-au schimbat între timp, BD-ul refuză (40001) și ecranul se reîncarcă. Cronul nu închide.
+  const inchideLuna = async (c) => {
+    if (lucrez || !c?.amprenta) return
+    const l = String(c.luna).slice(0, 10)
+    if (!confirm(`Închizi calculul pentru ${fmtLuna(l)}?\n\nConfirmi că pentru toată luna:\n• normele și administratorii din „Detaliu NMA” sunt corecte (schimbările sunt înregistrate ca corecții HR);\n• suspendările fără cod în pontaj sunt înregistrate;\n• facturile au valoarea fără TVA și plata completate.\n\nDe plată la stat: ${lei(c.de_plata)} lei până pe ${fmtData(c.termen_stat)}. Valorile rămân fixe.`)) return
     const ep = epoca.current
     setLucrez(true)
     try {
-      const { data, error } = await supabase.rpc('fn_upa_calcul_inchide', { p_luna: l })
+      const { data, error } = await supabase.rpc('fn_upa_calcul_inchide', { p_luna: l, p_amprenta: c.amprenta })
       if (!actiuneCurenta(ep)) return
-      if (error) { setMesaj({ tip:'error', text: error.code === '42501' ? 'Nu ai drept să închizi calculul.' : 'Eroare: ' + (error.message || error.code) }); return }
+      if (error) { setMesaj({ tip: error.code === '40001' ? 'warn' : 'error', text: mesajInchidere(error) }); if (error.code === '40001') incarca(); return }
       if (data?.inchis) setMesaj({ tip:'success', text: data.deja ? 'Luna era deja închisă.' : `Închis: de plată la stat ${lei(data.calcul?.de_plata)} lei până pe ${fmtData(data.calcul?.termen_stat)}.` })
       else setMesaj({ tip:'warn', text:'Nu s-a închis: ' + (lst(data?.calcul?.blocaje).map(textCod).join('; ') || 'pontajul lunii nu e încă închis') + '.' })
       incarca()
@@ -632,8 +751,8 @@ export default function UnitatiProtejate({ profile }) {
         <CifreLuna c={cur} />
         <Coduri c={cur} />
         <div style={{fontSize:11, color:G.dim, marginTop:10, lineHeight:1.5}}>
-          Previziune: se recalculează din pontaj și contracte până la închiderea pontajului (12 a lunii următoare); apoi luna se închide cu valoarea exactă.
-          Se deduce valoarea fără TVA a facturilor plătite până pe {fmtData(cur?.termen_upa)}, cel mult jumătate din contribuție; ce trece de jumătate se reportează pe lunile următoare.
+          Previziune: se recalculează din pontaj și contracte; din 13 a lunii următoare, cu datele complete, owner-ul închide luna cu valoarea exactă.
+          Se deduce valoarea fără TVA a facturilor plătite până pe {fmtData(cur?.termen_upa)}, cel mult jumătate din contribuția integrală; ce trece de jumătate se reportează pe lunile următoare.
         </div>
       </div>
 
@@ -643,13 +762,14 @@ export default function UnitatiProtejate({ profile }) {
           <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, flexWrap:'wrap'}}>
             <div style={{fontSize:13, fontWeight:800}}>Luna anterioară · {fmtLuna(ant.luna)}{insigna(ant)}</div>
             <div style={{display:'flex', gap:8}}>
-              {poateScrie === true && ant.poate_inchide === true && <button onClick={() => inchideLuna(String(ant.luna).slice(0,10))} disabled={lucrez} style={S.btnP}>🔒 Închide calculul</button>}
+              {esteOwner && ant.poate_inchide === true && <button onClick={() => inchideLuna(ant)} disabled={lucrez} style={S.btnP}>🔒 Închide calculul</button>}
+              {!esteOwner && ant.poate_inchide === true && <span style={{fontSize:11, color:G.dim, alignSelf:'center'}}>gata: îl închide owner-ul</span>}
               {esteOwner && <button onClick={() => setDetaliu(String(ant.luna).slice(0,10))} style={S.btnS}>👥 Detaliu NMA</button>}
             </div>
           </div>
           <div style={{fontSize:12.5, color: tonCuloare(stareCalculLuna(ant).ton), marginTop:6, fontWeight:600}}>{stareCalculLuna(ant).text}</div>
-          {ant.stare === 'definitiv' && esteNumar(ant.achizitii_acum) && Math.abs(Number(ant.achizitii_acum) - Number(ant.achizitii_fara_tva)) >= 0.005 && (
-            <div style={{fontSize:12, color:G.yellow, marginTop:4}}>⚠️ Achizițiile lunii s-au schimbat după închidere: acum {lei(ant.achizitii_acum)} lei fără TVA (la închidere {lei(ant.achizitii_fara_tva)}). Calculul închis nu se schimbă — vorbește cu contabilul.</div>
+          {ant.stare === 'definitiv' && (ant.surse_schimbate?.achizitii === true || ant.surse_schimbate?.angajati === true) && (
+            <div style={{fontSize:12, color:G.yellow, marginTop:4}}>⚠️ După închidere s-au schimbat {[ant.surse_schimbate?.achizitii ? `facturile lunii (acum ${lei(ant.achizitii_acum)} lei fără TVA, la închidere ${lei(ant.achizitii_fara_tva)})` : '', ant.surse_schimbate?.angajati ? 'datele de pontaj / contract ale lunii' : ''].filter(Boolean).join(' și ')}. Calculul închis nu se schimbă — vorbește cu contabilul.</div>
           )}
           <CifreLuna c={ant} />
           <Coduri c={ant} />
@@ -706,8 +826,8 @@ export default function UnitatiProtejate({ profile }) {
               : <>Nicio achiziție înregistrată în {fmtLuna(lunaSel + '-01')}.</>}
           </div>
         ) : achizitiiLuna.map(a => {
-          const lip = a.valoare_fara_tva == null || a.data_plata == null
-          const tarziu = a.data_plata && String(a.data_plata).slice(0,7) > String(a.luna).slice(0,7)
+          const lip = a.valoare_fara_tva == null || a.stare_plata !== 'platita'
+          const pl = textPlata(a)
           return (
             <div key={a.id} style={{padding:'10px 16px', borderBottom:`1px solid ${G.border2}`, display:'grid', gridTemplateColumns:'1fr 100px 70px 110px 110px 44px', gap:10, alignItems:'center'}}>
               <div style={{minWidth:0}}>
@@ -715,8 +835,7 @@ export default function UnitatiProtejate({ profile }) {
                 <div style={{fontSize:11, color:G.dim}}>
                   {a.numar_factura ? 'Factura ' + a.numar_factura : <span style={{color:G.yellow}}>fără număr</span>}{a.descriere ? ' · ' + a.descriere : ''}
                   {a.data_factura && String(a.data_factura).slice(0,7) !== String(a.luna).slice(0,7) && <span style={{color:G.yellow}}> · factură din altă lună</span>}
-                  {a.data_plata ? <span style={{color: tarziu ? G.red : G.dim}}> · plătită {fmtData(a.data_plata)}{tarziu ? ' (după sfârșitul lunii: nu se deduce)' : ''}</span>
-                    : <span style={{color:G.yellow}}> · neplătită / data plății necompletată</span>}
+                  <span style={{color: tonCuloare(pl.ton) === G.muted ? G.dim : tonCuloare(pl.ton)}}> · {pl.text}</span>
                 </div>
                 {lip && poateScrie === true && <CompletareAchizitie a={a} setMesaj={setMesaj} onGata={incarca} inEpoca={(ep => () => actiuneCurenta(ep))(epoca.current)} />}
               </div>
@@ -828,7 +947,8 @@ export default function UnitatiProtejate({ profile }) {
         <FormAchizitie furnizoriUpa={furnizori} setMesaj={setMesaj} inEpoca={() => actiuneCurenta(formAch.ep)}
                        onSalvat={incarca} onClose={() => setFormAch(false)} />
       )}
-      {detaliu && esteOwner && <DetaliuNma luna={detaliu} onClose={() => setDetaliu(null)} />}
+      {detaliu && esteOwner && <DetaliuNma luna={detaliu} onClose={() => setDetaliu(null)} onSchimbat={incarca} setMesaj={setMesaj}
+                                           inEpoca={(ep => () => actiuneCurenta(ep))(epoca.current)} />}
 
       {/* Citește Orice pe destinația UPA: arunci factura, AI extrage furnizor/număr/
           valoare, completezi valoarea fără TVA, confirmi → intră în calcul cu PDF-ul ca dovadă. */}

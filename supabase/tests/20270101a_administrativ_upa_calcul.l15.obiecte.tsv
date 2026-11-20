@@ -1,24 +1,43 @@
 # 20270101a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
 coloana	coloana public.upa_achizitii.data_plata	creat
+coloana	coloana public.upa_achizitii.stare_plata	creat
 coloana	coloana public.upa_achizitii.valoare_fara_tva	creat
+coloana	coloana public.upa_angajat_perioade.administrator	creat
+coloana	coloana public.upa_angajat_perioade.de_la	creat
+coloana	coloana public.upa_angajat_perioade.employee_id	creat
+coloana	coloana public.upa_angajat_perioade.id	creat
+coloana	coloana public.upa_angajat_perioade.norma	creat
+coloana	coloana public.upa_angajat_perioade.nota	creat
+coloana	coloana public.upa_angajat_perioade.pana_la	creat
+coloana	coloana public.upa_angajat_perioade.setat_de	creat
+coloana	coloana public.upa_angajat_perioade.setat_la	creat
+coloana	coloana public.upa_angajat_perioade.suspendat	creat
 coloana	coloana public.upa_calcul_angajat.contributie	creat
 coloana	coloana public.upa_calcul_angajat.employee_id	creat
 coloana	coloana public.upa_calcul_angajat.luna	creat
-coloana	coloana public.upa_calcul_angajat.norma	creat
+coloana	coloana public.upa_calcul_angajat.zile_administrator	creat
 coloana	coloana public.upa_calcul_angajat.zile_calcul	creat
 coloana	coloana public.upa_calcul_angajat.zile_cfs	creat
+coloana	coloana public.upa_calcul_angajat.zile_fara_efectiv	creat
+coloana	coloana public.upa_calcul_angajat.zile_numarate	creat
 coloana	coloana public.upa_calcul_angajat.zile_suspendare	creat
 coloana	coloana public.upa_calcul_lunar.achizitii_fara_tva	creat
+coloana	coloana public.upa_calcul_lunar.amprenta	creat
+coloana	coloana public.upa_calcul_lunar.amprenta_achizitii	creat
+coloana	coloana public.upa_calcul_lunar.amprenta_angajati	creat
 coloana	coloana public.upa_calcul_lunar.angajati_handicap	creat
 coloana	coloana public.upa_calcul_lunar.avertismente	creat
+coloana	coloana public.upa_calcul_lunar.confirmat_de	creat
 coloana	coloana public.upa_calcul_lunar.de_plata	creat
 coloana	coloana public.upa_calcul_lunar.deducere	creat
 coloana	coloana public.upa_calcul_lunar.inchis_la	creat
+coloana	coloana public.upa_calcul_lunar.jumatate	creat
 coloana	coloana public.upa_calcul_lunar.locuri	creat
 coloana	coloana public.upa_calcul_lunar.luna	creat
 coloana	coloana public.upa_calcul_lunar.nma	creat
 coloana	coloana public.upa_calcul_lunar.nr_achizitii	creat
 coloana	coloana public.upa_calcul_lunar.nr_angajati	creat
+coloana	coloana public.upa_calcul_lunar.posturi	creat
 coloana	coloana public.upa_calcul_lunar.report_iesit	creat
 coloana	coloana public.upa_calcul_lunar.report_intrat	creat
 coloana	coloana public.upa_calcul_lunar.salariu_minim	creat
@@ -34,6 +53,14 @@ coloana	coloana public.upa_parametri.setat_la	creat
 coloana	coloana public.upa_parametri.sursa	creat
 coloana	coloana public.upa_parametri.valoare	creat
 constrangere	constrangere tabel public.upa_achizitii.upa_achizitii_fara_tva_interval	creat
+constrangere	constrangere tabel public.upa_achizitii.upa_achizitii_stare_plata	creat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_fel	schimbat
+constrangere	constrangere tabel public.upa_alerta_jurnal.upa_alerta_jurnal_forma_cheie	schimbat
+constrangere	constrangere tabel public.upa_angajat_perioade.upa_angajat_perioade_ceva	creat
+constrangere	constrangere tabel public.upa_angajat_perioade.upa_angajat_perioade_interval	creat
+constrangere	constrangere tabel public.upa_angajat_perioade.upa_angajat_perioade_norma	creat
+constrangere	constrangere tabel public.upa_angajat_perioade.upa_angajat_perioade_nota	creat
+constrangere	constrangere tabel public.upa_angajat_perioade.upa_angajat_perioade_pkey	creat
 constrangere	constrangere tabel public.upa_calcul_angajat.upa_calcul_angajat_luna_fkey	creat
 constrangere	constrangere tabel public.upa_calcul_angajat.upa_calcul_angajat_pk	creat
 constrangere	constrangere tabel public.upa_calcul_angajat.upa_calcul_angajat_valori	creat
@@ -50,29 +77,47 @@ constrangere	constrangere tabel public.upa_parametri.upa_parametri_prima_zi	crea
 constrangere	constrangere tabel public.upa_parametri.upa_parametri_sursa	creat
 constrangere	constrangere tabel public.upa_parametri.upa_parametri_valoare	creat
 functie	functie public.fn_upa_achizitie_adauga(uuid,jsonb)	schimbat
+functie	functie public.fn_upa_achizitii_intentie()	schimbat
 functie	functie public.fn_upa_alerta_inscrie(text,date,date,numeric,numeric,numeric,integer,text[],integer,text)	schimbat
 functie	functie public.fn_upa_alerta_proba()	schimbat
 functie	functie public.fn_upa_alerta_rezerva_la(date)	schimbat
+functie	functie public.fn_upa_amprenta_achizitii(date)	creat
 functie	functie public.fn_upa_calcul_detaliu(date)	creat
-functie	functie public.fn_upa_calcul_inchide(date)	creat
-functie	functie public.fn_upa_calcul_inchide_la(date,date)	creat
+functie	functie public.fn_upa_calcul_inchide(date,text)	creat
+functie	functie public.fn_upa_calcul_inchide_la(date,date,text,uuid)	creat
 functie	functie public.fn_upa_calcul_la(date,date,integer)	creat
-functie	functie public.fn_upa_campuri_intentie()	schimbat
+functie	functie public.fn_upa_calendar_lipsa(integer)	creat
+functie	functie public.fn_upa_campuri_intentie_v2()	creat
+functie	functie public.fn_upa_cauza_cod(text)	creat
+functie	functie public.fn_upa_hash_intentie_v2(jsonb)	creat
 functie	functie public.fn_upa_inceput_calcul()	creat
 functie	functie public.fn_upa_nma_angajati(date)	creat
 functie	functie public.fn_upa_parametru_la(text,date)	creat
 functie	functie public.fn_upa_parametru_seteaza(text,date,numeric,numeric,text)	creat
+functie	functie public.fn_upa_perioada_adauga(integer,date,date,numeric,boolean,boolean,text)	creat
+functie	functie public.fn_upa_perioada_sterge(bigint)	creat
 functie	functie public.fn_upa_pontaj_inchis(date,date)	creat
+functie	functie public.fn_upa_rand_amprenta(integer,integer,integer,integer,integer,integer,integer,numeric)	creat
 functie	functie public.fn_upa_situatie(date,integer)	creat
+functie	functie public.fn_upa_situatie_la(date,integer)	creat
+functie	functie public.fn_upa_termen_stat(date)	creat
+functie	functie public.fn_upa_zi_lucratoare(date)	creat
+politica	politica public.upa_angajat_perioade.upa_angajat_perioade_citire_owner	creat
 politica	politica public.upa_calcul_angajat.upa_calcul_angajat_citire_owner	creat
 politica	politica public.upa_calcul_lunar.upa_calcul_lunar_citire	creat
 politica	politica public.upa_parametri.upa_parametri_citire	creat
+relatie	relatie public.upa_angajat_perioade	creat
+relatie	relatie public.upa_angajat_perioade_angajat_idx	creat
+relatie	relatie public.upa_angajat_perioade_id_seq	creat
+relatie	relatie public.upa_angajat_perioade_pkey	creat
 relatie	relatie public.upa_calcul_angajat	creat
 relatie	relatie public.upa_calcul_angajat_pk	creat
 relatie	relatie public.upa_calcul_lunar	creat
 relatie	relatie public.upa_calcul_lunar_pkey	creat
 relatie	relatie public.upa_parametri	creat
 relatie	relatie public.upa_parametri_pk	creat
+tip	tip public.upa_angajat_perioade	creat
+tip	tip public.upa_angajat_perioade[]	creat
 tip	tip public.upa_calcul_angajat	creat
 tip	tip public.upa_calcul_angajat[]	creat
 tip	tip public.upa_calcul_lunar	creat
