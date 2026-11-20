@@ -577,8 +577,8 @@ describe('r3: bucățile cu elemente respinse la validare păstrează semnalele 
   })
   it('migrarea: „ok” cere respinse = 0, „incomplet” respinse ≥ 1 (CHECK + închiderea); comportamentul e probat în PGlite', () => {
     expect(MIG).toContain("CHECK (stare IN ('rezervat', 'ok', 'incomplet', 'eroare', 'necunoscut'))")
-    expect(MIG).toContain("OR (stare = 'ok' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse = 0 AND")
-    expect(MIG).toContain("OR (stare = 'incomplet' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse >= 1 AND")
+    expect(MIG).toContain("OR (stare = 'ok' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse IS NOT NULL AND respinse = 0 AND")
+    expect(MIG).toContain("OR (stare = 'incomplet' AND inchis_la IS NOT NULL AND semnale IS NOT NULL AND respinse IS NOT NULL AND respinse >= 1 AND")
     expect(MIG).toContain("     OR (p_stare = 'ok' AND p_respinse IS DISTINCT FROM 0)")
   })
 })
