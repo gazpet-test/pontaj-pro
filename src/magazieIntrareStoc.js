@@ -4,11 +4,13 @@
 // Fără coloane noi: urma intrării (cantitate, factură, furnizor, preț, data) e o linie adăugată la `observatii`.
 import { normalizeazaNumar } from './eipIntrareLogica.js'
 import { dataCalendaristicaValida } from './magazieEipLogica.js'
+import { paginareKeyset } from './hrDeciziiUtil.js'
 
 const LIMITA_TEXT = { facturaNr: 60, furnizor: 120 }
 
-// „1.000” poate fi o mie (scriere românească) sau 1 (punct zecimal): refuzăm în loc să ghicim.
-const ambiguuMii = text => /^\d{1,3}\.\d{3}$/.test(String(text ?? '').trim())
+// „1.000” scris de om poate fi o mie (scriere românească) sau 1 (punct zecimal): refuzăm în loc să ghicim.
+// Doar TEXTUL e ambiguu: un număr deja citit din formular (1,001 → 1.001) nu se mai reinterpretează (r2 P3).
+const ambiguuMii = valoare => typeof valoare === 'string' && /^\d{1,3}\.\d{3}$/.test(valoare.trim())
 
 // Cantitate primită: număr > 0, acceptă virgula zecimală; text / 0 / negativ / ambiguu = refuz.
 export function eroareCantitateIntrare(valoare) {
@@ -145,14 +147,29 @@ export function tintaRand(alegere, potriviri) {
 // Rezultat: { stare: 'ok'|'deja'|'conflict'|'refuzat'|'eroare'|'necunoscut', total?, mesaj? }
 const egalNr = (a, b) => a != null && b != null && Number(a) === Number(b)
 
+// r2 P4 (L04): referința e legată de CONȚINUTUL liniei (cantitate, UM, factură, furnizor, preț, data).
+// Orice apariție a „ref X” în observații înseamnă că referința a fost folosită; e „aceeași” intrare doar dacă
+// există o singură linie cu ref-ul și ea e IDENTICĂ cu linia trimisă acum. Altfel = alt conținut cu aceeași cheie → refuz.
+export function stareRef(observatii, linie, ref) {
+  const token = new RegExp(`(?:^|[^0-9A-Za-z])ref ${ref}(?![0-9A-Za-z])`)
+  const cu = String(observatii ?? '').split('\n').map(l => l.replace(/\r$/, '')).filter(l => token.test(l))
+  if (!cu.length) return 'absent'
+  return cu.length === 1 && cu[0].trim() === String(linie).trim() ? 'aceeasi' : 'alta'
+}
+export const MESAJ_REF_ALT = 'Referința acestei intrări apare deja în observații cu alt conținut (altă cantitate, factură sau dată). Nimic nu a fost scris. Închide formularul, verifică observațiile și, dacă e nevoie, deschide o intrare nouă.'
+
 export async function aplicaIntrare(db, { id, totalVazut, primit, linie, ref }) {
-  if (!ref || !String(linie || '').includes(`ref ${ref}`)) return { stare: 'eroare', mesaj: 'Linia intrării nu are referința. Redeschide formularul.' }
+  if (!/^[0-9a-f]{8}$/.test(String(ref ?? '')) || /[\r\n]/.test(String(linie ?? '')) || stareRef(linie, linie, ref) !== 'aceeasi') {
+    return { stare: 'eroare', mesaj: 'Linia intrării nu are referința. Redeschide formularul.' }
+  }
   const citeste = () => db.from('magazie_echipamente').select('id,cantitate_total,observatii,activ').eq('id', id).maybeSingle()
   const r0 = await citeste()
   if (r0.error) return { stare: 'eroare', mesaj: 'Nu am putut citi stocul curent: ' + (r0.error.message || 'eroare necunoscută') + '. Nimic nu a fost scris.' }
   const b = r0.data
   if (!b) return { stare: 'eroare', mesaj: 'Echipamentul nu mai există sau nu îl poți vedea. Reîncarcă lista.' }
-  if (String(b.observatii || '').includes(`ref ${ref}`)) return { stare: 'deja', total: b.cantitate_total }
+  const s0 = stareRef(b.observatii, linie, ref)
+  if (s0 === 'aceeasi') return { stare: 'deja', total: b.cantitate_total }
+  if (s0 === 'alta') return { stare: 'eroare', mesaj: MESAJ_REF_ALT }
   if (b.activ === false) return { stare: 'eroare', mesaj: 'Echipamentul a fost scos din evidență între timp. Reîncarcă lista.' }
   if (!egalNr(b.cantitate_total, totalVazut)) return { stare: 'conflict', total: b.cantitate_total }
   const suma = sumaStoc(b.cantitate_total, primit)
@@ -166,7 +183,9 @@ export async function aplicaIntrare(db, { id, totalVazut, primit, linie, ref }) 
   // Rezultat neconfirmat: recitim, nu reîncercăm.
   const r2 = await citeste()
   if (r2.error || !r2.data) return { stare: 'necunoscut', mesaj: 'Rezultatul nu poate fi confirmat. Reîncarcă și verifică dacă observațiile conțin „ref ' + ref + '” înainte de a reîncerca.' }
-  if (String(r2.data.observatii || '').includes(`ref ${ref}`)) return { stare: 'deja', total: r2.data.cantitate_total }
+  const s2 = stareRef(r2.data.observatii, linie, ref)
+  if (s2 === 'aceeasi') return { stare: 'deja', total: r2.data.cantitate_total }
+  if (s2 === 'alta') return { stare: 'eroare', mesaj: MESAJ_REF_ALT }
   if (r1.error) return { stare: 'eroare', mesaj: (r1.error.message || 'eroare necunoscută') + '. Nimic nu a fost scris.' }
   const neschimbat = egalNr(r2.data.cantitate_total, b.cantitate_total) && (r2.data.observatii ?? null) === (b.observatii ?? null) && r2.data.activ !== false
   if (neschimbat) return { stare: 'refuzat', mesaj: 'Scrierea nu a fost acceptată (posibil fără drept de modificare). Nimic nu a fost scris.' }
@@ -174,3 +193,55 @@ export async function aplicaIntrare(db, { id, totalVazut, primit, linie, ref }) 
 }
 
 export const MESAJ_CONFLICT = 'Stocul s-a schimbat între timp (altcineva a modificat echipamentul). Reîncarcă lista și verifică totalul înainte de a adăuga din nou.'
+
+// Validare + linia de urmă, aceeași pentru „+ Intrare” și pentru rândurile din factură.
+// `azi` vine de la apelant; la reîncercarea după un rezultat necunoscut se refolosește ziua primei încercări,
+// ca linia (deci intenția) să fie identică (r2 P4).
+export function pregatesteIntrare({ um, form, azi, ref }) {
+  const v = validareIntrare(form, azi)
+  if (!v.ok) return v
+  return { ...v, linie: linieIntrare({ cantitate: v.cantitate, um, facturaNr: v.facturaNr, facturaData: v.facturaData, furnizor: v.furnizor, pret: v.pret, dataIntrare: azi, ref }) }
+}
+
+// ── r2 P1 (L18, L23): lista COMPLETĂ de echipamente ──
+// Keyset pe id până la pagina goală (plafonul de 1000 al serverului nu mai trunchiază tăcut), apoi ordonare după denumire.
+// Eroarea se aruncă (apelantul o arată), nu devine listă goală.
+export async function citesteEchipamente(db, pas = 1000) {
+  const toate = await paginareKeyset((ultim, n) => {
+    const q = db.from('v_magazie_echipamente').select('*').order('id', { ascending: true }).limit(n)
+    return ultim == null ? q : q.gt('id', ultim)
+  }, pas)
+  return toate.sort((a, b) => String(a.denumire ?? '').localeCompare(String(b.denumire ?? ''), 'ro') || (a.id > b.id ? 1 : a.id < b.id ? -1 : 0))
+}
+
+// Înaintea inserării, rândurile „nou” se reverifică pe lista completă RECITITĂ din BD: o potrivire pe care omul nu a văzut-o
+// în ecran (listă veche sau rând apărut între timp) = refuz, nu dublură tăcută. `vazute` = id-urile arătate în ecran pentru rând.
+export function dubluriNevazute(randuri, categorie, listaProaspata) {
+  return (randuri || []).filter(r => r.tinta === 'nou').flatMap(r => {
+    const vazute = new Set((r.vazute || []).map(String))
+    const noi = potrivireExistente(r, categorie, listaProaspata, new Set()).filter(p => !vazute.has(String(p.id)))
+    return noi.length ? [{ k: r.k, denumire: r.denumire, ids: noi.map(p => p.id) }] : []
+  })
+}
+
+// ── r2 P2 (L01, L20): rândurile din factură cu țintă existentă, aplicate în ordine ──
+// Pentru ACELAȘI echipament, totalul de comparat al rândului următor = totalul scris de rândul nostru anterior (confirmat
+// prin CAS), nu cel din ecran; altfel a doua intrare intră în conflict cu prima. „deja” (aplicat la o încercare anterioară,
+// lista reîncărcată după) nu mută baza. Se oprește la primul rezultat care nu e ok/deja: { aplicate: [k...], oprit: {k, stare, mesaj} | null }.
+export async function aplicaLot(db, pasi) {
+  const baza = new Map()
+  const aplicate = []
+  for (const p of pasi) {
+    const totalVazut = baza.has(p.id) ? baza.get(p.id) : p.totalVazut
+    let r
+    try {
+      r = await aplicaIntrare(db, { id: p.id, totalVazut, primit: p.primit, linie: p.linie, ref: p.ref })
+    } catch (e) {
+      r = { stare: 'necunoscut', mesaj: `Rezultat necunoscut (${e?.message || 'eroare'}). Reîncearcă aceeași intrare.` }
+    }
+    if (r.stare === 'ok') baza.set(p.id, r.total)
+    else if (r.stare !== 'deja') return { aplicate, oprit: { k: p.k, ...r } }
+    aplicate.push(p.k)
+  }
+  return { aplicate, oprit: null }
+}
