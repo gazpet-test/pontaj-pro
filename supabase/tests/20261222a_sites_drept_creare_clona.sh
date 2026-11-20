@@ -21,22 +21,26 @@
 #
 # PAȘI (așteptările scrise de mână, independent de cod):
 #   P0 precondiții: PG ≥ 17, postgres, clona confirmată, migrarea NEaplicată, conturile (owner; titular nerestrâns cu executie editor / admin).
-#   P1 baseline L15: scripts/sites_drept_creare_amprente.sql (READ ONLY) → coloana linie_baseline → copia migrării cu blocul BASELINE completat;
-#      controalele ordinii din RPC (secvența, 0 chei străine pe executie_proiecte.site_id, triggerul de proiect automat, 0 șantiere cu 2 proiecte);
-#      triggerele lui executie_proiecte se afișează pentru review.
+#   P1 baseline L15 (runda 6: BASELINE-ul e lipit în migrare din citirea de producție): scripts/sites_drept_creare_amprente.sql (READ ONLY) pe
+#      clonă → coloana linie_baseline TREBUIE să fie identică cu blocul BASELINE din migrare (altfel clona nu e ca producția: refuz, exit 2);
+#      migrarea se aplică EXACT cum e în repo (doar fără CR). Controalele ordinii din RPC: EXACT cheia străină executie_proiecte_site_id_fkey
+#      (nedeferabilă), triggerul de proiect automat, 0 șantiere cu 2 proiecte, corpul triggerului 22f95c1e…; triggerele lui executie_proiecte se
+#      afișează pentru review.
 #   P2 concurență migrare: A ține ROW EXCLUSIVE pe sites (BEGIN; LOCK … ROW EXCLUSIVE) → runner-ul aplică → 10 (NEAPLICAT) cu BUGET_LOCK /
 #      55P03 în ~1 s; RPC-ul nu există. A: ROLLBACK.
-#   P3 aplicarea prin runner → 0 (APLICAT + ÎNREGISTRAT).
+#   P3 aplicarea prin runner → 0 (APLICAT + ÎNREGISTRAT); corpul triggerului = cel nou (constanta AMPRENTA-CORP auto din migrare).
 #   P4 comportament (tranzacție anulată): titular fără drept → 42501; INSERT direct al titularului → 42501; cu drept: proiect nou → RPC →
-#      un șantier, legat în ambele sensuri, FĂRĂ proiect automat, coloanele administrative implicite (fără coordonate); al doilea apel →
-#      același șantier, creat = false; owner → ok; proiect inexistent → P0002.
+#      un șantier, legat în ambele sensuri (cheia străină reală, triggerele reale ale lui executie_proiecte), FĂRĂ proiect automat, coloanele
+#      administrative implicite (fără coordonate); al doilea apel → același șantier, creat = false; owner fără proiect → ok + proiectul automat
+#      creat de trigger (calea de azi); proiect inexistent → P0002.
 #   P5 concurență RPC: proiect de probă + dreptul titularului (comise). A: BEGIN; RPC(proiect) → ține proiectul FOR UPDATE. B: același RPC cu
 #      lock_timeout 1 s → 55P03. A: COMMIT. B din nou → creat = false, același șantier. Exact 1 șantier pe proiect, 1 proiect pe șantier.
 #   P6 revenirea cu dreptul acordat → 10 + „dreptul santiere_creare e acordat”; dreptul se retrage (DELETE pe rândul de probă).
 #   P6b (runda 3) deriva după aplicare: GRANT EXECUTE către service_role / către PUBLIC / ALTER … STRICT → revenirea → 10 + „starea nu e cea din
 #      20261222a (pasul 1, functia)”, RPC-ul și cheia rămân; deriva se reface (REVOKE / CALLED ON NULL INPUT) și ACL-ul + strict revin exact.
 #   P7 concurență revenire: A: BEGIN; INSERT dreptul (necomis: FOR KEY SHARE pe cheie) → revenirea → 10 cu BUGET_LOCK. A: ROLLBACK.
-#   P8 revenirea → 0; RPC-ul și cheia lipsesc; baseline-ul L15 recalculat = cel din P1; șantierul din P5 rămâne, legat de proiect.
+#   P8 revenirea → 0; RPC-ul și cheia lipsesc; corpul triggerului = 22f95c1e… (cel de azi); baseline-ul L15 recalculat = cel din P1; șantierul
+#      din P5 rămâne, legat de proiect.
 #   P9 reaplicarea (istoricul clonei curățat) → 0; P4 din nou.
 set -u
 set -o pipefail
@@ -147,19 +151,31 @@ baseline_linii() { "${PS[@]}" -tA -F $'\x1f' -f "$SECT" | awk -F $'\x1f' 'NF >= 
 baseline_linii > "$D/baseline.txt"
 NB="$(grep -c . "$D/baseline.txt")"
 ok "$([ "$NB" -ge 10 ] && grep -q "'functie fn_auto_create_executie_proiect()'" "$D/baseline.txt" && grep -q "'tabel sites | triggere'" "$D/baseline.txt"; echo $?)" "baseline: $NB linii, cu triggerul de proiect automat"
-MIGB="$D/baseline/20261222a_sites_drept_creare.sql"; mkdir -p "$D/baseline" "$D/revenire"
-PLACEHOLDER="    ('DE_COMPLETAT', 'DE_COMPLETAT')"
-tr -d '\r' < "$MIG" | awk -v f="$D/baseline.txt" -v ph="$PLACEHOLDER" '$0 == ph { while ((getline l < f) > 0) print l; next } { print }' > "$MIGB"
-ok "$(grep -qxF "$PLACEHOLDER" "$MIGB"; [ $? -ne 0 ]; echo $?)" "copia migrării are blocul BASELINE completat (rândul DE_COMPLETAT înlocuit)"
+# runda 6: migrarea se aplică EXACT cum e în repo (BASELINE-ul lipit din producție); clona trebuie să aibă același baseline
+MIGB="$D/migrare/20261222a_sites_drept_creare.sql"; mkdir -p "$D/migrare" "$D/revenire"
+tr -d '\r' < "$MIG" > "$MIGB"
+awk '/^-- >>> BASELINE 20261222a/{p=1} /^-- <<< BASELINE 20261222a/{p=0} p && (/^    \(/ || /^  , \(/)' "$MIGB" > "$D/baseline_migrare.txt"
+ok "$([ "$(grep -c . "$D/baseline_migrare.txt")" -ge 10 ] && ! grep -q 'DE_COMPLETAT' "$D/baseline_migrare.txt"; echo $?)" "migrarea are blocul BASELINE lipit ($(grep -c . "$D/baseline_migrare.txt") linii)"
+if ! cmp -s "$D/baseline_migrare.txt" "$D/baseline.txt"; then
+  echo "  ── diferențe (< migrare = producție, > clona) ──"; diff "$D/baseline_migrare.txt" "$D/baseline.txt" | head -n 40
+  refuz "baseline-ul clonei diferă de BASELINE-ul revizuit din producție (blocul din migrare): clona nu e ca producția, nu aplic"
+fi
+echo "  OK  baseline-ul clonei = BASELINE-ul din migrare (producție, 20.11.2026)"
 REVC="$D/revenire/20261222a_sites_drept_creare_ROLLBACK.sql"; tr -d '\r' < "$REV" > "$REVC"
-CTRL="$(q "SELECT pg_get_serial_sequence('public.sites', 'id') IS NOT NULL,
-  (SELECT count(*) FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+AUTO_AZI="22f95c1e3f15cde32a1d2c11e3259089"
+AUTO_NOU="$(awk '/-- AMPRENTA-CORP auto/{getline; if (match($0, /corp_md5=[0-9a-f]+/)) print substr($0, RSTART + 9, RLENGTH - 9); exit}' "$MIGB")"
+ok "$([[ "$AUTO_NOU" =~ ^[0-9a-f]{32}$ ]] && [ "$AUTO_NOU" != "$AUTO_AZI" ]; echo $?)" "constanta corpului nou al triggerului din migrare: $AUTO_NOU"
+md5_auto() { q "SELECT md5(replace(prosrc, chr(13), '')) FROM pg_proc WHERE oid = to_regprocedure('public.fn_auto_create_executie_proiect()')"; }
+CTRL="$(q "SELECT (SELECT count(*) FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
     WHERE c.conrelid = 'public.executie_proiecte'::regclass AND c.contype = 'f' AND a.attname = 'site_id'),
+  EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = 'public.executie_proiecte'::regclass AND c.contype = 'f' AND c.conname = 'executie_proiecte_site_id_fkey'
+    AND c.confrelid = 'public.sites'::regclass AND pg_get_constraintdef(c.oid) = 'FOREIGN KEY (site_id) REFERENCES sites(id)'
+    AND NOT c.condeferrable AND NOT c.condeferred AND c.convalidated),
   (SELECT count(*) FROM pg_trigger tg WHERE tg.tgrelid = 'public.sites'::regclass AND tg.tgname = 'tr_auto_create_executie_proiect'
     AND tg.tgfoid = to_regprocedure('public.fn_auto_create_executie_proiect()') AND tg.tgtype = 5 AND tg.tgenabled = 'O' AND tg.tgnargs = 0 AND tg.tgqual IS NULL),
   (SELECT count(*) FROM (SELECT site_id FROM public.executie_proiecte WHERE site_id IS NOT NULL GROUP BY site_id HAVING count(*) > 1) d),
   (SELECT md5(replace(prosrc, chr(13), '')) FROM pg_proc WHERE oid = to_regprocedure('public.fn_auto_create_executie_proiect()'))")"
-egal "$CTRL" "t|0|1|0|22f95c1e3f15cde32a1d2c11e3259089" "secvență | chei străine site_id | trigger | șantiere cu 2 proiecte | corpul triggerului (md5 din 13.11)"
+egal "$CTRL" "1|t|1|0|$AUTO_AZI" "chei străine site_id | cheia exactă (nedeferabilă) | trigger | șantiere cu 2 proiecte | corpul triggerului (de azi)"
 echo "  ── triggerele lui executie_proiecte (rulează la UPDATE site_id din RPC; de citit în review) ──"
 q "SELECT '     ' || tgname || ' | ' || tgfoid::regprocedure || ' | ' || tgenabled FROM pg_trigger WHERE tgrelid = 'public.executie_proiecte'::regclass AND NOT tgisinternal ORDER BY tgname"
 
@@ -178,6 +194,7 @@ pasA A_RB 'ROLLBACK;'; inchideA
 echo "P3 aplicarea prin runner (plafon 2000)"
 livreaza "$MIGB" 20261222120000
 egal "$R_COD" "0" "APLICAT + ÎNREGISTRAT"; [ "$R_COD" = 0 ] || { printf '%s\n' "$R_OUT" | tail -n 15; exit 1; }
+egal "$(md5_auto)" "$AUTO_NOU" "corpul triggerului de proiect automat după aplicare (condiția sites.proiect_id)"
 
 # ── P4 comportament (tranzacție anulată; marcaje PROBA_OK / PROBA_NU) ──
 comportament() {
@@ -220,8 +237,11 @@ SELECT public.fn_sites_creeaza('TEST 20261222A inexistent', -1, NULL);
 ROLLBACK TO SAVEPOINT s3;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', json_build_object('sub', :'owner', 'role', 'authenticated')::text, true), set_config('request.jwt.claim.sub', :'owner', true) \gset
-SELECT (r->>'creat') AS co FROM (SELECT public.fn_sites_creeaza('TEST 20261222A owner', NULL, NULL) AS r) x \gset
+SELECT (r->>'creat') AS co, (r->>'site_id') AS so FROM (SELECT public.fn_sites_creeaza('TEST 20261222A owner', NULL, NULL) AS r) x \gset
 \echo PROBA_TEXT owner_fara_proiect :co
+RESET ROLE;
+SELECT count(*) = 1 AS auto FROM public.executie_proiecte WHERE site_id = :so \gset
+\echo PROBA_BOOL owner_proiect_automat :auto
 ROLLBACK;
 SQL
 )"
@@ -232,6 +252,7 @@ SQL
   egal "$(printf '%s\n' "$out" | sed -n 's/^PROBA_BOOL coloane_implicite //p')" "t" "$et coloanele administrative implicite (fără coordonate / contract)"
   egal "$(printf '%s\n' "$out" | sed -n 's/^PROBA_STARE proiect_inexistent //p')" "P0002" "$et proiect inexistent"
   egal "$(printf '%s\n' "$out" | sed -n 's/^PROBA_TEXT owner_fara_proiect //p')" "true" "$et owner, fără proiect"
+  egal "$(printf '%s\n' "$out" | sed -n 's/^PROBA_BOOL owner_proiect_automat //p')" "t" "$et owner, fără proiect: proiectul automat creat de trigger (calea de azi)"
 }
 echo "P4 comportament (tranzacție anulată)"
 comportament P4
@@ -291,6 +312,7 @@ echo "P8 revenirea"
 livreaza "$REVC" 20261222120001
 egal "$R_COD" "0" "revenirea APLICATĂ"
 egal "$(q "SELECT to_regprocedure('public.fn_sites_creeaza(text, bigint, text)') IS NULL AND NOT EXISTS (SELECT 1 FROM public.app_modules WHERE key = 'santiere_creare')")" "t" "RPC-ul și cheia lipsesc"
+egal "$(md5_auto)" "$AUTO_AZI" "corpul triggerului de proiect automat readus (cel de azi)"
 baseline_linii > "$D/baseline_dupa.txt"
 ok "$(cmp -s "$D/baseline.txt" "$D/baseline_dupa.txt"; echo $?)" "amprenta L15 după revenire = baseline-ul din P1"
 egal "$(q "SELECT count(*) FROM public.sites s JOIN public.executie_proiecte e ON e.id = s.proiect_id AND e.site_id = s.id WHERE s.id = $SITE_A")" "1" "șantierul din P5 rămâne, legat de proiect"

@@ -9,7 +9,8 @@
 --     triggerul AFTER UPDATE trg_raport_rezumat_santier_mutat are aici un substitut (RPC-ul nu face UPDATE pe sites);
 --   * executie_proiecte: RLS-ul REAL — politica permisivă executie_proiecte_modify (ALL, auth.uid() IS NOT NULL, citită din producție) +
 --     cele patru politici RESTRICTIVE și triggerul de gardă din 20261209a, în forma pe care o generează acolo inventarul (clasa 'proiect',
---     cheia id; testul static compară textul cu șabloanele din 20261209a); fără cheie străină pe site_id (ca în producție). Garda izometriei
+--     cheia id; testul static compară textul cu șabloanele din 20261209a); runda 6: CU cheia străină reală pe site_id (ca în producție, citită
+--     20.11.2026; citirea din 13.11 care spunea „fără cheie” era greșită). Garda izometriei
 --     (trg_proiecte_izo_site, BEFORE UPDATE OF site_id) are un substitut: pe clonă rulează cea reală;
 --   * user_module_access / app_modules: coloanele și constrângerile reale (FK pe app_modules.key, CHECK pe nivel, UNIQUE pe cont + modul).
 -- Funcțiile de drept Execuție (fn_executie_proiect_permis, callee-urile și garda) le adaugă harness-ul, extrase EXACT din 20261209a, între
@@ -76,6 +77,10 @@ CREATE TABLE public.sites (
   localitate_meteo text,
   meteo_activ boolean NOT NULL DEFAULT true
 );
+-- cheia străină REALĂ pe executie_proiecte.site_id (citită pe producție 20.11.2026: executie_proiecte_site_id_fkey, FOREIGN KEY (site_id)
+-- REFERENCES sites(id), nedeferabilă, validată; din migrarea istorică faza0_executie_proiecte_link_site_contract): proba prinde astfel o ordine
+-- greșită în RPC (legătura proiect → șantier înaintea rândului din sites = 23503)
+ALTER TABLE public.executie_proiecte ADD CONSTRAINT executie_proiecte_site_id_fkey FOREIGN KEY (site_id) REFERENCES public.sites(id);
 ALTER TABLE public.sites ENABLE ROW LEVEL SECURITY;
 CREATE POLICY sites_select_authenticated ON public.sites FOR SELECT TO authenticated USING (true);
 CREATE POLICY sites_insert_owner ON public.sites FOR INSERT TO authenticated

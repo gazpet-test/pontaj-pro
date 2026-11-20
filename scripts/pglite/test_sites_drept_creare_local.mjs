@@ -21,6 +21,9 @@
 //   5. revenirea (refuzuri, aplicare → revenire → reaplicare, amprenta = baseline, șantierele create rămân) + mutanții ei; runda 3 (P2-2):
 //      deriva după aplicare (drepturi pe orice rol, proprietăți, rândul cheii) = refuz, nimic schimbat + mutanții R2–R5;
 //   6. mutanții migrării (comportament) și ai codului JS — fiecare TREBUIE să pice.
+//   Runda 6 (varianta B, cheia străină REALĂ executie_proiecte_site_id_fkey în schelet): RPC-ul inserează întâi șantierul, apoi leagă proiectul;
+//   fn_auto_create_executie_proiect primește condiția sites.proiect_id; preflight-ul cere cheia exactă; amprenta „după” = baseline + 2 diferențe;
+//   revenirea readuce corpul 22f95c1e…. Mutantul cu ordinea veche pică cu 23503; mutanții triggerului (fără condiție / condiția inversă) pică.
 // Rulare (din rădăcina repo-ului): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_sites_drept_creare_local.mjs
 // Limită: PGlite are o singură conexiune, fără timere: concurența (două apeluri pe același proiect, lock-ul NOWAIT al migrării / revenirii)
 //   și triggerele reale ale lui executie_proiecte se probează pe clona PG17: supabase/tests/20261222a_sites_drept_creare_clona.sh.
@@ -79,10 +82,15 @@ function aplica(text, lista) {
   }
   return t
 }
-// corpul RPC-ului din textul migrării + amprenta lui (la mutanții pe corp, amprenta „după” se pune pe corpul mutat)
+// corpul RPC-ului și corpul nou al triggerului de proiect automat din textul migrării + amprentele lor (la mutanții pe corpuri, amprentele
+// „după” se pun pe corpurile mutate)
 const corpFn = (t) => { const i = t.indexOf('CREATE FUNCTION public.fn_sites_creeaza('), a = t.indexOf('AS $f$', i) + 6; return t.slice(a, t.indexOf('$f$;', a)) }
-const AMP_CORP = md5(corpFn(MIG))
-const cuAmprentaCorp = (t) => t.split(AMP_CORP).join(md5(corpFn(t)))
+const corpAuto = (t) => { const i = t.indexOf('CREATE OR REPLACE FUNCTION public.fn_auto_create_executie_proiect()'), a = t.indexOf('AS $function$', i) + 13; return t.slice(a, t.indexOf('$function$;', a)) }
+const AMP_CORP = md5(corpFn(MIG)), AMP_AUTO = md5(corpAuto(MIG))
+// corpul de azi (producție, 13.11 + 20.11.2026) și amprenta rândului „functie fn_auto_create_executie_proiect()” din citirea de producție
+const AUTO_AZI = '22f95c1e3f15cde32a1d2c11e3259089', RAND_AUTO_PROD = '65ba246342e6d1594eed6152298e5c3d'
+const cuAmprentaCorp = (t) => t.split(AMP_CORP).join(md5(corpFn(t))).split(AMP_AUTO).join(md5(corpAuto(t)))
+const md5Auto = async (db) => (await db.query(`SELECT md5(replace(prosrc, chr(13), '')) AS h FROM pg_proc WHERE oid = to_regprocedure('public.fn_auto_create_executie_proiect()')`)).rows[0]?.h
 async function caRunner(db, nume, text, { plafon = 2000, marcajPlafon = true, marcaj = true } = {}) {
   const pre = plafon ? `SET transaction_timeout = ${plafon};` : 'SET transaction_timeout = 0;'
   const mp = marcajPlafon ? `SELECT set_config('gazpet.plafon_tranzactie', '${plafon}:' || txid_current(), true);` : ''
@@ -151,6 +159,12 @@ const ETICHETE = ['functie auth.uid()', 'functie fn_auto_create_executie_proiect
   'functie fn_executie_proiect_permis(bigint,boolean)', 'functie fn_schelet_sites_mutat()', 'functie fn_site_name_to_cod_intern(text)',
   'tabel sites | acl', 'tabel sites | acl coloane', 'tabel sites | politici', 'tabel sites | rls', 'tabel sites | secvente', 'tabel sites | triggere']
 ok(JSON.stringify(B0.map(r => r.eticheta)) === JSON.stringify(ETICHETE), 'baseline: etichetele așteptate — ' + B0.map(r => r.eticheta).join('; '))
+// runda 6: rândul triggerului din schelet = cel de pe producție (corp, proprietăți, drepturi), deci constantele „după” / revenire se probează
+// pe aceeași stare; cheia străină reală e în schelet
+ok(B0.find(r => r.eticheta === 'functie fn_auto_create_executie_proiect()')?.amprenta === RAND_AUTO_PROD, 'rândul fn_auto_create_executie_proiect() din schelet = cel din producție (' + RAND_AUTO_PROD + ')')
+const fk0 = (await (async () => { const db = await bazaNoua(); try { return (await db.query(`SELECT c.conname, pg_get_constraintdef(c.oid) AS d, c.condeferrable FROM pg_constraint c
+  WHERE c.conrelid = 'public.executie_proiecte'::regclass AND c.contype = 'f' AND c.confrelid = 'public.sites'::regclass`)).rows } finally { await db.close() } })())
+ok(JSON.stringify(fk0) === JSON.stringify([{ conname: 'executie_proiecte_site_id_fkey', d: 'FOREIGN KEY (site_id) REFERENCES sites(id)', condeferrable: false }]), 'schelet: cheia străină reală pe site_id ' + JSON.stringify(fk0))
 const linii = (rows) => rows.map((r, i) => (i === 0 ? '    ' : '  , ') + r.linie_baseline.replace(/^\s*,?\s*/, ''))
 const cuBaseline = (text, rows) => aplica(text, [[PLACEHOLDER, linii(rows).join('\n')]])
 const MIG_B = cuBaseline(MIG, B0)
@@ -440,6 +454,8 @@ console.log('1. migrarea aplicată (baseline pe schema falsă) + verificările p
   ok(j.some(m => /lock la \d+ ms/.test(m)) && j.some(m => /sfarsit la \d+ ms/.test(m)), 'NOTICE-urile de timp (lock / sfârșit)')
   const ak = (await db.query(`SELECT count(*)::int AS n FROM public.user_module_access WHERE module = 'santiere_creare'`)).rows[0].n
   ok(ak === 0, 'migrarea nu acordă dreptul nimănui')
+  const hA = await md5Auto(db)
+  ok(hA === AMP_AUTO && hA !== AUTO_AZI, `triggerul de proiect automat are corpul nou (${hA})`)
   const ab = await verifica(db)
   ab.forEach(a => console.log('     ' + a))
   ok(ab.length === 0, `verificările de comportament (${ab.length} abateri)`)
@@ -521,10 +537,16 @@ for (const [nume, fn, re] of [
     await db.exec(`DROP TRIGGER tr_auto_create_executie_proiect ON public.sites; CREATE TRIGGER tr_auto_create_executie_proiect AFTER INSERT ON public.sites FOR EACH ROW WHEN (NEW.active) EXECUTE FUNCTION public.fn_auto_create_executie_proiect();`)
     return aplicaMig(db, MIG_B)
   }, /triggerul tr_auto_create_executie_proiect nu e cel asteptat/],
-  ['cheie străină pe executie_proiecte.site_id (ordinea din RPC n-ar mai merge)', async (db) => {
-    await db.exec(`ALTER TABLE public.executie_proiecte ADD CONSTRAINT zz_fk_site FOREIGN KEY (site_id) REFERENCES public.sites(id);`)
-    return aplicaMig(db, MIG_B)
-  }, /executie_proiecte.site_id are cheie straina/],
+  // runda 6: cheia străină pe executie_proiecte.site_id trebuie să fie EXACT cea citită pe producție
+  ...[['a doua cheie străină pe site_id', `ALTER TABLE public.executie_proiecte ADD CONSTRAINT zz_fk_site FOREIGN KEY (site_id) REFERENCES public.sites(id);`],
+      ['cheia străină lipsă', `ALTER TABLE public.executie_proiecte DROP CONSTRAINT executie_proiecte_site_id_fkey;`],
+      ['cheia străină DEFERRABLE', `ALTER TABLE public.executie_proiecte ALTER CONSTRAINT executie_proiecte_site_id_fkey DEFERRABLE INITIALLY IMMEDIATE;`],
+      ['cheia străină cu ON DELETE SET NULL', `ALTER TABLE public.executie_proiecte DROP CONSTRAINT executie_proiecte_site_id_fkey;
+        ALTER TABLE public.executie_proiecte ADD CONSTRAINT executie_proiecte_site_id_fkey FOREIGN KEY (site_id) REFERENCES public.sites(id) ON DELETE SET NULL;`],
+      ['cheia străină sub alt nume', `ALTER TABLE public.executie_proiecte RENAME CONSTRAINT executie_proiecte_site_id_fkey TO zz_fk_site;`],
+      ['cheia străină NOT VALID', `ALTER TABLE public.executie_proiecte DROP CONSTRAINT executie_proiecte_site_id_fkey;
+        ALTER TABLE public.executie_proiecte ADD CONSTRAINT executie_proiecte_site_id_fkey FOREIGN KEY (site_id) REFERENCES public.sites(id) NOT VALID;`],
+  ].map(([n, sql]) => [n, async (db) => { await db.exec(sql); return aplicaMig(db, MIG_B) }, /cheia straina pe executie_proiecte.site_id nu e cea revizuita/]),
   ['cheia există deja (reaplicare parțială)', async (db) => { await db.exec(`INSERT INTO public.app_modules (key, name) VALUES ('santiere_creare', 'x');`); return aplicaMig(db, MIG_B) }, /reaplicare/],
   ['o supraîncărcare a RPC-ului există deja', async (db) => { await db.exec(`CREATE FUNCTION public.fn_sites_creeaza(p text) RETURNS jsonb LANGUAGE sql AS $$ SELECT NULL::jsonb $$;`); return aplicaMig(db, MIG_B) }, /reaplicare/],
 ]) {
@@ -546,7 +568,13 @@ const SCEN_L15 = [
   ['altă politică adăugată între verificări', INTRE('CREATE POLICY zz_upd ON public.sites FOR UPDATE TO authenticated USING (true);'), /starea de acces \(dupa\) difera de baseline-ul L15 revizuit: tabel sites \| politici/],
   ['drept pe tabel schimbat între verificări', INTRE('REVOKE TRUNCATE ON public.sites FROM anon;'), /starea de acces \(dupa\) difera de baseline-ul L15 revizuit: tabel sites \| acl/],
   ['trigger nou între verificări', INTRE('CREATE TRIGGER zz_t AFTER INSERT ON public.sites FOR EACH ROW EXECUTE FUNCTION public.fn_schelet_sites_mutat();'), /starea de acces \(dupa\) difera de baseline-ul L15 revizuit: tabel sites \| triggere/],
-  ['triggerul de proiect automat schimbat între verificări', INTRE(AUTO_SCHIMBAT), /starea de acces \(dupa\) difera de baseline-ul L15 revizuit: functie fn_auto_create_executie_proiect/],
+  // runda 6: corpul schimbat între verificări = refuzul gărzii de dinaintea înlocuirii (CREATE OR REPLACE doar peste corpul revizuit)
+  ['triggerul de proiect automat schimbat între verificări', INTRE(AUTO_SCHIMBAT), /corpul fn_auto_create_executie_proiect nu e cel revizuit/],
+  // proprietăți / drepturi ale triggerului schimbate între verificări (CREATE OR REPLACE le păstrează): amprenta „după” refuză
+  ['drept nou pe triggerul de proiect automat între verificări', INTRE('GRANT EXECUTE ON FUNCTION public.fn_auto_create_executie_proiect() TO authenticated;'),
+    /triggerul de proiect automat \(dupa\) are alt detaliu: .*acl=authenticated:EXECUTE, postgres/],
+  ['alt proprietar al triggerului de proiect automat între verificări', INTRE('ALTER FUNCTION public.fn_auto_create_executie_proiect() OWNER TO service_role;'),
+    /triggerul de proiect automat \(dupa\) are alt detaliu: .*proprietar=service_role/],
 ]
 for (const [nume, mut, re] of SCEN_L15) {
   const db = await bazaNoua()
@@ -561,6 +589,14 @@ for (const [nume, scen, mutPoarta] of [
   ['L3 detaliul funcției noi necomparat', [[`COMMENT ON FUNCTION public.fn_sites_creeaza(text, bigint, text) IS`,
     `ALTER FUNCTION public.fn_sites_creeaza(text, bigint, text) STRICT;\nCOMMENT ON FUNCTION public.fn_sites_creeaza(text, bigint, text) IS`]],
     [["    IF v_fn IS DISTINCT FROM 'tip=f", "    IF false AND v_fn IS DISTINCT FROM 'tip=f"]]],
+  // runda 6: detaliul triggerului de proiect automat (a doua diferență declarată)
+  ['L4 detaliul triggerului necomparat', SCEN_L15.find(s => s[0].startsWith('drept nou pe triggerul'))[1],
+    [['    IF v_auto IS DISTINCT FROM v_auto_ast\n', '    IF false AND v_auto IS DISTINCT FROM v_auto_ast\n']]],
+  // constanta „după” a triggerului legată de baseline: o constantă care diferă de baseline și prin altceva decât corpul (aici ACL-ul, cu starea
+  // potrivită ei) = refuz; fără legătură ar trece
+  ['L5 constanta triggerului nelegată de baseline', [...INTRE('REVOKE EXECUTE ON FUNCTION public.fn_auto_create_executie_proiect() FROM service_role;'),
+    ["acl=postgres:EXECUTE, service_role:EXECUTE, '\n", "acl=postgres:EXECUTE, '\n"]],
+    [['\n       OR md5(replace(v_auto_ast, ', '\n       OR false AND md5(replace(v_auto_ast, ']]],
 ]) {
   const rul = async (extra) => { const db = await bazaNoua(); try { await aplicaMig(db, aplica(MIG_B, [...scen, ...extra])); return null } catch (e) { return e.message } finally { await db.close() } }
   const mOrig = await rul([]), mMut = await rul(mutPoarta)
@@ -585,6 +621,14 @@ console.log('5. revenirea')
   ok(r.rows && g && pol === 4, 'revenirea scoate exact funcția și cheia (cele 4 politici de azi rămân)')
   const ram = (await db.query(`SELECT s.id FROM public.sites s JOIN public.executie_proiecte e ON e.site_id = s.id AND e.id = s.proiect_id WHERE s.name = 'Gazpet - Inainte de revenire'`)).rows
   ok(ram.length === 1, 'șantierul creat prin RPC înainte de revenire rămâne, legat de proiect')
+  const hR = await md5Auto(db)
+  ok(hR === AUTO_AZI, `revenirea readuce EXACT corpul de azi al triggerului (${hR})`)
+  // după revenire, calea fără proiect_id creează proiectul automat ca azi, iar o inserare cu proiect_id iar creează unul (comportamentul vechi)
+  const azi = await tx(db, {}, async ({ q }) => {
+    const s = (await q(`INSERT INTO public.sites (name, active, proiect_id) VALUES ('Gazpet - Dupa revenire', true, 3) RETURNING id`)).rows[0].id
+    return (await q(`SELECT count(*)::int AS n FROM public.executie_proiecte WHERE site_id = $1`, [s])).rows[0].n
+  })
+  ok(azi === 1, `după revenire triggerul vechi creează iar proiectul automat și pentru o inserare cu proiect_id (${azi} proiect)`)
   const b2 = await baseline(db)
   ok(JSON.stringify(b2.map(x => [x.eticheta, x.amprenta])) === JSON.stringify(B0.map(x => [x.eticheta, x.amprenta])), 'după revenire amprenta L15 = baseline-ul de dinainte')
   // re-aplicarea pe aceeași bază (proiectul 2 are acum șantier: verificările îl folosesc doar pe owner fără proiect / cu 2 → se mută pe o bază nouă)
@@ -610,6 +654,8 @@ console.log('5. revenirea')
 // runda 3 (Jakarinos r2, P2-2): deriva DUPĂ aplicare — orice drept nou pe funcție (pe ORICE rol, inclusiv PUBLIC / anon / service_role / GRANT
 // OPTION), orice proprietate schimbată, rândul cheii schimbat = revenirea refuză, nimic schimbat (funcția și cheia rămân)
 const FN_SIG = 'public.fn_sites_creeaza(text, bigint, text)'
+// corpul de azi al triggerului, exact cum îl readuce revenirea (blocul TRIGGER_AUTO_VECHI)
+const AUTO_VECHI_SQL = (() => { const i = REV.indexOf('CREATE OR REPLACE FUNCTION public.fn_auto_create_executie_proiect()'); return REV.slice(i, REV.indexOf('$function$;', i) + '$function$;'.length) })()
 const DERIVA = [
   ['GRANT EXECUTE către service_role (demonstrația Jak)', `GRANT EXECUTE ON FUNCTION ${FN_SIG} TO service_role;`, /\(pasul 1, functia\): .*acl=authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE/],
   ['GRANT EXECUTE către PUBLIC', `GRANT EXECUTE ON FUNCTION ${FN_SIG} TO PUBLIC;`, /\(pasul 1, functia\): .*acl=PUBLIC:EXECUTE, authenticated/],
@@ -627,6 +673,11 @@ const DERIVA = [
   ['rândul cheii: pe pagina de start', `UPDATE public.app_modules SET show_on_homepage = true WHERE key = 'santiere_creare';`, /\(pasul 1, cheia de modul\)/],
   ['rândul cheii: altă descriere', `UPDATE public.app_modules SET description = description || ' x' WHERE key = 'santiere_creare';`, /\(pasul 1, cheia de modul\)/],
   ['rândul cheii: sub alt părinte', `UPDATE public.app_modules SET parent_key = 'executie' WHERE key = 'santiere_creare';`, /\(pasul 1, cheia de modul\)/],
+  // runda 6: triggerul de proiect automat schimbat după aplicare (corp / drepturi / proprietăți) = revenirea nu-l suprascrie, refuză
+  ['triggerul: corpul schimbat', AUTO_SCHIMBAT, /\(pasul 1, triggerul de proiect automat\): .*corp_md5=(?!22f95c1e)/],
+  ['triggerul: corpul de azi pus de altcineva', AUTO_VECHI_SQL,/\(pasul 1, triggerul de proiect automat\): .*corp_md5=22f95c1e3f15cde32a1d2c11e3259089/],
+  ['triggerul: drept nou pentru authenticated', 'GRANT EXECUTE ON FUNCTION public.fn_auto_create_executie_proiect() TO authenticated;', /\(pasul 1, triggerul de proiect automat\): .*acl=authenticated:EXECUTE, /],
+  ['triggerul: SECURITY INVOKER', 'ALTER FUNCTION public.fn_auto_create_executie_proiect() SECURITY INVOKER;', /\(pasul 1, triggerul de proiect automat\): .*definer=false/],
 ]
 const intact = async (db) => (await db.query(`SELECT to_regprocedure('${FN_SIG}') IS NOT NULL AND EXISTS (SELECT 1 FROM public.app_modules WHERE key = 'santiere_creare') AS i`)).rows[0].i
 console.log('   deriva după aplicare (runda 3): revenirea refuză, nimic schimbat')
@@ -649,18 +700,26 @@ for (const [nume, sql, re] of DERIVA) {
 }
 console.log('   mutanții revenirii')
 for (const [nume, inl, pregatire, re] of [
-  ['R1 fără verificarea „niciun drept acordat”', [["  IF EXISTS (SELECT 1 FROM public.user_module_access WHERE module = 'santiere_creare') THEN\n    RAISE EXCEPTION '20261222a revenire: dreptul santiere_creare e acordat (user_module_access); retragerea lui e un pas separat, cu acordul owner-ului';\n  END IF;\n", '']],
+  ['R1 fără verificarea „niciun drept acordat”', [["      IF EXISTS (SELECT 1 FROM public.user_module_access WHERE module = 'santiere_creare') THEN\n        RAISE EXCEPTION '20261222a revenire: dreptul santiere_creare e acordat (user_module_access); retragerea lui e un pas separat, cu acordul owner-ului';\n      END IF;\n", '']],
     async (db) => { await db.exec(ACORDA) }, /dreptul santiere_creare e acordat/],
   ['R2 fără compararea detaliului funcției', [['    IF v_det IS DISTINCT FROM\n', '    IF false AND v_det IS DISTINCT FROM\n']],
     async (db) => { await db.exec(DERIVA.find(d => d[0] === 'corpul schimbat')[1]) }, /starea nu e cea din 20261222a/],
-  // r2: drepturile verificate doar pentru o listă de roluri (anon / PUBLIC) — un GRANT către service_role trecea (demonstrația Jak)
+  // r2: drepturile verificate doar pentru o listă de roluri (anon / PUBLIC) — un GRANT către service_role trecea (demonstrația Jak); runda 6:
+  // filtrul doar pe RPC (triggerul are legitim service_role:EXECUTE)
   ['R3 ACL-ul comparat doar pe o listă de roluri (ca în r2)', [["                  FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a), '(niciun drept)')\n           || ', corp_md5='",
-    "                  FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e WHERE e.grantee = 0 OR pg_get_userbyid(e.grantee) IN ('anon', 'authenticated', 'postgres')) a), '(niciun drept)')\n           || ', corp_md5='"]],
+    "                  FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e WHERE e.grantee = 0 OR pg_get_userbyid(e.grantee) IN ('anon', 'authenticated', 'postgres') OR p.proname <> 'fn_sites_creeaza') a), '(niciun drept)')\n           || ', corp_md5='"]],
     async (db) => { await db.exec(`GRANT EXECUTE ON FUNCTION ${FN_SIG} TO service_role;`) }, /starea nu e cea din 20261222a/],
   ['R4 o proprietate necomparată (strict)', [["|| ', strict=' || p.proisstrict::text ||", "|| ', strict=false' ||"]],
     async (db) => { await db.exec(`ALTER FUNCTION ${FN_SIG} STRICT;`) }, /starea nu e cea din 20261222a/],
   ['R5 rândul cheii necomparat (doar numărul)', [["    IF (SELECT count(*) FROM public.app_modules WHERE key = 'santiere_creare') <> 1\n       OR NOT EXISTS", "    IF (SELECT count(*) FROM public.app_modules WHERE key = 'santiere_creare') <> 1\n       OR false AND NOT EXISTS"]],
     async (db) => { await db.exec(`UPDATE public.app_modules SET show_on_homepage = true WHERE key = 'santiere_creare';`) }, /starea nu e cea din 20261222a \(pasul 1, cheia de modul\)/],
+  // runda 6: starea triggerului de dinainte de readucere necomparată — un corp schimbat de altcineva după aplicare ar fi suprascris fără urmă
+  ['R6 starea triggerului necomparată', [['    IF v_auto IS DISTINCT FROM\n         -- DETALIU-DUPA-START auto', '    IF false AND v_auto IS DISTINCT FROM\n         -- DETALIU-DUPA-START auto']],
+    async (db) => { await db.exec(AUTO_SCHIMBAT) }, /\(pasul 1, triggerul de proiect automat\)/],
+  // postcondiția: un drept pe trigger pus după aplicare, cu starea „după” necomparată (R6), ajunge în baseline-ul de după revenire → refuz
+  ['R7 postcondiția triggerului (cu R6)', [['    IF v_auto IS DISTINCT FROM\n         -- DETALIU-DUPA-START auto', '    IF false AND v_auto IS DISTINCT FROM\n         -- DETALIU-DUPA-START auto'],
+    ['      IF v_auto IS DISTINCT FROM\n           -- DETALIU-BASELINE-START auto', '      IF false AND v_auto IS DISTINCT FROM\n           -- DETALIU-BASELINE-START auto']],
+    async (db) => { await db.exec('GRANT EXECUTE ON FUNCTION public.fn_auto_create_executie_proiect() TO authenticated;') }, /\(pasul 1, triggerul de proiect automat\)/],
 ]) {
   const db = await bazaNoua()
   await aplicaMig(db, MIG_B)
@@ -671,8 +730,39 @@ for (const [nume, inl, pregatire, re] of [
   await db.close()
 }
 
+// runda 6: postcondiția revenirii pe trigger (separat de starea „după”) și readucerea corpului
+{
+  const R6 = [['    IF v_auto IS DISTINCT FROM\n         -- DETALIU-DUPA-START auto', '    IF false AND v_auto IS DISTINCT FROM\n         -- DETALIU-DUPA-START auto']]
+  const FARA_READUCERE = [[AUTO_VECHI_SQL, '']]
+  const FARA_POST = [['      IF v_auto IS DISTINCT FROM\n           -- DETALIU-BASELINE-START auto', '      IF false AND v_auto IS DISTINCT FROM\n           -- DETALIU-BASELINE-START auto']]
+  const rev = async (pregatire, mut) => {
+    const db = await bazaNoua()
+    try {
+      await aplicaMig(db, MIG_B); if (pregatire) await db.exec(pregatire)
+      let m = null; try { await revino(db, aplica(REV, mut)) } catch (e) { m = e.message }
+      return { m, h: await md5Auto(db), b: await baseline(db), g: await gol(db) }
+    } finally { await db.close() }
+  }
+  const BL0 = JSON.stringify(B0.map(x => [x.eticheta, x.amprenta]))
+  let r = await rev('GRANT EXECUTE ON FUNCTION public.fn_auto_create_executie_proiect() TO authenticated;', R6)
+  ok(/revenire post: triggerul de proiect automat nu are detaliul din baseline: .*acl=authenticated:EXECUTE/.test(r.m || '') && !r.g,
+    `R6 (starea „după” necomparată) + drept nou pe trigger: postcondiția refuză singură, nimic schimbat (${(r.m || 'NU a refuzat').slice(0, 120)})`)
+  r = await rev(null, FARA_READUCERE)
+  ok(/revenire post: triggerul de proiect automat nu are detaliul din baseline: .*corp_md5=/.test(r.m || '') && r.h === AMP_AUTO && !r.g,
+    `R8 fără readucerea corpului: postcondiția refuză, nimic schimbat (${(r.m || 'NU a refuzat').slice(0, 120)})`)
+  r = await rev(null, [...FARA_READUCERE, ...FARA_POST])
+  ok(r.m == null && r.h === AMP_AUTO && JSON.stringify(r.b.map(x => [x.eticheta, x.amprenta])) !== BL0,
+    `R9 fără readucere și fără postcondiție: revenirea „trece”, dar amprenta de după ≠ baseline (proba o prinde; corpul rămas ${r.h})`)
+}
+
 // ── 6. mutanții migrării (comportament) și ai codului JS: fiecare TREBUIE să pice ──
 console.log('6. mutanții migrării')
+// runda 6: ordinea nouă din RPC, ordinea din r2–r5 și condiția nouă din trigger (blocul exact din migrare)
+const ORDINE_NOUA = "  INSERT INTO public.sites (name, active, beneficiar_principal, proiect_id) VALUES (v_nume, true, v_benef, p_proiect) RETURNING id INTO v_site;\n  UPDATE public.executie_proiecte SET site_id = v_site WHERE id = p_proiect;\n"
+const ORDINE_VECHE = "  v_site := nextval(pg_get_serial_sequence('public.sites', 'id'));\n  UPDATE public.executie_proiecte SET site_id = v_site WHERE id = p_proiect;\n  INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id) VALUES (v_site, v_nume, true, v_benef, p_proiect);\n"
+const CONDITIE_AUTO = (() => { const i = MIG.indexOf('  -- runda 6: șantierul e creat deja legat'); return i < 0 ? '(lipsă)' : MIG.slice(i, MIG.indexOf('  END IF;\n\n', i) + '  END IF;\n\n'.length) })()
+ok(CONDITIE_AUTO.split('\n').length === 6 &&CONDITIE_AUTO.includes('  IF NEW.proiect_id IS NOT NULL THEN\n    RETURN NEW;\n  END IF;\n'), 'blocul condiției din trigger găsit (4 linii + rândul gol): ' + JSON.stringify(CONDITIE_AUTO.slice(0, 60)))
+ok(corpAuto(MIG).split(CONDITIE_AUTO).join('') === corpAuto(SCHELET) && md5(corpAuto(SCHELET)) === AUTO_AZI, 'corpul nou = corpul de azi (schelet, 22f95c1e…) + EXACT blocul condiției')
 const MUTANTI = [
   ['M1 nivel viewer acceptat (santiere_creare)', [["u.module = 'santiere_creare' AND u.access_level IN ('editor', 'admin')", "u.module = 'santiere_creare' AND u.access_level IN ('viewer', 'editor', 'admin')"]]],
   ['M2 fără verificarea proiectului (L09)', [['\n     OR public.fn_executie_proiect_permis(p_proiect, true) IS NOT TRUE THEN', ' THEN']]],
@@ -683,16 +773,23 @@ const MUTANTI = [
   ['M7 EXECUTE pentru anon', [['GRANT EXECUTE ON FUNCTION public.fn_sites_creeaza(text, bigint, text) TO authenticated;', 'GRANT EXECUTE ON FUNCTION public.fn_sites_creeaza(text, bigint, text) TO authenticated, anon;']]],
   ['M8 migrarea acordă dreptul cuiva', [['-- ── postcondiții ──', `INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('${U.CONTR}', 'santiere_creare', 'editor');\n-- ── postcondiții ──`]]],
   ['M9 identitatea nu din auth.uid() (orice rând de drept)', [["WHERE u.profile_id = v_uid AND u.module = 'santiere_creare'", "WHERE u.module = 'santiere_creare'"]]],
-  ['M10 ordinea r1 (șantierul înaintea legăturii), cu postcondiția', [["  UPDATE public.executie_proiecte SET site_id = v_site WHERE id = p_proiect;\n  INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id) VALUES (v_site, v_nume, true, v_benef, p_proiect);",
-    "  INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id) VALUES (v_site, v_nume, true, v_benef, p_proiect);\n  UPDATE public.executie_proiecte SET site_id = v_site WHERE id = p_proiect;"]]],
-  ['M11 ordinea r1 fără postcondiție (dublarea tăcută)', [["  UPDATE public.executie_proiecte SET site_id = v_site WHERE id = p_proiect;\n  INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id) VALUES (v_site, v_nume, true, v_benef, p_proiect);",
-    "  INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id) VALUES (v_site, v_nume, true, v_benef, p_proiect);\n  UPDATE public.executie_proiecte SET site_id = v_site WHERE id = p_proiect;"],
-    ['  IF v_n IS DISTINCT FROM 1 OR NOT EXISTS', '  IF false AND v_n IS DISTINCT FROM 1 OR false AND NOT EXISTS']]],
+  // runda 6: ordinea din r2–r5 (legătura proiect → șantier ÎNAINTEA rândului din sites, id din secvență) pică pe cheia străină reală: 23503
+  ['M10 ordinea r2–r5 (legătura înaintea șantierului)', [[ORDINE_NOUA, ORDINE_VECHE]], /23503/],
+  // triggerul neschimbat (corpul de azi lăsat la loc) cu ordinea nouă: proiectul automat apare la INSERT → postcondiția RPC-ului refuză
+  ['M11 triggerul neschimbat (fără condiția sites.proiect_id)', [[CONDITIE_AUTO, '']], /P0001 .*nu e unică/],
+  ['M12b triggerul neschimbat și fără postcondiție (dublarea tăcută)', [[CONDITIE_AUTO, ''], ['  IF v_n IS DISTINCT FROM 1 OR NOT EXISTS', '  IF false AND v_n IS DISTINCT FROM 1 OR false AND NOT EXISTS']], /fără proiect automat|aștepta 4: niciun proiect automat/],
+  // condiția inversată: fără proiect_id nu se mai creează proiectul automat (calea Admin / owner de azi stricată)
+  ['M17 condiția triggerului inversată', [['  IF NEW.proiect_id IS NOT NULL THEN\n    RETURN NEW;', '  IF NEW.proiect_id IS NULL THEN\n    RETURN NEW;']], /P0001 .*nu e unică|proiectul automat/],
+  // condiția lărgită: niciun proiect automat, oricum
+  ['M18 triggerul nu mai creează niciodată proiectul automat', [['  IF NEW.proiect_id IS NOT NULL THEN\n    RETURN NEW;', '  IF true THEN\n    RETURN NEW;']], /proiectul automat/],
   ['M12 fără idempotență (proiect legat = șantier nou, relegat)', [['  IF v_leg IS NOT NULL THEN\n    IF EXISTS', '  IF false THEN\n    IF EXISTS']]],
   ['M13 fără proiect permis și contului restrâns', [['\n     OR public.fn_executie_proiect_permis(p_proiect, true) IS NOT TRUE THEN', '\n     OR (p_proiect IS NOT NULL AND public.fn_executie_proiect_permis(p_proiect, true) IS NOT TRUE) THEN']]],
   ['M14 fără ocolirea owner-ului', [['NOT (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = v_uid AND p.is_owner IS TRUE)\n             OR', 'NOT (false\n             OR']]],
-  ['M15 coloane administrative în INSERT (meteo / coordonate)', [['INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id) VALUES (v_site, v_nume, true, v_benef, p_proiect);',
-    'INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id, lat, lng) VALUES (v_site, v_nume, true, v_benef, p_proiect, 44.9, 26.0);']]],
+  ['M15 coloane administrative în INSERT (meteo / coordonate)', [['INSERT INTO public.sites (name, active, beneficiar_principal, proiect_id) VALUES (v_nume, true, v_benef, p_proiect) RETURNING id INTO v_site;',
+    'INSERT INTO public.sites (name, active, beneficiar_principal, proiect_id, lat, lng) VALUES (v_nume, true, v_benef, p_proiect, 44.9, 26.0) RETURNING id INTO v_site;']]],
+  // fără proiect_id în INSERT: legătura doar într-un sens + proiectul automat creat de trigger → postcondiția refuză
+  ['M19 INSERT fără proiect_id', [['INSERT INTO public.sites (name, active, beneficiar_principal, proiect_id) VALUES (v_nume, true, v_benef, p_proiect) RETURNING id INTO v_site;',
+    'INSERT INTO public.sites (name, active, beneficiar_principal) VALUES (v_nume, true, v_benef) RETURNING id INTO v_site;']]],
   ['M16 denumirea goală acceptată', [['  IF v_nume IS NULL THEN\n', '  IF false THEN\n']]],
 ]
 // Garda de scriere a lui executie_proiecte (trg_executie_acces_garda, 20261209a) refuză și ea contul restrâns la UPDATE-ul site_id / la
@@ -707,16 +804,18 @@ const PE_PROIECT = new Set(['M2', 'M5', 'M13'])
   ok(ab.length === 0, `originalul, fără garda lui executie_proiecte: verificările trec (${ab.length} abateri)`)
   await db.close()
 }
-for (const [nume, inl] of MUTANTI) {
+// runda 6: mutanții cu al treilea element TREBUIE să pice din motivul dat (căutat în toate abaterile), nu din altul
+for (const [nume, inl, motiv] of MUTANTI) {
   const db = await bazaNoua()
   if (PE_PROIECT.has(nume.split(' ')[0])) await db.exec(FARA_GARDA)
-  let picat = null
+  let picat = null, tot = ''
   try {
     await aplicaMig(db, cuAmprentaCorp(aplica(MIG_B, inl)))
     const ab = await verifica(db)
-    if (ab.length) picat = 'verificări: ' + ab[0]
-  } catch (e) { picat = 'aplicare: ' + e.message.slice(0, 140) }
-  ok(picat != null, `${nume} pică (${picat || 'NU a picat'})`)
+    if (ab.length) { picat = 'verificări: ' + ab[0]; tot = ab.join(' | ') }
+  } catch (e) { picat = 'aplicare: ' + e.message.slice(0, 140); tot = e.message }
+  const m = motiv ? (tot.match(motiv) || [null])[0] : null
+  ok(picat != null && (!motiv || m != null), `${nume} pică (${picat || 'NU a picat'})${motiv ? ` — motivul cerut ${motiv}: ${m ? 'găsit' : 'LIPSĂ'}` : ''}`)
   await db.close()
 }
 console.log('   mutanții codului JS (src/lib/santiereDrept.js)')

@@ -17,31 +17,38 @@
 --       - ce scrie (verdict P1-2): DOAR numele, beneficiarul și legătura cu proiectul; restul coloanelor rămân pe valorile implicite ale
 --         tabelului, aceleași ca la „Adaugă Șantier” al owner-ului (fără contract, tip „santier”, fără coordonate — deci nicio prelucrare meteo,
 --         care cere lat / lng —, fără alias-uri, fără denumire QR). Nu există altă cale: INSERT-ul direct în sites rămâne doar al owner-ului.
---       - cu proiect (verdict P1-1, dublarea): totul într-o tranzacție (L02) — proiectul FOR UPDATE → id-ul nou din secvența lui sites →
---         proiect.site_id = id → INSERT în sites cu proiect_id. Triggerul existent tr_auto_create_executie_proiect (AFTER INSERT, neatins) găsește
---         astfel proiectul deja legat (site_id = NEW.id) și NU mai creează proiectul automat. Postcondiție în RPC: exact UN proiect pe șantierul
---         nou, altfel totul se anulează (o schimbare viitoare a triggerului nu poate dubla în tăcere).
+--       - cu proiect (verdict P1-1, dublarea; runda 6, varianta B): totul într-o tranzacție (L02) — proiectul FOR UPDATE → INSERT în sites cu
+--         proiect_id → proiect.site_id = id-ul nou. Ordinea vine din cheia străină REALĂ executie_proiecte_site_id_fkey (site_id → sites.id,
+--         nedeferabilă, citită pe producție 20.11.2026): legătura proiect → șantier se poate scrie doar după ce șantierul există. Triggerul existent
+--         tr_auto_create_executie_proiect (AFTER INSERT) rulează deci ÎNAINTE de legătură; funcția lui, fn_auto_create_executie_proiect, primește
+--         O SINGURĂ condiție în plus: nu creează proiectul automat când șantierul e creat deja legat de un proiect (NEW.proiect_id IS NOT NULL).
+--         Restul corpului rămâne identic; inserările fără proiect_id (Admin → Șantiere, interfața veche) creează proiectul automat ca azi.
+--         Postcondiție în RPC: exact UN proiect pe șantierul nou, altfel totul se anulează (un trigger schimbat nu poate dubla în tăcere).
 --       - idempotent pe proiect (verdict P2, L04 / L05): proiectul are deja șantierul lui (legat în ambele sensuri, de exemplu de un apel al
 --         cărui răspuns s-a pierdut) → întoarce același șantier, creat = false, nimic scris; proiect legat de ALT șantier → refuz (P0001).
 --       - fără proiect (Admin → Șantiere, cont cu drept): ca INSERT-ul owner-ului de azi (triggerul creează proiectul automat).
 -- Ce NU face: nu acordă dreptul nimănui (rândul din user_module_access îl adaugă coordonatorul, separat, cu acordul owner-ului); nu lărgește la
 --   conturile cu can_manage_contracts; nu schimbă politicile lui sites (INSERT / UPDATE / DELETE rămân ale owner-ului: interfața veche cu
---   dreptul acordat primește refuz la INSERT, nu un fals succes), drepturile pe tabel, triggerele sau vreo funcție existentă (amprenta L15).
+--   dreptul acordat primește refuz la INSERT, nu un fals succes), drepturile pe tabel sau triggerele; dintre funcțiile existente schimbă DOAR
+--   corpul lui fn_auto_create_executie_proiect (condiția de mai sus; proprietățile și drepturile ei rămân, amprenta L15 o verifică).
 --
 -- L15: amprenta COMPLETĂ (corpul AMPRENTA_L15 v1 IDENTIC, L19; testul src/sitesDreptCreareMigrare.test.js) a tabelului sites (drepturi pe tabel
 --   și coloane, RLS / FORCE, secvențe, TOATE politicile, triggerele — inclusiv tr_auto_create_executie_proiect, pe care se sprijină ordinea din
 --   RPC) și a funcțiilor din ÎNCHIDEREA TRANZITIVĂ calculată în migrare (blocul INCHIDERE_L15, identic cu cel din script; pornirea: auth.uid(),
 --   fn_executie_proiect_permis, RPC-ul nou (doar „după”) + funcțiile politicilor și triggerelor lui sites — deci și
 --   fn_auto_create_executie_proiect / fn_site_name_to_cod_intern), comparată cu BASELINE-ul din producție ÎNAINTE și DUPĂ. „După” = baseline-ul,
---   cu EXACT o diferență: funcția nouă (detaliu exact: proprietăți, drepturi, corpul revizuit). EXECUTE dinamic / limbaj neanalizabil în lanț =
---   refuz. Valorile le scoate coordonatorul cu scripts/sites_drept_creare_amprente.sql (tranzacție READ ONLY) în blocul marcat; necompletat = refuz.
---   Perimetru declarat: triggerele lui executie_proiecte (garda de acces din 20261209a, garda izometriei din 20261102a) rulează la UPDATE-ul
---   site_id din RPC, ca la UPDATE-ul direct de azi din wizard; nu sunt în amprentă (pot doar refuza), iar proba pe clonă le rulează pe cele reale.
+--   cu EXACT două diferențe: funcția nouă (detaliu exact: proprietăți, drepturi, corpul revizuit) și fn_auto_create_executie_proiect (detaliu
+--   exact, care diferă de cel din baseline DOAR prin corp_md5). EXECUTE dinamic / limbaj neanalizabil în lanț = refuz. Valorile le-a scos
+--   coordonatorul cu scripts/sites_drept_creare_amprente.sql (tranzacție READ ONLY, producție, 20.11.2026) în blocul marcat; necompletat = refuz.
+--   Perimetru declarat: triggerele lui executie_proiecte (garda de acces din 20261209a, garda izometriei din 20261102a, magazia automată,
+--   managerul automat) rulează la UPDATE-ul site_id din RPC, ca la UPDATE-ul direct de azi din wizard; nu sunt în amprentă, iar proba pe clonă
+--   le rulează pe cele reale. Cheia străină a lui executie_proiecte.site_id e verificată EXACT în $pre$ (nu e în amprentă).
 -- Livrare: DOAR cu plafon — scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000 (fără plafon = refuz în $pre$).
 --   Lock (L06): sites SHARE (oprește DDL-ul pe sites până la COMMIT, ca amprenta „după” să rămână adevărată; citirile merg), NOWAIT, reîncercat la
 --   50 ms până la 1 s de la BEGIN (peste = 55P03, nimic schimbat), după verificările de catalog; apoi rândul nou din app_modules.
 -- Revenire: supabase/revenire/20261222a_sites_drept_creare_ROLLBACK.sql (prin runner, cu plafon; refuză dacă dreptul a fost acordat cuiva;
---   șantierele create între timp rămân — sunt date ale utilizatorilor, nu obiecte ale migrării).
+--   readuce corpul EXACT de azi al lui fn_auto_create_executie_proiect, corp_md5 22f95c1e3f15cde32a1d2c11e3259089; șantierele create între
+--   timp rămân — sunt date ale utilizatorilor, nu obiecte ale migrării).
 -- Probe: scripts/pglite/test_sites_drept_creare_local.mjs (local, PGlite) și supabase/tests/20261222a_sites_drept_creare_clona.sh (clona PG17:
 --   concurență, aplicare → revenire → reaplicare; o rulează coordonatorul).
 DO $pre$
@@ -95,15 +102,18 @@ BEGIN
      OR (SELECT prorettype FROM pg_proc WHERE oid = to_regprocedure('public.fn_executie_proiect_permis(bigint, boolean)')) <> 'boolean'::regtype THEN
     RAISE EXCEPTION '20261222a: dependentele (fn_executie_proiect_permis, auth.uid) lipsesc sau difera';
   END IF;
-  -- ordinea din RPC (proiect.site_id ÎNAINTEA rândului din sites) cere: id-ul lui sites dintr-o secvență proprie, nicio cheie străină pe
-  -- executie_proiecte.site_id (ar refuza id-ul încă neinserat) și triggerul de proiect automat EXACT cel de azi (AFTER INSERT, pe rând, fără
-  -- WHEN / argumente, activ, funcția fn_auto_create_executie_proiect(); corpul ei e în baseline-ul L15)
-  IF pg_get_serial_sequence('public.sites', 'id') IS NULL THEN
-    RAISE EXCEPTION '20261222a: sites.id nu are secventa proprie (serial / identity)';
-  END IF;
-  IF EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
-              WHERE c.conrelid = 'public.executie_proiecte'::regclass AND c.contype = 'f' AND a.attname = 'site_id') THEN
-    RAISE EXCEPTION '20261222a: executie_proiecte.site_id are cheie straina (ordinea din RPC nu mai e valabila)';
+  -- ordinea din RPC (rândul din sites ÎNAINTEA legăturii proiect.site_id, runda 6) e gândită pe starea citită pe producție (20.11.2026):
+  -- EXACT o cheie străină pe executie_proiecte.site_id, executie_proiecte_site_id_fkey → sites(id), nedeferabilă, validată, fără acțiuni
+  -- (altă cheie, alt nume, altă definiție, DEFERRABLE = refuz: designul nu a fost revizuit pe acea stare), și triggerul de proiect automat
+  -- EXACT cel de azi (AFTER INSERT, pe rând, fără WHEN / argumente, activ, funcția fn_auto_create_executie_proiect(); corpul ei e în baseline-ul
+  -- L15 și e verificat din nou chiar înainte de înlocuire)
+  IF (SELECT count(*) FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+       WHERE c.conrelid = 'public.executie_proiecte'::regclass AND c.contype = 'f' AND a.attname = 'site_id') <> 1
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint c
+                     WHERE c.conrelid = 'public.executie_proiecte'::regclass AND c.contype = 'f' AND c.conname = 'executie_proiecte_site_id_fkey'
+                       AND c.confrelid = 'public.sites'::regclass AND pg_get_constraintdef(c.oid) = 'FOREIGN KEY (site_id) REFERENCES sites(id)'
+                       AND NOT c.condeferrable AND NOT c.condeferred AND c.convalidated) THEN
+    RAISE EXCEPTION '20261222a: cheia straina pe executie_proiecte.site_id nu e cea revizuita (executie_proiecte_site_id_fkey, nedeferabila)';
   END IF;
   IF (SELECT count(*) FROM pg_trigger tg WHERE tg.tgrelid = 'public.sites'::regclass AND NOT tg.tgisinternal
          AND tg.tgfoid = to_regprocedure('public.fn_auto_create_executie_proiect()')) <> 1
@@ -117,10 +127,25 @@ END $pre$;
 -- ── L15: amprenta COMPLETĂ a tabelului sites și a lanțului de funcții, verificată ÎNAINTE și DUPĂ (tiparul 20261221a) ──
 -- >>> BASELINE 20261222a — SINGURUL loc cu valori din producție: coloana linie_baseline din scripts/sites_drept_creare_amprente.sql, copiată
 --     ÎNTREAGĂ, în ordinea afișată; coloana „detaliu” de acolo intră în review. Necompletat (DE_COMPLETAT) = migrarea refuză.
+--     Lipit în runda 6 din citirea pe producție (READ ONLY, ROLLBACK) din 19.11.2026 23:37 UTC, PG 17.6: 15 rânduri.
 CREATE FUNCTION pg_temp.amp_baseline_20261222a() RETURNS TABLE (eticheta text, amprenta text)
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $bl$
   SELECT v.eticheta, v.amprenta FROM (VALUES
-    ('DE_COMPLETAT', 'DE_COMPLETAT')
+    ('functie auth.uid()', '547eb1864858f1efce909a735a04d521')
+  , ('functie fn_auto_create_executie_proiect()', '65ba246342e6d1594eed6152298e5c3d')
+  , ('functie fn_executie_acces_lista(boolean)', '8dae19e2f5e53aeaec7d4a7d360f046b')
+  , ('functie fn_executie_acces_lista_cont(uuid,boolean)', '4f382e2182a748dd9790e9f65f9cd9a5')
+  , ('functie fn_executie_acces_nerestrans()', '53dbf0d75d3f7f5d17747fef20b674a7')
+  , ('functie fn_executie_acces_nerestrans_cont(uuid)', 'bba2d110bb9df2b16d9239156f3b3607')
+  , ('functie fn_executie_proiect_permis(bigint,boolean)', 'bb8d39285aee035d640af6f7371e5476')
+  , ('functie fn_raport_rezumat_santier_mutat()', '82f2117eeaf0f3558ad8ee032ba0c115')
+  , ('functie fn_site_name_to_cod_intern(text)', '90576f5e637d8bdf9bd5873d50bcbf9a')
+  , ('tabel sites | acl', '565553b4fd23bff3761a45bfba76d27c')
+  , ('tabel sites | acl coloane', 'a0e240c36ade38bbb43163c61b36e86b')
+  , ('tabel sites | politici', '40efb11aeae2999fe40956b624c430e0')
+  , ('tabel sites | rls', '0a318f8ff8d8cc0bbd7b4b61a975f7b3')
+  , ('tabel sites | secvente', '6946ae924ed58e185eff765890b7e9cb')
+  , ('tabel sites | triggere', '2ef41238382060ca040278abe22629de')
   ) v(eticheta, amprenta)
 $bl$;
 -- <<< BASELINE 20261222a
@@ -244,12 +269,14 @@ amp_calc(eticheta, amprenta, detaliu) AS (
 -- <<< AMPRENTA_L15 v1
 SELECT c.eticheta, c.amprenta, c.detaliu FROM amp_calc c
 $amp$;
--- „înainte”: exact baseline-ul. „după”: baseline-ul cu EXACT o diferență așteptată — funcția nouă, cu detaliul exact (proprietăți, drepturi,
--- corp revizuit). Orice altă diferență (drepturi, politici, triggere, funcții din lanț) = refuz. Amprenta se calculează O DATĂ pe apel.
+-- „înainte”: exact baseline-ul. „după”: baseline-ul cu EXACT două diferențe așteptate — funcția nouă, cu detaliul exact (proprietăți, drepturi,
+-- corp revizuit), și fn_auto_create_executie_proiect, cu detaliul exact (corpul nou) care diferă de rândul ei din baseline DOAR prin corp_md5.
+-- Orice altă diferență (drepturi, politici, triggere, funcții din lanț) = refuz. Amprenta se calculează O DATĂ pe apel.
 CREATE FUNCTION pg_temp.amp_verifica_20261222a(p_moment text) RETURNS void
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $vf$
-DECLARE v_dif text; v_exec text; v_fn text;
+DECLARE v_dif text; v_exec text; v_fn text; v_auto text; v_auto_ast text;
   c_fn constant text := 'functie fn_sites_creeaza(text,bigint,text)';
+  c_auto constant text := 'functie fn_auto_create_executie_proiect()';
 BEGIN
   IF p_moment NOT IN ('inainte', 'dupa') THEN RAISE EXCEPTION '20261222a: moment necunoscut %', p_moment; END IF;
   CREATE TEMP TABLE amp_rez_20261222a ON COMMIT DROP AS SELECT * FROM pg_temp.amp_calc_20261222a();
@@ -277,17 +304,30 @@ BEGIN
     IF v_fn IS DISTINCT FROM 'tip=f, limbaj=plpgsql, definer=true, volatil=v, strict=false, leakproof=false, proprietar=postgres, '
                              || 'config=search_path=public, pg_temp, intoarce=jsonb, acl=authenticated:EXECUTE, postgres:EXECUTE, '
                              -- AMPRENTA-CORP rpc
-                             || 'corp_md5=7adb03ef93e482804b01fca31a8bd383'
+                             || 'corp_md5=5ab5b228461158157f833c4a242c1335'
                              || ', sqlbody_md5=-' THEN
       RAISE EXCEPTION '20261222a: functia noua (dupa) are alt detaliu: %', coalesce(v_fn, 'LIPSESTE');
+    END IF;
+    -- triggerul de proiect automat: detaliul exact cu corpul nou; aceleași proprietăți și drepturi ca în baseline (detaliul așteptat, cu
+    -- corp_md5 de azi pus la loc, are EXACT amprenta din baseline: singura diferență e corpul)
+    SELECT c.detaliu INTO v_auto FROM amp_rez_20261222a c WHERE c.eticheta = c_auto;
+    v_auto_ast := 'tip=f, limbaj=plpgsql, definer=true, volatil=v, strict=false, leakproof=false, proprietar=postgres, '
+                  || 'config=search_path=public, pg_temp, intoarce=trigger, acl=postgres:EXECUTE, service_role:EXECUTE, '
+                  -- AMPRENTA-CORP auto
+                  || 'corp_md5=d6b7881fdfec0d1419a173a45a764c6a'
+                  || ', sqlbody_md5=-';
+    IF v_auto IS DISTINCT FROM v_auto_ast
+       OR md5(replace(v_auto_ast, 'corp_md5=d6b7881fdfec0d1419a173a45a764c6a,', 'corp_md5=22f95c1e3f15cde32a1d2c11e3259089,'))
+          IS DISTINCT FROM (SELECT b.amprenta FROM pg_temp.amp_baseline_20261222a() b WHERE b.eticheta = c_auto) THEN
+      RAISE EXCEPTION '20261222a: triggerul de proiect automat (dupa) are alt detaliu: %', coalesce(v_auto, 'LIPSESTE');
     END IF;
   END IF;
   -- restul: EXACT baseline-ul (FULL JOIN: o funcție din lanț lipsă din baseline sau una în plus = refuz)
   SELECT string_agg(coalesce(c.eticheta, b.eticheta) || ' = ' || coalesce(c.amprenta, 'LIPSESTE') || ' (baseline ' || coalesce(b.amprenta, 'NU ARE') || ')',
                     '; ' ORDER BY coalesce(c.eticheta, b.eticheta) COLLATE "C")
     INTO v_dif
-    FROM (SELECT * FROM amp_rez_20261222a x WHERE p_moment = 'inainte' OR x.eticheta <> c_fn) c
-    FULL JOIN pg_temp.amp_baseline_20261222a() b ON b.eticheta = c.eticheta
+    FROM (SELECT * FROM amp_rez_20261222a x WHERE p_moment = 'inainte' OR x.eticheta NOT IN (c_fn, c_auto)) c
+    FULL JOIN (SELECT * FROM pg_temp.amp_baseline_20261222a() y WHERE p_moment = 'inainte' OR y.eticheta <> c_auto) b ON b.eticheta = c.eticheta
    WHERE c.amprenta IS DISTINCT FROM b.amprenta;
   IF v_dif IS NOT NULL THEN
     RAISE EXCEPTION '20261222a: starea de acces (%) difera de baseline-ul L15 revizuit: %', p_moment, v_dif;
@@ -338,10 +378,74 @@ VALUES ('santiere_creare', NULL, 'Creare șantiere', '🏗️',
         'Dreptul de a crea un șantier nou (Execuție → Proiect nou și Admin → Șantiere), cu Execuție editor / admin. Nivel editor sau admin. Nu dă drept de modificare sau ștergere. 20261222a.',
         true, false);
 
+-- ── triggerul de proiect automat: O condiție în plus (runda 6, varianta B), restul corpului identic cu cel de azi ──
+-- Înlocuirea se face DOAR peste corpul revizuit (corp_md5 22f95c1e…, verificat aici, după lock, chiar înainte de CREATE OR REPLACE); CREATE OR
+-- REPLACE păstrează proprietarul și drepturile; SECURITY DEFINER și search_path se scriu la fel ca azi. Amprenta „după” verifică detaliul exact.
+DO $auto$
+BEGIN
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.proname = 'fn_auto_create_executie_proiect') <> 1
+     OR (SELECT md5(replace(p.prosrc, chr(13), '')) FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_auto_create_executie_proiect()'))
+        IS DISTINCT FROM '22f95c1e3f15cde32a1d2c11e3259089' THEN
+    RAISE EXCEPTION '20261222a: corpul fn_auto_create_executie_proiect nu e cel revizuit (22f95c1e3f15cde32a1d2c11e3259089); nimic schimbat';
+  END IF;
+END $auto$;
+-- >>> TRIGGER_AUTO_NOU 20261222a (corpul de azi, din supabase/tests/20261222a_sites_drept_creare_schelet.sql, + blocul marcat „runda 6”)
+CREATE OR REPLACE FUNCTION public.fn_auto_create_executie_proiect()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_cod   TEXT;
+  v_nume  TEXT;
+  v_try   INTEGER := 0;
+  v_cod_final TEXT;
+BEGIN
+  -- Nu crea pentru Sediu
+  IF NEW.name ILIKE '%sediu%' THEN
+    RETURN NEW;
+  END IF;
+
+  -- Dacă există deja proiect cu același site_id, nu dubla
+  IF EXISTS (SELECT 1 FROM executie_proiecte WHERE site_id = NEW.id) THEN
+    RETURN NEW;
+  END IF;
+
+  -- runda 6: șantierul e creat deja legat de un proiect existent, prin sites.proiect_id; legătura inversă o face apelantul, nu dubla
+  IF NEW.proiect_id IS NOT NULL THEN
+    RETURN NEW;
+  END IF;
+
+  -- Generează cod_intern din nume
+  v_cod  := fn_site_name_to_cod_intern(NEW.name);
+  v_nume := UPPER(TRIM(
+    REGEXP_REPLACE(NEW.name, '^Gazpet\s*[-–]\s*', '', 'i')
+  ));
+
+  -- Dacă cod colizionează, adaugă sufixul _2, _3 etc.
+  v_cod_final := v_cod;
+  WHILE EXISTS (SELECT 1 FROM executie_proiecte WHERE cod_intern = v_cod_final) LOOP
+    v_try := v_try + 1;
+    v_cod_final := v_cod || '_' || v_try;
+  END LOOP;
+
+  -- INSERT proiect nou — beneficiar NULL (utilizatorul completează la adăugarea contractului)
+  INSERT INTO executie_proiecte (cod_intern, nume, beneficiar, site_id, activ)
+  VALUES (v_cod_final, v_nume, NULL, NEW.id, true);
+
+  RETURN NEW;
+END;
+$function$;
+-- <<< TRIGGER_AUTO_NOU 20261222a
+
 -- ── RPC-ul: O SINGURĂ definiție a regulii (L19) și O SINGURĂ cale de creare pentru contul cu drept ──
--- Ordinea lock-urilor (L06): 1. rândul proiectului FOR UPDATE; 2. UPDATE pe același rând (site_id; triggerele lui executie_proiecte);
---   3. INSERT în sites (cheia străină ia KEY SHARE pe proiect, deja ținut; triggerul AFTER INSERT citește executie_proiecte). Fără proiect: doar
---   INSERT-ul (ca owner-ul azi). Un al doilea apel pe același proiect așteaptă pasul 1, apoi găsește legătura și o întoarce (idempotent).
+-- Ordinea lock-urilor (L06): 1. rândul proiectului FOR UPDATE; 2. INSERT în sites cu proiect_id (cheia străină sites.proiect_id ia KEY SHARE pe
+--   proiect, deja ținut; triggerul AFTER INSERT citește executie_proiecte și, cu proiect_id, nu creează nimic); 3. UPDATE pe rândul proiectului
+--   (site_id; cheia străină executie_proiecte_site_id_fkey ia KEY SHARE pe rândul nou din sites, al aceleiași tranzacții; triggerele lui
+--   executie_proiecte). Fără proiect: doar INSERT-ul (ca owner-ul azi; triggerul creează proiectul automat). Un al doilea apel pe același proiect
+--   așteaptă pasul 1, apoi găsește legătura și o întoarce (idempotent).
 -- Corpul nu conține apeluri în afara pornirii amprentate (auth.uid, fn_executie_proiect_permis) și al funcțiilor din pg_catalog (postcondiție).
 CREATE FUNCTION public.fn_sites_creeaza(p_nume text, p_proiect bigint, p_beneficiar text) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
@@ -380,9 +484,8 @@ BEGIN
     END IF;
     RAISE EXCEPTION 'Crearea șantierului: proiectul are deja alt șantier legat' USING ERRCODE = 'P0001';
   END IF;
-  v_site := nextval(pg_get_serial_sequence('public.sites', 'id'));
+  INSERT INTO public.sites (name, active, beneficiar_principal, proiect_id) VALUES (v_nume, true, v_benef, p_proiect) RETURNING id INTO v_site;
   UPDATE public.executie_proiecte SET site_id = v_site WHERE id = p_proiect;
-  INSERT INTO public.sites (id, name, active, beneficiar_principal, proiect_id) VALUES (v_site, v_nume, true, v_benef, p_proiect);
   SELECT count(*) INTO v_n FROM public.executie_proiecte e WHERE e.site_id = v_site;
   IF v_n IS DISTINCT FROM 1 OR NOT EXISTS (SELECT 1 FROM public.executie_proiecte e WHERE e.id = p_proiect AND e.site_id = v_site) THEN
     RAISE EXCEPTION 'Crearea șantierului: legătura cu proiectul nu e unică, % proiecte pe șantier; nimic scris', v_n USING ERRCODE = 'P0001';

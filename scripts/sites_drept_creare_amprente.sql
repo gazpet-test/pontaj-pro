@@ -11,9 +11,10 @@
 --   * „atentie” = ce trebuie privit cu ochii înainte de a accepta baseline-ul (drepturi pentru anon / PUBLIC, DEFINER fără search_path,
 --     EXECUTE în corp — pe acesta migrarea îl REFUZĂ). Pe sites, „politica USING true” pe INSERT e normală (INSERT are doar CHECK).
 -- De privit în mod special în „detaliu”: la 'tabel sites | triggere' triggerul tr_auto_create_executie_proiect (AFTER INSERT) și la
---   'functie fn_auto_create_executie_proiect()' corpul (corp_md5 citit pe 13.11.2026: 22f95c1e3f15cde32a1d2c11e3259089) — RPC-ul se
---   sprijină pe condiția lui „există deja proiect cu site_id = NEW.id”; la 'tabel sites | politici' politica de CITIRE (contul cu drept își
---   recitește șantierul la reconciliere) și cele trei politici ale owner-ului (INSERT / UPDATE / DELETE rămân doar ale lui).
+--   'functie fn_auto_create_executie_proiect()' corpul (corp_md5 citit pe 13.11.2026 și 20.11.2026: 22f95c1e3f15cde32a1d2c11e3259089; după
+--   aplicare: d6b7881fdfec0d1419a173a45a764c6a, corpul cu condiția sites.proiect_id din runda 6); la 'tabel sites | politici' politica de
+--   CITIRE (contul cu drept își recitește șantierul la reconciliere) și cele trei politici ale owner-ului (INSERT / UPDATE / DELETE rămân doar
+--   ale lui).
 -- Cum se folosește: coloana linie_baseline, în ordinea afișată, se copiază ÎNTREAGĂ între marcajele „>>> BASELINE 20261222a” /
 --   „<<< BASELINE 20261222a” ale migrării (în locul rândului DE_COMPLETAT; singurul loc din migrare cu valori de producție), iar „detaliu”
 --   intră în review. Migrarea refuză până atunci și refuză orice diferență față de el, înainte și după schimbare.
@@ -172,10 +173,14 @@ SELECT (SELECT count(*) FROM public.app_modules WHERE key = 'santiere_creare') A
        (SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'executie_proiecte' AND column_name = 'site_id') AS tip_proiect_site_id;
 
 \echo
-\echo '=== 20261222a — presupunerile ordinii din RPC (trebuie: secventa = sites_id_seq, chei_straine_site_id = 0, trigger = 1, santiere_cu_mai_multe_proiecte = 0) ==='
+\echo '=== 20261222a — presupunerile ordinii din RPC (runda 6, trebuie: chei_straine_site_id = 1, cheia_site_id_exacta = t, trigger = 1, santiere_cu_mai_multe_proiecte = 0) ==='
 SELECT pg_get_serial_sequence('public.sites', 'id') AS secventa_sites_id,
        (SELECT count(*) FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
          WHERE c.conrelid = 'public.executie_proiecte'::regclass AND c.contype = 'f' AND a.attname = 'site_id') AS chei_straine_site_id,
+       EXISTS (SELECT 1 FROM pg_constraint c
+                WHERE c.conrelid = 'public.executie_proiecte'::regclass AND c.contype = 'f' AND c.conname = 'executie_proiecte_site_id_fkey'
+                  AND c.confrelid = 'public.sites'::regclass AND pg_get_constraintdef(c.oid) = 'FOREIGN KEY (site_id) REFERENCES sites(id)'
+                  AND NOT c.condeferrable AND NOT c.condeferred AND c.convalidated) AS cheia_site_id_exacta,
        (SELECT count(*) FROM pg_trigger tg WHERE tg.tgrelid = 'public.sites'::regclass AND tg.tgname = 'tr_auto_create_executie_proiect'
          AND tg.tgfoid = to_regprocedure('public.fn_auto_create_executie_proiect()') AND tg.tgtype = 5 AND tg.tgenabled = 'O'
          AND tg.tgnargs = 0 AND tg.tgqual IS NULL) AS trigger_proiect_automat,
