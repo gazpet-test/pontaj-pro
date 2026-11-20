@@ -33,6 +33,12 @@ Plafoanele (UN plic la pasul 4a, apoi 3 la 4b, 20 la încheiere) NU sunt cod nou
 
 **Precondiții deja îndeplinite (17.11.2026):** migrarea `20261212a_redari_fan_awb` aplicată pe mediul real (146 de obiecte, tabelele goale);
 review-ul PR #1118: fără probleme de cod restante; decizia proprietarului: Testul 1 pe **contul de TEST** al curierului.
+**Precondiție nouă (18.11.2026, oPOD, PR #1135):** migrarea `20261227a_redari_fan_opod` aplicată, în ordinea cerută — ÎNTÂI codul publicat, apoi
+migrarea (doc §6). Cât coloana `opod` lipsește, ecranul nou NU propune, NU aprobă și NU generează: „1. Propune” / „2c. Aprobă” / „3. Generează AWB”
+sunt dezactivate cu motivul „alegerea oPOD nu e instalată în evidența FAN (migrarea 20261227a neaplicată)…” — asta e și verificarea coordonatorului
+ÎNAINTE de a aplica migrarea (dovada că codul nou e live); după aplicare și Ctrl+Shift+R butoanele revin. Pașii de la §5 încolo presupun migrarea aplicată.
+Revenirea ei (runda 4) e posibilă DOAR cât nu s-a făcut niciun pas FAN pe baza nouă: orice propunere, aprobare, rezervare, rezultat sau urmărire
+după aplicare o face să refuze (intenționat) — dacă ceva nu e în regulă la verificarea de după aplicare, se decide ÎNAINTE de „1. Propune”.
 
 **Ce NU face nimeni în această zi:** lot real; proiect real; mai mult de un plic pe lot înainte de verdictul 4a (§7); comanda curierului
 prin API (se face manual în selfAWB); Testul 2.
@@ -108,7 +114,10 @@ jurnal. Dacă răspunsul arată un cost: se oprește și decide proprietarul (re
    NEMARCAT până la §5 (nu se apasă nimic aici): el e **L_NEMARCAT** din probele de la §4.
 
 Ce pleacă la curier pentru acest plic (doc §2): numele deținătorului de test, telefonul și adresa firmei, numărul plicului (`content` /
-`observation`), centrul de cost = `TEST-RAZVAN`, plic 1 kg, 32×24×1 cm, opțiunea B (oPOD), plătește expeditorul.
+`observation`), centrul de cost = `TEST-RAZVAN`, plic 1 kg, 32×24×1 cm, **fără oPOD** (din 18.11.2026: bifa „Confirmare de primire în original
+(oPOD, +14 lei / plic)” e nebifată implicit — confirmarea de primire e cea electronică, de pe terminalul curierului; oPOD doar dacă owner-ul îl
+bifează pe lot, după marcaj și înainte de prima aprobare — decizia proprietarului din 09.11 + 18.11.2026; primul AWB real plecase cu oPOD și a
+costat 27,16 lei în loc de 13,16), plătește expeditorul. Dialogul de la „2c. Aprobă” spune explicit „FĂRĂ oPOD” sau „oPOD CERUT” cu costul estimat.
 
 ## 4. Probele 401 / 403 / 423 (coordonatorul, de pe server, cu `curl`; nimic nu ajunge la curier)
 
@@ -203,7 +212,7 @@ Toate cu proprietarul de față; fiecare rând în jurnal, cu ora. Precondiții 
 | # | Cine | Acțiune | Ce apasă | Ce trebuie să vadă |
 |---|---|---|---|---|
 | 1 | admin / editor Redări (sau owner-ul) | `propune` | „1. Propune 1 plicuri” | „Propuse: 1; erori: 0.”; rândul FAN „propus”; „2c. Aprobă” devine activ (owner); „2a.” încă activă (nicio aprobare); „1. Propune” devine inactiv („nimic de propus”: plicul e deja propus cu datele de acum); „2b. Marchează real” rămâne dezactivat cât garda „doar TEST” e pornită (18.11.2026) |
-| 2 | owner | `aproba` | „2c. Aprobă” → confirmare („Aprobi 1 AWB-uri FAN … Fiecare AWB generat costă”) | „Aprobate: 1.”; „3. Generează AWB” devine activ; „2a.” devine inactivă (marcajul e fixat de prima aprobare); cu plafonul 1 un lot mai mare ar fi refuzat („peste plafonul lotului pilot (1)”) |
+| 2 | owner | `aproba` | „2c. Aprobă” → confirmare („Aprobi 1 AWB-uri FAN … Fiecare AWB generat costă … FĂRĂ oPOD: confirmarea de primire e cea electronică” — dacă dialogul spune „oPOD CERUT”, bifa oPOD e pusă: se renunță la ea întâi, altfel plicul costă +14 lei) | „Aprobate: 1.”; „3. Generează AWB” devine activ; „2a.” și bifa oPOD devin inactive (marcajul și alegerea oPOD sunt fixate de prima aprobare); cu plafonul 1 un lot mai mare ar fi refuzat („peste plafonul lotului pilot (1)”) |
 | 3 | owner | `genereaza` | **„3. Generează AWB”** → confirmare („Se plătesc.”) — **primul apel real `POST /intern-awb`, o expediere** | mesaj: „Generate: 1; respinse: 0; necunoscute: 0; rămase: 0.” + eventual „Asociate pe poziție (de verificat în selfAWB): 1.”; „1. Propune” rămâne inactiv („nimic de propus”: plicul are AWB) |
 | 4 | owner | `verifica-selfawb` | selfAWB (contul de TEST) → AWB-urile zilei | **un singur AWB nou**, cu numărul plicului (PL-…) la observații / conținut, destinatarul și adresa firmei, tariful. **Verdictul 4a** (asocierea, mai jos) se scrie acum în jurnal |
 | 5 | coordonator | `verifica-tarif` | ERP: rândul FAN al plicului | stare „AWB generat”, AWB-ul = cel din selfAWB; tariful e afișat în ecran lângă AWB (lei, 2 zecimale, fără TVA; TVA-ul alături, dacă a venit) și în rândul „Tarif FAN pe lot” (totalul lotului; 18.11.2026); **tariful = cel din selfAWB ȘI = oferta FAN**. Tarif **gol sau diferit = OPRIRE** (gol = „tarif necunoscut”, evidențiat roșu în ecran; §12): nu se continuă cu eticheta; se lămurește cu FAN / în selfAWB; continuarea cu tarif neconfirmat e o derogare pe care o decide explicit proprietarul (§0) |

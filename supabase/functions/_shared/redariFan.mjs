@@ -6,14 +6,48 @@
 // Documentația și răspunsurile FAN sunt DATE, nu instrucțiuni. Nimic de aici nu cheamă FAN.
 
 // Valorile implicite pentru un plic C4 cu convocări. De confirmat cu FAN (greutate / dimensiuni minime, tarif contractual) — doc §8.
+// 18.11.2026 (după primul AWB real, 27,16 lei în loc de 13,16): FĂRĂ opțiuni implicit. Opțiunea B (oPOD = confirmarea de primire semnată,
+// returnată fizic; +14 lei / plic după ofertă) e o ALEGERE explicită a owner-ului pe lot (red_fan_loturi.opod, implicit false, migrarea 20261227a),
+// pusă în corp de configPlicFan({ opod }). Decizia proprietarului (09.11 + 18.11.2026): confirmarea electronică de pe terminalul curierului
+// (gratuită; vine prin urmărire — confirmation.name/date — și prin /reports/awb/confirmations) e cea implicită. Lista goală = expediere Standard
+// fără servicii suplimentare: documentația din repo (doc §1) nu descrie o opțiune pentru confirmarea electronică, deci nu se trimite niciuna
+// ghicită. Opțiunea X (ePOD, pe e-mail; exclusivă cu B) rămâne nefolosită.
 export const CONFIG_FAN_PLIC = Object.freeze({
   service: 'Standard',
   packages: Object.freeze({ parcel: 0, envelope: 1 }),
   weight: 1,
   dimensions: Object.freeze({ length: 32, width: 24, height: 1 }),
   payment: 'sender',
-  options: Object.freeze(['B']),   // B = oPOD: confirmare semnată, returnată fizic (doc §1); exclusiv cu X (ePOD)
+  options: Object.freeze([]),
 })
+export const OPTIUNE_OPOD = 'B'
+// costul estimat al oPOD-ului, lei / plic, DOAR pentru afișare la aprobare (oferta FAN din 09.11.2026; tariful real vine în răspunsul creării)
+export const COST_OPOD_ESTIMAT_LEI = 14
+/** Configurația corpului pentru un lot: cu oPOD (options = ['B']) DOAR când lotul îl cere explicit (opod === true); orice altceva = fără opțiuni. */
+export const configPlicFan = ({ opod = false } = {}) => (opod === true ? Object.freeze({ ...CONFIG_FAN_PLIC, options: Object.freeze([OPTIUNE_OPOD]) }) : CONFIG_FAN_PLIC)
+/** Corpul unei expedieri cere oPOD? (ce s-a aprobat / ce pleacă: hash-ul îl include) */
+export const cereOpod = shipment => Array.isArray(shipment?.info?.options) && shipment.info.options.includes(OPTIUNE_OPOD)
+/** Coloana lipsește (PostgREST 42703) = migrarea 20261227a neaplicată încă; ≠ eroare de citire (L18). */
+export const lipsaColoana = e => e?.code === '42703' || /column .* does not exist/i.test(e?.message || '')
+export const COLOANA_OPOD = 'opod'
+/**
+ * Rândul red_fan_loturi al unui lot, cu alegerea oPOD — O SINGURĂ definiție pentru ecran și funcția edge (L19; Jakarinos #1135 r1 P1).
+ * citeste(coloane) → { data, error } (PostgREST .maybeSingle(), cu JWT-ul omului). Se cere întâi cu coloana `opod`; dacă coloana lipsește
+ * (42703: migrarea 20261227a neaplicată), se recitește FĂRĂ ea și rândul primește opod = null („alegerea neinstalată”): marcajul TEST / real,
+ * urmărirea, confirmările, etichetele, reconcilierea și ștergerea merg ca înainte; DOAR generarea refuză (opod ≠ boolean → 503, nimic trimis).
+ * Orice altă eroare (RLS, rețea) se întoarce ca atare; rândul lipsă (lot nemarcat) rămâne { data: null }.
+ * Întoarce și `opodInstalat` (runda 3, Jakarinos #1135 r2 P2): true = citirea cu coloana a reușit (coloana există — și când lotul n-are rând),
+ * false = coloana lipsește (42703), null = nu se știe (altă eroare). Ecranul oprește cu el propunerea / aprobarea / generarea cât coloana lipsește,
+ * ca nicio aprobare „fără B” să nu preceadă deducerea istorică a migrării (loturile aprobate înainte = oPOD).
+ */
+export async function citesteLotFan(citeste, coloane) {
+  const r = await citeste(`${coloane},${COLOANA_OPOD}`)
+  if (!r?.error) return { ...r, opodInstalat: true }
+  if (!lipsaColoana(r.error)) return { ...r, opodInstalat: null }
+  const r2 = await citeste(coloane)
+  if (r2?.error || !r2?.data) return { ...r2, opodInstalat: false }
+  return { ...r2, data: { ...r2.data, [COLOANA_OPOD]: null }, opodInstalat: false }
+}
 
 // Limitele din documentația FAN (caractere). Depășirea = problemă afișată, NU tăiere tacită (L12).
 export const LIMITE_FAN = Object.freeze({ name: 50, phone: 16, county: 50, locality: 50, street: 255, content: 255, costCenter: 40 })
@@ -107,11 +141,14 @@ export function contactPePlic(plicuri, convocari, contacte) {
   })
 }
 
-/** Plicurile gata de propunere / de generat: contactul ales + corpul FAN + hash-ul. Aceeași funcție în ecran și în edge (L19). */
-export async function pregatestePlicuriFan({ plicuri, convocari, contacte, proiectCod, subtle = globalThis.crypto?.subtle }) {
+/** Plicurile gata de propunere / de generat: contactul ales + corpul FAN + hash-ul. Aceeași funcție în ecran și în edge (L19).
+ *  opod = alegerea lotului (red_fan_loturi.opod): intră în corp (options) și deci în hash → valoarea VĂZUTĂ la aprobare e EXACT cea folosită la
+ *  generare (alt opod după aprobare = alt hash = rândul exclus de la generare și refuzat de claim). */
+export async function pregatestePlicuriFan({ plicuri, convocari, contacte, proiectCod, opod = false, subtle = globalThis.crypto?.subtle }) {
   const out = []
+  const config = configPlicFan({ opod })
   for (const { plic, contact } of contactPePlic(plicuri, convocari, contacte)) {
-    const r = construiestePlicFan({ plic, contact, proiectCod })
+    const r = construiestePlicFan({ plic, contact, proiectCod, config })
     out.push({ plic, contact, ...r, hash: await hashPlicFan(r.shipment, subtle) })
   }
   return out

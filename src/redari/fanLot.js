@@ -5,7 +5,8 @@
 // ACEEAȘI gardă (transportPermis) ca în funcția edge (L19); butonul de marcaj cere doar proiectul de TEST (lotul nu e încă marcat).
 import { TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST, transportPermis, esteProiectTest, MESAJ_TRANSPORT_OPRIT, MESAJ_DOAR_PROIECT_TEST, MESAJ_DOAR_LOT_TEST } from '../../supabase/functions/_shared/redariFanHandler.mjs'
 import { manifestTiparire, cheieTiraj, tirajDin, tirajNeschimbat, refuzTiraj, destinatarMascat, COD_TIRAJ_SCHIMBAT, COD_TIRAJ_OPRIT, MESAJ_TIRAJ_SCHIMBAT, MESAJ_TIRAJ_OPRIT,
-  ASTEPTARE_DUPA_OPRIRE_S, fapteContrazise, ALEGERI_SOLUTIONARE, COD_URMARIRE_SCHIMBATA, sumaFan, EVENIMENTE_FAN } from '../../supabase/functions/_shared/redariFan.mjs'
+  ASTEPTARE_DUPA_OPRIRE_S, fapteContrazise, ALEGERI_SOLUTIONARE, COD_URMARIRE_SCHIMBATA, sumaFan, EVENIMENTE_FAN, categorieEveniment, cereOpod,
+  COST_OPOD_ESTIMAT_LEI } from '../../supabase/functions/_shared/redariFan.mjs'
 import { planPachetPlicuire, continutPaginaControl } from './plicuri.js'
 export { TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST, transportPermis, esteProiectTest, MESAJ_TRANSPORT_OPRIT, MESAJ_DOAR_PROIECT_TEST, MESAJ_DOAR_LOT_TEST }
 
@@ -44,15 +45,22 @@ export function starePropunere({ pregatite = [], randuri = [] } = {}) {
   return { dePropus, motiv }
 }
 
+// Runda 3 pe #1135 (Jakarinos r2 P2): cât coloana `opod` lipsește (migrarea 20261227a neaplicată, codul publicat înainte), ecranul NU propune, NU
+// aprobă și NU generează — doar citirea și acțiunile care nu creează rezultate noi (marcaj, urmărire, confirmări, etichete, reconciliere, ștergere).
+// Altfel o aprobare cu hash-uri „fără B” ar preceda deducerea istorică a migrării („aprobat înainte = oPOD”), iar lotul ar rămâne înghețat pe true.
+export const MESAJ_OPOD_NEINSTALAT_PASI = 'alegerea oPOD nu e instalată în evidența FAN (migrarea 20261227a neaplicată): până la aplicarea ei nu se propune, nu se aprobă și nu se generează nimic nou'
 /** Pașii cu starea lor: { ...pas, activ, motiv }. transportActiv = flag-ul din cod; evidentaInstalata = tabelul red_fan_awb citibil;
  *  proiectCod = red_proiecte.cod al lotului (garda „doar TEST”: fără el, cu DOAR_PROIECTE_TEST, nimic nu e activ).
- *  gataDePropus = numărul plicurilor DE PROPUS (starePropunere.dePropus.length), motivPropunere = motivul când e 0 (starePropunere.motiv). */
-export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, poateScrie = false, fanLot = null, randuri = [], gataDePropus = 0, motivPropunere = '', proiectCod = null } = {}) {
+ *  gataDePropus = numărul plicurilor DE PROPUS (starePropunere.dePropus.length), motivPropunere = motivul când e 0 (starePropunere.motiv).
+ *  opodInstalat = coloana red_fan_loturi.opod există (citesteLotFan.opodInstalat === true); orice altceva (lipsă, necunoscut) oprește propunerea,
+ *  aprobarea și generarea cu MESAJ_OPOD_NEINSTALAT_PASI — fără valoare implicită „instalată” (L18: necunoscut ≠ instalat). */
+export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, poateScrie = false, fanLot = null, randuri = [], gataDePropus = 0, motivPropunere = '', proiectCod = null, opodInstalat = null } = {}) {
   const cuAwb = numar(randuri, ['generat', 'ridicat'])
+  const cuOpod = [opodInstalat === true, MESAJ_OPOD_NEINSTALAT_PASI]
   const conditii = {
-    propune: [[poateScrie, 'doar admin / editor'], [gataDePropus > 0, motivPropunere || 'niciun plic cu toate datele cerute de FAN']],
-    aproba: [[esteOwner, 'doar owner-ul'], [!!fanLot, 'alege întâi: lot de TEST sau lot real'], [numar(randuri, ['propus']) > 0, 'niciun plic propus']],
-    genereaza: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['aprobat']) > 0, 'niciun plic aprobat']],
+    propune: [[poateScrie, 'doar admin / editor'], cuOpod, [gataDePropus > 0, motivPropunere || 'niciun plic cu toate datele cerute de FAN']],
+    aproba: [[esteOwner, 'doar owner-ul'], cuOpod, [!!fanLot, 'alege întâi: lot de TEST sau lot real'], [numar(randuri, ['propus']) > 0, 'niciun plic propus']],
+    genereaza: [[esteOwner, 'doar owner-ul'], cuOpod, [numar(randuri, ['aprobat']) > 0, 'niciun plic aprobat']],
     etichete: [[esteOwner, 'doar owner-ul'], [cuAwb > 0, 'niciun AWB generat']],
     curier: [[cuAwb > 0, 'niciun AWB generat']],
     urmarire: [[esteOwner, 'doar owner-ul'], [cuAwb > 0, 'niciun AWB generat']],
@@ -87,6 +95,74 @@ export function stareMarcajReal({ doarTest = DOAR_PROIECTE_TEST, ...rest } = {})
   const m = stareMarcaj(rest)
   if (!m.activ) return m
   return doarTest ? { activ: false, motiv: MESAJ_MARCAJ_REAL_OPRIT } : m
+}
+
+// ── oPOD pe lot (18.11.2026, după primul AWB real: 27,16 lei în loc de 13,16 — opțiunea B pleca mereu) ──
+// Alegerea „confirmare de primire în original (oPOD)” e a owner-ului, pe lot (red_fan_loturi.opod, implicit false, migrarea 20261227a), prin RPC
+// (fn_red_fan_lot_opod), DOAR după marcajul TEST / real și DOAR înainte de PRIMA aprobare (apoi imuabilă, ca marcajul: trigger în BD). Intră în
+// corpul fiecărui plic (options) și în hash-ul aprobat → ce pleacă la generare e EXACT ce s-a văzut la aprobare.
+export const TEXT_OPOD = `Confirmare de primire în original (oPOD, +${COST_OPOD_ESTIMAT_LEI} lei / plic)`
+export const MESAJ_OPOD_NEINSTALAT = 'alegerea oPOD nu e instalată în evidența FAN (migrarea 20261227a neaplicată)'
+export function stareOpod({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, randuri = [], fanLot = null, proiectCod = null } = {}) {
+  // ca la marcaj (cereMarcaj = false): garda cere proiectul de TEST; lipsa marcajului e spusă mai jos, cu motivul ei
+  const motivOprit = motivTransport({ transportActiv, proiectCod, fanLot, cereMarcaj: false })
+  if (motivOprit) return { activ: false, motiv: motivOprit }
+  if (!evidentaInstalata) return { activ: false, motiv: 'evidența FAN nu e instalată (migrarea neaplicată)' }
+  if (!esteOwner) return { activ: false, motiv: 'doar owner-ul alege oPOD' }
+  if (!fanLot) return { activ: false, motiv: 'alege întâi: lot de TEST sau lot real' }
+  if (typeof fanLot.opod !== 'boolean') return { activ: false, motiv: MESAJ_OPOD_NEINSTALAT }
+  if (fanLot.prima_aprobare_la) return { activ: false, motiv: 'lotul a fost aprobat o dată: alegerea oPOD nu se mai schimbă' }
+  if (numar(randuri, ['aprobat', 'in_curs', 'generat', 'necunoscut', 'ridicat']) > 0) return { activ: false, motiv: 'lotul are deja plicuri aprobate: alegerea oPOD nu se mai schimbă' }
+  return { activ: true, motiv: '' }
+}
+/** oPOD-ul lotului, DOAR din valoarea citită (true); lipsă / necunoscut = fără oPOD în corp (același criteriu ca configPlicFan, L19). */
+export const opodLot = fanLot => fanLot?.opod === true
+export const costOpodEstimat = n => (Number.isInteger(n) && n > 0 ? n * COST_OPOD_ESTIMAT_LEI : 0)
+// Rândurile TRIMISE curierului (claim făcut; au sau au avut un AWB): oPOD-ul lor e cel al lotului la aprobare, nu corpul reconstruit acum.
+export const STARI_TRIMISE_FAN = Object.freeze(['in_curs', 'generat', 'necunoscut', 'ridicat'])
+export const TEXT_OPOD_RAND = 'oPOD'
+export const TEXT_OPOD_LEGACY = 'oPOD (expediat înainte de alegerea pe lot: opțiunea B pleca mereu)'
+/**
+ * Ce se arată pe rândul unui plic despre oPOD (Jakarinos #1135 r1 P2: AWB-ul deja taxat cu oPOD trebuie identificat ca atare):
+ *  - rând TRIMIS (STARI_TRIMISE_FAN): alegerea lotului e înghețată de prima aprobare și a fost exact cea din hash-ul trimis (funcția edge
+ *    exclude orice rând al cărui hash nu e cel recalculat cu alegerea lotului) → `opod === true` = „oPOD”, `false` = nimic; `opod` null /
+ *    lipsă (coloana neinstalată) pe un rând trimis = rând generat de codul de dinaintea migrării, care trimitea MEREU B → TEXT_OPOD_LEGACY
+ *    (aceeași deducere ca backfill-ul migrării 20261227a: orice lot aprobat înainte de ea primește opod = true);
+ *  - rând netrimis (sau fără rând): corpul reconstruit acum (cereOpod), adică ce s-ar propune / aproba.
+ * Întoarce '' când nu e nimic de spus.
+ */
+export function textOpodRand({ fanLot = null, rand = null, shipment = null } = {}) {
+  if (rand && STARI_TRIMISE_FAN.includes(rand.stare)) {
+    if (fanLot?.opod === true) return TEXT_OPOD_RAND
+    if (fanLot?.opod === false) return ''
+    return TEXT_OPOD_LEGACY
+  }
+  return cereOpod(shipment) ? TEXT_OPOD_RAND : ''
+}
+/** Textul dialogului de aprobare: ce se aprobă (număr), dacă oPOD e cerut și costul estimat suplimentar — DIN CORPURILE propuse (cereOpod pe
+ *  shipment), nu din rândul lotului: se arată exact ce intră în hash-urile aprobate. Corpuri amestecate (unele cu B, altele fără) = nu se aprobă. */
+export function textAprobare({ n, shipments = [], titlu = '' }) {
+  const cu = shipments.filter(cereOpod).length
+  if (cu && cu !== shipments.length) return { ok: false, text: `Plicurile propuse nu au aceeași alegere oPOD (${cu} cu, ${shipments.length - cu} fără): propune din nou tot lotul.` }
+  const opod = cu > 0 && cu === shipments.length
+  return { ok: true, opod, text: `Aprobi ${n} AWB-uri FAN pentru ${titlu}? Fiecare AWB generat costă (tariful vine de la FAN). `
+    + (opod ? `oPOD CERUT (confirmare de primire în original): cost estimat suplimentar ${formatLei(costOpodEstimat(n))} (${n} × ${COST_OPOD_ESTIMAT_LEI} lei), peste transport.`
+      : 'FĂRĂ oPOD: confirmarea de primire e cea electronică, de pe terminalul curierului (fără cost suplimentar).') }
+}
+
+// ── ultimul eveniment de urmărire, cu ora României (18.11.2026: ecranul arăta doar „ridicat (C0)”, fără când) ──
+const VERB_EVENIMENT = Object.freeze({ ridicat: 'ridicat de curier', livrat: 'livrat', avizat: 'avizat (destinatarul anunțat)', adresa: 'adresă greșită / incompletă',
+  mutat: 'destinatar mutat', refuz: 'refuzat de destinatar', retur: 'retur', confirmare_refuzata: 'confirmare refuzată', neutru: 'contact cu destinatarul',
+  tranzit: 'în tranzit', inregistrat: 'AWB înregistrat la curier', de_verificat: 'de verificat de om' })
+/** Un moment (timestamptz ISO din PostgREST sau text „AAAA-LL-ZZ HH:MM:SS”) → „ZZ.LL.AAAA HH:MM” în Europe/Bucharest (L17); '' dacă nu e dată. */
+export const oraBucuresti = v => ora(v)
+/** „ridicat de curier (C0) 18.11.2026 17:21” — DOAR afișare: categoria din codul FAN (EVENIMENTE_FAN), momentul în ora României. '' fără eveniment. */
+export function textUltimEveniment(r) {
+  const cod = typeof r?.ultim_eveniment === 'string' && r.ultim_eveniment.trim() ? r.ultim_eveniment.trim() : ''
+  if (!cod) return ''
+  const verb = VERB_EVENIMENT[categorieEveniment(cod)] || 'eveniment'
+  const cand = r.ultim_eveniment_la ? ora(r.ultim_eveniment_la) : ''
+  return `${verb} (${cod})${cand ? ' ' + cand : ' (fără oră)'}`
 }
 
 // Operațiile din procedură care nu sunt pași ai fluxului (Jakarinos #1118 r1 P2: toate în ecran, dezactivate cât transportul e oprit).
@@ -309,6 +385,7 @@ export function mesajEdgeFan(rez) {
   if (cod === 'transport_real_oprit') return 'Transport oprit: funcția FAN nu face niciun apel până la activare.'
   if (cod === 'transport_real_doar_test') return `Transport permis doar pe proiecte de TEST cu lotul marcat TEST (Testul 1): funcția FAN nu a făcut niciun apel. ${rez?.data?.motiv || ''}`.trim()
   if (cod === 'non_owner') return 'Doar owner-ul poate porni pașii FAN.'
+  if (cod === 'lot_nemarcat') return 'Lotul nu e marcat (TEST / real) în evidența FAN: nimic trimis.'
   if (cod === 'manifest_schimbat') return 'Evidența s-a schimbat de la afișare: reîncarcă și verifică din nou pagina de control. Nimic tipărit.'
   if (cod === 'tiraj_schimbat') return `${MESAJ_TIRAJ_SCHIMBAT} Nimic tipărit.`
   if (cod === 'tiraj_oprit') return MESAJ_TIRAJ_OPRIT
