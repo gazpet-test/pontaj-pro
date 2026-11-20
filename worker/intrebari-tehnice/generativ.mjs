@@ -526,11 +526,72 @@ export function cazuriLot(l) {
   const out = []
   let excluse = 0
   for (let i = l.de_la; i < l.pana_la; i++) {
-    const v = valori(dims, i)
-    const c = f.aplicabil(v) ? f.construieste(v) : null
+    const c = cazLaIndice(f, dims, i)
     if (c) out.push(c); else excluse++
   }
   return { cazuri: out, excluse }
+}
+/** Cazul de la indicele `i` al produsului familiei `f` (null = combinație neaplicabilă). */
+function cazLaIndice(f, dims, i) {
+  const v = valori(dims, i)
+  return f.aplicabil(v) ? f.construieste(v) : null
+}
+/** Cazurile de la indicii dați (crescători) ai produsului unei familii — aceeași construcție ca în cazuriLot. */
+export function cazuriIndici(familie, indici) {
+  const f = FAMILII.find(x => x.nume === familie)
+  const dims = f.dims()
+  const out = []
+  let excluse = 0
+  for (const i of indici) { const c = cazLaIndice(f, dims, i); if (c) out.push(c); else excluse++ }
+  return { cazuri: out, excluse }
+}
+
+// ─── r8: EȘANTIONUL ACOPERITOR (rulat pe fiecare PR; produsul complet rulează în jobul separat „Întreabă echipa — matricea
+// generativă completă”, .github/workflows/intrebari-generativ.yml) ───
+// Pe familie: (1) produsul ≤ LOT_MAX (un singur lot) → TOATE cazurile, adică familia completă; (2) altfel ACOPERIREA 3 LA 3: pentru
+// oricare trei dimensiuni și oricare trei valori ale lor, cel puțin un caz care le are pe toate trei; celelalte dimensiuni se
+// completează determinist (amestec pe indicii tripletei). Prima dimensiune a familiilor mari e deja lista variantelor aplicabile
+// (firma × diacritice × separator…), iar familiile mari nu au combinații neaplicabile — deci fiecare triplet e un caz real.
+// Indicii sunt în produsul familiei (aceeași bază mixtă ca loturi() / cazuriLot()), crescători și fără dubluri.
+export const ESANTION_COMPLET_PANA_LA = LOT_MAX
+const amesteca = (...x) => {
+  let h = 0x811c9dc5
+  for (const v of x) { h = Math.imul(h ^ v, 0x01000193); h ^= h >>> 13; h = Math.imul(h, 0x5bd1e995); h ^= h >>> 15 }
+  return h >>> 0
+}
+const ESANTION = new Map()
+/** Indicii eșantionului acoperitor al familiei, în produsul ei. */
+export function indiciEsantion(familie) {
+  if (ESANTION.has(familie)) return ESANTION.get(familie)
+  const f = FAMILII.find(x => x.nume === familie)
+  const d = f.dims().map(x => x.length)
+  const n = d.reduce((p, x) => p * x, 1)
+  let out
+  if (n <= ESANTION_COMPLET_PANA_LA) out = Array.from({ length: n }, (_, i) => i)
+  else {
+    const pond = d.map((_, k) => d.slice(k + 1).reduce((p, x) => p * x, 1))   // ultima dimensiune = cifra cea mai puțin semnificativă
+    const set = new Set()
+    for (let a = 0; a < d.length; a++) for (let b = a + 1; b < d.length; b++) for (let c = b + 1; c < d.length; c++)
+      for (let va = 0; va < d[a]; va++) for (let vb = 0; vb < d[b]; vb++) for (let vc = 0; vc < d[c]; vc++) {
+        let i = 0
+        for (let k = 0; k < d.length; k++) i += (k === a ? va : k === b ? vb : k === c ? vc : amesteca(a, va, b, vb, c, vc, k) % d[k]) * pond[k]
+        set.add(i)
+      }
+    out = [...set].sort((x, y) => x - y)
+  }
+  ESANTION.set(familie, out)
+  return out
+}
+/** Cifrele (indicii valorilor pe fiecare dimensiune) ale indicelui `i` din produsul familiei — pentru verificarea acoperirii. */
+export function cifre(familie, i) {
+  const d = FAMILII.find(x => x.nume === familie).dims().map(x => x.length)
+  const out = []
+  for (let k = d.length - 1; k >= 0; k--) { out.unshift(i % d[k]); i = Math.floor(i / d[k]) }
+  return out
+}
+/** Cazurile eșantionului acoperitor care cad în lotul `l` (aceleași în firele vitest și în procesul Node real). */
+export function cazuriEsantionLot(l) {
+  return cazuriIndici(l.familie, indiciEsantion(l.familie).filter(i => i >= l.de_la && i < l.pana_la))
 }
 /** Rezumatul domeniului (pentru document și raport): familia → [dimensiunea → numărul de valori], produsul, loturile. */
 export function rezumat() {

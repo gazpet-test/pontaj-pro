@@ -449,6 +449,29 @@ identități, granițe diferite) se exclud și se numără — în domeniul de m
 cazuri, fără plafon total (toate loturile rulează; r7: ≈ 5,3 minute pe serverul AI, 8 fire + 8 procese). Testul verifică și că
 tabelul de mai jos are exact cifrele generatorului.
 
+**Unde rulează produsul complet (r8, 20.11.2026).** Pe mașina GitHub a jobului „verificare” (4 nuclee, `npm test` cu toate
+celelalte teste în paralel) produsul complet, rulat de două ori, depășea 900 s și înroșea toate PR-urile. De aceea:
+- **pe fiecare rulare `npm test`** (toate PR-urile): (1) eșantionul ACOPERITOR (`indiciEsantion` din generator): familiile cu
+  produsul ≤ 100.000 (un lot) — TOATE cazurile; la cele patru familii mari (`firme_nume_intreg`, `firme_reprezentare`,
+  `firme_componenta_singura`, `persoane_nume_intreg`) — fiecare triplet de valori pe oricare trei dimensiuni (acoperire 3 la 3),
+  celelalte dimensiuni completate determinist; ≈ 590.000 de cazuri, rulate pe fire de lucru ȘI în procesul Node real, cu aceeași
+  amprentă pe fiecare lot din cele 341; testul verifică independent că fiecare triplet apare; (2) eșantionul direct pe modulul
+  importat de vitest: fiecare al 97-lea indice din produsul fiecărei familii (≈ 340.000 de cazuri, alte cazuri decât (1));
+- **produsul complet** (testul de dinainte, neschimbat, aceleași amprente pe lot) rulează cu `INTREBARI_GENERATIV_COMPLET=1` în
+  jobul separat `.github/workflows/intrebari-generativ.yml`, în 4 părți paralele (loturile `i % 4`): pe orice PR care atinge un
+  fișier de care depinde rezultatul — închiderea importurilor testului și a procesului (motorul, generatorul, cele trei JSON-uri,
+  testul), plus acest document, `package*.json`, fișierele de workflow și configurația runnerului (`vite.config.js` explicit și
+  modelele `vite.config.*`, `vitest.config.*`, `vitest.workspace.*`, `vitest.projects.*`); testul verifică el însuși că lista de
+  căi conține toată închiderea, că fiecare nume de configurație căutat de vitest-ul instalat (citit din pachet) e prins de un model,
+  că configurația existentă, importurile ei din repo și eventualele `setupFiles` / `globalSetup` sunt scrise explicit, că nu
+  apar alte chei `test` / `envPrefix` / `envDir` / `define` (altfel testul cere să fie extins), că închiderea citește din mediu
+  doar cele două variabile ale jobului (deci fișierele `.env*` nu pot schimba rezultatul), că părțile sunt 0..N−1 și că Node e
+  același ca la „verificare” —, în fiecare noapte și la cerere.
+Rezultatul e determinist (aceleași fișiere + același Node = aceleași ieșiri), deci un PR care nu atinge niciunul din fișierele
+listate nu poate schimba ce verifică produsul complet; schimbările de mediu (Node, mașina) le prinde rularea de noapte. Ce s-a
+mutat: pe PR-urile care NU ating motorul, produsul complet nu mai rulează (a rulat pe ultimul PR care l-a atins și rulează în
+fiecare noapte); o abatere care ține de 4 sau mai multe dimensiuni deodată poate scăpa eșantionului și o prinde jobul complet.
+
 **Domeniul publicat** (dicționarul de test: persoanele VLĂDESCU ANA, ZAMFIRESCU MARIA, ȘERBĂNESCU OLGA, CRÂNGAȘU VIOREL, MARE ION,
 DUMBRĂVEANU ANDREEA-IOANA; firmele Lumivo Servicii SRL — distinctivă pe prima poziție, Varnitec SRL — un cuvânt distinctiv, Alfa SRL —
 un cuvânt comun, Construct Pelorîn SRL — distinctivă pe a doua poziție, cu diacritice, Barzeni Instal Grup SRL — trei cuvinte,
@@ -597,7 +620,8 @@ periodică încă dezactivată. Ordinea:
    Verificarea: `node scripts/intrebari/manifest_motor.mjs --verifica` în clona de pe `main` → „la zi”; workerul verifică singur,
    la pornire, amprentele fișierelor copiate (cu finaluri de linie LF) — o diferență = `motor_invalid` în jurnal, nicio preluare.
 8. Testele pe `main`, în clona repo-ului de pe server: `npm install` + `npx vitest run src/intrebariMascare.test.js
-   src/intrebariMascare.generativ.test.js src/intrebariSurse.test.js scripts/intrebari/corpus.test.mjs` și
+   src/intrebariMascare.generativ.test.js src/intrebariSurse.test.js scripts/intrebari/corpus.test.mjs` (r8: matricea generativă
+   rulează aici eșantionul acoperitor; produsul complet: același test cu `INTREBARI_GENERATIV_COMPLET=1`, ≈ 5–6 minute) și
    `python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py"` (aceeași versiune de Python ca workerul, Node 24
    în PATH) — toate OK. Opțional, testul în browser (secțiunea „Testele”).
 9. **Testul de fum controlat, cu task-ul încă DEZACTIVAT:** coada are doar întrebarea de test a ownerului (nume inventate, un
