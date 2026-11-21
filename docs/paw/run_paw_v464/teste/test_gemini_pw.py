@@ -4,7 +4,8 @@
 # Nu importa Playwright, nu se ataseaza la Edge, nu trimite nimic la Gemini: logica de selectie tab / model /
 # asteptare stabila / validare brief / numarare atasamente (HTML sintetic) / ordinea pazei in trimite() (pagina falsa) /
 # r4: semnalele de atasament verificate INAINTEA listelor albe (reproducerile din verdictul Jakarinos r3 + variante + mutanti) /
-# r6: elementul zonei insesi verificat ca orice element (reproducerile din verdictul r5 + zona reala + linkul real + mutanti)
+# r6: elementul zonei insesi verificat ca orice element (reproducerile din verdictul r5 + zona reala + linkul real + mutanti) /
+# r7: editorul insusi verificat ca orice element (media / fundal CSS) si O SINGURA functie de semnale pe toate nivelurile (paritate + mutanti)
 # e testata cu obiecte false. ASCII only.
 import os, sys, io, re, types, tempfile, shutil, unittest, importlib.util, contextlib
 from unittest import mock
@@ -685,7 +686,8 @@ class TestStructuraCiorna(unittest.TestCase):
 
     def test_in_editor_doar_text(self):
         # in editor intra brief-ul (text, comparat separat): o imagine sau un card in editor = refuz
-        for ed, m in ((EDITOR_HTML.replace("<p>ciorna</p>", '<p>ciorna<img src="x"></p>'), "media_in_editor:img[src]"),
+        # r7: media in editor = acelasi semnal "media:" ca oriunde, cu prefixul contextului (nu mai exista un motiv "media_in_editor")
+        for ed, m in ((EDITOR_HTML.replace("<p>ciorna</p>", '<p>ciorna<img src="x"></p>'), "semnal_in_editor:media:img[src]"),
                       (EDITOR_HTML.replace("<p>ciorna</p>", "<p>ciorna</p><attachment-card></attachment-card>"),
                        "element_in_editor:attachment-card")):
             i, e = self.refuz(zona_cu(editor=ed))
@@ -952,13 +954,13 @@ ZONA_ATRIBUTE_REALE = (' _ngcontent-ng-c1796725376="" trace="" _nghost-ng-c16941
 HREF_REAL = "https://support.google.com/gemini/answer/14620100"
 
 
-def pagina_calibrare(stare, atribut_file=ATRIBUTE_DIV_REALE, zona_atr=ZONA_ATRIBUTE_REALE):
+def pagina_calibrare(stare, atribut_file=ATRIBUTE_DIV_REALE, zona_atr=ZONA_ATRIBUTE_REALE, editor_atr=""):
     # pagina sintetica scrisa de mana ca sa reproduca EXACT liniile de mai sus (ordinea = parcurgerea in adancime a zonei);
-    # r6: zona are atributele reale, linkul are href-ul real
+    # r6: zona are atributele reale, linkul are href-ul real; r7: editor_atr = atribute in plus pe elementul editorului insusi
     assert stare in ("i", "ii", "iii")
     gi = "<gem-icon><svg viewBox=\"0 0 24 24\"><path d=\"M0 0h24v24H0z\"></path></svg></gem-icon>"
-    editor = ('<rich-textarea class="text-input-field_textarea"><div class="ql-editor textarea" contenteditable="true" role="textbox">'
-              + ("<p>proba</p>" if stare == "ii" else "<p><br></p>") + "</div></rich-textarea>")
+    editor = ('<rich-textarea class="text-input-field_textarea"><div class="ql-editor textarea" contenteditable="true" role="textbox"'
+              + editor_atr + ">" + ("<p>proba</p>" if stare == "ii" else "<p><br></p>") + "</div></rich-textarea>")
     trimite = ""
     if stare == "ii":
         trimite = ('<div data-test-id="send-button-container" aria-describedby="x1"><gem-icon-button type="onsurface">'
@@ -1273,7 +1275,7 @@ class TestSemnaleInainteDeListe(unittest.TestCase):
         # verdict trec la Enter (exact ce a gasit Jakarinos pe d50dda4e); pe cod: refuz fara nicio actiune (testat mai sus)
         with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
             src = f.read().decode("ascii")
-        bloc = ["    s = _semnal(n)", "    if s:", "        return s, ctrl"]
+        bloc = ["    s = _semnal(n)", "    if s:", '        return ("semnal_in_editor:" + s if in_editor else s), ctrl']
         tinta = '    return "element:" + sem, ctrl'
         linii = [l.rstrip("\r") for l in src.split("\n")]
         ib = [k for k in range(len(linii) - 2) if linii[k:k + 3] == bloc]
@@ -1765,10 +1767,10 @@ class TestZonaInsasi(unittest.TestCase):
 
     def test_mutanti_r6_lasa_brief_ul_sa_plece(self):
         # fiecare mutant readuce comportamentul din 807119f9 (sau slabeste repararea); scenariul lui pleaca la Enter pe mutant, refuz pe cod
-        zona_veche = "    st = [(c, None) for c in reversed(zona.copii)]"            # linia din r5 (_necunoscute pornea de la copii)
+        zona_veche = "    st = [(c, None, False) for c in reversed(zona.copii)]"     # linia din r5 (_necunoscute pornea de la copii), forma r7
         cazuri = (
             # (A) zona insasi nu mai e verificata in _necunoscute: toate cele sase reproduceri din verdict pleaca
-            ([("    st = [(zona, None)]                     # r6 (Jakarinos r5 P1): zona insasi, cu aceleasi reguli ca orice element; apoi continutul ei",
+            ([("    st = [(zona, None, False)]              # r6 (Jakarinos r5 P1): zona insasi, cu aceleasi reguli ca orice element; apoi continutul ei",
                zona_veche)],
              tuple(pagina(zona_atr=atr) for atr, _ in REPRO_R6.values()) + tuple(zona_cu(zona_atr=atr) for atr, _ in ZONA_VARIANTE.values())
              + (pagina_calibrare("iii", zona_atr=REPRO_R6["clasa"][0]),), "ciorna_necunoscuta"),
@@ -1793,6 +1795,246 @@ class TestZonaInsasi(unittest.TestCase):
         # mutantul (A) inca refuza acelasi semnal pe un DESCENDENT (nu e zona): deci doar nivelul zonei e diferit
         mut = mutant([(cazuri[0][0][0][0], zona_veche)])
         self.assertEqual(ruleaza_trimite(mut, FakePg(zona_cu('<gem-icon data-file-name="oferta.docx"></gem-icon>')))[0], "ciorna_necunoscuta")
+
+
+# --- v4.6.4 r7 (Jakarinos NO-GO pe 0a8ab9a3, P1): EDITORUL INSUSI verificat ca orice element (media / fundal CSS) si O SINGURA functie
+# de semnale (_semnal), apelata dintr-un singur loc (_motiv_element), pentru TOATE nivelurile: zona, invelisurile de incredere, editorul,
+# descendentii editorului, descendentii zonei ---
+# reproducerea din verdict, copiata exact (pe 0a8ab9a3: atasamente 0, semne 0, necunoscute 0 -> press Enter), in locul editorului valid din teste
+EDITOR_VERDICT = ('<div class="ql-editor textarea"\n     contenteditable="true" role="textbox"\n     style="background: url(/resource/1234)">\n'
+                  '  <p>ciorna</p>\n</div>')
+EDITOR_VERDICT_BLOB = EDITOR_VERDICT.replace("url(/resource/1234)", "url(blob:null/12345678-1234-1234-1234-123456789abc)")
+EDITOR_DIV = '<div class="ql-editor textarea" contenteditable="true" role="textbox"><p>ciorna</p></div>'     # editorul din EDITOR_HTML
+assert EDITOR_DIV in EDITOR_HTML
+SEMNATURA_EDITOR = "div[role=textbox][contenteditable]"                                                     # scrisa de mana (ordinea r2)
+FUNDAL_EDITOR = "semnal_in_editor:fundal:" + SEMNATURA_EDITOR
+
+
+def editor_cu(atr):
+    # editorul valid din teste cu atribute in plus pe ELEMENTUL editorului insusi
+    return EDITOR_HTML.replace('contenteditable="true"', 'contenteditable="true"' + atr)
+
+
+# variante pe editorul insusi (asteptat scris de mana): fundalul CSS in orice forma, fundal + alt semnal (fundalul e primul), semnalele r4 / r5
+EDITOR_VARIANTE = {
+    "fundal_blob": (' style="background-image: url(blob:x)"', FUNDAL_EDITOR),
+    "fundal_data": (' style="--bg: url(data:image/png;base64,AAAA)"', FUNDAL_EDITOR),
+    "fundal_majuscule_spatii": (' style="background : URL( /r/1 )"', FUNDAL_EDITOR),
+    "fundal_a_doua_regula": (' style="color: red; background: url(x)"', FUNDAL_EDITOR),
+    "fundal_si_fisier": (' style="background: url(x)" data-file-name="oferta.docx"', FUNDAL_EDITOR),
+    "data_file_name": (' data-file-name="oferta.docx"', "semnal_in_editor:token_file:div[role=textbox][contenteditable]{ql-editor textarea data-file-name}"),
+    "style_fisier": (' style="--x: oferta.docx"', "semnal_in_editor:atribut_fisier:div[role=textbox][contenteditable]{ql-editor textarea style}"),
+    "title_fisier": (' title="oferta.docx"', "semnal_in_editor:eticheta:div[role=textbox][title=oferta.docx][contenteditable]"),
+}
+# editorul e chiar un element media (contenteditable pe canvas / img / iframe sub rich-textarea): semnalul "media:" pe editor
+EDITOR_MEDIA = (
+    ('<div class="input-area"><rich-textarea><canvas contenteditable="true"></canvas></rich-textarea></div>', "semnal_in_editor:media:canvas[contenteditable]"),
+    ('<div class="input-area"><rich-textarea><img contenteditable="true"></rich-textarea></div>', "semnal_in_editor:media:img[contenteditable]"),
+    ('<div class="input-area"><rich-textarea><iframe contenteditable="true"></iframe></rich-textarea></div>', "semnal_in_editor:media:iframe[contenteditable]"),
+)
+# calea legitima (L20): editorul cu stiluri / atribute FARA url( si fara nume de fisier / cuvant de atasament trece
+EDITOR_CURAT = (
+    ' style="min-height: 24px; color: rgb(0, 0, 0)"',
+    ' style="background: none; --x: 1"',
+    ' aria-label="Introdu un prompt aici" data-placeholder="Intreaba Gemini" spellcheck="true"',
+    ' aria-multiline="true" aria-haspopup="menu"',
+)
+# acelasi atribut cu semnal pus pe FIECARE nivel analizat (tipul motivului asteptat, scris de mana; "pdf" e cuvant, deci .docx)
+PARITATE_SEMNALE = {
+    "fundal": (' style="background: url(/resource/1234)"', "fundal"),
+    "fundal_blob": (' style="background-image: url(blob:x)"', "fundal"),
+    "eticheta_fisier": (' title="oferta.docx"', "eticheta"),
+    "eticheta_cuvant": (' title="Remove file"', "eticheta"),
+    "nume_atribut": (' data-file-name="oferta.docx"', "token_file"),
+    "nume_atribut_necunoscut": (' removeattachment=""', "token_attach"),
+    "id_fisier": (' id="oferta.docx"', "atribut_fisier"),
+    "valoare_cuvant": (' data-x="attachment"', "token_attach"),
+    "valoare_fisier": (' data-x="oferta.docx"', "atribut_fisier"),
+    "style_fisier": (' style="--x: oferta.docx"', "atribut_fisier"),
+    "href_blob": (' href="blob:https://gemini.google.com/oferta.docx"', "atribut_fisier"),
+}
+_ED_X = EDITOR_HTML.replace('class="input-area"', 'class="x"')      # editorul fara zona interioara (zona = invelisul dat de test)
+# nivel -> pagina intreaga cu atributele `atr` pe elementul acelui nivel (editor = elementul editorului; in_editor = un span din editor)
+NIVELURI = {
+    "zona_input_area_v2": lambda atr: pagina(zona_atr=atr),
+    "zona_prin_clasa": lambda atr: '<html><body><div class="input-area"%s>%s</div></body></html>' % (atr, _ED_X),
+    "input_container": lambda atr: '<html><body><input-area-v2><input-container%s>%s</input-container></input-area-v2></body></html>' % (atr, EDITOR_HTML),
+    "input_area_container": lambda atr: '<html><body><input-area-v2><div class="input-area-container"%s>%s</div></input-area-v2></body></html>' % (atr, _ED_X),
+    "rich_textarea": lambda atr: pagina(editor=EDITOR_HTML.replace('<rich-textarea class="text-input-field"', '<rich-textarea class="text-input-field"' + atr)),
+    "fieldset": lambda atr: zona_cu('<fieldset role="none"%s></fieldset>' % atr),
+    "textarea_wrapper": lambda atr: zona_cu('<div data-test-id="textarea-wrapper"%s></div>' % atr),
+    "div_editor_real": lambda atr: zona_cu('<div class="text-input-field simplified-input-area"%s%s></div>' % (ATRIBUTE_DIV_REALE, atr)),
+    "editor": lambda atr: zona_cu(editor=editor_cu(atr)),
+    "in_editor": lambda atr: zona_cu(editor=EDITOR_HTML.replace("<p>ciorna</p>", "<p>ciorna<span%s></span></p>" % atr)),
+    "structura_din_lista": lambda atr: zona_cu("<gem-icon%s></gem-icon>" % atr),
+    "div_neutru": lambda atr: zona_cu("<div%s></div>" % atr),
+    "control_din_lista": lambda atr: zona_cu('<button aria-label="Trimite mesajul"%s></button>' % atr),
+    "butonul_modelului": lambda atr: zona_cu('<button data-test-id="bard-mode-menu-button"%s></button>' % atr),
+}
+NIVELURI_EDITOR = ("editor", "in_editor")                            # motivele lor poarta prefixul contextului
+
+
+class TestEditorInsusi(unittest.TestCase):
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def refuz_fara_actiuni(self, html, m, mod=gp, msg=None):
+        i = self.an(html, mod)
+        self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"]), (1, 1, 0, 0), msg=msg)   # ce a masurat Jakarinos: 0 / 0
+        self.assertEqual(i["necunoscute_detalii"], [m], msg=msg)                                             # ... dar acum 1 necunoscut
+        self.assertEqual(ruleaza_trimite(mod, FakePg(html)), ("ciorna_necunoscuta", []), msg=msg)
+
+    def test_reproducerea_din_verdict_refuzata_fara_actiuni(self):
+        # fixture-ul din verdict (editorul valid din teste cu style="background: url(/resource/1234)", apoi url(blob:...)), in pagina
+        # simpla, in zona cu controale si in pagina calibrata (cele trei stari); pe 0a8ab9a3 toate dadeau 0 / 0 / 0 si press Enter
+        atr_verdict = ' style="background: url(/resource/1234)"'
+        for ed in (EDITOR_VERDICT, EDITOR_VERDICT_BLOB):
+            for html in (pagina(editor=EDITOR_HTML.replace(EDITOR_DIV, ed)), zona_cu(editor=EDITOR_HTML.replace(EDITOR_DIV, ed))):
+                self.refuz_fara_actiuni(html, FUNDAL_EDITOR, msg=ed)
+        for stare in ("i", "ii", "iii"):
+            self.refuz_fara_actiuni(pagina_calibrare(stare, editor_atr=atr_verdict), FUNDAL_EDITOR, msg=stare)
+        # cele trei momente: tab-ul curent (nicio actiune), chatul nou (doar goto), dupa scriere (fara Enter)
+        rau = pagina(editor=EDITOR_HTML.replace(EDITOR_DIV, EDITOR_VERDICT))
+        self.assertEqual(ruleaza_trimite(gp, FakePg(rau)), ("ciorna_necunoscuta", []))
+        self.assertEqual(ruleaza_trimite(gp, FakePg(pagina(), dupa_goto=rau)), ("ciorna_necunoscuta", ["goto"]))
+        cod, act = ruleaza_trimite(gp, FakePg(pagina(), dupa_scriere=rau))
+        self.assertEqual(cod, "ciorna_necunoscuta")
+        self.assertIn("insert", act)
+        self.assertNotIn("press Enter", act)
+        # acelasi stil pe <p> din editor (refuzat si in r6, ca "media_in_editor:p"): acum acelasi semnal "fundal:", cu prefixul contextului
+        ed = EDITOR_HTML.replace("<p>ciorna</p>", '<p style="background: url(/resource/1234)">ciorna</p>')
+        self.refuz_fara_actiuni(zona_cu(editor=ed), "semnal_in_editor:fundal:p")
+
+    def test_fiecare_varianta_pe_editor_refuzata(self):
+        for k, (atr, m) in sorted(EDITOR_VARIANTE.items()):
+            self.refuz_fara_actiuni(zona_cu(editor=editor_cu(atr)), m, msg=k)
+            self.refuz_fara_actiuni(pagina_calibrare("iii", editor_atr=atr), m, msg=k)
+        # listele albe nu au nicio putere in editor: semnatura editorului cu semnal in STRUCTURA / CONTROALE = tot refuz
+        with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", gp.STRUCTURA_CUNOSCUTA + (SEMNATURA_EDITOR, "div[role=textbox][title=oferta.docx][contenteditable]")), \
+                mock.patch.object(gp, "CONTROALE_CUNOSCUTE", gp.CONTROALE_CUNOSCUTE + (SEMNATURA_EDITOR,)):
+            for k, (atr, m) in sorted(EDITOR_VARIANTE.items()):
+                self.refuz_fara_actiuni(zona_cu(editor=editor_cu(atr)), m, msg=k)
+
+    def test_editorul_media_refuzat(self):
+        for ed, m in EDITOR_MEDIA:
+            self.refuz_fara_actiuni(pagina(editor=ed), m, msg=ed)
+
+    def test_editorul_curat_trece(self):
+        # calea legitima (L20): editorul cu stiluri obisnuite / atribute de accesibilitate trece, pe fixture-urile simple si pe cele trei
+        # stari calibrate; `trimite` ajunge la Enter
+        for atr in EDITOR_CURAT:
+            for html in (pagina(editor=editor_cu(atr)), zona_cu(editor=editor_cu(atr)),
+                         pagina_calibrare("i", editor_atr=atr), pagina_calibrare("ii", editor_atr=atr), pagina_calibrare("iii", editor_atr=atr)):
+                i = self.an(html)
+                self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"], i["necunoscute"]), (1, 1, 0, 0, 0), msg=(atr, i["necunoscute_detalii"]))
+                self.assertEqual(ruleaza_trimite(gp, FakePg(html, dupa_goto=html)), (None, ACTIUNI_TRIMITERE), msg=atr)
+        # textul brief-ului din editor (cu nume de fisiere) nu e verificat aici (comparat separat), ca inainte
+        self.assertEqual(self.an(zona_cu(editor=editor_cu(EDITOR_CURAT[0]).replace("<p>ciorna</p>", "<p>vezi raport.pdf</p>")))["necunoscute"], 0)
+
+    def test_paritate_acelasi_semnal_pe_orice_nivel(self):
+        # L19: acelasi atribut cu semnal, pus pe ORICE nivel analizat (zona, invelisurile de incredere, editorul, un element din editor,
+        # structura / controlul din lista, div neutru, butonul modelului), da ACELASI tip de motiv (scris de mana) si refuz fara actiuni;
+        # in editor motivul poarta prefixul contextului, in afara lui nu
+        for nivel, fab in sorted(NIVELURI.items()):
+            for k, (atr, tip) in sorted(PARITATE_SEMNALE.items()):
+                html = fab(atr)
+                i = self.an(html)
+                self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"], i["necunoscute"]), (1, 1, 0, 0, 1), msg=(nivel, k, i["necunoscute_detalii"]))
+                m = i["necunoscute_detalii"][0]
+                self.assertEqual(m.startswith("semnal_in_editor:"), nivel in NIVELURI_EDITOR, msg=(nivel, k, m))
+                if nivel in NIVELURI_EDITOR:
+                    m = m[len("semnal_in_editor:"):]
+                self.assertEqual(m.split(":", 1)[0], tip, msg=(nivel, k, m))
+                self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=(nivel, k))
+            # acelasi nivel FARA semnal trece (calea legitima a fiecarui nivel)
+            i = self.an(fab(""))
+            self.assertEqual((i["editoare"], i["zone"], i["necunoscute"]), (1, 1, 0), msg=(nivel, i["necunoscute_detalii"]))
+        # media pe niveluri (nu se pune prin atribut): zona insasi, un invelis, un element din zona, editorul (EDITOR_MEDIA mai sus)
+        for html, m in (('<html><body><canvas class="input-area">%s</canvas></body></html>' % _ED_X, "media:canvas"),
+                        ('<html><body><input-area-v2><picture>%s</picture></input-area-v2></body></html>' % EDITOR_HTML, "media:picture"),
+                        (zona_cu('<img src="x">'), "media:img[src]")):
+            self.refuz_fara_actiuni(html, m, msg=m)
+
+    def test_o_singura_functie_de_semnale(self):
+        # structural: _semnal e definit o data si apelat dintr-un singur loc (_motiv_element), care e apelat dintr-un singur loc
+        # (traseul unic din _necunoscute); nu mai exista _motiv_editor / media_in_editor; media si "url(" se verifica DOAR in _semnal,
+        # iar in _motiv_element semnalul vine inaintea oricarui return
+        with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
+            src = f.read().decode("ascii")
+        linii = [l.rstrip("\r") for l in src.split("\n")]
+        cod = [l for l in linii if not l.lstrip().startswith("#")]                   # (antetul povesteste istoria, inclusiv _motiv_editor)
+        self.assertFalse(any("_motiv_editor" in l for l in cod))
+        self.assertFalse(any("media_in_editor" in l for l in cod))
+        self.assertEqual(linii.count("def _semnal(n):"), 1)
+        self.assertEqual(sum(l.count("_semnal(") for l in cod), 2)                    # definitia + singurul apel
+        self.assertEqual(linii.count("    s = _semnal(n)"), 1)
+        self.assertEqual(linii.count("def _motiv_element(n, ctrl, in_editor=False):"), 1)
+        self.assertEqual(sum(l.count("_motiv_element(") for l in cod), 2)             # definitia + singurul apel
+        self.assertEqual(linii.count("        m, ctrl_copii = _motiv_element(n, ctrl, in_editor)"), 1)
+        self.assertEqual(sum(l.count('"url(" in') for l in cod), 1)
+        self.assertEqual(sum(l.count("n.tag in MEDIA") for l in cod), 1)
+        i_sem = linii.index("def _semnal(n):")
+        i_urm = next(k for k in range(i_sem + 1, len(linii)) if linii[k].startswith("def "))
+        corp_semnal = "\n".join(linii[i_sem:i_urm])
+        self.assertIn('    if "url(" in _ascii(n.attrs.get("style")):', corp_semnal)
+        self.assertIn("    if n.tag in MEDIA:", corp_semnal)
+        i_me = linii.index("def _motiv_element(n, ctrl, in_editor=False):")
+        i_s = linii.index("    s = _semnal(n)")
+        self.assertLess(i_me, i_s)
+        self.assertFalse(any("return" in l for l in linii[i_me:i_s]), linii[i_me:i_s])
+        # editorul nu are nicio ramura proprie inaintea traseului unic (singura linie cu `editoare` din _necunoscute seteaza contextul)
+        i_nec = linii.index("def _necunoscute(zona, editoare):")
+        i_urm = next(k for k in range(i_nec + 1, len(linii)) if linii[k].startswith("def "))
+        corp = [l for l in linii[i_nec:i_urm] if "editoare" in l and not l.lstrip().startswith("#")]
+        self.assertEqual(corp, ["def _necunoscute(zona, editoare):", "        if any(n is e for e in editoare):"])
+
+    def test_stare_arata_editorul(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            gp.stare(FakePg(pagina_calibrare("i", editor_atr=' style="background: url(/resource/1234)"')))
+        linii = out.getvalue().splitlines()
+        self.assertIn("necunoscute in zona: 1", linii)
+        self.assertIn("  necunoscut " + FUNDAL_EDITOR, linii)
+        self.assertTrue(any(l.startswith("paza ciorna: REFUZ ciorna_necunoscuta") for l in linii), linii)
+
+    def test_mutanti_r7_lasa_brief_ul_sa_plece(self):
+        # fiecare mutant readuce lacuna din 0a8ab9a3 (sau o generalizeaza); scenariul lui pleaca la Enter pe mutant, refuz pe cod.
+        # ("background:", nu "background-image:": "image" e cuvant de atasament si ar refuza si pe mutant)
+        verdict = pagina(editor=EDITOR_HTML.replace(EDITOR_DIV, EDITOR_VERDICT))
+        verdict_blob = zona_cu(editor=EDITOR_HTML.replace(EDITOR_DIV, EDITOR_VERDICT_BLOB))
+        cazuri = (
+            # (M1) fundalul CSS nu mai e semnal in _semnal: editorul din verdict pleaca - si o structura din lista / zona cu fundal
+            # (aceeasi functie serveste toate nivelurile)
+            ([('    if "url(" in _ascii(n.attrs.get("style")):', "    if False:")],
+             (verdict, verdict_blob, pagina_calibrare("i", editor_atr=' style="background: url(/resource/1234)"'),
+              zona_cu('<gem-icon style="background: url(blob:x)"></gem-icon>'), pagina(zona_atr=' style="background: url(blob:x)"'))),
+            # (M2) = clasa de defect r6: editorul insusi e tratat ca "de incredere" (sarit din traseul unic): fundalul si atributul de pe el pleaca
+            ([("        m, ctrl_copii = _motiv_element(n, ctrl, in_editor)",
+               "        m, ctrl_copii = (None, ctrl) if any(n is e for e in editoare) else _motiv_element(n, ctrl, in_editor)")],
+             (verdict, verdict_blob, zona_cu(editor=editor_cu(' data-file-name="oferta.docx"')), zona_cu(editor=editor_cu(' title="oferta.docx"')))),
+        )
+        for inlocuiri, htmluri in cazuri:
+            mut = mutant(inlocuiri)
+            for html in htmluri:
+                self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=html[-160:])
+                cod_m, act_m = ruleaza_trimite(mut, FakePg(html))
+                self.assertIsNone(cod_m, msg=(inlocuiri[0][1], html[-160:], cod_m))
+                self.assertIn("press Enter", act_m, msg=html[-160:])
+        # mutantul (M2) inca refuza acelasi semnal pe un DESCENDENT al editorului: deci doar nivelul editorului e diferit (ca in r6)
+        mut2 = mutant(cazuri[1][0])
+        for ed in (EDITOR_HTML.replace("<p>ciorna</p>", '<p style="background: url(/resource/1234)">ciorna</p>'),
+                   EDITOR_HTML.replace("<p>ciorna</p>", '<p>ciorna<span class="ql-attachment-chip"></span></p>')):
+            self.assertEqual(ruleaza_trimite(mut2, FakePg(zona_cu(editor=ed)))[0], "ciorna_necunoscuta")
+        # (M3) media scos din _semnal: pe cod intrarea "img[src]" din lista nu acopera imaginea, pe mutant o acopera (brief-ul pleaca);
+        # editorul-media ramane refuzat si pe mutant (element_in_editor: verificare dubla acolo, nu discrimineaza)
+        mut3 = mutant([("    if n.tag in MEDIA:", "    if False:")])
+        with mock.patch.object(mut3, "CONTROALE_CUNOSCUTE", mut3.CONTROALE_CUNOSCUTE + ("img[src]",)):
+            cod_m, act_m = ruleaza_trimite(mut3, FakePg(zona_cu('<img src="x">')))
+            self.assertIsNone(cod_m)
+            self.assertIn("press Enter", act_m)
+        with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", gp.CONTROALE_CUNOSCUTE + ("img[src]",)):
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu('<img src="x">'))), ("ciorna_necunoscuta", []))
+        self.assertEqual(ruleaza_trimite(mut3, FakePg(pagina(editor=EDITOR_MEDIA[0][0])))[0], "ciorna_necunoscuta")
 
 
 if __name__ == "__main__":

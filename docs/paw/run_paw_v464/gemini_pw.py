@@ -62,6 +62,15 @@
 #   ui-improvements-phase-1 with-toolbox-drawer input-box-shadow discovery-feed-the..." - fara semnal, deci trece. Celelalte niveluri
 #   "parinte" (rich-textarea, invelisurile editorului, editorul) erau deja descendenti ai zonei si treceau prin _semnal (teste pastrate).
 #   Linkul real de confidentialitate (chat existent): href="https://support.google.com/gemini/answer/14620100" - gazda Google, calea fara fisier.
+# v4.6.4 r7 (Jakarinos NO-GO pe 0a8ab9a3, P1): EDITORUL INSUSI (div.ql-editor[contenteditable]) avea o cale separata (_motiv_editor):
+#   trecea prin _semnal, dar verificarea media / fundal CSS (style cu "url(") se facea doar pe descendentii lui si in _motiv_element;
+#   <div class="ql-editor" contenteditable="true" style="background: url(/resource/1234)"> dadea 0 / 0 / 0 si brief-ul pleca.
+#   Ca sa nu mai existe niveluri cu reguli diferite: media si fundalul CSS au intrat IN _semnal, iar _semnal e SINGURA functie de semnale,
+#   apelata dintr-un singur loc (_motiv_element) pentru ORICE element analizat - zona, invelisurile de incredere (input-container,
+#   .input-area-container, fieldset, rich-textarea, textarea-wrapper / -inner, div-ul editorului), editorul, descendentii editorului si
+#   descendentii zonei (neutri, structura, liste albe, butonul modelului). _motiv_editor a disparut: editorul si continutul lui trec prin
+#   _motiv_element cu contextul in_editor (dupa semnal: in editor sunt tolerate doar etichetele de text EDITOR_TAGURI, textele brief-ului
+#   se compara separat in verifica_ciorna). Motivele din editor: "semnal_in_editor:<semnal>" / "element_in_editor:<semnatura>".
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata
@@ -482,7 +491,11 @@ def _fara_gazda_permisa(k, v):
 
 def _semnal(n):
     """r4 (Jakarinos r3 P1): primul semn de atasament purtat de elementul INSUSI, ca motiv de refuz (sau None). Se verifica
-    INAINTEA oricarei acceptari si pe ORICE element (neutru, din listele albe, zona / rich-textarea, butonul modelului, editorul):
+    INAINTEA oricarei acceptari si pe ORICE element (neutru, din listele albe, zona / rich-textarea, butonul modelului, editorul).
+    r7 (Jakarinos r6 P1): SINGURA functie de semnale - apelata dintr-un singur loc (_motiv_element) pentru toate nivelurile (zona,
+    invelisuri, editor, descendentii editorului, descendentii zonei); nicio cale separata nu mai verifica altceva. Ordinea:
+    (0) r7: elementul e media (img, picture, video, audio, canvas, object, embed, iframe, image, source, track) -> "media:<semnatura>";
+        style cu "url(" (miniatura pusa ca imagine de fundal) -> "fundal:<semnatura>";
     (1) eticheta (atributele cu valoare din semnatura): cuvant interzis sau nume.extensie -> "eticheta:<semnatura>";
     (2) cuvant de atasament in orice clasa, in id sau in NUMELE oricarui atribut (si data-*, si necunoscute: removeattachment)
         -> "token_<cuvant>:<semnatura>{clase #id atribute}"; r5: singurul nume exceptat e marcajul gol din MARCAJE_GOALE_PERMISE,
@@ -491,10 +504,15 @@ def _semnal(n):
     (4) in VALOAREA oricarui atribut din afara semnaturii (data-*, aria-description, necunoscute, style, href / src / srcset):
         cuvant -> "token_...", nume.extensie -> "atribut_fisier:..."; r5: si in URL-uri si in style, singura exceptie fiind gazda
         Google a unui href http(s) (_fara_gazda_permisa); blob: / data: / alt host / src / srcset = textul intreg.
-    Tagul nu e semnal: el E semnatura, comparata exact cu lista (file-drop-indicator a fost vazut gol de om la calibrare).
-    Textele si descendentii elementului se verifica mai departe, element cu element (_motiv_text / _necunoscute)."""
+    Tagul (in afara celor media) nu e semnal: el E semnatura, comparata exact cu lista (file-drop-indicator a fost vazut gol de om
+    la calibrare). Textele si descendentii elementului se verifica mai departe, element cu element (_motiv_text / _necunoscute)."""
+    sem = _semnatura(n)
+    if n.tag in MEDIA:
+        return "media:" + sem
+    if "url(" in _ascii(n.attrs.get("style")):
+        return "fundal:" + sem
     if _are_eticheta_interzisa(n):
-        return "eticheta:" + _semnatura(n)
+        return "eticheta:" + sem
     clase_id = _ascii(" ".join([n.attrs.get("class") or "", n.attrs.get("id") or ""]))
     nume_atribute = _ascii(" ".join(k for k in n.attrs if not _marcaj_gol_permis(n, k)))
     t = _cuvant(clase_id + " " + nume_atribute)
@@ -533,41 +551,24 @@ def _motiv_text(nod, ctrl):
     return "text:" + a[:TEXT_AFISAT]
 
 
-def _motiv_editor(ed):
-    # in editor intra doar textul brief-ului (comparat separat cu verifica_ciorna): orice alt element = nerecunoscut;
-    # r4: editorul insusi si elementele din el nu pot purta semnale de atasament (clase / atribute cu cuvinte, nume.extensie)
-    out = []
-    s = _semnal(ed)
-    if s:
-        out.append("semnal_in_editor:" + s)
-    st = list(reversed(ed.copii))
-    while st:
-        n = st.pop()
-        if n.tag == "#text" or n.tag in NEVIZIBILE:
-            continue
-        s = _semnal(n)
-        if n.tag in MEDIA or "url(" in _ascii(n.attrs.get("style")):
-            out.append("media_in_editor:" + _semnatura(n))
-        elif s:
-            out.append("semnal_in_editor:" + s)
-        elif n.tag not in EDITOR_TAGURI:
-            out.append("element_in_editor:" + _semnatura(n))
-        st.extend(reversed(n.copii))
-    return out
-
-
-def _motiv_element(n, ctrl):
+def _motiv_element(n, ctrl, in_editor=False):
     # -> (motiv sau None, controlul recunoscut in care sunt copiii - sau None)
+    # r7 (Jakarinos r6 P1): ORICE element analizat (zona, invelisurile de incredere, editorul, descendentii editorului, descendentii
+    # zonei) trece pe aici, iar primul pas e ACEEASI functie de semnale, _semnal (media, fundal CSS, eticheta, clase, id, numele si
+    # valorile tuturor atributelor, URL-uri, style). Nicio alta cale nu verifica semnale: un element cu semnal e refuzat oricare ar fi
+    # nivelul, contextul sau lista.
+    # r4 (Jakarinos r3 P1): semnalele se verifica INAINTEA oricarei acceptari (editor, structura, neutru, liste albe, butonul
+    # modelului); mutantul care muta blocul dupa liste e prins de teste
     sem = _semnatura(n)
-    if n.tag in MEDIA:
-        return "media:" + sem, ctrl
-    if "url(" in _ascii(n.attrs.get("style")):
-        return "fundal:" + sem, ctrl                    # miniatura pusa ca imagine de fundal
-    # r4 (Jakarinos r3 P1): semnalele de atasament se verifica INAINTEA oricarei acceptari (structura, neutru, liste albe, butonul
-    # modelului): un element cu semnal e refuzat oricare ar fi lista; mutantul care muta blocul dupa liste e prins de teste
     s = _semnal(n)
     if s:
-        return s, ctrl
+        return ("semnal_in_editor:" + s if in_editor else s), ctrl
+    if in_editor:
+        # in editor (contenteditable) intra doar textul brief-ului (comparat separat, verifica_ciorna): Quill produce p / br, restul
+        # etichetelor de text sunt tolerate; orice alt element = nerecunoscut (nicio lista alba nu se consulta in editor)
+        if n.tag in EDITOR_TAGURI:
+            return None, ctrl
+        return "element_in_editor:" + sem, ctrl
     if n.tag in STRUCTURA_TAGURI:
         return None, ctrl                               # zona si invelisul editorului (aceleasi nume ca selectorii)
     if n.attrs.get("data-test-id") == MODEL_DATA_TEST:
@@ -584,27 +585,28 @@ def _motiv_element(n, ctrl):
 def _necunoscute(zona, editoare):
     """Elementele / textele din zona (r6: SI ELEMENTUL ZONEI INSESI, primul verificat) care NU fac parte din structura recunoscuta
     a ciornei goale (lista de motive). Chip-urile si semnele (numarate separat, si pe zona) si ce nu se afiseaza (script / style /
-    template) se sar."""
+    template) se sar. r7: UN SINGUR traseu pentru toate elementele - fiecare (zona, invelisuri, editor, descendenti) trece prin
+    _motiv_element (deci prin _semnal); editorul si descendentii lui poarta doar contextul in_editor, nu o alta functie."""
     out = []
-    st = [(zona, None)]                     # r6 (Jakarinos r5 P1): zona insasi, cu aceleasi reguli ca orice element; apoi continutul ei
+    st = [(zona, None, False)]              # r6 (Jakarinos r5 P1): zona insasi, cu aceleasi reguli ca orice element; apoi continutul ei
     while st:
-        n, ctrl = st.pop()
+        n, ctrl, in_editor = st.pop()
         if n.tag == "#text":
-            m = _motiv_text(n, ctrl)
-            if m:
-                out.append(m)
+            if not in_editor:               # in editor sta textul brief-ului: se compara separat (verifica_ciorna), nu e "text necunoscut"
+                m = _motiv_text(n, ctrl)
+                if m:
+                    out.append(m)
             continue
         if n.tag in NEVIZIBILE or n.tag == CHIP or _e_semn(n):
             continue
         if any(n is e for e in editoare):
-            out.extend(_motiv_editor(n))
-            continue
-        m, ctrl_copii = _motiv_element(n, ctrl)
+            in_editor = True                # r7: editorul = acelasi traseu, cu context (nu o cale separata)
+        m, ctrl_copii = _motiv_element(n, ctrl, in_editor)
         if m:
             out.append(m)
         if n is zona:
             ctrl_copii = None               # r6: zona e un invelis, niciodata un control (textele din ea nu sunt eticheta ei)
-        st.extend((c, ctrl_copii) for c in reversed(n.copii))
+        st.extend((c, ctrl_copii, in_editor) for c in reversed(n.copii))
     return out
 
 

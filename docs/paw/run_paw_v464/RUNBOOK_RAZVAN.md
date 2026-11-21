@@ -114,6 +114,27 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
   (necitit) contine un cuvant de atasament sau un nume.extensie: STOP, copiaza linia pentru chat (nu se trece
   in liste; se lamureste ca la r5).
 
+**Stare (r7, 22.11.2026, dupa review-ul Jakarinos pe r6):**
+- **Editorul insusi (P1).** Pana la r6, editorul (`div.ql-editor[contenteditable]`) avea o cale separata de
+  verificare: trecea prin semnalele r4 / r5 (clase, atribute, nume de fisier), dar verificarea media / fundal
+  CSS (`style` cu `url(`) se facea doar pe descendentii lui. Un `style="background: url(/resource/1234)"` (sau
+  `url(blob:...)`) pus chiar pe editor dadea 0 / 0 / 0 si brief-ul pleca. Acum editorul e refuzat ca orice alt
+  element: `semnal_in_editor:fundal:div[role=textbox][contenteditable]`, fara nicio actiune, in toate cele trei
+  momente (tab-ul curent, chatul nou, inainte de Enter).
+- **O singura functie de semnale, un singur traseu.** Ca sa nu mai existe niveluri cu reguli diferite, media
+  si fundalul CSS au intrat in functia unica de semnale (`_semnal`), iar aceasta e apelata dintr-un singur loc
+  (`_motiv_element`), pentru TOATE elementele analizate: zona, invelisurile de incredere (`input-container`,
+  `.input-area-container`, `fieldset`, `rich-textarea`, `textarea-wrapper` / `-inner`, div-ul editorului),
+  editorul, elementele din editor si toate elementele din zona (neutre, structura, liste albe, butonul
+  modelului). Calea separata a editorului (`_motiv_editor`) a disparut; editorul poarta doar un context
+  (in editor sunt tolerate etichetele de text ale brief-ului, nicio lista alba nu se consulta). Testul de
+  paritate pune acelasi semnal pe fiecare nivel si cere acelasi tip de motiv; un test structural verifica
+  ca `_semnal` are un singur apel si ca media / `url(` se verifica doar acolo. Motivele din editor sunt
+  `semnal_in_editor:<semnal>` (si pentru media: `semnal_in_editor:media:img[src]`, nu mai exista
+  `media_in_editor:`) si `element_in_editor:<semnatura>`; niciunul nu se trece in liste.
+- La 5a, o linie `semnal_in_editor:...` cu ciorna goala pe ecran inseamna ca editorul real poarta un stil cu
+  `url(` sau un atribut cu nume / cuvant de fisier: STOP, copiaza linia pentru chat (nu se trece in liste).
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -170,7 +191,7 @@ if ($manifest.'gemini_pw.py' -ine $GemHashNou) { throw 'gemini_pw.py din pachet 
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel din v4.6.3' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 622 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 624 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -180,17 +201,18 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + '.v463') -Force }
 ```
 
-Asteptat (pachetul r6): 622 linii diferite (11 vechi `<=`, 611 noi `=>`; r5: 600 / 11 / 589, r4:
-536 / 11 / 525, r3: 477 / 11 / 466, r2: 411 / 11 / 400). Cele 11 linii vechi afisate sunt aceleasi ca in
-r2-r5: antetul, lista de coduri, linia `import`, comentariul selectorilor `ATAS`, titlul partii cu browserul,
+Asteptat (pachetul r7): 624 linii diferite (11 vechi `<=`, 613 noi `=>`; r6: 622 / 11 / 611, r5: 600 / 11 / 589,
+r4: 536 / 11 / 525, r3: 477 / 11 / 466, r2: 411 / 11 / 400). Cele 11 linii vechi afisate sunt aceleasi ca in
+r2-r6: antetul, lista de coduri, linia `import`, comentariul selectorilor `ATAS`, titlul partii cu browserul,
 cele doua linii din vechea `_atasamente`, linia `atasamente in ciorna` din `stare` si cele trei linii ale vechii
-verificari din `trimite`. Liniile noi: notele v4.6.4 / r2 / r3 / r4 / r5 / r6, selectorul `CHIP`, analiza HTML a
-ciornei, verificarea pozitiva a structurii (din r6 pornind de la elementul zonei insesi, `_cu_descendenti`),
-semnalele de atasament verificate inaintea listelor (`_semnal`, cu nume.extensie in toate valorile si exceptia
-gazdei Google pentru `href`), regula marcajului gol `xapfileselectordropzone`, listele albe calibrate (fara
-linia `token_file`), textul Workspace, regula domeniului firmei, paza si apelurile ei. Testele:
-`Ran 115 tests ... OK`. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
-raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 622 / 11 de mai sus).
+verificari din `trimite`. Liniile noi: notele v4.6.4 / r2 / r3 / r4 / r5 / r6 / r7, selectorul `CHIP`, analiza HTML a
+ciornei, verificarea pozitiva a structurii (din r6 pornind de la elementul zonei insesi, `_cu_descendenti`; din r7
+un singur traseu, cu contextul `in_editor`, fara `_motiv_editor`), semnalele de atasament verificate inaintea
+listelor (`_semnal` - din r7 si media / fundalul CSS -, cu nume.extensie in toate valorile si exceptia gazdei
+Google pentru `href`), regula marcajului gol `xapfileselectordropzone`, listele albe calibrate (fara linia
+`token_file`), textul Workspace, regula domeniului firmei, paza si apelurile ei. Testele:
+`Ran 123 tests ... OK`. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
+raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 624 / 11 de mai sus).
 
 Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
 `C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi
@@ -313,7 +335,8 @@ Orice rezultat diferit de cel cerut mai jos = **STOP**, fara marker; copiaza toa
   verifica intai tab-ul curent): ambele trebuie sa dea `necunoscute in zona: 0`. (Pachetul r4 arata aici
   1 necunoscut `token_file:...`; r5 il lamureste prin regula marcajului `xapfileselectordropzone=""` -
   vezi pasul 0. Href-ul real al linkului de confidentialitate e confirmat din pagina si testat in r6; daca
-  5a arata totusi `atribut_fisier:a[...][href]{}` sau o linie pe zona `...:input-area-v2{...}`, STOP,
+  5a arata totusi `atribut_fisier:a[...][href]{}`, o linie pe zona `...:input-area-v2{...}` sau o linie pe
+  editor `semnal_in_editor:...` (r7: un stil cu `url(` / un atribut cu fisier chiar pe editor), STOP,
   copiaza linia pentru chat.)
 - **5b.** Pune de mana UN fisier mic (de ex. un `.txt`) in ciorna, fara sa trimiti; `stare` din nou:
   trebuie EXACT `atasamente in ciorna: 1` si `paza ciorna: REFUZ ciorna_cu_atasamente ...`.
