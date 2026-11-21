@@ -17,8 +17,74 @@ export function lunaText(iso) {
 }
 export const zileText = n => n === 1 ? 'mai este 1 zi' : (n % 100 === 0 || n % 100 >= 20) ? `mai sunt ${n} de zile` : `mai sunt ${n} zile`
 
-// un rând rezervat -> {subiect, html}
+// 'AAAA-LL-ZZ' -> 'ZZ.LL.AAAA' (termenele din calcul); altceva -> '—'
+export const ziText = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso ?? '')); return m ? `${m[3]}.${m[2]}.${m[1]}` : '—' }
+// un număr din calcul (jsonb): finit sau null (L18: necunoscut != 0); un număr cu 2 zecimale în forma românească (NMA 66,08 / locuri 2,64)
+const nr = v => (v === null || v === undefined || v === '' || typeof v === 'boolean' || !Number.isFinite(Number(v))) ? null : Number(v)
+const zecimale = v => Number(v).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const ZI_ISO = /^\d{4}-\d{2}-\d{2}$/
+// 20270101a (runda 2, P2): rândul are cheia `calcul` (chiar null) = rezervarea NOUĂ: calculul trebuie să fie complet pentru felul rândului,
+//   altfel mailul se REFUZĂ (mailUpa -> null, rândul -> eroare calcul_invalid), fără forma veche; fără cheia `calcul` = rezervarea din
+//   20261229a (edge-ul publicat înaintea migrării): forma v10, doar pentru felurile vechi (zilnic / inchidere).
+export const areCalcul = r => !!r && typeof r === 'object' && Object.prototype.hasOwnProperty.call(r, 'calcul')
+export function calculValid(r) {
+  const c = r?.calcul
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return false
+  if (r.fel === 'calcul') {
+    // runda 3: termen_depasit vine din BD (termenul la stat < ziua rezervării); lipsă / alt tip = necunoscut -> refuz (L18)
+    return c.stare === 'definitiv' && ZI_ISO.test(String(c.termen_stat ?? '')) && typeof r.termen_depasit === 'boolean'
+      && [c.nma, c.posturi, c.locuri, c.salariu_minim, c.suma_datorata, c.achizitii_fara_tva, c.report_intrat, c.deducere, c.de_plata, c.report_iesit].every(v => nr(v) !== null)
+  }
+  if (r.fel === 'zilnic') {
+    return c.stare === 'previziune' && ZI_ISO.test(String(c.termen_upa ?? '')) && ZI_ISO.test(String(c.termen_stat ?? ''))
+      && [c.jumatate, c.report_intrat, c.achizitii_fara_tva, r.ramas].every(v => nr(v) !== null)
+  }
+  return false
+}
+
+function mailCalcul(r, { furnizori, app }) {
+  const c = r.calcul, luna = lunaText(r.luna)
+  const link = `<p style="margin-top:16px"><a href="${esc(app)}/administrativ?tab=upa" style="color:#1f6f8b">Deschide Administrativ → Unități protejate</a> (calculul pe luni și facturile)</p>`
+  const subsol = `<p style="color:#8a99a8;font-size:12px;margin-top:18px">Mesaj trimis din platforma Gazpet ERP · nu răspundeți la acest mesaj.</p>`
+  const tabel = (randuri) => `<table style="border-collapse:collapse;font-size:14px;margin:8px 0">${randuri.map(([e, v, rosu]) =>
+    `<tr><td style="padding:5px 12px 5px 0;color:#44515c">${e}</td><td style="padding:5px 0;font-weight:700;text-align:right${rosu ? ';color:#b3261e' : ''}">${v}</td></tr>`).join('')}</table>`
+  const fz = Array.isArray(furnizori) && furnizori.length
+    ? `<p style="margin:14px 0 4px;font-weight:700">Furnizori UPA cu autorizația valabilă</p><ul style="margin:0;padding-left:18px">${furnizori.slice(0, 15).map(f => `<li>${esc(f)}</li>`).join('')}</ul>`
+    : ''
+  if (r.fel === 'calcul') {
+    const depasit = r.termen_depasit === true
+    const subiect = depasit
+      ? `Fond handicap ${luna}: de plată la bugetul de stat ${lei(c.de_plata)} lei; termenul ${ziText(c.termen_stat)} a trecut`
+      : `Fond handicap ${luna}: de plată la bugetul de stat ${lei(c.de_plata)} lei până pe ${ziText(c.termen_stat)}`
+    const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1a232c;max-width:680px">` +
+      `<p>Bună ziua,</p><p>Calculul contribuției pentru persoanele cu handicap pe <b>${esc(luna)}</b> s-a încheiat, după închiderea pontajului:</p>` +
+      (depasit ? `<p style="color:#b3261e;font-weight:700">Termenul de plată la bugetul de stat (${esc(ziText(c.termen_stat))}) a trecut: plata se face cât mai curând.</p>` : '') +
+      tabel([['Număr mediu de angajați', esc(zecimale(c.nma))], ['Posturi (4% din numărul mediu)', esc(zecimale(c.posturi))],
+        ['Locuri de muncă neocupate', esc(zecimale(c.locuri))], ['Salariul minim brut al lunii', `${lei(c.salariu_minim)} lei`],
+        ['Contribuția integrală', `${lei(c.suma_datorata)} lei`],
+        ['Achiziții de la unități protejate (fără TVA, plătite în lună)', `${lei(c.achizitii_fara_tva)} lei`], ['Report din lunile anterioare', `${lei(c.report_intrat)} lei`],
+        ['Deducere (cel mult jumătate din contribuție)', `${lei(c.deducere)} lei`], [`De plată la bugetul de stat până pe ${esc(ziText(c.termen_stat))}`, `${lei(c.de_plata)} lei`, true],
+        ['Se reportează pe lunile următoare', `${lei(c.report_iesit)} lei`]]) +
+      link + subsol + `</div>`
+    return { subiect: subiect.replace(/[\r\n]+/g, ' ').slice(0, 200), html }
+  }
+  const zile = zileText(Number(r.zile_ramase))
+  const subiect = `Fond handicap ${luna} (previziune): mai sunt ${lei(r.ramas)} lei de cumpărat de la unități protejate, ${zile}`
+  const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1a232c;max-width:680px">` +
+    `<p>Bună ziua,</p><p>Pentru <b>${esc(luna)}</b>, <b>previziunea</b> contribuției pentru persoanele cu handicap arată că deducerea din achiziții de la unități protejate nu e folosită integral:</p>` +
+    tabel([['Contribuția integrală estimată', nr(c.suma_datorata) === null ? '—' : `${lei(c.suma_datorata)} lei`], ['Deducerea maximă (jumătate din contribuție)', `${lei(c.jumatate)} lei`],
+      ['Report din lunile anterioare', `${lei(c.report_intrat)} lei`], ['Cumpărat până acum (fără TVA)', `${lei(c.achizitii_fara_tva)} lei`],
+      ['Rămas de cumpărat', `${lei(r.ramas)} lei`, true], ['Zile rămase din lună', esc(zile.replace(/^mai (sunt|este) /, ''))]]) +
+    `<p>Facturile se plătesc unității protejate până la sfârșitul lunii (${esc(ziText(c.termen_upa))}); ce nu se deduce se plătește la bugetul de stat până pe ${esc(ziText(c.termen_stat))}. ` +
+    `Previziune: suma exactă se calculează după închiderea pontajului.</p>` +
+    fz + link + subsol + `</div>`
+  return { subiect: subiect.replace(/[\r\n]+/g, ' ').slice(0, 200), html }
+}
+
+// un rând rezervat -> {subiect, html}; null = rândul nu respectă contractul (calcul invalid / fel necunoscut): nu se trimite nimic
 export function mailUpa(r, { furnizori = [], app = APP } = {}) {
+  if (areCalcul(r)) return calculValid(r) ? mailCalcul(r, { furnizori, app }) : null
+  if (!r || (r.fel !== 'zilnic' && r.fel !== 'inchidere')) return null
   const luna = lunaText(r.luna)
   const link = `<p style="margin-top:16px"><a href="${esc(app)}/administrativ?tab=upa" style="color:#1f6f8b">Deschide Administrativ → Unități protejate</a> (acolo se înregistrează facturile)</p>`
   const fz = Array.isArray(furnizori) && furnizori.length
@@ -78,17 +144,23 @@ export async function ruleazaAlertaUpa({ sb, fetchFn = globalThis.fetch, resendK
   // erori_config = codurile de business ale configurării (setare_zi_invalida / fara_plafon), calculate de BD la FIECARE rulare (nu doar la
   //   prima din zi, când se scriu în jurnal): o zi cu configurare defectă nu arată ca o zi fără alertă (L18)
   // destinatari_ignorati = câte adrese din setări NU sunt interne (nu primesc nimic); doar numărul, fără adrese
-  const baza = { zi: rez.zi ?? null, luna_inchisa: rez.inchis?.luna ?? null, reconciliate: Number(rez.reconciliate) || 0, erori_config: rez.erori_config,
+  // luna_de_inchis (20270101a): prima lună cu pontajul închis care așteaptă confirmarea owner-ului (gata) sau date (blocată); doar luna
+  const baza = { zi: rez.zi ?? null, luna_inchisa: rez.inchis?.luna ?? null, luna_de_inchis: rez.luna_de_inchis?.luna ?? null,
+                 reconciliate: Number(rez.reconciliate) || 0, erori_config: rez.erori_config,
                  destinatari_ignorati: rez.destinatari_ignorati }
   if (rez.activ !== true) return raspuns(200, { ok: true, skip: 'alerta_oprita', ...baza })
   const contor = { trimis: 0, eroare: 0, necunoscut: 0, fara_mail: 0, nemarcat: 0 }
   for (const r of rez.randuri) {
     if (r?.stare !== 'rezervat') { if (r?.stare === 'fara_mail') contor.fara_mail++; continue }
     let rezultat, resendId = null
-    if (!destinatariValizi(r.destinatari) || !Number.isSafeInteger(Number(r.id))) {
+    const mail = destinatariValizi(r.destinatari) && Number.isSafeInteger(Number(r.id)) ? mailUpa(r, { furnizori: rez.furnizori_upa, app }) : undefined
+    if (mail === undefined) {
       rezultat = { stare: 'eroare', eroare: 'rezervare_invalida' }
+    } else if (mail === null) {
+      // P2: un calcul nou incomplet / invalid NU trimite textul vechi: rândul se marchează eroare, fără niciun apel la Resend
+      rezultat = { stare: 'eroare', eroare: 'calcul_invalid' }
     } else {
-      const { subiect, html } = mailUpa(r, { furnizori: rez.furnizori_upa, app })
+      const { subiect, html } = mail
       try {
         const res = await fetchFn('https://api.resend.com/emails', {
           method: 'POST', signal: AbortSignal.timeout(15000),
