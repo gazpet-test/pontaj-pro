@@ -408,6 +408,8 @@ export async function urmaresteLot({ lot, randuri, s, fan, deps, uid = null, rul
     // și dacă evenimentul nu e mai vechi decât cel deja scris (altfel „depășit”: o rulare mai nouă a câștigat)
     const p = b.map(r => { const z = u.pe_awb.get(r.awb); stari[z.urmarire_stare] = (stari[z.urmarire_stare] || 0) + 1
       return { id: r.id, awb: r.awb, versiune: r.versiune_urmarire, urmarire_stare: z.urmarire_stare, ultim_eveniment: z.ultim_eveniment, ultim_eveniment_la: z.ultim_eveniment_la,
+        // runda 4 #1155 (Jakarinos r3 P2): lista evenimentelor citite, din care BD-ul ia cronologia DOAR la un moment posibil (rezumatUrmarireFan)
+        evenimente: Array.isArray(z.evenimente) ? z.evenimente : null,   // lipsa ≠ listă goală (L18): null = BD-ul o derivă din ultimul eveniment
         ridicat_propus: z.ridicat_propus, livrat_la: z.livrat_la, retur_propus: z.retur_propus, retur_la: z.retur_la ?? null, contradictii: z.contradictii || [] } })
     const raw = await scriereUrmarire(deps, uid, 'urmarire', lot.id, p, rulare)
     const w = rezUrmarire(raw, p.length)

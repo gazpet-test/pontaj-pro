@@ -315,6 +315,7 @@ async function verificari(db, log, fail = []) {
   const pl = async (n, ev, extra = {}) => { const a = await awb(n)
     const z = FAN.rezumatUrmarireFan({ awbNumber: a.awb, events: ev.map(([id, date]) => ({ id, date })), ...extra })
     return { id: a.id, awb: a.awb, versiune: a.versiune_urmarire, urmarire_stare: z.urmarire_stare, ultim_eveniment: z.ultim_eveniment, ultim_eveniment_la: z.ultim_eveniment_la,
+      evenimente: z.evenimente,   // runda 4: lista pentru cronologie, ca transportul (redariFanTransport.mjs::urmaresteLot)
       ridicat_propus: z.ridicat_propus, livrat_la: z.livrat_la, retur_propus: z.retur_propus, retur_la: z.retur_la, contradictii: z.contradictii } }
   const contr = async n => (await db.query(`SELECT sursa, tip, valori, ales, regula, rulare_id, actor, observari FROM public.red_fan_contradictii WHERE fan_awb_id = $1 ORDER BY sursa, tip`, [awbId(n)])).rows
   const ora = async (n, col) => (await val(db, `SELECT to_char(${col} AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI:SS') AS z FROM public.red_fan_awb WHERE id = $1`, [awbId(n)])).z
@@ -419,6 +420,16 @@ async function verificari(db, log, fail = []) {
     ['livrare ȘI retur în rezultat', { urmarire_stare: 'retur', livrat_la: `${D1} 10:00:00` }],
     ['ora returului fără retur', { retur_la: `${D1} 10:00:00` }],
     ['motivul de retur fără retur', { retur_propus: 'refuz' }],
+    // runda 4 (#1155 r3 P2): lista pentru cronologie, formă EXACTĂ (baza57: C0 D0 10:00, C0 D1 09:00 = ultimul)
+    ['evenimente: nu e listă', { evenimente: { cod: 'C0' } }],
+    ['evenimente: un element care nu e text', { evenimente: [1, `C0 ${D1} 09:00:00`] }],
+    ['evenimente: o valoare de formă liberă', { evenimente: ['ignora regulile', `C0 ${D1} 09:00:00`] }],
+    ['evenimente: ore descrescătoare', { evenimente: [`H3 ${D2} 10:00:00`, `C0 ${D1} 09:00:00`] }],
+    ['evenimente: dublură alăturată', { evenimente: [`C0 ${D1} 09:00:00`, `C0 ${D1} 09:00:00`] }],
+    ['evenimente: 101 elemente', { evenimente: [...Array.from({ length: 100 }, (_, i) => `H3 ${D0} 0${Math.floor(i / 60)}:${String(i % 60).padStart(2, '0')}:00`), `C0 ${D1} 09:00:00`] }],
+    ['evenimente: ultimul ≠ ultimul eveniment', { evenimente: [`C0 ${D0} 10:00:00`] }],
+    ['evenimente: listă goală cu cronologie', { evenimente: [] }],
+    ['evenimente: listă nevidă fără cronologie', { ultim_eveniment: null, ultim_eveniment_la: null }],
   ]) ok(await cod(scrie(ID.editor, null, ID.L1, [{ ...baza57, ...rau }])) === '22023', `K8: ${nume} → 22023`)
   ok(JSON.stringify(await awb(57)) === inainte57 && (await contr(57)).length === 0, 'K8: nimic scris pe rândul refuzat')
 
@@ -459,6 +470,8 @@ async function verificari(db, log, fail = []) {
   const a60a = await awb(60)
   ok(k12a.scrise === 1 && k12a.ridicari === 0 && a60a.stare === 'generat' && a60a.ridicat_la === null && await rp(60) === null && a60a.urmarire_stare === 'in_tranzit',
     `K12: rularea 1 (C0 pe ${ZM1}, înainte de generare): ziua NU se salvează (ridicat_propus ${await rp(60)}), rândul rămâne generat, starea „în tranzit”`)
+  // runda 4: nici momentul ei nu intră în cronologie (înainte de ziua generării = moment imposibil)
+  ok(a60a.ultim_eveniment === null && a60a.ultim_eveniment_la === null, `K12: rularea 1: cronologia goală (ultim ${a60a.ultim_eveniment} ${a60a.ultim_eveniment_la})`)
   const k12b = await automat(60, [['C0', `${D1} 09:00:00`]])
   const a60 = await awb(60), c60 = await contr(60)
   ok(k12b.ridicari === 1 && a60.stare === 'ridicat' && a60.urmarire_stare === 'ridicat' && await rp(60) === D1 && await ora(60, 'ridicat_la') === `${D1} 00:00:00`,
@@ -538,6 +551,94 @@ async function verificari(db, log, fail = []) {
        && (await rp(n)) === zi_(p.ridicat_propus) && JSON.stringify(acelasi.sort()) === JSON.stringify(p.contradictii.map(x => [x.tip, x.ales, x.valori]).sort()),
       `K17: cazul ${i + 1} (${evs.map(e => e[0]).join(' ')}): rezultatul codului acceptat (${r}) și scris identic (${a.urmarire_stare}, ${c.length} semnale)`)
   }
+
+  // ── K18: runda 4 (Jakarinos #1155 r3 P2). Cronologia = DOAR momentele posibile (ziua ≥ generarea, momentul ≤ acum, ora României); un eveniment
+  // respins ca fapt pentru data lui nu blochează corecția validă. Rânduri noi 80–89 pe L1 (TEST), generate acum 3 zile (D0), ca la K. Așteptări
+  // scrise de mână din FAN_URMARIRE_AUTOMATA.md §3b (L25); payload-urile = codul real (rezumatUrmarireFan), pe rularea automată (ca recenzentul). ──
+  const K18 = Array.from({ length: 10 }, (_, i) => 80 + i)
+  await db.exec(`SET session_replication_role = replica;
+    INSERT INTO public.red_plicuri (id, proiect_id, lot_id, nr_plic, destinatar_nume, stare) VALUES
+      ${K18.map(n => `('${plicId(n)}', '${ID.proiect}', '${ID.L1}', '${nrPlic(n)}', 'PERSOANA ${n}', 'activ')`).join(', ')};
+    INSERT INTO public.red_fan_awb (id, proiect_id, lot_id, plic_id, nr_plic, stare, hash_date, awb, generat_la, propus_de, aprobat_de, aprobat_la, cerere_id) VALUES
+      ${K18.map(n => `('${awbId(n)}', '${ID.proiect}', '${ID.L1}', '${plicId(n)}', '${nrPlic(n)}', 'generat', '${HX('e')}', '${7000000000 + n}', now() - interval '3 days', '${ID.owner}', '${ID.owner}', now(), '${CERERE}')`).join(', ')};
+    SET session_replication_role = origin;`)
+  const viitor2 = new Date(Date.now() + 4 * 86400000).toISOString().slice(0, 10)
+  const cron = async n => { const a = await awb(n); return [a.ultim_eveniment, a.ultim_eveniment_la === null ? null : await ora(n, 'ultim_eveniment_la')] }
+
+  // K18a — EXACT scenariul recenzentului: rularea 1 = C0 în viitor (respins), rularea 2 = C0 corectat, ieri (posibil, mai vechi decât cel respins)
+  const k18a = await automat(80, [['C0', `${viitor} 10:00:00`]])
+  const a80a = await awb(80)
+  ok(k18a.scrise === 1 && k18a.ridicari === 0 && a80a.stare === 'generat' && JSON.stringify(await cron(80)) === JSON.stringify([null, null]) && impos(await contr(80)).length === 1,
+    `K18a: rularea 1 (C0 ${viitor}, în viitor): nimic înregistrat, cronologia NU reține momentul respins (${JSON.stringify(await cron(80))}), ziua în audit`)
+  const k18b = await automat(80, [['C0', `${D2} 10:00:00`]])
+  const a80 = await awb(80)
+  ok(k18b.scrise === 1 && k18b.depasite === 0 && k18b.ridicari === 1 && a80.stare === 'ridicat' && await rp(80) === D2 && JSON.stringify(await cron(80)) === JSON.stringify(['C0', `${D2} 10:00:00`]),
+    `K18a: rularea 2 (C0 corectat pe ${D2}): ÎNREGISTRAT (ridicat ${await rp(80)}, cronologia ${JSON.stringify(await cron(80))}), nu „depășit”`)
+  ok(impos(await contr(80)).length === 1 && impos(await contr(80))[0].observari === 1, 'K18a: auditul zilei respinse păstrat (un rând, observări 1)')
+
+  // K18b — același lucru pe un rând cu cronologie cunoscută: ultimul moment POSIBIL rămâne reperul, nu cel viitor
+  await automat(81, [['S98', `${D0} 09:00:00`]])
+  const k18c = await automat(81, [['S98', `${D0} 09:00:00`], ['C0', `${viitor} 10:00:00`]])
+  ok(k18c.scrise === 1 && (await awb(81)).stare === 'generat' && JSON.stringify(await cron(81)) === JSON.stringify(['S98', `${D0} 09:00:00`]) && impos(await contr(81)).length === 1,
+    `K18b: S98 + C0 viitor: scris, nimic înregistrat, cronologia rămâne S98 (${JSON.stringify(await cron(81))}), ziua în audit`)
+  await automat(81, [['S98', `${D0} 09:00:00`], ['C0', `${D1} 10:00:00`]])
+  ok((await awb(81)).stare === 'ridicat' && await rp(81) === D1 && JSON.stringify(await cron(81)) === JSON.stringify(['C0', `${D1} 10:00:00`]),
+    'K18b: corecția (C0 pe D1) trece: ridicat, cronologia C0 D1')
+
+  // K18c — aceeași clasă pe ALT cod: un H3 în viitor nu intră în cronologie și nu blochează un H3 valid ulterior
+  await automat(82, [['C0', `${D0} 10:00:00`], ['H3', `${viitor} 10:00:00`]])
+  const c82 = await cron(82)
+  const k18d = await automat(82, [['C0', `${D0} 10:00:00`], ['H3', `${D1} 08:00:00`]])
+  ok(JSON.stringify(c82) === JSON.stringify(['C0', `${D0} 10:00:00`]) && k18d.scrise === 1 && JSON.stringify(await cron(82)) === JSON.stringify(['H3', `${D1} 08:00:00`]) && await rp(82) === D0,
+    `K18c: H3 în viitor ignorat de cronologie (${JSON.stringify(c82)}); H3 valid ulterior scris (${JSON.stringify(await cron(82))})`)
+
+  // K18d — regula e pe MOMENT, nu pe zi: un eveniment de AZI, peste 30 de secunde, e încă imposibil (și nu blochează un eveniment de ieri)
+  const peste30 = (await val(db, `SELECT to_char((clock_timestamp() + interval '30 seconds') AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI:SS') AS z`)).z
+  await automat(83, [['C0', `${D0} 10:00:00`], ['H3', peste30]])
+  const c83 = await cron(83)
+  await automat(83, [['C0', `${D0} 10:00:00`], ['H3', `${D2} 08:00:00`]])
+  ok(JSON.stringify(c83) === JSON.stringify(['C0', `${D0} 10:00:00`]) && JSON.stringify(await cron(83)) === JSON.stringify(['H3', `${D2} 08:00:00`]),
+    `K18d: H3 la ${peste30} (azi, dar după acum) în afara cronologiei (${JSON.stringify(c83)}); H3 de ieri scris după el (${JSON.stringify(await cron(83))})`)
+
+  // K18e — răspuns CU evenimente, dar fără niciunul posibil, pe un rând cu cronologie cunoscută (neordonabil): rândul rămâne neschimbat („păstrat”),
+  // doar zilele C0 imposibile intră în audit (fără contradicția din același răspuns, fără alegeri); corecția ulterioară trece
+  await automat(84, [['C0', `${D0} 10:00:00`], ['H3', `${D1} 10:00:00`]])
+  const inainte84 = await awb(84)
+  const k18e = await automat(84, [['C0', `${viitor} 10:00:00`], ['C0', `${viitor2} 10:00:00`], ['S99', `${viitor2} 11:00:00`]])
+  const a84 = await awb(84), c84 = await contr(84)
+  const fapte84 = a => JSON.stringify([a.stare, a.urmarire_stare, a.ultim_eveniment, a.ultim_eveniment_la, a.ridicat_propus, a.ridicat_la, a.livrat_la, a.retur_cunoscut, a.retur_propus])
+  ok(k18e.scrise === 0 && k18e.pastrate === 1 && k18e.depasite === 0 && fapte84(a84) === fapte84(inainte84) && a84.versiune_urmarire === inainte84.versiune_urmarire + 1,
+    `K18e: răspuns neordonabil: 0 scrise / 1 păstrat / 0 depășite (${k18e.scrise}/${k18e.pastrate}/${k18e.depasite}), faptele și cronologia neschimbate, versiunea +1`)
+  ok(impos(c84).length === 2 && c84.length === 2 && JSON.stringify(impos(c84).map(c => c.valori[0]).sort()) === JSON.stringify([`C0 ${viitor}`, `C0 ${viitor2}`]),
+    'K18e: în audit DOAR cele două zile imposibile (fără ridicare_zile din același răspuns): ' + JSON.stringify(c84.map(c => [c.sursa, c.tip, c.valori])))
+  await automat(84, [['C0', `${D0} 10:00:00`], ['H3', `${D1} 10:00:00`], ['S2', `${D2} 09:00:00`]])
+  ok((await awb(84)).urmarire_stare === 'livrat' && await ora(84, 'livrat_la') === `${D2} 09:00:00`, 'K18e: răspunsul următor (posibil, mai nou) se scrie: livrat')
+  // aceeași cale cu o livrare (S2) în viitor, singura în răspuns: nicio livrare înregistrată, starea rămâne „în tranzit”
+  await automat(88, [['H3', `${D1} 10:00:00`]])
+  const inainte88 = await awb(88)
+  const k18e2 = await automat(88, [['S2', `${viitor} 10:00:00`]])
+  ok(k18e2.pastrate === 1 && fapte84(await awb(88)) === fapte84(inainte88) && inainte88.urmarire_stare === 'in_tranzit' && (await awb(88)).livrat_la === null,
+    'K18e: S2 în viitor, singurul eveniment, pe un rând cu cronologie: păstrat, fără livrare, „în tranzit”')
+
+  // K18f — o cronologie veche IMPOSIBILĂ (în viitor, scrisă de corpul de dinainte de 20270102a) nu mai blochează: răspunsul posibil o înlocuiește
+  await db.exec(`SET session_replication_role = replica; UPDATE public.red_fan_awb SET ultim_eveniment = 'H3', ultim_eveniment_la = now() + interval '5 days', urmarire_stare = 'in_tranzit' WHERE id = '${awbId(85)}'; SET session_replication_role = origin;`)
+  const k18f = await automat(85, [['C0', `${D1} 10:00:00`]])
+  ok(k18f.scrise === 1 && (await awb(85)).stare === 'ridicat' && JSON.stringify(await cron(85)) === JSON.stringify(['C0', `${D1} 10:00:00`]),
+    `K18f: cronologia veche din viitor nu blochează: C0 pe D1 scris (${k18f.scrise} scris, ${JSON.stringify(await cron(85))})`)
+
+  // K18g — limita listei (100, = BD): codul real, 120 de evenimente → ultimele 100, acceptate; ultimul eveniment posibil = capătul listei
+  const ore120 = Array.from({ length: 120 }, (_, i) => ['H3', `${D1} ${String(8 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00`])
+  const p86 = await pl(86, [['C0', `${D0} 10:00:00`], ...ore120])
+  ok(p86.evenimente.length === FAN.LIMITA_EVENIMENTE_CRONOLOGIE && await cod(scrie(null, RL, ID.L1, [p86])) === 'OK' && JSON.stringify(await cron(86)) === JSON.stringify(['H3', `${D1} 09:59:00`])
+     && await rp(86) === D0, `K18g: 121 de evenimente → lista cu ultimele ${p86.evenimente.length}, acceptată; cronologia H3 ${D1} 09:59, ridicarea din C0-ul din afara listei (${await rp(86)})`)
+
+  // K18h — compatibilitate: un rând FĂRĂ listă (funcția edge de dinainte) → lista derivată din ultimul eveniment, cu ACEEAȘI regulă (momentul viitor ignorat)
+  const faraLista = { ...(await pl(87, [['C0', `${viitor} 10:00:00`]])) }
+  delete faraLista.evenimente
+  await scrie(null, RL, ID.L1, [faraLista])
+  await scrie(null, RL, ID.L1, [{ ...(await pl(87, [['C0', `${D2} 10:00:00`]])), evenimente: undefined }])
+  ok((await awb(87)).stare === 'ridicat' && JSON.stringify(await cron(87)) === JSON.stringify(['C0', `${D2} 10:00:00`]),
+    `K18h: fără listă (edge vechi): C0 viitor nu blochează corecția (${JSON.stringify(await cron(87))})`)
   return fail
 }
 
@@ -694,11 +795,29 @@ const MUTANTI = [
   ['scrierea: returul nou nu înlocuiește livrarea cunoscută', "WHEN f.k_fin = 'livrat' THEN CASE WHEN f.n_ret_la IS NULL OR f.n_ret_la >= f.k_liv THEN 'retur' ELSE 'livrat' END", "WHEN f.k_fin = 'livrat' THEN 'livrat'"],
   ['scrierea: livrarea nouă înlocuiește mereu returul cunoscut', "ELSE CASE WHEN f.k_la IS NOT NULL AND f.n_liv > f.k_la THEN 'livrat' ELSE 'retur' END END AS fin", "ELSE 'livrat' END AS fin"],
   ['scrierea: aceeași contradicție nu mai e numărată (observări)', 'DO UPDATE SET observari = t.observari + 1,', 'DO UPDATE SET observari = t.observari,'],
-  ['scrierea: lista de contradicții nevalidată (conținut extern)', '           AND c.ok), count(DISTINCT u.id)', '           ), count(DISTINCT u.id)'],
+  ['scrierea: lista de contradicții nevalidată (conținut extern)', '           AND c.ok AND cr.ok), count(DISTINCT u.id)', '           AND cr.ok), count(DISTINCT u.id)'],
   ['scrierea: livrare ȘI retur acceptate în rezultat', "           AND (u.livrat_la IS NULL OR u.urmarire_stare <> 'retur') AND", '           AND'],
   ['scrierea: ridicarea automată și pe lotul real', '(v_test IS TRUE AND g.k_stare', "(true AND g.k_stare"],
   ['scrierea: fără jurnalul ridicărilor automate', '   WHERE x.auto_rid;', '   WHERE false;'],
   ['scrierea: numerele noi ale rulării neadunate', "         contradictii = contradictii + (v_r ->> 'contradictii')::integer,", '         contradictii = contradictii,'],
+  // runda 4 (#1155 r3 P2): cronologia DOAR din momentele posibile; răspunsul neordonabil; lista ca date externe
+  ['codul r3: cronologia = ultimul eveniment brut (fără predicat)', "WHERE (x.la::date >= (b.generat_la AT TIME ZONE 'Europe/Bucharest')::date AND x.la <= v_acum) IS TRUE) p", 'WHERE true) p'],
+  ['cronologia: regula pe zi, nu pe moment', 'AND x.la <= v_acum) IS TRUE) p', 'AND x.la::date <= v_azi) IS TRUE) p'],
+  ['cronologia: fără limita de jos (generarea)', "WHERE (x.la::date >= (b.generat_la AT TIME ZONE 'Europe/Bucharest')::date AND x.la <= v_acum) IS TRUE) p", 'WHERE (x.la <= v_acum) IS TRUE) p'],
+  ['cronologia: ultimul eveniment cunoscut nefiltrat (ora veche din viitor blochează)', 'b.retur_propus AS k_mot, p.k_la, (p.k_la IS NOT NULL AND p.n_la IS NULL) AS neord',
+    'b.retur_propus AS k_mot, b.ultim_eveniment_la AS k_la, (b.ultim_eveniment_la IS NOT NULL AND p.n_la IS NULL) AS neord'],
+  ['garda veche (pe ultimul eveniment brut al rândului)', '       AND (m.k_la IS NULL OR m.neord OR m.n_la >= m.k_la)', '       AND (a.ultim_eveniment_la IS NULL OR (m.n_la IS NOT NULL AND m.n_la >= a.ultim_eveniment_la))'],
+  ['neordonabil: tratat ca ordonabil (depășit)', '(p.k_la IS NOT NULL AND p.n_la IS NULL) AS neord', 'false AS neord'],
+  ['neordonabil: zilele imposibile lipsă din audit', '           FROM unnest(m.rid_imposibile) AS z(d)) x) AS contr', '           FROM unnest(m.rid_imposibile) AS z(d) WHERE NOT m.neord) x) AS contr'],
+  ['neordonabil: contradicțiile din același răspuns scrise', 'FROM jsonb_array_elements(m.n_contr) e WHERE NOT m.neord', 'FROM jsonb_array_elements(m.n_contr) e'],
+  ['neordonabil: starea suprascrisă', '           urmarire_stare = CASE WHEN m.neord THEN a.urmarire_stare\n', '           urmarire_stare = CASE\n'],
+  ['neordonabil: cronologia suprascrisă', 'ultim_eveniment_la = CASE WHEN m.neord THEN a.ultim_eveniment_la ELSE m.n_la END', 'ultim_eveniment_la = m.n_la'],
+  ['neordonabil: livrarea din răspuns luată', 'livrat_la = CASE WHEN m.neord THEN a.livrat_la ELSE m.liv END', 'livrat_la = m.liv'],
+  ['lista: nevalidată', '           AND c.ok AND cr.ok), count(DISTINCT u.id)', '           AND c.ok), count(DISTINCT u.id)'],
+  ['lista: limita 99 (nu 100, ca în cod)', 'WHEN jsonb_array_length(u.evenimente) > 100 THEN false', 'WHEN jsonb_array_length(u.evenimente) > 99 THEN false'],
+  ['lista: ordinea / dublurile neverificate', 'WHERE right(b.x, 19) COLLATE "C" < right(a.x, 19) COLLATE "C" OR b.x = a.x) THEN false', 'WHERE false) THEN false'],
+  ['lista: capătul nelegat de ultimul eveniment', "        ELSE (u.evenimente ->> -1) = u.ultim_eveniment || ' ' || u.ultim_eveniment_la END) AS cr(ok)", '        ELSE true END) AS cr(ok)'],
+  ['lista: goală ↔ fără cronologie neverificat', '        WHEN (jsonb_array_length(u.evenimente) = 0) IS DISTINCT FROM (u.ultim_eveniment_la IS NULL) THEN false\n', ''],
 ]
 // postcondiția amprentelor NOI și cea a indexului cad pe textul mutat: se scot DOAR comparația de corp din AMPRENTE-NOI și verificarea indexului
 const POST_MD5 = "      OR md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM a.amprenta\n"
@@ -739,6 +858,13 @@ console.log('5. paritatea plafonului: JS (PLAFON_APELURI_RULARE) = SQL (fn_red_f
   const nVal = [...MIG.matchAll(/jsonb_array_length\(e -> 'valori'\) NOT BETWEEN 2 AND (\d+)/g)].map(x => Number(x[1]))
   const nChk = [...MIG.matchAll(/jsonb_array_length\(valori\) BETWEEN 1 AND (\d+)\)/g)].map(x => Number(x[1]))
   ok(nVal.length === 1 && nVal[0] === L && nChk.length === 1 && nChk[0] === L, `limita valorilor ${L} în JS = validarea (${nVal.join(', ')}) = CHECK-ul tabelului (${nChk.join(', ')})`)
+  // runda 4 (#1155 r3 P2): limita listei pentru cronologie — JS (LIMITA_EVENIMENTE_CRONOLOGIE) = validarea din fn_red_fan_urmarire_scrie
+  const LE = FAN.LIMITA_EVENIMENTE_CRONOLOGIE
+  const nEv = [...MIG.matchAll(/jsonb_array_length\(u\.evenimente\) > (\d+)/g)].map(x => Number(x[1]))
+  ok(nEv.length === 1 && nEv[0] === LE, `limita listei pentru cronologie ${LE} în JS = validarea (${nEv.join(', ')})`)
+  // predicatul momentului posibil e scris O DATĂ în corp (L19): o singură apariție a comparației cu v_acum
+  const corp = MIG.slice(MIG.indexOf('CREATE FUNCTION public.fn_red_fan_urmarire_scrie('), MIG.indexOf('CREATE OR REPLACE FUNCTION public.fn_red_fan_urmarire_intern('))
+  ok((corp.match(/<= v_acum/g) || []).length === 1, `predicatul momentului posibil: ${(corp.match(/<= v_acum/g) || []).length} apariție(i) în corpul comun (așteptat 1)`)
 }
 
 console.log('6. porțile care au blocat livrarea pe clonă la 20261228a — GATE 0e (scripts/control_0e.sql, verbatim) și poarta Izometrie E2 (blocul din 20261230a) — neschimbate de migrare')

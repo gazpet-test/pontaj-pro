@@ -403,8 +403,18 @@ export const ORDINE_EGALITATE = Object.freeze(['inregistrat', 'tranzit', 'neutru
 const rangEgalitate = cat => ORDINE_EGALITATE.indexOf(cat || 'necunoscut')
 const ordineEvenimente = (a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : rangEgalitate(a.cat) - rangEgalitate(b.cat) || (a.cod < b.cod ? -1 : a.cod > b.cod ? 1 : 0))
 const SEMNAL_FINAL_RETUR = ['refuz', 'adresa', 'mutat']
+// Runda 4 #1155 (Jakarinos r3 P2, L03 / L17 / L18 / L19): CRONOLOGIA (ultim_eveniment / ultim_eveniment_la și garda „ne-mai-veche” a scrierii) o
+// stabilește BD-ul DOAR din evenimentele la un moment POSIBIL (ziua ≥ ziua generării AWB-ului și momentul ≤ acum, ora României; predicatul are O
+// singură definiție, în fn_red_fan_urmarire_scrie, 20270102a). Un eveniment respins ca fapt pentru că data lui e imposibilă (ex. C0 în viitor) nu mai
+// intră în cronologie, deci nu mai blochează corecția validă de la rularea următoare. Codul nu decide posibilitatea (nu știe nici ziua generării,
+// nici ceasul bazei): trimite `evenimente` = evenimentele DISTINCTE citite, în ordinea completă (ordineEvenimente), ca texte „COD AAAA-LL-ZZ HH:MM:SS”,
+// ultimul = ultim_eveniment + ultim_eveniment_la. Peste LIMITA_EVENIMENTE_CRONOLOGIE se trimit ultimele (cele mai noi): ultimul eveniment posibil
+// e printre ele oricând măcar unul dintre ele e posibil; altfel BD-ul tratează răspunsul ca fără cronologie posibilă (nu avansează, nu blochează).
+// Limita e aceeași în BD (validarea listei; testul de paritate le compară).
+export const LIMITA_EVENIMENTE_CRONOLOGIE = 100
+const listaCronologie = ev => ev.map(e => `${e.cod} ${e.la}`).filter((x, i, a) => i === 0 || x !== a[i - 1]).slice(-LIMITA_EVENIMENTE_CRONOLOGIE)
 export function rezumatUrmarireFan(el) {
-  const gol = { urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [] }
+  const gol = { urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, evenimente: [], ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [] }
   if (!el || typeof el !== 'object') return { ...gol, motiv: 'element de urmărire fără formă cunoscută' }
   // runda 3 (L18): lipsa listei ≠ listă goală — fără `events` (sau null) = formă necunoscută; `events: []` = „fără evenimente” (fără cronologie:
   // BD-ul nu șterge un eveniment cunoscut cu el, fn_red_fan_urmarire îl numără „păstrat”)
@@ -420,7 +430,7 @@ export function rezumatUrmarireFan(el) {
   // ordinea COMPLETĂ (ora, rangul ORDINE_EGALITATE, codul): același set de evenimente dă același rezultat în orice ordine a listei FAN (runda 3 P1)
   ev.sort(ordineEvenimente)
   const ultim = ev.at(-1) || null
-  const cronologie = { ultim_eveniment: ultim?.cod || null, ultim_eveniment_la: ultim?.la || null }
+  const cronologie = { ultim_eveniment: ultim?.cod || null, ultim_eveniment_la: ultim?.la || null, evenimente: listaCronologie(ev) }
   if (stricat) return { ...gol, ...cronologie, motiv: 'evenimente cu cod sau dată de formă necunoscută (nimic înregistrat automat din acest răspuns)' }
   // „ultimul eveniment” = TOATE evenimentele de la ora maximă (nu doar elementul de la capătul listei): fiecare regulă care privește finalul le vede pe toate
   const laFinal = ev.filter(e => e.la === ultim?.la)
@@ -492,7 +502,7 @@ export function interpreteazaUrmarire(status, corp, awbs) {
   if (!Number.isInteger(status) || status <= 0 || status >= 400) return { ok: false, motiv: `urmărire neconfirmată (HTTP ${status})`, pe_awb: new Map(), necerute: 0 }
   const lista = listaDin(corp)
   const pe = new Map()
-  const deVerificat = motiv => ({ urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [], motiv })
+  const deVerificat = motiv => ({ urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, evenimente: [], ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [], motiv })
   if (!lista) return { ok: false, forma_necunoscuta: true, motiv: 'răspuns de urmărire de formă necunoscută (fără listă recunoscută): nimic scris', pe_awb: pe, necerute: 0 }
   if (lista.length > 0 && !lista.some(el => awbDin(el))) return { ok: false, forma_necunoscuta: true, motiv: 'răspuns de urmărire fără niciun element cu AWB recunoscut: nimic scris', pe_awb: pe, necerute: 0 }
   const grup = new Map()

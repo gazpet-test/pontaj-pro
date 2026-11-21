@@ -430,6 +430,37 @@ VERIFICARI.formaRaspuns = async M => {
   if (g.ok !== true || g.pe_awb.get('7000000001')?.urmarire_stare !== 'de_verificat') return 'lista goală: AWB-ul nu e „de verificat”'
   return null
 }
+// ── runda 4 (Jakarinos #1155 r3 P2): lista evenimentelor pentru cronologie (BD-ul ia din ea DOAR momentele posibile). Așteptări scrise de mână:
+// evenimentele DISTINCTE, în ordinea completă (oră, departajare, cod), „COD AAAA-LL-ZZ HH:MM:SS”, ultimul = ultimul eveniment; peste 100 = ultimele 100;
+// lista goală la răspunsurile fără evenimente; lista ajunge în rândul scris în BD; limita = cea din BD ──
+VERIFICARI.cronologie = async M => {
+  const rz = M.__fan.rezumatUrmarireFan
+  const a = rz(ev(['H3', '2026-11-19 10:00:00'], ['C0', '2026-11-24 10:00:00'], ['S98', '2026-11-18 09:00:00'], ['H3', '2026-11-19 10:00:00'], ['C0', '2026-11-19 10:00:00']))
+  // la aceeași oră (19.11 10:00): tranzitul (H3) înaintea ridicării (C0), după ORDINE_EGALITATE; H3 dublat = o singură intrare
+  const asteptat = ['S98 2026-11-18 09:00:00', 'H3 2026-11-19 10:00:00', 'C0 2026-11-19 10:00:00', 'C0 2026-11-24 10:00:00']
+  if (JSON.stringify(a.evenimente) !== JSON.stringify(asteptat)) return 'lista: ' + JSON.stringify(a.evenimente)
+  if (a.ultim_eveniment !== 'C0' || a.ultim_eveniment_la !== '2026-11-24 10:00:00') return 'ultimul eveniment ≠ capătul listei'
+  // 120 de evenimente distincte → ultimele 100 (primul păstrat = al 21-lea), capătul = ultimul eveniment
+  const multe = Array.from({ length: 120 }, (_, i) => ['H3', `2026-11-19 ${String(8 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00`])
+  const b = rz(ev(...multe))
+  if (b.evenimente?.length !== 100 || b.evenimente[0] !== 'H3 2026-11-19 08:20:00' || b.evenimente.at(-1) !== `H3 ${b.ultim_eveniment_la}` || b.ultim_eveniment_la !== '2026-11-19 09:59:00')
+    return '120 de evenimente: ' + JSON.stringify([b.evenimente?.length, b.evenimente?.[0], b.evenimente?.at(-1)])
+  if (M.__fan.LIMITA_EVENIMENTE_CRONOLOGIE !== 100) return 'limita listei în cod: ' + M.__fan.LIMITA_EVENIMENTE_CRONOLOGIE
+  const lim = [...SQL_MIG.matchAll(/jsonb_array_length\(u\.evenimente\) > (\d+)/g)].map(x => Number(x[1]))
+  if (lim.length !== 1 || lim[0] !== M.__fan.LIMITA_EVENIMENTE_CRONOLOGIE) return `limita listei: cod ${M.__fan.LIMITA_EVENIMENTE_CRONOLOGIE}, BD ${lim}`
+  // forma necunoscută a unui eveniment: cronologia citită rămâne (de verificat, fără fapte); fără evenimente / AWB absent = listă goală
+  const c = rz({ events: [{ id: 'C0', date: '2026-11-18 10:00:00' }, { id: 'C0', date: '18.11.2026' }] })
+  if (JSON.stringify(c.evenimente) !== JSON.stringify(['C0 2026-11-18 10:00:00'])) return 'cronologie incompletă: ' + JSON.stringify(c.evenimente)
+  if (JSON.stringify(rz({ events: [] }).evenimente) !== '[]' || JSON.stringify(rz(null).evenimente) !== '[]') return 'fără evenimente: lista nu e goală'
+  const u = M.__fan.interpreteazaUrmarire(200, { data: [] }, ['7000000001'])
+  if (JSON.stringify(u.pe_awb.get('7000000001')?.evenimente) !== '[]') return 'AWB absent: lista nu e goală'
+  // lista ajunge în rândul trimis BD-ului (rularea automată = aceeași funcție ca butonul)
+  const f = lume()
+  await M.ruleazaUrmarireAuto(CRON, f.deps)
+  const p = f.rpc.find(x => x.nume === 'fn_red_fan_srv_urmarire')?.args.p_randuri[0]
+  if (JSON.stringify(p?.evenimente) !== JSON.stringify(['C0 2026-11-20 10:40:00'])) return 'lista nu ajunge în BD: ' + JSON.stringify(p?.evenimente)
+  return null
+}
 
 describe('regula contradicțiilor (decizia owner-ului 21.11.2026): toate evaluate, faptele după regulă, contradicțiile în listă — rezumatUrmarireFan', () => {
   it.each(CAZURI_CONTRADICTII)('%s', (_, el, fapte, contr) => {
@@ -468,6 +499,9 @@ describe('regula contradicțiilor (decizia owner-ului 21.11.2026): toate evaluat
     expect(verificaLimita(FAN_REAL)).toBeNull()
     expect(verificaParitateBD(FAN_REAL)).toBeNull()
     expect(FAN_REAL.LIMITA_VALORI_CONTRADICTIE).toBe(50)
+  })
+  it('runda 4: lista pentru cronologie (distincte, în ordinea completă, ultimele 100, capătul = ultimul eveniment, trimisă BD-ului, limita = BD)', async () => {
+    expect(await VERIFICARI.cronologie(REAL)).toBeNull()
   })
   it('verificările adăugate în runda 3 (egalitate, limită, paritate) trec pe codul real', async () => {
     for (const k of ['egalitate', 'limita', 'paritateBD']) expect(await VERIFICARI[k](REAL)).toBeNull()
@@ -617,6 +651,12 @@ const MUTANTI = [
   ['secretele citite înaintea selecției', 'redariFanUrmarireAuto.mjs', "  const sel = await rpc('fn_red_fan_srv_de_urmarit', { p_rulare: rulare })", "  deps.secrete()\n  const sel = await rpc('fn_red_fan_srv_de_urmarit', { p_rulare: rulare })"],
   ['refuzul determinist de lot oprește tot', 'redariFanUrmarireAuto.mjs', "const REFUZ_LOT = ['P0001', 'RD032', '22023']", 'const REFUZ_LOT = []'],
   ['refuzul NEcunoscut de lot sărit (L05)', 'redariFanUrmarireAuto.mjs', "      return incheie('oprita_eroare', 'scriere_neconfirmata')\n", "      sarite++; continue\n"],
+  // runda 4 (Jakarinos #1155 r3 P2): lista pentru cronologie
+  ['cronologie: lista netrimisă în BD', 'redariFanTransport.mjs', 'evenimente: Array.isArray(z.evenimente) ? z.evenimente : null,', 'evenimente: null,'],
+  ['cronologie: dublurile păstrate', 'redariFan.mjs', '.filter((x, i, a) => i === 0 || x !== a[i - 1])', ''],
+  ['cronologie: primele 100, nu ultimele', 'redariFan.mjs', '.slice(-LIMITA_EVENIMENTE_CRONOLOGIE)', '.slice(0, LIMITA_EVENIMENTE_CRONOLOGIE)'],
+  ['cronologie: limita 50 în cod (≠ BD)', 'redariFan.mjs', 'export const LIMITA_EVENIMENTE_CRONOLOGIE = 100', 'export const LIMITA_EVENIMENTE_CRONOLOGIE = 50'],
+  ['cronologie: lista în ordinea FAN, nu în ordinea completă', 'redariFan.mjs', 'evenimente: listaCronologie(ev) }', 'evenimente: listaCronologie(el.events.map(e => ({ cod: e.id, la: e.date }))) }'],
 ]
 describe('mutanți (fiecare trebuie să pice cel puțin o verificare)', () => {
   it.each(MUTANTI)('%s', async (_, fisier, din, in_) => {

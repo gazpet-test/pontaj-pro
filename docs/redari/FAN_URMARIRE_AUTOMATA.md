@@ -88,6 +88,18 @@ returului din semnal și motivul la egalitate. Probat pe **toate permutările** 
 test de paritate). Un răspuns cu peste 50 de zile C0 / ore S2 distincte pentru un AWB = rândul „de verificat”, **fără** fapte din acel răspuns, cu
 numărul în motiv; celelalte AWB-uri din aceeași cerere se scriu normal (nimic tăiat în tăcere, nicio bucată refuzată de BD).
 
+**Cronologia doar din momente posibile (runda 4, Jakarinos r3 P2).** Garda „ne-mai-veche” a scrierii (un răspuns mai vechi decât ce e deja
+înregistrat nu se scrie) și `ultim_eveniment` / `ultim_eveniment_la` se iau **doar** din evenimentele la un moment **posibil**: ziua lui ≥ ziua
+generării AWB-ului și momentul ≤ acum, ora României (aceeași regulă ca la ziua C0, la nivel de moment; predicatul e scris o dată, în
+`fn_red_fan_urmarire_scrie`). Codul trimite lista evenimentelor citite (`evenimente`, distincte, în ordinea completă, cel mult **100** — ultimele;
+aceeași limită în BD, test de paritate), BD-ul alege ultimul posibil. Astfel o dată respinsă ca fapt nu mai blochează corecția:
+- rularea 1: C0 pe 24.11 (în viitor, pe 21.11) → nimic înregistrat, cronologia **goală**, ziua în audit; rularea 2: C0 corectat pe 20.11 → **ridicat**;
+- un H3 / S2 / orice cod la o dată imposibilă nu intră în cronologie (nu blochează un eveniment valid ulterior);
+- un `ultim_eveniment_la` vechi aflat în viitor (scris înainte de 20270102a) nu mai blochează: răspunsul posibil îl înlocuiește;
+- un răspuns **cu** evenimente, dar **fără niciunul posibil**, pe un rând cu cronologie cunoscută nu se poate ordona față de ea: rândul rămâne
+  **neschimbat** (doar „verificat la”, numărat „păstrat”), iar zilele lui C0 imposibile intră în audit (fără alte semnale din el);
+- un rând trimis fără listă (funcția edge de dinainte) = lista derivată din ultimul eveniment, cu aceeași regulă.
+
 Un răspuns **fără** eveniment final nu șterge finalul cunoscut; un răspuns fără cronologie (`events: []`) doar consemnează „verificat la”;
 evenimentele identice repetate sunt un singur fapt; un eveniment de formă necunoscută = rândul „de verificat”, **fără** niciun fapt din acel
 răspuns (cronologia e incompletă: evenimentul pierdut poate fi chiar al doilea C0).
@@ -219,7 +231,10 @@ runner (refuză cât există rulări în istoric, contradicții înregistrate sa
   contradicții, nicio coloană `*_contrazis`, lotul real fără ridicare automată; **K12–K17 (runda 3)**: ziua C0 imposibilă pe două rulări (nu se
   salvează, corecția validă trece), în același răspuns și în viitor, ziua veche imposibilă înlocuită; limita de 50 (acceptat), 51 (de verificat),
   bucata mixtă, 51 scris de mână = 22023; ordinile [S2, S6] / [S6, S2] identice în BD, motive la aceeași oră; paritatea cod → BD pe cazurile de
-  egalitate; 15 forme noi refuzate (22023); refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
+  egalitate; 15 forme noi refuzate (22023); **K18 (runda 4)**: scenariul recenzentului pe două rulări (C0 viitor respins → cronologia goală;
+  C0 corectat, mai vechi → înregistrat), același lucru pe un rând cu cronologie, alt cod (H3) în viitor, regula pe moment (azi, peste 30 s),
+  răspunsul neordonabil (păstrat, doar zilele imposibile în audit; S2 viitor fără livrare), cronologia veche din viitor, 121 de evenimente →
+  ultimele 100 acceptate, rândul fără listă (edge vechi); lista ca date externe (9 forme refuzate, 22023); refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
   revenirea (refuz la fiecare urmă, inclusiv contradicții și ridicări automate; aplicare → revenire → re-aplicare); **mutanți SQL** + martorul;
   paritatea plafonului JS ↔ SQL; porțile 0e / Izometrie E2.
 - Pe clonă (coordonatorul): `supabase/tests/20270102a_redari_fan_urmarire_auto_doua_sesiuni.sh` — S1 două porniri suprapuse (B așteaptă, apoi

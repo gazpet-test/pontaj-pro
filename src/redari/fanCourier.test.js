@@ -1279,7 +1279,7 @@ describe('runda 3: urmărirea nu șterge un eveniment cunoscut (r2 P2)', () => {
     expect(rezumatUrmarireFan({ awbNumber: '2000000001' })).toMatchObject({ urmarire_stare: 'de_verificat', motiv: 'elementul de urmărire nu are lista de evenimente' })
     expect(rezumatUrmarireFan({ awbNumber: '2000000001', events: null }).urmarire_stare).toBe('de_verificat')
     expect(rezumatUrmarireFan({ awbNumber: '2000000001', events: [] })).toEqual({ urmarire_stare: 'fara_evenimente', ultim_eveniment: null, ultim_eveniment_la: null,
-      ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [] })   // #1155 r2: + ora returului, lista contradicțiilor
+      evenimente: [], ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [] })   // #1155 r2: + ora returului, lista contradicțiilor; r4: + lista pentru cronologie
   })
   it('funcția edge: răspunsul `events: []` ajunge în BD fără cronologie; „păstrate” raportate; forma veche {scrise, depasite} = scriere neconfirmată', async () => {
     const fx = await fixtura(2); fx.randuri.forEach((r, i) => { r.stare = 'generat'; r.awb = String(2000000001 + i); r.versiune_urmarire = 4 })
