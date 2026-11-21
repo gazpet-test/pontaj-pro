@@ -28,6 +28,8 @@ B="$(ls "$PAW_BRIEF_DIR"/acte_2026-10-16_*.md 2>/dev/null | head -1)"
 [ -n "$B" ]; ok $? 0 "brief scris in PAW_BRIEF_DIR"
 grep -q 'Jakarinos — verificarea' "$B"; ok $? 0 "brief contine TEMA_ACTE.md"
 grep -q 'Folderul rularii' "$B"; ok $? 0 "brief contine folderul rularii"
+grep -q '^## GBE / polițe CAR' "$B"; ok $? 0 "brief contine sectiunea GBE / CAR"
+grep -q 'EXPIRA_CURAND' "$B"; ok $? 0 "brief contine clasificarea de valabilitate"
 case "$O" in *'C:\ProgramData\Gazpet\Paw\bin\run_paw.cmd jak '*'paw-data\out\acte_2026-10-16_'*) ok 1 1 "comanda prin run_paw jak, iesire in paw-data\\out";; *) ok 0 1 "comanda prin run_paw jak";; esac
 [ ! -e "$F/.jak_ruleaza" ]; ok $? 0 "--doar-brief nu ia blocajul"
 
