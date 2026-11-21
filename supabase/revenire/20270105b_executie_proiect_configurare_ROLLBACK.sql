@@ -35,7 +35,8 @@ BEGIN
      OR to_regprocedure('public.fn_executie_proiect_configurare_completa(bigint, text)') IS NULL
      OR to_regprocedure('public.fn_executie_proiect_configurare_garda()') IS NULL
      OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_executie\_proiect\_configurare\_%') <> 2
-     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgrelid = 'public.executie_proiecte'::regclass AND t.tgname = 'trg_rest_decontat_configurare_garda')
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgrelid = 'public.executie_proiecte'::regclass AND t.tgname = 'trg_rest_decontat_configurare_garda'
+                      AND t.tgtype = 23 AND t.tgqual IS NULL AND t.tgnargs = 0 AND t.tgfoid = to_regprocedure('public.fn_executie_proiect_configurare_garda()'))
      OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname = 'trg_rest_decontat_configurare_jurnal_garda') THEN
     RAISE EXCEPTION '20270105b revenire: starea nu e cea din 20270105b (obiectele migrarii lipsesc sau difera)';
   END IF;
@@ -97,9 +98,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_executie\_proiect\_configurare\_%'
   ) x;
   -- AMPRENTA_20270105b_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'e0fb8d9d973c83507fd28c73f8777364' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'ca93c57f57fe5c0d0f8e6e4a9fdae92e' THEN
     RAISE NOTICE 'AMPRENTA_20270105b_TEXT %', v_amp;
-    RAISE EXCEPTION '20270105b revenire: AMPRENTA obiectelor migrarii % (asteptat e0fb8d9d973c83507fd28c73f8777364): starea nu e cea din 20270105b; nimic schimbat',
+    RAISE EXCEPTION '20270105b revenire: AMPRENTA obiectelor migrarii % (asteptat ca93c57f57fe5c0d0f8e6e4a9fdae92e): starea nu e cea din 20270105b; nimic schimbat',
       md5(coalesce(v_amp, ''));
   END IF;
 END $pre$;

@@ -2,15 +2,23 @@
 // PGlite — NU atinge nicio bază reală. Baza: schema falsă supabase/tests/20270105a_executie_rest_decontat_schelet.sql (roluri Supabase, auth.uid(),
 // tabelele existente cu RLS-ul general al Execuției, STUB-urile porților Izometrie cu ștampilele verzi, un proiect „moștenit” cu articole).
 // Aplicarea: ca runnerul (marcaj + plafon 5000 + pașii L15 v2 generați: manifestul cu ROLLBACK, apoi livrarea aprobată + garda finală).
-// 0. Validatorul runnerului (plafonul 5000 la migrări / 2000 la reveniri), detectorul porților Izometrie pe depozit, paritatea UM cu 20261208a.
-// 1. Refuzurile migrării A (fără marcaj, fără pasul L15 „înainte”, plafon greșit, porți roșii, porți lipsă, reaplicare, coloană cu alt tip); nimic schimbat.
+// 0. Validatorul runnerului (plafonul 5000 la migrări / 2000 la reveniri), detectorul porților Izometrie pe depozit, paritatea UM cu 20261208a,
+//    paritatea textuală a funcțiilor 20261209a copiate în schelet, reverificarea dreptului DUPĂ lock în cele 3 RPC-uri (verificare STATICĂ pe text;
+//    cursa reală cu două sesiuni: supabase/tests/20270105a_executie_rest_decontat_concurenta.sh, pe clonă).
+// 1. Refuzurile migrării A (fără marcaj, fără pasul L15 „înainte”, plafon greșit, porți roșii, porți lipsă, 20261209a lipsă / alt corp, reaplicare,
+//    coloană cu alt tip); nimic schimbat.
 // 2. Livrarea A: manifestul generat = lista revizuită; rândurile moștenite neatinse (în afara cheii), cheia cu nr doar pe codul repetat în document;
 //    ștampilele porților recalculate și verzi; blocul AMPRENTA identic în migrare și revenire, aceeași constantă.
-// 3. Dry-run-ul A (supabase/tests/20270105a_…_dryrun.sql, toate blocurile, ROLLBACK la final): toate NOTICE-urile „ok”, nimic rămas.
-// 4. MUTANȚI ai migrării A (fiecare TREBUIE prins de dry-run; cu postcondițiile întregi, refuzat la aplicare): dublarea situației, lipsa „înlocuiește”,
-//    notele legate adunate încă o dată, restul tăiat la zero, dreptul dat accesului general Execuție, UM-ul neverificat, lipsa ofertei neverificată,
-//    factorul UM ignorat.
-// 5. Migrarea B peste A: dry-run B; mutanți B (MP fără ofertă acceptat, owner fără motiv acceptat, fără garda pe coloane); revenirea B.
+// 3. Dry-run-ul A (supabase/tests/20270105a_…_dryrun.sql, toate blocurile, ROLLBACK la final): toate NOTICE-urile „ok”, nimic rămas. Dry-run-ul începe
+//    cu garda în SESIUNE PROASPĂTĂ (marcajul RPC NULL), de aceea rulează pe o bază pe care niciun RPC n-a scris încă.
+// 4. MUTANȚI ai migrării A: un mutant contează „prins” DOAR dacă s-a APLICAT cu succes (fără postcondiții) și dry-run-ul l-a picat; cu postcondițiile
+//    întregi trebuie refuzat la aplicare. r2 (review #1158): marcajul NULL acceptat de gărzi (articole / situații), restricția pe proiect scoasă din
+//    drept, un singur grup de coduri repetate, poziția lipsă neverificată, lista completă pe obiect_cod brut, nota neaprobată acceptată (RPC / calcul),
+//    ordinea „ultimul act” după momentul încărcării (listă completă / preț) + cei 10 din r1. Mutanții STATICI (reverificarea dreptului scoasă
+//    după lock) sunt prinși de verificarea pe text din 0.
+// 5. Migrarea B peste A: dry-run B; mutanți B (MP fără ofertă acceptat, owner fără motiv acceptat, fără garda pe coloane, marcaj NULL acceptat,
+//    garda doar pe UPDATE — INSERT „configurat” acceptat); revenirea B. Postcondițiile B = secțiunea „4.” (r2: markerul greșit din r1 ascundea
+//    mutanții B neaplicați).
 // 6. Revenirile: refuzuri (fără marcaj, cu date, amprentă schimbată, B aplicată peste A), aplicare → revenire → reaplicare, starea de dinainte.
 // Rulare (din rădăcina repo-ului; cere bash + python3 în PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_executie_rest_decontat_local.mjs
 //   (--scrie-obiecte rescrie listele revizuite L15 din manifestele generate; --amprente tipărește constantele AMPRENTA calculate)
@@ -119,7 +127,9 @@ async function dryrun(db, text) {
   catch (e) { try { await db.exec('ROLLBACK') } catch { /* anulată */ } e.jurnal = jurnal; throw e }
   return jurnal
 }
-const BLOCURI_A = ['t_fara_baza ok', 'oferta ok', 't_negative_peste_oferta ok', 't_um ok', 't_dublare_situatie ok', 't_aa_leaga_note ok', 't_drept_sef_santier (1/3) ok', 't_drept_sef_santier (2/3) ok', 't_drept_sef_santier (3/3) ok']
+const BLOCURI_A = ['t_garda_proaspata ok', 't_fara_baza ok', 'oferta ok', 't_negative_peste_oferta ok', 't_um ok', 't_dublare_situatie ok', 't_aa_leaga_note ok',
+  't_coduri_repetate ok', 't_ultimul_act ok', 't_drept_restrans (1/2) ok', 't_drept_restrans (2/2) ok', 't_drept_sef_santier (1/3) ok', 't_drept_sef_santier (2/3) ok', 't_drept_sef_santier (3/3) ok']
+const BLOCURI_B = ['t_poarta_garda_proaspata ok', 't_poarta_mp ok', 't_poarta_owner ok', 't_poarta_cu_oferta ok', 't_poarta_direct ok']
 async function verificaDry(db, text, blocuri) {
   try {
     const j = await dryrun(db, text)
@@ -127,6 +137,43 @@ async function verificaDry(db, text, blocuri) {
     return lipsa.length ? ['blocuri fără ok: ' + lipsa.join(', ')] : []
   } catch (e) { return ['dry-run picat: ' + e.message] }
 }
+// un mutant e „prins” DOAR dacă: (1) textul mutant s-a găsit o singură dată, (2) migrarea mutantă FĂRĂ postcondiții s-a APLICAT cu succes (altfel
+// eroarea de aplicare nu dovedește nimic despre dry-run), (3) dry-run-ul a picat; apoi, cu postcondițiile întregi, aplicarea e refuzată (amprenta)
+async function ruleazaMutant({ eticheta, nume, lista, textBaza, marcajPost, pregateste, aplica, dry, blocuri }) {
+  let text
+  try { text = mutant(textBaza, lista) } catch (e) { ok(false, `${eticheta} „${nume}”: ${e.message}`); return }
+  const iPost = text.indexOf(marcajPost)
+  if (iPost < 0) { ok(false, `${eticheta} „${nume}”: markerul postcondițiilor „${marcajPost}” nu există în migrare`); return }
+  const db = await bazaNoua()
+  await pregateste(db)
+  const eAplic = await eroare(aplica(db, text.slice(0, iPost)))
+  if (eAplic) { ok(false, `${eticheta} „${nume}”: mutantul NU s-a aplicat (nu se poate dovedi că dry-run-ul îl prinde): ${eAplic.slice(0, 160)}`); return }
+  const ab = await verificaDry(db, dry, blocuri)
+  ok(ab.length > 0, `${eticheta} „${nume}” aplicat și prins de dry-run (${ab.length}): ${(ab.join(' | ') || 'NIMIC').slice(0, 220)}`)
+  const db2 = await bazaNoua()
+  await pregateste(db2)
+  const s0 = await stare(db2)
+  const err = await eroare(aplica(db2, text))
+  const post = marcajPost.includes('20270105b') || /^-- ─── 4\./.test(marcajPost) ? /20270105b post:/ : /20270105a post:/
+  ok(post.test(err || '') && JSON.stringify(await stare(db2)) === JSON.stringify(s0), `${eticheta} „${nume}” refuzat la aplicare (postcondiții), nimic schimbat (${(err || 'TRECE').slice(0, 90)})`)
+}
+// verificare STATICĂ (L01): în fiecare RPC, între lock-ul pe proiect și marcajul de scriere există o reverificare a dreptului
+function recheckDupaLock(text, fn, lockText, nivel) {
+  const i = text.indexOf(`CREATE FUNCTION public.${fn}(`)
+  if (i < 0) return `funcția ${fn} lipsește`
+  const corp = text.slice(i, text.indexOf('$f$;', i))
+  const l = corp.indexOf(lockText)
+  if (l < 0) return `${fn}: lock-ul pe proiect lipsește`
+  const w = corp.indexOf('SET LOCAL gazpet.rest_decontat_scriitor', l)
+  if (w < 0) return `${fn}: marcajul de scriere lipsește`
+  return corp.slice(l, w).includes(`public.fn_rest_decontat_drept(p_proiect, ${nivel})`) ? '' : `${fn}: dreptul NU e reverificat după lock`
+}
+const RECHECK = [
+  [MIG_A, 'fn_rest_decontat_confirma_baza', 'WHERE x.id = p_proiect FOR SHARE;', 'v_nivel'],
+  [MIG_A, 'fn_rest_decontat_confirma_situatie', 'WHERE x.id = p_proiect FOR SHARE;', "'confirmare'"],
+  ...(AREB ? [[MIG_B, 'fn_executie_proiect_configurare_completa', 'WHERE e.id = p_proiect FOR UPDATE;', "'confirmare'"]] : []),
+]
+const verificaRecheck = (txtA, txtB) => RECHECK.map(([t, fn, lk, nv]) => recheckDupaLock(t === MIG_A ? txtA : txtB, fn, lk, nv)).filter(Boolean)
 
 if (!DOAR || DOAR === '0') {
   console.log('0. validatorul runnerului, detectorul porților, paritatea UM')
@@ -143,6 +190,37 @@ if (!DOAR || DOAR === '0') {
   catch (e) { ok(false, 'detectorul porților Izometrie: ' + String(e.stdout || '') + String(e.stderr || '')) }
   const um = t => { const i = t.indexOf('-- UM-START'), j = t.indexOf('-- UM-END'); return t.slice(i, j).replace(/\s+/g, ' ') }
   ok(um(MIG_A) === um(citeste('supabase/migrations/20261208a_executie_devize_tinte.sql')), 'lista UM (UM-START / UM-END) identică cu fn_executie_tinte_conversie din 20261208a (L19)')
+  // funcțiile 20261209a din schelet = copii VERBATIM ale celor din migrarea 20261209a (altfel md5-urile din preflight n-ar însemna nimic)
+  const m1209 = citeste('supabase/migrations/20261209a_executie_acces_proiect.sql')
+  const blocP = SCHELET.slice(SCHELET.indexOf('-- PARITATE_20261209A_INCEPUT'), SCHELET.indexOf('-- PARITATE_20261209A_SFARSIT'))
+  const fnP = [...blocP.matchAll(/CREATE FUNCTION public\.(fn_[a-z_]+)\(/g)].map(m => m[1])
+  const difP = fnP.filter(fn => { const a = blocP.indexOf(`CREATE FUNCTION public.${fn}(`), b = m1209.indexOf(`CREATE FUNCTION public.${fn}(`); if (b < 0) return true
+    return blocP.slice(a, blocP.indexOf('$f$;', a) + 4) !== m1209.slice(b, m1209.indexOf('$f$;', b) + 4) })
+  ok(fnP.length === 5 && fnP.includes('fn_executie_proiect_permis') && difP.length === 0, `scheletul: ${fnP.length} funcții 20261209a identice textual cu migrarea (diferite: ${difP.join(', ') || 'niciuna'})`)
+  const rc = verificaRecheck(MIG_A, MIG_B)
+  ok(rc.length === 0, 'L01: dreptul e reverificat DUPĂ lock-ul pe proiect în cele 3 RPC-uri (static)' + (rc.length ? ': ' + rc.join('; ') : ''))
+  // mutanții statici: reverificarea scoasă din fiecare RPC trebuie văzută de verificarea de mai sus
+  const RECHECK_A = `  -- L01: dreptul se REVERIFICĂ după lock (instrucțiune nouă = snapshot nou: MP-ul / lista schimbate cât apelul aștepta lock-ul = refuz)
+  IF NOT public.fn_rest_decontat_drept(p_proiect, v_nivel) THEN
+    RAISE EXCEPTION 'rest_decontat: proiectul nu exista sau nu ai drept sa confirmi acest document' USING ERRCODE = '42501';
+  END IF;
+`
+  const RECHECK_S = `  -- L01: dreptul se REVERIFICĂ după lock (MP-ul / lista schimbate cât apelul aștepta lock-ul = refuz)
+  IF NOT public.fn_rest_decontat_drept(p_proiect, 'confirmare') THEN
+    RAISE EXCEPTION 'rest_decontat: proiectul nu exista sau nu ai drept sa confirmi situatii' USING ERRCODE = '42501';
+  END IF;
+`
+  const RECHECK_B = `  -- L01: dreptul se REVERIFICĂ după lock (MP-ul / lista schimbate cât apelul aștepta lock-ul = refuz)
+  IF NOT public.fn_rest_decontat_drept(p_proiect, 'confirmare') THEN
+    RAISE EXCEPTION 'configurare: proiectul nu exista sau nu ai drept sa-i declari configurarea' USING ERRCODE = '42501';
+  END IF;
+`
+  for (const [nume, fisier, din] of [['confirma_baza fără reverificare', 'A', RECHECK_A], ['confirma_situatie fără reverificare', 'A', RECHECK_S], ...(AREB ? [['configurare_completa fără reverificare', 'B', RECHECK_B]] : [])]) {
+    let t; try { t = mutant(fisier === 'A' ? MIG_A : MIG_B, [[din, '']]) } catch (e) { ok(false, `mutantul static „${nume}”: ${e.message}`); continue }
+    const r = fisier === 'A' ? verificaRecheck(t, MIG_B) : verificaRecheck(MIG_A, t)
+    ok(r.length === 1, `mutantul static „${nume}” e prins de verificarea pe text: ${r.join('; ') || 'NIMIC'}`)
+  }
+  ok(existsSync(join(ROOT, 'supabase/tests/20270105a_executie_rest_decontat_concurenta.sh')), 'proba cu două sesiuni (cursa MP schimbat cât RPC-ul așteaptă lock-ul) există pentru clonă: supabase/tests/20270105a_executie_rest_decontat_concurenta.sh')
 }
 
 if (!DOAR || DOAR === '1') {
@@ -167,6 +245,19 @@ if (!DOAR || DOAR === '1') {
   await db.exec('ALTER TABLE public.proiect_articole ALTER COLUMN cantitate TYPE text')
   ok(/coloana proiect_articole.cantitate lipseste sau are alt tip/.test(await eroare(aplicaA(db))), 'o coloană folosită cu alt tip = refuz')
   await db.exec('ALTER TABLE public.proiect_articole ALTER COLUMN cantitate TYPE numeric USING cantitate::numeric')
+  // 20261209a lipsă / cu alt corp = refuz (dreptul depinde de fn_executie_proiect_permis)
+  await db.exec('ALTER FUNCTION public.fn_executie_proiect_permis(bigint, boolean) RENAME TO fn_executie_proiect_permis_x')
+  ok(/20261209a/.test(await eroare(aplicaA(db))), '20261209a lipsă (fn_executie_proiect_permis) = refuz')
+  await db.exec('ALTER FUNCTION public.fn_executie_proiect_permis_x(bigint, boolean) RENAME TO fn_executie_proiect_permis')
+  await db.exec(`CREATE OR REPLACE FUNCTION public.fn_executie_proiect_permis(p_proiect bigint, p_scriere boolean DEFAULT false) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$`)
+  ok(/20261209a/.test(await eroare(aplicaA(db))), 'fn_executie_proiect_permis cu alt corp decât cel revizuit = refuz')
+  await db.exec(`CREATE OR REPLACE FUNCTION public.fn_executie_proiect_permis(p_proiect bigint, p_scriere boolean DEFAULT false) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT p_scriere IS NOT NULL
+    AND (public.fn_executie_acces_nerestrans()
+         OR (p_proiect IS NOT NULL AND p_proiect = ANY (public.fn_executie_acces_lista(p_scriere))))
+$f$`)
   ok(JSON.stringify(await stare(db)) === JSON.stringify(s0) && JSON.stringify(await randuriMostenite(db)) === JSON.stringify(m0), 'după refuzuri: catalogul și rândurile moștenite identice')
 }
 
@@ -213,12 +304,33 @@ if (!DOAR || DOAR === '3') {
 }
 
 if (!DOAR || DOAR === '4') {
-  console.log('4. MUTANȚI ai migrării A (dry-run-ul trebuie să-i prindă; cu postcondițiile întregi, refuz la aplicare)')
+  console.log('4. MUTANȚI ai migrării A (aplicați cu succes fără postcondiții → dry-run-ul trebuie să-i prindă; cu postcondițiile întregi, refuz la aplicare)')
   const POST_A = '-- ─── 12. Postcondiții'
   const MUTANTI_A = [
+    // r2 (review #1158)
+    ['garda proiect_articole acceptă marcajul LIPSĂ (NULL într-o sesiune nouă)', [
+      [`  v_rpc boolean := coalesce(current_setting('gazpet.rest_decontat_scriitor', true), '') = 'fn_rest_decontat_confirma_baza';`, `  v_rpc boolean := current_setting('gazpet.rest_decontat_scriitor', true) = 'fn_rest_decontat_confirma_baza';`],
+      [`    IF OLD.confirmat_la IS NOT NULL AND (v_rpc OR v_server) IS NOT TRUE THEN`, `    IF OLD.confirmat_la IS NOT NULL AND NOT (v_rpc OR v_server) THEN`],
+      [`  IF (v_rpc OR v_server) IS NOT TRUE THEN\n    IF TG_OP = 'UPDATE' AND OLD.confirmat_la IS NOT NULL THEN`, `  IF NOT (v_rpc OR v_server) THEN\n    IF TG_OP = 'UPDATE' AND OLD.confirmat_la IS NOT NULL THEN`]]],
+    // (garda situațiilor cu marcaj NULL e corectată la fel, dar NU e observabilă de client: authenticated n-are INSERT / UPDATE / DELETE pe
+    //  executie_sl_detaliu* — refuzul de privilegiu vine înaintea trigger-ului; un mutant acolo ar fi echivalent pentru dry-run)
+    ['restricția pe proiect (20261209a) scoasă din drept', [[`    AND public.fn_executie_proiect_permis(p_proiect, p_nivel <> 'citire') IS TRUE\n`, '']]],
+    ['un singur grup de coduri repetate (SELECT INTO pe agregare cu GROUP BY)', [[
+      `  SELECT coalesce(array_agg(z.k ORDER BY z.k), ARRAY[]::text[]) INTO STRICT v_dub\n    FROM (SELECT k FROM unnest(v_chei) AS k GROUP BY k HAVING count(*) > 1) z;`,
+      `  SELECT array_agg(DISTINCT k) INTO v_dub FROM (SELECT unnest(v_chei) AS k) z GROUP BY k HAVING count(*) > 1;\n  v_dub := coalesce(v_dub, ARRAY[]::text[]);`]]],
+    ['poziția lipsă pe un cod repetat neverificată', [[`    IF public.fn_rest_decontat_cheie(e->>'obiect_cod', e->>'deviz_cod', e->>'cod', NULL) = ANY (v_dub) AND coalesce(e->>'nr', '') !~ '[^[:space:]]' THEN`, `    IF false THEN`]]],
+    ['cheia finală duplicată neverificată (același cod, aceeași poziție)', [
+      [`    IF v_k = ANY (v_finale) THEN`, `    IF false THEN`],
+      [`  IF cardinality(v_finale) <> jsonb_array_length(p_linii) OR (SELECT count(DISTINCT f) FROM unnest(v_finale) f) <> jsonb_array_length(p_linii) THEN`, `  IF false THEN`]]],
+    ['lista completă pe obiect_cod brut (nu pe identitatea canonică)', [[`           public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) AS obiect_k,`, `           a.obiect_cod::text AS obiect_k,`]]],
+    ['devizul unei note NEAPROBATE acceptat de RPC', [[`    IF v_data_nota IS NULL THEN`, `    IF false THEN`]]],
+    ['nota neaprobată numărată în bază (calcul)', [[`       AND (r0.nota_id IS NULL OR (coalesce(nt.activ, false) AND nt.data_aprobare IS NOT NULL\n`, `       AND (r0.nota_id IS NULL OR (coalesce(nt.activ, false)\n`]]],
+    ['„înainte” la lista completă = momentul încărcării, nu data documentului', [[`AND (r1.data_doc, r1.moment, r1.id) < (lc.data_doc, lc.moment, lc.id))),`, `AND (r1.moment, r1.id) < (lc.moment, lc.id))),`]]],
+    ['prețul = ultimul document încărcat, nu ultimul act (după dată)', [[`(array_agg(u.pret_unitar ORDER BY u.data_doc DESC, u.moment DESC, u.id DESC) FILTER (WHERE u.pret_unitar IS NOT NULL))[1],`, `(array_agg(u.pret_unitar ORDER BY u.moment DESC, u.id DESC) FILTER (WHERE u.pret_unitar IS NOT NULL))[1],`]]],
+    // r1
     ['aceeași amprentă acceptată (dublarea situației)', [[`  IF EXISTS (SELECT 1 FROM public.executie_sl_detaliu d WHERE d.proiect_id = p_proiect AND d.amprenta = p_amprenta) THEN`, `  IF false THEN`]]],
     ['nr. existent fără „înlocuiește” acceptat', [[`    IF NOT p_inlocuieste THEN`, `    IF false THEN`]]],
-    ['notele legate de un AA activ cu deviz se adună încă o dată', [[`AND (r0.nota_id IS NULL OR (coalesce(nt.activ, false) AND NOT (coalesce(aan.activ, false) AND coalesce(aan.are_deviz, false))))),`, `AND (r0.nota_id IS NULL OR coalesce(nt.activ, false))),`]]],
+    ['notele legate de un AA activ cu deviz se adună încă o dată', [[`                                   AND NOT (coalesce(aan.activ, false) AND coalesce(aan.are_deviz, false))))),`, `))),`]]],
     ['AA inactiv încă numărat', [[`     WHERE (r0.act_aditional_id IS NULL OR coalesce(aa.activ, false))`, `     WHERE true`]]],
     ['restul tăiat la zero', [[`art.nr, art.cod, art.denumire, art.um, art.um_incert, art.pret_unitar, art.bc, art.bv, art.dc, art.dv, art.bc - art.dc, art.bv - art.dv,`, `art.nr, art.cod, art.denumire, art.um, art.um_incert, art.pret_unitar, art.bc, art.bv, art.dc, art.dv, greatest(art.bc - art.dc, 0), greatest(art.bv - art.dv, 0),`]]],
     ['accesul general Execuție dă citire', [[`                     WHERE u.profile_id = auth.uid() AND u.module = 'executie_rest_decontat'`, `                     WHERE u.profile_id = auth.uid() AND u.module IN ('executie_rest_decontat', 'executie')`]]],
@@ -228,18 +340,9 @@ if (!DOAR || DOAR === '4') {
     ['rândurile confirmate se pot modifica direct', [[`    IF TG_OP = 'UPDATE' AND OLD.confirmat_la IS NOT NULL THEN`, `    IF false THEN`]]],
   ]
   for (const [nume, lista] of MUTANTI_A) {
-    let text
-    try { text = mutant(MIG_A, lista) } catch (e) { ok(false, `mutantul „${nume}”: ${e.message}`); continue }
-    const db = await bazaNoua()
-    let ab
-    try { await aplicaA(db, text.slice(0, text.indexOf(POST_A))); ab = await verificaDry(db, DRY_A, BLOCURI_A) } catch (e) { ab = ['aplicarea a picat: ' + e.message] }
-    ok(ab.length > 0, `mutantul „${nume}” e prins de dry-run (${ab.length}): ${(ab.join(' | ') || 'NIMIC').slice(0, 200)}`)
-    const db2 = await bazaNoua()
-    const s0 = await stare(db2)
-    const err = await eroare(aplicaA(db2, text))
-    ok(/20270105a post:/.test(err || '') && JSON.stringify(await stare(db2)) === JSON.stringify(s0), `mutantul „${nume}” e refuzat la aplicare (postcondiții), nimic schimbat (${(err || 'TRECE').slice(0, 90)})`)
+    await ruleazaMutant({ eticheta: 'mutantul A', nume, lista, textBaza: MIG_A, marcajPost: POST_A, pregateste: async () => {}, aplica: (db, t) => aplicaA(db, t), dry: DRY_A, blocuri: BLOCURI_A })
   }
-  ok(MIG_A.indexOf(POST_A) > 0 && MIG_A.slice(MIG_A.indexOf(POST_A)).includes('AMPRENTA_20270105a_INCEPUT'), 'postcondițiile conțin amprenta (mutanții o ating)')
+  ok(MIG_A.indexOf(POST_A) > 0 && MIG_A.slice(MIG_A.indexOf(POST_A)).includes('AMPRENTA_20270105a_INCEPUT'), 'postcondițiile A conțin amprenta (mutanții o ating)')
 }
 
 if (AREB && (!DOAR || DOAR === '5')) {
@@ -255,29 +358,23 @@ if (AREB && (!DOAR || DOAR === '5')) {
   const amp = j.find(m => /^AMPRENTA_20270105b_TEXT/.test(m))
   if (process.argv.includes('--amprente') || amp) console.log('     amprenta B calculată: ' + (await q1(db, `SELECT md5($1) AS m`, [amp ? amp.slice('AMPRENTA_20270105b_TEXT '.length) : ''])).m)
   ok(JSON.stringify((await q1(db, `SELECT public.fn_izo_porti_lipsa() AS v`)).v) === '[]', 'B: porțile verzi după')
-  const BLOCURI_B = ['t_poarta_mp ok', 't_poarta_owner ok', 't_poarta_cu_oferta ok', 't_poarta_direct ok']
   const ab = await verificaDry(db, DRY_B, BLOCURI_B)
   ok(ab.length === 0, 'dry-run B: toate blocurile ok' + (ab.length ? ': ' + ab.join(' | ') : ''))
   ok(/20270105b/.test(await eroare(revinoA(db))), 'revenirea A cu B aplicată = refuz (întâi revenirea B)')
-  const POST_B = '-- ─── 3. Postcondiții'
+  const POST_B = '-- ─── 4. Postcondiții'
+  ok(MIG_B.indexOf(POST_B) > 0 && MIG_B.slice(MIG_B.indexOf(POST_B)).includes('AMPRENTA_20270105b_INCEPUT'), 'postcondițiile B (secțiunea 4) conțin amprenta (mutanții o ating)')
   const MUTANTI_B = [
     ['MP-ul fără ofertă declară configurarea completă', [[`  IF NOT v_oferta AND NOT (v_owner AND v_motiv IS NOT NULL) THEN`, `  IF false THEN`]]],
     ['owner-ul fără motiv acceptat', [[`  v_motiv := nullif(btrim(regexp_replace(coalesce(p_motiv, ''), '[[:space:]]+', ' ', 'g')), '');`, `  v_motiv := coalesce(nullif(btrim(regexp_replace(coalesce(p_motiv, ''), '[[:space:]]+', ' ', 'g')), ''), 'x');`]]],
-    ['fără garda pe coloanele de configurare', [[`CREATE TRIGGER trg_rest_decontat_configurare_garda BEFORE UPDATE OF configurare_completa_la, configurare_exceptie_motiv ON public.executie_proiecte\n  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_proiect_configurare_garda();`, '']]],
+    ['fără garda pe coloanele de configurare', [[`CREATE TRIGGER trg_rest_decontat_configurare_garda BEFORE INSERT OR UPDATE OF configurare_completa_la, configurare_exceptie_motiv ON public.executie_proiecte\n  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_proiect_configurare_garda();`, '']]],
+    // r2 (review #1158)
+    ['garda poartei acceptă marcajul LIPSĂ (NULL într-o sesiune nouă)', [
+      [`  v_rpc boolean := coalesce(current_setting('gazpet.rest_decontat_scriitor', true), '') = 'fn_executie_proiect_configurare_completa';`, `  v_rpc boolean := current_setting('gazpet.rest_decontat_scriitor', true) = 'fn_executie_proiect_configurare_completa';`],
+      [`     AND (v_rpc OR v_server) IS NOT TRUE THEN\n    RAISE EXCEPTION 'configurare: starea`, `     AND NOT (v_rpc OR v_server) THEN\n    RAISE EXCEPTION 'configurare: starea`]]],
+    ['garda doar pe UPDATE: un proiect nou se poate crea direct „configurat”', [[`CREATE TRIGGER trg_rest_decontat_configurare_garda BEFORE INSERT OR UPDATE OF`, `CREATE TRIGGER trg_rest_decontat_configurare_garda BEFORE UPDATE OF`]]],
   ]
   for (const [nume, lista] of MUTANTI_B) {
-    let text
-    try { text = mutant(MIG_B, lista) } catch (e) { ok(false, `mutantul B „${nume}”: ${e.message}`); continue }
-    const dbm = await bazaNoua()
-    await aplicaLivrare(dbm, A, MIG_A, F(A).ob)
-    let abm
-    try { await aplicaB(dbm, text.slice(0, text.indexOf(POST_B))); abm = await verificaDry(dbm, DRY_B, BLOCURI_B) } catch (e) { abm = ['aplicarea a picat: ' + e.message] }
-    ok(abm.length > 0, `mutantul B „${nume}” e prins de dry-run (${abm.length}): ${(abm.join(' | ') || 'NIMIC').slice(0, 200)}`)
-    const dbm2 = await bazaNoua()
-    await aplicaLivrare(dbm2, A, MIG_A, F(A).ob)
-    const s0 = await stare(dbm2)
-    const err = await eroare(aplicaB(dbm2, text))
-    ok(/20270105b post:/.test(err || '') && JSON.stringify(await stare(dbm2)) === JSON.stringify(s0), `mutantul B „${nume}” e refuzat la aplicare, nimic schimbat (${(err || 'TRECE').slice(0, 90)})`)
+    await ruleazaMutant({ eticheta: 'mutantul B', nume, lista, textBaza: MIG_B, marcajPost: POST_B, pregateste: dbm => aplicaLivrare(dbm, A, MIG_A, F(A).ob), aplica: (dbm, t) => aplicaB(dbm, t), dry: DRY_B, blocuri: BLOCURI_B })
   }
   // revenirea B: refuz cu date (proiect configurat), apoi pe curat; reaplicare
   const sA = await stare(db)

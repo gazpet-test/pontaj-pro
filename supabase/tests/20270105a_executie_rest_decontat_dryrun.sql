@@ -4,7 +4,12 @@
 -- nu din codul testat (L25). Identitatea: ambele surse JWT + SET LOCAL ROLE authenticated, verificate la fiecare bloc (auth.uid, current_user,
 -- rol fara BYPASSRLS). Conturi SINTETICE (uuid-uri f0000000-…): a = owner, b = managerul proiectului P1 si P3, c = director financiar
 -- (executie_rest_decontat viewer), d = editor pe sub-modul, e = sef de santier (executie viewer + santierul P1, NU are sub-modulul),
--- f = responsabilul de contracte al P1 (executie viewer), g = fara drepturi. Proiecte: P1 (cu oferta, dupa primul bloc), P2 (alt MP), P3 (fara oferta).
+-- f = responsabilul de contracte al P1 (executie viewer), g = fara drepturi, h = editor pe sub-modul RESTRANS (20261209a) la P2 ca viewer,
+-- i = editor pe sub-modul RESTRANS la P2 ca editor. Proiecte: P1 (cu oferta, dupa primul bloc), P2 (alt MP), P3 (fara oferta), P4 (al owner-ului:
+-- coduri repetate, lista completa pe identitate canonica, ultimul act, note neaprobate), P5 (un rand confirmat scris de SERVER in fixturi, pentru
+-- garda in sesiune proaspata).
+-- SESIUNE PROASPATA: primul bloc dupa fixturi verifica garda cu marcajul RPC LIPSA (NULL): fisierul se ruleaza intr-o sesiune noua, inainte ca
+-- vreun RPC sa fi pus marcajul (precondiția e verificata explicit).
 -- FIXTURI: pe clona, daca profiles / employees cer alte coloane NOT NULL, se completeaza DOAR blocul FIXTURI (restul nu depinde de ele).
 BEGIN;
 SET LOCAL search_path = public, pg_temp;
@@ -18,17 +23,19 @@ BEGIN
   INSERT INTO public.employees (id, name) VALUES (9101, 'RD MP UNU'), (9102, 'RD MP DOI'), (9103, 'RD CONTRACTE'), (9104, 'RD SEF SANTIER');
   IF to_regclass('auth.users') IS NOT NULL THEN
     INSERT INTO auth.users (id) SELECT x::uuid FROM unnest(ARRAY['f0000000-0000-4000-8000-00000000000a', 'f0000000-0000-4000-8000-00000000000b', 'f0000000-0000-4000-8000-00000000000c',
-      'f0000000-0000-4000-8000-00000000000d', 'f0000000-0000-4000-8000-00000000000e', 'f0000000-0000-4000-8000-00000000000f', 'f0000000-0000-4000-8000-000000000010']) x
+      'f0000000-0000-4000-8000-00000000000d', 'f0000000-0000-4000-8000-00000000000e', 'f0000000-0000-4000-8000-00000000000f', 'f0000000-0000-4000-8000-000000000010',
+      'f0000000-0000-4000-8000-000000000011', 'f0000000-0000-4000-8000-000000000012']) x
     ON CONFLICT (id) DO NOTHING;
   END IF;
   INSERT INTO public.profiles (id, is_owner, employee_id) VALUES
     ('f0000000-0000-4000-8000-00000000000a', true, NULL), ('f0000000-0000-4000-8000-00000000000b', false, 9101), ('f0000000-0000-4000-8000-00000000000c', false, NULL),
     ('f0000000-0000-4000-8000-00000000000d', false, NULL), ('f0000000-0000-4000-8000-00000000000e', false, 9104), ('f0000000-0000-4000-8000-00000000000f', false, 9103),
-    ('f0000000-0000-4000-8000-000000000010', false, NULL)
+    ('f0000000-0000-4000-8000-000000000010', false, NULL), ('f0000000-0000-4000-8000-000000000011', false, NULL), ('f0000000-0000-4000-8000-000000000012', false, NULL)
   ON CONFLICT (id) DO UPDATE SET is_owner = EXCLUDED.is_owner, employee_id = EXCLUDED.employee_id;
   INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES
     ('f0000000-0000-4000-8000-00000000000c', 'executie_rest_decontat', 'viewer'), ('f0000000-0000-4000-8000-00000000000d', 'executie_rest_decontat', 'editor'),
-    ('f0000000-0000-4000-8000-00000000000e', 'executie', 'viewer'), ('f0000000-0000-4000-8000-00000000000f', 'executie', 'viewer');
+    ('f0000000-0000-4000-8000-00000000000e', 'executie', 'viewer'), ('f0000000-0000-4000-8000-00000000000f', 'executie', 'viewer'),
+    ('f0000000-0000-4000-8000-000000000011', 'executie_rest_decontat', 'editor'), ('f0000000-0000-4000-8000-000000000012', 'executie_rest_decontat', 'editor');
   INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id, responsabil_contracte_externe_id, sef_santier_employee_id) VALUES ('RD-P1', 'Dry P1', 9101, 9103, 9104) RETURNING id INTO v;
   INSERT INTO rd_fix VALUES ('p1', v);
   INSERT INTO public.sites (name, proiect_id) VALUES ('Dry santier P1', v) RETURNING id INTO v_s;
@@ -41,7 +48,24 @@ BEGIN
   INSERT INTO rd_fix VALUES ('p2', v);
   INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P3', 'Dry P3 fara oferta', 9101) RETURNING id INTO v;
   INSERT INTO rd_fix VALUES ('p3', v);
-  RAISE NOTICE 'fixturi ok: P1 %, P2 %, P3 %', (SELECT id FROM rd_fix WHERE k = 'p1'), (SELECT id FROM rd_fix WHERE k = 'p2'), (SELECT id FROM rd_fix WHERE k = 'p3');
+  -- h / i: conturi RESTRANSE pe proiect (20261209a) la P2 (viewer / editor); scrierea directa aici e fixtura (pe productie: fn_executie_acces_proiect_seteaza)
+  INSERT INTO public.executie_acces_proiect (profile_id, proiect_id, nivel) VALUES
+    ('f0000000-0000-4000-8000-000000000011', (SELECT id FROM rd_fix WHERE k = 'p2'), 'viewer'), ('f0000000-0000-4000-8000-000000000012', (SELECT id FROM rd_fix WHERE k = 'p2'), 'editor');
+  -- P4 (owner): AA-4 lista completa datata 2026-05-01, AA-5 „doar diferente” datata 2026-02-01 (mai VECHE, dar incarcata DUPA AA-4)
+  INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P4', 'Dry P4 coduri repetate / ultimul act', 9102) RETURNING id INTO v;
+  INSERT INTO rd_fix VALUES ('p4', v);
+  INSERT INTO public.executie_acte_aditionale (proiect_id, numar_act, data_semnare, activ) VALUES (v, 'AA-4', DATE '2026-05-01', true) RETURNING id INTO v_s;
+  INSERT INTO rd_fix VALUES ('aa4', v_s);
+  INSERT INTO public.executie_acte_aditionale (proiect_id, numar_act, data_semnare, activ) VALUES (v, 'AA-5', DATE '2026-02-01', true) RETURNING id INTO v_s;
+  INSERT INTO rd_fix VALUES ('aa5', v_s);
+  -- P5: un rand CONFIRMAT scris de server (calea serverului: auth.uid() NULL + postgres), pentru garda in sesiune proaspata
+  INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P5', 'Dry P5 garda proaspata', 9102) RETURNING id INTO v;
+  INSERT INTO rd_fix VALUES ('p5', v);
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate, valoare, sursa, mod_import, fisier_amprenta, confirmat_de, confirmat_la)
+  VALUES (v, '0001', 'D1', '1', 'A100', 'Conducta', 'M', 10, 1000, 'contract_initial', 'lista_completa', repeat('55', 32), 'f0000000-0000-4000-8000-00000000000a', now()) RETURNING id INTO v_s;
+  INSERT INTO rd_fix VALUES ('p5r', v_s);
+  RAISE NOTICE 'fixturi ok: P1 %, P2 %, P3 %, P4 %, P5 %', (SELECT id FROM rd_fix WHERE k = 'p1'), (SELECT id FROM rd_fix WHERE k = 'p2'), (SELECT id FROM rd_fix WHERE k = 'p3'),
+    (SELECT id FROM rd_fix WHERE k = 'p4'), (SELECT id FROM rd_fix WHERE k = 'p5');
 END $fix$;
 CREATE FUNCTION pg_temp.rd_id(p text) RETURNS bigint LANGUAGE sql STABLE AS $f$ SELECT id FROM rd_fix WHERE k = p $f$;
 -- identitatea din bloc: auth.uid() din ambele surse, rolul authenticated, fara BYPASSRLS
@@ -51,6 +75,46 @@ BEGIN
     RAISE EXCEPTION 'identitate gresita: uid % user %', auth.uid(), current_user;
   END IF;
 END $f$;
+
+-- ── t_garda_proaspata: SESIUNE NOUA, marcajul RPC LIPSESTE (NULL, nu ''): garzile refuza scrierile directe ale owner-ului (accesul general
+--    Executie trece de politicile vechi ale proiect_articole) — rand confirmat modificat / sters, provenienta scrisa direct, situatie scrisa direct ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000a', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE n int;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000a');
+  IF current_setting('gazpet.rest_decontat_scriitor', true) IS NOT NULL THEN
+    RAISE EXCEPTION 't_garda_proaspata PRECONDITIE: marcajul RPC e deja definit in sesiune (%); dry-run-ul se ruleaza intr-o sesiune noua', current_setting('gazpet.rest_decontat_scriitor', true);
+  END IF;
+  IF (SELECT count(*) FROM public.proiect_articole WHERE id = pg_temp.rd_id('p5r') AND confirmat_la IS NOT NULL) <> 1 THEN RAISE EXCEPTION 't_garda_proaspata FAIL: randul confirmat al fixturii lipseste'; END IF;
+  BEGIN UPDATE public.proiect_articole SET cantitate = 999 WHERE id = pg_temp.rd_id('p5r'); RAISE EXCEPTION 't_garda_proaspata FAIL: rand confirmat modificat direct (marcaj NULL)';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%nu se modifica direct%' THEN RAISE; END IF; END;
+  BEGIN DELETE FROM public.proiect_articole WHERE id = pg_temp.rd_id('p5r'); RAISE EXCEPTION 't_garda_proaspata FAIL: rand confirmat sters direct (marcaj NULL)';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%nu se sterg%' THEN RAISE; END IF; END;
+  BEGIN
+    INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, cod, denumire, um, cantitate, valoare, sursa, confirmat_de, confirmat_la)
+    VALUES (pg_temp.rd_id('p5'), '0001', 'D1', 'B200', 'x', 'M', 1, 1, 'contract_initial', auth.uid(), now());
+    RAISE EXCEPTION 't_garda_proaspata FAIL: provenienta scrisa direct (marcaj NULL)';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%confirma_baza%' THEN RAISE; END IF; END;
+  BEGIN
+    INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, cod, denumire, um, cantitate, valoare, sursa, mod_import)
+    VALUES (pg_temp.rd_id('p5'), '0001', 'D1', 'B200', 'x', 'M', 1, 1, 'contract_initial', 'diferente');
+    RAISE EXCEPTION 't_garda_proaspata FAIL: mod_import scris direct (marcaj NULL)';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%confirma_baza%' THEN RAISE; END IF; END;
+  -- situatiile: clientii n-au deloc INSERT (GRANT), deci refuzul vine inaintea gardei (garda cu marcaj NULL ramane plasa a doua, neobservabila de client)
+  BEGIN INSERT INTO public.executie_sl_detaliu (proiect_id, nr_situatie, amprenta, confirmat_de) VALUES (pg_temp.rd_id('p5'), '1', repeat('56', 32), auth.uid()); RAISE EXCEPTION 't_garda_proaspata FAIL: situatie scrisa direct (marcaj NULL)';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  SELECT count(*) INTO n FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p5');
+  IF n <> 1 OR (SELECT cantitate FROM public.proiect_articole WHERE id = pg_temp.rd_id('p5r')) <> 10 OR EXISTS (SELECT 1 FROM public.executie_sl_detaliu) THEN
+    RAISE EXCEPTION 't_garda_proaspata FAIL: refuzurile au scris ceva';
+  END IF;
+  -- calea legitima a serverului ramane: nimic de testat aici ca authenticated; calea veche (rand fara provenienta) merge
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, cod, denumire, um, cantitate, valoare, sursa) VALUES (pg_temp.rd_id('p5'), '0001', 'D1', 'Z9', 'extras', 'M', 1, 0, 'extras_materiale');
+  DELETE FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p5') AND sursa = 'extras_materiale';
+  RAISE NOTICE 't_garda_proaspata ok: cu marcajul RPC LIPSA (NULL) randul confirmat nu se modifica / sterge, provenienta si situatiile nu se scriu direct; calea veche merge';
+END $t$;
+RESET ROLE;
 
 -- ── t_fara_baza: fara oferta confirmata nu se confirma nicio situatie (MP-ul pe P3 si pe P1 inainte de oferta) ───────────────────
 SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
@@ -307,8 +371,8 @@ BEGIN
   EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN DELETE FROM public.executie_note_modificare WHERE id = pg_temp.rd_id('ncs1'); RAISE EXCEPTION 't_aa FAIL: nota stearsa';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
-  -- AA „lista completa” pe obiectul 0002: inlocuieste randurile confirmate inainte pe 0002 (C300 = 12), 0001 neatins
-  INSERT INTO public.executie_acte_aditionale (proiect_id, numar_act, activ) VALUES (pg_temp.rd_id('p1'), 'AA-2', true) RETURNING id INTO r;
+  -- AA „lista completa” pe obiectul 0002 (datat DUPA oferta si AA-1): inlocuieste randurile datate inainte pe 0002 (C300 = 12), 0001 neatins
+  INSERT INTO public.executie_acte_aditionale (proiect_id, numar_act, data_semnare, activ) VALUES (pg_temp.rd_id('p1'), 'AA-2', DATE '2026-07-01', true) RETURNING id INTO r;
   v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p1'), 'act_aditional', r.id, NULL, 'lista_completa', 'aa2.xlsx', repeat('e4', 32),
          '[{"obiect_cod":"0002","deviz_cod":"D2","cod":"C300","denumire":"Alt articol revizuit","um":"BUC","cantitate":12,"pret_unitar":55,"valoare":660}]'::jsonb);
   IF (SELECT cantitate FROM public.v_executie_rest_decontat_baza WHERE proiect_id = pg_temp.rd_id('p1') AND cheie = '0002|D2|C300') <> 12
@@ -321,6 +385,138 @@ BEGIN
     RAISE EXCEPTION 't_aa FAIL: lista completa cu cantitate negativa / al doilea deviz pe AA acceptat';
   EXCEPTION WHEN unique_violation OR invalid_parameter_value THEN NULL; END;
   RAISE NOTICE 't_aa_leaga_note ok: NCS +20 → 120; AA legat (+20, +5) → 120 si C300 15 (nu 140); AA inactiv → 120 / 10; nota inactiva → 100; lista completa pe 0002 → 12';
+END $t$;
+
+-- ── t_coduri_repetate (owner, P4): TOATE grupurile de coduri repetate primesc pozitia (A#1, A#2, B#3, B#4 — nu B comasat 7); pozitii lipsa /
+--    duplicate = refuz, nimic scris ──
+DO $t$
+DECLARE v jsonb; r record; n int;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000a');
+  SELECT count(*) INTO n FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p4');
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p4'), 'contract_initial', NULL, NULL, NULL, 'o4.xlsx', repeat('a4', 32),
+           '[{"obiect_cod":"OB1","deviz_cod":"D1","nr":"1","cod":"A","denumire":"a","um":"M","cantitate":1,"valoare":10},
+             {"obiect_cod":"OB1","deviz_cod":"D1","nr":"1","cod":"A","denumire":"a bis","um":"M","cantitate":1,"valoare":10}]'::jsonb);
+    RAISE EXCEPTION 't_coduri_repetate FAIL: acelasi cod cu aceeasi pozitie acceptat';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%pozitii duplicate%' THEN RAISE; END IF; END;
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p4'), 'contract_initial', NULL, NULL, NULL, 'o4.xlsx', repeat('a4', 32),
+           '[{"obiect_cod":"OB1","deviz_cod":"D1","cod":"A","denumire":"a","um":"M","cantitate":1,"valoare":10},
+             {"obiect_cod":"OB1","deviz_cod":"D1","nr":"2","cod":"A","denumire":"a bis","um":"M","cantitate":1,"valoare":10}]'::jsonb);
+    RAISE EXCEPTION 't_coduri_repetate FAIL: cod repetat cu o pozitie lipsa acceptat';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%pozitii lipsa%' THEN RAISE; END IF; END;
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p4')) <> n THEN RAISE EXCEPTION 't_coduri_repetate FAIL: refuzurile au scris ceva'; END IF;
+  -- doua grupuri repetate (A: #1 #2; B: #3 #4) + X singur, pret 10
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p4'), 'contract_initial', NULL, NULL, NULL, 'o4.xlsx', repeat('a4', 32),
+         '[{"obiect_cod":"OB1","deviz_cod":"D1","nr":"1","cod":"A","denumire":"a1","um":"M","cantitate":1,"valoare":10},
+           {"obiect_cod":"OB1","deviz_cod":"D1","nr":"2","cod":"A","denumire":"a2","um":"M","cantitate":2,"valoare":20},
+           {"obiect_cod":"OB1","deviz_cod":"D1","nr":"3","cod":"B","denumire":"b3","um":"M","cantitate":3,"valoare":30},
+           {"obiect_cod":"OB1","deviz_cod":"D1","nr":"4","cod":"B","denumire":"b4","um":"M","cantitate":4,"valoare":40},
+           {"obiect_cod":"OB1","deviz_cod":"D1","nr":"5","cod":"X","denumire":"x","um":"M","cantitate":100,"pret_unitar":10,"valoare":1000}]'::jsonb);
+  IF (v->>'inserate')::int <> 5 THEN RAISE EXCEPTION 't_coduri_repetate FAIL: %', v; END IF;
+  SELECT string_agg(b.cheie || '=' || b.cantitate::text, '; ' ORDER BY b.cheie) AS s, count(*) AS c INTO r FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p4');
+  IF r.c <> 5 OR r.s IS DISTINCT FROM 'OB1|D1|A|#1=1; OB1|D1|A|#2=2; OB1|D1|B|#3=3; OB1|D1|B|#4=4; OB1|D1|X=100' THEN RAISE EXCEPTION 't_coduri_repetate FAIL baza: %', r.s; END IF;
+  RAISE NOTICE 't_coduri_repetate ok: A#1, A#2, B#3, B#4 separate (5 chei), pozitii duplicate / lipsa refuzate';
+END $t$;
+
+-- ── t_ultimul_act (owner, P4): nota neaprobata nu intra (deviz refuzat, lipsa nota_neaprobata); dupa aprobare intra; AA „lista completa” pe
+--    obiectul scris altfel (' ob1 ') INLOCUIESTE (150, nu 250); un act mai VECHI incarcat DUPA nu trece peste lista completa; pretul = ultimul act (dupa data) ──
+DO $t$
+DECLARE v jsonb; r record; v_nota bigint;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000a');
+  INSERT INTO public.executie_note_modificare (proiect_id, tip, numar, descriere) VALUES (pg_temp.rd_id('p4'), 'NCS', 'NCS-9', 'fara aprobare inca') RETURNING id INTO v_nota;
+  IF NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p4') AND tip = 'nota_neaprobata' AND referinta = 'NCS NCS-9') THEN
+    RAISE EXCEPTION 't_ultimul_act FAIL: lipsa nota_neaprobata';
+  END IF;
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p4'), 'nota_comanda_suplimentara', NULL, v_nota, NULL, 'ncs9.xlsx', repeat('a9', 32),
+           '[{"obiect_cod":"OB1","deviz_cod":"D1","cod":"X","denumire":"x","um":"M","cantitate":20,"pret_unitar":11,"valoare":220}]'::jsonb);
+    RAISE EXCEPTION 't_ultimul_act FAIL: devizul unei note NEAPROBATE acceptat';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%nota_neaprobata%' THEN RAISE; END IF; END;
+  IF (SELECT cantitate FROM public.v_executie_rest_decontat_baza WHERE proiect_id = pg_temp.rd_id('p4') AND cheie = 'OB1|D1|X') <> 100 THEN RAISE EXCEPTION 't_ultimul_act FAIL: refuzul a scris'; END IF;
+  UPDATE public.executie_note_modificare SET data_aprobare = DATE '2026-04-01' WHERE id = v_nota;
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p4'), 'nota_comanda_suplimentara', NULL, v_nota, NULL, 'ncs9.xlsx', repeat('a9', 32),
+         '[{"obiect_cod":"OB1","deviz_cod":"D1","cod":"X","denumire":"x","um":"M","cantitate":20,"pret_unitar":11,"valoare":220}]'::jsonb);
+  SELECT cantitate, pret_unitar INTO r FROM public.v_executie_rest_decontat_baza WHERE proiect_id = pg_temp.rd_id('p4') AND cheie = 'OB1|D1|X';
+  IF r.cantitate <> 120 OR r.pret_unitar <> 11 THEN RAISE EXCEPTION 't_ultimul_act FAIL: nota aprobata → % (astept 120, pret 11)', row_to_json(r); END IF;
+  -- aprobarea retrasa (data_aprobare NULL): randurile notei ies din baza, lipsa reapare
+  UPDATE public.executie_note_modificare SET data_aprobare = NULL WHERE id = v_nota;
+  SELECT cantitate, pret_unitar INTO r FROM public.v_executie_rest_decontat_baza WHERE proiect_id = pg_temp.rd_id('p4') AND cheie = 'OB1|D1|X';
+  IF r.cantitate <> 100 OR r.pret_unitar <> 10 OR NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p4') AND tip = 'nota_neaprobata') THEN
+    RAISE EXCEPTION 't_ultimul_act FAIL: nota cu aprobarea retrasa inca in baza: %', row_to_json(r);
+  END IF;
+  UPDATE public.executie_note_modificare SET data_aprobare = DATE '2026-04-01' WHERE id = v_nota;
+  -- AA-4 (2026-05-01) lista completa, obiectul scris ' ob1 ': inlocuieste TOT ce e datat inainte pe OB1 (oferta, NCS-9) → doar X = 150, pret 12
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p4'), 'act_aditional', pg_temp.rd_id('aa4'), NULL, 'lista_completa', 'aa4.xlsx', repeat('a5', 32),
+         '[{"obiect_cod":" ob1 ","deviz_cod":"D1","cod":"X","denumire":"x revizuit","um":"M","cantitate":150,"pret_unitar":12,"valoare":1800}]'::jsonb);
+  SELECT string_agg(b.cheie || '=' || b.cantitate::text || ' @' || coalesce(b.pret_unitar::text, '-') || ' r' || b.randuri, '; ' ORDER BY b.cheie) AS s INTO r
+    FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p4');
+  IF r.s IS DISTINCT FROM 'OB1|D1|X=150 @12 r1' THEN RAISE EXCEPTION 't_ultimul_act FAIL lista completa pe identitate canonica: %', r.s; END IF;
+  -- AA-5 (2026-02-01, mai vechi) incarcat DUPA AA-4, „doar diferente” +10 pret 9: e datat inaintea listei complete → ignorat; pretul ramane al AA-4
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p4'), 'act_aditional', pg_temp.rd_id('aa5'), NULL, 'diferente', 'aa5.xlsx', repeat('a6', 32),
+         '[{"obiect_cod":"OB1","deviz_cod":"D1","cod":"X","denumire":"x","um":"M","cantitate":10,"pret_unitar":9,"valoare":90}]'::jsonb);
+  SELECT cantitate, pret_unitar, randuri INTO r FROM public.v_executie_rest_decontat_baza WHERE proiect_id = pg_temp.rd_id('p4') AND cheie = 'OB1|D1|X';
+  IF r.cantitate <> 150 OR r.pret_unitar <> 12 OR r.randuri <> 1 THEN RAISE EXCEPTION 't_ultimul_act FAIL: actul vechi incarcat tarziu a trecut peste lista completa: %', row_to_json(r); END IF;
+  -- AA-4 dezactivat: lista completa dispare, raman oferta (100 @10), NCS-9 (+20 @11, 2026-04) si AA-5 (+10 @9, 2026-02) → 130, pretul = NCS-9 (data cea mai recenta)
+  UPDATE public.executie_acte_aditionale SET activ = false WHERE id = pg_temp.rd_id('aa4');
+  SELECT cantitate, pret_unitar, randuri INTO r FROM public.v_executie_rest_decontat_baza WHERE proiect_id = pg_temp.rd_id('p4') AND cheie = 'OB1|D1|X';
+  IF r.cantitate <> 130 OR r.pret_unitar <> 11 OR r.randuri <> 3 THEN RAISE EXCEPTION 't_ultimul_act FAIL: fara AA-4 → % (astept 130 @11, 3 randuri)', row_to_json(r); END IF;
+  UPDATE public.executie_acte_aditionale SET activ = true WHERE id = pg_temp.rd_id('aa4');
+  RAISE NOTICE 't_ultimul_act ok: nota neaprobata refuzata / exclusa, aprobata → 120 @11; lista completa pe " ob1 " → 150 @12 (nu 250); actul vechi incarcat tarziu ignorat; fara AA-4 → 130 @11';
+END $t$;
+RESET ROLE;
+
+-- ── t_drept_restrans: restrictia pe proiect (20261209a) se aplica inaintea dreptului de modul: h (editor pe sub-modul, viewer pe P2) citeste doar
+--    P2 si nu confirma; i (editor pe sub-modul, editor pe P2) confirma doar pe P2; P1 e invizibil pentru amandoi ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-000000000011', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-000000000011","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-000000000011');
+  IF public.fn_rest_decontat_drept(pg_temp.rd_id('p1'), 'citire') OR public.fn_rest_decontat_drept(pg_temp.rd_id('p3'), 'citire') OR public.fn_rest_decontat_drept(pg_temp.rd_id('p4'), 'citire')
+     OR NOT public.fn_rest_decontat_drept(pg_temp.rd_id('p2'), 'citire') OR public.fn_rest_decontat_drept(pg_temp.rd_id('p2'), 'confirmare') OR public.fn_rest_decontat_drept(pg_temp.rd_id('p2'), 'documente_baza') THEN
+    RAISE EXCEPTION 't_drept_restrans FAIL: dreptul contului restrans viewer pe P2';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.v_executie_rest_decontat WHERE proiect_id <> pg_temp.rd_id('p2')) OR EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_baza WHERE proiect_id <> pg_temp.rd_id('p2'))
+     OR EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_obiect WHERE proiect_id <> pg_temp.rd_id('p2')) OR EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id <> pg_temp.rd_id('p2'))
+     OR EXISTS (SELECT 1 FROM public.executie_note_modificare) OR EXISTS (SELECT 1 FROM public.executie_sl_detaliu) OR EXISTS (SELECT 1 FROM public.executie_sl_detaliu_linii)
+     OR NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p2') AND tip = 'fara_oferta') THEN
+    RAISE EXCEPTION 't_drept_restrans FAIL: contul restrans vede alte proiecte decat P2 (functiile DEFINER)';
+  END IF;
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p2'), 'contract_initial', NULL, NULL, NULL, 'o2.xlsx', repeat('a2', 32), '[{"obiect_cod":"0001","deviz_cod":"D1","cod":"A","denumire":"a","um":"M","cantitate":1,"valoare":10}]'::jsonb);
+    RAISE EXCEPTION 't_drept_restrans FAIL: viewer-ul pe proiect a confirmat oferta';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p1'), 'act_aditional', pg_temp.rd_id('aa1'), NULL, 'diferente', 'x.xlsx', repeat('a3', 32), '[{"obiect_cod":"0001","deviz_cod":"D1","cod":"A100","denumire":"x","um":"M","cantitate":1,"valoare":100}]'::jsonb);
+    RAISE EXCEPTION 't_drept_restrans FAIL: contul restrans a confirmat pe P1';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN INSERT INTO public.executie_note_modificare (proiect_id, tip, numar) VALUES (pg_temp.rd_id('p1'), 'NR', 'NR-H'); RAISE EXCEPTION 't_drept_restrans FAIL: nota pe P1 scrisa de contul restrans';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RAISE NOTICE 't_drept_restrans (1/2) ok: viewer pe P2 → citeste doar P2 in cele 4 vederi, nu confirma, P1 invizibil';
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-000000000012', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-000000000012","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-000000000012');
+  IF public.fn_rest_decontat_drept(pg_temp.rd_id('p1'), 'citire') OR public.fn_rest_decontat_drept(pg_temp.rd_id('p1'), 'documente_baza')
+     OR NOT public.fn_rest_decontat_drept(pg_temp.rd_id('p2'), 'confirmare') OR NOT public.fn_rest_decontat_drept(pg_temp.rd_id('p2'), 'documente_baza') THEN
+    RAISE EXCEPTION 't_drept_restrans FAIL: dreptul contului restrans editor pe P2';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.v_executie_rest_decontat WHERE proiect_id <> pg_temp.rd_id('p2')) THEN RAISE EXCEPTION 't_drept_restrans FAIL: editorul restrans vede P1'; END IF;
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p2'), 'contract_initial', NULL, NULL, NULL, 'o2.xlsx', repeat('a2', 32), '[{"obiect_cod":"0001","deviz_cod":"D1","cod":"A","denumire":"a","um":"M","cantitate":1,"valoare":10}]'::jsonb);
+  IF (v->>'inserate')::int <> 1 OR NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p2') AND cheie = '0001|D1|A') THEN RAISE EXCEPTION 't_drept_restrans FAIL: editorul pe P2 nu a confirmat oferta P2'; END IF;
+  BEGIN
+    v := public.fn_rest_decontat_confirma_situatie(pg_temp.rd_id('p1'), '8', NULL, 'x.xlsx', repeat('a7', 32), '[{"cod":"A100","um":"M","cantitate_perioada":1,"valoare":100,"cheie":"0001|D1|A100","tip_rand":"articol","potrivire":"exact"}]'::jsonb, false);
+    RAISE EXCEPTION 't_drept_restrans FAIL: editorul restrans a confirmat o situatie pe P1';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RAISE NOTICE 't_drept_restrans (2/2) ok: editor pe P2 → confirma pe P2, nimic pe P1';
 END $t$;
 RESET ROLE;
 
@@ -396,10 +592,13 @@ DO $t$
 DECLARE v jsonb;
 BEGIN
   PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000c');
-  IF (SELECT count(DISTINCT proiect_id) FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id IN (pg_temp.rd_id('p1'), pg_temp.rd_id('p2'), pg_temp.rd_id('p3'))) <> 2
+  IF NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p3') AND tip = 'fara_oferta')
+     OR EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p2') AND tip = 'fara_oferta')
      OR NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p1') AND cheie = '0001|D1|A100')
+     OR NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p2') AND cheie = '0001|D1|A')
+     OR NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_baza WHERE proiect_id = pg_temp.rd_id('p4') AND cheie = 'OB1|D1|X')
      OR (SELECT count(*) FROM public.executie_sl_detaliu WHERE proiect_id = pg_temp.rd_id('p1')) <> 7 THEN
-    RAISE EXCEPTION 't_drept FAIL: directorul financiar nu vede toate proiectele';
+    RAISE EXCEPTION 't_drept FAIL: directorul financiar nu vede toate proiectele (P1, P2 cu oferta, P3 fara oferta, P4)';
   END IF;
   IF NOT public.fn_rest_decontat_drept(pg_temp.rd_id('p2'), 'citire') OR public.fn_rest_decontat_drept(pg_temp.rd_id('p2'), 'confirmare') THEN RAISE EXCEPTION 't_drept FAIL: viewer pe sub-modul'; END IF;
   BEGIN

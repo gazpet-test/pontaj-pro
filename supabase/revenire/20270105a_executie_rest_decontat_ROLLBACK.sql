@@ -155,9 +155,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%'
   ) x;
   -- AMPRENTA_20270105a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'c6181efebba2cd51e8d78c42f4ec6454' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '514aaf68434bfc1027a7c3812b6d41c0' THEN
     RAISE NOTICE 'AMPRENTA_20270105a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270105a revenire: AMPRENTA obiectelor migrarii % (asteptat c6181efebba2cd51e8d78c42f4ec6454): starea nu e cea din 20270105a; nimic schimbat',
+    RAISE EXCEPTION '20270105a revenire: AMPRENTA obiectelor migrarii % (asteptat 514aaf68434bfc1027a7c3812b6d41c0): starea nu e cea din 20270105a; nimic schimbat',
       md5(coalesce(v_amp, ''));
   END IF;
 END $pre$;

@@ -63,6 +63,58 @@ CREATE POLICY proiect_articole_upd ON public.proiect_articole FOR UPDATE TO auth
 CREATE POLICY proiect_articole_del ON public.proiect_articole FOR DELETE TO authenticated USING (public.fx_executie_general());
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
 
+-- 20261209a (acces pe PROIECT, aplicată pe producție 11.11.2026): tabelul executie_acces_proiect + funcțiile pe care 20270105a le cheamă
+-- (fn_rest_decontat_drept → fn_executie_proiect_permis). Corpurile sunt COPII VERBATIM din 20261209a (proba PGlite verifică paritatea textuală;
+-- md5-urile sunt cele din preflight-ul 20261213a). Restul migrării 20261209a (politici restrictive, inventar, Storage) nu e reprodus.
+CREATE TABLE public.executie_acces_proiect (
+  profile_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id) ON DELETE RESTRICT,
+  nivel text NOT NULL DEFAULT 'editor',
+  acordat_de uuid,
+  acordat_la timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT executie_acces_proiect_pk PRIMARY KEY (profile_id, proiect_id),
+  CONSTRAINT executie_acces_proiect_nivel_ck CHECK (nivel IN ('viewer', 'editor'))
+);
+-- PARITATE_20261209A_INCEPUT
+CREATE FUNCTION public.fn_executie_acces_nerestrans_cont(p_profile uuid) RETURNS boolean
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  SELECT p_profile IS NOT NULL
+    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = p_profile AND p.is_owner IS TRUE)
+         OR NOT EXISTS (SELECT 1 FROM public.executie_acces_proiect a WHERE a.profile_id = p_profile))
+$f$;
+CREATE FUNCTION public.fn_executie_acces_lista_cont(p_profile uuid, p_scriere boolean) RETURNS bigint[]
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  SELECT coalesce(array_agg(a.proiect_id ORDER BY a.proiect_id), '{}'::bigint[])
+    FROM public.executie_acces_proiect a
+   WHERE p_profile IS NOT NULL AND p_scriere IS NOT NULL AND a.profile_id = p_profile
+     AND (p_scriere IS FALSE OR a.nivel = 'editor')
+$f$;
+CREATE FUNCTION public.fn_executie_acces_nerestrans() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT coalesce(public.fn_executie_acces_nerestrans_cont(auth.uid()), false)
+$f$;
+CREATE FUNCTION public.fn_executie_acces_lista(p_scriere boolean) RETURNS bigint[]
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT public.fn_executie_acces_lista_cont(auth.uid(), p_scriere)
+$f$;
+CREATE FUNCTION public.fn_executie_proiect_permis(p_proiect bigint, p_scriere boolean DEFAULT false) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT p_scriere IS NOT NULL
+    AND (public.fn_executie_acces_nerestrans()
+         OR (p_proiect IS NOT NULL AND p_proiect = ANY (public.fn_executie_acces_lista(p_scriere))))
+$f$;
+-- PARITATE_20261209A_SFARSIT
+REVOKE ALL ON FUNCTION public.fn_executie_acces_nerestrans() FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_lista(boolean) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_proiect_permis(bigint, boolean) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_nerestrans_cont(uuid) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_lista_cont(uuid, boolean) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_executie_acces_nerestrans() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_executie_proiect_permis(bigint, boolean) TO authenticated;
+ALTER TABLE public.executie_acces_proiect ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.executie_acces_proiect FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON public.executie_acces_proiect TO authenticated, service_role;
+
 -- STUB-urile porților Izometrie (forma celor reale: DEFINER, md5 pe catalog; E4b = ACL / coloane / politici pe executie_proiecte)
 CREATE FUNCTION public.fn_izo_porti_definitii() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
   SELECT md5(coalesce((SELECT string_agg(p.polname, ',' ORDER BY p.polname) FROM pg_policy p WHERE p.polname LIKE 'izo\_%'), ''))

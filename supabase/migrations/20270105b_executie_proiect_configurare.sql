@@ -12,8 +12,10 @@
 --     = {deja: true}, nimic scris).
 --   * executie_proiect_configurare_jurnal: o înregistrare pe fiecare declarare (cine, când, cu / fără excepție, motivul, câte rânduri de ofertă erau);
 --     doar RPC-ul scrie, clienții citesc cu dreptul de citire al proiectului.
---   * garda BEFORE UPDATE OF configurare_completa_la / configurare_exceptie_motiv pe executie_proiecte (L07): coloanele poartei se schimbă doar
---     prin RPC (marcajul static al tranzacției, ca în 20270105a) sau de server; un PATCH direct prin API e refuzat.
+--   * garda BEFORE INSERT OR UPDATE OF configurare_completa_la / configurare_exceptie_motiv pe executie_proiecte (L07): coloanele poartei se
+--     schimbă doar prin RPC (marcajul static al tranzacției, ca în 20270105a) sau de server; un PATCH direct prin API e refuzat, iar un proiect
+--     NOU nu poate fi creat direct cu configurarea declarată (r2, review #1158: INSERT acoperit). Marcaj LIPSĂ (NULL, sesiune nouă) = refuz.
+--   * RPC-ul reverifică dreptul DUPĂ lock-ul pe proiect (L01).
 -- Ce NU face: nicio dată, niciun drept acordat, nu atinge politicile existente ale executie_proiecte.
 -- Dependențe: 20270105a aplicată (coloanele, fn_rest_decontat_drept, fn_rest_decontat_are_oferta — corpurile verificate prin md5); porțile Izometrie
 --   (20261230a): trigger-ul pe executie_proiecte e o atingere „posibilă” a perimetrului E4b → ritualul PRE / ștampile / POST, ca în 20270105a.
@@ -57,7 +59,7 @@ BEGIN
   END IF;
   SELECT string_agg(p.proname || '=' || md5(replace(p.prosrc, chr(13), '')) || ':' || p.prosecdef::text || ':' || pg_get_userbyid(p.proowner), ';' ORDER BY p.proname) INTO v_x
     FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_rest_decontat_drept', 'fn_rest_decontat_are_oferta', 'fn_rest_decontat_server');
-  IF v_x IS DISTINCT FROM 'fn_rest_decontat_are_oferta=62c2b3021e3d7e7a827e864b8c337924:true:postgres;fn_rest_decontat_drept=ffe356e246445fdfe47baf430f16e05b:true:postgres;fn_rest_decontat_server=8de3a77b9c3984544a84b9ee3dfdd219:false:postgres' THEN
+  IF v_x IS DISTINCT FROM 'fn_rest_decontat_are_oferta=62c2b3021e3d7e7a827e864b8c337924:true:postgres;fn_rest_decontat_drept=c1e493134dfd4882b1bc69b09b5b49ea:true:postgres;fn_rest_decontat_server=8de3a77b9c3984544a84b9ee3dfdd219:false:postgres' THEN
     RAISE EXCEPTION '20270105b: functiile din 20270105a au alt corp / proprietar decat cel revizuit: %', v_x;
   END IF;
   IF to_regprocedure('public.fn_izo_porti_lipsa()') IS NULL OR to_regprocedure('public.fn_izo_porti_definitii()') IS NULL
@@ -131,30 +133,38 @@ CREATE INDEX executie_proiect_configurare_jurnal_proiect_ix ON public.executie_p
 COMMENT ON TABLE public.executie_proiect_configurare_jurnal IS
   'Execuție (20270105b): fiecare declarare „configurare completă” a unui proiect (cine, când, cu excepția owner-ului și motivul ei, câte rânduri de ofertă erau). Scris doar de fn_executie_proiect_configurare_completa.';
 
--- ─── 2. gărzile (L07): coloanele poartei doar prin RPC / server; jurnalul append-only ─────────────────────────────────────────
+-- ─── 2. gărzile (L07): coloanele poartei doar prin RPC / server (și la INSERT: un proiect nou nu se naște „configurat”); jurnalul append-only ──
+-- Marcajul LIPSĂ (NULL, sesiune nouă) = refuz, ca și marcajul gol (L18).
 CREATE FUNCTION public.fn_executie_proiect_configurare_garda() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
 DECLARE
-  v_rpc boolean := current_setting('gazpet.rest_decontat_scriitor', true) = 'fn_executie_proiect_configurare_completa';
-  v_server boolean := public.fn_rest_decontat_server();
+  v_rpc boolean := coalesce(current_setting('gazpet.rest_decontat_scriitor', true), '') = 'fn_executie_proiect_configurare_completa';
+  v_server boolean := public.fn_rest_decontat_server() IS TRUE;
 BEGIN
   IF TG_TABLE_NAME = 'executie_proiect_configurare_jurnal' THEN
     IF TG_OP <> 'INSERT' AND NOT v_server THEN
       RAISE EXCEPTION 'configurare: jurnalul declararilor nu se modifica si nu se sterge' USING ERRCODE = '42501';
     END IF;
-    IF TG_OP = 'INSERT' AND NOT (v_rpc OR v_server) THEN
+    IF TG_OP = 'INSERT' AND (v_rpc OR v_server) IS NOT TRUE THEN
       RAISE EXCEPTION 'configurare: jurnalul se scrie doar prin fn_executie_proiect_configurare_completa' USING ERRCODE = '42501';
     END IF;
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
   END IF;
+  -- INSERT: proiectul nou se naște „în configurare” (ambele coloane NULL); doar serverul poate scrie altfel (RPC-ul nu creează proiecte)
+  IF TG_OP = 'INSERT' THEN
+    IF (NEW.configurare_completa_la IS NOT NULL OR NEW.configurare_exceptie_motiv IS NOT NULL) AND NOT v_server THEN
+      RAISE EXCEPTION 'configurare: un proiect nou se creeaza „in configurare”; starea se declara doar prin fn_executie_proiect_configurare_completa' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
   IF (NEW.configurare_completa_la, NEW.configurare_exceptie_motiv) IS DISTINCT FROM (OLD.configurare_completa_la, OLD.configurare_exceptie_motiv)
-     AND NOT (v_rpc OR v_server) THEN
+     AND (v_rpc OR v_server) IS NOT TRUE THEN
     RAISE EXCEPTION 'configurare: starea „in configurare” a proiectului se schimba doar prin fn_executie_proiect_configurare_completa' USING ERRCODE = '42501';
   END IF;
   RETURN NEW;
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_executie_proiect_configurare_garda() FROM PUBLIC, anon, authenticated, service_role;
-CREATE TRIGGER trg_rest_decontat_configurare_garda BEFORE UPDATE OF configurare_completa_la, configurare_exceptie_motiv ON public.executie_proiecte
+CREATE TRIGGER trg_rest_decontat_configurare_garda BEFORE INSERT OR UPDATE OF configurare_completa_la, configurare_exceptie_motiv ON public.executie_proiecte
   FOR EACH ROW EXECUTE FUNCTION public.fn_executie_proiect_configurare_garda();
 CREATE TRIGGER trg_rest_decontat_configurare_jurnal_garda BEFORE INSERT OR UPDATE OR DELETE ON public.executie_proiect_configurare_jurnal
   FOR EACH ROW EXECUTE FUNCTION public.fn_executie_proiect_configurare_garda();
@@ -181,6 +191,10 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('gazpet.rest_decontat:' || p_proiect::text, 0));
   SELECT * INTO v_e FROM public.executie_proiecte e WHERE e.id = p_proiect FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'configurare: proiectul nu exista sau nu ai drept sa-i declari configurarea' USING ERRCODE = '42501'; END IF;
+  -- L01: dreptul se REVERIFICĂ după lock (MP-ul / lista schimbate cât apelul aștepta lock-ul = refuz)
+  IF NOT public.fn_rest_decontat_drept(p_proiect, 'confirmare') THEN
+    RAISE EXCEPTION 'configurare: proiectul nu exista sau nu ai drept sa-i declari configurarea' USING ERRCODE = '42501';
+  END IF;
   IF v_e.configurare_completa_la IS NOT NULL THEN
     RETURN jsonb_build_object('ok', true, 'deja', true, 'proiect_id', p_proiect, 'configurare_completa_la', v_e.configurare_completa_la,
                               'exceptie', v_e.configurare_exceptie_motiv IS NOT NULL, 'motiv', v_e.configurare_exceptie_motiv);
@@ -231,9 +245,9 @@ BEGIN
                       OR p.provolatile <> 'v')) THEN
     RAISE EXCEPTION '20270105b post: functii (numar / definer / search_path / owner / EXECUTE)';
   END IF;
-  -- trigger-ele exacte: pe executie_proiecte BEFORE UPDATE OF cele doua coloane (tgtype 19 = ROW + BEFORE + UPDATE); pe jurnal BEFORE INSERT/UPDATE/DELETE (31)
+  -- trigger-ele exacte: pe executie_proiecte BEFORE INSERT OR UPDATE OF cele doua coloane (tgtype 23 = ROW + BEFORE + INSERT + UPDATE); pe jurnal BEFORE INSERT/UPDATE/DELETE (31)
   IF (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.executie_proiecte'::regclass AND t.tgname = 'trg_rest_decontat_configurare_garda'
-        AND NOT t.tgisinternal AND t.tgenabled = 'O' AND t.tgfoid = 'public.fn_executie_proiect_configurare_garda()'::regprocedure AND t.tgtype = 19 AND t.tgqual IS NULL AND t.tgnargs = 0
+        AND NOT t.tgisinternal AND t.tgenabled = 'O' AND t.tgfoid = 'public.fn_executie_proiect_configurare_garda()'::regprocedure AND t.tgtype = 23 AND t.tgqual IS NULL AND t.tgnargs = 0
         AND t.tgattr::text = (SELECT string_agg(a.attnum::text, ' ' ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = 'public.executie_proiecte'::regclass
                                  AND a.attname IN ('configurare_completa_la', 'configurare_exceptie_motiv'))) <> 1
      OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = v_jur AND t.tgname = 'trg_rest_decontat_configurare_jurnal_garda' AND NOT t.tgisinternal AND t.tgenabled = 'O'
@@ -277,9 +291,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_executie\_proiect\_configurare\_%'
   ) x;
   -- AMPRENTA_20270105b_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'e0fb8d9d973c83507fd28c73f8777364' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'ca93c57f57fe5c0d0f8e6e4a9fdae92e' THEN
     RAISE NOTICE 'AMPRENTA_20270105b_TEXT %', v_amp;
-    RAISE EXCEPTION '20270105b post: AMPRENTA obiectelor % (asteptat e0fb8d9d973c83507fd28c73f8777364)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270105b post: AMPRENTA obiectelor % (asteptat ca93c57f57fe5c0d0f8e6e4a9fdae92e)', md5(coalesce(v_amp, ''));
   END IF;
   -- ștampilele porților Izometrie, CALCULATE după ultima schimbare (trigger-ul pe executie_proiecte: atingere posibilă a perimetrului E4b)
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());

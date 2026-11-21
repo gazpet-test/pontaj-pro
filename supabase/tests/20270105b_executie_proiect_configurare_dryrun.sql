@@ -2,6 +2,8 @@
 -- (psql -v ON_ERROR_STOP=1 -f) sau pe PGlite (scripts/pglite/test_executie_rest_decontat_local.mjs). Blocurile din plan (Task 2, pasul 1):
 -- proiect fara oferta → MP: exceptie (fara_oferta); owner fara motiv: exceptie; owner cu motiv: ok + motiv salvat + jurnal; proiect cu oferta
 -- confirmata: ok pentru MP (fara exceptie); in plus: coloanele poartei nu se schimba direct (nici de owner), idempotenta, jurnalul doar citibil.
+-- SESIUNE PROASPATA (r2): primul bloc ruleaza cu marcajul RPC LIPSA (NULL, precondiție verificata): un proiect NOU nu se poate crea direct cu
+-- configurarea declarata (INSERT), iar coloanele poartei nu se schimba direct; fisierul se ruleaza intr-o sesiune noua.
 -- Conturi SINTETICE: a = owner, b = MP al P1 si P3. FIXTURI: pe clona, daca profiles / employees cer alte coloane NOT NULL, se completeaza doar aici.
 BEGIN;
 SET LOCAL search_path = public, pg_temp;
@@ -28,6 +30,37 @@ BEGIN
     RAISE EXCEPTION 'identitate gresita: uid % user %', auth.uid(), current_user;
   END IF;
 END $f$;
+
+-- ── t_poarta_garda_proaspata: marcajul RPC LIPSESTE (NULL): owner-ul nu poate crea un proiect „configurat” (INSERT) nici schimba coloanele poartei ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000001a', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000001a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v_id bigint;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000001a');
+  IF current_setting('gazpet.rest_decontat_scriitor', true) IS NOT NULL THEN
+    RAISE EXCEPTION 't_poarta_garda_proaspata PRECONDITIE: marcajul RPC e deja definit in sesiune (%); dry-run-ul se ruleaza intr-o sesiune noua', current_setting('gazpet.rest_decontat_scriitor', true);
+  END IF;
+  BEGIN
+    INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id, configurare_completa_la) VALUES ('RD-PX', 'Dry proiect nascut configurat', 9201, now());
+    RAISE EXCEPTION 't_poarta_garda_proaspata FAIL: proiect creat direct cu configurare_completa_la (marcaj NULL)';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%configurare:%' THEN RAISE; END IF; END;
+  BEGIN
+    INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id, configurare_completa_la, configurare_exceptie_motiv) VALUES ('RD-PX', 'Dry proiect nascut cu exceptie', 9201, now(), 'motiv direct');
+    RAISE EXCEPTION 't_poarta_garda_proaspata FAIL: proiect creat direct cu exceptie (marcaj NULL)';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%configurare:%' THEN RAISE; END IF; END;
+  BEGIN UPDATE public.executie_proiecte SET configurare_completa_la = now() WHERE id = pg_temp.rd_id('p3'); RAISE EXCEPTION 't_poarta_garda_proaspata FAIL: starea schimbata direct (marcaj NULL)';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%configurare:%' THEN RAISE; END IF; END;
+  IF EXISTS (SELECT 1 FROM public.executie_proiecte WHERE cod_intern = 'RD-PX') OR EXISTS (SELECT 1 FROM public.executie_proiecte WHERE id IN (pg_temp.rd_id('p1'), pg_temp.rd_id('p3')) AND configurare_completa_la IS NOT NULL) THEN
+    RAISE EXCEPTION 't_poarta_garda_proaspata FAIL: refuzurile au scris ceva';
+  END IF;
+  -- calea legitima: un proiect nou se creeaza „in configurare” (ambele coloane NULL)
+  INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-PN', 'Dry proiect nou in configurare', 9201) RETURNING id INTO v_id;
+  IF (SELECT configurare_completa_la IS NULL AND configurare_exceptie_motiv IS NULL FROM public.executie_proiecte WHERE id = v_id) IS NOT TRUE THEN RAISE EXCEPTION 't_poarta_garda_proaspata FAIL: proiectul nou nu e in configurare'; END IF;
+  DELETE FROM public.executie_proiecte WHERE id = v_id;
+  RAISE NOTICE 't_poarta_garda_proaspata ok: cu marcajul RPC LIPSA (NULL), INSERT „configurat” si UPDATE pe coloanele poartei refuzate; proiectul nou se naste in configurare';
+END $t$;
+RESET ROLE;
 
 -- ── t_poarta_mp: MP-ul pe un proiect fara oferta → fara_oferta; starea ramane „in configurare” ──────────────────────────────────
 SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000001b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000001b","role":"authenticated"}', true);
@@ -115,11 +148,16 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN INSERT INTO public.executie_proiect_configurare_jurnal (proiect_id, profile_id, cu_exceptie, motiv, oferta_randuri) VALUES (pg_temp.rd_id('p3'), auth.uid(), false, NULL, 1); RAISE EXCEPTION 't_poarta_direct FAIL: jurnal scris direct';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  -- si cu marcajul pus pe '' de RPC-urile de mai sus: un proiect nou nu se naste „configurat”
+  BEGIN
+    INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id, configurare_completa_la) VALUES ('RD-PX', 'Dry proiect nascut configurat', 9201, now());
+    RAISE EXCEPTION 't_poarta_direct FAIL: proiect creat direct cu configurare_completa_la (marcaj gol)';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%configurare:%' THEN RAISE; END IF; END;
   -- o alta coloana a proiectului ramane editabila ca inainte (garda e doar pe coloanele poartei)
   UPDATE public.executie_proiecte SET nume = 'Dry poarta P3 redenumit' WHERE id = pg_temp.rd_id('p3');
   IF (SELECT nume FROM public.executie_proiecte WHERE id = pg_temp.rd_id('p3')) <> 'Dry poarta P3 redenumit' THEN RAISE EXCEPTION 't_poarta_direct FAIL: redenumirea'; END IF;
   IF (SELECT count(*) FROM public.executie_proiect_configurare_jurnal) <> 2 THEN RAISE EXCEPTION 't_poarta_direct FAIL: jurnalul nu are 2 randuri'; END IF;
-  RAISE NOTICE 't_poarta_direct ok: coloanele poartei si jurnalul nu se scriu direct (nici de owner); alte coloane ale proiectului raman libere';
+  RAISE NOTICE 't_poarta_direct ok: coloanele poartei si jurnalul nu se scriu direct (nici de owner, nici la INSERT); alte coloane ale proiectului raman libere';
 END $t$;
 RESET ROLE;
 
