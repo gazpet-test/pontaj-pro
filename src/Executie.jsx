@@ -29,6 +29,7 @@ import TabMeteoIstoric from './TabMeteoIstoric.jsx'        // 🌧️ Meteo: ist
 import ExecutieGrafic from './ExecutieGrafic.jsx'   // „📅 Grafic”: graficul de execuție importat din MS Project (20261204a)
 import DevizVsExecutatTab from './DevizVsExecutatTab.jsx'   // „📋 Deviz vs executat”: ținte din deviz, executat, rest, alerte, Excel (20261208a)
 import ContractProiectTab from './ContractProiectTab.jsx'   // fișa contractului: clauze, căi de prelungire, termene, registrul evenimentelor (20261203a)
+import ExecutieSemnale, { SemnaleOwnerPanel } from './ExecutieSemnale.jsx'   // „🔔 Semnale”: semnalele agentului verificator, pe proiect + lista owner-ului (20270106a)
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
@@ -105,6 +106,7 @@ const CONTEXT_TABS = [
   { key: 'documente',      label: 'Documente',      icon: '📂', color: G.muted,  desc: 'Calitate materiale · Arhivă NAS' },
   { key: 'meteo',          label: 'Meteo',          icon: '🌧️', color: G.teal,   desc: 'Istoric zilnic · Zile nelucrabile · Excel' },
   { key: 'contract',       label: 'Contract',       icon: '📜', color: G.yellow, desc: 'Clauze · Căi de prelungire · Termene · Registrul evenimentelor' },
+  { key: 'semnale',        label: 'Semnale',        icon: '🔔', color: G.red,    desc: 'Semnalele agentului verificator · stare · responsabil (owner, MP, responsabil)' },
 ]
 
 // ===========================================================================
@@ -258,6 +260,8 @@ export default function ExecutiePage() {
       {!proiectIdStr ? (
         <>
           {profile && <DocumenteDeRepartizat profile={profile} />}
+          {/* 20270106a: lista semnalelor pe toate proiectele, pentru owner (RLS-ul dă fiecăruia exact ce poate vedea; panoul e închis implicit) */}
+          {profile?.is_owner === true && <SemnaleOwnerPanel client={supabase} />}
           <DashboardProiectePage onSelectProiect={goToProiect} acces={acces} />
         </>
       ) : (
@@ -397,6 +401,7 @@ function ProiectContextView({ proiectId, tab, onBack, onSubTab, canEdit, acces }
       {tab === 'documente'      && (<><PvCuplareGenerator supabase={supabase} proiectId={proiectId} proiect={proiect} /><CorespondentaEmailSection proiectId={proiectId} /><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
       {tab === 'meteo'          && <TabMeteoIstoric proiectId={Number(proiectId)} codProiect={proiect?.cod_intern} client={supabase} />}
       {tab === 'contract'       && <ContractProiectTab proiectId={proiectId} />}
+      {tab === 'semnale'        && <ExecutieSemnale proiectId={Number(proiectId)} client={supabase} />}
 
       {/* ── Izometrie + Tronsoane (sub-tabs) ── */}
       {SUB_FILE_IZOMETRIE.includes(tab) && (

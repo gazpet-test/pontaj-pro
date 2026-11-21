@@ -1,0 +1,106 @@
+// Logica ecranului „🔔 Semnale” (Execuție, 20270106a): tranzițiile (aceeași listă ca în BD), filtrele, sortarea, parametrii RPC-ului, validarea.
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import {
+  TRANZITII, STARI, tranzitiePermisa, stariUrmatoare, motivObligatoriu, zilePanaLa, filtreaza, sorteaza, rezumat, dovadaText, eLink,
+  parametriStare, validareStare, fmtZi,
+} from './executieSemnaleLogica.js'
+
+const S = (id, extra = {}) => ({
+  id, proiect_id: 1, proiect_cod: 'P1', flux: 'lipsuri', tip: 'termen_apropiat', obiect: 'contract:termen', gravitate: 'atentie', titlu: `Semnal ${id}`,
+  detalii: null, constatare: 'constatat', surse_consultate: [], dovada_sursa: 'camp_erp', dovada_data: '2026-11-21', dovada_fragment: 'data_termen = 2026-12-11',
+  dovada_ref: 'executie_proiecte.data_termen', termen: null, termen_baza: null, termen_confirmat: null, propunere: null, responsabil_employee_id: null,
+  stare: 'nou', versiune: 1, detectat_la: '2026-11-21T20:00:00+00:00', ...extra,
+})
+
+describe('tranzițiile de stare (L19: aceeași listă ca blocul TRANZITII din migrarea 20270106a)', () => {
+  it('blocul din migrare = TRANZITII', () => {
+    const mig = readFileSync(new URL('../supabase/migrations/20270106a_executie_semnale.sql', import.meta.url), 'utf8').replace(/\r/g, '')
+    const bloc = mig.slice(mig.indexOf('-- TRANZITII-START'), mig.indexOf('-- TRANZITII-END'))
+    const dinSql = [...bloc.matchAll(/\('(om|agent)', '([a-z_]+)', '([a-z_]+)'\)/g)].map(m => [m[1], m[2], m[3]])
+    expect(dinSql).toEqual(TRANZITII)
+    expect(dinSql.length).toBe(14)
+  })
+  it('omul: din nou în orice stare de lucru / finală; din închis doar înapoi în lucru; niciodată „nou”', () => {
+    expect(stariUrmatoare('nou')).toEqual(['in_lucru', 'asteapta_informatii', 'rezolvat', 'respins'])
+    expect(stariUrmatoare('in_lucru')).toEqual(['asteapta_informatii', 'rezolvat', 'respins'])
+    expect(stariUrmatoare('asteapta_informatii')).toEqual(['in_lucru', 'rezolvat', 'respins'])
+    expect(stariUrmatoare('rezolvat')).toEqual(['in_lucru'])
+    expect(stariUrmatoare('respins')).toEqual(['in_lucru'])
+    for (const s of STARI) expect(tranzitiePermisa(s, 'nou', 'om')).toBe(false)
+    expect(tranzitiePermisa('respins', 'asteapta_informatii', 'om')).toBe(false)
+  })
+  it('agentul: doar redeschiderea (închis -> nou)', () => {
+    expect(tranzitiePermisa('rezolvat', 'nou', 'agent')).toBe(true)
+    expect(tranzitiePermisa('respins', 'nou', 'agent')).toBe(true)
+    expect(tranzitiePermisa('nou', 'in_lucru', 'agent')).toBe(false)
+    expect(tranzitiePermisa('in_lucru', 'nou', 'agent')).toBe(false)
+  })
+  it('motivul e obligatoriu la rezolvare / respingere și la redeschidere', () => {
+    expect(motivObligatoriu('nou', 'respins')).toBe(true)
+    expect(motivObligatoriu('in_lucru', 'rezolvat')).toBe(true)
+    expect(motivObligatoriu('respins', 'in_lucru')).toBe(true)
+    expect(motivObligatoriu('nou', 'in_lucru')).toBe(false)
+    expect(motivObligatoriu('in_lucru', 'in_lucru')).toBe(false)
+    expect(motivObligatoriu('respins', 'respins')).toBe(false)   // starea neschimbată: serverul păstrează motivul existent
+  })
+})
+
+describe('filtre, sortare, rezumat', () => {
+  const L = [
+    S(1, { termen: '2026-12-11', gravitate: 'atentie' }), S(2, { termen: '2026-11-30', gravitate: 'info', flux: 'corespondenta' }),
+    S(3, { termen: null, gravitate: 'critic', stare: 'in_lucru', titlu: 'Polița CAR expiră' }), S(4, { termen: '2026-11-30', gravitate: 'critic', stare: 'respins' }),
+    S(5, { termen: null, gravitate: 'info', stare: 'rezolvat', detectat_la: '2026-11-22T06:00:00+00:00' }),
+  ]
+  it('după termen: termenele întâi (cel mai apropiat primul), la egalitate gravitatea, apoi cele fără termen după gravitate', () => {
+    expect(sorteaza(L).map(r => r.id)).toEqual([4, 2, 1, 3, 5])
+  })
+  it('după gravitate: critic > atenție > info, apoi termenul', () => {
+    expect(sorteaza(L, 'gravitate').map(r => r.id)).toEqual([4, 3, 1, 2, 5])
+  })
+  it('doarDeschise ascunde rezolvat / respins; listele goale = toate; textul caută fără diacritice', () => {
+    expect(filtreaza(L, { doarDeschise: true }).map(r => r.id).sort()).toEqual([1, 2, 3])
+    expect(filtreaza(L, { gravitati: ['critic'] }).map(r => r.id).sort()).toEqual([3, 4])
+    expect(filtreaza(L, { stari: ['respins', 'rezolvat'] }).map(r => r.id).sort()).toEqual([4, 5])
+    expect(filtreaza(L, { fluxuri: ['corespondenta'] }).map(r => r.id)).toEqual([2])
+    expect(filtreaza(L, { text: 'polita car' }).map(r => r.id)).toEqual([3])
+    expect(filtreaza(L, { text: 'P1' }).length).toBe(5)
+    expect(filtreaza(L, {}).length).toBe(5)
+  })
+  it('rezumatul numără deschisele pe gravitate și toate pe stare', () => {
+    expect(rezumat(L)).toEqual({ total: 5, deschise: 3, critic: 1, atentie: 1, info: 1, stari: { nou: 2, in_lucru: 1, respins: 1, rezolvat: 1 } })
+    expect(rezumat([])).toEqual({ total: 0, deschise: 0, critic: 0, atentie: 0, info: 0, stari: {} })
+  })
+  it('zile până la termen (Europe/Bucharest, pe zile calendaristice)', () => {
+    expect(zilePanaLa('2026-12-11', '2026-11-21')).toBe(20)
+    expect(zilePanaLa('2026-11-20', '2026-11-21')).toBe(-1)
+    expect(zilePanaLa(null, '2026-11-21')).toBeNull()
+    expect(fmtZi('2026-12-11')).toBe('11.12.2026')
+  })
+  it('textul dovezii deosebește „negăsit în surse” de „câmp lipsă” și de „constatat”', () => {
+    expect(dovadaText(S(1, { constatare: 'negasit_in_surse', surse_consultate: ['NAS', 'mail'] }))).toBe('Negăsit în sursele consultate: NAS, mail')
+    expect(dovadaText(S(1, { constatare: 'camp_lipsa', dovada_ref: 'executie_proiecte.nr_contract' }))).toBe('Câmp gol în ERP: executie_proiecte.nr_contract')
+    expect(dovadaText(S(1))).toBe('câmp ERP · 21.11.2026 · data_termen = 2026-12-11')
+    expect(eLink('https://x.y/z')).toBe(true); expect(eLink('Z:/Oferte/x.pdf')).toBe(false)
+  })
+})
+
+describe('formularul de stare → RPC', () => {
+  const r = S(7, { stare: 'in_lucru', versiune: 3, responsabil_employee_id: 11 })
+  it('parametrii: id + versiunea rândului (CAS), textele curățate, responsabilul doar cu bifa', () => {
+    expect(parametriStare(r, { stare: 'respins', motiv: '  nu e cazul ', dovada: '', actiuneRef: ' TKT-1 ', responsabil: '14', schimbaResponsabil: false })).toEqual({
+      p_id: 7, p_versiune: 3, p_stare: 'respins', p_motiv: 'nu e cazul', p_dovada: null, p_actiune_ref: 'TKT-1', p_responsabil: null, p_schimba_responsabil: false,
+    })
+    expect(parametriStare(r, { stare: '', motiv: '', dovada: '', actiuneRef: '', responsabil: '14', schimbaResponsabil: true })).toMatchObject({ p_stare: null, p_responsabil: 14, p_schimba_responsabil: true })
+    expect(parametriStare(r, { stare: 'in_lucru', motiv: '' })).toMatchObject({ p_stare: null, p_motiv: null })   // aceeași stare = NULL (serverul o păstrează)
+    expect(parametriStare(r, { stare: null, responsabil: '', schimbaResponsabil: true })).toMatchObject({ p_responsabil: null, p_schimba_responsabil: true })
+  })
+  it('validarea: tranziție nepermisă, motiv lipsă, responsabil invalid', () => {
+    expect(validareStare(r, { stare: 'nou' })).toMatch(/nu se poate trece/)
+    expect(validareStare(r, { stare: 'respins', motiv: '  ' })).toMatch(/Motivul e obligatoriu/)
+    expect(validareStare(r, { stare: 'respins', motiv: 'x' })).toBeNull()
+    expect(validareStare(r, { stare: 'asteapta_informatii' })).toBeNull()
+    expect(validareStare(r, { stare: 'in_lucru', schimbaResponsabil: true, responsabil: 'abc' })).toMatch(/angajat/)
+    expect(validareStare(S(8, { stare: 'respins' }), { stare: 'in_lucru' })).toMatch(/Motivul e obligatoriu/)
+  })
+})
