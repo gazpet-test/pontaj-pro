@@ -5,11 +5,18 @@
 #   Credentialul NAS (cont read-only `erp-citire`) e salvat de Razvan cu cmdkey pe server - NU e in repo, scriptul nu-l atinge.
 # Intrare: <Baza>\proiecte.tsv  (id <TAB> cod <TAB> cale, cale RELATIVA la radacina NAS) - exportat de Claude din executie_proiecte.
 # Iesire:  <Baza>\<AAAA-LL-ZZ>\P<id>\<copii locale>  + lista.tsv + rezumat.txt
-# Stare:   <Baza>\stare.tsv (cale RELATIVA la radacina <TAB> marime|data) - ce s-a vazut la rularea anterioara.
+# Familii (21.11.2026): pe langa actele aditionale (act) se cauta si garantiile de buna executie (gbe) si politele CAR (car);
+#   coloana `familie` din lista.tsv spune ce a recunoscut NUMELE fisierului (Jakarinos stabileste din document ce este de fapt).
+#   gbe/car NU se iau din documentele de oferta: cale (sub folderul proiectului) sau nume cu participare / oferta -> exclus, numarat in rezumat
+#   (si cand numele seamana si cu un act aditional: excluderea are prioritate fata de regula actelor).
+# Stare:   <Baza>\stare.tsv (cale RELATIVA la radacina <TAB> marime|data[|gbe|car]) - ce s-a vazut la rularea anterioara.
+#          Actele raman `marime|data` (ca inainte); gbe/car au sufixul familiei, ca un fisier vazut deja ca act si recunoscut
+#          acum ca GBE/CAR sa intre o data la verificare (motiv FAMILIE_NOUA).
 #          Formatul vechi (chei Z:\...) se converteste o singura data cu converteste_stare.py; scanarea refuza cheile absolute (exit 4).
 # Fara stare.tsv (prima rulare) sau cu -Toate = BASELINE: toate actele gasite intra la verificare.
 # Datele (copii de acte, preturi) stau in <Baza>, NU in repo.
 # Coduri de iesire: 0 ok | 2 NAS indisponibil | 3 lipseste proiecte.tsv | 4 stare.tsv in format vechi | 5 parametri refuzati
+#                   6 lista.tsv a zilei are alt antet (nici cel vechi, nici cel cu `familie`) - lista, rezumatul si stare.tsv raman neatinse
 param(
   [switch]$Toate,
   [string]$Radacina = '\\gazpet-tnas\Licitatii_Executate',
@@ -38,6 +45,31 @@ if (-not (Test-Path -LiteralPath $fProi)) { 'LIPSESTE proiecte.tsv - Claude il e
 # nume de fisier care arata a act aditional / ajustare / acord subsecvent (ad.?ional prinde si varianta cu diacritice)
 $re = '(?i)(act[\s._-]*ad|ad.?ional|(^|[^a-z0-9])AA[\s._-]*\d|majorar|ajustar|acord[\s._-]*subsecvent)'
 $ext = '(?i)^\.(pdf|docx?|jpe?g|png|tiff?)$'
+# GBE / CAR (21.11.2026): se potrivesc pe numele PLIAT (fara diacritice, litere mici - vezi Pliaza), deci doar ASCII aici.
+# Limitele de cuvant sunt pe litere/cifre ([a-z0-9]), nu \b: '_' e separator in numele de fisier (polita_CAR_1.pdf),
+# iar 'car' nu prinde carburant / cariera / carte / scara / oscar. Dupa CAR/GBE pot urma cifre (CAR2024), nu litere.
+$reGbe = '(?<![a-z0-9])gbe(?![a-z])|garant[a-z]*[\s._-]*(de[\s._-]*)?buna[\s._-]*executi|polit[a-z]*[\s._-]*(de[\s._-]*)?buna[\s._-]*executi|scrisoar[a-z]*[\s._-]*(de[\s._-]*)?garanti|instrument[a-z]*[\s._-]*(de[\s._-]*)?garantar'
+$reCar = '(?<![a-z0-9])car(?![a-z])|constructi[a-z]*[\s._-]*(si[\s._-]*)?montaj|all[\s._-]*risk'
+# documente de oferta (garantia de participare etc.): doar pe calea DE SUB folderul proiectului (radacina NAS e chiar Oferte\...)
+$reOferta = '(?<![a-z0-9])(participar|ofert)[a-z]*'   # participare, oferta, oferte, ofertare, ofertant...
+function Pliaza([string]$s) {
+  # NFD + scoaterea semnelor combinate (a cu caciula -> a, s/t cu virgula SAU cu sedila -> s/t, i/a cu circumflex -> i/a);
+  # merge si pe nume scrise deja descompus (NFD). Fisierul ramane ASCII (PowerShell 5.1 il citeste fara BOM).
+  return ([regex]::Replace($s.Normalize([Text.NormalizationForm]::FormD), '\p{Mn}', '')).ToLowerInvariant()
+}
+function Familie($fisier, [string]$relProiect) {
+  # ordinea: gbe -> car -> act (un act aditional LA POLITA e verificat cu regulile GBE/CAR; Jakarinos decide din document)
+  # intoarce familia sau 'exclus' (GBE/CAR in document de oferta) sau '' (nu ne intereseaza)
+  # Precedenta (Jakarinos #1162 r1 P2): un GBE/CAR recunoscut si exclus ca document de oferta / participare RAMANE exclus,
+  #   chiar daca numele se potriveste si cu regula actelor (ex. "Act aditional polita CAR oferta.pdf", "AA1 scrisoare de garantie participare.pdf").
+  # Doar fisierele care NU sunt GBE/CAR cad la regula actelor (un act aditional obisnuit dintr-un folder de oferta ramane `act`, ca inainte).
+  $n = Pliaza $fisier.Name
+  $gc = ''
+  if ($n -match $reGbe) { $gc = 'gbe' } elseif ($n -match $reCar) { $gc = 'car' }
+  if ($gc) { if ((Pliaza $relProiect) -match $reOferta) { return 'exclus' } else { return $gc } }
+  if ($fisier.Name -match $re) { return 'act' }   # actele: exact regula de dinainte, pe numele brut
+  return ''
+}
 $vechi = @{}
 $baseline = $true
 if ((Test-Path -LiteralPath $fStare) -and -not $Toate) {
@@ -58,7 +90,8 @@ $stare = @{}
 foreach ($k in $vechi.Keys) { $stare[$k] = $vechi[$k] }
 $rez = New-Object System.Collections.Generic.List[string]
 $lista = New-Object System.Collections.Generic.List[string]
-$lista.Add((@('id','cod','fisier_local','cale_nas','kb','modificat','motiv') -join $T))
+$antet = @('id','cod','fisier_local','cale_nas','kb','modificat','motiv','familie') -join $T
+$lista.Add($antet)
 $total = 0
 foreach ($r in (Import-Csv -LiteralPath $fProi -Delimiter $T -Encoding UTF8)) {
   if (-not $r.cale) { $rez.Add(('P{0} {1} | FARA CALE NAS in ERP (nas_folder_path gol)' -f $r.id, $r.cod)); continue }
@@ -69,15 +102,30 @@ foreach ($r in (Import-Csv -LiteralPath $fProi -Delimiter $T -Encoding UTF8)) {
   }
   $root = $rad + '\' + $cale
   if (-not (Test-Path -LiteralPath $root)) { $rez.Add(('P{0} {1} | CALE INEXISTENTA pe NAS: {2}' -f $r.id, $r.cod, $root)); continue }
-  $fs = @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $re -and $_.Extension -match $ext })
+  $fs = New-Object System.Collections.Generic.List[object]
+  $fam = @{}
+  $nr = @{ act = 0; gbe = 0; car = 0; exclus = 0 }
+  foreach ($f in @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match $ext })) {
+    # calea DE SUB folderul proiectului (pentru excluderea ofertelor); altfel doar numele
+    if ($f.FullName.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) { $relP = $f.FullName.Substring($root.Length + 1) } else { $relP = $f.Name }
+    $x = Familie $f $relP
+    if (-not $x) { continue }
+    $nr[$x]++
+    if ($x -eq 'exclus') { continue }   # numarat in rezumat, nu dispare tacit
+    $fs.Add($f); $fam[$f.FullName] = $x
+  }
   $n = 0; $sarite = 0
   foreach ($f in $fs) {
     if (-not $f.FullName.StartsWith($rad + '\', [StringComparison]::OrdinalIgnoreCase)) { $sarite++; continue }  # nu ar trebui sa se intample
     $cheie = $f.FullName.Substring($rad.Length + 1)   # cheia din stare: cale relativa la radacina NAS
-    $val = '{0}|{1}' -f $f.Length, $f.LastWriteTime.ToString('yyyy-MM-ddTHH:mm:ss')
+    $fx = $fam[$f.FullName]
+    $val0 = '{0}|{1}' -f $f.Length, $f.LastWriteTime.ToString('yyyy-MM-ddTHH:mm:ss')
+    $val = $val0
+    if ($fx -ne 'act') { $val = $val0 + '|' + $fx }   # actele raman in formatul vechi (fara re-verificari)
     if ($vechi.ContainsKey($cheie)) {
       if ($vechi[$cheie] -eq $val) { continue }
-      $motiv = 'MODIFICAT'
+      # acelasi fisier (marime + data), alta familie (ex. vazut ca act, acum GBE) -> o verificare cu regulile familiei noi
+      if ((@($vechi[$cheie].Split('|') | Select-Object -First 2) -join '|') -eq $val0) { $motiv = 'FAMILIE_NOUA' } else { $motiv = 'MODIFICAT' }
     } elseif ($baseline) { $motiv = 'BASELINE' } else { $motiv = 'NOU' }
     $d = Join-Path $out ('P' + $r.id)
     New-Item -ItemType Directory -Force -Path $d | Out-Null
@@ -96,11 +144,11 @@ foreach ($r in (Import-Csv -LiteralPath $fProi -Delimiter $T -Encoding UTF8)) {
     }
     # 13.10.2026: un fisier necopiat (eroare sau prea mare) NU intra in stare -> reapare saptamana viitoare
     if ($copiat) { $stare[$cheie] = $val }
-    $lista.Add((@($r.id, $r.cod, $dest, $f.FullName, [int]($f.Length / 1KB), $f.LastWriteTime.ToString('yyyy-MM-dd'), $motiv) -join $T))
+    $lista.Add((@($r.id, $r.cod, $dest, $f.FullName, [int]($f.Length / 1KB), $f.LastWriteTime.ToString('yyyy-MM-dd'), $motiv, $fx) -join $T))
     $n++
   }
   $total += $n
-  $rez.Add(('P{0} {1} | acte pe NAS: {2} | de verificat acum: {3}' -f $r.id, $r.cod, $fs.Count, $n))
+  $rez.Add(('P{0} {1} | acte pe NAS: {2} | GBE: {3} | CAR: {4} | excluse (oferta/participare): {5} | de verificat acum: {6}' -f $r.id, $r.cod, $nr.act, $nr.gbe, $nr.car, $nr.exclus, $n))
   if ($sarite) { $rez.Add(('P{0} {1} | ATENTIE: {2} fisiere sarite (calea nu incepe cu radacina {3})' -f $r.id, $r.cod, $sarite, $rad)) }
 }
 $cap = @("SCANARE $azi $(Get-Date -Format 'HH:mm') | radacina=$rad | baseline=$baseline | total de verificat: $total", '')
@@ -108,6 +156,17 @@ $fRez = Join-Path $out 'rezumat.txt'
 $fLista = Join-Path $out 'lista.tsv'
 # a doua rulare in aceeasi zi ADAUGA la lista zilei (nu o rescrie)
 if (Test-Path -LiteralPath $fLista) {
+  # lista zilei scrisa de versiunea fara `familie` (doar acte): o aducem la antetul nou, randurile vechi primesc `act`
+  $vechiL = @(Get-Content -LiteralPath $fLista -Encoding UTF8)
+  $antetVechi = @('id','cod','fisier_local','cale_nas','kb','modificat','motiv') -join $T
+  if ($vechiL.Count -and $vechiL[0] -ne $antet -and $vechiL[0] -ne $antetVechi) {
+    # stare.tsv NU se scrie -> fisierele de azi reapar la rularea urmatoare (nimic pierdut)
+    "LISTA CU ANTET NECUNOSCUT: $fLista - nu adaug la ea. Muta fisierul deoparte si ruleaza din nou."
+    exit 6
+  }
+  if ($vechiL.Count -and $vechiL[0] -eq $antetVechi) {
+    Set-Content -LiteralPath $fLista -Encoding UTF8 -Value (@($antet) + @($vechiL | Select-Object -Skip 1 | Where-Object { $_ -match '\S' } | ForEach-Object { $_ + $T + 'act' }))
+  }
   if ($lista.Count -gt 1) { Add-Content -LiteralPath $fLista -Value ($lista | Select-Object -Skip 1) -Encoding UTF8 }
   Add-Content -LiteralPath $fRez -Value (@('') + $cap + $rez) -Encoding UTF8
 } else {
