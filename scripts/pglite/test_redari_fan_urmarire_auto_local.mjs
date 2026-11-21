@@ -892,6 +892,42 @@ async function verificari(db, log, fail = []) {
   const k20dv2 = (await scrie(null, RL, ID.L1, [{ ...p156, versiune: p156.versiune - 1 }])).rows[0].r
   ok(k20dv2.depasite === 1 && (await contr(156)).length === 1 && (await contr(156))[0].observari === 2, 'K20d: a doua rulare pe versiunea veche: tot depășit, observări 2')
 
+  // K20f — cunoscut dinainte × depășit / păstrat: returul imposibil scris de corpul vechi rămâne pe rând când răspunsul e DEPĂȘIT (CAS pe versiune) sau
+  // PĂSTRAT (dezacord): faptele nu se ating, deci cronologia lui NU se auditează încă (n-a ieșit din fapte), dar rândul rămâne de urmărit (nu e fapt
+  // final) și evenimentul imposibil al răspunsului depășit are urmă; rularea următoare, valabilă, îl curăță și auditează cronologia veche
+  await returVechi(157)
+  const viitorRet7 = await ora(157, 'ultim_eveniment_la')
+  await eligibil(157)
+  const in157 = await awb(157)
+  const p157 = await pl(157, [['C0', `${D0} 09:00:00`], ['S2', `${viitor} 10:00:00`]])
+  const k20f = (await scrie(null, RL, ID.L1, [{ ...p157, versiune: p157.versiune + 1 }])).rows[0].r
+  const c157 = await contr(157)
+  ok(k20f.depasite === 1 && k20f.scrise === 0 && JSON.stringify(await awb(157)) === JSON.stringify(in157) && !(await stareFapte(157)).final
+     && JSON.stringify(c157.map(c => [c.sursa, c.valori[0]])) === JSON.stringify([['acelasi_raspuns', `S2 ${viitor} 10:00:00`]]) && await eligibil(157) !== null,
+    'K20f: retur imposibil cunoscut + răspuns depășit pe versiune: rândul neatins (returul imposibil rămâne, dar nu e fapt final: de urmărit), doar S2-ul răspunsului în audit')
+  const k20f2 = await automat(157, [['C0', `${D0} 09:00:00`], ['S2', `${viitor} 10:00:00`]])
+  const a157 = await awb(157), c157b = await contr(157), s157 = await stareFapte(157)
+  ok(k20f2.scrise === 1 && a157.urmarire_stare === 'ridicat' && a157.stare === 'ridicat' && a157.retur_cunoscut === false && a157.retur_propus === null && s157.curat && !s157.final
+     && JSON.stringify(c157b.map(c => [c.sursa, c.valori[0], c.observari]).sort()) === JSON.stringify([['acelasi_raspuns', `S2 ${viitor} 10:00:00`, 2], ['intre_raspunsuri', `S6 ${viitorRet7}`, 1]].sort())
+     && await eligibil(157) !== null,
+    'K20f: rularea validă următoare: scris, ridicat (C0), returul imposibil scos și cronologia lui în audit, S2-ul respins la a doua observare, încă de urmărit')
+  await returVechi(158)
+  const viitorRet8 = await ora(158, 'ultim_eveniment_la')
+  await eligibil(158)
+  const in158 = await awb(158)
+  const p158 = await pl(158, [['C0', `${D0} 09:00:00`], ['S2', `${D1} 10:00:00`]])
+  const k20f3 = (await scrie(ID.editor, null, ID.L1, [{ ...p158, livrat_la: `${viitor} 10:00:00` }])).rows[0].r
+  const a158 = await awb(158)
+  ok(k20f3.pastrate === 1 && k20f3.scrise === 0 && fapteK20(a158) === fapteK20(in158) && a158.versiune_urmarire === in158.versiune_urmarire + 1 && !(await stareFapte(158)).final
+     && (await contr(158)).length === 0 && await eligibil(158) !== null,
+    'K20f: retur imposibil cunoscut + răspuns PĂSTRAT (dezacord pe o livrare imposibilă): faptele neatinse (returul imposibil rămâne, nu e final, de urmărit), nimic auditat încă')
+  const k20f4 = await buton(158, [['C0', `${D0} 09:00:00`], ['S2', `${D1} 10:00:00`]])
+  const a158b = await awb(158)
+  ok(k20f4.scrise === 1 && a158b.urmarire_stare === 'livrat' && await ora(158, 'livrat_la') === `${D1} 10:00:00` && a158b.retur_cunoscut === false && a158b.retur_propus === null
+     && JSON.stringify((await contr(158)).map(c => [c.sursa, c.tip, c.valori[0]])) === JSON.stringify([['intre_raspunsuri', 'eveniment_data_imposibila', `S6 ${viitorRet8}`]])
+     && (await stareFapte(158)).final && await eligibil(158) === null,
+    'K20f: corecția validă apoi (același răspuns, fără dezacord): livrat, returul imposibil scos și cronologia lui în audit (fără livrare_retur), nu mai e de urmărit')
+
   // K20e — MATRICEA clasei: fiecare fel de eveniment (ridicare, livrare, retur, refuz, tranzit, de verificat, cod necunoscut) × fiecare ramură a
   // scrierii × (în viitor / înainte de generare). Invariantul (scris de mână): după rulare niciun fapt / nicio cronologie a rândului nu stă pe un
   // moment imposibil; eligibilitatea rulării automate = „fără fapt final valid”; fiecare eveniment imposibil (al răspunsului sau cunoscut dinainte)
