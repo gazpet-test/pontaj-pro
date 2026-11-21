@@ -28,7 +28,9 @@
 //    schimbarea UM fără accept_schimbare_um acceptată; obiect_cod / UM scrise brut (nu în reprezentarea existentă); cantitatea / prețul neconvertite;
 //    unitatea din proiect_unitati ignorată; cantitatea nereprezentabilă rotunjită tăcut; amprenta necăutată în istoric (A → B → A). r7 (review #1158,
 //    2 × P1 pe r6): obiect_cod / deviz_cod / cod / nr / UM necopiate din rândul cu aceeași cheie (scrise cum vin, normalizate); ambiguitatea formelor
-//    brute neverificată; cheia nouă scrisă brut (nenormalizată).
+//    brute neverificată; cheia nouă scrisă brut (nenormalizată). r9 (review #1158, 2 × P1 pe r8: cheia referită): garda fără refuzul cheie_referita /
+//    cu ocolire pentru server / învelișul fără DEFINER; RPC-ul fără păstrarea #n, fără refuzul codului decontat despărțit în poziții, fără cheia referită unică
+//    la linia fără poziție, fără refuzul ambiguității; lipsurile fără decontat_fara_articol; rezultatul fără decontat_fara_baza.
 //    Mutanții STATICI (reverificarea dreptului scoasă după lock; garda fără advisory / cu advisory blocant) sunt prinși de verificările pe text din 0.
 // 5. Migrarea B peste A: dry-run B; mutanți B (MP fără ofertă acceptat, owner fără motiv acceptat, fără garda pe coloane, marcaj NULL acceptat,
 //    garda doar pe UPDATE — INSERT „configurat” acceptat); revenirea B. Postcondițiile B = secțiunea „4.” (r2: markerul greșit din r1 ascundea
@@ -392,7 +394,7 @@ if (!DOAR || DOAR === '4') {
     ['un singur grup de coduri repetate (SELECT INTO pe agregare cu GROUP BY)', [[
       `  SELECT coalesce(array_agg(z.k ORDER BY z.k), ARRAY[]::text[]) INTO STRICT v_dub\n    FROM (SELECT k FROM unnest(v_chei) AS k GROUP BY k HAVING count(*) > 1) z;`,
       `  SELECT array_agg(DISTINCT k) INTO v_dub FROM (SELECT unnest(v_chei) AS k) z GROUP BY k HAVING count(*) > 1;\n  v_dub := coalesce(v_dub, ARRAY[]::text[]);`]]],
-    ['poziția lipsă pe un cod repetat neverificată', [[`    IF public.fn_rest_decontat_cheie(e->>'obiect_cod', e->>'deviz_cod', e->>'cod', NULL) = ANY (v_dub) AND coalesce(e->>'nr', '') !~ '[^[:space:]]' THEN`, `    IF false THEN`]]],
+    ['poziția lipsă pe un cod repetat neverificată', [[`    IF v_repetat AND coalesce(e->>'nr', '') !~ '[^[:space:]]' THEN`, `    IF false THEN`]]],
     ['cheia finală duplicată neverificată (același cod, aceeași poziție)', [
       [`    IF v_k = ANY (v_finale) THEN`, `    IF false THEN`],
       [`  IF cardinality(v_finale) <> jsonb_array_length(v_linii) OR (SELECT count(DISTINCT f) FROM unnest(v_finale) f) <> jsonb_array_length(v_linii) THEN`, `  IF false THEN`]]],
@@ -435,7 +437,7 @@ if (!DOAR || DOAR === '4') {
     ['calculul ignoră rândurile vechi ale unui obiect NEIMPORTAT când alt obiect al proiectului e confirmat (regula pe proiect)', [[
       `OR NOT public.fn_rest_decontat_obiect_confirmat(p_proiect, a.obiect_cod::text))),`,
       `OR NOT EXISTS (SELECT 1 FROM public.proiect_articole q WHERE q.proiect_id::bigint = p_proiect AND q.sursa = 'contract_initial' AND q.confirmat_la IS NOT NULL))),`]]],
-    ['lipsurile nu declară obiectele încă vechi (oferta_neconfirmata)', [[`   WHERE NOT public.fn_rest_decontat_obiect_confirmat(pr.id, a.obiect_cod::text)\n   GROUP BY pr.id, public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL)\n$f$;`, `   WHERE false\n   GROUP BY pr.id, public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL)\n$f$;`]]],
+    ['lipsurile nu declară obiectele încă vechi (oferta_neconfirmata)', [[`   WHERE NOT public.fn_rest_decontat_obiect_confirmat(pr.id, a.obiect_cod::text)\n   GROUP BY pr.id, public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL)\n  UNION ALL`, `   WHERE false\n   GROUP BY pr.id, public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL)\n  UNION ALL`]]],
     ['predicatul stării ignoră istoricul (obiectul scos de server se redeschide pe calea veche)', [[`         OR EXISTS (SELECT 1 FROM public.proiect_articole_istoric h\n                  WHERE h.proiect_id = p_proiect AND h.sursa = 'contract_initial' AND h.confirmat_la IS NOT NULL\n                    AND h.obiect_k = public.fn_rest_decontat_cheie(p_obiect, NULL, NULL, NULL)))`, `         )`]]],
     ['istoricul se scrie fără motivul / amprenta fișierului nou (inlocuire_oferta nedeosebit de confirmare_oferta)', [[`             CASE WHEN m.confirmat_la IS NULL THEN 'confirmare_oferta' ELSE 'inlocuire_oferta' END, p_amprenta`, `             'confirmare_oferta', p_amprenta`]]],
     // (garda istoricului cu marcaj NULL NU e observabilă de client: authenticated n-are INSERT / UPDATE / DELETE pe proiect_articole_istoric —
@@ -491,6 +493,27 @@ if (!DOAR || DOAR === '4') {
       `    SELECT coalesce(array_agg(DISTINCT f->>'nr'), ARRAY[]::text[]) INTO v_nr_forme FROM jsonb_array_elements(v_forme) f\n     WHERE public.fn_rest_decontat_cheie(f->>'nr', NULL, NULL, NULL) = public.fn_rest_decontat_cheie(e->>'nr', NULL, NULL, NULL);`],
       [`    IF cardinality(v_nr_forme) = 1 AND coalesce(e->>'nr', '') ~ '[^[:space:]]'\n       AND public.fn_rest_decontat_cheie(e->>'nr', NULL, NULL, NULL) IS DISTINCT FROM public.fn_rest_decontat_cheie(v_nr_forme[1], NULL, NULL, NULL) THEN`,
        `    IF false THEN`]]],
+    // r9 (review #1158, 2 × P1 pe r8): o cheie REFERITĂ de o situație confirmată e înghețată; decontatul fără articol e declarat
+    ['cheia referită se re-cheiază / își schimbă codul pe calea veche (garda fără refuzul cheie_referita — reproducerea 1: decontatul desprins de articol)', [[
+      `  IF TG_OP = 'UPDATE' AND NEW.cheie IS DISTINCT FROM OLD.cheie AND OLD.sursa IN ('contract_initial', 'act_aditional', 'nota_renuntare', 'nota_comanda_suplimentara') THEN\n    v_sit := public.fn_rest_decontat_cheie_situatii(OLD.proiect_id::bigint, OLD.cheie);`,
+      `  IF false THEN\n    v_sit := public.fn_rest_decontat_cheie_situatii(OLD.proiect_id::bigint, OLD.cheie);`]]],
+    ['serverul ocolește înghețarea cheii referite (garda sare peste refuz când v_server)', [[
+      `  IF TG_OP = 'UPDATE' AND NEW.cheie IS DISTINCT FROM OLD.cheie AND OLD.sursa IN ('contract_initial', 'act_aditional', 'nota_renuntare', 'nota_comanda_suplimentara') THEN\n    v_sit := public.fn_rest_decontat_cheie_situatii(OLD.proiect_id::bigint, OLD.cheie);`,
+      `  IF TG_OP = 'UPDATE' AND NOT v_server AND NEW.cheie IS DISTINCT FROM OLD.cheie AND OLD.sursa IN ('contract_initial', 'act_aditional', 'nota_renuntare', 'nota_comanda_suplimentara') THEN\n    v_sit := public.fn_rest_decontat_cheie_situatii(OLD.proiect_id::bigint, OLD.cheie);`]]],
+    ['învelișul cheii referite fără SECURITY DEFINER (politicile apelantului: accesul general Execuție nu vede situațiile → re-cheierea trece sau pică altfel)', [[
+      `CREATE FUNCTION public.fn_rest_decontat_cheie_situatii(p_proiect bigint, p_cheie text) RETURNS text[]\nLANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$`,
+      `CREATE FUNCTION public.fn_rest_decontat_cheie_situatii(p_proiect bigint, p_cheie text) RETURNS text[]\nLANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$`]]],
+    ['RPC: poziția #n a unei chei referite nu e păstrată când codul nu se mai repetă (reproducerea 2: „#1” → fără poziție)', [[
+      `      ELSIF v_kn IS NOT NULL AND v_kn = ANY (v_ref_id) THEN\n        v_k := v_kn;`, `      ELSIF false THEN\n        v_k := v_kn;`]]],
+    ['RPC: codul decontat (cheia fără poziție referită) se desparte în poziții fără refuz (reproducerea 1 pe RPC)', [[
+      `      IF v_repetat AND v_kb = ANY (v_ref_id) THEN\n        RAISE EXCEPTION 'rest_decontat: cheia % e referita de situatiile confirmate (%) si codul % se repeta acum in document`,
+      `      IF false THEN\n        RAISE EXCEPTION 'rest_decontat: cheia % e referita de situatiile confirmate (%) si codul % se repeta acum in document`]]],
+    ['RPC: linia fără poziție nu ia unica cheie referită a identității ei (devizul AA listă completă rupe legătura cu decontatul)', [[
+      `      ELSIF v_kn IS NULL AND cardinality(v_ref_id) = 1 THEN\n        v_k := v_ref_id[1];`, `      ELSIF false THEN\n        v_k := v_ref_id[1];`]]],
+    ['RPC: linia fără poziție cu mai multe chei referite acceptată (ambiguitatea nerefuzată, decontatul celor două poziții desprins)', [[
+      `      ELSIF v_kn IS NULL THEN\n        RAISE EXCEPTION 'rest_decontat: linia % fara pozitie (nr) e ambigua`, `      ELSIF false THEN\n        RAISE EXCEPTION 'rest_decontat: linia % fara pozitie (nr) e ambigua`]]],
+    ['lipsurile nu declară decontatul fără articol (decontat_fara_articol)', [[`   WHERE NOT (r.cheie = ANY (bz.chei))\n$f$;`, `   WHERE false\n$f$;`]]],
+    ['RPC-ul nu întoarce cheile referite rămase fără bază (decontat_fara_baza mereu gol)', [[`   WHERE NOT (r.cheie = ANY (coalesce(bz.chei, ARRAY[]::text[])));`, `   WHERE false;`]]],
     ['amprenta fișierului necăutată în istoric (A → B → A acceptat)', [[
       `\n     OR EXISTS (SELECT 1 FROM public.proiect_articole_istoric h WHERE h.proiect_id = p_proiect AND h.rand->>'fisier_amprenta' = p_amprenta) THEN\n    RAISE EXCEPTION 'rest_decontat: acelasi fisier a fost deja confirmat pe acest proiect'`,
       ` THEN\n    RAISE EXCEPTION 'rest_decontat: acelasi fisier a fost deja confirmat pe acest proiect'`]]],
