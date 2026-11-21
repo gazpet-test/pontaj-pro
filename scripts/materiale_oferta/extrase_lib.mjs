@@ -12,8 +12,13 @@
 //    sunt păstrate și marcate `de_verificat`; după TOTAL se acceptă DOAR subsolurile din lista
 //    SUBSOL_ADMIS (rândul EURO, „Ofertant”, numele firmei, „Lucrarea se incadreaza in grupa:”,
 //    celule numai în afara coloanelor formularului), orice alt rând = nerecunoscut (L12);
+//  - CE SE CERTIFICĂ (r3, decizia chat-ului): DOAR C6 (materialele) intră în import; `completa` și
+//    cifrele de control ale extrasului privesc DOAR C6 + paritatea cu importul + erorile foii C6.
+//    C7–C9 (manoperă, utilaj, transport) sunt INFORMAȚIE: în `_resurse.tsv` cu `certificat = nu`,
+//    controalele lor dau `resurse_complete` (separat, cu motivele), niciodată `completa`;
 //  - foaia e `completa` doar fără niciun motiv structural: rând / linie nerecunoscută (chiar cu
-//    valoare 0), gol sau repetare în numerotare, UM necunoscut sau lipsă (C6), TOTAL lipsă /
+//    valoare 0), gol sau repetare în numerotare, UM necunoscut sau lipsă (C6), valori lipsă / nenumerice
+//    (inclusiv km / ore la C9), subtotal C9 care nu concordă cu detaliile, TOTAL lipsă /
 //    nenumeric / în altă monedă / cu alte celule, TOTAL care nu concordă (L12, L18);
 //  - forma pentru import vine din parseExtrasMateriale (aceeași funcție ca ecranul
 //    „Materiale” din ERP), cu paritate verificată rând cu rând pe TOATE câmpurile importului,
@@ -25,7 +30,11 @@
 import { umInfo, parseExtrasMateriale } from '../../src/devizParser.js'
 import { parseNumar, fmtNr } from '../../src/izoDocumenteLogica.js'
 
-export const VERSIUNE = 'extrase-c6-c9-v2'
+export const VERSIUNE = 'extrase-c6-c9-v3'
+// formularele certificate (import + `completa`); restul sunt doar informative
+export const CERTIFICATE = ['C6']
+export const RESURSE = ['C7', 'C8', 'C9']
+export const MOTIV_NECERTIFICAT = 'informativ: doar materialele (C6) se certifică și se importă'
 
 async function incarcaXlsx() {
   const _x = await import('xlsx-js-style')
@@ -171,6 +180,13 @@ function verificaNumar(x, nume, motive, { zeroSuspect = false } = {}) {
   else if (x < 0) motive.push(`${nume} negativ`)
   else if (zeroSuspect && x === 0) motive.push(`${nume} 0`)
 }
+/**
+ * Câmpurile numerice INCERTE ale unei linii: celulă prezentă dar nenumerică (NaN, ex. km = „INVALID”)
+ * sau lipsă acolo unde e obligatorie (preț / valoare pe o linie de resursă). Lista nevidă = foaia nu e completă (L12, L18).
+ */
+export function valoriIncerte(l, campuri, obligatorii = []) {
+  return campuri.filter((k) => Number.isNaN(l[k]) || (l[k] === null && obligatorii.includes(k)))
+}
 // valoare = cantitate × preț; celulele au precizie întreagă (nu valori tipărite rotunjite), deci
 // toleranța e doar cea a rotunjirii valorii: max(1 ban, 1 ppm din valoare). Pe cele 7 extrase reale abaterea maximă e 0,0075.
 export function verificaProdus(cant, pret, val, motive) {
@@ -256,6 +272,9 @@ export function motiveIncomplet(s) {
   }
   const um = s.linii.filter((l) => l.um_problema)
   if (um.length) m.push(`UM necunoscut sau lipsă pe ${um.length} ${um.length === 1 ? 'linie' : 'linii'} (rândurile ${um.map((l) => l.rand).join(', ')})`)
+  const inc = s.linii.filter((l) => l.valori_incerte?.length)
+  if (inc.length) m.push(`valori lipsă sau nenumerice pe ${inc.length} ${inc.length === 1 ? 'linie' : 'linii'} (${inc.map((l) => `rândul ${l.rand}: ${l.valori_incerte.join(', ')}`).join('; ')})`)
+  for (const x of s.structurale || []) m.push(x)
   for (const x of s.motive) m.push(x)
   if (s.concorda === false) m.push(`suma liniilor diferă de TOTAL cu ${rot2(s.diferenta)}`)
   else if (s.concorda !== true) m.push('comparația cu TOTAL necunoscută (fără total numeric)')
@@ -287,8 +306,10 @@ export function citesteC6(rows, { foaie = 'materiale', origine = 0 } = {}) {
       cantitate: cant, cantitate_um_baza: fin(cant) ? (u.factor === 1 ? cant : Math.round(cant * u.factor * 1e6) / 1e6) : null,
       pret_unitar: pret, valoare: val, furnizor: String(r[6] ?? '').trim(), coloana_h: txt(r[7]),
       tip: fin(cant) ? 'material' : (cant === null && fin(val) && /^LEI\.?$/i.test(umSursa) ? 'valoric' : 'nerecunoscut'),
-      um_problema: false, import_erp: null, motive: [], brut: '',
+      um_problema: false, valori_incerte: [], import_erp: null, motive: [], brut: '',
     }
+    // liniile nerecunoscute sunt deja motiv structural (nu le număr de două ori)
+    if (l.tip !== 'nerecunoscut') l.valori_incerte = valoriIncerte(l, ['cantitate', 'pret_unitar', 'valoare'], l.tip === 'material' ? ['pret_unitar', 'valoare'] : [])
     if (l.tip === 'material') {
       if (!/[A-Za-z]/.test(l.denumire)) l.motive.push('denumire goală')
       if (!l.cod) l.motive.push('fără cod de resursă')
@@ -332,8 +353,9 @@ export function citesteResurse(rows, formular, { foaie = CATEGORIE[formular], or
     const l = {
       foaie, categorie: CATEGORIE[formular], rand, nr_crt: nr, denumire: txt(r[1]), um,
       cantitate: cant, km: null, ore: null, pret_unitar: pret, valoare: val,
-      tip: fin(cant) ? 'resursa' : (cant === null && fin(val) ? 'valoric' : 'nerecunoscut'), motive: [], brut: '',
+      tip: fin(cant) ? 'resursa' : (cant === null && fin(val) ? 'valoric' : 'nerecunoscut'), valori_incerte: [], motive: [], brut: '',
     }
+    if (l.tip !== 'nerecunoscut') l.valori_incerte = valoriIncerte(l, ['cantitate', 'pret_unitar', 'valoare'], l.tip === 'resursa' ? ['pret_unitar', 'valoare'] : [])
     if (l.tip === 'resursa') {
       if (!/[A-Za-z]/.test(l.denumire)) l.motive.push('denumire goală')
       verificaNumar(cant, 'cantitate', l.motive, { zeroSuspect: true })
@@ -371,31 +393,44 @@ export function citesteC9(rows, { foaie = 'transport', origine = 0 } = {}) {
     const l = {
       foaie, categorie: 'transport', rand, nr_crt: nr, denumire: txt(r[1]), um: 'tone',
       cantitate: tone, km, ore, pret_unitar: pret, valoare: val,
-      tip: subtotal ? 'subtotal' : (fin(tone) ? 'resursa' : (tone === null && fin(val) ? 'valoric' : 'nerecunoscut')), motive: [], brut: '',
+      tip: subtotal ? 'subtotal' : (fin(tone) ? 'resursa' : (tone === null && fin(val) ? 'valoric' : 'nerecunoscut')), valori_incerte: [], motive: [], brut: '',
+    }
+    // km / ore: opționale, dar o celulă prezentă trebuie să fie număr ≥ 0 (altfel incertă, nu „ok”).
+    // Valoarea subtotalului e verificată separat, față de detalii (mai jos).
+    if (l.tip !== 'nerecunoscut') {
+      l.valori_incerte = valoriIncerte(l, subtotal ? ['cantitate', 'km', 'ore', 'pret_unitar'] : ['cantitate', 'km', 'ore', 'pret_unitar', 'valoare'], l.tip === 'resursa' ? ['pret_unitar', 'valoare'] : [])
+      if (km !== null) verificaNumar(km, 'km', l.motive)
+      if (ore !== null) verificaNumar(ore, 'ore', l.motive)
     }
     if (l.tip === 'resursa') {
       verificaNumar(tone, 'tone', l.motive, { zeroSuspect: true })
       verificaNumar(pret, 'tarif', l.motive)
       verificaNumar(val, 'valoare', l.motive)
-      if (km === null && ore === null) verificaProdus(tone, pret, val, l.motive)
+      // tariful e în RON/tonă (antetul) → valoare = tone × tarif, oricare ar fi km / ore
+      verificaProdus(tone, pret, val, l.motive)
     } else if (l.tip === 'valoric') {
       l.motive.push('linie valorică fără tone (diferență de preț)')
     } else if (l.tip === 'nerecunoscut') { l.motive.push('rând nerecunoscut'); l.brut = brut(r) }
     linii.push(l)
   }
   for (const { r, rand } of dupaTotal) nerecunoscute.push({ rand, motiv: MOTIV_DUPA_TOTAL, brut: brut(r) })
-  // subtotalul fiecărei categorii = suma detaliilor ei („1” ← „1.001”, „1.002”, ...)
+  // subtotalul fiecărei categorii = suma detaliilor ei („1” ← „1.001”, „1.002”, ...); orice neconcordanță e STRUCTURALĂ
+  // (nu știm care cifră e cea bună), inclusiv subtotalul nenul fără niciun detaliu
+  const structurale = []
   for (const s of linii.filter((l) => l.tip === 'subtotal')) {
-    const det = linii.filter((l) => l.tip !== 'subtotal' && l.nr_crt.startsWith(s.nr_crt + '.') && fin(l.valoare))
-    const suma = rot2(det.reduce((t, l) => t + l.valoare, 0))
-    if (!fin(s.valoare)) { if (det.length) s.motive.push('subtotal fără valoare') }
-    else if (Math.abs(suma - s.valoare) > 0.01) s.motive.push(`subtotal ≠ suma detaliilor (${rot2(s.valoare)} vs ${suma})`)
+    const det = linii.filter((l) => l.tip !== 'subtotal' && l.nr_crt.startsWith(s.nr_crt + '.'))
+    const suma = rot2(det.filter((l) => fin(l.valoare)).reduce((t, l) => t + l.valoare, 0))
+    let problema = null
+    if (Number.isNaN(s.valoare)) problema = 'subtotal nenumeric'
+    else if (s.valoare === null) { if (det.length) problema = 'subtotal fără valoare' }
+    else if (Math.abs(suma - s.valoare) > 0.01) problema = `subtotal ≠ suma detaliilor (${rot2(s.valoare)} vs ${suma})`
+    if (problema) { s.motive.push(problema); structurale.push(`categoria ${s.nr_crt} (rândul ${s.rand}): ${problema}`) }
   }
   marcheazaDuplicate(linii, (l) => l.nr_crt, 'nr. repetat')
   const nrCrt = verificaNrC9(linii)
   const tot = totaluri(linii, total, ['resursa', 'valoric'])
   linii.forEach(stareLinie)
-  return inchide({ formular: 'C9', foaie, rand_antet: origine + h + 1, linii, nerecunoscute, randuri_index: structura, subsol, nr_crt: nrCrt, ...tot })
+  return inchide({ formular: 'C9', foaie, rand_antet: origine + h + 1, linii, nerecunoscute, randuri_index: structura, subsol, nr_crt: nrCrt, structurale, ...tot })
 }
 
 // ── paritatea cu importul din ERP (parseExtrasMateriale) ──
@@ -462,15 +497,19 @@ export function aplicaParitate(c6, importate) {
 // ── tot fișierul ──
 /**
  * Citește un extras (.xls/.xlsx) din memorie. Întoarce foile C6..C9 citite, foile ignorate, erorile și paritatea.
- * `completa` = fără erori, C6 citit, fiecare foaie C6..C9 citită fără motive structurale (motiveIncomplet)
- * și paritate cu importul; `motive_incomplet` spune de ce nu (lista goală ⇔ completa).
- * Orice eroare de citire / parsare (inclusiv a importului din ERP) intră în `erori`.
+ * CERTIFICAREA privește DOAR C6: `completa` = fără erori pe C6 / import, C6 citit fără motive structurale
+ * (motiveIncomplet) și paritate cu importul; `motive_incomplet` spune de ce nu (lista goală ⇔ completa).
+ * C7–C9 sunt informative: `resurse_complete` + `motive_resurse_incomplete` (formular lipsă, eroare, motive
+ * structurale), raportate separat și NICIODATĂ amestecate în `completa`; `resurse_certificat` e mereu false.
+ * Erorile de citire / parsare: `erori` (C6 și importul din ERP), `erori_resurse` (foile C7–C9). Ambele se văd.
  */
 export async function citesteExtras(buf) {
   const XLSX = await incarcaXlsx()
   const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf)
   const wb = XLSX.read(u8, { type: 'array' })
-  const foi = {}, ignorate = [], erori = []
+  const foi = {}, ignorate = [], erori = [], erori_resurse = []
+  // eroarea unei foi merge în lista formularului ei: C6 (certificat) sau resurse (informativ)
+  const eroarePe = (f) => (CERTIFICATE.includes(f) ? erori : erori_resurse)
   for (const nume of wb.SheetNames) {
     const ws = wb.Sheets[nume]
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: true, defval: '', raw: true })
@@ -480,13 +519,13 @@ export async function citesteExtras(buf) {
       ignorate.push({ foaie: nume, randuri: rows.filter((r) => !gol(r)).length, motiv: 'fără marcaj „FORMULAR C6–C9” (foaie de lucru, nu face parte din formularele ofertei)' })
       continue
     }
-    if (foi[f]) { erori.push({ foaie: nume, mesaj: `al doilea ${f} (primul e „${foi[f].foaie}”): nu aleg singur` }); continue }
+    if (foi[f]) { eroarePe(f).push({ foaie: nume, formular: f, mesaj: `al doilea ${f} (primul e „${foi[f].foaie}”): nu aleg singur` }); continue }
     try {
       foi[f] = f === 'C6' ? citesteC6(rows, { foaie: nume, origine })
         : f === 'C9' ? citesteC9(rows, { foaie: nume, origine })
           : citesteResurse(rows, f, { foaie: nume, origine })
       if (nume.toLowerCase() !== CATEGORIE[f]) foi[f].nume_neasteptat = true
-    } catch (e) { erori.push({ foaie: nume, mesaj: e.message }) }
+    } catch (e) { eroarePe(f).push({ foaie: nume, formular: f, mesaj: e.message }) }
   }
   let paritate = null
   if (!foi.C6) erori.push({ foaie: '', mesaj: 'lipsește formularul C6 (materiale)' })
@@ -500,13 +539,25 @@ export async function citesteExtras(buf) {
       erori.push({ foaie: foi.C6.foaie, mesaj: `importul din ERP (parseExtrasMateriale) nu citește fișierul: ${e.message}` })
     }
   }
-  const motive_incomplet = erori.map((e) => `eroare${e.foaie ? ` (foaia „${e.foaie}”)` : ''}: ${e.mesaj}`)
-  for (const f of ['C6', 'C7', 'C8', 'C9']) if (foi[f]) for (const m of foi[f].motive_incomplet) motive_incomplet.push(`${f}: ${m}`)
+  const textEroare = (e) => `eroare${e.foaie ? ` (foaia „${e.foaie}”)` : ''}: ${e.mesaj}`
+  // certificarea: DOAR C6 (+ paritatea cu importul)
+  const motive_incomplet = erori.map(textEroare)
+  for (const f of CERTIFICATE) if (foi[f]) for (const m of foi[f].motive_incomplet) motive_incomplet.push(`${f}: ${m}`)
   if (paritate && !paritate.eroare && !paritate.ok) {
     motive_incomplet.push(`paritate cu importul din ERP eșuată (${paritate.diferente.length} rânduri cu câmpuri diferite, ${paritate.linii_lipsa.length} linii lipsă din import, ${paritate.fara_pereche.length} importate fără pereche)`)
   }
   const completa = !!foi.C6 && !!paritate?.ok && motive_incomplet.length === 0
-  return { versiune: VERSIUNE, foi, ignorate, erori, paritate, completa, motive_incomplet }
+  // resursele (informativ): un formular lipsă sau cu eroare = necunoscut, deci incomplet (L12, L18)
+  const motive_resurse_incomplete = erori_resurse.map(textEroare)
+  for (const f of RESURSE) {
+    if (!foi[f]) { if (!erori_resurse.some((e) => e.formular === f)) motive_resurse_incomplete.push(`${f}: formularul ${CATEGORIE[f]} nu a fost citit`); continue }
+    for (const m of foi[f].motive_incomplet) motive_resurse_incomplete.push(`${f}: ${m}`)
+  }
+  const resurse_complete = motive_resurse_incomplete.length === 0
+  return {
+    versiune: VERSIUNE, certificat: CERTIFICATE, foi, ignorate, erori, erori_resurse, paritate, completa, motive_incomplet,
+    resurse_certificat: false, resurse_complete, motive_resurse_incomplete,
+  }
 }
 
 // ── ieșiri: TSV (zecimale cu punct, pentru import) și rezumat Markdown (format RO) ──
@@ -525,14 +576,19 @@ export function tsvMateriale(proiect, fisier, c6) {
   return out.join('\n') + '\n'
 }
 
-export const COLOANE_RESURSE = ['proiect', 'fisier', 'foaie', 'categorie', 'rand', 'nr_crt', 'denumire', 'um', 'cantitate', 'km', 'ore', 'pret_unitar', 'valoare', 'tip', 'stare', 'motive', 'text_brut']
+// resursele C7–C9: INFORMAȚIE, nu intră în import. Fiecare rând poartă `certificat = nu` și motivul necertificării
+// (MOTIV_NECERTIFICAT + motivele structurale ale foii, dacă e incompletă); `foaie_completa` = controalele foii.
+export const COLOANE_RESURSE = ['proiect', 'fisier', 'foaie', 'categorie', 'rand', 'nr_crt', 'denumire', 'um', 'cantitate', 'km', 'ore', 'pret_unitar', 'valoare', 'tip', 'stare', 'motive',
+  'certificat', 'foaie_completa', 'motiv_necertificat', 'text_brut']
+export const motivNecertificat = (s) => [MOTIV_NECERTIFICAT, ...(s.completa ? [] : [`foaia ${s.formular} incompletă: ${s.motive_incomplet.join('; ')}`])].join('; ')
 export function tsvResurse(proiect, fisier, foi) {
   const out = [COLOANE_RESURSE.join('\t')]
-  for (const f of ['C7', 'C8', 'C9']) {
+  for (const f of RESURSE) {
     const s = foi[f]
     if (!s) continue
-    for (const l of s.linii) out.push(linieTsv([proiect, fisier, l.foaie, l.categorie, l.rand, l.nr_crt, l.denumire, l.um, l.cantitate, l.km, l.ore, l.pret_unitar, l.valoare, l.tip, l.stare, l.motive.join('; '), l.brut]))
-    for (const n of s.nerecunoscute) out.push(linieTsv([proiect, fisier, s.foaie, CATEGORIE[f], n.rand, '', '', '', null, null, null, null, null, 'nerecunoscut', 'de_verificat', n.motiv, n.brut]))
+    const cert = ['nu', s.completa ? 'da' : 'nu', motivNecertificat(s)]
+    for (const l of s.linii) out.push(linieTsv([proiect, fisier, l.foaie, l.categorie, l.rand, l.nr_crt, l.denumire, l.um, l.cantitate, l.km, l.ore, l.pret_unitar, l.valoare, l.tip, l.stare, l.motive.join('; '), ...cert, l.brut]))
+    for (const n of s.nerecunoscute) out.push(linieTsv([proiect, fisier, s.foaie, CATEGORIE[f], n.rand, '', '', '', null, null, null, null, null, 'nerecunoscut', 'de_verificat', n.motiv, ...cert, n.brut]))
   }
   return out.join('\n') + '\n'
 }
@@ -545,8 +601,10 @@ export function rezumatProiect({ proiect, fisier, sha256, rez }) {
   const r = []
   r.push(`## ${proiect} — \`${fisier}\``, '')
   r.push(`- SHA-256: \`${sha256}\``)
-  r.push(`- Stare: ${rez.completa ? '**completă** (C6–C9 citite integral, totalurile concordă, importul ERP are aceleași linii)' : '**incompletă**, din motivele:'}`)
+  r.push(`- Stare materiale (C6, singurul formular certificat și importat): ${rez.completa ? '**completă** (C6 citit integral, totalul concordă, importul ERP are aceleași linii)' : '**incompletă**, din motivele:'}`)
   for (const m of rez.motive_incomplet) r.push(`  - ${m}`)
+  r.push(`- Resurse C7–C9 (informativ, **necertificate**, nu intră în import): ${rez.resurse_complete ? 'controalele lor trec' : 'controale care nu trec:'}`)
+  for (const m of rez.motive_resurse_incomplete) r.push(`  - ${m}`)
   for (const g of rez.ignorate) r.push(`- Foaie ignorată „${g.foaie}” (${g.randuri} rânduri nevide): ${g.motiv}`)
   const c6 = rez.foi.C6
   if (c6) {
@@ -573,13 +631,13 @@ export function rezumatProiect({ proiect, fisier, sha256, rez }) {
       for (const n of c6.nerecunoscute) r.push(`| ${n.rand} | — | — | ${n.brut.replace(/\|/g, '/').slice(0, 70)} | — | — | — | ${n.motiv} |`)
     }
   }
-  const alte = ['C7', 'C8', 'C9'].filter((f) => rez.foi[f])
+  const alte = RESURSE.filter((f) => rez.foi[f])
   if (alte.length) {
-    r.push('', '### Celelalte resurse (în `_resurse.tsv`, nu intră în importul de materiale)', '', '| Formular | Linii | Suma liniilor | TOTAL tipărit | Comparație | De verificat | Citire |', '|---|---|---|---|---|---|---|')
+    r.push('', '### Celelalte resurse — informativ, necertificate (în `_resurse.tsv` cu `certificat = nu`, nu intră în import)', '', '| Formular | Linii | Suma liniilor | TOTAL tipărit | Comparație | De verificat | Controalele foii |', '|---|---|---|---|---|---|---|')
     for (const f of alte) {
       const s = rez.foi[f]
       const det = s.linii.filter((l) => l.tip !== 'subtotal')
-      r.push(`| ${f} ${CATEGORIE[f]} | ${det.length} | ${lei(s.suma)} | ${lei(s.total_tiparit)} | ${concText(s)} | ${s.linii.filter((l) => l.stare === 'de_verificat').length + s.nerecunoscute.length} | ${s.completa ? 'completă' : '**incompletă**'} |`)
+      r.push(`| ${f} ${CATEGORIE[f]} | ${det.length} | ${lei(s.suma)} | ${lei(s.total_tiparit)} | ${concText(s)} | ${s.linii.filter((l) => l.stare === 'de_verificat').length + s.nerecunoscute.length} | ${s.completa ? 'trec (necertificat)' : '**nu trec** (necertificat)'} |`)
     }
   }
   r.push('')

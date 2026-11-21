@@ -12,7 +12,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import {
   citesteExtras, citesteC6, citesteC9, citesteResurse, umCanonic, aplicaParitate, tsvMateriale, tsvResurse, COLOANE_MATERIALE, verificaProdus,
-  clasificaSubsol, umFormaImport, omisiuneAdmisa, MOTIV_DUPA_TOTAL,
+  clasificaSubsol, umFormaImport, omisiuneAdmisa, MOTIV_DUPA_TOTAL, COLOANE_RESURSE, MOTIV_NECERTIFICAT, valoriIncerte,
 } from './extrase_lib.mjs'
 import { ruleaza } from './citeste_extrase.mjs'
 import { parseExtrasMateriale } from '../../src/devizParser.js'
@@ -96,8 +96,13 @@ describe('citesteExtras — extras complet (.xls)', () => {
     expect(Object.keys(rez.foi).sort()).toEqual(['C6', 'C7', 'C8', 'C9'])
     expect(rez.ignorate.map((g) => g.foaie)).toEqual(['materiale de comandat'])
     expect(rez.erori).toEqual([])
+    expect(rez.erori_resurse).toEqual([])
+    expect(rez.certificat).toEqual(['C6'])
     expect(rez.motive_incomplet).toEqual([])
     expect(rez.completa).toBe(true)
+    expect(rez.resurse_certificat).toBe(false)
+    expect(rez.motive_resurse_incomplete).toEqual([])
+    expect(rez.resurse_complete).toBe(true)
   })
 
   it('C6: linii, sursa pe rând, total tipărit RON + EURO, concordanță, subsol admis', () => {
@@ -300,27 +305,31 @@ describe('P1 r2: completitudinea cere toate controalele structurale (L11, L12, L
     expect(rez.motive_incomplet).toEqual(['C6: suma liniilor diferă de TOTAL cu -1'])
   })
 
-  it('C8 cu TOTAL care nu concordă → extrasul întreg e incomplet (motivul pe C8)', async () => {
+  it('C8 cu TOTAL care nu concordă → resursele incomplete (motivul pe C8), C6 rămâne complet', async () => {
     const u = c8(); u[6] = ['', 'TOTAL', '', '  RON', '160.00']
     const rez = await extras({ u })
     expect(rez.foi.C8.concorda).toBe(false)
     expect(rez.foi.C8.diferenta).toBe(-10)
-    expect(rez.motive_incomplet).toEqual(['C8: suma liniilor diferă de TOTAL cu -10'])
-    expect(rez.completa).toBe(false)
+    expect(rez.motive_resurse_incomplete).toEqual(['C8: suma liniilor diferă de TOTAL cu -10'])
+    expect(rez.resurse_complete).toBe(false)
+    expect(rez.motive_incomplet).toEqual([])
+    expect(rez.completa).toBe(true)
   })
 
-  it('C7 cu gol de numerotare → incomplet (motivul pe C7)', async () => {
+  it('C7 cu gol de numerotare → resursele incomplete (motivul pe C7)', async () => {
     const mo = c7(); mo[6][0] = '3'
     const rez = await extras({ mo })
-    expect(rez.motive_incomplet).toEqual(['C7: numerotare cu goluri: lipsesc 2'])
+    expect(rez.motive_resurse_incomplete).toEqual(['C7: numerotare cu goluri: lipsesc 2'])
+    expect(rez.completa).toBe(true)
   })
 
-  it('C9: detaliu lipsă (1.002) și detaliu fără categorie (3.001) → incomplet', async () => {
+  it('C9: detaliu lipsă (1.002) și detaliu fără categorie (3.001) → resursele incomplete', async () => {
     const t = c9(); t[8][0] = '1.004'; t.splice(11, 0, ['3.001', 'TRANSPORT TEST Z', 0, '', '', 1, 0])
     const rez = await extras({ t })
     expect(rez.foi.C9.nr_crt.lipsa).toEqual(['1.002'])
     expect(rez.foi.C9.nr_crt.orfane).toEqual(['3.001'])
-    expect(rez.motive_incomplet).toEqual(['C9: numerotare cu goluri: lipsesc 1.002', 'C9: detalii fără categorie: 3.001'])
+    expect(rez.motive_resurse_incomplete).toEqual(['C9: numerotare cu goluri: lipsesc 1.002', 'C9: detalii fără categorie: 3.001'])
+    expect(rez.resurse_complete).toBe(false)
   })
 
   it('rând nerecunoscut între antet și TOTAL → păstrat, extras incomplet', async () => {
@@ -361,10 +370,12 @@ describe('P1 r2: completitudinea cere toate controalele structurale (L11, L12, L
     expect(m.nerecunoscute.map((n) => n.motiv)).toContain(MOTIV_DUPA_TOTAL)
   })
 
-  it('C9: subtotal diferit de suma detaliilor e marcat; sub-antetul lipsă = eroare', () => {
+  it('C9: subtotal diferit de suma detaliilor e marcat ȘI face foaia incompletă; sub-antetul lipsă = eroare', () => {
     const rows = c9(); rows[6] = ['1', 'Transport auto (total)', 30, '', '', '', 80]
     const t = citesteC9(rows)
     expect(peNr(t, '1').motive.join()).toContain('subtotal ≠ suma detaliilor (80 vs 75)')
+    expect(t.motive_incomplet).toEqual(['categoria 1 (rândul 7): subtotal ≠ suma detaliilor (80 vs 75)'])
+    expect(t.completa).toBe(false)
     const fara = c9(); fara.splice(4, 1)
     expect(() => citesteC9(fara)).toThrow(/sub-antetul C9/)
   })
@@ -380,6 +391,146 @@ describe('P1 r2: completitudinea cere toate controalele structurale (L11, L12, L
     expect(rez.paritate.ok).toBe(false)
     expect(peNr(rez.foi.C6, '1').motive.join()).toContain('importul din ERP citește altfel: cantitate')
     expect(rez.completa).toBe(false)
+  })
+})
+
+// c9(): rândul 7 = categoria 1 (75), 8 = 1.001, 9 = 1.002, 10 = 1.003 (valoric), 11 = categoria 2 (0), 12 = TOTAL
+describe('r3: certificarea privește DOAR C6; problemele C7–C9 sunt marcate, nu certificate (L11, L12, L18)', () => {
+  it('Jakarinos P1: subtotal 80, detalii 75 → resursele incomplete cu motivul exact; C6 complet', async () => {
+    const t = c9(); t[6][6] = 80
+    const rez = await extras({ t })
+    expect(rez.foi.C9.concorda).toBe(true) // subtotalurile nu intră în TOTAL
+    expect(rez.motive_resurse_incomplete).toEqual(['C9: categoria 1 (rândul 7): subtotal ≠ suma detaliilor (80 vs 75)'])
+    expect(rez.resurse_complete).toBe(false)
+    expect(rez.motive_incomplet).toEqual([])
+    expect(rez.completa).toBe(true)
+  })
+
+  it('Jakarinos P1: toate detaliile categoriei 1 scoase, TOTAL = 0, subtotalul rămâne 75 → incomplet', async () => {
+    const t = c9(); t.splice(7, 3); t[8] = ['', 'TOTAL', '', '', '', '  RON', '0.00']
+    const rez = await extras({ t })
+    expect(rez.foi.C9.concorda).toBe(true)
+    expect(rez.foi.C9.nr_crt.lipsa).toEqual([])
+    expect(rez.motive_resurse_incomplete).toEqual(['C9: categoria 1 (rândul 7): subtotal ≠ suma detaliilor (75 vs 0)'])
+    expect(rez.completa).toBe(true)
+  })
+
+  it.each([
+    ['nenumeric', 'abc', 'subtotal nenumeric'],
+    ['lipsă (categoria are detalii)', '', 'subtotal fără valoare'],
+  ])('subtotal %s → resurse incomplete, motivul exact', async (_n, v, motiv) => {
+    const t = c9(); t[6][6] = v
+    const rez = await extras({ t })
+    expect(rez.motive_resurse_incomplete).toEqual([`C9: categoria 1 (rândul 7): ${motiv}`])
+  })
+
+  it('pozitiv: subtotal egal (în toleranța de 1 ban) și subtotal 0 fără detalii → fără motiv', () => {
+    const t = c9(); t[6][6] = 75.005
+    const s = citesteC9(t)
+    expect(s.structurale).toEqual([])
+    expect(s.completa).toBe(true)
+  })
+
+  it.each([
+    ['km', 3, 'INVALID'],
+    ['ore', 4, 'n/a'],
+  ])('Jakarinos P2: %s nenumeric pe un detaliu → linie de_verificat, resurse incomplete', async (camp, col, v) => {
+    const t = c9(); t[7][col] = v
+    const rez = await extras({ t })
+    const l = peNr(rez.foi.C9, '1.001')
+    expect(Number.isNaN(l[camp])).toBe(true)
+    expect(l.valori_incerte).toEqual([camp])
+    expect(l.motive).toEqual([`${camp} nenumeric`])
+    expect(l.stare).toBe('de_verificat')
+    expect(rez.motive_resurse_incomplete).toEqual([`C9: valori lipsă sau nenumerice pe 1 linie (rândul 8: ${camp})`])
+    expect(rez.resurse_complete).toBe(false)
+    expect(rez.completa).toBe(true)
+  })
+
+  it('km / ore numerice → linie ok; produsul tone × tarif se verifică și când km / ore sunt completate', () => {
+    const t = c9(); t[7][3] = 120; t[7][4] = 3
+    const s = citesteC9(t)
+    expect(peNr(s, '1.001')).toMatchObject({ km: 120, ore: 3, valori_incerte: [], motive: [], stare: 'ok' })
+    expect(s.completa).toBe(true)
+    const g = c9(); g[7][3] = 120; g[7][6] = 25
+    expect(peNr(citesteC9(g), '1.001').motive).toContain('valoare ≠ cantitate × preț (dif. -5)')
+  })
+
+  it('km negativ → marcat pe linie, nu e valoare incertă', () => {
+    const t = c9(); t[7][3] = -5
+    const l = peNr(citesteC9(t), '1.001')
+    expect(l.motive).toEqual(['km negativ'])
+    expect(l.valori_incerte).toEqual([])
+  })
+
+  it('km / ore nenumerice și pe subtotal și pe linia valorică', () => {
+    const t = c9(); t[6][3] = 'x'; t[9][4] = 'y'
+    expect(citesteC9(t).motive_incomplet).toEqual(['valori lipsă sau nenumerice pe 2 linii (rândul 7: km; rândul 10: ore)'])
+  })
+
+  it.each([
+    ['preț nenumeric', (m) => { m[9][4] = 'abc' }, 'pret_unitar'],
+    ['preț lipsă', (m) => { m[9][4] = '' }, 'pret_unitar'],
+    ['valoare nenumerică', (m) => { m[9][5] = 'abc'; m[16] = ['', 'TOTAL', '', '', '  RON', '543.00'] }, 'valoare'],
+    ['valoare lipsă', (m) => { m[9][5] = ''; m[16] = ['', 'TOTAL', '', '', '  RON', '543.00'] }, 'valoare'],
+  ])('C6 (certificat): %s pe o linie de material → extras incomplet, chiar dacă TOTAL și paritatea trec', async (_n, f, camp) => {
+    const rez = await cuC6(f)
+    expect(rez.foi.C6.concorda).toBe(true)
+    expect(rez.paritate.ok).toBe(true)
+    expect(rez.motive_incomplet).toEqual([`C6: valori lipsă sau nenumerice pe 1 linie (rândul 10: ${camp})`])
+    expect(rez.completa).toBe(false)
+    expect(rez.resurse_complete).toBe(true)
+  })
+
+  it('C8: tarif nenumeric / lipsă pe o resursă → resurse incomplete; C6 neatins', async () => {
+    for (const v of ['abc', '']) {
+      const u = c8(); u[5][3] = v
+      const rez = await extras({ u })
+      expect(rez.motive_resurse_incomplete).toEqual(['C8: valori lipsă sau nenumerice pe 1 linie (rândul 6: pret_unitar)'])
+      expect(rez.completa).toBe(true)
+    }
+  })
+
+  it('valoriIncerte: NaN mereu, null doar pe câmpurile obligatorii', () => {
+    const l = { a: NaN, b: null, c: 0, d: 5 }
+    expect(valoriIncerte(l, ['a', 'b', 'c', 'd'])).toEqual(['a'])
+    expect(valoriIncerte(l, ['a', 'b', 'c', 'd'], ['b', 'c'])).toEqual(['a', 'b'])
+  })
+
+  it('formular de resurse lipsă → resurse incomplete („nu a fost citit”), C6 neatins', async () => {
+    const rez = await citesteExtras(carte([['materiale', c6()], ['manopera', c7()], ['utilaj', c8()]]))
+    expect(rez.motive_resurse_incomplete).toEqual(['C9: formularul transport nu a fost citit'])
+    expect(rez.resurse_complete).toBe(false)
+    expect(rez.completa).toBe(true)
+  })
+
+  it('al doilea C7 → eroare în erori_resurse, un singur motiv; C6 neatins', async () => {
+    const rez = await citesteExtras(carte([...complet(), ['manopera2', c7()]]))
+    expect(rez.erori).toEqual([])
+    expect(rez.motive_resurse_incomplete).toEqual(['eroare (foaia „manopera2”): al doilea C7 (primul e „manopera”): nu aleg singur'])
+    expect(rez.completa).toBe(true)
+  })
+
+  it('toate problemele de resurse deodată nu schimbă nimic la C6 (motive, paritate, cifre)', async () => {
+    const t = c9(); t[6][6] = 80; t[7][3] = 'INVALID'
+    const u = c8(); u[6] = ['', 'TOTAL', '', '  RON', '160.00']
+    const baza = await extras(), rez = await extras({ t, u })
+    expect(rez.completa).toBe(true)
+    expect(rez.motive_incomplet).toEqual(baza.motive_incomplet)
+    expect(rez.paritate).toEqual(baza.paritate)
+    expect([rez.foi.C6.suma, rez.foi.C6.total_tiparit, rez.foi.C6.linii.length]).toEqual([549, 549, 10])
+    expect(rez.motive_resurse_incomplete).toEqual([
+      'C8: suma liniilor diferă de TOTAL cu -10',
+      'C9: valori lipsă sau nenumerice pe 1 linie (rândul 8: km)',
+      'C9: categoria 1 (rândul 7): subtotal ≠ suma detaliilor (80 vs 75)',
+    ])
+  })
+
+  it('invers: o problemă pe C6 nu face resursele incomplete', async () => {
+    const rez = await cuC6((m) => { m[9][2] = 'XYZ' })
+    expect(rez.completa).toBe(false)
+    expect(rez.resurse_complete).toBe(true)
+    expect(rez.motive_resurse_incomplete).toEqual([])
   })
 })
 
@@ -503,6 +654,28 @@ describe('ieșirile TSV', () => {
     expect(t.filter((c) => c === 'utilaj')).toHaveLength(1)
     expect(t.filter((c) => c === 'transport')).toHaveLength(5)
   })
+  it('resurse: fiecare rând are certificat = nu și motivul; foaia incompletă își scrie motivele pe rânduri', async () => {
+    const t9 = c9(); t9[6][6] = 80 // subtotal 80 vs detalii 75
+    const rez = await extras({ t: t9 })
+    // fără trimEnd: ultima celulă (text_brut) poate fi goală, iar tab-ul ei contează
+    const [h, ...rs] = tsvResurse('P9', 'x.xls', rez.foi).replace(/\n$/, '').split('\n').map((l) => l.split('\t'))
+    expect(h).toEqual(COLOANE_RESURSE)
+    const col = (r, k) => r[h.indexOf(k)]
+    expect(rs).toHaveLength(8)
+    for (const r of rs) {
+      expect(r).toHaveLength(COLOANE_RESURSE.length)
+      expect(col(r, 'certificat')).toBe('nu')
+      expect(col(r, 'motiv_necertificat').startsWith(MOTIV_NECERTIFICAT)).toBe(true)
+    }
+    const tr = rs.filter((r) => col(r, 'categorie') === 'transport'), alte = rs.filter((r) => col(r, 'categorie') !== 'transport')
+    for (const r of tr) {
+      expect(col(r, 'foaie_completa')).toBe('nu')
+      expect(col(r, 'motiv_necertificat')).toBe(`${MOTIV_NECERTIFICAT}; foaia C9 incompletă: categoria 1 (rândul 7): subtotal ≠ suma detaliilor (80 vs 75)`)
+    }
+    for (const r of alte) { expect(col(r, 'foaie_completa')).toBe('da'); expect(col(r, 'motiv_necertificat')).toBe(MOTIV_NECERTIFICAT) }
+    // materialele nu primesc nimic din resurse
+    expect(tsvMateriale('P9', 'x.xls', rez.foi.C6)).toBe(tsvMateriale('P9', 'x.xls', (await extras()).foi.C6))
+  })
 })
 
 describe('ruleaza (CLI) pe foldere temporare', () => {
@@ -533,14 +706,24 @@ describe('ruleaza (CLI) pe foldere temporare', () => {
     expect(p10.sha256).toBe(crypto.createHash('sha256').update(buf).digest('hex'))
     expect(p10.completa).toBe(true)
     expect(p10.motive_incomplet).toEqual([])
-    expect(p10.materiale).toMatchObject({ linii: 10, suma: 549, total_tiparit: 549, concorda: true, linii_import: 8, paritate_ok: true, linii_lipsa_import: 0, omise_admise: 2, completa: true })
+    expect(p10.materiale).toMatchObject({ linii: 10, suma: 549, total_tiparit: 549, concorda: true, linii_import: 8, paritate_ok: true, linii_lipsa_import: 0, omise_admise: 2, certificat: true, completa: true })
+    expect(p10.certificat).toEqual(['C6'])
+    expect(p10.resurse).toEqual({ certificat: false, resurse_complete: true, motive_resurse_incomplete: [] })
+    for (const k of ['manopera', 'utilaj', 'transport']) {
+      expect(p10[k]).toMatchObject({ certificat: false, foaie_completa: true, motive_foaie: [] })
+      expect(p10[k]).not.toHaveProperty('completa') // cifrele informative nu poartă eticheta de certificare
+    }
+    expect(p10.transport).toMatchObject({ linii: 5, suma: 75, total_tiparit: 75, concorda: true })
     expect(fs.existsSync(path.join(iesire, 'P10.tsv'))).toBe(true)
     expect(fs.existsSync(path.join(iesire, 'P10_resurse.tsv'))).toBe(true)
     expect(fs.existsSync(path.join(iesire, 'P2.tsv'))).toBe(false)
     expect(fs.readFileSync(path.join(iesire, 'altcineva.txt'), 'utf8')).toBe('nu se sterge')
     const md = fs.readFileSync(path.join(iesire, 'rezumat.md'), 'utf8')
-    expect(md).toContain('| P10 | 10 | 549,00 | 549,00 | 0 |')
+    expect(md).toContain('| P10 | 10 | 549,00 | 549,00 | 0 | 7 | 535,50 | completă | controale trec |')
     expect(md).toContain('Foaie ignorată „materiale de comandat”')
+    expect(md).toContain('- Stare materiale (C6, singurul formular certificat și importat): **completă**')
+    expect(md).toContain('- Resurse C7–C9 (informativ, **necertificate**, nu intră în import): controalele lor trec')
+    expect(md).toContain('| C9 transport | 3 | 75,00 | 75,00 | concordă | 1 | trec (necertificat) |')
   })
 
   it('toate citite fără erori → ok, chiar dacă un extras e incomplet', async () => {
@@ -556,11 +739,26 @@ describe('ruleaza (CLI) pe foldere temporare', () => {
     ['antet C6 invalid', () => { const m = c6(); m[4] = ['Nr.', 'Altceva']; return carte([['materiale', m]]) }, /antetul C6 nu are coloanele/],
     ['sub-antet C9 lipsă', () => { const t = c9(); t.splice(4, 1); return carte(complet({ t })) }, /sub-antetul C9/],
     ['import ERP ilizibil', () => { const m = c6(); m.splice(3, 0, ...Array.from({ length: 17 }, () => ['Nota', 'x'])); return carte(complet({ m })) }, /importul din ERP/],
-  ])('eroare de parsare în rez.erori (%s) → ok = false, chiar fără eroare de fișier', async (_n, f, re) => {
+  ])('eroare de parsare în rez.erori / erori_resurse (%s) → ok = false, chiar fără eroare de fișier', async (_n, f, re) => {
     const { surse, iesire } = pregateste(`c${_n.length}`, { P1: { 'x.xls': Buffer.from(f()) } })
     const r = await ruleaza({ surse, iesire })
     expect(r.proiecte[0].eroare).toBeUndefined()
-    expect(r.proiecte[0].erori.map((e) => e.mesaj).join(' ')).toMatch(re)
+    expect([...r.proiecte[0].erori, ...r.proiecte[0].erori_resurse].map((e) => e.mesaj).join(' ')).toMatch(re)
+    expect(r.ok).toBe(false)
+  })
+
+  it('eroare pe C9 (sub-antet lipsă): în erori_resurse, C6 rămâne complet cu aceleași cifre, exit = eșec', async () => {
+    const t = c9(); t.splice(4, 1)
+    const { surse, iesire } = pregateste('c9err', { P1: { 'x.xls': Buffer.from(carte(complet({ t }))) }, P2: { 'x.xls': Buffer.from(carte(complet())) } })
+    const r = await ruleaza({ surse, iesire })
+    const [p1, p2] = r.proiecte
+    expect(p1.erori).toEqual([])
+    expect(p1.erori_resurse.map((e) => [e.foaie, e.formular])).toEqual([['transport', 'C9']])
+    expect(p1.completa).toBe(true)
+    expect(p1.materiale).toEqual(p2.materiale)
+    expect(p1.transport).toBe(null)
+    expect(p1.resurse.resurse_complete).toBe(false)
+    expect(p1.resurse.motive_resurse_incomplete).toEqual([expect.stringMatching(/^eroare \(foaia „transport”\): sub-antetul C9/)])
     expect(r.ok).toBe(false)
   })
 
