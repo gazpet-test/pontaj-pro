@@ -72,6 +72,29 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
   (de ex. o clasa cu "card" sau "chip" pe `gem-icon`), fiindca r3 nu verifica clasele / atributele
   elementelor din liste. Ele NU se trec in liste: se copiaza pentru chat si se lamuresc una cate una.
 
+**Stare (r5, 21.11.2026, dupa review-ul Jakarinos pe r4):**
+- **Nume de fisier peste tot (P1).** `nume.extensie` se cauta acum in TOATE valorile unui element: clase,
+  id, orice atribut, URL-uri (`href` / `src` / `srcset`, inclusiv `blob:`) si `style` (nu doar `url(`).
+  Reproducerile din verdict (`gem-icon class="oferta.docx"`, `id="oferta.docx"`, `a ... href="blob:.../
+  oferta.docx"`, `gem-icon style="--x: oferta.pdf"`) sunt refuzate fara nicio actiune. Singura exceptie,
+  inchisa si testata: intr-un `href` cu schema http(s) a carui gazda e EXACT un host Google (`google.com`
+  sau subdomeniu - linkul calibrat "Confidentialitatea ta si Gemini"), hostname-ul nu e fisier; calea,
+  interogarea si fragmentul se verifica integral. Orice alt URL (alt host, `blob:`, `data:`, `src`,
+  `srcset`) si orice `style` se verifica ca text intreg. **Presupunere declarata:** href-ul real al linkului
+  (valoarea nu a fost copiata la pasul 0) sta pe un host Google; daca nu, pe pagina reala va aparea
+  `atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}` si se lamureste in chat (nu se trece
+  in liste). La fel, un `style` real cu un cuvant de atasament (ex. `--mat-card-...`) ar da `token_card:...`.
+- **Linia `token_file` lamurita.** Sursa citita de chat din pagina reala (doar citire, chat nou gol):
+  `div.text-input-field.simplified-input-area` are EXACT atributele `_ngcontent-ng-c<numar>=""`,
+  `xapfileselectordropzone=""`, `class`, `jslog="303810;track:impression"`. Cuvantul "file" vine din NUMELE
+  `xapfileselectordropzone` (marcajul zonei de drop al selectorului de fisiere, cu valoare goala), nu dintr-un
+  fisier. Regula inchisa `MARCAJE_GOALE_PERMISE`: acceptat EXACT acest nume, doar cu valoare goala, doar pe
+  div-ul cu exact aceste doua clase. Orice valoare nevida, alt atribut cu "file", acelasi atribut pe alt
+  element sau cu alte clase = refuz in continuare (teste negative + mutanti). Nu e o intrare in liste si nu
+  e o acceptare globala a lui "file". Cu ea, pe pagina sintetica cele trei stari dau 0 necunoscute.
+- Pasul 0 NU se mai repeta inainte de review; 5a pe pagina reala e confirmarea (0 necunoscute in ambele
+  chaturi). Daca 5a arata totusi o linie `necunoscut ...`, STOP si se copiaza pentru chat.
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -128,7 +151,7 @@ if ($manifest.'gemini_pw.py' -ine $GemHashNou) { throw 'gemini_pw.py din pachet 
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel din v4.6.3' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 536 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 600 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -138,16 +161,17 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + '.v463') -Force }
 ```
 
-Asteptat (pachetul r4): 536 linii diferite (11 vechi `<=`, 525 noi `=>`; r3: 477 / 11 / 466, r2:
-411 / 11 / 400). Cele 11 linii vechi afisate sunt aceleasi ca in r2 / r3: antetul, lista de coduri,
-linia `import`, comentariul selectorilor `ATAS`, titlul partii cu browserul, cele doua linii din vechea
-`_atasamente`, linia `atasamente in ciorna` din `stare` si cele trei linii ale vechii verificari din
-`trimite`. Liniile noi: notele v4.6.4 / r2 / r3 / r4, selectorul `CHIP`, analiza HTML a ciornei,
-verificarea pozitiva a structurii, semnalele de atasament verificate inaintea listelor (`_semnal`),
-listele albe calibrate (fara linia `token_file`), textul Workspace, regula domeniului firmei, paza si
-apelurile ei. Testele: `Ran 98 tests ... OK`. Daca pasul 0 se mai repeta (atributul div-ului, r5),
-numerele se schimba din nou: le da raportul de review al commit-ului respectiv (cifrele din raport
-inlocuiesc 536 / 11 de mai sus).
+Asteptat (pachetul r5): 600 linii diferite (11 vechi `<=`, 589 noi `=>`; r4: 536 / 11 / 525, r3:
+477 / 11 / 466, r2: 411 / 11 / 400). Cele 11 linii vechi afisate sunt aceleasi ca in r2 / r3 / r4: antetul,
+lista de coduri, linia `import`, comentariul selectorilor `ATAS`, titlul partii cu browserul, cele doua
+linii din vechea `_atasamente`, linia `atasamente in ciorna` din `stare` si cele trei linii ale vechii
+verificari din `trimite`. Liniile noi: notele v4.6.4 / r2 / r3 / r4 / r5, selectorul `CHIP`, analiza HTML a
+ciornei, verificarea pozitiva a structurii, semnalele de atasament verificate inaintea listelor (`_semnal`,
+cu nume.extensie in toate valorile si exceptia gazdei Google pentru `href`), regula marcajului gol
+`xapfileselectordropzone`, listele albe calibrate (fara linia `token_file`), textul Workspace, regula
+domeniului firmei, paza si apelurile ei. Testele: `Ran 106 tests ... OK`. Daca mai urmeaza un commit pe
+`gemini_pw.py`, numerele se schimba din nou: le da raportul de review al commit-ului respectiv (cifrele
+din raport inlocuiesc 600 / 11 de mai sus).
 
 Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
 `C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi
@@ -267,9 +291,10 @@ Orice rezultat diferit de cel cerut mai jos = **STOP**, fara marker; copiaza toa
   `paza ciorna: REFUZ ciorna_necunoscuta ...` = calibrarea (pasul 0) nu acopera pagina: STOP,
   fara marker, copiaza liniile `necunoscut ...` pentru chat. 5a se ruleaza pe un chat NOU si apoi
   inca o data pe un chat EXISTENT (tab-ul ramane pe chatul vechi dupa fiecare `gem`, iar paza
-  verifica intai tab-ul curent): ambele trebuie sa dea `necunoscute in zona: 0`. (Cu pachetul r4,
-  inainte de lamurirea atributului div-ului editorului, 5a va arata 1 necunoscut `token_file:...`:
-  pasul 5 nu se incepe pana la commit-ul care o rezolva - vezi pasul 0.)
+  verifica intai tab-ul curent): ambele trebuie sa dea `necunoscute in zona: 0`. (Pachetul r4 arata aici
+  1 necunoscut `token_file:...`; r5 il lamureste prin regula marcajului `xapfileselectordropzone=""` -
+  vezi pasul 0. Daca 5a arata `atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}`,
+  href-ul real al linkului nu e pe un host Google: STOP, copiaza linia pentru chat.)
 - **5b.** Pune de mana UN fisier mic (de ex. un `.txt`) in ciorna, fara sa trimiti; `stare` din nou:
   trebuie EXACT `atasamente in ciorna: 1` si `paza ciorna: REFUZ ciorna_cu_atasamente ...`.
   `0`, `2`, `5`, `?` sau orice alt numar = STOP (numararea nu se potriveste cu pagina reala).

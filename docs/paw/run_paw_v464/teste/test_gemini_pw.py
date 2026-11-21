@@ -807,6 +807,11 @@ class TestStructuraCiorna(unittest.TestCase):
         self.assertEqual(gp.SEMN_EXTRA, 'img, picture, video, audio, canvas, object, embed, iframe, image, source, track, '
                          '[aria-label*="remove" i], [aria-label*="elimin" i], [aria-label*="terge" i], [aria-label*="delete" i]')
         self.assertTrue(all(t in gp.TOKENI_ATAS or t == "terge" for t in gp.TOKENI_ELIMINA))
+        # r5: singurul marcaj acceptat = cel citit din pagina reala (scris de mana din token_file_atribute.txt), nimic altceva; numele lui
+        # contine chiar cuvantul "file", de aceea nu poate sta in nicio lista alba si are regula lui, legata de element si de valoarea goala
+        self.assertEqual(gp.MARCAJE_GOALE_PERMISE, (("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone"),))
+        self.assertEqual(gp._cuvant("xapfileselectordropzone"), "file")
+        self.assertEqual(gp.HREF_GAZDE_FARA_FISIER, ("google.com",))
 
     def test_stare_afiseaza_semnaturile(self):
         pg = FakePg(zona_cu(CARD_VERDICT))
@@ -870,8 +875,7 @@ class TestMutantiStructura(unittest.TestCase):
 
     def test_fara_regula_de_cuvinte(self):
         # mutant: clasele / id-ul / numele atributelor nu se mai cauta dupa cuvinte de atasament
-        self.verifica([('    nume = _ascii(" ".join([n.attrs.get("class") or "", n.attrs.get("id") or ""] + list(n.attrs.keys())))',
-                        '    nume = ""')], NECUNOSCUTE["clasa_atasament"])
+        self.verifica([('    t = _cuvant(clase_id + " " + nume_atribute)', "    t = None")], NECUNOSCUTE["clasa_atasament"])
 
 
 # --- v4.6.4 r3: calibrarea de pe 21.11.2026 (RUNBOOK pasul 0) - liniile `necunoscut ...` copiate EXACT din cele trei iesiri `stare`
@@ -926,14 +930,18 @@ assert (len(CALIBRARE_I), len(CALIBRARE_II), len(CALIBRARE_III)) == (27, 31, 32)
 # hallucination-disclaimer, chat existent): paragraful dinaintea linkului "Confidentialitatea ta si Gemini" (sursa independenta)
 AVERTISMENT_TEXT = ("Chaturile Gazpet.ro nu sunt folosite pentru a ne \u00eembun\u0103t\u0103\u021bi modelele. Gemini este un AI \u0219i poate "
                     "s\u0103 fac\u0103 gre\u0219eli, inclusiv \u00een leg\u0103tur\u0103 cu persoane.")
-# atributul care da "file" pe invelisul editorului nu apare in semnatura r3 (nu e clasa / id / data-*); in fixture e IPOTETIC;
-# r4 afiseaza numele atributelor in {...}, deci rularea `stare` pe pagina reala il va arata
-ATRIBUT_FILE_IPOTETIC = ' filedroptarget=""'
+# r5: atributele REALE ale div-ului editorului, copiate din ce a citit chatul din pagina reala pe 21.11.2026 (doar citire, chat nou gol;
+# paw_v464_calibrare\token_file_atribute.txt): `_ngcontent-ng-c1694197906=""`, `xapfileselectordropzone=""`, `class="text-input-field
+# simplified-input-area"`, `jslog="303810;track:impression"`. Cuvantul "file" vine din NUMELE `xapfileselectordropzone` (valoare goala).
+ATRIBUTE_DIV_REALE = ' _ngcontent-ng-c1694197906="" xapfileselectordropzone="" jslog="303810;track:impression"'
+ATRIBUT_FILE_IPOTETIC = ' filedroptarget=""'                                             # presupunerea din r4 (gresita): ramane refuzata
 TOKEN_FILE_R3 = "token_file:div{text-input-field simplified-input-area}"                 # linia din calibrare (afisarea r3)
-TOKEN_FILE_R4 = "token_file:div{text-input-field simplified-input-area filedroptarget}"  # aceeasi, cu atributul ipotetic afisat
+# aceeasi linie cu numele atributelor afisate (r4+), pe div-ul real: numele din afara semnaturii, sortate, fara cele generate (_ng...)
+TOKEN_FILE_R4 = "token_file:div{text-input-field simplified-input-area jslog xapfileselectordropzone}"
+TOKEN_FILE_IPOTETIC = "token_file:div{text-input-field simplified-input-area filedroptarget}"
 
 
-def pagina_calibrare(stare, atribut_file=ATRIBUT_FILE_IPOTETIC):
+def pagina_calibrare(stare, atribut_file=ATRIBUTE_DIV_REALE):
     # pagina sintetica scrisa de mana ca sa reproduca EXACT liniile de mai sus (ordinea = parcurgerea in adancime a zonei)
     assert stare in ("i", "ii", "iii")
     gi = "<gem-icon><svg viewBox=\"0 0 24 24\"><path d=\"M0 0h24v24H0z\"></path></svg></gem-icon>"
@@ -971,6 +979,8 @@ def pagina_calibrare(stare, atribut_file=ATRIBUT_FILE_IPOTETIC):
 
 
 LISTE_GOALE = dict(CONTROALE_CUNOSCUTE=(), STRUCTURA_CUNOSCUTA=(), TEXTE_CUNOSCUTE=())
+FARA_MARCAJ = dict(MARCAJE_GOALE_PERMISE=())                  # r5: fara regula marcajului = comportamentul r4 pe div-ul real
+ACTIUNI_TRIMITERE = ["goto", "click", "press Control+A", "press Delete", "insert", "press Enter"]
 
 
 class TestCalibrare(unittest.TestCase):
@@ -978,55 +988,62 @@ class TestCalibrare(unittest.TestCase):
         return mod.analizeaza_ciorna(html)
 
     def test_fixture_urile_reproduc_iesirile_stare(self):
-        # cu listele albe goale (= ae3e8947), paginile sintetice dau EXACT liniile copiate din cele trei fisiere, in aceeasi ordine;
-        # textul avertismentului e taiat la 40 ca in r2, ca sa se compare cu linia copiata. Singura linie care difera ca afisare:
-        # token_file - r4 arata si numele atributului (ipotetic in fixture), r3 nu il arata; forma r3 e prefixul celei r4
+        # cu listele albe goale (= ae3e8947) si fara regula marcajului (r5), paginile sintetice cu atributele REALE ale div-ului dau
+        # EXACT liniile copiate din cele trei fisiere, in aceeasi ordine; textul avertismentului e taiat la 40 ca in r2, ca sa se
+        # compare cu linia copiata. Singura linie care difera ca afisare: token_file - r4+ arata si numele atributelor (jslog,
+        # xapfileselectordropzone), r3 nu le arata; forma r3 e prefixul celei r4
         self.assertTrue(TOKEN_FILE_R4.startswith(TOKEN_FILE_R3[:-1]))
         for stare, asteptat in (("i", CALIBRARE_I), ("ii", CALIBRARE_II), ("iii", CALIBRARE_III)):
-            with mock.patch.multiple(gp, **LISTE_GOALE), mock.patch.object(gp, "TEXT_AFISAT", 40), \
-                    mock.patch.object(gp, "DOMENII_FIRMA", ()):
+            with mock.patch.multiple(gp, **LISTE_GOALE), mock.patch.multiple(gp, **FARA_MARCAJ), \
+                    mock.patch.object(gp, "TEXT_AFISAT", 40), mock.patch.object(gp, "DOMENII_FIRMA", ()):
                 i = self.an(pagina_calibrare(stare))
             self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"]), (1, 1, 0, 0), msg=stare)
             self.assertEqual(i["necunoscute_detalii"], [TOKEN_FILE_R4 if l == TOKEN_FILE_R3 else l for l in asteptat], msg=stare)
             self.assertEqual(i["necunoscute"], len(asteptat), msg=stare)
 
-    def test_listele_livrate_recunosc_cele_trei_stari_fara_atributul_file(self):
-        # calea legitima (L20): fara atributul necunoscut al div-ului, toate cele trei stari (si chatul existent, cu textul Workspace
-        # intreg in TEXTE_CUNOSCUTE - P2) dau 0 necunoscute si `trimite` ajunge la Enter
-        for stare in ("i", "ii", "iii"):
-            i = self.an(pagina_calibrare(stare, atribut_file=""))
-            self.assertEqual((i["necunoscute"], i["atasamente"], i["semne"]), (0, 0, 0), msg=i["necunoscute_detalii"])
-            self.assertEqual(gp.verifica_fara_atasamente(i, 0, "t"), 0)
-            cod, act = ruleaza_trimite(gp, FakePg(pagina_calibrare(stare, atribut_file=""), dupa_goto=pagina_calibrare("i", atribut_file="")))
-            self.assertEqual((cod, act), (None, ["goto", "click", "press Control+A", "press Delete", "insert", "press Enter"]), msg=stare)
+    def test_listele_livrate_recunosc_cele_trei_stari_reale(self):
+        # calea legitima (L20), r5: cu atributele REALE ale div-ului (si marcajul xapfileselectordropzone=""), toate cele trei stari
+        # (si chatul existent, cu textul Workspace intreg in TEXTE_CUNOSCUTE - P2) dau 0 necunoscute si `trimite` ajunge la Enter
+        for atribute in (ATRIBUTE_DIV_REALE, ' xapfileselectordropzone=""', " xapfileselectordropzone", ""):
+            for stare in ("i", "ii", "iii"):
+                i = self.an(pagina_calibrare(stare, atribut_file=atribute))
+                self.assertEqual((i["necunoscute"], i["atasamente"], i["semne"]), (0, 0, 0), msg=(stare, atribute, i["necunoscute_detalii"]))
+                self.assertEqual(gp.verifica_fara_atasamente(i, 0, "t"), 0)
+                cod, act = ruleaza_trimite(gp, FakePg(pagina_calibrare(stare, atribut_file=atribute), dupa_goto=pagina_calibrare("i", atribut_file=atribute)))
+                self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE), msg=(stare, atribute))
 
-    def test_div_ul_cu_atributul_file_ramane_refuzat_si_afisat_cu_atribut(self):
-        # r4: cu atributul (ipotetic) care contine "file", fiecare stare are EXACT un motiv - linia token_file, acum cu numele
-        # atributului in {...} (asa va arata `stare` pe pagina reala, ca chatul sa citeasca sursa cuvantului); refuz fara actiuni
+    def test_fara_regula_marcajului_div_ul_real_e_refuzat_si_afisat_cu_atribute(self):
+        # = comportamentul r4 (86f6ff72) pe pagina reala: fiecare stare are EXACT un motiv - linia token_file cu numele atributelor in
+        # {...} (jslog, xapfileselectordropzone; _ngcontent e generat si nu se afiseaza); refuz fara actiuni. Asa a ajuns chatul la
+        # sursa cuvantului. Nici intrarea r3, nici forma completa in STRUCTURA nu-l accepta (P1 r4: lista nu acopera semnalul)
+        with mock.patch.multiple(gp, **FARA_MARCAJ):
+            for stare in ("i", "ii", "iii"):
+                i = self.an(pagina_calibrare(stare))
+                self.assertEqual(i["necunoscute_detalii"], [TOKEN_FILE_R4], msg=stare)
+                self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_calibrare(stare))), ("ciorna_necunoscuta", []), msg=stare)
+            with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", gp.STRUCTURA_CUNOSCUTA + (TOKEN_FILE_R3.split(":", 1)[1], TOKEN_FILE_R4.split(":", 1)[1])):
+                self.assertEqual(self.an(pagina_calibrare("i"))["necunoscute_detalii"], [TOKEN_FILE_R4])
+                self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_calibrare("i"))), ("ciorna_necunoscuta", []))
+        # presupunerea r4 (atribut ipotetic `filedroptarget=""`) NU e marcajul real: ramane refuzata, cu numele ei afisat
         for stare in ("i", "ii", "iii"):
-            i = self.an(pagina_calibrare(stare))
-            self.assertEqual(i["necunoscute_detalii"], [TOKEN_FILE_R4], msg=stare)
-            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_calibrare(stare))), ("ciorna_necunoscuta", []), msg=stare)
-        # P1: nici intrarea r3, nici forma completa r4 in STRUCTURA nu pot accepta un element cu cuvant de atasament
-        with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", gp.STRUCTURA_CUNOSCUTA + (TOKEN_FILE_R3.split(":", 1)[1], TOKEN_FILE_R4.split(":", 1)[1])):
-            self.assertEqual(self.an(pagina_calibrare("i"))["necunoscute_detalii"], [TOKEN_FILE_R4])
-            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_calibrare("i"))), ("ciorna_necunoscuta", []))
+            self.assertEqual(self.an(pagina_calibrare(stare, atribut_file=ATRIBUT_FILE_IPOTETIC))["necunoscute_detalii"], [TOKEN_FILE_IPOTETIC], msg=stare)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_calibrare(stare, atribut_file=ATRIBUT_FILE_IPOTETIC))), ("ciorna_necunoscuta", []), msg=stare)
 
     def test_starea_iii_textul_workspace(self):
         # P2: textul intreg (copiat din pagina reala) e in TEXTE_CUNOSCUTE exact; fara el starea (iii) ar fi refuzata DOAR pe text:
-        i = self.an(pagina_calibrare("iii", atribut_file=""))
+        i = self.an(pagina_calibrare("iii"))
         self.assertEqual(i["necunoscute"], 0, msg=i["necunoscute_detalii"])
         self.assertIn(gp._ascii(AVERTISMENT_TEXT), gp.TEXTE_CUNOSCUTE)
         self.assertEqual(gp._ascii(AVERTISMENT_TEXT), "chaturile gazpet.ro nu sunt folosite pentru a ne imbunatati modelele. gemini este un ai "
                          "si poate sa faca greseli, inclusiv in legatura cu persoane.")
         fara = tuple(x for x in gp.TEXTE_CUNOSCUTE if x != gp._ascii(AVERTISMENT_TEXT))
         with mock.patch.object(gp, "TEXTE_CUNOSCUTE", fara):
-            i = self.an(pagina_calibrare("iii", atribut_file=""))
+            i = self.an(pagina_calibrare("iii"))
             self.assertEqual(i["necunoscute_detalii"], ["text:" + gp._ascii(AVERTISMENT_TEXT)])
-            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_calibrare("iii", atribut_file=""))), ("ciorna_necunoscuta", []))
+            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_calibrare("iii"))), ("ciorna_necunoscuta", []))
         # un text care contine IN PLUS un nume de fisier (sau un cuvant de atasament) ramane refuzat, chiar daca ar fi in lista
         for plus, m in ((" Vezi oferta.pdf", "text_fisier:"), (" Fisier atasat.", "text_atasament:"), (" (preview)", "text_atasament:")):
-            html = pagina_calibrare("iii", atribut_file="").replace(AVERTISMENT_TEXT, AVERTISMENT_TEXT + plus)
+            html = pagina_calibrare("iii").replace(AVERTISMENT_TEXT, AVERTISMENT_TEXT + plus)
             i = self.an(html)
             self.assertEqual(i["necunoscute"], 1, msg=plus)
             self.assertTrue(i["necunoscute_detalii"][0].startswith(m + "chaturile gazpet.ro"), msg=i["necunoscute_detalii"])
@@ -1035,12 +1052,12 @@ class TestCalibrare(unittest.TestCase):
                 self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=plus)
         # textul tot ar fi "fisier" fara regula domeniului: mutantul refuza chiar si cu textul in lista (refuz fals permanent)
         mut = mutant([("        if a[i:j] in DOMENII_FIRMA:", "        if False:")])
-        self.assertTrue(self.an(pagina_calibrare("iii", atribut_file=""), mut)["necunoscute_detalii"][0].startswith("text_fisier:chaturile gazpet.ro"))
+        self.assertTrue(self.an(pagina_calibrare("iii"), mut)["necunoscute_detalii"][0].startswith("text_fisier:chaturile gazpet.ro"))
 
     def test_stare_afiseaza_textul_intreg(self):
         fara = tuple(x for x in gp.TEXTE_CUNOSCUTE if x != gp._ascii(AVERTISMENT_TEXT))
         with mock.patch.object(gp, "TEXTE_CUNOSCUTE", fara):
-            pg = FakePg(pagina_calibrare("iii", atribut_file=""))
+            pg = FakePg(pagina_calibrare("iii"))
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 gp.stare(pg)
@@ -1048,23 +1065,29 @@ class TestCalibrare(unittest.TestCase):
         self.assertIn("necunoscute in zona: 1", linii)
         self.assertIn("  necunoscut text:" + gp._ascii(AVERTISMENT_TEXT), linii)
         self.assertTrue(any(l.startswith("paza ciorna: REFUZ ciorna_necunoscuta") for l in linii), linii)
-        # cu listele livrate, `stare` pe starea (i) reala (cu atributul) arata exact linia token_file cu atributul
+        # r5: cu listele livrate si regula marcajului, `stare` pe starea (i) reala (atributele reale) = 0 necunoscute, paza OK;
+        # fara regula marcajului (= r4) arata exact linia token_file cu numele atributelor
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
+            gp.stare(FakePg(pagina_calibrare("i")))
+        self.assertIn("necunoscute in zona: 0", out.getvalue().splitlines())
+        self.assertIn("paza ciorna: OK (trimite ar continua)", out.getvalue().splitlines())
+        out = io.StringIO()
+        with mock.patch.multiple(gp, **FARA_MARCAJ), contextlib.redirect_stdout(out):
             gp.stare(FakePg(pagina_calibrare("i")))
         self.assertIn("  necunoscut " + TOKEN_FILE_R4, out.getvalue().splitlines())
 
     def test_token_file_vine_din_atribut_nu_din_clasa(self):
-        # clasa "text-input-field simplified-input-area" nu contine "file" (nici "simplified", nici "field"); fara atributul
-        # ipotetic div-ul e neutru si nu apare deloc; cu el apare linia token_file, cu numele atributului (r4), si NU se poate
+        # clasa "text-input-field simplified-input-area" nu contine "file" (nici "simplified", nici "field"); fara atribut div-ul e
+        # neutru si nu apare deloc; cu un atribut cu "file" in nume apare linia token_file, cu numele atributului (r4), si NU se poate
         # accepta prin nicio lista; alta clasa / id / data-* / alt tag = tot refuz; continutul lui se verifica in continuare
         self.assertNotIn("file", "text-input-field simplified-input-area")
         div = '<div class="text-input-field ng-tns-c12-3 simplified-input-area"%s></div>'
         with mock.patch.multiple(gp, **LISTE_GOALE):
             self.assertEqual(self.an(zona_cu(div % ""))["necunoscute"], 0)
-            self.assertEqual(self.an(zona_cu(div % ATRIBUT_FILE_IPOTETIC))["necunoscute_detalii"], [TOKEN_FILE_R4])
+            self.assertEqual(self.an(zona_cu(div % ATRIBUT_FILE_IPOTETIC))["necunoscute_detalii"], [TOKEN_FILE_IPOTETIC])
         self.assertEqual(self.an(zona_cu(div % ""))["necunoscute"], 0)
-        self.assertEqual(self.an(zona_cu(div % ATRIBUT_FILE_IPOTETIC))["necunoscute_detalii"], [TOKEN_FILE_R4])
+        self.assertEqual(self.an(zona_cu(div % ATRIBUT_FILE_IPOTETIC))["necunoscute_detalii"], [TOKEN_FILE_IPOTETIC])
         for alt, m in ((div.replace("simplified-input-area", "simplified-input-area-v2") % ATRIBUT_FILE_IPOTETIC,
                         "token_file:div{text-input-field simplified-input-area-v2 filedroptarget}"),
                        (div.replace('class="', 'id="z" class="') % ATRIBUT_FILE_IPOTETIC,
@@ -1080,11 +1103,12 @@ class TestCalibrare(unittest.TestCase):
             self.assertEqual(self.an(zona_cu(alt))["necunoscute_detalii"], [m], msg=alt)
         for inauntru, m in (("<span>a.txt</span>", "text_fisier:a.txt"), ('<img src="x">', "media:img[src]"),
                             ("<attachment-card></attachment-card>", "element:attachment-card"), (chip("a.txt"), None)):
-            i = self.an(zona_cu(div.replace("></div>", ">" + inauntru + "</div>") % ""))
-            if m is None:
-                self.assertEqual(i["atasamente"], 1, msg=inauntru)      # chip-ul din invelis se numara ca fisier
-            else:
-                self.assertEqual(i["necunoscute_detalii"], [m], msg=inauntru)
+            for atribute in ("", ATRIBUTE_DIV_REALE):                    # r5: si cu marcajul real, continutul div-ului se verifica
+                i = self.an(zona_cu(div.replace("></div>", ">" + inauntru + "</div>") % atribute))
+                if m is None:
+                    self.assertEqual(i["atasamente"], 1, msg=inauntru)      # chip-ul din invelis se numara ca fisier
+                else:
+                    self.assertEqual(i["necunoscute_detalii"], [m], msg=inauntru)
 
     def test_controalele_calibrate_nu_acopera_atasamente(self):
         # un control din lista cu continut de fisier / un invelis din lista cu un buton Remove = tot refuz
@@ -1200,14 +1224,17 @@ class TestSemnaleInainteDeListe(unittest.TestCase):
         self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(editor=ed))), ("ciorna_necunoscuta", []))
 
     def test_url_urile_nu_sunt_nume_de_fisier_dar_cuvintele_raman(self):
-        # href-ul linkului real contine "support.google.com" (ar fi "fisier" dupa regex): valorile URL se verifica doar pe cuvinte
+        # r5: href-ul linkului real sta pe un host Google (ar fi "fisier" dupa regex): DOAR hostname-ul unui http(s) pe google.com e
+        # exceptat; cuvintele se verifica pe tot URL-ul, numele de fisier pe tot ce nu e gazda (cazurile r5 complete: TestNumeFisierPesteTot)
         a = '<a data-test-id="footer-privacy-notice-link" href="%s"></a>'
         self.assertEqual(self.an(zona_cu(a % "https://support.google.com/gemini/answer/13594961?hl=ro"))["necunoscute"], 0)
         self.assertEqual(self.an(zona_cu(a % "https://x.ro/download/oferta.pdf"))["necunoscute_detalii"],
                          ["token_pdf:a[data-test-id=footer-privacy-notice-link][href]{}"])
         self.assertEqual(self.an(zona_cu(a % "https://x.ro/uploads/1"))["necunoscute_detalii"],
                          ["token_upload:a[data-test-id=footer-privacy-notice-link][href]{}"])
-        self.assertEqual(gp.URL_ATRIBUTE, ("href", "src", "srcset"))
+        self.assertEqual(self.an(zona_cu(a % "https://x.ro/download/oferta.docx"))["necunoscute_detalii"],
+                         ["atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"])
+        self.assertEqual(gp.HREF_GAZDE_FARA_FISIER, ("google.com",))
 
     def test_eticheta_permite_doar_cuvintele_de_incarcare(self):
         # scris de mana: butonul calibrat "Incarcare si instrumente" trece; orice alt cuvant de atasament in eticheta = refuz
@@ -1265,7 +1292,7 @@ class TestSemnaleInainteDeListe(unittest.TestCase):
     def test_mutant_fara_valorile_atributelor(self):
         # mutant: valorile atributelor din afara semnaturii nu se mai verifica -> gem-icon data-x="oferta.pdf" din lista pleaca
         extra = SEMNALE["gem_icon_valoare_fisier"][0]
-        mut = mutant([("        if k in ATRIBUTE_SEPARATE or k in SEMN_ATR_VALOARE or not v:", "        if True:")])
+        mut = mutant([("        if k in ATRIBUTE_AFISATE_SEPARAT or k in SEMN_ATR_VALOARE or not v:", "        if True:")])
         self.assertIsNone(ruleaza_trimite(mut, FakePg(zona_cu(extra)))[0])
         self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra))), ("ciorna_necunoscuta", []))
 
@@ -1321,6 +1348,246 @@ class TestDomeniulFirmei(unittest.TestCase):
         mut2 = mutant([("        while j < len(a) and a[j] in CARACTERE_NUME:", "        while False:")])
         with mock.patch.object(mut2, "TEXTE_CUNOSCUTE", ("gazpet.ro.docx",)):
             self.assertIsNone(ruleaza_trimite(mut2, FakePg(zona_cu(extra)))[0])
+
+
+# --- v4.6.4 r5 (Jakarinos NO-GO pe 86f6ff72, P1): nume.extensie in TOATE valorile (clase, id, URL-uri, style) ---
+# cele patru reproduceri din verdict, copiate exact (pe 86f6ff72: atasamente 0, semne 0, necunoscute 0 -> press Enter)
+REPRO_R5 = {
+    "clasa": ('<gem-icon class="oferta.docx"></gem-icon>', "atribut_fisier:gem-icon{oferta.docx}"),
+    "id": ('<gem-icon id="oferta.docx"></gem-icon>', "atribut_fisier:gem-icon{#oferta.docx}"),
+    "href_blob": ('<a data-test-id="footer-privacy-notice-link"\n   href="blob:https://gemini.google.com/oferta.docx"></a>',
+                  "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "style": ('<gem-icon style="--x: oferta.pdf"></gem-icon>', "token_pdf:gem-icon{style}"),   # "pdf" e si cuvant de atasament
+}
+LINK = '<a data-test-id="footer-privacy-notice-link" href="%s"></a>'
+# variante (asteptat scris de mana): fiecare = un nume.extensie intr-o valoare pe care r4 nu o verifica, pe elemente din liste / neutre
+NUME_PESTE_TOT = {
+    "clasa_intre_altele": ('<gem-icon class="ng-star-inserted icon oferta.docx"></gem-icon>', "atribut_fisier:gem-icon{icon oferta.docx}"),
+    "clasa_div_neutru": ('<div class="a.txt"></div>', "atribut_fisier:div{a.txt}"),
+    "id_pe_control": ('<button aria-label="Trimite mesajul" id="oferta.docx"></button>', "atribut_fisier:button[aria-label=trimite mesajul]{#oferta.docx}"),
+    "href_host_fisier": (LINK % "https://oferta.docx/", "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "href_google_cale": (LINK % "https://support.google.com/x/oferta.docx", "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "href_google_interogare": (LINK % "https://support.google.com/gemini?f=oferta.docx", "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "href_google_fragment": (LINK % "https://support.google.com/gemini#oferta.docx", "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "href_google_utilizator": (LINK % "https://oferta.docx@support.google.com/", "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "href_host_fals_sufix": (LINK % "https://google.com.evil.ro/", "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "href_host_fals_prefix": (LINK % "https://support.google.com.evil.ro/", "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "href_host_fals_lipit": (LINK % "https://evilgoogle.com/", "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "href_blob_uuid": (LINK % "blob:https://gemini.google.com/4f3a0b2c-1d2e-4f5a-8b9c-0d1e2f3a4b5c",
+                       "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "href_fara_schema": (LINK % "//gemini.google.com/x", "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "href_alt_host": (LINK % "https://x.ro/", "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "src_host": ('<gem-icon src="https://lh3.googleusercontent.com/a"></gem-icon>', "atribut_fisier:gem-icon[src]{}"),   # src: fara exceptie
+    "src_fisier": ('<gem-icon src="x.svg"></gem-icon>', "atribut_fisier:gem-icon[src]{}"),
+    "srcset": ('<gem-icon srcset="a.webp 1x, b.webp 2x"></gem-icon>', "atribut_fisier:gem-icon[srcset]{}"),
+    "style_docx": ('<gem-icon style="--x: oferta.docx"></gem-icon>', "atribut_fisier:gem-icon{style}"),
+    "style_pe_control": ('<button aria-label="Trimite mesajul" style="color: red; --f: raport.docx"></button>',
+                         "atribut_fisier:button[aria-label=trimite mesajul]{style}"),
+    "style_cuvant": ('<gem-icon style="--chip-color: red"></gem-icon>', "token_chip:gem-icon{style}"),
+    "style_pe_structura": ('<toolbox-drawer style="--x: a.txt"></toolbox-drawer>', "atribut_fisier:toolbox-drawer{style}"),
+    "style_in_editor": (None, "semnal_in_editor:atribut_fisier:span{style}"),
+}
+# calea legitima (L20): URL-uri si stiluri FARA nume de fisier pe elementele calibrate trec (0 necunoscute)
+CURATE_R5 = (
+    LINK % "https://support.google.com/gemini?p=privacy_notice",
+    LINK % "https://support.google.com/gemini/answer/13594961?hl=ro",
+    LINK % "https://policies.google.com/privacy?hl=ro",
+    LINK % "https://gemini.google.com/",
+    LINK % "https://support.google.com/gemini/answer/13594961?hl=ro&co=GENIE.Platform%3DDesktop#zippy=",
+    '<gem-icon style="width: 24px; --mat-icon-color: red"></gem-icon>',
+    '<gem-icon class="ng-star-inserted mat-icon-no-color"></gem-icon>',
+    '<toolbox-drawer style="display: none"></toolbox-drawer>',
+)
+
+
+class TestNumeFisierPesteTot(unittest.TestCase):
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def nod(self, html):
+        a = gp._Arbore()
+        a.feed(html)
+        return a.radacina.copii[0]
+
+    def test_cele_patru_reproduceri_din_verdict_refuzate_fara_actiuni(self):
+        for k, (extra, m) in sorted(REPRO_R5.items()):
+            i = self.an(zona_cu(extra))
+            self.assertEqual((i["atasamente"], i["semne"]), (0, 0), msg=k)             # ce a gasit Jakarinos: 0 / 0 ...
+            self.assertEqual(i["necunoscute_detalii"], [m], msg=k)                         # ... dar acum un necunoscut
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra))), ("ciorna_necunoscuta", []), msg=k)
+        # style cu url( ramane "fundal:" (verificat inaintea semnalului), ca inainte
+        self.assertEqual(self.an(zona_cu('<gem-icon style="background: url(blob:x)"></gem-icon>'))["necunoscute_detalii"], ["fundal:gem-icon"])
+
+    def test_fiecare_varianta_refuzata_oricare_ar_fi_lista(self):
+        semnaturi = tuple(gp._semnatura(self.nod(extra)) for extra, _ in NUME_PESTE_TOT.values() if extra is not None)
+        with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", gp.CONTROALE_CUNOSCUTE + semnaturi):
+            for k, (extra, m) in sorted(NUME_PESTE_TOT.items()):
+                if extra is None:
+                    html = zona_cu(editor=EDITOR_HTML.replace("<p>ciorna</p>", '<p>ciorna<span style="--x: a.txt"></span></p>'))
+                else:
+                    html = zona_cu(extra)
+                i = self.an(html)
+                self.assertEqual((i["atasamente"], i["semne"]), (0, 0), msg=k)
+                self.assertEqual(i["necunoscute_detalii"], [m], msg=k)
+                self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=k)
+        for extra in CURATE_R5:
+            i = self.an(zona_cu(extra))
+            self.assertEqual(i["necunoscute"], 0, msg=(extra, i["necunoscute_detalii"]))
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra), dupa_goto=zona_cu(extra))), (None, ACTIUNI_TRIMITERE), msg=extra)
+
+    def test_exceptia_href_e_doar_gazda_google_a_unui_http(self):
+        # scris de mana: ce ramane de verificat dupa scoaterea gazdei; orice alt caz = textul intreg al valorii
+        f = gp._fara_gazda_permisa
+        self.assertEqual(f("href", "https://support.google.com/gemini?p=privacy_notice"), "https /gemini p=privacy_notice")
+        self.assertEqual(f("href", "https://support.google.com/x/oferta.docx"), "https /x/oferta.docx")
+        self.assertEqual(f("href", "https://Support.GOOGLE.com/"), "https /")
+        for k, v in (("href", "https://oferta.docx/"), ("href", "https://google.com.evil.ro/"), ("href", "https://evilgoogle.com/"),
+                     ("href", "blob:https://gemini.google.com/oferta.docx"), ("href", "//gemini.google.com/x"), ("href", "ftp://google.com/"),
+                     ("href", "javascript:void(0)"), ("href", "/x"), ("src", "https://google.com/a.png"), ("srcset", "https://google.com/a.png 1x"),
+                     ("style", "--x: google.com"), ("data-x", "https://google.com/")):
+            self.assertEqual(f(k, v), gp._ascii(v), msg=(k, v))
+        self.assertTrue(gp._gazda_permisa("google.com") and gp._gazda_permisa("support.google.com") and gp._gazda_permisa("a.b.google.com"))
+        for g in ("google.com.evil.ro", "evilgoogle.com", "google.co", "gazpet.ro", "", "google.com."):
+            self.assertFalse(gp._gazda_permisa(g), g)
+
+    def test_mutanti_r5_lasa_brief_ul_sa_plece(self):
+        # fiecare mutant readuce o lacuna din 86f6ff72 (sau o slabeste); scenariul lui pleaca la Enter pe mutant si e refuzat pe cod
+        cazuri = (
+            # clasele / id-ul nu se mai cauta dupa nume.extensie (r4): reproducerile "clasa" si "id"
+            ([("    if _nume_fisier(clase_id) is not None:", "    if False:")], (REPRO_R5["clasa"][0], REPRO_R5["id"][0])),
+            # valorile URL exceptate in intregime de la nume.extensie (r4): href blob si src
+            ([("        if _nume_fisier(_fara_gazda_permisa(k, v)) is not None:",
+               '        if k not in ("href", "src", "srcset") and _nume_fisier(a) is not None:')],
+             (REPRO_R5["href_blob"][0], NUME_PESTE_TOT["href_blob_uuid"][0], NUME_PESTE_TOT["href_alt_host"][0],
+              LINK % "https://x.ro/download/oferta.docx")),       # (gem-icon[src] e refuzat si pe mutant ca element necunoscut: nu discrimineaza)
+            # style sarit (r4: doar url( ): reproducerea "style" si varianta .docx
+            ([("        if k in ATRIBUTE_AFISATE_SEPARAT or k in SEMN_ATR_VALOARE or not v:",
+               '        if k in ATRIBUTE_AFISATE_SEPARAT + ("style",) or k in SEMN_ATR_VALOARE or not v:')],
+             (REPRO_R5["style"][0], NUME_PESTE_TOT["style_docx"][0])),
+            # exceptia gazdei largita la tot URL-ul: un nume de fisier in calea unui host Google pleaca
+            ([('    return _ascii(" ".join([u.scheme, u.username or "", u.password or "", u.path, u.params, u.query, u.fragment]))',
+               '    return ""')], (NUME_PESTE_TOT["href_google_cale"][0], NUME_PESTE_TOT["href_google_interogare"][0])),
+            # gazda cautata ca SUBSIR (nu egalitate / sufix cu punct): google.com.evil.ro ar fi "Google"
+            ([('    return any(gazda == d or gazda.endswith("." + d) for d in HREF_GAZDE_FARA_FISIER)',
+               "    return any(d in gazda for d in HREF_GAZDE_FARA_FISIER)")],
+             (NUME_PESTE_TOT["href_host_fals_sufix"][0], NUME_PESTE_TOT["href_host_fals_lipit"][0])),
+            # fara conditia de schema http(s): un URL relativ la protocol pe un host Google ar fi exceptat
+            ([('    if u.scheme not in ("http", "https") or not gazda or not _gazda_permisa(gazda):',
+               "    if not gazda or not _gazda_permisa(gazda):")], (NUME_PESTE_TOT["href_fara_schema"][0],)),
+        )
+        for inlocuiri, extre in cazuri:
+            mut = mutant(inlocuiri)
+            for extra in extre:
+                self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra))), ("ciorna_necunoscuta", []), msg=extra)
+                cod_m, act_m = ruleaza_trimite(mut, FakePg(zona_cu(extra)))
+                self.assertIsNone(cod_m, msg=(inlocuiri[0][1], extra, cod_m))
+                self.assertIn("press Enter", act_m, msg=extra)
+
+
+# --- v4.6.4 r5: sursa reala a liniei token_file = atributul `xapfileselectordropzone=""` (marcaj gol de zona drop), acceptat EXACT ---
+DIV_REAL = '<div _ngcontent-ng-c1694197906="" xapfileselectordropzone="" class="text-input-field simplified-input-area" jslog="303810;track:impression">%s</div>'
+DIV_FARA_NG = '<div class="text-input-field simplified-input-area"%s></div>'
+TOKEN_MARCAJ = "token_file:div{text-input-field simplified-input-area jslog xapfileselectordropzone}"
+
+
+class TestMarcajDropZone(unittest.TestCase):
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def test_div_ul_real_trece_si_continutul_lui_se_verifica(self):
+        # exact atributele citite din pagina (ordinea din token_file_atribute.txt), gol sau cu structura calibrata inauntru
+        for inauntru in ("", "<simplified-input-menu></simplified-input-menu><toolbox-drawer></toolbox-drawer>"):
+            i = self.an(zona_cu(DIV_REAL % inauntru))
+            self.assertEqual((i["necunoscute"], i["atasamente"], i["semne"]), (0, 0, 0), msg=i["necunoscute_detalii"])
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(DIV_REAL % inauntru), dupa_goto=zona_cu(DIV_REAL % inauntru))), (None, ACTIUNI_TRIMITERE))
+        # marcajul nu "acopera" nimic din interior: fisier / card / text / chip in div = refuz sau numarat, ca inainte
+        for inauntru, m in (("<span>a.txt</span>", "text_fisier:a.txt"), ("<attachment-card></attachment-card>", "element:attachment-card"),
+                            ('<div data-file-id="1"></div>', "token_file:div{data-file-id}"), ("<span>Deep Research</span>", "text:deep research")):
+            self.assertEqual(self.an(zona_cu(DIV_REAL % inauntru))["necunoscute_detalii"], [m], msg=inauntru)
+        self.assertEqual(self.an(zona_cu(DIV_REAL % chip("a.txt")))["atasamente"], 1)
+
+    def test_orice_abatere_de_la_marcaj_e_refuzata(self):
+        # scris de mana: valoare nevida, alt element, alte clase, alt nume (prefix / sufix / subsir), alt atribut cu "file" alaturi
+        cazuri = (
+            (DIV_FARA_NG % ' xapfileselectordropzone="1"', TOKEN_MARCAJ.replace(" jslog", "")),
+            (DIV_FARA_NG % ' xapfileselectordropzone="oferta.docx"', TOKEN_MARCAJ.replace(" jslog", "")),
+            (DIV_FARA_NG % ' xapfileselectordropzone="true"', TOKEN_MARCAJ.replace(" jslog", "")),
+            (DIV_REAL.replace('xapfileselectordropzone=""', 'xapfileselectordropzone=" "') % "", TOKEN_MARCAJ),
+            ('<gem-icon xapfileselectordropzone=""></gem-icon>', "token_file:gem-icon{xapfileselectordropzone}"),
+            ('<span class="text-input-field simplified-input-area" xapfileselectordropzone=""></span>',
+             "token_file:span{text-input-field simplified-input-area xapfileselectordropzone}"),
+            ('<fieldset role="none" xapfileselectordropzone=""></fieldset>', "token_file:fieldset[role=none]{xapfileselectordropzone}"),
+            ('<rich-textarea xapfileselectordropzone=""></rich-textarea>', "token_file:rich-textarea{xapfileselectordropzone}"),
+            ('<toolbox-drawer xapfileselectordropzone=""></toolbox-drawer>', "token_file:toolbox-drawer{xapfileselectordropzone}"),
+            ('<button aria-label="Trimite mesajul" xapfileselectordropzone=""></button>',
+             "token_file:button[aria-label=trimite mesajul]{xapfileselectordropzone}"),
+            ('<div xapfileselectordropzone=""></div>', "token_file:div{xapfileselectordropzone}"),
+            ('<div class="text-input-field" xapfileselectordropzone=""></div>', "token_file:div{text-input-field xapfileselectordropzone}"),
+            ('<div class="simplified-input-area" xapfileselectordropzone=""></div>', "token_file:div{simplified-input-area xapfileselectordropzone}"),
+            ('<div class="text-input-field simplified-input-area extra" xapfileselectordropzone=""></div>',
+             "token_file:div{text-input-field simplified-input-area extra xapfileselectordropzone}"),
+            ('<div class="text-input-field simplified-input-area-v2" xapfileselectordropzone=""></div>',
+             "token_file:div{text-input-field simplified-input-area-v2 xapfileselectordropzone}"),
+            (DIV_FARA_NG % ' xapfileselectordropzones=""', "token_file:div{text-input-field simplified-input-area xapfileselectordropzones}"),
+            (DIV_FARA_NG % ' xapfileselectordropzone2=""', "token_file:div{text-input-field simplified-input-area xapfileselectordropzone2}"),
+            (DIV_FARA_NG % ' xxapfileselectordropzone=""', "token_file:div{text-input-field simplified-input-area xxapfileselectordropzone}"),
+            (DIV_FARA_NG % ' xapfileselectordropzone-x=""', "token_file:div{text-input-field simplified-input-area xapfileselectordropzone-x}"),
+            (DIV_FARA_NG % ' data-xapfileselectordropzone=""', "token_file:div{text-input-field simplified-input-area data-xapfileselectordropzone}"),
+            (DIV_FARA_NG % ' xapfileselectordropzone="" data-file-id="1"',
+             "token_file:div{text-input-field simplified-input-area data-file-id xapfileselectordropzone}"),
+            (DIV_FARA_NG % ' xapfileselectordropzone="" filedroptarget=""',
+             "token_file:div{text-input-field simplified-input-area filedroptarget xapfileselectordropzone}"),
+            (DIV_FARA_NG % ' xapfileselectordropzone="" removeattachment=""',
+             "token_attach:div{text-input-field simplified-input-area removeattachment xapfileselectordropzone}"),
+            (DIV_FARA_NG % ' xapfileselectordropzone="" data-x="oferta.docx"',
+             "atribut_fisier:div{text-input-field simplified-input-area data-x xapfileselectordropzone}"),
+        )
+        for extra, m in cazuri:
+            i = self.an(zona_cu(extra))
+            self.assertEqual(i["necunoscute_detalii"], [m], msg=extra)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra))), ("ciorna_necunoscuta", []), msg=extra)
+        # in editor: nici editorul, nici un element din el nu poate purta marcajul
+        ed = EDITOR_HTML.replace('contenteditable="true"', 'contenteditable="true" xapfileselectordropzone=""')
+        self.assertEqual(self.an(zona_cu(editor=ed))["necunoscute_detalii"],
+                         ["semnal_in_editor:token_file:div[role=textbox][contenteditable]{ql-editor textarea xapfileselectordropzone}"])
+        # nicio lista alba nu-l poate accepta (P1 r4): semnatura exacta a abaterii in STRUCTURA / CONTROALE = tot refuz
+        with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", gp.STRUCTURA_CUNOSCUTA + ("gem-icon", "div", TOKEN_MARCAJ.split(":", 1)[1])), \
+                mock.patch.object(gp, "CONTROALE_CUNOSCUTE", gp.CONTROALE_CUNOSCUTE + ("button[aria-label=trimite mesajul]",)):
+            for extra, m in cazuri:
+                self.assertEqual(self.an(zona_cu(extra))["necunoscute_detalii"], [m], msg=extra)
+
+    def test_stare_arata_abaterea(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            gp.stare(FakePg(zona_cu(DIV_FARA_NG % ' xapfileselectordropzone="1"')))
+        linii = out.getvalue().splitlines()
+        self.assertIn("necunoscute in zona: 1", linii)
+        self.assertIn("  necunoscut " + TOKEN_MARCAJ.replace(" jslog", ""), linii)
+
+    def test_mutanti_marcaj_lasa_brief_ul_sa_plece(self):
+        cazuri = (
+            # fara conditia de valoare goala: o valoare nevida pe marcaj pleaca
+            ([('        if n.attrs.get(k) != "":', "        if False:")], (DIV_FARA_NG % ' xapfileselectordropzone="1"',)),
+            # fara conditia de element: acelasi atribut pe gem-icon / span / fieldset pleaca
+            ([("        if n.tag != tag or set(c for c in _clase(n) if not _generat(c)) != set(clase):", "        if False:")],
+             ('<gem-icon xapfileselectordropzone=""></gem-icon>', '<fieldset role="none" xapfileselectordropzone=""></fieldset>',
+              '<div class="text-input-field" xapfileselectordropzone=""></div>')),
+            # numele comparat ca prefix, nu exact: un atribut cu sufix pleaca
+            ([("        if k != nume:", "        if not k.startswith(nume):")], (DIV_FARA_NG % ' xapfileselectordropzone2=""',)),
+            # acceptare GLOBALA a lui "file" (ce interzice brief-ul): orice data-file-* pleaca
+            ([('TOKENI_ATAS = ("file", "fisier",', 'TOKENI_ATAS = ("fisier",')], ('<gem-icon data-file-name="oferta"></gem-icon>',)),
+        )
+        for inlocuiri, extre in cazuri:
+            mut = mutant(inlocuiri)
+            for extra in extre:
+                self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra))), ("ciorna_necunoscuta", []), msg=extra)
+                cod_m, act_m = ruleaza_trimite(mut, FakePg(zona_cu(extra)))
+                self.assertIsNone(cod_m, msg=(inlocuiri[0][1], extra, cod_m))
+                self.assertIn("press Enter", act_m, msg=extra)
+        # mutantul cu TOKENI_ATAS fara "file" inca refuza div-ul real? NU e nevoie: pe cod div-ul real trece prin regula marcajului,
+        # nu prin lipsa cuvantului - verificat: fara regula (FARA_MARCAJ), div-ul real e refuzat pe cod
+        with mock.patch.multiple(gp, **FARA_MARCAJ):
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(DIV_REAL % ""))), ("ciorna_necunoscuta", []))
 
 
 if __name__ == "__main__":

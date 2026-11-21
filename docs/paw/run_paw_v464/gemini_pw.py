@@ -40,6 +40,16 @@
 #   de atasament (token_...) nu mai poate fi trecut in STRUCTURA: intrarea `div{text-input-field simplified-input-area}` a fost
 #   scoasa (sursa cuvantului "file" - un atribut al div-ului real - nu e cunoscuta; `stare` afiseaza acum si numele atributelor).
 #   P2: textul integral al avertismentului Workspace (citit de chat pe 21.11.2026) e in TEXTE_CUNOSCUTE -> chatul existent trece.
+# v4.6.4 r5 (Jakarinos NO-GO pe 86f6ff72, P1): nume.extensie se cauta acum in TOATE valorile unui element - clase, id, orice atribut,
+#   URL-uri (href / src / srcset, si blob:) si style - nu doar in valorile "obisnuite" (r4 sarea clasele / id-ul, URL-urile si style).
+#   Singura exceptie, inchisa si testata: intr-un `href` cu schema http(s) a carui gazda e EXACT un host Google (HREF_GAZDE_FARA_FISIER;
+#   linkul calibrat "Confidentialitatea ta si Gemini" sta pe google.com), hostname-ul nu e fisier; restul URL-ului se verifica integral.
+#   Orice alt URL (blob:, data:, alt host, src / srcset) si orice style se verifica ca text intreg: un nume.extensie = refuz.
+#   token_file: sursa reala a cuvantului "file" pe div-ul editorului (citita de chat din pagina reala, 21.11.2026, doar citire) e NUMELE
+#   atributului `xapfileselectordropzone` (marcajul zonei de drop al selectorului de fisiere, cu valoare GOALA), alaturi de
+#   `_ngcontent-ng-c<numar>=""`, `class="text-input-field simplified-input-area"` si `jslog="303810;track:impression"`. Acceptat EXACT
+#   atat (MARCAJE_GOALE_PERMISE): acel nume, doar cu valoare goala, doar pe div-ul cu exact acele doua clase; orice valoare nevida, alt
+#   nume cu "file" (si cu prefix / sufix), alt tag sau alte clase = refuz in continuare. Nicio acceptare globala a lui "file".
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata
@@ -96,8 +106,17 @@ TOKENI_ELIMINA = ("remove", "elimin", "terge", "delete")     # eticheta unui but
 # eticheta = refuz, oricare ar fi lista alba ("eticheta:"). "terge" = sterge cu / fara diacritice (ca in TOKENI_ELIMINA).
 TOKENI_ETICHETA_PERMISE = ("upload", "incarca")
 TOKENI_ETICHETA_INTERZISA = tuple(t for t in TOKENI_ATAS if t not in TOKENI_ETICHETA_PERMISE) + ("terge",)
-URL_ATRIBUTE = ("href", "src", "srcset")                     # valori URL: orice URL contine "domeniu.tld" -> doar cuvinte, nu nume.extensie
-ATRIBUTE_SEPARATE = ("class", "id", "style")                 # verificate separat (clase / id / fundal url(); nu intra in {...})
+# r5: nume.extensie se cauta in TOATE valorile (clase, id, orice atribut, URL-uri, style). Un URL contine "domeniu.tld", care dupa RE_FISIER
+# e un nume.extensie; singura exceptie e INCHISA: in `href` cu schema http / https, hostname-ul EXACT (nu si calea / interogarea /
+# fragmentul) nu e fisier DACA e unul din hosturile de mai jos sau un subdomeniu al lor (linkul calibrat de confidentialitate sta pe
+# google.com). Orice alt URL (blob:, data:, alt host) sau atribut (src, srcset, style, data-*) se verifica ca text intreg = refuz.
+HREF_GAZDE_FARA_FISIER = ("google.com",)                     # lista INCHISA, constanta in cod: hostname == intrare sau se termina cu ".intrare"
+ATRIBUTE_AFISATE_SEPARAT = ("class", "id")                   # afisate in {...} ca "clase #id", nu ca nume de atribut; valorile lor verificate separat
+# r5: marcaje de atribut cu cuvant de atasament in NUME care NU sunt fisiere - lista INCHISA, citita din pagina reala (chat, 21.11.2026,
+# doar citire): `div.text-input-field.simplified-input-area` are atributele `_ngcontent-ng-c<numar>=""`, `xapfileselectordropzone=""`,
+# `class=...`, `jslog=...`; cuvantul "file" vine din NUMELE `xapfileselectordropzone` (zona de drop a selectorului de fisiere, nu un fisier).
+# (tag, clasele EXACTE ale elementului fara cele generate, numele atributului): acceptat DOAR cu valoare goala, doar pe acest element.
+MARCAJE_GOALE_PERMISE = (("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone"),)
 RE_FISIER = re.compile(r"(?<![a-z0-9])[a-z0-9][a-z0-9_-]*\.[a-z][a-z0-9]{0,4}(?![a-z0-9])")   # nume.extensie in text
 # r3: un cuvant care e EXACT un domeniu al firmei nu e fisier (textul de confidentialitate Workspace: "Chaturile gazpet.ro nu
 # sunt folosite ..."). Cuvantul = potrivirea RE_FISIER extinsa peste toate caracterele de nume de fisier din jur, deci
@@ -118,6 +137,8 @@ MODEL_DATA_TEST = "bard-mode-menu-button"                     # butonul modelulu
 # `token_file:div{text-input-field simplified-input-area}`: un element cu cuvant de atasament nu poate fi acceptat de nicio lista
 # (semnalele se verifica intai); cuvantul vine dintr-un atribut al div-ului real pe care semnatura din r3 nu il afisa - `stare`
 # il afiseaza acum in {...} si decizia se ia dupa citirea lui din pagina (RUNBOOK pasul 0), nu prin acceptare globala.
+# r5: atributul citit din pagina reala = `xapfileselectordropzone=""` -> regula inchisa MARCAJE_GOALE_PERMISE (mai sus), nu o intrare
+# in liste; cu ea div-ul e un element neutru obisnuit, iar continutul lui se verifica in continuare element cu element.
 CONTROALE_CUNOSCUTE = (
     "button[aria-label=deruleaza in jos][type=button][tabindex]",   # i ii iii - "Deruleaza in jos" (in back-to-bottom-fab)
     "button[aria-label=incarcare si instrumente]",                   # i ii iii - butonul "+" care deschide meniul (nu e fisier)
@@ -372,9 +393,9 @@ def _generat(nume):
 
 def _semnatura_token(n):
     # r4: semnatura unui element cu semnal de atasament: + clasele (fara cele generate), id-ul si NUMELE tuturor atributelor din
-    # afara semnaturii (data-*, necunoscute - ex. removeattachment -, fara cele generate), ca sursa cuvantului sa se vada in `stare`
+    # afara semnaturii (data-*, necunoscute - ex. removeattachment -, style, fara cele generate), ca sursa semnalului sa se vada in `stare`
     clase = [c for c in _clase(n) if not _generat(c)]
-    atribute = sorted(k for k in n.attrs if k not in ATRIBUTE_SEPARATE and k not in SEMN_ATR_VALOARE
+    atribute = sorted(k for k in n.attrs if k not in ATRIBUTE_AFISATE_SEPARAT and k not in SEMN_ATR_VALOARE
                       and k not in SEMN_ATR_CHEIE and not _generat(k))
     parti = clase + (["#" + n.attrs["id"]] if n.attrs.get("id") else []) + atribute
     return _semnatura(n) + "{" + _ascii(" ".join(parti))[:80] + "}"
@@ -403,30 +424,73 @@ def _are_eticheta_interzisa(n):
     return _cuvant(t, TOKENI_ETICHETA_INTERZISA) is not None or _nume_fisier(t) is not None
 
 
+def _marcaj_gol_permis(n, k):
+    # r5: atributul k al elementului n e un marcaj din MARCAJE_GOALE_PERMISE: numele EXACT (nu prefix / sufix / subsir), pe tagul
+    # exact, cu clasele (fara cele generate) EXACT cele din lista, si cu valoare GOALA. Doar atunci numele lui nu intra in cautarea
+    # cuvintelor de atasament; valoarea (goala) nu are ce ascunde. Orice abatere = atributul se verifica ca oricare altul (refuz).
+    for tag, clase, nume in MARCAJE_GOALE_PERMISE:
+        if k != nume:
+            continue
+        if n.tag != tag or set(c for c in _clase(n) if not _generat(c)) != set(clase):
+            continue
+        if n.attrs.get(k) != "":
+            continue
+        return True
+    return False
+
+
+def _gazda_permisa(gazda):
+    return any(gazda == d or gazda.endswith("." + d) for d in HREF_GAZDE_FARA_FISIER)
+
+
+def _fara_gazda_permisa(k, v):
+    # r5: valoarea atributului k, ca text ASCII, pentru cautarea nume.extensie. SINGURA exceptie: in `href` cu schema http / https si
+    # gazda (hostname EXACT) din HREF_GAZDE_FARA_FISIER sau subdomeniu al ei, gazda e scoasa (un hostname nu e fisier); schema,
+    # utilizatorul, calea, parametrii, interogarea si fragmentul raman si se verifica integral. Orice alt URL (blob:, data:, alt host,
+    # relativ) sau atribut (src, srcset, style, data-*, necunoscute) = textul intreg.
+    a = _ascii(v)
+    if k != "href":
+        return a
+    try:
+        u = urlparse(v.strip())
+    except Exception:
+        return a
+    gazda = (u.hostname or "").lower()
+    if u.scheme not in ("http", "https") or not gazda or not _gazda_permisa(gazda):
+        return a
+    return _ascii(" ".join([u.scheme, u.username or "", u.password or "", u.path, u.params, u.query, u.fragment]))
+
+
 def _semnal(n):
     """r4 (Jakarinos r3 P1): primul semn de atasament purtat de elementul INSUSI, ca motiv de refuz (sau None). Se verifica
     INAINTEA oricarei acceptari si pe ORICE element (neutru, din listele albe, zona / rich-textarea, butonul modelului, editorul):
     (1) eticheta (atributele cu valoare din semnatura): cuvant interzis sau nume.extensie -> "eticheta:<semnatura>";
     (2) cuvant de atasament in orice clasa, in id sau in NUMELE oricarui atribut (si data-*, si necunoscute: removeattachment)
-        -> "token_<cuvant>:<semnatura>{clase #id atribute}";
-    (3) in VALOAREA oricarui atribut din afara semnaturii (data-*, aria-description, necunoscute): cuvant -> "token_...",
-        nume.extensie -> "atribut_fisier:..."; valorile URL (href, src, srcset) doar pe cuvinte (orice URL contine "domeniu.tld").
+        -> "token_<cuvant>:<semnatura>{clase #id atribute}"; r5: singurul nume exceptat e marcajul gol din MARCAJE_GOALE_PERMISE,
+        doar pe elementul lui (_marcaj_gol_permis);
+    (3) r5: nume.extensie intr-o clasa sau in id -> "atribut_fisier:...";
+    (4) in VALOAREA oricarui atribut din afara semnaturii (data-*, aria-description, necunoscute, style, href / src / srcset):
+        cuvant -> "token_...", nume.extensie -> "atribut_fisier:..."; r5: si in URL-uri si in style, singura exceptie fiind gazda
+        Google a unui href http(s) (_fara_gazda_permisa); blob: / data: / alt host / src / srcset = textul intreg.
     Tagul nu e semnal: el E semnatura, comparata exact cu lista (file-drop-indicator a fost vazut gol de om la calibrare).
     Textele si descendentii elementului se verifica mai departe, element cu element (_motiv_text / _necunoscute)."""
     if _are_eticheta_interzisa(n):
         return "eticheta:" + _semnatura(n)
-    nume = _ascii(" ".join([n.attrs.get("class") or "", n.attrs.get("id") or ""] + list(n.attrs.keys())))
-    t = _cuvant(nume)
+    clase_id = _ascii(" ".join([n.attrs.get("class") or "", n.attrs.get("id") or ""]))
+    nume_atribute = _ascii(" ".join(k for k in n.attrs if not _marcaj_gol_permis(n, k)))
+    t = _cuvant(clase_id + " " + nume_atribute)
     if t:
         return "token_%s:%s" % (t, _semnatura_token(n))
+    if _nume_fisier(clase_id) is not None:
+        return "atribut_fisier:" + _semnatura_token(n)
     for k, v in n.attrs.items():
-        if k in ATRIBUTE_SEPARATE or k in SEMN_ATR_VALOARE or not v:
+        if k in ATRIBUTE_AFISATE_SEPARAT or k in SEMN_ATR_VALOARE or not v:
             continue
         a = _ascii(v)
         t = _cuvant(a)
         if t:
             return "token_%s:%s" % (t, _semnatura_token(n))
-        if k not in URL_ATRIBUTE and _nume_fisier(a) is not None:
+        if _nume_fisier(_fara_gazda_permisa(k, v)) is not None:
             return "atribut_fisier:" + _semnatura_token(n)
     return None
 
