@@ -23,6 +23,12 @@ const { PGlite } = await import(process.env.PGLITE_DIR ? pathToFileURL(join(reso
 const AUTO = await import(pathToFileURL(join(ROOT, 'supabase/functions/_shared/redariFanUrmarireAuto.mjs')).href)
 // runda 2: payload-urile scenariilor K se construiesc cu interpretarea REALĂ a răspunsului FAN (aceeași funcție ca butonul și rularea, L19)
 const FAN = await import(pathToFileURL(join(ROOT, 'supabase/functions/_shared/redariFan.mjs')).href)
+// runda 7 (#1155 r6 P2, L25): parserul VECHI (origin/main b1d3c593, de dinaintea acestui PR), ÎNGHEȚAT în fixturi: payload-ul funcției edge de dinainte
+// (doar faptele + ultimul eveniment, fără liste) e cel REAL, nu unul scris de mână. Fixtura e verificată pe sha256 în secțiunea 0 (și, cât origin/main
+// mai are parserul vechi, pe identitate cu `git show origin/main:…`).
+const FIXTURA_VECHI = 'scripts/pglite/fixturi/redariFan_origin_main_b1d3c593.mjs'
+const SHA_VECHI = 'e7a77c9903843f7c7ec3c361cb10c860dca5a79054ae136a4bd9e619435feb2f'
+const FAN_VECHI = await import(pathToFileURL(join(ROOT, FIXTURA_VECHI)).href)
 const TMP = mkdtempSync(join(tmpdir(), 'fan_auto_'))
 const citeste = rel => readFileSync(join(ROOT, rel), 'utf8').replace(/\r/g, '')
 const SCHELET = citeste('supabase/tests/20261212a_redari_fan_awb_schelet.sql')
@@ -66,6 +72,15 @@ console.log('0. validatorul runnerului pe fișierele exacte; scriptul de clonă 
   let sn = null; try { execFileSync('bash', ['-n', S2], { stdio: ['ignore', 'pipe', 'pipe'] }) } catch (x) { sn = String(x.stderr || x.message) }
   const s2 = existsSync(S2) ? citeste('supabase/tests/20270102a_redari_fan_urmarire_auto_doua_sesiuni.sh') : ''
   ok(sn === null && ['S1', 'S2', 'S3'].every(k => s2.includes(`rez ok "${k} `)) && s2.includes('fn_red_fan_srv_rulare_incepe('), `scriptul cu două sesiuni: bash -n ${sn || 'OK'}; scenariile S1 S2 S3 prezente`)
+  // runda 7: fixtura parserului vechi = octeții exacți din origin/main b1d3c593 (sha256); cât origin/main nu are încă parserul nou (momentPosibilFan),
+  // trebuie să fie identică cu `git show origin/main:…` (după merge, fixtura rămâne referința istorică)
+  const octVechi = readFileSync(join(ROOT, FIXTURA_VECHI)).toString('latin1').replace(/\r\n/g, '\n')
+  const shaVechi = (await import('node:crypto')).createHash('sha256').update(Buffer.from(octVechi, 'latin1')).digest('hex')
+  let peMain = null
+  try { peMain = execFileSync('git', ['show', 'origin/main:supabase/functions/_shared/redariFan.mjs'], { cwd: ROOT, encoding: 'latin1', stdio: ['ignore', 'pipe', 'ignore'] }).replace(/\r\n/g, '\n') } catch { /* fără origin/main local */ }
+  const mainVechi = peMain !== null && !peMain.includes('export function momentPosibilFan')
+  ok(shaVechi === SHA_VECHI && typeof FAN_VECHI.rezumatUrmarireFan === 'function' && FAN_VECHI.momentPosibilFan === undefined && (!mainVechi || peMain === octVechi),
+    `fixtura parserului vechi: sha256 ${shaVechi.slice(0, 12)}… (așteptat ${SHA_VECHI.slice(0, 12)}…), fără momentPosibilFan; origin/main ${peMain === null ? 'indisponibil' : mainVechi ? (peMain === octVechi ? 'identic' : 'DIFERIT') : 'are deja parserul nou'}`)
 }
 
 const ID = {
@@ -743,8 +758,9 @@ async function verificari(db, log, fail = []) {
   const p144 = await pl(144, [['S2', `${D1} 10:00:00`], ['S2', `${D1} 12:00:00`]])
   const viitorS = `${viitor} 12:00:00`
   const w144 = (await scrie(ID.editor, null, ID.L1, [{ ...p144, livrat_la: viitorS, contradictii: [{ ...p144.contradictii[0], valori: [`${D1} 10:00:00`, viitorS], ales: viitorS }] }])).rows[0].r
-  ok(w144.pastrate === 1 && (await awb(144)).livrat_la === null && (await contr(144)).length === 0,
-    'K19e (3): o oră imposibilă în contradicție + fapte → păstrat, fără livrare, contradicția nescrisă (nu e un fapt al curierului)')
+  // runda 7: ora imposibilă afirmată de fapte (livrat_la ȘI valoarea contradicției, același text) are O urmă ca „respins”; contradicția livrare_ore nu se scrie
+  ok(w144.pastrate === 1 && (await awb(144)).livrat_la === null && JSON.stringify((await contr(144)).map(c => [c.sursa, c.tip, c.valori, c.ales])) === JSON.stringify([['acelasi_raspuns', 'eveniment_data_imposibila', [`S2 ${viitorS}`, `azi ${AZI}`], 'respins']]),
+    'K19e (3): o oră imposibilă în contradicție + fapte → păstrat, fără livrare, contradicția nescrisă (nu e un fapt al curierului), ora imposibilă o singură dată în audit (runda 7)')
 
   // K19f — `respinse` la limită: 100 de evenimente imposibile (codul real) → acceptat (ridicat + 100 de rânduri de audit); 101 → codul dă „de verificat” cu
   // ultimele 100, acceptat de BD (limita = cod)
@@ -917,16 +933,19 @@ async function verificari(db, log, fail = []) {
   const in158 = await awb(158)
   const p158 = await pl(158, [['C0', `${D0} 09:00:00`], ['S2', `${D1} 10:00:00`]])
   const k20f3 = (await scrie(ID.editor, null, ID.L1, [{ ...p158, livrat_la: `${viitor} 10:00:00` }])).rows[0].r
-  const a158 = await awb(158)
+  const a158 = await awb(158), c158 = await contr(158)
+  // runda 7 (Jakarinos r6 P2): livrarea imposibilă afirmată DOAR de câmpul de fapt (nu e în liste) lasă urmă ca „respins”; cronologia returului
+  // cunoscut NU se auditează încă (faptele nu s-au atins)
   ok(k20f3.pastrate === 1 && k20f3.scrise === 0 && fapteK20(a158) === fapteK20(in158) && a158.versiune_urmarire === in158.versiune_urmarire + 1 && !(await stareFapte(158)).final
-     && (await contr(158)).length === 0 && await eligibil(158) !== null,
-    'K20f: retur imposibil cunoscut + răspuns PĂSTRAT (dezacord pe o livrare imposibilă): faptele neatinse (returul imposibil rămâne, nu e final, de urmărit), nimic auditat încă')
+     && JSON.stringify(c158.map(c => [c.sursa, c.tip, c.valori, c.ales, c.observari])) === JSON.stringify([['acelasi_raspuns', 'eveniment_data_imposibila', [`S2 ${viitor} 10:00:00`, `azi ${AZI}`], 'respins', 1]])
+     && await eligibil(158) !== null,
+    'K20f: retur imposibil cunoscut + răspuns PĂSTRAT (dezacord pe o livrare imposibilă din câmpul de fapt): faptele neatinse (returul imposibil rămâne, nu e final, de urmărit), livrarea imposibilă în audit ca „respins”, cronologia returului încă nu')
   const k20f4 = await buton(158, [['C0', `${D0} 09:00:00`], ['S2', `${D1} 10:00:00`]])
   const a158b = await awb(158)
   ok(k20f4.scrise === 1 && a158b.urmarire_stare === 'livrat' && await ora(158, 'livrat_la') === `${D1} 10:00:00` && a158b.retur_cunoscut === false && a158b.retur_propus === null
-     && JSON.stringify((await contr(158)).map(c => [c.sursa, c.tip, c.valori[0]])) === JSON.stringify([['intre_raspunsuri', 'eveniment_data_imposibila', `S6 ${viitorRet8}`]])
+     && JSON.stringify((await contr(158)).map(c => [c.sursa, c.tip, c.valori[0], c.observari]).sort()) === JSON.stringify([['acelasi_raspuns', 'eveniment_data_imposibila', `S2 ${viitor} 10:00:00`, 1], ['intre_raspunsuri', 'eveniment_data_imposibila', `S6 ${viitorRet8}`, 1]].sort())
      && (await stareFapte(158)).final && await eligibil(158) === null,
-    'K20f: corecția validă apoi (același răspuns, fără dezacord): livrat, returul imposibil scos și cronologia lui în audit (fără livrare_retur), nu mai e de urmărit')
+    'K20f: corecția validă apoi (același răspuns, fără dezacord): livrat, returul imposibil scos și cronologia lui în audit (fără livrare_retur), urma livrării respinse rămâne (observări 1), nu mai e de urmărit')
 
   // K20e — MATRICEA clasei: fiecare fel de eveniment (ridicare, livrare, retur, refuz, tranzit, de verificat, cod necunoscut) × fiecare ramură a
   // scrierii × (în viitor / înainte de generare). Invariantul (scris de mână): după rulare niciun fapt / nicio cronologie a rândului nu stă pe un
@@ -983,6 +1002,125 @@ async function verificari(db, log, fail = []) {
   }
   ok(nX - 160 === EVS.length * RAMURI.length * FELURI.length && rauX.length === 0,
     `K20e: matricea ${EVS.length} evenimente × ${RAMURI.length} ramuri × ${FELURI.length} feluri (${nX - 160} rânduri, două rulări fiecare): ${rauX.slice(0, 3).join(' | ') || 'nicio dată imposibilă nu devine sau rămâne fapt, fiecare respingere are urma ei'}`)
+
+  // ── K21: runda 7 (Jakarinos #1155 r6 P2). Momentele imposibile afirmate DOAR de câmpurile de fapte (sursa „f”: ridicat_propus / livrat_la / retur_la /
+  // valorile contradicțiilor) lasă urmă în audit ca cele din liste, deduplicate față de liste, fără să slăbească CAS-ul / ramura „păstrat”. Payload-ul
+  // = cel REAL al funcției edge de dinainte: parserul vechi din origin/main (fixtura, FAN_VECHI) + rândul construit EXACT ca transportul vechi
+  // (origin/main redariFanTransport.mjs::urmarire: fără evenimente / respinse / retur_la / contradictii). Așteptări scrise de mână din
+  // FAN_URMARIRE_AUTOMATA.md §3b (L25). Rânduri noi 230–239 pe L1 (TEST), generate acum 3 zile (D0). ──
+  const K21 = Array.from({ length: 10 }, (_, i) => 230 + i)
+  await db.exec(`SET session_replication_role = replica;
+    INSERT INTO public.red_plicuri (id, proiect_id, lot_id, nr_plic, destinatar_nume, stare) VALUES
+      ${K21.map(n => `('${plicId(n)}', '${ID.proiect}', '${ID.L1}', '${nrPlic(n)}', 'PERSOANA ${n}', 'activ')`).join(', ')};
+    INSERT INTO public.red_fan_awb (id, proiect_id, lot_id, plic_id, nr_plic, stare, hash_date, awb, generat_la, propus_de, aprobat_de, aprobat_la, cerere_id) VALUES
+      ${K21.map(n => `('${awbId(n)}', '${ID.proiect}', '${ID.L1}', '${plicId(n)}', '${nrPlic(n)}', 'generat', '${HX('e')}', '${7000000000 + n}', now() - interval '3 days', '${ID.owner}', '${ID.owner}', now(), '${CERERE}')`).join(', ')};
+    SET session_replication_role = origin;`)
+  const plVechi = async (n, ev, extra = {}) => { const a = await awb(n)
+    const z = FAN_VECHI.rezumatUrmarireFan({ awbNumber: a.awb, events: ev.map(([id, date]) => ({ id, date })), ...extra })
+    return { id: a.id, awb: a.awb, versiune: a.versiune_urmarire, urmarire_stare: z.urmarire_stare, ultim_eveniment: z.ultim_eveniment, ultim_eveniment_la: z.ultim_eveniment_la,
+      ridicat_propus: z.ridicat_propus, livrat_la: z.livrat_la, retur_propus: z.retur_propus } }
+  const auditK21 = async n => (await contr(n)).map(c => [c.sursa, c.tip, c.valori, c.ales, c.observari])
+  const urma = (txt, reper, obs) => ['acelasi_raspuns', 'eveniment_data_imposibila', [txt, reper], 'respins', obs]
+  const ZMG = `${zi(-1)} 10:00:00`, GEN = `generat ${D0}`
+
+  // K21a — EXACT reproducerea recenzentului (r6): parserul vechi pe S2 ÎNAINTE de generare (zi(-1) 10:00) + H3 valid (D1 12:00) → livrat_la imposibil în
+  // câmpul de fapt, ultimul eveniment valid, fără liste. Două rulări: păstrat (CAS neslăbit, nimic înregistrat), urma S2 în audit (observări 1 → 2),
+  // AWB-ul de urmărit; apoi corecția validă prin același parser vechi se înregistrează
+  const ev21a = [['S2', ZMG], ['H3', `${D1} 12:00:00`]]
+  const p230 = await plVechi(230, ev21a)
+  ok(p230.urmarire_stare === 'livrat' && p230.livrat_la === ZMG && p230.ultim_eveniment === 'H3' && p230.ultim_eveniment_la === `${D1} 12:00:00`
+     && !('evenimente' in p230) && !('respinse' in p230) && !('retur_la' in p230) && !('contradictii' in p230),
+    `K21a: parserul vechi (origin/main) trimite livrat_la ${p230.livrat_la} (înainte de generarea pe ${D0}), ultimul eveniment H3 valid, fără liste`)
+  await eligibil(230)
+  const in230 = await awb(230)
+  const k21a = (await scrie(null, RL, ID.L1, [p230])).rows[0].r
+  const a230 = await awb(230)
+  ok(k21a.scrise === 0 && k21a.pastrate === 1 && k21a.depasite === 0 && k21a.contradictii === 1 && fapteK20(a230) === fapteK20(in230) && a230.versiune_urmarire === in230.versiune_urmarire + 1
+     && a230.livrat_la === null && a230.stare === 'generat' && JSON.stringify(await auditK21(230)) === JSON.stringify([urma(`S2 ${ZMG}`, GEN, 1)])
+     && !(await stareFapte(230)).final && await eligibil(230) !== null,
+    `K21a: rularea 1: păstrat (${k21a.scrise}/${k21a.pastrate}/${k21a.depasite}), nimic înregistrat (versiunea +1), S2 ${ZMG} în audit ca „respins” (reper ${GEN}), de urmărit`)
+  const k21a2 = (await scrie(null, RL, ID.L1, [await plVechi(230, ev21a)])).rows[0].r
+  ok(k21a2.pastrate === 1 && k21a2.scrise === 0 && fapteK20(await awb(230)) === fapteK20(in230) && (await awb(230)).versiune_urmarire === in230.versiune_urmarire + 2
+     && JSON.stringify(await auditK21(230)) === JSON.stringify([urma(`S2 ${ZMG}`, GEN, 2)]) && await eligibil(230) !== null,
+    'K21a: rularea 2 (același răspuns): tot păstrat, faptele neatinse, același rând de audit cu observări 2')
+  const k21a3 = (await scrie(null, RL, ID.L1, [await plVechi(230, [['S2', `${D1} 10:00:00`], ['H3', `${D1} 12:00:00`]])])).rows[0].r
+  const a230c = await awb(230)
+  ok(k21a3.scrise === 1 && a230c.urmarire_stare === 'livrat' && await ora(230, 'livrat_la') === `${D1} 10:00:00` && JSON.stringify(await cron(230)) === JSON.stringify(['H3', `${D1} 12:00:00`])
+     && JSON.stringify(await auditK21(230)) === JSON.stringify([urma(`S2 ${ZMG}`, GEN, 2)]) && (await stareFapte(230)).final && await eligibil(230) === null,
+    `K21a: corecția validă prin parserul vechi (S2 ${D1} 10:00): livrat, urma veche rămâne (observări 2), nu mai e de urmărit`)
+
+  // K21b — a doua reproducere a recenzentului: C0 ÎNAINTE de generare prin ridicat_propus (parserul vechi), ultimul eveniment valid. Două rulări: păstrat,
+  // ziua imposibilă în audit ca „C0 <zi>” (fără oră: lista derivată n-are C0-ul), fără ridicare; corecția validă → ridicat (ziua C0 posibilă)
+  const ev21b = [['C0', `${zi(-1)} 09:00:00`], ['H3', `${D1} 12:00:00`]]
+  const p231 = await plVechi(231, ev21b)
+  ok(p231.urmarire_stare === 'ridicat' && p231.ridicat_propus === zi(-1) && p231.ultim_eveniment === 'H3', `K21b: parserul vechi trimite ridicat_propus ${p231.ridicat_propus} (înainte de generare), ultimul eveniment H3 valid`)
+  await eligibil(231)
+  const in231 = await awb(231)
+  for (const runda of [1, 2]) {
+    const w = (await scrie(null, RL, ID.L1, [await plVechi(231, ev21b)])).rows[0].r
+    const a = await awb(231)
+    ok(w.pastrate === 1 && w.scrise === 0 && fapteK20(a) === fapteK20(in231) && a.stare === 'generat' && a.ridicat_propus === null && a.versiune_urmarire === in231.versiune_urmarire + runda
+       && JSON.stringify(await auditK21(231)) === JSON.stringify([urma(`C0 ${zi(-1)}`, GEN, runda)]) && await eligibil(231) !== null,
+      `K21b: rularea ${runda}: păstrat, nicio ridicare, ziua C0 ${zi(-1)} în audit ca „respins” (observări ${runda}), de urmărit`)
+  }
+  const k21b3 = (await scrie(null, RL, ID.L1, [await plVechi(231, [['C0', `${D0} 09:00:00`], ['H3', `${D1} 12:00:00`]])])).rows[0].r
+  ok(k21b3.scrise === 1 && k21b3.ridicari === 1 && (await awb(231)).stare === 'ridicat' && await rp(231) === D0 && (await auditK21(231)).length === 1,
+    `K21b: corecția validă (C0 ${D0}): ridicat, ridicarea înregistrată, urma zilei imposibile rămâne`)
+
+  // K21c — DEDUPLICAREA față de liste (parserul vechi): ultimul eveniment S2 în viitor ȘI livrat_la la același moment → O singură urmă (nu două), pe
+  // două rulări; ziua C0 posibilă nu se înregistrează (rândul e păstrat, clasificare contestată)
+  const ev21c = [['C0', `${D0} 09:00:00`], ['S2', `${viitor} 10:00:00`]]
+  await eligibil(232)
+  const in232 = await awb(232)
+  for (const runda of [1, 2]) {
+    const w = (await scrie(null, RL, ID.L1, [await plVechi(232, ev21c)])).rows[0].r
+    ok(w.pastrate === 1 && w.contradictii === 1 && fapteK20(await awb(232)) === fapteK20(in232) && (await awb(232)).stare === 'generat'
+       && JSON.stringify(await auditK21(232)) === JSON.stringify([urma(`S2 ${viitor} 10:00:00`, `azi ${AZI}`, runda)]),
+      `K21c: rularea ${runda}: S2 viitor ca ultim eveniment ȘI ca livrat_la = o singură urmă (observări ${runda}), păstrat, nicio ridicare`)
+  }
+
+  // K21d — deduplicarea zilei ridicării (parserul nou, payload în dezacord): codul respinge C0-ul de dinainte de generare (în `respinse`), dar faptele
+  // afirmă ziua lui (ridicat_propus fabricat) → urma evenimentului din listă, NU și o a doua urmă „C0 <zi>”; păstrat
+  const p233 = await pl(233, [['C0', `${zi(-1)} 09:00:00`], ['H3', `${D1} 12:00:00`]])
+  ok(p233.ridicat_propus === null && JSON.stringify(p233.respinse) === JSON.stringify([`C0 ${zi(-1)} 09:00:00`]), 'K21d: parserul nou respinge C0-ul de dinainte de generare (fără zi de ridicare)')
+  const w233 = (await scrie(ID.editor, null, ID.L1, [{ ...p233, ridicat_propus: zi(-1) }])).rows[0].r
+  ok(w233.pastrate === 1 && (await awb(233)).ridicat_propus === null && JSON.stringify(await auditK21(233)) === JSON.stringify([urma(`C0 ${zi(-1)} 09:00:00`, GEN, 1)]),
+    'K21d: ziua de ridicare fabricată din C0-ul respins: păstrat, o singură urmă (evenimentul din listă; ziua nu se auditează a doua oară)')
+
+  // K21e — returul: retur_la imposibil afirmat doar de câmpul de fapt (lista posibilă, retur_la fabricat în viitor) → păstrat, urma „retur <moment>”
+  const p234 = await pl(234, [['C0', `${D0} 09:00:00`], ['S6', `${D1} 10:00:00`]])
+  ok(p234.urmarire_stare === 'retur' && p234.retur_la === `${D1} 10:00:00`, 'K21e: parserul nou: retur (refuz) cu retur_la valid')
+  const w234 = (await scrie(ID.editor, null, ID.L1, [{ ...p234, retur_la: `${viitor} 10:00:00` }])).rows[0].r
+  const a234 = await awb(234)
+  ok(w234.pastrate === 1 && a234.retur_cunoscut === false && a234.urmarire_stare === 'neurmarit' && a234.stare === 'generat'
+     && JSON.stringify(await auditK21(234)) === JSON.stringify([urma(`retur ${viitor} 10:00:00`, `azi ${AZI}`, 1)]),
+    'K21e: retur_la imposibil în câmpul de fapt (lista posibilă): păstrat, niciun retur înregistrat, urma „retur <moment>” în audit')
+
+  // K21f — o valoare imposibilă DOAR într-o contradicție (livrare_ore: prima oră înainte de generare, alesul valid = livrat_la) → păstrat, urma „S2 <moment>”
+  const p235 = await pl(235, [['C0', `${D0} 09:00:00`], ['S2', `${D1} 10:00:00`], ['S2', `${D1} 12:00:00`]])
+  ok(p235.contradictii.length === 1 && p235.contradictii[0].tip === 'livrare_ore' && p235.livrat_la === `${D1} 12:00:00`, 'K21f: parserul nou: două ore de livrare → livrare_ore, alesul = ultima')
+  const w235 = (await scrie(ID.editor, null, ID.L1, [{ ...p235, contradictii: [{ ...p235.contradictii[0], valori: [ZMG, `${D1} 12:00:00`] }] }])).rows[0].r
+  ok(w235.pastrate === 1 && (await awb(235)).livrat_la === null && JSON.stringify(await auditK21(235)) === JSON.stringify([urma(`S2 ${ZMG}`, GEN, 1)]),
+    'K21f: ora imposibilă doar în valorile contradicției: păstrat, fără livrare, contradicția nescrisă, ora în audit ca „respins”')
+
+  // K21g — deduplicarea e pe MOMENT (sau pe ziua C0 doar pentru ziua ridicării): o livrare imposibilă în fapte în aceeași zi cu un C0 respins din listă
+  // are urma ei separată (două urme, texte diferite)
+  const p236 = await pl(236, [['C0', `${viitor} 09:00:00`], ['S2', `${D1} 10:00:00`]])
+  ok(JSON.stringify(p236.respinse) === JSON.stringify([`C0 ${viitor} 09:00:00`]) && p236.livrat_la === `${D1} 10:00:00`, 'K21g: parserul nou: C0 viitor respins, livrarea validă')
+  const w236 = (await scrie(ID.editor, null, ID.L1, [{ ...p236, livrat_la: `${viitor} 10:00:00` }])).rows[0].r
+  ok(w236.pastrate === 1 && (await awb(236)).livrat_la === null
+     && JSON.stringify((await auditK21(236)).sort()) === JSON.stringify([urma(`C0 ${viitor} 09:00:00`, `azi ${AZI}`, 1), urma(`S2 ${viitor} 10:00:00`, `azi ${AZI}`, 1)].sort()),
+    'K21g: C0 respins (listă) + livrare imposibilă (fapt) în aceeași zi = două urme distincte (deduplicarea nu înghite livrarea)')
+
+  // K21h — ramura „depășit” cu fapt imposibil (parserul vechi, versiune veche): rândul neatins, urma faptului tot se scrie (ca la evenimentele din liste, runda 6)
+  await automat(237, [['H3', `${D1} 12:00:00`]])
+  await eligibil(237)
+  const in237 = await awb(237)
+  const p237 = await plVechi(237, ev21a)
+  const w237 = (await scrie(null, RL, ID.L1, [{ ...p237, versiune: p237.versiune - 1 }])).rows[0].r
+  ok(w237.depasite === 1 && w237.scrise === 0 && w237.pastrate === 0 && JSON.stringify(await awb(237)) === JSON.stringify(in237)
+     && JSON.stringify(await auditK21(237)) === JSON.stringify([urma(`S2 ${ZMG}`, GEN, 1)]),
+    'K21h: depășit pe versiune (CAS) cu livrat_la imposibil din parserul vechi: rândul neatins, urma S2 în audit')
   return fail
 }
 
@@ -1185,7 +1323,11 @@ const MUTANTI = [
   ['returul cunoscut fără cronologie (legitim, fără oră) scos din fapte', "(b.retur_cunoscut AND coalesce(bool_and(y.ok) FILTER (WHERE y.s = 'k'), true)) AS k_ret", "(b.retur_cunoscut AND coalesce(bool_and(y.ok) FILTER (WHERE y.s = 'k'), false)) AS k_ret"],
   ['motivul returului scos din fapte rămâne', 'p.k_ret, CASE WHEN p.k_ret THEN b.retur_propus END AS k_mot,', 'p.k_ret, b.retur_propus AS k_mot,'],
   ['cronologia cunoscută imposibilă lipsă din audit', "FILTER (WHERE y.s IN ('kr', 'kl', 'k') AND NOT y.ok)", "FILTER (WHERE y.s IN ('kr', 'kl') AND NOT y.ok)"],
-  ['auditul doar cu ce a respins codul (nu și ce găsește BD-ul)', "FILTER (WHERE y.s = 'r' OR (y.s = 'n' AND NOT y.ok))", "FILTER (WHERE y.s = 'r')"],
+  ['auditul doar cu ce a respins codul (nu și ce găsește BD-ul)', "FILTER (WHERE y.s = 'r' OR (y.s = 'n' AND NOT y.ok) OR (y.s = 'f'", "FILTER (WHERE y.s = 'r' OR (y.s = 'f'"],
+  // runda 7 (#1155 r6 P2): momentele imposibile afirmate doar de câmpurile de fapte (sursa f) fără urmă (codul r6); deduplicarea față de liste
+  ['runda 7: faptele imposibile ale răspunsului (sursa f) lipsă din audit (codul r6)', " OR (y.s = 'f' AND NOT y.ok AND NOT y.in_lista))", ')'],
+  ['runda 7: faptul deja prezent în liste auditat a doua oară (fără deduplicare)', " OR (y.s = 'f' AND NOT y.ok AND NOT y.in_lista))", " OR (y.s = 'f' AND NOT y.ok))"],
+  ['runda 7: deduplicarea pe zi aplicată oricărui fapt (nu doar zilei ridicării)', "(x.txt ~ '^C0 [0-9]{4}-[0-9]{2}-[0-9]{2}$' AND bool_or(", '(bool_or('],
   ['respinse: nevalidată', '           AND c.ok AND cr.ok AND rs.ok), count(DISTINCT u.id)', '           AND c.ok AND cr.ok), count(DISTINCT u.id)'],
   ['respinse: limita 99 (nu 100, ca în cod)', 'WHEN jsonb_array_length(u.respinse) > 100 THEN false', 'WHEN jsonb_array_length(u.respinse) > 99 THEN false'],
   ['tabelul: tipul comun refuzat (doar C0, codul r4)', "('eveniment_data_imposibila', 'data_imposibila'))),", "('ridicare_data_imposibila', 'data_imposibila'))),"],

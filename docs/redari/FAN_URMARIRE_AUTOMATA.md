@@ -77,7 +77,7 @@ Toate contradicțiile se evaluează **înainte** de a construi faptele (nu doar 
 | ore de livrare (S2) diferite | **ultima oră** | **ultima oră** dintre cele două |
 | livrare și retur | **evenimentul final ulterior** după ora curierului; la egalitate sau cu retur fără oră (`returnAwbNumber`) → **retur** | retur nou peste livrare cunoscută: retur dacă returul n-are oră sau e la / după livrare; livrare nouă peste retur cunoscut: livrat doar dacă livrarea e **după** ultimul eveniment cunoscut la înregistrarea returului, altfel retur |
 | motive de retur diferite | motivul ultimului semnal; semnale cu motive diferite la **aceeași oră** → motivul după departajare (refuz > adresă > mutat > avizat) + semnal `retur_motiv` | motivul răspunsului **mai nou**; un răspuns fără motiv păstrează motivul cunoscut |
-| **orice eveniment** (C0, S2, retur, refuz, tranzit, orice cod) la un moment **imposibil** (runda 5, vezi mai jos) | respins **înaintea** regulilor de mai sus: nu intră în stare, ridicare, livrare, retur, contradicții, cronologie | un fapt cunoscut imposibil (livrare / zi de ridicare / cronologia pe care stă returul, scrise înainte de 20270102a) iese din fapte; fiecare eveniment respins = un semnal `eveniment_data_imposibila` („respins”), doar în audit, pe orice ramură (scris / păstrat / depășit; runda 6) |
+| **orice eveniment** (C0, S2, retur, refuz, tranzit, orice cod) la un moment **imposibil** (runda 5, vezi mai jos) | respins **înaintea** regulilor de mai sus: nu intră în stare, ridicare, livrare, retur, contradicții, cronologie | un fapt cunoscut imposibil (livrare / zi de ridicare / cronologia pe care stă returul, scrise înainte de 20270102a) iese din fapte; fiecare eveniment respins = un semnal `eveniment_data_imposibila` („respins”), doar în audit, pe orice ramură (scris / păstrat / depășit; runda 6), din liste **și din câmpurile de fapte** (runda 7) |
 
 **Regula momentului posibil (runda 5, Jakarinos r4 P1 — clasa, nu cazul C0).** Un eveniment al curierului e **posibil** dacă ziua lui (ora
 României) e ≥ ziua generării AWB-ului **și** momentul lui e ≤ momentul procesării + **5 minute** (toleranța mică pentru ceasurile diferite ale
@@ -91,6 +91,17 @@ curierului și ale noastre). O singură definiție, aceeași în cod (`redariFan
   clasificare contestată nu devine fapt; rularea următoare o reface;
 - fiecare eveniment imposibil al răspunsului = un rând în audit (`eveniment_data_imposibila`, valorile `[eveniment, reper]`, reperul = `generat
   <zi>` sau `azi <zi>`; revăzut în aceeași zi = același rând, observări + 1); un fapt cunoscut imposibil intră în audit când rândul se scrie;
+- **toate sursele unui moment lasă urmă (runda 7, Jakarinos r6 P2)**: și un moment imposibil afirmat **doar de câmpurile de fapte** ale
+  răspunsului (`ridicat_propus`, `livrat_la`, `retur_la`, valorile contradicțiilor — calea funcției edge de dinainte, care trimite faptele fără
+  liste, sau un payload în dezacord cu listele) intră în audit ca „respins” (textul = faptul: `C0 <zi>`, `S2 <moment>`, `retur <moment>`,
+  valorile contradicțiilor ca eveniment), **deduplicat** față de liste (același moment, sau același C0 în aceeași zi pentru ziua ridicării) —
+  rândul rămâne „păstrat”, CAS-ul și faptele neschimbate. Tabelul surselor: lista posibilă (`n`) → audit când BD-ul o găsește imposibilă;
+  lista respinsă (`r`) → audit mereu; faptele răspunsului (`f`) → audit când sunt imposibile (runda 7); faptele cunoscute (`k` cronologia,
+  `kl` livrarea, `kr` ziua ridicării) → audit când ies din fapte, adică pe rândul scris (un rând păstrat / depășit nu-și schimbă faptele; le
+  auditează prima scriere validă).
+  Exemplul recenzentului (r6): AWB generat pe 18.11, funcția edge veche trimite `livrat_la` = 17.11 10:00 (S2 de dinaintea generării) și ultimul
+  eveniment H3 20.11 valid → păstrat pe ambele rulări, `S2 2026-11-17 10:00:00` în audit (reper `generat 2026-11-18`, observări 2); la fel
+  C0 de dinaintea generării prin `ridicat_propus` (`C0 2026-11-17`);
 - o livrare imposibilă **nu e fapt final**: AWB-ul rămâne în selecția rulării automate (`fn_red_fan_srv_de_urmarit`, același predicat) până la un
   fapt final valid; corecția validă ulterioară se înregistrează (nu „ultima oră” dintre ea și cea imposibilă).
 Exemplul recenzentului: pe 21.11, C0 20.11 08:00 + S2 24.11 10:00 → **ridicat**, fără livrare, S2 în audit, AWB-ul încă de urmărit; apoi
@@ -280,7 +291,11 @@ runner (refuză cât există rulări în istoric, contradicții înregistrate sa
   vechi), scenariul P2 pe două rulări (depășit pe cronologie și pe versiune: rândul neatins, S2 imposibil în audit, observări 2, fără contradicțiile
   răspunsului depășit), **matricea clasei** 7 evenimente × 5 ramuri (scris / păstrat / depășit pe cronologie / depășit pe versiune / cunoscut dinainte) ×
   2 feluri (viitor / înainte de generare) = 70 de rânduri, două rulări fiecare, cu invariantul: niciun fapt / cronologie pe moment imposibil,
-  eligibilitate = „fără fapt final valid”, exact o urmă pe eveniment imposibil; refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
+  eligibilitate = „fără fapt final valid”, exact o urmă pe eveniment imposibil; **K21 (runda 7)**: payload-ul REAL al parserului vechi (fixtura
+  `scripts/pglite/fixturi/redariFan_origin_main_b1d3c593.mjs`, sha256 verificat) pe două rulări — S2 înainte de generare prin `livrat_la` și C0
+  înainte de generare prin `ridicat_propus` (păstrat, urma în audit cu observări 1 → 2, corecția validă apoi), deduplicarea față de liste (același
+  moment; ziua C0 față de C0-ul din listă; o livrare în aceeași zi cu un C0 respins are urma ei), `retur_la` și valorile contradicțiilor ca surse,
+  ramura „depășit” cu fapt imposibil; refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
   revenirea (refuz la fiecare urmă, inclusiv contradicții și ridicări automate; aplicare → revenire → re-aplicare); **mutanți SQL** + martorul;
   paritatea plafonului JS ↔ SQL; porțile 0e / Izometrie E2.
 - Pe clonă (coordonatorul): `supabase/tests/20270102a_redari_fan_urmarire_auto_doua_sesiuni.sh` — S1 două porniri suprapuse (B așteaptă, apoi
