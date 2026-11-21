@@ -526,7 +526,8 @@ BEGIN
 END $t$;
 
 -- ── t_ultimul_act (owner, P4): nota neaprobata nu intra (deviz refuzat, lipsa nota_neaprobata); dupa aprobare intra; AA „lista completa” pe
---    obiectul scris altfel (' ob1 ') INLOCUIESTE (150, nu 250); un act mai VECHI incarcat DUPA nu trece peste lista completa; pretul = ultimul act (dupa data) ──
+--    obiectul cu forme brute amestecate (randul X al ofertei rescris ' ob1 ' de server; AA-ul vine cu ' ob1 ' si e scris 'OB1') INLOCUIESTE pe identitatea
+--    canonica (150, nu 250); un act mai VECHI incarcat DUPA nu trece peste lista completa; pretul = ultimul act (dupa data) ──
 DO $t$
 DECLARE v jsonb; r record; v_nota bigint;
 BEGIN
@@ -554,12 +555,38 @@ BEGIN
     RAISE EXCEPTION 't_ultimul_act FAIL: nota cu aprobarea retrasa inca in baza: %', row_to_json(r);
   END IF;
   UPDATE public.executie_note_modificare SET data_aprobare = DATE '2026-04-01' WHERE id = v_nota;
-  -- AA-4 (2026-05-01) lista completa, obiectul scris ' ob1 ': inlocuieste TOT ce e datat inainte pe OB1 (oferta, NCS-9) → doar X = 150, pret 12
+END $t$;
+RESET ROLE;
+-- (r6) SERVERUL scrie obiectul randului X al ofertei P4 in alta forma bruta (' ob1 '; identitatea canonica si cheia raman OB1 / OB1|D1|X): un proiect cu
+--    forme brute amestecate ale aceluiasi obiect — lista completa de mai jos trebuie sa inlocuiasca si acest rand (pe identitatea canonica, nu pe brut)
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+DO $t$
+BEGIN
+  IF auth.uid() IS NOT NULL OR public.fn_rest_decontat_server() IS NOT TRUE THEN RAISE EXCEPTION 't_ultimul_act PRECONDITIE: blocul serverului cere auth.uid() NULL si rolul postgres'; END IF;
+  UPDATE public.proiect_articole SET obiect_cod = ' ob1 ' WHERE proiect_id = pg_temp.rd_id('p4') AND sursa = 'contract_initial' AND cod = 'X';
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p4') AND obiect_cod = ' ob1 ' AND cheie = 'OB1|D1|X' AND confirmat_la IS NOT NULL) <> 1 THEN
+    RAISE EXCEPTION 't_ultimul_act PRECONDITIE: randul X al ofertei P4 scris de server cu obiectul '' ob1 '' (cheia neschimbata)';
+  END IF;
+END $t$;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000a', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb; r record;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000a');
+  SELECT cantitate, pret_unitar, randuri INTO r FROM public.v_executie_rest_decontat_baza WHERE proiect_id = pg_temp.rd_id('p4') AND cheie = 'OB1|D1|X';
+  IF r.cantitate <> 120 OR r.pret_unitar <> 11 OR r.randuri <> 2 THEN RAISE EXCEPTION 't_ultimul_act PRECONDITIE: X = 120 @11 din 2 randuri (oferta '' ob1 '' + NCS-9) inaintea AA-4: %', row_to_json(r); END IF;
+  -- AA-4 (2026-05-01) lista completa, obiectul scris ' ob1 ' (r6: scris in reprezentarea existenta 'OB1', forma majoritara): inlocuieste TOT ce e datat
+  -- inainte pe OB1 — oferta (inclusiv randul X scris ' ob1 ' de server), NCS-9 — pe identitatea canonica → doar X = 150, pret 12
   v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p4'), 'act_aditional', pg_temp.rd_id('aa4'), NULL, 'lista_completa', 'aa4.xlsx', repeat('a5', 32),
          '[{"obiect_cod":" ob1 ","deviz_cod":"D1","cod":"X","denumire":"x revizuit","um":"M","cantitate":150,"pret_unitar":12,"valoare":1800}]'::jsonb);
   SELECT string_agg(b.cheie || '=' || b.cantitate::text || ' @' || coalesce(b.pret_unitar::text, '-') || ' r' || b.randuri, '; ' ORDER BY b.cheie) AS s INTO r
     FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p4');
-  IF r.s IS DISTINCT FROM 'OB1|D1|X=150 @12 r1' THEN RAISE EXCEPTION 't_ultimul_act FAIL lista completa pe identitate canonica: %', r.s; END IF;
+  IF r.s IS DISTINCT FROM 'OB1|D1|X=150 @12 r1' THEN RAISE EXCEPTION 't_ultimul_act FAIL lista completa pe identitate canonica (randul '' ob1 '' al ofertei a ramas?): %', r.s; END IF;
+  -- (r6) randul AA-4 e scris cu obiect_cod 'OB1' (reprezentarea existenta majoritara), nu ' ob1 '
+  IF (SELECT obiect_cod FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p4') AND act_aditional_id = pg_temp.rd_id('aa4')) IS DISTINCT FROM 'OB1' THEN
+    RAISE EXCEPTION 't_ultimul_act FAIL: randul AA-4 nu e scris in reprezentarea existenta a obiectului (OB1)';
+  END IF;
   -- AA-5 (2026-02-01, mai vechi) incarcat DUPA AA-4, „doar diferente” +10 pret 9: e datat inaintea listei complete → ignorat; pretul ramane al AA-4
   v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p4'), 'act_aditional', pg_temp.rd_id('aa5'), NULL, 'diferente', 'aa5.xlsx', repeat('a6', 32),
          '[{"obiect_cod":"OB1","deviz_cod":"D1","cod":"X","denumire":"x","um":"M","cantitate":10,"pret_unitar":9,"valoare":90}]'::jsonb);
