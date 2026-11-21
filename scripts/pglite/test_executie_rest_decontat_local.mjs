@@ -492,8 +492,8 @@ if (!DOAR || DOAR === '4') {
     ['cod necopiat din rândul cheii (" tsa01 " → "tsa01" în loc de "TSA01")', [[
       `      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`, `      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := btrim(regexp_replace(e->>'cod', '[[:space:]]+', ' ', 'g'));`]]],
     ['nr necopiat din rândul cheii la aceeași poziție ("2A" în loc de "2a")', [[
-      `    v_nr := CASE WHEN cardinality(v_nr_forme) = 1 THEN v_nr_forme[1] ELSE btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g')) END;`,
-      `    v_nr := btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g'));`]]],
+      `    v_nr := CASE WHEN cardinality(v_nr_forme) = 1 THEN v_nr_forme[1]\n                 WHEN v_kn IS NULL AND v_k <> v_kb THEN substr(v_k, length(v_kb) + 3)\n                 ELSE btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g')) END;`,
+      `    v_nr := CASE WHEN v_kn IS NULL AND v_k <> v_kb THEN substr(v_k, length(v_kb) + 3)\n                 ELSE btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g')) END;`]]],
     ['UM-ul scris brut, cum vine (cantitatea convertită, UM-ul nu: 2 „MC” în loc de 2 „100 MC”)', [[
       `      'um', coalesce(v_um_rep, btrim(regexp_replace(e->>'um', '[[:space:]]+', ' ', 'g'))), 'cantitate', v_c,`, `      'um', btrim(regexp_replace(e->>'um', '[[:space:]]+', ' ', 'g')), 'cantitate', v_c,`]]],
     ['cantitatea neconvertită în UM-ul existent (200 „100 MC” în loc de 2)', [[`      v_c := v_c * v_factor / v_factor_rep; v_p := v_p * v_factor_rep / v_factor;`, `      v_p := v_p * v_factor_rep / v_factor;`]]],
@@ -1138,7 +1138,7 @@ if (!DOAR || DOAR === '8') {
     ['obiect_cod necopiat', [[`      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`, `      v_ob := btrim(regexp_replace(e->>'obiect_cod', '[[:space:]]+', ' ', 'g')); v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`]], /legatura_unitate/],
     ['deviz_cod necopiat', [[`      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`, `      v_ob := v_f->>'obiect_cod'; v_dz := btrim(regexp_replace(e->>'deviz_cod', '[[:space:]]+', ' ', 'g')); v_cod := v_f->>'cod';`]], null],
     ['cod necopiat', [[`      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`, `      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := btrim(regexp_replace(e->>'cod', '[[:space:]]+', ' ', 'g'));`]], null],
-    ['nr necopiat', [[`    v_nr := CASE WHEN cardinality(v_nr_forme) = 1 THEN v_nr_forme[1] ELSE btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g')) END;`, `    v_nr := btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g'));`]], null],
+    ['nr necopiat', [[`    v_nr := CASE WHEN cardinality(v_nr_forme) = 1 THEN v_nr_forme[1]\n                 WHEN v_kn IS NULL AND v_k <> v_kb THEN substr(v_k, length(v_kb) + 3)\n                 ELSE btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g')) END;`, `    v_nr := CASE WHEN v_kn IS NULL AND v_k <> v_kb THEN substr(v_k, length(v_kb) + 3)\n                 ELSE btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g')) END;`]], null],
     ['um necopiat (cantitatea convertită)', [[`      'um', coalesce(v_um_rep, btrim(regexp_replace(e->>'um', '[[:space:]]+', ' ', 'g'))), 'cantitate', v_c,`, `      'um', btrim(regexp_replace(e->>'um', '[[:space:]]+', ' ', 'g')), 'cantitate', v_c,`]], null],
     ['cantitatea neconvertită', [[`      v_c := v_c * v_factor / v_factor_rep; v_p := v_p * v_factor_rep / v_factor;`, `      v_p := v_p * v_factor_rep / v_factor;`]], null],
   ]
