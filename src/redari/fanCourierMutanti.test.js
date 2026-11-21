@@ -103,7 +103,7 @@ const schimbaTirajul = (stare, cheieNoua) => {
   if (cheieNoua) { stare.acum += 30000; t({ p_cheie: cheieNoua, p_inlocuieste: vechi }) }
 }
 // opodAprobat = alegerea cu care s-au calculat hash-urile aprobate; opodLot = alegerea CURENTĂ a lotului (rândul red_fan_loturi), implicit aceeași
-async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza' }, randuriPlus = {}, rpc, stareTiraj, raspUrmarire, opodAprobat = false, opodLot = opodAprobat }) {
+async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza' }, randuriPlus = {}, rpc, rpcServer, stareTiraj, raspUrmarire, opodAprobat = false, opodLot = opodAprobat }) {
   const tiraj = tirajSimulat(stareTiraj)
   const plicuri = Array.from({ length: n }, (_, i) => ({ id: `pl${i + 1}`, nr_plic: `PL-TST-${String(i + 1).padStart(4, '0')}`, destinatar_nume: 'PERSOANA FICTIVA', stare: 'activ' }))
   const convocari = plicuri.map((p, i) => ({ id: `c${i}`, plic_id: p.id, detinator_id: `d${i}` }))
@@ -123,12 +123,17 @@ async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza
     secrete: () => ({ username: 'u', password: 'p', clientId: 'C' }), randuriLot: async () => ({ data: randuri }), proiect: async () => ({ data: { cod: 'TEST-RAZVAN' } }),
     fanLot: async () => ({ data: { lot_id: LOT.id, test: true, prima_aprobare_la: '2026-11-18T08:00:00+00:00', opod: opodLot } }),
     datePlicuri: async () => ({ data: { plicuri, convocari, contacte } }), plicuriLot: async () => ({ data: plicuri }), pauza: async () => {}, subtle: webcrypto.subtle, fetch,
+    // F1: clasa B (service_role) simulată după contractul 20261228a
+    // F1: clasa B (service_role) simulată după contractul 20261228a; urmărirea / confirmările trec prin fn_red_fan_srv_* (p_actor = omul)
+    rpcServer: rpcServer || (async (nume, args) => { jurnal.push({ nume, args }); return nume === 'fn_red_fan_srv_anuleaza' ? { data: args.p_rezultat }
+      : nume === 'fn_red_fan_srv_urmarire' ? (raspUrmarire ? raspUrmarire(args) : { data: { scrise: args.p_randuri.length, pastrate: 0, depasite: 0 } })
+      : nume === 'fn_red_fan_srv_confirmari' ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : { data: null } }),
     rpc: rpc || (async (nume, args) => { jurnal.push({ nume, args }); return nume === 'fn_red_fan_claim_lot' ? { data: '99999999-0000-4000-8000-000000000001' }
       : nume === 'fn_red_fan_tiraj' ? tiraj(args) : nume === 'fn_red_fan_tiraj_opreste' ? tiraj.opreste(args)
       : nume === 'fn_red_fan_urmarire' ? (raspUrmarire ? raspUrmarire(args) : { data: { scrise: args.p_randuri.length, pastrate: 0, depasite: 0 } })
       : nume === 'fn_red_fan_confirmari' ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : { data: (args.p_rezultate || args.p_randuri || []).length } }),
   }
-  const r = await M.tr.executaActiuneFan({ corp, lot: LOT }, deps)
+  const r = await M.tr.executaActiuneFan({ corp, lot: LOT, uid: 'f0000000-0000-4000-8000-000000000001', proiectCod: 'TEST-RAZVAN' }, deps)
   return { r, apeluri, jurnal, plicuri, convocari, contacte, randuri }
 }
 const toateOk = (u, init) => raspuns(200, { response: JSON.parse(init.body).shipments.map((s, i) => ({ awbNumber: String(3000000000 + Number(s.info.content.slice(-4))) })) })
@@ -176,16 +181,15 @@ const VERIFICARI = {
     return JSON.stringify(eticheta) === '["3000000001","3000000003"]' && JSON.stringify(r.body.pozitii) === '[1,2]' && JSON.stringify(man.ramase.map(x => x.nr_plic)) === '["PL-TST-0002"]'
       && JSON.stringify([...new Set(zip.fisiere.map(f => f.nr_plic))]) === '["PL-TST-0001","PL-TST-0003"]' && zip.fisiere.every(f => f.nume.startsWith(f.nr_plic === 'PL-TST-0001' ? '0001_' : '0002_'))
   },
-  // 3 (P2): DELETE /awb cu 200 + eroare (sau formă necunoscută) → AWB-ul rămâne, nicio anulare scrisă
+  // 3 (P2): DELETE /awb cu 200 + eroare (sau formă necunoscută) → AWB-ul rămâne, nicio anulare scrisă (F1: înscrierea „ambiguu”, nu „sters”)
   async stergereStricta(M) {
+    const corpCerere = { actiune: 'sterge_awb', rand_id: '00000000-0000-4000-8000-000000000000', motiv_cod: 'date_gresite' }
     for (const corp of [{ status: 'error', message: 'nu' }, null, { ceva: 1 }]) {
-      const { r, jurnal } = await ruleaza(M, 1, { stari: { 0: 'generat' }, randuriPlus: { 0: { awb: '3000000001' } }, corp: { actiune: 'sterge_awb', rand_id: '00000000-0000-4000-8000-000000000000' },
-        handler: () => raspuns(200, corp) })
-      if (r.body.cod !== 'stergere_neconfirmata' || jurnal.some(j => j.nume === 'fn_red_fan_anulat')) return false
+      const { r, jurnal } = await ruleaza(M, 1, { stari: { 0: 'generat' }, randuriPlus: { 0: { awb: '3000000001' } }, corp: corpCerere, handler: () => raspuns(200, corp) })
+      if (r.body.cod !== 'stergere_neconfirmata' || jurnal.some(j => j.nume === 'fn_red_fan_anulat' || (j.nume === 'fn_red_fan_srv_anuleaza' && j.args.p_rezultat === 'sters'))) return false
     }
-    const { r } = await ruleaza(M, 1, { stari: { 0: 'generat' }, randuriPlus: { 0: { awb: '3000000001' } }, corp: { actiune: 'sterge_awb', rand_id: '00000000-0000-4000-8000-000000000000' },
-      handler: () => raspuns(200, { status: 'success' }) })
-    return r.body.cod === 'ok'
+    const { r, jurnal } = await ruleaza(M, 1, { stari: { 0: 'generat' }, randuriPlus: { 0: { awb: '3000000001' } }, corp: corpCerere, handler: () => raspuns(200, { status: 'success' }) })
+    return r.body.cod === 'ok' && jurnal.some(j => j.nume === 'fn_red_fan_srv_anuleaza' && j.args.p_rezultat === 'sters')
   },
   // 4 (P2): marcajul TEST / real blocat după PRIMA aprobare, chiar dacă rândurile au redevenit „propus”
   async marcajIstoric(M) {
@@ -224,8 +228,8 @@ const VERIFICARI = {
   async versiuneUrmarire(M) {
     const ev = u => raspuns(200, { data: u.searchParams.getAll('awb[]').map(a => ({ awbNumber: a, events: [{ id: 'C0', date: '2026-11-10 15:00:00' }] })) })
     const { r, jurnal } = await ruleaza(M, 2, { stari: { 0: 'generat', 1: 'generat' }, randuriPlus: { 0: { awb: '3000000001' }, 1: { awb: '3000000002' } }, corp: { actiune: 'urmarire' }, handler: ev })
-    const p = jurnal.find(j => j.nume === 'fn_red_fan_urmarire')?.args.p_randuri || []
-    const vechi = await ruleaza(M, 1, { stari: { 0: 'generat' }, randuriPlus: { 0: { awb: '3000000001' } }, corp: { actiune: 'urmarire' }, handler: ev, rpc: async () => ({ data: 1 }) })
+    const p = jurnal.find(j => /^fn_red_fan_(srv_)?urmarire$/.test(j.nume))?.args.p_randuri || []
+    const vechi = await ruleaza(M, 1, { stari: { 0: 'generat' }, randuriPlus: { 0: { awb: '3000000001' } }, corp: { actiune: 'urmarire' }, handler: ev, rpc: async () => ({ data: 1 }), rpcServer: async () => ({ data: 1 }) })
     return p.length === 2 && p.every(x => x.versiune === 7) && r.body.cod === 'ok' && vechi.r.body.cod === 'scriere_neconfirmata'
   },
   // 8c: un element de răspuns cu referința ALTUI plic → toată bucata „necunoscut” (asocierea pe poziție nu se face)
@@ -293,7 +297,7 @@ const VERIFICARI = {
     const baza = { stari: { 0: 'generat' }, randuriPlus: { 0: { awb: '3000000001' } }, corp: { actiune: 'urmarire' },
       handler: u => raspuns(200, { data: u.searchParams.getAll('awb[]').map(x => ({ awbNumber: x, events: [] })) }) }
     const r1 = await ruleaza(M, 1, { ...baza, raspUrmarire: () => ({ data: { scrise: 0, pastrate: 1, depasite: 0 } }) })
-    const p = r1.jurnal.find(j => j.nume === 'fn_red_fan_urmarire')?.args.p_randuri[0]
+    const p = r1.jurnal.find(j => /^fn_red_fan_(srv_)?urmarire$/.test(j.nume))?.args.p_randuri[0]
     const r2 = await ruleaza(M, 1, { ...baza, raspUrmarire: () => ({ data: { scrise: 1, depasite: 0 } }) })
     return lipsa.urmarire_stare === 'de_verificat' && gol.urmarire_stare === 'fara_evenimente' && gol.ultim_eveniment_la === null
       && p?.urmarire_stare === 'fara_evenimente' && p.ultim_eveniment_la === null && r1.r.body.cod === 'ok' && r1.r.body.pastrate === 1 && r2.r.body.cod === 'scriere_neconfirmata'
@@ -346,13 +350,14 @@ const VERIFICARI = {
     return M.lot.prefixLot({ test: true }) === 'TEST_' && /LOT DE TEST/.test(csv) && /^LOT DE TEST/.test(M.lot.titluLot({ nr_lot: 'PP-0001' }, { test: true }))
   },
   async poartaRol(M) {
-    const deps = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: false }), lot: async () => ({ data: LOT }) }
+    const deps = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: false }), operator: async () => ({ data: false }), lot: async () => ({ data: LOT }) }
     return (await M.h.raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: LOT.id } }, deps)).status === 403
+      && (await M.h.raspundeFan({ jwt: 'x', corp: { actiune: 'trimite', lot_id: LOT.id } }, deps)).body.cod === 'non_operator'
   },
   // ACTIVARE Testul 1: flag-ul pornit, DAR calea reală DOAR pe un proiect „TEST-…” cu lotul marcat TEST; orice alt lot = 423, fără secrete / rețea
   async doarTest(M) {
     const interzis = vi.fn(() => { throw new Error('APEL INTERZIS') })
-    const baza = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: async () => ({ data: LOT }), fetch: interzis, rpc: interzis, secrete: interzis, randuriLot: interzis, datePlicuri: interzis }
+    const baza = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), operator: async () => ({ data: true }), lot: async () => ({ data: LOT }), fetch: interzis, rpc: interzis, secrete: interzis, randuriLot: interzis, datePlicuri: interzis }
     const cer = async (cod, test) => { try { return await M.h.raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: LOT.id } }, { ...baza, proiect: async () => ({ data: { id: 'p1', cod } }), fanLot: async () => ({ data: test == null ? null : { test } }) }) } catch { return null } }
     const real = await cer('LOT1-PRUNISOR-JUPA', true), nemarcat = await cer('TEST-RAZVAN', null), marcatReal = await cer('TEST-RAZVAN', false)
     const refuz = r => r?.status === 423 && r.body.cod === 'transport_real_doar_test'
@@ -465,7 +470,10 @@ const VERIFICARI = {
       if (u.pathname === '/awb' && init.method === 'DELETE') return raspuns(200, { status: 'success' })
       return raspuns(200, { data: [] })
     }
-    const deps = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: async () => ({ data: LOT }), proiect: async () => ({ data: { cod: 'TEST-RAZVAN' } }), fanLot,
+    // merge cu F1 (#1136): poarta operatorului (owner-ul e operator) + clasa B pentru înscrierile acțiunilor operatorului (urmărire / confirmări / anulare)
+    const deps = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), operator: async () => ({ data: true }), lot: async () => ({ data: LOT }), proiect: async () => ({ data: { cod: 'TEST-RAZVAN' } }), fanLot,
+      rpcServer: async (nume, args) => { jurnal.push(nume); return nume === 'fn_red_fan_srv_urmarire' ? { data: { scrise: args.p_randuri.length, pastrate: 0, depasite: 0 } }
+        : nume === 'fn_red_fan_srv_confirmari' ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : nume === 'fn_red_fan_srv_anuleaza' ? { data: args.p_rezultat } : { data: 1 } },
       secrete: () => ({ username: 'u', password: 'p', clientId: 'C' }), randuriLot: async () => ({ data: randuri }), datePlicuri: async () => ({ data: { plicuri, convocari, contacte } }), plicuriLot: async () => ({ data: plicuri }),
       pauza: async () => {}, subtle: webcrypto.subtle, fetch, rpc: async (nume, args) => { jurnal.push(nume); return nume === 'fn_red_fan_urmarire' ? { data: { scrise: args.p_randuri.length, pastrate: 0, depasite: 0 } }
         : nume === 'fn_red_fan_confirmari' ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : nume === 'fn_red_fan_claim_lot' ? { data: '99999999-0000-4000-8000-000000000001' } : { data: 1 } } }
@@ -473,7 +481,7 @@ const VERIFICARI = {
     const g = await cere({ actiune: 'genereaza' })
     if (g.status !== 503 || g.body.cod !== 'citire_neconfirmata' || apeluri.includes('/intern-awb') || jurnal.includes('fn_red_fan_claim_lot')) return false
     const rez = []
-    for (const [actiune, extra] of [['urmarire', {}], ['confirmari', {}], ['evenimente', {}], ['eticheta', { manifest_cheie: 'alta' }], ['reconciliaza', { data: '2026-11-18' }], ['sterge_awb', { rand_id: randuri[0].id }]]) {
+    for (const [actiune, extra] of [['urmarire', {}], ['confirmari', {}], ['evenimente', {}], ['eticheta', { manifest_cheie: 'alta' }], ['reconciliaza', { data: '2026-11-18' }], ['sterge_awb', { rand_id: randuri[0].id, motiv_cod: 'date_gresite' }]]) {
       const r = await cere({ actiune, ...extra }); rez.push(r.status + ':' + r.body.cod)
     }
     return rez.join() === '200:ok,200:ok,200:ok,409:manifest_schimbat,409:nimic_de_reconciliat,200:ok'
@@ -516,8 +524,8 @@ describe('comutatorul oprit (TRANSPORT_REAL_ACTIV = false): comportamentul de di
   it('toate acțiunile → 423 transport_real_oprit, nicio dependență atinsă; pașii din ecran dezactivați cu „transport oprit”', async () => {
     const M = await incarca({ fisier: 'redariFanHandler.mjs', din: 'export const TRANSPORT_REAL_ACTIV = true', in: 'export const TRANSPORT_REAL_ACTIV = false' })
     const interzis = vi.fn(() => { throw new Error('APEL INTERZIS cât transportul e oprit') })
-    const deps = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: async () => ({ data: LOT }),
-      fetch: interzis, rpc: interzis, secrete: interzis, randuriLot: interzis, datePlicuri: interzis, proiect: interzis, fanLot: interzis, plicuriLot: interzis, pauza: interzis }
+    const deps = { getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), operator: async () => ({ data: true }), lot: async () => ({ data: LOT }),
+      fetch: interzis, rpc: interzis, rpcServer: interzis, secrete: interzis, randuriLot: interzis, datePlicuri: interzis, proiect: interzis, fanLot: interzis, plicuriLot: interzis, pauza: interzis }
     for (const actiune of M.h.ACTIUNI_FAN) {
       const r = await M.h.raspundeFan({ jwt: 'x', corp: { actiune, lot_id: LOT.id, parte: 1, data: '2026-11-18' } }, deps)
       expect([actiune, r]).toEqual([actiune, { status: 423, body: { cod: 'transport_real_oprit' } }])

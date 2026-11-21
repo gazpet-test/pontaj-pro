@@ -6,7 +6,7 @@
 import { TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST, transportPermis, esteProiectTest, MESAJ_TRANSPORT_OPRIT, MESAJ_DOAR_PROIECT_TEST, MESAJ_DOAR_LOT_TEST } from '../../supabase/functions/_shared/redariFanHandler.mjs'
 import { manifestTiparire, cheieTiraj, tirajDin, tirajNeschimbat, refuzTiraj, destinatarMascat, COD_TIRAJ_SCHIMBAT, COD_TIRAJ_OPRIT, MESAJ_TIRAJ_SCHIMBAT, MESAJ_TIRAJ_OPRIT,
   ASTEPTARE_DUPA_OPRIRE_S, fapteContrazise, ALEGERI_SOLUTIONARE, COD_URMARIRE_SCHIMBATA, sumaFan, EVENIMENTE_FAN, categorieEveniment, cereOpod,
-  COST_OPOD_ESTIMAT_LEI } from '../../supabase/functions/_shared/redariFan.mjs'
+  COST_OPOD_ESTIMAT_LEI, MOTIVE_ANULARE, CODURI_FAN, hashCerereFan } from '../../supabase/functions/_shared/redariFan.mjs'
 import { planPachetPlicuire, continutPaginaControl } from './plicuri.js'
 export { TRANSPORT_REAL_ACTIV, DOAR_PROIECTE_TEST, transportPermis, esteProiectTest, MESAJ_TRANSPORT_OPRIT, MESAJ_DOAR_PROIECT_TEST, MESAJ_DOAR_LOT_TEST }
 
@@ -45,26 +45,35 @@ export function starePropunere({ pregatite = [], randuri = [] } = {}) {
   return { dePropus, motiv }
 }
 
+/** Poarta „operator numit sau owner” (F1, spec §7.1 / §7.3): aceeași ca în funcția edge (fn_red_fan_e_operator: owner-ul e inclus în BD; aici
+ *  esteOperator vine din acel RPC, iar esteOwner din profil — L19: o singură definiție a cine e operator, în BD). */
+export const MESAJ_DOAR_OPERATOR = 'doar operatorii numiți de owner sau owner-ul'
+const operatorSauOwner = ({ esteOwner, esteOperator }) => esteOwner === true || esteOperator === true
+
 // Runda 3 pe #1135 (Jakarinos r2 P2): cât coloana `opod` lipsește (migrarea 20261227a neaplicată, codul publicat înainte), ecranul NU propune, NU
 // aprobă și NU generează — doar citirea și acțiunile care nu creează rezultate noi (marcaj, urmărire, confirmări, etichete, reconciliere, ștergere).
 // Altfel o aprobare cu hash-uri „fără B” ar preceda deducerea istorică a migrării („aprobat înainte = oPOD”), iar lotul ar rămâne înghețat pe true.
+// F1: aceeași regulă pe butonul unic „Trimite la curier” (stareTrimitere): el propune + aprobă + generează.
 export const MESAJ_OPOD_NEINSTALAT_PASI = 'alegerea oPOD nu e instalată în evidența FAN (migrarea 20261227a neaplicată): până la aplicarea ei nu se propune, nu se aprobă și nu se generează nimic nou'
 /** Pașii cu starea lor: { ...pas, activ, motiv }. transportActiv = flag-ul din cod; evidentaInstalata = tabelul red_fan_awb citibil;
  *  proiectCod = red_proiecte.cod al lotului (garda „doar TEST”: fără el, cu DOAR_PROIECTE_TEST, nimic nu e activ).
  *  gataDePropus = numărul plicurilor DE PROPUS (starePropunere.dePropus.length), motivPropunere = motivul când e 0 (starePropunere.motiv).
  *  opodInstalat = coloana red_fan_loturi.opod există (citesteLotFan.opodInstalat === true); orice altceva (lipsă, necunoscut) oprește propunerea,
- *  aprobarea și generarea cu MESAJ_OPOD_NEINSTALAT_PASI — fără valoare implicită „instalată” (L18: necunoscut ≠ instalat). */
-export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, poateScrie = false, fanLot = null, randuri = [], gataDePropus = 0, motivPropunere = '', proiectCod = null, opodInstalat = null } = {}) {
+ *  aprobarea și generarea cu MESAJ_OPOD_NEINSTALAT_PASI — fără valoare implicită „instalată” (L18: necunoscut ≠ instalat).
+ *  F1: esteOperator (fn_red_fan_e_operator) deschide pașii pe care funcția edge îi permite operatorului (etichete, urmărire, confirmări); aprobarea și
+ *  generarea detaliată rămân ale owner-ului. */
+export function stariPasi({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, esteOperator = false, poateScrie = false, fanLot = null, randuri = [], gataDePropus = 0, motivPropunere = '', proiectCod = null, opodInstalat = null } = {}) {
   const cuAwb = numar(randuri, ['generat', 'ridicat'])
+  const op = operatorSauOwner({ esteOwner, esteOperator })
   const cuOpod = [opodInstalat === true, MESAJ_OPOD_NEINSTALAT_PASI]
   const conditii = {
     propune: [[poateScrie, 'doar admin / editor'], cuOpod, [gataDePropus > 0, motivPropunere || 'niciun plic cu toate datele cerute de FAN']],
     aproba: [[esteOwner, 'doar owner-ul'], cuOpod, [!!fanLot, 'alege întâi: lot de TEST sau lot real'], [numar(randuri, ['propus']) > 0, 'niciun plic propus']],
     genereaza: [[esteOwner, 'doar owner-ul'], cuOpod, [numar(randuri, ['aprobat']) > 0, 'niciun plic aprobat']],
-    etichete: [[esteOwner, 'doar owner-ul'], [cuAwb > 0, 'niciun AWB generat']],
+    etichete: [[op, MESAJ_DOAR_OPERATOR], [cuAwb > 0, 'niciun AWB generat']],
     curier: [[cuAwb > 0, 'niciun AWB generat']],
-    urmarire: [[esteOwner, 'doar owner-ul'], [cuAwb > 0, 'niciun AWB generat']],
-    confirmari: [[esteOwner, 'doar owner-ul'], [cuAwb > 0, 'niciun AWB generat']],
+    urmarire: [[op, MESAJ_DOAR_OPERATOR], [cuAwb > 0, 'niciun AWB generat']],
+    confirmari: [[op, MESAJ_DOAR_OPERATOR], [cuAwb > 0, 'niciun AWB generat']],
   }
   const oprit = motivTransport({ transportActiv, proiectCod, fanLot })
   return PASI_FAN.map(p => {
@@ -175,14 +184,17 @@ export const OPERATII_FAN = Object.freeze([
   { cheie: 'solutionare', titlu: 'Soluționează o contradicție', ajutor: 'owner-ul sau un admin Redări: după verificarea în selfAWB, alegi pentru fiecare fapt contrazis valoarea care rămâne (cea cunoscută sau cea nouă), cu motiv; istoricul rămâne în jurnal' },
 ])
 /** Operațiile cu starea lor: { ...operatie, activ, motiv } (aceleași reguli ca stariPasi: transportul oprit le dezactivează pe toate). */
-export function stariOperatii({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, esteAdmin = false, randuri = [], fanLot = null, proiectCod = null } = {}) {
+export function stariOperatii({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, esteOwner = false, esteOperator = false, esteAdmin = false, randuri = [], fanLot = null, proiectCod = null } = {}) {
+  const op = operatorSauOwner({ esteOwner, esteOperator })
   const conditii = {
     // runda 5: soluționarea contradicțiilor urmăririi — owner SAU admin Redări (aceeași poartă ca fn_red_fan_urmarire_solutioneaza)
     solutionare: [[esteOwner || esteAdmin, 'doar owner-ul sau un admin Redări'], [(randuri || []).some(r => fapteContrazise(r).length > 0), 'nicio contradicție de soluționat']],
-    reconciliere: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['necunoscut', 'in_curs']) > 0, 'niciun rând „necunoscut” sau „în curs”']],
+    // F1: reconcilierea (propunerile + „Confirmă: găsit”) și anularea (ștergerea la curier, în doi pași) sunt și ale operatorului; absența și
+    // „marchează anulat” rămân owner (clasa C) și se verifică separat în ecran
+    reconciliere: [[op, MESAJ_DOAR_OPERATOR], [numar(randuri, ['necunoscut', 'in_curs']) > 0, 'niciun rând „necunoscut” sau „în curs”']],
     plafon: [[esteOwner, 'doar owner-ul']],
-    anulare: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['generat']) > 0, 'niciun AWB generat neridicat']],
-    evenimente: [[esteOwner, 'doar owner-ul']],
+    anulare: [[op, MESAJ_DOAR_OPERATOR], [numar(randuri, ['generat']) > 0, 'niciun AWB generat neridicat']],
+    evenimente: [[op, MESAJ_DOAR_OPERATOR]],
     tiraj: [[esteOwner, 'doar owner-ul'], [numar(randuri, ['generat', 'ridicat']) > 0, 'niciun AWB generat']],
   }
   const oprit = motivTransport({ transportActiv, proiectCod, fanLot }) || (!evidentaInstalata ? 'evidența FAN nu e instalată (migrarea neaplicată)' : null)
@@ -323,6 +335,8 @@ export async function solutioneazaUrmarire({ rpc, rand, alegeri, motiv }) {
 export const ETICHETE_STARE_FAN = Object.freeze({
   propus: 'propus', aprobat: 'aprobat', in_curs: 'în curs (trimis la FAN)', generat: 'AWB generat', eroare: 'respins de FAN',
   necunoscut: 'necunoscut: de reconciliat', anulat: 'anulat', ridicat: 'ridicat de curier',
+  // F1 (spec §8.8): stările noi
+  de_aprobat: 'așteaptă aprobarea proprietarului', retras: 'retras din trimitere',
 })
 export const ETICHETE_URMARIRE = Object.freeze({
   neurmarit: '-', fara_evenimente: 'fără evenimente', in_tranzit: 'în tranzit', ridicat: 'ridicat (C0): de confirmat', livrat: 'livrat (S2)',
@@ -386,6 +400,16 @@ export function mesajEdgeFan(rez) {
   if (cod === 'transport_real_doar_test') return `Transport permis doar pe proiecte de TEST cu lotul marcat TEST (Testul 1): funcția FAN nu a făcut niciun apel. ${rez?.data?.motiv || ''}`.trim()
   if (cod === 'non_owner') return 'Doar owner-ul poate porni pașii FAN.'
   if (cod === 'lot_nemarcat') return 'Lotul nu e marcat (TEST / real) în evidența FAN: nimic trimis.'
+  // F1 (spec §8.5): poarta operatorului, refuzurile comenzii / tirajului din BD, anularea în doi pași
+  if (cod === 'non_operator') return MESAJ_NON_OPERATOR
+  if (cod === 'autorizare_neconfirmata') return 'Verificarea dreptului nu s-a putut face (răspuns neconfirmat): nimic trimis. Reîncearcă.'
+  if (cod === 'comanda_refuzata') return mesajRefuzComanda(rez?.data?.cod_bd, rez?.data?.mesaj)
+  if (cod === 'lot_neincheiat') return MESAJ_LOT_NEINCHEIAT
+  if (cod === 'anulare_in_curs') return 'Anularea AWB-ului e deja în curs; așteaptă răspunsul curierului („Verifică la curier” dacă durează).'
+  if (cod === 'stergere_refuzata') return 'Nu s-a anulat: curierul spune că AWB-ul a fost deja preluat; cererea de anulare a fost închisă (ridicarea vine la urmărire).'
+  if (cod === 'doar_awb_generat_neridicat') return 'Se anulează doar un AWB generat și neridicat.'
+  if (cod === 'nu_e_gasit_in_borderou') return 'AWB-ul nu e în borderoul curierului la reverificare: nimic confirmat. Verifică în contul curierului.'
+  if (cod === 'transport_neconfigurat' || cod === 'autentificare_fan_neconfirmata') return MESAJ_LEGATURA_CURIER
   if (cod === 'manifest_schimbat') return 'Evidența s-a schimbat de la afișare: reîncarcă și verifică din nou pagina de control. Nimic tipărit.'
   if (cod === 'tiraj_schimbat') return `${MESAJ_TIRAJ_SCHIMBAT} Nimic tipărit.`
   if (cod === 'tiraj_oprit') return MESAJ_TIRAJ_OPRIT
@@ -393,4 +417,260 @@ export function mesajEdgeFan(rez) {
   if (cod === 'stergere_neconfirmata') return `Ștergere neconfirmată: AWB-ul rămâne „generat”. ${rez?.data?.motiv || ''}`.trim()
   if (rez?.error) return 'Rezultat neconfirmat: reîncarcă evidența înainte de orice reluare (nu reapăsa orbește).'
   return cod === 'ok' ? 'Operație încheiată.' : `Răspuns: ${cod || 'necunoscut'}`
+}
+
+// ═══ F1 — butonul unic „Trimite la curier” (spec docs/redari/FAN_FLUX_OPERATOR_SPEC.md §1, §7.2, §8.3, §8.5, §13 F1) ═══
+export { MOTIVE_ANULARE, CODURI_FAN, hashCerereFan }
+export const MESAJ_NON_OPERATOR = 'Doar operatorii numiți de proprietar pot trimite la curier.'
+export const MESAJ_LOT_NEINCHEIAT = 'AWB-urile se tipăresc după ce se termină trimiterea lotului.'
+export const MESAJ_LEGATURA_CURIER = 'Legătura cu curierul nu e configurată sau nu răspunde; nimic trimis. Anunță proprietarul.'
+export const MESAJ_NECONFIRMAT = 'Răspunsul curierului nu s-a confirmat pentru %N plicuri. NU retrimite. Apasă „Verifică la curier” după 10 minute.'
+export const MESAJ_DOAR_TEST_BD = 'Transportul e permis doar pe proiecte de TEST (Testul 1): nimic trimis.'
+/** Arenda unei trimiteri (minute): cât timp o altă apăsare pe același lot e refuzată (RD030) — aceeași valoare ca în BD (fn_red_fan_comanda). */
+export const ARENDA_INTENTIE_MIN = 10
+export const ETICHETE_MOTIV_ANULARE = Object.freeze({
+  netiparit_3_zile: 'AWB netipărit de 3 zile lucrătoare', neridicat_3_zile: 'tipărit, dar neridicat de 3 zile lucrătoare',
+  plic_retras: 'plicul a fost retras', date_gresite: 'date greșite pe AWB', alt_motiv: 'alt motiv (cu notă)',
+})
+export const ETICHETE_MOTIV_RETRAGERE = Object.freeze({ plic_mutat: 'plicul nu mai e în lot', plic_anulat: 'plicul e anulat', lot_tiparit: 'lotul e tipărit', operator: 'retras de operator', owner: 'retras de owner' })
+const oraRo = v => { const ms = Date.parse(v); if (!Number.isFinite(ms)) return ''
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(ms)).map(x => [x.type, x.value]))
+  return `${p.hour}:${p.minute}` }
+const plicuriN = n => `${n} ${n === 1 ? 'plic' : 'plicuri'}`
+
+/** Ziua de azi în ora României (yyyy-mm-dd), aceeași ca `zi_ro` din BD (L17). */
+export const ziRo = (ms = Date.now()) => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(ms)).map(x => [x.type, x.value])); return `${p.year}-${p.month}-${p.day}` }
+/**
+ * Lista ecranului (§1): fiecare plic pregătit (pregatestePlicuriFan: { ok, plic, hash, probleme }) cu rândul FAN viu și dacă poate intra într-o trimitere:
+ * gata (toate datele) ȘI fără rând cu AWB / în curs / de aprobat (un rând propus / aprobat sau niciun rând intră; eroare / anulat / retras nu sunt vii).
+ * { ...pregatit, rand, trimisibil, motiv } — motivul e textul semnului galben („lipsește …” sau starea rândului).
+ */
+export function plicuriTrimisibile(pregatite, randuri) {
+  const viu = new Map((randuri || []).filter(r => r && !['eroare', 'anulat', 'retras'].includes(r.stare)).map(r => [r.plic_id, r]))
+  return (pregatite || []).filter(p => p?.plic?.id).map(p => {
+    const f = viu.get(p.plic.id) || null, blocat = !!f && !['propus', 'aprobat'].includes(f.stare)
+    return { ...p, rand: f, trimisibil: !!p.ok && !blocat, motiv: !p.ok ? (p.probleme || []).join('; ') || 'lipsesc date cerute de curier' : blocat ? ETICHETE_STARE_FAN[f.stare] || f.stare : '' }
+  })
+}
+/** Runda 2 pe #1136: ce spune confirmarea „Trimite la curier” despre oPOD — alegerea lotului citită (aceeași din care funcția edge construiește corpul). */
+export function textOpodTrimitere(fanLot, n) {
+  return opodLot(fanLot) ? `Lotul cere oPOD (confirmare de primire în original): în plus față de transport, estimat ${formatLei(costOpodEstimat(n))} pentru ${n} plicuri.`
+    : 'Fără oPOD: confirmarea de primire e cea electronică, de pe terminalul curierului.'
+}
+/** Textul plafonului zilei (§1): „azi mai poți trimite N …”; plafon = rândul din v_red_fan_plafon_azi; null = eroare de citire → mesaj, nu „0” (L18). */
+export function textPlafonAzi(plafon) {
+  if (!plafon || !Number.isInteger(plafon.limita_zi) || !Number.isInteger(plafon.incap)) return 'Plafonul zilei nu s-a putut citi: nu se știe cât mai încape azi fără aprobarea proprietarului.'
+  if (plafon.limita_zi === 0) return `Plafonul zilei e 0: orice trimitere așteaptă aprobarea proprietarului (azi ${plafon.aprobate ?? 0} aprobate).`
+  return `Azi mai poți trimite ${plicuriN(plafon.incap)} fără aprobarea proprietarului (plafon ${plafon.limita_zi}/zi; ${plafon.aprobate ?? 0} aprobate azi).`
+}
+
+/**
+ * Starea butonului „Trimite la curier” (§1, §7.1): { activ, motiv, avertisment }. esteOperator = răspunsul lui fn_red_fan_e_operator (true / false /
+ * null = neconfirmat → inactiv, L18); plafon = v_red_fan_plafon_azi (null = necitit: butonul rămâne activ, dar avertismentul spune că nu se știe
+ * cât încape); intentieVie = intenția in_curs a lotului cu arenda în viitor (altă apăsare → RD030: nu mai trimitem). Avertismentul Q2 (decis A):
+ * mai multe plicuri decât încap → TOATĂ trimiterea așteaptă aprobarea.
+ */
+export function stareTrimitere({ transportActiv = TRANSPORT_REAL_ACTIV, evidentaInstalata = false, opodInstalat = null, esteOperator = null, fanLot = null, proiectCod = null, selectate = 0, plafon = null, intentieVie = null, acumMs = Date.now() } = {}) {
+  // marcajul îl pune comanda (automat), deci doar proiectul se verifică aici (cereMarcaj: false); BD-ul refuză lotul REAL (RD032)
+  const oprit = motivTransport({ transportActiv, fanLot, proiectCod, cereMarcaj: false })
+  if (oprit) return { activ: false, motiv: oprit, avertisment: '' }
+  if (!evidentaInstalata) return { activ: false, motiv: 'evidența FAN nu e instalată (migrarea neaplicată)', avertisment: '' }
+  // runda 2 pe #1136: butonul propune + aprobă + generează → aceeași regulă ca pașii detaliați (#1135 r3): fără coloana opod confirmată, nimic nou
+  if (opodInstalat !== true) return { activ: false, motiv: MESAJ_OPOD_NEINSTALAT_PASI, avertisment: '' }
+  if (esteOperator === null) return { activ: false, motiv: 'dreptul de operator nu s-a putut verifica (reîncarcă)', avertisment: '' }
+  if (esteOperator !== true) return { activ: false, motiv: MESAJ_DOAR_OPERATOR, avertisment: '' }
+  if (fanLot?.tiraj_cheie) return { activ: false, motiv: 'lotul e tipărit: plicurile noi merg într-un lot nou de plicuire', avertisment: '' }
+  if (intentieVie && Date.parse(intentieVie.lucru_pana_la) > acumMs) return { activ: false, motiv: `o trimitere e în curs pe acest lot (alt tab sau încă rulează); așteaptă până la ${oraRo(intentieVie.lucru_pana_la)}`, avertisment: '' }
+  if (!Number.isInteger(selectate) || selectate < 1) return { activ: false, motiv: 'alege cel puțin un plic gata', avertisment: '' }
+  let avertisment = ''
+  if (!plafon || !Number.isInteger(plafon.incap)) avertisment = 'Plafonul zilei nu s-a putut citi: dacă plicurile nu încap azi, TOATĂ trimiterea va aștepta aprobarea proprietarului.'
+  else if (selectate > plafon.incap) avertisment = `Ai ales ${plicuriN(selectate)}, dar azi mai încap doar ${plafon.incap} fără aprobare: TOATĂ trimiterea va aștepta aprobarea proprietarului. Poți debifa ${selectate - plafon.incap} și trimite azi doar cât încape.`
+  return { activ: true, motiv: '', avertisment }
+}
+
+// ── registrul local al intențiilor (§8.3, lecția „L05 în UI”): o intrare pe cheie, scrisă și VERIFICATĂ înainte de apel; iese doar la rezultat dovedit ──
+export const PREFIX_REGISTRU_FAN = 'redari_fan_intentie:'
+/** storage = localStorage (sau un obiect cu getItem / setItem / removeItem / key / length în teste). Fiecare metodă întoarce ce a reușit; nimic nu aruncă. */
+export function registruIntentii(storage = globalThis.localStorage) {
+  const k = cheie => PREFIX_REGISTRU_FAN + cheie
+  const citeste = cheie => { try { const v = storage?.getItem(k(cheie)); if (!v) return null; const o = JSON.parse(v); return o && typeof o === 'object' ? { cheie, ...o } : null } catch { return null } }
+  return {
+    citeste,
+    /** scrie + recitește: true doar dacă intrarea e în registru cu exact aceste date (storage plin / blocat = false → NU se trimite) */
+    scrie(cheie, { lot_id, plic_ids, hash_cerere, inceput_la, apasat_la, terminat_la }) {
+      if (!cheie || !lot_id || !Array.isArray(plic_ids) || !plic_ids.length || !hash_cerere) return false
+      const acum = new Date().toISOString()
+      const date = { lot_id, plic_ids: [...plic_ids], hash_cerere, inceput_la: inceput_la || acum, apasat_la: apasat_la || inceput_la || acum, ...(terminat_la ? { terminat_la } : {}) }
+      try { storage.setItem(k(cheie), JSON.stringify(date)) } catch { return false }
+      const r = citeste(cheie)
+      return !!r && r.lot_id === lot_id && r.hash_cerere === hash_cerere && JSON.stringify(r.plic_ids) === JSON.stringify(date.plic_ids) && r.apasat_la === date.apasat_la
+        && (r.terminat_la || null) === (date.terminat_la || null)
+    },
+    /** Runda 2 pe #1136: momentul ULTIMEI apăsări cu această cheie (prima trimitere sau „Reia”), scris și verificat ÎNAINTEA apelului (eșec = nu se
+     *  trimite). Absența cheii din BD dovedește ceva doar după ARENDA_INTENTIE_MIN de la el (deciziaIntentiei): nicio cerere nu mai poate fi în zbor. */
+    apasa(cheie, la = new Date().toISOString()) {
+      const r = citeste(cheie)
+      if (!r) return false
+      return this.scrie(cheie, { lot_id: r.lot_id, plic_ids: r.plic_ids, hash_cerere: r.hash_cerere, inceput_la: r.inceput_la, apasat_la: la, terminat_la: r.terminat_la })
+    },
+    /** Runda 3 pe #1136 (Jakarinos r2 P1): momentul în care s-a ÎNCHEIAT ultimul apel cu cheia din acest browser (răspuns sau eroare), pe versiunea
+     *  CURENTĂ a intrării (nu o recreează dacă a ieșit). O listă a cărei citire a pornit înaintea lui nu dovedește absența (apelul putea scrie după ea). */
+    termina(cheie, la = new Date().toISOString()) {
+      const r = citeste(cheie)
+      if (!r) return false
+      return this.scrie(cheie, { lot_id: r.lot_id, plic_ids: r.plic_ids, hash_cerere: r.hash_cerere, inceput_la: r.inceput_la, apasat_la: r.apasat_la, terminat_la: la })
+    },
+    sterge(cheie) { try { storage.removeItem(k(cheie)) } catch { /* nimic */ } return citeste(cheie) === null },
+    toate() {
+      const out = []
+      try { for (let i = 0; i < (storage?.length ?? 0); i++) { const n = storage.key(i); if (n && n.startsWith(PREFIX_REGISTRU_FAN)) { const r = citeste(n.slice(PREFIX_REGISTRU_FAN.length)); if (r) out.push(r) } } } catch { /* nimic */ }
+      return out.sort((a, b) => String(a.inceput_la).localeCompare(String(b.inceput_la)))
+    },
+    peLot(lotId) { return this.toate().filter(r => r.lot_id === lotId) },
+  }
+}
+/** O trimitere din ACEST browser, pe același lot, pornită de mai puțin de ARENDA_INTENTIE_MIN minute (încă în registru) → a doua apăsare cu cheie nouă e refuzată local. */
+export function intentieLocalaBlocanta(intrari, lotId, acumMs = Date.now()) {
+  return (intrari || []).find(r => r.lot_id === lotId && Number.isFinite(Date.parse(r.inceput_la)) && acumMs - Date.parse(r.inceput_la) < ARENDA_INTENTIE_MIN * 60000) || null
+}
+/**
+ * Rezultatul DOVEDIT (intrarea iese din registru) — §8.3: `ok` cu `incheiata: true` (și cea încheiată de RPC); refuz determinist al BD care NU a scris
+ * cheia (`RD034` închisă, `RD036` / `RD037` / `22023` / `P0001` / `P0002` / `23505` refuzate în faza V, nimic scris); cerere invalidă (400); garda „doar TEST”
+ * ÎNAINTEA comenzii (fără `mod` în răspuns). NU dovedesc nimic: `ok` cu `incheiata: false`, `RD030` (altcineva lucrează pe cheie), `RD033`, 403 (dreptul
+ * e verificat înaintea cheii), 503 / timeout / lipsa răspunsului — intrarea rămâne și se lămurește din BD (v_red_fan_intentii) la redeschidere.
+ */
+export function rezultatDovedit(corp) {
+  const cod = corp?.cod
+  if (cod === 'ok') return corp.incheiata === true
+  if (cod === 'comanda_refuzata') return ['RD034', 'RD036', 'RD037', 'RD038', '22023', 'P0001', 'P0002', '23505'].includes(corp.cod_bd)
+  if (cod === 'cerere_invalida') return true
+  if (cod === 'transport_real_doar_test') return corp.mod === undefined
+  return false
+}
+/**
+ * Ce face ecranul cu o intenție din registru față de starea ei din BD (v_red_fan_intentii). dinBd: undefined = necitit; null = cheia NU apare în
+ * citire; altfel rândul. cititLaMs = momentul în care a PORNIT citirea (Jakarinos #1136 r1 P1: o listă citită înaintea unei apăsări nu dovedește
+ * nimic despre cheia ei). 'sterge' DOAR la o stare terminală (încheiată / închisă — stări care nu se mai schimbă) sau la absența văzută de o
+ * citire pornită după ARENDA_INTENTIE_MIN de la ultima apăsare (apasat_la; nicio cerere cu cheia nu mai poate fi în zbor); 'reia' (absentă încă,
+ * sau in_curs cu arenda expirată: retrimiterea cu ACEEAȘI cheie e idempotentă), 'verifica' (rânduri nelămurite), 'asteapta' (arenda în viitor),
+ * 'necitit'.
+ */
+export function deciziaIntentiei(intrare, dinBd, acumMs = Date.now(), cititLaMs = null) {
+  if (dinBd === undefined) return 'necitit'
+  if (dinBd === null) {
+    const apasat = Date.parse(intrare?.apasat_la || intrare?.inceput_la)
+    // runda 3 (Jakarinos #1136 r2 P1): și după sfârșitul ultimului apel cu cheia (terminat_la), dacă e cunoscut — un apel ținut peste arendă poate scrie
+    const terminat = intrare?.terminat_la ? Date.parse(intrare.terminat_la) : -Infinity
+    return Number.isFinite(cititLaMs) && Number.isFinite(apasat) && cititLaMs >= apasat + ARENDA_INTENTIE_MIN * 60000 && cititLaMs >= terminat ? 'sterge' : 'reia'   // terminat_la stricat (NaN) = nimic dovedit
+  }
+  if (dinBd.stare === 'incheiata' || dinBd.stare === 'neincheiata') return 'sterge'
+  if (Number(dinBd.necunoscute) > 0) return 'verifica'
+  return Date.parse(dinBd.lucru_pana_la) > acumMs ? 'asteapta' : 'reia'
+}
+/**
+ * După un apel `trimite` (Jakarinos #1136 r1 P1): intrarea iese din registru DOAR pe dovada din BD, citită pe cheia EXACTĂ, cu citirea pornită DUPĂ
+ * răspuns (cititLaMs). dinBd = rândul / null (cheia absentă) / undefined (citirea a picat). Stare terminală în BD = 'sterge'; cheie absentă = 'sterge'
+ * doar dacă răspunsul funcției edge e un rezultat dovedit (rezultatDovedit: refuz determinist înaintea oricărei scrieri / nimic de trimis) — un 503,
+ * un timeout sau lipsa răspunsului NU dovedesc absența (cererea poate fi încă în zbor): 'pastreaza', iar regula arendei o lămurește mai târziu.
+ */
+export function decizieDupaApel({ intrare, corp, dinBd, cititLaMs, acumMs = Date.now() }) {
+  if (dinBd === undefined) return 'pastreaza'
+  if (dinBd === null) return rezultatDovedit(corp) || deciziaIntentiei(intrare, null, acumMs, cititLaMs) === 'sterge' ? 'sterge' : 'pastreaza'
+  return deciziaIntentiei(intrare, dinBd, acumMs, cititLaMs) === 'sterge' ? 'sterge' : 'pastreaza'
+}
+/** Runda 3 pe #1136 (Jakarinos r2 P1): cheile cu un apel `trimite` în curs DIN ACEST BROWSER (puse înaintea scrierii în registru, scoase după
+ *  decizia de după răspuns). La nivel de modul, nu de componentă: o remontare a ecranului (lot schimbat și înapoi) nu le uită. */
+export const APELURI_FAN_IN_CURS = new Set()
+/**
+ * Curățarea registrului din efectul de lămurire (lista `intentii`). Decizia se ia pe versiunea CURENTĂ a intrării, recitită din registru chiar acum
+ * (după un „Reia” sau o apăsare în alt tab, apasat_la e nou; copia memorată de ecran e veche), și niciodată pe o cheie cu apel în curs (inCurs).
+ * dinBd = rândul cheii din listă / null (absentă) / undefined (lista necitită). true = intrarea a ieșit.
+ */
+export function stergeDacaLamurita(reg, cheie, dinBd, acumMs, cititLaMs, inCurs) {
+  if (inCurs?.has(cheie)) return false
+  const curenta = reg.citeste(cheie)
+  if (!curenta || deciziaIntentiei(curenta, dinBd, acumMs, cititLaMs) !== 'sterge') return false
+  return reg.sterge(cheie)
+}
+
+// ── mesajul unic (§8.5): o singură definiție; motivul în BD rămâne codul ──
+const TEXT_RESPINS = Object.freeze({ phone: 'telefonul lipsește sau e greșit', adresa: 'adresa nu e recunoscută de curier (județ / localitate / stradă)', name: 'curierul a respins expedierea; detalii în contul curierului', necunoscut: 'curierul a respins expedierea; detalii în contul curierului' })
+export const textRespins = x => `${x?.nr_plic || 'PL-?'} — ${TEXT_RESPINS[x?.motiv_cod] || TEXT_RESPINS.necunoscut}`
+const TEXT_EXCLUS = Object.freeze({
+  lot_tiparit: 'lotul e deja tipărit; plicul nu mai intră în el (mută-l într-un lot nou de plicuire)', in_asteptare_aprobare: 'așteaptă decizia proprietarului',
+  date_schimbate: 'datele s-au schimbat după aprobare; nu a intrat în reluare („Trimite” din nou)', date_incomplete: 'lipsesc date cerute de curier (fișa deținătorului)',
+  plic_necitibil: 'plicul nu s-a putut citi', plic_anulat: 'plicul e anulat', plic_mutat: 'plicul nu mai e în lot', plic_expediat: 'plicul are deja expediere',
+  deja_awb: 'are deja AWB',
+})
+export const textExclus = x => `${x?.nr_plic || x?.plic_id || 'PL-?'} — ${TEXT_EXCLUS[x?.motiv_cod] || `exclus (${x?.motiv_cod || '?'})`}${Array.isArray(x?.detalii) && x.detalii.length ? `: ${x.detalii.join('; ')}` : ''}`
+export const textRetras = x => `${x?.nr_plic || 'PL-?'} — scos din trimitere: ${ETICHETE_MOTIV_RETRAGERE[x?.motiv_cod] || x?.motiv_cod || '?'}`
+/** Refuzul comenzii / tirajului din BD (cod SQLSTATE) → mesajul operatorului (§8.5). mesajBd = textul BD (doar ora din RD030 / numărul din RD033 se refolosesc). */
+export function mesajRefuzComanda(codBd, mesajBd = '') {
+  const ora = String(mesajBd || '').match(/\b(\d{2}:\d{2})\b/)?.[1]
+  const n = String(mesajBd || '').match(/(\d+) plicuri/)?.[1]
+  switch (codBd) {
+    case 'RD030': return `Trimiterea e în curs (alt tab sau încă rulează); așteaptă${ora ? ` până la ${ora}` : ' câteva minute'}.`
+    case 'RD031': return MESAJ_LOT_NEINCHEIAT
+    case 'RD032': return MESAJ_DOAR_TEST_BD
+    case 'RD033': return `${n ? `${n} plicuri au` : 'Plicurile au'} rezultatul neconfirmat; întâi „Verifică la curier”.`
+    case 'RD034': return 'Trimiterea anterioară a fost închisă; apasă din nou „Trimite la curier”.'
+    case 'RD035': return 'Anularea AWB-ului e deja în curs; așteaptă răspunsul curierului.'
+    case 'RD036': return 'Lotul e deja tipărit; plicurile noi merg într-un lot nou de plicuire.'
+    case 'RD037': return 'Lotul are deja plicuri în așteptarea aprobării proprietarului; așteaptă decizia, retrage cererea sau alege mai puține plicuri.'
+    case 'RD038': return 'Alegerea oPOD a lotului (confirmarea de primire în original) s-a schimbat între timp: nimic trimis. Reîncarcă și apasă din nou.'
+    case '22023': return 'Cererea nu se potrivește cu trimiterea anterioară (altă cheie / alt operator): reîncarcă și apasă din nou „Trimite la curier”.'
+    case 'P0001': return `Refuzat de regulile evidenței: ${mesajBd || 'verifică plafonul lotului și datele'}. Nimic trimis.`
+    default: return `Comanda a fost refuzată (${codBd || '?'}): nimic trimis. ${mesajBd || ''}`.trim()
+  }
+}
+/**
+ * Mesajul UNIC după „Trimite la curier” (§8.5), din răspunsul funcției edge (corp = body-ul; `cod` + câmpurile din `trimite`). Numerele vin din
+ * rândurile recitite de funcția edge (nu din memo); listele (respinse / excluse / retrase) se înșiră sub mesaj. Un răspuns lipsă = neconfirmat.
+ */
+export function mesajTrimitere(corp) {
+  if (!corp || typeof corp !== 'object') return 'Rezultat neconfirmat: reîncarcă evidența; dacă trimiterea apare neîncheiată, „Reia trimiterea”.'
+  if (corp.cod !== 'ok') {
+    if (corp.cod === 'comanda_refuzata') return mesajRefuzComanda(corp.cod_bd, corp.mesaj)
+    if (corp.cod === 'transport_real_doar_test') return MESAJ_DOAR_TEST_BD
+    if (corp.cod === 'non_operator') return MESAJ_NON_OPERATOR
+    if (corp.cod === 'cerere_invalida') return 'Cererea e invalidă (plicuri sau cheie): reîncarcă ecranul și alege din nou plicurile.'
+    if (corp.cod === 'transport_neconfigurat' || corp.cod === 'autentificare_fan_neconfirmata') return MESAJ_LEGATURA_CURIER
+    if (corp.cod === 'transport_real_oprit') return 'Transport oprit: funcția FAN nu face niciun apel până la activare.'
+    // runda 2 pe #1136: niciun plic valid acum, dar cheia are deja o trimitere neîncheiată în evidență (încercarea anterioară)
+    if (corp.cod === 'intentie_neincheiata') return Number(corp.necunoscute) > 0
+      ? `Plicurile alese nu mai sunt valide, iar trimiterea anterioară are ${plicuriN(Number(corp.necunoscute))} cu rezultatul neconfirmat: NU retrimite; „Verifică la curier” după 10 minute.`
+      : 'Plicurile alese nu mai sunt valide, iar trimiterea anterioară cu aceeași apăsare e încă neîncheiată în evidență: reîncarcă; „Reia trimiterea” o încheie.'
+    return `Rezultat neconfirmat (${corp.cod}): reîncarcă evidența; dacă trimiterea apare neîncheiată, „Reia trimiterea”. Nu reapăsa orbește.`
+  }
+  const linii = []
+  const generate = Number(corp.generate) || 0, deAprobat = Number(corp.de_aprobat) || 0, necunoscute = Number(corp.necunoscute) || 0, ramase = Number(corp.ramase) || 0
+  const respinse = Array.isArray(corp.respinse) ? corp.respinse : [], excluse = Array.isArray(corp.excluse) ? corp.excluse : [], retrase = Array.isArray(corp.retrase) ? corp.retrase : []
+  if (corp.replay) linii.push(`Rezultat deja înregistrat${corp.incheiata_la ? ` la ${oraRo(corp.incheiata_la)}` : ''} (aceeași apăsare): nimic retrimis.`)
+  else if (corp.mod === 'reluare') linii.push(`Trimiterea întreruptă a fost reluată.`)
+  if (!corp.incheiata) {
+    linii.push(MESAJ_NECONFIRMAT.replace('%N', String(necunoscute || ramase || '?')))
+  } else if (deAprobat > 0 && generate === 0) {
+    const inc = corp.azi && Number.isInteger(corp.azi.incapeau) ? ` (azi mai încăpeau ${corp.azi.incapeau})` : ''
+    linii.push(`Toate cele ${plicuriN(deAprobat)} așteaptă aprobarea proprietarului${inc}. După aprobare, apasă din nou „Trimite la curier”.`)
+  } else if (generate > 0) {
+    const tarif = sumaFan(corp.tarif_total)
+    linii.push(`${generate} ${generate === 1 ? 'AWB generat' : 'AWB-uri generate'}${respinse.length ? `, ${respinse.length} ${respinse.length === 1 ? 'respins' : 'respinse'}` : ''}.${tarif != null ? ` Tarif: ${formatLei(tarif)} fără TVA.` : ' Tarif: necunoscut.'}`)
+    // foile: „descărcate” DOAR cu PDF-urile în răspuns și fără eroare la etichete (tirajul poate fi început și când PDF-ul a picat după el — L18)
+    if (corp.etichete_eroare === 'lot_neincheiat') linii.push(MESAJ_LOT_NEINCHEIAT)
+    else if (corp.etichete_eroare) linii.push('AWB-urile există; foile AWB nu s-au putut descărca acum: „Descarcă AWB-urile” mai târziu.')
+    else if (corp.tiraj?.id && Array.isArray(corp.pdf_parti) && corp.pdf_parti.length) linii.push(`Foile AWB au fost descărcate (tirajul ${corp.tiraj.id}${Number(corp.parti) > 1 ? `, ${corp.parti} fișiere` : ''}): pune fiecare AWB în buzunarul plicului, după pagina de control.`)
+  } else if (corp.nimic_de_trimis || corp.mod === 'nimic') {
+    linii.push('Nimic de trimis: plicurile alese au deja AWB sau sunt excluse (motivele mai jos).')
+  } else if (respinse.length) {
+    linii.push(`Niciun AWB generat: ${respinse.length} ${respinse.length === 1 ? 'plic respins' : 'plicuri respinse'} de curier.`)
+  } else linii.push('Trimiterea s-a încheiat fără AWB-uri noi.')
+  if (corp.oprit === '429') linii.push(`Curierul a cerut o pauză; restul (${plicuriN(ramase)}) se trimite mai târziu: apasă din nou „Trimite la curier” peste câteva minute.`)
+  else if (corp.oprit === 'limita_solicitari') linii.push(`S-au trimis ${generate}; mai sunt ${ramase}: apasă din nou „Trimite la curier”.`)
+  else if (corp.oprit === 'rezervare_refuzata') linii.push('Datele unui plic s-au schimbat între timp; nimic trimis pentru acea bucată. Apasă din nou „Trimite la curier”.')
+  else if (corp.oprit === 'scriere_neconfirmata') linii.push('Răspunsul curierului nu s-a putut înscrie: NU retrimite; „Verifică la curier” după 10 minute.')
+  for (const r of respinse) linii.push(textRespins(r))
+  for (const x of excluse) linii.push(textExclus(x))
+  for (const x of retrase) linii.push(textRetras(x))
+  if (respinse.length) linii.push('Plicurile respinse: corectează datele în fișa deținătorului, mută-le într-un lot nou de plicuire și trimite lotul nou.')
+  return linii.join('\n')
 }

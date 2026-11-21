@@ -240,9 +240,13 @@ function interpreteazaElement(r) {
  * confirmat pe răspunsul real (doc §8 deschisă 11, Testul 1); rezultatul o spune (`asociere: 'pozitie' | 'referinta'`). Alt număr de
  * elemente decât `n` = toate „necunoscut” (asocierea nu se ghicește).
  * HTTP 0 / 5xx / corp neparsabil = toate „necunoscut” (L05: AWB-urile pot exista; fără retry automat).
- * 4xx = refuz determinist („eroare”) — DAR dacă răspunsul de refuz conține vreun număr AWB, toată bucata e „necunoscut”.
+ * 4xx = refuz determinist („eroare”) — DAR dacă răspunsul de refuz conține vreun număr AWB, toată bucata e „necunoscut”; iar 429 (spec F1, §8.8,
+ * L05) NU e un refuz al conținutului, ci o cerere de pauză → toate „necunoscut” (pe calea nouă `trimite`, un 429 FĂRĂ niciun AWB devine observația
+ * `neincercat` înaintea scrierii în BD, iar starea o decide BD-ul după presupunerea P429; pe calea veche rămâne „necunoscut” → reconciliere).
  * Același număr AWB pe două elemente = ambele „necunoscut”.
  */
+export const COD_PAUZA_FAN = 429
+export const OBSERVATIE_NEINCERCAT = 'neincercat'
 export function interpreteazaRaspunsLot(status, corp, n, { referinte } = {}) {
   if (!Number.isInteger(n) || n < 1 || n > MAX_PE_CERERE) throw new Error('număr de expedieri invalid')
   if (referinte != null && (!Array.isArray(referinte) || referinte.length !== n)) throw new Error('referințele trebuie să aibă exact n elemente')
@@ -251,7 +255,8 @@ export function interpreteazaRaspunsLot(status, corp, n, { referinte } = {}) {
   const el = Array.isArray(corp?.response) ? corp.response : null
   if (status >= 400) {
     if (el && el.some(e => textAwb(e?.awbNumber))) return toate('necunoscut', `refuz FAN (HTTP ${status}) cu număr AWB în răspuns: de verificat în borderou`)
-    return toate('eroare', status === 429 ? 'FAN: prea multe solicitări (HTTP 429); rularea s-a oprit, se reia de om' : `FAN a refuzat cererea (HTTP ${status})`)
+    if (status === COD_PAUZA_FAN) return toate('necunoscut', 'FAN: prea multe solicitări (HTTP 429); rularea s-a oprit; de verificat în borderou înainte de retrimitere')
+    return toate('eroare', `FAN a refuzat cererea (HTTP ${status})`)
   }
   if (!el || el.length !== n) return toate('necunoscut', `răspuns FAN cu ${el ? el.length : 'niciun'} element(e) pentru ${n} expedieri: asocierea nu se ghicește`)
   if (referinte) {
@@ -281,6 +286,20 @@ export function interpreteazaStergere(status, corp) {
 
 /** Compatibil cu scheletul: răspunsul pentru O singură expediere. */
 export const interpreteazaRaspunsAwb = (status, corp) => interpreteazaRaspunsLot(status, corp, 1)[0]
+
+// ── F1: butonul unic (spec §8.1, §8.3, §8.4.1) — definiții comune funcției edge și ecranului (L19) ──
+/** Hash-ul CERERII (idempotența intenției, L04): sha256 pe lista canonică (sortată, distinctă) a plicurilor cerute; același în ecran (registrul local) și în edge. */
+export async function hashCerereFan(plicIds, subtle = globalThis.crypto?.subtle) {
+  if (!subtle) throw new Error('Web Crypto indisponibil')
+  const lista = [...new Set((plicIds || []).map(String))].sort()
+  const buf = await subtle.digest('SHA-256', new TextEncoder().encode('redari-fan-cerere-v1|' + lista.join(',')))
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('')
+}
+/** Motivele anulării unui AWB neridicat (codul din listă = CHECK-ul red_fan_awb.anulare_ceruta_motiv / motiv_anulare; alt_motiv cere notă ≤ 200). */
+export const MOTIVE_ANULARE = Object.freeze(['netiparit_3_zile', 'neridicat_3_zile', 'plic_retras', 'date_gresite', 'alt_motiv'])
+/** Codurile SQLSTATE ale refuzurilor comenzii / tirajului (spec §8.5), o singură listă pentru edge și ecran. */
+export const CODURI_FAN = Object.freeze({ RD030: 'in_curs', RD031: 'lot_neincheiat', RD032: 'doar_test', RD033: 'rezultat_necunoscut', RD034: 'intentie_inchisa',
+  RD035: 'anulare_in_curs', RD036: 'lot_tiparit', RD037: 'cerere_deschisa', RD038: 'opod_schimbat' })
 
 // ── evenimente de urmărire (GET /reports/awb-events) ──
 // Lista din PDF-ul 09.2025 (doc §1), completată pe 18.11.2026 cu lista REALĂ întoarsă de /reports/awb-events la Testul 1 (37 de coduri
