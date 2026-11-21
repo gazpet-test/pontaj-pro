@@ -8,6 +8,9 @@
 -- i = editor pe sub-modul RESTRANS la P2 ca editor. Proiecte: P1 (cu oferta, dupa primul bloc), P2 (alt MP), P3 (fara oferta), P4 (al owner-ului:
 -- coduri repetate, lista completa pe identitate canonica, ultimul act, note neaprobate), P5 (un rand confirmat scris de SERVER in fixturi, pentru
 -- garda in sesiune proaspata).
+-- SURSELE (r3, review #1158): t_surse_autorizate = accesul general Executie (e) nu aduce in baza un rand NR / NCS / AA scris direct (INSERT sau
+-- schimbarea sursei), apoi, ca SERVER (auth.uid() NULL), CHECK-ul refuza randul orfan / neconfirmat independent de garda; t_rand_orfan (ultimul
+-- bloc) = apararea in adancime: cu CHECK-ul scos intr-un sub-bloc anulat, randurile orfane / neconfirmate nu intra in calcul si apar in lipsuri.
 -- SESIUNE PROASPATA: primul bloc dupa fixturi verifica garda cu marcajul RPC LIPSA (NULL): fisierul se ruleaza intr-o sesiune noua, inainte ca
 -- vreun RPC sa fi pus marcajul (precondiția e verificata explicit).
 -- FIXTURI: pe clona, daca profiles / employees cer alte coloane NOT NULL, se completeaza DOAR blocul FIXTURI (restul nu depinde de ele).
@@ -386,6 +389,71 @@ BEGIN
   EXCEPTION WHEN unique_violation OR invalid_parameter_value THEN NULL; END;
   RAISE NOTICE 't_aa_leaga_note ok: NCS +20 → 120; AA legat (+20, +5) → 120 si C300 15 (nu 140); AA inactiv → 120 / 10; nota inactiva → 100; lista completa pe 0002 → 12';
 END $t$;
+RESET ROLE;
+
+-- ── t_surse_autorizate (r3, review #1158): accesul GENERAL Executie (e: executie viewer, trece de politicile vechi ale proiect_articole) nu poate
+--    aduce in baza un rand NR / NCS / AA scris direct (fara nota / act, neconfirmat) — nici prin INSERT, nici schimband sursa unui rand existent
+--    neconfirmat; calea veche (extras_materiale) merge; apoi, ca SERVER (auth.uid() NULL, trece de garda), CHECK-ul rd_legaturi_ck refuza randul
+--    orfan SI pe cel cu legatura dar neconfirmat (apararea a doua, structurala); baza A100 ramane 120 ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v_id bigint; n int; s text;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  IF NOT EXISTS (SELECT 1 FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p1')) THEN RAISE EXCEPTION 't_surse_autorizate PRECONDITIE: accesul general nu citeste proiect_articole (politicile vechi)'; END IF;
+  SELECT count(*) INTO n FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p1');
+  FOREACH s IN ARRAY ARRAY['nota_comanda_suplimentara', 'nota_renuntare', 'act_aditional'] LOOP
+    BEGIN
+      INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, cod, denumire, um, cantitate, valoare, sursa, act_nr)
+      VALUES (pg_temp.rd_id('p1'), '0001', 'D1', 'A100', 'Conducta', 'M', 20, 2000, s, CASE WHEN s = 'act_aditional' THEN 'AA-X' END);
+      RAISE EXCEPTION 't_surse_autorizate FAIL: rand % scris direct (fara nota / act, neconfirmat)', s;
+    EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%confirma_baza%' THEN RAISE; END IF; END;
+  END LOOP;
+  -- schimbarea sursei unui rand existent neconfirmat (calea veche) catre NR / NCS / AA = refuz; randul ramane cum era
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, cod, denumire, um, cantitate, valoare, sursa)
+  VALUES (pg_temp.rd_id('p1'), '0001', 'D1', 'A100', 'extras', 'M', 20, 0, 'extras_materiale') RETURNING id INTO v_id;
+  FOREACH s IN ARRAY ARRAY['nota_comanda_suplimentara', 'nota_renuntare', 'act_aditional'] LOOP
+    BEGIN
+      UPDATE public.proiect_articole SET sursa = s, valoare = 2000 WHERE id = v_id;
+      RAISE EXCEPTION 't_surse_autorizate FAIL: sursa unui rand neconfirmat schimbata direct in %', s;
+    EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%confirma_baza%' THEN RAISE; END IF; END;
+  END LOOP;
+  IF (SELECT sursa || '/' || valoare::text FROM public.proiect_articole WHERE id = v_id) <> 'extras_materiale/0' THEN RAISE EXCEPTION 't_surse_autorizate FAIL: randul extras s-a schimbat'; END IF;
+  DELETE FROM public.proiect_articole WHERE id = v_id;
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p1')) <> n THEN RAISE EXCEPTION 't_surse_autorizate FAIL: refuzurile au scris ceva'; END IF;
+  RAISE NOTICE 't_surse_autorizate (1/2) ok: accesul general nu scrie direct NR / NCS / AA (INSERT si schimbarea sursei → 42501); calea veche (extras) merge';
+END $t$;
+RESET ROLE;
+-- serverul (auth.uid() NULL, postgres): garda il lasa, CHECK-ul nu — randul orfan si randul cu legatura dar neconfirmat sunt refuzate structural
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+DO $t$
+DECLARE n int; r record;
+BEGIN
+  IF auth.uid() IS NOT NULL OR public.fn_rest_decontat_server() IS NOT TRUE THEN
+    RAISE EXCEPTION 't_surse_autorizate PRECONDITIE: blocul serverului cere auth.uid() NULL si rolul postgres (acum % / %)', auth.uid(), current_user;
+  END IF;
+  SELECT count(*) INTO n FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p1');
+  FOR r IN SELECT * FROM (VALUES
+      ('act_aditional', 'AA-X', NULL::bigint, NULL::bigint, 'AA fara act'),
+      ('nota_renuntare', NULL, NULL, NULL, 'NR fara nota'),
+      ('nota_comanda_suplimentara', NULL, NULL, NULL, 'NCS fara nota'),
+      ('act_aditional', 'AA-1', pg_temp.rd_id('aa1'), NULL, 'AA cu act, neconfirmat'),
+      ('nota_comanda_suplimentara', NULL, NULL, pg_temp.rd_id('ncs1'), 'NCS cu nota, neconfirmat')) v(sursa, act_nr, act_id, nota_id, ce) LOOP
+    BEGIN
+      INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, cod, denumire, um, cantitate, valoare, sursa, act_nr, act_aditional_id, nota_id)
+      VALUES (pg_temp.rd_id('p1'), '0001', 'D1', 'A100', r.ce, 'M', 1, 1, r.sursa, r.act_nr, r.act_id, r.nota_id);
+      RAISE EXCEPTION 't_surse_autorizate FAIL: % scris de server (CHECK-ul nu a refuzat)', r.ce;
+    EXCEPTION WHEN check_violation THEN IF SQLERRM NOT LIKE '%rd_legaturi_ck%' THEN RAISE; END IF; END;
+  END LOOP;
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p1')) <> n
+     OR (SELECT b.cantitate FROM public.fn_rest_decontat_baza_proiect(pg_temp.rd_id('p1')) b WHERE b.cheie = '0001|D1|A100') <> 120 THEN
+    RAISE EXCEPTION 't_surse_autorizate FAIL: refuzurile serverului au scris ceva / baza A100 <> 120';
+  END IF;
+  RAISE NOTICE 't_surse_autorizate (2/2) ok: CHECK-ul refuza si pe calea serverului randul AA / NR / NCS fara legatura sau neconfirmat; baza A100 = 120';
+END $t$;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000a', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
 
 -- ── t_coduri_repetate (owner, P4): TOATE grupurile de coduri repetate primesc pozitia (A#1, A#2, B#3, B#4 — nu B comasat 7); pozitii lipsa /
 --    duplicate = refuz, nimic scris ──
@@ -427,6 +495,7 @@ DECLARE v jsonb; r record; v_nota bigint;
 BEGIN
   PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000a');
   INSERT INTO public.executie_note_modificare (proiect_id, tip, numar, descriere) VALUES (pg_temp.rd_id('p4'), 'NCS', 'NCS-9', 'fara aprobare inca') RETURNING id INTO v_nota;
+  INSERT INTO rd_fix VALUES ('ncs9', v_nota);
   IF NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p4') AND tip = 'nota_neaprobata' AND referinta = 'NCS NCS-9') THEN
     RAISE EXCEPTION 't_ultimul_act FAIL: lipsa nota_neaprobata';
   END IF;
@@ -626,6 +695,51 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
 END $t$;
 RESET ROLE;
+
+-- ── t_rand_orfan (apararea in adancime, r3): daca un rand AA / NR / NCS fara legatura sau neconfirmat ar ajunge TOTUSI in tabel (CHECK-ul scos
+--    temporar intr-un sub-bloc, scriere de server, P4 pe obiectul OB2), calculul NU il numara (baza P4 ramane OB1|D1|X=150), iar lipsurile il
+--    declara pe sursa ('rand_neautorizat'); sub-blocul se ANULEAZA (constrangerea revine, randurile dispar). Ultimul bloc: nimic nu depinde de el ──
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+DO $t$
+DECLARE s text;
+BEGIN
+  IF auth.uid() IS NOT NULL OR public.fn_rest_decontat_server() IS NOT TRUE THEN
+    RAISE EXCEPTION 't_rand_orfan PRECONDITIE: blocul serverului cere auth.uid() NULL si rolul postgres (acum % / %)', auth.uid(), current_user;
+  END IF;
+  SELECT string_agg(b.cheie || '=' || b.cantitate::text, '; ' ORDER BY b.cheie) INTO s FROM public.fn_rest_decontat_baza_proiect(pg_temp.rd_id('p4')) b;
+  IF s IS DISTINCT FROM 'OB1|D1|X=150' THEN RAISE EXCEPTION 't_rand_orfan PRECONDITIE: baza P4 = % (astept OB1|D1|X=150)', s; END IF;
+  BEGIN
+    ALTER TABLE public.proiect_articole DROP CONSTRAINT proiect_articole_rd_legaturi_ck;
+    INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, cod, denumire, um, cantitate, valoare, sursa, act_nr, act_aditional_id, nota_id) VALUES
+      (pg_temp.rd_id('p4'), 'OB2', 'D1', 'Y', 'orfan: AA fara act', 'M', 7, 70, 'act_aditional', 'AA-X', NULL, NULL),
+      (pg_temp.rd_id('p4'), 'OB2', 'D1', 'Y', 'AA cu act activ, neconfirmat', 'M', 7, 70, 'act_aditional', 'AA-4', pg_temp.rd_id('aa4'), NULL),
+      (pg_temp.rd_id('p4'), 'OB2', 'D1', 'Y', 'orfan: NCS fara nota', 'M', 7, 70, 'nota_comanda_suplimentara', NULL, NULL, NULL),
+      (pg_temp.rd_id('p4'), 'OB2', 'D1', 'Y', 'NCS cu nota aprobata, neconfirmat', 'M', 7, 70, 'nota_comanda_suplimentara', NULL, NULL, pg_temp.rd_id('ncs9')),
+      (pg_temp.rd_id('p4'), 'OB2', 'D1', 'Y', 'orfan: NR fara nota', 'M', -7, -70, 'nota_renuntare', NULL, NULL, NULL);
+    IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p4') AND obiect_cod = 'OB2' AND activ) <> 5 THEN
+      RAISE EXCEPTION 't_rand_orfan PRECONDITIE: cele 5 randuri orfane / neconfirmate nu s-au scris';
+    END IF;
+    SELECT string_agg(b.cheie || '=' || b.cantitate::text, '; ' ORDER BY b.cheie) INTO s FROM public.fn_rest_decontat_baza_proiect(pg_temp.rd_id('p4')) b;
+    IF s IS DISTINCT FROM 'OB1|D1|X=150' THEN RAISE EXCEPTION 't_rand_orfan FAIL: randurile orfane / neconfirmate au intrat in baza: %', s; END IF;
+    -- lipsurile (ca owner-ul a, care citeste P4; apoi inapoi la server)
+    PERFORM set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000a', true);
+    SELECT string_agg(l.referinta, '; ' ORDER BY l.referinta) INTO s FROM public.fn_rest_decontat_lipsuri_calcul() l WHERE l.proiect_id = pg_temp.rd_id('p4') AND l.tip = 'rand_neautorizat';
+    PERFORM set_config('request.jwt.claim.sub', '', true);
+    IF s IS DISTINCT FROM 'act_aditional: 2; nota_comanda_suplimentara: 2; nota_renuntare: 1' THEN
+      RAISE EXCEPTION 't_rand_orfan FAIL: lipsurile nu declara randurile neautorizate pe sursa: %', coalesce(s, 'nimic');
+    END IF;
+    RAISE EXCEPTION 'ORFAN_GATA' USING ERRCODE = 'P0999';   -- anuleaza sub-blocul: constrangerea revine, randurile dispar
+  EXCEPTION WHEN SQLSTATE 'P0999' THEN NULL;
+  END;
+  PERFORM set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000a', true);
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = 'public.proiect_articole'::regclass AND k.conname = 'proiect_articole_rd_legaturi_ck')
+     OR EXISTS (SELECT 1 FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p4') AND obiect_cod = 'OB2')
+     OR EXISTS (SELECT 1 FROM public.fn_rest_decontat_lipsuri_calcul() l WHERE l.tip = 'rand_neautorizat') THEN
+    RAISE EXCEPTION 't_rand_orfan FAIL: sub-blocul nu s-a anulat (constrangerea / randurile / lipsurile)';
+  END IF;
+  PERFORM set_config('request.jwt.claim.sub', '', true);
+  RAISE NOTICE 't_rand_orfan ok: 5 randuri AA / NR / NCS orfane sau neconfirmate (CHECK scos temporar) nu intra in calcul (P4 = OB1|D1|X=150) si apar in lipsuri pe sursa; sub-blocul anulat';
+END $t$;
 
 SELECT 'DRY_COMPLET' AS rezultat;
 ROLLBACK;

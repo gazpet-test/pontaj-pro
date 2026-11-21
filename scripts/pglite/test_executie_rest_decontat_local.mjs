@@ -14,8 +14,10 @@
 // 4. MUTANȚI ai migrării A: un mutant contează „prins” DOAR dacă s-a APLICAT cu succes (fără postcondiții) și dry-run-ul l-a picat; cu postcondițiile
 //    întregi trebuie refuzat la aplicare. r2 (review #1158): marcajul NULL acceptat de gărzi (articole / situații), restricția pe proiect scoasă din
 //    drept, un singur grup de coduri repetate, poziția lipsă neverificată, lista completă pe obiect_cod brut, nota neaprobată acceptată (RPC / calcul),
-//    ordinea „ultimul act” după momentul încărcării (listă completă / preț) + cei 10 din r1. Mutanții STATICI (reverificarea dreptului scoasă
-//    după lock) sunt prinși de verificarea pe text din 0.
+//    ordinea „ultimul act” după momentul încărcării (listă completă / preț) + cei 10 din r1. r3 (review #1158, clasa R1-6): rândul NR / NCS / AA
+//    scris direct — garda fără refuzul pe sursă / doar la INSERT, predicatul unic fără NR / NCS / AA, CHECK-ul fără predicat, calculul care numără
+//    rândul neconfirmat, lipsurile fără „rand_neautorizat”. Mutanții STATICI (reverificarea dreptului scoasă după lock) sunt prinși de
+//    verificarea pe text din 0.
 // 5. Migrarea B peste A: dry-run B; mutanți B (MP fără ofertă acceptat, owner fără motiv acceptat, fără garda pe coloane, marcaj NULL acceptat,
 //    garda doar pe UPDATE — INSERT „configurat” acceptat); revenirea B. Postcondițiile B = secțiunea „4.” (r2: markerul greșit din r1 ascundea
 //    mutanții B neaplicați).
@@ -128,7 +130,8 @@ async function dryrun(db, text) {
   return jurnal
 }
 const BLOCURI_A = ['t_garda_proaspata ok', 't_fara_baza ok', 'oferta ok', 't_negative_peste_oferta ok', 't_um ok', 't_dublare_situatie ok', 't_aa_leaga_note ok',
-  't_coduri_repetate ok', 't_ultimul_act ok', 't_drept_restrans (1/2) ok', 't_drept_restrans (2/2) ok', 't_drept_sef_santier (1/3) ok', 't_drept_sef_santier (2/3) ok', 't_drept_sef_santier (3/3) ok']
+  't_surse_autorizate (1/2) ok', 't_surse_autorizate (2/2) ok', 't_coduri_repetate ok', 't_ultimul_act ok', 't_drept_restrans (1/2) ok', 't_drept_restrans (2/2) ok',
+  't_drept_sef_santier (1/3) ok', 't_drept_sef_santier (2/3) ok', 't_drept_sef_santier (3/3) ok', 't_rand_orfan ok']
 const BLOCURI_B = ['t_poarta_garda_proaspata ok', 't_poarta_mp ok', 't_poarta_owner ok', 't_poarta_cu_oferta ok', 't_poarta_direct ok']
 async function verificaDry(db, text, blocuri) {
   try {
@@ -258,6 +261,12 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
     AND (public.fn_executie_acces_nerestrans()
          OR (p_proiect IS NOT NULL AND p_proiect = ANY (public.fn_executie_acces_lista(p_scriere))))
 $f$`)
+  // r3: rânduri AA / NR / NCS încărcate pe calea veche (fără legătură) = refuz L14 înaintea CHECK-ului (decizie separată), nimic schimbat
+  for (const [sursa, actNr] of [['act_aditional', 'AA1'], ['nota_comanda_suplimentara', null], ['nota_renuntare', null]]) {
+    await db.query(`INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate, valoare, sursa, act_nr) VALUES (900, '0001', 'D02', '3', 'GC 01', 'calea veche', 'M', 100, 8000, $1, $2)`, [sursa, actNr])
+    ok(/incarcate pe calea veche/.test(await eroare(aplicaA(db))), `un rând ${sursa} moștenit pe calea veche (fără legătură / confirmare) = refuz al migrării (decizie separată)`)
+    await db.query(`DELETE FROM public.proiect_articole WHERE proiect_id = 900 AND sursa = $1`, [sursa])
+  }
   ok(JSON.stringify(await stare(db)) === JSON.stringify(s0) && JSON.stringify(await randuriMostenite(db)) === JSON.stringify(m0), 'după refuzuri: catalogul și rândurile moștenite identice')
 }
 
@@ -273,19 +282,19 @@ if (!DOAR || ['2', '3', '6'].includes(DOAR)) {
   const j = await aplicaLivrare(DB, A, MIG_A, F(A).ob)
   const amp = j.find(m => /^AMPRENTA_20270105a_TEXT/.test(m))
   if (process.argv.includes('--amprente') || amp) console.log('     amprenta A calculată: ' + (await q1(DB, `SELECT md5($1) AS m`, [amp ? amp.slice('AMPRENTA_20270105a_TEXT '.length) : ''])).m)
-  ok(j.some(m => /^20270105a: randuri proiect_articole cu cheie = 6, din care cu nr in cheie = 2/.test(m)), 'NOTICE: 6 rânduri moștenite au cheie, 2 cu nr (codul repetat în același deviz al ofertei)')
+  ok(j.some(m => /^20270105a: randuri proiect_articole cu cheie = 5, din care cu nr in cheie = 2/.test(m)), 'NOTICE: 5 rânduri moștenite au cheie, 2 cu nr (codul repetat în același deviz al ofertei)')
   const ch = (await DB.query(`SELECT cod, nr, cheie, activ, confirmat_la FROM public.proiect_articole WHERE proiect_id = 900 ORDER BY id`)).rows
-  ok(ch.map(r => r.cheie).join(';') === '0001|D01|TSA01A1|#1;0001|D01|TSA01A1|#2;0001|D02|GC 01;0002|D02|GC 01;0001|D02|GC 01;||TEAVA-DN300' && ch.every(r => r.activ && r.confirmat_la === null),
-    'cheile moștenite: nr doar pe codul repetat în același document; AA-ul vechi (alt document) fără nr; toate activ, neconfirmate: ' + ch.map(r => r.cheie).join(';'))
+  ok(ch.map(r => r.cheie).join(';') === '0001|D01|TSA01A1|#1;0001|D01|TSA01A1|#2;0001|D02|GC 01;0002|D02|GC 01;||TEAVA-DN300' && ch.every(r => r.activ && r.confirmat_la === null),
+    'cheile moștenite: nr doar pe codul repetat în același document; toate activ, neconfirmate: ' + ch.map(r => r.cheie).join(';'))
   ok(JSON.stringify(await randuriMostenite(DB)) === JSON.stringify(m0), `rândurile moștenite identice (în afara cheii): ${m0.n} rânduri`)
   const gata = await q1(DB, `SELECT public.fn_izo_porti_lipsa() AS v`)
   ok(JSON.stringify(gata.v) === '[]', 'porțile Izometrie verzi după (ștampilele recalculate): ' + JSON.stringify(gata.v))
   ok(/obiectele exista deja/.test(await eroare(aplicaA(DB))), 'a doua aplicare = refuz')
-  // baza proiectului moștenit (ca owner sintetic): AA-ul vechi fără id de act se adună; extras_materiale nu intră
+  // baza proiectului moștenit (ca owner sintetic): oferta moștenită (calea veche) intră; extras_materiale nu intră
   await DB.exec(`INSERT INTO public.profiles (id, is_owner) VALUES ('f0000000-0000-4000-8000-00000000009a', true)`)
   const b = await caRol(DB, 'authenticated', 'f0000000-0000-4000-8000-00000000009a', `SELECT cheie, cantitate::text AS c, um, randuri FROM public.v_executie_rest_decontat_baza WHERE proiect_id = 900 ORDER BY cheie`)
   ok(!b.err && JSON.stringify(b.rows) === JSON.stringify([{ cheie: '0001|D01|TSA01A1|#1', c: '120', um: 'MC', randuri: 1 }, { cheie: '0001|D01|TSA01A1|#2', c: '30', um: 'MC', randuri: 1 },
-    { cheie: '0001|D02|GC 01', c: '1100', um: 'M', randuri: 2 }, { cheie: '0002|D02|GC 01', c: '500', um: 'M', randuri: 1 }]), 'baza moștenită: contract + AA vechi (1000 + 100 m), fără extras_materiale: ' + JSON.stringify(b.rows || b.msg))
+    { cheie: '0001|D02|GC 01', c: '1000', um: 'M', randuri: 1 }, { cheie: '0002|D02|GC 01', c: '500', um: 'M', randuri: 1 }]), 'baza moștenită: oferta de pe calea veche (1000 m), fără extras_materiale: ' + JSON.stringify(b.rows || b.msg))
   await DB.exec(`DELETE FROM public.profiles WHERE id = 'f0000000-0000-4000-8000-00000000009a'`)
 }
 async function caRol(db, rol, uid, sql, params) {
@@ -324,14 +333,23 @@ if (!DOAR || DOAR === '4') {
       [`  IF cardinality(v_finale) <> jsonb_array_length(p_linii) OR (SELECT count(DISTINCT f) FROM unnest(v_finale) f) <> jsonb_array_length(p_linii) THEN`, `  IF false THEN`]]],
     ['lista completă pe obiect_cod brut (nu pe identitatea canonică)', [[`           public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) AS obiect_k,`, `           a.obiect_cod::text AS obiect_k,`]]],
     ['devizul unei note NEAPROBATE acceptat de RPC', [[`    IF v_data_nota IS NULL THEN`, `    IF false THEN`]]],
-    ['nota neaprobată numărată în bază (calcul)', [[`       AND (r0.nota_id IS NULL OR (coalesce(nt.activ, false) AND nt.data_aprobare IS NOT NULL\n`, `       AND (r0.nota_id IS NULL OR (coalesce(nt.activ, false)\n`]]],
+    ['nota neaprobată numărată în bază (calcul)', [[`AND coalesce(nt.activ, false) AND nt.data_aprobare IS NOT NULL\n`, `AND coalesce(nt.activ, false)\n`]]],
+    // r3 (review #1158, clasa R1-6: rândul NR / NCS / AA scris direct)
+    ['garda nu refuză sursa cu flux (INSERT direct NR / NCS / AA trece de gardă; CHECK-ul dă 23514, nu 42501)', [[`    IF NOT public.fn_rest_decontat_sursa_autorizata(NEW.sursa::text, NULL, NULL, NULL) THEN`, `    IF false THEN`]]],
+    ['garda refuză sursa cu flux doar la INSERT (schimbarea sursei unui rând neconfirmat trece)', [[`    IF NOT public.fn_rest_decontat_sursa_autorizata(NEW.sursa::text, NULL, NULL, NULL) THEN`, `    IF TG_OP = 'INSERT' AND NOT public.fn_rest_decontat_sursa_autorizata(NEW.sursa::text, NULL, NULL, NULL) THEN`]]],
+    ['predicatul unic lasă AA fără act / confirmare (INSERT direct AA acceptat de gardă, CHECK și calcul)', [[`    WHEN p_sursa = 'act_aditional' THEN p_act_aditional_id IS NOT NULL AND p_confirmat_la IS NOT NULL`, `    WHEN p_sursa = 'act_aditional' THEN true`]]],
+    ['predicatul unic lasă NR fără notă / confirmare (INSERT direct NR acceptat)', [[`    WHEN p_sursa IN ('nota_renuntare', 'nota_comanda_suplimentara') THEN p_nota_id IS NOT NULL AND p_confirmat_la IS NOT NULL`, `    WHEN p_sursa = 'nota_comanda_suplimentara' THEN p_nota_id IS NOT NULL AND p_confirmat_la IS NOT NULL`]]],
+    ['predicatul unic lasă NCS fără notă / confirmare (INSERT direct NCS acceptat)', [[`    WHEN p_sursa IN ('nota_renuntare', 'nota_comanda_suplimentara') THEN p_nota_id IS NOT NULL AND p_confirmat_la IS NOT NULL`, `    WHEN p_sursa = 'nota_renuntare' THEN p_nota_id IS NOT NULL AND p_confirmat_la IS NOT NULL`]]],
+    ['CHECK-ul fără predicatul sursei (serverul scrie rândul orfan / neconfirmat)', [[`    AND (act_aditional_id IS NULL OR sursa = 'act_aditional') AND (nota_id IS NULL OR act_aditional_id IS NULL)\n    AND public.fn_rest_decontat_sursa_autorizata(sursa, nota_id, act_aditional_id, confirmat_la));`, `    AND (act_aditional_id IS NULL OR sursa = 'act_aditional') AND (nota_id IS NULL OR act_aditional_id IS NULL));`]]],
+    ['calculul numără rândul AA / NR / NCS neconfirmat sau orfan', [[`       AND public.fn_rest_decontat_sursa_autorizata(a.sursa::text, a.nota_id, a.act_aditional_id, a.confirmat_la)),`, `),`]]],
+    ['lipsurile nu declară rândurile neautorizate', [[`   WHERE NOT public.fn_rest_decontat_sursa_autorizata(a.sursa::text, a.nota_id, a.act_aditional_id, a.confirmat_la)`, `   WHERE false`]]],
     ['„înainte” la lista completă = momentul încărcării, nu data documentului', [[`AND (r1.data_doc, r1.moment, r1.id) < (lc.data_doc, lc.moment, lc.id))),`, `AND (r1.moment, r1.id) < (lc.moment, lc.id))),`]]],
     ['prețul = ultimul document încărcat, nu ultimul act (după dată)', [[`(array_agg(u.pret_unitar ORDER BY u.data_doc DESC, u.moment DESC, u.id DESC) FILTER (WHERE u.pret_unitar IS NOT NULL))[1],`, `(array_agg(u.pret_unitar ORDER BY u.moment DESC, u.id DESC) FILTER (WHERE u.pret_unitar IS NOT NULL))[1],`]]],
     // r1
     ['aceeași amprentă acceptată (dublarea situației)', [[`  IF EXISTS (SELECT 1 FROM public.executie_sl_detaliu d WHERE d.proiect_id = p_proiect AND d.amprenta = p_amprenta) THEN`, `  IF false THEN`]]],
     ['nr. existent fără „înlocuiește” acceptat', [[`    IF NOT p_inlocuieste THEN`, `    IF false THEN`]]],
-    ['notele legate de un AA activ cu deviz se adună încă o dată', [[`                                   AND NOT (coalesce(aan.activ, false) AND coalesce(aan.are_deviz, false))))),`, `))),`]]],
-    ['AA inactiv încă numărat', [[`     WHERE (r0.act_aditional_id IS NULL OR coalesce(aa.activ, false))`, `     WHERE true`]]],
+    ['notele legate de un AA activ cu deviz se adună încă o dată', [[`\n            AND NOT (coalesce(aan.activ, false) AND coalesce(aan.are_deviz, false)))),`, `)),`]]],
+    ['AA inactiv încă numărat', [[`        OR (r0.sursa = 'act_aditional' AND coalesce(aa.activ, false))`, `        OR (r0.sursa = 'act_aditional')`]]],
     ['restul tăiat la zero', [[`art.nr, art.cod, art.denumire, art.um, art.um_incert, art.pret_unitar, art.bc, art.bv, art.dc, art.dv, art.bc - art.dc, art.bv - art.dv,`, `art.nr, art.cod, art.denumire, art.um, art.um_incert, art.pret_unitar, art.bc, art.bv, art.dc, art.dv, greatest(art.bc - art.dc, 0), greatest(art.bv - art.dv, 0),`]]],
     ['accesul general Execuție dă citire', [[`                     WHERE u.profile_id = auth.uid() AND u.module = 'executie_rest_decontat'`, `                     WHERE u.profile_id = auth.uid() AND u.module IN ('executie_rest_decontat', 'executie')`]]],
     ['UM-ul liniei neverificat', [[`      IF v_incert OR v_um IS DISTINCT FROM (SELECT x.um FROM public.fn_rest_decontat_um(e->>'um') x) THEN`, `      IF false THEN`]]],

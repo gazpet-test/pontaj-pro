@@ -3,7 +3,8 @@
 -- auth.uid() din cele două surse JWT, tabelele existente cu coloanele folosite (tipurile din producție, citite de chat pe 21.11.2026) și RLS-ul lor
 -- „general Execuție” (proiect_articole_sel/ins/upd/del: owner sau user_module_access 'executie'), plus STUB-urile porților Izometrie
 -- (fn_izo_porti_lipsa + cele 5 definiții, cu ștampilele verzi): E4b amprentează coloanele / ACL-ul / politicile de pe executie_proiecte, ca pe live.
--- Date: un proiect „moștenit” cu articole scrise ÎNAINTE de migrare (cod repetat în același deviz, o sursă extras_materiale, un AA fără id de act);
+-- Date: un proiect „moștenit” cu articole scrise ÎNAINTE de migrare (cod repetat în același deviz, o sursă extras_materiale); un rând act_aditional
+-- „vechi” (doar cu act_nr, fără legătură) NU mai e în date (r3: migrarea îl REFUZĂ la preflight — testul din secțiunea 1 îl adaugă și îl scoate);
 -- restul fixturilor le pune dry-run-ul (identități sintetice, în tranzacție cu ROLLBACK).
 DO $r$
 BEGIN
@@ -166,7 +167,7 @@ BEGIN
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e4b_definitii() IS %L', 'porti_e4b=' || public.fn_izo_porti_e4b_definitii());
 END $stampile$;
 
--- proiectul „moștenit” (articole scrise înaintea migrării, ca pe producție: contract_initial, extras_materiale, un AA vechi doar cu act_nr)
+-- proiectul „moștenit” (articole scrise înaintea migrării, ca pe producție la 21.11.2026: contract_initial, extras_materiale)
 INSERT INTO public.employees (id, name) VALUES (901, 'MOSTENIT ANGAJAT');
 INSERT INTO public.executie_proiecte (id, cod_intern, nume) VALUES (900, 'CLONA-MOSTENIT', 'Proiect mostenit (articole dinainte de migrare)');
 INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, valoare, sursa, act_nr, pret_unitar) VALUES
@@ -174,5 +175,4 @@ INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_
   (900, '0001', 'TRONSON 1', 'D01', 'Terasamente', '2', 'TSA01A1', 'Sapatura manuala (alt strat)', 'MC', 30, 1500, 'contract_initial', NULL, 50),
   (900, '0001', 'TRONSON 1', 'D02', 'Montaj', '1', 'GC 01', 'Montaj conducta', 'M', 1000, 80000, 'contract_initial', NULL, 80),
   (900, '0002', 'TRONSON 2', 'D02', 'Montaj', '1', 'gc 01', 'Montaj conducta', 'M', 500, 40000, 'contract_initial', NULL, 80),
-  (900, '0001', 'TRONSON 1', 'D02', 'Montaj', '3', 'GC 01', 'Montaj conducta (AA vechi)', 'M', 100, 8000, 'act_aditional', 'AA1', 80),
   (900, NULL, NULL, NULL, NULL, NULL, 'TEAVA-DN300', 'Teava DN300 (extras materiale)', 'M', 1100, 0, 'extras_materiale', NULL, NULL);
