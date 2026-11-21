@@ -4035,7 +4035,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
             </>}
             {tab === 'propunere' && <PropunereRezumat st={ptSt} onDeschide={() => { onClose(); onGoPropunere?.() }} />}
 
-            {tab === 'verificari' && <VerificareFinalaSection licitatie={l} />}
+            {tab === 'verificari' && <VerificareFinalaSection licitatie={l} profile={profile} />}
             {tab === 'clarificari' && <DocumenteNoiSection licitatie={l} showToast={showToast} />}
             {tab === 'clarificari' && (
               <div style={{ ...S.card, padding:16, background:G.surface }}>
@@ -5122,20 +5122,25 @@ function ParticipariSeap({ particip, fEnt, setFEnt }) {
 // ── 🔍 Poarta 4: verificarea finală anti-descalificare ──────────────────────
 // 3 treceri: (A) determinist din registru, (B) adversarial (Sonnet 5),
 // (C) arbitrul final (Fable 5.1). Rulează câteva minute; verdictul se salvează.
-function VerificareFinalaSection({ licitatie: l }) {
+// TKT-2026-0390 (decizia Răzvan 21.11.2026): fără parolă (stătea scrisă în codul din browser, oricine o putea citi). Pornește doar
+// ownerul sau un responsabil al licitației numit de owner / un admin Ofertare — aceeași „poartă pe cheltuială” ca restul Ofertării
+// (poatePorniProcesarea = poateCheltuiUI). Serverul (ofertare-verificare-finala) verifică același drept pe contul logat și refuză
+// cu 403; aici butonul doar se dezactivează și spune de ce. Avertismentul de cost rămâne, ca o confirmare explicită.
+export const AVERTISMENT_VERIFICARE_FINALA = '⚠️ Această verificare consumă foarte multe resurse, este indicat să se folosească doar la finalul licitației, până la depunerea în SEAP!\n\nPornești verificarea acum?'
+export const MOTIV_VERIFICARE_FINALA = 'Verificarea finală costă (mai multe modele AI, câteva minute). O pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare.'
+export function VerificareFinalaSection({ licitatie: l, profile }) {
   const [ultima, setUltima] = useState(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
+  const poate = poatePorniProcesarea(profile, l)
   useEffect(() => {
     supabase.from('ofertare_verificari').select('*').eq('licitatie_id', l.id).order('id', { ascending:false }).limit(1)
       .then(({ data }) => setUltima(data?.[0] || null))
   }, [l.id])
 
-  // parolă cerută de Razvan (03.09) — verificarea consumă mult, nu se apasă „de curiozitate"
   const ruleaza = async () => {
-    const p = window.prompt('⚠️ Această verificare consumă foarte multe resurse, este indicat să se folosească doar la finalul licitației, până la depunerea în SEAP!\n\nIntrodu parola pentru a continua:')
-    if (p === null) return
-    if (p !== 'Gazpet2026') { setErr('Parolă greșită — verificarea nu a pornit.'); return }
+    if (!poate || busy) return
+    if (!window.confirm(AVERTISMENT_VERIFICARE_FINALA)) return
     setBusy(true); setErr(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -5143,8 +5148,9 @@ function VerificareFinalaSection({ licitatie: l }) {
         method:'POST', headers: { Authorization: `Bearer ${session?.access_token}`, 'Content-Type':'application/json' },
         body: JSON.stringify({ licitatie_id: l.id }),
       })
-      const j = await r.json()
-      if (!j.ok) throw new Error(j.error || 'eroare necunoscută')
+      const j = await r.json().catch(() => ({}))
+      if (r.status === 401 || r.status === 403) throw new Error(j.error || MOTIV_VERIFICARE_FINALA)
+      if (!j.ok) throw new Error(j.error || `eroare necunoscută (HTTP ${r.status})`)
       const { data } = await supabase.from('ofertare_verificari').select('*').eq('id', j.verificare_id).single()
       setUltima(data)
     } catch (e) { setErr(String(e?.message || e)) } finally { setBusy(false) }
@@ -5160,10 +5166,12 @@ function VerificareFinalaSection({ licitatie: l }) {
         <div style={{ fontSize:13, fontWeight:800 }}>🔍 Verificare finală (anti-descalificare)</div>
         <span style={{ fontSize:12.5, fontWeight:800, color:vCol }}>{vLbl}</span>
         {ultima && <span style={{ fontSize:11, color:G.dim }}>rulată {new Date(ultima.created_at).toLocaleString('ro-RO')}</span>}
-        <button style={{ ...S.btnP, marginLeft:'auto', padding:'6px 13px', fontSize:12, opacity: busy ? .6 : 1 }} disabled={busy} onClick={ruleaza}>
+        <button style={{ ...S.btnP, marginLeft:'auto', padding:'6px 13px', fontSize:12, opacity: busy || !poate ? .6 : 1, cursor: poate ? 'pointer' : 'not-allowed' }}
+          disabled={busy || !poate} onClick={ruleaza} title={poate ? AVERTISMENT_VERIFICARE_FINALA : MOTIV_VERIFICARE_FINALA}>
           {busy ? '⏳ Rulează cele 3 treceri…' : (ultima ? '🔁 Rulează din nou' : '🔍 Rulează verificarea')}
         </button>
       </div>
+      {!poate && <div style={{ marginTop:6, fontSize:11.5, color:G.dim }}>🔒 {MOTIV_VERIFICARE_FINALA}</div>}
       {err && <div style={{ marginTop:8, fontSize:12.5, color:G.red }}>Eroare: {err}</div>}
       {ultima && (
         <div style={{ marginTop:10, fontSize:12.5 }}>
