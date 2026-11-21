@@ -1,0 +1,47 @@
+# 20270102a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase); baza = 20261212a + 20261227a + 20261228a aplicate
+coloana	coloana public.red_fan_rulari.apeluri	creat
+coloana	coloana public.red_fan_rulari.depasite	creat
+coloana	coloana public.red_fan_rulari.eroare_cod	creat
+coloana	coloana public.red_fan_rulari.id	creat
+coloana	coloana public.red_fan_rulari.incheiata_la	creat
+coloana	coloana public.red_fan_rulari.loturi	creat
+coloana	coloana public.red_fan_rulari.loturi_sarite	creat
+coloana	coloana public.red_fan_rulari.pastrate	creat
+coloana	coloana public.red_fan_rulari.plafon_apeluri	creat
+coloana	coloana public.red_fan_rulari.pornita_de	creat
+coloana	coloana public.red_fan_rulari.pornita_la	creat
+coloana	coloana public.red_fan_rulari.randuri	creat
+coloana	coloana public.red_fan_rulari.scrise	creat
+coloana	coloana public.red_fan_rulari.slot	creat
+coloana	coloana public.red_fan_rulari.stare	creat
+coloana	coloana public.red_fan_rulari.sursa	creat
+coloana	coloana public.red_fan_rulari.zi_ro	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_apeluri_plafon	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_depasite_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_eroare_cod_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_inchiderea	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_loturi_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_loturi_sarite_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_motiv	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_pastrate_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_pkey	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_plafon_apeluri_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_pornire	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_randuri_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_scrise_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_slot_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_stare_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_suma	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_sursa_check	creat
+functie	functie public.fn_red_fan_srv_de_urmarit(uuid)	creat
+functie	functie public.fn_red_fan_srv_rulare_apel(uuid)	creat
+functie	functie public.fn_red_fan_srv_rulare_incepe(text,uuid)	creat
+functie	functie public.fn_red_fan_srv_rulare_incheie(uuid,text,text,integer,integer)	creat
+functie	functie public.fn_red_fan_srv_urmarire(uuid,uuid,uuid,jsonb)	schimbat
+politica	politica public.red_fan_rulari.red_fan_rulari_citire	creat
+relatie	relatie public.red_fan_rulari	creat
+relatie	relatie public.red_fan_rulari_in_curs_uq	creat
+relatie	relatie public.red_fan_rulari_pkey	creat
+relatie	relatie public.red_fan_rulari_slot_uq	creat
+tip	tip public.red_fan_rulari	creat
+tip	tip public.red_fan_rulari[]	creat

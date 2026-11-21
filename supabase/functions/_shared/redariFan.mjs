@@ -366,6 +366,9 @@ export function dataEvenimentFan(v) {
  *   nelimpede pentru o convocare, 18.11.2026), sau „confirmare refuzată” (L12: nimic nu dispare tacit).
  * - tranzit / inregistrat / neutru nu schimbă faptele: ca ultim eveniment dau „în tranzit” (sau „ridicat” / „livrat” după faptele cunoscute);
  *   ecranul deosebește „AWB înregistrat, neridicat” (S98) după ultimul eveniment (fanLot.js, etichetaUrmarire).
+ * - CONTRADICȚII în ACELAȘI răspuns (spec §9.2, precondiția F2, 21.11.2026): ridicări (C0) în ZILE diferite, livrări (S2) la ore diferite, sau
+ *   livrare + retur → de_verificat, iar faptul contrazis NU se propune (ridicat_propus / livrat_la / retur_propus = null): BD-ul nu consemnează
+ *   nimic din el, omul decide. Evenimentele identice repetate (același cod, aceeași dată) = un singur fapt; două C0 în aceeași zi = ridicat.
  */
 export function rezumatUrmarireFan(el) {
   const gol = { urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null }
@@ -391,6 +394,11 @@ export function rezumatUrmarireFan(el) {
   const baza = { ultim_eveniment: ultim?.cod || null, ultim_eveniment_la: ultim?.la || null, ridicat_propus: ridicat?.data || null, livrat_la: livrat?.la || null, retur_propus: null }
   const rez = (urmarire_stare, extra = {}) => ({ ...baza, urmarire_stare, ...extra })
   if (stricat) return rez('de_verificat', { motiv: 'evenimente cu cod sau dată de formă necunoscută' })
+  // contradicțiile în același răspuns (§9.2): faptul contrazis nu se propune; un fapt repetat identic nu e contradicție
+  const distincte = (cat, cheie) => new Set(ev.filter(e => e.cat === cat).map(e => e[cheie])).size
+  if (distincte('ridicat', 'data') > 1) return rez('de_verificat', { ridicat_propus: null, motiv: 'două date de ridicare în același răspuns' })
+  if (distincte('livrat', 'la') > 1) return rez('de_verificat', { livrat_la: null, motiv: 'două ore de livrare în același răspuns' })
+  if (livrat && areRetur) return rez('de_verificat', { livrat_la: null, retur_propus: null, motiv: 'livrare și retur în același răspuns' })
   if (areRetur) return rez('retur', { retur_propus: ultimSemnal ? RETUR_DIN_CATEGORIE[ultimSemnal.cat] : null })
   if (ultim && ['refuz', 'adresa', 'mutat'].includes(ultim.cat)) return rez('retur', { retur_propus: RETUR_DIN_CATEGORIE[ultim.cat] })
   if (ev.some(e => e.cat === 'confirmare_refuzata')) return rez('de_verificat', { motiv: 'confirmare refuzată (S50): judecată umană' })

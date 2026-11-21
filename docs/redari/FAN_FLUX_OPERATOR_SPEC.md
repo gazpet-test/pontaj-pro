@@ -1814,6 +1814,9 @@ comanda curierului și „Pregătește comanda” (F5); orice efect pe proiecte 
   cere, de F6.
 
 ### F2 — Urmărirea automată + verificarea generate / tipărite / ridicate (D4, D11)
+- **F2a livrată separat (21.11.2026, decizia owner-ului): urmărirea automată FĂRĂ bifare pe plic** — `docs/redari/FAN_URMARIRE_AUTOMATA.md`,
+  migrarea `20270102a` (NEAPLICATĂ): cron de două ori pe zi, aceeași urmărire ca butonul, ridicarea rămâne propusă, contradicțiile „de verificat”,
+  precondiția contradicțiilor din §9.2 inclusă. Restul lui F2 (bifarea D4, D11, întrerupătorul din ecran) rămâne cum e descris mai jos.
 - **Precondiție (P1 înainte de F2, Jakarinos)**: regula contradicțiilor în ACELAȘI răspuns în `rezumatUrmarireFan` (§9.2), cu tabelul de cazuri.
 - **Conține**: `red_fan_rulari` (+ `control jsonb`), `fn_red_fan_urmarire_tick` (postgres / pg_cron), secretul Vault `REDARI_FAN_INTERN_SECRET` (generat în BD),
   `fn_red_fan_srv_urmarire` / `fn_red_fan_srv_confirmari` cu `p_rulare` activ, `fn_red_fan_srv_bifeaza`, `fn_red_fan_srv_rulare` (clasa B, EXECUTE

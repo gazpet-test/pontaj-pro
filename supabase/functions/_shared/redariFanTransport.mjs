@@ -113,7 +113,7 @@ export async function executaActiuneFan({ corp, lot, uid = null, proiectCod = nu
     const randuri = [...r.data].sort(comparaPlic)
     switch (corp.actiune) {
       case 'genereaza': return await genereaza({ lot, randuri, s, fan, deps, out })
-      case 'urmarire': return await urmarire({ lot, randuri, s, fan, deps, uid, out })
+      case 'urmarire': return await urmaresteLot({ lot, randuri, s, fan, deps, uid, out })
       case 'confirmari': return await confirmari({ lot, randuri, s, fan, deps, uid, out })
       case 'evenimente': { const x = await fan.cerere('GET', '/reports/awb-events'); const c = comparaEvenimente(x.status, x.corp); return c.ok ? out(200, 'ok', c) : out(502, 'evenimente_de_verificat', { motiv: c.motiv }) }
       case 'eticheta': return await eticheta({ corp, lot, randuri, s, fan, deps, out })
@@ -368,34 +368,49 @@ const rezUrmarire = (w, n) => !w?.error && w?.data && typeof w.data === 'object'
 
 // ── urmărire: ≤ 100 AWB-uri pe solicitare; scrie DOAR starea de urmărire (propuneri), nu expedierea. Scrierea = clasa B dacă există rpcServer
 // (operator / owner prin funcția edge nouă, p_actor = omul), altfel RPC-ul vechi al owner-ului (același corp în BD, L19). ──
+// Rularea automată (redari-fan-urmarire, 20270102a) cheamă ACEEAȘI funcție, cu `rulare` = id-ul rulării (p_actor NULL, p_rulare = rularea) și
+// `deps.inainteDeApel()` = pasul durabil al plafonului ÎNAINTEA fiecărui GET (fn_red_fan_srv_rulare_apel); refuzul = nimic cerut curierului.
 const cuAwb = randuri => randuri.filter(x => ['generat', 'ridicat'].includes(x.stare) && x.awb)
-async function urmarire({ lot, randuri, s, fan, deps, uid, out }) {
+export async function urmaresteLot({ lot, randuri, s, fan, deps, uid = null, rulare = null, out }) {
   const lista = cuAwb(randuri)
   if (!lista.length) return out(409, 'nimic_de_urmarit')
   const stari = {}
-  let scrise = 0, pastrate = 0, depasite = 0, necerute = 0
+  let scrise = 0, pastrate = 0, depasite = 0, necerute = 0, solicitari = 0
   for (const [i, b] of imparteInBucati(lista).entries()) {
     if (i > 0) await deps.pauza(PAUZA_INTRE_CERERI_MS)
+    if (typeof deps.inainteDeApel === 'function') {
+      const pas = await deps.inainteDeApel()
+      if (pas?.ok !== true) return out(423, 'apel_refuzat', { cod_bd: pas?.cod ?? null, scrise, pastrate, depasite, stari, solicitari })
+    }
+    solicitari++
     const awbs = b.map(x => x.awb)
     const x = await fan.cerere('GET', caleListaAwb('/reports/awb/tracking', { clientId: s.clientId, awbs }))
     const u = interpreteazaUrmarire(x.status, x.corp, awbs)
-    if (!u.ok) return out(502, 'urmarire_neconfirmata', { motiv: u.motiv, scrise, pastrate, depasite, stari })
+    if (!u.ok) return out(502, 'urmarire_neconfirmata', { motiv: u.motiv, http: x.status, scrise, pastrate, depasite, stari, solicitari })
     necerute += u.necerute
     // Jakarinos #1118 r1 (L03): fiecare rând poartă versiunea de urmărire CITITĂ la începutul rulării; BD-ul scrie doar dacă e încă aceeași
     // și dacă evenimentul nu e mai vechi decât cel deja scris (altfel „depășit”: o rulare mai nouă a câștigat)
     const p = b.map(r => { const z = u.pe_awb.get(r.awb); stari[z.urmarire_stare] = (stari[z.urmarire_stare] || 0) + 1
       return { id: r.id, awb: r.awb, versiune: r.versiune_urmarire, urmarire_stare: z.urmarire_stare, ultim_eveniment: z.ultim_eveniment, ultim_eveniment_la: z.ultim_eveniment_la,
         ridicat_propus: z.ridicat_propus, livrat_la: z.livrat_la, retur_propus: z.retur_propus } })
-    const w = rezUrmarire(await scriereUrmarire(deps, uid, 'urmarire', lot.id, p), p.length)
-    if (!w) return out(503, 'scriere_neconfirmata', { scrise, pastrate, depasite, stari })
+    const raw = await scriereUrmarire(deps, uid, 'urmarire', lot.id, p, rulare)
+    const w = rezUrmarire(raw, p.length)
+    if (!w) return out(503, 'scriere_neconfirmata', { cod_bd: raw?.error?.code ?? null, scrise, pastrate, depasite, stari, solicitari })
     scrise += w.scrise; pastrate += w.pastrate; depasite += w.depasite
   }
-  return out(200, 'ok', { scrise, pastrate, depasite, stari, necerute })
+  return out(200, 'ok', { scrise, pastrate, depasite, stari, necerute, solicitari })
 }
-// clasa B (fn_red_fan_srv_urmarire / _confirmari, service_role, p_actor = omul, p_rulare NULL în F1) când funcția edge are clientul server; altfel RPC-ul vechi (owner)
-const scriereUrmarire = (deps, uid, ce, lotId, p) => (typeof deps.rpcServer === 'function' && uid
-  ? deps.rpcServer(ce === 'urmarire' ? 'fn_red_fan_srv_urmarire' : 'fn_red_fan_srv_confirmari', { p_actor: uid, p_rulare: null, p_lot_id: lotId, p_randuri: p })
-  : deps.rpc(ce === 'urmarire' ? 'fn_red_fan_urmarire' : 'fn_red_fan_confirmari', { p_lot_id: lotId, p_randuri: p }))
+// clasa B (fn_red_fan_srv_urmarire / _confirmari, service_role) când funcția edge are clientul server: p_actor = omul (F1) SAU p_rulare = rularea
+// automată (doar urmărirea, 20270102a; exact unul e nenul, BD-ul refuză altfel); fără client server, RPC-ul vechi (owner). Rularea automată fără
+// client server = nicio scriere (nu cade pe RPC-ul owner-ului: ar scrie cu alt drept decât cel declarat).
+const scriereUrmarire = (deps, uid, ce, lotId, p, rulare = null) => {
+  if (rulare) return typeof deps.rpcServer === 'function' && ce === 'urmarire'
+    ? deps.rpcServer('fn_red_fan_srv_urmarire', { p_actor: null, p_rulare: rulare, p_lot_id: lotId, p_randuri: p })
+    : Promise.resolve({ error: { code: 'rulare_fara_server' } })
+  return typeof deps.rpcServer === 'function' && uid
+    ? deps.rpcServer(ce === 'urmarire' ? 'fn_red_fan_srv_urmarire' : 'fn_red_fan_srv_confirmari', { p_actor: uid, p_rulare: null, p_lot_id: lotId, p_randuri: p })
+    : deps.rpc(ce === 'urmarire' ? 'fn_red_fan_urmarire' : 'fn_red_fan_confirmari', { p_lot_id: lotId, p_randuri: p })
+}
 
 async function confirmari({ lot, randuri, s, fan, deps, uid, out }) {
   const lista = cuAwb(randuri)
