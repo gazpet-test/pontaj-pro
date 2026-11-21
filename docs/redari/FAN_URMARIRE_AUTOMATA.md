@@ -57,7 +57,9 @@ Varianta „o dată pe zi, 18:30” e la fel de sigură; o alege owner-ul dacă 
 
 Rândurile `red_fan_awb` cu:
 - `stare` `generat` sau `ridicat`, cu AWB;
-- **nelivrate** (`livrat_la` gol și `urmarire_stare` ≠ `livrat`), **fără retur cunoscut**; cele anulate sunt excluse prin stare;
+- **fără fapt final valid**: nici livrare la un moment posibil (`livrat_la`, runda 5), nici retur cunoscut pe o cronologie lipsă sau posibilă
+  (`ultim_eveniment_la`, runda 6; un retur / o livrare scrise pe un moment imposibil nu sunt fapte finale, rândul rămâne de urmărit); cele anulate
+  sunt excluse prin stare;
 - generate în ultimele **60 de zile**;
 - pe loturile permise de garda „doar TEST” (`fn_red_fan_lot_permis`, aceeași funcție ca pe orice cale cu efect; când garda cade la F4, loturile
   reale intră automat, fără altă schimbare);
@@ -75,7 +77,7 @@ Toate contradicțiile se evaluează **înainte** de a construi faptele (nu doar 
 | ore de livrare (S2) diferite | **ultima oră** | **ultima oră** dintre cele două |
 | livrare și retur | **evenimentul final ulterior** după ora curierului; la egalitate sau cu retur fără oră (`returnAwbNumber`) → **retur** | retur nou peste livrare cunoscută: retur dacă returul n-are oră sau e la / după livrare; livrare nouă peste retur cunoscut: livrat doar dacă livrarea e **după** ultimul eveniment cunoscut la înregistrarea returului, altfel retur |
 | motive de retur diferite | motivul ultimului semnal; semnale cu motive diferite la **aceeași oră** → motivul după departajare (refuz > adresă > mutat > avizat) + semnal `retur_motiv` | motivul răspunsului **mai nou**; un răspuns fără motiv păstrează motivul cunoscut |
-| **orice eveniment** (C0, S2, retur, refuz, tranzit, orice cod) la un moment **imposibil** (runda 5, vezi mai jos) | respins **înaintea** regulilor de mai sus: nu intră în stare, ridicare, livrare, retur, contradicții, cronologie | un fapt cunoscut imposibil (livrare / zi de ridicare scrise înainte de 20270102a) iese din fapte; fiecare eveniment respins = un semnal `eveniment_data_imposibila` („respins”), doar în audit |
+| **orice eveniment** (C0, S2, retur, refuz, tranzit, orice cod) la un moment **imposibil** (runda 5, vezi mai jos) | respins **înaintea** regulilor de mai sus: nu intră în stare, ridicare, livrare, retur, contradicții, cronologie | un fapt cunoscut imposibil (livrare / zi de ridicare / cronologia pe care stă returul, scrise înainte de 20270102a) iese din fapte; fiecare eveniment respins = un semnal `eveniment_data_imposibila` („respins”), doar în audit, pe orice ramură (scris / păstrat / depășit; runda 6) |
 
 **Regula momentului posibil (runda 5, Jakarinos r4 P1 — clasa, nu cazul C0).** Un eveniment al curierului e **posibil** dacă ziua lui (ora
 României) e ≥ ziua generării AWB-ului **și** momentul lui e ≤ momentul procesării + **5 minute** (toleranța mică pentru ceasurile diferite ale
@@ -93,6 +95,21 @@ curierului și ale noastre). O singură definiție, aceeași în cod (`redariFan
   fapt final valid; corecția validă ulterioară se înregistrează (nu „ultima oră” dintre ea și cea imposibilă).
 Exemplul recenzentului: pe 21.11, C0 20.11 08:00 + S2 24.11 10:00 → **ridicat**, fără livrare, S2 în audit, AWB-ul încă de urmărit; apoi
 S2 20.11 10:00 → **livrat la 20.11 10:00**.
+
+**Returul cunoscut și ramura „depășit” (runda 6, Jakarinos r5 P1 / P2).** Returul înregistrat (`retur_cunoscut`) nu are oră proprie pe rând:
+faptul lui stă pe **cronologia cu care a fost înregistrat** (`ultim_eveniment_la` = „ultimul eveniment cunoscut la înregistrarea returului”, regula
+de mai sus). De aici:
+- returul e fapt final **doar** dacă acea cronologie **lipsește** (returul legitim fără oră: `returnAwbNumber`, fără evenimente) sau e **posibilă**;
+  un retur scris înainte de 20270102a pe o cronologie imposibilă (ex. S6 pe 24.11, procesat pe 21.11) **iese din fapte** (și motivul lui): nu mai
+  câștigă la departajarea livrare / retur, AWB-ul rămâne de urmărit (`fn_red_fan_srv_de_urmarit`, aceeași compunere), o corecție validă îl
+  înlocuiește, iar cronologia imposibilă intră în audit (`eveniment_data_imposibila`, `intre_raspunsuri`), ca livrarea / ziua ridicării;
+- „neordonabil” (răspuns fără niciun moment posibil, pasul 4) se judecă față de cronologia cunoscută **posibilă**: un rând cu cronologie veche
+  imposibilă nu rămâne „păstrat” la nesfârșit — se scrie, faptele imposibile ies și se auditează;
+- un răspuns **depășit** (CAS pe versiune sau partea lui validă mai veche decât cronologia cunoscută) nu schimbă nimic pe rând (protecția faptelor
+  rămâne), dar evenimentele lui imposibile **lasă urmă în audit** (același rând la revedere, observări + 1); faptele și contradicțiile lui nu se iau.
+Exemplele recenzentului: (P1) retur cunoscut pe S6 24.11, procesat pe 21.11 → AWB-ul **e** în selecție; corecția S2 20.11 10:00 → **livrat**,
+returul scos, S6 24.11 în audit; (P2) cronologie H3 20.11 12:00, răspuns C0 20.11 08:00 + S2 24.11 → **depășit**, rândul neatins, S2 24.11 în
+audit pe ambele rulări.
 
 **Evenimente la aceeași oră (runda 3).** Rezultatul nu depinde de ordinea în care FAN listează evenimentele: „ultimul eveniment” = **toate**
 evenimentele de la ora maximă. Un refuz / adresă greșită / mutat la ora finală e dovadă de retur oriunde ar sta în listă (S2 + S6 la 10:00 →
@@ -256,7 +273,14 @@ runner (refuză cât există rulări în istoric, contradicții înregistrate sa
   Jakarinos r4 pe două rulări (C0 + S2 viitor → ridicat, fără livrare, S2 în audit, AWB-ul de urmărit; corecția S2 → livrat), corecția peste o
   livrare imposibilă scrisă înainte (rândul de urmărit, livrarea înlocuită, cea veche în audit), **matricea** 13 coduri × (viitor / înainte de
   generare / valid), toleranța (240 s posibil, 330 s nu), dezacordul cod ↔ BD (3 forme → păstrat), limita `respinse` (100 / 101), rândul păstrat
-  nu-și auditează faptele cunoscute, predicatul BD = cod pe granițe fixe; `respinse` ca date externe (6 forme refuzate); refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
+  nu-și auditează faptele cunoscute, predicatul BD = cod pe granițe fixe; `respinse` ca date externe (6 forme refuzate); **K20 (runda 6)**: scenariul
+  lui Jakarinos r5 P1 pe două rulări (retur cunoscut pe cronologie imposibilă → AWB-ul în selecție; corecția S2 → livrat, returul scos, cronologia în
+  audit; a doua rulare neschimbată), returul legitim fără oră (pe cronologie posibilă și fără cronologie: fapt final, livrarea de dinainte nu-l
+  înlocuiește), returul imposibil + răspuns fără moment posibil (scris, nu păstrat la nesfârșit; cu `returnAwbNumber` → retur legitim fără motivul
+  vechi), scenariul P2 pe două rulări (depășit pe cronologie și pe versiune: rândul neatins, S2 imposibil în audit, observări 2, fără contradicțiile
+  răspunsului depășit), **matricea clasei** 7 evenimente × 5 ramuri (scris / păstrat / depășit pe cronologie / depășit pe versiune / cunoscut dinainte) ×
+  2 feluri (viitor / înainte de generare) = 70 de rânduri, două rulări fiecare, cu invariantul: niciun fapt / cronologie pe moment imposibil,
+  eligibilitate = „fără fapt final valid”, exact o urmă pe eveniment imposibil; refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
   revenirea (refuz la fiecare urmă, inclusiv contradicții și ridicări automate; aplicare → revenire → re-aplicare); **mutanți SQL** + martorul;
   paritatea plafonului JS ↔ SQL; porțile 0e / Izometrie E2.
 - Pe clonă (coordonatorul): `supabase/tests/20270102a_redari_fan_urmarire_auto_doua_sesiuni.sh` — S1 două porniri suprapuse (B așteaptă, apoi

@@ -776,6 +776,177 @@ async function verificari(db, log, fail = []) {
     if (b !== astept || FAN.momentPosibilFan(la, RP) !== astept) rauH.push(`${la}: BD ${b}, cod ${FAN.momentPosibilFan(la, RP)}, așteptat ${astept}`)
   }
   ok(rauH.length === 0, `K19h: predicatul BD = cod = așteptarea, pe ${cazH.length} granițe (reper fix 20.11 / 21.11 10:00): ${rauH.join(' | ') || 'identic'}`)
+
+  // ── K20: runda 6 (Jakarinos #1155 r5 P1 / P2). Rânduri noi 150–229 pe L1 (TEST), generate acum 3 zile (D0). Așteptări scrise de mână din
+  // FAN_URMARIRE_AUTOMATA.md §3b (L25). (P1) returul cunoscut stă pe cronologia lui: pe o cronologie imposibilă nu e fapt final (AWB-ul de urmărit,
+  // corecția validă îl înlocuiește, urma în audit), returul LEGITIM fără oră rămâne fapt; (P2) evenimentele imposibile lasă urmă și pe ramura
+  // „depășit”, fără să slăbească CAS-ul; K20e = matricea evenimente × ramuri × feluri de dată imposibilă, cu invariantul clasei. ──
+  const K20 = Array.from({ length: 80 }, (_, i) => 150 + i)
+  await db.exec(`SET session_replication_role = replica;
+    INSERT INTO public.red_plicuri (id, proiect_id, lot_id, nr_plic, destinatar_nume, stare) VALUES
+      ${K20.map(n => `('${plicId(n)}', '${ID.proiect}', '${ID.L1}', '${nrPlic(n)}', 'PERSOANA ${n}', 'activ')`).join(', ')};
+    INSERT INTO public.red_fan_awb (id, proiect_id, lot_id, plic_id, nr_plic, stare, hash_date, awb, generat_la, propus_de, aprobat_de, aprobat_la, cerere_id) VALUES
+      ${K20.map(n => `('${awbId(n)}', '${ID.proiect}', '${ID.L1}', '${plicId(n)}', '${nrPlic(n)}', 'generat', '${HX('a')}', '${7000000000 + n}', now() - interval '3 days', '${ID.owner}', '${ID.owner}', now(), '${CERERE}')`).join(', ')};
+    SET session_replication_role = origin;`)
+  const TZ = `AT TIME ZONE 'Europe/Bucharest'`
+  const tsRo = la => `('${la}'::timestamp ${TZ})`   // momentul local (text) → timestamptz, pentru faptele „scrise de corpul de dinainte” (fixtură)
+  const fapteK20 = a => JSON.stringify([a.stare, a.urmarire_stare, a.ultim_eveniment, a.ultim_eveniment_la, a.ridicat_propus, a.ridicat_la, a.livrat_la, a.retur_cunoscut, a.retur_propus])
+  // invariantul clasei, scris de mână (independent de corpul comun): „curat” = niciun fapt (ziua ridicării, livrarea) și nicio cronologie a rândului
+  // nu stă pe un moment imposibil; „final” = livrare la un moment posibil SAU retur pe o cronologie lipsă / posibilă (§3b). Eligibilitatea rulării
+  // automate trebuie să fie exact „nu e final”.
+  const stareFapte = async n => {
+    const r = await val(db, `SELECT (a.ridicat_propus IS NULL OR public.fn_red_fan_moment_posibil(a.ridicat_propus::timestamp, g.zi, g.acum)) AS rid_ok,
+        (a.livrat_la IS NULL OR public.fn_red_fan_moment_posibil(a.livrat_la ${TZ}, g.zi, g.acum)) AS liv_ok,
+        (a.ultim_eveniment_la IS NULL OR public.fn_red_fan_moment_posibil(a.ultim_eveniment_la ${TZ}, g.zi, g.acum)) AS cron_ok,
+        a.livrat_la IS NOT NULL AS liv, a.retur_cunoscut AS ret, a.ultim_eveniment_la IS NULL AS fara_cron
+      FROM public.red_fan_awb a CROSS JOIN LATERAL (SELECT (a.generat_la ${TZ})::date AS zi, clock_timestamp() ${TZ} AS acum) g WHERE a.id = $1`, [awbId(n)])
+    return { curat: r.rid_ok && r.liv_ok && r.cron_ok, final: (r.liv && r.liv_ok) || (r.ret && (r.fara_cron || r.cron_ok)), ...r }
+  }
+  const returVechi = n => db.exec(`SET session_replication_role = replica; UPDATE public.red_fan_awb SET urmarire_stare = 'retur', retur_cunoscut = true, retur_propus = 'refuz',
+    ultim_eveniment = 'S6', ultim_eveniment_la = now() + interval '3 days' WHERE id = '${awbId(n)}'; SET session_replication_role = origin;`)
+
+  // K20a — EXACT scenariul recenzentului (P1): retur cunoscut, scris de corpul de dinainte pe o cronologie IMPOSIBILĂ (S6 peste 3 zile), procesat azi;
+  // corecția validă S2 (două rulări identice)
+  await returVechi(150)
+  const viitorRet = await ora(150, 'ultim_eveniment_la')
+  const s150 = await stareFapte(150)
+  ok(!s150.final && !s150.curat && await eligibil(150) !== null, `K20a: returul pe o cronologie imposibilă (S6 ${viitorRet}) NU e fapt final: AWB-ul e în selecția rulării automate`)
+  const k20a = await buton(150, [['C0', `${D0} 09:00:00`], ['S2', `${D1} 10:00:00`]])
+  const a150 = await awb(150), c150 = await contr(150)
+  ok(k20a.scrise === 1 && a150.urmarire_stare === 'livrat' && await ora(150, 'livrat_la') === `${D1} 10:00:00` && a150.retur_cunoscut === false && a150.retur_propus === null
+     && JSON.stringify(await cron(150)) === JSON.stringify(['S2', `${D1} 10:00:00`]) && !c150.some(c => c.tip === 'livrare_retur')
+     && JSON.stringify(impos(c150).map(c => [c.sursa, c.valori])) === JSON.stringify([['intre_raspunsuri', [`S6 ${viitorRet}`, `azi ${AZI}`]]])
+     && (await stareFapte(150)).final && await eligibil(150) === null,
+    `K20a: rularea 1 (corecția S2 ${D1} 10:00): LIVRAT, returul imposibil scos (fără livrare_retur), cronologia lui în audit, nu mai e de urmărit: ` + JSON.stringify(c150.map(c => [c.sursa, c.tip, c.valori])))
+  const k20a2 = await buton(150, [['C0', `${D0} 09:00:00`], ['S2', `${D1} 10:00:00`]])
+  const c150b = await contr(150)
+  ok(k20a2.scrise === 1 && fapteK20(await awb(150)) === fapteK20(a150) && c150b.length === 1 && c150b[0].observari === 1 && await eligibil(150) === null,
+    'K20a: rularea 2 (același răspuns): neschimbat, livrat, urma cronologiei imposibile rămâne (un rând, observări 1)')
+
+  // K20b — returul LEGITIM fără oră (returnAwbNumber, regula fan-contradictii-v1) rămâne fapt final: pe o cronologie posibilă și fără nicio cronologie;
+  // livrarea care nu e DUPĂ ultimul eveniment cunoscut nu-l înlocuiește (regula neschimbată)
+  const RA = { returnAwbNumber: '7000009999' }
+  const k20b = await buton(151, [['H3', `${D1} 10:00:00`]], RA)
+  const a151 = await awb(151)
+  ok(k20b.scrise === 1 && a151.urmarire_stare === 'retur' && a151.retur_cunoscut && a151.retur_propus === null && JSON.stringify(await cron(151)) === JSON.stringify(['H3', `${D1} 10:00:00`])
+     && (await stareFapte(151)).final && await eligibil(151) === null, 'K20b: retur fără oră pe o cronologie posibilă (H3): fapt final, nu e de urmărit')
+  // un răspuns mai vechi decât cronologia cunoscută (S2 D1 09:00 < H3 D1 10:00) e „depășit”: nimic scris, returul rămâne; o livrare la ACEEAȘI oră cu ultimul
+  // eveniment cunoscut se scrie, dar nu e DUPĂ el → egalitatea merge la retur, cu semnalul livrare_retur (regula fan-contradictii-v1 neschimbată)
+  const k20bv = await buton(151, [['C0', `${D0} 09:00:00`], ['S2', `${D1} 09:00:00`]])
+  const a151v = await awb(151)
+  ok(k20bv.depasite === 1 && k20bv.scrise === 0 && a151v.urmarire_stare === 'retur' && a151v.retur_cunoscut && a151v.livrat_la === null && a151v.versiune_urmarire === a151.versiune_urmarire
+     && (await contr(151)).length === 0 && await eligibil(151) === null,
+    'K20b: livrarea mai VECHE decât ultimul eveniment cunoscut = răspuns depășit: returul legitim rămâne, nimic scris, nimic în audit (nu e dată imposibilă)')
+  const k20be = await buton(151, [['C0', `${D0} 09:00:00`], ['S2', `${D1} 10:00:00`]])
+  const a151b = await awb(151), c151 = await contr(151)
+  ok(k20be.scrise === 1 && a151b.urmarire_stare === 'retur' && a151b.retur_cunoscut && a151b.livrat_la === null
+     && c151.length === 1 && c151[0].tip === 'livrare_retur' && c151[0].ales === 'retur' && JSON.stringify(c151[0].valori) === JSON.stringify(['retur_cunoscut', `S2 ${D1} 10:00:00`])
+     && await eligibil(151) === null,
+    'K20b: livrarea la aceeași oră cu ultimul eveniment cunoscut (nu DUPĂ) nu înlocuiește returul legitim: scris, retur, semnal livrare_retur (regula neschimbată)')
+  const k20b2 = await buton(152, [], RA)
+  const a152 = await awb(152)
+  ok(k20b2.scrise === 1 && a152.urmarire_stare === 'retur' && a152.retur_cunoscut && a152.ultim_eveniment_la === null && (await stareFapte(152)).final && await eligibil(152) === null,
+    'K20b: retur fără oră și FĂRĂ cronologie (doar returnAwbNumber): fapt final, nu e de urmărit')
+  await buton(152, [['S2', `${D1} 09:00:00`]])
+  ok((await awb(152)).urmarire_stare === 'retur' && (await awb(152)).livrat_la === null && await eligibil(152) === null,
+    'K20b: fără cronologie cunoscută, livrarea ulterioară nu înlocuiește returul (necunoscutul merge la retur, ca înainte)')
+
+  // K20c — retur cunoscut pe cronologie imposibilă + răspuns FĂRĂ niciun moment posibil: nu rămâne „păstrat” la nesfârșit („neordonabil” = față de o
+  // cronologie POSIBILĂ): rândul se scrie, returul imposibil iese (și motivul lui), ambele evenimente imposibile în audit, AWB-ul rămâne de urmărit
+  await returVechi(153)
+  const viitorRet3 = await ora(153, 'ultim_eveniment_la')
+  const k20c = await buton(153, [['S6', `${viitor} 10:00:00`]])
+  const a153 = await awb(153), c153 = impos(await contr(153))
+  ok(k20c.scrise === 1 && k20c.pastrate === 0 && a153.urmarire_stare === 'fara_evenimente' && a153.retur_cunoscut === false && a153.retur_propus === null && a153.ultim_eveniment_la === null
+     && JSON.stringify(c153.map(c => [c.sursa, c.valori[0]]).sort()) === JSON.stringify([['acelasi_raspuns', `S6 ${viitor} 10:00:00`], ['intre_raspunsuri', `S6 ${viitorRet3}`]].sort())
+     && (await stareFapte(153)).curat && await eligibil(153) !== null,
+    'K20c: răspuns fără moment posibil pe un retur imposibil: scris (nu păstrat), returul și cronologia imposibile scoase și auditate, AWB-ul de urmărit: ' + JSON.stringify(c153.map(c => c.valori)))
+  await returVechi(154)
+  const k20c2 = await buton(154, [['S6', `${viitor} 10:00:00`]], RA)
+  const a154 = await awb(154)
+  ok(k20c2.scrise === 1 && a154.urmarire_stare === 'retur' && a154.retur_cunoscut && a154.retur_propus === null && a154.ultim_eveniment_la === null && impos(await contr(154)).length === 2
+     && (await stareFapte(154)).final && await eligibil(154) === null,
+    'K20c: cu returnAwbNumber: returul legitim fără oră înlocuiește returul imposibil (motivul vechi nu rămâne), fapt final, ambele S6 în audit')
+
+  // K20d — EXACT scenariul recenzentului (P2): cronologie cunoscută H3 D1 12:00; răspuns C0 D1 08:00 (mai vechi) + S2 imposibil → „depășit”, dar S2
+  // lasă urmă durabilă (două rulări → observări 2); rândul rămâne neatins (protecția CAS); contradicția din același răspuns (două zile C0) NU se
+  // scrie (faptele răspunsului depășit nu s-au luat). Apoi același lucru pe „depășit” prin versiune (CAS).
+  await automat(155, [['H3', `${D1} 12:00:00`]])
+  const in155 = await awb(155)
+  const evD = [['C0', `${D0} 09:00:00`], ['C0', `${D1} 08:00:00`], ['S2', `${viitor} 10:00:00`]]
+  const k20d = await automat(155, evD)
+  const c155 = await contr(155)
+  ok(k20d.scrise === 0 && k20d.pastrate === 0 && k20d.depasite === 1 && JSON.stringify(await awb(155)) === JSON.stringify(in155)
+     && c155.length === 1 && JSON.stringify([c155[0].sursa, c155[0].tip, c155[0].valori, c155[0].observari]) === JSON.stringify(['acelasi_raspuns', 'eveniment_data_imposibila', [`S2 ${viitor} 10:00:00`, `azi ${AZI}`], 1]),
+    `K20d: rularea 1: depășit (${k20d.scrise}/${k20d.pastrate}/${k20d.depasite}), rândul neatins (nici versiunea), S2 imposibil în audit, fără ridicare_zile din răspunsul depășit: ` + JSON.stringify(c155.map(c => [c.sursa, c.tip, c.valori])))
+  const k20d2 = await automat(155, evD)
+  const c155b = await contr(155)
+  ok(k20d2.depasite === 1 && JSON.stringify(await awb(155)) === JSON.stringify(in155) && c155b.length === 1 && c155b[0].observari === 2,
+    'K20d: rularea 2: tot depășit, rândul neatins, același rând de audit cu observări 2')
+  await automat(156, [['H3', `${D1} 12:00:00`]])
+  const in156 = await awb(156)
+  const p156 = await pl(156, [['C0', `${D0} 09:00:00`], ['H3', `${D1} 13:00:00`], ['S2', `${viitor} 10:00:00`]])
+  const k20dv = (await scrie(null, RL, ID.L1, [{ ...p156, versiune: p156.versiune - 1 }])).rows[0].r
+  ok(k20dv.depasite === 1 && k20dv.scrise === 0 && JSON.stringify(await awb(156)) === JSON.stringify(in156) && JSON.stringify(impos(await contr(156)).map(c => c.valori[0])) === JSON.stringify([`S2 ${viitor} 10:00:00`]),
+    'K20d: depășit pe versiune (CAS): rândul neatins, S2 imposibil în audit')
+  const k20dv2 = (await scrie(null, RL, ID.L1, [{ ...p156, versiune: p156.versiune - 1 }])).rows[0].r
+  ok(k20dv2.depasite === 1 && (await contr(156)).length === 1 && (await contr(156))[0].observari === 2, 'K20d: a doua rulare pe versiunea veche: tot depășit, observări 2')
+
+  // K20e — MATRICEA clasei: fiecare fel de eveniment (ridicare, livrare, retur, refuz, tranzit, de verificat, cod necunoscut) × fiecare ramură a
+  // scrierii × (în viitor / înainte de generare). Invariantul (scris de mână): după rulare niciun fapt / nicio cronologie a rândului nu stă pe un
+  // moment imposibil; eligibilitatea rulării automate = „fără fapt final valid”; fiecare eveniment imposibil (al răspunsului sau cunoscut dinainte)
+  // are exact urma lui în audit; a doua rulare identică nu schimbă nimic (observări + 1 pe urmele răspunsului). Ramurile: scris (răspuns mai nou
+  // decât cronologia cunoscută), păstrat (răspuns fără moment posibil pe o cronologie cunoscută posibilă), depășit pe cronologie (răspuns mai vechi),
+  // depășit pe versiune (CAS), cunoscut dinainte (faptul imposibil scris de corpul vechi; răspuns valid fără el).
+  const EVS = ['C0', 'S2', 'S16', 'S6', 'H3', 'S99', 'Z9']
+  const RAMURI = ['scris', 'pastrat', 'depasit_cronologie', 'depasit_versiune', 'cunoscut_anterior']
+  const FELURI = [['viitor', `${viitor} 10:00:00`, `azi ${AZI}`], ['inainte', `${zi(-1)} 10:00:00`, `generat ${D0}`]]
+  const H3K = ['H3', `${D1} 12:00:00`], BAZA_OK = [['C0', `${D0} 09:00:00`], ['H3', `${D1} 13:00:00`]]
+  const vechiImposibil = (n, E, la) => db.exec(`SET session_replication_role = replica; UPDATE public.red_fan_awb SET ultim_eveniment = '${E}', ultim_eveniment_la = ${tsRo(la)}, ${
+    E === 'C0' ? `urmarire_stare = 'ridicat', ridicat_propus = '${la.slice(0, 10)}'` : E === 'S2' ? `urmarire_stare = 'livrat', livrat_la = ${tsRo(la)}`
+    : ['S16', 'S6'].includes(E) ? `urmarire_stare = 'retur', retur_cunoscut = true, retur_propus = 'refuz'` : E === 'H3' ? `urmarire_stare = 'in_tranzit'` : `urmarire_stare = 'de_verificat'`
+  } WHERE id = '${awbId(n)}'; SET session_replication_role = origin;`)
+  let nX = 160
+  const rauX = []
+  for (const E of EVS) for (const ramura of RAMURI) for (const [fel, la, reper] of FELURI) {
+    const n = nX++
+    const rau = m => rauX.push(`${E}/${ramura}/${fel}: ${m}`)
+    let asteptAudit, ruleaza, inainte = null
+    if (ramura === 'cunoscut_anterior') {
+      await vechiImposibil(n, E, la)
+      const s0 = await stareFapte(n)
+      if (s0.curat || s0.final || await eligibil(n) === null) rau('faptul imposibil scris dinainte: curat / final / neeligibil ' + JSON.stringify(s0))
+      ruleaza = () => buton(n, BAZA_OK)
+      // ziua ridicării (kr, ca zi) și cronologia (k, cu oră) sunt două urme; livrarea (kl) și cronologia (k) au același text → o urmă (dedup)
+      asteptAudit = E === 'C0' ? [['intre_raspunsuri', `C0 ${la.slice(0, 10)}`], ['intre_raspunsuri', `C0 ${la}`]] : [['intre_raspunsuri', `${E} ${la}`]]
+    } else {
+      await automat(n, [H3K])
+      await eligibil(n)        // pune urmarit_la la coadă (NULL) ÎNAINTE de a fotografia rândul: ajutătorul o face la fiecare chemare, iar „rândul neatins” se compară cu fotografia
+      inainte = await awb(n)
+      const ev = ramura === 'pastrat' ? [[E, la]] : ramura === 'depasit_cronologie' ? [['C0', `${D1} 08:00:00`], [E, la]] : [...BAZA_OK, [E, la]]
+      ruleaza = async () => { const p = await pl(n, ev); if (ramura === 'depasit_versiune') p.versiune = inainte.versiune_urmarire - 1; return (await scrie(null, RL, ID.L1, [p])).rows[0].r }
+      asteptAudit = [['acelasi_raspuns', `${E} ${la}`]]
+    }
+    for (const runda of [1, 2]) {
+      const w = await ruleaza()
+      const a = await awb(n), c = await contr(n), s = await stareFapte(n)
+      const cheie = ramura === 'scris' || ramura === 'cunoscut_anterior' ? 'scrise' : ramura === 'pastrat' ? 'pastrate' : 'depasite'
+      if (w[cheie] !== 1 || w.scrise + w.pastrate + w.depasite !== 1) rau(`rularea ${runda}: ${JSON.stringify(w)}, așteptat 1 ${cheie}`)
+      if (!s.curat) rau(`rularea ${runda}: un fapt / cronologia stă pe un moment imposibil ${JSON.stringify(s)}`)
+      if (s.final || await eligibil(n) === null) rau(`rularea ${runda}: fapt final / neeligibil fără fapt final valid`)
+      const audit = c.filter(x => x.tip === 'eveniment_data_imposibila').map(x => [x.sursa, x.valori[0], x.valori[1], x.observari])
+      const asteptat = asteptAudit.map(([s_, t]) => [s_, t, reper, ramura === 'cunoscut_anterior' ? 1 : runda])
+      if (c.length !== audit.length || JSON.stringify(audit.sort()) !== JSON.stringify(asteptat.sort())) rau(`rularea ${runda}: audit ${JSON.stringify(c.map(x => [x.sursa, x.tip, x.valori, x.observari]))}, așteptat ${JSON.stringify(asteptat)}`)
+      if (ramura === 'scris' || ramura === 'cunoscut_anterior') {
+        if (a.urmarire_stare !== 'ridicat' || a.livrat_la !== null || a.retur_cunoscut || a.retur_propus !== null || await rp(n) !== D0 || JSON.stringify(await cron(n)) !== JSON.stringify(['H3', `${D1} 13:00:00`]))
+          rau(`rularea ${runda}: rândul scris ≠ răspunsul fără evenimentul imposibil: ${fapteK20(a)}`)
+      } else if (ramura === 'pastrat') {
+        if (fapteK20(a) !== fapteK20(inainte) || a.versiune_urmarire !== inainte.versiune_urmarire + runda) rau(`rularea ${runda}: rândul păstrat s-a schimbat: ${fapteK20(a)}`)
+      } else if (JSON.stringify(a) !== JSON.stringify(inainte)) rau(`rularea ${runda}: rândul depășit a fost atins`)
+    }
+  }
+  ok(nX - 160 === EVS.length * RAMURI.length * FELURI.length && rauX.length === 0,
+    `K20e: matricea ${EVS.length} evenimente × ${RAMURI.length} ramuri × ${FELURI.length} feluri (${nX - 160} rânduri, două rulări fiecare): ${rauX.slice(0, 3).join(' | ') || 'nicio dată imposibilă nu devine sau rămâne fapt, fiecare respingere are urma ei'}`)
   return fail
 }
 
@@ -808,6 +979,11 @@ console.log('1. aplicarea ca la livrare (L15 v2: manifest generat, apoi livrarea
   m = null; try { await revino(db) } catch (e) { m = e.message }
   ok(/exista rulari automate/.test(m || ''), 'revenirea refuză cu istoric de rulări: ' + m)
   await db.close()
+  // runda 6: `--doar-verificari` = oprire după comportament (buclă scurtă la scrierea probelor; dovada completă rămâne rularea fără comutator)
+  if (process.argv.includes('--doar-verificari')) {
+    console.log(esec ? `\nREZULTAT (doar 0–1): ${esec} verificări picate` : '\nREZULTAT (doar 0–1): toate verificările au trecut')
+    process.exit(esec ? 1 : 0)
+  }
 }
 
 console.log('2. refuzurile migrării (nimic schimbat)')
@@ -902,10 +1078,13 @@ const MUTANTI = [
   ['apel: fără plafon', ' AND apeluri < plafon_apeluri\n  RETURNING apeluri INTO v_n;', '\n  RETURNING apeluri INTO v_n;'],
   ['apel: rularea expirată acceptată', "   WHERE id = p_rulare AND stare = 'in_curs' AND pornita_la >= clock_timestamp() - interval '15 minutes' AND apeluri < plafon_apeluri", "   WHERE id = p_rulare AND stare = 'in_curs' AND apeluri < plafon_apeluri"],
   ['selecția: fără garda doar TEST', '       AND public.fn_red_fan_lot_permis(a.lot_id)\n', ''],
-  ['selecția: și livratele', "       AND NOT lv.valida AND NOT a.retur_cunoscut AND (a.urmarire_stare <> 'livrat' OR a.livrat_la IS NOT NULL)\n", "       AND NOT a.retur_cunoscut\n"],
+  ['selecția: și livratele', "       AND NOT fin.livrare AND NOT fin.retur AND (a.urmarire_stare <> 'livrat' OR a.livrat_la IS NOT NULL)\n", "       AND NOT fin.retur\n"],
   // runda 5: o livrare imposibilă nu e fapt final (rândul rămâne de urmărit); predicatul selecției = cel al scrierii
-  ['selecția: livrarea imposibilă = fapt final (codul r4)', "       AND NOT lv.valida AND NOT a.retur_cunoscut AND (a.urmarire_stare <> 'livrat' OR a.livrat_la IS NOT NULL)\n",
-    "       AND a.livrat_la IS NULL AND NOT a.retur_cunoscut AND a.urmarire_stare <> 'livrat'\n"],
+  ['selecția: livrarea imposibilă = fapt final (codul r4)', "       AND NOT fin.livrare AND NOT fin.retur AND (a.urmarire_stare <> 'livrat' OR a.livrat_la IS NOT NULL)\n",
+    "       AND a.livrat_la IS NULL AND NOT fin.retur AND a.urmarire_stare <> 'livrat'\n"],
+  // runda 6 (#1155 r5 P1): returul cunoscut pe o cronologie imposibilă nu e fapt final (selecția = compunerea din scriere)
+  ['selecția: returul pe cronologie imposibilă = fapt final (codul r5)', '       AND NOT fin.livrare AND NOT fin.retur AND (', '       AND NOT fin.livrare AND NOT a.retur_cunoscut AND ('],
+  ['selecția: returul fără cronologie (legitim, fără oră) tratat ca imposibil', "a.retur_cunoscut AND (a.ultim_eveniment_la IS NULL OR public.fn_red_fan_moment_posibil(a.ultim_eveniment_la", "a.retur_cunoscut AND (false OR public.fn_red_fan_moment_posibil(a.ultim_eveniment_la"],
   ['selecția: fără ziua generării în rând', ", 'versiune_urmarire', x.versiune_urmarire, 'generat_la', x.generat_la)", ", 'versiune_urmarire', x.versiune_urmarire)"],
   ['selecția: fără plafonul de vechime', "       AND a.generat_la >= clock_timestamp() - interval '60 days'\n", ''],
   ['selecția: ordinea după id (nu după ultima urmărire)', '     ORDER BY a.urmarit_la ASC NULLS FIRST, a.id\n     LIMIT v_lim', '     ORDER BY a.id\n     LIMIT v_lim'],
@@ -947,9 +1126,14 @@ const MUTANTI = [
   ['predicatul: fără toleranță (0 s, ≠ cod)', "p_la <= p_acum + interval '300 seconds') IS TRUE", 'p_la <= p_acum) IS TRUE'],
   ['cronologia: ultimul eveniment cunoscut nefiltrat (ora veche din viitor blochează)', "max(y.tz) FILTER (WHERE y.s = 'k' AND y.ok) AS k_la", "max(y.tz) FILTER (WHERE y.s = 'k') AS k_la"],
   ['garda veche (pe ultimul eveniment brut al rândului)', '       AND (m.k_la IS NULL OR m.pastrat OR m.n_la >= m.k_la)', '       AND (a.ultim_eveniment_la IS NULL OR (m.n_la IS NOT NULL AND m.n_la >= a.ultim_eveniment_la))'],
-  ['neordonabil: tratat ca ordonabil (depășit / suprascris)', '(b.ultim_eveniment_la IS NOT NULL AND p.n_la IS NULL) OR p.dezacord AS pastrat', 'p.dezacord AS pastrat'],
+  ['neordonabil: tratat ca ordonabil (depășit / suprascris)', '(p.k_la IS NOT NULL AND p.n_la IS NULL) OR p.dezacord AS pastrat', 'p.dezacord AS pastrat'],
+  // runda 6 (#1155 r5 P1): „neordonabil” față de cronologia brută (și imposibilă): rândul cu retur / cronologie imposibilă rămâne păstrat la nesfârșit
+  ['neordonabil față de cronologia brută, și imposibilă (codul r5)', '(p.k_la IS NOT NULL AND p.n_la IS NULL) OR p.dezacord AS pastrat', '(b.ultim_eveniment_la IS NOT NULL AND p.n_la IS NULL) OR p.dezacord AS pastrat'],
   ['păstrat: evenimentele imposibile lipsă din audit', 'FROM jsonb_array_elements(m.imp_raspuns) v(x)', 'FROM jsonb_array_elements(m.imp_raspuns) v(x) WHERE NOT m.pastrat'],
-  ['păstrat: contradicțiile din același răspuns scrise', 'FROM jsonb_array_elements(m.n_contr) e WHERE NOT m.pastrat', 'FROM jsonb_array_elements(m.n_contr) e'],
+  // runda 6 (#1155 r5 P2): auditul doar din rândurile atinse de UPDATE (codul r5) = rândul depășit își pierde evenimentele imposibile
+  ['depășit: evenimentele imposibile lipsă din audit (auditul doar din RETURNING, codul r5)', '    FROM m LEFT JOIN w ON w.id = m.id\n', '    FROM m JOIN w ON w.id = m.id\n'],
+  ['depășit: faptele răspunsului depășit intră în contradicții (CAS slăbit pe audit)', '(SELECT (w.id IS NOT NULL AND NOT w.pastrat) IS TRUE AS scris) s', '(SELECT (w.pastrat IS NOT TRUE) AS scris) s'],
+  ['păstrat: contradicțiile din același răspuns scrise', 'FROM jsonb_array_elements(m.n_contr) e WHERE s.scris', 'FROM jsonb_array_elements(m.n_contr) e'],
   ['păstrat: starea suprascrisă', '           urmarire_stare = CASE WHEN m.pastrat THEN a.urmarire_stare\n', '           urmarire_stare = CASE\n'],
   ['păstrat: cronologia suprascrisă', 'ultim_eveniment_la = CASE WHEN m.pastrat THEN a.ultim_eveniment_la ELSE m.n_la END', 'ultim_eveniment_la = m.n_la'],
   ['păstrat: livrarea din răspuns luată', 'livrat_la = CASE WHEN m.pastrat THEN a.livrat_la ELSE m.liv END', 'livrat_la = m.liv'],
@@ -958,8 +1142,13 @@ const MUTANTI = [
   ['dezacord: faptele răspunsului necontrolate', "WHEN y.s IN ('n', 'f') THEN NOT y.ok", "WHEN y.s IN ('n') THEN NOT y.ok"],
   ['dezacord: un eveniment posibil „respins” acceptat', "WHEN y.s = 'r' THEN y.ok ELSE false END", 'ELSE false END'],
   ['livrarea cunoscută imposibilă prevalează (Jakarinos r4: greatest păstrează viitorul)', 'CASE WHEN p.k_liv_posibil THEN b.livrat_la END AS k_liv', 'b.livrat_la AS k_liv'],
-  ['faptele cunoscute imposibile lipsă din audit', "FROM jsonb_array_elements(m.imp_cunoscute) v(x) WHERE NOT m.pastrat", "FROM jsonb_array_elements('[]'::jsonb) v(x) WHERE NOT m.pastrat"],
-  ['faptele cunoscute auditate și pe un rând păstrat (rămase pe rând)', 'v(x) WHERE NOT m.pastrat) x) AS contr', 'v(x)) x) AS contr'],
+  ['faptele cunoscute imposibile lipsă din audit', "FROM jsonb_array_elements(m.imp_cunoscute) v(x) WHERE s.scris", "FROM jsonb_array_elements('[]'::jsonb) v(x) WHERE s.scris"],
+  ['faptele cunoscute auditate și pe un rând păstrat (rămase pe rând)', 'v(x) WHERE s.scris) x)))', 'v(x)) x)))'],
+  // runda 6 (#1155 r5 P1): returul cunoscut stă pe cronologia lui; o cronologie imposibilă îl scoate din fapte și intră în audit
+  ['returul cunoscut pe o cronologie imposibilă rămâne fapt (codul r5)', "(b.retur_cunoscut AND coalesce(bool_and(y.ok) FILTER (WHERE y.s = 'k'), true)) AS k_ret", 'b.retur_cunoscut AS k_ret'],
+  ['returul cunoscut fără cronologie (legitim, fără oră) scos din fapte', "(b.retur_cunoscut AND coalesce(bool_and(y.ok) FILTER (WHERE y.s = 'k'), true)) AS k_ret", "(b.retur_cunoscut AND coalesce(bool_and(y.ok) FILTER (WHERE y.s = 'k'), false)) AS k_ret"],
+  ['motivul returului scos din fapte rămâne', 'p.k_ret, CASE WHEN p.k_ret THEN b.retur_propus END AS k_mot,', 'p.k_ret, b.retur_propus AS k_mot,'],
+  ['cronologia cunoscută imposibilă lipsă din audit', "FILTER (WHERE y.s IN ('kr', 'kl', 'k') AND NOT y.ok)", "FILTER (WHERE y.s IN ('kr', 'kl') AND NOT y.ok)"],
   ['auditul doar cu ce a respins codul (nu și ce găsește BD-ul)', "FILTER (WHERE y.s = 'r' OR (y.s = 'n' AND NOT y.ok))", "FILTER (WHERE y.s = 'r')"],
   ['respinse: nevalidată', '           AND c.ok AND cr.ok AND rs.ok), count(DISTINCT u.id)', '           AND c.ok AND cr.ok), count(DISTINCT u.id)'],
   ['respinse: limita 99 (nu 100, ca în cod)', 'WHEN jsonb_array_length(u.respinse) > 100 THEN false', 'WHEN jsonb_array_length(u.respinse) > 99 THEN false'],
@@ -1013,12 +1202,17 @@ console.log('5. paritatea plafonului: JS (PLAFON_APELURI_RULARE) = SQL (fn_red_f
   const LE = FAN.LIMITA_EVENIMENTE_CRONOLOGIE
   const nEv = [...MIG.matchAll(/jsonb_array_length\(u\.evenimente\) > (\d+)/g)].map(x => Number(x[1]))
   ok(nEv.length === 1 && nEv[0] === LE, `limita listei pentru cronologie ${LE} în JS = validarea (${nEv.join(', ')})`)
-  // runda 5 (L19): predicatul momentului posibil = O funcție (fn_red_fan_moment_posibil), chemată O DATĂ în corpul comun și O DATĂ în selecție; nicio
-  // comparație de moment scrisă de mână în afara ei; toleranța = cea din cod
+  // runda 5 (L19): predicatul momentului posibil = O funcție (fn_red_fan_moment_posibil), chemată O DATĂ în corpul comun; nicio comparație de moment
+  // scrisă de mână în afara ei; toleranța = cea din cod. Runda 6: selecția o cheamă pe FIECARE fapt final (livrarea pe livrat_la, returul pe
+  // cronologia lui ultim_eveniment_la) = 2 chemări, aceeași compunere ca k_liv / k_ret din corpul comun (K20 compară eligibilitatea cu faptele)
   const corp = MIG.slice(MIG.indexOf('CREATE FUNCTION public.fn_red_fan_urmarire_scrie('), MIG.indexOf('CREATE OR REPLACE FUNCTION public.fn_red_fan_urmarire_intern('))
   const sel = MIG.slice(MIG.indexOf('CREATE FUNCTION public.fn_red_fan_srv_de_urmarit('), MIG.indexOf('CREATE FUNCTION public.fn_red_fan_srv_rulare_incheie('))
   const nApel = t => (t.match(/public\.fn_red_fan_moment_posibil\(/g) || []).length
-  ok(nApel(corp) === 1 && nApel(sel) === 1 && !/<= v_acum|<= v_azi/.test(corp), `predicatul: chemat ${nApel(corp)} dată(ori) în corpul comun și ${nApel(sel)} în selecție (așteptat 1 / 1), fără comparații de mână`)
+  ok(nApel(corp) === 1 && nApel(sel) === 2 && !/<= v_acum|<= v_azi/.test(corp) && !/(livrat_la|ultim_eveniment_la)[^\n]*(<=|>=|<|>) *(clock_timestamp|g\.acum|g\.zi)/.test(sel),
+    `predicatul: chemat ${nApel(corp)} dată(ori) în corpul comun și ${nApel(sel)} în selecție (așteptat 1 / 2: livrarea + cronologia returului), fără comparații de mână`)
+  ok(/a\.livrat_la IS NOT NULL AND public\.fn_red_fan_moment_posibil\(a\.livrat_la AT TIME ZONE/.test(sel)
+     && /a\.retur_cunoscut AND \(a\.ultim_eveniment_la IS NULL OR public\.fn_red_fan_moment_posibil\(a\.ultim_eveniment_la AT TIME ZONE/.test(sel),
+    'selecția: faptul final = livrare posibilă SAU retur pe cronologie lipsă / posibilă (textual, aceeași compunere ca k_liv / k_ret)')
   const pred = (/CREATE FUNCTION public\.fn_red_fan_moment_posibil\([^)]*\) RETURNS boolean\n[^\n]*\$fn\$\n([^\n]*)\n\$fn\$;/.exec(MIG) || [])[1] || ''
   ok(pred.trim() === `SELECT (p_la::date >= p_generat_zi AND p_la <= p_acum + interval '${FAN.TOLERANTA_VIITOR_S} seconds') IS TRUE`, `predicatul BD = regula din cod (toleranța ${FAN.TOLERANTA_VIITOR_S} s): ${pred.trim()}`)
   const nR = [...MIG.matchAll(/jsonb_array_length\(u\.respinse\) > (\d+)/g)].map(x => Number(x[1]))
