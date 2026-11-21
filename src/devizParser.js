@@ -35,11 +35,12 @@ const ART_RE = /^(\d{3})\s+([A-Z]{2,4}\d[A-Z0-9]*)\s+(.*)$/
 // linia de articol: eventual „[ N ]" (marcaj fază), apoi UNITATE, apoi CANTITATE
 const UM_RE = new RegExp('^(?:\\[\\s*\\d+\\s*\\]\\s*)?(' + UM_ALT + ')\\s+([\\d.,]+)')
 
-// tokenul brut de unitate → definiția (unitate bază + factor). Fallback ×1.
-function umInfo(token) {
+// tokenul brut de unitate → definiția (unitate bază + factor). Fallback ×1, marcat `necunoscut`
+// (exportat și pentru scripts/materiale_oferta: extrasele C6 normalizează UM-ul cu aceeași regulă).
+export function umInfo(token) {
   const up = String(token).toUpperCase().replace(/\s+/g, ' ').trim()
   for (const d of UM_DEFS) if (new RegExp('^(?:' + d.re + ')$').test(up)) return d
-  return { base: up.toLowerCase(), f: 1 }
+  return { base: up.toLowerCase(), f: 1, necunoscut: true }
 }
 
 const num = (s) => {
