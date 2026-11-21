@@ -5142,9 +5142,10 @@ export function VerificareFinalaSection({ licitatie: l, profile }) {
     if (!poate || busy) return
     if (!window.confirm(AVERTISMENT_VERIFICARE_FINALA)) return
     setBusy(true); setErr(null)
+    let r = null
     try {
       const { data: { session } } = await supabase.auth.getSession()
-      const r = await fetch('https://dxczwkbciseqniprspcu.supabase.co/functions/v1/ofertare-verificare-finala', {
+      r = await fetch('https://dxczwkbciseqniprspcu.supabase.co/functions/v1/ofertare-verificare-finala', {
         method:'POST', headers: { Authorization: `Bearer ${session?.access_token}`, 'Content-Type':'application/json' },
         body: JSON.stringify({ licitatie_id: l.id }),
       })
@@ -5153,7 +5154,11 @@ export function VerificareFinalaSection({ licitatie: l, profile }) {
       if (!j.ok) throw new Error(j.error || `eroare necunoscută (HTTP ${r.status})`)
       const { data } = await supabase.from('ofertare_verificari').select('*').eq('id', j.verificare_id).single()
       setUltima(data)
-    } catch (e) { setErr(String(e?.message || e)) } finally { setBusy(false) }
+    } catch (e) {
+      // L05: fără răspuns (rețea / timeout) sau 5xx = NECUNOSCUT — verificarea plătită poate rula încă pe server
+      const necunoscut = !r || r.status >= 500
+      setErr(String(e?.message || e) + (necunoscut ? ' — rezultat necunoscut: verificarea poate rula încă pe server; redeschide fișa peste câteva minute înainte să o pornești din nou.' : ''))
+    } finally { setBusy(false) }
   }
 
   const VC = { verde:['🟢 VERDE — nimic în neregulă în registrul extras (nu verifică pachetul final depus)', G.green], galben:['🟡 GALBEN — de rezolvat punctele înainte de depunere', G.yellow], rosu:['🔴 ROȘU — NU se depune', G.red] }

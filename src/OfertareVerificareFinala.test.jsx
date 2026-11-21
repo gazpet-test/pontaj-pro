@@ -131,7 +131,10 @@ async function monteaza(licitatie, profile, { confirma = true, raspuns = { statu
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   const confirm = vi.fn(() => confirma), prompt = vi.fn(() => 'Gazpet2026')
   j.window.confirm = confirm; j.window.prompt = prompt
-  const fetchFals = vi.fn(async () => new Response(JSON.stringify(raspuns.corp), { status: raspuns.status }))
+  const fetchFals = vi.fn(async () => {
+    if (raspuns === 'arunca') throw new TypeError('Failed to fetch')
+    return new Response(JSON.stringify(raspuns.corp), { status: raspuns.status })
+  })
   vi.stubGlobal('fetch', fetchFals)
   const { createRoot } = await import('react-dom/client')
   const act = React.act || (await import('react-dom/test-utils')).act
@@ -178,5 +181,16 @@ dom(JSDOM ? 'Verificare finală — click (jsdom)' : `Verificare finală — cli
     expect(m.fetchFals).toHaveBeenCalledTimes(1)
     expect(m.text()).toContain('refuz de pe server (test)')
     expect(m.text()).toContain('nerulată încă')
+    expect(m.text()).not.toContain('rezultat necunoscut')   // refuzul e cert (4xx), nu „necunoscut”
+  })
+  it('L05: legătura cade / 5xx după pornire -> „rezultat necunoscut”, cu îndemnul de a verifica înainte de repornire', async () => {
+    for (const raspuns of ['arunca', { status: 502, corp: { message: 'gateway' } }]) {
+      const m = await monteaza(LIC, OWNER, { raspuns })
+      await m.apasa()
+      expect(m.fetchFals).toHaveBeenCalledTimes(1)
+      expect(m.text()).toContain('rezultat necunoscut')
+      expect(m.text()).toContain('nerulată încă')
+      ;[...curata].reverse().forEach(f => f()); curata = []
+    }
   })
 })
