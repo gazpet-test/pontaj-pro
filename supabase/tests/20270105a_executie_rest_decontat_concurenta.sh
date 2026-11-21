@@ -19,6 +19,7 @@
 # CUM SE RULEAZĂ (coordonatorul; cere bash ≥ 4 (coproc), psql ≥ 13 (\warn), conectare ca superuser `postgres`):
 #     REST_CLUSTER_DISPENSABIL=da PGHOST=… PGPORT=… PGUSER=postgres PGPASSWORD=… bash supabase/tests/20270105a_executie_rest_decontat_concurenta.sh <nume_baza_noua>
 #     … REST_MUTANT=da bash …   → aplică migrarea cu reverificarea SCOASĂ (mutantul) și așteaptă rezultatul OPUS (vechiul MP scrie): dovada că proba discriminează.
+#     … REST_MUTANT=lock_garda bash …   → garda proiect_articole FĂRĂ advisory-ul proiectului (mutantul r4): C5 / C6 așteaptă rezultatul OPUS (cumulare).
 #   Ieșire: 0 = toate așteptările se țin și curățenia a reușit; 1 = cel puțin o așteptare nu se ține (sau curățenia a eșuat); 2 = refuz / folosire greșită.
 #
 # BARIERA (fără sleep orb): sesiunea A (owner-ul) e un psql ținut deschis (coproc): BEGIN; UPDATE executie_proiecte SET mp_employee_id = <alt MP> WHERE id = P
@@ -35,6 +36,15 @@
 #   C3  configurare_completa (20270105b): proiect cu ofertă; A ține schimbarea MP; B (MP vechi) declară configurarea → 42501, configurare_completa_la NULL,
 #       jurnal gol.
 #   C4  calea legitimă: după ce A a comis schimbarea, NOUL MP (contul n) cheamă același RPC fără concurent → 00000 (nimic nu e blocat în plus).
+#   r4 (review #1158, P1 r3 — stările ofertei; „acces general” = contul x, user_module_access 'executie', scrie proiect_articole pe calea veche):
+#   C5  import vechi vs RPC: A (acces general) INSERT 2 rânduri contract_initial pe C5, NECOMIS — garda a luat advisory-ul proiectului (try) și îl ține;
+#       B (MP vechi) cheamă fn_rest_decontat_confirma_baza(C5) → așteaptă la advisory (pg_stat_activity: Lock); A COMMIT → B: 00000, inlocuite = 2:
+#       0 rânduri vechi active, 2 vechi retrase, 1 confirmat (fără cumulare). Cu REST_MUTANT=lock_garda (advisory-ul scos din gardă): B NU așteaptă,
+#       confirmă peste rândurile necomise ale lui A → după COMMIT-ul lui A rămân 2 rânduri vechi ACTIVE pe un proiect confirmat (cumulare în tabel).
+#   C6  RPC în curs vs import vechi: A (MP vechi) confirmă oferta C6, NECOMIS (ține advisory-ul); B (acces general) INSERT contract_initial pe C6 →
+#       55P03 imediat (try-lock ocupat, nimic scris); A COMMIT; B din nou → 42501 (oferta confirmată), nimic scris. Cu mutantul lock_garda: primul B scrie
+#       (00000: starea (a) văzută fără lock) → după COMMIT 1 rând vechi activ pe proiectul confirmat.
+#   REST_MUTANT=da (reverificarea dreptului scoasă) schimbă doar așteptările C1–C3 (+ C4 sărit); REST_MUTANT=lock_garda doar C5 / C6.
 set -u
 set -o pipefail
 
@@ -100,6 +110,7 @@ q() { psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -tAc "$1"; }
 UID_OWNER=f0000000-0000-4000-8000-0000000000aa
 UID_MP_VECHI=f0000000-0000-4000-8000-0000000000bb
 UID_MP_NOU=f0000000-0000-4000-8000-0000000000cc
+UID_EXEC=f0000000-0000-4000-8000-0000000000dd   # r4: acces general Execuție (calea veche a catalogului), fără sub-modulul nou
 ca() { printf "SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claim.sub', '%s', true), set_config('request.jwt.claims', '{\"sub\":\"%s\",\"role\":\"authenticated\"}', true);" "$1" "$1"; }
 
 A_FD_IN=''; A_FD_OUT=''; A_PID_C=''
@@ -182,19 +193,32 @@ PY
   n_rev="$(grep -c 'dreptul se REVERIFIC' "$DDL_A" "$DDL_B" | awk -F: '{s+=$2} END {print s+0}')"
   ok "$([ "$n_rev" = 0 ] && echo 0 || echo 1)" "mutantul: reverificarea scoasa din toate RPC-urile (ramase: $n_rev)"
 fi
+if [ "$MUTANT" = lock_garda ]; then
+  # mutantul r4: advisory-ul proiectului SCOS din garda proiect_articole (blocul IF NOT pg_try_advisory_xact_lock … END IF;, 3 rânduri)
+  python3 - "$DDL_A" <<'PY'
+import re, sys
+p = sys.argv[1]; t = open(p, encoding='utf-8').read()
+t2, n = re.subn(r"\n[ \t]*IF NOT pg_try_advisory_xact_lock\([^\n]*\n[^\n]*\n[ \t]*END IF;", "", t)
+open(p, 'w', encoding='utf-8').write(t2); print(n)
+PY
+  n_lock="$(grep -c 'pg_try_advisory_xact_lock' "$DDL_A")"
+  ok "$([ "$n_lock" = 0 ] && echo 0 || echo 1)" "mutantul lock_garda: advisory-ul scos din garda proiect_articole (ramase: $n_lock)"
+fi
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f <(tr -d '\r' < "$SCHELET") > /dev/null; ok $? "scheletul"
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$DDL_A" > /dev/null; ok $? "DDL-ul migrarii A"
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$DDL_B" > /dev/null; ok $? "DDL-ul migrarii B"
 # fixturi: owner (aa), MP vechi (bb, emp 9101), MP nou (cc, emp 9102); proiectele C1 (fara oferta), C2 si C3 (cu oferta scrisa de server)
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 > /dev/null <<EOF
 INSERT INTO public.employees (id, name) VALUES (9101, 'CONC MP VECHI'), (9102, 'CONC MP NOU');
-INSERT INTO public.profiles (id, is_owner, employee_id) VALUES ('$UID_OWNER', true, NULL), ('$UID_MP_VECHI', false, 9101), ('$UID_MP_NOU', false, 9102);
-INSERT INTO public.executie_proiecte (id, cod_intern, nume, mp_employee_id) VALUES (9001, 'CONC-1', 'C1 confirma_baza', 9101), (9002, 'CONC-2', 'C2 confirma_situatie', 9101), (9003, 'CONC-3', 'C3 configurare', 9101);
+INSERT INTO public.profiles (id, is_owner, employee_id) VALUES ('$UID_OWNER', true, NULL), ('$UID_MP_VECHI', false, 9101), ('$UID_MP_NOU', false, 9102), ('$UID_EXEC', false, NULL);
+INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('$UID_EXEC', 'executie', 'editor');
+INSERT INTO public.executie_proiecte (id, cod_intern, nume, mp_employee_id) VALUES (9001, 'CONC-1', 'C1 confirma_baza', 9101), (9002, 'CONC-2', 'C2 confirma_situatie', 9101), (9003, 'CONC-3', 'C3 configurare', 9101),
+  (9004, 'CONC-5', 'C5 import vechi vs RPC', 9101), (9005, 'CONC-6', 'C6 RPC in curs vs import vechi', 9101);
 INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate, valoare, sursa, mod_import, fisier_amprenta, confirmat_de, confirmat_la)
 VALUES (9002, '0001', 'D1', '1', 'A100', 'Conducta', 'M', 100, 10000, 'contract_initial', 'lista_completa', repeat('c2', 32), '$UID_OWNER', now()),
        (9003, '0001', 'D1', '1', 'A100', 'Conducta', 'M', 100, 10000, 'contract_initial', 'lista_completa', repeat('c3', 32), '$UID_OWNER', now());
 EOF
-ok $? "fixturile (3 proiecte ale MP-ului vechi, 2 cu oferta)"
+ok $? "fixturile (5 proiecte ale MP-ului vechi, 2 cu oferta; contul cu acces general Executie)"
 
 OFERTA_C1="SELECT public.fn_rest_decontat_confirma_baza(9001, 'contract_initial', NULL, NULL, NULL, 'o.xlsx', repeat('a1', 32), '[{\"obiect_cod\":\"0001\",\"deviz_cod\":\"D1\",\"cod\":\"A100\",\"denumire\":\"x\",\"um\":\"M\",\"cantitate\":1,\"valoare\":10}]'::jsonb)"
 SITUATIE_C2="SELECT public.fn_rest_decontat_confirma_situatie(9002, '1', NULL, 's.xlsx', repeat('b1', 32), '[{\"cod\":\"A100\",\"um\":\"M\",\"cantitate_perioada\":1,\"valoare\":100,\"cheie\":\"0001|D1|A100\",\"tip_rand\":\"articol\",\"potrivire\":\"exact\"}]'::jsonb, false)"
@@ -243,6 +267,37 @@ if [ "$MUTANT" != da ]; then
 else
   echo "     (sarit cu mutantul: datele au fost scrise deja de MP-ul vechi)"
 fi
+
+# r4: stările ofertei — importul vechi (calea veche, acces general) față de RPC-ul de confirmare, pe același proiect
+OFERTA_C5="SELECT public.fn_rest_decontat_confirma_baza(9004, 'contract_initial', NULL, NULL, NULL, 'o5.xlsx', repeat('a5', 32), '[{\"obiect_cod\":\"0001\",\"deviz_cod\":\"D1\",\"nr\":\"1\",\"cod\":\"A100\",\"denumire\":\"x\",\"um\":\"M\",\"cantitate\":100,\"valoare\":10000}]'::jsonb)"
+OFERTA_C6="SELECT public.fn_rest_decontat_confirma_baza(9005, 'contract_initial', NULL, NULL, NULL, 'o6.xlsx', repeat('a6', 32), '[{\"obiect_cod\":\"0001\",\"deviz_cod\":\"D1\",\"nr\":\"1\",\"cod\":\"A100\",\"denumire\":\"x\",\"um\":\"M\",\"cantitate\":100,\"valoare\":10000}]'::jsonb)"
+IMPORT_C5="INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate, valoare, sursa) VALUES (9004, '0001', 'D1', '1', 'A100', 'vechi 1', 'M', 90, 9000, 'contract_initial'), (9004, '0001', 'D1', '2', 'B200', 'vechi 2', 'MC', 2, 2000, 'contract_initial')"
+IMPORT_C6="INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate, valoare, sursa) VALUES (9005, '0001', 'D1', '1', 'A100', 'vechi 1', 'M', 90, 9000, 'contract_initial')"
+NUMAR_VECHI_ACTIVE="SELECT count(*) FROM public.proiect_articole WHERE proiect_id = %s AND sursa = 'contract_initial' AND activ AND confirmat_la IS NULL"
+if [ "$MUTANT" = lock_garda ]; then AST_C5_VECHI=2; AST_C6B=00000; AST_C6_VECHI=1; else AST_C5_VECHI=0; AST_C6B=55P03; AST_C6_VECHI=0; fi
+
+echo "C5. import vechi vs RPC: importul vechi tine advisory-ul proiectului (necomis), RPC-ul asteapta si retrage randurile vechi (astept vechi active = $AST_C5_VECHI)"
+pasA C5a "BEGIN;" "$(ca "$UID_EXEC")" "$IMPORT_C5;"; astept 00000 "$A_STARE" "A (acces general): 2 randuri vechi pe C5, NECOMISE (garda tine advisory-ul proiectului)"
+porniB C5b "$UID_MP_VECHI" "$OFERTA_C5"
+if [ "$MUTANT" = lock_garda ]; then
+  terminaB C5b; astept 00000 "$B_STARE" "B (MP): RPC-ul NU a asteptat (mutantul: garda fara advisory) si a confirmat peste randurile necomise"
+  pasA C5c "COMMIT;"; astept 00000 "$A_STARE" "A: COMMIT"
+else
+  asteaptaBlocatB C5b; ok $? "B (MP): RPC-ul asteapta la advisory-ul tinut de importul vechi (pg_stat_activity: Lock)"
+  pasA C5c "COMMIT;"; astept 00000 "$A_STARE" "A: COMMIT"
+  terminaB C5b; astept 00000 "$B_STARE" "B (MP): RPC-ul dupa COMMIT-ul importului vechi"
+  astept 2 "$(q "SELECT count(*) FROM public.proiect_articole WHERE proiect_id = 9004 AND sursa = 'contract_initial' AND NOT activ AND confirmat_la IS NULL")" "randurile vechi RETRASE de RPC (inlocuite)"
+fi
+astept 1 "$(q "SELECT count(*) FROM public.proiect_articole WHERE proiect_id = 9004 AND sursa = 'contract_initial' AND activ AND confirmat_la IS NOT NULL")" "randuri confirmate active pe C5"
+astept "$AST_C5_VECHI" "$(q "$(printf "$NUMAR_VECHI_ACTIVE" 9004)")" "randuri vechi ACTIVE pe C5 (0 = fara cumulare; mutantul lasa 2)"
+
+echo "C6. RPC in curs (advisory tinut, necomis) vs import vechi: 55P03 imediat, nimic scris; dupa COMMIT 42501 (astept $AST_C6B, vechi active = $AST_C6_VECHI)"
+pasA C6a "BEGIN;" "$(ca "$UID_MP_VECHI")" "$OFERTA_C6;"; astept 00000 "$A_STARE" "A (MP): oferta C6 confirmata, NECOMISA (advisory-ul proiectului tinut)"
+ruleazaSincron C6b "$UID_EXEC" "$IMPORT_C6"; astept "$AST_C6B" "$B_STARE" "B (acces general): importul vechi cat RPC-ul e in curs (try-lock ocupat = 55P03)"
+pasA C6c "COMMIT;"; astept 00000 "$A_STARE" "A: COMMIT"
+ruleazaSincron C6d "$UID_EXEC" "$IMPORT_C6"; astept 42501 "$B_STARE" "B (acces general): importul vechi dupa confirmare (oferta confirmata)"
+astept 1 "$(q "SELECT count(*) FROM public.proiect_articole WHERE proiect_id = 9005 AND sursa = 'contract_initial' AND activ AND confirmat_la IS NOT NULL")" "randuri confirmate active pe C6"
+astept "$AST_C6_VECHI" "$(q "$(printf "$NUMAR_VECHI_ACTIVE" 9005)")" "randuri vechi ACTIVE pe C6 (0 = nimic scris de import; mutantul lasa 1)"
 
 inchideA; ok $? "sesiunea A inchisa curat"
 [ "$esec" = 0 ] && echo "TOTUL OK" || echo "ESEC: $esec"
