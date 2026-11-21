@@ -10,7 +10,9 @@
 //   P<id>_resurse.tsv   manoperă (C7), utilaj (C8), transport (C9)
 //   rezumat.md          pe proiect: linii, total, comparația cu TOTAL tipărit, liniile suspecte
 //   manifest.json       SHA-256 al fiecărei surse + cifrele de control (pentru importul ulterior)
-// Cod de ieșire: 0 = toate citite; 1 = cel puțin un proiect cu eroare de citire (celelalte se scriu oricum).
+// Cod de ieșire: 0 = toate citite fără nicio eroare; 1 = cel puțin o eroare de citire / parsare (fișier ilizibil,
+// antet invalid, C6 lipsă, foaie dublă, importul din ERP care nu citește fișierul) sau niciun proiect găsit.
+// Celelalte proiecte se scriu oricum. Un extras citit fără erori, dar `incomplet` (motivele în rezumat) iese cu 0.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import fs from 'node:fs'
@@ -52,14 +54,18 @@ export async function ruleaza({ surse, iesire, acum = new Date() }) {
     sectiuni.push(rezumatProiect({ proiect: p, fisier, sha256, rez }))
     const c6 = rez.foi.C6
     const control = (s) => (s ? { linii: s.linii.length, suma: s.suma, total_tiparit: s.total_tiparit, diferenta: s.diferenta, concorda: s.concorda,
-      de_verificat: s.linii.filter((l) => l.stare === 'de_verificat').length + s.nerecunoscute.length } : null)
+      de_verificat: s.linii.filter((l) => l.stare === 'de_verificat').length + s.nerecunoscute.length, completa: s.completa } : null)
     proiecte.push({
-      proiect: p, fisier, sha256, completa: rez.completa,
+      proiect: p, fisier, sha256, completa: rez.completa, motive_incomplet: rez.motive_incomplet,
       erori: rez.erori, foi_ignorate: rez.ignorate.map((g) => g.foaie),
-      materiale: c6 ? { ...control(c6), linii_import: rez.paritate?.linii_import ?? null, valoare_import: rez.paritate?.valoare_import ?? null, paritate_ok: !!rez.paritate?.ok } : null,
+      materiale: c6 ? {
+        ...control(c6), linii_import: rez.paritate?.linii_import ?? null, valoare_import: rez.paritate?.valoare_import ?? null, paritate_ok: !!rez.paritate?.ok,
+        linii_lipsa_import: rez.paritate?.linii_lipsa?.length ?? null, omise_admise: rez.paritate?.omise_admise?.length ?? null,
+      } : null,
       manopera: control(rez.foi.C7), utilaj: control(rez.foi.C8), transport: control(rez.foi.C9),
     })
   }
+  if (!dirs.length) sectiuni.push(`## (niciun proiect)\n\n- EROARE: în ${surse} nu e niciun folder P<id>\n`)
 
   // tabelul general + secțiunile pe proiect
   const t = ['| Proiect | Linii C6 | Valoare materiale (lei) | TOTAL tipărit (lei) | Diferență | De verificat | Import ERP actual (lei) | Stare |', '|---|---|---|---|---|---|---|---|']
@@ -78,7 +84,8 @@ export async function ruleaza({ surse, iesire, acum = new Date() }) {
   ].join('\n')
   fs.writeFileSync(path.join(iesire, 'rezumat.md'), md)
   fs.writeFileSync(path.join(iesire, 'manifest.json'), JSON.stringify({ versiune: VERSIUNE, generat_la: acum.toISOString(), proiecte }, null, 2) + '\n')
-  return { proiecte, ok: proiecte.every((x) => !x.eroare) }
+  // orice eroare de citire sau parsare (și cele din rez.erori: C6 lipsă, antet invalid, import ilizibil) = eșec (L13, L18)
+  return { proiecte, ok: dirs.length > 0 && proiecte.every((x) => !x.eroare && x.erori.length === 0) }
 }
 
 function argumente(argv) {
@@ -94,9 +101,11 @@ function argumente(argv) {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const { proiecte, ok } = await ruleaza(argumente(process.argv.slice(2)))
+    if (!proiecte.length) console.error('EROARE: niciun folder P<id> în --surse')
     for (const x of proiecte) {
-      console.log(x.eroare ? `${x.proiect}: EROARE ${x.eroare}`
-        : `${x.proiect}: ${x.materiale?.linii ?? 0} linii C6, ${fmt(x.materiale?.suma)} lei vs TOTAL ${fmt(x.materiale?.total_tiparit)}, de verificat ${x.materiale?.de_verificat ?? '—'}, ${x.completa ? 'completă' : 'incompletă'}`)
+      if (x.eroare) { console.log(`${x.proiect}: EROARE ${x.eroare}`); continue }
+      console.log(`${x.proiect}: ${x.materiale?.linii ?? 0} linii C6, ${fmt(x.materiale?.suma)} lei vs TOTAL ${fmt(x.materiale?.total_tiparit)}, de verificat ${x.materiale?.de_verificat ?? '—'}, ${x.completa ? 'completă' : 'incompletă'}`)
+      for (const e of x.erori) console.log(`${x.proiect}: EROARE ${e.foaie ? `foaia „${e.foaie}”: ` : ''}${e.mesaj}`)
     }
     process.exitCode = ok ? 0 : 1
   } catch (e) { console.error('EROARE: ' + e.message); process.exitCode = 1 }
