@@ -9,20 +9,28 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
-// clientul fals: fiecare cerere pe proiect_articole se înregistrează ({op, filtre, rows}); răspunsurile se setează per test
+// clientul fals: fiecare cerere pe proiect_articole se înregistrează ({op, filtre, rows}); răspunsurile se setează per test. r8 (review #1158 P1, plafonul
+// PostgREST): SELECT-ul respectă max-rows = 1000 pe cerere, ordinea `.order()` și `.gt('id', …)` + `.limit()` ale paginării pe chei (fără ordine: ordinea tabloului)
 const st = vi.hoisted(() => ({ cereri: [], articole: [], raspuns: { delete: { error: null }, insert: { error: null } } }))
 vi.mock('./lib/supabase.js', () => ({
   supabase: {
     from: tabel => {
-      const q = { tabel, op: 'select', filtre: [], rows: null }
+      const q = { tabel, op: 'select', filtre: [], rows: null, ordine: [], limita: null, dupa: null }
       q.select = () => { q.op = 'select'; return q }
       q.delete = () => { q.op = 'delete'; return q }
       q.insert = rows => { q.op = 'insert'; q.rows = rows; return q }
       q.eq = (c, v) => { q.filtre.push([c, v]); return q }
-      q.order = () => q
+      q.gt = (c, v) => { q.dupa = [c, v]; return q }
+      q.order = c => { q.ordine.push(c); return q }
+      q.limit = n => { q.limita = n; return q }
       q.then = (res, rej) => {
-        st.cereri.push({ op: q.op, filtre: q.filtre, rows: q.rows })
-        const r = q.op === 'select' ? { data: st.articole.map(a => ({ ...a })), error: null } : { ...st.raspuns[q.op] }
+        st.cereri.push({ op: q.op, filtre: q.filtre, rows: q.rows, ordine: q.ordine, limita: q.limita })
+        let r
+        if (q.op === 'select') {
+          let rows = st.articole.filter(a => !q.dupa || a[q.dupa[0]] > q.dupa[1])
+          if (q.ordine.length) rows = [...rows].sort((a, b) => { for (const c of q.ordine) { if (a[c] !== b[c]) return a[c] < b[c] ? -1 : 1 } return 0 })
+          r = { data: rows.slice(0, Math.min(q.limita ?? 1000, 1000)).map(a => ({ ...a })), error: null }
+        } else r = { ...st.raspuns[q.op] }
         return Promise.resolve(r).then(res, rej)
       }
       return q
@@ -146,5 +154,22 @@ dom(numeDom('CatalogDevizPanel: importul ofertei față de refuzurile BD'), () =
     expect(text).toContain('Catalog: 2 articole')
     expect(text).toContain('ofertă confirmată în „Rest de decontat”')
     expect(text).not.toContain('vechi retras')
+  })
+  // r8 (review #1158 P1): plafonul PostgREST de 1000 de rânduri pe cerere — catalogul se citește COMPLET, pe chei, și arată toate articolele / totalul
+  it('1.200 articole (peste plafonul de 1000 pe cerere): catalogul le arată pe toate, citite pe chei, ordonate ca înainte', async () => {
+    st.articole = Array.from({ length: 1200 }, (_, i) => ({ id: 1200 - i, proiect_id: 4, obiect_cod: i % 2 ? '0002' : '0001', obiect_nume: i % 2 ? 'TRONSON 2' : 'TRONSON 1',
+      deviz_cod: 'D1', nr: String(i + 1), cod: `A${i}`, denumire: `Articol ${i}`, um: 'M', cantitate: 1, valoare: 10, sursa: 'contract_initial' }))
+    const total = st.articole.reduce((s, a) => s + a.valoare, 0)
+    const { d } = await monteaza()
+    const text = d.body.textContent
+    expect(text).toContain('Catalog: 1200 articole')
+    expect(text).toContain(total.toLocaleString('ro-RO', { maximumFractionDigits: 0 }) + ' lei')
+    expect(text).toContain('TRONSON 1')
+    expect(text).toContain('600 art')
+    const sel = st.cereri.filter(c => c.op === 'select')
+    expect(sel.length).toBeGreaterThanOrEqual(2)   // 1200 rânduri = cel puțin două pagini + pagina goală
+    expect(sel.every(c => c.ordine.includes('id') && c.limita != null)).toBe(true)
+    // grupele: TRONSON 1 întâi (obiect_cod 0001 < 0002), deși ordinea pe id e inversă
+    expect(text.indexOf('TRONSON 1')).toBeLessThan(text.indexOf('TRONSON 2'))
   })
 })

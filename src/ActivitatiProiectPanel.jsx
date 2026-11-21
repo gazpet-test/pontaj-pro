@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import { citesteToate } from './lib/citireCompleta.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -28,8 +29,9 @@ const STANDARD = [
 
 export default function ActivitatiProiectPanel({ proiectId, showToast }) {
   const [acts, setActs] = useState([])
-  const [articole, setArticole] = useState([])
+  const [articole, setArticole] = useState([])   // null = citirea a picat: „Contract” e NECUNOSCUT, nu 0 (L18)
   const [realizat, setRealizat] = useState({})   // {activitate_id: suma cantităților din rapoartele zilnice}
+  const [eroareCitire, setEroareCitire] = useState(null)
   const [loading, setLoading] = useState(true)
   const [noua, setNoua] = useState({ nume: '', um: '', coduri_deviz: '' })
   // Proiect de distribuție gaze → raportul zilnic (/m) arată „Raport lucrări executate” (13.10.2026).
@@ -46,26 +48,38 @@ export default function ActivitatiProiectPanel({ proiectId, showToast }) {
     showToast?.(v ? '✓ Raportul zilnic arată acum tabelele de distribuție (conducte + branșamente)' : 'Tabelele de distribuție nu mai apar în raportul zilnic', 'success')
   }
 
+  // Articolele și rapoartele se citesc COMPLET, pe chei (citesteToate: keyset pe id până la pagina goală, L23). Review #1158 r8: PostgREST dă cel mult
+  // 1000 de rânduri pe cerere, iar citirea veche (fără ordine, fără paginare) primea un subset dependent de ordinea fizică → „Contract” se schimba după
+  // confirmarea ofertei în „Rest de decontat” pe proiectele cu peste 1000 de articole. O eroare de citire NU e „zero articole” (L18): se arată și
+  // „Contract” rămâne necunoscut.
   const load = useCallback(async () => {
     setLoading(true)
-    const [a, art, rl] = await Promise.all([
-      supabase.from('proiect_activitati').select('*').eq('proiect_id', proiectId).order('ordine').order('id'),
-      supabase.from('proiect_articole').select('cod, um, cantitate, sursa').eq('proiect_id', proiectId).neq('sursa', 'extras_materiale'),
-      supabase.from('raport_lucrari').select('activitate_id, cantitate').eq('proiect_id', proiectId),
-    ])
-    setActs(a.data || [])
-    setArticole(art.data || [])
-    const r = {}
-    for (const x of (rl.data || [])) if (x.activitate_id) r[x.activitate_id] = (r[x.activitate_id] || 0) + (Number(x.cantitate) || 0)
-    setRealizat(r)
+    try {
+      const a = await supabase.from('proiect_activitati').select('*').eq('proiect_id', proiectId).order('ordine').order('id')
+      if (a.error) throw a.error
+      setActs(a.data || [])
+      const [art, rl] = await Promise.all([
+        citesteToate(() => supabase.from('proiect_articole').select('id, cod, um, cantitate, sursa').eq('proiect_id', proiectId).neq('sursa', 'extras_materiale')),
+        citesteToate(() => supabase.from('raport_lucrari').select('id, activitate_id, cantitate').eq('proiect_id', proiectId)),
+      ])
+      setArticole(art)
+      const r = {}
+      for (const x of rl) if (x.activitate_id) r[x.activitate_id] = (r[x.activitate_id] || 0) + (Number(x.cantitate) || 0)
+      setRealizat(r)
+      setEroareCitire(null)
+    } catch (e) {
+      setArticole(null); setRealizat({})
+      setEroareCitire(e?.message || String(e))
+      showToast?.('Articolele / rapoartele proiectului nu s-au putut citi: ' + (e?.message || e), 'error')
+    }
     setLoading(false)
-  }, [proiectId])
+  }, [proiectId])   // eslint-disable-line react-hooks/exhaustive-deps -- showToast nu intră în deps (buclă infinită)
   useEffect(() => { load() }, [load])
 
-  // cantitatea de contract pt o activitate = suma articolelor al căror cod începe cu unul din prefixe
+  // cantitatea de contract pt o activitate = suma articolelor al căror cod începe cu unul din prefixe; articole necitite (eroare) = necunoscut (null), nu 0
   const contractPt = useCallback((coduri) => {
     const prefixe = (coduri || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-    if (!prefixe.length) return null
+    if (!prefixe.length || !articole) return null
     const sel = articole.filter(x => prefixe.some(p => (x.cod || '').toUpperCase().startsWith(p)))
     if (!sel.length) return { q: 0, n: 0 }
     return { q: sel.reduce((s, x) => s + (Number(x.cantitate) || 0), 0), n: sel.length }
@@ -111,6 +125,9 @@ export default function ActivitatiProiectPanel({ proiectId, showToast }) {
           <input type="checkbox" checked={distributie} onChange={e => comutaDistributie(e.target.checked)} />
           Proiect de distribuție gaze — raportul zilnic are „Raport lucrări executate” (conducte + branșamente)
         </label>
+      )}
+      {eroareCitire && (
+        <div style={{ fontSize: 12, color: G.red, marginBottom: 8 }}>⚠ Articolele / rapoartele proiectului nu s-au putut citi ({eroareCitire}) — „Contract” și progresul nu sunt afișate.</div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
         <div style={{ fontSize: 12, color: G.muted }}>{loading ? 'Se încarcă…' : `${acts.length} activități operaționale`}</div>

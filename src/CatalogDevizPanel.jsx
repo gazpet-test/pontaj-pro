@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import { citesteToate, ordineCatalog } from './lib/citireCompleta.js'
 import { parseDeviz } from './devizParser.js'
 
 const G = {
@@ -33,15 +34,18 @@ export default function CatalogDevizPanel({ proiectId, showToast }) {
   const [importing, setImporting] = useState(false)
   const [openOb, setOpenOb] = useState(null)
 
+  // Catalogul se citește COMPLET, pe chei (citesteToate: keyset pe id, L23; review #1158 r8: plafonul PostgREST de 1000 de rânduri trunchia catalogul și
+  // totalul proiectelor mari), apoi se ordonează în client ca înainte (obiect / deviz / nr). O eroare se arată (L18), nu devine catalog gol.
   const load = useCallback(async () => {
     setLoading(true)
-    const { data } = await supabase.from('proiect_articole').select('*')
-      .eq('proiect_id', proiectId).order('obiect_cod').order('deviz_cod').order('nr')
-    // rândurile RETRASE de server (activ = false, coloana există doar după migrarea 20270105a: înainte e undefined) nu sunt catalogul curent;
-    // rândurile înlocuite la confirmarea ofertei nu mai sunt în tabel (stau în proiect_articole_istoric), deci nu ajung aici
-    setArticole((data || []).filter(a => a.activ !== false))
+    try {
+      const data = await citesteToate(() => supabase.from('proiect_articole').select('*').eq('proiect_id', proiectId))
+      // rândurile RETRASE de server (activ = false, coloana există doar după migrarea 20270105a: înainte e undefined) nu sunt catalogul curent;
+      // rândurile înlocuite la confirmarea ofertei nu mai sunt în tabel (stau în proiect_articole_istoric), deci nu ajung aici
+      setArticole(data.filter(a => a.activ !== false).sort(ordineCatalog))
+    } catch (e) { setArticole([]); showToast?.('Catalogul nu s-a putut citi: ' + (e?.message || e), 'error') }
     setLoading(false)
-  }, [proiectId])
+  }, [proiectId])   // eslint-disable-line react-hooks/exhaustive-deps -- showToast nu intră în deps (buclă infinită)
   useEffect(() => { load() }, [load])
 
   const insertRows = async (arts, extra) => {

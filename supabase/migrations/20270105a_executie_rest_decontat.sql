@@ -11,6 +11,10 @@
 --     mod_import ('diferente' / 'lista_completa'), activ, fisier_amprenta (sha256 al fișierului confirmat), confirmat_de / confirmat_la, tip_rand
 --     ('articol' / 'os' / 'diverse'). Rândurile existente rămân activ = true și primesc cheia (nr intră în cheie doar când codul se repetă în
 --     același document: proiect + sursă + act_nr + obiect + deviz). Politicile existente ale tabelului NU se schimbă (CatalogDevizPanel / Magazie).
+--     r8 (review #1158, P1 pe r7: importul vechi prin catalog DUPĂ migrare comasa pozițiile repetate — cheia fără nr pe ambele rânduri): ACEEAȘI regulă a
+--     documentului se impune și pe calea veche, în gardă: un rând scris fără cheie al cărui cod canonic există deja în același document primește poziția
+--     (|#nr) și re-cheiază rândurile deja scrise ale grupului (fn_rest_decontat_cheie_document, DEFINER, apelabilă doar din gardă), inclusiv când loturile
+--     catalogului (200 de rânduri, cereri separate) taie un grup — rezultatul e identic cu importul de dinaintea migrării + backfill.
 --   * executie_sl_detaliu + executie_sl_detaliu_linii: situațiile de lucrări DETALIATE (pe articol), o versiune activă pe (proiect, nr. situație),
 --     fiecare cu amprenta fișierului; scrise DOAR prin RPC (clienții au doar SELECT).
 --   * executie_proiecte + configurare_completa_la / configurare_exceptie_motiv (folosite de 20270105b: poarta „în configurare”).
@@ -89,6 +93,10 @@
 --         20261208a / v_executie_tinte, DevizVsExecutatTab, CatalogDevizPanel dau EXACT același rezultat înainte / după confirmarea unor date echivalente
 --         (testul de proprietate: scripts/pglite/test_executie_rest_decontat_local.mjs §8, pe transformări echivalente generate).
 --     (3) Amprenta fișierului se caută și în istoric (rândurile retrase, rand->>'fisier_amprenta'), sub același advisory: A → B → A = 23505.
+--     (4) r8 (review #1158, P2 pe r7: nr era luat doar de la rândurile cu aceeași poziție, iar o poziție nouă se scria): regula r7 se aplică INTEGRAL și
+--         poziției, deși ea nu participă la identitatea cheii — formele nr ale TUTUROR rândurilor cheii (orice poziție): mai multe = 22023 forme_multiple
+--         (inclusiv poziții diferite stocate sub aceeași cheie), înaintea oricărei retrageri; exact una = copiată exact, iar o linie care vine cu ALTĂ
+--         poziție (canonic diferită) = 22023 nr_schimbat (poziția unei chei existente nu se schimbă la confirmare; linia fără nr o copiază pe cea existentă).
 --   * Gărzi BEFORE pe ORICE cale (L07 / L08): rândurile confirmate din proiect_articole nu se modifică / șterg direct, coloanele de
 --     confirmare le scrie doar RPC-ul (marcajul static al tranzacției, precedent 20261130l; marcaj LIPSĂ = NULL într-o sesiune nouă = REFUZ,
 --     ca și marcajul gol), un rând cu sursă AA / NR / NCS se scrie doar prin RPC, rândurile contract_initial ale unui OBIECT cu oferta confirmată
@@ -563,12 +571,47 @@ REVOKE ALL ON FUNCTION public.fn_rest_decontat_nota_garda() FROM PUBLIC, anon, a
 CREATE TRIGGER trg_rest_decontat_nota_garda BEFORE INSERT OR UPDATE OR DELETE ON public.executie_note_modificare
   FOR EACH ROW EXECUTE FUNCTION public.fn_rest_decontat_nota_garda();
 
+-- r8 (review #1158, P1 pe r7): cheia rândurilor scrise pe CALEA VECHE (fără cheie dată — catalogul, Magazie, fixturile serverului) urmează ACEEAȘI regulă
+-- ca backfill-ul migrării și ca RPC-ul: în același DOCUMENT (proiect + sursă + act_nr) codul canonic (obiect | deviz | cod) care se repetă primește poziția
+-- (|#nr) pe TOATE rândurile lui — și pe cele deja scrise, din alte loturi / instrucțiuni (catalogul inserează câte 200 de rânduri, pe cereri separate; un
+-- grup poate fi tăiat de lot). Garda (BEFORE INSERT, ca apelantul) cheamă funcția de aici pentru rândul care se scrie: dacă documentul are deja rânduri cu
+-- același cod canonic, le re-cheiază cu poziția (DEFINER: politicile vechi ale apelantului pot să nu-i dea UPDATE / SELECT) și răspunde adevărat (rândul nou
+-- ia și el poziția). Scrie DOAR coloana derivată cheie, DOAR pe rândurile neconfirmate ale documentului, DOAR cu valoarea calculată din propriile câmpuri
+-- (regula backfill-ului: nr::text, NULL = fără poziție) și DOAR din gardă (pg_trigger_depth() = 0 → refuz: apelată direct n-ar putea decât să pună poziția
+-- pe un cod nerepetat). UPDATE-ul re-cheierii trece prin aceeași gardă (rândul neconfirmat, cheia din mulțimea permisă, advisory-ul deja ținut de sesiune).
+CREATE FUNCTION public.fn_rest_decontat_cheie_document(p_proiect bigint, p_sursa text, p_act_nr text, p_k text) RETURNS boolean
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_exista boolean;
+BEGIN
+  IF pg_trigger_depth() = 0 THEN
+    RAISE EXCEPTION 'rest_decontat: fn_rest_decontat_cheie_document se apeleaza doar din garda proiect_articole' USING ERRCODE = '42501';
+  END IF;
+  IF p_proiect IS NULL OR p_k IS NULL THEN RETURN false; END IF;
+  -- documentul căii vechi = rândurile NECONFIRMATE ale (proiect, sursă, act_nr): cele confirmate sunt documentul RPC-ului (poziția lor a decis-o RPC-ul)
+  SELECT EXISTS (SELECT 1 FROM public.proiect_articole a
+                  WHERE a.proiect_id::bigint = p_proiect AND a.sursa IS NOT DISTINCT FROM p_sursa AND coalesce(a.act_nr::text, '') = coalesce(p_act_nr, '')
+                    AND a.confirmat_la IS NULL
+                    AND public.fn_rest_decontat_cheie(a.obiect_cod::text, a.deviz_cod::text, a.cod::text, NULL) = p_k) INTO v_exista;
+  IF NOT v_exista THEN RETURN false; END IF;
+  -- grupul e repetat (rândurile existente + cel care se scrie): toate rândurile lui scrise pe calea veche primesc poziția
+  UPDATE public.proiect_articole a
+     SET cheie = public.fn_rest_decontat_cheie(a.obiect_cod::text, a.deviz_cod::text, a.cod::text, a.nr::text)
+   WHERE a.proiect_id::bigint = p_proiect AND a.sursa IS NOT DISTINCT FROM p_sursa AND coalesce(a.act_nr::text, '') = coalesce(p_act_nr, '')
+     AND a.confirmat_la IS NULL
+     AND public.fn_rest_decontat_cheie(a.obiect_cod::text, a.deviz_cod::text, a.cod::text, NULL) = p_k
+     AND a.cheie IS DISTINCT FROM public.fn_rest_decontat_cheie(a.obiect_cod::text, a.deviz_cod::text, a.cod::text, a.nr::text);
+  RETURN true;
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_rest_decontat_cheie_document(bigint, text, text, text) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_rest_decontat_cheie_document(bigint, text, text, text) TO authenticated;
+
 -- proiect_articole: coloanele de confirmare le scrie doar RPC-ul (marcajul tranzacției) sau serverul; rândurile confirmate nu se modifică /
 -- șterg direct; un rând cu sursă AA / NR / NCS (flux autorizat: act / notă aprobată + confirmare) se scrie DOAR prin RPC — nici INSERT direct, nici
 -- schimbarea sursei unui rând existent către ele (r3); pe un OBIECT cu oferta CONFIRMATĂ (starea (b), fn_rest_decontat_obiect_confirmat)
 -- rândurile contract_initial nu se mai scriu / modifică / șterg / reparentează direct (r4 / r5: calea veche e închisă pe acel obiect, deschisă pe
--- obiectele vechi ale aceluiași proiect); cheia e mereu cea calculată în BD (fără nr, sau cu nr când apelantul o cere). Marcajul LIPSĂ (NULL,
--- sesiune nouă) = refuz (L18).
+-- obiectele vechi ale aceluiași proiect); cheia e mereu cea calculată în BD (fără nr, sau cu nr când apelantul o cere; r8: un rând NOU fără cheie
+-- primește poziția când codul lui canonic există deja în același document — regula backfill-ului, prin fn_rest_decontat_cheie_document). Marcajul
+-- LIPSĂ (NULL, sesiune nouă) = refuz (L18).
 CREATE FUNCTION public.fn_rest_decontat_articole_garda() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
 DECLARE
@@ -632,7 +675,13 @@ BEGIN
                         AND OLD.cheie <> public.fn_rest_decontat_cheie(OLD.obiect_cod::text, OLD.deviz_cod::text, OLD.cod::text, NULL) THEN v_cu ELSE v_fara END;
   END IF;
   IF NEW.cheie IS NULL THEN
-    NEW.cheie := v_fara;
+    -- r8 (review #1158, P1 pe r7): rândul NOU scris fără cheie (calea veche) urmează regula documentului — codul canonic deja prezent în același document
+    -- (proiect + sursă + act_nr) = repetat → poziția intră în cheie, și la rândurile deja scrise ale grupului (alte loturi / instrucțiuni), ca la backfill
+    IF TG_OP = 'INSERT' AND public.fn_rest_decontat_cheie_document(NEW.proiect_id::bigint, NEW.sursa::text, NEW.act_nr::text, v_fara) THEN
+      NEW.cheie := v_cu;
+    ELSE
+      NEW.cheie := v_fara;
+    END IF;
   ELSIF NEW.cheie NOT IN (v_fara, v_cu) THEN
     RAISE EXCEPTION 'rest_decontat: cheia articolului nu corespunde obiectului / devizului / codului (se calculeaza in BD)' USING ERRCODE = '23514';
   END IF;
@@ -1104,24 +1153,32 @@ BEGIN
     SELECT x.um, x.factor INTO v_um_n, v_factor FROM public.fn_rest_decontat_um(e->>'um') x;
     -- r7 (2): FORMELE BRUTE ale cheii în rândurile existente ale proiectului (toate sursele bazei, active sau nu — tot ce văd cititorii vechi —, inclusiv
     -- rândurile care se vor înlocui), pe trei grupuri de câmpuri: (a) identitatea obiect / deviz / cod — exact UNA pe cheie (rândurile aceleiași chei din
-    -- documente diferite o poartă identic, copiată de aici); (b) nr — formele rândurilor cu ACEEAȘI poziție canonică ca linia (documentele diferite au
-    -- poziții diferite, legitim: un deviz AA fără nr nu e o altă formă a ofertei); (c) UM — formele rândurilor cu ACELAȘI UM normalizat ca linia.
+    -- documente diferite o poartă identic, copiată de aici); (b) nr — r8 (review #1158, P2 pe r7): formele TUTUROR rândurilor cheii, orice poziție (poziția
+    -- nu participă la identitate, dar e citită: catalogul ordonează pe nr) — poziții diferite stocate sub aceeași cheie = forme multiple; o linie care vine
+    -- cu altă poziție decât cea unică existentă e refuzată mai jos (nr_schimbat), linia fără nr (devizele AA „doar diferențe”) copiază poziția existentă;
+    -- (c) UM — formele rândurilor cu ACELAȘI UM normalizat ca linia.
     -- Într-un grup, exact una = copiată mai jos; MAI MULTE = ambiguitate → refuz înaintea oricărei retrageri (documentul nu poate alege ce văd cititorii
-    -- existenți); niciuna = cheie nouă (sau poziție / UM nou), scrisă cum vine, normalizată
+    -- existenți); niciuna = cheie nouă (sau UM nou), scrisă cum vine, normalizată
     SELECT coalesce(jsonb_agg(z.f ORDER BY z.f::text), '[]'::jsonb) INTO v_forme FROM (
       SELECT DISTINCT jsonb_build_object('obiect_cod', a.obiect_cod::text, 'deviz_cod', a.deviz_cod::text, 'cod', a.cod::text, 'nr', a.nr::text, 'um', a.um::text) AS f
         FROM public.proiect_articole a
        WHERE a.proiect_id::bigint = p_proiect AND a.cheie = v_k
          AND a.sursa IN ('contract_initial', 'act_aditional', 'nota_renuntare', 'nota_comanda_suplimentara')) z;
     SELECT coalesce(jsonb_agg(DISTINCT (f - 'nr' - 'um')), '[]'::jsonb) INTO v_f_id FROM jsonb_array_elements(v_forme) f;
-    SELECT coalesce(array_agg(DISTINCT f->>'nr'), ARRAY[]::text[]) INTO v_nr_forme FROM jsonb_array_elements(v_forme) f
-     WHERE public.fn_rest_decontat_cheie(f->>'nr', NULL, NULL, NULL) = public.fn_rest_decontat_cheie(e->>'nr', NULL, NULL, NULL);
+    SELECT coalesce(array_agg(DISTINCT f->>'nr'), ARRAY[]::text[]) INTO v_nr_forme FROM jsonb_array_elements(v_forme) f;
     SELECT coalesce(array_agg(DISTINCT f->>'um'), ARRAY[]::text[]) INTO v_um_forme FROM jsonb_array_elements(v_forme) f
      WHERE f->>'um' IS NOT NULL AND (SELECT x.um FROM public.fn_rest_decontat_um(f->>'um') x) = v_um_n;
     IF jsonb_array_length(v_f_id) > 1 OR cardinality(v_nr_forme) > 1 OR cardinality(v_um_forme) > 1 THEN
       RAISE EXCEPTION 'rest_decontat: cheia % exista in randurile proiectului in mai multe forme brute (obiect / deviz / cod / nr / UM): %; documentul nu poate alege reprezentarea cititorilor existenti — randurile existente se aduc intai la o singura forma (forme_multiple)',
         v_k, (SELECT string_agg(concat_ws('/', coalesce(f->>'obiect_cod', '-'), coalesce(f->>'deviz_cod', '-'), coalesce(f->>'cod', '-'), coalesce(f->>'nr', '-'), coalesce(f->>'um', '-')), ' | ') FROM jsonb_array_elements(v_forme) f)
         USING ERRCODE = '22023';
+    END IF;
+    -- r8 (P2): poziția unei chei EXISTENTE nu se schimbă la confirmare — linia cu o poziție canonic diferită de cea unică a rândurilor cheii = refuz,
+    -- înaintea oricărei scrieri; linia fără poziție o copiază pe cea existentă (mai jos)
+    IF cardinality(v_nr_forme) = 1 AND coalesce(e->>'nr', '') ~ '[^[:space:]]'
+       AND public.fn_rest_decontat_cheie(e->>'nr', NULL, NULL, NULL) IS DISTINCT FROM public.fn_rest_decontat_cheie(v_nr_forme[1], NULL, NULL, NULL) THEN
+      RAISE EXCEPTION 'rest_decontat: cheia % are in randurile proiectului pozitia (nr) % si documentul o trimite cu pozitia %; pozitia unei chei existente nu se schimba la confirmare — trimite linia cu pozitia existenta sau fara pozitie (nr_schimbat)',
+        v_k, coalesce(v_nr_forme[1], '-'), e->>'nr' USING ERRCODE = '22023';
     END IF;
     v_f := CASE WHEN jsonb_array_length(v_f_id) = 1 THEN v_f_id->0 END;
     -- r6 (1): UM-ul liniei față de baza ANTERIOARĂ (v_baza, cu rândurile care se vor înlocui) și față de DECONTATUL existent al cheii (liniile situațiilor
@@ -1153,7 +1210,8 @@ BEGIN
     END IF;
     -- r7 (2): REPREZENTAREA CHEII, PE FIECARE CÂMP citit de cititorii existenți (ActivitatiProiectPanel / verificariProiect: cod + cantitate; 20261208a:
     -- obiect_cod + cod + um + cantitate; CatalogDevizPanel: tot, ordonat pe obiect_cod / deviz_cod / nr; DevizVsExecutatTab: obiect_cod): cheie EXISTENTĂ →
-    -- obiect_cod, deviz_cod, cod copiate EXACT din rândurile cu aceeași cheie; nr copiat din rândul cu aceeași poziție (altfel poziția nouă, normalizată);
+    -- obiect_cod, deviz_cod, cod copiate EXACT din rândurile cu aceeași cheie; nr copiat EXACT din rândurile cheii (r8: forma unică a cheii, orice poziție — o
+    -- poziție diferită a fost refuzată mai sus; doar o cheie fără rânduri existente ia poziția liniei, normalizată);
     -- UM-ul BRUT al rândului cu același UM normalizat, cu cantitatea și prețul convertite prin factor (1 HM pe o cheie în M → 100 M; 2 MC pe o cheie în
     -- „100 MC” → 0.02; nereprezentabil exact în 6 zecimale = refuz, L17); cheie NOUĂ → câmpurile cum vin, normalizate (trim, spațiile multiple → unul,
     -- literele neschimbate), obiect_cod-ul din v_rep_ob când obiectul există. UM-ul schimbat ACCEPTAT se scrie cum vine (normalizat).
@@ -1379,7 +1437,7 @@ DECLARE v_amp text; v_n bigint;
   v_fn name[] := ARRAY['fn_rest_decontat_cheie', 'fn_rest_decontat_um', 'fn_rest_decontat_sursa_autorizata', 'fn_rest_decontat_drept', 'fn_rest_decontat_server', 'fn_rest_decontat_aa_al_proiectului',
     'fn_rest_decontat_are_oferta', 'fn_rest_decontat_obiect_confirmat', 'fn_rest_decontat_nota_garda', 'fn_rest_decontat_articole_garda', 'fn_rest_decontat_sl_garda', 'fn_rest_decontat_istoric_garda',
     'fn_rest_decontat_baza_proiect', 'fn_rest_decontat_baza_calcul', 'fn_rest_decontat_calcul', 'fn_rest_decontat_obiect_calcul', 'fn_rest_decontat_lipsuri_calcul', 'fn_rest_decontat_confirma_baza',
-    'fn_rest_decontat_confirma_situatie']::name[];
+    'fn_rest_decontat_confirma_situatie', 'fn_rest_decontat_cheie_document']::name[];
 BEGIN
   -- RLS + politicile pe cele patru tabele noi
   IF (SELECT count(*) FROM pg_class c WHERE c.oid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass, 'public.proiect_articole_istoric'::regclass) AND c.relrowsecurity) <> 4
@@ -1415,20 +1473,20 @@ BEGIN
     RAISE EXCEPTION '20270105a post: privilegii pe tabele / vederi / secvente';
   END IF;
   -- funcțiile: toate cu search_path fix, owner postgres; DEFINER doar unde trebuie; EXECUTE doar pentru authenticated, nu pe funcțiile trigger
-  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%') <> 19
+  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%') <> 20
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (v_fn)
                  AND (p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] OR pg_get_userbyid(p.proowner) <> 'postgres'
                       OR p.prosecdef IS DISTINCT FROM (p.proname IN ('fn_rest_decontat_drept', 'fn_rest_decontat_aa_al_proiectului', 'fn_rest_decontat_are_oferta', 'fn_rest_decontat_obiect_confirmat',
                                                                      'fn_rest_decontat_baza_proiect', 'fn_rest_decontat_baza_calcul', 'fn_rest_decontat_calcul',
                                                                      'fn_rest_decontat_obiect_calcul', 'fn_rest_decontat_lipsuri_calcul', 'fn_rest_decontat_confirma_baza',
-                                                                     'fn_rest_decontat_confirma_situatie'))
+                                                                     'fn_rest_decontat_confirma_situatie', 'fn_rest_decontat_cheie_document'))
                       OR has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('service_role', p.oid, 'EXECUTE')
                       OR has_function_privilege('authenticated', p.oid, 'EXECUTE')
                          IS DISTINCT FROM (p.proname NOT IN ('fn_rest_decontat_nota_garda', 'fn_rest_decontat_articole_garda', 'fn_rest_decontat_sl_garda', 'fn_rest_decontat_istoric_garda', 'fn_rest_decontat_baza_proiect'))
                       OR (p.proname IN ('fn_rest_decontat_cheie', 'fn_rest_decontat_um', 'fn_rest_decontat_sursa_autorizata') AND p.provolatile <> 'i')
-                      OR (p.proname IN ('fn_rest_decontat_confirma_baza', 'fn_rest_decontat_confirma_situatie') AND p.provolatile <> 'v')
+                      OR (p.proname IN ('fn_rest_decontat_confirma_baza', 'fn_rest_decontat_confirma_situatie', 'fn_rest_decontat_cheie_document') AND p.provolatile <> 'v')
                       OR (p.proname NOT IN ('fn_rest_decontat_cheie', 'fn_rest_decontat_um', 'fn_rest_decontat_sursa_autorizata', 'fn_rest_decontat_confirma_baza', 'fn_rest_decontat_confirma_situatie',
-                                            'fn_rest_decontat_nota_garda', 'fn_rest_decontat_articole_garda', 'fn_rest_decontat_sl_garda', 'fn_rest_decontat_istoric_garda') AND p.provolatile <> 's'))) THEN
+                                            'fn_rest_decontat_cheie_document', 'fn_rest_decontat_nota_garda', 'fn_rest_decontat_articole_garda', 'fn_rest_decontat_sl_garda', 'fn_rest_decontat_istoric_garda') AND p.provolatile <> 's'))) THEN
     RAISE EXCEPTION '20270105a post: functii (numar / definer / search_path / owner / EXECUTE / volatilitate)';
   END IF;
   -- trigger-ele exacte: BEFORE INSERT OR UPDATE OR DELETE, pe rând, active (tgtype 31 = ROW + BEFORE + INSERT + DELETE + UPDATE), fără WHEN / argumente
@@ -1504,9 +1562,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%'
   ) x;
   -- AMPRENTA_20270105a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '4367c371d9363f35e0b25576e3dd27c1' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '7c7631c215ba958de0f8da03613c717c' THEN
     RAISE NOTICE 'AMPRENTA_20270105a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270105a post: AMPRENTA obiectelor % (asteptat 4367c371d9363f35e0b25576e3dd27c1)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270105a post: AMPRENTA obiectelor % (asteptat 7c7631c215ba958de0f8da03613c717c)', md5(coalesce(v_amp, ''));
   END IF;
   -- ștampilele porților Izometrie, CALCULATE după ultima schimbare (coloanele noi pe executie_proiecte intră în E4b)
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());

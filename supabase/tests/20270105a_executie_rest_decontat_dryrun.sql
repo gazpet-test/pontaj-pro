@@ -38,6 +38,12 @@
 -- randurile scrise sunt IDENTICE cu cele vechi (fiecare camp copiat din randul cheii), cititorii vechi (prefixul TSA, JOIN-ul unitatii pe 'o1', lista
 -- obiectelor O1 / o1) neschimbati; a doua forma a aceleiasi chei (strecurata de server) = 22023 forme_multiple cu cheia si formele, nimic scris; o cheie NOUA
 -- (' z  z ') se scrie normalizata ('z z', deviz 'd1', um 'buc') cu obiect_cod-ul unitatii ('o1': obiectul are forme amestecate).
+-- r8 (review #1158: 2 x P1 + P2 pe r7). t_import_vechi_repetat (P7): accesul general (e) scrie oferta pe calea veche in mai multe cereri (ca loturile de 200 ale
+-- catalogului), cu un cod repetat taiat de lot → toate randurile grupului primesc pozitia in cheie (si cele scrise in lotul anterior, re-cheiate), ca la
+-- backfill-ul migrarii; doua repetari in aceeasi instructiune la fel; acelasi cod in alt deviz nu e repetat; baza tine pozitiile separate; functia de
+-- re-cheiere apelata direct = 42501. t_pozitie (P6 / P7): pozitia nu participa la identitate, dar se copiaza exact — o confirmare cu ALTA pozitie pe o cheie
+-- existenta = 22023 nr_schimbat, nimic scris; fara nr → copiata; doua pozitii stocate de server sub aceeasi cheie → 22023 forme_multiple la o linie insumata
+-- (reproducerile Jakarinos r7). Cititorii cu plafonul API si importul vechi fata de backfill se probeaza in PGlite (§9), nu aici.
 -- SESIUNE PROASPATA: primul bloc dupa fixturi verifica garda cu marcajul RPC LIPSA (NULL): fisierul se ruleaza intr-o sesiune noua, inainte ca
 -- vreun RPC sa fi pus marcajul (precondiția e verificata explicit).
 -- FIXTURI: pe clona, daca profiles / employees cer alte coloane NOT NULL, se completeaza DOAR blocul FIXTURI (restul nu depinde de ele).
@@ -97,6 +103,9 @@ BEGIN
   INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P6', 'Dry P6 reprezentare pe cheie', 9101) RETURNING id INTO v;
   INSERT INTO rd_fix VALUES ('p6', v);
   INSERT INTO public.proiect_unitati (proiect_id, tip, nume, obiect_cod) VALUES (v, 'obiect', 'Tronson o1', 'o1');
+  -- P7 (r8, MP b): importul vechi DUPA migrare cu coduri repetate, in loturi (t_import_vechi_repetat) si pozitii diferite sub aceeasi cheie (t_pozitie 2/2)
+  INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P7', 'Dry P7 import vechi coduri repetate', 9101) RETURNING id INTO v;
+  INSERT INTO rd_fix VALUES ('p7', v);
   -- P5: un rand CONFIRMAT scris de server (calea serverului: auth.uid() NULL + postgres), pentru garda in sesiune proaspata
   INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P5', 'Dry P5 garda proaspata', 9102) RETURNING id INTO v;
   INSERT INTO rd_fix VALUES ('p5', v);
@@ -1461,6 +1470,172 @@ BEGIN
     RAISE EXCEPTION 't_reprezentare_cheie FAIL: cheia noua nu e scrisa normalizata cu obiect_cod-ul unitatii, sau cheile existente s-au schimbat: %', s;
   END IF;
   RAISE NOTICE 't_reprezentare_cheie (3/3) ok: a doua forma a aceleiasi chei = refuz 22023 forme_multiple (cheia + formele), nimic scris; cheia noua " z  z " scrisa "z z" / "d1" / "buc" pe obiectul unitatii (o1), cheile existente neschimbate';
+END $t$;
+RESET ROLE;
+
+-- ── t_import_vechi_repetat (r8, review #1158 P1 pe r7: importul vechi prin catalog DUPA migrare comasa pozitiile repetate — ambele randuri cu cheia fara nr).
+--    P7 (MP b). Accesul general (e) scrie oferta pe calea veche in DOUA cereri, ca loturile catalogului: lotul 1 = TSA01 #1 (100 M) + Y #2; lotul 2 = TSA01 #3
+--    (200 M) + Z #4 — grupul TSA01 e TAIAT de lot. Cheile: TSA01 primeste pozitia pe AMBELE randuri (cel din lotul 1 e re-cheiat), Y / Z raman fara; lotul 3
+--    cu DOUA TSA01 in aceeasi instructiune (#5, #6) → toate patru cu pozitie, iar acelasi cod in ALT deviz (D2) nu e repetat; functia de re-cheiere apelata
+--    direct = 42501; baza (MP b) tine pozitiile separate (100 / 200 / 300 / 400), nu comasate (300) ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+CREATE FUNCTION pg_temp.rd_chei_p7() RETURNS text LANGUAGE sql STABLE AS $f$
+  SELECT string_agg(nr || ':' || cheie, '; ' ORDER BY id) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p7') AND sursa = 'contract_initial'
+$f$;
+DO $t$
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  -- lotul 1
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, nr, cod, denumire, um, cantitate, pret_unitar, valoare, sursa) VALUES
+    (pg_temp.rd_id('p7'), 'O1', 'TRONSON O1', 'D1', '1', 'TSA01', 'Sapatura strat 1', 'M', 100, 10, 1000, 'contract_initial'),
+    (pg_temp.rd_id('p7'), 'O1', 'TRONSON O1', 'D1', '2', 'Y', 'Umplutura', 'MC', 1, 10, 10, 'contract_initial');
+  IF pg_temp.rd_chei_p7() IS DISTINCT FROM '1:O1|D1|TSA01; 2:O1|D1|Y' THEN RAISE EXCEPTION 't_import_vechi_repetat PRECONDITIE lot 1: %', pg_temp.rd_chei_p7(); END IF;
+END $t$;
+DO $t$
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  -- lotul 2 (alta instructiune): TSA01 se repeta → pozitia intra in cheie si la randul din lotul 1
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, nr, cod, denumire, um, cantitate, pret_unitar, valoare, sursa) VALUES
+    (pg_temp.rd_id('p7'), 'O1', 'TRONSON O1', 'D1', '3', 'TSA01', 'Sapatura strat 2', 'M', 200, 10, 2000, 'contract_initial'),
+    (pg_temp.rd_id('p7'), 'O1', 'TRONSON O1', 'D1', '4', 'Z', 'Compactare', 'MC', 1, 10, 10, 'contract_initial');
+  IF pg_temp.rd_chei_p7() IS DISTINCT FROM '1:O1|D1|TSA01|#1; 2:O1|D1|Y; 3:O1|D1|TSA01|#3; 4:O1|D1|Z' THEN
+    RAISE EXCEPTION 't_import_vechi_repetat FAIL: grupul taiat de lot nu are pozitia pe ambele randuri: %', pg_temp.rd_chei_p7();
+  END IF;
+END $t$;
+DO $t$
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  -- lotul 3: doua TSA01 in ACEEASI instructiune + TSA01 in alt deviz (D2: alt grup, nerepetat)
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, nr, cod, denumire, um, cantitate, pret_unitar, valoare, sursa) VALUES
+    (pg_temp.rd_id('p7'), 'O1', 'TRONSON O1', 'D1', '5', 'TSA01', 'Sapatura strat 3', 'M', 300, 10, 3000, 'contract_initial'),
+    (pg_temp.rd_id('p7'), 'O1', 'TRONSON O1', 'D1', '6', 'TSA01', 'Sapatura strat 4', 'M', 400, 10, 4000, 'contract_initial'),
+    (pg_temp.rd_id('p7'), 'O1', 'TRONSON O1', 'D2', '1', 'TSA01', 'Sapatura in alt deviz', 'M', 7, 10, 70, 'contract_initial');
+  IF pg_temp.rd_chei_p7() IS DISTINCT FROM '1:O1|D1|TSA01|#1; 2:O1|D1|Y; 3:O1|D1|TSA01|#3; 4:O1|D1|Z; 5:O1|D1|TSA01|#5; 6:O1|D1|TSA01|#6; 1:O1|D2|TSA01' THEN
+    RAISE EXCEPTION 't_import_vechi_repetat FAIL lot 3: %', pg_temp.rd_chei_p7();
+  END IF;
+  -- cheile sunt exact cele ale backfill-ului (regula documentului, recalculata aici din randuri)
+  IF EXISTS (SELECT 1 FROM public.proiect_articole a
+              JOIN (SELECT x.proiect_id, x.sursa, coalesce(x.act_nr, '') AS act_nr, public.fn_rest_decontat_cheie(x.obiect_cod, x.deviz_cod, x.cod, NULL) AS k, count(*) AS n
+                      FROM public.proiect_articole x WHERE x.proiect_id = pg_temp.rd_id('p7') GROUP BY 1, 2, 3, 4) d
+                ON d.proiect_id = a.proiect_id AND d.sursa IS NOT DISTINCT FROM a.sursa AND d.act_nr = coalesce(a.act_nr, '') AND d.k = public.fn_rest_decontat_cheie(a.obiect_cod, a.deviz_cod, a.cod, NULL)
+             WHERE a.proiect_id = pg_temp.rd_id('p7') AND a.cheie IS DISTINCT FROM public.fn_rest_decontat_cheie(a.obiect_cod, a.deviz_cod, a.cod, CASE WHEN d.n > 1 THEN a.nr END)) THEN
+    RAISE EXCEPTION 't_import_vechi_repetat FAIL: cheile difera de regula backfill-ului';
+  END IF;
+  -- functia de re-cheiere nu se apeleaza direct
+  BEGIN
+    PERFORM public.fn_rest_decontat_cheie_document(pg_temp.rd_id('p7'), 'contract_initial', NULL, 'O1|D1|Y');
+    RAISE EXCEPTION 't_import_vechi_repetat FAIL: fn_rest_decontat_cheie_document apelata direct';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%doar din garda%' THEN RAISE; END IF; END;
+  IF pg_temp.rd_chei_p7() IS DISTINCT FROM '1:O1|D1|TSA01|#1; 2:O1|D1|Y; 3:O1|D1|TSA01|#3; 4:O1|D1|Z; 5:O1|D1|TSA01|#5; 6:O1|D1|TSA01|#6; 1:O1|D2|TSA01' THEN
+    RAISE EXCEPTION 't_import_vechi_repetat FAIL: apelul direct refuzat a schimbat cheile';
+  END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE s text;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  SELECT string_agg(b.cheie || '=' || b.cantitate::text, '; ' ORDER BY b.cheie COLLATE "C") INTO s FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p7');
+  IF s IS DISTINCT FROM 'O1|D1|TSA01|#1=100; O1|D1|TSA01|#3=200; O1|D1|TSA01|#5=300; O1|D1|TSA01|#6=400; O1|D1|Y=1; O1|D1|Z=1; O1|D2|TSA01=7' THEN
+    RAISE EXCEPTION 't_import_vechi_repetat FAIL baza (pozitii comasate?): %', s;
+  END IF;
+  RAISE NOTICE 't_import_vechi_repetat ok: codul repetat pe calea veche primeste pozitia pe toate randurile grupului, si peste loturi (re-cheiere), ca backfill-ul; baza tine 100 / 200 / 300 / 400 separate; apelul direct al re-cheierii = 42501';
+END $t$;
+RESET ROLE;
+
+-- ── t_pozitie (r8, review #1158 P2 pe r7: pozitia nu participa la identitatea cheii, dar se copiaza EXACT si nu se schimba la confirmare). (1/2) P6 (MP b),
+--    „inlocuieste” cu aceleasi 3 linii, dar TSA01 cu nr '2' (cheia unica O1|D1|TSA01 are pozitia '1') = 22023 nr_schimbat, nimic scris (reproducerea 1
+--    Jakarinos r7: inainte, pozitia devenea 2); apoi TSA01 FARA nr → trece, randul e scris cu '1' (copiat), cititorii vechi identici ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  INSERT INTO rd_cons VALUES ('p6_pozitie_inainte', pg_temp.rd_cititori_p6());
+  IF (SELECT v FROM rd_cons WHERE k = 'p6_pozitie_inainte') NOT LIKE '%randuri: O1/D1/1/TSA01/M/100/10/1000; o1/D1/2a/Y/100 MC/2/1000/2000; o1/d1/3/z z/buc/1/1/1' THEN
+    RAISE EXCEPTION 't_pozitie PRECONDITIE P6: %', (SELECT v FROM rd_cons WHERE k = 'p6_pozitie_inainte');
+  END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb; n int; h int;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  SELECT count(*) INTO n FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p6');
+  SELECT count(*) INTO h FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p6');
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p6'), 'contract_initial', NULL, NULL, NULL, 'oferta6d.xlsx', repeat('e4', 32), $j$[
+      {"obiect_cod":"O1","obiect_nume":"TRONSON O1","deviz_cod":"D1","deviz_nume":"Terasamente","nr":"2","cod":"TSA01","denumire":"Sapatura","um":"M","cantitate":100,"pret_unitar":10,"valoare":1000},
+      {"obiect_cod":"o1","obiect_nume":"TRONSON O1","deviz_cod":"D1","deviz_nume":"Terasamente","nr":"2a","cod":"Y","denumire":"Umplutura","um":"100 MC","cantitate":2,"pret_unitar":1000,"valoare":2000},
+      {"obiect_cod":"o1","obiect_nume":"TRONSON O1","deviz_cod":"d1","deviz_nume":"Terasamente","nr":"3","cod":"z z","denumire":"Articol nou","um":"buc","cantitate":1,"pret_unitar":1,"valoare":1}]$j$::jsonb, true);
+    RAISE EXCEPTION 't_pozitie FAIL: confirmarea cu alta pozitie (nr 2) pe cheia O1|D1|TSA01 (pozitia 1) acceptata';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    IF SQLERRM NOT LIKE '%O1|D1|TSA01%pozitia (nr) 1%pozitia 2%nr_schimbat%' THEN RAISE; END IF;
+  END;
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p6')) <> n OR (SELECT count(*) FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p6')) <> h THEN
+    RAISE EXCEPTION 't_pozitie FAIL: refuzul nr_schimbat a scris ceva';
+  END IF;
+  -- fara nr pe TSA01: pozitia existenta ('1') e copiata
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p6'), 'contract_initial', NULL, NULL, NULL, 'oferta6d.xlsx', repeat('e4', 32), $j$[
+    {"obiect_cod":"O1","obiect_nume":"TRONSON O1","deviz_cod":"D1","deviz_nume":"Terasamente","cod":"TSA01","denumire":"Sapatura","um":"M","cantitate":100,"pret_unitar":10,"valoare":1000},
+    {"obiect_cod":"o1","obiect_nume":"TRONSON O1","deviz_cod":"D1","deviz_nume":"Terasamente","nr":"2a","cod":"Y","denumire":"Umplutura","um":"100 MC","cantitate":2,"pret_unitar":1000,"valoare":2000},
+    {"obiect_cod":"o1","obiect_nume":"TRONSON O1","deviz_cod":"d1","deviz_nume":"Terasamente","nr":"3","cod":"z z","denumire":"Articol nou","um":"buc","cantitate":1,"pret_unitar":1,"valoare":1}]$j$::jsonb, true);
+  IF (v->>'inserate')::int <> 3 OR (v->>'inlocuite')::int <> 3 OR (v->>'inlocuite_confirmate')::int <> 3 THEN RAISE EXCEPTION 't_pozitie FAIL inlocuire fara nr: %', v; END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  IF pg_temp.rd_cititori_p6() IS DISTINCT FROM (SELECT v FROM rd_cons WHERE k = 'p6_pozitie_inainte') THEN
+    RAISE EXCEPTION 't_pozitie FAIL: linia fara nr n-a copiat pozitia existenta / cititorii s-au schimbat: %', pg_temp.rd_cititori_p6();
+  END IF;
+  RAISE NOTICE 't_pozitie (1/2) ok: alta pozitie pe o cheie existenta = 22023 nr_schimbat (cheia, pozitia veche, pozitia noua), nimic scris; linia fara nr copiaza pozitia (1), cititorii vechi identici';
+END $t$;
+RESET ROLE;
+-- (2/2) P7: SERVERUL strecoara doua randuri ale aceluiasi cod W cu pozitii diferite (7, 8) sub ACEEASI cheie stocata O1|D2|W (duplicate mostenite cu pozitiile
+--    necuprinse in cheie); MP-ul b confirma oferta P7 cu o linie W insumata (nr 7, 300) = 22023 forme_multiple cu ambele forme, nimic scris (reproducerea 2
+--    Jakarinos r7: inainte, linia era acceptata si cele doua randuri retrase); la fel cu linia doar pe pozitia 7 (cheia e ambigua indiferent de linie) ──
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+DO $t$
+BEGIN
+  IF auth.uid() IS NOT NULL OR public.fn_rest_decontat_server() IS NOT TRUE THEN RAISE EXCEPTION 't_pozitie PRECONDITIE: blocul serverului cere auth.uid() NULL si rolul postgres'; END IF;
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, nr, cod, denumire, um, cantitate, pret_unitar, valoare, sursa, cheie) VALUES
+    (pg_temp.rd_id('p7'), 'O1', 'TRONSON O1', 'D2', '7', 'W', 'Dublu a', 'M', 100, 10, 1000, 'contract_initial', 'O1|D2|W'),
+    (pg_temp.rd_id('p7'), 'O1', 'TRONSON O1', 'D2', '8', 'W', 'Dublu b', 'M', 200, 10, 2000, 'contract_initial', 'O1|D2|W');
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p7') AND cheie = 'O1|D2|W') <> 2 THEN RAISE EXCEPTION 't_pozitie PRECONDITIE: doua pozitii sub aceeasi cheie'; END IF;
+END $t$;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb; n int; h int; L constant jsonb := $j$[
+    {"obiect_cod":"O1","obiect_nume":"TRONSON O1","deviz_cod":"D2","deviz_nume":"Montaj","nr":"7","cod":"W","denumire":"Dublu insumat","um":"M","cantitate":300,"pret_unitar":10,"valoare":3000}]$j$::jsonb;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  SELECT count(*) INTO n FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p7');
+  SELECT count(*) INTO h FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p7');
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p7'), 'contract_initial', NULL, NULL, NULL, 'oferta7.xlsx', repeat('e7', 32), L);
+    RAISE EXCEPTION 't_pozitie FAIL: linia insumata pe cheia cu doua pozitii stocate acceptata (randurile ar fi fost retrase)';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    IF SQLERRM NOT LIKE '%O1|D2|W%mai multe forme brute%O1/D2/W/7/M | O1/D2/W/8/M%forme_multiple%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p7'), 'contract_initial', NULL, NULL, NULL, 'oferta7.xlsx', repeat('e7', 32), jsonb_set(L, '{0,cantitate}', '100'::jsonb));
+    RAISE EXCEPTION 't_pozitie FAIL: linia doar pe pozitia 7 a cheii ambigue acceptata';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    IF SQLERRM NOT LIKE '%O1|D2|W%forme_multiple%' THEN RAISE; END IF;
+  END;
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p7')) <> n OR (SELECT count(*) FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p7')) <> h THEN
+    RAISE EXCEPTION 't_pozitie FAIL: refuzul forme_multiple a scris ceva (retragere inaintea refuzului)';
+  END IF;
+  RAISE NOTICE 't_pozitie (2/2) ok: doua pozitii stocate sub aceeasi cheie = 22023 forme_multiple (ambele forme) la linia insumata si la linia pe o singura pozitie, nimic scris / retras';
 END $t$;
 RESET ROLE;
 
