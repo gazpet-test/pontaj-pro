@@ -33,9 +33,9 @@ const ARTICOL = { obiect_cod: '0001', obiect_nume: 'TRONSON 1', deviz_cod: 'D1',
 vi.mock('./devizParser.js', () => ({ parseDeviz: async () => [{ ...ARTICOL }] }))
 import CatalogDevizPanel, { explicaEroareImport } from './CatalogDevizPanel.jsx'
 
-// mesajele BD, scrise de mână ca în migrarea 20270105a (garda proiect_articole), nu luate din cod (L25)
-const REFUZ_DELETE = { code: '42501', message: 'rest_decontat: oferta proiectului 4 e confirmata; randurile ofertei nu se mai sterg direct (importul ofertei se face din Rest de decontat)' }
-const REFUZ_INSERT = { code: '42501', message: 'rest_decontat: oferta proiectului 4 e confirmata; importul ofertei se face din Rest de decontat (fn_rest_decontat_confirma_baza), nu din catalogul vechi' }
+// mesajele BD, scrise de mână ca în migrarea 20270105a (garda proiect_articole, r5: pe obiect), nu luate din cod (L25)
+const REFUZ_DELETE = { code: '42501', message: 'rest_decontat: randurile confirmate ale bazei nu se sterg' }
+const REFUZ_INSERT = { code: '42501', message: 'rest_decontat: obiectul 0001 al proiectului 4 are oferta confirmata; importul ofertei se face din Rest de decontat (fn_rest_decontat_confirma_baza), nu din catalogul vechi' }
 const OCUPAT = { code: '55P03', message: 'rest_decontat: oferta proiectului 4 se confirma chiar acum (Rest de decontat); reincearca' }
 const RLS = { code: '42501', message: 'new row violates row-level security policy for table "proiect_articole"' }
 
@@ -50,7 +50,7 @@ const numeDom = t => (JSDOM ? t : `${t} — ${MOTIV_SARIT}`)
 describe('explicaEroareImport: refuzul BD ajunge în clar la utilizator', () => {
   it('refuzul gărzii (oferta confirmată) → mesaj clar + mesajul BD; nu se continuă', () => {
     const m = explicaEroareImport(REFUZ_DELETE, 'Eroare import')
-    expect(m).toMatch(/^Eroare import refuzat: oferta acestui proiect e confirmată în „Rest de decontat”/)
+    expect(m).toMatch(/^Eroare import refuzat: oferta acestui proiect \(cel puțin un obiect al ei\) e confirmată în „Rest de decontat”/)
     expect(m).toContain('Nimic nu s-a schimbat')
     expect(m).toContain(REFUZ_DELETE.message)
   })
@@ -102,7 +102,7 @@ dom(numeDom('CatalogDevizPanel: importul ofertei față de refuzurile BD'), () =
     expect(toast).toHaveBeenCalledTimes(1)
     const [mesaj, tip] = toast.mock.calls[0]
     expect(tip).toBe('error')
-    expect(mesaj).toMatch(/oferta acestui proiect e confirmată în „Rest de decontat”/)
+    expect(mesaj).toMatch(/oferta acestui proiect \(cel puțin un obiect al ei\) e confirmată în „Rest de decontat”/)
     expect(mesaj).toContain(REFUZ_DELETE.message)
   })
   it('INSERT refuzat după un DELETE acceptat → mesajul BD în clar, fără toast de succes', async () => {
@@ -133,9 +133,9 @@ dom(numeDom('CatalogDevizPanel: importul ofertei față de refuzurile BD'), () =
     await importa(1)
     expect(ops()).toEqual(['select', 'delete'])
     expect(toast).toHaveBeenCalledTimes(1)
-    expect(toast.mock.calls[0][0]).toMatch(/^Eroare import act refuzat: oferta acestui proiect e confirmată/)
+    expect(toast.mock.calls[0][0]).toMatch(/^Eroare import act refuzat: oferta acestui proiect \(cel puțin un obiect al ei\) e confirmată/)
   })
-  it('rândurile retrase (activ = false) nu se afișează; oferta confirmată e etichetată', async () => {
+  it('rândurile retrase de server (activ = false) nu se afișează; oferta confirmată e etichetată', async () => {
     st.articole = [
       { id: 1, proiect_id: 4, obiect_cod: '0001', obiect_nume: 'TRONSON 1', deviz_cod: 'D1', nr: '1', cod: 'A100', denumire: 'vechi retras', um: 'M', cantitate: 90, valoare: 9000, sursa: 'contract_initial', activ: false, confirmat_la: null },
       { id: 2, proiect_id: 4, obiect_cod: '0001', obiect_nume: 'TRONSON 1', deviz_cod: 'D1', nr: '1', cod: 'A100', denumire: 'confirmat', um: 'M', cantitate: 100, valoare: 10000, sursa: 'contract_initial', activ: true, confirmat_la: '2026-11-21T10:00:00Z' },

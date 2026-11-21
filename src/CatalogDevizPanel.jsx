@@ -14,14 +14,15 @@ const G = {
 }
 const fmtLei = (v) => v == null ? '—' : Number(v).toLocaleString('ro-RO', { maximumFractionDigits: 0 }) + ' lei'
 
-// Refuzurile bazei de date (migrarea 20270105a, „Rest de decontat”) ajung în clar la utilizator: după ce oferta unui proiect e CONFIRMATĂ în
-// „Rest de decontat”, catalogul vechi nu mai poate scrie / șterge rândurile ofertei (42501, mesajul BD începe cu „rest_decontat:”); 55P03 = oferta
-// se confirmă chiar acum (reîncearcă). Orice altă eroare rămâne cum vine (RLS, rețea). Exportat pentru teste.
+// Refuzurile bazei de date (migrarea 20270105a, „Rest de decontat”) ajung în clar la utilizator: după ce oferta unui OBIECT al proiectului e
+// CONFIRMATĂ în „Rest de decontat”, catalogul vechi nu mai poate scrie / șterge rândurile ofertei acelui obiect (42501, mesajul BD începe cu
+// „rest_decontat:”); importul de aici înlocuiește toată oferta proiectului, deci e refuzat de la primul obiect confirmat. 55P03 = oferta se confirmă
+// chiar acum (reîncearcă). Orice altă eroare rămâne cum vine (RLS, rețea). Exportat pentru teste.
 export function explicaEroareImport(e, ce) {
   const m = e?.message || String(e)
   if (/rest_decontat/.test(m)) {
     if (e?.code === '55P03') return `${ce}: oferta acestui proiect se confirmă chiar acum în „Rest de decontat” — reîncearcă peste câteva secunde. (${m})`
-    return `${ce} refuzat: oferta acestui proiect e confirmată în „Rest de decontat”; importul ofertei (și al actelor adiționale) se face de acolo, nu din catalog. Nimic nu s-a schimbat. (${m})`
+    return `${ce} refuzat: oferta acestui proiect (cel puțin un obiect al ei) e confirmată în „Rest de decontat”; importul ofertei (și al actelor adiționale) se face de acolo, nu din catalog. Nimic nu s-a schimbat. (${m})`
   }
   return `${ce}: ${m}`
 }
@@ -36,7 +37,8 @@ export default function CatalogDevizPanel({ proiectId, showToast }) {
     setLoading(true)
     const { data } = await supabase.from('proiect_articole').select('*')
       .eq('proiect_id', proiectId).order('obiect_cod').order('deviz_cod').order('nr')
-    // rândurile RETRASE (activ = false, coloana există doar după migrarea 20270105a: înainte e undefined) sunt istoric, nu catalogul curent
+    // rândurile RETRASE de server (activ = false, coloana există doar după migrarea 20270105a: înainte e undefined) nu sunt catalogul curent;
+    // rândurile înlocuite la confirmarea ofertei nu mai sunt în tabel (stau în proiect_articole_istoric), deci nu ajung aici
     setArticole((data || []).filter(a => a.activ !== false))
     setLoading(false)
   }, [proiectId])
@@ -107,7 +109,8 @@ export default function CatalogDevizPanel({ proiectId, showToast }) {
 
   const totalVal = useMemo(() => articole.reduce((s, a) => s + (a.valoare || 0), 0), [articole])
   const acte = useMemo(() => [...new Set(articole.filter(a => a.sursa === 'act_aditional' && a.act_nr).map(a => a.act_nr))].sort(), [articole])
-  // oferta confirmată în „Rest de decontat” (rânduri cu confirmat_la): catalogul o arată, dar n-o mai poate rescrie (BD refuză)
+  // oferta confirmată în „Rest de decontat” (rânduri contract_initial cu confirmat_la, pe cel puțin un obiect): catalogul o arată, dar n-o mai poate
+  // rescrie (BD refuză importul care ar atinge obiectele confirmate)
   const ofertaConfirmata = useMemo(() => articole.some(a => a.sursa === 'contract_initial' && a.confirmat_la), [articole])
 
   return (

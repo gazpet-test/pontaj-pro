@@ -19,16 +19,25 @@
 //    rândul neconfirmat, lipsurile fără „rand_neautorizat”. r4 (review #1158, P1 r3: reimportul vechi dubla baza confirmată — stările ofertei):
 //    garda primește oferta veche pe un proiect confirmat (INSERT / UPDATE / reparentare), doar la INSERT, lasă ștergerea, nu ia lock-ul proiectului;
 //    RPC-ul cumulează (rândurile vechi nu se retrag) / acceptă a doua ofertă; calculul numără rândurile neconfirmate pe proiectul confirmat;
-//    lipsurile nu declară; predicatul stării cere rândul confirmat ACTIV. Mutanții STATICI (reverificarea dreptului scoasă după lock; garda fără
-//    advisory / cu advisory blocant) sunt prinși de verificările pe text din 0.
+//    lipsurile nu declară; predicatul stării cere rândul confirmat ACTIV. r5 (review #1158, 2 × P1 r4: regula pe proiect retrăgea obiectele neimportate
+//    și lăsa rândurile retrase vizibile consumatorilor vechi): RPC-ul retrage toate obiectele proiectului, nu doar cele importate; RPC-ul refuză (23505)
+//    orice proiect cu un obiect confirmat (confirmarea târzie a unui obiect vechi); re-importul unui obiect confirmat fără „înlocuiește” acceptat;
+//    rândurile înlocuite rămân în proiect_articole cu activ = false (cititorii vechi le văd: 568 în loc de 284); garda / calculul / lipsurile pe
+//    proiect în loc de obiect; predicatul stării ignoră istoricul (obiectul scos de server se redeschide); lipsurile nu declară obiectele vechi.
+//    Mutanții STATICI (reverificarea dreptului scoasă după lock; garda fără advisory / cu advisory blocant) sunt prinși de verificările pe text din 0.
 // 5. Migrarea B peste A: dry-run B; mutanți B (MP fără ofertă acceptat, owner fără motiv acceptat, fără garda pe coloane, marcaj NULL acceptat,
 //    garda doar pe UPDATE — INSERT „configurat” acceptat); revenirea B. Postcondițiile B = secțiunea „4.” (r2: markerul greșit din r1 ascundea
 //    mutanții B neaplicați).
 // 6. Revenirile: refuzuri (fără marcaj, cu date, amprentă schimbată, B aplicată peste A), aplicare → revenire → reaplicare, starea de dinainte.
-// 7. Trecerea (a) -> (b) pe un proiect ca proiectul 4 de pe producție: 284 rânduri contract_initial SINTETICE scrise pe calea veche înaintea
-//    migrării (coduri repetate în același deviz → nr în cheie), baza = cele 284; calea veche încă merge (starea (a)); confirmarea ofertei prin RPC cu
-//    aceleași 284 linii → inlocuite = 284, baza IDENTICĂ (fără dublare), 284 active confirmate + 284 retrase; apoi reimportul vechi e refuzat
-//    (DELETE / INSERT / UPDATE → 42501, mesajul „Rest de decontat”), baza neschimbată; revenirea refuză (date confirmate).
+// 7. Trecerea (a) -> (b) pe un proiect ca proiectul 4 de pe producție: 284 rânduri contract_initial SINTETICE (4 obiecte × 3 devize) scrise pe calea
+//    veche înaintea migrării (coduri repetate în același deviz → nr în cheie), baza = cele 284; calea veche încă merge; CITITORII VECHI ai tabelului
+//    (ActivitatiProiectPanel / verificariProiect, CatalogDevizPanel, 20261208a cu predicatul luat din textul migrării, DevizVsExecutatTab, 20270105b,
+//    fn_rest_decontat_are_oferta) înregistrați ÎNAINTE; import PARȚIAL (doar obiectul 0001, 71 linii) → 71 inserate / 71 mutate în istoric, obiectele
+//    0002–0004 neatinse (baza cu valoarea veche, declarate 'oferta_neconfirmata'), cititorii vechi identici pe ele; confirmarea restului (213 linii, fără
+//    „înlocuiește”) → 284 confirmate, 0 rânduri retrase în tabel, baza IDENTICĂ (284 chei, aceeași valoare, nu dublă), TOȚI cititorii vechi EXACT ca
+//    înainte (284 → 284); re-importul lui 0001 fără „înlocuiește” = 23505, cu „înlocuiește” (aceleași linii) = cititorii identici; reimportul vechi refuzat
+//    (DELETE / INSERT / UPDATE → 42501, mesajul „Rest de decontat”); mutantul comportamental „rândurile retrase rămân cu activ = false” (textul RPC-ului
+//    r4) face cititorii să vadă 568; revenirea refuză (date confirmate).
 // Rulare (din rădăcina repo-ului; cere bash + python3 în PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_executie_rest_decontat_local.mjs
 //   (--scrie-obiecte rescrie listele revizuite L15 din manifestele generate; --amprente tipărește constantele AMPRENTA calculate)
 import { PGlite } from '@electric-sql/pglite'
@@ -139,7 +148,8 @@ async function dryrun(db, text) {
 const BLOCURI_A = ['t_garda_proaspata ok', 't_fara_baza ok', 'oferta ok', 't_negative_peste_oferta ok', 't_um ok', 't_dublare_situatie ok', 't_aa_leaga_note ok',
   't_surse_autorizate (1/2) ok', 't_surse_autorizate (2/2) ok', 't_coduri_repetate ok', 't_ultimul_act ok', 't_drept_restrans (1/2) ok', 't_drept_restrans (2/2) ok',
   't_drept_sef_santier (1/3) ok', 't_drept_sef_santier (2/3) ok', 't_drept_sef_santier (3/3) ok',
-  't_oferta_confirmata (1/5) ok', 't_oferta_confirmata (2/5) ok', 't_oferta_confirmata (3/5) ok', 't_oferta_confirmata (4/5) ok', 't_oferta_confirmata (5/5) ok', 't_rand_orfan ok']
+  't_oferta_confirmata (1/7) ok', 't_oferta_confirmata (2/7) ok', 't_oferta_confirmata (3/7) ok', 't_oferta_confirmata (4/7) ok', 't_oferta_confirmata (5/7) ok',
+  't_oferta_confirmata (6/7) ok', 't_oferta_confirmata (7/7) ok', 't_rand_orfan ok']
 const BLOCURI_B = ['t_poarta_garda_proaspata ok', 't_poarta_mp ok', 't_poarta_owner ok', 't_poarta_cu_oferta ok', 't_poarta_direct ok']
 async function verificaDry(db, text, blocuri) {
   try {
@@ -193,8 +203,8 @@ function lockGarda(text) {
   const i = text.indexOf('CREATE FUNCTION public.fn_rest_decontat_articole_garda(')
   if (i < 0) return 'garda lipsește'
   const corp = text.slice(i, text.indexOf('$f$;', i))
-  const l = corp.indexOf(CHEIA_GARDA), c = corp.indexOf('public.fn_rest_decontat_oferta_confirmata(v_p)')
-  if (c < 0) return 'garda nu verifică starea ofertei'
+  const l = corp.indexOf(CHEIA_GARDA), c = corp.indexOf('public.fn_rest_decontat_obiect_confirmat(NEW.proiect_id::bigint, NEW.obiect_cod::text)')
+  if (c < 0) return 'garda nu verifică starea ofertei (pe obiect)'
   if (l < 0) return 'garda nu ia advisory-ul proiectului înaintea verificării stării (cursa cu RPC-ul)'
   if (c < l) return 'garda verifică starea ofertei ÎNAINTEA lock-ului'
   if (/[^_]pg_advisory_xact_lock\(/.test(corp)) return 'garda AȘTEAPTĂ advisory-ul (deadlock cu RPC-ul)'
@@ -378,16 +388,38 @@ if (!DOAR || DOAR === '4') {
     ['CHECK-ul fără predicatul sursei (serverul scrie rândul orfan / neconfirmat)', [[`    AND (act_aditional_id IS NULL OR sursa = 'act_aditional') AND (nota_id IS NULL OR act_aditional_id IS NULL)\n    AND public.fn_rest_decontat_sursa_autorizata(sursa, nota_id, act_aditional_id, confirmat_la));`, `    AND (act_aditional_id IS NULL OR sursa = 'act_aditional') AND (nota_id IS NULL OR act_aditional_id IS NULL));`]]],
     ['calculul numără rândul AA / NR / NCS neconfirmat sau orfan', [[`       AND public.fn_rest_decontat_sursa_autorizata(a.sursa::text, a.nota_id, a.act_aditional_id, a.confirmat_la)\n`, '']]],
     ['lipsurile nu declară rândurile neautorizate', [[`   WHERE NOT public.fn_rest_decontat_sursa_autorizata(a.sursa::text, a.nota_id, a.act_aditional_id, a.confirmat_la)`, `   WHERE false`]]],
-    // r4 (review #1158, P1 r3: reimportul vechi dubla baza confirmată — stările ofertei)
-    ['garda primește oferta veche pe un proiect cu oferta confirmată (INSERT / UPDATE / reparentare direct)', [[`        IF public.fn_rest_decontat_oferta_confirmata(v_p) THEN`, `        IF false THEN`]]],
-    ['garda refuză oferta veche pe proiectul confirmat doar la INSERT (UPDATE / reparentarea trec)', [[`    IF NEW.sursa = 'contract_initial' OR (TG_OP = 'UPDATE' AND OLD.sursa = 'contract_initial') THEN`, `    IF TG_OP = 'INSERT' AND NEW.sursa = 'contract_initial' THEN`]]],
-    ['garda lasă ștergerea directă a rândurilor ofertei pe un proiect confirmat', [[`    IF OLD.sursa = 'contract_initial' AND (v_rpc OR v_server) IS NOT TRUE AND public.fn_rest_decontat_oferta_confirmata(OLD.proiect_id::bigint) THEN`, `    IF false THEN`]]],
+    // r4 (review #1158, P1 r3: reimportul vechi dubla baza confirmată — stările ofertei), rescriși pe obiect în r5
+    ['garda primește oferta veche pe un obiect cu oferta confirmată (INSERT / reparentare direct)', [[`      IF NEW.sursa = 'contract_initial' AND public.fn_rest_decontat_obiect_confirmat(NEW.proiect_id::bigint, NEW.obiect_cod::text) THEN`, `      IF false THEN`]]],
+    ['garda refuză oferta veche pe obiectul confirmat doar la INSERT (UPDATE-ul rândului vechi al obiectului trece)', [[`      IF TG_OP = 'UPDATE' AND OLD.sursa = 'contract_initial' AND public.fn_rest_decontat_obiect_confirmat(OLD.proiect_id::bigint, OLD.obiect_cod::text) THEN`, `      IF false THEN`]]],
+    ['garda lasă ștergerea directă a rândurilor ofertei pe un obiect confirmat', [[`    IF OLD.sursa = 'contract_initial' AND (v_rpc OR v_server) IS NOT TRUE AND public.fn_rest_decontat_obiect_confirmat(OLD.proiect_id::bigint, OLD.obiect_cod::text) THEN`, `    IF false THEN`]]],
     ['garda nu ia advisory-ul proiectului înaintea verificării stării (cursa import vechi vs RPC; prins și static)', [[`        IF NOT pg_try_advisory_xact_lock(hashtextextended('gazpet.rest_decontat:' || v_p::text, 0)) THEN\n          RAISE EXCEPTION 'rest_decontat: oferta proiectului % se confirma chiar acum (Rest de decontat); reincearca' , v_p USING ERRCODE = '55P03';\n        END IF;\n`, '']]],
-    ['RPC-ul cumulează: rândurile vechi neconfirmate nu se retrag la confirmarea ofertei', [[`    UPDATE public.proiect_articole a SET activ = false\n     WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial' AND a.confirmat_la IS NULL AND a.activ;\n    GET DIAGNOSTICS v_inlocuite = ROW_COUNT;\n`, `    v_inlocuite := 0;\n`]]],
-    ['RPC-ul acceptă a doua ofertă pe un proiect cu oferta confirmată', [[`    IF public.fn_rest_decontat_oferta_confirmata(p_proiect) THEN`, `    IF false THEN`]]],
-    ['calculul numără rândurile contract_initial neconfirmate pe un proiect cu oferta confirmată', [[`\n       AND (a.sursa <> 'contract_initial' OR a.confirmat_la IS NOT NULL OR NOT public.fn_rest_decontat_oferta_confirmata(p_proiect))),`, `\n       ),`]]],
-    ['lipsurile nu declară oferta veche neconfirmată pe un proiect confirmat', [[`   WHERE public.fn_rest_decontat_oferta_confirmata(pr.id)\n   GROUP BY pr.id\n`, `   WHERE false\n   GROUP BY pr.id\n`]]],
-    ['predicatul stării cere rândul confirmat ACTIV (oferta confirmată retrasă = calea veche redeschisă)', [[`    AND EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial' AND a.confirmat_la IS NOT NULL)`, `    AND EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial' AND a.confirmat_la IS NOT NULL AND a.activ)`]]],
+    ['RPC-ul cumulează: rândurile vechi ale obiectelor importate nu se retrag la confirmarea ofertei', [[`       WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial'\n         AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = ANY (v_obiecte)\n       RETURNING a.*),`, `       WHERE false\n       RETURNING a.*),`]]],
+    ['calculul numără rândurile contract_initial neconfirmate pe un obiect cu oferta confirmată', [[`\n       AND (a.sursa <> 'contract_initial' OR a.confirmat_la IS NOT NULL OR NOT public.fn_rest_decontat_obiect_confirmat(p_proiect, a.obiect_cod::text))),`, `\n       ),`]]],
+    ['lipsurile nu declară oferta veche neconfirmată pe un obiect confirmat', [[`   WHERE public.fn_rest_decontat_obiect_confirmat(pr.id, a.obiect_cod::text)\n   GROUP BY pr.id, public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL)\n  UNION ALL`, `   WHERE false\n   GROUP BY pr.id, public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL)\n  UNION ALL`]]],
+    ['predicatul stării cere rândul confirmat ACTIV (oferta confirmată retrasă = calea veche redeschisă)', [[`                  WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial' AND a.confirmat_la IS NOT NULL\n                    AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL)`, `                  WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial' AND a.confirmat_la IS NOT NULL AND a.activ\n                    AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL)`]]],
+    // r5 (review #1158, 2 × P1 r4: starea pe OBIECT, obiectele neimportate neatinse, rândurile înlocuite în istoric — nu în tabel)
+    ['RPC-ul retrage TOATE obiectele proiectului, nu doar cele importate (P1 r4: O2 dispare la importul lui O1)', [[`       WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial'\n         AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = ANY (v_obiecte)\n       RETURNING a.*),`, `       WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial'\n       RETURNING a.*),`]]],
+    ['RPC-ul refuză (23505) orice obiect al unui proiect cu un obiect confirmat (regula pe proiect din r4: 0002 nu se mai poate confirma târziu)', [[
+      `           coalesce(array_agg(z.k ORDER BY z.k) FILTER (WHERE public.fn_rest_decontat_obiect_confirmat(p_proiect, z.o)), ARRAY[]::text[])`,
+      `           CASE WHEN EXISTS (SELECT 1 FROM public.proiect_articole q WHERE q.proiect_id::bigint = p_proiect AND q.sursa = 'contract_initial' AND q.confirmat_la IS NOT NULL) THEN coalesce(array_agg(z.k ORDER BY z.k), ARRAY[]::text[]) ELSE ARRAY[]::text[] END`]]],
+    ['re-importul unui obiect confirmat acceptat FĂRĂ „inlocuieste”', [[`    IF cardinality(v_conf) > 0 AND NOT p_inlocuieste THEN`, `    IF false THEN`]]],
+    ['„inlocuieste” acceptat fără niciun obiect confirmat în document', [[`    IF p_inlocuieste AND cardinality(v_conf) = 0 THEN`, `    IF false THEN`]]],
+    ['„inlocuieste” acceptat pe devizul unui act / al unei note', [[`  ELSIF p_inlocuieste THEN\n    RAISE EXCEPTION 'rest_decontat: „inlocuieste” e doar pentru oferta (contract_initial); devizul unui act / al unei note se inlocuieste printr-o decizie separata' USING ERRCODE = '22023';\n`, '']]],
+    ['rândurile înlocuite rămân în proiect_articole cu activ = false (textul RPC-ului r4): cititorii vechi văd și rândurile retrase', [[
+      `    WITH mut AS (\n      DELETE FROM public.proiect_articole a\n       WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial'\n         AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = ANY (v_obiecte)\n       RETURNING a.*),`,
+      `    WITH mut AS (\n      UPDATE public.proiect_articole a SET activ = false\n       WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial' AND a.activ\n         AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = ANY (v_obiecte)\n       RETURNING a.*),`],
+      [`    IF EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial'\n                 AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = ANY (v_obiecte)) THEN`, `    IF false THEN`]]],
+    ['garda verifică starea pe PROIECT, nu pe obiect (un obiect nou / vechi al unui proiect cu alt obiect confirmat e refuzat)', [[
+      `      IF NEW.sursa = 'contract_initial' AND public.fn_rest_decontat_obiect_confirmat(NEW.proiect_id::bigint, NEW.obiect_cod::text) THEN`,
+      `      IF NEW.sursa = 'contract_initial' AND EXISTS (SELECT 1 FROM public.proiect_articole q WHERE q.proiect_id::bigint = NEW.proiect_id::bigint AND q.sursa = 'contract_initial' AND q.confirmat_la IS NOT NULL) THEN`]]],
+    ['calculul ignoră rândurile vechi ale unui obiect NEIMPORTAT când alt obiect al proiectului e confirmat (regula pe proiect)', [[
+      `OR NOT public.fn_rest_decontat_obiect_confirmat(p_proiect, a.obiect_cod::text))),`,
+      `OR NOT EXISTS (SELECT 1 FROM public.proiect_articole q WHERE q.proiect_id::bigint = p_proiect AND q.sursa = 'contract_initial' AND q.confirmat_la IS NOT NULL))),`]]],
+    ['lipsurile nu declară obiectele încă vechi (oferta_neconfirmata)', [[`   WHERE NOT public.fn_rest_decontat_obiect_confirmat(pr.id, a.obiect_cod::text)\n   GROUP BY pr.id, public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL)\n$f$;`, `   WHERE false\n   GROUP BY pr.id, public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL)\n$f$;`]]],
+    ['predicatul stării ignoră istoricul (obiectul scos de server se redeschide pe calea veche)', [[`         OR EXISTS (SELECT 1 FROM public.proiect_articole_istoric h\n                  WHERE h.proiect_id = p_proiect AND h.sursa = 'contract_initial' AND h.confirmat_la IS NOT NULL\n                    AND h.obiect_k = public.fn_rest_decontat_cheie(p_obiect, NULL, NULL, NULL)))`, `         )`]]],
+    ['istoricul se scrie fără motivul / amprenta fișierului nou (inlocuire_oferta nedeosebit de confirmare_oferta)', [[`             CASE WHEN m.confirmat_la IS NULL THEN 'confirmare_oferta' ELSE 'inlocuire_oferta' END, p_amprenta`, `             'confirmare_oferta', p_amprenta`]]],
+    // (garda istoricului cu marcaj NULL NU e observabilă de client: authenticated n-are INSERT / UPDATE / DELETE pe proiect_articole_istoric —
+    //  refuzul de privilegiu vine înaintea trigger-ului; dry-run-ul verifică privilegiile prin postcondiții, nu printr-un mutant al gărzii)
     ['„înainte” la lista completă = momentul încărcării, nu data documentului', [[`AND (r1.data_doc, r1.moment, r1.id) < (lc.data_doc, lc.moment, lc.id))),`, `AND (r1.moment, r1.id) < (lc.moment, lc.id))),`]]],
     ['prețul = ultimul document încărcat, nu ultimul act (după dată)', [[`(array_agg(u.pret_unitar ORDER BY u.data_doc DESC, u.moment DESC, u.id DESC) FILTER (WHERE u.pret_unitar IS NOT NULL))[1],`, `(array_agg(u.pret_unitar ORDER BY u.moment DESC, u.id DESC) FILTER (WHERE u.pret_unitar IS NOT NULL))[1],`]]],
     // r1
@@ -465,6 +497,15 @@ if (!DOAR || DOAR === '6') {
   // cu date confirmate: refuz, nimic schimbat
   await DB.exec(`INSERT INTO public.profiles (id, is_owner) VALUES ('f0000000-0000-4000-8000-00000000009a', true)`)
   const c = await caRol(DB, 'authenticated', 'f0000000-0000-4000-8000-00000000009a', `SELECT public.fn_rest_decontat_confirma_baza(900, 'act_aditional', (SELECT id FROM public.executie_acte_aditionale WHERE proiect_id = 900 LIMIT 1), NULL, 'diferente', 'x', repeat('ab', 32), '[{"obiect_cod":"0001","deviz_cod":"D02","cod":"GC 01","denumire":"x","um":"M","cantitate":1,"valoare":80}]'::jsonb) AS v`)
+  // r5: istoricul ofertei cu rânduri = refuz al revenirii (date scrise de calea nouă); proba pe o bază separată, cu istoricul scris de server
+  {
+    const dbh = await bazaNoua()
+    await aplicaLivrare(dbh, A, MIG_A, F(A).ob)
+    await dbh.exec(`INSERT INTO public.proiect_articole_istoric (rand_id, proiect_id, obiect_k, sursa, confirmat_la, rand, retras_de, motiv) VALUES (1, 900, '0001||', 'contract_initial', NULL, '{"id":1}'::jsonb, 'f0000000-0000-4000-8000-00000000009a', 'confirmare_oferta')`)
+    const eh = await eroare(revinoA(dbh))
+    ok(/istoricul ofertei|date scrise/.test(eh || ''), `revenirea A cu rânduri în istoricul ofertei = refuz: ${(eh || 'TRECE').slice(0, 120)}`)
+    ok(Number((await q1(dbh, 'SELECT count(*)::int AS n FROM public.proiect_articole_istoric')).n) === 1 && (await q1(dbh, `SELECT to_regclass('public.fn_rest_decontat_drept') IS NOT NULL OR to_regprocedure('public.fn_rest_decontat_drept(bigint, text)') IS NOT NULL AS v`)).v === true, 'după refuz: istoricul și funcțiile au rămas')
+  }
   if (c.err) {
     await DB.exec(`INSERT INTO public.executie_acte_aditionale (proiect_id, numar_act) VALUES (900, 'AA-R')`)
   }
@@ -481,6 +522,9 @@ if (!DOAR || DOAR === '6') {
   await db.exec('CREATE INDEX x_rd ON public.executie_sl_detaliu (nr_situatie)')
   ok(/AMPRENTA obiectelor migrarii/.test(await eroare(revinoA(db)) || ''), 'un index în plus pe un tabel nou = refuz al revenirii')
   await db.exec('DROP INDEX public.x_rd')
+  await db.exec('CREATE INDEX x_rdh ON public.proiect_articole_istoric (retras_la)')
+  ok(/AMPRENTA obiectelor migrarii/.test(await eroare(revinoA(db)) || ''), 'un index în plus pe istoricul ofertei = refuz al revenirii (istoricul e în amprentă)')
+  await db.exec('DROP INDEX public.x_rdh')
   await db.exec('GRANT EXECUTE ON FUNCTION public.fn_rest_decontat_drept(bigint, text) TO anon')
   ok(/AMPRENTA obiectelor migrarii/.test(await eroare(revinoA(db)) || ''), 'drepturile unei funcții schimbate = refuz al revenirii')
   await db.exec('REVOKE EXECUTE ON FUNCTION public.fn_rest_decontat_drept(bigint, text) FROM anon')
@@ -519,55 +563,178 @@ const asteptatBaza = L => {
   return L.map(l => ({ cheie: cheieAsteptata(l, grup.get(`${l.obiect_cod}|${l.deviz_cod}|${l.cod}`) > 1), c: String(l.cantitate), v: String(l.valoare), randuri: 1 }))
     .sort((a, b) => (a.cheie < b.cheie ? -1 : a.cheie > b.cheie ? 1 : 0))
 }
+const suma = xs => String(Math.round(xs.reduce((s, x) => s + x, 0) * 100) / 100)
+// CITITORII VECHI ai proiect_articole (r5, review #1158 P1 r4), cu filtrele EXACTE din cod, pe proiectul 904, grupate pe obiect (ca să se vadă și
+// obiectele neimportate): ActivitatiProiectPanel.jsx:53 / lib/verificariProiect.js:67 (sursa <> 'extras_materiale'; cod, cantitate), CatalogDevizPanel.jsx:37
+// (select('*') pe proiect, apoi activ !== false în JS), 20261208a fn_executie_tinte_calcul (predicatul JOIN luat VERBATIM din textul migrării, cu v_p = 904,
+// obiectele u și prefixele a ca în calcul), DevizVsExecutatTab.jsx:222 (id, obiect_cod, obiect_nume cu obiect_cod nenul → obiectele distincte),
+// MaterialeProiectPanel.jsx:29 (sursa = 'extras_materiale'), 20270105b (contract_initial AND activ), fn_rest_decontat_are_oferta.
+// Rezultatul fiecăruia e un text; textele se compară înainte / după confirmare și cu valorile așteptate calculate din L (L25).
+const M1208 = citeste('supabase/migrations/20261208a_executie_devize_tinte.sql')
+const predicatTinte = (() => {
+  const i = M1208.indexOf('JOIN public.proiect_articole art ON ')
+  const j = M1208.indexOf('CROSS JOIN LATERAL', i)
+  if (i < 0 || j < 0) return null
+  return M1208.slice(i + 'JOIN public.proiect_articole art ON '.length, j).replace(/\s+/g, ' ').trim().split('v_p').join('904')
+})()
+const PREFIXE = ['TSA', 'TSC', 'TSD', 'GC', 'IZ', 'RPCT', 'M1L05', 'SUD', 'TF', 'CZ']
+const CITITORI = {
+  activitati: `SELECT obiect_cod AS k, count(*)::int AS n, coalesce(sum(cantitate), 0)::float8::text AS s FROM (SELECT cod, um, cantitate, sursa, obiect_cod FROM public.proiect_articole WHERE proiect_id = 904 AND sursa <> 'extras_materiale') x GROUP BY 1 ORDER BY 1`,
+  catalog: `SELECT obiect_cod AS k, count(*)::int AS n, coalesce(sum(valoare), 0)::float8::text AS s FROM (SELECT * FROM public.proiect_articole WHERE proiect_id = 904 ORDER BY obiect_cod, deviz_cod, nr) x WHERE x.activ IS DISTINCT FROM false GROUP BY 1 ORDER BY 1`,
+  tinte: predicatTinte && `WITH u(obiect_cod) AS (VALUES ('0001'), ('0002'), ('0003'), ('0004')),
+       a(baza_deviz, prefixe) AS (VALUES ('initiala', ARRAY[${PREFIXE.map(p => `'${p}'`).join(', ')}]), ('revizuita', ARRAY['TSA', 'GC']))
+     SELECT u.obiect_cod || '/' || a.baza_deviz AS k, count(*)::int AS n, coalesce(sum(art.cantitate), 0)::float8::text AS s
+       FROM u JOIN a ON true JOIN public.proiect_articole art ON ${predicatTinte} GROUP BY 1 ORDER BY 1`,
+  obiecte: `SELECT 'toate' AS k, count(DISTINCT obiect_cod)::int AS n, string_agg(DISTINCT obiect_cod, ',') AS s FROM (SELECT id, obiect_cod, obiect_nume FROM public.proiect_articole WHERE proiect_id = 904 AND obiect_cod IS NOT NULL ORDER BY id) x`,
+  materiale: `SELECT 'extras' AS k, count(*)::int AS n, coalesce(sum(cantitate), 0)::float8::text AS s FROM (SELECT * FROM public.proiect_articole WHERE proiect_id = 904 AND sursa = 'extras_materiale' ORDER BY nr) x`,
+  configurare: `SELECT 'contract_initial activ' AS k, count(*)::int AS n, '-' AS s FROM public.proiect_articole a WHERE a.proiect_id::bigint = 904 AND a.sursa = 'contract_initial' AND a.activ`,
+  are_oferta: `SELECT 'are_oferta' AS k, CASE WHEN public.fn_rest_decontat_are_oferta(904) THEN 1 ELSE 0 END AS n, '-' AS s`,
+}
+async function cititori(db, uid) {
+  const r = {}
+  for (const [nume, sql] of Object.entries(CITITORI)) {
+    if (!sql) { r[nume] = 'PREDICAT 20261208a NEGASIT'; continue }
+    const x = await caRol(db, 'authenticated', uid, sql)
+    r[nume] = x.err ? `EROARE ${x.err} ${x.msg}` : x.rows.map(y => `${y.k}=${y.n}/${y.s}`).join('; ')
+  }
+  return r
+}
+const asteptatCititori = (L, extras) => {
+  const ob = [...new Set(L.map(l => l.obiect_cod))].sort()
+  const pe = f => ob.map(o => `${o}=${L.filter(l => l.obiect_cod === o).length}/${suma(L.filter(l => l.obiect_cod === o).map(f))}`).join('; ')
+  const cuPrefix = (o, px) => L.filter(l => l.obiect_cod === o && px.some(p => l.cod.toUpperCase().startsWith(p)))
+  return {
+    activitati: pe(l => l.cantitate),
+    catalog: pe(l => l.valoare) + `; null=${extras.length}/0`,   // rândurile extras_materiale (obiect_cod NULL) sunt și ele în catalogul vechi
+    tinte: ob.flatMap(o => [['initiala', PREFIXE], ['revizuita', ['TSA', 'GC']]].map(([b, px]) => `${o}/${b}=${cuPrefix(o, px).length}/${suma(cuPrefix(o, px).map(l => l.cantitate))}`)).join('; '),
+    obiecte: `toate=${ob.length}/${ob.join(',')}`,
+    materiale: `extras=${extras.length}/${suma(extras.map(e => e.cantitate))}`,
+    configurare: `contract_initial activ=${L.length}/-`,
+    are_oferta: 'are_oferta=1/-',
+  }
+}
+const liniiRpc = L => L.map(({ obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, pret_unitar, valoare }) => ({ obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, pret_unitar, valoare }))
+const EXTRAS = [{ nr: '1', cod: 'TEAVA-DN300', denumire: 'Teava DN300', um: 'M', cantitate: 1100 }, { nr: '2', cod: 'ROBINET-DN300', denumire: 'Robinet DN300', um: 'BUC', cantitate: 4 }, { nr: '3', cod: 'FLANSA-DN300', denumire: 'Flansa DN300', um: 'BUC', cantitate: 8 }]
+async function proiectSintetic(db, L) {
+  await db.exec(`INSERT INTO public.executie_proiecte (id, cod_intern, nume) VALUES (904, 'CLONA-P4', 'Proiect ca proiectul 4 (284 randuri contract_initial pe calea veche)')`)
+  await db.query(`INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, valoare, pret_unitar, sursa)
+    SELECT 904, x.obiect_cod, x.obiect_nume, x.deviz_cod, x.deviz_nume, x.nr, x.cod, x.denumire, x.um, x.cantitate, x.valoare, x.pret_unitar, 'contract_initial'
+      FROM jsonb_to_recordset($1::jsonb) AS x(obiect_cod text, obiect_nume text, deviz_cod text, deviz_nume text, nr text, cod text, denumire text, um text, cantitate numeric, valoare numeric, pret_unitar numeric)`, [JSON.stringify(L)])
+  await db.query(`INSERT INTO public.proiect_articole (proiect_id, nr, cod, denumire, um, cantitate, valoare, sursa)
+    SELECT 904, x.nr, x.cod, x.denumire, x.um, x.cantitate, 0, 'extras_materiale' FROM jsonb_to_recordset($1::jsonb) AS x(nr text, cod text, denumire text, um text, cantitate numeric)`, [JSON.stringify(EXTRAS)])
+}
 if (!DOAR || DOAR === '7') {
-  console.log('7. trecerea (a) -> (b) pe un proiect ca proiectul 4 (284 rânduri contract_initial pe calea veche), fără dublare')
+  console.log('7. trecerea (a) -> (b) pe un proiect ca proiectul 4 (284 rânduri contract_initial pe calea veche, 4 obiecte): import parțial, obiectele neimportate neatinse, cititorii vechi neschimbați, fără dublare')
   const db = await bazaNoua()
   const L = ofertaSintetica()
   const ast = asteptatBaza(L)
   const cuNr = ast.filter(x => x.cheie.includes('|#')).length
   const total = Math.round(L.reduce((s, l) => s + l.valoare, 0) * 100) / 100
-  ok(L.length === 284 && new Set(ast.map(x => x.cheie)).size === 284, `oferta sintetică: 284 rânduri, 284 chei distincte (${cuNr} cu nr în cheie), valoare ${total}`)
-  await db.exec(`INSERT INTO public.executie_proiecte (id, cod_intern, nume) VALUES (904, 'CLONA-P4', 'Proiect ca proiectul 4 (284 randuri contract_initial pe calea veche)')`)
-  await db.query(`INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, valoare, pret_unitar, sursa)
-    SELECT 904, x.obiect_cod, x.obiect_nume, x.deviz_cod, x.deviz_nume, x.nr, x.cod, x.denumire, x.um, x.cantitate, x.valoare, x.pret_unitar, 'contract_initial'
-      FROM jsonb_to_recordset($1::jsonb) AS x(obiect_cod text, obiect_nume text, deviz_cod text, deviz_nume text, nr text, cod text, denumire text, um text, cantitate numeric, valoare numeric, pret_unitar numeric)`, [JSON.stringify(L)])
+  const L1 = L.filter(l => l.obiect_cod === '0001'), LREST = L.filter(l => l.obiect_cod !== '0001')
+  ok(L.length === 284 && new Set(ast.map(x => x.cheie)).size === 284 && L1.length === 71 && LREST.length === 213, `oferta sintetică: 284 rânduri, 284 chei distincte (${cuNr} cu nr în cheie), valoare ${total}; obiectul 0001 = 71 linii, restul 213`)
+  ok(!!predicatTinte && /art\.sursa = 'contract_initial'/.test(predicatTinte), `predicatul cititorului 20261208a luat din textul migrării: ${(predicatTinte || 'NEGASIT').slice(0, 120)}…`)
+  await proiectSintetic(db, L)
   const j = await aplicaLivrare(db, A, MIG_A, F(A).ob)
-  ok(j.some(m => new RegExp(`^20270105a: randuri proiect_articole cu cheie = 289, din care cu nr in cheie = ${cuNr + 2}$`).test(m)), `NOTICE: 289 rânduri cu cheie (5 moștenite + 284), ${cuNr + 2} cu nr în cheie`)
+  ok(j.some(m => new RegExp(`^20270105a: randuri proiect_articole cu cheie = 292, din care cu nr in cheie = ${cuNr + 2}$`).test(m)), `NOTICE: 292 rânduri cu cheie (5 moștenite + 284 + 3 extras), ${cuNr + 2} cu nr în cheie`)
   const OWNER = 'f0000000-0000-4000-8000-00000000009a'
   await db.exec(`INSERT INTO public.profiles (id, is_owner) VALUES ('${OWNER}', true)`)
   const SQL_BAZA = `SELECT cheie, cantitate::text AS c, valoare::text AS v, randuri FROM public.v_executie_rest_decontat_baza WHERE proiect_id = 904 ORDER BY cheie COLLATE "C"`
-  const SQL_SUMA = `SELECT coalesce(sum(valoare), 0)::text AS s, count(*)::int AS n FROM public.v_executie_rest_decontat_baza WHERE proiect_id = 904`
-  const numar = async () => q1(db, `SELECT count(*) FILTER (WHERE activ AND confirmat_la IS NULL)::int AS vechi_active, count(*) FILTER (WHERE NOT activ AND confirmat_la IS NULL)::int AS vechi_retrase,
-    count(*) FILTER (WHERE activ AND confirmat_la IS NOT NULL)::int AS confirmate FROM public.proiect_articole WHERE proiect_id = 904 AND sursa = 'contract_initial'`)
+  const SQL_SUMA = `SELECT coalesce(sum(valoare), 0)::float8::text AS s, count(*)::int AS n FROM public.v_executie_rest_decontat_baza WHERE proiect_id = 904`
+  const numar = async () => q1(db, `SELECT count(*) FILTER (WHERE activ AND confirmat_la IS NULL)::int AS vechi_active, count(*) FILTER (WHERE NOT activ)::int AS retrase,
+    count(*) FILTER (WHERE activ AND confirmat_la IS NOT NULL)::int AS confirmate, (SELECT count(*) FROM public.proiect_articole_istoric WHERE proiect_id = 904)::int AS istoric
+    FROM public.proiect_articole WHERE proiect_id = 904 AND sursa = 'contract_initial'`)
+  const lipsuriOferta = async () => (await caRol(db, 'authenticated', OWNER, `SELECT tip || '=' || referinta AS x FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = 904 AND tip IN ('fara_oferta', 'oferta_neconfirmata', 'oferta_veche_neconfirmata') ORDER BY 1`)).rows.map(r => r.x).join('; ')
   const b0 = await caRol(db, 'authenticated', OWNER, SQL_BAZA)
-  ok(!b0.err && JSON.stringify(b0.rows) === JSON.stringify(ast), 'baza înainte (starea (a)) = cele 284 rânduri vechi, cheia cu nr pe codurile repetate: ' + (b0.msg || `${b0.rows.length} chei`))
+  ok(!b0.err && JSON.stringify(b0.rows) === JSON.stringify(ast), 'baza înainte (toate obiectele vechi) = cele 284 rânduri, cheia cu nr pe codurile repetate: ' + (b0.msg || `${b0.rows.length} chei`))
   const s0 = await caRol(db, 'authenticated', OWNER, SQL_SUMA)
   ok(!s0.err && Number(s0.rows[0].s) === total && s0.rows[0].n === 284, `valoarea bazei înainte = ${total} (284 chei): ${JSON.stringify(s0.rows?.[0] || s0.msg)}`)
-  // calea veche încă merge (starea (a)): un rând în plus, apoi șters
+  ok((await lipsuriOferta()) === ['0001', '0002', '0003', '0004'].map(o => `oferta_neconfirmata=obiect ${o}: contract_initial 71`).join('; '), 'lipsuri înainte: cele 4 obiecte vechi declarate oferta_neconfirmata (71 rânduri fiecare): ' + (await lipsuriOferta()))
+  // cititorii vechi ÎNAINTE: fiecare = valorile așteptate calculate din L (L25)
+  const AST_CIT = asteptatCititori(L, EXTRAS)
+  const c0 = await cititori(db, OWNER)
+  for (const k of Object.keys(CITITORI)) ok(c0[k] === AST_CIT[k], `cititorul vechi „${k}” înainte = așteptat din date: ${c0[k].slice(0, 150)}${c0[k] === AST_CIT[k] ? '' : ' ≠ ' + AST_CIT[k].slice(0, 150)}`)
+  // calea veche încă merge (toate obiectele vechi): un rând în plus, apoi șters
   const i1 = await caRol(db, 'authenticated', OWNER, `INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate, valoare, sursa) VALUES (904, '0001', 'D01', '99', 'PROBA', 'rand vechi in plus', 'M', 1, 10, 'contract_initial') RETURNING id`)
   const d1 = i1.err ? i1 : await caRol(db, 'authenticated', OWNER, `DELETE FROM public.proiect_articole WHERE proiect_id = 904 AND cod = 'PROBA'`)
-  ok(!i1.err && !d1.err && JSON.stringify(await numar()) === JSON.stringify({ vechi_active: 284, vechi_retrase: 0, confirmate: 0 }), 'calea veche merge încă pe proiectul în starea (a): INSERT + DELETE direct, 284 rânduri vechi active: ' + (i1.msg || d1.msg || 'ok'))
-  // trecerea (a) -> (b): RPC-ul cu aceleași 284 linii (ca fișierul F3 reîncărcat din ecranul nou)
-  const linii = L.map(({ obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, pret_unitar, valoare }) => ({ obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, pret_unitar, valoare }))
-  const c = await caRol(db, 'authenticated', OWNER, `SELECT public.fn_rest_decontat_confirma_baza(904, 'contract_initial', NULL, NULL, NULL, 'F3_proiect4.xlsx', repeat('44', 32), $1::jsonb) AS v`, [JSON.stringify(linii)])
-  ok(!c.err && c.rows[0].v.inserate === 284 && c.rows[0].v.inlocuite === 284, 'confirmarea ofertei prin RPC: inserate 284, inlocuite 284 (rândurile vechi retrase): ' + (c.msg || JSON.stringify({ inserate: c.rows?.[0]?.v?.inserate, inlocuite: c.rows?.[0]?.v?.inlocuite })))
+  ok(!i1.err && !d1.err && JSON.stringify(await numar()) === JSON.stringify({ vechi_active: 284, retrase: 0, confirmate: 0, istoric: 0 }), 'calea veche merge încă pe obiectele vechi: INSERT + DELETE direct, 284 rânduri vechi active: ' + (i1.msg || d1.msg || 'ok'))
+  // IMPORT PARȚIAL: doar obiectul 0001 (71 linii, aceleași ca cele vechi), ca fișierul F3 al unui singur obiect
+  const c = await caRol(db, 'authenticated', OWNER, `SELECT public.fn_rest_decontat_confirma_baza(904, 'contract_initial', NULL, NULL, NULL, 'F3_proiect4_ob1.xlsx', repeat('44', 32), $1::jsonb) AS v`, [JSON.stringify(liniiRpc(L1))])
+  const v1 = c.rows?.[0]?.v || {}
+  ok(!c.err && v1.inserate === 71 && v1.inlocuite === 71 && v1.inlocuite_confirmate === 0 && JSON.stringify(v1.obiecte) === '["0001||"]', 'import parțial 0001 prin RPC: inserate 71, inlocuite 71 (mutate în istoric), 0 confirmate înlocuite, obiecte ["0001||"]: ' + (c.msg || JSON.stringify({ inserate: v1.inserate, inlocuite: v1.inlocuite, inlocuite_confirmate: v1.inlocuite_confirmate, obiecte: v1.obiecte })))
+  ok(JSON.stringify(await numar()) === JSON.stringify({ vechi_active: 213, retrase: 0, confirmate: 71, istoric: 71 }), 'după importul parțial: 71 confirmate + 213 vechi active (0002–0004 NEATINSE), 0 retrase în tabel, 71 în istoric: ' + JSON.stringify(await numar()))
   const b1 = await caRol(db, 'authenticated', OWNER, SQL_BAZA)
-  ok(!b1.err && JSON.stringify(b1.rows) === JSON.stringify(ast), 'baza după confirmare IDENTICĂ cu cea dinainte (284 chei, câte 1 rând, aceleași cantități): fără dublare: ' + (b1.msg || `${b1.rows.length} chei`))
-  const s1 = await caRol(db, 'authenticated', OWNER, SQL_SUMA)
-  ok(!s1.err && Number(s1.rows[0].s) === total && s1.rows[0].n === 284, `valoarea bazei după confirmare = ${total} (nu ${total * 2}): ${JSON.stringify(s1.rows?.[0] || s1.msg)}`)
-  ok(JSON.stringify(await numar()) === JSON.stringify({ vechi_active: 0, vechi_retrase: 284, confirmate: 284 }), '284 rânduri confirmate active + 284 vechi retrase (istoric), 0 vechi active: ' + JSON.stringify(await numar()))
-  const lp = await caRol(db, 'authenticated', OWNER, `SELECT tip FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = 904 AND tip IN ('fara_oferta', 'oferta_veche_neconfirmata')`)
-  ok(!lp.err && lp.rows.length === 0, 'fără lipsuri de ofertă pe proiect după trecere: ' + (lp.msg || JSON.stringify(lp.rows)))
+  ok(!b1.err && JSON.stringify(b1.rows) === JSON.stringify(ast), 'baza după importul parțial IDENTICĂ (0001 confirmat + 0002–0004 cu valoarea veche): ' + (b1.msg || `${b1.rows.length} chei`))
+  ok((await lipsuriOferta()) === ['0002', '0003', '0004'].map(o => `oferta_neconfirmata=obiect ${o}: contract_initial 71`).join('; '), 'lipsuri după importul parțial: obiectele 0002–0004 încă vechi declarate, 0001 nu: ' + (await lipsuriOferta()))
+  const c1 = await cititori(db, OWNER)
+  for (const k of Object.keys(CITITORI)) ok(c1[k] === c0[k], `cititorul vechi „${k}” după importul parțial = înainte (0001: exact rândurile confirmate; 0002–0004: neatinse): ${c1[k].slice(0, 150)}${c1[k] === c0[k] ? '' : ' ≠ ' + c0[k].slice(0, 150)}`)
+  // calea veche pe un obiect NEIMPORTAT merge încă; pe 0001 e închisă
+  const i2 = await caRol(db, 'authenticated', OWNER, `INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate, valoare, sursa) VALUES (904, '0002', 'D01', '99', 'PROBA2', 'rand vechi pe obiect vechi', 'M', 1, 10, 'contract_initial') RETURNING id`)
+  const d2 = i2.err ? i2 : await caRol(db, 'authenticated', OWNER, `DELETE FROM public.proiect_articole WHERE proiect_id = 904 AND cod = 'PROBA2'`)
+  ok(!i2.err && !d2.err, 'calea veche merge pe obiectul neimportat 0002 după confirmarea lui 0001 (INSERT + DELETE): ' + (i2.msg || d2.msg || 'ok'))
+  const i3 = await caRol(db, 'authenticated', OWNER, `INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate, valoare, sursa) VALUES (904, '0001', 'D01', '1', 'TSA01A1', 'Articol sintetic 1', 'M', 1, 5, 'contract_initial')`)
+  ok(i3.err === '42501' && /obiectul 0001 al proiectului 904 are oferta confirmata.*Rest de decontat/.test(i3.msg || ''), 'calea veche pe obiectul confirmat 0001: refuz 42501 cu mesajul „Rest de decontat”: ' + (i3.msg || 'TRECE'))
+  // confirmarea restului (0002–0004, 213 linii) FĂRĂ „înlocuiește”: trece (nu 23505)
+  const c2 = await caRol(db, 'authenticated', OWNER, `SELECT public.fn_rest_decontat_confirma_baza(904, 'contract_initial', NULL, NULL, NULL, 'F3_proiect4_rest.xlsx', repeat('45', 32), $1::jsonb) AS v`, [JSON.stringify(liniiRpc(LREST))])
+  const v2 = c2.rows?.[0]?.v || {}
+  ok(!c2.err && v2.inserate === 213 && v2.inlocuite === 213 && v2.inlocuite_confirmate === 0 && JSON.stringify(v2.obiecte) === '["0002||","0003||","0004||"]', 'confirmarea târzie a obiectelor 0002–0004 (fără inlocuieste): inserate 213, inlocuite 213: ' + (c2.msg || JSON.stringify({ inserate: v2.inserate, inlocuite: v2.inlocuite, obiecte: v2.obiecte })))
+  ok(JSON.stringify(await numar()) === JSON.stringify({ vechi_active: 0, retrase: 0, confirmate: 284, istoric: 284 }), '284 rânduri confirmate active, 0 vechi, 0 retrase în tabel, 284 în istoric: ' + JSON.stringify(await numar()))
+  const b2 = await caRol(db, 'authenticated', OWNER, SQL_BAZA)
+  ok(!b2.err && JSON.stringify(b2.rows) === JSON.stringify(ast), 'baza după confirmarea completă IDENTICĂ cu cea dinainte (284 chei, câte 1 rând, aceleași cantități): fără dublare: ' + (b2.msg || `${b2.rows.length} chei`))
+  const s2 = await caRol(db, 'authenticated', OWNER, SQL_SUMA)
+  ok(!s2.err && Number(s2.rows[0].s) === total && s2.rows[0].n === 284, `valoarea bazei după confirmare = ${total} (nu ${total * 2}): ${JSON.stringify(s2.rows?.[0] || s2.msg)}`)
+  ok((await lipsuriOferta()) === '', 'fără lipsuri de ofertă după confirmarea completă: ' + ((await lipsuriOferta()) || 'niciuna'))
+  const c2c = await cititori(db, OWNER)
+  for (const k of Object.keys(CITITORI)) ok(c2c[k] === c0[k], `cititorul vechi „${k}” după confirmarea completă = înainte (284 → 284, aceleași valori): ${c2c[k].slice(0, 150)}${c2c[k] === c0[k] ? '' : ' ≠ ' + c0[k].slice(0, 150)}`)
+  // re-importul lui 0001: fără „înlocuiește” = 23505; cu „înlocuiește” (aceleași linii, alt fișier) = 71 confirmate înlocuite, cititorii tot identici
+  const r1 = await caRol(db, 'authenticated', OWNER, `SELECT public.fn_rest_decontat_confirma_baza(904, 'contract_initial', NULL, NULL, NULL, 'F3_proiect4_ob1_v2.xlsx', repeat('46', 32), $1::jsonb) AS v`, [JSON.stringify(liniiRpc(L1))])
+  ok(r1.err === '23505' && /obiectele 0001\|\|.*inlocuieste/.test(r1.msg || ''), 're-importul obiectului confirmat 0001 fără inlocuieste: refuz 23505: ' + (r1.msg || 'TRECE'))
+  const r2 = await caRol(db, 'authenticated', OWNER, `SELECT public.fn_rest_decontat_confirma_baza(904, 'contract_initial', NULL, NULL, NULL, 'F3_proiect4_ob1_v2.xlsx', repeat('46', 32), $1::jsonb, true) AS v`, [JSON.stringify(liniiRpc(L1))])
+  const v3 = r2.rows?.[0]?.v || {}
+  ok(!r2.err && v3.inserate === 71 && v3.inlocuite === 71 && v3.inlocuite_confirmate === 71, 're-importul lui 0001 cu inlocuieste: inserate 71, inlocuite 71, toate confirmate înlocuite: ' + (r2.msg || JSON.stringify(v3)))
+  ok(JSON.stringify(await numar()) === JSON.stringify({ vechi_active: 0, retrase: 0, confirmate: 284, istoric: 355 }), 'după înlocuire: 284 confirmate, 0 retrase în tabel, 355 în istoric (284 vechi + 71 confirmate înlocuite): ' + JSON.stringify(await numar()))
+  const h = await q1(db, `SELECT count(*) FILTER (WHERE motiv = 'inlocuire_oferta' AND confirmat_la IS NOT NULL AND obiect_k = '0001||' AND inlocuit_cu_amprenta = repeat('46', 32))::int AS inl, count(*) FILTER (WHERE motiv = 'confirmare_oferta' AND confirmat_la IS NULL)::int AS conf, count(DISTINCT obiect_k)::int AS ob FROM public.proiect_articole_istoric WHERE proiect_id = 904`)
+  ok(h.inl === 71 && h.conf === 284 && h.ob === 4, `istoricul: 71 rânduri confirmate înlocuite (motiv inlocuire_oferta, amprenta fișierului nou) + 284 vechi (confirmare_oferta), 4 obiecte: ${JSON.stringify(h)}`)
+  const c3 = await cititori(db, OWNER)
+  for (const k of Object.keys(CITITORI)) ok(c3[k] === c0[k], `cititorul vechi „${k}” după înlocuire = înainte: ${c3[k].slice(0, 150)}${c3[k] === c0[k] ? '' : ' ≠ ' + c0[k].slice(0, 150)}`)
+  const b3 = await caRol(db, 'authenticated', OWNER, SQL_BAZA)
+  ok(!b3.err && JSON.stringify(b3.rows) === JSON.stringify(ast), 'baza după înlocuire IDENTICĂ: ' + (b3.msg || `${b3.rows.length} chei`))
   // reimportul vechi (ca CatalogDevizPanel: DELETE pe toată oferta, apoi INSERT) = refuz cu mesajul clar; baza și rândurile neschimbate
   const rd = await caRol(db, 'authenticated', OWNER, `DELETE FROM public.proiect_articole WHERE proiect_id = 904 AND sursa = 'contract_initial'`)
   ok(rd.err === '42501', 'reimportul vechi după confirmare, pasul DELETE: refuz 42501: ' + (rd.msg || 'TRECE'))
-  const ri = await caRol(db, 'authenticated', OWNER, `INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate, valoare, sursa) VALUES (904, '0001', 'D01', '1', 'TSA01A1', 'Articol sintetic 1', 'M', 1, 5, 'contract_initial')`)
-  ok(ri.err === '42501' && /oferta proiectului 904 e confirmata.*Rest de decontat/.test(ri.msg || ''), 'reimportul vechi după confirmare, pasul INSERT: refuz 42501 cu mesajul „Rest de decontat”: ' + (ri.msg || 'TRECE'))
-  const ru = await caRol(db, 'authenticated', OWNER, `UPDATE public.proiect_articole SET cantitate = cantitate + 1 WHERE proiect_id = 904 AND sursa = 'contract_initial' AND confirmat_la IS NULL`)
-  ok(ru.err === '42501', 'modificarea directă a rândurilor vechi retrase: refuz 42501: ' + (ru.msg || 'TRECE'))
-  const b2 = await caRol(db, 'authenticated', OWNER, SQL_BAZA)
-  ok(!b2.err && JSON.stringify(b2.rows) === JSON.stringify(ast) && JSON.stringify(await numar()) === JSON.stringify({ vechi_active: 0, vechi_retrase: 284, confirmate: 284 }), 'după refuzuri: baza și rândurile neschimbate')
-  ok(/randuri confirmate|date scrise/.test(await eroare(revinoA(db)) || ''), 'revenirea A pe proiectul confirmat = refuz (date scrise de calea nouă)')
+  const ri = await caRol(db, 'authenticated', OWNER, `INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate, valoare, sursa) VALUES (904, '0003', 'D01', '1', 'TSA01A1', 'Articol sintetic', 'M', 1, 5, 'contract_initial')`)
+  ok(ri.err === '42501' && /obiectul 0003 al proiectului 904 are oferta confirmata.*Rest de decontat/.test(ri.msg || ''), 'reimportul vechi după confirmare, pasul INSERT (obiect confirmat târziu): refuz 42501 cu mesajul „Rest de decontat”: ' + (ri.msg || 'TRECE'))
+  const ru = await caRol(db, 'authenticated', OWNER, `UPDATE public.proiect_articole SET cantitate = cantitate + 1 WHERE proiect_id = 904 AND sursa = 'contract_initial'`)
+  ok(ru.err === '42501', 'modificarea directă a rândurilor confirmate: refuz 42501: ' + (ru.msg || 'TRECE'))
+  const b4 = await caRol(db, 'authenticated', OWNER, SQL_BAZA)
+  ok(!b4.err && JSON.stringify(b4.rows) === JSON.stringify(ast) && JSON.stringify(await numar()) === JSON.stringify({ vechi_active: 0, retrase: 0, confirmate: 284, istoric: 355 }), 'după refuzuri: baza și rândurile neschimbate')
+  ok(/randuri confirmate|date scrise|istoricul ofertei/.test(await eroare(revinoA(db)) || ''), 'revenirea A pe proiectul confirmat = refuz (date scrise de calea nouă)')
+  // MUTANTUL COMPORTAMENTAL (reproducerea P1 r4): rândurile înlocuite rămân în proiect_articole cu activ = false (textul RPC-ului r4) → cititorii vechi
+  // văd 355 (284 + 71) după importul parțial; migrarea mutantă se aplică fără postcondiții (amprenta ar refuza-o) pe o bază nouă cu aceleași 284 rânduri
+  {
+    const POST_A = '-- ─── 12. Postcondiții'
+    let tm = null
+    try {
+      tm = mutant(MIG_A, [[`    WITH mut AS (\n      DELETE FROM public.proiect_articole a\n       WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial'\n         AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = ANY (v_obiecte)\n       RETURNING a.*),`,
+        `    WITH mut AS (\n      UPDATE public.proiect_articole a SET activ = false\n       WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial' AND a.activ\n         AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = ANY (v_obiecte)\n       RETURNING a.*),`],
+        [`    IF EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial'\n                 AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = ANY (v_obiecte)) THEN`, `    IF false THEN`]])
+    } catch (e) { ok(false, 'mutantul comportamental „rândurile retrase rămân în tabel”: ' + e.message) }
+    if (tm) {
+      const dbm = await bazaNoua()
+      await proiectSintetic(dbm, L)
+      const eA = await eroare(aplicaA(dbm, tm.slice(0, tm.indexOf(POST_A))))
+      await dbm.exec(`INSERT INTO public.profiles (id, is_owner) VALUES ('${OWNER}', true)`)
+      const cm0 = eA ? null : await cititori(dbm, OWNER)
+      const cm = eA ? { err: eA } : await caRol(dbm, 'authenticated', OWNER, `SELECT public.fn_rest_decontat_confirma_baza(904, 'contract_initial', NULL, NULL, NULL, 'F3_proiect4_ob1.xlsx', repeat('44', 32), $1::jsonb) AS v`, [JSON.stringify(liniiRpc(L1))])
+      const cm1 = eA || cm.err ? null : await cititori(dbm, OWNER)
+      const difera = cm1 ? Object.keys(CITITORI).filter(k => cm1[k] !== cm0[k]) : []
+      ok(!eA && !cm.err && difera.includes('activitati') && difera.includes('tinte') && !difera.includes('catalog') && !difera.includes('configurare'),
+        `mutantul comportamental aplicat (fără postcondiții) și PRINS de cititorii vechi după importul parțial (diferă: ${difera.join(', ') || 'NIMIC'}; catalogul și 20270105b filtrează activ și nu văd diferența — de aceea P1 r4 a scăpat testelor r4): ${eA || cm.msg || cm1?.activitati?.slice(0, 120) || ''}`)
+      const dbm2 = await bazaNoua()
+      await proiectSintetic(dbm2, L)
+      const eA2 = await eroare(aplicaA(dbm2, tm))
+      ok(/20270105a post:/.test(eA2 || ''), `mutantul comportamental refuzat la aplicare cu postcondițiile întregi: ${(eA2 || 'TRECE').slice(0, 90)}`)
+    }
+  }
 }
 
 console.log(esec ? `\nESEC: ${esec} verificari picate` : '\nTOTUL OK')

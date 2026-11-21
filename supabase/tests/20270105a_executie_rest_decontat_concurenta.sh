@@ -36,14 +36,16 @@
 #   C3  configurare_completa (20270105b): proiect cu ofertă; A ține schimbarea MP; B (MP vechi) declară configurarea → 42501, configurare_completa_la NULL,
 #       jurnal gol.
 #   C4  calea legitimă: după ce A a comis schimbarea, NOUL MP (contul n) cheamă același RPC fără concurent → 00000 (nimic nu e blocat în plus).
-#   r4 (review #1158, P1 r3 — stările ofertei; „acces general” = contul x, user_module_access 'executie', scrie proiect_articole pe calea veche):
-#   C5  import vechi vs RPC: A (acces general) INSERT 2 rânduri contract_initial pe C5, NECOMIS — garda a luat advisory-ul proiectului (try) și îl ține;
-#       B (MP vechi) cheamă fn_rest_decontat_confirma_baza(C5) → așteaptă la advisory (pg_stat_activity: Lock); A COMMIT → B: 00000, inlocuite = 2:
-#       0 rânduri vechi active, 2 vechi retrase, 1 confirmat (fără cumulare). Cu REST_MUTANT=lock_garda (advisory-ul scos din gardă): B NU așteaptă,
-#       confirmă peste rândurile necomise ale lui A → după COMMIT-ul lui A rămân 2 rânduri vechi ACTIVE pe un proiect confirmat (cumulare în tabel).
-#   C6  RPC în curs vs import vechi: A (MP vechi) confirmă oferta C6, NECOMIS (ține advisory-ul); B (acces general) INSERT contract_initial pe C6 →
-#       55P03 imediat (try-lock ocupat, nimic scris); A COMMIT; B din nou → 42501 (oferta confirmată), nimic scris. Cu mutantul lock_garda: primul B scrie
-#       (00000: starea (a) văzută fără lock) → după COMMIT 1 rând vechi activ pe proiectul confirmat.
+#   r4 / r5 (review #1158, P1 r3 — stările ofertei, PE OBIECT din r5; „acces general” = contul x, user_module_access 'executie', scrie proiect_articole
+#   pe calea veche; rândurile importate și oferta confirmată sunt pe același obiect 0001):
+#   C5  import vechi vs RPC: A (acces general) INSERT 2 rânduri contract_initial pe C5 / 0001, NECOMIS — garda a luat advisory-ul proiectului (try) și îl
+#       ține; B (MP vechi) cheamă fn_rest_decontat_confirma_baza(C5, obiectul 0001) → așteaptă la advisory (pg_stat_activity: Lock); A COMMIT → B: 00000,
+#       inlocuite = 2: 0 rânduri vechi active, 0 rânduri retrase în tabel, 2 în proiect_articole_istoric, 1 confirmat (fără cumulare). Cu
+#       REST_MUTANT=lock_garda (advisory-ul scos din gardă): B NU așteaptă, confirmă peste rândurile necomise ale lui A → după COMMIT-ul lui A rămân
+#       2 rânduri vechi ACTIVE pe un obiect confirmat (cumulare în tabel).
+#   C6  RPC în curs vs import vechi: A (MP vechi) confirmă oferta C6 / 0001, NECOMIS (ține advisory-ul); B (acces general) INSERT contract_initial pe
+#       C6 / 0001 → 55P03 imediat (try-lock ocupat, nimic scris); A COMMIT; B din nou → 42501 (obiectul confirmat), nimic scris. Cu mutantul lock_garda:
+#       primul B scrie (00000: obiectul vechi văzut fără lock) → după COMMIT 1 rând vechi activ pe obiectul confirmat.
 #   REST_MUTANT=da (reverificarea dreptului scoasă) schimbă doar așteptările C1–C3 (+ C4 sărit); REST_MUTANT=lock_garda doar C5 / C6.
 set -u
 set -o pipefail
@@ -286,7 +288,8 @@ else
   asteaptaBlocatB C5b; ok $? "B (MP): RPC-ul asteapta la advisory-ul tinut de importul vechi (pg_stat_activity: Lock)"
   pasA C5c "COMMIT;"; astept 00000 "$A_STARE" "A: COMMIT"
   terminaB C5b; astept 00000 "$B_STARE" "B (MP): RPC-ul dupa COMMIT-ul importului vechi"
-  astept 2 "$(q "SELECT count(*) FROM public.proiect_articole WHERE proiect_id = 9004 AND sursa = 'contract_initial' AND NOT activ AND confirmat_la IS NULL")" "randurile vechi RETRASE de RPC (inlocuite)"
+  astept 2 "$(q "SELECT count(*) FROM public.proiect_articole_istoric WHERE proiect_id = 9004 AND obiect_k = '0001||' AND confirmat_la IS NULL AND motiv = 'confirmare_oferta'")" "randurile vechi MUTATE in istoric de RPC (inlocuite)"
+  astept 0 "$(q "SELECT count(*) FROM public.proiect_articole WHERE proiect_id = 9004 AND sursa = 'contract_initial' AND NOT activ")" "niciun rand retras ramas in proiect_articole (cititorii vechi nu vad randuri in plus)"
 fi
 astept 1 "$(q "SELECT count(*) FROM public.proiect_articole WHERE proiect_id = 9004 AND sursa = 'contract_initial' AND activ AND confirmat_la IS NOT NULL")" "randuri confirmate active pe C5"
 astept "$AST_C5_VECHI" "$(q "$(printf "$NUMAR_VECHI_ACTIVE" 9004)")" "randuri vechi ACTIVE pe C5 (0 = fara cumulare; mutantul lasa 2)"

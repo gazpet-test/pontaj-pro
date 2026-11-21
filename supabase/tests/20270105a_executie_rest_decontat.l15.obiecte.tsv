@@ -51,6 +51,17 @@ coloana	coloana public.proiect_articole.fisier_amprenta	creat
 coloana	coloana public.proiect_articole.mod_import	creat
 coloana	coloana public.proiect_articole.nota_id	creat
 coloana	coloana public.proiect_articole.tip_rand	creat
+coloana	coloana public.proiect_articole_istoric.confirmat_la	creat
+coloana	coloana public.proiect_articole_istoric.id	creat
+coloana	coloana public.proiect_articole_istoric.inlocuit_cu_amprenta	creat
+coloana	coloana public.proiect_articole_istoric.motiv	creat
+coloana	coloana public.proiect_articole_istoric.obiect_k	creat
+coloana	coloana public.proiect_articole_istoric.proiect_id	creat
+coloana	coloana public.proiect_articole_istoric.rand	creat
+coloana	coloana public.proiect_articole_istoric.rand_id	creat
+coloana	coloana public.proiect_articole_istoric.retras_de	creat
+coloana	coloana public.proiect_articole_istoric.retras_la	creat
+coloana	coloana public.proiect_articole_istoric.sursa	creat
 coloana	coloana public.v_executie_rest_decontat.baza_cantitate	creat
 coloana	coloana public.v_executie_rest_decontat.baza_valoare	creat
 coloana	coloana public.v_executie_rest_decontat.cheie	creat
@@ -141,6 +152,11 @@ constrangere	constrangere tabel public.proiect_articole.proiect_articole_rd_conf
 constrangere	constrangere tabel public.proiect_articole.proiect_articole_rd_legaturi_ck	creat
 constrangere	constrangere tabel public.proiect_articole.proiect_articole_rd_mod_import_ck	creat
 constrangere	constrangere tabel public.proiect_articole.proiect_articole_rd_tip_rand_ck	creat
+constrangere	constrangere tabel public.proiect_articole_istoric.proiect_articole_istoric_amprenta_ck	creat
+constrangere	constrangere tabel public.proiect_articole_istoric.proiect_articole_istoric_motiv_ck	creat
+constrangere	constrangere tabel public.proiect_articole_istoric.proiect_articole_istoric_pkey	creat
+constrangere	constrangere tabel public.proiect_articole_istoric.proiect_articole_istoric_proiect_id_fkey	creat
+constrangere	constrangere tabel public.proiect_articole_istoric.proiect_articole_istoric_rand_ck	creat
 functie	functie public.fn_rest_decontat_aa_al_proiectului(bigint,bigint)	creat
 functie	functie public.fn_rest_decontat_are_oferta(bigint)	creat
 functie	functie public.fn_rest_decontat_articole_garda()	creat
@@ -148,13 +164,14 @@ functie	functie public.fn_rest_decontat_baza_calcul()	creat
 functie	functie public.fn_rest_decontat_baza_proiect(bigint)	creat
 functie	functie public.fn_rest_decontat_calcul()	creat
 functie	functie public.fn_rest_decontat_cheie(text,text,text,text)	creat
-functie	functie public.fn_rest_decontat_confirma_baza(bigint,text,bigint,bigint,text,text,text,jsonb)	creat
+functie	functie public.fn_rest_decontat_confirma_baza(bigint,text,bigint,bigint,text,text,text,jsonb,boolean)	creat
 functie	functie public.fn_rest_decontat_confirma_situatie(bigint,text,bigint,text,text,jsonb,boolean,numeric)	creat
 functie	functie public.fn_rest_decontat_drept(bigint,text)	creat
+functie	functie public.fn_rest_decontat_istoric_garda()	creat
 functie	functie public.fn_rest_decontat_lipsuri_calcul()	creat
 functie	functie public.fn_rest_decontat_nota_garda()	creat
 functie	functie public.fn_rest_decontat_obiect_calcul()	creat
-functie	functie public.fn_rest_decontat_oferta_confirmata(bigint)	creat
+functie	functie public.fn_rest_decontat_obiect_confirmat(bigint,text)	creat
 functie	functie public.fn_rest_decontat_server()	creat
 functie	functie public.fn_rest_decontat_sl_garda()	creat
 functie	functie public.fn_rest_decontat_sursa_autorizata(text,bigint,bigint,timestamp with time zone)	creat
@@ -164,6 +181,7 @@ politica	politica public.executie_note_modificare.executie_note_modificare_citir
 politica	politica public.executie_note_modificare.executie_note_modificare_modifica	creat
 politica	politica public.executie_sl_detaliu.executie_sl_detaliu_citire	creat
 politica	politica public.executie_sl_detaliu_linii.executie_sl_detaliu_linii_citire	creat
+politica	politica public.proiect_articole_istoric.proiect_articole_istoric_citire	creat
 regula	regula public.v_executie_rest_decontat."_RETURN"	creat
 regula	regula public.v_executie_rest_decontat_baza."_RETURN"	creat
 regula	regula public.v_executie_rest_decontat_lipsuri."_RETURN"	creat
@@ -184,6 +202,10 @@ relatie	relatie public.executie_sl_detaliu_linii_pkey	creat
 relatie	relatie public.executie_sl_detaliu_pkey	creat
 relatie	relatie public.executie_sl_detaliu_sl_ix	creat
 relatie	relatie public.executie_sl_detaliu_versiune_uq	creat
+relatie	relatie public.proiect_articole_istoric	creat
+relatie	relatie public.proiect_articole_istoric_id_seq	creat
+relatie	relatie public.proiect_articole_istoric_obiect_ix	creat
+relatie	relatie public.proiect_articole_istoric_pkey	creat
 relatie	relatie public.proiect_articole_rd_aa_ix	creat
 relatie	relatie public.proiect_articole_rd_cheie_ix	creat
 relatie	relatie public.proiect_articole_rd_nota_ix	creat
@@ -197,6 +219,8 @@ tip	tip public.executie_sl_detaliu	creat
 tip	tip public.executie_sl_detaliu[]	creat
 tip	tip public.executie_sl_detaliu_linii	creat
 tip	tip public.executie_sl_detaliu_linii[]	creat
+tip	tip public.proiect_articole_istoric	creat
+tip	tip public.proiect_articole_istoric[]	creat
 tip	tip public.v_executie_rest_decontat	creat
 tip	tip public.v_executie_rest_decontat[]	creat
 tip	tip public.v_executie_rest_decontat_baza	creat
@@ -220,6 +244,8 @@ trigger	trigger public.executie_proiecte intern executie_note_modificare_proiect
 trigger	trigger public.executie_proiecte intern executie_note_modificare_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
 trigger	trigger public.executie_proiecte intern executie_sl_detaliu_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
 trigger	trigger public.executie_proiecte intern executie_sl_detaliu_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_proiecte intern proiect_articole_istoric_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_proiecte intern proiect_articole_istoric_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
 trigger	trigger public.executie_situatii_plata intern executie_sl_detaliu_sl_id_fkey "RI_FKey_noaction_del"() 9	creat
 trigger	trigger public.executie_situatii_plata intern executie_sl_detaliu_sl_id_fkey "RI_FKey_noaction_upd"() 17	creat
 trigger	trigger public.executie_sl_detaliu intern executie_sl_detaliu_inlocuieste_id_fkey "RI_FKey_check_ins"() 5	creat
@@ -241,3 +267,6 @@ trigger	trigger public.proiect_articole intern proiect_articole_act_aditional_id
 trigger	trigger public.proiect_articole intern proiect_articole_nota_id_fkey "RI_FKey_check_ins"() 5	creat
 trigger	trigger public.proiect_articole intern proiect_articole_nota_id_fkey "RI_FKey_check_upd"() 17	creat
 trigger	trigger public.proiect_articole.trg_rest_decontat_articole_garda	creat
+trigger	trigger public.proiect_articole_istoric intern proiect_articole_istoric_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.proiect_articole_istoric intern proiect_articole_istoric_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.proiect_articole_istoric.trg_rest_decontat_istoric_garda	creat

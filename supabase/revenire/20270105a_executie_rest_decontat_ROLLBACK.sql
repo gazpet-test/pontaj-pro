@@ -1,11 +1,12 @@
 -- Revenire 20270105a_executie_rest_decontat. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a owner-ului (supabase/revenire/README.md).
--- Scoate tot ce a creat migrarea: cele 4 vederi, cele 18 funcții fn_rest_decontat_*, trigger-ele trg_rest_decontat_*, tabelele executie_sl_detaliu_linii /
---   executie_sl_detaliu / executie_note_modificare, coloanele noi de pe proiect_articole (cheie, nota_id, act_aditional_id, mod_import, activ, fisier_amprenta,
---   confirmat_de, confirmat_la, tip_rand, cu constrângerile și indexurile lor) și de pe executie_proiecte (configurare_completa_la, configurare_exceptie_motiv).
+-- Scoate tot ce a creat migrarea: cele 4 vederi, cele 19 funcții fn_rest_decontat_*, trigger-ele trg_rest_decontat_*, tabelele executie_sl_detaliu_linii /
+--   executie_sl_detaliu / executie_note_modificare / proiect_articole_istoric, coloanele noi de pe proiect_articole (cheie, nota_id, act_aditional_id, mod_import,
+--   activ, fisier_amprenta, confirmat_de, confirmat_la, tip_rand, cu constrângerile și indexurile lor) și de pe executie_proiecte (configurare_completa_la,
+--   configurare_exceptie_motiv).
 -- Dacă 20270105b e aplicată (fn_executie_proiect_configurare_completa există), REFUZĂ: întâi revenirea 20270105b.
 -- REFUZĂ (nimic schimbat) dacă există date scrise de calea nouă (L14): note, situații detaliate, rânduri confirmate / legate / retrase în proiect_articole,
---   proiecte cu configurarea declarată; ștergerea lor e o decizie separată (preview → „da” → apply, cu export înainte). Rândurile moștenite din
---   proiect_articole NU se ating (pierd doar coloana cheie, recalculabilă).
+--   rânduri în istoricul ofertei, proiecte cu configurarea declarată; ștergerea lor e o decizie separată (preview → „da” → apply, cu export înainte).
+--   Rândurile moștenite din proiect_articole NU se ating (pierd doar coloana cheie, recalculabilă).
 -- REFUZĂ dacă amprenta COMPLETĂ a obiectelor migrării (blocul AMPRENTA, identic cu cel din postcondițiile migrării) diferă de constanta revizuită, sau dacă
 --   alte obiecte depind de cele scoase. Lock-urile se iau ÎNAINTEA verificărilor „fără date” (L14), NOWAIT.
 -- Porțile Izometrie: executie_proiecte e în perimetrul E4b → ritualul PRE / ștampile / POST, ca în migrare.
@@ -13,7 +14,7 @@
 --   bash scripts/livrare_migrare.sh --migrare supabase/revenire/20270105a_executie_rest_decontat_ROLLBACK.sql --sha256 <sha256 al fișierului>
 --        --versiune 20270105120001 --tinta-db postgres --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P> --user postgres
 --        --plafon-tranzactie-ms 2000
--- Lock (NOWAIT, ordinea L06): executie_proiecte, proiect_articole, executie_note_modificare, executie_sl_detaliu, executie_sl_detaliu_linii — ACCESS EXCLUSIVE.
+-- Lock (NOWAIT, ordinea L06): executie_proiecte, proiect_articole, executie_note_modificare, executie_sl_detaliu, executie_sl_detaliu_linii, proiect_articole_istoric — ACCESS EXCLUSIVE.
 -- Probe: scripts/pglite/test_executie_rest_decontat_local.mjs.
 DO $pre$
 DECLARE v_plafon text; v_amp text; v_n bigint;
@@ -37,22 +38,23 @@ BEGIN
   END IF;
   PERFORM set_config('lock_timeout', '100ms', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
-  -- starea exactă a migrării: tabelele, vederile, cele 18 funcții, trigger-ele, coloanele
+  -- starea exactă a migrării: tabelele, vederile, cele 19 funcții, trigger-ele, coloanele
   IF to_regclass('public.executie_note_modificare') IS NULL OR to_regclass('public.executie_sl_detaliu') IS NULL OR to_regclass('public.executie_sl_detaliu_linii') IS NULL
+     OR to_regclass('public.proiect_articole_istoric') IS NULL
      OR to_regclass('public.v_executie_rest_decontat_baza') IS NULL OR to_regclass('public.v_executie_rest_decontat') IS NULL
      OR to_regclass('public.v_executie_rest_decontat_obiect') IS NULL OR to_regclass('public.v_executie_rest_decontat_lipsuri') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_cheie(text, text, text, text)') IS NULL OR to_regprocedure('public.fn_rest_decontat_um(text)') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_sursa_autorizata(text, bigint, bigint, timestamptz)') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_drept(bigint, text)') IS NULL OR to_regprocedure('public.fn_rest_decontat_server()') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_aa_al_proiectului(bigint, bigint)') IS NULL OR to_regprocedure('public.fn_rest_decontat_are_oferta(bigint)') IS NULL
-     OR to_regprocedure('public.fn_rest_decontat_oferta_confirmata(bigint)') IS NULL OR to_regprocedure('public.fn_rest_decontat_nota_garda()') IS NULL OR to_regprocedure('public.fn_rest_decontat_articole_garda()') IS NULL
-     OR to_regprocedure('public.fn_rest_decontat_sl_garda()') IS NULL OR to_regprocedure('public.fn_rest_decontat_baza_proiect(bigint)') IS NULL
+     OR to_regprocedure('public.fn_rest_decontat_obiect_confirmat(bigint, text)') IS NULL OR to_regprocedure('public.fn_rest_decontat_nota_garda()') IS NULL OR to_regprocedure('public.fn_rest_decontat_articole_garda()') IS NULL
+     OR to_regprocedure('public.fn_rest_decontat_sl_garda()') IS NULL OR to_regprocedure('public.fn_rest_decontat_istoric_garda()') IS NULL OR to_regprocedure('public.fn_rest_decontat_baza_proiect(bigint)') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_baza_calcul()') IS NULL OR to_regprocedure('public.fn_rest_decontat_calcul()') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_obiect_calcul()') IS NULL OR to_regprocedure('public.fn_rest_decontat_lipsuri_calcul()') IS NULL
-     OR to_regprocedure('public.fn_rest_decontat_confirma_baza(bigint, text, bigint, bigint, text, text, text, jsonb)') IS NULL
+     OR to_regprocedure('public.fn_rest_decontat_confirma_baza(bigint, text, bigint, bigint, text, text, text, jsonb, boolean)') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_confirma_situatie(bigint, text, bigint, text, text, jsonb, boolean, numeric)') IS NULL
-     OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%') <> 18
-     OR (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname IN ('trg_rest_decontat_nota_garda', 'trg_rest_decontat_articole_garda', 'trg_rest_decontat_sl_garda', 'trg_rest_decontat_sl_linii_garda')) <> 4
+     OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%') <> 19
+     OR (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname IN ('trg_rest_decontat_nota_garda', 'trg_rest_decontat_articole_garda', 'trg_rest_decontat_sl_garda', 'trg_rest_decontat_sl_linii_garda', 'trg_rest_decontat_istoric_garda')) <> 5
      OR (SELECT count(*) FROM pg_attribute a WHERE a.attrelid = 'public.proiect_articole'::regclass AND NOT a.attisdropped
           AND a.attname IN ('cheie', 'nota_id', 'act_aditional_id', 'mod_import', 'activ', 'fisier_amprenta', 'confirmat_de', 'confirmat_la', 'tip_rand')) <> 9
      OR (SELECT count(*) FROM pg_attribute a WHERE a.attrelid = 'public.executie_proiecte'::regclass AND NOT a.attisdropped
@@ -78,19 +80,19 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_depend d JOIN pg_rewrite w ON w.oid = d.objid JOIN pg_class v ON v.oid = w.ev_class
               WHERE d.classid = 'pg_rewrite'::regclass AND v.relname NOT LIKE 'v\_executie\_rest\_decontat%'
                 AND (d.refobjid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass,
-                                    'public.v_executie_rest_decontat_baza'::regclass, 'public.v_executie_rest_decontat'::regclass,
+                                    'public.proiect_articole_istoric'::regclass, 'public.v_executie_rest_decontat_baza'::regclass, 'public.v_executie_rest_decontat'::regclass,
                                     'public.v_executie_rest_decontat_obiect'::regclass, 'public.v_executie_rest_decontat_lipsuri'::regclass)
                      OR (d.refobjid = 'public.proiect_articole'::regclass AND d.refobjsubid IN (
                            SELECT attnum FROM pg_attribute WHERE attrelid = 'public.proiect_articole'::regclass
                               AND attname IN ('cheie', 'nota_id', 'act_aditional_id', 'mod_import', 'activ', 'fisier_amprenta', 'confirmat_de', 'confirmat_la', 'tip_rand')))
                      OR (d.refobjid = 'public.executie_proiecte'::regclass AND d.refobjsubid IN (
                            SELECT attnum FROM pg_attribute WHERE attrelid = 'public.executie_proiecte'::regclass AND attname IN ('configurare_completa_la', 'configurare_exceptie_motiv')))))
-     OR EXISTS (SELECT 1 FROM pg_policies WHERE NOT (schemaname = 'public' AND tablename IN ('executie_note_modificare', 'executie_sl_detaliu', 'executie_sl_detaliu_linii'))
+     OR EXISTS (SELECT 1 FROM pg_policies WHERE NOT (schemaname = 'public' AND tablename IN ('executie_note_modificare', 'executie_sl_detaliu', 'executie_sl_detaliu_linii', 'proiect_articole_istoric'))
                  AND coalesce(qual, '') || coalesce(with_check, '') ~ 'fn_rest_decontat_')
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_(toast_)?temp_'
                    AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_rest\_decontat\_%')
-                   AND p.prosrc ~ '\m(fn_rest_decontat_[a-z_]+|v_executie_rest_decontat[a-z_]*|executie_note_modificare|executie_sl_detaliu(_linii)?)\M') THEN
+                   AND p.prosrc ~ '\m(fn_rest_decontat_[a-z_]+|v_executie_rest_decontat[a-z_]*|executie_note_modificare|executie_sl_detaliu(_linii)?|proiect_articole_istoric)\M') THEN
     RAISE EXCEPTION '20270105a revenire: alte obiecte (vederi / politici / functii) depind de obiectele migrarii';
   END IF;
   -- lock-urile ÎNAINTEA verificărilor „fără date” (L14), NOWAIT, în ordinea din antet
@@ -99,10 +101,13 @@ BEGIN
   LOCK TABLE public.executie_note_modificare IN ACCESS EXCLUSIVE MODE NOWAIT;
   LOCK TABLE public.executie_sl_detaliu IN ACCESS EXCLUSIVE MODE NOWAIT;
   LOCK TABLE public.executie_sl_detaliu_linii IN ACCESS EXCLUSIVE MODE NOWAIT;
+  LOCK TABLE public.proiect_articole_istoric IN ACCESS EXCLUSIVE MODE NOWAIT;
   SELECT count(*) INTO v_n FROM public.executie_note_modificare;
   IF v_n > 0 THEN RAISE EXCEPTION '20270105a revenire: % note NR / NCS scrise (executie_note_modificare) — decizie separata inainte; nimic schimbat', v_n; END IF;
   SELECT count(*) INTO v_n FROM public.executie_sl_detaliu;
   IF v_n > 0 THEN RAISE EXCEPTION '20270105a revenire: % situatii detaliate confirmate (executie_sl_detaliu) — decizie separata inainte; nimic schimbat', v_n; END IF;
+  SELECT count(*) INTO v_n FROM public.proiect_articole_istoric;
+  IF v_n > 0 THEN RAISE EXCEPTION '20270105a revenire: % randuri in istoricul ofertei (proiect_articole_istoric, date scrise de calea noua) — decizie separata inainte; nimic schimbat', v_n; END IF;
   SELECT count(*) INTO v_n FROM public.proiect_articole a
    WHERE a.confirmat_la IS NOT NULL OR a.confirmat_de IS NOT NULL OR a.fisier_amprenta IS NOT NULL OR a.nota_id IS NOT NULL OR a.act_aditional_id IS NOT NULL
       OR a.mod_import IS NOT NULL OR a.activ IS NOT TRUE OR a.tip_rand <> 'articol';
@@ -115,22 +120,22 @@ BEGIN
            || ' id=' || a.attidentity::text || ' gen=' || a.attgenerated::text || ' acl=' || coalesce(a.attacl::text, '-') AS l
       FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
      WHERE NOT a.attisdropped AND a.attnum > 0
-       AND ((c.oid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass))
+       AND ((c.oid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass, 'public.proiect_articole_istoric'::regclass))
             OR (c.oid = 'public.proiect_articole'::regclass AND a.attname IN ('cheie', 'nota_id', 'act_aditional_id', 'mod_import', 'activ', 'fisier_amprenta', 'confirmat_de', 'confirmat_la', 'tip_rand'))
             OR (c.oid = 'public.executie_proiecte'::regclass AND a.attname IN ('configurare_completa_la', 'configurare_exceptie_motiv')))
     UNION ALL
     SELECT 'tab ' || c.relname || ' rls=' || c.relrowsecurity || ' force=' || c.relforcerowsecurity || ' acl=' || coalesce(c.relacl::text, '-') || ' own=' || pg_get_userbyid(c.relowner)
-      FROM pg_class c WHERE c.oid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass)
+      FROM pg_class c WHERE c.oid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass, 'public.proiect_articole_istoric'::regclass)
     UNION ALL
     SELECT 'con ' || c.relname || '.' || k.conname || ' ' || k.contype::text || ' val=' || k.convalidated || ' defer=' || k.condeferrable || ' ' || pg_get_constraintdef(k.oid)
       FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
-     WHERE k.contype <> 'n' AND (c.oid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass)
+     WHERE k.contype <> 'n' AND (c.oid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass, 'public.proiect_articole_istoric'::regclass)
             OR k.conname IN ('proiect_articole_rd_mod_import_ck', 'proiect_articole_rd_tip_rand_ck', 'proiect_articole_rd_amprenta_ck', 'proiect_articole_rd_confirmat_ck',
                              'proiect_articole_rd_legaturi_ck', 'proiect_articole_nota_id_fkey', 'proiect_articole_act_aditional_id_fkey', 'executie_proiecte_configurare_motiv_ck'))
     UNION ALL
     SELECT 'idx ' || pg_get_indexdef(i.indexrelid) || ' nnd=' || i.indnullsnotdistinct || ' valid=' || i.indisvalid
       FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid
-     WHERE c.oid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass)
+     WHERE c.oid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass, 'public.proiect_articole_istoric'::regclass)
         OR i.indexrelid::regclass::text IN ('proiect_articole_rd_cheie_ix', 'proiect_articole_rd_aa_ix', 'proiect_articole_rd_nota_ix')
     UNION ALL
     SELECT 'trg ' || pg_get_triggerdef(t.oid) || ' en=' || t.tgenabled::text
@@ -140,7 +145,7 @@ BEGIN
            || ' roles=' || coalesce((SELECT string_agg(pg_get_userbyid(r), ',' ORDER BY pg_get_userbyid(r)) FROM unnest(p.polroles) r), 'PUBLIC')
            || ' using=' || coalesce(pg_get_expr(p.polqual, p.polrelid), '-') || ' check=' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '-')
       FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
-     WHERE c.oid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass)
+     WHERE c.oid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass, 'public.proiect_articole_istoric'::regclass)
     UNION ALL
     SELECT 'view ' || c.relname || ' opt=' || coalesce(array_to_string(c.reloptions, ';'), '-') || ' acl=' || coalesce(c.relacl::text, '-') || ' def=' || md5(pg_get_viewdef(c.oid))
       FROM pg_class c WHERE c.relkind = 'v' AND c.relnamespace = 'public'::regnamespace AND c.relname LIKE 'v\_executie\_rest\_decontat%'
@@ -156,9 +161,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%'
   ) x;
   -- AMPRENTA_20270105a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '9f33b67b67ec91be89e7871940d6d8ac' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'e2cafa52e7718aa275b29d4b92df89a7' THEN
     RAISE NOTICE 'AMPRENTA_20270105a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270105a revenire: AMPRENTA obiectelor migrarii % (asteptat 9f33b67b67ec91be89e7871940d6d8ac): starea nu e cea din 20270105a; nimic schimbat',
+    RAISE EXCEPTION '20270105a revenire: AMPRENTA obiectelor migrarii % (asteptat e2cafa52e7718aa275b29d4b92df89a7): starea nu e cea din 20270105a; nimic schimbat',
       md5(coalesce(v_amp, ''));
   END IF;
 END $pre$;
@@ -173,13 +178,15 @@ DROP FUNCTION public.fn_rest_decontat_calcul();
 DROP FUNCTION public.fn_rest_decontat_lipsuri_calcul();
 DROP FUNCTION public.fn_rest_decontat_baza_calcul();
 DROP FUNCTION public.fn_rest_decontat_confirma_situatie(bigint, text, bigint, text, text, jsonb, boolean, numeric);
-DROP FUNCTION public.fn_rest_decontat_confirma_baza(bigint, text, bigint, bigint, text, text, text, jsonb);
+DROP FUNCTION public.fn_rest_decontat_confirma_baza(bigint, text, bigint, bigint, text, text, text, jsonb, boolean);
 DROP FUNCTION public.fn_rest_decontat_baza_proiect(bigint);
 DROP TABLE public.executie_sl_detaliu_linii;   -- cu trigger-ul și politica lui
 DROP TABLE public.executie_sl_detaliu;
 DROP FUNCTION public.fn_rest_decontat_sl_garda();
 DROP TRIGGER trg_rest_decontat_articole_garda ON public.proiect_articole;
 DROP FUNCTION public.fn_rest_decontat_articole_garda();
+DROP TABLE public.proiect_articole_istoric;   -- cu trigger-ul și politica lui (r5); după garda proiect_articole care chema fn_rest_decontat_obiect_confirmat
+DROP FUNCTION public.fn_rest_decontat_istoric_garda();
 ALTER TABLE public.proiect_articole
   DROP CONSTRAINT proiect_articole_rd_mod_import_ck, DROP CONSTRAINT proiect_articole_rd_tip_rand_ck, DROP CONSTRAINT proiect_articole_rd_amprenta_ck,
   DROP CONSTRAINT proiect_articole_rd_confirmat_ck, DROP CONSTRAINT proiect_articole_rd_legaturi_ck,
@@ -189,7 +196,7 @@ DROP FUNCTION public.fn_rest_decontat_sursa_autorizata(text, bigint, bigint, tim
 DROP TABLE public.executie_note_modificare;   -- cu trigger-ul și politicile lui
 DROP FUNCTION public.fn_rest_decontat_nota_garda();
 DROP FUNCTION public.fn_rest_decontat_are_oferta(bigint);
-DROP FUNCTION public.fn_rest_decontat_oferta_confirmata(bigint);   -- după garda / calculul / lipsurile care o chemau (r4)
+DROP FUNCTION public.fn_rest_decontat_obiect_confirmat(bigint, text);   -- după garda / calculul / lipsurile care o chemau (r4 / r5) și după istoric
 DROP FUNCTION public.fn_rest_decontat_aa_al_proiectului(bigint, bigint);
 DROP FUNCTION public.fn_rest_decontat_server();
 DROP FUNCTION public.fn_rest_decontat_drept(bigint, text);
@@ -202,6 +209,7 @@ ALTER TABLE public.executie_proiecte
 DO $post$
 BEGIN
   IF to_regclass('public.executie_note_modificare') IS NOT NULL OR to_regclass('public.executie_sl_detaliu') IS NOT NULL OR to_regclass('public.executie_sl_detaliu_linii') IS NOT NULL
+     OR to_regclass('public.proiect_articole_istoric') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname LIKE 'v\_executie\_rest\_decontat%')
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%')
      OR EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname LIKE 'trg\_rest\_decontat\_%')
@@ -210,7 +218,7 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.executie_proiecte'::regclass AND NOT a.attisdropped AND a.attname IN ('configurare_completa_la', 'configurare_exceptie_motiv'))
      OR EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conname IN ('proiect_articole_rd_mod_import_ck', 'proiect_articole_rd_tip_rand_ck', 'proiect_articole_rd_amprenta_ck',
                  'proiect_articole_rd_confirmat_ck', 'proiect_articole_rd_legaturi_ck', 'executie_proiecte_configurare_motiv_ck'))
-     OR EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('proiect_articole_rd_cheie_ix', 'proiect_articole_rd_aa_ix', 'proiect_articole_rd_nota_ix')) THEN
+     OR EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('proiect_articole_rd_cheie_ix', 'proiect_articole_rd_aa_ix', 'proiect_articole_rd_nota_ix', 'proiect_articole_istoric_obiect_ix')) THEN
     RAISE EXCEPTION '20270105a revenire post: au ramas obiecte';
   END IF;
   -- ștampilele porților Izometrie, CALCULATE după ultima schimbare (coloanele scoase de pe executie_proiecte)
