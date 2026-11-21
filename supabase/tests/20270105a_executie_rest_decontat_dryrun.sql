@@ -1013,38 +1013,64 @@ BEGIN
   SELECT string_agg(l.referinta, '; ' ORDER BY l.referinta) INTO s FROM public.fn_rest_decontat_lipsuri_calcul() l WHERE l.proiect_id = pg_temp.rd_id('p3') AND l.tip = 'oferta_veche_neconfirmata';
   PERFORM set_config('request.jwt.claim.sub', '', true);
   IF s IS DISTINCT FROM 'contract_initial: 1 (obiect 0001)' THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: lipsurile nu declara oferta veche neconfirmata pe obiect: %', coalesce(s, 'nimic'); END IF;
-  DELETE FROM public.proiect_articole WHERE id = v_id;
+  INSERT INTO rd_fix VALUES ('p3_strecurat', v_id);
+END $t$;
+-- (6/7, urmare) accesul general (e) NU poate atinge nici randul vechi neconfirmat al unui obiect confirmat (singurul fel in care un astfel de rand poate
+--    exista e scrierea de server): UPDATE / DELETE / mutarea lui spre un obiect nou = 42501 (ramurile OLD ale gardei); apoi serverul il scoate
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  IF (SELECT activ AND confirmat_la IS NULL AND obiect_cod = '0001' FROM public.proiect_articole WHERE id = pg_temp.rd_id('p3_strecurat')) IS NOT TRUE THEN RAISE EXCEPTION 't_oferta_confirmata PRECONDITIE: randul strecurat nu e vizibil / nu e vechi'; END IF;
+  BEGIN UPDATE public.proiect_articole SET cantitate = 1 WHERE id = pg_temp.rd_id('p3_strecurat'); RAISE EXCEPTION 't_oferta_confirmata FAIL: randul vechi neconfirmat al obiectului confirmat 0001 modificat direct';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%obiectul 0001 al proiectului % are oferta confirmata%' THEN RAISE; END IF; END;
+  BEGIN UPDATE public.proiect_articole SET obiect_cod = '0003' WHERE id = pg_temp.rd_id('p3_strecurat'); RAISE EXCEPTION 't_oferta_confirmata FAIL: randul vechi al obiectului confirmat 0001 mutat spre un obiect nou';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%obiectul 0001 al proiectului % are oferta confirmata%nu se mai modifica direct%' THEN RAISE; END IF; END;
+  BEGIN DELETE FROM public.proiect_articole WHERE id = pg_temp.rd_id('p3_strecurat'); RAISE EXCEPTION 't_oferta_confirmata FAIL: randul vechi neconfirmat al obiectului confirmat 0001 sters direct';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%obiectul 0001 al proiectului % are oferta confirmata%nu se mai sterg direct%' THEN RAISE; END IF; END;
+  IF (SELECT cantitate::text || '/' || obiect_cod FROM public.proiect_articole WHERE id = pg_temp.rd_id('p3_strecurat')) <> '500/0001' THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: refuzurile au scris pe randul strecurat'; END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+DO $t$
+BEGIN
+  DELETE FROM public.proiect_articole WHERE id = pg_temp.rd_id('p3_strecurat');
   PERFORM set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true);
   IF EXISTS (SELECT 1 FROM public.fn_rest_decontat_lipsuri_calcul() l WHERE l.tip = 'oferta_veche_neconfirmata') THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: lipsa ramasa dupa scoaterea randului'; END IF;
   PERFORM set_config('request.jwt.claim.sub', '', true);
-  RAISE NOTICE 't_oferta_confirmata (6/7) ok: randul contract_initial neconfirmat strecurat de server pe 0001 nu intra in calcul si e declarat in lipsuri (oferta_veche_neconfirmata, pe obiect)';
+  RAISE NOTICE 't_oferta_confirmata (6/7) ok: randul contract_initial neconfirmat strecurat de server pe 0001 nu intra in calcul, e declarat in lipsuri (oferta_veche_neconfirmata, pe obiect) si nu poate fi modificat / mutat / sters pe calea veche';
 END $t$;
--- (7/7) starea confirmata e DEFINITIVA pe obiect: (a) serverul RETRAGE (activ = false) randurile confirmate ale lui 0001 → calea veche ramane inchisa;
---    randurile sunt reactivate; (b) serverul SCOATE de tot randurile confirmate ale lui 0001 (raman doar in istoric, cu confirmat_la) → tot inchisa; 0002
---    (confirmat, randuri prezente) neatins. Ultimul bloc al t_oferta_confirmata: nimic de dupa nu depinde de randurile lui 0001
+-- (7/7) starea confirmata e DEFINITIVA pe obiect: (a) serverul RETRAGE (activ = false) randurile confirmate ale lui 0002 (obiect confirmat tarziu, FARA
+--    rand confirmat in istoric — predicatul trebuie sa vada randul retras din tabel) → calea veche ramane inchisa; randurile sunt reactivate; (b) serverul
+--    SCOATE de tot randurile confirmate ale lui 0001 (raman doar in istoric, cu confirmat_la) → tot inchisa. Ultimul bloc al t_oferta_confirmata: nimic de
+--    dupa nu depinde de randurile lui 0001
 DO $t$
 BEGIN
-  UPDATE public.proiect_articole SET activ = false WHERE proiect_id = pg_temp.rd_id('p3') AND sursa = 'contract_initial' AND obiect_cod = '0001' AND confirmat_la IS NOT NULL;
-  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p3') AND sursa = 'contract_initial' AND obiect_cod = '0001' AND activ) <> 0 THEN RAISE EXCEPTION 't_oferta_confirmata PRECONDITIE: retragerea ofertei confirmate 0001'; END IF;
+  IF EXISTS (SELECT 1 FROM public.proiect_articole_istoric h WHERE h.proiect_id = pg_temp.rd_id('p3') AND h.obiect_k = '0002||' AND h.confirmat_la IS NOT NULL) THEN
+    RAISE EXCEPTION 't_oferta_confirmata PRECONDITIE: 0002 nu trebuie sa aiba rand confirmat in istoric (proba retragerii din tabel)';
+  END IF;
+  UPDATE public.proiect_articole SET activ = false WHERE proiect_id = pg_temp.rd_id('p3') AND sursa = 'contract_initial' AND obiect_cod = '0002' AND confirmat_la IS NOT NULL;
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p3') AND sursa = 'contract_initial' AND obiect_cod = '0002' AND activ) <> 0 THEN RAISE EXCEPTION 't_oferta_confirmata PRECONDITIE: retragerea ofertei confirmate 0002'; END IF;
 END $t$;
 SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 DO $t$
 BEGIN
   PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
-  IF NOT public.fn_rest_decontat_obiect_confirmat(pg_temp.rd_id('p3'), '0001') THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: oferta confirmata retrasa = obiectul nu mai e confirmat'; END IF;
+  IF NOT public.fn_rest_decontat_obiect_confirmat(pg_temp.rd_id('p3'), '0002') THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: oferta confirmata retrasa (activ = false) = obiectul 0002 nu mai e confirmat'; END IF;
   BEGIN
     INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate, valoare, sursa)
-    VALUES (pg_temp.rd_id('p3'), '0001', 'D1', '1', 'A100', 'Conducta', 'M', 100, 10000, 'contract_initial');
-    RAISE EXCEPTION 't_oferta_confirmata FAIL: calea veche redeschisa dupa retragerea ofertei confirmate';
-  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%obiectul 0001 al proiectului % are oferta confirmata%' THEN RAISE; END IF; END;
+    VALUES (pg_temp.rd_id('p3'), '0002', 'D2', '1', 'E500', 'Conducta', 'M', 40, 4000, 'contract_initial');
+    RAISE EXCEPTION 't_oferta_confirmata FAIL: calea veche redeschisa pe 0002 dupa retragerea ofertei confirmate';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%obiectul 0002 al proiectului % are oferta confirmata%' THEN RAISE; END IF; END;
 END $t$;
 RESET ROLE;
 SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
 DO $t$
 BEGIN
-  UPDATE public.proiect_articole SET activ = true WHERE proiect_id = pg_temp.rd_id('p3') AND sursa = 'contract_initial' AND obiect_cod = '0001' AND confirmat_la IS NOT NULL;
-  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p3') AND sursa = 'contract_initial' AND obiect_cod = '0001' AND activ AND confirmat_la IS NOT NULL) <> 2 THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: reactivarea ofertei 0001'; END IF;
+  UPDATE public.proiect_articole SET activ = true WHERE proiect_id = pg_temp.rd_id('p3') AND sursa = 'contract_initial' AND obiect_cod = '0002' AND confirmat_la IS NOT NULL;
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p3') AND sursa = 'contract_initial' AND obiect_cod = '0002' AND activ AND confirmat_la IS NOT NULL) <> 2 THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: reactivarea ofertei 0002'; END IF;
   -- (b) serverul scoate de tot randurile confirmate ale lui 0001: starea ramane „confirmat” prin istoric (randurile inlocuite in (4/7) au confirmat_la)
   DELETE FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p3') AND sursa = 'contract_initial' AND obiect_cod = '0001';
   IF EXISTS (SELECT 1 FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p3') AND obiect_cod = '0001')
@@ -1066,7 +1092,7 @@ BEGIN
     RAISE EXCEPTION 't_oferta_confirmata FAIL: calea veche redeschisa pe un obiect ramas doar in istoric';
   EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM NOT LIKE '%obiectul 0001 al proiectului % are oferta confirmata%' THEN RAISE; END IF; END;
   IF EXISTS (SELECT 1 FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p3') AND obiect_cod = '0001') THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: refuzul a scris'; END IF;
-  RAISE NOTICE 't_oferta_confirmata (7/7) ok: oferta confirmata retrasa (activ = false) sau scoasa de server (doar in istoric) tine obiectul 0001 confirmat: calea veche ramane inchisa';
+  RAISE NOTICE 't_oferta_confirmata (7/7) ok: oferta confirmata retrasa (activ = false, 0002) sau scoasa de server (doar in istoric, 0001) tine obiectul confirmat: calea veche ramane inchisa';
 END $t$;
 RESET ROLE;
 

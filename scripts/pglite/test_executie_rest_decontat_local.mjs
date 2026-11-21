@@ -363,7 +363,8 @@ if (!DOAR || DOAR === '4') {
   const MUTANTI_A = [
     // r2 (review #1158)
     ['garda proiect_articole acceptă marcajul LIPSĂ (NULL într-o sesiune nouă)', [
-      [`  v_rpc boolean := coalesce(current_setting('gazpet.rest_decontat_scriitor', true), '') = 'fn_rest_decontat_confirma_baza';`, `  v_rpc boolean := current_setting('gazpet.rest_decontat_scriitor', true) = 'fn_rest_decontat_confirma_baza';`],
+      // (același marcaj îl citește și garda istoricului, r5: textul mutantului include linia următoare, proprie gărzii proiect_articole)
+      [`  v_rpc boolean := coalesce(current_setting('gazpet.rest_decontat_scriitor', true), '') = 'fn_rest_decontat_confirma_baza';\n  v_server boolean := public.fn_rest_decontat_server() IS TRUE;\n  v_fara text;`, `  v_rpc boolean := current_setting('gazpet.rest_decontat_scriitor', true) = 'fn_rest_decontat_confirma_baza';\n  v_server boolean := public.fn_rest_decontat_server() IS TRUE;\n  v_fara text;`],
       [`    IF OLD.confirmat_la IS NOT NULL AND (v_rpc OR v_server) IS NOT TRUE THEN`, `    IF OLD.confirmat_la IS NOT NULL AND NOT (v_rpc OR v_server) THEN`],
       [`  IF (v_rpc OR v_server) IS NOT TRUE THEN\n    IF TG_OP = 'UPDATE' AND OLD.confirmat_la IS NOT NULL THEN`, `  IF NOT (v_rpc OR v_server) THEN\n    IF TG_OP = 'UPDATE' AND OLD.confirmat_la IS NOT NULL THEN`]]],
     // (garda situațiilor cu marcaj NULL e corectată la fel, dar NU e observabilă de client: authenticated n-are INSERT / UPDATE / DELETE pe
