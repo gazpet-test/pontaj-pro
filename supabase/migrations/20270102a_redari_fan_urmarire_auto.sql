@@ -4,8 +4,19 @@
 -- L15 v2 (docs/LIVRARE_L15_V2.md): garanția la aplicare = amprenta GLOBALĂ a runnerului. Lista OBIECTELOR din manifest e în
 --   supabase/tests/20270102a_redari_fan_urmarire_auto.l15.obiecte.tsv (generată pe PGlite cu pașii reali ai runnerului). Pe lângă ea, migrarea
 --   verifică pe amprentă (corp fără CR + proprietăți + EXECUTE), ÎNAINTE: poarta de drept fn_red_nivel (20261126a) și TOATE cele 52 de funcții
---   fn_red_fan_* ale bazei, EXACT lista AMPRENTE-NOI din 20261228a (listă scrisă, nu citită din catalog); DUPĂ: cele 56 de funcții (51 neschimbate,
---   fn_red_fan_srv_urmarire înlocuită, 4 noi) cu amprentele lor (AMPRENTE-NOI 20270102a) și EXECUTE exact pe clasă.
+--   fn_red_fan_* ale bazei, EXACT lista AMPRENTE-NOI din 20261228a (listă scrisă, nu citită din catalog); DUPĂ: cele 57 de funcții (49 neschimbate,
+--   3 înlocuite — fn_red_fan_srv_urmarire, fn_red_fan_urmarire, fn_red_fan_urmarire_intern —, 5 noi) cu amprentele lor (AMPRENTE-NOI 20270102a) și
+--   EXECUTE exact pe clasă.
+-- RUNDA 2 (#1155, 21.11.2026) — DECIZIA OWNER-ULUI: „verificările de livrare la 2000 de oameni o să fie aproape imposibile, trebuie să mergem pe ce
+--   livrează API-ul”. Faptele raportate de curier (ridicarea C0, livrarea S2, returul) se înregistrează AUTOMAT, pe buton ȘI pe cron (același corp
+--   nou, fn_red_fan_urmarire_scrie, L19); contradicțiile NU mai blochează rândul la om: se rezolvă după o regulă deterministă și se păstrează DURABIL
+--   în red_fan_contradictii (valorile, regula, rularea / omul), ca semnal de audit. REGULA (fan-contradictii-v1, aceeași în redariFan.mjs::
+--   REGULI_CONTRADICTII): ridicarea = prima zi C0 (o zi deja înregistrată nu se mută); livrarea = ultima oră S2; livrare vs retur = evenimentul
+--   final ULTERIOR după ora curierului, la egalitate / retur fără oră → retur; între două răspunsuri, motivul de retur al răspunsului mai nou; un
+--   răspuns fără eveniment final nu șterge finalul cunoscut. Pe loturile de TEST ridicarea trece rândul generat → ridicat (ridicat_la = ziua C0),
+--   cu un eveniment ridicare_auto în red_jurnal; pe loturile reale plicul NU se atinge (expedierea pe plic = D4 / F4, cu „da”-ul juridic), iar
+--   ridicarea rămâne pentru butonul owner-ului (fn_red_fan_ridicat, neschimbată). O dată C0 înainte de generarea AWB-ului / în viitor nu se
+--   înregistrează (semnal ridicare_data_imposibila). Coloanele *_contrazis nu se mai scriu (verificarea prealabilă cere să fie goale).
 -- BAZA = 20261212a + 20261227a + 20261228a aplicate, în această ordine.
 -- 20270102a_redari_fan_urmarire_auto — Redări FAN: urmărirea AWB-urilor actualizată AUTOMAT (decizia owner-ului, 21.11.2026; spec
 --   docs/redari/FAN_FLUX_OPERATOR_SPEC.md §9, felia „F2a” din docs/redari/FAN_URMARIRE_AUTOMATA.md). Faptul de pornire: un AWB livrat pe 20.11 la
@@ -17,14 +28,18 @@
 --   fn_red_fan_srv_rulare_incheie (închiderea + un rând în red_jurnal); (3) fn_red_fan_srv_urmarire acceptă p_rulare (rezervat din 20261228a):
 --   exact unul dintre p_actor / p_rulare e nenul; cu p_rulare scrie prin ACELAȘI corp fn_red_fan_urmarire_intern (CAS pe versiune, propuneri) și
 --   adună numerele în rândul rulării. NU se schimbă: fn_red_fan_srv_confirmari (confirmările rămân la buton: dovada de livrare e a omului, F3),
---   ridicarea (rămâne „propusă”, confirmată de om prin fn_red_fan_ridicat), plicul (nicio scriere pe red_plicuri), contradicțiile („de verificat”).
+--   fn_red_fan_ridicat (butonul owner-ului, singura cale spre plic), plicul (nicio scriere pe red_plicuri). (Runda 2: vezi mai sus — faptele și
+--   contradicțiile.)
 --   Jobul cron NU e în migrare (postgres nu e superuser pe Supabase): îl pune coordonatorul cu cron.schedule DUPĂ aplicare (docs/redari/FAN_URMARIRE_AUTOMATA.md §5).
 -- ORDINEA lock-urilor la rulare (L06; se adaugă la §6.2 ca poziția 12, DUPĂ red_fan_awb și ÎNAINTEA red_jurnal): fn_red_fan_srv_rulare_incepe =
 --   advisory (cheia fixă a rulărilor) → rândurile red_fan_rulari; fn_red_fan_srv_rulare_apel = rândul rulării (UPDATE CAS); fn_red_fan_srv_urmarire
---   cu p_rulare = 3 red_fan_awb (ORDER BY id, în corpul comun) → 12 rândul rulării (UPDATE); fn_red_fan_srv_rulare_incheie = 12 rândul rulării →
---   11 red_jurnal (INSERT, ultimul). Nicio cale nu ia rândul rulării înaintea rândurilor FAN.
--- Lock-uri la APLICARE: niciunul pe tabelele existente (tabel nou, funcții noi, CREATE OR REPLACE pe o funcție = doar rândul ei din pg_proc;
---   politica nouă e pe tabelul nou). Nicio funcție creată nu rulează la aplicare (în afara postcondițiilor, care doar citesc).
+--   cu p_rulare = 3 red_fan_awb (ORDER BY id, în corpul comun) → INSERT red_fan_contradictii + INSERT red_jurnal (doar inserări: cheia unică a
+--   contradicțiilor începe cu rândul FAN, deja blocat de aceeași tranzacție, deci nicio altă tranzacție nu poate ține aceeași cheie) → 12 rândul
+--   rulării (UPDATE); fn_red_fan_srv_rulare_incheie = 12 rândul rulării → 11 red_jurnal (INSERT, ultimul). Nicio cale nu ia rândul rulării
+--   înaintea rândurilor FAN. red_fan_contradictii.fan_awb_id → red_fan_awb (FK: la INSERT, FOR KEY SHARE pe rândul deja blocat FOR UPDATE de noi).
+-- Lock-uri la APLICARE: cheia străină nouă ia SHARE ROW EXCLUSIVE pe red_fan_awb (blochează scrierile cât durează CREATE TABLE; lock_timeout 100 ms
+--   → la concurență migrarea pică curat, nimic schimbat); restul = tabele noi, funcții noi, CREATE OR REPLACE = doar rândul funcției din pg_proc.
+--   Nicio funcție creată nu rulează la aplicare (în afara postcondițiilor, care doar citesc).
 -- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms și garda finală a runnerului.
 -- Revenire: supabase/revenire/20270102a_redari_fan_urmarire_auto_ROLLBACK.sql (prin runner, plafonul 2000; LOCK … NOWAIT pe red_fan_rulari;
 --   refuză cu orice rulare sau eveniment urmarire_auto în red_jurnal; readuce TEXTUAL corpul din 20261228a al fn_red_fan_srv_urmarire, cu amprenta verificată DUPĂ).
@@ -32,7 +47,7 @@
 --   ca authenticated / anon / service_role, revendicarea și suprapunerea, plafonul, expirarea, selecția, scrierea cu p_rulare, revenirea, mutanți)
 --   + supabase/tests/20270102a_redari_fan_urmarire_auto_doua_sesiuni.sh (două sesiuni reale pe un cluster dispensabil; netestat local).
 DO $pre$
-DECLARE v_plafon text; r record; v_tip text;
+DECLARE v_plafon text; r record; v_tip text; v_n integer;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
      OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270102a_redari_fan_urmarire_auto:' || txid_current() THEN
@@ -63,7 +78,8 @@ BEGIN
      OR to_regclass('public.red_fan_operatori') IS NULL THEN
     RAISE EXCEPTION '20270102a: 20261228a nu e aplicata (tabelele FAN F1 lipsesc): ordinea e 20261212a -> 20261227a -> 20261228a -> 20270102a';
   END IF;
-  IF to_regclass('public.red_fan_rulari') IS NOT NULL
+  IF to_regclass('public.red_fan_rulari') IS NOT NULL OR to_regclass('public.red_fan_contradictii') IS NOT NULL
+     OR to_regprocedure('public.fn_red_fan_urmarire_scrie(uuid, jsonb, uuid, uuid)') IS NOT NULL
      OR to_regprocedure('public.fn_red_fan_srv_rulare_incepe(text, uuid)') IS NOT NULL OR to_regprocedure('public.fn_red_fan_srv_rulare_apel(uuid)') IS NOT NULL
      OR to_regprocedure('public.fn_red_fan_srv_de_urmarit(uuid)') IS NOT NULL OR to_regprocedure('public.fn_red_fan_srv_rulare_incheie(uuid, text, text, integer, integer)') IS NOT NULL
      OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_red\_fan\_%') <> 52 THEN
@@ -77,9 +93,12 @@ BEGIN
       ('red_fan_awb', 'id', '^uuid$'), ('red_fan_awb', 'lot_id', '^uuid$'), ('red_fan_awb', 'awb', '^text$'), ('red_fan_awb', 'stare', '^text$'),
       ('red_fan_awb', 'versiune_urmarire', '^integer$'), ('red_fan_awb', 'urmarire_stare', '^text$'), ('red_fan_awb', 'livrat_la', '^timestamp with time zone$'),
       ('red_fan_awb', 'retur_cunoscut', '^boolean$'), ('red_fan_awb', 'generat_la', '^timestamp with time zone$'), ('red_fan_awb', 'urmarit_la', '^timestamp with time zone$'),
+      ('red_fan_awb', 'ultim_eveniment', '^text$'), ('red_fan_awb', 'ultim_eveniment_la', '^timestamp with time zone$'), ('red_fan_awb', 'ridicat_propus', '^date$'),
+      ('red_fan_awb', 'retur_propus', '^text$'), ('red_fan_awb', 'ridicat_la', '^timestamp with time zone$'), ('red_fan_awb', 'ridicat_contrazis', '^date$'),
+      ('red_fan_awb', 'livrat_contrazis', '^timestamp with time zone$'), ('red_fan_awb', 'retur_contrazis', '^text$'), ('red_fan_awb', 'updated_at', '^timestamp with time zone$'),
       ('red_fan_loturi', 'lot_id', '^uuid$'), ('red_fan_loturi', 'test', '^boolean$'),
       ('red_jurnal', 'tabela', '^text$'), ('red_jurnal', 'inregistrare_id', '^uuid$'), ('red_jurnal', 'actiune', '^text$'),
-      ('red_jurnal', 'date_noi', '^jsonb$'), ('red_jurnal', 'user_id', '^uuid$')
+      ('red_jurnal', 'date_vechi', '^jsonb$'), ('red_jurnal', 'date_noi', '^jsonb$'), ('red_jurnal', 'user_id', '^uuid$')
     ) v(t, c, tip) LOOP
     SELECT data_type INTO v_tip FROM information_schema.columns WHERE table_schema = 'public' AND table_name = r.t AND column_name = r.c;
     IF v_tip IS NULL OR v_tip !~ r.tip THEN
@@ -94,6 +113,15 @@ BEGIN
                       AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND tg.tgfoid = to_regprocedure('public.fn_red_fan_awb_opod_jurnal()') AND tg.tgtype = (1 | 4 | 8 | 16)
                       AND tg.tgattr::text = '') THEN
     RAISE EXCEPTION '20270102a: red_fan_awb nu are exact trigger-ele din 20261228a (garda F1 + jurnalul oPOD)';
+  END IF;
+  -- runda 2 (L14, preflight pe datele live SUB lock): lock-ul pe care l-ar lua oricum cheia străină nouă, luat ÎNAINTEA verificării, ca nicio
+  -- scriere prin corpul vechi să nu se strecoare între verificare și COMMIT; apoi: nicio contradicție veche nesoluționată (coloanele *_contrazis
+  -- sau livrat + retur deodată). Corpul nou nu le mai scrie și nu le poate rezolva: se soluționează ÎNAINTE (fn_red_fan_urmarire_solutioneaza).
+  LOCK TABLE public.red_fan_awb IN SHARE ROW EXCLUSIVE MODE;
+  SELECT count(*) INTO v_n FROM public.red_fan_awb
+   WHERE ridicat_contrazis IS NOT NULL OR livrat_contrazis IS NOT NULL OR retur_contrazis IS NOT NULL OR (livrat_la IS NOT NULL AND retur_cunoscut);
+  IF v_n > 0 THEN
+    RAISE EXCEPTION '20270102a: % rand(uri) red_fan_awb au contradictii vechi nesolutionate (*_contrazis / livrat + retur): se solutioneaza intai (fn_red_fan_urmarire_solutioneaza); nimic schimbat', v_n;
   END IF;
   IF to_regprocedure('auth.uid()') IS NULL
      OR (SELECT prorettype FROM pg_proc WHERE oid = to_regprocedure('auth.uid()')) IS DISTINCT FROM 'uuid'::regtype::oid
@@ -204,6 +232,8 @@ CREATE TABLE public.red_fan_rulari (
   scrise integer NOT NULL DEFAULT 0 CHECK (scrise >= 0),
   pastrate integer NOT NULL DEFAULT 0 CHECK (pastrate >= 0),
   depasite integer NOT NULL DEFAULT 0 CHECK (depasite >= 0),
+  contradictii integer NOT NULL DEFAULT 0 CHECK (contradictii >= 0),   -- runda 2: semnale de contradicție înscrise / revăzute (red_fan_contradictii)
+  ridicari integer NOT NULL DEFAULT 0 CHECK (ridicari >= 0),           -- runda 2: ridicări înregistrate automat (lot de TEST: generat → ridicat)
   loturi integer CHECK (loturi IS NULL OR loturi >= 0),                    -- raportate la închidere
   loturi_sarite integer CHECK (loturi_sarite IS NULL OR loturi_sarite >= 0),
   eroare_cod text CHECK (eroare_cod IS NULL OR eroare_cod ~ '^[a-z0-9_]{1,60}$'),
@@ -222,6 +252,209 @@ REVOKE ALL ON public.red_fan_rulari FROM PUBLIC, anon, authenticated, service_ro
 GRANT SELECT ON public.red_fan_rulari TO authenticated;
 CREATE POLICY red_fan_rulari_citire ON public.red_fan_rulari FOR SELECT TO authenticated
   USING (auth.uid() IS NOT NULL AND public.fn_red_nivel() IN ('admin', 'editor'));
+
+-- ═══ 1b. Contradicțiile FAN (runda 2, decizia owner-ului 21.11.2026): semnal DURABIL de audit, nu blocaj. Un rând = o contradicție văzută pe un
+-- AWB: valorile contradictorii, valoarea aleasă, regula aplicată (versiunea ei), cine a văzut-o (rularea automată sau omul de la buton), de câte
+-- ori și când. Nimic nu le șterge (nicio cale de scriere în afara corpului comun; niciun GRANT de scriere); o rulare ulterioară cu un singur
+-- eveniment NU șterge urma și nu mai cere omul. Fără date personale (AWB, coduri, date / ore ale curierului). Citire: admin / editor Redări. ═══
+CREATE TABLE public.red_fan_contradictii (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  fan_awb_id uuid NOT NULL REFERENCES public.red_fan_awb(id),
+  lot_id uuid NOT NULL,
+  awb text NOT NULL CHECK (awb ~ '^[0-9]{6,20}$'),
+  sursa text NOT NULL CHECK (sursa IN ('acelasi_raspuns', 'intre_raspunsuri')),   -- în același răspuns FAN / între răspunsul nou și faptul înregistrat
+  tip text NOT NULL,
+  valori jsonb NOT NULL CHECK (jsonb_typeof(valori) = 'array' AND jsonb_array_length(valori) BETWEEN 1 AND 20),
+  ales text NOT NULL CHECK (ales ~ '^[A-Za-z0-9_: -]{1,40}$'),
+  regula text NOT NULL,
+  versiune_regula text NOT NULL CHECK (versiune_regula = 'fan-contradictii-v1'),
+  rulare_id uuid,                                        -- rularea automată care a văzut-o prima dată (NULL = butonul)
+  actor uuid,                                            -- omul de la buton (NULL = rularea automată)
+  cheie text NOT NULL CHECK (cheie ~ '^[0-9a-f]{32}$'), -- md5(sursa|tip|valori|ales|regula): aceeași contradicție revăzută = același rând
+  observari integer NOT NULL DEFAULT 1 CHECK (observari >= 1),
+  prima_la timestamptz NOT NULL DEFAULT clock_timestamp(),
+  ultima_la timestamptz NOT NULL DEFAULT clock_timestamp(),
+  ultima_rulare_id uuid,
+  CONSTRAINT red_fan_contradictii_regula CHECK ((tip, regula) IN (('ridicare_zile', 'prima_ridicare'), ('livrare_ore', 'ultima_livrare'),
+    ('livrare_retur', 'final_ulterior'), ('retur_motiv', 'ultimul_semnal'), ('ridicare_data_imposibila', 'data_imposibila'))),
+  CONSTRAINT red_fan_contradictii_cheie_uq UNIQUE (fan_awb_id, cheie)
+);
+CREATE INDEX red_fan_contradictii_lot_ix ON public.red_fan_contradictii (lot_id, prima_la DESC);
+COMMENT ON TABLE public.red_fan_contradictii IS 'Redări FAN: contradicțiile din răspunsurile curierului, rezolvate automat după regula fan-contradictii-v1 și păstrate ca semnal de audit (nu blochează rândul). Scris doar prin fn_red_fan_urmarire_scrie. 20270102a.';
+ALTER TABLE public.red_fan_contradictii ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.red_fan_contradictii FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON public.red_fan_contradictii TO authenticated;
+CREATE POLICY red_fan_contradictii_citire ON public.red_fan_contradictii FOR SELECT TO authenticated
+  USING (auth.uid() IS NOT NULL AND public.fn_red_nivel() IN ('admin', 'editor'));
+
+-- ═══ 1c. Corpul COMUN al urmăririi (runda 2): buton (owner fn_red_fan_urmarire / operator fn_red_fan_srv_urmarire cu p_actor) și rularea automată
+-- (fn_red_fan_srv_urmarire cu p_rulare) scriu prin ACEEAȘI funcție (L19). Intern: EXECUTE nimănui; autorul vine DOAR de la apelanții de mai sus
+-- (auth.uid() verificat ca owner / p_actor verificat de poartă / p_rulare verificată în curs), niciodată din p_randuri.
+-- Pașii: (1) validarea completă a rândurilor (inclusiv retur_la și lista de contradicții din același răspuns, pe listă albă) → (2) rândurile FAN
+-- FOR UPDATE ORDER BY id → (3) rând străin = P0001, lot în afara gărzii = RD032 → (4) „păstrate” (răspuns fără cronologie, ca înainte) → (5) FAPTELE
+-- după regula fan-contradictii-v1 (TOATE contradicțiile între răspunsul nou și faptele înregistrate se evaluează înainte, apoi faptul rezolvat se
+-- scrie; CAS pe versiune + cronologia ne-mai-veche, ca înainte) și, pe un lot de TEST, ridicarea generat → ridicat → (6) contradicțiile (din răspuns
+-- + dintre răspunsuri + data imposibilă) în red_fan_contradictii, DOAR pentru rândurile scrise → (7) jurnalul ridicărilor automate.
+CREATE FUNCTION public.fn_red_fan_urmarire_scrie(p_lot_id uuid, p_randuri jsonb, p_rulare uuid, p_actor uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_n integer; v_bune integer; v_dist integer; v_scrise integer; v_pastrate integer; v_test boolean; v_azi date; v_w jsonb;
+  v_contr integer := 0; v_rid integer := 0;
+BEGIN
+  IF p_lot_id IS NULL OR p_randuri IS NULL OR jsonb_typeof(p_randuri) <> 'array' OR jsonb_array_length(p_randuri) NOT BETWEEN 1 AND 100
+     OR (p_rulare IS NOT NULL AND p_actor IS NOT NULL) THEN
+    RAISE EXCEPTION 'redari fan: urmarire invalida' USING ERRCODE = '22023'; END IF;
+  SELECT count(*), count(*) FILTER (WHERE u.id IS NOT NULL AND u.awb ~ '^[0-9]{6,20}$' AND u.versiune IS NOT NULL AND u.versiune >= 0
+           AND u.urmarire_stare IN ('fara_evenimente', 'in_tranzit', 'ridicat', 'livrat', 'retur', 'de_verificat')
+           AND (u.ultim_eveniment IS NULL OR u.ultim_eveniment ~ '^[A-Z]{1,2}[0-9]{1,3}$')
+           AND (u.ultim_eveniment_la IS NULL OR u.ultim_eveniment_la ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$')
+           AND (u.livrat_la IS NULL OR u.livrat_la ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$')
+           AND (u.ridicat_propus IS NULL OR u.ridicat_propus ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+           AND (u.retur_propus IS NULL OR u.retur_propus IN ('destinatar_necunoscut', 'mutat', 'avizat_neridicat', 'refuz', 'adresa_incompleta'))
+           -- runda 2: faptele rezolvate în răspuns sunt coerente (o livrare și un retur nu vin deodată; ora returului doar la retur)
+           AND (u.livrat_la IS NULL OR u.urmarire_stare <> 'retur') AND (u.retur_propus IS NULL OR u.urmarire_stare = 'retur')
+           AND (u.retur_la IS NULL OR (u.urmarire_stare = 'retur' AND u.retur_la ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$'))
+           AND c.ok), count(DISTINCT u.id)
+    INTO v_n, v_bune, v_dist
+    FROM jsonb_to_recordset(p_randuri) AS u(id uuid, awb text, versiune integer, urmarire_stare text, ultim_eveniment text,
+      ultim_eveniment_la text, ridicat_propus text, livrat_la text, retur_propus text, retur_la text, contradictii jsonb)
+    -- lista de contradicții din același răspuns (redariFan.mjs::rezumatUrmarireFan): lipsă / [] / ≤ 3 elemente, fiecare EXACT {tip, valori, ales,
+    -- regula}, perechea (tip, regula) pe lista albă, valorile = 2..20 texte de formă fixă (zi / oră / cod + oră / returnAwbNumber), alesul = o
+    -- valoare din listă (ridicare / livrare) sau livrat / retur — conținut extern tratat ca date, nimic în afara formelor fixe
+    CROSS JOIN LATERAL (SELECT u.contradictii IS NULL OR (jsonb_typeof(u.contradictii) = 'array' AND jsonb_array_length(u.contradictii) <= 3
+        AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(u.contradictii) e WHERE NOT (
+              jsonb_typeof(e) = 'object'
+          AND (SELECT array_agg(k ORDER BY k COLLATE "C") FROM jsonb_object_keys(e) k) = ARRAY['ales', 'regula', 'tip', 'valori']
+          AND (e ->> 'tip', e ->> 'regula') IN (('ridicare_zile', 'prima_ridicare'), ('livrare_ore', 'ultima_livrare'), ('livrare_retur', 'final_ulterior'))
+          AND jsonb_typeof(e -> 'valori') = 'array' AND jsonb_array_length(e -> 'valori') BETWEEN 2 AND 20
+          AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(e -> 'valori') v WHERE jsonb_typeof(v) IS DISTINCT FROM 'string'
+                OR (v #>> '{}') !~ '^(([A-Z]{1,2}[0-9]{1,3} )?[0-9]{4}-[0-9]{2}-[0-9]{2}( [0-9]{2}:[0-9]{2}:[0-9]{2})?|returnAwbNumber)$')
+          AND jsonb_typeof(e -> 'ales') = 'string'
+          AND CASE WHEN e ->> 'tip' = 'livrare_retur' THEN (e ->> 'ales') IN ('livrat', 'retur') ELSE (e -> 'valori') @> jsonb_build_array(e -> 'ales') END)))) AS c(ok);
+  IF v_n <> v_bune OR v_dist <> v_n THEN RAISE EXCEPTION 'redari fan: urmarire invalida' USING ERRCODE = '22023'; END IF;
+  PERFORM 1 FROM public.red_fan_awb WHERE id IN (SELECT u.id FROM jsonb_to_recordset(p_randuri) AS u(id uuid)) ORDER BY id FOR UPDATE;
+  IF EXISTS (SELECT 1 FROM jsonb_to_recordset(p_randuri) AS u(id uuid, awb text)
+             LEFT JOIN public.red_fan_awb a ON a.id = u.id AND a.lot_id = p_lot_id AND a.awb = u.awb AND a.stare IN ('generat', 'ridicat')
+             WHERE a.id IS NULL) THEN RAISE EXCEPTION 'redari fan: rand strain sau AWB diferit' USING ERRCODE = 'P0001'; END IF;
+  IF NOT public.fn_red_fan_lot_permis(p_lot_id) THEN RAISE EXCEPTION 'redari fan: doar proiecte de TEST' USING ERRCODE = 'RD032'; END IF;
+  -- marcajul TEST al lotului: imuabil după prima aprobare (trigger-ul fn_red_fan_loturi_garda), iar un lot cu AWB-uri a fost aprobat → fără lock
+  SELECT test INTO v_test FROM public.red_fan_loturi WHERE lot_id = p_lot_id;
+  v_azi := (clock_timestamp() AT TIME ZONE 'Europe/Bucharest')::date;
+  -- (4) răspuns FĂRĂ cronologie pe un rând cu eveniment cunoscut: doar „verificat la” (ca în 20261212a runda 3)
+  UPDATE public.red_fan_awb a SET urmarit_la = now(), updated_at = now(), versiune_urmarire = a.versiune_urmarire + 1
+    FROM jsonb_to_recordset(p_randuri) AS u(id uuid, versiune integer, ultim_eveniment_la text)
+   WHERE a.id = u.id AND a.versiune_urmarire = u.versiune AND a.ultim_eveniment_la IS NOT NULL AND u.ultim_eveniment_la IS NULL;
+  GET DIAGNOSTICS v_pastrate = ROW_COUNT;
+  -- (5) faptele. n = răspunsul nou (deja rezolvat în el însuși de rezumatUrmarireFan), k = faptele înregistrate (rândul blocat mai sus).
+  -- Finalul (livrat / retur): un răspuns fără final păstrează finalul cunoscut; același final: livrarea = ULTIMA oră, returul = motivul
+  -- răspunsului nou (lipsa lui păstrează motivul cunoscut); finaluri diferite = finalul ULTERIOR după ora curierului: retur nou peste livrare
+  -- cunoscută dacă returul n-are oră sau e la / după livrare; livrare nouă peste retur cunoscut doar dacă livrarea e DUPĂ ultimul eveniment
+  -- cunoscut la înregistrarea returului (altfel retur: egalitatea / necunoscutul merg la retur). Ridicarea: ziua înregistrată rămâne.
+  WITH n AS (
+    SELECT u.id, u.versiune, u.urmarire_stare AS n_stare, u.ultim_eveniment AS n_ev,
+           (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest') AS n_la, u.ridicat_propus::date AS n_rid,
+           (u.livrat_la::timestamp AT TIME ZONE 'Europe/Bucharest') AS n_liv, u.urmarire_stare = 'retur' AS n_ret, u.retur_propus AS n_mot,
+           (u.retur_la::timestamp AT TIME ZONE 'Europe/Bucharest') AS n_ret_la, coalesce(u.contradictii, '[]'::jsonb) AS n_contr,
+           b.stare AS k_stare, (b.generat_la AT TIME ZONE 'Europe/Bucharest')::date AS k_gen, b.ridicat_propus AS k_rid, b.livrat_la AS k_liv,
+           b.retur_cunoscut AS k_ret, b.retur_propus AS k_mot, b.ultim_eveniment_la AS k_la
+      FROM jsonb_to_recordset(p_randuri) AS u(id uuid, versiune integer, urmarire_stare text, ultim_eveniment text, ultim_eveniment_la text,
+             ridicat_propus text, livrat_la text, retur_propus text, retur_la text, contradictii jsonb)
+      JOIN public.red_fan_awb b ON b.id = u.id
+  ), f AS (
+    SELECT n.*, coalesce(n.k_rid, n.n_rid) AS rid,
+           CASE WHEN n.n_ret THEN 'retur' WHEN n.n_liv IS NOT NULL THEN 'livrat' END AS n_fin,
+           CASE WHEN n.k_ret THEN 'retur' WHEN n.k_liv IS NOT NULL THEN 'livrat' END AS k_fin
+      FROM n
+  ), g AS (
+    SELECT f.*, CASE WHEN f.n_fin IS NULL THEN f.k_fin
+                     WHEN f.k_fin IS NULL OR f.k_fin = f.n_fin THEN f.n_fin
+                     WHEN f.k_fin = 'livrat' THEN CASE WHEN f.n_ret_la IS NULL OR f.n_ret_la >= f.k_liv THEN 'retur' ELSE 'livrat' END
+                     ELSE CASE WHEN f.k_la IS NOT NULL AND f.n_liv > f.k_la THEN 'livrat' ELSE 'retur' END END AS fin
+      FROM f
+  ), m AS (
+    SELECT g.*,
+           CASE WHEN g.fin = 'livrat' THEN CASE WHEN g.n_fin = 'livrat' AND g.k_fin = 'livrat' THEN greatest(g.k_liv, g.n_liv)
+                                                WHEN g.n_fin = 'livrat' THEN g.n_liv ELSE g.k_liv END END AS liv,
+           CASE WHEN g.fin = 'retur' THEN CASE WHEN g.n_fin = 'retur' THEN coalesce(g.n_mot, g.k_mot) ELSE g.k_mot END END AS mot,
+           (v_test IS TRUE AND g.k_stare = 'generat' AND g.rid IS NOT NULL AND g.rid >= g.k_gen AND g.rid <= v_azi) AS auto_rid,
+           (g.k_stare = 'generat' AND g.rid IS NOT NULL AND (g.rid < g.k_gen OR g.rid > v_azi)) AS rid_imposibil
+      FROM g
+  ), w AS (
+    UPDATE public.red_fan_awb a SET
+           urmarire_stare = CASE WHEN m.n_stare = 'de_verificat' THEN 'de_verificat' WHEN m.fin = 'retur' THEN 'retur' WHEN m.fin = 'livrat' THEN 'livrat'
+                                 WHEN m.rid IS NOT NULL AND m.n_stare IN ('fara_evenimente', 'in_tranzit') THEN 'ridicat' ELSE m.n_stare END,
+           ultim_eveniment = m.n_ev, ultim_eveniment_la = m.n_la, ridicat_propus = m.rid, livrat_la = m.liv, retur_propus = m.mot,
+           retur_cunoscut = (m.fin IS NOT DISTINCT FROM 'retur'),
+           stare = CASE WHEN m.auto_rid THEN 'ridicat' ELSE a.stare END,
+           ridicat_la = CASE WHEN m.auto_rid THEN (m.rid::timestamp AT TIME ZONE 'Europe/Bucharest') ELSE a.ridicat_la END,
+           urmarit_la = now(), updated_at = now(), versiune_urmarire = a.versiune_urmarire + 1
+      FROM m
+     WHERE a.id = m.id AND a.versiune_urmarire = m.versiune
+       AND (a.ultim_eveniment_la IS NULL OR (m.n_la IS NOT NULL AND m.n_la >= a.ultim_eveniment_la))
+    RETURNING a.id, a.awb, a.lot_id, a.ultim_eveniment, a.ultim_eveniment_la, a.ridicat_la, m.rid, m.auto_rid,
+      -- contradicțiile rândului scris: cele din același răspuns + cele dintre răspunsuri + data imposibilă (fiecare cu valorile, alesul, regula)
+      (SELECT coalesce(jsonb_agg(x.c), '[]'::jsonb) FROM (
+         SELECT jsonb_build_object('sursa', 'acelasi_raspuns', 'tip', e ->> 'tip', 'valori', e -> 'valori', 'ales', e ->> 'ales', 'regula', e ->> 'regula') AS c
+           FROM jsonb_array_elements(m.n_contr) e
+         UNION ALL SELECT jsonb_build_object('sursa', 'intre_raspunsuri', 'tip', 'ridicare_zile', 'regula', 'prima_ridicare', 'ales', to_char(m.k_rid, 'YYYY-MM-DD'),
+                  'valori', jsonb_build_array(to_char(least(m.k_rid, m.n_rid), 'YYYY-MM-DD'), to_char(greatest(m.k_rid, m.n_rid), 'YYYY-MM-DD')))
+          WHERE m.k_rid IS NOT NULL AND m.n_rid IS NOT NULL AND m.n_rid <> m.k_rid
+         UNION ALL SELECT jsonb_build_object('sursa', 'intre_raspunsuri', 'tip', 'livrare_ore', 'regula', 'ultima_livrare',
+                  'ales', to_char(m.liv AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI:SS'),
+                  'valori', jsonb_build_array(to_char(least(m.k_liv, m.n_liv) AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI:SS'),
+                                              to_char(greatest(m.k_liv, m.n_liv) AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI:SS')))
+          WHERE m.k_fin = 'livrat' AND m.n_fin = 'livrat' AND m.n_liv <> m.k_liv
+         UNION ALL SELECT jsonb_build_object('sursa', 'intre_raspunsuri', 'tip', 'retur_motiv', 'regula', 'ultimul_semnal', 'ales', m.mot,
+                  'valori', jsonb_build_array(m.k_mot, m.n_mot))
+          WHERE m.k_fin = 'retur' AND m.n_fin = 'retur' AND m.k_mot IS NOT NULL AND m.n_mot IS NOT NULL AND m.n_mot <> m.k_mot
+         UNION ALL SELECT jsonb_build_object('sursa', 'intre_raspunsuri', 'tip', 'livrare_retur', 'regula', 'final_ulterior', 'ales', m.fin,
+                  'valori', CASE WHEN m.k_fin = 'livrat'
+                                 THEN jsonb_build_array('S2 ' || to_char(m.k_liv AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI:SS'),
+                                        coalesce('retur ' || to_char(m.n_ret_la AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI:SS'), 'retur fara_ora'))
+                                 ELSE jsonb_build_array('retur_cunoscut', 'S2 ' || to_char(m.n_liv AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI:SS')) END)
+          WHERE m.k_fin IS NOT NULL AND m.n_fin IS NOT NULL AND m.k_fin <> m.n_fin
+         UNION ALL SELECT jsonb_build_object('sursa', 'intre_raspunsuri', 'tip', 'ridicare_data_imposibila', 'regula', 'data_imposibila', 'ales', 'neinregistrata',
+                  'valori', jsonb_build_array('C0 ' || to_char(m.rid, 'YYYY-MM-DD'), 'generat ' || to_char(m.k_gen, 'YYYY-MM-DD'), 'azi ' || to_char(v_azi, 'YYYY-MM-DD')))
+          WHERE m.rid_imposibil) x) AS contr
+  )
+  SELECT count(*)::integer, coalesce(jsonb_agg(jsonb_build_object('id', w.id, 'awb', w.awb, 'lot', w.lot_id, 'ev', w.ultim_eveniment, 'la', w.ultim_eveniment_la,
+           'rid', w.rid, 'rid_la', w.ridicat_la, 'auto_rid', w.auto_rid, 'contr', w.contr)), '[]'::jsonb)
+    INTO v_scrise, v_w FROM w;
+  -- (6) contradicțiile, durabil; aceeași contradicție revăzută (aceeași cheie pe același AWB) = observări + 1, nu rând nou
+  INSERT INTO public.red_fan_contradictii AS t (fan_awb_id, lot_id, awb, sursa, tip, valori, ales, regula, versiune_regula, rulare_id, actor, cheie, ultima_rulare_id)
+  SELECT DISTINCT ON (x.id, md5(c.sursa || '|' || c.tip || '|' || c.valori::text || '|' || c.ales || '|' || c.regula))
+         x.id, x.lot, x.awb, c.sursa, c.tip, c.valori, c.ales, c.regula, 'fan-contradictii-v1', p_rulare, p_actor,
+         md5(c.sursa || '|' || c.tip || '|' || c.valori::text || '|' || c.ales || '|' || c.regula), p_rulare
+    FROM jsonb_to_recordset(v_w) AS x(id uuid, awb text, lot uuid, contr jsonb)
+    CROSS JOIN LATERAL jsonb_to_recordset(x.contr) AS c(sursa text, tip text, valori jsonb, ales text, regula text)
+  ON CONFLICT (fan_awb_id, cheie) DO UPDATE SET observari = t.observari + 1, ultima_la = clock_timestamp(), ultima_rulare_id = EXCLUDED.ultima_rulare_id;
+  GET DIAGNOSTICS v_contr = ROW_COUNT;
+  -- (7) jurnalul ridicărilor înregistrate automat (lot de TEST): ziua C0, ultimul eveniment (nu „ora ridicării”), sursa, regula
+  INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_vechi, date_noi, user_id)
+  SELECT 'red_fan_awb', x.id, 'update', jsonb_build_object('stare', 'generat'),
+         jsonb_build_object('eveniment', 'ridicare_auto', 'cod', 'C0', 'ridicat_propus', x.rid, 'ridicat_la', x.rid_la, 'ultim_eveniment', x.ev,
+           'ultim_eveniment_la', x.la, 'lot_id', x.lot, 'rulare_id', p_rulare, 'sursa', CASE WHEN p_rulare IS NULL THEN 'buton' ELSE 'rulare_automata' END,
+           'regula', 'fan-contradictii-v1'), p_actor
+    FROM jsonb_to_recordset(v_w) AS x(id uuid, lot uuid, ev text, la timestamptz, rid date, rid_la timestamptz, auto_rid boolean)
+   WHERE x.auto_rid;
+  GET DIAGNOSTICS v_rid = ROW_COUNT;
+  RETURN jsonb_build_object('scrise', v_scrise, 'pastrate', v_pastrate, 'depasite', v_n - v_scrise - v_pastrate, 'contradictii', v_contr, 'ridicari', v_rid);
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_red_fan_urmarire_scrie(uuid, jsonb, uuid, uuid) FROM PUBLIC, anon, authenticated, service_role;
+
+-- vechiul corp intern devine un înveliș al celui nou (fără autor: nu mai are apelanți în baza de după migrare; rămâne pentru compatibilitate,
+-- EXECUTE nimănui, ca înainte)
+CREATE OR REPLACE FUNCTION public.fn_red_fan_urmarire_intern(p_lot_id uuid, p_randuri jsonb) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  RETURN public.fn_red_fan_urmarire_scrie(p_lot_id, p_randuri, NULL, NULL);
+END $fn$;
+-- RPC-ul vechi al owner-ului (clasa C, calea detaliată): același corp nou, autorul = auth.uid() verificat ca owner
+CREATE OR REPLACE FUNCTION public.fn_red_fan_urmarire(p_lot_id uuid, p_randuri jsonb) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  IF NOT public.fn_red_fan_e_owner() THEN RAISE EXCEPTION 'redari fan: doar owner-ul' USING ERRCODE = '42501'; END IF;
+  RETURN public.fn_red_fan_urmarire_scrie(p_lot_id, p_randuri, NULL, auth.uid());
+END $fn$;
 
 -- ═══ 2. Clasa B — rularea automată (EXECUTE EXCLUSIV service_role; un JWT de om = 42501) ═══
 -- Revendicarea: lock (advisory pe cheia fixă a rulărilor, L01) → rularea în curs de peste 15 minute se închide „expirata” (limita de execuție a
@@ -332,31 +565,34 @@ BEGIN
     INSERT INTO public.red_jurnal (tabela, inregistrare_id, actiune, date_noi, user_id)
     VALUES ('red_fan_rulari', v_r.id, 'update', jsonb_build_object('eveniment', 'urmarire_auto', 'sursa', v_r.sursa, 'slot', v_r.slot, 'zi_ro', v_r.zi_ro,
               'stare', v_r.stare, 'eroare_cod', v_r.eroare_cod, 'apeluri', v_r.apeluri, 'randuri', v_r.randuri, 'scrise', v_r.scrise, 'pastrate', v_r.pastrate,
-              'depasite', v_r.depasite, 'loturi', v_r.loturi, 'loturi_sarite', v_r.loturi_sarite, 'pornita_la', v_r.pornita_la, 'la', v_r.incheiata_la), v_r.pornita_de);
+              'depasite', v_r.depasite, 'contradictii', v_r.contradictii, 'ridicari', v_r.ridicari, 'loturi', v_r.loturi, 'loturi_sarite', v_r.loturi_sarite,
+              'pornita_la', v_r.pornita_la, 'la', v_r.incheiata_la), v_r.pornita_de);
   END IF;
   RETURN jsonb_build_object('rulare_id', v_r.id, 'stare', v_r.stare, 'eroare_cod', v_r.eroare_cod, 'apeluri', v_r.apeluri, 'randuri', v_r.randuri,
-    'scrise', v_r.scrise, 'pastrate', v_r.pastrate, 'depasite', v_r.depasite, 'deja_inchisa', v_deja);
+    'scrise', v_r.scrise, 'pastrate', v_r.pastrate, 'depasite', v_r.depasite, 'contradictii', v_r.contradictii, 'ridicari', v_r.ridicari, 'deja_inchisa', v_deja);
 END $fn$;
 
 -- fn_red_fan_srv_urmarire: p_rulare prinde viață (rezervat din 20261228a). Exact unul dintre p_actor / p_rulare: p_actor = omul verificat din JWT
 -- (F1, neschimbat: poarta operator / owner activ); p_rulare = rularea automată în curs, neexpirată (fără om: auth.uid() NULL, p_actor NULL).
--- Ambele căi scriu prin ACELAȘI corp fn_red_fan_urmarire_intern (L19). Cu p_rulare, numerele se adună în rândul rulării DUPĂ scriere; rularea
--- închisă între timp = RD041 și TOTUL se anulează (nici urmărirea nu rămâne scrisă). Lock: 3 red_fan_awb (în corpul comun) → 12 rândul rulării.
+-- Ambele căi scriu prin ACELAȘI corp fn_red_fan_urmarire_scrie (L19; runda 2), cu autorul: p_actor (omul) SAU p_rulare (rularea). Cu p_rulare,
+-- numerele (inclusiv contradicțiile și ridicările automate) se adună în rândul rulării DUPĂ scriere; rularea închisă între timp = RD041 și TOTUL
+-- se anulează (nici urmărirea, nici contradicțiile, nici jurnalul nu rămân scrise). Lock: 3 red_fan_awb (în corpul comun) → inserări → 12 rândul rulării.
 CREATE OR REPLACE FUNCTION public.fn_red_fan_srv_urmarire(p_actor uuid, p_rulare uuid, p_lot_id uuid, p_randuri jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_r jsonb;
 BEGIN
   IF p_rulare IS NULL THEN
     PERFORM public.fn_red_fan_srv_poarta(p_actor, true);
-    RETURN public.fn_red_fan_urmarire_intern(p_lot_id, p_randuri);
+    RETURN public.fn_red_fan_urmarire_scrie(p_lot_id, p_randuri, NULL, p_actor);
   END IF;
   IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'redari fan: rularea automata nu e apelabila de un om' USING ERRCODE = '42501'; END IF;
   IF p_actor IS NOT NULL THEN RAISE EXCEPTION 'redari fan: exact unul dintre actor si rulare' USING ERRCODE = '22023'; END IF;
   IF NOT EXISTS (SELECT 1 FROM public.red_fan_rulari WHERE id = p_rulare AND stare = 'in_curs' AND pornita_la >= clock_timestamp() - interval '15 minutes') THEN
     RAISE EXCEPTION 'redari fan: rularea nu e in curs' USING ERRCODE = 'RD041'; END IF;
-  v_r := public.fn_red_fan_urmarire_intern(p_lot_id, p_randuri);
+  v_r := public.fn_red_fan_urmarire_scrie(p_lot_id, p_randuri, p_rulare, NULL);
   UPDATE public.red_fan_rulari SET randuri = randuri + jsonb_array_length(p_randuri), scrise = scrise + (v_r ->> 'scrise')::integer,
-         pastrate = pastrate + (v_r ->> 'pastrate')::integer, depasite = depasite + (v_r ->> 'depasite')::integer
+         pastrate = pastrate + (v_r ->> 'pastrate')::integer, depasite = depasite + (v_r ->> 'depasite')::integer,
+         contradictii = contradictii + (v_r ->> 'contradictii')::integer, ridicari = ridicari + (v_r ->> 'ridicari')::integer
    WHERE id = p_rulare AND stare = 'in_curs';
   IF NOT FOUND THEN RAISE EXCEPTION 'redari fan: rularea s-a inchis in timpul scrierii' USING ERRCODE = 'RD041'; END IF;
   RETURN v_r;
@@ -399,7 +635,32 @@ BEGIN
       RAISE EXCEPTION '20270102a post: CHECK-ul % lipseste', r.c; END IF;
   END LOOP;
   IF EXISTS (SELECT 1 FROM public.red_fan_rulari) THEN RAISE EXCEPTION '20270102a post: red_fan_rulari are randuri'; END IF;
-  -- funcțiile: exact 56 fn_red_fan_* (52 ale bazei, dintre care 1 înlocuită, + 4 noi), fiecare cu corpul (AMPRENTE-NOI), limbajul, DEFINER, volatilitatea, tipul întors, proprietarul și EXECUTE EXACT pe clasă
+  -- runda 2: red_fan_contradictii — RLS (fără FORCE), exact politica de citire, DOAR SELECT pentru authenticated, fără trigger-e, cheia unică, CHECK-urile, gol
+  IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = 'public.red_fan_contradictii'::regclass AND c.relrowsecurity AND NOT c.relforcerowsecurity AND pg_get_userbyid(c.relowner) = 'postgres')
+     OR (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.red_fan_contradictii'::regclass) <> 1
+     OR NOT EXISTS (SELECT 1 FROM pg_policy pol WHERE pol.polrelid = 'public.red_fan_contradictii'::regclass AND pol.polname = 'red_fan_contradictii_citire' AND pol.polcmd = 'r'
+                      AND pol.polpermissive AND pol.polroles = ARRAY['authenticated'::regrole::oid] AND pol.polwithcheck IS NULL
+                      AND pg_get_expr(pol.polqual, pol.polrelid) = '((auth.uid() IS NOT NULL) AND (fn_red_nivel() = ANY (ARRAY[''admin''::text, ''editor''::text])))') THEN
+    RAISE EXCEPTION '20270102a post: RLS / politica pe red_fan_contradictii';
+  END IF;
+  SELECT string_agg(y.rol || '/' || z.drept, ', ') INTO v_rau
+    FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) y(rol), unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) z(drept)
+   WHERE has_table_privilege(y.rol, 'public.red_fan_contradictii'::regclass, z.drept) IS DISTINCT FROM (z.drept = 'SELECT' AND y.rol = 'authenticated');
+  IF v_rau IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_class c CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) e WHERE c.oid = 'public.red_fan_contradictii'::regclass AND e.grantee = 0)
+     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.red_fan_contradictii'::regclass AND a.attnum > 0 AND a.attacl IS NOT NULL) THEN
+    RAISE EXCEPTION '20270102a post: drepturi pe red_fan_contradictii (%)', coalesce(v_rau, 'PUBLIC / coloane');
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.red_fan_contradictii'::regclass AND NOT tgisinternal)
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.red_fan_contradictii'::regclass AND conname = 'red_fan_contradictii_cheie_uq' AND contype = 'u'
+                      AND pg_get_constraintdef(oid) = 'UNIQUE (fan_awb_id, cheie)')
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.red_fan_contradictii'::regclass AND contype = 'f' AND confrelid = 'public.red_fan_awb'::regclass
+                      AND pg_get_constraintdef(oid) = 'FOREIGN KEY (fan_awb_id) REFERENCES red_fan_awb(id)')
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.red_fan_contradictii'::regclass AND conname = 'red_fan_contradictii_regula' AND contype = 'c' AND convalidated)
+     OR EXISTS (SELECT 1 FROM public.red_fan_contradictii) THEN
+    RAISE EXCEPTION '20270102a post: trigger-e / cheia unica / cheia straina / CHECK-ul regulii pe red_fan_contradictii, sau tabelul are randuri';
+  END IF;
+  -- funcțiile: exact 57 fn_red_fan_* (52 ale bazei, dintre care 3 înlocuite, + 5 noi), fiecare cu corpul (AMPRENTE-NOI), limbajul, DEFINER, volatilitatea, tipul întors, proprietarul și EXECUTE EXACT pe clasă
   SELECT string_agg(a.semnatura, ', ' ORDER BY a.semnatura) INTO v_rau
     FROM (VALUES
       -- >>> AMPRENTE-NOI 20270102a (semnătura, md5(replace(prosrc, chr(13), '')), limbaj, DEFINER, volatilitate, tipul întors, EXECUTE authenticated, EXECUTE service_role)
@@ -449,14 +710,15 @@ BEGIN
       ('public.fn_red_fan_srv_rezultate(uuid,uuid,uuid,jsonb,integer)', '216688178ad5d77bb059054a96a31a7a', 'plpgsql', true, 'v', 'integer', false, true),
       ('public.fn_red_fan_srv_rulare_apel(uuid)', 'ca597a7446e9b9bd1a1d3c4029f13c43', 'plpgsql', true, 'v', 'integer', false, true),
       ('public.fn_red_fan_srv_rulare_incepe(text,uuid)', '2b1f1bf31f225284a2d9f4ca613933c8', 'plpgsql', true, 'v', 'jsonb', false, true),
-      ('public.fn_red_fan_srv_rulare_incheie(uuid,text,text,integer,integer)', 'd2fb7ab776c99003b1ff8ee2c62a3546', 'plpgsql', true, 'v', 'jsonb', false, true),
-      ('public.fn_red_fan_srv_urmarire(uuid,uuid,uuid,jsonb)', 'df871dc075ad55c6bda19d675f3f4cf9', 'plpgsql', true, 'v', 'jsonb', false, true),
+      ('public.fn_red_fan_srv_rulare_incheie(uuid,text,text,integer,integer)', '4cd929e8d0a3f440ff0015ab4b8161e3', 'plpgsql', true, 'v', 'jsonb', false, true),
+      ('public.fn_red_fan_srv_urmarire(uuid,uuid,uuid,jsonb)', 'c822d21b2f713f5a61ebb65b403718c6', 'plpgsql', true, 'v', 'jsonb', false, true),
       ('public.fn_red_fan_suma(numeric)', 'e4c468b1a27473db01ba7cfd15421a7d', 'sql', false, 'i', 'numeric', false, false),
       ('public.fn_red_fan_surse(uuid)', 'dd250f175d559976c72412ded8a1ae06', 'sql', false, 's', 'text', false, false),
       ('public.fn_red_fan_tiraj(uuid,text,text)', '36cafe6b98cf2436e5ffb42370139765', 'plpgsql', true, 'v', 'jsonb', true, false),
       ('public.fn_red_fan_tiraj_opreste(uuid,text,boolean)', '63b507c349b2961c032468a3d542212a', 'plpgsql', true, 'v', 'jsonb', true, false),
-      ('public.fn_red_fan_urmarire(uuid,jsonb)', '966a88fd8c20655714cf7a72dc25e748', 'plpgsql', true, 'v', 'jsonb', true, false),
-      ('public.fn_red_fan_urmarire_intern(uuid,jsonb)', '40109588fdeb59c56784ab4b7ff616be', 'plpgsql', true, 'v', 'jsonb', false, false),
+      ('public.fn_red_fan_urmarire(uuid,jsonb)', 'f310b4933f6064f4c2187e1602b46bb1', 'plpgsql', true, 'v', 'jsonb', true, false),
+      ('public.fn_red_fan_urmarire_intern(uuid,jsonb)', '50512f2506fcbf23bda6e4559cfbc71f', 'plpgsql', true, 'v', 'jsonb', false, false),
+      ('public.fn_red_fan_urmarire_scrie(uuid,jsonb,uuid,uuid)', '6c4e64aceb7b007d23907a045d5af08a', 'plpgsql', true, 'v', 'jsonb', false, false),
       ('public.fn_red_fan_urmarire_solutioneaza(uuid,integer,jsonb,text)', 'd286bb9f78d01f751eb123b0eb8ca5a5', 'plpgsql', true, 'v', 'jsonb', true, false),
       ('public.fn_red_fan_zi_garda()', '5c51181772f185ac5559913dd32918ec', 'plpgsql', true, 'v', 'trigger', false, false)
       -- <<< AMPRENTE-NOI 20270102a
@@ -476,7 +738,7 @@ BEGIN
       OR EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x WHERE x.grantee = 0);
   IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270102a post: functiile (corp / proprietati / EXECUTE) difera: %', v_rau; END IF;
   SELECT count(*) INTO v_n FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_red\_fan\_%';
-  IF v_n <> 56 THEN RAISE EXCEPTION '20270102a post: numarul functiilor fn_red_fan_* este %, asteptat 56', v_n; END IF;
+  IF v_n <> 57 THEN RAISE EXCEPTION '20270102a post: numarul functiilor fn_red_fan_* este %, asteptat 57', v_n; END IF;
   -- porțile 0e / Izometrie E2 (ca 20261228a runda 4): marcajul gărzii rândului FAN scris DOAR de cele 7 funcții ale listelor trigger-ului; niciun corp
   -- fn_red_fan_* nu cheamă funcția de configurare, nu numește calea de căutare și nu are SQL dinamic
   IF (SELECT array_agg(p.proname::text ORDER BY p.proname::text COLLATE "C") FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace

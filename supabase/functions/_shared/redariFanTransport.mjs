@@ -26,8 +26,12 @@ export const MAX_PLICURI_TRIMITE = 2000
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ZI = /^\d{4}-\d{2}-\d{2}$/
 
-/** Clientul FAN: login la nevoie (token 24 h, doc §1), un singur login nou la 401 (doc §5), timeout = status 0 („necunoscut”). */
-export function clientFan({ fetch, secrete, timeoutMs = TIMEOUT_FAN_MS }) {
+/** Clientul FAN: login la nevoie (token 24 h, doc §1), un singur login nou la 401 (doc §5), timeout = status 0 („necunoscut”).
+ *  Runda 2 #1155 (Jakarinos P2, L01 / L18): `inainteDeApel` (opțional, rularea automată) = pasul durabil al plafonului, chemat înaintea FIECĂRUI
+ *  apel cu token, INCLUSIV reluarea de după 401 (fiecare GET efectiv consumă plafonul, respectă bugetul și pauza `pauza(PAUZA_INTRE_CERERI_MS)`
+ *  dinaintea reluării). Refuzul pasului = nimic trimis: { status: null, corp: null, refuzat: { cod } } (refuz LOCAL, distinct de eroarea curierului,
+ *  L20). Fără `inainteDeApel` (butonul), comportamentul e cel de dinainte. Login-ul nu e o cerere de urmărire: nu consumă plafonul. */
+export function clientFan({ fetch, secrete, timeoutMs = TIMEOUT_FAN_MS, inainteDeApel = null, pauza = null }) {
   let token = null
   async function apel(method, cale, corp, { binar = false, cuToken = true } = {}) {
     try {
@@ -51,11 +55,21 @@ export function clientFan({ fetch, secrete, timeoutMs = TIMEOUT_FAN_MS }) {
   }
   return {
     async cerere(method, cale, corp, opt) {
+      const pas = async () => { if (typeof inainteDeApel !== 'function') return null; const p = await inainteDeApel(); return p?.ok === true ? null : { cod: p?.cod ?? null } }
+      let refuz = await pas()   // înaintea login-ului: un plafon atins nu mai trimite nimic curierului
+      if (refuz) return { status: null, corp: null, refuzat: refuz }
       if (!token) await login()
       let r = await apel(method, cale, corp, opt)
-      if (r.status === 401) { await login(); r = await apel(method, cale, corp, opt) }   // 401 = refuz înainte de prelucrare, determinist
+      if (r.status === 401) {   // 401 = refuz înainte de prelucrare, determinist: un login nou, apoi O reluare — tot prin pasul plafonului
+        await login()
+        if (typeof inainteDeApel === 'function' && typeof pauza === 'function') await pauza(PAUZA_INTRE_CERERI_MS)
+        refuz = await pas()
+        if (refuz) return { status: null, corp: null, refuzat: refuz }
+        r = await apel(method, cale, corp, opt)
+      }
       return r
     },
+    cuPlafon: typeof inainteDeApel === 'function',
   }
 }
 
@@ -368,37 +382,40 @@ const rezUrmarire = (w, n) => !w?.error && w?.data && typeof w.data === 'object'
 
 // ── urmărire: ≤ 100 AWB-uri pe solicitare; scrie DOAR starea de urmărire (propuneri), nu expedierea. Scrierea = clasa B dacă există rpcServer
 // (operator / owner prin funcția edge nouă, p_actor = omul), altfel RPC-ul vechi al owner-ului (același corp în BD, L19). ──
-// Rularea automată (redari-fan-urmarire, 20270102a) cheamă ACEEAȘI funcție, cu `rulare` = id-ul rulării (p_actor NULL, p_rulare = rularea) și
-// `deps.inainteDeApel()` = pasul durabil al plafonului ÎNAINTEA fiecărui GET (fn_red_fan_srv_rulare_apel); refuzul = nimic cerut curierului.
+// Rularea automată (redari-fan-urmarire, 20270102a) cheamă ACEEAȘI funcție, cu `rulare` = id-ul rulării (p_actor NULL, p_rulare = rularea) și un
+// client FAN construit cu `inainteDeApel` = pasul durabil al plafonului ÎNAINTEA fiecărui GET, inclusiv reluarea după 401 (runda 2 #1155, P2);
+// refuzul pasului = nimic cerut curierului. O rulare cu un client FĂRĂ pasul plafonului e refuzată aici, înaintea oricărui GET.
+// Runda 2 #1155 (decizia owner-ului 21.11.2026): faptele (ridicare, livrare, retur) se înregistrează AUTOMAT după regula deterministă
+// (rezumatUrmarireFan + corpul din BD); contradicțiile merg în BD ca semnal durabil (`contradictii`), nu mai blochează rândul. Butonul și
+// rularea automată au EXACT aceeași regulă (aceeași funcție, același corp SQL, L19).
 const cuAwb = randuri => randuri.filter(x => ['generat', 'ridicat'].includes(x.stare) && x.awb)
 export async function urmaresteLot({ lot, randuri, s, fan, deps, uid = null, rulare = null, out }) {
   const lista = cuAwb(randuri)
   if (!lista.length) return out(409, 'nimic_de_urmarit')
+  if (rulare && fan?.cuPlafon !== true) return out(423, 'apel_refuzat', { cod_bd: 'fara_plafon', scrise: 0, pastrate: 0, depasite: 0, stari: {}, solicitari: 0 })
   const stari = {}
-  let scrise = 0, pastrate = 0, depasite = 0, necerute = 0, solicitari = 0
+  let scrise = 0, pastrate = 0, depasite = 0, necerute = 0, solicitari = 0, contradictii = 0, ridicari = 0
   for (const [i, b] of imparteInBucati(lista).entries()) {
     if (i > 0) await deps.pauza(PAUZA_INTRE_CERERI_MS)
-    if (typeof deps.inainteDeApel === 'function') {
-      const pas = await deps.inainteDeApel()
-      if (pas?.ok !== true) return out(423, 'apel_refuzat', { cod_bd: pas?.cod ?? null, scrise, pastrate, depasite, stari, solicitari })
-    }
-    solicitari++
     const awbs = b.map(x => x.awb)
     const x = await fan.cerere('GET', caleListaAwb('/reports/awb/tracking', { clientId: s.clientId, awbs }))
+    if (x?.refuzat) return out(423, 'apel_refuzat', { cod_bd: x.refuzat.cod ?? null, scrise, pastrate, depasite, stari, solicitari })
+    solicitari++
     const u = interpreteazaUrmarire(x.status, x.corp, awbs)
-    if (!u.ok) return out(502, 'urmarire_neconfirmata', { motiv: u.motiv, http: x.status, scrise, pastrate, depasite, stari, solicitari })
+    if (!u.ok) return out(502, u.forma_necunoscuta ? 'urmarire_forma_necunoscuta' : 'urmarire_neconfirmata', { motiv: u.motiv, http: x.status, scrise, pastrate, depasite, stari, solicitari })
     necerute += u.necerute
     // Jakarinos #1118 r1 (L03): fiecare rând poartă versiunea de urmărire CITITĂ la începutul rulării; BD-ul scrie doar dacă e încă aceeași
     // și dacă evenimentul nu e mai vechi decât cel deja scris (altfel „depășit”: o rulare mai nouă a câștigat)
     const p = b.map(r => { const z = u.pe_awb.get(r.awb); stari[z.urmarire_stare] = (stari[z.urmarire_stare] || 0) + 1
       return { id: r.id, awb: r.awb, versiune: r.versiune_urmarire, urmarire_stare: z.urmarire_stare, ultim_eveniment: z.ultim_eveniment, ultim_eveniment_la: z.ultim_eveniment_la,
-        ridicat_propus: z.ridicat_propus, livrat_la: z.livrat_la, retur_propus: z.retur_propus } })
+        ridicat_propus: z.ridicat_propus, livrat_la: z.livrat_la, retur_propus: z.retur_propus, retur_la: z.retur_la ?? null, contradictii: z.contradictii || [] } })
     const raw = await scriereUrmarire(deps, uid, 'urmarire', lot.id, p, rulare)
     const w = rezUrmarire(raw, p.length)
     if (!w) return out(503, 'scriere_neconfirmata', { cod_bd: raw?.error?.code ?? null, scrise, pastrate, depasite, stari, solicitari })
     scrise += w.scrise; pastrate += w.pastrate; depasite += w.depasite
+    contradictii += Number.isInteger(w.contradictii) ? w.contradictii : 0; ridicari += Number.isInteger(w.ridicari) ? w.ridicari : 0
   }
-  return out(200, 'ok', { scrise, pastrate, depasite, stari, necerute, solicitari })
+  return out(200, 'ok', { scrise, pastrate, depasite, stari, necerute, solicitari, contradictii, ridicari })
 }
 // clasa B (fn_red_fan_srv_urmarire / _confirmari, service_role) când funcția edge are clientul server: p_actor = omul (F1) SAU p_rulare = rularea
 // automată (doar urmărirea, 20270102a; exact unul e nenul, BD-ul refuză altfel); fără client server, RPC-ul vechi (owner). Rularea automată fără

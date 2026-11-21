@@ -3,9 +3,22 @@
 Decizia owner-ului: 21.11.2026. Faptul de pornire: un AWB livrat pe 20.11 la 10:40 a ajuns în ERP abia pe 21.11, când cineva a apăsat
 „Urmărire”. De acum urmărirea se actualizează singură, de două ori pe zi, cu **exact aceeași logică** ca butonul.
 
-Ce NU se schimbă: ridicarea (C0) rămâne **propusă** și o confirmă omul („Confirmă ridicarea”, ca azi); contradicțiile ajung „de verificat de om”,
-ca azi; confirmările de primire (dovada pentru AR) rămân la buton; plicul nu se atinge; nicio acțiune care costă (generare, trimitere, anulare,
-ștergere, etichete) nu poate porni din rularea automată. Garda „doar proiecte de TEST” rămâne și aici, pe aceeași definiție.
+**Runda 2 (21.11.2026) — decizia owner-ului**: „verificările de livrare la 2000 de oameni o să fie aproape imposibile, trebuie să mergem pe ce
+livrează API-ul”. De aceea:
+
+- **Ridicarea (C0), livrarea (S2) și returul raportate de curier se înregistrează AUTOMAT ca fapte**, fără confirmarea omului pe fiecare plic —
+  la butonul „Urmărire” și la rularea automată, cu aceeași regulă (același cod JS, același corp SQL `fn_red_fan_urmarire_scrie`). Pe loturile de
+  TEST rândul FAN trece singur `generat` → `ridicat` (cu un eveniment `ridicare_auto` în jurnal); butonul „6b. Confirmă ridicarea” rămâne doar
+  pentru loturile **reale**, unde confirmarea scrie expedierea pe plic (termenul de 10 zile) — bifarea automată pe plic e D4, la F4, cu „da”-ul
+  juridic (spec §15.3).
+- **Contradicțiile din răspunsurile curierului NU mai blochează plicul la om**: se rezolvă automat după o regulă deterministă (§3b) și rămân
+  **durabil** ca semnal de audit (tabelul `red_fan_contradictii`, lista „Contradicții FAN (audit)” din ecranul AWB, cu filtru pe tip): valorile
+  contradictorii, valoarea aleasă, regula, rularea / omul, de câte ori a fost văzută. O rulare ulterioară nu șterge urma și nu mai cere omul.
+  Omul poate corecta manual un plic anume, dar nu e obligat.
+
+Ce NU se schimbă: confirmările de primire (dovada pentru AR) rămân la buton; plicul nu se atinge din urmărire; codurile nelimpezi ale curierului
+(S99, S50 etc.) rămân „de verificat de om”; nicio acțiune care costă (generare, trimitere, anulare, ștergere, etichete) nu poate porni din
+rularea automată. Garda „doar proiecte de TEST” rămâne și aici, pe aceeași definiție.
 
 Felia e o parte din F2 (`FAN_FLUX_OPERATOR_SPEC.md` §9, §13 F2): fără bifarea automată pe plic (D4), fără verificarea generate / tipărite /
 ridicate (D11), fără întrerupător în ecran. Acelea rămân pentru F2 complet.
@@ -14,13 +27,14 @@ ridicate (D11), fără întrerupător în ecran. Acelea rămân pentru F2 comple
 
 | Fișier | Ce face |
 |---|---|
-| `supabase/migrations/20270102a_redari_fan_urmarire_auto.sql` (NEAPLICATĂ) | tabelul `red_fan_rulari` + 4 RPC-uri ale clasei B + `fn_red_fan_srv_urmarire` cu `p_rulare` activ |
-| `supabase/revenire/20270102a_redari_fan_urmarire_auto_ROLLBACK.sql` | revenirea (readuce textual corpul din 20261228a) |
+| `supabase/migrations/20270102a_redari_fan_urmarire_auto.sql` (NEAPLICATĂ) | `red_fan_rulari` + `red_fan_contradictii` + 4 RPC-uri ale clasei B + corpul comun nou `fn_red_fan_urmarire_scrie` (folosit de `fn_red_fan_srv_urmarire` cu `p_actor` / `p_rulare`, de `fn_red_fan_urmarire` al owner-ului și de învelișul `fn_red_fan_urmarire_intern`) |
+| `supabase/revenire/20270102a_redari_fan_urmarire_auto_ROLLBACK.sql` | revenirea (readuce textual cele 3 corpuri din 20261228a) |
 | `supabase/functions/redari-fan-urmarire/index.ts` | funcția edge nouă: poarta + legăturile |
 | `supabase/functions/_shared/redariFanUrmarireAuto.mjs` | rularea (testabilă, fără rețea) |
-| `supabase/functions/_shared/redariFanTransport.mjs` | `urmaresteLot` = urmărirea butonului, exportată și folosită de ambele (L19) |
-| `supabase/functions/_shared/redariFan.mjs` | `rezumatUrmarireFan`: regula contradicțiilor în același răspuns (precondiția F2, §9.2) |
-| `src/redari/fanUrmarireAuto.test.js` | vitest: poarta, drumul, plafonul, erorile, suprapunerea, garda TEST, mutanți JS |
+| `supabase/functions/_shared/redariFanTransport.mjs` | `urmaresteLot` = urmărirea butonului, folosită de ambele (L19); `clientFan` cu pasul plafonului pe FIECARE GET, inclusiv reluarea după 401 |
+| `supabase/functions/_shared/redariFan.mjs` | `rezumatUrmarireFan`: TOATE contradicțiile evaluate, faptele după regulă (§3b), lista `contradictii`; `interpreteazaUrmarire`: forma necunoscută = eroare |
+| `src/redari/ui/FanContradictii.jsx` + `FanAwbPrevizualizare.jsx` + `fanLot.js` | lista de audit „Contradicții FAN”; „6b. Confirmă ridicarea” doar pe loturi reale |
+| `src/redari/fanUrmarireAuto.test.js` | vitest: poarta, drumul, plafonul (și pe reluarea după 401), erorile, forma necunoscută, suprapunerea, garda TEST, regula contradicțiilor (tabel de cazuri), mutanți JS |
 | `scripts/pglite/test_redari_fan_urmarire_auto_local.mjs` | PGlite: migrarea ca runnerul, comportamentul SQL, revenirea, mutanți SQL, porțile 0e / E2 |
 | `supabase/tests/20270102a_redari_fan_urmarire_auto_doua_sesiuni.sh` | două sesiuni reale pe clonă (S1 suprapunere, S2 plafon pe muchie, S3 închidere în timpul unui apel) — de rulat de coordonator |
 | `supabase/tests/20270102a_redari_fan_urmarire_auto.l15.obiecte.tsv` | lista obiectelor din manifestul L15 v2 (generată pe PGlite) |
@@ -49,7 +63,33 @@ Rândurile `red_fan_awb` cu:
   reale intră automat, fără altă schimbare);
 - cele **mai vechi urmărite primele** (`urmarit_la` gol întâi), cel mult plafon × 100 = 2.000 de rânduri pe rulare; restul vin la rularea următoare.
 
-Rândurile „de verificat” se urmăresc mai departe (faptele cunoscute nu se suprascriu; o contradicție nouă se adaugă lângă cea veche, ca la buton).
+Rândurile „de verificat” se urmăresc mai departe (faptele cunoscute rămân; o contradicție nouă se rezolvă după regulă și se adaugă în lista de audit).
+
+## 3b. Regula faptelor și a contradicțiilor (`fan-contradictii-v1`, aceeași în JS și în BD)
+
+Toate contradicțiile se evaluează **înainte** de a construi faptele (nu doar prima). Apoi:
+
+| Contradicția | În același răspuns FAN (`rezumatUrmarireFan`) | Între răspunsul nou și faptul înregistrat (`fn_red_fan_urmarire_scrie`) |
+|---|---|---|
+| zile de ridicare (C0) diferite | **prima zi** | ziua deja înregistrată **rămâne** (pe plicul real data expedierii e imuabilă) |
+| ore de livrare (S2) diferite | **ultima oră** | **ultima oră** dintre cele două |
+| livrare și retur | **evenimentul final ulterior** după ora curierului; la egalitate sau cu retur fără oră (`returnAwbNumber`) → **retur** | retur nou peste livrare cunoscută: retur dacă returul n-are oră sau e la / după livrare; livrare nouă peste retur cunoscut: livrat doar dacă livrarea e **după** ultimul eveniment cunoscut la înregistrarea returului, altfel retur |
+| motive de retur diferite | (un singur motiv: al ultimului semnal) | motivul răspunsului **mai nou**; un răspuns fără motiv păstrează motivul cunoscut |
+| dată C0 imposibilă (înainte de generarea AWB-ului / în viitor) | — | ridicarea **nu** se înregistrează (rândul rămâne `generat`) |
+
+Un răspuns **fără** eveniment final nu șterge finalul cunoscut; un răspuns fără cronologie (`events: []`) doar consemnează „verificat la”;
+evenimentele identice repetate sunt un singur fapt; un eveniment de formă necunoscută = rândul „de verificat”, **fără** niciun fapt din acel
+răspuns (cronologia e incompletă: evenimentul pierdut poate fi chiar al doilea C0).
+
+Fiecare contradicție = un rând în `red_fan_contradictii` (`sursa` = `acelasi_raspuns` / `intre_raspunsuri`, `tip`, `valori`, `ales`, `regula`,
+`versiune_regula`, `rulare_id` sau `actor`, `observari`, `prima_la` / `ultima_la`); aceeași contradicție revăzută = același rând (`observari` + 1,
+cheia unică pe AWB + conținut). Nimic nu le șterge; citirea = admin / editor Redări; scriere doar prin corpul comun. Exemple (probate pe PGlite):
+- două C0 (18 și 19.11), două S2 (20.11 10:40 și 12:00) și S16 (21.11) în același răspuns → ridicat 18.11, retur, fără livrare; 3 semnale;
+- prima rulare: două C0 (18 și 19.11) → ridicat 18.11 + un semnal; a doua rulare: un singur C0 pe 19.11 → rămâne 18.11, NU „de verificat”, al doilea
+  semnal (între răspunsuri), primul rămâne.
+
+Coloanele vechi `*_contrazis` nu se mai scriu (verificarea prealabilă a migrării cere să fie goale: o contradicție veche nesoluționată se
+soluționează întâi cu `fn_red_fan_urmarire_solutioneaza`).
 
 ## 4. Cum rulează (funcția edge `redari-fan-urmarire`)
 
@@ -61,12 +101,19 @@ Rândurile „de verificat” se urmăresc mai departe (faptele cunoscute nu se 
    curs” și index unic (zi, slot) ca plasă.
 3. **Selecția** (§3). Garda „doar TEST” se reverifică și în cod (`transportPermis`, aceeași funcție ca butonul): un lot care n-ar trece e sărit.
 4. **Secretele FAN** se citesc abia acum (nimic de urmărit = nimic citit, niciun apel).
-5. **Pe fiecare lot, `urmaresteLot`** (aceeași funcție ca butonul): bucăți de ≤ 100 AWB-uri, pauză 2 s; ÎNAINTEA fiecărui GET, pasul durabil al
-   plafonului în BD (`fn_red_fan_srv_rulare_apel`: contor CAS, plafon 20; RD040 = plafon atins) + plafonul local + bugetul de timp (100 s);
-   interpretarea comună (`interpreteazaUrmarire` / `rezumatUrmarireFan`); scrierea prin `fn_red_fan_srv_urmarire(p_actor NULL, p_rulare, …)` =
-   același corp `fn_red_fan_urmarire_intern` (CAS pe versiune, propuneri), iar BD-ul adună numerele în rândul rulării.
-6. **Oprirea la erori** (L05): 429 / 5xx / timeout / formă necunoscută a curierului = rularea se închide `oprita_eroare` cu codul, fără reîncercare
-   în aceeași rulare; rularea următoare reia. Refuz determinist pe un lot (rând schimbat între selecție și scriere: P0001 / RD032 / 22023) = lotul se
+5. **Pe fiecare lot, `urmaresteLot`** (aceeași funcție ca butonul): bucăți de ≤ 100 AWB-uri, pauză 2 s; ÎNAINTEA FIECĂRUI GET efectiv — inclusiv
+   reluarea pe care clientul curierului o face după un 401 (login nou), precedată de pauza de 2 s — pasul durabil al plafonului în BD
+   (`fn_red_fan_srv_rulare_apel`: contor CAS, plafon 20; RD040 = plafon atins) + plafonul local + bugetul de timp (100 s). Pasul îl cheamă clientul
+   însuși (`clientFan({ inainteDeApel })`), deci nicio reluare nu-l ocolește; o rulare cu un client fără pas e refuzată înaintea oricărui GET.
+   Login-ul nu e o cerere de urmărire (nu consumă plafonul) și nu pornește dacă plafonul e deja atins. Interpretarea comună
+   (`interpreteazaUrmarire` / `rezumatUrmarireFan`, regula §3b); scrierea prin `fn_red_fan_srv_urmarire(p_actor NULL, p_rulare, …)` = același corp
+   `fn_red_fan_urmarire_scrie` ca butonul (CAS pe versiune, faptele după regulă, contradicțiile în lista de audit), iar BD-ul adună numerele în
+   rândul rulării (inclusiv contradicțiile și ridicările înregistrate).
+6. **Oprirea la erori** (L05): 429 / 5xx / timeout = rularea se închide `oprita_eroare` cu codul, fără reîncercare în aceeași rulare; rularea
+   următoare reia. **Forma necunoscută a ÎNTREGULUI răspuns** (nicio listă recunoscută, sau o listă în care niciun element nu are un AWB
+   recunoscut) = eroare de schemă: `oprita_eroare` / `fan_forma_necunoscuta`, NIMIC scris din acea bucată, loturile următoare nu se mai cer (la
+   buton: `urmarire_forma_necunoscuta`, eroare afișată, nimic scris). Diferit de un ELEMENT anume (AWB cerut și absent dintr-un răspuns valid): acel
+   AWB e „de verificat”, rularea continuă. Refuz determinist pe un lot (rând schimbat între selecție și scriere: P0001 / RD032 / 22023) = lotul se
    sare, rularea continuă. Eroare necunoscută la scriere = oprire.
 7. **Închiderea** (`fn_red_fan_srv_rulare_incheie`): o singură dată (a doua oară = starea existentă), cu un rând `urmarire_auto` în `red_jurnal`
    (numerele, sursa, slotul; fără AWB-uri, fără nume).
@@ -83,8 +130,12 @@ folosește; `FAN_SELFAWB_USERNAME` / `FAN_SELFAWB_PASSWORD` / `FAN_CLIENT_ID` su
 1. **Proba pe clonă**: migrarea prin runner (`--plafon-tranzactie-ms 5000 --amprenta-globala … --diferente-globale …`, manifestul generat cu
    `scripts/livrare_l15_manifest.sh` și comparat cu `supabase/tests/20270102a_redari_fan_urmarire_auto.l15.obiecte.tsv`), apoi
    `supabase/tests/20270102a_redari_fan_urmarire_auto_doua_sesiuni.sh`, apoi revenirea și re-aplicarea.
-2. **Migrarea pe producție** (cu „da”-ul owner-ului), prin runner, ca la 20261228a.
-3. **Funcția edge** `redari-fan-urmarire` (workflow „Deploy edge function”, slug `redari-fan-urmarire`; NU în `NO_JWT`).
+2. **Migrarea pe producție** (cu „da”-ul owner-ului), prin runner, ca la 20261228a. Verificarea ei prealabilă refuză dacă există contradicții
+   vechi nesoluționate (`*_contrazis` sau livrare + retur pe același rând): atunci se soluționează întâi din ecran („Soluționează…”), apoi se
+   reia aplicarea.
+3. **Funcțiile edge, imediat după migrare**: `redari-fan-awb` (butonul — aceleași fișiere `_shared`, regula nouă; până la republicare, un răspuns
+   cu livrare + retur trimis de codul vechi e refuzat de BD cu 22023, nimic scris) și `redari-fan-urmarire` (nouă) — workflow „Deploy edge
+   function”; `redari-fan-urmarire` NU în `NO_JWT`.
 4. **Proba manuală** a owner-ului: un POST cu JWT-ul lui pe funcție (fără corp) → `{ cod: 'ok' | 'oprita' | 'rulare_ocupata', … }`; în
    `red_fan_rulari` apare rularea `manual`; pe `TEST-RAZVAN` rândurile se actualizează ca la buton.
 5. **Jobul cron** (SQL, ca postgres; aceleași antete ca jobul 29):
@@ -109,41 +160,54 @@ SELECT cron.schedule('redari_fan_urmarire_zilnic', '30 5,16 * * *', $cmd$SELECT 
 
 **Oprirea**: `SELECT cron.alter_job((SELECT jobid FROM cron.job WHERE jobname = 'redari_fan_urmarire_zilnic'), active := false);` (sau
 `cron.unschedule`). O rulare deja pornită se termină singură (cel mult ~2 minute). **Revenirea** migrării: întâi jobul oprit, apoi revenirea prin
-runner (refuză cât există rulări în istoric — atunci nu se rulează).
+runner (refuză cât există rulări în istoric, contradicții înregistrate sau ridicări automate în jurnal — atunci nu se rulează; după revenire,
+`redari-fan-awb` trebuie republicată de pe commit-ul de dinainte).
 
 ## 6. Fișa de securitate a–e (CLAUDE.md pct. 7)
 
 - **(a) Conținut extern citit**: DOAR răspunsul curierului la `GET /reports/awb/tracking`. E tratat ca **date**: coduri de eveniment pe listă albă,
-  AWB numeric, date cu formă fixă, listele acceptate doar în formele cunoscute; textele curierului nu se păstrează; forma necunoscută = „de
-  verificat de om”. Curierul nu poate porni nimic: răspunde doar la întrebările noastre.
-- **(b) Ce scrie / face**: DOAR câmpurile de urmărire din `red_fan_awb` (prin corpul comun cu butonul: CAS pe versiune, faptele cunoscute nu se
-  suprascriu, contradicția → „de verificat”), rândul rulării din `red_fan_rulari` și un rând de jurnal pe rulare. NU cheltuie bani (urmărirea e
-  gratuită; generarea / trimiterea nu pot fi chemate: nici RPC-urile, nici căile curierului), NU confirmă ridicarea, NU scrie pe plic (fără data
-  expedierii, fără AR, fără retur), NU trimite mail / SMS, NU atinge drepturi, NU șterge.
+  AWB numeric, date cu formă fixă, listele acceptate doar în formele cunoscute; textele curierului nu se păstrează; forma necunoscută a întregului
+  răspuns = oprire, nimic scris; un eveniment de formă necunoscută = „de verificat de om”, fără fapte. Lista de contradicții trimisă în BD e
+  validată pe listă albă (tip + regulă, valori de formă fixă, alesul printre valori). Curierul nu poate porni nimic: răspunde doar la întrebările noastre.
+- **(b) Ce scrie / face**: câmpurile de urmărire din `red_fan_awb` (prin corpul comun cu butonul: CAS pe versiune, faptele după regula §3b) și, pe
+  un lot de TEST, starea `generat` → `ridicat` (`ridicat_la` = ziua C0); semnalele din `red_fan_contradictii`; rândul rulării din `red_fan_rulari`;
+  în `red_jurnal` un rând pe rulare + un rând pe ridicare automată. NU cheltuie bani (urmărirea e gratuită; generarea / trimiterea nu pot fi
+  chemate: nici RPC-urile, nici căile curierului), NU scrie pe plic (fără data expedierii, fără AR, fără retur pe plic), NU trimite mail / SMS,
+  NU atinge drepturi, NU șterge.
 - **(c) Identitate**: `service_role` în funcția edge — fără om la cron, iar RLS-ul tabelelor FAN cere un om admin / editor Redări; un cont tehnic cu
   drept de owner ar fi exact ce interzice D2. Perimetrul: poarta (`fn_verifica_secret`, `profiles.is_owner`) și cele 5 RPC-uri din `RPC_RULARE`,
   toate cu EXECUTE **exclusiv** `service_role` și cu `auth.uid() IS NULL` cerut în corp (un JWT de om pe calea serverului = 42501). Nicio scriere
-  directă pe tabele (`service_role` nu are niciun drept pe `red_fan_rulari`; postcondiția migrării o verifică).
+  directă pe tabele (`service_role` nu are niciun drept pe `red_fan_rulari` / `red_fan_contradictii`; postcondiția migrării o verifică).
 - **(d) Cine pornește**: DOAR jobul cron (`postgres`, cu `x-intern-secret` din Vault) sau owner-ul logat — verificare de rol în cod
   (`cronSauOwner`), nu doar `verify_jwt` (cheia anon e un JWT valid). Fără secret / cu secret greșit / cu JWT de ne-owner = 401, nimic citit.
   BD-ul reverifică owner-ul (`fn_red_fan_srv_rulare_incepe`).
-- **(e) Confirmarea umană păstrată**: ridicarea (rămâne propusă, „Confirmă ridicarea”), contradicțiile („de verificat”, soluționarea owner /
-  admin), livrarea / AR-ul / returul (pe plic doar de om), confirmările de primire (butonul), anularea. Regula tare (a)+(b): citește conținut
-  extern ȘI scrie → poarta = cine pornește (cron + secret / owner) + ce poate scrie (o listă închisă de câmpuri de urmărire, înainte-numai, fără
-  efect juridic: termenul de 10 zile pornește doar din data de expediere de pe plic, pusă de om).
+- **(e) Confirmarea umană păstrată** (după decizia owner-ului din 21.11.2026): expedierea pe plicul unui lot REAL („Confirmă ridicarea pe plic”;
+  bifarea automată = D4 / F4, cu „da”-ul juridic), AR-ul / returul pe plic, confirmările de primire (butonul), anularea, codurile nelimpezi („de
+  verificat”), corectarea manuală a unui plic anume. Faptele raportate de curier în evidența FAN (ridicare, livrare, retur) și contradicțiile NU mai
+  cer omul: regula §3b decide, semnalul rămâne în lista de audit. Regula tare (a)+(b): citește conținut extern ȘI scrie → poarta = cine pornește
+  (cron + secret / owner) + ce poate scrie (o listă închisă de câmpuri de urmărire + starea „ridicat” pe loturile de TEST, fără efect juridic:
+  termenul de 10 zile pornește doar din data de expediere de pe plic, pusă de om).
 
 ## 7. Probe
 
 - `npx vitest run src/redari/fanUrmarireAuto.test.js`: 401 la orice apelant în afara cron / owner (nimic chemat); drumul complet (p_actor NULL +
   p_rulare, pasul plafonului înaintea fiecărui GET, pauza, închiderea ultima); nicio cale costisitoare (garda de fetch pe tabel de cazuri); plafonul
-  (local, RD040 din BD, eroarea pasului, bugetul de timp); oprirea la 429 / 5xx / timeout; refuzul determinist vs necunoscut la scriere;
-  suprapunerea („ocupat”); garda TEST din cod; fără secrete / selecție picată / nimic de urmărit = nimic citit; răspunsul fără date; regula
-  contradicțiilor (tabel de cazuri); butonul neschimbat; **16 mutanți JS**, fiecare prins.
+  (local, RD040 din BD, eroarea pasului, bugetul de timp) **și pe reluarea după 401** (plafon 1 = un singur GET; RD040 / bugetul pe reluare; pauza
+  înaintea reluării; contorul = GET-urile efective); rularea cu un client fără plafon = refuz; oprirea la 429 / 5xx / timeout / **forma necunoscută
+  a întregului răspuns** (nimic scris, lotul următor necerut) vs. AWB absent = „de verificat”; refuzul determinist vs necunoscut la scriere;
+  suprapunerea („ocupat”); garda TEST din cod; fără secrete / selecție picată / nimic de urmărit = nimic citit; răspunsul fără date; **regula
+  contradicțiilor** (tabel de cazuri cu reproducerea recenzentului; perechile tip / regulă = CHECK-ul din BD); rândurile trimise poartă faptele
+  rezolvate + contradicțiile; butonul (aceeași regulă, 401 = o reluare, forma necunoscută = eroare); ecranul (6b doar pe lot real, lista de audit
+  citită cu keyset); **mutanți JS** (fiecare prins) + martorul nemutat.
 - `node scripts/pglite/test_redari_fan_urmarire_auto_local.mjs`: validatorul runnerului (5000 / 2000), aplicarea ca la livrare (manifestul =
   lista revizuită), clasa B (authenticated / anon / service_role cu JWT de om = 42501), revendicarea, suprapunerea, slotul, plafonul manual,
-  expirarea, selecția (incluse / excluse / ordinea / limita de 2.000), scrierea cu p_rulare (ridicarea rămâne propusă, plicul neatins, CAS,
-  garda TEST, numerele din BD), închiderea idempotentă, RLS, butonul F1 neschimbat, confirmările neschimbate; refuzurile migrării; revenirea (refuz
-  la fiecare urmă, aplicare → revenire → re-aplicare); **18 mutanți SQL** + martorul; paritatea plafonului JS ↔ SQL; porțile 0e / Izometrie E2.
+  expirarea, selecția (incluse / excluse / ordinea / limita de 2.000), scrierea cu p_rulare (ridicarea înregistrată automat pe lot TEST + jurnalul
+  ridicare_auto, plicul neatins, CAS, garda TEST, numerele din BD), închiderea idempotentă, RLS, butonul F1, confirmările neschimbate; **K1–K11**:
+  reproducerea P1 (trei contradicții în același răspuns), două / patru rulări succesive (urma rămâne, nu cere omul, observări), livrare ↔ retur între
+  răspunsuri (ambele sensuri), două ore de livrare, date C0 imposibile, payload-ul extern refuzat (22023, 10 forme), RLS / scriere directă pe
+  contradicții, nicio coloană `*_contrazis`, lotul real fără ridicare automată; refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
+  revenirea (refuz la fiecare urmă, inclusiv contradicții și ridicări automate; aplicare → revenire → re-aplicare); **mutanți SQL** + martorul;
+  paritatea plafonului JS ↔ SQL; porțile 0e / Izometrie E2.
 - Pe clonă (coordonatorul): `supabase/tests/20270102a_redari_fan_urmarire_auto_doua_sesiuni.sh` — S1 două porniri suprapuse (B așteaptă, apoi
   „ocupat”), S2 ultimul apel disputat (B așteaptă, apoi RD040), S3 închiderea în timpul unui apel (B așteaptă, apoi RD041).
 - Live pe `TEST-RAZVAN`, după deploy: proba manuală a owner-ului (§5 pasul 4), apoi prima rulare de cron în `red_fan_rulari`.

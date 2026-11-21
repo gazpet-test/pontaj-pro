@@ -8,9 +8,13 @@ import { describe, it, expect, afterAll } from 'vitest'
 import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import * as REAL from '../../supabase/functions/_shared/redariFanUrmarireAuto.mjs'
-import { rezumatUrmarireFan, URL_FAN } from '../../supabase/functions/_shared/redariFan.mjs'
+import * as AUTO_REAL from '../../supabase/functions/_shared/redariFanUrmarireAuto.mjs'
+import * as TRANSPORT_REAL from '../../supabase/functions/_shared/redariFanTransport.mjs'
+import * as FAN_REAL from '../../supabase/functions/_shared/redariFan.mjs'
+import { rezumatUrmarireFan, interpreteazaUrmarire, URL_FAN, REGULI_CONTRADICTII } from '../../supabase/functions/_shared/redariFan.mjs'
 import { executaActiuneFan, PAUZA_INTRE_CERERI_MS } from '../../supabase/functions/_shared/redariFanTransport.mjs'
+// modulul verificat = rularea + transportul + helperul din ACELAȘI folder (codul real sau copia mutată)
+const REAL = { ...AUTO_REAL, __transport: TRANSPORT_REAL, __fan: FAN_REAL }
 
 const RUL = '0a000000-0000-4000-8000-000000000001'
 const OWNER = '00000000-0000-4000-8000-000000000001'
@@ -133,11 +137,71 @@ const VERIFICARI = {
     const t = lume({ fanRaspuns: () => { throw new Error('timeout') } })
     await M.ruleazaUrmarireAuto(CRON, t.deps)
     if (tracking(t).length !== 1 || inchidere(t)?.p_eroare_cod !== 'fan_neconfirmat') return 'timeout: rularea nu s-a oprit „fan_neconfirmat”'
-    // formă necunoscută a listei → interpretarea comună: tot „de verificat”, nimic pierdut; scrierea are loc (propuneri), rularea continuă
-    const u = lume({ fanRaspuns: () => json(200, { ceva: 1 }) })
-    await M.ruleazaUrmarireAuto(CRON, u.deps)
-    const s = u.rpc.find(x => x.nume === 'fn_red_fan_srv_urmarire')
-    if (!s || s.args.p_randuri.some(x => x.urmarire_stare !== 'de_verificat')) return 'forma necunoscută nu ajunge „de verificat”'
+    // runda 2 (Jakarinos #1155 r1 P2, doc §4 pasul 6): forma necunoscută a ÎNTREGULUI răspuns = eroare de schemă → oprire „oprita_eroare”,
+    // NIMIC scris, al doilea lot nu mai e cerut (reproducerea recenzentului: două loturi, `{ ceva: 1 }`)
+    for (const corp of [{ ceva: 1 }, { data: [{ foo: 1 }, { bar: 2 }] }, 'text']) {
+      const u = lume({ loturi: [lot(L1, 2), lot(L2, 2, { baza: 7100000000 })], fanRaspuns: () => json(200, corp) })
+      const r = await M.ruleazaUrmarireAuto(CRON, u.deps)
+      if (tracking(u).length !== 1 || u.rpc.some(x => x.nume === 'fn_red_fan_srv_urmarire') || inchidere(u)?.p_stare !== 'oprita_eroare'
+          || inchidere(u)?.p_eroare_cod !== 'fan_forma_necunoscuta' || r.body.cod !== 'oprita')
+        return `forma necunoscută ${JSON.stringify(corp)}: ${tracking(u).length} GET, ${u.rpc.filter(x => x.nume === 'fn_red_fan_srv_urmarire').length} scrieri, ${inchidere(u)?.p_stare}/${inchidere(u)?.p_eroare_cod}`
+    }
+    // un ELEMENT anume (AWB absent din răspuns) rămâne „de verificat” pe acel AWB, rularea continuă (nu e eroare de schemă)
+    const e = lume({ loturi: [lot(L1, 2)], fanRaspuns: () => json(200, { data: [{ awbNumber: '7000000001', events: [{ id: 'C0', date: '2026-11-20 10:40:00' }] }] }) })
+    await M.ruleazaUrmarireAuto(CRON, e.deps)
+    const s = e.rpc.find(x => x.nume === 'fn_red_fan_srv_urmarire')
+    if (!s || s.args.p_randuri.map(x => x.urmarire_stare).join() !== 'ridicat,de_verificat' || inchidere(e)?.p_stare !== 'incheiata') return 'AWB-ul absent dintr-un răspuns valid nu e „de verificat” sau rularea s-a oprit'
+    return null
+  },
+  async reautentificare(M) {
+    // runda 2 (Jakarinos #1155 r1 P2): curierul cere login din nou (401) → reluarea GET-ului trece PRIN pasul plafonului, cu pauză
+    const de401 = () => { let n = 0; return url => (++n === 1 ? json(401, null) : urmarireOk(url)) }
+    // plafon 1: primul GET consumă plafonul, reluarea e refuzată local → UN singur GET efectiv, nimic scris, „oprita_plafon”
+    const f = lume({ start: { rulare_id: RUL, plafon_apeluri: 1 }, fanRaspuns: de401() })
+    await M.ruleazaUrmarireAuto(CRON, f.deps)
+    const login = f.fetchuri.filter(x => x.cale === '/login').length
+    if (tracking(f).length !== 1 || f.rpc.filter(x => x.nume === 'fn_red_fan_srv_rulare_apel').length !== 1 || inchidere(f)?.p_stare !== 'oprita_plafon'
+        || inchidere(f)?.p_eroare_cod !== 'plafon_local' || f.rpc.some(x => x.nume === 'fn_red_fan_srv_urmarire'))
+      return `plafon 1 cu 401: ${tracking(f).length} GET, ${login} login, ${f.rpc.filter(x => x.nume === 'fn_red_fan_srv_rulare_apel').length} pași, ${inchidere(f)?.p_stare}/${inchidere(f)?.p_eroare_cod}`
+    // refuzul BD-ului pe pasul reluării (RD040) → la fel: nimic trimis după el
+    const g = lume({ fanRaspuns: de401(), apel: n => (n <= 1 ? { data: n } : { error: { code: 'RD040' } }) })
+    await M.ruleazaUrmarireAuto(CRON, g.deps)
+    if (tracking(g).length !== 1 || inchidere(g)?.p_eroare_cod !== 'rd040') return `RD040 pe reluare: ${tracking(g).length} GET, ${inchidere(g)?.p_eroare_cod}`
+    // plafon 20: reluarea are loc, FIECARE GET e precedat de pasul lui și reluarea de pauză; contorul = GET-urile efective
+    const h = lume({ fanRaspuns: de401() })
+    const r = await M.ruleazaUrmarireAuto(CRON, h.deps)
+    const j = h.jurnal
+    const iGet = j.map((x, i) => (x === 'fetch:GET /reports/awb/tracking' ? i : -1)).filter(i => i >= 0)
+    const pasi = h.rpc.filter(x => x.nume === 'fn_red_fan_srv_rulare_apel').length
+    if (iGet.length !== 2 || pasi !== 2 || r.body.apeluri !== 2 || j[iGet[1] - 1] !== 'rpc:fn_red_fan_srv_rulare_apel' || j[iGet[1] - 2] !== 'pauza:' + PAUZA_INTRE_CERERI_MS
+        || inchidere(h)?.p_stare !== 'incheiata')
+      return `reluarea după 401: ${iGet.length} GET, ${pasi} pași, apeluri raportate ${r.body.apeluri}, înainte de reluare: ${j[iGet[1] - 2]} / ${j[iGet[1] - 1]}`
+    // bugetul de timp e verificat și pe reluare
+    const b = lume({ fanRaspuns: de401(), timp: i => (i <= 1 ? 0 : REAL.BUGET_RULARE_MS + 1) })
+    await M.ruleazaUrmarireAuto(CRON, b.deps)
+    if (tracking(b).length !== 1 || inchidere(b)?.p_eroare_cod !== 'buget_timp') return `bugetul pe reluare: ${tracking(b).length} GET, ${inchidere(b)?.p_eroare_cod}`
+    return null
+  },
+  async payloadFapte(M) {
+    // rândurile trimise în BD poartă faptele REZOLVATE + contradicțiile din același răspuns (BD-ul le păstrează durabil): două C0 + S2 + S16
+    const f = lume({ loturi: [lot(L1, 1)], fanRaspuns: () => json(200, { data: [{ awbNumber: '7000000001', events: [{ id: 'C0', date: '2026-11-18 10:00:00' },
+      { id: 'C0', date: '2026-11-19 09:00:00' }, { id: 'S2', date: '2026-11-20 10:40:00' }, { id: 'S16', date: '2026-11-21 10:00:00' }] }] }) })
+    await M.ruleazaUrmarireAuto(CRON, f.deps)
+    const p = f.rpc.find(x => x.nume === 'fn_red_fan_srv_urmarire')?.args.p_randuri?.[0]
+    if (!p || p.urmarire_stare !== 'retur' || p.ridicat_propus !== '2026-11-18' || p.livrat_la !== null || p.retur_la !== '2026-11-21 10:00:00'
+        || JSON.stringify((p.contradictii || []).map(c => c.tip)) !== JSON.stringify(['ridicare_zile', 'livrare_retur']))
+      return 'rândul trimis în BD nu poartă faptele rezolvate / contradicțiile: ' + JSON.stringify(p)
+    return null
+  },
+  async rulareFaraPlafon(M) {
+    // apărare în adâncime: urmaresteLot pe o rulare cu un client FĂRĂ pasul plafonului → refuz înaintea oricărui GET
+    const urm = M.__transport?.urmaresteLot
+    if (!urm) return 'nu găsesc urmaresteLot'
+    const fetchuri = []
+    const fan = M.__transport.clientFan({ fetch: async url => { fetchuri.push(url); return json(200, { data: { token: 't' } }) }, secrete: { username: 'u', password: 'p', clientId: '7' } })
+    const r = await urm({ lot: { id: L1 }, randuri: randuri(L1, 2), s: { clientId: '7' }, fan, deps: { rpcServer: async () => ({ data: { scrise: 2, pastrate: 0, depasite: 0 } }), pauza: async () => {} },
+      rulare: RUL, out: (status, cod, extra = {}) => ({ status, body: { cod, ...extra } }) })
+    if (r.status !== 423 || r.body.cod_bd !== 'fara_plafon' || fetchuri.length) return `rulare cu client fără plafon: ${r.status} ${r.body.cod_bd}, ${fetchuri.length} apeluri`
     return null
   },
   async scriereRefuzata(M) {
@@ -235,24 +299,140 @@ describe('funcția edge redari-fan-urmarire: poarta ÎNAINTEA oricărei citiri, 
   })
 })
 
-describe('regula contradicțiilor în ACELAȘI răspuns (spec §9.2, precondiția F2) — rezumatUrmarireFan', () => {
-  const ev = (...e) => ({ events: e.map(([id, date]) => ({ id, date })) })
-  it.each([
-    ['două C0 în zile diferite → de verificat, fără dată propusă', ev(['C0', '2026-11-18 10:00:00'], ['C0', '2026-11-19 09:00:00']), { urmarire_stare: 'de_verificat', ridicat_propus: null }],
-    ['două C0 în aceeași zi, ore diferite → ridicat cu ziua', ev(['C0', '2026-11-18 10:00:00'], ['C0', '2026-11-18 15:00:00']), { urmarire_stare: 'ridicat', ridicat_propus: '2026-11-18' }],
-    ['C0 + S2 → livrat', ev(['C0', '2026-11-18 10:00:00'], ['S2', '2026-11-20 10:40:00']), { urmarire_stare: 'livrat', ridicat_propus: '2026-11-18', livrat_la: '2026-11-20 10:40:00' }],
-    ['S2 + S16 → de verificat, fără livrare / retur propuse', ev(['S2', '2026-11-20 10:40:00'], ['S16', '2026-11-21 10:00:00']), { urmarire_stare: 'de_verificat', livrat_la: null, retur_propus: null }],
-    ['S2 fără C0 → livrat, ridicarea necunoscută', ev(['S2', '2026-11-20 10:40:00']), { urmarire_stare: 'livrat', ridicat_propus: null, livrat_la: '2026-11-20 10:40:00' }],
-    ['două S2 la ore diferite → de verificat, fără oră propusă', ev(['S2', '2026-11-20 10:40:00'], ['S2', '2026-11-20 12:00:00']), { urmarire_stare: 'de_verificat', livrat_la: null }],
-    ['evenimente identice repetate = un singur fapt', ev(['C0', '2026-11-18 10:00:00'], ['C0', '2026-11-18 10:00:00'], ['S2', '2026-11-20 10:40:00'], ['S2', '2026-11-20 10:40:00']), { urmarire_stare: 'livrat', ridicat_propus: '2026-11-18' }],
-    ['adresă greșită, apoi livrat → livrat (nu e retur)', ev(['S4', '2026-11-19 10:00:00'], ['S2', '2026-11-20 10:40:00']), { urmarire_stare: 'livrat' }],
-  ])('%s', (_, el, asteptat) => { expect(rezumatUrmarireFan(el)).toMatchObject(asteptat) })
-  it('livrare + returnAwbNumber → de verificat', () => {
-    expect(rezumatUrmarireFan({ ...ev(['S2', '2026-11-20 10:40:00']), returnAwbNumber: '1000000999' })).toMatchObject({ urmarire_stare: 'de_verificat', livrat_la: null })
+// ── regula contradicțiilor (decizia owner-ului 21.11.2026, runda 2): tabel de cazuri cu așteptări scrise de mână din FAN_URMARIRE_AUTOMATA.md §3b (L25) ──
+const ev = (...e) => ({ events: e.map(([id, date]) => ({ id, date })) })
+const CR = REGULI_CONTRADICTII
+const CAZURI_CONTRADICTII = [
+  ['reproducerea Jakarinos P1: două C0 (zile diferite), două S2 (ore diferite) și S16 → TOATE trei evaluate, faptele după regulă',
+    ev(['C0', '2026-11-18 10:00:00'], ['C0', '2026-11-19 09:00:00'], ['S2', '2026-11-20 10:40:00'], ['S2', '2026-11-20 12:00:00'], ['S16', '2026-11-21 10:00:00']),
+    { urmarire_stare: 'retur', ridicat_propus: '2026-11-18', livrat_la: null, retur_la: '2026-11-21 10:00:00' },
+    [['ridicare_zile', '2026-11-18', ['2026-11-18', '2026-11-19']], ['livrare_ore', '2026-11-20 12:00:00', ['2026-11-20 10:40:00', '2026-11-20 12:00:00']],
+      ['livrare_retur', 'retur', ['S2 2026-11-20 12:00:00', 'S16 2026-11-21 10:00:00']]]],
+  ['două C0 în zile diferite → ridicat, PRIMA zi', ev(['C0', '2026-11-18 10:00:00'], ['C0', '2026-11-19 09:00:00']),
+    { urmarire_stare: 'ridicat', ridicat_propus: '2026-11-18' }, [['ridicare_zile', '2026-11-18', ['2026-11-18', '2026-11-19']]]],
+  ['două C0 în aceeași zi, ore diferite → ridicat cu ziua, fără contradicție', ev(['C0', '2026-11-18 10:00:00'], ['C0', '2026-11-18 15:00:00']),
+    { urmarire_stare: 'ridicat', ridicat_propus: '2026-11-18' }, []],
+  ['C0 + S2 → livrat', ev(['C0', '2026-11-18 10:00:00'], ['S2', '2026-11-20 10:40:00']), { urmarire_stare: 'livrat', ridicat_propus: '2026-11-18', livrat_la: '2026-11-20 10:40:00' }, []],
+  ['S2, apoi S16 → retur după livrare = retur', ev(['S2', '2026-11-20 10:40:00'], ['S16', '2026-11-21 10:00:00']),
+    { urmarire_stare: 'retur', livrat_la: null, retur_propus: null, retur_la: '2026-11-21 10:00:00' }, [['livrare_retur', 'retur', ['S2 2026-11-20 10:40:00', 'S16 2026-11-21 10:00:00']]]],
+  ['S16, apoi S2 → livrarea ulterioară câștigă', ev(['S16', '2026-11-20 10:00:00'], ['S2', '2026-11-21 10:40:00']),
+    { urmarire_stare: 'livrat', livrat_la: '2026-11-21 10:40:00', retur_propus: null, retur_la: null }, [['livrare_retur', 'livrat', ['S2 2026-11-21 10:40:00', 'S16 2026-11-20 10:00:00']]]],
+  ['S2 și S16 la aceeași oră → retur (egalitatea merge la retur)', ev(['S2', '2026-11-20 10:40:00'], ['S16', '2026-11-20 10:40:00']),
+    { urmarire_stare: 'retur', livrat_la: null }, [['livrare_retur', 'retur', ['S2 2026-11-20 10:40:00', 'S16 2026-11-20 10:40:00']]]],
+  ['S2 + returnAwbNumber (fără oră) → retur', { ...ev(['S2', '2026-11-20 10:40:00']), returnAwbNumber: '1000000999' },
+    { urmarire_stare: 'retur', livrat_la: null, retur_la: null }, [['livrare_retur', 'retur', ['S2 2026-11-20 10:40:00', 'returnAwbNumber']]]],
+  ['două S2 la ore diferite → livrat, ULTIMA oră', ev(['S2', '2026-11-20 10:40:00'], ['S2', '2026-11-20 12:00:00']),
+    { urmarire_stare: 'livrat', livrat_la: '2026-11-20 12:00:00' }, [['livrare_ore', '2026-11-20 12:00:00', ['2026-11-20 10:40:00', '2026-11-20 12:00:00']]]],
+  ['S2, apoi refuz (S6) ca ultim eveniment → retur „refuz”', ev(['S2', '2026-11-20 10:40:00'], ['S6', '2026-11-20 15:00:00']),
+    { urmarire_stare: 'retur', livrat_la: null, retur_propus: 'refuz', retur_la: '2026-11-20 15:00:00' }, [['livrare_retur', 'retur', ['S2 2026-11-20 10:40:00', 'S6 2026-11-20 15:00:00']]]],
+  ['evenimente identice repetate = un singur fapt', ev(['C0', '2026-11-18 10:00:00'], ['C0', '2026-11-18 10:00:00'], ['S2', '2026-11-20 10:40:00'], ['S2', '2026-11-20 10:40:00']),
+    { urmarire_stare: 'livrat', ridicat_propus: '2026-11-18', livrat_la: '2026-11-20 10:40:00' }, []],
+  ['adresă greșită, apoi livrat → livrat, fără contradicție', ev(['S4', '2026-11-19 10:00:00'], ['S2', '2026-11-20 10:40:00']), { urmarire_stare: 'livrat', retur_propus: null }, []],
+  ['un eveniment de formă necunoscută → de verificat, NICIUN fapt (cronologia incompletă)', { events: [{ id: 'C0', date: '2026-11-18 10:00:00' }, { id: 'C0', date: '18.11.2026' }, { id: 'S2', date: '2026-11-20 10:40:00' }] },
+    { urmarire_stare: 'de_verificat', ridicat_propus: null, livrat_la: null, retur_propus: null, ultim_eveniment: 'S2' }, []],
+]
+const verificaContradictii = rz => {
+  for (const [nume, el, fapte, contr] of CAZURI_CONTRADICTII) {
+    const r = rz(el)
+    for (const [k, v] of Object.entries(fapte)) if (r[k] !== v) return `${nume}: ${k} = ${JSON.stringify(r[k])}, așteptat ${JSON.stringify(v)}`
+    const c = (r.contradictii || []).map(x => [x.tip, x.ales, x.valori, x.regula])
+    const a = contr.map(([tip, ales, valori]) => [tip, ales, valori, CR[tip]])
+    if (JSON.stringify(c) !== JSON.stringify(a)) return `${nume}: contradicții ${JSON.stringify(c)}, așteptat ${JSON.stringify(a)}`
+  }
+  return null
+}
+VERIFICARI.contradictii = async M => verificaContradictii(M.__fan.rezumatUrmarireFan)
+VERIFICARI.formaRaspuns = async M => {
+  const f = M.__fan.interpreteazaUrmarire
+  for (const corp of [{ ceva: 1 }, null, 'x', { data: [{ foo: 1 }] }]) { const u = f(200, corp, ['7000000001']); if (u.ok !== false || u.forma_necunoscuta !== true || u.pe_awb.size) return `forma ${JSON.stringify(corp)} acceptată` }
+  const g = f(200, { data: [] }, ['7000000001'])
+  if (g.ok !== true || g.pe_awb.get('7000000001')?.urmarire_stare !== 'de_verificat') return 'lista goală: AWB-ul nu e „de verificat”'
+  return null
+}
+
+describe('regula contradicțiilor (decizia owner-ului 21.11.2026): toate evaluate, faptele după regulă, contradicțiile în listă — rezumatUrmarireFan', () => {
+  it.each(CAZURI_CONTRADICTII)('%s', (_, el, fapte, contr) => {
+    const r = rezumatUrmarireFan(el)
+    expect(r).toMatchObject(fapte)
+    expect(r.contradictii.map(x => [x.tip, x.ales, x.valori, x.regula])).toEqual(contr.map(([tip, ales, valori]) => [tip, ales, valori, CR[tip]]))
+  })
+  it('lista regulilor = cea din BD (CHECK-ul red_fan_contradictii_regula și validarea din fn_red_fan_urmarire_scrie, 20270102a)', () => {
+    const sql = readFileSync('supabase/migrations/20270102a_redari_fan_urmarire_auto.sql', 'utf8').replace(/\r/g, '')
+    const chk = sql.slice(sql.indexOf('CONSTRAINT red_fan_contradictii_regula CHECK'), sql.indexOf('CONSTRAINT red_fan_contradictii_cheie_uq'))
+    const perechi = [...chk.matchAll(/\('([a-z_]+)', '([a-z_]+)'\)/g)].map(m => [m[1], m[2]])
+    expect(Object.fromEntries(perechi)).toEqual({ ...CR })
+    expect(sql).toContain("CHECK (versiune_regula = 'fan-contradictii-v1')")
+    expect(FAN_REAL.VERSIUNE_REGULA_CONTRADICTII).toBe('fan-contradictii-v1')
+  })
+  it('interpreteazaUrmarire: forma necunoscută a întregului răspuns = eroare (nimic scris), nu „de verificat”', () => {
+    expect(interpreteazaUrmarire(200, { ceva: 1 }, ['7000000001'])).toMatchObject({ ok: false, forma_necunoscuta: true })
+  })
+  it('verificările adăugate în runda 2 (contradicții, forma răspunsului) trec pe codul real', async () => {
+    expect(await VERIFICARI.contradictii(REAL)).toBeNull()
+    expect(await VERIFICARI.formaRaspuns(REAL)).toBeNull()
   })
 })
 
-describe('butonul „Urmărire” (F1) neschimbat: p_actor = omul, p_rulare NULL, fără pasul plafonului', () => {
+describe('butonul „Urmărire” (F1): aceeași regulă ca rularea; p_actor = omul, p_rulare NULL, fără pasul plafonului', () => {
+  it('executaActiuneFan „urmarire” scrie cu clasa B, p_actor = uid; rândurile poartă faptele rezolvate + contradicțiile; 401 = un login nou + o reluare', async () => {
+    const UID = 'f0000000-0000-4000-8000-000000000001'
+    const scrieri = [], get = []
+    let n = 0
+    const deps = {
+      secrete: () => ({ username: 'u', password: 'p', clientId: '7' }),
+      fetch: async (url, init = {}) => {
+        if (new URL(url).pathname === '/login') return json(200, { data: { token: 't' } })
+        get.push(url)
+        if (++n === 1) return json(401, null)
+        return json(200, { data: [{ awbNumber: '7000000001', events: [{ id: 'C0', date: '2026-11-18 10:00:00' }, { id: 'C0', date: '2026-11-19 09:00:00' }] }] })
+      },
+      randuriLot: async () => ({ data: [{ id: rid(L1, 1), plic_id: 'p', nr_plic: 'PL-TST-0001', stare: 'generat', awb: '7000000001', versiune_urmarire: 1 }] }),
+      rpcServer: async (nm, a) => { scrieri.push({ n: nm, a }); return { data: { scrise: 1, pastrate: 0, depasite: 0, contradictii: 1, ridicari: 1 } } },
+      pauza: async () => {},
+    }
+    const r = await executaActiuneFan({ corp: { actiune: 'urmarire', lot_id: L1 }, lot: { id: L1 }, uid: UID }, deps)
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ scrise: 1, contradictii: 1, ridicari: 1 })
+    expect(get.length).toBe(2)
+    expect(scrieri).toEqual([{ n: 'fn_red_fan_srv_urmarire', a: expect.objectContaining({ p_actor: UID, p_rulare: null, p_lot_id: L1 }) }])
+    expect(scrieri[0].a.p_randuri[0]).toMatchObject({ urmarire_stare: 'ridicat', ridicat_propus: '2026-11-18', retur_la: null,
+      contradictii: [{ tip: 'ridicare_zile', valori: ['2026-11-18', '2026-11-19'], ales: '2026-11-18', regula: 'prima_ridicare' }] })
+  })
+  it('forma necunoscută la buton: eroare afișată, nimic scris', async () => {
+    const scrieri = []
+    const deps = {
+      secrete: () => ({ username: 'u', password: 'p', clientId: '7' }),
+      fetch: async url => (new URL(url).pathname === '/login' ? json(200, { data: { token: 't' } }) : json(200, { ceva: 1 })),
+      randuriLot: async () => ({ data: [{ id: rid(L1, 1), plic_id: 'p', nr_plic: 'PL-TST-0001', stare: 'generat', awb: '7000000001', versiune_urmarire: 1 }] }),
+      rpcServer: async (nm, a) => { scrieri.push(nm); return { data: { scrise: 1, pastrate: 0, depasite: 0 } } },
+      pauza: async () => {},
+    }
+    const r = await executaActiuneFan({ corp: { actiune: 'urmarire', lot_id: L1 }, lot: { id: L1 }, uid: 'f0000000-0000-4000-8000-000000000001' }, deps)
+    expect([r.status, r.body.cod, scrieri.length]).toEqual([502, 'urmarire_forma_necunoscuta', 0])
+  })
+})
+
+describe('ecranul: ridicarea nu mai e „propusă” pe TEST; lista de audit „Contradicții FAN”', () => {
+  it('etichetele acoperă EXACT tipurile și regulile din BD; textul unei contradicții arată valorile, alesul, regula, sursa', async () => {
+    const L = await import('./fanLot.js')
+    expect(Object.keys(L.ETICHETE_CONTRADICTIE).sort()).toEqual(Object.keys(REGULI_CONTRADICTII).sort())
+    expect(Object.keys(L.ETICHETE_REGULA).sort()).toEqual(Object.values(REGULI_CONTRADICTII).sort())
+    expect(L.textContradictie({ tip: 'livrare_ore', valori: ['2026-11-20 10:40:00', '2026-11-20 12:00:00'], ales: '2026-11-20 12:00:00', regula: 'ultima_livrare', sursa: 'acelasi_raspuns', observari: 2 }))
+      .toBe('ore de livrare (S2) diferite: 2026-11-20 10:40:00 / 2026-11-20 12:00:00 → ales 2026-11-20 12:00:00 (rămâne ultima oră de livrare); în același răspuns FAN; văzută de 2 ori')
+    expect(L.lipsaTabelContradictii({ code: '42P01' }) && L.lipsaTabelContradictii({ code: 'PGRST205' }) && !L.lipsaTabelContradictii({ code: '42501' })).toBe(true)
+  })
+  it('„6b. Confirmă ridicarea” = doar loturile reale; lista de audit e citită cu JWT-ul omului, keyset pe id, eroarea ≠ „nicio contradicție”', () => {
+    const src = readFileSync('src/redari/ui/FanAwbPrevizualizare.jsx', 'utf8').replace(/\r/g, '')
+    expect(src).toMatch(/r\.stare === 'generat' && r\.ridicat_propus && !r\.ridicat_contrazis && fan\?\.fanLot\?\.test !== true/)
+    expect(src).toMatch(/<FanContradictii client=\{supabase\} lotId=\{lot\.id\} awb=\{awb\} activ=\{!!fan\?\.instalata\} reload=\{reload\} \/>/)
+    const c = readFileSync('src/redari/ui/FanContradictii.jsx', 'utf8').replace(/\r/g, '')
+    expect(c).toMatch(/citestePaginat\(\(\) => client\.from\('red_fan_contradictii'\)\.select\(COL_CONTRADICTII\)\.eq\('lot_id', lotId\), \{ cheie: 'id', esteCurent: curent \}\)/)
+    expect(c).toMatch(/else setEroare\(msgEroare\(e\)\)/)
+    expect(c).not.toMatch(/\.insert\(|\.update\(|\.delete\(|\.rpc\(/)
+  })
+})
+
+describe('butonul „Urmărire” (F1): p_actor = omul, p_rulare NULL', () => {
   it('executaActiuneFan „urmarire” scrie cu clasa B, p_actor = uid', async () => {
     const UID = 'f0000000-0000-4000-8000-000000000001'
     const scrieri = []
@@ -271,7 +451,7 @@ describe('butonul „Urmărire” (F1) neschimbat: p_actor = omul, p_rulare NULL
 
 // ── mutanți: modulele copiate într-un folder temporar, cu o singură mutație; cel puțin o verificare trebuie să PICE ──
 const SURSE = Object.fromEntries(['redariFan.mjs', 'redariFanTransport.mjs', 'redariFanHandler.mjs', 'redariFanUrmarireAuto.mjs']
-  .map(n => [n, readFileSync(join('supabase/functions/_shared', n), 'utf8')]))
+  .map(n => [n, readFileSync(join('supabase/functions/_shared', n), 'utf8').replace(/\r/g, '')]))   // CRLF la checkout pe Windows: mutațiile cu \n se potrivesc identic pe CI
 // sub .tmp/ din depozit (ignorat de git), ca în fanCourierMutanti.test.js: calea scurtă a folderului temporar Windows (GAZPET~1) nu se importă prin vite
 mkdirSync(join(process.cwd(), '.tmp'), { recursive: true })
 const DIR = mkdtempSync(join(process.cwd(), '.tmp', 'fan_auto_mut_'))
@@ -285,14 +465,34 @@ async function cuMutatie(fisier, din, in_) {
   const d = join(DIR, 'm' + (++nrMutant))
   mkdirSync(d, { recursive: true })
   for (const [n, t] of Object.entries(s)) writeFileSync(join(d, n), t)
-  return import(pathToFileURL(join(d, 'redariFanUrmarireAuto.mjs')).href)
+  const [a, t, f] = await Promise.all(['redariFanUrmarireAuto.mjs', 'redariFanTransport.mjs', 'redariFan.mjs'].map(n => import(pathToFileURL(join(d, n)).href)))
+  return { ...a, __transport: t, __fan: f }
 }
 const MUTANTI = [
   ['poarta: orice apelant acceptat', 'redariFanUrmarireAuto.mjs', "if (!['cron', 'owner'].includes(sursa)) return out(401, 'neautorizat')", "if (false) return out(401, 'neautorizat')"],
   ['poarta: owner fără actor verificat', 'redariFanUrmarireAuto.mjs', "if (sursa === 'owner' && !(typeof apelant.actor === 'string' && UUID.test(apelant.actor))) return out(401, 'neautorizat')", ''],
   ['garda de fetch: orice cale permisă', 'redariFanUrmarireAuto.mjs', "return APELURI_FAN_RULARE.some(([mm, cc]) => mm === m && cc === cale) ? cale : null", 'return cale'],
   ['garda de fetch: compară prefixul, nu calea exactă', 'redariFanUrmarireAuto.mjs', 'mm === m && cc === cale', 'mm === m && cale.startsWith(cc)'],
-  ['plafonul: pasul BD-ului înaintea GET-ului scos (transport)', 'redariFanTransport.mjs', "    if (typeof deps.inainteDeApel === 'function') {", '    if (false) {'],
+  ['plafonul: pasul BD-ului înaintea GET-ului scos (transport)', 'redariFanTransport.mjs', '      let refuz = await pas()   // înaintea login-ului', '      let refuz = null   // înaintea login-ului'],
+  // runda 2 (Jakarinos #1155 r1 P2): reluarea după 401 trece prin plafon, cu pauză; rularea cere clientul cu plafon
+  ['reautentificarea ocolește plafonul (reluarea fără pas)', 'redariFanTransport.mjs', '        refuz = await pas()\n', '        refuz = null\n'],
+  ['reluarea după 401 fără pauză', 'redariFanTransport.mjs', "        if (typeof inainteDeApel === 'function' && typeof pauza === 'function') await pauza(PAUZA_INTRE_CERERI_MS)\n", ''],
+  ['rularea construiește clientul FĂRĂ pasul plafonului', 'redariFanUrmarireAuto.mjs', 'clientFan({ fetch: fetchRulare, secrete: s, inainteDeApel, pauza: deps.pauza })', 'clientFan({ fetch: fetchRulare, secrete: s, pauza: deps.pauza })'],
+  ['urmaresteLot acceptă o rulare cu un client fără plafon', 'redariFanTransport.mjs', "  if (rulare && fan?.cuPlafon !== true) return out(423", '  if (false) return out(423'],
+  // runda 2 (P2): forma necunoscută a întregului răspuns oprește rularea
+  ['forma necunoscută acceptată ca „de verificat”', 'redariFan.mjs', "  if (!lista) return { ok: false, forma_necunoscuta: true,", "  if (!lista) return { ok: true, forma_necunoscuta: true,"],
+  ['lista fără niciun AWB recunoscut acceptată', 'redariFan.mjs', "  if (lista.length > 0 && !lista.some(el => awbDin(el))) return", '  if (false) return'],
+  ['oprirea la forma necunoscută raportată ca altă eroare', 'redariFanUrmarireAuto.mjs', "b.cod === 'urmarire_forma_necunoscuta' ? 'fan_forma_necunoscuta'", "false ? 'fan_forma_necunoscuta'"],
+  // runda 2 (P1 + decizia owner-ului): toate contradicțiile, regula deterministă
+  ['contradicția C0 (două zile) nu mai e înregistrată', 'redariFan.mjs', "  if (zileC0.length > 1) contradictii.push(", "  if (false) contradictii.push("],
+  ['contradicția S2 (două ore) nu mai e înregistrată', 'redariFan.mjs', "  if (oreS2.length > 1) contradictii.push(", "  if (false) contradictii.push("],
+  ['ridicarea = ultima zi C0, nu prima', 'redariFan.mjs', '  const ridicat = zileC0[0] || null', '  const ridicat = zileC0.at(-1) || null'],
+  ['livrarea = prima oră S2, nu ultima', 'redariFan.mjs', '  const livratLa = oreS2.at(-1) || null', '  const livratLa = oreS2[0] || null'],
+  ['egalitatea livrare / retur merge la livrare', 'redariFan.mjs', "returLa !== null && livratLa > returLa ? 'livrat' : 'retur'", "returLa !== null && livratLa >= returLa ? 'livrat' : 'retur'"],
+  ['returul fără oră (returnAwbNumber) nu mai câștigă', 'redariFan.mjs', "returLa !== null && livratLa > returLa ? 'livrat' : 'retur'", "(returLa === null || livratLa > returLa) ? 'livrat' : 'retur'"],
+  ['oprire la prima contradicție (livrare + retur neevaluat după alta)', 'redariFan.mjs', '  if (areRetur && livratLa) {', '  if (areRetur && livratLa && !contradictii.length) {'],
+  ['faptele dintr-o cronologie incompletă înregistrate', 'redariFan.mjs', "  if (stricat) return { ...gol, ...cronologie, motiv:", "  if (false) return { ...gol, ...cronologie, motiv:"],
+  ['transportul nu trimite contradicțiile în BD', 'redariFanTransport.mjs', 'retur_la: z.retur_la ?? null, contradictii: z.contradictii || [] }', 'retur_la: z.retur_la ?? null, contradictii: [] }'],
   ['plafonul local scos', 'redariFanUrmarireAuto.mjs', "    if (apeluri >= plafon) return { ok: false, cod: 'plafon_local' }\n", ''],
   ['bugetul de timp scos', 'redariFanUrmarireAuto.mjs', "    if (deps.acum() - t0 > BUGET_RULARE_MS) return { ok: false, cod: 'buget_timp' }\n", ''],
   ['eroarea curierului nu oprește rularea', 'redariFanUrmarireAuto.mjs', "      if (r.status === 502) return incheie(", "      if (r.status === 502) { sarite++; continue }\n      if (false) return incheie("],
@@ -303,17 +503,18 @@ const MUTANTI = [
   ['secretele citite înaintea selecției', 'redariFanUrmarireAuto.mjs', "  const sel = await rpc('fn_red_fan_srv_de_urmarit', { p_rulare: rulare })", "  deps.secrete()\n  const sel = await rpc('fn_red_fan_srv_de_urmarit', { p_rulare: rulare })"],
   ['refuzul determinist de lot oprește tot', 'redariFanUrmarireAuto.mjs', "const REFUZ_LOT = ['P0001', 'RD032', '22023']", 'const REFUZ_LOT = []'],
   ['refuzul NEcunoscut de lot sărit (L05)', 'redariFanUrmarireAuto.mjs', "      return incheie('oprita_eroare', 'scriere_neconfirmata')\n", "      sarite++; continue\n"],
-  ['contradicția C0 (două zile) nu mai e prinsă', 'redariFan.mjs', "  if (distincte('ridicat', 'data') > 1) return rez(", "  if (false) return rez("],
 ]
 describe('mutanți (fiecare trebuie să pice cel puțin o verificare)', () => {
   it.each(MUTANTI)('%s', async (_, fisier, din, in_) => {
     const M = await cuMutatie(fisier, din, in_)
     const picate = []
     for (const [nume, v] of Object.entries(VERIFICARI)) { let e; try { e = await v(M) } catch (x) { e = 'excepție: ' + x.message } if (e) picate.push(nume + ': ' + e) }
-    if (fisier === 'redariFan.mjs') {
-      const { rezumatUrmarireFan: rz } = await import(pathToFileURL(join(DIR, 'm' + nrMutant, 'redariFan.mjs')).href)
-      if (rz({ events: [{ id: 'C0', date: '2026-11-18 10:00:00' }, { id: 'C0', date: '2026-11-19 09:00:00' }] }).urmarire_stare !== 'de_verificat') picate.push('contradicții: două C0 nu dau de_verificat')
-    }
     expect(picate.length, 'mutantul a trecut toate verificările').toBeGreaterThan(0)
+  })
+  it('martorul: copia NEMUTATĂ a modulelor trece toate verificările (prinderea vine din mutație, nu din copiere)', async () => {
+    const M = await cuMutatie('redariFan.mjs', 'export const VERSIUNE_REGULA_CONTRADICTII', 'export const VERSIUNE_REGULA_CONTRADICTII')
+    const picate = []
+    for (const [nume, v] of Object.entries(VERIFICARI)) { let e; try { e = await v(M) } catch (x) { e = 'excepție: ' + x.message } if (e) picate.push(nume + ': ' + e) }
+    expect(picate).toEqual([])
   })
 })

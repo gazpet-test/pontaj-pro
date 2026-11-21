@@ -182,10 +182,11 @@ describe('urmărire (GET /reports/awb/tracking) și retururi', () => {
     expect(rezumatUrmarireFan({ events: [{ id: 'S2', date: '2026-11-12 10:00:00' }, { id: 'S50', date: '2026-11-12 10:05:00' }] }).urmarire_stare).toBe('de_verificat')
     expect(rezumatUrmarireFan(null).urmarire_stare).toBe('de_verificat')
   })
-  it('interpreteazaUrmarire: AWB lipsă din răspuns → de verificat; listă necunoscută → toate de verificat; 5xx → nimic scris', () => {
+  it('interpreteazaUrmarire: AWB lipsă din răspuns → de verificat; listă necunoscută → eroare de schemă, nimic scris (#1155 r2); 5xx → nimic scris', () => {
     const u = interpreteazaUrmarire(200, { data: [{ awbNumber: '1000000001', events: [{ id: 'C0', date: '2026-11-10 15:00:00' }] }, { awbNumber: '9999999999' }] }, ['1000000001', '1000000002'])
     expect(u.ok).toBe(true); expect(u.pe_awb.get('1000000001').urmarire_stare).toBe('ridicat'); expect(u.pe_awb.get('1000000002').urmarire_stare).toBe('de_verificat'); expect(u.necerute).toBe(1)
-    expect([...interpreteazaUrmarire(200, { ceva: 1 }, ['1000000001']).pe_awb.values()][0].urmarire_stare).toBe('de_verificat')
+    expect(interpreteazaUrmarire(200, { ceva: 1 }, ['1000000001'])).toMatchObject({ ok: false, forma_necunoscuta: true })
+    expect(interpreteazaUrmarire(200, { ceva: 1 }, ['1000000001']).pe_awb.size).toBe(0)
     expect(interpreteazaUrmarire(503, null, ['1000000001']).ok).toBe(false)
   })
   it('lista de evenimente: codurile din documentație (doc §1)', () => {
@@ -1278,7 +1279,7 @@ describe('runda 3: urmărirea nu șterge un eveniment cunoscut (r2 P2)', () => {
     expect(rezumatUrmarireFan({ awbNumber: '2000000001' })).toMatchObject({ urmarire_stare: 'de_verificat', motiv: 'elementul de urmărire nu are lista de evenimente' })
     expect(rezumatUrmarireFan({ awbNumber: '2000000001', events: null }).urmarire_stare).toBe('de_verificat')
     expect(rezumatUrmarireFan({ awbNumber: '2000000001', events: [] })).toEqual({ urmarire_stare: 'fara_evenimente', ultim_eveniment: null, ultim_eveniment_la: null,
-      ridicat_propus: null, livrat_la: null, retur_propus: null })
+      ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [] })   // #1155 r2: + ora returului, lista contradicțiilor
   })
   it('funcția edge: răspunsul `events: []` ajunge în BD fără cronologie; „păstrate” raportate; forma veche {scrise, depasite} = scriere neconfirmată', async () => {
     const fx = await fixtura(2); fx.randuri.forEach((r, i) => { r.stare = 'generat'; r.awb = String(2000000001 + i); r.versiune_urmarire = 4 })

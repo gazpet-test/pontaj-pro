@@ -366,12 +366,25 @@ export function dataEvenimentFan(v) {
  *   nelimpede pentru o convocare, 18.11.2026), sau „confirmare refuzată” (L12: nimic nu dispare tacit).
  * - tranzit / inregistrat / neutru nu schimbă faptele: ca ultim eveniment dau „în tranzit” (sau „ridicat” / „livrat” după faptele cunoscute);
  *   ecranul deosebește „AWB înregistrat, neridicat” (S98) după ultimul eveniment (fanLot.js, etichetaUrmarire).
- * - CONTRADICȚII în ACELAȘI răspuns (spec §9.2, precondiția F2, 21.11.2026): ridicări (C0) în ZILE diferite, livrări (S2) la ore diferite, sau
- *   livrare + retur → de_verificat, iar faptul contrazis NU se propune (ridicat_propus / livrat_la / retur_propus = null): BD-ul nu consemnează
- *   nimic din el, omul decide. Evenimentele identice repetate (același cod, aceeași dată) = un singur fapt; două C0 în aceeași zi = ridicat.
+ * - CONTRADICȚII în ACELAȘI răspuns (decizia owner-ului 21.11.2026, runda 2 #1155: „mergem pe ce livrează API-ul”): NU mai blochează rândul la
+ *   om. TOATE se evaluează ÎNAINTE de a construi faptele (nu doar prima), apoi faptele urmează regula deterministă REGULI_CONTRADICTII:
+ *   ridicări (C0) în zile diferite → PRIMA zi; livrări (S2) la ore diferite → ULTIMA oră; livrare + retur → evenimentul final ULTERIOR (după ora
+ *   curierului) câștigă, la egalitate sau cu retur fără oră (returnAwbNumber) → retur. Fiecare contradicție iese în `contradictii`
+ *   ({ tip, valori, ales, regula }), pe care BD-ul o păstrează DURABIL (red_fan_contradictii, 20270102a), ca semnal de audit. Evenimentele
+ *   identice repetate (același cod, aceeași dată) = un singur fapt; două C0 în aceeași zi = o singură zi, nu contradicție.
+ * - Evenimente de formă necunoscută (cod sau dată) = de_verificat FĂRĂ fapte (un eveniment pierdut poate fi chiar al doilea C0: nimic nu se
+ *   înregistrează automat dintr-o cronologie incompletă, L12); ultimul eveniment citit rămâne, pentru cronologie.
  */
+export const VERSIUNE_REGULA_CONTRADICTII = 'fan-contradictii-v1'
+export const REGULI_CONTRADICTII = Object.freeze({
+  ridicare_zile: 'prima_ridicare',      // mai multe zile C0: prima zi; o ridicare deja înregistrată nu se mută (BD)
+  livrare_ore: 'ultima_livrare',        // mai multe ore S2: ultima oră a curierului
+  livrare_retur: 'final_ulterior',      // livrare și retur: finalul ulterior câștigă; egalitate / retur fără oră → retur
+  retur_motiv: 'ultimul_semnal',        // (doar între răspunsuri, BD) alt motiv de retur: cel al răspunsului mai nou; lipsa lui păstrează motivul cunoscut
+  ridicare_data_imposibila: 'data_imposibila',   // (doar BD) C0 înainte de generarea AWB-ului / în viitor: ridicarea NU se înregistrează
+})
 export function rezumatUrmarireFan(el) {
-  const gol = { urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null }
+  const gol = { urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [] }
   if (!el || typeof el !== 'object') return { ...gol, motiv: 'element de urmărire fără formă cunoscută' }
   // runda 3 (L18): lipsa listei ≠ listă goală — fără `events` (sau null) = formă necunoscută; `events: []` = „fără evenimente” (fără cronologie:
   // BD-ul nu șterge un eveniment cunoscut cu el, fn_red_fan_urmarire îl numără „păstrat”)
@@ -385,26 +398,39 @@ export function rezumatUrmarireFan(el) {
     ev.push({ cod, la: d.local, data: d.data, cat: categorieEveniment(cod) })
   }
   ev.sort((a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : 0))
-  const primul = cat => ev.find(e => e.cat === cat) || null
   const ultim = ev.at(-1) || null
-  const ridicat = primul('ridicat'), livrat = primul('livrat')
+  const cronologie = { ultim_eveniment: ultim?.cod || null, ultim_eveniment_la: ultim?.la || null }
+  if (stricat) return { ...gol, ...cronologie, motiv: 'evenimente cu cod sau dată de formă necunoscută (nimic înregistrat automat din acest răspuns)' }
+  // 1. TOATE contradicțiile, înaintea faptelor (Jakarinos #1155 r1 P1: nu se oprește la prima)
+  const contradictii = []
+  const distincte = (cat, cheie) => [...new Set(ev.filter(e => e.cat === cat).map(e => e[cheie]))].sort()
+  const zileC0 = distincte('ridicat', 'data'), oreS2 = distincte('livrat', 'la')
+  const ridicat = zileC0[0] || null
+  if (zileC0.length > 1) contradictii.push({ tip: 'ridicare_zile', valori: zileC0, ales: ridicat, regula: REGULI_CONTRADICTII.ridicare_zile })
+  const livratLa = oreS2.at(-1) || null
+  if (oreS2.length > 1) contradictii.push({ tip: 'livrare_ore', valori: oreS2, ales: livratLa, regula: REGULI_CONTRADICTII.livrare_ore })
+  // dovezile de retur: codurile de retur (S16 / S33 / S43), ULTIMUL eveniment = refuz / adresă / mutat, returnAwbNumber (fără oră = cel mai târziu)
   const semnale = ev.filter(e => RETUR_DIN_CATEGORIE[e.cat])
   const ultimSemnal = semnale.at(-1) || null
-  const areRetur = ev.some(e => e.cat === 'retur') || !!textAwb(el.returnAwbNumber)
-  const baza = { ultim_eveniment: ultim?.cod || null, ultim_eveniment_la: ultim?.la || null, ridicat_propus: ridicat?.data || null, livrat_la: livrat?.la || null, retur_propus: null }
-  const rez = (urmarire_stare, extra = {}) => ({ ...baza, urmarire_stare, ...extra })
-  if (stricat) return rez('de_verificat', { motiv: 'evenimente cu cod sau dată de formă necunoscută' })
-  // contradicțiile în același răspuns (§9.2): faptul contrazis nu se propune; un fapt repetat identic nu e contradicție
-  const distincte = (cat, cheie) => new Set(ev.filter(e => e.cat === cat).map(e => e[cheie])).size
-  if (distincte('ridicat', 'data') > 1) return rez('de_verificat', { ridicat_propus: null, motiv: 'două date de ridicare în același răspuns' })
-  if (distincte('livrat', 'la') > 1) return rez('de_verificat', { livrat_la: null, motiv: 'două ore de livrare în același răspuns' })
-  if (livrat && areRetur) return rez('de_verificat', { livrat_la: null, retur_propus: null, motiv: 'livrare și retur în același răspuns' })
-  if (areRetur) return rez('retur', { retur_propus: ultimSemnal ? RETUR_DIN_CATEGORIE[ultimSemnal.cat] : null })
-  if (ultim && ['refuz', 'adresa', 'mutat'].includes(ultim.cat)) return rez('retur', { retur_propus: RETUR_DIN_CATEGORIE[ultim.cat] })
+  const returEv = [...ev.filter(e => e.cat === 'retur'), ...(ultim && ['refuz', 'adresa', 'mutat'].includes(ultim.cat) ? [ultim] : [])]
+  const returAwb = !!textAwb(el.returnAwbNumber)
+  const ultimRetur = returEv.sort((a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : 0)).at(-1) || null
+  const areRetur = returAwb || !!ultimRetur
+  const returLa = returAwb ? null : ultimRetur?.la || null
+  let final = areRetur ? 'retur' : livratLa ? 'livrat' : null
+  if (areRetur && livratLa) {
+    final = returLa !== null && livratLa > returLa ? 'livrat' : 'retur'
+    contradictii.push({ tip: 'livrare_retur', valori: [`S2 ${livratLa}`, returAwb ? 'returnAwbNumber' : `${ultimRetur.cod} ${returLa}`], ales: final, regula: REGULI_CONTRADICTII.livrare_retur })
+  }
+  // 2. faptele, după regulă
+  const fapte = { ridicat_propus: ridicat, livrat_la: final === 'livrat' ? livratLa : null,
+    retur_propus: final === 'retur' && ultimSemnal ? RETUR_DIN_CATEGORIE[ultimSemnal.cat] : null, retur_la: final === 'retur' ? returLa : null }
+  const rez = (urmarire_stare, extra = {}) => ({ ...cronologie, ...fapte, urmarire_stare, contradictii, ...extra })
+  if (final === 'retur') return rez('retur')
   if (ev.some(e => e.cat === 'confirmare_refuzata')) return rez('de_verificat', { motiv: 'confirmare refuzată (S50): judecată umană' })
   if (ultim && !ultim.cat) return rez('de_verificat', { motiv: `ultimul eveniment are un cod necunoscut (${ultim.cod})` })
   if (ultim && ultim.cat === 'de_verificat') return rez('de_verificat', { motiv: `ultimul eveniment (${ultim.cod}) cere verificarea omului (sens nelimpede pentru o convocare)` })
-  if (livrat) return rez('livrat')
+  if (final === 'livrat') return rez('livrat')
   if (ridicat) return rez('ridicat')
   return ev.length ? rez('in_tranzit') : rez('fara_evenimente')
 }
@@ -422,15 +448,19 @@ const awbDin = el => {
 
 /**
  * Răspunsul GET /reports/awb/tracking pentru AWB-urile cerute (≤ 100) → { ok, pe_awb: Map(awb → rezumat), motiv }.
- * ok=false (HTTP 0 / 4xx / 5xx) = nu se scrie nimic (citire, nu bani). Listă de formă necunoscută = TOATE AWB-urile cerute „de_verificat”.
- * AWB cerut și absent din răspuns = „de_verificat”; elementele pentru AWB-uri necerute se ignoră, dar se numără (raportate).
+ * ok=false (HTTP 0 / 4xx / 5xx) = nu se scrie nimic (citire, nu bani).
+ * Runda 2 #1155 (Jakarinos P2, L13 / L18): eroarea de SCHEMĂ a ÎNTREGULUI răspuns (nicio listă recunoscută, sau o listă nevidă în care niciun
+ * element nu are un AWB recunoscut) = ok=false + forma_necunoscuta: NIMIC scris, rularea automată se oprește „oprita_eroare” (doc §4.6), butonul
+ * arată eroarea. Altceva e un element ANUME: AWB cerut și absent din răspuns = „de_verificat” (de verificat de om pe acel AWB); elementele pentru
+ * AWB-uri necerute sau fără AWB se ignoră, dar se numără (raportate).
  */
 export function interpreteazaUrmarire(status, corp, awbs) {
   if (!Number.isInteger(status) || status <= 0 || status >= 400) return { ok: false, motiv: `urmărire neconfirmată (HTTP ${status})`, pe_awb: new Map(), necerute: 0 }
   const lista = listaDin(corp)
   const pe = new Map()
-  const deVerificat = motiv => ({ urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null, motiv })
-  if (!lista) { for (const a of awbs) pe.set(a, deVerificat('răspuns de urmărire de formă necunoscută')); return { ok: true, pe_awb: pe, necerute: 0 } }
+  const deVerificat = motiv => ({ urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [], motiv })
+  if (!lista) return { ok: false, forma_necunoscuta: true, motiv: 'răspuns de urmărire de formă necunoscută (fără listă recunoscută): nimic scris', pe_awb: pe, necerute: 0 }
+  if (lista.length > 0 && !lista.some(el => awbDin(el))) return { ok: false, forma_necunoscuta: true, motiv: 'răspuns de urmărire fără niciun element cu AWB recunoscut: nimic scris', pe_awb: pe, necerute: 0 }
   const grup = new Map()
   let necerute = 0
   for (const el of lista) {
