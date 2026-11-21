@@ -2,9 +2,10 @@
 # Carbon, potrivire exacta). Rulare:
 #   python -I docs\paw\run_paw_v464\teste\test_gemini_pw.py
 # Nu importa Playwright, nu se ataseaza la Edge, nu trimite nimic la Gemini: logica de selectie tab / model /
-# asteptare stabila / validare brief / numarare atasamente (HTML sintetic) / ordinea pazei in trimite() (pagina falsa)
+# asteptare stabila / validare brief / numarare atasamente (HTML sintetic) / ordinea pazei in trimite() (pagina falsa) /
+# r4: semnalele de atasament verificate INAINTEA listelor albe (reproducerile din verdictul Jakarinos r3 + variante + mutanti)
 # e testata cu obiecte false. ASCII only.
-import os, sys, io, types, tempfile, shutil, unittest, importlib.util, contextlib
+import os, sys, io, re, types, tempfile, shutil, unittest, importlib.util, contextlib
 from unittest import mock
 
 AICI = os.path.dirname(os.path.abspath(__file__))
@@ -647,7 +648,7 @@ class TestStructuraCiorna(unittest.TestCase):
         self.assertEqual(e.cod, "ciorna_necunoscuta")
         self.assertIn("nerecunoscute in zona ciornei - nu trimit", e.detaliu)
         self.assertEqual(i["necunoscute_detalii"],
-                         ["element:attachment-card", "text_fisier:a.txt", "element:button[aria-label=remove attachment]", "text:x"])
+                         ["element:attachment-card", "text_fisier:a.txt", "eticheta:button[aria-label=remove attachment]", "text:x"])
 
     def test_fiecare_structura_necunoscuta_refuzata(self):
         for k, extra in sorted(NECUNOSCUTE.items()):
@@ -657,13 +658,14 @@ class TestStructuraCiorna(unittest.TestCase):
 
     def test_motivele_sunt_cele_asteptate(self):
         # motivul primului element nerecunoscut, scris de mana pentru fiecare caz
+        # r4: eticheta de scoatere / cu "file" e semnal (eticheta:), verificat inaintea listelor, nu "element necunoscut"
         asteptat = {
             "img": "media:img[src]",
-            "buton_remove": "element:button[aria-label=remove file]",
-            "buton_sterge_ro": "element:button[aria-label=sterge fisierul]",
+            "buton_remove": "eticheta:button[aria-label=remove file]",
+            "buton_sterge_ro": "eticheta:button[aria-label=sterge fisierul]",
             "text_cu_extensie": "text_fisier:raport final.pdf",
             "text_cu_extensie_ro": "text_fisier:fisier_t.docx",
-            "text_necunoscut": "text:incarcat",
+            "text_necunoscut": "text_atasament:incarcat",      # r4: "incarca" e cuvant de atasament in text (nu text calibrabil)
             "card_fara_text": "element:attachment-card",
             "clasa_atasament": "token_attach:div{attachment-thumb}",
             "atribut_fisier": "token_file:div{data-file-id}",
@@ -673,8 +675,8 @@ class TestStructuraCiorna(unittest.TestCase):
             "div_etichetat": "element:div[aria-label=a]",
             "canvas": "media:canvas",
             "video": "media:video[src]",
-            "ligatura_fisier": "text:attach_file",
-            "input_ascuns": "element:input[type=file]",
+            "ligatura_fisier": "text_atasament:attach_file",
+            "input_ascuns": "eticheta:input[type=file]",
         }
         for k, m in asteptat.items():
             self.assertEqual(self.an(zona_cu(NECUNOSCUTE[k]))["necunoscute_detalii"][0], m, msg=k)
@@ -741,18 +743,22 @@ class TestStructuraCiorna(unittest.TestCase):
             self.assertEqual(self.an(zona_cu("<div>Gemini poate gre\u0219i</div>"))["necunoscute"], 0)
 
     def test_butonul_de_incarcare_se_poate_recunoaste(self):
-        # ciorna goala reala are (probabil) un buton de incarcare: eticheta cu "upload file" si iconita "attach_file" sunt
-        # permise unui control recunoscut exact; invelisul neutru cu clasa "upload-..." se recunoaste dupa clasa lui
+        # butonul real de incarcare (calibrare: "Incarcare si instrumente", doar iconita, fara text) se recunoaste exact: cuvintele
+        # de incarcare sunt singurele permise in eticheta. r4: un invelis cu clasa "upload-..." (cuvant de atasament), o eticheta
+        # cu "file" sau o ligatura "attach_file" in control sunt semnale si NU se mai pot acoperi de nicio lista alba
         inc = ('<div class="upload-wrapper ng-tns-c1-2"><button aria-label="Open upload file menu">'
                '<mat-icon>attach_file</mat-icon></button></div>')
-        self.assertEqual(self.an(zona_cu(inc))["necunoscute_detalii"],
-                         ["token_upload:div{upload-wrapper}", "element:button[aria-label=open upload file menu]", "text:attach_file"])
+        asteptat = ["token_upload:div{upload-wrapper}", "eticheta:button[aria-label=open upload file menu]", "text_atasament:attach_file"]
+        self.assertEqual(self.an(zona_cu(inc))["necunoscute_detalii"], asteptat)
         with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", ("button[aria-label=open upload file menu]",)), \
-                mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", ("div{upload-wrapper}",)):
-            self.assertEqual(self.an(zona_cu(inc))["necunoscute"], 0)
-            # aceeasi clasa pe alt element / alta clasa = tot necunoscut
+                mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", ("div{upload-wrapper}", "div{upload-preview}")):
+            self.assertEqual(self.an(zona_cu(inc))["necunoscute_detalii"], asteptat)
             self.assertEqual(self.an(zona_cu('<div class="upload-preview"></div>'))["necunoscute_detalii"],
                              ["token_upload:div{upload-preview}"])
+        real = '<button aria-label="\u00cenc\u0103rcare \u0219i instrumente"><gem-icon><svg><path d="M0"></path></svg></gem-icon></button>'
+        self.assertEqual(self.an(zona_cu(real))["necunoscute"], 0)
+        self.assertEqual(self.an(zona_cu(real.replace("instrumente", "fi\u0219iere")))["necunoscute_detalii"],
+                         ["eticheta:button[aria-label=incarcare si fisiere]"])
         # o intrare "div" goala nu dezactiveaza verificarea cuvintelor pe toate div-urile
         with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", ("div", "div{}")):
             self.assertEqual(self.an(zona_cu(NECUNOSCUTE["clasa_atasament"]))["necunoscute"], 1)
@@ -767,27 +773,36 @@ class TestStructuraCiorna(unittest.TestCase):
                 self.assertEqual(self.an(zona_cu(extra))["necunoscute_detalii"], [m], msg=extra)
 
     def test_listele_livrate_si_locatorul(self):
-        # listele albe livrate nu contin nimic ce seamana a fisier / scoatere (calibrarea le poate completa, nu cu astfel de intrari)
+        # listele albe livrate nu contin nimic ce seamana a fisier / scoatere (calibrarea le poate completa, nu cu astfel de intrari):
+        # valorile din semnaturi (aria-label etc.) trec regula etichetei, tagurile n-au cuvinte de scoatere / previzualizare
         for x in gp.CONTROALE_CUNOSCUTE + gp.STRUCTURA_CUNOSCUTA + gp.TEXTE_CUNOSCUTE:
-            self.assertFalse(any(t in gp._ascii(x) for t in gp.TOKENI_ETICHETA_INTERZISA), x)
-            self.assertIsNone(gp.RE_FISIER.search(gp._ascii(x)), x)
+            self.assertIsNone(gp._nume_fisier(gp._ascii(x)), x)          # nume.extensie (domeniul firmei nu e fisier, r3)
             self.assertEqual(x, gp._ascii(x), x)                          # forma afisata de `stare` (ASCII, litere mici)
+            self.assertNotIn("{", x)                                      # r4: niciun element cu cuvant de atasament (token_) in liste
+        for x in gp.CONTROALE_CUNOSCUTE + gp.STRUCTURA_CUNOSCUTA:
+            for v in re.findall(r"\[[^=\]]+=([^\]]*)\]", x):
+                self.assertIsNone(gp._cuvant(v, gp.TOKENI_ETICHETA_INTERZISA), x)
+            self.assertIsNone(gp._cuvant(x.split("[", 1)[0], gp.TOKENI_ELIMINA + ("preview", "previz", "thumb", "miniatur")), x)
         for x in gp.TEXTE_CUNOSCUTE:
-            self.assertFalse(any(t in x for t in gp.TOKENI_ATAS), x)
+            self.assertIsNone(gp._cuvant(x), x)
         # r3: listele = EXACT reuniunea semnaturilor din calibrarea de pe 21.11.2026 (cele trei iesiri `stare`, copiate mai jos),
-        # fara linia text_fisier (regula RUNBOOK: nu se trece niciodata); fiecare semnatura intr-o singura lista
+        # fara linia text_fisier (regula RUNBOOK: nu se trece niciodata) si - r4 - fara linia token_ (un element cu cuvant de
+        # atasament nu poate fi acceptat de nicio lista; sursa cuvantului se citeste din pagina, RUNBOOK pasul 0); in plus textul
+        # intreg al avertismentului Workspace (P2), copiat din fisierul citit de chat; fiecare semnatura intr-o singura lista
         toate = set(CALIBRARE_I + CALIBRARE_II + CALIBRARE_III)
-        elemente = set(l.split(":", 1)[1] for l in toate if l.startswith(("element:", "token_")))
+        elemente = set(l.split(":", 1)[1] for l in toate if l.startswith("element:"))
         texte = set(l.split(":", 1)[1] for l in toate if l.startswith("text:"))
+        neacceptate = [l for l in toate if l.startswith("token_")]
+        self.assertEqual(neacceptate, ["token_file:div{text-input-field simplified-input-area}"])
         self.assertEqual(set(gp.CONTROALE_CUNOSCUTE) | set(gp.STRUCTURA_CUNOSCUTA), elemente)
-        self.assertEqual(set(gp.TEXTE_CUNOSCUTE), texte)
+        self.assertEqual(set(gp.TEXTE_CUNOSCUTE), texte | {gp._ascii(AVERTISMENT_TEXT)})
         self.assertEqual(set(gp.CONTROALE_CUNOSCUTE) & set(gp.STRUCTURA_CUNOSCUTA), set())
-        self.assertEqual(len(gp.CONTROALE_CUNOSCUTE) + len(gp.STRUCTURA_CUNOSCUTA) + len(gp.TEXTE_CUNOSCUTE), 5 + 24 + 2)
+        self.assertEqual(len(gp.CONTROALE_CUNOSCUTE) + len(gp.STRUCTURA_CUNOSCUTA) + len(gp.TEXTE_CUNOSCUTE), 5 + 23 + 3)
         # controalele = doar butoane si linkuri; tot ce e invelis sta in STRUCTURA (continutul lui se verifica mai departe)
         self.assertTrue(all(x.startswith(("button[", "a[")) for x in gp.CONTROALE_CUNOSCUTE), gp.CONTROALE_CUNOSCUTE)
         self.assertFalse(any(x.startswith(("button[", "a[")) for x in gp.STRUCTURA_CUNOSCUTA), gp.STRUCTURA_CUNOSCUTA)
         self.assertTrue(any(l.startswith("text_fisier:chaturile gazpet.ro") for l in CALIBRARE_III))
-        self.assertFalse(any("chaturile" in x for x in gp.TEXTE_CUNOSCUTE))
+        self.assertEqual([x for x in gp.TEXTE_CUNOSCUTE if "chaturile" in x], [gp._ascii(AVERTISMENT_TEXT)])
         # L19: semnul locator (vede si shadow DOM) = aceleasi media + aceleasi etichete de scoatere ca analiza HTML
         self.assertEqual(gp.SEMN_EXTRA, 'img, picture, video, audio, canvas, object, embed, iframe, image, source, track, '
                          '[aria-label*="remove" i], [aria-label*="elimin" i], [aria-label*="terge" i], [aria-label*="delete" i]')
@@ -846,14 +861,17 @@ class TestMutantiStructura(unittest.TestCase):
         self.verifica([('    if info["necunoscute"]:', "    if False:")], CARD_VERDICT)
 
     def test_fara_regula_de_element(self):
-        self.verifica([('return "element:" + sem, in_control', "return None, in_control")], NECUNOSCUTE["card_fara_text"])
+        self.verifica([('return "element:" + sem, ctrl', "return None, ctrl")], NECUNOSCUTE["card_fara_text"])
 
     def test_fara_regula_de_text(self):
+        # (nume cu extensie fara cuvant de atasament: ".pdf" ar fi prins si de regula cuvintelor, ramasa in mutant)
         self.verifica([('return "text_fisier:" + a[:TEXT_AFISAT]', "return None"), ('return "text:" + a[:TEXT_AFISAT]', "return None")],
-                      NECUNOSCUTE["text_cu_extensie"])
+                      "<div><span>raport final.docx</span></div>")
 
     def test_fara_regula_de_cuvinte(self):
-        self.verifica([("        t = _token(n)", "        t = None")], NECUNOSCUTE["clasa_atasament"])
+        # mutant: clasele / id-ul / numele atributelor nu se mai cauta dupa cuvinte de atasament
+        self.verifica([('    nume = _ascii(" ".join([n.attrs.get("class") or "", n.attrs.get("id") or ""] + list(n.attrs.keys())))',
+                        '    nume = ""')], NECUNOSCUTE["clasa_atasament"])
 
 
 # --- v4.6.4 r3: calibrarea de pe 21.11.2026 (RUNBOOK pasul 0) - liniile `necunoscut ...` copiate EXACT din cele trei iesiri `stare`
@@ -904,13 +922,18 @@ AVERTISMENT_III = (                               # in (iii), chat existent gol,
 CALIBRARE_III = CALIBRARE_I[:4] + ("element:prompt-flow-bar",) + CALIBRARE_I[4:26] + AVERTISMENT_III
 assert (len(CALIBRARE_I), len(CALIBRARE_II), len(CALIBRARE_III)) == (27, 31, 32)
 
-# textul intreg al avertismentului nu se cunoaste (r2 il taia la 40 de caractere): in fixture e completat IPOTETIC dupa "pen"
-AVERTISMENT_TEXT = "Chaturile gazpet.ro nu sunt folosite pentru a \u00eembun\u0103t\u0103\u021bi modelele noastre. Gemini poate gre\u0219i."
-# atributul care da "file" pe invelisul editorului nu apare in semnatura (nu e clasa / id / data-*); in fixture e IPOTETIC
+# r4: textul INTREG al avertismentului Workspace, copiat din ce a citit chatul pe 21.11.2026 din pagina reala (element
+# hallucination-disclaimer, chat existent): paragraful dinaintea linkului "Confidentialitatea ta si Gemini" (sursa independenta)
+AVERTISMENT_TEXT = ("Chaturile Gazpet.ro nu sunt folosite pentru a ne \u00eembun\u0103t\u0103\u021bi modelele. Gemini este un AI \u0219i poate "
+                    "s\u0103 fac\u0103 gre\u0219eli, inclusiv \u00een leg\u0103tur\u0103 cu persoane.")
+# atributul care da "file" pe invelisul editorului nu apare in semnatura r3 (nu e clasa / id / data-*); in fixture e IPOTETIC;
+# r4 afiseaza numele atributelor in {...}, deci rularea `stare` pe pagina reala il va arata
 ATRIBUT_FILE_IPOTETIC = ' filedroptarget=""'
+TOKEN_FILE_R3 = "token_file:div{text-input-field simplified-input-area}"                 # linia din calibrare (afisarea r3)
+TOKEN_FILE_R4 = "token_file:div{text-input-field simplified-input-area filedroptarget}"  # aceeasi, cu atributul ipotetic afisat
 
 
-def pagina_calibrare(stare):
+def pagina_calibrare(stare, atribut_file=ATRIBUT_FILE_IPOTETIC):
     # pagina sintetica scrisa de mana ca sa reproduca EXACT liniile de mai sus (ordinea = parcurgerea in adancime a zonei)
     assert stare in ("i", "ii", "iii")
     gi = "<gem-icon><svg viewBox=\"0 0 24 24\"><path d=\"M0 0h24v24H0z\"></path></svg></gem-icon>"
@@ -932,7 +955,7 @@ def pagina_calibrare(stare):
             '<back-to-bottom-fab><button aria-label="Deruleaz\u0103 \u00een jos" type="button" tabindex="0">' + gi + "</button></back-to-bottom-fab>"
             + ("<prompt-flow-bar></prompt-flow-bar>" if stare == "iii" else "")
             + '<file-drop-indicator></file-drop-indicator><auto-suggest></auto-suggest>'
-            '<fieldset role="none"><div class="text-input-field ng-tns-c12-3 simplified-input-area ng-star-inserted"' + ATRIBUT_FILE_IPOTETIC + ">"
+            '<fieldset role="none"><div class="text-input-field ng-tns-c12-3 simplified-input-area ng-star-inserted"' + atribut_file + ">"
             '<simplified-input-menu><gem-icon-button type="onsurface"><button aria-label="\u00cenc\u0103rcare \u0219i instrumente">' + gi
             + "</button></gem-icon-button></simplified-input-menu><toolbox-drawer></toolbox-drawer>"
             '<div data-test-id="textarea-inner"><div data-test-id="textarea-wrapper">' + editor + "</div></div>"
@@ -956,73 +979,108 @@ class TestCalibrare(unittest.TestCase):
 
     def test_fixture_urile_reproduc_iesirile_stare(self):
         # cu listele albe goale (= ae3e8947), paginile sintetice dau EXACT liniile copiate din cele trei fisiere, in aceeasi ordine;
-        # textul avertismentului e taiat la 40 ca in r2, ca sa se compare cu linia copiata
+        # textul avertismentului e taiat la 40 ca in r2, ca sa se compare cu linia copiata. Singura linie care difera ca afisare:
+        # token_file - r4 arata si numele atributului (ipotetic in fixture), r3 nu il arata; forma r3 e prefixul celei r4
+        self.assertTrue(TOKEN_FILE_R4.startswith(TOKEN_FILE_R3[:-1]))
         for stare, asteptat in (("i", CALIBRARE_I), ("ii", CALIBRARE_II), ("iii", CALIBRARE_III)):
             with mock.patch.multiple(gp, **LISTE_GOALE), mock.patch.object(gp, "TEXT_AFISAT", 40), \
                     mock.patch.object(gp, "DOMENII_FIRMA", ()):
                 i = self.an(pagina_calibrare(stare))
             self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"]), (1, 1, 0, 0), msg=stare)
-            self.assertEqual(i["necunoscute_detalii"], list(asteptat), msg=stare)
+            self.assertEqual(i["necunoscute_detalii"], [TOKEN_FILE_R4 if l == TOKEN_FILE_R3 else l for l in asteptat], msg=stare)
             self.assertEqual(i["necunoscute"], len(asteptat), msg=stare)
 
-    def test_listele_livrate_recunosc_starile_i_si_ii(self):
-        for stare in ("i", "ii"):
-            i = self.an(pagina_calibrare(stare))
+    def test_listele_livrate_recunosc_cele_trei_stari_fara_atributul_file(self):
+        # calea legitima (L20): fara atributul necunoscut al div-ului, toate cele trei stari (si chatul existent, cu textul Workspace
+        # intreg in TEXTE_CUNOSCUTE - P2) dau 0 necunoscute si `trimite` ajunge la Enter
+        for stare in ("i", "ii", "iii"):
+            i = self.an(pagina_calibrare(stare, atribut_file=""))
             self.assertEqual((i["necunoscute"], i["atasamente"], i["semne"]), (0, 0, 0), msg=i["necunoscute_detalii"])
             self.assertEqual(gp.verifica_fara_atasamente(i, 0, "t"), 0)
-            cod, act = ruleaza_trimite(gp, FakePg(pagina_calibrare(stare), dupa_goto=pagina_calibrare("i")))
+            cod, act = ruleaza_trimite(gp, FakePg(pagina_calibrare(stare, atribut_file=""), dupa_goto=pagina_calibrare("i", atribut_file="")))
             self.assertEqual((cod, act), (None, ["goto", "click", "press Control+A", "press Delete", "insert", "press Enter"]), msg=stare)
 
-    def test_starea_iii_ramane_refuzata_doar_pe_textul_avertismentului(self):
-        # r3: domeniul firmei nu mai face din avertisment un "fisier"; textul trece prin regula text: si, fiindca intregul lui nu e
-        # cunoscut inca, NU e in TEXTE_CUNOSCUTE -> singurul motiv ramas; linia il afiseaza intreg (nu taiat la 40)
-        i = self.an(pagina_calibrare("iii"))
-        self.assertEqual(i["necunoscute_detalii"], ["text:" + gp._ascii(AVERTISMENT_TEXT)])
-        self.assertGreater(len(i["necunoscute_detalii"][0]), 60)
-        self.assertFalse(any(m.startswith("text_fisier:") for m in i["necunoscute_detalii"]))
-        cod, act = ruleaza_trimite(gp, FakePg(pagina_calibrare("iii")))
-        self.assertEqual((cod, act), ("ciorna_necunoscuta", []))
-        # calea legitima: cand textul intreg ajunge in TEXTE_CUNOSCUTE (exact), starea (iii) trece si trimite
-        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + (gp._ascii(AVERTISMENT_TEXT),)):
-            self.assertEqual(self.an(pagina_calibrare("iii"))["necunoscute"], 0)
-            cod, act = ruleaza_trimite(gp, FakePg(pagina_calibrare("iii"), dupa_goto=pagina_calibrare("i")))
-            self.assertIsNone(cod)
-            self.assertIn("press Enter", act)
+    def test_div_ul_cu_atributul_file_ramane_refuzat_si_afisat_cu_atribut(self):
+        # r4: cu atributul (ipotetic) care contine "file", fiecare stare are EXACT un motiv - linia token_file, acum cu numele
+        # atributului in {...} (asa va arata `stare` pe pagina reala, ca chatul sa citeasca sursa cuvantului); refuz fara actiuni
+        for stare in ("i", "ii", "iii"):
+            i = self.an(pagina_calibrare(stare))
+            self.assertEqual(i["necunoscute_detalii"], [TOKEN_FILE_R4], msg=stare)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_calibrare(stare))), ("ciorna_necunoscuta", []), msg=stare)
+        # P1: nici intrarea r3, nici forma completa r4 in STRUCTURA nu pot accepta un element cu cuvant de atasament
+        with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", gp.STRUCTURA_CUNOSCUTA + (TOKEN_FILE_R3.split(":", 1)[1], TOKEN_FILE_R4.split(":", 1)[1])):
+            self.assertEqual(self.an(pagina_calibrare("i"))["necunoscute_detalii"], [TOKEN_FILE_R4])
+            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_calibrare("i"))), ("ciorna_necunoscuta", []))
+
+    def test_starea_iii_textul_workspace(self):
+        # P2: textul intreg (copiat din pagina reala) e in TEXTE_CUNOSCUTE exact; fara el starea (iii) ar fi refuzata DOAR pe text:
+        i = self.an(pagina_calibrare("iii", atribut_file=""))
+        self.assertEqual(i["necunoscute"], 0, msg=i["necunoscute_detalii"])
+        self.assertIn(gp._ascii(AVERTISMENT_TEXT), gp.TEXTE_CUNOSCUTE)
+        self.assertEqual(gp._ascii(AVERTISMENT_TEXT), "chaturile gazpet.ro nu sunt folosite pentru a ne imbunatati modelele. gemini este un ai "
+                         "si poate sa faca greseli, inclusiv in legatura cu persoane.")
+        fara = tuple(x for x in gp.TEXTE_CUNOSCUTE if x != gp._ascii(AVERTISMENT_TEXT))
+        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", fara):
+            i = self.an(pagina_calibrare("iii", atribut_file=""))
+            self.assertEqual(i["necunoscute_detalii"], ["text:" + gp._ascii(AVERTISMENT_TEXT)])
+            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_calibrare("iii", atribut_file=""))), ("ciorna_necunoscuta", []))
+        # un text care contine IN PLUS un nume de fisier (sau un cuvant de atasament) ramane refuzat, chiar daca ar fi in lista
+        for plus, m in ((" Vezi oferta.pdf", "text_fisier:"), (" Fisier atasat.", "text_atasament:"), (" (preview)", "text_atasament:")):
+            html = pagina_calibrare("iii", atribut_file="").replace(AVERTISMENT_TEXT, AVERTISMENT_TEXT + plus)
+            i = self.an(html)
+            self.assertEqual(i["necunoscute"], 1, msg=plus)
+            self.assertTrue(i["necunoscute_detalii"][0].startswith(m + "chaturile gazpet.ro"), msg=i["necunoscute_detalii"])
+            with mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + (gp._ascii(AVERTISMENT_TEXT + plus),)):
+                self.assertEqual(self.an(html)["necunoscute"], 1, msg=plus)
+                self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=plus)
         # textul tot ar fi "fisier" fara regula domeniului: mutantul refuza chiar si cu textul in lista (refuz fals permanent)
         mut = mutant([("        if a[i:j] in DOMENII_FIRMA:", "        if False:")])
-        with mock.patch.object(mut, "TEXTE_CUNOSCUTE", mut.TEXTE_CUNOSCUTE + (mut._ascii(AVERTISMENT_TEXT),)):
-            self.assertTrue(self.an(pagina_calibrare("iii"), mut)["necunoscute_detalii"][0].startswith("text_fisier:chaturile gazpet.ro"))
+        self.assertTrue(self.an(pagina_calibrare("iii", atribut_file=""), mut)["necunoscute_detalii"][0].startswith("text_fisier:chaturile gazpet.ro"))
 
     def test_stare_afiseaza_textul_intreg(self):
-        pg = FakePg(pagina_calibrare("iii"))
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            gp.stare(pg)
+        fara = tuple(x for x in gp.TEXTE_CUNOSCUTE if x != gp._ascii(AVERTISMENT_TEXT))
+        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", fara):
+            pg = FakePg(pagina_calibrare("iii", atribut_file=""))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                gp.stare(pg)
         linii = out.getvalue().splitlines()
         self.assertIn("necunoscute in zona: 1", linii)
         self.assertIn("  necunoscut text:" + gp._ascii(AVERTISMENT_TEXT), linii)
         self.assertTrue(any(l.startswith("paza ciorna: REFUZ ciorna_necunoscuta") for l in linii), linii)
+        # cu listele livrate, `stare` pe starea (i) reala (cu atributul) arata exact linia token_file cu atributul
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            gp.stare(FakePg(pagina_calibrare("i")))
+        self.assertIn("  necunoscut " + TOKEN_FILE_R4, out.getvalue().splitlines())
 
     def test_token_file_vine_din_atribut_nu_din_clasa(self):
         # clasa "text-input-field simplified-input-area" nu contine "file" (nici "simplified", nici "field"); fara atributul
-        # ipotetic div-ul e neutru si nu apare deloc; cu el apare exact linia din calibrare, pe care STRUCTURA o recunoaste
+        # ipotetic div-ul e neutru si nu apare deloc; cu el apare linia token_file, cu numele atributului (r4), si NU se poate
+        # accepta prin nicio lista; alta clasa / id / data-* / alt tag = tot refuz; continutul lui se verifica in continuare
         self.assertNotIn("file", "text-input-field simplified-input-area")
         div = '<div class="text-input-field ng-tns-c12-3 simplified-input-area"%s></div>'
         with mock.patch.multiple(gp, **LISTE_GOALE):
             self.assertEqual(self.an(zona_cu(div % ""))["necunoscute"], 0)
-            self.assertEqual(self.an(zona_cu(div % ATRIBUT_FILE_IPOTETIC))["necunoscute_detalii"],
-                             ["token_file:div{text-input-field simplified-input-area}"])
-        self.assertEqual(self.an(zona_cu(div % ATRIBUT_FILE_IPOTETIC))["necunoscute"], 0)
-        # intrarea NU slabeste detectia: alta clasa / un id / un data-* in plus / alt tag = tot necunoscut; continutul se verifica
-        for alt in (div.replace("simplified-input-area", "simplified-input-area-v2") % ATRIBUT_FILE_IPOTETIC,
-                    div.replace('class="', 'id="z" class="') % ATRIBUT_FILE_IPOTETIC,
-                    div % (ATRIBUT_FILE_IPOTETIC + ' data-file-id="1"'),
-                    div.replace("div", "span") % ATRIBUT_FILE_IPOTETIC,
-                    '<div class="text-input-field simplified-input-area" data-file-id="1"></div>'):
-            self.assertEqual(self.an(zona_cu(alt))["necunoscute"], 1, msg=alt)
+            self.assertEqual(self.an(zona_cu(div % ATRIBUT_FILE_IPOTETIC))["necunoscute_detalii"], [TOKEN_FILE_R4])
+        self.assertEqual(self.an(zona_cu(div % ""))["necunoscute"], 0)
+        self.assertEqual(self.an(zona_cu(div % ATRIBUT_FILE_IPOTETIC))["necunoscute_detalii"], [TOKEN_FILE_R4])
+        for alt, m in ((div.replace("simplified-input-area", "simplified-input-area-v2") % ATRIBUT_FILE_IPOTETIC,
+                        "token_file:div{text-input-field simplified-input-area-v2 filedroptarget}"),
+                       (div.replace('class="', 'id="z" class="') % ATRIBUT_FILE_IPOTETIC,
+                        "token_file:div{text-input-field simplified-input-area #z filedroptarget}"),
+                       (div % (ATRIBUT_FILE_IPOTETIC + ' data-file-id="1"'),
+                        "token_file:div{text-input-field simplified-input-area data-file-id filedroptarget}"),
+                       (div.replace("div", "span") % ATRIBUT_FILE_IPOTETIC,
+                        "token_file:span{text-input-field simplified-input-area filedroptarget}"),
+                       ('<div class="text-input-field simplified-input-area" data-file-id="1"></div>',
+                        "token_file:div{text-input-field simplified-input-area data-file-id}"),
+                       ('<div class="text-input-field simplified-input-area" data-x="oferta.docx"></div>',
+                        "atribut_fisier:div{text-input-field simplified-input-area data-x}")):
+            self.assertEqual(self.an(zona_cu(alt))["necunoscute_detalii"], [m], msg=alt)
         for inauntru, m in (("<span>a.txt</span>", "text_fisier:a.txt"), ('<img src="x">', "media:img[src]"),
                             ("<attachment-card></attachment-card>", "element:attachment-card"), (chip("a.txt"), None)):
-            i = self.an(zona_cu(div.replace("></div>", ">" + inauntru + "</div>") % ATRIBUT_FILE_IPOTETIC))
+            i = self.an(zona_cu(div.replace("></div>", ">" + inauntru + "</div>") % ""))
             if m is None:
                 self.assertEqual(i["atasamente"], 1, msg=inauntru)      # chip-ul din invelis se numara ca fisier
             else:
@@ -1033,11 +1091,183 @@ class TestCalibrare(unittest.TestCase):
         inc = '<button aria-label="\u00cenc\u0103rcare \u0219i instrumente"><span>oferta.pdf</span></button>'
         self.assertEqual(self.an(zona_cu(inc))["necunoscute_detalii"], ["text_fisier:oferta.pdf"])
         self.assertEqual(self.an(zona_cu('<toolbox-drawer><button aria-label="Remove file">x</button></toolbox-drawer>'))
-                         ["necunoscute_detalii"], ["element:button[aria-label=remove file]", "text:x"])
+                         ["necunoscute_detalii"], ["eticheta:button[aria-label=remove file]", "text:x"])
         self.assertEqual(self.an(zona_cu('<toolbox-drawer><span>Deep Research</span></toolbox-drawer>'))["necunoscute_detalii"],
                          ["text:deep research"])                       # un instrument ales = text necunoscut = refuz
-        self.assertEqual(self.an(zona_cu('<span role="status">Fi\u0219ier \u00eenc\u0103rcat</span>'))["necunoscute_detalii"],
-                         ["text:fisier incarcat"])
+        # r4: textul cu cuvant de atasament in invelisul din lista = semnal (nu "text necunoscut" calibrabil): refuz si daca ar fi in TEXTE
+        status = '<span role="status">Fi\u0219ier \u00eenc\u0103rcat</span>'
+        self.assertEqual(self.an(zona_cu(status))["necunoscute_detalii"], ["text_atasament:fisier incarcat"])
+        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + ("fisier incarcat",)):
+            self.assertEqual(self.an(zona_cu(status))["necunoscute_detalii"], ["text_atasament:fisier incarcat"])
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(status))), ("ciorna_necunoscuta", []))
+
+
+# --- v4.6.4 r4 (Jakarinos NO-GO pe d50dda4e, P1): semnalele de atasament se verifica INAINTEA listelor albe ---
+# cele doua reproduceri din verdict, copiate exact
+REPRO_GEM_ICON = '<gem-icon class="attachment-card"\n          data-file-name="oferta.pdf"></gem-icon>'
+REPRO_DIV = '<div class="text-input-field simplified-input-area"\n     removeattachment="oferta.pdf"></div>'
+# variante: fiecare = un element din listele albe (sau neutru / structura / butonul modelului / editorul) care poarta un semnal
+# pe care semnatura r3 nu il arata; asteptat (scris de mana): motivul primului necunoscut
+SEMNALE = {
+    # (TOKENI_ATAS se cauta in ordine: "file" inaintea lui "attach"; "pdf" e cuvant de atasament, de aceea nume.extensie "curat" = .docx)
+    "repro_gem_icon": (REPRO_GEM_ICON, "token_file:gem-icon{attachment-card data-file-name}"),
+    "repro_div": (REPRO_DIV, "token_attach:div{text-input-field simplified-input-area removeattachment}"),
+    "gem_icon_data_file_name": ('<gem-icon data-file-name="oferta.pdf"></gem-icon>', "token_file:gem-icon{data-file-name}"),
+    "gem_icon_valoare_pdf": ('<gem-icon data-x="oferta.pdf"></gem-icon>', "token_pdf:gem-icon{data-x}"),
+    "gem_icon_valoare_fisier": ('<gem-icon data-x="oferta.docx"></gem-icon>', "atribut_fisier:gem-icon{data-x}"),
+    "gem_icon_valoare_cuvant": ('<gem-icon data-x="attachment"></gem-icon>', "token_attach:gem-icon{data-x}"),
+    "gem_icon_clasa_card": ('<gem-icon class="ng-star-inserted icon-card"></gem-icon>', "token_card:gem-icon{icon-card}"),
+    "gem_icon_id": ('<gem-icon id="preview-7"></gem-icon>', "token_preview:gem-icon{#preview-7}"),
+    "structura_atribut_necunoscut_pdf": ('<toolbox-drawer foo="raport.pdf"></toolbox-drawer>', "token_pdf:toolbox-drawer{foo}"),
+    "structura_atribut_necunoscut_fisier": ('<toolbox-drawer foo="raport.docx"></toolbox-drawer>', "atribut_fisier:toolbox-drawer{foo}"),
+    "structura_atribut_necunoscut_cuvant": ('<prompt-flow-bar removeattachment=""></prompt-flow-bar>',
+                                            "token_attach:prompt-flow-bar{removeattachment}"),
+    "structura_aria_description": ('<fieldset role="none" aria-description="oferta.docx"></fieldset>',
+                                   "atribut_fisier:fieldset[role=none][aria-description]{}"),
+    "control_clasa": ('<button aria-label="Trimite mesajul" class="send-button file-attached"></button>',
+                      "token_file:button[aria-label=trimite mesajul]{send-button file-attached}"),
+    "control_data_fisier": ('<button aria-label="Trimite mesajul" data-file-name="oferta.pdf"></button>',
+                            "token_file:button[aria-label=trimite mesajul]{data-file-name}"),
+    "control_title_fisier": ('<button aria-label="Trimite mesajul" title="oferta.pdf"></button>',
+                             "eticheta:button[aria-label=trimite mesajul][title=oferta.pdf]"),
+    "control_neutru_inauntru": ('<button aria-label="Trimite mesajul"><span class="attachment-thumb"></span></button>',
+                                "token_attach:span{attachment-thumb}"),
+    "control_ligatura_inauntru": ('<button aria-label="Trimite mesajul"><mat-icon>attach_file</mat-icon></button>',
+                                  "text_atasament:attach_file"),
+    "control_text_inauntru": ('<button aria-label="Trimite mesajul"><span>Fi\u0219ier ata\u0219at</span></button>',
+                              "text_atasament:fisier atasat"),
+    "control_text_fisier_inauntru": ('<button aria-label="Trimite mesajul"><span>oferta.pdf</span></button>', "text_fisier:oferta.pdf"),
+    "link_href_fisier": ('<a data-test-id="footer-privacy-notice-link" href="blob:https://gemini.google.com/oferta.pdf"></a>',
+                         "token_pdf:a[data-test-id=footer-privacy-notice-link][href]{}"),
+    "status_text": ('<span role="status">Fi\u0219ier \u00eenc\u0103rcat</span>', "text_atasament:fisier incarcat"),
+    "status_data": ('<span role="status" data-file-count="1"></span>', "token_file:span[role=status]{data-file-count}"),
+    "model_data_fisier": ('<button data-test-id="bard-mode-menu-button" aria-label="Alege modelul" data-file-name="a.pdf"></button>',
+                          "token_file:button[aria-label=alege modelul][data-test-id=bard-mode-menu-button]{data-file-name}"),
+    "rich_textarea_clasa": ('<rich-textarea class="attachment-host"></rich-textarea>', "token_attach:rich-textarea{attachment-host}"),
+    "fundal_pe_structura": ('<gem-icon style="background-image: url(blob:x)"></gem-icon>', "fundal:gem-icon"),
+}
+
+
+class TestSemnaleInainteDeListe(unittest.TestCase):
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def test_reproducerile_din_verdict_refuzate_fara_actiuni(self):
+        for k in ("repro_gem_icon", "repro_div"):
+            extra, m = SEMNALE[k]
+            i = self.an(zona_cu(extra))
+            self.assertEqual((i["atasamente"], i["semne"]), (0, 0), msg=k)             # ce a gasit Jakarinos: 0 / 0 ...
+            self.assertEqual(i["necunoscute_detalii"], [m], msg=k)                         # ... dar acum un necunoscut
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra))), ("ciorna_necunoscuta", []), msg=k)
+        # si cu intrarea r3 a div-ului (plus forma ei completa) in STRUCTURA: tot refuz (P1: lista nu acopera semnalul)
+        with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", gp.STRUCTURA_CUNOSCUTA + (TOKEN_FILE_R3.split(":", 1)[1],
+                                                                                   "div{text-input-field simplified-input-area removeattachment}")):
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(REPRO_DIV))), ("ciorna_necunoscuta", []))
+
+    def test_fiecare_semnal_refuzat_oricare_ar_fi_lista(self):
+        # listele albe contin deja gem-icon, toolbox-drawer, prompt-flow-bar, fieldset[role=none], butonul de trimitere, linkul,
+        # span[role=status]; in plus se adauga EXACT semnaturile variantelor (tag + atribute din semnatura): tot refuz
+        semnaturi = tuple(gp._semnatura(self.nod(extra)) for extra, _ in SEMNALE.values())
+        with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", gp.CONTROALE_CUNOSCUTE + semnaturi), \
+                mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + ("fisier incarcat", "fisier atasat", "attach_file")):
+            for k, (extra, m) in sorted(SEMNALE.items()):
+                i = self.an(zona_cu(extra))
+                self.assertEqual(i["necunoscute_detalii"][:1], [m], msg=k)
+                self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra))), ("ciorna_necunoscuta", []), msg=k)
+        # aceleasi elemente FARA semnal trec (calea legitima): semnatura exacta e in lista, continutul e curat
+        curate = ('<gem-icon class="ng-star-inserted"><svg><path d="M0"></path></svg></gem-icon>',
+                  '<toolbox-drawer foo="bar"></toolbox-drawer>',
+                  '<fieldset role="none" aria-live="polite"></fieldset>',
+                  '<button aria-label="Trimite mesajul" class="send-button"><span>Trimite</span><mat-icon>send</mat-icon></button>',
+                  '<a data-test-id="footer-privacy-notice-link" href="https://support.google.com/gemini?p=privacy_notice">'
+                  '<span data-test-id="content">Confiden\u021bialitatea ta \u0219i Gemini</span></a>',
+                  '<span role="status" aria-live="polite"></span>')
+        for extra in curate:
+            self.assertEqual(self.an(zona_cu(extra))["necunoscute"], 0, msg=(extra, self.an(zona_cu(extra))["necunoscute_detalii"]))
+
+    def nod(self, html):
+        a = gp._Arbore()
+        a.feed(html)
+        return a.radacina.copii[0]
+
+    def test_semnalul_in_editor(self):
+        # editorul insusi si elementele din el (span-uri Quill) nu pot purta clase / atribute de atasament
+        ed = EDITOR_HTML.replace('contenteditable="true"', 'contenteditable="true" data-file-name="oferta.pdf"')
+        self.assertEqual(self.an(zona_cu(editor=ed))["necunoscute_detalii"],
+                         ["semnal_in_editor:token_file:div[role=textbox][contenteditable]{ql-editor textarea data-file-name}"])
+        ed = EDITOR_HTML.replace("<p>ciorna</p>", '<p>ciorna<span class="ql-attachment-chip"></span></p>')
+        self.assertEqual(self.an(zona_cu(editor=ed))["necunoscute_detalii"], ["semnal_in_editor:token_attach:span{ql-attachment-chip}"])
+        self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(editor=ed))), ("ciorna_necunoscuta", []))
+
+    def test_url_urile_nu_sunt_nume_de_fisier_dar_cuvintele_raman(self):
+        # href-ul linkului real contine "support.google.com" (ar fi "fisier" dupa regex): valorile URL se verifica doar pe cuvinte
+        a = '<a data-test-id="footer-privacy-notice-link" href="%s"></a>'
+        self.assertEqual(self.an(zona_cu(a % "https://support.google.com/gemini/answer/13594961?hl=ro"))["necunoscute"], 0)
+        self.assertEqual(self.an(zona_cu(a % "https://x.ro/download/oferta.pdf"))["necunoscute_detalii"],
+                         ["token_pdf:a[data-test-id=footer-privacy-notice-link][href]{}"])
+        self.assertEqual(self.an(zona_cu(a % "https://x.ro/uploads/1"))["necunoscute_detalii"],
+                         ["token_upload:a[data-test-id=footer-privacy-notice-link][href]{}"])
+        self.assertEqual(gp.URL_ATRIBUTE, ("href", "src", "srcset"))
+
+    def test_eticheta_permite_doar_cuvintele_de_incarcare(self):
+        # scris de mana: butonul calibrat "Incarcare si instrumente" trece; orice alt cuvant de atasament in eticheta = refuz
+        self.assertEqual(gp.TOKENI_ETICHETA_PERMISE, ("upload", "incarca"))
+        self.assertEqual(set(gp.TOKENI_ETICHETA_INTERZISA), (set(gp.TOKENI_ATAS) - {"upload", "incarca"}) | {"terge"})
+        for lbl, ok in (("\u00cenc\u0103rcare \u0219i instrumente", True), ("Upload", True), ("Incarcare fisier", False),
+                        ("Attach", False), ("Elimin\u0103 imaginea", False), ("Card", False), ("Document nou", False),
+                        ("oferta.pdf", False), ("\u0218terge", False)):
+            btn = '<button aria-label="%s"></button>' % lbl
+            with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", (gp._semnatura(self.nod(btn)),)):
+                i = self.an(zona_cu(btn))
+                self.assertEqual(i["necunoscute"], 0 if ok else 1, msg=lbl)
+                if not ok:
+                    self.assertTrue(i["necunoscute_detalii"][0].startswith("eticheta:"), msg=lbl)
+
+    def test_semnalul_se_verifica_pe_toate_atributele_din_semnatura(self):
+        # r3 sarea role / type la eticheta: <input type="file"> in lista ar fi trecut; r4 le verifica si pe ele
+        with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", ("input[type=file]", "div[role=document]")):
+            self.assertEqual(self.an(zona_cu('<input type="file" hidden>'))["necunoscute_detalii"], ["eticheta:input[type=file]"])
+            self.assertEqual(self.an(zona_cu('<div role="document"></div>'))["necunoscute_detalii"], ["eticheta:div[role=document]"])
+
+    def test_mutant_ordinea_inversata_lasa_brief_ul_sa_plece(self):
+        # mutant: blocul de semnale mutat DUPA potrivirea cu listele (si dupa elementele neutre) -> cele doua reproduceri din
+        # verdict trec la Enter (exact ce a gasit Jakarinos pe d50dda4e); pe cod: refuz fara nicio actiune (testat mai sus)
+        with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
+            src = f.read().decode("ascii")
+        bloc = ["    s = _semnal(n)", "    if s:", "        return s, ctrl"]
+        tinta = '    return "element:" + sem, ctrl'
+        linii = [l.rstrip("\r") for l in src.split("\n")]
+        ib = [k for k in range(len(linii) - 2) if linii[k:k + 3] == bloc]
+        it = [k for k, l in enumerate(linii) if l == tinta]
+        self.assertEqual((len(ib), len(it)), (1, 1))
+        self.assertLess(ib[0], it[0])
+        del linii[ib[0]:ib[0] + 3]
+        it = [k for k, l in enumerate(linii) if l == tinta][0]
+        linii[it:it] = bloc
+        mut = types.ModuleType("gemini_pw_mutant_ordine")
+        exec(compile("\n".join(linii), "gemini_pw_mutant_ordine", "exec"), mut.__dict__)
+        cod, act = ruleaza_trimite(mut, FakePg(zona_cu(REPRO_GEM_ICON)))
+        self.assertEqual(cod, None)
+        self.assertIn("press Enter", act)
+        with mock.patch.object(mut, "STRUCTURA_CUNOSCUTA", mut.STRUCTURA_CUNOSCUTA + (TOKEN_FILE_R3.split(":", 1)[1],)):
+            cod, act = ruleaza_trimite(mut, FakePg(zona_cu(REPRO_DIV)))
+            self.assertIn("press Enter", act)
+        # mutantul inca refuza un element necunoscut cu semnal (nu e in lista): deci doar ORDINEA e diferita
+        self.assertEqual(ruleaza_trimite(mut, FakePg(zona_cu('<x-card data-file-name="a.pdf"></x-card>')))[0], "ciorna_necunoscuta")
+
+    def test_mutant_fara_semnal_pe_text_in_control(self):
+        # mutant: textul dintr-un control nu mai e verificat dupa cuvinte -> "Fisier atasat" in butonul de trimitere pleaca
+        extra = SEMNALE["control_text_inauntru"][0]
+        mut = mutant([('        return "text_atasament:" + a[:TEXT_AFISAT]', "        pass")])
+        self.assertIsNone(ruleaza_trimite(mut, FakePg(zona_cu(extra)))[0])
+        self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra))), ("ciorna_necunoscuta", []))
+
+    def test_mutant_fara_valorile_atributelor(self):
+        # mutant: valorile atributelor din afara semnaturii nu se mai verifica -> gem-icon data-x="oferta.pdf" din lista pleaca
+        extra = SEMNALE["gem_icon_valoare_fisier"][0]
+        mut = mutant([("        if k in ATRIBUTE_SEPARATE or k in SEMN_ATR_VALOARE or not v:", "        if True:")])
+        self.assertIsNone(ruleaza_trimite(mut, FakePg(zona_cu(extra)))[0])
+        self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra))), ("ciorna_necunoscuta", []))
 
 
 class TestDomeniulFirmei(unittest.TestCase):
@@ -1074,21 +1304,22 @@ class TestDomeniulFirmei(unittest.TestCase):
             self.assertEqual(an(zona_cu("<div>Vezi gazpet.ro.pdf</div>"))["necunoscute_detalii"], ["text_fisier:vezi gazpet.ro.pdf"])
 
     def test_mutant_domeniu_ca_subsir_trimite_fisierul(self):
-        # mutant: domeniul cautat ca SUBSIR al cuvantului (nu egalitate) -> "gazpet.ro.pdf" ar trece drept domeniu si brief-ul
-        # ar pleca cu fisierul in ciorna; pe cod ramane refuz fara nicio actiune
-        extra = "<div>gazpet.ro.pdf</div>"
+        # mutant: domeniul cautat ca SUBSIR al cuvantului (nu egalitate) -> "gazpet.ro.docx" ar trece drept domeniu si brief-ul
+        # ar pleca cu fisierul in ciorna; pe cod ramane refuz fara nicio actiune (".docx", nu ".pdf": "pdf" e si cuvant de
+        # atasament, pe care regula r4 a textelor l-ar prinde oricum si ar ascunde mutantul)
+        extra = "<div>gazpet.ro.docx</div>"
         cod, act = ruleaza_trimite(gp, FakePg(zona_cu(extra)))
         self.assertEqual((cod, act), ("ciorna_necunoscuta", []))
         mut = mutant([("        if a[i:j] in DOMENII_FIRMA:", "        if any(d in a[i:j] for d in DOMENII_FIRMA):")])
-        with mock.patch.object(mut, "TEXTE_CUNOSCUTE", ("gazpet.ro.pdf",)):
+        with mock.patch.object(mut, "TEXTE_CUNOSCUTE", ("gazpet.ro.docx",)):
             cod_m, act_m = ruleaza_trimite(mut, FakePg(zona_cu(extra)))
             self.assertIsNone(cod_m)
             self.assertIn("press Enter", act_m)
-        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", ("gazpet.ro.pdf",)):
+        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", ("gazpet.ro.docx",)):
             self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra)))[0], "ciorna_necunoscuta")
         # mutant: cuvantul nu se extinde peste punct (doar potrivirea regex) -> acelasi efect
         mut2 = mutant([("        while j < len(a) and a[j] in CARACTERE_NUME:", "        while False:")])
-        with mock.patch.object(mut2, "TEXTE_CUNOSCUTE", ("gazpet.ro.pdf",)):
+        with mock.patch.object(mut2, "TEXTE_CUNOSCUTE", ("gazpet.ro.docx",)):
             self.assertIsNone(ruleaza_trimite(mut2, FakePg(zona_cu(extra)))[0])
 
 

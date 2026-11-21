@@ -32,6 +32,14 @@
 #   Textul de confidentialitate Google Workspace ("Chaturile gazpet.ro nu sunt folosite ...") era luat drept nume de fisier:
 #   un cuvant care e EXACT un domeniu al firmei (DOMENII_FIRMA, lista inchisa) nu e fisier; "gazpet.ro.pdf", "a.gazpet.ro.docx",
 #   "gazpet.rox" raman fisiere. Textele afisate de `stare` nu se mai taie la 40 de caractere (calibrarea cere textul intreg).
+# v4.6.4 r4 (Jakarinos NO-GO pe d50dda4e, P1): o intrare din listele albe putea ascunde semne de atasament pe care semnatura nu le
+#   arata (clase, data-*, atribute necunoscute: <gem-icon class="attachment-card" data-file-name="oferta.pdf">, <div class="..."
+#   removeattachment="oferta.pdf">). Acum ORICE semnal de atasament purtat de un element (_semnal: eticheta, toate clasele, id-ul,
+#   NUMELE si VALORILE tuturor atributelor, apoi textele si descendentii lui) se verifica INAINTEA oricarei acceptari - element
+#   neutru, structura, lista alba, butonul modelului, editorul - si e refuz, oricare ar fi lista. De aceea un element cu cuvant
+#   de atasament (token_...) nu mai poate fi trecut in STRUCTURA: intrarea `div{text-input-field simplified-input-area}` a fost
+#   scoasa (sursa cuvantului "file" - un atribut al div-ului real - nu e cunoscuta; `stare` afiseaza acum si numele atributelor).
+#   P2: textul integral al avertismentului Workspace (citit de chat pe 21.11.2026) e in TEXTE_CUNOSCUTE -> chatul existent trece.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata
@@ -82,9 +90,14 @@ TOKENI_ATAS = ("file", "fisier", "attach", "atasa", "upload", "incarca", "remove
                "preview", "previz", "thumb", "miniatur", "document", "image", "imagin", "photo", "poza", "media", "chip",
                "card", "pdf")
 TOKENI_ELIMINA = ("remove", "elimin", "terge", "delete")     # eticheta unui buton de scoatere ("terge" = sterge cu / fara diacritice)
-# eticheta pe care NICIO intrare din listele albe nu o poate acoperi (scoatere / previzualizare a unui fisier, nume.extensie);
-# "upload" / "file" raman permise pentru un control recunoscut exact (butonul de incarcare din ciorna goala)
-TOKENI_ETICHETA_INTERZISA = TOKENI_ELIMINA + ("preview", "previz", "thumb", "miniatur")
+# r4: eticheta unui element (atributele cu valoare din semnatura: aria-label, title, alt, type, data-test-id...) poate contine DOAR
+# cuvintele de incarcare ("upload" / "incarca": butonul calibrat "Incarcare si instrumente" deschide meniul; eticheta lui e comparata
+# EXACT cu lista); orice alt cuvant de atasament (file, attach, remove, preview, thumb, card, chip, pdf...) sau un nume.extensie in
+# eticheta = refuz, oricare ar fi lista alba ("eticheta:"). "terge" = sterge cu / fara diacritice (ca in TOKENI_ELIMINA).
+TOKENI_ETICHETA_PERMISE = ("upload", "incarca")
+TOKENI_ETICHETA_INTERZISA = tuple(t for t in TOKENI_ATAS if t not in TOKENI_ETICHETA_PERMISE) + ("terge",)
+URL_ATRIBUTE = ("href", "src", "srcset")                     # valori URL: orice URL contine "domeniu.tld" -> doar cuvinte, nu nume.extensie
+ATRIBUTE_SEPARATE = ("class", "id", "style")                 # verificate separat (clase / id / fundal url(); nu intra in {...})
 RE_FISIER = re.compile(r"(?<![a-z0-9])[a-z0-9][a-z0-9_-]*\.[a-z][a-z0-9]{0,4}(?![a-z0-9])")   # nume.extensie in text
 # r3: un cuvant care e EXACT un domeniu al firmei nu e fisier (textul de confidentialitate Workspace: "Chaturile gazpet.ro nu
 # sunt folosite ..."). Cuvantul = potrivirea RE_FISIER extinsa peste toate caracterele de nume de fisier din jur, deci
@@ -101,8 +114,10 @@ MODEL_DATA_TEST = "bard-mode-menu-button"                     # butonul modelulu
 # (continutul lor se verifica in continuare element cu element); TEXTE = texte afisate in zona, in afara controalelor.
 # Calibrarea din 21.11.2026 (chat-ul, copia neinstalata a lui ae3e8947, Edge 9333, un tab, Carbon, nimic atasat, niciun
 # instrument): (i) chat nou gol = 27 linii, (ii) acelasi chat cu un cuvant in ciorna, fara Enter = 31, (iii) chat existent
-# gol = 32. Mai jos reuniunea lor; in comentariu starea in care a aparut fiecare. NU e trecut: textul de confidentialitate
-# (vezi DOMENII_FIRMA; trece prin regula text: si se adauga exact cand se vede intreg).
+# gol = 32. Mai jos reuniunea lor; in comentariu starea in care a aparut fiecare. NU e trecuta (r4) linia
+# `token_file:div{text-input-field simplified-input-area}`: un element cu cuvant de atasament nu poate fi acceptat de nicio lista
+# (semnalele se verifica intai); cuvantul vine dintr-un atribut al div-ului real pe care semnatura din r3 nu il afisa - `stare`
+# il afiseaza acum in {...} si decizia se ia dupa citirea lui din pagina (RUNBOOK pasul 0), nu prin acceptare globala.
 CONTROALE_CUNOSCUTE = (
     "button[aria-label=deruleaza in jos][type=button][tabindex]",   # i ii iii - "Deruleaza in jos" (in back-to-bottom-fab)
     "button[aria-label=incarcare si instrumente]",                   # i ii iii - butonul "+" care deschide meniul (nu e fisier)
@@ -117,7 +132,6 @@ STRUCTURA_CUNOSCUTA = (
     "file-drop-indicator",                                           # i ii iii - tinta de drag & drop, mereu in DOM, fara continut
     "auto-suggest",                                                  # i ii iii - sugestiile de completare (goale)
     "fieldset[role=none]",                                           # i ii iii - invelisul zonei de text
-    "div{text-input-field simplified-input-area}",                   # i ii iii - invelisul editorului; "file" vine dintr-un atribut
     "simplified-input-menu",                                         # i ii iii - invelisul butonului "+"
     "gem-icon-button[type=onsurface]",                               # i ii iii - invelisul unui buton cu iconita ("+", trimite)
     "toolbox-drawer",                                                # i ii iii - sertarul instrumentelor (niciun instrument ales)
@@ -137,6 +151,12 @@ STRUCTURA_CUNOSCUTA = (
     "span[data-test-id=content]",                                    # iii      - textul linkului de confidentialitate
 )
 TEXTE_CUNOSCUTE = (
+    # iii (r4) - avertismentul Google Workspace de sub ciorna pe un chat existent (element hallucination-disclaimer), citit INTREG de
+    # chat pe 21.11.2026 (doar citire) si trecut aici dupa normalizarea _ascii: textul paragrafului, fara linkul care ii urmeaza
+    # (textele linkului = cele doua intrari de mai jos / eticheta controlului a[...]). Un text care contine in plus un nume.extensie
+    # sau un cuvant de atasament NU trece niciodata (verificate inaintea listei).
+    "chaturile gazpet.ro nu sunt folosite pentru a ne imbunatati modelele. gemini este un ai si poate sa faca greseli, "
+    "inclusiv in legatura cu persoane.",
     "confidentialitatea ta si gemini",                               # iii - textul linkului de confidentialitate
     "se deschide intr-o fereastra noua",                             # iii - textul ascuns al linkului (se deschide in alt tab)
 )
@@ -340,18 +360,23 @@ def _semnificativ(n):
     return any(k.startswith("aria-") and k != "aria-hidden" for k in n.attrs)
 
 
-def _token(n):
-    # cuvant de atasament in clasa / id / numele atributelor / valorile data-* ale unui element neutru (sau None)
-    parti = [n.attrs.get("class"), n.attrs.get("id")] + list(n.attrs.keys())
-    parti += [v for k, v in n.attrs.items() if k.startswith("data-")]
-    t = _ascii(" ".join(p for p in parti if p))
-    return next((x for x in TOKENI_ATAS if x in t), None)
+def _cuvant(t, cuvinte=TOKENI_ATAS):
+    # primul cuvant de atasament din textul ASCII t (sau None)
+    return next((x for x in cuvinte if x in t), None)
+
+
+def _generat(nume):
+    # clase / atribute generate de Angular la fiecare build (ng-tns-c12-3, ng-star-inserted, _ngcontent-ng-c123): nu se afiseaza
+    return nume.startswith(("ng-", "_ng"))
 
 
 def _semnatura_token(n):
-    # semnatura unui element neutru cu cuvant de atasament: + clasele (fara cele generate ng-*), id-ul, atributele data-*
-    clase = [c for c in _clase(n) if not c.startswith(("ng-", "_ng"))]
-    parti = clase + (["#" + n.attrs["id"]] if n.attrs.get("id") else []) + sorted(k for k in n.attrs if k.startswith("data-"))
+    # r4: semnatura unui element cu semnal de atasament: + clasele (fara cele generate), id-ul si NUMELE tuturor atributelor din
+    # afara semnaturii (data-*, necunoscute - ex. removeattachment -, fara cele generate), ca sursa cuvantului sa se vada in `stare`
+    clase = [c for c in _clase(n) if not _generat(c)]
+    atribute = sorted(k for k in n.attrs if k not in ATRIBUTE_SEPARATE and k not in SEMN_ATR_VALOARE
+                      and k not in SEMN_ATR_CHEIE and not _generat(k))
+    parti = clase + (["#" + n.attrs["id"]] if n.attrs.get("id") else []) + atribute
     return _semnatura(n) + "{" + _ascii(" ".join(parti))[:80] + "}"
 
 
@@ -372,21 +397,53 @@ def _nume_fisier(a):
 
 
 def _are_eticheta_interzisa(n):
-    # eticheta (aria-label, title, alt...) de scoatere / previzualizare sau cu nume de fisier: nicio lista alba nu o acopera
-    t = _ascii(" ".join(n.attrs.get(k) or "" for k in SEMN_ATR_VALOARE if k not in ("role", "type")))
-    return any(x in t for x in TOKENI_ETICHETA_INTERZISA) or _nume_fisier(t) is not None
+    # eticheta (toate atributele cu valoare din semnatura: aria-label, title, alt, type, role, data-test-id...) cu cuvant de
+    # atasament (in afara celor de incarcare) sau cu nume de fisier: nicio lista alba nu o acopera
+    t = _ascii(" ".join(n.attrs.get(k) or "" for k in SEMN_ATR_VALOARE))
+    return _cuvant(t, TOKENI_ETICHETA_INTERZISA) is not None or _nume_fisier(t) is not None
 
 
-def _motiv_text(nod, in_control):
+def _semnal(n):
+    """r4 (Jakarinos r3 P1): primul semn de atasament purtat de elementul INSUSI, ca motiv de refuz (sau None). Se verifica
+    INAINTEA oricarei acceptari si pe ORICE element (neutru, din listele albe, zona / rich-textarea, butonul modelului, editorul):
+    (1) eticheta (atributele cu valoare din semnatura): cuvant interzis sau nume.extensie -> "eticheta:<semnatura>";
+    (2) cuvant de atasament in orice clasa, in id sau in NUMELE oricarui atribut (si data-*, si necunoscute: removeattachment)
+        -> "token_<cuvant>:<semnatura>{clase #id atribute}";
+    (3) in VALOAREA oricarui atribut din afara semnaturii (data-*, aria-description, necunoscute): cuvant -> "token_...",
+        nume.extensie -> "atribut_fisier:..."; valorile URL (href, src, srcset) doar pe cuvinte (orice URL contine "domeniu.tld").
+    Tagul nu e semnal: el E semnatura, comparata exact cu lista (file-drop-indicator a fost vazut gol de om la calibrare).
+    Textele si descendentii elementului se verifica mai departe, element cu element (_motiv_text / _necunoscute)."""
+    if _are_eticheta_interzisa(n):
+        return "eticheta:" + _semnatura(n)
+    nume = _ascii(" ".join([n.attrs.get("class") or "", n.attrs.get("id") or ""] + list(n.attrs.keys())))
+    t = _cuvant(nume)
+    if t:
+        return "token_%s:%s" % (t, _semnatura_token(n))
+    for k, v in n.attrs.items():
+        if k in ATRIBUTE_SEPARATE or k in SEMN_ATR_VALOARE or not v:
+            continue
+        a = _ascii(v)
+        t = _cuvant(a)
+        if t:
+            return "token_%s:%s" % (t, _semnatura_token(n))
+        if k not in URL_ATRIBUTE and _nume_fisier(a) is not None:
+            return "atribut_fisier:" + _semnatura_token(n)
+    return None
+
+
+def _motiv_text(nod, ctrl):
+    # ctrl = controlul recunoscut (din lista alba / butonul modelului) in care sta textul, sau None
     a = _ascii(nod.date)
     if not a:
         return None
     if _nume_fisier(a) is not None:
-        return "text_fisier:" + a[:TEXT_AFISAT]         # nume.extensie: refuz chiar si intr-un control cunoscut
-    if in_control:
+        return "text_fisier:" + a[:TEXT_AFISAT]         # nume.extensie: refuz chiar si intr-un control cunoscut / text din lista
+    if _cuvant(a) is not None:
+        return "text_atasament:" + a[:TEXT_AFISAT]      # r4: cuvant de atasament: refuz chiar si intr-un control / text din lista
+    if ctrl is not None:
         return None                                     # eticheta unui control recunoscut
     p = nod.parinte
-    if p is not None and p.tag == "mat-icon" and RE_LIGATURA.fullmatch(a) and not any(x in a for x in TOKENI_ATAS):
+    if p is not None and p.tag == "mat-icon" and RE_LIGATURA.fullmatch(a):
         return None                                     # ligatura unei iconite ("send", "mic", "add_2")
     if a in TEXTE_CUNOSCUTE:
         return None
@@ -394,56 +451,58 @@ def _motiv_text(nod, in_control):
 
 
 def _motiv_editor(ed):
-    # in editor intra doar textul brief-ului (comparat separat cu verifica_ciorna): orice alt element = nerecunoscut
+    # in editor intra doar textul brief-ului (comparat separat cu verifica_ciorna): orice alt element = nerecunoscut;
+    # r4: editorul insusi si elementele din el nu pot purta semnale de atasament (clase / atribute cu cuvinte, nume.extensie)
     out = []
+    s = _semnal(ed)
+    if s:
+        out.append("semnal_in_editor:" + s)
     st = list(reversed(ed.copii))
     while st:
         n = st.pop()
         if n.tag == "#text" or n.tag in NEVIZIBILE:
             continue
+        s = _semnal(n)
         if n.tag in MEDIA or "url(" in _ascii(n.attrs.get("style")):
             out.append("media_in_editor:" + _semnatura(n))
+        elif s:
+            out.append("semnal_in_editor:" + s)
         elif n.tag not in EDITOR_TAGURI:
             out.append("element_in_editor:" + _semnatura(n))
         st.extend(reversed(n.copii))
     return out
 
 
-def _motiv_element(n, in_control):
-    # -> (motiv sau None, in_control pentru copii)
+def _motiv_element(n, ctrl):
+    # -> (motiv sau None, controlul recunoscut in care sunt copiii - sau None)
     sem = _semnatura(n)
     if n.tag in MEDIA:
-        return "media:" + sem, in_control
+        return "media:" + sem, ctrl
     if "url(" in _ascii(n.attrs.get("style")):
-        return "fundal:" + sem, in_control              # miniatura pusa ca imagine de fundal
+        return "fundal:" + sem, ctrl                    # miniatura pusa ca imagine de fundal
+    # r4 (Jakarinos r3 P1): semnalele de atasament se verifica INAINTEA oricarei acceptari (structura, neutru, liste albe, butonul
+    # modelului): un element cu semnal e refuzat oricare ar fi lista; mutantul care muta blocul dupa liste e prins de teste
+    s = _semnal(n)
+    if s:
+        return s, ctrl
     if n.tag in STRUCTURA_TAGURI:
-        return None, in_control                         # zona si invelisul editorului (aceleasi nume ca selectorii)
-    if n.attrs.get("data-test-id") == MODEL_DATA_TEST and not _are_eticheta_interzisa(n):
-        return None, True                               # butonul modelului: verificat separat (verifica_model)
+        return None, ctrl                               # zona si invelisul editorului (aceleasi nume ca selectorii)
+    if n.attrs.get("data-test-id") == MODEL_DATA_TEST:
+        return None, n                                  # butonul modelului: verificat separat (verifica_model); textul lui = eticheta
     if n.tag in NEUTRE and not _semnificativ(n):
-        # element neutru: trece, afara de cazul cu cuvant de atasament in clasa / id / data-* (in afara unui control)
-        if in_control:
-            return None, in_control
-        t = _token(n)
-        if not t:
-            return None, in_control
-        sem_t = _semnatura_token(n)
-        if sem_t in STRUCTURA_CUNOSCUTA:
-            return None, in_control                     # invelis vazut de om (ex. clasa "upload-..." a butonului de incarcare)
-        return "token_%s:%s" % (t, sem_t), in_control
-    cunoscut_ctrl, cunoscut_str = sem in CONTROALE_CUNOSCUTE, sem in STRUCTURA_CUNOSCUTA
-    if cunoscut_ctrl or cunoscut_str:
-        if _are_eticheta_interzisa(n):
-            return "eticheta:" + sem, in_control        # o intrare din lista alba nu poate acoperi un buton "Remove"
-        return None, (in_control or cunoscut_ctrl)
-    return "element:" + sem, in_control
+        return None, ctrl                               # element neutru fara eticheta / rol / actiune (si fara semnal, mai sus)
+    if sem in CONTROALE_CUNOSCUTE:
+        return None, n                                  # control vazut la calibrare; textele din el = eticheta lui (verificate mai sus)
+    if sem in STRUCTURA_CUNOSCUTA:
+        return None, ctrl                               # invelis vazut la calibrare; continutul lui se verifica mai departe
+    return "element:" + sem, ctrl
 
 
 def _necunoscute(zona, editoare):
     """Elementele / textele din zona care NU fac parte din structura recunoscuta a ciornei goale (lista de motive).
     Chip-urile si semnele (numarate separat) si ce nu se afiseaza (script / style / template) se sar."""
     out = []
-    st = [(c, False) for c in reversed(zona.copii)]
+    st = [(c, None) for c in reversed(zona.copii)]
     while st:
         n, ctrl = st.pop()
         if n.tag == "#text":

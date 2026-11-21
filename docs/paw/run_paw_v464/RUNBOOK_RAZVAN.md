@@ -43,18 +43,34 @@ sunt livrate GOALE: structura reala a ciornei Gemini (butoanele trimite / microf
 nu se vede fara Edge. Fara calibrare, `stare` si `trimite` vor refuza cu `ciorna_necunoscuta`.
 
 **Stare (r3, 21.11.2026):** pasul 0 a fost rulat de sesiunea de chat pe 21.11.2026 seara din copia
-neinstalata a lui `ae3e8947` (27 / 31 / 32 semnaturi in cele trei stari) si listele albe contin acum
-EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul` legat de ele. Ce a
-ramas: in starea (iii) (chat existent) textul de confidentialitate Workspace ("Chaturile gazpet.ro
-nu sunt folosite pentru ...") era afisat ca `text_fisier:` din cauza domeniului `gazpet.ro`; din r3
-domeniul firmei (lista inchisa `DOMENII_FIRMA`) nu mai e "fisier", textul trece prin regula `text:`,
-dar intregul lui nu e cunoscut (r2 il taia la 40 de caractere), deci NU e in lista. Pasul 0 se
-repeta O DATA, doar pentru starea (iii), cu copia commit-ului r3: `stare` afiseaza acum textul intreg
-(pana la 200 de caractere) si se asteapta EXACT o linie `necunoscut text:chaturile gazpet.ro nu sunt
-folosite pen...`; Rocky o trece in `TEXTE_CUNOSCUTE` (commit nou, hash-uri noi). Pana atunci `trimite`
-va refuza cu `ciorna_necunoscuta` pe orice tab care arata un chat existent (si la a doua rulare
-`gem` din acelasi tab). Starile (i) si (ii) trec (0 necunoscute) pe paginile sintetice care reproduc
-exact iesirile calibrarii (`TestCalibrare`).
+neinstalata a lui `ae3e8947` (27 / 31 / 32 semnaturi in cele trei stari) si listele albe contin
+EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul` legat de ele.
+
+**Stare (r4, 21.11.2026, dupa review-ul Jakarinos pe r3):**
+- **Semnalele inaintea listelor (P1).** O intrare din listele albe NU mai poate acoperi un element care
+  poarta vreun semn de atasament: inainte de orice acceptare se verifica eticheta, toate clasele, id-ul,
+  numele si valorile tuturor atributelor (si `data-*`, si atribute necunoscute), apoi textele si
+  elementele dinauntru. Un astfel de element = `ciorna_necunoscuta`, fara nicio actiune, oricare ar fi
+  lista. Liniile lui `stare` care NU se trec NICIODATA in liste (si nici n-ar avea efect): `media:`,
+  `fundal:`, `eticheta:`, `text_fisier:`, `text_atasament:`, `token_...:`, `atribut_fisier:`,
+  `..._in_editor:`. Calibrabile raman doar `element:<semnatura>` si `text:<text>`.
+- **Textul Workspace (P2).** Textul integral al avertismentului de sub ciorna pe un chat existent
+  (citit de chat pe 21.11.2026) e in `TEXTE_CUNOSCUTE`: starea (iii) trece (pe pagina sintetica care
+  reproduce calibrarea). Un text care contine in plus un nume de fisier sau un cuvant de atasament
+  ramane refuzat.
+- **Linia `token_file:div{text-input-field simplified-input-area}` NU e in liste (scoasa).** Cuvantul
+  "file" nu vine din clase (verificat), ci dintr-un atribut al div-ului real pe care afisarea r3 nu il
+  arata. Din r4, `stare` afiseaza in `{...}` si numele atributelor din afara semnaturii, deci pe pagina
+  reala linia va fi `necunoscut token_file:div{text-input-field simplified-input-area <nume-atribut>}`.
+  **Consecinta: pana la r5, pe pagina reala toate cele trei stari dau 1 necunoscut (aceasta linie) si
+  `trimite` refuza.** Pasul 0 se repeta O DATA (ajunge starea i, chat nou gol) cu copia commit-ului r4;
+  sesiunea de chat copiaza linia `token_file...` intreaga. Decizia (in chat, apoi r5 + review): daca
+  atributul e un marcaj gol de drag & drop (tip `...filedroptarget=""`), se poate adauga o regula
+  inchisa si exacta pentru acel nume cu valoare goala (nu o intrare in STRUCTURA, care nu mai are
+  efect pe un element cu semnal); orice alt atribut sau o valoare nevida = ramane refuz.
+- Pe pagina reala pot aparea si alte linii noi `token_...` / `atribut_fisier:` pe elemente din liste
+  (de ex. o clasa cu "card" sau "chip" pe `gem-icon`), fiindca r3 nu verifica clasele / atributele
+  elementelor din liste. Ele NU se trec in liste: se copiaza pentru chat si se lamuresc una cate una.
 
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
@@ -71,8 +87,10 @@ in ciorna (fara Enter; apoi il stergi); (iii) un chat existent, ciorna goala. Pe
 trei: niciun fisier, nicio imagine, niciun instrument selectat. Copiaza pentru sesiunea de chat
 toate liniile `necunoscute in zona: N` si `  necunoscut ...`. Rocky trece in listele albe EXACT
 acele semnaturi (commit nou, hash-uri noi, review din nou). NU se trec niciodata linii `media:`,
-`fundal:`, `eticheta:`, `text_fisier:`, `..._in_editor:` sau orice seamana a fisier: daca apar
-cu ciorna goala pe ecran, STOP si se lamureste in chat. Pasul 0 nu scrie nimic si nu trimite nimic.
+`fundal:`, `eticheta:`, `text_fisier:`, `text_atasament:`, `token_...:`, `atribut_fisier:`,
+`..._in_editor:` sau orice seamana a fisier (din r4 nici n-ar avea efect: semnalele se verifica
+inaintea listelor): daca apar cu ciorna goala pe ecran, STOP si se lamureste in chat. Pasul 0 nu
+scrie nimic si nu trimite nimic.
 
 ## 1. Variabile (A si N, in orice consola noua, inclusiv la rollback)
 
@@ -110,7 +128,7 @@ if ($manifest.'gemini_pw.py' -ine $GemHashNou) { throw 'gemini_pw.py din pachet 
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel din v4.6.3' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 477 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 536 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -120,15 +138,16 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + '.v463') -Force }
 ```
 
-Asteptat (pachetul r3, calibrat la pasul 0): 477 linii diferite (11 vechi `<=`, 466 noi `=>`;
-in r2, fara calibrare, erau 411 / 11 / 400). Cele 11 linii vechi afisate sunt: antetul, lista de
-coduri, linia `import`, comentariul selectorilor `ATAS`, titlul partii cu browserul, cele doua linii
-din vechea `_atasamente`, linia `atasamente in ciorna` din `stare` si cele trei linii ale vechii
-verificari din `trimite`. Liniile noi: notele v4.6.4 / r2 / r3, selectorul `CHIP`, analiza HTML a
-ciornei, verificarea pozitiva a structurii, listele albe calibrate, regula domeniului firmei, paza si
-apelurile ei. Testele: `Ran 88 tests ... OK`. Daca pasul 0 se mai repeta (textul de confidentialitate),
+Asteptat (pachetul r4): 536 linii diferite (11 vechi `<=`, 525 noi `=>`; r3: 477 / 11 / 466, r2:
+411 / 11 / 400). Cele 11 linii vechi afisate sunt aceleasi ca in r2 / r3: antetul, lista de coduri,
+linia `import`, comentariul selectorilor `ATAS`, titlul partii cu browserul, cele doua linii din vechea
+`_atasamente`, linia `atasamente in ciorna` din `stare` si cele trei linii ale vechii verificari din
+`trimite`. Liniile noi: notele v4.6.4 / r2 / r3 / r4, selectorul `CHIP`, analiza HTML a ciornei,
+verificarea pozitiva a structurii, semnalele de atasament verificate inaintea listelor (`_semnal`),
+listele albe calibrate (fara linia `token_file`), textul Workspace, regula domeniului firmei, paza si
+apelurile ei. Testele: `Ran 98 tests ... OK`. Daca pasul 0 se mai repeta (atributul div-ului, r5),
 numerele se schimba din nou: le da raportul de review al commit-ului respectiv (cifrele din raport
-inlocuiesc 477 / 11 de mai sus).
+inlocuiesc 536 / 11 de mai sus).
 
 Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
 `C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi
@@ -248,7 +267,9 @@ Orice rezultat diferit de cel cerut mai jos = **STOP**, fara marker; copiaza toa
   `paza ciorna: REFUZ ciorna_necunoscuta ...` = calibrarea (pasul 0) nu acopera pagina: STOP,
   fara marker, copiaza liniile `necunoscut ...` pentru chat. 5a se ruleaza pe un chat NOU si apoi
   inca o data pe un chat EXISTENT (tab-ul ramane pe chatul vechi dupa fiecare `gem`, iar paza
-  verifica intai tab-ul curent): ambele trebuie sa dea `necunoscute in zona: 0`.
+  verifica intai tab-ul curent): ambele trebuie sa dea `necunoscute in zona: 0`. (Cu pachetul r4,
+  inainte de lamurirea atributului div-ului editorului, 5a va arata 1 necunoscut `token_file:...`:
+  pasul 5 nu se incepe pana la commit-ul care o rezolva - vezi pasul 0.)
 - **5b.** Pune de mana UN fisier mic (de ex. un `.txt`) in ciorna, fara sa trimiti; `stare` din nou:
   trebuie EXACT `atasamente in ciorna: 1` si `paza ciorna: REFUZ ciorna_cu_atasamente ...`.
   `0`, `2`, `5`, `?` sau orice alt numar = STOP (numararea nu se potriveste cu pagina reala).
