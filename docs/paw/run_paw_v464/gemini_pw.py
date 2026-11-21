@@ -50,6 +50,18 @@
 #   `_ngcontent-ng-c<numar>=""`, `class="text-input-field simplified-input-area"` si `jslog="303810;track:impression"`. Acceptat EXACT
 #   atat (MARCAJE_GOALE_PERMISE): acel nume, doar cu valoare goala, doar pe div-ul cu exact acele doua clase; orice valoare nevida, alt
 #   nume cu "file" (si cu prefix / sufix), alt tag sau alte clase = refuz in continuare. Nicio acceptare globala a lui "file".
+# v4.6.4 r6 (Jakarinos NO-GO pe 807119f9, P1): ELEMENTUL ZONEI DE COMPUNERE INSESI (input-area-v2 sau zona exterioara gasita prin
+#   ZONA_TAGURI / ZONA_CLASE) nu era verificat: _necunoscute() pornea de la copiii zonei, iar chip-urile si semnele se numarau doar pe
+#   descendenti; <input-area-v2 data-file-name="oferta.docx"> (sau class / id / style cu nume de fisier, sau marcajul
+#   xapfileselectordropzone pe zona) dadea 0 / 0 / 0 si brief-ul pleca. Acum zona e PRIMUL element verificat, cu aceleasi reguli ca
+#   orice element (_motiv_element: media, fundal, _semnal pe eticheta / clase / id / numele si valorile tuturor atributelor / URL / style,
+#   apoi structura - tagul zonei e in STRUCTURA_TAGURI, deci trece doar fara semnal), iar chip-urile / semnele se numara pe zona si
+#   pe descendentii ei (_cu_descendenti). Zona nu devine niciodata "control" (textele din ea nu sunt eticheta ei). Marcajul
+#   xapfileselectordropzone ramane permis DOAR pe div-ul structural exact (MARCAJE_GOALE_PERMISE), nu pe zona. Atributele reale ale zonei
+#   (citite de chat din pagina, 21.11.2026, doar citire): _ngcontent-ng-c<nr>="" trace="" _nghost-ng-c<nr>="" class="ng-tns-c<nr>-4
+#   ui-improvements-phase-1 with-toolbox-drawer input-box-shadow discovery-feed-the..." - fara semnal, deci trece. Celelalte niveluri
+#   "parinte" (rich-textarea, invelisurile editorului, editorul) erau deja descendenti ai zonei si treceau prin _semnal (teste pastrate).
+#   Linkul real de confidentialitate (chat existent): href="https://support.google.com/gemini/answer/14620100" - gazda Google, calea fara fisier.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata
@@ -303,6 +315,13 @@ def _descendenti(n):
         x = st.pop()
         yield x
         st.extend(reversed(x.copii))
+
+
+def _cu_descendenti(n):
+    # r6 (Jakarinos r5 P1): elementul INSUSI, apoi descendentii lui - zona de compunere se verifica si ea, nu doar continutul ei
+    yield n
+    for x in _descendenti(n):
+        yield x
 
 
 def _clase(n):
@@ -563,10 +582,11 @@ def _motiv_element(n, ctrl):
 
 
 def _necunoscute(zona, editoare):
-    """Elementele / textele din zona care NU fac parte din structura recunoscuta a ciornei goale (lista de motive).
-    Chip-urile si semnele (numarate separat) si ce nu se afiseaza (script / style / template) se sar."""
+    """Elementele / textele din zona (r6: SI ELEMENTUL ZONEI INSESI, primul verificat) care NU fac parte din structura recunoscuta
+    a ciornei goale (lista de motive). Chip-urile si semnele (numarate separat, si pe zona) si ce nu se afiseaza (script / style /
+    template) se sar."""
     out = []
-    st = [(c, None) for c in reversed(zona.copii)]
+    st = [(zona, None)]                     # r6 (Jakarinos r5 P1): zona insasi, cu aceleasi reguli ca orice element; apoi continutul ei
     while st:
         n, ctrl = st.pop()
         if n.tag == "#text":
@@ -582,6 +602,8 @@ def _necunoscute(zona, editoare):
         m, ctrl_copii = _motiv_element(n, ctrl)
         if m:
             out.append(m)
+        if n is zona:
+            ctrl_copii = None               # r6: zona e un invelis, niciodata un control (textele din ea nu sunt eticheta ei)
         st.extend((c, ctrl_copii) for c in reversed(n.copii))
     return out
 
@@ -605,7 +627,7 @@ def analizeaza_ciorna(html):
     zone = [z for z in zone if not any(_sub(z, x) for x in zone if x is not z)]
     atas, semne, detalii = 0, 0, {}
     for z in zone:
-        for n in _descendenti(z):
+        for n in _cu_descendenti(z):        # r6: si zona insasi (un chip / semn pe elementul zonei se numara)
             if n.tag == CHIP:
                 p, exterior = n.parinte, True
                 while p is not None and p is not z:

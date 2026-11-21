@@ -3,7 +3,8 @@
 #   python -I docs\paw\run_paw_v464\teste\test_gemini_pw.py
 # Nu importa Playwright, nu se ataseaza la Edge, nu trimite nimic la Gemini: logica de selectie tab / model /
 # asteptare stabila / validare brief / numarare atasamente (HTML sintetic) / ordinea pazei in trimite() (pagina falsa) /
-# r4: semnalele de atasament verificate INAINTEA listelor albe (reproducerile din verdictul Jakarinos r3 + variante + mutanti)
+# r4: semnalele de atasament verificate INAINTEA listelor albe (reproducerile din verdictul Jakarinos r3 + variante + mutanti) /
+# r6: elementul zonei insesi verificat ca orice element (reproducerile din verdictul r5 + zona reala + linkul real + mutanti)
 # e testata cu obiecte false. ASCII only.
 import os, sys, io, re, types, tempfile, shutil, unittest, importlib.util, contextlib
 from unittest import mock
@@ -303,14 +304,15 @@ def chip(nume):
             '<button aria-label="Remove file"><mat-icon>close</mat-icon></button></div></uploader-file-preview>' % nume)
 
 
-def pagina(fisiere=(), conversatie="", editor=EDITOR_HTML, extra_zona=""):
+def pagina(fisiere=(), conversatie="", editor=EDITOR_HTML, extra_zona="", zona_atr=""):
+    # r6: zona_atr = atributele elementului zonei insesi (<input-area-v2 ...>), verificat si el din r6
     previz = ""
     if fisiere:
         previz = ('<uploader-file-preview-container><div class="file-preview-container">' + "".join(chip(x) for x in fisiere)
                   + '</div></uploader-file-preview-container>')
     return ('<!DOCTYPE html><html><head><title>Gemini</title></head><body><chat-app><main>'
             '<div class="conversation-container">' + conversatie + '</div>'
-            '<input-area-v2><div class="input-area-container">' + previz + extra_zona + editor + '</div></input-area-v2>'
+            '<input-area-v2' + zona_atr + '><div class="input-area-container">' + previz + extra_zona + editor + '</div></input-area-v2>'
             '</main></chat-app></body></html>')
 
 
@@ -607,8 +609,8 @@ NECUNOSCUTE = {
 }
 
 
-def zona_cu(extra="", editor=EDITOR_HTML):
-    return pagina(extra_zona=GOALA_CU_CONTROALE + extra, editor=editor)
+def zona_cu(extra="", editor=EDITOR_HTML, zona_atr=""):
+    return pagina(extra_zona=GOALA_CU_CONTROALE + extra, editor=editor, zona_atr=zona_atr)
 
 
 def mutant(inlocuiri, nume="gemini_pw_mutant"):
@@ -939,10 +941,20 @@ TOKEN_FILE_R3 = "token_file:div{text-input-field simplified-input-area}"        
 # aceeasi linie cu numele atributelor afisate (r4+), pe div-ul real: numele din afara semnaturii, sortate, fara cele generate (_ng...)
 TOKEN_FILE_R4 = "token_file:div{text-input-field simplified-input-area jslog xapfileselectordropzone}"
 TOKEN_FILE_IPOTETIC = "token_file:div{text-input-field simplified-input-area filedroptarget}"
+# r6: atributele REALE ale elementului zonei <input-area-v2>, copiate din ce a citit chatul din pagina reala pe 21.11.2026 (doar citire,
+# paw_v464_calibrare\link_si_zona.txt, aceleasi pe chat nou si pe chat existent): `_ngcontent-ng-c1796725376=""`, `trace=""`,
+# `_nghost-ng-c1694197906=""`, `class="ng-tns-c1694197906-4 ui-improvements-phase-1 with-toolbox-drawer input-box-shadow discovery-feed-the"`
+# - valoarea clasei a fost citita TAIATA la 100 de caractere (ultimul cuvant, "discovery-feed-the", e un prefix al clasei reale); restul
+# clasei nu e cunoscut si se confirma la 5a (`stare` ar arata `token_...:input-area-v2{...}` daca ar contine un cuvant de atasament).
+ZONA_ATRIBUTE_REALE = (' _ngcontent-ng-c1796725376="" trace="" _nghost-ng-c1694197906="" '
+                       'class="ng-tns-c1694197906-4 ui-improvements-phase-1 with-toolbox-drawer input-box-shadow discovery-feed-the"')
+# r6: href-ul REAL al linkului "Confidentialitatea ta si Gemini" (chat existent; pe chat nou linkul nu exista), citit de chat pe 21.11.2026
+HREF_REAL = "https://support.google.com/gemini/answer/14620100"
 
 
-def pagina_calibrare(stare, atribut_file=ATRIBUTE_DIV_REALE):
-    # pagina sintetica scrisa de mana ca sa reproduca EXACT liniile de mai sus (ordinea = parcurgerea in adancime a zonei)
+def pagina_calibrare(stare, atribut_file=ATRIBUTE_DIV_REALE, zona_atr=ZONA_ATRIBUTE_REALE):
+    # pagina sintetica scrisa de mana ca sa reproduca EXACT liniile de mai sus (ordinea = parcurgerea in adancime a zonei);
+    # r6: zona are atributele reale, linkul are href-ul real
     assert stare in ("i", "ii", "iii")
     gi = "<gem-icon><svg viewBox=\"0 0 24 24\"><path d=\"M0 0h24v24H0z\"></path></svg></gem-icon>"
     editor = ('<rich-textarea class="text-input-field_textarea"><div class="ql-editor textarea" contenteditable="true" role="textbox">'
@@ -952,13 +964,13 @@ def pagina_calibrare(stare, atribut_file=ATRIBUTE_DIV_REALE):
         trimite = ('<div data-test-id="send-button-container" aria-describedby="x1"><gem-icon-button type="onsurface">'
                    '<button aria-label="Trimite mesajul">' + gi + "</button></gem-icon-button></div>")
     if stare == "iii":
-        avertisment = (AVERTISMENT_TEXT + ' <a data-test-id="footer-privacy-notice-link" href="https://support.google.com/x">'
+        avertisment = (AVERTISMENT_TEXT + ' <a data-test-id="footer-privacy-notice-link" href="' + HREF_REAL + '">'
                        '<span data-test-id="content">Confiden\u021bialitatea ta \u0219i Gemini</span>'
                        '<span class="cdk-visually-hidden">Se deschide \u00eentr-o fereastr\u0103 nou\u0103</span></a>')
     else:
         avertisment = '<p data-test-id="empty-disclaimer"></p>'
     return ('<!DOCTYPE html><html><body><chat-app><main><div class="conversation-container"></div>'
-            '<input-area-v2><div class="input-area-container">'
+            '<input-area-v2' + zona_atr + '><div class="input-area-container">'
             '<span role="status" class="cdk-visually-hidden"></span>'
             '<back-to-bottom-fab><button aria-label="Deruleaz\u0103 \u00een jos" type="button" tabindex="0">' + gi + "</button></back-to-bottom-fab>"
             + ("<prompt-flow-bar></prompt-flow-bar>" if stare == "iii" else "")
@@ -1389,6 +1401,7 @@ NUME_PESTE_TOT = {
 }
 # calea legitima (L20): URL-uri si stiluri FARA nume de fisier pe elementele calibrate trec (0 necunoscute)
 CURATE_R5 = (
+    LINK % HREF_REAL,                                           # r6: href-ul real (citit din pagina), nu mai e presupunere
     LINK % "https://support.google.com/gemini?p=privacy_notice",
     LINK % "https://support.google.com/gemini/answer/13594961?hl=ro",
     LINK % "https://policies.google.com/privacy?hl=ro",
@@ -1588,6 +1601,198 @@ class TestMarcajDropZone(unittest.TestCase):
         # nu prin lipsa cuvantului - verificat: fara regula (FARA_MARCAJ), div-ul real e refuzat pe cod
         with mock.patch.multiple(gp, **FARA_MARCAJ):
             self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(DIV_REAL % ""))), ("ciorna_necunoscuta", []))
+
+
+# --- v4.6.4 r6 (Jakarinos NO-GO pe 807119f9, P1): ELEMENTUL ZONEI INSESI se verifica (semnale, chip, semn), nu doar descendentii ---
+# cele sase reproduceri din verdict, copiate exact (pe 807119f9: atasamente 0, semne 0, necunoscute 0 -> press Enter); motivul scris de mana
+REPRO_R6 = {
+    "data_file_name": (' data-file-name="oferta.docx"', "token_file:input-area-v2{data-file-name}"),
+    "clasa": (' class="oferta.docx"', "atribut_fisier:input-area-v2{oferta.docx}"),
+    "id": (' id="oferta.docx"', "atribut_fisier:input-area-v2{#oferta.docx}"),
+    "style": (' style="--x: oferta.pdf"', "token_pdf:input-area-v2{style}"),                    # "pdf" e si cuvant de atasament
+    "marcaj_gol": (' xapfileselectordropzone=""', "token_file:input-area-v2{xapfileselectordropzone}"),   # marcajul e permis DOAR pe div
+    "marcaj_nevid": (' xapfileselectordropzone="1"', "token_file:input-area-v2{xapfileselectordropzone}"),
+}
+# variante pe zona (asteptat scris de mana): alte surse de semnal pe elementul zonei, zona exterioara gasita prin clasa, zone imbricate
+ZONA_VARIANTE = {
+    "style_docx": (' style="--x: oferta.docx"', "atribut_fisier:input-area-v2{style}"),
+    "fundal": (' style="background-image: url(blob:x)"', "fundal:input-area-v2"),
+    "data_cuvant": (' data-x="attachment"', "token_attach:input-area-v2{data-x}"),
+    "data_fisier": (' data-x="oferta.docx"', "atribut_fisier:input-area-v2{data-x}"),
+    "removeattachment": (' removeattachment=""', "token_attach:input-area-v2{removeattachment}"),
+    "eticheta_fisier": (' title="oferta.docx"', "eticheta:input-area-v2[title=oferta.docx]"),
+    "eticheta_cuvant": (' aria-label="Remove file"', "eticheta:input-area-v2[aria-label=remove file]"),
+    "href_blob": (' href="blob:https://gemini.google.com/oferta.docx"', "atribut_fisier:input-area-v2[href]{}"),
+    "clasa_intre_altele": (' class="ng-tns-c1-4 ui-improvements-phase-1 oferta.docx"', "atribut_fisier:input-area-v2{ui-improvements-phase-1 oferta.docx}"),
+    "clasa_cuvant": (' class="ng-tns-c1-4 with-file-chip"', "token_file:input-area-v2{with-file-chip}"),
+    "marcaj_cu_clasele_div_ului": (' class="text-input-field simplified-input-area" xapfileselectordropzone=""',
+                                   "token_file:input-area-v2{text-input-field simplified-input-area xapfileselectordropzone}"),
+}
+
+
+class TestZonaInsasi(unittest.TestCase):
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def test_cele_sase_reproduceri_din_verdict_refuzate_fara_actiuni(self):
+        # fixture-ul din verdict: <input-area-v2 ...> cu editorul valid inauntru (pagina()), apoi si zona cu controale (zona_cu) si
+        # pagina calibrata intreaga (cele trei stari) cu acelasi atribut pus pe zona
+        for k, (atr, m) in sorted(REPRO_R6.items()):
+            for html in (pagina(zona_atr=atr), zona_cu(zona_atr=atr), pagina_calibrare("i", zona_atr=atr),
+                         pagina_calibrare("ii", zona_atr=atr), pagina_calibrare("iii", zona_atr=atr)):
+                i = self.an(html)
+                self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"]), (1, 1, 0, 0), msg=k)   # ce a masurat Jakarinos: 0 / 0
+                self.assertEqual(i["necunoscute_detalii"], [m], msg=k)                                             # ... dar acum 1 necunoscut
+                self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=k)
+            # acelasi atribut pe zona cu atributele reale alaturi: tot refuz, acelasi fel de motiv (in {...} apar si clasele / "trace")
+            i = self.an(pagina_calibrare("i", zona_atr=ZONA_ATRIBUTE_REALE + atr))
+            self.assertEqual(i["necunoscute"], 1, msg=(k, i["necunoscute_detalii"]))
+            self.assertEqual(i["necunoscute_detalii"][0].split("{")[0], m.split("{")[0], msg=k)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_calibrare("i", zona_atr=ZONA_ATRIBUTE_REALE + atr))), ("ciorna_necunoscuta", []), msg=k)
+        # pe chatul nou (dupa goto) si dupa scriere: aceeasi paza, fara Enter
+        atr = REPRO_R6["data_file_name"][0]
+        self.assertEqual(ruleaza_trimite(gp, FakePg(pagina(), dupa_goto=pagina(zona_atr=atr))), ("ciorna_necunoscuta", ["goto"]))
+        cod, act = ruleaza_trimite(gp, FakePg(pagina(), dupa_scriere=pagina(zona_atr=atr)))
+        self.assertEqual(cod, "ciorna_necunoscuta")
+        self.assertNotIn("press Enter", act)
+
+    def test_fiecare_varianta_pe_zona_refuzata_oricare_ar_fi_lista(self):
+        # zona cu semnal e refuzata si daca semnatura ei exacta ar fi in liste (semnalele se verifica inaintea listelor, r4)
+        semnaturi = tuple(gp._semnatura(self.nod("<input-area-v2%s></input-area-v2>" % atr)) for atr, _ in ZONA_VARIANTE.values())
+        with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", gp.STRUCTURA_CUNOSCUTA + semnaturi), \
+                mock.patch.object(gp, "CONTROALE_CUNOSCUTE", gp.CONTROALE_CUNOSCUTE + semnaturi):
+            for k, (atr, m) in sorted(ZONA_VARIANTE.items()):
+                i = self.an(zona_cu(zona_atr=atr))
+                self.assertEqual((i["atasamente"], i["semne"]), (0, 0), msg=k)
+                self.assertEqual(i["necunoscute_detalii"], [m], msg=k)
+                self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(zona_atr=atr))), ("ciorna_necunoscuta", []), msg=k)
+
+    def nod(self, html):
+        a = gp._Arbore()
+        a.feed(html)
+        return a.radacina.copii[0]
+
+    def test_zona_reala_trece(self):
+        # calea legitima (L20): zona cu atributele REALE (copiate din pagina) = fara semnal -> 0 necunoscute si `trimite` ajunge la Enter,
+        # pe fixture-urile simple si pe cele trei stari calibrate; `stare` arata paza OK
+        for html in (pagina(zona_atr=ZONA_ATRIBUTE_REALE), zona_cu(zona_atr=ZONA_ATRIBUTE_REALE),
+                     pagina_calibrare("i"), pagina_calibrare("ii"), pagina_calibrare("iii")):
+            i = self.an(html)
+            self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"], i["necunoscute"]), (1, 1, 0, 0, 0), msg=i["necunoscute_detalii"])
+            self.assertEqual(gp.verifica_fara_atasamente(i, 0, "t"), 0)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html, dupa_goto=pagina_calibrare("i"))), (None, ACTIUNI_TRIMITERE))
+        self.assertIsNone(gp._semnal(self.nod("<input-area-v2%s></input-area-v2>" % ZONA_ATRIBUTE_REALE)))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            gp.stare(FakePg(pagina_calibrare("iii")))
+        self.assertIn("necunoscute in zona: 0", out.getvalue().splitlines())
+        self.assertIn("paza ciorna: OK (trimite ar continua)", out.getvalue().splitlines())
+        # atributele reale nu contin niciun cuvant de atasament si niciun nume.extensie (scris de mana: lista cuvintelor, nu codul)
+        self.assertIsNone(gp._cuvant("_ngcontent-ng-c1796725376 trace _nghost-ng-c1694197906 class ng-tns-c1694197906-4 ui-improvements-phase-1 "
+                                     "with-toolbox-drawer input-box-shadow discovery-feed-the"))
+        self.assertNotIn(".", "ng-tns-c1694197906-4 ui-improvements-phase-1 with-toolbox-drawer input-box-shadow discovery-feed-the")
+
+    def test_linkul_real_de_confidentialitate_trece(self):
+        # r6: href-ul real (citit din pagina) e pe gazda Google, calea nu contine nume.extensie: linkul trece; un fisier in cale = refuz
+        self.assertEqual(gp._fara_gazda_permisa("href", HREF_REAL), "https /gemini/answer/14620100")
+        self.assertIsNone(gp._nume_fisier(gp._fara_gazda_permisa("href", HREF_REAL)))
+        self.assertIsNotNone(gp._nume_fisier(gp._ascii(HREF_REAL)))                 # fara exceptia gazdei ar fi "fisier" (support.google.com)
+        i = self.an(zona_cu(LINK % HREF_REAL))
+        self.assertEqual(i["necunoscute"], 0, msg=i["necunoscute_detalii"])
+        self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(LINK % HREF_REAL), dupa_goto=zona_cu(LINK % HREF_REAL))), (None, ACTIUNI_TRIMITERE))
+        self.assertIn(HREF_REAL, pagina_calibrare("iii"))
+        self.assertEqual(self.an(pagina_calibrare("iii"))["necunoscute"], 0)
+        for rau in (HREF_REAL + "/oferta.docx", HREF_REAL + "?f=oferta.docx", HREF_REAL.replace("support.google.com", "support.google.com.evil.ro")):
+            self.assertEqual(self.an(zona_cu(LINK % rau))["necunoscute_detalii"], ["atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}"], msg=rau)
+
+    def test_zona_exterioara_prin_clasa_si_zone_imbricate(self):
+        # zona cea mai exterioara poate fi gasita prin clasa (ZONA_CLASE), nu doar prin tag: si ea se verifica; zonele interioare erau deja
+        # descendenti (regresie pastrata); un invelis parinte cu rol / eticheta necunoscuta pe zona = element necunoscut (refuz)
+        ed = EDITOR_HTML.replace('class="input-area"', 'class="x"')
+        for html, m in (('<html><body><div class="input-area oferta.docx">' + ed + "</div></body></html>", "atribut_fisier:div{input-area oferta.docx}"),
+                        ('<html><body><div class="input-area-container" data-file-name="a.docx">' + ed + "</div></body></html>",
+                         "token_file:div{input-area-container data-file-name}"),
+                        ('<html><body><input-area-v2 data-file-name="a.docx"><input-container>' + ed + "</input-container></input-area-v2></body></html>",
+                         "token_file:input-area-v2{data-file-name}"),
+                        ('<html><body><input-area-v2><input-container class="oferta.docx">' + ed + "</input-container></input-area-v2></body></html>",
+                         "atribut_fisier:input-container{oferta.docx}"),
+                        ('<html><body><input-area-v2><div class="input-area-container" id="oferta.docx">' + ed + "</div></input-area-v2></body></html>",
+                         "atribut_fisier:div{input-area-container #oferta.docx}"),
+                        ('<html><body><div class="input-area" role="region">' + ed + "</div></body></html>", "element:div[role=region]"),
+                        ('<html><body><section class="input-area">' + ed + "</section></body></html>", "element:section")):
+            i = self.an(html)
+            self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"]), (1, 1, 0, 0), msg=html)
+            self.assertEqual(i["necunoscute_detalii"], [m], msg=html)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=html)
+        # aceleasi zone FARA semnal trec (zona prin clasa e un div neutru; zonele imbricate sunt structura)
+        for html in ('<html><body><div class="input-area">' + ed + "</div></body></html>",
+                     '<html><body><input-area-v2><input-container><div class="input-area-container">' + ed + "</div></input-container></input-area-v2></body></html>"):
+            i = self.an(html)
+            self.assertEqual((i["zone"], i["necunoscute"]), (1, 0), msg=i["necunoscute_detalii"])
+
+    def test_chip_sau_semn_pe_zona_se_numara(self):
+        # un semn de atasament (clasa *file-preview*, data-test-id) sau chiar un chip pe ELEMENTUL zonei se numara (r5 numara doar descendentii)
+        for atr in (' class="file-preview-x"', ' data-test-id="uploaded-file-1"', ' data-test-id="file-preview"'):
+            i = self.an(pagina(zona_atr=atr))
+            self.assertEqual((i["atasamente"], i["semne"]), (0, 1), msg=atr)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina(zona_atr=atr))), ("ciorna_cu_atasamente", []), msg=atr)
+        chip_zona = '<html><body><uploader-file-preview class="input-area">' + EDITOR_HTML.replace('class="input-area"', 'class="x"') + "</uploader-file-preview></body></html>"
+        i = self.an(chip_zona)
+        self.assertEqual((i["zone"], i["atasamente"]), (1, 1))
+        with self.assertRaises(gp.GemEroare) as c:
+            gp.verifica_fara_atasamente(i, 0, "t")
+        self.assertEqual((c.exception.cod, c.exception.detaliu), ("ciorna_cu_atasamente", "t: 1 atasament(e) in ciorna - nu trimit"))
+        self.assertEqual(ruleaza_trimite(gp, FakePg(chip_zona)), ("ciorna_cu_atasamente", []))
+
+    def test_zona_nu_devine_control(self):
+        # o zona gasita prin clasa care poarta data-test-id-ul butonului de model NU face textele din ea "eticheta" (ar ascunde un text necunoscut)
+        ed = EDITOR_HTML.replace('class="input-area"', 'class="x"')
+        html = '<html><body><div class="input-area" data-test-id="bard-mode-menu-button"><span>Deep Research</span>' + ed + "</div></body></html>"
+        i = self.an(html)
+        self.assertEqual(i["necunoscute_detalii"], ["text:deep research"])
+        self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []))
+        # (acelasi text intr-un buton de model descendent e eticheta lui - comportament r2, neschimbat)
+        self.assertEqual(self.an(zona_cu('<button data-test-id="bard-mode-menu-button"><span>Deep Research</span></button>'))["necunoscute"], 0)
+
+    def test_stare_arata_zona(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            gp.stare(FakePg(pagina_calibrare("i", zona_atr=REPRO_R6["data_file_name"][0])))
+        linii = out.getvalue().splitlines()
+        self.assertIn("necunoscute in zona: 1", linii)
+        self.assertIn("  necunoscut token_file:input-area-v2{data-file-name}", linii)
+        self.assertTrue(any(l.startswith("paza ciorna: REFUZ ciorna_necunoscuta") for l in linii), linii)
+
+    def test_mutanti_r6_lasa_brief_ul_sa_plece(self):
+        # fiecare mutant readuce comportamentul din 807119f9 (sau slabeste repararea); scenariul lui pleaca la Enter pe mutant, refuz pe cod
+        zona_veche = "    st = [(c, None) for c in reversed(zona.copii)]"            # linia din r5 (_necunoscute pornea de la copii)
+        cazuri = (
+            # (A) zona insasi nu mai e verificata in _necunoscute: toate cele sase reproduceri din verdict pleaca
+            ([("    st = [(zona, None)]                     # r6 (Jakarinos r5 P1): zona insasi, cu aceleasi reguli ca orice element; apoi continutul ei",
+               zona_veche)],
+             tuple(pagina(zona_atr=atr) for atr, _ in REPRO_R6.values()) + tuple(zona_cu(zona_atr=atr) for atr, _ in ZONA_VARIANTE.values())
+             + (pagina_calibrare("iii", zona_atr=REPRO_R6["clasa"][0]),), "ciorna_necunoscuta"),
+            # (B) chip-urile / semnele numarate doar pe descendenti: un semn sau un chip pe elementul zonei pleaca
+            ([("        for n in _cu_descendenti(z):        # r6: si zona insasi (un chip / semn pe elementul zonei se numara)",
+               "        for n in _descendenti(z):")],
+             (pagina(zona_atr=' class="file-preview-x"'), pagina(zona_atr=' data-test-id="uploaded-file-1"'),
+              '<html><body><uploader-file-preview class="input-area">' + EDITOR_HTML.replace('class="input-area"', 'class="x"') + "</uploader-file-preview></body></html>"),
+             "ciorna_cu_atasamente"),
+            # (C) zona lasata sa devina control: textul necunoscut din ea trece drept eticheta
+            ([("        if n is zona:", "        if False:")],
+             ('<html><body><div class="input-area" data-test-id="bard-mode-menu-button"><span>Deep Research</span>'
+              + EDITOR_HTML.replace('class="input-area"', 'class="x"') + "</div></body></html>",), "ciorna_necunoscuta"),
+        )
+        for inlocuiri, htmluri, cod in cazuri:
+            mut = mutant(inlocuiri)
+            for html in htmluri:
+                self.assertEqual(ruleaza_trimite(gp, FakePg(html)), (cod, []), msg=html[:120])
+                cod_m, act_m = ruleaza_trimite(mut, FakePg(html))
+                self.assertIsNone(cod_m, msg=(inlocuiri[0][1], html[:120], cod_m))
+                self.assertIn("press Enter", act_m, msg=html[:120])
+        # mutantul (A) inca refuza acelasi semnal pe un DESCENDENT (nu e zona): deci doar nivelul zonei e diferit
+        mut = mutant([(cazuri[0][0][0][0], zona_veche)])
+        self.assertEqual(ruleaza_trimite(mut, FakePg(zona_cu('<gem-icon data-file-name="oferta.docx"></gem-icon>')))[0], "ciorna_necunoscuta")
 
 
 if __name__ == "__main__":

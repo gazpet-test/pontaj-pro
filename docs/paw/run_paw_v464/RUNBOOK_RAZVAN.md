@@ -95,6 +95,25 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
 - Pasul 0 NU se mai repeta inainte de review; 5a pe pagina reala e confirmarea (0 necunoscute in ambele
   chaturi). Daca 5a arata totusi o linie `necunoscut ...`, STOP si se copiaza pentru chat.
 
+**Stare (r6, 21.11.2026, dupa review-ul Jakarinos pe r5):**
+- **Zona de compunere insasi (P1).** Pana la r5, elementul zonei (`<input-area-v2>` sau zona exterioara
+  gasita prin clasa) NU era verificat: analiza pornea de la continutul lui, iar chip-urile si semnele se
+  numarau doar pe descendenti. Un atribut, o clasa, un id sau un `style` cu nume de fisier pus chiar pe
+  zona (sau marcajul `xapfileselectordropzone` pe zona) dadea 0 / 0 / 0 si brief-ul pleca. Acum zona e PRIMUL
+  element verificat, cu aceleasi reguli ca orice element (semnale, media, fundal, apoi structura), iar
+  chip-urile / semnele se numara si pe ea. Marcajul `xapfileselectordropzone=""` ramane permis DOAR pe
+  div-ul structural exact, nu pe zona. Celelalte niveluri "parinte" (`rich-textarea`, invelisurile editorului,
+  editorul) erau deja verificate ca descendenti ai zonei.
+- **Datele reale, citite de chat din pagina (doar citire, 21.11.2026).** Zona `input-area-v2` are atributele
+  `_ngcontent-ng-c<nr>=""`, `trace=""`, `_nghost-ng-c<nr>=""` si `class="ng-tns-c<nr>-4 ui-improvements-phase-1
+  with-toolbox-drawer input-box-shadow discovery-feed-the..."` (valoarea clasei citita taiata la 100 de
+  caractere) - fara semnal, deci trece (testat pe pagina sintetica, cele trei stari). Linkul "Confidentialitatea
+  ta si Gemini" (chat existent) are `href="https://support.google.com/gemini/answer/14620100"`: gazda Google,
+  calea fara nume de fisier - presupunerea din r5 e confirmata si testata cu valoarea exacta.
+- Daca 5a arata `token_...:input-area-v2{...}` sau `atribut_fisier:input-area-v2{...}`, restul clasei zonei
+  (necitit) contine un cuvant de atasament sau un nume.extensie: STOP, copiaza linia pentru chat (nu se trece
+  in liste; se lamureste ca la r5).
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -151,7 +170,7 @@ if ($manifest.'gemini_pw.py' -ine $GemHashNou) { throw 'gemini_pw.py din pachet 
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel din v4.6.3' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 600 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 622 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -161,17 +180,17 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + '.v463') -Force }
 ```
 
-Asteptat (pachetul r5): 600 linii diferite (11 vechi `<=`, 589 noi `=>`; r4: 536 / 11 / 525, r3:
-477 / 11 / 466, r2: 411 / 11 / 400). Cele 11 linii vechi afisate sunt aceleasi ca in r2 / r3 / r4: antetul,
-lista de coduri, linia `import`, comentariul selectorilor `ATAS`, titlul partii cu browserul, cele doua
-linii din vechea `_atasamente`, linia `atasamente in ciorna` din `stare` si cele trei linii ale vechii
-verificari din `trimite`. Liniile noi: notele v4.6.4 / r2 / r3 / r4 / r5, selectorul `CHIP`, analiza HTML a
-ciornei, verificarea pozitiva a structurii, semnalele de atasament verificate inaintea listelor (`_semnal`,
-cu nume.extensie in toate valorile si exceptia gazdei Google pentru `href`), regula marcajului gol
-`xapfileselectordropzone`, listele albe calibrate (fara linia `token_file`), textul Workspace, regula
-domeniului firmei, paza si apelurile ei. Testele: `Ran 106 tests ... OK`. Daca mai urmeaza un commit pe
-`gemini_pw.py`, numerele se schimba din nou: le da raportul de review al commit-ului respectiv (cifrele
-din raport inlocuiesc 600 / 11 de mai sus).
+Asteptat (pachetul r6): 622 linii diferite (11 vechi `<=`, 611 noi `=>`; r5: 600 / 11 / 589, r4:
+536 / 11 / 525, r3: 477 / 11 / 466, r2: 411 / 11 / 400). Cele 11 linii vechi afisate sunt aceleasi ca in
+r2-r5: antetul, lista de coduri, linia `import`, comentariul selectorilor `ATAS`, titlul partii cu browserul,
+cele doua linii din vechea `_atasamente`, linia `atasamente in ciorna` din `stare` si cele trei linii ale vechii
+verificari din `trimite`. Liniile noi: notele v4.6.4 / r2 / r3 / r4 / r5 / r6, selectorul `CHIP`, analiza HTML a
+ciornei, verificarea pozitiva a structurii (din r6 pornind de la elementul zonei insesi, `_cu_descendenti`),
+semnalele de atasament verificate inaintea listelor (`_semnal`, cu nume.extensie in toate valorile si exceptia
+gazdei Google pentru `href`), regula marcajului gol `xapfileselectordropzone`, listele albe calibrate (fara
+linia `token_file`), textul Workspace, regula domeniului firmei, paza si apelurile ei. Testele:
+`Ran 115 tests ... OK`. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
+raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 622 / 11 de mai sus).
 
 Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
 `C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi
@@ -293,8 +312,9 @@ Orice rezultat diferit de cel cerut mai jos = **STOP**, fara marker; copiaza toa
   inca o data pe un chat EXISTENT (tab-ul ramane pe chatul vechi dupa fiecare `gem`, iar paza
   verifica intai tab-ul curent): ambele trebuie sa dea `necunoscute in zona: 0`. (Pachetul r4 arata aici
   1 necunoscut `token_file:...`; r5 il lamureste prin regula marcajului `xapfileselectordropzone=""` -
-  vezi pasul 0. Daca 5a arata `atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}`,
-  href-ul real al linkului nu e pe un host Google: STOP, copiaza linia pentru chat.)
+  vezi pasul 0. Href-ul real al linkului de confidentialitate e confirmat din pagina si testat in r6; daca
+  5a arata totusi `atribut_fisier:a[...][href]{}` sau o linie pe zona `...:input-area-v2{...}`, STOP,
+  copiaza linia pentru chat.)
 - **5b.** Pune de mana UN fisier mic (de ex. un `.txt`) in ciorna, fara sa trimiti; `stare` din nou:
   trebuie EXACT `atasamente in ciorna: 1` si `paza ciorna: REFUZ ciorna_cu_atasamente ...`.
   `0`, `2`, `5`, `?` sau orice alt numar = STOP (numararea nu se potriveste cu pagina reala).
