@@ -175,7 +175,7 @@ Dacă serverul AI e oprit, XLS-urile se încarcă în continuare (totul în brow
 
 ## Ce rămâne pentru constructor
 
-- Formatul exact al situațiilor de lucrări la fiecare beneficiar (Transgaz, Romgaz, Conpet …) — parserul trebuie să recunoască
+- Formatul situațiilor: **întâi modelul Transgaz** (decizia lui Răzvan, 21.11 — același model îl folosesc Conpet, Romgaz, Depogaz); primăriile au alt format și vin într-o etapă ulterioară (eventual cu AI-ul local care doar recunoaște coloanele, cifrele le citește tot codul). Parserul trebuie să recunoască
   antetele; se pornește cu Lot 1 (Transgaz).
 - Legătura situație de lucrări ↔ `executie_situatii_plata` (aceeași lună / nr.).
 - Plasarea ecranului și numele exacte ale tabelelor / coloanelor, migrarea (L15 v2), testele.

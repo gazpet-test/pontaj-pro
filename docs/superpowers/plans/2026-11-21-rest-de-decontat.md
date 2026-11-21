@@ -96,6 +96,7 @@
 
 **Interfaces:**
 - Produces:
+  - Formatul țintă: **modelul Transgaz** (folosit și de Conpet, Romgaz, Depogaz); alt format (primării) = eroare clară „format nerecunoscut”, nu ghicire.
   - `parseSituatieExcel(arrayBuffer) -> { antet: {nr_situatie, luna, an}, linii: [{obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate_perioada, cantitate_cumulat_doc, pret_unitar, valoare, tip_rand}], total }` — recunoaște antetele coloanelor („cantitate în perioadă / luna curentă”, „cumulat”, „preț unitar”, „valoare”), rândul OS și „diverse” → `tip_rand` `os`/`diverse`.
   - `parseDevizModificare(file) -> { linii: [...] }` — pentru AA / NR / NCS; refolosește `parseDeviz` și păstrează semnul cantităților.
   - `potrivesteLinii(linii, baza) -> [{...linie, cheie_propusa, nivel: 'exact'|'cod'|'descriere'|'de_verificat', scor}]` — `baza` = rânduri din `v_executie_rest_decontat_baza`; ordinea: cod + obiect → cod singur (unic în proiect) → similaritate pe denumire (tokeni, ≥ 0.85 = `descriere`, sub = `de_verificat`); UM diferit după `normalizeUm` → `de_verificat` indiferent de nivel.
