@@ -82,8 +82,8 @@
 --         obiect” putea scoate un rând din ținta unei unități; decizia chat-ului 21.11.2026: regula e PE CHEIE, PE FIECARE CÂMP, nu pe obiect): pentru fiecare
 --         linie a cărei cheie canonică există deja în rândurile proiectului (toate sursele bazei, active sau nu — tot ce văd cititorii —, inclusiv rândurile
 --         care se vor înlocui), rândul confirmat copiază EXACT forma brută a tuturor câmpurilor citite de cititorii existenți din rândul cu aceeași cheie:
---         obiect_cod, deviz_cod, cod (identitatea: o singură formă pe cheie), nr (din rândul cu aceeași poziție canonică — documentele diferite au poziții
---         diferite, legitim), um (din rândul cu același UM normalizat) — cu cantitatea și prețul unitar convertite în acel UM prin factor (1 HM → 100 M;
+--         obiect_cod, deviz_cod, cod (identitatea: o singură formă pe cheie), nr (r8: forma unică a rândurilor cheii, orice poziție — vezi (4); în r7 era
+--         luată doar de la rândurile cu aceeași poziție), um (din rândul cu același UM normalizat) — cu cantitatea și prețul unitar convertite în acel UM prin factor (1 HM → 100 M;
 --         2 MC pe o cheie în „100 MC” → 0.02; nereprezentabil exact în 6 zecimale = refuz, „um_nereprezentabil”, nu rotunjire tăcută). Dacă aceeași cheie
 --         are în rândurile existente MAI MULTE forme brute diferite într-unul din cele trei grupuri (ambiguitate), RPC-ul REFUZĂ înaintea oricărei retrageri
 --         (22023 „forme_multiple”, cu cheia și formele găsite); la fel dacă forma scrisă ar muta o legătură existentă din proiect_unitati (20261208a: JOIN pe art.obiect_cod =
