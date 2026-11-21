@@ -111,6 +111,59 @@ console.log('0b. validatorul runnerului')
   ok(!vr2.ok && /PLAFON_DIFERIT/.test(vr2.out), 'revenirea cu runnerul la 5000 = refuz')
 }
 
+// ── 0c. proba fluxului pe clonă (scriptul coordonatorului, nerulat aici): sintaxa bash, scenariile F1-F7, gărzile, legătura cu sursele ──
+console.log('0c. scriptul pentru clonă (fluxul complet): bash -n + F1-F7 + gărzi + mesajele așteptate = textele din migrări')
+{
+  const F_FL = join(ROOT, 'supabase/tests/20261226b_sms_predare_flux_clona.sh')
+  let sn = null; try { execFileSync('bash', ['-n', F_FL], { stdio: ['ignore', 'pipe', 'pipe'] }) } catch (e) { sn = String(e.stderr || e.message) }
+  ok(sn === null, 'scriptul fluxului: bash -n ' + (sn || 'OK'))
+  const fl = readFileSync(F_FL, 'utf8').replace(/\r/g, '')
+  const M30B = citeste('supabase/migrations/20261130b_sms_acces_modul.sql'), DOC_B = citeste('docs/sms/LIVRARE_20261226b_SABLON_PREDARE.md')
+  // fiecare scenariu: descris în antet (rezultatul așteptat scris de mână) ȘI verificat (o etichetă OK / NU care începe cu el)
+  const lipsa = ['F1a', 'F1', 'F2', 'F3', 'F4a', 'F4c', 'F4b', 'F5', 'F6', 'F7'].filter(f => !new RegExp(`^#   ${f} `, 'm').test(fl) || !fl.includes(`"${f} `))
+  ok(lipsa.length === 0, 'scenariile F1-F7 (cu F4c) au antet + verificări' + (lipsa.length ? ': lipsesc ' + lipsa.join(', ') : ''))
+  // gărzile înaintea oricărei scrieri: ținta (22), A + B aplicate (23), conturile (24), mediul (27), izolarea SMS (28), resturile (25);
+  // PASS doar din curățenie (semantica gărzilor 25 / 28 și a curățeniei: scripts/pglite/test_sms_predare_flux_clona_local.mjs)
+  const iS0 = fl.indexOf('# ── S0 datele sintetice')
+  const garzi = [/REAL="\$\(q "SELECT system_identifier FROM pg_control_system\(\)"\)"/, /exit 22; \}/, /fn_red_optiune_retrasa\(text\)/, /exit 23; \}/, /exit 24; \}/,
+    /exit 25; \}/, /exit 27; \}/, /pg_cron/, /ESEC=1; exit 28/, /^izolare_verifica "la pornire"$/m]
+  ok(iS0 > 0 && garzi.every(r => { const m = r.exec(fl); return m && m.index < iS0 }), 'gărzile (system_identifier, A + B aplicate, conturi, mediu, izolare SMS, resturi) vin înaintea primei scrieri (S0)')
+  ok((fl.match(/PASS: /g) || []).length === 1 && fl.indexOf('PASS: ') > fl.indexOf('curatenie() {') && fl.indexOf('PASS: ') < fl.indexOf('trap curatenie EXIT')
+    && /exit 26/.test(fl), 'PASS se tipărește doar din curățenie, după verificare; curățenia picată = 26')
+  // amprentele din gărzi = cele din surse (postcondiția 20261226b; 20261130c / 20261130b pentru lanțul SMS)
+  const noi = /AMPRENTE-NOI 20261226b([\s\S]*?)<<< AMPRENTE-NOI/.exec(MIG)[1].match(/[0-9a-f]{32}/g)
+  ok(noi.length === 2 && noi.every(h => fl.includes(h)), 'garda B = amprentele postcondiției 20261226b: ' + noi.join(', '))
+  const lant = ['88991164518c47220941896f7d53deb6', '380000981deb53acfa21dbf26569066c', 'b565d0c4c1ff62320c14ae384ed6bb94', '1f14c19429a94c1146557e41db01e190']
+  ok(lant.every(h => fl.includes(h) && M30C.includes(h)) && fl.includes('b641f8c12d851541be4e0fc300f44dc3') && M30B.includes('b641f8c12d851541be4e0fc300f44dc3'),
+    'garda lanțului SMS = amprentele din 20261130c / 20261130b')
+  // versiunile și modelul: aceleași ca sursa (JS + migrații), textul scris de mână în script = modelul cu câmpurile completate
+  ok(new RegExp(`^VERS_NOUA=${SABLON_REDARI_VERSIUNE}; VERS_VECHE=provizoriu-2026-11-03$`, 'm').test(fl) && M30C.includes("SELECT 'provizoriu-2026-11-03'::text"),
+    'versiunile din script = SABLON_REDARI_VERSIUNE și versiunea din 20261130c')
+  const fmt = MODEL_NOU.replace('predare', '%s').replace('{COMUNA}', '%s').replace('{ZI}', '%s').replace('{ORA}', '09:00').replace('{TEL}', '%s')
+  ok(fl.includes(`printf '${fmt}'`) && SABLON_REDARI === MODEL_NOU, 'textul scris de mână în script = modelul din documentul B (cu „predare” / „redare”)')
+  // mesajele de refuz așteptate în script există EXACT în migrări (nu sunt inventate)
+  const mesaje = [
+    ['sms redari: blocat - asteapta autorizarea scrisa Transgaz', M30C], ['sms redari: textul s-a schimbat fata de cel afisat', M30C],
+    ['sms: nu ai acces la modulul SMS', M30B], ['sms: lotul s-a schimbat de la previzualizare', M30B],
+    ['sms redari: UAT-ul are deja un lot activ', M30C], ['sms redari: campania pentru acest UAT si ziua de sesiune', M30C]]
+  const nepotrivite = mesaje.filter(([m, src]) => !fl.includes(m) || !src.includes(m)).map(([m]) => m)
+  ok(nepotrivite.length === 0 && M30B.includes("'sms: lotul e deja inchis (%)'") && fl.includes('sms: lotul e deja inchis \\(coada_golita\\)')
+    && M30C.includes("RAISE EXCEPTION 'sms redari: % - %; anuleaza lotul si creeaza altul', v_motiv") && fl.includes("'^ERR 22023 sms redari: sablon_neaprobat - '")
+    && M30C.includes("'motiv', 'redari_neautorizat'") && M30C.includes("RETURN 'sablon_neaprobat'"),
+    'mesajele / motivele așteptate de script = textele din 20261130b / 20261130c' + (nepotrivite.length ? ': ' + nepotrivite.join('; ') : ''))
+  // interogarea documentului B §4, verbatim în script (clasificarea loturilor vechi)
+  const q4 = /```sql\n(  SELECT l\.id, l\.stare, l\.uat_id[\s\S]*?GROUP BY l\.id ORDER BY l\.creat_la;)\n  ```/.exec(DOC_B)
+  const q4s = q4 && q4[1].replace(/;$/, '')
+  ok(q4s && fl.includes(q4s), 'interogarea din documentul B §4 apare verbatim în script (F6)')
+  // căile reale, fără furnizor / edge / cron: RPC-urile aplicației și ale workerului; nicio cerere HTTP; nicio rezervare fără lot (cronul)
+  const rpc = ['fn_sms_lot_redari_sablon_creeaza', 'fn_sms_lot_aproba', 'fn_sms_rezerva', 'fn_sms_rezultat', 'fn_sms_lot_anuleaza', 'fn_sms_redari_autorizare_seteaza', 'fn_sms_lot_destinatari']
+  ok(rpc.every(f => fl.includes(`public.${f}(`)) && !/curl |functions\/v1|net\.http|fn_sms_rezerva\(NULL/.test(fl),
+    'scriptul folosește RPC-urile reale, fără HTTP / edge / cron (fn_sms_rezerva mereu cu lot)')
+  // triggerele oprite doar în tranzacții care le reactivează și le verifică înainte de COMMIT (fixture-ul F6 și curățenia)
+  const opriri = (fl.match(/DISABLE TRIGGER/g) || []).length, porniri = (fl.match(/ENABLE TRIGGER/g) || []).length
+  ok(opriri === porniri && opriri > 0 && /tgenabled <> 'O'/.test(fl) && /tgenabled = 'D'/.test(fl), `triggerele: ${opriri} opriri = ${porniri} reporniri, verificate înainte de COMMIT`)
+}
+
 // ── datele (fictive) ──
 const PT = '00000000-0000-0000-0000-00000000f001', PR = '00000000-0000-0000-0000-00000000f002'
 const UT = '00000000-0000-0000-0000-00000000f011', UR = '00000000-0000-0000-0000-00000000f012'
