@@ -154,6 +154,7 @@ functie	functie public.fn_rest_decontat_drept(bigint,text)	creat
 functie	functie public.fn_rest_decontat_lipsuri_calcul()	creat
 functie	functie public.fn_rest_decontat_nota_garda()	creat
 functie	functie public.fn_rest_decontat_obiect_calcul()	creat
+functie	functie public.fn_rest_decontat_oferta_confirmata(bigint)	creat
 functie	functie public.fn_rest_decontat_server()	creat
 functie	functie public.fn_rest_decontat_sl_garda()	creat
 functie	functie public.fn_rest_decontat_sursa_autorizata(text,bigint,bigint,timestamp with time zone)	creat

@@ -39,7 +39,16 @@
 --     Sursa 'extras_materiale' nu e ofertă: nu intră în bază.
 --   * CE INTRĂ ÎN BAZĂ, PE SURSĂ (r3, review #1158 — O SINGURĂ definiție: fn_rest_decontat_sursa_autorizata, folosită de CHECK, gardă, calcul, lipsuri):
 --     - contract_initial: rândurile active, confirmate prin RPC SAU încărcate pe calea veche (CatalogDevizPanel, accesul general Execuție, politicile
---       existente ale tabelului) — decizia chat-ului: calea veche a ofertei rămâne neschimbată; coloanele de proveniență le scrie doar RPC-ul;
+--       existente ale tabelului) — decizia chat-ului: calea veche a ofertei rămâne pe proiectele FĂRĂ ofertă confirmată; coloanele de proveniență
+--       le scrie doar RPC-ul. STĂRILE OFERTEI (r4, review #1158 P1: reimportul vechi dubla baza confirmată — O SINGURĂ definiție,
+--       fn_rest_decontat_oferta_confirmata, folosită de gardă, RPC, calcul, lipsuri): un proiect e FIE (a) cu baza veche, neconfirmată (rânduri
+--       contract_initial fără confirmat_la, ex. proiectul 4 cu 284 — CatalogDevizPanel le gestionează ca azi), FIE (b) cu baza confirmată prin RPC.
+--       Din momentul în care proiectul are cel puțin un rând contract_initial confirmat, calea veche e ÎNCHISĂ pe acel proiect: garda refuză orice
+--       INSERT / UPDATE / DELETE / reparentare directă a rândurilor contract_initial (42501, mesaj clar), calculul ignoră oricum rândurile
+--       contract_initial neconfirmate ale unui proiect cu baza confirmată (apărare dublă), lipsurile le declară ('oferta_veche_neconfirmata').
+--       Trecerea (a) -> (b) se face DOAR prin fn_rest_decontat_confirma_baza, care RETRAGE explicit (activ = false, rămân istoric) rândurile vechi
+--       neconfirmate ale ofertei, în aceeași tranzacție, sub advisory-ul proiectului — fără cumulare; garda ia același advisory (try, NOWAIT)
+--       înaintea verificării stării, ca un import vechi concurent cu RPC-ul să nu strecoare rânduri (ocupat = 55P03, nimic scris);
 --     - act_aditional: DOAR rândurile cu act_aditional_id (actul proiectului, activ) ȘI confirmat_la (scrise de fn_rest_decontat_confirma_baza);
 --       calea veche „Act adițional” din CatalogDevizPanel (act_nr fără legătură) este REFUZATĂ de gardă + CHECK (devizul AA se confirmă prin RPC);
 --     - nota_renuntare / nota_comanda_suplimentara: DOAR rândurile cu nota_id (nota proiectului, activă, APROBATĂ, nepreluată de un AA activ cu
@@ -49,8 +58,9 @@
 --     dacă ar ajunge totuși în tabel, calculul NU îl numără și lipsurile îl declară ('rand_neautorizat') — apărare în adâncime, L12 / L18.
 --   * Gărzi BEFORE pe ORICE cale (L07 / L08): rândurile confirmate din proiect_articole nu se modifică / șterg direct, coloanele de
 --     confirmare le scrie doar RPC-ul (marcajul static al tranzacției, precedent 20261130l; marcaj LIPSĂ = NULL într-o sesiune nouă = REFUZ,
---     ca și marcajul gol), un rând cu sursă AA / NR / NCS se scrie doar prin RPC, cheia e verificată; executie_sl_detaliu* se scriu doar prin
---     RPC; notele: autorul / momentul le pune serverul, proiectul nu se schimbă, actul legat e al aceluiași proiect.
+--     ca și marcajul gol), un rând cu sursă AA / NR / NCS se scrie doar prin RPC, rândurile contract_initial ale unui proiect cu oferta confirmată
+--     nu se mai ating direct (r4), cheia e verificată; executie_sl_detaliu* se scriu doar prin RPC; notele: autorul / momentul le pune serverul,
+--     proiectul nu se schimbă, actul legat e al aceluiași proiect.
 --   * RPC-urile reverifică dreptul DUPĂ lock-ul pe proiect (L01: MP-ul schimbat cât apelul aștepta lock-ul e refuzat).
 -- Ce NU face: nicio dată (încărcarea Lot 1 e separată, cu „da”-ul owner-ului), niciun drept acordat, nu atinge executie_situatii_plata* /
 --   TabSituatiiPlata, nici politicile proiect_articole; poarta proiectului nou (RPC + jurnal) e 20270105b.
@@ -61,7 +71,10 @@
 -- Ordinea lock-urilor (L06): migrarea: executie_proiecte (ACCESS EXCLUSIVE) -> proiect_articole (ACCESS EXCLUSIVE) -> executie_acte_aditionale
 --   (SHARE ROW EXCLUSIVE, FK) -> executie_situatii_plata (SHARE ROW EXCLUSIVE, FK). RPC-urile: advisory (proiect) -> executie_proiecte FOR SHARE
 --   -> executie_acte_aditionale / executie_situatii_plata FOR SHARE -> executie_note_modificare FOR SHARE -> executie_sl_detaliu FOR UPDATE
---   -> INSERT (proiect_articole | executie_sl_detaliu, executie_sl_detaliu_linii). Trigger-ele nu blochează alte rânduri.
+--   -> UPDATE proiect_articole (rândurile vechi ale ofertei, la trecerea (a) -> (b)) -> INSERT (proiect_articole | executie_sl_detaliu,
+--   executie_sl_detaliu_linii). Trigger-ele nu blochează alte rânduri; garda proiect_articole ia advisory-ul proiectului doar cu
+--   pg_try_advisory_xact_lock (BEFORE UPDATE / DELETE au deja rândul blocat: o așteptare acolo ar fi deadlock cu RPC-ul, care ține advisory-ul
+--   și apoi ia rândurile vechi) — ocupat = 55P03, nimic scris.
 -- Lock la aplicare (punct unic, NOWAIT, bugetul 1 s de la prima încercare, docs/LIVRARE_L15_V2.md §9).
 -- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, garda finală.
 -- Revenire: supabase/revenire/20270105a_executie_rest_decontat_ROLLBACK.sql. Probe: scripts/pglite/test_executie_rest_decontat_local.mjs,
@@ -376,6 +389,20 @@ $f$;
 REVOKE ALL ON FUNCTION public.fn_rest_decontat_are_oferta(bigint) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_rest_decontat_are_oferta(bigint) TO authenticated;
 
+-- STAREA OFERTEI (r4, review #1158, P1 r3: reimportul vechi dubla baza confirmată): proiectul are oferta CONFIRMATĂ prin RPC? = există cel puțin
+-- un rând contract_initial cu confirmat_la (activ sau retras: starea e definitivă, calea veche nu se redeschide printr-o retragere). (a) fals =
+-- baza veche, neconfirmată — CatalogDevizPanel o gestionează ca azi; (b) adevărat = calea veche e ÎNCHISĂ pe proiect: garda refuză scrierile
+-- directe ale rândurilor contract_initial, RPC-ul refuză a doua ofertă, calculul ignoră rândurile neconfirmate, lipsurile le declară. O SINGURĂ
+-- definiție (L19). SECURITY DEFINER fiindcă garda rulează ca apelantul, ale cărui politici ar putea ascunde rândurile confirmate, și NU poate fi
+-- fail-open (L18): răspunde adevărul oricui e autentificat (un singur bit, fără date: proiectul are / n-are ofertă confirmată).
+CREATE FUNCTION public.fn_rest_decontat_oferta_confirmata(p_proiect bigint) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT p_proiect IS NOT NULL
+    AND EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial' AND a.confirmat_la IS NOT NULL)
+$f$;
+REVOKE ALL ON FUNCTION public.fn_rest_decontat_oferta_confirmata(bigint) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_rest_decontat_oferta_confirmata(bigint) TO authenticated;
+
 -- ─── 6. situațiile de lucrări detaliate ───────────────────────────────────────────────────────────────────────────────────────
 CREATE TABLE public.executie_sl_detaliu (
   id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
@@ -471,18 +498,23 @@ CREATE TRIGGER trg_rest_decontat_nota_garda BEFORE INSERT OR UPDATE OR DELETE ON
 
 -- proiect_articole: coloanele de confirmare le scrie doar RPC-ul (marcajul tranzacției) sau serverul; rândurile confirmate nu se modifică /
 -- șterg direct; un rând cu sursă AA / NR / NCS (flux autorizat: act / notă aprobată + confirmare) se scrie DOAR prin RPC — nici INSERT direct, nici
--- schimbarea sursei unui rând existent către ele (r3); cheia e mereu cea calculată în BD (fără nr, sau cu nr când apelantul o cere).
--- Marcajul LIPSĂ (NULL, sesiune nouă) = refuz (L18).
+-- schimbarea sursei unui rând existent către ele (r3); pe un proiect cu oferta CONFIRMATĂ (starea (b), fn_rest_decontat_oferta_confirmata)
+-- rândurile contract_initial nu se mai scriu / modifică / șterg / reparentează direct (r4: calea veche e închisă pe acel proiect); cheia e mereu
+-- cea calculată în BD (fără nr, sau cu nr când apelantul o cere). Marcajul LIPSĂ (NULL, sesiune nouă) = refuz (L18).
 CREATE FUNCTION public.fn_rest_decontat_articole_garda() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
 DECLARE
   v_rpc boolean := coalesce(current_setting('gazpet.rest_decontat_scriitor', true), '') = 'fn_rest_decontat_confirma_baza';
   v_server boolean := public.fn_rest_decontat_server() IS TRUE;
-  v_fara text; v_cu text;
+  v_fara text; v_cu text; v_p bigint;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     IF OLD.confirmat_la IS NOT NULL AND (v_rpc OR v_server) IS NOT TRUE THEN
       RAISE EXCEPTION 'rest_decontat: randurile confirmate ale bazei nu se sterg' USING ERRCODE = '42501';
+    END IF;
+    -- r4: pe un proiect cu oferta confirmată nici rândurile vechi (neconfirmate, retrase) ale ofertei nu se șterg direct (rămân istoric)
+    IF OLD.sursa = 'contract_initial' AND (v_rpc OR v_server) IS NOT TRUE AND public.fn_rest_decontat_oferta_confirmata(OLD.proiect_id::bigint) THEN
+      RAISE EXCEPTION 'rest_decontat: oferta proiectului % e confirmata; randurile ofertei nu se mai sterg direct (importul ofertei se face din Rest de decontat)', OLD.proiect_id USING ERRCODE = '42501';
     END IF;
     RETURN OLD;
   END IF;
@@ -495,6 +527,22 @@ BEGIN
     -- schimbarea sursei unui rând existent (predicatul unic, cu legăturile NULL = „sursa cere fluxul”)
     IF NOT public.fn_rest_decontat_sursa_autorizata(NEW.sursa::text, NULL, NULL, NULL) THEN
       RAISE EXCEPTION 'rest_decontat: randurile cu sursa % (deviz NR / NCS / act aditional) se scriu doar prin fn_rest_decontat_confirma_baza', NEW.sursa USING ERRCODE = '42501';
+    END IF;
+    -- r4 (review #1158, P1 r3): STĂRILE OFERTEI. Un rând contract_initial scris / modificat / reparentat direct (calea veche) e primit DOAR cât
+    -- proiectul (cel nou ȘI, la reparentare, cel vechi) e în starea (a): fără niciun rând contract_initial confirmat. L01: ÎNTÂI lock-ul proiectului —
+    -- ACELAȘI advisory ca RPC-ul fn_rest_decontat_confirma_baza —, apoi verificarea stării (instrucțiune nouă = snapshot nou: o confirmare comisă
+    -- cât se aștepta e văzută). Doar try (NOWAIT, L06): BEFORE UPDATE / DELETE au deja rândul blocat, iar RPC-ul ține advisory-ul și apoi ia
+    -- rândurile vechi — o așteptare aici ar fi deadlock; „ocupat” = 55P03, nimic scris, apelantul reîncearcă. Lock-ul rămâne până la COMMIT, deci
+    -- RPC-ul pornit între timp așteaptă și vede apoi rândurile acestui import (le retrage, fără cumulare).
+    IF NEW.sursa = 'contract_initial' OR (TG_OP = 'UPDATE' AND OLD.sursa = 'contract_initial') THEN
+      FOREACH v_p IN ARRAY array_remove(ARRAY[NEW.proiect_id::bigint, CASE WHEN TG_OP = 'UPDATE' AND OLD.proiect_id::bigint IS DISTINCT FROM NEW.proiect_id::bigint THEN OLD.proiect_id::bigint END], NULL) LOOP
+        IF NOT pg_try_advisory_xact_lock(hashtextextended('gazpet.rest_decontat:' || v_p::text, 0)) THEN
+          RAISE EXCEPTION 'rest_decontat: oferta proiectului % se confirma chiar acum (Rest de decontat); reincearca' , v_p USING ERRCODE = '55P03';
+        END IF;
+        IF public.fn_rest_decontat_oferta_confirmata(v_p) THEN
+          RAISE EXCEPTION 'rest_decontat: oferta proiectului % e confirmata; importul ofertei se face din Rest de decontat (fn_rest_decontat_confirma_baza), nu din catalogul vechi', v_p USING ERRCODE = '42501';
+        END IF;
+      END LOOP;
     END IF;
     IF (TG_OP = 'INSERT' AND (NEW.confirmat_de, NEW.confirmat_la, NEW.fisier_amprenta, NEW.nota_id, NEW.act_aditional_id, NEW.mod_import)
                              IS DISTINCT FROM (NULL::uuid, NULL::timestamptz, NULL::text, NULL::bigint, NULL::bigint, NULL::text))
@@ -601,7 +649,10 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
            coalesce(a.confirmat_la, a.created_at::timestamptz, '-infinity'::timestamptz) AS moment
       FROM public.proiect_articole a
      WHERE a.proiect_id::bigint = p_proiect AND a.activ AND a.sursa IN ('contract_initial', 'act_aditional', 'nota_renuntare', 'nota_comanda_suplimentara')
-       AND public.fn_rest_decontat_sursa_autorizata(a.sursa::text, a.nota_id, a.act_aditional_id, a.confirmat_la)),
+       AND public.fn_rest_decontat_sursa_autorizata(a.sursa::text, a.nota_id, a.act_aditional_id, a.confirmat_la)
+       -- r4: pe un proiect cu oferta confirmată (starea (b)) rândurile contract_initial neconfirmate (calea veche, dacă ar mai exista) NU intră
+       -- în bază — apărare dublă față de gardă (lipsurile le declară: 'oferta_veche_neconfirmata')
+       AND (a.sursa <> 'contract_initial' OR a.confirmat_la IS NOT NULL OR NOT public.fn_rest_decontat_oferta_confirmata(p_proiect))),
   -- actele: active și cu deviz confirmat (un AA fără deviz nu preia încă nimic); data documentului = data_semnare
   aa AS (SELECT x.id::bigint AS id, coalesce(x.activ, true) AS activ, x.data_semnare::date AS data_doc,
                 EXISTS (SELECT 1 FROM r0 WHERE r0.act_aditional_id = x.id::bigint) AS are_deviz
@@ -749,6 +800,13 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
     FROM pr JOIN public.proiect_articole a ON a.proiect_id::bigint = pr.id AND a.activ
    WHERE NOT public.fn_rest_decontat_sursa_autorizata(a.sursa::text, a.nota_id, a.act_aditional_id, a.confirmat_la)
    GROUP BY pr.id, a.sursa
+  UNION ALL
+  -- r4: rânduri contract_initial ACTIVE și neconfirmate pe un proiect cu oferta CONFIRMATĂ (calea veche, strecurate pe lângă gardă): nu intră
+  -- în bază (calculul le ignoră) și se declară, cu numărul lor (L12)
+  SELECT pr.id, 'oferta_veche_neconfirmata', 'contract_initial: ' || count(*)::text
+    FROM pr JOIN public.proiect_articole a ON a.proiect_id::bigint = pr.id AND a.activ AND a.sursa = 'contract_initial' AND a.confirmat_la IS NULL
+   WHERE public.fn_rest_decontat_oferta_confirmata(pr.id)
+   GROUP BY pr.id
 $f$;
 REVOKE ALL ON FUNCTION public.fn_rest_decontat_lipsuri_calcul() FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_rest_decontat_lipsuri_calcul() TO authenticated;
@@ -764,13 +822,13 @@ GRANT SELECT ON public.v_executie_rest_decontat_baza, public.v_executie_rest_dec
 
 -- ─── 10. confirmarea bazei: oferta / devizul unui AA / devizul unei NR-NCS, într-o tranzacție ─────────────────────────────────
 -- p_linii = [{obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, pret_unitar, valoare, tip_rand}], numere JSON;
--- cheia se calculează aici (nr intră doar când obiect + deviz + cod se repetă în document). Rezultat: {inserate, ids}.
+-- cheia se calculează aici (nr intră doar când obiect + deviz + cod se repetă în document). Rezultat: {inserate, ids, sursa, mod_import, inlocuite}.
 CREATE FUNCTION public.fn_rest_decontat_confirma_baza(p_proiect bigint, p_sursa text, p_act_aditional_id bigint, p_nota_id bigint, p_mod text,
                                                       p_fisier text, p_amprenta text, p_linii jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
-  v_uid uuid := auth.uid(); v_mod text := p_mod; v_nivel text; v_act_nr text; v_n integer; v_ids bigint[]; v_data_nota date;
+  v_uid uuid := auth.uid(); v_mod text := p_mod; v_nivel text; v_act_nr text; v_n integer; v_ids bigint[]; v_data_nota date; v_inlocuite integer := 0;
   e jsonb; v_k text; v_tip text; v_cant numeric; v_val numeric; v_pret numeric; v_um text;
   v_chei text[] := ARRAY[]::text[]; v_dub text[]; v_finale text[] := ARRAY[]::text[]; v_acum timestamptz := now();
 BEGIN
@@ -829,8 +887,19 @@ BEGIN
       RAISE EXCEPTION 'rest_decontat: nota are deja un deviz confirmat (inlocuirea e o decizie separata)' USING ERRCODE = '23505';
     END IF;
   END IF;
-  IF p_sursa = 'contract_initial' AND EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial' AND a.activ) THEN
-    RAISE EXCEPTION 'rest_decontat: proiectul are deja oferta financiara (inlocuirea e o decizie separata)' USING ERRCODE = '23505';
+  -- r4 (review #1158): STĂRILE OFERTEI. (b) oferta CONFIRMATĂ există deja (activă sau retrasă) = a doua ofertă e refuzată (înlocuirea e o decizie
+  -- separată). (a) baza veche, neconfirmată (calea veche CatalogDevizPanel, ex. proiectul 4): trecerea (a) -> (b) RETRAGE explicit rândurile vechi
+  -- ACUM, sub advisory-ul proiectului, în aceeași tranzacție — înaintea verificării liniilor (UM-ul se compară cu baza nouă, nu cu rândurile înlocuite);
+  -- orice refuz de mai jos anulează tranzacția și rândurile vechi rămân cum erau. Fără cumulare: baza = doar oferta confirmată.
+  IF p_sursa = 'contract_initial' THEN
+    IF public.fn_rest_decontat_oferta_confirmata(p_proiect) THEN
+      RAISE EXCEPTION 'rest_decontat: proiectul are deja oferta financiara confirmata (inlocuirea e o decizie separata)' USING ERRCODE = '23505';
+    END IF;
+    SET LOCAL gazpet.rest_decontat_scriitor = 'fn_rest_decontat_confirma_baza';
+    UPDATE public.proiect_articole a SET activ = false
+     WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial' AND a.confirmat_la IS NULL AND a.activ;
+    GET DIAGNOSTICS v_inlocuite = ROW_COUNT;
+    SET LOCAL gazpet.rest_decontat_scriitor = '';
   END IF;
   IF EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id::bigint = p_proiect AND a.fisier_amprenta = p_amprenta) THEN
     RAISE EXCEPTION 'rest_decontat: acelasi fisier a fost deja confirmat pe acest proiect' USING ERRCODE = '23505';
@@ -896,7 +965,8 @@ BEGIN
   SELECT count(*)::integer, array_agg(ins.id::bigint ORDER BY ins.id) INTO v_n, v_ids FROM ins;
   SET LOCAL gazpet.rest_decontat_scriitor = '';
   IF v_n <> jsonb_array_length(p_linii) THEN RAISE EXCEPTION 'rest_decontat: randurile scrise nu corespund liniilor trimise' USING ERRCODE = 'P0001'; END IF;
-  RETURN jsonb_build_object('inserate', v_n, 'ids', to_jsonb(v_ids), 'sursa', p_sursa, 'mod_import', v_mod);
+  -- inlocuite = rândurile vechi ale ofertei (neconfirmate, calea veche) retrase la trecerea (a) -> (b); 0 la devize AA / NR / NCS și la oferta pe un proiect gol
+  RETURN jsonb_build_object('inserate', v_n, 'ids', to_jsonb(v_ids), 'sursa', p_sursa, 'mod_import', v_mod, 'inlocuite', v_inlocuite);
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_rest_decontat_confirma_baza(bigint, text, bigint, bigint, text, text, text, jsonb) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_rest_decontat_confirma_baza(bigint, text, bigint, bigint, text, text, text, jsonb) TO authenticated;
@@ -1041,7 +1111,7 @@ GRANT EXECUTE ON FUNCTION public.fn_rest_decontat_confirma_situatie(bigint, text
 DO $post$
 DECLARE v_amp text; v_n bigint;
   v_fn name[] := ARRAY['fn_rest_decontat_cheie', 'fn_rest_decontat_um', 'fn_rest_decontat_sursa_autorizata', 'fn_rest_decontat_drept', 'fn_rest_decontat_server', 'fn_rest_decontat_aa_al_proiectului',
-    'fn_rest_decontat_are_oferta', 'fn_rest_decontat_nota_garda', 'fn_rest_decontat_articole_garda', 'fn_rest_decontat_sl_garda', 'fn_rest_decontat_baza_proiect',
+    'fn_rest_decontat_are_oferta', 'fn_rest_decontat_oferta_confirmata', 'fn_rest_decontat_nota_garda', 'fn_rest_decontat_articole_garda', 'fn_rest_decontat_sl_garda', 'fn_rest_decontat_baza_proiect',
     'fn_rest_decontat_baza_calcul', 'fn_rest_decontat_calcul', 'fn_rest_decontat_obiect_calcul', 'fn_rest_decontat_lipsuri_calcul', 'fn_rest_decontat_confirma_baza',
     'fn_rest_decontat_confirma_situatie']::name[];
 BEGIN
@@ -1075,10 +1145,10 @@ BEGIN
     RAISE EXCEPTION '20270105a post: privilegii pe tabele / vederi / secvente';
   END IF;
   -- funcțiile: toate cu search_path fix, owner postgres; DEFINER doar unde trebuie; EXECUTE doar pentru authenticated, nu pe funcțiile trigger
-  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%') <> 17
+  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%') <> 18
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (v_fn)
                  AND (p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] OR pg_get_userbyid(p.proowner) <> 'postgres'
-                      OR p.prosecdef IS DISTINCT FROM (p.proname IN ('fn_rest_decontat_drept', 'fn_rest_decontat_aa_al_proiectului', 'fn_rest_decontat_are_oferta',
+                      OR p.prosecdef IS DISTINCT FROM (p.proname IN ('fn_rest_decontat_drept', 'fn_rest_decontat_aa_al_proiectului', 'fn_rest_decontat_are_oferta', 'fn_rest_decontat_oferta_confirmata',
                                                                      'fn_rest_decontat_baza_proiect', 'fn_rest_decontat_baza_calcul', 'fn_rest_decontat_calcul',
                                                                      'fn_rest_decontat_obiect_calcul', 'fn_rest_decontat_lipsuri_calcul', 'fn_rest_decontat_confirma_baza',
                                                                      'fn_rest_decontat_confirma_situatie'))
@@ -1161,9 +1231,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%'
   ) x;
   -- AMPRENTA_20270105a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '5c4b43db182c4ee8f65a825f4e9c3b64' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '9f33b67b67ec91be89e7871940d6d8ac' THEN
     RAISE NOTICE 'AMPRENTA_20270105a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270105a post: AMPRENTA obiectelor % (asteptat 5c4b43db182c4ee8f65a825f4e9c3b64)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270105a post: AMPRENTA obiectelor % (asteptat 9f33b67b67ec91be89e7871940d6d8ac)', md5(coalesce(v_amp, ''));
   END IF;
   -- ștampilele porților Izometrie, CALCULATE după ultima schimbare (coloanele noi pe executie_proiecte intră în E4b)
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());

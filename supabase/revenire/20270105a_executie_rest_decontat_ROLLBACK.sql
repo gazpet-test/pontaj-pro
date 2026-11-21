@@ -1,5 +1,5 @@
 -- Revenire 20270105a_executie_rest_decontat. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a owner-ului (supabase/revenire/README.md).
--- Scoate tot ce a creat migrarea: cele 4 vederi, cele 17 funcții fn_rest_decontat_*, trigger-ele trg_rest_decontat_*, tabelele executie_sl_detaliu_linii /
+-- Scoate tot ce a creat migrarea: cele 4 vederi, cele 18 funcții fn_rest_decontat_*, trigger-ele trg_rest_decontat_*, tabelele executie_sl_detaliu_linii /
 --   executie_sl_detaliu / executie_note_modificare, coloanele noi de pe proiect_articole (cheie, nota_id, act_aditional_id, mod_import, activ, fisier_amprenta,
 --   confirmat_de, confirmat_la, tip_rand, cu constrângerile și indexurile lor) și de pe executie_proiecte (configurare_completa_la, configurare_exceptie_motiv).
 -- Dacă 20270105b e aplicată (fn_executie_proiect_configurare_completa există), REFUZĂ: întâi revenirea 20270105b.
@@ -37,7 +37,7 @@ BEGIN
   END IF;
   PERFORM set_config('lock_timeout', '100ms', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
-  -- starea exactă a migrării: tabelele, vederile, cele 17 funcții, trigger-ele, coloanele
+  -- starea exactă a migrării: tabelele, vederile, cele 18 funcții, trigger-ele, coloanele
   IF to_regclass('public.executie_note_modificare') IS NULL OR to_regclass('public.executie_sl_detaliu') IS NULL OR to_regclass('public.executie_sl_detaliu_linii') IS NULL
      OR to_regclass('public.v_executie_rest_decontat_baza') IS NULL OR to_regclass('public.v_executie_rest_decontat') IS NULL
      OR to_regclass('public.v_executie_rest_decontat_obiect') IS NULL OR to_regclass('public.v_executie_rest_decontat_lipsuri') IS NULL
@@ -45,13 +45,13 @@ BEGIN
      OR to_regprocedure('public.fn_rest_decontat_sursa_autorizata(text, bigint, bigint, timestamptz)') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_drept(bigint, text)') IS NULL OR to_regprocedure('public.fn_rest_decontat_server()') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_aa_al_proiectului(bigint, bigint)') IS NULL OR to_regprocedure('public.fn_rest_decontat_are_oferta(bigint)') IS NULL
-     OR to_regprocedure('public.fn_rest_decontat_nota_garda()') IS NULL OR to_regprocedure('public.fn_rest_decontat_articole_garda()') IS NULL
+     OR to_regprocedure('public.fn_rest_decontat_oferta_confirmata(bigint)') IS NULL OR to_regprocedure('public.fn_rest_decontat_nota_garda()') IS NULL OR to_regprocedure('public.fn_rest_decontat_articole_garda()') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_sl_garda()') IS NULL OR to_regprocedure('public.fn_rest_decontat_baza_proiect(bigint)') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_baza_calcul()') IS NULL OR to_regprocedure('public.fn_rest_decontat_calcul()') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_obiect_calcul()') IS NULL OR to_regprocedure('public.fn_rest_decontat_lipsuri_calcul()') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_confirma_baza(bigint, text, bigint, bigint, text, text, text, jsonb)') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_confirma_situatie(bigint, text, bigint, text, text, jsonb, boolean, numeric)') IS NULL
-     OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%') <> 17
+     OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%') <> 18
      OR (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname IN ('trg_rest_decontat_nota_garda', 'trg_rest_decontat_articole_garda', 'trg_rest_decontat_sl_garda', 'trg_rest_decontat_sl_linii_garda')) <> 4
      OR (SELECT count(*) FROM pg_attribute a WHERE a.attrelid = 'public.proiect_articole'::regclass AND NOT a.attisdropped
           AND a.attname IN ('cheie', 'nota_id', 'act_aditional_id', 'mod_import', 'activ', 'fisier_amprenta', 'confirmat_de', 'confirmat_la', 'tip_rand')) <> 9
@@ -156,9 +156,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%'
   ) x;
   -- AMPRENTA_20270105a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '5c4b43db182c4ee8f65a825f4e9c3b64' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '9f33b67b67ec91be89e7871940d6d8ac' THEN
     RAISE NOTICE 'AMPRENTA_20270105a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270105a revenire: AMPRENTA obiectelor migrarii % (asteptat 5c4b43db182c4ee8f65a825f4e9c3b64): starea nu e cea din 20270105a; nimic schimbat',
+    RAISE EXCEPTION '20270105a revenire: AMPRENTA obiectelor migrarii % (asteptat 9f33b67b67ec91be89e7871940d6d8ac): starea nu e cea din 20270105a; nimic schimbat',
       md5(coalesce(v_amp, ''));
   END IF;
 END $pre$;
@@ -189,6 +189,7 @@ DROP FUNCTION public.fn_rest_decontat_sursa_autorizata(text, bigint, bigint, tim
 DROP TABLE public.executie_note_modificare;   -- cu trigger-ul și politicile lui
 DROP FUNCTION public.fn_rest_decontat_nota_garda();
 DROP FUNCTION public.fn_rest_decontat_are_oferta(bigint);
+DROP FUNCTION public.fn_rest_decontat_oferta_confirmata(bigint);   -- după garda / calculul / lipsurile care o chemau (r4)
 DROP FUNCTION public.fn_rest_decontat_aa_al_proiectului(bigint, bigint);
 DROP FUNCTION public.fn_rest_decontat_server();
 DROP FUNCTION public.fn_rest_decontat_drept(bigint, text);

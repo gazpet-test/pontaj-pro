@@ -14,6 +14,18 @@ const G = {
 }
 const fmtLei = (v) => v == null ? '—' : Number(v).toLocaleString('ro-RO', { maximumFractionDigits: 0 }) + ' lei'
 
+// Refuzurile bazei de date (migrarea 20270105a, „Rest de decontat”) ajung în clar la utilizator: după ce oferta unui proiect e CONFIRMATĂ în
+// „Rest de decontat”, catalogul vechi nu mai poate scrie / șterge rândurile ofertei (42501, mesajul BD începe cu „rest_decontat:”); 55P03 = oferta
+// se confirmă chiar acum (reîncearcă). Orice altă eroare rămâne cum vine (RLS, rețea). Exportat pentru teste.
+export function explicaEroareImport(e, ce) {
+  const m = e?.message || String(e)
+  if (/rest_decontat/.test(m)) {
+    if (e?.code === '55P03') return `${ce}: oferta acestui proiect se confirmă chiar acum în „Rest de decontat” — reîncearcă peste câteva secunde. (${m})`
+    return `${ce} refuzat: oferta acestui proiect e confirmată în „Rest de decontat”; importul ofertei (și al actelor adiționale) se face de acolo, nu din catalog. Nimic nu s-a schimbat. (${m})`
+  }
+  return `${ce}: ${m}`
+}
+
 export default function CatalogDevizPanel({ proiectId, showToast }) {
   const [articole, setArticole] = useState([])
   const [loading, setLoading] = useState(true)
@@ -24,7 +36,8 @@ export default function CatalogDevizPanel({ proiectId, showToast }) {
     setLoading(true)
     const { data } = await supabase.from('proiect_articole').select('*')
       .eq('proiect_id', proiectId).order('obiect_cod').order('deviz_cod').order('nr')
-    setArticole(data || [])
+    // rândurile RETRASE (activ = false, coloana există doar după migrarea 20270105a: înainte e undefined) sunt istoric, nu catalogul curent
+    setArticole((data || []).filter(a => a.activ !== false))
     setLoading(false)
   }, [proiectId])
   useEffect(() => { load() }, [load])
@@ -50,11 +63,13 @@ export default function CatalogDevizPanel({ proiectId, showToast }) {
       if (!arts.length) { showToast?.('Nu am găsit articole (verifică formatul F3).', 'error'); return }
       const val = arts.reduce((s, a) => s + (a.valoare || 0), 0)
       if (!window.confirm(`${arts.length} articole (${fmtLei(val)}).\n\nÎnlocuiesc CONTRACTUL INIȚIAL? (actele adiționale rămân)`)) return
-      await supabase.from('proiect_articole').delete().eq('proiect_id', proiectId).eq('sursa', 'contract_initial')
+      // rezultatul DELETE-ului se verifică: un refuz al BD (oferta confirmată în „Rest de decontat”) oprește importul AICI, fără INSERT-ul care ar dubla baza
+      const { error: eDel } = await supabase.from('proiect_articole').delete().eq('proiect_id', proiectId).eq('sursa', 'contract_initial')
+      if (eDel) throw eDel
       const n = await insertRows(arts, { sursa: 'contract_initial', act_nr: null })
       showToast?.(`✓ ${n} articole — contract inițial`, 'success')
       await load()
-    } catch (e) { showToast?.('Eroare import: ' + (e?.message || e), 'error') } finally { setImporting(false) }
+    } catch (e) { showToast?.(explicaEroareImport(e, 'Eroare import'), 'error') } finally { setImporting(false) }
   }
 
   const onImportAct = async (file) => {
@@ -72,11 +87,12 @@ export default function CatalogDevizPanel({ proiectId, showToast }) {
         cantitate: a.cantitate == null ? null : sign * Math.abs(a.cantitate),
         valoare: a.valoare == null ? null : sign * Math.abs(a.valoare),
       }))
-      await supabase.from('proiect_articole').delete().eq('proiect_id', proiectId).eq('sursa', 'act_aditional').eq('act_nr', nr.trim())
+      const { error: eDel } = await supabase.from('proiect_articole').delete().eq('proiect_id', proiectId).eq('sursa', 'act_aditional').eq('act_nr', nr.trim())
+      if (eDel) throw eDel
       const n = await insertRows(signed, { sursa: 'act_aditional', act_nr: nr.trim() })
       showToast?.(`✓ ${n} articole — Act ${nr.trim()} (${supliment ? 'suplimentare +' : 'renunțare −'})`, 'success')
       await load()
-    } catch (e) { showToast?.('Eroare import act: ' + (e?.message || e), 'error') } finally { setImporting(false) }
+    } catch (e) { showToast?.(explicaEroareImport(e, 'Eroare import act'), 'error') } finally { setImporting(false) }
   }
 
   const grupe = useMemo(() => {
@@ -91,13 +107,15 @@ export default function CatalogDevizPanel({ proiectId, showToast }) {
 
   const totalVal = useMemo(() => articole.reduce((s, a) => s + (a.valoare || 0), 0), [articole])
   const acte = useMemo(() => [...new Set(articole.filter(a => a.sursa === 'act_aditional' && a.act_nr).map(a => a.act_nr))].sort(), [articole])
+  // oferta confirmată în „Rest de decontat” (rânduri cu confirmat_la): catalogul o arată, dar n-o mai poate rescrie (BD refuză)
+  const ofertaConfirmata = useMemo(() => articole.some(a => a.sursa === 'contract_initial' && a.confirmat_la), [articole])
 
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
         <div style={{ fontSize: 13, color: G.muted }}>
           {loading ? 'Se încarcă…' : articole.length
-            ? <>Catalog: <strong style={{ color: G.text }}>{articole.length}</strong> articole · <strong style={{ color: G.green }}>{fmtLei(totalVal)}</strong>{acte.length ? <span style={{ color: G.yellow }}> · {acte.length} act(e) adiț. ({acte.join(', ')})</span> : ''}</>
+            ? <>Catalog: <strong style={{ color: G.text }}>{articole.length}</strong> articole · <strong style={{ color: G.green }}>{fmtLei(totalVal)}</strong>{acte.length ? <span style={{ color: G.yellow }}> · {acte.length} act(e) adiț. ({acte.join(', ')})</span> : ''}{ofertaConfirmata ? <span style={{ color: G.blue }}> · 🔒 ofertă confirmată în „Rest de decontat” (importul ofertei se face de acolo)</span> : ''}</>
             : 'Niciun articol încă — importă devizul (F3).'}
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
