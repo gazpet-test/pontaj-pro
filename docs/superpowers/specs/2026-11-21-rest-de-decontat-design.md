@@ -123,6 +123,23 @@ ERP; actele adiționale au fost puse până acum fără devize. De acum:
 - Recuperare (o dată): devizele actelor adiționale deja înregistrate fără deviz (Lot 1 are 6) și situațiile detaliate ale lunilor
   trecute (Lot 1: 15) — prin tura de noapte, apoi confirmare.
 
+### Poarta la deschiderea unui proiect nou (decis de Răzvan, 21.11.2026)
+
+- Un proiect / contract nou rămâne „în configurare” până se încarcă oferta financiară (F3 + devizele pe obiect) în
+  `proiect_articole`; până atunci NU poate trece în „în execuție” (garda în BD, ecranul doar o oglindește).
+- Poarta nu blochează munca de teren (pontaj, rapoarte, logistică merg de la prima zi) — doar trecerea de stare.
+- Owner-ul are excepție cu motiv scris (jurnalizată), pentru urgențe.
+- Proiectele deja deschise: listă „fără ofertă financiară” pe ecran, de completat o dată; poarta nu le schimbă starea retroactiv.
+
+### Note de renunțare (NR) și note de comandă suplimentară (NCS) (decis de Răzvan, 21.11.2026)
+
+- Surse noi în bază, ca actele adiționale: fiecare NR / NCS cu documentul și devizul ei (diferențe cu semn: NR minus, NCS plus),
+  încărcate cu previzualizare + confirmare; ecranul arată „NR / NCS fără deviz”.
+- O notă intră în bază din momentul aprobării de către beneficiar.
+- **Fără dublare:** când vine actul adițional care preia notele, AA se LEAGĂ de notele respective și conținutul lor nu se mai adună
+  încă o dată; din AA se adaugă doar ce aduce în plus față de notele legate. O notă legată de un AA rămâne vizibilă (istoric),
+  dar baza o numără o singură dată.
+
 ### Pilotul (Lot 1)
 
 1. Oferta financiară depusă + devizele actelor adiționale → `proiect_articole` (proiect 1).
