@@ -544,7 +544,7 @@ if (!DOAR || DOAR === '4') {
       `      ELSIF v_kn IS NULL AND cardinality(v_ref_id) = 1 THEN\n        v_k := v_ref_id[1];`, `      ELSIF false THEN\n        v_k := v_ref_id[1];`]]],
     ['RPC: linia fără poziție cu mai multe chei referite acceptată (ambiguitatea nerefuzată, decontatul celor două poziții desprins)', [[
       `      ELSIF v_kn IS NULL THEN\n        RAISE EXCEPTION 'rest_decontat: linia % fara pozitie (nr) e ambigua`, `      ELSIF false THEN\n        RAISE EXCEPTION 'rest_decontat: linia % fara pozitie (nr) e ambigua`]]],
-    ['lipsurile nu declară decontatul fără articol (decontat_fara_articol)', [[`   WHERE NOT (r.cheie = ANY (bz.chei))\n$f$;`, `   WHERE false\n$f$;`]]],
+    ['lipsurile nu declară decontatul fără articol (decontat_fara_articol)', [[`   WHERE NOT (r.cheie = ANY (bz.chei))\n  UNION ALL`, `   WHERE false\n  UNION ALL`]]],
     ['RPC-ul nu întoarce cheile referite rămase fără bază (decontat_fara_baza mereu gol)', [[`   WHERE NOT (r.cheie = ANY (coalesce(bz.chei, ARRAY[]::text[])));`, `   WHERE false;`]]],
     ['amprenta fișierului necăutată în istoric (A → B → A acceptat)', [[
       `\n     OR EXISTS (SELECT 1 FROM public.proiect_articole_istoric h WHERE h.proiect_id = p_proiect AND h.rand->>'fisier_amprenta' = p_amprenta) THEN\n    RAISE EXCEPTION 'rest_decontat: acelasi fisier a fost deja confirmat pe acest proiect'`,

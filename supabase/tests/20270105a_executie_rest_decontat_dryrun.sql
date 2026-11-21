@@ -2161,7 +2161,15 @@ BEGIN
      OR EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip IN ('decontat_fara_articol', 'decontat_um_diferit')) THEN
     RAISE EXCEPTION 't_um_decontat FAIL rest O5|D1|X|#1 dupa reintroducere: %', row_to_json(r);
   END IF;
-  RAISE NOTICE 't_um_decontat (2/3) ok: X fara pozitie pe cheia referita O5|D1|X|#1 ramasa fara baza — in MC = 22023 um_decontat (nimic scris, lipsa ramane), in M = acceptat cu cheia referita si pozitia 1 reconstruita din cheie (rest 100 / 80 / 20, lipsa stinsa)';
+  -- L20: o situatie INLOCUITA (inactiva) nu tine cheia prizoniera in UM-ul ei vechi — situatia 4 v1 (inactiva, t_cheie_referita 4/4) avea X in M pe O3|D1|X;
+  -- cheia nu mai e referita, deci devizul NCS-12 cu X (fara pozitie, cheia O3|D1|X) in MC trece (doar situatiile ACTIVE conteaza)
+  INSERT INTO public.executie_note_modificare (proiect_id, tip, numar, data_aprobare) VALUES (pg_temp.rd_id('p8'), 'NCS', 'NCS-12', DATE '2026-10-09') RETURNING id INTO h;
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'nota_comanda_suplimentara', NULL, h, NULL, 'p8_ncs12.xlsx', repeat('ad', 32),
+         '[{"obiect_cod":"O3","deviz_cod":"D1","cod":"X","denumire":"x in mc","um":"MC","cantitate":5,"pret_unitar":10,"valoare":50}]'::jsonb);
+  IF (v->>'inserate')::int <> 1 OR v->'decontat_fara_baza' IS DISTINCT FROM '[]'::jsonb THEN RAISE EXCEPTION 't_um_decontat FAIL NCS-12 pe cheia dezghetata: %', v; END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O3|D1|X';
+  IF r.baza_cantitate <> 5 OR r.um IS DISTINCT FROM 'MC' OR r.decontat_cantitate <> 0 OR r.um_incert IS NOT FALSE THEN RAISE EXCEPTION 't_um_decontat FAIL O3|D1|X in MC dupa dezghetare: %', row_to_json(r); END IF;
+  RAISE NOTICE 't_um_decontat (2/3) ok: X fara pozitie pe cheia referita O5|D1|X|#1 ramasa fara baza — in MC = 22023 um_decontat (nimic scris, lipsa ramane), in M = acceptat cu cheia referita si pozitia 1 reconstruita din cheie (rest 100 / 80 / 20, lipsa stinsa); situatia inlocuita (inactiva) nu tine O3|D1|X in M: NCS-12 in MC trece';
 END $t$;
 RESET ROLE;
 
