@@ -1,7 +1,7 @@
 # Verificarea săptămânală a actelor adiționale, GBE și polițelor CAR (NAS ↔ ERP) — automatizari #69
 
 Task #15, decizia Răzvan 03.10.2026. Mutată de pe laptop pe serverul AI (13.10.2026; 16.10.2026: NAS prin UNC, stare pe căi relative, Jakarinos doar prin `run_paw`). Laptopul rămâne rezervă până la prima rulare reușită pe server.
-Din 21.11.2026 verifică și **garanțiile de bună execuție (GBE)** și **polițele CAR**: documentul de pe NAS e în ERP? numărul, emitentul, valoarea, expirarea, actele la poliță corespund? expiră în 30 de zile sau a expirat fără prelungire?
+Din 21.11.2026 verifică și **garanțiile de bună execuție (GBE)** și **polițele CAR**: documentul de pe NAS e în ERP? numărul, emitentul, valoarea, expirarea, actele la poliță corespund? expiră în 30 de zile sau a expirat? Data de expirare efectivă se calculează cu regula ERP-ului (`fn_polite_scadente`: cea mai târzie dată de expirare din actele poliței — și când un act o scurtează —, data poliței doar dacă actele n-au dată).
 
 ## Ce caută scanarea (după NUMELE fișierului; coloana `familie` din `lista.tsv`)
 - `act` — act adițional / AA n / majorare / ajustare / acord subsecvent (regula de dinainte, neschimbată).
@@ -9,7 +9,7 @@ Din 21.11.2026 verifică și **garanțiile de bună execuție (GBE)** și **poli
 - `car` — poliță CAR, „CAR”, construcții-montaj, all risks.
 - Numele se compară fără diacritice (ă, ș/ş, ț/ţ, î, â, și în forma descompusă). „GBE” / „CAR” se caută ca cuvânt (`_`, `.`, `-`, spațiu = separatori): nu prind „carburant”, „cariera”, „carte”, „scara”.
 - Ordinea: `gbe` → `car` → `act` (un „act adițional la polița CAR” e verificat ca poliță). Familia e un indiciu; Jakarinos decide din document.
-- GBE / CAR din **documente de ofertă** nu intră: dacă în calea DE SUB folderul proiectului (foldere sau nume) apare un cuvânt care începe cu „particip” sau „ofert” (garanție de participare, Oferta tehnică, Ofertare…). Se numără în `rezumat.txt` („excluse (oferta/participare): N”), nu dispar tacit. Un act adițional dintr-un folder de ofertă rămâne `act`, ca înainte.
+- GBE / CAR din **documente de ofertă** nu intră: dacă în calea DE SUB folderul proiectului (foldere sau nume) apare un cuvânt care începe cu „particip” sau „ofert” (garanție de participare, Oferta tehnică, Ofertare…). Se numără în `rezumat.txt` („excluse (oferta/participare): N”), nu dispar tacit. Excluderea are prioritate față de regula actelor: un GBE / CAR de ofertă rămâne exclus și când numele seamănă cu un act („Act adițional poliță CAR ofertă”, „AA1 scrisoare de garanție participare”). Un act adițional obișnuit (nici GBE, nici CAR) dintr-un folder de ofertă rămâne `act`, ca înainte.
 - `stare.tsv`: aceleași chei (căi relative). Actele rămân `marime|data`; GBE / CAR au `marime|data|gbe` / `|car`. Un fișier deja verificat ca act și recunoscut acum ca GBE/CAR apare o dată cu motivul `FAMILIE_NOUA`.
 - Prima rulare după schimbare: toate GBE / CAR de pe NAS apar ca `NOU` (nu erau în stare) — o listă mai lungă, o singură dată.
 Responsabil: Jakarinos (Codex). Verifică: Claude. Aprobă: Răzvan. **Doar Claude scrie în BD, doar după „da” direct de la Răzvan, cu RETURNING.**
@@ -32,7 +32,8 @@ Claude (rutina zilnică, ziua VINERI) lucrează prin **Desktop Commander, device
 - Test prin DC pe server: `scan_acte.ps1` cu NAS-ul real (după conversie trebuie să iasă „baseline=False”), apoi `jak_acte.sh <data> --doar-brief` (scrie doar brief-ul, nu pornește run_paw).
 
 ## Teste (director sintetic local, fără NAS)
-- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acte_aditionale\teste\test_scan_acte.ps1` — baseline, chei relative, NOU/MODIFICAT, căi refuzate, exit 2/3/4/5/6, NAS-ul sintetic neschimbat, conversie + rescanare; GBE / CAR: nume adevărate (cu diacritice NFC / NFD / sedilă, `_` ca separator, AA la poliță) și false (carburant, cariera, carte, scara, garanție de participare, foldere de ofertă), familia corectă în `lista.tsv`, `FAMILIE_NOUA`, lista zilei veche adusă la zi.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acte_aditionale\teste\test_scan_acte.ps1` — baseline, chei relative, NOU/MODIFICAT, căi refuzate, exit 2/3/4/5/6, NAS-ul sintetic neschimbat, conversie + rescanare; GBE / CAR: nume adevărate (cu diacritice NFC / NFD / sedilă, `_` ca separator, AA la poliță) și false (carburant, cariera, carte, scara, garanție de participare, foldere de ofertă), familia corectă în `lista.tsv`, `FAMILIE_NOUA`, lista zilei veche adusă la zi; precedența (GBE / CAR de ofertă cu nume de act rămâne exclus, actul obișnuit din folder de ofertă rămâne `act`); „CAR Casa de Ajutor Reciproc” intră ca `car` (Jakarinos îl dă `NERELEVANT`), fără tokenul CAR nu intră.
+- `ACTE_PGLITE=<folder> node scripts/acte_aditionale/teste/test_export_erp.mjs` (PGlite instalat cu `npm install --no-save --prefix <folder> @electric-sql/pglite`, nu e dependență a repo-ului) — `export_erp.sql` pe o schemă falsă + `fn_polite_scadente` luată din migrarea 20261205a: expirarea efectivă la scurtare, prelungire, acte fără dată; exemplele din TEMA_ACTE.md dau exact rezultatul funcției ERP. `--mutant-greatest` (regula veche „cea mai târzie dintre poliță și acte”) trebuie să pice.
 - `python -B scripts/acte_aditionale/teste/test_converteste_stare.py` — preview fără scriere, `--asteptat` obligatoriu, BOM/CRLF, idempotență, duplicate, probleme blochează.
 - `"C:\Program Files\Git\bin\bash.exe" scripts/acte_aditionale/teste/test_jak_acte.sh` — argumente, „nimic nou”, fișiere lipsă, `--doar-brief` (fără run_paw).
 

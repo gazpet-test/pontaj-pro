@@ -30,6 +30,9 @@ grep -q 'Jakarinos — verificarea' "$B"; ok $? 0 "brief contine TEMA_ACTE.md"
 grep -q 'Folderul rularii' "$B"; ok $? 0 "brief contine folderul rularii"
 grep -q '^## GBE / polițe CAR' "$B"; ok $? 0 "brief contine sectiunea GBE / CAR"
 grep -q 'EXPIRA_CURAND' "$B"; ok $? 0 "brief contine clasificarea de valabilitate"
+grep -q 'regula ERP-ului.*fn_polite_scadente' "$B"; ok $? 0 "brief: expirarea efectiva = regula ERP (fn_polite_scadente)"
+grep -q 'act care \*\*scurtează\*\* valabilitatea o scurtează' "$B"; ok $? 0 "brief: un act poate scurta valabilitatea"
+grep -q 'NERELEVANT.*Casa de Ajutor Reciproc' "$B"; ok $? 0 "brief: CAR = Casa de Ajutor Reciproc -> NERELEVANT"
 case "$O" in *'C:\ProgramData\Gazpet\Paw\bin\run_paw.cmd jak '*'paw-data\out\acte_2026-10-16_'*) ok 1 1 "comanda prin run_paw jak, iesire in paw-data\\out";; *) ok 0 1 "comanda prin run_paw jak";; esac
 [ ! -e "$F/.jak_ruleaza" ]; ok $? 0 "--doar-brief nu ia blocajul"
 

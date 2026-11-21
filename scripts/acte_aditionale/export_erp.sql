@@ -4,7 +4,8 @@
 --   SELECT E'id\tcod\tcale\n' || string_agg(id || E'\t' || cod_intern || E'\t' || coalesce(nas_folder_path,''), E'\n' ORDER BY id) FROM executie_proiecte WHERE activ AND id <> 24;
 -- 21.11.2026 (GBE / CAR): data de referinta = ziua din Europe/Bucharest (nu CURRENT_DATE UTC); la polite: moneda, data emiterii,
 --   garantie_pana_la, data emiterii actelor si valorile EFECTIVE (cu actele) + zilele pana la expirare din fn_polite_scadente
---   (singura definitie, aceeasi ca alertele; doar pentru politele active); Registrul de garantii (garantii) GBE / CAR nelegat de o polita
+--   (singura definitie, aceeasi ca alertele; doar pentru politele active; expirarea efectiva = maximul datelor de expirare din actele
+--   politei, chiar daca un act o scurteaza, cu revenire la data politei doar daca actele nu au data - regula pe care o aplica si TEMA_ACTE.md); Registrul de garantii (garantii) GBE / CAR nelegat de o polita
 --   de pe contract (cele legate apar deja la `polite contract`); numarul contractului si beneficiarul. Fara IBAN / cont.
 WITH azi AS (SELECT (now() AT TIME ZONE 'Europe/Bucharest')::date AS d),
 p AS (SELECT id, cod_intern, contract_id, valoare_lei, garantie_buna_exec_pct FROM executie_proiecte WHERE activ AND id<>24),

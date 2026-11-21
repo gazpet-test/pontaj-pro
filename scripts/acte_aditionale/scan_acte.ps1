@@ -7,7 +7,8 @@
 # Iesire:  <Baza>\<AAAA-LL-ZZ>\P<id>\<copii locale>  + lista.tsv + rezumat.txt
 # Familii (21.11.2026): pe langa actele aditionale (act) se cauta si garantiile de buna executie (gbe) si politele CAR (car);
 #   coloana `familie` din lista.tsv spune ce a recunoscut NUMELE fisierului (Jakarinos stabileste din document ce este de fapt).
-#   gbe/car NU se iau din documentele de oferta: cale (sub folderul proiectului) sau nume cu participare / oferta -> exclus, numarat in rezumat.
+#   gbe/car NU se iau din documentele de oferta: cale (sub folderul proiectului) sau nume cu participare / oferta -> exclus, numarat in rezumat
+#   (si cand numele seamana si cu un act aditional: excluderea are prioritate fata de regula actelor).
 # Stare:   <Baza>\stare.tsv (cale RELATIVA la radacina <TAB> marime|data[|gbe|car]) - ce s-a vazut la rularea anterioara.
 #          Actele raman `marime|data` (ca inainte); gbe/car au sufixul familiei, ca un fisier vazut deja ca act si recunoscut
 #          acum ca GBE/CAR sa intre o data la verificare (motiv FAMILIE_NOUA).
@@ -58,13 +59,15 @@ function Pliaza([string]$s) {
 }
 function Familie($fisier, [string]$relProiect) {
   # ordinea: gbe -> car -> act (un act aditional LA POLITA e verificat cu regulile GBE/CAR; Jakarinos decide din document)
-  # intoarce familia sau 'exclus' (GBE/CAR in document de oferta, fara nume de act) sau '' (nu ne intereseaza)
+  # intoarce familia sau 'exclus' (GBE/CAR in document de oferta) sau '' (nu ne intereseaza)
+  # Precedenta (Jakarinos #1162 r1 P2): un GBE/CAR recunoscut si exclus ca document de oferta / participare RAMANE exclus,
+  #   chiar daca numele se potriveste si cu regula actelor (ex. "Act aditional polita CAR oferta.pdf", "AA1 scrisoare de garantie participare.pdf").
+  # Doar fisierele care NU sunt GBE/CAR cad la regula actelor (un act aditional obisnuit dintr-un folder de oferta ramane `act`, ca inainte).
   $n = Pliaza $fisier.Name
   $gc = ''
   if ($n -match $reGbe) { $gc = 'gbe' } elseif ($n -match $reCar) { $gc = 'car' }
-  if ($gc -and -not ((Pliaza $relProiect) -match $reOferta)) { return $gc }
+  if ($gc) { if ((Pliaza $relProiect) -match $reOferta) { return 'exclus' } else { return $gc } }
   if ($fisier.Name -match $re) { return 'act' }   # actele: exact regula de dinainte, pe numele brut
-  if ($gc) { return 'exclus' }   # (un act aditional dintr-un folder de oferta ramane `act`, ca inainte)
   return ''
 }
 $vechi = @{}

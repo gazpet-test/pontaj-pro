@@ -57,11 +57,21 @@ try {
     'rgbe_harta.png'                                                 = ''
     'Garantie de participare.pdf'                                    = ''      # nu e nici GBE, nici act
     'Scrisoare de garantie participare.pdf'                          = 'exclus'
+    # precedenta (Jakarinos #1162 r1 P2): GBE/CAR de oferta / participare ramane exclus si cand numele seamana cu un act
+    'Act aditional polita CAR oferta.pdf'                            = 'exclus'
+    'AA1 scrisoare de garantie participare.pdf'                      = 'exclus'
+    'AA 2 majorare polita GBE participare.docx'                      = 'exclus'
+    'Act aditional 5 oferta.pdf'                                     = 'act'   # nu e GBE/CAR -> regula actelor, ca inainte
+    # CAR = si Casa de Ajutor Reciproc (HR): cu tokenul CAR intra ca posibil CAR (Jakarinos il clasifica NERELEVANT), fara token nu intra
+    'CAR Casa de Ajutor Reciproc adeverinta.pdf'                     = 'car'
+    'Casa de Ajutor Reciproc imprumut.pdf'                           = ''
     'Polita GBE.txt'                                                 = ''      # extensie ignorata
   }
   foreach ($k in $gc.Keys) { Set-Content -LiteralPath (Join-Path $p3 $k) -Value ('x ' + $k) }
   Set-Content -LiteralPath (Join-Path $p3o 'Polita GBE.pdf') -Value 'gbe din oferta'          # exclus (folder Ofertare\Oferta)
   Set-Content -LiteralPath (Join-Path $p3o 'Polita CAR.pdf') -Value 'car din oferta'          # exclus
+  Set-Content -LiteralPath (Join-Path $p3o 'AA1 polita CAR.pdf') -Value 'act la car din oferta' # exclus (folder de oferta + nume de act)
+  Set-Content -LiteralPath (Join-Path $p3o 'Act aditional 7.pdf') -Value 'act din oferta'     # act (nu e GBE/CAR, ca inainte)
   Set-Content -LiteralPath (Join-Path $p3d ("Poli$tz$ab CAR.pdf")) -Value 'car din oferta'    # exclus (folder cu diacritice)
   Set-Content -LiteralPath (Join-Path $p3c 'Bon.pdf') -Value 'carburant in cale, nu in nume'  # nimic
 
@@ -88,29 +98,32 @@ try {
   $inainte = Instantaneu
   $r = Scan
   Verifica ($r.cod -eq 0) "exit 0 (cod=$($r.cod))"
-  Verifica ($r.text -match 'baseline=True \| total de verificat: 13') 'baseline cu 3 acte + 5 GBE + 5 CAR'
+  Verifica ($r.text -match 'baseline=True \| total de verificat: 16') 'baseline cu 5 acte + 5 GBE + 6 CAR'
   Verifica ($r.text -match 'P3 FARA \| FARA CALE NAS') 'proiect fara cale semnalat'
   Verifica ($r.text -match 'P4 RAU \| CALE REFUZATA') 'cale cu .. refuzata'
   Verifica ($r.text -match 'P5 ABS \| CALE REFUZATA') 'cale absoluta refuzata'
   Verifica ($r.text -match 'P1 UNU \| acte pe NAS: 2 \| GBE: 0 \| CAR: 0 \| excluse \(oferta/participare\): 0 \| de verificat acum: 2') 'rezumat P1 (doar acte)'
-  Verifica ($r.text -match 'P6 TREI \| acte pe NAS: 0 \| GBE: 5 \| CAR: 5 \| excluse \(oferta/participare\): 4 \| de verificat acum: 10') 'rezumat P6: GBE/CAR numarate, ofertele excluse numarate'
+  Verifica ($r.text -match 'P6 TREI \| acte pe NAS: 2 \| GBE: 5 \| CAR: 6 \| excluse \(oferta/participare\): 8 \| de verificat acum: 13') 'rezumat P6: GBE/CAR numarate, ofertele excluse numarate (si cele cu nume de act)'
   $st = @(Stare)
-  Verifica ($st.Count -eq 13) "stare.tsv are 13 randuri ($($st.Count))"
+  Verifica ($st.Count -eq 16) "stare.tsv are 16 randuri ($($st.Count))"
   Verifica (@($st | Where-Object { $_ -match '^[A-Za-z]:' -or $_.StartsWith('\\') }).Count -eq 0) 'nicio cheie absoluta in stare.tsv'
   Verifica (@($st | Where-Object { $_.StartsWith("Oferte\1.TRANSGAZ\114. Proiect unu\Act aditional 1.pdf`t") }).Count -eq 1) 'cheie relativa la radacina'
   Verifica (@($st | Where-Object { $_ -match "^Oferte\\1\.TRANSGAZ\\114\. Proiect unu\\Act aditional 1\.pdf`t\d+\|[0-9T:-]+$" }).Count -eq 1) 'act: valoarea din stare ramane marime|data (fara sufix)'
-  Verifica (@($st | Where-Object { $_ -match '\|gbe$' }).Count -eq 5 -and @($st | Where-Object { $_ -match '\|car$' }).Count -eq 5) 'stare: 5 x |gbe, 5 x |car'
+  Verifica (@($st | Where-Object { $_ -match '\|gbe$' }).Count -eq 5 -and @($st | Where-Object { $_ -match '\|car$' }).Count -eq 6) 'stare: 5 x |gbe, 6 x |car'
+  Verifica (@($st | Where-Object { $_ -match '(oferta|participare)' -and $_ -match '(?i)(polita|garantie)' }).Count -eq 0) 'stare: niciun GBE/CAR de oferta / participare (nici cu nume de act)'
   $l = @(Lista)
-  Verifica ((@($l | Where-Object { $_.motiv -eq 'BASELINE' }).Count) -eq 13) 'lista: 13 x BASELINE'
+  Verifica ((@($l | Where-Object { $_.motiv -eq 'BASELINE' }).Count) -eq 16) 'lista: 16 x BASELINE'
   Verifica (@($l | Where-Object { -not ($_.fisier_local.StartsWith($baza)) }).Count -eq 0) 'copiile locale sunt sub Baza'
-  Verifica (@($l | Where-Object { Test-Path -LiteralPath $_.fisier_local }).Count -eq 13) 'copiile locale exista'
+  Verifica (@($l | Where-Object { Test-Path -LiteralPath $_.fisier_local }).Count -eq 16) 'copiile locale exista'
   Verifica (@($l | Where-Object { $_.id -ne '6' -and $_.familie -ne 'act' }).Count -eq 0) 'P1/P2: familie=act'
   foreach ($k in $gc.Keys) {
     $rand = @($l | Where-Object { $_.id -eq '6' -and $_.cale_nas -eq (Join-Path $p3 $k) })
-    if ($gc[$k] -in @('gbe', 'car')) { Verifica ($rand.Count -eq 1 -and $rand[0].familie -eq $gc[$k]) "familie $($gc[$k]): $k" }
+    if ($gc[$k] -in @('gbe', 'car', 'act')) { Verifica ($rand.Count -eq 1 -and $rand[0].familie -eq $gc[$k]) "familie $($gc[$k]): $k" }
     else { Verifica ($rand.Count -eq 0) "nu intra in lista ($(if ($gc[$k]) { $gc[$k] } else { 'nimic' })): $k" }
   }
-  Verifica (@($l | Where-Object { $_.cale_nas.StartsWith($p3o) -or $_.cale_nas.StartsWith($p3d) -or $_.cale_nas.StartsWith($p3c) }).Count -eq 0) 'nimic din folderele de oferta / Carburant'
+  Verifica (@($l | Where-Object { ($_.cale_nas.StartsWith($p3o) -or $_.cale_nas.StartsWith($p3d) -or $_.cale_nas.StartsWith($p3c)) -and $_.cale_nas -ne (Join-Path $p3o 'Act aditional 7.pdf') }).Count -eq 0) 'din folderele de oferta / Carburant: niciun GBE/CAR (nici "AA1 polita CAR.pdf")'
+  $a7 = @($l | Where-Object { $_.cale_nas -eq (Join-Path $p3o 'Act aditional 7.pdf') })
+  Verifica ($a7.Count -eq 1 -and $a7[0].familie -eq 'act') 'act aditional obisnuit din folder de oferta: ramane act (ca inainte)'
   $dif = @(Compare-Object $inainte (Instantaneu)); $dif | ForEach-Object { '    dif: ' + $_.SideIndicator + ' ' + $_.InputObject }
   Verifica ($dif.Count -eq 0) 'NAS-ul sintetic neschimbat (nume, marime, data)'
 
@@ -140,7 +153,7 @@ try {
   $l = @(Lista)
   Verifica (@($l | Where-Object { $_.motiv -eq 'MODIFICAT' }).Count -eq 1) 'un MODIFICAT'
   Verifica (@($l | Where-Object { $_.motiv -eq 'NOU' }).Count -eq 1) 'un NOU'
-  Verifica (@(Stare).Count -eq 14) 'stare.tsv are 14 randuri'
+  Verifica (@(Stare).Count -eq 17) 'stare.tsv are 17 randuri'
 
   "7) stare.tsv in format vechi (Z:\) -> exit 4, fara scriere"
   $fSt = Join-Path $baza 'stare.tsv'
@@ -155,8 +168,8 @@ try {
   $py = Get-Command python -ErrorAction SilentlyContinue
   if ($py) {
     $o = & python -B $conv --preview --fisier $fSt 2>&1
-    Verifica (($o -join "`n") -match 'de convertit: 14 ') 'preview: 14 de convertit (si randurile |gbe / |car)'
-    $o = & python -B $conv --aplica --asteptat 14 --fisier $fSt 2>&1
+    Verifica (($o -join "`n") -match 'de convertit: 17 ') 'preview: 17 de convertit (si randurile |gbe / |car)'
+    $o = & python -B $conv --aplica --asteptat 17 --fisier $fSt 2>&1
     Verifica ($LASTEXITCODE -eq 0) "aplica (cod=$LASTEXITCODE)"
     $r = Scan
     Verifica ($r.cod -eq 0 -and $r.text -match 'baseline=False \| total de verificat: 0') 'dupa conversie: nimic nou'
@@ -164,7 +177,7 @@ try {
 
   "8) -Toate = BASELINE complet"
   $r = Scan @('-Toate')
-  Verifica ($r.text -match 'baseline=True \| total de verificat: 14') 'baseline cu 14 (4 acte + 5 GBE + 5 CAR)'
+  Verifica ($r.text -match 'baseline=True \| total de verificat: 17') 'baseline cu 17 (6 acte + 5 GBE + 6 CAR)'
 
   "9) lista zilei scrisa de versiunea veche (fara familie) -> antet adus la zi, randurile vechi = act"
   $fL = Join-Path $baza ((Get-Date -Format 'yyyy-MM-dd') + '\lista.tsv')
