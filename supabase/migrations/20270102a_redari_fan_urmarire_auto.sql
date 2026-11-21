@@ -17,6 +17,10 @@
 --   cu un eveniment ridicare_auto în red_jurnal; pe loturile reale plicul NU se atinge (expedierea pe plic = D4 / F4, cu „da”-ul juridic), iar
 --   ridicarea rămâne pentru butonul owner-ului (fn_red_fan_ridicat, neschimbată). O dată C0 înainte de generarea AWB-ului / în viitor nu se
 --   înregistrează (semnal ridicare_data_imposibila). Coloanele *_contrazis nu se mai scriu (verificarea prealabilă cere să fie goale).
+-- RUNDA 3 (#1155, Jakarinos r2): (P1) evenimentele cu aceeași oră se departajează explicit în cod (redariFan.mjs::ORDINE_EGALITATE), toate cele de la
+--   ora maximă contează (motive diferite la aceeași oră = contradicția retur_motiv din același răspuns, acceptată acum de validare); (P2) o zi C0
+--   imposibilă nu se mai salvează în ridicat_propus și nu mai blochează o zi posibilă din același răspuns sau din următoarele (doar audit);
+--   (P2) limita valorilor unei contradicții = 50 în cod, în validare și în CHECK (paritate testată), validarea pe forme fixe per tip.
 -- BAZA = 20261212a + 20261227a + 20261228a aplicate, în această ordine.
 -- 20270102a_redari_fan_urmarire_auto — Redări FAN: urmărirea AWB-urilor actualizată AUTOMAT (decizia owner-ului, 21.11.2026; spec
 --   docs/redari/FAN_FLUX_OPERATOR_SPEC.md §9, felia „F2a” din docs/redari/FAN_URMARIRE_AUTOMATA.md). Faptul de pornire: un AWB livrat pe 20.11 la
@@ -264,7 +268,8 @@ CREATE TABLE public.red_fan_contradictii (
   awb text NOT NULL CHECK (awb ~ '^[0-9]{6,20}$'),
   sursa text NOT NULL CHECK (sursa IN ('acelasi_raspuns', 'intre_raspunsuri')),   -- în același răspuns FAN / între răspunsul nou și faptul înregistrat
   tip text NOT NULL,
-  valori jsonb NOT NULL CHECK (jsonb_typeof(valori) = 'array' AND jsonb_array_length(valori) BETWEEN 1 AND 20),
+  -- runda 3 (#1155 r2 P2): aceeași limită ca în cod (LIMITA_VALORI_CONTRADICTIE = 50) și ca validarea din fn_red_fan_urmarire_scrie (test de paritate)
+  valori jsonb NOT NULL CHECK (jsonb_typeof(valori) = 'array' AND jsonb_array_length(valori) BETWEEN 1 AND 50),
   ales text NOT NULL CHECK (ales ~ '^[A-Za-z0-9_: -]{1,40}$'),
   regula text NOT NULL,
   versiune_regula text NOT NULL CHECK (versiune_regula = 'fan-contradictii-v1'),
@@ -317,19 +322,38 @@ BEGIN
     INTO v_n, v_bune, v_dist
     FROM jsonb_to_recordset(p_randuri) AS u(id uuid, awb text, versiune integer, urmarire_stare text, ultim_eveniment text,
       ultim_eveniment_la text, ridicat_propus text, livrat_la text, retur_propus text, retur_la text, contradictii jsonb)
-    -- lista de contradicții din același răspuns (redariFan.mjs::rezumatUrmarireFan): lipsă / [] / ≤ 3 elemente, fiecare EXACT {tip, valori, ales,
-    -- regula}, perechea (tip, regula) pe lista albă, valorile = 2..20 texte de formă fixă (zi / oră / cod + oră / returnAwbNumber), alesul = o
-    -- valoare din listă (ridicare / livrare) sau livrat / retur — conținut extern tratat ca date, nimic în afara formelor fixe
-    CROSS JOIN LATERAL (SELECT u.contradictii IS NULL OR (jsonb_typeof(u.contradictii) = 'array' AND jsonb_array_length(u.contradictii) <= 3
-        AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(u.contradictii) e WHERE NOT (
-              jsonb_typeof(e) = 'object'
-          AND (SELECT array_agg(k ORDER BY k COLLATE "C") FROM jsonb_object_keys(e) k) = ARRAY['ales', 'regula', 'tip', 'valori']
-          AND (e ->> 'tip', e ->> 'regula') IN (('ridicare_zile', 'prima_ridicare'), ('livrare_ore', 'ultima_livrare'), ('livrare_retur', 'final_ulterior'))
-          AND jsonb_typeof(e -> 'valori') = 'array' AND jsonb_array_length(e -> 'valori') BETWEEN 2 AND 20
-          AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(e -> 'valori') v WHERE jsonb_typeof(v) IS DISTINCT FROM 'string'
-                OR (v #>> '{}') !~ '^(([A-Z]{1,2}[0-9]{1,3} )?[0-9]{4}-[0-9]{2}-[0-9]{2}( [0-9]{2}:[0-9]{2}:[0-9]{2})?|returnAwbNumber)$')
-          AND jsonb_typeof(e -> 'ales') = 'string'
-          AND CASE WHEN e ->> 'tip' = 'livrare_retur' THEN (e ->> 'ales') IN ('livrat', 'retur') ELSE (e -> 'valori') @> jsonb_build_array(e -> 'ales') END)))) AS c(ok);
+    -- lista de contradicții din același răspuns (redariFan.mjs::rezumatUrmarireFan): lipsă / [] / ≤ 4 elemente cu tipuri DIFERITE, fiecare EXACT
+    -- {tip, valori, ales, regula}, perechea (tip, regula) pe lista albă. Runda 3 (#1155 r2 P2 / P1, L13 / L19): valorile = 2..50 texte
+    -- (LIMITA_VALORI_CONTRADICTIE din cod; testul de paritate compară), cu forma FIXĂ a tipului (zi C0 / oră S2 / motiv de retur / [S2 + oră, cod +
+    -- oră sau returnAwbNumber]), în ordine strict crescătoare ca în cod; alesul = regula aplicată pe valori (prima zi / ultima oră / motivul) și
+    -- legat de faptele rândului (ridicat_propus / livrat_la / retur_propus / starea). Conținut extern tratat ca date: orice element care nu se
+    -- potrivește EXACT (inclusiv NULL, prin IS NOT TRUE, L18) = 22023, nimic scris. CASE-ul ordonează verificările (forma înaintea conținutului).
+    CROSS JOIN LATERAL (SELECT CASE WHEN u.contradictii IS NULL THEN true WHEN jsonb_typeof(u.contradictii) IS DISTINCT FROM 'array' THEN false
+        WHEN jsonb_array_length(u.contradictii) > 4 THEN false ELSE (
+        NOT EXISTS (SELECT 1 FROM jsonb_array_elements(u.contradictii) e WHERE (CASE
+          WHEN jsonb_typeof(e) IS DISTINCT FROM 'object' THEN false
+          WHEN (SELECT array_agg(k ORDER BY k COLLATE "C") FROM jsonb_object_keys(e) k) IS DISTINCT FROM ARRAY['ales', 'regula', 'tip', 'valori'] THEN false
+          WHEN jsonb_typeof(e -> 'valori') IS DISTINCT FROM 'array' OR jsonb_typeof(e -> 'ales') IS DISTINCT FROM 'string' THEN false
+          WHEN ((e ->> 'tip', e ->> 'regula') IN (('ridicare_zile', 'prima_ridicare'), ('livrare_ore', 'ultima_livrare'), ('livrare_retur', 'final_ulterior'),
+                                                 ('retur_motiv', 'ultimul_semnal'))) IS NOT TRUE THEN false
+          WHEN jsonb_array_length(e -> 'valori') NOT BETWEEN 2 AND 50 THEN false
+          WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(e -> 'valori') WITH ORDINALITY v(x, i) WHERE jsonb_typeof(v.x) IS DISTINCT FROM 'string'
+                OR (v.x #>> '{}') !~ CASE e ->> 'tip'
+                     WHEN 'ridicare_zile' THEN '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                     WHEN 'livrare_ore' THEN '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$'
+                     WHEN 'retur_motiv' THEN '^(destinatar_necunoscut|mutat|avizat_neridicat|refuz|adresa_incompleta)$'
+                     WHEN 'livrare_retur' THEN CASE WHEN v.i = 1 THEN '^S2 [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$'
+                                                    ELSE '^([A-Z]{1,2}[0-9]{1,3} [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}|returnAwbNumber)$' END END) THEN false
+          -- livrare_retur = [livrarea, returul]; celelalte: strict crescătoare (deci și distincte), ca în cod
+          WHEN e ->> 'tip' = 'livrare_retur' THEN jsonb_array_length(e -> 'valori') = 2 AND (e ->> 'ales') IN ('livrat', 'retur')
+                                                  AND ((e ->> 'ales') = 'retur') = (u.urmarire_stare = 'retur')
+          WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(e -> 'valori') WITH ORDINALITY a(x, i)
+                         JOIN jsonb_array_elements_text(e -> 'valori') WITH ORDINALITY b(x, i) ON b.i = a.i + 1 WHERE b.x COLLATE "C" <= a.x COLLATE "C") THEN false
+          WHEN e ->> 'tip' = 'ridicare_zile' THEN (e ->> 'ales') = (e -> 'valori' ->> 0) AND (e ->> 'ales') IS NOT DISTINCT FROM u.ridicat_propus
+          WHEN e ->> 'tip' = 'livrare_ore' THEN (e ->> 'ales') = (e -> 'valori' ->> -1) AND (u.livrat_la IS NULL OR u.livrat_la = (e ->> 'ales'))
+          ELSE u.urmarire_stare = 'retur' AND (e -> 'valori') @> jsonb_build_array(e -> 'ales') AND (e ->> 'ales') IS NOT DISTINCT FROM u.retur_propus
+        END) IS NOT TRUE)
+        AND (SELECT count(DISTINCT e ->> 'tip') FROM jsonb_array_elements(u.contradictii) e) = jsonb_array_length(u.contradictii)) END) AS c(ok);
   IF v_n <> v_bune OR v_dist <> v_n THEN RAISE EXCEPTION 'redari fan: urmarire invalida' USING ERRCODE = '22023'; END IF;
   PERFORM 1 FROM public.red_fan_awb WHERE id IN (SELECT u.id FROM jsonb_to_recordset(p_randuri) AS u(id uuid)) ORDER BY id FOR UPDATE;
   IF EXISTS (SELECT 1 FROM jsonb_to_recordset(p_randuri) AS u(id uuid, awb text)
@@ -349,9 +373,17 @@ BEGIN
   -- răspunsului nou (lipsa lui păstrează motivul cunoscut); finaluri diferite = finalul ULTERIOR după ora curierului: retur nou peste livrare
   -- cunoscută dacă returul n-are oră sau e la / după livrare; livrare nouă peste retur cunoscut doar dacă livrarea e DUPĂ ultimul eveniment
   -- cunoscut la înregistrarea returului (altfel retur: egalitatea / necunoscutul merg la retur). Ridicarea: ziua înregistrată rămâne.
+  -- RUNDA 3 (#1155 r2 P2): o zi C0 IMPOSIBILĂ (înainte de ziua generării AWB-ului sau după azi, ora României) nu devine NICIODATĂ fapt: nu se
+  -- salvează în ridicat_propus și nu prevalează asupra răspunsurilor următoare; rămâne doar în audit (ridicare_data_imposibila, câte un rând pe zi).
+  -- Zilele candidate ale răspunsului = ridicat_propus + toate zilele contradicției ridicare_zile din același răspuns (aceeași regulă „prima zi”,
+  -- restrânsă la zilele posibile): C0 pe 17 (imposibil) + C0 pe 19 (posibil) → 19. Ziua cunoscută prevalează DOAR dacă e posibilă (o zi veche
+  -- imposibilă, scrisă de corpul de dinainte de 20270102a, iese din fapte și intră în audit).
   WITH n AS (
     SELECT u.id, u.versiune, u.urmarire_stare AS n_stare, u.ultim_eveniment AS n_ev,
-           (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest') AS n_la, u.ridicat_propus::date AS n_rid,
+           (u.ultim_eveniment_la::timestamp AT TIME ZONE 'Europe/Bucharest') AS n_la,
+           ARRAY(SELECT DISTINCT x.d::date FROM (SELECT u.ridicat_propus AS d
+                   UNION ALL SELECT v.d FROM jsonb_array_elements(coalesce(u.contradictii, '[]'::jsonb)) e CROSS JOIN LATERAL jsonb_array_elements_text(e -> 'valori') AS v(d)
+                    WHERE e ->> 'tip' = 'ridicare_zile') x WHERE x.d IS NOT NULL ORDER BY 1) AS n_cand,
            (u.livrat_la::timestamp AT TIME ZONE 'Europe/Bucharest') AS n_liv, u.urmarire_stare = 'retur' AS n_ret, u.retur_propus AS n_mot,
            (u.retur_la::timestamp AT TIME ZONE 'Europe/Bucharest') AS n_ret_la, coalesce(u.contradictii, '[]'::jsonb) AS n_contr,
            b.stare AS k_stare, (b.generat_la AT TIME ZONE 'Europe/Bucharest')::date AS k_gen, b.ridicat_propus AS k_rid, b.livrat_la AS k_liv,
@@ -360,12 +392,17 @@ BEGIN
              ridicat_propus text, livrat_la text, retur_propus text, retur_la text, contradictii jsonb)
       JOIN public.red_fan_awb b ON b.id = u.id
   ), f AS (
-    SELECT n.*, coalesce(n.k_rid, n.n_rid) AS rid,
+    SELECT n.*,
+           (SELECT min(d) FROM unnest(n.n_cand) AS z(d) WHERE z.d >= n.k_gen AND z.d <= v_azi) AS n_rid_ok,
+           CASE WHEN n.k_rid >= n.k_gen AND n.k_rid <= v_azi THEN n.k_rid END AS k_rid_ok,
+           ARRAY(SELECT DISTINCT z.d FROM unnest(n.n_cand || CASE WHEN n.k_rid IS NULL THEN '{}'::date[] ELSE ARRAY[n.k_rid] END) AS z(d)
+                  WHERE (z.d >= n.k_gen AND z.d <= v_azi) IS NOT TRUE ORDER BY 1) AS rid_imposibile,
            CASE WHEN n.n_ret THEN 'retur' WHEN n.n_liv IS NOT NULL THEN 'livrat' END AS n_fin,
            CASE WHEN n.k_ret THEN 'retur' WHEN n.k_liv IS NOT NULL THEN 'livrat' END AS k_fin
       FROM n
   ), g AS (
-    SELECT f.*, CASE WHEN f.n_fin IS NULL THEN f.k_fin
+    SELECT f.*, coalesce(f.k_rid_ok, f.n_rid_ok) AS rid,
+                CASE WHEN f.n_fin IS NULL THEN f.k_fin
                      WHEN f.k_fin IS NULL OR f.k_fin = f.n_fin THEN f.n_fin
                      WHEN f.k_fin = 'livrat' THEN CASE WHEN f.n_ret_la IS NULL OR f.n_ret_la >= f.k_liv THEN 'retur' ELSE 'livrat' END
                      ELSE CASE WHEN f.k_la IS NOT NULL AND f.n_liv > f.k_la THEN 'livrat' ELSE 'retur' END END AS fin
@@ -375,13 +412,15 @@ BEGIN
            CASE WHEN g.fin = 'livrat' THEN CASE WHEN g.n_fin = 'livrat' AND g.k_fin = 'livrat' THEN greatest(g.k_liv, g.n_liv)
                                                 WHEN g.n_fin = 'livrat' THEN g.n_liv ELSE g.k_liv END END AS liv,
            CASE WHEN g.fin = 'retur' THEN CASE WHEN g.n_fin = 'retur' THEN coalesce(g.n_mot, g.k_mot) ELSE g.k_mot END END AS mot,
-           (v_test IS TRUE AND g.k_stare = 'generat' AND g.rid IS NOT NULL AND g.rid >= g.k_gen AND g.rid <= v_azi) AS auto_rid,
-           (g.k_stare = 'generat' AND g.rid IS NOT NULL AND (g.rid < g.k_gen OR g.rid > v_azi)) AS rid_imposibil
+           -- rid e prin construcție o zi posibilă (≥ generare, ≤ azi)
+           (v_test IS TRUE AND g.k_stare = 'generat' AND g.rid IS NOT NULL) AS auto_rid
       FROM g
   ), w AS (
     UPDATE public.red_fan_awb a SET
+           -- „ridicat” din răspuns fără nicio zi posibilă → „în tranzit” (starea nu afirmă o ridicare pe care faptele nu o au)
            urmarire_stare = CASE WHEN m.n_stare = 'de_verificat' THEN 'de_verificat' WHEN m.fin = 'retur' THEN 'retur' WHEN m.fin = 'livrat' THEN 'livrat'
-                                 WHEN m.rid IS NOT NULL AND m.n_stare IN ('fara_evenimente', 'in_tranzit') THEN 'ridicat' ELSE m.n_stare END,
+                                 WHEN m.rid IS NOT NULL AND m.n_stare IN ('fara_evenimente', 'in_tranzit') THEN 'ridicat'
+                                 WHEN m.rid IS NULL AND m.n_stare = 'ridicat' THEN 'in_tranzit' ELSE m.n_stare END,
            ultim_eveniment = m.n_ev, ultim_eveniment_la = m.n_la, ridicat_propus = m.rid, livrat_la = m.liv, retur_propus = m.mot,
            retur_cunoscut = (m.fin IS NOT DISTINCT FROM 'retur'),
            stare = CASE WHEN m.auto_rid THEN 'ridicat' ELSE a.stare END,
@@ -395,9 +434,9 @@ BEGIN
       (SELECT coalesce(jsonb_agg(x.c), '[]'::jsonb) FROM (
          SELECT jsonb_build_object('sursa', 'acelasi_raspuns', 'tip', e ->> 'tip', 'valori', e -> 'valori', 'ales', e ->> 'ales', 'regula', e ->> 'regula') AS c
            FROM jsonb_array_elements(m.n_contr) e
-         UNION ALL SELECT jsonb_build_object('sursa', 'intre_raspunsuri', 'tip', 'ridicare_zile', 'regula', 'prima_ridicare', 'ales', to_char(m.k_rid, 'YYYY-MM-DD'),
-                  'valori', jsonb_build_array(to_char(least(m.k_rid, m.n_rid), 'YYYY-MM-DD'), to_char(greatest(m.k_rid, m.n_rid), 'YYYY-MM-DD')))
-          WHERE m.k_rid IS NOT NULL AND m.n_rid IS NOT NULL AND m.n_rid <> m.k_rid
+         UNION ALL SELECT jsonb_build_object('sursa', 'intre_raspunsuri', 'tip', 'ridicare_zile', 'regula', 'prima_ridicare', 'ales', to_char(m.k_rid_ok, 'YYYY-MM-DD'),
+                  'valori', jsonb_build_array(to_char(least(m.k_rid_ok, m.n_rid_ok), 'YYYY-MM-DD'), to_char(greatest(m.k_rid_ok, m.n_rid_ok), 'YYYY-MM-DD')))
+          WHERE m.k_rid_ok IS NOT NULL AND m.n_rid_ok IS NOT NULL AND m.n_rid_ok <> m.k_rid_ok
          UNION ALL SELECT jsonb_build_object('sursa', 'intre_raspunsuri', 'tip', 'livrare_ore', 'regula', 'ultima_livrare',
                   'ales', to_char(m.liv AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI:SS'),
                   'valori', jsonb_build_array(to_char(least(m.k_liv, m.n_liv) AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI:SS'),
@@ -412,9 +451,12 @@ BEGIN
                                         coalesce('retur ' || to_char(m.n_ret_la AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI:SS'), 'retur fara_ora'))
                                  ELSE jsonb_build_array('retur_cunoscut', 'S2 ' || to_char(m.n_liv AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI:SS')) END)
           WHERE m.k_fin IS NOT NULL AND m.n_fin IS NOT NULL AND m.k_fin <> m.n_fin
+         -- runda 3: câte un rând pe ZI imposibilă (din răspuns sau ziua veche ieșită din fapte); reperul = generarea (zi trecută) sau azi (zi
+         -- viitoare), ca semnalul revăzut a doua zi să fie același rând (observări + 1), nu unul nou
          UNION ALL SELECT jsonb_build_object('sursa', 'intre_raspunsuri', 'tip', 'ridicare_data_imposibila', 'regula', 'data_imposibila', 'ales', 'neinregistrata',
-                  'valori', jsonb_build_array('C0 ' || to_char(m.rid, 'YYYY-MM-DD'), 'generat ' || to_char(m.k_gen, 'YYYY-MM-DD'), 'azi ' || to_char(v_azi, 'YYYY-MM-DD')))
-          WHERE m.rid_imposibil) x) AS contr
+                  'valori', jsonb_build_array('C0 ' || to_char(z.d, 'YYYY-MM-DD'),
+                                              CASE WHEN z.d > v_azi THEN 'azi ' || to_char(v_azi, 'YYYY-MM-DD') ELSE 'generat ' || coalesce(to_char(m.k_gen, 'YYYY-MM-DD'), 'necunoscut') END))
+           FROM unnest(m.rid_imposibile) AS z(d)) x) AS contr
   )
   SELECT count(*)::integer, coalesce(jsonb_agg(jsonb_build_object('id', w.id, 'awb', w.awb, 'lot', w.lot_id, 'ev', w.ultim_eveniment, 'la', w.ultim_eveniment_la,
            'rid', w.rid, 'rid_la', w.ridicat_la, 'auto_rid', w.auto_rid, 'contr', w.contr)), '[]'::jsonb)
@@ -718,7 +760,7 @@ BEGIN
       ('public.fn_red_fan_tiraj_opreste(uuid,text,boolean)', '63b507c349b2961c032468a3d542212a', 'plpgsql', true, 'v', 'jsonb', true, false),
       ('public.fn_red_fan_urmarire(uuid,jsonb)', 'f310b4933f6064f4c2187e1602b46bb1', 'plpgsql', true, 'v', 'jsonb', true, false),
       ('public.fn_red_fan_urmarire_intern(uuid,jsonb)', '50512f2506fcbf23bda6e4559cfbc71f', 'plpgsql', true, 'v', 'jsonb', false, false),
-      ('public.fn_red_fan_urmarire_scrie(uuid,jsonb,uuid,uuid)', '6c4e64aceb7b007d23907a045d5af08a', 'plpgsql', true, 'v', 'jsonb', false, false),
+      ('public.fn_red_fan_urmarire_scrie(uuid,jsonb,uuid,uuid)', '5c3b03c9ac4ff056a178fadd7648a979', 'plpgsql', true, 'v', 'jsonb', false, false),
       ('public.fn_red_fan_urmarire_solutioneaza(uuid,integer,jsonb,text)', 'd286bb9f78d01f751eb123b0eb8ca5a5', 'plpgsql', true, 'v', 'jsonb', true, false),
       ('public.fn_red_fan_zi_garda()', '5c51181772f185ac5559913dd32918ec', 'plpgsql', true, 'v', 'trigger', false, false)
       -- <<< AMPRENTE-NOI 20270102a

@@ -374,15 +374,35 @@ export function dataEvenimentFan(v) {
  *   identice repetate (același cod, aceeași dată) = un singur fapt; două C0 în aceeași zi = o singură zi, nu contradicție.
  * - Evenimente de formă necunoscută (cod sau dată) = de_verificat FĂRĂ fapte (un eveniment pierdut poate fi chiar al doilea C0: nimic nu se
  *   înregistrează automat dintr-o cronologie incompletă, L12); ultimul eveniment citit rămâne, pentru cronologie.
+ * - Runda 3 (Jakarinos #1155 r2 P1): evenimentele cu ACEEAȘI oră nu mai depind de ordinea listei FAN. „Ultimul eveniment” = TOATE evenimentele
+ *   de la ora maximă: un refuz / adresă / mutat la ora finală e dovadă de retur oricare ar fi poziția lui (S2 + S6 la aceeași oră → retur, cu
+ *   contradicția livrare_retur, în ambele ordini); un cod necunoscut / de verificat la ora finală dă „de verificat” oriunde ar sta. Departajarea
+ *   explicită (ORDINE_EGALITATE, apoi codul) alege codul afișat ca ultim eveniment, codul returului din contradicție și motivul returului la
+ *   egalitate (motive diferite la aceeași oră = contradicția retur_motiv). Peste LIMITA_VALORI_CONTRADICTIE zile C0 / ore S2 distincte = de_verificat.
  */
 export const VERSIUNE_REGULA_CONTRADICTII = 'fan-contradictii-v1'
 export const REGULI_CONTRADICTII = Object.freeze({
-  ridicare_zile: 'prima_ridicare',      // mai multe zile C0: prima zi; o ridicare deja înregistrată nu se mută (BD)
+  ridicare_zile: 'prima_ridicare',      // mai multe zile C0: prima zi; o ridicare deja înregistrată nu se mută (BD); BD-ul ia prima zi POSIBILĂ (≥ generare, ≤ azi)
   livrare_ore: 'ultima_livrare',        // mai multe ore S2: ultima oră a curierului
   livrare_retur: 'final_ulterior',      // livrare și retur: finalul ulterior câștigă; egalitate / retur fără oră → retur
-  retur_motiv: 'ultimul_semnal',        // (doar între răspunsuri, BD) alt motiv de retur: cel al răspunsului mai nou; lipsa lui păstrează motivul cunoscut
-  ridicare_data_imposibila: 'data_imposibila',   // (doar BD) C0 înainte de generarea AWB-ului / în viitor: ridicarea NU se înregistrează
+  // alt motiv de retur: între răspunsuri (BD) = motivul răspunsului mai nou (lipsa lui păstrează motivul cunoscut); în ACELAȘI răspuns (runda 3) =
+  // semnale cu motive diferite la ACEEAȘI oră (ultima oră a semnalelor) → motivul după ORDINE_EGALITATE (refuz > adresă > mutat > avizat)
+  retur_motiv: 'ultimul_semnal',
+  ridicare_data_imposibila: 'data_imposibila',   // (doar BD) C0 înainte de generarea AWB-ului / în viitor: ziua aceea NU se înregistrează (nici nu se păstrează)
 })
+// Runda 3 #1155 (Jakarinos r2 P2, L12 / L19): limita COMUNĂ a valorilor unei contradicții, aceeași în BD (validarea din fn_red_fan_urmarire_scrie și
+// CHECK-ul red_fan_contradictii.valori, 20270102a; testul de paritate le compară). Peste ea (un răspuns FAN cu > 50 de zile C0 / ore S2 distincte)
+// rândul e „de verificat” FĂRĂ fapte din acel răspuns, cu numărul în motiv: nimic nu se taie în tăcere și BD-ul nu primește ce ar refuza
+// (un refuz 22023 ar anula toată bucata, cu celelalte AWB-uri).
+export const LIMITA_VALORI_CONTRADICTIE = 50
+// Runda 3 #1155 (Jakarinos r2 P1, L11 / L19): DEPARTAJAREA evenimentelor cu ACEEAȘI oră, explicită și independentă de ordinea listei FAN.
+// Ordinea completă a evenimentelor = (ora, rangul categoriei în lista de mai jos, codul); rang mai mare = „mai final” la egalitate. Retururile și
+// semnalele de retur stau la capăt (egalitatea merge la retur), apoi codurile de verificat de om; mișcarea plicului la început.
+export const ORDINE_EGALITATE = Object.freeze(['inregistrat', 'tranzit', 'neutru', 'ridicat', 'avizat', 'livrat', 'confirmare_refuzata', 'de_verificat',
+  'necunoscut', 'mutat', 'adresa', 'refuz', 'retur'])
+const rangEgalitate = cat => ORDINE_EGALITATE.indexOf(cat || 'necunoscut')
+const ordineEvenimente = (a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : rangEgalitate(a.cat) - rangEgalitate(b.cat) || (a.cod < b.cod ? -1 : a.cod > b.cod ? 1 : 0))
+const SEMNAL_FINAL_RETUR = ['refuz', 'adresa', 'mutat']
 export function rezumatUrmarireFan(el) {
   const gol = { urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [] }
   if (!el || typeof el !== 'object') return { ...gol, motiv: 'element de urmărire fără formă cunoscută' }
@@ -397,24 +417,31 @@ export function rezumatUrmarireFan(el) {
     if (!RE_COD_EVENIMENT.test(cod) || !d) { stricat = true; continue }
     ev.push({ cod, la: d.local, data: d.data, cat: categorieEveniment(cod) })
   }
-  ev.sort((a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : 0))
+  // ordinea COMPLETĂ (ora, rangul ORDINE_EGALITATE, codul): același set de evenimente dă același rezultat în orice ordine a listei FAN (runda 3 P1)
+  ev.sort(ordineEvenimente)
   const ultim = ev.at(-1) || null
   const cronologie = { ultim_eveniment: ultim?.cod || null, ultim_eveniment_la: ultim?.la || null }
   if (stricat) return { ...gol, ...cronologie, motiv: 'evenimente cu cod sau dată de formă necunoscută (nimic înregistrat automat din acest răspuns)' }
+  // „ultimul eveniment” = TOATE evenimentele de la ora maximă (nu doar elementul de la capătul listei): fiecare regulă care privește finalul le vede pe toate
+  const laFinal = ev.filter(e => e.la === ultim?.la)
   // 1. TOATE contradicțiile, înaintea faptelor (Jakarinos #1155 r1 P1: nu se oprește la prima)
   const contradictii = []
   const distincte = (cat, cheie) => [...new Set(ev.filter(e => e.cat === cat).map(e => e[cheie]))].sort()
   const zileC0 = distincte('ridicat', 'data'), oreS2 = distincte('livrat', 'la')
+  // runda 3 P2 (contractul JS = BD): peste limita comună de valori = „de verificat”, fără fapte, cu numărul în motiv (nimic tăiat în tăcere)
+  const prea = [['zile de ridicare (C0)', zileC0.length], ['ore de livrare (S2)', oreS2.length]].filter(([, n]) => n > LIMITA_VALORI_CONTRADICTIE)
+  if (prea.length) return { ...gol, ...cronologie, motiv: `prea multe ${prea.map(([t, n]) => `${t}: ${n}`).join(', ')} distincte în răspuns (limita ${LIMITA_VALORI_CONTRADICTIE}): nimic înregistrat automat, de verificat de om` }
   const ridicat = zileC0[0] || null
   if (zileC0.length > 1) contradictii.push({ tip: 'ridicare_zile', valori: zileC0, ales: ridicat, regula: REGULI_CONTRADICTII.ridicare_zile })
   const livratLa = oreS2.at(-1) || null
   if (oreS2.length > 1) contradictii.push({ tip: 'livrare_ore', valori: oreS2, ales: livratLa, regula: REGULI_CONTRADICTII.livrare_ore })
-  // dovezile de retur: codurile de retur (S16 / S33 / S43), ULTIMUL eveniment = refuz / adresă / mutat, returnAwbNumber (fără oră = cel mai târziu)
+  // dovezile de retur: codurile de retur (S16 / S33 / S43), un refuz / adresă / mutat la ORA FINALĂ (oricare dintre evenimentele de la ora
+  // maximă, nu doar ultimul din listă), returnAwbNumber (fără oră = cel mai târziu)
   const semnale = ev.filter(e => RETUR_DIN_CATEGORIE[e.cat])
   const ultimSemnal = semnale.at(-1) || null
-  const returEv = [...ev.filter(e => e.cat === 'retur'), ...(ultim && ['refuz', 'adresa', 'mutat'].includes(ultim.cat) ? [ultim] : [])]
+  const returEv = [...ev.filter(e => e.cat === 'retur'), ...laFinal.filter(e => SEMNAL_FINAL_RETUR.includes(e.cat))].sort(ordineEvenimente)
   const returAwb = !!textAwb(el.returnAwbNumber)
-  const ultimRetur = returEv.sort((a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : 0)).at(-1) || null
+  const ultimRetur = returEv.at(-1) || null
   const areRetur = returAwb || !!ultimRetur
   const returLa = returAwb ? null : ultimRetur?.la || null
   let final = areRetur ? 'retur' : livratLa ? 'livrat' : null
@@ -422,14 +449,21 @@ export function rezumatUrmarireFan(el) {
     final = returLa !== null && livratLa > returLa ? 'livrat' : 'retur'
     contradictii.push({ tip: 'livrare_retur', valori: [`S2 ${livratLa}`, returAwb ? 'returnAwbNumber' : `${ultimRetur.cod} ${returLa}`], ales: final, regula: REGULI_CONTRADICTII.livrare_retur })
   }
+  const returPropus = final === 'retur' && ultimSemnal ? RETUR_DIN_CATEGORIE[ultimSemnal.cat] : null
+  // motive de retur diferite la ACEEAȘI oră (ultima oră a semnalelor): motivul după ORDINE_EGALITATE, contradicția păstrată (doar dacă finalul e retur)
+  if (returPropus) {
+    const motive = [...new Set(semnale.filter(e => e.la === ultimSemnal.la).map(e => RETUR_DIN_CATEGORIE[e.cat]))].sort()
+    if (motive.length > 1) contradictii.push({ tip: 'retur_motiv', valori: motive, ales: returPropus, regula: REGULI_CONTRADICTII.retur_motiv })
+  }
   // 2. faptele, după regulă
-  const fapte = { ridicat_propus: ridicat, livrat_la: final === 'livrat' ? livratLa : null,
-    retur_propus: final === 'retur' && ultimSemnal ? RETUR_DIN_CATEGORIE[ultimSemnal.cat] : null, retur_la: final === 'retur' ? returLa : null }
+  const fapte = { ridicat_propus: ridicat, livrat_la: final === 'livrat' ? livratLa : null, retur_propus: returPropus, retur_la: final === 'retur' ? returLa : null }
   const rez = (urmarire_stare, extra = {}) => ({ ...cronologie, ...fapte, urmarire_stare, contradictii, ...extra })
   if (final === 'retur') return rez('retur')
   if (ev.some(e => e.cat === 'confirmare_refuzata')) return rez('de_verificat', { motiv: 'confirmare refuzată (S50): judecată umană' })
-  if (ultim && !ultim.cat) return rez('de_verificat', { motiv: `ultimul eveniment are un cod necunoscut (${ultim.cod})` })
-  if (ultim && ultim.cat === 'de_verificat') return rez('de_verificat', { motiv: `ultimul eveniment (${ultim.cod}) cere verificarea omului (sens nelimpede pentru o convocare)` })
+  // la ora finală: orice cod necunoscut / de verificat, oricare ar fi poziția lui în listă (codurile, în ordine, în motiv)
+  const necunoscute = laFinal.filter(e => !e.cat).map(e => e.cod), deVerificat = laFinal.filter(e => e.cat === 'de_verificat').map(e => e.cod)
+  if (necunoscute.length) return rez('de_verificat', { motiv: `ultimul eveniment are un cod necunoscut (${necunoscute.join(', ')})` })
+  if (deVerificat.length) return rez('de_verificat', { motiv: `ultimul eveniment (${deVerificat.join(', ')}) cere verificarea omului (sens nelimpede pentru o convocare)` })
   if (final === 'livrat') return rez('livrat')
   if (ridicat) return rez('ridicat')
   return ev.length ? rez('in_tranzit') : rez('fara_evenimente')

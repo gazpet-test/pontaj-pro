@@ -330,7 +330,88 @@ const CAZURI_CONTRADICTII = [
   ['adresă greșită, apoi livrat → livrat, fără contradicție', ev(['S4', '2026-11-19 10:00:00'], ['S2', '2026-11-20 10:40:00']), { urmarire_stare: 'livrat', retur_propus: null }, []],
   ['un eveniment de formă necunoscută → de verificat, NICIUN fapt (cronologia incompletă)', { events: [{ id: 'C0', date: '2026-11-18 10:00:00' }, { id: 'C0', date: '18.11.2026' }, { id: 'S2', date: '2026-11-20 10:40:00' }] },
     { urmarire_stare: 'de_verificat', ridicat_propus: null, livrat_la: null, retur_propus: null, ultim_eveniment: 'S2' }, []],
+  // runda 3 (Jakarinos #1155 r2 P1): reproducerea recenzentului, în ordinea care dădea „livrat” fără contradicție
+  ['[S6, S2] la aceeași oră (ordinea care dădea „livrat”) → retur „refuz”, cu contradicția', ev(['S6', '2026-11-20 10:00:00'], ['S2', '2026-11-20 10:00:00']),
+    { urmarire_stare: 'retur', livrat_la: null, retur_propus: 'refuz', retur_la: '2026-11-20 10:00:00', ultim_eveniment: 'S6' },
+    [['livrare_retur', 'retur', ['S2 2026-11-20 10:00:00', 'S6 2026-11-20 10:00:00']]]],
+  ['refuz și adresă greșită la aceeași oră → motivul refuz (departajarea), contradicția retur_motiv', ev(['S6', '2026-11-20 10:00:00'], ['S4', '2026-11-20 10:00:00']),
+    { urmarire_stare: 'retur', retur_propus: 'refuz', ultim_eveniment: 'S6' }, [['retur_motiv', 'refuz', ['adresa_incompleta', 'refuz']]]],
 ]
+// ── runda 3 P1: aceleași evenimente în ORICE ordine dau același rezultat (toate permutările), cu așteptările scrise de mână (L25) ──
+const T_ = '2026-11-20 10:00:00', T0_ = '2026-11-19 09:00:00'
+const CAZURI_EGALITATE = [
+  ['S2 + S6 la aceeași oră (reproducerea r2)', [['S2', T_], ['S6', T_]],
+    { urmarire_stare: 'retur', ultim_eveniment: 'S6', livrat_la: null, retur_propus: 'refuz', retur_la: T_ }, [['livrare_retur', 'retur', [`S2 ${T_}`, `S6 ${T_}`]]]],
+  ['C0, apoi S2 + S4 + S6 la aceeași oră', [['C0', T0_], ['S2', T_], ['S4', T_], ['S6', T_]],
+    { urmarire_stare: 'retur', ultim_eveniment: 'S6', ridicat_propus: '2026-11-19', retur_propus: 'refuz', retur_la: T_ },
+    [['livrare_retur', 'retur', [`S2 ${T_}`, `S6 ${T_}`]], ['retur_motiv', 'refuz', ['adresa_incompleta', 'refuz']]]],
+  ['S2 + S99 la aceeași oră → de verificat (faptul livrării păstrat)', [['S2', T_], ['S99', T_]],
+    { urmarire_stare: 'de_verificat', ultim_eveniment: 'S99', livrat_la: T_ }, []],
+  ['C0 + H3 + S98 la aceeași oră → ridicat, ultimul eveniment C0', [['C0', T_], ['H3', T_], ['S98', T_]],
+    { urmarire_stare: 'ridicat', ultim_eveniment: 'C0', ridicat_propus: '2026-11-20' }, []],
+  ['S2 + S16 + S6 la aceeași oră → retur, codul returului S16, motivul refuz', [['S2', T_], ['S16', T_], ['S6', T_]],
+    { urmarire_stare: 'retur', ultim_eveniment: 'S16', retur_propus: 'refuz', retur_la: T_ }, [['livrare_retur', 'retur', [`S2 ${T_}`, `S16 ${T_}`]]]],
+  ['două S2 + S50 la ora a doua → de verificat (S50), ultima oră de livrare', [['S2', T0_], ['S2', T_], ['S50', T_]],
+    { urmarire_stare: 'de_verificat', ultim_eveniment: 'S50', livrat_la: T_ }, [['livrare_ore', T_, [T0_, T_]]]],
+  ['S6 + S2 + cod necunoscut X7 la aceeași oră → retur (retururile la capăt)', [['S6', T_], ['S2', T_], ['X7', T_]],
+    { urmarire_stare: 'retur', ultim_eveniment: 'S6', retur_propus: 'refuz' }, [['livrare_retur', 'retur', [`S2 ${T_}`, `S6 ${T_}`]]]],
+  ['S2 + X7 la aceeași oră → de verificat (codul necunoscut, oriunde ar sta)', [['X7', T_], ['S2', T_]],
+    { urmarire_stare: 'de_verificat', ultim_eveniment: 'X7', livrat_la: T_ }, []],
+  ['șase evenimente (C0 + H3 la ora 1; S2, S6, S4, S16 la ora 2), 720 de ordini', [['C0', T0_], ['H3', T0_], ['S2', T_], ['S6', T_], ['S4', T_], ['S16', T_]],
+    { urmarire_stare: 'retur', ultim_eveniment: 'S16', ridicat_propus: '2026-11-19', livrat_la: null, retur_propus: 'refuz', retur_la: T_ },
+    [['livrare_retur', 'retur', [`S2 ${T_}`, `S16 ${T_}`]], ['retur_motiv', 'refuz', ['adresa_incompleta', 'refuz']]]],
+]
+const permutari = a => (a.length <= 1 ? [a] : a.flatMap((x, i) => permutari([...a.slice(0, i), ...a.slice(i + 1)]).map(p => [x, ...p])))
+const verificaEgalitate = rz => {
+  for (const [nume, evs, fapte, contr] of CAZURI_EGALITATE) {
+    let primul = null
+    for (const p of permutari(evs)) {
+      const r = rz(ev(...p)), s = JSON.stringify(r)
+      if (primul === null) primul = s
+      else if (s !== primul) return `${nume}: ordinea ${p.map(e => e[0]).join(',')} dă alt rezultat: ${s} față de ${primul}`
+      for (const [k, v] of Object.entries(fapte)) if (r[k] !== v) return `${nume} (ordinea ${p.map(e => e[0]).join(',')}): ${k} = ${JSON.stringify(r[k])}, așteptat ${JSON.stringify(v)}`
+      const c = JSON.stringify(r.contradictii.map(x => [x.tip, x.ales, x.valori, x.regula])), a = JSON.stringify(contr.map(([t, al, v]) => [t, al, v, CR[t]]))
+      if (c !== a) return `${nume} (ordinea ${p.map(e => e[0]).join(',')}): contradicții ${c}, așteptat ${a}`
+    }
+  }
+  return null
+}
+// ── runda 3 P2: limita COMUNĂ a valorilor (50, = BD) — 50 trec cu toate valorile; 51 = „de verificat” fără fapte; bucata mixtă ──
+const oreS2 = n => Array.from({ length: n }, (_, i) => ['S2', `2026-11-20 ${String(8 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00`])
+const zileC0 = n => Array.from({ length: n }, (_, i) => ['C0', new Date(Date.UTC(2026, 8, 1) + i * 86400000).toISOString().slice(0, 10) + ' 10:00:00'])
+const verificaLimita = F => {
+  const rz = F.rezumatUrmarireFan
+  const r50 = rz(ev(...oreS2(50))), r51 = rz(ev(...oreS2(51)))
+  if (r50.urmarire_stare !== 'livrat' || r50.contradictii.length !== 1 || r50.contradictii[0].valori.length !== 50 || r50.livrat_la !== '2026-11-20 08:49:00') return '50 de ore S2: ' + JSON.stringify(r50).slice(0, 200)
+  if (r51.urmarire_stare !== 'de_verificat' || r51.contradictii.length || r51.livrat_la !== null || !/51/.test(r51.motiv || '') || !/limita 50/.test(r51.motiv || '')) return '51 de ore S2: ' + JSON.stringify(r51).slice(0, 200)
+  const z50 = rz(ev(...zileC0(50))), z51 = rz(ev(...zileC0(51)))
+  if (z50.urmarire_stare !== 'ridicat' || z50.ridicat_propus !== '2026-09-01' || z50.contradictii[0]?.valori.length !== 50) return '50 de zile C0: ' + JSON.stringify(z50).slice(0, 200)
+  if (z51.urmarire_stare !== 'de_verificat' || z51.ridicat_propus !== null || z51.contradictii.length) return '51 de zile C0: ' + JSON.stringify(z51).slice(0, 200)
+  // bucata mixtă: un AWB peste limită nu strică celelalte AWB-uri din aceeași cerere
+  const u = F.interpreteazaUrmarire(200, { data: [{ awbNumber: '7000000001', events: oreS2(51).map(([id, date]) => ({ id, date })) },
+    { awbNumber: '7000000002', events: [{ id: 'C0', date: T0_ }] }] }, ['7000000001', '7000000002'])
+  if (!u.ok || u.pe_awb.get('7000000001')?.urmarire_stare !== 'de_verificat' || u.pe_awb.get('7000000002')?.urmarire_stare !== 'ridicat') return 'bucata mixtă: ' + JSON.stringify([...u.pe_awb])
+  return null
+}
+// ── paritatea cod ↔ BD (L19): limita, tipurile din același răspuns și motivele de retur = cele din migrare ──
+const SQL_MIG = readFileSync('supabase/migrations/20270102a_redari_fan_urmarire_auto.sql', 'utf8').replace(/\r/g, '')
+const verificaParitateBD = F => {
+  const L = F.LIMITA_VALORI_CONTRADICTIE
+  const nVal = [...SQL_MIG.matchAll(/jsonb_array_length\(e -> 'valori'\) NOT BETWEEN 2 AND (\d+)/g)].map(x => Number(x[1]))
+  const nChk = [...SQL_MIG.matchAll(/jsonb_array_length\(valori\) BETWEEN 1 AND (\d+)\)/g)].map(x => Number(x[1]))
+  if (nVal.length !== 1 || nVal[0] !== L || nChk.length !== 1 || nChk[0] !== L) return `limita: cod ${L}, validare ${nVal}, CHECK ${nChk}`
+  const v0 = SQL_MIG.indexOf("WHEN ((e ->> 'tip', e ->> 'regula') IN ("), v1 = SQL_MIG.indexOf('IS NOT TRUE THEN false', v0)
+  const perechi = [...SQL_MIG.slice(v0, v1).matchAll(/\('([a-z_]+)', '([a-z_]+)'\)/g)].map(m => [m[1], m[2]])
+  const asteptat = Object.entries(F.REGULI_CONTRADICTII).filter(([t]) => t !== 'ridicare_data_imposibila')
+  if (JSON.stringify(perechi.sort()) !== JSON.stringify(asteptat.sort())) return 'tipurile din același răspuns: BD ' + JSON.stringify(perechi) + ', cod ' + JSON.stringify(asteptat)
+  const mot = (/WHEN 'retur_motiv' THEN '\^\(([a-z_|]+)\)\$'/.exec(SQL_MIG) || [])[1]?.split('|').sort()
+  if (!mot || !Object.values(F.RETUR_DIN_CATEGORIE).every(m => mot.includes(m))) return 'motivele de retur din cod lipsesc din validarea BD: ' + mot
+  if (JSON.stringify(F.ORDINE_EGALITATE.filter(c => c !== 'necunoscut').sort()) !== JSON.stringify(Object.keys(F.EVENIMENTE_FAN).sort())) return 'ORDINE_EGALITATE nu acoperă exact categoriile'
+  return null
+}
+VERIFICARI.egalitate = async M => verificaEgalitate(M.__fan.rezumatUrmarireFan)
+VERIFICARI.limita = async M => verificaLimita(M.__fan)
+VERIFICARI.paritateBD = async M => verificaParitateBD(M.__fan)
 const verificaContradictii = rz => {
   for (const [nume, el, fapte, contr] of CAZURI_CONTRADICTII) {
     const r = rz(el)
@@ -370,6 +451,26 @@ describe('regula contradicțiilor (decizia owner-ului 21.11.2026): toate evaluat
   it('verificările adăugate în runda 2 (contradicții, forma răspunsului) trec pe codul real', async () => {
     expect(await VERIFICARI.contradictii(REAL)).toBeNull()
     expect(await VERIFICARI.formaRaspuns(REAL)).toBeNull()
+  })
+  // runda 3 (Jakarinos #1155 r2)
+  it.each(CAZURI_EGALITATE)('P1 — toate ordinile: %s', (_, evs, fapte, contr) => {
+    const rez = permutari(evs).map(p => rezumatUrmarireFan(ev(...p)))
+    expect(new Set(rez.map(r => JSON.stringify(r))).size).toBe(1)
+    expect(rez[0]).toMatchObject(fapte)
+    expect(rez[0].contradictii.map(x => [x.tip, x.ales, x.valori, x.regula])).toEqual(contr.map(([t, a, v]) => [t, a, v, CR[t]]))
+  })
+  it('P1 — reproducerea recenzentului: [S2, S6] și [S6, S2] la 10:00 dau același retur „refuz” și aceeași contradicție', () => {
+    const a = rezumatUrmarireFan(ev(['S2', T_], ['S6', T_])), b = rezumatUrmarireFan(ev(['S6', T_], ['S2', T_]))
+    expect(a).toEqual(b)
+    expect([a.urmarire_stare, a.retur_propus, a.contradictii.length]).toEqual(['retur', 'refuz', 1])
+  })
+  it('P2 — limita comună (50) și bucata mixtă; paritatea cod ↔ BD (limita, tipurile, motivele, categoriile)', async () => {
+    expect(verificaLimita(FAN_REAL)).toBeNull()
+    expect(verificaParitateBD(FAN_REAL)).toBeNull()
+    expect(FAN_REAL.LIMITA_VALORI_CONTRADICTIE).toBe(50)
+  })
+  it('verificările adăugate în runda 3 (egalitate, limită, paritate) trec pe codul real', async () => {
+    for (const k of ['egalitate', 'limita', 'paritateBD']) expect(await VERIFICARI[k](REAL)).toBeNull()
   })
 })
 
@@ -457,11 +558,14 @@ mkdirSync(join(process.cwd(), '.tmp'), { recursive: true })
 const DIR = mkdtempSync(join(process.cwd(), '.tmp', 'fan_auto_mut_'))
 afterAll(() => rmSync(DIR, { recursive: true, force: true }))
 let nrMutant = 0
+// `din` = text (o mutație) sau listă de perechi [din, în] (mutație compusă, runda 3: ex. codul vechi = două schimbări deodată)
 async function cuMutatie(fisier, din, in_) {
   const s = { ...SURSE }
-  const parti = s[fisier].split(din)
-  if (parti.length !== 2) throw new Error(`mutația nu se aplică exact o dată în ${fisier}: ${din.slice(0, 80)}`)
-  s[fisier] = parti.join(in_)
+  for (const [d, i] of Array.isArray(din) ? din : [[din, in_]]) {
+    const parti = s[fisier].split(d)
+    if (parti.length !== 2) throw new Error(`mutația nu se aplică exact o dată în ${fisier}: ${d.slice(0, 80)}`)
+    s[fisier] = parti.join(i)
+  }
   const d = join(DIR, 'm' + (++nrMutant))
   mkdirSync(d, { recursive: true })
   for (const [n, t] of Object.entries(s)) writeFileSync(join(d, n), t)
@@ -493,6 +597,16 @@ const MUTANTI = [
   ['oprire la prima contradicție (livrare + retur neevaluat după alta)', 'redariFan.mjs', '  if (areRetur && livratLa) {', '  if (areRetur && livratLa && !contradictii.length) {'],
   ['faptele dintr-o cronologie incompletă înregistrate', 'redariFan.mjs', "  if (stricat) return { ...gol, ...cronologie, motiv:", "  if (false) return { ...gol, ...cronologie, motiv:"],
   ['transportul nu trimite contradicțiile în BD', 'redariFanTransport.mjs', 'retur_la: z.retur_la ?? null, contradictii: z.contradictii || [] }', 'retur_la: z.retur_la ?? null, contradictii: [] }'],
+  // runda 3 (Jakarinos #1155 r2): P1 egalitatea orelor, P2 limita comună
+  ['egalitate: ordinea doar după oră (fără departajare)', 'redariFan.mjs', '  ev.sort(ordineEvenimente)', '  ev.sort((a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : 0))'],
+  ['egalitate: codul r2 (doar ora + doar ultimul element al listei)', 'redariFan.mjs', [['  ev.sort(ordineEvenimente)', '  ev.sort((a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : 0))'],
+    ['  const laFinal = ev.filter(e => e.la === ultim?.la)', '  const laFinal = ultim ? [ultim] : []']]],
+  ['egalitate: livrarea departajată după retururi', 'redariFan.mjs', [["'avizat', 'livrat', 'confirmare_refuzata'", "'avizat', 'confirmare_refuzata'"], ["'refuz', 'retur'])", "'refuz', 'retur', 'livrat'])"]]],
+  ['egalitate: refuzul / adresa de la ora finală nu mai sunt dovezi de retur', 'redariFan.mjs', '...laFinal.filter(e => SEMNAL_FINAL_RETUR.includes(e.cat))].sort(ordineEvenimente)', '].sort(ordineEvenimente)'],
+  ['egalitate: motivul = primul semnal de la aceeași oră (nedepartajat)', 'redariFan.mjs', '  const ultimSemnal = semnale.at(-1) || null', '  const ultimSemnal = semnale.filter(e => e.la === semnale.at(-1)?.la)[0] || null'],
+  ['egalitate: contradicția retur_motiv neînregistrată', 'redariFan.mjs', '    if (motive.length > 1) contradictii.push(', '    if (false) contradictii.push('],
+  ['limita: peste 50 de valori trimis mai departe', 'redariFan.mjs', '  if (prea.length) return', '  if (false) return'],
+  ['limita: 20 în cod (≠ BD)', 'redariFan.mjs', 'export const LIMITA_VALORI_CONTRADICTIE = 50', 'export const LIMITA_VALORI_CONTRADICTIE = 20'],
   ['plafonul local scos', 'redariFanUrmarireAuto.mjs', "    if (apeluri >= plafon) return { ok: false, cod: 'plafon_local' }\n", ''],
   ['bugetul de timp scos', 'redariFanUrmarireAuto.mjs', "    if (deps.acum() - t0 > BUGET_RULARE_MS) return { ok: false, cod: 'buget_timp' }\n", ''],
   ['eroarea curierului nu oprește rularea', 'redariFanUrmarireAuto.mjs', "      if (r.status === 502) return incheie(", "      if (r.status === 502) { sarite++; continue }\n      if (false) return incheie("],

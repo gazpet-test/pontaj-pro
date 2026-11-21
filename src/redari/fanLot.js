@@ -307,8 +307,9 @@ export const ETICHETE_CONTRADICTIE = Object.freeze({
 })
 export const ETICHETE_REGULA = Object.freeze({
   prima_ridicare: 'rămâne prima zi de ridicare', ultima_livrare: 'rămâne ultima oră de livrare',
-  final_ulterior: 'câștigă evenimentul final ulterior (la egalitate sau retur fără oră: retur)', ultimul_semnal: 'rămâne motivul răspunsului mai nou',
-  data_imposibila: 'ridicarea nu s-a înregistrat (înainte de generarea AWB-ului sau în viitor)',
+  final_ulterior: 'câștigă evenimentul final ulterior (la egalitate sau retur fără oră: retur)',
+  ultimul_semnal: 'rămâne motivul cel mai nou (la aceeași oră: refuz, apoi adresă, mutat, avizat)',
+  data_imposibila: 'ziua aceasta nu s-a înregistrat (înainte de generarea AWB-ului sau în viitor)',
 })
 /** Tabelul contradicțiilor lipsește (migrarea 20270102a neaplicată): PostgREST 42P01 / PGRST205 ≠ eroare de citire (L18). */
 export const lipsaTabelContradictii = e => e?.code === '42P01' || e?.code === 'PGRST205'

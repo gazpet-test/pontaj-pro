@@ -74,8 +74,19 @@ Toate contradicțiile se evaluează **înainte** de a construi faptele (nu doar 
 | zile de ridicare (C0) diferite | **prima zi** | ziua deja înregistrată **rămâne** (pe plicul real data expedierii e imuabilă) |
 | ore de livrare (S2) diferite | **ultima oră** | **ultima oră** dintre cele două |
 | livrare și retur | **evenimentul final ulterior** după ora curierului; la egalitate sau cu retur fără oră (`returnAwbNumber`) → **retur** | retur nou peste livrare cunoscută: retur dacă returul n-are oră sau e la / după livrare; livrare nouă peste retur cunoscut: livrat doar dacă livrarea e **după** ultimul eveniment cunoscut la înregistrarea returului, altfel retur |
-| motive de retur diferite | (un singur motiv: al ultimului semnal) | motivul răspunsului **mai nou**; un răspuns fără motiv păstrează motivul cunoscut |
-| dată C0 imposibilă (înainte de generarea AWB-ului / în viitor) | — | ridicarea **nu** se înregistrează (rândul rămâne `generat`) |
+| motive de retur diferite | motivul ultimului semnal; semnale cu motive diferite la **aceeași oră** → motivul după departajare (refuz > adresă > mutat > avizat) + semnal `retur_motiv` | motivul răspunsului **mai nou**; un răspuns fără motiv păstrează motivul cunoscut |
+| dată C0 imposibilă (înainte de ziua generării AWB-ului / după azi, ora României) | — | ziua aceea **nu** se înregistrează și **nu** se păstrează în `ridicat_propus`; se ia prima zi C0 **posibilă** a răspunsului (dacă există), altfel rândul rămâne `generat`, starea „în tranzit”; ziua respinsă = un semnal pe zi, doar în audit |
+
+**Evenimente la aceeași oră (runda 3).** Rezultatul nu depinde de ordinea în care FAN listează evenimentele: „ultimul eveniment” = **toate**
+evenimentele de la ora maximă. Un refuz / adresă greșită / mutat la ora finală e dovadă de retur oriunde ar sta în listă (S2 + S6 la 10:00 →
+retur „refuz” + semnalul livrare / retur, în ambele ordini); un cod necunoscut sau „de verificat” la ora finală dă „de verificat” (faptele rămân).
+Departajarea explicită (`ORDINE_EGALITATE` în `redariFan.mjs`: înregistrat < tranzit < neutru < ridicat < avizat < livrat < confirmare refuzată <
+de verificat < necunoscut < mutat < adresă < refuz < retur, apoi codul) alege doar ce trebuie ales: codul afișat ca ultim eveniment, codul
+returului din semnal și motivul la egalitate. Probat pe **toate permutările** cazurilor (până la 720).
+
+**Limita valorilor (runda 3).** O contradicție are cel mult **50** de valori, aceeași limită în cod și în BD (validarea + CHECK-ul tabelului,
+test de paritate). Un răspuns cu peste 50 de zile C0 / ore S2 distincte pentru un AWB = rândul „de verificat”, **fără** fapte din acel răspuns, cu
+numărul în motiv; celelalte AWB-uri din aceeași cerere se scriu normal (nimic tăiat în tăcere, nicio bucată refuzată de BD).
 
 Un răspuns **fără** eveniment final nu șterge finalul cunoscut; un răspuns fără cronologie (`events: []`) doar consemnează „verificat la”;
 evenimentele identice repetate sunt un singur fapt; un eveniment de formă necunoscută = rândul „de verificat”, **fără** niciun fapt din acel
@@ -205,7 +216,10 @@ runner (refuză cât există rulări în istoric, contradicții înregistrate sa
   ridicare_auto, plicul neatins, CAS, garda TEST, numerele din BD), închiderea idempotentă, RLS, butonul F1, confirmările neschimbate; **K1–K11**:
   reproducerea P1 (trei contradicții în același răspuns), două / patru rulări succesive (urma rămâne, nu cere omul, observări), livrare ↔ retur între
   răspunsuri (ambele sensuri), două ore de livrare, date C0 imposibile, payload-ul extern refuzat (22023, 10 forme), RLS / scriere directă pe
-  contradicții, nicio coloană `*_contrazis`, lotul real fără ridicare automată; refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
+  contradicții, nicio coloană `*_contrazis`, lotul real fără ridicare automată; **K12–K17 (runda 3)**: ziua C0 imposibilă pe două rulări (nu se
+  salvează, corecția validă trece), în același răspuns și în viitor, ziua veche imposibilă înlocuită; limita de 50 (acceptat), 51 (de verificat),
+  bucata mixtă, 51 scris de mână = 22023; ordinile [S2, S6] / [S6, S2] identice în BD, motive la aceeași oră; paritatea cod → BD pe cazurile de
+  egalitate; 15 forme noi refuzate (22023); refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
   revenirea (refuz la fiecare urmă, inclusiv contradicții și ridicări automate; aplicare → revenire → re-aplicare); **mutanți SQL** + martorul;
   paritatea plafonului JS ↔ SQL; porțile 0e / Izometrie E2.
 - Pe clonă (coordonatorul): `supabase/tests/20270102a_redari_fan_urmarire_auto_doua_sesiuni.sh` — S1 două porniri suprapuse (B așteaptă, apoi
