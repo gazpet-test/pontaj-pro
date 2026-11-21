@@ -24,6 +24,12 @@
 -- „inlocuieste” pe 0001 muta randurile confirmate in istoric (inlocuite_confirmate = 2) — cu aceleasi linii, cititorii vechi vad EXACT acelasi rezultat ca
 -- inainte; ca SERVER, un rand neconfirmat strecurat pe 0001 nu intra in calcul si apare in lipsuri ('oferta_veche_neconfirmata'); oferta confirmata RETRASA
 -- (activ = false) sau SCOASA de server (ramasa doar in istoric) tine calea veche tot inchisa pe obiect.
+-- r6 (review #1158: 2 x P1 + P2 pe r5): liniile RPC pentru 0001 vin cu obiect_cod „ 0001 ” (spatii) si B200 in „MC” x 200 (= 2 x „100 MC”, randul vechi):
+-- randul confirmat se scrie in REPREZENTAREA EXISTENTA (obiect_cod '0001', um '100 MC', cantitate 2, pret 1000), deci cititorii vechi vad pe 0001 exact
+-- 2 randuri / 102 / 12000 (ca si cand ar fi fost scrise la fel); fisierul A (b3) inlocuit de B (b4) ramane „deja confirmat” (A -> B -> A = 23505);
+-- t_um_inlocuire (ultimele blocuri, pe P1 / 0001 cu decontat): inlocuirea cu A100 in „100 MC” (cheie decontata in M) = 22023 um_decontat, si cu
+-- accept_schimbare_um; cu A100 in „HM” x 1 (echivalent prin factor) trece si se scrie 'M' x 100; D400|#7 in BUC (fara decontat) = 22023 um_schimbat fara
+-- accept, trece cu accept (um_schimbate); obiectul nou ' st-3 ' al P3 se scrie 'St-3' (unitatea din proiect_unitati); cantitatea nereprezentabila = refuz.
 -- SESIUNE PROASPATA: primul bloc dupa fixturi verifica garda cu marcajul RPC LIPSA (NULL): fisierul se ruleaza intr-o sesiune noua, inainte ca
 -- vreun RPC sa fi pus marcajul (precondiția e verificata explicit).
 -- FIXTURI: pe clona, daca profiles / employees cer alte coloane NOT NULL, se completeaza DOAR blocul FIXTURI (restul nu depinde de ele).
@@ -67,6 +73,8 @@ BEGIN
   INSERT INTO rd_fix VALUES ('p2', v);
   INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P3', 'Dry P3 fara oferta', 9101) RETURNING id INTO v;
   INSERT INTO rd_fix VALUES ('p3', v);
+  -- r6: o unitate a P3 cu obiect_cod 'St-3' (20261208a), FARA randuri in proiect_articole: importul obiectului ' st-3 ' trebuie scris 'St-3' (t_um_inlocuire)
+  INSERT INTO public.proiect_unitati (proiect_id, tip, nume, obiect_cod) VALUES (v, 'obiect', 'Statie robinete 3', 'St-3');
   -- h / i: conturi RESTRANSE pe proiect (20261209a) la P2 (viewer / editor); scrierea directa aici e fixtura (pe productie: fn_executie_acces_proiect_seteaza)
   INSERT INTO public.executie_acces_proiect (profile_id, proiect_id, nivel) VALUES
     ('f0000000-0000-4000-8000-000000000011', (SELECT id FROM rd_fix WHERE k = 'p2'), 'viewer'), ('f0000000-0000-4000-8000-000000000012', (SELECT id FROM rd_fix WHERE k = 'p2'), 'editor');
@@ -799,8 +807,9 @@ BEGIN
 END $t$;
 RESET ROLE;
 -- (2/7) MP-ul (b) confirma prin RPC DOAR obiectul 0001 al P3 (import PARTIAL): randurile vechi ale lui 0001 sunt MUTATE in istoric (inlocuite = 3, niciunul
---    confirmat), baza 0001 = doar oferta confirmata (A100 = 100, nu 190; B200 = 2 MC, UM-ul vechi „100 MC” nu blocheaza; C300 lipseste), obiectul 0002
---    ramane NEATINS in baza cu valoarea veche (E500 = 40 M, F600 = 3 BUC) si e declarat in lipsuri ('oferta_neconfirmata'); istoricul e citibil de MP
+--    confirmat), baza 0001 = doar oferta confirmata (A100 = 100, nu 190; B200 = 200 MC venit ca „MC” x 200 pe randul vechi in „100 MC” x 2 — acelasi UM
+--    normalizat, deci trece; C300 lipseste), obiectul 0002 ramane NEATINS in baza cu valoarea veche (E500 = 40 M, F600 = 3 BUC) si e declarat in lipsuri
+--    ('oferta_neconfirmata'); istoricul e citibil de MP. r6: liniile vin cu obiect_cod „ 0001 ” — identitatea canonica e aceeasi, reprezentarea scrisa e cea existenta
 SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 DO $t$
@@ -815,14 +824,15 @@ BEGIN
   IF s IS DISTINCT FROM 'obiect 0001: contract_initial 3; obiect 0002: contract_initial 2' THEN RAISE EXCEPTION 't_oferta_confirmata PRECONDITIE: lipsurile oferta_neconfirmata pe P3 inainte: %', coalesce(s, 'nimic'); END IF;
   IF EXISTS (SELECT 1 FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p3')) THEN RAISE EXCEPTION 't_oferta_confirmata PRECONDITIE: istoricul P3 nu e gol'; END IF;
   v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p3'), 'contract_initial', NULL, NULL, NULL, 'oferta3_ob1.xlsx', repeat('b3', 32), $j$[
-    {"obiect_cod":"0001","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"1","cod":"A100","denumire":"Conducta","um":"M","cantitate":100,"pret_unitar":100,"valoare":10000},
-    {"obiect_cod":"0001","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"2","cod":"B200","denumire":"Sapatura","um":"MC","cantitate":2,"pret_unitar":1000,"valoare":2000}]$j$::jsonb);
-  IF (v->>'inserate')::int <> 2 OR (v->>'inlocuite')::int <> 3 OR (v->>'inlocuite_confirmate')::int <> 0 OR v->'obiecte' IS DISTINCT FROM '["0001||"]'::jsonb THEN
-    RAISE EXCEPTION 't_oferta_confirmata FAIL import partial 0001: % (astept inserate 2, inlocuite 3, inlocuite_confirmate 0, obiecte ["0001||"])', v;
+    {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"1","cod":"A100","denumire":"Conducta","um":"M","cantitate":100,"pret_unitar":100,"valoare":10000},
+    {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"2","cod":"B200","denumire":"Sapatura","um":"MC","cantitate":200,"pret_unitar":10,"valoare":2000}]$j$::jsonb);
+  IF (v->>'inserate')::int <> 2 OR (v->>'inlocuite')::int <> 3 OR (v->>'inlocuite_confirmate')::int <> 0 OR v->'obiecte' IS DISTINCT FROM '["0001||"]'::jsonb
+     OR v->'um_schimbate' IS DISTINCT FROM '[]'::jsonb THEN
+    RAISE EXCEPTION 't_oferta_confirmata FAIL import partial 0001: % (astept inserate 2, inlocuite 3, inlocuite_confirmate 0, obiecte ["0001||"], um_schimbate [])', v;
   END IF;
   SELECT string_agg(b.cheie || '=' || b.cantitate::text || ' ' || b.um || ' r' || b.randuri, '; ' ORDER BY b.cheie) AS s, coalesce(sum(b.valoare), 0) AS val INTO r
     FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p3');
-  IF r.s IS DISTINCT FROM '0001|D1|A100=100 M r1; 0001|D1|B200=2 MC r1; 0002|D2|E500=40 M r1; 0002|D2|F600=3 BUC r1' OR r.val <> 16300 THEN
+  IF r.s IS DISTINCT FROM '0001|D1|A100=100 M r1; 0001|D1|B200=200 MC r1; 0002|D2|E500=40 M r1; 0002|D2|F600=3 BUC r1' OR r.val <> 16300 THEN
     RAISE EXCEPTION 't_oferta_confirmata FAIL: baza P3 dupa importul partial (0001 confirmat, 0002 vechi neatins): % (val %)', r.s, r.val;
   END IF;
   IF NOT public.fn_rest_decontat_obiect_confirmat(pg_temp.rd_id('p3'), '0001') OR public.fn_rest_decontat_obiect_confirmat(pg_temp.rd_id('p3'), '0002') THEN
@@ -839,7 +849,7 @@ BEGIN
   IF r.n <> 3 OR r.coduri <> 'A100,B200,C300' OR r.ok IS NOT TRUE THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: istoricul randurilor vechi ale lui 0001: % % %', r.n, r.coduri, r.ok; END IF;
   -- in proiect_articole NU ramane niciun rand retras / vechi al lui 0001 (cititorii vechi nu-l vad)
   IF EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_baza WHERE proiect_id = pg_temp.rd_id('p3') AND cheie = '0001|D1|C300') THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: C300 vechi a ramas in baza'; END IF;
-  RAISE NOTICE 't_oferta_confirmata (2/7) ok: import partial — doar 0001 confirmat prin RPC (inserate 2, inlocuite 3 mutate in istoric), 0002 neatins in baza (E500 40 M, F600 3 BUC) si declarat oferta_neconfirmata; baza 16300, fara cumulare';
+  RAISE NOTICE 't_oferta_confirmata (2/7) ok: import partial — doar 0001 confirmat prin RPC (inserate 2, inlocuite 3 mutate in istoric; B200 venit ca MC x 200 pe randul vechi in 100 MC), 0002 neatins in baza (E500 40 M, F600 3 BUC) si declarat oferta_neconfirmata; baza 16300, fara cumulare';
 END $t$;
 RESET ROLE;
 -- (3/7) accesul general (e) pe P3 dupa importul partial: CITITORII VECHI vad pe 0002 EXACT ce vedeau inainte si pe 0001 doar randurile confirmate (fara
@@ -857,9 +867,16 @@ BEGIN
   END IF;
   s := pg_temp.rd_cititori(pg_temp.rd_id('p3'), '0001');
   IF s IS DISTINCT FROM 'activitati:2/102; catalog:2/12000; tinte:2/102; configurare:2; obiecte:0001,0002' THEN
-    RAISE EXCEPTION 't_oferta_confirmata FAIL: cititorii vechi vad pe 0001 altceva decat randurile confirmate (randuri retrase ramase? cumulare?): %', s;
+    RAISE EXCEPTION 't_oferta_confirmata FAIL: cititorii vechi vad pe 0001 altceva decat randurile confirmate (randuri retrase ramase? cumulare? reprezentarea bruta „ 0001 ” / MC x 200?): %', s;
   END IF;
   INSERT INTO rd_cons VALUES ('p3_0001_confirmat', s);
+  -- r6 (P1-2): randul confirmat B200 e scris in REPREZENTAREA EXISTENTA: obiect_cod '0001' (nu „ 0001 ”), um '100 MC' (nu 'MC'), cantitatea 2 (nu 200),
+  -- pretul 1000 (nu 10), valoarea 2000; A100 pastreaza 'M' x 100 (acelasi UM brut); niciun rand cu obiect_cod brut diferit
+  SELECT string_agg(obiect_cod || '/' || um || '/' || cantitate::text || '/' || coalesce(pret_unitar::text, '-') || '/' || valoare::text, '; ' ORDER BY cod) INTO s
+    FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p3') AND sursa = 'contract_initial' AND confirmat_la IS NOT NULL;
+  IF s IS DISTINCT FROM '0001/M/100/100/10000; 0001/100 MC/2/1000/2000' THEN
+    RAISE EXCEPTION 't_oferta_confirmata FAIL: randurile confirmate nu sunt in reprezentarea existenta (obiect_cod brut / UM brut / cantitate si pret convertite): %', s;
+  END IF;
   IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p3') AND sursa = 'contract_initial' AND (NOT activ OR (confirmat_la IS NULL AND obiect_cod = '0001'))) <> 0 THEN
     RAISE EXCEPTION 't_oferta_confirmata FAIL: randuri retrase / vechi ale lui 0001 ramase in proiect_articole';
   END IF;
@@ -897,7 +914,7 @@ BEGIN
      OR pg_temp.rd_cititori(pg_temp.rd_id('p3'), '0002') IS DISTINCT FROM (SELECT v FROM rd_cons WHERE k = 'p3_0002_inainte') THEN
     RAISE EXCEPTION 't_oferta_confirmata FAIL: refuzurile au scris ceva pe P3';
   END IF;
-  RAISE NOTICE 't_oferta_confirmata (3/7) ok: cititorii vechi — 0002 identic cu inainte, 0001 doar randurile confirmate (fara retrase); pe 0001 calea veche e inchisa (INSERT / UPDATE / DELETE / mutare / schimbarea sursei → 42501), pe 0002 merge';
+  RAISE NOTICE 't_oferta_confirmata (3/7) ok: cititorii vechi — 0002 identic cu inainte, 0001 doar randurile confirmate (fara retrase), scrise in reprezentarea existenta (0001 / 100 MC x 2); pe 0001 calea veche e inchisa (INSERT / UPDATE / DELETE / mutare / schimbarea sursei → 42501), pe 0002 merge';
 END $t$;
 RESET ROLE;
 -- (4/7) MP-ul (b): re-importul lui 0001 fara „inlocuieste” = 23505 (nimic scris); „inlocuieste” pe un document fara obiect confirmat (0002) = 22023;
@@ -912,8 +929,8 @@ SET LOCAL ROLE authenticated;
 DO $t$
 DECLARE v jsonb; r record; s text; n int;
   LINII_0001 constant jsonb := $j$[
-    {"obiect_cod":"0001","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"1","cod":"A100","denumire":"Conducta","um":"M","cantitate":100,"pret_unitar":100,"valoare":10000},
-    {"obiect_cod":"0001","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"2","cod":"B200","denumire":"Sapatura","um":"MC","cantitate":2,"pret_unitar":1000,"valoare":2000}]$j$::jsonb;
+    {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"1","cod":"A100","denumire":"Conducta","um":"M","cantitate":100,"pret_unitar":100,"valoare":10000},
+    {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"2","cod":"B200","denumire":"Sapatura","um":"MC","cantitate":200,"pret_unitar":10,"valoare":2000}]$j$::jsonb;
   LINII_0002 constant jsonb := $j$[
     {"obiect_cod":"0002","obiect_nume":"TRONSON 2","deviz_cod":"D2","deviz_nume":"Montaj","nr":"1","cod":"E500","denumire":"Conducta tronson 2","um":"M","cantitate":40,"pret_unitar":100,"valoare":4000},
     {"obiect_cod":"0002","obiect_nume":"TRONSON 2","deviz_cod":"D2","deviz_nume":"Montaj","nr":"2","cod":"F600","denumire":"Robinet tronson 2","um":"BUC","cantitate":3,"pret_unitar":100,"valoare":300}]$j$::jsonb;
@@ -962,12 +979,18 @@ BEGIN
     v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p3'), 'contract_initial', NULL, NULL, NULL, 'oferta3_ob1_v2.xlsx', repeat('b4', 32), LINII_0001, true);
     RAISE EXCEPTION 't_oferta_confirmata FAIL: acelasi fisier reconfirmat cu inlocuieste';
   EXCEPTION WHEN unique_violation THEN IF SQLERRM NOT LIKE '%acelasi fisier%' THEN RAISE; END IF; END;
+  -- r6 (P2): fisierul A (b3), inlocuit de B (b4) — randurile lui sunt doar in istoric —, e tot „deja confirmat”: A -> B -> A = 23505, nimic scris
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p3'), 'contract_initial', NULL, NULL, NULL, 'oferta3_ob1.xlsx', repeat('b3', 32), LINII_0001, true);
+    RAISE EXCEPTION 't_oferta_confirmata FAIL: fisierul A (b3), inlocuit de B si ramas doar in istoric, a fost reconfirmat (A -> B -> A)';
+  EXCEPTION WHEN unique_violation THEN IF SQLERRM NOT LIKE '%acelasi fisier%' THEN RAISE; END IF; END;
+  IF (SELECT count(*) FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p3')) <> 7 THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: refuzul A -> B -> A a scris in istoric'; END IF;
   SELECT string_agg(b.cheie || '=' || b.cantitate::text || ' ' || b.um || ' r' || b.randuri, '; ' ORDER BY b.cheie) AS s, coalesce(sum(b.valoare), 0) AS val INTO r
     FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p3');
-  IF r.s IS DISTINCT FROM '0001|D1|A100=100 M r1; 0001|D1|B200=2 MC r1; 0002|D2|E500=40 M r1; 0002|D2|F600=3 BUC r1' OR r.val <> 16300 THEN
+  IF r.s IS DISTINCT FROM '0001|D1|A100=100 M r1; 0001|D1|B200=200 MC r1; 0002|D2|E500=40 M r1; 0002|D2|F600=3 BUC r1' OR r.val <> 16300 THEN
     RAISE EXCEPTION 't_oferta_confirmata FAIL: baza P3 dupa confirmarea tarzie + inlocuieste: % (val %)', r.s, r.val;
   END IF;
-  RAISE NOTICE 't_oferta_confirmata (4/7) ok: re-import 0001 fara inlocuieste = 23505; inlocuieste fara obiect confirmat / pe AA = 22023; confirmarea tarzie a lui 0002 trece (inlocuite 2); inlocuieste 0001 = inlocuite_confirmate 2, istoric 7 randuri; baza 16300';
+  RAISE NOTICE 't_oferta_confirmata (4/7) ok: re-import 0001 fara inlocuieste = 23505; inlocuieste fara obiect confirmat / pe AA = 22023; confirmarea tarzie a lui 0002 trece (inlocuite 2); inlocuieste 0001 = inlocuite_confirmate 2, istoric 7 randuri; acelasi fisier si fisierul A inlocuit (doar in istoric) = 23505; baza 16300';
 END $t$;
 RESET ROLE;
 -- (5/7) accesul general (e): dupa confirmarea tarzie a lui 0002 si „inlocuieste” pe 0001, AMBELE cu aceleasi linii, cititorii vechi vad EXACT ce vedeau
@@ -1007,7 +1030,7 @@ BEGIN
   VALUES (pg_temp.rd_id('p3'), '0001', 'D1', '1', 'A100', 'strecurat pe langa garda', 'M', 500, 50000, 'contract_initial') RETURNING id INTO v_id;
   IF (SELECT activ AND confirmat_la IS NULL FROM public.proiect_articole WHERE id = v_id) IS NOT TRUE THEN RAISE EXCEPTION 't_oferta_confirmata PRECONDITIE: randul strecurat nu e activ si neconfirmat'; END IF;
   SELECT string_agg(b.cheie || '=' || b.cantitate::text, '; ' ORDER BY b.cheie) INTO s FROM public.fn_rest_decontat_baza_proiect(pg_temp.rd_id('p3')) b;
-  IF s IS DISTINCT FROM '0001|D1|A100=100; 0001|D1|B200=2; 0002|D2|E500=40; 0002|D2|F600=3' THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: randul neconfirmat strecurat pe un obiect confirmat a intrat in baza: %', s; END IF;
+  IF s IS DISTINCT FROM '0001|D1|A100=100; 0001|D1|B200=200; 0002|D2|E500=40; 0002|D2|F600=3' THEN RAISE EXCEPTION 't_oferta_confirmata FAIL: randul neconfirmat strecurat pe un obiect confirmat a intrat in baza: %', s; END IF;
   -- lipsurile (ca MP-ul b, care citeste P3; apoi inapoi la server)
   PERFORM set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true);
   SELECT string_agg(l.referinta, '; ' ORDER BY l.referinta) INTO s FROM public.fn_rest_decontat_lipsuri_calcul() l WHERE l.proiect_id = pg_temp.rd_id('p3') AND l.tip = 'oferta_veche_neconfirmata';
@@ -1140,6 +1163,135 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', '', true);
   RAISE NOTICE 't_rand_orfan ok: 5 randuri AA / NR / NCS orfane sau neconfirmate (CHECK scos temporar) nu intra in calcul (P4 = OB1|D1|X=150) si apar in lipsuri pe sursa; sub-blocul anulat';
 END $t$;
+
+-- ── t_um_inlocuire (r6, review #1158: P1 r5 „UM schimbat dupa decontare” + „reprezentarea pentru cititorii existenti”). (1/2) MP-ul (b) pe P1 / 0001
+--    (A100 in M cu decontat, D400|#7 in M fara decontat; randurile ofertei din blocul „oferta”): (a) inlocuirea cu A100 in „100 MC” = 22023 um_decontat
+--    (cheia, UM vechi M, UM nou MC), si cu accept_schimbare_um; (b) D400|#7 in BUC fara accept = 22023 um_schimbat; nimic scris; (c) aceleasi 5 linii in
+--    alta reprezentare (obiect „ 0001 ”, A100 in HM x 1, B200 in MC x 200, D400 in „m”) trec si NU schimba baza / decontatul / restul; (d) D400|#7 in BUC cu
+--    accept_schimbare_um trece (um_schimbate), baza D400|#7 = 5 BUC; accept_schimbare_um pe un deviz AA = 22023; (e) pe P3 obiectul NOU „ st-3 ” (unitatea
+--    'St-3' din proiect_unitati, fara randuri) in KM x 1 trece; inlocuirea lui cu M x 0.000001 (nereprezentabil exact in KM) = 22023 um_nereprezentabil ──
+DO $t$
+BEGIN
+  PERFORM set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true);
+  PERFORM set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+END $t$;
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb; r record; n int; s text; s2 text;
+  -- aceleasi 5 linii ale lui 0001 ca in blocul „oferta”, in ALTA reprezentare (identitate canonica si UM normalizat identice)
+  L_ECHIV constant jsonb := $j$[
+    {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"1","cod":"A100","denumire":"Conducta","um":"HM","cantitate":1,"pret_unitar":10000,"valoare":10000},
+    {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"2","cod":"B200","denumire":"Sapatura","um":"MC","cantitate":200,"pret_unitar":10,"valoare":2000},
+    {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"7","cod":"D400","denumire":"Dublu a","um":"m","cantitate":5,"pret_unitar":10,"valoare":50},
+    {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"8","cod":"D400","denumire":"Dublu b","um":"m","cantitate":6,"pret_unitar":10,"valoare":60},
+    {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"OS","deviz_nume":"Organizare","nr":"1","cod":"OS","denumire":"Organizare de santier","um":"LEI","cantitate":1,"pret_unitar":3000,"valoare":3000,"tip_rand":"os"}]$j$::jsonb;
+  L_A100_MC constant jsonb := $j${"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"1","cod":"A100","denumire":"Conducta","um":"100 MC","cantitate":1,"pret_unitar":10000,"valoare":10000}$j$::jsonb;
+  L_D400_BUC constant jsonb := $j${"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"7","cod":"D400","denumire":"Dublu a","um":"BUC","cantitate":5,"pret_unitar":10,"valoare":50}$j$::jsonb;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p1') AND cheie = '0001|D1|A100';
+  IF r.um IS DISTINCT FROM 'M' OR r.decontat_cantitate <= 0 THEN RAISE EXCEPTION 't_um_inlocuire PRECONDITIE: A100 in M cu decontat (%)', row_to_json(r); END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p1') AND cheie = '0001|D1|D400|#7';
+  IF r.um IS DISTINCT FROM 'M' OR r.decontat_cantitate <> 0 OR r.baza_cantitate <> 5 THEN RAISE EXCEPTION 't_um_inlocuire PRECONDITIE: D400|#7 in M, 5, fara decontat (%)', row_to_json(r); END IF;
+  IF NOT public.fn_rest_decontat_obiect_confirmat(pg_temp.rd_id('p1'), '0001') THEN RAISE EXCEPTION 't_um_inlocuire PRECONDITIE: 0001 al P1 confirmat'; END IF;
+  SELECT string_agg(c.cheie || '=' || c.baza_cantitate::text || ' ' || c.um || ' d' || c.decontat_cantitate::text || ' r' || c.rest_cantitate::text, '; ' ORDER BY c.cheie) INTO s
+    FROM public.v_executie_rest_decontat c WHERE c.proiect_id = pg_temp.rd_id('p1') AND c.cheie IS NOT NULL;
+  SELECT count(*) INTO n FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p1');
+  -- (a) cheie DECONTATA (A100, M): alt UM normalizat (100 MC) = 22023 um_decontat, cu cheia / UM vechi / UM nou; la fel cu accept_schimbare_um
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p1'), 'contract_initial', NULL, NULL, NULL, 'oferta_mc.xlsx', repeat('d2', 32), jsonb_set(L_ECHIV, '{0}', L_A100_MC), true);
+    RAISE EXCEPTION 't_um_inlocuire FAIL: A100 (decontat in M) inlocuit cu 100 MC (reproducerea P1 r5: 100 M -> situatie -> 100 MC)';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%0001|D1|A100%decontate in UM M%UM nou MC%um_decontat%' THEN RAISE; END IF; END;
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p1'), 'contract_initial', NULL, NULL, NULL, 'oferta_mc.xlsx', repeat('d2', 32),
+           jsonb_build_object('accept_schimbare_um', true, 'linii', jsonb_set(L_ECHIV, '{0}', L_A100_MC)), true);
+    RAISE EXCEPTION 't_um_inlocuire FAIL: A100 decontat inlocuit cu 100 MC desi accept_schimbare_um (acceptarea nu trece peste decontat)';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%um_decontat%' THEN RAISE; END IF; END;
+  -- (b) cheie FARA decontat (D400|#7, M) in BUC, fara accept = 22023 um_schimbat
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p1'), 'contract_initial', NULL, NULL, NULL, 'oferta_buc.xlsx', repeat('d4', 32), jsonb_set(L_ECHIV, '{2}', L_D400_BUC), true);
+    RAISE EXCEPTION 't_um_inlocuire FAIL: D400|#7 (M, fara decontat) inlocuit cu BUC fara accept_schimbare_um';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%0001|D1|D400|#7%UM M%UM BUC%um_schimbat%' THEN RAISE; END IF; END;
+  -- obiectul p_linii cu alta cheie / accept_schimbare_um ne-boolean = 22023; accept_schimbare_um pe un deviz AA = 22023
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p1'), 'contract_initial', NULL, NULL, NULL, 'x.xlsx', repeat('d5', 32), jsonb_build_object('accept_schimbare_um', 'da', 'linii', L_ECHIV), true);
+    RAISE EXCEPTION 't_um_inlocuire FAIL: accept_schimbare_um ne-boolean acceptat';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%doar linii / accept_schimbare_um%' THEN RAISE; END IF; END;
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p1'), 'act_aditional', pg_temp.rd_id('aa1'), NULL, 'diferente', 'x.xlsx', repeat('d5', 32),
+           jsonb_build_object('accept_schimbare_um', true, 'linii', '[{"obiect_cod":"0001","deviz_cod":"D1","cod":"A100","denumire":"x","um":"M","cantitate":1,"valoare":100}]'::jsonb));
+    RAISE EXCEPTION 't_um_inlocuire FAIL: accept_schimbare_um acceptat pe un deviz AA';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%accept_schimbare_um e doar pentru oferta%' THEN RAISE; END IF; END;
+  SELECT string_agg(c.cheie || '=' || c.baza_cantitate::text || ' ' || c.um || ' d' || c.decontat_cantitate::text || ' r' || c.rest_cantitate::text, '; ' ORDER BY c.cheie) INTO s2
+    FROM public.v_executie_rest_decontat c WHERE c.proiect_id = pg_temp.rd_id('p1') AND c.cheie IS NOT NULL;
+  IF s2 IS DISTINCT FROM s OR (SELECT count(*) FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p1')) <> n THEN
+    RAISE EXCEPTION 't_um_inlocuire FAIL: refuzurile au scris ceva (rest % / istoric)', s2;
+  END IF;
+  -- (c) aceleasi linii in alta reprezentare, echivalenta prin factor: trece (5 inlocuite confirmate, fara um_schimbate); baza, decontatul si restul IDENTICE
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p1'), 'contract_initial', NULL, NULL, NULL, 'oferta_hm.xlsx', repeat('d3', 32), L_ECHIV, true);
+  IF (v->>'inserate')::int <> 5 OR (v->>'inlocuite')::int <> 5 OR (v->>'inlocuite_confirmate')::int <> 5 OR v->'um_schimbate' IS DISTINCT FROM '[]'::jsonb OR v->'obiecte' IS DISTINCT FROM '["0001||"]'::jsonb THEN
+    RAISE EXCEPTION 't_um_inlocuire FAIL inlocuire echivalenta: %', v;
+  END IF;
+  SELECT string_agg(c.cheie || '=' || c.baza_cantitate::text || ' ' || c.um || ' d' || c.decontat_cantitate::text || ' r' || c.rest_cantitate::text, '; ' ORDER BY c.cheie) INTO s2
+    FROM public.v_executie_rest_decontat c WHERE c.proiect_id = pg_temp.rd_id('p1') AND c.cheie IS NOT NULL;
+  IF s2 IS DISTINCT FROM s THEN RAISE EXCEPTION 't_um_inlocuire FAIL: restul de decontat s-a schimbat dupa inlocuirea cu linii echivalente: % (inainte %)', s2, s; END IF;
+  -- (d) D400|#7 in BUC cu accept_schimbare_um: trece, cheia e declarata in um_schimbate, baza D400|#7 = 5 BUC; restul celorlalte chei neschimbat
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p1'), 'contract_initial', NULL, NULL, NULL, 'oferta_buc.xlsx', repeat('d4', 32),
+         jsonb_build_object('accept_schimbare_um', true, 'linii', jsonb_set(L_ECHIV, '{2}', L_D400_BUC)), true);
+  IF (v->>'inserate')::int <> 5 OR (v->>'inlocuite_confirmate')::int <> 5 OR v->'um_schimbate' IS DISTINCT FROM '["0001|D1|D400|#7"]'::jsonb THEN
+    RAISE EXCEPTION 't_um_inlocuire FAIL inlocuire cu UM schimbat acceptat: %', v;
+  END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p1') AND cheie = '0001|D1|D400|#7';
+  IF r.um IS DISTINCT FROM 'BUC' OR r.baza_cantitate <> 5 OR r.decontat_cantitate <> 0 THEN RAISE EXCEPTION 't_um_inlocuire FAIL: D400|#7 dupa schimbarea acceptata: %', row_to_json(r); END IF;
+  SELECT string_agg(c.cheie || '=' || c.baza_cantitate::text || ' ' || c.um || ' d' || c.decontat_cantitate::text || ' r' || c.rest_cantitate::text, '; ' ORDER BY c.cheie) INTO s2
+    FROM public.v_executie_rest_decontat c WHERE c.proiect_id = pg_temp.rd_id('p1') AND c.cheie IS NOT NULL AND c.cheie <> '0001|D1|D400|#7';
+  IF s2 IS DISTINCT FROM (SELECT string_agg(x, '; ' ORDER BY x) FROM unnest(string_to_array(s, '; ')) x WHERE x NOT LIKE '0001|D1|D400|#7=%') THEN
+    RAISE EXCEPTION 't_um_inlocuire FAIL: celelalte chei s-au schimbat: %', s2;
+  END IF;
+  -- (e) P3: obiect NOU „ st-3 ” (unitatea 'St-3' exista in proiect_unitati, fara randuri in proiect_articole), in KM; apoi M x 0.000001 = nereprezentabil in KM
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p3'), 'contract_initial', NULL, NULL, NULL, 'st3.xlsx', repeat('d6', 32),
+         '[{"obiect_cod":" st-3 ","obiect_nume":"Statie","deviz_cod":"D3","nr":"1","cod":"K100","denumire":"Conducta in km","um":"KM","cantitate":1,"pret_unitar":100000,"valoare":100000}]'::jsonb);
+  IF (v->>'inserate')::int <> 1 OR (v->>'inlocuite')::int <> 0 OR v->'obiecte' IS DISTINCT FROM '["ST-3||"]'::jsonb THEN RAISE EXCEPTION 't_um_inlocuire FAIL obiect nou St-3: %', v; END IF;
+  IF (SELECT b.cantitate::text || ' ' || b.um FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p3') AND b.cheie = 'ST-3|D3|K100') IS DISTINCT FROM '1000 M' THEN
+    RAISE EXCEPTION 't_um_inlocuire FAIL: baza St-3 (1 KM = 1000 M)';
+  END IF;
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p3'), 'contract_initial', NULL, NULL, NULL, 'st3b.xlsx', repeat('d7', 32),
+           '[{"obiect_cod":"ST-3","obiect_nume":"Statie","deviz_cod":"D3","nr":"1","cod":"K100","denumire":"Conducta in km","um":"M","cantitate":0.000001,"pret_unitar":100,"valoare":0.0001}]'::jsonb, true);
+    RAISE EXCEPTION 't_um_inlocuire FAIL: 0.000001 M scris in KM (rotunjire tacita la 0)';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%ST-3|D3|K100%UM-ul existent KM%um_nereprezentabil%' THEN RAISE; END IF; END;
+  IF (SELECT b.cantitate::text || ' ' || b.um FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p3') AND b.cheie = 'ST-3|D3|K100') IS DISTINCT FROM '1000 M' THEN
+    RAISE EXCEPTION 't_um_inlocuire FAIL: refuzul nereprezentabil a scris';
+  END IF;
+  RAISE NOTICE 't_um_inlocuire (1/2) ok: A100 decontat in M → 100 MC refuzat (um_decontat, si cu accept); D400|#7 → BUC fara accept refuzat (um_schimbat), cu accept trece (um_schimbate); liniile echivalente (HM x 1, MC x 200, m, obiect „ 0001 ”) nu schimba restul; St-3 nou in KM; 0.000001 M in KM refuzat (um_nereprezentabil)';
+END $t$;
+RESET ROLE;
+-- (2/2) owner-ul (a, acces general Executie): randurile scrise sunt in REPREZENTAREA EXISTENTA — obiect_cod '0001' (nu „ 0001 ”), A100 'M' x 100 (venit HM x 1,
+--    pret 100 din 10000), B200 '100 MC' x 2 (venit MC x 200, pret 1000 din 10), D400|#8 'M' (venit 'm'), D400|#7 'BUC' x 5 (UM schimbat acceptat: cum vine);
+--    St-3 al P3 scris 'St-3' (unitatea din proiect_unitati, JOIN-ul 20261208a pe obiect_cod brut) cu UM 'KM' x 1
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000a', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE s text;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000a');
+  SELECT string_agg(a.obiect_cod || '/' || a.cod || '/' || a.um || '/' || a.cantitate::text || '/' || coalesce(a.pret_unitar::text, '-') || '/' || a.valoare::text, '; ' ORDER BY a.cheie) INTO s
+    FROM public.proiect_articole a WHERE a.proiect_id = pg_temp.rd_id('p1') AND a.sursa = 'contract_initial' AND a.activ AND a.confirmat_la IS NOT NULL
+     AND public.fn_rest_decontat_cheie(a.obiect_cod, NULL, NULL, NULL) = '0001||';
+  IF s IS DISTINCT FROM '0001/A100/M/100/100/10000; 0001/B200/100 MC/2/1000/2000; 0001/D400/BUC/5/10/50; 0001/D400/M/6/10/60; 0001/OS/LEI/1/3000/3000' THEN
+    RAISE EXCEPTION 't_um_inlocuire FAIL: randurile lui 0001 nu sunt in reprezentarea existenta: %', s;
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id = pg_temp.rd_id('p1') AND a.obiect_cod <> btrim(a.obiect_cod)) THEN
+    RAISE EXCEPTION 't_um_inlocuire FAIL: obiect_cod brut cu spatii scris in P1';
+  END IF;
+  SELECT string_agg(a.obiect_cod || '/' || a.um || '/' || a.cantitate::text, '; ') INTO s FROM public.proiect_articole a WHERE a.proiect_id = pg_temp.rd_id('p3') AND a.cod = 'K100';
+  IF s IS DISTINCT FROM 'St-3/KM/1' THEN RAISE EXCEPTION 't_um_inlocuire FAIL: obiectul nou nu a luat obiect_cod-ul unitatii din proiect_unitati (St-3): %', s; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.proiect_unitati u JOIN public.proiect_articole a ON a.proiect_id = u.proiect_id AND a.obiect_cod = u.obiect_cod WHERE u.proiect_id = pg_temp.rd_id('p3') AND a.cod = 'K100') THEN
+    RAISE EXCEPTION 't_um_inlocuire FAIL: JOIN-ul 20261208a (art.obiect_cod = u.obiect_cod) nu gaseste articolul K100 al unitatii St-3';
+  END IF;
+  RAISE NOTICE 't_um_inlocuire (2/2) ok: randurile confirmate sunt in reprezentarea existenta (0001 / M x 100 / 100 MC x 2 / M; BUC doar unde schimbarea a fost acceptata); St-3 scris ca unitatea din proiect_unitati';
+END $t$;
+RESET ROLE;
 
 SELECT 'DRY_COMPLET' AS rezultat;
 ROLLBACK;

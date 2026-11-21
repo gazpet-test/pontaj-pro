@@ -68,6 +68,19 @@
 --   * proiect_articole_istoric (r5): rândurile ofertei înlocuite de RPC (vechi la prima confirmare a obiectului, confirmate la „înlocuiește”),
 --     rândul întreg ca jsonb + obiectul canonic, sursa, confirmat_la, retras_de / retras_la / motiv / amprenta fișierului care le-a înlocuit;
 --     scris DOAR de RPC (gardă cu marcaj), citit cu dreptul de citire al proiectului; serverul îl poate goli (decizie separată).
+--   * r6 (review #1158: 2 × P1 + P2 pe r5; deciziile chat-ului, 21.11.2026), în fn_rest_decontat_confirma_baza:
+--     (1) UM-ul se validează ÎNAINTE de retragerea rândurilor vechi, față de baza ANTERIOARĂ (cu rândurile obiectelor care se înlocuiesc) ȘI față de
+--         DECONTATUL existent (liniile situațiilor active pe cheie). Pe o cheie cu cantități decontate UM-ul normalizat NU se poate schimba (22023, mesaj cu
+--         cheia, UM-ul vechi, UM-ul nou — „um_decontat”: 100 M → situație 80 M → înlocuire 100 MC = refuz). Pe o cheie fără decontat schimbarea e permisă
+--         doar echivalentă prin factor (același UM normalizat: 100 M ↔ 1 HM) sau cu accept_schimbare_um = true explicit în obiectul p_linii (altfel 22023,
+--         „um_schimbat”); cheile schimbate cu acceptare se întorc în rezultat (um_schimbate).
+--     (2) REPREZENTAREA EXISTENTĂ pentru cititorii vechi: când obiectul există deja (rânduri ale proiectului în proiect_articole — inclusiv cele care se
+--         înlocuiesc — sau o unitate cu obiect_cod în proiect_unitati, 20261208a: JOIN pe art.obiect_cod = u.obiect_cod) rândul confirmat se scrie cu
+--         ACELAȘI obiect_cod brut; când cheia există deja, cu UM-ul BRUT existent, iar cantitatea și prețul unitar convertite prin factor (1 HM → 100 M;
+--         2 MC pe o cheie în „100 MC” → 0.02; nereprezentabil exact în 6 zecimale = refuz, „um_nereprezentabil”, nu rotunjire tăcută). Doar un obiect / o
+--         cheie nouă (sau o cheie cu UM-ul schimbat acceptat) se scrie cum vine. Astfel ActivitatiProiectPanel, verificariProiect, 20261208a /
+--         v_executie_tinte, DevizVsExecutatTab, CatalogDevizPanel dau EXACT același rezultat înainte / după confirmarea unor date echivalente.
+--     (3) Amprenta fișierului se caută și în istoric (rândurile retrase, rand->>'fisier_amprenta'), sub același advisory: A → B → A = 23505.
 --   * Gărzi BEFORE pe ORICE cale (L07 / L08): rândurile confirmate din proiect_articole nu se modifică / șterg direct, coloanele de
 --     confirmare le scrie doar RPC-ul (marcajul static al tranzacției, precedent 20261130l; marcaj LIPSĂ = NULL într-o sesiune nouă = REFUZ,
 --     ca și marcajul gol), un rând cu sursă AA / NR / NCS se scrie doar prin RPC, rândurile contract_initial ale unui OBIECT cu oferta confirmată
@@ -78,6 +91,7 @@
 --   TabSituatiiPlata, nici politicile proiect_articole; poarta proiectului nou (RPC + jurnal) e 20270105b.
 -- Dependențe: porțile Izometrie (20261230a: fn_izo_porti_lipsa + cele 5 definiții) — migrarea adaugă coloane pe executie_proiecte (perimetrul
 --   E4b), deci face ritualul PRE / ștampile / POST (docs/izometrie/PORTI_REGULA.md); executie_acte_aditionale și executie_situatii_plata există;
+--   proiect_unitati.obiect_cod (20261208a; r6: reprezentarea existentă a obiectului o citește și de acolo);
 --   20261209a (executie_acces_proiect + fn_executie_proiect_permis / fn_executie_acces_nerestrans, corpurile verificate prin md5 — aceleași
 --   constante ca preflight-ul 20261213a —, DEFINER, owner postgres, EXECUTE pentru authenticated).
 -- Ordinea lock-urilor (L06): migrarea: executie_proiecte (ACCESS EXCLUSIVE) -> proiect_articole (ACCESS EXCLUSIVE) -> executie_acte_aditionale
@@ -122,8 +136,8 @@ BEGIN
   -- dependențele
   IF to_regclass('public.executie_proiecte') IS NULL OR to_regclass('public.proiect_articole') IS NULL OR to_regclass('public.profiles') IS NULL
      OR to_regclass('public.user_module_access') IS NULL OR to_regclass('public.executie_acte_aditionale') IS NULL
-     OR to_regclass('public.executie_situatii_plata') IS NULL OR to_regprocedure('auth.uid()') IS NULL THEN
-    RAISE EXCEPTION '20270105a: tabelele existente (executie_proiecte, proiect_articole, profiles, user_module_access, executie_acte_aditionale, executie_situatii_plata) sau auth.uid lipsesc';
+     OR to_regclass('public.executie_situatii_plata') IS NULL OR to_regclass('public.proiect_unitati') IS NULL OR to_regprocedure('auth.uid()') IS NULL THEN
+    RAISE EXCEPTION '20270105a: tabelele existente (executie_proiecte, proiect_articole, profiles, user_module_access, executie_acte_aditionale, executie_situatii_plata, proiect_unitati) sau auth.uid lipsesc';
   END IF;
   IF to_regprocedure('public.fn_izo_porti_lipsa()') IS NULL OR to_regprocedure('public.fn_izo_porti_definitii()') IS NULL
      OR to_regprocedure('public.fn_izo_porti_e3_definitii()') IS NULL OR to_regprocedure('public.fn_izo_porti_e3b_definitii()') IS NULL
@@ -177,7 +191,8 @@ BEGIN
       ('executie_acte_aditionale', 'numar_act', 'text|character varying|integer'), ('executie_acte_aditionale', 'activ', 'boolean'),
       ('executie_situatii_plata', 'id', 'bigint|integer'), ('executie_situatii_plata', 'proiect_id', 'integer|bigint'),
       ('executie_situatii_plata', 'nr_situatie', 'text|character varying'), ('executie_situatii_plata', 'luna', 'integer|smallint'),
-      ('executie_situatii_plata', 'an', 'integer|smallint'), ('executie_situatii_plata', 'valoare_baza_lei', 'numeric|double precision')
+      ('executie_situatii_plata', 'an', 'integer|smallint'), ('executie_situatii_plata', 'valoare_baza_lei', 'numeric|double precision'),
+      ('proiect_unitati', 'id', 'integer|bigint'), ('proiect_unitati', 'proiect_id', 'integer|bigint'), ('proiect_unitati', 'obiect_cod', 'text|character varying')
     ) v(t, c, tipuri) LOOP
     SELECT data_type INTO v_tip FROM information_schema.columns WHERE table_schema = 'public' AND table_name = r.t AND column_name = r.c;
     IF v_tip IS NULL OR NOT (v_tip = ANY (string_to_array(r.tipuri, '|'))) THEN
@@ -422,6 +437,8 @@ CREATE TABLE public.proiect_articole_istoric (
   CONSTRAINT proiect_articole_istoric_rand_ck CHECK (jsonb_typeof(rand) = 'object')
 );
 CREATE INDEX proiect_articole_istoric_obiect_ix ON public.proiect_articole_istoric (proiect_id, obiect_k);
+-- r6 (P2): amprenta fișierului unui rând retras se caută la fiecare confirmare (A → B → A = refuz)
+CREATE INDEX proiect_articole_istoric_amprenta_ix ON public.proiect_articole_istoric (proiect_id, (rand->>'fisier_amprenta'));
 COMMENT ON TABLE public.proiect_articole_istoric IS
   'Rest de decontat (20270105a): rândurile proiect_articole ale ofertei înlocuite de fn_rest_decontat_confirma_baza (rândul întreg în rand); obiect_k = fn_rest_decontat_cheie(obiect_cod, NULL, NULL, NULL). Un rând confirmat aici ține obiectul în starea „confirmat”.';
 
@@ -904,11 +921,15 @@ REVOKE ALL ON public.v_executie_rest_decontat_baza, public.v_executie_rest_decon
 GRANT SELECT ON public.v_executie_rest_decontat_baza, public.v_executie_rest_decontat, public.v_executie_rest_decontat_obiect, public.v_executie_rest_decontat_lipsuri TO authenticated;
 
 -- ─── 10. confirmarea bazei: oferta / devizul unui AA / devizul unei NR-NCS, într-o tranzacție ─────────────────────────────────
--- p_linii = [{obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, pret_unitar, valoare, tip_rand}], numere JSON;
--- cheia se calculează aici (nr intră doar când obiect + deviz + cod se repetă în document). p_inlocuieste (r5, doar la ofertă): re-importul unui
+-- p_linii = FIE tabloul liniilor [{obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, pret_unitar, valoare, tip_rand}]
+-- (numere JSON), FIE obiectul {linii: [...tabloul...], accept_schimbare_um: boolean} (r6; singurele chei acceptate; accept_schimbare_um doar la ofertă).
+-- Cheia se calculează aici (nr intră doar când obiect + deviz + cod se repetă în document). p_inlocuieste (r5, doar la ofertă): re-importul unui
 -- OBIECT deja confirmat cere adevărat explicit (altfel 23505); adevărat fără niciun obiect confirmat în document = 22023.
--- Rezultat: {inserate, ids, sursa, mod_import, inlocuite, inlocuite_confirmate, obiecte} — inlocuite = rândurile contract_initial ale obiectelor din
--- document mutate în istoric (din care inlocuite_confirmate fuseseră confirmate), obiecte = identitățile canonice ale obiectelor importate.
+-- ORDINEA (r6): validări (formă, chei, UM față de baza ANTERIOARĂ și de decontat, reprezentarea existentă) → mutarea rândurilor vechi în istoric → INSERT;
+-- orice refuz vine înaintea oricărei scrieri.
+-- Rezultat: {inserate, ids, sursa, mod_import, inlocuite, inlocuite_confirmate, obiecte, um_schimbate} — inlocuite = rândurile contract_initial ale
+-- obiectelor din document mutate în istoric (din care inlocuite_confirmate fuseseră confirmate), obiecte = identitățile canonice ale obiectelor importate,
+-- um_schimbate = cheile scrise cu alt UM normalizat decât în baza anterioară (doar cu accept_schimbare_um).
 CREATE FUNCTION public.fn_rest_decontat_confirma_baza(p_proiect bigint, p_sursa text, p_act_aditional_id bigint, p_nota_id bigint, p_mod text,
                                                       p_fisier text, p_amprenta text, p_linii jsonb, p_inlocuieste boolean DEFAULT false)
 RETURNS jsonb
@@ -916,14 +937,29 @@ LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS 
 DECLARE
   v_uid uuid := auth.uid(); v_mod text := p_mod; v_nivel text; v_act_nr text; v_n integer; v_ids bigint[]; v_data_nota date; v_inlocuite integer := 0;
   v_inlocuite_conf integer := 0; v_obiecte text[] := ARRAY[]::text[]; v_conf text[] := ARRAY[]::text[];
-  e jsonb; v_k text; v_tip text; v_cant numeric; v_val numeric; v_pret numeric; v_um text;
+  v_linii jsonb; v_accept_um boolean := false; v_baza jsonb; v_rep_ob jsonb; v_scrie jsonb := '[]'::jsonb; v_um_schimbate text[] := ARRAY[]::text[];
+  e jsonb; v_k text; v_tip text; v_cant numeric; v_val numeric; v_pret numeric; v_um text; v_um_n text; v_factor numeric; v_um_dec text[];
+  v_um_rep text; v_factor_rep numeric; v_c numeric; v_p numeric;
   v_chei text[] := ARRAY[]::text[]; v_dub text[]; v_finale text[] := ARRAY[]::text[]; v_acum timestamptz := now();
 BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'rest_decontat: autentificare necesara' USING ERRCODE = '42501'; END IF;
+  -- r6: p_linii = tabloul liniilor SAU obiectul {linii, accept_schimbare_um} (ca la fn_rest_decontat_confirma_situatie)
+  IF jsonb_typeof(p_linii) = 'object' THEN
+    IF EXISTS (SELECT 1 FROM jsonb_object_keys(p_linii) k WHERE k NOT IN ('linii', 'accept_schimbare_um'))
+       OR jsonb_typeof(p_linii->'accept_schimbare_um') NOT IN ('boolean', 'null') THEN
+      RAISE EXCEPTION 'rest_decontat: obiectul p_linii are doar linii / accept_schimbare_um' USING ERRCODE = '22023';
+    END IF;
+    v_linii := p_linii->'linii'; v_accept_um := coalesce((p_linii->>'accept_schimbare_um')::boolean, false);
+  ELSE
+    v_linii := p_linii;
+  END IF;
   IF p_proiect IS NULL OR p_sursa IS NULL OR p_amprenta IS NULL OR p_amprenta !~ '^[0-9a-f]{64}$' OR p_inlocuieste IS NULL
-     OR p_linii IS NULL OR jsonb_typeof(p_linii) IS DISTINCT FROM 'array' OR jsonb_array_length(p_linii) NOT BETWEEN 1 AND 5000
+     OR v_linii IS NULL OR jsonb_typeof(v_linii) IS DISTINCT FROM 'array' OR jsonb_array_length(v_linii) NOT BETWEEN 1 AND 5000
      OR (p_fisier IS NOT NULL AND length(p_fisier) NOT BETWEEN 1 AND 1000) THEN
     RAISE EXCEPTION 'rest_decontat: parametri invalizi (proiect, sursa, amprenta sha256, linii 1..5000, inlocuieste)' USING ERRCODE = '22023';
+  END IF;
+  IF v_accept_um AND p_sursa IS DISTINCT FROM 'contract_initial' THEN
+    RAISE EXCEPTION 'rest_decontat: accept_schimbare_um e doar pentru oferta (contract_initial); UM-ul devizului unui act / al unei note e cel al bazei' USING ERRCODE = '22023';
   END IF;
   IF p_sursa = 'contract_initial' THEN
     IF p_act_aditional_id IS NOT NULL OR p_nota_id IS NOT NULL OR coalesce(v_mod, 'lista_completa') <> 'lista_completa' THEN
@@ -976,49 +1012,49 @@ BEGIN
       RAISE EXCEPTION 'rest_decontat: nota are deja un deviz confirmat (inlocuirea e o decizie separata)' USING ERRCODE = '23505';
     END IF;
   END IF;
-  IF EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id::bigint = p_proiect AND a.fisier_amprenta = p_amprenta) THEN
+  -- amprenta fișierului: în rândurile curente ȘI în istoric (r6, P2: un fișier înlocuit — rândurile lui retrase — rămâne „deja confirmat”; A → B → A = refuz)
+  IF EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id::bigint = p_proiect AND a.fisier_amprenta = p_amprenta)
+     OR EXISTS (SELECT 1 FROM public.proiect_articole_istoric h WHERE h.proiect_id = p_proiect AND h.rand->>'fisier_amprenta' = p_amprenta) THEN
     RAISE EXCEPTION 'rest_decontat: acelasi fisier a fost deja confirmat pe acest proiect' USING ERRCODE = '23505';
   END IF;
   -- r4 / r5 (review #1158): STĂRILE OFERTEI, PE OBIECT. Obiectele documentului (identitatea canonică a obiectului, din liniile trimise; forma liniilor
   -- e verificată mai jos, orice refuz anulează totul). Un obiect deja CONFIRMAT (în proiect_articole sau în istoric) se re-importă DOAR cu
-  -- p_inlocuieste = true (altfel 23505: înlocuirea e o decizie explicită); p_inlocuieste fără niciun obiect confirmat = 22023. Apoi rândurile
+  -- p_inlocuieste = true (altfel 23505: înlocuirea e o decizie explicită); p_inlocuieste fără niciun obiect confirmat = 22023. Rândurile
   -- contract_initial ale obiectelor importate (vechi, neconfirmate — calea veche CatalogDevizPanel, ex. proiectul 4 — și, la „înlocuiește”, cele
-  -- confirmate) sunt MUTATE în proiect_articole_istoric ACUM, sub advisory-ul proiectului, în aceeași tranzacție — înaintea verificării liniilor
-  -- (UM-ul se compară cu baza rămasă, nu cu rândurile înlocuite). Obiectele NEIMPORTATE nu sunt atinse (rămân în bază cu valoarea veche, declarate
-  -- în lipsuri, confirmabile mai târziu). Fără cumulare și fără rânduri retrase rămase în tabel: cititorii vechi văd același număr de rânduri.
+  -- confirmate) sunt MUTATE în proiect_articole_istoric, sub advisory-ul proiectului, în aceeași tranzacție — DUPĂ validarea liniilor (r6: UM-ul se
+  -- compară cu baza ANTERIOARĂ, cu rândurile înlocuite încă prezente, și cu decontatul). Obiectele NEIMPORTATE nu sunt atinse (rămân în bază cu
+  -- valoarea veche, declarate în lipsuri, confirmabile mai târziu). Fără cumulare și fără rânduri retrase rămase în tabel.
   IF p_sursa = 'contract_initial' THEN
     SELECT coalesce(array_agg(z.k ORDER BY z.k), ARRAY[]::text[]),
            coalesce(array_agg(z.k ORDER BY z.k) FILTER (WHERE public.fn_rest_decontat_obiect_confirmat(p_proiect, z.o)), ARRAY[]::text[])
       INTO STRICT v_obiecte, v_conf
       FROM (SELECT public.fn_rest_decontat_cheie(x->>'obiect_cod', NULL, NULL, NULL) AS k, min(x->>'obiect_cod') AS o
-              FROM jsonb_array_elements(p_linii) x GROUP BY 1) z;
+              FROM jsonb_array_elements(v_linii) x GROUP BY 1) z;
     IF cardinality(v_conf) > 0 AND NOT p_inlocuieste THEN
       RAISE EXCEPTION 'rest_decontat: obiectele % au deja oferta confirmata; re-importul lor cere „inlocuieste” explicit (inlocuirea e o decizie separata)', array_to_string(v_conf, ', ') USING ERRCODE = '23505';
     END IF;
     IF p_inlocuieste AND cardinality(v_conf) = 0 THEN
       RAISE EXCEPTION 'rest_decontat: „inlocuieste” cere cel putin un obiect cu oferta confirmata in document; obiectele % nu au oferta confirmata (importa fara inlocuieste)', array_to_string(v_obiecte, ', ') USING ERRCODE = '22023';
     END IF;
-    SET LOCAL gazpet.rest_decontat_scriitor = 'fn_rest_decontat_confirma_baza';
-    WITH mut AS (
-      DELETE FROM public.proiect_articole a
-       WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial'
-         AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = ANY (v_obiecte)
-       RETURNING a.*),
-    ist AS (
-      INSERT INTO public.proiect_articole_istoric (rand_id, proiect_id, obiect_k, sursa, confirmat_la, rand, retras_de, retras_la, motiv, inlocuit_cu_amprenta)
-      SELECT m.id::bigint, p_proiect, public.fn_rest_decontat_cheie(m.obiect_cod::text, NULL, NULL, NULL), m.sursa::text, m.confirmat_la, to_jsonb(m), v_uid, v_acum,
-             CASE WHEN m.confirmat_la IS NULL THEN 'confirmare_oferta' ELSE 'inlocuire_oferta' END, p_amprenta
-        FROM mut m
-      RETURNING confirmat_la)
-    SELECT count(*)::integer, (count(*) FILTER (WHERE ist.confirmat_la IS NOT NULL))::integer INTO v_inlocuite, v_inlocuite_conf FROM ist;
-    SET LOCAL gazpet.rest_decontat_scriitor = '';
-    IF EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial'
-                 AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = ANY (v_obiecte)) THEN
-      RAISE EXCEPTION 'rest_decontat: randurile vechi ale obiectelor importate nu s-au putut muta in istoric' USING ERRCODE = 'P0001';
-    END IF;
   END IF;
+  -- r6 (2): REPREZENTAREA EXISTENTĂ a obiectelor documentului (toate sursele): obiect_cod BRUT al rândurilor proiectului cu aceeași identitate canonică
+  -- (forma cea mai des întâlnită, apoi cea mai mică; include rândurile care se vor înlocui), altfel al unității din proiect_unitati (20261208a:
+  -- fn_executie_tinte_calcul face JOIN pe art.obiect_cod = u.obiect_cod brut), altfel lipsă (= obiect nou, se scrie cum vine)
+  SELECT coalesce(jsonb_object_agg(z.k, z.ob), '{}'::jsonb) INTO v_rep_ob FROM (
+    SELECT d.k, coalesce(
+      (SELECT a.obiect_cod::text FROM public.proiect_articole a WHERE a.proiect_id::bigint = p_proiect AND a.obiect_cod IS NOT NULL
+         AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = d.k
+       GROUP BY a.obiect_cod::text ORDER BY count(*) DESC, a.obiect_cod::text LIMIT 1),
+      (SELECT pu.obiect_cod::text FROM public.proiect_unitati pu WHERE pu.proiect_id::bigint = p_proiect AND pu.obiect_cod IS NOT NULL
+         AND public.fn_rest_decontat_cheie(pu.obiect_cod::text, NULL, NULL, NULL) = d.k
+       ORDER BY pu.id LIMIT 1)) AS ob
+      FROM (SELECT DISTINCT public.fn_rest_decontat_cheie(x->>'obiect_cod', NULL, NULL, NULL) AS k FROM jsonb_array_elements(v_linii) x) d) z
+   WHERE z.ob IS NOT NULL;
+  -- r6 (1): baza ANTERIOARĂ, o singură evaluare (cu rândurile obiectelor care se vor înlocui): UM-ul normalizat al fiecărei chei + ambiguitatea lui
+  SELECT coalesce(jsonb_object_agg(b.cheie, jsonb_build_object('um', b.um, 'incert', b.um_incert)), '{}'::jsonb) INTO v_baza
+    FROM public.fn_rest_decontat_baza_proiect(p_proiect) b;
   -- forma liniilor: exact cheile cunoscute, numere JSON (L17), fără dubluri
-  FOR e IN SELECT x FROM jsonb_array_elements(p_linii) x LOOP
+  FOR e IN SELECT x FROM jsonb_array_elements(v_linii) x LOOP
     IF jsonb_typeof(e) IS DISTINCT FROM 'object'
        OR EXISTS (SELECT 1 FROM jsonb_object_keys(e) k WHERE k NOT IN ('obiect_cod', 'obiect_nume', 'deviz_cod', 'deviz_nume', 'nr', 'cod', 'denumire', 'um',
                                                                        'cantitate', 'pret_unitar', 'valoare', 'tip_rand')) THEN
@@ -1045,7 +1081,7 @@ BEGIN
   -- într-un grup repetat fiecare linie trebuie să aibă nr (altfel cheile finale ar coincide), iar cheile finale trebuie să fie distincte
   SELECT coalesce(array_agg(z.k ORDER BY z.k), ARRAY[]::text[]) INTO STRICT v_dub
     FROM (SELECT k FROM unnest(v_chei) AS k GROUP BY k HAVING count(*) > 1) z;
-  FOR e IN SELECT x FROM jsonb_array_elements(p_linii) x LOOP
+  FOR e IN SELECT x FROM jsonb_array_elements(v_linii) x LOOP
     IF public.fn_rest_decontat_cheie(e->>'obiect_cod', e->>'deviz_cod', e->>'cod', NULL) = ANY (v_dub) AND coalesce(e->>'nr', '') !~ '[^[:space:]]' THEN
       RAISE EXCEPTION 'rest_decontat: codul % se repeta in document si o linie nu are pozitie (nr) — pozitii lipsa', e->>'cod' USING ERRCODE = '22023';
     END IF;
@@ -1054,34 +1090,99 @@ BEGIN
       RAISE EXCEPTION 'rest_decontat: cheia % apare de doua ori in document (acelasi cod cu aceeasi pozitie) — pozitii duplicate', v_k USING ERRCODE = '22023';
     END IF;
     v_finale := v_finale || v_k;
-    -- UM-ul unei chei existente în bază trebuie să fie același
-    SELECT b.um INTO v_um FROM public.fn_rest_decontat_baza_proiect(p_proiect) b WHERE b.cheie = v_k;
-    IF FOUND AND v_um IS DISTINCT FROM (SELECT x.um FROM public.fn_rest_decontat_um(e->>'um') x) THEN
+    -- r6 (1): UM-ul liniei față de baza ANTERIOARĂ (v_baza, cu rândurile care se vor înlocui) și față de DECONTATUL existent al cheii (liniile situațiilor
+    -- active), ÎNAINTE de orice scriere
+    SELECT x.um, x.factor INTO v_um_n, v_factor FROM public.fn_rest_decontat_um(e->>'um') x;
+    v_um := v_baza->v_k->>'um';
+    SELECT coalesce(array_agg(DISTINCT x.um ORDER BY x.um), ARRAY[]::text[]) INTO v_um_dec
+      FROM public.executie_sl_detaliu d JOIN public.executie_sl_detaliu_linii l ON l.detaliu_id = d.id
+      CROSS JOIN LATERAL public.fn_rest_decontat_um(l.um) x
+     WHERE d.proiect_id = p_proiect AND d.activ AND l.cheie = v_k;
+    IF p_sursa = 'contract_initial' THEN
+      -- cheie cu cantități decontate: UM-ul normalizat NU se schimbă (nici cu acceptare)
+      IF cardinality(v_um_dec) > 0 AND (EXISTS (SELECT 1 FROM unnest(v_um_dec) u WHERE u IS DISTINCT FROM v_um_n) OR (v_um IS NOT NULL AND v_um IS DISTINCT FROM v_um_n)) THEN
+        RAISE EXCEPTION 'rest_decontat: cheia % are cantitati decontate in UM % si nu-si poate schimba UM-ul (UM nou %); oferta se inlocuieste cu acelasi UM sau cu unul echivalent prin factor (um_decontat)',
+          v_k, coalesce(v_um, v_um_dec[1]) || CASE WHEN cardinality(v_um_dec) > 1 OR (v_um IS NOT NULL AND v_um <> ALL (v_um_dec)) THEN ' / ' || array_to_string(v_um_dec, ' / ') ELSE '' END, v_um_n USING ERRCODE = '22023';
+      END IF;
+      -- cheie fără decontat, cu alt UM normalizat (sau UM ambiguu) în baza anterioară: doar cu acceptare explicită
+      IF v_um IS NOT NULL AND (v_um IS DISTINCT FROM v_um_n OR (v_baza->v_k->>'incert')::boolean) THEN
+        IF NOT v_accept_um THEN
+          RAISE EXCEPTION 'rest_decontat: cheia % are in baza UM % si vine cu UM %; schimbarea UM-ului cere accept_schimbare_um explicit in p_linii (um_schimbat)',
+            v_k, v_um || CASE WHEN (v_baza->v_k->>'incert')::boolean THEN ' (ambiguu)' ELSE '' END, v_um_n USING ERRCODE = '22023';
+        END IF;
+        v_um_schimbate := v_um_schimbate || v_k;
+      END IF;
+    ELSIF v_um IS NOT NULL AND v_um IS DISTINCT FROM v_um_n THEN
+      -- devizul unui act / al unei note: UM-ul unei chei existente în bază trebuie să fie același
       RAISE EXCEPTION 'rest_decontat: UM diferit de UM-ul articolului din baza (cheia %)', v_k USING ERRCODE = '22023';
     END IF;
+    -- r6 (2): REPREZENTAREA EXISTENTĂ a cheii: UM-ul BRUT al rândului existent cu același UM normalizat (întâi oferta, apoi id), cantitatea și prețul
+    -- convertite prin factor (1 HM pe o cheie în M → 100 M; 2 MC pe o cheie în „100 MC” → 0.02); nereprezentabil exact în 6 zecimale = refuz (L17).
+    -- O cheie nouă sau cu UM-ul schimbat acceptat se scrie cum vine.
+    v_c := (e->>'cantitate')::numeric; v_p := (e->>'pret_unitar')::numeric; v_um_rep := NULL; v_factor_rep := NULL;
+    IF NOT (v_k = ANY (v_um_schimbate)) THEN
+      SELECT a.um::text, x.factor INTO v_um_rep, v_factor_rep
+        FROM public.proiect_articole a CROSS JOIN LATERAL public.fn_rest_decontat_um(a.um::text) x
+       WHERE a.proiect_id::bigint = p_proiect AND a.cheie = v_k AND a.activ AND a.um IS NOT NULL AND x.um = v_um_n
+       ORDER BY (a.sursa = 'contract_initial') DESC, a.id LIMIT 1;
+      IF v_um_rep IS NOT NULL AND v_factor_rep <> v_factor THEN
+        v_c := v_c * v_factor / v_factor_rep; v_p := v_p * v_factor_rep / v_factor;
+        IF v_c <> round(v_c, 6) OR (v_p IS NOT NULL AND v_p <> round(v_p, 6)) THEN
+          RAISE EXCEPTION 'rest_decontat: cantitatea / pretul liniei % nu se pot reprezenta exact in UM-ul existent % (linia vine in %); trimite linia in UM-ul existent (um_nereprezentabil)',
+            v_k, v_um_rep, e->>'um' USING ERRCODE = '22023';
+        END IF;
+        v_c := trim_scale(round(v_c, 6)); v_p := trim_scale(round(v_p, 6));
+      END IF;
+    END IF;
+    v_scrie := v_scrie || jsonb_build_object(
+      'obiect_cod', coalesce(v_rep_ob->>public.fn_rest_decontat_cheie(e->>'obiect_cod', NULL, NULL, NULL), e->>'obiect_cod'),
+      'obiect_nume', e->'obiect_nume', 'deviz_cod', e->'deviz_cod', 'deviz_nume', e->'deviz_nume', 'nr', e->'nr', 'cod', e->'cod', 'denumire', e->'denumire',
+      'um', coalesce(v_um_rep, btrim(e->>'um')), 'cantitate', v_c, 'pret_unitar', v_p, 'valoare', (e->>'valoare')::numeric,
+      'tip_rand', coalesce(e->>'tip_rand', 'articol'), 'cheie', v_k);
   END LOOP;
-  IF cardinality(v_finale) <> jsonb_array_length(p_linii) OR (SELECT count(DISTINCT f) FROM unnest(v_finale) f) <> jsonb_array_length(p_linii) THEN
+  IF cardinality(v_finale) <> jsonb_array_length(v_linii) OR (SELECT count(DISTINCT f) FROM unnest(v_finale) f) <> jsonb_array_length(v_linii) THEN
     RAISE EXCEPTION 'rest_decontat: cheile finale nu sunt distincte' USING ERRCODE = '22023';
   END IF;
-  -- scrierea (marcajul static al tranzacției: garda proiect_articole lasă doar RPC-ul să pună coloanele de confirmare)
+  -- r5: rândurile contract_initial ale obiectelor importate sunt MUTATE în istoric (vechi = confirmare_oferta, confirmate = inlocuire_oferta), după
+  -- validări, sub advisory-ul proiectului; nimic vechi nu rămâne în tabel pe obiectele importate
+  IF p_sursa = 'contract_initial' THEN
+    SET LOCAL gazpet.rest_decontat_scriitor = 'fn_rest_decontat_confirma_baza';
+    WITH mut AS (
+      DELETE FROM public.proiect_articole a
+       WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial'
+         AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = ANY (v_obiecte)
+       RETURNING a.*),
+    ist AS (
+      INSERT INTO public.proiect_articole_istoric (rand_id, proiect_id, obiect_k, sursa, confirmat_la, rand, retras_de, retras_la, motiv, inlocuit_cu_amprenta)
+      SELECT m.id::bigint, p_proiect, public.fn_rest_decontat_cheie(m.obiect_cod::text, NULL, NULL, NULL), m.sursa::text, m.confirmat_la, to_jsonb(m), v_uid, v_acum,
+             CASE WHEN m.confirmat_la IS NULL THEN 'confirmare_oferta' ELSE 'inlocuire_oferta' END, p_amprenta
+        FROM mut m
+      RETURNING confirmat_la)
+    SELECT count(*)::integer, (count(*) FILTER (WHERE ist.confirmat_la IS NOT NULL))::integer INTO v_inlocuite, v_inlocuite_conf FROM ist;
+    SET LOCAL gazpet.rest_decontat_scriitor = '';
+    IF EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id::bigint = p_proiect AND a.sursa = 'contract_initial'
+                 AND public.fn_rest_decontat_cheie(a.obiect_cod::text, NULL, NULL, NULL) = ANY (v_obiecte)) THEN
+      RAISE EXCEPTION 'rest_decontat: randurile vechi ale obiectelor importate nu s-au putut muta in istoric' USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+  -- scrierea (marcajul static al tranzacției: garda proiect_articole lasă doar RPC-ul să pună coloanele de confirmare): liniile deja validate și aduse la
+  -- reprezentarea existentă (v_scrie)
   SET LOCAL gazpet.rest_decontat_scriitor = 'fn_rest_decontat_confirma_baza';
   WITH ins AS (
     INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, valoare, pret_unitar,
                                          sursa, act_nr, cheie, nota_id, act_aditional_id, mod_import, activ, fisier_amprenta, confirmat_de, confirmat_la, tip_rand)
-    SELECT p_proiect, x.obiect_cod, x.obiect_nume, x.deviz_cod, x.deviz_nume, x.nr, x.cod, x.denumire, btrim(x.um), x.cantitate, x.valoare, x.pret_unitar,
-           p_sursa, v_act_nr,
-           public.fn_rest_decontat_cheie(x.obiect_cod, x.deviz_cod, x.cod, CASE WHEN public.fn_rest_decontat_cheie(x.obiect_cod, x.deviz_cod, x.cod, NULL) = ANY (v_dub) THEN x.nr END),
-           p_nota_id, p_act_aditional_id, v_mod, true, p_amprenta, v_uid, v_acum, coalesce(x.tip_rand, 'articol')
-      FROM jsonb_to_recordset(p_linii) AS x(obiect_cod text, obiect_nume text, deviz_cod text, deviz_nume text, nr text, cod text, denumire text, um text,
-                                            cantitate numeric, valoare numeric, pret_unitar numeric, tip_rand text)
+    SELECT p_proiect, x.obiect_cod, x.obiect_nume, x.deviz_cod, x.deviz_nume, x.nr, x.cod, x.denumire, x.um, x.cantitate, x.valoare, x.pret_unitar,
+           p_sursa, v_act_nr, x.cheie, p_nota_id, p_act_aditional_id, v_mod, true, p_amprenta, v_uid, v_acum, x.tip_rand
+      FROM jsonb_to_recordset(v_scrie) AS x(obiect_cod text, obiect_nume text, deviz_cod text, deviz_nume text, nr text, cod text, denumire text, um text,
+                                            cantitate numeric, valoare numeric, pret_unitar numeric, tip_rand text, cheie text)
     RETURNING id)
   SELECT count(*)::integer, array_agg(ins.id::bigint ORDER BY ins.id) INTO v_n, v_ids FROM ins;
   SET LOCAL gazpet.rest_decontat_scriitor = '';
-  IF v_n <> jsonb_array_length(p_linii) THEN RAISE EXCEPTION 'rest_decontat: randurile scrise nu corespund liniilor trimise' USING ERRCODE = 'P0001'; END IF;
+  IF v_n <> jsonb_array_length(v_linii) THEN RAISE EXCEPTION 'rest_decontat: randurile scrise nu corespund liniilor trimise' USING ERRCODE = 'P0001'; END IF;
   -- inlocuite = rândurile contract_initial ale obiectelor din document mutate în istoric (vechi la prima confirmare; inlocuite_confirmate dintre ele
   -- fuseseră confirmate — doar cu „înlocuiește”); 0 la devize AA / NR / NCS și la obiecte noi
   RETURN jsonb_build_object('inserate', v_n, 'ids', to_jsonb(v_ids), 'sursa', p_sursa, 'mod_import', v_mod, 'inlocuite', v_inlocuite,
-                            'inlocuite_confirmate', v_inlocuite_conf, 'obiecte', to_jsonb(v_obiecte));
+                            'inlocuite_confirmate', v_inlocuite_conf, 'obiecte', to_jsonb(v_obiecte), 'um_schimbate', to_jsonb(v_um_schimbate));
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_rest_decontat_confirma_baza(bigint, text, bigint, bigint, text, text, text, jsonb, boolean) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_rest_decontat_confirma_baza(bigint, text, bigint, bigint, text, text, text, jsonb, boolean) TO authenticated;
@@ -1353,9 +1454,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%'
   ) x;
   -- AMPRENTA_20270105a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'e2cafa52e7718aa275b29d4b92df89a7' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '456f2a52fcecfdd76ede2270dc62415d' THEN
     RAISE NOTICE 'AMPRENTA_20270105a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270105a post: AMPRENTA obiectelor % (asteptat e2cafa52e7718aa275b29d4b92df89a7)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270105a post: AMPRENTA obiectelor % (asteptat 456f2a52fcecfdd76ede2270dc62415d)', md5(coalesce(v_amp, ''));
   END IF;
   -- ștampilele porților Izometrie, CALCULATE după ultima schimbare (coloanele noi pe executie_proiecte intră în E4b)
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());

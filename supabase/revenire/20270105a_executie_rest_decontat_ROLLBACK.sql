@@ -161,9 +161,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%'
   ) x;
   -- AMPRENTA_20270105a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'e2cafa52e7718aa275b29d4b92df89a7' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '456f2a52fcecfdd76ede2270dc62415d' THEN
     RAISE NOTICE 'AMPRENTA_20270105a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270105a revenire: AMPRENTA obiectelor migrarii % (asteptat e2cafa52e7718aa275b29d4b92df89a7): starea nu e cea din 20270105a; nimic schimbat',
+    RAISE EXCEPTION '20270105a revenire: AMPRENTA obiectelor migrarii % (asteptat 456f2a52fcecfdd76ede2270dc62415d): starea nu e cea din 20270105a; nimic schimbat',
       md5(coalesce(v_amp, ''));
   END IF;
 END $pre$;
@@ -218,7 +218,7 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.executie_proiecte'::regclass AND NOT a.attisdropped AND a.attname IN ('configurare_completa_la', 'configurare_exceptie_motiv'))
      OR EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conname IN ('proiect_articole_rd_mod_import_ck', 'proiect_articole_rd_tip_rand_ck', 'proiect_articole_rd_amprenta_ck',
                  'proiect_articole_rd_confirmat_ck', 'proiect_articole_rd_legaturi_ck', 'executie_proiecte_configurare_motiv_ck'))
-     OR EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('proiect_articole_rd_cheie_ix', 'proiect_articole_rd_aa_ix', 'proiect_articole_rd_nota_ix', 'proiect_articole_istoric_obiect_ix')) THEN
+     OR EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('proiect_articole_rd_cheie_ix', 'proiect_articole_rd_aa_ix', 'proiect_articole_rd_nota_ix', 'proiect_articole_istoric_obiect_ix', 'proiect_articole_istoric_amprenta_ix')) THEN
     RAISE EXCEPTION '20270105a revenire post: au ramas obiecte';
   END IF;
   -- ștampilele porților Izometrie, CALCULATE după ultima schimbare (coloanele scoase de pe executie_proiecte)

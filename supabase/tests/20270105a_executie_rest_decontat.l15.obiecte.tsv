@@ -203,6 +203,7 @@ relatie	relatie public.executie_sl_detaliu_pkey	creat
 relatie	relatie public.executie_sl_detaliu_sl_ix	creat
 relatie	relatie public.executie_sl_detaliu_versiune_uq	creat
 relatie	relatie public.proiect_articole_istoric	creat
+relatie	relatie public.proiect_articole_istoric_amprenta_ix	creat
 relatie	relatie public.proiect_articole_istoric_id_seq	creat
 relatie	relatie public.proiect_articole_istoric_obiect_ix	creat
 relatie	relatie public.proiect_articole_istoric_pkey	creat
