@@ -8,10 +8,11 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 export const MIGRARE = join(ROOT, 'supabase/migrations/20270106a_executie_semnale.sql')
-/** [nume, semnătura, limbajul, SECURITY DEFINER] — cele 10 funcții ale migrării, în ordinea din revenire */
+/** [nume, semnătura, limbajul, SECURITY DEFINER] — cele 11 funcții ale migrării, în ordinea din revenire */
 export const SEMNATURI = [
   ['fn_executie_semnal_drept', 'bigint, integer', 'sql', true], ['fn_executie_semnal_drept_id', 'bigint', 'sql', true],
-  ['fn_executie_semnal_tranzitie', 'text, text, text', 'sql', false], ['fn_executie_semnal_amprenta', 'text, text[], text, date, text, text', 'sql', false],
+  ['fn_executie_semnal_tranzitie', 'text, text, text', 'sql', false], ['fn_executie_semnal_canonic', 'text', 'sql', false],
+  ['fn_executie_semnal_amprenta', 'text, text[], text, date, text, text', 'sql', false],
   ['fn_executie_semnal_dif', 'jsonb, jsonb', 'sql', false], ['fn_executie_semnal_garda', '', 'plpgsql', false],
   ['fn_executie_semnal_jurnal_garda', '', 'plpgsql', false], ['fn_executie_semnal_fara_golire', '', 'plpgsql', false],
   ['fn_executie_semnal_scrie', 'jsonb', 'plpgsql', true], ['fn_executie_semnal_stare', 'bigint, integer, text, text, text, text, integer, boolean', 'plpgsql', true],

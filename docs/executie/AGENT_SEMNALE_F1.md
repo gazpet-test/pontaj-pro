@@ -15,14 +15,25 @@ Un rând în `executie_semnale`, unic pe **(proiect, tip, obiect)** — aceeași
 | `obiect` | ce anume (ex. `contract:termen`, `polita:GBE`, `camp:nr_contract`) |
 | `gravitate` | `info` / `atentie` / `critic` |
 | `titlu`, `detalii` | pentru om |
-| `constatare` | `constatat` (cu dovadă) · `negasit_in_surse` (documentul NU a fost găsit în sursele consultate — NU înseamnă că lipsește; `surse_consultate` obligatorie) · `camp_lipsa` (câmp gol în ERP; `dovada_ref` = câmpul) |
+| `constatare` | `constatat` (cu dovadă) · `negasit_in_surse` (documentul NU a fost găsit în sursele consultate — NU înseamnă că lipsește) · `camp_lipsa` (câmp gol în ERP) — vezi contractul dovezii mai jos |
 | `dovada_sursa` / `dovada_data` / `dovada_fragment` / `dovada_ref` | sursa (`document` / `mail` / `camp_erp`), data sursei, fragmentul scurt, linkul sau calea NAS |
-| `dovada_amprenta` | md5 canonic al dovezii, pus de SERVER; decide „dovadă nouă” |
-| `termen`, `termen_baza`, `termen_confirmat` | termenul identificat, baza calculului, dacă e confirmat |
+| `dovada_amprenta` | md5 CANONIC al dovezii, pus de SERVER; decide „dovadă nouă” (ordinea / spațiile / majusculele / dublurile surselor consultate și spațiile din fragment NU sunt dovadă nouă) |
+| `termen`, `termen_baza`, `termen_confirmat` | termenul identificat, baza calculului (OBLIGATORIE la termen confirmat), dacă e confirmat |
 | `incertitudine`, `propunere` | explicația incertitudinii; ce propune agentul |
-| `responsabil_employee_id`, `responsabil_sursa` | angajatul titular; `agent` (propus) sau `om` (stabilit de om — agentul nu-l mai schimbă) |
+| `responsabil_employee_id`, `responsabil_sursa` | angajatul titular; `agent` (propus) sau `om` (stabilit SAU confirmat explicit de om — inclusiv „fără responsabil”, id NULL — agentul nu-l mai schimbă) |
 | `stare` | `nou` → `in_lucru` / `asteapta_informatii` → `rezolvat` / `respins` (omul); `rezolvat` / `respins` → `nou` doar agentul, doar cu dovadă nouă |
-| `stare_motiv`, `stare_dovada`, `actiune_ref`, `stare_de`, `stare_la` | decizia omului: motivul, dovada rezolvării / respingerii, legătura cu tichetul / acțiunea, cine, când |
+| `stare_motiv`, `stare_dovada`, `actiune_ref`, `stare_de`, `stare_la` | decizia omului: motivul, dovada rezolvării / respingerii, legătura cu tichetul / acțiunea, cine, când; rezolvarea cere motiv + dovada SAU acțiunea |
+
+### Contractul dovezii (CHECK `executie_semnale_constatare_ck` / `_termen_ck`, scrise cu `IS NULL` / `IS NOT NULL` / `IS DISTINCT FROM`, fără rezultat UNKNOWN)
+| constatare | obligatoriu |
+|---|---|
+| `constatat` | `dovada_sursa` + `dovada_data` + `dovada_fragment` (calea / linkul singure nu dovedesc nimic; `dovada_ref` opțional) |
+| `negasit_in_surse` | `surse_consultate` (≥ 1) + OBLIGAȚIA care cere documentul: `dovada_sursa` + `dovada_data` + `dovada_fragment` (clauza din contract / ordin), `dovada_ref` opțional. „Negăsit” fără obligație e zgomot, nu semnal; ecranul arată ambele |
+| `camp_lipsa` | `dovada_sursa = 'camp_erp'` + `dovada_ref` (câmpul); data / fragmentul opționale |
+| termen | fără termen = fără bază / confirmare; cu termen = `termen_confirmat` decis explicit; `termen_confirmat = true` cere `termen_baza` |
+
+Cele 13 semnale ale testului „pe hârtie” al pilotului (sintetizate, fără date personale) stau în `scripts/pglite/executie_semnale_pilot.mjs` și se scriu
+real prin RPC în proba PGlite (toate `creat`; fiecare piesă scoasă = refuz 23514); a doua rulare = 13 × `neschimbat`.
 | `regula_versiune` | versiunea regulii care a produs semnalul |
 | `detectat_la`, `ultima_verificare`, `versiune` | prima detectare; ultima rulare care l-a confirmat; versiunea rândului (CAS pentru ecran) |
 
@@ -39,8 +50,9 @@ Cheile EXACTE (necunoscute = refuz 22023): `proiect_id`, `flux`, `tip`, `obiect`
 `termen`, `termen_baza`, `termen_confirmat`, `incertitudine`, `propunere`, `responsabil_employee_id` (opționale; `null` = lipsă).
 Răspuns `{ok, actiune, id, stare, versiune}` cu `actiune` ∈ `creat` · `actualizat` (ceva s-a schimbat, diferențele în jurnal) · `neschimbat`
 (doar `ultima_verificare`) · `redeschis` (semnal închis de om, dovadă NOUĂ → `nou`) · `neschimbat_inchis` (semnal închis de om, aceeași dovadă → NU
-reapare). Agentul nu poate atinge starea / motivul / dovada / acțiunea omului și nici responsabilul stabilit de om; gărzile stau în BD (trigger
-BEFORE), nu doar în RPC.
+reapare). Agentul nu poate atinge starea / motivul / dovada / acțiunea omului și nici responsabilul stabilit / confirmat de om; gărzile stau în BD
+(trigger BEFORE), nu doar în RPC. `surse_consultate` se stochează în ordinea formei canonice, fără dubluri (aceeași listă în altă ordine =
+`neschimbat`, nu `actualizat`); „dovadă nouă” = altă constatare / sursă / dată / fragment / cale sau o sursă consultată în plus / în minus.
 
 Exemplu: `select fn_executie_semnal_scrie('{"proiect_id": 12, "flux": "lipsuri", "tip": "termen_apropiat", "obiect": "contract:termen", "gravitate": "atentie",
 "titlu": "Termenul contractului se apropie", "constatare": "constatat", "dovada_sursa": "camp_erp", "dovada_data": "2026-11-21", "dovada_fragment": "data_termen = 2026-12-11",
@@ -49,7 +61,14 @@ Exemplu: `select fn_executie_semnal_scrie('{"proiect_id": 12, "flux": "lipsuri",
 
 ## RPC-ul omului: `fn_executie_semnal_stare(p_id, p_versiune, p_stare, p_motiv, p_dovada, p_actiune_ref, p_responsabil, p_schimba_responsabil)`
 EXECUTE `authenticated`; dreptul de mai sus, verificat după lock; CAS pe `versiune` (`{ok: false, motiv: 'conflict', semnal}` = ecranul reîncarcă).
-Rezolvarea, respingerea și redeschiderea cer motiv. `p_stare` NULL = starea rămâne (și textele ei); `p_schimba_responsabil = true` aplică `p_responsabil`.
+Rezolvarea cere motiv + dovada rezolvării SAU acțiunea rezultată; respingerea și redeschiderea cer motiv. `p_stare` NULL = starea rămâne (și
+textele ei). `p_schimba_responsabil = true` aplică `p_responsabil` ca DECIZIE a omului (`responsabil_sursa = 'om'`): și când e același angajat
+propus de agent (confirmare), și când e NULL („fără responsabil”); confirmarea fără altă schimbare e permisă (nu „nimic de schimbat”), iar o a
+doua confirmare identică e „nimic de schimbat”. Omul nu poate pune înapoi `agent` și nu poate șterge confirmarea (garda le forțează la `om`).
+
+Ecranul clasifică răspunsul RPC-ului (L05, `clasificaRaspunsStare`): doar un refuz HTTP 4xx (fără 408) e „nu s-a salvat”; eroarea de rețea
+(status 0), 408, 5xx sau un corp neașteptat = rezultat NECUNOSCUT (tranzacția poate fi comisă, răspunsul pierdut) → formularul se închide, lista se
+reîncarcă și omul verifică semnalul înainte să reia (nicio retrimitere automată).
 
 ## Ecranul
 Execuție → proiect → fila „🔔 Semnale” (`src/ExecutieSemnale.jsx`); pentru owner, în Execuție → Proiecte, panoul „🔔 Semnale — toate proiectele”
@@ -57,9 +76,11 @@ Execuție → proiect → fila „🔔 Semnale” (`src/ExecutieSemnale.jsx`); p
 propunerea, decizia și istoricul; formular de schimbare a stării (motiv, dovadă, acțiune) și a responsabilului.
 
 ## Probe
-`node scripts/pglite/test_executie_semnale_local.mjs` (PGlite, pașii reali L15 v2; drepturi pe 9 conturi, dedup, respins nu reapare, agentul nu
-atinge starea omului, revenirea, 31 de mutanți, paritatea tranzițiilor, dry-run-ul pentru clonă), `npx vitest run src/executieSemnaleLogica.test.js
-src/ExecutieSemnale.test.jsx`. Pe clonă: `supabase/tests/20270106a_executie_semnale_dryrun.sql` (după aplicarea prin runner).
+`node scripts/pglite/test_executie_semnale_local.mjs` (PGlite, pașii reali L15 v2; drepturi pe 9 conturi, dedup, contractul dovezii, amprenta
+canonică, confirmarea responsabilului, respins nu reapare, agentul nu atinge starea omului, pilotul cu 13 semnale, revenirea pe definiții
+(blocul DEFINITII, regenerat cu `--scrie-definitii`; lista L15 cu `--scrie-obiecte`), 45 de mutanți, paritatea tranzițiilor, dry-run-ul pentru
+clonă), `npx vitest run src/executieSemnaleLogica.test.js src/ExecutieSemnale.test.jsx`. Pe clonă: `supabase/tests/20270106a_executie_semnale_dryrun.sql`
+(după aplicarea prin runner).
 
 ## Ce NU e în faza 1 (faza 2, coordonatorul)
 Regulile de verificare și sursele permise ale fiecărui flux; agentul propriu-zis (programare, credențiale `service_role` pe server, limite de

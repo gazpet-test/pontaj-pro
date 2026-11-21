@@ -1,12 +1,19 @@
 -- Revenire 20270106a_executie_semnale. NEAPLICAT (ca și migrarea). Fără GO de execuție: doar la cererea explicită a owner-ului (supabase/revenire/README.md).
 -- Scoate TOT ce a creat migrarea: vederea v_executie_semnale, tabelele executie_semnale și executie_semnale_jurnal (cu politicile, trigger-ele,
--- cheile și indexurile lor) și cele 10 funcții fn_executie_semnal_*. Tabelele și funcțiile existente (executie_proiecte, employees, lanțul
+-- cheile și indexurile lor) și cele 11 funcții fn_executie_semnal_*. Tabelele și funcțiile existente (executie_proiecte, employees, lanțul
 -- 20261209a) NU se ating.
--- Starea EXACTĂ a migrării e verificată înainte, pe DEFINIȚII (nu doar pe numere): coloanele fiecărui tabel (nume, tip, în ordine), constrângerile
--- și indexurile (după nume), politicile (comanda, permisivă, rolurile, expresia exactă), trigger-ele (funcția, tipul, activ, fără WHEN / argumente /
--- coloane), funcțiile (corpul = amprenta fără CR, limbajul, DEFINER-ul, search_path-ul, proprietarul, EXECUTE pe fiecare rol), drepturile pe
--- tabele / vedere / secvențe (fiecare drept, pe fiecare rol, plus PUBLIC și coloane) și ACL-ul EXACT (niciun alt rol), nimic străin dependent.
--- Altă stare = refuz, nimic schimbat. Amprentele funcțiilor se regenerează cu scripts/executie_semnale_amprente.mjs --actualizeaza-revenire.
+-- Starea EXACTĂ a migrării e verificată înainte, pe DEFINIȚIILE EFECTIVE (nu pe nume / numere): coloanele fiecărui tabel (nume, tip, NOT NULL,
+-- valoarea implicită, identitatea, în ordine), TEXTUL fiecărei constrângeri (pg_get_constraintdef, validată) și al fiecărui index (pg_get_indexdef,
+-- valid), TEXTUL vederii (pg_get_viewdef) + security_invoker, politicile (comanda, permisivă, rolurile, expresia exactă), trigger-ele (funcția,
+-- tipul, activ, fără WHEN / argumente / coloane), funcțiile (corpul = amprenta fără CR, limbajul, DEFINER-ul, search_path-ul, proprietarul, EXECUTE
+-- pe fiecare rol), drepturile pe tabele / vedere / secvențe (fiecare drept, pe fiecare rol, plus PUBLIC și coloane) și ACL-ul EXACT (niciun alt
+-- rol), nimic străin dependent. Un CHECK înlocuit sub același nume, un index recreat pe alte coloane, un implicit schimbat, o vedere rescrisă =
+-- alt obiect decât cel creat = refuz. Altă stare = refuz, nimic schimbat.
+-- Blocurile se regenerează din migrare / de pe baza cu migrarea aplicată: AMPRENTE cu scripts/executie_semnale_amprente.mjs
+-- --actualizeaza-revenire, DEFINITII cu node scripts/pglite/test_executie_semnale_local.mjs --scrie-definitii (proba le verifică la fiecare rulare).
+-- Fără amprentă globală L15 (varianta A din docs/LIVRARE_L15_V2.md §9, plafonul 2000 al revenirilor): garanția revenirii e verificarea
+-- definițiilor de mai sus + „fără date”, nu comparația cu un manifest; dacă proprietarul cere aceeași garanție ca la aplicare (varianta B),
+-- revenirea se livrează separat, cu manifestul ei.
 -- REFUZĂ dacă există date: un semnal sau un rând de jurnal (semnalele și deciziile oamenilor asupra lor sunt istoric; golirea = decizie
 -- separată a owner-ului: preview → „da” → export → apply, într-o tranzacție armată, înaintea acestui fișier — trigger-ele refuză DELETE / TRUNCATE
 -- pentru oricine, inclusiv postgres, deci golirea cere dezactivarea lor în aceeași tranzacție).
@@ -21,7 +28,7 @@
 --   încercări și DUPĂ obținere, în ordinea: executie_semnale, executie_semnale_jurnal (ACCESS EXCLUSIVE), ÎNAINTEA verificării „fără date”;
 --   3. sub lock: starea din nou, „fără date”, DROP-urile (fără CASCADE), postcondiția. Un SINGUR bloc DO: un refuz e singura instrucțiune care eșuează.
 DO $revenire$
-DECLARE v_plafon text; v_incercari integer := 0; v_pas integer; v_rau text;
+DECLARE v_plafon text; v_incercari integer := 0; v_pas integer; v_rau text; v_n integer;
   v_tabele constant text[] := ARRAY['executie_semnale', 'executie_semnale_jurnal'];
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
@@ -69,29 +76,42 @@ BEGIN
        OR NOT EXISTS (SELECT 1 FROM pg_class WHERE oid = to_regclass('public.v_executie_semnale') AND 'security_invoker=on' = ANY (reloptions)) THEN
       RAISE EXCEPTION '20270106a revenire: starea nu e cea din 20270106a (pasul %, tabele / vedere)', v_pas;
     END IF;
-    -- coloanele fiecărui tabel: numele + tipul, în ordine (o coloană adăugată / schimbată = alt obiect decât cel creat)
-    SELECT string_agg(t.tab, ', ') INTO v_rau FROM (VALUES
-        -- COLOANE-START
-        ('executie_semnale', 'id:bigint,proiect_id:bigint,flux:text,tip:text,obiect:text,gravitate:text,titlu:text,detalii:text,constatare:text,surse_consultate:text[],dovada_sursa:text,dovada_data:date,dovada_fragment:text,dovada_ref:text,dovada_amprenta:text,termen:date,termen_baza:text,termen_confirmat:boolean,incertitudine:text,propunere:text,responsabil_employee_id:integer,responsabil_sursa:text,stare:text,stare_motiv:text,stare_dovada:text,actiune_ref:text,stare_de:uuid,stare_la:timestamp with time zone,regula_versiune:text,detectat_la:timestamp with time zone,ultima_verificare:timestamp with time zone,versiune:integer'),
-        ('executie_semnale_jurnal', 'id:bigint,semnal_id:bigint,proiect_id:bigint,actiune:text,stare_veche:text,stare_noua:text,actor:text,actor_profile:uuid,motiv:text,dovada:text,valori:jsonb,regula_versiune:text,creat_la:timestamp with time zone')
-        -- COLOANE-END
-      ) t(tab, coloane)
-     WHERE t.coloane IS DISTINCT FROM (SELECT string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod), ',' ORDER BY a.attnum)
-                                         FROM pg_attribute a WHERE a.attrelid = ('public.' || t.tab)::regclass AND a.attnum > 0 AND NOT a.attisdropped);
-    IF v_rau IS NOT NULL THEN
-      RAISE EXCEPTION '20270106a revenire: starea nu e cea din 20270106a (pasul %, coloane: %)', v_pas, v_rau;
-    END IF;
-    -- constrângerile (fără rândurile NOT NULL ale PG18) și indexurile, după nume, exact
-    IF (SELECT string_agg(k.conname, ',' ORDER BY k.conname) FROM pg_constraint k WHERE k.conrelid = 'public.executie_semnale'::regclass AND k.contype <> 'n')
-         IS DISTINCT FROM 'executie_semnale_amprenta_ck,executie_semnale_cheie_uq,executie_semnale_constatare_ck,executie_semnale_flux_ck,executie_semnale_gravitate_ck,executie_semnale_obiect_ck,executie_semnale_pkey,executie_semnale_proiect_id_fkey,executie_semnale_regula_ck,executie_semnale_responsabil_ck,executie_semnale_responsabil_employee_id_fkey,executie_semnale_stare_ck,executie_semnale_termen_ck,executie_semnale_texte_ck,executie_semnale_timp_ck,executie_semnale_tip_ck,executie_semnale_titlu_ck'
-       OR (SELECT string_agg(k.conname, ',' ORDER BY k.conname) FROM pg_constraint k WHERE k.conrelid = 'public.executie_semnale_jurnal'::regclass AND k.contype <> 'n')
-         IS DISTINCT FROM 'executie_semnale_jurnal_actiune_ck,executie_semnale_jurnal_actor_ck,executie_semnale_jurnal_pkey,executie_semnale_jurnal_semnal_id_fkey,executie_semnale_jurnal_valori_ck'
-       OR (SELECT string_agg(ic.relname, ',' ORDER BY ic.relname) FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid WHERE i.indrelid = 'public.executie_semnale'::regclass)
-         IS DISTINCT FROM 'executie_semnale_cheie_uq,executie_semnale_pkey,executie_semnale_proiect_stare_idx,executie_semnale_responsabil_idx'
-       OR (SELECT string_agg(ic.relname, ',' ORDER BY ic.relname) FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid WHERE i.indrelid = 'public.executie_semnale_jurnal'::regclass)
-         IS DISTINCT FROM 'executie_semnale_jurnal_pkey,executie_semnale_jurnal_semnal_idx'
-       OR EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid IN ('public.executie_semnale'::regclass, 'public.executie_semnale_jurnal'::regclass) AND NOT k.convalidated) THEN
-      RAISE EXCEPTION '20270106a revenire: starea nu e cea din 20270106a (pasul %, constrangeri / indexuri)', v_pas;
+    -- DEFINIȚIILE efective, pe fiecare obiect: coloanele (nume : tip : NOT NULL : implicit : identitate / generată, în ordine), fiecare
+    -- constrângere (numele + textul ei + validată; fără rândurile NOT NULL ale PG18), fiecare index (textul lui + valid), vederea (textul ei).
+    -- Textul așteptat (blocul DEFINITII) e generat de pe baza cu migrarea aplicată și verificat de probă la fiecare rulare; expresia care citește
+    -- starea reală (blocul DEF-ACTUAL) e aceeași în probă (citită de aici, nu copiată).
+    SELECT string_agg(a.cheie, ', ') FILTER (WHERE a.def IS DISTINCT FROM a.real),
+           count(DISTINCT a.cheie) FILTER (WHERE a.cheie IN ('coloane:executie_semnale', 'coloane:executie_semnale_jurnal', 'constrangeri:executie_semnale',
+                                                             'constrangeri:executie_semnale_jurnal', 'indexuri:executie_semnale', 'indexuri:executie_semnale_jurnal', 'vedere:v_executie_semnale'))
+      INTO v_rau, v_n
+      FROM (SELECT a.cheie, a.def, (
+        -- DEF-ACTUAL-START
+        CASE split_part(a.cheie, ':', 1)
+          WHEN 'coloane' THEN (SELECT string_agg(c.attname || ':' || format_type(c.atttypid, c.atttypmod) || ':' || CASE WHEN c.attnotnull THEN 'nn' ELSE 'n' END
+                                                 || ':' || coalesce(pg_get_expr(d.adbin, d.adrelid), '-') || ':' || c.attidentity::text || c.attgenerated::text, ',' ORDER BY c.attnum)
+                                 FROM pg_attribute c LEFT JOIN pg_attrdef d ON d.adrelid = c.attrelid AND d.adnum = c.attnum
+                                WHERE c.attrelid = ('public.' || split_part(a.cheie, ':', 2))::regclass AND c.attnum > 0 AND NOT c.attisdropped)
+          WHEN 'constrangeri' THEN (SELECT string_agg(k.conname || ' ' || pg_get_constraintdef(k.oid) || CASE WHEN k.convalidated THEN '' ELSE ' NOT VALID' END, '; ' ORDER BY k.conname)
+                                      FROM pg_constraint k WHERE k.conrelid = ('public.' || split_part(a.cheie, ':', 2))::regclass AND k.contype <> 'n')
+          WHEN 'indexuri' THEN (SELECT string_agg(pg_get_indexdef(i.indexrelid) || CASE WHEN i.indisvalid THEN '' ELSE ' INVALID' END, '; ' ORDER BY pg_get_indexdef(i.indexrelid))
+                                  FROM pg_index i WHERE i.indrelid = ('public.' || split_part(a.cheie, ':', 2))::regclass)
+          WHEN 'vedere' THEN regexp_replace(pg_get_viewdef(('public.' || split_part(a.cheie, ':', 2))::regclass), '[[:space:]]+', ' ', 'g')
+        END
+        -- DEF-ACTUAL-END
+        ) AS real FROM (VALUES
+        -- DEFINITII-START
+        ('coloane:executie_semnale', 'id:bigint:nn:-:d,proiect_id:bigint:nn:-:,flux:text:nn:-:,tip:text:nn:-:,obiect:text:nn:-:,gravitate:text:nn:-:,titlu:text:nn:-:,detalii:text:n:-:,constatare:text:nn:-:,surse_consultate:text[]:nn:''{}''::text[]:,dovada_sursa:text:n:-:,dovada_data:date:n:-:,dovada_fragment:text:n:-:,dovada_ref:text:n:-:,dovada_amprenta:text:nn:-:,termen:date:n:-:,termen_baza:text:n:-:,termen_confirmat:boolean:n:-:,incertitudine:text:n:-:,propunere:text:n:-:,responsabil_employee_id:integer:n:-:,responsabil_sursa:text:n:-:,stare:text:nn:''nou''::text:,stare_motiv:text:n:-:,stare_dovada:text:n:-:,actiune_ref:text:n:-:,stare_de:uuid:n:-:,stare_la:timestamp with time zone:n:-:,regula_versiune:text:nn:-:,detectat_la:timestamp with time zone:nn:now():,ultima_verificare:timestamp with time zone:nn:now():,versiune:integer:nn:1:'),
+        ('coloane:executie_semnale_jurnal', 'id:bigint:nn:-:d,semnal_id:bigint:nn:-:,proiect_id:bigint:nn:-:,actiune:text:nn:-:,stare_veche:text:n:-:,stare_noua:text:n:-:,actor:text:nn:-:,actor_profile:uuid:n:-:,motiv:text:n:-:,dovada:text:n:-:,valori:jsonb:nn:''{}''::jsonb:,regula_versiune:text:n:-:,creat_la:timestamp with time zone:nn:now():'),
+        ('constrangeri:executie_semnale', 'executie_semnale_amprenta_ck CHECK ((dovada_amprenta ~ ''^[0-9a-f]{32}$''::text)); executie_semnale_cheie_uq UNIQUE (proiect_id, tip, obiect); executie_semnale_constatare_ck CHECK (((constatare = ANY (ARRAY[''constatat''::text, ''negasit_in_surse''::text, ''camp_lipsa''::text])) AND ((dovada_sursa IS NULL) OR (dovada_sursa = ANY (ARRAY[''document''::text, ''mail''::text, ''camp_erp''::text]))) AND (cardinality(surse_consultate) <= 50) AND ((constatare IS DISTINCT FROM ''constatat''::text) OR ((dovada_sursa IS NOT NULL) AND (dovada_data IS NOT NULL) AND (dovada_fragment IS NOT NULL))) AND ((constatare IS DISTINCT FROM ''negasit_in_surse''::text) OR ((cardinality(surse_consultate) >= 1) AND (dovada_sursa IS NOT NULL) AND (dovada_data IS NOT NULL) AND (dovada_fragment IS NOT NULL))) AND ((constatare IS DISTINCT FROM ''camp_lipsa''::text) OR ((NOT (dovada_sursa IS DISTINCT FROM ''camp_erp''::text)) AND (dovada_ref IS NOT NULL))))); executie_semnale_flux_ck CHECK ((flux = ANY (ARRAY[''lipsuri''::text, ''tichete''::text, ''corespondenta''::text]))); executie_semnale_gravitate_ck CHECK ((gravitate = ANY (ARRAY[''info''::text, ''atentie''::text, ''critic''::text]))); executie_semnale_obiect_ck CHECK ((((length(obiect) >= 1) AND (length(obiect) <= 200)) AND (obiect !~ ''[[:cntrl:]]''::text) AND (obiect ~ ''[^[:space:]]''::text))); executie_semnale_pkey PRIMARY KEY (id); executie_semnale_proiect_id_fkey FOREIGN KEY (proiect_id) REFERENCES executie_proiecte(id); executie_semnale_regula_ck CHECK ((regula_versiune ~ ''^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$''::text)); executie_semnale_responsabil_ck CHECK ((((responsabil_sursa IS NULL) OR (responsabil_sursa = ANY (ARRAY[''agent''::text, ''om''::text]))) AND ((responsabil_employee_id IS NULL) OR (responsabil_sursa IS NOT NULL)) AND ((responsabil_sursa IS DISTINCT FROM ''agent''::text) OR (responsabil_employee_id IS NOT NULL)))); executie_semnale_responsabil_employee_id_fkey FOREIGN KEY (responsabil_employee_id) REFERENCES employees(id); executie_semnale_stare_ck CHECK (((stare = ANY (ARRAY[''nou''::text, ''in_lucru''::text, ''asteapta_informatii''::text, ''rezolvat''::text, ''respins''::text])) AND (((stare = ''nou''::text) AND (stare_motiv IS NULL) AND (stare_dovada IS NULL) AND (actiune_ref IS NULL) AND (stare_de IS NULL) AND (stare_la IS NULL)) OR ((stare <> ''nou''::text) AND (stare_de IS NOT NULL) AND (stare_la IS NOT NULL) AND ((stare <> ALL (ARRAY[''rezolvat''::text, ''respins''::text])) OR (stare_motiv IS NOT NULL)) AND ((stare IS DISTINCT FROM ''rezolvat''::text) OR (stare_dovada IS NOT NULL) OR (actiune_ref IS NOT NULL)))))); executie_semnale_termen_ck CHECK (((((termen IS NULL) AND (termen_baza IS NULL) AND (termen_confirmat IS NULL)) OR ((termen IS NOT NULL) AND ((termen >= ''2000-01-01''::date) AND (termen <= ''2100-12-31''::date)) AND (termen_confirmat IS NOT NULL) AND ((termen_confirmat IS NOT TRUE) OR (termen_baza IS NOT NULL)))) AND ((dovada_data IS NULL) OR ((dovada_data >= ''2000-01-01''::date) AND (dovada_data <= ''2100-12-31''::date))))); executie_semnale_texte_ck CHECK ((((detalii IS NULL) OR (((length(detalii) >= 1) AND (length(detalii) <= 4000)) AND (detalii ~ ''[^[:space:]]''::text))) AND ((dovada_fragment IS NULL) OR (((length(dovada_fragment) >= 1) AND (length(dovada_fragment) <= 1000)) AND (dovada_fragment ~ ''[^[:space:]]''::text))) AND ((dovada_ref IS NULL) OR (((length(dovada_ref) >= 1) AND (length(dovada_ref) <= 1000)) AND (dovada_ref !~ ''[[:cntrl:]]''::text) AND (dovada_ref ~ ''[^[:space:]]''::text))) AND ((termen_baza IS NULL) OR (((length(termen_baza) >= 1) AND (length(termen_baza) <= 500)) AND (termen_baza ~ ''[^[:space:]]''::text))) AND ((incertitudine IS NULL) OR (((length(incertitudine) >= 1) AND (length(incertitudine) <= 1000)) AND (incertitudine ~ ''[^[:space:]]''::text))) AND ((propunere IS NULL) OR (((length(propunere) >= 1) AND (length(propunere) <= 2000)) AND (propunere ~ ''[^[:space:]]''::text))) AND ((stare_motiv IS NULL) OR (((length(stare_motiv) >= 1) AND (length(stare_motiv) <= 2000)) AND (stare_motiv ~ ''[^[:space:]]''::text))) AND ((stare_dovada IS NULL) OR (((length(stare_dovada) >= 1) AND (length(stare_dovada) <= 1000)) AND (stare_dovada ~ ''[^[:space:]]''::text))) AND ((actiune_ref IS NULL) OR (((length(actiune_ref) >= 1) AND (length(actiune_ref) <= 200)) AND (actiune_ref !~ ''[[:cntrl:]]''::text) AND (actiune_ref ~ ''[^[:space:]]''::text))))); executie_semnale_timp_ck CHECK (((versiune >= 1) AND (ultima_verificare >= detectat_la))); executie_semnale_tip_ck CHECK ((tip ~ ''^[a-z][a-z0-9_]{1,59}$''::text)); executie_semnale_titlu_ck CHECK ((((length(titlu) >= 3) AND (length(titlu) <= 200)) AND (titlu !~ ''[[:cntrl:]]''::text) AND (titlu ~ ''[^[:space:]]''::text)))'),
+        ('constrangeri:executie_semnale_jurnal', 'executie_semnale_jurnal_actiune_ck CHECK ((actiune = ANY (ARRAY[''creat''::text, ''actualizat''::text, ''redeschis''::text, ''stare''::text, ''responsabil''::text]))); executie_semnale_jurnal_actor_ck CHECK (((actor = ANY (ARRAY[''agent''::text, ''om''::text])) AND ((actor = ''om''::text) = (actor_profile IS NOT NULL)))); executie_semnale_jurnal_pkey PRIMARY KEY (id); executie_semnale_jurnal_semnal_id_fkey FOREIGN KEY (semnal_id) REFERENCES executie_semnale(id); executie_semnale_jurnal_valori_ck CHECK ((jsonb_typeof(valori) = ''object''::text))'),
+        ('indexuri:executie_semnale', 'CREATE INDEX executie_semnale_proiect_stare_idx ON public.executie_semnale USING btree (proiect_id, stare, gravitate); CREATE INDEX executie_semnale_responsabil_idx ON public.executie_semnale USING btree (responsabil_employee_id) WHERE (responsabil_employee_id IS NOT NULL); CREATE UNIQUE INDEX executie_semnale_cheie_uq ON public.executie_semnale USING btree (proiect_id, tip, obiect); CREATE UNIQUE INDEX executie_semnale_pkey ON public.executie_semnale USING btree (id)'),
+        ('indexuri:executie_semnale_jurnal', 'CREATE INDEX executie_semnale_jurnal_semnal_idx ON public.executie_semnale_jurnal USING btree (semnal_id, id); CREATE UNIQUE INDEX executie_semnale_jurnal_pkey ON public.executie_semnale_jurnal USING btree (id)'),
+        ('vedere:v_executie_semnale', ' SELECT s.id, s.proiect_id, s.flux, s.tip, s.obiect, s.gravitate, s.titlu, s.detalii, s.constatare, s.surse_consultate, s.dovada_sursa, s.dovada_data, s.dovada_fragment, s.dovada_ref, s.dovada_amprenta, s.termen, s.termen_baza, s.termen_confirmat, s.incertitudine, s.propunere, s.responsabil_employee_id, s.responsabil_sursa, s.stare, s.stare_motiv, s.stare_dovada, s.actiune_ref, s.stare_de, s.stare_la, s.regula_versiune, s.detectat_la, s.ultima_verificare, s.versiune, e.cod_intern AS proiect_cod, e.nume AS proiect_nume FROM (executie_semnale s JOIN executie_proiecte e ON ((e.id = s.proiect_id)));'),
+        -- DEFINITII-END
+        ('', '')
+      ) a(cheie, def) WHERE a.cheie <> '') a;
+    IF v_rau IS NOT NULL OR v_n IS DISTINCT FROM 7 THEN
+      RAISE EXCEPTION '20270106a revenire: starea nu e cea din 20270106a (pasul %, definitii: %)', v_pas, coalesce(v_rau, 'blocul DEFINITII incomplet (' || coalesce(v_n, 0) || ' din 7)');
     END IF;
     -- drepturile pe tabele / vedere, fiecare pe rând: doar SELECT pentru authenticated / service_role; nimic pentru anon, PUBLIC, pe coloane
     SELECT string_agg(DISTINCT x.tab || '/' || y.rol || '/' || z.drept, ', ') INTO v_rau
@@ -149,19 +169,20 @@ BEGIN
     IF v_rau IS NOT NULL THEN
       RAISE EXCEPTION '20270106a revenire: starea nu e cea din 20270106a (pasul %, trigger-e: %)', v_pas, v_rau;
     END IF;
-    -- funcțiile: exact cele 10, fiecare cu corpul revizuit (amprenta fără CR), limbajul, DEFINER-ul, search_path-ul, proprietarul, EXECUTE pe clasă
+    -- funcțiile: exact cele 11, fiecare cu corpul revizuit (amprenta fără CR), limbajul, DEFINER-ul, search_path-ul, proprietarul, EXECUTE pe clasă
     SELECT string_agg(a.fn, ', ') INTO v_rau FROM (VALUES
         -- AMPRENTE-START
         ('public.fn_executie_semnal_drept(bigint, integer)', 'sql', true, 'e518d28f2e083bbbb58f1a76f408a998'),
         ('public.fn_executie_semnal_drept_id(bigint)', 'sql', true, 'fef8852a3559d16ce8ef6414c8f633ff'),
         ('public.fn_executie_semnal_tranzitie(text, text, text)', 'sql', false, 'c36465e6826f935218a565bd7768df4b'),
-        ('public.fn_executie_semnal_amprenta(text, text[], text, date, text, text)', 'sql', false, 'cbcf30d2e6fd749bb639f53ee0be14f4'),
+        ('public.fn_executie_semnal_canonic(text)', 'sql', false, 'dca255617fa2d2efd128b28d490bd217'),
+        ('public.fn_executie_semnal_amprenta(text, text[], text, date, text, text)', 'sql', false, '3795ba4c625627a385a0f56f85eb890b'),
         ('public.fn_executie_semnal_dif(jsonb, jsonb)', 'sql', false, 'e12240cbab35d2468a77fe093456ee84'),
-        ('public.fn_executie_semnal_garda()', 'plpgsql', false, 'ee50f35b4d60b262a53e227f1d076d62'),
+        ('public.fn_executie_semnal_garda()', 'plpgsql', false, 'ead4b8688b66d0079dec64c5ee0fb297'),
         ('public.fn_executie_semnal_jurnal_garda()', 'plpgsql', false, '06bfbc1622933e7305aefe0cd2e16efb'),
         ('public.fn_executie_semnal_fara_golire()', 'plpgsql', false, 'cc70f302ba552a0d797b136a6df85b67'),
-        ('public.fn_executie_semnal_scrie(jsonb)', 'plpgsql', true, 'ae665fdab77fdd4177768aa63f51953d'),
-        ('public.fn_executie_semnal_stare(bigint, integer, text, text, text, text, integer, boolean)', 'plpgsql', true, 'bfe08913bfec2e2e29c6bf461c7cdda3'),
+        ('public.fn_executie_semnal_scrie(jsonb)', 'plpgsql', true, '04b908e217cdde2c6575c10896c350c7'),
+        ('public.fn_executie_semnal_stare(bigint, integer, text, text, text, text, integer, boolean)', 'plpgsql', true, '6342f1c7c7cec8ac479f3db9df86c7d2'),
         -- AMPRENTE-END
         ('', '', false, '')
       ) a(fn, limbaj, definer, amp)
@@ -175,7 +196,7 @@ BEGIN
                                  OR a.fn LIKE 'public.fn_executie_semnal_drept_id(%' OR a.fn LIKE 'public.fn_executie_semnal_stare(%')
                            AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e WHERE e.grantee = 0));
     IF v_rau IS NOT NULL
-       OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_semnal\_%') <> 10 THEN
+       OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_semnal\_%') <> 11 THEN
       RAISE EXCEPTION '20270106a revenire: starea nu e cea din 20270106a (pasul %, functii: %)', v_pas, coalesce(v_rau, 'alt numar');
     END IF;
     -- nimic din afara migrării nu depinde de obiectele ei: vederi (în afara celei proprii) / chei străine spre tabele, funcții care le numesc, alte politici
@@ -212,6 +233,7 @@ BEGIN
   DROP FUNCTION public.fn_executie_semnal_fara_golire();
   DROP FUNCTION public.fn_executie_semnal_tranzitie(text, text, text);
   DROP FUNCTION public.fn_executie_semnal_amprenta(text, text[], text, date, text, text);
+  DROP FUNCTION public.fn_executie_semnal_canonic(text);
   DROP FUNCTION public.fn_executie_semnal_dif(jsonb, jsonb);
   IF to_regclass('public.executie_semnale') IS NOT NULL OR to_regclass('public.executie_semnale_jurnal') IS NOT NULL OR to_regclass('public.v_executie_semnale') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_semnal\_%') THEN

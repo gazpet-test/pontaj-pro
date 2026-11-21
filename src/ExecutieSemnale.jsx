@@ -1,6 +1,8 @@
 // „🔔 Semnale” — Execuție (agentul verificator, faza 1; migrarea 20270106a).
 // Agentul de noapte scrie semnale (DOAR el, prin RPC-ul lui); oamenii le văd și le schimbă starea (cu motiv) sau responsabilul, prin
-// fn_executie_semnal_stare (CAS pe versiune: 0 rânduri = conflict → lista se reîncarcă). Două ecrane din aceeași componentă:
+// fn_executie_semnal_stare (CAS pe versiune: 0 rânduri = conflict → lista se reîncarcă). Răspunsul RPC-ului e clasificat (L05): doar un refuz
+// HTTP 4xx e „nu s-a salvat”; eroarea de rețea / 5xx / răspunsul pierdut = rezultat NECUNOSCUT (tranzacția poate fi comisă) → lista se reîncarcă
+// și omul verifică înainte să reia. Două ecrane din aceeași componentă:
 //   * <ExecutieSemnale proiectId={…} />           — fila proiectului (toate semnalele proiectului pe care contul le poate citi);
 //   * <ExecutieSemnale mod="toate" />              — lista owner-ului, toate proiectele (RLS-ul dă exact ce are voie contul).
 // Citirea: v_executie_semnale (security_invoker) prin paginare keyset pe id (L23); numele responsabililor din employees, separat.
@@ -12,7 +14,8 @@ import { ziBucuresti } from './lib/izoTeren.js'
 import { G, S } from './NodCuplareVizualizare.jsx'
 import {
   STARI, STARE_INFO, GRAVITATI, GRAVITATE_INFO, FLUXURI, FLUX_INFO, CONSTATARE_INFO, STARI_DESCHISE,
-  stariUrmatoare, motivObligatoriu, fmtZi, fmtMoment, zilePanaLa, filtreaza, sorteaza, rezumat, dovadaText, eLink, parametriStare, validareStare,
+  stariUrmatoare, motivObligatoriu, dovadaSauActiuneObligatorie, fmtZi, fmtMoment, zilePanaLa, filtreaza, sorteaza, rezumat, dovadaText, eLink,
+  responsabilText, parametriStare, validareStare, clasificaRaspunsStare,
 } from './executieSemnaleLogica.js'
 
 const TON = { rosu: G.red, galben: G.yellow, albastru: G.blue, portocaliu: '#F0883E', verde: G.green, gri: G.muted }
@@ -126,15 +129,20 @@ export default function ExecutieSemnale({ proiectId = null, client = supabase, m
     if (v) { setMesaj({ tip: 'eroare', text: v }); return }
     const op = ++opGen.current
     setInCurs(true); setMesaj(null)
+    // rezultat NECUNOSCUT (L05): schimbarea poate fi comisă pe server, răspunsul s-a pierdut → nu „nu s-a salvat”; formularul se închide, lista se
+    // reîncarcă și omul verifică semnalul înainte să reia (o retrimitere oarbă ar putea schimba de două ori)
+    const necunoscut = detaliu => {
+      setMesaj({ tip: 'eroare', text: 'Rezultat necunoscut (rețea / server): schimbarea poate fi salvată sau nu. Lista s-a reîncărcat; verifică semnalul înainte să reiei. ' + detaliu })
+      setForm(null); incarca()
+    }
     try {
-      const { data, error } = await client.rpc('fn_executie_semnal_stare', parametriStare(r, form))
+      const res = await client.rpc('fn_executie_semnal_stare', parametriStare(r, form))
       if (op !== opGen.current) return
-      if (error) { setMesaj({ tip: 'eroare', text: 'Schimbarea nu s-a salvat: ' + textEroare(error) }); return }
-      if (!data || data.ok !== true) {
-        if (data?.motiv === 'conflict') { setMesaj({ tip: 'eroare', text: 'Semnalul s-a schimbat între timp (altcineva a lucrat pe el). Lista s-a reîncărcat; verifică și reia.' }); setForm(null); incarca(); return }
-        setMesaj({ tip: 'eroare', text: 'Răspuns neașteptat de la server: ' + JSON.stringify(data).slice(0, 200) }); return
-      }
-      const s = data.semnal
+      const c = clasificaRaspunsStare(res)
+      if (c.tip === 'refuz') { setMesaj({ tip: 'eroare', text: 'Schimbarea nu s-a salvat: ' + textEroare(c.eroare) }); return }
+      if (c.tip === 'necunoscut') { necunoscut(c.eroare ? textEroare(c.eroare) + (c.detaliu ? ` (${c.detaliu})` : '') : c.detaliu || ''); return }
+      if (c.tip === 'conflict') { setMesaj({ tip: 'eroare', text: 'Semnalul s-a schimbat între timp (altcineva a lucrat pe el). Lista s-a reîncărcat; verifică și reia.' }); setForm(null); incarca(); return }
+      const s = c.semnal
       setRanduri(lista => lista.map(x => (x.id === s.id ? { ...x, ...s } : x)))
       if (s.responsabil_employee_id != null && !nume[s.responsabil_employee_id]) {
         const e = Array.isArray(angajati) ? angajati.find(a => a.id === s.responsabil_employee_id) : null
@@ -145,7 +153,7 @@ export default function ExecutieSemnale({ proiectId = null, client = supabase, m
       setMesaj({ tip: 'ok', text: `Salvat: ${STARE_INFO[s.stare]?.label || s.stare}.` })
     } catch (e) {
       if (op !== opGen.current) return
-      setMesaj({ tip: 'eroare', text: 'Schimbarea nu s-a salvat (rezultat necunoscut, verifică lista): ' + textEroare(e) }); incarca()
+      necunoscut(textEroare(e))
     } finally { if (op === opGen.current) setInCurs(false) }
   }
 
@@ -198,17 +206,18 @@ export default function ExecutieSemnale({ proiectId = null, client = supabase, m
             </div>
             <div style={{ ...Sx.mic, marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <span>{FLUX_INFO[r.flux] || r.flux} · {r.tip} · {r.obiect}</span>
-              <span>responsabil: <b style={{ color: G.text }}>{r.responsabil_employee_id != null ? (nume[r.responsabil_employee_id] || `angajat #${r.responsabil_employee_id}`) : '—'}</b>{r.responsabil_sursa === 'agent' ? ' (propus de agent)' : ''}</span>
+              <span>responsabil: <b style={{ color: G.text }}>{responsabilText(r, nume)}</b></span>
               <span>detectat {fmtMoment(r.detectat_la)} · verificat {fmtMoment(r.ultima_verificare)}</span>
             </div>
             {estDeschis && (
               <div style={{ marginTop: 8, display: 'grid', gap: 6, fontSize: 13 }}>
                 {r.detalii && <div>{r.detalii}</div>}
                 <div><span style={Sx.mic}>constatare: </span>{CONSTATARE_INFO[r.constatare] || r.constatare}</div>
+                {/* dovada: constatat = sursă · dată · fragment; negăsit = sursele consultate ȘI obligația (clauza) care cere documentul; câmp lipsă = câmpul */}
                 <div><span style={Sx.mic}>dovadă: </span>{dovadaText(r) || '—'}
                   {r.dovada_ref && r.constatare !== 'camp_lipsa' && <> · {eLink(r.dovada_ref) ? <a href={r.dovada_ref} target="_blank" rel="noreferrer" style={{ color: G.blue }}>link</a> : <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{r.dovada_ref}</span>}</>}
                 </div>
-                {r.constatare === 'constatat' && r.surse_consultate?.length > 0 && <div style={Sx.mic}>surse consultate: {r.surse_consultate.join(', ')}</div>}
+                {r.constatare !== 'negasit_in_surse' && r.surse_consultate?.length > 0 && <div style={Sx.mic}>surse consultate: {r.surse_consultate.join(', ')}</div>}
                 {r.termen && <div><span style={Sx.mic}>termen: </span>{fmtZi(r.termen)}{r.termen_baza ? ` · baza: ${r.termen_baza}` : ''} · {r.termen_confirmat ? 'confirmat' : 'NECONFIRMAT'}</div>}
                 {r.incertitudine && <div><span style={Sx.mic}>incertitudine: </span>{r.incertitudine}</div>}
                 {r.propunere && <div><span style={Sx.mic}>propunere: </span>{r.propunere}</div>}
@@ -226,21 +235,22 @@ export default function ExecutieSemnale({ proiectId = null, client = supabase, m
                     <label style={S.label}>Motiv{motivObligatoriu(r.stare, fm.stare) ? ' (obligatoriu)' : ''}
                       <textarea value={fm.motiv} onChange={e => setForm(f => ({ ...f, motiv: e.target.value }))} aria-label="motiv" rows={2} style={{ ...S.input, marginTop: 4, fontSize: 14 }} placeholder="de ce / ce s-a făcut" />
                     </label>
-                    <label style={S.label}>Dovada (document, mail, act adițional)
+                    <label style={S.label}>Dovada (document, mail, act adițional){dovadaSauActiuneObligatorie(r.stare, fm.stare) ? ' — la rezolvare: dovada SAU acțiunea, obligatoriu' : ''}
                       <input value={fm.dovada} onChange={e => setForm(f => ({ ...f, dovada: e.target.value }))} aria-label="dovada" style={{ ...S.input, marginTop: 4, fontSize: 14 }} />
                     </label>
                     <label style={S.label}>Acțiunea rezultată (nr. tichet / adresă)
                       <input value={fm.actiuneRef} onChange={e => setForm(f => ({ ...f, actiuneRef: e.target.value }))} aria-label="acțiune" style={{ ...S.input, marginTop: 4, fontSize: 14 }} />
                     </label>
                     <label style={{ ...Sx.mic, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                      <input type="checkbox" checked={fm.schimbaResponsabil} onChange={e => setForm(f => ({ ...f, schimbaResponsabil: e.target.checked }))} aria-label="schimbă responsabilul" /> schimbă responsabilul
+                      <input type="checkbox" checked={fm.schimbaResponsabil} onChange={e => setForm(f => ({ ...f, schimbaResponsabil: e.target.checked }))} aria-label="schimbă responsabilul" /> schimbă / confirmă responsabilul
                     </label>
-                    {fm.schimbaResponsabil && (Array.isArray(angajati) ? (
+                    {fm.schimbaResponsabil && (Array.isArray(angajati) ? (<>
                       <select value={fm.responsabil ?? ''} onChange={e => setForm(f => ({ ...f, responsabil: e.target.value }))} aria-label="responsabil" style={S.input}>
                         <option value="">— fără responsabil —</option>
                         {angajati.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                       </select>
-                    ) : angajati?.eroare ? <div style={Sx.eroare}>Lista angajaților nu s-a putut încărca: {angajati.eroare}</div> : <div style={Sx.mic}>Se încarcă angajații…</div>)}
+                      <div style={Sx.mic}>Ce alegi aici devine decizia ta (și „fără responsabil”, și același angajat pe care l-a propus agentul): agentul nu o mai schimbă.</div>
+                    </>) : angajati?.eroare ? <div style={Sx.eroare}>Lista angajaților nu s-a putut încărca: {angajati.eroare}</div> : <div style={Sx.mic}>Se încarcă angajații…</div>)}
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button type="button" onClick={() => salveaza(r)} disabled={inCurs} style={{ ...S.btn, background: G.blue + '33', borderColor: G.blue }}>{inCurs ? 'Se salvează…' : 'Salvează'}</button>
                       <button type="button" onClick={() => setForm(null)} disabled={inCurs} style={S.btn}>Renunță</button>

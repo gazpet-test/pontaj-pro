@@ -36,6 +36,8 @@ export const stariUrmatoare = veche => STARI.filter(s => tranzitiePermisa(veche,
 /** motivul e obligatoriu la TRECEREA în rezolvat / respins și la redeschiderea unui semnal închis (aceeași regulă ca fn_executie_semnal_stare;
  *  starea neschimbată păstrează motivul existent pe server) */
 export const motivObligatoriu = (veche, noua) => noua !== veche && (['rezolvat', 'respins'].includes(noua) || ['rezolvat', 'respins'].includes(veche))
+/** la TRECEREA în rezolvat e obligatorie dovada rezolvării SAU acțiunea rezultată (aceeași regulă ca RPC-ul și CHECK-ul executie_semnale_stare_ck) */
+export const dovadaSauActiuneObligatorie = (veche, noua) => noua === 'rezolvat' && noua !== veche
 
 export const fmtZi = z => (z ? String(z).slice(0, 10).split('-').reverse().join('.') : '—')
 export const fmtMoment = m => {
@@ -96,15 +98,50 @@ export function rezumat(randuri) {
   return r
 }
 
-/** textul dovezii, pentru afișare: sursa · data · fragment; referința se arată separat (link doar dacă e http(s)) */
+/** sursa · data · fragmentul dovezii (ce arată contractul: pentru „negăsit” = obligația care cere documentul) */
+const dovadaPiese = r => [SURSA_INFO[r.dovada_sursa] || r.dovada_sursa, r.dovada_data ? fmtZi(r.dovada_data) : null, r.dovada_fragment].filter(Boolean).join(' · ')
+/** textul dovezii, pentru afișare; referința (link / cale) se arată separat (link doar dacă e http(s)).
+ *  negăsit = sursele consultate ȘI obligația (clauza) care cere documentul; câmp lipsă = câmpul + ce s-a citit; constatat = sursa · data · fragment */
 export function dovadaText(r) {
   if (!r) return ''
-  if (r.constatare === 'negasit_in_surse') return `Negăsit în sursele consultate: ${(r.surse_consultate || []).join(', ') || '—'}`
-  if (r.constatare === 'camp_lipsa') return `Câmp gol în ERP: ${r.dovada_ref || '—'}`
-  const p = [SURSA_INFO[r.dovada_sursa] || r.dovada_sursa, r.dovada_data ? fmtZi(r.dovada_data) : null, r.dovada_fragment].filter(Boolean)
-  return p.join(' · ')
+  if (r.constatare === 'negasit_in_surse') {
+    const ob = dovadaPiese(r)
+    return `Negăsit în sursele consultate: ${(r.surse_consultate || []).join(', ') || '—'} · obligația: ${ob || '—'}`
+  }
+  if (r.constatare === 'camp_lipsa') {
+    const citit = [r.dovada_data ? fmtZi(r.dovada_data) : null, r.dovada_fragment].filter(Boolean).join(' · ')
+    return `Câmp gol în ERP: ${r.dovada_ref || '—'}${citit ? ' · ' + citit : ''}`
+  }
+  return dovadaPiese(r)
 }
 export const eLink = ref => /^https?:\/\/[^\s]+$/i.test(String(ref || ''))
+
+/** responsabilul, pentru afișare: numele (sau #id) + proveniența; „fără responsabil” ales de om se deosebește de „nimic decis” */
+export function responsabilText(r, nume = {}) {
+  if (!r) return '—'
+  if (r.responsabil_employee_id != null) {
+    const n = nume[r.responsabil_employee_id] || `angajat #${r.responsabil_employee_id}`
+    return r.responsabil_sursa === 'agent' ? `${n} (propus de agent)` : r.responsabil_sursa === 'om' ? `${n} (stabilit de om)` : n
+  }
+  return r.responsabil_sursa === 'om' ? 'fără responsabil (stabilit de om)' : '—'
+}
+
+/**
+ * Răspunsul lui client.rpc('fn_executie_semnal_stare') clasificat (L05): doar un refuz HTTP 4xx (fără 408) e eșec SIGUR („nu s-a salvat”);
+ * eroarea fără status (postgrest-js dă status 0 la „Failed to fetch”), 408, 5xx sau un corp neașteptat = NECUNOSCUT (tranzacția poate fi comisă,
+ * răspunsul pierdut) → ecranul reîncarcă și cere verificarea. ok = {ok: true, semnal}; conflict = {ok: false, motiv: 'conflict', semnal}.
+ */
+export function clasificaRaspunsStare(res) {
+  if (!res || typeof res !== 'object') return { tip: 'necunoscut', detaliu: 'fără răspuns' }
+  const { data, error, status } = res
+  if (error) {
+    const sigur = Number.isInteger(status) && status >= 400 && status < 500 && status !== 408
+    return sigur ? { tip: 'refuz', eroare: error } : { tip: 'necunoscut', eroare: error, detaliu: `status ${Number.isInteger(status) ? status : 'lipsă'}` }
+  }
+  if (data && data.ok === true && data.semnal && data.semnal.id != null) return { tip: 'ok', semnal: data.semnal }
+  if (data && data.ok === false && data.motiv === 'conflict' && data.semnal) return { tip: 'conflict', semnal: data.semnal }
+  return { tip: 'necunoscut', detaliu: 'răspuns neașteptat: ' + JSON.stringify(data ?? null).slice(0, 200) }
+}
 
 /** parametrii RPC-ului fn_executie_semnal_stare din formularul de schimbare a stării */
 export function parametriStare(semnal, { stare, motiv, dovada, actiuneRef, responsabil, schimbaResponsabil }) {
@@ -117,10 +154,11 @@ export function parametriStare(semnal, { stare, motiv, dovada, actiuneRef, respo
   }
 }
 /** validarea formularului înaintea apelului: mesaj sau null */
-export function validareStare(semnal, { stare, motiv, schimbaResponsabil, responsabil }) {
+export function validareStare(semnal, { stare, motiv, dovada, actiuneRef, schimbaResponsabil, responsabil }) {
   const noua = stare || semnal.stare
   if (noua !== semnal.stare && !tranzitiePermisa(semnal.stare, noua, 'om')) return `Din „${STARE_INFO[semnal.stare]?.label}” nu se poate trece la „${STARE_INFO[noua]?.label}”.`
   if (motivObligatoriu(semnal.stare, noua) && !(motiv || '').trim()) return 'Motivul e obligatoriu la rezolvare, respingere și redeschidere.'
+  if (dovadaSauActiuneObligatorie(semnal.stare, noua) && !(dovada || '').trim() && !(actiuneRef || '').trim()) return 'La rezolvare e obligatorie dovada rezolvării (document, act adițional) sau acțiunea rezultată (tichet, adresă).'
   if (schimbaResponsabil && responsabil != null && responsabil !== '' && !/^[1-9][0-9]{0,8}$/.test(String(responsabil))) return 'Responsabilul trebuie să fie un angajat din listă.'
   return null
 }

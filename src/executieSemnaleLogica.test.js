@@ -2,9 +2,10 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
-  TRANZITII, STARI, tranzitiePermisa, stariUrmatoare, motivObligatoriu, zilePanaLa, filtreaza, sorteaza, rezumat, dovadaText, eLink,
-  parametriStare, validareStare, fmtZi,
+  TRANZITII, STARI, tranzitiePermisa, stariUrmatoare, motivObligatoriu, dovadaSauActiuneObligatorie, zilePanaLa, filtreaza, sorteaza, rezumat, dovadaText, eLink,
+  responsabilText, parametriStare, validareStare, clasificaRaspunsStare, fmtZi,
 } from './executieSemnaleLogica.js'
+import { PILOT } from '../scripts/pglite/executie_semnale_pilot.mjs'
 
 const S = (id, extra = {}) => ({
   id, proiect_id: 1, proiect_cod: 'P1', flux: 'lipsuri', tip: 'termen_apropiat', obiect: 'contract:termen', gravitate: 'atentie', titlu: `Semnal ${id}`,
@@ -77,11 +78,39 @@ describe('filtre, sortare, rezumat', () => {
     expect(zilePanaLa(null, '2026-11-21')).toBeNull()
     expect(fmtZi('2026-12-11')).toBe('11.12.2026')
   })
-  it('textul dovezii deosebește „negăsit în surse” de „câmp lipsă” și de „constatat”', () => {
-    expect(dovadaText(S(1, { constatare: 'negasit_in_surse', surse_consultate: ['NAS', 'mail'] }))).toBe('Negăsit în sursele consultate: NAS, mail')
-    expect(dovadaText(S(1, { constatare: 'camp_lipsa', dovada_ref: 'executie_proiecte.nr_contract' }))).toBe('Câmp gol în ERP: executie_proiecte.nr_contract')
+  it('textul dovezii deosebește „negăsit în surse” (cu OBLIGAȚIA care cere documentul) de „câmp lipsă” și de „constatat”', () => {
+    expect(dovadaText(S(1, { constatare: 'negasit_in_surse', surse_consultate: ['NAS', 'mail'], dovada_sursa: 'document', dovada_data: '2026-09-18', dovada_fragment: 'art. 8: GBE în max. 15 zile' })))
+      .toBe('Negăsit în sursele consultate: NAS, mail · obligația: document · 18.09.2026 · art. 8: GBE în max. 15 zile')
+    expect(dovadaText(S(1, { constatare: 'negasit_in_surse', surse_consultate: ['NAS'], dovada_sursa: null, dovada_data: null, dovada_fragment: null }))).toBe('Negăsit în sursele consultate: NAS · obligația: —')   // rând vechi / incomplet: lipsa se vede
+    expect(dovadaText(S(1, { constatare: 'camp_lipsa', dovada_ref: 'executie_proiecte.nr_contract', dovada_data: null, dovada_fragment: null }))).toBe('Câmp gol în ERP: executie_proiecte.nr_contract')
+    expect(dovadaText(S(1, { constatare: 'camp_lipsa', dovada_ref: 'sites.proiect_id', dovada_data: '2026-11-22', dovada_fragment: 'niciun șantier legat' }))).toBe('Câmp gol în ERP: sites.proiect_id · 22.11.2026 · niciun șantier legat')
     expect(dovadaText(S(1))).toBe('câmp ERP · 21.11.2026 · data_termen = 2026-12-11')
     expect(eLink('https://x.y/z')).toBe(true); expect(eLink('Z:/Oferte/x.pdf')).toBe(false)
+  })
+  it('responsabilul: propus de agent / stabilit de om / „fără responsabil” ales de om / nimic decis', () => {
+    const nume = { 10: 'POPESCU ION' }
+    expect(responsabilText(S(1, { responsabil_employee_id: 10, responsabil_sursa: 'agent' }), nume)).toBe('POPESCU ION (propus de agent)')
+    expect(responsabilText(S(1, { responsabil_employee_id: 10, responsabil_sursa: 'om' }), nume)).toBe('POPESCU ION (stabilit de om)')
+    expect(responsabilText(S(1, { responsabil_employee_id: 11, responsabil_sursa: 'om' }), nume)).toBe('angajat #11 (stabilit de om)')
+    expect(responsabilText(S(1, { responsabil_employee_id: null, responsabil_sursa: 'om' }), nume)).toBe('fără responsabil (stabilit de om)')
+    expect(responsabilText(S(1, { responsabil_employee_id: null, responsabil_sursa: null }), nume)).toBe('—')
+    expect(responsabilText(null)).toBe('—')
+  })
+  it('cele 13 semnale ale pilotului (sintetizate) se afișează cu dovada completă: „negăsit” arată și obligația, nu doar sursele', () => {
+    const pilot = PILOT(42)
+    expect(pilot).toHaveLength(13)
+    expect(pilot.map(s => s.constatare).sort()).toEqual(['camp_lipsa', 'camp_lipsa', 'camp_lipsa', 'camp_lipsa', 'camp_lipsa', 'camp_lipsa', 'constatat', 'constatat', 'negasit_in_surse', 'negasit_in_surse', 'negasit_in_surse', 'negasit_in_surse', 'negasit_in_surse'])
+    for (const s of pilot) {
+      const t = dovadaText({ ...s, id: 1 })
+      expect(t).not.toMatch(/—/)                                           // nicio piesă lipsă în afișare
+      if (s.constatare === 'negasit_in_surse') { expect(t).toMatch(/^Negăsit în sursele consultate: .+ · obligația: document · \d\d\.\d\d\.\d{4} · .+/); expect(t).toContain(s.dovada_fragment) }
+      if (s.constatare === 'camp_lipsa') expect(t).toMatch(/^Câmp gol în ERP: .+ · 22\.11\.2026 · .+/)
+      if (s.termen) expect(s.termen_confirmat !== true || !!s.termen_baza).toBe(true)
+    }
+    // fără date personale / valori: niciun nume de persoană (NUME PRENUME cu majuscule), nicio sumă în lei
+    const tot = JSON.stringify(pilot)
+    expect(tot).not.toMatch(/\b[A-ZĂÂÎȘȚ]{3,} [A-ZĂÂÎȘȚ][a-zăâîșț]+\b/)
+    expect(tot).not.toMatch(/\d[\d.]*,\d\d lei/)
   })
 })
 
@@ -95,12 +124,47 @@ describe('formularul de stare → RPC', () => {
     expect(parametriStare(r, { stare: 'in_lucru', motiv: '' })).toMatchObject({ p_stare: null, p_motiv: null })   // aceeași stare = NULL (serverul o păstrează)
     expect(parametriStare(r, { stare: null, responsabil: '', schimbaResponsabil: true })).toMatchObject({ p_responsabil: null, p_schimba_responsabil: true })
   })
-  it('validarea: tranziție nepermisă, motiv lipsă, responsabil invalid', () => {
+  it('validarea: tranziție nepermisă, motiv lipsă, rezolvare fără dovadă / acțiune, responsabil invalid', () => {
     expect(validareStare(r, { stare: 'nou' })).toMatch(/nu se poate trece/)
     expect(validareStare(r, { stare: 'respins', motiv: '  ' })).toMatch(/Motivul e obligatoriu/)
     expect(validareStare(r, { stare: 'respins', motiv: 'x' })).toBeNull()
     expect(validareStare(r, { stare: 'asteapta_informatii' })).toBeNull()
     expect(validareStare(r, { stare: 'in_lucru', schimbaResponsabil: true, responsabil: 'abc' })).toMatch(/angajat/)
     expect(validareStare(S(8, { stare: 'respins' }), { stare: 'in_lucru' })).toMatch(/Motivul e obligatoriu/)
+    // rezolvarea: motiv + dovada SAU acțiunea (aceeași regulă ca RPC-ul / CHECK-ul)
+    expect(dovadaSauActiuneObligatorie('in_lucru', 'rezolvat')).toBe(true)
+    expect(dovadaSauActiuneObligatorie('rezolvat', 'rezolvat')).toBe(false)   // starea neschimbată: serverul păstrează dovada existentă
+    expect(dovadaSauActiuneObligatorie('in_lucru', 'respins')).toBe(false)
+    expect(validareStare(r, { stare: 'rezolvat', motiv: 'gata' })).toMatch(/dovada rezolvării/)
+    expect(validareStare(r, { stare: 'rezolvat', motiv: 'gata', dovada: '  ', actiuneRef: ' ' })).toMatch(/dovada rezolvării/)
+    expect(validareStare(r, { stare: 'rezolvat', motiv: 'gata', dovada: 'AA 3' })).toBeNull()
+    expect(validareStare(r, { stare: 'rezolvat', motiv: 'gata', actiuneRef: 'TKT-1' })).toBeNull()
+    expect(validareStare(r, { stare: 'respins', motiv: 'nu e cazul' })).toBeNull()
+    // confirmarea aceluiași responsabil e o cerere validă (nu „nimic de schimbat” local)
+    expect(validareStare(r, { stare: 'in_lucru', schimbaResponsabil: true, responsabil: '11' })).toBeNull()
+    expect(validareStare(r, { stare: 'in_lucru', schimbaResponsabil: true, responsabil: '' })).toBeNull()
+  })
+})
+
+describe('răspunsul RPC-ului clasificat (L05: doar 4xx = eșec sigur; restul = necunoscut, se reîncarcă)', () => {
+  const sem = { id: 7, stare: 'in_lucru', versiune: 4 }
+  it('ok / conflict', () => {
+    expect(clasificaRaspunsStare({ data: { ok: true, semnal: sem }, error: null, status: 200 })).toEqual({ tip: 'ok', semnal: sem })
+    expect(clasificaRaspunsStare({ data: { ok: false, motiv: 'conflict', semnal: sem }, error: null, status: 200 })).toEqual({ tip: 'conflict', semnal: sem })
+  })
+  it('refuz SIGUR doar cu status 4xx (fără 408)', () => {
+    const e = { code: '42501', message: 'semnale: nu ai drept' }
+    expect(clasificaRaspunsStare({ data: null, error: e, status: 403 })).toEqual({ tip: 'refuz', eroare: e })
+    expect(clasificaRaspunsStare({ data: null, error: { code: '22023', message: 'cere un motiv' }, status: 400 }).tip).toBe('refuz')
+    expect(clasificaRaspunsStare({ data: null, error: e, status: 408 }).tip).toBe('necunoscut')
+  })
+  it('necunoscut: rețea (status 0), 5xx, status lipsă, corp neașteptat, fără răspuns', () => {
+    expect(clasificaRaspunsStare({ data: null, error: { message: 'TypeError: Failed to fetch' }, status: 0 })).toMatchObject({ tip: 'necunoscut', detaliu: 'status 0' })
+    expect(clasificaRaspunsStare({ data: null, error: { message: 'gateway' }, status: 503 })).toMatchObject({ tip: 'necunoscut', detaliu: 'status 503' })
+    expect(clasificaRaspunsStare({ data: null, error: { code: '42501', message: 'x' } })).toMatchObject({ tip: 'necunoscut', detaliu: 'status lipsă' })   // fără status = nu e refuz sigur
+    expect(clasificaRaspunsStare({ data: { ceva: 1 }, error: null, status: 200 }).tip).toBe('necunoscut')
+    expect(clasificaRaspunsStare({ data: { ok: true }, error: null, status: 200 }).tip).toBe('necunoscut')      // ok fără semnal
+    expect(clasificaRaspunsStare({ data: null, error: null, status: 200 }).tip).toBe('necunoscut')
+    expect(clasificaRaspunsStare(undefined).tip).toBe('necunoscut')
   })
 })

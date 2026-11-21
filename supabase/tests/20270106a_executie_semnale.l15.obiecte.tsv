@@ -101,6 +101,7 @@ constrangere	constrangere tabel public.executie_semnale_jurnal.executie_semnale_
 constrangere	constrangere tabel public.executie_semnale_jurnal.executie_semnale_jurnal_semnal_id_fkey	creat
 constrangere	constrangere tabel public.executie_semnale_jurnal.executie_semnale_jurnal_valori_ck	creat
 functie	functie public.fn_executie_semnal_amprenta(text,text[],text,date,text,text)	creat
+functie	functie public.fn_executie_semnal_canonic(text)	creat
 functie	functie public.fn_executie_semnal_dif(jsonb,jsonb)	creat
 functie	functie public.fn_executie_semnal_drept(bigint,integer)	creat
 functie	functie public.fn_executie_semnal_drept_id(bigint)	creat

@@ -53,17 +53,20 @@ function clientFals({ randuri = [], jurnal = {}, erori = {} } = {}) {
       }
       return q
     },
+    // moduri: 'ok' / 'auto' (serverul aplică); 'conflict'; 'refuz' (4xx: nimic scris); 'retea' / '5xx' (serverul A COMIS, răspunsul s-a pierdut:
+    // postgrest-js dă status 0 la „Failed to fetch”)
     rpc: (fn, a) => {
       const d = amana(); st.rpc.push({ fn, a, ...d })
       return d.p.then(mod => {
-        if (mod === 'retea') return { data: null, error: { message: 'Failed to fetch' } }
-        if (mod === 'refuz') return { data: null, error: { code: '42501', message: 'semnale: semnalul nu există sau nu ai drept asupra lui' } }
+        if (mod === 'refuz') return { data: null, error: { code: '42501', message: 'semnale: semnalul nu există sau nu ai drept asupra lui' }, status: 403 }
         const r = server.get(a.p_id)
-        if (mod === 'conflict' || r.versiune !== a.p_versiune) return { data: { ok: false, motiv: 'conflict', semnal: { ...r } }, error: null }
+        if (mod === 'conflict' || r.versiune !== a.p_versiune) return { data: { ok: false, motiv: 'conflict', semnal: { ...r } }, error: null, status: 200 }
         Object.assign(r, { stare: a.p_stare || r.stare, stare_motiv: a.p_motiv, stare_dovada: a.p_dovada, actiune_ref: a.p_actiune_ref, versiune: r.versiune + 1,
           stare_de: 'u1', stare_la: '2026-11-22T08:00:00+00:00',
-          ...(a.p_schimba_responsabil ? { responsabil_employee_id: a.p_responsabil, responsabil_sursa: a.p_responsabil == null ? null : 'om' } : {}) })
-        return { data: { ok: true, semnal: { ...r } }, error: null }
+          ...(a.p_schimba_responsabil ? { responsabil_employee_id: a.p_responsabil, responsabil_sursa: 'om' } : {}) })   // ca serverul: orice alegere a omului = sursa om
+        if (mod === 'retea') return { data: null, error: { message: 'TypeError: Failed to fetch' }, status: 0 }
+        if (mod === '5xx') return { data: null, error: { message: 'gateway timeout' }, status: 504 }
+        return { data: { ok: true, semnal: { ...r } }, error: null, status: 200 }
       })
     },
   }
@@ -187,20 +190,100 @@ dom(numeDom('ExecutieSemnale (jsdom + react-dom)'), () => {
     expect(u.d.body.textContent).toContain('s-a schimbat între timp')
     expect(st.cereri.filter(c => c.tabel === 'v_executie_semnale').length).toBeGreaterThan(cereriInainte)
     expect(u.d.body.textContent).toContain('versiunea rândului 4')
-    // a doua încercare, pe versiunea nouă: refuzul serverului se arată ca eroare, nu dispare
+    // a doua încercare, pe versiunea nouă: refuzul SIGUR al serverului (4xx) se arată ca eroare, fără reîncărcare, formularul rămâne
     await u.apasa(u.buton('Schimbă starea'))
     await u.bifa(u.camp('schimbă responsabilul'))
     await u.scrie(u.camp('responsabil'), '11')
     await u.apasa(u.buton('Salvează'))
+    const cereriRefuz = st.cereri.filter(c => c.tabel === 'v_executie_semnale').length
     await u.elibereaza(st.rpc[1], 'refuz')
     expect(u.d.body.textContent).toContain('Schimbarea nu s-a salvat')
     expect(u.d.body.textContent).toContain('nu ai drept')
-    // a treia, reușită: numele noului responsabil apare
+    expect(u.d.body.textContent).not.toContain('Rezultat necunoscut')
+    expect(st.cereri.filter(c => c.tabel === 'v_executie_semnale').length).toBe(cereriRefuz)
+    // a treia, reușită: numele noului responsabil apare, ca decizie a omului
     await u.apasa(u.buton('Salvează'))
     await u.elibereaza(st.rpc[2], 'ok')
     expect(server.get(1).responsabil_employee_id).toBe(11)
-    expect(u.d.body.textContent).toContain('IONESCU ANA')
+    expect(u.d.body.textContent).toContain('IONESCU ANA (stabilit de om)')
     expect(u.d.body.textContent).not.toContain('(propus de agent)')
+  })
+
+  it('rezultat NECUNOSCUT (eroare de rețea după COMMIT, 5xx): nu „nu s-a salvat”; formularul se închide, lista se reîncarcă și arată starea reală (L05)', async () => {
+    const { client, st, server } = clientFals({ randuri: [SEM(1), SEM(2, { titlu: 'Semnal 2' })] })
+    const u = await monteaza(client)
+    await u.apasa(u.buton('Semnal 1'))
+    await u.apasa(u.buton('Schimbă starea'))
+    await u.scrie(u.camp('stare nouă'), 'in_lucru')
+    await u.apasa(u.buton('Salvează'))
+    const cereri = st.cereri.filter(c => c.tabel === 'v_executie_semnale').length
+    await u.elibereaza(st.rpc[0], 'retea')                            // serverul a comis, răspunsul s-a pierdut (status 0)
+    expect(server.get(1).stare).toBe('in_lucru')
+    expect(u.d.body.textContent).toContain('Rezultat necunoscut')
+    expect(u.d.body.textContent).not.toContain('Schimbarea nu s-a salvat')
+    expect(st.cereri.filter(c => c.tabel === 'v_executie_semnale').length).toBeGreaterThan(cereri)   // reîncărcat
+    expect(u.d.querySelector('[data-semnal="1"]').textContent).toContain('în lucru')                 // starea reală, de pe server
+    expect(u.d.querySelector('[data-semnal="1"]').textContent).toContain('versiunea rândului 2')
+    expect(u.d.querySelector('[role="form"]')).toBeNull()                                            // formularul închis: omul verifică, nu retrimite orb
+    expect(st.rpc).toHaveLength(1)                                                                   // nicio retrimitere automată
+    // 5xx = tot necunoscut
+    await u.apasa(u.buton('Semnal 2'))
+    await u.apasa(u.buton('Schimbă starea'))
+    await u.scrie(u.camp('stare nouă'), 'asteapta_informatii')
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[1], '5xx')
+    expect(u.d.body.textContent).toContain('Rezultat necunoscut')
+    expect(u.d.body.textContent).toContain('status 504')
+    expect(u.d.querySelector('[data-semnal="2"]').textContent).toContain('așteaptă informații')
+  })
+
+  it('confirmarea responsabilului propus de agent (același angajat) și „fără responsabil” pleacă la server și se arată ca decizii ale omului', async () => {
+    const { client, st, server } = clientFals({ randuri: [SEM(1, { responsabil_employee_id: 10, responsabil_sursa: 'agent' })] })
+    const u = await monteaza(client)
+    expect(u.d.body.textContent).toContain('POPESCU ION (propus de agent)')
+    await u.apasa(u.buton('Semnal 1'))
+    await u.apasa(u.buton('Schimbă starea'))
+    await u.bifa(u.camp('schimbă responsabilul'))
+    expect(u.camp('responsabil').value).toBe('10')                     // propunerea agentului, preselectată
+    expect(u.d.body.textContent).toContain('devine decizia ta')
+    await u.apasa(u.buton('Salvează'))                                 // fără nicio altă schimbare: confirmarea E o schimbare
+    expect(st.rpc[0].a).toMatchObject({ p_id: 1, p_versiune: 1, p_stare: null, p_responsabil: 10, p_schimba_responsabil: true })
+    await u.elibereaza(st.rpc[0], 'ok')
+    expect(server.get(1).responsabil_sursa).toBe('om')
+    expect(u.d.body.textContent).toContain('POPESCU ION (stabilit de om)')
+    expect(u.d.body.textContent).not.toContain('(propus de agent)')
+    // „fără responsabil”
+    await u.apasa(u.buton('Schimbă starea'))
+    await u.bifa(u.camp('schimbă responsabilul'))
+    await u.scrie(u.camp('responsabil'), '')
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc[1].a).toMatchObject({ p_versiune: 2, p_responsabil: null, p_schimba_responsabil: true })
+    await u.elibereaza(st.rpc[1], 'ok')
+    expect(u.d.body.textContent).toContain('fără responsabil (stabilit de om)')
+  })
+
+  it('rezolvarea cere dovada SAU acțiunea (oprit local, fără RPC); „negăsit” arată obligația care cere documentul', async () => {
+    const { client, st } = clientFals({ randuri: [SEM(1, { stare: 'in_lucru', versiune: 2, stare_de: 'u1', stare_la: '2026-11-21T21:00:00+00:00' }),
+      SEM(2, { titlu: 'Polița GBE negăsită', constatare: 'negasit_in_surse', surse_consultate: ['ERP: polițe', 'NAS: dosar'], dovada_sursa: 'document', dovada_data: '2026-09-18',
+        dovada_fragment: 'art. 8: GBE 10% în max. 15 zile', dovada_ref: 'NAS: contract.pdf', termen: null, termen_baza: null, termen_confirmat: null })] })
+    const u = await monteaza(client)
+    await u.apasa(u.buton('Polița GBE negăsită'))
+    expect(u.d.body.textContent).toContain('Negăsit în sursele consultate: ERP: polițe, NAS: dosar · obligația: document · 18.09.2026 · art. 8: GBE 10% în max. 15 zile')
+    expect(u.d.body.textContent).toContain('NAS: contract.pdf')
+    await u.apasa(u.buton('Semnal 1'))
+    await u.apasa(u.buton('Schimbă starea'))
+    await u.scrie(u.camp('stare nouă'), 'rezolvat')
+    expect(u.d.body.textContent).toContain('la rezolvare: dovada SAU acțiunea, obligatoriu')
+    await u.scrie(u.camp('motiv'), 'gata')
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc).toHaveLength(0)
+    expect(u.d.body.textContent).toContain('dovada rezolvării')
+    await u.scrie(u.camp('acțiune'), 'TKT-2026-0001')
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc).toHaveLength(1)
+    expect(st.rpc[0].a).toMatchObject({ p_stare: 'rezolvat', p_motiv: 'gata', p_dovada: null, p_actiune_ref: 'TKT-2026-0001' })
+    await u.elibereaza(st.rpc[0], 'ok')
+    expect(u.d.body.textContent).toContain('Salvat: rezolvat.')
   })
 
   it('schimbarea proiectului: răspunsul întârziat al proiectului vechi nu se aplică (L24)', async () => {

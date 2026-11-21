@@ -13,6 +13,10 @@
 //    agentul nu atinge starea / motivul / responsabilul omului; omul nu rescrie constatarea (și pe calea directă, ca postgres).
 // 2. Refuzurile migrării (marcaj, plafon, fără amprenta globală, tabela „înainte” veche, lanțul de drept schimbat, coloane lipsă, bugetul lock-ului).
 // 3. Revenirea (refuz cu date, definiții / structură / ACL schimbate, aplicare -> revenire -> re-aplicare).
+//    Runda 2 (verdictul Jakarinos pe PR #1164): confirmarea explicită a responsabilului (același angajat / „fără responsabil” = decizia omului),
+//    amprenta CANONICĂ (ordinea / spațiile / majusculele surselor, spațiile din fragment nu redeschid), contractul dovezii (constatat = sursă +
+//    dată + fragment; negăsit = surse + obligația; camp_lipsa fără sursă nu trece prin UNKNOWN; termen confirmat cu bază; rezolvat cu dovadă /
+//    acțiune), cele 13 semnale ale pilotului scrise real, revenirea verificată pe DEFINIȚII (blocul DEFINITII, `--scrie-definitii`).
 // 4. MUTANȚI ai migrării: fiecare TREBUIE să pice (la aplicare, la verificări sau prin detectorul lui).
 // 5. Paritatea tranzițiilor: blocul TRANZITII din migrare = TRANZITII din src/executieSemnaleLogica.js + aceleași răspunsuri pe toate combinațiile (L19).
 // 6. Dry-run-ul pentru clonă (supabase/tests/20270106a_executie_semnale_dryrun.sql) rulat aici întreg, pe baza cu migrarea aplicată.
@@ -179,11 +183,15 @@ const SEMNAL = (proiect = 1, extra = {}) => ({
   termen: '2026-12-11', termen_baza: 'câmpul data_termen', termen_confirmat: true, incertitudine: null, propunere: 'Verificați dacă e nevoie de act adițional.',
   responsabil_employee_id: null, regula_versiune: 'lipsuri-v1', ...extra,
 })
+// negăsit în surse: sursele consultate + OBLIGAȚIA care cere documentul (contractul: sursa, data, fragmentul clauzei)
 const NEGASIT = (proiect = 2, extra = {}) => SEMNAL(proiect, {
   tip: 'document_negasit', obiect: 'polita:GBE', titlu: 'Polița GBE nu a fost găsită', constatare: 'negasit_in_surse',
-  surse_consultate: ['NAS: Z:/.../garantii', 'mail: subiect „GBE”'], dovada_sursa: null, dovada_data: null, dovada_fragment: null, dovada_ref: null,
-  termen: null, termen_baza: null, termen_confirmat: null, incertitudine: 'Polița poate fi la Kostas, nescanată.', responsabil_employee_id: 11, ...extra,
+  surse_consultate: ['NAS: Z:/.../garantii', 'mail: subiect „GBE”'], dovada_sursa: 'document', dovada_data: '2026-09-18',
+  dovada_fragment: 'art. 8: GBE 10% în max. 15 zile de la încheierea contractului', dovada_ref: 'NAS: Z:/.../contract.pdf',
+  termen: null, termen_baza: null, termen_confirmat: null, incertitudine: 'Polița poate fi la responsabilul contracte, nescanată.', responsabil_employee_id: 11, ...extra,
 })
+// cele 13 semnale ale pilotului (sintetizate), pe proiectul dat
+const { PILOT } = await import('./executie_semnale_pilot.mjs')
 const scrie = (db, s, { rol = 'service_role', uid = null } = {}) => ca(db, rol, uid, `SELECT public.fn_executie_semnal_scrie(${lit(JSON.stringify(s))}::jsonb) AS r`)
 const stare = (db, uid, id, versiune, st, { motiv = null, dovada = null, ref = null, resp = null, schimba = false, rol = 'authenticated' } = {}) =>
   ca(db, rol, uid, `SELECT public.fn_executie_semnal_stare(${id}, ${versiune}, ${st == null ? 'NULL' : lit(st)}, ${motiv == null ? 'NULL' : lit(motiv)}, ${dovada == null ? 'NULL' : lit(dovada)}, ${ref == null ? 'NULL' : lit(ref)}, ${resp == null ? 'NULL' : resp}, ${schimba}) AS r`)
@@ -227,10 +235,27 @@ async function verifica(db) {
   asteptCod(await scrie(db, SEMNAL(1, { gravitate: 'urgent' })), '23514', 'A gravitate necunoscută')
   asteptCod(await scrie(db, SEMNAL(1, { flux: 'altul', tip: 'x_y' })), '23514', 'A flux necunoscut')
   asteptCod(await scrie(db, SEMNAL(1, { tip: 'Termen' })), '23514', 'A tip cu majuscule')
+  // CONTRACTUL DOVEZII: fiecare lipsă e refuzată de CHECK (23514), inclusiv cele care înainte treceau prin rezultatul UNKNOWN
   asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_x', constatare: 'negasit_in_surse', surse_consultate: [] })), '23514', 'A negăsit fără surse')
+  asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_x2', constatare: 'negasit_in_surse', surse_consultate: ['NAS'], dovada_fragment: null })), '23514', 'A negăsit fără fragmentul obligației')
+  asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_x3', constatare: 'negasit_in_surse', surse_consultate: ['NAS'], dovada_sursa: null, dovada_data: null, dovada_fragment: null, dovada_ref: null })), '23514', 'A negăsit fără obligație (doar sursele)')
+  asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_x4', constatare: 'negasit_in_surse', surse_consultate: ['NAS'], dovada_data: null })), '23514', 'A negăsit fără data obligației')
   asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_y', constatare: 'camp_lipsa', dovada_sursa: 'mail' })), '23514', 'A câmp lipsă cu altă sursă decât camp_erp')
+  asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_y2', constatare: 'camp_lipsa', dovada_sursa: null })), '23514', 'A câmp lipsă FĂRĂ sursă (NULL nu trece ca UNKNOWN)')
+  asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_y3', constatare: 'camp_lipsa', dovada_ref: null })), '23514', 'A câmp lipsă fără câmpul (dovada_ref)')
   asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_z', constatare: 'constatat', dovada_sursa: null })), '23514', 'A constatat fără sursă')
+  asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_z2', constatare: 'constatat', dovada_data: null })), '23514', 'A constatat fără data sursei')
+  asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_z3', constatare: 'constatat', dovada_fragment: null })), '23514', 'A constatat doar cu calea, fără fragment')
   asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_t', termen: '2026-12-01', termen_confirmat: null })), '23514', 'A termen fără „confirmat”')
+  asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_t2', termen: '2026-12-01', termen_confirmat: true, termen_baza: null })), '23514', 'A termen CONFIRMAT fără baza calculului')
+  asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_t3', termen: null, termen_confirmat: null, termen_baza: 'x' })), '23514', 'A bază fără termen')
+  // căile legitime ale contractului (L20), pe P3 (fără MP): termen neconfirmat fără bază; câmp lipsă doar cu câmpul; constatat fără cale
+  const leg1 = asteptOk(await scrie(db, SEMNAL(3, { tip: 'doc_ok1', obiect: 'o1', termen: '2026-12-01', termen_confirmat: false, termen_baza: null, incertitudine: 'termen dedus' })), 'A termen neconfirmat fără bază (legitim)')
+  if (leg1 && leg1.actiune !== 'creat') ab.push('A termen neconfirmat fără bază: ' + JSON.stringify(leg1))
+  const leg2 = asteptOk(await scrie(db, SEMNAL(3, { tip: 'doc_ok2', obiect: 'o2', constatare: 'camp_lipsa', dovada_sursa: 'camp_erp', dovada_ref: 'executie_proiecte.x', dovada_data: null, dovada_fragment: null, termen: null, termen_confirmat: null, termen_baza: null })), 'A câmp lipsă doar cu câmpul (legitim)')
+  if (leg2 && leg2.actiune !== 'creat') ab.push('A câmp lipsă doar cu câmpul: ' + JSON.stringify(leg2))
+  const leg3 = asteptOk(await scrie(db, SEMNAL(3, { tip: 'doc_ok3', obiect: 'o3', dovada_ref: null })), 'A constatat fără cale (legitim)')
+  if (leg3 && leg3.actiune !== 'creat') ab.push('A constatat fără cale: ' + JSON.stringify(leg3))
   asteptCod(await scrie(db, SEMNAL(1, { titlu: 'ab' })), '23514', 'A titlu prea scurt')
   asteptCod(await scrie(db, SEMNAL(1, { obiect: 'x' + String.fromCharCode(7) })), '23514', 'A caracter de control în obiect')
   asteptCod(await scrie(db, SEMNAL(1, { regula_versiune: 'v 1' })), '23514', 'A versiunea regulii cu spațiu')
@@ -252,17 +277,18 @@ async function verifica(db) {
   const QV = 'SELECT proiect_id, count(*)::int AS n FROM public.v_executie_semnale GROUP BY 1 ORDER BY 1'
   const QJ = 'SELECT proiect_id, count(*)::int AS n FROM public.executie_semnale_jurnal GROUP BY 1 ORDER BY 1'
   // VIEWER = angajatul 14, responsabilul PROPUS de agent pe primul semnal: îl vede pe acela (dreptul urmează responsabilul, oricare i-ar fi sursa)
-  for (const [cont, asteptat] of [['OWNER', '["1:2","2:1"]'], ['MP_P1', '["1:2"]'], ['MP_P2', '["2:1"]'], ['RESP', '["2:1"]'], ['MP_P1_RESTRANS', '[]'],
+  // P3 (fără MP, cele 3 semnale legitime) îl vede doar owner-ul
+  for (const [cont, asteptat] of [['OWNER', '["1:2","2:1","3:3"]'], ['MP_P1', '["1:2"]'], ['MP_P2', '["2:1"]'], ['RESP', '["2:1"]'], ['MP_P1_RESTRANS', '[]'],
                                   ['SEF', '[]'], ['ADMIN', '[]'], ['VIEWER', '["1:1"]'], ['FARA', '[]']]) {
     for (const [nume, q] of [['tabel', Q], ['vedere', QV]]) { const v = await nr(U[cont], q); if (v !== asteptat) ab.push(`B ${nume} ${cont}: ${v} (aștepta ${asteptat})`) }
   }
-  for (const [cont, asteptat] of [['OWNER', '["1:4","2:1"]'], ['MP_P1', '["1:4"]'], ['RESP', '["2:1"]'], ['SEF', '[]'], ['ADMIN', '[]'], ['MP_P1_RESTRANS', '[]']]) {
+  for (const [cont, asteptat] of [['OWNER', '["1:4","2:1","3:3"]'], ['MP_P1', '["1:4"]'], ['RESP', '["2:1"]'], ['SEF', '[]'], ['ADMIN', '[]'], ['MP_P1_RESTRANS', '[]']]) {
     const v = await nr(U[cont], QJ); if (v !== asteptat) ab.push(`B jurnal ${cont}: ${v} (aștepta ${asteptat})`)
   }
   if (await nr(null, Q) !== '[]') ab.push('B fără JWT vede semnale')
   asteptCod(await ca(db, 'anon', null, Q), '42501', 'B anon citește tabelul')
   asteptCod(await ca(db, 'anon', null, QV), '42501', 'B anon citește vederea')
-  const vs = await ca(db, 'service_role', null, Q); if (vs.code || vs.rows.length !== 2) ab.push('B service_role (agentul) nu citește tot: ' + JSON.stringify(vs))
+  const vs = await ca(db, 'service_role', null, Q); if (vs.code || vs.rows.length !== 3) ab.push('B service_role (agentul) nu citește tot: ' + JSON.stringify(vs))
   const vv = await ca(db, 'authenticated', U.OWNER, `SELECT proiect_cod, proiect_nume FROM public.v_executie_semnale WHERE id = ${id1}`)
   if (vv.code || vv.rows[0]?.proiect_cod !== 'P1' || vv.rows[0]?.proiect_nume !== 'Proiect unu') ab.push('B vederea nu aduce codul / numele proiectului: ' + JSON.stringify(vv))
   // C. scrierile directe refuzate (PostgREST: authenticated / service_role); postgres: fără ștergere / golire; jurnalul doar adăugare
@@ -288,6 +314,8 @@ async function verifica(db) {
   asteptCod(await ca(db, 'postgres', U.OWNER, `UPDATE public.executie_semnale SET titlu = 'alt titlu' WHERE id = ${id1}`), '42501', 'C omul rescrie titlul direct', /constatarea agentului/)
   asteptCod(await ca(db, 'postgres', U.OWNER, `UPDATE public.executie_semnale SET ultima_verificare = now() WHERE id = ${id1}`), '42501', 'C omul mută ultima verificare', /constatarea agentului/)
   asteptCod(await ca(db, 'postgres', U.OWNER, `INSERT INTO public.executie_semnale (proiect_id, flux, tip, obiect, gravitate, titlu, constatare, dovada_amprenta, regula_versiune) VALUES (1, 'lipsuri', 'x_y', 'o', 'info', 'Titlu', 'camp_lipsa', repeat('0', 32), 'v1')`), '42501', 'C omul creează un semnal direct', /doar agentul/)
+  // contractul stării și pe calea directă (CHECK, L07): rezolvat fără dovadă / acțiune, chiar cu motiv
+  asteptCod(await ca(db, 'postgres', U.OWNER, `UPDATE public.executie_semnale SET stare = 'rezolvat', stare_motiv = 'gata' WHERE id = ${id3}`), '23514', 'C rezolvat direct fără dovadă / acțiune', /executie_semnale_stare_ck/)
   // D. starea omului: MP-ul pe P1; CAS; motivul; tranzițiile; dreptul; responsabilul
   let v = (await rand(db, id1)).versiune
   const d1 = asteptOk(await stare(db, U.MP_P1, id1, v, 'in_lucru'), 'D MP ia în lucru')
@@ -297,6 +325,8 @@ async function verifica(db) {
   v += 1
   asteptCod(await stare(db, U.MP_P1, id1, v, 'respins'), '22023', 'D respins fără motiv', /cere un motiv/)
   asteptCod(await stare(db, U.MP_P1, id1, v, 'rezolvat', { motiv: '   ' }), '22023', 'D rezolvat cu motiv gol', /cere un motiv/)
+  asteptCod(await stare(db, U.MP_P1, id1, v, 'rezolvat', { motiv: 'gata' }), '22023', 'D rezolvat doar cu motiv, fără dovadă / acțiune', /cere dovada rezolvării sau acțiunea/)
+  asteptCod(await stare(db, U.MP_P1, id1, v, 'rezolvat', { motiv: 'gata', dovada: '  ' }), '22023', 'D rezolvat cu dovadă goală', /cere dovada rezolvării sau acțiunea/)
   asteptCod(await stare(db, U.MP_P1, id1, v, 'nou'), '22023', 'D omul pune „nou”', /nepermisă omului/)
   asteptCod(await stare(db, U.MP_P1, id1, v, 'alta'), '22023', 'D stare necunoscută', /nepermisă omului/)
   asteptCod(await stare(db, U.MP_P1, id1, v, null), '22023', 'D nimic de schimbat', /nimic de schimbat/)
@@ -328,15 +358,22 @@ async function verifica(db) {
   // fostul responsabil nu mai vede semnalul (dreptul urmează responsabilul curent); MP-ul P1 (angajatul 10) acum îl vede
   if (await nr(U.RESP, Q) !== '[]') ab.push('D fostul responsabil mai vede semnalul')
   if (await nr(U.MP_P1, Q) !== '["1:2","2:1"]') ab.push('D noul responsabil (MP P1) nu vede semnalul P2: ' + await nr(U.MP_P1, Q))
+  // „fără responsabil” ales de om = tot decizie a omului (sursa om, id NULL): agentul nu mai propune peste ea
   const e3 = asteptOk(await stare(db, U.OWNER, id2, 3, null, { resp: null, schimba: true }), 'D owner-ul scoate responsabilul')
-  if (e3 && (e3.ok !== true || e3.semnal.responsabil_employee_id !== null || e3.semnal.responsabil_sursa !== null)) ab.push('D responsabil scos: ' + JSON.stringify(e3))
-  const e4 = asteptOk(await stare(db, U.OWNER, id2, 4, null, { resp: 11, schimba: true }), 'D owner-ul pune înapoi responsabilul 11')
+  if (e3 && (e3.ok !== true || e3.semnal.responsabil_employee_id !== null || e3.semnal.responsabil_sursa !== 'om')) ab.push('D „fără responsabil” nu e decizia omului: ' + JSON.stringify(e3))
+  asteptCod(await stare(db, U.OWNER, id2, 4, null, { resp: null, schimba: true }), '22023', 'D „fără responsabil” ales a doua oară', /nimic de schimbat/)
+  const e3b = asteptOk(await scrie(db, NEGASIT(2, { responsabil_employee_id: 14 })), 'D agentul propune peste „fără responsabil”')
+  const rr0 = await rand(db, id2)
+  if (e3b && (e3b.actiune !== 'neschimbat' || rr0.responsabil_employee_id !== null || rr0.responsabil_sursa !== 'om')) ab.push('D agentul a trecut peste „fără responsabil”: ' + JSON.stringify([e3b, rr0.responsabil_employee_id, rr0.responsabil_sursa]))
+  asteptCod(await ca(db, 'postgres', null, `UPDATE public.executie_semnale SET responsabil_employee_id = 14 WHERE id = ${id2}`), '42501', 'D calea directă a agentului peste „fără responsabil”', /stabilit de om/)
+  const e4 = asteptOk(await stare(db, U.OWNER, id2, 5, null, { resp: 11, schimba: true }), 'D owner-ul pune înapoi responsabilul 11')
   if (e4 && e4.semnal.responsabil_sursa !== 'om') ab.push('D sursa responsabilului pus de om: ' + JSON.stringify(e4))
   const jd = await jurnal(db, id1, "AND actor = 'om'")
   if (jd.length !== 3 || jd.some(x => x.actiune !== 'stare' || x.actor_profile !== U.MP_P1) || jd[2].motiv !== 'Termenul e deja prelungit prin AA 2.' || jd[2].stare_veche !== 'in_lucru' || jd[2].stare_noua !== 'respins')
     ab.push('D jurnalul omului pe P1: ' + JSON.stringify(jd.map(x => [x.actiune, x.stare_veche, x.stare_noua, x.motiv])))
   const je = await jurnal(db, id2, "AND actiune = 'responsabil'")
-  if (je.length !== 3 || JSON.stringify(je[0].valori.responsabil_employee_id) !== '[11,10]' || JSON.stringify(je[0].valori.responsabil_sursa) !== '["agent","om"]') ab.push('D jurnalul responsabilului: ' + JSON.stringify(je.map(x => x.valori)))
+  if (je.length !== 3 || JSON.stringify(je[0].valori.responsabil_employee_id) !== '[11,10]' || JSON.stringify(je[0].valori.responsabil_sursa) !== '["agent","om"]'
+      || JSON.stringify(je[1].valori) !== '{"responsabil_employee_id":[10,null]}' || JSON.stringify(je[2].valori) !== '{"responsabil_employee_id":[null,11]}') ab.push('D jurnalul responsabilului: ' + JSON.stringify(je.map(x => x.valori)))
   // E. respins nu reapare cu aceeași dovadă; cu dovadă nouă se redeschide; rezolvat la fel; agentul nu schimbă responsabilul omului
   const f1 = asteptOk(await scrie(db, SEMNAL(1, { gravitate: 'critic', responsabil_employee_id: 14 })), 'E aceeași dovadă pe un respins')
   let rr = await rand(db, id1)
@@ -347,14 +384,82 @@ async function verifica(db) {
   if (f2 && (f2.actiune !== 'redeschis' || rr.stare !== 'nou' || rr.stare_motiv !== null || rr.stare_de !== null || rr.actiune_ref !== null)) ab.push('E dovada nouă nu redeschide curat: ' + JSON.stringify([f2, rr.stare, rr.stare_motiv]))
   const jr = await jurnal(db, id1, "AND actiune = 'redeschis'")
   if (jr.length !== 1 || jr[0].stare_veche !== 'respins' || jr[0].stare_noua !== 'nou' || jr[0].actor !== 'agent' || !/dovadă nouă/.test(jr[0].motiv || '')) ab.push('E jurnalul redeschiderii: ' + JSON.stringify(jr))
-  // ordinea surselor contează în amprentă? aceeași listă în altă ordine = altă dovadă (canonic, fără ghicit): se notează ca actualizare, nu ca „neschimbat”
   v = rr.versiune
-  const g1 = asteptOk(await stare(db, U.OWNER, id1, v, 'rezolvat', { motiv: 'prelungit prin AA 3' }), 'E owner-ul rezolvă')
-  if (g1 && g1.ok !== true) ab.push('E rezolvarea: ' + JSON.stringify(g1))
-  const g2 = asteptOk(await scrie(db, SEMNAL(1, { gravitate: 'critic', responsabil_employee_id: 14, dovada_fragment: 'data_termen = 2026-12-05 (AA 3)', dovada_data: '2026-11-22' })), 'E aceeași dovadă pe un rezolvat')
+  const g1 = asteptOk(await stare(db, U.OWNER, id1, v, 'rezolvat', { motiv: 'prelungit prin AA 3', dovada: 'AA nr. 3 / 2026' }), 'E owner-ul rezolvă (motiv + dovadă)')
+  if (g1 && (g1.ok !== true || g1.semnal.stare_dovada !== 'AA nr. 3 / 2026')) ab.push('E rezolvarea: ' + JSON.stringify(g1))
+  const DOV3 = { gravitate: 'critic', responsabil_employee_id: 14, dovada_fragment: 'data_termen = 2026-12-05 (AA 3)', dovada_data: '2026-11-22' }
+  const g2 = asteptOk(await scrie(db, SEMNAL(1, DOV3)), 'E aceeași dovadă pe un rezolvat')
   rr = await rand(db, id1)
   if (g2 && (g2.actiune !== 'neschimbat_inchis' || rr.stare !== 'rezolvat')) ab.push('E rezolvatul a reapărut: ' + JSON.stringify([g2, rr.stare]))
+  // AMPRENTA E CANONICĂ: diferențele nesemantice ale dovezii NU sunt dovadă nouă (semnalul închis NU reapare, jurnalul nu crește)
+  const nj1 = (await jurnal(db, id1)).length
+  const SURSE2 = ['ERP: executie_proiecte.data_termen', 'mail: AA 3']
+  const g3 = asteptOk(await scrie(db, SEMNAL(1, { ...DOV3, surse_consultate: SURSE2 })), 'E o sursă consultată în plus pe un rezolvat (dovadă nouă)')
+  rr = await rand(db, id1)
+  if (g3 && (g3.actiune !== 'redeschis' || rr.stare !== 'nou' || JSON.stringify(rr.surse_consultate) !== JSON.stringify(SURSE2))) ab.push('E sursa nouă nu redeschide / sursele nu sunt stocate canonic: ' + JSON.stringify([g3, rr.stare, rr.surse_consultate]))
+  const g4 = asteptOk(await stare(db, U.OWNER, id1, rr.versiune, 'rezolvat', { motiv: 'prelungit prin AA 3', ref: 'TKT-2026-9998' }), 'E owner-ul rezolvă din nou (motiv + acțiune)')
+  if (g4 && g4.ok !== true) ab.push('E rezolvarea a doua: ' + JSON.stringify(g4))
+  const nj2 = (await jurnal(db, id1)).length
+  for (const [ce, extra] of [
+    ['sursele în altă ordine', { surse_consultate: [SURSE2[1], SURSE2[0]] }],
+    ['sursele cu majuscule / spații / dublură', { surse_consultate: ['  MAIL:   aa 3 ', 'erp: EXECUTIE_PROIECTE.data_termen', 'Mail: AA 3'] }],
+    ['fragmentul cu spații în plus', { surse_consultate: SURSE2, dovada_fragment: '  data_termen =   2026-12-05 (AA 3) ' }],
+    ['calea cu spații la capete', { surse_consultate: SURSE2, dovada_ref: ' executie_proiecte.data_termen ' }],
+  ]) {
+    const g = asteptOk(await scrie(db, SEMNAL(1, { ...DOV3, ...extra })), `E ${ce} pe un rezolvat`)
+    rr = await rand(db, id1)
+    if (g && (g.actiune !== 'neschimbat_inchis' || rr.stare !== 'rezolvat')) ab.push(`E ${ce} a redeschis semnalul (dovadă „nouă” nesemantică): ` + JSON.stringify([g.actiune, rr.stare]))
+  }
+  if ((await jurnal(db, id1)).length !== nj2) ab.push('E jurnal nou la diferențe nesemantice')
+  // dovadă REALĂ nouă (altă dată a sursei) → redeschis
+  const g5 = asteptOk(await scrie(db, SEMNAL(1, { ...DOV3, surse_consultate: SURSE2, dovada_data: '2026-11-23' })), 'E altă dată a sursei pe un rezolvat')
+  rr = await rand(db, id1)
+  if (g5 && (g5.actiune !== 'redeschis' || rr.stare !== 'nou')) ab.push('E data nouă nu redeschide: ' + JSON.stringify([g5, rr.stare]))
+  if ((await jurnal(db, id1, "AND actiune = 'redeschis'")).length !== 3) ab.push('E numărul redeschiderilor: ' + (await jurnal(db, id1, "AND actiune = 'redeschis'")).length)
+  // pe un semnal DESCHIS aceeași listă în altă ordine = „neschimbat” (nu „actualizat” cu diferență falsă); stocarea rămâne canonică
+  const g6 = asteptOk(await scrie(db, SEMNAL(1, { ...DOV3, dovada_data: '2026-11-23', surse_consultate: [SURSE2[1], SURSE2[0]] })), 'E ordinea surselor pe un semnal deschis')
+  rr = await rand(db, id1)
+  if (g6 && (g6.actiune !== 'neschimbat' || JSON.stringify(rr.surse_consultate) !== JSON.stringify(SURSE2))) ab.push('E ordinea surselor a dat „actualizat” / stocare necanonică: ' + JSON.stringify([g6.actiune, rr.surse_consultate]))
+  const g7 = asteptOk(await stare(db, U.OWNER, id1, rr.versiune, 'rezolvat', { motiv: 'prelungit prin AA 3', ref: 'TKT-2026-9998' }), 'E owner-ul rezolvă a treia dată')
+  if (g7 && g7.ok !== true) ab.push('E rezolvarea a treia: ' + JSON.stringify(g7))
+  rr = await rand(db, id1)
   asteptCod(await ca(db, 'postgres', null, `UPDATE public.executie_semnale SET stare = 'nou' WHERE id = ${id1}`), '42501', 'E redeschidere directă fără dovadă nouă', /dovadă nouă/)
+  // CONFIRMAREA EXPLICITĂ a responsabilului propus de agent (același angajat 14): sursa devine om, jurnal 'responsabil'; agentul nu-l mai schimbă,
+  // nici la redeschidere, nici pe calea directă; omul nu poate pune înapoi „agent”
+  if (rr.responsabil_employee_id !== 14 || rr.responsabil_sursa !== 'agent') ab.push('E precondiție: responsabilul propus de agent: ' + JSON.stringify([rr.responsabil_employee_id, rr.responsabil_sursa]))
+  const njc = (await jurnal(db, id1)).length
+  const k1 = asteptOk(await stare(db, U.MP_P1, id1, rr.versiune, null, { resp: 14, schimba: true }), 'E MP-ul confirmă responsabilul propus (același angajat)')
+  rr = await rand(db, id1)
+  if (k1 && (k1.ok !== true || rr.responsabil_employee_id !== 14 || rr.responsabil_sursa !== 'om' || rr.stare !== 'rezolvat')) ab.push('E confirmarea nu a dat sursa om: ' + JSON.stringify([k1, rr.responsabil_employee_id, rr.responsabil_sursa]))
+  const jk = await jurnal(db, id1, "AND actiune = 'responsabil'")
+  if (jk.length !== 1 || (await jurnal(db, id1)).length !== njc + 1 || JSON.stringify(jk[0].valori) !== '{"responsabil_sursa":["agent","om"]}' || jk[0].actor_profile !== U.MP_P1) ab.push('E jurnalul confirmării: ' + JSON.stringify(jk.map(x => x.valori)))
+  asteptCod(await stare(db, U.MP_P1, id1, rr.versiune, null, { resp: 14, schimba: true }), '22023', 'E confirmarea a doua oară (deja al omului)', /nimic de schimbat/)
+  const k2 = asteptOk(await scrie(db, SEMNAL(1, { ...DOV3, dovada_data: '2026-11-23', surse_consultate: SURSE2, responsabil_employee_id: 10 })), 'E agentul propune alt responsabil pe cel confirmat (aceeași dovadă)')
+  rr = await rand(db, id1)
+  if (k2 && (k2.actiune !== 'neschimbat_inchis' || rr.responsabil_employee_id !== 14 || rr.responsabil_sursa !== 'om')) ab.push('E agentul a schimbat responsabilul confirmat: ' + JSON.stringify([k2, rr.responsabil_employee_id, rr.responsabil_sursa]))
+  const k3 = asteptOk(await scrie(db, SEMNAL(1, { ...DOV3, dovada_data: '2026-11-24', surse_consultate: SURSE2, responsabil_employee_id: 10 })), 'E agentul redeschide cu dovadă nouă și alt responsabil')
+  rr = await rand(db, id1)
+  if (k3 && (k3.actiune !== 'redeschis' || rr.stare !== 'nou' || rr.responsabil_employee_id !== 14 || rr.responsabil_sursa !== 'om')) ab.push('E redeschiderea a schimbat responsabilul confirmat: ' + JSON.stringify([k3, rr.responsabil_employee_id, rr.responsabil_sursa]))
+  asteptCod(await ca(db, 'postgres', null, `UPDATE public.executie_semnale SET responsabil_employee_id = 10 WHERE id = ${id1}`), '42501', 'E calea directă a agentului pe responsabilul confirmat', /stabilit de om/)
+  asteptCod(await ca(db, 'postgres', null, `UPDATE public.executie_semnale SET responsabil_employee_id = NULL WHERE id = ${id1}`), '42501', 'E agentul scoate responsabilul confirmat (direct)', /stabilit de om/)
+  const k4 = await ca(db, 'postgres', U.OWNER, `UPDATE public.executie_semnale SET responsabil_sursa = 'agent' WHERE id = ${id1}`)
+  rr = await rand(db, id1)
+  if (k4.code || rr.responsabil_sursa !== 'om') ab.push('E omul a pus înapoi sursa „agent” (direct): ' + JSON.stringify([k4.code, rr.responsabil_sursa]))
+  const k5 = await ca(db, 'postgres', U.OWNER, `UPDATE public.executie_semnale SET responsabil_sursa = NULL WHERE id = ${id1}`)
+  rr = await rand(db, id1)
+  if (k5.code || rr.responsabil_sursa !== 'om') ab.push('E omul a șters confirmarea (direct): ' + JSON.stringify([k5.code, rr.responsabil_sursa]))
+  // același angajat propus de agent, apoi omul alege „fără responsabil” pe un semnal nou (id3): sursa om cu id NULL; agentul nu mai propune
+  const k6 = asteptOk(await scrie(db, SEMNAL(1, { tip: 'polita_expira', obiect: 'polita:CAR', titlu: 'Polița CAR expiră', gravitate: 'critic', termen: '2026-11-30', responsabil_employee_id: 14 })), 'E agentul propune responsabil pe al treilea semnal')
+  rr = await rand(db, id3)
+  if (k6 && (k6.actiune !== 'actualizat' || rr.responsabil_sursa !== 'agent')) ab.push('E propunerea pe id3: ' + JSON.stringify([k6, rr.responsabil_sursa]))
+  const k7 = asteptOk(await stare(db, U.MP_P1, id3, rr.versiune, null, { resp: null, schimba: true }), 'E MP-ul alege „fără responsabil” peste propunere')
+  rr = await rand(db, id3)
+  if (k7 && (k7.ok !== true || rr.responsabil_employee_id !== null || rr.responsabil_sursa !== 'om' || rr.stare !== 'nou')) ab.push('E „fără responsabil” pe id3: ' + JSON.stringify([k7, rr.responsabil_employee_id, rr.responsabil_sursa]))
+  const k8 = asteptOk(await scrie(db, SEMNAL(1, { tip: 'polita_expira', obiect: 'polita:CAR', titlu: 'Polița CAR expiră', gravitate: 'critic', termen: '2026-11-30', responsabil_employee_id: 14 })), 'E agentul propune din nou pe id3')
+  rr = await rand(db, id3)
+  if (k8 && (k8.actiune !== 'neschimbat' || rr.responsabil_employee_id !== null || rr.responsabil_sursa !== 'om')) ab.push('E agentul a trecut peste „fără responsabil” pe id3: ' + JSON.stringify([k8, rr.responsabil_employee_id, rr.responsabil_sursa]))
+  // angajatul 14 (VIEWER) nu mai vede id3 (nu e responsabil), dar îl vede pe id1 (confirmat)
+  if (await nr(U.VIEWER, Q) !== '["1:1"]') ab.push('E vizibilitatea după confirmări: ' + await nr(U.VIEWER, Q))
   // agentul propune alt responsabil pe id2 (sursa om = 11): rămâne 11, fără jurnal nou
   const nj = (await jurnal(db, id2)).length
   const h1 = asteptOk(await scrie(db, NEGASIT(2, { responsabil_employee_id: 14 })), 'E agentul propune alt responsabil pe semnalul cu responsabil pus de om')
@@ -370,7 +475,50 @@ async function verifica(db) {
   asteptCod(await ca(db, 'service_role', null, `SELECT public.fn_executie_semnal_stare(${id1}, 1, 'in_lucru', NULL, NULL, NULL, NULL, false)`), '42501', 'F RPC-ul omului din service_role')
   const dr = await ca(db, 'authenticated', U.MP_P1, 'SELECT public.fn_executie_semnal_drept(1, NULL) AS a, public.fn_executie_semnal_drept(2, NULL) AS b, public.fn_executie_semnal_drept(2, 10) AS c, public.fn_executie_semnal_drept(999, 10) AS d')
   if (dr.code || JSON.stringify(dr.rows[0]) !== '{"a":true,"b":false,"c":true,"d":false}') ab.push('F dreptul (MP P1): ' + JSON.stringify(dr))
+  asteptCod(await ca(db, 'authenticated', U.OWNER, `SELECT public.fn_executie_semnal_canonic(' A  b ')`), '42501', 'F forma canonică din API')
+  const can = await db.query(`SELECT public.fn_executie_semnal_canonic($1) AS c, public.fn_executie_semnal_canonic('   ') AS g, public.fn_executie_semnal_canonic(NULL) AS n`, ['  NAS:  Z:/x   Y\t z '])
+  if (JSON.stringify(can.rows[0]) !== '{"c":"nas: z:/x y z","g":null,"n":null}') ab.push('F forma canonică: ' + JSON.stringify(can.rows[0]))
+  // G. PILOTUL: cele 13 semnale ale testului „pe hârtie” (sintetizate) se reprezintă EXACT în contract, pe P3; fiecare constatare e acoperită,
+  //    iar fiecare „negăsit” poartă obligația (sursă + dată + fragment). Scoaterea unei piese a contractului din fiecare = refuz 23514.
+  const pilot = PILOT(3, { mp: 10, contracte: 11 })
+  if (pilot.length !== 13) ab.push('G pilotul nu are 13 semnale: ' + pilot.length)
+  const nP3 = (await db.query(`SELECT count(*)::int AS n FROM public.executie_semnale WHERE proiect_id = 3`)).rows[0].n
+  for (const [i, s] of pilot.entries()) {
+    const r = asteptOk(await scrie(db, s), `G pilot #${i + 1} (${s.constatare}): ${s.titlu}`)
+    if (r && r.actiune !== 'creat') ab.push(`G pilot #${i + 1} nu e „creat”: ` + JSON.stringify(r))
+  }
+  const pil = (await db.query(`SELECT constatare, count(*)::int AS n, bool_and(dovada_sursa IS NOT NULL AND dovada_data IS NOT NULL AND dovada_fragment IS NOT NULL) AS obligatie,
+                                       bool_and(termen IS NULL OR termen_confirmat IS NOT TRUE OR termen_baza IS NOT NULL) AS baza
+                                  FROM public.executie_semnale WHERE proiect_id = 3 AND regula_versiune = 'pilot-2026-11-22' GROUP BY 1 ORDER BY 1`)).rows
+  if (JSON.stringify(pil) !== JSON.stringify([{ constatare: 'camp_lipsa', n: 6, obligatie: true, baza: true }, { constatare: 'constatat', n: 2, obligatie: true, baza: true }, { constatare: 'negasit_in_surse', n: 5, obligatie: true, baza: true }]))
+    ab.push('G pilotul pe constatări: ' + JSON.stringify(pil))
+  const nP3b = (await db.query(`SELECT count(*)::int AS n FROM public.executie_semnale WHERE proiect_id = 3`)).rows[0].n
+  if (nP3b !== nP3 + 13) ab.push(`G ${nP3b - nP3} rânduri noi pe P3 (așteptate 13)`)
+  for (const [i, s] of pilot.entries()) {
+    const rupt = s.constatare === 'camp_lipsa' ? { dovada_sursa: null } : s.constatare === 'negasit_in_surse' ? { dovada_fragment: null } : { dovada_data: null }
+    asteptCod(await scrie(db, { ...s, obiect: s.obiect + ':rupt', ...rupt }), '23514', `G pilot #${i + 1} fără ${Object.keys(rupt)[0]}`)
+    if (s.termen_confirmat === true) asteptCod(await scrie(db, { ...s, obiect: s.obiect + ':rupt2', termen_baza: null }), '23514', `G pilot #${i + 1} termen confirmat fără bază`)
+  }
+  // a doua rulare a agentului, cu aceleași semnale = 13 × neschimbat (niciun rând nou, niciun jurnal nou)
+  const nj3 = (await db.query(`SELECT count(*)::int AS n FROM public.executie_semnale_jurnal WHERE proiect_id = 3`)).rows[0].n
+  for (const s of pilot) { const r = asteptOk(await scrie(db, s), 'G a doua rulare'); if (r && r.actiune !== 'neschimbat') ab.push('G a doua rulare nu e „neschimbat”: ' + JSON.stringify(r)) }
+  if ((await db.query(`SELECT count(*)::int AS n FROM public.executie_semnale WHERE proiect_id = 3`)).rows[0].n !== nP3b
+      || (await db.query(`SELECT count(*)::int AS n FROM public.executie_semnale_jurnal WHERE proiect_id = 3`)).rows[0].n !== nj3) ab.push('G a doua rulare a scris rânduri / jurnal')
   return ab
+}
+
+// ── definițiile efective pe care le verifică revenirea: expresia DEF-ACTUAL citită din fișierul revenirii, rulată pe cele 7 chei ──
+const CHEI_DEF = ['coloane:executie_semnale', 'coloane:executie_semnale_jurnal', 'constrangeri:executie_semnale', 'constrangeri:executie_semnale_jurnal',
+  'indexuri:executie_semnale', 'indexuri:executie_semnale_jurnal', 'vedere:v_executie_semnale']
+const DEF_ACTUAL = (() => { const i = REV.indexOf('-- DEF-ACTUAL-START'), j = REV.indexOf('-- DEF-ACTUAL-END'); if (i < 0 || j < 0) throw new Error('DEF-ACTUAL lipsește din revenire'); return REV.slice(i + '-- DEF-ACTUAL-START'.length, j) })()
+async function definitii(db) {
+  const r = await db.query(`SELECT a.cheie, (${DEF_ACTUAL}) AS real FROM (VALUES ${CHEI_DEF.map(c => `(${lit(c)})`).join(', ')}) a(cheie)`)
+  return Object.fromEntries(r.rows.map(x => [x.cheie, x.real]))
+}
+/** blocul DEFINITII din revenire: { cheie: text } */
+function definitiiRevenire(text) {
+  const bloc = text.slice(text.indexOf('-- DEFINITII-START'), text.indexOf('-- DEFINITII-END'))
+  return Object.fromEntries([...bloc.matchAll(/\('([a-z_:]+)', '((?:[^']|'')*)'\)/g)].filter(m => m[1]).map(m => [m[1], m[2].replace(/''/g, "'")]))
 }
 
 // ── manifestul L15: lista obiectelor (familie, etichetă, operație) din fișierul revizuit = diferența generată de pașii runnerului ──
@@ -399,6 +547,25 @@ console.log('1. aplicarea ca la livrare (L15 v2: manifest generat, apoi livrarea
   const ab = await verifica(db)
   ab.forEach(a => console.log('     ' + a))
   ok(ab.length === 0, `verificările de comportament (${ab.length} abateri)`)
+  // definițiile efective (coloane / constrângeri / indexuri / vedere) de pe baza cu migrarea aplicată = blocul DEFINITII al revenirii,
+  // citite cu EXPRESIA din revenire (DEF-ACTUAL), nu cu una copiată
+  const defs = await definitii(db)
+  const dinRev = definitiiRevenire(REV)
+  if (process.argv.includes('--scrie-definitii')) {
+    const t = readFileSync(join(ROOT, 'supabase/revenire/20270106a_executie_semnale_ROLLBACK.sql'), 'utf8')
+    const nl = t.includes('\r\n') ? '\r\n' : '\n'
+    const i = t.indexOf('-- DEFINITII-START'), j = t.indexOf('        -- DEFINITII-END')
+    writeFileSync(join(ROOT, 'supabase/revenire/20270106a_executie_semnale_ROLLBACK.sql'),
+      t.slice(0, t.indexOf('\n', i) + 1) + CHEI_DEF.map(c => `        (${lit(c)}, ${lit(defs[c])}),`).join(nl) + nl + t.slice(j))
+    console.log('     blocul DEFINITII al revenirii rescris (rulează din nou proba fără --scrie-definitii)')
+  }
+  const difDef = CHEI_DEF.filter(c => defs[c] == null || dinRev[c] !== defs[c])
+  ok(Object.keys(dinRev).length === 7 && difDef.length === 0, `blocul DEFINITII al revenirii = definițiile reale (${CHEI_DEF.length} obiecte)${difDef.length ? ': diferă ' + difDef.join(', ') : ''}`)
+  ok(/executie_semnale_constatare_ck CHECK \(\(.*dovada_sursa IS DISTINCT FROM 'camp_erp'::text.*dovada_ref IS NOT NULL/.test(defs['constrangeri:executie_semnale'] || '')
+    && /executie_semnale_proiect_stare_idx ON public\.executie_semnale USING btree \(proiect_id, stare, gravitate\)/.test(defs['indexuri:executie_semnale'] || '')
+    && /^stare:text:nn:'nou'::text:/m.test((defs['coloane:executie_semnale'] || '').split(',').join('\n'))
+    && /e\.nume AS proiect_nume FROM \(executie_semnale s JOIN executie_proiecte e ON \(\(e\.id = s\.proiect_id\)\)\)/.test(defs['vedere:v_executie_semnale'] || ''),
+    'definițiile reale conțin textul constrângerilor, al indexurilor, implicitul coloanelor și textul vederii (nu doar nume)')
   let m = null; try { await aplicaMig(db) } catch (e) { m = e.message }
   ok(/reaplicare/.test(m || ''), 'reaplicarea refuzată: ' + m)
   m = null; try { await revino(db) } catch (e) { m = e.message }
@@ -480,13 +647,28 @@ console.log('3. revenirea')
     ['trigger dezactivat (același număr)', `ALTER TABLE public.executie_semnale DISABLE TRIGGER trg_executie_semnal_garda`, `ALTER TABLE public.executie_semnale ENABLE TRIGGER trg_executie_semnal_garda`, /trigger/],
     ['drept INSERT dat pe tabel', `GRANT INSERT ON public.executie_semnale TO authenticated`, `REVOKE INSERT ON public.executie_semnale FROM authenticated`, /drepturi/],
     ['drept UPDATE pe vedere', `GRANT UPDATE ON public.v_executie_semnale TO service_role`, `REVOKE UPDATE ON public.v_executie_semnale FROM service_role`, /drepturi/],
-    ['coloană adăugată pe tabel', `ALTER TABLE public.executie_semnale ADD COLUMN zz int`, `ALTER TABLE public.executie_semnale DROP COLUMN zz`, /coloane/],
-    ['un CHECK în plus pe tabelul gol', `ALTER TABLE public.executie_semnale ADD CONSTRAINT zz_ck CHECK (versiune < 100000)`, `ALTER TABLE public.executie_semnale DROP CONSTRAINT zz_ck`, /constrangeri/],
-    ['un index în plus', `CREATE INDEX zz_idx ON public.executie_semnale_jurnal (motiv)`, `DROP INDEX public.zz_idx`, /indexuri/],
+    ['coloană adăugată pe tabel', `ALTER TABLE public.executie_semnale ADD COLUMN zz int`, `ALTER TABLE public.executie_semnale DROP COLUMN zz`, /definitii: coloane:executie_semnale\)/],
+    ['un CHECK în plus pe tabelul gol', `ALTER TABLE public.executie_semnale ADD CONSTRAINT zz_ck CHECK (versiune < 100000)`, `ALTER TABLE public.executie_semnale DROP CONSTRAINT zz_ck`, /definitii: constrangeri:executie_semnale\)/],
+    ['un index în plus', `CREATE INDEX zz_idx ON public.executie_semnale_jurnal (motiv)`, `DROP INDEX public.zz_idx`, /definitii: indexuri:executie_semnale_jurnal\)/],
+    // ACELAȘI NUME, altă definiție (numele singure nu le-ar prinde)
+    ['un CHECK înlocuit sub același nume', `ALTER TABLE public.executie_semnale DROP CONSTRAINT executie_semnale_flux_ck; ALTER TABLE public.executie_semnale ADD CONSTRAINT executie_semnale_flux_ck CHECK (flux IS NOT NULL)`,
+      `ALTER TABLE public.executie_semnale DROP CONSTRAINT executie_semnale_flux_ck; ALTER TABLE public.executie_semnale ADD CONSTRAINT executie_semnale_flux_ck CHECK (flux IN ('lipsuri', 'tichete', 'corespondenta'))`, /definitii: constrangeri:executie_semnale\)/],
+    ['un CHECK NOT VALID sub același nume', `ALTER TABLE public.executie_semnale_jurnal DROP CONSTRAINT executie_semnale_jurnal_valori_ck; ALTER TABLE public.executie_semnale_jurnal ADD CONSTRAINT executie_semnale_jurnal_valori_ck CHECK (jsonb_typeof(valori) = 'object') NOT VALID`,
+      `ALTER TABLE public.executie_semnale_jurnal VALIDATE CONSTRAINT executie_semnale_jurnal_valori_ck`, /definitii: constrangeri:executie_semnale_jurnal\)/],
+    ['un index recreat sub același nume, pe alte coloane', `DROP INDEX public.executie_semnale_proiect_stare_idx; CREATE INDEX executie_semnale_proiect_stare_idx ON public.executie_semnale (proiect_id)`,
+      `DROP INDEX public.executie_semnale_proiect_stare_idx; CREATE INDEX executie_semnale_proiect_stare_idx ON public.executie_semnale (proiect_id, stare, gravitate)`, /definitii: indexuri:executie_semnale\)/],
+    ['indexul parțial fără condiția lui', `DROP INDEX public.executie_semnale_responsabil_idx; CREATE INDEX executie_semnale_responsabil_idx ON public.executie_semnale (responsabil_employee_id)`,
+      `DROP INDEX public.executie_semnale_responsabil_idx; CREATE INDEX executie_semnale_responsabil_idx ON public.executie_semnale (responsabil_employee_id) WHERE responsabil_employee_id IS NOT NULL`, /definitii: indexuri:executie_semnale\)/],
+    ['implicitul unei coloane schimbat', `ALTER TABLE public.executie_semnale ALTER COLUMN stare SET DEFAULT 'in_lucru'`, `ALTER TABLE public.executie_semnale ALTER COLUMN stare SET DEFAULT 'nou'`, /definitii: coloane:executie_semnale\)/],
+    ['NOT NULL scos de pe o coloană', `ALTER TABLE public.executie_semnale_jurnal ALTER COLUMN actor DROP NOT NULL`, `ALTER TABLE public.executie_semnale_jurnal ALTER COLUMN actor SET NOT NULL`, /definitii: coloane:executie_semnale_jurnal\)/],
+    ['tipul unei coloane schimbat', `ALTER TABLE public.executie_semnale_jurnal ALTER COLUMN motiv TYPE varchar(4000)`, `ALTER TABLE public.executie_semnale_jurnal ALTER COLUMN motiv TYPE text`, /definitii: coloane:executie_semnale_jurnal\)/],
     ['drept pe secvență', `GRANT USAGE ON SEQUENCE public.executie_semnale_jurnal_id_seq TO authenticated`, `REVOKE USAGE ON SEQUENCE public.executie_semnale_jurnal_id_seq FROM authenticated`, /drepturi ACL: executie_semnale_jurnal_id_seq\/authenticated\/USAGE/],
     ['un rol suplimentar cu drept pe tabel', `CREATE ROLE zz_rol NOLOGIN; GRANT SELECT ON public.executie_semnale TO zz_rol`, `REVOKE SELECT ON public.executie_semnale FROM zz_rol; DROP ROLE zz_rol`, /drepturi ACL: executie_semnale\/zz_rol\/SELECT/],
     ['SELECT cu GRANT OPTION', `GRANT SELECT ON public.executie_semnale TO service_role WITH GRANT OPTION`, `REVOKE GRANT OPTION FOR SELECT ON public.executie_semnale FROM service_role`, /drepturi ACL: executie_semnale\/service_role\/SELECT/],
     ['vederea fără security_invoker', `ALTER VIEW public.v_executie_semnale SET (security_invoker = off)`, `ALTER VIEW public.v_executie_semnale SET (security_invoker = on)`, /tabele \/ vedere/],
+    // ultima (fără revenire la forma veche: o coloană a vederii nu se poate scoate cu CREATE OR REPLACE)
+    ['vederea rescrisă sub același nume (coloană în plus)', `CREATE OR REPLACE VIEW public.v_executie_semnale WITH (security_invoker = on) AS
+       SELECT s.*, e.cod_intern AS proiect_cod, e.nume AS proiect_nume, e.activ AS proiect_activ FROM public.executie_semnale s JOIN public.executie_proiecte e ON e.id = s.proiect_id`, null, /definitii: vedere:v_executie_semnale\)/],
   ]) {
     await db.exec(sql)
     m = null; try { await revino(db) } catch (e) { m = e.message }
@@ -557,6 +739,23 @@ const MUTANTI = [
     null, { detector: async (db, text) => {
       await db.exec(`BEGIN; CREATE TEMP TABLE ag_ina_0123456789abcdef (x int); COMMIT;`)
       try { await aplicaMig(db, 'SELECT count(*) FROM pg_temp.ag_ina_0123456789abcdef;\n' + text, { l15: 'nimic' }); return 'aplicată fără pasul „înainte”' } catch { return null } } }],
+  // runda 2 (verdictul Jakarinos): confirmarea responsabilului, amprenta canonică, contractul dovezii
+  ['M32 confirmarea aceluiași responsabil nu devine a omului (RPC)', [["         responsabil_sursa = CASE WHEN p_schimba_responsabil IS TRUE THEN 'om' ELSE s.responsabil_sursa END", '         responsabil_sursa = CASE WHEN p_schimba_responsabil IS TRUE THEN s.responsabil_sursa ELSE s.responsabil_sursa END']]],
+  ['M33 garda omului pune „om” doar la alt angajat (fără confirmare / „fără responsabil”)', [["  IF NEW.responsabil_employee_id IS DISTINCT FROM OLD.responsabil_employee_id OR NEW.responsabil_sursa IS DISTINCT FROM OLD.responsabil_sursa THEN\n    NEW.responsabil_sursa := 'om';",
+    "  IF NEW.responsabil_employee_id IS DISTINCT FROM OLD.responsabil_employee_id THEN\n    NEW.responsabil_sursa := CASE WHEN NEW.responsabil_employee_id IS NULL THEN NULL ELSE 'om' END;"]]],
+  ['M34 confirmarea aceluiași responsabil = „nimic de schimbat”', [["     AND NOT (p_schimba_responsabil IS TRUE AND (p_responsabil IS DISTINCT FROM r.responsabil_employee_id OR r.responsabil_sursa IS DISTINCT FROM 'om')) THEN", '     AND NOT (p_schimba_responsabil IS TRUE AND p_responsabil IS DISTINCT FROM r.responsabil_employee_id) THEN']]],
+  ['M35 agentul poate schimba responsabilul omului (garda)', [["      IF OLD.responsabil_sursa IS NOT DISTINCT FROM 'om' THEN\n        RAISE EXCEPTION 'semnale: responsabilul stabilit de om nu se schimbă de agent' USING ERRCODE = '42501';\n      END IF;\n", '']]],
+  ['M36 amprenta cu sursele necanonice (textul brut, în ordinea dată)', [["                                'surse', coalesce((SELECT jsonb_agg(DISTINCT c ORDER BY c) FROM unnest(coalesce(p_surse, '{}'::text[])) s, public.fn_executie_semnal_canonic(s) c WHERE c IS NOT NULL), '[]'::jsonb),",
+    "                                'surse', to_jsonb(coalesce(p_surse, '{}'::text[])),"]]],
+  ['M37 sursele stocate în ordinea dată (nu canonică)', [['    SELECT coalesce(array_agg(x.s ORDER BY x.c, x.ord), \'{}\'::text[]) INTO v_surse', '    SELECT coalesce(array_agg(x.s ORDER BY x.ord), \'{}\'::text[]) INTO v_surse']]],
+  ['M38 forma canonică fără litere mici', [["  SELECT nullif(lower(regexp_replace(btrim(p_text), '[[:space:]]+', ' ', 'g')), '')", "  SELECT nullif(regexp_replace(btrim(p_text), '[[:space:]]+', ' ', 'g'), '')"]]],
+  ['M39 fragmentul intră brut în amprentă', [["                                'fragment', nullif(regexp_replace(btrim(coalesce(p_fragment, '')), '[[:space:]]+', ' ', 'g'), ''),", "                                'fragment', p_fragment,"]]],
+  ['M40 camp_lipsa fără sursă trece prin UNKNOWN (CHECK cu =)', [["    AND (constatare IS DISTINCT FROM 'camp_lipsa' OR (dovada_sursa IS NOT DISTINCT FROM 'camp_erp' AND dovada_ref IS NOT NULL))),", "    AND (constatare IS DISTINCT FROM 'camp_lipsa' OR (dovada_sursa = 'camp_erp' AND dovada_ref IS NOT NULL))),"]]],
+  ['M41 constatat doar cu calea (fără dată / fragment)', [["    AND (constatare IS DISTINCT FROM 'constatat' OR (dovada_sursa IS NOT NULL AND dovada_data IS NOT NULL AND dovada_fragment IS NOT NULL))", "    AND (constatare IS DISTINCT FROM 'constatat' OR (dovada_sursa IS NOT NULL AND (dovada_fragment IS NOT NULL OR dovada_ref IS NOT NULL)))"]]],
+  ['M42 negăsit fără obligația care cere documentul', [["         OR (cardinality(surse_consultate) >= 1 AND dovada_sursa IS NOT NULL AND dovada_data IS NOT NULL AND dovada_fragment IS NOT NULL))", '         OR cardinality(surse_consultate) >= 1)']]],
+  ['M43 termen confirmat fără baza calculului', [['         AND (termen_confirmat IS NOT TRUE OR termen_baza IS NOT NULL)))', '))']]],
+  ['M44 rezolvarea doar cu motiv (RPC)', [["  IF v_stare = 'rezolvat' AND v_dovada IS NULL AND v_ref IS NULL THEN\n    RAISE EXCEPTION 'semnale: rezolvarea cere dovada rezolvării sau acțiunea rezultată' USING ERRCODE = '22023';\n  END IF;\n", '']]],
+  ['M45 rezolvarea doar cu motiv (CHECK, calea directă)', [["\n             AND (stare IS DISTINCT FROM 'rezolvat' OR stare_dovada IS NOT NULL OR actiune_ref IS NOT NULL)))),", '))),']]],
 ]
 for (const [nume, inl, preg, opt] of MUTANTI) {
   try { aplica(MIG, inl) } catch (e) { ok(false, `${nume}: ${e.message.slice(0, 120)}`); continue }

@@ -13,14 +13,16 @@
 -- Ce face (DOAR obiecte noi, nicio dată, niciun drept pe tabele existente):
 --   * executie_semnale: un semnal pe (proiect, tip, obiect) — cheia de deduplicare (UNIQUE): aceeași problemă ACTUALIZEAZĂ semnalul, nu creează
 --     altul. Fluxul (lipsuri / tichete / corespondenta), tipul (cod stabil, ex. termen_apropiat, document_negasit, camp_lipsa_erp, polita_expira),
---     gravitatea (info / atentie / critic), titlul, detaliile; CONSTATAREA deosebește explicit „constatat” (dovadă: sursa document / mail / camp_erp,
---     data sursei, fragmentul scurt, linkul sau calea NAS) de „negasit_in_surse” (documentul NU a fost găsit în sursele consultate — lista lor e
---     obligatorie) și de „camp_lipsa” (câmp gol în ERP: dovada e câmpul); termenul identificat + baza calculului + dacă e confirmat; explicația
---     incertitudinii; propunerea; responsabilul (angajat; sursa lui: agent / om — ce a stabilit omul nu mai schimbă agentul); starea
---     (nou / in_lucru / asteapta_informatii / rezolvat / respins) cu motivul, dovada rezolvării / respingerii, acțiunea rezultată (legătura cu
---     tichetul), cine și când; versiunea regulii; detectat_la / ultima_verificare; versiunea rândului (CAS). Amprenta dovezii (md5 canonic, pusă
---     de SERVER) spune dacă dovada e NOUĂ: un semnal respins (sau rezolvat) cu aceeași dovadă NU reapare — doar ultima_verificare se mișcă; cu
---     dovadă nouă se redeschide (stare nou, decizia veche rămâne în jurnal).
+--     gravitatea (info / atentie / critic), titlul, detaliile; CONSTATAREA deosebește explicit „constatat” (dovadă: sursa document / mail / camp_erp
+--     + DATA sursei + FRAGMENTUL; linkul sau calea NAS opțional) de „negasit_in_surse” (documentul NU a fost găsit în sursele consultate — lista lor
+--     e obligatorie — iar OBLIGAȚIA care îl cere e dovada: sursa + data + fragmentul clauzei) și de „camp_lipsa” (câmp gol în ERP: dovada e câmpul);
+--     termenul identificat + baza calculului (obligatorie la termen confirmat) + dacă e confirmat; explicația incertitudinii; propunerea;
+--     responsabilul (angajat; sursa lui: agent = propus / om = stabilit SAU confirmat explicit de om, inclusiv „fără responsabil” — ce a decis omul
+--     nu mai schimbă agentul); starea (nou / in_lucru / asteapta_informatii / rezolvat / respins) cu motivul, dovada rezolvării / respingerii,
+--     acțiunea rezultată (legătura cu tichetul; rezolvarea cere dovada sau acțiunea), cine și când; versiunea regulii; detectat_la /
+--     ultima_verificare; versiunea rândului (CAS). Amprenta dovezii (md5 CANONIC, pusă de SERVER: sursele consultate fără ordine / spații / majuscule
+--     / dubluri, fragmentul cu spațiile strânse) spune dacă dovada e NOUĂ: un semnal respins (sau rezolvat) cu aceeași dovadă NU reapare — doar
+--     ultima_verificare se mișcă; cu dovadă nouă se redeschide (stare nou, decizia veche rămâne în jurnal).
 --   * executie_semnale_jurnal: jurnal DOAR ADĂUGARE al schimbărilor (creat / actualizat / redeschis / stare / responsabil), cu actorul
 --     (agent / om + contul), motivul, dovada, diferențele (câmp: [vechi, nou]) și versiunea regulii.
 --   * Dreptul: O SINGURĂ definiție (fn_executie_semnal_drept): citire = owner SAU managerul de proiect (profiles.employee_id =
@@ -54,8 +56,9 @@
 --   la coliziune migrarea refuză curat (55P03), nimic schimbat.
 -- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, bugetul lock-urilor de
 --   1 s și garda finală a runnerului. Migrarea NU fixează statement_timeout și nu are alt plafon.
--- Revenire: supabase/revenire/20270106a_executie_semnale_ROLLBACK.sql (prin runner, plafonul 2000; refuză dacă există semnale / jurnal; verifică
---   DEFINIȚIILE, nu doar numerele).
+-- Revenire: supabase/revenire/20270106a_executie_semnale_ROLLBACK.sql (prin runner, plafonul 2000, fără amprentă globală — varianta A din
+--   docs/LIVRARE_L15_V2.md §9; refuză dacă există semnale / jurnal; verifică DEFINIȚIILE efective — textul fiecărei constrângeri, al fiecărui
+--   index, al vederii, proprietățile coloanelor —, nu doar numele / numerele).
 -- Probe: scripts/pglite/test_executie_semnale_local.mjs (PGlite, cu pașii reali L15 v2 ai runnerului: drepturi pe 9 conturi, deduplicare, respins
 --   nu reapare, agentul nu atinge starea omului, omul nu rescrie constatarea, revenirea, mutanți) + supabase/tests/20270106a_executie_semnale_dryrun.sql
 --   (același scenariu, pe clonă, într-o tranzacție anulată).
@@ -235,24 +238,38 @@ CREATE TABLE public.executie_semnale (
     AND (stare_motiv IS NULL OR (length(stare_motiv) BETWEEN 1 AND 2000 AND stare_motiv ~ '[^[:space:]]'))
     AND (stare_dovada IS NULL OR (length(stare_dovada) BETWEEN 1 AND 1000 AND stare_dovada ~ '[^[:space:]]'))
     AND (actiune_ref IS NULL OR (length(actiune_ref) BETWEEN 1 AND 200 AND actiune_ref !~ '[[:cntrl:]]' AND actiune_ref ~ '[^[:space:]]'))),
+  -- CONTRACTUL DOVEZII (fiecare condiție scrisă cu IS NULL / IS NOT NULL / IS DISTINCT FROM: un NULL nu dă UNKNOWN, care ar trece CHECK-ul):
+  --   constatat        = sursa + DATA sursei + FRAGMENTUL (calea / linkul singure nu dovedesc nimic);
+  --   negasit_in_surse = sursele consultate (>= 1) + OBLIGAȚIA care cere documentul (sursa + data + fragmentul clauzei): „negăsit” fără obligație
+  --                      e zgomot, nu semnal;
+  --   camp_lipsa       = sursa camp_erp + câmpul (dovada_ref); data / fragmentul opționale.
   CONSTRAINT executie_semnale_constatare_ck CHECK (
     constatare IN ('constatat', 'negasit_in_surse', 'camp_lipsa')
     AND (dovada_sursa IS NULL OR dovada_sursa IN ('document', 'mail', 'camp_erp'))
     AND cardinality(surse_consultate) <= 50
-    AND (constatare <> 'constatat' OR (dovada_sursa IS NOT NULL AND (dovada_fragment IS NOT NULL OR dovada_ref IS NOT NULL)))
-    AND (constatare <> 'negasit_in_surse' OR cardinality(surse_consultate) >= 1)
-    AND (constatare <> 'camp_lipsa' OR (dovada_sursa = 'camp_erp' AND dovada_ref IS NOT NULL))),
+    AND (constatare IS DISTINCT FROM 'constatat' OR (dovada_sursa IS NOT NULL AND dovada_data IS NOT NULL AND dovada_fragment IS NOT NULL))
+    AND (constatare IS DISTINCT FROM 'negasit_in_surse'
+         OR (cardinality(surse_consultate) >= 1 AND dovada_sursa IS NOT NULL AND dovada_data IS NOT NULL AND dovada_fragment IS NOT NULL))
+    AND (constatare IS DISTINCT FROM 'camp_lipsa' OR (dovada_sursa IS NOT DISTINCT FROM 'camp_erp' AND dovada_ref IS NOT NULL))),
   CONSTRAINT executie_semnale_amprenta_ck CHECK (dovada_amprenta ~ '^[0-9a-f]{32}$'),
+  -- termenul: fără termen = fără bază / confirmare; cu termen = „confirmat” decis explicit, iar un termen CONFIRMAT își păstrează baza calculului
   CONSTRAINT executie_semnale_termen_ck CHECK (
-    (termen IS NULL OR (termen BETWEEN DATE '2000-01-01' AND DATE '2100-12-31' AND termen_confirmat IS NOT NULL))
-    AND (termen IS NOT NULL OR (termen_baza IS NULL AND termen_confirmat IS NULL))
+    ((termen IS NULL AND termen_baza IS NULL AND termen_confirmat IS NULL)
+     OR (termen IS NOT NULL AND termen BETWEEN DATE '2000-01-01' AND DATE '2100-12-31' AND termen_confirmat IS NOT NULL
+         AND (termen_confirmat IS NOT TRUE OR termen_baza IS NOT NULL)))
     AND (dovada_data IS NULL OR dovada_data BETWEEN DATE '2000-01-01' AND DATE '2100-12-31')),
+  -- responsabilul: agent = propus (cere un angajat); om = stabilit / confirmat explicit de om (angajatul propus, altul SAU „fără responsabil”);
+  -- un angajat fără sursă nu există
   CONSTRAINT executie_semnale_responsabil_ck CHECK (
-    (responsabil_employee_id IS NULL) = (responsabil_sursa IS NULL) AND (responsabil_sursa IS NULL OR responsabil_sursa IN ('agent', 'om'))),
+    (responsabil_sursa IS NULL OR responsabil_sursa IN ('agent', 'om'))
+    AND (responsabil_employee_id IS NULL OR responsabil_sursa IS NOT NULL)
+    AND (responsabil_sursa IS DISTINCT FROM 'agent' OR responsabil_employee_id IS NOT NULL)),
+  -- starea: rezolvarea cere motiv ȘI dovada rezolvării sau acțiunea rezultată; respingerea cere motiv
   CONSTRAINT executie_semnale_stare_ck CHECK (
     stare IN ('nou', 'in_lucru', 'asteapta_informatii', 'rezolvat', 'respins')
     AND ((stare = 'nou' AND stare_motiv IS NULL AND stare_dovada IS NULL AND actiune_ref IS NULL AND stare_de IS NULL AND stare_la IS NULL)
-         OR (stare <> 'nou' AND stare_de IS NOT NULL AND stare_la IS NOT NULL AND (stare NOT IN ('rezolvat', 'respins') OR stare_motiv IS NOT NULL)))),
+         OR (stare <> 'nou' AND stare_de IS NOT NULL AND stare_la IS NOT NULL AND (stare NOT IN ('rezolvat', 'respins') OR stare_motiv IS NOT NULL)
+             AND (stare IS DISTINCT FROM 'rezolvat' OR stare_dovada IS NOT NULL OR actiune_ref IS NOT NULL)))),
   CONSTRAINT executie_semnale_regula_ck CHECK (regula_versiune ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$'),
   CONSTRAINT executie_semnale_timp_ck CHECK (versiune >= 1 AND ultima_verificare >= detectat_la)
 );
@@ -260,9 +277,9 @@ CREATE INDEX executie_semnale_proiect_stare_idx ON public.executie_semnale (proi
 CREATE INDEX executie_semnale_responsabil_idx ON public.executie_semnale (responsabil_employee_id) WHERE responsabil_employee_id IS NOT NULL;
 COMMENT ON TABLE public.executie_semnale IS
   'Execuție: semnalele agentului verificator (faza 1). Un rând pe (proiect, tip, obiect); scris doar de agent prin fn_executie_semnal_scrie; starea / responsabilul le schimbă omul prin fn_executie_semnal_stare. 20270106a.';
-COMMENT ON COLUMN public.executie_semnale.constatare IS 'constatat = cu dovadă; negasit_in_surse = documentul NU a fost găsit în sursele consultate (nu înseamnă că lipsește); camp_lipsa = câmp gol în ERP. 20270106a.';
-COMMENT ON COLUMN public.executie_semnale.dovada_amprenta IS 'md5 canonic al dovezii (constatare, surse, sursă, dată, fragment, ref), pus de server: aceeași amprentă pe un semnal respins / rezolvat = nu reapare. 20270106a.';
-COMMENT ON COLUMN public.executie_semnale.responsabil_sursa IS 'agent = propus de agent (agentul îl poate schimba); om = stabilit de om (agentul nu-l mai atinge). 20270106a.';
+COMMENT ON COLUMN public.executie_semnale.constatare IS 'constatat = cu dovadă (sursă + dată + fragment); negasit_in_surse = documentul NU a fost găsit în sursele consultate (nu înseamnă că lipsește) + obligația care îl cere (sursă + dată + fragment); camp_lipsa = câmp gol în ERP (dovada_ref = câmpul). 20270106a.';
+COMMENT ON COLUMN public.executie_semnale.dovada_amprenta IS 'md5 canonic al dovezii (constatare, sursele în formă canonică — fără ordine / spații / majuscule —, sursă, dată, fragment cu spațiile strânse, ref), pus de server: aceeași amprentă pe un semnal respins / rezolvat = nu reapare. 20270106a.';
+COMMENT ON COLUMN public.executie_semnale.responsabil_sursa IS 'agent = propus de agent (agentul îl poate schimba); om = stabilit sau confirmat explicit de om, inclusiv „fără responsabil” (id NULL): agentul nu-l mai atinge. 20270106a.';
 
 -- ── jurnalul (doar adăugare) ──
 CREATE TABLE public.executie_semnale_jurnal (
@@ -322,11 +339,23 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
 $f$;
 REVOKE ALL ON FUNCTION public.fn_executie_semnal_tranzitie(text, text, text) FROM PUBLIC, anon, authenticated, service_role;
 
--- ── amprenta dovezii: md5 canonic (jsonb ordonează cheile); NULL-urile intră ca null ──
+-- ── forma canonică a unui text pentru compararea dovezilor (O SINGURĂ definiție, L19: amprenta + ordonarea surselor stocate de RPC):
+-- spațiile de la capete scoase, spațiile interioare strânse la unul, litere mici. NULL / gol = NULL. ──
+CREATE FUNCTION public.fn_executie_semnal_canonic(p_text text) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
+  SELECT nullif(lower(regexp_replace(btrim(p_text), '[[:space:]]+', ' ', 'g')), '')
+$f$;
+REVOKE ALL ON FUNCTION public.fn_executie_semnal_canonic(text) FROM PUBLIC, anon, authenticated, service_role;
+
+-- ── amprenta dovezii: md5 canonic (jsonb ordonează cheile); NULL-urile intră ca null. Sursele consultate intră în formă canonică, fără dubluri,
+-- ORDONATE (ordinea / spațiile / majusculele listei NU sunt dovadă nouă); fragmentul cu spațiile strânse; referința doar fără spațiile de la capete. ──
 CREATE FUNCTION public.fn_executie_semnal_amprenta(p_constatare text, p_surse text[], p_sursa text, p_data date, p_fragment text, p_ref text) RETURNS text
 LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
-  SELECT md5(jsonb_build_object('constatare', p_constatare, 'surse', to_jsonb(coalesce(p_surse, '{}'::text[])), 'sursa', p_sursa,
-                                'data', p_data, 'fragment', p_fragment, 'ref', p_ref)::text)
+  SELECT md5(jsonb_build_object('constatare', p_constatare,
+                                'surse', coalesce((SELECT jsonb_agg(DISTINCT c ORDER BY c) FROM unnest(coalesce(p_surse, '{}'::text[])) s, public.fn_executie_semnal_canonic(s) c WHERE c IS NOT NULL), '[]'::jsonb),
+                                'sursa', p_sursa, 'data', p_data,
+                                'fragment', nullif(regexp_replace(btrim(coalesce(p_fragment, '')), '[[:space:]]+', ' ', 'g'), ''),
+                                'ref', nullif(btrim(coalesce(p_ref, '')), ''))::text)
 $f$;
 REVOKE ALL ON FUNCTION public.fn_executie_semnal_amprenta(text, text[], text, date, text, text) FROM PUBLIC, anon, authenticated, service_role;
 
@@ -376,8 +405,9 @@ BEGIN
     ELSIF (NEW.stare_motiv, NEW.stare_dovada, NEW.actiune_ref, NEW.stare_de, NEW.stare_la) IS DISTINCT FROM (OLD.stare_motiv, OLD.stare_dovada, OLD.actiune_ref, OLD.stare_de, OLD.stare_la) THEN
       RAISE EXCEPTION 'semnale: agentul nu atinge motivul / dovada / acțiunea date de om' USING ERRCODE = '42501';
     END IF;
+    -- responsabilul stabilit / confirmat de om (sursa om, inclusiv „fără responsabil”) nu se atinge; propunerea agentului rămâne a agentului
     IF NEW.responsabil_employee_id IS DISTINCT FROM OLD.responsabil_employee_id THEN
-      IF OLD.responsabil_sursa = 'om' THEN
+      IF OLD.responsabil_sursa IS NOT DISTINCT FROM 'om' THEN
         RAISE EXCEPTION 'semnale: responsabilul stabilit de om nu se schimbă de agent' USING ERRCODE = '42501';
       END IF;
       NEW.responsabil_sursa := CASE WHEN NEW.responsabil_employee_id IS NULL THEN NULL ELSE 'agent' END;
@@ -403,8 +433,10 @@ BEGIN
   ELSE
     NEW.stare_de := OLD.stare_de; NEW.stare_la := OLD.stare_la;
   END IF;
-  IF NEW.responsabil_employee_id IS DISTINCT FROM OLD.responsabil_employee_id THEN
-    NEW.responsabil_sursa := CASE WHEN NEW.responsabil_employee_id IS NULL THEN NULL ELSE 'om' END;
+  -- orice atingere a omului pe responsabil (alt angajat, același angajat confirmat, „fără responsabil”) = sursa om, pusă de server; omul nu poate
+  -- pune înapoi „agent” sau șterge confirmarea
+  IF NEW.responsabil_employee_id IS DISTINCT FROM OLD.responsabil_employee_id OR NEW.responsabil_sursa IS DISTINCT FROM OLD.responsabil_sursa THEN
+    NEW.responsabil_sursa := 'om';
   ELSE
     NEW.responsabil_sursa := OLD.responsabil_sursa;
   END IF;
@@ -502,7 +534,12 @@ BEGIN
                 WHERE jsonb_typeof(e.x) <> 'string' OR length(e.x #>> '{}') NOT BETWEEN 1 AND 200 OR (e.x #>> '{}') !~ '[^[:space:]]' OR (e.x #>> '{}') ~ '[[:cntrl:]]') THEN
       RAISE EXCEPTION 'semnale: surse_consultate = listă de texte (1–200 de caractere, fără caractere de control)' USING ERRCODE = '22023';
     END IF;
-    SELECT coalesce(array_agg(btrim(e.x #>> '{}') ORDER BY ord), '{}'::text[]) INTO v_surse FROM jsonb_array_elements(p_semnal -> 'surse_consultate') WITH ORDINALITY e(x, ord);
+    -- stocate în ordinea formei canonice, fără dubluri canonice (prima apariție rămâne), cu spațiile strânse: aceeași listă în altă ordine =
+    -- același rând, nu „actualizat”
+    SELECT coalesce(array_agg(x.s ORDER BY x.c, x.ord), '{}'::text[]) INTO v_surse
+      FROM (SELECT DISTINCT ON (c) regexp_replace(btrim(e.x #>> '{}'), '[[:space:]]+', ' ', 'g') AS s, public.fn_executie_semnal_canonic(e.x #>> '{}') AS c, e.ord
+              FROM jsonb_array_elements(p_semnal -> 'surse_consultate') WITH ORDINALITY e(x, ord)
+             ORDER BY c, e.ord) x;
   ELSE
     v_surse := '{}'::text[];
   END IF;
@@ -571,7 +608,9 @@ GRANT EXECUTE ON FUNCTION public.fn_executie_semnal_scrie(jsonb) TO service_role
 
 -- ── RPC-ul OMULUI: schimbă starea (cu motiv / dovadă / acțiune) și / sau responsabilul. EXECUTE authenticated; dreptul = fn_executie_semnal_drept,
 -- verificat DUPĂ lock (L01); CAS pe versiune (L01: 0 rânduri = conflict, {ok: false, motiv: conflict, semnal}); p_stare NULL = starea rămâne;
--- p_schimba_responsabil = true aplică p_responsabil (NULL = fără responsabil). Rezolvarea / respingerea / redeschiderea cer motiv. ──
+-- p_schimba_responsabil = true aplică p_responsabil (NULL = „fără responsabil”) ca DECIZIE a omului (sursa om), inclusiv când e același angajat
+-- pe care l-a propus agentul (confirmare) — de atunci agentul nu-l mai schimbă. Rezolvarea cere motiv + dovada rezolvării sau acțiunea rezultată;
+-- respingerea și redeschiderea cer motiv. ──
 CREATE FUNCTION public.fn_executie_semnal_stare(p_id bigint, p_versiune integer, p_stare text, p_motiv text, p_dovada text, p_actiune_ref text,
                                                 p_responsabil integer, p_schimba_responsabil boolean) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
@@ -604,6 +643,9 @@ BEGIN
   IF v_stare IN ('rezolvat', 'respins') AND v_motiv IS NULL THEN
     RAISE EXCEPTION 'semnale: rezolvarea / respingerea cere un motiv' USING ERRCODE = '22023';
   END IF;
+  IF v_stare = 'rezolvat' AND v_dovada IS NULL AND v_ref IS NULL THEN
+    RAISE EXCEPTION 'semnale: rezolvarea cere dovada rezolvării sau acțiunea rezultată' USING ERRCODE = '22023';
+  END IF;
   IF r.stare IN ('rezolvat', 'respins') AND v_stare <> r.stare AND v_motiv IS NULL THEN
     RAISE EXCEPTION 'semnale: redeschiderea cere un motiv' USING ERRCODE = '22023';
   END IF;
@@ -611,13 +653,15 @@ BEGIN
      AND NOT EXISTS (SELECT 1 FROM public.employees e WHERE e.id = p_responsabil AND e.active IS NOT FALSE) THEN
     RAISE EXCEPTION 'semnale: responsabilul nu e un angajat activ' USING ERRCODE = '22023';
   END IF;
+  -- confirmarea explicită (același angajat, sau „fără responsabil”) pe un semnal încă nedecis de om E o schimbare (sursa devine om)
   IF v_stare = r.stare AND v_motiv IS NOT DISTINCT FROM r.stare_motiv AND v_dovada IS NOT DISTINCT FROM r.stare_dovada AND v_ref IS NOT DISTINCT FROM r.actiune_ref
-     AND NOT (p_schimba_responsabil IS TRUE AND p_responsabil IS DISTINCT FROM r.responsabil_employee_id) THEN
+     AND NOT (p_schimba_responsabil IS TRUE AND (p_responsabil IS DISTINCT FROM r.responsabil_employee_id OR r.responsabil_sursa IS DISTINCT FROM 'om')) THEN
     RAISE EXCEPTION 'semnale: nimic de schimbat' USING ERRCODE = '22023';
   END IF;
   UPDATE public.executie_semnale s
      SET stare = v_stare, stare_motiv = v_motiv, stare_dovada = v_dovada, actiune_ref = v_ref,
-         responsabil_employee_id = CASE WHEN p_schimba_responsabil IS TRUE THEN p_responsabil ELSE s.responsabil_employee_id END
+         responsabil_employee_id = CASE WHEN p_schimba_responsabil IS TRUE THEN p_responsabil ELSE s.responsabil_employee_id END,
+         responsabil_sursa = CASE WHEN p_schimba_responsabil IS TRUE THEN 'om' ELSE s.responsabil_sursa END
    WHERE s.id = r.id AND s.versiune = p_versiune
    RETURNING * INTO r2;
   IF r2.id IS NULL THEN
@@ -656,9 +700,9 @@ COMMENT ON VIEW public.v_executie_semnale IS 'Execuție: semnalele agentului ver
 -- ── postcondiții ──
 DO $post$
 DECLARE v_s oid := 'public.executie_semnale'::regclass; v_j oid := 'public.executie_semnale_jurnal'::regclass; v_rau text;
-  v_fn name[] := ARRAY['fn_executie_semnal_drept', 'fn_executie_semnal_drept_id', 'fn_executie_semnal_tranzitie', 'fn_executie_semnal_amprenta',
-    'fn_executie_semnal_dif', 'fn_executie_semnal_garda', 'fn_executie_semnal_jurnal_garda', 'fn_executie_semnal_fara_golire',
-    'fn_executie_semnal_scrie', 'fn_executie_semnal_stare']::name[];
+  v_fn name[] := ARRAY['fn_executie_semnal_drept', 'fn_executie_semnal_drept_id', 'fn_executie_semnal_tranzitie', 'fn_executie_semnal_canonic',
+    'fn_executie_semnal_amprenta', 'fn_executie_semnal_dif', 'fn_executie_semnal_garda', 'fn_executie_semnal_jurnal_garda',
+    'fn_executie_semnal_fara_golire', 'fn_executie_semnal_scrie', 'fn_executie_semnal_stare']::name[];
 BEGIN
   IF (SELECT relrowsecurity FROM pg_class WHERE oid = v_s) IS NOT TRUE OR (SELECT relrowsecurity FROM pg_class WHERE oid = v_j) IS NOT TRUE
      OR (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('executie_semnale', 'executie_semnale_jurnal')) <> 2
@@ -684,8 +728,8 @@ BEGIN
      OR NOT EXISTS (SELECT 1 FROM pg_class WHERE oid = 'public.v_executie_semnale'::regclass AND 'security_invoker=on' = ANY (reloptions)) THEN
     RAISE EXCEPTION '20270106a post: privilegii pe tabele / secvente / vedere: %', coalesce(v_rau, 'PUBLIC / coloane / secvente / security_invoker');
   END IF;
-  -- funcțiile: exact 10, search_path fix, DEFINER doar la drept / drept_id / scrie / stare, proprietar postgres, EXECUTE exact pe clasă
-  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_executie\_semnal\_%') <> 10
+  -- funcțiile: exact 11, search_path fix, DEFINER doar la drept / drept_id / scrie / stare, proprietar postgres, EXECUTE exact pe clasă
+  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_executie\_semnal\_%') <> 11
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (v_fn)
                  AND (p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
                       OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres'

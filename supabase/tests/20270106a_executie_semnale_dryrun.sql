@@ -108,18 +108,25 @@ BEGIN
   IF n <> 1 THEN RAISE EXCEPTION 'D1 FAIL: % rânduri pentru aceeași cheie', n; END IF;
   SELECT count(*) INTO n FROM public.executie_semnale_jurnal WHERE semnal_id = v_id;
   IF n <> 2 THEN RAISE EXCEPTION 'D1 FAIL: jurnalul are % rânduri (așteptat creat + actualizat)', n; END IF;
-  -- al doilea semnal, pe p2, cu responsabilul e2 și „negăsit în surse”
+  -- al doilea semnal, pe p2, cu responsabilul e2 și „negăsit în surse” (sursele consultate + obligația care cere documentul)
   r := pg_temp.d_scrie(pg_temp.d_semnal(2, jsonb_build_object('tip', 'dry_document_negasit', 'obiect', 'polita:GBE', 'constatare', 'negasit_in_surse',
-         'dovada_sursa', NULL, 'dovada_fragment', NULL, 'dovada_ref', NULL, 'surse_consultate', jsonb_build_array('NAS: Z:/.../garantii', 'mail: subiect „GBE”'),
+         'dovada_sursa', 'document', 'dovada_data', '2026-09-18', 'dovada_fragment', 'art. 8: GBE 10% în max. 15 zile de la încheierea contractului', 'dovada_ref', 'NAS: Z:/.../contract.pdf',
+         'surse_consultate', jsonb_build_array('NAS: Z:/.../garantii', 'mail: subiect „GBE”'),
          'termen', NULL, 'termen_baza', NULL, 'termen_confirmat', NULL, 'responsabil_employee_id', pg_temp.d_g('e2')::int, 'titlu', 'Polița GBE nu a fost găsită')));
   IF r ->> 'actiune' <> 'creat' THEN RAISE EXCEPTION 'D1 FAIL: al doilea semnal %', r; END IF;
   PERFORM set_config('dsem.s2', r ->> 'id', true);
-  -- validarea: chei necunoscute, lipsă, tipuri, enumerări, constatarea fără surse, proiect / angajat inexistent, același tip pe alt flux
+  -- validarea: chei necunoscute, lipsă, tipuri, enumerări, constatarea fără surse, proiect / angajat inexistent, același tip pe alt flux;
+  -- contractul dovezii (fiecare lipsă = 23514, inclusiv camp_lipsa fără sursă, care ar trece prin UNKNOWN cu un CHECK scris cu „=”)
   IF NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1, '{"strain": 1}')), '22023', 'câmpuri necunoscute')
      OR NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1) - 'titlu'), '22023', 'obligatoriu')
      OR NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1, '{"gravitate": 3}')), '22023', 'trebuie să fie string')
      OR NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1, '{"gravitate": "urgent"}')), '23514')
      OR NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1, '{"tip": "dry_x", "obiect": "o", "constatare": "negasit_in_surse", "surse_consultate": []}')), '23514')
+     OR NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1, '{"tip": "dry_x2", "obiect": "o", "constatare": "negasit_in_surse", "surse_consultate": ["NAS"], "dovada_fragment": null}')), '23514')
+     OR NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1, '{"tip": "dry_x3", "obiect": "o", "constatare": "camp_lipsa", "dovada_sursa": null}')), '23514')
+     OR NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1, '{"tip": "dry_x4", "obiect": "o", "dovada_data": null}')), '23514')
+     OR NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1, '{"tip": "dry_x5", "obiect": "o", "dovada_fragment": null}')), '23514')
+     OR NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1, '{"tip": "dry_x6", "obiect": "o", "termen_baza": null}')), '23514')
      OR NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1, '{"proiect_id": 999999999}')), '22023', 'proiectul nu există')
      OR NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1, '{"responsabil_employee_id": 999999999}')), '22023', 'angajat activ')
      OR NOT pg_temp.d_refuza(format('SELECT pg_temp.d_scrie(%L::jsonb)', pg_temp.d_semnal(1, '{"dovada_data": "21.11.2026"}')), '22023', 'AAAA-LL-ZZ')
@@ -199,6 +206,7 @@ BEGIN
   r := public.fn_executie_semnal_stare(s1, v, 'respins', 'nu e cazul', NULL, NULL, NULL, false);
   IF (r ->> 'ok')::boolean IS NOT FALSE OR r ->> 'motiv' <> 'conflict' OR r -> 'semnal' ->> 'stare' <> 'in_lucru' THEN RAISE EXCEPTION 'D4 FAIL: CAS %', r; END IF;
   IF NOT pg_temp.d_refuza(format('SELECT public.fn_executie_semnal_stare(%s, %s, ''respins'', NULL, NULL, NULL, NULL, false)', s1, v + 1), '22023', 'cere un motiv')
+     OR NOT pg_temp.d_refuza(format('SELECT public.fn_executie_semnal_stare(%s, %s, ''rezolvat'', ''gata'', NULL, NULL, NULL, false)', s1, v + 1), '22023', 'cere dovada rezolvării sau acțiunea')
      OR NOT pg_temp.d_refuza(format('SELECT public.fn_executie_semnal_stare(%s, %s, ''nou'', NULL, NULL, NULL, NULL, false)', s1, v + 1), '22023', 'nepermisă omului')
      OR NOT pg_temp.d_refuza(format('SELECT public.fn_executie_semnal_stare(%s, %s, NULL, NULL, NULL, NULL, NULL, false)', s1, v + 1), '22023', 'nimic de schimbat')
      OR NOT pg_temp.d_refuza(format('SELECT public.fn_executie_semnal_stare(%s, %s, ''in_lucru'', NULL, NULL, NULL, NULL, false)', s2, 1), '42501', 'nu ai drept') THEN
@@ -228,9 +236,17 @@ BEGIN
   IF NOT pg_temp.d_refuza(format('SELECT public.fn_executie_semnal_stare(%s, 2, ''rezolvat'', ''gata'', NULL, NULL, NULL, false)', s2), '42501') THEN
     RAISE EXCEPTION 'D4 FAIL: anon';
   END IF;
-  -- owner-ul schimbă responsabilul lui s2 (sursa devine „om”) și redeschide s1 (respins -> in_lucru cere motiv)
+  -- owner-ul CONFIRMĂ responsabilul propus de agent pe s2 (același angajat e2): sursa devine „om”, agentul nu-l mai schimbă; a doua confirmare =
+  -- nimic de schimbat; apoi îl schimbă pe e1 (tot „om”); redeschiderea lui s1 (respins -> in_lucru) cere motiv
   PERFORM pg_temp.d_ca(own, 'authenticated');
-  r := public.fn_executie_semnal_stare(s2, 2, NULL, NULL, NULL, NULL, pg_temp.d_g('e1')::int, true);
+  r := public.fn_executie_semnal_stare(s2, 2, NULL, NULL, NULL, NULL, pg_temp.d_g('e2')::int, true);
+  IF (r ->> 'ok')::boolean IS NOT TRUE OR (r -> 'semnal' ->> 'responsabil_employee_id')::int <> pg_temp.d_g('e2')::int OR r -> 'semnal' ->> 'responsabil_sursa' <> 'om' THEN
+    RAISE EXCEPTION 'D4 FAIL: confirmarea responsabilului propus %', r;
+  END IF;
+  IF NOT pg_temp.d_refuza(format('SELECT public.fn_executie_semnal_stare(%s, 3, NULL, NULL, NULL, NULL, %s, true)', s2, pg_temp.d_g('e2')), '22023', 'nimic de schimbat') THEN
+    RAISE EXCEPTION 'D4 FAIL: a doua confirmare trebuia să fie „nimic de schimbat”';
+  END IF;
+  r := public.fn_executie_semnal_stare(s2, 3, NULL, NULL, NULL, NULL, pg_temp.d_g('e1')::int, true);
   IF (r ->> 'ok')::boolean IS NOT TRUE OR (r -> 'semnal' ->> 'responsabil_employee_id')::int <> pg_temp.d_g('e1')::int OR r -> 'semnal' ->> 'responsabil_sursa' <> 'om' THEN
     RAISE EXCEPTION 'D4 FAIL: schimbarea responsabilului %', r;
   END IF;
@@ -245,8 +261,9 @@ BEGIN
   END IF;
   PERFORM set_config('request.jwt.claim.sub', '', true);
   IF (SELECT count(*) FROM public.executie_semnale_jurnal WHERE semnal_id = s1 AND actor = 'om' AND actiune = 'stare') <> 2
-     OR (SELECT count(*) FROM public.executie_semnale_jurnal WHERE semnal_id = s2 AND actor = 'om' AND actiune = 'responsabil') <> 1 THEN
-    RAISE EXCEPTION 'D4 FAIL: jurnalul omului';
+     OR (SELECT count(*) FROM public.executie_semnale_jurnal WHERE semnal_id = s2 AND actor = 'om' AND actiune = 'responsabil') <> 2
+     OR (SELECT valori FROM public.executie_semnale_jurnal WHERE semnal_id = s2 AND actiune = 'responsabil' ORDER BY id LIMIT 1) <> '{"responsabil_sursa": ["agent", "om"]}'::jsonb THEN
+    RAISE EXCEPTION 'D4 FAIL: jurnalul omului (confirmarea = o intrare „responsabil” cu sursa agent -> om)';
   END IF;
   RAISE NOTICE 'D4 OK';
 END $t$;
@@ -259,15 +276,19 @@ BEGIN
   r := pg_temp.d_scrie(pg_temp.d_semnal(1, '{"gravitate": "critic"}'));
   SELECT stare, stare_motiv INTO st, m FROM public.executie_semnale WHERE id = s1;
   IF r ->> 'actiune' <> 'neschimbat_inchis' OR st <> 'respins' OR m IS NULL THEN RAISE EXCEPTION 'D5 FAIL: respinsul a reapărut: % / %', r, st; END IF;
+  -- diferențele NESEMANTICE ale dovezii (ordinea / majusculele / spațiile surselor, spațiile din fragment) nu sunt dovadă nouă: respinsul NU reapare
+  r := pg_temp.d_scrie(pg_temp.d_semnal(1, '{"gravitate": "critic", "surse_consultate": ["  erp:   EXECUTIE_PROIECTE.data_termen "], "dovada_fragment": "data_termen  =  2026-12-11"}'));
+  SELECT stare INTO st FROM public.executie_semnale WHERE id = s1;
+  IF r ->> 'actiune' <> 'neschimbat_inchis' OR st <> 'respins' THEN RAISE EXCEPTION 'D5 FAIL: o diferență nesemantică a redeschis semnalul: % / %', r, st; END IF;
   r := pg_temp.d_scrie(pg_temp.d_semnal(1, '{"gravitate": "critic", "dovada_fragment": "data_termen = 2026-12-05 (AA 3)", "dovada_data": "2026-11-22"}'));
   SELECT stare, stare_motiv INTO st, m FROM public.executie_semnale WHERE id = s1;
   IF r ->> 'actiune' <> 'redeschis' OR st <> 'nou' OR m IS NOT NULL THEN RAISE EXCEPTION 'D5 FAIL: dovada nouă nu redeschide: % / %', r, st; END IF;
   IF (SELECT count(*) FROM public.executie_semnale_jurnal WHERE semnal_id = s1 AND actiune = 'redeschis' AND stare_veche = 'respins' AND actor = 'agent') <> 1 THEN
     RAISE EXCEPTION 'D5 FAIL: jurnalul redeschiderii';
   END IF;
-  -- fără dovadă nouă, pe calea directă, redeschiderea e refuzată chiar și pentru postgres
+  -- rezolvarea cere motiv + dovadă / acțiune; fără dovadă nouă, pe calea directă, redeschiderea e refuzată chiar și pentru postgres
   PERFORM pg_temp.d_ca(pg_temp.d_g('own')::uuid, 'authenticated');
-  r := public.fn_executie_semnal_stare(s1, (SELECT versiune FROM public.executie_semnale WHERE id = s1), 'rezolvat', 'prelungit prin AA 3', NULL, NULL, NULL, false);
+  r := public.fn_executie_semnal_stare(s1, (SELECT versiune FROM public.executie_semnale WHERE id = s1), 'rezolvat', 'prelungit prin AA 3', 'AA nr. 3 / 2026', NULL, NULL, false);
   PERFORM pg_temp.d_ca(NULL, 'postgres');
   IF (r ->> 'ok')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'D5 FAIL: rezolvarea %', r; END IF;
   IF NOT pg_temp.d_refuza(format('UPDATE public.executie_semnale SET stare = ''nou'' WHERE id = %s', s1), '42501', 'dovadă nouă') THEN
@@ -275,7 +296,8 @@ BEGIN
   END IF;
   -- agentul propune alt responsabil pe s2: rămâne cel stabilit de om (e1)
   r := pg_temp.d_scrie(pg_temp.d_semnal(2, jsonb_build_object('tip', 'dry_document_negasit', 'obiect', 'polita:GBE', 'constatare', 'negasit_in_surse',
-         'dovada_sursa', NULL, 'dovada_fragment', NULL, 'dovada_ref', NULL, 'surse_consultate', jsonb_build_array('NAS: Z:/.../garantii', 'mail: subiect „GBE”'),
+         'dovada_sursa', 'document', 'dovada_data', '2026-09-18', 'dovada_fragment', 'art. 8: GBE 10% în max. 15 zile de la încheierea contractului', 'dovada_ref', 'NAS: Z:/.../contract.pdf',
+         'surse_consultate', jsonb_build_array('NAS: Z:/.../garantii', 'mail: subiect „GBE”'),
          'termen', NULL, 'termen_baza', NULL, 'termen_confirmat', NULL, 'responsabil_employee_id', pg_temp.d_g('e2')::int, 'titlu', 'Polița GBE nu a fost găsită')));
   IF (SELECT responsabil_employee_id FROM public.executie_semnale WHERE id = s2) <> pg_temp.d_g('e1')::int
      OR (SELECT responsabil_sursa FROM public.executie_semnale WHERE id = s2) <> 'om' THEN
