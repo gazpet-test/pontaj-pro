@@ -53,6 +53,14 @@
 -- declara, urmatoarea lista completa cu #1 / #2 il readuce; (4/4) dezactivarea actului (owner) readuce lipsa / reactivarea o stinge, SERVERUL nu schimba nici el
 -- cheia referita, iar inlocuirea situatiei (fara linia pe cheie) dezgheata cheia (despartirea in pozitii trece apoi). Backfill-ul: tabelele situatiilor sunt
 -- goale la aplicare (postconditia migrarii).
+-- r10 (review #1158: P1 + P2 pe r9). t_um_decontat (P8): O SINGURA validare a UM-ului fata de decontatul cheii (fn_rest_decontat_um_decontat_diferit), pe TOATE
+-- caile prin care o linie de baza noua ajunge pe o cheie cu decontat: (1/3) O1|D1|TSA01 (80 M decontati, situatia 1) ramane fara baza (randul vechi sters pe calea
+-- veche) → calea veche cu MC = 23514 um_decontat (INSERT; si UPDATE-ul UM-ului pe randul ML scris legitim), devizul AA-11 / NCS-11 / NR-11 cu MC = 22023 um_decontat
+-- (reproducerea P1: nimic scris, avertizarea decontat_fara_articol NU se stinge, decontatul ramane 80 M), serverul nu schimba UM-ul randului confirmat (23514);
+-- UM-ul echivalent prin factor trece peste tot (ML pe calea veche, HM in AA-11, ML / M in note) si stinge lipsa (rest 100 / 80 / 20); (2/3) reproducerea P2: O5 cu
+-- X #1 / #2, situatia 6 pe X|#1, inlocuirea cu Y il lasa fara baza; reintroducerea lui X FARA pozitie cu MC = 22023 um_decontat (oferta), cu M = acceptata,
+-- randul poarta cheia referita O5|D1|X|#1 SI pozitia '1' (reconstruita din cheie), rest 100 / 80 / 20, lipsa stinsa; (3/3) apararea in adancime (server, garda
+-- scoasa intr-un sub-bloc anulat): randul bazei trecut in MC peste decontatul in M → lipsurile declara decontat_um_diferit, calculul marcheaza um_incert.
 -- SESIUNE PROASPATA: primul bloc dupa fixturi verifica garda cu marcajul RPC LIPSA (NULL): fisierul se ruleaza intr-o sesiune noua, inainte ca
 -- vreun RPC sa fi pus marcajul (precondiția e verificata explicit).
 -- FIXTURI: pe clona, daca profiles / employees cer alte coloane NOT NULL, se completeaza DOAR blocul FIXTURI (restul nu depinde de ele).
@@ -125,6 +133,9 @@ BEGIN
   INSERT INTO rd_fix VALUES ('aa9', v_s);
   INSERT INTO public.executie_acte_aditionale (proiect_id, numar_act, data_semnare, activ) VALUES (v, 'AA-10', DATE '2026-08-01', true) RETURNING id INTO v_s;
   INSERT INTO rd_fix VALUES ('aa10', v_s);
+  -- r10: AA-11 „doar diferente” pe O1 (t_um_decontat: reatasarea unei chei ramase fara baza, reproducerea P1 Jakarinos r9)
+  INSERT INTO public.executie_acte_aditionale (proiect_id, numar_act, data_semnare, activ) VALUES (v, 'AA-11', DATE '2026-10-01', true) RETURNING id INTO v_s;
+  INSERT INTO rd_fix VALUES ('aa11', v_s);
   -- P5: un rand CONFIRMAT scris de server (calea serverului: auth.uid() NULL + postgres), pentru garda in sesiune proaspata
   INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P5', 'Dry P5 garda proaspata', 9102) RETURNING id INTO v;
   INSERT INTO rd_fix VALUES ('p5', v);
@@ -408,7 +419,8 @@ BEGIN
     v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p1'), 'act_aditional', pg_temp.rd_id('aa1'), NULL, 'diferente', 'aa1.xlsx', repeat('e3', 32),
            '[{"obiect_cod":"0001","deviz_cod":"D1","cod":"A100","denumire":"Conducta","um":"BUC","cantitate":20,"valoare":2000}]'::jsonb);
     RAISE EXCEPTION 't_aa FAIL: UM diferit in deviz acceptat';
-  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%UM diferit%' THEN RAISE; END IF; END;
+  -- r10: A100 are deja decontat (SL1–SL3, 120 M) → refuzul vine din validarea unica fata de decontat (um_decontat), pe orice sursa
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%0001|D1|A100%decontate in UM M%UM nou BUC%um_decontat%' THEN RAISE; END IF; END;
   RAISE NOTICE 't_aa_leaga_note (1/2) ok: nota scrisa de responsabilul de contracte (autor / normalizare din server; alt proiect refuzat), deviz NCS +20; al doilea deviz / UM diferit refuzate';
 END $t$;
 RESET ROLE;
@@ -1975,6 +1987,223 @@ BEGIN
   RAISE NOTICE 't_cheie_referita (4/4) ok: AA dezactivat → #2 fara baza declarat, reactivat → stins; serverul nu schimba cheia referita (23514, nimic scris); situatia inlocuita fara linia pe cheie dezgheata cheia (despartirea in pozitii trece)';
 END $t$;
 RESET ROLE;
+
+-- ── t_um_decontat (r10, review #1158, P1 + P2 pe r9: reatasarea unei chei ramase fara baza amesteca unitatile si stinge avertizarea; reatasarea fara nr a
+--    cheii referite #1 e refuzata dupa ce articolul a ajuns in istoric). P8 (MP b). O SINGURA validare (fn_rest_decontat_um_decontat_diferit) pe TOATE caile.
+--    (1/3) CALEA VECHE + RPC (toate sursele) + SERVER pe O1|D1|TSA01 (80 M decontati, situatia 1): (e) sterge randul TSA01 (permis, declarat); (e) il rescrie cu
+--    MC = 23514 um_decontat, nimic scris; cu ML (echivalent) trece, UPDATE um → MC = 23514, um → m trece, cantitatea trece; sters la loc. (b) vede
+--    decontat_fara_articol (800 lei) si baza 0 / decontat 80; devizul AA-11 cu TSA01 100 MC = 22023 um_decontat (reproducerea P1 Jakarinos: inainte RPC-ul
+--    accepta si intorcea decontat_fara_baza = []), nimic scris, avertizarea NU se stinge; la fel devizul NCS-11 si NR-11 cu MC; AA-11 cu HM x 1 (= 100 M) trece,
+--    stinge lipsa, rest 100 / 80 / 20 (um_incert fals); NCS-11 in ML (+10) si NR-11 in M (-10) trec (rest 110 → 100); serverul nu trece randul AA-11 in MC
+--    (23514, nimic scris), schimbarile care nu ating UM-ul / cheia trec ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE n int; v_id bigint;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  IF pg_temp.rd_chei_p8('O1') IS DISTINCT FROM '2:O1|D1|Y|#2; 4:O1|D1|Y|#4; 1:O1|D1|TSA01' THEN RAISE EXCEPTION 't_um_decontat PRECONDITIE O1: %', pg_temp.rd_chei_p8('O1'); END IF;
+  SELECT count(*) INTO n FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8');
+  -- randul referit dispare pe calea veche (permis; declarat de lipsuri — t_cheie_referita 1/4)
+  DELETE FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8') AND obiect_cod = 'O1' AND cod = 'TSA01';
+  -- reproducerea P1 pe CALEA VECHE: baza refacuta in MC peste 80 M decontati = refuz, nimic scris
+  BEGIN
+    INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, nr, cod, denumire, um, cantitate, pret_unitar, valoare, sursa) VALUES
+      (pg_temp.rd_id('p8'), 'O1', 'TRONSON O1', 'D1', '1', 'TSA01', 'Sapatura (MC)', 'MC', 100, 10, 1000, 'contract_initial');
+    RAISE EXCEPTION 't_um_decontat FAIL: TSA01 rescris in MC pe calea veche peste decontatul in M';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE '%cheia O1|D1|TSA01 (codul TSA01) are cantitati decontate in UM M si nu primeste o baza in UM MC%um_decontat%' THEN RAISE; END IF;
+  END;
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8')) <> n - 1 THEN RAISE EXCEPTION 't_um_decontat FAIL: refuzul MC a scris ceva'; END IF;
+  -- UM echivalent prin factor (ML = M) trece; UPDATE-ul UM-ului spre MC = refuz; spre „m” trece; cantitatea trece
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, nr, cod, denumire, um, cantitate, pret_unitar, valoare, sursa) VALUES
+    (pg_temp.rd_id('p8'), 'O1', 'TRONSON O1', 'D1', '1', 'TSA01', 'Sapatura (ML)', 'ML', 50, 10, 500, 'contract_initial') RETURNING id INTO v_id;
+  IF (SELECT cheie FROM public.proiect_articole WHERE id = v_id) IS DISTINCT FROM 'O1|D1|TSA01' THEN RAISE EXCEPTION 't_um_decontat FAIL: cheia randului ML'; END IF;
+  BEGIN
+    UPDATE public.proiect_articole SET um = 'MC' WHERE id = v_id;
+    RAISE EXCEPTION 't_um_decontat FAIL: UM-ul randului referit schimbat in MC pe calea veche';
+  EXCEPTION WHEN check_violation THEN IF SQLERRM NOT LIKE '%cheia O1|D1|TSA01%decontate in UM M%baza in UM MC%um_decontat%' THEN RAISE; END IF; END;
+  UPDATE public.proiect_articole SET um = 'm' WHERE id = v_id;
+  UPDATE public.proiect_articole SET cantitate = 60, valoare = 600 WHERE id = v_id;
+  IF (SELECT um || '/' || cantitate::text FROM public.proiect_articole WHERE id = v_id) IS DISTINCT FROM 'm/60' THEN RAISE EXCEPTION 't_um_decontat FAIL: schimbarile legitime (um echivalent, cantitate) n-au trecut'; END IF;
+  DELETE FROM public.proiect_articole WHERE id = v_id;
+  IF pg_temp.rd_chei_p8('O1') IS DISTINCT FROM '2:O1|D1|Y|#2; 4:O1|D1|Y|#4' THEN RAISE EXCEPTION 't_um_decontat FAIL: O1 dupa calea veche: %', pg_temp.rd_chei_p8('O1'); END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb; r record; v_nota bigint; s text;
+  L_MC constant jsonb := $j$[{"obiect_cod":"O1","deviz_cod":"D1","cod":"TSA01","denumire":"Sapatura rev","um":"MC","cantitate":100,"pret_unitar":10,"valoare":1000}]$j$::jsonb;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  -- precondiția reproducerii: cheia referita fara baza, declarata
+  IF NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol' AND referinta = 'O1|D1|TSA01: 800 lei, 1 linii (situatiile 1)')
+     OR NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'aa_fara_deviz' AND referinta = 'AA-11') THEN
+    RAISE EXCEPTION 't_um_decontat PRECONDITIE: decontat_fara_articol O1|D1|TSA01 + aa_fara_deviz AA-11: %', (SELECT string_agg(tip || '=' || referinta, '; ') FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8'));
+  END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O1|D1|TSA01';
+  IF r.baza_cantitate <> 0 OR r.decontat_cantitate <> 80 OR r.decontat_valoare <> 800 THEN RAISE EXCEPTION 't_um_decontat PRECONDITIE rest: %', row_to_json(r); END IF;
+  -- reproducerea P1 (Jakarinos r9): devizul AA pe cheia ramasa fara baza, in MC = refuz (inainte: acceptat, decontat_fara_baza = [], 80 M prezentati ca 80 MC)
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'act_aditional', pg_temp.rd_id('aa11'), NULL, 'diferente', 'p8_aa11.xlsx', repeat('a2', 32), L_MC);
+    RAISE EXCEPTION 't_um_decontat FAIL: devizul AA-11 in MC acceptat pe cheia O1|D1|TSA01 cu 80 M decontati (reproducerea P1 r9): %', v;
+  EXCEPTION WHEN invalid_parameter_value THEN
+    IF SQLERRM NOT LIKE '%cheia O1|D1|TSA01 are cantitati decontate in UM M si nu-si poate schimba UM-ul (UM nou MC)%um_decontat%' THEN RAISE; END IF;
+  END;
+  -- NCS-11 / NR-11 (notele MP-ului, aprobate): devizele lor in MC = acelasi refuz
+  INSERT INTO public.executie_note_modificare (proiect_id, tip, numar, data_aprobare) VALUES (pg_temp.rd_id('p8'), 'NCS', 'NCS-11', DATE '2026-10-05') RETURNING id INTO v_nota;
+  INSERT INTO rd_fix VALUES ('ncs11', v_nota);
+  INSERT INTO public.executie_note_modificare (proiect_id, tip, numar, data_aprobare) VALUES (pg_temp.rd_id('p8'), 'NR', 'NR-11', DATE '2026-10-07') RETURNING id INTO v_nota;
+  INSERT INTO rd_fix VALUES ('nr11', v_nota);
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'nota_comanda_suplimentara', NULL, pg_temp.rd_id('ncs11'), NULL, 'p8_ncs11.xlsx', repeat('a3', 32),
+           jsonb_set(L_MC, '{0,cantitate}', '10') );
+    RAISE EXCEPTION 't_um_decontat FAIL: devizul NCS-11 in MC acceptat pe cheia decontata in M';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%O1|D1|TSA01%decontate in UM M%UM nou MC%um_decontat%' THEN RAISE; END IF; END;
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'nota_renuntare', NULL, pg_temp.rd_id('nr11'), NULL, 'p8_nr11.xlsx', repeat('a4', 32),
+           jsonb_set(jsonb_set(L_MC, '{0,cantitate}', '-10'), '{0,valoare}', '-100'));
+    RAISE EXCEPTION 't_um_decontat FAIL: devizul NR-11 in MC acceptat pe cheia decontata in M';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%O1|D1|TSA01%decontate in UM M%UM nou MC%um_decontat%' THEN RAISE; END IF; END;
+  -- nimic scris; avertizarea NU s-a stins; decontatul ramane 80 M cu baza 0
+  IF NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol' AND referinta = 'O1|D1|TSA01: 800 lei, 1 linii (situatiile 1)')
+     OR NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'aa_fara_deviz' AND referinta = 'AA-11')
+     OR (SELECT count(*) FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'nota_fara_deviz' AND referinta IN ('NCS NCS-11', 'NR NR-11')) <> 2
+     OR EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_baza WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O1|D1|TSA01') THEN
+    RAISE EXCEPTION 't_um_decontat FAIL: refuzurile RPC au scris ceva sau au stins avertizarea: %', (SELECT string_agg(tip || '=' || referinta, '; ') FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8'));
+  END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O1|D1|TSA01';
+  IF r.baza_cantitate <> 0 OR r.decontat_cantitate <> 80 OR r.decontat_valoare <> 800 THEN RAISE EXCEPTION 't_um_decontat FAIL: decontatul dupa refuzuri: %', row_to_json(r); END IF;
+  -- UM echivalent prin factor: AA-11 cu HM x 1 (= 100 M) trece si stinge lipsa; rest 100 / 80 / 20, UM sigur
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'act_aditional', pg_temp.rd_id('aa11'), NULL, 'diferente', 'p8_aa11b.xlsx', repeat('a5', 32),
+         '[{"obiect_cod":"O1","deviz_cod":"D1","cod":"TSA01","denumire":"Sapatura rev","um":"HM","cantitate":1,"pret_unitar":1000,"valoare":1000}]'::jsonb);
+  IF (v->>'inserate')::int <> 1 OR v->'decontat_fara_baza' IS DISTINCT FROM '[]'::jsonb THEN RAISE EXCEPTION 't_um_decontat FAIL AA-11 HM: %', v; END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O1|D1|TSA01';
+  IF r.baza_cantitate <> 100 OR r.decontat_cantitate <> 80 OR r.rest_cantitate <> 20 OR r.um IS DISTINCT FROM 'M' OR r.um_incert IS NOT FALSE OR r.obiect_cod IS DISTINCT FROM 'O1'
+     OR EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip IN ('decontat_fara_articol', 'decontat_um_diferit')) THEN
+    RAISE EXCEPTION 't_um_decontat FAIL: re-atasarea echivalenta (HM) n-a readus baza / n-a stins lipsa: %', row_to_json(r);
+  END IF;
+  -- notele cu UM echivalent trec (ML +10, M -10): rest 110 → 100
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'nota_comanda_suplimentara', NULL, pg_temp.rd_id('ncs11'), NULL, 'p8_ncs11b.xlsx', repeat('a6', 32),
+         '[{"obiect_cod":"O1","deviz_cod":"D1","cod":"TSA01","denumire":"Sapatura supl","um":"ML","cantitate":10,"pret_unitar":10,"valoare":100}]'::jsonb);
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O1|D1|TSA01';
+  IF r.baza_cantitate <> 110 OR r.rest_cantitate <> 30 OR r.um_incert IS NOT FALSE THEN RAISE EXCEPTION 't_um_decontat FAIL NCS-11 ML: %', row_to_json(r); END IF;
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'nota_renuntare', NULL, pg_temp.rd_id('nr11'), NULL, 'p8_nr11b.xlsx', repeat('a7', 32),
+         '[{"obiect_cod":"O1","deviz_cod":"D1","cod":"TSA01","denumire":"Sapatura renuntare","um":"M","cantitate":-10,"pret_unitar":10,"valoare":-100}]'::jsonb);
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O1|D1|TSA01';
+  IF r.baza_cantitate <> 100 OR r.rest_cantitate <> 20 OR r.um_incert IS NOT FALSE
+     OR EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip IN ('decontat_fara_articol', 'decontat_um_diferit', 'nota_fara_deviz', 'aa_fara_deviz') AND referinta ~ '(TSA01|AA-11|NCS-11|NR-11)') THEN
+    RAISE EXCEPTION 't_um_decontat FAIL NR-11 M: % / %', row_to_json(r), (SELECT string_agg(tip || '=' || referinta, '; ') FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8'));
+  END IF;
+END $t$;
+RESET ROLE;
+-- SERVERUL (auth.uid() NULL, postgres): nici el nu trece un rand al bazei in alt UM decat cel decontat; schimbarile care nu ating UM-ul / cheia trec
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+DO $t$
+BEGIN
+  IF auth.uid() IS NOT NULL OR public.fn_rest_decontat_server() IS NOT TRUE THEN RAISE EXCEPTION 't_um_decontat PRECONDITIE: blocul serverului cere auth.uid() NULL si rolul postgres'; END IF;
+  IF (SELECT um FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8') AND act_aditional_id = pg_temp.rd_id('aa11')) IS DISTINCT FROM 'HM' THEN RAISE EXCEPTION 't_um_decontat PRECONDITIE: randul AA-11 in HM'; END IF;
+  BEGIN
+    UPDATE public.proiect_articole SET um = 'MC' WHERE proiect_id = pg_temp.rd_id('p8') AND act_aditional_id = pg_temp.rd_id('aa11');
+    RAISE EXCEPTION 't_um_decontat FAIL: serverul a trecut randul AA-11 in MC peste decontatul in M';
+  EXCEPTION WHEN check_violation THEN IF SQLERRM NOT LIKE '%cheia O1|D1|TSA01%decontate in UM M%baza in UM MC%um_decontat%' THEN RAISE; END IF; END;
+  UPDATE public.proiect_articole SET denumire = 'Sapatura rev (server)' WHERE proiect_id = pg_temp.rd_id('p8') AND act_aditional_id = pg_temp.rd_id('aa11');
+  IF (SELECT um || '/' || denumire FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8') AND act_aditional_id = pg_temp.rd_id('aa11')) IS DISTINCT FROM 'HM/Sapatura rev (server)' THEN
+    RAISE EXCEPTION 't_um_decontat FAIL: refuzul serverului a scris / schimbarea legitima n-a trecut';
+  END IF;
+  RAISE NOTICE 't_um_decontat (1/3) ok: cheia O1|D1|TSA01 (80 M decontati) ramasa fara baza — calea veche cu MC = 23514 um_decontat (INSERT si UPDATE), ML / m trec; devizul AA-11 / NCS-11 / NR-11 cu MC = 22023 um_decontat (reproducerea P1 r9), nimic scris, avertizarea decontat_fara_articol ramane; AA-11 in HM (= 100 M) stinge lipsa (rest 100 / 80 / 20, UM sigur), notele in ML / M trec (110 → 100); serverul nu trece randul in MC (23514)';
+END $t$;
+
+-- ── (2/3) reproducerea P2 (MP b, O5): oferta X #1 (100 M) / #2 (200 M); situatia 6 pe O5|D1|X|#1 (80 M / 800); inlocuirea cu Y il lasa fara baza (X in istoric,
+--    declarat); reintroducerea lui X FARA pozitie cu MC = 22023 um_decontat (oferta pe cheia fara baza), nimic scris; cu M = acceptata: randul poarta cheia
+--    referita O5|D1|X|#1 si pozitia '1' (reconstruita din cheie; inainte: nr NULL → 23514 „cheia nu corespunde”), rest 100 / 80 / 20, lipsa stinsa ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb; r record; h int; s text;
+  L_Y constant jsonb := $j${"obiect_cod":"O5","obiect_nume":"TRONSON O5","deviz_cod":"D1","deviz_nume":"Terasamente","nr":"1","cod":"Y","denumire":"Umplutura","um":"BUC","cantitate":10,"pret_unitar":10,"valoare":100}$j$::jsonb;
+  L_X constant jsonb := $j${"obiect_cod":"O5","obiect_nume":"TRONSON O5","deviz_cod":"D1","deviz_nume":"Terasamente","cod":"X","denumire":"Sapatura","um":"M","cantitate":100,"pret_unitar":10,"valoare":1000}$j$::jsonb;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'contract_initial', NULL, NULL, NULL, 'p8_o5.xlsx', repeat('a8', 32),
+         jsonb_build_array(L_X || '{"nr":"1","denumire":"Sapatura 1"}'::jsonb, L_X || '{"nr":"2","denumire":"Sapatura 2","cantitate":200,"valoare":2000}'::jsonb));
+  IF (v->>'inserate')::int <> 2 THEN RAISE EXCEPTION 't_um_decontat FAIL oferta O5: %', v; END IF;
+  v := public.fn_rest_decontat_confirma_situatie(pg_temp.rd_id('p8'), '6', NULL, 'p8_sl6.xlsx', repeat('a9', 32),
+         '{"luna":6,"an":2026,"linii":[{"cod":"X","nr":"1","um":"M","cantitate_perioada":80,"valoare":800,"cheie":"O5|D1|X|#1","tip_rand":"articol","potrivire":"exact"}]}'::jsonb, false);
+  -- inlocuirea cu articolul Y: X ajunge in istoric, #1 ramane decontat fara baza (declarat)
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'contract_initial', NULL, NULL, NULL, 'p8_o5b.xlsx', repeat('aa', 32), jsonb_build_array(L_Y), true);
+  IF (v->>'inserate')::int <> 1 OR (v->>'inlocuite_confirmate')::int <> 2 OR v->'decontat_fara_baza' IS DISTINCT FROM '["O5|D1|X|#1"]'::jsonb THEN RAISE EXCEPTION 't_um_decontat FAIL inlocuirea cu Y: %', v; END IF;
+  SELECT count(*) INTO h FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p8') AND obiect_k = 'O5||';
+  IF h <> 2 OR NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol' AND referinta = 'O5|D1|X|#1: 800 lei, 1 linii (situatiile 6)') THEN
+    RAISE EXCEPTION 't_um_decontat FAIL: X nu e in istoric (%) / #1 fara baza nedeclarat', h;
+  END IF;
+  -- reintroducerea lui X fara pozitie, in MC (oferta pe cheia ramasa fara baza) = refuz, nimic scris
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'contract_initial', NULL, NULL, NULL, 'p8_o5c.xlsx', repeat('ab', 32),
+           jsonb_build_array(L_Y, L_X || '{"um":"MC"}'::jsonb), true);
+    RAISE EXCEPTION 't_um_decontat FAIL: X reintrodus in MC pe cheia O5|D1|X|#1 cu 80 M decontati';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM NOT LIKE '%cheia O5|D1|X|#1 are cantitati decontate in UM M%UM nou MC%um_decontat%' THEN RAISE; END IF; END;
+  IF (SELECT count(*) FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p8') AND obiect_k = 'O5||') <> h
+     OR NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol' AND referinta LIKE 'O5|D1|X|#1: 800 lei%') THEN
+    RAISE EXCEPTION 't_um_decontat FAIL: refuzul MC pe O5 a scris / retras ceva sau a stins avertizarea';
+  END IF;
+  -- reproducerea P2: X fara pozitie, UM corect → cheia referita #1 SI pozitia '1' reconstruita din cheie
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'contract_initial', NULL, NULL, NULL, 'p8_o5d.xlsx', repeat('ac', 32), jsonb_build_array(L_Y, L_X), true);
+  IF (v->>'inserate')::int <> 2 OR (v->>'inlocuite_confirmate')::int <> 1 OR v->'decontat_fara_baza' IS DISTINCT FROM '[]'::jsonb THEN
+    RAISE EXCEPTION 't_um_decontat FAIL: reintroducerea lui X fara pozitie (reproducerea P2 r9): %', v;
+  END IF;
+  SELECT string_agg(b.cheie || '=' || b.cantitate::text || ' ' || b.um || ' nr=' || coalesce(b.nr, '-'), '; ' ORDER BY b.cheie COLLATE "C") INTO s
+    FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p8') AND b.cheie LIKE 'O5|%';
+  IF s IS DISTINCT FROM 'O5|D1|X|#1=100 M nr=1; O5|D1|Y=10 BUC nr=1' THEN RAISE EXCEPTION 't_um_decontat FAIL baza O5 dupa reintroducere (astept X|#1 cu nr 1): %', s; END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O5|D1|X|#1';
+  IF r.baza_cantitate <> 100 OR r.decontat_cantitate <> 80 OR r.rest_cantitate <> 20 OR r.um_incert IS NOT FALSE OR r.nr IS DISTINCT FROM '1'
+     OR EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip IN ('decontat_fara_articol', 'decontat_um_diferit')) THEN
+    RAISE EXCEPTION 't_um_decontat FAIL rest O5|D1|X|#1 dupa reintroducere: %', row_to_json(r);
+  END IF;
+  RAISE NOTICE 't_um_decontat (2/3) ok: X fara pozitie pe cheia referita O5|D1|X|#1 ramasa fara baza — in MC = 22023 um_decontat (nimic scris, lipsa ramane), in M = acceptat cu cheia referita si pozitia 1 reconstruita din cheie (rest 100 / 80 / 20, lipsa stinsa)';
+END $t$;
+RESET ROLE;
+
+-- ── (3/3) apararea in adancime (SERVER, garda scoasa intr-un sub-bloc ANULAT): daca un rand al bazei ar ajunge totusi in alt UM decat cel decontat (O5|D1|X|#1
+--    trecut in MC peste 80 M), lipsurile il declara (decontat_um_diferit: baza MC, decontat M) si calculul il marcheaza um_incert — nu se prezinta ca „rest 20 MC”;
+--    sub-blocul se anuleaza (garda revine, randul e iar in M) ──
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+DO $t$
+DECLARE r record; s text;
+BEGIN
+  IF auth.uid() IS NOT NULL OR public.fn_rest_decontat_server() IS NOT TRUE THEN RAISE EXCEPTION 't_um_decontat PRECONDITIE: blocul serverului cere auth.uid() NULL si rolul postgres'; END IF;
+  PERFORM set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000a', true);
+  SELECT * INTO r FROM public.fn_rest_decontat_calcul() c WHERE c.proiect_id = pg_temp.rd_id('p8') AND c.cheie = 'O5|D1|X|#1';
+  IF r.um IS DISTINCT FROM 'M' OR r.um_incert IS NOT FALSE OR r.baza_cantitate <> 100 OR EXISTS (SELECT 1 FROM public.fn_rest_decontat_lipsuri_calcul() l WHERE l.tip = 'decontat_um_diferit') THEN
+    RAISE EXCEPTION 't_um_decontat PRECONDITIE (3/3): O5|D1|X|#1 = 100 M sigur, fara decontat_um_diferit (%)', row_to_json(r);
+  END IF;
+  PERFORM set_config('request.jwt.claim.sub', '', true);
+  BEGIN
+    ALTER TABLE public.proiect_articole DISABLE TRIGGER trg_rest_decontat_articole_garda;
+    UPDATE public.proiect_articole SET um = 'MC' WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O5|D1|X|#1' AND activ;
+    IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O5|D1|X|#1' AND um = 'MC') <> 1 THEN RAISE EXCEPTION 't_um_decontat PRECONDITIE (3/3): randul strecurat in MC'; END IF;
+    PERFORM set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000a', true);
+    SELECT string_agg(l.referinta, '; ' ORDER BY l.referinta) INTO s FROM public.fn_rest_decontat_lipsuri_calcul() l WHERE l.proiect_id = pg_temp.rd_id('p8') AND l.tip = 'decontat_um_diferit';
+    IF s IS DISTINCT FROM 'O5|D1|X|#1: baza MC, decontat M' THEN RAISE EXCEPTION 't_um_decontat FAIL: lipsurile nu declara UM-ul bazei diferit de cel decontat: %', coalesce(s, 'nimic'); END IF;
+    SELECT * INTO r FROM public.fn_rest_decontat_calcul() c WHERE c.proiect_id = pg_temp.rd_id('p8') AND c.cheie = 'O5|D1|X|#1';
+    IF r.um IS DISTINCT FROM 'MC' OR r.baza_cantitate <> 100 OR r.decontat_cantitate <> 80 OR r.um_incert IS NOT TRUE THEN
+      RAISE EXCEPTION 't_um_decontat FAIL: calculul prezinta 80 M decontati ca rest in MC fara um_incert: %', row_to_json(r);
+    END IF;
+    PERFORM set_config('request.jwt.claim.sub', '', true);
+    RAISE EXCEPTION 'UM_GATA' USING ERRCODE = 'P0999';   -- anuleaza sub-blocul: garda revine, randul e iar in M
+  EXCEPTION WHEN SQLSTATE 'P0999' THEN NULL;
+  END;
+  PERFORM set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000a', true);
+  IF (SELECT t.tgenabled FROM pg_trigger t WHERE t.tgrelid = 'public.proiect_articole'::regclass AND t.tgname = 'trg_rest_decontat_articole_garda') IS DISTINCT FROM 'O'
+     OR (SELECT um FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O5|D1|X|#1' AND activ) IS DISTINCT FROM 'M'
+     OR EXISTS (SELECT 1 FROM public.fn_rest_decontat_lipsuri_calcul() l WHERE l.tip = 'decontat_um_diferit')
+     OR (SELECT c.um_incert FROM public.fn_rest_decontat_calcul() c WHERE c.proiect_id = pg_temp.rd_id('p8') AND c.cheie = 'O5|D1|X|#1') IS NOT FALSE THEN
+    RAISE EXCEPTION 't_um_decontat FAIL: sub-blocul nu s-a anulat (garda / randul / lipsurile / um_incert)';
+  END IF;
+  PERFORM set_config('request.jwt.claim.sub', '', true);
+  RAISE NOTICE 't_um_decontat (3/3) ok: randul bazei strecurat in MC (garda scoasa) peste 80 M decontati e declarat (decontat_um_diferit: baza MC, decontat M) si marcat um_incert in calcul; sub-blocul anulat';
+END $t$;
 
 SELECT 'DRY_COMPLET' AS rezultat;
 ROLLBACK;

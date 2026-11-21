@@ -110,6 +110,19 @@
 --     identitate schimbată și nu se refuză, dar lipsurile o declară pe cheie (decontat_fara_articol: valoarea, liniile, situațiile) și RPC-ul o întoarce
 --     (decontat_fara_baza); calculul ține decontatul în totaluri. (3) Backfill-ul migrării nu poate atinge o cheie referită: tabelele situațiilor sunt goale
 --     (postcondiție). Căile, gărzile și testele fiecăreia: supabase/tests/20270105a_executie_rest_decontat_dryrun.sql, blocurile t_cheie_referita (1/4)–(4/4).
+--   * r10 (review #1158, P1 + P2 pe r9). (1) P1: validarea UM-ului față de DECONTAT era doar la ofertă (contract_initial); pentru AA / NR / NCS se compara doar
+--     cu UM-ul bazei / rândurilor existente, deci după dispariția bazei (articolul șters pe calea veche, înlocuit, scos de o listă completă) un deviz AA refăcea
+--     baza în MC peste 80 M decontați, fără semnal (um_incert fals, decontat_fara_articol stins). Acum O SINGURĂ validare (L19), fn_rest_decontat_um_decontat_diferit
+--     (proiect, cheie, UM) — UM-urile normalizate ale liniilor situațiilor ACTIVE pe cheie care diferă de UM-ul liniei; gol = compatibil —, folosită de TOATE căile
+--     prin care o linie de bază nouă ajunge pe o cheie cu decontat: RPC-ul fn_rest_decontat_confirma_baza pentru ORICE sursă (ofertă, deviz AA, NR, NCS, inclusiv
+--     când baza a dispărut: 22023 um_decontat), garda proiect_articole la INSERT și la UPDATE-ul care schimbă cheia / UM-ul / activ / sursa / proiectul unui rând al
+--     bazei (calea veche a catalogului, serverul, și rândurile RPC-ului — apărare în adâncime; 23514 um_decontat), lipsurile (decontat_um_diferit: o cheie a bazei al
+--     cărei UM diferă de cel decontat, dacă un rând ar trece totuși) și calculul (um_incert adevărat pe o astfel de cheie). UM-ul echivalent prin factor (M ↔ ML ↔ HM)
+--     trece pe toate căile. Avertizarea decontat_fara_articol nu se stinge prin reatașare cu alt UM: reatașarea e refuzată, nimic scris.
+--     (2) P2: linia FĂRĂ poziție care primește unica cheie referită CU poziție (#n) a identității ei, când cheia nu mai are rânduri (articolul e în istoric), se
+--     scria cu nr NULL și garda o refuza (cheia nu corespundea câmpurilor): poziția se reconstruiește din cheia referită (forma canonică a poziției, după „|#”),
+--     ca rândul scris să poarte identitatea referită; rândurile existente ale cheii (când sunt) își copiază în continuare forma exactă (r7 / r8).
+--     Căile → validarea → testele: supabase/tests/20270105a_executie_rest_decontat_dryrun.sql, blocurile t_um_decontat (1/3)–(3/3).
 --   * Gărzi BEFORE pe ORICE cale (L07 / L08): rândurile confirmate din proiect_articole nu se modifică / șterg direct, coloanele de
 --     confirmare le scrie doar RPC-ul (marcajul static al tranzacției, precedent 20261130l; marcaj LIPSĂ = NULL într-o sesiune nouă = REFUZ,
 --     ca și marcajul gol), un rând cu sursă AA / NR / NCS se scrie doar prin RPC, rândurile contract_initial ale unui OBIECT cu oferta confirmată
@@ -572,6 +585,24 @@ $f$;
 REVOKE ALL ON FUNCTION public.fn_rest_decontat_cheie_situatii(bigint, text) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_rest_decontat_cheie_situatii(bigint, text) TO authenticated;
 
+-- r10 (review #1158, P1 pe r9): O SINGURĂ validare a compatibilității UM a unei linii de BAZĂ cu DECONTATUL cheii (L19), pentru orice cale prin care o linie
+-- de bază nouă ajunge pe o cheie cu decontat (RPC-ul de confirmare pentru orice sursă, garda proiect_articole pe calea veche / server / RPC, lipsurile, calculul).
+-- Răspunde cu UM-urile normalizate ale liniilor situațiilor ACTIVE pe cheie care DIFERĂ de UM-ul normalizat al liniei (fn_rest_decontat_um: M ↔ ML ↔ HM sunt
+-- același UM); gol = compatibil (nicio cantitate decontată pe cheie, sau toate în același UM). UM lipsă ('' normalizat) e un UM ca oricare altul: o linie fără
+-- UM pe o cheie decontată în M = incompatibilă (L18, fără fail-open). DEFINER: garda rulează ca apelantul, ale cărui politici pot ascunde situațiile; dezvăluie
+-- doar UM-urile decontate ale unei chei date a unui proiect dat (fără valori).
+CREATE FUNCTION public.fn_rest_decontat_um_decontat_diferit(p_proiect bigint, p_cheie text, p_um text) RETURNS text[]
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT CASE WHEN p_proiect IS NULL OR p_cheie IS NULL THEN ARRAY[]::text[]
+              ELSE coalesce((SELECT array_agg(DISTINCT x.um ORDER BY x.um)
+                               FROM public.executie_sl_detaliu d JOIN public.executie_sl_detaliu_linii l ON l.detaliu_id = d.id
+                               CROSS JOIN LATERAL public.fn_rest_decontat_um(l.um) x
+                              WHERE d.proiect_id = p_proiect AND d.activ AND l.cheie = p_cheie
+                                AND x.um IS DISTINCT FROM (SELECT y.um FROM public.fn_rest_decontat_um(p_um) y)), ARRAY[]::text[]) END
+$f$;
+REVOKE ALL ON FUNCTION public.fn_rest_decontat_um_decontat_diferit(bigint, text, text) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_rest_decontat_um_decontat_diferit(bigint, text, text) TO authenticated;
+
 -- ─── 7. gărzile BEFORE (toate căile, L07 / L08) ───────────────────────────────────────────────────────────────────────────────
 -- notele: autorul / momentul le pune serverul; proiectul, tipul, autorul nu se schimbă; dreptul = documente_baza; actul legat e al proiectului
 CREATE FUNCTION public.fn_rest_decontat_nota_garda() RETURNS trigger
@@ -659,7 +690,7 @@ LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
 DECLARE
   v_rpc boolean := coalesce(current_setting('gazpet.rest_decontat_scriitor', true), '') = 'fn_rest_decontat_confirma_baza';
   v_server boolean := public.fn_rest_decontat_server() IS TRUE;
-  v_fara text; v_cu text; v_p bigint; v_sit text[];
+  v_fara text; v_cu text; v_p bigint; v_sit text[]; v_um_dif text[];
 BEGIN
   IF TG_OP = 'DELETE' THEN
     IF OLD.confirmat_la IS NOT NULL AND (v_rpc OR v_server) IS NOT TRUE THEN
@@ -738,6 +769,19 @@ BEGIN
     IF cardinality(v_sit) > 0 THEN
       RAISE EXCEPTION 'rest_decontat: cheia % (codul %) e referita de situatiile confirmate % si nu-si poate schimba identitatea (ar fi devenit %); un articol decontat nu se re-cheiaza si nu-si schimba codul / obiectul / devizul — inlocuieste intai situatiile care il folosesc (cheie_referita)',
         OLD.cheie, coalesce(OLD.cod::text, '-'), array_to_string(v_sit, ', '), NEW.cheie USING ERRCODE = '23514';
+    END IF;
+  END IF;
+  -- r10 (review #1158, P1 pe r9): UM-ul unui rând al BAZEI față de DECONTATUL cheii — ACEEAȘI validare ca RPC-ul (fn_rest_decontat_um_decontat_diferit), pe
+  -- toate căile (catalogul vechi, serverul, și rândurile RPC-ului — apărare în adâncime): la INSERT și la UPDATE-ul care schimbă cheia / UM-ul / activ / sursa /
+  -- proiectul rândului. Un articol cu 80 M decontați nu primește o bază în MC (nici după ce rândul vechi a fost șters pe calea veche); UM-ul echivalent prin
+  -- factor (M → ML) trece. Refuz înaintea oricărei scrieri, cu cheia, UM-urile decontate și UM-ul nou.
+  IF NEW.sursa IN ('contract_initial', 'act_aditional', 'nota_renuntare', 'nota_comanda_suplimentara') AND NEW.activ
+     AND (TG_OP = 'INSERT' OR (NEW.cheie, NEW.um::text, NEW.activ, NEW.sursa::text, NEW.proiect_id::bigint)
+                              IS DISTINCT FROM (OLD.cheie, OLD.um::text, OLD.activ, OLD.sursa::text, OLD.proiect_id::bigint)) THEN
+    v_um_dif := public.fn_rest_decontat_um_decontat_diferit(NEW.proiect_id::bigint, NEW.cheie, NEW.um::text);
+    IF cardinality(v_um_dif) > 0 THEN
+      RAISE EXCEPTION 'rest_decontat: cheia % (codul %) are cantitati decontate in UM % si nu primeste o baza in UM %; UM-ul unui articol decontat nu se schimba (nici dupa stergerea randului vechi) — scrie randul in UM-ul decontat sau echivalent prin factor (um_decontat)',
+        NEW.cheie, coalesce(NEW.cod::text, '-'), array_to_string(v_um_dif, ' / '), coalesce(NEW.um::text, '-') USING ERRCODE = '23514';
     END IF;
   END IF;
   RETURN NEW;
@@ -933,7 +977,9 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
       FROM ln WHERE ln.cheie IS NOT NULL GROUP BY 1, 2),
   art AS (
     SELECT coalesce(b.proiect_id, dec.proiect_id) AS proiect_id, coalesce(b.cheie, dec.cheie) AS cheie, coalesce(b.tip_rand, 'articol') AS tip_rand,
-           b.obiect_cod, b.obiect_nume, b.deviz_cod, b.deviz_nume, b.nr, b.cod, b.denumire, b.um, coalesce(b.um_incert, false) AS um_incert, b.pret_unitar,
+           b.obiect_cod, b.obiect_nume, b.deviz_cod, b.deviz_nume, b.nr, b.cod, b.denumire, b.um,
+           -- r10: UM-ul bazei ambiguu SAU diferit de UM-ul decontat pe cheie (aceeași validare unică ca RPC-ul / garda; un rând strecurat nu e prezentat ca sigur)
+           (coalesce(b.um_incert, false) OR (b.cheie IS NOT NULL AND cardinality(public.fn_rest_decontat_um_decontat_diferit(b.proiect_id, b.cheie, b.um)) > 0)) AS um_incert, b.pret_unitar,
            coalesce(b.cantitate, 0) AS bc, coalesce(b.valoare, 0) AS bv, coalesce(dec.cant, 0) AS dc, coalesce(dec.val, 0) AS dv,
            coalesce(dec.situatii, 0) AS situatii, dec.ultima
       FROM b FULL JOIN dec ON dec.proiect_id = b.proiect_id AND dec.cheie = b.cheie),
@@ -973,7 +1019,8 @@ $f$;
 REVOKE ALL ON FUNCTION public.fn_rest_decontat_obiect_calcul() FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_rest_decontat_obiect_calcul() TO authenticated;
 
--- lipsurile: proiect fără ofertă, situație de plată fără detaliu, act adițional / notă fără deviz, rânduri neautorizate / vechi, decontat fără articol (r9)
+-- lipsurile: proiect fără ofertă, situație de plată fără detaliu, act adițional / notă fără deviz, rânduri neautorizate / vechi, decontat fără articol (r9),
+-- UM-ul bazei diferit de cel decontat (r10)
 CREATE FUNCTION public.fn_rest_decontat_lipsuri_calcul()
 RETURNS TABLE (proiect_id bigint, tip text, referinta text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
@@ -1027,6 +1074,13 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
     FROM pr CROSS JOIN LATERAL (SELECT coalesce(array_agg(b.cheie), ARRAY[]::text[]) AS chei FROM public.fn_rest_decontat_baza_proiect(pr.id) b) bz
             CROSS JOIN LATERAL public.fn_rest_decontat_chei_referite(pr.id) r
    WHERE NOT (r.cheie = ANY (bz.chei))
+  UNION ALL
+  -- r10 (review #1158, P1 pe r9): o cheie a BAZEI al cărei UM diferă de UM-ul DECONTAT pe ea (un rând strecurat pe lângă RPC / gardă): decontatul în M nu se
+  -- prezintă ca rest în MC — se declară pe cheie, cu UM-ul bazei și cel decontat (L12); aceeași validare unică (fn_rest_decontat_um_decontat_diferit)
+  SELECT pr.id, 'decontat_um_diferit', b.cheie || ': baza ' || coalesce(nullif(b.um, ''), '-') || ', decontat ' || array_to_string(d.u, ' / ')
+    FROM pr CROSS JOIN LATERAL public.fn_rest_decontat_baza_proiect(pr.id) b
+            CROSS JOIN LATERAL (SELECT public.fn_rest_decontat_um_decontat_diferit(pr.id, b.cheie, b.um) AS u) d
+   WHERE cardinality(d.u) > 0
 $f$;
 REVOKE ALL ON FUNCTION public.fn_rest_decontat_lipsuri_calcul() FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_rest_decontat_lipsuri_calcul() TO authenticated;
@@ -1281,16 +1335,17 @@ BEGIN
     v_um := coalesce(v_baza->v_k->>'um', (SELECT x.um FROM jsonb_array_elements(v_forme) f CROSS JOIN LATERAL public.fn_rest_decontat_um(f->>'um') x
                                             WHERE f->>'um' IS NOT NULL GROUP BY x.um
                                            HAVING count(*) = (SELECT count(*) FROM jsonb_array_elements(v_forme) g WHERE g->>'um' IS NOT NULL)));
-    SELECT coalesce(array_agg(DISTINCT x.um ORDER BY x.um), ARRAY[]::text[]) INTO v_um_dec
-      FROM public.executie_sl_detaliu d JOIN public.executie_sl_detaliu_linii l ON l.detaliu_id = d.id
-      CROSS JOIN LATERAL public.fn_rest_decontat_um(l.um) x
-     WHERE d.proiect_id = p_proiect AND d.activ AND l.cheie = v_k;
+    -- r10 (review #1158, P1 pe r9): cheia cu cantități DECONTATE nu-și schimbă UM-ul normalizat pe NICIO sursă (ofertă, deviz AA, NR, NCS) — nici cu acceptare,
+    -- nici după ce baza ei a dispărut (v_um NULL: articolul șters pe calea veche / înlocuit / scos de o listă completă): ACEEAȘI validare unică ca garda și
+    -- lipsurile (fn_rest_decontat_um_decontat_diferit = UM-urile decontate diferite de cel al liniei); la ofertă, și UM-ul bazei anterioare al unei chei
+    -- referite trebuie să fie cel al liniei (o bază ambiguă nu se „repară” pe o cheie decontată)
+    v_um_dec := public.fn_rest_decontat_um_decontat_diferit(p_proiect, v_k, e->>'um');
+    IF cardinality(v_um_dec) > 0 OR (v_k = ANY (v_ref) AND v_um IS NOT NULL AND v_um IS DISTINCT FROM v_um_n) THEN
+      RAISE EXCEPTION 'rest_decontat: cheia % are cantitati decontate in UM % si nu-si poate schimba UM-ul (UM nou %); documentul se confirma cu acelasi UM sau cu unul echivalent prin factor, pe orice sursa (um_decontat)',
+        v_k, CASE WHEN cardinality(v_um_dec) > 0 THEN array_to_string(v_um_dec, ' / ') ELSE v_um END || CASE WHEN cardinality(v_um_dec) > 0 AND v_um IS NOT NULL AND v_um <> ALL (v_um_dec) THEN ' (baza ' || v_um || ')' ELSE '' END,
+        v_um_n USING ERRCODE = '22023';
+    END IF;
     IF p_sursa = 'contract_initial' THEN
-      -- cheie cu cantități decontate: UM-ul normalizat NU se schimbă (nici cu acceptare)
-      IF cardinality(v_um_dec) > 0 AND (EXISTS (SELECT 1 FROM unnest(v_um_dec) u WHERE u IS DISTINCT FROM v_um_n) OR (v_um IS NOT NULL AND v_um IS DISTINCT FROM v_um_n)) THEN
-        RAISE EXCEPTION 'rest_decontat: cheia % are cantitati decontate in UM % si nu-si poate schimba UM-ul (UM nou %); oferta se inlocuieste cu acelasi UM sau cu unul echivalent prin factor (um_decontat)',
-          v_k, coalesce(v_um, v_um_dec[1]) || CASE WHEN cardinality(v_um_dec) > 1 OR (v_um IS NOT NULL AND v_um <> ALL (v_um_dec)) THEN ' / ' || array_to_string(v_um_dec, ' / ') ELSE '' END, v_um_n USING ERRCODE = '22023';
-      END IF;
       -- cheie fără decontat, cu alt UM normalizat (sau UM ambiguu) în baza anterioară: doar cu acceptare explicită
       IF v_um IS NOT NULL AND (v_um IS DISTINCT FROM v_um_n OR (v_baza->v_k->>'incert')::boolean) THEN
         IF NOT v_accept_um THEN
@@ -1317,7 +1372,11 @@ BEGIN
       v_ob := coalesce(v_rep_ob->>public.fn_rest_decontat_cheie(e->>'obiect_cod', NULL, NULL, NULL), btrim(regexp_replace(e->>'obiect_cod', '[[:space:]]+', ' ', 'g')));
       v_dz := btrim(regexp_replace(e->>'deviz_cod', '[[:space:]]+', ' ', 'g')); v_cod := btrim(regexp_replace(e->>'cod', '[[:space:]]+', ' ', 'g'));
     END IF;
-    v_nr := CASE WHEN cardinality(v_nr_forme) = 1 THEN v_nr_forme[1] ELSE btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g')) END;
+    -- r10 (review #1158, P2 pe r9): linia FĂRĂ poziție care a primit unica cheie referită CU poziție a identității ei (#n), iar cheia nu mai are rânduri
+    -- (articolul e în istoric): poziția se reconstruiește din cheia referită (forma canonică de după „|#”), altfel rândul ar purta o cheie care nu-i corespunde
+    v_nr := CASE WHEN cardinality(v_nr_forme) = 1 THEN v_nr_forme[1]
+                 WHEN v_kn IS NULL AND v_k <> v_kb THEN substr(v_k, length(v_kb) + 3)
+                 ELSE btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g')) END;
     IF NOT (v_k = ANY (v_um_schimbate)) AND cardinality(v_um_forme) = 1 THEN
       v_um_rep := v_um_forme[1];
       SELECT x.factor INTO v_factor_rep FROM public.fn_rest_decontat_um(v_um_rep) x;
@@ -1539,7 +1598,8 @@ DECLARE v_amp text; v_n bigint;
   v_fn name[] := ARRAY['fn_rest_decontat_cheie', 'fn_rest_decontat_um', 'fn_rest_decontat_sursa_autorizata', 'fn_rest_decontat_drept', 'fn_rest_decontat_server', 'fn_rest_decontat_aa_al_proiectului',
     'fn_rest_decontat_are_oferta', 'fn_rest_decontat_obiect_confirmat', 'fn_rest_decontat_nota_garda', 'fn_rest_decontat_articole_garda', 'fn_rest_decontat_sl_garda', 'fn_rest_decontat_istoric_garda',
     'fn_rest_decontat_baza_proiect', 'fn_rest_decontat_baza_calcul', 'fn_rest_decontat_calcul', 'fn_rest_decontat_obiect_calcul', 'fn_rest_decontat_lipsuri_calcul', 'fn_rest_decontat_confirma_baza',
-    'fn_rest_decontat_confirma_situatie', 'fn_rest_decontat_cheie_document', 'fn_rest_decontat_chei_referite', 'fn_rest_decontat_cheie_situatii']::name[];
+    'fn_rest_decontat_confirma_situatie', 'fn_rest_decontat_cheie_document', 'fn_rest_decontat_chei_referite', 'fn_rest_decontat_cheie_situatii',
+    'fn_rest_decontat_um_decontat_diferit']::name[];
 BEGIN
   -- RLS + politicile pe cele patru tabele noi
   IF (SELECT count(*) FROM pg_class c WHERE c.oid IN ('public.executie_note_modificare'::regclass, 'public.executie_sl_detaliu'::regclass, 'public.executie_sl_detaliu_linii'::regclass, 'public.proiect_articole_istoric'::regclass) AND c.relrowsecurity) <> 4
@@ -1575,13 +1635,14 @@ BEGIN
     RAISE EXCEPTION '20270105a post: privilegii pe tabele / vederi / secvente';
   END IF;
   -- funcțiile: toate cu search_path fix, owner postgres; DEFINER doar unde trebuie; EXECUTE doar pentru authenticated, nu pe funcțiile trigger
-  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%') <> 22
+  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%') <> 23
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (v_fn)
                  AND (p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] OR pg_get_userbyid(p.proowner) <> 'postgres'
                       OR p.prosecdef IS DISTINCT FROM (p.proname IN ('fn_rest_decontat_drept', 'fn_rest_decontat_aa_al_proiectului', 'fn_rest_decontat_are_oferta', 'fn_rest_decontat_obiect_confirmat',
                                                                      'fn_rest_decontat_baza_proiect', 'fn_rest_decontat_baza_calcul', 'fn_rest_decontat_calcul',
                                                                      'fn_rest_decontat_obiect_calcul', 'fn_rest_decontat_lipsuri_calcul', 'fn_rest_decontat_confirma_baza',
-                                                                     'fn_rest_decontat_confirma_situatie', 'fn_rest_decontat_cheie_document', 'fn_rest_decontat_cheie_situatii'))
+                                                                     'fn_rest_decontat_confirma_situatie', 'fn_rest_decontat_cheie_document', 'fn_rest_decontat_cheie_situatii',
+                                                                     'fn_rest_decontat_um_decontat_diferit'))
                       OR has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('service_role', p.oid, 'EXECUTE')
                       OR has_function_privilege('authenticated', p.oid, 'EXECUTE')
                          IS DISTINCT FROM (p.proname NOT IN ('fn_rest_decontat_nota_garda', 'fn_rest_decontat_articole_garda', 'fn_rest_decontat_sl_garda', 'fn_rest_decontat_istoric_garda', 'fn_rest_decontat_baza_proiect', 'fn_rest_decontat_chei_referite'))
@@ -1664,9 +1725,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%'
   ) x;
   -- AMPRENTA_20270105a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '75a0a7e26218612d455e44a0c73204b4' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '0e486e7f35c6d77d8c7bba75f00204a6' THEN
     RAISE NOTICE 'AMPRENTA_20270105a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270105a post: AMPRENTA obiectelor % (asteptat 75a0a7e26218612d455e44a0c73204b4)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270105a post: AMPRENTA obiectelor % (asteptat 0e486e7f35c6d77d8c7bba75f00204a6)', md5(coalesce(v_amp, ''));
   END IF;
   -- ștampilele porților Izometrie, CALCULATE după ultima schimbare (coloanele noi pe executie_proiecte intră în E4b)
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());

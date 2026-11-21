@@ -1,5 +1,5 @@
 -- Revenire 20270105a_executie_rest_decontat. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a owner-ului (supabase/revenire/README.md).
--- Scoate tot ce a creat migrarea: cele 4 vederi, cele 22 de funcții fn_rest_decontat_*, trigger-ele trg_rest_decontat_*, tabelele executie_sl_detaliu_linii /
+-- Scoate tot ce a creat migrarea: cele 4 vederi, cele 23 de funcții fn_rest_decontat_*, trigger-ele trg_rest_decontat_*, tabelele executie_sl_detaliu_linii /
 --   executie_sl_detaliu / executie_note_modificare / proiect_articole_istoric, coloanele noi de pe proiect_articole (cheie, nota_id, act_aditional_id, mod_import,
 --   activ, fisier_amprenta, confirmat_de, confirmat_la, tip_rand, cu constrângerile și indexurile lor) și de pe executie_proiecte (configurare_completa_la,
 --   configurare_exceptie_motiv).
@@ -38,7 +38,7 @@ BEGIN
   END IF;
   PERFORM set_config('lock_timeout', '100ms', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
-  -- starea exactă a migrării: tabelele, vederile, cele 22 de funcții, trigger-ele, coloanele
+  -- starea exactă a migrării: tabelele, vederile, cele 23 de funcții, trigger-ele, coloanele
   IF to_regclass('public.executie_note_modificare') IS NULL OR to_regclass('public.executie_sl_detaliu') IS NULL OR to_regclass('public.executie_sl_detaliu_linii') IS NULL
      OR to_regclass('public.proiect_articole_istoric') IS NULL
      OR to_regclass('public.v_executie_rest_decontat_baza') IS NULL OR to_regclass('public.v_executie_rest_decontat') IS NULL
@@ -55,7 +55,8 @@ BEGIN
      OR to_regprocedure('public.fn_rest_decontat_confirma_situatie(bigint, text, bigint, text, text, jsonb, boolean, numeric)') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_cheie_document(bigint, text, text, text)') IS NULL
      OR to_regprocedure('public.fn_rest_decontat_chei_referite(bigint)') IS NULL OR to_regprocedure('public.fn_rest_decontat_cheie_situatii(bigint, text)') IS NULL
-     OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%') <> 22
+     OR to_regprocedure('public.fn_rest_decontat_um_decontat_diferit(bigint, text, text)') IS NULL
+     OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%') <> 23
      OR (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgname IN ('trg_rest_decontat_nota_garda', 'trg_rest_decontat_articole_garda', 'trg_rest_decontat_sl_garda', 'trg_rest_decontat_sl_linii_garda', 'trg_rest_decontat_istoric_garda')) <> 5
      OR (SELECT count(*) FROM pg_attribute a WHERE a.attrelid = 'public.proiect_articole'::regclass AND NOT a.attisdropped
           AND a.attname IN ('cheie', 'nota_id', 'act_aditional_id', 'mod_import', 'activ', 'fisier_amprenta', 'confirmat_de', 'confirmat_la', 'tip_rand')) <> 9
@@ -163,9 +164,9 @@ BEGIN
      WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_rest\_decontat\_%'
   ) x;
   -- AMPRENTA_20270105a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '75a0a7e26218612d455e44a0c73204b4' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '0e486e7f35c6d77d8c7bba75f00204a6' THEN
     RAISE NOTICE 'AMPRENTA_20270105a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270105a revenire: AMPRENTA obiectelor migrarii % (asteptat 75a0a7e26218612d455e44a0c73204b4): starea nu e cea din 20270105a; nimic schimbat',
+    RAISE EXCEPTION '20270105a revenire: AMPRENTA obiectelor migrarii % (asteptat 0e486e7f35c6d77d8c7bba75f00204a6): starea nu e cea din 20270105a; nimic schimbat',
       md5(coalesce(v_amp, ''));
   END IF;
 END $pre$;
@@ -190,6 +191,7 @@ DROP FUNCTION public.fn_rest_decontat_articole_garda();
 DROP FUNCTION public.fn_rest_decontat_cheie_document(bigint, text, text, text);   -- r8: chemată doar de garda proiect_articole, scoasă după ea
 DROP FUNCTION public.fn_rest_decontat_cheie_situatii(bigint, text);   -- r9: chemată de garda proiect_articole (scoasă mai sus)
 DROP FUNCTION public.fn_rest_decontat_chei_referite(bigint);   -- r9: chemată de înveliș, de confirma_baza și de lipsuri (toate scoase mai sus)
+DROP FUNCTION public.fn_rest_decontat_um_decontat_diferit(bigint, text, text);   -- r10: chemată de garda proiect_articole, de confirma_baza, de calcul și de lipsuri (toate scoase mai sus)
 DROP TABLE public.proiect_articole_istoric;   -- cu trigger-ul și politica lui (r5); după garda proiect_articole care chema fn_rest_decontat_obiect_confirmat
 DROP FUNCTION public.fn_rest_decontat_istoric_garda();
 ALTER TABLE public.proiect_articole

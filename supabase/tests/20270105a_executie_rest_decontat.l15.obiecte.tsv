@@ -163,10 +163,10 @@ functie	functie public.fn_rest_decontat_articole_garda()	creat
 functie	functie public.fn_rest_decontat_baza_calcul()	creat
 functie	functie public.fn_rest_decontat_baza_proiect(bigint)	creat
 functie	functie public.fn_rest_decontat_calcul()	creat
+functie	functie public.fn_rest_decontat_chei_referite(bigint)	creat
 functie	functie public.fn_rest_decontat_cheie(text,text,text,text)	creat
 functie	functie public.fn_rest_decontat_cheie_document(bigint,text,text,text)	creat
 functie	functie public.fn_rest_decontat_cheie_situatii(bigint,text)	creat
-functie	functie public.fn_rest_decontat_chei_referite(bigint)	creat
 functie	functie public.fn_rest_decontat_confirma_baza(bigint,text,bigint,bigint,text,text,text,jsonb,boolean)	creat
 functie	functie public.fn_rest_decontat_confirma_situatie(bigint,text,bigint,text,text,jsonb,boolean,numeric)	creat
 functie	functie public.fn_rest_decontat_drept(bigint,text)	creat
@@ -179,6 +179,7 @@ functie	functie public.fn_rest_decontat_server()	creat
 functie	functie public.fn_rest_decontat_sl_garda()	creat
 functie	functie public.fn_rest_decontat_sursa_autorizata(text,bigint,bigint,timestamp with time zone)	creat
 functie	functie public.fn_rest_decontat_um(text)	creat
+functie	functie public.fn_rest_decontat_um_decontat_diferit(bigint,text,text)	creat
 politica	politica public.executie_note_modificare.executie_note_modificare_adauga	creat
 politica	politica public.executie_note_modificare.executie_note_modificare_citire	creat
 politica	politica public.executie_note_modificare.executie_note_modificare_modifica	creat

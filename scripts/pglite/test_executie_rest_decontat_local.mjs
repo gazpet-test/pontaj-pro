@@ -30,7 +30,10 @@
 //    2 × P1 pe r6): obiect_cod / deviz_cod / cod / nr / UM necopiate din rândul cu aceeași cheie (scrise cum vin, normalizate); ambiguitatea formelor
 //    brute neverificată; cheia nouă scrisă brut (nenormalizată). r9 (review #1158, 2 × P1 pe r8: cheia referită): garda fără refuzul cheie_referita /
 //    cu ocolire pentru server / învelișul fără DEFINER; RPC-ul fără păstrarea #n, fără refuzul codului decontat despărțit în poziții, fără cheia referită unică
-//    la linia fără poziție, fără refuzul ambiguității; lipsurile fără decontat_fara_articol; rezultatul fără decontat_fara_baza.
+//    la linia fără poziție, fără refuzul ambiguității; lipsurile fără decontat_fara_articol; rezultatul fără decontat_fara_baza. r10 (review #1158, P1 + P2 pe
+//    r9: UM-ul la reatașarea unei chei fără bază, poziția liniei fără nr pe o cheie #n din istoric): RPC-ul validează UM-ul față de decontat doar la ofertă;
+//    garda fără validarea UM / doar la INSERT / ocolită de server; funcția unică fără DEFINER / pe UM brut / cu situațiile inactive; poziția nereconstruită;
+//    lipsurile fără decontat_um_diferit; calculul fără um_incert pe UM decontat diferit.
 //    Mutanții STATICI (reverificarea dreptului scoasă după lock; garda fără advisory / cu advisory blocant) sunt prinși de verificările pe text din 0.
 // 5. Migrarea B peste A: dry-run B; mutanți B (MP fără ofertă acceptat, owner fără motiv acceptat, fără garda pe coloane, marcaj NULL acceptat,
 //    garda doar pe UPDATE — INSERT „configurat” acceptat); revenirea B. Postcondițiile B = secțiunea „4.” (r2: markerul greșit din r1 ascundea
@@ -170,7 +173,8 @@ const BLOCURI_A = ['t_garda_proaspata ok', 't_fara_baza ok', 'oferta ok', 't_neg
   't_oferta_confirmata (1/7) ok', 't_oferta_confirmata (2/7) ok', 't_oferta_confirmata (3/7) ok', 't_oferta_confirmata (4/7) ok', 't_oferta_confirmata (5/7) ok',
   't_oferta_confirmata (6/7) ok', 't_oferta_confirmata (7/7) ok', 't_rand_orfan ok', 't_um_inlocuire (1/2) ok', 't_um_inlocuire (2/2) ok',
   't_reprezentare_cheie (1/3) ok', 't_reprezentare_cheie (2/3) ok', 't_reprezentare_cheie (3/3) ok', 't_import_vechi_repetat ok', 't_pozitie (1/2) ok', 't_pozitie (2/2) ok',
-  't_cheie_referita (1/4) ok', 't_cheie_referita (2/4) ok', 't_cheie_referita (3/4) ok', 't_cheie_referita (4/4) ok']
+  't_cheie_referita (1/4) ok', 't_cheie_referita (2/4) ok', 't_cheie_referita (3/4) ok', 't_cheie_referita (4/4) ok',
+  't_um_decontat (1/3) ok', 't_um_decontat (2/3) ok', 't_um_decontat (3/3) ok']
 const BLOCURI_B = ['t_poarta_garda_proaspata ok', 't_poarta_mp ok', 't_poarta_owner ok', 't_poarta_cu_oferta ok', 't_poarta_direct ok']
 async function verificaDry(db, text, blocuri) {
   try {
@@ -450,7 +454,35 @@ if (!DOAR || DOAR === '4') {
       [`    v_um := coalesce(v_baza->v_k->>'um', (SELECT x.um FROM jsonb_array_elements(v_forme) f CROSS JOIN LATERAL public.fn_rest_decontat_um(f->>'um') x\n`,
        `    v_um := coalesce(v_baza->v_k->>'um', (SELECT NULL::text FROM jsonb_array_elements(v_forme) f CROSS JOIN LATERAL public.fn_rest_decontat_um(f->>'um') x\n`]]],
     ['cheia DECONTATĂ acceptă alt UM normalizat (100 M → situație 80 M → înlocuire 100 MC trece)', [[
-      `      IF cardinality(v_um_dec) > 0 AND (EXISTS (SELECT 1 FROM unnest(v_um_dec) u WHERE u IS DISTINCT FROM v_um_n) OR (v_um IS NOT NULL AND v_um IS DISTINCT FROM v_um_n)) THEN`, `      IF false THEN`]]],
+      `    IF cardinality(v_um_dec) > 0 OR (v_k = ANY (v_ref) AND v_um IS NOT NULL AND v_um IS DISTINCT FROM v_um_n) THEN`, `    IF false THEN`]]],
+    // r10 (review #1158, P1 + P2 pe r9): validarea UM față de decontat pe TOATE căile (o singură funcție) + poziția reconstruită din cheia referită
+    ['RPC: validarea UM față de decontat doar la ofertă (r9) — devizul AA / NR / NCS reface baza unei chei fără bază în alt UM (reproducerea P1 r9)', [[
+      `    IF cardinality(v_um_dec) > 0 OR (v_k = ANY (v_ref) AND v_um IS NOT NULL AND v_um IS DISTINCT FROM v_um_n) THEN`,
+      `    IF p_sursa = 'contract_initial' AND (cardinality(v_um_dec) > 0 OR (v_k = ANY (v_ref) AND v_um IS NOT NULL AND v_um IS DISTINCT FROM v_um_n)) THEN`]]],
+    ['garda: UM-ul rândului bazei neverificat față de decontat (calea veche rescrie articolul șters în MC peste 80 M)', [[
+      `    v_um_dif := public.fn_rest_decontat_um_decontat_diferit(NEW.proiect_id::bigint, NEW.cheie, NEW.um::text);\n    IF cardinality(v_um_dif) > 0 THEN`,
+      `    v_um_dif := public.fn_rest_decontat_um_decontat_diferit(NEW.proiect_id::bigint, NEW.cheie, NEW.um::text);\n    IF false THEN`]]],
+    ['garda verifică UM-ul doar la INSERT (UPDATE-ul UM-ului unui rând al bazei referit trece)', [[
+      `     AND (TG_OP = 'INSERT' OR (NEW.cheie, NEW.um::text, NEW.activ, NEW.sursa::text, NEW.proiect_id::bigint)\n                              IS DISTINCT FROM (OLD.cheie, OLD.um::text, OLD.activ, OLD.sursa::text, OLD.proiect_id::bigint)) THEN`,
+      `     AND TG_OP = 'INSERT' THEN`]]],
+    ['serverul ocolește validarea UM a gărzii', [[
+      `  IF NEW.sursa IN ('contract_initial', 'act_aditional', 'nota_renuntare', 'nota_comanda_suplimentara') AND NEW.activ\n     AND (TG_OP = 'INSERT' OR`,
+      `  IF NOT v_server AND NEW.sursa IN ('contract_initial', 'act_aditional', 'nota_renuntare', 'nota_comanda_suplimentara') AND NEW.activ\n     AND (TG_OP = 'INSERT' OR`]]],
+    ['funcția unică de validare UM fără SECURITY DEFINER (garda rulează ca apelantul: accesul general nu vede situațiile → compatibil)', [[
+      `CREATE FUNCTION public.fn_rest_decontat_um_decontat_diferit(p_proiect bigint, p_cheie text, p_um text) RETURNS text[]\nLANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$`,
+      `CREATE FUNCTION public.fn_rest_decontat_um_decontat_diferit(p_proiect bigint, p_cheie text, p_um text) RETURNS text[]\nLANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$`]]],
+    ['funcția unică compară UM-urile brute, nu normalizate (ML / HM refuzate pe o cheie decontată în M)', [[
+      `                                AND x.um IS DISTINCT FROM (SELECT y.um FROM public.fn_rest_decontat_um(p_um) y)), ARRAY[]::text[]) END`,
+      `                                AND l.um IS DISTINCT FROM p_um), ARRAY[]::text[]) END`]]],
+    ['funcția unică numără și situațiile INACTIVE (versiunea înlocuită ține cheia prizonieră în UM-ul vechi)', [[
+      `                              WHERE d.proiect_id = p_proiect AND d.activ AND l.cheie = p_cheie\n                                AND x.um IS DISTINCT FROM`,
+      `                              WHERE d.proiect_id = p_proiect AND l.cheie = p_cheie\n                                AND x.um IS DISTINCT FROM`]]],
+    ['RPC: poziția nereconstruită din cheia referită (linia fără nr pe o cheie #n ajunsă în istoric scrisă cu nr NULL — reproducerea P2 r9)', [[
+      `                 WHEN v_kn IS NULL AND v_k <> v_kb THEN substr(v_k, length(v_kb) + 3)\n`, '']]],
+    ['lipsurile nu declară UM-ul bazei diferit de cel decontat (decontat_um_diferit)', [[`   WHERE cardinality(d.u) > 0\n$f$;`, `   WHERE false\n$f$;`]]],
+    ['calculul nu marchează um_incert când UM-ul decontat diferă de cel al bazei', [[
+      `           (coalesce(b.um_incert, false) OR (b.cheie IS NOT NULL AND cardinality(public.fn_rest_decontat_um_decontat_diferit(b.proiect_id, b.cheie, b.um)) > 0)) AS um_incert, b.pret_unitar,`,
+      `           coalesce(b.um_incert, false) AS um_incert, b.pret_unitar,`]]],
     ['schimbarea UM-ului pe o cheie fără decontat acceptată FĂRĂ accept_schimbare_um', [[`        IF NOT v_accept_um THEN`, `        IF false THEN`]]],
     // r7 (review #1158, 2 × P1 pe r6: regula PE CHEIE, PE FIECARE CÂMP): fiecare câmp necopiat din rândul cheii (scris cum vine, normalizat) e văzut de un cititor
     ['obiect_cod necopiat din rândul cheii (scris cum vine, normalizat: " o1 " → "o1" în loc de "O1")', [[
