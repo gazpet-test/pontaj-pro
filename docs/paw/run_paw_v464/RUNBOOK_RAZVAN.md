@@ -42,6 +42,20 @@ Listele albe din `gemini_pw.py` (`CONTROALE_CUNOSCUTE`, `STRUCTURA_CUNOSCUTA`, `
 sunt livrate GOALE: structura reala a ciornei Gemini (butoanele trimite / microfon / incarcare etc.)
 nu se vede fara Edge. Fara calibrare, `stare` si `trimite` vor refuza cu `ciorna_necunoscuta`.
 
+**Stare (r3, 21.11.2026):** pasul 0 a fost rulat de sesiunea de chat pe 21.11.2026 seara din copia
+neinstalata a lui `ae3e8947` (27 / 31 / 32 semnaturi in cele trei stari) si listele albe contin acum
+EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul` legat de ele. Ce a
+ramas: in starea (iii) (chat existent) textul de confidentialitate Workspace ("Chaturile gazpet.ro
+nu sunt folosite pentru ...") era afisat ca `text_fisier:` din cauza domeniului `gazpet.ro`; din r3
+domeniul firmei (lista inchisa `DOMENII_FIRMA`) nu mai e "fisier", textul trece prin regula `text:`,
+dar intregul lui nu e cunoscut (r2 il taia la 40 de caractere), deci NU e in lista. Pasul 0 se
+repeta O DATA, doar pentru starea (iii), cu copia commit-ului r3: `stare` afiseaza acum textul intreg
+(pana la 200 de caractere) si se asteapta EXACT o linie `necunoscut text:chaturile gazpet.ro nu sunt
+folosite pen...`; Rocky o trece in `TEXTE_CUNOSCUTE` (commit nou, hash-uri noi). Pana atunci `trimite`
+va refuza cu `ciorna_necunoscuta` pe orice tab care arata un chat existent (si la a doua rulare
+`gem` din acelasi tab). Starile (i) si (ii) trec (0 necunoscute) pe paginile sintetice care reproduc
+exact iesirile calibrarii (`TestCalibrare`).
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -96,7 +110,7 @@ if ($manifest.'gemini_pw.py' -ine $GemHashNou) { throw 'gemini_pw.py din pachet 
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel din v4.6.3' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 411 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 477 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -106,13 +120,15 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + '.v463') -Force }
 ```
 
-Asteptat (pachetul FARA intrari de calibrare): 411 linii diferite (11 vechi `<=`, 400 noi `=>`).
-Cele 11 linii vechi afisate sunt: antetul, lista de coduri, linia `import`, comentariul selectorilor
-`ATAS`, titlul partii cu browserul, cele doua linii din vechea `_atasamente`, linia `atasamente in
-ciorna` din `stare` si cele trei linii ale vechii verificari din `trimite`. Liniile noi: notele
-v4.6.4 / r2, selectorul `CHIP`, analiza HTML a ciornei, verificarea pozitiva a structurii, paza si
-apelurile ei. Testele: `Ran 79 tests ... OK`. Dupa calibrarea de la pasul 0 numerele se schimba:
-le da raportul de review al commit-ului calibrat (cifrele din raport inlocuiesc 411 / 11 de mai sus).
+Asteptat (pachetul r3, calibrat la pasul 0): 477 linii diferite (11 vechi `<=`, 466 noi `=>`;
+in r2, fara calibrare, erau 411 / 11 / 400). Cele 11 linii vechi afisate sunt: antetul, lista de
+coduri, linia `import`, comentariul selectorilor `ATAS`, titlul partii cu browserul, cele doua linii
+din vechea `_atasamente`, linia `atasamente in ciorna` din `stare` si cele trei linii ale vechii
+verificari din `trimite`. Liniile noi: notele v4.6.4 / r2 / r3, selectorul `CHIP`, analiza HTML a
+ciornei, verificarea pozitiva a structurii, listele albe calibrate, regula domeniului firmei, paza si
+apelurile ei. Testele: `Ran 88 tests ... OK`. Daca pasul 0 se mai repeta (textul de confidentialitate),
+numerele se schimba din nou: le da raportul de review al commit-ului respectiv (cifrele din raport
+inlocuiesc 477 / 11 de mai sus).
 
 Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
 `C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi
@@ -230,7 +246,9 @@ Orice rezultat diferit de cel cerut mai jos = **STOP**, fara marker; copiaza toa
 - **5a.** `stare` arata `model: Carbon`, `genereaza: False`, `atasamente in ciorna: 0`,
   `necunoscute in zona: 0`, `paza ciorna: OK (trimite ar continua)`. Cu ciorna goala pe ecran,
   `paza ciorna: REFUZ ciorna_necunoscuta ...` = calibrarea (pasul 0) nu acopera pagina: STOP,
-  fara marker, copiaza liniile `necunoscut ...` pentru chat.
+  fara marker, copiaza liniile `necunoscut ...` pentru chat. 5a se ruleaza pe un chat NOU si apoi
+  inca o data pe un chat EXISTENT (tab-ul ramane pe chatul vechi dupa fiecare `gem`, iar paza
+  verifica intai tab-ul curent): ambele trebuie sa dea `necunoscute in zona: 0`.
 - **5b.** Pune de mana UN fisier mic (de ex. un `.txt`) in ciorna, fara sa trimiti; `stare` din nou:
   trebuie EXACT `atasamente in ciorna: 1` si `paza ciorna: REFUZ ciorna_cu_atasamente ...`.
   `0`, `2`, `5`, `?` sau orice alt numar = STOP (numararea nu se potriveste cu pagina reala).

@@ -27,6 +27,11 @@
 #   = GEM_EROARE ciorna_necunoscuta, exit 3. Listele albe se completeaza DOAR din calibrarea pe pagina reala (RUNBOOK,
 #   pasul 0), nu din presupuneri: un refuz fals (operatorul goleste ciorna de mana / se completeaza lista) e preferat
 #   unei trimiteri false.
+# v4.6.4 r3 (21.11.2026, calibrarea de la pasul 0 pe pagina reala, Carbon, nimic atasat): listele albe contin EXACT semnaturile
+#   afisate de `stare` in cele trei stari (chat nou gol / acelasi chat cu un cuvant in ciorna / chat existent gol), reuniune.
+#   Textul de confidentialitate Google Workspace ("Chaturile gazpet.ro nu sunt folosite ...") era luat drept nume de fisier:
+#   un cuvant care e EXACT un domeniu al firmei (DOMENII_FIRMA, lista inchisa) nu e fisier; "gazpet.ro.pdf", "a.gazpet.ro.docx",
+#   "gazpet.rox" raman fisiere. Textele afisate de `stare` nu se mai taie la 40 de caractere (calibrarea cere textul intreg).
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata
@@ -81,15 +86,60 @@ TOKENI_ELIMINA = ("remove", "elimin", "terge", "delete")     # eticheta unui but
 # "upload" / "file" raman permise pentru un control recunoscut exact (butonul de incarcare din ciorna goala)
 TOKENI_ETICHETA_INTERZISA = TOKENI_ELIMINA + ("preview", "previz", "thumb", "miniatur")
 RE_FISIER = re.compile(r"(?<![a-z0-9])[a-z0-9][a-z0-9_-]*\.[a-z][a-z0-9]{0,4}(?![a-z0-9])")   # nume.extensie in text
+# r3: un cuvant care e EXACT un domeniu al firmei nu e fisier (textul de confidentialitate Workspace: "Chaturile gazpet.ro nu
+# sunt folosite ..."). Cuvantul = potrivirea RE_FISIER extinsa peste toate caracterele de nume de fisier din jur, deci
+# "gazpet.ro.pdf", "a.gazpet.ro.docx", "gazpet.rox", "www.gazpet.ro" NU sunt domeniul exact si raman fisiere (refuz).
+DOMENII_FIRMA = ("gazpet.ro",)                                # lista INCHISA, constanta in cod (nu se citeste de nicaieri)
+CARACTERE_NUME = "abcdefghijklmnopqrstuvwxyz0123456789_.-"   # caracterele din care RE_FISIER compune un nume.extensie
+TEXT_AFISAT = 200                                             # r3: textul unui motiv text: / text_fisier: (calibrarea cere textul intreg)
+DETALIU_AFISAT = 240                                          # o linie "necunoscut ..." (motiv + semnatura / text)
 RE_LIGATURA = re.compile(r"[a-z0-9_]{1,40}")                 # textul unei iconite mat-icon (ex. "send", "add_2")
 MODEL_DATA_TEST = "bard-mode-menu-button"                     # butonul modelului (= MODEL), verificat separat
-# LISTE ALBE - goale pana la calibrarea pe pagina reala (RUNBOOK pasul 0). Se adauga EXACT semnatura afisata de `stare`
-# (linia "necunoscute"), doar pentru elemente vazute de om pe ecran cu ciorna goala / doar text, niciodata pentru ceva ce
-# seamana a fisier. CONTROALE = butoane (textul si iconitele din ele sunt eticheta lor); STRUCTURA = invelisuri (continutul
-# lor se verifica in continuare element cu element); TEXTE = texte afisate in zona, in afara controalelor.
-CONTROALE_CUNOSCUTE = ()
-STRUCTURA_CUNOSCUTA = ()
-TEXTE_CUNOSCUTE = ()
+# LISTE ALBE - completate DOAR din calibrarea pe pagina reala (RUNBOOK pasul 0): EXACT semnaturile afisate de `stare`
+# (liniile "necunoscut ..."), doar pentru elemente vazute de om pe ecran cu ciorna goala / doar text, niciodata pentru ceva ce
+# seamana a fisier. CONTROALE = butoane / linkuri (textul si iconitele din ele sunt eticheta lor); STRUCTURA = invelisuri
+# (continutul lor se verifica in continuare element cu element); TEXTE = texte afisate in zona, in afara controalelor.
+# Calibrarea din 21.11.2026 (chat-ul, copia neinstalata a lui ae3e8947, Edge 9333, un tab, Carbon, nimic atasat, niciun
+# instrument): (i) chat nou gol = 27 linii, (ii) acelasi chat cu un cuvant in ciorna, fara Enter = 31, (iii) chat existent
+# gol = 32. Mai jos reuniunea lor; in comentariu starea in care a aparut fiecare. NU e trecut: textul de confidentialitate
+# (vezi DOMENII_FIRMA; trece prin regula text: si se adauga exact cand se vede intreg).
+CONTROALE_CUNOSCUTE = (
+    "button[aria-label=deruleaza in jos][type=button][tabindex]",   # i ii iii - "Deruleaza in jos" (in back-to-bottom-fab)
+    "button[aria-label=incarcare si instrumente]",                   # i ii iii - butonul "+" care deschide meniul (nu e fisier)
+    "button[aria-label=dicteaza (^?d)]",                             # i ii iii - microfonul (dictare; "?" = caracterul non-ASCII)
+    "button[aria-label=trimite mesajul]",                            # ii       - butonul de trimitere, apare doar cu text in ciorna
+    "a[data-test-id=footer-privacy-notice-link][href]",              # iii      - linkul "Confidentialitatea ta si Gemini"
+)
+STRUCTURA_CUNOSCUTA = (
+    "span[role=status]",                                             # i ii iii - regiune live pentru cititoare de ecran (goala)
+    "back-to-bottom-fab",                                            # i ii iii - invelisul butonului "Deruleaza in jos"
+    "gem-icon",                                                      # i ii iii - iconita (componenta Angular; svg-ul din ea e neutru)
+    "file-drop-indicator",                                           # i ii iii - tinta de drag & drop, mereu in DOM, fara continut
+    "auto-suggest",                                                  # i ii iii - sugestiile de completare (goale)
+    "fieldset[role=none]",                                           # i ii iii - invelisul zonei de text
+    "div{text-input-field simplified-input-area}",                   # i ii iii - invelisul editorului; "file" vine dintr-un atribut
+    "simplified-input-menu",                                         # i ii iii - invelisul butonului "+"
+    "gem-icon-button[type=onsurface]",                               # i ii iii - invelisul unui buton cu iconita ("+", trimite)
+    "toolbox-drawer",                                                # i ii iii - sertarul instrumentelor (niciun instrument ales)
+    "div[data-test-id=textarea-inner]",                              # i ii iii
+    "div[data-test-id=textarea-wrapper]",                            # i ii iii
+    "at-mentions-menu-v2",                                           # i ii iii - meniul @ (inchis)
+    "bard-mode-switcher",                                            # i ii iii - invelisul butonului de model (verificat separat)
+    "div[role=group]",                                               # i ii iii - grup in bard-mode-switcher
+    "div[data-test-id=logo-pill-label-container]",                   # i ii iii - eticheta modelului
+    "gem-popover",                                                   # i ii iii - popover-ul listei de modele (inchis)
+    "speech-dictation-mic-button",                                   # i ii iii - invelisul microfonului
+    "gem-icon-button[type=onsurface][aria-describedby]",             # i ii iii - invelisul microfonului (cu descriere)
+    "div[data-test-id=send-button-container][aria-describedby]",     # ii       - invelisul butonului de trimitere
+    "hallucination-disclaimer",                                      # i ii iii - invelisul textului "Gemini poate gresi" (text verificat)
+    "p[data-test-id=empty-disclaimer]",                              # i ii     - paragraful gol al avertismentului pe chat nou
+    "prompt-flow-bar",                                               # iii      - bara de deasupra ciornei pe un chat existent (goala)
+    "span[data-test-id=content]",                                    # iii      - textul linkului de confidentialitate
+)
+TEXTE_CUNOSCUTE = (
+    "confidentialitatea ta si gemini",                               # iii - textul linkului de confidentialitate
+    "se deschide intr-o fereastra noua",                             # iii - textul ascuns al linkului (se deschide in alt tab)
+)
 # acelasi lucru vazut de locator (strapunge shadow DOM-ul deschis, pe care page.content() nu il serializeaza): semn = refuz
 SEMN_EXTRA = ", ".join(list(MEDIA) + ['[aria-label*="%s" i]' % t for t in TOKENI_ELIMINA])
 MODEL_CERUT = "Carbon"
@@ -305,18 +355,34 @@ def _semnatura_token(n):
     return _semnatura(n) + "{" + _ascii(" ".join(parti))[:80] + "}"
 
 
+def _nume_fisier(a):
+    # r3: primul nume.extensie din textul ASCII `a` (sau None). O potrivire al carei cuvant intreg (extins peste CARACTERE_NUME
+    # in ambele sensuri) e EXACT un domeniu din DOMENII_FIRMA nu e fisier; orice alt cuvant care o cuprinde (gazpet.ro.pdf,
+    # a.gazpet.ro.docx, gazpet.rox, www.gazpet.ro) ramane fisier. Singura definitie, folosita de texte si de etichete.
+    for m in RE_FISIER.finditer(a):
+        i, j = m.start(), m.end()
+        while i > 0 and a[i - 1] in CARACTERE_NUME:
+            i -= 1
+        while j < len(a) and a[j] in CARACTERE_NUME:
+            j += 1
+        if a[i:j] in DOMENII_FIRMA:
+            continue
+        return m.group(0)
+    return None
+
+
 def _are_eticheta_interzisa(n):
     # eticheta (aria-label, title, alt...) de scoatere / previzualizare sau cu nume de fisier: nicio lista alba nu o acopera
     t = _ascii(" ".join(n.attrs.get(k) or "" for k in SEMN_ATR_VALOARE if k not in ("role", "type")))
-    return any(x in t for x in TOKENI_ETICHETA_INTERZISA) or RE_FISIER.search(t) is not None
+    return any(x in t for x in TOKENI_ETICHETA_INTERZISA) or _nume_fisier(t) is not None
 
 
 def _motiv_text(nod, in_control):
     a = _ascii(nod.date)
     if not a:
         return None
-    if RE_FISIER.search(a):
-        return "text_fisier:" + a[:40]                  # nume.extensie: refuz chiar si intr-un control cunoscut
+    if _nume_fisier(a) is not None:
+        return "text_fisier:" + a[:TEXT_AFISAT]         # nume.extensie: refuz chiar si intr-un control cunoscut
     if in_control:
         return None                                     # eticheta unui control recunoscut
     p = nod.parinte
@@ -324,7 +390,7 @@ def _motiv_text(nod, in_control):
         return None                                     # ligatura unei iconite ("send", "mic", "add_2")
     if a in TEXTE_CUNOSCUTE:
         return None
-    return "text:" + a[:40]
+    return "text:" + a[:TEXT_AFISAT]
 
 
 def _motiv_editor(ed):
@@ -436,7 +502,7 @@ def analizeaza_ciorna(html):
         necunoscute.extend(_necunoscute(z, editoare))
     return {"editoare": len(editoare), "zone": len(zone), "atasamente": atas, "semne": semne,
             "detalii": ["%s x%d" % (k, v) for k, v in sorted(detalii.items())][:12],
-            "necunoscute": len(necunoscute), "necunoscute_detalii": [m[:120] for m in necunoscute[:60]]}
+            "necunoscute": len(necunoscute), "necunoscute_detalii": [m[:DETALIU_AFISAT] for m in necunoscute[:60]]}
 
 
 def verifica_fara_atasamente(info, semn_locator, moment):
