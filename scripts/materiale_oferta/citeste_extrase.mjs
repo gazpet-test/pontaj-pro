@@ -65,6 +65,8 @@ export async function ruleaza({ surse, iesire, acum = new Date() }) {
         ...cifre(c6), certificat: true, completa: c6.completa,
         linii_import: rez.paritate?.linii_import ?? null, valoare_import: rez.paritate?.valoare_import ?? null, paritate_ok: !!rez.paritate?.ok,
         linii_lipsa_import: rez.paritate?.linii_lipsa?.length ?? null, omise_admise: rez.paritate?.omise_admise?.length ?? null,
+        // foaia citită de import = foaia C6 după marcaj; `ecran` = ce ar citi butonul din ERP (informativ, nu certificare)
+        foaie_import: rez.paritate?.foaie_import ?? null, ecran: rez.ecran,
       } : null,
       resurse: { certificat: false, resurse_complete: rez.resurse_complete, motive_resurse_incomplete: rez.motive_resurse_incomplete },
       manopera: informativ(rez.foi.C7), utilaj: informativ(rez.foi.C8), transport: informativ(rez.foi.C9),

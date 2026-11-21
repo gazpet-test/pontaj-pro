@@ -24,13 +24,18 @@
 //    „Materiale” din ERP), cu paritate verificată rând cu rând pe TOATE câmpurile importului,
 //    inclusiv forma UM; o linie lipsă din import e diferență, cu excepția omisiunilor admise
 //    enumerate în omisiuneAdmisa (L19);
+//  - (r4) importul primește EXPLICIT foaia identificată ca C6 (opțiunea `foaie`), nu alege singur
+//    („materiale” / prima foaie, regula ecranului): ordinea și numele foilor nu schimbă nimic din certificare.
+//    Foaia pe care ar lua-o ecranul se raportează informativ (`ecran`), fără să intre în `completa`;
+//  - (r4) C6 fără nicio linie de material și importul fără nicio linie = necunoscut (incomplet, cu motiv),
+//    chiar cu TOTAL 0: două liste goale nu dovedesc citirea;
 //  - UM se normalizează cu umInfo din devizParser; numerele text cu parseNumar existent (L17).
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { umInfo, parseExtrasMateriale } from '../../src/devizParser.js'
+import { umInfo, parseExtrasMateriale, foaieImplicitaExtras } from '../../src/devizParser.js'
 import { parseNumar, fmtNr } from '../../src/izoDocumenteLogica.js'
 
-export const VERSIUNE = 'extrase-c6-c9-v3'
+export const VERSIUNE = 'extrase-c6-c9-v4'
 // formularele certificate (import + `completa`); restul sunt doar informative
 export const CERTIFICATE = ['C6']
 export const RESURSE = ['C7', 'C8', 'C9']
@@ -131,6 +136,8 @@ export function formularFoaie(rows) {
 
 const brut = (r) => JSON.stringify((r || []).slice(0, 8).map((c) => (typeof c === 'number' ? c : txt(c))))
 export const MOTIV_DUPA_TOTAL = 'rând după TOTAL care nu e subsol admis'
+export const MOTIV_C6_GOL = 'formular fără nicio linie de material (gol sau necitit): conținut necunoscut, nu se certifică'
+export const MOTIV_IMPORT_GOL = 'paritate cu importul din ERP necunoscută: importul nu are nicio linie (două liste goale nu dovedesc citirea)'
 
 /**
  * Forma UM pe care o scrie importul din ERP (parseExtrasMateriale): textul celulei, trim, litere mici, fără punctul final.
@@ -335,7 +342,10 @@ export function citesteC6(rows, { foaie = 'materiale', origine = 0 } = {}) {
   const nrCrt = verificaNrCrt(linii)
   const tot = totaluri(linii, total, ['material', 'valoric'])
   linii.forEach(stareLinie)
-  return inchide({ formular: 'C6', foaie, rand_antet: origine + h + 1, coloana_h: colH, linii, nerecunoscute, randuri_index: structura, subsol, nr_crt: nrCrt, ...tot })
+  // r4: un C6 fără nicio linie de material NU e „complet”, chiar cu TOTAL 0 și paritate între două liste goale:
+  // nu dovedește că formularul a fost citit (L12, L18: gol ≠ necunoscut ≠ 0)
+  const structurale = linii.some((l) => l.tip === 'material') ? [] : [MOTIV_C6_GOL]
+  return inchide({ formular: 'C6', foaie, rand_antet: origine + h + 1, coloana_h: colH, linii, nerecunoscute, randuri_index: structura, subsol, nr_crt: nrCrt, structurale, ...tot })
 }
 
 // ── C7 manoperă / C8 utilaj: nr | denumire | consum (ore) | tarif | valoare ──
@@ -488,8 +498,10 @@ export function aplicaParitate(c6, importate) {
   }
   const fara_pereche = importate.slice(j).map((x) => x.nr)
   const valoareImport = rot2(importate.reduce((s, a) => s + (fin(a.valoare) ? a.valoare : 0), 0))
+  // r4: importul fără nicio linie = paritate NECUNOSCUTĂ (nu „aceleași linii”), oricât de goală ar fi și foaia
+  const gol = importate.length === 0
   return {
-    ok: dif.length === 0 && lipsa.length === 0 && fara_pereche.length === 0,
+    ok: !gol && dif.length === 0 && lipsa.length === 0 && fara_pereche.length === 0, gol,
     linii_import: importate.length, valoare_import: valoareImport, diferente: dif, linii_lipsa: lipsa, omise_admise: omise, fara_pereche,
   }
 }
@@ -532,18 +544,25 @@ export async function citesteExtras(buf) {
   else {
     try {
       const ab = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength)
-      const importate = await parseExtrasMateriale({ arrayBuffer: async () => ab })
-      paritate = aplicaParitate(foi.C6, importate)
+      // r4: importul citește EXPLICIT foaia identificată ca C6 (marcajul „FORMULAR C6”), nu „materiale” / prima foaie:
+      // ordinea și numele foilor nu pot schimba paritatea (L18, L19)
+      const importate = await parseExtrasMateriale({ arrayBuffer: async () => ab }, { foaie: foi.C6.foaie })
+      paritate = { foaie_import: foi.C6.foaie, ...aplicaParitate(foi.C6, importate) }
     } catch (e) {
-      paritate = { ok: false, eroare: e.message, linii_import: 0, valoare_import: null, diferente: [], linii_lipsa: [], omise_admise: [], fara_pereche: [] }
+      paritate = { ok: false, eroare: e.message, foaie_import: foi.C6.foaie, linii_import: 0, valoare_import: null, diferente: [], linii_lipsa: [], omise_admise: [], fara_pereche: [] }
       erori.push({ foaie: foi.C6.foaie, mesaj: `importul din ERP (parseExtrasMateriale) nu citește fișierul: ${e.message}` })
     }
   }
+  // INFORMATIV (nu intră în certificare): foaia pe care ar lua-o butonul din ecranul „Materiale”, care nu primește foaia C6.
+  // Diferită de C6 = importul se face din TSV / cu foaia C6, nu din ecran.
+  const foaieEcran = wb.SheetNames.length ? foaieImplicitaExtras(wb) : null
+  const ecran = { foaie_implicita: foaieEcran, aceeasi_cu_c6: !!foi.C6 && foaieEcran === foi.C6.foaie }
   const textEroare = (e) => `eroare${e.foaie ? ` (foaia „${e.foaie}”)` : ''}: ${e.mesaj}`
   // certificarea: DOAR C6 (+ paritatea cu importul)
   const motive_incomplet = erori.map(textEroare)
   for (const f of CERTIFICATE) if (foi[f]) for (const m of foi[f].motive_incomplet) motive_incomplet.push(`${f}: ${m}`)
-  if (paritate && !paritate.eroare && !paritate.ok) {
+  if (paritate && !paritate.eroare && paritate.gol) motive_incomplet.push(MOTIV_IMPORT_GOL)
+  if (paritate && !paritate.eroare && (paritate.diferente.length || paritate.linii_lipsa.length || paritate.fara_pereche.length)) {
     motive_incomplet.push(`paritate cu importul din ERP eșuată (${paritate.diferente.length} rânduri cu câmpuri diferite, ${paritate.linii_lipsa.length} linii lipsă din import, ${paritate.fara_pereche.length} importate fără pereche)`)
   }
   const completa = !!foi.C6 && !!paritate?.ok && motive_incomplet.length === 0
@@ -555,7 +574,7 @@ export async function citesteExtras(buf) {
   }
   const resurse_complete = motive_resurse_incomplete.length === 0
   return {
-    versiune: VERSIUNE, certificat: CERTIFICATE, foi, ignorate, erori, erori_resurse, paritate, completa, motive_incomplet,
+    versiune: VERSIUNE, certificat: CERTIFICATE, foi, ignorate, erori, erori_resurse, paritate, completa, motive_incomplet, ecran,
     resurse_certificat: false, resurse_complete, motive_resurse_incomplete,
   }
 }
@@ -620,7 +639,8 @@ export function rezumatProiect({ proiect, fisier, sha256, rez }) {
     if (rez.paritate) {
       const p = rez.paritate
       r.push(`| Importul din ERP (ecranul Materiale) | ${p.eroare ? `eroare: ${p.eroare}` : `${p.linii_import} linii, ${lei(p.valoare_import)} lei${fin(c6.total_tiparit) ? ` (lipsesc ${lei(rot2(c6.total_tiparit - p.valoare_import))} lei față de TOTAL)` : ''}`} |`)
-      r.push(`| Paritate cu importul | ${p.ok ? 'aceleași linii și câmpuri (inclusiv UM)' : `**diferă** (${p.diferente.length} rânduri cu câmpuri diferite, ${p.linii_lipsa.length} linii lipsă din import, ${p.fara_pereche.length} importate fără pereche)`}${p.omise_admise.length ? `; sărite prin regula importului: ${p.omise_admise.length} (rândurile ${p.omise_admise.map((o) => `${o.rand} – ${o.motiv}`).join(', ')})` : ''} |`)
+      r.push(`| Foaia citită de import | „${p.foaie_import}” (foaia C6 după marcaj)${rez.ecran?.aceeasi_cu_c6 ? '' : `; **atenție**: butonul din ecranul Materiale ar citi „${rez.ecran?.foaie_implicita ?? '—'}”, deci importul se face din TSV, nu din ecran`} |`)
+      r.push(`| Paritate cu importul | ${p.ok ? 'aceleași linii și câmpuri (inclusiv UM)' : p.gol && !p.eroare ? '**necunoscută** (importul nu are nicio linie)' : `**diferă** (${p.diferente.length} rânduri cu câmpuri diferite, ${p.linii_lipsa.length} linii lipsă din import, ${p.fara_pereche.length} importate fără pereche)`}${p.omise_admise.length ? `; sărite prin regula importului: ${p.omise_admise.length} (rândurile ${p.omise_admise.map((o) => `${o.rand} – ${o.motiv}`).join(', ')})` : ''} |`)
     }
     if (c6.coloana_h) r.push(`| Coloana H | „${c6.coloana_h}” |`)
     r.push(`| Subsol după TOTAL (admis) | ${c6.subsol.length ? c6.subsol.map((s) => `rândul ${s.rand} ${s.tip}`).join(', ') : '—'} |`)

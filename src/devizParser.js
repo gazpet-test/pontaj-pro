@@ -140,18 +140,28 @@ export async function parseDevizExcel(arrayBuffer) {
 // ── Extras de materiale (Formular C6 — „Lista consumurilor de resurse materiale") ──
 // Foaia „materiale": antet cu Nr/Denumire/UM/Consumuri/Pret/Valoare, date de la
 // rândul următor. Denumirea începe cu codul numeric de material (ex. „2000092 OTEL…").
-export async function parseExtrasMateriale(file) {
+// Foaia pe care o citește ecranul „Materiale” (fără opțiunea `foaie`): „materiale” dacă există, altfel prima.
+// Exportată ca regula să aibă o singură definiție (scripts/materiale_oferta o raportează, nu o copiază).
+export function foaieImplicitaExtras(wb) {
+  return Object.prototype.hasOwnProperty.call(wb.Sheets, 'materiale') ? 'materiale' : wb.SheetNames[0]
+}
+// `foaie` (opțional): numele EXACT al foii de citit; foaie inexistentă = eroare, nu altă foaie.
+// Ecranul nu o dă, deci comportamentul lui rămâne cel de mai sus. scripts/materiale_oferta dă foaia
+// identificată determinist ca C6 (marcajul „FORMULAR C6”), ca ordinea / numele foilor să nu schimbe paritatea.
+export async function parseExtrasMateriale(file, { foaie } = {}) {
   const _x = await import('xlsx-js-style')
   const XLSX = _x.default?.read ? _x.default : _x
   const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
-  const sheet = wb.Sheets['materiale'] || wb.Sheets[wb.SheetNames[0]]
+  if (foaie != null && !wb.SheetNames.includes(foaie)) throw new Error(`Foaia „${foaie}" nu există în fișier`)
+  const numeFoaie = foaie != null ? foaie : foaieImplicitaExtras(wb)
+  const sheet = wb.Sheets[numeFoaie]
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' })
   let hdr = -1
   for (let r = 0; r < Math.min(rows.length, 20); r++) {
     const cells = rows[r].map(c => String(c).toLowerCase())
     if (cells.some(c => c.includes('denumirea resursei')) && cells.some(c => c.includes('consumuri'))) { hdr = r; break }
   }
-  if (hdr < 0) throw new Error('Nu găsesc antetul C6 (Denumirea resursei / Consumuri) în foaia „materiale"')
+  if (hdr < 0) throw new Error(`Nu găsesc antetul C6 (Denumirea resursei / Consumuri) în foaia „${foaie != null ? foaie : 'materiale'}"`)
   const out = []
   for (let r = hdr + 1; r < rows.length; r++) {
     const [nr, den, um, cant, pret, val, furnizor] = rows[r]
