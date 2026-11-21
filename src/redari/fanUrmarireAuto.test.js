@@ -417,6 +417,11 @@ const verificaParitateBD = F => {
   const mot = (/WHEN 'retur_motiv' THEN '\^\(([a-z_|]+)\)\$'/.exec(SQL_MIG) || [])[1]?.split('|').sort()
   if (!mot || !Object.values(F.RETUR_DIN_CATEGORIE).every(m => mot.includes(m))) return 'motivele de retur din cod lipsesc din validarea BD: ' + mot
   if (JSON.stringify(F.ORDINE_EGALITATE.filter(c => c !== 'necunoscut').sort()) !== JSON.stringify(Object.keys(F.EVENIMENTE_FAN).sort())) return 'ORDINE_EGALITATE nu acoperă exact categoriile'
+  // runda 8 (#1155 r7 P2): clasa codurilor de retur din deduplicarea auditului BD (retur_la fără cod) = codurile din care codul ia returul
+  // (EVENIMENTE_FAN.retur + semnalele finale SEMNAL_FINAL_RETUR), o singură apariție în migrare
+  const clase = [...SQL_MIG.matchAll(/x\.ev = ANY \('\{([A-Z0-9,]+)\}'::text\[\]\)/g)].map(m => m[1].split(',').sort())
+  const claseCod = [...F.EVENIMENTE_FAN.retur, ...(F.SEMNAL_FINAL_RETUR || []).flatMap(c => F.EVENIMENTE_FAN[c] || [])].sort()
+  if (clase.length !== 1 || JSON.stringify(clase[0]) !== JSON.stringify(claseCod)) return `clasa codurilor de retur: BD ${JSON.stringify(clase)}, cod ${JSON.stringify(claseCod)}`
   return null
 }
 VERIFICARI.egalitate = async M => verificaEgalitate(cuReper(M.__fan))

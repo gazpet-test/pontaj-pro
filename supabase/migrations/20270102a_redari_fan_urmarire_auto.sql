@@ -453,6 +453,10 @@ BEGIN
   --   sau în dezacord cu listele e auditat ca „respins” (textul = faptul: „C0 <zi>”, „S2 <moment>”, „retur <moment>”, valorile contradicțiilor
   --   ca eveniment), DEDUPLICAT față de liste (același moment, sau același C0 în aceeași zi pentru ziua ridicării; același text = un rând, cheia
   --   din pasul 6). Faptele cunoscute ('k' / 'kl' / 'kr') își au urma când ies din fapte (rândul scris). CAS-ul și ramura „păstrat” neschimbate.
+  -- RUNDA 8 (#1155 r7 P2, L12 / L16 / L19 / L25): deduplicarea 'f' față de liste recunoaște IDENTITATEA faptului (codul sau clasa lui + momentul),
+  --   nu doar momentul: S2 (livrare) și H3 (tranzit) la aceeași oră sunt două fapte, livrarea respinsă își păstrează urma; la fel ziua C0 față de un
+  --   H3 la 00:00. Returul fără cod (retur_la) se compară cu clasa codurilor de retur. Excepția zilei C0 (urma zilei = urma evenimentului C0 din
+  --   aceeași zi) rămâne. Toate regulile de deduplicare / filtrare ale auditului sunt enumerate în FAN_URMARIRE_AUTOMATA.md §3b (tabelul identităților).
   -- RUNDA 6 (#1155 r5 P1 / P2, L03 / L12 / L19 / L20): (P1) RETURUL cunoscut (retur_cunoscut) nu are oră proprie pe rând: faptul lui stă pe
   --   cronologia cu care a fost înregistrat (ultim_eveniment_la = „ultimul eveniment cunoscut la înregistrarea returului”, regula fan-contradictii-v1).
   --   E fapt final DOAR dacă acea cronologie lipsește (returul legitim fără oră: returnAwbNumber, fără evenimente) sau e POSIBILĂ (k_ret). Un retur
@@ -490,26 +494,34 @@ BEGIN
                                  (b.retur_cunoscut AND coalesce(bool_and(y.ok) FILTER (WHERE y.s = 'k'), true)) AS k_ret,
                                  coalesce(bool_or(CASE WHEN y.s IN ('n', 'f') THEN NOT y.ok WHEN y.s = 'r' THEN y.ok ELSE false END), false) AS dezacord,
                                  -- runda 7 (#1155 r6 P2): și momentele imposibile afirmate DOAR de faptele răspunsului (s = 'f': calea funcției edge
-                                 -- de dinainte, care trimite faptele fără liste, sau un payload în dezacord) lasă urmă; un moment deja prezent
-                                 -- în liste (y.in_lista) nu se auditează a doua oară
+                                 -- de dinainte, care trimite faptele fără liste, sau un payload în dezacord) lasă urmă; un fapt deja prezent
+                                 -- în liste (y.in_lista: ACELAȘI fapt, nu doar același moment — runda 8) nu se auditează a doua oară
                                  coalesce(jsonb_agg(jsonb_build_array(y.txt, y.reper) ORDER BY y.s, y.i) FILTER (WHERE y.s = 'r' OR (y.s = 'n' AND NOT y.ok) OR (y.s = 'f' AND NOT y.ok AND NOT y.in_lista)), '[]'::jsonb) AS imp_raspuns,
                                  coalesce(jsonb_agg(jsonb_build_array(y.txt, y.reper) ORDER BY y.s, y.i) FILTER (WHERE y.s IN ('kr', 'kl', 'k') AND NOT y.ok), '[]'::jsonb) AS imp_cunoscute
           FROM (SELECT x.*, public.fn_red_fan_moment_posibil(x.la, g.zi, v_acum) AS ok,
                        CASE WHEN x.la::date < g.zi THEN 'generat ' || to_char(g.zi, 'YYYY-MM-DD') ELSE 'azi ' || to_char(v_azi, 'YYYY-MM-DD') END AS reper,
-                       -- runda 7: momentul unui fapt e „în liste” dacă lista posibilă / respinsă a răspunsului are un eveniment la ACELAȘI moment
-                       -- sau, pentru ziua ridicării (textul „C0 AAAA-LL-ZZ”, fără oră), un C0 în ACEEAȘI zi (urma zilei = urma evenimentului)
-                       (bool_or(x.s IN ('n', 'r')) OVER (PARTITION BY x.la)
+                       -- RUNDA 8 (#1155 r7 P2, L12 / L16 / L19): un fapt e „în liste” dacă lista posibilă / respinsă a răspunsului are un eveniment cu
+                       -- ACEEAȘI IDENTITATE = (ce fapt, momentul), nu doar același moment (S2 și H3 la aceeași oră sunt două fapte: livrarea respinsă
+                       -- își păstrează urma). „Ce fapt” = codul evenimentului (x.ev: 'C0' pentru ziua ridicării, 'S2' pentru livrare, codul scris în
+                       -- valoarea unei contradicții) sau, pentru returul fără cod (retur_la → ev 'retur'), CLASA codurilor de retur din cod
+                       -- (redariFan.mjs: EVENIMENTE_FAN.retur + semnalele finale refuz / adresa / mutat; testul de paritate compară lista).
+                       -- Excepția justificată a zilei ridicării (textul „C0 AAAA-LL-ZZ”, fără oră): un C0 din liste în ACEEAȘI zi (urma zilei = urma
+                       -- evenimentului; ziua n-are oră, deci nu poate fi comparată pe moment).
+                       (bool_or(x.s IN ('n', 'r')) OVER (PARTITION BY x.la, x.ev)
+                        OR (x.ev = 'retur' AND bool_or(x.s IN ('n', 'r') AND x.ev = ANY ('{S16,S33,S43,S6,S5,S4,S10,S19,S20,S25,S27,S28,S42}'::text[])) OVER (PARTITION BY x.la))
                         OR (x.txt ~ '^C0 [0-9]{4}-[0-9]{2}-[0-9]{2}$' AND bool_or(x.s IN ('n', 'r') AND x.ev = 'C0') OVER (PARTITION BY x.la::date))) IS TRUE AS in_lista
                   FROM (SELECT 'n' AS s, e.i, left(e.x, -20) AS ev, right(e.x, 19)::timestamp AS la, (right(e.x, 19)::timestamp AT TIME ZONE 'Europe/Bucharest') AS tz, e.x AS txt
                           FROM jsonb_array_elements_text(coalesce(u.evenimente, CASE WHEN u.ultim_eveniment_la IS NULL THEN '[]'::jsonb
                                  ELSE jsonb_build_array(u.ultim_eveniment || ' ' || u.ultim_eveniment_la) END)) WITH ORDINALITY e(x, i)
                         UNION ALL SELECT 'r', e.i, left(e.x, -20), right(e.x, 19)::timestamp, NULL, e.x
                           FROM jsonb_array_elements_text(coalesce(u.respinse, '[]'::jsonb)) WITH ORDINALITY e(x, i)
-                        -- runda 7: faptele au text de audit (ziua ridicării ca zi „C0 AAAA-LL-ZZ”, livrarea „S2 <moment>”, returul „retur <moment>”)
-                        UNION ALL SELECT 'f', 0, NULL, v.la, NULL, v.txt
-                          FROM (VALUES (u.ridicat_propus::date::timestamp, 'C0 ' || u.ridicat_propus), (u.livrat_la::timestamp, 'S2 ' || u.livrat_la),
-                                       (u.retur_la::timestamp, 'retur ' || u.retur_la)) v(la, txt) WHERE v.la IS NOT NULL
-                        UNION ALL SELECT 'f', 0, NULL, CASE WHEN length(v.x) = 10 THEN v.x::date::timestamp ELSE right(v.x, 19)::timestamp END, NULL,
+                        -- runda 7: faptele au text de audit (ziua ridicării ca zi „C0 AAAA-LL-ZZ”, livrarea „S2 <moment>”, returul „retur <moment>”);
+                        -- runda 8: și identitatea faptului (ev: C0 / S2 / retur), pentru deduplicarea față de liste
+                        UNION ALL SELECT 'f', 0, v.ev, v.la, NULL, v.txt
+                          FROM (VALUES ('C0', u.ridicat_propus::date::timestamp, 'C0 ' || u.ridicat_propus), ('S2', u.livrat_la::timestamp, 'S2 ' || u.livrat_la),
+                                       ('retur', u.retur_la::timestamp, 'retur ' || u.retur_la)) v(ev, la, txt) WHERE v.la IS NOT NULL
+                        UNION ALL SELECT 'f', 0, CASE c ->> 'tip' WHEN 'ridicare_zile' THEN 'C0' WHEN 'livrare_ore' THEN 'S2' ELSE left(v.x, -20) END,
+                                         CASE WHEN length(v.x) = 10 THEN v.x::date::timestamp ELSE right(v.x, 19)::timestamp END, NULL,
                                          CASE c ->> 'tip' WHEN 'ridicare_zile' THEN 'C0 ' || v.x WHEN 'livrare_ore' THEN 'S2 ' || v.x ELSE v.x END
                           FROM jsonb_array_elements(coalesce(u.contradictii, '[]'::jsonb)) c CROSS JOIN LATERAL jsonb_array_elements_text(c -> 'valori') v(x)
                          WHERE c ->> 'tip' IN ('ridicare_zile', 'livrare_ore', 'livrare_retur') AND v.x ~ '[0-9]{4}-[0-9]{2}-[0-9]{2}'
@@ -913,7 +925,7 @@ BEGIN
       ('public.fn_red_fan_tiraj_opreste(uuid,text,boolean)', '63b507c349b2961c032468a3d542212a', 'plpgsql', true, 'v', 'jsonb', true, false),
       ('public.fn_red_fan_urmarire(uuid,jsonb)', 'f310b4933f6064f4c2187e1602b46bb1', 'plpgsql', true, 'v', 'jsonb', true, false),
       ('public.fn_red_fan_urmarire_intern(uuid,jsonb)', '50512f2506fcbf23bda6e4559cfbc71f', 'plpgsql', true, 'v', 'jsonb', false, false),
-      ('public.fn_red_fan_urmarire_scrie(uuid,jsonb,uuid,uuid)', 'a3a9fcda28cee1f407c6bd9d1ef6761e', 'plpgsql', true, 'v', 'jsonb', false, false),
+      ('public.fn_red_fan_urmarire_scrie(uuid,jsonb,uuid,uuid)', '8fa666ce7fa22f0989cfce70f67598d8', 'plpgsql', true, 'v', 'jsonb', false, false),
       ('public.fn_red_fan_urmarire_solutioneaza(uuid,integer,jsonb,text)', 'd286bb9f78d01f751eb123b0eb8ca5a5', 'plpgsql', true, 'v', 'jsonb', true, false),
       ('public.fn_red_fan_zi_garda()', '5c51181772f185ac5559913dd32918ec', 'plpgsql', true, 'v', 'trigger', false, false)
       -- <<< AMPRENTE-NOI 20270102a

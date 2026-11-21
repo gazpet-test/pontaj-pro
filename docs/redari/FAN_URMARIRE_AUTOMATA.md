@@ -94,14 +94,34 @@ curierului și ale noastre). O singură definiție, aceeași în cod (`redariFan
 - **toate sursele unui moment lasă urmă (runda 7, Jakarinos r6 P2)**: și un moment imposibil afirmat **doar de câmpurile de fapte** ale
   răspunsului (`ridicat_propus`, `livrat_la`, `retur_la`, valorile contradicțiilor — calea funcției edge de dinainte, care trimite faptele fără
   liste, sau un payload în dezacord cu listele) intră în audit ca „respins” (textul = faptul: `C0 <zi>`, `S2 <moment>`, `retur <moment>`,
-  valorile contradicțiilor ca eveniment), **deduplicat** față de liste (același moment, sau același C0 în aceeași zi pentru ziua ridicării) —
-  rândul rămâne „păstrat”, CAS-ul și faptele neschimbate. Tabelul surselor: lista posibilă (`n`) → audit când BD-ul o găsește imposibilă;
-  lista respinsă (`r`) → audit mereu; faptele răspunsului (`f`) → audit când sunt imposibile (runda 7); faptele cunoscute (`k` cronologia,
-  `kl` livrarea, `kr` ziua ridicării) → audit când ies din fapte, adică pe rândul scris (un rând păstrat / depășit nu-și schimbă faptele; le
-  auditează prima scriere validă).
+  valorile contradicțiilor ca eveniment), **deduplicat** față de liste pe **identitatea faptului** (runda 8, Jakarinos r7 P2: ce fapt + momentul,
+  nu doar momentul — vezi tabelul identităților de mai jos) — rândul rămâne „păstrat”, CAS-ul și faptele neschimbate. Tabelul surselor: lista
+  posibilă (`n`) → audit când BD-ul o găsește imposibilă; lista respinsă (`r`) → audit mereu; faptele răspunsului (`f`) → audit când sunt
+  imposibile (runda 7); faptele cunoscute (`k` cronologia, `kl` livrarea, `kr` ziua ridicării) → audit când ies din fapte, adică pe rândul scris
+  (un rând păstrat / depășit nu-și schimbă faptele; le auditează prima scriere validă).
   Exemplul recenzentului (r6): AWB generat pe 18.11, funcția edge veche trimite `livrat_la` = 17.11 10:00 (S2 de dinaintea generării) și ultimul
   eveniment H3 20.11 valid → păstrat pe ambele rulări, `S2 2026-11-17 10:00:00` în audit (reper `generat 2026-11-18`, observări 2); la fel
-  C0 de dinaintea generării prin `ridicat_propus` (`C0 2026-11-17`);
+  C0 de dinaintea generării prin `ridicat_propus` (`C0 2026-11-17`). Exemplul recenzentului (r7): S2 **și** H3 la 17.11 10:00 prin funcția edge
+  veche → **două** urme (`H3 2026-11-17 10:00:00` din listă și `S2 2026-11-17 10:00:00` din fapt), nu una; C0 + H3 la 17.11 00:00 → `H3 2026-11-17
+  00:00:00` și ziua `C0 2026-11-17`;
+- **tabelul identităților (runda 8): toate regulile de deduplicare / filtrare ale auditului, în BD și în cod.** Pentru fiecare: identitatea
+  folosită, două intrări distincte care rămân amândouă, testul care o dovedește. Nicio regulă nu folosește o identitate mai largă decât faptul.
+
+  | Regula | Unde | Identitatea | Două intrări distincte, ambele păstrate | Test |
+  |---|---|---|---|---|
+  | `in_lista` (faptul `f` deja în liste `n` / `r`) | SQL `fn_red_fan_urmarire_scrie`, lateral-ul `p` | **codul + momentul** (`PARTITION BY la, ev`; `f` are ev C0 / S2 / codul din valoarea contradicției) | `S2 17.11 10:00` (fapt) și `H3 17.11 10:00` (listă) | PGlite K22a (două rulări), K21g; mutanții „deduplicarea doar pe moment”, „faptele fără identitate”, „valoarea contradicției fără codul ei” |
+  | `in_lista`, returul fără cod (`retur_la`) | același | **clasa codurilor de retur** (`EVENIMENTE_FAN.retur` + `SEMNAL_FINAL_RETUR`; paritate cod ↔ BD) + momentul | `retur 24.11 10:00` (fapt) și `H3 24.11 10:00` (listă) | K22c (S6 = aceeași clasă → o urmă), K22d (H3 → două); mutanții „returul nededuplicat față de clasă”, „clasa = orice cod”; paritatea listei (PGlite §5, vitest) |
+  | `in_lista`, ziua ridicării (`C0 AAAA-LL-ZZ`, fără oră) — excepția justificată | același | **C0 + ziua** (`PARTITION BY la::date`, doar ev C0) | `C0 24.11` (zi) și `S2 24.11 00:00` (listă) | K22b (două rulări), K22g, K21d, K21g; mutantul „deduplicarea pe zi aplicată oricărui fapt” |
+  | textul identic al urmei → un rând (`observari + 1`) | SQL pasul 6: `DISTINCT ON (id, md5(sursa\|tip\|valori\|ales\|regula))` + `ON CONFLICT (fan_awb_id, cheie)` | **conținutul complet** al semnalului (sursa, tipul, `[eveniment, reper]`, alesul, regula) pe AWB | `[S2 X, generat Z]` și `[H3 X, generat Z]`; același eveniment cu alt reper (altă zi) = alt rând | K19e(3) (livrat_la + valoarea contradicției = un rând), K22a (două texte = două rânduri), K18a (observări) |
+  | faptele cunoscute ieșite din fapte (`kr` / `kl` / `k`) | SQL `imp_cunoscute` (doar pe rândul scris) | textul urmei: `kl` și `k` cu același text (livrarea = ultimul eveniment) = un rând; `kr` (zi) ≠ `k` (oră) | `C0 24.11` (kr) și `C0 24.11 10:00:00` (k) | K20e „cunoscut dinainte” (C0 → două urme, S2 → una), K20a/f |
+  | filtrul surselor în `imp_raspuns` | SQL lateral-ul `p` | `r` mereu; `n` când e imposibil aici; `f` când e imposibil și nu e în liste | `S2 X` în `respinse` și același `S2 X` în `evenimente` (payload fabricat) = un text, un rând | K19e(2), K21a–h, mutanții „auditul doar cu ce a respins codul”, „faptele imposibile lipsă din audit” |
+  | valorile contradicțiilor fără moment (`returnAwbNumber`) nu sunt momente | SQL lateral-ul `p` (`v.x ~ '[0-9]{4}-…'`) | n/a (nu e moment, nu poate fi imposibil) | — | K20 (returul legitim fără oră), validarea formei |
+  | lista `evenimente` / `respinse` fără dubluri alăturate, `contradictii` cu tipuri distincte | SQL validarea (22023, nimic scris) | codul + momentul (text) / tipul | refuz explicit, nu filtrare | K18 „lista ca date externe”, K19 „respinse ca date externe”, mutanții validării |
+  | `textEvenimente`: evenimentele identice repetate = un fapt | cod `redariFan.mjs` (cronologie și `respinse`) | **codul + momentul** (texte alăturate după ordinea completă) | `S2 X` și `H3 X`; `C0 X` și `C0 Y` | vitest „evenimente identice repetate”, „runda 4: lista pentru cronologie”; mutantul „cronologie: dublurile păstrate” |
+  | zilele C0 / orele S2 distincte (`distincte`) | cod `redariFan.mjs` | **categoria + ziua** (C0) / **categoria + momentul** (S2); două C0 în aceeași zi = o zi (decizie documentată, nu contradicție) | `C0 18.11` și `C0 19.11` → `ridicare_zile` | vitest „două C0 → prima zi”, K1; mutanții „contradicția C0 / S2 nu mai e înregistrată” |
+  | motivele de retur la ora finală (`motive`) | cod `redariFan.mjs` | **motivul** la ultima oră a semnalelor | `refuz` și `adresa_incompleta` la aceeași oră → `retur_motiv` | vitest „refuz și adresă greșită la aceeași oră”, K16; mutantul „retur_motiv neînregistrată” |
+  | limitele 100 (`evenimente`, `respinse`) și 50 (valori) | cod + SQL (aceleași valori, paritate) | n/a (plafon, nu identitate): peste 100 respinse / 50 valori = „de verificat” fără fapte, cu numărul în motiv; peste 100 evenimente = ultimele 100, faptele rămân din toate | — | K18g, K19f, vitest „limita `respinse`”, paritatea §5 |
+  | ecranul „Contradicții FAN (audit)” | `FanContradictii.jsx` | **nicio deduplicare**: toate rândurile lotului (keyset pe id), filtru pe tip la cererea omului | două rânduri cu același eveniment și alt reper se văd amândouă | `fanUrmarireAuto.test.js` (UI), L23 / L24 |
 - o livrare imposibilă **nu e fapt final**: AWB-ul rămâne în selecția rulării automate (`fn_red_fan_srv_de_urmarit`, același predicat) până la un
   fapt final valid; corecția validă ulterioară se înregistrează (nu „ultima oră” dintre ea și cea imposibilă).
 Exemplul recenzentului: pe 21.11, C0 20.11 08:00 + S2 24.11 10:00 → **ridicat**, fără livrare, S2 în audit, AWB-ul încă de urmărit; apoi
@@ -295,7 +315,10 @@ runner (refuză cât există rulări în istoric, contradicții înregistrate sa
   `scripts/pglite/fixturi/redariFan_origin_main_b1d3c593.mjs`, sha256 verificat) pe două rulări — S2 înainte de generare prin `livrat_la` și C0
   înainte de generare prin `ridicat_propus` (păstrat, urma în audit cu observări 1 → 2, corecția validă apoi), deduplicarea față de liste (același
   moment; ziua C0 față de C0-ul din listă; o livrare în aceeași zi cu un C0 respins are urma ei), `retur_la` și valorile contradicțiilor ca surse,
-  ramura „depășit” cu fapt imposibil; refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
+  ramura „depășit” cu fapt imposibil; **K22 (runda 8)**: identitatea faptului în deduplicare — reproducerile recenzentului r7 prin parserul vechi
+  (S2 + H3 la aceeași oră → două urme; C0 + H3 la 00:00 → ziua C0 și H3), două rulări fiecare și corecția validă; `retur_la` față de S6 (aceeași
+  clasă → o urmă) și față de H3 (două urme); valoarea contradicției cu codul ei (S6 = același fapt, S16 ≠ S6); livrarea + ziua C0 la același moment
+  cu un S2 din listă; refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
   revenirea (refuz la fiecare urmă, inclusiv contradicții și ridicări automate; aplicare → revenire → re-aplicare); **mutanți SQL** + martorul;
   paritatea plafonului JS ↔ SQL; porțile 0e / Izometrie E2.
 - Pe clonă (coordonatorul): `supabase/tests/20270102a_redari_fan_urmarire_auto_doua_sesiuni.sh` — S1 două porniri suprapuse (B așteaptă, apoi

@@ -404,7 +404,9 @@ export const ORDINE_EGALITATE = Object.freeze(['inregistrat', 'tranzit', 'neutru
   'necunoscut', 'mutat', 'adresa', 'refuz', 'retur'])
 const rangEgalitate = cat => ORDINE_EGALITATE.indexOf(cat || 'necunoscut')
 const ordineEvenimente = (a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : rangEgalitate(a.cat) - rangEgalitate(b.cat) || (a.cod < b.cod ? -1 : a.cod > b.cod ? 1 : 0))
-const SEMNAL_FINAL_RETUR = ['refuz', 'adresa', 'mutat']
+// Runda 8 #1155 (Jakarinos r7 P2, L19): exportat pentru testul de paritate — clasa codurilor de retur din BD (deduplicarea auditului pentru
+// `retur_la`, care n-are cod) = EVENIMENTE_FAN.retur + categoriile de aici
+export const SEMNAL_FINAL_RETUR = Object.freeze(['refuz', 'adresa', 'mutat'])
 // Runda 4 #1155 (Jakarinos r3 P2, L03 / L17 / L18 / L19): CRONOLOGIA (ultim_eveniment / ultim_eveniment_la și garda „ne-mai-veche” a scrierii) o
 // stabilește BD-ul DOAR din evenimentele la un moment POSIBIL (ziua ≥ ziua generării AWB-ului și momentul ≤ acum, ora României; predicatul are O
 // singură definiție, în fn_red_fan_urmarire_scrie, 20270102a). Un eveniment respins ca fapt pentru că data lui e imposibilă (ex. C0 în viitor) nu mai
