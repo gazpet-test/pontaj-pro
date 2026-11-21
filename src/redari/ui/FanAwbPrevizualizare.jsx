@@ -13,7 +13,11 @@
    oprit”; nu se cheamă funcția edge și nu se scrie nimic. Activarea pentru Testul 1 (DOAR_PROIECTE_TEST = true): activ DOAR pe un proiect
    „TEST-…” cu lotul marcat TEST (aceeași gardă ca funcția edge, transportPermis); pe orice alt lot, pașii rămân dezactivați cu motivul.
    Proiectare: docs/redari/FANCOURIER_INTEGRARE.md, docs/redari/FAN_TEST1_PASI.md. Contactul (PII) se citește cu
-   JWT-ul omului (RLS: doar admin/editor). Răspunsurile FAN sunt date: ridicarea, reconcilierea și returul le confirmă omul. */
+   JWT-ul omului (RLS: doar admin/editor). Răspunsurile FAN sunt date: reconcilierea și returul pe plic le confirmă omul.
+   Runda 2 #1155 (decizia owner-ului 21.11.2026, „mergem pe ce livrează API-ul”): ridicarea (C0), livrarea și returul raportate de curier se
+   înregistrează AUTOMAT în evidența FAN (butonul „Urmărire” și rularea zilnică, aceeași regulă); pe loturile de TEST rândul trece singur în
+   „ridicat”, deci „6b. Confirmă ridicarea” rămâne DOAR pentru loturile reale (expedierea pe plic, cu termenul de 10 zile); contradicțiile nu mai
+   blochează: se rezolvă după regulă și se văd în lista de audit „Contradicții FAN” (FanContradictii.jsx). */
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { pregatestePlicuriFan, contactPePlic, LIMITA_LOT_PILOT_IMPLICITA, FORMAT_ETICHETA, manifestTiparire, partiManifest, cheieTiraj, idTiraj, tirajDin,
@@ -26,6 +30,7 @@ import { docxPaginaControl } from '../plicuri.js'
 import { descarcaBlob } from '../docx.js'
 import { G, S, Modal, msgEroare, citestePaginat, etichetaRetur, MOTIVE_RETUR } from './comune.jsx'
 import TrimiteLaCurier, { CereriAprobare, OperatoriCurier, ListaAnulari, SetariZi } from './FanTrimitere.jsx'
+import FanContradictii from './FanContradictii.jsx'
 
 export { contactPePlic }   // compatibil cu testele vechi (definiția e în redariFan.mjs, comună cu funcția edge)
 const LOT_IN = 100
@@ -300,16 +305,19 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
     return `Tirajul nou ${t.id} (nr. ${t.nr}) a început. Descarcă din nou toate părțile etichetelor și arhiva documentelor.`
   })
   const urmarire = () => executa('urmarire', async curent => { if (!curent()) return OPRIT; const { corp, mesaj } = await edge('urmarire')
-    return corp?.cod === 'ok' ? `Urmărire actualizată: ${corp.scrise} AWB-uri${corp.pastrate ? `; ${corp.pastrate} fără evenimente noi (informația cunoscută păstrată, doar „verificat”)` : ''}${corp.depasite ? `; ${corp.depasite} depășite de o rulare mai nouă (nescrise)` : ''}.` : mesaj })
+    return corp?.cod === 'ok' ? `Urmărire actualizată: ${corp.scrise} AWB-uri${corp.pastrate ? `; ${corp.pastrate} fără evenimente noi (informația cunoscută păstrată, doar „verificat”)` : ''}${corp.depasite ? `; ${corp.depasite} depășite de o rulare mai nouă (nescrise)` : ''}`
+      + `${corp.ridicari ? `; ${corp.ridicari} ridicări înregistrate automat` : ''}${corp.contradictii ? `; ${corp.contradictii} contradicții rezolvate după regulă (în lista de audit)` : ''}.` : mesaj })
   const confirmari = () => executa('confirmari', async curent => { if (!curent()) return OPRIT; const { corp, mesaj } = await edge('confirmari')
     return corp?.cod === 'ok' ? `Confirmări verificate: ${corp.scrise} AWB-uri${corp.depasite ? `; ${corp.depasite} depășite` : ''}.` : mesaj })
   const evenimente = () => executa('evenimente', async curent => { if (!curent()) return OPRIT; const { corp, mesaj } = await edge('evenimente')
     return corp?.cod === 'ok' ? `Coduri lipsă la FAN: ${corp.lipsa_la_fan.join(', ') || '-'}; coduri FAN neclasificate: ${corp.neclasificate.map(c => c.cod).join(', ') || '-'}.` : mesaj })
-  // runda 4: o ridicare CONTRAZISĂ (FAN a dat două date) nu se confirmă în bloc: omul o verifică în selfAWB
-  const deConfirmatRidicare = awb.filter(r => r.stare === 'generat' && r.ridicat_propus && !r.ridicat_contrazis)
+  // runda 2 #1155: pe un lot de TEST ridicarea se înregistrează automat (rândul trece în „ridicat”), deci aici rămân doar loturile REALE, unde
+  // confirmarea scrie expedierea pe plic (termenul de 10 zile; bifarea automată pe plic = D4 / F4, cu „da”-ul juridic)
+  const deConfirmatRidicare = awb.filter(r => r.stare === 'generat' && r.ridicat_propus && !r.ridicat_contrazis && fan?.fanLot?.test !== true)
   const confirmaRidicarea = () => executa('urmarire', async curent => {
+    if (fan.fanLot?.test) return 'Lot de TEST: ridicarea raportată de curier se înregistrează automat la urmărire (nimic de confirmat).'
     if (!esteOwner) return 'Confirmarea ridicării (cu efect pe plic) e a owner-ului.'   // fn_red_fan_ridicat = clasa C
-    const efect = fan.fanLot?.test ? 'Lot de TEST: se marchează doar în evidența FAN.' : 'Lot real: plicurile primesc AWB-ul și data expedierii (pornește termenul de 10 zile).'
+    const efect = 'Lot real: plicurile primesc AWB-ul și data expedierii (pornește termenul de 10 zile).'
     if (!window.confirm(`Confirmi ridicarea de către curier pentru ${deConfirmatRidicare.length} plicuri, la datele evenimentului C0? ${efect}`)) return 'Nimic confirmat.'
     return bucla(curent, deConfirmatRidicare, r => supabase.rpc('fn_red_fan_ridicat', { p_id: r.id, p_data: r.ridicat_propus }), 'Ridicări confirmate')
   })
@@ -430,7 +438,7 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
       {(parti.length ? parti : [[]]).map((b, i) => <Pas key={i} cheie="etichete" onClick={() => etichete(i + 1)}>
         4. Etichete (PDF){parti.length > 1 ? ` — partea ${i + 1} din ${parti.length} (pozițiile ${b[0].pozitie}…${b.at(-1).pozitie})` : ''}</Pas>)}
       <Pas cheie="urmarire" onClick={urmarire} />
-      <Pas cheie="urmarire" onClick={confirmaRidicarea}>6b. Confirmă ridicarea ({deConfirmatRidicare.length})</Pas>
+      <Pas cheie="urmarire" onClick={confirmaRidicarea}>6b. Confirmă ridicarea pe plic — lot real ({deConfirmatRidicare.length})</Pas>
       <Pas cheie="confirmari" onClick={confirmari} />
       <Pas cheie="evenimente" onClick={evenimente}>Lista de evenimente FAN</Pas>
       {fan?.instalata && awb.length > 0 && <button style={S.btnX} disabled={lucru} onClick={borderou}>Borderou FAN (CSV, fără date personale)</button>}
@@ -481,10 +489,12 @@ export default function FanAwbPrevizualizare({ proiect, lot, plicuri, convocariP
           {fan?.fanLot?.test ? ' · lot de test: nu se înregistrează pe plic' : p?.data_expediere && !p?.retur && onRetur
             ? <> <button style={S.btnX} disabled={lucru} onClick={() => onRetur(p.id, r.retur_propus, (r.ultim_eveniment_la || '').slice(0, 10))}>Înregistrează returul…</button></> : ''}</div> })}
     </div>}
+    <FanContradictii client={supabase} lotId={lot.id} awb={awb} activ={!!fan?.instalata} reload={reload} />
     {deVerificat.length > 0 && <div style={{ ...S.card, borderColor: G.red, marginBottom: 8 }}>
-      <b style={{ color: G.red }}>Urmărire de verificat de om ({deVerificat.length})</b> — răspuns FAN neclar sau CONTRADICȚIE cu un fapt cunoscut: faptele cunoscute rămân
-      (nu se șterg și nu se înlocuiesc automat, nici la un răspuns ulterior). Verifică în selfAWB; o contradicție o soluționează owner-ul sau un admin Redări
-      cu „Soluționează…” (alegi valoarea care rămâne pentru fiecare fapt, cu motiv); ridicarea / AR-ul / returul pe plic se înregistrează apoi ca de obicei.
+      <b style={{ color: G.red }}>Urmărire de verificat de om ({deVerificat.length})</b> — răspuns FAN neclar (un cod al curierului cu sens nelimpede pentru o
+      convocare, confirmare refuzată, evenimente de formă necunoscută): faptele deja înregistrate rămân. Contradicțiile dintre răspunsuri NU mai ajung aici:
+      se rezolvă automat după regulă și se văd în „Contradicții FAN (audit)”. Verifică în selfAWB; o contradicție veche (dinaintea regulii) o soluționează
+      owner-ul sau un admin Redări cu „Soluționează…” (alegi valoarea care rămâne pentru fiecare fapt, cu motiv).
       {deVerificat.map(r => <div key={r.id}>{r.nr_plic} · AWB {r.awb} · ultimul eveniment: {r.ultim_eveniment || '-'}{textFapteUrmarire(r, ETICHETE_RETUR) ? ` · ${textFapteUrmarire(r, ETICHETE_RETUR)}` : ''}
         {fapteContrazise(r).length > 0 && sol?.rand.id !== r.id && <> <Pas cheie="solutionare" onClick={() => deschideSolutionare(r)}>Soluționează…</Pas></>}
         {sol?.rand.id === r.id && <div style={{ ...S.card, margin: '4px 0', display: 'grid', gap: 4 }}>

@@ -1327,6 +1327,14 @@ rândului), iar `urmarire_stare` = ce a spus ultima urmărire (`neurmarit`, `far
 `de_verificat`). **Ce știm despre ora ridicării**: `ridicat_propus` e `date` (curierul dă ziua C0; ora C0 nu e păstrată), iar `ultim_eveniment_la`
 e ora ULTIMULUI eveniment, nu a C0 → nici jurnalul, nici ecranul nu promit „ora ridicării”: scriu „ridicat (C0) în ziua de <data>” și, separat,
 „ultimul eveniment <cod> la <ora>”; `ridicat_la` (timestamptz) = ziua C0 la 00:00 ora României, ca azi în `fn_red_fan_ridicat`.
+> **Revizuit 21.11.2026 (decizia owner-ului, PR #1155 runda 2) — înlocuiește regula „de verificat” de mai jos și rândul „a doua dată de C0
+> diferită…” din tabel**: contradicțiile NU mai blochează rândul la om. Toate se evaluează înainte de fapte, apoi regula deterministă
+> `fan-contradictii-v1`: ridicarea = **prima** zi C0 (o zi deja înregistrată nu se mută); livrarea = **ultima** oră S2; livrare vs retur =
+> evenimentul final **ulterior** după ora curierului (egalitate / retur fără oră → retur; retur după livrare = retur); între răspunsuri, motivul
+> de retur al răspunsului mai nou; o dată C0 înainte de generare / în viitor nu se înregistrează. Fiecare contradicție rămâne DURABIL în
+> `red_fan_contradictii` (valori, alesul, regula, rularea / omul, observări) — lista de audit „Contradicții FAN” cu filtru pe tip. Detaliile și
+> tabelul complet: `FAN_URMARIRE_AUTOMATA.md` §3b. Bifarea pe plicul unui lot REAL (D4) folosește faptul rezolvat, la F4.
+
 **Contradicții în ACELAȘI răspuns** (Jakarinos, P1 înainte de F2 — proba lui: helperul din `main` cu două C0 diferite întoarce `ridicat` cu prima
 dată, fără contradicție): `rezumatUrmarireFan` primește regula: două sau mai multe evenimente din categoria `ridicat` cu **zile diferite** →
 `de_verificat`, motiv „două date de ridicare în același răspuns”; două `livrat` cu ore diferite → `de_verificat`; `livrat` și `retur` în același
@@ -1349,7 +1357,7 @@ face DOAR din faptele **necontrazise** ale rândului, după scrierea urmăririi,
 | **S50** confirmare refuzată | `de_verificat` (judecată umană, ca azi) | nimic | — |
 | **S7, S8, S9, S14, S15, S37, S38, S46, S47, S49, S54, S55, S56, S64, S65, S67, S69, S99** și orice cod necunoscut ca ultim eveniment | `de_verificat` | nimic | — |
 | a doua dată de C0 diferită / altă oră S2 / alt motiv de retur | faptul cunoscut rămâne, valoarea nouă în `*_contrazis`, `de_verificat` (ca azi); **plicul nu se atinge** (data expedierii e imuabilă prin trigger-ul plicului odată scrisă) | nimic | — |
-| dată **în viitor** (peste ora curentă RO + 60 min) sau **înainte de `generat_la`**, sau formă necunoscută | `de_verificat`, motiv „dată imposibilă” | nimic | — |
+| dată **în viitor** (peste ora curentă RO + 60 min) sau **înainte de `generat_la`**, sau formă necunoscută | `de_verificat`, motiv „dată imposibilă” (**înlocuit** de runda 5 #1155: regula unică a momentului posibil, toleranța 5 min, evenimentul imposibil respins ca fapt și păstrat doar în audit — `FAN_URMARIRE_AUTOMATA.md` §3b) | nimic | — |
 | C0 pe un rând al cărui plic nu mai e activ / are deja expediere manuală | `ridicat_propus` scris, dar plicul **nu**; „De verificat” cu motivul (ca refuzul de azi din `fn_red_fan_ridicat`) | nimic | — |
 | răspuns fără evenimente / AWB absent / listă de formă necunoscută | ca azi: „păstrat” / `de_verificat`; nimic pe plic | nimic | — |
 
@@ -1814,6 +1822,12 @@ comanda curierului și „Pregătește comanda” (F5); orice efect pe proiecte 
   cere, de F6.
 
 ### F2 — Urmărirea automată + verificarea generate / tipărite / ridicate (D4, D11)
+- **F2a livrată separat (21.11.2026, decizia owner-ului): urmărirea automată FĂRĂ bifare pe plic** — `docs/redari/FAN_URMARIRE_AUTOMATA.md`,
+  migrarea `20270102a` (NEAPLICATĂ): cron de două ori pe zi, aceeași urmărire ca butonul. **Revizuit în aceeași zi (runda 2 #1155, decizia
+  owner-ului „la 2000 de oameni mergem pe ce livrează API-ul”)**: ridicarea / livrarea / returul raportate de curier se înregistrează AUTOMAT ca fapte
+  în evidența FAN (pe loturile de TEST rândul trece singur în `ridicat`; ridicarea NU mai e „propusă”), la buton și la cron; contradicțiile nu mai
+  ajung „de verificat”: regula deterministă `fan-contradictii-v1` (§9.2, revizuită) + semnal durabil în `red_fan_contradictii` (lista de audit
+  „Contradicții FAN”). Restul lui F2 (bifarea D4 pe plicul loturilor reale, D11, întrerupătorul din ecran) rămâne cum e descris mai jos.
 - **Precondiție (P1 înainte de F2, Jakarinos)**: regula contradicțiilor în ACELAȘI răspuns în `rezumatUrmarireFan` (§9.2), cu tabelul de cazuri.
 - **Conține**: `red_fan_rulari` (+ `control jsonb`), `fn_red_fan_urmarire_tick` (postgres / pg_cron), secretul Vault `REDARI_FAN_INTERN_SECRET` (generat în BD),
   `fn_red_fan_srv_urmarire` / `fn_red_fan_srv_confirmari` cu `p_rulare` activ, `fn_red_fan_srv_bifeaza`, `fn_red_fan_srv_rulare` (clasa B, EXECUTE

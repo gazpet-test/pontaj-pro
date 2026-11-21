@@ -22,7 +22,7 @@ export const PASI_FAN = Object.freeze([
   // 18.11.2026: formatul A6 e CERUT curierului (parametrul din documentație), dar prima probă a venit A4 → titlul nu mai afirmă A6
   { cheie: 'etichete', titlu: '4. Etichete', ajutor: 'un PDF pe lot, în ordinea numărului de plic; formatul paginii se verifică pe PDF (A6 cerut curierului; la prima probă a venit A4)' },
   { cheie: 'curier', titlu: '5. Comandă curier', ajutor: 'în selfAWB (manual): o comandă pe zi, interval de cel puțin 2 ore' },
-  { cheie: 'urmarire', titlu: '6. Urmărire', ajutor: 'ridicarea (C0) și livrarea; ridicarea o confirmă omul' },
+  { cheie: 'urmarire', titlu: '6. Urmărire', ajutor: 'ridicarea (C0), livrarea și returul raportate de curier se înregistrează automat (pe loturile de TEST rândul trece singur în „ridicat”); contradicțiile se rezolvă după regulă și rămân în lista de audit' },
   { cheie: 'confirmari', titlu: '7. Confirmări / retururi', ajutor: 'confirmările FAN și retururile propuse; AR-ul și returul le înregistrează omul' },
 ])
 
@@ -298,6 +298,31 @@ export function textFapteUrmarire(r, eticheteRetur = {}) {
   return [f.length ? `fapte: ${f.join(', ')}` : '', c.length ? `CONTRADICȚIE de verificat de om: ${c.join('; ')}` : ''].filter(Boolean).join(' · ')
 }
 
+// ── contradicțiile FAN, lista de AUDIT (runda 2 #1155, decizia owner-ului 21.11.2026): rezolvate automat după regula fan-contradictii-v1
+// (REGULI_CONTRADICTII din redariFan.mjs = CHECK-ul din BD), păstrate în red_fan_contradictii; nu blochează rândul, se consultă la nevoie ──
+export const COL_CONTRADICTII = 'id,fan_awb_id,awb,sursa,tip,valori,ales,regula,rulare_id,actor,observari,prima_la,ultima_la'
+export const ETICHETE_CONTRADICTIE = Object.freeze({
+  ridicare_zile: 'zile de ridicare (C0) diferite', livrare_ore: 'ore de livrare (S2) diferite', livrare_retur: 'livrare și retur',
+  // runda 5 (#1155 r4 P1): ORICE eveniment (ridicare, livrare, retur…) cu o dată imposibilă, respins ca fapt
+  retur_motiv: 'motive de retur diferite', eveniment_data_imposibila: 'eveniment cu dată imposibilă',
+})
+export const ETICHETE_REGULA = Object.freeze({
+  prima_ridicare: 'rămâne prima zi de ridicare', ultima_livrare: 'rămâne ultima oră de livrare',
+  final_ulterior: 'câștigă evenimentul final ulterior (la egalitate sau retur fără oră: retur)',
+  ultimul_semnal: 'rămâne motivul cel mai nou (la aceeași oră: refuz, apoi adresă, mutat, avizat)',
+  data_imposibila: 'evenimentul nu s-a înregistrat: data e înainte de generarea AWB-ului sau în viitor; o corecție ulterioară a curierului se înregistrează',
+})
+/** Tabelul contradicțiilor lipsește (migrarea 20270102a neaplicată): PostgREST 42P01 / PGRST205 ≠ eroare de citire (L18). */
+export const lipsaTabelContradictii = e => e?.code === '42P01' || e?.code === 'PGRST205'
+/** Textul unei contradicții pentru ecran (fără date personale: AWB, coduri, date / ore ale curierului). */
+export function textContradictie(c) {
+  if (!c) return ''
+  const valori = Array.isArray(c.valori) ? c.valori.map(String).join(' / ') : '?'
+  const sursa = c.sursa === 'acelasi_raspuns' ? 'în același răspuns FAN' : 'față de faptul deja înregistrat'
+  return `${ETICHETE_CONTRADICTIE[c.tip] || c.tip}: ${valori} → ales ${c.ales} (${ETICHETE_REGULA[c.regula] || c.regula}); ${sursa}`
+    + `${Number.isInteger(c.observari) && c.observari > 1 ? `; văzută de ${c.observari} ori` : ''}`
+}
+
 export { fapteContrazise, ALEGERI_SOLUTIONARE }
 /** Opțiunile din formularul de soluționare: pe fiecare fapt contrazis, AMBELE valori (cunoscută și nouă), cu textul afișat (ziua / ora României). */
 export function optiuniSolutionare(r, eticheteRetur = {}) {
@@ -339,7 +364,7 @@ export const ETICHETE_STARE_FAN = Object.freeze({
   de_aprobat: 'așteaptă aprobarea proprietarului', retras: 'retras din trimitere',
 })
 export const ETICHETE_URMARIRE = Object.freeze({
-  neurmarit: '-', fara_evenimente: 'fără evenimente', in_tranzit: 'în tranzit', ridicat: 'ridicat (C0): de confirmat', livrat: 'livrat (S2)',
+  neurmarit: '-', fara_evenimente: 'fără evenimente', in_tranzit: 'în tranzit', ridicat: 'ridicat (C0)', livrat: 'livrat (S2)',
   retur: 'RETUR', de_verificat: 'de verificat de om',
 })
 export const ETICHETE_CONFIRMARE = Object.freeze({
