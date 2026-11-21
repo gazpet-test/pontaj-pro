@@ -6,8 +6,9 @@ import { describe, it, expect, vi } from 'vitest'
 vi.mock('../lib/supabase.js', () => ({ supabase: {} }))
 import { webcrypto } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { construiestePlicFan, telefonFan, hashPlicFan, jsonCanonic, interpreteazaRaspunsAwb, interpreteazaRaspunsLot, rezumatUrmarireFan, CONFIG_FAN_PLIC,
-  imparteInBucati, MAX_PE_CERERE, FORMAT_ETICHETA, LIMITA_LOT_PILOT_IMPLICITA, interpreteazaUrmarire, interpreteazaConfirmari, comparaEvenimente, cautaInBorderou,
+import { construiestePlicFan, telefonFan, hashPlicFan, jsonCanonic, interpreteazaRaspunsAwb, interpreteazaRaspunsLot, rezumatUrmarireFan as rezumatCuReper, CONFIG_FAN_PLIC,
+  imparteInBucati, MAX_PE_CERERE, FORMAT_ETICHETA, LIMITA_LOT_PILOT_IMPLICITA, interpreteazaUrmarire as interpreteazaCuRepere, interpreteazaConfirmari, comparaEvenimente, cautaInBorderou,
+  reperUrmarireFan,
   caleEticheta, caleListaAwb, dataEvenimentFan, EVENIMENTE_FAN, pregatestePlicuriFan, estePdf, inBase64, LIMITE_FAN, contactPePlic,
   manifestTiparire, destinatarMascat, interpreteazaStergere, campuriEroareFan, cheieTiraj, idTiraj, tirajDin, VERSIUNE_TIRAJ, MESAJ_TIRAJ_SCHIMBAT,
   MESAJ_TIRAJ_OPRIT, ASTEPTARE_DUPA_OPRIRE_S, tirajNeschimbat, refuzTiraj, categorieEveniment, configPlicFan, cereOpod, OPTIUNE_OPOD, COST_OPOD_ESTIMAT_LEI,
@@ -29,6 +30,13 @@ import { createHash } from 'node:crypto'
 import { genereazaPvB } from './pv.js'
 import { pasiDinDocument, parcurge, lumeNoua, actiuneDin } from './fanProcedura.testutil.js'
 
+// runda 5 (#1155): reperul de timp e obligatoriu în interpretarea urmăririi. Probele de REGULĂ de aici folosesc un reper larg (AWB generat pe 01.08.2026,
+// procesat pe 31.12.2026), ca toate datele lor să fie posibile; regula momentului posibil are probele ei (fanUrmarireAuto.test.js, PGlite K19).
+const REPER_LARG = reperUrmarireFan({ generatLa: '2026-08-01T00:00:00Z', acumMs: Date.parse('2026-12-31T00:00:00Z') })
+const rezumatUrmarireFan = el => rezumatCuReper(el, REPER_LARG)
+const interpreteazaUrmarire = (s, c, awbs) => interpreteazaCuRepere(s, c, awbs, new Map((awbs || []).map(a => [a, REPER_LARG])))
+// rândurile FAN ale probelor de transport poartă ziua generării (COL_FAN, runda 5); ceasul probelor = 31.12.2026
+const GEN_LA_PROBA = '2026-08-01T00:00:00+00:00', ACUM_PROBA = () => Date.parse('2026-12-31T00:00:00Z')
 const DOC = readFileSync('docs/redari/FANCOURIER_INTEGRARE.md', 'utf8')
 const PASI_DOC = readFileSync('docs/redari/FAN_TEST1_PASI.md', 'utf8')
 const MIG = readFileSync('supabase/migrations/20261212a_redari_fan_awb.sql', 'utf8')
@@ -314,7 +322,8 @@ function depsFake(fx, fan, o = {}) {
   const tiraj = tirajSimulat(o.stareTiraj)
   return { jurnal, deps: {
     secrete: () => ({ username: 'utilizator-fictiv', password: 'parola-fictiva', clientId: 'CLIENT-FICTIV' }),
-    randuriLot: async () => ({ data: fx.randuri }),
+    // runda 5: rândurile citite poartă ziua generării (COL_FAN), ca în funcția edge
+    randuriLot: async () => ({ data: fx.randuri.map(r => ({ generat_la: GEN_LA_PROBA, ...r })) }),
     proiect: async () => ({ data: { cod: 'TEST-RAZVAN' } }),
     // 18.11: alegerea oPOD a lotului (rândul red_fan_loturi), implicit fără oPOD, lot de TEST aprobat
     fanLot: async () => ({ data: { lot_id: LOT.id, test: true, prima_aprobare_la: '2026-11-18T08:00:00+00:00', opod: false } }),
@@ -330,7 +339,7 @@ function depsFake(fx, fan, o = {}) {
       // merge cu #1135 (runda 2 pe #1136): urmărirea / confirmările operatorului trec prin clasa B, cu același contract ca RPC-urile vechi
       : nume === 'fn_red_fan_srv_urmarire' ? { data: { scrise: args.p_randuri.length, pastrate: 0, depasite: 0 } }
       : nume === 'fn_red_fan_srv_confirmari' ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : { data: null } }),
-    fetch: fan.fetch, pauza: vi.fn(async () => {}), subtle: webcrypto.subtle, ...o,
+    fetch: fan.fetch, pauza: vi.fn(async () => {}), subtle: webcrypto.subtle, acum: ACUM_PROBA, ...o,
   } }
 }
 
@@ -1279,7 +1288,7 @@ describe('runda 3: urmărirea nu șterge un eveniment cunoscut (r2 P2)', () => {
     expect(rezumatUrmarireFan({ awbNumber: '2000000001' })).toMatchObject({ urmarire_stare: 'de_verificat', motiv: 'elementul de urmărire nu are lista de evenimente' })
     expect(rezumatUrmarireFan({ awbNumber: '2000000001', events: null }).urmarire_stare).toBe('de_verificat')
     expect(rezumatUrmarireFan({ awbNumber: '2000000001', events: [] })).toEqual({ urmarire_stare: 'fara_evenimente', ultim_eveniment: null, ultim_eveniment_la: null,
-      evenimente: [], ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [] })   // #1155 r2: + ora returului, lista contradicțiilor; r4: + lista pentru cronologie
+      evenimente: [], respinse: [], ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [] })   // #1155 r2: + ora returului, lista contradicțiilor; r4: + lista pentru cronologie; r5: + respinse
   })
   it('funcția edge: răspunsul `events: []` ajunge în BD fără cronologie; „păstrate” raportate; forma veche {scrise, depasite} = scriere neconfirmată', async () => {
     const fx = await fixtura(2); fx.randuri.forEach((r, i) => { r.stare = 'generat'; r.awb = String(2000000001 + i); r.versiune_urmarire = 4 })

@@ -103,6 +103,9 @@ const schimbaTirajul = (stare, cheieNoua) => {
   if (cheieNoua) { stare.acum += 30000; t({ p_cheie: cheieNoua, p_inlocuieste: vechi }) }
 }
 // opodAprobat = alegerea cu care s-au calculat hash-urile aprobate; opodLot = alegerea CURENTĂ a lotului (rândul red_fan_loturi), implicit aceeași
+// runda 5 #1155: reperul de timp al interpretării urmăririi (obligatoriu de acum); larg, ca datele probelor de regulă să fie posibile. Modulele
+// vechi (dovada pe head-ul vechi) nu au reperul și ignoră al doilea argument.
+const REPER_LARG = M => M.fan.reperUrmarireFan?.({ generatLa: '2026-08-01T00:00:00Z', acumMs: Date.parse('2026-12-31T00:00:00Z') }) ?? null
 async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza' }, randuriPlus = {}, rpc, rpcServer, stareTiraj, raspUrmarire, opodAprobat = false, opodLot = opodAprobat }) {
   const tiraj = tirajSimulat(stareTiraj)
   const plicuri = Array.from({ length: n }, (_, i) => ({ id: `pl${i + 1}`, nr_plic: `PL-TST-${String(i + 1).padStart(4, '0')}`, destinatar_nume: 'PERSOANA FICTIVA', stare: 'activ' }))
@@ -111,7 +114,7 @@ async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza
   // forma veche (9f6fdada) nu cunoaște `opod`: parametrul în plus e ignorat acolo
   const pr = await M.fan.pregatestePlicuriFan({ plicuri, convocari, contacte, proiectCod: 'TEST-RAZVAN', opod: opodAprobat, subtle: webcrypto.subtle })
   const randuri = pr.map((x, i) => ({ id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, plic_id: x.plic.id, nr_plic: x.plic.nr_plic, stare: stari[i] || 'aprobat',
-    hash_date: x.hash, awb: null, versiune_urmarire: 7, ...(randuriPlus[i] || {}) }))
+    hash_date: x.hash, awb: null, versiune_urmarire: 7, generat_la: '2026-08-01T00:00:00+00:00', ...(randuriPlus[i] || {}) }))   // runda 5 #1155: ziua generării (COL_FAN)
   const apeluri = [], jurnal = []
   const fetch = async (url, init) => {
     const u = new URL(url)
@@ -123,6 +126,7 @@ async function ruleaza(M, n, { stari = {}, handler, corp = { actiune: 'genereaza
     secrete: () => ({ username: 'u', password: 'p', clientId: 'C' }), randuriLot: async () => ({ data: randuri }), proiect: async () => ({ data: { cod: 'TEST-RAZVAN' } }),
     fanLot: async () => ({ data: { lot_id: LOT.id, test: true, prima_aprobare_la: '2026-11-18T08:00:00+00:00', opod: opodLot } }),
     datePlicuri: async () => ({ data: { plicuri, convocari, contacte } }), plicuriLot: async () => ({ data: plicuri }), pauza: async () => {}, subtle: webcrypto.subtle, fetch,
+    acum: () => Date.parse('2026-12-31T00:00:00Z'),   // runda 5 #1155: momentul procesării urmăririi (reperul momentului posibil)
     // F1: clasa B (service_role) simulată după contractul 20261228a
     // F1: clasa B (service_role) simulată după contractul 20261228a; urmărirea / confirmările trec prin fn_red_fan_srv_* (p_actor = omul)
     rpcServer: rpcServer || (async (nume, args) => { jurnal.push({ nume, args }); return nume === 'fn_red_fan_srv_anuleaza' ? { data: args.p_rezultat }
@@ -292,8 +296,8 @@ const VERIFICARI = {
   },
   // r2 P2: lista lipsă ≠ listă goală; `events: []` = fără cronologie (BD-ul păstrează ce știe: „păstrate”); forma veche a scrierii = neconfirmată
   async urmarireFaraEvenimente(M) {
-    const lipsa = M.fan.rezumatUrmarireFan({ awbNumber: '3000000001' })
-    const gol = M.fan.rezumatUrmarireFan({ awbNumber: '3000000001', events: [] })
+    const lipsa = M.fan.rezumatUrmarireFan({ awbNumber: '3000000001' }, REPER_LARG(M))
+    const gol = M.fan.rezumatUrmarireFan({ awbNumber: '3000000001', events: [] }, REPER_LARG(M))
     const baza = { stari: { 0: 'generat' }, randuriPlus: { 0: { awb: '3000000001' } }, corp: { actiune: 'urmarire' },
       handler: u => raspuns(200, { data: u.searchParams.getAll('awb[]').map(x => ({ awbNumber: x, events: [] })) }) }
     const r1 = await ruleaza(M, 1, { ...baza, raspUrmarire: () => ({ data: { scrise: 0, pastrate: 1, depasite: 0 } }) })
@@ -404,7 +408,7 @@ const VERIFICARI = {
     const total = lot.totalTarifLot([{ stare: 'generat', tarif: '27.1600' }, { stare: 'generat', tarif: null }, { stare: 'eroare', tarif: 5 }])
     // 5: codurile reale clasificate; nelimpede ca ultim eveniment = de verificat; tranzitul nu schimbă faptele; 2: fișierul fără A6, cererea cu format=A6
     const ev = (...l) => ({ events: l.map(([id, h]) => ({ id, date: `2026-11-${h}` })) })
-    const u99 = fan.rezumatUrmarireFan(ev(['C0', '19 08:00:00'], ['S99', '20 10:00:00'])), uH = fan.rezumatUrmarireFan(ev(['C0', '19 08:00:00'], ['H17', '20 10:00:00']))
+    const u99 = fan.rezumatUrmarireFan(ev(['C0', '19 08:00:00'], ['S99', '20 10:00:00']), REPER_LARG(M)), uH = fan.rezumatUrmarireFan(ev(['C0', '19 08:00:00'], ['H17', '20 10:00:00']), REPER_LARG(M))
     const comp = fan.comparaEvenimente(200, { data: ['C1', 'H0', 'S98', 'S99', 'S21', 'S12', 'S14'].map(id => ({ id, name: id })) })
     return p0.dePropus.length === 0 && /nimic de propus/.test(p0.motiv) && p1.dePropus.map(x => x.plic.id).join() === 'p1,p2' && p2.dePropus.length === 0 && pas.activ === false && /nimic de propus/.test(pas.motiv)
       && real.activ === false && real.motiv === lot.MESAJ_MARCAJ_REAL_OPRIT && real2.activ === true
@@ -457,7 +461,7 @@ const VERIFICARI = {
     const plicuri = [{ id: 'pl1', nr_plic: 'PL-TST-0001', destinatar_nume: 'PERSOANA FICTIVA', stare: 'activ' }, { id: 'pl2', nr_plic: 'PL-TST-0002', destinatar_nume: 'PERSOANA FICTIVA', stare: 'activ' }]
     const convocari = plicuri.map((p, i) => ({ id: `c${i}`, plic_id: p.id, detinator_id: `d${i}` })), contacte = plicuri.map((p, i) => ({ detinator_id: `d${i}`, ...contact }))
     const pr = await M.fan.pregatestePlicuriFan({ plicuri, convocari, contacte, proiectCod: 'TEST-RAZVAN', subtle: webcrypto.subtle })
-    const randuri = [{ id: '00000000-0000-4000-8000-000000000001', plic_id: 'pl1', nr_plic: 'PL-TST-0001', stare: 'generat', hash_date: pr[0].hash, awb: '2000000001', versiune_urmarire: 1 },
+    const randuri = [{ id: '00000000-0000-4000-8000-000000000001', plic_id: 'pl1', nr_plic: 'PL-TST-0001', stare: 'generat', hash_date: pr[0].hash, awb: '2000000001', versiune_urmarire: 1, generat_la: '2026-11-18T07:00:00+00:00' },
       { id: '00000000-0000-4000-8000-000000000002', plic_id: 'pl2', nr_plic: 'PL-TST-0002', stare: 'aprobat', hash_date: pr[1].hash, awb: null, versiune_urmarire: 0 }]
     const apeluri = [], jurnal = []
     const fetch = async (url, init) => {
@@ -475,7 +479,7 @@ const VERIFICARI = {
       rpcServer: async (nume, args) => { jurnal.push(nume); return nume === 'fn_red_fan_srv_urmarire' ? { data: { scrise: args.p_randuri.length, pastrate: 0, depasite: 0 } }
         : nume === 'fn_red_fan_srv_confirmari' ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : nume === 'fn_red_fan_srv_anuleaza' ? { data: args.p_rezultat } : { data: 1 } },
       secrete: () => ({ username: 'u', password: 'p', clientId: 'C' }), randuriLot: async () => ({ data: randuri }), datePlicuri: async () => ({ data: { plicuri, convocari, contacte } }), plicuriLot: async () => ({ data: plicuri }),
-      pauza: async () => {}, subtle: webcrypto.subtle, fetch, rpc: async (nume, args) => { jurnal.push(nume); return nume === 'fn_red_fan_urmarire' ? { data: { scrise: args.p_randuri.length, pastrate: 0, depasite: 0 } }
+      pauza: async () => {}, subtle: webcrypto.subtle, fetch, acum: () => Date.parse('2026-12-31T00:00:00Z'), rpc: async (nume, args) => { jurnal.push(nume); return nume === 'fn_red_fan_urmarire' ? { data: { scrise: args.p_randuri.length, pastrate: 0, depasite: 0 } }
         : nume === 'fn_red_fan_confirmari' ? { data: { scrise: args.p_randuri.length, depasite: 0 } } : nume === 'fn_red_fan_claim_lot' ? { data: '99999999-0000-4000-8000-000000000001' } : { data: 1 } } }
     const cere = corp => M.h.raspundeFan({ jwt: 'x', corp: { lot_id: LOT.id, ...corp } }, deps)
     const g = await cere({ actiune: 'genereaza' })

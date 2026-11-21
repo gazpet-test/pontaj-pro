@@ -75,7 +75,24 @@ Toate contradicțiile se evaluează **înainte** de a construi faptele (nu doar 
 | ore de livrare (S2) diferite | **ultima oră** | **ultima oră** dintre cele două |
 | livrare și retur | **evenimentul final ulterior** după ora curierului; la egalitate sau cu retur fără oră (`returnAwbNumber`) → **retur** | retur nou peste livrare cunoscută: retur dacă returul n-are oră sau e la / după livrare; livrare nouă peste retur cunoscut: livrat doar dacă livrarea e **după** ultimul eveniment cunoscut la înregistrarea returului, altfel retur |
 | motive de retur diferite | motivul ultimului semnal; semnale cu motive diferite la **aceeași oră** → motivul după departajare (refuz > adresă > mutat > avizat) + semnal `retur_motiv` | motivul răspunsului **mai nou**; un răspuns fără motiv păstrează motivul cunoscut |
-| dată C0 imposibilă (înainte de ziua generării AWB-ului / după azi, ora României) | — | ziua aceea **nu** se înregistrează și **nu** se păstrează în `ridicat_propus`; se ia prima zi C0 **posibilă** a răspunsului (dacă există), altfel rândul rămâne `generat`, starea „în tranzit”; ziua respinsă = un semnal pe zi, doar în audit |
+| **orice eveniment** (C0, S2, retur, refuz, tranzit, orice cod) la un moment **imposibil** (runda 5, vezi mai jos) | respins **înaintea** regulilor de mai sus: nu intră în stare, ridicare, livrare, retur, contradicții, cronologie | un fapt cunoscut imposibil (livrare / zi de ridicare scrise înainte de 20270102a) iese din fapte; fiecare eveniment respins = un semnal `eveniment_data_imposibila` („respins”), doar în audit |
+
+**Regula momentului posibil (runda 5, Jakarinos r4 P1 — clasa, nu cazul C0).** Un eveniment al curierului e **posibil** dacă ziua lui (ora
+României) e ≥ ziua generării AWB-ului **și** momentul lui e ≤ momentul procesării + **5 minute** (toleranța mică pentru ceasurile diferite ale
+curierului și ale noastre). O singură definiție, aceeași în cod (`redariFan.mjs::momentPosibilFan`, `TOLERANTA_VIITOR_S = 300`) și în BD
+(`fn_red_fan_moment_posibil`, test de paritate pe text și pe cazuri). Regula se aplică **tuturor** tipurilor de eveniment:
+- codul o aplică **înainte** de orice altă regulă: un eveniment imposibil e ca și cum n-ar exista în răspuns (nicio stare, livrare, retur, zi de
+  ridicare, contradicție sau cronologie din el); merge în `respinse` (cel mult 100; peste = „de verificat”, fără fapte, cu numărul în motiv);
+- BD-ul o **reface** cu ceasul lui pe fiecare moment al rândului: lista posibilă, cele respinse, momentele afirmate de fapte (ziua ridicării,
+  livrarea, returul, valorile contradicțiilor) și faptele cunoscute. Un **dezacord** (un moment „posibil” al codului e imposibil în BD, un
+  „respins” e posibil, sau o funcție edge veche trimite un fapt imposibil) = rândul **păstrat** (neschimbat, doar „verificat la”): nicio
+  clasificare contestată nu devine fapt; rularea următoare o reface;
+- fiecare eveniment imposibil al răspunsului = un rând în audit (`eveniment_data_imposibila`, valorile `[eveniment, reper]`, reperul = `generat
+  <zi>` sau `azi <zi>`; revăzut în aceeași zi = același rând, observări + 1); un fapt cunoscut imposibil intră în audit când rândul se scrie;
+- o livrare imposibilă **nu e fapt final**: AWB-ul rămâne în selecția rulării automate (`fn_red_fan_srv_de_urmarit`, același predicat) până la un
+  fapt final valid; corecția validă ulterioară se înregistrează (nu „ultima oră” dintre ea și cea imposibilă).
+Exemplul recenzentului: pe 21.11, C0 20.11 08:00 + S2 24.11 10:00 → **ridicat**, fără livrare, S2 în audit, AWB-ul încă de urmărit; apoi
+S2 20.11 10:00 → **livrat la 20.11 10:00**.
 
 **Evenimente la aceeași oră (runda 3).** Rezultatul nu depinde de ordinea în care FAN listează evenimentele: „ultimul eveniment” = **toate**
 evenimentele de la ora maximă. Un refuz / adresă greșită / mutat la ora finală e dovadă de retur oriunde ar sta în listă (S2 + S6 la 10:00 →
@@ -90,15 +107,16 @@ numărul în motiv; celelalte AWB-uri din aceeași cerere se scriu normal (nimic
 
 **Cronologia doar din momente posibile (runda 4, Jakarinos r3 P2).** Garda „ne-mai-veche” a scrierii (un răspuns mai vechi decât ce e deja
 înregistrat nu se scrie) și `ultim_eveniment` / `ultim_eveniment_la` se iau **doar** din evenimentele la un moment **posibil**: ziua lui ≥ ziua
-generării AWB-ului și momentul ≤ acum, ora României (aceeași regulă ca la ziua C0, la nivel de moment; predicatul e scris o dată, în
-`fn_red_fan_urmarire_scrie`). Codul trimite lista evenimentelor citite (`evenimente`, distincte, în ordinea completă, cel mult **100** — ultimele;
-aceeași limită în BD, test de paritate), BD-ul alege ultimul posibil. Astfel o dată respinsă ca fapt nu mai blochează corecția:
-- rularea 1: C0 pe 24.11 (în viitor, pe 21.11) → nimic înregistrat, cronologia **goală**, ziua în audit; rularea 2: C0 corectat pe 20.11 → **ridicat**;
+generării AWB-ului și momentul ≤ acum + toleranța, ora României (runda 5: predicatul unic de mai sus). Codul trimite lista evenimentelor
+posibile (`evenimente`, distincte, în ordinea completă, cel mult **100** — ultimele; aceeași limită în BD, test de paritate), BD-ul alege ultimul
+posibil. Astfel o dată respinsă ca fapt nu mai blochează corecția:
+- rularea 1: C0 pe 24.11 (în viitor, pe 21.11) → nimic înregistrat, cronologia **goală** (starea „fără evenimente”), C0 în audit; rularea 2: C0 corectat pe 20.11 → **ridicat**;
 - un H3 / S2 / orice cod la o dată imposibilă nu intră în cronologie (nu blochează un eveniment valid ulterior);
 - un `ultim_eveniment_la` vechi aflat în viitor (scris înainte de 20270102a) nu mai blochează: răspunsul posibil îl înlocuiește;
 - un răspuns **cu** evenimente, dar **fără niciunul posibil**, pe un rând cu cronologie cunoscută nu se poate ordona față de ea: rândul rămâne
-  **neschimbat** (doar „verificat la”, numărat „păstrat”), iar zilele lui C0 imposibile intră în audit (fără alte semnale din el);
-- un rând trimis fără listă (funcția edge de dinainte) = lista derivată din ultimul eveniment, cu aceeași regulă.
+  **neschimbat** (doar „verificat la”, numărat „păstrat”), iar evenimentele lui imposibile (orice cod, runda 5) intră în audit (fără alte semnale din el);
+- un rând trimis fără listă (funcția edge de dinainte) = lista derivată din ultimul eveniment, cu aceeași regulă (un ultim eveniment / fapt
+  imposibil = dezacord → păstrat, evenimentul în audit).
 
 Un răspuns **fără** eveniment final nu șterge finalul cunoscut; un răspuns fără cronologie (`events: []`) doar consemnează „verificat la”;
 evenimentele identice repetate sunt un singur fapt; un eveniment de formă necunoscută = rândul „de verificat”, **fără** niciun fapt din acel
@@ -234,7 +252,11 @@ runner (refuză cât există rulări în istoric, contradicții înregistrate sa
   egalitate; 15 forme noi refuzate (22023); **K18 (runda 4)**: scenariul recenzentului pe două rulări (C0 viitor respins → cronologia goală;
   C0 corectat, mai vechi → înregistrat), același lucru pe un rând cu cronologie, alt cod (H3) în viitor, regula pe moment (azi, peste 30 s),
   răspunsul neordonabil (păstrat, doar zilele imposibile în audit; S2 viitor fără livrare), cronologia veche din viitor, 121 de evenimente →
-  ultimele 100 acceptate, rândul fără listă (edge vechi); lista ca date externe (9 forme refuzate, 22023); refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
+  ultimele 100 acceptate, rândul fără listă (edge vechi); lista ca date externe (9 forme refuzate, 22023); **K19 (runda 5)**: scenariul lui
+  Jakarinos r4 pe două rulări (C0 + S2 viitor → ridicat, fără livrare, S2 în audit, AWB-ul de urmărit; corecția S2 → livrat), corecția peste o
+  livrare imposibilă scrisă înainte (rândul de urmărit, livrarea înlocuită, cea veche în audit), **matricea** 13 coduri × (viitor / înainte de
+  generare / valid), toleranța (240 s posibil, 330 s nu), dezacordul cod ↔ BD (3 forme → păstrat), limita `respinse` (100 / 101), rândul păstrat
+  nu-și auditează faptele cunoscute, predicatul BD = cod pe granițe fixe; `respinse` ca date externe (6 forme refuzate); refuzurile migrării (inclusiv contradicțiile vechi nesoluționate);
   revenirea (refuz la fiecare urmă, inclusiv contradicții și ridicări automate; aplicare → revenire → re-aplicare); **mutanți SQL** + martorul;
   paritatea plafonului JS ↔ SQL; porțile 0e / Izometrie E2.
 - Pe clonă (coordonatorul): `supabase/tests/20270102a_redari_fan_urmarire_auto_doua_sesiuni.sh` — S1 două porniri suprapuse (B așteaptă, apoi

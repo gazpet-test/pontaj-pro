@@ -303,13 +303,14 @@ export function textFapteUrmarire(r, eticheteRetur = {}) {
 export const COL_CONTRADICTII = 'id,fan_awb_id,awb,sursa,tip,valori,ales,regula,rulare_id,actor,observari,prima_la,ultima_la'
 export const ETICHETE_CONTRADICTIE = Object.freeze({
   ridicare_zile: 'zile de ridicare (C0) diferite', livrare_ore: 'ore de livrare (S2) diferite', livrare_retur: 'livrare și retur',
-  retur_motiv: 'motive de retur diferite', ridicare_data_imposibila: 'dată de ridicare imposibilă',
+  // runda 5 (#1155 r4 P1): ORICE eveniment (ridicare, livrare, retur…) cu o dată imposibilă, respins ca fapt
+  retur_motiv: 'motive de retur diferite', eveniment_data_imposibila: 'eveniment cu dată imposibilă',
 })
 export const ETICHETE_REGULA = Object.freeze({
   prima_ridicare: 'rămâne prima zi de ridicare', ultima_livrare: 'rămâne ultima oră de livrare',
   final_ulterior: 'câștigă evenimentul final ulterior (la egalitate sau retur fără oră: retur)',
   ultimul_semnal: 'rămâne motivul cel mai nou (la aceeași oră: refuz, apoi adresă, mutat, avizat)',
-  data_imposibila: 'ziua aceasta nu s-a înregistrat (înainte de generarea AWB-ului sau în viitor)',
+  data_imposibila: 'evenimentul nu s-a înregistrat: data e înainte de generarea AWB-ului sau în viitor; o corecție ulterioară a curierului se înregistrează',
 })
 /** Tabelul contradicțiilor lipsește (migrarea 20270102a neaplicată): PostgREST 42P01 / PGRST205 ≠ eroare de citire (L18). */
 export const lipsaTabelContradictii = e => e?.code === '42P01' || e?.code === 'PGRST205'

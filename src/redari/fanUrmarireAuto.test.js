@@ -20,7 +20,11 @@ const RUL = '0a000000-0000-4000-8000-000000000001'
 const OWNER = '00000000-0000-4000-8000-000000000001'
 const L1 = '20000000-0000-4000-8000-000000000001', L2 = '20000000-0000-4000-8000-000000000002', LR = '20000000-0000-4000-8000-000000000004'
 const rid = (l, i) => `${l.slice(0, 2)}a00000-0000-4000-8000-${String(i).padStart(12, '0')}`
-const randuri = (l, n, baza = 7000000000) => Array.from({ length: n }, (_, i) => ({ id: rid(l, i + 1), awb: String(baza + i + 1), stare: 'generat', versiune_urmarire: 3 }))
+// runda 5: fiecare rând poartă ziua generării (reperul momentului posibil), ca fn_red_fan_srv_de_urmarit / COL_FAN
+const GEN_LA = '2026-11-15T08:00:00.123456+00:00'
+// ceasul probei: 21.11.2026 09:00 UTC (11:00 ora României); diferențele (bugetul de timp) rămân cele din `timp`
+const T_ACUM = Date.parse('2026-11-21T09:00:00Z')
+const randuri = (l, n, baza = 7000000000) => Array.from({ length: n }, (_, i) => ({ id: rid(l, i + 1), awb: String(baza + i + 1), stare: 'generat', versiune_urmarire: 3, generat_la: GEN_LA }))
 const lot = (lot_id, n, { proiect_cod = 'TEST-RAZVAN', test = true, baza } = {}) => ({ lot_id, proiect_cod, test, randuri: randuri(lot_id, n, baza) })
 const json = (status, corp) => ({ status, json: async () => corp, arrayBuffer: async () => new ArrayBuffer(0) })
 // răspunsul FAN la urmărire (forma din documentație, §1): un element pe AWB cerut; C0 = ridicat
@@ -58,7 +62,7 @@ function lume({ start = { rulare_id: RUL, plafon_apeluri: 20, slot: 'seara' }, l
       return fanRaspuns(url, init)
     },
     pauza: async ms => { jurnal.push('pauza:' + ms) },
-    acum: () => (timp ? timp(t++) : 0),
+    acum: () => T_ACUM + (timp ? timp(t++) : 0),
   }
   return { deps, jurnal, rpc, fetchuri }
 }
@@ -302,6 +306,12 @@ describe('funcția edge redari-fan-urmarire: poarta ÎNAINTEA oricărei citiri, 
 // ── regula contradicțiilor (decizia owner-ului 21.11.2026, runda 2): tabel de cazuri cu așteptări scrise de mână din FAN_URMARIRE_AUTOMATA.md §3b (L25) ──
 const ev = (...e) => ({ events: e.map(([id, date]) => ({ id, date })) })
 const CR = REGULI_CONTRADICTII
+// runda 5: reperul de timp (obligatoriu) al probelor de REGULĂ de mai jos = larg (generat 01.08, procesat 31.12.2026), ca toate datele cazurilor să fie
+// posibile; regula momentului posibil are tabelul ei (VERIFICARI.momentPosibil). Construit cu funcția MODULULUI (o mutație în ea se vede și aici).
+const REPER_LARG = F => F.reperUrmarireFan({ generatLa: '2026-08-01T00:00:00Z', acumMs: Date.parse('2026-12-31T00:00:00Z') })
+const cuReper = F => el => F.rezumatUrmarireFan(el, REPER_LARG(F))
+const urmCuReper = F => (s, c, awbs) => F.interpreteazaUrmarire(s, c, awbs, new Map((awbs || []).map(a => [a, REPER_LARG(F)])))
+const rzT = cuReper(FAN_REAL)
 const CAZURI_CONTRADICTII = [
   ['reproducerea Jakarinos P1: două C0 (zile diferite), două S2 (ore diferite) și S16 → TOATE trei evaluate, faptele după regulă',
     ev(['C0', '2026-11-18 10:00:00'], ['C0', '2026-11-19 09:00:00'], ['S2', '2026-11-20 10:40:00'], ['S2', '2026-11-20 12:00:00'], ['S16', '2026-11-21 10:00:00']),
@@ -380,7 +390,7 @@ const verificaEgalitate = rz => {
 const oreS2 = n => Array.from({ length: n }, (_, i) => ['S2', `2026-11-20 ${String(8 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00`])
 const zileC0 = n => Array.from({ length: n }, (_, i) => ['C0', new Date(Date.UTC(2026, 8, 1) + i * 86400000).toISOString().slice(0, 10) + ' 10:00:00'])
 const verificaLimita = F => {
-  const rz = F.rezumatUrmarireFan
+  const rz = cuReper(F)
   const r50 = rz(ev(...oreS2(50))), r51 = rz(ev(...oreS2(51)))
   if (r50.urmarire_stare !== 'livrat' || r50.contradictii.length !== 1 || r50.contradictii[0].valori.length !== 50 || r50.livrat_la !== '2026-11-20 08:49:00') return '50 de ore S2: ' + JSON.stringify(r50).slice(0, 200)
   if (r51.urmarire_stare !== 'de_verificat' || r51.contradictii.length || r51.livrat_la !== null || !/51/.test(r51.motiv || '') || !/limita 50/.test(r51.motiv || '')) return '51 de ore S2: ' + JSON.stringify(r51).slice(0, 200)
@@ -388,7 +398,7 @@ const verificaLimita = F => {
   if (z50.urmarire_stare !== 'ridicat' || z50.ridicat_propus !== '2026-09-01' || z50.contradictii[0]?.valori.length !== 50) return '50 de zile C0: ' + JSON.stringify(z50).slice(0, 200)
   if (z51.urmarire_stare !== 'de_verificat' || z51.ridicat_propus !== null || z51.contradictii.length) return '51 de zile C0: ' + JSON.stringify(z51).slice(0, 200)
   // bucata mixtă: un AWB peste limită nu strică celelalte AWB-uri din aceeași cerere
-  const u = F.interpreteazaUrmarire(200, { data: [{ awbNumber: '7000000001', events: oreS2(51).map(([id, date]) => ({ id, date })) },
+  const u = urmCuReper(F)(200, { data: [{ awbNumber: '7000000001', events: oreS2(51).map(([id, date]) => ({ id, date })) },
     { awbNumber: '7000000002', events: [{ id: 'C0', date: T0_ }] }] }, ['7000000001', '7000000002'])
   if (!u.ok || u.pe_awb.get('7000000001')?.urmarire_stare !== 'de_verificat' || u.pe_awb.get('7000000002')?.urmarire_stare !== 'ridicat') return 'bucata mixtă: ' + JSON.stringify([...u.pe_awb])
   return null
@@ -402,14 +412,14 @@ const verificaParitateBD = F => {
   if (nVal.length !== 1 || nVal[0] !== L || nChk.length !== 1 || nChk[0] !== L) return `limita: cod ${L}, validare ${nVal}, CHECK ${nChk}`
   const v0 = SQL_MIG.indexOf("WHEN ((e ->> 'tip', e ->> 'regula') IN ("), v1 = SQL_MIG.indexOf('IS NOT TRUE THEN false', v0)
   const perechi = [...SQL_MIG.slice(v0, v1).matchAll(/\('([a-z_]+)', '([a-z_]+)'\)/g)].map(m => [m[1], m[2]])
-  const asteptat = Object.entries(F.REGULI_CONTRADICTII).filter(([t]) => t !== 'ridicare_data_imposibila')
+  const asteptat = Object.entries(F.REGULI_CONTRADICTII).filter(([t]) => t !== 'eveniment_data_imposibila')
   if (JSON.stringify(perechi.sort()) !== JSON.stringify(asteptat.sort())) return 'tipurile din același răspuns: BD ' + JSON.stringify(perechi) + ', cod ' + JSON.stringify(asteptat)
   const mot = (/WHEN 'retur_motiv' THEN '\^\(([a-z_|]+)\)\$'/.exec(SQL_MIG) || [])[1]?.split('|').sort()
   if (!mot || !Object.values(F.RETUR_DIN_CATEGORIE).every(m => mot.includes(m))) return 'motivele de retur din cod lipsesc din validarea BD: ' + mot
   if (JSON.stringify(F.ORDINE_EGALITATE.filter(c => c !== 'necunoscut').sort()) !== JSON.stringify(Object.keys(F.EVENIMENTE_FAN).sort())) return 'ORDINE_EGALITATE nu acoperă exact categoriile'
   return null
 }
-VERIFICARI.egalitate = async M => verificaEgalitate(M.__fan.rezumatUrmarireFan)
+VERIFICARI.egalitate = async M => verificaEgalitate(cuReper(M.__fan))
 VERIFICARI.limita = async M => verificaLimita(M.__fan)
 VERIFICARI.paritateBD = async M => verificaParitateBD(M.__fan)
 const verificaContradictii = rz => {
@@ -422,7 +432,7 @@ const verificaContradictii = rz => {
   }
   return null
 }
-VERIFICARI.contradictii = async M => verificaContradictii(M.__fan.rezumatUrmarireFan)
+VERIFICARI.contradictii = async M => verificaContradictii(cuReper(M.__fan))
 VERIFICARI.formaRaspuns = async M => {
   const f = M.__fan.interpreteazaUrmarire
   for (const corp of [{ ceva: 1 }, null, 'x', { data: [{ foo: 1 }] }]) { const u = f(200, corp, ['7000000001']); if (u.ok !== false || u.forma_necunoscuta !== true || u.pe_awb.size) return `forma ${JSON.stringify(corp)} acceptată` }
@@ -434,7 +444,7 @@ VERIFICARI.formaRaspuns = async M => {
 // evenimentele DISTINCTE, în ordinea completă (oră, departajare, cod), „COD AAAA-LL-ZZ HH:MM:SS”, ultimul = ultimul eveniment; peste 100 = ultimele 100;
 // lista goală la răspunsurile fără evenimente; lista ajunge în rândul scris în BD; limita = cea din BD ──
 VERIFICARI.cronologie = async M => {
-  const rz = M.__fan.rezumatUrmarireFan
+  const rz = cuReper(M.__fan)
   const a = rz(ev(['H3', '2026-11-19 10:00:00'], ['C0', '2026-11-24 10:00:00'], ['S98', '2026-11-18 09:00:00'], ['H3', '2026-11-19 10:00:00'], ['C0', '2026-11-19 10:00:00']))
   // la aceeași oră (19.11 10:00): tranzitul (H3) înaintea ridicării (C0), după ORDINE_EGALITATE; H3 dublat = o singură intrare
   const asteptat = ['S98 2026-11-18 09:00:00', 'H3 2026-11-19 10:00:00', 'C0 2026-11-19 10:00:00', 'C0 2026-11-24 10:00:00']
@@ -462,9 +472,81 @@ VERIFICARI.cronologie = async M => {
   return null
 }
 
+// ── runda 5 (Jakarinos #1155 r4 P1): CLASA „dată imposibilă” pe ORICE eveniment. Așteptări scrise de mână (FAN_URMARIRE_AUTOMATA.md §3b, L25):
+// reperul = AWB generat pe 20.11.2026 la 08:00 (ora României), procesat pe 21.11.2026 la 10:00 → limita = 21.11 10:05 (toleranța 300 s) ──
+const REPER_JAK = F => F.reperUrmarireFan({ generatLa: '2026-11-20T06:00:00Z', acumMs: Date.parse('2026-11-21T08:00:00Z') })
+const VIITOR_ = '2026-11-24 10:00:00', INAINTE_ = '2026-11-19 10:00:00', VALID_ = '2026-11-20 12:00:00', BAZA_ = ['C0', '2026-11-20 09:00:00']
+// matricea: fiecare categorie de cod (+ un cod necunoscut) × (în viitor / înainte de generare / valid); starea pentru „valid” scrisă de mână
+const MATRICE_STARE_VALID = [['C0', 'ridicat'], ['S2', 'livrat'], ['S3', 'ridicat'], ['S4', 'retur'], ['S5', 'retur'], ['S6', 'retur'], ['S16', 'retur'],
+  ['S50', 'de_verificat'], ['S30', 'ridicat'], ['H3', 'ridicat'], ['S98', 'ridicat'], ['S99', 'de_verificat'], ['Z9', 'de_verificat']]
+const SQL_PREDICAT = (/CREATE FUNCTION public\.fn_red_fan_moment_posibil\([^)]*\) RETURNS boolean\n[^\n]*\$fn\$\n([^\n]*)\n\$fn\$;/.exec(SQL_MIG) || [])[1] || ''
+VERIFICARI.momentPosibil = async M => {
+  const F = M.__fan
+  const r = REPER_JAK(F)
+  if (!r || r.generatZi !== '2026-11-20' || r.acum !== '2026-11-21 10:00:00' || r.limita !== '2026-11-21 10:05:00') return 'reperul: ' + JSON.stringify(r)
+  // predicatul: granițele (toleranța inclusă, o secundă peste = imposibil; ziua generării de la 00:00), reper lipsă = imposibil
+  for (const [la, asteptat] of [['2026-11-21 10:05:00', true], ['2026-11-21 10:05:01', false], ['2026-11-21 09:59:59', true], ['2026-11-20 00:00:00', true],
+    ['2026-11-19 23:59:59', false], [VIITOR_, false], ['2026-11-21 23:00:00', false], ['21.11.2026', false]]) if (F.momentPosibilFan(la, r) !== asteptat) return `momentPosibilFan(${la}) ≠ ${asteptat}`
+  if (F.momentPosibilFan(VALID_, null) !== false || F.reperUrmarireFan({ generatLa: null, acumMs: 0 }) !== null || F.reperUrmarireFan({ generatLa: GEN_LA }) !== null) return 'reper lipsă ≠ imposibil'
+  // paritatea cu BD: aceeași toleranță și aceeași formă a predicatului (fn_red_fan_moment_posibil, 20270102a)
+  if (F.TOLERANTA_VIITOR_S !== 300 || SQL_PREDICAT.trim() !== `SELECT (p_la::date >= p_generat_zi AND p_la <= p_acum + interval '${F.TOLERANTA_VIITOR_S} seconds') IS TRUE`) return 'predicatul BD ≠ cod: ' + SQL_PREDICAT
+  // scenariul lui Jakarinos (r4): la 21.11, C0 20.11 08:00 + S2 24.11 10:00 → ridicat, FĂRĂ livrare, S2 respins (doar audit); apoi corecția S2 20.11 10:00 → livrat
+  const rz = el => F.rezumatUrmarireFan(el, r)
+  const a = rz(ev(['C0', '2026-11-20 08:00:00'], ['S2', VIITOR_]))
+  if (a.urmarire_stare !== 'ridicat' || a.livrat_la !== null || a.ridicat_propus !== '2026-11-20' || a.ultim_eveniment_la !== '2026-11-20 08:00:00' || a.contradictii.length
+      || JSON.stringify(a.evenimente) !== '["C0 2026-11-20 08:00:00"]' || JSON.stringify(a.respinse) !== `["S2 ${VIITOR_}"]`) return 'Jakarinos, rularea 1: ' + JSON.stringify(a)
+  const b = rz(ev(['C0', '2026-11-20 08:00:00'], ['S2', '2026-11-20 10:00:00']))
+  if (b.urmarire_stare !== 'livrat' || b.livrat_la !== '2026-11-20 10:00:00' || b.respinse.length || b.ultim_eveniment_la !== '2026-11-20 10:00:00') return 'Jakarinos, corecția: ' + JSON.stringify(b)
+  // matricea: imposibil = EXACT ca răspunsul fără el (+ el în `respinse`); valid = starea scrisă de mână
+  const baza = rz(ev(BAZA_))
+  for (const [cod, stare] of MATRICE_STARE_VALID) {
+    for (const t of [VIITOR_, INAINTE_]) {
+      const x = rz(ev(BAZA_, [cod, t]))
+      if (JSON.stringify({ ...x, respinse: [] }) !== JSON.stringify(baza) || JSON.stringify(x.respinse) !== JSON.stringify([`${cod} ${t}`])) return `matricea ${cod} la ${t}: ${JSON.stringify(x)}`
+    }
+    const v = rz(ev(BAZA_, [cod, VALID_]))
+    if (v.urmarire_stare !== stare || v.respinse.length) return `matricea ${cod} valid: ${v.urmarire_stare}, așteptat ${stare}`
+  }
+  // `respinse`: cel mult 100 (= BD); peste = de verificat, fără fapte, cu numărul în motiv; limita BD = cea din cod
+  const viitoare = n => Array.from({ length: n }, (_, i) => ['H3', `2026-11-2${5 + Math.floor(i / 60)} 10:${String(i % 60).padStart(2, '0')}:00`])
+  const r100 = rz(ev(BAZA_, ...viitoare(100))), r101 = rz(ev(BAZA_, ...viitoare(101)))
+  if (r100.respinse.length !== 100 || r100.urmarire_stare !== 'ridicat') return '100 respinse: ' + JSON.stringify([r100.respinse.length, r100.urmarire_stare])
+  if (r101.respinse.length !== 100 || r101.urmarire_stare !== 'de_verificat' || r101.ridicat_propus !== null || !/101/.test(r101.motiv || '')) return '101 respinse: ' + JSON.stringify([r101.respinse.length, r101.urmarire_stare, r101.motiv])
+  const limR = [...SQL_MIG.matchAll(/jsonb_array_length\(u\.respinse\) > (\d+)/g)].map(x => Number(x[1]))
+  if (limR.length !== 1 || limR[0] !== F.LIMITA_EVENIMENTE_CRONOLOGIE) return 'limita respinse BD: ' + limR
+  // transportul: reperul din rând (generat_la) + ceasul injectat; `respinse` ajung în rândul trimis BD-ului
+  // (rândurile lumii: generate pe 15.11, ceasul 21.11 11:00 → H3 din 14.11 = înainte de generare, S2 din 24.11 = în viitor)
+  const f = lume({ fanRaspuns: url => json(200, { data: new URL(url).searchParams.getAll('awb[]').map(x => ({ awbNumber: x,
+    events: [{ id: 'H3', date: '2026-11-14 10:00:00' }, { id: 'C0', date: '2026-11-20 10:40:00' }, { id: 'S2', date: VIITOR_ }] })) }) })
+  await M.ruleazaUrmarireAuto(CRON, f.deps)
+  const p = f.rpc.find(x => x.nume === 'fn_red_fan_srv_urmarire')?.args.p_randuri[0]
+  if (p?.urmarire_stare !== 'ridicat' || p?.livrat_la !== null || JSON.stringify(p?.evenimente) !== '["C0 2026-11-20 10:40:00"]'
+      || JSON.stringify(p?.respinse) !== `["H3 2026-11-14 10:00:00","S2 ${VIITOR_}"]`) return 'transportul: ' + JSON.stringify(p)
+  // un rând fără ziua generării = nimic cerut curierului, rularea oprită cu motivul ei
+  const g = lume({ loturi: [{ ...lot(L1, 2), randuri: lot(L1, 2).randuri.map((x, i) => (i ? { ...x, generat_la: null } : x)) }] })
+  await M.ruleazaUrmarireAuto(CRON, g.deps)
+  if (tracking(g).length || inchidere(g)?.p_stare !== 'oprita_eroare' || inchidere(g)?.p_eroare_cod !== 'reper_lipsa') return 'reper lipsă: ' + JSON.stringify([tracking(g).length, inchidere(g)])
+  return null
+}
+
+describe('runda 5 (Jakarinos #1155 r4 P1): o singură regulă pentru ORICE eveniment cu dată imposibilă — cod (și paritatea cu BD)', () => {
+  it('regula, scenariul recenzentului, matricea tip × dată, limita `respinse`, transportul și reperul lipsă trec pe codul real', async () => {
+    expect(await VERIFICARI.momentPosibil(REAL)).toBeNull()
+  })
+  it.each(MATRICE_STARE_VALID)('matricea, codul %s: în viitor și înainte de generare = respins (ca fără el); valid = %s', (cod, stare) => {
+    const rz = el => rezumatUrmarireFan(el, REPER_JAK(FAN_REAL))
+    const baza = rz(ev(BAZA_))
+    for (const t of [VIITOR_, INAINTE_]) expect(rz(ev(BAZA_, [cod, t]))).toEqual({ ...baza, respinse: [`${cod} ${t}`] })
+    expect(rz(ev(BAZA_, [cod, VALID_]))).toMatchObject({ urmarire_stare: stare, respinse: [] })
+  })
+  it('fără reper: nimic înregistrat (de verificat, fără fapte)', () => {
+    expect(rezumatUrmarireFan(ev(BAZA_))).toMatchObject({ urmarire_stare: 'de_verificat', ridicat_propus: null, evenimente: [], respinse: [], motiv: expect.stringMatching(/reperul de timp/) })
+  })
+})
+
 describe('regula contradicțiilor (decizia owner-ului 21.11.2026): toate evaluate, faptele după regulă, contradicțiile în listă — rezumatUrmarireFan', () => {
   it.each(CAZURI_CONTRADICTII)('%s', (_, el, fapte, contr) => {
-    const r = rezumatUrmarireFan(el)
+    const r = rzT(el)
     expect(r).toMatchObject(fapte)
     expect(r.contradictii.map(x => [x.tip, x.ales, x.valori, x.regula])).toEqual(contr.map(([tip, ales, valori]) => [tip, ales, valori, CR[tip]]))
   })
@@ -485,13 +567,13 @@ describe('regula contradicțiilor (decizia owner-ului 21.11.2026): toate evaluat
   })
   // runda 3 (Jakarinos #1155 r2)
   it.each(CAZURI_EGALITATE)('P1 — toate ordinile: %s', (_, evs, fapte, contr) => {
-    const rez = permutari(evs).map(p => rezumatUrmarireFan(ev(...p)))
+    const rez = permutari(evs).map(p => rzT(ev(...p)))
     expect(new Set(rez.map(r => JSON.stringify(r))).size).toBe(1)
     expect(rez[0]).toMatchObject(fapte)
     expect(rez[0].contradictii.map(x => [x.tip, x.ales, x.valori, x.regula])).toEqual(contr.map(([t, a, v]) => [t, a, v, CR[t]]))
   })
   it('P1 — reproducerea recenzentului: [S2, S6] și [S6, S2] la 10:00 dau același retur „refuz” și aceeași contradicție', () => {
-    const a = rezumatUrmarireFan(ev(['S2', T_], ['S6', T_])), b = rezumatUrmarireFan(ev(['S6', T_], ['S2', T_]))
+    const a = rzT(ev(['S2', T_], ['S6', T_])), b = rzT(ev(['S6', T_], ['S2', T_]))
     expect(a).toEqual(b)
     expect([a.urmarire_stare, a.retur_propus, a.contradictii.length]).toEqual(['retur', 'refuz', 1])
   })
@@ -521,9 +603,10 @@ describe('butonul „Urmărire” (F1): aceeași regulă ca rularea; p_actor = o
         if (++n === 1) return json(401, null)
         return json(200, { data: [{ awbNumber: '7000000001', events: [{ id: 'C0', date: '2026-11-18 10:00:00' }, { id: 'C0', date: '2026-11-19 09:00:00' }] }] })
       },
-      randuriLot: async () => ({ data: [{ id: rid(L1, 1), plic_id: 'p', nr_plic: 'PL-TST-0001', stare: 'generat', awb: '7000000001', versiune_urmarire: 1 }] }),
+      randuriLot: async () => ({ data: [{ id: rid(L1, 1), plic_id: 'p', nr_plic: 'PL-TST-0001', stare: 'generat', awb: '7000000001', versiune_urmarire: 1, generat_la: GEN_LA }] }),
       rpcServer: async (nm, a) => { scrieri.push({ n: nm, a }); return { data: { scrise: 1, pastrate: 0, depasite: 0, contradictii: 1, ridicari: 1 } } },
       pauza: async () => {},
+      acum: () => T_ACUM,
     }
     const r = await executaActiuneFan({ corp: { actiune: 'urmarire', lot_id: L1 }, lot: { id: L1 }, uid: UID }, deps)
     expect(r.status).toBe(200)
@@ -538,7 +621,7 @@ describe('butonul „Urmărire” (F1): aceeași regulă ca rularea; p_actor = o
     const deps = {
       secrete: () => ({ username: 'u', password: 'p', clientId: '7' }),
       fetch: async url => (new URL(url).pathname === '/login' ? json(200, { data: { token: 't' } }) : json(200, { ceva: 1 })),
-      randuriLot: async () => ({ data: [{ id: rid(L1, 1), plic_id: 'p', nr_plic: 'PL-TST-0001', stare: 'generat', awb: '7000000001', versiune_urmarire: 1 }] }),
+      randuriLot: async () => ({ data: [{ id: rid(L1, 1), plic_id: 'p', nr_plic: 'PL-TST-0001', stare: 'generat', awb: '7000000001', versiune_urmarire: 1, generat_la: GEN_LA }] }),
       rpcServer: async (nm, a) => { scrieri.push(nm); return { data: { scrise: 1, pastrate: 0, depasite: 0 } } },
       pauza: async () => {},
     }
@@ -574,9 +657,10 @@ describe('butonul „Urmărire” (F1): p_actor = omul, p_rulare NULL', () => {
     const deps = {
       secrete: () => ({ username: 'u', password: 'p', clientId: '7' }),
       fetch: async (url, init = {}) => (new URL(url).pathname === '/login' ? json(200, { data: { token: 't' } }) : urmarireOk(url, init)),
-      randuriLot: async () => ({ data: [{ id: rid(L1, 1), plic_id: 'p', nr_plic: 'PL-TST-0001', stare: 'generat', awb: '7000000001', versiune_urmarire: 1 }] }),
+      randuriLot: async () => ({ data: [{ id: rid(L1, 1), plic_id: 'p', nr_plic: 'PL-TST-0001', stare: 'generat', awb: '7000000001', versiune_urmarire: 1, generat_la: GEN_LA }] }),
       rpcServer: async (n, a) => { scrieri.push({ n, a }); return { data: { scrise: 1, pastrate: 0, depasite: 0 } } },
       pauza: async () => {},
+      acum: () => T_ACUM,
     }
     const r = await executaActiuneFan({ corp: { actiune: 'urmarire', lot_id: L1 }, lot: { id: L1 }, uid: UID }, deps)
     expect(r.status).toBe(200)
@@ -632,8 +716,8 @@ const MUTANTI = [
   ['faptele dintr-o cronologie incompletă înregistrate', 'redariFan.mjs', "  if (stricat) return { ...gol, ...cronologie, motiv:", "  if (false) return { ...gol, ...cronologie, motiv:"],
   ['transportul nu trimite contradicțiile în BD', 'redariFanTransport.mjs', 'retur_la: z.retur_la ?? null, contradictii: z.contradictii || [] }', 'retur_la: z.retur_la ?? null, contradictii: [] }'],
   // runda 3 (Jakarinos #1155 r2): P1 egalitatea orelor, P2 limita comună
-  ['egalitate: ordinea doar după oră (fără departajare)', 'redariFan.mjs', '  ev.sort(ordineEvenimente)', '  ev.sort((a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : 0))'],
-  ['egalitate: codul r2 (doar ora + doar ultimul element al listei)', 'redariFan.mjs', [['  ev.sort(ordineEvenimente)', '  ev.sort((a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : 0))'],
+  ['egalitate: ordinea doar după oră (fără departajare)', 'redariFan.mjs', '  toate.sort(ordineEvenimente)', '  toate.sort((a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : 0))'],
+  ['egalitate: codul r2 (doar ora + doar ultimul element al listei)', 'redariFan.mjs', [['  toate.sort(ordineEvenimente)', '  toate.sort((a, b) => (a.la < b.la ? -1 : a.la > b.la ? 1 : 0))'],
     ['  const laFinal = ev.filter(e => e.la === ultim?.la)', '  const laFinal = ultim ? [ultim] : []']]],
   ['egalitate: livrarea departajată după retururi', 'redariFan.mjs', [["'avizat', 'livrat', 'confirmare_refuzata'", "'avizat', 'confirmare_refuzata'"], ["'refuz', 'retur'])", "'refuz', 'retur', 'livrat'])"]]],
   ['egalitate: refuzul / adresa de la ora finală nu mai sunt dovezi de retur', 'redariFan.mjs', '...laFinal.filter(e => SEMNAL_FINAL_RETUR.includes(e.cat))].sort(ordineEvenimente)', '].sort(ordineEvenimente)'],
@@ -654,9 +738,24 @@ const MUTANTI = [
   // runda 4 (Jakarinos #1155 r3 P2): lista pentru cronologie
   ['cronologie: lista netrimisă în BD', 'redariFanTransport.mjs', 'evenimente: Array.isArray(z.evenimente) ? z.evenimente : null,', 'evenimente: null,'],
   ['cronologie: dublurile păstrate', 'redariFan.mjs', '.filter((x, i, a) => i === 0 || x !== a[i - 1])', ''],
-  ['cronologie: primele 100, nu ultimele', 'redariFan.mjs', '.slice(-LIMITA_EVENIMENTE_CRONOLOGIE)', '.slice(0, LIMITA_EVENIMENTE_CRONOLOGIE)'],
+  ['cronologie: primele 100, nu ultimele', 'redariFan.mjs', 'ev => textEvenimente(ev).slice(-LIMITA_EVENIMENTE_CRONOLOGIE)', 'ev => textEvenimente(ev).slice(0, LIMITA_EVENIMENTE_CRONOLOGIE)'],
   ['cronologie: limita 50 în cod (≠ BD)', 'redariFan.mjs', 'export const LIMITA_EVENIMENTE_CRONOLOGIE = 100', 'export const LIMITA_EVENIMENTE_CRONOLOGIE = 50'],
-  ['cronologie: lista în ordinea FAN, nu în ordinea completă', 'redariFan.mjs', 'evenimente: listaCronologie(ev) }', 'evenimente: listaCronologie(el.events.map(e => ({ cod: e.id, la: e.date }))) }'],
+  ['cronologie: lista în ordinea FAN, nu în ordinea completă', 'redariFan.mjs', 'evenimente: listaCronologie(ev), respinse }', 'evenimente: listaCronologie(el.events.map(e => ({ cod: e.id, la: e.date }))), respinse }'],
+  // runda 5 (Jakarinos #1155 r4 P1): clasa „dată imposibilă” pe ORICE eveniment, aceeași regulă ca BD-ul
+  ['regula: codul r4 (doar C0 respins, livrarea viitoare = fapt)', 'redariFan.mjs', '  const ev = toate.filter(e => momentPosibilFan(e.la, reper))', "  const ev = toate.filter(e => e.cat !== 'ridicat' || momentPosibilFan(e.la, reper))"],
+  ['regula: niciun eveniment respins (toate = posibile)', 'redariFan.mjs', '  const ev = toate.filter(e => momentPosibilFan(e.la, reper))', '  const ev = toate'],
+  ['regula: fără toleranță (0 s, ≠ BD)', 'redariFan.mjs', 'export const TOLERANTA_VIITOR_S = 300', 'export const TOLERANTA_VIITOR_S = 0'],
+  ['regula: fără limita de jos (ziua generării)', 'redariFan.mjs', ' && la.slice(0, 10) >= reper.generatZi && la <= reper.limita', ' && la <= reper.limita'],
+  ['regula: pe zi, nu pe moment', 'redariFan.mjs', ' && la.slice(0, 10) >= reper.generatZi && la <= reper.limita', ' && la.slice(0, 10) >= reper.generatZi && la.slice(0, 10) <= reper.limita.slice(0, 10)'],
+  ['regula: reperul fără ziua generării', 'redariFan.mjs', 'Object.freeze({ generatZi: g.data, acum: a.local, limita })', "Object.freeze({ generatZi: '0000-01-01', acum: a.local, limita })"],
+  ['regula: limita = acum, fără toleranță (pe calea reperului)', 'redariFan.mjs', '  const limita = a ? adunaSecundeLocal(a.local, TOLERANTA_VIITOR_S) : null', '  const limita = a ? adunaSecundeLocal(a.local, 0) : null'],
+  ['respinse: netrimise în BD', 'redariFanTransport.mjs', 'respinse: Array.isArray(z.respinse) ? z.respinse : [],', 'respinse: [],'],
+  ['respinse: peste 100 trimise mai departe cu fapte', 'redariFan.mjs', '  if (respinseToate.length > LIMITA_EVENIMENTE_CRONOLOGIE) return', '  if (false) return'],
+  ['respinse: lipsă din rezultat', 'redariFan.mjs', 'evenimente: listaCronologie(ev), respinse }', 'evenimente: listaCronologie(ev), respinse: [] }'],
+  ['reper lipsă: cererea pleacă oricum', 'redariFanTransport.mjs', '  if (lista.some(r => !reperUrmarireFan({ generatLa: r.generat_la, acumMs: 0 }))) return', '  if (false) return'],
+  ['reper lipsă: rularea nu se oprește cu motivul ei', 'redariFanUrmarireAuto.mjs', "      if (r.status === 503 && b.cod === COD_REPER_LIPSA) return incheie('oprita_eroare', COD_REPER_LIPSA)\n", ''],
+  ['reperul fără ziua generării rândului (transport)', 'redariFanTransport.mjs', 'reperUrmarireFan({ generatLa: r.generat_la, acumMs: t })', "reperUrmarireFan({ generatLa: '2000-01-01T00:00:00Z', acumMs: t })"],
+  ['reperul fără ceasul injectat (momentul 0)', 'redariFanTransport.mjs', '    const t = acumMs(deps)\n', '    const t = 0\n'],
 ]
 describe('mutanți (fiecare trebuie să pice cel puțin o verificare)', () => {
   it.each(MUTANTI)('%s', async (_, fisier, din, in_) => {

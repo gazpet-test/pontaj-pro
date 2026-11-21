@@ -1357,7 +1357,7 @@ face DOAR din faptele **necontrazise** ale rândului, după scrierea urmăririi,
 | **S50** confirmare refuzată | `de_verificat` (judecată umană, ca azi) | nimic | — |
 | **S7, S8, S9, S14, S15, S37, S38, S46, S47, S49, S54, S55, S56, S64, S65, S67, S69, S99** și orice cod necunoscut ca ultim eveniment | `de_verificat` | nimic | — |
 | a doua dată de C0 diferită / altă oră S2 / alt motiv de retur | faptul cunoscut rămâne, valoarea nouă în `*_contrazis`, `de_verificat` (ca azi); **plicul nu se atinge** (data expedierii e imuabilă prin trigger-ul plicului odată scrisă) | nimic | — |
-| dată **în viitor** (peste ora curentă RO + 60 min) sau **înainte de `generat_la`**, sau formă necunoscută | `de_verificat`, motiv „dată imposibilă” | nimic | — |
+| dată **în viitor** (peste ora curentă RO + 60 min) sau **înainte de `generat_la`**, sau formă necunoscută | `de_verificat`, motiv „dată imposibilă” (**înlocuit** de runda 5 #1155: regula unică a momentului posibil, toleranța 5 min, evenimentul imposibil respins ca fapt și păstrat doar în audit — `FAN_URMARIRE_AUTOMATA.md` §3b) | nimic | — |
 | C0 pe un rând al cărui plic nu mai e activ / are deja expediere manuală | `ridicat_propus` scris, dar plicul **nu**; „De verificat” cu motivul (ca refuzul de azi din `fn_red_fan_ridicat`) | nimic | — |
 | răspuns fără evenimente / AWB absent / listă de formă necunoscută | ca azi: „păstrat” / `de_verificat`; nimic pe plic | nimic | — |
 

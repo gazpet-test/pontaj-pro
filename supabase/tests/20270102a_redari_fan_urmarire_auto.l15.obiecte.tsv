@@ -65,6 +65,7 @@ constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_slot_check	
 constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_stare_check	creat
 constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_suma	creat
 constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_sursa_check	creat
+functie	functie public.fn_red_fan_moment_posibil(timestamp without time zone,date,timestamp without time zone)	creat
 functie	functie public.fn_red_fan_srv_de_urmarit(uuid)	creat
 functie	functie public.fn_red_fan_srv_rulare_apel(uuid)	creat
 functie	functie public.fn_red_fan_srv_rulare_incepe(text,uuid)	creat

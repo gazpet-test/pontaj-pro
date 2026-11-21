@@ -1,6 +1,6 @@
 -- Revenire 20270102a_redari_fan_urmarire_auto. NEAPLICAT (ca și migrarea). Fără GO de execuție: doar la cererea explicită a owner-ului (supabase/revenire/README.md).
 -- Scoate TOT ce a creat migrarea: cele 4 funcții noi ale clasei B (fn_red_fan_srv_rulare_incepe / _rulare_apel / _de_urmarit / _rulare_incheie), corpul
--- comun nou fn_red_fan_urmarire_scrie (runda 2), tabelele red_fan_contradictii și red_fan_rulari (cu indexurile și politicile lor) și readuce TEXTUAL
+-- comun nou fn_red_fan_urmarire_scrie (runda 2), predicatul fn_red_fan_moment_posibil (runda 5), tabelele red_fan_contradictii și red_fan_rulari (cu indexurile și politicile lor) și readuce TEXTUAL
 -- corpurile din 20261228a ale fn_red_fan_srv_urmarire (p_rulare nenul = 22023), fn_red_fan_urmarire (owner) și fn_red_fan_urmarire_intern (corpul vechi:
 -- contradicția → *_contrazis + „de verificat”), cu amprentele md5 verificate DUPĂ, împreună cu proprietățile și EXECUTE-ul celor 52 de funcții ale bazei.
 -- REFUZĂ (L14, textual) dacă există ORICE urmă a migrării în date: un rând în red_fan_rulari (istoricul rulărilor), un rând în red_fan_contradictii
@@ -57,13 +57,14 @@ BEGIN
           round(extract(epoch FROM clock_timestamp() - now()) * 1000), v_incercari USING ERRCODE = '55P03';
       END IF;
     END IF;
-    -- starea = cea de după 20270102a: tabelele, cele 5 funcții noi, exact 57 de funcții fn_red_fan_*, corpurile noi ale celor 3 funcții înlocuite
-    -- (to_regclass / to_regprocedure: pe o bază fără migrare refuzul e al gărzii, nu o eroare de cast)
+    -- starea = cea de după 20270102a: tabelele, cele 6 funcții noi (runda 5: + predicatul fn_red_fan_moment_posibil), exact 58 de funcții
+    -- fn_red_fan_*, corpurile noi ale celor 3 funcții înlocuite (to_regclass / to_regprocedure: pe o bază fără migrare refuzul e al gărzii, nu o eroare de cast)
     IF to_regclass('public.red_fan_rulari') IS NULL OR to_regclass('public.red_fan_contradictii') IS NULL
        OR to_regprocedure('public.fn_red_fan_urmarire_scrie(uuid, jsonb, uuid, uuid)') IS NULL
+       OR to_regprocedure('public.fn_red_fan_moment_posibil(timestamp, date, timestamp)') IS NULL
        OR to_regprocedure('public.fn_red_fan_srv_rulare_incepe(text, uuid)') IS NULL OR to_regprocedure('public.fn_red_fan_srv_rulare_apel(uuid)') IS NULL
        OR to_regprocedure('public.fn_red_fan_srv_de_urmarit(uuid)') IS NULL OR to_regprocedure('public.fn_red_fan_srv_rulare_incheie(uuid, text, text, integer, integer)') IS NULL
-       OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_red\_fan\_%') <> 57
+       OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_red\_fan\_%') <> 58
        OR (SELECT count(*) FROM pg_proc p JOIN (VALUES
                         -- >>> AMPRENTE-NOI 20270102a (corpurile noi ale celor 3 funcții înlocuite)
                         ('public.fn_red_fan_srv_urmarire(uuid,uuid,uuid,jsonb)', 'c822d21b2f713f5a61ebb65b403718c6'),
@@ -163,6 +164,7 @@ DROP FUNCTION public.fn_red_fan_srv_de_urmarit(uuid);
 DROP FUNCTION public.fn_red_fan_srv_rulare_apel(uuid);
 DROP FUNCTION public.fn_red_fan_srv_rulare_incepe(text, uuid);
 DROP FUNCTION public.fn_red_fan_urmarire_scrie(uuid, jsonb, uuid, uuid);
+DROP FUNCTION public.fn_red_fan_moment_posibil(timestamp, date, timestamp);
 DROP TABLE public.red_fan_contradictii;
 DROP TABLE public.red_fan_rulari;
 
@@ -242,6 +244,7 @@ BEGIN
   IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_red\_fan\_%') <> 52
      OR to_regclass('public.red_fan_rulari') IS NOT NULL OR to_regclass('public.red_fan_contradictii') IS NOT NULL
      OR to_regprocedure('public.fn_red_fan_urmarire_scrie(uuid, jsonb, uuid, uuid)') IS NOT NULL
+     OR to_regprocedure('public.fn_red_fan_moment_posibil(timestamp, date, timestamp)') IS NOT NULL
      OR to_regprocedure('public.fn_red_fan_srv_rulare_incepe(text, uuid)') IS NOT NULL OR to_regprocedure('public.fn_red_fan_srv_rulare_apel(uuid)') IS NOT NULL
      OR to_regprocedure('public.fn_red_fan_srv_de_urmarit(uuid)') IS NOT NULL OR to_regprocedure('public.fn_red_fan_srv_rulare_incheie(uuid, text, text, integer, integer)') IS NOT NULL THEN
     RAISE EXCEPTION '20270102a revenire post: au ramas obiecte ale migrarii (sau numarul functiilor fn_red_fan_* nu e 52)';

@@ -22,7 +22,7 @@
 // (5) oprire la prima eroare a curierului (429 / 5xx / timeout / forma necunoscută a întregului răspuns, L05: fără reîncercare în aceeași
 // rulare; rularea următoare reia).
 import { TRANSPORT_REAL_ACTIV, transportPermis } from './redariFanHandler.mjs'
-import { clientFan, urmaresteLot, PAUZA_INTRE_CERERI_MS } from './redariFanTransport.mjs'
+import { clientFan, urmaresteLot, PAUZA_INTRE_CERERI_MS, COD_REPER_LIPSA } from './redariFanTransport.mjs'
 import { URL_FAN } from './redariFan.mjs'
 
 // plafonul de solicitări FAN pe rulare (= 2.000 de AWB-uri); ACEEAȘI valoare e în BD (red_fan_rulari.plafon_apeluri, pusă de
@@ -118,7 +118,8 @@ export async function ruleazaUrmarireAuto(apelant, deps) {
     return { ok: true }
   }
   const fan = clientFan({ fetch: fetchRulare, secrete: s, inainteDeApel, pauza: deps.pauza })
-  const depsLot = { rpcServer: rpc, pauza: deps.pauza }
+  // runda 5: același ceas (deps.acum) dă momentul procesării pentru regula momentului posibil (urmaresteLot)
+  const depsLot = { rpcServer: rpc, pauza: deps.pauza, acum: deps.acum }
   try {
     for (const [i, l] of deUrmarit.entries()) {
       if (i > 0) await deps.pauza(PAUZA_INTRE_CERERI_MS)
@@ -132,6 +133,8 @@ export async function ruleazaUrmarireAuto(apelant, deps) {
       if (r.status === 502) return incheie('oprita_eroare', interzis ? 'apel_interzis' : b.cod === 'urmarire_forma_necunoscuta' ? 'fan_forma_necunoscuta'
         : Number.isInteger(b.http) && b.http > 0 ? `fan_http_${b.http}` : 'fan_neconfirmat')
       if (r.status === 503 && REFUZ_LOT.includes(b.cod_bd)) { sarite++; continue }
+      // runda 5: un rând selectat fără ziua generării citibilă = oprire, nimic cerut curierului pentru lot (reper necunoscut, L18)
+      if (r.status === 503 && b.cod === COD_REPER_LIPSA) return incheie('oprita_eroare', COD_REPER_LIPSA)
       return incheie('oprita_eroare', 'scriere_neconfirmata')
     }
   } catch (e) {

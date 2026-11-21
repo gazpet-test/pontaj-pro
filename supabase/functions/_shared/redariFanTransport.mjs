@@ -14,7 +14,7 @@
 import { MAX_PE_CERERE, URL_FAN, pregatestePlicuriFan, comparaPlic, imparteInBucati, interpreteazaRaspunsLot, interpreteazaUrmarire,
   interpreteazaConfirmari, comparaEvenimente, cautaInBorderou, caleEticheta, caleListaAwb, estePdf, inBase64, amprenteSurse, manifestTiparire,
   partiManifest, interpreteazaStergere, cheieTiraj, tirajDin, tirajNeschimbat, refuzTiraj, MESAJ_TIRAJ_SCHIMBAT, MESAJ_TIRAJ_OPRIT, hashCerereFan,
-  COD_PAUZA_FAN, OBSERVATIE_NEINCERCAT, MOTIVE_ANULARE, CODURI_FAN } from './redariFan.mjs'
+  COD_PAUZA_FAN, OBSERVATIE_NEINCERCAT, MOTIVE_ANULARE, CODURI_FAN, reperUrmarireFan } from './redariFan.mjs'
 
 // Câte solicitări de creare la un apăsat de buton (5 × 100 = 500 de plicuri), cu pauză între ele: limita pe minut a FAN nu e documentată
 // (doc §8, deschisă 2) → solicitările merg una după alta, niciodată în paralel. Restul lotului = încă un apăsat (decizie umană).
@@ -389,10 +389,16 @@ const rezUrmarire = (w, n) => !w?.error && w?.data && typeof w.data === 'object'
 // (rezumatUrmarireFan + corpul din BD); contradicțiile merg în BD ca semnal durabil (`contradictii`), nu mai blochează rândul. Butonul și
 // rularea automată au EXACT aceeași regulă (aceeași funcție, același corp SQL, L19).
 const cuAwb = randuri => randuri.filter(x => ['generat', 'ridicat'].includes(x.stare) && x.awb)
+// Runda 5 #1155 (Jakarinos r4 P1): reperul de timp al fiecărui AWB (ziua generării + momentul procesării) intră în interpretare (momentPosibilFan:
+// orice eveniment la un moment imposibil e respins ca fapt). Momentul procesării = DUPĂ răspunsul curierului (deps.acum, altfel ceasul funcției).
+// Un rând fără ziua generării citibilă = 503 reper_lipsa ÎNAINTEA oricărei cereri către curier (L18: necunoscut ≠ posibil).
+export const COD_REPER_LIPSA = 'reper_lipsa'
+const acumMs = deps => (typeof deps?.acum === 'function' ? deps.acum() : Date.now())
 export async function urmaresteLot({ lot, randuri, s, fan, deps, uid = null, rulare = null, out }) {
   const lista = cuAwb(randuri)
   if (!lista.length) return out(409, 'nimic_de_urmarit')
   if (rulare && fan?.cuPlafon !== true) return out(423, 'apel_refuzat', { cod_bd: 'fara_plafon', scrise: 0, pastrate: 0, depasite: 0, stari: {}, solicitari: 0 })
+  if (lista.some(r => !reperUrmarireFan({ generatLa: r.generat_la, acumMs: 0 }))) return out(503, COD_REPER_LIPSA, { scrise: 0, pastrate: 0, depasite: 0, stari: {}, solicitari: 0 })
   const stari = {}
   let scrise = 0, pastrate = 0, depasite = 0, necerute = 0, solicitari = 0, contradictii = 0, ridicari = 0
   for (const [i, b] of imparteInBucati(lista).entries()) {
@@ -401,7 +407,8 @@ export async function urmaresteLot({ lot, randuri, s, fan, deps, uid = null, rul
     const x = await fan.cerere('GET', caleListaAwb('/reports/awb/tracking', { clientId: s.clientId, awbs }))
     if (x?.refuzat) return out(423, 'apel_refuzat', { cod_bd: x.refuzat.cod ?? null, scrise, pastrate, depasite, stari, solicitari })
     solicitari++
-    const u = interpreteazaUrmarire(x.status, x.corp, awbs)
+    const t = acumMs(deps)
+    const u = interpreteazaUrmarire(x.status, x.corp, awbs, new Map(b.map(r => [r.awb, reperUrmarireFan({ generatLa: r.generat_la, acumMs: t })])))
     if (!u.ok) return out(502, u.forma_necunoscuta ? 'urmarire_forma_necunoscuta' : 'urmarire_neconfirmata', { motiv: u.motiv, http: x.status, scrise, pastrate, depasite, stari, solicitari })
     necerute += u.necerute
     // Jakarinos #1118 r1 (L03): fiecare rând poartă versiunea de urmărire CITITĂ la începutul rulării; BD-ul scrie doar dacă e încă aceeași
@@ -410,6 +417,8 @@ export async function urmaresteLot({ lot, randuri, s, fan, deps, uid = null, rul
       return { id: r.id, awb: r.awb, versiune: r.versiune_urmarire, urmarire_stare: z.urmarire_stare, ultim_eveniment: z.ultim_eveniment, ultim_eveniment_la: z.ultim_eveniment_la,
         // runda 4 #1155 (Jakarinos r3 P2): lista evenimentelor citite, din care BD-ul ia cronologia DOAR la un moment posibil (rezumatUrmarireFan)
         evenimente: Array.isArray(z.evenimente) ? z.evenimente : null,   // lipsa ≠ listă goală (L18): null = BD-ul o derivă din ultimul eveniment
+        // runda 5 (Jakarinos r4 P1): evenimentele la un moment imposibil, respinse ca fapt; BD-ul le reverifică și le păstrează în audit
+        respinse: Array.isArray(z.respinse) ? z.respinse : [],
         ridicat_propus: z.ridicat_propus, livrat_la: z.livrat_la, retur_propus: z.retur_propus, retur_la: z.retur_la ?? null, contradictii: z.contradictii || [] } })
     const raw = await scriereUrmarire(deps, uid, 'urmarire', lot.id, p, rulare)
     const w = rezUrmarire(raw, p.length)

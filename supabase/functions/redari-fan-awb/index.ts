@@ -16,7 +16,8 @@ import { raspundeFan, transportPermis } from '../_shared/redariFanHandler.mjs';
 import { citesteToate } from '../_shared/redariFanTransport.mjs';
 import { citesteLotFan } from '../_shared/redariFan.mjs';
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
-const COL_FAN = 'id, plic_id, nr_plic, stare, hash_date, awb, versiune_urmarire, intentie_cheie, motiv';
+// generat_la (runda 5 #1155): ziua generării = limita de jos a momentului posibil al evenimentelor de urmărire (redariFan.mjs::momentPosibilFan)
+const COL_FAN = 'id, plic_id, nr_plic, stare, hash_date, awb, versiune_urmarire, intentie_cheie, motiv, generat_la';
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   const raspuns = (body: unknown, status: number) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
@@ -69,6 +70,7 @@ Deno.serve(async (req: Request) => {
       },
       fetch: (url: string, init: RequestInit) => fetch(url, init),
       pauza: (ms: number) => new Promise<void>(res => setTimeout(res, ms)),
+      acum: () => Date.now(),   // momentul procesării urmăririi (regula momentului posibil, runda 5 #1155)
       subtle: crypto.subtle,
     });
     return raspuns(r.body, r.status);

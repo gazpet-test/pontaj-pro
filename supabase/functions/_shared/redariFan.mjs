@@ -382,13 +382,15 @@ export function dataEvenimentFan(v) {
  */
 export const VERSIUNE_REGULA_CONTRADICTII = 'fan-contradictii-v1'
 export const REGULI_CONTRADICTII = Object.freeze({
-  ridicare_zile: 'prima_ridicare',      // mai multe zile C0: prima zi; o ridicare deja înregistrată nu se mută (BD); BD-ul ia prima zi POSIBILĂ (≥ generare, ≤ azi)
+  ridicare_zile: 'prima_ridicare',      // mai multe zile C0 (doar cele POSIBILE, runda 5): prima zi; o ridicare deja înregistrată nu se mută (BD)
   livrare_ore: 'ultima_livrare',        // mai multe ore S2: ultima oră a curierului
   livrare_retur: 'final_ulterior',      // livrare și retur: finalul ulterior câștigă; egalitate / retur fără oră → retur
   // alt motiv de retur: între răspunsuri (BD) = motivul răspunsului mai nou (lipsa lui păstrează motivul cunoscut); în ACELAȘI răspuns (runda 3) =
   // semnale cu motive diferite la ACEEAȘI oră (ultima oră a semnalelor) → motivul după ORDINE_EGALITATE (refuz > adresă > mutat > avizat)
   retur_motiv: 'ultimul_semnal',
-  ridicare_data_imposibila: 'data_imposibila',   // (doar BD) C0 înainte de generarea AWB-ului / în viitor: ziua aceea NU se înregistrează (nici nu se păstrează)
+  // runda 5 (#1155 r4 P1): ORICE eveniment (C0, S2, retur, refuz, tranzit…) la un moment IMPOSIBIL (momentPosibilFan) e respins ca fapt înaintea
+  // regulilor de mai sus și păstrat DOAR în audit (un rând pe eveniment, alesul „respins”); BD-ul scrie auditul (red_fan_contradictii)
+  eveniment_data_imposibila: 'data_imposibila',
 })
 // Runda 3 #1155 (Jakarinos r2 P2, L12 / L19): limita COMUNĂ a valorilor unei contradicții, aceeași în BD (validarea din fn_red_fan_urmarire_scrie și
 // CHECK-ul red_fan_contradictii.valori, 20270102a; testul de paritate le compară). Peste ea (un răspuns FAN cu > 50 de zile C0 / ore S2 distincte)
@@ -406,32 +408,77 @@ const SEMNAL_FINAL_RETUR = ['refuz', 'adresa', 'mutat']
 // Runda 4 #1155 (Jakarinos r3 P2, L03 / L17 / L18 / L19): CRONOLOGIA (ultim_eveniment / ultim_eveniment_la și garda „ne-mai-veche” a scrierii) o
 // stabilește BD-ul DOAR din evenimentele la un moment POSIBIL (ziua ≥ ziua generării AWB-ului și momentul ≤ acum, ora României; predicatul are O
 // singură definiție, în fn_red_fan_urmarire_scrie, 20270102a). Un eveniment respins ca fapt pentru că data lui e imposibilă (ex. C0 în viitor) nu mai
-// intră în cronologie, deci nu mai blochează corecția validă de la rularea următoare. Codul nu decide posibilitatea (nu știe nici ziua generării,
-// nici ceasul bazei): trimite `evenimente` = evenimentele DISTINCTE citite, în ordinea completă (ordineEvenimente), ca texte „COD AAAA-LL-ZZ HH:MM:SS”,
-// ultimul = ultim_eveniment + ultim_eveniment_la. Peste LIMITA_EVENIMENTE_CRONOLOGIE se trimit ultimele (cele mai noi): ultimul eveniment posibil
-// e printre ele oricând măcar unul dintre ele e posibil; altfel BD-ul tratează răspunsul ca fără cronologie posibilă (nu avansează, nu blochează).
-// Limita e aceeași în BD (validarea listei; testul de paritate le compară).
+// intră în cronologie, deci nu mai blochează corecția validă de la rularea următoare. Runda 5: codul aplică ACEEAȘI regulă înaintea faptelor
+// (momentPosibilFan, mai jos) și trimite `evenimente` = evenimentele POSIBILE distincte, în ordinea completă (ordineEvenimente), ca texte
+// „COD AAAA-LL-ZZ HH:MM:SS”, ultimul = ultim_eveniment + ultim_eveniment_la, plus `respinse` (cele imposibile). Peste LIMITA_EVENIMENTE_CRONOLOGIE
+// se trimit ultimele (cele mai noi). Limita e aceeași în BD (validarea listelor; testul de paritate le compară).
 export const LIMITA_EVENIMENTE_CRONOLOGIE = 100
-const listaCronologie = ev => ev.map(e => `${e.cod} ${e.la}`).filter((x, i, a) => i === 0 || x !== a[i - 1]).slice(-LIMITA_EVENIMENTE_CRONOLOGIE)
-export function rezumatUrmarireFan(el) {
-  const gol = { urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, evenimente: [], ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [] }
+const textEvenimente = ev => ev.map(e => `${e.cod} ${e.la}`).filter((x, i, a) => i === 0 || x !== a[i - 1])
+const listaCronologie = ev => textEvenimente(ev).slice(-LIMITA_EVENIMENTE_CRONOLOGIE)
+
+// ── Runda 5 #1155 (Jakarinos r4 P1, L03 / L11 / L17 / L18 / L19): O SINGURĂ regulă pentru momentul POSIBIL al ORICĂRUI eveniment ──
+// Un eveniment al curierului (ridicare, livrare, retur, refuz, tranzit, orice cod) e POSIBIL dacă ziua lui (ora României) e ≥ ziua generării AWB-ului
+// ȘI momentul lui e ≤ momentul procesării + TOLERANTA_VIITOR_S (ceasurile curierului și ale noastre nu sunt identice; 5 minute = toleranța mică
+// documentată, FAN_URMARIRE_AUTOMATA.md §3b). Un eveniment IMPOSIBIL e RESPINS ca fapt ÎNAINTEA oricărei reguli: nu intră în stare, livrat_la,
+// retur, ridicare, contradicții, cronologie sau garda „ne-mai-veche”; merge DOAR în `respinse` (auditul din BD, ca respins). Corecția validă de la
+// o rulare următoare se înregistrează normal. ACEEAȘI regulă în BD: fn_red_fan_moment_posibil (20270102a; `p_la::date >= p_generat_zi AND
+// p_la <= p_acum + interval '300 seconds'`, pe ora locală, adunare naivă ca aici; testul de paritate compară constanta și cazurile).
+// BD-ul reverifică independent, cu ceasul lui: orice dezacord (un eveniment acceptat aici, imposibil acolo, sau invers) = rândul rămâne
+// neschimbat („păstrat”), doar auditul — niciun fapt dintr-o clasificare contestată.
+export const TOLERANTA_VIITOR_S = 300
+const RE_MOMENT = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/
+/** Ora locală „AAAA-LL-ZZ HH:MM:SS” + s secunde, adunare NAIVĂ pe ora din text (ca `timestamp + interval` în PostgreSQL). null = formă greșită. */
+export function adunaSecundeLocal(local, s) {
+  const m = typeof local === 'string' ? RE_MOMENT.exec(local) : null
+  if (!m || !Number.isInteger(s)) return null
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) + s * 1000).toISOString().slice(0, 19).replace('T', ' ')
+}
+/**
+ * Reperul de timp al unui AWB: { generatZi: 'AAAA-LL-ZZ', acum: 'AAAA-LL-ZZ HH:MM:SS', limita } (ora României), din `generatLa` (red_fan_awb.generat_la,
+ * timestamptz citit prin PostgREST) și `acumMs` (momentul procesării = DUPĂ răspunsul curierului). null = reper necunoscut (L18: necunoscut ≠ posibil).
+ */
+export function reperUrmarireFan({ generatLa, acumMs } = {}) {
+  const g = typeof generatLa === 'string' ? dataEvenimentFan(generatLa) : null
+  if (!g || !Number.isFinite(acumMs)) return null
+  const a = dataEvenimentFan(new Date(acumMs).toISOString())
+  const limita = a ? adunaSecundeLocal(a.local, TOLERANTA_VIITOR_S) : null
+  return limita ? Object.freeze({ generatZi: g.data, acum: a.local, limita }) : null
+}
+/** Predicatul unic: momentul local `la` e posibil față de reper (ziua ≥ ziua generării, momentul ≤ acum + toleranța). Reper lipsă = imposibil. */
+export const momentPosibilFan = (la, reper) => !!reper && typeof la === 'string' && RE_MOMENT.test(la) && typeof reper.generatZi === 'string'
+  && typeof reper.limita === 'string' && la.slice(0, 10) >= reper.generatZi && la <= reper.limita
+
+/**
+ * Runda 5: `reper` (reperUrmarireFan) e OBLIGATORIU. Întoarce, pe lângă faptele de mai sus, `respinse` = evenimentele distincte la un moment
+ * imposibil (texte „COD AAAA-LL-ZZ HH:MM:SS”, în ordinea completă, cel mult LIMITA_EVENIMENTE_CRONOLOGIE; peste = „de verificat”, fără fapte).
+ * Toate regulile (faptele, contradicțiile, cronologia `evenimente`) privesc DOAR evenimentele posibile.
+ */
+export function rezumatUrmarireFan(el, reper) {
+  const gol = { urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, evenimente: [], respinse: [], ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [] }
   if (!el || typeof el !== 'object') return { ...gol, motiv: 'element de urmărire fără formă cunoscută' }
   // runda 3 (L18): lipsa listei ≠ listă goală — fără `events` (sau null) = formă necunoscută; `events: []` = „fără evenimente” (fără cronologie:
   // BD-ul nu șterge un eveniment cunoscut cu el, fn_red_fan_urmarire îl numără „păstrat”)
   if (!Array.isArray(el.events)) return { ...gol, motiv: el.events == null ? 'elementul de urmărire nu are lista de evenimente' : 'lista de evenimente are o formă necunoscută' }
+  // runda 5: fără reper nu se poate decide ce e posibil → nimic înregistrat (transportul refuză oricum înaintea cererii către curier)
+  if (!reper || typeof reper.generatZi !== 'string' || typeof reper.limita !== 'string') return { ...gol, motiv: 'reperul de timp al AWB-ului lipsește (ziua generării / momentul procesării): nimic înregistrat automat' }
   let stricat = false
-  const ev = []
+  const toate = []
   for (const e of el.events) {
     const cod = typeof e?.id === 'string' ? e.id.trim() : ''
     const d = dataEvenimentFan(e?.date)
     if (!RE_COD_EVENIMENT.test(cod) || !d) { stricat = true; continue }
-    ev.push({ cod, la: d.local, data: d.data, cat: categorieEveniment(cod) })
+    toate.push({ cod, la: d.local, data: d.data, cat: categorieEveniment(cod) })
   }
   // ordinea COMPLETĂ (ora, rangul ORDINE_EGALITATE, codul): același set de evenimente dă același rezultat în orice ordine a listei FAN (runda 3 P1)
-  ev.sort(ordineEvenimente)
+  toate.sort(ordineEvenimente)
+  // runda 5: CLASA, nu cazul — orice eveniment la un moment imposibil iese din toate regulile de mai jos, înainte de ele
+  const ev = toate.filter(e => momentPosibilFan(e.la, reper))
+  const respinseToate = textEvenimente(toate.filter(e => !momentPosibilFan(e.la, reper)))
+  const respinse = respinseToate.slice(-LIMITA_EVENIMENTE_CRONOLOGIE)
   const ultim = ev.at(-1) || null
-  const cronologie = { ultim_eveniment: ultim?.cod || null, ultim_eveniment_la: ultim?.la || null, evenimente: listaCronologie(ev) }
+  const cronologie = { ultim_eveniment: ultim?.cod || null, ultim_eveniment_la: ultim?.la || null, evenimente: listaCronologie(ev), respinse }
   if (stricat) return { ...gol, ...cronologie, motiv: 'evenimente cu cod sau dată de formă necunoscută (nimic înregistrat automat din acest răspuns)' }
+  if (respinseToate.length > LIMITA_EVENIMENTE_CRONOLOGIE) return { ...gol, ...cronologie, motiv: `${respinseToate.length} evenimente la un moment imposibil (limita ${LIMITA_EVENIMENTE_CRONOLOGIE}): nimic înregistrat automat, de verificat de om` }
   // „ultimul eveniment” = TOATE evenimentele de la ora maximă (nu doar elementul de la capătul listei): fiecare regulă care privește finalul le vede pe toate
   const laFinal = ev.filter(e => e.la === ultim?.la)
   // 1. TOATE contradicțiile, înaintea faptelor (Jakarinos #1155 r1 P1: nu se oprește la prima)
@@ -498,11 +545,12 @@ const awbDin = el => {
  * arată eroarea. Altceva e un element ANUME: AWB cerut și absent din răspuns = „de_verificat” (de verificat de om pe acel AWB); elementele pentru
  * AWB-uri necerute sau fără AWB se ignoră, dar se numără (raportate).
  */
-export function interpreteazaUrmarire(status, corp, awbs) {
+// runda 5: `repere` = Map(awb → reperUrmarireFan(...)); un AWB fără reper primește „de verificat” fără fapte (rezumatUrmarireFan)
+export function interpreteazaUrmarire(status, corp, awbs, repere = new Map()) {
   if (!Number.isInteger(status) || status <= 0 || status >= 400) return { ok: false, motiv: `urmărire neconfirmată (HTTP ${status})`, pe_awb: new Map(), necerute: 0 }
   const lista = listaDin(corp)
   const pe = new Map()
-  const deVerificat = motiv => ({ urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, evenimente: [], ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [], motiv })
+  const deVerificat = motiv => ({ urmarire_stare: 'de_verificat', ultim_eveniment: null, ultim_eveniment_la: null, evenimente: [], respinse: [], ridicat_propus: null, livrat_la: null, retur_propus: null, retur_la: null, contradictii: [], motiv })
   if (!lista) return { ok: false, forma_necunoscuta: true, motiv: 'răspuns de urmărire de formă necunoscută (fără listă recunoscută): nimic scris', pe_awb: pe, necerute: 0 }
   if (lista.length > 0 && !lista.some(el => awbDin(el))) return { ok: false, forma_necunoscuta: true, motiv: 'răspuns de urmărire fără niciun element cu AWB recunoscut: nimic scris', pe_awb: pe, necerute: 0 }
   const grup = new Map()
@@ -514,7 +562,7 @@ export function interpreteazaUrmarire(status, corp, awbs) {
   }
   for (const a of awbs) {
     const g = grup.get(a) || []
-    pe.set(a, g.length === 1 ? rezumatUrmarireFan(g[0]) : deVerificat(g.length ? 'mai multe elemente pentru același AWB' : 'AWB absent din răspunsul de urmărire'))
+    pe.set(a, g.length === 1 ? rezumatUrmarireFan(g[0], repere?.get?.(a) ?? null) : deVerificat(g.length ? 'mai multe elemente pentru același AWB' : 'AWB absent din răspunsul de urmărire'))
   }
   return { ok: true, pe_awb: pe, necerute }
 }
