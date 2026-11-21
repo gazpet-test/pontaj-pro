@@ -165,6 +165,8 @@ functie	functie public.fn_rest_decontat_baza_proiect(bigint)	creat
 functie	functie public.fn_rest_decontat_calcul()	creat
 functie	functie public.fn_rest_decontat_cheie(text,text,text,text)	creat
 functie	functie public.fn_rest_decontat_cheie_document(bigint,text,text,text)	creat
+functie	functie public.fn_rest_decontat_cheie_situatii(bigint,text)	creat
+functie	functie public.fn_rest_decontat_chei_referite(bigint)	creat
 functie	functie public.fn_rest_decontat_confirma_baza(bigint,text,bigint,bigint,text,text,text,jsonb,boolean)	creat
 functie	functie public.fn_rest_decontat_confirma_situatie(bigint,text,bigint,text,text,jsonb,boolean,numeric)	creat
 functie	functie public.fn_rest_decontat_drept(bigint,text)	creat

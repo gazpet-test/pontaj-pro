@@ -167,7 +167,8 @@ const BLOCURI_A = ['t_garda_proaspata ok', 't_fara_baza ok', 'oferta ok', 't_neg
   't_drept_sef_santier (1/3) ok', 't_drept_sef_santier (2/3) ok', 't_drept_sef_santier (3/3) ok',
   't_oferta_confirmata (1/7) ok', 't_oferta_confirmata (2/7) ok', 't_oferta_confirmata (3/7) ok', 't_oferta_confirmata (4/7) ok', 't_oferta_confirmata (5/7) ok',
   't_oferta_confirmata (6/7) ok', 't_oferta_confirmata (7/7) ok', 't_rand_orfan ok', 't_um_inlocuire (1/2) ok', 't_um_inlocuire (2/2) ok',
-  't_reprezentare_cheie (1/3) ok', 't_reprezentare_cheie (2/3) ok', 't_reprezentare_cheie (3/3) ok', 't_import_vechi_repetat ok', 't_pozitie (1/2) ok', 't_pozitie (2/2) ok']
+  't_reprezentare_cheie (1/3) ok', 't_reprezentare_cheie (2/3) ok', 't_reprezentare_cheie (3/3) ok', 't_import_vechi_repetat ok', 't_pozitie (1/2) ok', 't_pozitie (2/2) ok',
+  't_cheie_referita (1/4) ok', 't_cheie_referita (2/4) ok', 't_cheie_referita (3/4) ok', 't_cheie_referita (4/4) ok']
 const BLOCURI_B = ['t_poarta_garda_proaspata ok', 't_poarta_mp ok', 't_poarta_owner ok', 't_poarta_cu_oferta ok', 't_poarta_direct ok']
 async function verificaDry(db, text, blocuri) {
   try {

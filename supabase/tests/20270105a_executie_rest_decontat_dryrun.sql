@@ -44,6 +44,15 @@
 -- re-cheiere apelata direct = 42501. t_pozitie (P6 / P7): pozitia nu participa la identitate, dar se copiaza exact — o confirmare cu ALTA pozitie pe o cheie
 -- existenta = 22023 nr_schimbat, nimic scris; fara nr → copiata; doua pozitii stocate de server sub aceeasi cheie → 22023 forme_multiple la o linie insumata
 -- (reproducerile Jakarinos r7). Cititorii cu plafonul API si importul vechi fata de backfill se probeaza in PGlite (§9), nu aici.
+-- r9 (review #1158: 2 x P1 pe r8 — re-cheierea pe calea veche si RPC-ul schimbau identitatea unei chei cu decontat confirmat). t_cheie_referita (P8, MP b), TOATE
+-- caile care pot schimba o cheie sau pot lasa o cheie referita fara baza: (1/4) calea veche — al doilea TSA01 dupa o situatie pe O1|D1|TSA01 = 23514 cheie_referita
+-- (reproducerea 1), schimbarea directa a codului / a cheii randului referit = refuz, schimbarile care nu ating cheia si re-cheierea unui cod NEreferit trec,
+-- stergerea randului referit (obiect vechi) trece dar lipsurile declara decontat_fara_articol si re-scrierea stinge lipsa; (2/4) RPC — linia fara pozitie peste
+-- doua chei referite = refuz, inlocuirea care scoate pozitia 2 pastreaza #1 (reproducerea 2) si declara #2 (lipsuri + decontat_fara_baza), codul decontat
+-- despartit in pozitii = refuz, re-atasarea stinge lipsa; (3/4) AA lista completa — linia fara pozitie ia unica cheie referita (#1), lista completa fara #2 il
+-- declara, urmatoarea lista completa cu #1 / #2 il readuce; (4/4) dezactivarea actului (owner) readuce lipsa / reactivarea o stinge, SERVERUL nu schimba nici el
+-- cheia referita, iar inlocuirea situatiei (fara linia pe cheie) dezgheata cheia (despartirea in pozitii trece apoi). Backfill-ul: tabelele situatiilor sunt
+-- goale la aplicare (postconditia migrarii).
 -- SESIUNE PROASPATA: primul bloc dupa fixturi verifica garda cu marcajul RPC LIPSA (NULL): fisierul se ruleaza intr-o sesiune noua, inainte ca
 -- vreun RPC sa fi pus marcajul (precondiția e verificata explicit).
 -- FIXTURI: pe clona, daca profiles / employees cer alte coloane NOT NULL, se completeaza DOAR blocul FIXTURI (restul nu depinde de ele).
@@ -106,6 +115,16 @@ BEGIN
   -- P7 (r8, MP b): importul vechi DUPA migrare cu coduri repetate, in loturi (t_import_vechi_repetat) si pozitii diferite sub aceeasi cheie (t_pozitie 2/2)
   INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P7', 'Dry P7 import vechi coduri repetate', 9101) RETURNING id INTO v;
   INSERT INTO rd_fix VALUES ('p7', v);
+  -- P8 (r9, MP b): cheile REFERITE (t_cheie_referita): obiecte pe calea veche (O1) si prin RPC (O2, O3, O4); AA-8 / AA-9 liste complete pe O2 (datate
+  -- 08 / 09.2026), AA-10 lista completa pe O4
+  INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P8', 'Dry P8 chei referite', 9101) RETURNING id INTO v;
+  INSERT INTO rd_fix VALUES ('p8', v);
+  INSERT INTO public.executie_acte_aditionale (proiect_id, numar_act, data_semnare, activ) VALUES (v, 'AA-8', DATE '2026-08-01', true) RETURNING id INTO v_s;
+  INSERT INTO rd_fix VALUES ('aa8', v_s);
+  INSERT INTO public.executie_acte_aditionale (proiect_id, numar_act, data_semnare, activ) VALUES (v, 'AA-9', DATE '2026-09-01', true) RETURNING id INTO v_s;
+  INSERT INTO rd_fix VALUES ('aa9', v_s);
+  INSERT INTO public.executie_acte_aditionale (proiect_id, numar_act, data_semnare, activ) VALUES (v, 'AA-10', DATE '2026-08-01', true) RETURNING id INTO v_s;
+  INSERT INTO rd_fix VALUES ('aa10', v_s);
   -- P5: un rand CONFIRMAT scris de server (calea serverului: auth.uid() NULL + postgres), pentru garda in sesiune proaspata
   INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P5', 'Dry P5 garda proaspata', 9102) RETURNING id INTO v;
   INSERT INTO rd_fix VALUES ('p5', v);
@@ -1636,6 +1655,324 @@ BEGIN
     RAISE EXCEPTION 't_pozitie FAIL: refuzul forme_multiple a scris ceva (retragere inaintea refuzului)';
   END IF;
   RAISE NOTICE 't_pozitie (2/2) ok: doua pozitii stocate sub aceeasi cheie = 22023 forme_multiple (ambele forme) la linia insumata si la linia pe o singura pozitie, nimic scris / retras';
+END $t$;
+RESET ROLE;
+
+-- ── t_cheie_referita (r9, review #1158, 2 x P1 pe r8: o cheie REFERITA de o situatie confirmata e INGHETATA; fara decontat orfan tacut). P8 (MP b).
+--    (1/4) CALEA VECHE (reproducerea 1 Jakarinos): (e) scrie oferta O1 pe calea veche (TSA01 #1 = 100 M / 1000 lei, Y #2); (b) confirma situatia 1 pe
+--    O1|D1|TSA01 (80 M / 800 lei); (e) scrie TSA01 #3 (200 M) → grupul s-ar repeta si randul #1 ar deveni O1|D1|TSA01|#1 → 23514 cheie_referita (cheia,
+--    situatia 1, ce ar fi devenit), nimic scris, cheile neschimbate; schimbarea directa a codului sau a cheii randului referit = acelasi refuz; schimbarile
+--    care NU ating cheia (denumire, obiectul in forma canonic egala) trec, iar un cod NEreferit (Y) se re-cheiaza in continuare (Y#2 / Y#4 — calea legitima);
+--    restul O1|D1|TSA01 = 100 / 80 / 20, fara lipsa; stergerea randului referit pe calea veche (obiect vechi) TRECE, dar lipsurile declara decontat_fara_articol
+--    (800 lei, situatia 1) si calculul tine decontatul (baza 0 / decontat 80); re-scrierea codului readuce baza si stinge lipsa ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+CREATE FUNCTION pg_temp.rd_chei_p8(ob text) RETURNS text LANGUAGE sql STABLE AS $f$
+  SELECT string_agg(nr || ':' || cheie, '; ' ORDER BY id) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8') AND obiect_cod = ob AND sursa = 'contract_initial'
+$f$;
+DO $t$
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, nr, cod, denumire, um, cantitate, pret_unitar, valoare, sursa) VALUES
+    (pg_temp.rd_id('p8'), 'O1', 'TRONSON O1', 'D1', '1', 'TSA01', 'Sapatura', 'M', 100, 10, 1000, 'contract_initial'),
+    (pg_temp.rd_id('p8'), 'O1', 'TRONSON O1', 'D1', '2', 'Y', 'Umplutura', 'MC', 1, 10, 10, 'contract_initial');
+  IF pg_temp.rd_chei_p8('O1') IS DISTINCT FROM '1:O1|D1|TSA01; 2:O1|D1|Y' THEN RAISE EXCEPTION 't_cheie_referita PRECONDITIE O1: %', pg_temp.rd_chei_p8('O1'); END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb; r record;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  v := public.fn_rest_decontat_confirma_situatie(pg_temp.rd_id('p8'), '1', NULL, 'p8_sl1.xlsx', repeat('91', 32),
+         '{"luna":1,"an":2026,"linii":[{"obiect_cod":"O1","deviz_cod":"D1","cod":"TSA01","um":"M","cantitate_perioada":80,"pret_unitar":10,"valoare":800,"cheie":"O1|D1|TSA01","tip_rand":"articol","potrivire":"exact"}]}'::jsonb, false);
+  IF (v->>'inserate')::int <> 1 THEN RAISE EXCEPTION 't_cheie_referita FAIL situatia 1: %', v; END IF;
+  IF public.fn_rest_decontat_cheie_situatii(pg_temp.rd_id('p8'), 'O1|D1|TSA01') IS DISTINCT FROM ARRAY['1']::text[]
+     OR public.fn_rest_decontat_cheie_situatii(pg_temp.rd_id('p8'), 'O1|D1|Y') IS DISTINCT FROM ARRAY[]::text[]
+     OR public.fn_rest_decontat_cheie_situatii(NULL, 'O1|D1|TSA01') IS DISTINCT FROM ARRAY[]::text[] THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL: fn_rest_decontat_cheie_situatii (TSA01 referita de 1, Y nereferita, NULL = gol)';
+  END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O1|D1|TSA01';
+  IF r.baza_cantitate <> 100 OR r.decontat_cantitate <> 80 OR r.rest_cantitate <> 20 OR r.obiect_cod IS DISTINCT FROM 'O1' THEN RAISE EXCEPTION 't_cheie_referita FAIL rest inainte: %', row_to_json(r); END IF;
+  -- functia MULTIMII (cu valorile decontate) nu e apelabila de client
+  BEGIN
+    PERFORM x.cheie FROM public.fn_rest_decontat_chei_referite(pg_temp.rd_id('p8')) x;
+    RAISE EXCEPTION 't_cheie_referita FAIL: fn_rest_decontat_chei_referite apelabila de client';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE n int;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  SELECT count(*) INTO n FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8');
+  IF n <> 2 THEN RAISE EXCEPTION 't_cheie_referita PRECONDITIE: (e) vede cele 2 randuri ale P8 (%)', n; END IF;
+  -- reproducerea 1: al doilea TSA01 pe calea veche ar re-cheia randul referit → refuz, nimic scris
+  BEGIN
+    INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, nr, cod, denumire, um, cantitate, pret_unitar, valoare, sursa) VALUES
+      (pg_temp.rd_id('p8'), 'O1', 'TRONSON O1', 'D1', '3', 'TSA01', 'Sapatura strat 2', 'M', 200, 10, 2000, 'contract_initial');
+    RAISE EXCEPTION 't_cheie_referita FAIL: al doilea TSA01 pe calea veche acceptat (randul referit ar fi fost re-cheiat O1|D1|TSA01|#1)';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE '%cheia O1|D1|TSA01 (codul TSA01) e referita de situatiile confirmate 1%ar fi devenit O1|D1|TSA01|#1%cheie_referita%' THEN RAISE; END IF;
+  END;
+  -- schimbarea directa a codului / a cheii randului referit
+  BEGIN
+    UPDATE public.proiect_articole SET cod = 'TSA02' WHERE proiect_id = pg_temp.rd_id('p8') AND obiect_cod = 'O1' AND cod = 'TSA01';
+    RAISE EXCEPTION 't_cheie_referita FAIL: codul randului referit schimbat direct';
+  EXCEPTION WHEN check_violation THEN IF SQLERRM NOT LIKE '%cheia O1|D1|TSA01%situatiile confirmate 1%ar fi devenit O1|D1|TSA02%cheie_referita%' THEN RAISE; END IF; END;
+  BEGIN
+    UPDATE public.proiect_articole SET cheie = 'O1|D1|TSA01|#1' WHERE proiect_id = pg_temp.rd_id('p8') AND obiect_cod = 'O1' AND cod = 'TSA01';
+    RAISE EXCEPTION 't_cheie_referita FAIL: cheia randului referit schimbata explicit';
+  EXCEPTION WHEN check_violation THEN IF SQLERRM NOT LIKE '%ar fi devenit O1|D1|TSA01|#1%cheie_referita%' THEN RAISE; END IF; END;
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8')) <> n OR pg_temp.rd_chei_p8('O1') IS DISTINCT FROM '1:O1|D1|TSA01; 2:O1|D1|Y'
+     OR (SELECT cantitate FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8') AND cod = 'TSA01') <> 100 THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL: refuzurile au scris ceva: %', pg_temp.rd_chei_p8('O1');
+  END IF;
+  -- caile legitime (L20): denumirea / forma canonic egala a obiectului nu ating cheia; un cod NEreferit se re-cheiaza ca pana acum
+  UPDATE public.proiect_articole SET denumire = 'Sapatura (rev)', obiect_cod = ' o1 ' WHERE proiect_id = pg_temp.rd_id('p8') AND cod = 'TSA01';
+  UPDATE public.proiect_articole SET obiect_cod = 'O1' WHERE proiect_id = pg_temp.rd_id('p8') AND cod = 'TSA01';
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, nr, cod, denumire, um, cantitate, pret_unitar, valoare, sursa) VALUES
+    (pg_temp.rd_id('p8'), 'O1', 'TRONSON O1', 'D1', '4', 'Y', 'Umplutura 2', 'MC', 2, 10, 20, 'contract_initial');
+  IF pg_temp.rd_chei_p8('O1') IS DISTINCT FROM '1:O1|D1|TSA01; 2:O1|D1|Y|#2; 4:O1|D1|Y|#4' THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL calea legitima (denumire / obiect canonic egal / re-cheierea codului nereferit): %', pg_temp.rd_chei_p8('O1');
+  END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE r record;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O1|D1|TSA01';
+  IF r.baza_cantitate <> 100 OR r.decontat_cantitate <> 80 OR r.rest_cantitate <> 20 THEN RAISE EXCEPTION 't_cheie_referita FAIL rest dupa refuzuri: %', row_to_json(r); END IF;
+  IF EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol') THEN RAISE EXCEPTION 't_cheie_referita FAIL: lipsa decontat_fara_articol fara motiv'; END IF;
+END $t$;
+RESET ROLE;
+-- stergerea randului referit pe calea veche (obiectul O1 e „vechi”): trece (dispartia bazei nu e identitate schimbata), dar nu tacut
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  DELETE FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8') AND cod = 'TSA01';
+  IF pg_temp.rd_chei_p8('O1') IS DISTINCT FROM '2:O1|D1|Y|#2; 4:O1|D1|Y|#4' THEN RAISE EXCEPTION 't_cheie_referita FAIL: stergerea randului referit pe calea veche: %', pg_temp.rd_chei_p8('O1'); END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE r record;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  IF NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol' AND referinta = 'O1|D1|TSA01: 800 lei, 1 linii (situatiile 1)') THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL: decontatul ramas fara articol nu e declarat: %', (SELECT string_agg(tip || '=' || referinta, '; ') FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8'));
+  END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O1|D1|TSA01';
+  IF r.baza_cantitate <> 0 OR r.decontat_cantitate <> 80 OR r.decontat_valoare <> 800 THEN RAISE EXCEPTION 't_cheie_referita FAIL: decontatul fara articol nu mai e in calcul: %', row_to_json(r); END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, nr, cod, denumire, um, cantitate, pret_unitar, valoare, sursa) VALUES
+    (pg_temp.rd_id('p8'), 'O1', 'TRONSON O1', 'D1', '1', 'TSA01', 'Sapatura', 'M', 100, 10, 1000, 'contract_initial');
+  IF pg_temp.rd_chei_p8('O1') IS DISTINCT FROM '2:O1|D1|Y|#2; 4:O1|D1|Y|#4; 1:O1|D1|TSA01' THEN RAISE EXCEPTION 't_cheie_referita FAIL re-scriere: %', pg_temp.rd_chei_p8('O1'); END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE r record;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O1|D1|TSA01';
+  IF r.baza_cantitate <> 100 OR r.decontat_cantitate <> 80 OR r.rest_cantitate <> 20 OR r.obiect_cod IS DISTINCT FROM 'O1'
+     OR EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol') THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL: re-scrierea codului n-a readus baza / n-a stins lipsa: %', row_to_json(r);
+  END IF;
+  RAISE NOTICE 't_cheie_referita (1/4) ok: calea veche — al doilea TSA01 (re-cheierea randului decontat) = 23514 cheie_referita, codul / cheia randului referit nu se schimba direct, nimic scris; denumirea / obiectul canonic egal / re-cheierea unui cod nereferit trec; stergerea randului referit trece, dar e declarata (decontat_fara_articol 800 lei, situatia 1) si decontatul ramane in calcul; re-scrierea stinge lipsa';
+END $t$;
+RESET ROLE;
+
+-- ── (2/4) RPC (MP b): O2 confirmat prin RPC cu TSA01 #1 (100 M) / #2 (200 M) + Z; situatiile 2 (#1: 80 M / 800) si 3 (#2: 50 M / 500). (a) inlocuirea cu o
+--    singura linie TSA01 FARA pozitie = 22023 cheie_referita (ambigua intre #1 si #2), nimic scris; (b) reproducerea 2 Jakarinos: inlocuirea pastreaza doar
+--    linia nr 1 si scoate pozitia 2 → linia ramane O2|D1|TSA01|#1 (nu „fara pozitie”), rest 100 / 80 / 20; #2 ramane decontat fara baza: intors in
+--    decontat_fara_baza, declarat in lipsuri, tinut in calcul (baza 0 / decontat 50); (c) reproducerea 1 pe RPC: O3 confirmat cu X (cheia fara pozitie), situatia
+--    4 pe O3|D1|X, inlocuirea cu X #1 + X #2 = 22023 cheie_referita (cheia, situatia 4, ce ar fi devenit), nimic scris; (d) re-atasarea: inlocuirea O2 cu #1 si
+--    #2 → #2 are iar baza, lipsa dispare, rest #2 = 200 / 50 / 150 ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb; r record; h int; s text;
+  L1 constant jsonb := $j$[
+    {"obiect_cod":"O2","obiect_nume":"TRONSON O2","deviz_cod":"D1","deviz_nume":"Terasamente","nr":"1","cod":"TSA01","denumire":"Sapatura 1","um":"M","cantitate":100,"pret_unitar":10,"valoare":1000},
+    {"obiect_cod":"O2","obiect_nume":"TRONSON O2","deviz_cod":"D1","deviz_nume":"Terasamente","nr":"3","cod":"Z","denumire":"Altceva","um":"BUC","cantitate":1,"pret_unitar":5,"valoare":5}]$j$::jsonb;
+  L2 constant jsonb := $j${"obiect_cod":"O2","obiect_nume":"TRONSON O2","deviz_cod":"D1","deviz_nume":"Terasamente","nr":"2","cod":"TSA01","denumire":"Sapatura 2","um":"M","cantitate":200,"pret_unitar":10,"valoare":2000}$j$::jsonb;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'contract_initial', NULL, NULL, NULL, 'p8_o2.xlsx', repeat('92', 32), L1 || L2);
+  IF (v->>'inserate')::int <> 3 OR v->'decontat_fara_baza' IS DISTINCT FROM '[]'::jsonb THEN RAISE EXCEPTION 't_cheie_referita FAIL oferta O2: %', v; END IF;
+  SELECT string_agg(b.cheie || '=' || b.cantitate::text, '; ' ORDER BY b.cheie COLLATE "C") INTO s FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p8') AND b.cheie LIKE 'O2|%';
+  IF s IS DISTINCT FROM 'O2|D1|TSA01|#1=100; O2|D1|TSA01|#2=200; O2|D1|Z=1' THEN RAISE EXCEPTION 't_cheie_referita FAIL baza O2: %', s; END IF;
+  v := public.fn_rest_decontat_confirma_situatie(pg_temp.rd_id('p8'), '2', NULL, 'p8_sl2.xlsx', repeat('93', 32),
+         '{"luna":2,"an":2026,"linii":[{"cod":"TSA01","nr":"1","um":"M","cantitate_perioada":80,"valoare":800,"cheie":"O2|D1|TSA01|#1","tip_rand":"articol","potrivire":"exact"}]}'::jsonb, false);
+  v := public.fn_rest_decontat_confirma_situatie(pg_temp.rd_id('p8'), '3', NULL, 'p8_sl3.xlsx', repeat('94', 32),
+         '{"luna":3,"an":2026,"linii":[{"cod":"TSA01","nr":"2","um":"M","cantitate_perioada":50,"valoare":500,"cheie":"O2|D1|TSA01|#2","tip_rand":"articol","potrivire":"exact"}]}'::jsonb, false);
+  SELECT count(*) INTO h FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p8');
+  -- (a) linia fara pozitie peste doua chei referite = ambigua
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'contract_initial', NULL, NULL, NULL, 'p8_o2b.xlsx', repeat('95', 32),
+           jsonb_build_array((L1->0) - 'nr' || '{"cantitate":300,"valoare":3000}'::jsonb, L1->1), true);
+    RAISE EXCEPTION 't_cheie_referita FAIL: linia fara pozitie peste doua chei referite acceptata';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    IF SQLERRM NOT LIKE '%linia TSA01 fara pozitie%ambigua%O2|D1|TSA01|#1 (situatiile 2), O2|D1|TSA01|#2 (situatiile 3)%ar fi devenit O2|D1|TSA01;%cheie_referita%' THEN RAISE; END IF;
+  END;
+  IF (SELECT count(*) FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p8')) <> h
+     OR (SELECT string_agg(b.cheie || '=' || b.cantitate::text, '; ' ORDER BY b.cheie COLLATE "C") FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p8') AND b.cheie LIKE 'O2|%') IS DISTINCT FROM s THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL: refuzul (a) a scris / retras ceva';
+  END IF;
+  -- (b) reproducerea 2: doar linia nr 1 → pastreaza #1; #2 fara baza, declarat
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'contract_initial', NULL, NULL, NULL, 'p8_o2c.xlsx', repeat('96', 32), L1, true);
+  IF (v->>'inserate')::int <> 2 OR (v->>'inlocuite_confirmate')::int <> 3 OR v->'decontat_fara_baza' IS DISTINCT FROM '["O2|D1|TSA01|#2"]'::jsonb THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL inlocuirea fara pozitia 2: % (astept inserate 2, inlocuite_confirmate 3, decontat_fara_baza ["O2|D1|TSA01|#2"])', v;
+  END IF;
+  SELECT string_agg(b.cheie || '=' || b.cantitate::text, '; ' ORDER BY b.cheie COLLATE "C") INTO s FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p8') AND b.cheie LIKE 'O2|%';
+  IF s IS DISTINCT FROM 'O2|D1|TSA01|#1=100; O2|D1|Z=1' THEN RAISE EXCEPTION 't_cheie_referita FAIL: linia nr 1 n-a pastrat cheia referita #1 (baza O2: %)', s; END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O2|D1|TSA01|#1';
+  IF r.baza_cantitate <> 100 OR r.decontat_cantitate <> 80 OR r.rest_cantitate <> 20 OR r.obiect_cod IS DISTINCT FROM 'O2' THEN RAISE EXCEPTION 't_cheie_referita FAIL rest #1: %', row_to_json(r); END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O2|D1|TSA01|#2';
+  IF r.baza_cantitate <> 0 OR r.decontat_cantitate <> 50 OR r.decontat_valoare <> 500 THEN RAISE EXCEPTION 't_cheie_referita FAIL: decontatul #2 nu mai e in calcul: %', row_to_json(r); END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol' AND referinta = 'O2|D1|TSA01|#2: 500 lei, 1 linii (situatiile 3)') THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL: #2 fara baza nedeclarat: %', (SELECT string_agg(tip || '=' || referinta, '; ') FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8'));
+  END IF;
+  -- (c) reproducerea 1 pe RPC: codul decontat (cheia fara pozitie) despartit in pozitii
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'contract_initial', NULL, NULL, NULL, 'p8_o3.xlsx', repeat('97', 32),
+         '[{"obiect_cod":"O3","obiect_nume":"TRONSON O3","deviz_cod":"D1","nr":"1","cod":"X","denumire":"x","um":"M","cantitate":10,"pret_unitar":10,"valoare":100}]'::jsonb);
+  v := public.fn_rest_decontat_confirma_situatie(pg_temp.rd_id('p8'), '4', NULL, 'p8_sl4.xlsx', repeat('98', 32),
+         '{"luna":4,"an":2026,"linii":[{"cod":"X","um":"M","cantitate_perioada":5,"valoare":50,"cheie":"O3|D1|X","tip_rand":"articol","potrivire":"exact"}]}'::jsonb, false);
+  SELECT count(*) INTO h FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p8');
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'contract_initial', NULL, NULL, NULL, 'p8_o3b.xlsx', repeat('99', 32), $j$[
+      {"obiect_cod":"O3","obiect_nume":"TRONSON O3","deviz_cod":"D1","nr":"1","cod":"X","denumire":"x a","um":"M","cantitate":5,"pret_unitar":10,"valoare":50},
+      {"obiect_cod":"O3","obiect_nume":"TRONSON O3","deviz_cod":"D1","nr":"2","cod":"X","denumire":"x b","um":"M","cantitate":5,"pret_unitar":10,"valoare":50}]$j$::jsonb, true);
+    RAISE EXCEPTION 't_cheie_referita FAIL: codul decontat despartit in pozitii acceptat (#1 / #2 in loc de cheia referita)';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    IF SQLERRM NOT LIKE '%cheia O3|D1|X e referita de situatiile confirmate (4) si codul X se repeta acum in document (ar fi devenit O3|D1|X|#1, O3|D1|X|#2)%cheie_referita%' THEN RAISE; END IF;
+  END;
+  IF (SELECT count(*) FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p8')) <> h
+     OR (SELECT string_agg(b.cheie || '=' || b.cantitate::text, '; ') FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p8') AND b.cheie LIKE 'O3|%') IS DISTINCT FROM 'O3|D1|X=10' THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL: refuzul (c) a scris / retras ceva';
+  END IF;
+  -- (d) re-atasarea lui #2
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'contract_initial', NULL, NULL, NULL, 'p8_o2d.xlsx', repeat('9a', 32), L1 || L2, true);
+  IF (v->>'inserate')::int <> 3 OR v->'decontat_fara_baza' IS DISTINCT FROM '[]'::jsonb THEN RAISE EXCEPTION 't_cheie_referita FAIL re-atasare: %', v; END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O2|D1|TSA01|#2';
+  IF r.baza_cantitate <> 200 OR r.decontat_cantitate <> 50 OR r.rest_cantitate <> 150 OR r.obiect_cod IS DISTINCT FROM 'O2'
+     OR EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol') THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL: #2 re-atasat: %', row_to_json(r);
+  END IF;
+  RAISE NOTICE 't_cheie_referita (2/4) ok: RPC — linia fara pozitie peste #1 / #2 referite = 22023 cheie_referita (ambigua); inlocuirea fara pozitia 2 pastreaza #1 (rest 100 / 80 / 20) si declara #2 (decontat_fara_baza + lipsuri, decontatul ramane in calcul); codul decontat despartit in pozitii = 22023 cheie_referita, nimic scris; re-atasarea stinge lipsa';
+END $t$;
+RESET ROLE;
+
+-- ── (3/4) AA LISTA COMPLETA peste o cheie referita (MP b, documente_baza): O4 confirmat cu Z #1 (10 BUC) / #2 (20 BUC), situatia 5 pe O4|D1|Z|#1 (4 BUC / 40);
+--    AA-10 lista completa cu Z FARA pozitie (15 BUC) → linia ia unica cheie referita a identitatii (O4|D1|Z|#1), baza O4 = #1 15 (AA-10), #2 nereferit iese
+--    fara lipsa, rest #1 = 15 / 4 / 11; AA-8 lista completa pe O2 DOAR cu TSA01 nr 1 (150 M) → #1 pastrat, #2 (situatia 3) ramane fara baza → intors +
+--    declarat; AA-9 (datat dupa AA-8) cu #1 si #2 → #2 readus, lipsa stinsa ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb; r record; s text;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'contract_initial', NULL, NULL, NULL, 'p8_o4.xlsx', repeat('9b', 32), $j$[
+    {"obiect_cod":"O4","obiect_nume":"TRONSON O4","deviz_cod":"D1","nr":"1","cod":"Z","denumire":"z a","um":"BUC","cantitate":10,"pret_unitar":10,"valoare":100},
+    {"obiect_cod":"O4","obiect_nume":"TRONSON O4","deviz_cod":"D1","nr":"2","cod":"Z","denumire":"z b","um":"BUC","cantitate":20,"pret_unitar":10,"valoare":200}]$j$::jsonb);
+  v := public.fn_rest_decontat_confirma_situatie(pg_temp.rd_id('p8'), '5', NULL, 'p8_sl5.xlsx', repeat('9c', 32),
+         '{"luna":5,"an":2026,"linii":[{"cod":"Z","um":"BUC","cantitate_perioada":4,"valoare":40,"cheie":"O4|D1|Z|#1","tip_rand":"articol","potrivire":"exact"}]}'::jsonb, false);
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'act_aditional', pg_temp.rd_id('aa10'), NULL, 'lista_completa', 'p8_aa10.xlsx', repeat('9d', 32),
+         '[{"obiect_cod":"O4","deviz_cod":"D1","cod":"Z","denumire":"z rev","um":"BUC","cantitate":15,"pret_unitar":12,"valoare":180}]'::jsonb);
+  IF (v->>'inserate')::int <> 1 OR v->'decontat_fara_baza' IS DISTINCT FROM '[]'::jsonb THEN RAISE EXCEPTION 't_cheie_referita FAIL AA-10: %', v; END IF;
+  SELECT string_agg(b.cheie || '=' || b.cantitate::text || ' @' || b.pret_unitar::text, '; ' ORDER BY b.cheie COLLATE "C") INTO s FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p8') AND b.cheie LIKE 'O4|%';
+  IF s IS DISTINCT FROM 'O4|D1|Z|#1=15 @12' THEN RAISE EXCEPTION 't_cheie_referita FAIL: linia AA fara pozitie n-a luat cheia referita #1 / lista completa: %', s; END IF;
+  SELECT * INTO r FROM public.v_executie_rest_decontat WHERE proiect_id = pg_temp.rd_id('p8') AND cheie = 'O4|D1|Z|#1';
+  IF r.baza_cantitate <> 15 OR r.decontat_cantitate <> 4 OR r.rest_cantitate <> 11 OR r.obiect_cod IS DISTINCT FROM 'O4' THEN RAISE EXCEPTION 't_cheie_referita FAIL rest O4 #1: %', row_to_json(r); END IF;
+  IF EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol') THEN RAISE EXCEPTION 't_cheie_referita FAIL: lipsa dupa AA-10 (#2 nu e referit)'; END IF;
+  -- AA-8 lista completa pe O2 fara pozitia 2
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'act_aditional', pg_temp.rd_id('aa8'), NULL, 'lista_completa', 'p8_aa8.xlsx', repeat('9e', 32),
+         '[{"obiect_cod":"O2","deviz_cod":"D1","nr":"1","cod":"TSA01","denumire":"Sapatura rev","um":"M","cantitate":150,"pret_unitar":11,"valoare":1650}]'::jsonb);
+  IF (v->>'inserate')::int <> 1 OR v->'decontat_fara_baza' IS DISTINCT FROM '["O2|D1|TSA01|#2"]'::jsonb THEN RAISE EXCEPTION 't_cheie_referita FAIL AA-8: %', v; END IF;
+  SELECT string_agg(b.cheie || '=' || b.cantitate::text, '; ' ORDER BY b.cheie COLLATE "C") INTO s FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p8') AND b.cheie LIKE 'O2|%';
+  IF s IS DISTINCT FROM 'O2|D1|TSA01|#1=150' THEN RAISE EXCEPTION 't_cheie_referita FAIL baza O2 dupa AA-8: %', s; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol' AND referinta = 'O2|D1|TSA01|#2: 500 lei, 1 linii (situatiile 3)') THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL: #2 scos de lista completa AA-8 nedeclarat';
+  END IF;
+  -- AA-9 (mai nou) cu ambele pozitii
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'act_aditional', pg_temp.rd_id('aa9'), NULL, 'lista_completa', 'p8_aa9.xlsx', repeat('9f', 32), $j$[
+    {"obiect_cod":"O2","deviz_cod":"D1","nr":"1","cod":"TSA01","denumire":"Sapatura 1","um":"M","cantitate":150,"pret_unitar":11,"valoare":1650},
+    {"obiect_cod":"O2","deviz_cod":"D1","nr":"2","cod":"TSA01","denumire":"Sapatura 2","um":"M","cantitate":210,"pret_unitar":11,"valoare":2310}]$j$::jsonb);
+  IF (v->>'inserate')::int <> 2 OR v->'decontat_fara_baza' IS DISTINCT FROM '[]'::jsonb THEN RAISE EXCEPTION 't_cheie_referita FAIL AA-9: %', v; END IF;
+  SELECT string_agg(b.cheie || '=' || b.cantitate::text, '; ' ORDER BY b.cheie COLLATE "C") INTO s FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p8') AND b.cheie LIKE 'O2|%';
+  IF s IS DISTINCT FROM 'O2|D1|TSA01|#1=150; O2|D1|TSA01|#2=210'
+     OR EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol') THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL dupa AA-9: %', s;
+  END IF;
+  RAISE NOTICE 't_cheie_referita (3/4) ok: AA lista completa — linia fara pozitie ia unica cheie referita (O4|D1|Z|#1 = 15, rest 11); lista completa fara #2 il lasa fara baza: intors (decontat_fara_baza) si declarat (lipsuri); lista completa urmatoare cu #1 / #2 il readuce';
+END $t$;
+RESET ROLE;
+
+-- ── (4/4) dezactivarea actului (owner a): AA-9 inactiv → baza O2 revine la AA-8, #2 iar fara baza (declarat); reactivat → stins. SERVERUL (auth.uid() NULL,
+--    postgres) nu schimba nici el cheia unui rand referit. Inlocuirea situatiei 4 (fara linia pe O3|D1|X) DEZGHEATA cheia: despartirea in pozitii trece apoi ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000a', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000a');
+  UPDATE public.executie_acte_aditionale SET activ = false WHERE id = pg_temp.rd_id('aa9');
+  IF NOT EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol' AND referinta LIKE 'O2|D1|TSA01|#2: 500 lei%') THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL: AA-9 dezactivat → #2 fara baza nedeclarat';
+  END IF;
+  UPDATE public.executie_acte_aditionale SET activ = true WHERE id = pg_temp.rd_id('aa9');
+  IF EXISTS (SELECT 1 FROM public.v_executie_rest_decontat_lipsuri WHERE proiect_id = pg_temp.rd_id('p8') AND tip = 'decontat_fara_articol') THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL: AA-9 reactivat → lipsa ramasa';
+  END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+DO $t$
+BEGIN
+  IF auth.uid() IS NOT NULL OR public.fn_rest_decontat_server() IS NOT TRUE THEN RAISE EXCEPTION 't_cheie_referita PRECONDITIE: blocul serverului cere auth.uid() NULL si rolul postgres'; END IF;
+  BEGIN
+    UPDATE public.proiect_articole SET cod = 'TSA09' WHERE proiect_id = pg_temp.rd_id('p8') AND obiect_cod = 'O1' AND cod = 'TSA01';
+    RAISE EXCEPTION 't_cheie_referita FAIL: serverul a schimbat codul unui rand referit';
+  EXCEPTION WHEN check_violation THEN IF SQLERRM NOT LIKE '%cheia O1|D1|TSA01%ar fi devenit O1|D1|TSA09%cheie_referita%' THEN RAISE; END IF; END;
+  IF (SELECT cheie FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p8') AND obiect_cod = 'O1' AND cod = 'TSA01') IS DISTINCT FROM 'O1|D1|TSA01' THEN
+    RAISE EXCEPTION 't_cheie_referita FAIL: refuzul serverului a scris ceva';
+  END IF;
+END $t$;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb; s text;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  -- situatia 4 inlocuita cu o versiune FARA linia pe O3|D1|X (articol nou) → cheia nu mai e referita
+  v := public.fn_rest_decontat_confirma_situatie(pg_temp.rd_id('p8'), '4', NULL, 'p8_sl4b.xlsx', repeat('a1', 32),
+         '{"luna":4,"an":2026,"linii":[{"obiect_cod":"O3","cod":"X9","denumire":"Lucrare noua","um":"M","cantitate_perioada":5,"valoare":50,"tip_rand":"articol_nou"}]}'::jsonb, true);
+  IF (v->>'versiune')::int <> 2 OR public.fn_rest_decontat_cheie_situatii(pg_temp.rd_id('p8'), 'O3|D1|X') IS DISTINCT FROM ARRAY[]::text[] THEN RAISE EXCEPTION 't_cheie_referita FAIL: situatia 4 v2 / cheia inca referita: %', v; END IF;
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p8'), 'contract_initial', NULL, NULL, NULL, 'p8_o3b.xlsx', repeat('99', 32), $j$[
+    {"obiect_cod":"O3","obiect_nume":"TRONSON O3","deviz_cod":"D1","nr":"1","cod":"X","denumire":"x a","um":"M","cantitate":5,"pret_unitar":10,"valoare":50},
+    {"obiect_cod":"O3","obiect_nume":"TRONSON O3","deviz_cod":"D1","nr":"2","cod":"X","denumire":"x b","um":"M","cantitate":5,"pret_unitar":10,"valoare":50}]$j$::jsonb, true);
+  IF (v->>'inserate')::int <> 2 OR v->'decontat_fara_baza' IS DISTINCT FROM '[]'::jsonb THEN RAISE EXCEPTION 't_cheie_referita FAIL: despartirea in pozitii dupa dezghetare: %', v; END IF;
+  SELECT string_agg(b.cheie || '=' || b.cantitate::text, '; ' ORDER BY b.cheie COLLATE "C") INTO s FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p8') AND b.cheie LIKE 'O3|%';
+  IF s IS DISTINCT FROM 'O3|D1|X|#1=5; O3|D1|X|#2=5' THEN RAISE EXCEPTION 't_cheie_referita FAIL baza O3 dupa dezghetare: %', s; END IF;
+  RAISE NOTICE 't_cheie_referita (4/4) ok: AA dezactivat → #2 fara baza declarat, reactivat → stins; serverul nu schimba cheia referita (23514, nimic scris); situatia inlocuita fara linia pe cheie dezgheata cheia (despartirea in pozitii trece)';
 END $t$;
 RESET ROLE;
 
