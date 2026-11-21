@@ -27,9 +27,17 @@
 -- r6 (review #1158: 2 x P1 + P2 pe r5): liniile RPC pentru 0001 vin cu obiect_cod „ 0001 ” (spatii) si B200 in „MC” x 200 (= 2 x „100 MC”, randul vechi):
 -- randul confirmat se scrie in REPREZENTAREA EXISTENTA (obiect_cod '0001', um '100 MC', cantitate 2, pret 1000), deci cititorii vechi vad pe 0001 exact
 -- 2 randuri / 102 / 12000 (ca si cand ar fi fost scrise la fel); fisierul A (b3) inlocuit de B (b4) ramane „deja confirmat” (A -> B -> A = 23505);
--- t_um_inlocuire (ultimele blocuri, pe P1 / 0001 cu decontat): inlocuirea cu A100 in „100 MC” (cheie decontata in M) = 22023 um_decontat, si cu
+-- t_um_inlocuire (pe P1 / 0001 cu decontat): inlocuirea cu A100 in „100 MC” (cheie decontata in M) = 22023 um_decontat, si cu
 -- accept_schimbare_um; cu A100 in „HM” x 1 (echivalent prin factor) trece si se scrie 'M' x 100; D400|#7 in BUC (fara decontat) = 22023 um_schimbat fara
 -- accept, trece cu accept (um_schimbate); obiectul nou ' st-3 ' al P3 se scrie 'St-3' (unitatea din proiect_unitati); cantitatea nereprezentabila = refuz.
+-- r7 (review #1158: 2 x P1 pe r6 — codul brut schimba tintele prefixelor; forma „majoritara pe obiect” scoate un rand din tinta unei unitati): regula e PE CHEIE,
+-- PE FIECARE CAMP. t_ultimul_act: serverul rescrie AMBELE randuri ale cheii OB1|D1|X (oferta + NCS-9) cu ' ob1 ' — o singura forma pe cheie, forme amestecate
+-- pe obiect —, iar randul AA-4 al cheii e scris ' ob1 ' (forma randului cu aceeasi cheie, nu a obiectului). t_um_inlocuire: liniile echivalente vin si cu
+-- deviz ' d1 ', cod 'a100 ' / nr ' 1' (toate copiate din randul cheii). t_reprezentare_cheie (ultimele blocuri, P6, reproducerile Jakarinos r6): oferta veche
+-- 'O1/D1/1/TSA01 M' + 'o1/D1/2a/Y 100 MC', unitatea legata la 'o1'; RPC-ul primeste ' o1 '/' d1 '/' 1'/' tsa01 ' HM x 1 si 'O1'/'D1'/'2A'/'y' MC x 200 →
+-- randurile scrise sunt IDENTICE cu cele vechi (fiecare camp copiat din randul cheii), cititorii vechi (prefixul TSA, JOIN-ul unitatii pe 'o1', lista
+-- obiectelor O1 / o1) neschimbati; a doua forma a aceleiasi chei (strecurata de server) = 22023 forme_multiple cu cheia si formele, nimic scris; o cheie NOUA
+-- (' z  z ') se scrie normalizata ('z z', deviz 'd1', um 'buc') cu obiect_cod-ul unitatii ('o1': obiectul are forme amestecate).
 -- SESIUNE PROASPATA: primul bloc dupa fixturi verifica garda cu marcajul RPC LIPSA (NULL): fisierul se ruleaza intr-o sesiune noua, inainte ca
 -- vreun RPC sa fi pus marcajul (precondiția e verificata explicit).
 -- FIXTURI: pe clona, daca profiles / employees cer alte coloane NOT NULL, se completeaza DOAR blocul FIXTURI (restul nu depinde de ele).
@@ -85,6 +93,10 @@ BEGIN
   INSERT INTO rd_fix VALUES ('aa4', v_s);
   INSERT INTO public.executie_acte_aditionale (proiect_id, numar_act, data_semnare, activ) VALUES (v, 'AA-5', DATE '2026-02-01', true) RETURNING id INTO v_s;
   INSERT INTO rd_fix VALUES ('aa5', v_s);
+  -- P6 (r7, MP b): reprezentarea PE CHEIE cu forme brute amestecate pe obiect ('O1' / 'o1') si o unitate legata la 'o1' (reproducerile Jakarinos r6)
+  INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P6', 'Dry P6 reprezentare pe cheie', 9101) RETURNING id INTO v;
+  INSERT INTO rd_fix VALUES ('p6', v);
+  INSERT INTO public.proiect_unitati (proiect_id, tip, nume, obiect_cod) VALUES (v, 'obiect', 'Tronson o1', 'o1');
   -- P5: un rand CONFIRMAT scris de server (calea serverului: auth.uid() NULL + postgres), pentru garda in sesiune proaspata
   INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P5', 'Dry P5 garda proaspata', 9102) RETURNING id INTO v;
   INSERT INTO rd_fix VALUES ('p5', v);
@@ -526,8 +538,9 @@ BEGIN
 END $t$;
 
 -- ── t_ultimul_act (owner, P4): nota neaprobata nu intra (deviz refuzat, lipsa nota_neaprobata); dupa aprobare intra; AA „lista completa” pe
---    obiectul cu forme brute amestecate (randul X al ofertei rescris ' ob1 ' de server; AA-ul vine cu ' ob1 ' si e scris 'OB1') INLOCUIESTE pe identitatea
---    canonica (150, nu 250); un act mai VECHI incarcat DUPA nu trece peste lista completa; pretul = ultimul act (dupa data) ──
+--    obiectul cu forme brute amestecate (randurile cheii X — oferta + NCS-9 — rescrise ' ob1 ' de server, celelalte chei 'OB1'; AA-ul vine cu ' ob1 ' si e
+--    scris ' ob1 ', forma randului cu aceeasi cheie — r7) INLOCUIESTE pe identitatea canonica (150, nu 250: si randurile 'OB1' ale ofertei dispar din baza);
+--    un act mai VECHI incarcat DUPA nu trece peste lista completa; pretul = ultimul act (dupa data) ──
 DO $t$
 DECLARE v jsonb; r record; v_nota bigint;
 BEGIN
@@ -557,15 +570,17 @@ BEGIN
   UPDATE public.executie_note_modificare SET data_aprobare = DATE '2026-04-01' WHERE id = v_nota;
 END $t$;
 RESET ROLE;
--- (r6) SERVERUL scrie obiectul randului X al ofertei P4 in alta forma bruta (' ob1 '; identitatea canonica si cheia raman OB1 / OB1|D1|X): un proiect cu
---    forme brute amestecate ale aceluiasi obiect — lista completa de mai jos trebuie sa inlocuiasca si acest rand (pe identitatea canonica, nu pe brut)
+-- (r6 → r7) SERVERUL scrie obiectul AMBELOR randuri ale cheii OB1|D1|X (oferta + NCS-9) in alta forma bruta (' ob1 '; identitatea canonica si cheia raman
+--    OB1 / OB1|D1|X; o singura forma PE CHEIE, deci fara ambiguitate): un proiect cu forme brute amestecate ale aceluiasi obiect — lista completa de mai jos
+--    trebuie sa inlocuiasca TOATE randurile obiectului (pe identitatea canonica, nu pe brut), inclusiv cele 'OB1' ale celorlalte chei
 SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
 DO $t$
 BEGIN
   IF auth.uid() IS NOT NULL OR public.fn_rest_decontat_server() IS NOT TRUE THEN RAISE EXCEPTION 't_ultimul_act PRECONDITIE: blocul serverului cere auth.uid() NULL si rolul postgres'; END IF;
-  UPDATE public.proiect_articole SET obiect_cod = ' ob1 ' WHERE proiect_id = pg_temp.rd_id('p4') AND sursa = 'contract_initial' AND cod = 'X';
-  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p4') AND obiect_cod = ' ob1 ' AND cheie = 'OB1|D1|X' AND confirmat_la IS NOT NULL) <> 1 THEN
-    RAISE EXCEPTION 't_ultimul_act PRECONDITIE: randul X al ofertei P4 scris de server cu obiectul '' ob1 '' (cheia neschimbata)';
+  UPDATE public.proiect_articole SET obiect_cod = ' ob1 ' WHERE proiect_id = pg_temp.rd_id('p4') AND cheie = 'OB1|D1|X';
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p4') AND obiect_cod = ' ob1 ' AND cheie = 'OB1|D1|X' AND confirmat_la IS NOT NULL) <> 2
+     OR (SELECT count(DISTINCT obiect_cod) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p4')) <> 2 THEN
+    RAISE EXCEPTION 't_ultimul_act PRECONDITIE: cele 2 randuri ale cheii X (oferta + NCS-9) scrise de server cu obiectul '' ob1 '' (cheia neschimbata), celelalte ''OB1''';
   END IF;
 END $t$;
 SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000a', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
@@ -576,16 +591,16 @@ BEGIN
   PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000a');
   SELECT cantitate, pret_unitar, randuri INTO r FROM public.v_executie_rest_decontat_baza WHERE proiect_id = pg_temp.rd_id('p4') AND cheie = 'OB1|D1|X';
   IF r.cantitate <> 120 OR r.pret_unitar <> 11 OR r.randuri <> 2 THEN RAISE EXCEPTION 't_ultimul_act PRECONDITIE: X = 120 @11 din 2 randuri (oferta '' ob1 '' + NCS-9) inaintea AA-4: %', row_to_json(r); END IF;
-  -- AA-4 (2026-05-01) lista completa, obiectul scris ' ob1 ' (r6: scris in reprezentarea existenta 'OB1', forma majoritara): inlocuieste TOT ce e datat
-  -- inainte pe OB1 — oferta (inclusiv randul X scris ' ob1 ' de server), NCS-9 — pe identitatea canonica → doar X = 150, pret 12
+  -- AA-4 (2026-05-01) lista completa, obiectul venit 'OB1' (r7: scris ' ob1 ', forma randului cu aceeasi cheie): inlocuieste TOT ce e datat inainte pe OB1 —
+  -- oferta (randurile 'OB1' ale cheilor A / B si randul X scris ' ob1 '), NCS-9 — pe identitatea canonica → doar X = 150, pret 12
   v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p4'), 'act_aditional', pg_temp.rd_id('aa4'), NULL, 'lista_completa', 'aa4.xlsx', repeat('a5', 32),
-         '[{"obiect_cod":" ob1 ","deviz_cod":"D1","cod":"X","denumire":"x revizuit","um":"M","cantitate":150,"pret_unitar":12,"valoare":1800}]'::jsonb);
+         '[{"obiect_cod":"OB1","deviz_cod":"D1","cod":"X","denumire":"x revizuit","um":"M","cantitate":150,"pret_unitar":12,"valoare":1800}]'::jsonb);
   SELECT string_agg(b.cheie || '=' || b.cantitate::text || ' @' || coalesce(b.pret_unitar::text, '-') || ' r' || b.randuri, '; ' ORDER BY b.cheie) AS s INTO r
     FROM public.v_executie_rest_decontat_baza b WHERE b.proiect_id = pg_temp.rd_id('p4');
-  IF r.s IS DISTINCT FROM 'OB1|D1|X=150 @12 r1' THEN RAISE EXCEPTION 't_ultimul_act FAIL lista completa pe identitate canonica (randul '' ob1 '' al ofertei a ramas?): %', r.s; END IF;
-  -- (r6) randul AA-4 e scris cu obiect_cod 'OB1' (reprezentarea existenta majoritara), nu ' ob1 '
-  IF (SELECT obiect_cod FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p4') AND act_aditional_id = pg_temp.rd_id('aa4')) IS DISTINCT FROM 'OB1' THEN
-    RAISE EXCEPTION 't_ultimul_act FAIL: randul AA-4 nu e scris in reprezentarea existenta a obiectului (OB1)';
+  IF r.s IS DISTINCT FROM 'OB1|D1|X=150 @12 r1' THEN RAISE EXCEPTION 't_ultimul_act FAIL lista completa pe identitate canonica (randurile ''OB1'' ale ofertei au ramas?): %', r.s; END IF;
+  -- (r7) randul AA-4 e scris cu obiect_cod ' ob1 ' (forma randului cu aceeasi cheie OB1|D1|X), nu 'OB1' (forma majoritara a obiectului) si nu cum vine
+  IF (SELECT obiect_cod FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p4') AND act_aditional_id = pg_temp.rd_id('aa4')) IS DISTINCT FROM ' ob1 ' THEN
+    RAISE EXCEPTION 't_ultimul_act FAIL: randul AA-4 nu e scris in forma randului cu aceeasi cheie ('' ob1 ''): %', (SELECT obiect_cod FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p4') AND act_aditional_id = pg_temp.rd_id('aa4'));
   END IF;
   -- AA-5 (2026-02-01, mai vechi) incarcat DUPA AA-4, „doar diferente” +10 pret 9: e datat inaintea listei complete → ignorat; pretul ramane al AA-4
   v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p4'), 'act_aditional', pg_temp.rd_id('aa5'), NULL, 'diferente', 'aa5.xlsx', repeat('a6', 32),
@@ -597,7 +612,7 @@ BEGIN
   SELECT cantitate, pret_unitar, randuri INTO r FROM public.v_executie_rest_decontat_baza WHERE proiect_id = pg_temp.rd_id('p4') AND cheie = 'OB1|D1|X';
   IF r.cantitate <> 130 OR r.pret_unitar <> 11 OR r.randuri <> 3 THEN RAISE EXCEPTION 't_ultimul_act FAIL: fara AA-4 → % (astept 130 @11, 3 randuri)', row_to_json(r); END IF;
   UPDATE public.executie_acte_aditionale SET activ = true WHERE id = pg_temp.rd_id('aa4');
-  RAISE NOTICE 't_ultimul_act ok: nota neaprobata refuzata / exclusa, aprobata → 120 @11; lista completa pe " ob1 " → 150 @12 (nu 250); actul vechi incarcat tarziu ignorat; fara AA-4 → 130 @11';
+  RAISE NOTICE 't_ultimul_act ok: nota neaprobata refuzata / exclusa, aprobata → 120 @11; lista completa pe obiectul cu forme amestecate (X in " ob1 ") → 150 @12 (nu 250), randul AA-4 scris " ob1 " (forma cheii); actul vechi incarcat tarziu ignorat; fara AA-4 → 130 @11';
 END $t$;
 RESET ROLE;
 
@@ -1205,9 +1220,10 @@ END $t$;
 SET LOCAL ROLE authenticated;
 DO $t$
 DECLARE v jsonb; r record; n int; s text; s2 text;
-  -- aceleasi 5 linii ale lui 0001 ca in blocul „oferta”, in ALTA reprezentare (identitate canonica si UM normalizat identice)
+  -- aceleasi 5 linii ale lui 0001 ca in blocul „oferta”, in ALTA reprezentare (identitate canonica si UM normalizat identice; r7: si devizul / codul / nr
+  -- vin cu spatii si litere mici — toate campurile se copiaza din randul cu aceeasi cheie)
   L_ECHIV constant jsonb := $j$[
-    {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"1","cod":"A100","denumire":"Conducta","um":"HM","cantitate":1,"pret_unitar":10000,"valoare":10000},
+    {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":" d1 ","deviz_nume":"Montaj","nr":" 1","cod":"a100 ","denumire":"Conducta","um":"HM","cantitate":1,"pret_unitar":10000,"valoare":10000},
     {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"2","cod":"B200","denumire":"Sapatura","um":"MC","cantitate":200,"pret_unitar":10,"valoare":2000},
     {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"7","cod":"D400","denumire":"Dublu a","um":"m","cantitate":5,"pret_unitar":10,"valoare":50},
     {"obiect_cod":" 0001 ","obiect_nume":"TRONSON 1","deviz_cod":"D1","deviz_nume":"Montaj","nr":"8","cod":"D400","denumire":"Dublu b","um":"m","cantitate":6,"pret_unitar":10,"valoare":60},
@@ -1302,11 +1318,11 @@ DO $t$
 DECLARE s text;
 BEGIN
   PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000a');
-  SELECT string_agg(a.obiect_cod || '/' || a.cod || '/' || a.um || '/' || a.cantitate::text || '/' || coalesce(a.pret_unitar::text, '-') || '/' || a.valoare::text, '; ' ORDER BY a.cheie) INTO s
+  SELECT string_agg(a.obiect_cod || '/' || a.deviz_cod || '/' || a.nr || '/' || a.cod || '/' || a.um || '/' || a.cantitate::text || '/' || coalesce(a.pret_unitar::text, '-') || '/' || a.valoare::text, '; ' ORDER BY a.cheie) INTO s
     FROM public.proiect_articole a WHERE a.proiect_id = pg_temp.rd_id('p1') AND a.sursa = 'contract_initial' AND a.activ AND a.confirmat_la IS NOT NULL
      AND public.fn_rest_decontat_cheie(a.obiect_cod, NULL, NULL, NULL) = '0001||';
-  IF s IS DISTINCT FROM '0001/A100/M/100/100/10000; 0001/B200/100 MC/2/1000/2000; 0001/D400/BUC/5/10/50; 0001/D400/M/6/10/60; 0001/OS/LEI/1/3000/3000' THEN
-    RAISE EXCEPTION 't_um_inlocuire FAIL: randurile lui 0001 nu sunt in reprezentarea existenta: %', s;
+  IF s IS DISTINCT FROM '0001/D1/1/A100/M/100/100/10000; 0001/D1/2/B200/100 MC/2/1000/2000; 0001/D1/7/D400/BUC/5/10/50; 0001/D1/8/D400/M/6/10/60; 0001/OS/1/OS/LEI/1/3000/3000' THEN
+    RAISE EXCEPTION 't_um_inlocuire FAIL: randurile lui 0001 nu sunt in reprezentarea existenta (obiect / deviz / nr / cod / UM copiate din randul cheii): %', s;
   END IF;
   IF EXISTS (SELECT 1 FROM public.proiect_articole a WHERE a.proiect_id = pg_temp.rd_id('p1') AND a.obiect_cod <> btrim(a.obiect_cod)) THEN
     RAISE EXCEPTION 't_um_inlocuire FAIL: obiect_cod brut cu spatii scris in P1';
@@ -1316,7 +1332,135 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.proiect_unitati u JOIN public.proiect_articole a ON a.proiect_id = u.proiect_id AND a.obiect_cod = u.obiect_cod WHERE u.proiect_id = pg_temp.rd_id('p3') AND a.cod = 'K100') THEN
     RAISE EXCEPTION 't_um_inlocuire FAIL: JOIN-ul 20261208a (art.obiect_cod = u.obiect_cod) nu gaseste articolul K100 al unitatii St-3';
   END IF;
-  RAISE NOTICE 't_um_inlocuire (2/2) ok: randurile confirmate sunt in reprezentarea existenta (0001 / M x 100 / 100 MC x 2 / M; BUC doar unde schimbarea a fost acceptata); St-3 scris ca unitatea din proiect_unitati';
+  RAISE NOTICE 't_um_inlocuire (2/2) ok: randurile confirmate sunt in reprezentarea existenta (0001 / D1 / 1 / A100 / M x 100; 100 MC x 2; BUC doar unde schimbarea a fost acceptata); St-3 scris ca unitatea din proiect_unitati';
+END $t$;
+RESET ROLE;
+
+-- ── t_reprezentare_cheie (r7, review #1158: 2 x P1 pe r6 — reproducerile Jakarinos). P6 (MP b; unitatea legata la 'o1'). (1/3) accesul general (e) scrie pe
+--    calea veche oferta cu forme brute amestecate pe obiect: 'O1'/'D1'/'1'/'TSA01' M x 100 si 'o1'/'D1'/'2a'/'Y' „100 MC” x 2; cititorii vechi inregistrati:
+--    rd_cititori pe 'O1' si 'o1', prefixul TSA (ActivitatiProiectPanel.jsx:69: upper(cod) incepe cu prefixul, suma cantitatilor brute), tinta unitatii 'o1'
+--    (20261208a: JOIN pe obiect_cod brut, cantitatea convertita), lista obiectelor (DevizVsExecutatTab) ──
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+CREATE FUNCTION pg_temp.rd_cititori_p6() RETURNS text LANGUAGE sql STABLE AS $f$
+  SELECT concat_ws(' || ', 'O1: ' || pg_temp.rd_cititori(pg_temp.rd_id('p6'), 'O1'), 'o1: ' || pg_temp.rd_cititori(pg_temp.rd_id('p6'), 'o1'),
+    'prefix TSA: ' || (SELECT count(*)::text || '/' || coalesce(sum(cantitate), 0)::text FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p6') AND sursa <> 'extras_materiale' AND left(upper(coalesce(cod, '')), 3) = 'TSA'),
+    'tinta unitate: ' || (SELECT count(*)::text || '/' || coalesce(sum(art.cantitate * (SELECT x.factor FROM public.fn_rest_decontat_um(art.um) x)), 0)::text
+                            FROM public.proiect_unitati u JOIN public.proiect_articole art ON art.proiect_id = u.proiect_id AND art.obiect_cod = u.obiect_cod AND art.sursa = 'contract_initial'
+                           WHERE u.proiect_id = pg_temp.rd_id('p6') AND u.obiect_cod IS NOT NULL),
+    'randuri: ' || (SELECT string_agg(concat_ws('/', obiect_cod, deviz_cod, nr, cod, um, cantitate::text, coalesce(pret_unitar::text, '-'), valoare::text), '; ' ORDER BY cheie)
+                      FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p6') AND sursa = 'contract_initial'))
+$f$;
+DO $t$
+DECLARE s text;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, pret_unitar, valoare, sursa) VALUES
+    (pg_temp.rd_id('p6'), 'O1', 'TRONSON O1', 'D1', 'Terasamente', '1', 'TSA01', 'Sapatura', 'M', 100, 10, 1000, 'contract_initial'),
+    (pg_temp.rd_id('p6'), 'o1', 'TRONSON O1', 'D1', 'Terasamente', '2a', 'Y', 'Umplutura', '100 MC', 2, 1000, 2000, 'contract_initial');
+  s := pg_temp.rd_cititori_p6();
+  -- (ordinea listei obiectelor O1 / o1 depinde de colatie: se construieste cu acelasi string_agg)
+  IF s IS DISTINCT FROM 'O1: activitati:1/100; catalog:1/1000; tinte:1/100; configurare:1; obiecte:' || (SELECT string_agg(x, ',' ORDER BY x) FROM unnest(ARRAY['O1', 'o1']) x)
+       || ' || o1: activitati:1/2; catalog:1/2000; tinte:1/2; configurare:1; obiecte:' || (SELECT string_agg(x, ',' ORDER BY x) FROM unnest(ARRAY['O1', 'o1']) x)
+       || ' || prefix TSA: 1/100 || tinta unitate: 1/200 || randuri: O1/D1/1/TSA01/M/100/10/1000; o1/D1/2a/Y/100 MC/2/1000/2000' THEN
+    RAISE EXCEPTION 't_reprezentare_cheie PRECONDITIE cititori P6 inainte: %', s;
+  END IF;
+  INSERT INTO rd_cons VALUES ('p6_inainte', s);
+  RAISE NOTICE 't_reprezentare_cheie (1/3) ok: oferta veche P6 cu forme amestecate (O1 / o1), unitatea pe o1 vede Y (200 MC), prefixul TSA vede 100; cititorii inregistrati';
+END $t$;
+RESET ROLE;
+-- (2/3) MP-ul (b) confirma EXACT aceleasi doua linii in alta reprezentare (obiect ' o1 ' / 'O1' inversate fata de randuri, deviz ' d1 ', nr ' 1' / '2A', cod ' tsa01 ' /
+--    'y', UM HM x 1 / MC x 200): randurile scrise sunt IDENTICE cu cele vechi (fiecare camp copiat din randul cu aceeasi cheie), toti cititorii vechi neschimbati
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p6'), 'contract_initial', NULL, NULL, NULL, 'oferta6.xlsx', repeat('e1', 32), $j$[
+    {"obiect_cod":" o1 ","obiect_nume":"TRONSON O1","deviz_cod":" d1 ","deviz_nume":"Terasamente","nr":" 1","cod":" tsa01 ","denumire":"Sapatura","um":"HM","cantitate":1,"pret_unitar":1000,"valoare":1000},
+    {"obiect_cod":"O1","obiect_nume":"TRONSON O1","deviz_cod":"D1","deviz_nume":"Terasamente","nr":"2A","cod":"y","denumire":"Umplutura","um":"MC","cantitate":200,"pret_unitar":10,"valoare":2000}]$j$::jsonb);
+  IF (v->>'inserate')::int <> 2 OR (v->>'inlocuite')::int <> 2 OR (v->>'inlocuite_confirmate')::int <> 0 OR v->'obiecte' IS DISTINCT FROM '["O1||"]'::jsonb OR v->'um_schimbate' IS DISTINCT FROM '[]'::jsonb THEN
+    RAISE EXCEPTION 't_reprezentare_cheie FAIL confirmare P6: %', v;
+  END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE s text;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  s := pg_temp.rd_cititori_p6();
+  IF s IS DISTINCT FROM (SELECT v FROM rd_cons WHERE k = 'p6_inainte') THEN
+    RAISE EXCEPTION 't_reprezentare_cheie FAIL: cititorii vechi s-au schimbat dupa confirmarea unor date echivalente: % (inainte %)', s, (SELECT v FROM rd_cons WHERE k = 'p6_inainte');
+  END IF;
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p6') AND confirmat_la IS NOT NULL) <> 2 THEN RAISE EXCEPTION 't_reprezentare_cheie FAIL: 2 randuri confirmate'; END IF;
+  RAISE NOTICE 't_reprezentare_cheie (2/3) ok: dupa confirmarea liniilor echivalente (obiect / deviz / nr / cod / UM in alta forma) randurile sunt identice cu cele vechi si toti cititorii vechi (prefix TSA, tinta unitatii o1, obiectele O1 / o1, catalogul) dau acelasi rezultat';
+END $t$;
+RESET ROLE;
+-- (3/3) SERVERUL strecoara o a doua forma a cheii O1|D1|TSA01 (acelasi rand in HM): „inlocuieste” = 22023 forme_multiple cu cheia si cele doua forme, nimic
+--    scris; serverul o scoate; apoi „inlocuieste” cu o cheie NOUA (' z  z ' pe ' o1 ', deviz ' d1 ', um ' buc ') → scrisa normalizata ('z z' / 'd1' / 'buc') cu
+--    obiect_cod-ul unitatii ('o1': obiectul are forme amestecate), randurile vechi ale cheilor existente neschimbate
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+DO $t$
+BEGIN
+  IF auth.uid() IS NOT NULL OR public.fn_rest_decontat_server() IS NOT TRUE THEN RAISE EXCEPTION 't_reprezentare_cheie PRECONDITIE: blocul serverului cere auth.uid() NULL si rolul postgres'; END IF;
+  INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, nr, cod, denumire, um, cantitate, pret_unitar, valoare, sursa)
+  VALUES (pg_temp.rd_id('p6'), 'O1', 'TRONSON O1', 'D1', '1', 'TSA01', 'Sapatura (a doua forma, strecurata)', 'HM', 1, 1000, 1000, 'contract_initial');
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p6') AND cheie = 'O1|D1|TSA01') <> 2 THEN RAISE EXCEPTION 't_reprezentare_cheie PRECONDITIE: a doua forma a cheii TSA01'; END IF;
+END $t$;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb; n int;
+  L6 constant jsonb := $j$[
+    {"obiect_cod":" o1 ","obiect_nume":"TRONSON O1","deviz_cod":" d1 ","deviz_nume":"Terasamente","nr":" 1","cod":" tsa01 ","denumire":"Sapatura","um":"HM","cantitate":1,"pret_unitar":1000,"valoare":1000},
+    {"obiect_cod":"O1","obiect_nume":"TRONSON O1","deviz_cod":"D1","deviz_nume":"Terasamente","nr":"2A","cod":"y","denumire":"Umplutura","um":"MC","cantitate":200,"pret_unitar":10,"valoare":2000}]$j$::jsonb;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  SELECT count(*) INTO n FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p6');
+  BEGIN
+    v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p6'), 'contract_initial', NULL, NULL, NULL, 'oferta6b.xlsx', repeat('e2', 32), L6, true);
+    RAISE EXCEPTION 't_reprezentare_cheie FAIL: cheia O1|D1|TSA01 cu doua forme brute acceptata (documentul a ales una)';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    IF SQLERRM NOT LIKE '%O1|D1|TSA01%mai multe forme brute%O1/D1/TSA01/1/HM | O1/D1/TSA01/1/M;%forme_multiple%' THEN RAISE; END IF;
+  END;
+  IF (SELECT count(*) FROM public.proiect_articole_istoric WHERE proiect_id = pg_temp.rd_id('p6')) <> n THEN RAISE EXCEPTION 't_reprezentare_cheie FAIL: refuzul forme_multiple a scris in istoric'; END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+DO $t$
+BEGIN
+  IF auth.uid() IS NOT NULL OR public.fn_rest_decontat_server() IS NOT TRUE THEN RAISE EXCEPTION 't_reprezentare_cheie PRECONDITIE: blocul serverului cere auth.uid() NULL si rolul postgres'; END IF;
+  DELETE FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p6') AND cheie = 'O1|D1|TSA01' AND confirmat_la IS NULL;
+  IF (SELECT count(*) FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p6') AND cheie = 'O1|D1|TSA01') <> 1 THEN RAISE EXCEPTION 't_reprezentare_cheie PRECONDITIE: a doua forma scoasa'; END IF;
+END $t$;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000b');
+  v := public.fn_rest_decontat_confirma_baza(pg_temp.rd_id('p6'), 'contract_initial', NULL, NULL, NULL, 'oferta6c.xlsx', repeat('e3', 32), $j$[
+    {"obiect_cod":" o1 ","obiect_nume":"TRONSON O1","deviz_cod":" d1 ","deviz_nume":"Terasamente","nr":" 1","cod":" tsa01 ","denumire":"Sapatura","um":"HM","cantitate":1,"pret_unitar":1000,"valoare":1000},
+    {"obiect_cod":"O1","obiect_nume":"TRONSON O1","deviz_cod":"D1","deviz_nume":"Terasamente","nr":"2A","cod":"y","denumire":"Umplutura","um":"MC","cantitate":200,"pret_unitar":10,"valoare":2000},
+    {"obiect_cod":" o1 ","obiect_nume":"TRONSON O1","deviz_cod":" d1 ","deviz_nume":"Terasamente","nr":"3","cod":" z  z ","denumire":"Articol nou","um":" buc ","cantitate":1,"pret_unitar":1,"valoare":1}]$j$::jsonb, true);
+  IF (v->>'inserate')::int <> 3 OR (v->>'inlocuite')::int <> 2 OR (v->>'inlocuite_confirmate')::int <> 2 THEN RAISE EXCEPTION 't_reprezentare_cheie FAIL inlocuire cu cheie noua: %', v; END IF;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', 'f0000000-0000-4000-8000-00000000000e', true), set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE s text;
+BEGIN
+  PERFORM pg_temp.rd_identitate('f0000000-0000-4000-8000-00000000000e');
+  SELECT string_agg(concat_ws('/', obiect_cod, deviz_cod, nr, cod, um, cantitate::text, coalesce(pret_unitar::text, '-'), valoare::text), '; ' ORDER BY cheie) INTO s
+    FROM public.proiect_articole WHERE proiect_id = pg_temp.rd_id('p6') AND sursa = 'contract_initial';
+  IF s IS DISTINCT FROM 'O1/D1/1/TSA01/M/100/10/1000; o1/D1/2a/Y/100 MC/2/1000/2000; o1/d1/3/z z/buc/1/1/1' THEN
+    RAISE EXCEPTION 't_reprezentare_cheie FAIL: cheia noua nu e scrisa normalizata cu obiect_cod-ul unitatii, sau cheile existente s-au schimbat: %', s;
+  END IF;
+  RAISE NOTICE 't_reprezentare_cheie (3/3) ok: a doua forma a aceleiasi chei = refuz 22023 forme_multiple (cheia + formele), nimic scris; cheia noua " z  z " scrisa "z z" / "d1" / "buc" pe obiectul unitatii (o1), cheile existente neschimbate';
 END $t$;
 RESET ROLE;
 

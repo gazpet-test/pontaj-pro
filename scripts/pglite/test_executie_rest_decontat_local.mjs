@@ -26,7 +26,9 @@
 //    proiect în loc de obiect; predicatul stării ignoră istoricul (obiectul scos de server se redeschide); lipsurile nu declară obiectele vechi.
 //    r6 (review #1158, 2 × P1 + P2 r5): UM-ul validat față de baza RĂMASĂ (fără obiectele care se înlocuiesc, ca r5); cheia decontată acceptă alt UM;
 //    schimbarea UM fără accept_schimbare_um acceptată; obiect_cod / UM scrise brut (nu în reprezentarea existentă); cantitatea / prețul neconvertite;
-//    unitatea din proiect_unitati ignorată; cantitatea nereprezentabilă rotunjită tăcut; amprenta necăutată în istoric (A → B → A).
+//    unitatea din proiect_unitati ignorată; cantitatea nereprezentabilă rotunjită tăcut; amprenta necăutată în istoric (A → B → A). r7 (review #1158,
+//    2 × P1 pe r6): obiect_cod / deviz_cod / cod / nr / UM necopiate din rândul cu aceeași cheie (scrise cum vin, normalizate); ambiguitatea formelor
+//    brute neverificată; cheia nouă scrisă brut (nenormalizată).
 //    Mutanții STATICI (reverificarea dreptului scoasă după lock; garda fără advisory / cu advisory blocant) sunt prinși de verificările pe text din 0.
 // 5. Migrarea B peste A: dry-run B; mutanți B (MP fără ofertă acceptat, owner fără motiv acceptat, fără garda pe coloane, marcaj NULL acceptat,
 //    garda doar pe UPDATE — INSERT „configurat” acceptat); revenirea B. Postcondițiile B = secțiunea „4.” (r2: markerul greșit din r1 ascundea
@@ -44,6 +46,14 @@
 //    ('100 MC', 'HM'), iar liniile RPC vin în ALTĂ reprezentare echivalentă (' ob 1 ', 'MC' × 100, 'T' / 1000, 'ML', 'buc'): rândurile scrise sunt
 //    OCTET CU OCTET în reprezentarea existentă (md5 pe obiect / UM / cantitate / preț identic înainte / după), cititorul 20261208a verifică CANTITATEA
 //    convertită; UM-ul la înlocuire (cheie decontată = refuz și cu accept; fără decontat = refuz fără accept, trece cu accept); fișierul înlocuit = 23505.
+// 8. r7 (review #1158, 2 × P1 pe r6 — regula PE CHEIE, PE FIECARE CÂMP): TESTUL DE PROPRIETATE al clasei. Pe un set GENERAT de transformări echivalente
+//    (litere mari / mici pe obiect / deviz / cod, spații la început / sfârșit și duble pe obiect / deviz / cod / nr, UM-uri echivalente M / ML / HM / KM /
+//    „100 M”, MC / M3 / „100 MC”, BUC / „100 BUC”, KG / T / „100 KG”, obiecte cu una sau două forme brute, unități legate la una din forme sau la niciuna, 1 sau 2
+//    obiecte) o funcție calculează ieșirile TUTUROR cititorilor existenți (ActivitatiProiectPanel / verificariProiect: logica de prefix din cod, în JS;
+//    20261208a / v_executie_tinte: predicatul JOIN luat din textul migrării, pe proiect_unitati real; DevizVsExecutatTab: lista obiectelor; CatalogDevizPanel:
+//    toate rândurile ordonate + grupele pe obiect; MaterialeProiectPanel; 20270105b; fn_rest_decontat_are_oferta) ÎNAINTE și DUPĂ confirmarea prin RPC a
+//    liniilor transformate: orice diferență (sau un refuz) = test picat. Apoi MUTANȚII care scot copierea unui câmp (obiect_cod, deviz_cod, cod, nr, um,
+//    cantitatea) trebuie să pice testul (diferență sau refuzul „legatura_unitate” acolo unde o unitate e legată).
 // Rulare (din rădăcina repo-ului; cere bash + python3 în PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_executie_rest_decontat_local.mjs
 //   (--scrie-obiecte rescrie listele revizuite L15 din manifestele generate; --amprente tipărește constantele AMPRENTA calculate)
 import { PGlite } from '@electric-sql/pglite'
@@ -155,7 +165,8 @@ const BLOCURI_A = ['t_garda_proaspata ok', 't_fara_baza ok', 'oferta ok', 't_neg
   't_surse_autorizate (1/2) ok', 't_surse_autorizate (2/2) ok', 't_coduri_repetate ok', 't_ultimul_act ok', 't_drept_restrans (1/2) ok', 't_drept_restrans (2/2) ok',
   't_drept_sef_santier (1/3) ok', 't_drept_sef_santier (2/3) ok', 't_drept_sef_santier (3/3) ok',
   't_oferta_confirmata (1/7) ok', 't_oferta_confirmata (2/7) ok', 't_oferta_confirmata (3/7) ok', 't_oferta_confirmata (4/7) ok', 't_oferta_confirmata (5/7) ok',
-  't_oferta_confirmata (6/7) ok', 't_oferta_confirmata (7/7) ok', 't_rand_orfan ok', 't_um_inlocuire (1/2) ok', 't_um_inlocuire (2/2) ok']
+  't_oferta_confirmata (6/7) ok', 't_oferta_confirmata (7/7) ok', 't_rand_orfan ok', 't_um_inlocuire (1/2) ok', 't_um_inlocuire (2/2) ok',
+  't_reprezentare_cheie (1/3) ok', 't_reprezentare_cheie (2/3) ok', 't_reprezentare_cheie (3/3) ok']
 const BLOCURI_B = ['t_poarta_garda_proaspata ok', 't_poarta_mp ok', 't_poarta_owner ok', 't_poarta_cu_oferta ok', 't_poarta_direct ok']
 async function verificaDry(db, text, blocuri) {
   try {
@@ -428,20 +439,37 @@ if (!DOAR || DOAR === '4') {
     // (garda istoricului cu marcaj NULL NU e observabilă de client: authenticated n-are INSERT / UPDATE / DELETE pe proiect_articole_istoric —
     //  refuzul de privilegiu vine înaintea trigger-ului; dry-run-ul verifică privilegiile prin postcondiții, nu printr-un mutant al gărzii)
     // r6 (review #1158, 2 × P1 + P2 r5: UM-ul la înlocuire, reprezentarea existentă, amprenta din istoric)
-    ['UM-ul validat față de baza RĂMASĂ, fără obiectele care se înlocuiesc (ca r5: cheia înlocuită nu mai are UM vechi)', [[
+    // (r7: UM-ul existent are două surse — baza anterioară și formele cheii —, deci mutantul scoate ambele; altfel e echivalent)
+    ['UM-ul validat față de baza RĂMASĂ, fără obiectele care se înlocuiesc, și fără UM-ul formelor cheii (ca r5: cheia înlocuită nu mai are UM vechi)', [[
       `    FROM public.fn_rest_decontat_baza_proiect(p_proiect) b;\n`,
-      `    FROM public.fn_rest_decontat_baza_proiect(p_proiect) b WHERE NOT (public.fn_rest_decontat_cheie(b.obiect_cod, NULL, NULL, NULL) = ANY (v_obiecte));\n`]]],
+      `    FROM public.fn_rest_decontat_baza_proiect(p_proiect) b WHERE NOT (public.fn_rest_decontat_cheie(b.obiect_cod, NULL, NULL, NULL) = ANY (v_obiecte));\n`],
+      [`    v_um := coalesce(v_baza->v_k->>'um', (SELECT x.um FROM jsonb_array_elements(v_forme) f CROSS JOIN LATERAL public.fn_rest_decontat_um(f->>'um') x\n`,
+       `    v_um := coalesce(v_baza->v_k->>'um', (SELECT NULL::text FROM jsonb_array_elements(v_forme) f CROSS JOIN LATERAL public.fn_rest_decontat_um(f->>'um') x\n`]]],
     ['cheia DECONTATĂ acceptă alt UM normalizat (100 M → situație 80 M → înlocuire 100 MC trece)', [[
       `      IF cardinality(v_um_dec) > 0 AND (EXISTS (SELECT 1 FROM unnest(v_um_dec) u WHERE u IS DISTINCT FROM v_um_n) OR (v_um IS NOT NULL AND v_um IS DISTINCT FROM v_um_n)) THEN`, `      IF false THEN`]]],
     ['schimbarea UM-ului pe o cheie fără decontat acceptată FĂRĂ accept_schimbare_um', [[`        IF NOT v_accept_um THEN`, `        IF false THEN`]]],
-    ['obiect_cod scris brut, cum vine (nu în reprezentarea existentă a obiectului)', [[
-      `      'obiect_cod', coalesce(v_rep_ob->>public.fn_rest_decontat_cheie(e->>'obiect_cod', NULL, NULL, NULL), e->>'obiect_cod'),`, `      'obiect_cod', e->>'obiect_cod',`]]],
-    ['UM-ul scris brut, cum vine (cantitatea convertită, UM-ul nu: 2 „MC” în loc de 2 „100 MC”)', [[`      'um', coalesce(v_um_rep, btrim(e->>'um')), 'cantitate', v_c,`, `      'um', btrim(e->>'um'), 'cantitate', v_c,`]]],
-    ['cantitatea neconvertită în UM-ul existent (200 „100 MC” în loc de 2)', [[`        v_c := v_c * v_factor / v_factor_rep; v_p := v_p * v_factor_rep / v_factor;`, `        v_p := v_p * v_factor_rep / v_factor;`]]],
-    ['prețul unitar neconvertit în UM-ul existent (10 pe „100 MC” în loc de 1000)', [[`        v_c := v_c * v_factor / v_factor_rep; v_p := v_p * v_factor_rep / v_factor;`, `        v_c := v_c * v_factor / v_factor_rep;`]]],
+    // r7 (review #1158, 2 × P1 pe r6: regula PE CHEIE, PE FIECARE CÂMP): fiecare câmp necopiat din rândul cheii (scris cum vine, normalizat) e văzut de un cititor
+    ['obiect_cod necopiat din rândul cheii (scris cum vine, normalizat: " o1 " → "o1" în loc de "O1")', [[
+      `      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`, `      v_ob := btrim(regexp_replace(e->>'obiect_cod', '[[:space:]]+', ' ', 'g')); v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`]]],
+    ['deviz_cod necopiat din rândul cheii (" d1 " → "d1" în loc de "D1": catalogul ordonează pe deviz)', [[
+      `      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`, `      v_ob := v_f->>'obiect_cod'; v_dz := btrim(regexp_replace(e->>'deviz_cod', '[[:space:]]+', ' ', 'g')); v_cod := v_f->>'cod';`]]],
+    ['cod necopiat din rândul cheii (" tsa01 " → "tsa01" în loc de "TSA01")', [[
+      `      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`, `      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := btrim(regexp_replace(e->>'cod', '[[:space:]]+', ' ', 'g'));`]]],
+    ['nr necopiat din rândul cheii la aceeași poziție ("2A" în loc de "2a")', [[
+      `    v_nr := CASE WHEN cardinality(v_nr_forme) = 1 THEN v_nr_forme[1] ELSE btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g')) END;`,
+      `    v_nr := btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g'));`]]],
+    ['UM-ul scris brut, cum vine (cantitatea convertită, UM-ul nu: 2 „MC” în loc de 2 „100 MC”)', [[
+      `      'um', coalesce(v_um_rep, btrim(regexp_replace(e->>'um', '[[:space:]]+', ' ', 'g'))), 'cantitate', v_c,`, `      'um', btrim(regexp_replace(e->>'um', '[[:space:]]+', ' ', 'g')), 'cantitate', v_c,`]]],
+    ['cantitatea neconvertită în UM-ul existent (200 „100 MC” în loc de 2)', [[`      v_c := v_c * v_factor / v_factor_rep; v_p := v_p * v_factor_rep / v_factor;`, `      v_p := v_p * v_factor_rep / v_factor;`]]],
+    ['prețul unitar neconvertit în UM-ul existent (10 pe „100 MC” în loc de 1000)', [[`      v_c := v_c * v_factor / v_factor_rep; v_p := v_p * v_factor_rep / v_factor;`, `      v_c := v_c * v_factor / v_factor_rep;`]]],
+    ['ambiguitatea formelor brute ale cheii neverificată (documentul alege una din forme)', [[`    IF jsonb_array_length(v_f_id) > 1 OR cardinality(v_nr_forme) > 1 OR cardinality(v_um_forme) > 1 THEN`, `    IF false THEN`]]],
+    ['cheia nouă scrisă brut, nenormalizată (" z  z ", " d1 ")', [[
+      `      v_dz := btrim(regexp_replace(e->>'deviz_cod', '[[:space:]]+', ' ', 'g')); v_cod := btrim(regexp_replace(e->>'cod', '[[:space:]]+', ' ', 'g'));`,
+      `      v_dz := e->>'deviz_cod'; v_cod := e->>'cod';`]]],
     ['unitatea din proiect_unitati ignorată la reprezentarea unui obiect nou (20261208a nu-l mai găsește)', [[
-      `      (SELECT pu.obiect_cod::text FROM public.proiect_unitati pu WHERE pu.proiect_id::bigint = p_proiect AND pu.obiect_cod IS NOT NULL\n         AND public.fn_rest_decontat_cheie(pu.obiect_cod::text, NULL, NULL, NULL) = d.k\n       ORDER BY pu.id LIMIT 1)) AS ob`, `      NULL::text) AS ob`]]],
-    ['cantitatea nereprezentabilă exact în UM-ul existent se rotunjește tăcit', [[`        IF v_c <> round(v_c, 6) OR (v_p IS NOT NULL AND v_p <> round(v_p, 6)) THEN`, `        IF false THEN`]]],
+      `      LEFT JOIN LATERAL (SELECT pu.obiect_cod::text AS ob FROM public.proiect_unitati pu WHERE pu.proiect_id::bigint = p_proiect AND pu.obiect_cod IS NOT NULL\n                            AND public.fn_rest_decontat_cheie(pu.obiect_cod::text, NULL, NULL, NULL) = d.k\n                          ORDER BY pu.id LIMIT 1) u ON true) z`,
+      `      LEFT JOIN LATERAL (SELECT NULL::text AS ob) u ON true) z`]]],
+    ['cantitatea nereprezentabilă exact în UM-ul existent se rotunjește tăcit', [[`      IF v_c <> round(v_c, 6) OR (v_p IS NOT NULL AND v_p <> round(v_p, 6)) THEN`, `      IF false THEN`]]],
     ['amprenta fișierului necăutată în istoric (A → B → A acceptat)', [[
       `\n     OR EXISTS (SELECT 1 FROM public.proiect_articole_istoric h WHERE h.proiect_id = p_proiect AND h.rand->>'fisier_amprenta' = p_amprenta) THEN\n    RAISE EXCEPTION 'rest_decontat: acelasi fisier a fost deja confirmat pe acest proiect'`,
       ` THEN\n    RAISE EXCEPTION 'rest_decontat: acelasi fisier a fost deja confirmat pe acest proiect'`]]],
@@ -821,8 +849,8 @@ if (!DOAR || DOAR === '7') {
     const POST_A = '-- ─── 12. Postcondiții'
     let tm = null
     try {
-      tm = mutant(MIG_A, [[`      'obiect_cod', coalesce(v_rep_ob->>public.fn_rest_decontat_cheie(e->>'obiect_cod', NULL, NULL, NULL), e->>'obiect_cod'),`, `      'obiect_cod', e->>'obiect_cod',`],
-        [`      'um', coalesce(v_um_rep, btrim(e->>'um')), 'cantitate', v_c,`, `      'um', btrim(e->>'um'), 'cantitate', (e->>'cantitate')::numeric,`]])
+      tm = mutant(MIG_A, [[`      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`, `      v_ob := e->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`],
+        [`      'um', coalesce(v_um_rep, btrim(regexp_replace(e->>'um', '[[:space:]]+', ' ', 'g'))), 'cantitate', v_c,`, `      'um', btrim(e->>'um'), 'cantitate', (e->>'cantitate')::numeric,`]])
     } catch (e) { ok(false, 'mutantul comportamental „reprezentarea brută”: ' + e.message) }
     if (tm) {
       const dbm = await bazaNoua()
@@ -836,6 +864,172 @@ if (!DOAR || DOAR === '7') {
       ok(!eA && !cm.err && difera.includes('activitati') && difera.includes('tinte') && difera.includes('obiecte'),
         `mutantul comportamental „reprezentarea brută” aplicat (fără postcondiții) și PRINS de cititorii vechi (diferă: ${difera.join(', ') || 'NIMIC'}): ${eA || cm.msg || cm1?.obiecte?.slice(0, 120) || ''}`)
     }
+  }
+}
+
+// ─── 8. TESTUL DE PROPRIETATE al reprezentării pe cheie (r7, review #1158: 2 × P1 pe r6) ──────────────────────────────────────────────────────────
+// Proprietatea: pentru ORICE ofertă existentă (scrisă pe calea veche, în orice forme brute) și ORICE document echivalent (aceleași chei canonice, aceleași
+// cantități în UM-ul normalizat, alte forme brute), confirmarea prin RPC lasă NESCHIMBATĂ ieșirea fiecărui cititor existent al proiect_articole.
+// Cititorii, cu logica EXACTĂ din cod: ActivitatiProiectPanel.jsx:53,69 și lib/verificariProiect.js:67,76 (în JS, expresiile componentelor), 20261208a
+// fn_executie_tinte_calcul (predicatul JOIN luat din textul migrării, pe proiect_unitati REAL, cantitatea convertită), DevizVsExecutatTab.jsx:222-228 (obiectele
+// distincte, prima denumire după id, sortate localeCompare), CatalogDevizPanel.jsx:38,100-111 (toate rândurile ordonate pe obiect / deviz / nr, grupele pe
+// obiect_nume || obiect_cod, actele), MaterialeProiectPanel.jsx:29, 20270105b (contract_initial activ), fn_rest_decontat_are_oferta.
+const CODURI8 = ['TSA01A1', 'TSC17B1', 'TSD01C1', 'GC 01', 'IZ 05', 'RPCT 11', 'M1L05', 'SUD 300']
+const PREFIXE8 = ['TSA', 'TSC', 'TSD', 'GC', 'IZ', 'RPCT', 'M1L05', 'SUD']
+const ACTIVITATI8 = [...PREFIXE8, 'TSA,TSC', 'tsa', 'gc', 'TSD, IZ']   // coduri_deviz ale activităților (ca în proiect_activitati; litere mici și spații ca în date reale)
+const UM8 = [['M', 100], ['100 MC', 2], ['BUC', 10], ['KG', 500], ['HM', 3], ['MC', 250]]   // (UM brut, cantitate) — toate conversiile de mai jos exact reprezentabile
+// UM-uri echivalente (același UM normalizat, alt factor): [UM nou, factorul cantității noi față de cea veche]
+const ECHIV8 = { M: [['ML', 1], ['HM', 1 / 100], ['KM', 1 / 1000], ['100 M', 1 / 100]], '100 MC': [['MC', 100], ['M3', 100], ['1000 MC', 1 / 10]], BUC: [['100 BUC', 1 / 100], ['buc', 1]],
+  KG: [['T', 1 / 1000], ['100 KG', 1 / 100], ['TO', 1 / 1000]], HM: [['M', 100], ['KM', 1 / 10], ['100 M', 1]], MC: [['M3', 1], ['100 MC', 1 / 100]] }
+const swapCase = s => [...s].map((c, i) => i % 2 ? c.toLowerCase() : c.toUpperCase()).join('')
+const cuSpatii = (s, i) => [` ${s}`, `${s}  `, ` ${s} `, s.includes(' ') ? s.replace(/ /g, '  ') : `  ${s}`][i % 4]
+// combinațiile generate (deterministe): nr. de obiecte × formele brute ale obiectului (una / două, alternate pe rânduri) × unitatea legată (niciuna / forma A / forma B)
+// × transformarea liniilor (litere, spații, UM, toate)
+function combinatii8() {
+  const L = []
+  for (const obiecte of [1, 2]) for (const forme of ['unic', 'mixt']) for (const unitate of forme === 'unic' ? ['fara', 'A'] : ['fara', 'A', 'B'])
+    for (const trans of ['litere', 'spatii', 'um', 'toate']) L.push({ obiecte, forme, unitate, trans })
+  return L
+}
+// oferta veche a unei combinații: rândurile (forme brute) + unitățile; liniile RPC = aceleași rânduri transformate echivalent
+function fixtura8(c, i0) {
+  const baze = ['OB1', 'TR-2'].slice(0, c.obiecte)
+  const randuri = [], unitati = []
+  baze.forEach((baza, o) => {
+    const formeOb = c.forme === 'unic' ? [baza] : [baza, baza.toLowerCase()]
+    if (c.unitate !== 'fara') unitati.push({ nume: `Unitate ${baza}`, obiect_cod: c.unitate === 'A' ? formeOb[0] : formeOb[1] })
+    for (let j = 0; j < 6; j++) {
+      const cod = CODURI8[(j + o) % CODURI8.length], [um, cant] = UM8[(j + o) % UM8.length]
+      randuri.push({ obiect_cod: formeOb[j % formeOb.length], obiect_nume: `Obiect ${baza}`, deviz_cod: j < 3 ? 'D01' : 'D02', deviz_nume: j < 3 ? 'Terasamente' : 'Montaj',
+        nr: String(j + 1) + (j % 2 ? 'a' : ''), cod, denumire: `Articol ${cod}`, um, cantitate: cant, pret_unitar: 10, valoare: cant * 10 })
+    }
+  })
+  const linii = randuri.map((r, j) => {
+    const l = { ...r }
+    const litere = c.trans === 'litere' || c.trans === 'toate', spatii = c.trans === 'spatii' || c.trans === 'toate', umT = c.trans === 'um' || c.trans === 'toate'
+    if (litere) { l.obiect_cod = swapCase(l.obiect_cod); l.deviz_cod = l.deviz_cod.toLowerCase(); l.cod = j % 2 ? l.cod.toLowerCase() : swapCase(l.cod); l.nr = l.nr.toUpperCase() }
+    if (spatii) { l.obiect_cod = cuSpatii(l.obiect_cod, j); l.deviz_cod = cuSpatii(l.deviz_cod, j + 1); l.cod = cuSpatii(l.cod, j + 2); l.nr = cuSpatii(l.nr, j + 3) }
+    if (umT) { const alt = ECHIV8[r.um]; const [um, f] = alt[(j + i0) % alt.length]; l.um = um; l.cantitate = rotund(r.cantitate * f); l.pret_unitar = rotund(r.pret_unitar / f) }
+    return l
+  })
+  return { randuri, unitati, linii }
+}
+const M1208_PRED = predicatTinte   // predicatul JOIN al cititorului 20261208a (textul migrării, cu v_p → 904), re-parametrizat pe proiect mai jos
+async function cititori8(db, uid, pid) {
+  const r = {}
+  const sel = async sql => { const x = await caRol(db, 'authenticated', uid, sql); if (x.err) throw new Error(`cititor: ${x.err} ${x.msg}`); return x.rows }
+  // ActivitatiProiectPanel.jsx:53 + contractPt (69-71) și verificariProiect.js:67 + stadiuFizic (74-77): expresiile din componente, pe rândurile citite ca ele
+  const articole = await sel(`SELECT cod, um, cantitate, sursa FROM public.proiect_articole WHERE proiect_id = ${pid} AND sursa <> 'extras_materiale'`)
+  r.activitati = ACTIVITATI8.map(coduri => {
+    const prefixe = (coduri || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+    const sel2 = articole.filter(x => prefixe.some(p => (x.cod || '').toUpperCase().startsWith(p)))
+    return `${coduri}=${sel2.reduce((s, x) => s + (Number(x.cantitate) || 0), 0)}/${sel2.length}`
+  }).join('; ')
+  const art = await sel(`SELECT cod, cantitate, sursa FROM public.proiect_articole WHERE proiect_id = ${pid} AND sursa <> 'extras_materiale'`)
+  r.verificari = ACTIVITATI8.map(coduri => {
+    const prefixe = (coduri || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+    const q = (art || []).filter(x => prefixe.some(p => (x.cod || '').toUpperCase().startsWith(p))).reduce((s, x) => s + (Number(x.cantitate) || 0), 0)
+    return `${coduri}=${q}`
+  }).join('; ')
+  // 20261208a fn_executie_tinte_calcul: unitățile REALE ale proiectului, prefixele ca în calcul, predicatul JOIN din textul migrării, cantitatea convertită
+  r.tinte = (await sel(`WITH u AS (SELECT pu.id, pu.obiect_cod FROM public.proiect_unitati pu WHERE pu.proiect_id = ${pid}),
+       a(baza_deviz, prefixe) AS (VALUES ('initiala', ARRAY[${PREFIXE8.map(p => `'${p}'`).join(', ')}]), ('revizuita', ARRAY['TSA', 'GC']))
+     SELECT u.id::text || '/' || u.obiect_cod || '/' || a.baza_deviz AS k, count(*)::int AS n, (count(*) FILTER (WHERE art.cantitate IS NULL OR cv.f IS NULL))::int AS fara,
+            coalesce(sum(art.cantitate::numeric * cv.f), 0)::float8::text AS s
+       FROM u JOIN a ON cardinality(a.prefixe) > 0 JOIN public.proiect_articole art ON ${M1208_PRED.split('904').join(String(pid))}
+       CROSS JOIN LATERAL (SELECT x.factor AS f FROM public.fn_rest_decontat_um(art.um) x) cv
+      WHERE u.obiect_cod IS NOT NULL GROUP BY 1 ORDER BY 1`)).map(y => `${y.k}=${y.n}/${y.fara}/${y.s}`).join('; ')
+  // CatalogDevizPanel.jsx:38 (select('*') ordonat pe obiect_cod, deviz_cod, nr; activ !== false) → toate rândurile vizibile + grupele (100-111) + actele
+  const cat = (await sel(`SELECT obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate::float8::text AS cantitate, pret_unitar::float8::text AS pret_unitar,
+      valoare::float8::text AS valoare, sursa, act_nr, activ FROM public.proiect_articole WHERE proiect_id = ${pid} ORDER BY obiect_cod, deviz_cod, nr`)).filter(a => a.activ !== false)
+  const grupe = new Map()
+  for (const a of cat) { const k = a.obiect_nume || a.obiect_cod || '—'; if (!grupe.has(k)) grupe.set(k, { nume: k, cod: a.obiect_cod, n: 0, val: 0 }); const g = grupe.get(k); g.n++; g.val += (Number(a.valoare) || 0) }
+  r.catalog_grupe = [...grupe.values()].map(g => `${g.nume}|${g.cod}=${g.n}/${g.val}`).join('; ')
+  r.catalog_randuri = cat.map(a => [a.obiect_cod, a.obiect_nume, a.deviz_cod, a.deviz_nume, a.nr, a.cod, a.denumire, a.um, a.cantitate, a.pret_unitar, a.valoare, a.sursa, a.act_nr].map(v => v == null ? '∅' : String(v)).join('|')).join('\n')
+  r.catalog_acte = [...new Set(cat.filter(a => a.sursa === 'act_aditional' && a.act_nr).map(a => a.act_nr))].sort().join(',')
+  // DevizVsExecutatTab.jsx:222-228: obiectele distincte (prima denumire după id), sortate localeCompare
+  const ob = new Map()
+  for (const a of await sel(`SELECT id, obiect_cod, obiect_nume FROM public.proiect_articole WHERE proiect_id = ${pid} AND obiect_cod IS NOT NULL ORDER BY id`)) if (a.obiect_cod && !ob.has(a.obiect_cod)) ob.set(a.obiect_cod, a.obiect_nume || '')
+  r.obiecte = [...ob.entries()].map(([obiect_cod, obiect_nume]) => ({ obiect_cod, obiect_nume })).sort((a, b) => a.obiect_cod.localeCompare(b.obiect_cod)).map(o => `${o.obiect_cod}=${o.obiect_nume}`).join('; ')
+  r.materiale = (await sel(`SELECT nr, cod, cantitate::float8::text AS c FROM public.proiect_articole WHERE proiect_id = ${pid} AND sursa = 'extras_materiale' ORDER BY nr`)).map(m => `${m.nr}/${m.cod}/${m.c}`).join('; ')
+  r.configurare = String((await sel(`SELECT count(*)::int AS n FROM public.proiect_articole a WHERE a.proiect_id::bigint = ${pid} AND a.sursa = 'contract_initial' AND a.activ`))[0].n)
+  r.are_oferta = String((await sel(`SELECT public.fn_rest_decontat_are_oferta(${pid}) AS v`))[0].v)
+  return r
+}
+const OWNER8 = 'f0000000-0000-4000-8000-00000000009a'
+// rulează toate combinațiile pe o bază cu migrarea (sau un mutant) aplicată: pentru fiecare, proiect nou → oferta veche (server, calea veche) → cititorii →
+// RPC cu liniile echivalente → cititorii; întoarce [{c, err, difera}]
+async function ruleazaCombinatii8(db, lista) {
+  const rez = []
+  await db.exec(`INSERT INTO public.profiles (id, is_owner) VALUES ('${OWNER8}', true) ON CONFLICT (id) DO NOTHING`)
+  for (let i = 0; i < lista.length; i++) {
+    const c = lista[i], pid = 9500 + i
+    const { randuri, unitati, linii } = fixtura8(c, i)
+    await db.query(`INSERT INTO public.executie_proiecte (id, cod_intern, nume) VALUES ($1, $2, 'Proprietate r7')`, [pid, `PROP-${i}`])
+    for (const u of unitati) await db.query(`INSERT INTO public.proiect_unitati (proiect_id, tip, nume, obiect_cod) VALUES ($1, 'obiect', $2, $3)`, [pid, u.nume, u.obiect_cod])
+    await db.query(`INSERT INTO public.proiect_articole (proiect_id, obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, valoare, pret_unitar, sursa)
+      SELECT $1, x.obiect_cod, x.obiect_nume, x.deviz_cod, x.deviz_nume, x.nr, x.cod, x.denumire, x.um, x.cantitate, x.valoare, x.pret_unitar, 'contract_initial'
+        FROM jsonb_to_recordset($2::jsonb) AS x(obiect_cod text, obiect_nume text, deviz_cod text, deviz_nume text, nr text, cod text, denumire text, um text, cantitate numeric, valoare numeric, pret_unitar numeric)`, [pid, JSON.stringify(randuri)])
+    await db.query(`INSERT INTO public.proiect_articole (proiect_id, nr, cod, denumire, um, cantitate, valoare, sursa) VALUES ($1, '1', 'TEAVA-DN300', 'Teava', 'M', 1100, 0, 'extras_materiale')`, [pid])
+    const c0 = await cititori8(db, OWNER8, pid)
+    const x = await caRol(db, 'authenticated', OWNER8, `SELECT public.fn_rest_decontat_confirma_baza($1, 'contract_initial', NULL, NULL, NULL, 'prop.xlsx', $2, $3::jsonb) AS v`,
+      [pid, (i + 1).toString(16).padStart(2, '0').repeat(32), JSON.stringify(linii)])
+    const c1 = x.err ? null : await cititori8(db, OWNER8, pid)
+    const difera = c1 ? Object.keys(c0).filter(k => c0[k] !== c1[k]) : []
+    rez.push({ c, i, err: x.err ? `${x.err} ${x.msg}` : null, difera, inserate: x.rows?.[0]?.v?.inserate, c0, c1 })
+  }
+  return rez
+}
+const eticheta8 = c => `${c.obiecte} obiect(e), forme ${c.forme}, unitate ${c.unitate}, transformare ${c.trans}`
+if (!DOAR || DOAR === '8') {
+  console.log('8. PROPRIETATEA reprezentării pe cheie (r7): cititorii existenți identici înainte / după confirmarea unor linii echivalente, pe combinații generate; mutanții pe fiecare câmp pică testul')
+  const LISTA = combinatii8()
+  ok(LISTA.length === 40 && !!predicatTinte, `${LISTA.length} combinații generate (1–2 obiecte × forme unice / amestecate × unitate legată la niciuna / forma A / forma B × transformare litere / spații / UM / toate); predicatul 20261208a din textul migrării`)
+  // transformările sunt ECHIVALENTE prin construcție: aceleași chei canonice și aceleași cantități normalizate (verificare pe date, independentă de RPC)
+  const canon = s => (s ?? '').replace(/\s+/g, ' ').trim().toUpperCase()
+  const normUm = u => { const n = canon(u).replace(/[ .]/g, ''); const t = { M: ['M', 1], ML: ['M', 1], HM: ['M', 100], KM: ['M', 1000], '100M': ['M', 100], MC: ['MC', 1], M3: ['MC', 1], '100MC': ['MC', 100], '1000MC': ['MC', 1000], BUC: ['BUC', 1], '100BUC': ['BUC', 100], KG: ['KG', 1], T: ['KG', 1000], TO: ['KG', 1000], '100KG': ['KG', 100] }; return t[n] || [n, 1] }
+  let echiv = 0, neechiv = []
+  for (let i = 0; i < LISTA.length; i++) {
+    const { randuri, linii } = fixtura8(LISTA[i], i)
+    const k = r => `${canon(r.obiect_cod)}|${canon(r.deviz_cod)}|${canon(r.cod)}|${canon(r.nr)}`
+    const q = r => { const [b, f] = normUm(r.um); return `${b}:${rotund(r.cantitate * f)}:${rotund(r.pret_unitar / f)}:${r.valoare}` }
+    const a = randuri.map(r => k(r) + '=' + q(r)).sort().join('\n'), b = linii.map(r => k(r) + '=' + q(r)).sort().join('\n')
+    const difForma = randuri.some((r, j) => ['obiect_cod', 'deviz_cod', 'cod', 'nr', 'um'].some(f => r[f] !== linii[j][f]))
+    if (a === b && difForma) echiv++; else neechiv.push(i)
+  }
+  ok(echiv === LISTA.length, `toate combinațiile au linii ECHIVALENTE (aceleași chei canonice, cantități / prețuri în UM normalizat, valori) și DIFERITE ca formă brută (${echiv}/${LISTA.length}; neechivalente: ${neechiv.join(',') || 'niciuna'})`)
+  const db = await bazaNoua()
+  await aplicaLivrare(db, A, MIG_A, F(A).ob)
+  const rez = await ruleazaCombinatii8(db, LISTA)
+  let verzi = 0
+  for (const r of rez) {
+    const bun = !r.err && r.difera.length === 0 && r.inserate === r.c.obiecte * 6
+    if (bun) verzi++
+    ok(bun, `combinația ${r.i + 1}/${rez.length} (${eticheta8(r.c)}): ${r.err ? 'REFUZ ' + r.err.slice(0, 160) : r.difera.length ? 'DIFERĂ ' + r.difera.join(', ') + ' — ' + r.difera.map(k => `${k}: ${String(r.c1[k]).slice(0, 80)} ≠ ${String(r.c0[k]).slice(0, 80)}`).join(' | ') : `toți cititorii identici, ${r.inserate} rânduri confirmate`}`)
+  }
+  ok(verzi === rez.length, `PROPRIETATEA: ${verzi}/${rez.length} combinații verzi (cititorii: ${Object.keys(rez[0]?.c0 || {}).join(', ')})`)
+  // MUTANȚII proprietății: fără copierea unui câmp din rândul cheii (sau fără conversia cantității) testul trebuie să PICE (diferență sau refuz); la obiect_cod,
+  // acolo unde o unitate e legată, refuzul vine de la garda „legatura_unitate” (apărarea în adâncime), nu de la cititori
+  const POST_A = '-- ─── 12. Postcondiții'
+  const MUTANTI8 = [
+    ['obiect_cod necopiat', [[`      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`, `      v_ob := btrim(regexp_replace(e->>'obiect_cod', '[[:space:]]+', ' ', 'g')); v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`]], /legatura_unitate/],
+    ['deviz_cod necopiat', [[`      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`, `      v_ob := v_f->>'obiect_cod'; v_dz := btrim(regexp_replace(e->>'deviz_cod', '[[:space:]]+', ' ', 'g')); v_cod := v_f->>'cod';`]], null],
+    ['cod necopiat', [[`      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := v_f->>'cod';`, `      v_ob := v_f->>'obiect_cod'; v_dz := v_f->>'deviz_cod'; v_cod := btrim(regexp_replace(e->>'cod', '[[:space:]]+', ' ', 'g'));`]], null],
+    ['nr necopiat', [[`    v_nr := CASE WHEN cardinality(v_nr_forme) = 1 THEN v_nr_forme[1] ELSE btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g')) END;`, `    v_nr := btrim(regexp_replace(e->>'nr', '[[:space:]]+', ' ', 'g'));`]], null],
+    ['um necopiat (cantitatea convertită)', [[`      'um', coalesce(v_um_rep, btrim(regexp_replace(e->>'um', '[[:space:]]+', ' ', 'g'))), 'cantitate', v_c,`, `      'um', btrim(regexp_replace(e->>'um', '[[:space:]]+', ' ', 'g')), 'cantitate', v_c,`]], null],
+    ['cantitatea neconvertită', [[`      v_c := v_c * v_factor / v_factor_rep; v_p := v_p * v_factor_rep / v_factor;`, `      v_p := v_p * v_factor_rep / v_factor;`]], null],
+  ]
+  for (const [nume, lista, refuzAsteptat] of MUTANTI8) {
+    let tm = null
+    try { tm = mutant(MIG_A, lista) } catch (e) { ok(false, `mutantul proprietății „${nume}”: ${e.message}`); continue }
+    const dbm = await bazaNoua()
+    const eA = await eroare(aplicaA(dbm, tm.slice(0, tm.indexOf(POST_A))))
+    if (eA) { ok(false, `mutantul proprietății „${nume}” nu s-a aplicat: ${eA.slice(0, 160)}`); continue }
+    const rm = await ruleazaCombinatii8(dbm, LISTA)
+    const picate = rm.filter(r => r.err || r.difera.length), refuzuri = rm.filter(r => r.err), cuRefuzAsteptat = refuzAsteptat ? refuzuri.filter(r => refuzAsteptat.test(r.err)) : []
+    const campuri = [...new Set(picate.flatMap(r => r.difera))]
+    ok(picate.length > 0 && (!refuzAsteptat || cuRefuzAsteptat.length > 0),
+      `mutantul proprietății „${nume}” PICĂ testul: ${picate.length}/${rm.length} combinații (${refuzuri.length} refuzuri${refuzAsteptat ? `, din care ${cuRefuzAsteptat.length} „legatura_unitate”` : ''}; cititorii diferiți: ${campuri.join(', ') || '-'})`)
   }
 }
 
