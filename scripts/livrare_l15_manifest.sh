@@ -38,10 +38,13 @@
 #   FARA --plafon-tranzactie-ms (PLAFON_LIPSA), si o comparatie a plafonului in forma neverificabila (PLAFON_FORMA).
 # Runda 18 (22.11.2026, plafonul EXTINS; docs/LIVRARE_L15_V2.md §9): --plafon-extins (fara valoare) = ca la runner: plafonul trebuie sa fie
 #   EXACT AG_PLAFON_EXTINS_MS (15000; altfel 2), iar validatorul cere ca migrarea sa declare optiunea (PLAFON_EXTINS_DIFERIT = 3). Fereastra
-#   orara (Europe/Bucharest, in afara orelor de lucru) se aplica PROBEI pe tinta (--compara-cu: ia aceleasi lock-uri ca livrarea): verificata
-#   local (2 in afara ei; sarita doar cu --doar-genereaza) si pe server (1a_fereastra.sql, generat de runner, primul in restul mesajului).
-#   GENERAREA manifestului (--iesire, DOAR pe clona, ROLLBACK, fara utilizatori) NU e supusa ferestrei si NU include 1a_fereastra.sql:
-#   manifestul se poate genera oricand, iar randurile lui nu depind de pas (un DO nu creeaza obiecte de catalog).
+#   orara (Europe/Bucharest, in afara orelor de lucru) e verificata local (2 in afara ei; sarita doar cu --doar-genereaza) si pe server
+#   (1a_fereastra.sql, generat de runner, primul in restul mesajului).
+# Runda 19 (verdictul Jakarinos pe PR #1169, r2): in runda 18 GENERAREA (--iesire) era scutita de fereastra ("doar pe clona") - dar nimic nu
+#   verifica ca tinta e o clona, deci --iesire cu endpointul productiei lua lock-urile migrarii cu plafonul 15000 oricand (ROLLBACK-ul nu
+#   anuleaza blocarea aplicatiei). Acum AMBELE moduri trec prin garda UNICA a bibliotecii (ag_plafon_garda, aceeasi ca in runner), inaintea
+#   oricarei conexiuni, si AMBELE poarta 1a_fereastra.sql: plafonul extins pe orice tinta conectata = doar in fereastra. Manifestul nu se
+#   schimba (un DO nu creeaza obiecte de catalog); costul: generarea pe clona cu plafonul extins se face si ea in fereastra.
 # ============================================================================
 set -Eeuo pipefail
 umask 077
@@ -88,15 +91,14 @@ chmod 700 "$W"
 # shellcheck source=livrare_amprenta.sh
 . "$ROOT/scripts/livrare_amprenta.sh"
 # Runda 16: aceeasi forma ca livrarea cu amprenta globala => acelasi plafon, EXACT AG_PLAFON_MS (o singura definitie).
-# Runda 18: cu --plafon-extins EXACT AG_PLAFON_EXTINS_MS; fereastra orara, local, doar la proba pe tinta (--compara-cu) si doar daca se conecteaza.
-AG_PL_MSG="$(ag_plafon_ok "$PLAFON_MS" $([ "$EXTINS" = 0 ] || echo extins) 2>&1)" || refuz 2 "$AG_PL_MSG"
+# Runda 18: cu --plafon-extins EXACT AG_PLAFON_EXTINS_MS. Runda 19: garda UNICA (ag_plafon_garda, ca in runner) pentru AMBELE moduri: valoarea
+# + fereastra orara pe orice cale care se conecteaza (--iesire SI --compara-cu, orice tinta); "neconectat" DOAR cu --doar-genereaza.
+CONECTAT=1; [ -z "$GEN" ] || CONECTAT=0
+AG_PL_MSG="$(ag_plafon_garda "$PLAFON_MS" "$EXTINS" "$CONECTAT" 2>&1)" || refuz 2 "$AG_PL_MSG"
+[ -z "$AG_PL_MSG" ] || echo "[ok] $AG_PL_MSG (orice tinta, --iesire sau --compara-cu; pe server o reverifica 1a_fereastra.sql)"
 if [ -n "$CMP" ]; then
   ag_manifest_valid "$CMP" || refuz 2 "--compara-cu: manifestul dat nu are formatul corect"
   tr -d '\r' <"$CMP" | grep -v '^#' | grep -v '^$' | LC_ALL=C sort >"$W/manifest_dat.tsv" || true
-  if [ "$EXTINS" = 1 ] && [ -z "$GEN" ]; then
-    AG_FER_MSG="$(ag_fereastra_ok 2>&1)" || refuz 2 "$AG_FER_MSG"
-    echo "[ok] $AG_FER_MSG (proba pe tinta; pe server o reverifica 1a_fereastra.sql)"
-  fi
 fi
 PL=(); [ -z "$PLAFON_MS" ] || PL=(--plafon-tranzactie-ms "$PLAFON_MS")
 [ "$EXTINS" = 0 ] || PL+=(--plafon-extins)
@@ -113,8 +115,8 @@ if [ -n "$PLAFON_MS" ]; then
   # shellcheck source=livrare_mesaj.sh
   . "$ROOT/scripts/livrare_mesaj.sh"
   REST="$W/m_rest.sql"
-  # runda 18: fereastra pe server doar la PROBA pe tinta (--compara-cu); la generarea pe clona (--iesire) nu (vezi antetul)
-  { if [ "$EXTINS" = 1 ] && [ -n "$CMP" ]; then cat "$W/g/1a_fereastra.sql"; fi; cat "$W/g/1_pre.sql"; cat "$W/2_ag_inainte.sql"; } >"$REST"
+  # runda 19: fereastra pe server in AMBELE moduri (--iesire si --compara-cu), cu plafonul extins (vezi antetul)
+  { [ "$EXTINS" = 0 ] || cat "$W/g/1a_fereastra.sql"; cat "$W/g/1_pre.sql"; cat "$W/2_ag_inainte.sql"; } >"$REST"
   POZ="$(lm_octeti "$REST")"
   { cat "$COPIE"; lm_sep; cat "$W/g/3_inreg.sql"; cat "$W/4_ag_dupa.sql"; lm_timp "$NUME"; lm_fin "$NUME" "$PLAFON_MS" ROLLBACK lock; } >>"$REST" \
     || refuz 3 "restul mesajului"

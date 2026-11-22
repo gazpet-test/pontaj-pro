@@ -398,6 +398,7 @@ Celelalte **semnale** (EXECUTE dinamic, vederi, alt limbaj) nu sunt refuz automa
 2. **Citirea pe producție**, fără DDL concurent: `amprenta_globala_citire.sh … --lista [--amprente-migrare …] --radacina … > citire_prod.txt`.
 3. **Manifestul pe clonă** (clona adusă la starea producției): `livrare_l15_manifest.sh … --iesire supabase/migrations/<NUME>.l15.tsv
    --detalii <în afara repo-ului>/<NUME>.l15.detalii.txt`; apoi citirea clonei cu `--lista` (aceleași rădăcini) `> citire_clona.txt`.
+   Cu `--plafon-extins` (runda 19): și generarea se face doar în fereastra orară (procedura de mai jos), ca orice rulare conectată.
 4. `l15_compara_liste.sh --a citire_clona.txt --b citire_prod.txt --manifest supabase/migrations/<NUME>.l15.tsv` ⇒ **`COMPARABIL`**.
 5. **PR de baseline** pentru review (câte unul pe migrare), cu:
    - manifestul (fișierul) + sha256-ul lui și al migrării;
@@ -443,6 +444,26 @@ Celelalte **semnale** (EXECUTE dinamic, vederi, alt limbaj) nu sunt refuz automa
 9. Refuz la **„înainte”** (`AMPRENTA_GLOBALA_INAINTE`): catalogul s-a schimbat după recitire — compară md5-urile pe familii din mesaj cu
    `citire_ziua.txt`, recitește (pasul 6) și, dacă partea revizuită diferă, refă PR-ul de baseline. Refuz la **„după”**: lista spune exact
    ce diferă (`NEDECLARAT` / `ABSENT` / `ALTFEL`); analiză înainte de orice reîncercare.
+
+### Livrarea cu plafonul extins (`--plafon-extins`, 15000 ms; runda 19, riscul rezidual din verdictul Jakarinos pe PR #1169, r2)
+
+Se aplică ORICĂREI rulări conectate cu `--plafon-extins` — manifestul pe clonă (pasul 3), proba cu ROLLBACK pe țintă (pasul 7) și aplicarea
+(pasul 8). Uneltele refuză singure în afara ferestrei (local și pe server, secțiunea 9); restul procedurii e al coordonatorului:
+1. **Doar în fereastra 21:00–06:00 Europe/Bucharest**, cu rezervă: tranzacția pornește cel târziu la ~05:55 (pasul serverului verifică
+   momentul BEGIN-ului, iar tranzacția poate dura până la ~15 s plus COMMIT-ul).
+2. **Observatorul, pornit ÎNAINTE de rulare:** o a doua sesiune pe aceeași țintă, care nu scrie nimic (singura ei acțiune e oprirea de la pasul 3), care la ~50 ms citește `pg_locks` +
+   `pg_stat_activity` (filtru pe PID-ul livrării — sesiunea a cărei `query` conține marcajul verificării „un mesaj”, `$mesaj_unic$` — și
+   pe relațiile pe care migrarea le blochează) și scrie în jurnal: momentul primei apariții a fiecărui lock
+   puternic, al dispariției lui (eliberarea reală) și câte sesiuni ale aplicației așteaptă (`wait_event_type = 'Lock'`) și de cât timp
+   (= blocarea aplicației). Comenzile exacte le are coordonatorul (secțiunea 9, „Riscul”).
+3. **Oprire manuală:** dacă blocarea măsurată de observator (un lock puternic ținut sau o sesiune a aplicației care așteaptă) depășește
+   plafonul (`AG_PLAFON_EXTINS_MS` = 15.000 ms de la prima apariție), coordonatorul oprește livrarea din sesiunea observatorului cu
+   `pg_cancel_backend(<PID-ul livrării>)` (dacă nu răspunde, `pg_terminate_backend`; observatorul rulează cu rolul livrării sau cu un rol
+   care are `pg_signal_backend`, verificat înainte) — tranzacția se anulează, nimic comis. Oprirea poate
+   prinde și COMMIT-ul (neplafonat): după orice oprire starea e **necunoscută** (L05) până când reconcilierea runnerului / o recitire o
+   stabilește; nu se reîncearcă înainte.
+4. **În jurnalul livrării:** ora de început, jurnalul observatorului (blocarea maximă măsurată, câte sesiuni au așteptat), timpii runnerului
+   (`PLAFON_TIMP`, `LOCK_TINUT`) și, dacă a fost cazul, momentul și motivul opririi.
 
 GLOBAL **nu** se pune în repo ca valoare de durată: se schimbă zilnic din cauza platformei (limita 12). În repo stau manifestul și
 acceptările; GLOBAL-ul folosit la aplicare e cel al recitirii din ziua livrării, consemnat în jurnalul ei.
@@ -724,10 +745,22 @@ la ~15 s — în orele de lucru asta ar opri pontajul / rapoartele; după 21:00 
    opțiune refuză un mesaj care l-ar conține.
 Ceasul local și cel al serverului dau același verdict la aceeași secundă (proba PGlite compară ora serverului cu regula din bash pe 13
 momente fixe, inclusiv trecerile la ora de vară / iarnă din 2026 și 2027). **Când se sare verificarea locală:** `--genereaza-in` (runnerul nu se
-conectează; fișierele poartă oricum pasul serverului) și, la generatorul de manifest, `--doar-genereaza`. **Unde NU se aplică fereastra:**
-generarea manifestului pe CLONĂ (`livrare_l15_manifest.sh --iesire`, ROLLBACK, fără utilizatori) — fără verificare locală și fără pasul
-serverului, ca manifestul să se poată genera oricând (rândurile lui nu depind de pas: un `DO` nu creează obiecte de catalog). Proba pe țintă
-(`--compara-cu`, ia aceleași lock-uri ca livrarea) are amândouă verificările.
+conectează; fișierele poartă oricum pasul serverului) și, la generatorul de manifest, `--doar-genereaza`. Nicio altă excepție (runda 19, mai jos).
+
+**O singură gardă pe toate căile (runda 19, verdictul Jakarinos pe PR #1169, r2).** În runda 18 generarea manifestului (`--iesire`) era scutită
+de fereastră pe motiv că rulează „doar pe clonă” — dar nimic nu verifica faptul că ținta e o clonă, deci `--iesire` cu endpointul producției
+ar fi luat lock-urile migrării cu plafonul 15000 oricând (ROLLBACK-ul de la final nu anulează blocarea aplicației din timpul tranzacției).
+Acum valoarea plafonului și fereastra trec printr-o SINGURĂ funcție a bibliotecii, `ag_plafon_garda <plafon> <extins> <conectat>`, apelată
+identic de runner (livrarea, cu `--sha256` sau `--aprobare`) și de generatorul de manifest în AMBELE moduri (`--iesire`, cu sau fără
+`--detalii`, și `--compara-cu`, cu sau fără `--amprenta-globala`), în blocul argumentelor, înaintea oricărei conexiuni; „neconectat” (fără
+verificarea orei) DOAR la `--genereaza-in` / `--doar-genereaza`, care ies înaintea oricărui `psql`. Ambele moduri ale generatorului poartă și
+pasul serverului `1a_fereastra.sql` (manifestul nu se schimbă: un `DO` nu creează obiecte de catalog). Argumente în afara listei (`0|1`) =
+refuz (fail-closed). **De ce nu „plafon extins fără fereastră pe o clonă identificată”** (alternativa din verdict): identificatorul de
+sistem e dat de operator, iar o listă de respingere (`system_identifier` ≠ cel al producției) e fail-open — dacă identificatorul producției
+se schimbă (restaurare, upgrade de platformă, proiect nou) sau e scris greșit, producția ar trece drept clonă; o listă de permisiuni pe
+clone ar cere actualizare la fiecare clonă nouă, iar o clonă fizică are oricum același identificator ca sursa. Garda unică nu depinde de
+nicio informație despre țintă. **Costul acceptat:** și generarea manifestului pe clonă cu plafonul extins se face în fereastră (o dată pe
+migrare, în aceeași seară cu proba).
 
 **Acordul runner ↔ generator ↔ validator ↔ gărzile migrării (nicio cale de nepotrivire tăcută), în plus față de runda 16:**
 - runnerul și generatorul: `--plafon-extins` (fără valoare, o singură dată) DOAR împreună cu `--amprenta-globala` + `--diferente-globale`;
@@ -751,18 +784,27 @@ serverului, ca manifestul să se poată genera oricând (rândurile lui nu depin
 **Ce NU se schimbă:** bugetul de lock (1 s de la prima încercare, `BUGET_LOCK`) și `LOCK_TINUT` (diagnostic, nu gardă) rămân exact ca în runda
 16 — plafonul extins nu dă voie la lock-uri obținute mai greu; dă doar timp calculelor fixe ale amprentei și corpului. **Consecința acceptată:**
 sub plafonul extins lock-urile puternice pot fi ținute până la ~15 s (de aici fereastra orară); observatorul extern din altă sesiune (secțiunea
-„Riscul”) rămâne obligatoriu la proba pe producție.
+„Riscul”) rămâne obligatoriu la proba pe producție. **Risc rezidual (verdictul Jakarinos pe PR #1169, r2):** bugetul de 1 s limitează doar
+OBȚINEREA lock-urilor, nu ținerea lor — acestea rămân până la COMMIT / ROLLBACK, iar COMMIT-ul propriu-zis nu e plafonat (`LOCK_TINUT` e
+diagnostic, nu gardă). De aceea orice rulare cu plafonul extins pe producție (proba cu ROLLBACK și aplicarea) urmează procedura din
+secțiunea 7, „Livrarea cu plafonul extins”: doar în fereastră, cu observator și cu oprire manuală.
 
 **Limite declarate:** (1) verificarea locală se bazează pe ceasul mașinii de livrare (NTP) și pe regula UE a orei de vară (Directiva
 2000/84/CE; dacă UE ar renunța la ora de vară, regula din bibliotecă și tzdata ar diverge — verificarea încrucișată cu tzdata, unde există,
 refuză atunci); (2) verificarea serverului folosește tzdata PostgreSQL (`Europe/Bucharest`), întreținut de platformă; (3) un operator care
-ocolește deliberat runnerul nu e oprit (gardă de PROTOCOL, ca restul); (4) generarea manifestului pe clonă nu e supusă ferestrei (declarat
-mai sus).
+ocolește deliberat runnerul nu e oprit (gardă de PROTOCOL, ca restul); (4) runda 19: generarea manifestului e supusă ferestrei ca orice cale
+conectată (în runda 18 nu era — retras); (5) ceasul fals al testelor (un `date` pus primul în `PATH`) arată că oricine controlează mediul
+mașinii de livrare poate păcăli verificarea LOCALĂ — de aceea rămâne și verificarea serverului, pe ceasul lui, în tranzacție.
 
 **Probe (secțiunea 11):** `scripts/test_livrare_plafon_extins.sh` (biblioteca: 20 de momente fixe, granițele ferestrei, `ag_plafon_ok`, textul
 serverului, 8 mutanți prinși), `scripts/pglite/test_plafon_extins_local.mjs` (pasul serverului pe PGlite: 13 momente fixe, ora serverului = ora
-bibliotecii, tranzacția anulată la refuz, 5 mutanți pe text prinși), secțiunea 6 din `scripts/test_livrare_l15_forma.sh` (runnerul și
-generatorul fără PostgreSQL: argumentele, fereastra reală, `--genereaza-in`, acordul validatorului, `--iesire` / `--compara-cu`),
+bibliotecii, tranzacția anulată la refuz, 5 mutanți pe text prinși; runda 19: + `ag_plafon_garda` pe 12 cazuri cu ceas fals în proces și 3
+mutanți — 11 în total), secțiunea 6 din `scripts/test_livrare_l15_forma.sh` (runnerul și generatorul fără PostgreSQL: argumentele, fereastra
+pe ceas fals — 23:00 și 12:00 la fiecare rulare, nu ora reală —, `--genereaza-in`, acordul validatorului, `--iesire` / `--compara-cu`),
+`scripts/test_livrare_plafon_garda.sh` (runda 19: runnerul — livrarea cu `--sha256` / `--aprobare`, `--genereaza-in` — și generatorul în
+fiecare mod — `--iesire`, `--iesire --detalii`, `--compara-cu`, `--compara-cu --amprenta-globala`, `--doar-genereaza` în ambele, niciun mod /
+ambele — pe două ținte cu identificatori diferiți: la 12:00 refuz 2 `PLAFON_EXTINS_FEREASTRA` fără niciun apel `psql`, la 23:00 calea ajunge
+la `psql` cu pasul ferestrei între verificarea „un mesaj” și lock; 28 de scenarii + 6 mutanți pe runner / generator / bibliotecă, toți prinși),
 `scripts/test_livrare_validator_plafon.py` (`plafon_extins()`: cazuri minime, cele trei migrări, compatibilitatea pe tot repo-ul), probele
 PGlite ale celor trei migrări (plafonul extins pus de runner; 5000 și 2000 refuzate), testul static `src/amprentaGlobalaL15v2.test.js`.
 

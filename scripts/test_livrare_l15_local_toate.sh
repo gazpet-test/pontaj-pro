@@ -11,7 +11,8 @@
 #   PASS pglite_uscare: TOTUL OK
 #   PASS pglite_meteo: TOTUL OK
 #   (runda 18, 22.11.2026, plafonul extins) PASS plafon_extins: PASS test_livrare_plafon_extins; PASS pglite_plafon_extins: TOTUL OK test_plafon_extins_local
-#   PASS test_livrare_l15_local_toate (8/8)      => cod 0; altfel ESEC cu ultimele 20 de linii ale pasului si cod 1.
+#   (runda 19, verdictul Jakarinos pe PR #1169 r2) PASS plafon_garda: PASS test_livrare_plafon_garda
+#   PASS test_livrare_l15_local_toate (9/9)     => cod 0; altfel ESEC cu ultimele 20 de linii ale pasului si cod 1.
 # Probele pe PostgreSQL 17 real (test_livrare_l15_v2.sh <slot>, test_livrare_plafon.sh <slot>, test_portal_e1.sh) si cele pe clona
 # (supabase/tests/l15_aplicare_concurenta.sh, 20261225a_executie_uscare_doua_sesiuni.sh) NU sunt aici: cer un cluster / clona.
 set -uo pipefail
@@ -40,5 +41,6 @@ pas pglite_uscare 'TOTUL OK' node scripts/pglite/test_executie_uscare_local.mjs
 pas pglite_meteo 'TOTUL OK' node scripts/pglite/test_meteo_xweather_local.mjs
 pas plafon_extins 'PASS test_livrare_plafon_extins' bash scripts/test_livrare_plafon_extins.sh
 pas pglite_plafon_extins 'TOTUL OK test_plafon_extins_local' node scripts/pglite/test_plafon_extins_local.mjs
+pas plafon_garda 'PASS test_livrare_plafon_garda' bash scripts/test_livrare_plafon_garda.sh
 if [ "$OK" = "$N" ]; then echo "PASS test_livrare_l15_local_toate ($OK/$N)"; exit 0; fi
 echo "ESEC test_livrare_l15_local_toate ($OK/$N)"; exit 1

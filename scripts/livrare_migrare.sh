@@ -209,6 +209,10 @@
 #     consultativ ⇒ în afara ferestrei excepție, nimic comis. Validatorul primește și el --plafon-extins: artefactul trebuie să DECLARE opțiunea
 #     în antet (și invers, un artefact care o declară nu pleacă fără ea) ⇒ PLAFON_EXTINS_DIFERIT, refuz 3; acordul valorii rămâne PLAFON_DIFERIT.
 #     Bugetul de lock (1 s de la prima încercare) și LOCK_TINUT (diagnostic) NU se schimbă. Fără opțiune: NIMIC schimbat (paritate cu main).
+#   Runda 19 (verdictul Jakarinos pe PR #1169, r2 — fereastra ocolibilă prin generatorul de manifest): valoarea plafonului și fereastra trec
+#     printr-o SINGURĂ funcție din bibliotecă, ag_plafon_garda <plafon> <extins> <conectat>, apelată identic de runner și de generatorul de
+#     manifest în ORICE mod (--iesire și --compara-cu), înaintea oricărei conexiuni. Ținta (clonă sau producție) nu schimbă nimic: plafonul
+#     extins pe o cale conectată = doar în fereastră. Ora se sare DOAR fără conexiune (--genereaza-in aici, --doar-genereaza la generator).
 # Orice altă opțiune (-v, -f, -c, --set, -d URI, …) ⇒ refuz înainte de conexiune. Nu se acceptă URI-uri de conexiune.
 # Variabile respinse (pot schimba execuția/ținta pe ascuns): PGPASSWORD, PGOPTIONS, PGDATABASE, PSQLRC, PGHOSTADDR,
 # PGTARGETSESSIONATTRS, PGLOADBALANCEHOSTS, PGSERVICE, PGSERVICEFILE, PGSYSCONFDIR. PGHOST/PGPORT: eliminate explicit (unset)
@@ -289,11 +293,11 @@ if [ -n "$AG_MD5" ] || [ "$EXTINS" = 1 ]; then
   [ -f "$LIB_AG" ] || refuz 3 "biblioteca L15 v2 lipsește: $LIB_AG"
   # shellcheck source=livrare_amprenta.sh
   . "$LIB_AG"
-  AG_PL_MSG="$(ag_plafon_ok "$PLAFON_MS" $([ "$EXTINS" = 0 ] || echo extins) 2>&1)" || refuz 2 "$AG_PL_MSG"
-  if [ "$EXTINS" = 1 ] && [ -z "$GENEREAZA" ]; then
-    AG_FER_MSG="$(ag_fereastra_ok 2>&1)" || refuz 2 "$AG_FER_MSG"
-    echo "→ $AG_FER_MSG (verificată local; pe server o reverifică 1a_fereastra.sql, în tranzacție)"
-  fi
+  # Runda 19 (verdictul Jakarinos pe PR #1169, r2): garda UNICĂ din bibliotecă (aceeași în generatorul de manifest, în orice mod):
+  # valoarea plafonului + fereastra pe orice cale care se conectează; „neconectat” DOAR cu --genereaza-in (iese cu 40 înaintea oricărui psql).
+  CONECTAT=1; [ -z "$GENEREAZA" ] || CONECTAT=0
+  AG_PL_MSG="$(ag_plafon_garda "$PLAFON_MS" "$EXTINS" "$CONECTAT" 2>&1)" || refuz 2 "$AG_PL_MSG"
+  [ -z "$AG_PL_MSG" ] || echo "→ $AG_PL_MSG (verificată local; pe server o reverifică 1a_fereastra.sql, în tranzacție)"
 fi
 if [ -n "$APROBARE" ]; then
   [ -z "$SHA" ] || refuz 2 "--sha256 și --aprobare se exclud"

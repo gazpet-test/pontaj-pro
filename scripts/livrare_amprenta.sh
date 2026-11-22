@@ -89,6 +89,18 @@ ag_fereastra_ok() {
     echo "L15 v2: PLAFON_EXTINS_FEREASTRA: ora $AG_FEREASTRA_FUS e $h, in afara ferestrei $AG_FEREASTRA_DE-$AG_FEREASTRA_PANA - plafonul extins ($AG_PLAFON_EXTINS_MS ms) se livreaza doar in afara orelor de lucru; nimic trimis" >&2; return 2; }
   echo "L15 v2: plafon EXTINS $AG_PLAFON_EXTINS_MS ms; ora $AG_FEREASTRA_FUS $h in fereastra $AG_FEREASTRA_DE-$AG_FEREASTRA_PANA"
 }
+# ag_plafon_garda <plafon_ms|""> <extins: 0|1> <conectat: 0|1> - runda 19 (verdictul Jakarinos pe PR #1169, r2): O SINGURA garda a plafonului,
+# apelata de TOATE caile, inaintea oricarei conexiuni: runnerul (livrarea) si generatorul de manifest in ORICE mod (--iesire SI --compara-cu).
+# Valoarea = ag_plafon_ok; cu plafonul extins pe o cale care se CONECTEAZA, si fereastra orara (ag_fereastra_ok), oricare ar fi tinta: clona
+# nu se deosebeste local de productie (identificatorul e dat de operator), deci nicio tinta nu primeste plafonul extins in afara ferestrei.
+# Ora se sare DOAR pe caile fara conexiune (runnerul --genereaza-in, generatorul --doar-genereaza). Argumente in afara listei = refuz (fail-closed).
+# Iesire: 0 (pe stdout mesajul ferestrei, doar daca s-a verificat) / 2 (motivul pe stderr).
+ag_plafon_garda() {
+  case "${2:-}:${3:-}" in 0:0|0:1|1:0|1:1) ;; *) echo "L15 v2: ag_plafon_garda: argumente invalide (extins '${2:-}', conectat '${3:-}') - refuz" >&2; return 2 ;; esac
+  ag_plafon_ok "$1" $([ "$2" = 0 ] || echo extins) || return 2
+  [ "$2" = 1 ] && [ "$3" = 1 ] || return 0   # M_GARDA_CONECTAT
+  ag_fereastra_ok || return 2
+}
 # ag_fereastra_sql <NUME> - fisierul 1a_fereastra.sql (stdout): aceeasi fereastra verificata PE SERVER, pe ceasul lui, in tranzactie (dupa
 # verificarea „un mesaj”, inaintea lock-ului consultativ); in afara ferestrei = exceptie, nimic comis. Fara backslash, ASCII, functii si
 # operatori calificati (search_path-ul sesiunii nu e inca fixat aici). Momentul = transaction_timestamp() (= BEGIN).

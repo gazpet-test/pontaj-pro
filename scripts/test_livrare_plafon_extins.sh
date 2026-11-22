@@ -12,6 +12,10 @@
 #   * MUTANTI pe o copie a bibliotecii (fiecare inlocuire EXACT o data, altfel proba e nefunctionala): fara ora de vara; fereastra de la 20:00;
 #     06:00:00 inclus; „extins” accepta orice valoare; ultima duminica din martie = mereu 31; granita orei de vara cu > in loc de >=;
 #     OR -> AND in textul serverului; fusul schimbat in text — fiecare trebuie PRINS de verificarile de mai sus.
+#   * runda 19 (verdictul Jakarinos pe PR #1169, r2): ag_plafon_garda (garda UNICA a runnerului si a generatorului de manifest) pe un tabel de
+#     cazuri cu ceas fals in proces: fara extins doar valoarea; extins neconectat fara ora; extins conectat = ora (23:00 trece, 12:00 refuz 2);
+#     argumente in afara 0|1 = refuz 2; + 3 mutanti (fara ora, argumente invalide acceptate, fara verificarea valorii). Caile reale (runner,
+#     generator in fiecare mod) si mutantii pe ele: scripts/test_livrare_plafon_garda.sh.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="$ROOT/scripts/livrare_amprenta.sh"
@@ -94,6 +98,30 @@ verifica() (
   ! printf '%s' "$s" | grep -q '\\' || { echo "ag_fereastra_sql: backslash" >&2; exit 1; }
   ! LC_ALL=C printf '%s' "$s" | grep -q '[^ -~]' || { echo "ag_fereastra_sql: caractere non-ASCII" >&2; exit 1; }
   ! ag_fereastra_sql 'rau;nume' >/dev/null 2>&1 || { echo "ag_fereastra_sql cu nume invalid trebuie refuzat" >&2; exit 1; }
+  # runda 19 (verdictul Jakarinos pe PR #1169, r2): ag_plafon_garda <plafon> <extins> <conectat> - garda UNICA a runnerului si a generatorului.
+  # Ceas fals IN PROCES (ultimul pas: o functie `date` care inlocuieste doar momentul curent, `date -u +%s`); 12:00 / 23:00 Europe/Bucharest.
+  ZI_E="$(date -u -d '2026-11-23 10:00:00' +%s)"; NOAPTE_E="$(date -u -d '2026-11-23 21:00:00' +%s)"
+  date() { if [ "$#" = 2 ] && [ "$1" = -u ] && [ "$2" = +%s ]; then printf '%s\n' "$FALS_ACUM"; else command date "$@"; fi; }
+  while IFS='|' read -r pl ex co acum cod frag; do
+    case "$acum" in zi) FALS_ACUM="$ZI_E" ;; noapte) FALS_ACUM="$NOAPTE_E" ;; esac
+    rc=0; m="$(ag_plafon_garda "$pl" "$ex" "$co" 2>&1)" || rc=$?
+    if [ -z "$frag" ]; then ok=0; [ -z "$m" ] || ok=1; else ok=0; [[ "$m" == *"$frag"* ]] || ok=1; fi
+    [ "$rc" = "$cod" ] && [ "$ok" = 0 ] || { echo "ag_plafon_garda '$pl' '$ex' '$co' la $acum: cod $rc, '$m' (asteptat $cod, '${frag:-gol}')" >&2; exit 1; }
+  done <<'CAZURI'
+5000|0|1|zi|0|
+|0|1|zi|0|
+5000|0|0|zi|0|
+15000|1|0|zi|0|
+15000|1|1|noapte|0|plafon EXTINS 15000 ms; ora Europe/Bucharest 23:00:00 in fereastra
+15000|1|1|zi|2|PLAFON_EXTINS_FEREASTRA: ora Europe/Bucharest e 12:00:00
+15000|0|1|noapte|2|cere optiunea explicita --plafon-extins
+5000|1|0|noapte|2|--plafon-extins cere --plafon-tranzactie-ms 15000
+15000|1||noapte|2|argumente invalide
+15000|da|1|noapte|2|argumente invalide
+15000||1|noapte|2|argumente invalide
+15000|1|2|zi|2|argumente invalide
+CAZURI
+  unset -f date
 )
 
 verifica "$LIB" || fail 'biblioteca reala nu trece verificarile'
@@ -123,6 +151,9 @@ ultima duminica din martie = mereu 31~lu_m=$((31 - $(date -u -d "$an-03-31" +%u)
 granita orei de vara cu > in loc de >=~[ "$e" -ge "$dst0" ]~[ "$e" -gt "$dst0" ]
 OR -> AND in textul serverului~::pg_catalog.time OR v_ora OPERATOR~::pg_catalog.time AND v_ora OPERATOR
 alt fus in textul serverului~AT TIME ZONE '$AG_FEREASTRA_FUS'~AT TIME ZONE 'Europe/Chisinau'
+garda unica fara ora (runda 19)~[ "$2" = 1 ] && [ "$3" = 1 ] || return 0   # M_GARDA_CONECTAT~return 0   # M_GARDA_CONECTAT
+garda unica accepta argumente invalide (runda 19)~- refuz" >&2; return 2 ;; esac~- refuz" >&2 ;; esac
+garda unica fara verificarea valorii (runda 19)~ag_plafon_ok "$1" $([ "$2" = 0 ] || echo extins) || return 2~true || return 2
 EOF
 echo "PLX_MUTANTI: $n mutanti pe biblioteca, toti prinsi"
 echo 'PASS test_livrare_plafon_extins'

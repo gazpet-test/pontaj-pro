@@ -446,22 +446,43 @@ describe('runnerul — runda 18 (22.11.2026): plafonul EXTINS, doar cu --plafon-
   it('runnerul: flag fara valoare, DOAR cu L15, plafonul exact, fereastra locala (sarita doar la --genereaza-in), 1a_fereastra primul in rest, validatorul cu flag', () => {
     expect(RUN).toContain('if [ "$1" = --plafon-extins ]; then [ "$EXTINS" = 0 ] || refuz 2')
     expect(RUN).toContain('[ "$EXTINS" = 0 ] || [ -n "$AG_MD5" ] || [ -n "$GENEREAZA" ] || refuz 2 "--plafon-extins se folosește DOAR la livrările cu amprentă globală')
-    expect(RUN).toContain('AG_PL_MSG="$(ag_plafon_ok "$PLAFON_MS" $([ "$EXTINS" = 0 ] || echo extins) 2>&1)" || refuz 2 "$AG_PL_MSG"')
-    expect(RUN).toContain('if [ "$EXTINS" = 1 ] && [ -z "$GENEREAZA" ]; then\n    AG_FER_MSG="$(ag_fereastra_ok 2>&1)" || refuz 2 "$AG_FER_MSG"')
+    // runda 19: valoarea + fereastra prin garda UNICA a bibliotecii (vezi blocul „runda 19” de mai jos)
+    expect(RUN).toContain('CONECTAT=1; [ -z "$GENEREAZA" ] || CONECTAT=0\n  AG_PL_MSG="$(ag_plafon_garda "$PLAFON_MS" "$EXTINS" "$CONECTAT" 2>&1)" || refuz 2 "$AG_PL_MSG"')
     expect(RUN).toContain('[ "$EXTINS" = 0 ] || VAL_PLAFON+=(--plafon-extins)')
     expect(RUN).toContain('[ "$EXTINS" = 0 ] || ag_fereastra_sql "$NUME" > "$DIR/1a_fereastra.sql"')
     expect(RUN).toContain('{ [ "$EXTINS" = 0 ] || cat "$DIR/1a_fereastra.sql"; cat "$DIR/1_pre.sql"; } > "$DIR/m_rest.sql"')
     expect(RUN).toContain('[ "$EXTINS" = 0 ] || chmod 400 "$DIR/1a_fereastra.sql"')
     // fereastra verificata INAINTE de copie / validator / conexiune: in blocul argumentelor, inaintea lui mktemp
-    expect(RUN.indexOf('ag_fereastra_ok')).toBeLessThan(RUN.indexOf('DIR="$(mktemp -d)"'))
+    expect(RUN.indexOf('ag_plafon_garda')).toBeLessThan(RUN.indexOf('DIR="$(mktemp -d)"'))
   })
-  it('generatorul de manifest: flag, plafonul exact, fereastra doar la --compara-cu (local + 1a_fereastra); --iesire (clona) fara', () => {
+  it('generatorul de manifest (runda 19): flag, garda UNICA in AMBELE moduri (--iesire si --compara-cu), 1a_fereastra in ambele', () => {
     expect(MAN).toContain('if [ "$1" = --plafon-extins ]; then [ "$EXTINS" = 0 ] || refuz 2')
-    expect(MAN).toContain('AG_PL_MSG="$(ag_plafon_ok "$PLAFON_MS" $([ "$EXTINS" = 0 ] || echo extins) 2>&1)" || refuz 2 "$AG_PL_MSG"')
-    expect(MAN).toContain('if [ "$EXTINS" = 1 ] && [ -z "$GEN" ]; then\n    AG_FER_MSG="$(ag_fereastra_ok 2>&1)" || refuz 2 "$AG_FER_MSG"')
-    expect(MAN.indexOf('AG_FER_MSG="$(ag_fereastra_ok')).toBeGreaterThan(MAN.indexOf('if [ -n "$CMP" ]; then'))
+    expect(MAN).toContain('CONECTAT=1; [ -z "$GEN" ] || CONECTAT=0\nAG_PL_MSG="$(ag_plafon_garda "$PLAFON_MS" "$EXTINS" "$CONECTAT" 2>&1)" || refuz 2 "$AG_PL_MSG"')
+    // garda INAINTEA ramificarii pe mod (nu mai sta in blocul --compara-cu) si inaintea apelului psql
+    const g = MAN.indexOf('AG_PL_MSG="$(ag_plafon_garda')
+    expect(g).toBeLessThan(MAN.indexOf('if [ -n "$CMP" ]; then\n  ag_manifest_valid'))
+    expect(g).toBeLessThan(MAN.indexOf('"${PSQL_BIN:-psql}"'))
     expect(MAN).toContain('[ "$EXTINS" = 0 ] || PL+=(--plafon-extins)')
-    expect(MAN).toContain('{ if [ "$EXTINS" = 1 ] && [ -n "$CMP" ]; then cat "$W/g/1a_fereastra.sql"; fi; cat "$W/g/1_pre.sql"; cat "$W/2_ag_inainte.sql"; } >"$REST"')
+    expect(MAN).toContain('{ [ "$EXTINS" = 0 ] || cat "$W/g/1a_fereastra.sql"; cat "$W/g/1_pre.sql"; cat "$W/2_ag_inainte.sql"; } >"$REST"')
+    expect(MAN).not.toContain('[ -n "$CMP" ]; then cat "$W/g/1a_fereastra.sql"')
+  })
+  it('runda 19 (verdictul Jakarinos pe PR #1169, r2): O SINGURA garda - definita o data in biblioteca, apelata identic de runner si generator', () => {
+    const cod = t => t.replace(/^\s*#.*$/gm, '')
+    expect(LIB).toContain('ag_plafon_garda() {')
+    expect(LIB).toContain('[ "$2" = 1 ] && [ "$3" = 1 ] || return 0   # M_GARDA_CONECTAT')
+    expect(LIB).toContain('case "${2:-}:${3:-}" in 0:0|0:1|1:0|1:1) ;; *)')
+    // runner si generator: un singur apel al garzii, niciun apel direct la ag_plafon_ok / ag_fereastra_ok (ar ocoli garda comuna)
+    for (const [t, n] of [[RUN, 'runner'], [MAN, 'generator']]) {
+      expect((cod(t).match(/ag_plafon_garda /g) || []).length, n + ': un apel al garzii').toBe(1)
+      expect(/ag_plafon_ok|ag_fereastra_ok/.test(cod(t)), n + ': fara apel direct').toBe(false)
+    }
+    const TG = citeste('scripts/test_livrare_plafon_garda.sh')
+    expect(TG).toContain('PASS test_livrare_plafon_garda')
+    for (const m of ['--iesire', '--detalii', '--compara-cu', '--amprenta-globala', '--doar-genereaza', '--genereaza-in', '--aprobare']) expect(TG, m).toContain(m)
+    expect(TG).toContain('PLX_GARDA_MUTANTI')
+    expect(citeste('scripts/test_livrare_l15_local_toate.sh')).toContain('scripts/test_livrare_plafon_garda.sh')
+    expect(DOC).toContain('ag_plafon_garda')
+    expect(DOC).toContain('observator')
   })
   it('validatorul: --plafon-extins doar cu --plafon-tranzactie-ms, acordul declaratiei (PLAFON_EXTINS_DIFERIT) dupa acordul valorii, declaratia = cerere la --fara-plafon', () => {
     expect(VAL).toContain('PLAFON_EXTINS_OPT = "--plafon-extins"')
