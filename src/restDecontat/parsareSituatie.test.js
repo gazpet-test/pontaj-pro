@@ -326,6 +326,54 @@ describe('parseSituatieExcel — foaie de detaliu nerecunoscută lângă una val
     expect(recunoasteAntet([['Valoare contract', 'Valoare cumulat'], [1, 2]]).tabel).toBeNull() // aceeași familie (valoare) de două ori
     expect(recunoasteAntet([['Situație nr. 7'], ['Valoare totală', 20]]).tabel).toBeNull()
   })
+  // ── review #1165 r2 P1 (L12, L18): detecția parcurge ÎNTREAGA foaie, nu o fereastră de 80 de rânduri ──
+  // Rândurile introductive au O singură celulă (note înguste): o lățime calculată doar pe primele rânduri ar trunchia antetul de jos.
+  const NOTE = n => Array.from({ length: n }, (_, i) => [`Notă introductivă ${i + 1}`])
+  it('reproducerea review-ului r2: foaie validă (20) + „Detaliu” cu 81 de rânduri introductive, apoi antet cu „Cantitate” fără calificativ + articol 30 → problemă, complet = false', async () => {
+    const detaliuJos = { nume: 'Detaliu', rows: [...NOTE(81), ['Nr', 'Cod', 'Denumire', 'UM', 'Cantitate', 'Preț unitar', 'Valoare'], [1, 'B1', 'Lucrare B', 'm', 3, 10, 30]] }
+    const r = await parseSituatieExcel(xlsx([valida, detaliuJos]))
+    expect(r.foi).toEqual(['Valid'])
+    expect(r.total).toBe(20)
+    expect(r.complet).toBe(false)
+    expect(r.foi_fara_tabel).toEqual([]) // NU e copertă: tabelul există, doar că e după rândul 80
+    expect(r.foi_nerecunoscute).toEqual([{ foaie: 'Detaliu', rand: 82, gasite: ['nr', 'cod', 'denumire', 'um', 'pret_unitar', 'valoare'], lipsesc: ['cantitate_perioada'], ambigue: [] }])
+    expect(r.probleme).toHaveLength(1)
+    expect(r.probleme[0]).toMatchObject({ foaie: 'Detaliu', rand: 82 })
+    expect(r.probleme[0].motiv).toMatch(/^foaie de detaliu nerecunoscută .* \(foaia „Detaliu”, rândul 82: găsite \[nr, cod, denumire, um, pret_unitar, valoare\], lipsesc \[cantitate_perioada\]\)$/)
+  })
+  it('tabel RECUNOSCUT după rândul 80 (antet la rândul 82) se citește: total 50, complet = true, linia cu rândul ei', async () => {
+    const detaliuOk = { nume: 'Detaliu2', rows: [...NOTE(81), ANTET_OK, ['Obiectul: 02 B'], [1, 'B1', 'Lucrare B', 'm', 3, 10, 30], ['TOTAL', '', '', '', '', '', 30]] }
+    const r = await parseSituatieExcel(xlsx([valida, detaliuOk]))
+    expect(r.foi).toEqual(['Valid', 'Detaliu2'])
+    expect(r.linii.map(l => [l.foaie, l.rand, l.obiect_cod, l.cod, l.valoare])).toEqual([['Valid', 3, '01', 'A1', 20], ['Detaliu2', 84, '02', 'B1', 30]])
+    expect(r.total).toBe(50)
+    expect(r.total_doc).toBe(50)
+    expect(r.probleme).toEqual([])
+    expect(r.foi_nerecunoscute).toEqual([])
+    expect(r.foi_fara_tabel).toEqual([])
+    expect(r.complet).toBe(true)
+    expect(r.avertismente.map(a => a.motiv)).toEqual([expect.stringMatching(/^2 foi cu antet recunoscut \(Valid, Detaliu2\)/)])
+  })
+  it('singura foaie, cu antetul la rândul 301 → citită (nu „format nerecunoscut”); centralizatorul cu 2 familii după 100 de rânduri → tot nerecunoscut, nu copertă', async () => {
+    const r = await parseSituatieExcel(xlsx([{ nume: 'S', rows: [...NOTE(300), ANTET_OK, [1, 'A1', 'Lucrare A', 'm', 2, 10, 20]] }]))
+    expect(r.linii.map(l => [l.rand, l.cod, l.valoare])).toEqual([[302, 'A1', 20]])
+    expect(r.complet).toBe(true)
+    const centralizatorJos = { nume: 'Centralizator', rows: [...NOTE(100), ['Denumire obiect', 'Valoare'], ['Tronson A', 20], ['TOTAL', 20]] }
+    const r2 = await parseSituatieExcel(xlsx([valida, centralizatorJos]))
+    expect(r2.foi_fara_tabel).toEqual([])
+    expect(r2.foi_nerecunoscute).toEqual([{ foaie: 'Centralizator', rand: 101, gasite: ['denumire', 'valoare'], lipsesc: ['um', 'cantitate_perioada', 'pret_unitar'], ambigue: [] }])
+    expect(r2.complet).toBe(false)
+  })
+  it('recunoasteAntet pe rânduri brute: antetul după 200 de rânduri înguste e găsit cu toate coloanele (lățimea din toată foaia); tabelul de 2 familii după 150 de rânduri e văzut', () => {
+    const a = recunoasteAntet([...NOTE(200), ANTET_OK, [1, 'A1', 'x', 'm', 1, 3, 3]])
+    expect(a.ok).toBe(true)
+    expect([a.inceput, a.sfarsit, a.primulRandDate]).toEqual([200, 200, 201])
+    expect(a.coloane).toEqual({ nr: 0, cod: 1, denumire: 2, um: 3, pret_unitar: 5, cantitate_perioada: 4, cantitate_cumulat: -1, valoare: 6 })
+    const t = recunoasteAntet([...NOTE(150), ['Denumire', 'Valoare'], ['x', 1]])
+    expect(t.ok).toBe(false)
+    expect(t.tabel).toEqual({ rand: 151, gasite: ['denumire', 'valoare'] })
+    expect(t.cel_mai_bun).toBeNull()
+  })
   it('antetul documentului din mai multe foi: valorile diferite nu se aleg (null + avertisment); valorile egale sau unice se iau', async () => {
     const foaie = (nume, titlu, cod, v) => ({ nume, rows: [[titlu], ANTET_OK, [1, cod, 'Lucrare', 'm', 1, v, v]] })
     const r = await parseSituatieExcel(xlsx([foaie('F1', 'Situație de lucrări nr. 7 / octombrie 2026', 'A1', 10), foaie('F2', 'Situație de lucrări nr. 8 / 2026', 'A2', 20)]))
@@ -385,6 +433,18 @@ describe('parseDevizModificare (AA / NR / NCS) — refolosește parseDeviz și p
     const r = await parseDevizModificare({ name: 'aa.xlsx', arrayBuffer: async () => buf })
     expect(r.linii.map(l => [l.cod, l.cantitate])).toEqual([['TSA01A1', -3], ['TSD01B1', 7]])
     expect(r.negative).toBe(1)
+  })
+  // review #1165 r2 P1, aceeași clasă pe calea Excel: antetul catalogului se caută doar în primele 30 de rânduri (regula veche, pe main);
+  // parseDevizModificare cere explicit { antetOriunde: true } și citește devizul cu 35 de note deasupra. Așteptarea pentru calea implicită
+  // e scrisă de mână după regula veche (30 de rânduri → niciun articol), nu citită din cod (L25).
+  it('Excel cu antetul după rândul 30: parseDevizModificare îl citește (antetOriunde); parseDeviz implicit (catalog) rămâne ca pe main', async () => {
+    const note = Array.from({ length: 35 }, (_, i) => [`Notă ${i + 1}`])
+    const buf = xlsx([{ nume: 'Deviz AA', rows: [...note, ['Nr', 'Simbol', 'Denumire', 'UM', 'Cantitate'], [1, 'TSA01A1', 'Săpătură', 'mc', -3], [2, 'TSD01B1', 'Umplutură', 'mc', 7]] }])
+    const r = await parseDevizModificare({ name: 'aa.xlsx', arrayBuffer: async () => buf })
+    expect(r.linii.map(l => [l.cod, l.cantitate])).toEqual([['TSA01A1', -3], ['TSD01B1', 7]])
+    expect(r.negative).toBe(1)
+    expect(await parseDeviz({ name: 'aa.xlsx', arrayBuffer: async () => buf })).toEqual([])
+    expect(await parseDeviz({ name: 'aa.xlsx', arrayBuffer: async () => buf }, { cuSemn: true })).toEqual([]) // cuSemn singur nu schimbă calea Excel
   })
 })
 

@@ -119,7 +119,11 @@ export async function parseDevizDocx(arrayBuffer, optiuni) {
 }
 
 // ── .xls/.xlsx: best-effort pe antet (Nr, Cod/Simbol, Denumire, UM, Cantitate) ──
-export async function parseDevizExcel(arrayBuffer) {
+// Antetul se caută în primele RANDURI_ANTET_EXCEL rânduri ale foii (comportamentul istoric al catalogului). Cu opțiunea explicită
+// { antetOriunde: true } (DOAR Rest de decontat, parseDevizModificare) se caută în TOATĂ foaia, ca un deviz AA cu note lungi
+// deasupra tabelului să nu fie citit ca „fără articole” (review #1165 r2 P1, L12).
+const RANDURI_ANTET_EXCEL = 30
+export async function parseDevizExcel(arrayBuffer, { antetOriunde = false } = {}) {
   const _x = await import('xlsx-js-style')
   const XLSX = _x.default?.read ? _x.default : _x
   const wb = XLSX.read(arrayBuffer, { type: 'array' })
@@ -128,7 +132,8 @@ export async function parseDevizExcel(arrayBuffer) {
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, blankrows: false, defval: '' })
     // caută rândul de antet
     let hdr = -1, col = {}
-    for (let r = 0; r < Math.min(rows.length, 30); r++) {
+    const randuriAntet = antetOriunde ? rows.length : Math.min(rows.length, RANDURI_ANTET_EXCEL)
+    for (let r = 0; r < randuriAntet; r++) {
       const cells = rows[r].map(c => String(c).toLowerCase())
       const find = (kw) => cells.findIndex(c => kw.some(k => c.includes(k)))
       const ic = find(['cantitat']), iu = find(['u.m', 'um', 'unitat']), id = find(['denumire', 'articol', 'lucrar'])
@@ -193,14 +198,15 @@ export async function parseExtrasMateriale(file, { foaie } = {}) {
 }
 
 // ── Dispatcher pe tip fișier ──
-// optiuni (opțional): { cuSemn: true } = cantitățile / totalurile negative din .docx intră cu semn (DOAR Rest de decontat,
-// parseDevizModificare). Fără opțiune = comportamentul istoric al catalogului (linia negativă din .docx se sare). Pe Excel numerele
-// vin din celule prin num(), cu semnul lor, pe ambele căi (așa era și înainte: opțiunea nu schimbă calea Excel).
+// optiuni (opțional): { cuSemn: true } = cantitățile / totalurile negative din .docx intră cu semn; { antetOriunde: true } = pe Excel
+// antetul se caută în toată foaia, nu doar în primele 30 de rânduri (ambele DOAR Rest de decontat, parseDevizModificare).
+// Fără opțiuni = comportamentul istoric al catalogului (linia negativă din .docx se sare; antetul Excel în primele 30 de rânduri).
+// Pe Excel numerele vin din celule prin num(), cu semnul lor, pe ambele căi (așa era și înainte: cuSemn nu schimbă calea Excel).
 export async function parseDeviz(file, optiuni = {}) {
   const buf = await file.arrayBuffer()
   const nume = (file.name || '').toLowerCase()
   if (nume.endsWith('.docx')) return parseDevizDocx(buf, optiuni)
-  if (nume.endsWith('.xls') || nume.endsWith('.xlsx')) return parseDevizExcel(buf)
+  if (nume.endsWith('.xls') || nume.endsWith('.xlsx')) return parseDevizExcel(buf, optiuni)
   // fallback: încearcă docx (zip) apoi excel
-  try { return await parseDevizDocx(buf, optiuni) } catch (_) { return parseDevizExcel(buf) }
+  try { return await parseDevizDocx(buf, optiuni) } catch (_) { return parseDevizExcel(buf, optiuni) }
 }

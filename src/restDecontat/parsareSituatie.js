@@ -22,7 +22,8 @@ import { parseDeviz } from '../devizParser.js'
 /** Câmpurile unei linii acceptate de fn_rest_decontat_confirma_situatie (plus cheie / potrivire, puse de ecran după confirmare). */
 export const CAMPURI_LINIE_RPC = ['obiect_cod', 'deviz_cod', 'nr', 'cod', 'denumire', 'um', 'cantitate_perioada', 'cantitate_cumulat_doc', 'pret_unitar', 'valoare', 'tip_rand']
 export const COLOANE_OBLIGATORII = ['denumire', 'um', 'cantitate_perioada', 'pret_unitar', 'valoare']
-const RANDURI_CAUTARE_ANTET = 80
+// Detecția antetului / tabelului parcurge ÎNTREAGA foaie (tot `!ref`), fără limită de rânduri (review #1165 r2 P1): o limită ar
+// transforma un tabel aflat mai jos într-o „copertă” dovedită și liniile lui ar dispărea tăcut, cu `complet: true` (L12, L18).
 const LUNI = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie']
 
 /** text de antet normalizat: fără diacritice, litere mici, punctele și spațiile multiple → un spațiu */
@@ -86,7 +87,8 @@ const eRandGrup = row => !eRandGol(row) && !eRandDate(row) && row.every(c => c =
 const familie = cls => (cls && cls.startsWith('cantitate') ? 'cantitate' : cls && cls.startsWith('valoare') ? 'valoare' : cls)
 
 /**
- * Găsește blocul de antet al unei foi (rânduri 0-based [inceput, sfarsit], inclusiv) și coloanele pe clase.
+ * Găsește blocul de antet al unei foi (rânduri 0-based [inceput, sfarsit], inclusiv) și coloanele pe clase, căutând în TOATE
+ * rândurile foii (nicio fereastră: antetul poate sta după zeci de rânduri de note / titluri; lățimea se ia tot din toate rândurile).
  * rows = sheet_to_json(header:1, blankrows:true, defval:''); merges = sheet['!merges'] (celulele unite primesc valoarea din stânga-sus).
  * Întoarce { ok: true, inceput, sfarsit, primulRandDate, coloane } sau { ok: false, cel_mai_bun: {rand, gasite, lipsesc} | null, tabel }.
  * `tabel` (doar la ok: false) = primul rând care arată ca un antet de TABEL de articole — cel puțin 2 familii de coloane de tabel
@@ -104,10 +106,11 @@ export function recunoasteAntet(rows, merges = []) {
     const v = u ? rows[u[0]]?.[u[1]] : rows[r]?.[c]
     return v == null ? '' : v
   }
-  const latime = Math.max(0, ...rows.slice(0, RANDURI_CAUTARE_ANTET + 3).map(r => r.length))
+  let latime = 0
+  for (const row of rows) if (row && row.length > latime) latime = row.length
   const randAntet = r => Array.from({ length: latime }, (_, c) => cel(r, c))
   let celMaiBun = null, tabel = null
-  for (let r = 0; r < Math.min(rows.length, RANDURI_CAUTARE_ANTET); r++) {
+  for (let r = 0; r < rows.length; r++) {
     const frunza = randAntet(r)
     if (eRandGol(frunza) || eRandDate(frunza)) continue
     const clase = frunza.map(clasificaColoana)
@@ -266,7 +269,8 @@ export function antetDinFoi(anteturi) {
  * „format nerecunoscut …”; antet recunoscut dar nicio linie → Error (o situație goală nu intră tăcut).
  * Foile se împart în trei (L12, review #1165 r1 P1): `foi` (antet recunoscut, citite), `foi_nerecunoscute` (au un TABEL de articole —
  * vezi recunoasteAntet.tabel — sau un antet aproape bun, dar NU modelul Transgaz: fiecare intră în `probleme`, liniile ei lipsesc din
- * rezultat) și `foi_fara_tabel` (coperta / titluri / goale: excepția legitimă, fără problemă). `complet` = probleme.length === 0 —
+ * rezultat) și `foi_fara_tabel` (coperta / titluri / goale: excepția legitimă, fără problemă). O foaie e „fără tabel” DOAR dacă pe
+ * TOATĂ foaia (fiecare rând din `!ref`, review #1165 r2 P1) nu există niciun rând care arată a antet de tabel. `complet` = probleme.length === 0 —
  * o singură definiție: tot ce avea cifre (rând sau foaie) a devenit linie; false = rezultatul NU e situația întreagă, ecranul nu-l
  * tratează ca atare fără ca omul să vadă problemele.
  */
@@ -322,10 +326,12 @@ export async function parseSituatieExcel(arrayBuffer) {
  * Devizul unui act adițional / NR / NCS (DOCX sau XLS/XLSX): refolosește parseDeviz (catalogul F3) și PĂSTREAZĂ semnul
  * cantităților (diminuările sunt negative; „doar diferențe” se adună cu semn în BD) — DOAR aici, prin opțiunea explicită
  * { cuSemn: true }; catalogul (CatalogDevizPanel) apelează parseDeviz fără opțiune și sare linia negativă ca înainte.
+ * { antetOriunde: true }: pe Excel antetul se caută în TOATĂ foaia (nu în primele 30 de rânduri ale catalogului), ca un deviz cu note
+ * lungi deasupra tabelului să nu fie citit ca „fără articole” (aceeași clasă ca limita de 80 de rânduri din recunoasteAntet).
  * Fără articole = eroare, nu listă goală.
  */
 export async function parseDevizModificare(file) {
-  const arts = await parseDeviz(file, { cuSemn: true })
+  const arts = await parseDeviz(file, { cuSemn: true, antetOriunde: true })
   if (!Array.isArray(arts) || arts.length === 0) throw new Error(`format nerecunoscut: niciun articol de deviz în „${file?.name || 'fișier'}”`)
   const probleme = []
   const linii = arts.map((a, i) => {
