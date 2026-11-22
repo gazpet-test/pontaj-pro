@@ -9,7 +9,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // Sub opțiunea explicită { contabilizare: true } (DOAR Rest de decontat, parseDevizModificare) se aplică invariantul de contabilizare
 // din restDecontat/contabilizare.js (review #1165 r5); fără opțiune, catalogul rămâne identic cu main.
-import { eRandGol, eRandDate, randCandidat, tipRand, numar, RE_NUMAR_AMBIGUU, verificaContabilizare, randuriDeLaA1 } from './restDecontat/contabilizare.js'
+import { eRandGol, eRandDate, randCandidat, eMetaDocument, eTotalDovedit, tipRand, numar, RE_NUMAR_AMBIGUU, verificaContabilizare, randuriDeLaA1 } from './restDecontat/contabilizare.js'
 
 // Unități de măsură din deviz → (unitate de bază, factor de conversie spre bază).
 // ATENȚIE: multe articole de conducte/săpături sunt cotate în unități „×100":
@@ -35,6 +35,9 @@ const UM_DEFS = [
 ]
 const UM_ALT = UM_DEFS.map(d => d.re).join('|')
 const ART_RE = /^(\d{3})\s+([A-Z]{2,4}\d[A-Z0-9]*)\s+(.*)$/
+// Linie care ARATĂ a articol, dar nu respectă ART_RE (poziția nu are exact 3 cifre: „1000 TSD01B1 M 3”, „1 TSA01A1 MC 2”): sub
+// { contabilizare: true } e problemă (review #1165 r5 P1-4), nu paragraf sărit tăcut; pe calea catalogului se sare, ca pe main
+const ART_LARG_RE = /^\d{1,6}\s+[A-Z]{2,4}\d[A-Z0-9]*\s+\S/
 // linia de articol: eventual „[ N ]" (marcaj fază), apoi UNITATE, apoi CANTITATE
 const UM_RE = new RegExp('^(?:\\[\\s*\\d+\\s*\\]\\s*)?(' + UM_ALT + ')\\s+([\\d.,]+)')
 const TOTAL_RE = /Total=\s*([\d.,]+)/
@@ -71,7 +74,8 @@ const num = (s) => {
 //   Tot sub cuSemn: „Total=” se caută până la articolul / secțiunea următoare (nu doar în fereastra de 5 paragrafe), iar lipsa lui
 //   marchează articolul `incomplet: '<motiv>'` (valoare: null); un „Total=” de după articolul următor NU e luat drept al celui curent.
 // optiuni.contabilizare (implicit false): întoarce { articole, probleme } — o linie de articol (ART_RE) fără UM cunoscută + cantitate NU
-//   mai e sărită tăcut ca „resursă”: intră în probleme (paragraful, codul, restul liniei); omul decide. Implicit (catalog) se sare, ca pe main.
+//   mai e sărită tăcut ca „resursă”: intră în probleme (paragraful, codul, restul liniei); omul decide. La fel o linie care arată a articol
+//   dar nu respectă ART_RE (poziție cu alt număr de cifre, ART_LARG_RE — r5 P1-4). Implicit (catalog) ambele se sar, ca pe main.
 export function articoleDinParagrafe(paras, { cuSemn = false, contabilizare = false } = {}) {
   const umRe = cuSemn ? UM_RE_SEMN : UM_RE, totalRe = cuSemn ? TOTAL_RE_SEMN : TOTAL_RE
   const arts = [], probleme = []
@@ -82,7 +86,10 @@ export function articoleDinParagrafe(paras, { cuSemn = false, contabilizare = fa
     if ((m = p.match(OBIECT_RE))) obiect = { cod: m[1], nume: m[2].trim() }
     if ((m = p.match(DEVIZ_RE))) deviz = { cod: m[1], nume: m[2].trim() }
     const ma = p.match(ART_RE)
-    if (!ma) continue
+    if (!ma) {
+      if (contabilizare && ART_LARG_RE.test(p)) probleme.push({ paragraf: i + 1, motiv: `linie care arată a articol, dar poziția nu are 3 cifre (format neacceptat, sărită): „${p.slice(0, 60)}”` })
+      continue
+    }
     const [, nr, cod, rest] = ma
     const mu = rest.match(umRe)
     if (!mu) { // linie fără UM+cantitate = resursă (material/utilaj), o sărim — sub contabilizare e problemă, nu tăcere
@@ -153,7 +160,6 @@ export async function parseDevizDocx(arrayBuffer, optiuni) {
 // ca text se citesc cu `numar` (parseNumar, RO / EN, semn), nu cu `num` (care citește „1.234,5” drept 1,2345). Rezultatul devine
 // { articole, probleme, contabilizare }. FĂRĂ opțiune totul rămâne identic cu main (blankrows: false, num, rândurile sărite tăcut, array).
 const RANDURI_ANTET_EXCEL = 30
-const RE_TOTAL_DEVIZ = /^total\b/i
 const RE_UM_ANTET = /^u\.?\s?m\.?$/
 export async function parseDevizExcel(arrayBuffer, { antetOriunde = false, contabilizare = false } = {}) {
   const _x = await import('xlsx-js-style')
@@ -181,13 +187,13 @@ export async function parseDevizExcel(arrayBuffer, { antetOriunde = false, conta
       // foaie fără antet de deviz: implicit sărită (catalog, ca pe main); sub contabilizare fiecare rând ne-gol e „ignorat” cu motiv, iar
       // rândurile ei de articol le scoate invariantul la probleme (review #1165 r4 P1: foaia „Detaliu” fără antet dispărea tăcut)
       if (contabilizare) {
-        rows.forEach((row, r) => { if (!eRandGol(row)) cls(r, 'ignorat', 'foaie fără antet de deviz (Cantitate + UM)') })
+        rows.forEach((row, r) => { if (eRandGol(row)) return; if (eMetaDocument(row)) cls(r, 'meta_document'); else cls(r, 'ignorat', 'foaie fără antet de deviz (Cantitate + UM)') })
         const inv = verificaContabilizare(name, rows, clase)
         probleme.push(...inv.probleme); sumar[name] = inv.sumar
       }
       continue
     }
-    for (let r = 0; r < hdr; r++) { if (eRandGol(rows[r])) continue; if (eRandDate(rows[r])) cls(r, 'ignorat', 'deasupra antetului, cu cifre'); else cls(r, 'titlu') }
+    for (let r = 0; r < hdr; r++) { if (eRandGol(rows[r])) continue; if (eMetaDocument(rows[r])) cls(r, 'meta_document'); else if (eRandDate(rows[r])) cls(r, 'ignorat', 'deasupra antetului, cu cifre'); else cls(r, 'titlu') }
     cls(hdr, 'antet')
     for (let r = hdr + 1; r < rows.length; r++) {
       const row = rows[r]
@@ -197,7 +203,9 @@ export async function parseDevizExcel(arrayBuffer, { antetOriunde = false, conta
       const den = String(row[col.den] || '').trim()
       const cod = col.cod >= 0 ? String(row[col.cod] || '').trim() : ''
       if (contabilizare) {
-        if (RE_TOTAL_DEVIZ.test(den) || RE_TOTAL_DEVIZ.test(cod)) { cls(r, 'total'); continue }
+        // TOTAL doar cu dovadă (review #1165 r5 P1-2, aceeași regulă ca la situație): etichetă „Total …” ȘI fără cod de articol, fără UM
+        // din lista comună, fără cantitate; „Total station montaj | m | 3” merge mai departe ca articol sau problemă, nu total tăcut
+        if (eTotalDovedit({ etichete: [den, cod], cod, um, cantitati: [cant] })) { cls(r, 'total'); continue }
         if (Number.isNaN(cant)) { problema(r, `cantitate neinterpretabilă „${String(brutCant).trim()}”`, { cod, denumire: den }); continue }
         if (typeof brutCant === 'string' && RE_NUMAR_AMBIGUU.test(brutCant.trim())) { problema(r, `cantitate ambiguă (mii sau zecimale?) „${brutCant.trim()}”`, { cod, denumire: den }); continue }
         if (cant == null || !um || !den) {
