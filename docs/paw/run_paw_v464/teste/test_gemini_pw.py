@@ -813,8 +813,12 @@ class TestStructuraCiorna(unittest.TestCase):
         self.assertTrue(all(t in gp.TOKENI_ATAS or t == "terge" for t in gp.TOKENI_ELIMINA))
         # r5: singurul marcaj acceptat = cel citit din pagina reala (scris de mana din token_file_atribute.txt), nimic altceva; numele lui
         # contine chiar cuvantul "file", de aceea nu poate sta in nicio lista alba si are regula lui, legata de element si de valoarea goala
-        self.assertEqual(gp.MARCAJE_GOALE_PERMISE, (("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone"),))
+        # r8: + marcajul vazut la 5a pe 22.11.2026 (stare_22_11_dupa_instalare.txt, linia 1), cu forma valorii (identificator fara punct)
+        self.assertEqual([(t, c, n, f.pattern) for t, c, n, f in gp.MARCAJE_PERMISE],
+                         [("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone", ""),
+                          ("file-drop-indicator", (), "data-filedrop-id", "[A-Za-z0-9_-]{0,64}")])
         self.assertEqual(gp._cuvant("xapfileselectordropzone"), "file")
+        self.assertEqual(gp._cuvant("data-filedrop-id"), "file")
         self.assertEqual(gp.HREF_GAZDE_FARA_FISIER, ("google.com",))
 
     def test_stare_afiseaza_semnaturile(self):
@@ -993,7 +997,7 @@ def pagina_calibrare(stare, atribut_file=ATRIBUTE_DIV_REALE, zona_atr=ZONA_ATRIB
 
 
 LISTE_GOALE = dict(CONTROALE_CUNOSCUTE=(), STRUCTURA_CUNOSCUTA=(), TEXTE_CUNOSCUTE=())
-FARA_MARCAJ = dict(MARCAJE_GOALE_PERMISE=())                  # r5: fara regula marcajului = comportamentul r4 pe div-ul real
+FARA_MARCAJ = dict(MARCAJE_PERMISE=())                        # r5: fara regula marcajului = comportamentul r4 pe div-ul real
 ACTIUNI_TRIMITERE = ["goto", "click", "press Control+A", "press Delete", "insert", "press Enter"]
 
 
@@ -1275,8 +1279,8 @@ class TestSemnaleInainteDeListe(unittest.TestCase):
         # verdict trec la Enter (exact ce a gasit Jakarinos pe d50dda4e); pe cod: refuz fara nicio actiune (testat mai sus)
         with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
             src = f.read().decode("ascii")
-        bloc = ["    s = _semnal(n)", "    if s:", '        return ("semnal_in_editor:" + s if in_editor else s), ctrl']
-        tinta = '    return "element:" + sem, ctrl'
+        bloc = ["    s = _semnal(n)", "    if s:", '        return ("semnal_in_editor:" + s[0] if in_editor else s[0]), ctrl, s[1]']
+        tinta = '    return "element:" + sem, ctrl, ""'
         linii = [l.rstrip("\r") for l in src.split("\n")]
         ib = [k for k in range(len(linii) - 2) if linii[k:k + 3] == bloc]
         it = [k for k, l in enumerate(linii) if l == tinta]
@@ -1469,7 +1473,7 @@ class TestNumeFisierPesteTot(unittest.TestCase):
         # fiecare mutant readuce o lacuna din 86f6ff72 (sau o slabeste); scenariul lui pleaca la Enter pe mutant si e refuzat pe cod
         cazuri = (
             # clasele / id-ul nu se mai cauta dupa nume.extensie (r4): reproducerile "clasa" si "id"
-            ([("    if _nume_fisier(clase_id) is not None:", "    if False:")], (REPRO_R5["clasa"][0], REPRO_R5["id"][0])),
+            ([("    if f is not None:", "    if False:")], (REPRO_R5["clasa"][0], REPRO_R5["id"][0])),
             # valorile URL exceptate in intregime de la nume.extensie (r4): href blob si src
             ([("        if _nume_fisier(_fara_gazda_permisa(k, v)) is not None:",
                '        if k not in ("href", "src", "srcset") and _nume_fisier(a) is not None:')],
@@ -1581,8 +1585,8 @@ class TestMarcajDropZone(unittest.TestCase):
 
     def test_mutanti_marcaj_lasa_brief_ul_sa_plece(self):
         cazuri = (
-            # fara conditia de valoare goala: o valoare nevida pe marcaj pleaca
-            ([('        if n.attrs.get(k) != "":', "        if False:")], (DIV_FARA_NG % ' xapfileselectordropzone="1"',)),
+            # fara conditia de valoare goala (r8: forma valorii): o valoare nevida pe marcaj pleaca
+            ([('        if not forma.fullmatch(n.attrs.get(k) or ""):', "        if False:")], (DIV_FARA_NG % ' xapfileselectordropzone="1"',)),
             # fara conditia de element: acelasi atribut pe gem-icon / span / fieldset pleaca
             ([("        if n.tag != tag or set(c for c in _clase(n) if not _generat(c)) != set(clase):", "        if False:")],
              ('<gem-icon xapfileselectordropzone=""></gem-icon>', '<fieldset role="none" xapfileselectordropzone=""></fieldset>',
@@ -1970,7 +1974,13 @@ class TestEditorInsusi(unittest.TestCase):
         self.assertEqual(linii.count("    s = _semnal(n)"), 1)
         self.assertEqual(linii.count("def _motiv_element(n, ctrl, in_editor=False):"), 1)
         self.assertEqual(sum(l.count("_motiv_element(") for l in cod), 2)             # definitia + singurul apel
-        self.assertEqual(linii.count("        m, ctrl_copii = _motiv_element(n, ctrl, in_editor)"), 1)
+        self.assertEqual(linii.count("        m, ctrl_copii, sursa = _motiv_element(n, ctrl, in_editor)"), 1)
+        # r8: sursa afisata de `stare` vine din acelasi _semnal (al doilea element al rezultatului) si nu intra in nicio decizie:
+        # paza (verifica_fara_atasamente) nu citeste necunoscute_surse, iar _sursa_cuvant e apelata doar din _semnal
+        i_vf = linii.index("def verifica_fara_atasamente(info, semn_locator, moment):")
+        i_urm = next(k for k in range(i_vf + 1, len(linii)) if linii[k].startswith("def "))
+        self.assertFalse(any("surse" in l for l in linii[i_vf:i_urm]))
+        self.assertEqual(sum(l.count("_sursa_cuvant(") for l in cod), 3)             # definitia + cele doua apeluri (ambele in _semnal, mai jos)
         self.assertEqual(sum(l.count('"url(" in') for l in cod), 1)
         self.assertEqual(sum(l.count("n.tag in MEDIA") for l in cod), 1)
         i_sem = linii.index("def _semnal(n):")
@@ -1978,6 +1988,7 @@ class TestEditorInsusi(unittest.TestCase):
         corp_semnal = "\n".join(linii[i_sem:i_urm])
         self.assertIn('    if "url(" in _ascii(n.attrs.get("style")):', corp_semnal)
         self.assertIn("    if n.tag in MEDIA:", corp_semnal)
+        self.assertEqual(corp_semnal.count("_sursa_cuvant("), 2)                     # r8: sursa se calculeaza doar in _semnal
         i_me = linii.index("def _motiv_element(n, ctrl, in_editor=False):")
         i_s = linii.index("    s = _semnal(n)")
         self.assertLess(i_me, i_s)
@@ -2009,8 +2020,8 @@ class TestEditorInsusi(unittest.TestCase):
              (verdict, verdict_blob, pagina_calibrare("i", editor_atr=' style="background: url(/resource/1234)"'),
               zona_cu('<gem-icon style="background: url(blob:x)"></gem-icon>'), pagina(zona_atr=' style="background: url(blob:x)"'))),
             # (M2) = clasa de defect r6: editorul insusi e tratat ca "de incredere" (sarit din traseul unic): fundalul si atributul de pe el pleaca
-            ([("        m, ctrl_copii = _motiv_element(n, ctrl, in_editor)",
-               "        m, ctrl_copii = (None, ctrl) if any(n is e for e in editoare) else _motiv_element(n, ctrl, in_editor)")],
+            ([("        m, ctrl_copii, sursa = _motiv_element(n, ctrl, in_editor)",
+               '        m, ctrl_copii, sursa = (None, ctrl, "") if any(n is e for e in editoare) else _motiv_element(n, ctrl, in_editor)')],
              (verdict, verdict_blob, zona_cu(editor=editor_cu(' data-file-name="oferta.docx"')), zona_cu(editor=editor_cu(' title="oferta.docx"')))),
         )
         for inlocuiri, htmluri in cazuri:
@@ -2035,6 +2046,351 @@ class TestEditorInsusi(unittest.TestCase):
         with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", gp.CONTROALE_CUNOSCUTE + ("img[src]",)):
             self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu('<img src="x">'))), ("ciorna_necunoscuta", []))
         self.assertEqual(ruleaza_trimite(mut3, FakePg(pagina(editor=EDITOR_MEDIA[0][0])))[0], "ciorna_necunoscuta")
+
+
+# --- v4.6.4b / r8 (22.11.2026): 5a PICAT pe v4.6.4 instalat (A03E2B5C): pagina Gemini s-a schimbat dupa calibrarea din 21.11 ---
+# cele trei linii `necunoscut`, copiate EXACT din paw_v464_calibrare\stare_22_11_dupa_instalare.txt (chat NOU gol, Carbon, dupa Esc + F5,
+# de doua ori acelasi rezultat) - sursa independenta a fixture-urilor si a regulii de mai jos
+STARE_22_11 = (
+    "token_file:file-drop-indicator{data-filedrop-id}",
+    "token_incarca:gem-icon-button[type=onsurface]{menu-button gem-menu-button open gem-button gem-button-badge-size-small gem-butt}",
+    "semnal_in_editor:token_chip:div[role=textbox][aria-label=introdu o solicitare pentru gemini][contenteditable]"
+    "{ql-editor ql-blank textarea new-input-ui rich-query-formatting-enabled input-url}",
+)
+# ce se VEDE in captura, si doar atat (scris de mana din liniile de mai sus): clasele butonului "+" (a sasea e taiata: "gem-butt..."),
+# clasele si eticheta editorului gol; valoarea lui data-filedrop-id NU apare in captura
+CLASE_PLUS_22_11 = "menu-button gem-menu-button open gem-button gem-button-badge-size-small"
+CLASE_EDITOR_22_11 = "ql-editor ql-blank textarea new-input-ui rich-query-formatting-enabled input-url"
+ETICHETA_EDITOR_22_11 = "Introdu o solicitare pentru Gemini"
+FDI_22_11 = '<file-drop-indicator _ngcontent-ng-c1694197906="" data-filedrop-id="%s"%s></file-drop-indicator>'
+DOAR_MARCAJ_R5 = dict(MARCAJE_PERMISE=getattr(gp, "MARCAJE_PERMISE", ())[:1])   # = regulile din v4.6.4 instalat (fara data-filedrop-id)
+TOKEN_FDI = "token_file:file-drop-indicator{data-filedrop-id}"
+# valori de identificator (scrise de mana) cu care indicatorul trece: numar, gol, uuid, nume cu liniuta / underscore, 64 de caractere
+IDENTIFICATORI = ("1", "0", "", "4f3a0b2c-1d2e-4f5a-8b9c-0d1e2f3a4b5c", "drop_zone-7", "A", "x" * 64)
+
+
+def pagina_22_11(valoare="1", fdi_extra="", plus_extra="", editor_extra="", stare="i", extra_zona=""):
+    # pagina calibrata la 21.11 (cu datele reale ale zonei / div-ului / linkului) + ce a aratat 5a pe 22.11: indicatorul de drop cu
+    # data-filedrop-id, butonul "+" cu clasele vazute, editorul gol cu clasele si eticheta vazute. Fiecare inlocuire se face o singura data.
+    html = pagina_calibrare(stare)
+    inlocuiri = (
+        ("<file-drop-indicator></file-drop-indicator>", FDI_22_11 % (valoare, fdi_extra)),
+        ('<gem-icon-button type="onsurface"><button aria-label="\u00cenc\u0103rcare',
+         '<gem-icon-button type="onsurface" class="' + CLASE_PLUS_22_11 + '"' + plus_extra + '><button aria-label="\u00cenc\u0103rcare'),
+        ('<div class="ql-editor textarea" contenteditable="true" role="textbox"',
+         '<div class="' + CLASE_EDITOR_22_11 + '" aria-label="' + ETICHETA_EDITOR_22_11 + '" contenteditable="true" role="textbox"' + editor_extra),
+        ('<div class="input-area-container">', '<div class="input-area-container">' + extra_zona),
+    )
+    for vechi, nou in inlocuiri:
+        assert html.count(vechi) == 1, vechi
+        html = html.replace(vechi, nou)
+    return html
+
+
+class TestPagina2211(unittest.TestCase):
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def nod(self, html):
+        a = gp._Arbore()
+        a.feed(html)
+        return a.radacina.copii[0]
+
+    def stare_linii(self, html, mod=gp):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            mod.stare(FakePg(html))
+        return out.getvalue().splitlines()
+
+    def test_liniile_din_5a_sunt_semnale_nu_semnaturi_calibrabile(self):
+        # toate cele trei linii sunt semnale (token_...), cu {...}: nicio lista alba nu le poate acoperi (P1 r4) si niciuna nu e o
+        # semnatura `element:` / `text:` de trecut in liste -> listele raman cele de la 21.11 (test_listele_livrate_si_locatorul: 5 + 23 + 3)
+        for l in STARE_22_11:
+            self.assertTrue(l.startswith(("token_", "semnal_in_editor:token_")), l)
+            self.assertIn("{", l)
+        # liniile (2) si (3): partea afisata a lui {...} are EXACT 80 de caractere (limita r4-r7) si NU contine cuvantul din motiv
+        for l, cuvant in ((STARE_22_11[1], "incarca"), (STARE_22_11[2], "chip")):
+            acolade = l[l.index("{") + 1:-1]
+            self.assertEqual(len(acolade), 80, acolade)
+            self.assertNotIn(cuvant, acolade)
+            self.assertIsNone(gp._cuvant(acolade), acolade)
+        # linia (1): {...} intreg (16 caractere) = un singur atribut neafisat separat, fara clase, fara id -> sursa e NUMELE lui
+        self.assertEqual(STARE_22_11[0][STARE_22_11[0].index("{") + 1:-1], "data-filedrop-id")
+        self.assertEqual(gp._cuvant("data-filedrop-id"), "file")
+        # "open" si "input-url" (interpretarea din brief) NU sunt cuvinte de atasament si nu sunt verificate ca URL ("url(" doar in style)
+        for t in ("open", "input-url", "url", CLASE_PLUS_22_11, CLASE_EDITOR_22_11, gp._ascii(ETICHETA_EDITOR_22_11)):
+            self.assertIsNone(gp._cuvant(t), t)
+            self.assertIsNone(gp._nume_fisier(gp._ascii(t)), t)
+        self.assertNotIn("open", gp.TOKENI_ATAS)
+        self.assertNotIn("url", gp.TOKENI_ATAS)
+
+    def test_linia_1_se_reproduce_pe_v464_si_trece_pe_v464b(self):
+        # cu regulile din v4.6.4 instalat (fara marcajul data-filedrop-id), pagina din 22.11 da EXACT linia (1) din captura - si nimic
+        # altceva: butonul "+" si editorul cu clasele vazute trec (deci liniile (2) si (3) vin din afara partii afisate); refuz fara actiuni
+        for valoare in IDENTIFICATORI:
+            with mock.patch.multiple(gp, **DOAR_MARCAJ_R5):
+                i = self.an(pagina_22_11(valoare))
+                self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"]), (1, 1, 0, 0), msg=valoare)
+                self.assertEqual(i["necunoscute_detalii"], [STARE_22_11[0]], msg=valoare)
+                self.assertEqual(i["necunoscute_surse"], ["nume_atribut:data-filedrop-id=" + valoare.lower()], msg=valoare)
+                self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_22_11(valoare))), ("ciorna_necunoscuta", []), msg=valoare)
+                linii = self.stare_linii(pagina_22_11(valoare))
+                self.assertIn("  necunoscut " + STARE_22_11[0], linii)
+                self.assertIn("    sursa nume_atribut:data-filedrop-id=" + valoare.lower(), linii)
+            # v4.6.4b: regula marcajului -> 0 necunoscute in toate cele trei stari, paza OK, `trimite` ajunge la Enter
+            for stare in ("i", "ii", "iii"):
+                i = self.an(pagina_22_11(valoare, stare=stare))
+                self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"], i["necunoscute"]), (1, 1, 0, 0, 0),
+                                 msg=(valoare, stare, i["necunoscute_detalii"]))
+                self.assertEqual(gp.verifica_fara_atasamente(i, 0, "t"), 0)
+                self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_22_11(valoare, stare=stare), dupa_goto=pagina_22_11(valoare))),
+                                 (None, ACTIUNI_TRIMITERE), msg=(valoare, stare))
+        linii = self.stare_linii(pagina_22_11())
+        self.assertIn("necunoscute in zona: 0", linii)
+        self.assertIn("paza ciorna: OK (trimite ar continua)", linii)
+        self.assertFalse(any(l.startswith("    sursa") for l in linii))
+        # listele albe singure n-ar fi ajutat: file-drop-indicator E deja in STRUCTURA, iar semnatura cu {...} in liste nu acopera semnalul
+        self.assertIn("file-drop-indicator", gp.STRUCTURA_CUNOSCUTA)
+        with mock.patch.multiple(gp, **DOAR_MARCAJ_R5), mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", gp.STRUCTURA_CUNOSCUTA + (STARE_22_11[0].split(":", 1)[1],)):
+            self.assertEqual(self.an(pagina_22_11())["necunoscute_detalii"], [STARE_22_11[0]])
+            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_22_11())), ("ciorna_necunoscuta", []))
+
+    def test_pagina_22_11_cu_fisier_tot_ciorna_cu_atasamente(self):
+        # aceeasi pagina + un chip real (ca la 5b / stare_ii-iii cu fisier): numararea si refuzul raman neschimbate, inainte de orice actiune
+        for n, fisiere in ((1, ("a.txt",)), (2, ("a.txt", "b.png"))):
+            html = pagina_22_11(extra_zona="".join(chip(f) for f in fisiere))
+            i = self.an(html)
+            self.assertEqual(i["atasamente"], n)
+            with self.assertRaises(gp.GemEroare) as c:
+                gp.verifica_fara_atasamente(i, 0, "t")
+            self.assertEqual((c.exception.cod, c.exception.detaliu), ("ciorna_cu_atasamente", "t: %d atasament(e) in ciorna - nu trimit" % n))
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_cu_atasamente", []))
+            self.assertIn("atasamente in ciorna: %d" % n, " ".join(self.stare_linii(html)))
+        # chip-ul chiar in indicatorul de drop se numara; un semn fara chip in el = refuz
+        self.assertEqual(self.an(pagina_22_11(fdi_extra="", extra_zona="").replace("></file-drop-indicator>", ">" + chip("a.txt") + "</file-drop-indicator>"))["atasamente"], 1)
+        self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_22_11(), dupa_goto=pagina_22_11(extra_zona=chip("a.txt")))), ("ciorna_cu_atasamente", ["goto"]))
+
+    def test_indicatorul_de_drop_nu_poate_masca_un_atasament(self):
+        # scris de mana: tot ce se abate de la marcajul EXACT (nume, element fara clase, valoare identificator) sau poarta altceva = refuz
+        # fara nicio actiune, cu motivul si sursa asteptate. O valoare care nu e identificator readuce numele in cautare (linia din captura).
+        cazuri = (
+            # valoarea nu e identificator: nume.extensie, spatiu, punct, prea lunga, caractere din afara listei -> numele intra in cautare
+            (FDI_22_11 % ("oferta.docx", ""), TOKEN_FDI, "nume_atribut:data-filedrop-id=oferta.docx"),
+            (FDI_22_11 % ("a b", ""), TOKEN_FDI, "nume_atribut:data-filedrop-id=a b"),
+            (FDI_22_11 % ("1.2", ""), TOKEN_FDI, "nume_atribut:data-filedrop-id=1.2"),
+            (FDI_22_11 % ("x" * 65, ""), TOKEN_FDI, "nume_atribut:data-filedrop-id=" + "x" * 65),
+            (FDI_22_11 % ("a:b", ""), TOKEN_FDI, "nume_atribut:data-filedrop-id=a:b"),
+            (FDI_22_11 % ("a/b", ""), TOKEN_FDI, "nume_atribut:data-filedrop-id=a/b"),
+            (FDI_22_11 % ("\u0219", ""), TOKEN_FDI, "nume_atribut:data-filedrop-id=s"),
+            # valoarea e identificator, dar poarta un cuvant de atasament: verificata ca orice valoare (pasul 4)
+            (FDI_22_11 % ("file-1", ""), TOKEN_FDI, "valoare_atribut:data-filedrop-id=file-1"),
+            (FDI_22_11 % ("attachment", ""), "token_attach:file-drop-indicator{data-filedrop-id}", "valoare_atribut:data-filedrop-id=attachment"),
+            (FDI_22_11 % ("upload_7", ""), "token_upload:file-drop-indicator{data-filedrop-id}", "valoare_atribut:data-filedrop-id=upload_7"),
+            # alt element cu acelasi atribut: numele e cuvant de atasament
+            ('<div data-filedrop-id="1"></div>', "token_file:div{data-filedrop-id}", "nume_atribut:data-filedrop-id=1"),
+            ('<gem-icon data-filedrop-id="1"></gem-icon>', "token_file:gem-icon{data-filedrop-id}", "nume_atribut:data-filedrop-id=1"),
+            ('<toolbox-drawer data-filedrop-id=""></toolbox-drawer>', "token_file:toolbox-drawer{data-filedrop-id}", "nume_atribut:data-filedrop-id="),
+            ('<button aria-label="Trimite mesajul" data-filedrop-id="1"></button>', "token_file:button[aria-label=trimite mesajul]{data-filedrop-id}",
+             "nume_atribut:data-filedrop-id=1"),
+            # indicatorul cu clase (altele decat cele generate), cu id, cu alt nume de atribut (prefix / sufix / alt cuvant), cu doua atribute
+            (FDI_22_11 % ("1", ' class="x"'), "token_file:file-drop-indicator{x data-filedrop-id}", "nume_atribut:data-filedrop-id=1"),
+            (FDI_22_11 % ("1", ' id="preview-7"'), "token_preview:file-drop-indicator{#preview-7 data-filedrop-id}", "id:preview-7"),
+            (FDI_22_11 % ("1", ' id="oferta.docx"'), "atribut_fisier:file-drop-indicator{#oferta.docx data-filedrop-id}", "id:oferta.docx"),
+            ('<file-drop-indicator data-filedrop-name="1"></file-drop-indicator>', "token_file:file-drop-indicator{data-filedrop-name}",
+             "nume_atribut:data-filedrop-name=1"),
+            ('<file-drop-indicator data-filedrop-id-x="1"></file-drop-indicator>', "token_file:file-drop-indicator{data-filedrop-id-x}",
+             "nume_atribut:data-filedrop-id-x=1"),
+            ('<file-drop-indicator filedrop-id="1"></file-drop-indicator>', "token_file:file-drop-indicator{filedrop-id}", "nume_atribut:filedrop-id=1"),
+            (FDI_22_11 % ("1", ' data-file-name="oferta.docx"'), "token_file:file-drop-indicator{data-file-name data-filedrop-id}",
+             "nume_atribut:data-file-name=oferta.docx"),
+            (FDI_22_11 % ("1", ' removeattachment=""'), "token_attach:file-drop-indicator{data-filedrop-id removeattachment}", "nume_atribut:removeattachment="),
+            (FDI_22_11 % ("1", ' data-x="oferta.docx"'), "atribut_fisier:file-drop-indicator{data-filedrop-id data-x}", "valoare_atribut:data-x=oferta.docx"),
+            (FDI_22_11 % ("1", ' title="oferta.docx"'), "eticheta:file-drop-indicator[title=oferta.docx]", "eticheta:title=oferta.docx"),
+            (FDI_22_11 % ("1", ' aria-label="Remove file"'), "eticheta:file-drop-indicator[aria-label=remove file]", "eticheta:aria-label=remove file"),
+            (FDI_22_11 % ("1", ' style="background: url(x)"'), "fundal:file-drop-indicator", "style:background: url(x)"),
+            # marcajul r5 pe indicator / marcajul r8 pe div-ul r5: fiecare e permis DOAR pe elementul lui
+            ('<file-drop-indicator xapfileselectordropzone=""></file-drop-indicator>', "token_file:file-drop-indicator{xapfileselectordropzone}",
+             "nume_atribut:xapfileselectordropzone="),
+            (DIV_FARA_NG % ' data-filedrop-id="1"', "token_file:div{text-input-field simplified-input-area data-filedrop-id}", "nume_atribut:data-filedrop-id=1"),
+            # pe zona si pe editor
+        )
+        for extra, m, s in cazuri:
+            i = self.an(zona_cu(extra))
+            self.assertEqual((i["atasamente"], i["semne"]), (0, 0), msg=extra)
+            self.assertEqual(i["necunoscute_detalii"], [m], msg=extra)
+            self.assertEqual(i["necunoscute_surse"], [s], msg=extra)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra))), ("ciorna_necunoscuta", []), msg=extra)
+            # semnatura exacta a abaterii in liste: tot refuz (semnalele se verifica inaintea listelor)
+            with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", gp.STRUCTURA_CUNOSCUTA + (m.split(":", 1)[1],)):
+                self.assertEqual(self.an(zona_cu(extra))["necunoscute_detalii"], [m], msg=extra)
+        self.assertEqual(self.an(pagina(zona_atr=' data-filedrop-id="1"'))["necunoscute_detalii"], ["token_file:input-area-v2{data-filedrop-id}"])
+        self.assertEqual(self.an(zona_cu(editor=editor_cu(' data-filedrop-id="1"')))["necunoscute_detalii"],
+                         ["semnal_in_editor:token_file:div[role=textbox][contenteditable]{ql-editor textarea data-filedrop-id}"])
+        # continutul indicatorului se verifica in continuare: text cu fisier, imagine, card, text necunoscut
+        for inauntru, m in (("<span>a.txt</span>", "text_fisier:a.txt"), ('<img src="x">', "media:img[src]"),
+                            ("<attachment-card></attachment-card>", "element:attachment-card"), ("<span>Trage fisierele aici</span>", "text_atasament:trage fisierele aici"),
+                            ("<span>Arunca aici</span>", "text:arunca aici")):
+            html = zona_cu((FDI_22_11 % ("1", "")).replace("></file-drop-indicator>", ">" + inauntru + "</file-drop-indicator>"))
+            self.assertEqual(self.an(html)["necunoscute_detalii"], [m], msg=inauntru)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=inauntru)
+        # calea legitima (L20): indicatorul EXACT, gol sau cu clasa generata, cu fiecare identificator -> trece, ca element din STRUCTURA
+        for valoare in IDENTIFICATORI:
+            for extra in (FDI_22_11 % (valoare, ""), FDI_22_11 % (valoare, ' class="ng-star-inserted"'),
+                          '<file-drop-indicator data-filedrop-id="%s"></file-drop-indicator>' % valoare):
+                i = self.an(zona_cu(extra))
+                self.assertEqual(i["necunoscute"], 0, msg=(extra, i["necunoscute_detalii"]))
+        # fara regula (= v4.6.4): acelasi indicator e refuzat cu linia din captura; cu clasele mari (mutantul "doar tagul") NU: vezi mutantii
+        with mock.patch.multiple(gp, **DOAR_MARCAJ_R5):
+            self.assertEqual(self.an(zona_cu(FDI_22_11 % ("1", "")))["necunoscute_detalii"], [TOKEN_FDI])
+
+    def test_captura_e_consecventa_cu_o_sursa_dincolo_de_80_de_caractere(self):
+        # elementele construite DOAR din ce se vede in captura (clasele butonului "+", clasele + eticheta editorului) nu au niciun semnal:
+        # deci "incarca" / "chip" vin din partea taiata a lui {...} (clase sau atribute necunoscute). NU se excepteaza nimic pentru ele.
+        plus = '<gem-icon-button type="onsurface" class="%s"></gem-icon-button>' % CLASE_PLUS_22_11
+        editor = '<div class="%s" aria-label="%s" contenteditable="true" role="textbox"></div>' % (CLASE_EDITOR_22_11, ETICHETA_EDITOR_22_11)
+        self.assertIsNone(gp._semnal(self.nod(plus)))
+        self.assertIsNone(gp._semnal(self.nod(editor)))
+        self.assertEqual(gp._semnatura(self.nod(plus)), "gem-icon-button[type=onsurface]")               # = semnatura din linia (2)
+        self.assertEqual(gp._semnatura(self.nod(editor)), STARE_22_11[2].split(":", 2)[2].split("{")[0])  # = semnatura din linia (3)
+        # EXEMPLU de mecanism (numele atributelor / clasa de mai jos sunt INVENTATE, nu sursa reala): o a sasea clasa "gem-butt..." si un
+        # atribut cu "incarca" in valoare pe butonul "+", o clasa cu "chip" pe editor; cu latimea r7 (80) `stare` ar fi aratat EXACT liniile
+        # (2) si (3) din captura - fara sursa; cu r8 (400) {...} e intreg si linia `sursa` arata locul cuvantului
+        plus_ex = pagina_22_11(plus_extra=' tooltip="\u00cenc\u0103rcare \u0219i instrumente"').replace(
+            'class="' + CLASE_PLUS_22_11 + '"', 'class="' + CLASE_PLUS_22_11 + ' gem-button-onsurface"')
+        editor_ex = pagina_22_11().replace('class="' + CLASE_EDITOR_22_11 + '"', 'class="' + CLASE_EDITOR_22_11 + ' with-chips"')
+        with mock.patch.object(gp, "SEMNATURA_TOKEN_AFISATA", 80):
+            self.assertEqual(self.an(plus_ex)["necunoscute_detalii"], [STARE_22_11[1]])
+            self.assertEqual(self.an(editor_ex)["necunoscute_detalii"], [STARE_22_11[2]])
+        i = self.an(plus_ex)
+        self.assertEqual(i["necunoscute_detalii"], ["token_incarca:gem-icon-button[type=onsurface]{" + CLASE_PLUS_22_11 + " gem-button-onsurface tooltip}"])
+        self.assertEqual(i["necunoscute_surse"], ["valoare_atribut:tooltip=incarcare si instrumente"])
+        i = self.an(editor_ex)
+        self.assertEqual(i["necunoscute_detalii"], [STARE_22_11[2][:-1] + " with-chips}"])
+        self.assertEqual(i["necunoscute_surse"], ["clasa:with-chips"])
+        for html in (plus_ex, editor_ex):
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []))
+            linii = self.stare_linii(html)
+            k = next(j for j, l in enumerate(linii) if l.startswith("  necunoscut "))
+            self.assertTrue(linii[k + 1].startswith("    sursa "), linii[k:k + 2])
+        # o exceptie "larga" pe cuvantul url / pe clasa open n-ar fi avut niciun efect (nu sunt cuvinte), iar un nume de fisier sau un cuvant
+        # intr-o clasa a editorului ramane refuzat, oricare ar fi clasele vazute alaturi
+        for cl, m in (("oferta.docx", "semnal_in_editor:atribut_fisier:"), ("input-url file-chip", "semnal_in_editor:token_file:"),
+                      ("input-url-attachment", "semnal_in_editor:token_attach:")):
+            html = pagina_22_11().replace('class="' + CLASE_EDITOR_22_11 + '"', 'class="' + CLASE_EDITOR_22_11 + " " + cl + '"')
+            i = self.an(html)
+            self.assertEqual(i["necunoscute"], 1, msg=(cl, i["necunoscute_detalii"]))
+            self.assertTrue(i["necunoscute_detalii"][0].startswith(m), msg=(cl, i["necunoscute_detalii"]))
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=cl)
+
+    def test_sursa_afisata_pentru_fiecare_fel_de_semnal(self):
+        # scris de mana: pentru fiecare fel de semnal, motivul (neschimbat fata de r7) si sursa; motivele fara semnal n-au sursa
+        cazuri = (
+            ('<img src="x">', "media:img[src]", "tag:img"),
+            ('<gem-icon style="background: url(blob:x)"></gem-icon>', "fundal:gem-icon", "style:background: url(blob:x)"),
+            ('<button aria-label="Remove file"></button>', "eticheta:button[aria-label=remove file]", "eticheta:aria-label=remove file"),
+            ('<button aria-label="Trimite mesajul" title="oferta.pdf"></button>', "eticheta:button[aria-label=trimite mesajul][title=oferta.pdf]",
+             "eticheta:title=oferta.pdf"),
+            ('<gem-icon class="ng-star-inserted icon-card"></gem-icon>', "token_card:gem-icon{icon-card}", "clasa:icon-card"),
+            ('<gem-icon id="preview-7"></gem-icon>', "token_preview:gem-icon{#preview-7}", "id:preview-7"),
+            ('<gem-icon data-file-name="oferta.pdf"></gem-icon>', "token_file:gem-icon{data-file-name}", "nume_atribut:data-file-name=oferta.pdf"),
+            ('<prompt-flow-bar removeattachment=""></prompt-flow-bar>', "token_attach:prompt-flow-bar{removeattachment}", "nume_atribut:removeattachment="),
+            ('<gem-icon data-x="attachment"></gem-icon>', "token_attach:gem-icon{data-x}", "valoare_atribut:data-x=attachment"),
+            ('<gem-icon class="oferta.docx"></gem-icon>', "atribut_fisier:gem-icon{oferta.docx}", "clasa:oferta.docx"),
+            ('<gem-icon id="oferta.docx"></gem-icon>', "atribut_fisier:gem-icon{#oferta.docx}", "id:oferta.docx"),
+            ('<gem-icon data-x="oferta.docx"></gem-icon>', "atribut_fisier:gem-icon{data-x}", "valoare_atribut:data-x=oferta.docx"),
+            (LINK % "blob:https://gemini.google.com/oferta.docx", "atribut_fisier:a[data-test-id=footer-privacy-notice-link][href]{}",
+             "valoare_atribut:href=blob:https://gemini.google.com/oferta.docx"),
+            ('<gem-icon style="--x: oferta.docx"></gem-icon>', "atribut_fisier:gem-icon{style}", "valoare_atribut:style=--x: oferta.docx"),
+            # marcajul r5 permis alaturi de un atribut vinovat: sursa e atributul vinovat, nu marcajul
+            (DIV_FARA_NG % ' xapfileselectordropzone="" data-file-id="1"', "token_file:div{text-input-field simplified-input-area data-file-id xapfileselectordropzone}",
+             "nume_atribut:data-file-id=1"),
+            (DIV_FARA_NG % ' xapfileselectordropzone="1"', "token_file:div{text-input-field simplified-input-area xapfileselectordropzone}",
+             "nume_atribut:xapfileselectordropzone=1"),
+            # fara semnal: fara sursa
+            ("<attachment-card></attachment-card>", "element:attachment-card", ""),
+            ("<span>a.txt</span>", "text_fisier:a.txt", ""),
+            ("<span>Deep Research</span>", "text:deep research", ""),
+        )
+        for extra, m, s in cazuri:
+            i = self.an(zona_cu(extra))
+            self.assertEqual((i["necunoscute_detalii"], i["necunoscute_surse"]), ([m], [s]), msg=extra)
+            linii = self.stare_linii(zona_cu(extra))
+            k = linii.index("  necunoscut " + m)
+            if s:
+                self.assertEqual(linii[k + 1], "    sursa " + s, msg=extra)
+            else:
+                self.assertFalse(linii[k + 1].startswith("    sursa"), msg=extra)
+        # in editor: acelasi semnal, aceeasi sursa, cu prefixul contextului pe motiv
+        i = self.an(zona_cu(editor=editor_cu(' data-file-name="oferta.docx"')))
+        self.assertEqual((i["necunoscute_detalii"], i["necunoscute_surse"]),
+                         (["semnal_in_editor:token_file:div[role=textbox][contenteditable]{ql-editor textarea data-file-name}"], ["nume_atribut:data-file-name=oferta.docx"]))
+        # listele paralele au aceeasi lungime, si la mai multe necunoscute; sursa e ASCII si taiata
+        i = self.an(zona_cu(CARD_VERDICT + '<gem-icon data-x="' + "attachment" + "y" * 300 + '"></gem-icon>'))
+        self.assertEqual(len(i["necunoscute_detalii"]), len(i["necunoscute_surse"]))
+        self.assertEqual(i["necunoscute_surse"][-1], "valoare_atribut:data-x=" + ("attachment" + "y" * 300)[:gp.SURSA_AFISATA])
+        for s in i["necunoscute_surse"]:
+            s.encode("ascii")
+        # mesajul GEM_EROARE ramane cel de pana acum (primele trei motive), fara sursa
+        with self.assertRaises(gp.GemEroare) as c:
+            gp.verifica_fara_atasamente(i, 0, "t")
+        self.assertNotIn("sursa", c.exception.detaliu)
+
+    def test_semnatura_token_intreaga(self):
+        # r8: {...} nu se mai taie la 80 (sursa liniilor (2) / (3) era exact acolo); se taie abia la 400, iar linia la 600
+        clase = " ".join("clasa-%02d-lunga" % k for k in range(12))                   # 12 x 14 + 11 = 179 caractere
+        self.assertGreater(len(clase), 80)
+        extra = '<gem-icon class="%s" data-file-name="x"></gem-icon>' % clase
+        i = self.an(zona_cu(extra))
+        self.assertEqual(i["necunoscute_detalii"], ["token_file:gem-icon{" + clase + " data-file-name}"])
+        with mock.patch.object(gp, "SEMNATURA_TOKEN_AFISATA", 80):
+            self.assertEqual(self.an(zona_cu(extra))["necunoscute_detalii"], ["token_file:gem-icon{" + (clase + " data-file-name")[:80] + "}"])
+        prea = " ".join("c%03d" % k for k in range(120))                               # 599 caractere
+        i = self.an(zona_cu('<gem-icon class="%s" data-file-name="x"></gem-icon>' % prea))
+        self.assertEqual(len(i["necunoscute_detalii"][0]), len("token_file:gem-icon{}") + gp.SEMNATURA_TOKEN_AFISATA)
+        self.assertEqual((gp.SEMNATURA_TOKEN_AFISATA, gp.DETALIU_AFISAT, gp.SURSA_AFISATA), (400, 600, 160))
+
+    def test_mutanti_r8_lasa_brief_ul_sa_plece(self):
+        # fiecare mutant slabeste regula marcajului data-filedrop-id (sau o largeste la "wildcard"); scenariul lui pleaca la Enter pe mutant,
+        # refuz fara actiuni pe cod
+        fdi = lambda v, extra="": zona_cu(FDI_22_11 % (v, extra))
+        cazuri = (
+            # (M1) fara forma valorii: o valoare care nu e identificator (spatiu / punct / lunga) pleaca - si marcajul r5 cu valoare nevida
+            ([('        if not forma.fullmatch(n.attrs.get(k) or ""):', "        if False:")],
+             (fdi("a b"), fdi("1.2"), fdi("x" * 65), zona_cu(DIV_FARA_NG % ' xapfileselectordropzone="1"'))),
+            # (M2) fara conditia de element: acelasi atribut pe gem-icon / pe indicator cu clasa / pe zona pleaca
+            ([("        if n.tag != tag or set(c for c in _clase(n) if not _generat(c)) != set(clase):", "        if False:")],
+             (zona_cu('<gem-icon data-filedrop-id="1"></gem-icon>'), fdi("1", ' class="x"'), pagina(zona_atr=' data-filedrop-id="1"'))),
+            # (M3) numele comparat ca prefix: un atribut cu sufix pleaca
+            ([("        if k != nume:", "        if not k.startswith(nume):")],
+             (zona_cu('<file-drop-indicator data-filedrop-id-x="1"></file-drop-indicator>'),
+              zona_cu('<file-drop-indicator data-filedrop-identity="1"></file-drop-indicator>'))),
+            # (M4) valoarea marcajului scutita de cautarea cuvintelor (pasul 4): "file-1" / "attachment" in valoare pleaca
+            ([("        if k in ATRIBUTE_AFISATE_SEPARAT or k in SEMN_ATR_VALOARE or not v:",
+               "        if k in ATRIBUTE_AFISATE_SEPARAT or k in SEMN_ATR_VALOARE or not v or _marcaj_permis(n, k):")],
+             (fdi("file-1"), fdi("attachment"), fdi("upload_7"))),
+            # (M5) "wildcard": tot indicatorul scutit de semnale (nu doar numele unui atribut, pe o valoare de o forma anume): un nume de fisier
+            # intr-un atribut, o clasa de atasament sau un fundal pe indicator pleaca (el E in STRUCTURA)
+            ([("    if n.tag in MEDIA:", '    if n.tag == "file-drop-indicator":\n        return None\n    if n.tag in MEDIA:')],
+             (zona_cu('<file-drop-indicator data-file-name="oferta.docx"></file-drop-indicator>'), fdi("1", ' data-x="oferta.docx"'),
+              zona_cu('<file-drop-indicator class="attachment-card"></file-drop-indicator>'), fdi("1", ' style="background: url(x)"'),
+              fdi("oferta.docx"))),
+            # (M6) acceptare globala a lui "file" in NUMELE atributelor (ce interzice brief-ul): data-file-name pe gem-icon pleaca
+            ([('TOKENI_ATAS = ("file", "fisier",', 'TOKENI_ATAS = ("fisier",')], (zona_cu('<gem-icon data-file-name="oferta"></gem-icon>'),)),
+        )
+        for inlocuiri, htmluri in cazuri:
+            mut = mutant(inlocuiri)
+            for html in htmluri:
+                self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=html[-200:])
+                cod_m, act_m = ruleaza_trimite(mut, FakePg(html))
+                self.assertIsNone(cod_m, msg=(inlocuiri[0][1], html[-200:], cod_m))
+                self.assertIn("press Enter", act_m, msg=html[-200:])
+        # mutantii (M1)-(M4) lasa indicatorul REAL (identificator curat) sa treaca, ca pe cod: deci difera doar pe abateri
+        for inlocuiri, _ in cazuri[:4]:
+            self.assertEqual(ruleaza_trimite(mutant(inlocuiri), FakePg(pagina_22_11(), dupa_goto=pagina_22_11())), (None, ACTIUNI_TRIMITERE))
+        # fara regula de tot (= v4.6.4 instalat): pagina din 22.11 e refuzata pe cod cu linia din captura (test_linia_1...), deci regula
+        # e cea care o lasa sa treaca, nu lipsa cuvantului "file"
+        with mock.patch.multiple(gp, **DOAR_MARCAJ_R5):
+            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_22_11())), ("ciorna_necunoscuta", []))
 
 
 if __name__ == "__main__":

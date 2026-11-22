@@ -71,6 +71,22 @@
 #   descendentii zonei (neutri, structura, liste albe, butonul modelului). _motiv_editor a disparut: editorul si continutul lui trec prin
 #   _motiv_element cu contextul in_editor (dupa semnal: in editor sunt tolerate doar etichetele de text EDITOR_TAGURI, textele brief-ului
 #   se compara separat in verifica_ciorna). Motivele din editor: "semnal_in_editor:<semnal>" / "element_in_editor:<semnatura>".
+# v4.6.4b / r8 (22.11.2026, dupa 5a PICAT pe v4.6.4 instalat, A03E2B5C): pagina Gemini s-a schimbat dupa calibrarea din 21.11. Pe un chat
+#   NOU gol (Carbon, Esc + F5), `stare` a dat de doua ori aceleasi 3 necunoscute - toate SEMNALE (token_...), niciuna calibrabila prin liste:
+#   (1) token_file:file-drop-indicator{data-filedrop-id} - indicatorul de drag & drop (vazut gol la 21.11, in STRUCTURA) poarta acum un atribut
+#       `data-filedrop-id`; cuvantul "file" e in NUMELE lui (valoarea nu era afisata). Regula INCHISA in MARCAJE_PERMISE (fosta MARCAJE_GOALE_PERMISE,
+#       acum cu forma valorii): acel nume, doar pe <file-drop-indicator> fara clase, doar cu valoare de IDENTIFICATOR ([A-Za-z0-9_-]{0,64}, deci
+#       fara punct = fara nume.extensie); valoarea se verifica in continuare la cuvinte / nume de fisier ca orice alta valoare. Indicatorul nu e chip
+#       (CHIP = uploader-file-preview), nu poarta nume de fisier (regex + nume.extensie), iar orice alt atribut, clasa, continut sau element = refuz.
+#   (2) token_incarca:gem-icon-button[type=onsurface]{menu-button gem-menu-button open gem-button gem-button-badge-size-small gem-butt} si
+#   (3) semnal_in_editor:token_chip:div[role=textbox][aria-label=introdu o solicitare pentru gemini][contenteditable]{ql-editor ql-blank textarea
+#       new-input-ui rich-query-formatting-enabled input-url}: cuvintele "incarca" si "chip" NU apar in partea afisata a lui {...} (taiata la 80 de
+#       caractere, ambele exact la limita), iar "open" si "input-url" NU sunt cuvinte de atasament (nu sunt in TOKENI_ATAS; "url(" se cauta doar
+#       in style) - elementele cu EXACT clasele afisate trec cu 0 necunoscute (teste). Sursa reala (o clasa / un atribut de dincolo de 80 de
+#       caractere) nu se poate stabili din captura, deci NU se excepteaza nimic pentru ele (o exceptie ghicita = wildcard). Ca urmatorul 5a sa
+#       dea sursa, `stare` afiseaza acum, sub fiecare `necunoscut` cu semnal, o linie `    sursa <fel>:<unde>=<valoare>` (fel = tag / style /
+#       eticheta / clasa / id / nume_atribut / valoare_atribut), iar {...} se afiseaza intreg (pana la 400 de caractere). Nicio decizie nu depinde
+#       de sursa afisata: ea vine din ACEEASI functie _semnal (al doilea element al rezultatului), nu dintr-o a doua cautare.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata
@@ -136,8 +152,17 @@ ATRIBUTE_AFISATE_SEPARAT = ("class", "id")                   # afisate in {...} 
 # r5: marcaje de atribut cu cuvant de atasament in NUME care NU sunt fisiere - lista INCHISA, citita din pagina reala (chat, 21.11.2026,
 # doar citire): `div.text-input-field.simplified-input-area` are atributele `_ngcontent-ng-c<numar>=""`, `xapfileselectordropzone=""`,
 # `class=...`, `jslog=...`; cuvantul "file" vine din NUMELE `xapfileselectordropzone` (zona de drop a selectorului de fisiere, nu un fisier).
-# (tag, clasele EXACTE ale elementului fara cele generate, numele atributului): acceptat DOAR cu valoare goala, doar pe acest element.
-MARCAJE_GOALE_PERMISE = (("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone"),)
+# r8 (v4.6.4b): + `data-filedrop-id` pe <file-drop-indicator> (5a din 22.11.2026 pe pagina reala, chat nou gol: `token_file:file-drop-indicator
+# {data-filedrop-id}` - fara clase, fara id, singurul atribut neafisat separat; valoarea NU a fost afisata). Forma valorii e parte din regula:
+# `xapfileselectordropzone` doar GOL; `data-filedrop-id` doar un identificator ASCII fara punct ([A-Za-z0-9_-], cel mult 64), pe valoarea BRUTA
+# (un spatiu nu e "gol"). Un identificator nu poate fi un nume.extensie; valoarea trece oricum si prin cautarea cuvintelor / numelor de fisier
+# din _semnal (pasul 4), ca orice alta valoare. (tag, clasele EXACTE fara cele generate, numele atributului, forma valorii): acceptat DOAR asa.
+VALOARE_GOALA = re.compile(r"")                               # exact ""
+VALOARE_IDENTIFICATOR = re.compile(r"[A-Za-z0-9_-]{0,64}")   # id generat (numar / uuid / nume-cu-liniuta), niciodata un nume.extensie
+MARCAJE_PERMISE = (
+    ("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone", VALOARE_GOALA),     # r5 (21.11.2026)
+    ("file-drop-indicator", (), "data-filedrop-id", VALOARE_IDENTIFICATOR),                              # r8 (22.11.2026)
+)
 RE_FISIER = re.compile(r"(?<![a-z0-9])[a-z0-9][a-z0-9_-]*\.[a-z][a-z0-9]{0,4}(?![a-z0-9])")   # nume.extensie in text
 # r3: un cuvant care e EXACT un domeniu al firmei nu e fisier (textul de confidentialitate Workspace: "Chaturile gazpet.ro nu
 # sunt folosite ..."). Cuvantul = potrivirea RE_FISIER extinsa peste toate caracterele de nume de fisier din jur, deci
@@ -145,7 +170,10 @@ RE_FISIER = re.compile(r"(?<![a-z0-9])[a-z0-9][a-z0-9_-]*\.[a-z][a-z0-9]{0,4}(?!
 DOMENII_FIRMA = ("gazpet.ro",)                                # lista INCHISA, constanta in cod (nu se citeste de nicaieri)
 CARACTERE_NUME = "abcdefghijklmnopqrstuvwxyz0123456789_.-"   # caracterele din care RE_FISIER compune un nume.extensie
 TEXT_AFISAT = 200                                             # r3: textul unui motiv text: / text_fisier: (calibrarea cere textul intreg)
-DETALIU_AFISAT = 240                                          # o linie "necunoscut ..." (motiv + semnatura / text)
+DETALIU_AFISAT = 600                                          # o linie "necunoscut ..." (motiv + semnatura / text); r8: 240 -> 600, cu {...} intreg
+SEMNATURA_TOKEN_AFISATA = 400                                 # r8: {clase #id atribute} al unui element cu semnal (era 80: pe pagina reala taia
+                                                              #     exact sursa cuvantului, vezi antetul v4.6.4b)
+SURSA_AFISATA = 160                                           # r8: valoarea aratata in linia "    sursa ..." a lui `stare`
 RE_LIGATURA = re.compile(r"[a-z0-9_]{1,40}")                 # textul unei iconite mat-icon (ex. "send", "add_2")
 MODEL_DATA_TEST = "bard-mode-menu-button"                     # butonul modelului (= MODEL), verificat separat
 # LISTE ALBE - completate DOAR din calibrarea pe pagina reala (RUNBOOK pasul 0): EXACT semnaturile afisate de `stare`
@@ -158,8 +186,11 @@ MODEL_DATA_TEST = "bard-mode-menu-button"                     # butonul modelulu
 # `token_file:div{text-input-field simplified-input-area}`: un element cu cuvant de atasament nu poate fi acceptat de nicio lista
 # (semnalele se verifica intai); cuvantul vine dintr-un atribut al div-ului real pe care semnatura din r3 nu il afisa - `stare`
 # il afiseaza acum in {...} si decizia se ia dupa citirea lui din pagina (RUNBOOK pasul 0), nu prin acceptare globala.
-# r5: atributul citit din pagina reala = `xapfileselectordropzone=""` -> regula inchisa MARCAJE_GOALE_PERMISE (mai sus), nu o intrare
+# r5: atributul citit din pagina reala = `xapfileselectordropzone=""` -> regula inchisa MARCAJE_PERMISE (mai sus), nu o intrare
 # in liste; cu ea div-ul e un element neutru obisnuit, iar continutul lui se verifica in continuare element cu element.
+# r8 (22.11.2026, 5a pe v4.6.4 instalat, chat nou gol): cele 3 linii noi sunt toate semnale (`token_...`), deci listele NU se schimba
+# (reuniunea liniilor `element:` / `text:` reale ramane cea de la 21.11: 5 + 23 + 3). Linia (1) e lamurita prin MARCAJE_PERMISE; liniile
+# (2) si (3) au sursa in afara partii afisate si se lamuresc la urmatorul 5a din liniile `    sursa ...` (vezi antetul v4.6.4b).
 CONTROALE_CUNOSCUTE = (
     "button[aria-label=deruleaza in jos][type=button][tabindex]",   # i ii iii - "Deruleaza in jos" (in back-to-bottom-fab)
     "button[aria-label=incarcare si instrumente]",                   # i ii iii - butonul "+" care deschide meniul (nu e fisier)
@@ -426,7 +457,7 @@ def _semnatura_token(n):
     atribute = sorted(k for k in n.attrs if k not in ATRIBUTE_AFISATE_SEPARAT and k not in SEMN_ATR_VALOARE
                       and k not in SEMN_ATR_CHEIE and not _generat(k))
     parti = clase + (["#" + n.attrs["id"]] if n.attrs.get("id") else []) + atribute
-    return _semnatura(n) + "{" + _ascii(" ".join(parti))[:80] + "}"
+    return _semnatura(n) + "{" + _ascii(" ".join(parti))[:SEMNATURA_TOKEN_AFISATA] + "}"
 
 
 def _nume_fisier(a):
@@ -445,23 +476,31 @@ def _nume_fisier(a):
     return None
 
 
-def _are_eticheta_interzisa(n):
+def _eticheta_interzisa(n):
     # eticheta (toate atributele cu valoare din semnatura: aria-label, title, alt, type, role, data-test-id...) cu cuvant de
-    # atasament (in afara celor de incarcare) sau cu nume de fisier: nicio lista alba nu o acopera
-    t = _ascii(" ".join(n.attrs.get(k) or "" for k in SEMN_ATR_VALOARE))
-    return _cuvant(t, TOKENI_ETICHETA_INTERZISA) is not None or _nume_fisier(t) is not None
+    # atasament (in afara celor de incarcare) sau cu nume de fisier: nicio lista alba nu o acopera. r8: intoarce (atribut, valoare ASCII)
+    # al primului atribut vinovat (sursa afisata de `stare`) sau None; cuvintele si numele n-au spatii, deci verificarea atribut cu
+    # atribut decide la fel ca pe textul lor lipit (cum era pana la r7)
+    for k in SEMN_ATR_VALOARE:
+        if k not in n.attrs:
+            continue
+        t = _ascii(n.attrs.get(k))
+        if _cuvant(t, TOKENI_ETICHETA_INTERZISA) is not None or _nume_fisier(t) is not None:
+            return k, t
+    return None
 
 
-def _marcaj_gol_permis(n, k):
-    # r5: atributul k al elementului n e un marcaj din MARCAJE_GOALE_PERMISE: numele EXACT (nu prefix / sufix / subsir), pe tagul
-    # exact, cu clasele (fara cele generate) EXACT cele din lista, si cu valoare GOALA. Doar atunci numele lui nu intra in cautarea
-    # cuvintelor de atasament; valoarea (goala) nu are ce ascunde. Orice abatere = atributul se verifica ca oricare altul (refuz).
-    for tag, clase, nume in MARCAJE_GOALE_PERMISE:
+def _marcaj_permis(n, k):
+    # r5 / r8: atributul k al elementului n e un marcaj din MARCAJE_PERMISE: numele EXACT (nu prefix / sufix / subsir), pe tagul exact,
+    # cu clasele (fara cele generate) EXACT cele din lista, si cu valoarea BRUTA de forma ceruta (goala / identificator). Doar atunci numele
+    # lui nu intra in cautarea cuvintelor de atasament; valoarea ramane verificata in _semnal (pasul 4) ca orice alta valoare. Orice abatere
+    # = atributul se verifica ca oricare altul (refuz).
+    for tag, clase, nume, forma in MARCAJE_PERMISE:
         if k != nume:
             continue
         if n.tag != tag or set(c for c in _clase(n) if not _generat(c)) != set(clase):
             continue
-        if n.attrs.get(k) != "":
+        if not forma.fullmatch(n.attrs.get(k) or ""):
             continue
         return True
     return False
@@ -505,31 +544,50 @@ def _semnal(n):
         cuvant -> "token_...", nume.extensie -> "atribut_fisier:..."; r5: si in URL-uri si in style, singura exceptie fiind gazda
         Google a unui href http(s) (_fara_gazda_permisa); blob: / data: / alt host / src / srcset = textul intreg.
     Tagul (in afara celor media) nu e semnal: el E semnatura, comparata exact cu lista (file-drop-indicator a fost vazut gol de om
-    la calibrare). Textele si descendentii elementului se verifica mai departe, element cu element (_motiv_text / _necunoscute)."""
+    la calibrare). Textele si descendentii elementului se verifica mai departe, element cu element (_motiv_text / _necunoscute).
+    r8: intoarce (motiv, sursa) sau None. Sursa = "<fel>:<unde>=<valoare>" (fel: tag / style / eticheta / clasa / id / nume_atribut /
+    valoare_atribut), afisata de `stare` sub linia `necunoscut`; NU intra in nicio decizie (motivul e neschimbat), e doar locul exact
+    al cuvantului / numelui, ca o linie de pe pagina reala sa nu mai ramana nelamurita (5a din 22.11.2026: sursa taiata din {...})."""
     sem = _semnatura(n)
     if n.tag in MEDIA:
-        return "media:" + sem
+        return "media:" + sem, "tag:" + n.tag
     if "url(" in _ascii(n.attrs.get("style")):
-        return "fundal:" + sem
-    if _are_eticheta_interzisa(n):
-        return "eticheta:" + sem
+        return "fundal:" + sem, "style:" + _ascii(n.attrs.get("style"))[:SURSA_AFISATA]
+    e = _eticheta_interzisa(n)
+    if e:
+        return "eticheta:" + sem, "eticheta:%s=%s" % (e[0], e[1][:SURSA_AFISATA])
     clase_id = _ascii(" ".join([n.attrs.get("class") or "", n.attrs.get("id") or ""]))
-    nume_atribute = _ascii(" ".join(k for k in n.attrs if not _marcaj_gol_permis(n, k)))
+    nume_atribute = _ascii(" ".join(k for k in n.attrs if not _marcaj_permis(n, k)))
     t = _cuvant(clase_id + " " + nume_atribute)
     if t:
-        return "token_%s:%s" % (t, _semnatura_token(n))
-    if _nume_fisier(clase_id) is not None:
-        return "atribut_fisier:" + _semnatura_token(n)
+        return "token_%s:%s" % (t, _semnatura_token(n)), _sursa_cuvant(n, t)
+    f = _nume_fisier(clase_id)
+    if f is not None:
+        return "atribut_fisier:" + _semnatura_token(n), _sursa_cuvant(n, f)
     for k, v in n.attrs.items():
         if k in ATRIBUTE_AFISATE_SEPARAT or k in SEMN_ATR_VALOARE or not v:
             continue
         a = _ascii(v)
         t = _cuvant(a)
         if t:
-            return "token_%s:%s" % (t, _semnatura_token(n))
+            return "token_%s:%s" % (t, _semnatura_token(n)), "valoare_atribut:%s=%s" % (k, a[:SURSA_AFISATA])
         if _nume_fisier(_fara_gazda_permisa(k, v)) is not None:
-            return "atribut_fisier:" + _semnatura_token(n)
+            return "atribut_fisier:" + _semnatura_token(n), "valoare_atribut:%s=%s" % (k, a[:SURSA_AFISATA])
     return None
+
+
+def _sursa_cuvant(n, t):
+    # r8: unde sta textul t (cuvant de atasament sau nume.extensie gasit de _semnal in clase / id / numele atributelor): prima clasa, apoi
+    # id-ul, apoi primul nume de atribut (cu valoarea lui, ca la 5a sa se vada si ce poarta - ex. data-filedrop-id=<valoare>). Doar afisare.
+    for c in _clase(n):
+        if t in _ascii(c):
+            return "clasa:" + _ascii(c)[:SURSA_AFISATA]
+    if t in _ascii(n.attrs.get("id")):
+        return "id:" + _ascii(n.attrs.get("id"))[:SURSA_AFISATA]
+    for k, v in n.attrs.items():
+        if t in _ascii(k) and not _marcaj_permis(n, k):
+            return "nume_atribut:%s=%s" % (k, _ascii(v)[:SURSA_AFISATA])
+    return "?:" + t                                          # (nu se ajunge: t vine chiar din aceste texte)
 
 
 def _motiv_text(nod, ctrl):
@@ -552,7 +610,7 @@ def _motiv_text(nod, ctrl):
 
 
 def _motiv_element(n, ctrl, in_editor=False):
-    # -> (motiv sau None, controlul recunoscut in care sunt copiii - sau None)
+    # -> (motiv sau None, controlul recunoscut in care sunt copiii - sau None, sursa semnalului - "" cand nu e semnal; r8)
     # r7 (Jakarinos r6 P1): ORICE element analizat (zona, invelisurile de incredere, editorul, descendentii editorului, descendentii
     # zonei) trece pe aici, iar primul pas e ACEEASI functie de semnale, _semnal (media, fundal CSS, eticheta, clase, id, numele si
     # valorile tuturor atributelor, URL-uri, style). Nicio alta cale nu verifica semnale: un element cu semnal e refuzat oricare ar fi
@@ -562,31 +620,32 @@ def _motiv_element(n, ctrl, in_editor=False):
     sem = _semnatura(n)
     s = _semnal(n)
     if s:
-        return ("semnal_in_editor:" + s if in_editor else s), ctrl
+        return ("semnal_in_editor:" + s[0] if in_editor else s[0]), ctrl, s[1]
     if in_editor:
         # in editor (contenteditable) intra doar textul brief-ului (comparat separat, verifica_ciorna): Quill produce p / br, restul
         # etichetelor de text sunt tolerate; orice alt element = nerecunoscut (nicio lista alba nu se consulta in editor)
         if n.tag in EDITOR_TAGURI:
-            return None, ctrl
-        return "element_in_editor:" + sem, ctrl
+            return None, ctrl, ""
+        return "element_in_editor:" + sem, ctrl, ""
     if n.tag in STRUCTURA_TAGURI:
-        return None, ctrl                               # zona si invelisul editorului (aceleasi nume ca selectorii)
+        return None, ctrl, ""                           # zona si invelisul editorului (aceleasi nume ca selectorii)
     if n.attrs.get("data-test-id") == MODEL_DATA_TEST:
-        return None, n                                  # butonul modelului: verificat separat (verifica_model); textul lui = eticheta
+        return None, n, ""                              # butonul modelului: verificat separat (verifica_model); textul lui = eticheta
     if n.tag in NEUTRE and not _semnificativ(n):
-        return None, ctrl                               # element neutru fara eticheta / rol / actiune (si fara semnal, mai sus)
+        return None, ctrl, ""                           # element neutru fara eticheta / rol / actiune (si fara semnal, mai sus)
     if sem in CONTROALE_CUNOSCUTE:
-        return None, n                                  # control vazut la calibrare; textele din el = eticheta lui (verificate mai sus)
+        return None, n, ""                              # control vazut la calibrare; textele din el = eticheta lui (verificate mai sus)
     if sem in STRUCTURA_CUNOSCUTA:
-        return None, ctrl                               # invelis vazut la calibrare; continutul lui se verifica mai departe
-    return "element:" + sem, ctrl
+        return None, ctrl, ""                           # invelis vazut la calibrare; continutul lui se verifica mai departe
+    return "element:" + sem, ctrl, ""
 
 
 def _necunoscute(zona, editoare):
     """Elementele / textele din zona (r6: SI ELEMENTUL ZONEI INSESI, primul verificat) care NU fac parte din structura recunoscuta
     a ciornei goale (lista de motive). Chip-urile si semnele (numarate separat, si pe zona) si ce nu se afiseaza (script / style /
     template) se sar. r7: UN SINGUR traseu pentru toate elementele - fiecare (zona, invelisuri, editor, descendenti) trece prin
-    _motiv_element (deci prin _semnal); editorul si descendentii lui poarta doar contextul in_editor, nu o alta functie."""
+    _motiv_element (deci prin _semnal); editorul si descendentii lui poarta doar contextul in_editor, nu o alta functie.
+    r8: lista de perechi (motiv, sursa); sursa e "" pentru motivele fara semnal (element: / text...)."""
     out = []
     st = [(zona, None, False)]              # r6 (Jakarinos r5 P1): zona insasi, cu aceleasi reguli ca orice element; apoi continutul ei
     while st:
@@ -595,15 +654,15 @@ def _necunoscute(zona, editoare):
             if not in_editor:               # in editor sta textul brief-ului: se compara separat (verifica_ciorna), nu e "text necunoscut"
                 m = _motiv_text(n, ctrl)
                 if m:
-                    out.append(m)
+                    out.append((m, ""))
             continue
         if n.tag in NEVIZIBILE or n.tag == CHIP or _e_semn(n):
             continue
         if any(n is e for e in editoare):
             in_editor = True                # r7: editorul = acelasi traseu, cu context (nu o cale separata)
-        m, ctrl_copii = _motiv_element(n, ctrl, in_editor)
+        m, ctrl_copii, sursa = _motiv_element(n, ctrl, in_editor)
         if m:
-            out.append(m)
+            out.append((m, sursa))
         if n is zona:
             ctrl_copii = None               # r6: zona e un invelis, niciodata un control (textele din ea nu sunt eticheta ei)
         st.extend((c, ctrl_copii, in_editor) for c in reversed(n.copii))
@@ -649,7 +708,8 @@ def analizeaza_ciorna(html):
         necunoscute.extend(_necunoscute(z, editoare))
     return {"editoare": len(editoare), "zone": len(zone), "atasamente": atas, "semne": semne,
             "detalii": ["%s x%d" % (k, v) for k, v in sorted(detalii.items())][:12],
-            "necunoscute": len(necunoscute), "necunoscute_detalii": [m[:DETALIU_AFISAT] for m in necunoscute[:60]]}
+            "necunoscute": len(necunoscute), "necunoscute_detalii": [m[:DETALIU_AFISAT] for m, _ in necunoscute[:60]],
+            "necunoscute_surse": [s[:DETALIU_AFISAT] for _, s in necunoscute[:60]]}     # r8: paralel cu necunoscute_detalii
 
 
 def verifica_fara_atasamente(info, semn_locator, moment):
@@ -767,9 +827,12 @@ def stare(pg):
     spune("zone compunere:", info["zone"], "| semne atasament: zona", info["semne"], "/ locator", semn,
           "| detalii:", ", ".join(info["detalii"]) or "-")
     # r2: calibrarea listelor albe (RUNBOOK pasul 0) copiaza EXACT aceste semnaturi, cate una pe linie
+    # r8: sub un necunoscut cu semnal (token_... / atribut_fisier: / eticheta: / fundal: / media:), locul exact al cuvantului / numelui
     spune("necunoscute in zona:", info["necunoscute"])
-    for m in info["necunoscute_detalii"]:
+    for m, s in zip(info["necunoscute_detalii"], info["necunoscute_surse"]):
         spune("  necunoscut", m)
+        if s:
+            spune("    sursa", s)
     try:
         verifica_fara_atasamente(info, semn, "stare")
         spune("paza ciorna: OK (trimite ar continua)")
