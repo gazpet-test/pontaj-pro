@@ -1,8 +1,10 @@
 // Proba LOCALĂ a migrărilor 20270105a (Rest de decontat: schema, drept, calcul, confirmare) și 20270105b (poarta proiectului în configurare) pe
 // PGlite — NU atinge nicio bază reală. Baza: schema falsă supabase/tests/20270105a_executie_rest_decontat_schelet.sql (roluri Supabase, auth.uid(),
 // tabelele existente cu RLS-ul general al Execuției, STUB-urile porților Izometrie cu ștampilele verzi, un proiect „moștenit” cu articole).
-// Aplicarea: ca runnerul (marcaj + plafon 5000 + pașii L15 v2 generați: manifestul cu ROLLBACK, apoi livrarea aprobată + garda finală).
-// 0. Validatorul runnerului (plafonul 5000 la migrări / 2000 la reveniri), detectorul porților Izometrie pe depozit, paritatea UM cu 20261208a,
+// Aplicarea: ca runnerul (marcaj + plafonul EXTINS 15000 — decizia proprietarului 22.11.2026, --plafon-extins; AG_PLAFON_EXTINS_MS — + pașii L15 v2
+//   generați: manifestul cu ROLLBACK, apoi livrarea aprobată + garda finală).
+// 0. Validatorul runnerului (plafonul 15000 + --plafon-extins la migrări / 2000 la reveniri; 15000 fără --plafon-extins și 5000 cu el = refuz),
+//    detectorul porților Izometrie pe depozit, paritatea UM cu 20261208a,
 //    paritatea textuală a funcțiilor 20261209a copiate în schelet, reverificarea dreptului DUPĂ lock în cele 3 RPC-uri (verificare STATICĂ pe text;
 //    cursa reală cu două sesiuni: supabase/tests/20270105a_executie_rest_decontat_concurenta.sh, pe clonă).
 // 1. Refuzurile migrării A (fără marcaj, fără pasul L15 „înainte”, plafon greșit, porți roșii, porți lipsă, 20261209a lipsă / alt corp, reaplicare,
@@ -91,7 +93,9 @@ const validator = (fisier, ...opt) => {
     return { ok: true, out: o.trim() }
   } catch (e) { return { ok: false, out: String(e.stderr || e.message).trim() } }
 }
-const PLAFON_LIVRARE = Number(execFileSync('bash', ['-c', '. "$1"; printf %s "$AG_PLAFON_MS"', '_', join(ROOT, 'scripts/livrare_amprenta.sh')], { encoding: 'utf8' }))
+// runda 18 a runnerului (22.11.2026): migrările A / B cer plafonul EXTINS (AG_PLAFON_EXTINS_MS, cu --plafon-extins); plafonul standard L15 (AG_PLAFON_MS) e refuzat de ele
+const PLAFON_LIVRARE = Number(execFileSync('bash', ['-c', '. "$1"; printf %s "$AG_PLAFON_EXTINS_MS"', '_', join(ROOT, 'scripts/livrare_amprenta.sh')], { encoding: 'utf8' }))
+const PLAFON_L15 = Number(execFileSync('bash', ['-c', '. "$1"; printf %s "$AG_PLAFON_MS"', '_', join(ROOT, 'scripts/livrare_amprenta.sh')], { encoding: 'utf8' }))
 const PLAFON_REVENIRE = 2000
 const garda = (nume, plafon, final) => execFileSync('bash', ['-c', '. "$1"; lm_fin "$2" "$3" "$4" lock', '_', join(ROOT, 'scripts/livrare_mesaj.sh'), nume, String(plafon), final], { encoding: 'utf8' })
 
@@ -249,12 +253,16 @@ function lockGarda(text) {
 
 if (!DOAR || DOAR === '0') {
   console.log('0. validatorul runnerului, detectorul porților, paritatea UM')
-  for (const [f, pl, nume] of [[F(A).mig, PLAFON_LIVRARE, 'migrarea A'], [F(A).rev, PLAFON_REVENIRE, 'revenirea A'], ...(AREB ? [[F(B).mig, PLAFON_LIVRARE, 'migrarea B'], [F(B).rev, PLAFON_REVENIRE, 'revenirea B']] : [])]) {
+  ok(PLAFON_LIVRARE === 15000 && PLAFON_L15 === 5000, `plafonul extins ${PLAFON_LIVRARE} (AG_PLAFON_EXTINS_MS), plafonul standard L15 ${PLAFON_L15} (AG_PLAFON_MS)`)
+  for (const [f, pl, nume, extins] of [[F(A).mig, PLAFON_LIVRARE, 'migrarea A', true], [F(A).rev, PLAFON_REVENIRE, 'revenirea A', false], ...(AREB ? [[F(B).mig, PLAFON_LIVRARE, 'migrarea B', true], [F(B).rev, PLAFON_REVENIRE, 'revenirea B', false]] : [])]) {
     if (!existsSync(join(ROOT, f))) { ok(false, `${nume}: fișierul lipsește (${f})`); continue }
-    const v = validator(join(ROOT, f), '--plafon-tranzactie-ms', String(pl))
-    ok(v.ok && /^OK \d+ /.test(v.out), `${nume} trece validatorul cu ${pl}: ${v.out.slice(0, 120)}`)
-    const v2 = validator(join(ROOT, f), '--plafon-tranzactie-ms', String(pl === 5000 ? 2000 : 5000))
-    ok(!v2.ok && /PLAFON_DIFERIT/.test(v2.out), `${nume} cu alt plafon = refuz`)
+    const FLAG = extins ? ['--plafon-extins'] : []
+    const v = validator(join(ROOT, f), '--plafon-tranzactie-ms', String(pl), ...FLAG)
+    ok(v.ok && /^OK \d+ /.test(v.out), `${nume} trece validatorul cu ${pl}${extins ? ' + --plafon-extins' : ''}: ${v.out.slice(0, 120)}`)
+    const v2 = validator(join(ROOT, f), '--plafon-tranzactie-ms', String(extins ? PLAFON_L15 : PLAFON_LIVRARE), ...FLAG)
+    ok(!v2.ok && /PLAFON_DIFERIT/.test(v2.out), `${nume} cu alt plafon (${extins ? PLAFON_L15 : PLAFON_LIVRARE}) = refuz PLAFON_DIFERIT`)
+    const v3 = validator(join(ROOT, f), '--plafon-tranzactie-ms', String(pl), ...(extins ? [] : ['--plafon-extins']))
+    ok(!v3.ok && /PLAFON_EXTINS_DIFERIT/.test(v3.out), `${nume} cu plafonul ei dar ${extins ? 'FĂRĂ' : 'CU'} --plafon-extins = refuz PLAFON_EXTINS_DIFERIT (acordul declarației)`)
     const vf = validator(join(ROOT, f), '--fara-plafon')
     ok(!vf.ok && /PLAFON_LIPSA/.test(vf.out), `${nume} fără plafon = refuz local`)
   }
@@ -312,7 +320,8 @@ if (!DOAR || DOAR === '1') {
   const s0 = await stare(db), m0 = await randuriMostenite(db)
   ok(/garda start invalida/.test(await eroare(aplicaA(db, MIG_A, { marcaj: false }))), 'fără marcajul runnerului = refuz')
   ok(/AMPRENTA_GLOBALA_LIPSA/.test(await eroare(aplicaA(db, MIG_A, { l15: 'nimic' }))), 'fără pasul L15 „înainte” = refuz')
-  ok(/PLAFON_TRANZACTIE lipsa/.test(await eroare(aplicaA(db, MIG_A, { plafon: 2000 }))), 'plafonul 2000 în loc de 5000 = refuz')
+  ok(new RegExp(`PLAFON_TRANZACTIE lipsa: ${PLAFON_L15}/session marcaj ${PLAFON_L15}:\\d+ \\(cerut ${PLAFON_LIVRARE}/session`).test(await eroare(aplicaA(db, MIG_A, { plafon: PLAFON_L15 }))), `plafonul standard L15 (${PLAFON_L15}) în loc de cel extins (${PLAFON_LIVRARE}) = refuz`)
+  ok(/PLAFON_TRANZACTIE lipsa/.test(await eroare(aplicaA(db, MIG_A, { plafon: 2000 }))), 'plafonul 2000 (al revenirilor) = refuz')
   await db.exec(`COMMENT ON FUNCTION public.fn_izo_porti_e4b_definitii() IS 'porti_e4b=00000000000000000000000000000000'`)
   ok(/portile Izometrie nu sunt verzi inainte/.test(await eroare(aplicaA(db))), 'porți roșii înainte = refuz (PRE)')
   await db.exec(`DO $x$ BEGIN EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e4b_definitii() IS %L', 'porti_e4b=' || public.fn_izo_porti_e4b_definitii()); END $x$`)

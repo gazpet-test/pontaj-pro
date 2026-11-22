@@ -1,6 +1,7 @@
--- Version 20270106120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 5000 --amprenta-globala <md5> --diferente-globale
---   supabase/migrations/20270106a_executie_semnale.l15.tsv (DOAR cu plafon ȘI cu amprenta globală L15 v2: fără pasul „înainte” al runnerului în
---   aceeași tranzacție, migrarea refuză în $pre$ — AMPRENTA_GLOBALA_LIPSA).
+-- Version 20270106120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 15000 --plafon-extins --amprenta-globala <md5> --diferente-globale
+--   supabase/migrations/20270106a_executie_semnale.l15.tsv (DOAR cu plafonul EXTINS — decizia proprietarului 22.11.2026, ca 20270105a: pe producție
+--   cele două fotografii L15 singure iau ~3 s; --plafon-extins cere fereastra orară, docs/LIVRARE_L15_V2.md §9 — ȘI cu amprenta globală L15 v2:
+--   fără pasul „înainte” al runnerului în aceeași tranzacție, migrarea refuză în $pre$ — AMPRENTA_GLOBALA_LIPSA).
 -- L15 v2 (docs/LIVRARE_L15_V2.md): garanția la aplicare = amprenta GLOBALĂ a runnerului. Lista OBIECTELOR din manifest e în
 --   supabase/tests/20270106a_executie_semnale.l15.obiecte.tsv (generată pe PGlite cu pașii reali ai runnerului). Pe lângă ea, migrarea verifică pe
 --   amprentă (corp fără CR + proprietăți + EXECUTE), ÎNAINTE și DUPĂ, poarta de drept pe proiect pe care o cheamă direct (fn_executie_proiect_permis,
@@ -57,8 +58,9 @@
 --   docs/LIVRARE_L15_V2.md §9): bugetul = 1 s cu ceasul pornit IMEDIAT ÎNAINTEA PRIMEI ÎNCERCĂRI, verificat înaintea fiecărei încercări și DUPĂ
 --   obținerea setului complet; fiecare încercare e o subtranzacție. employees e tabelul HR / pontaj: aplicarea se face într-un moment liniștit;
 --   la coliziune migrarea refuză curat (55P03), nimic schimbat.
--- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, bugetul lock-urilor de
---   1 s și garda finală a runnerului. Migrarea NU fixează statement_timeout și nu are alt plafon.
+-- GĂRZILE DE TIMP: plafonul tranzacției = 15000 ms (plafonul EXTINS, --plafon-extins, doar în fereastra 21:00–06:00 Europe/Bucharest) pus de
+--   runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, bugetul lock-urilor de 1 s (neschimbat) și garda finală a runnerului.
+--   Migrarea NU fixează statement_timeout și nu are alt plafon.
 -- Revenire: supabase/revenire/20270106a_executie_semnale_ROLLBACK.sql (prin runner, plafonul 2000, fără amprentă globală — varianta A din
 --   docs/LIVRARE_L15_V2.md §9; refuză dacă există semnale / jurnal; verifică DEFINIȚIILE efective — textul fiecărei constrângeri, al fiecărui
 --   index, al vederii, proprietățile coloanelor —, nu doar numele / numerele).
@@ -80,9 +82,9 @@ BEGIN
   END IF;
   IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION '20270106a: cere PostgreSQL 17 (plafonul tranzactiei)'; END IF;
   SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
-  IF v_plafon IS DISTINCT FROM '5000/session'
-     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || txid_current() THEN
-    RAISE EXCEPTION '20270106a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 5000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 5000)',
+  IF v_plafon IS DISTINCT FROM '15000/session'
+     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '15000:' || txid_current() THEN
+    RAISE EXCEPTION '20270106a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 15000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 15000 --plafon-extins)',
       coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa');
   END IF;
   -- L15 v2: pasul „înainte” al runnerului a rulat în ACEASTĂ tranzacție (tabela lui temporară, creată de tranzacția curentă și blocată de ea)

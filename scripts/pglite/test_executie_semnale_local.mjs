@@ -2,7 +2,8 @@
 // nicio bază reală.
 // Baza: schema falsă supabase/tests/20270106a_executie_semnale_schelet.sql + lanțul de drept pe proiect extras EXACT din 20261209a (amprentele =
 //   constantele din migrare, verificat).
-// Aplicarea: ca runnerul — marcaj + plafon 5000 + PAȘII L15 v2 GENERAȚI de scripts/livrare_amprenta_gen.sh (aceleași funcții ca runnerul): întâi
+// Aplicarea: ca runnerul — marcaj + plafonul EXTINS 15000 (decizia proprietarului 22.11.2026, --plafon-extins; AG_PLAFON_EXTINS_MS) + PAȘII L15 v2
+//   GENERAȚI de scripts/livrare_amprenta_gen.sh (aceleași funcții ca runnerul): întâi
 //   generarea manifestului (GLOBAL aprobat „-”, ROLLBACK), apoi livrarea cu GLOBAL-ul citit + manifestul generat (diferența = exact manifestul) și
 //   garda finală REALĂ a runnerului + COMMIT. Lista obiectelor din manifest = supabase/tests/20270106a_executie_semnale.l15.obiecte.tsv
 //   (`--scrie-obiecte` o regenerează; PG18 adaugă constrângerile NOT NULL, ignorate: producția e PG17).
@@ -87,11 +88,13 @@ SQL_LANT += `CREATE POLICY executie_acces_proiect_citire ON public.executie_proi
   USING ((SELECT public.fn_executie_acces_nerestrans()) OR public.fn_executie_proiect_permis(id::bigint, false));\n`
 
 // ── 0b. validatorul REAL al runnerului pe fișierele exacte din repo (octeții lor) ──
-const PLAFON_LIVRARE = Number(execFileSync('bash', ['-c', '. "$1"; printf %s "$AG_PLAFON_MS"', '_', join(ROOT, 'scripts/livrare_amprenta.sh')], { encoding: 'utf8' }))
+// runda 18 a runnerului (22.11.2026): migrarea cere plafonul EXTINS (AG_PLAFON_EXTINS_MS, cu --plafon-extins); plafonul standard L15 (AG_PLAFON_MS) e refuzat de ea
+const PLAFON_LIVRARE = Number(execFileSync('bash', ['-c', '. "$1"; printf %s "$AG_PLAFON_EXTINS_MS"', '_', join(ROOT, 'scripts/livrare_amprenta.sh')], { encoding: 'utf8' }))
+const PLAFON_L15 = Number(execFileSync('bash', ['-c', '. "$1"; printf %s "$AG_PLAFON_MS"', '_', join(ROOT, 'scripts/livrare_amprenta.sh')], { encoding: 'utf8' }))
 const PLAFON_REVENIRE = 2000
-const validator = (fisier, plafon) => {
+const validator = (fisier, plafon, ...opt) => {
   try {
-    const o = execFileSync('bash', ['-c', 'exec python3 "$@"', '_', join(ROOT, 'scripts/livrare_validator.py'), fisier, 'reg_0123456789abcdef', '--plafon-tranzactie-ms', String(plafon)],
+    const o = execFileSync('bash', ['-c', 'exec python3 "$@"', '_', join(ROOT, 'scripts/livrare_validator.py'), fisier, 'reg_0123456789abcdef', '--plafon-tranzactie-ms', String(plafon), ...opt],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
     return { ok: true, out: o.trim() }
   } catch (e) { return { ok: false, out: String(e.stderr || e.message).trim() } }
@@ -99,15 +102,20 @@ const validator = (fisier, plafon) => {
 const garda = (nume, plafon, final) => execFileSync('bash', ['-c', '. "$1"; lm_fin "$2" "$3" "$4" lock', '_', join(ROOT, 'scripts/livrare_mesaj.sh'), nume, String(plafon), final], { encoding: 'utf8' })
 console.log('0b. validatorul runnerului (cu plafon) pe migrare și pe revenire')
 {
-  ok(PLAFON_LIVRARE === 5000 && MIG.includes(`IS DISTINCT FROM '${PLAFON_LIVRARE}/session'`), `migrarea cere exact plafonul runnerului L15 v2 (AG_PLAFON_MS = ${PLAFON_LIVRARE})`)
-  const vm = validator(join(ROOT, 'supabase/migrations/20270106a_executie_semnale.sql'), PLAFON_LIVRARE)
-  ok(vm.ok && /^OK \d+ /.test(vm.out), 'migrarea trece validatorul cu plafonul runnerului: ' + vm.out)
+  ok(PLAFON_LIVRARE === 15000 && PLAFON_L15 === 5000 && MIG.includes(`IS DISTINCT FROM '${PLAFON_LIVRARE}/session'`) && MIG.split('\n')[0].includes(`--plafon-tranzactie-ms ${PLAFON_LIVRARE} --plafon-extins`),
+    `migrarea cere exact plafonul EXTINS al runnerului (AG_PLAFON_EXTINS_MS = ${PLAFON_LIVRARE}) și declară --plafon-extins în antet; plafonul standard L15 rămâne ${PLAFON_L15}`)
+  const vm = validator(join(ROOT, 'supabase/migrations/20270106a_executie_semnale.sql'), PLAFON_LIVRARE, '--plafon-extins')
+  ok(vm.ok && /^OK \d+ /.test(vm.out), 'migrarea trece validatorul cu plafonul extins + --plafon-extins: ' + vm.out)
   const vr = validator(join(ROOT, 'supabase/revenire/20270106a_executie_semnale_ROLLBACK.sql'), PLAFON_REVENIRE)
   ok(vr.ok && /^OK \d+ /.test(vr.out), 'revenirea trece validatorul cu plafonul ei: ' + vr.out)
-  const vm2 = validator(join(ROOT, 'supabase/migrations/20270106a_executie_semnale.sql'), 2000)
-  ok(!vm2.ok && /PLAFON_DIFERIT/.test(vm2.out), 'migrarea (cere 5000) cu runnerul la 2000 = refuz: ' + vm2.out.slice(0, 120))
+  const vm2 = validator(join(ROOT, 'supabase/migrations/20270106a_executie_semnale.sql'), PLAFON_L15, '--plafon-extins')
+  ok(!vm2.ok && /PLAFON_DIFERIT/.test(vm2.out), `migrarea (cere ${PLAFON_LIVRARE}) cu runnerul la ${PLAFON_L15} = refuz: ` + vm2.out.slice(0, 120))
+  const vm3 = validator(join(ROOT, 'supabase/migrations/20270106a_executie_semnale.sql'), PLAFON_LIVRARE)
+  ok(!vm3.ok && /PLAFON_EXTINS_DIFERIT/.test(vm3.out), `migrarea (declară --plafon-extins) cu runnerul la ${PLAFON_LIVRARE} FĂRĂ --plafon-extins = refuz: ` + vm3.out.slice(0, 120))
   const vr2 = validator(join(ROOT, 'supabase/revenire/20270106a_executie_semnale_ROLLBACK.sql'), PLAFON_LIVRARE)
-  ok(!vr2.ok && /PLAFON_DIFERIT/.test(vr2.out), 'revenirea (cere 2000) cu runnerul la 5000 = refuz: ' + vr2.out.slice(0, 120))
+  ok(!vr2.ok && /PLAFON_DIFERIT/.test(vr2.out), `revenirea (cere 2000) cu runnerul la ${PLAFON_LIVRARE} = refuz: ` + vr2.out.slice(0, 120))
+  const vr3 = validator(join(ROOT, 'supabase/revenire/20270106a_executie_semnale_ROLLBACK.sql'), PLAFON_REVENIRE, '--plafon-extins')
+  ok(!vr3.ok && /PLAFON_EXTINS_DIFERIT/.test(vr3.out), 'revenirea (nu declară --plafon-extins) cu --plafon-extins = refuz: ' + vr3.out.slice(0, 120))
 }
 
 // ── conturile și datele (scrise de mână) ──
@@ -690,8 +698,8 @@ console.log('1. aplicarea ca la livrare (L15 v2: manifest generat, apoi livrarea
   const j = await aplicaMig(db, MIG, { l15: 'livrare', aprobat: G, manifest: fManifest, final: garda(NUME, PLAFON_LIVRARE, 'COMMIT') })
   ok(j.some(m => /^AMPRENTA_GLOBALA dupa: \d+ diferente = manifestul/.test(m)) && j.some(m => /sfarsit la \d+ ms de la BEGIN; lock-uri puternice tinute de \d+ ms/.test(m)),
     'livrarea aprobată: diferența = manifestul; ' + j.filter(m => /ms de la BEGIN/.test(m)).map(m => m.slice(0, 90)).join(' | '))
-  ok(j.some(m => new RegExp(`^PLAFON_TIMP ${NUME}: garda trecuta la \\d+ ms de la BEGIN \\(plafon 5000 ms\\)`).test(m)) && j.some(m => /^LOCK_TINUT /.test(m))
-    && j.some(m => /lock la \d+ ms de la BEGIN \(1 incercari, \d+ ms de la prima incercare\)/.test(m)), 'garda finală a runnerului: PLAFON_TIMP (5000) + LOCK_TINUT')
+  ok(j.some(m => new RegExp(`^PLAFON_TIMP ${NUME}: garda trecuta la \\d+ ms de la BEGIN \\(plafon ${PLAFON_LIVRARE} ms\\)`).test(m)) && j.some(m => /^LOCK_TINUT /.test(m))
+    && j.some(m => /lock la \d+ ms de la BEGIN \(1 incercari, \d+ ms de la prima incercare\)/.test(m)), `garda finală a runnerului: PLAFON_TIMP (${PLAFON_LIVRARE}) + LOCK_TINUT`)
   const ab = await verifica(db)
   ab.forEach(a => console.log('     ' + a))
   ok(ab.length === 0, `verificările de comportament (${ab.length} abateri)`)
@@ -725,7 +733,8 @@ console.log('2. refuzurile migrării')
 for (const [nume, fn, re] of [
   ['fără marcajul runnerului', db => aplicaMig(db, MIG, { marcaj: false }), /garda start invalida/],
   ['fără plafon', db => aplicaMig(db, MIG, { plafon: 0, marcajPlafon: false }), /PLAFON_TRANZACTIE lipsa/],
-  ['plafonul vechi (2000) pus de runner', db => aplicaMig(db, MIG, { plafon: 2000 }), /PLAFON_TRANZACTIE lipsa: 2000\/session marcaj 2000:\d+ \(cerut 5000\/session/],
+  ['plafonul standard L15 (5000, fără --plafon-extins) pus de runner', db => aplicaMig(db, MIG, { plafon: PLAFON_L15 }), new RegExp(`PLAFON_TRANZACTIE lipsa: ${PLAFON_L15}/session marcaj ${PLAFON_L15}:\\d+ \\(cerut ${PLAFON_LIVRARE}/session`)],
+  ['plafonul vechi (2000) pus de runner', db => aplicaMig(db, MIG, { plafon: 2000 }), new RegExp(`PLAFON_TRANZACTIE lipsa: 2000/session marcaj 2000:\\d+ \\(cerut ${PLAFON_LIVRARE}/session`)],
   ['fără amprenta globală L15 v2 (pasul „înainte” lipsă)', db => aplicaMig(db, MIG, { l15: 'nimic' }), /AMPRENTA_GLOBALA_LIPSA/],
   ['pasul „înainte” dintr-o tranzacție anterioară', async db => {
     await db.exec(`BEGIN; CREATE TEMP TABLE ag_ina_0123456789abcdef (x int); COMMIT;`)
@@ -783,7 +792,7 @@ console.log('3. revenirea')
   let m = null; try { await revino(db, REV, { plafon: 0, marcajPlafon: false }) } catch (e) { m = e.message }
   ok(/PLAFON_TRANZACTIE lipsa/.test(m || ''), 'revenirea fără plafon refuzată')
   m = null; try { await revino(db, REV, { plafon: PLAFON_LIVRARE }) } catch (e) { m = e.message }
-  ok(/PLAFON_TRANZACTIE lipsa: 5000\/session/.test(m || ''), 'revenirea cu plafonul livrărilor (5000, nu al ei) refuzată')
+  ok(new RegExp(`PLAFON_TRANZACTIE lipsa: ${PLAFON_LIVRARE}/session`).test(m || ''), `revenirea cu plafonul livrărilor (${PLAFON_LIVRARE}, nu al ei) refuzată`)
   m = null; try { await revino(db, REV, { marcaj: false }) } catch (e) { m = e.message }
   ok(/garda invalida/.test(m || ''), 'revenirea fără marcaj refuzată')
   for (const [ce, sql, undo, re] of [

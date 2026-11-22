@@ -1,6 +1,7 @@
--- Version 20270105130000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 5000 --amprenta-globala <md5> --diferente-globale
---   supabase/migrations/20270105b_executie_proiect_configurare.l15.tsv (DOAR cu plafon ȘI cu amprenta globală L15 v2; manifestul se generează pe
---   clonă). Lista OBIECTELOR revizuită: supabase/tests/20270105b_executie_proiect_configurare.l15.obiecte.tsv.
+-- Version 20270105130000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 15000 --plafon-extins --amprenta-globala <md5> --diferente-globale
+--   supabase/migrations/20270105b_executie_proiect_configurare.l15.tsv (DOAR cu plafonul EXTINS — decizia proprietarului 22.11.2026, ca 20270105a:
+--   pe producție cele două fotografii L15 singure iau ~3 s; --plafon-extins cere fereastra orară, docs/LIVRARE_L15_V2.md §9 — ȘI cu amprenta
+--   globală L15 v2; manifestul se generează pe clonă). Lista OBIECTELOR revizuită: supabase/tests/20270105b_executie_proiect_configurare.l15.obiecte.tsv.
 -- 20270105b_executie_proiect_configurare — Execuție: poarta proiectului NOU „în configurare” (decizia owner-ului, 21.11.2026; plan Task 2).
 --   „În configurare” = executie_proiecte.configurare_completa_la IS NULL (coloanele vin din 20270105a). Un proiect iese din configurare doar
 --   când are oferta financiară încărcată (rânduri contract_initial active, fn_rest_decontat_are_oferta) — sau, prin excepție, când owner-ul o
@@ -21,7 +22,8 @@
 --   (20261230a): trigger-ul pe executie_proiecte e o atingere „posibilă” a perimetrului E4b → ritualul PRE / ștampile / POST, ca în 20270105a.
 -- Ordinea lock-urilor (L06): migrarea: executie_proiecte (ACCESS EXCLUSIVE). RPC-ul: advisory (proiect, aceeași cheie ca RPC-urile din 20270105a)
 --   -> executie_proiecte FOR UPDATE -> UPDATE -> INSERT jurnal.
--- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, garda finală.
+-- GĂRZILE DE TIMP: plafonul tranzacției = 15000 ms (plafonul EXTINS, --plafon-extins, doar în fereastra 21:00–06:00 Europe/Bucharest) pus de
+--   runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, garda finală.
 -- Revenire: supabase/revenire/20270105b_executie_proiect_configurare_ROLLBACK.sql. Probe: scripts/pglite/test_executie_rest_decontat_local.mjs,
 --   supabase/tests/20270105b_executie_proiect_configurare_dryrun.sql.
 DO $pre$
@@ -39,9 +41,9 @@ BEGIN
   END IF;
   IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION '20270105b: cere PostgreSQL 17 (plafonul tranzactiei)'; END IF;
   SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
-  IF v_plafon IS DISTINCT FROM '5000/session'
-     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || txid_current() THEN
-    RAISE EXCEPTION '20270105b: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 5000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 5000)',
+  IF v_plafon IS DISTINCT FROM '15000/session'
+     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '15000:' || txid_current() THEN
+    RAISE EXCEPTION '20270105b: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 15000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 15000 --plafon-extins)',
       coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa');
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = pg_my_temp_schema() AND c.relkind = 'r' AND c.relname ~ '^ag_ina_[0-9a-f]{16}$'
