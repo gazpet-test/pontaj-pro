@@ -1,9 +1,11 @@
 -- Dry-run 20270106a_executie_semnale — DOAR pe clona schemei de producție (PG ca în producție, postgres NOSUPERUSER), NICIODATĂ pe producție.
 -- Cere migrarea 20270106a APLICATĂ pe clonă (prin runner, cu L15 v2). Rulare din rădăcina repo-ului:
 --   psql -X -v ON_ERROR_STOP=1 -f supabase/tests/20270106a_executie_semnale_dryrun.sql
--- O singură tranzacție, ANULATĂ la final (ROLLBACK): identități reale din catalog (owner + 4 profiluri non-owner, cu drepturile 'executie',
--- legătura cu fișa de angajat și restricția pe proiect rescrise DOAR în tranzacție), 2 angajați și 2 proiecte EXISTENTE (managerul de proiect
--- rescris doar în tranzacție), semnale FICTIVE (tip „dry_*”). Nimic din datele reale nu se citește în afara catalogului și nimic nu rămâne.
+-- O singură tranzacție, ANULATĂ la final (ROLLBACK). r-clona (proba chat-ului pe clona PG17, 22.11.2026): fixturile NU se bazează pe date
+-- existente (un mediu nou poate avea 0 angajați / profiluri / proiecte) și respectă constrângerile producției: D0 creează în tranzacție owner-ul
+-- + 4 profiluri non-owner SINTETICE (rol explicit din profiles_role_chk, câte o fișă de angajat pe cont: uniq_profiles_employee_id), 3 angajați
+-- sintetici (department NOT NULL), cheia de modul 'executie' dacă lipsește (FK user_module_access → app_modules) și 3 proiecte sintetice;
+-- semnale FICTIVE (tip „dry_*”). Nimic din datele reale nu se citește sau se schimbă și nimic nu rămâne.
 -- Fiecare test se termină cu NOTICE „Dn OK” (D0–D6); orice abatere oprește rularea (RAISE EXCEPTION). Refuzurile se verifică după SQLSTATE și după
 -- fragmentul exact al mesajului (L25). Același scenariu rulează local pe PGlite (scripts/pglite/test_executie_semnale_local.mjs, secțiunea 6).
 \set ON_ERROR_STOP 1
@@ -57,39 +59,45 @@ BEGIN
 END $h$;
 GRANT EXECUTE ON FUNCTION pg_temp.d_ca(uuid, text), pg_temp.d_refuza(text, text, text), pg_temp.d_g(text), pg_temp.d_semnal(integer, jsonb) TO authenticated, anon, service_role;
 
--- D0: identități, drepturi și legături rescrise în tranzacție
+-- D0: identități, angajați, drepturi și proiecte SINTETICE, create în tranzacție (r-clona: nimic din datele existente)
 DO $t$
-DECLARE own uuid; ids uuid[]; e integer[]; p bigint; p2 bigint;
+DECLARE own uuid := 'f0000000-0000-4000-8000-0000000000d0';
+  ids uuid[] := ARRAY['f0000000-0000-4000-8000-0000000000d1', 'f0000000-0000-4000-8000-0000000000d2', 'f0000000-0000-4000-8000-0000000000d3',
+                      'f0000000-0000-4000-8000-0000000000d4']::uuid[];
+  e integer[] := ARRAY[9301, 9302, 9303]; p bigint; p2 bigint; p3 bigint;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'D0 FAIL: rulează ca postgres'; END IF;
   IF to_regclass('public.executie_semnale') IS NULL THEN RAISE EXCEPTION 'D0 FAIL: migrarea 20270106a nu e aplicată'; END IF;
-  SELECT id INTO own FROM public.profiles WHERE is_owner IS TRUE ORDER BY id LIMIT 1;
-  SELECT array_agg(id ORDER BY id) INTO ids FROM (SELECT id FROM public.profiles WHERE is_owner IS NOT TRUE ORDER BY id LIMIT 4) x;
-  SELECT array_agg(id ORDER BY id) INTO e FROM (SELECT id FROM public.employees WHERE active IS NOT FALSE ORDER BY id LIMIT 2) x;
-  SELECT id INTO p FROM public.executie_proiecte ORDER BY id LIMIT 1;
-  SELECT id INTO p2 FROM public.executie_proiecte WHERE id <> p ORDER BY id LIMIT 1;
-  IF own IS NULL OR coalesce(array_length(ids, 1), 0) < 4 OR coalesce(array_length(e, 1), 0) < 2 OR p IS NULL OR p2 IS NULL THEN
-    RAISE EXCEPTION 'D0 FAIL: identități / angajați / proiecte insuficiente';
-  END IF;
   IF EXISTS (SELECT 1 FROM public.executie_semnale WHERE tip LIKE 'dry\_%') THEN RAISE EXCEPTION 'D0 FAIL: tipurile dry_* sunt deja folosite'; END IF;
-  -- ids[1] = managerul proiectului p (fișa e[1]); ids[2] = responsabil (fișa e[2]); ids[3] = acces general 'admin' pe modul, fără fișă;
-  -- ids[4] = managerul proiectului p, dar RESTRÂNS pe proiectul p2 (lista 20261209a) → nu vede p
-  UPDATE public.profiles SET employee_id = NULL WHERE id = ANY (ids);
-  UPDATE public.profiles SET employee_id = e[1] WHERE id IN (ids[1], ids[4]);
-  UPDATE public.profiles SET employee_id = e[2] WHERE id = ids[2];
-  DELETE FROM public.user_module_access WHERE profile_id = ANY (ids) AND module = 'executie';
+  -- angajații: e[1] = MP-ul lui p1, e[2] = responsabilul, e[3] = MP-ul lui p3 (contul restrâns); department e NOT NULL pe producție
+  INSERT INTO public.employees (id, name, department, active) VALUES (e[1], 'DS MP P1', 'Executie', true), (e[2], 'DS RESPONSABIL', 'Executie', true),
+    (e[3], 'DS MP P3 RESTRANS', 'Executie', true);
+  IF to_regclass('auth.users') IS NOT NULL THEN
+    INSERT INTO auth.users (id) SELECT x FROM unnest(own || ids) x ON CONFLICT (id) DO NOTHING;
+  END IF;
+  -- ids[1] = managerul proiectului p1 (fișa e[1]); ids[2] = responsabil (fișa e[2]); ids[3] = acces general 'admin' pe modul, fără fișă;
+  -- ids[4] = managerul proiectului p3 (fișa e[3]: o fișă = un cont, uniq_profiles_employee_id), dar RESTRÂNS pe proiectul p2 (lista 20261209a)
+  -- → nu vede p3 (D2, cu martorul: fără restricție îl vede). Rolul e explicit: valoarea implicită a coloanei ('manager') nu trece profiles_role_chk;
+  -- 'teren' nu dă niciun drept în Execuție (dreptul vine din is_owner / user_module_access / fișă).
+  INSERT INTO public.profiles (id, is_owner, employee_id, role) VALUES (own, true, NULL, 'teren'), (ids[1], false, e[1], 'teren'), (ids[2], false, e[2], 'teren'),
+    (ids[3], false, NULL, 'teren'), (ids[4], false, e[3], 'teren')
+  ON CONFLICT (id) DO UPDATE SET is_owner = EXCLUDED.is_owner, employee_id = EXCLUDED.employee_id, role = EXCLUDED.role;
+  -- user_module_access.module are FK spre app_modules(key): cheia 'executie' există pe producție; într-un mediu nou o creează fixtura (anulată la ROLLBACK)
+  INSERT INTO public.app_modules (key, parent_key, name, is_active, show_on_homepage) VALUES ('executie', NULL, 'Executie', true, true) ON CONFLICT (key) DO NOTHING;
+  DELETE FROM public.user_module_access WHERE profile_id = ANY (own || ids);
   INSERT INTO public.user_module_access (profile_id, module, access_level)
   VALUES (ids[1], 'executie', 'editor'), (ids[2], 'executie', 'viewer'), (ids[3], 'executie', 'admin'), (ids[4], 'executie', 'editor');
-  DELETE FROM public.executie_acces_proiect WHERE profile_id = ANY (ids);
+  INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('DS-P1', 'Dry semnale P1', e[1]) RETURNING id INTO p;
+  INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('DS-P2', 'Dry semnale P2', NULL) RETURNING id INTO p2;
+  INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('DS-P3', 'Dry semnale P3 (MP-ul restrans)', e[3]) RETURNING id INTO p3;
+  DELETE FROM public.executie_acces_proiect WHERE profile_id = ANY (own || ids);
   INSERT INTO public.executie_acces_proiect (profile_id, proiect_id, nivel) VALUES (ids[4], p2, 'editor');
-  UPDATE public.executie_proiecte SET mp_employee_id = e[1] WHERE id = p;
-  UPDATE public.executie_proiecte SET mp_employee_id = NULL WHERE id = p2;
   PERFORM set_config('dsem.own', own::text, true);
   PERFORM set_config('dsem.mp', ids[1]::text, true); PERFORM set_config('dsem.resp', ids[2]::text, true);
   PERFORM set_config('dsem.gen', ids[3]::text, true); PERFORM set_config('dsem.restr', ids[4]::text, true);
-  PERFORM set_config('dsem.e1', e[1]::text, true); PERFORM set_config('dsem.e2', e[2]::text, true);
-  PERFORM set_config('dsem.p1', p::text, true); PERFORM set_config('dsem.p2', p2::text, true);
-  RAISE NOTICE 'D0 OK (p1=%, p2=%, e1=%, e2=%)', p, p2, e[1], e[2];
+  PERFORM set_config('dsem.e1', e[1]::text, true); PERFORM set_config('dsem.e2', e[2]::text, true); PERFORM set_config('dsem.e3', e[3]::text, true);
+  PERFORM set_config('dsem.p1', p::text, true); PERFORM set_config('dsem.p2', p2::text, true); PERFORM set_config('dsem.p3', p3::text, true);
+  RAISE NOTICE 'D0 OK (p1=%, p2=%, p3=%, e1=%, e2=%, e3=%)', p, p2, p3, e[1], e[2], e[3];
 END $t$;
 
 -- D1: agentul scrie (creat), dedup (același semnal = actualizat / neschimbat, un singur rând), refuzurile de validare
@@ -143,11 +151,21 @@ DECLARE own uuid := pg_temp.d_g('own')::uuid; mp uuid := pg_temp.d_g('mp')::uuid
   qv text := 'SELECT count(*)::int FROM public.v_executie_semnale WHERE tip LIKE ''dry\_%''';
   qj text := 'SELECT count(*)::int FROM public.executie_semnale_jurnal j WHERE j.semnal_id IN (' || pg_temp.d_g('s1') || ', ' || pg_temp.d_g('s2') || ')';
 BEGIN
-  IF pg_temp.d_nr(own, 'authenticated', q) <> 2 OR pg_temp.d_nr(own, 'authenticated', qv) <> 2 OR pg_temp.d_nr(own, 'authenticated', qj) <> 3 THEN RAISE EXCEPTION 'D2 FAIL: owner-ul nu vede tot'; END IF;
+  -- r-clona: s3 pe p3, proiectul al cărui MP e contul restrâns (fișa e3; restricția lui e pe p2)
+  PERFORM set_config('dsem.s3', pg_temp.d_scrie(pg_temp.d_semnal(3, '{"tip": "dry_restrans_p3"}')) ->> 'id', true);
+  IF pg_temp.d_g('s3') IS NULL THEN RAISE EXCEPTION 'D2 FAIL: semnalul pe p3 nu s-a scris'; END IF;
+  IF pg_temp.d_nr(own, 'authenticated', q) <> 3 OR pg_temp.d_nr(own, 'authenticated', qv) <> 3 OR pg_temp.d_nr(own, 'authenticated', qj) <> 3 THEN RAISE EXCEPTION 'D2 FAIL: owner-ul nu vede tot'; END IF;
   IF pg_temp.d_nr(mp, 'authenticated', q) <> 1 OR pg_temp.d_nr(mp, 'authenticated', qv) <> 1 OR pg_temp.d_nr(mp, 'authenticated', qj) <> 2 THEN RAISE EXCEPTION 'D2 FAIL: MP-ul nu vede exact p1'; END IF;
   IF pg_temp.d_nr(resp, 'authenticated', q) <> 1 OR pg_temp.d_nr(resp, 'authenticated', qj) <> 1 THEN RAISE EXCEPTION 'D2 FAIL: responsabilul nu vede exact semnalul lui'; END IF;
   IF pg_temp.d_nr(gen, 'authenticated', q) <> 0 OR pg_temp.d_nr(gen, 'authenticated', qv) <> 0 OR pg_temp.d_nr(gen, 'authenticated', qj) <> 0 THEN RAISE EXCEPTION 'D2 FAIL: accesul general pe modul vede semnale'; END IF;
-  IF pg_temp.d_nr(restr, 'authenticated', q) <> 0 THEN RAISE EXCEPTION 'D2 FAIL: MP-ul restrâns pe alt proiect vede p1'; END IF;
+  -- contul restrâns pe p2 nu vede nimic, nici semnalul proiectului lui (p3); martorul: fără restricție vede exact s3 (deci restricția îl ascunde)
+  IF pg_temp.d_nr(restr, 'authenticated', q) <> 0 OR pg_temp.d_nr(restr, 'authenticated', qv) <> 0 THEN RAISE EXCEPTION 'D2 FAIL: MP-ul restrâns pe alt proiect vede semnale (p3)'; END IF;
+  DELETE FROM public.executie_acces_proiect WHERE profile_id = restr;
+  IF pg_temp.d_nr(restr, 'authenticated', q || ' AND id = ' || pg_temp.d_g('s3')) <> 1 OR pg_temp.d_nr(restr, 'authenticated', q) <> 1 THEN
+    RAISE EXCEPTION 'D2 FAIL: martorul: fără restricție, MP-ul lui p3 nu vede exact semnalul lui';
+  END IF;
+  INSERT INTO public.executie_acces_proiect (profile_id, proiect_id, nivel) VALUES (restr, pg_temp.d_g('p2')::bigint, 'editor');
+  IF pg_temp.d_nr(restr, 'authenticated', q) <> 0 THEN RAISE EXCEPTION 'D2 FAIL: restricția pusă la loc nu mai ascunde p3'; END IF;
   IF pg_temp.d_nr(NULL, 'authenticated', q) <> 0 THEN RAISE EXCEPTION 'D2 FAIL: fără JWT se văd semnale'; END IF;
   PERFORM pg_temp.d_ca(NULL, 'anon');
   IF NOT pg_temp.d_refuza(q, '42501') THEN RAISE EXCEPTION 'D2 FAIL: anon citește'; END IF;

@@ -10,7 +10,8 @@
 // 2. Livrarea A: manifestul generat = lista revizuită; rândurile moștenite neatinse (în afara cheii), cheia cu nr doar pe codul repetat în document;
 //    ștampilele porților recalculate și verzi; blocul AMPRENTA identic în migrare și revenire, aceeași constantă.
 // 3. Dry-run-ul A (supabase/tests/20270105a_…_dryrun.sql, toate blocurile, ROLLBACK la final): toate NOTICE-urile „ok”, nimic rămas. Dry-run-ul începe
-//    cu garda în SESIUNE PROASPĂTĂ (marcajul RPC NULL), de aceea rulează pe o bază pe care niciun RPC n-a scris încă.
+//    cu garda în SESIUNE PROASPĂTĂ (marcajul RPC NULL), de aceea rulează pe o bază pe care niciun RPC n-a scris încă. Orice dry-run (A, B, mutanții)
+//    rulează cu constrângerile producției în tranzacția lui (scripts/pglite/fixturi/executie_constrangeri_productie.sql, proba clonei din 22.11.2026).
 // 4. MUTANȚI ai migrării A: un mutant contează „prins” DOAR dacă s-a APLICAT cu succes (fără postcondiții) și dry-run-ul l-a picat; cu postcondițiile
 //    întregi trebuie refuzat la aplicare. r2 (review #1158): marcajul NULL acceptat de gărzi (articole / situații), restricția pe proiect scoasă din
 //    drept, un singur grup de coduri repetate, poziția lipsă neverificată, lista completă pe obiect_cod brut, nota neaprobată acceptată (RPC / calcul),
@@ -160,10 +161,19 @@ const stare = async db => (await q1(db, `SELECT jsonb_build_object(
   'fn', (SELECT string_agg(p.proname || ':' || md5(p.prosrc) || ':' || coalesce(p.proacl::text, '-'), ',' ORDER BY p.proname, p.oid) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace),
   'com', (SELECT string_agg(d.description, ',' ORDER BY d.description) FROM pg_description d JOIN pg_proc p ON p.oid = d.objoid AND d.classoid = 'pg_proc'::regclass WHERE p.proname LIKE 'fn_izo_porti%')) AS s`)).s
 const randuriMostenite = async db => (await q1(db, `SELECT md5(string_agg(concat_ws('|', id, proiect_id, obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, cantitate, valoare, sursa, act_nr, pret_unitar, created_at), chr(10) ORDER BY id)) AS h, count(*)::int AS n FROM public.proiect_articole WHERE proiect_id = 900`))
-// dry-run-ul: o singură tranzacție (BEGIN … ROLLBACK în fișier); întoarce NOTICE-urile
+// constrângerile PRODUCȚIEI pe tabelele comune (proba chat-ului pe clona PG17, 22.11.2026: employees.department NOT NULL, profiles.role implicit
+// 'manager' respins de profiles_role_chk, uniq_profiles_employee_id, FK user_module_access → app_modules fără cheia executie_rest_decontat), puse
+// DOAR în tranzacția dry-run-ului, imediat după BEGIN-ul fișierului: ROLLBACK-ul de la final le anulează, celelalte secțiuni rămân pe schema falsă
+const CONSTRANGERI_PROD = citeste('scripts/pglite/fixturi/executie_constrangeri_productie.sql')
+function cuConstrangeriProd(text) {
+  const m = /^BEGIN\b[^;\n]*;/m.exec(text)
+  if (!m) throw new Error('dry-run-ul nu are BEGIN la început de rând')
+  return text.slice(0, m.index + m[0].length) + '\n' + CONSTRANGERI_PROD + '\n' + text.slice(m.index + m[0].length)
+}
+// dry-run-ul: o singură tranzacție (BEGIN … ROLLBACK în fișier), cu constrângerile producției; întoarce NOTICE-urile
 async function dryrun(db, text) {
   const jurnal = []
-  try { await db.exec(text, { onNotice: n => jurnal.push(n.message) }) }
+  try { await db.exec(cuConstrangeriProd(text), { onNotice: n => jurnal.push(n.message) }) }
   catch (e) { try { await db.exec('ROLLBACK') } catch { /* anulată */ } e.jurnal = jurnal; throw e }
   return jurnal
 }
@@ -380,6 +390,8 @@ if (!DOAR || DOAR === '3') {
   ok(ab.length === 0, 'dry-run A: toate blocurile ok' + (ab.length ? ': ' + ab.join(' | ') : ''))
   const r = await q1(DB, `SELECT (SELECT count(*) FROM public.executie_sl_detaliu) + (SELECT count(*) FROM public.executie_note_modificare) + (SELECT count(*) FROM public.proiect_articole WHERE confirmat_la IS NOT NULL) AS n`)
   ok(Number(r.n) === 0, 'după ROLLBACK-ul dry-run-ului nimic nu a rămas')
+  ok((await q1(DB, `SELECT to_regclass('public.app_modules') IS NULL AND NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.employees'::regclass AND attname = 'department') AS v`)).v === true,
+    'constrângerile producției au trăit doar în tranzacția dry-run-ului (anulate de ROLLBACK)')
 }
 
 if (!DOAR || DOAR === '4') {

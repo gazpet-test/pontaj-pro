@@ -12,12 +12,14 @@ GRANT SELECT, INSERT ON rd_fix TO authenticated, service_role;
 DO $fix$
 DECLARE v bigint;
 BEGIN
-  INSERT INTO public.employees (id, name) VALUES (9201, 'RD MP POARTA');
+  -- r-clona (proba chat-ului pe clona PG17, 22.11.2026): constrangerile productiei — employees.department NOT NULL; profiles.role explicit
+  -- (valoarea implicita 'manager' nu trece profiles_role_chk; 'teren' nu da drepturi in Executie); o fisa = un cont (uniq_profiles_employee_id)
+  INSERT INTO public.employees (id, name, department) VALUES (9201, 'RD MP POARTA', 'Executie');
   IF to_regclass('auth.users') IS NOT NULL THEN
     INSERT INTO auth.users (id) SELECT x::uuid FROM unnest(ARRAY['f0000000-0000-4000-8000-00000000001a', 'f0000000-0000-4000-8000-00000000001b']) x ON CONFLICT (id) DO NOTHING;
   END IF;
-  INSERT INTO public.profiles (id, is_owner, employee_id) VALUES ('f0000000-0000-4000-8000-00000000001a', true, NULL), ('f0000000-0000-4000-8000-00000000001b', false, 9201)
-  ON CONFLICT (id) DO UPDATE SET is_owner = EXCLUDED.is_owner, employee_id = EXCLUDED.employee_id;
+  INSERT INTO public.profiles (id, is_owner, employee_id, role) VALUES ('f0000000-0000-4000-8000-00000000001a', true, NULL, 'teren'), ('f0000000-0000-4000-8000-00000000001b', false, 9201, 'teren')
+  ON CONFLICT (id) DO UPDATE SET is_owner = EXCLUDED.is_owner, employee_id = EXCLUDED.employee_id, role = EXCLUDED.role;
   INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P1', 'Dry poarta P1', 9201) RETURNING id INTO v;
   INSERT INTO rd_fix VALUES ('p1', v);
   INSERT INTO public.executie_proiecte (cod_intern, nume, mp_employee_id) VALUES ('RD-P3', 'Dry poarta P3 fara oferta', 9201) RETURNING id INTO v;

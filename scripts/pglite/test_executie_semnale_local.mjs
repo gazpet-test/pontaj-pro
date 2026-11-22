@@ -28,7 +28,8 @@
 //    spațiu alb, fără UNKNOWN); versiunea CREȘTE la neschimbat_inchis (scriere pe ultima_verificare), jurnalul nu; mutanții M51–M59.
 // 4. MUTANȚI ai migrării: fiecare TREBUIE să pice (la aplicare, la verificări sau prin detectorul lui).
 // 5. Paritatea tranzițiilor: blocul TRANZITII din migrare = TRANZITII din src/executieSemnaleLogica.js + aceleași răspunsuri pe toate combinațiile (L19).
-// 6. Dry-run-ul pentru clonă (supabase/tests/20270106a_executie_semnale_dryrun.sql) rulat aici întreg, pe baza cu migrarea aplicată.
+// 6. Dry-run-ul pentru clonă (supabase/tests/20270106a_executie_semnale_dryrun.sql) rulat aici întreg, pe baza cu migrarea aplicată, cu
+//    constrângerile producției în tranzacția lui (scripts/pglite/fixturi/executie_constrangeri_productie.sql), pe o bază GOALĂ și pe cea cu datele probei.
 // Ce NU probează PGlite (o singură conexiune): concurența reală (două sesiuni) — pe clonă, de coordonator.
 // Rulare (din rădăcina repo-ului; cere bash în PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_executie_semnale_local.mjs
 import { PGlite } from '@electric-sql/pglite'
@@ -1001,18 +1002,41 @@ console.log('5. paritatea tranzițiilor: blocul TRANZITII din migrare = src/exec
 
 console.log('6. dry-run-ul pentru clonă (supabase/tests/20270106a_executie_semnale_dryrun.sql) pe PGlite, după aplicare')
 {
-  const db = await bazaNoua()
-  await aplicaMig(db)
-  const text = DRY.split('\n').filter(l => !l.startsWith('\\')).join('\n')
-  const note = []
-  let m = null
-  try { await db.exec(text, { onNotice: n => note.push(n.message) }) } catch (e) { m = e.message; try { await db.exec('ROLLBACK') } catch { /* deja */ } }
-  const okuri = note.filter(x => /^D[0-9] OK/.test(x))
-  ok(m === null && okuri.length === 7, `dry-run-ul: ${okuri.length} pași OK (D0–D6) (${okuri.map(x => x.slice(0, 2)).join(', ')})${m ? '; eroare: ' + m.slice(0, 200) : ''}`)
-  if (m) note.slice(-8).forEach(x => console.log('     ' + x))
-  const ramase = (await db.query(`SELECT count(*)::int AS n FROM public.executie_semnale`)).rows[0].n
-  ok(ramase === 0, 'dry-run-ul nu lasă nimic în urmă (ROLLBACK)')
-  await db.close()
+  // r-clona (proba chat-ului pe clona PG17, 22.11.2026): dry-run-ul își creează TOATE identitățile, angajații și proiectele (nu se bazează pe date
+  // existente) și rulează pe constrângerile producției (scripts/pglite/fixturi/executie_constrangeri_productie.sql: employees.department NOT NULL,
+  // profiles.role implicit respins de CHECK, uniq_profiles_employee_id, FK spre app_modules), puse DOAR în tranzacția lui (după BEGIN, anulate de
+  // ROLLBACK). Două baze: (a) GOALĂ (fără niciun angajat / profil / proiect, ca un mediu nou) și (b) cu datele probei (fixturile nu se ciocnesc cu
+  // rândurile existente; seed-ul probei are doi profiluri pe fișa 10, pe care producția nu le permite → fișa celui de-al doilea e scoasă în tranzacție)
+  const PROD = readFileSync(join(ROOT, 'scripts/pglite/fixturi/executie_constrangeri_productie.sql'), 'utf8').replace(/\r/g, '')
+  const DRY_T = DRY.split('\n').filter(l => !l.startsWith('\\')).join('\n')
+  const cuPrelud = prelud => { const m = /^BEGIN\b[^;\n]*;/m.exec(DRY_T); return DRY_T.slice(0, m.index + m[0].length) + '\n' + prelud + '\n' + DRY_T.slice(m.index + m[0].length) }
+  const ruleaza = async (eticheta, db, text) => {
+    const note = []
+    let m = null
+    try { await db.exec(text, { onNotice: n => note.push(n.message) }) } catch (e) { m = e.message; try { await db.exec('ROLLBACK') } catch { /* deja */ } }
+    const okuri = note.filter(x => /^D[0-9] OK/.test(x))
+    ok(m === null && okuri.length === 7, `${eticheta}: ${okuri.length} pași OK (D0–D6) (${okuri.map(x => x.slice(0, 2)).join(', ')})${m ? '; eroare: ' + m.slice(0, 200) : ''}`)
+    if (m) note.slice(-8).forEach(x => console.log('     ' + x))
+    const r = (await db.query(`SELECT (SELECT count(*) FROM public.executie_semnale)::int AS n, to_regclass('public.app_modules') IS NULL AS fara_module,
+      (SELECT count(*) FROM public.executie_proiecte WHERE cod_intern LIKE 'DS-%')::int AS pr`)).rows[0]
+    ok(r.n === 0 && r.fara_module && r.pr === 0, `${eticheta}: nu lasă nimic în urmă (ROLLBACK: semnale, proiecte sintetice, constrângerile de probă)`)
+  }
+  {
+    const db = new PGlite()
+    await db.exec(SCHELET)
+    await db.exec(SQL_LANT)
+    await aplicaMig(db)
+    const n0 = (await db.query(`SELECT (SELECT count(*) FROM public.employees) + (SELECT count(*) FROM public.profiles) + (SELECT count(*) FROM public.executie_proiecte) AS n`)).rows[0].n
+    ok(Number(n0) === 0, 'baza (a) e goală: 0 angajați / profiluri / proiecte')
+    await ruleaza('dry-run-ul pe baza GOALĂ cu constrângerile producției', db, cuPrelud(PROD))
+    await db.close()
+  }
+  {
+    const db = await bazaNoua()
+    await aplicaMig(db)
+    await ruleaza('dry-run-ul pe baza cu datele probei, cu constrângerile producției', db, cuPrelud(`UPDATE public.profiles SET employee_id = NULL WHERE id = '${U.MP_P1_RESTRANS}';\n` + PROD))
+    await db.close()
+  }
 }
 
 console.log(esec ? `\nEȘEC: ${esec} verificări picate` : '\nTOTUL OK')
