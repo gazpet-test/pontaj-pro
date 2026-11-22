@@ -11,7 +11,12 @@
 //   (rânduri de text, cu motiv), probleme (rânduri cu cifre care NU au putut deveni linii, FOI de detaliu nerecunoscute și TOATE
 //   încălcările invariantului de contabilizare — vezi contabilizare.js), avertismente (linii păstrate, dar de privit: valoare ≠
 //   cantitate × preț), complet (= probleme goale; false = rezultatul nu e situația întreagă), foi_nerecunoscute, foi_fara_tabel,
-//   contabilizare (pe foaie: câte rânduri pe fiecare clasă).
+//   contabilizare (pe foaie: câte rânduri pe fiecare clasă), reconciliere (r7: totalurile de control găsite, suma, toleranța, verdictul).
+// RECONCILIEREA CU TOTALUL DOCUMENTULUI (review #1165 r6 → r7, decizia chat-ului — plasa principală, peste invariant): `complet: true`
+//   DOAR dacă documentul are un total de control recunoscut (rândul TOTAL dovedit al foii de detaliu; un „Total …” cu un singur număr pe
+//   recapitulație / copertă) ȘI suma valorilor liniilor citite (cu OS / diverse, cu semn) = acel total, cu toleranța 0,01 lei × linii (max
+//   1 leu). Fără total → problemă „fără total de control”; diferență → problemă cu diferența în lei și foaia / rândul. Prinde orice articol
+//   cu valoare pierdut, indiferent de forma rândului (contabilizare.js reconciliazaTotal — aceeași funcție și pentru devizul AA).
 // INVARIANT (review #1165 r5): fiecare rând ne-gol al fiecărei foi primește exact o clasă (antet / index / titlu / sectiune / articol /
 //   os / diverse / fara_miscare / total / ignorat cu motiv / problema), iar un rând care arată a articol și nu e acoperit (linie, total,
 //   fără mișcare, problemă) intră în `probleme` cu foaia și rândul — verificat la final de verificaContabilizare, aceeași funcție pe care
@@ -24,107 +29,49 @@
 import { parseDeviz } from '../devizParser.js'
 import {
   textAntet, text, eNumeric, numar, RE_NUMAR_AMBIGUU, eRandGol, eRandIndex, eRandDate, randCandidat, eMetaDocument, TIPARE_META_DOCUMENT, eTotalDovedit, RE_TOTAL,
-  tipRand, verificaContabilizare, randuriDeLaA1,
+  totalDeControlFaraAntet, reconciliazaTotal, MOTIV_FARA_CONTROL_VALOARE, tipRand, verificaContabilizare, randuriDeLaA1,
 } from './contabilizare.js'
+import { clasificaColoana, antetDinTitluri, celuleFoaie, blocAntet, CLASE_TABEL, familie } from './antet.js'
 
-// re-exportate (o singură definiție, în contabilizare.js; testele și ecranul le iau de aici)
-export { textAntet, eNumeric, numar, RE_NUMAR_AMBIGUU, randCandidat, eMetaDocument, TIPARE_META_DOCUMENT, eTotalDovedit, tipRand, randuriDeLaA1 }
+// re-exportate (o singură definiție, în contabilizare.js / antet.js; testele și ecranul le iau de aici)
+export { textAntet, eNumeric, numar, RE_NUMAR_AMBIGUU, randCandidat, eMetaDocument, TIPARE_META_DOCUMENT, eTotalDovedit, totalDeControlFaraAntet, reconciliazaTotal, tipRand, randuriDeLaA1, clasificaColoana, antetDinTitluri }
 
 /** Câmpurile unei linii acceptate de fn_rest_decontat_confirma_situatie (plus cheie / potrivire, puse de ecran după confirmare). */
 export const CAMPURI_LINIE_RPC = ['obiect_cod', 'deviz_cod', 'nr', 'cod', 'denumire', 'um', 'cantitate_perioada', 'cantitate_cumulat_doc', 'pret_unitar', 'valoare', 'tip_rand']
 export const COLOANE_OBLIGATORII = ['denumire', 'um', 'cantitate_perioada', 'pret_unitar', 'valoare']
 // Detecția antetului / tabelului parcurge ÎNTREAGA foaie (tot `!ref`), fără limită de rânduri (review #1165 r2 P1): o limită ar
 // transforma un tabel aflat mai jos într-o „copertă” dovedită și liniile lui ar dispărea tăcut, cu `complet: true` (L12, L18).
-const LUNI = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie']
+// Clasificarea coloanelor, calificativele și blocul de antet stau în antet.js (o singură definiție, folosită și de devizul AA Excel — r7).
 
-const tokeni = s => textAntet(s).split(/[^a-z0-9]+/).filter(Boolean)
 const rot = (x, z = 2) => Math.round(x * 10 ** z) / 10 ** z
-
-const RE_CUMUL = /cumul|de la inceput|la zi|pana la data|pana in prezent/
-// „anterior” / „precedent” = realizat PÂNĂ LA situația precedentă (fără perioada curentă): nu e cumulatul la zi și nu e perioada — clasă
-// proprie (cantitate_anterior / valoare_anterior), recunoscută (calificativul e consumat), niciodată folosită drept perioadă sau cumulat
-const RE_ANTERIOR = /anterio|precedent/ // „anterior” / „anterioară” / „precedent(ă)”
-const RE_CONTRACT = /contract|ofert|deviz|prevazut|aprobat|initial/
-const RE_PERIOADA = /perioad|lun[aă]|lunar|curent|realizat|executat|decontat|aceasta situati|situatia curenta/
-// calificativele de antet (review #1165 r5 P1-3 → r6): un rând de deasupra / dedesubtul frunzei cu cel puțin o astfel de celulă (sau o
-// clasă de coloană) e rând al blocului de antet; un calificativ rămas fără clasă la clasificarea coloanelor = `neconsumate` → foaie nerecunoscută
-const RE_CALIFICATIV = /perioad|luna|lunar|curent|cumul|contract|ofert|realizat|executat|decontat|total|unitar|lei|ron|anterio|precedent|prezent/
-
-/**
- * Clasa unei coloane din textul (concatenat) al antetului ei: 'nr' | 'cod' | 'denumire' | 'um' | 'cantitate_contract' |
- * 'cantitate_perioada' | 'cantitate_cumulat' | 'cantitate_anterior' | 'cantitate' (fără calificativ) | 'pret_unitar' | 'valoare' |
- * 'valoare_cumulat' | 'valoare_anterior' | 'valoare_contract' | null. Ordinea contează: valoare → preț → cantitate (un antet „Valoare
- * (cantitate × preț)” e valoare); anterior / precedent bate perioada și cumulatul („Cantitate realizată anterior” nu e realizată în perioadă).
- */
-export function clasificaColoana(textColoana) {
-  const t = textAntet(textColoana)
-  if (!t) return null
-  const tok = new Set(tokeni(t))
-  const anterior = RE_ANTERIOR.test(t), cumul = !anterior && RE_CUMUL.test(t), contract = RE_CONTRACT.test(t), perioada = !anterior && RE_PERIOADA.test(t)
-  if (/valoar/.test(t) || tok.has('val')) return anterior ? 'valoare_anterior' : contract && !perioada && !cumul ? 'valoare_contract' : cumul ? 'valoare_cumulat' : 'valoare'
-  if (/pret/.test(t) || tok.has('pu') || tok.has('p')) return 'pret_unitar'
-  if (/cantit/.test(t) || tok.has('cant')) {
-    if (anterior) return 'cantitate_anterior'
-    if (cumul) return 'cantitate_cumulat'
-    if (contract && !perioada) return 'cantitate_contract'
-    return perioada ? 'cantitate_perioada' : 'cantitate'
-  }
-  if (tok.has('um') || (tok.has('u') && tok.has('m')) || /unitat|\bunit\b/.test(t)) return 'um'
-  if (tok.has('cod') || tok.has('codul') || tok.has('simbol') || tok.has('simbolul') || tok.has('indicativ')) return 'cod'
-  if (/denumir|descrier/.test(t) || tok.has('lucrare') || tok.has('lucrari') || tok.has('lucrarii') || tok.has('articol') || tok.has('articolul') || tok.has('capitol')) return 'denumire'
-  if (tok.has('nr') || tok.has('crt') || tok.has('poz') || tok.has('pozitie') || tok.has('pozitia')) return 'nr'
-  return null
-}
-
-// titlul documentului („Situație de lucrări nr. 7 / octombrie 2026”) lipit de antet (fără rând gol) s-ar clasifica „denumire” (tokenul
-// „lucrari”) și ar intra în blocul de antet, stricând coloana de denumire → o celulă care dă nr. situației e titlu, nu rând de antet
-const eTitluDocument = c => antetDinTitluri([c]).nr_situatie != null
-// celulă de ANTET nevidă (clasă de coloană sau calificativ: „perioadă”, „cumulat”, „contract”…): fără cifre (o dată / un an / un număr
-// de contract sunt titluri, nu antet) și nu titlul documentului
-const eCelulaAntet = c => c !== '' && c != null && !/\d/.test(textAntet(c)) && !eTitluDocument(c) && (clasificaColoana(c) != null || RE_CALIFICATIV.test(textAntet(c)))
-// rând al BLOCULUI de antet (deasupra sau dedesubtul rândului-frunză): fără nicio celulă numerică și cu CEL PUȚIN o celulă de antet
-// (cuvânt-cheie de coloană sau calificativ). O celulă nerecunoscută („Observații”) NU mai taie blocul (review #1165 r5 P1-3: cu regula
-// „toate celulele”, rândul „contract | … | Observații” ieșea din bloc, iar „Cantitate” simplă devenea tăcut perioada). Blocul = ȘIRUL
-// NEÎNTRERUPT de astfel de rânduri în jurul frunzei, fără limită de rânduri (review #1165 r4 P1: fereastra de 2 rânduri). Un rând
-// candidat de articol (cod + UM, fără numere) nu e rând de antet, oricât ar conține cuvinte-cheie („B1 | Lucrare B | m”).
-const eRandAntet = row => !eRandGol(row) && !eRandDate(row) && !randCandidat(row) && row.some(eCelulaAntet)
-const CLASE_TABEL = new Set(['cod', 'denumire', 'um', 'pret_unitar', 'cantitate', 'cantitate_perioada', 'cantitate_cumulat', 'cantitate_anterior', 'cantitate_contract', 'valoare', 'valoare_cumulat', 'valoare_anterior', 'valoare_contract'])
-const familie = cls => (cls && cls.startsWith('cantitate') ? 'cantitate' : cls && cls.startsWith('valoare') ? 'valoare' : cls)
 
 /**
  * Găsește blocul de antet al unei foi (rânduri 0-based [inceput, sfarsit], inclusiv) și coloanele pe clase, căutând în TOATE
  * rândurile foii (nicio fereastră: antetul poate sta după zeci de rânduri de note / titluri; lățimea se ia tot din toate rândurile).
  * rows = sheet_to_json(header:1, blankrows:true, defval:''); merges = sheet['!merges'] (celulele unite primesc valoarea din stânga-sus).
  * Întoarce { ok: true, inceput, sfarsit, primulRandDate, coloane } sau { ok: false, cel_mai_bun: {rand, gasite, lipsesc, ambigue,
- * neconsumate} | null, tabel, candidat }.
- * Blocul = tot șirul neîntrerupt de rânduri de antet în jurul frunzei. `neconsumate` = coloane ale blocului al căror text de antet
- * conține un calificativ (contract / cumulat / perioadă / lună …) dar NU primește nicio clasă (ex. „contract” singur peste o coloană
- * goală): contextul de antet neconsumat face foaia NERECUNOSCUTĂ (raportată), niciodată „Cantitate” simplă = perioada tăcut.
+ * neconsumate, context_exclus?} | null, tabel, candidat }.
+ * Blocul (antet.js blocAntet) = tot șirul neîntrerupt de rânduri de antet în jurul frunzei. `neconsumate` = coloane ale blocului al căror
+ * text de antet conține un calificativ (contract / cumulat / perioadă / lună …) dar NU primește nicio clasă (ex. „contract” singur peste o
+ * coloană goală): contextul de antet neconsumat face foaia NERECUNOSCUTĂ (raportată), niciodată „Cantitate” simplă = perioada tăcut.
+ * `context_exclus` (r7) = rândul de deasupra blocului cu calificative dar ținut afară de o celulă numerică („contract | … | Revizia | 1”):
+ * tot foaie nerecunoscută, cu diagnosticul (calificativul n-a ajuns pe coloane).
  * `tabel` (doar la ok: false) = primul rând care arată ca un antet de TABEL de articole — cel puțin 2 familii de coloane de tabel
  * (cod / denumire / um / cantitate / preț / valoare; „nr” singur nu ajunge, un titlu „Situație nr. 7” e „nr”) urmat de cel puțin un
  * rând cu cifre — sau null. `candidat` (doar la ok: false) = primul RÂND CANDIDAT de articol (vezi randCandidat), independent de orice
- * antet: { rand, motiv, total } sau null. O foaie cu `tabel` SAU cu `candidat` și fără antet recunoscut e o FOAIE DE DETALIU
+ * antet: { rand, motiv, total } sau null; un TOTAL DE CONTROL fără antet („Total general | 1137”, totalDeControlFaraAntet) nu e candidat —
+ * e totalul recapitulației, verificat la reconciliere. O foaie cu `tabel` SAU cu `candidat` și fără antet recunoscut e o FOAIE DE DETALIU
  * NERECUNOSCUTĂ: parseSituatieExcel o raportează în `probleme` (L12), nu o sare tăcut. Coperta = ok: false cu cel_mai_bun, tabel și
- * candidat toate null: pe TOATĂ foaia nu există nici antet, nici rând de articol.
+ * candidat toate null: pe TOATĂ foaie nu există nici antet, nici rând de articol.
  */
 export function recunoasteAntet(rows, merges = []) {
-  const uniri = new Map()
-  for (const m of merges || []) {
-    for (let r = m.s.r; r <= m.e.r; r++) for (let c = m.s.c; c <= m.e.c; c++) if (r !== m.s.r || c !== m.s.c) uniri.set(`${r},${c}`, [m.s.r, m.s.c])
-  }
-  const cel = (r, c) => {
-    const u = uniri.get(`${r},${c}`)
-    const v = u ? rows[u[0]]?.[u[1]] : rows[r]?.[c]
-    return v == null ? '' : v
-  }
-  let latime = 0
-  for (const row of rows) if (row && row.length > latime) latime = row.length
-  const randAntet = r => Array.from({ length: latime }, (_, c) => cel(r, c))
+  const foaie = celuleFoaie(rows, merges)
+  const { randAntet } = foaie
   let celMaiBun = null, tabel = null, candidat = null, candidati = 0
   for (let r = 0; r < rows.length; r++) {
     const frunza = randAntet(r)
-    // rând candidat de articol (independent de antet): numărat pe toată foaia, primul e raportat
-    const motivCandidat = randCandidat(frunza)
+    // rând candidat de articol (independent de antet): numărat pe toată foaia, primul e raportat; totalul de control al recapitulației nu e candidat
+    const motivCandidat = totalDeControlFaraAntet(frunza) ? null : randCandidat(frunza)
     if (motivCandidat) { candidati++; if (!candidat) candidat = { rand: r + 1, motiv: motivCandidat } }
     if (eRandGol(frunza) || eRandDate(frunza)) continue
     const clase = frunza.map(clasificaColoana)
@@ -133,28 +80,7 @@ export function recunoasteAntet(rows, merges = []) {
     const familii = new Set(clase.map(familie).filter(Boolean))
     if (familii.size < 3) continue
     // blocul: TOT șirul neîntrerupt de rânduri de antet deasupra (grupuri, calificative) și dedesubt (calificative) — fără fereastră
-    let inceput = r, sfarsit = r
-    while (inceput - 1 >= 0 && eRandAntet(randAntet(inceput - 1))) inceput--
-    while (sfarsit + 1 < rows.length && eRandAntet(randAntet(sfarsit + 1))) sfarsit++
-    const bloc = []
-    for (let rr = inceput; rr <= sfarsit; rr++) bloc.push(randAntet(rr))
-    // umplere spre dreapta a grupurilor (celule unite fără `!merges`): în rândurile de deasupra ultimului, doar în coloanele
-    // în care un rând de mai jos are text (nu se varsă în coloane complet goale)
-    for (let i = 0; i < bloc.length - 1; i++) {
-      let ultim = ''
-      for (let c = 0; c < latime; c++) {
-        const v = text(bloc[i][c])
-        if (v) ultim = v
-        else if (ultim && bloc.slice(i + 1).some(rr => text(rr[c]))) bloc[i][c] = ultim
-        else ultim = ''
-      }
-    }
-    const texteColoane = Array.from({ length: latime }, (_, c) => bloc.map(rr => text(rr[c])).filter(Boolean).join(' '))
-    const peClase = new Map()
-    texteColoane.forEach((t, c) => { const k = clasificaColoana(t); if (k) peClase.set(k, [...(peClase.get(k) || []), c]) })
-    // context de antet NECONSUMAT: o coloană a blocului cu un calificativ în text, dar fără clasă (nimeni n-a folosit-o)
-    const neconsumate = []
-    texteColoane.forEach((t, c) => { if (t && clasificaColoana(t) == null && RE_CALIFICATIV.test(textAntet(t))) neconsumate.push(`„${t}” (coloana ${c + 1})`) })
+    const { inceput, sfarsit, texteColoane, peClase, neconsumate, context_exclus } = blocAntet(rows, r, foaie)
     const una = k => (peClase.get(k) || []).length === 1 ? peClase.get(k)[0] : -1
     const coloane = { nr: una('nr'), cod: una('cod'), denumire: una('denumire'), um: una('um'), pret_unitar: una('pret_unitar'), cantitate_perioada: -1, cantitate_cumulat: una('cantitate_cumulat'), valoare: -1 }
     const ambigue = []
@@ -166,33 +92,14 @@ export function recunoasteAntet(rows, merges = []) {
     if ((peClase.get('valoare') || []).length === 1) coloane.valoare = peClase.get('valoare')[0]
     const gasite = Object.keys(coloane).filter(k => coloane[k] >= 0)
     const lipsesc = COLOANE_OBLIGATORII.filter(k => coloane[k] < 0)
-    if (lipsesc.length === 0 && ambigue.length === 0 && neconsumate.length === 0) {
+    if (lipsesc.length === 0 && ambigue.length === 0 && neconsumate.length === 0 && !context_exclus) {
       let primulRandDate = sfarsit + 1
       while (primulRandDate < rows.length && (eRandIndex(rows[primulRandDate]) || eRandGol(rows[primulRandDate]))) primulRandDate++
       return { ok: true, inceput, sfarsit, primulRandDate, coloane, texteColoane }
     }
-    if (!celMaiBun || gasite.length > celMaiBun.gasite.length) celMaiBun = { rand: r + 1, gasite, lipsesc, ambigue, neconsumate }
+    if (!celMaiBun || gasite.length > celMaiBun.gasite.length) celMaiBun = { rand: r + 1, gasite, lipsesc, ambigue, neconsumate, ...(context_exclus ? { context_exclus } : {}) }
   }
   return { ok: false, cel_mai_bun: celMaiBun, tabel, candidat: candidat ? { ...candidat, total: candidati } : null }
-}
-
-/** Antetul documentului din rândurile de deasupra tabelului: nr. situație, luna, anul (null când nu se găsesc). */
-export function antetDinTitluri(randuriText) {
-  const antet = { nr_situatie: null, luna: null, an: null }
-  for (const t0 of randuriText) {
-    const t = textAntet(t0)
-    if (!t) continue
-    if (antet.nr_situatie == null) {
-      const m = t.match(/situati[ae][^0-9]{0,60}?\b(?:nr|numar(?:ul)?|no)\b\s*(\d{1,4}[a-z]?)/) || t.match(/situati[ae]\s*(?:de\s+(?:lucrari|plata)\s*)?(\d{1,4}[a-z]?)\b/)
-      if (m) antet.nr_situatie = m[1]
-    }
-    if (antet.luna == null) {
-      const i = LUNI.findIndex(l => new RegExp(`\\b${l}\\b`).test(t))
-      if (i >= 0) antet.luna = i + 1
-    }
-    if (antet.an == null) { const m = t.match(/\b(20\d{2})\b/); if (m) antet.an = Number(m[1]) }
-  }
-  return antet
 }
 
 const RE_OBIECT = /^obiect(?:ul)?\s*[:.\-]?\s*([a-z0-9][a-z0-9./-]*)\s*[:.\-]?\s*(.*)$/
@@ -211,8 +118,15 @@ function liniiDinFoaie(nume, rows, merges) {
     const motiv = a.cel_mai_bun ? 'foaie nerecunoscută: antet aproape bun, dar nu modelul Transgaz' : a.tabel ? 'foaie nerecunoscută: tabel de articole fără antetul modelului Transgaz'
       : a.candidat ? 'foaie nerecunoscută: rânduri de articol fără niciun antet de tabel' : 'copertă: rând cu cifre, fără formă de articol'
     const coperta = !a.cel_mai_bun && !a.tabel && !a.candidat
-    rows.forEach((row, r) => { if (eRandGol(row)) return; if (eMetaDocument(row)) cls(r, 'meta_document'); else if (coperta && !eRandDate(row)) cls(r, 'titlu'); else cls(r, 'ignorat', motiv) })
-    return { ok: false, cel_mai_bun: a.cel_mai_bun, tabel: a.tabel, candidat: a.candidat, clase }
+    // totalul de control al recapitulației / copertei (r7): „Total general | 1137” = clasa total + valoare pentru reconciliere (ultimul de pe foaie)
+    const totaluri = []
+    rows.forEach((row, r) => {
+      if (eRandGol(row)) return
+      const t = totalDeControlFaraAntet(row)
+      if (t) { cls(r, 'total'); totaluri.push({ rand: r + 1, ...t }); return }
+      if (eMetaDocument(row)) cls(r, 'meta_document'); else if (coperta && !eRandDate(row)) cls(r, 'titlu'); else cls(r, 'ignorat', motiv)
+    })
+    return { ok: false, cel_mai_bun: a.cel_mai_bun, tabel: a.tabel, candidat: a.candidat, clase, total_control: totaluri.length ? totaluri[totaluri.length - 1] : null }
   }
   const c = a.coloane
   const titluri = rows.slice(0, a.inceput).map(r => r.map(text).filter(Boolean).join(' ')).filter(Boolean)
@@ -222,7 +136,7 @@ function liniiDinFoaie(nume, rows, merges) {
   for (let r = a.inceput; r <= a.sfarsit; r++) if (!eRandGol(rows[r])) cls(r, 'antet')
   for (let r = a.sfarsit + 1; r < a.primulRandDate; r++) if (!eRandGol(rows[r])) cls(r, 'index')
   const linii = [], ignorate = [], probleme = [], avertismente = [], sectiuni = [], fara_miscare_randuri = []
-  let total_doc = null, obiect = { cod: '', nume: '' }, deviz = { cod: '', nume: '' }
+  let total_doc = null, total_control = null, obiect = { cod: '', nume: '' }, deviz = { cod: '', nume: '' }
   const nrCel = r => (c.nr >= 0 ? text(rows[r][c.nr]) : '')
   const problema = (r, p) => { probleme.push({ foaie: nume, rand: r + 1, ...p }); cls(r, 'problema') }
   for (let r = a.primulRandDate; r < rows.length; r++) {
@@ -250,7 +164,8 @@ function liniiDinFoaie(nume, rows, merges) {
     // „[2, B1, Total station montaj, m, 3, 3, 10, 30]” NU e total — merge mai departe ca articol (cu avertisment) sau problemă
     const etichetaTotal = RE_TOTAL.test(dn) || RE_TOTAL.test(cn) || RE_TOTAL.test(nrn)
     if (etichetaTotal && eTotalDovedit({ etichete: [den, cod, nrCel(r)], cod, um, cantitati: [q, qc] })) {
-      if (v != null && Number.isFinite(v)) { total_doc = v; cls(r, 'total') }
+      // totalul de control al foii (r7) = ULTIMUL rând TOTAL dovedit cu valoare (un „Total general” după subtotaluri pe obiecte)
+      if (v != null && Number.isFinite(v)) { total_doc = v; total_control = { rand, eticheta: [den, cod, nrCel(r)].find(e => RE_TOTAL.test(textAntet(e))), valoare: v }; cls(r, 'total') }
       else if (v != null) problema(r, { motiv: 'totalul tipărit nu e număr', text: text(brut.v) })
       else cls(r, 'total')
       continue
@@ -280,7 +195,7 @@ function liniiDinFoaie(nume, rows, merges) {
     })
     cls(r, tip)
   }
-  return { ok: true, titluri, linii, ignorate, probleme, avertismente, sectiuni, fara_miscare: fara_miscare_randuri.length, fara_miscare_randuri, total_doc, coloane: c, antet_rand: a.inceput + 1, clase }
+  return { ok: true, titluri, linii, ignorate, probleme, avertismente, sectiuni, fara_miscare: fara_miscare_randuri.length, fara_miscare_randuri, total_doc, total_control, coloane: c, antet_rand: a.inceput + 1, clase }
 }
 
 /** antetul documentului din mai multe foi: valorile pe care foile le dau diferit NU se aleg (null) și se raportează (identitatea
@@ -315,7 +230,7 @@ export async function parseSituatieExcel(arrayBuffer) {
   const _x = await import('xlsx-js-style')
   const XLSX = _x.default?.read ? _x.default : _x
   const wb = XLSX.read(arrayBuffer, { type: 'array' })
-  const foi = [], foi_nerecunoscute = [], foi_fara_tabel = [], anteturi = [], contabilizare = {}, problemeNerecunoscute = {}
+  const foi = [], foi_nerecunoscute = [], foi_fara_tabel = [], anteturi = [], contabilizare = {}, problemeNerecunoscute = {}, controale = []
   let linii = [], ignorate = [], probleme = [], avertismente = [], sectiuni = [], fara_miscare_randuri = [], coloane = {}
   let total_doc = null, cuTotal = 0
   for (const nume of wb.SheetNames) {
@@ -326,6 +241,7 @@ export async function parseSituatieExcel(arrayBuffer) {
     const inv = verificaContabilizare(nume, rows, f.clase)
     contabilizare[nume] = inv.sumar
     if (!f.ok) {
+      if (f.total_control) controale.push({ foaie: nume, ...f.total_control, sursa: 'recapitulatie' })
       if (f.cel_mai_bun) foi_nerecunoscute.push({ foaie: nume, ...f.cel_mai_bun })
       else if (f.tabel) foi_nerecunoscute.push({ foaie: nume, rand: f.tabel.rand, gasite: f.tabel.gasite, lipsesc: COLOANE_OBLIGATORII.filter(k => !f.tabel.gasite.includes(k)), ambigue: [], neconsumate: [] })
       else if (f.candidat) foi_nerecunoscute.push({ foaie: nume, rand: f.candidat.rand, gasite: [], lipsesc: [...COLOANE_OBLIGATORII], ambigue: [], neconsumate: [], fara_antet: { motiv: f.candidat.motiv, randuri: f.candidat.total } })
@@ -341,10 +257,11 @@ export async function parseSituatieExcel(arrayBuffer) {
     linii = linii.concat(f.linii); ignorate = ignorate.concat(f.ignorate); probleme = probleme.concat([...f.probleme, ...inv.probleme].sort(peRand))
     avertismente = avertismente.concat(f.avertismente); sectiuni = sectiuni.concat(f.sectiuni); fara_miscare_randuri = fara_miscare_randuri.concat(f.fara_miscare_randuri)
     if (f.total_doc != null) { total_doc = (total_doc ?? 0) + f.total_doc; cuTotal++ }
+    if (f.total_control) controale.push({ foaie: nume, ...f.total_control, sursa: 'detaliu', suma_foaie: rot(f.linii.reduce((s, l) => s + l.valoare, 0)), linii_foaie: f.linii.length })
   }
   const descrie = n => (n.fara_antet
     ? `foaia „${n.foaie}”, rândul ${n.rand}: rând de articol (${n.fara_antet.motiv}) fără niciun antet de tabel recunoscut — ${n.fara_antet.randuri} ${n.fara_antet.randuri === 1 ? 'rând candidat' : 'rânduri candidate'} pe foaie`
-    : `foaia „${n.foaie}”, rândul ${n.rand}: găsite [${n.gasite.join(', ')}], lipsesc [${n.lipsesc.join(', ')}]${n.ambigue?.length ? `, ambigue [${n.ambigue.join(', ')}]` : ''}${n.neconsumate?.length ? `, antet neconsumat [${n.neconsumate.join(', ')}]` : ''}`)
+    : `foaia „${n.foaie}”, rândul ${n.rand}: găsite [${n.gasite.join(', ')}], lipsesc [${n.lipsesc.join(', ')}]${n.ambigue?.length ? `, ambigue [${n.ambigue.join(', ')}]` : ''}${n.neconsumate?.length ? `, antet neconsumat [${n.neconsumate.join(', ')}]` : ''}${n.context_exclus ? `, context de antet exclus [${n.context_exclus.celule.map(c => `„${c}”`).join(', ')} (rândul ${n.context_exclus.rand}, cu cifre)]` : ''}`)
   if (foi.length === 0) {
     const cel = [...foi_nerecunoscute].sort((a, b) => b.gasite.length - a.gasite.length)[0]
     const detaliu = cel ? ` Cel mai apropiat: ${descrie(cel)}.` : ' Nicio foaie nu are un rând de antet cu Denumire / UM / Cantitate / Preț / Valoare.'
@@ -365,9 +282,13 @@ export async function parseSituatieExcel(arrayBuffer) {
   const { antet, conflicte } = antetDinFoi(anteturi)
   for (const c of conflicte) avertismente.push({ motiv: `foile dau valori diferite pentru ${c.camp} (${c.valori.join('; ')}) — câmpul rămâne de completat de om`, camp: c.camp })
   const total = rot(linii.reduce((s, l) => s + l.valoare, 0))
+  // RECONCILIEREA CU TOTALUL DOCUMENTULUI (r7, plasa principală): suma liniilor citite = totalul de control (al foilor de detaliu — pe foaie
+  // sau pe document — ori al recapitulației), cu toleranța de rotunjire; altfel problemă (diferența în lei, foaia / rândul) → complet: false
+  const reconciliere = reconciliazaTotal({ suma: total, nLinii: linii.length, controale, foi })
+  probleme = probleme.concat(reconciliere.probleme)
   return {
     antet, linii, total,
-    total_doc, diferenta_total: total_doc == null ? null : rot(total - total_doc),
+    total_doc, diferenta_total: total_doc == null ? null : rot(total - total_doc), reconciliere,
     foi, foi_nerecunoscute, foi_fara_tabel, complet: probleme.length === 0,
     coloane, sectiuni, fara_miscare: fara_miscare_randuri.length, fara_miscare_randuri, ignorate, probleme, avertismente, contabilizare,
   }
@@ -384,6 +305,9 @@ export async function parseSituatieExcel(arrayBuffer) {
  * cu foaia și rândul; pe .docx, liniile de articol (ART_RE) fără UM cunoscută + cantitate sunt probleme, nu resurse tăcute.
  * Pe .docx, tot sub cuSemn, „Total=” se caută până la articolul următor (nu în 5 paragrafe); lipsa lui = linie `incomplet` + problemă.
  * Fără articole = eroare (cu problemele găsite), nu listă goală. `complet` = probleme.length === 0 (aceeași definiție ca la situație).
+ * Reconcilierea (r7): pe .docx suma „Total=” ale articolelor trebuie să fie egală cu ultimul total al devizului neconsumat de un articol
+ * („Total deviz …”, „TOTAL GENERAL …”; lipsa = „fără total de control”); pe Excel devizul are doar cantități → problemă „fără control pe
+ * valoare” (nu există valoare de verificat) → complet: false, explicit.
  */
 export async function parseDevizModificare(file) {
   const rez = await parseDeviz(file, { cuSemn: true, antetOriunde: true, contabilizare: true })
@@ -400,5 +324,17 @@ export async function parseDevizModificare(file) {
     if (a.incomplet) probleme.push({ poz: i + 1, cod: a.cod, denumire: a.denumire, motiv: `valoare lipsă: ${a.incomplet}` })
     return { ...a, cantitate: q == null || !Number.isFinite(q) ? null : q }
   })
-  return { linii, negative: linii.filter(l => l.cantitate != null && l.cantitate < 0).length, probleme, complet: probleme.length === 0, contabilizare: rez.contabilizare || {} }
+  // RECONCILIEREA CU TOTALUL DEVIZULUI (r7): .docx → suma „Total=” ale articolelor = ultimul „Total deviz / TOTAL GENERAL …” neconsumat
+  // (rez.totaluri, articoleDinParagrafe); lipsa lui = „fără total de control”. Excel (doar cantități, rez.totaluri == null) → „fără control
+  // pe valoare”: nu există valoare de verificat, deci rezultatul nu poate fi declarat complet.
+  const cuValoare = linii.filter(l => l.valoare != null && Number.isFinite(l.valoare))
+  let reconciliere = null
+  if (rez.totaluri == null) probleme.push({ motiv: `${MOTIV_FARA_CONTROL_VALOARE}: devizul are doar cantități (fără „Total=” pe articole / fără coloană de valoare), suma articolelor nu poate fi verificată cu un total de control` })
+  else {
+    // ULTIMUL total neconsumat din document = totalul de control (după „Total deviz 0101” / „Total deviz 0102” vine „TOTAL GENERAL”)
+    const ultim = rez.totaluri.length ? [{ ...rez.totaluri[rez.totaluri.length - 1], sursa: 'deviz' }] : []
+    reconciliere = reconciliazaTotal({ suma: rot(cuValoare.reduce((s, l) => s + l.valoare, 0)), nLinii: cuValoare.length, controale: ultim })
+    probleme.push(...reconciliere.probleme)
+  }
+  return { linii, negative: linii.filter(l => l.cantitate != null && l.cantitate < 0).length, probleme, complet: probleme.length === 0, contabilizare: rez.contabilizare || {}, reconciliere }
 }

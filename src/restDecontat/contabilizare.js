@@ -18,6 +18,12 @@
 //      lista comună NU poate fi meta_document.
 //   3. rândul TOTAL doar cu dovadă (eTotalDovedit, r6): eticheta începe cu „Total” ȘI rândul nu are cod de articol, nici UM din lista
 //      comună, nici cantitate — altfel e articol (dacă coloanele îl susțin) sau problemă, niciodată total tăcut.
+//   4. RECONCILIEREA CU TOTALUL DOCUMENTULUI (reconciliazaTotal, r7 — plasa principală, peste invariantul de rânduri, decizia chat-ului
+//      după review-ul r6): `complet: true` DOAR dacă (a) documentul are un total de control recunoscut (rândul TOTAL dovedit al foii de
+//      detaliu, un „Total …” cu un singur număr pe o recapitulație / copertă, „Total deviz …” în .docx) și (b) suma valorilor articolelor
+//      citite (cu OS / diverse, cu semn) = acel total, cu toleranța de rotunjire TOLERANTA (0,01 lei × numărul de linii, cel mult 1 leu).
+//      Total lipsă → problemă „fără total de control”; diferență → problemă cu diferența în lei și foile implicate. Devizul doar cu
+//      cantități (AA Excel) → „fără control pe valoare”. Prinde ORICE articol cu valoare pierdut, indiferent de forma rândului.
 // eNumeric / numar: O SINGURĂ definiție a „celulă numerică” (semn + / −, separatori RO / EN, procente excluse explicit) și a
 // valorii ei (parseNumar, helperul EXISTENT — L17 —, cu „+”-ul explicit acceptat).
 // Rulează în browser și în Node (teste, tura de noapte). Fără BD, fără AI.
@@ -73,11 +79,12 @@ export function eRandIndex(row) {
 /** rând cu cel puțin o celulă numerică (și care nu e rândul de indici) */
 export const eRandDate = row => !eRandGol(row) && !eRandIndex(row) && row.some(c => c !== '' && c != null && eNumeric(c))
 
-// ── antetul documentului (META_DOCUMENT) — singura excepție de la regula rândului candidat (review #1165 r5 P1-1 → r6) ──
+// ── antetul documentului (META_DOCUMENT) — singura excepție de la regula rândului candidat (review #1165 r5 P1-1 → r6 → r7) ──
 // Lista ALBĂ a tiparelor de antet de document, pe textul normalizat al unei celule (textAntet: fără diacritice, litere mici, punctele →
 // spații), fiecare ANCORAT la începutul celulei (L13): „Situația de lucrări nr. 5” / „Nr. situație 5”, „Luna: octombrie 2026” / „Octombrie
-// 2026”, „Anul 2026”, „Perioada 01.10–31.10.2026”, „Data: 15.10.2026”, „Pagina 1 din 3” / „Pag. 2”, „Contract nr. 30/2025” / „Nr. contract”,
-// „Beneficiar: …”, „Executant: …”, „Obiectiv: …”, „CUI / C.U.I. / Cod fiscal”. Testul are un exemplu pozitiv și unul negativ pentru fiecare.
+// 2026”, „Anul 2026”, „Perioada 01.10–31.10.2026”, „Data: 15.10.2026”, „Pagina 1 din 3” / „Pag. 2”, „Contract nr. 30/2025” / „Contractul” /
+// „Nr. contract” (NU „contract” singur: acela e CALIFICATIV de antet de coloană — review r6 P1-2), „Beneficiar: …”, „Executant: …”,
+// „Obiectiv: …”, „CUI / C.U.I. / Cod fiscal”. Testul are un exemplu pozitiv și unul negativ pentru fiecare.
 const LUNI_META = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie']
 export const TIPARE_META_DOCUMENT = [
   ['nr_situatie', /^situati[ae]\b|^(nr|numar(ul)?|no)\b.*\bsituati[ae]\b/],
@@ -86,12 +93,16 @@ export const TIPARE_META_DOCUMENT = [
   ['perioada', /^perioad[ae]\b/],
   ['data', /^data\b/],
   ['pagina', /^pag(ina)?\b/],
-  ['contract', /^contract(ul)?\b|^(nr|numar(ul)?|no)\b.*\bcontract/],
+  ['contract', /^contractul\b|^contract\b\s*\S|^(nr|numar(ul)?|no)\b.*\bcontract/],
   ['beneficiar', /^beneficiar(ul)?\b/],
   ['executant', /^executant(ul)?\b/],
   ['obiectiv', /^obiectiv(ul)?\b/],
   ['cui', /^(cui|c u i|cod fiscal)\b/],
 ]
+/** eticheta de antet de document a unei celule (numele tiparului) sau null */
+const etichetaMeta = c => (TIPARE_META_DOCUMENT.find(([, re]) => re.test(textAntet(c))) || [null])[0]
+/** cel mult atâtea celule nevide poate avea un rând de antet de document (perechi etichetă–valoare); un rând de articol are mai multe */
+export const META_MAX_CELULE = 6
 /** cod plauzibil de articol: litere + cifră (TSA01A1, B1, RPCU01, IZF01) */
 export const RE_COD_PLAUZIBIL = /^[A-Za-z]{1,5}\d[A-Za-z0-9./-]*$/
 /** celulele de text (nenumerice, nevide) ale unui rând → { texte, um (prima UM din lista comună), cod (prim cod plauzibil, altă celulă decât UM) } */
@@ -101,21 +112,44 @@ function formaTexte(row) {
   const cod = texte.find(c => c !== um && RE_COD_PLAUZIBIL.test(text(c)))
   return { texte, um, cod }
 }
+/** rând de articol „tare” (formă de articol indiferent de antet): cod plauzibil + UM din lista comună, cod + număr, sau UM + număr */
+export function eRandArticolTare(row) {
+  if (!row || eRandGol(row) || eRandIndex(row)) return false
+  const { um, cod } = formaTexte(row)
+  const numere = row.filter(c => c !== '' && c != null && eNumeric(c)).length
+  return (cod != null && (um != null || numere > 0)) || (um != null && numere > 0)
+}
 /**
- * Rând META_DOCUMENT (antetul documentului): numele tiparului potrivit (ex. 'pagina') sau null. Recunoscut EXPLICIT — cel puțin o celulă
- * de text se potrivește pe un tipar din lista albă — și NUMAI dacă rândul nu are cod de articol și nici UM din lista comună (un articol
- * nu poate fi antet de document, oricât ar începe denumirea lui cu „Data …”). Rândul gol / de indici / fără text nu e meta_document.
+ * Rând META_DOCUMENT (antetul documentului): numele primului tipar potrivit (ex. 'pagina') sau null. Recunoscut EXPLICIT, pe FORMA
+ * ÎNTREGULUI rând (review #1165 r6 P1-1: o celulă din lista albă scutea tot rândul — „2 | 2000092 | Executant lucrari speciale | SET |
+ * 3 | 3 | 10 | 30” dispărea ca antet de document). Forma de antet de document = perechi etichetă–valoare:
+ *   - cel mult META_MAX_CELULE celule nevide;
+ *   - cel puțin o celulă-etichetă din lista albă; celula IMEDIAT după o etichetă e VALOAREA ei (orice conținut: „C123/2025”, „15.10.2026”,
+ *     „30/2025” — nu e cod de articol, nici UM, nici număr liber);
+ *   - restul celulelor („din”, „(sintetic)”): fără cod plauzibil de articol, fără UM din lista comună; un număr liber doar după un text
+ *     liber („Pagina | 1 | din | 3”) și niciodată două numere alăturate (UM + cantitate + preț / valoare în coloane succesive = articol).
+ * Rândul gol / de indici / fără text nu e meta_document.
  */
 export function eMetaDocument(row) {
   if (!row || eRandGol(row) || eRandIndex(row)) return null
-  const { texte, um, cod } = formaTexte(row)
-  if (texte.length === 0 || um != null || cod != null) return null
-  for (const c of texte) {
-    const t = textAntet(c)
-    const tipar = TIPARE_META_DOCUMENT.find(([, re]) => re.test(t))
-    if (tipar) return tipar[0]
+  const celule = row.filter(c => c !== '' && c != null)
+  if (celule.length > META_MAX_CELULE) return null
+  // (prima celulă nu poate fi număr: un număr liber cere un text liber înaintea lui — regula de mai jos)
+  let tipar = null, valoareUrmeaza = false, liberAnterior = null // liberAnterior: 'text' | 'numar' | null (ultima celulă liberă)
+  for (let i = 0; i < celule.length; i++) {
+    const c = celule[i]
+    const eticheta = eNumeric(c) ? null : etichetaMeta(c)
+    if (eticheta) { tipar = tipar || eticheta; valoareUrmeaza = true; continue } // o etichetă în locul valorii („Luna | octombrie | 2026”) e tot etichetă
+    if (valoareUrmeaza) { valoareUrmeaza = false; continue } // valoarea etichetei: orice conținut
+    if (eNumeric(c)) {
+      if (eNumeric(celule[i - 1]) || liberAnterior !== 'text') return null // număr liber doar după un text liber, niciodată două numere alăturate
+      liberAnterior = 'numar'
+      continue
+    }
+    if (eUmCunoscut(c) || RE_COD_PLAUZIBIL.test(text(c))) return null
+    liberAnterior = 'text'
   }
-  return null
+  return tipar
 }
 
 // Rând CANDIDAT de articol (review #1165 r3 / r4 / r5 / r6): detectat INDEPENDENT de orice antet —
@@ -160,6 +194,75 @@ export function eTotalDovedit({ etichete, cod, um, cantitati }) {
   if (eUmCunoscut(um)) return false
   if (cantitati.some(q => q != null)) return false
   return true
+}
+
+/**
+ * TOTAL DE CONTROL pe un rând FĂRĂ antet de tabel (recapitulație / copertă, r7): o celulă de text care începe cu „Total”, EXACT un
+ * număr pe rând (două numere — perioadă și cumulat — nu spun care e controlul: ambiguu, rândul rămâne candidat), fără cod plauzibil
+ * de articol și fără UM din lista comună, numărul neambiguu („2.000” nu se ghicește, L17). Întoarce { eticheta, valoare } sau null.
+ * Rândul primește clasa `total` (acoperă candidatul) și valoarea intră la reconciliere ca total al DOCUMENTULUI (sursa „recapitulatie”).
+ */
+export function totalDeControlFaraAntet(row) {
+  if (!row || eRandGol(row) || eRandIndex(row)) return null
+  const { texte, um, cod } = formaTexte(row)
+  const numere = row.filter(c => c !== '' && c != null && eNumeric(c))
+  if (numere.length !== 1 || um != null || cod != null) return null
+  const eticheta = texte.find(t => RE_TOTAL.test(textAntet(t)))
+  if (eticheta == null) return null
+  const brut = numere[0]
+  if (typeof brut === 'string' && RE_NUMAR_AMBIGUU.test(brut.trim())) return null
+  const valoare = numar(brut)
+  if (valoare == null || !Number.isFinite(valoare)) return null
+  return { eticheta: text(eticheta), valoare }
+}
+
+// ── RECONCILIEREA CU TOTALUL DOCUMENTULUI (r7) — o singură definiție pentru situație, AA .docx și AA Excel ──
+/** toleranța de rotunjire: 0,01 lei pe linie citită, cel mult 1 leu (documentat în plan / PR) */
+export const TOLERANTA_PE_LINIE_LEI = 0.01
+export const TOLERANTA_MAX_LEI = 1
+export const toleranta = nLinii => Math.min(TOLERANTA_MAX_LEI, Math.round(TOLERANTA_PE_LINIE_LEI * Math.max(1, nLinii) * 100) / 100)
+const rot2 = x => Math.round(x * 100) / 100
+const lei = x => `${rot2(x)} lei`
+export const MOTIV_FARA_TOTAL = 'fără total de control'
+export const MOTIV_FARA_CONTROL_VALOARE = 'fără control pe valoare'
+/**
+ * @param {number} suma suma valorilor liniilor citite (cu semn; articole + OS + diverse)
+ * @param {number} nLinii câte linii s-au citit (toleranța)
+ * @param {Array} controale totalurile de control recunoscute: { foaie?, rand?, paragraf?, eticheta, valoare (număr finit sau NaN =
+ *   neinterpretabil), sursa: 'detaliu' | 'recapitulatie' | 'deviz', suma_foaie?, linii_foaie? } — pentru 'detaliu' (rândul TOTAL al
+ *   unei foi cu antet) se acceptă ȘI potrivirea cu suma FOII (scop 'foaie'), nu doar cu suma documentului (scop 'document')
+ * @param {string[]} foi foile cu linii citite (fiecare trebuie acoperită: de propriul total potrivit pe foaie SAU de un total al documentului)
+ * @returns {{ ok: boolean, suma, toleranta, controale: Array<{…, scop: 'foaie'|'document'|null, diferenta_foaie?, diferenta_document}>, probleme: Array<{motiv, …}> }}
+ *   probleme: fiecare total de control nepotrivit (cu diferența în lei și foaia / rândul lui), „fără total de control” când nu există
+ *   niciunul, sau foile cu linii pe care niciun total nu le acoperă. ok = probleme goale.
+ */
+export function reconciliazaTotal({ suma, nLinii, controale, foi = [] }) {
+  const tol = toleranta(nLinii)
+  const probleme = []
+  const verificate = controale.map(c => {
+    const dDoc = rot2(c.valoare - suma)
+    const dFoaie = c.sursa === 'detaliu' && c.suma_foaie != null ? rot2(c.valoare - c.suma_foaie) : null
+    const scop = dFoaie != null && Math.abs(dFoaie) <= toleranta(c.linii_foaie || 0) + 1e-9 ? 'foaie' : Math.abs(dDoc) <= tol + 1e-9 ? 'document' : null
+    return { ...c, scop, diferenta_foaie: dFoaie, diferenta_document: dDoc }
+  })
+  for (const c of verificate) {
+    const loc = c.foaie != null ? { foaie: c.foaie, rand: c.rand } : { paragraf: c.paragraf }
+    const unde = c.foaie != null ? `foaia „${c.foaie}”, rândul ${c.rand}` : `paragraful ${c.paragraf}`
+    if (!Number.isFinite(c.valoare)) { probleme.push({ ...loc, motiv: `total de control neinterpretabil („${c.eticheta}”, ${unde})` }); continue }
+    if (c.scop) continue
+    const fata = c.diferenta_foaie != null
+      ? `suma foii ${lei(c.suma_foaie)} (diferență ${lei(c.diferenta_foaie)}) și suma documentului ${lei(suma)} (diferență ${lei(c.diferenta_document)})`
+      : `suma articolelor citite ${lei(suma)} (diferență ${lei(c.diferenta_document)})`
+    // `diferenta` = total − sumă (pozitiv = lipsesc articole din citire); pentru totalul unei foi de detaliu, față de suma FOII
+    probleme.push({ ...loc, diferenta: c.diferenta_foaie ?? c.diferenta_document, motiv: `totalul de control ${lei(c.valoare)} („${c.eticheta}”, ${unde}) ≠ ${fata} — un articol lipsește sau e în plus, ori totalul tipărit e greșit; toleranță ${lei(tol)}` })
+  }
+  if (controale.length === 0) probleme.push({ motiv: `${MOTIV_FARA_TOTAL}: documentul nu are niciun rând TOTAL recunoscut (pe foile de detaliu sau pe o recapitulație) — suma articolelor citite (${lei(suma)}) nu poate fi verificată` })
+  else if (probleme.length === 0) {
+    const acoperitDocument = verificate.some(c => c.scop === 'document')
+    const neacoperite = foi.filter(f => !verificate.some(c => c.sursa === 'detaliu' && c.foaie === f && c.scop === 'foaie'))
+    if (!acoperitDocument && neacoperite.length) probleme.push({ motiv: `${MOTIV_FARA_TOTAL} pe foile: ${neacoperite.map(f => `„${f}”`).join(', ')} — liniile lor nu sunt verificate de niciun total (nici al foii, nici al documentului)` })
+  }
+  return { ok: probleme.length === 0, suma: rot2(suma), toleranta: tol, controale: verificate, probleme }
 }
 
 const RE_OS = /organizare\s+(?:de\s+)?santier|^o\s?s$/

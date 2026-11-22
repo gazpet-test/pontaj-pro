@@ -9,7 +9,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // Sub opțiunea explicită { contabilizare: true } (DOAR Rest de decontat, parseDevizModificare) se aplică invariantul de contabilizare
 // din restDecontat/contabilizare.js (review #1165 r5); fără opțiune, catalogul rămâne identic cu main.
-import { eRandGol, eRandDate, randCandidat, eMetaDocument, eTotalDovedit, tipRand, numar, RE_NUMAR_AMBIGUU, verificaContabilizare, randuriDeLaA1 } from './restDecontat/contabilizare.js'
+import { eRandGol, eRandDate, eRandIndex, randCandidat, eMetaDocument, eTotalDovedit, tipRand, numar, RE_NUMAR_AMBIGUU, verificaContabilizare, randuriDeLaA1 } from './restDecontat/contabilizare.js'
+import { clasificaColoana, celuleFoaie, blocAntet, familie } from './restDecontat/antet.js'
 
 // Unități de măsură din deviz → (unitate de bază, factor de conversie spre bază).
 // ATENȚIE: multe articole de conducte/săpături sunt cotate în unități „×100":
@@ -47,6 +48,10 @@ const TOTAL_RE = /Total=\s*([\d.,]+)/
 // exact ca înainte — altfel importul AA din catalog (sign × |cantitate|) ar transforma o diminuare în suplimentare (review #1165 r1 P1).
 const UM_RE_SEMN = new RegExp('^(?:\\[\\s*\\d+\\s*\\]\\s*)?(' + UM_ALT + ')\\s+(-?[\\d.,]+)')
 const TOTAL_RE_SEMN = /Total=\s*(-?[\d.,]+)/
+// TOTALUL DEVIZULUI (r7, DOAR sub { contabilizare: true }): un paragraf NECONSUMAT ca „Total=” al unui articol, care începe cu „Total”
+// (nu „Total=” — aceea e forma de articol), urmat de etichetă opțională și un număr la final: „Total deviz 1.310,00”, „TOTAL GENERAL = 1310.00
+// lei”. Ultimul din document = totalul de control la reconciliere (parseDevizModificare); lipsa lui = „fără total de control”.
+const TOTAL_DEVIZ_RE = /^total\b(?!=)(.*?)([+-]?\d[\d.,]*)\s*(?:lei|ron)?\s*$/i
 const OBIECT_RE = /^Obiectul:\s*(\d+)\s+\d+\s+(.*)/
 const DEVIZ_RE = /^Deviz oferta\s+(\d+)\s+(.*)/
 // Fereastra istorică a catalogului: denumirea și „Total=” se caută în următoarele FERESTRA_DOCX paragrafe de după linia articolului.
@@ -78,7 +83,7 @@ const num = (s) => {
 //   dar nu respectă ART_RE (poziție cu alt număr de cifre, ART_LARG_RE — r5 P1-4). Implicit (catalog) ambele se sar, ca pe main.
 export function articoleDinParagrafe(paras, { cuSemn = false, contabilizare = false } = {}) {
   const umRe = cuSemn ? UM_RE_SEMN : UM_RE, totalRe = cuSemn ? TOTAL_RE_SEMN : TOTAL_RE
-  const arts = [], probleme = []
+  const arts = [], probleme = [], consumate = new Set(), totaluri = []
   let obiect = null, deviz = null
   for (let i = 0; i < paras.length; i++) {
     const p = paras[i]
@@ -88,6 +93,11 @@ export function articoleDinParagrafe(paras, { cuSemn = false, contabilizare = fa
     const ma = p.match(ART_RE)
     if (!ma) {
       if (contabilizare && ART_LARG_RE.test(p)) probleme.push({ paragraf: i + 1, motiv: `linie care arată a articol, dar poziția nu are 3 cifre (format neacceptat, sărită): „${p.slice(0, 60)}”` })
+      // totalul devizului (r7): paragraf „Total …” cu număr, neconsumat ca „Total=” al unui articol
+      else if (contabilizare && !consumate.has(i) && (m = p.trim().match(TOTAL_DEVIZ_RE))) {
+        const t = p.trim(), nr = m[2] // eticheta = tot ce e înaintea numărului de la final („Total deviz 0101 =” → „Total deviz 0101”)
+        totaluri.push({ paragraf: i + 1, eticheta: t.slice(0, t.lastIndexOf(nr)).replace(/[\s:=]+$/, '').slice(0, 60), valoare: RE_NUMAR_AMBIGUU.test(nr) ? NaN : (numar(nr) ?? NaN) })
+      }
       continue
     }
     const [, nr, cod, rest] = ma
@@ -108,7 +118,7 @@ export function articoleDinParagrafe(paras, { cuSemn = false, contabilizare = fa
       // calea cuSemn: la articolul / secțiunea următoare ne oprim — „Total=” al articolului curent nu mai poate veni după ele
       if (cuSemn && (ART_RE.test(paras[j]) || OBIECT_RE.test(paras[j]) || DEVIZ_RE.test(paras[j]))) break
       const mt = paras[j].match(totalRe)
-      if (mt) { valoare = num(mt[1]); totalGasit = true; break }
+      if (mt) { valoare = num(mt[1]); totalGasit = true; consumate.add(j); break }
       if (!inFereastra) continue // dincolo de fereastră (doar cuSemn) căutăm numai „Total=”; denumirea rămâne cea din fereastră
       const t = paras[j].replace(/\s+[\d.,]+(\s+[\d.,]+)*$/, '').trim()
       if (/[A-Z]{3,}/.test(t)) den.push(t)
@@ -121,7 +131,7 @@ export function articoleDinParagrafe(paras, { cuSemn = false, contabilizare = fa
     if (cuSemn && (!totalGasit || valoare == null)) art.incomplet = totalGasit ? 'valoarea de după „Total=” nu e număr' : 'fără „Total=” până la articolul / secțiunea următoare (valoarea lipsește)'
     arts.push(art)
   }
-  return contabilizare ? { articole: arts, probleme, contabilizare: {} } : arts
+  return contabilizare ? { articole: arts, probleme, contabilizare: {}, totaluri } : arts
 }
 
 // ── .docx: extrage paragrafele din word/document.xml ──
@@ -157,10 +167,11 @@ export async function parseDevizDocx(arrayBuffer, optiuni) {
 // ca la situație: rândurile se citesc cu rândurile goale (indicele + 1 = rândul Excel), fiecare rând ne-gol primește o clasă (titlu /
 // ignorat cu motiv deasupra antetului, antet, articol / os / diverse, total, problema), o foaie FĂRĂ antet nu mai e sărită tăcut (rândurile ei
 // de articol devin probleme), un rând cu cifre sărit (cantitate / UM / denumire lipsă, număr neinterpretabil sau ambiguu) e problemă; numerele
-// ca text se citesc cu `numar` (parseNumar, RO / EN, semn), nu cu `num` (care citește „1.234,5” drept 1,2345). Rezultatul devine
-// { articole, probleme, contabilizare }. FĂRĂ opțiune totul rămâne identic cu main (blankrows: false, num, rândurile sărite tăcut, array).
+// ca text se citesc cu `numar` (parseNumar, RO / EN, semn), nu cu `num` (care citește „1.234,5” drept 1,2345); antetul se citește ca BLOC
+// (restDecontat/antet.js, aceeași funcție ca la situație — r7): cantitatea = unica coloană „Cantitate” fără calificativ, iar un calificativ
+// neconsumat / un context exclus / coloane de situație fac foaia nerecunoscută, cu diagnostic. Rezultatul devine { articole, probleme,
+// contabilizare, totaluri: null }. FĂRĂ opțiune totul rămâne identic cu main (blankrows: false, num, includes('um'), rândurile sărite tăcut, array).
 const RANDURI_ANTET_EXCEL = 30
-const RE_UM_ANTET = /^u\.?\s?m\.?$/
 export async function parseDevizExcel(arrayBuffer, { antetOriunde = false, contabilizare = false } = {}) {
   const _x = await import('xlsx-js-style')
   const XLSX = _x.default?.read ? _x.default : _x
@@ -173,31 +184,63 @@ export async function parseDevizExcel(arrayBuffer, { antetOriunde = false, conta
     const cls = contabilizare ? (r, clasa, motiv) => clase.push(motiv ? { rand: r + 1, clasa, motiv } : { rand: r + 1, clasa }) : () => {}
     const problema = (r, motiv, extra) => { probleme.push({ foaie: name, rand: r + 1, motiv, ...extra }); cls(r, 'problema') }
     // caută rândul de antet
-    let hdr = -1, col = {}
+    let hdr = -1, col = {}, blocInceput = -1, diagnostic = null
     const randuriAntet = antetOriunde ? rows.length : Math.min(rows.length, RANDURI_ANTET_EXCEL)
-    for (let r = 0; r < randuriAntet; r++) {
-      const cells = rows[r].map(c => String(c).toLowerCase())
-      const find = (kw) => cells.findIndex(c => kw.some(k => c.includes(k)))
-      // coloana UM: regula veche `includes('um')` prinde și „denUMire” (prima coloană potrivită) — sub contabilizare celula trebuie să FIE
-      // „UM” / „U.M.” sau să conțină „unitat”; implicit rămâne regula veche (catalog, identic cu main)
-      const ic = find(['cantitat']), iu = contabilizare ? cells.findIndex(c => RE_UM_ANTET.test(c.trim()) || c.includes('unitat')) : find(['u.m', 'um', 'unitat']), id = find(['denumire', 'articol', 'lucrar'])
-      if (ic >= 0 && iu >= 0) { hdr = r; col = { cant: ic, um: iu, den: id >= 0 ? id : 1, cod: find(['simbol', 'cod', 'indicativ']) }; break }
+    if (contabilizare) {
+      // r7 (review r6 P1-2): ACELAȘI bloc de antet ca la situație (antet.js) — rândul-frunză are o coloană din familia cantitate și una UM;
+      // blocul (grupuri / calificative deasupra și dedesubt, umplere spre dreapta) dă textul fiecărei coloane → clase. Cantitatea devizului
+      // = UNICA coloană de clasă „cantitate” (fără calificativ); o coloană de situație (cumulat / perioadă / anterior) alături, un calificativ
+      // neconsumat sau un context exclus (rând de calificative cu cifre deasupra blocului) = antet NESIGUR → foaia e refuzată cu diagnosticul,
+      // nu citită cu „prima coloană care conține «cantitat»” (care lua cantitatea CONTRACTULUI drept cantitatea AA-ului, cu complet: true)
+      const foaie = celuleFoaie(rows, [])
+      for (let r = 0; r < randuriAntet && hdr < 0; r++) {
+        const frunza = foaie.randAntet(r)
+        if (eRandGol(frunza) || eRandDate(frunza)) continue
+        const claseFrunza = frunza.map(clasificaColoana)
+        if (!claseFrunza.some(k => familie(k) === 'cantitate') || !claseFrunza.includes('um')) continue
+        const { inceput, sfarsit, peClase, neconsumate, context_exclus } = blocAntet(rows, r, foaie)
+        const una = k => (peClase.get(k) || []).length === 1 ? peClase.get(k)[0] : -1
+        const motive = []
+        if ((peClase.get('cantitate') || []).length !== 1) motive.push((peClase.get('cantitate') || []).length ? 'două coloane „Cantitate” fără calificativ' : 'nicio coloană „Cantitate” fără calificativ (contract / cumulat / perioadă …)')
+        const straine = [...peClase.keys()].filter(k => ['cantitate_cumulat', 'cantitate_perioada', 'cantitate_anterior', 'valoare_cumulat', 'valoare_anterior'].includes(k))
+        if (straine.length) motive.push(`coloane de situație de lucrări, nu de deviz: ${straine.join(', ')}`)
+        if (una('um') < 0) motive.push('coloana UM lipsește sau e dublă')
+        if (neconsumate.length) motive.push(`antet neconsumat [${neconsumate.join(', ')}]`)
+        if (context_exclus) motive.push(`context de antet exclus [${context_exclus.celule.map(c => `„${c}”`).join(', ')} (rândul ${context_exclus.rand}, cu cifre)]`)
+        if (motive.length) { if (!diagnostic) diagnostic = { rand: r + 1, motive }; continue }
+        hdr = sfarsit; blocInceput = inceput
+        col = { cant: una('cantitate'), um: una('um'), den: una('denumire') >= 0 ? una('denumire') : 1, cod: una('cod') }
+      }
+    } else {
+      for (let r = 0; r < randuriAntet; r++) {
+        const cells = rows[r].map(c => String(c).toLowerCase())
+        const find = (kw) => cells.findIndex(c => kw.some(k => c.includes(k)))
+        // calea catalogului (identic cu main): prima coloană care conține „cantitat”, UM-ul prin includes('um') (prinde și „denUMire”)
+        const ic = find(['cantitat']), iu = find(['u.m', 'um', 'unitat']), id = find(['denumire', 'articol', 'lucrar'])
+        if (ic >= 0 && iu >= 0) { hdr = r; col = { cant: ic, um: iu, den: id >= 0 ? id : 1, cod: find(['simbol', 'cod', 'indicativ']) }; break }
+      }
     }
     if (hdr < 0) {
       // foaie fără antet de deviz: implicit sărită (catalog, ca pe main); sub contabilizare fiecare rând ne-gol e „ignorat” cu motiv, iar
-      // rândurile ei de articol le scoate invariantul la probleme (review #1165 r4 P1: foaia „Detaliu” fără antet dispărea tăcut)
+      // rândurile ei de articol le scoate invariantul la probleme (review #1165 r4 P1: foaia „Detaliu” fără antet dispărea tăcut);
+      // cu un antet aproape bun dar NESIGUR (diagnostic) → și o problemă de foaie, cu motivele (r7)
       if (contabilizare) {
-        rows.forEach((row, r) => { if (eRandGol(row)) return; if (eMetaDocument(row)) cls(r, 'meta_document'); else cls(r, 'ignorat', 'foaie fără antet de deviz (Cantitate + UM)') })
+        const motiv = diagnostic ? `foaie nerecunoscută: antet de deviz nesigur (rândul ${diagnostic.rand}: ${diagnostic.motive.join('; ')})` : 'foaie fără antet de deviz (Cantitate + UM)'
+        if (diagnostic) probleme.push({ foaie: name, rand: diagnostic.rand, motiv: `${motiv} — liniile foii LIPSESC din rezultat` })
+        rows.forEach((row, r) => { if (eRandGol(row)) return; if (eMetaDocument(row)) cls(r, 'meta_document'); else cls(r, 'ignorat', motiv) })
         const inv = verificaContabilizare(name, rows, clase)
         probleme.push(...inv.probleme); sumar[name] = inv.sumar
       }
       continue
     }
-    for (let r = 0; r < hdr; r++) { if (eRandGol(rows[r])) continue; if (eMetaDocument(rows[r])) cls(r, 'meta_document'); else if (eRandDate(rows[r])) cls(r, 'ignorat', 'deasupra antetului, cu cifre'); else cls(r, 'titlu') }
-    cls(hdr, 'antet')
+    if (blocInceput < 0) blocInceput = hdr
+    for (let r = 0; r < blocInceput; r++) { if (eRandGol(rows[r])) continue; if (eMetaDocument(rows[r])) cls(r, 'meta_document'); else if (eRandDate(rows[r])) cls(r, 'ignorat', 'deasupra antetului, cu cifre'); else cls(r, 'titlu') }
+    for (let r = blocInceput; r <= hdr; r++) if (!eRandGol(rows[r])) cls(r, 'antet')
     for (let r = hdr + 1; r < rows.length; r++) {
       const row = rows[r]
       if (contabilizare && eRandGol(row)) continue
+      // rândul de indici „0 1 2 3 4” de sub antet (r7): sub contabilizare e clasa index, nu un articol cu cod „1” și UM „3”; implicit ca pe main
+      if (contabilizare && eRandIndex(row)) { cls(r, 'index'); continue }
       const brutCant = row[col.cant]
       const cant = contabilizare ? numar(brutCant) : num(brutCant), um = String(row[col.um] || '').trim()
       const den = String(row[col.den] || '').trim()
@@ -220,7 +263,8 @@ export async function parseDevizExcel(arrayBuffer, { antetOriunde = false, conta
     }
     if (contabilizare) { const inv = verificaContabilizare(name, rows, clase); probleme.push(...inv.probleme); sumar[name] = inv.sumar }
   }
-  return contabilizare ? { articole: out, probleme, contabilizare: sumar } : out
+  // totaluri: null = devizul Excel are doar cantități, fără valori → parseDevizModificare raportează „fără control pe valoare” (r7)
+  return contabilizare ? { articole: out, probleme, contabilizare: sumar, totaluri: null } : out
 }
 
 // ── Extras de materiale (Formular C6 — „Lista consumurilor de resurse materiale") ──
