@@ -1,4 +1,4 @@
-# Paw v4.6.4 - doar paza atasamentelor Gemini - procedura pentru Razvan
+# Paw v4.6.4 / v4.6.4b - doar paza atasamentelor Gemini - procedura pentru Razvan
 
 Numai operatorul executa pasii. Agentul nu a instalat nimic si nu a cerut elevare.
 A = PowerShell 5.1 admin Gazpet-Ai; N = acelasi cont NE-elevat. Orice eroare = STOP.
@@ -32,9 +32,22 @@ A = PowerShell 5.1 admin Gazpet-Ai; N = acelasi cont NE-elevat. Orice eroare = S
 v4.6.3; cel nou se leaga de hash-ul v4.6.4).
 **Ramane neschimbat in lansator:** canalul se cheama tot `gem ... argon` / `argon:<lucrare>`.
 
+**Stare 22.11.2026 (v4.6.4 -> v4.6.4b):** v4.6.4 (`gemini_pw.py` `A03E2B5C...`, head `5417037b`) a fost INSTALAT pe 22.11.2026
+(pasii 1-4, zona protejata `operator-v464`), dar pasul 5a a PICAT: pe un chat NOU gol (Carbon, Esc + F5) `stare` a dat de doua ori
+`necunoscute in zona: 3` (`paw-data\out\paw_v464_calibrare\stare_22_11_dupa_instalare.txt`) - pagina Gemini s-a schimbat dupa
+calibrarea din 21.11. Markerul NU a fost scris, deci lansatorul refuza `gem` (sigur). **v4.6.4b** (acest pachet) schimba din nou
+DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE v4.6.4 cu aceeasi procedura: hash-ul vechi = `A03E2B5C...`,
+zona protejata noua `operator-v464b`, copiile de siguranta cu sufixul `.v464`, fisierele noi cu `.v464b` (pasul 1). Ce aduce, pe scurt
+(detaliile la pasul 0, "Stare r8" si "Stare r9"): r8 - regula inchisa pentru atributul `data-filedrop-id` al indicatorului de drag & drop
+(linia 1 din 5a) si afisarea sursei fiecarui semnal (`    sursa <fel>:<unde>=<valoare>`, `{...}` intreg); r9 (runda 2 a PR-ului, dupa ce
+chat-ul a citit din pagina atributele COMPLETE ale celor 3 elemente) - cate o exceptie EXACTA pe element pentru cele trei semnale, toate
+in functia unica de semnale: indicatorul doar cu valoarea reala si izolat, butonul "+" doar cu `arialabel` exact + `ariahaspopup="menu"`,
+editorul doar cu cele doua token-uri de clasa intregi. Pe pagina reconstituita din atributele complete: 0 necunoscute, `paza ciorna: OK`.
+Rollback-ul (mai jos) readuce v4.6.4.
+
 Hash-urile vin din raportul de review, nu din acest fisier. Livrare: folderul din commit-ul
 aprobat ajunge in `$Source` (`git archive` al commit-ului, dezarhivat in
-`C:\Users\Public\livrare\run_paw_v464`); verificarea de mai jos decide.
+`C:\Users\Public\livrare\run_paw_v464b`); verificarea de mai jos decide.
 
 ## 0. Calibrare pe pagina reala (N, DOAR citire, INAINTE de review-ul final si de instalare)
 
@@ -135,6 +148,68 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
 - La 5a, o linie `semnal_in_editor:...` cu ciorna goala pe ecran inseamna ca editorul real poarta un stil cu
   `url(` sau un atribut cu nume / cuvant de fisier: STOP, copiaza linia pentru chat (nu se trece in liste).
 
+**Stare (r8 = v4.6.4b, 22.11.2026, dupa 5a PICAT pe v4.6.4 instalat):**
+- **Ce a aratat 5a** (chat nou gol, Carbon, dupa Esc + F5, de doua ori identic): `necunoscute in zona: 3`, toate SEMNALE (`token_...`),
+  deci niciuna calibrabila prin listele albe (r4: un element cu semnal e refuzat oricare ar fi lista); listele raman cele de la 21.11
+  (5 + 23 + 3). Liniile, exact:
+  1. `token_file:file-drop-indicator{data-filedrop-id}` - indicatorul de drag & drop (vazut gol la 21.11, e in STRUCTURA) poarta acum
+     un atribut `data-filedrop-id`; cuvantul "file" e in NUMELE lui, valoarea nu era afisata. **Lamurit, regula inchisa** (`MARCAJE_PERMISE`,
+     fosta `MARCAJE_GOALE_PERMISE`, acum cu forma valorii): numele EXACT, doar pe `<file-drop-indicator>` fara clase (in afara celor
+     generate), doar cu valoare de identificator (`[A-Za-z0-9_-]`, cel mult 64, deci fara punct = fara nume.extensie), pe valoarea bruta;
+     valoarea trece oricum si prin cautarea cuvintelor / numelor de fisier. De ce nu poate masca un atasament: indicatorul nu e chip
+     (fisierele se numara doar pe `uploader-file-preview`, si in el), nu poate purta nume de fisier (regex + nume.extensie), orice alta
+     clasa / atribut / continut (text, imagine, card, buton) sau acelasi atribut pe alt element = refuz in continuare (teste + 6 mutanti).
+     **Presupunere declarata:** valoarea reala e un identificator fara cuvant de atasament; daca nu, 5a va arata aceeasi linie cu
+     `    sursa nume_atribut:data-filedrop-id=<valoare>` (forma gresita) sau `    sursa valoare_atribut:data-filedrop-id=<valoare>`
+     (cuvant in valoare) -> STOP, copiaza pentru chat.
+  2. `token_incarca:gem-icon-button[type=onsurface]{menu-button gem-menu-button open gem-button gem-button-badge-size-small gem-butt}`
+  3. `semnal_in_editor:token_chip:div[role=textbox][aria-label=introdu o solicitare pentru gemini][contenteditable]{ql-editor ql-blank
+     textarea new-input-ui rich-query-formatting-enabled input-url}`
+     **NElamurite, nimic exceptat.** Cuvintele din motiv ("incarca", "chip") NU apar in partea afisata a lui `{...}` - amandoua sunt
+     taiate exact la limita de 80 de caractere a afisarii r4-r7 (a sasea clasa a butonului e taiata la "gem-butt"). "open" si "input-url"
+     NU sunt cuvinte de atasament si nu se verifica ca URL (`url(` se cauta doar in `style`): elementele cu EXACT clasele afisate trec cu
+     0 necunoscute (test). Sursa reala e o clasa / un atribut de dincolo de 80 de caractere, necunoscut; o exceptie pe "open" sau pe
+     "url" n-ar avea niciun efect, iar una ghicita ar fi un wildcard. **Ce se schimba ca sa se vada:** `stare` afiseaza `{...}` intreg
+     (pana la 400 de caractere; linia pana la 600) si, sub fiecare `necunoscut` cu semnal, `    sursa <fel>:<unde>=<valoare>` (fel =
+     `tag` / `style` / `eticheta` / `clasa` / `id` / `nume_atribut` / `valoare_atribut`), calculata in aceeasi functie `_semnal` (al
+     doilea element al rezultatului), fara nicio decizie pe baza ei. **La 5a liniile 2 si 3 vor aparea in continuare** (refuz, marker
+     nescris), dar cu sursa: se copiaza pentru chat liniile `necunoscut` + `sursa`, iar regula exacta (daca sursa e inofensiva) intra
+     intr-un commit nou, cu review.
+- Fixture-ul `pagina_22_11` din teste = pagina calibrata la 21.11 + ce se vede in captura (indicatorul cu `data-filedrop-id`, clasele
+  butonului "+", clasele si eticheta editorului gol): pe v4.6.4 (`A03E2B5C`) da EXACT linia 1 si nimic altceva; pe v4.6.4b 0 necunoscute,
+  paza OK, `trimite` ajunge la Enter; cu un chip de fisier real in ea = `ciorna_cu_atasamente` fara nicio actiune (ca la 5b / 5c).
+
+**Stare (r9 = v4.6.4b runda 2, 22.11.2026, dupa ce chat-ul a citit atributele COMPLETE din pagina reala):**
+- **Sursa exacta a celor 3 linii.** Sesiunea de chat a citit prin CDP (doar citire, chat nou gol, dupa Esc + F5) atributele complete ale
+  celor 3 elemente semnalate (`paw-data\out\paw_v464_calibrare\atribute_complete_22_11.txt`). Constatarea r8 (sursa dincolo de caracterul
+  80) s-a confirmat, si niciuna nu e fisier:
+  1. `<file-drop-indicator>` are EXACT: clasele Angular `ng-tns-*` / `ng-star-inserted`, atributele `_ngcontent-*` / `_nghost-*` goale si
+     `data-filedrop-id="chat-window-input-container"`; fara text, fara copii.
+  2. butonul "+" `<gem-icon-button>` are atributul Angular `arialabel="Incarcare si instrumente"` (FARA cratima: nu e eticheta `aria-label`
+     din semnatura, ci o valoare oarecare de atribut, de aceea cuvantul "incarca" din ea era semnal) si `ariahaspopup="menu"`; clasele
+     `menu-button gem-menu-button open gem-button ... lm-enabled` (meniul "+", permanent).
+  3. editorul `div[role=textbox][contenteditable]` are clasele `... input-url-linkification-enabled inline-chips-enabled` (steaguri de
+     functionalitate); cuvantul "chip" e in a doua.
+- **Exceptii EXACTE, toate in functia unica de semnale, cate una pe element** (nicio intrare in listele albe, care raman 5 + 23 + 3):
+  (1) marcajul `data-filedrop-id` e acceptat DOAR cu valoarea `chat-window-input-container` (r8 accepta orice identificator; acum nu) si
+  DOAR pe un indicator IZOLAT: niciun alt atribut in afara celor Angular goale si a clasei cu doar `ng-*`, niciun copil, niciun text -
+  orice alta valoare / atribut / copil readuce numele in cautare (`token_file:...`, ca pana acum), iar copilul se verifica si el;
+  (2) pe `gem-icon-button`, valoarea `arialabel` EXACT `incarcare si instrumente` (dupa normalizarea ASCII, ca toate etichetele din liste)
+  impreuna cu `ariahaspopup="menu"` nu e semnal - alt tag, alta valoare (si "... oferta.docx"), fara `ariahaspopup="menu"`, sau acelasi
+  cuvant in alt atribut = semnal; (3) pe EDITOR, token-urile de clasa EXACT `input-url-linkification-enabled` si `inline-chips-enabled`
+  (comparate intregi, nu subsir) nu intra in cautare - `chip`, `file-chip`, `inline-chips`, `inline-chips-enabled-x`, litere mari, sau
+  acelasi token pe alt element (zona, rich-textarea, gem-icon, div, un p din editor) = semnal.
+- **Dovezi (teste 131 -> 138, toate `python -I`):** pagina reconstituita din atributele complete da, pe gemini_pw.py din v4.6.4 instalat
+  (codul real, nu mock), EXACT cele 3 linii din captura, in aceeasi ordine; pe r8 ar fi dat liniile 2 si 3 intregi cu sursa (ce prevedea
+  raportul r8); pe r9 0 necunoscute si `paza ciorna: OK` in cele trei stari, `trimite` ajunge la Enter; cu un chip real tot
+  `ciorna_cu_atasamente` fara nicio actiune. Abaterile fiecarui element (valoare / atribut / copil / token / alt element) sunt refuzate cu
+  motivul si sursa asteptate; 12 mutanti (valoarea ca identificator, izolarea scoasa pe atribute / pe copii, `ariahaspopup` necerut,
+  valoarea ca subsir, tagul necerut, token ca prefix, scutirea pe orice element, "chip" / "incarca" scoase din cuvinte, "wildcard" pe buton /
+  pe editor) lasa fiecare scenariul lui sa plece si pagina reala sa treaca; pe cod toate refuza. Identificatorii acceptati de r8 (`1`,
+  uuid etc.) sunt acum refuzati.
+- **La 5a (v4.6.4b r9) sunt asteptate 0 necunoscute pe chat NOU si pe chat EXISTENT.** Daca apare totusi o linie `necunoscut`, ea vine cu
+  `    sursa ...` sub ea: STOP, copiaza amandoua pentru chat (nu se trece in liste; regula exacta, daca sursa e inofensiva, intr-un commit nou).
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -159,20 +234,24 @@ scrie nimic si nu trimite nimic.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$Source = 'C:\Users\Public\livrare\run_paw_v464\docs\paw\run_paw_v464'
+$Source = 'C:\Users\Public\livrare\run_paw_v464b\docs\paw\run_paw_v464'
 $PawRoot = 'C:\ProgramData\Gazpet\Paw'
 $Bin = Join-Path $PawRoot 'bin'
-$Audit = Join-Path $PawRoot 'operator-v464'
+$Audit = Join-Path $PawRoot 'operator-v464b'
+$SufVechi = '.v464'      # sufixul copiilor de siguranta (ce e instalat acum: v4.6.4)
+$SufNou = '.v464b'       # sufixul fisierelor noi din zona protejata
 $GemMarker = 'C:\Users\Public\paw-data\gem_canal_validat'
 $Python = 'C:\Program Files\Python313\python.exe'
 $ManifestHash = 'INLOCUIESTE_CU_HASH_MANIFEST_DIN_RAPORT'
 $GemHashNou = 'INLOCUIESTE_CU_HASH_GEMINI_PW_DIN_RAPORT'
-$GemHashVechi = 'BE3B867B0BD7FA2333D009B54258A146DF72F4D78C2706C321ABEB2D21AED9F5'
+$GemHashVechi = 'A03E2B5C5ABD5D80709E5E1FB87126F4986245389B4E0943796589E2156AF7B6'
 $Operator = "$env:COMPUTERNAME\Gazpet-Ai"
 $ReaderSid = (New-Object Security.Principal.NTAccount($Operator)).Translate([Security.Principal.SecurityIdentifier]).Value
 ```
 
-`$GemHashVechi` = `gemini_pw.py` din v4.6.3 (instalat acum in `bin`).
+`$GemHashVechi` = `gemini_pw.py` din v4.6.4 (instalat acum in `bin`, 22.11.2026). Istoric: la instalarea v4.6.4 peste v4.6.3 valorile
+au fost `$Audit = operator-v464`, `$GemHashVechi = BE3B867B0BD7FA2333D009B54258A146DF72F4D78C2706C321ABEB2D21AED9F5` (v4.6.3), sufixele
+`.v463` / `.v464`; folderul `operator-v464` ramane pe disc (copiile v4.6.3), nu se atinge.
 
 ## 2. Verificari inainte de inlocuire (N - NU in consola admin; o data, inainte de pasul 3)
 
@@ -188,31 +267,34 @@ foreach ($e in $manifest.PSObject.Properties) {
     if ($e.Name -ne 'gemini_pw.py' -and (Get-FileHash -LiteralPath (Join-Path $Bin $e.Name)).Hash -ine $e.Value) { throw "Difera de instalat: $($e.Name)" }
 }
 if ($manifest.'gemini_pw.py' -ine $GemHashNou) { throw 'gemini_pw.py din pachet nu e cel revizuit' }
-if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel din v4.6.3' }
+if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel asteptat (vezi $GemHashVechi)' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 624 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 11) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 230 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 47) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
 if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 # copia markerului existent (daca exista), pentru rollback - ne-elevat (paw-data e scriibil de utilizatori)
-if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + '.v463') -Force }
+if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + $SufVechi) -Force }
 ```
 
-Asteptat (pachetul r7): 624 linii diferite (11 vechi `<=`, 613 noi `=>`; r6: 622 / 11 / 611, r5: 600 / 11 / 589,
-r4: 536 / 11 / 525, r3: 477 / 11 / 466, r2: 411 / 11 / 400). Cele 11 linii vechi afisate sunt aceleasi ca in
-r2-r6: antetul, lista de coduri, linia `import`, comentariul selectorilor `ATAS`, titlul partii cu browserul,
-cele doua linii din vechea `_atasamente`, linia `atasamente in ciorna` din `stare` si cele trei linii ale vechii
-verificari din `trimite`. Liniile noi: notele v4.6.4 / r2 / r3 / r4 / r5 / r6 / r7, selectorul `CHIP`, analiza HTML a
-ciornei, verificarea pozitiva a structurii (din r6 pornind de la elementul zonei insesi, `_cu_descendenti`; din r7
-un singur traseu, cu contextul `in_editor`, fara `_motiv_editor`), semnalele de atasament verificate inaintea
-listelor (`_semnal` - din r7 si media / fundalul CSS -, cu nume.extensie in toate valorile si exceptia gazdei
-Google pentru `href`), regula marcajului gol `xapfileselectordropzone`, listele albe calibrate (fara linia
-`token_file`), textul Workspace, regula domeniului firmei, paza si apelurile ei. Testele:
-`Ran 123 tests ... OK`. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
-raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 624 / 11 de mai sus).
+Asteptat (pachetul v4.6.4b = r9, fata de v4.6.4 INSTALAT in `bin`, `A03E2B5C...`): **230 linii diferite (47 vechi `<=`, 183 noi `=>`)**.
+Cele 47 de linii vechi sunt toate din v4.6.4 (nu din v4.6.3): constanta `MARCAJE_GOALE_PERMISE` si comentariile ei, `DETALIU_AFISAT = 240`,
+taierea `[:80]` din `_semnatura_token`, functiile `_are_eticheta_interzisa` si `_marcaj_gol_permis` (inlocuite de `_eticheta_interzisa` /
+`_marcaj_permis`), liniile `return` cu un singur rezultat din `_semnal` si cu doua din `_motiv_element` (acum cu sursa), linia `clase_id = ...`
+si linia `if k in ATRIBUTE_AFISATE_SEPARAT ...` din `_semnal` (acum cu `_clase_verificate` / `_valoare_permisa`), `out.append(m)` si linia
+`for m in ...` din `_necunoscute` / `stare`, docstring-urile celor doua functii. Liniile noi: notele v4.6.4b r8 si r9 din antet,
+`VALOARE_GOALA` / `VALOARE_FILEDROP` / `MARCAJE_PERMISE` / `VALORI_PERMISE` / `CLASE_EDITOR_PERMISE` cu comentariile lor,
+`SEMNATURA_TOKEN_AFISATA` / `SURSA_AFISATA`, `_marcaj_permis` (cu izolarea), `_valoare_permisa`, `_clase_verificate`, `_sursa_cuvant`,
+rezultatul `(motiv, sursa)`, `necunoscute_surse` si liniile `    sursa` din `stare`. Testele: `Ran 138 tests ... OK`.
+Informativ, fata de v4.6.3 (`BE3B867B...`, nu mai e in `bin`): 760 / 11 / 749 - aceleasi 11 linii vechi ca in r2-r8 (antetul, lista de
+coduri, `import`, comentariul `ATAS`, titlul partii cu browserul, cele doua linii din vechea `_atasamente`, linia `atasamente in ciorna`
+din `stare`, cele trei linii ale vechii verificari din `trimite`); fata de r8 (`C7609E9E...`, head-ul anterior al PR-ului, neinstalat):
+115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
+r4 536 / 11 / 525, r3 477 / 11 / 466, r2 411 / 11 / 400. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
+raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 230 / 47 de mai sus).
 
 Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
 `C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi
@@ -239,13 +321,13 @@ if (Test-Path -LiteralPath $Audit) { throw 'Audit exista deja (instalare reluata
 $barrier = OpenCdxInstallBarrier $true
 try {
     [void][IO.Directory]::CreateDirectory($Audit); SetCdxAdminAcl $Audit $ReaderSid
-    # (a) copii de siguranta ale fisierelor instalate
+    # (a) copii de siguranta ale fisierelor instalate (sufixul $SufVechi, pasul 1)
     foreach ($n in 'gemini_pw.py', 'SHA256.json') {
         AssertCdxAdminAcl (Join-Path $Bin $n); AssertCdxSingleFile (Join-Path $Bin $n)
-        Copy-Item -LiteralPath (Join-Path $Bin $n) -Destination (Join-Path $Audit ($n + '.v463'))
-        SetCdxAdminAcl (Join-Path $Audit ($n + '.v463')) $ReaderSid
+        Copy-Item -LiteralPath (Join-Path $Bin $n) -Destination (Join-Path $Audit ($n + $SufVechi))
+        SetCdxAdminAcl (Join-Path $Audit ($n + $SufVechi)) $ReaderSid
     }
-    if ((HashCdx "$Audit\gemini_pw.py.v463") -ine $GemHashVechi) { throw 'Fisierul instalat nu e gemini_pw.py din v4.6.3' }
+    if ((HashCdx "$Audit\gemini_pw.py$SufVechi") -ine $GemHashVechi) { throw 'Fisierul instalat nu e gemini_pw.py asteptat (vezi $GemHashVechi)' }
     # (b) pachetul: fiecare sursa se citeste O SINGURA DATA in memorie, hash-ul se verifica pe octetii cititi si
     #     doar acei octeti se scriu in zona protejata. Sursa nu se redeschide intre verificare si copiere, iar un
     #     continut care nu e cel revizuit nu ajunge nicaieri (nici macar in $Audit).
@@ -265,14 +347,14 @@ try {
                 }
             } finally { $fs.Dispose() }
             if (([BitConverter]::ToString($sha.ComputeHash($octeti))).Replace('-', '') -ine $asteptat) { throw "Sursa nu e cea revizuita: $n (nimic scris)" }
-            $st = Join-Path $Audit ($n + '.v464')
+            $st = Join-Path $Audit ($n + $SufNou)
             [IO.File]::WriteAllBytes($st, $octeti)
             SetCdxAdminAcl $st $ReaderSid; AssertCdxSingleFile $st
         }
     } finally { $sha.Dispose() }
-    if ((HashCdx "$Audit\SHA256.json.v464") -ine $ManifestHash) { throw 'Manifestul copiat nu e cel revizuit' }
-    if ((HashCdx "$Audit\gemini_pw.py.v464") -ine $GemHashNou) { throw 'gemini_pw.py copiat nu e cel revizuit' }
-    $manifest = Get-Content -LiteralPath "$Audit\SHA256.json.v464" -Raw | ConvertFrom-Json
+    if ((HashCdx "$Audit\SHA256.json$SufNou") -ine $ManifestHash) { throw 'Manifestul copiat nu e cel revizuit' }
+    if ((HashCdx "$Audit\gemini_pw.py$SufNou") -ine $GemHashNou) { throw 'gemini_pw.py copiat nu e cel revizuit' }
+    $manifest = Get-Content -LiteralPath "$Audit\SHA256.json$SufNou" -Raw | ConvertFrom-Json
     if (@($manifest.PSObject.Properties).Count -ne 12 -or $manifest.'gemini_pw.py' -ine $GemHashNou) { throw 'Manifest neasteptat' }
     foreach ($e in $manifest.PSObject.Properties) {
         if ($e.Name -ne 'gemini_pw.py' -and (HashCdx (Join-Path $Bin $e.Name)) -ine $e.Value) { throw "Instalat difera de manifest: $($e.Name)" }
@@ -280,7 +362,7 @@ try {
     # (c) inlocuirea, din zona protejata
     foreach ($n in 'gemini_pw.py', 'SHA256.json') {
         $dest = Join-Path $Bin $n
-        Copy-Item -LiteralPath (Join-Path $Audit ($n + '.v464')) -Destination $dest -Force
+        Copy-Item -LiteralPath (Join-Path $Audit ($n + $SufNou)) -Destination $dest -Force
         AssertCdxAdminAcl $dest; AssertCdxSingleFile $dest
     }
     # (d) starea finala: toate cele 12 fisiere din bin = manifestul revizuit
@@ -330,7 +412,11 @@ Orice rezultat diferit de cel cerut mai jos = **STOP**, fara marker; copiaza toa
 - **5a.** `stare` arata `model: Carbon`, `genereaza: False`, `atasamente in ciorna: 0`,
   `necunoscute in zona: 0`, `paza ciorna: OK (trimite ar continua)`. Cu ciorna goala pe ecran,
   `paza ciorna: REFUZ ciorna_necunoscuta ...` = calibrarea (pasul 0) nu acopera pagina: STOP,
-  fara marker, copiaza liniile `necunoscut ...` pentru chat. 5a se ruleaza pe un chat NOU si apoi
+  fara marker, copiaza liniile `necunoscut ...` SI liniile `    sursa ...` de sub ele (v4.6.4b) pentru chat.
+  **Asteptat la v4.6.4b r9 (declarat, pasul 0 "Stare r9"):** toate cele 3 linii din 22.11 dispar (fiecare are
+  regula ei exacta, scrisa din atributele complete citite din pagina): `necunoscute in zona: 0`, `paza ciorna: OK`.
+  Daca apare totusi o linie `necunoscut`, ea vine cu `    sursa ...` sub ea: STOP, markerul NU se scrie, copiaza
+  amandoua pentru chat (regula exacta, daca e cazul, intr-un commit nou, cu review). 5a se ruleaza pe un chat NOU si apoi
   inca o data pe un chat EXISTENT (tab-ul ramane pe chatul vechi dupa fiecare `gem`, iar paza
   verifica intai tab-ul curent): ambele trebuie sa dea `necunoscute in zona: 0`. (Pachetul r4 arata aici
   1 necunoscut `token_file:...`; r5 il lamureste prin regula marcajului `xapfileselectordropzone=""` -
@@ -382,7 +468,7 @@ Numai dupa ce ai VAZUT rezultatele 5a-5g, markerul - **ne-elevat (N)**, nu din c
 ```powershell
 $GemHash = (Get-FileHash -LiteralPath "$Bin\gemini_pw.py" -Algorithm SHA256).Hash
 if ($GemHash -ine $GemHashNou) { throw 'gemini_pw.py instalat nu e cel revizuit' }
-Set-Content -LiteralPath $GemMarker -Value ('CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v464') -Encoding ASCII
+Set-Content -LiteralPath $GemMarker -Value ('CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v464b') -Encoding ASCII
 ```
 
 ## 6. Smoke prin lansator (N)
@@ -401,7 +487,9 @@ Asteptat (ultima linie din fiecare log): gem `PAW_GATA`; jak `PAW_GATA`. In logu
 Dupa smoke: sesiunea de chat actualizeaza `registru_automatizari`, randul `run_paw` din
 `public.automatizari` si mentiunea "Gemini 4 Argon" din CLAUDE.md (model: Carbon).
 
-## Rollback la v4.6.3 (A, consola noua, dupa pasul 1; pasul 2 NU se ruleaza)
+## Rollback la versiunea dinainte (A, consola noua, dupa pasul 1; pasul 2 NU se ruleaza)
+
+Readuce in `bin` copiile de siguranta cu sufixul `$SufVechi` din `$Audit` (la v4.6.4b: v4.6.4, `A03E2B5C...`, din `operator-v464b`).
 
 ```powershell
 . "$Bin\cdx_security.ps1"
@@ -409,27 +497,27 @@ $PAW_ROOT = $PawRoot
 $barrier = OpenCdxInstallBarrier $true
 try {
     foreach ($n in 'gemini_pw.py', 'SHA256.json') {
-        $src = Join-Path $Audit ($n + '.v463')
+        $src = Join-Path $Audit ($n + $SufVechi)
         if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { throw ('Lipseste copia de siguranta pentru ' + $n + ' - bin nu a fost atins de pasul 3 (compara hash-urile de mana)') }
         AssertCdxAdminAcl $src; AssertCdxSingleFile $src
     }
-    if ((HashCdx "$Audit\gemini_pw.py.v463") -ine $GemHashVechi) { throw 'Copia de siguranta nu e gemini_pw.py din v4.6.3' }
+    if ((HashCdx "$Audit\gemini_pw.py$SufVechi") -ine $GemHashVechi) { throw 'Copia de siguranta nu e gemini_pw.py asteptat (vezi $GemHashVechi)' }
     foreach ($n in 'gemini_pw.py', 'SHA256.json') {
-        Copy-Item -LiteralPath (Join-Path $Audit ($n + '.v463')) -Destination (Join-Path $Bin $n) -Force
+        Copy-Item -LiteralPath (Join-Path $Audit ($n + $SufVechi)) -Destination (Join-Path $Bin $n) -Force
         AssertCdxAdminAcl (Join-Path $Bin $n); AssertCdxSingleFile (Join-Path $Bin $n)
-        if ((HashCdx (Join-Path $Bin $n)) -ine (HashCdx (Join-Path $Audit ($n + '.v463')))) { throw "Rollback incomplet: $n" }
+        if ((HashCdx (Join-Path $Bin $n)) -ine (HashCdx (Join-Path $Audit ($n + $SufVechi)))) { throw "Rollback incomplet: $n" }
     }
 } finally { $barrier.Dispose() }
-Rename-Item -LiteralPath $Audit -NewName ('operator-v464-anulat-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+Rename-Item -LiteralPath $Audit -NewName ((Split-Path -Leaf $Audit) + '-anulat-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 ```
 
 Apoi markerul, **ne-elevat (N)**, dupa pasul 1 (copia facuta la pasul 2, daca exista):
 
 ```powershell
-if (Test-Path -LiteralPath ($GemMarker + '.v463')) { Copy-Item -LiteralPath ($GemMarker + '.v463') -Destination $GemMarker -Force }
+if (Test-Path -LiteralPath ($GemMarker + $SufVechi)) { Copy-Item -LiteralPath ($GemMarker + $SufVechi) -Destination $GemMarker -Force }
 ```
 
-Dupa rollback `gem` ramane refuzat (v4.6.3 nu are marker valid: testul ei de canal a picat);
+Dupa rollback `gem` ramane refuzat (nici v4.6.3, nici v4.6.4 nu au marker valid: testele lor de canal au picat);
 jak / cop / cdx neschimbate. Pasul 4 se poate rula ca verificare. Folderul de audit e redenumit,
 deci pasul 3 se poate relua de la capat dupa ce cauza e lamurita.
 
