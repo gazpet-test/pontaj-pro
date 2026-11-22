@@ -12,12 +12,12 @@ Un rând în `executie_semnale`, unic pe **(proiect, tip, obiect)** — aceeași
 |---|---|
 | `flux` | `lipsuri` / `tichete` / `corespondenta` (cele trei execuții izolate ale agentului) |
 | `tip` | cod stabil, `^[a-z][a-z0-9_]{1,59}$` (ex. `termen_apropiat`, `document_negasit`, `camp_lipsa_erp`, `polita_expira`); un tip stă pe un singur flux |
-| `obiect` | ce anume (ex. `contract:termen`, `polita:GBE`, `camp:nr_contract`) |
+| `obiect` | ce anume (ex. `contract:termen`, `polita:GBE`, `camp:nr_contract`), stocat DOAR în forma canonică `fn_executie_semnal_spatii` (vezi mai jos): RPC-ul o aplică, iar CHECK-ul `executie_semnale_obiect_ck` o cere pe orice cale — ` polita:GBE`, NBSP + `polita:GBE`, `polita:` + U+200B + `GBE` sunt același semnal (același id), nu rânduri noi. Literele contează (`polita:gbe` ≠ `polita:GBE`), un spațiu interior contează (`polita: GBE` ≠ `polita:GBE`); doar spațiu alb / caractere fără lățime = refuz 22023 |
 | `gravitate` | `info` / `atentie` / `critic` |
 | `titlu`, `detalii` | pentru om |
 | `constatare` | `constatat` (cu dovadă) · `negasit_in_surse` (documentul NU a fost găsit în sursele consultate — NU înseamnă că lipsește) · `camp_lipsa` (câmp gol în ERP) — vezi contractul dovezii mai jos |
 | `dovada_sursa` / `dovada_data` / `dovada_fragment` / `dovada_ref` | sursa (`document` / `mail` / `camp_erp`), data sursei, fragmentul scurt, linkul sau calea NAS |
-| `dovada_amprenta` | md5 CANONIC al dovezii, pus de SERVER; decide „dovadă nouă” (ordinea / spațiul alb / majusculele / dublurile surselor consultate și spațiul alb din fragment / referință NU sunt dovadă nouă). Spațiul alb = O SINGURĂ funcție, `fn_executie_semnal_spatii`: orice șir de spațiu alb — spațiu, tab, newline, CR, NBSP și celelalte spații Unicode, BOM — devine ÎNTÂI un spațiu, APOI capetele se taie (ordinea inversă lăsa un `\n` de la capete ca spațiu); aceeași funcție normalizează și textele dovezii stocate de RPC (fragment, referință, surse) |
+| `dovada_amprenta` | md5 CANONIC al dovezii, pus de SERVER; decide „dovadă nouă” (ordinea / spațiul alb / majusculele / dublurile surselor consultate și spațiul alb din fragment / referință NU sunt dovadă nouă). Spațiul alb = O SINGURĂ funcție, `fn_executie_semnal_spatii`, în trei pași: 1. caracterele de format fără lățime (U+200B–U+200F, U+202A–U+202E, U+2060–U+2064, U+2066–U+2069, BOM U+FEFF, cratima moale U+00AD) se ELIMINĂ (nu sunt spațiu: `a<U+200B>b` = `ab`); 2. orice șir de spațiu alb — spațiu, tab, newline, CR, NBSP, U+2007, U+202F și celelalte spații Unicode — devine un spațiu; 3. capetele se taie (ordinea inversă lăsa un `\n` de la capete ca spațiu). Aceeași funcție normalizează cheia `obiect` și textele dovezii stocate de RPC (fragment, referință, surse) |
 | `termen`, `termen_baza`, `termen_confirmat` | termenul identificat, baza calculului (OBLIGATORIE la termen confirmat), dacă e confirmat |
 | `incertitudine`, `propunere` | explicația incertitudinii; ce propune agentul |
 | `responsabil_employee_id`, `responsabil_sursa` | angajatul titular; `agent` (propus) sau `om` (stabilit SAU confirmat explicit de om — inclusiv „fără responsabil”, id NULL — agentul nu-l mai schimbă) |
@@ -35,7 +35,7 @@ Un rând în `executie_semnale`, unic pe **(proiect, tip, obiect)** — aceeași
 Cele 13 semnale ale testului „pe hârtie” al pilotului (sintetizate, fără date personale) stau în `scripts/pglite/executie_semnale_pilot.mjs` și se scriu
 real prin RPC în proba PGlite (toate `creat`; fiecare piesă scoasă = refuz 23514); a doua rulare = 13 × `neschimbat`.
 | `regula_versiune` | versiunea regulii care a produs semnalul |
-| `detectat_la`, `ultima_verificare`, `versiune` | prima detectare; ultima rulare care l-a confirmat; versiunea rândului (CAS pentru ecran) |
+| `detectat_la`, `ultima_verificare`, `versiune` | prima detectare; ultima rulare care l-a confirmat; versiunea rândului (CAS pentru ecran). `versiune` crește la ORICE scriere pe rând (garda), deci și la `neschimbat` / `neschimbat_inchis` (se scrie `ultima_verificare`): un formular deschis peste rularea de noapte primește „conflict” și ecranul reîncarcă; jurnalul NU crește la aceste două răspunsuri |
 
 Jurnal doar-adăugare `executie_semnale_jurnal`: `creat` / `actualizat` / `redeschis` (agent), `stare` / `responsabil` (om), cu diferențele `{câmp: [vechi, nou]}`.
 
@@ -48,9 +48,11 @@ modul (viewer / editor / admin) sau șeful de șantier NU vede semnalele (0 rân
 Cheile EXACTE (necunoscute = refuz 22023): `proiect_id`, `flux`, `tip`, `obiect`, `gravitate`, `titlu`, `constatare`, `regula_versiune`
 (obligatorii) + `detalii`, `surse_consultate` (listă de texte), `dovada_sursa`, `dovada_data` (`AAAA-LL-ZZ`), `dovada_fragment`, `dovada_ref`,
 `termen`, `termen_baza`, `termen_confirmat`, `incertitudine`, `propunere`, `responsabil_employee_id` (opționale; `null` = lipsă).
+Cheia (proiect, tip, obiect) se compară pe forma canonică a lui `obiect` (`fn_executie_semnal_spatii`); `tip` e un cod ASCII strict (CHECK-ul lui
+nu lasă niciun spațiu sau caracter fără lățime, deci nu are formă necanonică).
 Răspuns `{ok, actiune, id, stare, versiune}` cu `actiune` ∈ `creat` · `actualizat` (ceva s-a schimbat, diferențele în jurnal) · `neschimbat`
-(doar `ultima_verificare`) · `redeschis` (semnal închis de om, dovadă NOUĂ → `nou`) · `neschimbat_inchis` (semnal închis de om, aceeași dovadă → NU
-reapare). Agentul nu poate atinge starea / motivul / dovada / acțiunea omului și nici responsabilul stabilit / confirmat de om; gărzile stau în BD
+(doar `ultima_verificare`; `versiune` + 1, fără jurnal) · `redeschis` (semnal închis de om, dovadă NOUĂ → `nou`) · `neschimbat_inchis` (semnal închis
+de om, aceeași dovadă → NU reapare; doar `ultima_verificare`, `versiune` + 1, fără jurnal). Agentul nu poate atinge starea / motivul / dovada / acțiunea omului și nici responsabilul stabilit / confirmat de om; gărzile stau în BD
 (trigger BEFORE), nu doar în RPC. `surse_consultate` se stochează în ordinea formei canonice, fără dubluri (aceeași listă în altă ordine =
 `neschimbat`, nu `actualizat`); „dovadă nouă” = altă constatare / sursă / dată / fragment / cale sau o sursă consultată în plus / în minus.
 
@@ -79,7 +81,9 @@ propunerea, decizia și istoricul; formular de schimbare a stării (motiv, dovad
 `node scripts/pglite/test_executie_semnale_local.mjs` (PGlite, pașii reali L15 v2; drepturi pe 9 conturi, dedup, contractul dovezii, amprenta
 canonică, confirmarea responsabilului, respins nu reapare, agentul nu atinge starea omului, pilotul cu 13 semnale, revenirea pe definiții
 (blocul DEFINITII, regenerat cu `--scrie-definitii`; lista L15 cu `--scrie-obiecte`), spațiul alb din amprentă (newline / tab / NBSP la capete și în
-mijloc pe respins / rezolvat / deschis = aceeași dovadă), 50 de mutanți, paritatea tranzițiilor, dry-run-ul pentru clonă),
+mijloc pe respins / rezolvat / deschis = aceeași dovadă), cheia `obiect` canonică (reproducerea Jakarinos r3: `polita:GBE` respins, retrimis cu NBSP /
+U+202F / U+200B la capete și în mijloc = același id, `neschimbat_inchis`; cheie cu spațiu interior; forma necanonică refuzată de CHECK pe calea
+directă), 59 de mutanți, paritatea tranzițiilor, dry-run-ul pentru clonă D0–D6),
 `npx vitest run src/executieSemnaleLogica.test.js src/ExecutieSemnale.test.jsx src/ExecutieSemnaleMutanti.test.jsx` (ultimul: mutanții JS ai
 clasificării răspunsului RPC — orice eroare / 408 / 5xx / status lipsă = refuz, corp fără semnal = ok —, ai afișării obligației / datei și ai
 ecranului — rezultatul necunoscut tratat ca „nu s-a salvat”, fără reîncărcare, excepția clientului ca refuz, dovada fără obligație —, fiecare

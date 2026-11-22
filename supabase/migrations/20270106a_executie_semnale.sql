@@ -12,7 +12,8 @@
 --
 -- Ce face (DOAR obiecte noi, nicio dată, niciun drept pe tabele existente):
 --   * executie_semnale: un semnal pe (proiect, tip, obiect) — cheia de deduplicare (UNIQUE): aceeași problemă ACTUALIZEAZĂ semnalul, nu creează
---     altul. Fluxul (lipsuri / tichete / corespondenta), tipul (cod stabil, ex. termen_apropiat, document_negasit, camp_lipsa_erp, polita_expira),
+--     altul; obiectul e stocat DOAR în forma canonică (fn_executie_semnal_spatii: spațiul alb strâns + tăiat, caracterele fără lățime eliminate),
+--     impusă de RPC ȘI de un CHECK (o scriere pe altă cale nu poate ocoli normalizarea); tipul e un cod ASCII strict. Fluxul (lipsuri / tichete / corespondenta), tipul (cod stabil, ex. termen_apropiat, document_negasit, camp_lipsa_erp, polita_expira),
 --     gravitatea (info / atentie / critic), titlul, detaliile; CONSTATAREA deosebește explicit „constatat” (dovadă: sursa document / mail / camp_erp
 --     + DATA sursei + FRAGMENTUL; linkul sau calea NAS opțional) de „negasit_in_surse” (documentul NU a fost găsit în sursele consultate — lista lor
 --     e obligatorie — iar OBLIGAȚIA care îl cere e dovada: sursa + data + fragmentul clauzei) și de „camp_lipsa” (câmp gol în ERP: dovada e câmpul);
@@ -20,10 +21,11 @@
 --     responsabilul (angajat; sursa lui: agent = propus / om = stabilit SAU confirmat explicit de om, inclusiv „fără responsabil” — ce a decis omul
 --     nu mai schimbă agentul); starea (nou / in_lucru / asteapta_informatii / rezolvat / respins) cu motivul, dovada rezolvării / respingerii,
 --     acțiunea rezultată (legătura cu tichetul; rezolvarea cere dovada sau acțiunea), cine și când; versiunea regulii; detectat_la /
---     ultima_verificare; versiunea rândului (CAS). Amprenta dovezii (md5 CANONIC, pusă de SERVER: sursele consultate fără ordine / spațiu alb /
---     majuscule / dubluri, fragmentul și referința cu spațiul alb normalizat — TOT spațiul alb, inclusiv \n, \t, NBSP, printr-o SINGURĂ funcție,
---     fn_executie_semnal_spatii, aplicată și textelor stocate de RPC) spune dacă dovada e NOUĂ: un semnal respins (sau rezolvat) cu aceeași dovadă
---     NU reapare — doar ultima_verificare se mișcă; cu dovadă nouă se redeschide (stare nou, decizia veche rămâne în jurnal).
+--     ultima_verificare; versiunea rândului (CAS, crește la ORICE scriere, și la „neschimbat”). Amprenta dovezii (md5 CANONIC, pusă de SERVER:
+--     sursele consultate fără ordine / spațiu alb / majuscule / dubluri, fragmentul și referința cu spațiul alb normalizat — TOT spațiul alb,
+--     inclusiv newline, tab, NBSP, iar caracterele fără lățime eliminate — printr-o SINGURĂ funcție, fn_executie_semnal_spatii, aplicată și
+--     textelor stocate de RPC și cheii obiect) spune dacă dovada e NOUĂ: un semnal respins (sau rezolvat) cu aceeași dovadă NU reapare — doar
+--     ultima_verificare se mișcă; cu dovadă nouă se redeschide (stare nou, decizia veche rămâne în jurnal).
 --   * executie_semnale_jurnal: jurnal DOAR ADĂUGARE al schimbărilor (creat / actualizat / redeschis / stare / responsabil), cu actorul
 --     (agent / om + contul), motivul, dovada, diferențele (câmp: [vechi, nou]) și versiunea regulii.
 --   * Dreptul: O SINGURĂ definiție (fn_executie_semnal_drept): citire = owner SAU managerul de proiect (profiles.employee_id =
@@ -189,6 +191,21 @@ BEGIN
     v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
 END $lock$;
 
+-- ── spațiul alb al unui text, O SINGURĂ definiție (L19) pentru TOT ce intră în cheia de deduplicare (obiect), în amprentă și în textele dovezii
+-- stocate de RPC (fragment, referință, surse). Trei pași, în această ordine: 1. caracterele de FORMAT fără lățime (Unicode Cf: spațiul fără
+-- lățime U+200B, U+200C–U+200D, marcajele bidi U+200E–U+200F și U+202A–U+202E, U+2060–U+2064, izolatoarele bidi U+2066–U+2069, BOM U+FEFF,
+-- cratima moale U+00AD) se ELIMINĂ — nu sunt spațiu („a<U+200B>b” = „ab”); 2. orice șir de spațiu alb (spațiu, tab, newline, CR, VT, FF, NEL și
+-- spațiile Unicode: NBSP U+00A0, U+1680, U+2000–U+200A (inclusiv U+2007), U+2028, U+2029, U+202F, U+205F, U+3000 — [[:space:]] NU le prinde pe
+-- cele fără rupere) devine UN spațiu; 3. capetele se taie. Ordinea contează: eliminarea înaintea strângerii (altfel „a <U+200B> b” ar rămâne cu
+-- două spații), strângerea înaintea tăierii (btrim întâi lăsa un newline de la capete ca spațiu în amprentă — verdictul Jakarinos r2). Codurile
+-- sunt scrise prin chr(): validatorul runnerului refuză U&'…' și backslash-urile din literali. NULL / doar spațiu alb = NULL. Stă ÎNAINTEA
+-- tabelului: CHECK-ul cheii (executie_semnale_obiect_ck) cere ca valoarea stocată să fie deja forma canonică, pe orice cale de scriere. ──
+CREATE FUNCTION public.fn_executie_semnal_spatii(p_text text) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
+  SELECT nullif(btrim(regexp_replace(regexp_replace(p_text, '[' || (SELECT string_agg(chr(c), '') FROM unnest(ARRAY[173, 8203, 8204, 8205, 8206, 8207, 8234, 8235, 8236, 8237, 8238, 8288, 8289, 8290, 8291, 8292, 8294, 8295, 8296, 8297, 65279]) c) || ']', '', 'g'), '[[:space:]' || (SELECT string_agg(chr(c), '') FROM unnest(ARRAY[133, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288]) c) || ']+', ' ', 'g'), ' '), '')
+$f$;
+REVOKE ALL ON FUNCTION public.fn_executie_semnal_spatii(text) FROM PUBLIC, anon, authenticated, service_role;
+
 -- ── semnalele ──
 CREATE TABLE public.executie_semnale (
   id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
@@ -226,7 +243,10 @@ CREATE TABLE public.executie_semnale (
   CONSTRAINT executie_semnale_cheie_uq UNIQUE (proiect_id, tip, obiect),
   CONSTRAINT executie_semnale_flux_ck CHECK (flux IN ('lipsuri', 'tichete', 'corespondenta')),
   CONSTRAINT executie_semnale_tip_ck CHECK (tip ~ '^[a-z][a-z0-9_]{1,59}$'),
-  CONSTRAINT executie_semnale_obiect_ck CHECK (length(obiect) BETWEEN 1 AND 200 AND obiect !~ '[[:cntrl:]]' AND obiect ~ '[^[:space:]]'),
+  -- cheia de deduplicare e stocată DOAR în forma canonică (fn_executie_semnal_spatii), pe orice cale: „ polita:GBE”, NBSP sau un caracter fără
+  -- lățime nu pot crea alt rând lângă „polita:GBE”. IS NOT DISTINCT FROM: forma canonică NULL (doar spațiu alb) = refuz, nu UNKNOWN.
+  CONSTRAINT executie_semnale_obiect_ck CHECK (length(obiect) BETWEEN 1 AND 200 AND obiect !~ '[[:cntrl:]]'
+    AND obiect IS NOT DISTINCT FROM public.fn_executie_semnal_spatii(obiect)),
   CONSTRAINT executie_semnale_gravitate_ck CHECK (gravitate IN ('info', 'atentie', 'critic')),
   CONSTRAINT executie_semnale_titlu_ck CHECK (length(titlu) BETWEEN 3 AND 200 AND titlu !~ '[[:cntrl:]]' AND titlu ~ '[^[:space:]]'),
   CONSTRAINT executie_semnale_texte_ck CHECK (
@@ -279,7 +299,8 @@ CREATE INDEX executie_semnale_responsabil_idx ON public.executie_semnale (respon
 COMMENT ON TABLE public.executie_semnale IS
   'Execuție: semnalele agentului verificator (faza 1). Un rând pe (proiect, tip, obiect); scris doar de agent prin fn_executie_semnal_scrie; starea / responsabilul le schimbă omul prin fn_executie_semnal_stare. 20270106a.';
 COMMENT ON COLUMN public.executie_semnale.constatare IS 'constatat = cu dovadă (sursă + dată + fragment); negasit_in_surse = documentul NU a fost găsit în sursele consultate (nu înseamnă că lipsește) + obligația care îl cere (sursă + dată + fragment); camp_lipsa = câmp gol în ERP (dovada_ref = câmpul). 20270106a.';
-COMMENT ON COLUMN public.executie_semnale.dovada_amprenta IS 'md5 canonic al dovezii (constatare, sursele în formă canonică — fără ordine / spațiu alb / majuscule —, sursă, dată, fragment și ref cu spațiul alb normalizat prin fn_executie_semnal_spatii: orice spațiu alb, inclusiv newline / tab / NBSP, devine un spațiu, apoi capetele se taie), pus de server: aceeași amprentă pe un semnal respins / rezolvat = nu reapare. 20270106a.';
+COMMENT ON COLUMN public.executie_semnale.obiect IS 'Ce anume (ex. polita:GBE), în forma canonică fn_executie_semnal_spatii (spațiul alb strâns + tăiat, caracterele fără lățime eliminate), impusă de RPC și de CHECK: face parte din cheia de deduplicare (proiect, tip, obiect). 20270106a.';
+COMMENT ON COLUMN public.executie_semnale.dovada_amprenta IS 'md5 canonic al dovezii (constatare, sursele în formă canonică — fără ordine / spațiu alb / majuscule —, sursă, dată, fragment și ref cu spațiul alb normalizat prin fn_executie_semnal_spatii: caracterele fără lățime eliminate, orice spațiu alb, inclusiv newline / tab / NBSP, devine un spațiu, apoi capetele se taie), pus de server: aceeași amprentă pe un semnal respins / rezolvat = nu reapare. 20270106a.';
 COMMENT ON COLUMN public.executie_semnale.responsabil_sursa IS 'agent = propus de agent (agentul îl poate schimba); om = stabilit sau confirmat explicit de om, inclusiv „fără responsabil” (id NULL): agentul nu-l mai atinge. 20270106a.';
 
 -- ── jurnalul (doar adăugare) ──
@@ -339,17 +360,6 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   ) t(actor, veche, noua) WHERE t.actor = p_actor AND t.veche = p_veche AND t.noua = p_noua)
 $f$;
 REVOKE ALL ON FUNCTION public.fn_executie_semnal_tranzitie(text, text, text) FROM PUBLIC, anon, authenticated, service_role;
-
--- ── spațiul alb al unui text, O SINGURĂ definiție (L19) pentru TOT ce intră în amprentă și pentru textele dovezii stocate de RPC: ÎNTÂI orice
--- șir de spațiu alb (spațiu, tab, \n, \r, \v, \f, NEL și spațiile Unicode: NBSP U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F,
--- U+3000, spațiul fără lățime U+200B, BOM U+FEFF — [[:space:]] NU le prinde pe cele fără rupere) devine UN spațiu, APOI capetele se taie.
--- Ordinea contează: btrim înaintea strângerii lăsa un „\n” de la capete ca spațiu în amprentă (verdictul Jakarinos r2). Spațiile Unicode sunt
--- scrise prin codurile lor (chr): validatorul runnerului refuză U&'…' și backslash-urile din literali. NULL / gol = NULL. ──
-CREATE FUNCTION public.fn_executie_semnal_spatii(p_text text) RETURNS text
-LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
-  SELECT nullif(btrim(regexp_replace(p_text, '[[:space:]' || (SELECT string_agg(chr(c), '') FROM unnest(ARRAY[133, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8203, 8232, 8233, 8239, 8287, 12288, 65279]) c) || ']+', ' ', 'g'), ' '), '')
-$f$;
-REVOKE ALL ON FUNCTION public.fn_executie_semnal_spatii(text) FROM PUBLIC, anon, authenticated, service_role;
 
 -- ── forma canonică a unui text pentru compararea dovezilor (sursele consultate: amprenta + ordonarea celor stocate de RPC): spațiul alb normalizat
 -- (fn_executie_semnal_spatii) + litere mici. NULL / gol = NULL. ──
@@ -489,8 +499,11 @@ CREATE TRIGGER trg_executie_semnale_jurnal_fara_golire BEFORE TRUNCATE ON public
 -- ── RPC-ul AGENTULUI: scrie / actualizează un semnal. EXECUTE exclusiv service_role; în corp auth.uid() IS NULL (calea server, L08).
 -- p_semnal: obiect cu cheile EXACTE (necunoscute = refuz): proiect_id, flux, tip, obiect, gravitate, titlu, constatare, regula_versiune
 -- (obligatorii), detalii, surse_consultate (listă de texte), dovada_sursa, dovada_data (AAAA-LL-ZZ), dovada_fragment, dovada_ref, termen,
--- termen_baza, termen_confirmat, incertitudine, propunere, responsabil_employee_id (opționale, null = lipsă). Întoarce {ok, actiune, id, stare,
--- versiune}: actiune = creat | actualizat | neschimbat | redeschis | neschimbat_inchis (respins / rezolvat cu aceeași dovadă: nu reapare). ──
+-- termen_baza, termen_confirmat, incertitudine, propunere, responsabil_employee_id (opționale, null = lipsă). Cheia de deduplicare (proiect, tip,
+-- obiect) se compară pe forma canonică a obiectului (fn_executie_semnal_spatii; tipul e un cod ASCII strict, CHECK-ul lui nu lasă niciun spațiu).
+-- Întoarce {ok, actiune, id, stare, versiune}: actiune = creat | actualizat | neschimbat | redeschis | neschimbat_inchis (respins / rezolvat cu
+-- aceeași dovadă: nu reapare). La neschimbat / neschimbat_inchis se scrie DOAR ultima_verificare, dar e o scriere: garda incrementează versiune
+-- (CAS-ul ecranului dă „conflict” → reîncărcare), jurnalul nu crește. ──
 CREATE FUNCTION public.fn_executie_semnal_scrie(p_semnal jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
@@ -557,7 +570,12 @@ BEGIN
   ELSE
     v_surse := '{}'::text[];
   END IF;
-  v_flux := p_semnal ->> 'flux'; v_tip := p_semnal ->> 'tip'; v_obiect := btrim(p_semnal ->> 'obiect');
+  -- cheia de deduplicare: obiectul în forma canonică (aceeași funcție ca amprenta și CHECK-ul tabelului): spațiul alb strâns + tăiat,
+  -- caracterele fără lățime eliminate — „ polita:GBE”, NBSP + „polita:GBE”, „polita:” + U+200B + „GBE” = același semnal
+  v_flux := p_semnal ->> 'flux'; v_tip := p_semnal ->> 'tip'; v_obiect := public.fn_executie_semnal_spatii(p_semnal ->> 'obiect');
+  IF v_obiect IS NULL THEN
+    RAISE EXCEPTION 'semnale: obiect = text (1–200 de caractere, nu doar spațiu alb / caractere fără lățime)' USING ERRCODE = '22023';
+  END IF;
   -- 2. rândul existent, blocat ÎNAINTEA deciziei (L01); lipsă = INSERT cu ON CONFLICT DO NOTHING + recitire (L04: o cursă nu creează dublură)
   SELECT * INTO r FROM public.executie_semnale s WHERE s.proiect_id = v_proiect AND s.tip = v_tip AND s.obiect = v_obiect FOR UPDATE;
   IF NOT FOUND THEN
@@ -767,10 +785,14 @@ BEGIN
             AND tg.tgenabled = 'O' AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND tg.tgattr::text = '') <> 4 THEN
     RAISE EXCEPTION '20270106a post: trigger-ele';
   END IF;
-  IF (SELECT count(*) FROM pg_constraint WHERE conrelid = v_s AND contype = 'u' AND conname = 'executie_semnale_cheie_uq') <> 1
+  IF (SELECT count(*) FROM pg_constraint WHERE conrelid = v_s AND contype = 'u' AND conname = 'executie_semnale_cheie_uq'
+        AND pg_get_constraintdef(oid) = 'UNIQUE (proiect_id, tip, obiect)') <> 1
      OR (SELECT count(*) FROM pg_constraint WHERE conrelid = v_s AND contype = 'f') <> 2
-     OR (SELECT count(*) FROM pg_constraint WHERE conrelid = v_j AND contype = 'f') <> 1 THEN
-    RAISE EXCEPTION '20270106a post: cheile';
+     OR (SELECT count(*) FROM pg_constraint WHERE conrelid = v_j AND contype = 'f') <> 1
+     -- cheia obiect e păzită de forma canonică (aceeași funcție ca RPC-ul și amprenta), validată
+     OR (SELECT count(*) FROM pg_constraint WHERE conrelid = v_s AND contype = 'c' AND conname = 'executie_semnale_obiect_ck' AND convalidated
+        AND pg_get_constraintdef(oid) LIKE '%(NOT (obiect IS DISTINCT FROM %fn_executie_semnal_spatii(obiect)))%') <> 1 THEN
+    RAISE EXCEPTION '20270106a post: cheile (UNIQUE / FK / forma canonica a obiectului)';
   END IF;
   IF EXISTS (SELECT 1 FROM public.executie_semnale) OR EXISTS (SELECT 1 FROM public.executie_semnale_jurnal) THEN
     RAISE EXCEPTION '20270106a post: migrarea nu scrie date';

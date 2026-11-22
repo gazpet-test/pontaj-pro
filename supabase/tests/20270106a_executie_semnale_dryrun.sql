@@ -4,7 +4,7 @@
 -- O singură tranzacție, ANULATĂ la final (ROLLBACK): identități reale din catalog (owner + 4 profiluri non-owner, cu drepturile 'executie',
 -- legătura cu fișa de angajat și restricția pe proiect rescrise DOAR în tranzacție), 2 angajați și 2 proiecte EXISTENTE (managerul de proiect
 -- rescris doar în tranzacție), semnale FICTIVE (tip „dry_*”). Nimic din datele reale nu se citește în afara catalogului și nimic nu rămâne.
--- Fiecare test se termină cu NOTICE „Dn OK”; orice abatere oprește rularea (RAISE EXCEPTION). Refuzurile se verifică după SQLSTATE și după
+-- Fiecare test se termină cu NOTICE „Dn OK” (D0–D6); orice abatere oprește rularea (RAISE EXCEPTION). Refuzurile se verifică după SQLSTATE și după
 -- fragmentul exact al mesajului (L25). Același scenariu rulează local pe PGlite (scripts/pglite/test_executie_semnale_local.mjs, secțiunea 6).
 \set ON_ERROR_STOP 1
 BEGIN ISOLATION LEVEL READ COMMITTED;
@@ -316,6 +316,53 @@ BEGIN
     RAISE EXCEPTION 'D5 FAIL: calea directă schimbă responsabilul omului';
   END IF;
   RAISE NOTICE 'D5 OK';
+END $t$;
+
+-- D6 (Jakarinos r3): cheia de deduplicare `obiect` e în forma canonică (fn_executie_semnal_spatii) pe orice cale — s2 (polita:GBE) respins de
+--     owner, retrimis cu NBSP / U+202F / U+200B la capete, U+200B în mijloc, tab + newline la capete = ACELAȘI id, `neschimbat_inchis`, stare
+--     respins, UN rând pe cheie, versiunea +1 la fiecare (scriere pe ultima_verificare), jurnalul neschimbat; o cheie real diferită = semnal nou;
+--     scrierea DIRECTĂ (postgres fără JWT = agentul) a unei forme necanonice e refuzată de CHECK, inclusiv „doar NBSP” (nu trece prin UNKNOWN)
+DO $t$
+DECLARE s2 bigint := pg_temp.d_g('s2')::bigint; r jsonb; v integer; v0 integer; n integer; nj integer; ob text;
+  ins constant text := 'INSERT INTO public.executie_semnale (proiect_id, flux, tip, obiect, gravitate, titlu, constatare, dovada_sursa, dovada_ref, dovada_amprenta, regula_versiune)'
+    || ' VALUES (%s, ''lipsuri'', ''dry_direct'', %L, ''info'', ''Titlu direct'', ''camp_lipsa'', ''camp_erp'', ''executie_proiecte.x'', repeat(''0'', 32), ''dry-1'')';
+BEGIN
+  SELECT versiune INTO v FROM public.executie_semnale WHERE id = s2;
+  PERFORM pg_temp.d_ca(pg_temp.d_g('own')::uuid, 'authenticated');
+  r := public.fn_executie_semnal_stare(s2, v, 'respins', 'Polița e la responsabilul contracte, nescanată.', NULL, NULL, NULL, false);
+  PERFORM pg_temp.d_ca(NULL, 'postgres');
+  IF (r ->> 'ok')::boolean IS NOT TRUE OR r -> 'semnal' ->> 'stare' <> 'respins' THEN RAISE EXCEPTION 'D6 FAIL: respingerea s2 %', r; END IF;
+  SELECT count(*) INTO nj FROM public.executie_semnale_jurnal WHERE semnal_id = s2;
+  FOREACH ob IN ARRAY ARRAY[chr(160) || 'polita:GBE' || chr(160), chr(8239) || 'polita:GBE' || chr(8239), chr(8203) || 'polita:GBE' || chr(8203),
+                            'polita:' || chr(8203) || 'GBE', chr(65279) || 'polita' || chr(8288) || ':GBE', chr(9) || 'polita:GBE' || chr(10)] LOOP
+    SELECT versiune INTO v0 FROM public.executie_semnale WHERE id = s2;
+    r := pg_temp.d_scrie(pg_temp.d_semnal(2, jsonb_build_object('tip', 'dry_document_negasit', 'obiect', ob, 'constatare', 'negasit_in_surse',
+           'dovada_sursa', 'document', 'dovada_data', '2026-09-18', 'dovada_fragment', 'art. 8: GBE 10% în max. 15 zile de la încheierea contractului', 'dovada_ref', 'NAS: Z:/.../contract.pdf',
+           'surse_consultate', jsonb_build_array('NAS: Z:/.../garantii', 'mail: subiect „GBE”'),
+           'termen', NULL, 'termen_baza', NULL, 'termen_confirmat', NULL, 'responsabil_employee_id', pg_temp.d_g('e2')::int, 'titlu', 'Polița GBE nu a fost găsită')));
+    IF (r ->> 'id')::bigint <> s2 OR r ->> 'actiune' <> 'neschimbat_inchis' OR (r ->> 'versiune')::int <> v0 + 1 THEN
+      RAISE EXCEPTION 'D6 FAIL: obiectul „%” (coduri %) a dat alt rând / a redeschis / versiune: %', ob, (SELECT string_agg(ascii(c)::text, ' ') FROM regexp_split_to_table(ob, '') c), r;
+    END IF;
+  END LOOP;
+  SELECT count(*) INTO n FROM public.executie_semnale WHERE tip = 'dry_document_negasit';
+  IF n <> 1 THEN RAISE EXCEPTION 'D6 FAIL: % rânduri pentru polita:GBE', n; END IF;
+  IF (SELECT stare || '|' || obiect FROM public.executie_semnale WHERE id = s2) <> 'respins|polita:GBE' THEN RAISE EXCEPTION 'D6 FAIL: s2 redeschis / obiectul stocat schimbat'; END IF;
+  IF (SELECT count(*) FROM public.executie_semnale_jurnal WHERE semnal_id = s2) <> nj THEN RAISE EXCEPTION 'D6 FAIL: jurnal nou la neschimbat_inchis'; END IF;
+  -- o cheie REAL diferită rămâne semnal nou
+  r := pg_temp.d_scrie(pg_temp.d_semnal(2, jsonb_build_object('tip', 'dry_document_negasit', 'obiect', 'polita:GBE-2026', 'constatare', 'negasit_in_surse',
+         'dovada_sursa', 'document', 'dovada_data', '2026-09-18', 'dovada_fragment', 'art. 8: GBE 10% în max. 15 zile de la încheierea contractului', 'dovada_ref', 'NAS: Z:/.../contract.pdf',
+         'surse_consultate', jsonb_build_array('NAS: Z:/.../garantii'), 'termen', NULL, 'termen_baza', NULL, 'termen_confirmat', NULL, 'responsabil_employee_id', NULL, 'titlu', 'Polița GBE 2026 nu a fost găsită')));
+  IF r ->> 'actiune' <> 'creat' OR (r ->> 'id')::bigint = s2 THEN RAISE EXCEPTION 'D6 FAIL: cheia diferită nu e semnal nou: %', r; END IF;
+  -- calea directă: forma canonică trece, formele necanonice sunt refuzate de CHECK
+  EXECUTE format(ins, pg_temp.d_g('p1'), 'direct:ok');
+  IF NOT pg_temp.d_refuza(format(ins, pg_temp.d_g('p1'), chr(160) || 'direct:x' || chr(160)), '23514', 'executie_semnale_obiect_ck')
+     OR NOT pg_temp.d_refuza(format(ins, pg_temp.d_g('p1'), 'direct:' || chr(8203) || 'x'), '23514', 'executie_semnale_obiect_ck')
+     OR NOT pg_temp.d_refuza(format(ins, pg_temp.d_g('p1'), 'direct  x'), '23514', 'executie_semnale_obiect_ck')
+     OR NOT pg_temp.d_refuza(format(ins, pg_temp.d_g('p1'), chr(160) || chr(160)), '23514', 'executie_semnale_obiect_ck')
+     OR NOT pg_temp.d_refuza(format(ins, pg_temp.d_g('p1'), chr(8203)), '23514', 'executie_semnale_obiect_ck') THEN
+    RAISE EXCEPTION 'D6 FAIL: scrierea directă a unei chei necanonice a trecut';
+  END IF;
+  RAISE NOTICE 'D6 OK';
 END $t$;
 
 -- Revenirea cu date (refuz „exista semnale”) și ciclul aplicare -> revenire -> re-aplicare NU sunt aici: le probează scripts/pglite/test_executie_semnale_local.mjs
