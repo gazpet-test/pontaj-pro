@@ -9,7 +9,7 @@
 // 2. Refuzurile migrării. 3. Revenirea: refuz la fiecare urmă; aplicare → revenire → re-aplicare. 4. Mutanți: fiecare PICĂ.
 // 5. Paritatea plafonului JS ↔ SQL. 6. Porțile 0e / Izometrie E2 neschimbate de migrare.
 // Rulare (din rădăcina repo-ului; cere bash + python3 în PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_redari_fan_urmarire_auto_local.mjs
-import { readFileSync, writeFileSync, existsSync, mkdtempSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
@@ -56,6 +56,19 @@ const validator = (fisier, ...opt) => {
 }
 let esec = 0
 const ok = (c, m) => { if (c) console.log('  OK  ' + m); else { esec++; console.log('  NU  ' + m) } }
+// #1166 r2 (Jakarinos): „parserul nou” se decide prin IMPORT, nu prin text: octeții modulului se scriu într-un fișier temporar în afara repo-ului
+// (șters imediat), se încarcă cu import() și nou = `typeof mod.momentPosibilFan === 'function'` (orice formă de export; comentariile și șirurile nu contează).
+// Importul picat = eroare explicită (aruncată), niciodată „vechi” tăcut.
+const parserNouFan = async octeti => {
+  const dir = mkdtempSync(join(tmpdir(), 'fan_parser_'))
+  try {
+    const f = join(dir, `redariFan_${randomBytes(8).toString('hex')}.mjs`)
+    writeFileSync(f, octeti)
+    let mod
+    try { mod = await import(pathToFileURL(f).href) } catch (e) { throw new Error('importul modulului redariFan.mjs a picat: ' + (e && e.message)) }
+    return typeof mod.momentPosibilFan === 'function'
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+}
 
 console.log('0. validatorul runnerului pe fișierele exacte; scriptul de clonă (bash -n)')
 {
@@ -76,12 +89,42 @@ console.log('0. validatorul runnerului pe fișierele exacte; scriptul de clonă 
   // trebuie să fie identică cu `git show origin/main:…` (după merge, fixtura rămâne referința istorică)
   const octVechi = readFileSync(join(ROOT, FIXTURA_VECHI)).toString('latin1').replace(/\r\n/g, '\n')
   const shaVechi = (await import('node:crypto')).createHash('sha256').update(Buffer.from(octVechi, 'latin1')).digest('hex')
-  let peMain = null
-  try { peMain = execFileSync('git', ['show', 'origin/main:supabase/functions/_shared/redariFan.mjs'], { cwd: ROOT, encoding: 'latin1', stdio: ['ignore', 'pipe', 'ignore'] }).replace(/\r\n/g, '\n') } catch { /* fără origin/main local */ }
-  // parserul nou = un export `momentPosibilFan` sub orice formă (pe main e `export const momentPosibilFan = …`, nu `export function`)
-  const mainVechi = peMain !== null && !/^export\s+(?:async\s+)?(?:const|let|var|function\*?)\s+momentPosibilFan\b/m.test(peMain)
-  ok(shaVechi === SHA_VECHI && typeof FAN_VECHI.rezumatUrmarireFan === 'function' && FAN_VECHI.momentPosibilFan === undefined && (!mainVechi || peMain === octVechi),
-    `fixtura parserului vechi: sha256 ${shaVechi.slice(0, 12)}… (așteptat ${SHA_VECHI.slice(0, 12)}…), fără momentPosibilFan; origin/main ${peMain === null ? 'indisponibil' : mainVechi ? (peMain === octVechi ? 'identic' : 'DIFERIT') : 'are deja parserul nou'}`)
+  // #1166 r2: detecția prin import, verificată întâi pe module sintetice (pozitive și negative), apoi aplicată pe origin/main
+  const SINTETICE = [
+    ['export const', 'export const momentPosibilFan = () => true', true],
+    ['export function', 'export function momentPosibilFan() { return true }', true],
+    ['export async function', 'export async function momentPosibilFan() { return true }', true],
+    ['export function*', 'export function* momentPosibilFan() { yield 1 }', true],
+    ['export function *nume', 'export function *momentPosibilFan() { yield 1 }', true],
+    ['declarație indentată', '  export const momentPosibilFan = () => true', true],
+    ['export { x as momentPosibilFan }', 'const x = () => true\nexport { x as momentPosibilFan }', true],
+    ['export { momentPosibilFan }', 'function momentPosibilFan() { return true }\nexport { momentPosibilFan }', true],
+    ['doar comentariu bloc', '/*\nexport const momentPosibilFan = () => true\n*/\nexport const alt = 1', false],
+    ['doar comentariu linie', '// export function momentPosibilFan() {}\nexport const alt = 1', false],
+    ['template string multiline', "export const t = `\nexport const momentPosibilFan = () => true\n`", false],
+    ['string simplu', "export const s = 'export function momentPosibilFan() {}'", false],
+    ['momentPosibilFan$', 'export const momentPosibilFan$ = () => true', false],
+    ['nume exportat dar nu funcție', 'export const momentPosibilFan = 5', false],
+    ['modul gol', '', false],
+  ]
+  const greseli = []
+  for (const [nume, sursa, asteptat] of SINTETICE) {
+    let r; try { r = await parserNouFan(Buffer.from(sursa, 'utf8')) } catch (e) { r = 'EROARE ' + e.message }
+    if (r !== asteptat) greseli.push(`${nume}: ${r} (așteptat ${asteptat})`)
+  }
+  ok(greseli.length === 0, `detecția parserului nou prin import pe ${SINTETICE.length} module sintetice (8 nou, 7 vechi)${greseli.length ? ': ' + greseli.join('; ') : ''}`)
+  let eroareSintaxa = null
+  try { await parserNouFan(Buffer.from('export const = ;', 'utf8')) } catch (e) { eroareSintaxa = e.message }
+  ok(eroareSintaxa !== null && eroareSintaxa.startsWith('importul modulului redariFan.mjs a picat'), `modul care nu se poate importa = eroare explicită, nu „vechi”: ${eroareSintaxa === null ? 'NICIO eroare' : eroareSintaxa.slice(0, 90)}`)
+  let octMain = null
+  try { octMain = execFileSync('git', ['show', 'origin/main:supabase/functions/_shared/redariFan.mjs'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] }) } catch { /* fără origin/main local */ }
+  const peMain = octMain === null ? null : octMain.toString('latin1').replace(/\r\n/g, '\n')
+  let nouPeMain = null, eroareMain = null
+  if (octMain !== null) { try { nouPeMain = await parserNouFan(octMain) } catch (e) { eroareMain = e.message } }
+  ok(eroareMain === null, `importul redariFan.mjs de pe origin/main: ${eroareMain === null ? (octMain === null ? 'origin/main indisponibil' : 'OK') : 'EȘEC ' + eroareMain}`)
+  const mainVechi = octMain !== null && eroareMain === null && nouPeMain === false
+  ok(eroareMain === null && shaVechi === SHA_VECHI && typeof FAN_VECHI.rezumatUrmarireFan === 'function' && FAN_VECHI.momentPosibilFan === undefined && (!mainVechi || peMain === octVechi),
+    `fixtura parserului vechi: sha256 ${shaVechi.slice(0, 12)}… (așteptat ${SHA_VECHI.slice(0, 12)}…), fără momentPosibilFan; origin/main ${peMain === null ? 'indisponibil' : eroareMain !== null ? 'NEIMPORTABIL' : mainVechi ? (peMain === octVechi ? 'identic' : 'DIFERIT') : 'are deja parserul nou'}`)
 }
 
 const ID = {
