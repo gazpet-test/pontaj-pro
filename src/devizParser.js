@@ -32,9 +32,15 @@ const UM_DEFS = [
 ]
 const UM_ALT = UM_DEFS.map(d => d.re).join('|')
 const ART_RE = /^(\d{3})\s+([A-Z]{2,4}\d[A-Z0-9]*)\s+(.*)$/
-// linia de articol: eventual „[ N ]" (marcaj fază), apoi UNITATE, apoi CANTITATE (cu semn: devizele actelor adiționale / NR
-// au diminuări negative — Rest de decontat, parseDevizModificare; în F3 cantitățile sunt pozitive, deci nimic nu se schimbă acolo)
-const UM_RE = new RegExp('^(?:\\[\\s*\\d+\\s*\\]\\s*)?(' + UM_ALT + ')\\s+(-?[\\d.,]+)')
+// linia de articol: eventual „[ N ]" (marcaj fază), apoi UNITATE, apoi CANTITATE
+const UM_RE = new RegExp('^(?:\\[\\s*\\d+\\s*\\]\\s*)?(' + UM_ALT + ')\\s+([\\d.,]+)')
+const TOTAL_RE = /Total=\s*([\d.,]+)/
+// Aceleași două, cu SEMN (-?) la cantitate și la „Total=”: DOAR sub opțiunea explicită { cuSemn: true }, cerută de Rest de decontat
+// (parseDevizModificare: devizele actelor adiționale / NR au diminuări negative). IMPLICIT (catalogul F3 din CatalogDevizPanel,
+// importul ofertei și al actelor adiționale) rămân regexurile de mai sus: o linie cu cantitate negativă NU e articol și se sare,
+// exact ca înainte — altfel importul AA din catalog (sign × |cantitate|) ar transforma o diminuare în suplimentare (review #1165 r1 P1).
+const UM_RE_SEMN = new RegExp('^(?:\\[\\s*\\d+\\s*\\]\\s*)?(' + UM_ALT + ')\\s+(-?[\\d.,]+)')
+const TOTAL_RE_SEMN = /Total=\s*(-?[\d.,]+)/
 
 // tokenul brut de unitate → definiția (unitate bază + factor). Fallback ×1, marcat `necunoscut`
 // (exportat și pentru scripts/materiale_oferta: extrasele C6 normalizează UM-ul cu aceeași regulă).
@@ -51,7 +57,9 @@ const num = (s) => {
 }
 
 // ── Core: din paragrafe (deja text plat) → articole ──
-export function articoleDinParagrafe(paras) {
+// optiuni.cuSemn (implicit false): cantitatea / „Total=” negative sunt acceptate cu semn; implicit linia negativă se sare (ca pe main).
+export function articoleDinParagrafe(paras, { cuSemn = false } = {}) {
+  const umRe = cuSemn ? UM_RE_SEMN : UM_RE, totalRe = cuSemn ? TOTAL_RE_SEMN : TOTAL_RE
   const arts = []
   let obiect = null, deviz = null
   for (let i = 0; i < paras.length; i++) {
@@ -62,7 +70,7 @@ export function articoleDinParagrafe(paras) {
     const ma = p.match(ART_RE)
     if (!ma) continue
     const [, nr, cod, rest] = ma
-    const mu = rest.match(UM_RE)
+    const mu = rest.match(umRe)
     if (!mu) continue // linie fără UM+cantitate = resursă (material/utilaj), o sărim
     const info = umInfo(mu[1])
     const q = num(mu[2])
@@ -71,7 +79,7 @@ export function articoleDinParagrafe(paras) {
     const den = []
     let valoare = null
     for (let j = i + 1; j < paras.length && j < i + 6; j++) {
-      const mt = paras[j].match(/Total=\s*(-?[\d.,]+)/)
+      const mt = paras[j].match(totalRe)
       if (mt) { valoare = num(mt[1]); break }
       const t = paras[j].replace(/\s+[\d.,]+(\s+[\d.,]+)*$/, '').trim()
       if (/[A-Z]{3,}/.test(t)) den.push(t)
@@ -101,13 +109,13 @@ function paragrafeDinDocXml(xml) {
   return paras
 }
 
-export async function parseDevizDocx(arrayBuffer) {
+export async function parseDevizDocx(arrayBuffer, optiuni) {
   const JSZip = (await import('jszip')).default
   const zip = await JSZip.loadAsync(arrayBuffer)
   const f = zip.file('word/document.xml')
   if (!f) throw new Error('document.xml lipsă din .docx')
   const xml = await f.async('string')
-  return articoleDinParagrafe(paragrafeDinDocXml(xml))
+  return articoleDinParagrafe(paragrafeDinDocXml(xml), optiuni)
 }
 
 // ── .xls/.xlsx: best-effort pe antet (Nr, Cod/Simbol, Denumire, UM, Cantitate) ──
@@ -185,11 +193,14 @@ export async function parseExtrasMateriale(file, { foaie } = {}) {
 }
 
 // ── Dispatcher pe tip fișier ──
-export async function parseDeviz(file) {
+// optiuni (opțional): { cuSemn: true } = cantitățile / totalurile negative din .docx intră cu semn (DOAR Rest de decontat,
+// parseDevizModificare). Fără opțiune = comportamentul istoric al catalogului (linia negativă din .docx se sare). Pe Excel numerele
+// vin din celule prin num(), cu semnul lor, pe ambele căi (așa era și înainte: opțiunea nu schimbă calea Excel).
+export async function parseDeviz(file, optiuni = {}) {
   const buf = await file.arrayBuffer()
   const nume = (file.name || '').toLowerCase()
-  if (nume.endsWith('.docx')) return parseDevizDocx(buf)
+  if (nume.endsWith('.docx')) return parseDevizDocx(buf, optiuni)
   if (nume.endsWith('.xls') || nume.endsWith('.xlsx')) return parseDevizExcel(buf)
   // fallback: încearcă docx (zip) apoi excel
-  try { return await parseDevizDocx(buf) } catch (_) { return parseDevizExcel(buf) }
+  try { return await parseDevizDocx(buf, optiuni) } catch (_) { return parseDevizExcel(buf) }
 }

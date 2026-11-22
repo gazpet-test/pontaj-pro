@@ -4,9 +4,10 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import * as XLSX_mod from 'xlsx-js-style'
 import JSZip from 'jszip'
-import { parseSituatieExcel, parseDevizModificare, recunoasteAntet, clasificaColoana, antetDinTitluri, tipRand, CAMPURI_LINIE_RPC, COLOANE_OBLIGATORII } from './parsareSituatie.js'
+import { parseSituatieExcel, parseDevizModificare, recunoasteAntet, clasificaColoana, antetDinTitluri, antetDinFoi, tipRand, CAMPURI_LINIE_RPC, COLOANE_OBLIGATORII } from './parsareSituatie.js'
 import { UM_LISTA, normalizeUm, acelasiUm, umCanonic } from './um.js'
 import { cheieClient } from './potrivire.js'
+import { parseDeviz, articoleDinParagrafe } from '../devizParser.js'
 const XLSX = XLSX_mod.default || XLSX_mod
 
 const MIG = fs.readFileSync(new URL('../../supabase/migrations/20270105a_executie_rest_decontat.sql', import.meta.url), 'utf8').replace(/\r/g, '')
@@ -131,6 +132,17 @@ describe('clasificarea coloanelor din antet', () => {
     expect([a.inceput, a.sfarsit, a.primulRandDate]).toEqual([4, 5, 7])
     expect(a.coloane).toEqual(COLOANE_A)
   })
+  it('recunoasteAntet: titlul „Situație de lucrări nr. 7 / …” LIPIT de antet (fără rând gol) rămâne titlu, nu grup de antet', () => {
+    const a = recunoasteAntet([['Situație de lucrări nr. 7 / octombrie 2026'], ['Nr', 'Cod', 'Denumire', 'UM', 'Cantitate în perioadă', 'Preț unitar', 'Valoare'], [1, 'A1', 'x', 'm', 1, 3, 3]])
+    expect(a.ok).toBe(true)
+    expect([a.inceput, a.sfarsit, a.primulRandDate]).toEqual([1, 1, 2])
+    expect(a.coloane.denumire).toBe(2)
+    // un grup de antet adevărat deasupra frunzei rămâne grup
+    const g = recunoasteAntet([['', '', '', '', 'Cantitate', '', '', 'Valoare'], ['Nr', 'Cod', 'Denumire', 'UM', 'contract', 'în perioadă', 'Preț unitar', 'în perioadă'], [1, 'A1', 'x', 'm', 1, 1, 3, 3]])
+    expect(g.ok).toBe(true)
+    expect([g.inceput, g.sfarsit]).toEqual([0, 1])
+    expect(g.coloane).toMatchObject({ cantitate_perioada: 5, pret_unitar: 6, valoare: 7 })
+  })
   it('recunoasteAntet: aceleași două rânduri FĂRĂ `!merges` (celule goale la dreapta grupului) → aceleași coloane', () => {
     const a = recunoasteAntet([...TITLU, ANTET_A, ANTET_B, INDEX, ...DATE_A], [])
     expect(a.ok).toBe(true)
@@ -196,6 +208,9 @@ describe('parseSituatieExcel — modelul Transgaz (fixture sintetic A)', () => {
     expect(r.fara_miscare).toBe(1)
     expect(r.ignorate).toEqual([])
     expect(r.probleme).toEqual([])
+    expect(r.complet).toBe(true)
+    expect(r.foi_nerecunoscute).toEqual([])
+    expect(r.foi_fara_tabel).toEqual([])
     expect(r.avertismente.map(a => a.motiv)).toEqual(['rând os fără cantitate (valoare forfetară)'])
     expect(r.sectiuni.map(s => [s.tip, s.cod, s.nume])).toEqual([['obiect', '01', 'Tronson A'], ['deviz', '0101', 'Conductă'], ['obiect', '02', 'Tronson B'], ['deviz', '0201', 'Conductă B'], ['obiect', '03', 'Stație'], ['deviz', '0301', 'Izolații']])
     for (const l of r.linii) for (const k of CAMPURI_LINIE_RPC) expect(l).toHaveProperty(k)
@@ -225,6 +240,7 @@ describe('parseSituatieExcel — modelul Transgaz (fixture sintetic A)', () => {
     expect(r.probleme.map(p => p.motiv)).toEqual([
       'număr neinterpretabil: valoare', 'rând cu cifre, fără denumire și fără cod', 'UM lipsă', 'cantitate în perioadă lipsă (valoare fără cantitate)',
     ])
+    expect(r.complet).toBe(false) // rânduri cu cifre care n-au devenit linii = rezultat incomplet (L12)
     expect(r.avertismente.map(a => a.motiv)).toEqual(['valoare ≠ cantitate × preț unitar'])
     expect(r.avertismente[0]).toMatchObject({ rand: 9, calculat: 20, valoare: 100 })
   })
@@ -253,6 +269,71 @@ describe('parseSituatieExcel — modelul Transgaz (fixture sintetic A)', () => {
     expect(r.total_doc).toBe(30)
     expect(r.linii[0].cantitate_cumulat_doc).toBeNull() // coloana de cumulat lipsește → null, nu 0
     expect(r.avertismente.map(a => a.motiv)).toEqual([expect.stringMatching(/^2 foi cu antet recunoscut \(Ob1, Ob2\)/)])
+    // coperta (titluri, fără tabel) = excepția legitimă: nu e problemă, rezultatul rămâne complet
+    expect(r.foi_fara_tabel).toEqual(['Coperta'])
+    expect(r.foi_nerecunoscute).toEqual([])
+    expect(r.probleme).toEqual([])
+    expect(r.complet).toBe(true)
+  })
+})
+
+// ── review #1165 r1 P1 (L12, L18): o foaie de DETALIU nerecunoscută lângă o foaie validă nu dispare tăcut ──
+describe('parseSituatieExcel — foaie de detaliu nerecunoscută lângă una validă (review #1165 r1 P1)', () => {
+  const ANTET_OK = ['Nr', 'Cod', 'Denumire', 'UM', 'Cantitate în perioadă', 'Preț unitar', 'Valoare']
+  const valida = { nume: 'Valid', rows: [ANTET_OK, ['Obiectul: 01 A'], [1, 'A1', 'Lucrare A', 'm', 2, 10, 20], ['TOTAL', '', '', '', '', '', 20]] }
+  // reproducerea review-ului: aceeași structură, dar „Cantitate” fără calificativ (și fără cumulat) → antetul nu e recunoscut
+  const detaliu = { nume: 'Detaliu', rows: [['Nr', 'Cod', 'Denumire', 'UM', 'Cantitate', 'Preț unitar', 'Valoare'], ['Obiectul: 02 B'], [1, 'B1', 'Lucrare B', 'm', 3, 10, 30], ['TOTAL', '', '', '', '', '', 30]] }
+  it('reproducere: foaie validă (20) + foaie de detaliu cu „Cantitate” fără calificativ (30) → problemă, complet = false, totalul 20 declarat parțial', async () => {
+    const r = await parseSituatieExcel(xlsx([valida, detaliu]))
+    expect(r.foi).toEqual(['Valid'])
+    expect(r.total).toBe(20)
+    expect(r.linii.map(l => l.cod)).toEqual(['A1'])
+    expect(r.complet).toBe(false)
+    expect(r.foi_nerecunoscute).toEqual([{ foaie: 'Detaliu', rand: 1, gasite: ['nr', 'cod', 'denumire', 'um', 'pret_unitar', 'valoare'], lipsesc: ['cantitate_perioada'], ambigue: [] }])
+    expect(r.foi_fara_tabel).toEqual([])
+    expect(r.probleme).toHaveLength(1)
+    expect(r.probleme[0]).toMatchObject({ foaie: 'Detaliu', rand: 1 })
+    expect(r.probleme[0].motiv).toMatch(/^foaie de detaliu nerecunoscută — are tabel de articole, dar nu modelul Transgaz; liniile ei LIPSESC din rezultat \(foaia „Detaliu”, rândul 1: găsite \[nr, cod, denumire, um, pret_unitar, valoare\], lipsesc \[cantitate_perioada\]\)$/)
+    // ordinea foilor nu schimbă verdictul
+    const r2 = await parseSituatieExcel(xlsx([detaliu, valida]))
+    expect(r2.foi).toEqual(['Valid'])
+    expect(r2.complet).toBe(false)
+    expect(r2.probleme.map(p => p.foaie)).toEqual(['Detaliu'])
+  })
+  it('tabel cu doar două familii de coloane (ex. centralizator Denumire / Valoare cu cifre) = tot foaie de detaliu nerecunoscută', async () => {
+    const centralizator = { nume: 'Centralizator', rows: [['Situație nr. 7'], ['Denumire obiect', 'Valoare'], ['Tronson A', 20], ['Tronson B', 30], ['TOTAL', 50]] }
+    const r = await parseSituatieExcel(xlsx([valida, centralizator]))
+    expect(r.foi).toEqual(['Valid'])
+    expect(r.complet).toBe(false)
+    expect(r.foi_nerecunoscute).toEqual([{ foaie: 'Centralizator', rand: 2, gasite: ['denumire', 'valoare'], lipsesc: ['um', 'cantitate_perioada', 'pret_unitar'], ambigue: [] }])
+    expect(r.probleme.map(p => [p.foaie, p.rand])).toEqual([['Centralizator', 2]])
+  })
+  it('excepția distinctă: coperta fără tabel (titluri; o etichetă cu o cifră; o foaie goală) nu e problemă', async () => {
+    const coperta = { nume: 'Coperta', rows: [['Situație de lucrări nr. 7'], ['Luna: octombrie 2026'], ['Valoare totală (lei)', 20], ['Beneficiar: (sintetic)']] }
+    const goala = { nume: 'Goala', rows: [[]] }
+    const r = await parseSituatieExcel(xlsx([coperta, valida, goala]))
+    expect(r.foi).toEqual(['Valid'])
+    expect(r.foi_fara_tabel).toEqual(['Coperta', 'Goala'])
+    expect(r.foi_nerecunoscute).toEqual([])
+    expect(r.probleme).toEqual([])
+    expect(r.complet).toBe(true)
+    expect(r.antet).toEqual({ nr_situatie: null, luna: null, an: null }) // titlurile copertei nu sunt ale foii citite: nu se ghicesc
+  })
+  it('recunoasteAntet.tabel: ≥ 2 familii de tabel + un rând cu cifre dedesubt; „nr” singur sau fără cifre = fără tabel', () => {
+    expect(recunoasteAntet([['Denumire', 'Valoare'], ['x', 1]]).tabel).toEqual({ rand: 1, gasite: ['denumire', 'valoare'] })
+    expect(recunoasteAntet([['Denumire', 'Valoare'], ['fără', 'cifre']]).tabel).toBeNull()
+    expect(recunoasteAntet([['Nr. crt.', 'Valoare'], [1, 2]]).tabel).toBeNull() // nr + o singură familie de tabel
+    expect(recunoasteAntet([['Valoare contract', 'Valoare cumulat'], [1, 2]]).tabel).toBeNull() // aceeași familie (valoare) de două ori
+    expect(recunoasteAntet([['Situație nr. 7'], ['Valoare totală', 20]]).tabel).toBeNull()
+  })
+  it('antetul documentului din mai multe foi: valorile diferite nu se aleg (null + avertisment); valorile egale sau unice se iau', async () => {
+    const foaie = (nume, titlu, cod, v) => ({ nume, rows: [[titlu], ANTET_OK, [1, cod, 'Lucrare', 'm', 1, v, v]] })
+    const r = await parseSituatieExcel(xlsx([foaie('F1', 'Situație de lucrări nr. 7 / octombrie 2026', 'A1', 10), foaie('F2', 'Situație de lucrări nr. 8 / 2026', 'A2', 20)]))
+    expect(r.antet).toEqual({ nr_situatie: null, luna: 10, an: 2026 })
+    expect(r.avertismente.map(a => a.motiv)).toContain('foile dau valori diferite pentru nr_situatie (F1: 7; F2: 8) — câmpul rămâne de completat de om')
+    expect(antetDinFoi([{ foaie: 'a', antet: { nr_situatie: '7', luna: 10, an: 2026 } }, { foaie: 'b', antet: { nr_situatie: '7', luna: null, an: 2026 } }]))
+      .toEqual({ antet: { nr_situatie: '7', luna: 10, an: 2026 }, conflicte: [] })
+    expect(antetDinFoi([]).antet).toEqual({ nr_situatie: null, luna: null, an: null })
   })
 })
 
@@ -304,5 +385,40 @@ describe('parseDevizModificare (AA / NR / NCS) — refolosește parseDeviz și p
     const r = await parseDevizModificare({ name: 'aa.xlsx', arrayBuffer: async () => buf })
     expect(r.linii.map(l => [l.cod, l.cantitate])).toEqual([['TSA01A1', -3], ['TSD01B1', 7]])
     expect(r.negative).toBe(1)
+  })
+})
+
+// ── review #1165 r1 P1: semnul DOAR sub opțiune explicită; parseDeviz implicit = comportamentul istoric al catalogului ──
+// Devizul AA mixt (+10 / +100 și −5 / −50), ca în reproducerea review-ului. Așteptările pentru calea implicită sunt scrise de mână după
+// regula veche (regexul fără „-”: linia „MC -5.000” nu e articol → se sare; „Total= -50.00” nu e total), nu citite din cod (L25).
+const AA_MIXT = [
+  'Obiectul: 01 1 TRONSON A', 'Deviz oferta 0101 CONDUCTA',
+  '001 TSA01A1 MC 10.000', 'SAPATURA MANUALA', 'Total= 100.00',
+  '002 TSD01B1 MC -5.000', 'UMPLUTURA COMPACTATA', 'Total= -50.00',
+]
+describe('parseDeviz implicit (catalog) vs { cuSemn: true } (Rest de decontat) pe același .docx AA mixt', () => {
+  it('(a) parseDeviz(file) FĂRĂ opțiune = ca pe main: linia negativă e sărită, rămâne doar +10 / +100', async () => {
+    const arts = await parseDeviz(await docx(AA_MIXT))
+    expect(arts.map(a => [a.cod, a.cantitate, a.valoare])).toEqual([['TSA01A1', 10, 100]])
+    expect(arts[0]).toMatchObject({ obiect_cod: '01', deviz_cod: '0101', nr: '001', um: 'mc', denumire: 'SAPATURA MANUALA' })
+    expect(arts.reduce((s, a) => s + a.valoare, 0)).toBe(100) // totalul importului ofertei: neschimbat față de main
+  })
+  it('(c) parseDevizModificare pe ACELAȘI fișier păstrează −5 / −50', async () => {
+    const r = await parseDevizModificare(await docx(AA_MIXT))
+    expect(r.linii.map(l => [l.cod, l.cantitate, l.valoare])).toEqual([['TSA01A1', 10, 100], ['TSD01B1', -5, -50]])
+    expect(r.negative).toBe(1)
+  })
+  it('articoleDinParagrafe: implicit fără semn; cu { cuSemn: true } cu semn; { cuSemn: false } explicit = implicit', () => {
+    const paras = AA_MIXT
+    expect(articoleDinParagrafe(paras).map(a => a.cantitate)).toEqual([10])
+    expect(articoleDinParagrafe(paras, {}).map(a => a.cantitate)).toEqual([10])
+    expect(articoleDinParagrafe(paras, { cuSemn: false }).map(a => a.cantitate)).toEqual([10])
+    expect(articoleDinParagrafe(paras, { cuSemn: true }).map(a => [a.cantitate, a.valoare])).toEqual([[10, 100], [-5, -50]])
+    // un deviz F3 obișnuit (toate pozitive) dă același lucru pe ambele căi
+    expect(articoleDinParagrafe(F3.slice(0, 5), { cuSemn: true })).toEqual(articoleDinParagrafe(F3.slice(0, 5)))
+  })
+  it('parseDeviz cu { cuSemn: true } (ce apelează parseDevizModificare) întoarce ambele articole', async () => {
+    const arts = await parseDeviz(await docx(AA_MIXT), { cuSemn: true })
+    expect(arts.map(a => [a.cod, a.cantitate, a.valoare])).toEqual([['TSA01A1', 10, 100], ['TSD01B1', -5, -50]])
   })
 })

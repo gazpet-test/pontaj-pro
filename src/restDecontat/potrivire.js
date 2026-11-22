@@ -5,6 +5,8 @@
 // NU are cod (tokeni, ≥ PRAG_DESCRIERE = 'descriere'; sub prag sau ambiguu = 'de_verificat'); cod inexistent = 'de_verificat'.
 // UM diferit după normalizeUm (M ↔ ML ↔ HM sunt același M; MC ≠ M) sau UM-ul bazei incert = 'de_verificat' INDIFERENT de nivel
 // (Review Focus 2: niciodată adunat brut). Același articol propus pentru două linii = ambele 'de_verificat' (RPC-ul l-ar refuza).
+// Un câmp decide identitatea DOAR la nivelul lui: obiectul în proiect, devizul în obiect, poziția (nr) în deviz — fără deviz pe linie,
+// candidații din devize diferite nu se departajează prin nr (review #1165 r1 P1) → 'de_verificat' cu motivul scris.
 // cheieClient = oglinda lui fn_rest_decontat_cheie DOAR pentru afișare / grupare; cheia scrisă o calculează BD-ul.
 // ═══════════════════════════════════════════════════════════════════════════
 import { normalizeUm } from './um.js'
@@ -55,6 +57,10 @@ function potrivesteUna(linie, bazaN) {
     const c1 = art.filter(b => b._cod === codL && b._ob === obL && (!dzL || !b._dz || b._dz === dzL))
     if (c1.length === 1) return rez(linie, c1[0], 'exact', 1)
     if (c1.length > 1) {
+      // poziția (nr) e LOCALĂ devizului: departajează doar candidați din ACELAȘI deviz. Candidați din devize diferite (linia fără
+      // deviz, sau baza cu deviz gol lângă unul numit) = identitatea nu e dovedită (L11) → de_verificat, nu „exact” spre primul deviz
+      const devize = [...new Set(c1.map(b => b._dz))]
+      if (devize.length > 1) return rez(linie, null, 'de_verificat', 0, `codul ${linie.cod} există în ${devize.length} devize ale obiectului (${devize.map(d => d || '—').join(', ')}); linia nu spune devizul, iar poziția (nr) e locală devizului și nu decide între ele`)
       const cn = nrL ? c1.filter(b => b._nr === nrL) : []
       if (cn.length === 1) return rez(linie, cn[0], 'exact', 1)
       return rez(linie, null, 'de_verificat', 0, `codul ${linie.cod} se repetă în același deviz (${c1.length} poziții); poziția (nr) nu decide`)

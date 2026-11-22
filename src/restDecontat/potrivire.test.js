@@ -128,6 +128,26 @@ describe('potrivesteLinii — ordinea: cod + obiect → cod singur → denumire;
     expect(r[0].motiv).toMatch(/propus pentru 2 linii/)
     expect(r[0].cheie_propusa).toBe('01|0101|TSD01B1')
   })
+  // review #1165 r1 P1 (L11, L19): poziția (nr) e locală devizului; fără deviz pe linie nu decide între devize diferite
+  it('același cod în DOUĂ devize ale obiectului, linie fără deviz: poziția nu decide → de_verificat (reproducerea review-ului)', () => {
+    const BAZA2 = [
+      b('01|D1|ABC1', { deviz_cod: 'D1', nr: '1', cod: 'ABC1', denumire: 'Articol în devizul 1', um: 'MC' }),
+      b('01|D2|ABC1', { deviz_cod: 'D2', nr: '2', cod: 'ABC1', denumire: 'Articol în devizul 2', um: 'MC' }),
+    ]
+    const r = potrivesteLinii([L({ obiect_cod: '01', deviz_cod: '', nr: '1', cod: 'ABC1' })], BAZA2)[0]
+    expect(r).toMatchObject({ cheie_propusa: null, nivel: 'de_verificat', scor: 0 })
+    expect(r.motiv).toBe('codul ABC1 există în 2 devize ale obiectului (D1, D2); linia nu spune devizul, iar poziția (nr) e locală devizului și nu decide între ele')
+    // nici poziția 2 (care ar „nimeri” D2) nu decide
+    expect(potrivesteLinii([L({ obiect_cod: '01', nr: '2', cod: 'ABC1' })], BAZA2)[0].nivel).toBe('de_verificat')
+    // cu devizul pe linie, identitatea e dovedită la nivelul lui → exact
+    expect(potrivesteLinii([L({ obiect_cod: '01', deviz_cod: 'D1', nr: '1', cod: 'ABC1' })], BAZA2)[0]).toMatchObject({ cheie_propusa: '01|D1|ABC1', nivel: 'exact' })
+    expect(potrivesteLinii([L({ obiect_cod: '01', deviz_cod: 'd2 ', nr: '', cod: 'ABC1' })], BAZA2)[0]).toMatchObject({ cheie_propusa: '01|D2|ABC1', nivel: 'exact' })
+    // baza cu deviz GOL lângă unul numit, linia cu deviz: tot două devize distincte → de_verificat (nu „exact” spre primul)
+    const BAZA3 = [BAZA2[0], b('01||ABC1|#1', { deviz_cod: '', nr: '1', cod: 'ABC1', denumire: 'Fără deviz în bază', um: 'MC' })]
+    const r3 = potrivesteLinii([L({ obiect_cod: '01', deviz_cod: 'D1', nr: '1', cod: 'ABC1' })], BAZA3)[0]
+    expect(r3.nivel).toBe('de_verificat')
+    expect(r3.motiv).toMatch(/există în 2 devize ale obiectului \(D1, —\)/)
+  })
   it('linia păstrează toate câmpurile ei; baza goală = tot de_verificat; rezumatul numără pe niveluri', () => {
     const l = L({ obiect_cod: '01', deviz_cod: '0101', cod: 'TSA01A1', foaie: 'S', rand: 10 })
     expect(una(l)).toMatchObject({ ...l, nivel: 'exact' })
