@@ -82,7 +82,7 @@ function potrivesteUna(linie, bazaN) {
 
 /**
  * potrivesteLinii(linii, baza) -> [{...linie, cheie_propusa, nivel: 'exact'|'cod'|'descriere'|'de_verificat', scor, motiv}]
- * linii = din parseSituatieExcel; baza = rânduri din v_executie_rest_decontat_baza (cheie, tip_rand, obiect_cod, deviz_cod, nr, cod,
+ * linii = din parseSituatie / parseSituatieF3 (sau parseDevizModificare); baza = rânduri din v_executie_rest_decontat_baza (cheie, tip_rand, obiect_cod, deviz_cod, nr, cod,
  * denumire, um, um_incert). Un rând al bazei este propus cel mult unei linii.
  */
 export function potrivesteLinii(linii, baza) {

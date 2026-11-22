@@ -28,7 +28,8 @@ export function normalizeUm(um) {
   return gasit ? { um: gasit.um, factor: gasit.factor } : { um: u, factor: 1 }
 }
 
-/** UM-ul brut e în lista comună (UM_LISTA, aceeași cu migrarea)? Folosit la detecția rândurilor de articol fără antet (parsareSituatie). */
+/** UM-ul brut e în lista comună (UM_LISTA, aceeași cu migrarea)? Informativ pentru ecran: UM-urile F3 din afara listei („ORA”, „TONA”,
+ *  „PER” …) rămân ele însele, factor 1, și se potrivesc doar cu același UM brut normalizat (ca în BD). */
 export const eUmCunoscut = um => UM_MAP.has(umCanonic(um))
 
 /** Două UM-uri brute înseamnă același lucru? (după normalizare; '' nu e egal cu nimic, nici cu '') */

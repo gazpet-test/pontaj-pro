@@ -242,13 +242,19 @@ export function situatieDinParagrafe(paras) {
   inchideDeviz()
   if (devize.length === 0) throw new Error(`${MOTIV_FORMAT_F3}; niciun paragraf „Deviz …” în ${paras.length} paragrafe${probleme.length ? ` (${probleme.length} probleme; prima: ${probleme[0].motiv})` : ''}`)
 
-  // antetul fișierului: doar valorile pe care TOATE devizele le dau la fel (identitatea situației nu o decide primul deviz)
+  // antetul fișierului: doar valorile pe care TOATE devizele le dau la fel (identitatea situației nu o decide primul deviz și nici
+  // majoritatea: pe situațiile reale un singur deviz din 17 avea altă lună / alt an, iar omul decide care e corect). Avertismentul
+  // grupează devizele pe valoare (cele mai multe întâi; un grup de peste 3 devize apare ca număr) și dă grupurile întregi în `valori`.
   const antet = { luna: null, an: null }
   for (const k of ['luna', 'an']) {
     const valori = [...new Set(devize.map(d => d[k]).filter(v => v != null))]
     if (valori.length === 1) antet[k] = valori[0]
-    else if (valori.length > 1) avertismente.push({ camp: k, motiv: `devizele dau valori diferite pentru ${k === 'luna' ? 'lună' : 'an'} (${devize.filter(d => d[k] != null).map(d => `${d.deviz_cod}: ${d[k]}`).join('; ')}) — câmpul rămâne de completat de om` })
-    else avertismente.push({ camp: k, motiv: `niciun deviz nu are „Situatie de plata in luna L anul A” — ${k === 'luna' ? 'luna' : 'anul'} rămâne de completat de om` })
+    else if (valori.length > 1) {
+      const grupuri = valori.map(v => ({ valoare: v, devize: devize.filter(d => d[k] === v).map(d => d.deviz_cod) })).sort((a, b) => b.devize.length - a.devize.length)
+      const fara = devize.filter(d => d[k] == null).map(d => d.deviz_cod)
+      const text = grupuri.map(g => `${g.valoare} (${g.devize.length > 3 ? `${g.devize.length} devize` : g.devize.join(', ')})`).join('; ')
+      avertismente.push({ camp: k, valori: grupuri, motiv: `devizele dau valori diferite pentru ${k === 'luna' ? 'lună' : 'an'}: ${text}${fara.length ? `; fără valoare: ${fara.join(', ')}` : ''} — câmpul rămâne de completat de om` })
+    } else avertismente.push({ camp: k, motiv: `niciun deviz nu are „Situatie de plata in luna L anul A” — ${k === 'luna' ? 'luna' : 'anul'} rămâne de completat de om` })
   }
   const linii = devize.flatMap(d => d.linii)
   const cuControl = devize.filter(d => d.control_cheltuieli_directe != null), cuTotal = devize.filter(d => d.total_general != null)

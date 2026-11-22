@@ -252,6 +252,13 @@ describe('controlul pe deviz → complet: false cu devizul și motivul', () => {
     expect(r.probleme[0].motiv).toMatch(/devizul „DZ0101” \(obiectul „0001”\): suma „Total=” ale articolelor citite \(11983\.09 lei, 6 articole\) ≠ controlul „Cheltuieli directe din articole” \(12333\.09 lei\) — diferență 350 lei, toleranță 0\.06 lei/)
     expect(r.total_citit).toBe(11983.09); expect(r.total_control).toBe(12333.09)
   })
+  it('devizul de modificare (AA / NR / NCS) trece prin ACELAȘI control: parseDevizModificare pe un NCS cu articol lipsă → complet false, aceleași probleme', async () => {
+    const paras = D1().filter(p => !ART_D1[4].includes(p))
+    const m = await parseDevizModificare(fisier('F3 NCS Ad.1.docx', paras))
+    expect(m.complet).toBe(false)
+    expect(m).toEqual({ ...situatieDinParagrafe(paras), negative: 0 })
+    expect(m.probleme.map(p => p.diferenta)).toEqual([350])
+  })
   it('articol în plus (controlul mai mic cu valoarea unui articol): diferența negativă, complet false', () => {
     const r = situatieDinParagrafe(D1(sfarsitDeviz({ total: SUMA_D1 - 1500, tg: TG_D1 })))
     expect(r.complet).toBe(false)
@@ -358,6 +365,12 @@ describe('paragrafe de articol neconsumate și „Total=” orfane → probleme 
     const r4 = situatieDinParagrafe(inAntet)
     expect(r4.devize[0].obiect_nume).toBe('TRONSON 1'); expect(r4.complet).toBe(false)
     expect(r4.probleme.map(p => p.motiv)).toEqual([expect.stringMatching(/linie de articol înaintea primului deviz/)])
+    // imediat după „Deviz …” (înainte de „Categoria”): linia de articol nu devine continuarea numelui devizului; e citită ca articol, iar
+    // lipsa „Total=” al ei e problemă
+    const dupaDeviz = D1().flatMap(p => (p.startsWith('Deviz DZ0101') ? [p, '009 TSX09A1 M 1.000 0.00 0.00'] : [p]))
+    const r5 = situatieDinParagrafe(dupaDeviz)
+    expect(r5.devize[0].deviz_nume).toBe('4.1.1/1 Firul conductei - tronson 1'); expect(r5.complet).toBe(false)
+    expect(r5.linii[0]).toMatchObject({ nr: '009', cod: 'TSX09A1', valoare: null, incomplet: 'fără „Total=” până la articolul următor' })
   })
   it('„Total=” orfan în zona articolelor (fără linie de articol deschisă): problemă cu valoarea', () => {
     const paras = D1().flatMap(p => (p === '0.001 0 Total= 1500.00' ? [p, '0.002 0 Total= 77.00'] : [p]))
@@ -416,16 +429,38 @@ describe('mai multe devize, obiecte diferite, paginare, antet', () => {
     expect(r.devize[1]).toMatchObject({ deviz_cod: 'DZ0507', total_general: 161.22, reconciliat: true })
     expect(r.probleme.map(p => p.motiv)).toEqual([expect.stringMatching(/devizul „DZ0101”.*„TOTAL GENERAL DEVIZ” nu a fost găsit/)])
     expect(r.complet).toBe(false)
+    // „Deviz” nou direct după controlul unui deviz neîncheiat (fără „Obiectul” între ele): devizul deschis se închide cu problema lui,
+    // nu se contopește cu următorul
+    const direct = [...D1().filter(p => !p.startsWith('TOTAL GENERAL DEVIZ')), 'Deviz DZ0102 4.1.1/2 Subtraversare de test', 'Categoria de lucrari: 0999', SEP, ...ANTET_TABEL, SEP, ...ART_D2.flat(), ...sfarsitDeviz({ total: SUMA_D2, tg: TG_D2 })]
+    const r2 = situatieDinParagrafe(direct)
+    expect(r2.devize.map(d => [d.deviz_cod, d.linii.length, d.total_general, d.reconciliat])).toEqual([['DZ0101', 7, null, true], ['DZ0102', 2, 161.22, true]])
+    expect(r2.probleme.map(p => p.motiv)).toEqual([expect.stringMatching(/devizul „DZ0101”.*„TOTAL GENERAL DEVIZ” nu a fost găsit/)])
   })
   it('antetul fișierului: an diferit între devize → an null + avertisment cu devizele; luna comună rămâne; fără „Situatie de plata” → ambele null + avertismente', () => {
     const r = situatieDinParagrafe([...D1(), ...antetDeviz({ obiectCod: '0005', devizCod: 'DZ0507', an: 2025 }), ...ART_D2.flat(), ...sfarsitDeviz({ total: SUMA_D2, tg: TG_D2 })])
     expect(r.complet).toBe(true)
     expect(r.antet).toEqual({ luna: 10, an: null })
     expect(r.devize.map(d => [d.luna, d.an])).toEqual([[10, 2026], [10, 2025]])
-    expect(r.avertismente).toEqual([{ camp: 'an', motiv: 'devizele dau valori diferite pentru an (DZ0101: 2026; DZ0507: 2025) — câmpul rămâne de completat de om' }])
+    expect(r.avertismente).toEqual([{ camp: 'an', valori: [{ valoare: 2026, devize: ['DZ0101'] }, { valoare: 2025, devize: ['DZ0507'] }], motiv: 'devizele dau valori diferite pentru an: 2026 (DZ0101); 2025 (DZ0507) — câmpul rămâne de completat de om' }])
     const r2 = situatieDinParagrafe([...antetDeviz({ situatie: false }), ...ART_D1.flat(), ...sfarsitDeviz({ total: SUMA_D1, tg: TG_D1 })])
     expect(r2.antet).toEqual({ luna: null, an: null }); expect(r2.devize[0]).toMatchObject({ luna: null, an: null })
     expect(r2.avertismente.map(a => a.camp)).toEqual(['luna', 'an']); expect(r2.complet).toBe(true)
+  })
+  it('forma din situațiile reale: un singur deviz din cinci cu altă lună → luna null (nu majoritatea), avertisment cu grupul mare numărat și devizul diferit numit; deviz fără „Situatie” numit separat', () => {
+    const deviz = (cod, luna, situatie = true) => [...antetDeviz({ obiectCod: '0001', devizCod: cod, luna, situatie }), ...ART_D2.flat(), ...sfarsitDeviz({ total: SUMA_D2, tg: TG_D2 })]
+    // devizul diferit e PRIMUL (ca în una dintre situațiile reale): grupul mare tot primul în avertisment
+    const r = situatieDinParagrafe([...deviz('DZ0101', 11), ...deviz('DZ0102', 10), ...deviz('DZ0103', 10), ...deviz('DZ0104', 10), ...deviz('DZ0105', 10)])
+    expect(r.complet).toBe(true); expect(r.probleme).toEqual([])
+    expect(r.antet).toEqual({ luna: null, an: 2026 })
+    expect(r.avertismente).toEqual([{
+      camp: 'luna', valori: [{ valoare: 10, devize: ['DZ0102', 'DZ0103', 'DZ0104', 'DZ0105'] }, { valoare: 11, devize: ['DZ0101'] }],
+      motiv: 'devizele dau valori diferite pentru lună: 10 (4 devize); 11 (DZ0101) — câmpul rămâne de completat de om',
+    }])
+    // primul deviz fără „Situatie de plata”, următorii cu luni diferite: devizul fără valoare apare în motiv (nu dispare tăcut)
+    const r2 = situatieDinParagrafe([...deviz('DZ0101', 10, false), ...deviz('DZ0102', 10), ...deviz('DZ0103', 11)])
+    expect(r2.devize.map(d => d.luna)).toEqual([null, 10, 11])
+    expect(r2.avertismente.find(a => a.camp === 'luna').motiv).toBe('devizele dau valori diferite pentru lună: 10 (DZ0102); 11 (DZ0103); fără valoare: DZ0101 — câmpul rămâne de completat de om')
+    expect(r2.antet.luna).toBeNull()
   })
   it('„Deviz oferta 0101 …” (forma ofertei) și „Obiectul: 01 Tronson A” (fără al doilea număr) se citesc', () => {
     const paras = D1().map(p => (p.startsWith('Obiectul:') ? 'Obiectul: 01 Tronson A' : p.startsWith('Deviz ') ? 'Deviz oferta 0101 CONDUCTA' : p))
