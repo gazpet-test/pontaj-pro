@@ -34,7 +34,11 @@
 #       0 rânduri contract_initial pe proiect. Cu mutantul: B: 00000, N rânduri scrise.
 #   C2  confirma_situatie: proiect cu ofertă (scrisă ÎNAINTE de owner); A ține schimbarea MP; B (MP vechi) confirmă situația „1” → 42501, 0 situații.
 #   C3  configurare_completa (20270105b): proiect cu ofertă; A ține schimbarea MP; B (MP vechi) declară configurarea → 42501, configurare_completa_la NULL,
-#       jurnal gol.
+#       jurnal gol. r-cluster (proba chat-ului pe PG17, 22.11): MP-ul vechi al lui C3 e un cont SEPARAT (contul e, employee 9103) cu acces de CITIRE
+#       pe sub-modul (user_module_access 'executie_rest_decontat' / viewer). Altfel, după schimbarea MP-ului, fn_rest_decontat_are_oferta (care cere și
+#       ea dreptul de citire) răspundea „fără ofertă” și oprea RPC-ul cu P0001 ÎNAINTEA scrierii — mutantul nu putea scrie, proba nu discrimina.
+#       Cu citirea păstrată, după COMMIT-ul lui A singura barieră rămasă e reverificarea dreptului de CONFIRMARE (verificat explicit: are_oferta = t,
+#       drept confirmare = f, în ambele moduri) → normal 42501, mutantul scrie configurarea + jurnalul.
 #   C4  calea legitimă: după ce A a comis schimbarea, NOUL MP (contul n) cheamă același RPC fără concurent → 00000 (nimic nu e blocat în plus).
 #   r4 / r5 (review #1158, P1 r3 — stările ofertei, PE OBIECT din r5; „acces general” = contul x, user_module_access 'executie', scrie proiect_articole
 #   pe calea veche; rândurile importate și oferta confirmată sunt pe același obiect 0001):
@@ -113,7 +117,19 @@ UID_OWNER=f0000000-0000-4000-8000-0000000000aa
 UID_MP_VECHI=f0000000-0000-4000-8000-0000000000bb
 UID_MP_NOU=f0000000-0000-4000-8000-0000000000cc
 UID_EXEC=f0000000-0000-4000-8000-0000000000dd   # r4: acces general Execuție (calea veche a catalogului), fără sub-modulul nou
+UID_MP_C3=f0000000-0000-4000-8000-0000000000ee  # r-cluster: MP-ul vechi al lui C3 (employee 9103), cu citire pe sub-modul (viewer)
 ca() { printf "SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claim.sub', '%s', true), set_config('request.jwt.claims', '{\"sub\":\"%s\",\"role\":\"authenticated\"}', true);" "$1" "$1"; }
+# o citire ca un cont (JWT-ul lui), anulată la final: rezultatul instrucțiunii <sql>
+qca() {   # <uid> <sql fara ;>
+  psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -tA <<EOF
+BEGIN;
+\o /dev/null
+$(ca "$1")
+\o
+$2;
+ROLLBACK;
+EOF
+}
 
 A_FD_IN=''; A_FD_OUT=''; A_PID_C=''
 deschideA() {
@@ -209,18 +225,20 @@ fi
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f <(tr -d '\r' < "$SCHELET") > /dev/null; ok $? "scheletul"
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$DDL_A" > /dev/null; ok $? "DDL-ul migrarii A"
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$DDL_B" > /dev/null; ok $? "DDL-ul migrarii B"
-# fixturi: owner (aa), MP vechi (bb, emp 9101), MP nou (cc, emp 9102); proiectele C1 (fara oferta), C2 si C3 (cu oferta scrisa de server)
+# fixturi: owner (aa), MP vechi (bb, emp 9101), MP nou (cc, emp 9102), MP vechi C3 (ee, emp 9103, citire pe sub-modul); proiectele C1 (fara oferta),
+# C2 si C3 (cu oferta scrisa de server)
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 > /dev/null <<EOF
-INSERT INTO public.employees (id, name) VALUES (9101, 'CONC MP VECHI'), (9102, 'CONC MP NOU');
-INSERT INTO public.profiles (id, is_owner, employee_id) VALUES ('$UID_OWNER', true, NULL), ('$UID_MP_VECHI', false, 9101), ('$UID_MP_NOU', false, 9102), ('$UID_EXEC', false, NULL);
-INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('$UID_EXEC', 'executie', 'editor');
-INSERT INTO public.executie_proiecte (id, cod_intern, nume, mp_employee_id) VALUES (9001, 'CONC-1', 'C1 confirma_baza', 9101), (9002, 'CONC-2', 'C2 confirma_situatie', 9101), (9003, 'CONC-3', 'C3 configurare', 9101),
+INSERT INTO public.employees (id, name) VALUES (9101, 'CONC MP VECHI'), (9102, 'CONC MP NOU'), (9103, 'CONC MP VECHI C3');
+INSERT INTO public.profiles (id, is_owner, employee_id) VALUES ('$UID_OWNER', true, NULL), ('$UID_MP_VECHI', false, 9101), ('$UID_MP_NOU', false, 9102), ('$UID_EXEC', false, NULL),
+  ('$UID_MP_C3', false, 9103);
+INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('$UID_EXEC', 'executie', 'editor'), ('$UID_MP_C3', 'executie_rest_decontat', 'viewer');
+INSERT INTO public.executie_proiecte (id, cod_intern, nume, mp_employee_id) VALUES (9001, 'CONC-1', 'C1 confirma_baza', 9101), (9002, 'CONC-2', 'C2 confirma_situatie', 9101), (9003, 'CONC-3', 'C3 configurare', 9103),
   (9004, 'CONC-5', 'C5 import vechi vs RPC', 9101), (9005, 'CONC-6', 'C6 RPC in curs vs import vechi', 9101);
 INSERT INTO public.proiect_articole (proiect_id, obiect_cod, deviz_cod, nr, cod, denumire, um, cantitate, valoare, sursa, mod_import, fisier_amprenta, confirmat_de, confirmat_la)
 VALUES (9002, '0001', 'D1', '1', 'A100', 'Conducta', 'M', 100, 10000, 'contract_initial', 'lista_completa', repeat('c2', 32), '$UID_OWNER', now()),
        (9003, '0001', 'D1', '1', 'A100', 'Conducta', 'M', 100, 10000, 'contract_initial', 'lista_completa', repeat('c3', 32), '$UID_OWNER', now());
 EOF
-ok $? "fixturile (5 proiecte ale MP-ului vechi, 2 cu oferta; contul cu acces general Executie)"
+ok $? "fixturile (5 proiecte ale MP-urilor vechi, 2 cu oferta; contul cu acces general Executie; MP-ul vechi C3 cu citire pe sub-modul)"
 
 OFERTA_C1="SELECT public.fn_rest_decontat_confirma_baza(9001, 'contract_initial', NULL, NULL, NULL, 'o.xlsx', repeat('a1', 32), '[{\"obiect_cod\":\"0001\",\"deviz_cod\":\"D1\",\"cod\":\"A100\",\"denumire\":\"x\",\"um\":\"M\",\"cantitate\":1,\"valoare\":10}]'::jsonb)"
 SITUATIE_C2="SELECT public.fn_rest_decontat_confirma_situatie(9002, '1', NULL, 's.xlsx', repeat('b1', 32), '[{\"cod\":\"A100\",\"um\":\"M\",\"cantitate_perioada\":1,\"valoare\":100,\"cheie\":\"0001|D1|A100\",\"tip_rand\":\"articol\",\"potrivire\":\"exact\"}]'::jsonb, false)"
@@ -250,10 +268,12 @@ else astept 0 "$(q "SELECT count(*) FROM public.executie_sl_detaliu WHERE proiec
 
 echo "C3. configurare_completa (20270105b): la fel"
 pasA C3a "BEGIN;" "$(ca "$UID_OWNER")" "UPDATE public.executie_proiecte SET mp_employee_id = 9102 WHERE id = 9003;"; astept 00000 "$A_STARE" "A (owner): MP-ul schimbat, NECOMIS"
-porniB C3b "$UID_MP_VECHI" "$CONFIG_C3"
-asteaptaBlocatB C3b; ok $? "B (MP vechi): asteapta lock-ul pe proiect"
+porniB C3b "$UID_MP_C3" "$CONFIG_C3"
+asteaptaBlocatB C3b; ok $? "B (MP vechi C3): asteapta lock-ul pe proiect"
 pasA C3c "COMMIT;"; astept 00000 "$A_STARE" "A: COMMIT"
-terminaB C3b; astept "$ASTEPT" "$B_STARE" "B (MP vechi): RPC-ul dupa lock"
+terminaB C3b; astept "$ASTEPT" "$B_STARE" "B (MP vechi C3): RPC-ul dupa lock"
+# discriminarea: după schimbare, MP-ul vechi C3 încă VEDE oferta (citire pe sub-modul), dar nu mai are dreptul de confirmare → singura barieră = reverificarea
+astept "t|f" "$(qca "$UID_MP_C3" "SELECT public.fn_rest_decontat_are_oferta(9003), public.fn_rest_decontat_drept(9003, 'confirmare')")" "MP-ul vechi C3 dupa schimbare: are_oferta | drept confirmare"
 if [ "$MUTANT" = da ]; then astept 1 "$(q "SELECT count(*) FROM public.executie_proiect_configurare_jurnal WHERE proiect_id = 9003")" "jurnal scris de MP-ul vechi (mutantul scrie)"
 else astept 0 "$(q "SELECT count(*) FROM public.executie_proiect_configurare_jurnal WHERE proiect_id = 9003")" "jurnal scris de MP-ul vechi (nimic)"
      astept t "$(q "SELECT configurare_completa_la IS NULL FROM public.executie_proiecte WHERE id = 9003")" "proiectul C3 ramane in configurare"; fi
