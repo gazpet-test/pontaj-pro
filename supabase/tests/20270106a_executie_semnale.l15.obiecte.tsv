@@ -109,6 +109,7 @@ functie	functie public.fn_executie_semnal_fara_golire()	creat
 functie	functie public.fn_executie_semnal_garda()	creat
 functie	functie public.fn_executie_semnal_jurnal_garda()	creat
 functie	functie public.fn_executie_semnal_scrie(jsonb)	creat
+functie	functie public.fn_executie_semnal_spatii(text)	creat
 functie	functie public.fn_executie_semnal_stare(bigint,integer,text,text,text,text,integer,boolean)	creat
 functie	functie public.fn_executie_semnal_tranzitie(text,text,text)	creat
 politica	politica public.executie_semnale.executie_semnale_citire	creat

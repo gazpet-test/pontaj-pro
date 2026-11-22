@@ -17,6 +17,9 @@
 //    amprenta CANONICĂ (ordinea / spațiile / majusculele surselor, spațiile din fragment nu redeschid), contractul dovezii (constatat = sursă +
 //    dată + fragment; negăsit = surse + obligația; camp_lipsa fără sursă nu trece prin UNKNOWN; termen confirmat cu bază; rezolvat cu dovadă /
 //    acțiune), cele 13 semnale ale pilotului scrise real, revenirea verificată pe DEFINIȚII (blocul DEFINITII, `--scrie-definitii`).
+//    Runda 3 (verdictul Jakarinos r2, P2): spațiul alb din amprentă — reproducerea lui (creare → respingere → retrimitere cu \n / \t / NBSP la
+//    capete și în mijloc = `neschimbat_inchis`, stare `respins`), pe fragment, surse și referință, pe respins / rezolvat / deschis; textele stocate
+//    normalizate; mutanții M46–M49 (ordinea veche btrim → regexp, clasa fără NBSP, referința brută, stocarea cu btrim).
 // 4. MUTANȚI ai migrării: fiecare TREBUIE să pice (la aplicare, la verificări sau prin detectorul lui).
 // 5. Paritatea tranzițiilor: blocul TRANZITII din migrare = TRANZITII din src/executieSemnaleLogica.js + aceleași răspunsuri pe toate combinațiile (L19).
 // 6. Dry-run-ul pentru clonă (supabase/tests/20270106a_executie_semnale_dryrun.sql) rulat aici întreg, pe baza cu migrarea aplicată.
@@ -175,6 +178,8 @@ async function ca(db, rol, uid, sql) {
   catch (e) { await db.exec('ROLLBACK'); return { code: e.code, message: e.message } }
 }
 const lit = s => `'${String(s).replace(/'/g, "''")}'`
+// spațiul alb „exotic”, scris cu coduri (nu cu secvențe de scăpare în sursă): NBSP, spațiul îngust fără rupere, BOM, spațiul fără lățime
+const NBSP = String.fromCharCode(160), NNBSP = String.fromCharCode(8239), BOM = String.fromCharCode(65279), ZWSP = String.fromCharCode(8203)
 // semnalul agentului (toate cheile), valori scrise de mână
 const SEMNAL = (proiect = 1, extra = {}) => ({
   proiect_id: proiect, flux: 'lipsuri', tip: 'termen_apropiat', obiect: 'contract:termen', gravitate: 'atentie', titlu: 'Termenul contractului se apropie',
@@ -264,6 +269,9 @@ async function verifica(db) {
   asteptCod(await scrie(db, SEMNAL(1, { responsabil_employee_id: 999 })), '22023', 'A responsabil inexistent', /angajat activ/)
   asteptCod(await scrie(db, SEMNAL(1, { dovada_data: '21.11.2026' })), '22023', 'A zi în alt format', /AAAA-LL-ZZ/)
   asteptCod(await scrie(db, SEMNAL(1, { surse_consultate: ['', 'x'] })), '22023', 'A sursă goală în listă')
+  asteptCod(await scrie(db, SEMNAL(1, { surse_consultate: [NBSP + '\n' + NBSP, 'x'] })), '22023', 'A sursă doar din spațiu alb Unicode (NBSP / newline)', /nu doar spațiu alb/)
+  asteptCod(await scrie(db, SEMNAL(1, { surse_consultate: ['x' + String.fromCharCode(7) + 'y'] })), '22023', 'A sursă cu caracter de control (BEL)', /caractere de control/)
+  asteptCod(await scrie(db, SEMNAL(1, { tip: 'doc_w', obiect: 'w', dovada_fragment: NBSP + '\t' + NBSP })), '23514', 'A constatat cu fragmentul doar din spațiu alb Unicode (normalizat = NULL)')
   asteptCod(await scrie(db, SEMNAL(1, { surse_consultate: 'nas' })), '22023', 'A sursele ca text, nu listă', /trebuie să fie array/)
   asteptCod(await scrie(db, SEMNAL(1, { flux: 'tichete' })), '22023', 'A același tip pe alt flux', /înregistrat pe fluxul/)
   asteptCod(await scrie(db, 'null'), '22023', 'A payload null')
@@ -379,6 +387,26 @@ async function verifica(db) {
   let rr = await rand(db, id1)
   if (f1 && (f1.actiune !== 'neschimbat_inchis' || rr.stare !== 'respins' || rr.stare_motiv == null || rr.versiune !== f1.versiune)) ab.push('E respinsul a reapărut: ' + JSON.stringify([f1, rr.stare]))
   if ((await jurnal(db, id1)).length !== 6) ab.push('E jurnalul s-a umplut la „neschimbat_inchis”: ' + (await jurnal(db, id1)).length)
+  // REPRODUCEREA Jakarinos r2 (P2): creare → respingere de om → retrimitere cu \n / \t / \r / NBSP la capete ȘI în mijloc (fragment, surse,
+  // referință) = `neschimbat_inchis`, starea rămâne `respins`, jurnalul nu crește, rândul nu se schimbă (nici versiunea)
+  const SP = { gravitate: 'critic', responsabil_employee_id: 14 }
+  const rrR = await rand(db, id1)
+  for (const [ce, extra] of [
+    ['fragmentul cu \\n la capete (reproducerea exactă)', { dovada_fragment: '\n' + SEMNAL(1).dovada_fragment + '\n' }],
+    ['fragmentul cu \\n / \\t / \\r / NBSP la capete și în mijloc', { dovada_fragment: '\n\t' + NBSP + 'data_termen' + NBSP + '=\t\r\n  2026-12-11' + NNBSP + '\n' }],
+    ['fragmentul cu BOM / spațiu fără lățime la capete', { dovada_fragment: BOM + 'data_termen = 2026-12-11' + ZWSP }],
+    ['sursele cu \\n / \\t / NBSP la capete și în mijloc', { surse_consultate: ['\nERP:\t' + NBSP + 'executie_proiecte.data_termen' + NBSP + '\n'] }],
+    ['referința cu \\n / tab / NBSP la capete', { dovada_ref: '\n\t' + NBSP + 'executie_proiecte.data_termen' + NBSP + '\t\n' }],
+    ['referința cu spațiul interior dat ca NBSP + tab (același text normalizat)', { dovada_ref: 'executie_proiecte.data_termen', dovada_fragment: 'data_termen' + NBSP + '\t= 2026-12-11' }],
+    ['toate trei deodată', { dovada_fragment: '\ndata_termen\t=\n2026-12-11 ', surse_consultate: ['  erp: EXECUTIE_PROIECTE.data_termen\n'], dovada_ref: ' executie_proiecte.data_termen\n' }],
+  ]) {
+    const g = asteptOk(await scrie(db, SEMNAL(1, { ...SP, ...extra })), `E (respins) ${ce}`)
+    const rx = await rand(db, id1)
+    if (g && (g.actiune !== 'neschimbat_inchis' || rx.stare !== 'respins' || rx.stare_motiv == null)) ab.push(`E (respins) ${ce} a redeschis semnalul (dovadă „nouă” din spațiu alb): ` + JSON.stringify([g.actiune, rx.stare]))
+    if (rx.dovada_fragment !== rrR.dovada_fragment || rx.dovada_ref !== rrR.dovada_ref || JSON.stringify(rx.surse_consultate) !== JSON.stringify(rrR.surse_consultate) || rx.dovada_amprenta !== rrR.dovada_amprenta)
+      ab.push(`E (respins) ${ce} a schimbat textele / amprenta rândului închis: ` + JSON.stringify([rx.dovada_fragment, rx.dovada_ref, rx.surse_consultate]))
+  }
+  if ((await jurnal(db, id1)).length !== 6) ab.push('E jurnal nou la retrimiterile cu spațiu alb pe respins: ' + (await jurnal(db, id1)).length)
   const f2 = asteptOk(await scrie(db, SEMNAL(1, { gravitate: 'critic', responsabil_employee_id: 14, dovada_fragment: 'data_termen = 2026-12-05 (AA 3)', dovada_data: '2026-11-22' })), 'E dovadă nouă pe un respins')
   rr = await rand(db, id1)
   if (f2 && (f2.actiune !== 'redeschis' || rr.stare !== 'nou' || rr.stare_motiv !== null || rr.stare_de !== null || rr.actiune_ref !== null)) ab.push('E dovada nouă nu redeschide curat: ' + JSON.stringify([f2, rr.stare, rr.stare_motiv]))
@@ -405,6 +433,10 @@ async function verifica(db) {
     ['sursele cu majuscule / spații / dublură', { surse_consultate: ['  MAIL:   aa 3 ', 'erp: EXECUTIE_PROIECTE.data_termen', 'Mail: AA 3'] }],
     ['fragmentul cu spații în plus', { surse_consultate: SURSE2, dovada_fragment: '  data_termen =   2026-12-05 (AA 3) ' }],
     ['calea cu spații la capete', { surse_consultate: SURSE2, dovada_ref: ' executie_proiecte.data_termen ' }],
+    // runda 3: TOT spațiul alb (newline, tab, CR, NBSP, spațiul îngust fără rupere), la capete și în mijloc, pe fiecare text al amprentei
+    ['fragmentul cu \\n / \\t / NBSP la capete și în mijloc', { surse_consultate: SURSE2, dovada_fragment: '\n' + NBSP + 'data_termen\t=' + NBSP + '2026-12-05\r\n(AA' + NNBSP + '3)\n\t' }],
+    ['sursele cu \\n / \\t / NBSP la capete și în mijloc', { surse_consultate: ['\tmail:' + NBSP + 'AA 3\n', NBSP + 'ERP:\nexecutie_proiecte.data_termen' + NBSP] }],
+    ['calea cu \\n / NBSP la capete', { surse_consultate: SURSE2, dovada_ref: '\n' + NBSP + 'executie_proiecte.data_termen' + NBSP + '\n' }],
   ]) {
     const g = asteptOk(await scrie(db, SEMNAL(1, { ...DOV3, ...extra })), `E ${ce} pe un rezolvat`)
     rr = await rand(db, id1)
@@ -420,6 +452,20 @@ async function verifica(db) {
   const g6 = asteptOk(await scrie(db, SEMNAL(1, { ...DOV3, dovada_data: '2026-11-23', surse_consultate: [SURSE2[1], SURSE2[0]] })), 'E ordinea surselor pe un semnal deschis')
   rr = await rand(db, id1)
   if (g6 && (g6.actiune !== 'neschimbat' || JSON.stringify(rr.surse_consultate) !== JSON.stringify(SURSE2))) ab.push('E ordinea surselor a dat „actualizat” / stocare necanonică: ' + JSON.stringify([g6.actiune, rr.surse_consultate]))
+  // pe un semnal DESCHIS spațiul alb din fragment / surse / referință = „neschimbat” (textele STOCATE sunt normalizate, nu doar amprenta), fără jurnal
+  const nj6 = (await jurnal(db, id1)).length
+  const g6b = asteptOk(await scrie(db, SEMNAL(1, { ...DOV3, dovada_data: '2026-11-23', surse_consultate: ['\n' + SURSE2[1] + '\t', NBSP + SURSE2[0] + '\n'],
+    dovada_fragment: '\n\tdata_termen' + NBSP + '= 2026-12-05\r\n(AA 3)\n', dovada_ref: '\nexecutie_proiecte.data_termen\t' })), 'E spațiul alb pe un semnal deschis')
+  rr = await rand(db, id1)
+  if (g6b && (g6b.actiune !== 'neschimbat' || rr.dovada_fragment !== DOV3.dovada_fragment || rr.dovada_ref !== 'executie_proiecte.data_termen' || JSON.stringify(rr.surse_consultate) !== JSON.stringify(SURSE2)))
+    ab.push('E spațiul alb pe un semnal deschis a dat „actualizat” / textele stocate nenormalizate: ' + JSON.stringify([g6b.actiune, rr.dovada_fragment, rr.dovada_ref, rr.surse_consultate]))
+  if ((await jurnal(db, id1)).length !== nj6) ab.push('E jurnal nou la spațiu alb pe un semnal deschis')
+  // textele stocate la CREARE sunt normalizate la fel (fragment / referință / surse cu \n, tab, NBSP)
+  const g6c = asteptOk(await scrie(db, SEMNAL(3, { tip: 'doc_sp', obiect: 'sp', dovada_fragment: '\n\tdata_termen' + NBSP + '=\n2026-12-11 ', dovada_ref: ' executie_proiecte.' + NBSP + 'data_termen\n',
+    surse_consultate: ['\nERP:\t' + NBSP + 'executie_proiecte.data_termen' + NBSP + '\n', 'erp: EXECUTIE_PROIECTE.DATA_TERMEN'] })), 'E crearea cu spațiu alb în textele dovezii')
+  const rsp = g6c ? await rand(db, g6c.id) : null
+  if (rsp && (rsp.dovada_fragment !== 'data_termen = 2026-12-11' || rsp.dovada_ref !== 'executie_proiecte. data_termen' || JSON.stringify(rsp.surse_consultate) !== JSON.stringify(['ERP: executie_proiecte.data_termen'])))
+    ab.push('E textele stocate la creare nu sunt normalizate: ' + JSON.stringify([rsp.dovada_fragment, rsp.dovada_ref, rsp.surse_consultate]))
   const g7 = asteptOk(await stare(db, U.OWNER, id1, rr.versiune, 'rezolvat', { motiv: 'prelungit prin AA 3', ref: 'TKT-2026-9998' }), 'E owner-ul rezolvă a treia dată')
   if (g7 && g7.ok !== true) ab.push('E rezolvarea a treia: ' + JSON.stringify(g7))
   rr = await rand(db, id1)
@@ -476,8 +522,23 @@ async function verifica(db) {
   const dr = await ca(db, 'authenticated', U.MP_P1, 'SELECT public.fn_executie_semnal_drept(1, NULL) AS a, public.fn_executie_semnal_drept(2, NULL) AS b, public.fn_executie_semnal_drept(2, 10) AS c, public.fn_executie_semnal_drept(999, 10) AS d')
   if (dr.code || JSON.stringify(dr.rows[0]) !== '{"a":true,"b":false,"c":true,"d":false}') ab.push('F dreptul (MP P1): ' + JSON.stringify(dr))
   asteptCod(await ca(db, 'authenticated', U.OWNER, `SELECT public.fn_executie_semnal_canonic(' A  b ')`), '42501', 'F forma canonică din API')
+  asteptCod(await ca(db, 'authenticated', U.OWNER, `SELECT public.fn_executie_semnal_spatii(' A  b ')`), '42501', 'F normalizarea spațiului alb din API')
   const can = await db.query(`SELECT public.fn_executie_semnal_canonic($1) AS c, public.fn_executie_semnal_canonic('   ') AS g, public.fn_executie_semnal_canonic(NULL) AS n`, ['  NAS:  Z:/x   Y\t z '])
   if (JSON.stringify(can.rows[0]) !== '{"c":"nas: z:/x y z","g":null,"n":null}') ab.push('F forma canonică: ' + JSON.stringify(can.rows[0]))
+  // spațiul alb: ÎNTÂI strâns (orice spațiu alb, inclusiv \n / \t / \r / \v / \f / NEL / NBSP / U+2007 / U+202F / U+3000 / BOM / U+200B), APOI tăiat
+  // la capete; literele rămân (canonic le face mici); doar spațiu alb = NULL
+  const sp = await db.query(`SELECT public.fn_executie_semnal_spatii($1) AS a, public.fn_executie_semnal_spatii($2) AS b, public.fn_executie_semnal_spatii($3) AS g,
+      public.fn_executie_semnal_spatii(NULL) AS n, public.fn_executie_semnal_canonic($1) AS c, public.fn_executie_semnal_spatii('x') AS x`,
+    ['\n\t' + NBSP + 'Art.' + NBSP + '8:\r\n GBE' + String.fromCharCode(8199) + 'obligatorie' + NNBSP + String.fromCharCode(11) + '\f' + String.fromCharCode(133) + String.fromCharCode(12288) + '\n',
+     BOM + 'a' + ZWSP + 'b' + String.fromCharCode(5760) + 'c' + String.fromCharCode(8287) + 'd' + String.fromCharCode(8232) + 'e' + BOM,
+     '\n' + NBSP + '\t' + NNBSP + BOM + ' '])
+  if (JSON.stringify(sp.rows[0]) !== '{"a":"Art. 8: GBE obligatorie","b":"a b c d e","g":null,"n":null,"c":"art. 8: gbe obligatorie","x":"x"}') ab.push('F spațiul alb normalizat: ' + JSON.stringify(sp.rows[0]))
+  // amprenta: aceeași pentru dovezi egale până la spațiu alb (fragment / surse / referință), diferită la o literă în plus
+  const am = await db.query(`SELECT public.fn_executie_semnal_amprenta('constatat', ARRAY['NAS: x', 'mail: y'], 'document', '2026-09-18', 'art. 8: GBE obligatorie', 'Z:/a b.pdf') AS a,
+      public.fn_executie_semnal_amprenta('constatat', ARRAY[$1, $2], 'document', '2026-09-18', $3, $4) AS b,
+      public.fn_executie_semnal_amprenta('constatat', ARRAY['NAS: x', 'mail: y'], 'document', '2026-09-18', 'art. 8: GBE obligatorie!', 'Z:/a b.pdf') AS c`,
+    ['\nmail:' + NBSP + 'Y\t', ' nas: X ', '\n' + NBSP + 'art.' + NBSP + '8:\t\r\nGBE' + String.fromCharCode(11) + 'obligatorie' + NNBSP + '\n', '\tZ:/a' + NBSP + 'b.pdf\n'])
+  if (am.rows[0].a !== am.rows[0].b || am.rows[0].a === am.rows[0].c) ab.push('F amprenta nu e canonică pe spațiu alb / nu deosebește o literă: ' + JSON.stringify(am.rows[0]))
   // G. PILOTUL: cele 13 semnale ale testului „pe hârtie” (sintetizate) se reprezintă EXACT în contract, pe P3; fiecare constatare e acoperită,
   //    iar fiecare „negăsit” poartă obligația (sursă + dată + fragment). Scoaterea unei piese a contractului din fiecare = refuz 23514.
   const pilot = PILOT(3, { mp: 10, contracte: 11 })
@@ -691,6 +752,10 @@ console.log('3. revenirea')
 }
 
 console.log('4. mutanții migrării (fiecare TREBUIE să pice)')
+// corpul EXACT al funcției de spațiu alb (mutanții M46 / M47 îl rescriu; dacă textul nu mai există, mutantul pică la „nu găsește textul”)
+const SPATII_CORP = (() => { const i = MIG.indexOf('CREATE FUNCTION public.fn_executie_semnal_spatii('); const j = MIG.indexOf('\n  SELECT ', i) + 1; return MIG.slice(j, MIG.indexOf('\n', j)) })()
+const CLASA_RE = /'\[\[:space:\]' \|\| \(SELECT string_agg\(chr\(c\), ''\) FROM unnest\(ARRAY\[[0-9, ]+\]\) c\) \|\| '\]\+'/
+if (!/^  SELECT nullif\(btrim\(regexp_replace\(p_text, .*, ' ', 'g'\), ' '\), ''\)$/.test(SPATII_CORP) || !CLASA_RE.test(SPATII_CORP)) { ok(false, 'corpul fn_executie_semnal_spatii nu are forma așteptată de mutanți: ' + SPATII_CORP) }
 const MUTANTI = [
   ['M1 citirea deschisă tuturor (USING true)', [['CREATE POLICY executie_semnale_citire ON public.executie_semnale FOR SELECT TO authenticated\n  USING (public.fn_executie_semnal_drept(proiect_id, responsabil_employee_id));',
     'CREATE POLICY executie_semnale_citire ON public.executie_semnale FOR SELECT TO authenticated\n  USING (true);']]],
@@ -748,14 +813,22 @@ const MUTANTI = [
   ['M36 amprenta cu sursele necanonice (textul brut, în ordinea dată)', [["                                'surse', coalesce((SELECT jsonb_agg(DISTINCT c ORDER BY c) FROM unnest(coalesce(p_surse, '{}'::text[])) s, public.fn_executie_semnal_canonic(s) c WHERE c IS NOT NULL), '[]'::jsonb),",
     "                                'surse', to_jsonb(coalesce(p_surse, '{}'::text[])),"]]],
   ['M37 sursele stocate în ordinea dată (nu canonică)', [['    SELECT coalesce(array_agg(x.s ORDER BY x.c, x.ord), \'{}\'::text[]) INTO v_surse', '    SELECT coalesce(array_agg(x.s ORDER BY x.ord), \'{}\'::text[]) INTO v_surse']]],
-  ['M38 forma canonică fără litere mici', [["  SELECT nullif(lower(regexp_replace(btrim(p_text), '[[:space:]]+', ' ', 'g')), '')", "  SELECT nullif(regexp_replace(btrim(p_text), '[[:space:]]+', ' ', 'g'), '')"]]],
-  ['M39 fragmentul intră brut în amprentă', [["                                'fragment', nullif(regexp_replace(btrim(coalesce(p_fragment, '')), '[[:space:]]+', ' ', 'g'), ''),", "                                'fragment', p_fragment,"]]],
+  ['M38 forma canonică fără litere mici', [['  SELECT lower(public.fn_executie_semnal_spatii(p_text))', '  SELECT public.fn_executie_semnal_spatii(p_text)']]],
+  ['M39 fragmentul intră brut în amprentă', [["                                'fragment', public.fn_executie_semnal_spatii(p_fragment),", "                                'fragment', p_fragment,"]]],
   ['M40 camp_lipsa fără sursă trece prin UNKNOWN (CHECK cu =)', [["    AND (constatare IS DISTINCT FROM 'camp_lipsa' OR (dovada_sursa IS NOT DISTINCT FROM 'camp_erp' AND dovada_ref IS NOT NULL))),", "    AND (constatare IS DISTINCT FROM 'camp_lipsa' OR (dovada_sursa = 'camp_erp' AND dovada_ref IS NOT NULL))),"]]],
   ['M41 constatat doar cu calea (fără dată / fragment)', [["    AND (constatare IS DISTINCT FROM 'constatat' OR (dovada_sursa IS NOT NULL AND dovada_data IS NOT NULL AND dovada_fragment IS NOT NULL))", "    AND (constatare IS DISTINCT FROM 'constatat' OR (dovada_sursa IS NOT NULL AND (dovada_fragment IS NOT NULL OR dovada_ref IS NOT NULL)))"]]],
   ['M42 negăsit fără obligația care cere documentul', [["         OR (cardinality(surse_consultate) >= 1 AND dovada_sursa IS NOT NULL AND dovada_data IS NOT NULL AND dovada_fragment IS NOT NULL))", '         OR cardinality(surse_consultate) >= 1)']]],
   ['M43 termen confirmat fără baza calculului', [['         AND (termen_confirmat IS NOT TRUE OR termen_baza IS NOT NULL)))', '))']]],
   ['M44 rezolvarea doar cu motiv (RPC)', [["  IF v_stare = 'rezolvat' AND v_dovada IS NULL AND v_ref IS NULL THEN\n    RAISE EXCEPTION 'semnale: rezolvarea cere dovada rezolvării sau acțiunea rezultată' USING ERRCODE = '22023';\n  END IF;\n", '']]],
   ['M45 rezolvarea doar cu motiv (CHECK, calea directă)', [["\n             AND (stare IS DISTINCT FROM 'rezolvat' OR stare_dovada IS NOT NULL OR actiune_ref IS NOT NULL)))),", '))),']]],
+  // runda 3 (verdictul Jakarinos r2, P2): spațiul alb din amprentă
+  ['M46 ordinea veche: btrim ÎNAINTE de strângerea spațiului alb (un \\n de la capete rămâne spațiu)', [[SPATII_CORP,
+    SPATII_CORP.replace('nullif(btrim(regexp_replace(p_text, ', 'nullif(regexp_replace(btrim(p_text), ').replace(", ' ', 'g'), ' '), '')", ", ' ', 'g'), '')")]]],
+  ['M47 clasa de spațiu alb fără spațiile Unicode (doar [[:space:]]: NBSP rămâne)', [[SPATII_CORP, SPATII_CORP.replace(CLASA_RE, "'[[:space:]]+'")]]],
+  ['M48 referința intră în amprentă doar cu btrim (ca înainte)', [["                                'ref', public.fn_executie_semnal_spatii(p_ref))::text)", "                                'ref', nullif(btrim(coalesce(p_ref, '')), ''))::text)"]]],
+  ['M49 RPC-ul stochează fragmentul doar cu btrim (semnal deschis: „actualizat” fals, text nenormalizat)', [
+    ["            p_semnal ->> 'constatare', v_surse, p_semnal ->> 'dovada_sursa', v_dovada_data, public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_fragment'),", "            p_semnal ->> 'constatare', v_surse, p_semnal ->> 'dovada_sursa', v_dovada_data, nullif(btrim(p_semnal ->> 'dovada_fragment'), ''),"],
+    ["         dovada_fragment = public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_fragment'), dovada_ref = public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_ref'),", "         dovada_fragment = nullif(btrim(p_semnal ->> 'dovada_fragment'), ''), dovada_ref = public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_ref'),"]]],
 ]
 for (const [nume, inl, preg, opt] of MUTANTI) {
   try { aplica(MIG, inl) } catch (e) { ok(false, `${nume}: ${e.message.slice(0, 120)}`); continue }
@@ -771,7 +844,12 @@ for (const [nume, inl, preg, opt] of MUTANTI) {
   try {
     await aplicaMig(db, aplica(MIG, inl), opt)
     if (opt?.l15 === 'nimic') picat = null
-    else { const ab = await verifica(db); if (ab.length) picat = 'verificări: ' + ab[0] }
+    else {
+      const ab = await verifica(db)
+      // prima abatere + (runda 3) reproducerea Jakarinos, dacă pică și ea: creare → respins → retrimitere cu spațiu alb = redeschis
+      const repro = ab.find(x => x.startsWith('E (respins)'))
+      if (ab.length) picat = `verificări (${ab.length} abateri): ${ab[0]}` + (repro && repro !== ab[0] ? ` | repro Jak r2: ${repro}` : '')
+    }
   } catch (e) { picat = 'aplicare: ' + e.message.slice(0, 140) }
   if (opt?.l15 === 'nimic') ok(picat === null, `${nume}: fără gardă se aplică fără L15 (garda reală o refuză, secțiunea 2)`)
   else ok(picat != null, `${nume} pică (${picat || 'NU a picat'})`)

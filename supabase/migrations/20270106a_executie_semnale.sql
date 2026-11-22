@@ -20,9 +20,10 @@
 --     responsabilul (angajat; sursa lui: agent = propus / om = stabilit SAU confirmat explicit de om, inclusiv „fără responsabil” — ce a decis omul
 --     nu mai schimbă agentul); starea (nou / in_lucru / asteapta_informatii / rezolvat / respins) cu motivul, dovada rezolvării / respingerii,
 --     acțiunea rezultată (legătura cu tichetul; rezolvarea cere dovada sau acțiunea), cine și când; versiunea regulii; detectat_la /
---     ultima_verificare; versiunea rândului (CAS). Amprenta dovezii (md5 CANONIC, pusă de SERVER: sursele consultate fără ordine / spații / majuscule
---     / dubluri, fragmentul cu spațiile strânse) spune dacă dovada e NOUĂ: un semnal respins (sau rezolvat) cu aceeași dovadă NU reapare — doar
---     ultima_verificare se mișcă; cu dovadă nouă se redeschide (stare nou, decizia veche rămâne în jurnal).
+--     ultima_verificare; versiunea rândului (CAS). Amprenta dovezii (md5 CANONIC, pusă de SERVER: sursele consultate fără ordine / spațiu alb /
+--     majuscule / dubluri, fragmentul și referința cu spațiul alb normalizat — TOT spațiul alb, inclusiv \n, \t, NBSP, printr-o SINGURĂ funcție,
+--     fn_executie_semnal_spatii, aplicată și textelor stocate de RPC) spune dacă dovada e NOUĂ: un semnal respins (sau rezolvat) cu aceeași dovadă
+--     NU reapare — doar ultima_verificare se mișcă; cu dovadă nouă se redeschide (stare nou, decizia veche rămâne în jurnal).
 --   * executie_semnale_jurnal: jurnal DOAR ADĂUGARE al schimbărilor (creat / actualizat / redeschis / stare / responsabil), cu actorul
 --     (agent / om + contul), motivul, dovada, diferențele (câmp: [vechi, nou]) și versiunea regulii.
 --   * Dreptul: O SINGURĂ definiție (fn_executie_semnal_drept): citire = owner SAU managerul de proiect (profiles.employee_id =
@@ -278,7 +279,7 @@ CREATE INDEX executie_semnale_responsabil_idx ON public.executie_semnale (respon
 COMMENT ON TABLE public.executie_semnale IS
   'Execuție: semnalele agentului verificator (faza 1). Un rând pe (proiect, tip, obiect); scris doar de agent prin fn_executie_semnal_scrie; starea / responsabilul le schimbă omul prin fn_executie_semnal_stare. 20270106a.';
 COMMENT ON COLUMN public.executie_semnale.constatare IS 'constatat = cu dovadă (sursă + dată + fragment); negasit_in_surse = documentul NU a fost găsit în sursele consultate (nu înseamnă că lipsește) + obligația care îl cere (sursă + dată + fragment); camp_lipsa = câmp gol în ERP (dovada_ref = câmpul). 20270106a.';
-COMMENT ON COLUMN public.executie_semnale.dovada_amprenta IS 'md5 canonic al dovezii (constatare, sursele în formă canonică — fără ordine / spații / majuscule —, sursă, dată, fragment cu spațiile strânse, ref), pus de server: aceeași amprentă pe un semnal respins / rezolvat = nu reapare. 20270106a.';
+COMMENT ON COLUMN public.executie_semnale.dovada_amprenta IS 'md5 canonic al dovezii (constatare, sursele în formă canonică — fără ordine / spațiu alb / majuscule —, sursă, dată, fragment și ref cu spațiul alb normalizat prin fn_executie_semnal_spatii: orice spațiu alb, inclusiv newline / tab / NBSP, devine un spațiu, apoi capetele se taie), pus de server: aceeași amprentă pe un semnal respins / rezolvat = nu reapare. 20270106a.';
 COMMENT ON COLUMN public.executie_semnale.responsabil_sursa IS 'agent = propus de agent (agentul îl poate schimba); om = stabilit sau confirmat explicit de om, inclusiv „fără responsabil” (id NULL): agentul nu-l mai atinge. 20270106a.';
 
 -- ── jurnalul (doar adăugare) ──
@@ -339,23 +340,35 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
 $f$;
 REVOKE ALL ON FUNCTION public.fn_executie_semnal_tranzitie(text, text, text) FROM PUBLIC, anon, authenticated, service_role;
 
--- ── forma canonică a unui text pentru compararea dovezilor (O SINGURĂ definiție, L19: amprenta + ordonarea surselor stocate de RPC):
--- spațiile de la capete scoase, spațiile interioare strânse la unul, litere mici. NULL / gol = NULL. ──
+-- ── spațiul alb al unui text, O SINGURĂ definiție (L19) pentru TOT ce intră în amprentă și pentru textele dovezii stocate de RPC: ÎNTÂI orice
+-- șir de spațiu alb (spațiu, tab, \n, \r, \v, \f, NEL și spațiile Unicode: NBSP U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F,
+-- U+3000, spațiul fără lățime U+200B, BOM U+FEFF — [[:space:]] NU le prinde pe cele fără rupere) devine UN spațiu, APOI capetele se taie.
+-- Ordinea contează: btrim înaintea strângerii lăsa un „\n” de la capete ca spațiu în amprentă (verdictul Jakarinos r2). Spațiile Unicode sunt
+-- scrise prin codurile lor (chr): validatorul runnerului refuză U&'…' și backslash-urile din literali. NULL / gol = NULL. ──
+CREATE FUNCTION public.fn_executie_semnal_spatii(p_text text) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
+  SELECT nullif(btrim(regexp_replace(p_text, '[[:space:]' || (SELECT string_agg(chr(c), '') FROM unnest(ARRAY[133, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8203, 8232, 8233, 8239, 8287, 12288, 65279]) c) || ']+', ' ', 'g'), ' '), '')
+$f$;
+REVOKE ALL ON FUNCTION public.fn_executie_semnal_spatii(text) FROM PUBLIC, anon, authenticated, service_role;
+
+-- ── forma canonică a unui text pentru compararea dovezilor (sursele consultate: amprenta + ordonarea celor stocate de RPC): spațiul alb normalizat
+-- (fn_executie_semnal_spatii) + litere mici. NULL / gol = NULL. ──
 CREATE FUNCTION public.fn_executie_semnal_canonic(p_text text) RETURNS text
 LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
-  SELECT nullif(lower(regexp_replace(btrim(p_text), '[[:space:]]+', ' ', 'g')), '')
+  SELECT lower(public.fn_executie_semnal_spatii(p_text))
 $f$;
 REVOKE ALL ON FUNCTION public.fn_executie_semnal_canonic(text) FROM PUBLIC, anon, authenticated, service_role;
 
 -- ── amprenta dovezii: md5 canonic (jsonb ordonează cheile); NULL-urile intră ca null. Sursele consultate intră în formă canonică, fără dubluri,
--- ORDONATE (ordinea / spațiile / majusculele listei NU sunt dovadă nouă); fragmentul cu spațiile strânse; referința doar fără spațiile de la capete. ──
+-- ORDONATE (ordinea / spațiul alb / majusculele listei NU sunt dovadă nouă); fragmentul și referința cu spațiul alb normalizat (aceeași funcție,
+-- fn_executie_semnal_spatii; literele rămân: o cale / un link pot fi sensibile la majuscule). ──
 CREATE FUNCTION public.fn_executie_semnal_amprenta(p_constatare text, p_surse text[], p_sursa text, p_data date, p_fragment text, p_ref text) RETURNS text
 LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   SELECT md5(jsonb_build_object('constatare', p_constatare,
                                 'surse', coalesce((SELECT jsonb_agg(DISTINCT c ORDER BY c) FROM unnest(coalesce(p_surse, '{}'::text[])) s, public.fn_executie_semnal_canonic(s) c WHERE c IS NOT NULL), '[]'::jsonb),
                                 'sursa', p_sursa, 'data', p_data,
-                                'fragment', nullif(regexp_replace(btrim(coalesce(p_fragment, '')), '[[:space:]]+', ' ', 'g'), ''),
-                                'ref', nullif(btrim(coalesce(p_ref, '')), ''))::text)
+                                'fragment', public.fn_executie_semnal_spatii(p_fragment),
+                                'ref', public.fn_executie_semnal_spatii(p_ref))::text)
 $f$;
 REVOKE ALL ON FUNCTION public.fn_executie_semnal_amprenta(text, text[], text, date, text, text) FROM PUBLIC, anon, authenticated, service_role;
 
@@ -531,13 +544,14 @@ BEGIN
   v_termen := (p_semnal ->> 'termen')::date;
   IF jsonb_typeof(p_semnal -> 'surse_consultate') = 'array' THEN
     IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_semnal -> 'surse_consultate') e(x)
-                WHERE jsonb_typeof(e.x) <> 'string' OR length(e.x #>> '{}') NOT BETWEEN 1 AND 200 OR (e.x #>> '{}') !~ '[^[:space:]]' OR (e.x #>> '{}') ~ '[[:cntrl:]]') THEN
-      RAISE EXCEPTION 'semnale: surse_consultate = listă de texte (1–200 de caractere, fără caractere de control)' USING ERRCODE = '22023';
+                WHERE jsonb_typeof(e.x) <> 'string' OR length(e.x #>> '{}') NOT BETWEEN 1 AND 200 OR public.fn_executie_semnal_spatii(e.x #>> '{}') IS NULL
+                   OR public.fn_executie_semnal_spatii(e.x #>> '{}') ~ '[[:cntrl:]]') THEN
+      RAISE EXCEPTION 'semnale: surse_consultate = listă de texte (1–200 de caractere, nu doar spațiu alb, fără caractere de control)' USING ERRCODE = '22023';
     END IF;
-    -- stocate în ordinea formei canonice, fără dubluri canonice (prima apariție rămâne), cu spațiile strânse: aceeași listă în altă ordine =
-    -- același rând, nu „actualizat”
+    -- stocate în ordinea formei canonice, fără dubluri canonice (prima apariție rămâne), cu spațiul alb normalizat (fn_executie_semnal_spatii):
+    -- aceeași listă în altă ordine = același rând, nu „actualizat”
     SELECT coalesce(array_agg(x.s ORDER BY x.c, x.ord), '{}'::text[]) INTO v_surse
-      FROM (SELECT DISTINCT ON (c) regexp_replace(btrim(e.x #>> '{}'), '[[:space:]]+', ' ', 'g') AS s, public.fn_executie_semnal_canonic(e.x #>> '{}') AS c, e.ord
+      FROM (SELECT DISTINCT ON (c) public.fn_executie_semnal_spatii(e.x #>> '{}') AS s, public.fn_executie_semnal_canonic(e.x #>> '{}') AS c, e.ord
               FROM jsonb_array_elements(p_semnal -> 'surse_consultate') WITH ORDINALITY e(x, ord)
              ORDER BY c, e.ord) x;
   ELSE
@@ -551,8 +565,8 @@ BEGIN
                                          dovada_fragment, dovada_ref, dovada_amprenta, termen, termen_baza, termen_confirmat, incertitudine, propunere,
                                          responsabil_employee_id, regula_versiune)
     VALUES (v_proiect, v_flux, v_tip, v_obiect, p_semnal ->> 'gravitate', btrim(p_semnal ->> 'titlu'), nullif(btrim(p_semnal ->> 'detalii'), ''),
-            p_semnal ->> 'constatare', v_surse, p_semnal ->> 'dovada_sursa', v_dovada_data, nullif(btrim(p_semnal ->> 'dovada_fragment'), ''),
-            nullif(btrim(p_semnal ->> 'dovada_ref'), ''), repeat('0', 32), v_termen, nullif(btrim(p_semnal ->> 'termen_baza'), ''),
+            p_semnal ->> 'constatare', v_surse, p_semnal ->> 'dovada_sursa', v_dovada_data, public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_fragment'),
+            public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_ref'), repeat('0', 32), v_termen, nullif(btrim(p_semnal ->> 'termen_baza'), ''),
             (p_semnal ->> 'termen_confirmat')::boolean, nullif(btrim(p_semnal ->> 'incertitudine'), ''), nullif(btrim(p_semnal ->> 'propunere'), ''),
             v_resp, p_semnal ->> 'regula_versiune')
     ON CONFLICT ON CONSTRAINT executie_semnale_cheie_uq DO NOTHING
@@ -568,9 +582,10 @@ BEGIN
   IF r.flux IS DISTINCT FROM v_flux THEN
     RAISE EXCEPTION 'semnale: tipul % e înregistrat pe fluxul %, nu %', v_tip, r.flux, v_flux USING ERRCODE = '22023';
   END IF;
-  -- 3. semnal închis de om cu ACEEAȘI dovadă: nu reapare (doar ultima_verificare, prin gardă)
+  -- 3. semnal închis de om cu ACEEAȘI dovadă: nu reapare (doar ultima_verificare, prin gardă); fragmentul / referința cu spațiul alb normalizat,
+  --    ca la stocare (aceeași funcție pe care o aplică și amprenta)
   v_amp := public.fn_executie_semnal_amprenta(p_semnal ->> 'constatare', v_surse, p_semnal ->> 'dovada_sursa', v_dovada_data,
-                                               nullif(btrim(p_semnal ->> 'dovada_fragment'), ''), nullif(btrim(p_semnal ->> 'dovada_ref'), ''));
+                                               public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_fragment'), public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_ref'));
   IF r.stare IN ('rezolvat', 'respins') AND r.dovada_amprenta = v_amp THEN
     UPDATE public.executie_semnale s SET ultima_verificare = now() WHERE s.id = r.id RETURNING * INTO r2;
     RETURN jsonb_build_object('ok', true, 'actiune', 'neschimbat_inchis', 'id', r2.id, 'stare', r2.stare, 'versiune', r2.versiune);
@@ -580,7 +595,7 @@ BEGIN
   UPDATE public.executie_semnale s
      SET gravitate = p_semnal ->> 'gravitate', titlu = btrim(p_semnal ->> 'titlu'), detalii = nullif(btrim(p_semnal ->> 'detalii'), ''),
          constatare = p_semnal ->> 'constatare', surse_consultate = v_surse, dovada_sursa = p_semnal ->> 'dovada_sursa', dovada_data = v_dovada_data,
-         dovada_fragment = nullif(btrim(p_semnal ->> 'dovada_fragment'), ''), dovada_ref = nullif(btrim(p_semnal ->> 'dovada_ref'), ''),
+         dovada_fragment = public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_fragment'), dovada_ref = public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_ref'),
          termen = v_termen, termen_baza = nullif(btrim(p_semnal ->> 'termen_baza'), ''), termen_confirmat = (p_semnal ->> 'termen_confirmat')::boolean,
          incertitudine = nullif(btrim(p_semnal ->> 'incertitudine'), ''), propunere = nullif(btrim(p_semnal ->> 'propunere'), ''),
          responsabil_employee_id = CASE WHEN s.responsabil_sursa = 'om' THEN s.responsabil_employee_id ELSE v_resp END,
@@ -700,8 +715,8 @@ COMMENT ON VIEW public.v_executie_semnale IS 'Execuție: semnalele agentului ver
 -- ── postcondiții ──
 DO $post$
 DECLARE v_s oid := 'public.executie_semnale'::regclass; v_j oid := 'public.executie_semnale_jurnal'::regclass; v_rau text;
-  v_fn name[] := ARRAY['fn_executie_semnal_drept', 'fn_executie_semnal_drept_id', 'fn_executie_semnal_tranzitie', 'fn_executie_semnal_canonic',
-    'fn_executie_semnal_amprenta', 'fn_executie_semnal_dif', 'fn_executie_semnal_garda', 'fn_executie_semnal_jurnal_garda',
+  v_fn name[] := ARRAY['fn_executie_semnal_drept', 'fn_executie_semnal_drept_id', 'fn_executie_semnal_tranzitie', 'fn_executie_semnal_spatii',
+    'fn_executie_semnal_canonic', 'fn_executie_semnal_amprenta', 'fn_executie_semnal_dif', 'fn_executie_semnal_garda', 'fn_executie_semnal_jurnal_garda',
     'fn_executie_semnal_fara_golire', 'fn_executie_semnal_scrie', 'fn_executie_semnal_stare']::name[];
 BEGIN
   IF (SELECT relrowsecurity FROM pg_class WHERE oid = v_s) IS NOT TRUE OR (SELECT relrowsecurity FROM pg_class WHERE oid = v_j) IS NOT TRUE
@@ -728,8 +743,8 @@ BEGIN
      OR NOT EXISTS (SELECT 1 FROM pg_class WHERE oid = 'public.v_executie_semnale'::regclass AND 'security_invoker=on' = ANY (reloptions)) THEN
     RAISE EXCEPTION '20270106a post: privilegii pe tabele / secvente / vedere: %', coalesce(v_rau, 'PUBLIC / coloane / secvente / security_invoker');
   END IF;
-  -- funcțiile: exact 11, search_path fix, DEFINER doar la drept / drept_id / scrie / stare, proprietar postgres, EXECUTE exact pe clasă
-  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_executie\_semnal\_%') <> 11
+  -- funcțiile: exact 12, search_path fix, DEFINER doar la drept / drept_id / scrie / stare, proprietar postgres, EXECUTE exact pe clasă
+  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_executie\_semnal\_%') <> 12
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (v_fn)
                  AND (p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
                       OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres'

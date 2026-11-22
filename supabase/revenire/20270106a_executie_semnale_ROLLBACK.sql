@@ -1,6 +1,6 @@
 -- Revenire 20270106a_executie_semnale. NEAPLICAT (ca și migrarea). Fără GO de execuție: doar la cererea explicită a owner-ului (supabase/revenire/README.md).
 -- Scoate TOT ce a creat migrarea: vederea v_executie_semnale, tabelele executie_semnale și executie_semnale_jurnal (cu politicile, trigger-ele,
--- cheile și indexurile lor) și cele 11 funcții fn_executie_semnal_*. Tabelele și funcțiile existente (executie_proiecte, employees, lanțul
+-- cheile și indexurile lor) și cele 12 funcții fn_executie_semnal_*. Tabelele și funcțiile existente (executie_proiecte, employees, lanțul
 -- 20261209a) NU se ating.
 -- Starea EXACTĂ a migrării e verificată înainte, pe DEFINIȚIILE EFECTIVE (nu pe nume / numere): coloanele fiecărui tabel (nume, tip, NOT NULL,
 -- valoarea implicită, identitatea, în ordine), TEXTUL fiecărei constrângeri (pg_get_constraintdef, validată) și al fiecărui index (pg_get_indexdef,
@@ -169,19 +169,20 @@ BEGIN
     IF v_rau IS NOT NULL THEN
       RAISE EXCEPTION '20270106a revenire: starea nu e cea din 20270106a (pasul %, trigger-e: %)', v_pas, v_rau;
     END IF;
-    -- funcțiile: exact cele 11, fiecare cu corpul revizuit (amprenta fără CR), limbajul, DEFINER-ul, search_path-ul, proprietarul, EXECUTE pe clasă
+    -- funcțiile: exact cele 12, fiecare cu corpul revizuit (amprenta fără CR), limbajul, DEFINER-ul, search_path-ul, proprietarul, EXECUTE pe clasă
     SELECT string_agg(a.fn, ', ') INTO v_rau FROM (VALUES
         -- AMPRENTE-START
         ('public.fn_executie_semnal_drept(bigint, integer)', 'sql', true, 'e518d28f2e083bbbb58f1a76f408a998'),
         ('public.fn_executie_semnal_drept_id(bigint)', 'sql', true, 'fef8852a3559d16ce8ef6414c8f633ff'),
         ('public.fn_executie_semnal_tranzitie(text, text, text)', 'sql', false, 'c36465e6826f935218a565bd7768df4b'),
-        ('public.fn_executie_semnal_canonic(text)', 'sql', false, 'dca255617fa2d2efd128b28d490bd217'),
-        ('public.fn_executie_semnal_amprenta(text, text[], text, date, text, text)', 'sql', false, '3795ba4c625627a385a0f56f85eb890b'),
+        ('public.fn_executie_semnal_spatii(text)', 'sql', false, '961be31c5f52fd6e7447565b95a433a6'),
+        ('public.fn_executie_semnal_canonic(text)', 'sql', false, 'd285f87e9432d94300b76522db780661'),
+        ('public.fn_executie_semnal_amprenta(text, text[], text, date, text, text)', 'sql', false, '050a504f3c525dd1eea737c82e05254d'),
         ('public.fn_executie_semnal_dif(jsonb, jsonb)', 'sql', false, 'e12240cbab35d2468a77fe093456ee84'),
         ('public.fn_executie_semnal_garda()', 'plpgsql', false, 'ead4b8688b66d0079dec64c5ee0fb297'),
         ('public.fn_executie_semnal_jurnal_garda()', 'plpgsql', false, '06bfbc1622933e7305aefe0cd2e16efb'),
         ('public.fn_executie_semnal_fara_golire()', 'plpgsql', false, 'cc70f302ba552a0d797b136a6df85b67'),
-        ('public.fn_executie_semnal_scrie(jsonb)', 'plpgsql', true, '04b908e217cdde2c6575c10896c350c7'),
+        ('public.fn_executie_semnal_scrie(jsonb)', 'plpgsql', true, '42cb5af3959d7083c228a094edfa6992'),
         ('public.fn_executie_semnal_stare(bigint, integer, text, text, text, text, integer, boolean)', 'plpgsql', true, '6342f1c7c7cec8ac479f3db9df86c7d2'),
         -- AMPRENTE-END
         ('', '', false, '')
@@ -196,7 +197,7 @@ BEGIN
                                  OR a.fn LIKE 'public.fn_executie_semnal_drept_id(%' OR a.fn LIKE 'public.fn_executie_semnal_stare(%')
                            AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e WHERE e.grantee = 0));
     IF v_rau IS NOT NULL
-       OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_semnal\_%') <> 11 THEN
+       OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_semnal\_%') <> 12 THEN
       RAISE EXCEPTION '20270106a revenire: starea nu e cea din 20270106a (pasul %, functii: %)', v_pas, coalesce(v_rau, 'alt numar');
     END IF;
     -- nimic din afara migrării nu depinde de obiectele ei: vederi (în afara celei proprii) / chei străine spre tabele, funcții care le numesc, alte politici
@@ -234,6 +235,7 @@ BEGIN
   DROP FUNCTION public.fn_executie_semnal_tranzitie(text, text, text);
   DROP FUNCTION public.fn_executie_semnal_amprenta(text, text[], text, date, text, text);
   DROP FUNCTION public.fn_executie_semnal_canonic(text);
+  DROP FUNCTION public.fn_executie_semnal_spatii(text);
   DROP FUNCTION public.fn_executie_semnal_dif(jsonb, jsonb);
   IF to_regclass('public.executie_semnale') IS NOT NULL OR to_regclass('public.executie_semnale_jurnal') IS NOT NULL OR to_regclass('public.v_executie_semnale') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_semnal\_%') THEN

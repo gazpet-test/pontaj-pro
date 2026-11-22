@@ -268,8 +268,8 @@ BEGIN
   RAISE NOTICE 'D4 OK';
 END $t$;
 
--- D5: respins nu reapare cu aceeași dovadă (neschimbat_inchis, starea rămâne); cu dovadă nouă se redeschide (nou, decizia veche în jurnal);
---     responsabilul stabilit de om nu e schimbat de agent
+-- D5: respins nu reapare cu aceeași dovadă (neschimbat_inchis, starea rămâne), nici cu diferențe de spațiu alb (spații, newline, tab, NBSP);
+--     cu dovadă nouă se redeschide (nou, decizia veche în jurnal); responsabilul stabilit de om nu e schimbat de agent
 DO $t$
 DECLARE s1 bigint := pg_temp.d_g('s1')::bigint; s2 bigint := pg_temp.d_g('s2')::bigint; r jsonb; st text; m text;
 BEGIN
@@ -280,6 +280,15 @@ BEGIN
   r := pg_temp.d_scrie(pg_temp.d_semnal(1, '{"gravitate": "critic", "surse_consultate": ["  erp:   EXECUTIE_PROIECTE.data_termen "], "dovada_fragment": "data_termen  =  2026-12-11"}'));
   SELECT stare INTO st FROM public.executie_semnale WHERE id = s1;
   IF r ->> 'actiune' <> 'neschimbat_inchis' OR st <> 'respins' THEN RAISE EXCEPTION 'D5 FAIL: o diferență nesemantică a redeschis semnalul: % / %', r, st; END IF;
+  -- runda 3 (Jakarinos r2): TOT spațiul alb — newline, tab, NBSP (  în JSON) — la capete ȘI în mijloc, pe fragment / surse / referință = aceeași dovadă;
+  -- textele rândului închis rămân neschimbate
+  r := pg_temp.d_scrie(pg_temp.d_semnal(1, '{"gravitate": "critic", "dovada_fragment": "\n\tdata_termen =\t2026-12-11\n", "surse_consultate": ["\nERP: executie_proiecte.data_termen\t"], "dovada_ref": "\n executie_proiecte.data_termen "}'));
+  SELECT stare INTO st FROM public.executie_semnale WHERE id = s1;
+  IF r ->> 'actiune' <> 'neschimbat_inchis' OR st <> 'respins' THEN RAISE EXCEPTION 'D5 FAIL: spațiul alb (newline / tab / NBSP) a redeschis semnalul: % / %', r, st; END IF;
+  IF (SELECT dovada_fragment || '|' || dovada_ref || '|' || array_to_string(surse_consultate, ',') FROM public.executie_semnale WHERE id = s1)
+     <> 'data_termen = 2026-12-11|executie_proiecte.data_termen|ERP: executie_proiecte.data_termen' THEN
+    RAISE EXCEPTION 'D5 FAIL: textele dovezii nu sunt normalizate / s-au schimbat pe rândul închis';
+  END IF;
   r := pg_temp.d_scrie(pg_temp.d_semnal(1, '{"gravitate": "critic", "dovada_fragment": "data_termen = 2026-12-05 (AA 3)", "dovada_data": "2026-11-22"}'));
   SELECT stare, stare_motiv INTO st, m FROM public.executie_semnale WHERE id = s1;
   IF r ->> 'actiune' <> 'redeschis' OR st <> 'nou' OR m IS NOT NULL THEN RAISE EXCEPTION 'D5 FAIL: dovada nouă nu redeschide: % / %', r, st; END IF;
