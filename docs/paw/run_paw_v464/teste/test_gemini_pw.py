@@ -616,6 +616,9 @@ def zona_cu(extra="", editor=EDITOR_HTML, zona_atr=""):
 
 # linia din _semnal care alege ce VALORI de atribut se verifica (pasul 4); r9: + exceptia exacta _valoare_permisa. Mutantii o rescriu.
 LINIA_PAS4 = "        if k in ATRIBUTE_AFISATE_SEPARAT or k in SEMN_ATR_VALOARE or not v or _valoare_permisa(n, k):"
+# linia din _marcaj_permis care cere elementul IZOLAT (r9); r10: + atributele din campul `goale`, doar cu valoare goala / spatii albe HTML
+LINIA_IZOLAT = ('        if izolat and any(a != k and a != "class" and not (_generat(a) and v == "") and not (a in goale and VALOARE_SPATII.fullmatch(v))'
+                ' for a, v in n.attrs.items()):')
 
 
 def mutant(inlocuiri, nume="gemini_pw_mutant"):
@@ -819,9 +822,11 @@ class TestStructuraCiorna(unittest.TestCase):
         # contine chiar cuvantul "file", de aceea nu poate sta in nicio lista alba si are regula lui, legata de element si de valoarea goala
         # r8: + marcajul vazut la 5a pe 22.11.2026 (stare_22_11_dupa_instalare.txt, linia 1); r9: cu valoarea EXACTA citita de chat din pagina
         # (atribute_complete_22_11.txt) si element izolat; cele trei exceptii r9 sunt EXACT atributele reale (scrise de mana din acel fisier)
-        self.assertEqual([(t, c, n, f.pattern, iz) for t, c, n, f, iz in gp.MARCAJE_PERMISE],
-                         [("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone", "", False),
-                          ("file-drop-indicator", (), "data-filedrop-id", re.escape("chat-window-input-container"), True)])
+        # r10: + campul `goale` - pe indicator doar `style` (gol / spatii albe HTML; 5g, atribute_5g_22_11.txt), pe div-ul r5 nimic
+        self.assertEqual([(t, c, n, f.pattern, iz, g) for t, c, n, f, iz, g in gp.MARCAJE_PERMISE],
+                         [("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone", "", False, ()),
+                          ("file-drop-indicator", (), "data-filedrop-id", re.escape("chat-window-input-container"), True, ("style",))])
+        self.assertEqual(gp.VALOARE_SPATII.pattern, "[ \\t\\n\\r\\f]*")
         self.assertEqual(gp.VALORI_PERMISE, (("gem-icon-button", "arialabel", "incarcare si instrumente", (("ariahaspopup", "menu"),)),))
         self.assertEqual(gp.CLASE_EDITOR_PERMISE, ("input-url-linkification-enabled", "inline-chips-enabled"))
         self.assertEqual(gp._cuvant("xapfileselectordropzone"), "file")
@@ -2709,7 +2714,7 @@ class TestAtributeComplete2211(unittest.TestCase):
             ([('VALOARE_FILEDROP = re.compile(re.escape("chat-window-input-container"))', 'VALOARE_FILEDROP = re.compile(r"[A-Za-z0-9_-]{0,64}")')],
              (zona_cu(FDI_22_11 % ("1", "")), zona_cu(FDI_22_11 % ("drop_zone-7", "")))),
             # (M2) fara "niciun alt atribut": un atribut in plus (fara cuvant), gol sau Angular negol, pleaca
-            ([('        if izolat and any(a != k and a != "class" and not (_generat(a) and v == "") for a, v in n.attrs.items()):', "        if False:")],
+            ([(LINIA_IZOLAT, "        if False:")],
              (fdi_real(' data-x="1"'), fdi_real(' jslog="1"'), fdi_real(' _ngcontent-ng-c1="x"'), fdi_real(' trace=""'))),
             # (M3) fara "niciun copil": un copil neutru pleaca
             ([('        if izolat and any(c.tag != "#text" or _ascii(c.date) for c in n.copii):', "        if False:")],
@@ -2755,6 +2760,220 @@ class TestAtributeComplete2211(unittest.TestCase):
         # fara nicio exceptie r9 (= v4.6.4 instalat): pagina reala e refuzata cu cele trei linii, deci exceptiile sunt cele care o lasa sa treaca
         with mock.patch.multiple(gp, **REGULI_V464):
             self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_22_11_completa())), ("ciorna_necunoscuta", []))
+
+
+# --- r10 (v4.6.4c, 22.11.2026): 5g PICAT pe v4.6.4b instalat (5B0CCD48). Indicatorul de drop de pe chatul NOU deschis de script, cu atributele
+# copiate EXACT din paw_v464_calibrare\atribute_5g_22_11.txt (citite de chat prin CDP, doar citire): fata de r9 are in plus `style=""` (GOL);
+# clasa Angular ng-tns-...-9 (nu -6) e generata si nu conteaza ---
+FDI_5G_ATR = (' _ngcontent-ng-c2231844863="" _nghost-ng-c3042269636="" class="ng-tns-c3042269636-9 ng-tns-c2231844863-2 ng-star-inserted"'
+              ' data-filedrop-id="' + FILEDROP_REAL + '" style=""')
+FDI_5G = "<file-drop-indicator" + FDI_5G_ATR + "></file-drop-indicator>"
+# motivul si sursa asteptate cand `style` nu e acceptat (scrise de mana, regula din r9: orice abatere -> numele data-filedrop-id in cautare;
+# `style` apare in {...} fiindca nu e generat si nu e in semnatura). 5g n-a dat captura `stare`: asteptarea e dedusa din regulile r9, declarat.
+TOKEN_FDI_STYLE = "token_file:file-drop-indicator{data-filedrop-id style}"
+SURSA_FDI = "nume_atribut:data-filedrop-id=" + FILEDROP_REAL
+# r10 exact asa cum e in cod (6 campuri); mutantul care scoate `style` din `goale` = regulile din v4.6.4b instalat
+MARCAJ_FDI_R10 = '"data-filedrop-id", VALOARE_FILEDROP, True, ("style",)),'
+MARCAJ_FDI_FARA_GOALE = '"data-filedrop-id", VALOARE_FILEDROP, True, ()),'
+NBSP, VT, ZWSP, SPATIU_IDEOGRAFIC = chr(0xA0), chr(0x0B), chr(0x200B), chr(0x3000)
+# `style` cu continut care NU contine textul "url(" (deci trece de pasul 0, fundal) si nici cuvinte de atasament / nume de fisier (deci trece
+# de pasul 4): DOAR regula `izolat` il opreste (verificat in test pe un element oarecare). "u\72l(" = url( scris cu escape CSS (\72 = r),
+# -moz-element() / var() = fundal fara url( (fara "image" / "previz", care sunt cuvinte de atasament si ar fi oprite de pasul 4)
+STYLE_DOAR_IZOLAT = ("display:none", "background:u\\72l(/resource/1234)", "background:-moz-element(#x)",
+                     "background:var(--fundal-x)", "x", ";")
+# `style` alcatuit doar din spatii care NU sunt spatii albe HTML (NBSP, si ca entitate; tab vertical; latime zero; spatiu ideografic)
+STYLE_SPATII_NEHTML = (NBSP, "&#160;", VT, ZWSP, SPATIU_IDEOGRAFIC, " " + NBSP + " ")
+
+
+def fdi_style(valoare, atr=FDI_REAL_ATR, inauntru=""):
+    # indicatorul real (r9) + style="<valoare>" (valoarea scrisa ca in HTML: entitatile se decodeaza la citire)
+    return "<file-drop-indicator" + atr + ' style="' + valoare + '">' + inauntru + "</file-drop-indicator>"
+
+
+class TestStyleGol5g(unittest.TestCase):
+    """r10 (v4.6.4c): `style` pe indicatorul de drop e acceptat DOAR gol sau din spatii albe HTML; orice continut = semnal ca in r9."""
+
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def nod(self, html):
+        a = gp._Arbore()
+        a.feed(html)
+        return a.radacina.copii[0]
+
+    def stare_linii(self, html, mod=gp):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            mod.stare(FakePg(html))
+        return out.getvalue().splitlines()
+
+    def test_5g_elementul_real_trece_pe_chatul_nou(self):
+        self.assertEqual(self.nod(FDI_5G).attrs["style"], "")
+        self.assertIsNone(gp._semnal(self.nod(FDI_5G)))
+        # pe regulile din v4.6.4b (fara `goale`): elementul real e refuzat - reproducerea lui 5g
+        v464b = mutant([(MARCAJ_FDI_R10, MARCAJ_FDI_FARA_GOALE)])
+        self.assertEqual(v464b._semnal(self.nod(FDI_5G)), (TOKEN_FDI_STYLE, SURSA_FDI))
+        self.assertIsNone(v464b._semnal(self.nod(FDI_REAL)))                  # fara style: trecea si pe v4.6.4b
+        for stare in ("i", "ii", "iii"):
+            html = pagina_22_11_completa(stare, fdi=FDI_5G)
+            i = self.an(html)
+            self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"], i["necunoscute"]), (1, 1, 0, 0, 0),
+                             msg=(stare, i["necunoscute_detalii"]))
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html, dupa_goto=html)), (None, ACTIUNI_TRIMITERE), msg=stare)
+            # scenariul 5g: tab-ul curent fara style (r9), chatul NOU deschis de script cu style="" -> trece pe r10, refuz dupa goto pe v4.6.4b
+            pg = lambda: FakePg(pagina_22_11_completa(stare), dupa_goto=pagina_22_11_completa(fdi=FDI_5G))
+            self.assertEqual(ruleaza_trimite(gp, pg()), (None, ACTIUNI_TRIMITERE), msg=stare)
+            self.assertEqual(ruleaza_trimite(v464b, pg()), ("ciorna_necunoscuta", ["goto"]), msg=stare)
+            self.assertEqual(self.an(pagina_22_11_completa(stare, fdi=FDI_5G), mod=v464b)["necunoscute_detalii"], [TOKEN_FDI_STYLE])
+        linii = self.stare_linii(pagina_22_11_completa(fdi=FDI_5G))
+        self.assertIn("necunoscute in zona: 0", linii)
+        self.assertIn("paza ciorna: OK (trimite ar continua)", linii)
+        self.assertFalse(any(l.startswith(("  necunoscut", "    sursa")) for l in linii), linii)
+        linii = self.stare_linii(pagina_22_11_completa(fdi=FDI_5G), mod=v464b)
+        self.assertIn("  necunoscut " + TOKEN_FDI_STYLE, linii)
+        self.assertIn("    sursa " + SURSA_FDI, linii)
+        # cu un chip real pe chatul nou (5b-5d pe pagina 5g): tot ciorna_cu_atasamente
+        for n, fisiere in ((1, ("a.txt",)), (2, ("a.txt", "b.png"))):
+            html = pagina_22_11_completa(fdi=FDI_5G, extra_zona="".join(chip(f) for f in fisiere))
+            self.assertEqual(self.an(html)["atasamente"], n)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_cu_atasamente", []))
+            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_22_11_completa(), dupa_goto=html)), ("ciorna_cu_atasamente", ["goto"]))
+        i = self.an(pagina_22_11_completa(fdi=fdi_style("", FDI_5G_ATR.replace(' style=""', ""), chip("a.txt"))))
+        self.assertEqual((i["atasamente"], i["necunoscute_detalii"]), (1, [TOKEN_FDI_STYLE]))
+
+    def test_style_gol_sau_spatii_albe_html_trece(self):
+        # calea legitima (L20): gol, fara valoare, spatii albe HTML (spatiu, \t, \n, \r, \f; si ca entitate), cu / fara clasele generate
+        valori = ("", " ", "   ", "\t", "\n", "\r\n", "\f", " \t\n\r\f ", "&#32;", "&#9;")
+        for v in valori:
+            for atr in (FDI_REAL_ATR, ' data-filedrop-id="%s"' % FILEDROP_REAL):
+                html = fdi_style(v, atr)
+                self.assertIsNone(gp._semnal(self.nod(html)), msg=repr(v))
+                i = self.an(zona_cu(html))
+                self.assertEqual(i["necunoscute"], 0, msg=(repr(v), i["necunoscute_detalii"]))
+        self.assertEqual(self.an(zona_cu("<file-drop-indicator" + FDI_REAL_ATR + " style></file-drop-indicator>"))["necunoscute"], 0)
+        self.assertEqual(self.an(zona_cu(FDI_REAL))["necunoscute"], 0)                # r9 fara style: neschimbat
+
+    def test_style_cu_continut_refuz_ca_in_r9(self):
+        # scris de mana: orice style cu continut -> elementul nu e izolat -> token_file pe numele data-filedrop-id (primul cuvant din
+        # TOKENI_ATAS, inaintea lui "upload" din valoare); url( literal -> fundal (pasul 0, inaintea izolarii)
+        cazuri = [(v, TOKEN_FDI_STYLE, SURSA_FDI) for v in
+                  ("--uploader-height: 112px;", "--uploader-height: 112px", "oferta.docx", "--x: oferta.docx",
+                   "background:var(--x) /* oferta.docx */") + STYLE_DOAR_IZOLAT + STYLE_SPATII_NEHTML] + [
+            ("background: url(/resource/1234)", "fundal:file-drop-indicator", "style:background: url(/resource/1234)"),
+            ("background-image: URL(blob:https://gemini.google.com/x)", "fundal:file-drop-indicator",
+             "style:background-image: url(blob:https://gemini.google.com/x)"),
+        ]
+        # valorile STYLE_DOAR_IZOLAT / STYLE_SPATII_NEHTML nu sunt semnal pe un element oarecare (nici fundal, nici cuvant, nici fisier):
+        # pe indicator le opreste DOAR regula izolarii (de aceea prind mutantii M13 / M15)
+        for v in STYLE_DOAR_IZOLAT + STYLE_SPATII_NEHTML:
+            self.assertIsNone(gp._semnal(self.nod('<gem-icon style="%s"></gem-icon>' % v)), msg=repr(v))
+        for v, m, s in cazuri:
+            html = fdi_style(v)
+            i = self.an(zona_cu(html))
+            self.assertEqual((i["atasamente"], i["semne"]), (0, 0), msg=repr(v))
+            self.assertEqual((i["necunoscute_detalii"], i["necunoscute_surse"]), ([m], [s]), msg=repr(v))
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(html))), ("ciorna_necunoscuta", []), msg=repr(v))
+            # pe chatul nou (ca la 5g): refuz dupa goto, inainte de click / tastatura
+            self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_22_11_completa(), dupa_goto=pagina_22_11_completa(fdi=html))),
+                             ("ciorna_necunoscuta", ["goto"]), msg=repr(v))
+            with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", gp.STRUCTURA_CUNOSCUTA + (m.split(":", 1)[1],)):
+                self.assertEqual(self.an(zona_cu(html))["necunoscute_detalii"], [m], msg=repr(v))
+        # style gol NU acopera alte abateri: alt atribut (si gol), alt nume asemanator, clasa negenerata, copil -> refuz ca in r9
+        alte = (
+            (FDI_5G.replace(' style=""', ' style="" data-x="1"'), "token_file:file-drop-indicator{data-filedrop-id data-x style}"),
+            (FDI_5G.replace(' style=""', ' style="" trace=""'), "token_file:file-drop-indicator{data-filedrop-id style trace}"),
+            (FDI_5G.replace(' style=""', ' data-style=""'), "token_file:file-drop-indicator{data-filedrop-id data-style}"),
+            (FDI_5G.replace(' style=""', ' style-x=""'), "token_file:file-drop-indicator{data-filedrop-id style-x}"),
+            (FDI_5G.replace(' style=""', ' xstyle=""'), "token_file:file-drop-indicator{data-filedrop-id xstyle}"),
+            (FDI_5G.replace('ng-star-inserted"', 'ng-star-inserted x"'), "token_file:file-drop-indicator{x data-filedrop-id style}"),
+            (FDI_5G.replace(FILEDROP_REAL, FILEDROP_REAL + "-2"), TOKEN_FDI_STYLE),
+        )
+        for html, m in alte:
+            i = self.an(zona_cu(html))
+            self.assertEqual(i["necunoscute_detalii"], [m], msg=html)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(html))), ("ciorna_necunoscuta", []), msg=html)
+        i = self.an(zona_cu(FDI_5G.replace("></file-drop-indicator>", "><span>oferta.docx</span></file-drop-indicator>")))
+        self.assertEqual(i["necunoscute_detalii"], [TOKEN_FDI_STYLE, "text_fisier:oferta.docx"])
+        # style gol pe alt element cu data-filedrop-id (nu e indicatorul): tot semnal
+        i = self.an(zona_cu('<div data-filedrop-id="%s" style=""></div>' % FILEDROP_REAL))
+        self.assertEqual(i["necunoscute_detalii"], ["token_file:div{data-filedrop-id style}"])
+
+    def test_5e_style_uploader_pe_zona_si_editor_ramane_refuz(self):
+        # decizia din 22.11 (5e): dupa scoaterea manuala a fisierelor, zona si editorul pastreaza style="--uploader-height: 112px;" pana la F5
+        # -> refuz (fals, dar sigur); r10 NU excepteaza nimic acolo (RUNBOOK: F5 inainte de trimitere)
+        st = ' style="--uploader-height: 112px;"'
+        sursa = "valoare_atribut:style=--uploader-height: 112px;"
+        ed = pagina_22_11_completa(editor_atr=EDITOR_REAL_ATR.replace(' style=""', st))
+        zona = pagina(zona_atr=st)
+        cazuri = ((ed, LINIA_3_INTREAGA.replace("token_chip", "token_upload")), (zona, "token_upload:input-area-v2{style}"),
+                  (pagina_22_11_completa(fdi=FDI_5G, editor_atr=EDITOR_REAL_ATR.replace(' style=""', st)), LINIA_3_INTREAGA.replace("token_chip", "token_upload")))
+        for html, m in cazuri:
+            i = self.an(html)
+            self.assertEqual((i["necunoscute_detalii"], i["necunoscute_surse"]), ([m], [sursa]), msg=m)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=m)
+        # dupa F5 (style gol pe editor, ca in pagina reala): trece
+        self.assertEqual(self.an(pagina_22_11_completa(fdi=FDI_5G))["necunoscute"], 0)
+
+    def test_constanta_spatiilor_sta_doar_in_regula_marcajului(self):
+        # structural (L19): VALOARE_SPATII definita o data si citita o singura data, in _marcaj_permis (linia izolarii); campul `goale`
+        # e citit doar acolo
+        with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
+            src = f.read().decode("ascii")
+        linii = [l.rstrip("\r") for l in src.split("\n")]
+        cod = [l for l in linii if not l.lstrip().startswith("#")]
+        i0 = linii.index("def _marcaj_permis(n, k):")
+        i1 = next(k for k in range(i0 + 1, len(linii)) if linii[k].startswith("def "))
+        corp = [l for l in linii[i0:i1] if not l.lstrip().startswith("#")]
+        self.assertEqual(sum(l.count("VALOARE_SPATII") for l in cod), 2)
+        self.assertEqual(sum(l.startswith("VALOARE_SPATII = ") for l in cod), 1)
+        self.assertEqual(sum(l.count("VALOARE_SPATII.fullmatch(") for l in corp), 1)
+        self.assertIn(LINIA_IZOLAT, corp)
+        # campul `goale` (cuvantul apare si in comentarii / docstring-uri romanesti): despachetat o data, citit o data, ambele in _marcaj_permis
+        despachetare = "    for tag, clase, nume, forma, izolat, goale in MARCAJE_PERMISE:"
+        self.assertEqual(sum(l == despachetare for l in cod), 1)
+        self.assertIn(despachetare, corp)
+        self.assertEqual(sum(l.count(" in goale") for l in cod), 1)
+        self.assertEqual(sum(l.count(" in goale") for l in corp), 1)
+        self.assertIn(MARCAJ_FDI_R10, src)
+
+    def test_mutanti_r10_lasa_brief_ul_sa_plece(self):
+        # fiecare mutant largeste exceptia `style`; scenariul lui pleaca la Enter pe mutant, refuz fara actiuni pe cod; toti lasa pagina 5g
+        # sa treaca (deci difera doar pe abateri)
+        z = lambda v: zona_cu(fdi_style(v))
+        url_escape = z("background:u\\72l(/resource/1234)")
+        cazuri = (
+            # (M13) style acceptat cu ORICE valoare: url( cu escape CSS, -moz-element(), var(), display:none ... pleaca
+            ([("not (a in goale and VALOARE_SPATII.fullmatch(v))", "not (a in goale)")], tuple(z(v) for v in STYLE_DOAR_IZOLAT)),
+            # (M14) fullmatch -> match (prefix, neancorat; L13): orice valoare are prefixul gol -> pleaca
+            ([("VALOARE_SPATII.fullmatch(v)", "VALOARE_SPATII.match(v)")], (url_escape, z("display:none"))),
+            # (M15) spatiile Unicode (\s) in loc de spatiile albe HTML: NBSP / tab vertical / spatiul ideografic pleaca
+            ([('VALOARE_SPATII = re.compile(r"[ \\t\\n\\r\\f]*")', 'VALOARE_SPATII = re.compile(r"\\s*")')],
+             (z(NBSP), z("&#160;"), z(VT), z(SPATIU_IDEOGRAFIC))),
+            # (M16) orice atribut gol acceptat, nu doar `style`: trace="" / data-x="" pe indicator pleaca
+            ([("not (a in goale and VALOARE_SPATII.fullmatch(v))", "not (VALOARE_SPATII.fullmatch(v))")],
+             (zona_cu(FDI_5G.replace(' style=""', ' style="" trace=""')), zona_cu(FDI_5G.replace(' style=""', ' data-x=""')))),
+            # (M17) numele comparat ca subsir: data-style="" / xstyle="" pleaca
+            ([("not (a in goale and VALOARE_SPATII", "not (any(g in a for g in goale) and VALOARE_SPATII")],
+             (zona_cu(FDI_5G.replace(' style=""', ' data-style=""')), zona_cu(FDI_5G.replace(' style=""', ' xstyle=""')))),
+        )
+        for inlocuiri, htmluri in cazuri:
+            mut = mutant(inlocuiri)
+            for html in htmluri:
+                self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=html[-200:])
+                cod_m, act_m = ruleaza_trimite(mut, FakePg(html))
+                self.assertIsNone(cod_m, msg=(inlocuiri[0][1], html[-200:], cod_m))
+                self.assertIn("press Enter", act_m, msg=html[-200:])
+            for stare in ("i", "iii"):
+                self.assertEqual(ruleaza_trimite(mut, FakePg(pagina_22_11_completa(stare), dupa_goto=pagina_22_11_completa(fdi=FDI_5G))),
+                                 (None, ACTIUNI_TRIMITERE), msg=inlocuiri[0][1])
+        # url( LITERAL ramane refuzat si pe M13 (pasul 0, fundal, inaintea izolarii): doua bariere; de aceea testul pe url( foloseste si
+        # forma cu escape CSS, pe care o opreste DOAR regula izolarii
+        m13 = mutant(cazuri[0][0])
+        self.assertEqual(ruleaza_trimite(m13, FakePg(z("background: url(/resource/1234)"))), ("ciorna_necunoscuta", []))
+        self.assertEqual(self.an(z("background: url(/resource/1234)"), mod=m13)["necunoscute_detalii"], ["fundal:file-drop-indicator"])
+        # fara exceptia r10 (= v4.6.4b instalat): pagina 5g e refuzata, deci `goale` e cea care o lasa sa treaca
+        v464b = mutant([(MARCAJ_FDI_R10, MARCAJ_FDI_FARA_GOALE)])
+        self.assertEqual(ruleaza_trimite(v464b, FakePg(pagina_22_11_completa(fdi=FDI_5G))), ("ciorna_necunoscuta", []))
 
 
 if __name__ == "__main__":

@@ -104,6 +104,14 @@
 #       `inline-chips-enabled-x`, acelasi token pe alt element = semnal.
 #   Toate trei stau in aceeasi functie _semnal (cate o exceptie pe element, prin ajutatoare pure apelate doar de acolo); afisarea sursei (r8)
 #   ramane. Pe pagina reconstituita din atributele complete: 0 necunoscute, `paza ciorna: OK`; cu un chip real tot `ciorna_cu_atasamente`.
+# v4.6.4c / r10 (22.11.2026, dupa 5g PICAT pe v4.6.4b instalat, 5B0CCD48): pe chatul NOU deschis de script, <file-drop-indicator> are, pe
+#   langa atributele reale din r9, `style=""` (GOL; paw_v464_calibrare\atribute_5g_22_11.txt, citit de chat prin CDP, doar citire). Regula
+#   `izolat` din r9 il refuza (orice alt atribut = semnal). Acum marcajul are al saselea camp, `goale`: atributele care pot sta pe elementul
+#   izolat DOAR cu valoarea goala sau doar spatii albe HTML (spatiu, \t, \n, \r, \f - VALOARE_SPATII, fara NBSP / latime zero / \s Unicode);
+#   pentru indicator = ("style",), pentru div-ul r5 = (). Orice `style` cu continut (url(, escape CSS, var(), nume de fisier,
+#   `--uploader-height: 112px`, display:none) -> elementul nu mai e izolat -> numele `data-filedrop-id` intra in cautare = token_file, ca azi.
+#   5e (style `--uploader-height: 112px;` ramas pe zona si pe editor dupa scoaterea manuala a fisierelor, pana la F5) ramane REFUZ (decizie
+#   chat 22.11): nu se excepteaza nimic acolo - RUNBOOK: F5 inainte de trimitere.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata
@@ -178,12 +186,16 @@ ATRIBUTE_AFISATE_SEPARAT = ("class", "id")                   # afisate in {...} 
 # prin campul claselor = ()) si a atributelor generate `_ng*` cu valoare GOALA, si NICIUN copil (element sau text cu continut). Indicatorul real
 # e exact asa; un indicator cu un copil (ex. numele unui fisier), cu un atribut in plus sau cu alta valoare NU e marcaj: numele `data-filedrop-id`
 # intra in cautare si da `token_file:...` ca pana acum (iar copilul se verifica si el, element cu element). Div-ul r5 nu e izolat (are `jslog`).
-# (tag, clasele EXACTE fara cele generate, numele atributului, forma valorii, izolat): acceptat DOAR asa.
+# r10 (v4.6.4c): al saselea camp, `goale`: atributele (nume EXACT) care pot sta in plus pe elementul IZOLAT doar cu valoarea bruta goala sau
+# doar din spatii albe HTML (VALOARE_SPATII: spatiu, \t, \n, \r, \f; NU NBSP, latime zero sau alt spatiu Unicode). Indicatorul pe chatul nou
+# deschis de script (5g, atribute_5g_22_11.txt) are `style=""` -> ("style",). Un `style` cu orice continut -> elementul nu e izolat -> semnal.
+# (tag, clasele EXACTE fara cele generate, numele atributului, forma valorii, izolat, goale): acceptat DOAR asa.
 VALOARE_GOALA = re.compile(r"")                               # exact ""
 VALOARE_FILEDROP = re.compile(re.escape("chat-window-input-container"))     # r9: EXACT valoarea reala (nu un identificator oarecare)
+VALOARE_SPATII = re.compile(r"[ \t\n\r\f]*")                  # r10: gol sau doar spatii albe HTML (L13: clasa explicita, nu \s)
 MARCAJE_PERMISE = (
-    ("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone", VALOARE_GOALA, False),    # r5 (21.11.2026)
-    ("file-drop-indicator", (), "data-filedrop-id", VALOARE_FILEDROP, True),                                   # r8 + r9 (22.11.2026)
+    ("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone", VALOARE_GOALA, False, ()),      # r5 (21.11.2026)
+    ("file-drop-indicator", (), "data-filedrop-id", VALOARE_FILEDROP, True, ("style",)),                             # r8 + r9 + r10 (22.11)
 )
 # r9: VALORI de atribut cu cuvant de atasament care NU sunt fisiere - lista INCHISA, citita din pagina reala (chat, CDP, 22.11.2026, doar citire):
 # butonul "+" `<gem-icon-button>` are `arialabel="Incarcare si instrumente"` (atribut Angular FARA cratima - nu e `aria-label`, deci nu e
@@ -534,14 +546,16 @@ def _marcaj_permis(n, k):
     # cere element izolat (r9) - fara niciun alt atribut in afara clasei si a celor generate `_ng*` GOALE, fara niciun copil (element sau text
     # cu continut). Doar atunci numele lui nu intra in cautarea cuvintelor de atasament; valoarea ramane verificata in _semnal (pasul 4) ca
     # orice alta valoare. Orice abatere = atributul se verifica ca oricare altul (refuz).
-    for tag, clase, nume, forma, izolat in MARCAJE_PERMISE:
+    # r10: pe elementul izolat mai pot sta DOAR atributele din campul `goale` (nume exact), cu valoarea bruta goala / doar spatii albe HTML
+    # (VALOARE_SPATII, fullmatch); orice continut in ele = elementul nu e izolat (refuz).
+    for tag, clase, nume, forma, izolat, goale in MARCAJE_PERMISE:
         if k != nume:
             continue
         if n.tag != tag or set(c for c in _clase(n) if not _generat(c)) != set(clase):
             continue
         if not forma.fullmatch(n.attrs.get(k) or ""):
             continue
-        if izolat and any(a != k and a != "class" and not (_generat(a) and v == "") for a, v in n.attrs.items()):
+        if izolat and any(a != k and a != "class" and not (_generat(a) and v == "") and not (a in goale and VALOARE_SPATII.fullmatch(v)) for a, v in n.attrs.items()):
             continue
         if izolat and any(c.tag != "#text" or _ascii(c.date) for c in n.copii):
             continue
