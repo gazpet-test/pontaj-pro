@@ -12,6 +12,7 @@ Fiecare caz e un artefact minim (cu garda de livrare). Asteptat:
   * apelul fara tag / cu argumente in plus = cod de utilizare 2.
 """
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -152,9 +153,11 @@ def acord_plafon():
         if rc_vechi != 0:
             print(f"info acord {rel}: picat deja cu regulile plafonului (cod {rc_vechi}), nu se compara")
             continue
-        rc_ok, out_ok = iesire(cale, "reg_test", "--plafon-tranzactie-ms", d)
+        # runda 18 a runnerului: fisierele care declara plafonul extins se valideaza cu --plafon-extins (acordul declaratiei: plafon_extins())
+        extins = ("--plafon-extins",) if "--plafon-extins" in text else ()
+        rc_ok, out_ok = iesire(cale, "reg_test", "--plafon-tranzactie-ms", d, *extins)
         alt = "5000" if d != "5000" else "2000"
-        rc_alt, out_alt = iesire(cale, "reg_test", "--plafon-tranzactie-ms", alt)
+        rc_alt, out_alt = iesire(cale, "reg_test", "--plafon-tranzactie-ms", alt, *extins)
         bun = rc_ok == 0 and rc_alt == 1 and "PLAFON_DIFERIT" in out_alt
         print(f"{'ok' if bun else 'ESEC'} acord {rel}: cu {d} cod {rc_ok}, cu {alt} cod {rc_alt}{'' if bun else ' — ' + (out_ok + ' | ' + out_alt)[:200]}")
         if not bun:
@@ -516,6 +519,93 @@ def identitate_r19():
     return esecuri
 
 
+# Runda 18 a runnerului (22.11.2026, plafonul EXTINS, docs/LIVRARE_L15_V2.md §9): acordul DECLARATIEI (--plafon-extins), pe langa acordul
+# valorii. Cazuri minime scrise de mana + cele trei migrari reale care cer 15000 si declara optiunea + toate celelalte fisiere din repo
+# (cu --plafon-extins refuzate: niciunul nu declara optiunea; fara ea neschimbate). Valoarea 15000 nu e cunoscuta validatorului (o impune
+# runnerul); aici conteaza doar acordul declaratiei.
+EXTINS_REALE = ("supabase/migrations/20270105a_executie_rest_decontat.sql", "supabase/migrations/20270105b_executie_proiect_configurare.sql",
+                "supabase/migrations/20270106a_executie_semnale.sql")
+
+
+def plafon_extins():
+    esecuri = []
+
+    def rez(et, bun, detaliu=""):
+        print(f"{'ok' if bun else 'ESEC'} extins: {et}{'' if bun else ' — ' + detaliu[:240]}")
+        if not bun:
+            esecuri.append("extins: " + et)
+
+    def caz(et, text, args, exp, frag=None):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "a.sql"
+            f.write_bytes((GARDA + text).encode("utf-8"))
+            rc, out = iesire(f, "reg_test", *args)
+        rez(f"{et}: cod {rc} (asteptat {exp})", rc == exp and (frag is None or frag in out), out)
+
+    ANTET = "-- Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 15000 --plafon-extins --amprenta-globala <md5> --diferente-globale ...\n"
+    P15 = ("--plafon-tranzactie-ms", "15000")
+    FLAG = ("--plafon-extins",)
+    caz("cere 15000 + declara, runnerul 15000 + flag", ANTET + garda_plafon(15000), P15 + FLAG, 0)
+    caz("cere 15000 + declara, runnerul 15000 FARA flag", ANTET + garda_plafon(15000), P15, 1, "PLAFON_EXTINS_DIFERIT: fișierul declară")
+    caz("cere 15000 fara declaratie, runnerul 15000 + flag", garda_plafon(15000), P15 + FLAG, 1, "PLAFON_EXTINS_DIFERIT: runnerul livrează")
+    caz("cere 15000 fara declaratie, runnerul 15000 fara flag (doar acordul valorii; runnerul refuza 15000 fara flag)", garda_plafon(15000), P15, 0)
+    caz("cere 5000 + declara flag-ul, runnerul 15000 + flag (valoarea intai)", ANTET + garda_plafon(5000), P15 + FLAG, 1, "PLAFON_DIFERIT: fișierul cere 5000 ms")
+    caz("cere 5000 fara declaratie, runnerul 5000 + flag", garda_plafon(5000), ("--plafon-tranzactie-ms", "5000") + FLAG, 1, "PLAFON_EXTINS_DIFERIT: runnerul livrează")
+    caz("declaratia intr-un comentariu oriunde, runnerul fara flag (fail-closed)", garda_plafon(5000) + "-- nota: --plafon-extins\n",
+        ("--plafon-tranzactie-ms", "5000"), 1, "PLAFON_EXTINS_DIFERIT: fișierul declară")
+    caz("flag-ul inaintea celorlalte argumente", ANTET + garda_plafon(15000), FLAG + P15, 0)
+    caz("--fara-plafon pe o declaratie fara garda (declaratia e cerere)", "-- Runner: --plafon-extins\nSELECT 1;\n", ("--fara-plafon",), 1, "PLAFON_LIPSA")
+    caz("--plafon-extins singur", garda_plafon(15000), FLAG, 2)
+    caz("--plafon-extins cu --plafon-tranzactie (forma veche)", garda_plafon(15000), ("--plafon-tranzactie",) + FLAG, 2)
+    caz("--plafon-extins de doua ori", ANTET + garda_plafon(15000), P15 + FLAG + FLAG, 2)
+    caz("fara nicio cerere si fara declaratie, runnerul cu flag", "SELECT 1;\n", P15 + FLAG, 1, "PLAFON_EXTINS_DIFERIT: runnerul livrează")
+    caz("fara nicio cerere, fara flag (neschimbat)", "SELECT 1;\n", P15, 0)
+    for rel in EXTINS_REALE:
+        cale = ROOT / rel
+        if not cale.exists():
+            rez(f"{rel} lipseste", False)
+            continue
+        text = cale.read_text(encoding="utf-8")
+        rez(f"{rel}: cere '15000/session' + marcajul '15000:' si declara --plafon-extins pe prima linie",
+            text.count("'15000/session'") == 1 and text.count("'15000:' || txid_current()") == 1
+            and "--plafon-tranzactie-ms 15000 --plafon-extins" in text.split("\n")[0] and "'5000/session'" not in text)
+        rc, out = iesire(cale, "reg_test", *P15, *FLAG)
+        rez(f"{rel}: 15000 + flag = 0 (cod {rc})", rc == 0, out)
+        rc, out = iesire(cale, "reg_test", *P15)
+        rez(f"{rel}: 15000 fara flag = PLAFON_EXTINS_DIFERIT (cod {rc})", rc == 1 and "PLAFON_EXTINS_DIFERIT" in out, out)
+        rc, out = iesire(cale, "reg_test", "--plafon-tranzactie-ms", "5000", *FLAG)
+        rez(f"{rel}: 5000 + flag = PLAFON_DIFERIT (cod {rc})", rc == 1 and "PLAFON_DIFERIT: fișierul cere 15000 ms" in out, out)
+        rc, out = iesire(cale, "reg_test", "--fara-plafon")
+        rez(f"{rel}: --fara-plafon = PLAFON_LIPSA (cod {rc})", rc == 1 and "PLAFON_LIPSA" in out and "--plafon-extins" in out, out)
+        rev = ROOT / rel.replace("migrations/", "revenire/").replace(".sql", "_ROLLBACK.sql")
+        if not rev.exists():
+            rez(f"revenirea {rev.name} lipseste", False)
+            continue
+        rc, out = iesire(rev, "reg_test", "--plafon-tranzactie-ms", "2000")
+        rez(f"{rev.name}: 2000 fara flag = 0 (revenirea ramane fara amprenta globala, plafonul ei; cod {rc})", rc == 0, out)
+        rc, out = iesire(rev, "reg_test", "--plafon-tranzactie-ms", "2000", *FLAG)
+        rez(f"{rev.name}: 2000 + flag = PLAFON_EXTINS_DIFERIT (cod {rc})", rc == 1 and "PLAFON_EXTINS_DIFERIT" in out, out)
+    # compatibilitate: orice alt fisier cu plafon declarat, cu --plafon-extins = refuz (nu declara optiunea); fara flag = acelasi cod ca inainte
+    n = 0
+    for cale in sorted(list((ROOT / "supabase/migrations").glob("*.sql")) + list((ROOT / "supabase/revenire").glob("*.sql"))):
+        text = cale.read_text(encoding="utf-8")
+        if "--plafon-extins" in text:
+            continue
+        vals = set(re.findall(r"'([0-9]+)/session'", text))
+        if len(vals) != 1:
+            continue
+        d = vals.pop()
+        rc_0, _ = iesire(cale, "reg_test", "--plafon-tranzactie-ms", d)
+        if rc_0 != 0:
+            continue
+        n += 1
+        rc_f, out_f = iesire(cale, "reg_test", "--plafon-tranzactie-ms", d, *FLAG)
+        if not (rc_f == 1 and "PLAFON_EXTINS_DIFERIT: runnerul livrează" in out_f):
+            rez(f"{cale.relative_to(ROOT).as_posix()}: cu --plafon-extins cod {rc_f} (asteptat 1 PLAFON_EXTINS_DIFERIT)", False, out_f)
+    rez(f"compatibilitate: {n} fisiere cu plafon declarat care nu declara optiunea sunt refuzate cu --plafon-extins", n >= 20)
+    return esecuri
+
+
 def main():
     esecuri = []
     with tempfile.TemporaryDirectory() as d:
@@ -558,6 +648,7 @@ def main():
     esecuri += acord_plafon()
     esecuri += forma_structurala()
     esecuri += identitate_r19()
+    esecuri += plafon_extins()
     if esecuri:
         print(f"ESEC test_livrare_validator_plafon: {len(esecuri)} caz(uri): {', '.join(esecuri)}")
         return 1

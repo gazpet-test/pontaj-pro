@@ -1,5 +1,7 @@
--- Version 20270105120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 5000 --amprenta-globala <md5> --diferente-globale
---   supabase/migrations/20270105a_executie_rest_decontat.l15.tsv (DOAR cu plafon ȘI cu amprenta globală L15 v2, ca 20261231a; manifestul se
+-- Version 20270105120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 15000 --plafon-extins --amprenta-globala <md5> --diferente-globale
+--   supabase/migrations/20270105a_executie_rest_decontat.l15.tsv (DOAR cu plafonul EXTINS — decizia proprietarului 22.11.2026: pe producție pasul
+--   „înainte” singur a durat ~1,5 s și plafonul 5000 n-a încăput; opțiunea --plafon-extins cere fereastra orară, docs/LIVRARE_L15_V2.md §9 —
+--   ȘI cu amprenta globală L15 v2, ca 20261231a; manifestul se
 --   generează pe clonă cu scripts/livrare_l15_manifest.sh). Lista OBIECTELOR revizuită (familie, etichetă, operație; verificată pe PGlite cu
 --   pașii reali ai runnerului): supabase/tests/20270105a_executie_rest_decontat.l15.obiecte.tsv.
 -- 20270105a_executie_rest_decontat — Execuție: „Rest de decontat” (bani și cantități) pe proiect / obiect / articol. Spec:
@@ -144,7 +146,8 @@
 --   pg_try_advisory_xact_lock (BEFORE UPDATE / DELETE au deja rândul blocat: o așteptare acolo ar fi deadlock cu RPC-ul, care ține advisory-ul
 --   și apoi ia rândurile vechi) — ocupat = 55P03, nimic scris.
 -- Lock la aplicare (punct unic, NOWAIT, bugetul 1 s de la prima încercare, docs/LIVRARE_L15_V2.md §9).
--- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, garda finală.
+-- GĂRZILE DE TIMP: plafonul tranzacției = 15000 ms (plafonul EXTINS, --plafon-extins, doar în fereastra 21:00–06:00 Europe/Bucharest) pus de
+--   runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, bugetul lock-urilor de 1 s (neschimbat), garda finală.
 -- Revenire: supabase/revenire/20270105a_executie_rest_decontat_ROLLBACK.sql. Probe: scripts/pglite/test_executie_rest_decontat_local.mjs,
 --   supabase/tests/20270105a_executie_rest_decontat_dryrun.sql (pe clonă: după aplicare, în tranzacție cu ROLLBACK).
 DO $pre$
@@ -162,9 +165,9 @@ BEGIN
   END IF;
   IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION '20270105a: cere PostgreSQL 17 (plafonul tranzactiei)'; END IF;
   SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
-  IF v_plafon IS DISTINCT FROM '5000/session'
-     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || txid_current() THEN
-    RAISE EXCEPTION '20270105a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 5000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 5000)',
+  IF v_plafon IS DISTINCT FROM '15000/session'
+     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '15000:' || txid_current() THEN
+    RAISE EXCEPTION '20270105a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 15000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 15000 --plafon-extins)',
       coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa');
   END IF;
   -- L15 v2: pasul „înainte” al runnerului a rulat în ACEASTĂ tranzacție (tiparul 20261229b / 20261231a)

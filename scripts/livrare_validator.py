@@ -112,7 +112,12 @@
 #   --fara-plafon: set_config se recunoaște ca SCRIERE doar după identitatea exactă (set_config / "set_config", necalificat sau
 #     pg_catalog.); altă formă ("SET_CONFIG", altă schemă) = citire neclasificabilă ⇒ PLAFON_LIPSA.
 #
-# Utilizare: python3 livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie | --plafon-tranzactie-ms <N> | --fara-plafon]
+# Runda 18 a runnerului (22.11.2026, plafonul EXTINS, docs/LIVRARE_L15_V2.md §9): --plafon-extins (doar împreună cu --plafon-tranzactie-ms <N>;
+#   valoarea N o impune runnerul = AG_PLAFON_EXTINS_MS, aici nu se dublează constanta). Acordul DECLARAȚIEI, pe lângă acordul valorii: cu
+#   --plafon-extins fișierul trebuie să declare opțiunea (textul „--plafon-extins” în antet, căutat oriunde în fișier, fail-closed), iar un
+#   fișier care o declară NU pleacă fără ea ⇒ PLAFON_EXTINS_DIFERIT (refuz, înainte de orice conexiune). Cu --fara-plafon declarația e o
+#   cerere de plafon (PLAFON_LIPSA). Fără --plafon-extins și fără declarație: neschimbat.
+# Utilizare: python3 livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie | --plafon-tranzactie-ms <N> [--plafon-extins] | --fara-plafon]
 #   <tag-interzis> = tag-ul dollar-quote al înregistrării generate de runner; nu are voie să apară în fișier.
 # Ieșire: 0 = acceptat (tipărește „OK <n instrucțiuni>”); 1 = refuzat (motivul pe stderr); orice altceva = eroare ⇒ refuz.
 # ============================================================================
@@ -137,6 +142,8 @@ PLAFON_CERERI = (
     ("antetul --plafon-tranzactie-ms <D>", re.compile(r"--plafon-tranzactie-ms[ \t=]+([0-9]+)")),
 )
 PLAFON_MARCAJ = "gazpet.plafon_tranzactie"
+# Runda 18 a runnerului (22.11.2026): declarația plafonului EXTINS în antetul artefactului (textul exact al opțiunii runnerului).
+PLAFON_EXTINS_OPT = "--plafon-extins"
 # Runda 17 (verdictul PR #1115, P1): formele ACCEPTATE în codul executabil (tokenii lui instructiuni(): cuvinte MAJUSCULE, literali
 # ca "'"+valoare, semne câte unul). Orice altă citire / comparație a plafonului în cod = refuz (vezi verifica_structura_plafon).
 PL_CIT = ["FROM", "PG_CATALOG", ".", "PG_SETTINGS", "WHERE", "NAME", "=", "'transaction_timeout"]
@@ -521,6 +528,18 @@ def verifica_acord_plafon(text, plafon_ms):
     return gasite
 
 
+def verifica_declaratie_extins(text, extins):
+    """Runda 18 a runnerului (22.11.2026): acordul DECLARAȚIEI plafonului extins (vezi antetul). `extins` = runnerul a dat --plafon-extins.
+    Fail-closed pe textul brut (și comentariile): fișierul declară opțiunea dacă textul „--plafon-extins” apare oriunde în el."""
+    declara = PLAFON_EXTINS_OPT in text
+    if extins and not declara:
+        raise Refuz(f"PLAFON_EXTINS_DIFERIT: runnerul livrează cu plafonul EXTINS ({PLAFON_EXTINS_OPT}), dar fișierul nu îl declară în antet — "
+                    f"plafonul extins e doar pentru migrările care îl cer explicit (revizuite așa); nimic trimis")
+    if declara and not extins:
+        raise Refuz(f"PLAFON_EXTINS_DIFERIT: fișierul declară plafonul EXTINS ({PLAFON_EXTINS_OPT}, linia {linie(text, text.find(PLAFON_EXTINS_OPT))}), "
+                    f"dar runnerul nu îl dă — livrați cu {PLAFON_EXTINS_OPT} și plafonul declarat, în fereastra orară; nimic trimis")
+
+
 # runda 19: și pg_settings — un corp care îl numește și nu se analizează lexical (ex. litera confuză a tokenizerului) = refuz, nu sărit
 MENTIUNI_PLAFON = ("transaction_timeout", "plafon_tranzactie", "/session", "pg_settings")
 
@@ -817,6 +836,8 @@ def verifica_cere_plafon(text):
     literal '<D>/session', marcajul '<D>:' || txid_current() sau numele marcajului — e refuzat LOCAL, înainte de conexiune
     (altfel refuza abia în $pre$, în tranzacție, după pasul „înainte”). Fișierele fără nicio cerere: neschimbat."""
     motive = []
+    if PLAFON_EXTINS_OPT in text:
+        motive.append(f"antetul declară plafonul extins ({PLAFON_EXTINS_OPT})")   # runda 18 a runnerului: declarația e o cerere
     for et, rx in PLAFON_CERERI[:2]:
         motive += [f"{m.group(1)} ms ({et}, linia {linie(text, m.start())})" for m in rx.finditer(text)]
     if PLAFON_MARCAJ in text.lower() and not motive:
@@ -835,7 +856,7 @@ def verifica_cere_plafon(text):
                     f"--plafon-tranzactie-ms — livrați cu --plafon-tranzactie-ms <D> (D = valoarea cerută); nimic trimis")
 
 
-def valideaza(cale, tag_interzis=None, plafon=False, plafon_ms=None, fara_plafon=False):
+def valideaza(cale, tag_interzis=None, plafon=False, plafon_ms=None, fara_plafon=False, plafon_extins=False):
     brut = open(cale, "rb").read()
     if b"\x00" in brut:
         raise Refuz("octet NUL în fișier")
@@ -856,6 +877,7 @@ def valideaza(cale, tag_interzis=None, plafon=False, plafon_ms=None, fara_plafon
         verifica_plafon(text)
     if plafon_ms is not None:
         verifica_acord_plafon(text, plafon_ms)
+        verifica_declaratie_extins(text, plafon_extins)   # runda 18 a runnerului: după acordul valorii, acordul declarației
     if fara_plafon:
         verifica_cere_plafon(text)
     instr = instructiuni(text)
@@ -884,6 +906,13 @@ def valideaza(cale, tag_interzis=None, plafon=False, plafon_ms=None, fara_plafon
 
 def main(argv):
     args = list(argv[1:])
+    # runda 18 a runnerului: --plafon-extins (fără valoare, o singură dată, oriunde) doar împreună cu --plafon-tranzactie-ms <N>
+    plafon_extins = PLAFON_EXTINS_OPT in args
+    if plafon_extins:
+        if args.count(PLAFON_EXTINS_OPT) != 1:
+            print(f"Utilizare: {PLAFON_EXTINS_OPT} o singură dată", file=sys.stderr)
+            return 2
+        args.remove(PLAFON_EXTINS_OPT)
     plafon = bool(args) and args[-1] == "--plafon-tranzactie"
     if plafon:
         args.pop()
@@ -899,12 +928,15 @@ def main(argv):
             return 2
         plafon_ms = int(args[-1])
         del args[-2:]
+    if plafon_extins and plafon_ms is None:
+        print(f"Utilizare: {PLAFON_EXTINS_OPT} doar împreună cu --plafon-tranzactie-ms <N>", file=sys.stderr)
+        return 2
     if len(args) not in (1, 2) or any(a.startswith("--") for a in args):
-        print("Utilizare: livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie | --plafon-tranzactie-ms <N> | --fara-plafon]",
+        print("Utilizare: livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie | --plafon-tranzactie-ms <N> [--plafon-extins] | --fara-plafon]",
               file=sys.stderr)
         return 2
     try:
-        n = valideaza(args[0], args[1] if len(args) == 2 else None, plafon, plafon_ms, fara_plafon)
+        n = valideaza(args[0], args[1] if len(args) == 2 else None, plafon, plafon_ms, fara_plafon, plafon_extins)
     except Refuz as e:
         print(f"REFUZ validator: {e}", file=sys.stderr)
         return 1
