@@ -38,9 +38,12 @@ v4.6.3; cel nou se leaga de hash-ul v4.6.4).
 calibrarea din 21.11. Markerul NU a fost scris, deci lansatorul refuza `gem` (sigur). **v4.6.4b** (acest pachet) schimba din nou
 DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE v4.6.4 cu aceeasi procedura: hash-ul vechi = `A03E2B5C...`,
 zona protejata noua `operator-v464b`, copiile de siguranta cu sufixul `.v464`, fisierele noi cu `.v464b` (pasul 1). Ce aduce, pe scurt
-(detaliile la pasul 0, "Stare r8"): regula inchisa pentru atributul `data-filedrop-id` al indicatorului de drag & drop (linia 1 din 5a),
-iar pentru liniile 2 si 3 - a caror sursa nu se vede in captura - `stare` afiseaza acum, sub fiecare `necunoscut` cu semnal, o linie
-`    sursa <fel>:<unde>=<valoare>` si `{...}` intreg (nu mai e taiat la 80 de caractere). Rollback-ul (mai jos) readuce v4.6.4.
+(detaliile la pasul 0, "Stare r8" si "Stare r9"): r8 - regula inchisa pentru atributul `data-filedrop-id` al indicatorului de drag & drop
+(linia 1 din 5a) si afisarea sursei fiecarui semnal (`    sursa <fel>:<unde>=<valoare>`, `{...}` intreg); r9 (runda 2 a PR-ului, dupa ce
+chat-ul a citit din pagina atributele COMPLETE ale celor 3 elemente) - cate o exceptie EXACTA pe element pentru cele trei semnale, toate
+in functia unica de semnale: indicatorul doar cu valoarea reala si izolat, butonul "+" doar cu `arialabel` exact + `ariahaspopup="menu"`,
+editorul doar cu cele doua token-uri de clasa intregi. Pe pagina reconstituita din atributele complete: 0 necunoscute, `paza ciorna: OK`.
+Rollback-ul (mai jos) readuce v4.6.4.
 
 Hash-urile vin din raportul de review, nu din acest fisier. Livrare: folderul din commit-ul
 aprobat ajunge in `$Source` (`git archive` al commit-ului, dezarhivat in
@@ -176,6 +179,37 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
   butonului "+", clasele si eticheta editorului gol): pe v4.6.4 (`A03E2B5C`) da EXACT linia 1 si nimic altceva; pe v4.6.4b 0 necunoscute,
   paza OK, `trimite` ajunge la Enter; cu un chip de fisier real in ea = `ciorna_cu_atasamente` fara nicio actiune (ca la 5b / 5c).
 
+**Stare (r9 = v4.6.4b runda 2, 22.11.2026, dupa ce chat-ul a citit atributele COMPLETE din pagina reala):**
+- **Sursa exacta a celor 3 linii.** Sesiunea de chat a citit prin CDP (doar citire, chat nou gol, dupa Esc + F5) atributele complete ale
+  celor 3 elemente semnalate (`paw-data\out\paw_v464_calibrare\atribute_complete_22_11.txt`). Constatarea r8 (sursa dincolo de caracterul
+  80) s-a confirmat, si niciuna nu e fisier:
+  1. `<file-drop-indicator>` are EXACT: clasele Angular `ng-tns-*` / `ng-star-inserted`, atributele `_ngcontent-*` / `_nghost-*` goale si
+     `data-filedrop-id="chat-window-input-container"`; fara text, fara copii.
+  2. butonul "+" `<gem-icon-button>` are atributul Angular `arialabel="Incarcare si instrumente"` (FARA cratima: nu e eticheta `aria-label`
+     din semnatura, ci o valoare oarecare de atribut, de aceea cuvantul "incarca" din ea era semnal) si `ariahaspopup="menu"`; clasele
+     `menu-button gem-menu-button open gem-button ... lm-enabled` (meniul "+", permanent).
+  3. editorul `div[role=textbox][contenteditable]` are clasele `... input-url-linkification-enabled inline-chips-enabled` (steaguri de
+     functionalitate); cuvantul "chip" e in a doua.
+- **Exceptii EXACTE, toate in functia unica de semnale, cate una pe element** (nicio intrare in listele albe, care raman 5 + 23 + 3):
+  (1) marcajul `data-filedrop-id` e acceptat DOAR cu valoarea `chat-window-input-container` (r8 accepta orice identificator; acum nu) si
+  DOAR pe un indicator IZOLAT: niciun alt atribut in afara celor Angular goale si a clasei cu doar `ng-*`, niciun copil, niciun text -
+  orice alta valoare / atribut / copil readuce numele in cautare (`token_file:...`, ca pana acum), iar copilul se verifica si el;
+  (2) pe `gem-icon-button`, valoarea `arialabel` EXACT `incarcare si instrumente` (dupa normalizarea ASCII, ca toate etichetele din liste)
+  impreuna cu `ariahaspopup="menu"` nu e semnal - alt tag, alta valoare (si "... oferta.docx"), fara `ariahaspopup="menu"`, sau acelasi
+  cuvant in alt atribut = semnal; (3) pe EDITOR, token-urile de clasa EXACT `input-url-linkification-enabled` si `inline-chips-enabled`
+  (comparate intregi, nu subsir) nu intra in cautare - `chip`, `file-chip`, `inline-chips`, `inline-chips-enabled-x`, litere mari, sau
+  acelasi token pe alt element (zona, rich-textarea, gem-icon, div, un p din editor) = semnal.
+- **Dovezi (teste 131 -> 138, toate `python -I`):** pagina reconstituita din atributele complete da, pe gemini_pw.py din v4.6.4 instalat
+  (codul real, nu mock), EXACT cele 3 linii din captura, in aceeasi ordine; pe r8 ar fi dat liniile 2 si 3 intregi cu sursa (ce prevedea
+  raportul r8); pe r9 0 necunoscute si `paza ciorna: OK` in cele trei stari, `trimite` ajunge la Enter; cu un chip real tot
+  `ciorna_cu_atasamente` fara nicio actiune. Abaterile fiecarui element (valoare / atribut / copil / token / alt element) sunt refuzate cu
+  motivul si sursa asteptate; 12 mutanti (valoarea ca identificator, izolarea scoasa pe atribute / pe copii, `ariahaspopup` necerut,
+  valoarea ca subsir, tagul necerut, token ca prefix, scutirea pe orice element, "chip" / "incarca" scoase din cuvinte, "wildcard" pe buton /
+  pe editor) lasa fiecare scenariul lui sa plece si pagina reala sa treaca; pe cod toate refuza. Identificatorii acceptati de r8 (`1`,
+  uuid etc.) sunt acum refuzati.
+- **La 5a (v4.6.4b r9) sunt asteptate 0 necunoscute pe chat NOU si pe chat EXISTENT.** Daca apare totusi o linie `necunoscut`, ea vine cu
+  `    sursa ...` sub ea: STOP, copiaza amandoua pentru chat (nu se trece in liste; regula exacta, daca sursa e inofensiva, intr-un commit nou).
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -236,7 +270,7 @@ if ($manifest.'gemini_pw.py' -ine $GemHashNou) { throw 'gemini_pw.py din pachet 
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel asteptat (vezi $GemHashVechi)' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 147 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 42) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 230 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 47) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -246,18 +280,21 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + $SufVechi) -Force }
 ```
 
-Asteptat (pachetul v4.6.4b = r8, fata de v4.6.4 INSTALAT in `bin`, `A03E2B5C...`): **147 linii diferite (42 vechi `<=`, 105 noi `=>`)**.
-Cele 42 de linii vechi sunt toate din v4.6.4 (nu din v4.6.3): constanta `MARCAJE_GOALE_PERMISE` si comentariile ei, `DETALIU_AFISAT = 240`,
+Asteptat (pachetul v4.6.4b = r9, fata de v4.6.4 INSTALAT in `bin`, `A03E2B5C...`): **230 linii diferite (47 vechi `<=`, 183 noi `=>`)**.
+Cele 47 de linii vechi sunt toate din v4.6.4 (nu din v4.6.3): constanta `MARCAJE_GOALE_PERMISE` si comentariile ei, `DETALIU_AFISAT = 240`,
 taierea `[:80]` din `_semnatura_token`, functiile `_are_eticheta_interzisa` si `_marcaj_gol_permis` (inlocuite de `_eticheta_interzisa` /
-`_marcaj_permis`), liniile `return` cu un singur rezultat din `_semnal` si cu doua din `_motiv_element` (acum cu sursa), `out.append(m)`
-si linia `for m in ...` din `_necunoscute` / `stare`, docstring-urile celor doua functii. Liniile noi: nota v4.6.4b din antet, `VALOARE_GOALA` /
-`VALOARE_IDENTIFICATOR` / `MARCAJE_PERMISE`, `SEMNATURA_TOKEN_AFISATA` / `SURSA_AFISATA`, `_sursa_cuvant`, rezultatul `(motiv, sursa)`,
-`necunoscute_surse` si liniile `    sursa` din `stare`. Testele: `Ran 131 tests ... OK`.
-Informativ, fata de v4.6.3 (`BE3B867B...`, nu mai e in `bin`): 687 / 11 / 676 - aceleasi 11 linii vechi ca in r2-r7 (antetul, lista de
+`_marcaj_permis`), liniile `return` cu un singur rezultat din `_semnal` si cu doua din `_motiv_element` (acum cu sursa), linia `clase_id = ...`
+si linia `if k in ATRIBUTE_AFISATE_SEPARAT ...` din `_semnal` (acum cu `_clase_verificate` / `_valoare_permisa`), `out.append(m)` si linia
+`for m in ...` din `_necunoscute` / `stare`, docstring-urile celor doua functii. Liniile noi: notele v4.6.4b r8 si r9 din antet,
+`VALOARE_GOALA` / `VALOARE_FILEDROP` / `MARCAJE_PERMISE` / `VALORI_PERMISE` / `CLASE_EDITOR_PERMISE` cu comentariile lor,
+`SEMNATURA_TOKEN_AFISATA` / `SURSA_AFISATA`, `_marcaj_permis` (cu izolarea), `_valoare_permisa`, `_clase_verificate`, `_sursa_cuvant`,
+rezultatul `(motiv, sursa)`, `necunoscute_surse` si liniile `    sursa` din `stare`. Testele: `Ran 138 tests ... OK`.
+Informativ, fata de v4.6.3 (`BE3B867B...`, nu mai e in `bin`): 760 / 11 / 749 - aceleasi 11 linii vechi ca in r2-r8 (antetul, lista de
 coduri, `import`, comentariul `ATAS`, titlul partii cu browserul, cele doua linii din vechea `_atasamente`, linia `atasamente in ciorna`
-din `stare`, cele trei linii ale vechii verificari din `trimite`). Istoricul cifrelor fata de v4.6.3: r7 624 / 11 / 613, r6 622 / 11 / 611,
-r5 600 / 11 / 589, r4 536 / 11 / 525, r3 477 / 11 / 466, r2 411 / 11 / 400. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se
-schimba din nou: le da raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 147 / 42 de mai sus).
+din `stare`, cele trei linii ale vechii verificari din `trimite`); fata de r8 (`C7609E9E...`, head-ul anterior al PR-ului, neinstalat):
+115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
+r4 536 / 11 / 525, r3 477 / 11 / 466, r2 411 / 11 / 400. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
+raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 230 / 47 de mai sus).
 
 Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
 `C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi
@@ -376,10 +413,10 @@ Orice rezultat diferit de cel cerut mai jos = **STOP**, fara marker; copiaza toa
   `necunoscute in zona: 0`, `paza ciorna: OK (trimite ar continua)`. Cu ciorna goala pe ecran,
   `paza ciorna: REFUZ ciorna_necunoscuta ...` = calibrarea (pasul 0) nu acopera pagina: STOP,
   fara marker, copiaza liniile `necunoscut ...` SI liniile `    sursa ...` de sub ele (v4.6.4b) pentru chat.
-  **Asteptat la v4.6.4b (declarat, pasul 0 "Stare r8"):** linia 1 din 22.11 (`token_file:file-drop-indicator...`)
-  dispare; liniile 2 (`token_incarca:gem-icon-button...`) si 3 (`semnal_in_editor:token_chip:...`) raman, dar
-  acum cu `{...}` intreg si cu `    sursa ...` sub fiecare - acela e rezultatul de copiat pentru chat; markerul
-  NU se scrie (paza refuza), regula exacta vine intr-un commit nou, cu review. 5a se ruleaza pe un chat NOU si apoi
+  **Asteptat la v4.6.4b r9 (declarat, pasul 0 "Stare r9"):** toate cele 3 linii din 22.11 dispar (fiecare are
+  regula ei exacta, scrisa din atributele complete citite din pagina): `necunoscute in zona: 0`, `paza ciorna: OK`.
+  Daca apare totusi o linie `necunoscut`, ea vine cu `    sursa ...` sub ea: STOP, markerul NU se scrie, copiaza
+  amandoua pentru chat (regula exacta, daca e cazul, intr-un commit nou, cu review). 5a se ruleaza pe un chat NOU si apoi
   inca o data pe un chat EXISTENT (tab-ul ramane pe chatul vechi dupa fiecare `gem`, iar paza
   verifica intai tab-ul curent): ambele trebuie sa dea `necunoscute in zona: 0`. (Pachetul r4 arata aici
   1 necunoscut `token_file:...`; r5 il lamureste prin regula marcajului `xapfileselectordropzone=""` -

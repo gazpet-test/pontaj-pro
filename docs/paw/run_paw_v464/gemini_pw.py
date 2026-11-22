@@ -87,6 +87,23 @@
 #       dea sursa, `stare` afiseaza acum, sub fiecare `necunoscut` cu semnal, o linie `    sursa <fel>:<unde>=<valoare>` (fel = tag / style /
 #       eticheta / clasa / id / nume_atribut / valoare_atribut), iar {...} se afiseaza intreg (pana la 400 de caractere). Nicio decizie nu depinde
 #       de sursa afisata: ea vine din ACEEASI functie _semnal (al doilea element al rezultatului), nu dintr-o a doua cautare.
+# v4.6.4b r2 / r9 (22.11.2026, PR #1168 runda 2): sursa EXACTA a celor 3 semnale, din atributele COMPLETE ale elementelor, citite de chat
+#   prin CDP din pagina reala (doar citire, chat nou gol, Esc + F5; paw_v464_calibrare\atribute_complete_22_11.txt). Constatarea r8 (sursa
+#   dincolo de caracterul 80) e confirmata; niciuna din cele trei nu e un fisier:
+#   (1) <file-drop-indicator> are EXACT: clasele Angular `ng-tns-*` / `ng-star-inserted`, atributele `_ngcontent-*` / `_nghost-*` goale si
+#       `data-filedrop-id="chat-window-input-container"`; fara text, fara copii. Regula din MARCAJE_PERMISE devine EXACTA: valoarea
+#       `chat-window-input-container` (nu orice identificator) si elementul IZOLAT (niciun alt atribut in afara celor Angular goale si a
+#       clasei cu doar `ng-*`, niciun copil, niciun text). Orice alta valoare / atribut / copil -> numele intra in cautare = semnal ca pana acum.
+#   (2) butonul "+" (`gem-icon-button`) poarta atributul Angular `arialabel="Incarcare si instrumente"` (FARA cratima: nu e `aria-label` din
+#       semnatura, ci o valoare oarecare de atribut, pasul 4) si `ariahaspopup="menu"`; cuvantul "incarca" e in valoarea lui. Exceptie EXACTA
+#       (VALORI_PERMISE): pe `gem-icon-button`, atributul `arialabel` cu valoarea EXACT `incarcare si instrumente` (dupa _ascii, ca orice
+#       eticheta din liste) SI `ariahaspopup` EXACT `menu` nu e semnal; alt tag / alta valoare / fara `ariahaspopup=menu` = semnal.
+#   (3) editorul (`div.ql-editor[contenteditable]`) are clasele `input-url-linkification-enabled` si `inline-chips-enabled` (steaguri de
+#       functionalitate); cuvantul "chip" e in a doua. Exceptie EXACTA (CLASE_EDITOR_PERMISE): pe EDITOR (_e_editor), aceste doua token-uri
+#       de clasa, comparate INTREGI (nu subsir), nu intra in cautarea cuvintelor / numelor de fisier; `chip`, `file-chip`,
+#       `inline-chips-enabled-x`, acelasi token pe alt element = semnal.
+#   Toate trei stau in aceeasi functie _semnal (cate o exceptie pe element, prin ajutatoare pure apelate doar de acolo); afisarea sursei (r8)
+#   ramane. Pe pagina reconstituita din atributele complete: 0 necunoscute, `paza ciorna: OK`; cu un chip real tot `ciorna_cu_atasamente`.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata
@@ -153,16 +170,37 @@ ATRIBUTE_AFISATE_SEPARAT = ("class", "id")                   # afisate in {...} 
 # doar citire): `div.text-input-field.simplified-input-area` are atributele `_ngcontent-ng-c<numar>=""`, `xapfileselectordropzone=""`,
 # `class=...`, `jslog=...`; cuvantul "file" vine din NUMELE `xapfileselectordropzone` (zona de drop a selectorului de fisiere, nu un fisier).
 # r8 (v4.6.4b): + `data-filedrop-id` pe <file-drop-indicator> (5a din 22.11.2026 pe pagina reala, chat nou gol: `token_file:file-drop-indicator
-# {data-filedrop-id}` - fara clase, fara id, singurul atribut neafisat separat; valoarea NU a fost afisata). Forma valorii e parte din regula:
-# `xapfileselectordropzone` doar GOL; `data-filedrop-id` doar un identificator ASCII fara punct ([A-Za-z0-9_-], cel mult 64), pe valoarea BRUTA
-# (un spatiu nu e "gol"). Un identificator nu poate fi un nume.extensie; valoarea trece oricum si prin cautarea cuvintelor / numelor de fisier
-# din _semnal (pasul 4), ca orice alta valoare. (tag, clasele EXACTE fara cele generate, numele atributului, forma valorii): acceptat DOAR asa.
+# {data-filedrop-id}` - fara clase, fara id, singurul atribut neafisat separat). Forma valorii e parte din regula, pe valoarea BRUTA (un spatiu
+# nu e "gol"): `xapfileselectordropzone` doar GOL; `data-filedrop-id` (r9) doar EXACT `chat-window-input-container` - valoarea reala, citita de
+# chat din pagina (atribute_complete_22_11.txt); r8 accepta orice identificator [A-Za-z0-9_-]{0,64}, r9 nu mai accepta decat valoarea reala.
+# Valoarea trece oricum si prin cautarea cuvintelor / numelor de fisier din _semnal (pasul 4), ca orice alta valoare.
+# r9: al cincilea camp, `izolat`: elementul nu poate avea NICIUN alt atribut in afara marcajului, a clasei (cu doar token-uri generate `ng-*`,
+# prin campul claselor = ()) si a atributelor generate `_ng*` cu valoare GOALA, si NICIUN copil (element sau text cu continut). Indicatorul real
+# e exact asa; un indicator cu un copil (ex. numele unui fisier), cu un atribut in plus sau cu alta valoare NU e marcaj: numele `data-filedrop-id`
+# intra in cautare si da `token_file:...` ca pana acum (iar copilul se verifica si el, element cu element). Div-ul r5 nu e izolat (are `jslog`).
+# (tag, clasele EXACTE fara cele generate, numele atributului, forma valorii, izolat): acceptat DOAR asa.
 VALOARE_GOALA = re.compile(r"")                               # exact ""
-VALOARE_IDENTIFICATOR = re.compile(r"[A-Za-z0-9_-]{0,64}")   # id generat (numar / uuid / nume-cu-liniuta), niciodata un nume.extensie
+VALOARE_FILEDROP = re.compile(re.escape("chat-window-input-container"))     # r9: EXACT valoarea reala (nu un identificator oarecare)
 MARCAJE_PERMISE = (
-    ("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone", VALOARE_GOALA),     # r5 (21.11.2026)
-    ("file-drop-indicator", (), "data-filedrop-id", VALOARE_IDENTIFICATOR),                              # r8 (22.11.2026)
+    ("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone", VALOARE_GOALA, False),    # r5 (21.11.2026)
+    ("file-drop-indicator", (), "data-filedrop-id", VALOARE_FILEDROP, True),                                   # r8 + r9 (22.11.2026)
 )
+# r9: VALORI de atribut cu cuvant de atasament care NU sunt fisiere - lista INCHISA, citita din pagina reala (chat, CDP, 22.11.2026, doar citire):
+# butonul "+" `<gem-icon-button>` are `arialabel="Incarcare si instrumente"` (atribut Angular FARA cratima - nu e `aria-label`, deci nu e
+# eticheta din semnatura, ci o valoare oarecare verificata la pasul 4 din _semnal) si `ariahaspopup="menu"` (deschide meniul); cuvantul
+# "incarca" vine din valoarea lui. (tag, numele atributului, valoarea EXACTA dupa _ascii - ca etichetele din liste -, alte atribute cerute cu
+# valoarea lor bruta EXACTA): doar asa valoarea nu intra in cautare. Alt tag, alta valoare (si "incarcare si instrumente x"), fara
+# `ariahaspopup="menu"`, sau acelasi cuvant in alt atribut al butonului = semnal ca pana acum. Nu e o acceptare a cuvantului "incarca".
+VALORI_PERMISE = (
+    ("gem-icon-button", "arialabel", "incarcare si instrumente", (("ariahaspopup", "menu"),)),
+)
+# r9: TOKEN-uri de clasa cu cuvant de atasament care NU sunt fisiere, DOAR pe editor (_e_editor: div.ql-editor[contenteditable] / sub
+# rich-textarea) - lista INCHISA, citita din pagina reala (22.11.2026): editorul are clasele `... rich-query-formatting-enabled
+# input-url-linkification-enabled inline-chips-enabled` (steaguri de functionalitate Quill / Gemini); cuvantul "chip" vine din a doua.
+# Comparatia e pe token-ul INTREG de clasa (egalitate, nu subsir, nu prefix): `chip`, `file-chip`, `inline-chips`, `inline-chips-enabled-x`,
+# `Inline-Chips-Enabled` raman semnale, la fel acelasi token pe orice alt element (zona, rich-textarea, gem-icon, div). Token-ul scutit nu
+# intra nici in cautarea numelor de fisier (n-are punct, deci e echivalent). Nu e o acceptare a cuvantului "chip".
+CLASE_EDITOR_PERMISE = ("input-url-linkification-enabled", "inline-chips-enabled")
 RE_FISIER = re.compile(r"(?<![a-z0-9])[a-z0-9][a-z0-9_-]*\.[a-z][a-z0-9]{0,4}(?![a-z0-9])")   # nume.extensie in text
 # r3: un cuvant care e EXACT un domeniu al firmei nu e fisier (textul de confidentialitate Workspace: "Chaturile gazpet.ro nu
 # sunt folosite ..."). Cuvantul = potrivirea RE_FISIER extinsa peste toate caracterele de nume de fisier din jur, deci
@@ -189,8 +227,8 @@ MODEL_DATA_TEST = "bard-mode-menu-button"                     # butonul modelulu
 # r5: atributul citit din pagina reala = `xapfileselectordropzone=""` -> regula inchisa MARCAJE_PERMISE (mai sus), nu o intrare
 # in liste; cu ea div-ul e un element neutru obisnuit, iar continutul lui se verifica in continuare element cu element.
 # r8 (22.11.2026, 5a pe v4.6.4 instalat, chat nou gol): cele 3 linii noi sunt toate semnale (`token_...`), deci listele NU se schimba
-# (reuniunea liniilor `element:` / `text:` reale ramane cea de la 21.11: 5 + 23 + 3). Linia (1) e lamurita prin MARCAJE_PERMISE; liniile
-# (2) si (3) au sursa in afara partii afisate si se lamuresc la urmatorul 5a din liniile `    sursa ...` (vezi antetul v4.6.4b).
+# (reuniunea liniilor `element:` / `text:` reale ramane cea de la 21.11: 5 + 23 + 3). r9: toate trei sunt lamurite din atributele complete
+# citite de chat din pagina (antetul v4.6.4b r2): (1) MARCAJE_PERMISE (exact + izolat), (2) VALORI_PERMISE, (3) CLASE_EDITOR_PERMISE.
 CONTROALE_CUNOSCUTE = (
     "button[aria-label=deruleaza in jos][type=button][tabindex]",   # i ii iii - "Deruleaza in jos" (in back-to-bottom-fab)
     "button[aria-label=incarcare si instrumente]",                   # i ii iii - butonul "+" care deschide meniul (nu e fisier)
@@ -491,19 +529,49 @@ def _eticheta_interzisa(n):
 
 
 def _marcaj_permis(n, k):
-    # r5 / r8: atributul k al elementului n e un marcaj din MARCAJE_PERMISE: numele EXACT (nu prefix / sufix / subsir), pe tagul exact,
-    # cu clasele (fara cele generate) EXACT cele din lista, si cu valoarea BRUTA de forma ceruta (goala / identificator). Doar atunci numele
-    # lui nu intra in cautarea cuvintelor de atasament; valoarea ramane verificata in _semnal (pasul 4) ca orice alta valoare. Orice abatere
-    # = atributul se verifica ca oricare altul (refuz).
-    for tag, clase, nume, forma in MARCAJE_PERMISE:
+    # r5 / r8 / r9: atributul k al elementului n e un marcaj din MARCAJE_PERMISE: numele EXACT (nu prefix / sufix / subsir), pe tagul exact,
+    # cu clasele (fara cele generate) EXACT cele din lista, cu valoarea BRUTA de forma ceruta (goala / valoarea reala exacta) si - daca marcajul
+    # cere element izolat (r9) - fara niciun alt atribut in afara clasei si a celor generate `_ng*` GOALE, fara niciun copil (element sau text
+    # cu continut). Doar atunci numele lui nu intra in cautarea cuvintelor de atasament; valoarea ramane verificata in _semnal (pasul 4) ca
+    # orice alta valoare. Orice abatere = atributul se verifica ca oricare altul (refuz).
+    for tag, clase, nume, forma, izolat in MARCAJE_PERMISE:
         if k != nume:
             continue
         if n.tag != tag or set(c for c in _clase(n) if not _generat(c)) != set(clase):
             continue
         if not forma.fullmatch(n.attrs.get(k) or ""):
             continue
+        if izolat and any(a != k and a != "class" and not (_generat(a) and v == "") for a, v in n.attrs.items()):
+            continue
+        if izolat and any(c.tag != "#text" or _ascii(c.date) for c in n.copii):
+            continue
         return True
     return False
+
+
+def _valoare_permisa(n, k):
+    # r9: VALOAREA atributului k al elementului n e una din VALORI_PERMISE: tagul exact, numele exact, valoarea EXACT egala (dupa _ascii, ca
+    # etichetele din listele albe) si fiecare atribut cerut alaturi cu valoarea lui bruta EXACTA. Doar atunci valoarea nu intra in cautarea
+    # cuvintelor / numelor de fisier (pasul 4 din _semnal); numele atributului se verifica oricum (pasul 2). Orice abatere = valoarea se
+    # verifica ca oricare alta (refuz).
+    for tag, nume, valoare, cerute in VALORI_PERMISE:
+        if k != nume or n.tag != tag:
+            continue
+        if _ascii(n.attrs.get(k)) != valoare:
+            continue
+        if any(n.attrs.get(a) != v for a, v in cerute):
+            continue
+        return True
+    return False
+
+
+def _clase_verificate(n):
+    # r9: clasele elementului care intra in cautarea cuvintelor / numelor de fisier: toate, in afara token-urilor EXACTE din CLASE_EDITOR_PERMISE
+    # si doar pe editor (_e_editor). Comparatia e pe token-ul intreg, brut (nu subsir / prefix / fara litere mari). Afisarea (_semnatura_token)
+    # arata in continuare toate clasele.
+    if not _e_editor(n):
+        return _clase(n)
+    return [c for c in _clase(n) if c not in CLASE_EDITOR_PERMISE]
 
 
 def _gazda_permisa(gazda):
@@ -537,17 +605,21 @@ def _semnal(n):
         style cu "url(" (miniatura pusa ca imagine de fundal) -> "fundal:<semnatura>";
     (1) eticheta (atributele cu valoare din semnatura): cuvant interzis sau nume.extensie -> "eticheta:<semnatura>";
     (2) cuvant de atasament in orice clasa, in id sau in NUMELE oricarui atribut (si data-*, si necunoscute: removeattachment)
-        -> "token_<cuvant>:<semnatura>{clase #id atribute}"; r5: singurul nume exceptat e marcajul gol din MARCAJE_GOALE_PERMISE,
-        doar pe elementul lui (_marcaj_gol_permis);
+        -> "token_<cuvant>:<semnatura>{clase #id atribute}"; r5 / r8 / r9: singurele nume exceptate sunt marcajele din MARCAJE_PERMISE,
+        fiecare doar pe elementul lui, cu valoarea de forma ceruta (_marcaj_permis); r9: singurele clase exceptate sunt token-urile
+        EXACTE din CLASE_EDITOR_PERMISE, doar pe editor (_clase_verificate);
     (3) r5: nume.extensie intr-o clasa sau in id -> "atribut_fisier:...";
     (4) in VALOAREA oricarui atribut din afara semnaturii (data-*, aria-description, necunoscute, style, href / src / srcset):
         cuvant -> "token_...", nume.extensie -> "atribut_fisier:..."; r5: si in URL-uri si in style, singura exceptie fiind gazda
-        Google a unui href http(s) (_fara_gazda_permisa); blob: / data: / alt host / src / srcset = textul intreg.
+        Google a unui href http(s) (_fara_gazda_permisa); blob: / data: / alt host / src / srcset = textul intreg; r9: singura valoare
+        exceptata e cea EXACTA din VALORI_PERMISE, pe elementul si cu atributele cerute (_valoare_permisa).
     Tagul (in afara celor media) nu e semnal: el E semnatura, comparata exact cu lista (file-drop-indicator a fost vazut gol de om
     la calibrare). Textele si descendentii elementului se verifica mai departe, element cu element (_motiv_text / _necunoscute).
     r8: intoarce (motiv, sursa) sau None. Sursa = "<fel>:<unde>=<valoare>" (fel: tag / style / eticheta / clasa / id / nume_atribut /
     valoare_atribut), afisata de `stare` sub linia `necunoscut`; NU intra in nicio decizie (motivul e neschimbat), e doar locul exact
-    al cuvantului / numelui, ca o linie de pe pagina reala sa nu mai ramana nelamurita (5a din 22.11.2026: sursa taiata din {...})."""
+    al cuvantului / numelui, ca o linie de pe pagina reala sa nu mai ramana nelamurita (5a din 22.11.2026: sursa taiata din {...}).
+    r9: cele trei exceptii de pe pagina din 22.11 (marcaj / valoare / clase) sunt toate aici, cate una pe element, prin ajutatoare pure
+    apelate doar din aceasta functie (si din _sursa_cuvant, pentru afisare)."""
     sem = _semnatura(n)
     if n.tag in MEDIA:
         return "media:" + sem, "tag:" + n.tag
@@ -556,7 +628,7 @@ def _semnal(n):
     e = _eticheta_interzisa(n)
     if e:
         return "eticheta:" + sem, "eticheta:%s=%s" % (e[0], e[1][:SURSA_AFISATA])
-    clase_id = _ascii(" ".join([n.attrs.get("class") or "", n.attrs.get("id") or ""]))
+    clase_id = _ascii(" ".join(_clase_verificate(n) + [n.attrs.get("id") or ""]))
     nume_atribute = _ascii(" ".join(k for k in n.attrs if not _marcaj_permis(n, k)))
     t = _cuvant(clase_id + " " + nume_atribute)
     if t:
@@ -565,7 +637,7 @@ def _semnal(n):
     if f is not None:
         return "atribut_fisier:" + _semnatura_token(n), _sursa_cuvant(n, f)
     for k, v in n.attrs.items():
-        if k in ATRIBUTE_AFISATE_SEPARAT or k in SEMN_ATR_VALOARE or not v:
+        if k in ATRIBUTE_AFISATE_SEPARAT or k in SEMN_ATR_VALOARE or not v or _valoare_permisa(n, k):
             continue
         a = _ascii(v)
         t = _cuvant(a)
@@ -579,7 +651,8 @@ def _semnal(n):
 def _sursa_cuvant(n, t):
     # r8: unde sta textul t (cuvant de atasament sau nume.extensie gasit de _semnal in clase / id / numele atributelor): prima clasa, apoi
     # id-ul, apoi primul nume de atribut (cu valoarea lui, ca la 5a sa se vada si ce poarta - ex. data-filedrop-id=<valoare>). Doar afisare.
-    for c in _clase(n):
+    # r9: aceleasi clase / nume ca in _semnal (fara token-urile si marcajele scutite), ca sursa sa fie chiar locul care a dat semnalul
+    for c in _clase_verificate(n):
         if t in _ascii(c):
             return "clasa:" + _ascii(c)[:SURSA_AFISATA]
     if t in _ascii(n.attrs.get("id")):
