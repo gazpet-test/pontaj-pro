@@ -78,7 +78,8 @@ console.log('0. validatorul runnerului pe fișierele exacte; scriptul de clonă 
   const shaVechi = (await import('node:crypto')).createHash('sha256').update(Buffer.from(octVechi, 'latin1')).digest('hex')
   let peMain = null
   try { peMain = execFileSync('git', ['show', 'origin/main:supabase/functions/_shared/redariFan.mjs'], { cwd: ROOT, encoding: 'latin1', stdio: ['ignore', 'pipe', 'ignore'] }).replace(/\r\n/g, '\n') } catch { /* fără origin/main local */ }
-  const mainVechi = peMain !== null && !peMain.includes('export function momentPosibilFan')
+  // parserul nou = un export `momentPosibilFan` sub orice formă (pe main e `export const momentPosibilFan = …`, nu `export function`)
+  const mainVechi = peMain !== null && !/^export\s+(?:async\s+)?(?:const|let|var|function\*?)\s+momentPosibilFan\b/m.test(peMain)
   ok(shaVechi === SHA_VECHI && typeof FAN_VECHI.rezumatUrmarireFan === 'function' && FAN_VECHI.momentPosibilFan === undefined && (!mainVechi || peMain === octVechi),
     `fixtura parserului vechi: sha256 ${shaVechi.slice(0, 12)}… (așteptat ${SHA_VECHI.slice(0, 12)}…), fără momentPosibilFan; origin/main ${peMain === null ? 'indisponibil' : mainVechi ? (peMain === octVechi ? 'identic' : 'DIFERIT') : 'are deja parserul nou'}`)
 }
