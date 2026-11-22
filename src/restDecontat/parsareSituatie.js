@@ -18,6 +18,7 @@
 import { parseNumar } from '../izoDocumenteLogica.js'
 import { norm } from '../lib/diacritice.js'
 import { parseDeviz } from '../devizParser.js'
+import { eUmCunoscut } from './um.js'
 
 /** Câmpurile unei linii acceptate de fn_rest_decontat_confirma_situatie (plus cheie / potrivire, puse de ecran după confirmare). */
 export const CAMPURI_LINIE_RPC = ['obiect_cod', 'deviz_cod', 'nr', 'cod', 'denumire', 'um', 'cantitate_perioada', 'cantitate_cumulat_doc', 'pret_unitar', 'valoare', 'tip_rand']
@@ -86,15 +87,36 @@ const eRandGrup = row => !eRandGol(row) && !eRandDate(row) && row.every(c => c =
   && row.some(c => CLASE_TABEL.has(clasificaColoana(c)))
 const familie = cls => (cls && cls.startsWith('cantitate') ? 'cantitate' : cls && cls.startsWith('valoare') ? 'valoare' : cls)
 
+// Rând CANDIDAT de articol (review #1165 r3 P1, L12 / L18): detectat INDEPENDENT de orice antet — (a) un cod plauzibil de articol
+// (litere + cifră, ex. TSA01A1, B1) + o UM din lista comună (UM_LISTA, aceeași cu migrarea) + cel puțin un număr; sau (b) generic:
+// cel puțin 2 celule numerice și cel puțin un text pe același rând. O foaie cu rânduri candidate dar fără antet recunoscut NU e copertă:
+// e raportată în `probleme` (liniile ei lipsesc din rezultat) și rezultatul iese `complet: false`. Coperta reală (titluri, date,
+// semnături, o etichetă cu o singură cifră) nu are rânduri candidate. Un fals pozitiv costă o privire a omului; un fals negativ ar
+// pierde articole tăcut — alegem primul.
+const RE_COD_PLAUZIBIL = /^[A-Za-z]{1,5}\d[A-Za-z0-9./-]*$/
+export function randCandidat(row) {
+  if (!row || eRandGol(row) || eRandIndex(row)) return null
+  const celule = row.filter(c => c !== '' && c != null)
+  const numere = celule.filter(eNumeric), texte = celule.filter(c => !eNumeric(c))
+  if (numere.length === 0 || texte.length === 0) return null
+  const cod = texte.find(c => RE_COD_PLAUZIBIL.test(text(c)))
+  const um = texte.find(c => eUmCunoscut(c))
+  if (cod != null && um != null) return `cod „${text(cod)}”, UM „${text(um)}”, ${numere.length} ${numere.length === 1 ? 'număr' : 'numere'}`
+  if (numere.length >= 2) return `${numere.length} numere și text „${text(texte[0]).slice(0, 40)}”`
+  return null
+}
+
 /**
  * Găsește blocul de antet al unei foi (rânduri 0-based [inceput, sfarsit], inclusiv) și coloanele pe clase, căutând în TOATE
  * rândurile foii (nicio fereastră: antetul poate sta după zeci de rânduri de note / titluri; lățimea se ia tot din toate rândurile).
  * rows = sheet_to_json(header:1, blankrows:true, defval:''); merges = sheet['!merges'] (celulele unite primesc valoarea din stânga-sus).
- * Întoarce { ok: true, inceput, sfarsit, primulRandDate, coloane } sau { ok: false, cel_mai_bun: {rand, gasite, lipsesc} | null, tabel }.
+ * Întoarce { ok: true, inceput, sfarsit, primulRandDate, coloane } sau { ok: false, cel_mai_bun: {rand, gasite, lipsesc} | null, tabel, candidat }.
  * `tabel` (doar la ok: false) = primul rând care arată ca un antet de TABEL de articole — cel puțin 2 familii de coloane de tabel
  * (cod / denumire / um / cantitate / preț / valoare; „nr” singur nu ajunge, un titlu „Situație nr. 7” e „nr”) urmat de cel puțin un
- * rând cu cifre — sau null (coperta / foaia doar cu titluri). O foaie cu `tabel` și fără antet recunoscut e o FOAIE DE DETALIU
- * NERECUNOSCUTĂ: parseSituatieExcel o raportează în `probleme` (L12), nu o sare tăcut.
+ * rând cu cifre — sau null. `candidat` (doar la ok: false) = primul RÂND CANDIDAT de articol (vezi randCandidat: cod + UM + număr,
+ * sau ≥ 2 numere + text), independent de orice antet: { rand, motiv, total } sau null. O foaie cu `tabel` SAU cu `candidat` și fără
+ * antet recunoscut e o FOAIE DE DETALIU NERECUNOSCUTĂ: parseSituatieExcel o raportează în `probleme` (L12), nu o sare tăcut.
+ * Coperta = ok: false cu cel_mai_bun, tabel și candidat toate null: pe TOATĂ foaia nu există nici antet, nici rând de articol.
  */
 export function recunoasteAntet(rows, merges = []) {
   const uniri = new Map()
@@ -109,9 +131,12 @@ export function recunoasteAntet(rows, merges = []) {
   let latime = 0
   for (const row of rows) if (row && row.length > latime) latime = row.length
   const randAntet = r => Array.from({ length: latime }, (_, c) => cel(r, c))
-  let celMaiBun = null, tabel = null
+  let celMaiBun = null, tabel = null, candidat = null, candidati = 0
   for (let r = 0; r < rows.length; r++) {
     const frunza = randAntet(r)
+    // rând candidat de articol (independent de antet): numărat pe toată foaia, primul e raportat
+    const motivCandidat = randCandidat(frunza)
+    if (motivCandidat) { candidati++; if (!candidat) candidat = { rand: r + 1, motiv: motivCandidat } }
     if (eRandGol(frunza) || eRandDate(frunza)) continue
     const clase = frunza.map(clasificaColoana)
     const familiiTabel = new Set(clase.filter(k => CLASE_TABEL.has(k)).map(familie))
@@ -155,7 +180,7 @@ export function recunoasteAntet(rows, merges = []) {
     }
     if (!celMaiBun || gasite.length > celMaiBun.gasite.length) celMaiBun = { rand: r + 1, gasite, lipsesc, ambigue }
   }
-  return { ok: false, cel_mai_bun: celMaiBun, tabel }
+  return { ok: false, cel_mai_bun: celMaiBun, tabel, candidat: candidat ? { ...candidat, total: candidati } : null }
 }
 
 /** Antetul documentului din rândurile de deasupra tabelului: nr. situație, luna, anul (null când nu se găsesc). */
@@ -193,7 +218,7 @@ export function tipRand(denumire, cod) {
 
 function liniiDinFoaie(nume, rows, merges) {
   const a = recunoasteAntet(rows, merges)
-  if (!a.ok) return { ok: false, cel_mai_bun: a.cel_mai_bun, tabel: a.tabel }
+  if (!a.ok) return { ok: false, cel_mai_bun: a.cel_mai_bun, tabel: a.tabel, candidat: a.candidat }
   const c = a.coloane
   const titluri = rows.slice(0, a.inceput).map(r => r.map(text).filter(Boolean).join(' ')).filter(Boolean)
   const linii = [], ignorate = [], probleme = [], avertismente = [], sectiuni = []
@@ -268,9 +293,10 @@ export function antetDinFoi(anteturi) {
  * un caz comun); >1 foaie = avertisment (de verificat că nu e și un centralizator). Fără antet recunoscut nicăieri → Error
  * „format nerecunoscut …”; antet recunoscut dar nicio linie → Error (o situație goală nu intră tăcut).
  * Foile se împart în trei (L12, review #1165 r1 P1): `foi` (antet recunoscut, citite), `foi_nerecunoscute` (au un TABEL de articole —
- * vezi recunoasteAntet.tabel — sau un antet aproape bun, dar NU modelul Transgaz: fiecare intră în `probleme`, liniile ei lipsesc din
- * rezultat) și `foi_fara_tabel` (coperta / titluri / goale: excepția legitimă, fără problemă). O foaie e „fără tabel” DOAR dacă pe
- * TOATĂ foaia (fiecare rând din `!ref`, review #1165 r2 P1) nu există niciun rând care arată a antet de tabel. `complet` = probleme.length === 0 —
+ * vezi recunoasteAntet.tabel —, un antet aproape bun dar NU modelul Transgaz, sau RÂNDURI CANDIDATE de articol fără niciun antet —
+ * recunoasteAntet.candidat, review #1165 r3 P1: fiecare intră în `probleme`, liniile ei lipsesc din rezultat) și `foi_fara_tabel`
+ * (coperta / titluri / goale: excepția legitimă, fără problemă). O foaie e „fără tabel” DOAR dacă pe TOATĂ foaia (fiecare rând din
+ * `!ref`, review #1165 r2 P1) nu există nici un rând care arată a antet de tabel, nici un rând candidat de articol. `complet` = probleme.length === 0 —
  * o singură definiție: tot ce avea cifre (rând sau foaie) a devenit linie; false = rezultatul NU e situația întreagă, ecranul nu-l
  * tratează ca atare fără ca omul să vadă problemele.
  */
@@ -288,6 +314,7 @@ export async function parseSituatieExcel(arrayBuffer) {
     if (!f.ok) {
       if (f.cel_mai_bun) foi_nerecunoscute.push({ foaie: nume, ...f.cel_mai_bun })
       else if (f.tabel) foi_nerecunoscute.push({ foaie: nume, rand: f.tabel.rand, gasite: f.tabel.gasite, lipsesc: COLOANE_OBLIGATORII.filter(k => !f.tabel.gasite.includes(k)), ambigue: [] })
+      else if (f.candidat) foi_nerecunoscute.push({ foaie: nume, rand: f.candidat.rand, gasite: [], lipsesc: [...COLOANE_OBLIGATORII], ambigue: [], fara_antet: { motiv: f.candidat.motiv, randuri: f.candidat.total } })
       else foi_fara_tabel.push(nume)
       continue
     }
@@ -298,7 +325,9 @@ export async function parseSituatieExcel(arrayBuffer) {
     avertismente = avertismente.concat(f.avertismente); sectiuni = sectiuni.concat(f.sectiuni); fara_miscare += f.fara_miscare
     if (f.total_doc != null) { total_doc = (total_doc ?? 0) + f.total_doc; cuTotal++ }
   }
-  const descrie = n => `foaia „${n.foaie}”, rândul ${n.rand}: găsite [${n.gasite.join(', ')}], lipsesc [${n.lipsesc.join(', ')}]${n.ambigue?.length ? `, ambigue [${n.ambigue.join(', ')}]` : ''}`
+  const descrie = n => (n.fara_antet
+    ? `foaia „${n.foaie}”, rândul ${n.rand}: rând de articol (${n.fara_antet.motiv}) fără niciun antet de tabel recunoscut — ${n.fara_antet.randuri} ${n.fara_antet.randuri === 1 ? 'rând candidat' : 'rânduri candidate'} pe foaie`
+    : `foaia „${n.foaie}”, rândul ${n.rand}: găsite [${n.gasite.join(', ')}], lipsesc [${n.lipsesc.join(', ')}]${n.ambigue?.length ? `, ambigue [${n.ambigue.join(', ')}]` : ''}`)
   if (foi.length === 0) {
     const cel = [...foi_nerecunoscute].sort((a, b) => b.gasite.length - a.gasite.length)[0]
     const detaliu = cel ? ` Cel mai apropiat: ${descrie(cel)}.` : ' Nicio foaie nu are un rând de antet cu Denumire / UM / Cantitate / Preț / Valoare.'
@@ -308,7 +337,9 @@ export async function parseSituatieExcel(arrayBuffer) {
     throw new Error(`situația nu are nicio linie de articol (foile ${foi.join(', ')}; rânduri fără mișcare: ${fara_miscare}, probleme: ${probleme.length})`)
   }
   // foaie de detaliu nerecunoscută lângă una validă: problemă (liniile ei lipsesc din rezultat), nu tăcere (L12, L18)
-  for (const n of foi_nerecunoscute) probleme.push({ foaie: n.foaie, rand: n.rand, motiv: `foaie de detaliu nerecunoscută — are tabel de articole, dar nu modelul Transgaz; liniile ei LIPSESC din rezultat (${descrie(n)})` })
+  for (const n of foi_nerecunoscute) probleme.push({ foaie: n.foaie, rand: n.rand, motiv: n.fara_antet
+    ? `foaie de detaliu nerecunoscută — are rânduri de articol, dar niciun antet de tabel; liniile ei LIPSESC din rezultat (${descrie(n)})`
+    : `foaie de detaliu nerecunoscută — are tabel de articole, dar nu modelul Transgaz; liniile ei LIPSESC din rezultat (${descrie(n)})` })
   if (foi.length > 1) avertismente.push({ motiv: `${foi.length} foi cu antet recunoscut (${foi.join(', ')}) — verifică să nu fie și un centralizator care dublează liniile` })
   if (cuTotal > 0 && cuTotal < foi.length) avertismente.push({ motiv: `rând TOTAL găsit doar în ${cuTotal} din ${foi.length} foi — totalul tipărit e parțial` })
   const { antet, conflicte } = antetDinFoi(anteturi)
@@ -328,6 +359,7 @@ export async function parseSituatieExcel(arrayBuffer) {
  * { cuSemn: true }; catalogul (CatalogDevizPanel) apelează parseDeviz fără opțiune și sare linia negativă ca înainte.
  * { antetOriunde: true }: pe Excel antetul se caută în TOATĂ foaia (nu în primele 30 de rânduri ale catalogului), ca un deviz cu note
  * lungi deasupra tabelului să nu fie citit ca „fără articole” (aceeași clasă ca limita de 80 de rânduri din recunoasteAntet).
+ * Pe .docx, tot sub cuSemn, „Total=” se caută până la articolul următor (nu în 5 paragrafe); lipsa lui = linie `incomplet` + problemă.
  * Fără articole = eroare, nu listă goală.
  */
 export async function parseDevizModificare(file) {
@@ -337,6 +369,8 @@ export async function parseDevizModificare(file) {
   const linii = arts.map((a, i) => {
     const q = a.cantitate
     if (q == null || !Number.isFinite(q)) probleme.push({ poz: i + 1, cod: a.cod, denumire: a.denumire, motiv: 'cantitate lipsă sau neinterpretabilă' })
+    // .docx: articol fără „Total=” până la articolul următor (review #1165 r3) — linia rămâne, marcată, și intră în probleme (L12)
+    if (a.incomplet) probleme.push({ poz: i + 1, cod: a.cod, denumire: a.denumire, motiv: `valoare lipsă: ${a.incomplet}` })
     return { ...a, cantitate: q == null || !Number.isFinite(q) ? null : q }
   })
   return { linii, negative: linii.filter(l => l.cantitate != null && l.cantitate < 0).length, probleme }

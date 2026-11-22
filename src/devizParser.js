@@ -41,6 +41,13 @@ const TOTAL_RE = /Total=\s*([\d.,]+)/
 // exact ca înainte — altfel importul AA din catalog (sign × |cantitate|) ar transforma o diminuare în suplimentare (review #1165 r1 P1).
 const UM_RE_SEMN = new RegExp('^(?:\\[\\s*\\d+\\s*\\]\\s*)?(' + UM_ALT + ')\\s+(-?[\\d.,]+)')
 const TOTAL_RE_SEMN = /Total=\s*(-?[\d.,]+)/
+const OBIECT_RE = /^Obiectul:\s*(\d+)\s+\d+\s+(.*)/
+const DEVIZ_RE = /^Deviz oferta\s+(\d+)\s+(.*)/
+// Fereastra istorică a catalogului: denumirea și „Total=” se caută în următoarele FERESTRA_DOCX paragrafe de după linia articolului.
+// Pe calea implicită rămâne așa (paritate cu main). Sub { cuSemn: true } (DOAR Rest de decontat) „Total=” se caută până la următorul
+// articol / „Obiectul:” / „Deviz oferta” / sfârșit, iar lipsa lui NU e `valoare: null` tăcut: articolul e marcat `incomplet` cu motivul
+// (review #1165 r3, L12). Fereastra rămâne doar pentru DENUMIRE (text descriptiv, oricum tăiat la 200 de caractere) pe ambele căi.
+const FERESTRA_DOCX = 5
 
 // tokenul brut de unitate → definiția (unitate bază + factor). Fallback ×1, marcat `necunoscut`
 // (exportat și pentru scripts/materiale_oferta: extrasele C6 normalizează UM-ul cu aceeași regulă).
@@ -58,6 +65,8 @@ const num = (s) => {
 
 // ── Core: din paragrafe (deja text plat) → articole ──
 // optiuni.cuSemn (implicit false): cantitatea / „Total=” negative sunt acceptate cu semn; implicit linia negativă se sare (ca pe main).
+//   Tot sub cuSemn: „Total=” se caută până la articolul / secțiunea următoare (nu doar în fereastra de 5 paragrafe), iar lipsa lui
+//   marchează articolul `incomplet: '<motiv>'` (valoare: null); un „Total=” de după articolul următor NU e luat drept al celui curent.
 export function articoleDinParagrafe(paras, { cuSemn = false } = {}) {
   const umRe = cuSemn ? UM_RE_SEMN : UM_RE, totalRe = cuSemn ? TOTAL_RE_SEMN : TOTAL_RE
   const arts = []
@@ -65,8 +74,8 @@ export function articoleDinParagrafe(paras, { cuSemn = false } = {}) {
   for (let i = 0; i < paras.length; i++) {
     const p = paras[i]
     let m
-    if ((m = p.match(/^Obiectul:\s*(\d+)\s+\d+\s+(.*)/))) obiect = { cod: m[1], nume: m[2].trim() }
-    if ((m = p.match(/^Deviz oferta\s+(\d+)\s+(.*)/))) deviz = { cod: m[1], nume: m[2].trim() }
+    if ((m = p.match(OBIECT_RE))) obiect = { cod: m[1], nume: m[2].trim() }
+    if ((m = p.match(DEVIZ_RE))) deviz = { cod: m[1], nume: m[2].trim() }
     const ma = p.match(ART_RE)
     if (!ma) continue
     const [, nr, cod, rest] = ma
@@ -77,18 +86,25 @@ export function articoleDinParagrafe(paras, { cuSemn = false } = {}) {
     const um = info.base, cantitate = q == null ? null : Math.round(q * info.f * 1000) / 1000
     // denumirea + valoarea (Total=) vin pe următoarele rânduri
     const den = []
-    let valoare = null
-    for (let j = i + 1; j < paras.length && j < i + 6; j++) {
+    let valoare = null, totalGasit = false
+    for (let j = i + 1; j < paras.length; j++) {
+      const inFereastra = j < i + 1 + FERESTRA_DOCX
+      if (!cuSemn && !inFereastra) break // calea catalogului: fereastra istorică, identic cu main
+      // calea cuSemn: la articolul / secțiunea următoare ne oprim — „Total=” al articolului curent nu mai poate veni după ele
+      if (cuSemn && (ART_RE.test(paras[j]) || OBIECT_RE.test(paras[j]) || DEVIZ_RE.test(paras[j]))) break
       const mt = paras[j].match(totalRe)
-      if (mt) { valoare = num(mt[1]); break }
+      if (mt) { valoare = num(mt[1]); totalGasit = true; break }
+      if (!inFereastra) continue // dincolo de fereastră (doar cuSemn) căutăm numai „Total=”; denumirea rămâne cea din fereastră
       const t = paras[j].replace(/\s+[\d.,]+(\s+[\d.,]+)*$/, '').trim()
       if (/[A-Z]{3,}/.test(t)) den.push(t)
     }
-    arts.push({
+    const art = {
       obiect_cod: obiect?.cod || '', obiect_nume: obiect?.nume || '',
       deviz_cod: deviz?.cod || '', deviz_nume: deviz?.nume || '',
       nr, cod, denumire: den.join(' ').slice(0, 200).trim(), um, cantitate, valoare,
-    })
+    }
+    if (cuSemn && (!totalGasit || valoare == null)) art.incomplet = totalGasit ? 'valoarea de după „Total=” nu e număr' : 'fără „Total=” până la articolul / secțiunea următoare (valoarea lipsește)'
+    arts.push(art)
   }
   return arts
 }
