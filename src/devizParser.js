@@ -85,7 +85,9 @@ export function articoleDinParagrafe(paras) {
 }
 
 // ── .docx: extrage paragrafele din word/document.xml ──
-function paragrafeDinDocXml(xml) {
+// Exportată pentru Rest de decontat (restDecontat/parsareSituatie.js citește situațiile F3 Transgaz din aceleași paragrafe);
+// comportamentul catalogului (parseDevizDocx / articoleDinParagrafe) e neschimbat.
+export function paragrafeDinDocXml(xml) {
   const paras = []
   const pRe = /<w:p\b[\s\S]*?<\/w:p>/g
   let m
