@@ -32,8 +32,9 @@ const UM_DEFS = [
 ]
 const UM_ALT = UM_DEFS.map(d => d.re).join('|')
 const ART_RE = /^(\d{3})\s+([A-Z]{2,4}\d[A-Z0-9]*)\s+(.*)$/
-// linia de articol: eventual „[ N ]" (marcaj fază), apoi UNITATE, apoi CANTITATE
-const UM_RE = new RegExp('^(?:\\[\\s*\\d+\\s*\\]\\s*)?(' + UM_ALT + ')\\s+([\\d.,]+)')
+// linia de articol: eventual „[ N ]" (marcaj fază), apoi UNITATE, apoi CANTITATE (cu semn: devizele actelor adiționale / NR
+// au diminuări negative — Rest de decontat, parseDevizModificare; în F3 cantitățile sunt pozitive, deci nimic nu se schimbă acolo)
+const UM_RE = new RegExp('^(?:\\[\\s*\\d+\\s*\\]\\s*)?(' + UM_ALT + ')\\s+(-?[\\d.,]+)')
 
 // tokenul brut de unitate → definiția (unitate bază + factor). Fallback ×1, marcat `necunoscut`
 // (exportat și pentru scripts/materiale_oferta: extrasele C6 normalizează UM-ul cu aceeași regulă).
@@ -70,7 +71,7 @@ export function articoleDinParagrafe(paras) {
     const den = []
     let valoare = null
     for (let j = i + 1; j < paras.length && j < i + 6; j++) {
-      const mt = paras[j].match(/Total=\s*([\d.,]+)/)
+      const mt = paras[j].match(/Total=\s*(-?[\d.,]+)/)
       if (mt) { valoare = num(mt[1]); break }
       const t = paras[j].replace(/\s+[\d.,]+(\s+[\d.,]+)*$/, '').trim()
       if (/[A-Z]{3,}/.test(t)) den.push(t)
