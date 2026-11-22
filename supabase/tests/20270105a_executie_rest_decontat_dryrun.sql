@@ -64,6 +64,10 @@
 -- SESIUNE PROASPATA: primul bloc dupa fixturi verifica garda cu marcajul RPC LIPSA (NULL): fisierul se ruleaza intr-o sesiune noua, inainte ca
 -- vreun RPC sa fi pus marcajul (precondiția e verificata explicit).
 -- FIXTURI: pe clona, daca profiles / employees cer alte coloane NOT NULL, se completeaza DOAR blocul FIXTURI (restul nu depinde de ele).
+-- r-clona (proba chat-ului pe clona PG17, 22.11.2026): fixturile respecta constrangerile productiei — employees.department NOT NULL; profiles.role
+-- explicit (valoarea implicita 'manager' nu trece profiles_role_chk); o fisa de angajat = un cont (uniq_profiles_employee_id); user_module_access.module
+-- are FK spre app_modules(key), iar cheia 'executie_rest_decontat' NU exista in app_modules (nici pe productie) → fixtura o creeaza (anulata la ROLLBACK).
+-- Probele PGlite ruleaza fisierul cu aceleasi constrangeri (scripts/pglite/fixturi/executie_constrangeri_productie.sql, doar in tranzactia lui).
 BEGIN;
 SET LOCAL search_path = public, pg_temp;
 CREATE TEMP TABLE rd_fix (k text PRIMARY KEY, id bigint) ON COMMIT DROP;
@@ -76,18 +80,24 @@ GRANT SELECT, INSERT ON rd_cons TO authenticated, service_role;
 DO $fix$
 DECLARE v bigint; v_s bigint;
 BEGIN
-  INSERT INTO public.employees (id, name) VALUES (9101, 'RD MP UNU'), (9102, 'RD MP DOI'), (9103, 'RD CONTRACTE'), (9104, 'RD SEF SANTIER');
+  INSERT INTO public.employees (id, name, department) VALUES (9101, 'RD MP UNU', 'Executie'), (9102, 'RD MP DOI', 'Executie'), (9103, 'RD CONTRACTE', 'Executie'),
+    (9104, 'RD SEF SANTIER', 'Executie');
   IF to_regclass('auth.users') IS NOT NULL THEN
     INSERT INTO auth.users (id) SELECT x::uuid FROM unnest(ARRAY['f0000000-0000-4000-8000-00000000000a', 'f0000000-0000-4000-8000-00000000000b', 'f0000000-0000-4000-8000-00000000000c',
       'f0000000-0000-4000-8000-00000000000d', 'f0000000-0000-4000-8000-00000000000e', 'f0000000-0000-4000-8000-00000000000f', 'f0000000-0000-4000-8000-000000000010',
       'f0000000-0000-4000-8000-000000000011', 'f0000000-0000-4000-8000-000000000012']) x
     ON CONFLICT (id) DO NOTHING;
   END IF;
-  INSERT INTO public.profiles (id, is_owner, employee_id) VALUES
-    ('f0000000-0000-4000-8000-00000000000a', true, NULL), ('f0000000-0000-4000-8000-00000000000b', false, 9101), ('f0000000-0000-4000-8000-00000000000c', false, NULL),
-    ('f0000000-0000-4000-8000-00000000000d', false, NULL), ('f0000000-0000-4000-8000-00000000000e', false, 9104), ('f0000000-0000-4000-8000-00000000000f', false, 9103),
-    ('f0000000-0000-4000-8000-000000000010', false, NULL), ('f0000000-0000-4000-8000-000000000011', false, NULL), ('f0000000-0000-4000-8000-000000000012', false, NULL)
-  ON CONFLICT (id) DO UPDATE SET is_owner = EXCLUDED.is_owner, employee_id = EXCLUDED.employee_id;
+  -- rolul e explicit ('teren' nu da niciun drept in Executie: dreptul vine din is_owner / user_module_access / fisa); fiecare fisa pe un singur cont
+  INSERT INTO public.profiles (id, is_owner, employee_id, role) VALUES
+    ('f0000000-0000-4000-8000-00000000000a', true, NULL, 'teren'), ('f0000000-0000-4000-8000-00000000000b', false, 9101, 'teren'), ('f0000000-0000-4000-8000-00000000000c', false, NULL, 'teren'),
+    ('f0000000-0000-4000-8000-00000000000d', false, NULL, 'teren'), ('f0000000-0000-4000-8000-00000000000e', false, 9104, 'teren'), ('f0000000-0000-4000-8000-00000000000f', false, 9103, 'teren'),
+    ('f0000000-0000-4000-8000-000000000010', false, NULL, 'teren'), ('f0000000-0000-4000-8000-000000000011', false, NULL, 'teren'), ('f0000000-0000-4000-8000-000000000012', false, NULL, 'teren')
+  ON CONFLICT (id) DO UPDATE SET is_owner = EXCLUDED.is_owner, employee_id = EXCLUDED.employee_id, role = EXCLUDED.role;
+  -- cheile de modul (FK user_module_access → app_modules): 'executie' exista pe productie; 'executie_rest_decontat' NU → create aici, anulate la ROLLBACK
+  INSERT INTO public.app_modules (key, parent_key, name, is_active, show_on_homepage) VALUES ('executie', NULL, 'Executie', true, true) ON CONFLICT (key) DO NOTHING;
+  INSERT INTO public.app_modules (key, parent_key, name, is_active, show_on_homepage)
+    VALUES ('executie_rest_decontat', 'executie', 'Rest de decontat (dry-run)', false, false) ON CONFLICT (key) DO NOTHING;
   INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES
     ('f0000000-0000-4000-8000-00000000000c', 'executie_rest_decontat', 'viewer'), ('f0000000-0000-4000-8000-00000000000d', 'executie_rest_decontat', 'editor'),
     ('f0000000-0000-4000-8000-00000000000e', 'executie', 'viewer'), ('f0000000-0000-4000-8000-00000000000f', 'executie', 'viewer'),
