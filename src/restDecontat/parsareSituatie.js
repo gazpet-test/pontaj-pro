@@ -25,13 +25,16 @@
 // CONTROLUL (L12 — nimic nu dispare tăcut; plasa de control pe TOTAL din r7, acum pe fiecare deviz): `complet: true` DOAR dacă FIECARE
 // deviz are (a) controlul „Cheltuieli directe din articole … TOTAL” găsit și EGAL cu suma „Total=” ale articolelor citite (toleranța de
 // rotunjire `toleranta`: 0,01 lei × numărul de articole, cel mult 1 leu) și (b) „TOTAL GENERAL DEVIZ” găsit; altfel `complet: false`, cu
-// devizul și motivul în `probleme`. În plus sunt probleme: orice paragraf care ARATĂ a început de articol (3 cifre + simbol + … + trei
-// numere) și n-a fost consumat ca articol (oriunde: și în mijlocul unui articol, și în afara devizelor); un „Total=” fără articol deschis;
-// un articol fără „Total=” până la următorul (linia rămâne, `incomplet`, valoare null); un deviz fără articole. `complet` = probleme.length
-// === 0 — o singură definiție. Paragrafele necunoscute din zona articolelor intră în `ignorate` (vizibile, nu probleme: controlul pe sumă
-// e cel care decide dacă lipsește valoare).
-// Antet: luna / an din „Situatie de plata in luna L anul A” (pe deviz; la nivel de fișier doar valorile pe care TOATE devizele le dau la
-// fel — altfel null + avertisment); obiect / deviz din antetul fiecărui deviz.
+// devizul și motivul în `probleme`. În plus sunt probleme: un început de articol (PREFIXUL nr + simbol + UM + cantitate, oricât ar urma —
+// RE_ART_PREFIX, verificat înaintea continuării denumirii) care nu are forma F3 completă: e deschis ca articol NOU, cu problema formei, iar
+// articolul deschis înaintea lui se închide (r9: nu se mai lipește în denumire, nu ia „Total=”-ul altuia); orice paragraf care ARATĂ a
+// început de articol (3 cifre + simbol + … + trei numere) fără prefix citibil (neconsumat, oriunde); un „Total=” fără articol deschis; un
+// articol fără „Total=” până la următorul început de articol / control / sfârșitul devizului (linia rămâne, `incomplet`, valoare null); un
+// deviz fără articole. `complet` = probleme.length === 0 — o singură definiție. Paragrafele necunoscute din zona articolelor intră în
+// `ignorate` (vizibile, nu probleme: controlul pe sumă e cel care decide dacă lipsește valoare).
+// Antet: luna / an din „Situatie de plata in luna L anul A” (pe deviz; moștenite între devizele ACELUIAȘI bloc, niciodată peste un nou
+// „Obiectivul:” / „Obiectul:” — r9; la nivel de fișier doar valorile pe care TOATE devizele le dau la fel — altfel null + avertisment, cu
+// devizele fără valoare numite); obiect / deviz din antetul fiecărui deviz.
 // Numerele: parseNumar (helperul EXISTENT, L17) pe tokenii validați de regexuri ancorate (L13). Totalurile: `total_citit` = suma articolelor,
 // `total_control` = suma controalelor, `total_document` = suma „TOTAL GENERAL DEVIZ” (cu indirecte + profit — cifra din borderou).
 // Excel: situațiile Transgaz NU vin în Excel → `parseSituatieExcel` / un fișier .xls(x) = refuz clar, nu ghicire (decizia 22.11.2026).
@@ -96,6 +99,13 @@ export const RE_ART = new RegExp(`^(\\d{3})\\s+(\\S+)\\s+(?:\\[\\s*\\d+\\s*\\]\\
 /** paragraf care ARATĂ a început de articol (3 cifre + simbol + … + trei numere la final), oricare ar fi UM-ul / forma — dacă nu e consumat
  *  de RE_ART e problemă, nu paragraf sărit tăcut */
 export const RE_ART_INCEPUT = new RegExp(`^\\d{3}\\s+\\S+\\s+\\S.*\\s${NUM}\\s+${NUM}\\s+${NUM}$`)
+/** PREFIXUL de început de articol (r9): nr (3 cifre) + simbol + [ fază ] + UM + cantitate, ORICE ar urma după cantitate (prețurile, nimic,
+ *  alt text) — un articol cu linia incompletă („002 B1 M 1.000”) e tot început de articol, nu continuarea denumirii celui deschis. UM = un
+ *  token care începe cu literă (forma F3 „BUC.” / „100 MC.” / „KM.CABL.”, un UM din lista comună scris oricum — „buc.”, „ml” — sau alt
+ *  UM, „ora”), opțional cu „100” / „1000” în față; un rând de denumire care începe cu cifre („150 MM 0.00 0.00”) nu are UM + cantitate
+ *  după simbol. Calibrat pe sursele reale (22.11.2026): în afara liniilor RE_ART, 0 paragrafe au acest prefix. Grupele = ale lui RE_ART:
+ *  1 nr, 2 simbol, 3 UM, 4 cantitate. */
+export const RE_ART_PREFIX = new RegExp(`^(\\d{3})\\s+(\\S+)\\s+(?:\\[\\s*\\d+\\s*\\]\\s+)?((?:(?:1000|100)\\s*)?[A-Za-z][A-Za-z0-9.]{0,9})\\s+(-?\\d+(?:\\.\\d+)?)(?=\\s|$)`)
 /** „0.001 0 Total= 6697.50” / „Total= -50.00” / „suprapunere 50% Total= 5703.69” (ultimul rând de denumire lipit de Total=; grupa 1 = prefixul) */
 export const RE_TOTAL_ART = /^(?:(.*)\s)?Total=\s*(-?\d[\d ]*\.\d+)$/
 /** paragrafele de denumire poartă la final PU + VAL (două numere) — se taie pentru denumire (și un paragraf format doar din numere, „0.00 0.00”) */
@@ -171,8 +181,10 @@ export function situatieDinParagrafe(paras) {
       linii: [], suma_articole: 0, control_cheltuieli_directe: null, total_general: null, reconciliat: false, diferenta: null, toleranta: null,
     }
   }
-  const articolNou = (i, m) => {
+  // m = potrivirea RE_ART (linia F3 completă) sau RE_ART_PREFIX (doar prefixul: `formaIncompleta` → articol deschis + problemă)
+  const articolNou = (i, m, formaIncompleta = false) => {
     if (articol) inchideArticol('fără „Total=” până la articolul următor')
+    if (formaIncompleta) problema(i, `${eticheta(deviz)}: linia articolului ${m[1]} „${m[2]}” nu are forma F3 completă (UM cu majuscule + cantitate cu 3 zecimale + PU / VAL materiale): „${m.input.slice(0, 80)}” — e citită ca articol nou (nu se lipește de articolul anterior); verificați-o`, { nr: m[1], cod: m[2] })
     const q = numar(m[4])
     articol = {
       obiect_cod: deviz.obiect_cod, obiect_nume: deviz.obiect_nume, deviz_cod: deviz.deviz_cod, deviz_nume: deviz.deviz_nume,
@@ -189,12 +201,16 @@ export function situatieDinParagrafe(paras) {
     // zgomot de paginare / antetul tabelului / rândurile de categorie și prețuri: sărite în orice stare (în antetul devizului închid antetul)
     if (RE_PAG.test(p) || RE_SEP.test(p) || RE_ANTET_TABEL.test(p) || RE_CATEGORIA.test(p) || RE_PRETURI.test(p)) { if (stare === 'deviz') stare = 'articole'; continue }
     // marcajele de antet, în orice stare (un deviz deschis se închide, cu problemele lui)
-    if ((m = p.match(RE_OBIECTIV))) { inchideDeviz(); obiectiv = { nume: m[1].trim() }; obiect = null; stare = 'obiectiv'; continue }
-    if ((m = p.match(RE_OBIECT))) { inchideDeviz(); obiect = { cod: m[1], nume: m[2].trim() }; stare = 'obiect'; continue }
+    // un bloc nou (Obiectivul / Obiectul) își aduce propria „Situatie de plata …”: luna / anul blocului anterior NU se moștenesc (r9);
+    // între devizele aceluiași bloc moștenirea rămâne
+    if ((m = p.match(RE_OBIECTIV))) { inchideDeviz(); obiectiv = { nume: m[1].trim() }; obiect = null; situatie = null; stare = 'obiectiv'; continue }
+    if ((m = p.match(RE_OBIECT))) { inchideDeviz(); obiect = { cod: m[1], nume: m[2].trim() }; situatie = null; stare = 'obiect'; continue }
     if ((m = p.match(RE_SITUATIE))) { situatie = { luna: Number(m[1]), an: Number(m[2]) }; if (stare === 'obiectiv') stare = 'inainte'; continue }
     if ((m = p.match(RE_DEVIZ))) { devizNou(i, m[1], m[2].trim()); stare = 'deviz'; continue }
-    // continuarea numelor din antet (paragrafele următoare, până la marcajul următor) — niciodată o linie care arată a articol
-    const arataArticol = RE_ART_INCEPUT.test(p)
+    // continuarea numelor din antet (paragrafele următoare, până la marcajul următor) — niciodată o linie care arată a articol: prefixul
+    // de început (nr + simbol + UM + cantitate, oricât ar urma) SAU forma cu trei numere la final; verificat ÎNAINTEA oricărei continuări
+    const inceput = p.match(RE_ART_PREFIX)
+    const arataArticol = Boolean(inceput) || RE_ART_INCEPUT.test(p)
     if (stare === 'obiectiv' && obiectiv && !arataArticol) { obiectiv.nume = `${obiectiv.nume} ${p}`.trim(); continue }
     if (stare === 'obiect' && obiect && !arataArticol) { obiect.nume = `${obiect.nume} ${p}`.trim(); continue }
     if (stare === 'deviz' && !arataArticol) { deviz.deviz_nume = `${deviz.deviz_nume} ${p}`.trim(); continue }
@@ -202,7 +218,14 @@ export function situatieDinParagrafe(paras) {
 
     if (stare === 'articole') {
       if ((m = p.match(RE_ART))) { articolNou(i, m); continue }
-      if (arataArticol) { problema(i, `${eticheta(deviz)}: paragraf care arată a început de articol, dar nu are forma F3 așteptată (nr + simbol + UM + cantitate cu 3 zecimale + două prețuri) — neconsumat: „${p.slice(0, 80)}”`); continue }
+      // prefixul fără restul formei: articol NOU (închide pe cel deschis, cu problema lui), plus problema formei
+      if (inceput) { articolNou(i, inceput, true); continue }
+      // arată a articol (trei numere la final) fără prefixul citibil: nu poate fi deschis, dar nici nu lasă articolul deschis să ia
+      // „Total=”-ul care urmează (acela devine orfan, cu problema lui)
+      if (arataArticol) {
+        if (articol) inchideArticol('fără „Total=” până la un paragraf care arată a început de articol')
+        problema(i, `${eticheta(deviz)}: paragraf care arată a început de articol, dar nu are forma F3 așteptată (nr + simbol + UM + cantitate cu 3 zecimale + două prețuri) — neconsumat: „${p.slice(0, 80)}”`); continue
+      }
       if ((m = p.match(RE_TOTAL_ART))) {
         if (!articol) { problema(i, `${eticheta(deviz)}: „Total=” fără linie de articol înaintea lui — valoarea ${m[2].trim()} nu e a niciunui articol citit`); continue }
         const v = numar(m[2])
@@ -246,14 +269,20 @@ export function situatieDinParagrafe(paras) {
   // majoritatea: pe situațiile reale un singur deviz din 17 avea altă lună / alt an, iar omul decide care e corect). Avertismentul
   // grupează devizele pe valoare (cele mai multe întâi; un grup de peste 3 devize apare ca număr) și dă grupurile întregi în `valori`.
   const antet = { luna: null, an: null }
+  // Un deviz fără valoare (blocul lui n-are propriul „Situatie de plata …”, r9) nu dă aceeași valoare: câmpul fișierului rămâne null și
+  // devizele fără valoare sunt numite în avertisment.
   for (const k of ['luna', 'an']) {
     const valori = [...new Set(devize.map(d => d[k]).filter(v => v != null))]
-    if (valori.length === 1) antet[k] = valori[0]
-    else if (valori.length > 1) {
+    const fara = devize.filter(d => d[k] == null).map(d => d.deviz_cod)
+    if (valori.length === 1 && fara.length === 0) antet[k] = valori[0]
+    else if (valori.length >= 1) {
       const grupuri = valori.map(v => ({ valoare: v, devize: devize.filter(d => d[k] === v).map(d => d.deviz_cod) })).sort((a, b) => b.devize.length - a.devize.length)
-      const fara = devize.filter(d => d[k] == null).map(d => d.deviz_cod)
       const text = grupuri.map(g => `${g.valoare} (${g.devize.length > 3 ? `${g.devize.length} devize` : g.devize.join(', ')})`).join('; ')
-      avertismente.push({ camp: k, valori: grupuri, motiv: `devizele dau valori diferite pentru ${k === 'luna' ? 'lună' : 'an'}: ${text}${fara.length ? `; fără valoare: ${fara.join(', ')}` : ''} — câmpul rămâne de completat de om` })
+      const ce = k === 'luna' ? 'lună' : 'an'
+      const motiv = valori.length > 1
+        ? `devizele dau valori diferite pentru ${ce}: ${text}${fara.length ? `; fără valoare: ${fara.join(', ')}` : ''} — câmpul rămâne de completat de om`
+        : `nu toate devizele au „Situatie de plata in luna L anul A” în blocul lor (Obiectivul / Obiectul): ${ce} ${text}; fără valoare: ${fara.join(', ')} — valoarea altui bloc nu se moștenește, câmpul rămâne de completat de om`
+      avertismente.push({ camp: k, valori: grupuri, motiv })
     } else avertismente.push({ camp: k, motiv: `niciun deviz nu are „Situatie de plata in luna L anul A” — ${k === 'luna' ? 'luna' : 'anul'} rămâne de completat de om` })
   }
   const linii = devize.flatMap(d => d.linii)

@@ -8,7 +8,7 @@ import JSZip from 'jszip'
 import {
   parseSituatieF3, situatieDinParagrafe, parseSituatie, parseSituatieExcel, parseDevizModificare, tipRand, toleranta, liniePentruRpc, liniePentruRpcBaza,
   CAMPURI_LINIE_RPC, CAMPURI_LINIE_RPC_BAZA, TOLERANTA_PE_LINIE_LEI, TOLERANTA_MAX_LEI, MOTIV_FORMAT_F3,
-  RE_ART, RE_ART_INCEPUT, RE_TOTAL_ART, RE_OBIECT, RE_OBIECTIV, RE_DEVIZ, RE_SITUATIE, RE_PAG, RE_SEP, RE_ANTET_TABEL, RE_CHELT_DIRECTE, RE_CONTROL_ANTET,
+  RE_ART, RE_ART_INCEPUT, RE_ART_PREFIX, RE_TOTAL_ART, RE_OBIECT, RE_OBIECTIV, RE_DEVIZ, RE_SITUATIE, RE_PAG, RE_SEP, RE_ANTET_TABEL, RE_CHELT_DIRECTE, RE_CONTROL_ANTET,
   RE_CONTROL_NUMERE, RE_TOTAL_GENERAL, RE_GREUTATE, RE_SPORURI,
 } from './parsareSituatie.js'
 import { UM_LISTA, normalizeUm, acelasiUm, umCanonic, eUmCunoscut } from './um.js'
@@ -157,6 +157,15 @@ describe('regexurile F3 — pozitiv și negativ (L13, ancorate)', () => {
   it('RE_ART_INCEPUT: orice paragraf „nr + simbol + … + trei numere” (și cu UM nerecunoscută); nu: rândurile de denumire cu două numere, calculele CAM', () => {
     for (const bun of ['001 TSX01A1 buc. 6.000 3.91 23.46', '001 TSX01A1 BUC. 6.00 3.91 23.46', '001 TSX01A1 SET 6.000 3.91 23.46', '002 M1X42A1 [ 2] BUC. 19.000 6.75 128.25']) expect(bun, bun).toMatch(RE_ART_INCEPUT)
     for (const rau of ['150 MM 0.00 0.00', '0.00 * 0.000) * 0.02250 = 29.02', '135926.23 * 0.08000 = 10 874.10', '0.001 0 Total= 6697.50', '1001 TSX01A1 BUC. 6.000 3.91 23.46']) expect(rau, rau).not.toMatch(RE_ART_INCEPUT)
+  })
+  it('RE_ART_PREFIX (r9): nr + simbol + [ fază ] + UM + cantitate, ORICE după (nimic, prețuri, text); nu: denumiri care încep cu cifre, fără UM, fără cantitate, 4 cifre, „Total=”', () => {
+    const m = '002 B1 M 1.000'.match(RE_ART_PREFIX)
+    expect([m[1], m[2], m[3], m[4]]).toEqual(['002', 'B1', 'M', '1.000'])
+    expect('004 TSC04B1 [ 1] 100 MC. 5.000'.match(RE_ART_PREFIX).slice(1, 5)).toEqual(['004', 'TSC04B1', '100 MC.', '5.000'])
+    expect('002 B1 ora 5'.match(RE_ART_PREFIX).slice(1, 5)).toEqual(['002', 'B1', 'ora', '5'])
+    expect('001 CAB01 KM.CABL. -1.200 LUCRARE'.match(RE_ART_PREFIX).slice(3, 5)).toEqual(['KM.CABL.', '-1.200'])
+    for (const bun of ['002 B1 M 1.000 0.00 0.00', '002 M1X42A1 [ 2] BUC. 19.000 6.75 128.25', '002 B1 buc. 6.00 3.91', '002 B1 M 1.000 LUCRARE B', '003 6426594 BUC. 6']) expect(bun, bun).toMatch(RE_ART_PREFIX)
+    for (const rau of ['150 MM 0.00 0.00', '600 MM TEREN GREU 0.00 0.00', '002 B1 1.000 0.00 0.00', '002 B1 M', '002 B1 M abc', '002 B1 M 1.000x', '1002 B1 M 1.000', '02 B1 M 1.000', '0.001 0 Total= 100.00', 'LUCRARE B 0.00 0.00', 'Total= 5.00']) expect(rau, rau).not.toMatch(RE_ART_PREFIX)
   })
   it('RE_TOTAL_ART: „0.001 0 Total= 6697.50”, „Total= -50.00”, denumire lipită; nu: „Total deviz 100.00”, „Total = 20”, „TOTAL GENERAL DEVIZ: 3 223.38”', () => {
     expect('0.001 0 Total= 6697.50'.match(RE_TOTAL_ART)[2]).toBe('6697.50')
@@ -325,25 +334,48 @@ describe('controlul pe deviz → complet: false cu devizul și motivul', () => {
 })
 
 describe('paragrafe de articol neconsumate și „Total=” orfane → probleme (nimic nu dispare tăcut)', () => {
-  it('UM cu litere mici („buc.”): linia nu e articol F3 → problemă „neconsumat”; denumirile ei → ignorate; „Total=” al ei → problemă; controlul cade', () => {
+  it('UM cu litere mici („ora”): prefixul nr + simbol + UM + cantitate e început de articol → articol citit (cu „Total=” al lui) + problema formei; complet false', () => {
     const paras = D1().map(p => (p.startsWith('005 AUT0001 ORA') ? '005 AUT0001 ora 1.000 0.00 0.00' : p))
+    const r = situatieDinParagrafe(paras)
+    expect(r.complet).toBe(false)
+    expect(r.linii).toHaveLength(7)
+    expect(r.linii[4]).toMatchObject({ nr: '005', cod: 'AUT0001', um: 'ora', cantitate: 1, valoare: 350, denumire: 'AUTOLAB.MOBIL PT.VERIFICARI DE TEST PE AUTO 3T' })
+    expect(r.probleme.map(p => [p.paragraf, p.nr, p.cod, p.motiv])).toEqual([
+      [36, '005', 'AUT0001', expect.stringMatching(/linia articolului 005 „AUT0001” nu are forma F3 completă .*: „005 AUT0001 ora 1\.000 0\.00 0\.00” — e citită ca articol nou/)],
+    ])
+    expect(r.ignorate).toEqual([]); expect(r.devize[0].reconciliat).toBe(true)
+  })
+  it('linie fără prefix citibil (fără UM), dar cu trei numere la final: problemă „neconsumat”; denumirile ei → ignorate; „Total=” al ei → problemă; controlul cade', () => {
+    const paras = D1().map(p => (p.startsWith('005 AUT0001 ORA') ? '005 AUT0001 1.000 0.00 0.00 0.00' : p))
     const r = situatieDinParagrafe(paras)
     expect(r.complet).toBe(false)
     expect(r.linii).toHaveLength(6)
     expect(r.probleme.map(p => [p.paragraf, p.motiv])).toEqual([
-      [36, expect.stringMatching(/paragraf care arată a început de articol, dar nu are forma F3 așteptată .* — neconsumat: „005 AUT0001 ora 1\.000 0\.00 0\.00”/)],
+      [36, expect.stringMatching(/paragraf care arată a început de articol, dar nu are forma F3 așteptată .* — neconsumat: „005 AUT0001 1\.000 0\.00 0\.00 0\.00”/)],
       [40, expect.stringMatching(/„Total=” fără linie de articol înaintea lui — valoarea 350\.00 nu e a niciunui articol citit/)],
       [6, expect.stringMatching(/diferență 350 lei/)],
     ])
     expect(r.ignorate.map(i => i.text)).toEqual(['AUTOLAB.MOBIL PT.VERIFICARI DE TEST PE 10.00 10.00', 'AUTO 3T 0.00 0.00', '0.00 0.00'])
   })
-  it('linia care arată a articol în MIJLOCUL unui articol deschis: problemă, nu rând de denumire (denumirea rămâne neschimbată)', () => {
+  it('început de articol în MIJLOCUL unui articol deschis: articolul deschis se închide (problemă, fără valoare), cel nou ia „Total=”-ul; nimic nu intră în denumire', () => {
     const paras = D1().flatMap(p => (p === 'LA 2 MC CU MACARA DE 10-12 TF. 0.00 0.00' ? [p, '008 XYZ01 set 2.000 1.00 2.00'] : [p]))
     const r = situatieDinParagrafe(paras)
-    expect(r.linii[0].denumire).toBe('MONTARE STALPI DE TEST CU VOL PANA LA 2 MC CU MACARA DE 10-12 TF.')
-    expect(r.linii).toHaveLength(7)
-    expect(r.probleme.map(p => p.motiv)).toEqual([expect.stringMatching(/neconsumat: „008 XYZ01 set 2\.000 1\.00 2\.00”/)])
     expect(r.complet).toBe(false)
+    expect(r.linii).toHaveLength(8)
+    expect(r.linii[0]).toMatchObject({ nr: '001', cod: 'TSX01A1', valoare: null, incomplet: 'fără „Total=” până la articolul următor', denumire: 'MONTARE STALPI DE TEST CU VOL PANA LA 2 MC CU MACARA DE 10-12 TF.' })
+    expect(r.linii[1]).toMatchObject({ nr: '008', cod: 'XYZ01', um: 'set', cantitate: 2, valoare: 1313.46, denumire: '' })
+    expect(r.probleme.map(p => [p.paragraf, p.nr, p.cod])).toEqual([[16, '001', 'TSX01A1'], [19, '008', 'XYZ01']])
+    expect(r.probleme[1].motiv).toMatch(/linia articolului 008 „XYZ01” nu are forma F3 completă/)
+    // fără prefix citibil (fără UM): articolul deschis tot se închide — „Total=”-ul de după nu i se mai atribuie (devine orfan)
+    const fara = situatieDinParagrafe(D1().flatMap(p => (p === 'LA 2 MC CU MACARA DE 10-12 TF. 0.00 0.00' ? [p, '008 XYZ01 2.000 1.00 2.00 3.00'] : [p])))
+    expect(fara.linii).toHaveLength(7)
+    expect(fara.linii[0]).toMatchObject({ cod: 'TSX01A1', valoare: null, incomplet: 'fără „Total=” până la un paragraf care arată a început de articol' })
+    expect(fara.probleme.map(p => [p.paragraf, p.motiv])).toEqual([
+      [16, expect.stringMatching(/articolul 001 „TSX01A1” fără „Total=” până la un paragraf care arată a început de articol/)],
+      [19, expect.stringMatching(/neconsumat: „008 XYZ01 2\.000 1\.00 2\.00 3\.00”/)],
+      [21, expect.stringMatching(/„Total=” fără linie de articol înaintea lui — valoarea 1313\.46/)],
+      [6, expect.stringMatching(/diferență 1313\.46 lei/)],
+    ])
   })
   it('articol după controlul devizului / după TOTAL GENERAL / înaintea primului deviz: problemă cu locul, nu intră în niciun deviz', () => {
     const dupaControl = D1().flatMap(p => (p === 'Din care:' ? [p, ...art({ nr: '009', cod: 'TSX09A1', um: 'M', cant: 1, total: 5 })] : [p]))
@@ -395,6 +427,81 @@ describe('paragrafe de articol neconsumate și „Total=” orfane → probleme 
     expect(r.complet).toBe(true); expect(r.ignorate).toEqual([])
     expect(r.linii[2].denumire).toBe('TEAVA DE TEST CU EXECUTIE MECANIZATA A LANSARII DN=600MM TEREN GREU suprapunere 50%')
     expect(r.linii[2].valoare).toBe(1705.55)
+  })
+})
+
+describe('r9 P1: un articol fără „Total=” nu e absorbit de următorul început de articol (reproducerea review-ului)', () => {
+  // reproducerea exactă: A1 fără „Total=”, urmat de „002 B1 M 1.000” (linie fără prețuri) cu „Total= 100.00”; controlul 100, TOTAL GENERAL 110
+  const ARTICOLE = ['001 A1 M 1.000 0.00 0.00', 'LUCRARE A 0.00 0.00', '002 B1 M 1.000', 'LUCRARE B 0.00 0.00', '0.001 0 Total= 100.00']
+  const SFARSIT = ['Cheltuieli directe din articole:', 'GREUTATE MATERIALE MANOPERA UTILAJ TRANSPORT TOTAL', '0.000 0.00 0.00 0.00 0.00 100.00', 'TOTAL GENERAL DEVIZ: 110.00']
+  const PARAS = [...antetDeviz(), ...ARTICOLE, ...SFARSIT]
+  const verifica = r => {
+    expect(r.complet).toBe(false)
+    expect(r.linii.map(l => [l.nr, l.cod, l.um, l.cantitate, l.valoare, l.denumire])).toEqual([['001', 'A1', 'M', 1, null, 'LUCRARE A'], ['002', 'B1', 'M', 1, 100, 'LUCRARE B']])
+    expect(r.linii[0].incomplet).toBe('fără „Total=” până la articolul următor')
+    expect(r.probleme.map(p => [p.paragraf, p.nr, p.cod])).toEqual([[16, '001', 'A1'], [18, '002', 'B1']])
+    expect(r.probleme[0].motiv).toMatch(/devizul „DZ0101” \(obiectul „0001”\): articolul 001 „A1” fără „Total=” până la articolul următor — valoarea lipsește din sumă/)
+    expect(r.probleme[1].motiv).toMatch(/linia articolului 002 „B1” nu are forma F3 completă .*: „002 B1 M 1\.000” — e citită ca articol nou/)
+    expect(r.devize[0]).toMatchObject({ suma_articole: 100, control_cheltuieli_directe: 100, reconciliat: true, total_general: 110 })
+  }
+  it('situatieDinParagrafe: două articole, A1 problemă (fără valoare), B1 = 100, complet false', () => verifica(situatieDinParagrafe(PARAS)))
+  it('parseSituatieF3 (.docx) și parseDevizModificare (AA / NR / NCS): același rezultat', async () => {
+    verifica(await parseSituatieF3(await docx(PARAS)))
+    const m = await parseDevizModificare(fisier('F3 NCS Ad.2.docx', PARAS))
+    verifica(m); expect(m.negative).toBe(0)
+  })
+  it('variante: început cu text după cantitate, cantitate fără zecimale, UM „100 MC.” cu fază; început în antetul devizului / după control / înaintea primului deviz', () => {
+    for (const linie of ['002 B1 M 1.000 LUCRARE B', '002 B1 M 1', '002 B1 [ 2] 100 MC. 1.000']) {
+      const r = situatieDinParagrafe([...antetDeviz(), ...ARTICOLE.map(p => (p === '002 B1 M 1.000' ? linie : p)), ...SFARSIT])
+      expect(r.complet, linie).toBe(false)
+      expect(r.linii.map(l => [l.cod, l.valoare]), linie).toEqual([['A1', null], ['B1', 100]])
+      expect(r.probleme.map(p => p.cod), linie).toEqual(['A1', 'B1'])
+    }
+    // imediat după „Deviz …”: prefixul nu devine continuarea numelui devizului
+    const r1 = situatieDinParagrafe(D1().flatMap(p => (p.startsWith('Deviz DZ0101') ? [p, '009 TSX09A1 M 1.000'] : [p])))
+    expect(r1.devize[0].deviz_nume).toBe('4.1.1/1 Firul conductei - tronson 1')
+    expect(r1.linii[0]).toMatchObject({ nr: '009', cod: 'TSX09A1', valoare: null, incomplet: 'fără „Total=” până la articolul următor' })
+    expect(r1.complet).toBe(false)
+    // după controlul devizului și în antetul obiectului (înaintea primului deviz): problemă cu locul, nu denumire / nume
+    const r2 = situatieDinParagrafe(D1().flatMap(p => (p === 'Din care:' ? [p, '009 TSX09A1 M 1.000'] : [p])))
+    expect(r2.probleme.map(p => p.motiv)).toEqual([expect.stringMatching(/linie de articol după controlul devizul „DZ0101” .*„009 TSX09A1 M 1\.000”/)])
+    const r3 = situatieDinParagrafe(D1().flatMap(p => (p.startsWith('Obiectul:') ? [p, '009 TSX09A1 M 1.000'] : [p])))
+    expect(r3.devize[0].obiect_nume).toBe('TRONSON 1')
+    expect(r3.probleme.map(p => p.motiv)).toEqual([expect.stringMatching(/linie de articol înaintea primului deviz — nu intră în niciun deviz: „009 TSX09A1 M 1\.000”/)])
+  })
+})
+
+describe('r9 P2: luna / anul nu se moștenesc peste un nou „Obiectivul:” / „Obiectul:”', () => {
+  const blocNou = prefix => [...prefix, 'Deviz DZ0507 1.2.5/1 Pregatire culoar de lucru', 'Categoria de lucrari: 0999', SEP, ...ANTET_TABEL, SEP, ...ART_D2.flat(), ...sfarsitDeviz({ total: SUMA_D2, tg: TG_D2 })]
+  it('reproducerea: D1 cu 10/2026, apoi obiectiv + obiect noi fără „Situatie de plata” → D2 cu luna / an null, antetul null, avertisment care numește D2', async () => {
+    const paras = [...D1(), ...antetDeviz({ obiectCod: '0005', devizCod: 'DZ0507', situatie: false }), ...ART_D2.flat(), ...sfarsitDeviz({ total: SUMA_D2, tg: TG_D2 })]
+    const r = situatieDinParagrafe(paras)
+    expect(r.devize.map(d => [d.deviz_cod, d.luna, d.an])).toEqual([['DZ0101', 10, 2026], ['DZ0507', null, null]])
+    expect(r.antet).toEqual({ luna: null, an: null })
+    expect(r.avertismente).toEqual([
+      { camp: 'luna', valori: [{ valoare: 10, devize: ['DZ0101'] }], motiv: 'nu toate devizele au „Situatie de plata in luna L anul A” în blocul lor (Obiectivul / Obiectul): lună 10 (DZ0101); fără valoare: DZ0507 — valoarea altui bloc nu se moștenește, câmpul rămâne de completat de om' },
+      { camp: 'an', valori: [{ valoare: 2026, devize: ['DZ0101'] }], motiv: 'nu toate devizele au „Situatie de plata in luna L anul A” în blocul lor (Obiectivul / Obiectul): an 2026 (DZ0101); fără valoare: DZ0507 — valoarea altui bloc nu se moștenește, câmpul rămâne de completat de om' },
+    ])
+    expect(r.complet).toBe(true) // luna / anul sunt de completat de om (avertisment), nu o problemă de citire
+    expect(await parseSituatieF3(await docx(paras))).toEqual(r)
+    expect(await parseDevizModificare(fisier('F3 NR.docx', paras))).toEqual({ ...r, negative: 0 })
+  })
+  it('doar „Obiectul:” nou (fără „Obiectivul:”) sau doar „Obiectivul:” nou (fără „Obiectul:”) resetează la fel', () => {
+    const r1 = situatieDinParagrafe([...D1(), ...blocNou(['Obiectul: 0005 45000000 TRONSON 5'])])
+    expect(r1.devize.map(d => [d.obiect_cod, d.luna, d.an])).toEqual([['0001', 10, 2026], ['0005', null, null]])
+    expect(r1.antet).toEqual({ luna: null, an: null }); expect(r1.avertismente.map(a => a.camp)).toEqual(['luna', 'an'])
+    const r2 = situatieDinParagrafe([...D1(), ...blocNou(['Obiectivul: 0998 700000002 ALTA CONDUCTA DE TEST'])])
+    expect(r2.devize.map(d => [d.luna, d.an])).toEqual([[10, 2026], [null, null]])
+    expect(r2.antet).toEqual({ luna: null, an: null })
+    expect(r2.obiectiv).toBe('0998 700000002 ALTA CONDUCTA DE TEST')
+  })
+  it('blocul nou CU propria „Situatie de plata” își ia valorile; în ACELAȘI bloc al doilea deviz moștenește (fără avertisment)', () => {
+    const r = situatieDinParagrafe([...D1(), ...blocNou(['Obiectul: 0005 45000000 TRONSON 5', 'Situatie de plata in luna 10 anul 2026'])])
+    expect(r.devize.map(d => [d.luna, d.an])).toEqual([[10, 2026], [10, 2026]])
+    expect(r.antet).toEqual({ luna: 10, an: 2026 }); expect(r.avertismente).toEqual([])
+    const acelasi = situatieDinParagrafe([...D1(), ...blocNou([])])
+    expect(acelasi.devize.map(d => [d.obiect_cod, d.luna, d.an])).toEqual([['0001', 10, 2026], ['0001', 10, 2026]])
+    expect(acelasi.avertismente).toEqual([])
   })
 })
 
