@@ -19,7 +19,8 @@
 //    acțiune), cele 13 semnale ale pilotului scrise real, revenirea verificată pe DEFINIȚII (blocul DEFINITII, `--scrie-definitii`).
 //    Runda 3 (verdictul Jakarinos r2, P2): spațiul alb din amprentă — reproducerea lui (creare → respingere → retrimitere cu \n / \t / NBSP la
 //    capete și în mijloc = `neschimbat_inchis`, stare `respins`), pe fragment, surse și referință, pe respins / rezolvat / deschis; textele stocate
-//    normalizate; mutanții M46–M49 (ordinea veche btrim → regexp, clasa fără NBSP, referința brută, stocarea cu btrim).
+//    normalizate; mutanții M46–M50 (ordinea veche btrim → regexp în funcție, clasa fără NBSP, referința brută, stocarea cu btrim, forma exactă din
+//    83b9258c — pe ea reproducerea r2 pică direct).
 // 4. MUTANȚI ai migrării: fiecare TREBUIE să pice (la aplicare, la verificări sau prin detectorul lui).
 // 5. Paritatea tranzițiilor: blocul TRANZITII din migrare = TRANZITII din src/executieSemnaleLogica.js + aceleași răspunsuri pe toate combinațiile (L19).
 // 6. Dry-run-ul pentru clonă (supabase/tests/20270106a_executie_semnale_dryrun.sql) rulat aici întreg, pe baza cu migrarea aplicată.
@@ -827,6 +828,13 @@ const MUTANTI = [
     SPATII_CORP.replace('nullif(btrim(regexp_replace(p_text, ', 'nullif(regexp_replace(btrim(p_text), ').replace(", ' ', 'g'), ' '), '')", ", ' ', 'g'), '')")]]],
   ['M47 clasa de spațiu alb fără spațiile Unicode (doar [[:space:]]: NBSP rămâne)', [[SPATII_CORP, SPATII_CORP.replace(CLASA_RE, "'[[:space:]]+'")]]],
   ['M48 referința intră în amprentă doar cu btrim (ca înainte)', [["                                'ref', public.fn_executie_semnal_spatii(p_ref))::text)", "                                'ref', nullif(btrim(coalesce(p_ref, '')), ''))::text)"]]],
+  // starea EXACTĂ din 83b9258c (reprodusă de review): fragmentul stocat / trimis la amprentă doar cu btrim, iar amprenta îl strânge DUPĂ btrim →
+  // un \n de la capete rămâne spațiu → respinsul se redeschide (reproducerea r2 trebuie să pice DIRECT pe acest mutant)
+  ['M50 forma din r2: btrim la stocare + btrim înaintea strângerii în amprentă (fragmentul)', [
+    ["                                'fragment', public.fn_executie_semnal_spatii(p_fragment),", "                                'fragment', nullif(regexp_replace(btrim(coalesce(p_fragment, '')), '[[:space:]]+', ' ', 'g'), ''),"],
+    ["                                               public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_fragment'), public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_ref'));", "                                               nullif(btrim(p_semnal ->> 'dovada_fragment'), ''), public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_ref'));"],
+    ["            p_semnal ->> 'constatare', v_surse, p_semnal ->> 'dovada_sursa', v_dovada_data, public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_fragment'),", "            p_semnal ->> 'constatare', v_surse, p_semnal ->> 'dovada_sursa', v_dovada_data, nullif(btrim(p_semnal ->> 'dovada_fragment'), ''),"],
+    ["         dovada_fragment = public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_fragment'), dovada_ref = public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_ref'),", "         dovada_fragment = nullif(btrim(p_semnal ->> 'dovada_fragment'), ''), dovada_ref = public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_ref'),"]]],
   ['M49 RPC-ul stochează fragmentul doar cu btrim (semnal deschis: „actualizat” fals, text nenormalizat)', [
     ["            p_semnal ->> 'constatare', v_surse, p_semnal ->> 'dovada_sursa', v_dovada_data, public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_fragment'),", "            p_semnal ->> 'constatare', v_surse, p_semnal ->> 'dovada_sursa', v_dovada_data, nullif(btrim(p_semnal ->> 'dovada_fragment'), ''),"],
     ["         dovada_fragment = public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_fragment'), dovada_ref = public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_ref'),", "         dovada_fragment = nullif(btrim(p_semnal ->> 'dovada_fragment'), ''), dovada_ref = public.fn_executie_semnal_spatii(p_semnal ->> 'dovada_ref'),"]]],

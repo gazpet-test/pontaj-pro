@@ -79,7 +79,7 @@ propunerea, decizia și istoricul; formular de schimbare a stării (motiv, dovad
 `node scripts/pglite/test_executie_semnale_local.mjs` (PGlite, pașii reali L15 v2; drepturi pe 9 conturi, dedup, contractul dovezii, amprenta
 canonică, confirmarea responsabilului, respins nu reapare, agentul nu atinge starea omului, pilotul cu 13 semnale, revenirea pe definiții
 (blocul DEFINITII, regenerat cu `--scrie-definitii`; lista L15 cu `--scrie-obiecte`), spațiul alb din amprentă (newline / tab / NBSP la capete și în
-mijloc pe respins / rezolvat / deschis = aceeași dovadă), 49 de mutanți, paritatea tranzițiilor, dry-run-ul pentru clonă),
+mijloc pe respins / rezolvat / deschis = aceeași dovadă), 50 de mutanți, paritatea tranzițiilor, dry-run-ul pentru clonă),
 `npx vitest run src/executieSemnaleLogica.test.js src/ExecutieSemnale.test.jsx src/ExecutieSemnaleMutanti.test.jsx` (ultimul: mutanții JS ai
 clasificării răspunsului RPC — orice eroare / 408 / 5xx / status lipsă = refuz, corp fără semnal = ok —, ai afișării obligației / datei și ai
 ecranului — rezultatul necunoscut tratat ca „nu s-a salvat”, fără reîncărcare, excepția clientului ca refuz, dovada fără obligație —, fiecare
