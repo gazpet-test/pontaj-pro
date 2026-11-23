@@ -551,13 +551,108 @@ def cu_text_scris(html, interior_nou):
 UMBRE_ZERO = {"shadow_pagina": 0, "shadow_zona": 0, "custom_pagina": 0, "custom_zona": 0}     # r19: pagina reala (citire CDP 23.11)
 
 
+# --- r20: instantaneul CDP simulat. DOM.getDocument(depth -1, pierce) intoarce arborele in forma CDP (verificata in Edge 157, sonda_cdp.py):
+# document nodeType 9 -> children; element nodeType 1 (nodeName MAJUSCULE, localName, attributes = lista plata); text nodeType 3 (nodeValue);
+# <template> cu copiii in templateContent (fragment 11). Ca in Chromium: fara DOM.enable({includeWhitespace: "all"}) textele din doar
+# spatii albe HTML LIPSESC; un text > 10000 de caractere vine taiat (primele 10000 + U+2026). Umbrele se adauga cu cdp_doc(pg, doc).
+LIMITA_CDP_TEST = 10000                       # scrisa de mana (Edge 157: len 25000 -> 10001)
+
+
+def _cdp_din_nod(n, cu_spatii):
+    if n.tag == "#text":
+        v = n.date if len(n.date) <= LIMITA_CDP_TEST else n.date[:LIMITA_CDP_TEST] + "\u2026"
+        return {"nodeType": 3, "nodeName": "#text", "nodeValue": v}
+    copii = [_cdp_din_nod(c, cu_spatii) for c in n.copii if cu_spatii or c.tag != "#text" or c.date.strip(" \t\n\r\f")]
+    if n.tag == "#document":
+        return {"nodeType": 9, "nodeName": "#document", "children": copii}
+    d = {"nodeType": 1, "nodeName": n.tag.upper(), "localName": n.tag, "attributes": [x for kv in n.attrs.items() for x in kv]}
+    if n.tag == "template":
+        d["children"], d["templateContent"] = [], {"nodeType": 11, "nodeName": "#document-fragment", "children": copii}
+    else:
+        d["children"] = copii
+    return d
+
+
+def html_in_cdp(html, cu_spatii=True):
+    # HTML (parserul testelor, _Arbore) -> raspunsul DOM.getDocument: {"root": document}
+    a = gp._Arbore()
+    a.feed(html)
+    return {"root": _cdp_din_nod(a.radacina, cu_spatii)}
+
+
+def noduri_cdp(n):
+    # toate elementele unui raspuns CDP (DOM-ul obisnuit + continutul shadow root-urilor), in ordine
+    st = [n]
+    while st:
+        x = st.pop()
+        yield x
+        st.extend(reversed(x.get("children", []) + [y for s in x.get("shadowRoots", []) for y in [s]]))
+
+
+def adauga_umbra(doc, gazda, tip, interior="", al_catelea=0):
+    # pune un shadow root de tipul `tip` (open / closed / user-agent / ...) pe al `al_catelea` element CDP pentru care gazda(el) e adevarat;
+    # continutul = interior (HTML). Intoarce doc (modificat)
+    gasite = [x for x in noduri_cdp(doc["root"]) if x.get("nodeType") == 1 and gazda(x)]
+    g = gasite[al_catelea]
+    copii = html_in_cdp("<x>" + interior + "</x>")["root"]["children"][0]["children"] if interior else []
+    g.setdefault("shadowRoots", []).append({"nodeType": 11, "nodeName": "#document-fragment", "shadowRootType": tip, "children": copii})
+    return doc
+
+
+def atr_cdp(x):
+    a = x.get("attributes", [])
+    return dict(zip(a[::2], a[1::2]))
+
+
+class FakeCDP:
+    # sesiunea CDP a paginii false: DOM.enable / DOM.getDocument / detach; getDocument = citirea instantaneului (_citire)
+    def __init__(self, pg):
+        self.pg, self.spatii = pg, False
+
+    def send(self, metoda, param=None):
+        pg = self.pg
+        pg.jurnal.append("cdp " + metoda)
+        pg.cdp_trimise.append((metoda, param))
+        if metoda == "DOM.enable":
+            self.spatii = (param or {}).get("includeWhitespace") == "all"
+            return {}
+        if metoda == "DOM.getDocument":
+            if param != {"depth": -1, "pierce": True}:
+                return html_in_cdp("<html><body></body></html>")      # fara pierce / adancime: nimic din pagina (forma reala nu se simuleaza)
+            doc = html_in_cdp(pg._citire(), self.spatii)
+            if pg.cdp_doc is not None:
+                doc = pg.cdp_doc(pg, doc)
+            pg.ultimul_doc = doc
+            return pg.rezultat_cdp(pg, doc) if pg.rezultat_cdp else doc
+        raise RuntimeError("metoda CDP neasteptata " + metoda)
+
+    def detach(self):
+        self.pg.jurnal.append("cdp detach")
+
+
+class FakeCtx:
+    def __init__(self, pg):
+        self.pg = pg
+
+    def new_cdp_session(self, pagina):
+        self.pg.jurnal.append("cdp sesiune")
+        if pagina is not self.pg or self.pg.cdp_indisponibil:
+            raise RuntimeError("Target closed")
+        return FakeCDP(self.pg)
+
+
 class FakePg:
     def __init__(self, html, semn=0, dupa_goto=None, dupa_scriere=None, n_editor=1, randare=None, html_editor=None, la_citire=None,
-                 umbre=None, rezultat_evaluate=None):
-        # r19: evaluate(JS_INSTANTANEU) = aceeasi citire ca content() (acelasi HTML, aceleasi la_citire / citite / n_dupa) + umbre:
-        # dict (fix) sau umbre(pg) -> dict (schimbat intre citiri); implicit UMBRE_ZERO. rezultat_evaluate(pg, r) -> ce intoarce de fapt
-        # evaluate (forme gresite). Jurnalul inregistreaza "evaluate" (instantaneul) si "content" (doar mutantii mai vechi il mai folosesc)
+                 umbre=None, rezultat_evaluate=None, cdp_doc=None, rezultat_cdp=None, cdp_indisponibil=False):
+        # r19: evaluate(JS_UMBRE) = numaratorile shadow din pagina: dict (fix) sau umbre(pg) -> dict (schimbat intre citiri); implicit
+        # UMBRE_ZERO. rezultat_evaluate(pg, r) -> ce intoarce de fapt evaluate (forme gresite).
+        # r20: instantaneul = DOM.getDocument prin context.new_cdp_session(pg) (FakeCDP): aceeasi citire (_citire: la_citire / citite /
+        # n_dupa) in forma CDP; cdp_doc(pg, doc) -> doc = umbrele / schimbarile puse in raspuns; rezultat_cdp(pg, doc) -> ce intoarce de
+        # fapt (forme gresite); cdp_indisponibil = new_cdp_session esueaza. Jurnalul: "evaluate", "cdp sesiune", "cdp DOM.enable",
+        # "cdp DOM.getDocument" (instantaneul), "cdp detach"; "content" doar mutantii vechi
         self.umbre, self.rezultat_evaluate, self.js_evaluate = umbre, rezultat_evaluate, []
+        self.cdp_doc, self.rezultat_cdp, self.cdp_indisponibil, self.cdp_trimise = cdp_doc, rezultat_cdp, cdp_indisponibil, []
+        self.context = FakeCtx(self)
         # r17: n_editor = numarul de editoare principale vazute de locator; randare = cum arata inner_text() textul scris (None = identic)
         # r18: dupa scriere, content() pune in editor textul scris ca HTML Quill: html_editor(ciorna) daca e dat, altfel
         # quill_html(randare(ciorna) / ciorna); la_citire(pg, html) -> html = ce intoarce citirea curenta content() (editorul schimbat
@@ -579,10 +674,9 @@ class FakePg:
     def evaluate(self, js):
         self.jurnal.append("evaluate")
         self.js_evaluate.append(js)
-        u = self.umbre(self) if callable(self.umbre) else self.umbre     # inaintea citirii: n_dupa = citirile anterioare
+        u = self.umbre(self) if callable(self.umbre) else self.umbre     # n_dupa = citirile instantaneului de pana acum
         r = dict(UMBRE_ZERO if u is None else u)
         self.ultimele_umbre = dict(r)
-        r["html"] = self._citire()
         return self.rezultat_evaluate(self, r) if self.rezultat_evaluate else r
 
     def _citire(self):
@@ -3021,7 +3115,8 @@ class TestAtributeComplete2211(unittest.TestCase):
         self.assertNotIn("CLASE_EDITOR_PERMISE", "\n".join(corp("def _semnatura_token(n):")))
         # def + analizeaza_ciorna + _clase_verificate; r17: + _e_clipboard (editorul unic printre fratii lui) + _semnal (pasul 5, editabil:)
         # r18: + _motiv_element (editorul insusi: atributele lui pe lista alba; restul din editor doar p / br fara atribute)
-        self.assertEqual(sum(l.count("_e_editor(") for l in cod), 6)
+        # r20: + _arbore_cdp (stramosii editorului = "in zona" pentru shadow root-urile user-agent, ca in JS_UMBRE)
+        self.assertEqual(sum(l.count("_e_editor(") for l in cod), 7)
 
     def test_mutanti_r9_lasa_brief_ul_sa_plece(self):
         # fiecare mutant largeste una din cele trei exceptii (sau o face "wildcard" / globala); scenariul lui pleaca la Enter pe mutant, refuz
@@ -5760,17 +5855,22 @@ def _invariant_instantaneu(pg):
     # r18: dupa scriere exact O citire content(); daca s-a apasat Enter, apelul imediat dinainte e acea citire, iar ea arata editorul
     # cu EXACT brief-ul, fara necunoscute / atasamente (ce s-a trimis = ce s-a verificat) -> (ok, motiv)
     j = pg.jurnal
-    # r19: citirea = UN evaluate (HTML + umbre din acelasi apel); orice content() / al doilea evaluate dupa scriere rupe invariantul
+    # r19: + umbrele din evaluate. r20: instantaneul = UN DOM.getDocument (CDP); orice content() / al doilea getDocument dupa scriere rupe
+    # invariantul; intre el si Enter doar desprinderea sesiunii ("cdp detach"); Enter doar daca raspunsul CDP nu are shadow root-uri
     dupa = j[len(j) - 1 - j[::-1].index("insert") + 1:] if "insert" in j else []
-    n = dupa.count("content") + dupa.count("evaluate")
-    if n != 1 or dupa.count("evaluate") != 1:
-        return False, "citiri dupa scriere: %d (evaluate %d)" % (n, dupa.count("evaluate"))
+    # (un refuz al citirilor dinainte - locatori / evaluate - opreste paza inaintea instantaneului: 0 citiri, fara Enter)
+    n = dupa.count("content") + dupa.count("cdp DOM.getDocument")
+    if n > 1 or dupa.count("content") or ("press Enter" in dupa and n != 1):
+        return False, "citiri dupa scriere: %d (getDocument %d)" % (n, dupa.count("cdp DOM.getDocument"))
     if "press Enter" in dupa:
         k = dupa.index("press Enter")
-        if dupa[k - 1] != "evaluate":
-            return False, "intre instantaneu si Enter: " + dupa[k - 1]
+        intre = dupa[dupa.index("cdp DOM.getDocument") + 1:k]
+        if intre != ["cdp detach"]:
+            return False, "intre instantaneu si Enter: " + ", ".join(intre)
         if any(pg.ultimele_umbre[k] for k in ("shadow_pagina", "shadow_zona", "custom_zona")):
-            return False, "Enter dupa un instantaneu cu shadow DOM"
+            return False, "Enter dupa un evaluate cu shadow DOM"
+        if any(s.get("shadowRootType") != "user-agent" for x in noduri_cdp(pg.ultimul_doc["root"]) for s in x.get("shadowRoots", [])):
+            return False, "Enter dupa un instantaneu CDP cu shadow root (in afara celor user-agent)"
         i = gp.analizeaza_ciorna(pg.citite[-1])
         if gp.normalizeaza(i["text_editor"]) != gp.normalizeaza(BRIEF_TEST) or i["necunoscute"] or i["atasamente"]:
             return False, "Enter dupa un instantaneu care nu e brief-ul curat"
@@ -5915,14 +6015,14 @@ class TestUltimaPazaR18(unittest.TestCase):
             i1 = next(k for k in range(i0 + 1, len(linii)) if linii[k].startswith("def "))
             return [l for l in linii[i0 + 1:i1] if l.strip() and not l.lstrip().startswith("#")]
         c = corp("def _ultima_paza(pg, text):")
-        # r19: instantaneul = _instantaneu (un evaluate), umbrele refuzate inaintea atasamentelor
-        self.assertEqual(c, ["    _editor_unic(pg)", "    semn = _semn_locator(pg)", "    info, umbre = _instantaneu(pg)",
-                             '    verifica_fara_umbre(umbre, "inainte_de_enter")',
+        # r19: umbrele refuzate inaintea atasamentelor; r20: evaluate (doar refuz) inainte, instantaneul = _instantaneu (CDP), ultimul
+        self.assertEqual(c, ["    _editor_unic(pg)", "    semn = _semn_locator(pg)", '    verifica_fara_umbre(_umbre_js(pg), "inainte_de_enter")',
+                             "    info, umbre = _instantaneu(pg)", '    verifica_umbre_cdp(umbre, "inainte_de_enter")',
                              '    verifica_fara_atasamente(info, semn, "inainte_de_enter")', LINIA_VERIFICA_R18])
         self.assertEqual(sum(l.count("_ultima_paza(") for l in cod), 2)               # definitia + singurul apel (in trimite)
         self.assertFalse(any("_atasamente(pg)" in l for l in cod))                    # vechea paza separata a disparut
         self.assertFalse(any("NEVIZIBILE" in l for l in cod))
-        self.assertEqual(sum(l.count("_text_editor(") for l in cod), 2)               # definitia + analizeaza_ciorna
+        self.assertEqual(sum(l.count("_text_editor(") for l in cod), 2)               # definitia + analizeaza_arbore
         # _necunoscute sare DOAR chip-urile / semnele (numarate si refuzate separat); nicio alta eticheta
         c = corp("def _necunoscute(zona, editoare, ids=None):")
         self.assertEqual([l.split("#")[0].rstrip() for l in c if l.split("#")[0].strip() == "continue"], ["            continue"] * 2)
@@ -6026,14 +6126,14 @@ LINIA_UMBRE = '    if umbre["shadow_pagina"] or umbre["shadow_zona"] or umbre["c
 REGULI_M106_FARA_UMBRE = [(LINIA_UMBRE, "    if False:")]
 REGULI_M107_DOAR_ZONA = [(LINIA_UMBRE, '    if umbre["shadow_zona"] or umbre["custom_zona"]:')]
 REGULI_M108_FARA_CUSTOM = [(LINIA_UMBRE, '    if umbre["shadow_pagina"] or umbre["shadow_zona"]:')]
-# (M109) instantaneul r18: HTML din page.content(), numaratorile shadow absente (= 0)
-REGULI_M109_CONTENT_R18 = [("    r = pg.evaluate(JS_INSTANTANEU)\r\n",
-                            '    r = {"html": pg.content(), "shadow_pagina": 0, "shadow_zona": 0, "custom_pagina": 0, "custom_zona": 0}\r\n')]
-# (M110) doua apeluri in ultima paza: umbrele dintr-un evaluate, HTML-ul din altul
-REGULI_M110_DOUA_EVALUATE = [("    semn = _semn_locator(pg)\r\n    info, umbre = _instantaneu(pg)\r\n",
-                              "    semn = _semn_locator(pg)\r\n    umbre = _instantaneu(pg)[1]\r\n    info = _instantaneu(pg)[0]\r\n")]
-MUTANTI_R19 = (("M106", REGULI_M106_FARA_UMBRE), ("M107", REGULI_M107_DOAR_ZONA), ("M108", REGULI_M108_FARA_CUSTOM),
-               ("M109", REGULI_M109_CONTENT_R18), ("M110", REGULI_M110_DOUA_EVALUATE))
+# r20: M109 / M110 (instantaneul) sunt acum mutantii instantaneului CDP (mai jos, MUTANTI_R20); aici raman mutantii stratului evaluate
+MUTANTI_R19 = (("M106", REGULI_M106_FARA_UMBRE), ("M107", REGULI_M107_DOAR_ZONA), ("M108", REGULI_M108_FARA_CUSTOM))
+# (M109) instantaneul fara umbre (= ce vedea r19 in HTML: subarborii shadow, si cei INCHISI, nu exista)
+REGULI_M109_FARA_UMBRE_CDP = [('        for s in _lista_cdp(c, "shadowRoots"):\r\n', "        for s in []:\r\n")]
+# (M110) doua instantanee in ultima paza: umbrele dintr-unul, arborele din altul
+REGULI_M110_DOUA_INSTANTANEE = [("    info, umbre = _instantaneu(pg)\r\n    verifica_umbre_cdp(umbre, \"inainte_de_enter\")\r\n",
+                                 "    umbre = _instantaneu(pg)[1]\r\n    verifica_umbre_cdp(umbre, \"inainte_de_enter\")\r\n"
+                                 "    info = _instantaneu(pg)[0]\r\n")]
 
 
 def umbre_dupa_scriere(u):
@@ -6066,9 +6166,13 @@ class TestUmbreR19(unittest.TestCase):
             self.assertEqual(det, "inainte_de_enter: shadow DOM nevazut de analiza (shadow root: pagina 1, zona 1; custom inregistrate"
                                   " in zona 0) - nu trimit")
             self.assertEqual(_invariant_instantaneu(pg), (True, ""))
-            # pe instantaneul r18 (mutant M109: HTML din content(), fara numaratori): Enter (= ocolirea din verdict)
-            cod, act, pg, det = self.scrie(mutant(REGULI_M109_CONTENT_R18), umbre_dupa_scriere(UMBRA_ZONA), s)
+            # pe instantaneul r18 (fara numaratorile evaluate si fara umbrele CDP: M106 + M109): Enter (= ocolirea din verdict)
+            cod, act, pg, det = self.scrie(mutant(REGULI_M106_FARA_UMBRE + REGULI_M109_FARA_UMBRE_CDP), umbre_dupa_scriere(UMBRA_ZONA), s,
+                                           cdp_doc=umbra_dupa_scriere("open"))
             self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE), msg=s)
+            # r20: aceeasi umbra deschisa vazuta si de CDP: refuz si fara stratul evaluate (M106)
+            cod, act, pg, det = self.scrie(mutant(REGULI_M106_FARA_UMBRE), umbre_dupa_scriere(UMBRA_ZONA), s, cdp_doc=umbra_dupa_scriere("open"))
+            self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=s)
 
     def test_shadow_in_pagina_in_afara_zonei_refuz(self):
         # pagina reala are 0 shadow root-uri -> si unul in afara zonei = refuz sigur
@@ -6086,12 +6190,12 @@ class TestUmbreR19(unittest.TestCase):
             self.assertEqual(self.scrie(gp, CUSTOM_PAGINA, s)[:2], (None, ACTIUNI_TRIMITERE), msg=s)
 
     def test_starile_reale_trec_r19(self):
-        # starile reale (0 shadow, 0 custom): Enter; evaluate primeste EXACT JS_INSTANTANEU
+        # starile reale (0 shadow, 0 custom): Enter; evaluate primeste EXACT JS_UMBRE (r20: fara HTML)
         for s in ("mediu", "lung"):
             cod, act, pg, det = self.scrie(gp, None, s)
             self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE), msg=s)
             self.assertEqual(_invariant_instantaneu(pg), (True, ""))
-            self.assertEqual(pg.js_evaluate, [gp.JS_INSTANTANEU] * 3)             # inainte de chat nou, pe chatul nou, ultima paza
+            self.assertEqual(pg.js_evaluate, [gp.JS_UMBRE] * 3)                   # inainte de chat nou, pe chatul nou, ultima paza
             self.assertNotIn("content", pg.jurnal)
         for html in [pagina_calibrare(x) for x in ("i", "ii", "iii")] + [pagina_22_11_completa(x) for x in ("i", "ii", "iii")] + \
                 [pagina_23_11(), chat_nou_gol_23_11()]:
@@ -6109,10 +6213,11 @@ class TestUmbreR19(unittest.TestCase):
 
     def test_forma_rezultatului_evaluate(self):
         # orice abatere a rezultatului = ciorna_necitibila, nimic trimis (la prima paza: nicio actiune; la ultima: fara Enter)
-        forme = (lambda r: None, lambda r: [r["html"]], lambda r: r["html"], lambda r: {k: v for k, v in r.items() if k != "shadow_zona"},
+        # r20: fara HTML in rezultat (un "html" in plus = cheie in plus = refuz)
+        forme = (lambda r: None, lambda r: [r], lambda r: 0, lambda r: {k: v for k, v in r.items() if k != "shadow_zona"},
                  lambda r: dict(r, extra=0), lambda r: dict(r, shadow_pagina=0.0), lambda r: dict(r, shadow_zona=False),
-                 lambda r: dict(r, custom_zona=-1), lambda r: dict(r, shadow_pagina="0"), lambda r: dict(r, html=None),
-                 lambda r: dict(r, html=b"<html></html>"))
+                 lambda r: dict(r, custom_zona=-1), lambda r: dict(r, shadow_pagina="0"), lambda r: dict(r, html="<html></html>"),
+                 lambda r: dict(r, custom_pagina=None))
         for f in forme:
             pg = FakePg(html_captura("mediu"), rezultat_evaluate=lambda pg, r, f=f: f(r))
             self.assertEqual(ruleaza_trimite(gp, pg), ("ciorna_necitibila", []))
@@ -6122,7 +6227,7 @@ class TestUmbreR19(unittest.TestCase):
 
     def test_un_singur_evaluate_pe_tipare_de_umbre(self):
         # umbrele se schimba intre citiri (citirea k dupa scriere: curat / shadow in zona / shadow in pagina / custom in zona): decizia =
-        # starea din SINGURA citire; invariantul tine pe cod si se rupe pe M110 (doua evaluate)
+        # starea din citirea dinaintea instantaneului (ultima paza: evaluate, apoi CDP); invariantul (un instantaneu) tine pe cod
         import itertools
         stari = {"curat": UMBRE_ZERO, "zona": UMBRA_ZONA, "pagina": UMBRA_PAGINA, "custom": CUSTOM_ZONA}
 
@@ -6132,14 +6237,10 @@ class TestUmbreR19(unittest.TestCase):
             cod, act, pg, det = self.scrie(gp, tipar(t))
             self.assertEqual(_invariant_instantaneu(pg), (True, ""), msg=t)
             self.assertEqual(cod, None if t[0] == "curat" else "ciorna_necunoscuta", msg=t)
-        # M110: umbrele din prima citire (curata), HTML-ul din a doua (cu shadow) -> Enter, invariantul rupt
-        cod, act, pg, det = self.scrie(mutant(REGULI_M110_DOUA_EVALUATE), tipar(("curat", "zona")))
-        self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE))
-        self.assertFalse(_invariant_instantaneu(pg)[0])
 
     def test_mutanti_r19_lasa_brief_ul_sa_plece(self):
         # fiecare mutant rupe scenariul lui (Enter), codul refuza; starile reale trec pe fiecare mutant
-        cazuri = {"M106": UMBRA_ZONA, "M107": UMBRA_PAGINA, "M108": CUSTOM_ZONA, "M109": UMBRA_ZONA}
+        cazuri = {"M106": UMBRA_ZONA, "M107": UMBRA_PAGINA, "M108": CUSTOM_ZONA}      # doar numaratorile evaluate (CDP fara umbre)
         for nume, inl in MUTANTI_R19:
             mut = mutant(inl)
             if nume in cazuri:
@@ -6154,19 +6255,416 @@ class TestUmbreR19(unittest.TestCase):
             src = f.read().decode("ascii")
         cod = [l for l in (x.rstrip("\r") for x in src.split("\n")) if not l.lstrip().startswith("#")]
         self.assertFalse([l for l in cod if ".content(" in l])                       # nicio citire page.content() in cod
-        self.assertEqual(sum(l.count(".evaluate(") for l in cod), 1)                   # singurul evaluate: in _instantaneu
-        self.assertIn("    r = pg.evaluate(JS_INSTANTANEU)", cod)
+        self.assertEqual(sum(l.count(".evaluate(") for l in cod), 1)                   # singurul evaluate: in _umbre_js (r20)
+        self.assertIn("    r = pg.evaluate(JS_UMBRE)", cod)
         self.assertEqual(sum(l.count("_instantaneu(") for l in cod), 3)               # definitia + _citeste_ciorna + _ultima_paza
         self.assertEqual(sum(l.count("verifica_fara_umbre(") for l in cod), 4)        # definitia + _paza_ciorna + _ultima_paza + stare
         self.assertEqual(gp.CHEI_UMBRE, ("shadow_pagina", "shadow_zona", "custom_pagina", "custom_zona"))
-        js = gp.JS_INSTANTANEU
-        for parte in ("const Z = " + json.dumps(gp.ZONA), "E = " + json.dumps(gp.EDITOR), "document.documentElement.outerHTML",
+        js = gp.JS_UMBRE
+        for parte in ("const Z = " + json.dumps(gp.ZONA), "E = " + json.dumps(gp.EDITOR),
                       "if (el.shadowRoot) { sp++; if (z) sz++; parcurge(el.shadowRoot, z); }", "parcurge(document, false);",
                       "ce.getName(el.constructor)", "ce.get(el.localName)", "ce.get(el.getAttribute('is'))",
                       "stramosi.has(el) || zone.some((z) => z.contains(el))",
-                      "{ html: document.documentElement.outerHTML, shadow_pagina: sp, shadow_zona: sz, custom_pagina: cp, custom_zona: cz }"):
+                      "return { shadow_pagina: sp, shadow_zona: sz, custom_pagina: cp, custom_zona: cz };"):
             self.assertIn(parte, js)
+        self.assertNotIn("outerHTML", js)                                             # r20: HTML-ul nu mai vine din pagina
+        self.assertFalse(hasattr(gp, "JS_INSTANTANEU"))
         js.encode("ascii")
+
+
+# --- r20 (Jakarinos NO-GO r9 pe 5a1e2613): shadow root INCHIS pe un div standard -> instantaneul = un DOM.getDocument(pierce) CDP ---
+# reproducerea din verdict, copiata: un div standard din zona cu attachShadow({mode: 'closed'}) si continut strain; JavaScript-ul paginii
+# NU il vede (evaluate: 0 / 0 / 0 / 0), HTML-ul nu il are; CDP il intoarce in shadowRoots cu shadowRootType "closed" (Edge 157, sonda_cdp.py)
+REPRO_R9_INTERIOR = '<div contenteditable="true"><p>continut strain arbitrar</p></div>'
+
+
+def _primul(doc, tag, sub=None):
+    # primul element CDP cu localName `tag` (sub elementul `sub`, daca e dat)
+    return next(x for x in noduri_cdp(sub or doc["root"]) if x is not sub and x.get("localName") == tag)
+
+
+def div_din_zona(doc):
+    return _primul(doc, "div", _primul(doc, "input-area-v2"))
+
+
+def cu_umbra(gazda, tip, interior=REPRO_R9_INTERIOR, cand=lambda pg: True):
+    # cdp_doc: shadow root `tip` pe gazda(doc) (un element CDP), cand cand(pg) e adevarat
+    def f(pg, doc):
+        if cand(pg):
+            g = gazda(doc)
+            copii = html_in_cdp("<x>" + interior + "</x>")["root"]["children"][0]["children"] if interior else []
+            g.setdefault("shadowRoots", []).append({"nodeType": 11, "nodeName": "#document-fragment", "shadowRootType": tip,
+                                                    "children": copii})
+        return doc
+    return f
+
+
+def umbra_dupa_scriere(tip, gazda=div_din_zona):
+    # umbra aparuta DOAR la ultima paza (dupa scriere)
+    return cu_umbra(gazda, tip, cand=lambda pg: pg.scris)
+
+
+def cu_iframe(interior_cdp, cand=lambda pg: True):
+    # un iframe in body (in afara zonei), cu documentul lui (contentDocument) = interior_cdp(): ca iframe-urile din acelasi proces
+    def f(pg, doc):
+        if cand(pg):
+            ifr = {"nodeType": 1, "nodeName": "IFRAME", "localName": "iframe", "attributes": [], "children": [],
+                   "contentDocument": {"nodeType": 9, "nodeName": "#document", "children": [interior_cdp()]}}
+            _primul(doc, "body")["children"].append(ifr)
+        return doc
+    return f
+
+
+def img_in_afara(doc):
+    # ca pe pagina reala (23.11): un <img> in afara zonei (poza de profil din istoric) - adaugat in body, intors ca gazda. (body insusi
+    # e un stramos al editorului, deci "in zona" pentru regula stramosilor, ca in JS_UMBRE)
+    b = _primul(doc, "body")
+    x = next((y for y in b["children"] if y.get("localName") == "img"), None)
+    if x is None:
+        x = {"nodeType": 1, "nodeName": "IMG", "localName": "img", "attributes": [], "children": []}
+        b["children"].append(x)
+    return x
+
+
+def _doc_cu_div_inchis():
+    d = html_in_cdp("<html><body><div></div></body></html>")["root"]["children"][0]
+    _primul({"root": d}, "div").setdefault("shadowRoots", []).append(
+        {"nodeType": 11, "nodeName": "#document-fragment", "shadowRootType": "closed", "children": []})
+    return d
+
+
+def _index_clipboard(stare):
+    return next(i for i, (ad, tag, atr, text) in enumerate(CAPTURA_2311[stare]) if ("class", "ql-clipboard") in atr)
+
+
+LINIA_CDP_TIP = '            umbre[TIPURI_UMBRE.get(tip, "alt_tip")] += 1\r\n'
+# (M111) DOM.enable fara includeWhitespace (Chromium sare textele din doar spatii)
+REGULI_M111_FARA_SPATII = [('        cdp.send("DOM.enable", {"includeWhitespace": "all"})\r\n', '        cdp.send("DOM.enable", {})\r\n')]
+# (M112) user-agent in zona acceptat
+REGULI_M112_UA_ZONA = [('    if umbre["deschise"] or umbre["inchise"] or umbre["alt_tip"] or umbre["ua_zona"]:',
+                        '    if umbre["deschise"] or umbre["inchise"] or umbre["alt_tip"]:')]
+# (M113) doar shadow root-urile deschise refuzate (cele inchise = ca in r19)
+REGULI_M113_FARA_INCHISE = [(LINIA_CDP_TIP, '            umbre[TIPURI_UMBRE.get(tip, "alt_tip")] += 1 if tip != "closed" else 0\r\n')]
+# (M114) documentele iframe nu se parcurg
+REGULI_M114_FARA_IFRAME = [('            st.extend((y, None, a) for y in reversed(_lista_cdp(d, "children")))\r\n', "            pass\r\n")]
+# (M115) tipurile necunoscute acceptate (doar open / closed refuzate)
+REGULI_M115_ALT_TIP = [(LINIA_CDP_TIP, '            umbre[TIPURI_UMBRE.get(tip, "documente_iframe")] += 1\r\n')]
+# (M116) verificarea liniilor brief-ului scoasa (o linie > 10000 ajunge in editor, taiata in instantaneu)
+REGULI_M116_FARA_LINII = [('    if any(len(l.rstrip("\\r")) > LIMITA_TEXT_CDP for l in text.split("\\n")):', "    if False:")]
+# (M117) continutul shadow root-urilor (open / closed) nu se parcurge: cele imbricate nu se numara
+REGULI_M117_FARA_IMBRICATE = [('            st.extend((y, None, a) for y in reversed(_lista_cdp(s, "children")))\r\n', "            pass\r\n")]
+MUTANTI_R20 = (("M109", REGULI_M109_FARA_UMBRE_CDP), ("M110", REGULI_M110_DOUA_INSTANTANEE), ("M111", REGULI_M111_FARA_SPATII),
+               ("M112", REGULI_M112_UA_ZONA), ("M113", REGULI_M113_FARA_INCHISE), ("M114", REGULI_M114_FARA_IFRAME),
+               ("M115", REGULI_M115_ALT_TIP), ("M116", REGULI_M116_FARA_LINII), ("M117", REGULI_M117_FARA_IMBRICATE))
+
+
+class TestUmbreCdpR20(unittest.TestCase):
+    """r20: instantaneul = UN apel CDP DOM.getDocument(depth -1, pierce) (dupa DOM.enable cu includeWhitespace "all"): arborele analizat,
+    textul editorului, atasamentele, necunoscutele si shadow root-urile (si cele INCHISE) din acelasi raspuns. Orice shadow root open /
+    closed / alt tip oriunde (si imbricat, si in iframe) = refuz; user-agent doar in afara zonei. CDP indisponibil / forma gresita = refuz.
+    Asteptarile sunt scrise de mana; reproducerea e cea din verdict."""
+
+    def scrie(self, mod, s="mediu", brief=BRIEF_TEST, **kw):
+        g = html_captura(s)
+        pg = FakePg(g, dupa_goto=g, **kw)
+        cod, det, act = trimite_brief(mod, pg, brief)
+        return cod, act, pg, det
+
+    def an_cdp(self, html, cdp_doc=None):
+        doc = html_in_cdp(html)
+        if cdp_doc:
+            doc = cdp_doc(None, doc)
+        rad, umbre, trunchiate = gp._arbore_cdp(doc)
+        return gp.analizeaza_arbore(rad, trunchiate), umbre
+
+    def test_reproducerea_verdict_r9(self):
+        for s in ("gol", "mediu", "lung"):
+            h = html_captura(s)
+            # JavaScript-ul paginii nu vede umbra inchisa (evaluate 0), HTML-ul nu o are: exact ce a masurat Jakarinos
+            i = gp.analizeaza_ciorna(h)
+            self.assertEqual((i["editoare"], i["atasamente"], i["semne"], i["necunoscute"]), (1, 0, 0, 0), msg=s)
+            info, u = self.an_cdp(h, cu_umbra(div_din_zona, "closed"))
+            self.assertEqual((info["editoare"], info["atasamente"], info["semne"], info["necunoscute"]), (1, 0, 0, 0), msg=s)
+            self.assertEqual(u, {"deschise": 0, "inchise": 1, "alt_tip": 0, "ua_pagina": 0, "ua_zona": 0, "documente_iframe": 0})
+            # prezenta de la inceput: refuz la prima paza, nicio actiune
+            self.assertEqual(ruleaza_trimite(gp, FakePg(h, cdp_doc=cu_umbra(div_din_zona, "closed"))), ("ciorna_necunoscuta", []), msg=s)
+            # aparuta doar la ultima paza: refuz inainte de Enter, din acelasi instantaneu
+            cod, act, pg, det = self.scrie(gp, s, cdp_doc=umbra_dupa_scriere("closed"))
+            self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=s)
+            self.assertEqual(det, "inainte_de_enter: shadow DOM in pagina (CDP: deschise 0, inchise 1, alt tip 0; user-agent in zona 0)"
+                                  " - nu trimit")
+            self.assertEqual(_invariant_instantaneu(pg), (True, ""))
+            self.assertEqual(pg.ultimele_umbre, UMBRE_ZERO)                      # evaluate (r19) a vazut 0: doar CDP o prinde
+            # pe instantaneul fara umbre (M109 = ce vedea r19): Enter (= ocolirea din verdict)
+            cod, act, pg, det = self.scrie(mutant(REGULI_M109_FARA_UMBRE_CDP), s, cdp_doc=umbra_dupa_scriere("closed"))
+            self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE), msg=s)
+
+    def test_umbra_inchisa_in_afara_zonei_si_alte_tipuri_refuz(self):
+        body = lambda d: _primul(d, "body")
+        rich = lambda d: _primul(d, "rich-textarea")
+        for gazda, tip, mesaj in ((body, "closed", "deschise 0, inchise 1, alt tip 0"), (body, "open", "deschise 1, inchise 0, alt tip 0"),
+                                  (div_din_zona, "open", "deschise 1, inchise 0, alt tip 0"), (rich, "closed", "deschise 0, inchise 1, alt tip 0"),
+                                  (body, "nou-tip", "deschise 0, inchise 0, alt tip 1"), (body, None, "deschise 0, inchise 0, alt tip 1")):
+            for s in ("mediu", "lung"):
+                self.assertEqual(ruleaza_trimite(gp, FakePg(html_captura(s), cdp_doc=cu_umbra(gazda, tip, ""))), ("ciorna_necunoscuta", []))
+                cod, act, pg, det = self.scrie(gp, s, cdp_doc=umbra_dupa_scriere(tip, gazda))
+                self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=(tip, s))
+                self.assertIn("(CDP: " + mesaj + "; user-agent in zona 0)", det)
+        # pe chatul nou (dupa navigare): refuz inainte de click
+        cod, act, pg, det = self.scrie(gp, cdp_doc=cu_umbra(body, "closed", "", cand=lambda pg: "goto" in pg.act))
+        self.assertEqual((cod, act), ("ciorna_necunoscuta", ["goto"]))
+        self.assertTrue(det.startswith("pe_chatul_nou: shadow DOM in pagina (CDP"), det)
+
+    def test_umbre_imbricate_si_in_iframe(self):
+        # inchisa in interiorul unei umbre deschise / inchise; inchisa in documentul unui iframe (in afara zonei): toate numarate, refuz
+        imbr = '<div id="i"></div>'
+        for ext in ("open", "closed"):
+            def f(pg, doc, ext=ext):
+                cu_umbra(div_din_zona, ext, imbr)(pg, doc)
+                interior = div_din_zona(doc)["shadowRoots"][0]["children"][0]
+                interior["shadowRoots"] = [{"nodeType": 11, "nodeName": "#document-fragment", "shadowRootType": "closed", "children": []}]
+                return doc
+            info, u = self.an_cdp(html_captura("mediu"), f)
+            self.assertEqual((u["deschise"], u["inchise"]), (1, 1) if ext == "open" else (0, 2), msg=ext)
+        info, u = self.an_cdp(html_captura("mediu"), cu_iframe(_doc_cu_div_inchis))
+        self.assertEqual((u["inchise"], u["documente_iframe"], info["necunoscute"]), (1, 1, 0))
+        cod, act, pg, det = self.scrie(gp, cdp_doc=cu_iframe(_doc_cu_div_inchis, cand=lambda pg: pg.scris))
+        self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER))
+        # iframe gol (fara umbre) in afara zonei: trece (pagina reala: 3 documente iframe)
+        gol = lambda: html_in_cdp("<html><body><p>x</p></body></html>")["root"]["children"][0]
+        cod, act, pg, det = self.scrie(gp, cdp_doc=cu_iframe(gol))
+        self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE))
+        # M114 (iframe-urile neparcurse): Enter cu umbra inchisa din iframe; M117 (umbre imbricate neparcurse): doar cea exterioara numarata
+        cod, act, pg, det = self.scrie(mutant(REGULI_M114_FARA_IFRAME), cdp_doc=cu_iframe(_doc_cu_div_inchis, cand=lambda pg: pg.scris))
+        self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE))
+
+    def test_user_agent_in_afara_zonei_ok_in_zona_refuz(self):
+        # pagina reala: un shadow root user-agent, pe un <img> din istoric (in afara zonei) -> trece; continutul lui nu se parcurge
+        for s in ("mediu", "lung"):
+            cod, act, pg, det = self.scrie(gp, s, cdp_doc=cu_umbra(img_in_afara, "user-agent", REPRO_R9_INTERIOR))
+            self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE), msg=s)
+            self.assertEqual(_invariant_instantaneu(pg), (True, ""))
+        info, u = self.an_cdp(html_captura("mediu"), cu_umbra(img_in_afara, "user-agent"))
+        self.assertEqual((u["ua_pagina"], u["ua_zona"], info["necunoscute"], info["editoare"]), (1, 0, 0, 1))
+        # in zona (pe un div din zona / pe rich-textarea = stramos al editorului / pe zona insasi / pe body = stramos al editorului): refuz
+        for gazda in (div_din_zona, lambda d: _primul(d, "rich-textarea"), lambda d: _primul(d, "input-area-v2"), lambda d: _primul(d, "body")):
+            info, u = self.an_cdp(html_captura("mediu"), cu_umbra(gazda, "user-agent"))
+            self.assertEqual((u["ua_pagina"], u["ua_zona"]), (1, 1))
+            cod, act, pg, det = self.scrie(gp, cdp_doc=umbra_dupa_scriere("user-agent", gazda))
+            self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER))
+            self.assertIn("user-agent in zona 1", det)
+            self.assertEqual(self.scrie(mutant(REGULI_M112_UA_ZONA), cdp_doc=umbra_dupa_scriere("user-agent", gazda))[:2],
+                             (None, ACTIUNI_TRIMITERE))
+
+    def test_spatiile_se_vad_doar_cu_include_whitespace(self):
+        # div.ql-clipboard cu un spatiu (permis DOAR gol, r17): cu DOM.enable({includeWhitespace: "all"}) refuz; M111 (Chromium sare
+        # textul din doar spatii) -> clipboard-ul pare gol -> Enter
+        for s in ("mediu", "lung"):
+            h = html_captura(s, interior=((_index_clipboard(s), " "),))
+            self.assertEqual(gp.analizeaza_ciorna(h)["necunoscute_detalii"], [SEM_CLIPBOARD], msg=s)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(h)), ("ciorna_necunoscuta", []), msg=s)
+            pg = FakePg(h, dupa_goto=h)
+            self.assertEqual(trimite_brief(gp, pg, BRIEF_TEST)[::2], ("ciorna_necunoscuta", []))
+            self.assertEqual(trimite_brief(mutant(REGULI_M111_FARA_SPATII), FakePg(h, dupa_goto=h), BRIEF_TEST)[::2], (None, ACTIUNI_TRIMITERE))
+        # parametrii trimisi: exact DOM.enable {includeWhitespace: all}, apoi DOM.getDocument {depth -1, pierce true}, apoi detach
+        cod, act, pg, det = self.scrie(gp)
+        self.assertEqual(pg.cdp_trimise, [("DOM.enable", {"includeWhitespace": "all"}), ("DOM.getDocument", {"depth": -1, "pierce": True})] * 3)
+        self.assertEqual([x for x in pg.jurnal if x.startswith("cdp")],
+                         ["cdp sesiune", "cdp DOM.enable", "cdp DOM.getDocument", "cdp detach"] * 3)
+
+    def test_text_trunchiat_de_cdp(self):
+        # un text > 10000 de caractere vine taiat: in zona = necunoscut explicit (si textul strain); in afara zonei (head / istoric) = ok
+        lung = "x" * 12000
+        h = html_captura("mediu", extra_zona="<span>" + lung + "</span>")
+        info, u = self.an_cdp(h)
+        self.assertIn("text_trunchiat_cdp:10001 caractere citite", info["necunoscute_detalii"])
+        self.assertEqual(ruleaza_trimite(gp, FakePg(h)), ("ciorna_necunoscuta", []))
+        h = html_captura("mediu").replace("<body>", "<body><style>" + lung + "</style><p>" + lung + "</p>", 1)
+        self.assertIn(lung, h)
+        self.assertEqual(self.an_cdp(h)[0]["necunoscute"], 0)
+        self.assertEqual(ruleaza_trimite(gp, FakePg(h, dupa_goto=h)), (None, ACTIUNI_TRIMITERE))
+        # in editor: o linie de 10001 caractere = brief_invalid inainte de orice actiune; 10000 = trimisa (CDP nu o taie)
+        for n, asteptat in ((10001, ("brief_invalid", [])), (10000, (None, ACTIUNI_TRIMITERE))):
+            brief = "Intrebare:\n" + "y" * n + "\nsfarsit"
+            cod, act, pg, det = self.scrie(gp, brief=brief)
+            self.assertEqual((cod, act), asteptat, msg=n)
+        # M116 (fara verificarea liniilor): linia de 10001 e scrisa, instantaneul o arata taiata -> refuz abia la ultima paza
+        cod, act, pg, det = self.scrie(mutant(REGULI_M116_FARA_LINII), brief="Intrebare:\n" + "y" * 10001)
+        self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER))
+        self.assertIn("text_trunchiat_cdp:10001 caractere citite", det)
+
+    def test_cdp_indisponibil_sau_forma_gresita_refuz(self):
+        # new_cdp_session esueaza: refuz (nicio cale de rezerva)
+        self.assertEqual(ruleaza_trimite(gp, FakePg(html_captura("mediu"), cdp_indisponibil=True)), ("ciorna_necitibila", []))
+        g = html_captura("mediu")
+
+        class Indisponibil(FakeCtx):
+            def new_cdp_session(self, pagina):
+                if self.pg.scris:
+                    raise RuntimeError("Target closed")
+                return FakeCtx.new_cdp_session(self, pagina)
+        pg = FakePg(g, dupa_goto=g)
+        pg.context = Indisponibil(pg)
+        self.assertEqual(trimite_brief(gp, pg, BRIEF_TEST)[::2], ("ciorna_necitibila", ACTIUNI_FARA_ENTER))
+
+        def ed(doc):
+            return next(x for x in noduri_cdp(doc["root"]) if atr_cdp(x).get("role") == "textbox")
+        forme = (lambda d: None, lambda d: [], lambda d: {"root": None}, lambda d: {"root": dict(d["root"], nodeType=1)},
+                 lambda d: {"root": dict(d["root"], children={})}, lambda d: {"root": dict(d["root"], children=[1])},
+                 lambda d: (ed(d).__setitem__("attributes", ed(d)["attributes"] + ["x"]), d)[1],
+                 lambda d: (ed(d).__setitem__("attributes", ed(d)["attributes"] + ["x", None]), d)[1],
+                 lambda d: (ed(d).__setitem__("attributes", ed(d)["attributes"] + ["ROLE", "textbox"]), d)[1],
+                 lambda d: (ed(d).__setitem__("localName", ""), d)[1], lambda d: (ed(d).pop("localName"), d)[1],
+                 lambda d: (ed(d)["children"].append({"nodeType": 3}), d)[1],
+                 lambda d: (ed(d)["children"].append({"nodeType": 2, "nodeName": "x"}), d)[1],
+                 lambda d: (ed(d).__setitem__("shadowRoots", {}), d)[1],
+                 lambda d: (ed(d).__setitem__("contentDocument", {"nodeType": 1}), d)[1],
+                 lambda d: (ed(d).__setitem__("templateContent", []), d)[1])
+        for k, f in enumerate(forme):
+            pg = FakePg(html_captura("mediu"), rezultat_cdp=lambda pg, d, f=f: f(d))
+            self.assertEqual(ruleaza_trimite(gp, pg), ("ciorna_necitibila", []), msg=k)
+            pg = FakePg(g, dupa_goto=g, rezultat_cdp=lambda pg, d, f=f: f(d) if pg.scris else d)
+            self.assertEqual(trimite_brief(gp, pg, BRIEF_TEST)[::2], ("ciorna_necitibila", ACTIUNI_FARA_ENTER), msg=k)
+
+        # o eroare CDP la DOM.enable / DOM.getDocument: refuz
+        class Rau(FakeCDP):
+            def send(self, metoda, param=None):
+                if metoda == self.pg.metoda_rea:
+                    raise RuntimeError("Protocol error")
+                return FakeCDP.send(self, metoda, param)
+
+        class CtxRau(FakeCtx):
+            def new_cdp_session(self, pagina):
+                FakeCtx.new_cdp_session(self, pagina)
+                return Rau(self.pg)
+        for m in ("DOM.enable", "DOM.getDocument"):
+            pg = FakePg(html_captura("mediu"))
+            pg.metoda_rea, pg.context = m, CtxRau(pg)
+            self.assertEqual(ruleaza_trimite(gp, pg), ("ciorna_necitibila", []), msg=m)
+
+    def test_arborele_cdp_egal_cu_cel_html_pe_toate_capturile(self):
+        # aceeasi analiza din arborele CDP ca din HTML (aceleasi _Nod), pe toate paginile reale si pe reproducerile negative din suita
+        pagini = [pagina_calibrare(x) for x in ("i", "ii", "iii")] + [pagina_22_11_completa(x) for x in ("i", "ii", "iii")] + \
+            [pagina_22_11_completa(x, fdi=FDI_5G) for x in ("i", "ii", "iii")] + [pagina_23_11(), chat_nou_gol_23_11()] + \
+            [html_captura(s) for s in ("gol", "mediu", "lung")] + \
+            [html_captura("mediu", extra_zona=REPRO_R7_NEVIZIBIL % (t, t)) for t in NEVIZIBILE_R17] + \
+            [pagina(["a.txt"]), pagina(conversatie=CONV_IMAGINI), html_captura("mediu", editor=TEXT_MEDIU + REPRO_R7_SPAN),
+             html_captura("mediu", interior=((_index_clipboard("mediu"), " "),))]
+        for h in pagini:
+            a = gp.analizeaza_ciorna(h)
+            b, u = self.an_cdp(h)
+            self.assertEqual(a, b, msg=h[:80])
+            self.assertEqual(u, dict((k, 0) for k in gp.CHEI_UMBRE_CDP))
+        # template: continutul (templateContent in CDP) e copil al lui <template>, ca in HTMLParser
+        h = html_captura("mediu", extra_zona="<template><span>continut strain arbitrar</span></template>")
+        self.assertEqual(self.an_cdp(h)[0], gp.analizeaza_ciorna(h))
+        self.assertIn("text:continut strain arbitrar", self.an_cdp(h)[0]["necunoscute_detalii"])
+        # nume de tag / atribut cu majuscule (svg in CDP: clipPath, viewBox) -> litere mici, ca HTMLParser
+        doc = html_in_cdp("<html><body></body></html>")
+        _primul(doc, "body")["children"].append({"nodeType": 1, "nodeName": "clipPath", "localName": "clipPath",
+                                                  "attributes": ["viewBox", "0 0 1 1"], "children": []})
+        rad = gp._arbore_cdp(doc)[0]
+        x = [n for n in gp._descendenti(rad) if n.tag != "#text"][-1]
+        self.assertEqual((x.tag, x.attrs), ("clippath", {"viewbox": "0 0 1 1"}))
+        # comentarii / doctype ignorate, CDATA = text
+        doc = html_in_cdp("<html><body><p>a</p></body></html>")
+        p = _primul(doc, "p")
+        p["children"] += [{"nodeType": 8, "nodeName": "#comment", "nodeValue": "c"}, {"nodeType": 4, "nodeName": "#cdata-section", "nodeValue": "d"}]
+        doc["root"]["children"].insert(0, {"nodeType": 10, "nodeName": "html"})
+        rad = gp._arbore_cdp(doc)[0]
+        self.assertEqual([(c.tag, c.date) for c in [n for n in gp._descendenti(rad) if n.tag == "p"][0].copii], [("#text", "a"), ("#text", "d")])
+
+    def test_un_singur_instantaneu_pe_tipare_cdp(self):
+        # umbrele CDP se schimba intre citiri (citirea k dupa scriere): decizia = SINGURA citire dupa scriere; M110 (doua) se rupe
+        import itertools
+        stari = ("curat", "inchisa_zona", "inchisa_pagina", "ua_zona")
+
+        def tipar(t):
+            def f(pg, doc):
+                if not pg.scris or pg.n_dupa > len(t):
+                    return doc
+                st = t[pg.n_dupa - 1]
+                if st == "inchisa_zona":
+                    return cu_umbra(div_din_zona, "closed")(pg, doc)
+                if st == "inchisa_pagina":
+                    return cu_umbra(lambda d: _primul(d, "body"), "closed", "")(pg, doc)
+                if st == "ua_zona":
+                    return cu_umbra(div_din_zona, "user-agent", "")(pg, doc)
+                return doc
+            return f
+        for t in itertools.product(stari, repeat=2):
+            cod, act, pg, det = self.scrie(gp, cdp_doc=tipar(t))
+            self.assertEqual(_invariant_instantaneu(pg), (True, ""), msg=t)
+            self.assertEqual(cod, None if t[0] == "curat" else "ciorna_necunoscuta", msg=t)
+        # M110: umbrele din primul instantaneu (curat), arborele din al doilea (cu umbra inchisa, nevazuta in arbore) -> Enter
+        cod, act, pg, det = self.scrie(mutant(REGULI_M110_DOUA_INSTANTANEE), cdp_doc=tipar(("curat", "inchisa_zona")))
+        self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE))
+        self.assertFalse(_invariant_instantaneu(pg)[0])
+
+    def test_mutanti_r20_lasa_brief_ul_sa_plece(self):
+        # fiecare mutant rupe scenariul lui (Enter), codul refuza; starile reale trec pe fiecare mutant
+        tip_nou = umbra_dupa_scriere("nou-tip")
+        cazuri = {"M109": dict(cdp_doc=umbra_dupa_scriere("closed")), "M112": dict(cdp_doc=umbra_dupa_scriere("user-agent")),
+                  "M113": dict(cdp_doc=umbra_dupa_scriere("closed")),
+                  "M114": dict(cdp_doc=cu_iframe(_doc_cu_div_inchis, cand=lambda pg: pg.scris)), "M115": dict(cdp_doc=tip_nou)}
+        for nume, inl in MUTANTI_R20:
+            mut = mutant(inl)
+            if nume in cazuri:
+                self.assertEqual(self.scrie(gp, **cazuri[nume])[:2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=nume)
+                self.assertEqual(self.scrie(mut, **cazuri[nume])[:2], (None, ACTIUNI_TRIMITERE), msg=nume)
+            for s in ("mediu", "lung"):
+                self.assertEqual(self.scrie(mut, s)[:2], (None, ACTIUNI_TRIMITERE), msg=(nume, s))
+        # M117 (umbre imbricate neparcurse): umbra exterioara refuzata oricum -> doar numararea difera (strat de numarare, nu de decizie)
+        def f(pg, doc):
+            cu_umbra(div_din_zona, "open", '<div id="i"></div>')(pg, doc)
+            div_din_zona(doc)["shadowRoots"][0]["children"][0]["shadowRoots"] = [
+                {"nodeType": 11, "nodeName": "#document-fragment", "shadowRootType": "closed", "children": []}]
+            return doc
+        doc = f(None, html_in_cdp(html_captura("mediu")))
+        self.assertEqual(gp._arbore_cdp(doc)[1]["inchise"], 1)
+        self.assertEqual(mutant(REGULI_M117_FARA_IMBRICATE)._arbore_cdp(f(None, html_in_cdp(html_captura("mediu"))))[1]["inchise"], 0)
+
+    def test_starile_reale_trec_r20(self):
+        for s in ("mediu", "lung"):
+            cod, act, pg, det = self.scrie(gp, s)
+            self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE), msg=s)
+            self.assertEqual(_invariant_instantaneu(pg), (True, ""))
+            self.assertNotIn("content", pg.jurnal)
+            self.assertEqual(pg.jurnal.count("cdp DOM.getDocument"), 3)              # inainte de chat nou, pe chatul nou, ultima paza
+        for html in [pagina_calibrare(x) for x in ("i", "ii", "iii")] + [pagina_22_11_completa(x) for x in ("i", "ii", "iii")] + \
+                [pagina_22_11_completa(x, fdi=FDI_5G) for x in ("i", "ii", "iii")] + [pagina_23_11(), chat_nou_gol_23_11()]:
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html, dupa_goto=html)), (None, ACTIUNI_TRIMITERE))
+        self.assertEqual(scenariu_brief_lung(gp, pagina_23_11()), (None, "", ACTIUNI_TRIMITERE))
+        # `stare`: linia CDP; pagina reala (UA pe img in afara zonei) -> OK; umbra inchisa -> REFUZ
+        img = img_in_afara
+        for cdp_doc, linie, paza in (
+                (None, "shadow root CDP: deschise 0 / inchise 0 / alt tip 0 | user-agent: pagina 0 / zona 0 | documente iframe: 0", "paza ciorna: OK"),
+                (cu_umbra(img, "user-agent", ""), "shadow root CDP: deschise 0 / inchise 0 / alt tip 0 | user-agent: pagina 1 / zona 0 | documente iframe: 0",
+                 "paza ciorna: OK"),
+                (cu_umbra(div_din_zona, "closed"), "shadow root CDP: deschise 0 / inchise 1 / alt tip 0 | user-agent: pagina 0 / zona 0 | documente iframe: 0",
+                 "paza ciorna: REFUZ")):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                gp.stare(FakePg(html_captura("lung"), cdp_doc=cdp_doc))
+            l = out.getvalue().splitlines()
+            self.assertIn(linie, l)
+            self.assertIn("shadow root: pagina 0 / zona 0 | custom inregistrate: pagina 0 / zona 0", l)
+            self.assertTrue(any(x.startswith(paza) for x in l), msg=l[-1])
+
+    def test_structural_r20(self):
+        with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
+            src = f.read().decode("ascii")
+        cod = [l for l in (x.rstrip("\r") for x in src.split("\n")) if not l.lstrip().startswith("#")]
+        self.assertEqual(sum(l.count("new_cdp_session(") for l in cod), 1)
+        self.assertIn("        cdp = pg.context.new_cdp_session(pg)", cod)
+        self.assertEqual(sum(l.count('"DOM.getDocument"') for l in cod), 1)
+        self.assertIn('        doc = cdp.send("DOM.getDocument", {"depth": -1, "pierce": True})', cod)
+        self.assertIn('        cdp.send("DOM.enable", {"includeWhitespace": "all"})', cod)
+        self.assertEqual(sum(l.count("_arbore_cdp(") for l in cod), 2)                # definitia + _instantaneu
+        self.assertEqual(sum(l.count("analizeaza_arbore(") for l in cod), 3)          # definitia + analizeaza_ciorna + _instantaneu
+        self.assertEqual(sum(l.count("verifica_umbre_cdp(") for l in cod), 4)         # definitia + _paza_ciorna + _ultima_paza + stare
+        self.assertEqual(gp.LIMITA_TEXT_CDP, 10000)
+        self.assertEqual(gp.CHEI_UMBRE_CDP, ("deschise", "inchise", "alt_tip", "ua_pagina", "ua_zona", "documente_iframe"))
 
 
 def _nod_text(t):

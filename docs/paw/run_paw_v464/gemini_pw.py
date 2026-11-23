@@ -194,6 +194,15 @@
 #   necunoscute, Enter). Acum instantaneul (_instantaneu) = UN SINGUR pg.evaluate care intoarce HTML-ul SI numarul de shadow root-uri
 #   deschise (pagina / zona) si de elemente custom inregistrate (zona); orice shadow root sau custom in zona = refuz (verifica_fara_umbre),
 #   in ultima paza, in paza dinaintea chatului nou / pe chatul nou si in `stare`. Nicio citire page.content() nu mai exista in cod.
+# v4.6.4d / r20 (23.11.2026, Jakarinos NO-GO r9): un shadow root INCHIS pe o eticheta standard (div) nu se vede din JavaScript-ul paginii
+#   (el.shadowRoot = null), deci evaluate-ul r19 dadea 0 si brief-ul pleca. Decizia chat-ului: instantaneul = UN SINGUR apel CDP
+#   DOM.getDocument({depth: -1, pierce: true}) (sesiune pg.context.new_cdp_session(pg), DOM.enable cu includeWhitespace "all" inainte,
+#   altfel nodurile text din doar spatii lipsesc). Din el se deriva TOT: arborele analizat (_arbore_cdp construieste aceleasi _Nod ca
+#   parserul HTML: taguri, atribute, noduri text, continutul template-urilor), textul editorului, atasamentele, necunoscutele si
+#   numararea shadow root-urilor DIN ACELASI raspuns: orice shadow root open / closed / de alt tip, oriunde (si imbricat, si in
+#   documentele iframe-urilor) = refuz; user-agent (input / img / video...) doar in afara zonei (pagina reala: unul, pe un img din
+#   istoric); un text trunchiat de CDP (> 10000 de caractere) in zona = refuz. CDP indisponibil / forma neasteptata = refuz (nu exista o
+#   cale mai slaba). Verificarea r19 din evaluate ramane, ca citire anterioara care poate DOAR refuza (fara HTML).
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata, base64, json
@@ -823,7 +832,7 @@ def _e_editor(n):
     # r17 (Jakarinos NO-GO r6: "exceptia editorului acopera si elemente al caror text nu e comparat cu brief-ul"): EDITORUL PRINCIPAL e
     # EXACT elementul al carui text se compara cu brief-ul (trimite: locatorul EDITOR, unic) - div cu role="textbox" si contenteditable=
     # "true", copil DIRECT al lui rich-textarea (ca in capturile c23n gol / mediu / lung si atributele 22.11). Doar el poarta contextul
-    # in_editor (textul lui nu e "text necunoscut"). Trebuie sa fie UNIC in pagina: analizeaza_ciorna il numara, verifica_fara_atasamente
+    # in_editor (textul lui nu e "text necunoscut"). Trebuie sa fie UNIC in pagina: analizeaza_arbore il numara, verifica_fara_atasamente
     # refuza orice alt numar decat 1. div.ql-clipboard si orice alt element contenteditable NU sunt editor (_e_clipboard / _semnal).
     p = n.parinte
     return (n.tag == "div" and n.attrs.get("role") == "textbox" and n.attrs.get("contenteditable") == "true"
@@ -1288,7 +1297,7 @@ def _text_editor(ed):
     separatorilor din doar spatii albe HTML intre paragrafe - fara continut, comprimati oricum de normalizeaza); un <p> contine fie DOAR
     noduri text (o linie a brief-ului), fie exact un <br> si nimic altceva (linia goala, <p><br></p>); niciun <p> gol, niciun <br> langa
     text, nimic imbricat. Liniile se lipesc cu \\n (comparatia comprima oricum spatiile albe HTML, normalizeaza).
-    -> (text, None) sau (None, motiv "editor_structura:..."); motivul intra la necunoscute (analizeaza_ciorna), deci refuz."""
+    -> (text, None) sau (None, motiv "editor_structura:..."); motivul intra la necunoscute (analizeaza_arbore), deci refuz."""
     linii = []
     for p in ed.copii:
         if p.tag == "#text" and SPATII_COMPARATIE.fullmatch(p.date):
@@ -1310,12 +1319,19 @@ def _text_editor(ed):
 
 
 def analizeaza_ciorna(html):
-    """HTML-ul paginii -> dict: editoare, zone (zonele de compunere ale editoarelor, cele mai exterioare),
-    atasamente (chip-uri CHIP cele mai exterioare din zone = fisiere), semne (elemente ATAS din zone), detalii."""
+    """HTML -> analiza (analizeaza_arbore). r20: folosit doar de teste / diagnostic pe capturi; trimite / stare analizeaza arborele
+    din instantaneul CDP (_instantaneu -> _arbore_cdp), nu un HTML."""
     a = _Arbore()
     a.feed(html or "")
     HTMLParser.close(a)                     # inchide parserul HTML (nu browserul: canalul nu inchide nimic in Edge)
-    editoare = [n for n in _descendenti(a.radacina) if _e_editor(n)]     # r17: editoarele PRINCIPALE din toata pagina (paza cere exact 1)
+    return analizeaza_arbore(a.radacina)
+
+
+def analizeaza_arbore(radacina, trunchiate=()):
+    """arborele paginii (_Nod) -> dict: editoare, zone (zonele de compunere ale editoarelor, cele mai exterioare),
+    atasamente (chip-uri CHIP cele mai exterioare din zone = fisiere), semne (elemente ATAS din zone), detalii.
+    r20: trunchiate = nodurile text pe care CDP le-a taiat (> LIMITA_TEXT_CDP); unul in zona = necunoscut (textul real nu e cunoscut)."""
+    editoare = [n for n in _descendenti(radacina) if _e_editor(n)]     # r17: editoarele PRINCIPALE din toata pagina (paza cere exact 1)
     zone = []
     for e in editoare:
         z, p = None, e.parinte
@@ -1344,12 +1360,15 @@ def analizeaza_ciorna(html):
                 k = (n.tag + ("." + c[0] if c else ""))[:60].encode("ascii", "replace").decode("ascii")
                 detalii[k] = detalii.get(k, 0) + 1
     ids = {}                                # r13: elementele paginii dupa id (tinta lui aria-describedby; id dublat = toate)
-    for n in _descendenti(a.radacina):
+    for n in _descendenti(radacina):
         if n.attrs.get("id"):
             ids.setdefault(n.attrs["id"], []).append(n)
     necunoscute = []                        # r2: verificarea pozitiva (tot ce nu e structura recunoscuta a ciornei goale)
     for z in zone:
         necunoscute.extend(_necunoscute(z, editoare, ids))
+    for x in trunchiate:                    # r20: text taiat de CDP in zona (si in editor) = nu stiu ce scrie -> refuz
+        if any(_sub(x, z) for z in zone):
+            necunoscute.append(("text_trunchiat_cdp:%d caractere citite" % len(x.date), ""))
     # r18: textul editorului UNIC, din ACELASI arbore (acelasi instantaneu) ca atasamentele si necunoscutele; forma lui = regulile Quill
     text_editor = None
     if len(editoare) == 1:
@@ -1455,20 +1474,18 @@ def _semn_locator(pg):
 
 
 # r19 (Jakarinos NO-GO r8 P1): page.content() NU serializeaza subarborii shadow, deci un shadow root din zona poate purta continut
-# (ex. un al doilea contenteditable cu text strain) pe care analiza HTML nu il vede. Instantaneul = UN SINGUR pg.evaluate care intoarce,
-# din ACELASI moment: HTML-ul paginii (documentElement.outerHTML = ce analizeaza Python, ca page.content() fara doctype) SI numaratorile:
+# (ex. un al doilea contenteditable cu text strain) pe care analiza HTML nu il vede. r19 numara shadow root-urile din JavaScript-ul paginii.
+# r20 (Jakarinos NO-GO r9 P1): un shadow root INCHIS pe o eticheta standard (div, span...) nu se vede din JavaScript-ul paginii
+# (el.shadowRoot = null). Verificarea din pg.evaluate (JS_UMBRE, fara HTML) ramane ca citire ANTERIOARA care poate DOAR refuza:
 #   shadow_pagina = shadow root-uri DESCHISE in toata pagina (recursiv, si in shadow root-urile gasite);
 #   shadow_zona   = dintre ele, cele cu gazda in zona (elementele ZONA si descendentii lor) sau pe stramosii editorului (EDITOR);
 #   custom_zona   = elemente custom INREGISTRATE (customElements.getName pe constructorul elementului - prinde si built-in-urile
 #                   personalizate create cu createElement(tag, {is}), care NU au atributul is in DOM - plus customElements.get pe
-#                   eticheta cu cratima / pe atributul is) in zona / pe stramosii
-#                   editorului: singurele, in afara etichetelor standard, care pot purta un shadow root INCHIS (nevazut din pagina);
+#                   eticheta cu cratima / pe atributul is) in zona / pe stramosii editorului (CDP nu spune daca un element e inregistrat);
 #   custom_pagina = la fel, in toata pagina (doar afisat in `stare`, nu decide).
-# Pagina reala: 0 shadow root-uri deschise (citire CDP a chat-ului, 23.11.2026) -> orice shadow root deschis (in zona SAU oriunde in
-# pagina) sau orice element custom inregistrat in zona = refuz (verifica_fara_umbre). Limita: un shadow root INCHIS pe o eticheta standard
-# (div, span, p...) nu se vede din JavaScript-ul paginii (RUNBOOK, "Stare r19").
+# Decizia se ia din instantaneul CDP (_instantaneu), care vede si shadow root-urile inchise.
 CHEI_UMBRE = ("shadow_pagina", "shadow_zona", "custom_pagina", "custom_zona")
-JS_INSTANTANEU = (
+JS_UMBRE = (
     "() => {\n"
     "  const Z = " + json.dumps(ZONA) + ", E = " + json.dumps(EDITOR) + ";\n"
     "  const zone = Array.from(document.querySelectorAll(Z)), stramosi = new Set();\n"
@@ -1487,43 +1504,185 @@ JS_INSTANTANEU = (
     "    }\n"
     "  };\n"
     "  parcurge(document, false);\n"
-    "  return { html: document.documentElement.outerHTML, shadow_pagina: sp, shadow_zona: sz, custom_pagina: cp, custom_zona: cz };\n"
+    "  return { shadow_pagina: sp, shadow_zona: sz, custom_pagina: cp, custom_zona: cz };\n"
     "}")
 
 
-def _instantaneu(pg):
-    # r19: SINGURA citire a paginii pentru analiza ciornei: un pg.evaluate -> (info din HTML, umbre), ambele din acelasi apel.
-    # Forma rezultatului se verifica strict (orice abatere = nu stiu ce e in pagina -> refuz)
-    r = pg.evaluate(JS_INSTANTANEU)
-    if not isinstance(r, dict) or set(r) != set(("html",) + CHEI_UMBRE) or not isinstance(r["html"], str) or \
-            any(type(r[k]) is not int or r[k] < 0 for k in CHEI_UMBRE):
-        raise GemEroare("ciorna_necitibila", "instantaneul paginii nu are forma asteptata - nu trimit")
-    return analizeaza_ciorna(r["html"]), {k: r[k] for k in CHEI_UMBRE}
+def _umbre_js(pg):
+    # r19 / r20: citirea din JavaScript-ul paginii (doar numaratori, fara HTML); forma verificata strict, altfel refuz
+    r = pg.evaluate(JS_UMBRE)
+    if not isinstance(r, dict) or set(r) != set(CHEI_UMBRE) or any(type(r[k]) is not int or r[k] < 0 for k in CHEI_UMBRE):
+        raise GemEroare("ciorna_necitibila", "numararea shadow DOM din pagina nu are forma asteptata - nu trimit")
+    return r
 
 
 def verifica_fara_umbre(umbre, moment):
-    # r19: shadow DOM = continut pe care analiza HTML nu il vede -> refuz (pagina reala: 0); custom_pagina doar afisat
+    # r19: shadow DOM vazut din pagina -> refuz (pagina reala: 0); custom_pagina doar afisat
     if umbre["shadow_pagina"] or umbre["shadow_zona"] or umbre["custom_zona"]:
         raise GemEroare("ciorna_necunoscuta", "%s: shadow DOM nevazut de analiza (shadow root: pagina %d, zona %d; custom inregistrate in zona %d)"
                         " - nu trimit" % (moment, umbre["shadow_pagina"], umbre["shadow_zona"], umbre["custom_zona"]))
     return 0
 
 
+# r20: instantaneul = UN SINGUR raspuns CDP DOM.getDocument({depth: -1, pierce: true}). Cu pierce, fiecare element vine cu `children`
+# (DOM-ul obisnuit), `shadowRoots` (TOATE: open, closed, user-agent - inclusiv cele inchise, nevazute din pagina), `contentDocument`
+# (iframe-urile din acelasi proces) si `templateContent`. Fara DOM.enable({includeWhitespace: "all"}) Chromium SARE nodurile text din
+# doar spatii albe (verificat in Edge 157: `<div>  </div>` apare fara copil), deci DOM.enable cu acest parametru e obligatoriu. Textele
+# mai lungi de 10000 de caractere vin TAIATE (primele 10000 + U+2026): LIMITA_TEXT_CDP.
+LIMITA_TEXT_CDP = 10000
+CHEI_UMBRE_CDP = ("deschise", "inchise", "alt_tip", "ua_pagina", "ua_zona", "documente_iframe")
+TIPURI_UMBRE = {"open": "deschise", "closed": "inchise"}     # orice alt tip in afara de "user-agent" = "alt_tip" (refuz, ca open / closed)
+
+
+def _cdp_rau(motiv):
+    return GemEroare("ciorna_necitibila", "instantaneul CDP nu are forma asteptata (%s) - nu trimit" % motiv)
+
+
+def _lista_cdp(n, cheie):
+    v = n.get(cheie, [])
+    if not isinstance(v, list) or not all(isinstance(x, dict) for x in v):
+        raise _cdp_rau(cheie)
+    return v
+
+
+def _atribute_cdp(c):
+    # lista plata [nume, valoare, ...] -> dict cu numele in litere mici (ca HTMLParser); doua nume egale dupa litere mici = refuz
+    a = c.get("attributes", [])
+    if not isinstance(a, list) or len(a) % 2 or not all(isinstance(x, str) for x in a):
+        raise _cdp_rau("attributes")
+    d = {}
+    for i in range(0, len(a), 2):
+        k = a[i].lower()
+        if k in d:
+            raise _cdp_rau("atribut dublat %s" % _ascii(k)[:40])
+        d[k] = a[i + 1]
+    return d
+
+
+def _arbore_cdp(doc):
+    """r20: rezultatul DOM.getDocument(depth -1, pierce) -> (radacina _Nod, umbre, trunchiate). Arborele = DOM-ul obisnuit al documentului
+    principal, cu aceleasi _Nod ca _Arbore (tag si nume de atribut in litere mici, noduri "#text" cu textul brut, continutul unui <template>
+    ca copii ai lui); comentariile / doctype / instructiunile de procesare se ignora (ca HTMLParser), CDATA = text. Continutul shadow
+    root-urilor si al documentelor iframe NU intra in arbore: se parcurge doar ca sa NUMERE shadow root-urile (si cele imbricate);
+    continutul unui shadow root user-agent e al browserului (nu se parcurge). Fiecare shadow root are o ancora in arbore (gazda, sau
+    gazda / iframe-ul exterior pentru cele imbricate), folosita la "in zona". Orice abatere de forma = ciorna_necitibila."""
+    if not isinstance(doc, dict) or not isinstance(doc.get("root"), dict) or doc["root"].get("nodeType") != 9:
+        raise _cdp_rau("root")
+    rad = _Nod("#document", {}, None)
+    umbre = dict((k, 0) for k in CHEI_UMBRE_CDP)
+    ancore_ua, trunchiate = [], []
+    st = [(c, rad, None) for c in reversed(_lista_cdp(doc["root"], "children"))]
+    while st:
+        c, p, ancora = st.pop()             # p = parintele din arbore (None = in afara arborelui analizat), ancora = nodul din arbore
+        t = c.get("nodeType")
+        if t in (3, 4):
+            v = c.get("nodeValue")
+            if not isinstance(v, str):
+                raise _cdp_rau("nodeValue")
+            if p is not None:
+                x = _Nod("#text", {}, p, v)
+                p.copii.append(x)
+                if len(v) > LIMITA_TEXT_CDP:
+                    trunchiate.append(x)
+            continue
+        if t in (7, 8, 10):
+            continue
+        if t != 1 or not isinstance(c.get("localName"), str) or not c["localName"]:
+            raise _cdp_rau("nodeType %r" % (t,))
+        x = None
+        if p is not None:
+            x = _Nod(c["localName"].lower(), _atribute_cdp(c), p)
+            p.copii.append(x)
+        else:
+            _atribute_cdp(c)                # forma verificata si in afara arborelui
+        a = x if x is not None else ancora
+        for s in _lista_cdp(c, "shadowRoots"):
+            tip = s.get("shadowRootType")
+            if tip == "user-agent":
+                umbre["ua_pagina"] += 1
+                ancore_ua.append(a)
+                continue
+            umbre[TIPURI_UMBRE.get(tip, "alt_tip")] += 1
+            st.extend((y, None, a) for y in reversed(_lista_cdp(s, "children")))
+        if "contentDocument" in c:
+            d = c["contentDocument"]
+            if not isinstance(d, dict) or d.get("nodeType") != 9:
+                raise _cdp_rau("contentDocument")
+            umbre["documente_iframe"] += 1
+            st.extend((y, None, a) for y in reversed(_lista_cdp(d, "children")))
+        copii = _lista_cdp(c, "children")
+        if "templateContent" in c:
+            if not isinstance(c["templateContent"], dict):
+                raise _cdp_rau("templateContent")
+            copii = copii + _lista_cdp(c["templateContent"], "children")
+        st.extend((y, x, a) for y in reversed(copii))
+    # "in zona" = ca in JS_UMBRE: elementul e o zona (ZONA) sau sub una, ori e un stramos al unui editor principal (EDITOR)
+    stramosi = set()
+    for e in _descendenti(rad):
+        if _e_editor(e):
+            q = e
+            while q is not None:
+                stramosi.add(id(q))
+                q = q.parinte
+    for a in ancore_ua:
+        q, z = a, a is not None and id(a) in stramosi
+        while q is not None and not z:
+            z = _e_zona(q)
+            q = q.parinte
+        if z:
+            umbre["ua_zona"] += 1
+    return rad, umbre, trunchiate
+
+
+def _instantaneu(pg):
+    # r20: SINGURA citire a paginii din care se ia decizia: un apel CDP DOM.getDocument(pierce) -> (info, umbre), ambele din acelasi
+    # raspuns. CDP indisponibil sau orice eroare = refuz (nu exista o cale de rezerva mai slaba)
+    try:
+        cdp = pg.context.new_cdp_session(pg)
+    except Exception as e:
+        raise GemEroare("ciorna_necitibila", "CDP indisponibil pentru instantaneu (%s) - nu trimit" % type(e).__name__)
+    try:
+        cdp.send("DOM.enable", {"includeWhitespace": "all"})
+        doc = cdp.send("DOM.getDocument", {"depth": -1, "pierce": True})
+    except Exception as e:
+        raise GemEroare("ciorna_necitibila", "instantaneul CDP a esuat (%s) - nu trimit" % type(e).__name__)
+    finally:
+        try:
+            cdp.detach()
+        except Exception:
+            pass                            # dupa citire: desprinderea sesiunii nu decide nimic (raspunsul e deja primit sau refuzat)
+    rad, umbre, trunchiate = _arbore_cdp(doc)
+    return analizeaza_arbore(rad, trunchiate), umbre
+
+
+def verifica_umbre_cdp(umbre, moment):
+    # r20: orice shadow root care nu e al browserului (open / closed / alt tip), oriunde in pagina = refuz (pagina reala: 0); user-agent
+    # doar in afara zonei (pagina reala: 1, pe un img din istoric, in afara zonei)
+    if umbre["deschise"] or umbre["inchise"] or umbre["alt_tip"] or umbre["ua_zona"]:
+        raise GemEroare("ciorna_necunoscuta", "%s: shadow DOM in pagina (CDP: deschise %d, inchise %d, alt tip %d; user-agent in zona %d)"
+                        " - nu trimit" % (moment, umbre["deschise"], umbre["inchise"], umbre["alt_tip"], umbre["ua_zona"]))
+    return 0
+
+
 def _citeste_ciorna(pg):
+    # r20: citirile care pot doar refuza (locatorii, evaluate), apoi instantaneul CDP (ultimul)
+    semn = _semn_locator(pg)
+    umbre_js = _umbre_js(pg)
     info, umbre = _instantaneu(pg)
-    return info, _semn_locator(pg), umbre
+    return info, semn, umbre_js, umbre
 
 
 def _paza_ciorna(pg, moment):
-    # doar citire (evaluate + count); ridica GemEroare daca ciorna are atasamente / shadow DOM sau nu poate fi citita
-    info, semn, umbre = _citeste_ciorna(pg)
-    verifica_fara_umbre(umbre, moment)
+    # doar citire (count + evaluate + CDP); ridica GemEroare daca ciorna are atasamente / shadow DOM sau nu poate fi citita
+    info, semn, umbre_js, umbre = _citeste_ciorna(pg)
+    verifica_fara_umbre(umbre_js, moment)
+    verifica_umbre_cdp(umbre, moment)
     return verifica_fara_atasamente(info, semn, moment)
 
 
 def _editor_unic(pg):
-    # r17: locatorul EDITOR (aceeasi regula ca _e_editor; vede si shadow DOM) trebuie sa gaseasca EXACT un element. Atunci e chiar editorul
-    # unic din HTML: page.content() serializeaza doar DOM-ul obisnuit, iar orice element de acolo e gasit si de locator.
+    # r17: locatorul EDITOR (aceeasi regula ca _e_editor; vede si shadow DOM-ul deschis) trebuie sa gaseasca EXACT un element; editorul
+    # unic din instantaneu (r20: arborele CDP al documentului) se verifica separat (verifica_fara_atasamente: editoare == 1).
     loc = pg.locator(EDITOR)
     k = loc.count()
     if k == 0:
@@ -1534,19 +1693,17 @@ def _editor_unic(pg):
 
 
 def _ultima_paza(pg, text):
-    # r18 (Jakarinos NO-GO r7 P1-2): ultima paza = UN SINGUR instantaneu. Din ACELASI page.content() (singura citire a ciornei dupa
-    # scriere) se deriva si textul editorului comparat cu brief-ul (_text_editor, din HTML-ul brut), si editorul unic in HTML, si
-    # atasamentele / semnele / necunoscutele; nicio citire anterioara a textului (r17: ed.inner_text() citit INAINTE de content(), iar
-    # textul in plus vazut de content() era exclus ca "editor") nu intra in decizie. Inainte de instantaneu, doar doua citiri prin locator
-    # care pot DOAR refuza (vad si shadow DOM-ul, pe care page.content() nu il serializeaza): editorul unic si semnele de atasament.
-    # Apelantul apasa Enter imediat dupa (fara alte asteptari sau citiri).
-    # r19 (Jakarinos NO-GO r8 P1): instantaneul = UN pg.evaluate (_instantaneu) cu HTML-ul SI numaratorile shadow DOM din acelasi apel;
-    # decizia foloseste doar rezultatul lui. Instantaneul si Enter raman doua operatii distincte (fereastra de milisecunde; Playwright nu
-    # are o operatie "citeste si apasa" atomica) - limita documentata in RUNBOOK.
+    # r18 (Jakarinos NO-GO r7 P1-2): ultima paza = UN SINGUR instantaneu, din care se deriva si textul editorului comparat cu brief-ul
+    # (_text_editor), si editorul unic, si atasamentele / semnele / necunoscutele. Inainte de instantaneu, doar citiri care pot DOAR
+    # refuza: editorul unic si semnele de atasament (locatori), shadow DOM-ul vazut din pagina (r19, evaluate).
+    # r20 (Jakarinos NO-GO r9 P1): instantaneul = UN apel CDP DOM.getDocument(pierce) (_instantaneu): arborele analizat SI shadow
+    # root-urile (si cele inchise) din acelasi raspuns; decizia foloseste doar rezultatul lui. Apelantul apasa Enter imediat dupa (fara
+    # alte asteptari sau citiri). Instantaneul si Enter raman doua operatii distincte (limita documentata in RUNBOOK).
     _editor_unic(pg)
     semn = _semn_locator(pg)
+    verifica_fara_umbre(_umbre_js(pg), "inainte_de_enter")
     info, umbre = _instantaneu(pg)
-    verifica_fara_umbre(umbre, "inainte_de_enter")
+    verifica_umbre_cdp(umbre, "inainte_de_enter")
     verifica_fara_atasamente(info, semn, "inainte_de_enter")
     verifica_ciorna(info["text_editor"], text, info["atasamente"])
 
@@ -1554,14 +1711,17 @@ def _ultima_paza(pg, text):
 def stare(pg):
     spune("URL:", pg.url)
     spune("model:", _model_afisat(pg).strip().encode("ascii", "replace").decode("ascii"))
-    info, semn, umbre = _citeste_ciorna(pg)
+    info, semn, umbre_js, umbre = _citeste_ciorna(pg)
     spune("genereaza:", _genereaza(pg), "| editor:", pg.locator(EDITOR).count(), "| raspunsuri:", pg.locator(RASPUNS).count(),
           "| atasamente in ciorna:", info["atasamente"] if info["zone"] else "?")
     spune("zone compunere:", info["zone"], "| semne atasament: zona", info["semne"], "/ locator", semn,
           "| detalii:", ", ".join(info["detalii"]) or "-")
-    # r19: shadow DOM din acelasi instantaneu (pagina reala: 0 / 0; custom inregistrate: zona 0)
-    spune("shadow root: pagina", umbre["shadow_pagina"], "/ zona", umbre["shadow_zona"], "| custom inregistrate: pagina",
-          umbre["custom_pagina"], "/ zona", umbre["custom_zona"])
+    # r19: shadow DOM vazut din pagina (pagina reala: 0 / 0; custom inregistrate: zona 0)
+    spune("shadow root: pagina", umbre_js["shadow_pagina"], "/ zona", umbre_js["shadow_zona"], "| custom inregistrate: pagina",
+          umbre_js["custom_pagina"], "/ zona", umbre_js["custom_zona"])
+    # r20: shadow root-urile din instantaneul CDP (pagina reala 23.11: 0 / 0 / 0, user-agent pagina 1 / zona 0)
+    spune("shadow root CDP: deschise", umbre["deschise"], "/ inchise", umbre["inchise"], "/ alt tip", umbre["alt_tip"],
+          "| user-agent: pagina", umbre["ua_pagina"], "/ zona", umbre["ua_zona"], "| documente iframe:", umbre["documente_iframe"])
     # r2: calibrarea listelor albe (RUNBOOK pasul 0) copiaza EXACT aceste semnaturi, cate una pe linie
     # r8: sub un necunoscut cu semnal (token_... / atribut_fisier: / eticheta: / fundal: / media:), locul exact al cuvantului / numelui
     spune("necunoscute in zona:", info["necunoscute"])
@@ -1570,16 +1730,19 @@ def stare(pg):
         if s:
             spune("    sursa", s)
     try:
-        verifica_fara_umbre(umbre, "stare")
+        verifica_fara_umbre(umbre_js, "stare")
+        verifica_umbre_cdp(umbre, "stare")
         verifica_fara_atasamente(info, semn, "stare")
         spune("paza ciorna: OK (trimite ar continua)")
     except GemEroare as e:
         spune("paza ciorna: REFUZ", e.cod, e.detaliu)
 
-
 def trimite(pg, text, maxs, target="https://gemini.google.com/app"):
     if target != "https://gemini.google.com/app" and not re.fullmatch(r"https://gemini\.google\.com/app/[0-9a-fA-F]+", target):
         raise GemEroare("url_invalid", "tinta refuzata")
+    # r20: o linie mai lunga decat LIMITA_TEXT_CDP ar ajunge TAIATA in instantaneul CDP (refuz la ultima paza): refuz inainte de orice actiune
+    if any(len(l.rstrip("\r")) > LIMITA_TEXT_CDP for l in text.split("\n")):
+        raise GemEroare("brief_invalid", "o linie are peste %d caractere (instantaneul CDP o taie) - nu trimit" % LIMITA_TEXT_CDP)
     # v4.6.4: PRIMA operatie pe pagina = paza ciornei din tab-ul curent (doar citire). Chatul nou goleste ciorna, deci
     # o verificare facuta dupa navigare nu mai vede atasamentele puse de operator (cauza testului de canal picat 19.11.2026).
     _paza_ciorna(pg, "inainte_de_chat_nou")
