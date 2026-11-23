@@ -6,7 +6,7 @@
 # uz:  python gemini_pw.py stare                       (doar citire: tab, model, daca scrie)
 #      python gemini_pw.py trimite <brief.md> [secunde_max=600]
 # iesire: stdout UTF-8; la eroare ultima linie "GEM_EROARE <cod> <detaliu>" si exit 3.
-# coduri: fara_tab_gemini, mai_multe_taburi_gemini, model_gresit, gemini_ocupat, editor_lipsa, text_neintrat,
+# coduri: fara_tab_gemini, mai_multe_taburi_gemini, model_gresit, gemini_ocupat, editor_lipsa, editor_multiplu, text_neintrat,
 #         ciorna_cu_atasamente, ciorna_necitibila, ciorna_necunoscuta, brief_invalid, timeout_raspuns, cdp_indisponibil,
 #         eroare_playwright, comanda_necunoscuta, url_invalid
 # r2 (16.10.2026, dupa Jakarinos r1): ciorna = brief-ul exact (normalizare explicita), refuz cu atasamente in ciorna,
@@ -169,6 +169,17 @@
 #   au text gol, numele sta in fonticon / data-mat-icon-name). (3) Golul se decide pe textul BRUT: _ascii nu mai decide nimic in _motiv_text
 #   (U+0301, U+200B, NBSP, U+2060, U+FEFF = text nevid -> refuz; afisarea lor in escape-uri). Cheia BardVeMetadataKey citita intreaga:
 #   butonul de trimitere are 35 de elemente, cu [34] = [0] (nevazut cat era taiata) -> pozitia 34 = [<cifre>], META_LUNGIME = 35 (vazut).
+# v4.6.4d / r17 (23.11.2026, Jakarinos NO-GO r16): (1) exceptia de text a editorului (contextul in_editor: textul nu e "necunoscut", se
+#   compara cu brief-ul) acoperea ORICE contenteditable="true" de sub rich-textarea - si div.ql-clipboard, al carui text nu era comparat
+#   cu nimic (comparatia citea doar primul editor): <div class="ql-clipboard" contenteditable="true" tabindex="-1">continut strain
+#   arbitrar</div> (si contract.pdf, U+0301, U+200B) sau un al doilea element editabil langa editor ajungeau la Enter. Acum EDITORUL
+#   PRINCIPAL e unul singur si e EXACT elementul comparat: rich-textarea > div[role="textbox"][contenteditable="true"] (EDITOR in CSS =
+#   _e_editor in Python), unic in HTML (altfel ciorna_necitibila) si unic la locator (altfel editor_multiplu), citit de verifica_ciorna.
+#   div.ql-clipboard e permis DOAR gol (niciun copil, nici spatii) si cu atributele EXACTE din capturi (_e_clipboard); orice alt element
+#   cu atributul contenteditable (al doilea editor, clipboard cu text sau cu alte atribute, contenteditable pe alt nod, in editor sau
+#   in zona) = semnal `editabil:` (_semnal, pasul 5). (2) Comparatia cu brief-ul nu mai elimina in tacere U+200B / U+200C / U+200D /
+#   U+2060 / U+FEFF si nu mai inlocuieste NBSP: un caracter invizibil prezent in editor si absent din brief = text_neintrat. Ramane doar
+#   comprimarea spatiilor albe HTML, necesara pentru randarea reala Quill (normalizeaza: <p> pe linie -> inner_text cu \n in plus).
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata, base64, json
@@ -177,7 +188,11 @@ from html.parser import HTMLParser
 
 CDP = "http://127.0.0.1:9333"
 GAZDA = "gemini.google.com"
-EDITOR = 'rich-textarea [contenteditable="true"], div.ql-editor[contenteditable="true"]'
+# r17: editorul PRINCIPAL (unic), aceeasi regula ca _e_editor; ql-clipboard (fara role) si orice alt contenteditable nu se potrivesc
+EDITOR = 'rich-textarea > div[role="textbox"][contenteditable="true"]'
+# r17: div.ql-clipboard EXACT cum apare in capturile cu atribute complete (c23n gol / mediu / lung; la 21.11 `stare` arata doar
+# "editor: 2", fara atribute): aceste atribute si niciun altul
+CLIPBOARD_ATRIBUTE = {"class": "ql-clipboard", "contenteditable": "true", "tabindex": "-1"}
 RASPUNS = "message-content"
 MODEL = '[data-test-id="bard-mode-menu-button"]'
 STOP = 'button[aria-label*="Stop" i]:visible, button[aria-label*="Opre" i]:visible'
@@ -684,23 +699,39 @@ def citeste_brief(cale, roots=BRIEF_ROOTS):
     return text
 
 
+# r17 (Jakarinos NO-GO r6): singurele caractere comprimate la comparare = spatiile albe HTML (spatiu, \t, \n, \r, \f), aceleasi ca la golul
+# din _motiv_text; orice alt caracter (U+200B, U+2060, U+FEFF, U+200C / U+200D, NBSP, U+0301, U+3000, VT...) se compara EXACT
+SPATII_COMPARATIE = re.compile("[ \t\n\r\f]+")
+
+
 def normalizeaza(t):
-    # r2 (Jakarinos P1-b): normalizare EXPLICITA pentru compararea ciornei cu brief-ul: CRLF/CR -> LF, NBSP -> spatiu,
-    # caractere de latime zero eliminate, orice sir de spatii albe (inclusiv linii goale) -> un singur spatiu, capete taiate
-    t = (t or "").replace("\r\n", "\n").replace("\r", "\n").replace("\u00a0", " ")
-    for z in ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"):
-        t = t.replace(z, "")
-    return " ".join(t.split())
+    # r2 (Jakarinos P1-b): normalizare EXPLICITA pentru compararea ciornei cu brief-ul.
+    # r17 (Jakarinos NO-GO r6: "normalizarea elimina intentionat U+200B / U+2060"): NIMIC nu se mai elimina sau inlocuieste. Singura
+    # transformare = orice sir de spatii albe HTML -> un spatiu, capetele fara ele. De ce e NECESARA (randarea reala Quill): editorul pune
+    # fiecare linie a brief-ului intr-un <p> (linia goala = <p><br></p>), iar inner_text() separa blocurile <p> prin unul sau doua
+    # sfarsituri de linie (regula innerText pentru <p>) si mai adauga unul pentru <br> -> numarul de \n din brief nu se pastreaza ("a\nb"
+    # e citit "a\n\nb", o linie goala devine 3+ sfarsituri). Fara comprimare, orice brief cu mai multe linii ar fi refuzat. Testat cu
+    # textul randat ca de Quill (teste: TestComparatieR17). Ce NU se comprima: NBSP (Quill are white-space: pre-wrap, deci Chrome pastreaza
+    # spatiile obisnuite; un NBSP in editor si spatiu in brief = nepotrivire) si caracterele invizibile (prezente in editor, absente din
+    # brief = nepotrivire, text_neintrat). Daca la 5a prima diferenta arata U+00A0, e o decizie noua (commit + review), nu o exceptie tacuta.
+    return SPATII_COMPARATIE.sub(" ", t or "").strip(" ")
+
+
+def _cod_la(s, i):
+    # r17: caracterul de la prima diferenta, ca punct de cod (operatorul vede si un invizibil); "sfarsit" = textul s-a terminat
+    return "U+%04X" % ord(s[i]) if i < len(s) else "sfarsit"
 
 
 def verifica_ciorna(text_editor, brief, n_atasamente):
-    # inainte de Enter: ciorna nu are atasamente si contine EXACT brief-ul (dupa normalizare) - nimic in plus, nimic lipsa
+    # inainte de Enter: ciorna nu are atasamente si contine EXACT brief-ul (dupa normalizeaza: doar spatiile albe HTML comprimate) - nimic
+    # in plus, nimic lipsa, niciun caracter invizibil in plus
     if n_atasamente:
         raise GemEroare("ciorna_cu_atasamente", "%d atasament(e) in ciorna - nu trimit" % n_atasamente)
     a, b = normalizeaza(text_editor), normalizeaza(brief)
     if a != b:
         i = next((k for k in range(min(len(a), len(b))) if a[k] != b[k]), min(len(a), len(b)))
-        raise GemEroare("text_neintrat", "ciorna difera de brief (%d/%d car. normalizate, prima diferenta la %d)" % (len(a), len(b), i))
+        raise GemEroare("text_neintrat", "ciorna difera de brief (%d/%d car. normalizate, prima diferenta la %d: editor %s, brief %s)"
+                        % (len(a), len(b), i, _cod_la(a, i), _cod_la(b, i)))
 
 
 # --- v4.6.4: ciorna citita din HTML-ul paginii (page.content()), analizata aici, fara browser ---
@@ -773,17 +804,27 @@ def _e_zona(n):
 
 
 def _e_editor(n):
-    # = EDITOR: rich-textarea [contenteditable="true"], div.ql-editor[contenteditable="true"] (valoare exacta, ca in CSS)
-    if n.attrs.get("contenteditable") != "true":
-        return False
-    if n.tag == "div" and "ql-editor" in _clase(n):
-        return True
+    # = EDITOR: rich-textarea > div[role="textbox"][contenteditable="true"] (valori exacte, ca in CSS).
+    # r17 (Jakarinos NO-GO r6: "exceptia editorului acopera si elemente al caror text nu e comparat cu brief-ul"): EDITORUL PRINCIPAL e
+    # EXACT elementul al carui text se compara cu brief-ul (trimite: locatorul EDITOR, unic) - div cu role="textbox" si contenteditable=
+    # "true", copil DIRECT al lui rich-textarea (ca in capturile c23n gol / mediu / lung si atributele 22.11). Doar el poarta contextul
+    # in_editor (textul lui nu e "text necunoscut"). Trebuie sa fie UNIC in pagina: analizeaza_ciorna il numara, verifica_fara_atasamente
+    # refuza orice alt numar decat 1. div.ql-clipboard si orice alt element contenteditable NU sunt editor (_e_clipboard / _semnal).
     p = n.parinte
-    while p is not None:
-        if p.tag == "rich-textarea":
-            return True
-        p = p.parinte
-    return False
+    return (n.tag == "div" and n.attrs.get("role") == "textbox" and n.attrs.get("contenteditable") == "true"
+            and p is not None and p.tag == "rich-textarea")
+
+
+def _e_clipboard(n):
+    # r17: div.ql-clipboard al lui Quill, permis DOAR exact cum apare in toate capturile (c23n gol / mediu / lung: atributele
+    # CLIPBOARD_ATRIBUTE, text propriu gol, niciun descendent): atributele EXACT acestea (niciunul in plus / lipsa / alta valoare), FARA
+    # niciun copil (nici text, nici spatii albe: gol pe textul brut, nici element), copil direct al unui rich-textarea care are exact un
+    # editor principal si exact un astfel de clipboard printre copii. Textul lui NU se compara cu brief-ul, deci nu are voie sa aiba text.
+    p = n.parinte
+    if n.tag != "div" or n.attrs != CLIPBOARD_ATRIBUTE or n.copii or p is None or p.tag != "rich-textarea":
+        return False
+    return (sum(1 for c in p.copii if _e_editor(c)) == 1
+            and sum(1 for c in p.copii if c.tag == "div" and c.attrs == CLIPBOARD_ATRIBUTE) == 1)
 
 
 def _e_semn(n):
@@ -807,7 +848,7 @@ def _sub(n, stramos):
 
 # --- r2: verificarea POZITIVA a structurii ciornei (tot ce nu e recunoscut = ciorna_necunoscuta) ---
 
-_LATIME_ZERO = "".join(map(chr, (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF)))     # aceleasi ca in normalizeaza()
+_LATIME_ZERO = "".join(map(chr, (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF)))     # doar _ascii (cautare / afisare); r17: normalizeaza NU le mai scoate
 
 
 def _ascii(s):
@@ -976,6 +1017,9 @@ def _semnal(n):
         cuvant -> "token_...", nume.extensie -> "atribut_fisier:..."; r5: si in URL-uri si in style, singura exceptie fiind gazda
         Google a unui href http(s) (_fara_gazda_permisa); blob: / data: / alt host / src / srcset = textul intreg; r9: singura valoare
         exceptata e cea EXACTA din VALORI_PERMISE, pe elementul si cu atributele cerute (_valoare_permisa).
+    (5) r17: atributul contenteditable (orice valoare, si "", "false", "plaintext-only") pe ORICE element in afara editorului principal
+        (_e_editor) si a clipboard-ului Quill gol, exact (_e_clipboard) -> "editabil:<semnatura>{...}": al doilea editor, clipboard cu text /
+        copii / alte atribute, contenteditable in editor sau in zona. Ultimul pas: semnalele de atasament de mai sus au prioritate la afisare.
     Tagul (in afara celor media) nu e semnal: el E semnatura, comparata exact cu lista (file-drop-indicator a fost vazut gol de om
     la calibrare). Textele si descendentii elementului se verifica mai departe, element cu element (_motiv_text / _necunoscute).
     r8: intoarce (motiv, sursa) sau None. Sursa = "<fel>:<unde>=<valoare>" (fel: tag / style / eticheta / clasa / id / nume_atribut /
@@ -1008,6 +1052,8 @@ def _semnal(n):
             return "token_%s:%s" % (t, _semnatura_token(n)), "valoare_atribut:%s=%s" % (k, a[:SURSA_AFISATA])
         if _nume_fisier(_fara_gazda_permisa(k, v)) is not None:
             return "atribut_fisier:" + _semnatura_token(n), "valoare_atribut:%s=%s" % (k, a[:SURSA_AFISATA])
+    if "contenteditable" in n.attrs and not _e_editor(n) and not _e_clipboard(n):
+        return "editabil:" + _semnatura_token(n), "contenteditable:%s=%s" % (n.tag, _ascii(n.attrs["contenteditable"])[:SURSA_AFISATA])
     return None
 
 
@@ -1159,6 +1205,8 @@ def _motiv_element(n, ctrl, in_editor=False):
         if n.tag in EDITOR_TAGURI:
             return _acceptat(n, ctrl, True)
         return "element_in_editor:" + sem, ctrl, ""
+    if _e_clipboard(n):
+        return _acceptat(n, ctrl)                       # r17: div.ql-clipboard gol, exact ca in capturi (fara copii: nimic de citit in el)
     # r13: fiecare acceptare de mai jos trece prin _acceptat (atributele cu text = valori EXACTE cunoscute)
     if n.tag in STRUCTURA_TAGURI:
         return _acceptat(n, ctrl)                       # zona si invelisul editorului (aceleasi nume ca selectorii)
@@ -1214,7 +1262,7 @@ def analizeaza_ciorna(html):
     a = _Arbore()
     a.feed(html or "")
     HTMLParser.close(a)                     # inchide parserul HTML (nu browserul: canalul nu inchide nimic in Edge)
-    editoare = [n for n in _descendenti(a.radacina) if _e_editor(n)]
+    editoare = [n for n in _descendenti(a.radacina) if _e_editor(n)]     # r17: editoarele PRINCIPALE din toata pagina (paza cere exact 1)
     zone = []
     for e in editoare:
         z, p = None, e.parinte
@@ -1257,8 +1305,9 @@ def analizeaza_ciorna(html):
 
 def verifica_fara_atasamente(info, semn_locator, moment):
     # paza ciorna: fail-closed. Zona negasita = nu stiu ce e in ciorna; chip = fisier; orice semn fara chip = refuz
-    if not info["editoare"] or not info["zone"]:
-        raise GemEroare("ciorna_necitibila", "%s: zona de compunere negasita (editoare %d, zone %d) - nu trimit"
+    # r17: editorul principal trebuie sa fie UNIC (el e cel comparat cu brief-ul); doua sau mai multe = nu stiu in care scriu -> refuz
+    if info["editoare"] != 1 or not info["zone"]:
+        raise GemEroare("ciorna_necitibila", "%s: zona de compunere negasita sau editorul principal nu e unic (editoare %d, zone %d) - nu trimit"
                         % (moment, info["editoare"], info["zone"]))
     if info["atasamente"]:
         raise GemEroare("ciorna_cu_atasamente", "%s: %d atasament(e) in ciorna - nu trimit" % (moment, info["atasamente"]))
@@ -1356,6 +1405,18 @@ def _paza_ciorna(pg, moment):
     return verifica_fara_atasamente(info, semn, moment)
 
 
+def _editor_unic(pg):
+    # r17: locatorul EDITOR (aceeasi regula ca _e_editor; vede si shadow DOM) trebuie sa gaseasca EXACT un element. Atunci e chiar editorul
+    # unic din HTML: page.content() serializeaza doar DOM-ul obisnuit, iar orice element de acolo e gasit si de locator.
+    loc = pg.locator(EDITOR)
+    k = loc.count()
+    if k == 0:
+        raise GemEroare("editor_lipsa", "editorul nu e vizibil")
+    if k != 1:
+        raise GemEroare("editor_multiplu", "%d editoare principale - nu stiu care e ciorna, nu trimit" % k)
+    return loc.first
+
+
 def _atasamente(pg):
     # chiar inainte de Enter: aceeasi paza (ridica la orice semn), apoi 0 pentru verifica_ciorna
     return _paza_ciorna(pg, "inainte_de_enter")
@@ -1408,10 +1469,7 @@ def trimite(pg, text, maxs, target="https://gemini.google.com/app"):
     if _genereaza(pg):
         raise GemEroare("gemini_ocupat", "Gemini inca scrie - nu trimit peste el")
     inainte_n = len(_mesaje(pg))
-    ed = pg.locator(EDITOR)
-    if ed.count() == 0:
-        raise GemEroare("editor_lipsa", "editorul nu e vizibil")
-    ed = ed.first
+    ed = _editor_unic(pg)
     _paza_ciorna(pg, "pe_chatul_nou")       # defensiv: chatul nou / conversatia tinta, inainte de click si tastatura
     ed.click()
     pg.keyboard.press("Control+A")      # ciorna ramasa in editor se inlocuieste, nu se lipeste in fata brief-ului
@@ -1419,6 +1477,8 @@ def trimite(pg, text, maxs, target="https://gemini.google.com/app"):
     pg.keyboard.insert_text(text)
     pg.wait_for_timeout(800)
     # r2 (Jakarinos P1-b): continut identic (normalizat), nu doar lungime; atasamentele se verifica din nou chiar inainte de Enter
+    # r17: textul comparat = al editorului principal UNIC (locatorul reverificat chiar acum; paza din _atasamente cere si in HTML exact unul)
+    ed = _editor_unic(pg)
     verifica_ciorna(ed.inner_text(), text, _atasamente(pg))
     pg.keyboard.press("Enter")
     spune("GEM_MODEL:", model.encode("ascii", "replace").decode("ascii"))
