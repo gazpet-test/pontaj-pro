@@ -2,7 +2,7 @@
 // client Supabase FALS; sub-ecranele grele (Izometrie, Tronsoane, Nod, Probe, Uscare, Fibră, Grafic etc.) sunt înlocuite cu marcaje, ca
 // testul să probeze DOAR drumul: banda „Execuție | Proiecte”, bara sub-filelor Izometriei și URL-ul (`?tab=`). Fără rețea, fără librării noi.
 // jsdom nu e dependență a proiectului (ca la src/UscareConducta.test.jsx): se caută în node_modules sau în REDARI_JSDOM_DIR; fără el, suita
-// e SĂRITĂ VIZIBIL.
+// e SĂRITĂ VIZIBIL (navigarea), iar suita filei „Rest de decontat” PICĂ explicit (PR3 r2).
 // Ce probează (runda 3 a PR #1127, verdict P2-2): sub-fila afișată are O SINGURĂ sursă, URL-ul. Reproducerea recenzentului: deschizi
 // ?tab=uscare, apeși fila principală „Izometrie” → URL-ul devine tab=izometrie; înainte sub-fila locală rămânea „uscare” (formularul de
 // uscare rămânea pe ecran, banda redevenea lipită, iar după reîncărcare se vedea altceva). Acum ecranul urmează URL-ul la fiecare pas, iar
@@ -44,6 +44,8 @@ vi.mock('./ExecutieGrafic.jsx', marcaj('grafic'))
 vi.mock('./DevizVsExecutatTab.jsx', marcaj('deviz'))
 vi.mock('./ContractProiectTab.jsx', marcaj('contract'))
 vi.mock('./ExecutieSemnale.jsx', marcaj('semnale', { SemnaleOwnerPanel: () => null }))
+// tab-ul „Rest de decontat” e marcaj; dreptul (src/restDecontat/dreptRestDecontat.js) rămâne REAL: fila apare doar după răspunsul RPC-ului
+vi.mock('./restDecontat/RestDecontatTab.jsx', marcaj('rest_decontat'))
 vi.mock('./TabSituatiiPlata.jsx', marcaj('situatii_plata'))
 vi.mock('./TabDocumenteNAS.jsx', marcaj('documente'))
 vi.mock('./CereriInterneProiect.jsx', marcaj('cereri'))
@@ -103,8 +105,9 @@ function SondaUrl() { const l = useLocation(); return <div id="url">{l.pathname 
 let curata = []
 afterEach(() => { [...curata].reverse().forEach(f => f()); curata = []; vi.restoreAllMocks() })
 
-async function monteaza(adresa) {
+async function monteaza(adresa, { rpc = null } = {}) {
   fals.cur = clientFals()
+  if (rpc) fals.cur.rpc = rpc
   const j = new JSDOM('<!doctype html><div id="r"></div>', { pretendToBeVisual: true })
   const vechi = { window: globalThis.window, document: globalThis.document }
   Object.assign(globalThis, { window: j.window, document: j.window.document })
@@ -170,5 +173,52 @@ dom(numeDom('Execuție — navigarea între file și sub-file (jsdom + react-dom
     const w = await monteaza('/executie?proiect=1&tab=nod')                   // link direct de pe telefon
     expect(w.ecrane()).toEqual(['nod'])
     expect(w.subFilaActiva()).toBe('🔩 Nod cuplare')
+  })
+})
+
+// „💰 Rest de decontat” (PR3 r2, verdict #1178): suita PICĂ explicit fără jsdom (nu se sare) — jsdom nu e în package-lock, deci nu se declară
+const MOTIV_LIPSA = 'LIPSEȘTE jsdom: testul filei „Rest de decontat” nu se sare (rulați cu REDARI_JSDOM_DIR=<folder cu jsdom>)'
+const domObligatoriu = (nume, fn) => (JSDOM ? describe(nume, fn) : describe(nume, () => { it('jsdom e obligatoriu', () => { throw new Error(MOTIV_LIPSA) }) }))
+domObligatoriu('Execuție — fila „Rest de decontat” (jsdom + react-dom + MemoryRouter)', () => {
+  it('„💰 Rest de decontat”: fila apare DOAR când fn_rest_decontat_drept(proiect, citire) e adevărat (RPC, nu rolul); eroarea RPC-ului = mesaj separat cu reîncercare, FĂRĂ filă', async () => {
+    const TITLU = 'Ofertă + acte − situații confirmate · pe articol, obiect, proiect · Excel (owner, MP, acces „Rest de decontat”)'
+    const are = u => u.d.querySelectorAll('button').length > 0 && [...u.d.querySelectorAll('button')].some(b => b.getAttribute('title') === TITLU)
+    const cereri = []
+    const drept = citire => async (fn, a) => { cereri.push([fn, a]); return fn === 'fn_rest_decontat_drept' ? { data: a.p_nivel === 'citire' ? citire : false, error: null } : { data: null, error: null } }
+    // owner în profil, dar RPC-ul spune „nu” → fila nu apare (nu se deduce din rol)
+    const u = await monteaza('/executie?proiect=1&tab=proiect', { rpc: drept(false) })
+    expect(are(u)).toBe(false)
+    expect(cereri.filter(([fn]) => fn === 'fn_rest_decontat_drept').map(([, a]) => a)).toEqual([
+      { p_proiect: 1, p_nivel: 'citire' }, { p_proiect: 1, p_nivel: 'confirmare' }, { p_proiect: 1, p_nivel: 'documente_baza' }])
+    curata.pop()()
+    const v = await monteaza('/executie?proiect=1&tab=proiect', { rpc: drept(true) })
+    expect(are(v)).toBe(true)
+    // fila stă imediat după „Situații plată”
+    const titluri = [...v.d.querySelectorAll('button[title]')].map(b => b.getAttribute('title'))
+    expect(titluri[titluri.indexOf('SL1–SL6 · NCS · Facturare') + 1]).toBe(TITLU)
+    await v.apasa(v.filaPrincipala(TITLU))
+    expect(v.url()).toBe('/executie?proiect=1&tab=rest_decontat')
+    expect(v.ecrane()).toEqual(['rest_decontat'])
+    curata.pop()()
+    // eroarea întrebării: NICI filă, NICI „fără drept” tăcut — mesaj separat în bandă, cu reîncercare; a doua întrebare reușește → fila apare
+    let nEroare = 0
+    const w = await monteaza('/executie?proiect=1&tab=proiect', { rpc: async (fn, a) => (fn !== 'fn_rest_decontat_drept' ? { data: null, error: null }
+      : ++nEroare <= 3 ? { data: null, error: { message: 'function fn_rest_decontat_drept does not exist' } } : { data: a.p_nivel === 'citire', error: null }) })
+    expect(are(w)).toBe(false)
+    const mesaj = w.d.querySelector('[data-drept-rest-eroare]')
+    expect(mesaj.textContent).toContain('dreptul nu s-a putut verifica')
+    expect(mesaj.getAttribute('title')).toContain('function fn_rest_decontat_drept does not exist')
+    await w.apasa(mesaj)
+    expect(nEroare).toBe(6)
+    expect(are(w)).toBe(true)
+    expect(w.d.querySelector('[data-drept-rest-eroare]')).toBe(null)
+    curata.pop()()
+    // link vechi direct pe tab=rest_decontat cu eroare: ecranul tab-ului (care arată eroarea) se montează, dar fila nu apare în bandă
+    const x = await monteaza('/executie?proiect=1&tab=rest_decontat', { rpc: async () => ({ data: null, error: { message: 'boom' } }) })
+    expect(are(x)).toBe(false)
+    expect(x.d.querySelector('[data-drept-rest-eroare]')).not.toBe(null)
+    curata.pop()()
+    const z = await monteaza('/executie', { rpc: drept(true) })               // fără proiect deschis: nicio întrebare, nicio filă
+    expect(are(z)).toBe(false)
   })
 })

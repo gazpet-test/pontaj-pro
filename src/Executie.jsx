@@ -30,6 +30,8 @@ import ExecutieGrafic from './ExecutieGrafic.jsx'   // „📅 Grafic”: grafic
 import DevizVsExecutatTab from './DevizVsExecutatTab.jsx'   // „📋 Deviz vs executat”: ținte din deviz, executat, rest, alerte, Excel (20261208a)
 import ContractProiectTab from './ContractProiectTab.jsx'   // fișa contractului: clauze, căi de prelungire, termene, registrul evenimentelor (20261203a)
 import ExecutieSemnale, { SemnaleOwnerPanel } from './ExecutieSemnale.jsx'   // „🔔 Semnale”: semnalele agentului verificator, pe proiect + lista owner-ului (20270106a)
+import RestDecontatTab from './restDecontat/RestDecontatTab.jsx'   // „💰 Rest de decontat”: bază − situații confirmate, pe articol / obiect / proiect (20270105a/b)
+import { useDreptRestDecontat, filaVizibila, dreptEroare } from './restDecontat/dreptRestDecontat.js'
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
@@ -108,6 +110,12 @@ const CONTEXT_TABS = [
   { key: 'contract',       label: 'Contract',       icon: '📜', color: G.yellow, desc: 'Clauze · Căi de prelungire · Termene · Registrul evenimentelor' },
   { key: 'semnale',        label: 'Semnale',        icon: '🔔', color: G.red,    desc: 'Semnalele agentului verificator · stare · responsabil (owner, MP, responsabil)' },
 ]
+// „💰 Rest de decontat” (20270105a): fila apare DOAR când BD-ul răspunde că contul poate citi restul proiectului (fn_rest_decontat_drept, prin RPC;
+// accesul general la Execuție nu ajunge), imediat după „Situații plată”
+const TAB_REST_DECONTAT = { key: 'rest_decontat', label: 'Rest de decontat', icon: '💰', color: G.green, desc: 'Ofertă + acte − situații confirmate · pe articol, obiect, proiect · Excel (owner, MP, acces „Rest de decontat”)' }
+const fileContext = arataRest => (arataRest
+  ? CONTEXT_TABS.flatMap(t => (t.key === 'situatii_plata' ? [t, TAB_REST_DECONTAT] : [t]))
+  : CONTEXT_TABS)
 
 // ===========================================================================
 // MAIN COMPONENT — ExecutiePage (shell cu navigare proiect în URL)
@@ -134,6 +142,8 @@ export default function ExecutiePage() {
   const canEdit = profile?.is_owner === true || profile?.can_manage_contracts === true
   // proiectele permise contului (owner / nerestrâns = toate; restrâns = lista lui)
   const { acces } = useAccesProiectExecutie(supabase)
+  // dreptul pe „Rest de decontat” al proiectului deschis (întrebat în BD; nu se deduce din rol)
+  const dreptRest = useDreptRestDecontat(supabase, proiectIdStr)
 
   // Navighează la contextul unui proiect
   const goToProiect = (id, tab = 'proiect') => {
@@ -199,7 +209,7 @@ export default function ExecutiePage() {
           {proiectIdStr && <>
             <span style={{ color: G.border, fontSize: 20, marginInline: 2, flexShrink: 0 }}>›</span>
 
-            {CONTEXT_TABS.map(t => {
+            {fileContext(filaVizibila(dreptRest)).map(t => {
               const isActive = tabStr === t.key || (t.key === 'izometrie' && SUB_FILE_IZOMETRIE.includes(tabStr))
               return (
                 <button
@@ -224,6 +234,14 @@ export default function ExecutiePage() {
                 </button>
               )
             })}
+            {/* întrebarea despre dreptul pe „Rest de decontat” a eșuat: mesaj separat (nu filă, nu „fără drept”), cu reîncercare */}
+            {dreptEroare(dreptRest) && (
+              <button data-drept-rest-eroare="1" onClick={dreptRest.reincearca}
+                title={`Dreptul pe „Rest de decontat” nu s-a putut verifica: ${dreptEroare(dreptRest)}. Apăsați ca să reîncercați.`}
+                style={{ padding: '14px 12px', background: 'transparent', border: 'none', color: G.red, cursor: 'pointer', fontSize: 12.5, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                ⚠ Rest de decontat: dreptul nu s-a putut verifica · ↻
+              </button>
+            )}
           </>}
 
           {proiectIdStr && (
@@ -272,6 +290,7 @@ export default function ExecutiePage() {
           onSubTab={changeTab}
           canEdit={canEdit}
           acces={acces}
+          dreptRest={dreptRest}
         />
       )}
 
@@ -290,7 +309,7 @@ export default function ExecutiePage() {
 // ===========================================================================
 // onSubTab: sub-fila aleasă se scrie în URL (tab=uscare etc.), ca banda de sus să știe ce ecran e deschis și ca reîncărcarea să revină pe ea
 const SUB_FILE_IZOMETRIE = ['izometrie', 'tronsoane', 'nod', 'probe', 'uscare', 'fibra']
-function ProiectContextView({ proiectId, tab, onBack, onSubTab, canEdit, acces }) {
+function ProiectContextView({ proiectId, tab, onBack, onSubTab, canEdit, acces, dreptRest }) {
   // undefined = se încarcă; null = serverul n-a întors proiectul (nu există sau nu e permis contului); obiect = găsit
   const [proiectRand, setProiectRand] = useState(undefined)
   const [eroareProiect, setEroareProiect] = useState(null)
@@ -396,6 +415,8 @@ function ProiectContextView({ proiectId, tab, onBack, onSubTab, canEdit, acces }
       {tab === 'deviz'          && <DevizVsExecutatTab proiectId={Number(proiectId)} codProiect={proiect?.cod_intern} client={supabase} />}
       {tab === 'santiere'       && <TabSantiere      proiectId={proiectId} />}
       {tab === 'situatii_plata' && <TabSituatiiPlata proiectId={proiectId} />}
+      {/* fără drept de citire tab-ul arată doar mesajul (un link vechi cu tab=rest_decontat nu deschide nimic); datele le filtrează oricum BD-ul */}
+      {tab === 'rest_decontat'  && <RestDecontatTab proiectId={Number(proiectId)} codProiect={proiect?.cod_intern} proiect={proiect} client={supabase} drept={dreptRest} />}
       {tab === 'cereri'         && <CereriInterneProiect proiectId={proiectId} />}
       {tab === 'consumuri'      && <ConsumuriBonuriTab proiectId={proiectId} mode="executie" />}
       {tab === 'documente'      && (<><PvCuplareGenerator supabase={supabase} proiectId={proiectId} proiect={proiect} /><CorespondentaEmailSection proiectId={proiectId} /><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
