@@ -5,13 +5,17 @@
 // legarea sudurilor din executie_noduri_suduri de pozițiile din model (după cod), culorile pe DN și pe stare.
 // Varianta B (10.11.2026): grupurile pot avea `amplasare` (opțională) și apare vederea „Toată instalația” (instalatia()).
 // Fără React, fără Three.js, fără Supabase: totul se testează în vitest.
+// Armături (16.11.2026): tipurile `bara`, `beton`, `bulon`, `placa` și blocul `armare` pe grup (nodSchema3dArmare.js); tot
+// versiunea 1: modelele fără ele se citesc exact ca înainte (testul de regresie din nodSchema3d.regresie.json).
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { STARI, CULORI, culoareStare, esteStare, RE_COD } from './nodCuplareLogica.js'
+import { TIPURI_ARMARE, validElementArmare, curataElementArmare, citesteArmare, puncteArmare, transformaArmare } from './nodSchema3dArmare.js'
 
 export const FORMAT = 'gazpet-nod-3d'
 export const VERSIUNE = 1
-export const TIPURI = ['teava', 'cot', 'teu', 'reductie', 'flansa', 'robinet', 'stut', 'rezervor', 'eticheta']
+export const TIPURI = ['teava', 'cot', 'teu', 'reductie', 'flansa', 'robinet', 'stut', 'rezervor', 'eticheta', ...TIPURI_ARMARE]
+const ESTE_ARMARE = new Set(TIPURI_ARMARE)
 export const CERTITUDINI = ['desen', 'estimat']
 const LIM = { grupuri: 20, elemente: 5000, suduri: 2000, faraPozitie: 2000, text: 160, note: 20, nota: 400, coord: 1e6 }
 const RE_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/
@@ -51,16 +55,31 @@ export function parseModel3d(json) {
     if (!el || !su) { erori.push(`${eticG}: lipsesc elementele sau sudurile`); return }
     if (el.length > LIM.elemente || su.length > LIM.suduri) { erori.push(`${eticG}: prea multe elemente / suduri`); return }
     const prefixe = Array.isArray(g.prefixe) ? g.prefixe.map(txt) : []
-    if (!prefixe.length || !prefixe.every(p => RE_PREFIX.test(p))) { erori.push(`${eticG}: prefixele codurilor lipsesc sau sunt invalide`); return }
+    // un grup fără nicio sudură (ex. o fundație: beton + armături) poate avea lista de prefixe goală (dar tot listă)
+    const faraSuduri = !su.length && !(Array.isArray(g.fara_pozitie) && g.fara_pozitie.length)
+    if ((!prefixe.length && !(faraSuduri && Array.isArray(g.prefixe))) || !prefixe.every(p => RE_PREFIX.test(p))) { erori.push(`${eticG}: prefixele codurilor lipsesc sau sunt invalide`); return }
     const teren = g.teren_z == null ? null : g.teren_z
     if (teren != null && !(typeof teren === 'number' && Number.isFinite(teren) && Math.abs(teren) <= LIM.coord)) { erori.push(`${eticG}: teren_z invalid`); return }
     iduri.add(id)
+    // blocul `armare` (opțional): mărcile din extras; barele se leagă de ele după marcă
+    const ar = citesteArmare(g.armare)
+    for (const m of ar.erori) erori.push(`${eticG}: ${m}`)
+    const marci = new Map((ar.armare?.marci || []).map(m => [m.marca, m]))
     const elemente = []
     el.forEach((e, i) => {
-      const pb = validElement(e)
+      const pb = validElement(e, marci)
       if (pb) { erori.push(`${eticG}, elementul ${i + 1} (${txt(e?.tip) || '?'}): ${pb}`); return }
       elemente.push(curataElement(e))
     })
+    // o marcă din extras fără nicio bară validă în model RĂMÂNE în listă (review r2: altfel totalul extrasului scădea și controlul
+    // ieșea verde): rândul ei arată 0 bare, controlul iese INCOMPLET (controlArmare), iar eroarea e vizibilă
+    if (ar.armare) {
+      for (const m of ar.armare.marci) {
+        if (!elemente.some(e => e.tip === 'bara' && e.marca === m.marca)) {
+          erori.push(`${eticG}: marca ${m.marca} (Ø${m.d}) nu are nicio bară validă în model; controlul extrasului e incomplet`)
+        }
+      }
+    }
     const suduri = []
     su.forEach((s, i) => {
       const cod = txt(s?.cod).toUpperCase()
@@ -90,6 +109,7 @@ export function parseModel3d(json) {
     const titlu = txt(g.titlu)
     if (titlu.length > LIM.text) erori.push(`${eticG}: titlul are peste ${LIM.text} caractere (tăiat)`)
     const grup = { id, titlu: titlu.slice(0, LIM.text) || id, prefixe, terenZ: teren, amplasare: null, elemente, suduri, faraPozitie }
+    if (ar.armare) grup.armare = ar.armare          // doar când există: grupurile vechi rămân identice
     // amplasarea în sistemul comun al nodului (opțională): invalidă = eroare vizibilă, grupul rămâne doar în vederea lui (L12)
     const am = citesteAmplasare(g.amplasare)
     const pbAm = am.eroare || (am.amplasare && !punctePastrate(grup, am.amplasare) ? 'amplasarea scoate grupul în afara ±1 km' : null)
@@ -106,10 +126,11 @@ export function parseModel3d(json) {
   return { grupuri, note: noteCitite.map(n => n.slice(0, LIM.nota)).filter(Boolean), titlu: titlu.slice(0, LIM.text), erori }
 }
 
-function validElement(e) {
+function validElement(e, marci) {
   if (!e || typeof e !== 'object') return 'nu e un obiect'
   const tip = txt(e.tip)
   if (!TIPURI.includes(tip)) return `tip necunoscut „${tip.slice(0, 20)}”`
+  if (ESTE_ARMARE.has(tip)) return validElementArmare(e, tip, marci)
   for (const k of PUNCTE[tip]) if (!estePunct(e[k])) return `punctul „${k}” lipsește sau e invalid`
   if (tip === 'eticheta') return txt(e.text) && txt(e.text).length <= LIM.text ? null : 'text lipsă sau prea lung'
   if (tip === 'rezervor') return Number.isFinite(e.d) && e.d > 0 && e.d <= 20000 ? null : 'diametru invalid'
@@ -123,6 +144,7 @@ function validElement(e) {
 }
 function curataElement(e) {
   const tip = txt(e.tip)                // același tip normalizat ca la validare
+  if (ESTE_ARMARE.has(tip)) return curataElementArmare(e, tip)
   const o = { tip, cert: e.cert === 'estimat' ? 'estimat' : 'desen' }
   for (const k of PUNCTE[tip]) o[k] = e[k].slice()
   if (e.dn != null) o.dn = e.dn
@@ -133,6 +155,13 @@ function curataElement(e) {
   return o
 }
 export const lungime = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2])
+
+/**
+ * Punctele unui element (cutia grupului, încadrarea camerei, limita după amplasare). Tipurile vechi: câmpurile a, b, c, r, p
+ * prezente, în această ordine (exact ca înainte); tipurile noi: traseul barei / bulonului, colțurile betonului / plăcii.
+ */
+const CHEI_PUNCTE = ['a', 'b', 'c', 'r', 'p']
+export const puncteElement = e => (ESTE_ARMARE.has(e.tip) ? puncteArmare(e) : CHEI_PUNCTE.filter(k => e[k]).map(k => e[k]))
 
 // ── amplasarea grupurilor în sistemul comun al nodului (varianta B, 10.11.2026) ──
 // `amplasare: { origine: [x, y, z], rot_z: grade }` pe grup = unde ajunge originea grupului în sistemul comun și rotirea lui în
@@ -169,7 +198,10 @@ export function transformaPunct(p, amplasare) {
 
 /** Toate punctele grupului rămân, după amplasare, în limitele modelului (±1 km)? */
 function punctePastrate(grup, amplasare) {
-  for (const e of grup.elemente) for (const k of PUNCTE[e.tip]) if (!estePunct(transformaPunct(e[k], amplasare))) return false
+  for (const e of grup.elemente) {
+    if (ESTE_ARMARE.has(e.tip)) { for (const p of puncteArmare(e)) if (!estePunct(transformaPunct(p, amplasare))) return false; continue }
+    for (const k of PUNCTE[e.tip]) if (!estePunct(transformaPunct(e[k], amplasare))) return false
+  }
   for (const s of grup.suduri) if (!estePunct(transformaPunct(s.p, amplasare))) return false
   return true
 }
@@ -178,6 +210,7 @@ function punctePastrate(grup, amplasare) {
 export function aplicaAmplasare(grup) {
   const T = p => transformaPunct(p, grup.amplasare)
   const elemente = grup.elemente.map(e => {
+    if (ESTE_ARMARE.has(e.tip)) return transformaArmare(e, T, grup.amplasare ? grup.amplasare.rotZ : 0)
     const o = { ...e }
     for (const k of PUNCTE[e.tip]) o[k] = T(e[k])
     return o
@@ -203,7 +236,7 @@ export function instalatia(model) {
     elemente: parti.flatMap(p => p.elemente),
     suduri: parti.flatMap(p => p.suduri),
     faraPozitie: parti.flatMap(p => p.faraPozitie),
-    parti: parti.map(p => ({ id: p.id, titlu: p.titlu, prefixe: p.prefixe, elemente: p.elemente, suduri: p.suduri })),
+    parti: parti.map(p => ({ id: p.id, titlu: p.titlu, prefixe: p.prefixe, elemente: p.elemente, suduri: p.suduri, ...(p.armare ? { armare: p.armare } : {}) })),
     neamplasate: toate.filter(g => !g.amplasare).map(g => ({ id: g.id, titlu: g.titlu })),
   }
 }
@@ -320,7 +353,7 @@ export const razaSfera = dn => Math.max(diametruExterior(dn || 50) * 0.5 * 1.45,
 /** Cutia care cuprinde elementele și sudurile grupului: { min, max, centru, marime }; null dacă grupul e gol. */
 export function cutieGrup(grup) {
   const pts = []
-  for (const e of grup?.elemente || []) for (const k of ['a', 'b', 'c', 'r', 'p']) if (e[k]) pts.push(e[k])
+  for (const e of grup?.elemente || []) for (const p of puncteElement(e)) pts.push(p)
   for (const s of grup?.suduri || []) pts.push(s.p)
   if (!pts.length) return null
   // buclă, nu Math.min(...pts): în vederea comună pot fi zeci de mii de puncte (spread-ul mare dă RangeError)

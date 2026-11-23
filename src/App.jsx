@@ -5,6 +5,7 @@ import { tintaRedirectHostPublic } from './redari/domeniuPublic.js'
 import { supabase } from './lib/supabase.js'
 import { pornestePolling, eEroareSesiune } from './lib/sesiuneCereri.js'
 import { logoutProtejat } from './lib/izoLogoutBrowser.js'
+import { poateCreaSantier, mesajRefuzSantier, creeazaSantier, mesajSantier } from './lib/santiereDrept.js'
 import { creeazaDependentePontaj, creeazaControlorZi, randulZilei, propuneSantier, treceFiltrulSantier, nealocati, arataSpinner, valoriAfisate, stareRand } from './pontajSantierImplicit.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
@@ -61,12 +62,14 @@ import { MeteoSediu } from './Meteo.jsx'
 import Integrari from './Integrari.jsx'
 import Cladire from './Cladire.jsx'
 import { oreLucratoareAngajat, oreNormaPeZi, oreSuplimentare } from './pontajOreSuplimentare.js'
+import { NORME_TOTAL_EXPORT, coloaneBrut, coloaneNet, antetTotaluriBrut, antetTotaluriNet, numaraNorme, totaluriBrutIntrare, totaluriNetIntrare } from './pontajExportColoane.js'
 
 const AdministratorAlerte = lazy(() => import('./AdministratorAlerte.jsx'))
 const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner (docs/MONITOR_EGRESS.md)
 const IntrebariTehnice = lazy(() => import('./IntrebariTehnice.jsx'))   // ❓ Întreabă echipa — spețe tehnice → răspuns AI informativ (20261105a); modulul 'intrebari_tehnice'
 const MesajVocal = lazy(() => import('./MesajVocal.jsx'))   // 🎙 text → voce (Google TTS, vocea Aoede); owner sau modulul mesaj_vocal
 const Redari = lazy(() => import('./Redari.jsx'))   // 🌾 Redări teren (Lot 1 Transgaz) — docs/redari/CONTRACT_SCHEMA.md; modulul 'redari'
+const RedariMailOauthRetur = lazy(() => import('./redari/ui/MailOauthRetur.jsx'))   // întoarcerea de la Google (OAuth trimitere redari@), doar owner logat; F2b
 const RedariRaspunsPublic = lazy(() => import('./RedariRaspunsPublic.jsx'))   // formular public de răspuns cu token, fără login
 const RedariInformarePublic = lazy(() => import('./RedariInformarePublic.jsx'))   // informarea GDPR completă (țintă QR/link din convocator), fără login
 // 📱 SMS (20261130b): ruta proprie /sms pentru owner și modulul 'sms' (utilizator / test); nivelul real îl dă BD-ul (fn_sms_nivel)
@@ -2579,14 +2582,11 @@ function ReportsPage() {
       const mName = new Date(y, m-1).toLocaleString('ro-RO', { month: 'long', year: 'numeric' })
       
       // Coloane finale: A=Nume, B=Funcție, C=Program, D..AG/AH/AI(zile), Total Zile, Total Ore (FĂRĂ ORE SUPL)
-      // Plus etichetă AK4/AL4 (Razvan a zis să le păstrăm ca info informativă)
-      const TOTAL_ZILE_C = FIXED + days       // col index al „Total Zile"
-      const TOTAL_ORE_C  = FIXED + days + 1   // col index al „Total Ore"
-      // TKT-2026-0311: totalul zilelor de CO / CM / CFP / O per angajat (formule COUNTIF pe rândul Ora Intrare)
-      const NORME_TOTAL  = ['CO','CM','CFP','O']
-      const NORME_C0     = FIXED + days + 2
-      const WD_LABEL_C   = NORME_C0 + NORME_TOTAL.length   // col index al etichetei „Zile lucr. lună:"
-      const WD_VALUE_C   = WD_LABEL_C + 1                  // col index al valorii
+      // Plus etichetă „Zile lucr. lună:” + valoare pe rândul 4, după ultima coloană ZILE <normă> (Razvan a zis să le păstrăm ca info informativă)
+      // TKT-2026-0311 / 0368: totalul zilelor de CO / CM / BO / CFP / O per angajat (formule COUNTIF pe rândul Ora Intrare).
+      // Pozițiile coloanelor vin din pontajExportColoane.js (aceeași socoteală ca în teste).
+      const NORME_TOTAL  = NORME_TOTAL_EXPORT
+      const { WD_LABEL_C, WD_VALUE_C } = coloaneNet(days)   // etichetă + valoare „Zile lucr. lună:"
       
       const R = []
       R.push(['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
@@ -2600,10 +2600,11 @@ function ReportsPage() {
       R.push(titleRow)
       R.push([])
       // Header rând 6
-      const HDR = ['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU', ...dayNums, 'TOTAL ZILE','TOTAL ORE', ...NORME_TOTAL.map(n=>`ZILE ${n}`)]
+      const antetNet = antetTotaluriNet(NORME_LABELS)
+      const HDR = ['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU', ...dayNums, ...antetNet.hdr]
       R.push(HDR)
       // Day abbr rând 7
-      const DNR = ['','','', ...dayNums.map(d => dayAbbr[new Date(y, m-1, d).getDay()]), '', '', ...NORME_TOTAL.map(n=>NORME_LABELS[n]||n)]
+      const DNR = ['','','', ...dayNums.map(d => dayAbbr[new Date(y, m-1, d).getDay()]), ...antetNet.dnr]
       R.push(DNR)
       
       // Salariați
@@ -2621,10 +2622,8 @@ function ReportsPage() {
         }
         // Total Zile + Total Ore = FORMULE (nu valori), pe rândul Ora Intrare (r)
         // COUNTIF / SUM pe rândul Ore Lucrate (r+3)
-        rCI.push({ f: `COUNTIF(D${excelRow+3}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow+3},">0")`, t: 'n' })
-        rCI.push({ f: `SUM(D${excelRow+3}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow+3})`, t: 'n' })
-        // Zile CO/CM/CFP/O (TKT-2026-0311): COUNTIF pe codurile de normă de pe rândul Ora Intrare (r)
-        NORME_TOTAL.forEach(n => rCI.push({ f: `COUNTIF(D${excelRow}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow},"${n}")`, t: 'n' }))
+        // Zile CO/CM/BO/CFP/O (TKT-2026-0311 / 0368): COUNTIF pe codurile de normă de pe rândul Ora Intrare (r)
+        rCI.push(...totaluriNetIntrare({ days, excelRow }))
         const gol = ['', '', ...NORME_TOTAL.map(() => '')]
         rCO.push(...gol)
         rPM.push(...gol)
@@ -2637,7 +2636,7 @@ function ReportsPage() {
         {wch:26},{wch:16},{wch:22},
         ...dayNums.map(()=>({wch:5.5})),
         {wch:11}, {wch:11},
-        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / CFP / O
+        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / BO / CFP / O
         {wch:18}, {wch:11}
       ]
       
@@ -2673,7 +2672,7 @@ function ReportsPage() {
       let ri = 7  // 0-indexed (Excel rând 8)
       employees.forEach(emp => {
         for (let ro = 0; ro < 4; ro++) {
-          const TOTAL_C = FIXED + days + 2 + NORME_TOTAL.length  // FĂRĂ ORE SUPL, cu zile CO/CM/CFP/O
+          const TOTAL_C = WD_LABEL_C  // FĂRĂ ORE SUPL, cu zile CO/CM/BO/CFP/O (ultima coloană de norme = WD_LABEL_C − 1)
           for (let c = 0; c < TOTAL_C; c++) {
             let s = {}
             if (c === 0) {
@@ -4640,26 +4639,16 @@ function ReportsPage() {
       const isOff=(d)=>{ const dt=new Date(y,m-1,d); return {we:dt.getDay()===0||dt.getDay()===6, leg:legalSet.has(`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`)} }
 
       // Coloane dinamice (lățimea depinde de numărul de zile ale lunii)
-      const TOTAL_ZILE_C = FIXED + days        // ex Apr(30): col 33=AH; Mai(31): col 34=AI
-      const TOTAL_ORE_C  = FIXED + days + 1    // ex Apr: col 34=AI; Mai: col 35=AJ
-      const ORE_SUPL_C   = FIXED + days + 2    // ex Apr: col 35=AJ; Mai: col 36=AK
-      // TKT-2026-0311: totalul zilelor de CO / CM / CFP / O per angajat, după ORE SUPL (4 coloane)
-      const NORME_TOTAL  = ['CO','CM','CFP','O']
-      const NORME_C0     = FIXED + days + 3    // prima coloană de norme
+      // TOTAL ZILE (Apr: col 33=AH) | TOTAL ORE | ORE SUPL | ZILE CO/CM/BO/CFP/O | ORE NORME | TOTAL ORE LUNĂ | ORE LUCRĂTOARE | „Zile lucr. lună:”
+      // TKT-2026-0311 / 0368: totalul zilelor pe norme, după ORE SUPL; pozițiile vin din pontajExportColoane.js (aceeași socoteală ca în teste)
+      const NORME_TOTAL  = NORME_TOTAL_EXPORT
+      const { ORE_SUPL_C, NORME_C0, ORE_NORME_C, TOTAL_LUNA_C, ORE_LUCR_C, WD_LABEL_C, WD_VALUE_C } = coloaneBrut(days)
       // TKT-2026-0314 (var. A): orele de normă plătite (h normă/zi pe CO, CM, BO, BP, AM, M, O — CFP, N, LL = 0 ore)
       // și totalul lunii = TOTAL ORE (lucrate) + ORE NORME.
       // TKT-2026-0316: ORE SUPLIMENTARE = TOTAL ORE LUNĂ − ORE LUCRĂTOARE ale angajatului (normă redusă din procent_ocupare,
       // lună incompletă din hire_date / termination_date) — vezi pontajOreSuplimentare.js. Ziua de normă = 8h × procent.
       const NORME_ORE    = ['CO','CM','BO','BP','AM','M','O']
-      const ORE_NORME_C  = NORME_C0 + NORME_TOTAL.length           // ORE NORME (h normă/zi)
-      const TOTAL_LUNA_C = ORE_NORME_C + 1                          // TOTAL ORE LUNĂ
-      const ORE_LUCR_C   = TOTAL_LUNA_C + 1                         // ORE LUCRĂTOARE (normă × zile lucr. în contract)
-      const WD_LABEL_C   = ORE_LUCR_C + 1                           // etichetă „Zile lucr. lună:"
-      const WD_VALUE_C   = WD_LABEL_C + 1                            // valoarea numerică (informativ — ORE SUPL folosește ORE LUCRĂTOARE pe angajat)
-      const totalOreColLetter = XLSX.utils.encode_col(TOTAL_ORE_C)
-      const oreNormeColLetter = XLSX.utils.encode_col(ORE_NORME_C)
-      const totalLunaColLetter = XLSX.utils.encode_col(TOTAL_LUNA_C)
-      const oreLucrColLetter  = XLSX.utils.encode_col(ORE_LUCR_C)
+      // „Zile lucr. lună:” (WD_VALUE_C) e informativ — ORE SUPL folosește ORE LUCRĂTOARE pe angajat
 
       // ── Build rows ──
       const R=[]
@@ -4675,10 +4664,11 @@ function ReportsPage() {
       R.push(titleRow)
       R.push([])
       // Header row (idx 5)
-      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE','ORE SUPLIMENTARE',...NORME_TOTAL.map(n=>`ZILE ${n}`),'ORE NORME (h normă/zi)','TOTAL ORE LUNĂ','ORE LUCRĂTOARE']
+      const antetBrut=antetTotaluriBrut(NORME_LABELS, NORME_ORE)
+      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,...antetBrut.hdr]
       R.push(HDR)
       // Day names row (idx 6)
-      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','','',...NORME_TOTAL.map(n=>NORME_LABELS[n]||n),`h normă × zile ${NORME_ORE.join('/')}`,'ORE + ORE NORME','normă × zile în contract']
+      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),...antetBrut.dnr]
       R.push(DNR)
 
       // Tracking metadata pentru istoric BD
@@ -4696,16 +4686,14 @@ function ReportsPage() {
         const rPM=['','','Pauza de Masă (ore)']
         const rOL=['','','Ore Lucrate']
         let tz=0, to=0
-        const normeCnt=Object.fromEntries(NORME_TOTAL.map(n=>[n,0]))
-        let zileNormeOre=0   // zile cu normă plătită 8h (NORME_ORE)
+        const normeZile=[]   // codurile de normă ale lunii → numaraNorme (zile pe normă + zile cu normă plătită NORME_ORE)
 
         for(let d=1;d<=days;d++){
           const ds=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
           const {we,leg}=isOff(d)
           const rec=emp.records?.find(r=>r.date===ds)
           if(rec?.norma){
-            if(normeCnt[rec.norma]!==undefined) normeCnt[rec.norma]++
-            if(NORME_ORE.includes(rec.norma)) zileNormeOre++
+            normeZile.push(rec.norma)
             rCI.push(rec.norma); rCO.push(''); rPM.push(''); rOL.push('')
           } else if(rec?.check_in){
             const hp=spansLunch(rec.check_in,rec.check_out)&&rec.lunch_break!==false
@@ -4719,6 +4707,7 @@ function ReportsPage() {
             rCI.push(''); rCO.push(''); rPM.push(''); rOL.push('')
           }
         }
+        const { normeCnt, zileNormeOre } = numaraNorme(normeZile, NORME_ORE)
         const empOreLunar = +(to/60).toFixed(1)
         const empOreNorme = +(zileNormeOre*oreNormaPeZi(emp.procent_ocupare)).toFixed(2)
         const empOreLucr  = oreLucratoareAngajat({ y, m, days, legalSet, emp })
@@ -4726,16 +4715,9 @@ function ReportsPage() {
         totalOreLunarSum += empOreLunar
         totalOreSuplSum  += empOreSupl
 
-        rCI.push(tz, empOreLunar)
-        // ORE SUPLIMENTARE (TKT-2026-0316) — formula Excel pe primul rând (Ora Intrare)
-        // = MAX(0, TOTAL ORE LUNĂ{row} - ORE LUCRĂTOARE{row})
-        rCI.push({ f: `MAX(0, ${totalLunaColLetter}${excelRow} - ${oreLucrColLetter}${excelRow})`, t: 'n' })
-        // Zile CO / CM / CFP / O (TKT-2026-0311) — 0 explicit când nu există, ca să se poată însuma
-        NORME_TOTAL.forEach(n=>rCI.push(normeCnt[n]))
-        // ORE NORME (h normă/zi) + TOTAL ORE LUNĂ (formula = TOTAL ORE + ORE NORME, pe același rând) + ORE LUCRĂTOARE
-        rCI.push(empOreNorme)
-        rCI.push({ f: `${totalOreColLetter}${excelRow}+${oreNormeColLetter}${excelRow}`, t: 'n' })
-        rCI.push(empOreLucr)
+        // TOTAL ZILE, TOTAL ORE, ORE SUPL (formulă MAX(0, TOTAL ORE LUNĂ − ORE LUCRĂTOARE)), ZILE CO/CM/BO/CFP/O,
+        // ORE NORME, TOTAL ORE LUNĂ (formulă TOTAL ORE + ORE NORME), ORE LUCRĂTOARE — toate pe rândul Ora Intrare
+        rCI.push(...totaluriBrutIntrare({ days, excelRow, totalZile: tz, totalOre: empOreLunar, normeCnt, oreNorme: empOreNorme, oreLucratoare: empOreLucr }))
 
         const gol=['','','',...NORME_TOTAL.map(()=>''),'','','']
         rCO.push(...gol); rPM.push(...gol); rOL.push(...gol)
@@ -4750,7 +4732,7 @@ function ReportsPage() {
         {wch:11},                  // TOTAL ZILE
         {wch:11},                  // TOTAL ORE
         {wch:30},                  // ORE SUPLIMENTARE (216px ≈ 30 char)
-        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / CFP / O
+        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / BO / CFP / O
         {wch:16},                  // ORE NORME (h normă/zi)
         {wch:15},                  // TOTAL ORE LUNĂ
         {wch:15},                  // ORE LUCRĂTOARE
@@ -4786,7 +4768,7 @@ function ReportsPage() {
       let ri=7
       data.forEach(emp=>{
         for(let ro=0;ro<4;ro++){
-          const TOTAL_C = ORE_LUCR_C + 1  // include ORE SUPL + zile CO/CM/CFP/O + ORE NORME + TOTAL ORE LUNĂ + ORE LUCRĂTOARE
+          const TOTAL_C = ORE_LUCR_C + 1  // include ORE SUPL + zile CO/CM/BO/CFP/O + ORE NORME + TOTAL ORE LUNĂ + ORE LUCRĂTOARE
           for(let c=0;c<TOTAL_C;c++){
             let s={}
             if(c===0){
@@ -4816,7 +4798,7 @@ function ReportsPage() {
                 ? {fill:{fgColor:{rgb:'D9E1F2'}}, font:{bold:true,sz:11,color:{rgb:'1F497D'}}, border:bd, alignment:alC}
                 : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
             } else if(c>=NORME_C0 && c<NORME_C0+NORME_TOTAL.length) {
-              // ZILE CO/CM/CFP/O — galben pal pe rândul principal (aceeași culoare ca zilele cu normă)
+              // ZILE CO/CM/BO/CFP/O — galben pal pe rândul principal (aceeași culoare ca zilele cu normă)
               s = ro===0
                 ? {fill:{fgColor:{rgb:'FFF2CC'}}, font:{bold:true,sz:10}, border:bd, alignment:alC}
                 : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
@@ -6740,7 +6722,12 @@ function AdminPage() {
     loadAll()
   }
 
-  const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true); const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast('Eroare','error'); setAddingSite(false) }
+  // 20261222a: owner = INSERT direct, ca azi (politica lui); contul cu dreptul „Creare șantiere” = RPC fn_sites_creeaza (fără INSERT direct);
+  // refuzul / funcția lipsă / rezultatul necunoscut se arată cu motivul (L18), iar lista se reîncarcă oricum (fără reîncercare automată)
+  const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true)
+    if (isSuperAdmin) { const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast(mesajRefuzSantier(error),'error') }
+    else { const m=mesajSantier(await creeazaSantier(supabase,{nume:siteName.trim()}),{cuProiect:false}); showToast(m.ok?`✓ ${siteName}`:m.text,m.ok?undefined:'error'); if(m.ok) setSiteName(''); loadAll() }
+    setAddingSite(false) }
   const toggleSite=async(s)=>{ await supabase.from('sites').update({active:!s.active}).eq('id',s.id); setSites(prev=>prev.map(x=>x.id===s.id?{...x,active:!x.active}:x)) }
   const saveSiteName=async()=>{ if(!editSiteItem||!editSiteName.trim()) return; const {error}=await supabase.from('sites').update({name:editSiteName.trim()}).eq('id',editSiteItem.id); if(!error){showToast(`✓ Redenumit: ${editSiteName}`);setEditSiteItem(null);loadAll()} else showToast('Eroare','error') }
   const deleteSite=async(s)=>{
@@ -7082,15 +7069,18 @@ function AdminPage() {
     ['semnaturi', '🖋️ Semnături'],
     ['settings',  '⚙️ Setări'],  // restricted is_owner only
   ]
+  // 20261222a: tab-ul Șantiere și pentru contul cu dreptul „Creare șantiere” — doar lista + formularul de adăugare
+  // (redenumirea, dezactivarea, ștergerea și depozitele rămân ale owner-ului; baza le refuză oricum)
+  const tabsNonOwner = poateCreaSantier(profile) ? ['employees','semnaturi','sites'] : ['employees','semnaturi']
   const tabs = allTabs.filter(([v]) => {
-    if (!isSuperAdmin && !['employees','semnaturi'].includes(v)) return false
+    if (!isSuperAdmin && !tabsNonOwner.includes(v)) return false
     return true
   })
-  
+
   // non-owner (ex. Natalia cu can_modify_employees): redirect orice tab restricționat → 'employees'
   useEffect(() => {
-    if (!isSuperAdmin && !['employees','semnaturi'].includes(tab)) setTab('employees')
-  }, [isSuperAdmin, tab])
+    if (!isSuperAdmin && !tabsNonOwner.includes(tab)) setTab('employees')
+  }, [isSuperAdmin, tab, tabsNonOwner.length])
 
   // 29.09.2026: link-uri directe din alerte — /admin?tab=managers&cont=<profile_id> deschide contul,
   // /admin?tab=employees&angajat=<id> deschide „Editează Angajat”. Se citesc după loadAll, apoi se șterg din URL.
@@ -7765,21 +7755,26 @@ function AdminPage() {
                 <tr key={s.id}><td style={{fontWeight:600}}>{s.name}</td>
                 <td><span style={{padding:'2px 8px',borderRadius:20,fontSize:11,fontWeight:700,background:s.active?G.greenDim:G.redDim,color:s.active?G.green:G.red,border:`1px solid ${s.active?G.green:G.red}44`}}>{s.active?'● Activ':'○ Inactiv'}</span></td>
                 <td style={{display:'flex',gap:6}}>
+                  {isSuperAdmin ? <>
                   <button onClick={()=>{setEditSiteItem(s);setEditSiteName(s.name)}} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️</button>
                   <button onClick={()=>toggleSite(s)} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>{s.active?'Dezact.':'Activ.'}</button>
                   <button onClick={()=>setDeletingSite(s)} style={{...S.btnS,padding:'3px 9px',fontSize:11,color:G.red,borderColor:G.red+'44'}}>🗑️</button>
+                  </> : <span style={{fontSize:11,color:G.muted}}>—</span>}
                 </td></tr>
               ))}{!sites.length&&<tr><td colSpan={3} style={{textAlign:'center',color:G.muted,padding:28,fontSize:12}}>Niciun șantier</td></tr>}</tbody></table>
             )}
           </div>
+          {poateCreaSantier(profile) ? (
           <div style={{...S.card,padding:20}}>
             <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>Adaugă Șantier</div>
             <div style={{marginBottom:14}}><Lbl>Nume</Lbl><input style={S.input} placeholder="ex: Șantier Ploiești" value={siteName} onChange={e=>setSiteName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addSite()}/></div>
             <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={addSite} disabled={addingSite}>{addingSite?<><div className="sp"/>...</>:'+ Adaugă'}</button>
           </div>
+          ) : <div/>}
         </div>
 
-        {/* ═══════════ DEPOZITE MATERIALE ═══════════ */}
+        {/* ═══════════ DEPOZITE MATERIALE (doar owner) ═══════════ */}
+        {isSuperAdmin && (
         <div style={{marginTop:22}}>
           <div style={{fontSize:14,fontWeight:800,color:G.text,marginBottom:12,display:'flex',alignItems:'center',gap:8}}>
             🏭 Depozite materiale
@@ -7848,6 +7843,7 @@ function AdminPage() {
             </div>
           </div>
         </div>
+        )}
         </>
       )}
 
@@ -9038,6 +9034,7 @@ export default function App() {
         <Route path="/achizitii" element={<ProtectedRoute requireModule="achizitii"><Layout><AchizitiiPage/></Layout></ProtectedRoute>}/>
         <Route path="/ofertare" element={<ProtectedRoute requireModule="ofertare"><Layout><OfertarePage/></Layout></ProtectedRoute>}/>
         <Route path="/redari" element={<ProtectedRoute requireModule="redari"><Layout><Suspense fallback={<LoadingScreen/>}><Redari/></Suspense></Layout></ProtectedRoute>}/>
+        <Route path="/redari/mail-oauth" element={<ProtectedRoute requireModule="redari"><Layout><Suspense fallback={<LoadingScreen/>}><RedariMailOauthRetur/></Suspense></Layout></ProtectedRoute>}/>
         <Route path="/ctc" element={<ProtectedRoute requireModule="ctc"><Layout><CTCPage/></Layout></ProtectedRoute>}/>
         <Route path="/magazie" element={<ProtectedRoute requireModule="magazie"><Layout><MagaziePage/></Layout></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute requireModule="pontajpro"><ReportsPage/></ProtectedRoute>}/>

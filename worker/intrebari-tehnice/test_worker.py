@@ -2,7 +2,7 @@
 rulează MEREU, iar mascarea / regula B rulează în MOTORUL UNIC real (procesul Node, r4). Rulare (Node 24 în PATH):
 python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py". Date INVENTATE.
 """
-import ast, hashlib, json, pathlib, re, sys, tempfile, types, unittest
+import ast, hashlib, json, os, pathlib, re, sys, tempfile, time, types, unittest, unittest.mock
 
 AICI = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(AICI))
@@ -684,8 +684,11 @@ class Pornire(unittest.TestCase):
         W.DIR, W.INDEX_FILE, W.MANIFEST_FILE, W.VOCABULAR_FILE, W.edge, W.SECRET_FILE, W.cheie_api = self.vechi
         self.tmp.cleanup()
 
-    def pregateste_pornire(self, raspuns_nume):
-        """Corpus + vocabular valide, secret și cheie de test; edge-ul răspunde la „nume” cu `raspuns_nume`, la „preia” cu nimic."""
+    EDGE_VECHI = (400, {'error': 'Acțiune necunoscută'})   # edge-ul de dinainte de 14.11.2026 nu cunoaște „coada”
+
+    def pregateste_pornire(self, raspuns_nume, raspuns_coada=EDGE_VECHI):
+        """Corpus + vocabular valide, secret și cheie de test; edge-ul răspunde la „nume” cu `raspuns_nume`, la „coada” cu
+        `raspuns_coada` (implicit: edge vechi, fără acțiune; o excepție = rețea căzută), la „preia” cu nimic."""
         W.INDEX_FILE.write_bytes(self.octeti)
         self.manifest(hashlib.sha256(self.octeti).hexdigest())
         W.VOCABULAR_FILE = AICI / 'vocabular_web.json'
@@ -694,8 +697,17 @@ class Pornire(unittest.TestCase):
         W.cheie_api = lambda: 'k'
         def edge(s, corp):
             self.apeluri.append(corp)
+            if corp.get('actiune') == 'coada':
+                if isinstance(raspuns_coada, Exception): raise raspuns_coada
+                return raspuns_coada
             return raspuns_nume if corp.get('actiune') == 'nume' else (200, {'intrebare': None})
         W.edge = edge
+
+    def actiuni(self): return [a['actiune'] for a in self.apeluri]
+
+    def randuri_jurnal(self):
+        f = W.DIR / 'jurnal.jsonl'
+        return [json.loads(l) for l in f.read_text(encoding='utf-8').splitlines()] if f.exists() else []
 
     def test_fara_lista_de_nume_nu_se_preia_nimic(self):   # decizia A: fără listă, numele cunoscute ar pleca nemascate
         for r in ((500, {}), (400, {'error': 'Acțiune necunoscută'}), (200, {'persoane': [], 'firme': [], 'cui': []}),
@@ -703,13 +715,135 @@ class Pornire(unittest.TestCase):
             self.apeluri.clear()
             self.pregateste_pornire(r)
             self.assertEqual(W.main(), 1)
-            self.assertEqual([a['actiune'] for a in self.apeluri], ['nume'])   # niciun „preia”
+            self.assertEqual(self.actiuni(), ['coada', 'nume'])   # niciun „preia”
         self.assertEqual((W.DIR / 'jurnal.jsonl').read_text(encoding='utf-8').count('nume_indisponibile'), 4)
 
     def test_cu_lista_de_nume_se_preia(self):
         self.pregateste_pornire((200, {'persoane': ['POPESCU ION'], 'firme': [], 'cui': []}))
         self.assertEqual(W.main(), 0)
-        self.assertEqual([a['actiune'] for a in self.apeluri], ['nume', 'preia'])
+        self.assertEqual(self.actiuni(), ['coada', 'nume', 'preia'])
+
+    # ── 14.11.2026: acțiunea „coada” înaintea listei de nume ──
+    NUME_OK = (200, {'persoane': ['POPESCU ION'], 'firme': [], 'cui': []})
+
+    def test_coada_goala_fara_nume_fara_preia_fara_rand_in_jurnal(self):
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': False}))
+        self.assertEqual(W.main(), 0)
+        self.assertEqual(self.actiuni(), ['coada'])                     # nici „nume”, nici „preia”
+        self.assertEqual([j['stare'] for j in self.randuri_jurnal()], ['coada_goala'])   # rândul „viu”, primul din oră
+        for _ in range(5):                                               # următoarele rulări din aceeași oră: niciun rând
+            self.assertEqual(W.main(), 0)
+        self.assertEqual(self.actiuni(), ['coada'] * 6)
+        self.assertEqual([j['stare'] for j in self.randuri_jurnal()], ['coada_goala'])
+        m = W.DIR / W.VIU_FILE_NUME                                      # după o oră: încă un rând „viu”
+        t = m.stat().st_mtime - W.VIU_SEC - 1
+        os.utime(m, (t, t))
+        self.assertEqual(W.main(), 0)
+        self.assertEqual([j['stare'] for j in self.randuri_jurnal()], ['coada_goala', 'coada_goala'])
+        self.assertEqual(set(self.randuri_jurnal()[0]), {'la', 'stare'})  # doar data și starea
+
+    # ── r2 (review PR #1104, P2): marcajul ÎNAINTE de rând — niciodată două rânduri „viu” în aceeași oră ──
+    def test_coada_goala_marcajul_nu_se_poate_scrie_niciun_rand(self):
+        """touch() eșuează (disc plin / drept lipsă): niciun rând, la nicio rulare (altfel s-ar scrie unul la fiecare 2 minute)."""
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': False}))
+        def pica(*a, **k): raise PermissionError('marcaj')
+        with unittest.mock.patch.object(pathlib.Path, 'touch', pica):
+            for _ in range(4):
+                self.assertEqual(W.main(), 0)
+        self.assertEqual(self.actiuni(), ['coada'] * 4)
+        self.assertEqual(self.randuri_jurnal(), [])
+        self.assertFalse((W.DIR / W.VIU_FILE_NUME).exists())
+
+    def test_coada_goala_marcajul_vechi_care_nu_se_actualizeaza_niciun_rand(self):
+        """touch() „reușește” dar data marcajului rămâne veche: rularea următoare l-ar socoti tot vechi → niciun rând acum."""
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': False}))
+        m = W.DIR / W.VIU_FILE_NUME
+        m.write_bytes(b'')
+        t = time.time() - W.VIU_SEC - 10
+        os.utime(m, (t, t))
+        with unittest.mock.patch.object(pathlib.Path, 'touch', lambda *a, **k: None):
+            for _ in range(3):
+                self.assertEqual(W.main(), 0)
+        self.assertEqual(self.randuri_jurnal(), [])
+
+    def test_coada_goala_intrerupere_intre_marcaj_si_rand(self):
+        """Procesul se oprește după marcaj și înaintea rândului: în ora aceea niciun rând (nici la rulările următoare); după o oră,
+        exact un rând. Un rând dublat în aceeași oră nu e posibil."""
+        class Oprit(BaseException): pass   # ca o oprire a procesului: nu e prinsă de `except Exception` din main
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': False}))
+        jurnal_real = W.jurnal
+        def jurnal_oprit(**k):
+            if k.get('stare') == 'coada_goala': raise Oprit()
+            return jurnal_real(**k)
+        W.jurnal = jurnal_oprit
+        try:
+            with self.assertRaises(Oprit):
+                W.main()
+        finally:
+            W.jurnal = jurnal_real
+        m = W.DIR / W.VIU_FILE_NUME
+        self.assertTrue(m.exists())                                      # marcajul e pus, rândul nu
+        self.assertEqual(self.randuri_jurnal(), [])
+        for _ in range(3):                                               # repornirile din aceeași oră: tot niciun rând
+            self.assertEqual(W.main(), 0)
+        self.assertEqual(self.randuri_jurnal(), [])
+        t = m.stat().st_mtime - W.VIU_SEC - 1                            # după o oră: exact un rând
+        os.utime(m, (t, t))
+        self.assertEqual(W.main(), 0)
+        self.assertEqual(W.main(), 0)
+        self.assertEqual([j['stare'] for j in self.randuri_jurnal()], ['coada_goala'])
+
+    def test_coada_goala_randul_esuat_dupa_marcaj_nu_se_reia_in_aceeasi_ora(self):
+        """Scrierea rândului eșuează (OSError) după marcaj: rularea se încheie normal, fără rând, și nu se reîncearcă în ora aceea."""
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': False}))
+        jurnal_real = W.jurnal
+        def jurnal_pica(**k):
+            if k.get('stare') == 'coada_goala': raise OSError('jurnal')
+            return jurnal_real(**k)
+        W.jurnal = jurnal_pica
+        try:
+            self.assertEqual(W.main(), 0)
+        finally:
+            W.jurnal = jurnal_real
+        self.assertEqual(W.main(), 0)
+        self.assertEqual(self.randuri_jurnal(), [])
+
+    def test_coada_goala_marcaj_cu_data_din_viitor_se_pune_din_nou(self):
+        """Ceas mutat: un marcaj cu data peste o oră în viitor nu blochează rândul la nesfârșit."""
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': False}))
+        m = W.DIR / W.VIU_FILE_NUME
+        m.write_bytes(b'')
+        t = time.time() + 3600
+        os.utime(m, (t, t))
+        self.assertEqual(W.main(), 0)
+        self.assertEqual([j['stare'] for j in self.randuri_jurnal()], ['coada_goala'])
+        self.assertLess(abs(time.time() - m.stat().st_mtime), 60)
+
+    def test_coada_cu_ceva_fluxul_de_azi(self):
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': True}))
+        self.assertEqual(W.main(), 0)
+        self.assertEqual(self.actiuni(), ['coada', 'nume', 'preia'])
+        self.assertIn('nume_incarcate', [j['stare'] for j in self.randuri_jurnal()])
+
+    def test_coada_cu_eroare_sau_raspuns_necunoscut_fluxul_de_azi(self):
+        """Eroare, status necunoscut, corp de altă formă, edge vechi, rețea căzută → NU se sare peste nimic (nume → preia)."""
+        for r in (self.EDGE_VECHI, (500, {'error': 'Eroare internă'}), (401, {'error': 'Neautorizat'}), (404, {}), (302, {}),
+                  (None, {}), (200, {}), (200, []), (200, None), (200, {'de_preluat': 'false'}), (200, {'de_preluat': 0}),
+                  (200, {'de_preluat': None}), (200, {'de_preluat': False, 'alt': 1}), (200, {'intrebare': None}),
+                  (201, {'de_preluat': False}), TimeoutError('retea'), ValueError('json')):
+            self.apeluri.clear()
+            self.pregateste_pornire(self.NUME_OK, r)
+            self.assertEqual(W.main(), 0, repr(r))
+            self.assertEqual(self.actiuni(), ['coada', 'nume', 'preia'], repr(r))
+        self.assertNotIn('coada_goala', [j['stare'] for j in self.randuri_jurnal()])
+
+    def test_coada_goala_nu_ocoleste_verificarile_locale(self):
+        """Corpus / vocabular / motor se verifică tot înaintea oricărei cereri (ordinea de azi): stricate → nici „coada”."""
+        self.pregateste_pornire(self.NUME_OK, (200, {'de_preluat': False}))
+        W.MANIFEST_FILE.write_text(json.dumps({'index_sha256': 'f' * 64}), encoding='utf-8')
+        self.assertEqual(W.main(), 1)
+        self.assertEqual(self.apeluri, [])
+        self.assertEqual(self.randuri_jurnal()[-1]['stare'], 'corpus_invalid')
 
     def test_r3_jurnalul_de_pornire_numara_intrarile_aruncate(self):
         """L20: câte nume s-au încărcat și câte intrări fără valoare s-au aruncat — DOAR numere, niciun nume."""
@@ -738,7 +872,7 @@ class Pornire(unittest.TestCase):
     def test_r3_localitati_cu_forma_gresita_nu_preia_nimic(self):
         self.pregateste_pornire((200, {'persoane': ['POPESCU ION'], 'firme': [], 'cui': [], 'localitati': 'Berceni'}))
         self.assertEqual(W.main(), 1)
-        self.assertEqual([a['actiune'] for a in self.apeluri], ['nume'])
+        self.assertEqual(self.actiuni(), ['coada', 'nume'])
 
     def manifest(self, h):
         W.MANIFEST_FILE.write_text(json.dumps({'index_sha256': h}), encoding='utf-8')

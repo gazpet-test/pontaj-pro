@@ -10,11 +10,12 @@
 | `Model_1_Convocator_proprietar_v6_final.docx` | `convocator.docx` | deținător | convocarea scrisă (Anexa 1 din plan) |
 | `Model_2_PV_tip_A_cu_proprietarul_v5_final.docx` | `pv_a.docx` | deținător | PV de constatare cu deținătorul (Anexa 2) |
 | `Model_3_PV_tip_B_constatare_tehnica_v5_finala.docx` | `pv_b.docx` | parcelă | PV de constatare tehnică + demersuri (Anexa 3) |
-| `Model_4_Adresa_UAT_convocare_afisare_PV_v5_finala.docx` | `adresa_uat.docx` | UAT | adresă către primărie + Anexa 2 (convocare de afișare + lista parcelelor) + Anexa 3 (PV de afișare) |
+| `Model_4_Adresa_UAT_convocare_afisare_PV_v5_finala.docx` | `adresa_uat.docx` | UAT | adresă către primărie + Anexa 2 (din 19.11.2026: trimiterea la anunțul de afișare, fără lista parcelelor — excepția (12), §1) + Anexa 3 (PV de afișare) |
 | `Model_5_PV_receptie_tronson_v5_final.docx` | `pv_c.docx` | tronson | PV de recepție a redării pe tronson (Anexa 6) |
 | `Model_6_Registru_urmarire_convocari.xlsx` (v3) | — (export xlsx) | — | registrul: foi Registru / Centralizator / Legendă (§5) |
 | `Model_7_Anexa7_Tipizat_v6_final.xlsx` (și v5: `Model_7_Anexa7_Tipizat_date_detinatori_TGZ.xlsx`) | — (import, `red_import_loturi.sursa = 'ANEXA7'`) | — | tipizatul cerut Beneficiarului pentru datele deținătorilor (§6) |
 | `Lot1_Checklist_urmarire.pdf`, `Lot1_Plan_verificare_redari_DRAFT.pdf`, `Lot1_Scrisoare_Transgaz_DRAFT.pdf` (v3) | — | — | context (§7) |
+| — (text propriu: `TEXT_ANUNT_AFISARE.md`, 18.11.2026) | `anunt_afisare.docx` | UAT | anunțul de afișare la intrarea în primărie (convocarea pe UAT + lista parcelelor, fără date personale; planul rev. 1 pct. 4.3 + cap. 8, Anexa 5 = PV-ul de afișare) — §2.7 |
 
 Din Final_v2 NU intră în repo (nu sunt șabloane ERP, doar referință): `A1_Plan_verificare_redari_Lot1_rev49_final.docx` (de aici
 termenul de 10 zile, §8), `A1_Scrisoare_Transgaz_plan_Lot1_rev9_final.docx`, `A3_Adresa_TGZ_acord_art28_v1_final.docx`,
@@ -62,7 +63,8 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   originalului, cu excepțiile (6) și (7) de mai jos. Excepții structurale: (1) în `convocator.docx` un paragraf nou care conține
   doar `{{qr}}`, imediat după paragraful opțiunilor de răspuns (textul „codul QR alăturat” → „codul QR de mai jos”; din 03.11
   paragraful e un cadru aliniat la dreapta, §9); (2) în `adresa_uat.docx` tabelul „Lista
-  parcelelor” rămâne cu UN rând-șablon (`{{rand.*}}`), celelalte 7 rânduri goale se șterg; (3) `docProps`: fără miniatură și
+  parcelelor” rămâne cu UN rând-șablon (`{{rand.*}}`), celelalte 7 rânduri goale se șterg (din 19.11.2026 tabelul iese cu tot cu
+  corpul Anexei 2, excepția (12)); (3) `docProps`: fără miniatură și
   fără „ultima modificare de”; (4) **nou la Final_v2**: Word a salvat celulele goale ale tabelelor fără run (`<w:p …/>`) — ele
   primesc un run `<w:rPr><w:sz w:val="19"/></w:rPr><w:t>{{…}}</w:t>` (formatul celulelor de date din aceleași tabele, ca la v5);
   (5) în `pv_b.docx` paragraful `{{pv_a_referinta}}` sub „Nume:” (decizia 02.11, PR #935); (6) toate cele 5 trec de pe Letter
@@ -97,6 +99,57 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   rămâne „Lider al Asocierii … · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}”.
   `sabloaneA4.test.js` declară textul scos (`SCOS_INCEPUT`) și cere, după repunere, amprenta de dinainte; testele „antetul oficial”
   verifică header-ul pe șabloane și pe convocatorul completat cu QR. **Aspectul antetului a fost verificat în Word și aprobat de Răzvan**; documente-test cu date fictive în `Documente Redari\TEST_antet` pe NAS.
+- **(11) Terminologia „predare” și trei opțiuni de răspuns (deciziile Răzvan 17.11.2026; textele din modelele rev. 1 ale
+  Juridicului, juridic#044 §1, #045 pct. 1, #046 pct. 1).** Față de Transgaz, readucerea terenului la starea inițială e lucrarea
+  din contract; față de proprietari / deținători, procedura e PREDAREA terenului. În generator, `TERMINOLOGIE_PREDARE`
+  (aplicat în `construieste` după pașii fiecărei rețete, fiecare înlocuire cu exact o apariție):
+  - `convocator.docx`, `convocator_utilizator.docx`: titlul „CONVOCARE la predarea terenului” (era „… la constatarea readucerii
+    terenului la starea inițială”); opțiunea a doua „… procesul-verbal completat, spre semnare, electronic.” (era „prin poștă /
+    electronic”); paragraful „☐ Nu particip. Am următoarele obiecții: ____.” se șterge (`stergeParagraf`), rămân trei opțiuni:
+    particip / nu particip, fără obiecții / contest și solicit constatarea pe teren;
+  - `pv_a.docx`: titlul „PROCES-VERBAL DE PREDARE a terenului către proprietar / deținător (tip A)”;
+  - `pv_b.docx`: „Scrisoare recomandată sau curier, cu confirmare de primire”, „nr. recomandată / AWB …”, „adresa Beneficiar nr. …
+    / recomandată sau AWB nr. …”;
+  - `pv_c.docx`: titlul „PROCES-VERBAL DE FINALIZARE A PREDĂRII TERENURILOR pe tronson”.
+  Neschimbate intenționat: titlul PV tip B; în PV A secțiunile „Lucrări de readucere executate” și „Obiecțiile deținătorului
+  privind readucerea terenului”; în PV C fraza „Comisia constată că lucrările de readucere a terenului la starea inițială …”.
+  Neatinse (așteaptă text de la Juridic): `adresa_uat.docx` și `cerere_imputernicire.docx`. Placeholder-ele nu se schimbă
+  (aceeași listă ordonată; rândul scos nu avea câmpuri). `sabloaneA4.test.js` declară schimbările în `SCHIMBARI_TEXT`, iar
+  `sabloanePredare.test.js` verifică textul nou / vechi, lista de placeholder-e (amprentă de pe main), cele trei opțiuni și că
+  fiecare parte XML / `.rels` din cele cinci arhive e bine formată (verificator cu stivă, cu mutanți care trebuie să pice).
+  **Nu se publică în producție până nu confirmă Răzvan că pachetul a plecat la Transgaz.** Aspectul convocatorului cu trei
+  opțiuni (QR-ul în cadru la dreapta, lângă opțiuni) e de verificat vizual în Word înainte de publicare.
+  (Notă 19.11.2026: `adresa_uat.docx` nu mai e neatins — vezi excepția (12).)
+  **Publicare (PR #1117 rămâne draft până la pasul 1; pașii 3–4 în aceeași fereastră):**
+  1. Răzvan confirmă că pachetul a plecat la Transgaz.
+  2. Verificare în Word (neverificat încă): `convocator.docx` și `convocator_utilizator.docx` — o singură pagină A4 pe față, cele
+     trei opțiuni întregi, QR-ul în cadru la dreapta, lângă opțiuni, nedecalat după rândul scos; plus un convocator completat pe
+     TEST-RAZVAN. PV A / PV B / PV C: titlurile noi încap pe rând, paginarea neschimbată.
+  3. Migrarea de pe `redari/predare-bd` (neaplicată; textul final al declarației de la Juridic, „da”-ul lui Răzvan): `text_declaratie`
+     — DEFAULT-ul ȘI valorile salvate pe proiectele existente — plus refuzul pe server al codului retras. Se aplică ÎNTÂI.
+  4. Imediat după: publicarea aplicației (merge #1117 → deploy automat).
+  5. Control pe live (Ctrl+Shift+R): formularul public al unei convocări de pe TEST-RAZVAN arată trei variante, iar la „Nu particip —
+     nu am obiecții” declarația spune „electronic”, fără „prin poștă”; în 📞 Răspuns lista are trei opțiuni.
+- **(12) Adresa UAT: Anexa 2 = trimiterea la anunțul de afișare, fără lista parcelelor (decizia Răzvan 19.11.2026, PR #1137 r6).**
+  O singură definiție a textului public de afișare: anunțul (`anunt_afisare.docx`, §2.7, textul în `TEXT_ANUNT_AFISARE.md`). Lista
+  parcelelor publică stă DOAR în anunț (cu identificatorii validați, `identificatoriPublici.js`); convocatorul individual rămâne
+  neschimbat (nu se publică). În generator, `anexa2Anunt` (`ANEXA2_ANUNT`), după pașii rețetei adresei: titlul „ANEXA 2 – CONVOCARE
+  PENTRU AFIȘARE LA SEDIUL PRIMĂRIEI” rămâne; corpul vechi (convocarea scurtă: „Către toți proprietarii …”, „Lucrările … între orele
+  {{program_text}} …”, „Dacă nu vă puteți prezenta …”, „Convocarea se face …”, plus tabelul „Lista parcelelor (fără date personale)” cu
+  rândul-șablon `{{rand.*}}`, excepția (2)) se verifică EXACT și se înlocuiește cu două paragrafe (textul variantei trimise Transgaz
+  pe 19.11): „Anexa 2 este anunțul de afișare pe comună (convocarea pe UAT), după modelul „Anunț de afișare la primărie”, transmis
+  împreună cu prezenta adresă.” și „Anunțul conține: zilele și programul sesiunilor (cu satele / tarlalele programate), cum ne pot
+  răspunde deținătorii, precizarea că afișarea este o publicitate suplimentară a convocării și nu valorează acceptare tacită,
+  informarea privind datele personale (pagina publică, cu cod QR) și lista parcelelor din comună (sat, tarla, nr. cadastral /
+  parcelă, poz. HG, tronson), fără date personale.” Paragrafele noi refolosesc primele două paragrafe ale corpului vechi (aceeași
+  formatare, se schimbă doar `<w:t>`); saltul de pagină dinaintea Anexei 3 rămâne. Restul adresei (scrisoarea, inclusiv lista
+  anexelor „2. Convocarea pentru afișare + lista parcelelor”, și Anexa 3) e neschimbat. Șablonul are 36 de chei (fără `rand.*` și
+  `{{program_text}}`); din parcele, adresa ia doar NUMĂRUL lor (`{{numar_parcele}}` în PV-ul de afișare, aceleași parcele active ca
+  lista din anunț). Teste: `adresaUatAnexa2.test.js` (corpul Anexei 2 = textul din decizie; arhiva identică cu origin/main octet cu
+  octet în afara `word/document.xml`, iar acolo XML-ul identic înainte și după corpul Anexei 2), `sabloaneA4.test.js`
+  (`SCHIMBARI_TEXT.adresa_uat`, cu amprenta de dinainte), `anuntAfisare.test.js` (paritatea generatorului cu origin/main pe restul
+  textului, câmpurile fără `program_text`), `docx.test.js` (cheile, nicio valoare de parcelă în adresă, rând-șablon reintrodus =
+  refuz). **Formularea (decizia Răzvan 19.11.2026, varianta B):** în platformă „… transmis împreună cu prezenta adresă”; modelul trimis la Transgaz pe 19.11 („prezentul model”) diferă doar prin aceste două cuvinte.
 - **Documentul COMPLETAT (tot excepția (8), #970 r2–r18)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
   (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`. **Regula LITERALĂ (r18)**, în locul
   decupajului pe propoziții din r7–r17 (unde fiecare rundă găsea alt caz în care se pierdea un câmp GDPR):
@@ -147,7 +200,7 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
 - Antetul de firmă (adresă, CUI, telefon, „Lider al Asocierii …”) rămâne text fix; din antet s-au parametrizat doar
   `Contract Transgaz nr. {{contract_nr}}/{{contract_data}}` și `{{proiect_denumire}}` (convocator, PV A, PV B, PV C și — din 04.11, excepția (9), confirmată de Răzvan 04.11.2026, #975 — adresa UAT, cu antetul copiat din convocator). Corpul rămâne specific Lot 1 (Prunișor–Jupa, Acordul de mediu nr. 4/18.07.2022, A.P.M. Mehedinți,
   jud. Mehedinți în adresa UAT devine `{{judet}}`) — **șabloanele sunt ale Lot 1**.
-- Textele celor 4 opțiuni de răspuns din convocator rămân FIXE (text juridic); informarea GDPR e `{{text_gdpr}}` (tot
+- Textele opțiunilor de răspuns din convocator rămân FIXE (text juridic; din 17.11.2026 trei opțiuni, excepția (11)); informarea GDPR e `{{text_gdpr}}` (tot
   paragraful de sub „Date personale”), contactul Gazpet e `{{contact_nume}} {{contact_telefon}} {{contact_email}}`.
 - Verificare (03.11.2026): `node scripts/redari_sabloane_verifica.mjs` (ieșirea în §4) și `src/redari/sabloaneFinalV2.test.js`
   (fără DRAFT, fără „acord” pentru lipsa răspunsului, PV A cu 3 semnatari, PV B fără foto / topo / jurnal, termenul din adresa UAT
@@ -305,26 +358,25 @@ activi au PV A semnat. Un alt coproprietar cu PV A semnat nu blocheaza PV B; mod
 Constatarea nu poate contrazice PV A; schimbarea terenului cere verificare noua datata, nu o presupunere.
 Reprezentantul UAT semneaza numai PV B. Prezenta/refuzul nu se inventeaza din starea agregata.
 
-### 2.4 `adresa_uat.docx` (Model 4) — per UAT, 43 placeholder-e (antet + adresa + Anexa 2 + Anexa 3; antetul repus, confirmat de Răzvan 04.11.2026, #975)
+### 2.4 `adresa_uat.docx` (Model 4) — per UAT, 36 placeholder-e (antet + adresa + Anexa 3; antetul repus, confirmat de Răzvan 04.11.2026, #975; Anexa 2 = trimiterea la anunț, fără câmpuri, din 19.11.2026)
 
 | placeholder | sursă în BD | oblig. | observații |
 |---|---|---|---|
 | `{{contract_nr}}`, `{{contract_data}}`, `{{proiect_denumire}}` | red_proiecte.contract_nr, .contract_data, .denumire | da (contractul) | antet copiat din convocator (excepția (9), 04.11, confirmat de Răzvan, #975); Final_v2 nu îl mai avea |
-| `{{uat}}` ×5, `{{judet}}` | red_uat.nume, .judet | da | |
+| `{{uat}}` ×4, `{{judet}}` | red_uat.nume, .judet | da | |
 | `{{nr_document}}`, `{{data}}` | `fn_red_numar_document('AU', NULL, NULL)` → `AU-0001`; `red_uat.adresa_nr, adresa_data` | da | azi, Europe/Bucharest; regenerarea păstrează numărul |
 | `{{imputernicire_nr}}`, `{{imputernicire_data}}` | red_proiecte | da | |
 | `{{zi1..3}}`, `{{program1..3}}`, `{{sate_zi1..3}}` | red_uat.sesiune_zi1..3, program_zi1..3, sate_zi1..3 | da / nu | cel puțin o zi cu program |
 | `{{afisare_data_start}}` ×3, `{{afisare_data_end}}`, `{{afisare_pv_nr}}` | red_uat.afisare_* | da | |
 | `{{termen_confirmare}}` | red_uat.termen_confirmare | da | dată RO; se completează explicit |
-| `{{contact_nume}}` ×2, `{{contact_telefon}}` ×3, `{{contact_email}}` ×3 | red_proiecte | da | |
-| `{{reprezentant_tgz}}` ×2, `{{reprezentant_tgz_telefon}}` ×2 | red_proiecte.reprezentant_tgz_nume, reprezentant_tgz_telefon | nu | |
+| `{{contact_nume}}`, `{{contact_telefon}}`, `{{contact_email}}` | red_proiecte | da | |
+| `{{reprezentant_tgz}}`, `{{reprezentant_tgz_telefon}}` | red_proiecte.reprezentant_tgz_nume, reprezentant_tgz_telefon | nu | |
 | `{{reprezentant_gazpet}}` | calcul: reprezentant_gazpet_nume + _functie | da | semnătura adresei |
-| `{{zile_sesiune_text}}` ×2, `{{program_text}}` | calcul din sesiune_zi1..3 / program_zi1..3 („10, 11 și 12 noiembrie 2026”; „09:00 – 16:00 (ziua 2 până la 19:00)”) | da | |
-| `{{rand.nr}}`, `{{rand.sat}}`, `{{rand.tarla}}`, `{{rand.nr_cadastral}}`, `{{rand.poz_hg}}`, `{{rand.tronson}}` | red_parcele (toate parcelele active ale UAT-ului, fără date personale) | da | rând-șablon → `repetaRand` (§1) |
+| `{{zile_sesiune_text}}` | calcul din sesiune_zi1..3 („10, 11 și 12 noiembrie 2026”), în PV-ul de afișare | da | `{{program_text}}` a ieșit pe 19.11.2026 (era doar în convocarea scurtă din Anexa 2) |
 | `{{reprezentant_uat_nume}}`, `{{reprezentant_uat_functie}}` | red_uat | nu la generarea adresei | Primăria nominalizează ulterior; coloana telefon există din 20261127a |
 | `{{reprezentant_gazpet_nume}}` | red_proiecte.reprezentant_gazpet_nume | da | conform D2/felia 2 |
 | `{{afisare_ora}}` | red_uat.afisare_ora | nu | HH:MM, deja format RO |
-| `{{numar_parcele}}` | calcul: COUNT parcele active ale UAT-ului | da | |
+| `{{numar_parcele}}` | calcul: COUNT parcele active ale UAT-ului | da | singura informație din parcele în adresă; aceleași parcele ca lista din anunț |
 | `{{semnatar_uat}}`, `{{semnatar_gazpet}}` | calcul | nu | |
 
 De mână (intenționat): „Dezafișat la data de ___, ora ___. Semnătura: ___” și liniile de semnătură.
@@ -333,7 +385,15 @@ De mână (intenționat): „Dezafișat la data de ___, ora ___. Semnătura: ___
 Pe afișare rămân telefonul și e-mailul. Nu există pagină publică UAT. Restul XML-ului șablonului este păstrat.
 
 Generarea folosește `verificaDateAdresaUat`, separat de `lipsuriUat` (convocator). Împuternicirea este obligatorie;
-parcelele pot lipsi. Se citesc numai parcelele active, paginate keyset pe `id_parcela`, în ordinea acelui ID.
+parcelele pot lipsi. Se citesc numai parcelele active, paginate keyset pe `id_parcela`, și doar coloanele `COL_PARCELA_ADRESA`
+(`id_parcela, sters_la`: adresa le numără, nu le listează).
+
+**Anexa 2 (decizia Răzvan 19.11.2026, excepția (12) din §1):** nu mai e convocarea scurtă + lista parcelelor, ci trimiterea la
+anunțul de afișare (§2.7), transmis împreună cu adresa; nicio valoare de parcelă nu ajunge în adresă. În 🏛️ UAT-uri, lângă
+butoanele adresei și în mesajul de după salvare: „Anexa 2 a adresei este anunțul de afișare: generează-l cu butonul „Anunț de
+afișare (DOCX)” și trimite-l împreună cu adresa.” (`INDICIU_ANEXA2_ANUNT`). Cele două documente se generează separat (fluxul
+nu se schimbă: adresa e numerotată și salvată de admin; anunțul doar se descarcă, îl poate genera și editorul, și are propria
+validare a identificatorilor); legarea lor într-un singur clic nu e locală, deci nu s-a făcut.
 Fișierul se salvează imutabil în `redari/{proiectCod}/{uat3}/adresa/{AU-nnnn}_v{n}.docx`, versiunea maximă include orfanele.
 Upload-ul precedă UPDATE-ul UAT cu CAS pe versiunea citită și RETURNING explicit. Conflictul sau eroarea de rețea lasă fișierul
 în bucket și cer reîncărcare/reconciliere; nu se șterge automat. Descărcarea folosește versiunea maximă și URL semnat 10 minute.
@@ -380,6 +440,82 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `reprezentant_gazpet` | red_proiecte.reprezentant_gazpet_nume |
 | `functie` | red_proiecte.reprezentant_gazpet_functie |
 
+### 2.7 `anunt_afisare.docx` — anunțul de afișare la primărie (convocarea pe UAT), per UAT, 32 de placeholder-e (18.11.2026)
+
+Planul procedurii de predare rev. 1 (transmis Transgaz pe 18.11.2026), pct. 4.3: „Convocarea pe UAT, cu lista parcelelor (fără date
+personale), se afișează la intrarea în primărie cu cel puțin 10 zile înainte, pentru toți proprietarii, inclusiv cei fără adresă sau
+neidentificați. … Afișarea e publicitate suplimentară; nu valorează acceptare tacită.”; cap. 8: „Convocatorul afișat la primărie conține
+identificarea parcelelor, nu date personale.” Până la 18.11 exista doar Anexa 2 din adresa UAT (Model 4, §2.4), încorporată în adresă și
+cu terminologia veche; anunțul de sine stătător lipsea din pachetul trimis Transgaz (modelul lui: `13b_Model_Anunt_afisare_primarie_rev1`).
+**Din 19.11.2026 (decizia Răzvan, excepția (12) din §1) anunțul e SINGURA definiție a textului public de afișare:** Anexa 2 a adresei
+UAT nu mai are convocare și listă proprii, ci trimite la anunț („Anexa 2 este anunțul de afișare pe comună …”), iar lista parcelelor
+publică există doar aici. Convocatorul individual rămâne neschimbat (nu se publică).
+
+- **Textul** (propunere, de validat de Juridic și de Răzvan): `TEXT_ANUNT_AFISARE.md` — adaptat din convocatorul individual rev. 1
+  (titlul „CONVOCARE la predarea terenului”, cele trei opțiuni de răspuns, „În lipsa participării sau a unui răspuns … constatare tehnică
+  documentată”, precizările despre despăgubiri și coproprietari) și din Anexa 2 a adresei UAT; în plus: „Prezenta afișare este o
+  publicitate suplimentară a convocării; ea nu valorează acceptare tacită” (formularea din plan), „Prezentul anunț nu conține date
+  personale”, adresa paginii publice de informare GDPR (`https://redari.gazpet.ro/redari/informare`, aceeași pentru toți) cu codul ei QR
+  (fără link personal: nu există pagină publică de răspuns pe UAT, decizia D1 02.11).
+- **Șablonul** se construiește DOAR din text: `node scripts/redari_sablon_anunt_afisare.mjs` (`--verifica` = comparare octet cu octet).
+  A4 portret, marginile convocatorului (1,27 / 1,5 cm), Calibri 11 pt (titlul 20 pt, mărunt 9 pt), antetul-imagine Gazpet în header-ul
+  primei pagini (`redari_antet.mjs`, excepția (10)), tabelele cu `w:tblHeader` (antetul repetat pe fiecare pagină) și `w:cantSplit`
+  (rândurile nu se rup); `{{qr}}` într-un cadru de 3,2 cm aliniat la dreapta (ca la convocator). Marcajele de formatare ale textului sunt
+  descrise în capul fișierului-sursă. `anuntAfisare.test.js` cere textul din `<w:t>` = textul-sursă, în ordine.
+- **Generatorul**: `genereazaAnuntAfisare` / `verificaDateAnuntAfisare` (`docx.js`). Strict implicit; fără parcele active nu se generează.
+  Nu primește și nu citește deținători; din parcele intră DOAR `CAMPURI_PARCELA_ANUNT` (sat, tarla, nr_cadastral, poz_hg, tronson), iar
+  selectul UI e `COL_PARCELA_ANUNT`. Postcondiție: câmpurile = exact cheile șablonului. Ordinea listei: tarla, nr. cadastral / parcelă
+  (comparare naturală), id_parcela. Nu se numerotează, nu se salvează în storage / BD: afișarea se dovedește prin PV-ul de afișare
+  (`red_uat.afisare_data_start / _end / _pv_nr`, Anexa 5 din plan).
+- **O singură definiție (L19)**: câmpurile comune vin din helper-ele `campuriContractProiect`, `campuriSesiuniUat`, `campuriContactGazpet`
+  (folosite identic de convocator, adresa UAT și anunț; test de paritate cu generatoarele de pe `origin/main` + mutant textual) și
+  `areZiCuProgram` (`setari.js`; convocator, adresa UAT, anunț, „Gata de convocare?”).
+- **Forma identificatorilor publicați** (review #1137 r1, P1; `src/redari/identificatoriPublici.js`): câmpurile parcelei sunt text liber la
+  import, deci fiecare valoare care ajunge pe afiș trece printr-o validare de FORMĂ, una singură, indiferent de `strict`: tarla („T12”, „12”,
+  „T12/1”, „12A”), nr. cadastral / parcelă (valoarea TGZ compusă cu „#”: „52#”, „#44#”, „50029#30#”, „##”; „CF 1001”, „123/4”; un cod de 1–2
+  majuscule, ex. „DE”), poz. HG („117”, „12A”, „HG 1” — fără „/”, ca o cotă să nu treacă), tronson (1..11, regula importului
+  `tronsonOptional`), **satul doar dintre satele declarate la „Sate / tarlale ziua 1–3”** (nu există nomenclator de sate în schemă; un nume
+  de persoană are aceeași formă ca un nume de sat, deci forma singură nu ajunge). Valoarea goală trece (TGZ nu are coloana „sat”);
+  marcajul „____” al modelelor trece (nu poartă informație). Ce nu se potrivește **nu se publică și blochează generarea**, cu lista exactă
+  „câmp: id_parcela (motiv), …” (fără valori — pot fi chiar datele personale), afișată sub buton; se corectează în Fișa parcelei.
+- **Runda 3 (review #1137 r2, P1)**: (1) în document intră **exact șirul validat** (`canonizeazaIdentificator`: majuscule, spații simple;
+  TGZ-ul compus rămâne cu „#”, „##” = celulă goală; satul cu ortografia declarată), nu valoarea din BD și nu o formă recompusă (din
+  „1#2#” lipit cu „ / ” ar ieși „1 / 2”, forma unei cote); o valoare care ar trebui „reparată” („12//3”) e refuzată. (2) **Cote**: „a/b” cu
+  a ≤ b („1/2”, „3/3”, „12/15”) e refuzată în orice câmp, și ca subcâmp TGZ sau între paranteze — o subdiviziune reală are a > b („123/4”);
+  formele ambigue (o parcelă chiar numerotată „12/15”) se refuză și se corectează / se decid, nu se ghicesc. (3) **Telefon / CNP**: peste 8
+  cifre într-un subcâmp (ex. „0711/111/111”, „180010/100000/0”), sau **orice șir de grupuri de cifre consecutive** (runda 4: nu doar toate
+  cifrele valorii; „0711#111111#UA62A”, „180010#100000#0#1”) care, lipite, dau un telefon (0[237] + 8 cifre, 40 / 0040 + 9) ori 13 cifre
+  (forma unui CNP). Un grup de cifre nu se taie: un telefon cu o cifră lipită în față („50711#111111#”) și telefonul fără 0 împărțit în
+  subcâmpuri („711#111111#”) NU sunt prinse; un TGZ real cu 13 cifre pe subcâmpuri consecutive e refuzat (de decis). Lista exactă e în
+  descrierea PR-ului #1137. Lista de corectat poartă motivul („arată ca o cotă”, „prea multe cifre: telefon / CNP?”, „prea lung”).
+  (4) **Satul publicat** (runda 4): se verifică și ortografia declarată care se tipărește (cel mult 40 de caractere, fără punctuație
+  repetată / spații duble), nu doar cheia normalizată.
+  (5) **Forme cadastrale numerice** (runda 5, după măsurarea pe LOT1: 49 din 2512 parcele refuzate): DOAR la nr. cadastral se acceptă
+  primul dublu / triplu („12''”, „12'''(34'')”), lista de 2–4 numere despărțite de „,” sau „+” fără spațiu („12,34”, „12',34/5”,
+  „12+34”) și parantezele cu 1–4 elemente, cu 1–2 litere lipite de cifre („12(A34,B56)”). Cota se caută pe fiecare număr din listă /
+  din paranteze și înaintea parantezei („12,1/2”, „1/2(34)” = cotă); plafonul de 8 cifre pe subcâmp și ferestrele de telefon / CNP
+  rămân pe toată valoarea. Formele cu cuvinte („ABC 1234”, „AB_1234”, „A-ABCD”) și „#a/b#” cu a ≤ b rămân refuzate (de decis).
+- **Unde**: 🏛️ UAT-uri → editare UAT → „Anunț de afișare (DOCX)”, pentru admin și editor (documentul nu are date personale și nu scrie
+  nimic); UAT-ul, proiectul (cu starea informării de la server, `cuInformarePublicata`) și parcelele se recitesc din BD înainte de
+  generare; aceleași lipsuri apar în 📬 Notificări la modelul „Afișarea la Primărie”.
+
+| placeholder | sursă în BD | oblig. | observații |
+|---|---|---|---|
+| `{{contract_nr}}`, `{{contract_data}}`, `{{proiect_denumire}}` ×2 | red_proiecte (campuriContractProiect) | da | antet + „lucrările la {{proiect_denumire}}” |
+| `{{uat}}` ×4, `{{judet}}` | red_uat.nume, .judet | da | |
+| `{{imputernicire_nr}}`, `{{imputernicire_data}}` | red_proiecte | da | |
+| `{{zi1..3}}`, `{{program1..3}}`, `{{sate_zi1..3}}` | red_uat (campuriSesiuniUat) | cel puțin o zi cu program | tabelul celor 3 zile, ca la convocator |
+| `{{contact_nume}}`, `{{contact_telefon}}` ×2, `{{contact_email}}` ×2 | red_proiecte (campuriContactGazpet) | da, toate trei | fiecare e tipărit (regula D3) |
+| `{{reprezentant_tgz}}`, `{{reprezentant_tgz_telefon}}` | reprezentant_tgz_nume + _functie; reprezentant_tgz_telefon | da | „Contact TRANSGAZ (DRFT / ofițer de legătură)” |
+| `{{link_informare}}`, `{{qr}}` | constanta `LINK_INFORMARE_PUBLIC` (pagina publică a informării) + QR-ul ei | informarea publicată (server) | `false` / `null` de la server blochează |
+| `{{semnatar_gazpet}}`, `{{data}}` | reprezentant_gazpet_nume + _functie; data generării (Europe/Bucharest) | da (semnatarul) | |
+| `{{numar_parcele}}` | COUNT parcele active | — | |
+| `{{rand.nr}}`, `{{rand.sat}}`, `{{rand.tarla}}`, `{{rand.nr_cadastral}}`, `{{rand.poz_hg}}`, `{{rand.tronson}}` | red_v_parcele (lista albă) | ≥ 1 parcelă; fiecare valoare cu forma câmpului (`identificatoriPublici.js`), altfel blocat cu lista | rând-șablon → `repetaRand` |
+
+Întrebări deschise pentru Juridic (textul e propunere): formularea despre neprezentare (reluată din convocator) și fraza „publicitate
+suplimentară … nu valorează acceptare tacită”; dacă pe afiș se trec numele persoanelor de contact (Gazpet / Transgaz) sau doar
+funcția și telefonul; dacă anunțul trebuie semnat / ștampilat de Antreprenor sau e suficient PV-ul de afișare semnat de UAT.
+
 ## 3. Câmpuri FĂRĂ sursă în contract — de adăugat în schemă / de decis
 
 | câmp (placeholder) | șablon | propunere | de decis |
@@ -412,19 +548,32 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | „constatare pe teren cerută? (data)” (Model 6 col. AB) | registru | v5 spune „la data stabilită de comisie” → data vine din comisie, nu de la deținător: `red_raspunsuri.constatare_teren_data` (setată de operator) | — |
 | conținut fix de parametrizat la alt proiect | toate | A.P.M. Mehedinți, Acordul de mediu, „Lider al Asocierii …”, Prunișor–Jupa în corp | nu acum (Lot 1) |
 
-## 4. Ieșirea `node scripts/redari_sabloane_verifica.mjs` (06.11.2026, Final_v2 + A4 + QR + Model 1U + antetul-imagine în header)
+## 4. Ieșirea `node scripts/redari_sabloane_verifica.mjs` (19.11.2026, Final_v2 + A4 + QR + Model 1U + antetul-imagine în header + terminologia „predare”, excepția (11) + anunțul de afișare + Anexa 2 a adresei = anunțul, excepția (12))
+
+Față de 06.11: convocatoarele au un paragraf cu text mai puțin (opțiunea scoasă) și 2 resturi „opțiune bifată de mână” în loc de 3.
+Față de 17.11: a apărut `anunt_afisare.docx` (§2.7, 32 de chei), iar `adresa_uat.docx` are 36 de chei în loc de 43 (fără `rand.*` și
+`{{program_text}}`, excepția (12)); celelalte șabloane au aceleași placeholder-e.
 
 ```text
-# Verificare șabloane Redări — 7 fișiere din public/redari/sabloane (2026-11-06)
+# Verificare șabloane Redări — 8 fișiere din public/redari/sabloane (2026-11-19)
 
 ## adresa_uat.docx — OK
-- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 60
-- placeholder-e distincte: 43 (apariții: 57); rupte între run-uri: 0
-- `{{afisare_data_end}}` `{{afisare_data_start}}`×3 `{{afisare_ora}}` `{{afisare_pv_nr}}` `{{contact_email}}`×3 `{{contact_nume}}`×2 `{{contact_telefon}}`×3 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{judet}}` `{{nr_document}}` `{{numar_parcele}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{program_text}}` `{{proiect_denumire}}` `{{rand.nr}}` `{{rand.nr_cadastral}}` `{{rand.poz_hg}}` `{{rand.sat}}` `{{rand.tarla}}` `{{rand.tronson}}` `{{reprezentant_gazpet}}` `{{reprezentant_gazpet_nume}}` `{{reprezentant_tgz}}`×2 `{{reprezentant_tgz_telefon}}`×2 `{{reprezentant_uat_functie}}` `{{reprezentant_uat_nume}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_uat}}` `{{termen_confirmare}}` `{{uat}}`×5 `{{zi1}}` `{{zi2}}` `{{zi3}}` `{{zile_sesiune_text}}`×2
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 45
+- placeholder-e distincte: 36 (apariții: 41); rupte între run-uri: 0
+- `{{afisare_data_end}}` `{{afisare_data_start}}`×3 `{{afisare_ora}}` `{{afisare_pv_nr}}` `{{contact_email}}` `{{contact_nume}}` `{{contact_telefon}}` `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{judet}}` `{{nr_document}}` `{{numar_parcele}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{proiect_denumire}}` `{{reprezentant_gazpet}}` `{{reprezentant_gazpet_nume}}` `{{reprezentant_tgz}}` `{{reprezentant_tgz_telefon}}` `{{reprezentant_uat_functie}}` `{{reprezentant_uat_nume}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_uat}}` `{{termen_confirmare}}` `{{uat}}`×4 `{{zi1}}` `{{zi2}}` `{{zi3}}` `{{zile_sesiune_text}}`
 - pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.80/1.80/2.00/2.00; corp Normal: 10.5 pt
 - relații externe (.rels TargetMode=External): niciuna
-- rând-șablon (repetat de `repetaRand` înaintea câmpurilor simple): `{{rand.nr}}` `{{rand.nr_cadastral}}` `{{rand.poz_hg}}` `{{rand.sat}}` `{{rand.tarla}}` `{{rand.tronson}}`
 - resturi intenționate: 4× dezafișarea se consemnează de mână, la final (PV afișare); 2× linie de semnătură olografă
+
+## anunt_afisare.docx — OK
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 50
+- placeholder-e distincte: 32 (apariții: 38); rupte între run-uri: 0
+- `{{contact_email}}`×2 `{{contact_nume}}` `{{contact_telefon}}`×2 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{judet}}` `{{link_informare}}` `{{numar_parcele}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{proiect_denumire}}`×2 `{{qr}}` `{{rand.nr}}` `{{rand.nr_cadastral}}` `{{rand.poz_hg}}` `{{rand.sat}}` `{{rand.tarla}}` `{{rand.tronson}}` `{{reprezentant_tgz}}` `{{reprezentant_tgz_telefon}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{uat}}`×4 `{{zi1}}` `{{zi2}}` `{{zi3}}`
+- pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.27/1.27/1.50/1.50; corp Normal: 11 pt
+- {{qr}} singur în paragraf: da
+- relații externe (.rels TargetMode=External): niciuna
+- rând-șablon (repetat de `repetaRand` înaintea câmpurilor simple): `{{rand.nr}}` `{{rand.nr_cadastral}}` `{{rand.poz_hg}}` `{{rand.sat}}` `{{rand.tarla}}` `{{rand.tronson}}`
+- resturi intenționate: 1× linie de semnătură olografă
 
 ## cerere_imputernicire.docx — OK
 - părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 16
@@ -434,22 +583,22 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - relații externe (.rels TargetMode=External): niciuna
 
 ## convocator.docx — OK
-- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 55
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 54
 - placeholder-e distincte: 35 (apariții: 37); rupte între run-uri: 0
 - `{{adresa}}` `{{calitate}}` `{{contact_email}}` `{{contact_nume}}` `{{contact_telefon}}`×2 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{nr_cadastral}}` `{{nr_document}}` `{{nume}}` `{{poz_hg}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{proiect_denumire}}` `{{qr}}` `{{reprezentant_tgz}}` `{{reprezentant_tgz_telefon}}` `{{sat}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{suprafata}}` `{{tarla}}` `{{text_gdpr}}` `{{tronson}}` `{{uat}}`×2 `{{zi1}}` `{{zi2}}` `{{zi3}}`
 - pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.27/1.27/1.50/1.50; corp Normal: 9.5 pt
 - {{qr}} singur în paragraf: da
 - relații externe (.rels TargetMode=External): niciuna
-- resturi intenționate: 3× opțiune bifată de mână de destinatar (convocator); 2× linie de semnătură olografă
+- resturi intenționate: 2× opțiune bifată de mână de destinatar (convocator); 2× linie de semnătură olografă
 
 ## convocator_utilizator.docx — OK
-- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 55
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 54
 - placeholder-e distincte: 35 (apariții: 37); rupte între run-uri: 0
 - `{{adresa}}` `{{calitate}}` `{{contact_email}}` `{{contact_nume}}` `{{contact_telefon}}`×2 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{nr_cadastral}}` `{{nr_document}}` `{{nume}}` `{{poz_hg}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{proiect_denumire}}` `{{qr}}` `{{reprezentant_tgz}}` `{{reprezentant_tgz_telefon}}` `{{sat}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{suprafata}}` `{{tarla}}` `{{text_gdpr}}` `{{tronson}}` `{{uat}}`×2 `{{zi1}}` `{{zi2}}` `{{zi3}}`
 - pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.27/1.27/1.50/1.50; corp Normal: 9.5 pt
 - {{qr}} singur în paragraf: da
 - relații externe (.rels TargetMode=External): niciuna
-- resturi intenționate: 3× opțiune bifată de mână de destinatar (convocator); 2× linie de semnătură olografă
+- resturi intenționate: 2× opțiune bifată de mână de destinatar (convocator); 2× linie de semnătură olografă
 
 ## pv_a.docx — OK
 - părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 46
@@ -529,39 +678,39 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `{{calitate_cota}}` | pv_a |
 | `{{categoria_folosinta}}` | pv_a, pv_b |
 | `{{categoria_initiala}}` | pv_a, pv_b |
-| `{{contact_email}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator |
-| `{{contact_nume}}` | adresa_uat, convocator, convocator_utilizator |
-| `{{contact_telefon}}` | adresa_uat, convocator, convocator_utilizator |
-| `{{contract_data}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator, pv_a, pv_b, pv_c |
-| `{{contract_nr}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator, pv_a, pv_b, pv_c |
+| `{{contact_email}}` | adresa_uat, anunt_afisare, cerere_imputernicire, convocator, convocator_utilizator |
+| `{{contact_nume}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator |
+| `{{contact_telefon}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator |
+| `{{contract_data}}` | adresa_uat, anunt_afisare, cerere_imputernicire, convocator, convocator_utilizator, pv_a, pv_b, pv_c |
+| `{{contract_nr}}` | adresa_uat, anunt_afisare, cerere_imputernicire, convocator, convocator_utilizator, pv_a, pv_b, pv_c |
 | `{{conv_data_confirmare}}` | pv_b |
 | `{{conv_data_expediere}}` | pv_b |
 | `{{conv_nr_tracking}}` | pv_b |
 | `{{conv_retur}}` | pv_b |
-| `{{data}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator |
+| `{{data}}` | adresa_uat, anunt_afisare, cerere_imputernicire, convocator, convocator_utilizator |
 | `{{data_pv}}` | pv_a, pv_b, pv_c |
 | `{{functie}}` | cerere_imputernicire |
-| `{{imputernicire_data}}` | adresa_uat, convocator, convocator_utilizator |
-| `{{imputernicire_nr}}` | adresa_uat, convocator, convocator_utilizator |
-| `{{judet}}` | adresa_uat |
+| `{{imputernicire_data}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator |
+| `{{imputernicire_nr}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator |
+| `{{judet}}` | adresa_uat, anunt_afisare |
 | `{{km_de_la}}` | pv_c |
 | `{{km_pana_la}}` | pv_c |
+| `{{link_informare}}` | anunt_afisare |
 | `{{locul}}` | pv_a, pv_b |
 | `{{lucrari_altele}}` | pv_a, pv_b |
 | `{{nr_cadastral}}` | convocator, convocator_utilizator, pv_a, pv_b |
 | `{{nr_document}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator |
 | `{{nr_pv}}` | pv_a, pv_b, pv_c |
-| `{{numar_parcele}}` | adresa_uat, pv_c |
+| `{{numar_parcele}}` | adresa_uat, anunt_afisare, pv_c |
 | `{{nume}}` | convocator, convocator_utilizator, pv_a, pv_b |
 | `{{obiectii_deschise_mp}}` | pv_c |
 | `{{obiectii_deschise_nr}}` | pv_c |
 | `{{obiectii_text}}` | pv_a |
 | `{{poz_hg}}` | convocator, convocator_utilizator, pv_a, pv_b |
-| `{{program_text}}` | adresa_uat |
-| `{{program1}}` | adresa_uat, convocator, convocator_utilizator |
-| `{{program2}}` | adresa_uat, convocator, convocator_utilizator |
-| `{{program3}}` | adresa_uat, convocator, convocator_utilizator |
-| `{{proiect_denumire}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator, pv_a, pv_b, pv_c |
+| `{{program1}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator |
+| `{{program2}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator |
+| `{{program3}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator |
+| `{{proiect_denumire}}` | adresa_uat, anunt_afisare, cerere_imputernicire, convocator, convocator_utilizator, pv_a, pv_b, pv_c |
 | `{{pv_a_referinta}}` | pv_b |
 | `{{pva_corespondenta_mp}}` | pv_c |
 | `{{pva_corespondenta_nr}}` | pv_c |
@@ -569,13 +718,13 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `{{pva_sesiune_nr}}` | pv_c |
 | `{{pvb_mp}}` | pv_c |
 | `{{pvb_nr}}` | pv_c |
-| `{{qr}}` | convocator, convocator_utilizator |
-| `{{rand.nr}}` | adresa_uat |
-| `{{rand.nr_cadastral}}` | adresa_uat |
-| `{{rand.poz_hg}}` | adresa_uat |
-| `{{rand.sat}}` | adresa_uat |
-| `{{rand.tarla}}` | adresa_uat |
-| `{{rand.tronson}}` | adresa_uat |
+| `{{qr}}` | anunt_afisare, convocator, convocator_utilizator |
+| `{{rand.nr}}` | anunt_afisare |
+| `{{rand.nr_cadastral}}` | anunt_afisare |
+| `{{rand.poz_hg}}` | anunt_afisare |
+| `{{rand.sat}}` | anunt_afisare |
+| `{{rand.tarla}}` | anunt_afisare |
+| `{{rand.tronson}}` | anunt_afisare |
 | `{{raspuns_alt_text}}` | pv_b |
 | `{{raspuns_canal}}` | pv_b |
 | `{{raspuns_data}}` | pv_b |
@@ -585,18 +734,18 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `{{reluare_raspuns_text}}` | pv_b |
 | `{{reprezentant_gazpet}}` | adresa_uat, cerere_imputernicire |
 | `{{reprezentant_gazpet_nume}}` | adresa_uat |
-| `{{reprezentant_tgz}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator |
-| `{{reprezentant_tgz_telefon}}` | adresa_uat, convocator, convocator_utilizator |
+| `{{reprezentant_tgz}}` | adresa_uat, anunt_afisare, cerere_imputernicire, convocator, convocator_utilizator |
+| `{{reprezentant_tgz_telefon}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator |
 | `{{reprezentant_uat_functie}}` | adresa_uat |
 | `{{reprezentant_uat_nume}}` | adresa_uat, pv_b |
 | `{{reverificare_la}}` | pv_a |
 | `{{sat}}` | convocator, convocator_utilizator, pv_a, pv_b |
-| `{{sate_zi1}}` | adresa_uat, convocator, convocator_utilizator |
-| `{{sate_zi2}}` | adresa_uat, convocator, convocator_utilizator |
-| `{{sate_zi3}}` | adresa_uat, convocator, convocator_utilizator |
+| `{{sate_zi1}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator |
+| `{{sate_zi2}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator |
+| `{{sate_zi3}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator |
 | `{{semnatar_apm}}` | pv_b, pv_c |
 | `{{semnatar_detinator}}` | pv_a |
-| `{{semnatar_gazpet}}` | adresa_uat, convocator, convocator_utilizator, pv_a, pv_b, pv_c |
+| `{{semnatar_gazpet}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator, pv_a, pv_b, pv_c |
 | `{{semnatar_tgz}}` | convocator, convocator_utilizator, pv_a, pv_b, pv_c |
 | `{{semnatar_uat}}` | adresa_uat, pv_b |
 | `{{stare_teren_alta}}` | pv_a, pv_b |
@@ -608,16 +757,16 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `{{total_mp}}` | pv_c |
 | `{{total_nr}}` | pv_c |
 | `{{tronson}}` | convocator, convocator_utilizator, pv_a, pv_b, pv_c |
-| `{{uat}}` | adresa_uat, convocator, convocator_utilizator, pv_a, pv_b |
+| `{{uat}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator, pv_a, pv_b |
 | `{{uat_lista}}` | cerere_imputernicire |
 | `{{uat_uri}}` | pv_c |
 | `{{verificare_data}}` | pv_a, pv_b |
 | `{{verificare_de}}` | pv_a |
 | `{{verificare_de_gazpet}}` | pv_b |
 | `{{verificare_de_tgz}}` | pv_b |
-| `{{zi1}}` | adresa_uat, convocator, convocator_utilizator, pv_b |
-| `{{zi2}}` | adresa_uat, convocator, convocator_utilizator, pv_b |
-| `{{zi3}}` | adresa_uat, convocator, convocator_utilizator, pv_b |
+| `{{zi1}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator, pv_b |
+| `{{zi2}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator, pv_b |
+| `{{zi3}}` | adresa_uat, anunt_afisare, convocator, convocator_utilizator, pv_b |
 | `{{zile_sesiune_text}}` | adresa_uat |
 
 Rezultat: toate șabloanele OK
@@ -679,7 +828,9 @@ Divergențe explicite:
    neridicat | refuz primire | adresă incompletă – neexpediată` ↔ `destinatar_necunoscut | mutat | avizat_neridicat | refuz |
    adresa_incompleta`; canal răspuns `online | telefon | scris | la sesiune | fără răspuns` ↔ `online | telefon | scris |
    sesiune | email | sms` („fără răspuns” = lipsa rândului; `email`/`sms` nu există în Excel, dar există în Model_3 v5);
-   opțiune `particip | nu particip – fără obiecții | nu particip – cu obiecții | constatare pe teren` ↔ identic.
+   opțiune `particip | nu particip – fără obiecții | nu particip – cu obiecții | constatare pe teren` ↔ identic. Din
+   17.11.2026 (decizia Răzvan, juridic#046) „nu particip – cu obiecții” nu se mai oferă la răspunsuri noi (formularul public și
+   ecranul intern); răspunsurile vechi cu acest cod rămân valabile și se afișează / exportă cu aceeași etichetă.
 7. Coloanele `AF Obiecții de readucere? / AG Termen remediere / AH Remediat la` nu intră în STARE nici în Excel, nici în
    contract (acolo doar `red_v_tronson.obiectii_deschise`) — consecvent.
 8. Nr. PV în Excel e număr simplu („17”); contractul: `PVA-HUS-0001`. Col. U „Afișat la primărie (nr. PV afișare)” e per
@@ -730,7 +881,7 @@ Calitate (col. K): proprietar, coproprietar, moștenitor, arendaș, utilizator, 
 | | AF | Obiecții de readucere? | red_procese_verbale.obiectii_redare (DA/NU) |
 | | AG | Termen remediere | red_procese_verbale.termen_remediere |
 | | AH | Remediat la | red_procese_verbale.remediat_la |
-| | AI | Trimis spre semnare prin poștă (data) | red_procese_verbale.trimis_spre_semnare_data |
+| | AI | Trimis spre semnare, electronic (data) | red_procese_verbale.trimis_spre_semnare_data — în Model_6 (v3) antetul era „Trimis spre semnare prin poștă (data)”; schimbat după decizia Răzvan 17.11.2026 (semnarea de la distanță doar electronic, juridic#045) |
 | | AJ | PV semnat primit (data) | red_procese_verbale.semnat_primit_data |
 | STARE | AK | STARE (calculată) | red_v_stare_parcela.stare (etichetă RO din §5.2) |
 | | AL | Responsabil Gazpet | red_uat.responsabil_id -> profiles.name |

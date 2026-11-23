@@ -18,6 +18,11 @@
 //    parametrizate) — varianta implicită pentru claude#026 întrebarea 1, DE CONFIRMAT de Răzvan (04.11).
 //    (10) antetul oficial Gazpet (imagine, docs/redari/referinta/antet_gazpet.jpg) în header-ul PRIMEI pagini, iar rândul
 //    scris cu datele firmei se scoate din corp (rămâne „Lider al Asocierii … Contract …”) — decizia Răzvan 05.11.2026.
+//    (11) terminologia „predare” (titlurile convocatorului, PV A și PV C), „recomandată sau curier / AWB” în PV B, semnarea
+//    de la distanță doar electronic și opțiunea „Nu particip. Am următoarele obiecții” scoasă din convocatoare — deciziile
+//    Răzvan 17.11.2026, textele din modelele rev. 1 ale Juridicului (TERMINOLOGIE_PREDARE).
+//    (12) adresa UAT: Anexa 2 nu mai e convocarea scurtă + lista parcelelor, ci trimiterea la anunțul de afișare (o singură
+//    definiție a textului public; lista parcelelor publică stă DOAR în anunț) — decizia Răzvan 19.11.2026 (ANEXA2_ANUNT).
 import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -259,6 +264,56 @@ const CONVOCATOR_DOAR_QR = {
   nou: ', scanând cu telefonul codul QR de mai jos',
 }
 
+// excepția (11), deciziile Răzvan 17.11.2026 (juridic#044 §1, #045 pct. 1, #046 pct. 1): terminologia „predare” față de
+// proprietari / deținători, „recomandată sau curier” la convocarea scrisă și trei opțiuni de răspuns (fără „Nu particip. Am
+// următoarele obiecții”). Se aplică DUPĂ pașii fiecărei rețete (pe textul cu placeholder-e), numai pe textul fix al <w:t>;
+// fiecare înlocuire cere exact o apariție. Neschimbate intenționat (juridic#044 §1): titlul PV tip B, în PV A secțiunile
+// „Lucrări de readucere executate” și „Obiecțiile deținătorului privind readucerea terenului”, în PV C fraza comisiei.
+// Testul src/redari/sabloaneA4.test.js declară aceleași schimbări (textul de dinainte / de după), independent de aici.
+const OPTIUNE_RETRASA = '   ☐ Nu particip. Am următoarele obiecții: ________________________________.'
+const PREDARE_CONVOCATOR = {
+  inlocuiri: [
+    ['la constatarea readucerii terenului la starea inițială', 'la predarea terenului'],
+    ['   ☐ Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, prin poștă / electronic.',
+      '   ☐ Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, electronic.'],
+  ],
+  paragrafeScoase: [OPTIUNE_RETRASA],
+}
+const TERMINOLOGIE_PREDARE = {
+  'convocator.docx': PREDARE_CONVOCATOR,
+  'convocator_utilizator.docx': PREDARE_CONVOCATOR,
+  'pv_a.docx': { inlocuiri: [
+    ['PROCES-VERBAL DE CONSTATARE', 'PROCES-VERBAL DE PREDARE'],
+    ['a readucerii terenului la starea inițială (tip A – cu proprietarul / utilizatorul)', 'a terenului către proprietar / deținător (tip A)'],
+  ] },
+  'pv_b.docx': { inlocuiri: [
+    ['Scrisoare recomandată cu confirmare de primire', 'Scrisoare recomandată sau curier, cu confirmare de primire'],
+    ['nr. recomandată {{conv_nr_tracking}}', 'nr. recomandată / AWB {{conv_nr_tracking}}'],
+    ['adresa Beneficiar nr. {{reluare_adresa_tgz_nr}} / recomandată nr. {{reluare_nr_tracking}}', 'adresa Beneficiar nr. {{reluare_adresa_tgz_nr}} / recomandată sau AWB nr. {{reluare_nr_tracking}}'],
+  ] },
+  'pv_c.docx': { inlocuiri: [
+    ['PROCES-VERBAL DE RECEPȚIE A READUCERII TERENULUI LA STAREA INIȚIALĂ', 'PROCES-VERBAL DE FINALIZARE A PREDĂRII TERENURILOR'],
+  ] },
+}
+// paragraful care conține <w:t> cu textul exact `text` se șterge întreg; în el nu poate exista alt text (doar <w:t> goale)
+function stergeParagraf(xml, text) {
+  const RX_P = /<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g
+  const gasite = [...xml.matchAll(RX_P)].filter(m => m[0].includes(`>${esc(text)}</w:t>`))
+  asigura(gasite.length === 1, `paragraful de șters „${text.slice(0, 50)}”: ${gasite.length} apariții, așteptată 1`)
+  const m = gasite[0]
+  const texte = [...m[0].matchAll(RX_WT)].map(w => w[1]).filter(Boolean)
+  asigura(texte.length === 1 && texte[0] === esc(text), `paragraful de șters „${text.slice(0, 50)}” conține și alt text`)
+  asigura(!/<w:drawing>|<w:framePr|<w:sectPr/.test(m[0]), `paragraful de șters „${text.slice(0, 50)}” are desen, cadru sau secțiune`)
+  return xml.slice(0, m.index) + xml.slice(m.index + m[0].length)
+}
+function terminologiePredare(sablon, xml) {
+  const t = TERMINOLOGIE_PREDARE[sablon]
+  if (!t) return xml
+  for (const [vechi, nou] of t.inlocuiri) xml = inlocuiesteWt(xml, vechi, nou)
+  for (const text of t.paragrafeScoase ?? []) xml = stergeParagraf(xml, text)
+  return xml
+}
+
 const ANTET_VECHI ='Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. 30/22.01.2025 · Conductă de transport gaze naturale Prunișor–Orșova–Băile Herculane–Jupa, LOT 1'
 const ANTET_NOU = 'Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}'
 // excepția (9), varianta implicită claude#026 întrebarea 1 (DE CONFIRMAT de Răzvan, 04.11): Model_4 din Final_v2 nu mai are
@@ -286,6 +341,51 @@ function antetLaInceput(xml, antet) {
   const parti = xml.split('<w:body>')
   asigura(parti.length === 2, 'adresa UAT: <w:body> lipsă sau multiplu')
   return `${parti[0]}<w:body>${antet}${parti[1]}`
+}
+// excepția (12), decizia Răzvan 19.11.2026: o singură definiție a textului public de afișare. Anexa 2 a adresei UAT păstrează titlul,
+// dar corpul ei (convocarea scurtă + tabelul „Lista parcelelor”) se înlocuiește cu trimiterea la anunțul de afișare
+// (public/redari/sabloane/anunt_afisare.docx, §2.7), transmis împreună cu adresa. Textul = varianta trimisă Transgaz pe 19.11.
+// Cele două paragrafe noi refolosesc primele două paragrafe ale corpului vechi (aceeași formatare, se schimbă doar <w:t>);
+// restul corpului se taie până la paragraful cu saltul de pagină dinaintea Anexei 3. Textul tăiat se verifică EXACT.
+const ANEXA2_ANUNT = {
+  titlu: 'ANEXA 2 – CONVOCARE PENTRU AFIȘARE LA SEDIUL PRIMĂRIEI',
+  titluUrmator: 'ANEXA 3 – PROCES-VERBAL DE AFIȘARE',
+  vechi: [
+    'Către toți proprietarii și utilizatorii terenurilor de pe raza comunei {{uat}} afectate temporar de lucrările la conducta de transport gaze naturale Prunișor–Jupa, Lot 1 (lista parcelelor mai jos).',
+    'Lucrările de readucere a terenului la starea inițială au fost executate. Sunteți invitați să constatați starea terenului și să semnați procesul-verbal la sediul Primăriei, în zilele {{zile_sesiune_text}}, între orele {{program_text}}. Aduceți actul de identitate și, dacă e cazul, actul care dovedește calitatea de proprietar, moștenitor sau arendaș.',
+    'Dacă nu vă puteți prezenta, ne puteți răspunde la telefon {{contact_telefon}}, pe e-mail la {{contact_email}}. În lipsa participării, starea terenului poate fi constatată tehnic de reprezentanții Beneficiarului, ai Antreprenorului și ai Primăriei; această constatare nu reprezintă acceptarea tacită din partea dumneavoastră.',
+    'Convocarea se face în numele S.N.T.G.N. TRANSGAZ S.A., Beneficiar al investiției. Contact GAZPET INSTAL: {{contact_nume}}, {{contact_telefon}}, {{contact_email}}. Contact TRANSGAZ: {{reprezentant_tgz}}, tel. {{reprezentant_tgz_telefon}}.',
+    'Lista parcelelor (fără date personale):',
+    'Nr.', 'Sat', 'Tarla', 'Nr. cadastral / parcelă', 'Poz. HG', 'Tronson',
+    '{{rand.nr}}', '{{rand.sat}}', '{{rand.tarla}}', '{{rand.nr_cadastral}}', '{{rand.poz_hg}}', '{{rand.tronson}}',
+  ],
+  nou: [
+    'Anexa 2 este anunțul de afișare pe comună (convocarea pe UAT), după modelul „Anunț de afișare la primărie”, transmis împreună cu prezenta adresă.',
+    'Anunțul conține: zilele și programul sesiunilor (cu satele / tarlalele programate), cum ne pot răspunde deținătorii, precizarea că afișarea este o publicitate suplimentară a convocării și nu valorează acceptare tacită, informarea privind datele personale (pagina publică, cu cod QR) și lista parcelelor din comună (sat, tarla, nr. cadastral / parcelă, poz. HG, tronson), fără date personale.',
+  ],
+}
+function anexa2Anunt(xml) {
+  const RX_P = /<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>/])[\s\S])*?<\/w:p>/g
+  const cuText = text => [...xml.matchAll(RX_P)].filter(m => m[0].includes(`>${esc(text)}</w:t>`))
+  const [t2, t3] = [cuText(ANEXA2_ANUNT.titlu), cuText(ANEXA2_ANUNT.titluUrmator)]
+  asigura(t2.length === 1 && t3.length === 1, `adresa UAT (12): titlurile Anexei 2 / 3: ${t2.length} / ${t3.length} apariții, așteptată 1`)
+  const start = t2[0].index + t2[0][0].length
+  // paragraful dinaintea titlului Anexei 3 = doar saltul de pagină (rămâne)
+  const inainte = [...xml.slice(0, t3[0].index).matchAll(RX_P)].at(-1)
+  asigura(inainte && inainte.index + inainte[0].length === t3[0].index && /^<w:p[^>]*><w:r><w:br w:type="page"\/><\/w:r><\/w:p>$/.test(inainte[0]),
+    'adresa UAT (12): înaintea Anexei 3 nu mai e paragraful cu saltul de pagină')
+  const corp = xml.slice(start, inainte.index)
+  // textul concatenat din <w:t> (Word a spart unele paragrafe în mai multe run-uri, ex. „Lista ” + „parcelelor” …)
+  asigura([...corp.matchAll(RX_WT)].map(m => m[1]).join('') === esc(ANEXA2_ANUNT.vechi.join('')),
+    'adresa UAT (12): corpul Anexei 2 nu mai e cel așteptat (convocarea scurtă + lista parcelelor)')
+  asigura((corp.match(/<w:tbl>/g) || []).length === 1 && !/<w:drawing>|<w:framePr|<w:sectPr/.test(corp), 'adresa UAT (12): corpul Anexei 2 are altă structură')
+  // primele două paragrafe ale corpului (formatul textului Anexei 2) primesc textul nou; un singur <w:t> în fiecare
+  const p = [...corp.matchAll(RX_P)].slice(0, 2)
+  const nou = p.map((m, i) => {
+    asigura(m.index === (i === 0 ? 0 : p[0][0].length) && [...m[0].matchAll(RX_WT)].length === 1, 'adresa UAT (12): paragrafele de text ale Anexei 2 s-au schimbat')
+    return m[0].replace(RX_WT, () => wt(ANEXA2_ANUNT.nou[i]))
+  })
+  return xml.slice(0, start) + nou.join('') + xml.slice(inainte.index)
 }
 const ANTET_CONVOCATOR = await antetDinConvocator()
 const NR_LOC = ['Nr. ________ / ___.___.2026        Locul încheierii: ______________________', 'Nr. {{nr_pv}} / {{data_pv}}        Locul încheierii: {{locul}}']
@@ -438,6 +538,8 @@ const RETETE = {
       x = inWt(x, 'Convocarea rămâne afișată până la data de ___.___.2026 (ultima zi de sesiune). Dezafișarea se consemnează mai jos.', [['___.___.2026', '{{afisare_data_end}}']])
       x = inlocuiesteWt(x, 'Primăria ______________ (semnătura și ștampila)', 'Primăria {{uat}} (semnătura și ștampila)')
       x = inlocuiesteWt(x, NCD, ['{{semnatar_uat}}', '{{semnatar_gazpet}}'])
+      // excepția (12), 19.11.2026: corpul Anexei 2 (completat mai sus din model, deci verificat față de model) → trimiterea la anunț
+      x = anexa2Anunt(x)
       return x
     },
   },
@@ -469,7 +571,7 @@ const RETETE = {
 // Fiecare inlocuiesteWt / inWt de mai jos declară exact O apariție (argument scalar).
 RETETE['convocator_utilizator.docx'] = {
   ...RETETE['convocator.docx'],
-  // Excepția (7), numai 1U: 30 pt înainte de paragraful următor celor patru opțiuni,
+  // Excepția (7), numai 1U: 30 pt înainte de paragraful următor opțiunilor (trei din 17.11.2026, excepția (11)),
   // pentru a elibera cadrul QR de 3 cm inclusiv în LibreOffice. Textul nu se schimbă.
   formatare: [...RETETE['convocator.docx'].formatare, ['spațiu după opțiuni 1U', x => {
     let n = 0
@@ -494,7 +596,7 @@ RETETE['convocator_utilizator.docx'] = {
       ['datele parcelei dumneavoastră;', 'datele parcelei;'],
       ['la sesiune doar îl verificați și îl semnați.', 'la sesiune doar îl verificați și îl semnați. Semnătura dumneavoastră privește numai starea terenului constatată la fața locului; ea nu modifică drepturile proprietarului asupra terenului și nici raporturile dintre dumneavoastră și proprietar.'],
     ])
-    // 5: cele patru opțiuni rămân identice.
+    // 5: opțiunile rămân identice cu ale Model 1 (din 17.11.2026 trei, excepția (11), aplicată în construieste()).
     // 6: constatarea în lipsă, numai dacă nimeni nu semnează.
     x = inlocuiesteWt(x, 'În lipsa participării sau a unui răspuns, reprezentanții Beneficiarului, ai Antreprenorului și ai Primăriei pot efectua o constatare tehnică documentată a stării terenului.', 'Dacă pentru această parcelă nu semnează procesul-verbal nici proprietarul, nici utilizatorul, reprezentanții Beneficiarului, ai Antreprenorului și ai Primăriei pot efectua o constatare tehnică documentată a stării terenului (proces-verbal de constatare în lipsă). Dacă procesul-verbal a fost deja semnat de proprietar înainte de sesiune, prezența dumneavoastră nu mai este necesară.')
     // 7–9: precizările (bullet-ul și formatarea din model se păstrează).
@@ -513,7 +615,8 @@ async function construieste(sablon, { model, pasi, formatare = [], margini, stil
   const zip = await JSZip.loadAsync(readFileSync(resolve(REF, model)), { createFolders: false })
   const doc = await zip.file('word/document.xml').async('string')
   // excepția (10), decizia Răzvan 05.11.2026: datele firmei sunt în antetul-imagine (header, prima pagină) → rândul scris se scoate
-  const cuText = faraDateFirma(pasi(doc), esc(ANTET_FIRMA))
+  // excepția (11), 17.11.2026: terminologia „predare” + trei opțiuni de răspuns, după pașii rețetei
+  const cuText = faraDateFirma(terminologiePredare(sablon, pasi(doc)), esc(ANTET_FIRMA))
   // textul de referință se ia ÎNAINTE de orice pas de formatare și se compară după FIECARE pas
   const referinta = textWt(cuText)
   // excepția (6): A4 pe toate (cu marginile proprii doar la convocator), ultimul pas

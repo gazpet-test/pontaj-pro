@@ -17,6 +17,9 @@ pg_temp.ag_cat_<T> (corpul = blocul AG_CATALOG v2 din scripts/amprenta_globala_v
 TABLE ag_ses_<T>, CREATE FUNCTION pg_temp.ag_inainte_<T> (cu md5-ul aprobat), DO $ag_pas_<T>$; imediat dupa inregistrare
 (DO $verif$) CREATE FUNCTION pg_temp.ag_dupa_<T> (md5-ul aprobat), DO $ag_pas_<T>$ cu manifestul EXACT (octetii fisierului),
 DROP-urile, apoi DO $lm_timp$. Acelasi <T> in toti pasii.
+Runda 18 a runnerului (22.11.2026, plafonul EXTINS): optional „--fereastra” (oriunde la final) cere pasul DO $plafon_fereastra$ IMEDIAT dupa
+verificarea „un mesaj” si inaintea lock-ului consultativ, cu AT TIME ZONE 'Europe/Bucharest', fereastra 21:00:00-06:00:00 si refuzul
+PLAFON_EXTINS_FEREASTRA; FARA „--fereastra” pasul NU are voie sa apara (un mesaj fara plafon extins nu are verificarea ferestrei).
 """
 import hashlib
 import os
@@ -142,8 +145,30 @@ def verifica_l15(t, st, copie_t, md5, manifest):
     return T
 
 
+def verifica_fereastra(txt, poz_mu, fereastra):
+    """Runda 18 a runnerului: pasul ferestrei (DO $plafon_fereastra$) exact dupa verificarea „un mesaj”, inaintea lock-ului; sau absent."""
+    k = [i for i, x in enumerate(txt) if x.startswith("DO $plafon_fereastra$")]
+    if not fereastra:
+        if k:
+            esec("--fereastra lipsa, dar mesajul are pasul DO $plafon_fereastra$ (plafonul extins nu a fost cerut)")
+        return ""
+    if len(k) != 1 or k[0] != poz_mu + 1:
+        esec(f"--fereastra: DO $plafon_fereastra$ trebuie sa apara exact o data, imediat dupa DO $mesaj_unic$ (pozitii {k}, verificarea la {poz_mu})")
+    if not txt[k[0] + 1].startswith("SELECT pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'))"):
+        esec("--fereastra: dupa pasul ferestrei trebuie sa vina lock-ul consultativ (1_pre)")
+    g = txt[k[0]]
+    for x in ("pg_catalog.transaction_timestamp() AT TIME ZONE 'Europe/Bucharest'", "OPERATOR(pg_catalog.>=) '21:00:00'::pg_catalog.time",
+              "OR v_ora OPERATOR(pg_catalog.<) '06:00:00'::pg_catalog.time", "PLAFON_EXTINS_FEREASTRA", "RAISE EXCEPTION"):
+        if x not in g:
+            esec(f"--fereastra: pasul ferestrei nu contine {x!r}")
+    return "; fereastra orara verificata pe server (21:00:00-06:00:00 Europe/Bucharest) imediat dupa verificarea un mesaj"
+
+
 def main(a):
     l15 = None
+    fereastra = "--fereastra" in a
+    if fereastra:
+        a = [x for x in a if x != "--fereastra"]
     if len(a) >= 3 and a[-3] == "--l15":
         l15, a = (a[-2], a[-1]), a[:-3]
     if len(a) not in (5, 6):
@@ -232,10 +257,10 @@ def main(a):
             esec(f"garda nu contine {x!r}")
     if "\\" in t.replace(copie.decode("utf-8"), ""):
         esec("textul runnerului din M contine backslash (citirea literalilor ar depinde de standard_conforming_strings)")
-    l15_txt = ""
+    l15_txt = verifica_fereastra(txt, poz[3], fereastra)
     if l15:
         T = verifica_l15(t, st, copie.decode("utf-8"), l15[0], l15[1])
-        l15_txt = f"; L15 v2: amprenta globala inainte / dupa in jurul copiei (tag {T}), md5 aprobat, manifest exact"
+        l15_txt += f"; L15 v2: amprenta globala inainte / dupa in jurul copiei (tag {T}), md5 aprobat, manifest exact"
     print(f"MESAJ_UNIC_OK: {len(M)} octeti, {len(txt)} instructiuni intr-un mesaj, BEGIN prima, {final} ultima; "
           f"verificarea: total + rest ({rlung} octeti) + {len(felii) - 1} copie/copii = artefactul aprobat{l15_txt}")
     return 0

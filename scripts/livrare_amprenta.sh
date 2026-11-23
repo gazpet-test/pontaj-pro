@@ -29,6 +29,93 @@
 
 AG_V2_FISIER="$(dirname "${BASH_SOURCE[0]}")/amprenta_globala_v2.sql"
 
+# Plafonul tranzactiei pentru livrarile cu amprenta globala (decizia proprietarului, 17.11.2026; docs/LIVRARE_L15_V2.md §9):
+# O SINGURA definitie, folosita de runner (scripts/livrare_migrare.sh) si de generatorul / proba manifestului
+# (scripts/livrare_l15_manifest.sh). Migrarile L15 v2 cer aceeasi valoare in garda lor ('<N>/session' + marcajul), iar
+# validatorul (--plafon-tranzactie-ms) refuza orice migrare care cere alta valoare decat cea data runnerului.
+# Coborarea dupa masuratoarea pe productie = PR (constanta + gardele migrarilor neaplicate), nu optiune de linie de comanda.
+AG_PLAFON_MS=5000
+# Plafonul EXTINS (decizia proprietarului, 22.11.2026, varianta A; docs/LIVRARE_L15_V2.md §9 „Plafonul extins”): pe productie pasul
+# „inainte” singur a durat 1460 ms (28.562 randuri, PG 17.6 prin pooler), iar manifestul lui 20270105a (276 obiecte) a fost oprit de
+# transaction_timeout = 5000 (nimic comis). Valoarea de mai jos e acceptata DOAR cu optiunea explicita --plafon-extins (runner, generatorul
+# de manifest, validator), DOAR pentru livrarile cu amprenta globala si DOAR in fereastra de mai jos (ora Europe/Bucharest, in afara orelor
+# de lucru), verificata local (inainte de orice conexiune) SI pe server, in tranzactie (DO $plafon_fereastra$, inaintea lock-ului
+# consultativ). Fara optiune, totul ramane exact ca inainte (5000). O SINGURA definitie pentru fiecare valoare (L19).
+AG_PLAFON_EXTINS_MS=15000
+AG_FEREASTRA_DE=21:00:00      # fereastra = [DE, PANA) pe ora Europe/Bucharest; trece peste miezul noptii (L17)
+AG_FEREASTRA_PANA=06:00:00
+AG_FEREASTRA_FUS=Europe/Bucharest
+# ag_plafon_ok <plafon_ms|""> [extins] - cu amprenta globala, plafonul (daca e dat) trebuie sa fie EXACT AG_PLAFON_MS; cu „extins” (optiunea
+# --plafon-extins) trebuie sa fie EXACT AG_PLAFON_EXTINS_MS (optiunea nu e un „oricat”, iar fara ea valoarea extinsa e refuzata).
+ag_plafon_ok() {
+  if [ "${2:-}" = extins ]; then
+    [ "$1" = "$AG_PLAFON_EXTINS_MS" ] || {
+      echo "L15 v2: --plafon-extins cere --plafon-tranzactie-ms $AG_PLAFON_EXTINS_MS (plafonul EXTINS, doar in fereastra $AG_FEREASTRA_DE-$AG_FEREASTRA_PANA $AG_FEREASTRA_FUS; docs/LIVRARE_L15_V2.md §9), dat: ${1:-nimic} ms" >&2; return 2; }   # M_PLX_OK
+    return 0
+  fi
+  [ -z "$1" ] || [ "$1" = "$AG_PLAFON_MS" ] || {
+    echo "L15 v2: plafonul tranzactiei cu amprenta globala este $AG_PLAFON_MS ms (docs/LIVRARE_L15_V2.md §9), dat: $1 ms$([ "$1" != "$AG_PLAFON_EXTINS_MS" ] || echo " (plafonul extins $AG_PLAFON_EXTINS_MS cere optiunea explicita --plafon-extins)")" >&2; return 2; }
+}
+# ag_ora_bucuresti [<epoch UTC>] - ora Europe/Bucharest (HH:MM:SS) a momentului dat (implicit acum), calculata din regula UE a orei de vara
+# (ultima duminica din martie 01:00 UTC -> ultima duminica din octombrie 01:00 UTC, UTC+3; altfel UTC+2), fara sa depinda de baza de fusuri
+# a masinii (Git Bash pe Windows nu o are: TZ=Europe/Bucharest da GMT). Daca masina ARE fusul (EET / EEST), cele doua rezultate trebuie sa
+# coincida, altfel refuz (fail-closed: regula sau baza de fusuri s-au schimbat - un om decide). Cere `date` GNU (-d / -u).
+ag_ora_bucuresti() {
+  local e="${1:-}" an lu_m lu_o dst0 dst1 of h z
+  [ -n "$e" ] || e="$(date -u +%s)"
+  [[ "$e" =~ ^[0-9]{1,12}$ ]] || { echo "ag_ora_bucuresti: moment invalid: $e" >&2; return 2; }
+  an="$(date -u -d "@$e" +%Y)" || return 2
+  lu_m=$((31 - $(date -u -d "$an-03-31" +%u) % 7))   # ultima duminica din martie (%u: 7 = duminica)
+  lu_o=$((31 - $(date -u -d "$an-10-31" +%u) % 7))   # ultima duminica din octombrie
+  dst0="$(date -u -d "$an-03-$lu_m 01:00:00" +%s)" && dst1="$(date -u -d "$an-10-$lu_o 01:00:00" +%s)" || return 2
+  of=2; if [ "$e" -ge "$dst0" ] && [ "$e" -lt "$dst1" ]; then of=3; fi   # M_ORA_DST
+  h="$(date -u -d "@$((e + of * 3600))" +%H:%M:%S)" || return 2
+  z="$(TZ=$AG_FEREASTRA_FUS date -d "@$e" '+%H:%M:%S %Z' 2>/dev/null || true)"
+  case "$z" in
+    *" EET"|*" EEST") [ "${z% *}" = "$h" ] || { echo "ag_ora_bucuresti: regula UE ($h) si baza de fusuri a masinii (${z% *}) nu se potrivesc pentru @$e - refuz" >&2; return 3; } ;;
+  esac
+  printf '%s' "$h"
+}
+# ag_fereastra_in <HH:MM:SS> - 0 daca ora e in fereastra [AG_FEREASTRA_DE, AG_FEREASTRA_PANA), care trece peste miezul noptii.
+ag_fereastra_in() {
+  [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$ ]] || return 2
+  { [[ "$1" > "$AG_FEREASTRA_DE" ]] || [ "$1" = "$AG_FEREASTRA_DE" ]; } || [[ "$1" < "$AG_FEREASTRA_PANA" ]]   # M_FER_IN
+}
+# ag_fereastra_ok - verificarea LOCALA a ferestrei (inainte de orice conexiune): 0 in fereastra, 2 in afara ei (mesaj pe stderr).
+ag_fereastra_ok() {
+  local h
+  h="$(ag_ora_bucuresti)" || { echo "L15 v2: ora $AG_FEREASTRA_FUS nu se poate stabili local - plafonul extins se refuza" >&2; return 2; }
+  ag_fereastra_in "$h" || {
+    echo "L15 v2: PLAFON_EXTINS_FEREASTRA: ora $AG_FEREASTRA_FUS e $h, in afara ferestrei $AG_FEREASTRA_DE-$AG_FEREASTRA_PANA - plafonul extins ($AG_PLAFON_EXTINS_MS ms) se livreaza doar in afara orelor de lucru; nimic trimis" >&2; return 2; }
+  echo "L15 v2: plafon EXTINS $AG_PLAFON_EXTINS_MS ms; ora $AG_FEREASTRA_FUS $h in fereastra $AG_FEREASTRA_DE-$AG_FEREASTRA_PANA"
+}
+# ag_plafon_garda <plafon_ms|""> <extins: 0|1> <conectat: 0|1> - runda 19 (verdictul Jakarinos pe PR #1169, r2): O SINGURA garda a plafonului,
+# apelata de TOATE caile, inaintea oricarei conexiuni: runnerul (livrarea) si generatorul de manifest in ORICE mod (--iesire SI --compara-cu).
+# Valoarea = ag_plafon_ok; cu plafonul extins pe o cale care se CONECTEAZA, si fereastra orara (ag_fereastra_ok), oricare ar fi tinta: clona
+# nu se deosebeste local de productie (identificatorul e dat de operator), deci nicio tinta nu primeste plafonul extins in afara ferestrei.
+# Ora se sare DOAR pe caile fara conexiune (runnerul --genereaza-in, generatorul --doar-genereaza). Argumente in afara listei = refuz (fail-closed).
+# Iesire: 0 (pe stdout mesajul ferestrei, doar daca s-a verificat) / 2 (motivul pe stderr).
+ag_plafon_garda() {
+  case "${2:-}:${3:-}" in 0:0|0:1|1:0|1:1) ;; *) echo "L15 v2: ag_plafon_garda: argumente invalide (extins '${2:-}', conectat '${3:-}') - refuz" >&2; return 2 ;; esac
+  ag_plafon_ok "$1" $([ "$2" = 0 ] || echo extins) || return 2
+  [ "$2" = 1 ] && [ "$3" = 1 ] || return 0   # M_GARDA_CONECTAT
+  ag_fereastra_ok || return 2
+}
+# ag_fereastra_sql <NUME> - fisierul 1a_fereastra.sql (stdout): aceeasi fereastra verificata PE SERVER, pe ceasul lui, in tranzactie (dupa
+# verificarea „un mesaj”, inaintea lock-ului consultativ); in afara ferestrei = exceptie, nimic comis. Fara backslash, ASCII, functii si
+# operatori calificati (search_path-ul sesiunii nu e inca fixat aici). Momentul = transaction_timestamp() (= BEGIN).
+ag_fereastra_sql() {
+  local NUME="$1"
+  [[ "$NUME" =~ ^[0-9]{8}[a-z]?_[A-Za-z0-9_]+$ ]] || { echo "ag_fereastra_sql: nume invalid" >&2; return 2; }
+  cat <<SQL
+DO \$plafon_fereastra\$ DECLARE v_ora pg_catalog.time := (pg_catalog.transaction_timestamp() AT TIME ZONE '$AG_FEREASTRA_FUS')::pg_catalog.time; BEGIN
+  IF NOT (v_ora OPERATOR(pg_catalog.>=) '$AG_FEREASTRA_DE'::pg_catalog.time OR v_ora OPERATOR(pg_catalog.<) '$AG_FEREASTRA_PANA'::pg_catalog.time) THEN
+    RAISE EXCEPTION 'Livrare $NUME: PLAFON_EXTINS_FEREASTRA: ora serverului in $AG_FEREASTRA_FUS (%) e in afara ferestrei $AG_FEREASTRA_DE-$AG_FEREASTRA_PANA - plafonul extins ($AG_PLAFON_EXTINS_MS ms) se livreaza doar in afara orelor de lucru; refuz, nimic comis', v_ora; END IF;
+  RAISE NOTICE 'PLAFON_EXTINS $NUME: plafon $AG_PLAFON_EXTINS_MS ms; ora serverului in $AG_FEREASTRA_FUS % in fereastra $AG_FEREASTRA_DE-$AG_FEREASTRA_PANA', v_ora;
+END \$plafon_fereastra\$;
+SQL
+}
+
 # GUC-urile contextului canonic (aceleasi verificate de garda ag_garda din blocul AG_CATALOG v2).
 ag_guc_functie() {
   printf "SET quote_all_identifiers = off SET search_path = pg_catalog, pg_temp SET TimeZone = 'UTC' SET DateStyle = 'ISO, YMD'"
@@ -63,6 +150,9 @@ ag_sql_familii() {
 }
 
 # ag_sql_valid <tabel> <moment> - instructiuni plpgsql: randuri valide + etichete unice (altfel FULL JOIN-ul ar fi ambiguu).
+# Text neschimbat: o trecere comuna (dublura + GLOBAL dintr-o
+# sortare) a fost incercata si RETRASA la review (r1-r2, 17.11.2026): la limite de resurse sortarea putea esua INAINTEA
+# refuzului randului invalid / al dublurii, cu alt mesaj. Ordinea refuzurilor ramane: invalid, dublura, apoi GLOBAL.
 ag_sql_valid() {
   local t="$1" mo="$2"
   cat <<SQL
@@ -81,17 +171,22 @@ ag_tag() { od -An -N8 -tx1 /dev/urandom | tr -d ' \n'; }
 
 # ag_inainte <T> <md5_aprobat|-> - fisierul 2_ag_inainte.sql (stdout).
 ag_inainte() {
-  local T="$1" A="$2" cat_sql ses_sql cmp
+  local T="$1" A="$2" cat_sql ses_sql cmp fam
   [[ "$T" =~ ^[0-9a-f]{16}$ ]] || { echo "ag_inainte: tag invalid" >&2; return 2; }
   [[ "$A" =~ ^([0-9a-f]{32}|-)$ ]] || { echo "ag_inainte: md5 aprobat invalid" >&2; return 2; }
   cat_sql="$(ag_bloc 'AG_CATALOG v2')" || return 3
   ses_sql="$(ag_bloc 'AG_SESIUNE v2')" || return 3
+  # md5-ul pe familii (diagnostic, doar in mesaj): calculat doar unde se tipareste (citirea "-" / refuzul), acelasi text
+  fam="  SELECT string_agg(f.familie || '=' || f.md5 || '/' || f.randuri, ', ' ORDER BY f.familie COLLATE \"C\") INTO v_f
+    FROM ($(ag_sql_familii "pg_temp.ag_ina_$T")) f;"
   if [ "$A" = - ]; then
-    cmp="  RAISE NOTICE 'AMPRENTA_GLOBALA_CITITA inainte: % (% randuri), calcul % ms, la % ms de la BEGIN; familii: %', v_g, v_n,
+    cmp="$fam
+  RAISE NOTICE 'AMPRENTA_GLOBALA_CITITA inainte: % (% randuri), calcul % ms, la % ms de la BEGIN; familii: %', v_g, v_n,
     round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), round(extract(epoch FROM clock_timestamp() - transaction_timestamp()) * 1000), v_f;
   RAISE NOTICE 'AMPRENTA_GLOBALA_CONTEXT server_version_num % rol %', current_setting('server_version_num'), current_user;"
   else
     cmp="  IF v_g IS DISTINCT FROM '$A' THEN
+$fam
     RAISE EXCEPTION 'AMPRENTA_GLOBALA_INAINTE: GLOBAL % (% randuri) diferit de cel aprobat $A - catalogul nu mai e cel citit si revizuit (recitire baseline); familii acum: % - refuz inaintea artefactului, nimic comis', coalesce(v_g, 'NULL'), v_n, v_f;
   END IF;
   RAISE NOTICE 'AMPRENTA_GLOBALA inainte: % = aprobat (% randuri), calcul % ms, la % ms de la BEGIN', v_g, v_n,
@@ -112,8 +207,6 @@ BEGIN
     UNION ALL SELECT c.familie, c.eticheta, c.amprenta, c.detaliu FROM pg_temp.ag_cat_$T() c;
 $(ag_sql_valid "pg_temp.ag_ina_$T" inainte)
   SELECT g.global_md5, g.randuri INTO v_g, v_n FROM ($(ag_sql_global "pg_temp.ag_ina_$T")) g;
-  SELECT string_agg(f.familie || '=' || f.md5 || '/' || f.randuri, ', ' ORDER BY f.familie COLLATE "C") INTO v_f
-    FROM ($(ag_sql_familii "pg_temp.ag_ina_$T")) f;
 $cmp
 END \$ag_inainte_$T\$;
 DO \$ag_pas_$T\$ BEGIN PERFORM pg_temp.ag_inainte_$T(); END \$ag_pas_$T\$;

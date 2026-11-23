@@ -34,7 +34,7 @@ export function eroareCantitatePredare(cantitate, disponibil) {
   return ''
 }
 
-function dataCalendaristicaValida(data) {
+export function dataCalendaristicaValida(data) {
   if (typeof data !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(data)) return false
   const [an, luna, zi] = data.split('-').map(Number)
   if (an < 1 || luna < 1 || luna > 12 || zi < 1) return false

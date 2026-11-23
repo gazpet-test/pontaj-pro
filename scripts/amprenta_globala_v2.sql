@@ -188,6 +188,30 @@ ag_plasa(plasa, identitate, campuri) AS (
      WHERE c.oid < s.prag
 )
 -- <<< AG_PLASA v2
+-- CALCUL O DATA PE VALOARE (17.11.2026, optimizare fara efect pe randuri: aceleasi randuri si aceleasi valori ca forma de
+-- dinainte, deci versiunea ramane v2; dovada = paritatea rand cu rand, scripts/pglite/test_amprenta_paritate_calcul.mjs).
+-- Intrarea ACL a fiecarui obiect (relatie, functie, tip, relatie de sistem cu ACL explicit) e definita O DATA, in CTE-ul
+-- tipului lui (oid -> aclitem[]); ag_acl serializeaza o singura data fiecare valoare DISTINCTA. Cheia = valoarea aclitem[]
+-- insasi (egalitate exacta pe beneficiar, grantor si drepturi, clasa de operatori hash a tipului), nu textul ei; familia ia
+-- serializarea prin cheia obiectului ei. Serializarea e aceeasi ca in celelalte familii (beneficiar | null pentru PUBLIC,
+-- privilegiu, delegabil, grantor; ordonate COLLATE "C").
+, ag_acl_rel AS (
+  SELECT c.oid, coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's' ELSE 'r' END::"char", c.relowner)) AS acl
+    FROM ag_rel r JOIN pg_class c ON c.oid = r.oid
+),
+ag_acl_fn AS (SELECT p.oid, coalesce(p.proacl, acldefault('f', p.proowner)) AS acl FROM ag_fn x JOIN pg_proc p ON p.oid = x.oid),
+ag_acl_typ AS (SELECT t.oid, coalesce(t.typacl, acldefault('T', t.typowner)) AS acl FROM ag_typ x JOIN pg_type t ON t.oid = x.oid),
+ag_acl_sis AS (SELECT c.oid, c.relacl AS acl FROM ag_rel_sis r JOIN pg_class c ON c.oid = r.oid WHERE c.relacl IS NOT NULL),
+ag_acl AS MATERIALIZED (
+  SELECT k.acl,
+         (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
+            SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
+              FROM aclexplode(k.acl) a) z) AS j
+    FROM (SELECT x.acl FROM ag_acl_rel x UNION SELECT x.acl FROM ag_acl_fn x UNION SELECT x.acl FROM ag_acl_typ x
+          UNION SELECT x.acl FROM ag_acl_sis x) k
+),
+-- etichetele enum, o data pe tip (o parcurgere a lui pg_enum, nu una pe fiecare tip); tipul fara etichete = null, ca inainte
+ag_enum AS (SELECT e.enumtypid, jsonb_agg(e.enumlabel::text ORDER BY e.enumsortorder) AS j FROM pg_enum e GROUP BY e.enumtypid)
 , ag_rand(familie, eticheta, d) AS (
   -- schema: proprietar, ACL
   SELECT 'schema', 'schema ' || s.q,
@@ -199,12 +223,9 @@ ag_plasa(plasa, identitate, campuri) AS (
   UNION ALL
   -- relatie: tabele, partitii, vederi, vederi materializate, secvente, indecsi, tabele externe, tipuri compuse
   SELECT 'relatie', 'relatie ' || c.oid::regclass::text,
-         jsonb_build_array(c.relkind::text, c.relowner::regrole::text,
-           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
-                FROM aclexplode(coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's' ELSE 'r' END::"char", c.relowner))) a) z),
+         jsonb_build_array(c.relkind::text, c.relowner::regrole::text, ka.j,
            c.relrowsecurity, c.relforcerowsecurity, c.relpersistence::text, am.amname::text,
-           (SELECT jsonb_agg(o ORDER BY o COLLATE "C") FROM unnest(c.reloptions) o),
+           CASE WHEN c.reloptions IS NOT NULL THEN (SELECT jsonb_agg(o ORDER BY o COLLATE "C") FROM unnest(c.reloptions) o) END,
            c.relispartition, pg_get_expr(c.relpartbound, c.oid), c.relreplident::text, c.reltoastrelid <> 0, ts.spcname::text,
            CASE WHEN c.reloftype <> 0 THEN c.reloftype::regtype::text END,
            CASE WHEN c.relkind IN ('v', 'm') THEN pg_get_viewdef(c.oid) END,
@@ -225,6 +246,7 @@ ag_plasa(plasa, identitate, campuri) AS (
            CASE WHEN c.relkind = 'f' THEN jsonb_build_array(fs.srvname::text,
                   (SELECT md5(jsonb_agg(o ORDER BY o COLLATE "C")::text) FROM unnest(ft.ftoptions) o)) END)
     FROM ag_rel r JOIN pg_class c ON c.oid = r.oid
+    JOIN ag_acl_rel ar ON ar.oid = c.oid LEFT JOIN ag_acl ka ON ka.acl = ar.acl
     LEFT JOIN pg_am am ON am.oid = c.relam
     LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace
     LEFT JOIN pg_index i ON i.indexrelid = c.oid
@@ -243,11 +265,12 @@ ag_plasa(plasa, identitate, campuri) AS (
          jsonb_build_array(a.poz, format_type(a.atttypid, a.atttypmod),
            CASE WHEN a.attcollation <> 0 THEN a.attcollation::regcollation::text END, a.attnotnull, a.attidentity::text,
            a.attgenerated::text, pg_get_expr(a.adbin, a.adrelid),
-           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
+           -- (attacl si attfdwoptions sunt aproape mereu nule: subinterogarea ruleaza doar pe tabloul nenul; pe null da tot null)
+           CASE WHEN a.attacl IS NOT NULL THEN (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
               SELECT jsonb_build_array(CASE WHEN x.grantee = 0 THEN NULL ELSE x.grantee::regrole::text END, x.privilege_type, x.is_grantable, x.grantor::regrole::text) AS v
-                FROM aclexplode(a.attacl) x) z),
+                FROM aclexplode(a.attacl) x) z) END,
            a.attstorage::text, a.attcompression::text, a.attislocal, a.attinhcount,
-           (SELECT md5(jsonb_agg(o ORDER BY o COLLATE "C")::text) FROM unnest(a.attfdwoptions) o))
+           CASE WHEN a.attfdwoptions IS NOT NULL THEN (SELECT md5(jsonb_agg(o ORDER BY o COLLATE "C")::text) FROM unnest(a.attfdwoptions) o) END)
     FROM (SELECT at.attrelid, at.attname, at.atttypid, at.atttypmod, at.attcollation, at.attnotnull, at.attidentity, at.attgenerated,
                  at.attacl, at.attstorage, at.attcompression, at.attislocal, at.attinhcount, at.attfdwoptions,
                  ad.oid AS ad_oid, ad.adbin, ad.adrelid, pa.prag,
@@ -307,10 +330,8 @@ ag_plasa(plasa, identitate, campuri) AS (
            CASE WHEN p.prosupport <> 0 THEN p.prosupport::oid::regprocedure::text END,
            pg_get_function_arguments(p.oid), pg_get_function_result(p.oid), to_jsonb(p.proconfig), p.probin, md5(p.prosrc),
            CASE WHEN p.prosqlbody IS NOT NULL THEN md5(pg_get_function_sqlbody(p.oid)) END,
-           (SELECT jsonb_agg(u.x::regtype::text ORDER BY u.o) FROM unnest(p.protrftypes) WITH ORDINALITY u(x, o)),
-           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
-                FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a) z),
+           CASE WHEN p.protrftypes IS NOT NULL THEN (SELECT jsonb_agg(u.x::regtype::text ORDER BY u.o) FROM unnest(p.protrftypes) WITH ORDINALITY u(x, o)) END,
+           ka.j,
            (SELECT jsonb_build_array(g.aggkind::text, g.aggnumdirectargs, g.aggtransfn::oid::regprocedure::text,
                      g.aggfinalfn::oid::regprocedure::text, g.aggcombinefn::oid::regprocedure::text, g.aggserialfn::oid::regprocedure::text,
                      g.aggdeserialfn::oid::regprocedure::text, g.aggmtransfn::oid::regprocedure::text, g.aggminvtransfn::oid::regprocedure::text,
@@ -319,13 +340,11 @@ ag_plasa(plasa, identitate, campuri) AS (
                      CASE WHEN g.aggmtranstype <> 0 THEN g.aggmtranstype::regtype::text END, g.aggmtransspace, g.agginitval, g.aggminitval)
               FROM pg_aggregate g WHERE g.aggfnoid = p.oid))
     FROM ag_fn x JOIN pg_proc p ON p.oid = x.oid JOIN pg_language l ON l.oid = p.prolang
+    JOIN ag_acl_fn ar ON ar.oid = p.oid LEFT JOIN ag_acl ka ON ka.acl = ar.acl
   UNION ALL
   -- tip: TOATE tipurile din perimetru (de baza, compuse / randul tabelelor, domenii, enum, range, multirange, pseudo, tablouri)
   SELECT 'tip', 'tip ' || t.oid::regtype::text,
-         jsonb_build_array(t.typtype::text, t.typcategory::text, t.typispreferred, t.typowner::regrole::text,
-           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
-                FROM aclexplode(coalesce(t.typacl, acldefault('T', t.typowner))) a) z),
+         jsonb_build_array(t.typtype::text, t.typcategory::text, t.typispreferred, t.typowner::regrole::text, ka.j,
            t.typlen, t.typbyval, t.typalign::text, t.typstorage::text, t.typdelim::text, t.typnotnull,
            CASE WHEN t.typbasetype <> 0 THEN format_type(t.typbasetype, t.typtypmod) END,
            CASE WHEN t.typcollation <> 0 THEN t.typcollation::regcollation::text END, t.typdefault,
@@ -334,13 +353,15 @@ ag_plasa(plasa, identitate, campuri) AS (
              t.typanalyze::oid::regprocedure::text, t.typsubscript::oid::regprocedure::text),
            CASE WHEN t.typelem <> 0 THEN t.typelem::regtype::text END,
            CASE WHEN t.typrelid <> 0 THEN t.typrelid::regclass::text END,
-           (SELECT jsonb_agg(e.enumlabel::text ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid = t.oid),
+           en.j,
            (SELECT jsonb_build_array(rg.rngsubtype::regtype::text,
                      CASE WHEN rg.rngcollation <> 0 THEN rg.rngcollation::regcollation::text END,
                      (SELECT oc.et FROM ag_opc oc WHERE oc.oid = rg.rngsubopc),
                      rg.rngcanonical::oid::regprocedure::text, rg.rngsubdiff::oid::regprocedure::text, rg.rngmultitypid::regtype::text)
               FROM pg_range rg WHERE rg.rngtypid = t.oid))
     FROM pg_type t JOIN ag_typ x ON x.oid = t.oid
+    JOIN ag_acl_typ ar ON ar.oid = t.oid LEFT JOIN ag_acl ka ON ka.acl = ar.acl
+    LEFT JOIN ag_enum en ON en.enumtypid = t.oid
   UNION ALL
   -- operator
   SELECT 'operator', 'operator ' || o.oid::regoperator::text,
@@ -561,11 +582,9 @@ ag_plasa(plasa, identitate, campuri) AS (
     FROM ag_sis3 s JOIN pg_namespace n ON n.oid = s.oid
   UNION ALL
   SELECT 'acl_sistem', 'acl_sistem relatie ' || r.et,
-         jsonb_build_array(c.relkind::text, c.relowner::regrole::text,
-           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
-                FROM aclexplode(c.relacl) a) z))
+         jsonb_build_array(c.relkind::text, c.relowner::regrole::text, ka.j)
     FROM ag_rel_sis r JOIN pg_class c ON c.oid = r.oid
+    JOIN ag_acl_sis ar ON ar.oid = c.oid LEFT JOIN ag_acl ka ON ka.acl = ar.acl
    WHERE c.relacl IS NOT NULL
   UNION ALL
   SELECT 'acl_sistem', 'acl_sistem coloana ' || r.et || '.' || quote_ident(at.attname),
@@ -591,9 +610,10 @@ ag_plasa(plasa, identitate, campuri) AS (
     FROM pg_type t JOIN ag_sis3 s ON s.oid = t.typnamespace
    WHERE t.typacl IS NOT NULL
 )
-SELECT r.familie, r.eticheta, md5(r.d::text) AS amprenta, r.d::text AS detaliu
-  FROM ag_rand r CROSS JOIN ag_garda g
- WHERE g.ok = 1
+-- detaliul (d::text) se serializeaza O DATA pe rand (OFFSET 0: subinterogarea nu se contopeste, deci textul nu se recalculeaza
+-- pentru md5); amprenta = md5(detaliu), ca inainte
+SELECT q.familie, q.eticheta, md5(q.detaliu) AS amprenta, q.detaliu
+  FROM (SELECT r.familie, r.eticheta, r.d::text AS detaliu FROM ag_rand r CROSS JOIN ag_garda g WHERE g.ok = 1 OFFSET 0) q
 -- <<< AG_CATALOG v2
 
 -- >>> AG_PLASA_COLOANE v2

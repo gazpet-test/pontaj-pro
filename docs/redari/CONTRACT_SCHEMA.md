@@ -75,6 +75,13 @@ default true, created_at`. **[r2] DEFAULT-uri editabile** (texte confirmate de P
 `contact_email` = `redari@gazpet.ro` (adresa nu există încă — configurare); `text_gdpr` = „Operatori: S.N.T.G.N. TRANSGAZ S.A. … plângere la
 ANSPDCP (www.dataprotection.ro).” (NOT NULL); `text_declaratie` = „Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc
 procesul-verbal completat, spre semnare, prin poștă / electronic.” Formularul public întoarce `text_declaratie` ȘI `text_gdpr`.
+**17.11.2026 (decizia Răzvan: semnarea de la distanță doar electronic, juridic#045):** textele din cod și din șabloane spun „spre semnare,
+electronic”. Valoarea din baza de date `text_declaratie` (DEFAULT-ul de mai sus ȘI valorile salvate pe proiecte) se schimbă printr-o
+migrare separată, pe ramura `redari/predare-bd` (în pregătire, neaplicată), cu textul final al Juridicului și acordul lui Răzvan.
+**Migrarea se aplică odată cu publicarea PR-ului de terminologie (#1117), nu „separat în timp”. Ordinea: întâi migrarea, apoi
+publicarea aplicației.** Altfel, proprietarul vede în formular opțiunea „spre semnare, electronic” și imediat dedesubt declarația
+veche „prin poștă / electronic”. Doar DEFAULT-ul nu ajunge: proiectele existente își păstrează textul salvat. Pașii: `SABLOANE.md` §1,
+excepția (11), lista „Publicare”.
 
 ### red_uat
 `id, proiect_id FK, nume text NOT NULL, uat3 text NOT NULL` (3 litere mari, ex. PRU/GOD/HUS/CAZ/ILO/BAL/SIS; UNIQUE (proiect_id, uat3)),
@@ -132,6 +139,14 @@ neîncărcat, de reluat. **[r2]** Fișierele din bucket sunt imutabile (fără U
 optiune text CHECK IN ('particip','nu_particip_fara_obiectii','nu_particip_cu_obiectii','constatare_teren')`,
 `zi_sesiune_aleasa date, obiectii_text` (business — vizibil și viewer), `declaratie_confirmata bool, semnatura_electronica_ref text,
 created_by uuid NULL` (NULL la online), `created_at`.
+**17.11.2026 (decizia Răzvan, juridic#046):** `nu_particip_cu_obiectii` nu se mai OFERĂ la răspunsuri noi — formularul public
+(`OPTIUNI_NOI` în `RedariRaspunsPublic.jsx`) și modalul 📞 Răspuns (`OPTIUNI_RASPUNS_NOI` în `ui/comune.jsx`). Codul rămâne în CHECK,
+în RPC și în trigger (răspunsurile vechi sunt valabile, iar starea / PV-urile îl tratează ca „obiecții”). Ambele ecrane îl refuză
+înainte de cerere (lista albă în `pregatesteRaspunsPublic` / `pregatesteRaspunsManual`). Refuzul și pe server (RPC-ul public +
+trigger pe TOATE căile de INSERT, inclusiv PostgREST direct, și UPDATE-ul care schimbă opțiunea spre codul retras; codul rămâne în
+CHECK pentru istoric, iar actualizările legitime ale răspunsurilor vechi rămân posibile) e în migrarea de pe `redari/predare-bd`,
+cu acordul lui Răzvan. **Până atunci serverul acceptă încă vechiul cod**: un răspuns nou trimis direct la RPC / PostgREST cu el
+devine ULTIMUL răspuns și mută parcela în „obiecții de tratat”. Istoricul nu se pierde, dar efectul operațional există.
 **[r2] „Ultimul răspuns” = `ORDER BY data DESC, seq DESC`** — în view, în RPC și în `src/redari/stare.js` (UI-ul trebuie să folosească `seq` ca
 tie-break, nu ordinea din listă). **[r3] Semantica**: `data` = momentul DECLARAT al răspunsului (editabil de operator: „a sunat ieri”), `seq` =
 ordinea de înregistrare (tie-break la `data` egală), `created_at` = momentul recepției, IMUTABIL (trigger). Starea urmărește declarația, nu recepția. **[r2]** `ip_sau_sursa`, `user_agent`, `raw_payload` NU mai sunt aici (Copilot r1 P2-02) — vezi

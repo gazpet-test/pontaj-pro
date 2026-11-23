@@ -27,18 +27,33 @@
 # Utilizare (parola din ~/.pgpass / PGPASSFILE):
 #   bash scripts/livrare_l15_manifest.sh --migrare supabase/migrations/<NUME>.sql --versiune <AAAALLZZHHMMSS> \
 #        --tinta-host <H> --tinta-port <P> --tinta-db <D> --tinta-sistem <system_identifier> --user <U> [--plafon-tranzactie-ms N] \
-#        ( --iesire <dosar>/<NUME>.l15.tsv [--detalii <fisier>.l15.detalii.txt] | --compara-cu <NUME>.l15.tsv [--amprenta-globala <md5>] ) \
+#        [--plafon-extins] ( --iesire <dosar>/<NUME>.l15.tsv [--detalii <fisier>.l15.detalii.txt] | --compara-cu <NUME>.l15.tsv [--amprenta-globala <md5>] ) \
 #        [--doar-genereaza <dosar_nou>]
 # Coduri: 0 manifest scris / IDENTIC | 1 aplicarea / tiparirea a esuat (nimic comis) | 2 argumente | 3 generare locala |
 #   6 proba: diferenta != manifestul (sau GLOBAL inainte != cel asteptat) | 40 doar generat.
+# Runda 16 a runnerului (17.11.2026): --plafon-tranzactie-ms, daca e dat, e EXACT AG_PLAFON_MS (5000; scripts/livrare_amprenta.sh),
+#   ca la livrarea cu amprenta globala (altfel 2); validatorul runnerului cere ca migrarea sa ceara acelasi plafon (altfel 3);
+#   garda finala tipareste si LOCK_TINUT, iar timpii (lock / sfarsit / LOCK_TINUT) apar in lista de la final.
+# Runda 17: generarea trece prin runner => validatorul lui refuza local (cod 3 aici, nimic trimis) si o migrare care cere plafon generata
+#   FARA --plafon-tranzactie-ms (PLAFON_LIPSA), si o comparatie a plafonului in forma neverificabila (PLAFON_FORMA).
+# Runda 18 (22.11.2026, plafonul EXTINS; docs/LIVRARE_L15_V2.md §9): --plafon-extins (fara valoare) = ca la runner: plafonul trebuie sa fie
+#   EXACT AG_PLAFON_EXTINS_MS (15000; altfel 2), iar validatorul cere ca migrarea sa declare optiunea (PLAFON_EXTINS_DIFERIT = 3). Fereastra
+#   orara (Europe/Bucharest, in afara orelor de lucru) e verificata local (2 in afara ei; sarita doar cu --doar-genereaza) si pe server
+#   (1a_fereastra.sql, generat de runner, primul in restul mesajului).
+# Runda 19 (verdictul Jakarinos pe PR #1169, r2): in runda 18 GENERAREA (--iesire) era scutita de fereastra ("doar pe clona") - dar nimic nu
+#   verifica ca tinta e o clona, deci --iesire cu endpointul productiei lua lock-urile migrarii cu plafonul 15000 oricand (ROLLBACK-ul nu
+#   anuleaza blocarea aplicatiei). Acum AMBELE moduri trec prin garda UNICA a bibliotecii (ag_plafon_garda, aceeasi ca in runner), inaintea
+#   oricarei conexiuni, si AMBELE poarta 1a_fereastra.sql: plafonul extins pe orice tinta conectata = doar in fereastra. Manifestul nu se
+#   schimba (un DO nu creeaza obiecte de catalog); costul: generarea pe clona cu plafonul extins se face si ea in fereastra.
 # ============================================================================
 set -Eeuo pipefail
 umask 077
 refuz() { echo "REFUZ (nimic trimis): $2" >&2; exit "$1"; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-MIG="" V="" H="" P="" D="" SIS="" U="" PLAFON_MS="" IES="" GEN="" DET="" CMP="" AG_ASTEPTAT=""
+MIG="" V="" H="" P="" D="" SIS="" U="" PLAFON_MS="" IES="" GEN="" DET="" CMP="" AG_ASTEPTAT="" EXTINS=0
 while [ $# -gt 0 ]; do
+  if [ "$1" = --plafon-extins ]; then [ "$EXTINS" = 0 ] || refuz 2 "optiunea --plafon-extins se da o singura data"; EXTINS=1; shift; continue; fi   # runda 18: singura optiune fara valoare
   [ $# -ge 2 ] || refuz 2 "optiunea $1 fara valoare"
   case "$1" in
     --migrare) MIG="$2" ;; --versiune) V="$2" ;; --tinta-host) H="$2" ;; --tinta-port) P="$2" ;; --tinta-db) D="$2" ;;
@@ -75,11 +90,18 @@ W="$(mktemp -d)"; trap 'chmod -R u+w "$W" 2>/dev/null; rm -rf "$W"' EXIT
 chmod 700 "$W"
 # shellcheck source=livrare_amprenta.sh
 . "$ROOT/scripts/livrare_amprenta.sh"
+# Runda 16: aceeasi forma ca livrarea cu amprenta globala => acelasi plafon, EXACT AG_PLAFON_MS (o singura definitie).
+# Runda 18: cu --plafon-extins EXACT AG_PLAFON_EXTINS_MS. Runda 19: garda UNICA (ag_plafon_garda, ca in runner) pentru AMBELE moduri: valoarea
+# + fereastra orara pe orice cale care se conecteaza (--iesire SI --compara-cu, orice tinta); "neconectat" DOAR cu --doar-genereaza.
+CONECTAT=1; [ -z "$GEN" ] || CONECTAT=0
+AG_PL_MSG="$(ag_plafon_garda "$PLAFON_MS" "$EXTINS" "$CONECTAT" 2>&1)" || refuz 2 "$AG_PL_MSG"
+[ -z "$AG_PL_MSG" ] || echo "[ok] $AG_PL_MSG (orice tinta, --iesire sau --compara-cu; pe server o reverifica 1a_fereastra.sql)"
 if [ -n "$CMP" ]; then
   ag_manifest_valid "$CMP" || refuz 2 "--compara-cu: manifestul dat nu are formatul corect"
   tr -d '\r' <"$CMP" | grep -v '^#' | grep -v '^$' | LC_ALL=C sort >"$W/manifest_dat.tsv" || true
 fi
 PL=(); [ -z "$PLAFON_MS" ] || PL=(--plafon-tranzactie-ms "$PLAFON_MS")
+[ "$EXTINS" = 0 ] || PL+=(--plafon-extins)
 rc=0
 PSQL_BIN=/nu/se/foloseste bash "$ROOT/scripts/livrare_migrare.sh" --migrare "$MIG" --sha256 "$SHA" --versiune "$V" \
   --tinta-db "$D" --tinta-sistem "$SIS" --tinta-host "$H" --tinta-port "$P" --user "$U" ${PL[@]+"${PL[@]}"} \
@@ -93,9 +115,10 @@ if [ -n "$PLAFON_MS" ]; then
   # shellcheck source=livrare_mesaj.sh
   . "$ROOT/scripts/livrare_mesaj.sh"
   REST="$W/m_rest.sql"
-  { cat "$W/g/1_pre.sql"; cat "$W/2_ag_inainte.sql"; } >"$REST"
+  # runda 19: fereastra pe server in AMBELE moduri (--iesire si --compara-cu), cu plafonul extins (vezi antetul)
+  { [ "$EXTINS" = 0 ] || cat "$W/g/1a_fereastra.sql"; cat "$W/g/1_pre.sql"; cat "$W/2_ag_inainte.sql"; } >"$REST"
   POZ="$(lm_octeti "$REST")"
-  { cat "$COPIE"; lm_sep; cat "$W/g/3_inreg.sql"; cat "$W/4_ag_dupa.sql"; lm_timp "$NUME"; lm_fin "$NUME" "$PLAFON_MS" ROLLBACK; } >>"$REST" \
+  { cat "$COPIE"; lm_sep; cat "$W/g/3_inreg.sql"; cat "$W/4_ag_dupa.sql"; lm_timp "$NUME"; lm_fin "$NUME" "$PLAFON_MS" ROLLBACK lock; } >>"$REST" \
     || refuz 3 "restul mesajului"
   lm_mesaj "$W/g/0_prolog.sql" "$REST" "$W/m_mesaj.sql" "$NUME" "$POZ:$(lm_octeti "$COPIE"):$SHA" || refuz 3 "mesajul"
   TAG_M="lm_$(ag_tag)"
@@ -141,7 +164,7 @@ grep -q "PLAFON_TIMP $NUME: garda trecuta" "$W/out_lf.txt" || [ -z "$PLAFON_MS" 
   || { echo "[x] garda finala nu a trecut - nimic scris" >&2; exit 1; }
 timpi() {
   echo "--- timpi (ms de la BEGIN) ---"
-  grep -E "${PFX}(AMPRENTA_GLOBALA|L15_DIF_TOTAL|LIVRARE_TIMP|PLAFON_TIMP)" "$W/out_lf.txt" | grep -v 'AMPRENTA_GLOBALA_CONTEXT' | sed -E "s/${PFX}//" || true
+  grep -E "${PFX}(AMPRENTA_GLOBALA|L15_DIF_TOTAL|LIVRARE_TIMP|PLAFON_TIMP|LOCK_TINUT|[0-9]{8}[a-z]?: (lock|sfarsit) la)" "$W/out_lf.txt" | grep -v 'AMPRENTA_GLOBALA_CONTEXT' | sed -E "s/${PFX}//" || true
 }
 
 if [ -n "$CMP" ]; then

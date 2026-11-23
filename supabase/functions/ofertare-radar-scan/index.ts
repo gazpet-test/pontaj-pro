@@ -13,6 +13,7 @@
 // precedenta cat tine fereastra de rotire, ca sa nu pice cron-urile toate deodata.
 // SECRETUL RAMANE DE ROTIT — scoaterea literalului nu e revocare (task #51).
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { esteRelevant, detectSeg } from './relevanta.js';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
 const CORS: Record<string, string> = {
@@ -26,19 +27,8 @@ const SEAP_HDR: Record<string, string> = {
   'Origin': 'https://e-licitatie.ro',
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
 };
-const CPV_OK = ['45231', '45232', '45333', '65210', '65200'];
-const KEYWORDS = [
-  'gaze naturale', 'gaz metan', 'distributie gaze', 'transport gaze', 'retea de gaze', 'retele de gaze',
-  'conducta de gaz', 'conducte de gaz', 'bransament gaz', 'bransamente gaz', 'statie de reglare', 'srm ',
-  'alimentare cu apa', 'retea de apa', 'retele de apa', 'canalizare', 'aductiune', 'apa uzata', 'gospodarie de apa',
-];
-const EXCLUDE = [
-  ' lea ', 'lea 0,4', '0,4 kv', '0.4 kv', '20 kv', '110 kv', 'linii electrice', 'linie electrica',
-  'retele electrice', 'retea electrica', 'electricitate', 'iluminat public', 'post de transformare',
-  'posturi de transformare', 'anvelopat', 'fibra optica', '45231400', '45231600', '45231500',
-];
-
-const noDia = (s: unknown) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+// Regula de relevanta (CPV_OK / KEYWORDS / EXCLUDE / esteRelevant) si segmentul stau in
+// relevanta.js, fara dependente de Deno, ca sa fie testate cu vitest (16.11.2026: +CPV 45255).
 const deHtml = (s: unknown) => String(s ?? '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
 
 // Secretul NU sta in sursa: repo-ul e public. Verificare prin RPC contra Vault.
@@ -66,23 +56,6 @@ async function seapFetch(url: string, body?: unknown) {
   } finally {
     clearTimeout(t);
   }
-}
-
-function esteRelevant(titlu: string, cpv: string): boolean {
-  const t = ' ' + noDia(titlu) + ' ' + noDia(cpv) + ' ';
-  if (KEYWORDS.some((k) => t.includes(k))) return true;
-  if (EXCLUDE.some((k) => t.includes(k))) return false;
-  if (t.includes('bransament')) return true;
-  return CPV_OK.some((p) => String(cpv ?? '').trim().startsWith(p));
-}
-
-function detectSeg(autoritate: string, titlu: string, cpv: string): string {
-  const t = noDia(String(autoritate ?? '') + ' ' + String(titlu ?? '') + ' ' + String(cpv ?? ''));
-  if (t.includes('transgaz')) return 'transgaz';
-  if (t.includes('romgaz')) return 'romgaz';
-  if (t.includes('conpet')) return 'conpet';
-  if (/gaze|gaz metan|bransament/.test(t)) return 'distributie';
-  return 'altele';
 }
 
 Deno.serve(async (req: Request) => {

@@ -1,14 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react'
+import JSZip from 'jszip'
 import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob } from '../docx.js'
 import { sesiuneEcran } from '../corespondenta.js'
 import { propune, aplica } from '../importPostal.js'
-import { grupeazaPentruPlicuri, convocareDeRegenerat, MESAJ_DE_REGENERAT, textAR, genereazaOpis, genereazaPvPlicuire, csvEtichete, dataBucuresti, adresaPlic, areImputernicire,
-  termenExpediere, textTermenExpediere, avertismentExpediere, confirmaExpediereRecitita, textTintaExpediere, recomandareExpediere } from '../plicuri.js'
+import { grupeazaPentruPlicuri, convocareDeRegenerat, MESAJ_DE_REGENERAT, textAR, genereazaOpis, genereazaPvPlicuire, csvEtichete, dataBucuresti, adresaPlic, areImputernicire, planPachetPlicuire,
+  termenExpediere, textTermenExpediere, avertismentExpediere, confirmaExpediereRecitita, textTintaExpediere, recomandareExpediere, docxPaginaControl, continutPaginaControl } from '../plicuri.js'
+import { destinatarMascat } from '../../../supabase/functions/_shared/redariFan.mjs'
+import { prefixLot, pregatestePachetFan, confirmaTirajFinal, numeControl, numeArhiva } from '../fanLot.js'
 import { TERMEN_CONVOCARE_ZILE } from '../setari.js'
 import { G, S, Camp, Gol, Modal, MOTIVE_RETUR, msgEroare, fmtDate, citestePaginat } from './comune.jsx'
 import { CALITATI_AR, descriereArPlic } from '../arMentiune.js'
-import FanAwbPrevizualizare from './FanAwbPrevizualizare.jsx'
+import FanAwbPrevizualizare, { citesteEvidentaFan } from './FanAwbPrevizualizare.jsx'
 
 const COL_PLIC = 'id,proiect_id,uat_id,nr_plic,destinatar_nume,lot_id,awb,data_expediere,data_ar,ar_scan_path,ar_primit_de,ar_primit_calitate,ar_mentiune,opis_path,retur,retur_detaliu,retur_data,retur_scan_path,stare,motiv_anulare,versiune'
 const COL_LOT = 'id,proiect_id,nr_lot,data_plicuire,semnatar1_id,semnatar2_id,pv_path,observatii,versiune'
@@ -44,7 +47,7 @@ export async function citesteDatePlicuri(client, proiectId, poateScrie, esteCure
   const utilizatori = [...new Map([...owneri, ...cuAcces].map(p => [p.id, { id: p.id, name: p.name || '(fără nume)' }])).values()].sort((a, b) => a.name.localeCompare(b.name, 'ro'))
   const det = await inLoturi(parcele.map(p => p.id), 'red_detinatori', 'id,parcela_id,nume,nume_normalizat,calitate', 'parcela_id', q => q.is('sters_la', null))
   const [conv, contacte] = await Promise.all([
-    inLoturi(det.map(d => d.id), 'red_convocari', 'id,detinator_id,nr_document,plic_id,data_expediere,calitate_document', 'detinator_id', q => q.eq('stare', 'activ').eq('canal', 'posta').is('sters_la', null)),
+    inLoturi(det.map(d => d.id), 'red_convocari', 'id,detinator_id,nr_document,plic_id,data_expediere,calitate_document,fisier_convocator_path', 'detinator_id', q => q.eq('stare', 'activ').eq('canal', 'posta').is('sters_la', null)),
     poateScrie ? inLoturi(det.map(d => d.id), 'red_detinatori_contact', 'detinator_id,adresa_strada,adresa_sat,adresa_comuna,adresa_judet,cod_postal,adresa_cunoscuta', 'detinator_id', q => q, 'detinator_id') : Promise.resolve([]),
   ])
   const ps = new Map(parcele.map(p => [p.id, p])), ds = new Map(det.map(d => [d.id, d])), cs = new Map(contacte.map(c => [c.detinator_id, c]))
@@ -76,7 +79,7 @@ function verificaFisier(f) {
 }
 const stampila = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(new Date()).replace(/\D/g, '')
 
-export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0, onSchimbat }) {
+export default function PlicuriEcran({ proiect, uats = [], nivel, profile = null, reloadKey = 0, onSchimbat }) {
   const [date, setDate] = useState(null), [reload, setReload] = useState(0), [lucru, setLucru] = useState(false)
   const [mesaj, setMesaj] = useState(''), [incarcare, setIncarcare] = useState(true), [selectate, setSelectate] = useState([]), [uatId, setUatId] = useState(''), [filtru, setFiltru] = useState('')
   const [modal, setModal] = useState(null), [f, setF] = useState({}), [arText, setArText] = useState(''), [fanLot, setFanLot] = useState(null)
@@ -146,6 +149,45 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
   }
   async function document(tip, rand, curent) {
     const lista = plicuri.filter(p => p.lot_id === rand.id)
+    // tipărire pe lot: UN zip cu documentele ARHIVATE, în ordinea plicurilor (opisul primul în fiecare plic) + pagina de control; orice lipsă = refuz.
+    // Lot FAN (marcat TEST / real în evidența FAN): DOAR plicurile din manifestul COMUN cu etichetele, cu pozițiile lui; prefixul TEST_ pe un lot
+    // de test (Jakarinos #1118 r1 P1 / P2). Evidența se recitește acum (L03). Runda 3 (r2 P1): arhiva cere TIRAJUL lotului cu cheia acestui
+    // manifest (pregatestePachetFan → fn_red_fan_tiraj, aceeași cheie ca la fiecare parte a etichetelor); alt manifest decât al tirajului început
+    // = refuz („retipărește tot lotul”), nimic descărcat. Pagina de control = aceeași funcție ca la etichete (controlLotFan).
+    if (tip === 'pachet') {
+      const ev = await citesteEvidentaFan(supabase, rand.id, curent)
+      if (!curent()) return
+      const prefix = prefixLot(ev.fanLot)
+      let plan, continut, tiraj = null, ramase = []
+      if (ev.fanLot) {
+        const p = await pregatestePachetFan({ rpc: (n, a) => supabase.rpc(n, a), lot: rand, fanLot: ev.fanLot, randuriFan: ev.randuri, plicuri: lista, convocariPePlic: pePlic })
+        if (!curent()) return
+        ;({ plan, continut, tiraj } = p); ramase = p.manifest.ramase
+      } else {
+        plan = planPachetPlicuire(lista, pePlic, { prefix })
+        if (plan.lipsuri.length) throw { code: '23514', message: `Pachetul nu se face, lipsesc ${plan.lipsuri.length} documente: ${plan.lipsuri.slice(0, 8).join('; ')}${plan.lipsuri.length > 8 ? ' …' : ''}` }
+        continut = continutPaginaControl({ lot: rand, randuri: plan.plicuri.map(p => ({ pozitie: p.pozitie, nr_plic: p.nr_plic, awb: '', destinatar: destinatarMascat(p.destinatar_nume), documente: p.documente })) })
+      }
+      if (!plan.fisiere.length) throw { code: '23514', message: 'Lotul nu are plicuri active.' }
+      const control = await docxPaginaControl(continut)
+      if (!curent()) return
+      const zip = new JSZip()
+      zip.file(numeControl({ lot: rand, fanLot: ev.fanLot, tiraj, inArhiva: true }), await control.arrayBuffer())
+      for (const f of plan.fisiere) {
+        if (!curent()) return
+        const { data: bl, error } = await supabase.storage.from('redari').download(f.path)
+        if (error || !bl) throw { code: 'P0001', message: `${f.nr_plic}: documentul arhivat nu poate fi citit; pachetul nu s-a făcut.` }
+        zip.file(f.nume, await bl.arrayBuffer())
+      }
+      const blob = await zip.generateAsync({ type: 'blob' })
+      if (!curent()) return
+      // runda 4 (Jakarinos #1118 r3 P1): REVERIFICAREA FINALĂ a tirajului (aceeași cheie, același nr., neoprit) după ce arhiva e gata și
+      // ÎNAINTE de salvare: un tiraj oprit / înlocuit între timp (altă sesiune, owner-ul) = refuz, nimic descărcat
+      if (tiraj) { await confirmaTirajFinal({ rpc: (n, a) => supabase.rpc(n, a), lot: rand, tiraj }); if (!curent()) return }
+      descarcaBlob(blob, numeArhiva({ lot: rand, fanLot: ev.fanLot, tiraj }))
+      return `Pachet descărcat${tiraj ? ` (tirajul ${tiraj.id}, nr. ${tiraj.nr})` : ''}: ${plan.fisiere.length} documente, ${plan.plicuri.length} plicuri, în ordinea pozițiilor (în fiecare plic: opisul, apoi convocările) + pagina de control.`
+        + (ramase.length ? ` Rămase netipărite (fără etichetă și fără documente): ${ramase.map(r => r.nr_plic).join(', ')}.` : '')
+    }
     if (tip === 'csv' && !imputernicire) throw { code: '23514', message: 'Fără împuternicirea Beneficiarului nu se generează textele AR (etichete).' }
     // Jakarinos + Copilot f10 UI P2: opisul atașat la dosar se descarcă EXACT cum e arhivat (fără regenerare), ca exemplarul din plic să fie identic
     if (tip === 'opis' && rand.opis_path) {
@@ -294,11 +336,16 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       <p>Semnatari: {l.semnatar1_nume || '-'} (plicuiește) / {l.semnatar2_nume || '-'} (verifică)</p><p>{l.observatii}</p>
       {btn('PV (DOCX)', () => executa(c => document('pv', l, c)))}
       {btn('Etichete CSV', () => executa(c => document('csv', l, c)), !poateScrie || !imputernicire)}
+      {btn('Documente lot (ZIP, în ordinea plicurilor)', () => executa(c => document('pachet', l, c)), !poateScrie)}
       {poateScrie && <>{btn('Editează semnatarii / observațiile', () => deschide('semnatari', l))}{!l.pv_path && btn('Atașează PV semnat', () => deschide('pv_semnat', l))}</>}
       {poateScrie && btn('📦 AWB FAN — previzualizare', () => setFanLot(l))}
       {l.pv_path && <p>PV semnat atașat.</p>}
     </div>) : <Gol />}
-    {fanLot && poateScrie && <FanAwbPrevizualizare proiect={proiect} lot={fanLot} plicuri={plicuri.filter(p => p.lot_id === fanLot.id && p.stare === 'activ')} onClose={() => setFanLot(null)} />}
+    {fanLot && poateScrie && <FanAwbPrevizualizare proiect={proiect} lot={fanLot} plicuri={plicuri.filter(p => p.lot_id === fanLot.id)} convocariPePlic={pePlic}
+      esteOwner={profile?.is_owner === true} esteAdmin={nivel === 'admin'} poateScrie={poateScrie} onClose={() => setFanLot(null)}
+      onRetur={(plicId, motiv, data) => { const p = plicuri.find(x => x.id === plicId); if (!p) return
+        // returul semnalat de FAN = PROPUNERE: omul alege motivul final și atașează scanul plicului returnat (regula BD)
+        setFanLot(null); deschide('retur', p); setF(x => ({ ...x, motiv: MOTIVE_RETUR.some(m => m.cod === motiv) ? motiv : x.motiv, data: data && p.data_expediere && data >= p.data_expediere ? data : x.data })) }} />}
     {modal && <Modal titlu={({ lot: 'Lot de plicuire', semnatari: 'Semnatari și observații', pv_semnat: 'PV semnat', anulare: 'Anulare plic', expediere: 'Expediere plic', ar: 'Confirmare AR', retur: 'Retur' })[modal.tip]} onClose={() => { if (!lucru) setModal(null) }}>
       <div style={{ display: 'grid', gap: 12 }}>
         {['lot', 'expediere', 'ar', 'retur'].includes(modal.tip) && <Camp eticheta="Data"><input style={S.input} disabled={lucru} type="date" min={['ar', 'retur'].includes(modal.tip) ? modal.rand.data_expediere : undefined} value={f.data} onChange={e => camp('data', e.target.value)} /></Camp>}

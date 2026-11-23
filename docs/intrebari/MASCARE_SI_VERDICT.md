@@ -449,6 +449,29 @@ identități, granițe diferite) se exclud și se numără — în domeniul de m
 cazuri, fără plafon total (toate loturile rulează; r7: ≈ 5,3 minute pe serverul AI, 8 fire + 8 procese). Testul verifică și că
 tabelul de mai jos are exact cifrele generatorului.
 
+**Unde rulează produsul complet (r8, 20.11.2026).** Pe mașina GitHub a jobului „verificare” (4 nuclee, `npm test` cu toate
+celelalte teste în paralel) produsul complet, rulat de două ori, depășea 900 s și înroșea toate PR-urile. De aceea:
+- **pe fiecare rulare `npm test`** (toate PR-urile): (1) eșantionul ACOPERITOR (`indiciEsantion` din generator): familiile cu
+  produsul ≤ 100.000 (un lot) — TOATE cazurile; la cele patru familii mari (`firme_nume_intreg`, `firme_reprezentare`,
+  `firme_componenta_singura`, `persoane_nume_intreg`) — fiecare triplet de valori pe oricare trei dimensiuni (acoperire 3 la 3),
+  celelalte dimensiuni completate determinist; ≈ 590.000 de cazuri, rulate pe fire de lucru ȘI în procesul Node real, cu aceeași
+  amprentă pe fiecare lot din cele 341; testul verifică independent că fiecare triplet apare; (2) eșantionul direct pe modulul
+  importat de vitest: fiecare al 97-lea indice din produsul fiecărei familii (≈ 340.000 de cazuri, alte cazuri decât (1));
+- **produsul complet** (testul de dinainte, neschimbat, aceleași amprente pe lot) rulează cu `INTREBARI_GENERATIV_COMPLET=1` în
+  jobul separat `.github/workflows/intrebari-generativ.yml`, în 4 părți paralele (loturile `i % 4`): pe orice PR care atinge un
+  fișier de care depinde rezultatul — închiderea importurilor testului și a procesului (motorul, generatorul, cele trei JSON-uri,
+  testul), plus acest document, `package*.json`, fișierele de workflow și configurația runnerului (`vite.config.js` explicit și
+  modelele `vite.config.*`, `vitest.config.*`, `vitest.workspace.*`, `vitest.projects.*`); testul verifică el însuși că lista de
+  căi conține toată închiderea, că fiecare nume de configurație căutat de vitest-ul instalat (citit din pachet) e prins de un model,
+  că configurația existentă, importurile ei din repo și eventualele `setupFiles` / `globalSetup` sunt scrise explicit, că nu
+  apar alte chei `test` / `envPrefix` / `envDir` / `define` (altfel testul cere să fie extins), că închiderea citește din mediu
+  doar cele două variabile ale jobului (deci fișierele `.env*` nu pot schimba rezultatul), că părțile sunt 0..N−1 și că Node e
+  același ca la „verificare” —, în fiecare noapte și la cerere.
+Rezultatul e determinist (aceleași fișiere + același Node = aceleași ieșiri), deci un PR care nu atinge niciunul din fișierele
+listate nu poate schimba ce verifică produsul complet; schimbările de mediu (Node, mașina) le prinde rularea de noapte. Ce s-a
+mutat: pe PR-urile care NU ating motorul, produsul complet nu mai rulează (a rulat pe ultimul PR care l-a atins și rulează în
+fiecare noapte); o abatere care ține de 4 sau mai multe dimensiuni deodată poate scăpa eșantionului și o prinde jobul complet.
+
 **Domeniul publicat** (dicționarul de test: persoanele VLĂDESCU ANA, ZAMFIRESCU MARIA, ȘERBĂNESCU OLGA, CRÂNGAȘU VIOREL, MARE ION,
 DUMBRĂVEANU ANDREEA-IOANA; firmele Lumivo Servicii SRL — distinctivă pe prima poziție, Varnitec SRL — un cuvânt distinctiv, Alfa SRL —
 un cuvânt comun, Construct Pelorîn SRL — distinctivă pe a doua poziție, cu diacritice, Barzeni Instal Grup SRL — trei cuvinte,
@@ -597,7 +620,8 @@ periodică încă dezactivată. Ordinea:
    Verificarea: `node scripts/intrebari/manifest_motor.mjs --verifica` în clona de pe `main` → „la zi”; workerul verifică singur,
    la pornire, amprentele fișierelor copiate (cu finaluri de linie LF) — o diferență = `motor_invalid` în jurnal, nicio preluare.
 8. Testele pe `main`, în clona repo-ului de pe server: `npm install` + `npx vitest run src/intrebariMascare.test.js
-   src/intrebariMascare.generativ.test.js src/intrebariSurse.test.js scripts/intrebari/corpus.test.mjs` și
+   src/intrebariMascare.generativ.test.js src/intrebariSurse.test.js scripts/intrebari/corpus.test.mjs` (r8: matricea generativă
+   rulează aici eșantionul acoperitor; produsul complet: același test cu `INTREBARI_GENERATIV_COMPLET=1`, ≈ 5–6 minute) și
    `python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py"` (aceeași versiune de Python ca workerul, Node 24
    în PATH) — toate OK. Opțional, testul în browser (secțiunea „Testele”).
 9. **Testul de fum controlat, cu task-ul încă DEZACTIVAT:** coada are doar întrebarea de test a ownerului (nume inventate, un
@@ -613,6 +637,64 @@ periodică încă dezactivată. Ordinea:
 
 Revenirea: workerul se oprește întâi (pasul 1), apoi fișierele workerului, ale motorului și indexul corpusului se întorc împreună la
 versiunea anterioară (edge-ul poate rămâne: lista de nume e aceeași).
+
+### Actualizarea „coada” (14.11.2026) — lista de nume se încarcă doar când e ceva de preluat
+**Ce se schimbă:** funcția edge are o acțiune nouă, `coada`, DOAR CITIRE: o singură numărătoare pe `intrebari_tehnice` — există
+o întrebare în starea `noua` (inclusiv una amânată sau reluată: amânarea și reluarea o readuc în `noua`) SAU în starea `in_lucru`,
+indiferent de vechime? — și răspunde doar `{"de_preluat": true | false}`. Workerul o întreabă înaintea listei de nume: la `false`
+rularea se încheie fără lista de nume și fără rând în jurnal (cel mult un rând `coada_goala` pe oră, ca să se vadă că workerul
+merge); la orice altceva (are ceva, eroare, funcție edge veche) — fluxul de azi, neschimbat: nume → preia. Fără migrare, fără
+secrete noi; mascarea, cercetarea, regula „Da / Nu / Incert”, plafoanele și sursele de nume NU se schimbă.
+
+**Plafonul zilnic NU intră în `coada` (runda 2, după review):** cu plafonul atins și întrebări în așteptare, `coada` spune „are
+ceva”, workerul încarcă numele și preluarea refuză — exact ce se întâmpla înainte de `coada`. Economia lipsește în zilele cu
+plafonul atins și cât timp există o întrebare `in_lucru` (vezi mai jos); în schimb `coada` nu are nicio dată calendaristică (schimbarea zilei nu o afectează) și nicio numărătoare de
+preluări (o amânare confirmată între două citiri nu mai e posibilă: e o singură citire, deci un singur instantaneu al bazei).
+
+**Fără ceas (runda 3, după review):** `coada` nu are niciun ceas, nicio marjă și niciun prag de vechime. O întrebare `in_lucru`
+contează ca „are ceva” indiferent de când a fost preluată; dacă e expirată (peste 30 de minute) decide doar preluarea, în bază,
+cu ceasul bazei. Costul acceptat: cât timp o întrebare e „în lucru”, rulările încarcă lista de nume, iar preluarea nu face nimic
+(fluxul de dinainte de `coada`). Workerul are lock, deci în timpul procesării nu pornește a doua rulare.
+
+**Ce garantează `coada` (și numai atât):** nicio întrebare care există în starea `noua` sau `in_lucru` în momentul citirii nu e
+sărită; o întrebare pusă sau revenită în coadă după citire e luată la rularea următoare.
+
+**Ordinea de publicare: oricare e sigură; recomandată funcția edge ÎNTÂI, apoi workerul.**
+- Funcția edge nouă + workerul vechi: workerul vechi nu cheamă `coada`; celelalte acțiuni sunt neschimbate → nimic nu se schimbă.
+- Workerul nou + funcția edge veche: `coada` primește 400 „Acțiune necunoscută” → workerul face fluxul de azi (nume → preia) →
+  nimic nu se pierde, doar economia lipsește până la publicarea funcției.
+- În orice combinație workerul sare peste listă DOAR la răspunsul exact 200 `{"de_preluat": false}`; garanția de mai sus rămâne
+  aceeași.
+
+Pașii (cu „da”-ul lui Răzvan):
+1. Workerul oprit și verificat oprit (pasul 1 de mai sus). Tehnic nu e obligatoriu aici (vezi ordinea), dar regula casei rămâne.
+2. Merge PR-ul.
+3. Publicarea funcției edge `intrebari-tehnice-worker`: **`index.ts` și `logic.js` împreună**, prin workflow-ul manual (slug-ul e
+   deja în lista `NO_JWT`, deci `verify_jwt = false` rămâne).
+4. Verificarea FĂRĂ worker: cu secretul, `{"actiune": "coada"}` → **200** cu exact `{"de_preluat": false}` (sau `true` dacă e o
+   întrebare în coadă); fără antet / cu cheia anon / cu un JWT de cont obișnuit / cu un secret greșit → **401**. Tot cu secretul,
+   `{"actiune": "nume"}` → 200 ca înainte. Un 500 la `coada` = citirea a eșuat (de exemplu filtrul nu e acceptat de PostgREST
+   sau un drept lipsă pe `intrebari_tehnice`): workerul ar merge atunci pe fluxul de azi, dar se raportează. Filtrul e mereu
+   același (cele două stări, fără dată), deci un filtru greșit dă 500 la ORICE apel, nu doar cu coada plină.
+5. Copierea lui `intrebari_worker.py` din `main` în folderul workerului (doar el se schimbă; motorul, manifestele și indexul
+   corpusului rămân aceleași).
+6. Testele pe `main`: `npx vitest run supabase/functions/intrebari-tehnice-worker/logic.test.js` și
+   `python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py"` → OK.
+7. Testul de fum cu task-ul încă dezactivat, coada goală: o rulare de mână → jurnalul are UN rând `coada_goala` și niciun
+   `nume_incarcate`; a doua rulare imediat după → niciun rând nou. Prima întrebare reală de după reactivare trebuie să apară în
+   jurnal ca înainte (`nume_incarcate`, apoi `raspuns`).
+8. Reactivarea rulării periodice (pasul 10 de mai sus).
+
+**Ce se vede altfel în jurnal:** cu funcția edge nouă, `nume_incarcate` apare la rulările cu o întrebare `noua` sau `in_lucru` (nu la
+fiecare 2 minute; cât o întrebare e în lucru, rulările îl scriu în continuare, iar preluarea nu face nimic) și la rulările în care
+`coada` nu a dat un răspuns clar (eroare, răspuns necunoscut sau funcție edge veche: workerul merge atunci pe fluxul vechi); semnul că
+workerul merge cu coada goală e `coada_goala`, cel mult o dată pe oră (marcajul orei se pune înaintea rândului: o oprire între ele
+sau un marcaj care nu se poate scrie lasă ora fără rând, niciodată cu două). Un jurnal fără niciun rând nou de peste două ore
+înseamnă că workerul nu mai rulează sau că marcajul `coada_viu` nu se poate scrie în folderul workerului — se verifică (dacă
+funcția edge nu răspunde, workerul merge pe fluxul de azi și scrie `nume_indisponibile` la fiecare rulare).
+
+**Revenirea:** se copiază la loc `intrebari_worker.py` anterior (workerul vechi nu folosește `coada`); funcția edge poate rămâne. Sau
+invers: funcția edge veche cu workerul nou = fluxul de azi.
 
 ## Rândul propus pentru `registru_automatizari` (înlocuiește fișa „Întreabă echipa”)
 **Întreabă echipa (intrebari-tehnice-worker) — actualizare 13.11.2026: mascarea numelor (A) + regula „Da / Nu / Incert” (B), r5

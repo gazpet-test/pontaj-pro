@@ -17,6 +17,7 @@ Apoi, prin Supabase MCP, rulează:
 ```sql
 SELECT content_md FROM public.claude_docs WHERE slug = 'handoff_activ';
 SELECT content_md FROM public.claude_docs WHERE slug = 'registru_automatizari';  -- (02.10.2026, cerere Răzvan) ce rulează automat, canale, secrete (nume), rutine — obligatoriu la fiecare sesiune/container nou
+SELECT content_md FROM public.claude_docs WHERE slug = 'registru_proiecte_incepute';  -- (21.11.2026, cerere Răzvan) tot ce e pornit și neînchis: unde stă, ultimul pas, următorul, blocajul
 SELECT id, category, title, content, lungime_detalii, priority, todo_section, todo_completed
 FROM public.v_claude_context_start
 ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, category, created_at DESC;
@@ -76,8 +77,10 @@ Integrează natural (nu anunța „am citit memoria"). Reia exact de unde a răm
 ## Decizii închise (NU redeschide)
 PIUSI = doar reconciliere (nu dublu-decrement stoc). TVA pe valoare brută lucrări. Echipamente: service/QR/ITP → logistica_active; scule/EIP → Magazie-Echipamente. Financiar: fără drag&drop generic (doar certificate de plată). „TOTUL PDF": imaginile spre AI se convertesc client-side în PDF (imageToPdf în CitesteOricePanel.jsx). Comenzi Furnizor: tabel separat, auto-status prin triggere.
 
+12. **Proiectele începute nu se pierd (Răzvan 21.11.2026)**: orice lucru pornit — cod, integrare, cercetare, document — primește din prima zi un rând în `claude_docs` slug `registru_proiecte_incepute` (ce e · unde stă · ultimul pas · următorul pas / blocaj · data ultimei mișcări) și se actualizează la fiecare pas; la închidere `✅ ÎNCHIS <data>`. Codul nu rămâne doar local: branch pushat + PR draft din prima zi, chiar dacă e schelet. Ce nu e cod stă pe NAS / Drive / paw-data, cu calea trecută în registru (repo-ul e public: fără nume, prețuri, contacte). Rutina de dimineață listează rândurile fără mișcare de peste 14 zile; Răzvan decide: continuăm / pauză (cu motiv) / închidem.
+
 ## Final de sesiune — obligatoriu
-0. **Repo curat + pushat**: `git status` fără modificări locale — tot ce s-a lucrat e commis și PUSHAT (branch/PR, sau main după merge). Nimic rămas doar pe laptopul curent.
+0. **Repo curat + pushat** + `registru_proiecte_incepute` la zi pentru tot ce s-a atins în sesiune: `git status` fără modificări locale — tot ce s-a lucrat e commis și PUSHAT (branch/PR, sau main după merge). Nimic rămas doar pe laptopul curent.
 1. UPDATE `claude_docs` slug `handoff_activ` (secțiuni: Sesiuni și rutine / ✅ LIVE / ⏳ Pending / ⚠️ Atenționări / 🎯 Următoarele candidate). **Regula A + D (Răzvan 06.10.2026, `claude_context` #1620)**: țintă 9k, **plafon 15k caractere**. ACTUALIZEZI rândul subiectului tău, NU adaugi blocuri datate. Subiectele închise le scoți (istoricul stă în `handoff_istoric_*` / handoff-ul de modul). Peste plafon → compactezi, nu tai orbește. Rescriere completă doar cu snapshot nou + `UPDATE … WHERE md5(content_md) = '<md5 citit>'` (altfel ștergi ce a scris altă sesiune între timp).
 1b. Dacă în sesiune s-a creat/schimbat/oprit o automatizare: rândul din `public.automatizari` + secțiunea din `registru_automatizari` sunt la zi (pct. 7).
 2. INSERT lecții durabile noi în `claude_context` (category: lesson/decision/anti_bug/todo).

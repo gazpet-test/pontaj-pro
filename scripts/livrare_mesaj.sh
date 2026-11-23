@@ -66,15 +66,35 @@ lm_timp() {
     "'LIVRARE_TIMP $1: corp + inregistrare terminate la % ms de la BEGIN'"
 }
 
-# lm_fin <nume> <plafon_ms> <COMMIT|ROLLBACK> — garda finală (runda 12-13, neschimbată în conținut) urmată de instrucțiunea
-# finală, în același mesaj (forma un mesaj: separatorul e „;”, nu „\;”). Garda raportează și timpul (PLAFON_TIMP).
+# lm_fin <nume> <plafon_ms> <COMMIT|ROLLBACK> [lock] — garda finală (runda 12-13, neschimbată în conținut) urmată de
+# instrucțiunea finală, în același mesaj (forma un mesaj: separatorul e „;”, nu „\;”). Garda raportează și timpul (PLAFON_TIMP).
+# Runda 16 (L15 v2): cu „lock”, DUPĂ toate refuzurile și după PLAFON_TIMP, garda tipărește și LOCK_TINUT: cât au fost ținute
+# până aici lock-urile puternice ale migrării, din momentul declarat de migrare în gazpet.lock_puternic_la (microsecunde de la
+# epoch, scris imediat după obținerea setului complet). E DIAGNOSTIC, nu gardă (valoarea vine din artefact; nu decide nimic);
+# lipsă / formă greșită = mesaj „nedeclarat”. Eliberarea reală (după COMMIT) o măsoară observatorul din altă sesiune.
+# Runda 17 (verdictul PR #1115): mesajul spune exact ce măsoară — intervalul de la obținerea SETULUI complet până la gardă; primele
+# lock-uri ale setului sunt luate puțin mai devreme (în aceeași încercare), iar COMMIT-ul și eliberarea reală nu sunt incluse.
+# Fără „lock” textul e octet cu octet cel de dinainte (calea fără amprentă globală, scripts/test_livrare_l15_paritate.sh).
 lm_fin() {
-  local NUME="$1" PLAFON_MS="$2" FINAL="$3"
+  local NUME="$1" PLAFON_MS="$2" FINAL="$3" LOCK="${4:-}" DECL="" TIN=""
   case "$FINAL" in COMMIT|ROLLBACK) ;; *) echo "lm_fin: final invalid $FINAL" >&2; return 2 ;; esac
+  case "$LOCK" in "") ;; lock)
+    DECL=" v_lock text;"
+    TIN="
+  v_lock := pg_catalog.current_setting('gazpet.lock_puternic_la', true);
+  IF v_lock ~ '^[0-9]{10,19}\$' THEN
+    RAISE NOTICE 'LOCK_TINUT $NUME: lock-urile puternice ale migrarii tinute % ms pana la garda (de la obtinerea setului complet, la % ms de la BEGIN; primele lock-uri ale setului pot fi luate putin mai devreme; urmeaza $FINAL, neplafonat; eliberarea reala o masoara observatorul)',
+      round(extract(epoch FROM pg_catalog.clock_timestamp()) * 1000 - v_lock::numeric / 1000),
+      round(v_lock::numeric / 1000 - extract(epoch FROM pg_catalog.transaction_timestamp()) * 1000);
+  ELSE
+    RAISE NOTICE 'LOCK_TINUT $NUME: migrarea nu a declarat momentul lock-urilor puternice (gazpet.lock_puternic_la: %)', coalesce(nullif(v_lock, ''), 'lipsa');
+  END IF;" ;;
+    *) echo "lm_fin: al patrulea argument invalid $LOCK" >&2; return 2 ;;
+  esac
   cat <<SQL
 SET CONSTRAINTS ALL IMMEDIATE;
 SET LOCAL search_path = pg_catalog, pg_temp;
-DO \$plafon_fin\$ DECLARE v_amanabile text; BEGIN
+DO \$plafon_fin\$ DECLARE v_amanabile text;$DECL BEGIN
   IF pg_catalog.age(pg_catalog.xid(pg_catalog.pg_current_xact_id())) IS DISTINCT FROM 0 THEN
     RAISE EXCEPTION 'Livrare $NUME: PLAFON_AMANABIL: referinta tranzactiei curente (age = 0 pentru xid-ul de varf) nu se confirma - refuz, nimic comis'; END IF;
   SELECT pg_catalog.string_agg(o, ', ' ORDER BY o) INTO v_amanabile FROM (
@@ -99,7 +119,7 @@ DO \$plafon_fin\$ DECLARE v_amanabile text; BEGIN
     RAISE EXCEPTION 'Livrare $NUME: PLAFON_DEPASIT: % ms de la BEGIN > $PLAFON_MS ms fara inchiderea sesiunii (ceas oprit / repornit in tranzactie sau pauza inainte de garda) - refuz, nimic comis',
       round(extract(epoch FROM pg_catalog.clock_timestamp() - pg_catalog.transaction_timestamp()) * 1000); END IF;
   RAISE NOTICE 'PLAFON_TIMP $NUME: garda trecuta la % ms de la BEGIN (plafon $PLAFON_MS ms) - urmeaza $FINAL in acelasi mesaj',
-    round(extract(epoch FROM pg_catalog.clock_timestamp() - pg_catalog.transaction_timestamp()) * 1000);
+    round(extract(epoch FROM pg_catalog.clock_timestamp() - pg_catalog.transaction_timestamp()) * 1000);$TIN
 END \$plafon_fin\$;
 $FINAL;
 SQL

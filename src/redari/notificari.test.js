@@ -219,8 +219,12 @@ describe('modalul 📞 Răspuns — canalele manuale', () => {
     const { readFileSync } = await import('node:fs')
     const src = readFileSync(new URL('../Redari.jsx', import.meta.url), 'utf8')
     const modal = src.slice(src.indexOf('function ModalRaspunsTelefon'))
-    expect(modal).toContain('detinator_id: rand.detinator_id, canal, optiune,')
+    // din #1117 r2 rândul de INSERT îl construiește pregatesteRaspunsManual (ui/comune.jsx), cu canalul ales în modal
+    expect(modal).toContain('pregatesteRaspunsManual({ optiune, zi, zile, obiectii, declaratie, canal, detinatorId: rand.detinator_id')
+    expect(modal).toContain(".from('red_raspunsuri').insert(cerere.rand)")
     expect(modal).not.toContain("canal:'telefon'")
+    const { pregatesteRaspunsManual } = await import('./ui/comune.jsx')
+    expect(pregatesteRaspunsManual({ optiune: 'constatare_teren', obiectii: 'x', canal: 'scris', detinatorId: 'd1' }).rand.canal).toBe('scris')
     expect(modal).toContain('notaRaspunsManual(canal, operator, sursa)')
     expect(modal).toContain('CANALE_RASPUNS_MANUAL.map')
   })

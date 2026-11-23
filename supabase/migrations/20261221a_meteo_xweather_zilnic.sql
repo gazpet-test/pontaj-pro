@@ -1,4 +1,4 @@
--- Version 20261221120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 2000 (DOAR cu plafon; marcajul gazpet.livrare_migrare legat de txid).
+-- Version 20261221120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 5000 (DOAR cu plafon; marcajul gazpet.livrare_migrare legat de txid).
 -- 20261221a_meteo_xweather_zilnic — vremea ZILEI pe fiecare șantier, din Vaisala Xweather, păstrată NEMODIFICABIL, ca dovadă în rapoartele de
 -- lucru (raportul zilnic + exportul Excel), la o dispută cu beneficiarul (cererea owner-ului, 13.11.2026).
 --
@@ -35,10 +35,13 @@
 --   din baseline sau în plus = refuz; EXECUTE dinamic / limbaj neanalizabil în lanț = refuz; postcondiția: funcțiile noi cheamă doar pornirea.
 --   Valorile le scoate coordonatorul cu scripts/meteo_xweather_amprente.sql (tranzacție READ ONLY) în blocul marcat; necompletat = refuz.
 --   „După” = baseline-ul exact (migrarea nu schimbă nicio funcție existentă; o schimbare între cele două verificări = refuz la „după”).
--- Livrare: DOAR cu plafon — scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000 (fără plafon = refuz în $pre$).
+-- Livrare: DOAR cu plafon — scripts/livrare_migrare.sh … --plafon-tranzactie-ms 5000 (fără plafon = refuz în $pre$; alt plafon = refuz al
+--   validatorului runnerului, înainte de conexiune). 5000 = plafonul livrărilor cu amprenta globală L15 v2 (decizia proprietarului, 17.11.2026;
+--   docs/LIVRARE_L15_V2.md §9): de confirmat prin proba cu ROLLBACK pe producție, se poate coborî după măsurătoare.
 --   Lock (L06): UN singur lock pe un tabel existent — sites SHARE ROW EXCLUSIVE (cerut de cheia străină), NOWAIT, reîncercat la 50 ms până la
---   1 s de la BEGIN (peste = 55P03, nimic schimbat), după verificările de catalog. Oprește scurt doar scrierile în sites (nu citirile, nu
---   FOR SHARE / FOR UPDATE ale salvării raportului). Sub lock DOAR DDL pe obiecte noi + postcondițiile + amprenta „după”.
+--   1 s de la PRIMA ÎNCERCARE (nu de la BEGIN; termenul verificat înaintea fiecărei încercări și după obținere; peste = 55P03, nimic schimbat),
+--   după verificările de catalog. Oprește doar scrierile în sites (nu citirile, nu FOR SHARE / FOR UPDATE ale salvării raportului), până la
+--   COMMIT — inclusiv pasul „după” al runnerului. Sub lock DOAR DDL pe obiecte noi + postcondițiile + amprenta „după”.
 -- Revenire: supabase/revenire/20261221a_meteo_xweather_zilnic_ROLLBACK.sql (prin runner, cu plafon; refuză dacă tabelul are rânduri).
 -- Probe: scripts/pglite/test_meteo_xweather_local.mjs (local, PGlite: drepturi, nemodificabil, versiuni, RLS pe șantier, revenire, mutanți).
 DO $pre$
@@ -57,9 +60,9 @@ BEGIN
   -- plafonul total = ceasul de tranzacție PostgreSQL 17, pus de runner înainte de BEGIN (sursa 'session'), citit calificat + marcajul prologului
   IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION '20261221a: cere PostgreSQL 17 (plafonul tranzactiei)'; END IF;
   SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
-  IF v_plafon IS DISTINCT FROM '2000/session'
-     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '2000:' || txid_current() THEN
-    RAISE EXCEPTION '20261221a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 2000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 2000)',
+  IF v_plafon IS DISTINCT FROM '5000/session'
+     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || txid_current() THEN
+    RAISE EXCEPTION '20261221a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 5000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 5000)',
       coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa');
   END IF;
   PERFORM set_config('lock_timeout', '100ms', true);
@@ -283,24 +286,37 @@ BEGIN
 END $vf$;
 DO $l15_inainte$ BEGIN PERFORM pg_temp.amp_verifica_20261221a('inainte'); END $l15_inainte$;
 
--- ── punctul UNIC de blocare (L06), după verificările de catalog: sites SHARE ROW EXCLUSIVE (cheia străină), NOWAIT, reîncercare ≤ 1 s ──
+-- ── punctul UNIC de blocare (L06), după verificările de catalog: sites SHARE ROW EXCLUSIVE (cheia străină; singurul lock puternic, deci ordinea
+-- e fixă; lock-urile implicite ulterioare — FK la CREATE TABLE — sunt pe sites, deja ținut mai tare), NOWAIT. Bugetul = 1 s cu ceasul pornit
+-- IMEDIAT ÎNAINTEA PRIMEI ÎNCERCĂRI (v_t0; nu la BEGIN: pasul „înainte” al runnerului nu îl mai consumă), verificat ÎNAINTE de fiecare încercare
+-- și DUPĂ obținere — și pe calea fără coliziune: lock obținut după termen = refuz, nimic schimbat (docs/LIVRARE_L15_V2.md §9 „Bugetul de lock”).
+-- Fiecare încercare = subtranzacție (BEGIN … EXCEPTION): eșecul eliberează ce s-a luat în ea, înaintea pauzei. Momentul obținerii
+-- (gazpet.lock_puternic_la, µs de la epoch) îl citește garda finală a runnerului (LOCK_TINUT). ──
 DO $lock$
-DECLARE v_incercari integer := 0;
+DECLARE v_incercari integer := 0; v_t0 timestamptz := clock_timestamp(); v_buget constant interval := interval '1 second';
 BEGIN
   LOOP
+    IF clock_timestamp() >= v_t0 + v_buget THEN
+      RAISE EXCEPTION '20261221a: BUGET_LOCK: sites ocupat; % incercari, % ms de la prima incercare (bugetul e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
+        v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), round(extract(epoch FROM clock_timestamp() - now()) * 1000)
+        USING ERRCODE = '55P03';
+    END IF;
     v_incercari := v_incercari + 1;
     BEGIN
       LOCK TABLE public.sites IN SHARE ROW EXCLUSIVE MODE NOWAIT;
       EXIT;
     EXCEPTION WHEN lock_not_available THEN
-      IF clock_timestamp() >= now() + interval '1 second' THEN
-        RAISE EXCEPTION '20261221a: BUGET_LOCK: sites ocupat; % incercari, % ms de la BEGIN; nimic schimbat',
-          v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
-      END IF;
       PERFORM pg_sleep(0.05);
     END;
   END LOOP;
-  RAISE NOTICE '20261221a: lock la % ms de la BEGIN (% incercari)', round(extract(epoch FROM clock_timestamp() - now()) * 1000), v_incercari;
+  IF clock_timestamp() >= v_t0 + v_buget THEN
+    RAISE EXCEPTION '20261221a: BUGET_LOCK: lock-ul pe sites obtinut abia la % ms de la prima incercare (% incercari; bugetul e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
+      round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000)
+      USING ERRCODE = '55P03';
+  END IF;
+  PERFORM set_config('gazpet.lock_puternic_la', round(extract(epoch FROM clock_timestamp()) * 1000000)::bigint::text, true);
+  RAISE NOTICE '20261221a: lock la % ms de la BEGIN (% incercari, % ms de la prima incercare)', round(extract(epoch FROM clock_timestamp() - now()) * 1000),
+    v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
 END $lock$;
 
 -- ── tabelul ──
@@ -532,6 +548,8 @@ END $post$;
 -- L15: aceeași amprentă DUPĂ schimbare, timpul, apoi funcțiile pg_temp se șterg
 DO $l15_dupa$ BEGIN
   PERFORM pg_temp.amp_verifica_20261221a('dupa');
-  RAISE NOTICE '20261221a: sfarsit la % ms de la BEGIN', round(extract(epoch FROM clock_timestamp() - now()) * 1000);
+  RAISE NOTICE '20261221a: sfarsit la % ms de la BEGIN; lock-ul pe sites tinut de % ms (pana la COMMIT se adauga pasul dupa al runnerului si garda: LOCK_TINUT)',
+    round(extract(epoch FROM clock_timestamp() - now()) * 1000),
+    round(extract(epoch FROM clock_timestamp()) * 1000 - current_setting('gazpet.lock_puternic_la')::numeric / 1000);
 END $l15_dupa$;
 DROP FUNCTION pg_temp.amp_verifica_20261221a(text), pg_temp.amp_calc_20261221a(), pg_temp.amp_baseline_20261221a();

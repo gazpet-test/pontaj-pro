@@ -14,6 +14,7 @@
 //    ascundă un cuvânt care e și localitate, scris singur.
 // 3. numeDinPlatforma(): citește toate sursele (keyset până la pagina goală, L23); ORICE eroare / tabel lipsă / coloană lipsă /
 //    peste plafon → null (edge-ul răspunde 500, workerul nu preia nimic — fail closed, niciodată o listă tăiată în tăcere).
+// 4. coadaDePreluat() / raspunsCoada(): acțiunea „coada” (14.11.2026) — doar citire, un boolean; detaliile la secțiunea 4.
 
 export const SURSE_NUME = [
   // ── registre de persoane și terți ──
@@ -107,4 +108,60 @@ export async function numeDinPlatforma(pagina, surse = SURSE_NUME) {
   }
   if ([persoane, firme, cui, localitati].some(x => x.size > NUME_MAX_LISTA)) return null
   return { persoane: [...persoane], firme: [...firme], cui: [...cui], localitati: [...localitati] }
+}
+
+// ─── 4. Acțiunea „coada” (14.11.2026, fără migrare; r3 15.11.2026): DOAR CITIRE — e vreo întrebare în „noua” sau „in_lucru”? ───
+// Workerul o întreabă la fiecare rulare, înaintea listei de nume: coada goală → nu mai încarcă numele (21 de tabele) degeaba.
+// Răspunsul e doar un boolean, niciun conținut de întrebare. Nu preia, nu scrie, nu ia lock-uri.
+// Condiția (r3, decizia coordonatorului după review-ul PR #1104): „are ceva” = există cel puțin o întrebare în starea 'noua' SAU
+// în starea 'in_lucru', indiferent de vechime. Sunt exact stările pe care fn_intrebari_preia (ultima versiune: migrarea 20261131e)
+// le citește: 'noua' (inclusiv una amânată sau reluată — amânarea și reluarea o readuc în 'noua') și 'in_lucru' (pe cea expirată o
+// închide). „coada” NU are niciun ceas, nicio marjă și niciun prag: dacă o întrebare „în lucru” a expirat decide DOAR `preia`,
+// în bază, cu ceasul bazei. Costul acceptat: cât o întrebare e „în lucru” (cel mult 30 de minute), rularea încarcă numele și
+// `preia` nu face nimic — fluxul de dinainte de „coada”; workerul are lock, deci în timpul procesării nu pornește altă rulare.
+// FĂRĂ plafonul zilnic și fără nicio dată calendaristică: cu plafonul atins și întrebări în așteptare „coada” spune „are ceva”,
+// workerul încarcă numele și `preia` refuză — tot fluxul de dinainte de „coada”.
+// O SINGURĂ citire: un singur SELECT count(*) cu OR pe cele două stări (PostgREST HEAD + `or=`), deci un singur instantaneu al bazei.
+// GARANȚIA (și numai ea): nicio întrebare care există în starea 'noua' sau 'in_lucru' în momentul citirii nu e sărită; o întrebare
+// pusă sau revenită în coadă după citire e luată la rularea următoare.
+// Ce e diferit de `preia`: nu sare rândurile blocate (SKIP LOCKED), nu ține cont de plafon și nici de vechimea preluării — toate
+// dau doar „are ceva” în plus, niciodată „goală” în plus.
+// Testul `coada: aceleași stări ca fn_intrebari_preia` (logic.test.js) pică dacă migrarea schimbă stările citite de `preia`.
+export const COADA_STARI = Object.freeze(['noua', 'in_lucru'])
+const OP_COADA = new Set(['eq'])
+
+/** Condiția „coada”, ca date: tabel + `oricare` = listă de condiții [op, coloană, valoare] legate prin OR. Fără niciun timp. */
+export function interogareCoada() {
+  return { tabel: 'intrebari_tehnice', oricare: COADA_STARI.map(s => ['eq', 'stare', s]) }
+}
+
+/** Filtrul PostgREST `or=(...)` pentru `oricare` (fără parantezele exterioare, cum le cere supabase-js `.or()`): fiecare condiție
+ *  → `col.op."val"`, legate prin virgulă (OR). Valorile se pun mereu între ghilimele. Lista albă: op = eq, coloana [a-z_]+,
+ *  valoarea [a-z_]+; altfel null (L13: fără continuare tăcută). */
+export function filtruOrPostgrest(oricare) {
+  if (!Array.isArray(oricare) || !oricare.length) return null
+  const cond = c => (Array.isArray(c) && c.length === 3 && OP_COADA.has(c[0]) && /^[a-z_]+$/.test(c[1]) &&
+                     typeof c[2] === 'string' && /^[a-z_]+$/.test(c[2]) ? `${c[1]}.${c[0]}."${c[2]}"` : null)
+  const p = oricare.map(cond)
+  return p.includes(null) ? null : p.join(',')
+}
+
+/** true = există cel puțin o întrebare în 'noua' / 'in_lucru' (vezi sus); false = niciuna în momentul citirii; null = nu se știe
+ *  (eroare de citire, număr invalid, excepție) — edge-ul răspunde atunci 500, iar workerul merge pe fluxul de azi (L18).
+ *  `numara({ tabel, oricare, or })` → { count, error } — O SINGURĂ chemare (index.ts folosește `or`, proba PGlite `oricare`). */
+export async function coadaDePreluat(numara) {
+  const q = interogareCoada()
+  const or = filtruOrPostgrest(q.oricare)
+  if (!or) return null
+  try {
+    const { count, error } = await numara({ tabel: q.tabel, oricare: q.oricare, or })
+    if (error || !Number.isSafeInteger(count) || count < 0) return null
+    return count > 0
+  } catch (_) { return null }
+}
+
+/** Răspunsul acțiunii „coada”: 200 { de_preluat: boolean } sau 500 — fără alt conținut. */
+export async function raspunsCoada(numara) {
+  const r = await coadaDePreluat(numara)
+  return typeof r === 'boolean' ? { status: 200, corp: { de_preluat: r } } : { status: 500, corp: { error: 'Eroare internă' } }
 }
