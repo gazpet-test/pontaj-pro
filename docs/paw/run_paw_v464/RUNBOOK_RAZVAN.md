@@ -62,10 +62,12 @@ Gemini extinde caseta de compunere: div-ul zonei de drop isi schimba clasele (`h
 `paw-data\out\paw_v464_calibrare\stare_text_lung_23_11.json`, citite de chat cu textul in ciorna, netrimis). **v4.6.4d** (acest pachet,
 r11) schimba din nou DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE v4.6.4c cu aceeasi procedura: hash-ul vechi =
 `09E78891...`, zona protejata noua `operator-v464d`, copiile de siguranta cu sufixul `.v464c`, fisierele noi cu `.v464d` (pasul 1).
-Ce aduce (detaliile la pasul 0, "Stare r11" ... "Stare r17"; r14: LISTA ALBA de atribute + textele exacte ale descrierilor; r15: clasele si
+Ce aduce (detaliile la pasul 0, "Stare r11" ... "Stare r18"; r14: LISTA ALBA de atribute + textele exacte ale descrierilor; r15: clasele si
 `jslog` doar valorile vazute, textele pe Unicode exact; r16: si NODURILE TEXT pe lista alba, pe locul lor; r17: un singur editor principal,
 exact cel comparat cu brief-ul, `ql-clipboard` doar gol, orice alt `contenteditable` = refuz, comparatia cu brief-ul fara stergerea
-caracterelor invizibile): div-ul zonei de drop e acceptat
+caracterelor invizibile; r18: nicio eticheta sarita (si `script` / `style` / `template` / `noscript` = refuz), in editor doar `<p>` /
+`<br>` fara atribute, textul comparat citit din HTML (nu din textul vizibil), ultima paza dintr-o singura citire, Enter imediat dupa):
+div-ul zonei de drop e acceptat
 in starea extinsa DOAR cu una din cele 4 multimi de clase din lista inchisa (marcajul `xapfileselectordropzone` tot GOL), butonul "Ecran
 complet" e pe lista controalelor; r16: in ORICE control (si in afara lor) un text e permis doar gol (spatii albe HTML) sau exact textul
 vazut pe acel loc ("Carbon" doar in butonul modelului, textele linkului de confidentialitate doar in link, avertismentul Workspace doar sub
@@ -472,6 +474,37 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
   clipboard cu copii, clipboard dupa clasa, mai multe clipboard-uri, paza "cel putin un editor"; + locatorul fara `k != 1`. Pe codul r16
   (`ed293d49`) testele noi pica (17 FAIL + 2 ERROR din 202).
 
+**Stare (r18 = v4.6.4d runda 8, 23.11.2026, dupa NO-GO Jakarinos pe r17 `50743b8f`):**
+- **Ce era gresit in r17.** (1) `script`, `style`, `template` si `noscript` erau sarite cu tot continutul ("nu se afiseaza"), si in
+  editor: `<style contenteditable="true">continut strain arbitrar</style>` (la fel cu celelalte trei) dadea 0 necunoscute si Enter in
+  capturile gol / mediu / lung; un `<style>rich-textarea span { display: none }</style>` in zona ascundea un `<span>` strain din editor,
+  iar `inner_text()` (textul VIZIBIL) ramanea egal cu brief-ul -> Enter. (2) Ultima paza citea textul cu `ed.inner_text()` INAINTE de
+  `page.content()`; textul aparut in editor intre cele doua citiri era vazut de a doua, dar exclus ca "editor" -> Enter cu text in plus.
+- **Ce face r18.** (1) NICIO eticheta nu mai e sarita (doar chip-urile / semnele, numarate si refuzate separat): cele patru sunt elemente
+  ca oricare, fara loc in liste -> `element:` / `editabil:` / `element_in_editor:` + textul lor `text:` = refuz. In editor sunt permise
+  DOAR `<p>` si `<br>`, FARA niciun atribut, in forma Quill: copiii editorului doar `<p>` (intre ele doar spatii albe HTML), un `<p>` = doar
+  text SAU exact un `<br>` (linia goala); orice alta forma = `editor_structura:...` (refuz). Textul comparat cu brief-ul se citeste din
+  HTML-ul BRUT (textul nodurilor, liniile lipite cu linie noua), nu din `inner_text()`: CSS-ul nu mai poate ascunde nimic din comparatie.
+  (2) Ultima paza = UN SINGUR `page.content()`: din el se deriva textul comparat, editorul unic, atasamentele si necunoscutele; inainte doar
+  doua citiri prin locator care pot DOAR refuza (editor unic si semne in shadow DOM); Enter imediat dupa, fara asteptari.
+- **Deductii / riscuri ramase (refuz FALS, dar sigur):** (a) continutul editorului NU e in capturi (`diag\captura_caseta.py` il exclude,
+  e ciorna): forma "un `<p>` pe linie, `<p><br></p>` = linie goala, fara atribute" e forma Quill standard, DEDUSA. Daca la 5a / 5g apare
+  `element_in_editor:` / `editor_structura:` / `semnal_in_editor:atribut_...` pe o ciorna scrisa de script = STOP, captura editorului (doar
+  etichete si atribute, fara text) si decizie noua (commit + review). Candidati plauzibili: Gemini transforma un URL in link (clasa
+  `input-url-linkification-enabled`) sau o mentiune in chip (`inline-chips-enabled`) -> un brief cu URL-uri poate fi refuzat. (b) Ramane
+  fereastra inerenta dintre instantaneu si Enter (orice verificare o are; acum fara nicio asteptare in ea). (c) Raman cele din r17.
+- **Dovezi (teste 212, `python -I`):** reproducerile din verdict copiate exact, pe codul vechi REAL `50743b8f` si pe r18 (unealta separata,
+  aceleasi fixture-uri): **33 de scenarii, pe r17 toate 33 Enter, pe r18 toate 33 refuz** (cele 4 etichete x 3 capturi in editor si in
+  zona, style + span strain in editor si in paragraf x 3, editorul schimbat la ultima paza x 3). In teste: aceleasi reproduceri (refuz pe
+  cod, Enter pe regulile r17 ca mutant); 11 forme ne-Quill (text direct in editor, `<br>` langa text, `<p>` gol, `<p>` in `<p>`, editor
+  fara paragraf, span / div / style, `<p>` cu atribut permis in afara editorului / necunoscut); instantaneul: 27 de tipare de schimbare a
+  ciornei intre citiri (curat / text strain / chip, pe 3 citiri) x 2 capturi - decizia = starea din SINGURA citire dupa scriere, Enter
+  doar dupa o citire curata si nimic intre ea si Enter. Pozitive: 5 randari Quill (si cu linie goala finala, separatori, CRLF, linii
+  dublate) x 5 brief-uri (si cu `& < > "`, diacritice, tab, NBSP) = Enter; starile reale (captura netaiata, 21.11 i-iii, 22.11 i-iii si cu
+  5g, 23.11) = Enter cu textul citit din HTML. Mutanti r18 (6): etichetele sarite repuse, editorul r17 + text fara forma Quill, atributele
+  permise pe `<p>` din editor, textul din `inner_text()`, doua citiri, o asteptare inainte de Enter. Pe codul r17 testele noi pica (18 FAIL
+  + 6 ERROR din 212).
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -538,7 +571,7 @@ if ((Get-FileHash -LiteralPath "$Source\diag\captura_caseta.py").Hash -ine $Diag
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel asteptat (vezi $GemHashVechi)' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 644 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 64) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 738 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 80) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -548,7 +581,21 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + $SufVechi) -Force }
 ```
 
-Asteptat (pachetul v4.6.4d = r17, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **644 linii diferite (64 vechi `<=`, 580 noi `=>`)**.
+Asteptat (pachetul v4.6.4d = r18, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **738 linii diferite (80 vechi `<=`, 658 noi `=>`)**.
+Cele 80 de linii vechi = cele 64 din r17 (mai jos) + 16 noi, toate din v4.6.4c, schimbate de r18 (nicio eticheta sarita, editorul doar
+p / br in forma Quill, textul din HTML, ultima paza dintr-un instantaneu): `NEVIZIBILE = ("script", "style", "template", "noscript")`
+(scoasa), comentariul `# in editor (contenteditable) intra doar textul brief-ului: ...` si cele doua linii ale `EDITOR_TAGURI` (acum
+`("p", "br")`), din `_motiv_element` cele doua linii de comentariu ale ramurii editorului, `if n.tag in EDITOR_TAGURI:` si `return
+"element_in_editor:" + sem, ctrl, ""` (acum indentata in ramura noua), din docstring-ul `_necunoscute` cele doua linii despre ce se sare,
+linia `if n.tag in NEVIZIBILE or n.tag == CHIP or _e_semn(n):` (acum fara `NEVIZIBILE`), linia `return {"editoare": ...` din
+`analizeaza_ciorna` (acum + `text_editor`), cele trei linii ale vechii `_atasamente` si `verifica_ciorna(ed.inner_text(), text,
+_atasamente(pg))` din `trimite` (acum `_ultima_paza(pg, text)`). Liniile noi r18: nota r18 din antet, comentariile noi ale
+`STRUCTURA_TAGURI` / `EDITOR_TAGURI`, comentariul din `normalizeaza`, ramura editorului din `_motiv_element` (editorul insusi / p si br fara
+niciun atribut), `_text_editor`, `text_editor` din `analizeaza_ciorna`, `_ultima_paza` si apelul ei din `trimite`. Testele: `Ran 212 tests
+... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 1382 / 26 / 1356 (2 linii v4.6.3 in plus atinse: `def _atasamente(pg):` si apelul cu
+`ed.inner_text()` din `trimite`); fata de r17 (`FD99AA72...`, head-ul anterior al PR-ului, neinstalat) 106 / 22 / 84.
+
+Istoric (r17, fata de acelasi v4.6.4c instalat): 644 linii diferite (64 vechi `<=`, 580 noi `=>`).
 Cele 64 de linii vechi = cele 39 din r16 (mai jos) + 25 noi, toate din v4.6.4c, schimbate de r17 (editorul principal unic, comparatia):
 linia cu lista de coduri `# coduri: ... editor_lipsa, text_neintrat,` (acum + `editor_multiplu`), selectorul
 `EDITOR = 'rich-textarea [contenteditable="true"], div.ql-editor[contenteditable="true"]'` (acum `rich-textarea > div[role="textbox"]
@@ -561,7 +608,7 @@ GemEroare("text_neintrat", ...)` (acum cu punctul de cod), din `_e_editor` comen
 `ciorna_necitibila`, iar din `trimite` `ed = pg.locator(EDITOR)`, `if ed.count() == 0:` si `ed = ed.first` (acum `_editor_unic`).
 Liniile noi r17: nota r17 din antet, `EDITOR` + `CLIPBOARD_ATRIBUTE`, `SPATII_COMPARATIE`, `normalizeaza` / `_cod_la` / `verifica_ciorna`,
 `_e_editor` / `_e_clipboard`, pasul 5 din `_semnal` (`editabil:`), acceptarea clipboard-ului din `_motiv_element`, paza "exact un editor",
-`_editor_unic` si cele doua apeluri din `trimite`. Testele: `Ran 202 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 1316 / 24 /
+`_editor_unic` si cele doua apeluri din `trimite`. Testele de atunci: `Ran 202 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 1316 / 24 /
 1292 (13 linii v4.6.3 schimbate acum: lista de coduri, `EDITOR`, normalizarea, verificarea editorului din `trimite`); fata de r16
 (`5ACAED8D...`, head-ul anterior al PR-ului, neinstalat) 112 / 26 / 86.
 
@@ -640,7 +687,7 @@ rezultatul `(motiv, sursa)`, `necunoscute_surse` si liniile `    sursa` din `sta
 Informativ (r9), fata de v4.6.3 (`BE3B867B...`, nu mai e in `bin`): 760 / 11 / 749 - aceleasi 11 linii vechi ca in r2-r8 (antetul, lista de
 coduri, `import`, comentariul `ATAS`, titlul partii cu browserul, cele doua linii din vechea `_atasamente`, linia `atasamente in ciorna`
 din `stare`, cele trei linii ale vechii verificari din `trimite`); fata de r8 (`C7609E9E...`, head-ul anterior al PR-ului, neinstalat):
-115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r17 1316 / 24 / 1292, r16 1230 / 11 / 1219, r15 1196 / 11 / 1185, r14 1047 / 11 / 1036, r13 960 / 11 / 949, r12 840 / 11 / 829, r11 807 / 11 / 796, r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
+115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r18 1382 / 26 / 1356, r17 1316 / 24 / 1292, r16 1230 / 11 / 1219, r15 1196 / 11 / 1185, r14 1047 / 11 / 1036, r13 960 / 11 / 949, r12 840 / 11 / 829, r11 807 / 11 / 796, r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
 r4 536 / 11 / 525, r3 477 / 11 / 466, r2 411 / 11 / 400. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
 raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 78 / 6 din blocul de mai sus). Istoric r11 (fata de v4.6.4c):
 43 / 5 / 38, `Ran 153 tests`.

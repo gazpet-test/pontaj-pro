@@ -285,8 +285,10 @@ class TestSursa(unittest.TestCase):
         self.assertIn('pg.goto(target,', src)
         self.assertIn('CDP = "http://127.0.0.1:9333"', src)
         # r2: Enter vine DOAR dupa verifica_ciorna (continut + atasamente), iar comparatia pe lungime a disparut
-        i_ver, i_enter = src.index("verifica_ciorna(ed.inner_text()"), src.index('pg.keyboard.press("Enter")')
+        # r18: ultima paza (cu verifica_ciorna) = _ultima_paza, apelata o data in trimite, chiar inaintea lui Enter
+        i_ver, i_enter = src.index("    _ultima_paza(pg, text)\n"), src.index('pg.keyboard.press("Enter")')
         self.assertLess(i_ver, i_enter)
+        self.assertEqual(src.count('verifica_ciorna(info["text_editor"], text, info["atasamente"])'), 1)
         self.assertNotIn("* 0.8", src)
 
     def test_paza_e_prima_operatie_din_trimite(self):
@@ -462,6 +464,7 @@ class FakeLoc:
         return FakeLoc(self.pg, self.sel + " >> " + sub)
 
     def count(self):
+        self.pg.jurnal.append("count " + self.sel)
         if self.sel == gp.STOP:
             return 0
         if self.sel == gp.EDITOR:
@@ -476,15 +479,18 @@ class FakeLoc:
         pass
 
     def inner_text(self):
+        self.pg.jurnal.append("inner_text " + self.sel)
         if self.sel == gp.MODEL:
             return "Carbon"
-        return self.pg.randare(self.pg.ciorna) if self.pg.randare else self.pg.ciorna    # r17: textul citit din editor (randarea lui)
+        # r17: textul VIZIBIL al editorului (randarea lui); r18: codul nu il mai citeste (testat), ramane pentru mutantii cu calea r17
+        return self.pg.randare(self.pg.ciorna) if self.pg.randare else self.pg.ciorna
 
     def all_inner_texts(self):
         return list(self.pg.mesaje)
 
     def click(self):
         self.pg.act.append("click")
+        self.pg.jurnal.append("click")
 
 
 class FakeKb:
@@ -493,6 +499,7 @@ class FakeKb:
 
     def press(self, k):
         self.pg.act.append("press " + k)
+        self.pg.jurnal.append("press " + k)
         if k == "Delete":
             self.pg.ciorna = ""
         if k == "Enter":
@@ -500,34 +507,88 @@ class FakeKb:
 
     def insert_text(self, t):
         self.pg.act.append("insert")
+        self.pg.jurnal.append("insert")
         self.pg.ciorna += t
+        self.pg.scris = True
         if self.pg.dupa_scriere is not None:
             self.pg.html = self.pg.dupa_scriere
 
 
+def _esc_text(s):
+    # r18: textul unui nod asa cum il serializeaza page.content() (Chrome: &amp; &lt; &gt; si NBSP ca &nbsp;)
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\u00a0", "&nbsp;")
+
+
+def quill_html(t):
+    # r18: cum pune Quill un text in editor - un <p> pe linie, linia goala = <p><br></p> (forma Quill; continutul editorului nu e in
+    # capturi, vezi raportul r18) - cu escape-urile din page.content()
+    return "".join("<p>%s</p>" % (_esc_text(l) if l else "<br>") for l in (t or "").split("\n"))
+
+
+def cu_text_scris(html, interior_nou):
+    # r18: in pagina falsa, dupa scriere, continutul "de baza" al editorului principal (primul div cu role="textbox" si
+    # contenteditable="true") = textul scris (interior_nou); ce e IN PLUS in editor dupa baza (elementele straine puse de testele negative)
+    # ramane. Baza = continutul fixture-ului (TEXT_LUNG / TEXT_MEDIU / <p>ciorna</p> / <p>proba</p> / <p><br></p>).
+    m = next((x for x in re.finditer(r"<div\b[^>]*>", html) if 'role="textbox"' in x.group(0) and 'contenteditable="true"' in x.group(0)), None)
+    if m is None:
+        return html
+    i, adanc = m.end(), 1
+    for t in re.finditer(r"<div\b[^>]*>|</div>", html[i:]):
+        adanc += -1 if t.group(0) == "</div>" else 1
+        if adanc == 0:
+            j = i + t.start()
+            break
+    else:
+        return html
+    interior = html[i:j]
+    for b in (TEXT_LUNG, TEXT_MEDIU, "<p>ciorna</p>", "<p>proba</p>", "<p><br></p>"):
+        if interior.startswith(b):
+            interior = interior[len(b):]
+            break
+    return html[:i] + interior_nou + interior + html[j:]
+
+
 class FakePg:
-    def __init__(self, html, semn=0, dupa_goto=None, dupa_scriere=None, n_editor=1, randare=None):
+    def __init__(self, html, semn=0, dupa_goto=None, dupa_scriere=None, n_editor=1, randare=None, html_editor=None, la_citire=None):
         # r17: n_editor = numarul de editoare principale vazute de locator; randare = cum arata inner_text() textul scris (None = identic)
+        # r18: dupa scriere, content() pune in editor textul scris ca HTML Quill: html_editor(ciorna) daca e dat, altfel
+        # quill_html(randare(ciorna) / ciorna); la_citire(pg, html) -> html = ce intoarce citirea curenta content() (editorul schimbat
+        # intre citiri; pg.scris / pg.n_dupa = cate citiri content() au fost DUPA scriere, inaintea celei curente); jurnal = TOATE
+        # apelurile pe pagina (citiri + actiuni), in ordine
         self.url = "https://gemini.google.com/app/abc123"
-        self.n_editor, self.randare = n_editor, randare
+        self.n_editor, self.randare, self.html_editor, self.la_citire = n_editor, randare, html_editor, la_citire
         self.html, self.semn = html, semn
         self.dupa_goto = pagina() if dupa_goto is None else dupa_goto     # chatul nou goleste ciorna (ca pe 19.11)
         self.dupa_scriere = dupa_scriere
-        self.act, self.mesaje, self.ciorna = [], [], ""
+        self.act, self.mesaje, self.ciorna, self.jurnal, self.scris, self.n_dupa = [], [], "", [], False, 0
+        self.citite = []                    # r18: HTML-ul intors de fiecare citire content(), in ordine
         self.keyboard = FakeKb(self)
 
     def content(self):
-        return self.html
+        self.jurnal.append("content")
+        h = self.html
+        if self.scris:
+            if self.html_editor is not None:
+                h = cu_text_scris(h, self.html_editor(self.ciorna))
+            else:
+                h = cu_text_scris(h, quill_html(self.randare(self.ciorna) if self.randare else self.ciorna))
+        if self.la_citire is not None:
+            h = self.la_citire(self, h)
+        if self.scris:
+            self.n_dupa += 1
+        self.citite.append(h)
+        return h
 
     def locator(self, sel):
         return FakeLoc(self, sel)
 
     def goto(self, url, **kw):
         self.act.append("goto")
+        self.jurnal.append("goto")
         self.html, self.semn, self.url = self.dupa_goto, 0, "https://gemini.google.com/app"
 
     def wait_for_timeout(self, ms):
-        pass
+        self.jurnal.append("wait")
 
 
 BRIEF_TEST = "Raspunde exact: PAW_GEM_TEST_OK"
@@ -602,15 +663,17 @@ class TestTrimiteOrdine(unittest.TestCase):
 # Structura reala nu e cunoscuta (fara Edge); fixture-urile sunt scrise de mana. Cazul din verdict, copiat exact:
 CARD_VERDICT = ('<attachment-card>\n  <span>a.txt</span>\n  <button aria-label="Remove attachment">x</button>\n'
                 '</attachment-card>')
-# ciorna goala cu elemente legitime: butonul modelului (selectorul MODEL), o iconita svg, doua iconite mat-icon, script/style
+# ciorna goala cu elemente legitime: butonul modelului (selectorul MODEL), o iconita svg, doua iconite mat-icon
 # r16: iconitele mat-icon FARA text (ca in captura netaiata 23.11: numele sta in fonticon, textul e gol); r2-r15 aveau aici ligaturi
 # inventate ("add_2", "keyboard_arrow_down" ca text), acceptate de RE_LIGATURA - nevazute pe pagina reala, deci refuzate acum
+# r18: r2-r17 aveau aici si <script> / <style> (presupuse "nevizibile", sarite) - nevazute in nicio captura reala a zonei (c23n gol / mediu
+# / lung, t23: 0 elemente script / style / template / noscript), deci scoase; acum sunt refuzate (NECUNOSCUTE, TestNevizibileR18)
 GOALA_CU_CONTROALE = ('<div class="leading-actions-wrapper"><mat-icon role="img" aria-hidden="true" fonticon="plus"></mat-icon></div>'
                       '<div class="trailing-actions-wrapper"><button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Carbon">'
                       '<span class="picker-primary-text">Carbon</span><mat-icon role="img" aria-hidden="true" fonticon="keyboard_arrow_down">'
                       '</mat-icon></button>'
                       '<svg><path></path></svg></div>'
-                      '<script>var file = "a.txt";</script><style>.file-preview{}</style><span></span>')
+                      '<span></span>')
 # fiecare = ceva ce NU face parte din ciorna goala recunoscuta (asteptat: ciorna_necunoscuta), scris de mana
 NECUNOSCUTE = {
     "card_verdict": CARD_VERDICT,
@@ -632,6 +695,13 @@ NECUNOSCUTE = {
     "video": '<video src="x"></video>',
     "ligatura_fisier": '<div><mat-icon>attach_file</mat-icon></div>',
     "input_ascuns": '<input type="file" hidden>',
+    # r18: fostele "nevizibile" (sarite pana la r17), si goale
+    "script": '<script>var file = "a.txt";</script>',
+    "style": "<style>.file-preview{}</style>",
+    "script_gol": "<script></script>",
+    "style_gol": "<style></style>",
+    "template_gol": "<template></template>",
+    "noscript_gol": "<noscript></noscript>",
 }
 
 
@@ -682,6 +752,18 @@ def fara_r13(mod):
     # alta valoare, pe care lista alba a atributelor (r14, ca inainte regula r13) il refuza independent (doua straturi); mutantul se judeca
     # pe regula LUI, deci lista alba e oprita doar in modulul mutant (orice atribut trece)
     return mock.patch.object(mod, "_atribut_strain", lambda n: None)
+
+
+@contextlib.contextmanager
+def fara_r18(mod):
+    # r18 izolat: pentru mutantii rundelor vechi. Straturile r18 (textul editorului din HTML + forma Quill, ultima paza dintr-un singur
+    # instantaneu) prind si ele scenariile vechi (al doilea strat); mutantul se judeca pe regula LUI, deci DOAR in modulul mutant: forma
+    # editorului nu mai da motiv, iar ultima paza e cea din r17 (textul vizibil ed.inner_text(), apoi o citire separata a paginii)
+    def paza_r17(pg, text):
+        ed = mod._editor_unic(pg)
+        mod.verifica_ciorna(ed.inner_text(), text, mod._paza_ciorna(pg, "inainte_de_enter"))
+    with mock.patch.object(mod, "_text_editor", lambda ed: ("", None)), mock.patch.object(mod, "_ultima_paza", paza_r17):
+        yield
 
 
 class TestStructuraCiorna(unittest.TestCase):
@@ -749,14 +831,18 @@ class TestStructuraCiorna(unittest.TestCase):
     def test_in_editor_doar_text(self):
         # in editor intra brief-ul (text, comparat separat): o imagine sau un card in editor = refuz
         # r7: media in editor = acelasi semnal "media:" ca oriunde, cu prefixul contextului (nu mai exista un motiv "media_in_editor")
-        for ed, m in ((EDITOR_HTML.replace("<p>ciorna</p>", '<p>ciorna<img src="x"></p>'), "semnal_in_editor:media:img[src]"),
+        # r18: + motivul formei Quill (_text_editor), al doilea strat, scris de mana
+        for ed, m in ((EDITOR_HTML.replace("<p>ciorna</p>", '<p>ciorna<img src="x"></p>'), ["semnal_in_editor:media:img[src]", "editor_structura:img in p"]),
                       (EDITOR_HTML.replace("<p>ciorna</p>", "<p>ciorna</p><attachment-card></attachment-card>"),
-                       "element_in_editor:attachment-card")):
+                       ["element_in_editor:attachment-card", "editor_structura:attachment-card direct in editor"])):
             i, e = self.refuz(zona_cu(editor=ed))
-            self.assertEqual((e.cod, i["necunoscute_detalii"]), ("ciorna_necunoscuta", [m]))
-        # textul brief-ului (cu nume de fisiere, linii, formatare Quill) NU e verificat aici
-        ed = EDITOR_HTML.replace("<p>ciorna</p>", "<p>vezi raport.pdf</p><p><br></p><p><strong>x</strong> a.txt</p>")
+            self.assertEqual((e.cod, i["necunoscute_detalii"]), ("ciorna_necunoscuta", m))
+        # textul brief-ului (cu nume de fisiere, linii) NU e verificat aici (comparat separat)
+        ed = EDITOR_HTML.replace("<p>ciorna</p>", "<p>vezi raport.pdf</p><p><br></p><p>x a.txt</p>")
         self.assertEqual(self.an(zona_cu(editor=ed))["necunoscute"], 0)
+        # r18: formatarea (r2-r17 tolera strong / em / span...) nu mai e permisa in editor: doar p / br (refuz fals, sigur)
+        ed = EDITOR_HTML.replace("<p>ciorna</p>", "<p>vezi raport.pdf</p><p><br></p><p><strong>x</strong> a.txt</p>")
+        self.assertEqual(self.an(zona_cu(editor=ed))["necunoscute_detalii"], ["element_in_editor:strong", "editor_structura:strong in p"])
 
     def test_langa_editor_in_rich_textarea(self):
         ed = EDITOR_HTML.replace("</rich-textarea>", "<span>b.docx</span></rich-textarea>")
@@ -1389,7 +1475,8 @@ class TestSemnaleInainteDeListe(unittest.TestCase):
         self.assertEqual(self.an(zona_cu(editor=ed))["necunoscute_detalii"],
                          ["semnal_in_editor:token_file:div[role=textbox][contenteditable]{ql-editor textarea data-file-name}"])
         ed = EDITOR_HTML.replace("<p>ciorna</p>", '<p>ciorna<span class="ql-attachment-chip"></span></p>')
-        self.assertEqual(self.an(zona_cu(editor=ed))["necunoscute_detalii"], ["semnal_in_editor:token_attach:span{ql-attachment-chip}"])
+        self.assertEqual(self.an(zona_cu(editor=ed))["necunoscute_detalii"], ["semnal_in_editor:token_attach:span{ql-attachment-chip}",
+                                                                             "editor_structura:span in p"])      # r18: + forma Quill
         self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(editor=ed))), ("ciorna_necunoscuta", []))
 
     def test_url_urile_nu_sunt_nume_de_fisier_dar_cuvintele_raman(self):
@@ -1611,7 +1698,8 @@ class TestNumeFisierPesteTot(unittest.TestCase):
                     html = zona_cu(extra)
                 i = self.an(html)
                 self.assertEqual((i["atasamente"], i["semne"]), (0, 0), msg=k)
-                self.assertEqual(i["necunoscute_detalii"], [m], msg=k)
+                # r18: span-ul din editor da si motivul formei Quill (al doilea strat)
+                self.assertEqual(i["necunoscute_detalii"], [m] + (["editor_structura:span in p"] if extra is None else []), msg=k)
                 self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=k)
         # r14: calea legitima a regulii r5 (semnale), cu lista alba a atributelor oprita; cu ea pornita trece DOAR href-ul real, restul = refuz
         for extra in CURATE_R5:
@@ -2055,7 +2143,8 @@ NIVELURI = {
     "textarea_wrapper": lambda atr: zona_cu('<div data-test-id="textarea-wrapper"%s></div>' % atr),
     "div_editor_real": lambda atr: zona_cu('<div class="text-input-field simplified-input-area"%s%s></div>' % (ATRIBUTE_DIV_REALE, atr)),
     "editor": lambda atr: zona_cu(editor=editor_cu(atr)),
-    "in_editor": lambda atr: zona_cu(editor=EDITOR_HTML.replace("<p>ciorna</p>", "<p>ciorna<span%s></span></p>" % atr)),
+    # r18: elementul din editor = un <p> (singurul element cu text permis acolo; un span da si motivul formei Quill, al doilea strat)
+    "in_editor": lambda atr: zona_cu(editor=EDITOR_HTML.replace("<p>ciorna</p>", "<p%s>ciorna</p>" % atr)),
     "structura_din_lista": lambda atr: zona_cu("<gem-icon%s></gem-icon>" % atr),
     "div_neutru": lambda atr: zona_cu("<div%s></div>" % atr),
     "control_din_lista": lambda atr: zona_cu('<button aria-label="Trimite mesajul"%s></button>' % atr),
@@ -2234,7 +2323,7 @@ class TestEditorInsusi(unittest.TestCase):
             mut = mutant(inlocuiri)
             for html in htmluri:
                 self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=html[-160:])
-                with fara_r13(mut):                 # r14: lista alba (al doilea strat) oprita doar in mutant
+                with fara_r13(mut), fara_r18(mut):  # r14 / r18: lista alba si forma editorului (straturi noi) oprite doar in mutant
                     cod_m, act_m = ruleaza_trimite(mut, FakePg(html))
                 self.assertIsNone(cod_m, msg=(inlocuiri[0][1], html[-160:], cod_m))
                 self.assertIn("press Enter", act_m, msg=html[-160:])
@@ -2911,7 +3000,8 @@ class TestAtributeComplete2211(unittest.TestCase):
         # zona / editor / marcaj / semn - niciodata pentru cautarea cuvintelor
         self.assertNotIn("CLASE_EDITOR_PERMISE", "\n".join(corp("def _semnatura_token(n):")))
         # def + analizeaza_ciorna + _clase_verificate; r17: + _e_clipboard (editorul unic printre fratii lui) + _semnal (pasul 5, editabil:)
-        self.assertEqual(sum(l.count("_e_editor(") for l in cod), 5)
+        # r18: + _motiv_element (editorul insusi: atributele lui pe lista alba; restul din editor doar p / br fara atribute)
+        self.assertEqual(sum(l.count("_e_editor(") for l in cod), 6)
 
     def test_mutanti_r9_lasa_brief_ul_sa_plece(self):
         # fiecare mutant largeste una din cele trei exceptii (sau o face "wildcard" / globala); scenariul lui pleaca la Enter pe mutant, refuz
@@ -3810,6 +3900,7 @@ REPRO_R3_SURSE = ("atribut_necunoscut:matbadge=" + STRAIN, "atribut_necunoscut:a
 DESCRIERE_STRAINA = "descriere_text:%s{%s}" % ("button[aria-label=extinde intrarea la ecran complet][aria-describedby]", STRAIN)
 # linii din _motiv_element (cele 6 acceptari, r13) - tintele mutantilor; fiecare apare o singura data
 ACC_EDITOR = "            return _acceptat(n, ctrl, True)"
+ACC_IN_EDITOR = "        r = _acceptat(n, ctrl, True)"                  # r18: p / br din editor (si apoi: niciun atribut)
 ACC_CLIPBOARD = "        return _acceptat(n, ctrl)                       # r17: div.ql-clipboard gol, exact ca in capturi (fara copii: nimic de citit in el)"
 ACC_STRUCT_TAG ="        return _acceptat(n, ctrl)                       # zona si invelisul editorului (aceleasi nume ca selectorii)"
 ACC_MODEL = "        return _acceptat(n, n)                          # butonul modelului: verificat separat (verifica_model); textul lui = eticheta"
@@ -4370,8 +4461,9 @@ class TestListaAlbaAtribute(unittest.TestCase):
         i1 = next(k for k in range(i0 + 1, len(linii)) if linii[k].startswith("def "))
         corp = [l for l in linii[i0:i1] if not l.lstrip().startswith("#")]
         self.assertFalse(any(re.search(r"return None\s*,", l) for l in corp), corp)
-        self.assertEqual(sum(l.count("_acceptat(") for l in corp), 7)       # r17: + clipboard-ul Quill gol (ACC_CLIPBOARD)
-        for l in (ACC_EDITOR, ACC_CLIPBOARD, ACC_STRUCT_TAG, ACC_MODEL, ACC_NEUTRU, ACC_CONTROL, ACC_STRUCTURA):
+        # r17: + clipboard-ul Quill gol (ACC_CLIPBOARD); r18: editorul insusi (ACC_EDITOR) separat de p / br din el (ACC_IN_EDITOR)
+        self.assertEqual(sum(l.count("_acceptat(") for l in corp), 8)
+        for l in (ACC_EDITOR, ACC_IN_EDITOR, ACC_CLIPBOARD, ACC_STRUCT_TAG, ACC_MODEL, ACC_NEUTRU, ACC_CONTROL, ACC_STRUCTURA):
             self.assertEqual(linii.count(l), 1, l)
         numar = lambda nume: sum(len(re.findall(r"(?<![A-Za-z_])%s(?![A-Za-z_])" % nume, l)) for l in cod)
         self.assertEqual(numar("ATRIBUTE_PERMISE"), 2)                # definitia + citirea din _intrari_atribut
@@ -4380,7 +4472,7 @@ class TestListaAlbaAtribute(unittest.TestCase):
         self.assertEqual(numar("DESCRIERI_CUNOSCUTE"), 2)             # definitia + _motiv_descriere
         self.assertEqual(numar("ATRIBUTE_TINTA_DESCRIERE"), 2)
         self.assertEqual(numar("ATR_GENERAT"), 2)
-        self.assertEqual(sum(l.count("_acceptat(") for l in cod), 8)              # definitia + cele 7 apeluri (r17: + clipboard)
+        self.assertEqual(sum(l.count("_acceptat(") for l in cod), 9)              # definitia + cele 8 apeluri (r17: + clipboard; r18: + p / br)
         self.assertEqual(sum(l.count("_motiv_descriere(") for l in cod), 2)       # definitia + apelul din _necunoscute
         for vechi in ("VALORI_TEXT_CUNOSCUTE", "ATRIBUTE_TEXT", "FRAGMENTE_NUME_TEXT", "FORMA_IDENTIFICATOR", "_atribut_cu_text",
                       "_atribut_text_strain", '"atribut_text:'):
@@ -5330,6 +5422,12 @@ REGULI_R16_EDITOR = [
 REGULI_R16_NORMALIZARE = [('    return SPATII_COMPARATIE.sub(" ", t or "").strip(" ")',
                            '    t = (t or "").replace("\\u00a0", " ")\r\n    for z in ("\\u200b", "\\u200c", "\\u200d", "\\u2060", "\\ufeff"):\r\n'
                            '        t = t.replace(z, "")\r\n    return " ".join(t.split())')]
+# r18: regulile r17 din editor (orice eticheta de text tolerata, atributele doar pe lista alba), pentru mutantii judecati pe regula lor
+REGULI_R17_IN_EDITOR = [
+    ('EDITOR_TAGURI = ("p", "br")', 'EDITOR_TAGURI = ("p", "br", "span", "div", "strong", "b", "em", "i", "u", "s", "code", "pre", "ol", "ul", '
+                                    '"li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "sub", "sup")'),
+    ("        if r[0] is None and n.attrs:", "        if False:"),
+]
 # randarea inner_text() a unui brief cu mai multe linii in Quill: <p> pe linie -> \n in plus intre paragrafe, linia goala = <p><br></p>
 BRIEF_LINII = "Intrebare:\n\nlinia 1 cu  doua spatii\tsi tab\n- punct 1\n- punct 2 \u0219i \u021b"
 RANDARI_QUILL = (lambda s: s.replace("\n", "\n\n"), lambda s: s.replace("\n", "\n\n\n") + "\n", lambda s: "\n" + s.replace("\n", "\r\n\n"))
@@ -5357,8 +5455,10 @@ class TestEditorPrincipalR17(unittest.TestCase):
         return mod.analizeaza_ciorna(html)
 
     def scrie(self, mod, html_dupa_scriere, **kw):
+        # r18: mutantii din aceasta clasa (regulile r16 / r17) se judeca pe regula lor: straturile r18 oprite DOAR in mutant (fara_r18)
         g = html_captura("gol")
-        return ruleaza_trimite(mod, FakePg(g, dupa_goto=g, dupa_scriere=html_dupa_scriere, **kw))
+        with (fara_r18(mod) if mod is not gp else contextlib.nullcontext()):
+            return ruleaza_trimite(mod, FakePg(g, dupa_goto=g, dupa_scriere=html_dupa_scriere, **kw))
 
     def i_clip(self, s):
         return index_captura(s, "div", **{"class": "ql-clipboard"})
@@ -5425,7 +5525,8 @@ class TestEditorPrincipalR17(unittest.TestCase):
         # in editor: un div contenteditable gol (permis de lista alba a atributelor pe div) = semnal in editor
         ed = TEXT_LUNG + '<div contenteditable="true"></div>'
         html = html_captura("lung", editor=ed)
-        self.assertEqual(self.an(html)["necunoscute_detalii"], ["semnal_in_editor:editabil:div[contenteditable]{}"])
+        self.assertEqual(self.an(html)["necunoscute_detalii"], ["semnal_in_editor:editabil:div[contenteditable]{}",
+                                                                "editor_structura:div direct in editor"])     # r18: + forma Quill
         self.assertEqual(self.scrie(gp, html), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER))
         # pe rich-textarea si pe zona insasi
         i_rt = index_captura("lung", "rich-textarea")
@@ -5531,14 +5632,16 @@ class TestEditorPrincipalR17(unittest.TestCase):
         self.assertEqual(gp.SPATII_COMPARATIE.pattern, "[ \t\n\r\f]+")
         for c in map(chr, range(0x10000)):
             self.assertEqual(gp.SPATII_COMPARATIE.fullmatch(c) is not None, c in " \t\n\r\f", msg=hex(ord(c)))
-        # verifica_ciorna citeste editorul printr-un singur loc (_editor_unic), de doua ori in trimite (inainte de click si inainte de citire)
+        # editorul unic la locator printr-un singur loc (_editor_unic): o data in trimite (inainte de click) si o data in _ultima_paza
+        # r18: textul nu se mai citeste prin locator (inner_text), ci din instantaneul HTML al ultimei paze
         i_t = linii.index("def trimite(pg, text, maxs, target=\"https://gemini.google.com/app\"):")
         i_u = next(k for k in range(i_t + 1, len(linii)) if linii[k].startswith("def "))
         corp_t = [l for l in linii[i_t:i_u] if not l.lstrip().startswith("#")]
-        self.assertEqual(sum(l.count("_editor_unic(pg)") for l in corp_t), 2)
+        self.assertEqual(sum(l.count("_editor_unic(pg)") for l in corp_t), 1)
         self.assertEqual(sum(l.count("pg.locator(EDITOR)") for l in corp_t), 1)          # doar asteptarea dupa navigare (wait_for)
-        self.assertLess(corp_t.index("    ed = _editor_unic(pg)", corp_t.index("    pg.wait_for_timeout(800)")),
-                        corp_t.index("    verifica_ciorna(ed.inner_text(), text, _atasamente(pg))"))
+        self.assertLess(corp_t.index("    pg.wait_for_timeout(800)"), corp_t.index("    _ultima_paza(pg, text)"))
+        self.assertEqual(corp_t[corp_t.index("    _ultima_paza(pg, text)") + 1], '    pg.keyboard.press("Enter")')
+        self.assertFalse([l for l in corp_t if "inner_text" in l])
 
     # ---------- mutantii r17 ----------
 
@@ -5548,7 +5651,8 @@ class TestEditorPrincipalR17(unittest.TestCase):
         cap = lambda **k: html_captura(s, **k)
         cazuri = (
             # (M90) fara pasul 5 din _semnal: un div contenteditable gol in editor (permis de lista alba a atributelor) pleaca
-            ([('    if "contenteditable" in n.attrs and not _e_editor(n) and not _e_clipboard(n):', "    if False:")],
+            # r18: in editor div-ul e refuzat acum si de lista p / br fara atribute -> in mutant si regulile r17 din editor (REGULI_R17_IN_EDITOR)
+            ([('    if "contenteditable" in n.attrs and not _e_editor(n) and not _e_clipboard(n):', "    if False:")] + REGULI_R17_IN_EDITOR,
              (cap(editor=TEXT_MEDIU + '<div contenteditable="true"></div>'),), False),
             # (M91) clipboard-ul cu copii acceptat (doar atributele exacte): spatiu / <p></p> in el pleaca
             ([("    if n.tag != \"div\" or n.attrs != CLIPBOARD_ATRIBUTE or n.copii or p is None", "    if n.tag != \"div\" or n.attrs != CLIPBOARD_ATRIBUTE or p is None")],
@@ -5601,6 +5705,287 @@ class TestEditorPrincipalR17(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             gp.stare(FakePg(html_captura("lung")))
         self.assertIn("paza ciorna: OK (trimite ar continua)", out.getvalue().splitlines())
+
+
+# --- r18 (Jakarinos NO-GO r7 pe 50743b8f): nicio eticheta sarita in zona; textul editorului din HTML-ul brut; ultima paza = un instantaneu ---
+NEVIZIBILE_R17 = ("script", "style", "template", "noscript")          # etichetele sarite pana la r17 (scrise de mana)
+BAZA_EDITOR = {"gol": "<p><br></p>", "mediu": TEXT_MEDIU, "lung": TEXT_LUNG}
+# reproducerile din verdict, copiate exact: (1) eticheta "nevizibila" editabila, cu text strain, in editor; (2) un style in zona care
+# ascunde un span strain din editor
+REPRO_R7_NEVIZIBIL = '<%s contenteditable="true">continut strain arbitrar</%s>'
+REPRO_R7_STYLE = "<style>rich-textarea span { display: none }</style>"
+REPRO_R7_SPAN = "<span>continut strain arbitrar</span>"
+# regulile r17 (= 50743b8f) pentru etichetele sarite, ca mutant: impreuna cu REGULI_R17_IN_EDITOR si fara_r18 = codul r17 pe aceste cai
+REGULI_R17_NEVIZIBILE = [("        if n.tag == CHIP or _e_semn(n):",
+                          '        if n.tag in ("script", "style", "template", "noscript") or n.tag == CHIP or _e_semn(n):')]
+LINIA_VERIFICA_R18 = '    verifica_ciorna(info["text_editor"], text, info["atasamente"])'
+# (M100) textul din inner_text() (textul VIZIBIL, ca in r17), restul din instantaneu
+REGULI_M100_INNER_TEXT = [(LINIA_VERIFICA_R18, '    verifica_ciorna(_editor_unic(pg).inner_text(), text, info["atasamente"])')]
+# (M101) doua citiri: textul dintr-o citire content() ANTERIOARA, atasamentele / necunoscutele din a doua
+REGULI_M101_DOUA_CITIRI = [("    _editor_unic(pg)\r\n", '    text_citit = analizeaza_ciorna(pg.content())["text_editor"]\r\n    _editor_unic(pg)\r\n'),
+                           (LINIA_VERIFICA_R18, '    verifica_ciorna(text_citit, text, info["atasamente"])')]
+# (M102) o asteptare intre instantaneu si Enter
+REGULI_M102_ASTEPTARE = [('    _ultima_paza(pg, text)\r\n    pg.keyboard.press("Enter")',
+                          '    _ultima_paza(pg, text)\r\n    pg.wait_for_timeout(800)\r\n    pg.keyboard.press("Enter")')]
+BRIEF_SPECIAL = 'a & b <c> "d" \u0219i \u021b\tx  y\u00a0z'               # escape-uri HTML, diacritice, tab, spatii duble, NBSP
+
+
+def _text_editor_lejer(ed):
+    # mutant (M103): textContent al editorului FARA regulile formei Quill (orice eticheta, orice imbricare)
+    return "\n".join(gp._text_brut(c) if c.tag != "#text" else c.date for c in ed.copii), None
+
+
+def _invariant_instantaneu(pg):
+    # r18: dupa scriere exact O citire content(); daca s-a apasat Enter, apelul imediat dinainte e acea citire, iar ea arata editorul
+    # cu EXACT brief-ul, fara necunoscute / atasamente (ce s-a trimis = ce s-a verificat) -> (ok, motiv)
+    j = pg.jurnal
+    dupa = j[len(j) - 1 - j[::-1].index("insert") + 1:] if "insert" in j else []
+    if dupa.count("content") != 1:
+        return False, "citiri content dupa scriere: %d" % dupa.count("content")
+    if "press Enter" in dupa:
+        k = dupa.index("press Enter")
+        if dupa[k - 1] != "content":
+            return False, "intre instantaneu si Enter: " + dupa[k - 1]
+        i = gp.analizeaza_ciorna(pg.citite[-1])
+        if gp.normalizeaza(i["text_editor"]) != gp.normalizeaza(BRIEF_TEST) or i["necunoscute"] or i["atasamente"]:
+            return False, "Enter dupa un instantaneu care nu e brief-ul curat"
+    return True, ""
+
+
+class TestUltimaPazaR18(unittest.TestCase):
+    """r18: (1) script / style / template / noscript nu mai sunt sarite (zona si editor); in editor doar p / br fara atribute, in forma
+    Quill; textul editorului se citeste din HTML-ul brut (independent de CSS). (2) ultima paza = un singur page.content(), Enter imediat
+    dupa. Asteptarile sunt scrise de mana; reproducerile sunt copiate din verdict."""
+
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def r17(self):
+        # codul r17 pe caile atinse de r18 (etichete sarite, editorul tolerant), folosit cu fara_r18 (textul vizibil + citire separata)
+        return mutant(REGULI_R17_NEVIZIBILE + REGULI_R17_IN_EDITOR)
+
+    def scrie(self, mod, dupa_scriere, brief=BRIEF_TEST, r18_oprit=False, **kw):
+        g = html_captura("gol")
+        pg = FakePg(g, dupa_goto=g, dupa_scriere=dupa_scriere, **kw)
+        with (fara_r18(mod) if r18_oprit else contextlib.nullcontext()):
+            cod, det, act = trimite_brief(mod, pg, brief)
+        return cod, act, pg
+
+    # ---------- (1) reproducerile din verdict ----------
+
+    def test_reproducerea_nevizibil_editabil_in_editor(self):
+        r17 = self.r17()
+        for s in ("gol", "mediu", "lung"):
+            for tag in NEVIZIBILE_R17:
+                extra = REPRO_R7_NEVIZIBIL % (tag, tag)
+                html = html_captura(s, editor=BAZA_EDITOR[s] + extra)
+                i = self.an(html)
+                self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"]), (1, 1, 0, 0), msg=(s, tag))
+                self.assertEqual(i["necunoscute_detalii"], ["semnal_in_editor:editabil:%s[contenteditable]{}" % tag,
+                                                            "editor_structura:%s direct in editor" % tag], msg=(s, tag))
+                self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=(s, tag))
+                self.assertEqual(self.scrie(gp, html)[:2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=(s, tag))
+                # pe codul r17 (mutant + fara_r18): 0 necunoscute si Enter (= ce a masurat Jakarinos)
+                with fara_r18(r17):
+                    self.assertEqual(self.an(html, r17)["necunoscute"], 0, msg=(s, tag))
+                self.assertEqual(self.scrie(r17, html, r18_oprit=True)[:2], (None, ACTIUNI_TRIMITERE), msg=(s, tag))
+
+    def test_reproducerea_nevizibil_in_zona(self):
+        # aceleasi patru etichete in zona (in afara editorului), editabile cu text strain si goale: refuz; pe r17: Enter
+        r17 = self.r17()
+        for s in ("gol", "mediu", "lung"):
+            for tag in NEVIZIBILE_R17:
+                for extra, m in ((REPRO_R7_NEVIZIBIL % (tag, tag), ["editabil:%s[contenteditable]{}" % tag, "text:continut strain arbitrar"]),
+                                 ("<%s></%s>" % (tag, tag), ["element:" + tag]),
+                                 ("<%s>continut strain arbitrar</%s>" % (tag, tag), ["element:" + tag, "text:continut strain arbitrar"])):
+                    html = html_captura(s, extra_zona=extra)
+                    self.assertEqual(self.an(html)["necunoscute_detalii"], m, msg=(s, extra))
+                    self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=(s, extra))
+                    if s != "gol":
+                        self.assertEqual(self.scrie(gp, html)[:2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=(s, extra))
+                        self.assertEqual(self.scrie(r17, html, r18_oprit=True)[:2], (None, ACTIUNI_TRIMITERE), msg=(s, extra))
+
+    def test_reproducerea_style_ascunde_span_in_editor(self):
+        # style in zona care ascunde un span strain din editor: textul vizibil (inner_text, pagina falsa) = brief-ul; pe r17: Enter
+        r17 = self.r17()
+        for s in ("gol", "mediu", "lung"):
+            # (ordinea: traseul zonei - editorul, apoi style-ul de la capatul zonei - si la final forma editorului; in ciorna goala
+            # <p><br></p> primul copil strain al paragrafului e <br> langa span)
+            in_p = "editor_structura:br in p" if s == "gol" else "editor_structura:span in p"
+            for ed, m_forma in ((BAZA_EDITOR[s] + REPRO_R7_SPAN, "editor_structura:span direct in editor"),
+                                (BAZA_EDITOR[s].replace("</p>", REPRO_R7_SPAN + "</p>", 1), in_p)):
+                html = html_captura(s, editor=ed, extra_zona=REPRO_R7_STYLE)
+                d = self.an(html)["necunoscute_detalii"]
+                self.assertEqual(d, ["element_in_editor:span", "element:style", "text:rich-textarea span { display: none }", m_forma], msg=(s, ed[-80:]))
+                self.assertEqual(self.scrie(gp, html)[:2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=s)
+                self.assertEqual(self.scrie(r17, html, r18_oprit=True)[:2], (None, ACTIUNI_TRIMITERE), msg=s)
+        # chiar fara style si cu span-ul permis (mutant cu editorul r17): textul citit din HTML contine textul ascuns -> text_neintrat
+        mut = mutant(REGULI_R17_IN_EDITOR)
+        with mock.patch.object(mut, "_text_editor", _text_editor_lejer):
+            cod, act, _ = self.scrie(mut, html_captura("mediu", editor=TEXT_MEDIU), html_editor=lambda c: quill_html(c) + REPRO_R7_SPAN)
+        self.assertEqual((cod, act), ("text_neintrat", ACTIUNI_FARA_ENTER))
+
+    def test_reproducerea_editor_schimbat_la_ultima_paza(self):
+        # FakePg: la ultima paza (content() dupa scriere) editorul = brief + " continut strain arbitrar"; textul vizibil (inner_text) = brief
+        for s in ("gol", "mediu", "lung"):
+            cod, act, pg = self.scrie(gp, html_captura(s), html_editor=lambda c: quill_html(c + " continut strain arbitrar"))
+            self.assertEqual((cod, act), ("text_neintrat", ACTIUNI_FARA_ENTER), msg=s)
+            self.assertFalse([x for x in pg.jurnal if x.startswith("inner_text " + gp.EDITOR)], msg=s)       # textul NU vine din inner_text
+            # pe r17 (textul vizibil, apoi o citire separata a paginii): Enter cu textul strain inca in ciorna (= ce a gasit Jakarinos)
+            cod, act, pg = self.scrie(gp, html_captura(s), r18_oprit=True, html_editor=lambda c: quill_html(c + " continut strain arbitrar"))
+            self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE), msg=s)
+            self.assertIn("continut strain arbitrar", pg.citite[-1])
+
+    # ---------- (2) instantaneul unic ----------
+
+    def test_un_singur_instantaneu_pe_orice_tipar_de_schimbare(self):
+        # editorul se schimba intre citiri dupa orice tipar (citirea k dupa scriere: curat / cu text strain / cu un chip): invariantul tine
+        # pe cod (o citire, Enter doar daca ea e curata, nimic intre ea si Enter); pe mutantii M100 / M101 / M102 se rupe pe un tipar
+        def tipar(t):
+            def f(pg, h):
+                if not pg.scris or pg.n_dupa >= len(t) or t[pg.n_dupa] == "curat":
+                    return h
+                if t[pg.n_dupa] == "strain":
+                    return cu_text_scris(h, quill_html(pg.ciorna + " continut strain arbitrar"))
+                return h.replace("</input-area-v2>", chip("a.txt") + "</input-area-v2>")
+            return f
+        import itertools
+        rezultate = {}
+        for t in itertools.product(("curat", "strain", "chip"), repeat=3):
+            for s in ("mediu", "lung"):
+                cod, act, pg = self.scrie(gp, html_captura(s), la_citire=tipar(t))
+                ok, motiv = _invariant_instantaneu(pg)
+                self.assertTrue(ok, msg=(t, s, motiv, cod))
+                asteptat = {"curat": None, "strain": "text_neintrat", "chip": "ciorna_cu_atasamente"}[t[0]]
+                self.assertEqual(cod, asteptat, msg=(t, s))           # decizia = starea din SINGURA citire dupa scriere
+                rezultate[(t, s)] = cod
+        self.assertEqual(sum(1 for v in rezultate.values() if v is None), 2 * 9)     # 9 tipare cu prima citire curata x 2 stari
+        for inl, nume in ((REGULI_M100_INNER_TEXT, "M100"), (REGULI_M101_DOUA_CITIRI, "M101"), (REGULI_M102_ASTEPTARE, "M102")):
+            mut = mutant(inl)
+            rupte = []
+            for t in itertools.product(("curat", "strain", "chip"), repeat=3):
+                cod, act, pg = self.scrie(mut, html_captura("mediu"), la_citire=tipar(t))
+                if not _invariant_instantaneu(pg)[0]:
+                    rupte.append((t, cod))
+            self.assertTrue(rupte, msg=nume)
+            # starile reale trec pe fiecare mutant (mutantul slabeste, nu strica)
+            for s in ("mediu", "lung"):
+                self.assertEqual(self.scrie(mut, html_captura(s))[:2], (None, ACTIUNI_TRIMITERE), msg=(nume, s))
+        # M100: textul vizibil = brief, instantaneul cu text strain -> Enter (invariantul rupt pe ("strain", ...))
+        cod, act, pg = self.scrie(mutant(REGULI_M100_INNER_TEXT), html_captura("mediu"), la_citire=tipar(("strain",)))
+        self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE))
+        # M101: textul din prima citire (curata), restul din a doua (cu text strain in editor, exclus ca "editor") -> Enter
+        cod, act, pg = self.scrie(mutant(REGULI_M101_DOUA_CITIRI), html_captura("mediu"), la_citire=tipar(("curat", "strain")))
+        self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE))
+        self.assertIn("continut strain arbitrar", pg.citite[-1])
+
+    def test_ultima_paza_structural(self):
+        with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
+            src = f.read().decode("ascii")
+        linii = [l.rstrip("\r") for l in src.split("\n")]
+        cod = [l for l in linii if not l.lstrip().startswith("#")]
+
+        def corp(antet):
+            i0 = linii.index(antet)
+            i1 = next(k for k in range(i0 + 1, len(linii)) if linii[k].startswith("def "))
+            return [l for l in linii[i0 + 1:i1] if l.strip() and not l.lstrip().startswith("#")]
+        c = corp("def _ultima_paza(pg, text):")
+        self.assertEqual(c, ["    _editor_unic(pg)", "    semn = _semn_locator(pg)", "    info = analizeaza_ciorna(pg.content())",
+                             '    verifica_fara_atasamente(info, semn, "inainte_de_enter")', LINIA_VERIFICA_R18])
+        self.assertEqual(sum(l.count("_ultima_paza(") for l in cod), 2)               # definitia + singurul apel (in trimite)
+        self.assertFalse(any("_atasamente(pg)" in l for l in cod))                    # vechea paza separata a disparut
+        self.assertFalse(any("NEVIZIBILE" in l for l in cod))
+        self.assertEqual(sum(l.count("_text_editor(") for l in cod), 2)               # definitia + analizeaza_ciorna
+        # _necunoscute sare DOAR chip-urile / semnele (numarate si refuzate separat); nicio alta eticheta
+        c = corp("def _necunoscute(zona, editoare, ids=None):")
+        self.assertEqual([l.split("#")[0].rstrip() for l in c if l.split("#")[0].strip() == "continue"], ["            continue"] * 2)
+        self.assertIn("        if n.tag == CHIP or _e_semn(n):", c)
+        self.assertEqual(gp.EDITOR_TAGURI, ("p", "br"))
+
+    # ---------- forma Quill a editorului ----------
+
+    def test_randarile_quill_legitime_trec(self):
+        # L20: un brief cu mai multe linii / linii goale / CRLF / caractere speciale, randat ca de Quill (HTML), ajunge la Enter
+        randari = (quill_html, lambda c: quill_html(c) + "<p><br></p>", lambda c: "\n" + quill_html(c).replace("</p><p>", "</p>\n  <p>") + "\n",
+                   lambda c: quill_html(c.replace("\r\n", "\n")), lambda c: quill_html(c.replace("\n", "\n\n")))
+        for brief in (BRIEF_TEST, BRIEF_LINII, "Intrebare:\r\n\r\n  arhitectura?\r\n- punct\r\n", BRIEF_SPECIAL, BRIEF_LINII + "\n\n" + BRIEF_SPECIAL):
+            for f in randari:
+                for s in ("mediu", "lung"):
+                    cod, act, pg = self.scrie(gp, html_captura(s), brief=brief, html_editor=f)
+                    self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE), msg=(repr(brief[:30]), repr(f(brief)[:80]), s))
+        # _text_editor direct (scris de mana): liniile lipite cu \n, linia goala = ""
+        a = gp._Arbore()
+        a.feed('<div><p>a &amp; b</p><p><br></p><p>c\u00a0d</p>\n<p>e</p></div>')
+        self.assertEqual(gp._text_editor(a.radacina.copii[0]), ("a & b\n\nc\u00a0d\ne", None))
+
+    def test_forme_ne_quill_refuzate(self):
+        # orice alta forma a editorului = refuz inainte de Enter (motivele scrise de mana)
+        cazuri = (
+            (lambda c: quill_html(c) + "continut strain arbitrar", ["editor_structura:text direct in editor"]),
+            (lambda c: "<p>%s<br></p>" % c, ["editor_structura:br in p"]),
+            (lambda c: "<p><br>%s</p>" % c, ["editor_structura:br in p"]),
+            (lambda c: quill_html(c) + "<p></p>", ["editor_structura:p gol"]),
+            (lambda c: "<p>%s<p>x</p></p>" % c, ["editor_structura:p in p"]),
+            (lambda c: "", ["editor_structura:editor fara paragraf"]),
+            (lambda c: "<p><span>%s</span></p>" % c, ["element_in_editor:span", "editor_structura:span in p"]),
+            (lambda c: "<div><p>%s</p></div>" % c, ["element_in_editor:div", "editor_structura:div direct in editor"]),
+            (lambda c: '<p data-test-id="empty-disclaimer">%s</p>' % c,
+             ["semnal_in_editor:atribut_in_editor:p[data-test-id=empty-disclaimer]{data-test-id}"]),
+            (lambda c: '<p dir="ltr">%s</p>' % c, ["semnal_in_editor:atribut_necunoscut:p{dir}"]),
+            (lambda c: quill_html(c) + "<p><br></p><style>p{}</style>", ["element_in_editor:style", "editor_structura:style direct in editor"]),
+        )
+        for f, m in cazuri:
+            h = cu_text_scris(html_captura("mediu"), f(BRIEF_TEST))
+            self.assertEqual(self.an(h)["necunoscute_detalii"], m, msg=f(BRIEF_TEST))
+            cod, act, pg = self.scrie(gp, html_captura("mediu"), html_editor=f)
+            self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=f(BRIEF_TEST))
+
+    def test_mutanti_r18_lasa_brief_ul_sa_plece(self):
+        cap = lambda s="mediu", **k: html_captura(s, **k)
+        # (M103) etichetele sarite repuse: in zona, editabile / cu text, pleaca (in editor raman refuzate de forma Quill: doua straturi)
+        mut = mutant(REGULI_R17_NEVIZIBILE)
+        for tag in NEVIZIBILE_R17:
+            for extra in (REPRO_R7_NEVIZIBIL % (tag, tag), "<%s>continut strain arbitrar</%s>" % (tag, tag)):
+                self.assertEqual(self.scrie(gp, cap(extra_zona=extra))[:2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=extra)
+                self.assertEqual(self.scrie(mut, cap(extra_zona=extra))[:2], (None, ACTIUNI_TRIMITERE), msg=extra)
+            self.assertEqual(self.scrie(mut, cap(editor=TEXT_MEDIU + REPRO_R7_NEVIZIBIL % (tag, tag)))[0], "ciorna_necunoscuta")
+        # (M104) editorul r17 (orice eticheta de text, atribute pe lista alba) + textContent fara forma Quill: <b></b> / <code> goale pleaca
+        # (fiecare strat singur e dublat de celalalt: lista p / br prinde elementul, forma Quill prinde orice eticheta -> echivalenti separat)
+        mut = mutant(REGULI_R17_IN_EDITOR)
+        for f in (lambda c: quill_html(c) + "<b></b>", lambda c: "<p>%s<code></code></p>" % c, lambda c: "<p><strong>%s</strong></p>" % c):
+            self.assertEqual(self.scrie(gp, cap(), html_editor=f)[:2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=f(BRIEF_TEST))
+            with mock.patch.object(mut, "_text_editor", _text_editor_lejer):
+                self.assertEqual(self.scrie(mut, cap(), html_editor=f)[:2], (None, ACTIUNI_TRIMITERE), msg=f(BRIEF_TEST))
+        # (M105) atributele permise pe p in editor (regula "fara niciun atribut" scoasa): p[data-test-id=empty-disclaimer] pleaca
+        mut = mutant([("        if r[0] is None and n.attrs:", "        if False:")])
+        f = lambda c: '<p data-test-id="empty-disclaimer">%s</p>' % c
+        self.assertEqual(self.scrie(gp, cap(), html_editor=f)[:2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER))
+        self.assertEqual(self.scrie(mut, cap(), html_editor=f)[:2], (None, ACTIUNI_TRIMITERE))
+        # starile reale trec pe fiecare mutant r18
+        for inl in (REGULI_R17_NEVIZIBILE, REGULI_R17_IN_EDITOR, [("        if r[0] is None and n.attrs:", "        if False:")],
+                    REGULI_M100_INNER_TEXT, REGULI_M101_DOUA_CITIRI, REGULI_M102_ASTEPTARE):
+            m = mutant(inl)
+            for s in ("mediu", "lung"):
+                self.assertEqual(self.scrie(m, cap(s))[:2], (None, ACTIUNI_TRIMITERE), msg=(inl[0][1][:60], s))
+
+    def test_starile_reale_trec_r18(self):
+        # regresie (L20): captura netaiata (gol -> mediu / lung), 21.11 i-iii, 22.11 i-iii (si 5g), 23.11: Enter, cu textul citit din HTML
+        for s in ("mediu", "lung"):
+            cod, act, pg = self.scrie(gp, html_captura(s))
+            self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE), msg=s)
+            self.assertEqual(_invariant_instantaneu(pg), (True, ""))
+            i = self.an(pg.citite[-1])
+            self.assertEqual((i["editoare"], i["necunoscute"], i["text_editor"]), (1, 0, BRIEF_TEST), msg=s)
+        for html in [pagina_calibrare(x) for x in ("i", "ii", "iii")] + [pagina_22_11_completa(x) for x in ("i", "ii", "iii")] + \
+                [pagina_22_11_completa(x, fdi=FDI_5G) for x in ("i", "ii", "iii")] + [pagina_23_11(), chat_nou_gol_23_11()] + \
+                [html_captura(s) for s in ("gol", "mediu", "lung")]:
+            i = self.an(html)
+            self.assertEqual((i["editoare"], i["zone"], i["necunoscute"]), (1, 1, 0), msg=i["necunoscute_detalii"])
+            pg = FakePg(html, dupa_goto=html)
+            self.assertEqual(ruleaza_trimite(gp, pg), (None, ACTIUNI_TRIMITERE))
+            self.assertEqual(_invariant_instantaneu(pg), (True, ""))
+        # ciorna goala reala (<p><br></p>) = text gol, nicio abatere de forma
+        self.assertEqual(self.an(html_captura("gol"))["text_editor"], "")
 
 
 def _nod_text(t):

@@ -180,6 +180,15 @@
 #   in zona) = semnal `editabil:` (_semnal, pasul 5). (2) Comparatia cu brief-ul nu mai elimina in tacere U+200B / U+200C / U+200D /
 #   U+2060 / U+FEFF si nu mai inlocuieste NBSP: un caracter invizibil prezent in editor si absent din brief = text_neintrat. Ramane doar
 #   comprimarea spatiilor albe HTML, necesara pentru randarea reala Quill (normalizeaza: <p> pe linie -> inner_text cu \n in plus).
+# v4.6.4d / r18 (23.11.2026, Jakarinos NO-GO r7): (1) script / style / template / noscript erau sarite cu tot subarborele (NEVIZIBILE),
+#   si in editor: <style contenteditable="true">continut strain arbitrar</style> dadea 0 necunoscute, iar un <style> care ascundea un
+#   <span> strain din editor lasa inner_text() egal cu brief-ul. Acum NICIO eticheta nu se sare (doar chip-urile / semnele, numarate si
+#   refuzate separat): cele patru sunt elemente ca oricare, fara loc in liste -> refuz. Textul editorului se citeste din HTML-ul BRUT
+#   (_text_editor: textContent, forma Quill - doar <p> in editor, in <p> doar text sau exact un <br>), nu din inner_text(), deci nu mai
+#   depinde de CSS; in editor sunt permise doar p / br FARA niciun atribut (EDITOR_TAGURI), restul = element_in_editor:. (2) Ultima paza
+#   citea textul cu ed.inner_text() INAINTE de page.content() si excludea din HTML tot ce era in editor -> un text adaugat intre cele
+#   doua citiri pleca. Acum _ultima_paza: UN SINGUR page.content(), din care se deriva textul comparat, editorul unic, atasamentele si
+#   necunoscutele (inainte doar doua citiri prin locator care pot doar refuza); Enter imediat dupa.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata, base64, json
@@ -216,11 +225,12 @@ VOIDE = ("area", "base", "br", "col", "embed", "hr", "img", "input", "link", "me
 NEUTRE = ("div", "span", "p", "br", "mat-icon", "svg", "path", "g", "circle", "rect", "line", "polyline", "polygon",
           "ellipse", "defs", "clippath", "lineargradient", "radialgradient", "stop", "mask", "use", "symbol")
 STRUCTURA_TAGURI = ZONA_TAGURI + ("rich-textarea",)       # zona si invelisul editorului (aceleasi nume ca selectorii)
-NEVIZIBILE = ("script", "style", "template", "noscript")   # nu se afiseaza; subarborele lor nu se citeste
+# r18 (Jakarinos NO-GO r7): NICIO eticheta nu mai e sarita in zona (script / style / template / noscript erau "nevizibile" si se
+# sareau cu tot subarborele, si in editor): ele trec prin _motiv_element ca orice element si nu sunt in nicio lista alba -> refuz
 MEDIA = ("img", "picture", "video", "audio", "canvas", "object", "embed", "iframe", "image", "source", "track")
-# in editor (contenteditable) intra doar textul brief-ului: Quill produce p / br; restul etichetelor de text sunt tolerate
-EDITOR_TAGURI = ("p", "br", "span", "div", "strong", "b", "em", "i", "u", "s", "code", "pre", "ol", "ul", "li",
-                 "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "sub", "sup")
+# r18: in editor intra DOAR ce produce Quill pentru textul brief-ului: <p> pe linie, <br> singur intr-un <p> (linia goala), FARA niciun
+# atribut (_motiv_element) si in forma de mai jos (_text_editor); orice alta eticheta (span, div, b, code, a, style...) = element_in_editor:
+EDITOR_TAGURI = ("p", "br")
 # atribute care fac un element "semnificativ" (eticheta, rol, actiune): elementul trebuie sa fie in listele albe
 SEMN_ATR_VALOARE = ("role", "aria-label", "data-test-id", "data-testid", "type", "name", "title", "alt", "placeholder",
                     "mattooltip", "data-tooltip")              # in semnatura cu valoare
@@ -708,10 +718,10 @@ def normalizeaza(t):
     # r2 (Jakarinos P1-b): normalizare EXPLICITA pentru compararea ciornei cu brief-ul.
     # r17 (Jakarinos NO-GO r6: "normalizarea elimina intentionat U+200B / U+2060"): NIMIC nu se mai elimina sau inlocuieste. Singura
     # transformare = orice sir de spatii albe HTML -> un spatiu, capetele fara ele. De ce e NECESARA (randarea reala Quill): editorul pune
-    # fiecare linie a brief-ului intr-un <p> (linia goala = <p><br></p>), iar inner_text() separa blocurile <p> prin unul sau doua
-    # sfarsituri de linie (regula innerText pentru <p>) si mai adauga unul pentru <br> -> numarul de \n din brief nu se pastreaza ("a\nb"
-    # e citit "a\n\nb", o linie goala devine 3+ sfarsituri). Fara comprimare, orice brief cu mai multe linii ar fi refuzat. Testat cu
-    # textul randat ca de Quill (teste: TestComparatieR17). Ce NU se comprima: NBSP (Quill are white-space: pre-wrap, deci Chrome pastreaza
+    # fiecare linie a brief-ului intr-un <p> (linia goala = <p><br></p>); r18: textul se citeste din HTML (_text_editor: liniile lipite cu
+    # \n), iar \r din brief (CRLF), linia goala finala pe care Quill o poate adauga si tab-urile / spatiile de la capetele liniilor nu au o
+    # forma garantata in <p> -> fara comprimare, un brief cu mai multe linii ar putea fi refuzat fals. Testat cu randari Quill in HTML
+    # (teste: TestUltimaPazaR18). Ce NU se comprima: NBSP (Quill are white-space: pre-wrap, deci Chrome pastreaza
     # spatiile obisnuite; un NBSP in editor si spatiu in brief = nepotrivire) si caracterele invizibile (prezente in editor, absente din
     # brief = nepotrivire, text_neintrat). Daca la 5a prima diferenta arata U+00A0, e o decizie noua (commit + review), nu o exceptie tacuta.
     return SPATII_COMPARATIE.sub(" ", t or "").strip(" ")
@@ -1200,11 +1210,19 @@ def _motiv_element(n, ctrl, in_editor=False):
     if s:
         return ("semnal_in_editor:" + s[0] if in_editor else s[0]), ctrl, s[1]
     if in_editor:
-        # in editor (contenteditable) intra doar textul brief-ului (comparat separat, verifica_ciorna): Quill produce p / br, restul
-        # etichetelor de text sunt tolerate; orice alt element = nerecunoscut (nicio lista alba nu se consulta in editor)
-        if n.tag in EDITOR_TAGURI:
+        # in editor intra doar textul brief-ului (comparat separat, verifica_ciorna, pe textul citit din HTML - _text_editor)
+        # r18: editorul insusi = atributele lui pe lista alba; in el DOAR p / br (EDITOR_TAGURI) si FARA niciun atribut (nici cele permise
+        # pe p in afara editorului, ex. data-test-id); orice alt element = nerecunoscut (nicio lista alba nu se consulta in editor)
+        if _e_editor(n):
             return _acceptat(n, ctrl, True)
-        return "element_in_editor:" + sem, ctrl, ""
+        if n.tag not in EDITOR_TAGURI:
+            return "element_in_editor:" + sem, ctrl, ""
+        r = _acceptat(n, ctrl, True)
+        if r[0] is None and n.attrs:
+            k = sorted(n.attrs)[0]
+            return ("semnal_in_editor:atribut_in_editor:%s{%s}" % (sem, _ascii(k)[:40]), ctrl,
+                    "atribut_in_editor:%s=%s" % (_ascii(k)[:40], _ascii(n.attrs[k])[:SURSA_AFISATA]))
+        return r
     if _e_clipboard(n):
         return _acceptat(n, ctrl)                       # r17: div.ql-clipboard gol, exact ca in capturi (fara copii: nimic de citit in el)
     # r13: fiecare acceptare de mai jos trece prin _acceptat (atributele cu text = valori EXACTE cunoscute)
@@ -1223,8 +1241,10 @@ def _motiv_element(n, ctrl, in_editor=False):
 
 def _necunoscute(zona, editoare, ids=None):
     """Elementele / textele din zona (r6: SI ELEMENTUL ZONEI INSESI, primul verificat) care NU fac parte din structura recunoscuta
-    a ciornei goale (lista de motive). Chip-urile si semnele (numarate separat, si pe zona) si ce nu se afiseaza (script / style /
-    template) se sar. r7: UN SINGUR traseu pentru toate elementele - fiecare (zona, invelisuri, editor, descendenti) trece prin
+    a ciornei goale (lista de motive). Se sar DOAR chip-urile si semnele (numarate separat, si pe zona: orice chip / semn = refuz in
+    verifica_fara_atasamente). r18 (Jakarinos NO-GO r7): script / style / template / noscript NU se mai sar (nici in zona, nici in
+    editor) - sunt elemente ca oricare, fara loc in listele albe, deci refuz; textul lor (si al unui style care ar ascunde ceva) e nod text.
+    r7: UN SINGUR traseu pentru toate elementele - fiecare (zona, invelisuri, editor, descendenti) trece prin
     _motiv_element (deci prin _semnal); editorul si descendentii lui poarta doar contextul in_editor, nu o alta functie.
     r8: lista de perechi (motiv, sursa); sursa e "" pentru motivele fara semnal (element: / text...)."""
     out = []
@@ -1237,8 +1257,8 @@ def _necunoscute(zona, editoare, ids=None):
                 if m:
                     out.append((m, ""))
             continue
-        if n.tag in NEVIZIBILE or n.tag == CHIP or _e_semn(n):
-            continue
+        if n.tag == CHIP or _e_semn(n):
+            continue                        # numarate separat (atasamente / semne): refuz acolo
         if any(n is e for e in editoare):
             in_editor = True                # r7: editorul = acelasi traseu, cu context (nu o cale separata)
         m, ctrl_copii, sursa = _motiv_element(n, ctrl, in_editor)
@@ -1254,6 +1274,34 @@ def _necunoscute(zona, editoare, ids=None):
             ctrl_copii = ctrl               # r12 / r16: sub ORICE control contextul ramane al lui (nimic imbricat nu-l inlocuieste)
         st.extend((c, ctrl_copii, in_editor) for c in reversed(n.copii))
     return out
+
+
+def _text_editor(ed):
+    """r18 (Jakarinos NO-GO r7 P1-1): textul editorului principal citit din HTML-ul BRUT (textContent pe arborele lui), nu din
+    inner_text() - deci independent de CSS (un <style> / display:none nu mai poate ascunde un text din comparatie). Forma acceptata =
+    exact ce produce Quill pentru un text: copiii editorului sunt DOAR <p> (niciun alt element si niciun text direct in editor, in afara
+    separatorilor din doar spatii albe HTML intre paragrafe - fara continut, comprimati oricum de normalizeaza); un <p> contine fie DOAR
+    noduri text (o linie a brief-ului), fie exact un <br> si nimic altceva (linia goala, <p><br></p>); niciun <p> gol, niciun <br> langa
+    text, nimic imbricat. Liniile se lipesc cu \\n (comparatia comprima oricum spatiile albe HTML, normalizeaza).
+    -> (text, None) sau (None, motiv "editor_structura:..."); motivul intra la necunoscute (analizeaza_ciorna), deci refuz."""
+    linii = []
+    for p in ed.copii:
+        if p.tag == "#text" and SPATII_COMPARATIE.fullmatch(p.date):
+            continue                        # separator din spatii albe HTML intre paragrafe (fara continut)
+        if p.tag != "p":
+            return None, "editor_structura:%s direct in editor" % ("text" if p.tag == "#text" else _ascii(p.tag)[:40])
+        if len(p.copii) == 1 and p.copii[0].tag == "br":
+            linii.append("")                # linia goala Quill
+            continue
+        if not p.copii:
+            return None, "editor_structura:p gol"
+        for c in p.copii:
+            if c.tag != "#text":
+                return None, "editor_structura:%s in p" % _ascii(c.tag)[:40]
+        linii.append("".join(c.date for c in p.copii))
+    if not linii:
+        return None, "editor_structura:editor fara paragraf"
+    return "\n".join(linii), None
 
 
 def analizeaza_ciorna(html):
@@ -1297,7 +1345,13 @@ def analizeaza_ciorna(html):
     necunoscute = []                        # r2: verificarea pozitiva (tot ce nu e structura recunoscuta a ciornei goale)
     for z in zone:
         necunoscute.extend(_necunoscute(z, editoare, ids))
-    return {"editoare": len(editoare), "zone": len(zone), "atasamente": atas, "semne": semne,
+    # r18: textul editorului UNIC, din ACELASI arbore (acelasi instantaneu) ca atasamentele si necunoscutele; forma lui = regulile Quill
+    text_editor = None
+    if len(editoare) == 1:
+        text_editor, m = _text_editor(editoare[0])
+        if m:
+            necunoscute.append((m, ""))
+    return {"editoare": len(editoare), "zone": len(zone), "atasamente": atas, "semne": semne, "text_editor": text_editor,
             "detalii": ["%s x%d" % (k, v) for k, v in sorted(detalii.items())][:12],
             "necunoscute": len(necunoscute), "necunoscute_detalii": [m[:DETALIU_AFISAT] for m, _ in necunoscute[:60]],
             "necunoscute_surse": [s[:DETALIU_AFISAT] for _, s in necunoscute[:60]]}     # r8: paralel cu necunoscute_detalii
@@ -1417,9 +1471,18 @@ def _editor_unic(pg):
     return loc.first
 
 
-def _atasamente(pg):
-    # chiar inainte de Enter: aceeasi paza (ridica la orice semn), apoi 0 pentru verifica_ciorna
-    return _paza_ciorna(pg, "inainte_de_enter")
+def _ultima_paza(pg, text):
+    # r18 (Jakarinos NO-GO r7 P1-2): ultima paza = UN SINGUR instantaneu. Din ACELASI page.content() (singura citire a ciornei dupa
+    # scriere) se deriva si textul editorului comparat cu brief-ul (_text_editor, din HTML-ul brut), si editorul unic in HTML, si
+    # atasamentele / semnele / necunoscutele; nicio citire anterioara a textului (r17: ed.inner_text() citit INAINTE de content(), iar
+    # textul in plus vazut de content() era exclus ca "editor") nu intra in decizie. Inainte de instantaneu, doar doua citiri prin locator
+    # care pot DOAR refuza (vad si shadow DOM-ul, pe care page.content() nu il serializeaza): editorul unic si semnele de atasament.
+    # Apelantul apasa Enter imediat dupa (fara alte asteptari sau citiri).
+    _editor_unic(pg)
+    semn = _semn_locator(pg)
+    info = analizeaza_ciorna(pg.content())
+    verifica_fara_atasamente(info, semn, "inainte_de_enter")
+    verifica_ciorna(info["text_editor"], text, info["atasamente"])
 
 
 def stare(pg):
@@ -1477,9 +1540,8 @@ def trimite(pg, text, maxs, target="https://gemini.google.com/app"):
     pg.keyboard.insert_text(text)
     pg.wait_for_timeout(800)
     # r2 (Jakarinos P1-b): continut identic (normalizat), nu doar lungime; atasamentele se verifica din nou chiar inainte de Enter
-    # r17: textul comparat = al editorului principal UNIC (locatorul reverificat chiar acum; paza din _atasamente cere si in HTML exact unul)
-    ed = _editor_unic(pg)
-    verifica_ciorna(ed.inner_text(), text, _atasamente(pg))
+    # r18: textul, editorul unic si atasamentele din ACELASI instantaneu (_ultima_paza), Enter imediat dupa
+    _ultima_paza(pg, text)
     pg.keyboard.press("Enter")
     spune("GEM_MODEL:", model.encode("ascii", "replace").decode("ascii"))
     spune("TRIMIS (%d car.); astept raspunsul..." % len(text))
