@@ -1,4 +1,4 @@
-# Paw v4.6.4 / v4.6.4b / v4.6.4c - doar paza atasamentelor Gemini - procedura pentru Razvan
+# Paw v4.6.4 / v4.6.4b / v4.6.4c / v4.6.4d - doar paza atasamentelor Gemini - procedura pentru Razvan
 
 Numai operatorul executa pasii. Agentul nu a instalat nimic si nu a cerut elevare.
 A = PowerShell 5.1 admin Gazpet-Ai; N = acelasi cont NE-elevat. Orice eroare = STOP.
@@ -54,9 +54,21 @@ Ce aduce (detaliile la pasul 0, "Stare r10"): pe indicatorul izolat mai poate st
 (spatiu, tab, linie noua); orice `style` cu continut (url(, nume de fisier, `--uploader-height`, orice altceva) = refuz ca pana acum.
 Rollback-ul (mai jos) readuce v4.6.4b.
 
+**Stare 23.11.2026 (v4.6.4c -> v4.6.4d):** v4.6.4c (`gemini_pw.py` `09E78891...`, main `16a9a9f7`) a fost INSTALAT, testul de canal
+5a-5g a trecut si markerul e scris (`gem` merge prin lansator). Pe 23.11 un brief LUNG (~10 KB, sesiunea juridica) a fost refuzat
+FALS chiar inainte de Enter: `GEM_EROARE ciorna_necunoscuta inainte_de_enter: 2 element(e) ...` - nimic trimis (sigur). Cu text lung
+Gemini extinde caseta de compunere: div-ul zonei de drop isi schimba clasele (`height-expanded-past-single-line`, `pre-fullscreen`,
+`with-toolbox-drawer` in loc de `simplified-input-area`) si apare butonul "Ecran complet" (atributele complete:
+`paw-data\out\paw_v464_calibrare\stare_text_lung_23_11.json`, citite de chat cu textul in ciorna, netrimis). **v4.6.4d** (acest pachet,
+r11) schimba din nou DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE v4.6.4c cu aceeasi procedura: hash-ul vechi =
+`09E78891...`, zona protejata noua `operator-v464d`, copiile de siguranta cu sufixul `.v464c`, fisierele noi cu `.v464d` (pasul 1).
+Ce aduce (detaliile la pasul 0, "Stare r11"): div-ul zonei de drop e acceptat in starea extinsa DOAR cu una din multimile de clase
+din lista inchisa (marcajul `xapfileselectordropzone` tot GOL), butonul "Ecran complet" e pe lista controalelor. Testul de canal are un
+pas nou, **5g2** (brief lung si brief mediu). Rollback-ul (mai jos) readuce v4.6.4c (cu markerul ei).
+
 Hash-urile vin din raportul de review, nu din acest fisier. Livrare: folderul din commit-ul
 aprobat ajunge in `$Source` (`git archive` al commit-ului, dezarhivat in
-`C:\Users\Public\livrare\run_paw_v464c`); verificarea de mai jos decide.
+`C:\Users\Public\livrare\run_paw_v464d`); verificarea de mai jos decide.
 
 ## 0. Calibrare pe pagina reala (N, DOAR citire, INAINTE de review-ul final si de instalare)
 
@@ -241,6 +253,31 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
   `u\72l(` (url( cu escape CSS), oprit DOAR de regula izolarii.
 - **La 5a-5g (v4.6.4c) sunt asteptate aceleasi rezultate ca la v4.6.4b, plus 5g OK.**
 
+**Stare (r11 = v4.6.4d, 23.11.2026, dupa refuzul FALS al unui brief lung pe v4.6.4c instalat):**
+- **Ce s-a vazut.** Jurnalul refuzului (`paw-data\out\juridic_43eb636364a95c9d.log`) are 2 linii, ambele lamurite din atributele complete
+  (`stare_text_lung_23_11.json`): (1) `token_file:div{text-input-field height-expanded-past-single-line pre-fullscreen with-toolbox-drawer
+  jslog xapfileselectordropzone}` - acelasi div al zonei de drop (marcajul `xapfileselectordropzone=""`, GOL), dar cu alte clase decat
+  cele calibrate la 21.11 (`text-input-field simplified-input-area`), deci regula marcajului nu se mai potrivea; (2)
+  `element:button[aria-label=extinde intrarea la ecran complet][aria-describedby]` - butonul "Ecran complet" (`fullscreen-button`,
+  tooltip "Ecran complet"), fara niciun semnal. Butonul de trimitere in starea `has-input submit` era deja acceptat.
+- **Atentie: clasele reale difera de ce presupunea cererea.** In starea extinsa NU raman clasele normale: `simplified-input-area` dispare,
+  iar `with-toolbox-drawer` apare. Lista inchisa `CLASE_DIV_DROP` are 7 multimi EXACTE: normala (21.11), cea vazuta pe 23.11, cele doua
+  intermediare pe aceeasi baza (doar unul din cei doi token-i ai inaltimii) si cele trei "normala + token-ii inaltimii" cerute de chat.
+  Doar doua sunt vazute pe pagina; celelalte cinci le verifica 5g2 (brief mediu) - daca o stare intermediara are alte clase, refuzul
+  e fals dar sigur (STOP, copiezi linia). Orice alt token, prefix / sufix, litere mari, token lipsa, ambele baze odata, alt tag, sau o
+  valoare a marcajului = `token_file:...` ca inainte (sau `token_<cuvant>` daca o clasa noua contine un cuvant de atasament, ex.
+  `pre-fullscreen-file`).
+- **Butonul "Ecran complet"** e trecut EXACT cu semnatura din jurnal in lista controalelor (6 + 23 + 3); fara `aria-describedby` sau cu alta
+  eticheta = element necunoscut (refuz); cu un nume de fisier in eticheta / in text / intr-un atribut, cu o clasa de atasament sau cu o
+  imagine in el = refuz, oricare ar fi lista.
+- **Dovezi (teste 144 -> 153, toate `python -I`):** pe regulile v4.6.4c pagina reconstituita da EXACT linia `GEM_EROARE` din jurnal
+  (la `inainte_de_enter`, dupa scriere, fara Enter); pe r11 aceeasi stare da 0 necunoscute, `paza ciorna: OK`, iar `trimite` ajunge la
+  Enter; cu 1 / 2 fisiere reale tot `ciorna_cu_atasamente` (si cand fisierul apare odata cu textul lung: refuz chiar inainte de Enter);
+  21 de abateri pe div refuzate cu motivul si sursa asteptate; 5 mutanti (supramultime, submultime, fara litere mari, forma valorii
+  ignorata, semnatura controlului ca prefix) lasa fiecare scenariul lui sa plece si starea reala sa treaca; pe cod toate refuza.
+  Testele noi pica pe v4.6.4c (main `ae5ca32d`).
+- **La 5a-5g (v4.6.4d) sunt asteptate aceleasi rezultate ca la v4.6.4c; 5g2 (nou) trebuie sa treaca.**
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -265,25 +302,27 @@ scrie nimic si nu trimite nimic.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$Source = 'C:\Users\Public\livrare\run_paw_v464c\docs\paw\run_paw_v464'
+$Source = 'C:\Users\Public\livrare\run_paw_v464d\docs\paw\run_paw_v464'
 $PawRoot = 'C:\ProgramData\Gazpet\Paw'
 $Bin = Join-Path $PawRoot 'bin'
-$Audit = Join-Path $PawRoot 'operator-v464c'
-$SufVechi = '.v464b'     # sufixul copiilor de siguranta (ce e instalat acum: v4.6.4b)
-$SufNou = '.v464c'       # sufixul fisierelor noi din zona protejata
+$Audit = Join-Path $PawRoot 'operator-v464d'
+$SufVechi = '.v464c'     # sufixul copiilor de siguranta (ce e instalat acum: v4.6.4c)
+$SufNou = '.v464d'       # sufixul fisierelor noi din zona protejata
 $GemMarker = 'C:\Users\Public\paw-data\gem_canal_validat'
 $Python = 'C:\Program Files\Python313\python.exe'
 $ManifestHash = 'INLOCUIESTE_CU_HASH_MANIFEST_DIN_RAPORT'
 $GemHashNou = 'INLOCUIESTE_CU_HASH_GEMINI_PW_DIN_RAPORT'
-$GemHashVechi = '5B0CCD4851A2B2A5BCCB0CF0B76A087F544051091827B998A156C35D082972CD'
+$GemHashVechi = '09E78891CD4D73DA5B457D0397CC2CE6BD2A7E83EF3F7AD51C320AF0D69EA862'
 $Operator = "$env:COMPUTERNAME\Gazpet-Ai"
 $ReaderSid = (New-Object Security.Principal.NTAccount($Operator)).Translate([Security.Principal.SecurityIdentifier]).Value
 ```
 
-`$GemHashVechi` = `gemini_pw.py` din v4.6.4b (instalat acum in `bin`, 22.11.2026, main `c8138f0f`). Istoric: la instalarea v4.6.4b peste
-v4.6.4 valorile au fost `$Audit = operator-v464b`, `$GemHashVechi = A03E2B5C5ABD5D80709E5E1FB87126F4986245389B4E0943796589E2156AF7B6`
+`$GemHashVechi` = `gemini_pw.py` din v4.6.4c (instalat acum in `bin`, recitit 23.11.2026, = main `16a9a9f7` / `ae5ca32d`). Istoric: la
+instalarea v4.6.4c peste v4.6.4b valorile au fost `$Audit = operator-v464c`, `$GemHashVechi = 5B0CCD4851A2B2A5BCCB0CF0B76A087F544051091827B998A156C35D082972CD`
+(v4.6.4b), sufixele `.v464b` / `.v464c`; la instalarea v4.6.4b peste v4.6.4 valorile au fost `$Audit = operator-v464b`, `$GemHashVechi = A03E2B5C5ABD5D80709E5E1FB87126F4986245389B4E0943796589E2156AF7B6`
 (v4.6.4), sufixele `.v464` / `.v464b`; la instalarea v4.6.4 peste v4.6.3: `operator-v464`, `BE3B867B0BD7FA2333D009B54258A146DF72F4D78C2706C321ABEB2D21AED9F5`
-(v4.6.3), `.v463` / `.v464`. Folderele `operator-v464` si `operator-v464b` raman pe disc (copiile v4.6.3 / v4.6.4), nu se ating.
+(v4.6.3), `.v463` / `.v464`. Folderele `operator-v464`, `operator-v464b` si `operator-v464c` raman pe disc (copiile v4.6.3 / v4.6.4 /
+v4.6.4b), nu se ating.
 
 ## 2. Verificari inainte de inlocuire (N - NU in consola admin; o data, inainte de pasul 3)
 
@@ -302,7 +341,7 @@ if ($manifest.'gemini_pw.py' -ine $GemHashNou) { throw 'gemini_pw.py din pachet 
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel asteptat (vezi $GemHashVechi)' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 24 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 5) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 43 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 5) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -312,13 +351,22 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + $SufVechi) -Force }
 ```
 
-Asteptat (pachetul v4.6.4c = r10, fata de v4.6.4b INSTALAT in `bin`, `5B0CCD48...`): **24 linii diferite (5 vechi `<=`, 19 noi `=>`)**.
-Cele 5 linii vechi sunt toate din v4.6.4b: comentariul `# (tag, clasele EXACTE ..., izolat): acceptat DOAR asa.`, cele doua intrari din
+Asteptat (pachetul v4.6.4d = r11, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **43 linii diferite (5 vechi `<=`, 38 noi `=>`)**.
+Cele 5 linii vechi sunt toate din v4.6.4c: comentariul `# (tag, clasele EXACTE fara cele generate, ..., goale): acceptat DOAR asa.`,
+cele doua intrari din `MARCAJE_PERMISE` (acum al doilea camp e lista multimilor de clase: `CLASE_DIV_DROP` pe div, `((),)` pe indicator),
+comentariul `# cu clasele (fara cele generate) EXACT cele din lista, ...` din `_marcaj_permis` si linia
+`if n.tag != tag or set(c for c in _clase(n) if not _generat(c)) != set(clase):` (acum `not any(... == set(x) for x in clase)`).
+Liniile noi: nota v4.6.4d / r11 din antet, comentariile si constanta `CLASE_DIV_DROP` (7 multimi), cele doua intrari, cele doua linii
+din `_marcaj_permis`, nota r11 de la listele albe si butonul "Ecran complet" (cu comentariul lui) in `CONTROALE_CUNOSCUTE`.
+Testele: `Ran 153 tests ... OK`. Informativ, fata de v4.6.3 (`BE3B867B...`): 807 / 11 / 796 (aceleasi 11 linii vechi).
+
+Istoric (pachetul v4.6.4c = r10, fata de v4.6.4b instalat atunci, `5B0CCD48...`): 24 linii diferite (5 vechi `<=`, 19 noi `=>`).
+Cele 5 linii vechi erau toate din v4.6.4b: comentariul `# (tag, clasele EXACTE ..., izolat): acceptat DOAR asa.`, cele doua intrari din
 `MARCAJE_PERMISE` (acum cu al saselea camp: `()` pe div-ul r5, `("style",)` pe indicator), linia `for tag, clase, nume, forma, izolat in
 MARCAJE_PERMISE:` si linia izolarii `if izolat and any(... (_generat(a) and v == "") ...)` din `_marcaj_permis` (acum si cu
 `not (a in goale and VALOARE_SPATII.fullmatch(v))`). Liniile noi: nota v4.6.4c / r10 din antet, comentariile campului `goale`,
-`VALOARE_SPATII`, cele doua intrari, comentariul si cele doua linii din `_marcaj_permis`. Testele: `Ran 144 tests ... OK`.
-Informativ, fata de v4.6.3 (`BE3B867B...`): 774 / 11 / 763 (aceleasi 11 linii vechi).
+`VALOARE_SPATII`, cele doua intrari, comentariul si cele doua linii din `_marcaj_permis`. Testele de atunci: `Ran 144 tests ... OK`.
+Informativ (r10), fata de v4.6.3 (`BE3B867B...`): 774 / 11 / 763 (aceleasi 11 linii vechi).
 
 Istoric (pachetul v4.6.4b = r9, fata de v4.6.4 instalat atunci, `A03E2B5C...`): 230 linii diferite (47 vechi `<=`, 183 noi `=>`).
 Cele 47 de linii vechi erau toate din v4.6.4 (nu din v4.6.3): constanta `MARCAJE_GOALE_PERMISE` si comentariile ei, `DETALIU_AFISAT = 240`,
@@ -332,9 +380,9 @@ rezultatul `(motiv, sursa)`, `necunoscute_surse` si liniile `    sursa` din `sta
 Informativ (r9), fata de v4.6.3 (`BE3B867B...`, nu mai e in `bin`): 760 / 11 / 749 - aceleasi 11 linii vechi ca in r2-r8 (antetul, lista de
 coduri, `import`, comentariul `ATAS`, titlul partii cu browserul, cele doua linii din vechea `_atasamente`, linia `atasamente in ciorna`
 din `stare`, cele trei linii ale vechii verificari din `trimite`); fata de r8 (`C7609E9E...`, head-ul anterior al PR-ului, neinstalat):
-115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
+115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r11 807 / 11 / 796, r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
 r4 536 / 11 / 525, r3 477 / 11 / 466, r2 411 / 11 / 400. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
-raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 24 / 5 din blocul de mai sus).
+raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 43 / 5 din blocul de mai sus).
 
 Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
 `C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi
@@ -507,12 +555,45 @@ nu trimit (...)` cu ciorna goala (sau doar cu textul brief-ului): pagina are ele
 calibrarea nu le-a vazut (de ex. butonul de trimitere apare abia dupa scriere); nu a plecat nimic.
 STOP, fara marker, copiaza linia `GEM_EROARE` + liniile `necunoscut ...` din `stare` pentru chat.
 
-Numai dupa ce ai VAZUT rezultatele 5a-5g, markerul - **ne-elevat (N)**, nu din consola admin:
+- **5g2 (nou in v4.6.4d).** Tot cu Carbon, ciorna goala: doua trimiteri cu brief-uri mai lungi, ca sa se vada caseta EXTINSA (pe 23.11
+  un brief de ~10 KB a fost refuzat fals pe v4.6.4c, chiar inainte de Enter): (1) un brief LUNG (~13 KB, 160 de linii de umplutura),
+  (2) un brief MEDIU (5 linii; starea intermediara a casetei). Aceleasi verificari ca la 5g: cod 0, nicio linie `GEM_EROARE`, ultima
+  linie `GEM_CHAT_URL ...`, raspunsul contine `PAW_GEM_TEST_OK`. Pe ecran: chat nou in ACELASI tab, brief-ul intreg in mesajul trimis,
+  niciun fisier.
+
+```powershell
+$GemBriefLung = "C:\Users\Public\paw-data\brief\gem-canal-lung-$GemId.md"
+$GemBriefMediu = "C:\Users\Public\paw-data\brief\gem-canal-mediu-$GemId.md"
+$umplutura = @(1..160 | ForEach-Object { 'Linia {0:D3} a unui brief lung de proba, doar text simplu; nu raspunde la ea, citeste mai departe.' -f $_ })
+(@('Test de canal cu brief lung. Ignora liniile numerotate de mai jos.') + $umplutura + @('Raspunde exact: PAW_GEM_TEST_OK')) |
+    Set-Content -LiteralPath $GemBriefLung -Encoding ASCII
+@('Test de canal cu brief mediu.', 'Linia 1 de proba.', 'Linia 2 de proba.', 'Linia 3 de proba.', 'Raspunde exact: PAW_GEM_TEST_OK') |
+    Set-Content -LiteralPath $GemBriefMediu -Encoding ASCII
+if ((Get-Item -LiteralPath $GemBriefLung).Length -lt 10000) { throw 'Brief-ul lung are sub 10 KB' }
+foreach ($b in $GemBriefLung, $GemBriefMediu) {
+    $ErrorActionPreference = 'Continue'
+    $out = @(& $Python "$Bin\gemini_pw.py" trimite $b 180)
+    $cod = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    $out
+    if ($cod -ne 0) { throw "5g2 ${b}: cod de iesire $cod" }
+    if (@($out | Where-Object { $_ -match '^GEM_EROARE' }).Count) { throw "5g2 ${b}: GEM_EROARE" }
+    if ($out.Count -eq 0 -or $out[-1] -notmatch '^GEM_CHAT_URL https://gemini\.google\.com/app/[0-9a-fA-F]+$') { throw "5g2 ${b}: lipseste linia finala GEM_CHAT_URL" }
+    if (@($out | Where-Object { $_ -match 'PAW_GEM_TEST_OK' }).Count -eq 0) { throw "5g2 ${b}: raspunsul nu contine PAW_GEM_TEST_OK" }
+    "5g2 ${b}: OK"
+}
+```
+
+Daca 5g2 da `GEM_EROARE ciorna_necunoscuta inainte_de_enter: ...`: caseta extinsa are o forma pe care r11 nu o cunoaste (de ex. o stare
+intermediara cu alte clase); nu a plecat nimic. STOP, fara marker. Pentru chat: linia `GEM_EROARE` intreaga si - cu acelasi brief scris
+de mana in ciorna (lipit, NU trimis) - iesirea lui `stare` (liniile `necunoscut ...` si `    sursa ...`), apoi golesti ciorna.
+
+Numai dupa ce ai VAZUT rezultatele 5a-5g2, markerul - **ne-elevat (N)**, nu din consola admin:
 
 ```powershell
 $GemHash = (Get-FileHash -LiteralPath "$Bin\gemini_pw.py" -Algorithm SHA256).Hash
 if ($GemHash -ine $GemHashNou) { throw 'gemini_pw.py instalat nu e cel revizuit' }
-Set-Content -LiteralPath $GemMarker -Value ('CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v464c') -Encoding ASCII
+Set-Content -LiteralPath $GemMarker -Value ('CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v464d') -Encoding ASCII
 ```
 
 ## 6. Smoke prin lansator (N)
@@ -533,7 +614,7 @@ Dupa smoke: sesiunea de chat actualizeaza `registru_automatizari`, randul `run_p
 
 ## Rollback la versiunea dinainte (A, consola noua, dupa pasul 1; pasul 2 NU se ruleaza)
 
-Readuce in `bin` copiile de siguranta cu sufixul `$SufVechi` din `$Audit` (la v4.6.4c: v4.6.4b, `5B0CCD48...`, din `operator-v464c`).
+Readuce in `bin` copiile de siguranta cu sufixul `$SufVechi` din `$Audit` (la v4.6.4d: v4.6.4c, `09E78891...`, din `operator-v464d`).
 
 ```powershell
 . "$Bin\cdx_security.ps1"
@@ -561,8 +642,9 @@ Apoi markerul, **ne-elevat (N)**, dupa pasul 1 (copia facuta la pasul 2, daca ex
 if (Test-Path -LiteralPath ($GemMarker + $SufVechi)) { Copy-Item -LiteralPath ($GemMarker + $SufVechi) -Destination $GemMarker -Force }
 ```
 
-Dupa rollback `gem` ramane refuzat (nici v4.6.3, nici v4.6.4, nici v4.6.4b nu au marker valid: testele lor de canal au picat);
-jak / cop / cdx neschimbate. Pasul 4 se poate rula ca verificare. Folderul de audit e redenumit,
+Dupa rollback la v4.6.4c, markerul copiat la pasul 2 (`gem_canal_validat.v464c`, legat de `09E78891...`) e pus la loc, deci `gem` merge
+din nou cu v4.6.4c (cu refuzul fals la brief-urile lungi, sigur). Rollback mai departe (v4.6.4b sau mai vechi) = `gem` refuzat: nici
+v4.6.3, nici v4.6.4, nici v4.6.4b nu au marker valid (testele lor de canal au picat). jak / cop / cdx neschimbate. Pasul 4 se poate rula ca verificare. Folderul de audit e redenumit,
 deci pasul 3 se poate relua de la capat dupa ce cauza e lamurita.
 
 ## Pachetele neinstalate v4.6.2 (mil) si v4.7 (cxw)

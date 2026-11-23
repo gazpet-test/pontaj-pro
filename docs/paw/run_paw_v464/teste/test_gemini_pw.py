@@ -619,6 +619,8 @@ LINIA_PAS4 = "        if k in ATRIBUTE_AFISATE_SEPARAT or k in SEMN_ATR_VALOARE 
 # linia din _marcaj_permis care cere elementul IZOLAT (r9); r10: + atributele din campul `goale`, doar cu valoare goala / spatii albe HTML
 LINIA_IZOLAT = ('        if izolat and any(a != k and a != "class" and not (_generat(a) and v == "") and not (a in goale and VALOARE_SPATII.fullmatch(v))'
                 ' for a, v in n.attrs.items()):')
+# linia din _marcaj_permis care cere tagul si clasele exacte; r11: clasele = UNA din multimile din lista (CLASE_DIV_DROP pentru div)
+LINIA_CLASE = "        if n.tag != tag or not any(set(c for c in _clase(n) if not _generat(c)) == set(x) for x in clase):"
 
 
 def mutant(inlocuiri, nume="gemini_pw_mutant"):
@@ -805,10 +807,12 @@ class TestStructuraCiorna(unittest.TestCase):
         texte = set(l.split(":", 1)[1] for l in toate if l.startswith("text:"))
         neacceptate = [l for l in toate if l.startswith("token_")]
         self.assertEqual(neacceptate, ["token_file:div{text-input-field simplified-input-area}"])
-        self.assertEqual(set(gp.CONTROALE_CUNOSCUTE) | set(gp.STRUCTURA_CUNOSCUTA), elemente)
+        # r11: + singura linie `element:` din refuzul cu brief lung de pe 23.11 (STARE_23_11, copiata din jurnal): butonul "Ecran complet"
+        self.assertEqual([l for l in STARE_23_11 if l.startswith("element:")], [STARE_23_11[1]])
+        self.assertEqual(set(gp.CONTROALE_CUNOSCUTE) | set(gp.STRUCTURA_CUNOSCUTA), elemente | {STARE_23_11[1].split(":", 1)[1]})
         self.assertEqual(set(gp.TEXTE_CUNOSCUTE), texte | {gp._ascii(AVERTISMENT_TEXT)})
         self.assertEqual(set(gp.CONTROALE_CUNOSCUTE) & set(gp.STRUCTURA_CUNOSCUTA), set())
-        self.assertEqual(len(gp.CONTROALE_CUNOSCUTE) + len(gp.STRUCTURA_CUNOSCUTA) + len(gp.TEXTE_CUNOSCUTE), 5 + 23 + 3)
+        self.assertEqual(len(gp.CONTROALE_CUNOSCUTE) + len(gp.STRUCTURA_CUNOSCUTA) + len(gp.TEXTE_CUNOSCUTE), 6 + 23 + 3)
         # controalele = doar butoane si linkuri; tot ce e invelis sta in STRUCTURA (continutul lui se verifica mai departe)
         self.assertTrue(all(x.startswith(("button[", "a[")) for x in gp.CONTROALE_CUNOSCUTE), gp.CONTROALE_CUNOSCUTE)
         self.assertFalse(any(x.startswith(("button[", "a[")) for x in gp.STRUCTURA_CUNOSCUTA), gp.STRUCTURA_CUNOSCUTA)
@@ -823,9 +827,11 @@ class TestStructuraCiorna(unittest.TestCase):
         # r8: + marcajul vazut la 5a pe 22.11.2026 (stare_22_11_dupa_instalare.txt, linia 1); r9: cu valoarea EXACTA citita de chat din pagina
         # (atribute_complete_22_11.txt) si element izolat; cele trei exceptii r9 sunt EXACT atributele reale (scrise de mana din acel fisier)
         # r10: + campul `goale` - pe indicator doar `style` (gol / spatii albe HTML; 5g, atribute_5g_22_11.txt), pe div-ul r5 nimic
+        # r11: al doilea camp = lista multimilor de clase acceptate; pe div: CLASE_DIV_DROP (scrisa de mana mai jos: CLASE_DIV_DROP_ASTEPTATE)
         self.assertEqual([(t, c, n, f.pattern, iz, g) for t, c, n, f, iz, g in gp.MARCAJE_PERMISE],
-                         [("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone", "", False, ()),
-                          ("file-drop-indicator", (), "data-filedrop-id", re.escape("chat-window-input-container"), True, ("style",))])
+                         [("div", CLASE_DIV_DROP_ASTEPTATE, "xapfileselectordropzone", "", False, ()),
+                          ("file-drop-indicator", ((),), "data-filedrop-id", re.escape("chat-window-input-container"), True, ("style",))])
+        self.assertIs(gp.MARCAJE_PERMISE[0][1], gp.CLASE_DIV_DROP)
         self.assertEqual(gp.VALOARE_SPATII.pattern, "[ \\t\\n\\r\\f]*")
         self.assertEqual(gp.VALORI_PERMISE, (("gem-icon-button", "arialabel", "incarcare si instrumente", (("ariahaspopup", "menu"),)),))
         self.assertEqual(gp.CLASE_EDITOR_PERMISE, ("input-url-linkification-enabled", "inline-chips-enabled"))
@@ -1603,7 +1609,7 @@ class TestMarcajDropZone(unittest.TestCase):
             # fara conditia de valoare goala (r8: forma valorii): o valoare nevida pe marcaj pleaca
             ([('        if not forma.fullmatch(n.attrs.get(k) or ""):', "        if False:")], (DIV_FARA_NG % ' xapfileselectordropzone="1"',)),
             # fara conditia de element: acelasi atribut pe gem-icon / span / fieldset pleaca
-            ([("        if n.tag != tag or set(c for c in _clase(n) if not _generat(c)) != set(clase):", "        if False:")],
+            ([(LINIA_CLASE, "        if False:")],
              ('<gem-icon xapfileselectordropzone=""></gem-icon>', '<fieldset role="none" xapfileselectordropzone=""></fieldset>',
               '<div class="text-input-field" xapfileselectordropzone=""></div>')),
             # numele comparat ca prefix, nu exact: un atribut cu sufix pleaca
@@ -2446,7 +2452,7 @@ class TestPagina2211(unittest.TestCase):
             ([('        if not forma.fullmatch(n.attrs.get(k) or ""):', "        if False:")],
              (fdi("a b"), fdi("1.2"), fdi("x" * 65), fdi("1"), fdi("drop_zone-7"), zona_cu(DIV_FARA_NG % ' xapfileselectordropzone="1"'))),
             # (M2) fara conditia de element: acelasi atribut (valoarea reala) pe gem-icon / pe un div fara copii / pe indicator cu clasa pleaca
-            ([("        if n.tag != tag or set(c for c in _clase(n) if not _generat(c)) != set(clase):", "        if False:")],
+            ([(LINIA_CLASE, "        if False:")],
              (zona_cu('<gem-icon data-filedrop-id="%s"></gem-icon>' % FILEDROP_REAL), zona_cu('<div data-filedrop-id="%s"></div>' % FILEDROP_REAL),
               fdi(FILEDROP_REAL, ' class="x"'))),
             # (M3) numele comparat ca prefix: un atribut cu sufix (valoarea reala) pleaca
@@ -2553,8 +2559,9 @@ class TestAtributeComplete2211(unittest.TestCase):
         self.assertIn("paza ciorna: OK (trimite ar continua)", linii)
         self.assertIn("atasamente in ciorna: 0", " ".join(linii))
         self.assertFalse(any(l.startswith(("  necunoscut", "    sursa")) for l in linii), linii)
-        # listele albe raman cele de la 21.11 (5 + 23 + 3): niciuna din cele trei exceptii nu e o intrare in liste
-        self.assertEqual(len(gp.CONTROALE_CUNOSCUTE) + len(gp.STRUCTURA_CUNOSCUTA) + len(gp.TEXTE_CUNOSCUTE), 5 + 23 + 3)
+        # listele albe raman cele de la 21.11 (5 + 23 + 3; r11: + butonul "Ecran complet" = 6 + 23 + 3): niciuna din cele trei exceptii
+        # r9 nu e o intrare in liste
+        self.assertEqual(len(gp.CONTROALE_CUNOSCUTE) + len(gp.STRUCTURA_CUNOSCUTA) + len(gp.TEXTE_CUNOSCUTE), 6 + 23 + 3)
         for x in gp.CONTROALE_CUNOSCUTE + gp.STRUCTURA_CUNOSCUTA + gp.TEXTE_CUNOSCUTE:
             self.assertNotIn("arialabel", x)
             self.assertNotIn("chips", x)
@@ -2974,6 +2981,366 @@ class TestStyleGol5g(unittest.TestCase):
         # fara exceptia r10 (= v4.6.4b instalat): pagina 5g e refuzata, deci `goale` e cea care o lasa sa treaca
         v464b = mutant([(MARCAJ_FDI_R10, MARCAJ_FDI_FARA_GOALE)])
         self.assertEqual(ruleaza_trimite(v464b, FakePg(pagina_22_11_completa(fdi=FDI_5G))), ("ciorna_necunoscuta", []))
+
+
+# --- r11 (v4.6.4d, 23.11.2026): refuz FALS la un brief LUNG pe v4.6.4c instalat (09E78891). Cele doua linii `necunoscut` sunt copiate EXACT din
+# paw-data\out\juridic_43eb636364a95c9d.log (GEM_EROARE ciorna_necunoscuta inainte_de_enter); atributele de mai jos sunt copiate de mana din
+# paw-data\out\paw_v464_calibrare\stare_text_lung_23_11.json (citite de chat prin CDP cu ~10 KB de text in ciorna, NETRIMIS, apoi golit) ---
+STARE_23_11 = (
+    "token_file:div{text-input-field height-expanded-past-single-line pre-fullscreen with-toolbox-drawer jslog xapfileselectordropzone}",
+    "element:button[aria-label=extinde intrarea la ecran complet][aria-describedby]",
+)
+EROARE_23_11 = "inainte_de_enter: 2 element(e) nerecunoscute in zona ciornei - nu trimit (" + "; ".join(STARE_23_11) + ")"
+SURSA_DIV_23_11 = "nume_atribut:xapfileselectordropzone="
+# multimile de clase acceptate pe div-ul zonei de drop (scrise de mana: normal 21.11, text lung 23.11, intermediarele cerute de chat)
+CLASE_DIV_DROP_ASTEPTATE = (
+    ("text-input-field", "simplified-input-area"),
+    ("text-input-field", "height-expanded-past-single-line", "pre-fullscreen", "with-toolbox-drawer"),
+    ("text-input-field", "height-expanded-past-single-line", "with-toolbox-drawer"),
+    ("text-input-field", "pre-fullscreen", "with-toolbox-drawer"),
+    ("text-input-field", "simplified-input-area", "height-expanded-past-single-line"),
+    ("text-input-field", "simplified-input-area", "pre-fullscreen"),
+    ("text-input-field", "simplified-input-area", "height-expanded-past-single-line", "pre-fullscreen"),
+)
+CLASE_DIV_EXTINS = "text-input-field height-expanded-past-single-line pre-fullscreen with-toolbox-drawer"
+DIV_EXTINS_ATR = (' _ngcontent-ng-c282099457="" xapfileselectordropzone="" class="' + CLASE_DIV_EXTINS + '" jslog="303810;track:impression"')
+ZONA_2311_ATR = (' _ngcontent-ng-c3991212058="" trace="" _nghost-ng-c282099457="" class="ui-improvements-phase-1 with-toolbox-drawer'
+                 ' input-box-shadow discovery-feed-theme single-line-input lm-input-redesign ng-tns-c282099457-4"')
+CLASE_MAT_BTN = ("mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above"
+                 " mat-badge-after mat-badge-small mat-badge-hidden")
+RIPPLE = ' mat-ripple-loader-uninitialized="" mat-ripple-loader-class-name="mat-mdc-button-ripple" mat-ripple-loader-centered=""'
+CLASE_GEM_BTN = "gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled"
+PLUS_2311_GIB = (' _ngcontent-ng-c2269542982="" theme="lm" type="onSurface" ariahaspopup="menu" arialabel="' + ARIALABEL_REAL + '"'
+                 ' class="menu-button gem-menu-button open ' + CLASE_GEM_BTN + '" _nghost-ng-c738377845=""')
+PLUS_2311_BTN = (' _ngcontent-ng-c738377845="" matbadgeposition="after" maticonbutton="" class="' + CLASE_MAT_BTN + '"' + RIPPLE
+                 + ' aria-expanded="false" aria-haspopup="menu" aria-label="' + ARIALABEL_REAL + '" jslog="300142;track:generic_click,impression"'
+                 ' aria-disabled="false"')
+CLASE_ECRAN = ("mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger fullscreen-button ng-tns-c282099457-4"
+               " mat-primary")
+ECRAN_ATR = (' _ngcontent-ng-c282099457="" mat-icon-button="" color="primary" aria-label="Extinde intrarea la ecran complet"'
+             ' gemtooltip="Ecran complet" class="' + CLASE_ECRAN + '"' + RIPPLE
+             + ' aria-describedby="cdk-describedby-message-ng-1-16" cdk-describedby-host="ng-1"')
+GI = '<gem-icon><svg viewBox="0 0 24 24"><path d="M0 0h24v24H0z"></path></svg></gem-icon>'      # = iconita din pagina_calibrare
+
+
+def ecran(atr=ECRAN_ATR, inauntru=GI):
+    return "<button" + atr + ">" + inauntru + "</button>"
+
+
+JSLOG_MODEL = ("206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGws"
+               "bnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true")
+MODEL_2311_ATR = (' _ngcontent-ng-c1653784781="" cdkoverlayorigin="" gemmenutrigger="" mat-button="" periodictabletrigger=""'
+                  ' gemtooltipposition="below" data-test-id="bard-mode-menu-button" class="mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger'
+                  ' input-area-switch mat-mdc-button mat-unthemed lm-enabled" mat-ripple-loader-uninitialized=""'
+                  ' mat-ripple-loader-class-name="mat-mdc-button-ripple" type="button" aria-label="Deschide selectorul de moduri, momentan Carbon"'
+                  ' jslog="' + JSLOG_MODEL + '" tabindex="0" aria-disabled="false" aria-haspopup="true" aria-expanded="false"'
+                  ' aria-controls="ng-menu-a26090-1" aria-describedby="cdk-describedby-message-ng-1-11" cdk-describedby-host="ng-1"')
+ETICHETA_MIC = "Dicteaz" + chr(0x103) + " (^" + chr(0x21E7) + "D)"
+MIC_2311_GIB = (' _ngcontent-ng-c3904984110="" type="onSurface" class="mat-mdc-tooltip-trigger speech_dictation_mic_button ' + CLASE_GEM_BTN + '"'
+                ' _nghost-ng-c738377845="" aria-describedby="cdk-describedby-message-ng-1-2" cdk-describedby-host="ng-1"')
+MIC_2311_BTN = (' _ngcontent-ng-c738377845="" matbadgeposition="after" maticonbutton="" class="' + CLASE_MAT_BTN + '"' + RIPPLE
+                + ' aria-label="' + ETICHETA_MIC + '" aria-pressed="false" jslog="175863;track:generic_click,impression" aria-disabled="false"')
+JSLOG_TRIMITE = ("173899;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxbMCwicm8iLDAs"
+                 "IiJdLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il0sbnVsbCxudWxs"
+                 "LG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51")
+TRIMITE_2311_GIB = (' _ngcontent-ng-c282099457="" theme="lm" type="onSurface" class="send-button ng-tns-c282099457-4 has-input submit '
+                    + CLASE_GEM_BTN + ' ng-star-inserted" _nghost-ng-c738377845="" aria-disabled="false" style=""')
+TRIMITE_2311_BTN = (' _ngcontent-ng-c738377845="" matbadgeposition="after" maticonbutton="" class="' + CLASE_MAT_BTN + ' ng-star-inserted"' + RIPPLE
+                    + ' aria-label="Trimite mesajul" jslog="' + JSLOG_TRIMITE + '" aria-disabled="false"')
+EDITOR_2311_ATR = (' class="ql-editor textarea new-input-ui rich-query-formatting-enabled input-url-linkification-enabled inline-chips-enabled"'
+                   + EDITOR_REAL_ATR_FARA_CLASA)                  # fara ql-blank (are text); restul atributelor = cele din 22.11 (identice)
+TEXT_LUNG = "".join("<p>Linia %03d a unui brief lung de proba, doar text, nimic atasat.</p>" % k for k in range(160))
+assert len(TEXT_LUNG) > 10000
+
+
+def pagina_23_11(div_atr=DIV_EXTINS_ATR, ecran_html=None, extra_zona="", trimite_gib=TRIMITE_2311_GIB):
+    # starea cu text lung din 23.11: pagina reala din 22.11 (stare ii: cu text, cu butonul de trimitere; indicatorul de drop de pe chatul nou,
+    # FDI_5G - nu a fost recitit la 23.11) + atributele complete citite la 23.11: zona, div-ul extins, "+", "Ecran complet", modelul,
+    # microfonul, trimite (has-input submit), editorul cu ~10 KB de text. Pozitia butonului "Ecran complet" in DOM nu e in captura (dupa
+    # sertarul instrumentelor, in div-ul extins - fara efect asupra deciziei). Fiecare inlocuire se face o singura data.
+    html = pagina_22_11_completa("ii", fdi=FDI_5G, plus_atr=PLUS_2311_GIB, mic_atr=MIC_2311_GIB, editor_atr=EDITOR_2311_ATR, extra_zona=extra_zona)
+    inlocuiri = (
+        (ZONA_ATRIBUTE_REALE, ZONA_2311_ATR),
+        ('<div class="text-input-field ng-tns-c12-3 simplified-input-area ng-star-inserted"' + ATRIBUTE_DIV_REALE + ">", "<div" + div_atr + ">"),
+        ("<toolbox-drawer></toolbox-drawer>", "<toolbox-drawer></toolbox-drawer>" + (ecran() if ecran_html is None else ecran_html)),
+        ('<button aria-label="' + ARIALABEL_REAL + '">', "<button" + PLUS_2311_BTN + ">"),
+        ('<button data-test-id="bard-mode-menu-button" aria-label="Alege modelul">', "<button" + MODEL_2311_ATR + ">"),
+        ('<button aria-label="' + ETICHETA_MIC + '">', "<button" + MIC_2311_BTN + ">"),
+        ('<gem-icon-button type="onsurface"><button aria-label="Trimite mesajul">', "<gem-icon-button" + trimite_gib + "><button" + TRIMITE_2311_BTN + ">"),
+        ("<p>proba</p>", TEXT_LUNG),
+    )
+    for vechi, nou in inlocuiri:
+        assert html.count(vechi) == 1, vechi
+        html = html.replace(vechi, nou)
+    return html
+
+
+def chat_nou_gol_23_11():
+    # chatul nou gol pe care a trecut paza pe 23.11 (inainte_de_chat_nou / pe_chatul_nou au trecut): pagina reala din 22.11 cu FDI_5G
+    return pagina_22_11_completa(fdi=FDI_5G)
+
+
+def scenariu_brief_lung(mod, dupa_scriere):
+    # 23.11: tab-ul curent si chatul nou sunt goale; dupa scrierea brief-ului lung caseta se extinde -> paza de inainte de Enter
+    # -> (cod, detaliu, actiuni)
+    pg = FakePg(chat_nou_gol_23_11(), dupa_goto=chat_nou_gol_23_11(), dupa_scriere=dupa_scriere)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            mod.trimite(pg, BRIEF_TEST, 30)
+        return None, "", pg.act
+    except mod.GemEroare as e:
+        return e.cod, e.detaliu, pg.act
+
+
+# v4.6.4c (instalat, 09E78891) = regulile de dinainte de r11: div-ul doar cu clasele normale, fara butonul "Ecran complet" in liste
+REGULI_V464C = [('("div", CLASE_DIV_DROP, "xapfileselectordropzone"', '("div", (("text-input-field", "simplified-input-area"),), "xapfileselectordropzone"'),
+                ('    "button[aria-label=extinde intrarea la ecran complet][aria-describedby]",', "")]
+ACTIUNI_FARA_ENTER = ACTIUNI_TRIMITERE[:-1]
+
+
+def div_extins(clase=CLASE_DIV_EXTINS, xap="", extra="", inauntru=""):
+    return ('<div _ngcontent-ng-c282099457="" xapfileselectordropzone="%s" class="%s" jslog="303810;track:impression"%s>%s</div>'
+            % (xap, clase, extra, inauntru))
+
+
+class TestTextLung2311(unittest.TestCase):
+    """r11 (v4.6.4d): caseta extinsa de un brief LUNG. Asteptarile sunt scrise de mana din jurnalul refuzului si din atributele complete."""
+
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def nod(self, html):
+        a = gp._Arbore()
+        a.feed(html)
+        return a.radacina.copii[0]
+
+    def stare_linii(self, html, mod=gp):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            mod.stare(FakePg(html))
+        return out.getvalue().splitlines()
+
+    def test_jurnalul_din_23_11_se_reproduce_pe_v464c(self):
+        # pe regulile v4.6.4c: EXACT linia GEM_EROARE din jurnal, la inainte_de_enter (dupa scriere, fara Enter)
+        v464c = mutant(REGULI_V464C)
+        self.assertEqual(scenariu_brief_lung(v464c, pagina_23_11()), ("ciorna_necunoscuta", EROARE_23_11, ACTIUNI_FARA_ENTER))
+        i = self.an(pagina_23_11(), mod=v464c)
+        self.assertEqual((i["necunoscute_detalii"], i["necunoscute_surse"]), (list(STARE_23_11), [SURSA_DIV_23_11, ""]))
+        linii = self.stare_linii(pagina_23_11(), mod=v464c)
+        for l in ("  necunoscut " + STARE_23_11[0], "    sursa " + SURSA_DIV_23_11, "  necunoscut " + STARE_23_11[1]):
+            self.assertIn(l, linii)
+        # chatul nou gol trecea si pe v4.6.4c (paza inainte_de_chat_nou / pe_chatul_nou a trecut pe 23.11)
+        self.assertEqual(self.an(chat_nou_gol_23_11(), mod=v464c)["necunoscute"], 0)
+        # div-ul extins singur: semnal pe v4.6.4c, niciunul pe r11
+        nod = self.nod(div_extins())
+        self.assertEqual(v464c._semnal(nod), (STARE_23_11[0], SURSA_DIV_23_11))
+        self.assertIsNone(gp._semnal(nod))
+
+    def test_starea_reala_cu_text_lung_trece(self):
+        i = self.an(pagina_23_11())
+        self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"], i["necunoscute"]), (1, 1, 0, 0, 0), msg=i["necunoscute_detalii"])
+        self.assertEqual(gp.verifica_fara_atasamente(i, 0, "t"), 0)
+        linii = self.stare_linii(pagina_23_11())
+        self.assertIn("necunoscute in zona: 0", linii)
+        self.assertIn("paza ciorna: OK (trimite ar continua)", linii)
+        self.assertIn("atasamente in ciorna: 0", " ".join(linii))
+        self.assertFalse(any(l.startswith(("  necunoscut", "    sursa")) for l in linii), linii)
+        self.assertEqual(scenariu_brief_lung(gp, pagina_23_11()), (None, "", ACTIUNI_TRIMITERE))
+        # ciorna lunga lasata in tab-ul curent (nimic atasat): paza inainte_de_chat_nou trece, chatul nou o inlocuieste
+        self.assertEqual(ruleaza_trimite(gp, FakePg(pagina_23_11(), dupa_goto=chat_nou_gol_23_11(), dupa_scriere=pagina_23_11())),
+                         (None, ACTIUNI_TRIMITERE))
+        # fiecare element real citit la 23.11, singur: fara semnal; semnaturile lor sunt in liste (sau e butonul modelului)
+        for html, sem, unde in ((ecran(), STARE_23_11[1].split(":", 1)[1], gp.CONTROALE_CUNOSCUTE),
+                                ("<button" + PLUS_2311_BTN + "></button>", "button[aria-label=incarcare si instrumente]", gp.CONTROALE_CUNOSCUTE),
+                                ("<button" + MIC_2311_BTN + "></button>", "button[aria-label=dicteaza (^?d)]", gp.CONTROALE_CUNOSCUTE),
+                                ("<button" + TRIMITE_2311_BTN + "></button>", "button[aria-label=trimite mesajul]", gp.CONTROALE_CUNOSCUTE),
+                                ("<gem-icon-button" + TRIMITE_2311_GIB + "></gem-icon-button>", "gem-icon-button[type=onsurface]", gp.STRUCTURA_CUNOSCUTA),
+                                ("<gem-icon-button" + MIC_2311_GIB + "></gem-icon-button>", "gem-icon-button[type=onsurface][aria-describedby]",
+                                 gp.STRUCTURA_CUNOSCUTA)):
+            n = self.nod(html)
+            self.assertIsNone(gp._semnal(n), html[:80])
+            self.assertEqual(gp._semnatura(n), sem)
+            self.assertIn(sem, unde)
+        self.assertIsNone(gp._semnal(self.nod("<button" + MODEL_2311_ATR + "></button>")))
+        self.assertIsNone(gp._semnal(self.nod("<gem-icon-button" + PLUS_2311_GIB + "></gem-icon-button>")))
+        self.assertIsNone(gp._semnal(self.nod("<input-area-v2" + ZONA_2311_ATR + "></input-area-v2>")))
+
+    def test_text_lung_cu_chip_real_ciorna_cu_atasamente(self):
+        for n, fisiere in ((1, ("a.txt",)), (2, ("a.txt", "b.png"))):
+            html = pagina_23_11(extra_zona="".join(chip(f) for f in fisiere))
+            i = self.an(html)
+            self.assertEqual((i["atasamente"], i["necunoscute"]), (n, 0), msg=i["necunoscute_detalii"])
+            with self.assertRaises(gp.GemEroare) as c:
+                gp.verifica_fara_atasamente(i, 0, "t")
+            self.assertEqual((c.exception.cod, c.exception.detaliu), ("ciorna_cu_atasamente", "t: %d atasament(e) in ciorna - nu trimit" % n))
+            self.assertIn("atasamente in ciorna: %d" % n, " ".join(self.stare_linii(html)))
+            # fisierul aparut odata cu textul lung: refuz chiar inainte de Enter
+            self.assertEqual(scenariu_brief_lung(gp, html),
+                             ("ciorna_cu_atasamente", "inainte_de_enter: %d atasament(e) in ciorna - nu trimit" % n, ACTIUNI_FARA_ENTER))
+            # fisierul lasat in tab-ul curent, cu textul lung: refuz fara nicio actiune
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_cu_atasamente", []))
+        # chip-ul chiar in div-ul extins si in butonul "Ecran complet": numarat
+        div = "<div" + DIV_EXTINS_ATR + ">"
+        self.assertEqual(pagina_23_11().count(div), 1)
+        self.assertEqual(self.an(pagina_23_11().replace(div, div + chip("a.txt")))["atasamente"], 1)
+        self.assertEqual(self.an(pagina_23_11(ecran_html=ecran(inauntru=chip("a.txt"))))["atasamente"], 1)
+
+    def test_multimile_de_clase_acceptate_pe_div(self):
+        self.assertEqual(gp.CLASE_DIV_DROP, CLASE_DIV_DROP_ASTEPTATE)
+        for clase in CLASE_DIV_DROP_ASTEPTATE:
+            for forma in (" ".join(clase), " ".join(reversed(clase)), "ng-tns-c282099457-4 " + " ".join(clase) + " ng-star-inserted"):
+                html = div_extins(forma)
+                self.assertIsNone(gp._semnal(self.nod(html)), forma)
+                i = self.an(zona_cu(html))
+                self.assertEqual(i["necunoscute"], 0, msg=(forma, i["necunoscute_detalii"]))
+                self.assertEqual(scenariu_brief_lung(gp, pagina_23_11(div_atr=DIV_EXTINS_ATR.replace(CLASE_DIV_EXTINS, forma))),
+                                 (None, "", ACTIUNI_TRIMITERE), msg=forma)
+        # marcajul nu acopera continutul div-ului extins: fisier / card / atribut cu fisier inauntru = refuz
+        for inauntru, m in (("<span>a.txt</span>", "text_fisier:a.txt"), ("<attachment-card></attachment-card>", "element:attachment-card"),
+                            ('<div data-file-id="1"></div>', "token_file:div{data-file-id}")):
+            self.assertEqual(self.an(zona_cu(div_extins(inauntru=inauntru)))["necunoscute_detalii"], [m], msg=inauntru)
+
+    def test_orice_abatere_pe_div_ul_extins_e_refuzata(self):
+        # scris de mana: valoare nevida a marcajului, token de clasa nou / schimbat / lipsa / litere mari, ambele baze, alt tag, alt atribut
+        t = lambda clase, atr="jslog xapfileselectordropzone": "token_file:div{%s %s}" % (clase, atr)
+        ext = CLASE_DIV_EXTINS
+        cazuri = (
+            (div_extins(xap="1"), t(ext), SURSA_DIV_23_11 + "1"),
+            (div_extins(xap=" "), t(ext), SURSA_DIV_23_11),
+            (div_extins(xap="true"), t(ext), SURSA_DIV_23_11 + "true"),
+            (div_extins(xap="oferta.docx"), t(ext), SURSA_DIV_23_11 + "oferta.docx"),
+            # clasa pre-fullscreen-file (in loc de / pe langa pre-fullscreen): cuvantul "file" e in clasa -> sursa clasa
+            (div_extins(ext.replace("pre-fullscreen", "pre-fullscreen-file")), t(ext.replace("pre-fullscreen", "pre-fullscreen-file")),
+             "clasa:pre-fullscreen-file"),
+            (div_extins(ext + " pre-fullscreen-file"), t(ext + " pre-fullscreen-file"), "clasa:pre-fullscreen-file"),
+            # alt token (fara cuvant de atasament): marcajul nu se mai potriveste -> numele xapfileselectordropzone intra in cautare
+            (div_extins(ext.replace("pre-fullscreen", "pre-fullscreen-x")), t(ext.replace("pre-fullscreen", "pre-fullscreen-x")), SURSA_DIV_23_11),
+            (div_extins(ext.replace("pre-fullscreen", "fullscreen")), t(ext.replace("pre-fullscreen", "fullscreen")), SURSA_DIV_23_11),
+            (div_extins(ext.replace("height-expanded-past-single-line", "height-expanded")), t(ext.replace("height-expanded-past-single-line", "height-expanded")), SURSA_DIV_23_11),
+            (div_extins(ext.replace("height-expanded-past-single-line", "height-expanded-past-single-line-2")),
+             t(ext.replace("height-expanded-past-single-line", "height-expanded-past-single-line-2")), SURSA_DIV_23_11),
+            (div_extins(ext + " x"), t(ext + " x"), SURSA_DIV_23_11),
+            (div_extins(ext + " fullscreen"), t(ext + " fullscreen"), SURSA_DIV_23_11),
+            (div_extins(ext.replace("pre-fullscreen", "Pre-Fullscreen")), t(ext), SURSA_DIV_23_11),          # afisarea e ASCII cu litere mici
+            (div_extins(ext.replace("text-input-field ", "")), t(ext.replace("text-input-field ", "")), SURSA_DIV_23_11),
+            (div_extins("text-input-field with-toolbox-drawer"), t("text-input-field with-toolbox-drawer"), SURSA_DIV_23_11),
+            (div_extins("text-input-field simplified-input-area with-toolbox-drawer"), t("text-input-field simplified-input-area with-toolbox-drawer"), SURSA_DIV_23_11),
+            (div_extins("text-input-field simplified-input-area " + ext[len("text-input-field "):]),
+             t("text-input-field simplified-input-area " + ext[len("text-input-field "):]), SURSA_DIV_23_11),
+            # alt atribut cu "file" / cu nume de fisier alaturi de marcaj
+            (div_extins(extra=' data-file-id="1"'), t(ext, "data-file-id jslog xapfileselectordropzone"), "nume_atribut:data-file-id=1"),
+            (div_extins(extra=' data-x="oferta.docx"'), "atribut_fisier:div{%s data-x jslog xapfileselectordropzone}" % ext, "valoare_atribut:data-x=oferta.docx"),
+            # aceleasi clase si marcaj pe alt element decat div
+            ('<span xapfileselectordropzone="" class="%s"></span>' % ext, "token_file:span{%s xapfileselectordropzone}" % ext, SURSA_DIV_23_11),
+            ('<rich-textarea xapfileselectordropzone="" class="%s"></rich-textarea>' % ext, "token_file:rich-textarea{%s xapfileselectordropzone}" % ext,
+             SURSA_DIV_23_11),
+        )
+        for html, m, s in cazuri:
+            i = self.an(zona_cu(html))
+            self.assertEqual((i["necunoscute_detalii"], i["necunoscute_surse"]), ([m], [s]), msg=html)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(html))), ("ciorna_necunoscuta", []), msg=html)
+            with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", gp.STRUCTURA_CUNOSCUTA + (m.split(":", 1)[1], "div", "span")):
+                self.assertEqual(self.an(zona_cu(html))["necunoscute_detalii"], [m], msg=html)
+        # in starea extinsa reala, dupa scriere: refuz inainte de Enter
+        for div_atr in (DIV_EXTINS_ATR.replace('xapfileselectordropzone=""', 'xapfileselectordropzone="1"'),
+                        DIV_EXTINS_ATR.replace("pre-fullscreen", "pre-fullscreen-file"), DIV_EXTINS_ATR.replace("pre-fullscreen", "pre-fullscreen-x")):
+            cod, det, act = scenariu_brief_lung(gp, pagina_23_11(div_atr=div_atr))
+            self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=div_atr)
+            self.assertTrue(det.startswith("inainte_de_enter: 1 element(e) nerecunoscute"), det)
+
+    def test_butonul_ecran_complet(self):
+        sem = STARE_23_11[1].split(":", 1)[1]
+        self.assertEqual(gp._semnatura(self.nod(ecran())), sem)
+        self.assertEqual(self.an(zona_cu(ecran()))["necunoscute"], 0)
+        # scris de mana: semnatura in afara listei = element necunoscut; eticheta / text / atribut cu fisier = refuz oricare ar fi lista
+        alte_clase = "mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger fullscreen-button mat-primary"
+        alte_atr = ("cdk-describedby-host color %s gemtooltip mat-icon-button mat-ripple-loader-centered mat-ripple-loader-class-name"
+                    " mat-ripple-loader-uninitialized")
+        cazuri = (
+            (ecran(ECRAN_ATR.replace(' aria-describedby="cdk-describedby-message-ng-1-16"', "")),
+             "element:button[aria-label=extinde intrarea la ecran complet]", ""),
+            (ecran(ECRAN_ATR.replace("la ecran complet", "")), "element:button[aria-label=extinde intrarea][aria-describedby]", ""),
+            (ecran(ECRAN_ATR.replace("la ecran complet", "la ecran complet oferta.docx")),
+             "eticheta:button[aria-label=extinde intrarea la ecran complet oferta.docx][aria-describedby]",
+             "eticheta:aria-label=extinde intrarea la ecran complet oferta.docx"),
+            (ecran(inauntru="<span>oferta.docx</span>"), "text_fisier:oferta.docx", ""),
+            (ecran(inauntru="<span>a.txt</span>"), "text_fisier:a.txt", ""),
+            (ecran(ECRAN_ATR + ' data-file-name="a.pdf"'),
+             "token_file:%s{%s %s}" % (sem, alte_clase, alte_atr % "data-file-name"), "nume_atribut:data-file-name=a.pdf"),
+            (ecran(ECRAN_ATR.replace("fullscreen-button", "fullscreen-button attachment-thumb")),
+             "token_attach:%s{%s %s}" % (sem, alte_clase.replace("fullscreen-button", "fullscreen-button attachment-thumb"),
+                                         (alte_atr % "x").replace(" x ", " ")), "clasa:attachment-thumb"),
+            (ecran(inauntru='<img src="data:,">'), "media:img[src]", "tag:img"),
+        )
+        for html, m, s in cazuri:
+            i = self.an(zona_cu(html))
+            self.assertEqual((i["necunoscute_detalii"], i["necunoscute_surse"]), ([m], [s]), msg=html)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(html))), ("ciorna_necunoscuta", []), msg=html)
+            cod, det, act = scenariu_brief_lung(gp, pagina_23_11(ecran_html=html))
+            self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=html)
+
+    def test_butonul_trimite_has_input_submit(self):
+        # starea `has-input submit` (cu style gol) era deja acceptata: invelisul = structura, butonul = controlul calibrat
+        html = ('<div data-test-id="send-button-container" aria-describedby="x1"><gem-icon-button' + TRIMITE_2311_GIB + '><button'
+                + TRIMITE_2311_BTN + ">" + GI + "</button></gem-icon-button></div>")
+        self.assertEqual(self.an(zona_cu(html))["necunoscute"], 0)
+        # cu style cu continut (ca la 5e) sau cu o clasa de atasament: refuz
+        for gib, m, s in ((TRIMITE_2311_GIB.replace('style=""', 'style="--uploader-height: 112px;"'),
+                           "token_upload:gem-icon-button[type=onsurface]{send-button has-input submit %s aria-disabled style theme}" % CLASE_GEM_BTN,
+                           "valoare_atribut:style=--uploader-height: 112px;"),
+                          (TRIMITE_2311_GIB.replace("has-input submit", "has-input submit file-chip"),
+                           "token_file:gem-icon-button[type=onsurface]{send-button has-input submit file-chip %s aria-disabled style theme}" % CLASE_GEM_BTN,
+                           "clasa:file-chip")):
+            i = self.an(pagina_23_11(trimite_gib=gib))
+            self.assertEqual((i["necunoscute_detalii"], i["necunoscute_surse"]), ([m], [s]), msg=gib)
+            self.assertEqual(scenariu_brief_lung(gp, pagina_23_11(trimite_gib=gib))[0::2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER))
+
+    def test_regula_claselor_sta_doar_in_marcaj(self):
+        # structural (L19): CLASE_DIV_DROP definita o data si citita doar in MARCAJE_PERMISE; comparatia pe multimi sta doar in _marcaj_permis
+        with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
+            src = f.read().decode("ascii")
+        linii = [l.rstrip("\r") for l in src.split("\n")]
+        cod = [l for l in linii if not l.lstrip().startswith("#")]
+        i0 = linii.index("def _marcaj_permis(n, k):")
+        i1 = next(k for k in range(i0 + 1, len(linii)) if linii[k].startswith("def "))
+        corp = [l for l in linii[i0:i1] if not l.lstrip().startswith("#")]
+        self.assertEqual(sum(l.startswith("CLASE_DIV_DROP = (") for l in cod), 1)
+        self.assertEqual(sum(len(re.findall(r"(?<![A-Za-z_])CLASE_DIV_DROP(?![A-Za-z_])", l)) for l in cod), 2)    # definitia + MARCAJE_PERMISE
+        self.assertTrue(any(l.startswith('    ("div", CLASE_DIV_DROP, "xapfileselectordropzone", VALOARE_GOALA, False, ()),') for l in cod))
+        self.assertEqual(sum(l == LINIA_CLASE for l in cod), 1)
+        self.assertIn(LINIA_CLASE, corp)
+        self.assertEqual(sum(l.count("STARE") for l in corp), 0)
+
+    def test_mutanti_r11_lasa_brief_ul_sa_plece(self):
+        # fiecare mutant largeste regula noua; scenariul lui pleaca la Enter pe mutant, refuz pe cod; toti lasa starea reala 23.11 sa treaca
+        ext = CLASE_DIV_EXTINS
+        cazuri = (
+            # (M18) clasele ca SUPRAMULTIME a uneia din lista: un token in plus pleaca (x, pre-fullscreen-x, ambele baze)
+            ([(" == set(x) for x in clase)", " >= set(x) for x in clase)")],
+             (div_extins(ext + " x"), div_extins(ext + " pre-fullscreen-x"),
+              div_extins("text-input-field simplified-input-area " + ext[len("text-input-field "):]))),
+            # (M19) clasele ca SUBMULTIME: un token lipsa pleaca (fara text-input-field / doar baza with-toolbox-drawer)
+            ([(" == set(x) for x in clase)", " <= set(x) for x in clase)")],
+             (div_extins(ext.replace("text-input-field ", "")), div_extins("text-input-field with-toolbox-drawer"))),
+            # (M20) token-urile comparate fara litere mari
+            ([("set(c for c in _clase(n) if not _generat(c)) == set(x)", "set(c.lower() for c in _clase(n) if not _generat(c)) == set(x)")],
+             (div_extins(ext.replace("pre-fullscreen", "Pre-Fullscreen")),)),
+            # (M21) forma valorii ignorata: marcajul cu valoare pe div-ul extins pleaca
+            ([('        if not forma.fullmatch(n.attrs.get(k) or ""):', "        if False:")], (div_extins(xap="1"), div_extins(xap="x"))),
+            # (M22) semnatura controlului ca prefix: butonul fara aria-describedby pleaca
+            ([("    if sem in CONTROALE_CUNOSCUTE:", "    if any(c.startswith(sem) for c in CONTROALE_CUNOSCUTE):")],
+             (ecran(ECRAN_ATR.replace(' aria-describedby="cdk-describedby-message-ng-1-16"', "")),)),
+        )
+        for inlocuiri, htmluri in cazuri:
+            mut = mutant(inlocuiri)
+            for html in htmluri:
+                self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(html))), ("ciorna_necunoscuta", []), msg=html)
+                cod_m, act_m = ruleaza_trimite(mut, FakePg(zona_cu(html)))
+                self.assertIsNone(cod_m, msg=(inlocuiri[0][1], html, cod_m))
+                self.assertIn("press Enter", act_m, msg=html)
+            self.assertEqual(scenariu_brief_lung(mut, pagina_23_11()), (None, "", ACTIUNI_TRIMITERE), msg=inlocuiri[0][1])
+        # fara r11 (= v4.6.4c instalat): starea reala e refuzata, deci regula noua e cea care o lasa sa treaca
+        self.assertEqual(scenariu_brief_lung(mutant(REGULI_V464C), pagina_23_11())[0], "ciorna_necunoscuta")
 
 
 if __name__ == "__main__":

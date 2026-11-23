@@ -112,6 +112,17 @@
 #   `--uploader-height: 112px`, display:none) -> elementul nu mai e izolat -> numele `data-filedrop-id` intra in cautare = token_file, ca azi.
 #   5e (style `--uploader-height: 112px;` ramas pe zona si pe editor dupa scoaterea manuala a fisierelor, pana la F5) ramane REFUZ (decizie
 #   chat 22.11): nu se excepteaza nimic acolo - RUNBOOK: F5 inainte de trimitere.
+# v4.6.4d / r11 (23.11.2026, refuz fals la un brief LUNG pe v4.6.4c instalat, 09E78891): cu ~10 KB de text in ciorna, Gemini extinde
+#   caseta de compunere. Paza de inainte de Enter a dat `ciorna_necunoscuta` cu 2 linii (paw-data\out\juridic_43eb636364a95c9d.log):
+#   (1) token_file:div{text-input-field height-expanded-past-single-line pre-fullscreen with-toolbox-drawer jslog xapfileselectordropzone}
+#       - div-ul zonei de drop (marcajul r5 `xapfileselectordropzone=""`, GOL) are in starea extinsa ALTE clase: dispare
+#       `simplified-input-area`, apar `height-expanded-past-single-line`, `pre-fullscreen` si `with-toolbox-drawer` (atributele complete,
+#       citite de chat prin CDP cu textul in ciorna, NETRIMIS: paw_v464_calibrare\stare_text_lung_23_11.json). Marcajul nu mai cere o
+#       singura multime de clase, ci una din lista INCHISA CLASE_DIV_DROP (multimi EXACTE, token intreg, fara cele generate `ng-*`);
+#       orice alta clasa / token in plus / token lipsa / alt tag / valoare nevida = numele intra in cautare = token_file, ca pana acum.
+#   (2) element:button[aria-label=extinde intrarea la ecran complet][aria-describedby] - butonul "Ecran complet" (`fullscreen-button`,
+#       gemtooltip "Ecran complet") apare cu textul lung: fara semnal, trecut EXACT in CONTROALE_CUNOSCUTE (ca la calibrarea din 21.11).
+#   Butonul de trimitere in starea `has-input submit` (cu `style=""`) era deja acceptat (structura + controlul calibrat) - testat.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata
@@ -189,13 +200,30 @@ ATRIBUTE_AFISATE_SEPARAT = ("class", "id")                   # afisate in {...} 
 # r10 (v4.6.4c): al saselea camp, `goale`: atributele (nume EXACT) care pot sta in plus pe elementul IZOLAT doar cu valoarea bruta goala sau
 # doar din spatii albe HTML (VALOARE_SPATII: spatiu, \t, \n, \r, \f; NU NBSP, latime zero sau alt spatiu Unicode). Indicatorul pe chatul nou
 # deschis de script (5g, atribute_5g_22_11.txt) are `style=""` -> ("style",). Un `style` cu orice continut -> elementul nu e izolat -> semnal.
-# (tag, clasele EXACTE fara cele generate, numele atributului, forma valorii, izolat, goale): acceptat DOAR asa.
+# r11 (v4.6.4d): al doilea camp nu mai e O multime de clase, ci lista INCHISA a multimilor acceptate (fiecare comparata EXACT, ca
+# multime de token-uri intregi, fara cele generate `ng-*`). Pentru div-ul r5: CLASE_DIV_DROP (starea normala + starile cu text lung);
+# pentru indicator: doar multimea goala.
+# (tag, multimile de clase EXACTE fara cele generate, numele atributului, forma valorii, izolat, goale): acceptat DOAR asa.
 VALOARE_GOALA = re.compile(r"")                               # exact ""
 VALOARE_FILEDROP = re.compile(re.escape("chat-window-input-container"))     # r9: EXACT valoarea reala (nu un identificator oarecare)
 VALOARE_SPATII = re.compile(r"[ \t\n\r\f]*")                  # r10: gol sau doar spatii albe HTML (L13: clasa explicita, nu \s)
+# r11: clasele div-ului zonei de drop (cel cu `xapfileselectordropzone=""`). Starea normala (21.11, token_file_atribute.txt) si starea
+# cu ~10 KB de text in ciorna (23.11, stare_text_lung_23_11.json: `simplified-input-area` dispare, apar cei doi token-i ai inaltimii si
+# `with-toolbox-drawer`) sunt VAZUTE pe pagina reala; celelalte sunt aceleasi baze cu doar unul / ambii token-i ai inaltimii (starile
+# intermediare, cerute de chat ca "si / sau"; nevazute inca - 5g2 din RUNBOOK le verifica). Nimic din afara listei (alt token, prefix,
+# sufix, litere mari, ambele baze odata) nu e acceptat.
+CLASE_DIV_DROP = (
+    ("text-input-field", "simplified-input-area"),                                                        # r5 - normal (vazut 21.11)
+    ("text-input-field", "height-expanded-past-single-line", "pre-fullscreen", "with-toolbox-drawer"),    # r11 - text lung (vazut 23.11)
+    ("text-input-field", "height-expanded-past-single-line", "with-toolbox-drawer"),                      # r11 - intermediar (cerut)
+    ("text-input-field", "pre-fullscreen", "with-toolbox-drawer"),                                        # r11 - intermediar (cerut)
+    ("text-input-field", "simplified-input-area", "height-expanded-past-single-line"),                    # r11 - normal + inaltime (cerut)
+    ("text-input-field", "simplified-input-area", "pre-fullscreen"),                                      # r11 - normal + inaltime (cerut)
+    ("text-input-field", "simplified-input-area", "height-expanded-past-single-line", "pre-fullscreen"),  # r11 - normal + inaltime (cerut)
+)
 MARCAJE_PERMISE = (
-    ("div", ("text-input-field", "simplified-input-area"), "xapfileselectordropzone", VALOARE_GOALA, False, ()),      # r5 (21.11.2026)
-    ("file-drop-indicator", (), "data-filedrop-id", VALOARE_FILEDROP, True, ("style",)),                             # r8 + r9 + r10 (22.11)
+    ("div", CLASE_DIV_DROP, "xapfileselectordropzone", VALOARE_GOALA, False, ()),                         # r5 (21.11) + r11 (23.11)
+    ("file-drop-indicator", ((),), "data-filedrop-id", VALOARE_FILEDROP, True, ("style",)),               # r8 + r9 + r10 (22.11)
 )
 # r9: VALORI de atribut cu cuvant de atasament care NU sunt fisiere - lista INCHISA, citita din pagina reala (chat, CDP, 22.11.2026, doar citire):
 # butonul "+" `<gem-icon-button>` are `arialabel="Incarcare si instrumente"` (atribut Angular FARA cratima - nu e `aria-label`, deci nu e
@@ -241,12 +269,17 @@ MODEL_DATA_TEST = "bard-mode-menu-button"                     # butonul modelulu
 # r8 (22.11.2026, 5a pe v4.6.4 instalat, chat nou gol): cele 3 linii noi sunt toate semnale (`token_...`), deci listele NU se schimba
 # (reuniunea liniilor `element:` / `text:` reale ramane cea de la 21.11: 5 + 23 + 3). r9: toate trei sunt lamurite din atributele complete
 # citite de chat din pagina (antetul v4.6.4b r2): (1) MARCAJE_PERMISE (exact + izolat), (2) VALORI_PERMISE, (3) CLASE_EDITOR_PERMISE.
+# r11 (23.11.2026, brief lung): + o intrare in CONTROALE (butonul "Ecran complet"); listele devin 6 + 23 + 3.
 CONTROALE_CUNOSCUTE = (
     "button[aria-label=deruleaza in jos][type=button][tabindex]",   # i ii iii - "Deruleaza in jos" (in back-to-bottom-fab)
     "button[aria-label=incarcare si instrumente]",                   # i ii iii - butonul "+" care deschide meniul (nu e fisier)
     "button[aria-label=dicteaza (^?d)]",                             # i ii iii - microfonul (dictare; "?" = caracterul non-ASCII)
     "button[aria-label=trimite mesajul]",                            # ii       - butonul de trimitere, apare doar cu text in ciorna
     "a[data-test-id=footer-privacy-notice-link][href]",              # iii      - linkul "Confidentialitatea ta si Gemini"
+    # r11 (23.11.2026, text lung in ciorna, NETRIMIS): butonul "Ecran complet" (class fullscreen-button, gemtooltip "Ecran complet"),
+    # semnatura copiata EXACT din linia `element:` a jurnalului refuzului (juridic_43eb636364a95c9d.log); fara semnal (atributele complete
+    # in stare_text_lung_23_11.json). Alta semnatura (ex. fara aria-describedby) = element necunoscut, refuz (fals, dar sigur).
+    "button[aria-label=extinde intrarea la ecran complet][aria-describedby]",
 )
 STRUCTURA_CUNOSCUTA = (
     "span[role=status]",                                             # i ii iii - regiune live pentru cititoare de ecran (goala)
@@ -542,7 +575,7 @@ def _eticheta_interzisa(n):
 
 def _marcaj_permis(n, k):
     # r5 / r8 / r9: atributul k al elementului n e un marcaj din MARCAJE_PERMISE: numele EXACT (nu prefix / sufix / subsir), pe tagul exact,
-    # cu clasele (fara cele generate) EXACT cele din lista, cu valoarea BRUTA de forma ceruta (goala / valoarea reala exacta) si - daca marcajul
+    # cu clasele (fara cele generate) EXACT una din multimile listei (r11), cu valoarea BRUTA de forma ceruta (goala / valoarea reala exacta) si - daca marcajul
     # cere element izolat (r9) - fara niciun alt atribut in afara clasei si a celor generate `_ng*` GOALE, fara niciun copil (element sau text
     # cu continut). Doar atunci numele lui nu intra in cautarea cuvintelor de atasament; valoarea ramane verificata in _semnal (pasul 4) ca
     # orice alta valoare. Orice abatere = atributul se verifica ca oricare altul (refuz).
@@ -551,7 +584,7 @@ def _marcaj_permis(n, k):
     for tag, clase, nume, forma, izolat, goale in MARCAJE_PERMISE:
         if k != nume:
             continue
-        if n.tag != tag or set(c for c in _clase(n) if not _generat(c)) != set(clase):
+        if n.tag != tag or not any(set(c for c in _clase(n) if not _generat(c)) == set(x) for x in clase):
             continue
         if not forma.fullmatch(n.attrs.get(k) or ""):
             continue
