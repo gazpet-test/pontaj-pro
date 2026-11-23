@@ -130,7 +130,7 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("x"*100, registry.read_text(encoding="utf-8"))
         args, kwargs = popen.call_args
         self.assertEqual(args[0], [str(self.config["launcher"]), "cop", str(brief),
-                                  str(self.config["out_dir"] / ("juridic_" + ident + ".log")), "6ae06a54"])
+                                  str(self.config["out_dir"] / ("juridic_" + ident + ".log")), "6ae9a74f"])
         self.assertFalse(kwargs["shell"])
         for stream in ["stdin", "stdout", "stderr"]:
             self.assertEqual(kwargs[stream], subprocess.DEVNULL)

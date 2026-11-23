@@ -38,7 +38,7 @@ atomic, sub lock_gem. Un rezultat partial/crash retrage contextul incert.
 Modelul nu primeste o unealta shell, parametri de comanda, cale de fisier,
 model AI, conversatie configurabila, acces ERP, BD sau retea din acest server.
 Serverul executa numai lansatorul local configurat, cu argumentele fixe `cop`,
-`gem`, `gem-inchide` sau `jak`. Pentru Copilot adauga intotdeauna conversatia `6ae06a54`;
+`gem`, `gem-inchide` sau `jak`. Pentru Copilot adauga intotdeauna conversatia `6ae9a74f` (din 23.11.2026; `6ae06a54` s-a umplut);
 Gemini primeste argon sau argon:<eticheta>; Jakarinos nu primeste model/conversatie. Jakarinos porneste exact
 `run_paw.cmd jak <brief> <log>`. Textul extern ajunge exclusiv in brief, precedat de:
 
