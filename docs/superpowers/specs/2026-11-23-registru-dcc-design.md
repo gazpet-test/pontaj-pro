@@ -32,7 +32,7 @@ de documentul și revizia lor, pe firul corect.
   **(contract, emitent, tematică, tip)**. La DDE există intervale rezervate pe stație de robinete (SR1 = 00100–00199 …). Regula generală:
   „nu se alocă același cod unor documente diferite”.
 - **Revizia:** Rev0 = emis spre aprobare; Rev1, Rev2 … = re-emis după comentarii; reviziile interne (revA, revB) nu sunt Rev0 și nu pleacă
-  la DCC. Un document nu se retrimite de mai multe ori cu aceeași revizie.
+  la DCC. (Interdicția de a retransmite aceeași revizie e regulă operațională propusă, nu din ghid — vezi mai jos.)
 - **Cine alocă:** emitentul își alocă singur numerele; DCC-ul beneficiarului doar verifică și înregistrează. Subcontractorii au cod de
   emitent propriu și comunică prin DCC-ul nostru.
 - **Comunicarea:** trimiterea se face „de pe adresa de e-mail a DCC Contractor, dedicată acestui proiect, comunicată în prealabil”
@@ -50,7 +50,8 @@ de documentul și revizia lor, pe firul corect.
 1. **Revizia apare mereu, de la Rev0**, în forma ghidului (`.Rev0`, `.Rev1`), în cod, în subiect și în numele fișierelor. Azi Rev0 lipsește
    de obicei, iar reviziile apar ca `_rev.N` în ~7 forme. Ghidul o face obligatorie: omiterea Rev0 nu e o variantă conformă; o eventuală
    derogare ar trebui documentată separat, cu acordul DCC. Configurabili sunt doar separatorii și ordinea câmpurilor afișate.
-2. **Limba** (`.RO`) la Lot 1, cum cere ghidul; la Lot 2 doar dacă DCC confirmă.
+2. **Limba** (`.RO`) la Lot 1, cum cere ghidul, în cod și în numele fișierului. La Lot 2: în **numele fișierului** (cerut de ghid);
+   în **cod** doar dacă DCC confirmă.
 3. **Subiectul**: `<COD complet> <Titlu>`; „Lot N” devine opțional (prefixul contractului identifică lotul). La situațiile de plată și
    facturi, codul intră și în subiect (azi e doar în corp și în PDF), după antetul financiar folosit acum.
 4. **Numele fișierului**: `<COD complet>_<titlu scurt>.<ext>` (ghidul: „codul documentului, revizia și limba”).
@@ -70,7 +71,10 @@ doar prin RPC-uri `SECURITY DEFINER` (fără INSERT/UPDATE direct). `executie_pr
 
 ### 4.2 Registrul (trei niveluri)
 - `dcc_serii`: (proiect_dcc, emitent, tematică **nullable**, tip, interval) → `ultimul_ocupat` (contor), `prag_initial` = **ultimul număr
-  ocupat** confirmat de om (prima alocare = prag + 1), `limita_sup` (00099 la intervalele SR, 99999 altfel), `initializata_de/la`.
+  ocupat** confirmat de om (prima alocare = prag + 1), `limita_inf` / `limita_sup` per interval (`general`: 00001–99999 sau cum fixează
+  ghidul; `SR1`: 00100–00199, `SR2`: 00200–00299 …), `initializata_de/la`. **Domeniul seriei = contractul** (nu proiectul ERP): două
+  proiecte ERP pe același contract folosesc aceeași serie. La minute, unicitatea cu tematica NULL se impune printr-un index dedicat
+  (NULL nu se compară egal în UNIQUE).
   **O serie neinițializată refuză alocarea** (nu pornește singură de la 00001: numărul poate exista deja în corespondență); inițializarea e
   o operație separată, atomică, auditată. Epuizarea intervalului = refuz explicit, nu trecere în intervalul următor.
   - **Minutele (MOM)**: serie cu tematica NULL (serie proprie, nu excepție în formatter).
@@ -80,7 +84,7 @@ doar prin RPC-uri `SECURITY DEFINER` (fără INSERT/UPDATE direct). `executie_pr
   ERP pe același contract nu pot aloca același cod); titlu, creat de/la, stare ∈ {`activ`, `anulat`} (anularea nu eliberează numărul).
   - **Planșe (filă)**: `dcc_file` (document, filă) — subentitate a documentului, fiecare cu revizia ei, ca la desenele împărțite.
   - **Anexe**: `dcc_anexe` (document de bază, număr anexă, titlu) cu revizii proprii (codul = codul de bază + numărul anexei).
-- `dcc_revizii`: (document / filă / anexă, revizie int ≥ 0) UNIC; limba; titlul/descrierea reviziei; versiunea ghidului folosită la
+- `dcc_revizii`: (document / filă / anexă, revizie int ≥ 0, limbă) UNIC — varianta lingvistică face parte din identitate; limba; titlul/descrierea reviziei; versiunea ghidului folosită la
   formatare; **codul complet înghețat** (textul expediat nu se reformatează dacă ghidul se schimbă); variantele lingvistice ale aceleiași
   revizii = rânduri cu limba diferită, dacă DCC le cere separat.
   - **Stare de transport** ∈ {`rezervata`, `pregatita`, `copiata_pentru_gmail`, `trimisa_manual_neverificata`, `trimisa_manual_confirmata`,
@@ -109,7 +113,7 @@ doar prin RPC-uri `SECURITY DEFINER` (fără INSERT/UPDATE direct). `executie_pr
   originale, codul așa cum a fost scris, problema găsită: dublură / formă nestandard / revizie necunoscută / tematică greșită). Importul
   e idempotent pe identitatea sursei. **Revizia absentă = „necunoscută”**, nu 0.
 - Legarea unei apariții de un document canonic se face doar când identitatea e clară; două documente diferite cu același număr rămân două
-  apariții conflictuale vizibile (nu se inventează revizii). Pragul fiecărei serii = peste maximul credibil găsit (inclusiv numerele
+  apariții conflictuale vizibile (nu se inventează revizii). Pragul fiecărei serii = **ultimul număr ocupat sau rezervat** confirmat de om (cel mai mare număr credibil găsit, inclusiv numerele
   conflictuale), confirmat de om. Excelul și mailurile se reconciliază între ele (267 de rânduri + ~700 de fire nu înseamnă 967 de documente).
 - Seriile financiare (situații de plată, facturi) au codul doar în corp/PDF în istoric: pragul lor se confirmă de om.
 
@@ -150,7 +154,7 @@ Tab nou „✉️ DCC” în Execuție → proiect (vizibil cu `executie_dcc`):
   CC din lista albă, numele fișierelor propuse. Atașamente: upload din calculator (NAS-ul e montat local), bucket privat; peste plafonul
   proiectului (implicit 15 MB, maxim 25 MB) → câmp „link de transfer” verificat de om.
 - **Previzualizare** completă.
-- **„📋 Copiază pentru Gmail”** și, separat, **„✅ Confirm că am trimis”** (merg fără căsuță): omul lipește în Gmail și trimite de acolo,
+- **„📋 Copiază pentru Gmail”** și, separat, **„✅ Confirm că am trimis”** (merg fără căsuță conectată; adresa din care s-a trimis se declară separat, ca text): omul lipește în Gmail și trimite de acolo,
   apoi confirmă (data, căsuța din care a trimis, opțional subiectul exact). Starea rămâne „trimis manual, neverificat” până există o dovadă.
   Registrul e util din prima zi.
 - **Lot 4 (emitentul liderului)**: înregistrare manuală permisă; trimiterea din ERP rămâne blocată până la confirmarea mandatului și a
@@ -189,7 +193,7 @@ drepturile (doar cu „da”-ul proprietarului).
 - **PR1 BD**: configurare + registru + istoric (structura) + mesaje/legături (structura) + RPC-uri + RLS; migrare L15 v2 NEAPLICATĂ; probe
   pe clona 176 și concurență pe cluster dispensabil: prima alocare simultană pe serie nouă, retry după timeout (aceeași cheie = același
   cod), două revizii simultane, anulare, acces între proiecte.
-- **PR2 UI**: tab-ul „✉️ DCC” (registru, alocare, revizie nouă, șabloane, previzualizare, Copiază + Marchează trimis; Trimite inactiv).
+- **PR2 UI**: tab-ul „✉️ DCC” (registru, alocare, revizie nouă, șabloane, previzualizare, „Copiază pentru Gmail” + „Confirm că am trimis”; Trimite inactiv).
 - **PR3 import**: script + raport de completitudine (dubluri, forme nestandard, maxime pe serie, serii financiare) + lista pentru
   responsabilul de corespondență → inițializarea seriilor cu pragul confirmat. Date reale → preview + „da”.
 - **PR4 trimitere**: după decizia de căsuță, cu proba pe TEST și „da” separat la activare.
@@ -199,8 +203,8 @@ drepturile (doar cu „da”-ul proprietarului).
 1. Serie **absentă** → refuz; serie **inițializată fără alocări** + două alocări simultane → două numere diferite, consecutive după prag.
 2. Aceeași cheie de intenție cu **aceiași** parametri → același cod; cu parametri **diferiți** → eroare (la alocare și la revizie nouă).
 3. Revizie nouă cerută de două ori în paralel → o singură Rev1 (cu chei diferite: Rev1 și Rev2, niciodată două Rev1).
-4. Anulare → numărul nu se refolosește; limita intervalului (00099 la SR, 99999 altfel) → refuz explicit.
+4. Anulare → numărul nu se refolosește; limitele intervalului (de ex. SR1: 00100 și 00199; `general`: 99999) → refuz explicit la depășire, fără trecere în alt interval.
 5. Import rulat de două ori → nicio dublură în `dcc_istoric_aparitii`.
-6. „Confirm că am trimis” fără căsuță și fără Message-ID → stare „neverificat”, nicio valoare inventată.
+6. „Confirm că am trimis” fără căsuță conectată și fără Message-ID → stare „neverificat”, nicio valoare inventată.
 7. Utilizator cu acces doar pe Lot 1 → nu vede și nu scrie registrul Lot 2, nici prin RPC, nici direct (SELECT / INSERT / UPDATE / DELETE).
 8. Două proiecte ERP pe același contract → nu pot aloca același cod.
