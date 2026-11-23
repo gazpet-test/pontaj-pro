@@ -2,14 +2,13 @@
 // în memorie). Probează: totalul pe proiect = suma obiectelor; filtrul „peste ofertă” lasă doar rândurile cu rest negativ; fără drept de
 // citire tab-ul nu arată nimic și nu citește nimic; eroarea ≠ gol (L18); citirea pe pagini peste plafonul de 1000 (L23); butoanele de
 // încărcare doar cu drept de confirmare; semnalul de risc; lipsurile; configurarea completă prin RPC. Fila din bandă: Executie.test.jsx.
-import { afterEach, describe, it, expect, vi } from 'vitest'
+// r2 (verdict #1178): obiectele / lipsurile peste plafonul serverului, cu numărul total verificat (L23); răspunsul proiectului vechi / al
+// configurării nu se aplică după schimbarea proiectului (L24); eroarea dreptului cu „Reîncearcă”. Fără jsdom suita PICĂ explicit.
+import { afterEach, it, expect, vi } from 'vitest'
 vi.mock('../lib/supabase.js', () => ({ supabase: null }))
-import RestDecontatTab from './RestDecontatTab.jsx'
-import { JSDOM, MOTIV_SARIT, clientFals, monteaza, curataTot, A, ARTICOLE, OBIECTE } from './restDecontat.testutil.jsx'
+import RestDecontatTab, { citestePagini } from './RestDecontatTab.jsx'
+import { domObligatoriu, clientFals, monteaza, curataTot, amana, A, ARTICOLE, OBIECTE, fisierF3, devizF3 } from './restDecontat.testutil.jsx'
 
-if (!JSDOM) console.warn(`[RestDecontatTab.test] ${MOTIV_SARIT}`)
-const dom = JSDOM ? describe : describe.skip
-const numeDom = t => (JSDOM ? t : `${t} — ${MOTIV_SARIT}`)
 afterEach(curataTot)
 
 const DREPT_TOT = { stare: 'ok', citire: true, confirmare: true, documente_baza: true }
@@ -26,7 +25,7 @@ async function deschide({ drept = DREPT_TOT, tabele = {}, erori = {}, rpc = null
 }
 const articoleAfisate = u => [...u.d.querySelectorAll('[data-articol]')].map(x => x.getAttribute('data-articol'))
 
-dom(numeDom('RestDecontatTab (jsdom + react-dom)'), () => {
+domObligatoriu('RestDecontatTab (jsdom + react-dom)', () => {
   it('totalurile de sus = rândul proiectului = suma obiectelor; ajustările separat; lipsurile proiectului', async () => {
     const { u, st } = await deschide()
     await u.pana(() => u.d.querySelector('[data-totaluri-proiect]'))
@@ -73,9 +72,88 @@ dom(numeDom('RestDecontatTab (jsdom + react-dom)'), () => {
     expect(r.st.cereri).toEqual([])
     expect(r.u.d.querySelector('[data-totaluri-proiect]')).toBe(null)
     curataTot()
-    const e = await deschide({ drept: { stare: 'eroare', eroare: 'function fn_rest_decontat_drept does not exist' } })
+    const reincearca = vi.fn()
+    const e = await deschide({ drept: { stare: 'eroare', eroare: 'function fn_rest_decontat_drept does not exist', reincearca } })
     expect(e.u.text()).toContain('Nu s-a putut verifica dreptul')
+    expect(e.u.d.querySelector('[data-totaluri-proiect]')).toBe(null)
     expect(e.st.cereri).toEqual([])
+    await e.u.apasa(e.u.buton('Reîncearcă'))
+    expect(reincearca).toHaveBeenCalledTimes(1)
+  })
+
+  it('obiectele și lipsurile peste plafonul serverului (max-rows 300 < pas 1000): toate, offset-ul avansează cu rândurile primite, numărul total verificat (L23)', async () => {
+    const ob = Array.from({ length: 1250 }, (_, i) => ({ ...OBIECTE[0], obiect_cod: `O${String(i).padStart(4, '0')}` }))
+    const obiecte = [...ob, { ...OBIECTE[2], baza_valoare: ob.length * 2000, decontat_valoare: ob.length * 1700, rest_valoare: ob.length * 300 }]
+    const lipsuri = Array.from({ length: 1100 }, (_, i) => ({ proiect_id: 1, tip: 'sl_fara_detaliu', referinta: `SL ${String(i).padStart(4, '0')}` }))
+    const { client, st } = clientFals({ tabele: { v_executie_rest_decontat: ARTICOLE, v_executie_rest_decontat_obiect: obiecte, v_executie_rest_decontat_lipsuri: lipsuri,
+      executie_situatii_plata: SLP, executie_proiecte: PROIECTE }, plafon: 300 })
+    const u = await monteaza(<RestDecontatTab proiectId={1} codProiect="T1" client={client} drept={DREPT_TOT} />)
+    await u.pana(() => u.d.querySelector('[data-totaluri-proiect]'), 120)
+    expect(u.camp('obiectul').querySelectorAll('option').length).toBe(1250 + 1)
+    expect(u.d.querySelector('[data-lipsuri]').textContent).toContain('Lipsuri (1100)')
+    expect(u.d.querySelector('[data-incoerent]')).toBe(null)                 // proiect = suma TUTUROR obiectelor (niciunul pierdut)
+    const pagOb = st.cereri.filter(c => c.tabel === 'v_executie_rest_decontat_obiect')
+    expect(pagOb.map(c => c.range[0])).toEqual([0, 300, 600, 900, 1200, 1251])
+    expect(pagOb.every(c => c.count)).toBe(true)
+  })
+
+  it('citestePagini: numărul total lipsă / schimbat între pagini / diferit de rândurile adunate = eroare (nu trunchiere tăcută)', async () => {
+    const pagina = (rows, count) => async (a, b) => ({ data: rows.slice(a, b + 1), error: null, count })
+    const r = Array.from({ length: 5 }, (_, i) => ({ i }))
+    expect(await citestePagini(pagina(r, 5), 2)).toEqual(r)
+    await expect(citestePagini(pagina(r, undefined), 2)).rejects.toThrow(/numărul total/)
+    await expect(citestePagini(pagina(r, 7), 2)).rejects.toThrow(/5 rânduri citite din 7/)
+    let n = 0
+    await expect(citestePagini(async (a, b) => ({ data: r.slice(a, b + 1), error: null, count: ++n === 1 ? 5 : 6 }), 2)).rejects.toThrow(/s-au schimbat/)
+  })
+
+  it('L24: răspunsul proiectului VECHI (sosit după schimbarea proiectului) nu se aplică; configurarea trimisă pe proiectul vechi nu scrie pe cel nou', async () => {
+    const bariera = amana()
+    const ART2 = [{ ...A('0009|D9|P2'), proiect_id: 2, rand_id: '2:0009|D9|P2' }]
+    const OB2 = [{ ...OBIECTE[0], proiect_id: 2, obiect_cod: '0009', baza_valoare: 1000, decontat_valoare: 500, rest_valoare: 500 },
+      { ...OBIECTE[2], proiect_id: 2, baza_valoare: 1000, decontat_valoare: 500, rest_valoare: 500 }]
+    const { client } = clientFals({ tabele: { v_executie_rest_decontat: [...ARTICOLE, ...ART2], v_executie_rest_decontat_obiect: [...OBIECTE, ...OB2], v_executie_rest_decontat_lipsuri: [],
+      executie_situatii_plata: SLP, executie_proiecte: [...PROIECTE, { id: 2, configurare_completa_la: null, configurare_exceptie_motiv: null }] } })
+    // citirile proiectului 1 așteaptă bariera
+    const lent = { ...client, from: t => { const q = client.from(t); const eq = q.eq; let p = null; q.eq = (c, v) => { if (c === 'proiect_id' || c === 'id') p = v; return eq(c, v) }; const then = q.then; q.then = (res, rej) => (p === 1 ? bariera.p.then(() => then(res, rej)) : then(res, rej)); return q } }
+    const u = await monteaza(<RestDecontatTab proiectId={1} client={lent} drept={DREPT_TOT} />)
+    await u.rerandeaza(<RestDecontatTab proiectId={2} client={lent} drept={DREPT_TOT} />)
+    await u.pana(() => u.d.querySelector('[data-articol]'))
+    expect([...u.d.querySelectorAll('[data-articol]')].map(x => x.getAttribute('data-articol'))).toEqual(['2:0009|D9|P2'])
+    bariera.res()
+    await u.asteapta(10)
+    expect([...u.d.querySelectorAll('[data-articol]')].map(x => x.getAttribute('data-articol'))).toEqual(['2:0009|D9|P2'])
+    curataTot()
+    // configurarea: RPC-ul proiectului 1 în zbor, proiectul se schimbă, răspunsul vine → nimic pe ecranul proiectului 2
+    const b2 = amana()
+    const c2 = clientFals({ tabele: { v_executie_rest_decontat: [...ARTICOLE, ...ART2], v_executie_rest_decontat_obiect: [...OBIECTE, ...OB2], v_executie_rest_decontat_lipsuri: [],
+      executie_situatii_plata: SLP, executie_proiecte: [...PROIECTE, { id: 2, configurare_completa_la: null, configurare_exceptie_motiv: null }] },
+    rpc: fn => (fn === 'fn_executie_proiect_configurare_completa' ? b2.p.then(() => ({ data: { ok: true }, error: null })) : { data: null, error: null }) })
+    const v = await monteaza(<RestDecontatTab proiectId={1} client={c2.client} drept={DREPT_TOT} />)
+    await v.pana(() => v.butoane().some(b => b.textContent.includes('Configurare completă')))
+    await v.apasa(v.buton('Configurare completă'))
+    await v.rerandeaza(<RestDecontatTab proiectId={2} client={c2.client} drept={DREPT_TOT} />)
+    await v.pana(() => v.d.querySelector('[data-articol="2:0009|D9|P2"]'))
+    const cereriInainte = c2.st.cereri.length
+    b2.res()
+    await v.asteapta(10)
+    expect(v.text()).not.toContain('declarată completă')
+    expect(c2.st.cereri.length).toBe(cereriInainte)                         // nicio reîncărcare declanșată de răspunsul vechi
+    expect(v.butoane().find(b => b.textContent.includes('Configurare completă')).disabled).toBe(false)
+  })
+
+  it('reîncărcarea după o confirmare păstrează panoul de încărcare montat (cu rezultatul lui) și datele vechi până vin cele noi', async () => {
+    const { u, st } = await deschide()
+    await u.pana(() => u.d.querySelector('[data-totaluri-proiect]'))
+    await u.apasa(u.buton('Încarcă situație'))
+    await u.pana(() => u.camp('fișierul documentului'))
+    await u.alegeFisier(u.camp('fișierul documentului'), await fisierF3('SL.docx', devizF3({ articole: [{ nr: '001', cod: 'TSA01A1', um: 'M.C.', cant: 1, total: 10 }] })))
+    await u.pana(() => u.d.querySelectorAll('[data-linie]').length === 1)
+    const n = st.cereri.filter(c => c.tabel === 'v_executie_rest_decontat').length
+    await u.apasa(u.buton('↻'))
+    await u.pana(() => st.cereri.filter(c => c.tabel === 'v_executie_rest_decontat').length > n && !u.butoane().some(b => b.textContent === '↻ …'))
+    // panoul nu s-a demontat la reîncărcare: fișierul citit (starea lui internă) e tot acolo
+    expect(u.d.querySelectorAll('[data-linie]').length).toBe(1)
   })
 
   it('eroarea de citire se arată (nu „niciun articol”); „Reîncearcă” cere din nou (L18)', async () => {

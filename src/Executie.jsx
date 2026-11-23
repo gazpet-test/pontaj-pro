@@ -31,7 +31,7 @@ import DevizVsExecutatTab from './DevizVsExecutatTab.jsx'   // „📋 Deviz vs 
 import ContractProiectTab from './ContractProiectTab.jsx'   // fișa contractului: clauze, căi de prelungire, termene, registrul evenimentelor (20261203a)
 import ExecutieSemnale, { SemnaleOwnerPanel } from './ExecutieSemnale.jsx'   // „🔔 Semnale”: semnalele agentului verificator, pe proiect + lista owner-ului (20270106a)
 import RestDecontatTab from './restDecontat/RestDecontatTab.jsx'   // „💰 Rest de decontat”: bază − situații confirmate, pe articol / obiect / proiect (20270105a/b)
-import { useDreptRestDecontat, filaVizibila } from './restDecontat/dreptRestDecontat.js'
+import { useDreptRestDecontat, filaVizibila, dreptEroare } from './restDecontat/dreptRestDecontat.js'
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
@@ -234,6 +234,14 @@ export default function ExecutiePage() {
                 </button>
               )
             })}
+            {/* întrebarea despre dreptul pe „Rest de decontat” a eșuat: mesaj separat (nu filă, nu „fără drept”), cu reîncercare */}
+            {dreptEroare(dreptRest) && (
+              <button data-drept-rest-eroare="1" onClick={dreptRest.reincearca}
+                title={`Dreptul pe „Rest de decontat” nu s-a putut verifica: ${dreptEroare(dreptRest)}. Apăsați ca să reîncercați.`}
+                style={{ padding: '14px 12px', background: 'transparent', border: 'none', color: G.red, cursor: 'pointer', fontSize: 12.5, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                ⚠ Rest de decontat: dreptul nu s-a putut verifica · ↻
+              </button>
+            )}
           </>}
 
           {proiectIdStr && (

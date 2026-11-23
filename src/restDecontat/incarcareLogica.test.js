@@ -1,16 +1,16 @@
 // Teste pentru logica ecranului de încărcare (Task 4): ce blochează „Confirm”, ce primește RPC-ul, clasificarea erorilor (L05), amprenta,
-// calea în Storage, citirea pe pagini. Așteptările sunt scrise de mână (L25); contractul RPC-ului (cheile liniilor / ale obiectului p_linii)
-// și forma căii în Storage se compară cu TEXTUL migrărilor (L19: o singură definiție).
+// reconcilierea după amprentă (r2), citirea pe pagini. Așteptările sunt scrise de mână (L25); contractul RPC-ului (cheile liniilor / ale
+// obiectului p_linii, p_fisier NULL acceptat) se compară cu TEXTUL migrărilor (L19: o singură definiție).
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import {
   randuriInitiale, controlCumulat, optiuniArticol, efectiv, blocajeRanduri, liniiSituatie, pLiniiSituatie, totalLinii, verificaSituatie, verificaBaza,
-  liniiBaza, clasificaEroare, sha256Hex, caleFisier, eDejaIncarcat, citesteToate, nrSituatieCanonic, POTRIVIRE_RPC, PRAG_DIFERENTA_LEI, BUCKET_FISIERE,
+  liniiBaza, clasificaEroare, sha256Hex, citesteToate, nrSituatieCanonic, POTRIVIRE_RPC, PRAG_DIFERENTA_LEI, stareDupaAmprenta, reconciliereDupaRefuz,
 } from './incarcareLogica.js'
 import { potrivesteLinii } from './potrivire.js'
+import { clientFals } from './restDecontat.testutil.jsx'
 
 const MIG = fs.readFileSync(new URL('../../supabase/migrations/20270105a_executie_rest_decontat.sql', import.meta.url), 'utf8').replace(/\r/g, '')
-const MIG_ACCES = fs.readFileSync(new URL('../../supabase/migrations/20261209a_executie_acces_proiect.sql', import.meta.url), 'utf8').replace(/\r/g, '')
 const corpFunctie = nume => MIG.slice(MIG.indexOf(`CREATE FUNCTION public.${nume}(`), MIG.indexOf(`REVOKE ALL ON FUNCTION public.${nume}(`))
 const listaSql = s => [...s.matchAll(/'([a-z_]+)'/g)].map(m => m[1])
 
@@ -194,20 +194,73 @@ describe('clasificaEroare (L05: doar 4xx / SQLSTATE e refuz cert)', () => {
   })
 })
 
-describe('amprenta, calea în Storage, citirea pe pagini', () => {
+describe('fișierul nu se păstrează (r2, verdict #1178 P1): p_fisier NULL e acceptat de ambele RPC-uri', () => {
+  it('validarea din migrare lasă p_fisier NULL (doar lungimea unui text NENUL e verificată) pe confirma_situatie ȘI confirma_baza', () => {
+    for (const fn of ['fn_rest_decontat_confirma_situatie', 'fn_rest_decontat_confirma_baza']) {
+      const corp = corpFunctie(fn)
+      expect(corp).toContain('(p_fisier IS NOT NULL AND length(p_fisier) NOT BETWEEN 1 AND 1000)')
+      expect(corp).not.toMatch(/p_fisier IS NULL/)
+    }
+  })
+  it('modulul logicii nu mai exportă nimic despre Storage (bucket / cale / „deja încărcat”)', async () => {
+    const m = await import('./incarcareLogica.js')
+    expect(Object.keys(m).filter(k => /bucket|cale|incarcat|storage/i.test(k))).toEqual([])
+  })
+})
+
+describe('stareDupaAmprenta + reconciliereDupaRefuz (L05: după un rezultat necunoscut, refuzul nu dovedește „nimic scris”)', () => {
+  const AMP = 'a'.repeat(64)
+  const drept = (...raspunsuri) => { let i = 0; return fn => (fn === 'fn_rest_decontat_drept' ? raspunsuri[Math.min(i++, raspunsuri.length - 1)] : { data: null, error: null }) }
+  const DA = { data: true, error: null }, NU = { data: false, error: null }
+  const REFUZ = clasificaEroare({ error: { code: '42501', message: 'rest_decontat: proiectul nu exista sau nu ai drept sa confirmi situatii' }, status: 403 })
+  it('situația ACTIVĂ cu amprenta = scris → ok (chiar și fără drept de citire: rândul găsit e dovadă)', async () => {
+    const { client, st } = clientFals({ tabele: { executie_sl_detaliu: [{ id: 3, proiect_id: 1, nr_situatie: 'SL 3', versiune: 2, activ: true, amprenta: AMP }] }, rpc: drept(NU) })
+    const v = await stareDupaAmprenta({ client, pid: 1, eSit: true, amprenta: AMP })
+    expect(v).toMatchObject({ scris: true }); expect(v.dovada).toMatch(/SL 3.*versiunea 2/)
+    expect(st.cereri.at(-1)).toMatchObject({ tabel: 'executie_sl_detaliu', eq: [['proiect_id', 1], ['amprenta', AMP]] })
+    expect(reconciliereDupaRefuz(v, REFUZ)).toMatchObject({ stare: 'ok' })
+  })
+  it('doar versiune inactivă = retras → refuz cu explicația (nu „ok”, nu necunoscut)', async () => {
+    const { client } = clientFals({ tabele: { executie_sl_detaliu: [{ id: 3, proiect_id: 1, nr_situatie: 'SL 3', versiune: 1, activ: false, amprenta: AMP }] }, rpc: drept(DA) })
+    const v = await stareDupaAmprenta({ client, pid: 1, eSit: true, amprenta: AMP })
+    expect(v).toMatchObject({ retras: true })
+    expect(reconciliereDupaRefuz(v, REFUZ)).toMatchObject({ stare: 'refuz', mesaj: REFUZ.mesaj, reconciliat: expect.stringMatching(/înlocuită/) })
+  })
+  it('absent + drept de citire înainte ȘI după → absent dovedit → refuzul devine final (cu „verificat în ERP”)', async () => {
+    const { client, st } = clientFals({ tabele: { executie_sl_detaliu: [{ id: 3, proiect_id: 2, nr_situatie: 'X', versiune: 1, activ: true, amprenta: AMP }] }, rpc: drept(DA, DA) })
+    const v = await stareDupaAmprenta({ client, pid: 1, eSit: true, amprenta: AMP })
+    expect(v).toEqual({ absent: true })
+    expect(st.rpc.map(r => r.args)).toEqual([{ p_proiect: 1, p_nivel: 'citire' }, { p_proiect: 1, p_nivel: 'citire' }])
+    expect(reconciliereDupaRefuz(v, REFUZ)).toMatchObject({ stare: 'refuz', reconciliat: expect.stringMatching(/NU s-a scris/) })
+  })
+  it('absent dar FĂRĂ drept de citire (înainte sau după) / eroare la drept / eroare la citire → neverificabil → rămâne necunoscut', async () => {
+    for (const r of [drept(NU, DA), drept(DA, NU), drept({ data: null, error: { message: 'timeout' } })]) {
+      const { client } = clientFals({ rpc: r })
+      const v = await stareDupaAmprenta({ client, pid: 1, eSit: true, amprenta: AMP })
+      expect(v.neverificabil).toBeTruthy()
+      const t = reconciliereDupaRefuz(v, REFUZ)
+      expect(t.stare).toBe('necunoscut'); expect(JSON.stringify(t)).not.toMatch(/[Nn]imic nu s-a scris/)
+    }
+    const { client } = clientFals({ rpc: drept(DA), erori: { executie_sl_detaliu: { message: 'permission denied' } } })
+    expect((await stareDupaAmprenta({ client, pid: 1, eSit: true, amprenta: AMP })).neverificabil).toMatch(/permission denied/)
+  })
+  it('devizul de bază: rânduri în proiect_articole = scris; doar în istoric (rand->>fisier_amprenta) = retras; nimic + drept = absent', async () => {
+    const a = clientFals({ tabele: { proiect_articole: [{ id: 9, proiect_id: 1, fisier_amprenta: AMP }] }, rpc: drept(DA) })
+    expect(await stareDupaAmprenta({ client: a.client, pid: 1, eSit: false, amprenta: AMP })).toMatchObject({ scris: true })
+    const h = clientFals({ tabele: { proiect_articole_istoric: [{ id: 4, proiect_id: 1, rand: { fisier_amprenta: AMP } }] }, rpc: drept(DA) })
+    expect(await stareDupaAmprenta({ client: h.client, pid: 1, eSit: false, amprenta: AMP })).toMatchObject({ retras: true })
+    expect(h.st.cereri.at(-1)).toMatchObject({ tabel: 'proiect_articole_istoric', eq: [['proiect_id', 1], ['rand->>fisier_amprenta', AMP]] })
+    const g = clientFals({ rpc: drept(DA) })
+    expect(await stareDupaAmprenta({ client: g.client, pid: 1, eSit: false, amprenta: AMP })).toEqual({ absent: true })
+  })
+  it('fără refuz („Verifică starea” după rețea): absent nu produce o stare finală', () => {
+    expect(reconciliereDupaRefuz({ absent: true }, null).stare).toBe('necunoscut')
+  })
+})
+
+describe('amprenta, citirea pe pagini', () => {
   it('sha256Hex: vectorul standard „abc”', async () => {
     expect(await sha256Hex(new TextEncoder().encode('abc').buffer)).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
-  })
-  it('calea = sl_<proiect>/rest_decontat/<amprenta>.docx, recunoscută de poarta de acces pe proiect (20261209a) pentru bucketul borderourilor', () => {
-    const c = caleFisier(7, 'c'.repeat(64))
-    expect(c).toBe(`sl_7/rest_decontat/${'c'.repeat(64)}.docx`)
-    expect(BUCKET_FISIERE).toBe('executie-borderouri')
-    const ramura = MIG_ACCES.match(/WHEN p_bucket = 'executie-borderouri' THEN\s+substring\(p_name FROM '([^']+)'\)/)[1]
-    expect(c.match(new RegExp(ramura))?.[1]).toBe('7')
-  })
-  it('eDejaIncarcat: „already exists” / 409 = același conținut (calea e amprenta)', () => {
-    expect(eDejaIncarcat({ message: 'The resource already exists', statusCode: '409' })).toBe(true)
-    expect(eDejaIncarcat({ message: 'new row violates row-level security policy', statusCode: '403' })).toBe(false)
   })
   it('citesteToate: pagini până la pagina goală; eroarea se aruncă; fără progres = eroare', async () => {
     const date = Array.from({ length: 2500 }, (_, i) => ({ k: `k${String(i).padStart(5, '0')}` }))
@@ -216,5 +269,12 @@ describe('amprenta, calea în Storage, citirea pe pagini', () => {
     expect(tot.length).toBe(2500); expect(cereri.length).toBe(4)
     await expect(citesteToate(() => Promise.resolve({ data: null, error: { message: 'boom' } }), 'k')).rejects.toMatchObject({ message: 'boom' })
     await expect(citesteToate(() => Promise.resolve({ data: [{ k: 'a' }], error: null }), 'k')).rejects.toThrow(/fără progres/)
+  })
+  it('citesteToate cu plafonul serverului SUB pasul cerut (max-rows 300, pas 1000): toate rândurile, fără plafon tăcut (L23)', async () => {
+    const rows = Array.from({ length: 2345 }, (_, i) => ({ proiect_id: 1, id: i + 1 }))
+    const { client, st } = clientFals({ tabele: { t: rows }, plafon: 300 })
+    const tot = await citesteToate((ultim, pas) => { let q = client.from('t').select('id').eq('proiect_id', 1).order('id').limit(pas); if (ultim != null) q = q.gt('id', ultim); return q }, 'id')
+    expect(tot.map(x => x.id)).toEqual(rows.map(x => x.id))
+    expect(st.cereri.length).toBe(Math.ceil(2345 / 300) + 1)
   })
 })

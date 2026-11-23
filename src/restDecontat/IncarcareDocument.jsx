@@ -2,11 +2,14 @@
 // restDecontat/IncarcareDocument.jsx — încărcarea unui document în „Rest de decontat” (Task 4, plan 2026-11-21-rest-de-decontat):
 //   tip="situatie": situația de plată Transgaz (F3 .docx) → parsare în browser (parsareSituatie.js, fără AI) → potrivire pe baza proiectului
 //                  (potrivire.js) → previzualizare (devizele cu controlul lor, liniile cu nivelul potrivirii) → decizia omului pe fiecare rând
-//                  nesigur → „Confirm” → fișierul în Storage + fn_rest_decontat_confirma_situatie (o tranzacție, 20270105a);
+//                  nesigur → „Confirm” → fn_rest_decontat_confirma_situatie (o tranzacție, 20270105a);
 //   tip="baza":     oferta / devizul unui act adițional / al unei note NR-NCS (același format F3) → previzualizare → fn_rest_decontat_confirma_baza.
-// NIMIC nu se scrie înainte de „Confirm” (nici fișierul). Erorile BD-ului se arată în clar (L18); rețea / 5xx = rezultat NECUNOSCUT (L05): se
-// verifică după amprentă sau se retrimite identic (amprenta = cheia de idempotență, UNIQUE în BD). L24: fiecare citire / trimitere poartă un
-// token de generație; un răspuns vechi (alt fișier, alt proiect) nu se aplică. Drepturile le decide BD-ul; ecranul doar oglindește.
+// FIȘIERUL NU SE PĂSTREAZĂ ÎN ERP deocamdată (r2, verdict #1178): documentul detaliat are prețuri și se va păstra doar într-un loc legat de
+// dreptul „Rest de decontat” (livrare separată) → acum nu se urcă nicăieri, RPC-ul primește p_fisier = NULL (acceptat).
+// NIMIC nu se scrie înainte de „Confirm”. Erorile BD-ului se arată în clar (L18); rețea / 5xx = rezultat NECUNOSCUT (L05): se verifică după
+// amprentă sau se retrimite identic (amprenta = cheia de idempotență, UNIQUE în BD). După un rezultat necunoscut, un REFUZ la reîncercare nu
+// dovedește „nimic scris”: starea se reconciliază în BD după amprentă, iar câmpurile rămân blocate până atunci. L24: fiecare citire / trimitere
+// poartă un token de generație, invalidat și la demontare; un răspuns vechi (alt fișier, alt proiect) nu se aplică. Drepturile le decide BD-ul.
 // ═══════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
@@ -14,8 +17,8 @@ import { parseSituatie, parseDevizModificare } from './parsareSituatie.js'
 import { potrivesteLinii } from './potrivire.js'
 import {
   randuriInitiale, controlCumulat, optiuniArticol, blocajeRanduri, verificaSituatie, pLiniiSituatie, verificaBaza, liniiBaza, totalLinii,
-  clasificaEroare, sha256Hex, BUCKET_FISIERE, caleFisier, eDejaIncarcat, citesteToate, nrSituatieCanonic, SURSE_BAZA, PRAG_DIFERENTA_LEI,
-  INDICIU_NECUNOSCUT,
+  clasificaEroare, sha256Hex, citesteToate, nrSituatieCanonic, SURSE_BAZA, PRAG_DIFERENTA_LEI, reconciliereDupaRefuz,
+  stareDupaAmprenta, MESAJ_FARA_FISIER,
 } from './incarcareLogica.js'
 
 const G = { bg: '#0D1117', surface: '#161B22', card: '#1C2128', card2: '#21262D', text: '#E6EDF3', muted: '#8B949E', dim: '#6E7681',
@@ -39,8 +42,9 @@ const intreg = s => { const t = String(s ?? '').trim(); return /^\d{1,4}$/.test(
 /**
  * <IncarcareDocument proiectId tip="situatie"|"baza" sursa? client onGata onInchide />
  * sursa (doar la „baza”): sursa propusă inițial (contract_initial / act_aditional / nota_renuntare / nota_comanda_suplimentara).
+ * onBlocat(bool): adevărat cât o trimitere e în zbor / are rezultat necunoscut — apelantul nu închide panoul (închiderea ar pierde starea L05).
  */
-export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: sursaInitiala = null, surse = null, client = supabase, onGata, onInchide }) {
+export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: sursaInitiala = null, surse = null, client = supabase, onGata, onInchide, onBlocat }) {
   const pid = Number(proiectId)
   const eSit = tip === 'situatie'
   // sursele de bază pe care apelantul le poate confirma (oglinda dreptului: oferta cere 'confirmare', devizele AA / NR / NCS 'documente_baza')
@@ -76,10 +80,18 @@ export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: 
   const ocupat = useRef(false)    // garda anti-dublu-clic: pusă ÎNAINTEA primului await
   const necunoscutAnterior = useRef(false)
 
-  // ── contextul proiectului ──
+  // L24: la demontare toate generațiile avansează → niciun răspuns în zbor (context, fișier, decontat, trimitere, verificare) nu se mai aplică
+  useEffect(() => () => { gen.current++; genCtx.current++ }, [])
+  // panoul nu se închide cât o trimitere e în zbor / are rezultat necunoscut (apelantul ascunde închiderea)
+  const stareTrim = trimitere?.stare
+  useEffect(() => { onBlocat?.(stareTrim === 'trimite' || stareTrim === 'reconciliere' || stareTrim === 'necunoscut') }, [stareTrim, onBlocat])
+  useEffect(() => () => onBlocat?.(false), [onBlocat])
+
+  // ── contextul proiectului (toate citirile pe pagini până la pagina goală, fără plafon tăcut: L23) ──
   useEffect(() => {
     const g = ++genCtx.current
     setCtx(null); setEroareCtx(null)
+    const pe = (tabel, coloane, filtre = q => q) => citesteToate((ultim, pas) => { let q = filtre(client.from(tabel).select(coloane).eq('proiect_id', pid)).order('id').limit(pas); if (ultim != null) q = q.gt('id', ultim); return q }, 'id')
     ;(async () => {
       try {
         const erori = {}
@@ -87,21 +99,22 @@ export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: 
         if (eSit) {
           const [baza, sl, existente] = await Promise.all([
             citesteToate((ultim, pas) => { let q = client.from('v_executie_rest_decontat_baza').select('cheie, tip_rand, obiect_cod, obiect_nume, deviz_cod, deviz_nume, nr, cod, denumire, um, um_incert').eq('proiect_id', pid).order('cheie').limit(pas); if (ultim != null) q = q.gt('cheie', ultim); return q }, 'cheie'),
-            sigur('sl', async () => { const { data, error } = await client.from('executie_situatii_plata').select('id, nr_situatie, luna, an, valoare_baza_lei').eq('proiect_id', pid).order('id').limit(1000); if (error) throw error; return data || [] }),
-            citesteToate((ultim, pas) => { let q = client.from('executie_sl_detaliu').select('id, nr_situatie, versiune, amprenta').eq('proiect_id', pid).eq('activ', true).order('id').limit(pas); if (ultim != null) q = q.gt('id', ultim); return q }, 'id'),
+            sigur('sl', () => pe('executie_situatii_plata', 'id, nr_situatie, luna, an, valoare_baza_lei')),
+            pe('executie_sl_detaliu', 'id, nr_situatie, versiune, amprenta', q => q.eq('activ', true)),
           ])
           if (g !== genCtx.current) return
           setCtx({ baza, sl, existente, erori })
         } else {
           const [acte, note] = await Promise.all([
-            sigur('acte', async () => { const { data, error } = await client.from('executie_acte_aditionale').select('id, numar_act, data_semnare, activ').eq('proiect_id', pid).order('id').limit(1000); if (error) throw error; return (data || []).filter(a => a.activ !== false) }),
-            sigur('note', async () => { const { data, error } = await client.from('executie_note_modificare').select('id, tip, numar, data_aprobare, activ').eq('proiect_id', pid).eq('activ', true).order('id').limit(1000); if (error) throw error; return data || [] }),
+            sigur('acte', async () => (await pe('executie_acte_aditionale', 'id, numar_act, data_semnare, activ')).filter(a => a.activ !== false)),
+            sigur('note', () => pe('executie_note_modificare', 'id, tip, numar, data_aprobare, activ', q => q.eq('activ', true))),
           ])
           if (g !== genCtx.current) return
           setCtx({ acte, note, erori })
         }
       } catch (e) { if (g === genCtx.current) setEroareCtx(e?.message || String(e)) }
     })()
+    return () => { genCtx.current++ }
   }, [pid, eSit, client, reloadCtx])
 
   // ── fișierul: citire + amprentă + parsare + potrivire (fără nicio scriere) ──
@@ -129,19 +142,22 @@ export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: 
   // documentul are cumulat (F3 nu are)
   useEffect(() => {
     setDecontat(null)
-    if (!eSit || !fis?.rez || !ctx?.baza) return
+    if (!eSit || !fis?.rez || !ctx?.baza) return undefined
     const g = gen.current
+    let viu = true                 // L24: o rulare înlocuită (alt context / fișier) sau demontată nu mai scrie
+    const curent = () => viu && g === gen.current
     const init = randuriInitiale(potrivesteLinii(fis.rez.linii, ctx.baza))
     setRanduri(init); setPotrivitPentru(fis.amprenta)
-    if (!init.some(r => r.linie.cantitate_cumulat_doc != null)) return
+    if (!init.some(r => r.linie.cantitate_cumulat_doc != null)) return () => { viu = false }
     setDecontat({ citire: true })
     ;(async () => {
       try {
         const dec = await citesteToate((ultim, pas) => { let q = client.from('v_executie_rest_decontat').select('rand_id, cheie, decontat_cantitate').eq('proiect_id', pid).order('rand_id').limit(pas); if (ultim != null) q = q.gt('rand_id', ultim); return q }, 'rand_id')
-        if (g !== gen.current) return
+        if (!curent()) return
         setDecontat({ map: new Map(dec.filter(d => d.cheie).map(d => [d.cheie, Number(d.decontat_cantitate)])) })
-      } catch (e) { if (g === gen.current) setDecontat({ eroare: e?.message || String(e) }) }
+      } catch (e) { if (curent()) setDecontat({ eroare: e?.message || String(e) }) }
     })()
+    return () => { viu = false }
   }, [eSit, fis?.rez, ctx?.baza, client, pid])
   // rândurile cu controlul cumulatului aplicat (deciziile rămân); cât decontatul nu e citit, liniile cu cumulat sunt de verificat
   const randuriEf = useMemo(() => {
@@ -182,29 +198,18 @@ export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: 
 
   const decide = (i, decizie) => setRanduri(rs => rs.map(r => (r.i === i ? { ...r, decizie } : r)))
 
-  // ── trimiterea: fișierul în Storage (cale = amprenta; există deja = același conținut), apoi RPC-ul ──
+  // ── trimiterea: DOAR RPC-ul (fișierul nu se urcă nicăieri: p_fisier = NULL, vezi antetul) ──
   const confirma = async () => {
     if (ocupat.current || !ver.ok || !fis?.rez) return
     ocupat.current = true
     const g = gen.current
     setTrimitere({ stare: 'trimite' }); setVerificare(null)
     try {
-      const cale = caleFisier(pid, fis.amprenta)
-      let up
-      try { up = await client.storage.from(BUCKET_FISIERE).upload(cale, fis.file, { upsert: false, contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }) }
-      catch (e) { up = { error: { message: e?.message || String(e), aruncat: true } } }
-      if (g !== gen.current) return
-      if (up?.error && !eDejaIncarcat(up.error)) {
-        const st = Number(up.error.statusCode || up.error.status)
-        const sigurRefuz = !up.error.aruncat && st >= 400 && st < 500
-        setTrimitere({ stare: sigurRefuz ? 'refuz' : 'necunoscut', mesaj: `Fișierul nu s-a putut urca în Storage: ${up.error.message || up.error.error || 'eroare'}`, indiciu: sigurRefuz ? 'Nimic nu s-a scris în Rest de decontat.' : 'Reîncercați; nimic nu s-a scris în Rest de decontat.' })
-        return
-      }
       let r
       try {
         if (eSit) {
           r = await client.rpc('fn_rest_decontat_confirma_situatie', {
-            p_proiect: pid, p_nr_situatie: nrSituatieCanonic(nr), p_sl_id: sl ? Number(sl.id) : null, p_fisier: cale, p_amprenta: fis.amprenta,
+            p_proiect: pid, p_nr_situatie: nrSituatieCanonic(nr), p_sl_id: sl ? Number(sl.id) : null, p_fisier: null, p_amprenta: fis.amprenta,
             p_linii: pLiniiSituatie({ randuri: randuriEf, baza: ctx.baza, luna: intreg(luna), an: intreg(an), acceptDiferenta }), p_inlocuieste: inlocuieste === true,
             p_prag_diferenta: PRAG_DIFERENTA_LEI,
           })
@@ -212,7 +217,7 @@ export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: 
           const linii = liniiBaza(fis.rez)
           r = await client.rpc('fn_rest_decontat_confirma_baza', {
             p_proiect: pid, p_sursa: sursa, p_act_aditional_id: sursa === 'act_aditional' ? Number(actId) : null,
-            p_nota_id: sursa === 'nota_renuntare' || sursa === 'nota_comanda_suplimentara' ? Number(notaId) : null, p_mod: ver.mod, p_fisier: cale,
+            p_nota_id: sursa === 'nota_renuntare' || sursa === 'nota_comanda_suplimentara' ? Number(notaId) : null, p_mod: ver.mod, p_fisier: null,
             p_amprenta: fis.amprenta, p_linii: sursa === 'contract_initial' && acceptUm ? { linii, accept_schimbare_um: true } : linii,
             p_inlocuieste: sursa === 'contract_initial' && inlocuieste === true,
           })
@@ -226,73 +231,59 @@ export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: 
         return
       }
       const c = clasificaEroare(r)
-      // o încercare anterioară cu rezultat NECUNOSCUT + acum un refuz: refuzul poate fi chiar urma scrierii anterioare („același fișier deja
-      // confirmat”; la devizul unui act / al unei note „are deja un deviz confirmat” vine înaintea verificării amprentei) → se recitește starea
-      // în BD după amprentă (L05), nu se declară eșec pe încredere
-      if (c.tip === 'refuz' && necunoscutAnterior.current) {
-        if (/amprenta_existenta|deja confirmat/.test(c.mesaj)) {
-          necunoscutAnterior.current = false
-          setTrimitere({ stare: 'ok', rez: null, dovada: 'Încercarea anterioară a fost scrisă (serverul refuză același fișier a doua oară).' })
-          onGata?.(null)
-          return
-        }
-        const v = await citesteStarea()
-        if (g !== gen.current) return
-        if (v.gasit) {
-          necunoscutAnterior.current = false
-          setTrimitere({ stare: 'ok', rez: null, dovada: `Încercarea anterioară a fost scrisă. ${v.dovada}` })
-          onGata?.(null)
-          return
-        }
-        if (v.eroare) { setTrimitere({ stare: 'necunoscut', mesaj: `${c.mesaj} — iar starea nu s-a putut verifica: ${v.eroare}`, indiciu: c.indiciu || INDICIU_NECUNOSCUT }); return }
-        necunoscutAnterior.current = false
+      if (c.tip === 'necunoscut') {
+        necunoscutAnterior.current = true
+        setTrimitere({ stare: 'necunoscut', mesaj: c.mesaj, indiciu: c.indiciu })
+        return
       }
-      if (c.tip === 'necunoscut') necunoscutAnterior.current = true
-      setTrimitere({ stare: c.tip, mesaj: c.mesaj, indiciu: c.indiciu })
+      if (!necunoscutAnterior.current) { setTrimitere({ stare: 'refuz', mesaj: c.mesaj, indiciu: c.indiciu }); return }
+      // L05: o încercare anterioară are rezultat NECUNOSCUT, iar reîncercarea e refuzată. Refuzul NU dovedește „nimic scris” (poate fi chiar
+      // urma scrierii anterioare: „deja confirmat”, „are deja un deviz”, sau dreptul retras între timp, 42501) → starea rămâne necunoscută
+      // (câmpurile blocate) până când BD-ul, citit după amprentă, o lămurește
+      setTrimitere({ stare: 'reconciliere', mesaj: c.mesaj })
+      const v = await stareDupaAmprenta({ client, pid, eSit, amprenta: fis.amprenta })
+      if (g !== gen.current) return
+      aplica(reconciliereDupaRefuz(v, c))
     } finally { ocupat.current = false }
   }
-
-  // ── starea în BD după amprentă (L05): există un document scris cu acest fișier? → { gasit, dovada } | { gasit: false } | { eroare } ──
-  const citesteStarea = async () => {
-    try {
-      const { data, error } = eSit
-        ? await client.from('executie_sl_detaliu').select('id, nr_situatie, versiune, activ').eq('proiect_id', pid).eq('amprenta', fis.amprenta).limit(1)
-        : await client.from('proiect_articole').select('id').eq('proiect_id', pid).eq('fisier_amprenta', fis.amprenta).limit(1)
-      if (error) return { eroare: error.message || String(error) }
-      if (data?.length) return { gasit: true, dovada: eSit ? `Situația ${data[0].nr_situatie} (versiunea ${data[0].versiune}) e scrisă.` : 'Devizul e scris în bază.' }
-      return { gasit: false }
-    } catch (e) { return { eroare: e?.message || String(e) } }
+  // aplică starea reconciliată: ok (scris) / refuz (absență DOVEDITĂ sau versiune retrasă) / necunoscut (neverificabil: rămâne blocat)
+  const aplica = t => {
+    if (t.stare !== 'necunoscut') necunoscutAnterior.current = false
+    setTrimitere(t)
+    if (t.stare === 'ok') onGata?.(null)
   }
+
+  // ── „Verifică starea” (după un rezultat necunoscut, fără refuz): aceeași citire după amprentă ──
   const verificaStarea = async () => {
     const g = gen.current
     setVerificare({ stare: 'citire' })
-    const v = await citesteStarea()
+    const v = await stareDupaAmprenta({ client, pid, eSit, amprenta: fis.amprenta })
     if (g !== gen.current) return
-    if (v.eroare) { setVerificare({ stare: 'eroare', mesaj: v.eroare }); return }
-    if (v.gasit) {
-      necunoscutAnterior.current = false
-      setVerificare(null)
-      setTrimitere({ stare: 'ok', rez: null, dovada: v.dovada })
-      onGata?.(null)
-    } else setVerificare({ stare: 'absent', mesaj: 'Nimic scris cu acest fișier până acum. Apăsați din nou „Confirm” (se trimite exact același conținut).' })
+    if (v.neverificabil) { setVerificare({ stare: 'eroare', mesaj: v.neverificabil }); return }
+    if (v.scris || v.retras) { setVerificare(null); aplica(reconciliereDupaRefuz(v, null)); return }
+    setVerificare({ stare: 'absent', mesaj: 'Verificat în ERP: nimic scris cu acest fișier până acum. Apăsați din nou „Confirm” (se trimite exact același conținut).' })
   }
 
   // ── afișarea ──
   const rez = fis?.rez
   const trimis = trimitere?.stare === 'ok'
-  // cât rezultatul e NECUNOSCUT câmpurile și fișierul rămân înghețate: singura cale e retrimiterea identică sau verificarea (L05)
-  const blocatUi = trimitere?.stare === 'trimite' || trimis || trimitere?.stare === 'necunoscut'
-  const confirmBlocat = trimitere?.stare === 'trimite' || trimis
+  // cât rezultatul e NECUNOSCUT (sau se reconciliază) câmpurile și fișierul rămân înghețate: singura cale e retrimiterea identică sau
+  // verificarea (L05); un refuz se deblochează DOAR după ce BD-ul a dovedit că încercarea anterioară nu s-a scris
+  const blocatUi = stareTrim === 'trimite' || stareTrim === 'reconciliere' || trimis || stareTrim === 'necunoscut'
+  const confirmBlocat = stareTrim === 'trimite' || stareTrim === 'reconciliere' || trimis
+  const inchidereBlocata = stareTrim === 'trimite' || stareTrim === 'reconciliere' || stareTrim === 'necunoscut'
   const titlu = eSit ? '📥 Încarcă situația de plată (F3 .docx)' : '📥 Încarcă devizul: ofertă / act adițional / notă (F3 .docx)'
   const nrNecunoscut = eSit ? [...blocaje.keys()].length : 0
   return (
     <div style={{ background: G.card, border: `1px solid ${G.blue}44`, borderRadius: 10, padding: '12px 14px', margin: '0 0 14px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: G.text }}>{titlu}</div>
-        {onInchide && <button style={{ ...S.btn, marginLeft: 'auto', padding: '2px 8px' }} onClick={onInchide} aria-label="închide încărcarea">×</button>}
+        {onInchide && <button style={{ ...S.btn, marginLeft: 'auto', padding: '2px 8px' }} onClick={onInchide} disabled={inchidereBlocata}
+          title={inchidereBlocata ? 'Rezultatul trimiterii nu e încă lămurit: verificați starea sau retrimiteți înainte să închideți' : undefined} aria-label="închide încărcarea">×</button>}
       </div>
       <div style={{ fontSize: 12, color: G.muted, marginBottom: 10, lineHeight: 1.5 }}>
-        Fișierul se citește în browser (fără AI). Nimic nu se scrie până la „Confirm”: atunci fișierul se pune în dosarul proiectului și liniile intră în calcul.
+        Fișierul se citește în browser (fără AI). Nimic nu se scrie până la „Confirm”: atunci liniile intră în calcul.
+        <div style={{ color: G.yellow, marginTop: 2 }} data-fara-fisier="1">{MESAJ_FARA_FISIER}</div>
       </div>
 
       {eroareCtx && <div style={S.err}>Nu s-a putut citi baza proiectului: {eroareCtx}<div><button style={{ ...S.btn, marginTop: 6 }} onClick={() => setReloadCtx(x => x + 1)}>Reîncearcă</button></div></div>}
@@ -372,7 +363,7 @@ export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: 
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
             <button style={{ ...S.btn, color: ver.ok && !confirmBlocat ? G.green : G.dim, borderColor: ver.ok && !confirmBlocat ? G.green : G.border, fontWeight: 700 }}
-              disabled={!ver.ok || confirmBlocat} onClick={confirma}>{trimitere?.stare === 'trimite' ? 'Se confirmă…' : '✓ Confirm'}</button>
+              disabled={!ver.ok || confirmBlocat} onClick={confirma} data-confirm="1">{stareTrim === 'trimite' ? 'Se confirmă…' : stareTrim === 'reconciliere' ? 'Se verifică în ERP…' : '✓ Confirm'}</button>
             {!ver.ok && ver.motive.length > 0 && <div style={{ fontSize: 12, color: G.yellow }} data-motive="1">{ver.motive.join(' · ')}</div>}
             {eSit && nrNecunoscut > 0 && <span style={{ fontSize: 12, color: G.red }}>{nrNecunoscut} linii de rezolvat</span>}
           </div>
@@ -389,10 +380,16 @@ export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: 
           )}
         </div>
       )}
-      {(trimitere?.stare === 'refuz' || trimitere?.stare === 'necunoscut') && (
+      {stareTrim === 'reconciliere' && (
+        <div style={{ ...S.err, color: G.yellow, borderColor: G.yellow + '44', background: G.yellow + '14' }} data-rezultat="reconciliere">
+          Reîncercarea a fost refuzată ({trimitere.mesaj}), dar încercarea anterioară are rezultat necunoscut: se verifică în ERP dacă s-a scris…
+        </div>
+      )}
+      {(stareTrim === 'refuz' || stareTrim === 'necunoscut') && (
         <div style={S.err} data-rezultat={trimitere.stare}>
           {trimitere.stare === 'refuz' ? 'Refuzat de server: ' : 'Rezultat necunoscut: '}{trimitere.mesaj}
           {trimitere.indiciu && <div style={{ color: G.yellow, marginTop: 4 }}>{trimitere.indiciu}</div>}
+          {trimitere.reconciliat && <div style={{ color: G.muted, marginTop: 4 }} data-reconciliat="1">{trimitere.reconciliat}</div>}
           {trimitere.stare === 'necunoscut' && fis?.amprenta && <div style={{ marginTop: 6 }}><button style={S.btn} onClick={verificaStarea} disabled={verificare?.stare === 'citire'}>Verifică starea în ERP</button></div>}
         </div>
       )}

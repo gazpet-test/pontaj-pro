@@ -28,16 +28,28 @@ const S = {
 const num = { textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }
 export { useDreptRestDecontat }
 
-/** citire pe pagini (range) până la pagina goală, pentru vederile fără cheie unică (obiecte, lipsuri) — ordinea completă dată de apelant */
-async function citestePagini(cere, pas = 1000) {
+/**
+ * citestePagini(cere) — citire pe pagini (range) pentru vederile fără cheie unică (obiecte, lipsuri), ordinea completă dată de apelant (L23):
+ * offset-ul avansează cu rândurile PRIMITE (nu cu mărimea cerută: plafonul serverului poate fi mai mic), până la pagina goală; fiecare pagină
+ * cere și numărul total (count: 'exact') → numărul lipsă, schimbat între pagini sau diferit de rândurile adunate = eroare vizibilă, nu
+ * trunchiere tăcută. cere(a, b) → { data, error, count }.
+ */
+export async function citestePagini(cere, pas = 1000) {
   const tot = []
-  for (let o = 0; ; o += pas) {
-    const { data, error } = await cere(o, o + pas - 1)
+  let total = null
+  for (let o = 0; ;) {
+    const { data, error, count } = await cere(o, o + pas - 1)
     if (error) throw error
-    if (!data || !data.length) return tot
-    tot.push(...data)
-    if (o > 200000) throw new Error('citire pe pagini: prea multe rânduri')
+    if (!Number.isInteger(count)) throw new Error('citire pe pagini: serverul nu a dat numărul total de rânduri')
+    if (total != null && count !== total) throw new Error('citire pe pagini: datele s-au schimbat în timpul citirii — reîncărcați')
+    total = count
+    if (!data || !data.length) break
+    for (const x of data) tot.push(x)          // fără push(...rânduri) (RangeError la liste mari)
+    o += data.length
+    if (tot.length > total) break
   }
+  if (tot.length !== total) throw new Error(`citire pe pagini: ${tot.length} rânduri citite din ${total} — citire incompletă, reîncărcați`)
+  return tot
 }
 
 export default function RestDecontatTab({ proiectId, codProiect = null, proiect = null, client = supabase, drept: dreptExtern = null }) {
@@ -52,19 +64,30 @@ export default function RestDecontatTab({ proiectId, codProiect = null, proiect 
   const [exportBusy, setExportBusy] = useState(false)
   const [config, setConfig] = useState(null)     // { motiv, stare, mesaj }
   const [lipsuriDeschise, setLipsuriDeschise] = useState(false)
+  const [incarcareBlocata, setIncarcareBlocata] = useState(false)   // trimiterea din panou are rezultat nelămurit: panoul nu se închide
   const gen = useRef(0)
+  // L24: generația PROIECTULUI (avansează la schimbarea proiectului și la demontare) — acțiunile (configurare, export) o captează la pornire și
+  // nu-și aplică rezultatul pe alt proiect / după demontare; starea lor locală se golește la schimbare
+  const genProiect = useRef(0)
+  useEffect(() => {
+    genProiect.current++
+    setConfig(null); setIncarcare(null); setIncarcareBlocata(false); setExportBusy(false)
+    return () => { genProiect.current++ }
+  }, [pid])
 
   const poateCiti = drept?.stare === 'ok' && drept.citire === true
   useEffect(() => {
     const g = ++gen.current
-    setDate(null); setEroare(null)
-    if (!poateCiti) return
+    // reîncărcarea ACELUIAȘI proiect păstrează datele vechi pe ecran până vin cele noi (panoul de încărcare rămâne montat, cu rezultatul lui);
+    // alt proiect / fără drept = gol imediat
+    setDate(d => (poateCiti && d?.pid === pid ? { ...d, reincarcare: true } : null)); setEroare(null)
+    if (!poateCiti) return () => { gen.current++ }
     ;(async () => {
       try {
         const [articole, obiecte, lipsuri] = await Promise.all([
           citesteToate((ultim, pas) => { let q = client.from('v_executie_rest_decontat').select('*').eq('proiect_id', pid).order('rand_id').limit(pas); if (ultim != null) q = q.gt('rand_id', ultim); return q }, 'rand_id'),
-          citestePagini((a, b) => client.from('v_executie_rest_decontat_obiect').select('*').eq('proiect_id', pid).order('nivel').order('obiect_cod', { nullsFirst: true }).range(a, b)),
-          citestePagini((a, b) => client.from('v_executie_rest_decontat_lipsuri').select('tip, referinta').eq('proiect_id', pid).order('tip').order('referinta').range(a, b)),
+          citestePagini((a, b) => client.from('v_executie_rest_decontat_obiect').select('*', { count: 'exact' }).eq('proiect_id', pid).order('nivel').order('obiect_cod', { nullsFirst: true }).range(a, b)),
+          citestePagini((a, b) => client.from('v_executie_rest_decontat_lipsuri').select('tip, referinta', { count: 'exact' }).eq('proiect_id', pid).order('tip').order('referinta').range(a, b)),
         ])
         // ajustările de preț (doar citite) și starea configurării: o eroare aici se arată pe rândul lor, nu oprește tab-ul
         let ajustari, configurare
@@ -77,9 +100,15 @@ export default function RestDecontatTab({ proiectId, codProiect = null, proiect 
           configurare = error ? { eroare: error.message || String(error) } : (data || { eroare: 'proiectul nu a fost găsit' })
         } catch (e) { configurare = { eroare: e?.message || String(e) } }
         if (g !== gen.current) return
-        setDate({ articole, obiecte, lipsuri, ajustari, configurare })
-      } catch (e) { if (g === gen.current) setEroare(e?.message || String(e)) }
+        setDate({ pid, articole, obiecte, lipsuri, ajustari, configurare })
+      } catch (e) {
+        if (g !== gen.current) return
+        setEroare(e?.message || String(e))
+        // la reîncărcare datele vechi rămân, marcate ca vechi (eroarea se arată deasupra lor), ca panoul de încărcare să nu se demonteze
+        setDate(d => (d?.pid === pid ? { ...d, reincarcare: false, vechi: true } : null))
+      }
     })()
+    return () => { gen.current++ }            // rulare înlocuită (alt proiect / reîncărcare) sau demontare: răspunsul nu se mai aplică
   }, [pid, client, poateCiti, reload])
 
   const tot = useMemo(() => totaluriProiect(date?.obiecte), [date])
@@ -90,9 +119,9 @@ export default function RestDecontatTab({ proiectId, codProiect = null, proiect 
   const obiecteLista = useMemo(() => (date?.obiecte || []).filter(o => o.nivel === 'obiect'), [date])
 
   if (!drept || drept.stare === 'incarcare') return <div style={{ padding: '24px 28px', color: G.dim }}>Se verifică dreptul…</div>
-  if (drept.stare === 'eroare') return <div style={{ padding: '16px 28px' }}><div style={S.err}>Nu s-a putut verifica dreptul de citire pentru Rest de decontat: {drept.eroare}</div></div>
+  if (drept.stare === 'eroare') return <div style={{ padding: '16px 28px' }} data-drept-eroare="1"><div style={S.err}>Nu s-a putut verifica dreptul de citire pentru Rest de decontat: {drept.eroare}</div>{drept.reincearca && <button style={S.btn} onClick={drept.reincearca}>Reîncearcă</button>}</div>
   if (!poateCiti) return <div style={{ padding: '16px 28px', color: G.muted, fontSize: 13 }} data-fara-drept="1">Restul de decontat al acestui proiect îl văd doar owner-ul, managerul proiectului și cei cu acces „Rest de decontat”.</div>
-  if (eroare) return <div style={{ padding: '16px 28px' }}><div style={S.err}>Nu s-a putut citi restul de decontat: {eroare}</div><button style={S.btn} onClick={() => setReload(x => x + 1)}>Reîncearcă</button></div>
+  if (eroare && !date) return <div style={{ padding: '16px 28px' }}><div style={S.err}>Nu s-a putut citi restul de decontat: {eroare}</div><button style={S.btn} onClick={() => setReload(x => x + 1)}>Reîncearcă</button></div>
   if (!date) return <div style={{ padding: '24px 28px', color: G.dim }}>Se încarcă…</div>
 
   const poateSituatie = drept.confirmare === true
@@ -101,22 +130,26 @@ export default function RestDecontatTab({ proiectId, codProiect = null, proiect 
   const setF = (k, v) => setFiltre(f => ({ ...f, [k]: v }))
 
   const exporta = async () => {
+    const gp = genProiect.current
     setExportBusy(true)
     try {
       const { construiesteExportRest, numeFisierRest } = await import('./restDecontatExport.js')
+      if (gp !== genProiect.current) return          // alt proiect / tab închis între timp: nu se descarcă nimic
       const bytes = construiesteExportRest({ articole: date.articole, obiecte: date.obiecte, lipsuri: date.lipsuri, ajustari: ajust, proiect: proiect || { cod_intern: codProiect }, generatLa: new Date().toLocaleString('ro-RO') })
       const url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
       const a = document.createElement('a'); a.href = url; a.download = numeFisierRest(codProiect, aziBucuresti())
       document.body.appendChild(a); a.click(); a.remove()
       setTimeout(() => URL.revokeObjectURL(url), 30000)
-    } catch (e) { setEroare('Export: ' + (e?.message || String(e))) } finally { setExportBusy(false) }
+    } catch (e) { if (gp === genProiect.current) setEroare('Export: ' + (e?.message || String(e))) } finally { if (gp === genProiect.current) setExportBusy(false) }
   }
 
   const declaraConfigurare = async () => {
+    const gp = genProiect.current
     const motiv = config?.motiv?.trim() || null
     setConfig(c => ({ ...c, stare: 'trimite', mesaj: null }))
     let r
     try { r = await client.rpc('fn_executie_proiect_configurare_completa', { p_proiect: pid, p_motiv: motiv }) } catch (e) { r = { error: { message: e?.message || String(e) } } }
+    if (gp !== genProiect.current) return            // L24: răspunsul pentru proiectul vechi / tab-ul demontat nu se aplică
     if (r?.error) { setConfig(c => ({ ...c, stare: 'eroare', mesaj: r.error.message || String(r.error) })); return }
     setConfig({ stare: 'ok', mesaj: r.data?.deja ? 'Configurarea era deja declarată.' : 'Configurarea proiectului e declarată completă.' })
     setReload(x => x + 1)
@@ -135,16 +168,18 @@ export default function RestDecontatTab({ proiectId, codProiect = null, proiect 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: G.text }}>💰 Rest de decontat</div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {poateSituatie && <button style={{ ...S.btn, color: incarcare === 'situatie' ? G.yellow : G.blue }} onClick={() => setIncarcare(x => (x === 'situatie' ? null : 'situatie'))}>📥 Încarcă situație de plată</button>}
-          {surseBaza.length > 0 && <button style={{ ...S.btn, color: incarcare === 'baza' ? G.yellow : G.blue }} onClick={() => setIncarcare(x => (x === 'baza' ? null : 'baza'))}>📥 Încarcă deviz (ofertă / act adițional / notă)</button>}
-          <button style={S.btn} onClick={() => setReload(x => x + 1)} title="Reîncarcă">↻</button>
+          {poateSituatie && <button style={{ ...S.btn, color: incarcare === 'situatie' ? G.yellow : G.blue }} disabled={incarcareBlocata} onClick={() => setIncarcare(x => (x === 'situatie' ? null : 'situatie'))}>📥 Încarcă situație de plată</button>}
+          {surseBaza.length > 0 && <button style={{ ...S.btn, color: incarcare === 'baza' ? G.yellow : G.blue }} disabled={incarcareBlocata} onClick={() => setIncarcare(x => (x === 'baza' ? null : 'baza'))}>📥 Încarcă deviz (ofertă / act adițional / notă)</button>}
+          <button style={S.btn} onClick={() => setReload(x => x + 1)} disabled={date.reincarcare === true} title="Reîncarcă">{date.reincarcare ? '↻ …' : '↻'}</button>
           <button style={S.btn} disabled={exportBusy} onClick={exporta}>{exportBusy ? 'Se pregătește…' : '⬇ Excel'}</button>
         </div>
       </div>
 
+      {eroare && <div style={S.err} data-eroare-reincarcare="1">{date.vechi ? 'Reîncărcarea n-a reușit — cifrele de mai jos sunt cele de dinainte' : 'Eroare'}: {eroare}</div>}
+
       {incarcare && (
         <IncarcareDocument key={`${pid}:${incarcare}`} proiectId={pid} tip={incarcare} client={client} surse={incarcare === 'baza' ? surseBaza : undefined}
-          onGata={() => setReload(x => x + 1)} onInchide={() => setIncarcare(null)} />
+          onGata={() => setReload(x => x + 1)} onInchide={() => setIncarcare(null)} onBlocat={setIncarcareBlocata} />
       )}
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }} data-totaluri-proiect="1">

@@ -218,12 +218,59 @@ export async function sha256Hex(buf) {
   return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-/** calea în Storage: bucketul borderourilor proiectului, sub prefixul `sl_<proiect>/` (singura formă pe care poarta de acces pe proiect, 20261209a,
- *  o recunoaște pentru conturile restrânse) */
-export const BUCKET_FISIERE = 'executie-borderouri'
-export const caleFisier = (proiectId, amprenta) => `sl_${Number(proiectId)}/rest_decontat/${amprenta}.docx`
-/** fișierul există deja la aceeași cale (același conținut: calea e amprenta) = nu e eroare */
-export const eDejaIncarcat = err => /already exists|duplicate|resource already/i.test(String(err?.message || err?.error || '')) || String(err?.statusCode || err?.status || '') === '409'
+/** Fișierul NU se păstrează în ERP (r2, verdict #1178): documentul detaliat are prețuri. Până la un loc de păstrare legat de
+ *  fn_rest_decontat_drept (livrare separată), ecranul nu urcă nimic și trimite p_fisier = NULL (acceptat de ambele RPC-uri, 20270105a). */
+export const MESAJ_FARA_FISIER = 'Documentul în sine NU se păstrează în ERP deocamdată (doar liniile citite din el): păstrați fișierul în dosarul proiectului.'
+
+/**
+ * stareDupaAmprenta({ client, pid, eSit, amprenta }) — ce știe BD-ul despre documentul cu această amprentă (L05: reconcilierea cu serverul):
+ *   { scris, dovada }      — rândul ACTIV e în BD (situația detaliată activă / rândurile bazei în proiect_articole);
+ *   { retras, dovada }     — fișierul e în BD doar ca versiune înlocuită (situație inactivă / rânduri mutate în istoric): nu se mai poate scrie;
+ *   { absent: true }       — nimic cu amprenta asta, ȘI contul poate citi (fn_rest_decontat_drept 'citire' adevărat înainte ȘI după citiri) —
+ *                            altfel RLS-ul ar ascunde rândurile și „gol” n-ar dovedi nimic (L18);
+ *   { neverificabil: motiv } — eroare de citire / fără drept de citire: starea rămâne necunoscută.
+ */
+export async function stareDupaAmprenta({ client, pid, eSit, amprenta }) {
+  const motiv = e => e?.message || String(e)
+  try {
+    const drept = async () => { const r = await client.rpc('fn_rest_decontat_drept', { p_proiect: pid, p_nivel: 'citire' }); if (r?.error) throw r.error; return r?.data === true }
+    const inainte = await drept()
+    if (eSit) {
+      const { data, error } = await client.from('executie_sl_detaliu').select('id, nr_situatie, versiune, activ').eq('proiect_id', pid).eq('amprenta', amprenta).order('id').limit(50)
+      if (error) return { neverificabil: motiv(error) }
+      const activ = (data || []).find(x => x.activ === true)
+      if (activ) return { scris: true, dovada: `Situația ${activ.nr_situatie} (versiunea ${activ.versiune}) e scrisă în ERP cu acest fișier.` }
+      if ((data || []).length) return { retras: true, dovada: `Fișierul e în ERP doar ca versiune înlocuită (situația ${data[0].nr_situatie}, versiunea ${data[0].versiune}, inactivă); serverul nu-l mai primește a doua oară.` }
+    } else {
+      const a = await client.from('proiect_articole').select('id').eq('proiect_id', pid).eq('fisier_amprenta', amprenta).order('id').limit(1)
+      if (a.error) return { neverificabil: motiv(a.error) }
+      if ((a.data || []).length) return { scris: true, dovada: 'Devizul e scris în bază cu acest fișier.' }
+      const h = await client.from('proiect_articole_istoric').select('id').eq('proiect_id', pid).eq('rand->>fisier_amprenta', amprenta).order('id').limit(1)
+      if (h.error) return { neverificabil: motiv(h.error) }
+      if ((h.data || []).length) return { retras: true, dovada: 'Devizul cu acest fișier e în ERP doar în istoric (rânduri înlocuite); serverul nu-l mai primește a doua oară.' }
+    }
+    const dupa = await drept()
+    if (!inainte || !dupa) return { neverificabil: 'contul nu are (sau n-a avut tot timpul) drept de citire pe Rest de decontat, deci lipsa rândurilor nu dovedește nimic' }
+    return { absent: true }
+  } catch (e) { return { neverificabil: motiv(e) } }
+}
+
+/**
+ * reconciliereDupaRefuz(v, refuz) → starea trimiterii după citirea BD-ului (v = stareDupaAmprenta), când o încercare anterioară avea rezultat
+ * NECUNOSCUT (refuz = clasificaEroare al reîncercării sau null la „Verifică starea”):
+ *   scris → 'ok' (cu dovada); retras → 'refuz' (stare cunoscută: nu se mai poate scrie); absent → 'refuz' DOAR dacă există refuzul reîncercării
+ *   (altfel nu e nimic de declarat; apelantul arată „nimic scris”); neverificabil → rămâne 'necunoscut' (câmpurile blocate, fără „nimic scris”).
+ */
+export function reconciliereDupaRefuz(v, refuz) {
+  if (v?.scris) return { stare: 'ok', rez: null, dovada: `Încercarea anterioară a fost scrisă. ${v.dovada}` }
+  if (v?.retras) return { stare: 'refuz', mesaj: refuz?.mesaj || 'fișierul nu se mai poate confirma', indiciu: refuz?.indiciu || null, reconciliat: v.dovada }
+  if (v?.absent && refuz) return { stare: 'refuz', mesaj: refuz.mesaj, indiciu: refuz.indiciu, reconciliat: 'Verificat în ERP: încercarea anterioară NU s-a scris (nimic cu acest fișier), deci refuzul e final.' }
+  return {
+    stare: 'necunoscut',
+    mesaj: refuz ? `reîncercarea a fost refuzată (${refuz.mesaj}), iar starea încercării anterioare nu s-a putut verifica: ${v?.neverificabil || 'fără răspuns'}` : `starea nu s-a putut verifica: ${v?.neverificabil || 'fără răspuns'}`,
+    indiciu: 'Nu se știe dacă încercarea anterioară s-a scris. Câmpurile rămân blocate: apăsați „Verifică starea în ERP” sau retrimiteți identic.',
+  }
+}
 
 /**
  * citesteToate(cerePagina, camp) — keyset pe o coloană TEXT unică (cheie / rand_id) până la pagina goală (L23; plafonul PostgREST de 1000).

@@ -1,17 +1,22 @@
 // Harness-ul comun al testelor „Rest de decontat” (PR3): (1) constructorul de fișiere F3 .docx SINTETICE (structura reală a situației de plată
 // Transgaz, ca în parsareSituatie.test.js; coduri / prețuri / denumiri inventate — repo public); (2) clientul Supabase FALS (tabele / vederi în
-// memorie, lanțul eq / gt / order / limit / range, RPC-uri și Storage înregistrate, cu moduri ok / refuz / retea / 5xx / arunca); (3) montarea
-// unei componente reale cu react-dom în jsdom. jsdom nu e dependență a proiectului: se caută în node_modules sau în REDARI_JSDOM_DIR; fără el
-// suitele de ecran sunt SĂRITE VIZIBIL (JSDOM = null). Fără rețea, fără librării noi.
+// memorie, lanțul eq / gt / order / limit / range + count, plafonul de rânduri al serverului, RPC-uri înregistrate; Storage-ul ARUNCĂ la orice
+// atingere: ecranul nu urcă fișiere, r2); (3) montarea unei componente reale cu react-dom în jsdom. jsdom nu e dependență a proiectului (nu e
+// în package-lock, nu se adaugă fără acord): se caută în node_modules sau în REDARI_JSDOM_DIR; fără el suitele de ecran PICĂ EXPLICIT (r2,
+// verdict #1178: nu se mai sar). Fără rețea, fără librării noi.
 import React from 'react'
 import JSZip from 'jszip'
+import { describe, it } from 'vitest'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
 export let JSDOM = null
 const surse = [import.meta.url, process.env.REDARI_JSDOM_DIR && path.join(process.env.REDARI_JSDOM_DIR, 'package.json')].filter(Boolean)
 for (const s of surse) { try { JSDOM = createRequire(s)('jsdom').JSDOM; break } catch { /* următoarea sursă */ } }
-export const MOTIV_SARIT = 'SĂRIT: lipsește jsdom (nu e dependență a proiectului; rulează cu REDARI_JSDOM_DIR=<dir cu jsdom instalat>)'
+export const MOTIV_LIPSA = 'LIPSEȘTE jsdom: testele de ecran ale „Rest de decontat” nu se sar. jsdom nu e dependență a proiectului (nu e în package-lock); '
+  + 'rulați cu REDARI_JSDOM_DIR=<folder cu jsdom instalat> sau cereți acordul să fie adăugat ca devDependency.'
+/** describe pentru suitele de ecran: cu jsdom = suita; fără jsdom = un test care PICĂ cu motivul (nu describe.skip) */
+export const domObligatoriu = (nume, fn) => (JSDOM ? describe(nume, fn) : describe(nume, () => { it('jsdom e obligatoriu pentru testele de ecran', () => { throw new Error(MOTIV_LIPSA) }) }))
 
 // ── (1) fișierele F3 sintetice ──
 const SEP = '================================================================='
@@ -67,31 +72,36 @@ export const OBIECTE = [
 export const amana = () => { let res; const p = new Promise(r => { res = r }); return { p, res } }
 const cmpVal = (a, b) => (typeof a === 'number' && typeof b === 'number' ? a - b : String(a ?? '').localeCompare(String(b ?? '')))
 /**
- * clientFals({ tabele, erori, rpc, upload }) → { client, st }
- *  tabele: { nume: [rânduri] } (vederi și tabele); erori: { nume: { message } } (citirea tabelului întoarce eroare);
- *  rpc: (fn, args, st) => rezultat | Promise (implicit { data: null, error: null }); upload: (bucket, cale) => rezultat (implicit ok).
- *  st.cereri = citirile (tabel + filtre), st.rpc = apelurile RPC, st.upload = încărcările în Storage.
+ * clientFals({ tabele, erori, rpc, plafon }) → { client, st }
+ *  tabele: { nume: [rânduri] } (vederi și tabele; citite la fiecare cerere, deci un RPC fals poate „scrie” în ele); erori: { nume: { message } };
+ *  rpc: (fn, args, st) => rezultat | Promise (implicit { data: null, error: null }); plafon: max-rows al serverului (răspunsul se taie la atâtea
+ *  rânduri, oricât cere clientul — ca PostgREST). select(col, { count: 'exact' }) întoarce și `count` (rândurile după filtre, înainte de pagină).
+ *  st.cereri = citirile (tabel + filtre), st.rpc = apelurile RPC, st.storage = orice atingere a Storage-ului (care și aruncă).
  */
-export function clientFals({ tabele = {}, erori = {}, rpc = null, upload = null } = {}) {
-  const st = { cereri: [], rpc: [], upload: [] }
+export function clientFals({ tabele = {}, erori = {}, rpc = null, plafon = null } = {}) {
+  const st = { cereri: [], rpc: [], storage: [] }
   const client = {
     from: tabel => {
-      const f = { eq: [], gt: null, ord: [], lim: null, range: null, unul: false }
+      const f = { eq: [], gt: null, ord: [], lim: null, range: null, unul: false, count: false }
       const q = {
-        select: () => q, in: () => q, is: () => q, not: () => q,
+        select: (c, opt) => { if (opt?.count === 'exact') f.count = true; return q }, in: () => q, is: () => q, not: () => q,
         eq: (c, v) => { f.eq.push([c, v]); return q }, gt: (c, v) => { f.gt = [c, v]; return q },
         order: c => { f.ord.push(c); return q }, limit: n => { f.lim = n; return q }, range: (a, b) => { f.range = [a, b]; return q },
         maybeSingle: () => { f.unul = true; return q }, single: () => { f.unul = true; return q },
         then: (res, rej) => {
           st.cereri.push({ tabel, ...f })
           if (erori[tabel]) return Promise.resolve({ data: null, error: erori[tabel] }).then(res, rej)
-          let r = (tabele[tabel] || []).filter(x => f.eq.every(([c, v]) => String(x[c]) === String(v)))
+          // `col->>cheie` (calea JSON a PostgREST) se citește din obiectul coloanei
+          const val = (x, c) => { const m = /^(\w+)->>(\w+)$/.exec(c); return m ? x[m[1]]?.[m[2]] : x[c] }
+          let r = (tabele[tabel] || []).filter(x => f.eq.every(([c, v]) => String(val(x, c)) === String(v)))
           if (f.gt) r = r.filter(x => cmpVal(x[f.gt[0]], f.gt[1]) > 0)
           if (f.ord.length) r = [...r].sort((a, b) => { for (const c of f.ord) { const d = cmpVal(a[c], b[c]); if (d) return d } return 0 })
+          const count = r.length
           if (f.range) r = r.slice(f.range[0], f.range[1] + 1)
           if (f.lim != null) r = r.slice(0, f.lim)
+          if (plafon != null) r = r.slice(0, plafon)
           r = r.map(x => ({ ...x }))
-          return Promise.resolve({ data: f.unul ? r[0] || null : r, error: null }).then(res, rej)
+          return Promise.resolve({ data: f.unul ? r[0] || null : r, error: null, ...(f.count ? { count } : {}) }).then(res, rej)
         },
       }
       return q
@@ -101,11 +111,8 @@ export function clientFals({ tabele = {}, erori = {}, rpc = null, upload = null 
       if (rpc) return rpc(fn, args, st)
       return { data: null, error: null }
     },
-    storage: {
-      from: bucket => ({
-        upload: async (cale, fisier, opt) => { st.upload.push({ bucket, cale, fisier, opt }); return upload ? upload(bucket, cale) : { data: { path: cale }, error: null } },
-      }),
-    },
+    // r2: ecranul NU urcă fișiere (documentul nu se păstrează deocamdată) → orice atingere a Storage-ului e o regresie
+    storage: { from: bucket => { st.storage.push(bucket); throw new Error(`Storage atins (${bucket}): ecranul nu trebuie să urce fișiere`) } },
   }
   return { client, st }
 }
@@ -145,5 +152,9 @@ export async function monteaza(element) {
   }
   /** așteaptă până când condiția e adevărată (operațiile asincrone reale: JSZip, Web Crypto); altfel eroare cu textul paginii */
   const pana = async (cond, ture = 60) => { for (let t = 0; t < ture; t++) { if (cond()) return; await asteapta(1) } throw new Error('condiția nu s-a îndeplinit; pagina: ' + d.body.textContent.slice(0, 600)) }
-  return { d, j, act, buton, butoane, apasa, scrie, bifa, camp, alegeFisier, asteapta, pana, text: () => d.body.textContent }
+  /** aceeași rădăcină, alt element (ex. alt proiectId): React păstrează starea componentei, ca la navigarea reală */
+  const rerandeaza = async el => { await act(async () => { root.render(el) }); await asteapta() }
+  /** demontarea de dinaintea curățeniei (testele L24: răspuns sosit după închidere) */
+  const demonteaza = async () => { await act(async () => { root.unmount() }) }
+  return { d, j, act, buton, butoane, apasa, scrie, bifa, camp, alegeFisier, asteapta, pana, rerandeaza, demonteaza, text: () => d.body.textContent }
 }
