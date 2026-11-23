@@ -223,6 +223,25 @@
 #   structura / neutre, aceleasi semnale inainte). Nu acopera: style cu spatii sau cu orice continut (ramane pe formele exacte de pe tag,
 #   altfel refuz ca inainte), un element neacceptat (refuzat inainte de atribute), <p> / <br> din editor (FARA niciun atribut, neschimbat),
 #   div.ql-clipboard (atributele EXACT CLIPBOARD_ATRIBUTE, neschimbat). Nicio alta relaxare.
+# v4.6.5 (23.11.2026 seara, decizia lui Razvan: varianta B, risc acceptat de owner): lista alba STRICTA pe toata zona casetei (r2-r21,
+#   v4.6.4e / f) se rupea la fiecare schimbare cosmetica a paginii Gemini (clase, `style=""`, placeholder) -> refuz fals + runda noua.
+#   Acum paza STRICTA ramane doar pe ce PLEACA si pe ce poate pleca:
+#   BLOCHEAZA (refuz, ca pana acum): (1) editorul principal unic, textul lui din instantaneu = EXACT brief-ul, in el doar p / br fara
+#   atribute (regulile Quill), niciun alt element editabil - contenteditable in zona (in afara editorului si a clipboard-ului gol) SAU
+#   oriunde in pagina cu valoare editabila (orice in afara de "false"), plus textarea / input / select in zona (EDITABILE_TAGURI) -,
+#   div.ql-clipboard doar GOL; (2) atasamente: toate detectoarele existente (chip-uri, semne ATAS, locatori, media, fundal CSS, cuvinte de
+#   atasament / nume.extensie in etichete, clase, id, numele si valorile atributelor, texte si descrieri - lista neagra ramane strat
+#   suplimentar); (3) shadow root non-user-agent oriunde, CDP indisponibil, text trunchiat CDP in zona; (4) modelul cerut, pagina nu
+#   genereaza.
+#   NU MAI BLOCHEAZA (AVERTISMENT, scris in `stare` si in log ca `avertisment necunoscut <motiv>` + linia `sursa`): decorul - motivele
+#   din lista INCHISA MOTIVE_AVERTISMENT (element:, text:, text_in_control:, atribut_necunoscut:, atribut_valoare:, descriere_text:,
+#   descriere_structura:), adica taguri / atribute / clase / texte / descrieri necunoscute care NU poarta semne de atasament (_semnal,
+#   verificat inaintea oricarei clasificari) si nu sunt editabile. Orice alt motiv (si orice motiv nou, nescris in lista) = refuz
+#   (fail-closed). Atributele EDITORULUI insusi (ex. data-placeholder schimbat) sunt decor (avertisment); copiii lui raman stricti.
+#   Clipboard-ul Quill = div cu clasa ql-clipboard (fara alte clase negenerate), contenteditable="true", FARA niciun copil, unic langa
+#   editorul unic; celelalte atribute ale lui sunt decor. Listele albe raman, doar ca sa reduca zgomotul din avertismente. Descrierea
+#   (aria-describedby) se verifica si pe elementele cu avertisment (nume de fisier / cuvant de atasament in ea = refuz).
+#   Mesajul trimis = doar textul editorului (comparat cu brief-ul); textul decorului nu intra in el (teste).
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata, base64, json
@@ -262,6 +281,23 @@ STRUCTURA_TAGURI = ZONA_TAGURI + ("rich-textarea",)       # zona si invelisul ed
 # r18 (Jakarinos NO-GO r7): NICIO eticheta nu mai e sarita in zona (script / style / template / noscript erau "nevizibile" si se
 # sareau cu tot subarborele, si in editor): ele trec prin _motiv_element ca orice element si nu sunt in nicio lista alba -> refuz
 MEDIA = ("img", "picture", "video", "audio", "canvas", "object", "embed", "iframe", "image", "source", "track")
+# v4.6.5: controalele de formular editabile (nu contenteditable) - in zona = semnal `editabil:` (refuz), ca orice element editabil in plus.
+# Pagina reala (toate capturile 21.11 - 23.11) nu are niciunul in zona; input[type=file] era deja refuzat (eticheta `type=file`).
+EDITABILE_TAGURI = ("textarea", "input", "select")
+# v4.6.5 (varianta B): motivele care NU blocheaza (decorul) - lista INCHISA de prefixe EXACTE (cu ":"), comparate pe inceputul motivului.
+# Toate sunt motive fara semnal de atasament: _semnal (media, fundal, eticheta, token_*, atribut_fisier, editabil) e verificat inaintea
+# oricarei acceptari, iar motivele textelor cu nume de fisier / cuvinte de atasament au prefixe proprii (text_fisier:, text_atasament:,
+# descriere_fisier:, descriere_atasament:). Tot ce poarta prefixul editorului (semnal_in_editor:, element_in_editor:, editor_structura:)
+# si text_trunchiat_cdp: blocheaza. Orice motiv care nu incepe cu una din intrari = refuz (fail-closed).
+MOTIVE_AVERTISMENT = ("element:", "text:", "text_in_control:", "atribut_necunoscut:", "atribut_valoare:", "descriere_text:",
+                      "descriere_structura:")
+# v4.6.5: ce prindea lista alba STRICTA si acum ar fi doar decor, mutat in _semnal (refuz): (a) cuvant de atasament in NUMELE TAGULUI
+# (<attachment-card>, <gem-file-chip>: pana la v4.6.4f = `element:`, refuzat de lista); singura exceptie, INCHISA, e tagul real
+# <file-drop-indicator> (tinta de drag & drop, mereu in DOM) si doar GOL (niciun copil in afara textelor din spatii albe HTML) - atributele
+# lui trec in continuare prin semnale (marcajul data-filedrop-id, MARCAJE_PERMISE); (b) URL local de fisier (blob: / filesystem: / data:,
+# schema la inceput de cuvant) in VALOAREA oricarui atribut, si in etichete (pana la v4.6.4f: `atribut_necunoscut:` / `atribut_valoare:`).
+TAGURI_CU_CUVANT_PERMISE = ("file-drop-indicator",)
+RE_URL_LOCAL = re.compile(r"(?<![a-z0-9+.-])(?:blob|filesystem|data):")
 # r18: in editor intra DOAR ce produce Quill pentru textul brief-ului: <p> pe linie, <br> singur intr-un <p> (linia goala), FARA niciun
 # atribut (_motiv_element) si in forma de mai jos (_text_editor); orice alta eticheta (span, div, b, code, a, style...) = element_in_editor:
 EDITOR_TAGURI = ("p", "br")
@@ -893,11 +929,20 @@ def _e_clipboard(n):
     # CLIPBOARD_ATRIBUTE, text propriu gol, niciun descendent): atributele EXACT acestea (niciunul in plus / lipsa / alta valoare), FARA
     # niciun copil (nici text, nici spatii albe: gol pe textul brut, nici element), copil direct al unui rich-textarea care are exact un
     # editor principal si exact un astfel de clipboard printre copii. Textul lui NU se compara cu brief-ul, deci nu are voie sa aiba text.
+    # v4.6.5 (varianta B): identitatea clipboard-ului nu mai cere atributele EXACTE (CLIPBOARD_ATRIBUTE ramane forma vazuta, pe lista
+    # alba prin ATRIBUTE_PERMISE): _forma_clipboard = div, clasa ql-clipboard (fara alt token negenerat), contenteditable="true", FARA niciun
+    # copil. Restul atributelor lui sunt decor (_acceptat -> avertisment). Strict raman: golul, unicitatea, locul langa editorul unic.
     p = n.parinte
-    if n.tag != "div" or n.attrs != CLIPBOARD_ATRIBUTE or n.copii or p is None or p.tag != "rich-textarea":
+    if not _forma_clipboard(n) or p is None or p.tag != "rich-textarea":
         return False
     return (sum(1 for c in p.copii if _e_editor(c)) == 1
-            and sum(1 for c in p.copii if c.tag == "div" and c.attrs == CLIPBOARD_ATRIBUTE) == 1)
+            and sum(1 for c in p.copii if _forma_clipboard(c)) == 1)
+
+
+def _forma_clipboard(n):
+    # v4.6.5: forma minima a lui div.ql-clipboard (vezi _e_clipboard): gol pe textul brut = niciun copil (nici text, nici spatii, nici element)
+    return (n.tag == "div" and [c for c in _clase(n) if not _generat(c)] == ["ql-clipboard"]
+            and n.attrs.get("contenteditable") == "true" and not n.copii)
 
 
 def _e_semn(n):
@@ -1093,8 +1138,13 @@ def _semnal(n):
     (5) r17: atributul contenteditable (orice valoare, si "", "false", "plaintext-only") pe ORICE element in afara editorului principal
         (_e_editor) si a clipboard-ului Quill gol, exact (_e_clipboard) -> "editabil:<semnatura>{...}": al doilea editor, clipboard cu text /
         copii / alte atribute, contenteditable in editor sau in zona. Ultimul pas: semnalele de atasament de mai sus au prioritate la afisare.
+        v4.6.5: si elementele EDITABILE_TAGURI (textarea / input / select) -> "editabil:..." (sursa "tag:<tag>"); clipboard-ul = forma
+        minima (_forma_clipboard), nu atributele exacte.
     Tagul (in afara celor media) nu e semnal: el E semnatura, comparata exact cu lista (file-drop-indicator a fost vazut gol de om
-    la calibrare). Textele si descendentii elementului se verifica mai departe, element cu element (_motiv_text / _necunoscute).
+    la calibrare). v4.6.5: tagul E semnal daca are un cuvant de atasament (<attachment-card>), in afara lui file-drop-indicator gol
+    (_tag_permis), iar un URL local de fisier (blob: / filesystem: / data:) in orice valoare = atribut_fisier: - dupa pasul (4), inaintea
+    pasului (5), ca motivele de pana la v4.6.4f sa ramana neschimbate.
+    Textele si descendentii elementului se verifica mai departe, element cu element (_motiv_text / _necunoscute).
     r8: intoarce (motiv, sursa) sau None. Sursa = "<fel>:<unde>=<valoare>" (fel: tag / style / eticheta / clasa / id / nume_atribut /
     valoare_atribut), afisata de `stare` sub linia `necunoscut`; NU intra in nicio decizie (motivul e neschimbat), e doar locul exact
     al cuvantului / numelui, ca o linie de pe pagina reala sa nu mai ramana nelamurita (5a din 22.11.2026: sursa taiata din {...}).
@@ -1125,9 +1175,23 @@ def _semnal(n):
             return "token_%s:%s" % (t, _semnatura_token(n)), "valoare_atribut:%s=%s" % (k, a[:SURSA_AFISATA])
         if _nume_fisier(_fara_gazda_permisa(k, v)) is not None:
             return "atribut_fisier:" + _semnatura_token(n), "valoare_atribut:%s=%s" % (k, a[:SURSA_AFISATA])
+    # v4.6.5: dupa semnalele de pana la v4.6.4f (motivele si sursele lor raman neschimbate acolo unde exista deja un semnal)
+    t = _cuvant(_ascii(n.tag))
+    if t and not _tag_permis(n):                # (a) cuvant de atasament in numele tagului
+        return "token_%s:%s" % (t, _semnatura_token(n)), "tag:" + _ascii(n.tag)[:SURSA_AFISATA]
+    for k, v in n.attrs.items():                # (b) URL local de fisier in orice valoare (si in etichete)
+        if RE_URL_LOCAL.search(_ascii(v)):
+            return "atribut_fisier:" + _semnatura_token(n), "valoare_atribut:%s=%s" % (k, _ascii(v)[:SURSA_AFISATA])
     if "contenteditable" in n.attrs and not _e_editor(n) and not _e_clipboard(n):
         return "editabil:" + _semnatura_token(n), "contenteditable:%s=%s" % (n.tag, _ascii(n.attrs["contenteditable"])[:SURSA_AFISATA])
+    if n.tag in EDITABILE_TAGURI:
+        return "editabil:" + _semnatura_token(n), "tag:" + n.tag          # v4.6.5: textarea / input / select (camp editabil in plus)
     return None
+
+
+def _tag_permis(n):
+    # v4.6.5: tagul cu cuvant de atasament e permis DOAR daca e in TAGURI_CU_CUVANT_PERMISE si elementul e GOL (copii doar text din spatii albe HTML)
+    return n.tag in TAGURI_CU_CUVANT_PERMISE and all(c.tag == "#text" and VALOARE_SPATII.fullmatch(c.date) for c in n.copii)
 
 
 def _sursa_cuvant(n, t):
@@ -1286,7 +1350,7 @@ def _motiv_element(n, ctrl, in_editor=False):
         # r18: editorul insusi = atributele lui pe lista alba; in el DOAR p / br (EDITOR_TAGURI) si FARA niciun atribut (nici cele permise
         # pe p in afara editorului, ex. data-test-id); orice alt element = nerecunoscut (nicio lista alba nu se consulta in editor)
         if _e_editor(n):
-            return _acceptat(n, ctrl, True)
+            return _acceptat(n, ctrl)                   # v4.6.5: atributele editorului INSUSI = decor (avertisment, fara prefixul editorului)
         if n.tag not in EDITOR_TAGURI:
             return "element_in_editor:" + sem, ctrl, ""
         r = _acceptat(n, ctrl, True)
@@ -1334,12 +1398,12 @@ def _necunoscute(zona, editoare, ids=None):
         if any(n is e for e in editoare):
             in_editor = True                # r7: editorul = acelasi traseu, cu context (nu o cale separata)
         m, ctrl_copii, sursa = _motiv_element(n, ctrl, in_editor)
-        if not m and ids is not None:
-            d = _motiv_descriere(n, ids)           # r13 / r14: descrierea unui element acceptat (tinta oriunde in pagina)
-            if d:
-                m, sursa = d
         if m:
             out.append((m, sursa))
+        if (not m or _e_avertisment(m)) and ids is not None:
+            d = _motiv_descriere(n, ids)           # r13 / r14: descrierea unui element acceptat (tinta oriunde in pagina)
+            if d:                                  # v4.6.5: si pe elementele cu avertisment (decor), nu doar pe cele acceptate
+                out.append(d)
         if n is zona:
             ctrl_copii = None               # r6: zona e un invelis, niciodata un control (textele din ea nu sunt eticheta ei)
         if ctrl is not None:
@@ -1433,10 +1497,43 @@ def analizeaza_arbore(radacina, trunchiate=()):
         text_editor, m = _text_editor(editoare[0])
         if m:
             necunoscute.append((m, ""))
+    # v4.6.5: "niciun alt contenteditable in PAGINA" - in afara zonelor (in zona: _semnal, pasul 5, orice valoare) un element cu valoare
+    # editabila (orice in afara de "false", ca in HTML: "", "true", "plaintext-only", valori invalide mostenite) care nu e editorul
+    # principal si nici clipboard-ul gol = refuz. contenteditable="false" (chip-uri needitabile in raspunsuri) nu e editabil.
+    editabile_pagina = 0
+    for n in _descendenti(radacina):
+        if (n.tag != "#text" and "contenteditable" in n.attrs and n.attrs["contenteditable"].strip(" \t\n\r\f").lower() != "false"
+                and not _e_editor(n) and not _e_clipboard(n) and not any(n is z or _sub(n, z) for z in zone)):
+            editabile_pagina += 1
+            necunoscute.append(("editabil_in_pagina:" + _semnatura_token(n),
+                                "contenteditable:%s=%s" % (n.tag, _ascii(n.attrs["contenteditable"])[:SURSA_AFISATA])))
+    # v4.6.5 (varianta B): `necunoscute` = TOT ce nu e recunoscut (diagnostic, aceeasi clasificare ca pana la v4.6.4f); decizia se ia
+    # doar pe `blocante` (motivele din afara MOTIVE_AVERTISMENT - si orice motiv nou); decorul (MOTIVE_AVERTISMENT) = `avertismente`
+    blocante = [x for x in necunoscute if not _e_avertisment(x[0])]
+    avertismente = [x for x in necunoscute if _e_avertisment(x[0])]
     return {"editoare": len(editoare), "zone": len(zone), "atasamente": atas, "semne": semne, "text_editor": text_editor,
-            "detalii": ["%s x%d" % (k, v) for k, v in sorted(detalii.items())][:12],
+            "detalii": ["%s x%d" % (k, v) for k, v in sorted(detalii.items())][:12], "editabile_pagina": editabile_pagina,
             "necunoscute": len(necunoscute), "necunoscute_detalii": [m[:DETALIU_AFISAT] for m, _ in necunoscute[:60]],
-            "necunoscute_surse": [s[:DETALIU_AFISAT] for _, s in necunoscute[:60]]}     # r8: paralel cu necunoscute_detalii
+            "necunoscute_surse": [s[:DETALIU_AFISAT] for _, s in necunoscute[:60]],     # r8: paralel cu necunoscute_detalii
+            "blocante": len(blocante), "blocante_detalii": [m[:DETALIU_AFISAT] for m, _ in blocante[:60]],
+            "blocante_surse": [s[:DETALIU_AFISAT] for _, s in blocante[:60]],
+            "avertismente": len(avertismente), "avertismente_detalii": [m[:DETALIU_AFISAT] for m, _ in avertismente[:60]],
+            "avertismente_surse": [s[:DETALIU_AFISAT] for _, s in avertismente[:60]]}
+
+
+def _e_avertisment(m):
+    # v4.6.5: motivul e decor (MOTIVE_AVERTISMENT, prefix EXACT) -> avertisment; orice altceva -> blocheaza
+    return any(m.startswith(p) for p in MOTIVE_AVERTISMENT)
+
+
+def spune_avertismente(info, moment):
+    # v4.6.5: avertismentele (decorul necunoscut, nu blocheaza) in log / `stare`: `avertisment necunoscut <motiv>` + `    sursa ...`
+    # (aceeasi forma ca liniile `necunoscut`). Textele vin din _ascii (o singura linie, fara caractere de control), taiate la DETALIU_AFISAT.
+    spune("avertismente in zona (%s, nu blocheaza):" % moment, info["avertismente"])
+    for m, s in zip(info["avertismente_detalii"], info["avertismente_surse"]):
+        spune("  avertisment necunoscut", m)
+        if s:
+            spune("    sursa", s)
 
 
 def verifica_fara_atasamente(info, semn_locator, moment):
@@ -1451,9 +1548,10 @@ def verifica_fara_atasamente(info, semn_locator, moment):
         raise GemEroare("ciorna_cu_atasamente", "%s: semn de atasament fara chip recunoscut (zona %d, locator %d) - nu trimit"
                         % (moment, info["semne"], semn_locator))
     # r2: 0 chip-uri + 0 semne NU dovedeste ciorna goala; trebuie ca TOT ce e in zona sa fie structura recunoscuta
-    if info["necunoscute"]:
+    # v4.6.5 (varianta B): ...in afara decorului (avertismente, MOTIVE_AVERTISMENT): refuz doar pe motivele BLOCANTE
+    if info["blocante"]:
         raise GemEroare("ciorna_necunoscuta", "%s: %d element(e) nerecunoscute in zona ciornei - nu trimit (%s)"
-                        % (moment, info["necunoscute"], "; ".join(info["necunoscute_detalii"][:3])))
+                        % (moment, info["blocante"], "; ".join(info["blocante_detalii"][:3])))
     return 0
 
 
@@ -1755,7 +1853,10 @@ def _paza_ciorna(pg, moment):
     info, semn, umbre_js, umbre = _citeste_ciorna(pg)
     verifica_fara_umbre(umbre_js, moment)
     verifica_umbre_cdp(umbre, moment)
-    return verifica_fara_atasamente(info, semn, moment)
+    r = verifica_fara_atasamente(info, semn, moment)
+    if info["avertismente"]:
+        spune_avertismente(info, moment)    # v4.6.5: decorul necunoscut, in log (dupa decizie; nu blocheaza)
+    return r
 
 
 def _editor_unic(pg):
@@ -1784,6 +1885,7 @@ def _ultima_paza(pg, text):
     verifica_umbre_cdp(umbre, "inainte_de_enter")
     verifica_fara_atasamente(info, semn, "inainte_de_enter")
     verifica_ciorna(info["text_editor"], text, info["atasamente"])
+    return info                             # v4.6.5: avertismentele se scriu DUPA Enter (nimic intre instantaneu si Enter)
 
 
 def stare(pg):
@@ -1802,11 +1904,14 @@ def stare(pg):
           "| user-agent: pagina", umbre["ua_pagina"], "/ zona", umbre["ua_zona"], "| documente iframe:", umbre["documente_iframe"])
     # r2: calibrarea listelor albe (RUNBOOK pasul 0) copiaza EXACT aceste semnaturi, cate una pe linie
     # r8: sub un necunoscut cu semnal (token_... / atribut_fisier: / eticheta: / fundal: / media:), locul exact al cuvantului / numelui
-    spune("necunoscute in zona:", info["necunoscute"])
-    for m, s in zip(info["necunoscute_detalii"], info["necunoscute_surse"]):
+    # v4.6.5: liniile `necunoscut` = doar ce BLOCHEAZA (refuz); decorul necunoscut = `avertisment necunoscut` (nu blocheaza, risc acceptat B)
+    spune("contenteditable in pagina in afara zonei:", info["editabile_pagina"])
+    spune("necunoscute in zona:", info["blocante"])
+    for m, s in zip(info["blocante_detalii"], info["blocante_surse"]):
         spune("  necunoscut", m)
         if s:
             spune("    sursa", s)
+    spune_avertismente(info, "stare")
     try:
         verifica_fara_umbre(umbre_js, "stare")
         verifica_umbre_cdp(umbre, "stare")
@@ -1853,8 +1958,10 @@ def trimite(pg, text, maxs, target="https://gemini.google.com/app"):
     pg.wait_for_timeout(800)
     # r2 (Jakarinos P1-b): continut identic (normalizat), nu doar lungime; atasamentele se verifica din nou chiar inainte de Enter
     # r18: textul, editorul unic si atasamentele din ACELASI instantaneu (_ultima_paza), Enter imediat dupa
-    _ultima_paza(pg, text)
+    info = _ultima_paza(pg, text)
     pg.keyboard.press("Enter")
+    if info["avertismente"]:
+        spune_avertismente(info, "inainte_de_enter")   # v4.6.5: dupa Enter, ca sa nu existe nimic intre instantaneu si Enter
     spune("GEM_MODEL:", model.encode("ascii", "replace").decode("ascii"))
     spune("TRIMIS (%d car.); astept raspunsul..." % len(text))
     t0 = time.monotonic()
