@@ -17,8 +17,8 @@
 --      * definitie_lant = definiția întreagă (pg_get_functiondef) a fiecărei funcții din LANȚ: răspunsul la „ce face fiecare trigger la
 --        un UPDATE doar pe metadata și la un comentariu / o notificare nouă” (istoric umflat? notificări false? trimiteri în afară?).
 --   2. triggerele care se declanșează la scrierile noastre (tabel, nume, stare, definiția cu coloane / WHEN, funcția) — intră în review.
---   3. numărători fără conținut: tichetele eligibile pe status / subcategorie; dacă există deja tabelul de evidență / funcțiile
---      fn_tichet_clarificare_* (cerut înainte de aplicare: nu / 0).
+--   3. numărători fără conținut: tichetele eligibile pe status / subcategorie; dacă există deja tabelul de evidență / tabelul ancorelor /
+--      trigger-ul ancorei / funcțiile fn_tichet_clarificare_* (cerut înainte de aplicare: nu / nu / 0 / 0).
 -- Cum se folosește: coloana linie_baseline din secțiunea 1, în ordinea afișată, se copiază ÎNTREAGĂ între marcajele
 --   „>>> BASELINE 20261223a” / „<<< BASELINE 20261223a” ale migrării (în locul rândului DE_COMPLETAT; singurul loc din migrare cu valori de
 --   producție), iar „detaliu” + secțiunea 2 intră în review. Migrarea refuză până atunci și refuză orice diferență față de el, înainte și
@@ -204,6 +204,8 @@ SELECT x.status, x.subcategorie, count(*) AS tichete
  WHERE x.departament = 'it' AND x.subcategorie IN ('eroare_erp', 'cerere_functie') AND x.metadata ->> 'sursa' IN ('bug_report', 'feature_request')
  GROUP BY 1, 2 ORDER BY 1, 2;
 SELECT to_regclass('public.tichete_clarificari') IS NOT NULL AS tabel_evidenta_exista,
+       to_regclass('public.tichete_clarificari_ancore') IS NOT NULL AS tabel_ancore_exista,
+       (SELECT count(*) FROM pg_trigger tg WHERE tg.tgrelid = 'public.tichete'::regclass AND tg.tgname = 'trg_tichet_clarificare_ancora') AS trigger_ancora_exista,
        (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_tichet\_clarificare\_%') AS functii_existente;
 
 ROLLBACK;

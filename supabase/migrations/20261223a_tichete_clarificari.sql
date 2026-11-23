@@ -1,5 +1,5 @@
 -- Version 20261223120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 2000 (DOAR cu plafon; marcajul gazpet.livrare_migrare legat de txid).
--- 20261223a_tichete_clarificari — clarificări automate pe tichetele din butonul de raportare, maximum 2 runde (decizia owner-ului, 13.11.2026). r2.
+-- 20261223a_tichete_clarificari — clarificări automate pe tichetele din butonul de raportare, maximum 2 runde (decizia owner-ului, 13.11.2026). r3.
 --
 -- Tichetele din butonul de raportare (departament 'it', subcategorie eroare_erp / cerere_functie, metadata.sursa bug_report / feature_request)
 -- care NU sunt clare primesc, pe tichet, întrebări de clarificare scrise de rutina zilnică (sesiune de asistent, prin conectorul bazei).
@@ -7,6 +7,19 @@
 -- (niciun cont nu apare că „a discutat”), notifică autorul tichetului în platformă și ține evidența în tabelul propriu
 -- public.tichete_clarificari — toate în aceeași tranzacție, sub lock pe rândul tichetului. Tichetul NU se modifică de aici (nici statusul,
 -- nici metadata: funcțiile doar citesc tichete).
+--
+-- r3 (NECESITĂ APROBAREA OWNER-ULUI: proveniență nouă + trigger nou pe tichete): AUTORUL și INTRAREA în protocol sunt ANCORATE la
+--   crearea tichetului, într-un tabel protejat (public.tichete_clarificari_ancore), de trigger-ul trg_tichet_clarificare_ancora (AFTER
+--   INSERT OR UPDATE pe tichete, fără să blocheze sau să schimbe vreo scriere): la INSERT, ancora se scrie DOAR dacă tichetul e creat de
+--   autorul lui (auth.uid() = deschis_de, aceeași regulă ca politica de INSERT) și e eligibil chiar atunci (aceeași funcție
+--   fn_tichet_clarificare_eligibil_motiv, L19); la ORICE UPDATE care schimbă autorul, id-ul sau scoate tichetul din eligibilitate
+--   (departament / subcategorie / sursă / status), ancora IESE din protocol, definitiv (un tichet redeschis sau readus la valorile vechi
+--   NU reintră). Un id refolosit (tichet șters + INSERT cu același id) = ancora veche iese, tichetul nou nu intră. Tichetele create
+--   ÎNAINTE de aplicare nu au ancoră => rămân în afara protocolului (merg ca azi). Contul B care schimbă deschis_de / metadata.sursa /
+--   statusul unui tichet al lui A nu mai poate produce mesaje către B sau răspunsuri „ale autorului” (verdictul r2, P1).
+-- r3, fotografia unică (P2): starea, versiune_context și instantaneul comentariilor autorului folosit la scriere vin din ACELAȘI apel
+--   STABLE al fn_tichet_clarificare_stare_tichet (o singură fotografie MVCC, sub lock-ul rândului tichetului); un comentariu confirmat
+--   după acea fotografie nu e în instantaneu => rămâne detectabil ca răspuns (sau ca raspuns_dupa_incheiere).
 --
 -- Ce creează:
 --   * TABELUL public.tichete_clarificari = evidența protocolului, un rând pe eveniment: runda 1, runda 2, încheierea (tăcere / neclar, cu
@@ -16,9 +29,18 @@
 --     comentariu) și nicio dată personală în afara id-ului autorului (deja vizibil pe tichet). Cheia (tichet, fel, rundă) + cel mult o
 --     încheiere pe tichet (L16). RLS activ; o singură politică: SELECT pentru conturile logate (aceeași vizibilitate ca a comentariilor);
 --     fără politici de scriere; drepturile de scriere retrase de la PUBLIC / anon / authenticated / service_role. Scriu în el DOAR
---     funcțiile DEFINER de mai jos. Fără cheie străină spre tichete (migrarea nu ia lock de scriere pe tichete, iar ștergerea unui tichet de
---     către owner rămâne cum e azi; rândurile lui rămân ca dovadă și blochează revenirea).
---   * 8 funcții, dintre care 3 SECURITY DEFINER (cele apelate de rutină):
+--     funcțiile DEFINER de mai jos. Fără cheie străină spre tichete (ștergerea unui tichet de către owner rămâne cum e azi; rândurile lui
+--     rămân ca dovadă și blochează revenirea).
+--   * TABELUL public.tichete_clarificari_ancore (r3) = proveniența: un rând pe tichet intrat în protocol (tichet, autorul de la creare,
+--     momentul serverului, ieșirea din protocol: moment + motiv). RLS activ, FĂRĂ nicio politică și fără niciun drept pentru rolurile din
+--     API (nici citire: interfața nu are nevoie de el). Scrie în el DOAR trigger-ul de mai jos (DEFINER). Fără cheie străină (id refolosit:
+--     vezi r3 mai sus).
+--   * TRIGGER-ul trg_tichet_clarificare_ancora pe public.tichete: AFTER INSERT OR UPDATE, FOR EACH ROW, fără listă de coloane / WHEN; nu
+--     schimbă rândul tichetului și nu refuză nimic (doar scrie ancora / ieșirea).
+--   * 10 funcții, dintre care 4 SECURITY DEFINER (cele apelate de rutină + funcția trigger-ului):
+--     fn_tichet_clarificare_ancora()                                              — DEFINER, funcția trigger-ului (r3);
+--     fn_tichet_clarificare_eligibil_motiv(departament, subcategorie, metadata, status) — INVOKER, IMMUTABLE: lista albă a eligibilității,
+--       O SINGURĂ definiție (L19), folosită de trigger (la creare și la fiecare UPDATE) și de starea tichetului;
 --     fn_tichet_clarificare_trimite(tichet, runda, intrebari[], versiune_context)  — DEFINER; runda 1 / 2: comentariu + notificare + rândul
 --       de evidență; idempotentă pe (tichet, runda): al doilea apel = „deja_trimis”, fără al doilea comentariu / a doua notificare;
 --     fn_tichet_clarificare_incheie(tichet, motiv, versiune_context)              — DEFINER; încheierea, la fel de atomică și deduplicată:
@@ -30,39 +52,47 @@
 --       = 3 zile lucrătoare într-un singur loc), fn_tichet_clarificare_context (amprenta contextului: titlu, descriere, TOATE comentariile),
 --       fn_tichet_clarificare_zile_lucratoare (Europe/Bucharest, fără weekend), fn_tichet_clarificare_intrebari_motiv (validarea textului:
 --       refuz cu motiv, nu trunchiere), fn_tichet_clarificare_apelant_ok (verificarea apelantului, în cod).
--- Starea vine DOAR din tabelul protejat + comentariile reale; metadata tichetului nu se citește și nu se scrie pentru protocol (nu e
---   dovadă). „Răspuns după runda N” = un comentariu al autorului tichetului (autor = deschis_de) al cărui id NU e în instantaneul rundei N
---   (luat sub lock, la trimitere): datele (created_at) și ordinea id-urilor, valori alese la INSERT, nu decid nimic; momentul răspunsului e
---   doar informativ. Zilele de tăcere se numără de la momentul SERVERULUI al rundei (creat_la din tabel).
--- versiune_context: fn_tichet_clarificare_stare() o dă pentru fiecare tichet (md5 calculat în bază peste titlu, descriere și toate
---   comentariile: id, autor, text, ordonate după id); trimite / incheie o cer ca parametru obligatoriu, o recalculează sub lock și refuză cu
---   „context_schimbat” la orice diferență (rutina recitește și reevaluează). Deduplicarea (deja_trimis / deja_incheiat) vine ÎNAINTEA
---   comparației, ca reluarea după un timeout să nu fie confundată cu o schimbare.
+-- Starea vine DOAR din tabelele protejate (ancora + evidența) + comentariile reale; evidența din metadata tichetului nu se citește și nu se
+--   scrie (nu e dovadă; metadata.sursa contează doar ca regulă de eligibilitate, iar intrarea e ancorată la creare). „Răspuns după runda N”
+--   = un comentariu al AUTORULUI ANCORAT (= deschis_de, altfel tichetul e incoerent / neeligibil) al cărui id NU e în instantaneul rundei N
+--   (din fotografia stării, la trimitere): datele (created_at) și ordinea id-urilor, valori alese la INSERT, nu decid nimic; momentul
+--   răspunsului e doar informativ. Zilele de tăcere se numără de la momentul SERVERULUI al rundei (creat_la din tabel).
+-- versiune_context: fn_tichet_clarificare_stare() o dă pentru fiecare tichet (md5 calculat în bază peste titlu, descriere, autor,
+--   departament, subcategorie, sursă, status și toate comentariile: id, autor, text, ordonate după id); trimite / incheie o cer ca parametru
+--   obligatoriu, o recalculează sub lock și refuză cu „context_schimbat” la orice diferență (rutina recitește și reevaluează). Deduplicarea
+--   (deja_trimis / deja_incheiat) vine ÎNAINTEA comparației, ca reluarea după un timeout să nu fie confundată cu o schimbare; deja_trimis
+--   are intrebari_trimise = false (întrebările apelului de acum NU au plecat), deja_incheiat dă motivul salvat + acelasi_motiv.
 -- Cine le poate chema: NIMENI în afara proprietarului postgres (REVOKE de la PUBLIC / anon / authenticated / service_role, niciun GRANT) ȘI,
 --   verificat în cod la fiecare apel, session_user = 'postgres' fără SET ROLE (current_setting('role') = 'none'). LIMITA EXACTĂ: verificarea
 --   identifică SESIUNILE postgres de pe server (conectorul rutinei, psql-ul coordonatorului, joburile pg_cron, care rulează toate ca
 --   postgres), NU rutina anume. Ea separă apelurile din aplicație (PostgREST: session_user = authenticator, rol setat => refuz, chiar cu un
 --   GRANT greșit sau prin altă funcție DEFINER, care schimbă doar current_user). Puterea unei sesiuni postgres prin aceste funcții e
 --   limitată de ele: șablon fix, validarea textului, 2 runde, deduplicare, doar tichetele eligibile. NU service_role (rutina nu are cheia
---   de serviciu). auth.uid() nu se folosește (L08: identitatea nu vine din parametri sau din GUC-uri custom).
+--   de serviciu). Funcțiile rutinei NU folosesc auth.uid() (L08: identitatea nu vine din parametri sau din GUC-uri custom); singura
+--   folosire e în trigger-ul ancorei: identitatea CREATORULUI tichetului, din JWT-ul verificat de PostgREST (ca politica de INSERT); un
+--   INSERT fără JWT (service_role, sesiuni postgres) nu ancorează nimic.
 --
 -- L15: amprenta COMPLETĂ (corpul AMPRENTA_L15 v1 IDENTIC, L19; testul src/ticheteClarificariMigrare.test.js) pe tabelele existente atinse
---   (tichete — citit și blocat pe rând, tichete_comentarii și notifications — scrise: drepturi, RLS + FORCE, TOATE politicile, TOATE
---   triggerele) și pe funcțiile lor, plus ÎNCHIDEREA TRANZITIVĂ calculată în migrare (blocul INCHIDERE_L15, identic cu scriptul). Pornirea
---   închiderii păstrează, CONSERVATOR, și triggerele de UPDATE pe tichete (din r1; în r2 funcțiile nu mai scriu în tichete): doar mai mult
---   amprentat / verificat, aceeași mulțime de etichete ca citirea din producție. Comparată cu BASELINE-ul ÎNAINTE și DUPĂ: o diferență (ex. un
+--   (tichete — citit și blocat pe rând + trigger nou, tichete_comentarii și notifications — scrise: drepturi, RLS + FORCE, TOATE politicile,
+--   TOATE triggerele) și pe funcțiile lor, plus ÎNCHIDEREA TRANZITIVĂ calculată în migrare (blocul INCHIDERE_L15, identic cu scriptul).
+--   Pornirea închiderii păstrează triggerele de UPDATE pe tichete (r3: acolo stă și trigger-ul nou). ÎNAINTE: exact BASELINE-ul. DUPĂ:
+--   exact BASELINE-ul, cu DIFERENȚELE DECLARATE și verificate (amp_verifica 'dupa'): eticheta „tabel tichete | triggere” = liniile de
+--   dinainte (toate, neschimbate) + EXACT linia trigger-ului nou; etichetele noi = EXACT cele două funcții noi din lanț
+--   (fn_tichet_clarificare_ancora, fn_tichet_clarificare_eligibil_motiv), cu detaliul verificat de postcondiții; orice altă diferență (ex. un
 --   trigger nou apărut între citire și aplicare) = refuz. Pe LANȚ: EXECUTE dinamic / limbaj neanalizabil / DEFINER fără search_path = refuz.
---   Tabelul NOU nu intră în amprentă (nu există înainte): postcondițiile lui sunt mai jos (drepturi pe fiecare rol, RLS, politica unică,
+--   Tabelele NOI nu intră în amprentă (nu există înainte): postcondițiile lor sunt mai jos (drepturi pe fiecare rol, RLS, politici,
 --   fără triggere, gol).
---   Livrarea finală se va face prin runnerul cu amprenta globală (L15 v2, în lucru în alt PR); aici nu se adaugă verificări lexicale noi.
+--   Livrarea finală se va face prin runnerul cu amprenta globală (L15 v2); aici nu se adaugă verificări lexicale noi.
 -- BASELINE: completat din citirea de producție din 13.11.2026 (scripts/tichete_clarificari_amprente.sql, 30 de etichete); coordonatorul o
 --   repetă înainte de aplicare: orice diferență = refuz (nimic schimbat).
 -- Livrare: DOAR cu plafon — scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000 (fără plafon = refuz în $pre$).
---   Lock (L06): notifications, tichete, tichete_comentarii (în ordinea asta) SHARE UPDATE EXCLUSIVE, NOWAIT, reîncercat la 50 ms până la
---   1 s de la BEGIN (peste = 55P03, nimic schimbat), după verificările de catalog: NU oprește citirile și scrierile de rânduri, oprește
---   doar CREATE TRIGGER / politici / ALTER TABLE concurente până la COMMIT. Sub lock: tabelul, funcțiile, postcondițiile, amprenta „după”.
--- Revenire: supabase/revenire/20261223a_tichete_clarificari_ROLLBACK.sql (refuză dacă tabelul are rânduri = clarificări trimise; în loc:
---   oprirea pasului din promptul rutinei, docs/TICHETE_CLARIFICARI.md).
+--   Lock (L06): notifications SHARE UPDATE EXCLUSIVE, tichete SHARE ROW EXCLUSIVE (cerut de CREATE TRIGGER, luat de la început, fără
+--   urcare de nivel), tichete_comentarii SHARE UPDATE EXCLUSIVE (în ordinea asta), NOWAIT, reîncercat la 50 ms până la 1 s de la BEGIN
+--   (peste = 55P03, nimic schimbat), după verificările de catalog. Pe tichete OPREȘTE scrierile (INSERT / UPDATE / DELETE) până la COMMIT
+--   (sub plafonul de 2 s); citirile merg. Pe celelalte două oprește doar DDL concurent. Sub lock: tabelele, funcțiile, trigger-ul,
+--   postcondițiile, amprenta „după”.
+-- Revenire: supabase/revenire/20261223a_tichete_clarificari_ROLLBACK.sql (refuză dacă evidența are rânduri = clarificări trimise; ancorele
+--   singure nu blochează; în loc: oprirea pasului din promptul rutinei, docs/TICHETE_CLARIFICARI.md).
 -- Probe: scripts/pglite/test_tichete_clarificari_local.mjs (local, PGlite); scripts/tichete_clarificari_concurenta.mjs (clonă, 2 sesiuni).
 DO $pre$
 DECLARE r record; v_tip text; v_plafon text;
@@ -90,7 +120,9 @@ BEGIN
   -- reaplicare = refuz (orice funcție fn_tichet_clarificare_* sau un obiect cu numele tabelului de evidență)
   IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_tichet\_clarificare\_%')
-     OR to_regclass('public.tichete_clarificari') IS NOT NULL OR to_regtype('public.tichete_clarificari') IS NOT NULL THEN
+     OR to_regclass('public.tichete_clarificari') IS NOT NULL OR to_regtype('public.tichete_clarificari') IS NOT NULL
+     OR to_regclass('public.tichete_clarificari_ancore') IS NOT NULL OR to_regtype('public.tichete_clarificari_ancore') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.tichete'::regclass AND tg.tgname = 'trg_tichet_clarificare_ancora') THEN
     RAISE EXCEPTION '20261223a: obiectele exista deja (reaplicare)';
   END IF;
   -- coloanele citite / scrise, cu tipurile acceptate
@@ -295,13 +327,21 @@ SELECT c.eticheta, c.amprenta, c.detaliu,
        c.eticheta LIKE 'functie %' AND to_regprocedure(substr(c.eticheta, 9))::oid IN (SELECT f.oid FROM amp_functii_explicite f) AS in_lant
   FROM amp_calc c
 $amp$;
--- „înainte” și „după”: exact baseline-ul (migrarea nu schimbă nicio funcție / tabel existent). Amprenta se calculează O DATĂ pe apel
--- (tabel temporar), apoi se compară cu baseline-ul și se verifică lanțul.
+-- „înainte”: exact baseline-ul. „după”: exact baseline-ul, în afara DIFERENȚELOR DECLARATE (r3, trigger-ul ancorei): eticheta
+-- „tabel tichete | triggere” = liniile din „înainte” (toate, neschimbate) + EXACT o linie nouă, a trigger-ului trg_tichet_clarificare_ancora
+-- (cu funcția lui); etichetele noi = EXACT cele două funcții noi din lanț (detaliul lor: postcondițiile). Amprenta se calculează O DATĂ pe
+-- apel (tabel temporar); „înainte” o păstrează (amp_inainte_20261223a) pentru comparația liniilor din „după”.
 CREATE FUNCTION pg_temp.amp_verifica_20261223a(p_moment text) RETURNS void
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $vf$
-DECLARE v_dif text; v_exec text; v_lipsa text;
+DECLARE v_dif text; v_exec text; v_lipsa text; v_inainte text[]; v_dupa text[]; v_noi text[];
 BEGIN
+  IF p_moment NOT IN ('inainte', 'dupa') THEN RAISE EXCEPTION '20261223a: moment L15 necunoscut %', p_moment; END IF;
   CREATE TEMP TABLE amp_rez_20261223a ON COMMIT DROP AS SELECT * FROM pg_temp.amp_calc_20261223a();
+  IF p_moment = 'inainte' THEN
+    CREATE TEMP TABLE amp_inainte_20261223a ON COMMIT DROP AS SELECT * FROM amp_rez_20261223a;
+  ELSIF to_regclass('pg_temp.amp_inainte_20261223a') IS NULL THEN
+    RAISE EXCEPTION '20261223a: verificarea L15 „dupa” fara „inainte” in aceeasi tranzactie';
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261223a())
      OR EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261223a() b
                  WHERE b.eticheta IS NULL OR b.amprenta IS NULL OR b.amprenta !~ '^[0-9a-f]{32}$'
@@ -320,14 +360,35 @@ BEGIN
   IF v_lipsa IS NOT NULL THEN
     RAISE EXCEPTION '20261223a: baseline L15 fara etichetele tabelelor: %', v_lipsa;
   END IF;
-  -- mulțimea calculată = EXACT baseline-ul: o funcție / un tabel lipsă din baseline sau în plus, ori o amprentă diferită = refuz (FULL JOIN)
+  -- mulțimea calculată = EXACT baseline-ul: o funcție / un tabel lipsă din baseline sau în plus, ori o amprentă diferită = refuz (FULL JOIN);
+  -- „după”: în afara celor trei etichete declarate (verificate separat, mai jos)
   SELECT string_agg(coalesce(c.eticheta, b.eticheta) || ' = ' || coalesce(c.amprenta, 'LIPSESTE') || ' (baseline ' || coalesce(b.amprenta, 'NU ARE') || ')',
                     '; ' ORDER BY coalesce(c.eticheta, b.eticheta) COLLATE "C")
     INTO v_dif
     FROM amp_rez_20261223a c FULL JOIN pg_temp.amp_baseline_20261223a() b ON b.eticheta = c.eticheta
-   WHERE c.amprenta IS DISTINCT FROM b.amprenta;
+   WHERE c.amprenta IS DISTINCT FROM b.amprenta
+     AND NOT coalesce(p_moment = 'dupa' AND c.eticheta = 'tabel tichete | triggere' AND b.eticheta = 'tabel tichete | triggere', false)
+     AND NOT coalesce(p_moment = 'dupa' AND b.eticheta IS NULL
+                      AND c.eticheta IN ('functie fn_tichet_clarificare_ancora()', 'functie fn_tichet_clarificare_eligibil_motiv(text,text,jsonb,text)'), false);
   IF v_dif IS NOT NULL THEN
     RAISE EXCEPTION '20261223a: starea tabelelor / triggerelor (%) difera de baseline-ul L15 revizuit: %', p_moment, v_dif;
+  END IF;
+  IF p_moment = 'dupa' THEN
+    -- cele două funcții noi din lanț: prezente, ambele în lanț (altfel trigger-ul nu e cel declarat)
+    IF (SELECT count(*) FROM amp_rez_20261223a c
+         WHERE c.in_lant AND c.eticheta IN ('functie fn_tichet_clarificare_ancora()', 'functie fn_tichet_clarificare_eligibil_motiv(text,text,jsonb,text)')) <> 2 THEN
+      RAISE EXCEPTION '20261223a: L15 dupa: functiile noi din lantul trigger-ului lipsesc';
+    END IF;
+    -- triggerele lui tichete: liniile de dinainte, TOATE, neschimbate + EXACT linia trigger-ului ancorei
+    SELECT string_to_array(c.detaliu, chr(10)) INTO v_inainte FROM amp_inainte_20261223a c WHERE c.eticheta = 'tabel tichete | triggere';
+    SELECT string_to_array(c.detaliu, chr(10)) INTO v_dupa FROM amp_rez_20261223a c WHERE c.eticheta = 'tabel tichete | triggere';
+    IF v_inainte = ARRAY['(fara triggere)'] THEN v_inainte := '{}'; END IF;
+    SELECT coalesce(array_agg(x ORDER BY x COLLATE "C"), '{}') INTO v_noi FROM unnest(v_dupa) x WHERE NOT (x = ANY (v_inainte));
+    IF v_inainte IS NULL OR v_dupa IS NULL OR NOT (v_inainte <@ v_dupa) OR cardinality(v_dupa) <> cardinality(v_inainte) + 1
+       OR cardinality(v_noi) <> 1
+       OR v_noi[1] NOT LIKE 'trg\_tichet\_clarificare\_ancora | fn\_tichet\_clarificare\_ancora() | stare=O | CREATE TRIGGER trg\_tichet\_clarificare\_ancora AFTER INSERT OR UPDATE ON %tichete FOR EACH ROW EXECUTE FUNCTION %fn\_tichet\_clarificare\_ancora()' THEN
+      RAISE EXCEPTION '20261223a: L15 dupa: triggerele lui tichete nu sunt cele de dinainte + trigger-ul ancorei (noi: %)', coalesce(array_to_string(v_noi, ' ; '), '-');
+    END IF;
   END IF;
   -- independent de baseline, pe LANȚ (ce rulează la scrierile noastre): DEFINER fără search_path propriu = refuz (L15)
   IF EXISTS (SELECT 1 FROM amp_rez_20261223a c
@@ -350,14 +411,17 @@ BEGIN
 END $vf$;
 DO $l15_inainte$ BEGIN PERFORM pg_temp.amp_verifica_20261223a('inainte'); END $l15_inainte$;
 
--- ── punctul UNIC de blocare (L06), după verificările de catalog: cele trei tabele, în ordine fixă, SHARE UPDATE EXCLUSIVE, NOWAIT, ≤ 1 s ──
+-- ── punctul UNIC de blocare (L06), după verificările de catalog: cele trei tabele, în ordine fixă, NOWAIT, ≤ 1 s; tichete direct la
+--    SHARE ROW EXCLUSIVE (nivelul cerut de CREATE TRIGGER: fără urcare de nivel mai târziu); o încercare eșuată anulează tot blocul ──
 DO $lock$
 DECLARE v_incercari integer := 0;
 BEGIN
   LOOP
     v_incercari := v_incercari + 1;
     BEGIN
-      LOCK TABLE public.notifications, public.tichete, public.tichete_comentarii IN SHARE UPDATE EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.notifications IN SHARE UPDATE EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.tichete IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.tichete_comentarii IN SHARE UPDATE EXCLUSIVE MODE NOWAIT;
       EXIT;
     EXCEPTION WHEN lock_not_available THEN
       IF clock_timestamp() >= now() + interval '1 second' THEN
@@ -407,6 +471,24 @@ GRANT SELECT ON TABLE public.tichete_clarificari TO authenticated;
 CREATE POLICY tichete_clarificari_select ON public.tichete_clarificari FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
 COMMENT ON TABLE public.tichete_clarificari IS 'Clarificări automate pe tichetele din butonul de raportare: evidența rundelor / încheierii (fără textul întrebărilor). Scris DOAR de fn_tichet_clarificare_trimite / fn_tichet_clarificare_incheie. 20261223a.';
 
+-- ── proveniența (r3): ancora fiecărui tichet intrat în protocol, scrisă DOAR de trigger-ul trg_tichet_clarificare_ancora ──
+-- autor = deschis_de la creare, când e chiar contul care a creat tichetul (auth.uid()); iesit_la / iesit_motiv = momentul serverului și
+-- motivul ieșirii din protocol (definitivă: nimic nu o anulează). Fără politici și fără drepturi pentru rolurile din API (nici citire).
+CREATE TABLE public.tichete_clarificari_ancore (
+  tichet_id bigint NOT NULL,
+  autor uuid NOT NULL,
+  creat_la timestamptz NOT NULL DEFAULT now(),
+  iesit_la timestamptz,
+  iesit_motiv text,
+  CONSTRAINT tichete_clarificari_ancore_cheie PRIMARY KEY (tichet_id),
+  CONSTRAINT tichete_clarificari_ancore_iesire CHECK ((iesit_la IS NULL) = (iesit_motiv IS NULL)),
+  CONSTRAINT tichete_clarificari_ancore_motiv CHECK (iesit_motiv IS NULL
+    OR iesit_motiv IN ('autor_schimbat', 'id_schimbat', 'id_refolosit', 'departament', 'subcategorie', 'sursa', 'status'))
+);
+ALTER TABLE public.tichete_clarificari_ancore ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.tichete_clarificari_ancore FROM PUBLIC, anon, authenticated, service_role;
+COMMENT ON TABLE public.tichete_clarificari_ancore IS 'Clarificări automate: proveniența (autorul de la crearea tichetului, ieșirea definitivă din protocol). Scris DOAR de trigger-ul trg_tichet_clarificare_ancora; fără drepturi pentru rolurile din API. 20261223a.';
+
 -- ── zilele lucrătoare dintre două momente (Europe/Bucharest, fără weekend): zilele d cu ziua(p_de) < d <= ziua(p_la), luni–vineri ──
 -- (vineri 09:00 -> luni = 1, marți = 2, miercuri = 3; sâmbătă -> luni = 1; aceeași zi = 0). Sărbătorile legale NU se scad.
 CREATE FUNCTION public.fn_tichet_clarificare_zile_lucratoare(p_de timestamptz, p_la timestamptz) RETURNS integer
@@ -446,6 +528,59 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   END
 $f$;
 
+-- ── eligibilitatea după câmpurile tichetului, pe listă albă (L18): NULL = eligibil; altfel motivul. O SINGURĂ definiție (L19): o folosesc
+--    trigger-ul ancorei (la creare și la fiecare UPDATE) și starea tichetului ──
+CREATE FUNCTION public.fn_tichet_clarificare_eligibil_motiv(p_departament text, p_subcategorie text, p_metadata jsonb, p_status text) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
+  SELECT CASE
+    WHEN p_departament IS DISTINCT FROM 'it' THEN 'departament'
+    WHEN (p_subcategorie IN ('eroare_erp', 'cerere_functie')) IS NOT TRUE THEN 'subcategorie'
+    WHEN jsonb_typeof(p_metadata) IS DISTINCT FROM 'object' THEN 'sursa'
+    WHEN ((p_metadata ->> 'sursa') IN ('bug_report', 'feature_request')) IS NOT TRUE THEN 'sursa'
+    WHEN (p_status IN ('deschis', 'atribuit', 'in_analiza', 'in_lucru')) IS NOT TRUE THEN 'status'
+  END
+$f$;
+
+-- ── trigger-ul ancorei (r3): proveniența protocolului, ancorată la CREAREA tichetului; ieșirea din protocol la orice schimbare care l-ar
+--    putea muta pe alt autor / altă sursă / alt status. Nu schimbă rândul tichetului, nu refuză nimic (AFTER, întoarce NULL). ──
+CREATE FUNCTION public.fn_tichet_clarificare_ancora() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+-- Ordinea lock-urilor (L06): rândul tichetului (deja al scrierii care a pornit trigger-ul) -> rândul ancorei (cheia primară); la fel ca
+--   funcțiile rutinei (rândul tichetului FOR NO KEY UPDATE, apoi citirea ancorei). Identitatea creatorului = auth.uid() din JWT-ul
+--   verificat de PostgREST (L08), comparată cu deschis_de; fără JWT (service_role, sesiuni postgres) = nicio ancoră.
+DECLARE
+  v_uid uuid;
+  v_motiv text;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    -- un id refolosit (tichet șters, apoi creat altul cu același id ales la INSERT): ancora veche iese, tichetul nou NU intră
+    UPDATE public.tichete_clarificari_ancore a SET iesit_la = now(), iesit_motiv = 'id_refolosit'
+     WHERE a.tichet_id = NEW.id AND a.iesit_la IS NULL;
+    IF EXISTS (SELECT 1 FROM public.tichete_clarificari_ancore a WHERE a.tichet_id = NEW.id)
+       OR EXISTS (SELECT 1 FROM public.tichete_clarificari e WHERE e.tichet_id = NEW.id) THEN
+      RETURN NULL;
+    END IF;
+    v_uid := auth.uid();
+    IF v_uid IS NOT NULL AND NEW.deschis_de IS NOT DISTINCT FROM v_uid
+       AND public.fn_tichet_clarificare_eligibil_motiv(NEW.departament, NEW.subcategorie, NEW.metadata, NEW.status) IS NULL THEN
+      INSERT INTO public.tichete_clarificari_ancore (tichet_id, autor) VALUES (NEW.id, NEW.deschis_de);
+    END IF;
+    RETURN NULL;
+  END IF;
+  -- modificare: id-ul schimbat = ambele ancore ies; altfel autorul diferit de cel ancorat sau ieșirea din eligibilitate = ieșire definitivă
+  IF NEW.id IS DISTINCT FROM OLD.id THEN
+    UPDATE public.tichete_clarificari_ancore a SET iesit_la = now(), iesit_motiv = 'id_schimbat'
+     WHERE a.tichet_id IN (OLD.id, NEW.id) AND a.iesit_la IS NULL;
+    RETURN NULL;
+  END IF;
+  v_motiv := public.fn_tichet_clarificare_eligibil_motiv(NEW.departament, NEW.subcategorie, NEW.metadata, NEW.status);
+  UPDATE public.tichete_clarificari_ancore a
+     SET iesit_la = now(), iesit_motiv = CASE WHEN a.autor IS DISTINCT FROM NEW.deschis_de THEN 'autor_schimbat' ELSE v_motiv END
+   WHERE a.tichet_id = NEW.id AND a.iesit_la IS NULL AND (a.autor IS DISTINCT FROM NEW.deschis_de OR v_motiv IS NOT NULL);
+  RETURN NULL;
+END $f$;
+CREATE TRIGGER trg_tichet_clarificare_ancora AFTER INSERT OR UPDATE ON public.tichete FOR EACH ROW EXECUTE FUNCTION public.fn_tichet_clarificare_ancora();
+
 -- ── apelantul: o sesiune postgres a serverului (conectorul rutinei, psql-ul coordonatorului, joburile pg_cron), fără SET ROLE ──
 -- Verificarea în COD (pe lângă lipsa oricărui GRANT): prin PostgREST session_user = authenticator și rolul e setat (anon / authenticated /
 -- service_role) => fals, chiar dacă cineva ar acorda greșit EXECUTE sau ar chema funcțiile din altă funcție DEFINER expusă. session_user
@@ -455,12 +590,14 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
   SELECT session_user = 'postgres' AND current_setting('role') = 'none'
 $f$;
 
--- ── versiunea contextului unui tichet: md5 peste titlu, descriere și TOATE comentariile (id, autor, text), ordonate după id ──
+-- ── versiunea contextului unui tichet: md5 peste titlu, descriere, autor, câmpurile eligibilității și TOATE comentariile (id, autor,
+--    text), ordonate după id (r3: autorul intră în amprentă: o schimbare de autor între citire și apel = context_schimbat) ──
 -- NULL = tichet inexistent. O dă lista rutinei; trimiterea / încheierea o recalculează sub lock și o compară cu cea evaluată.
 CREATE FUNCTION public.fn_tichet_clarificare_context(p_tichet_id bigint) RETURNS text
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
   SELECT md5(jsonb_build_object(
-           'titlu', x.titlu, 'descriere', x.descriere,
+           'titlu', x.titlu, 'descriere', x.descriere, 'autor', x.deschis_de, 'departament', x.departament, 'subcategorie', x.subcategorie,
+           'sursa', CASE WHEN jsonb_typeof(x.metadata) = 'object' THEN x.metadata -> 'sursa' END, 'status', x.status,
            'comentarii', coalesce((SELECT jsonb_agg(jsonb_build_array(c.id, c.autor, c.text) ORDER BY c.id)
                                      FROM public.tichete_comentarii c WHERE c.tichet_id = x.id), '[]'::jsonb))::text)
     FROM public.tichete x WHERE x.id = p_tichet_id
@@ -469,12 +606,22 @@ $f$;
 -- ── starea clarificărilor pentru UN tichet: O SINGURĂ definiție (L19), citită de lista rutinei și de cele două scrieri (sub lock) ──
 CREATE FUNCTION public.fn_tichet_clarificare_stare_tichet(p_tichet_id bigint) RETURNS jsonb
 LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $f$
--- Nu scrie nimic. Pragul de tăcere și lista albă de eligibilitate stau DOAR aici. Evidența = DOAR tabelul tichete_clarificari, verificat
--- față de comentariile reale: un comentariu automat din evidență care lipsește (ex. șters de owner) sau un comentariu automat nelistat,
--- ori autorul tichetului schimbat de la prima rundă = „incoerent” (nimic nu se mai trimite până decide owner-ul).
+-- Nu scrie nimic. Pragul de tăcere stă DOAR aici; lista albă de eligibilitate = fn_tichet_clarificare_eligibil_motiv. Intrarea în protocol
+-- = DOAR ancora (tichete_clarificari_ancore, scrisă la crearea tichetului de contul autorului): fără ancoră = neeligibil (tichet creat
+-- înainte de aplicare, de altcineva decât autorul, sau neeligibil la creare); ancora ieșită (autor / id / sursă / status schimbat oricând)
+-- = neeligibil, sau „incoerent” dacă protocolul începuse (owner-ul decide). Evidența = DOAR tabelul tichete_clarificari, verificată față de
+-- comentariile reale: un comentariu automat din evidență care lipsește (ex. șters de owner) sau un comentariu automat nelistat = „incoerent”.
+-- FOTOGRAFIA (r3): funcția e STABLE => toate citirile ei văd ACEEAȘI fotografie MVCC, cea a instrucțiunii care o cheamă; ea întoarce și
+-- instantaneul comentariilor autorului (instantaneu_autor) din acea fotografie, iar trimite / incheie îl scriu pe ACELA (nu recitesc):
+-- starea verificată, versiune_context și instantaneul reprezintă același moment. Un comentariu confirmat după fotografie nu e în
+-- instantaneu => rămâne „răspuns după” (detectabil la rularea următoare).
 DECLARE
   c_prag_tacere constant integer := 3;  -- zile lucrătoare de tăcere după un mesaj automat => escaladare (SINGURUL loc)
   t record;
+  an public.tichete_clarificari_ancore%ROWTYPE;
+  v_autor uuid;
+  v_are_evid boolean;
+  v_inst bigint[];
   r1 public.tichete_clarificari%ROWTYPE;
   r2 public.tichete_clarificari%ROWTYPE;
   rf public.tichete_clarificari%ROWTYPE;
@@ -498,17 +645,31 @@ BEGIN
     RETURN jsonb_build_object('tichet_id', p_tichet_id, 'eligibil', false, 'motiv', 'tichet_inexistent');
   END IF;
   -- eligibilitatea, pe listă albă (L18): tichetele din butonul de raportare, încă deschise, cu autorul existent
-  v_motiv := CASE
-    WHEN t.departament IS DISTINCT FROM 'it' THEN 'departament'
-    WHEN (t.subcategorie IN ('eroare_erp', 'cerere_functie')) IS NOT TRUE THEN 'subcategorie'
-    WHEN jsonb_typeof(t.metadata) IS DISTINCT FROM 'object' THEN 'sursa'
-    WHEN ((t.metadata ->> 'sursa') IN ('bug_report', 'feature_request')) IS NOT TRUE THEN 'sursa'
-    WHEN (t.status IN ('deschis', 'atribuit', 'in_analiza', 'in_lucru')) IS NOT TRUE THEN 'status'
-    WHEN t.deschis_de IS NULL OR NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = t.deschis_de) THEN 'autor'
-  END;
+  v_motiv := public.fn_tichet_clarificare_eligibil_motiv(t.departament, t.subcategorie, t.metadata, t.status);
+  IF v_motiv IS NULL AND (t.deschis_de IS NULL OR NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = t.deschis_de)) THEN
+    v_motiv := 'autor';
+  END IF;
   IF v_motiv IS NOT NULL THEN
     RETURN jsonb_build_object('tichet_id', t.id, 'numar_tichet', t.numar_tichet, 'eligibil', false, 'motiv', v_motiv);
   END IF;
+  -- proveniența (r3): ancora de la crearea tichetului; fără ea / ieșită = în afara protocolului (sau incoerent, dacă protocolul începuse)
+  v_are_evid := EXISTS (SELECT 1 FROM public.tichete_clarificari e WHERE e.tichet_id = t.id);
+  SELECT a.* INTO an FROM public.tichete_clarificari_ancore a WHERE a.tichet_id = t.id;
+  IF NOT FOUND OR an.iesit_la IS NOT NULL OR an.autor IS DISTINCT FROM t.deschis_de THEN
+    v_inc := CASE WHEN NOT FOUND THEN 'fara_ancora'
+                  WHEN an.iesit_la IS NOT NULL THEN 'iesit_din_protocol:' || an.iesit_motiv
+                  ELSE 'autor_schimbat' END;
+    IF NOT v_are_evid THEN
+      RETURN jsonb_build_object('tichet_id', t.id, 'numar_tichet', t.numar_tichet, 'eligibil', false, 'motiv', v_inc);
+    END IF;
+    RETURN jsonb_build_object('tichet_id', t.id, 'numar_tichet', t.numar_tichet, 'status', t.status, 'subcategorie', t.subcategorie,
+      'creat_la', t.created_at, 'eligibil', true, 'actiune', 'incoerent', 'detaliu', v_inc, 'runda', NULL, 'faza', NULL,
+      'raspuns_autor', false, 'raspuns_dupa_incheiere', false, 'prag_tacere', c_prag_tacere,
+      'versiune_context', public.fn_tichet_clarificare_context(t.id));
+  END IF;
+  v_autor := an.autor;
+  -- instantaneul comentariilor autorului, din fotografia acestui apel (îl scriu trimite / incheie)
+  SELECT coalesce(array_agg(c.id ORDER BY c.id), '{}') INTO v_inst FROM public.tichete_comentarii c WHERE c.tichet_id = t.id AND c.autor = v_autor;
   -- evidența: rândurile protejate
   SELECT e.* INTO r1 FROM public.tichete_clarificari e WHERE e.tichet_id = t.id AND e.fel = 'runda' AND e.runda = 1;
   v_are1 := FOUND;
@@ -522,8 +683,6 @@ BEGIN
   -- coerența evidenței (forma rândurilor o garantează CHECK-ul tabelului)
   IF (v_are2 AND NOT v_are1) OR (v_aref AND rf.runda IS DISTINCT FROM v_runda) THEN
     v_inc := 'evidenta_invalida';
-  ELSIF EXISTS (SELECT 1 FROM public.tichete_clarificari e WHERE e.tichet_id = t.id AND e.autor_tichet IS DISTINCT FROM t.deschis_de) THEN
-    v_inc := 'autor_schimbat';
   ELSIF EXISTS (SELECT 1 FROM public.tichete_clarificari e
                  WHERE e.tichet_id = t.id AND e.comentariu_id IS NOT NULL
                    AND NOT EXISTS (SELECT 1 FROM public.tichete_comentarii c WHERE c.id = e.comentariu_id AND c.tichet_id = t.id AND c.autor IS NULL)) THEN
@@ -540,17 +699,17 @@ BEGIN
       'raspuns_autor', false, 'raspuns_dupa_incheiere', false, 'prag_tacere', c_prag_tacere,
       'versiune_context', public.fn_tichet_clarificare_context(t.id));
   END IF;
-  -- răspunsul la ultima rundă = un comentariu al AUTORULUI tichetului (deschis_de) cu id-ul în afara instantaneului rundei (comentariile
-  -- altor conturi sunt context, nu răspuns); data lui e doar informativă
+  -- răspunsul la ultima rundă = un comentariu al AUTORULUI ANCORAT (= deschis_de, verificat mai sus) cu id-ul în afara instantaneului
+  -- rundei (comentariile altor conturi sunt context, nu răspuns); data lui e doar informativă
   IF v_runda > 0 THEN
     SELECT count(*) > 0, max(c.created_at) INTO v_resp, v_resp_la FROM public.tichete_comentarii c
-     WHERE c.tichet_id = t.id AND c.autor = t.deschis_de AND NOT (c.id = ANY (ru.instantaneu_autor));
+     WHERE c.tichet_id = t.id AND c.autor = v_autor AND NOT (c.id = ANY (ru.instantaneu_autor));
   END IF;
   -- ultimul eveniment automat (încheierea, altfel ultima rundă): comentariul lui și momentul SERVERULUI
   IF v_aref THEN
     v_ult_id := rf.comentariu_id; v_ult_la := rf.creat_la;
     v_dupa := EXISTS (SELECT 1 FROM public.tichete_comentarii c
-                       WHERE c.tichet_id = t.id AND c.autor = t.deschis_de AND NOT (c.id = ANY (rf.instantaneu_autor)));
+                       WHERE c.tichet_id = t.id AND c.autor = v_autor AND NOT (c.id = ANY (rf.instantaneu_autor)));
   ELSIF v_runda > 0 THEN
     v_ult_id := ru.comentariu_id; v_ult_la := ru.creat_la;
     v_zile := public.fn_tichet_clarificare_zile_lucratoare(ru.creat_la, now());
@@ -566,7 +725,7 @@ BEGIN
     'creat_la', t.created_at, 'eligibil', true, 'actiune', v_act, 'runda', v_runda, 'faza', v_faza,
     'ultim_automat_id', v_ult_id, 'ultim_automat_la', v_ult_la, 'raspuns_autor', v_resp, 'ultim_raspuns_autor_la', v_resp_la,
     'zile_lucratoare', v_zile, 'prag_tacere', c_prag_tacere, 'raspuns_dupa_incheiere', v_dupa,
-    'versiune_context', public.fn_tichet_clarificare_context(t.id));
+    'versiune_context', public.fn_tichet_clarificare_context(t.id), 'autor', v_autor, 'instantaneu_autor', to_jsonb(v_inst));
 END $f$;
 
 -- ── runda 1 / 2: comentariu automat + notificare + rândul de evidență, într-o tranzacție, idempotent pe (tichet, rundă) ──
@@ -575,8 +734,11 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 -- Ordinea lock-urilor (L06): rândul tichetului (FOR NO KEY UPDATE: serializează două apeluri pentru același tichet, nu blochează un
 --   comentariu nou al unui om, care ia doar KEY SHARE) -> comentariul nou (cheia străină spre tichet: rândul e deja al nostru) -> notificarea
 --   (cheia străină spre profiles: KEY SHARE pe profilul autorului) -> rândul de evidență (cheia unică: o rundă o singură dată, L16).
---   Triggerele acestor scrieri: amprenta L15. Tichetul nu se modifică.
--- Rezultat explicit, fără excepții pentru cazurile de business: trimis / deja_trimis / refuz + motiv (+ detaliu).
+--   Ancora doar se citește (o schimbă doar trigger-ul, la o scriere pe rândul tichetului, deci după lock-ul nostru). Triggerele acestor
+--   scrieri: amprenta L15. Tichetul nu se modifică.
+-- Fotografia (r3): starea, versiune_context și instantaneul vin din UN apel al stării (STABLE, o fotografie); instantaneul scris e acela.
+-- Rezultat explicit, fără excepții pentru cazurile de business: trimis / deja_trimis (intrebari_trimise = false: întrebările apelului de
+--   acum NU au plecat; mesajul existent e cel din comentariu_id) / refuz + motiv (+ detaliu).
 DECLARE
   t record;
   s jsonb;
@@ -588,6 +750,7 @@ DECLARE
   v_com public.tichete_comentarii.id%TYPE;
   v_not public.notifications.id%TYPE;
   v_inst bigint[];
+  v_autor uuid;
 BEGIN
   IF public.fn_tichet_clarificare_apelant_ok() IS NOT TRUE THEN
     RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'apelant_nepermis', 'tichet_id', p_tichet_id);
@@ -616,7 +779,7 @@ BEGIN
   -- deduplicarea: runda cerută e deja trimisă (oricare ar fi întrebările sau contextul de acum: reluarea după un timeout)
   IF p_runda <= (s ->> 'runda')::integer THEN
     SELECT x.* INTO e FROM public.tichete_clarificari x WHERE x.tichet_id = t.id AND x.fel = 'runda' AND x.runda = p_runda;
-    RETURN jsonb_build_object('rezultat', 'deja_trimis', 'tichet_id', p_tichet_id, 'runda', p_runda,
+    RETURN jsonb_build_object('rezultat', 'deja_trimis', 'tichet_id', p_tichet_id, 'runda', p_runda, 'intrebari_trimise', false,
       'comentariu_id', e.comentariu_id, 'notificare_id', e.notificare_id);
   END IF;
   IF s ->> 'faza' IN ('incheiat', 'clarificat') THEN
@@ -637,8 +800,12 @@ BEGIN
   IF v_motiv IS NOT NULL THEN
     RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'intrebari_invalide', 'detaliu', v_motiv, 'tichet_id', p_tichet_id);
   END IF;
-  -- instantaneul comentariilor autorului de acum (sub lock): ce apare după el e răspuns la această rundă
-  SELECT coalesce(array_agg(c.id ORDER BY c.id), '{}') INTO v_inst FROM public.tichete_comentarii c WHERE c.tichet_id = t.id AND c.autor = t.deschis_de;
+  -- instantaneul comentariilor autorului din FOTOGRAFIA stării (nu o citire nouă): ce apare după el e răspuns la această rundă
+  v_autor := (s ->> 'autor')::uuid;
+  IF jsonb_typeof(s -> 'instantaneu_autor') IS DISTINCT FROM 'array' OR v_autor IS NULL OR v_autor IS DISTINCT FROM t.deschis_de THEN
+    RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'stare_incoerenta', 'detaliu', 'fotografie_incompleta', 'tichet_id', p_tichet_id);
+  END IF;
+  v_inst := ARRAY(SELECT j.v::bigint FROM jsonb_array_elements_text(s -> 'instantaneu_autor') WITH ORDINALITY AS j(v, n) ORDER BY j.n);
   -- textul: DOAR șablonul fix + întrebările numerotate; semnătura „Echipa ERP”
   v_txt := 'Clarificare ' || p_runda || '/2' || chr(10)
         || 'Mesaj automat pentru clarificare. Nu reprezintă o aprobare de acces, modificare sau termen de realizare.' || chr(10) || chr(10);
@@ -650,13 +817,13 @@ BEGIN
   INSERT INTO public.tichete_comentarii (tichet_id, autor, text) VALUES (t.id, NULL, v_txt) RETURNING id INTO v_com;
   -- notificarea către autor: titlu și mesaj fixe, fără textul întrebărilor
   INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
-  VALUES (t.deschis_de, 'info', 'Tichete', '❓ Întrebări de clarificare la tichetul ' || coalesce(t.numar_tichet, '#' || t.id),
+  VALUES (v_autor, 'info', 'Tichete', '❓ Întrebări de clarificare la tichetul ' || coalesce(t.numar_tichet, '#' || t.id),
           'Echipa ERP are nevoie de câteva detalii ca să poată continua. Răspunde direct pe tichet.', '/tichete?id=' || t.id)
   RETURNING id INTO v_not;
   -- evidența: un rând nou; cheia (tichet, fel, rundă) refuză a doua scriere a aceleiași runde (excepție = totul anulat)
   INSERT INTO public.tichete_clarificari (tichet_id, fel, runda, comentariu_id, notificare_id, nr_intrebari, autor_tichet, instantaneu_autor, versiune_context)
-  VALUES (t.id, 'runda', p_runda, v_com, v_not, cardinality(p_intrebari), t.deschis_de, v_inst, p_versiune_context);
-  RETURN jsonb_build_object('rezultat', 'trimis', 'tichet_id', t.id, 'runda', p_runda, 'comentariu_id', v_com, 'notificare_id', v_not);
+  VALUES (t.id, 'runda', p_runda, v_com, v_not, cardinality(p_intrebari), v_autor, v_inst, p_versiune_context);
+  RETURN jsonb_build_object('rezultat', 'trimis', 'tichet_id', t.id, 'runda', p_runda, 'intrebari_trimise', true, 'comentariu_id', v_com, 'notificare_id', v_not);
 END $f$;
 
 -- ── încheierea: 'tacere' / 'neclar' = mesajul de încheiere + notificare; 'clarificat' = doar rândul de evidență. Atomică, deduplicată ──
@@ -667,7 +834,9 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 --   tacere     = după runda 1 sau 2, fără răspunsul autorului, pragul de zile lucrătoare atins (acțiunea de_escaladat_tacere);
 --   neclar     = după runda 2, cu răspunsul autorului (acțiunea de_evaluat_raspuns), evaluat insuficient de rutină;
 --   clarificat = clar de la început (runda 0) sau după un răspuns al autorului: fără mesaj, fără notificare (tichetul merge mai departe).
--- Cel mult o încheiere pe tichet (indexul unic): al doilea apel = deja_incheiat, cu motivul primului. Tichetul nu se modifică.
+-- Cel mult o încheiere pe tichet (indexul unic): al doilea apel = deja_incheiat, cu motivul SALVAT (motiv_incheiere), motivul cerut acum
+--   (motiv_cerut) și acelasi_motiv: rutina nu raportează intenția nouă drept executată. Tichetul nu se modifică.
+-- Fotografia (r3): ca la trimitere, instantaneul scris e cel din apelul stării (aceeași fotografie cu verificarea și contextul).
 DECLARE
   t record;
   s jsonb;
@@ -676,6 +845,8 @@ DECLARE
   v_com public.tichete_comentarii.id%TYPE;
   v_not public.notifications.id%TYPE;
   v_inst bigint[];
+  v_autor uuid;
+  v_salvat text;
 BEGIN
   IF public.fn_tichet_clarificare_apelant_ok() IS NOT TRUE THEN
     RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'apelant_nepermis', 'tichet_id', p_tichet_id);
@@ -703,8 +874,9 @@ BEGIN
   -- deduplicarea, înaintea comparației contextului (reluarea după un timeout)
   IF s ->> 'faza' IN ('incheiat', 'clarificat') THEN
     SELECT x.* INTO e FROM public.tichete_clarificari x WHERE x.tichet_id = t.id AND x.fel IN ('incheiere', 'clarificat');
+    v_salvat := CASE WHEN e.fel = 'clarificat' THEN 'clarificat' ELSE e.motiv END;
     RETURN jsonb_build_object('rezultat', 'deja_incheiat', 'tichet_id', p_tichet_id,
-      'motiv_incheiere', CASE WHEN e.fel = 'clarificat' THEN 'clarificat' ELSE e.motiv END, 'comentariu_id', e.comentariu_id);
+      'motiv_incheiere', v_salvat, 'motiv_cerut', p_motiv, 'acelasi_motiv', v_salvat IS NOT DISTINCT FROM p_motiv, 'comentariu_id', e.comentariu_id);
   END IF;
   IF p_motiv = 'clarificat' AND NOT ((s ->> 'runda')::integer = 0 OR (s ->> 'raspuns_autor')::boolean IS TRUE) THEN
     RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'fara_raspuns_autor', 'tichet_id', p_tichet_id);
@@ -718,20 +890,25 @@ BEGIN
   IF (s ->> 'versiune_context') IS DISTINCT FROM p_versiune_context THEN
     RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'context_schimbat', 'tichet_id', p_tichet_id);
   END IF;
-  SELECT coalesce(array_agg(c.id ORDER BY c.id), '{}') INTO v_inst FROM public.tichete_comentarii c WHERE c.tichet_id = t.id AND c.autor = t.deschis_de;
+  -- instantaneul din FOTOGRAFIA stării (nu o citire nouă): un comentariu confirmat după ea rămâne „răspuns după încheiere”
+  v_autor := (s ->> 'autor')::uuid;
+  IF jsonb_typeof(s -> 'instantaneu_autor') IS DISTINCT FROM 'array' OR v_autor IS NULL OR v_autor IS DISTINCT FROM t.deschis_de THEN
+    RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'stare_incoerenta', 'detaliu', 'fotografie_incompleta', 'tichet_id', p_tichet_id);
+  END IF;
+  v_inst := ARRAY(SELECT j.v::bigint FROM jsonb_array_elements_text(s -> 'instantaneu_autor') WITH ORDINALITY AS j(v, n) ORDER BY j.n);
   IF p_motiv = 'clarificat' THEN
     INSERT INTO public.tichete_clarificari (tichet_id, fel, runda, autor_tichet, instantaneu_autor, versiune_context)
-    VALUES (t.id, 'clarificat', (s ->> 'runda')::integer, t.deschis_de, v_inst, p_versiune_context);
+    VALUES (t.id, 'clarificat', (s ->> 'runda')::integer, v_autor, v_inst, p_versiune_context);
   ELSE
     v_txt := 'Clarificările automate s-au încheiat. Tichetul rămâne deschis și ajunge la conducere împreună cu discuția. '
           || 'Acest mesaj nu confirmă implementarea sau un termen.' || chr(10) || 'Echipa ERP';
     INSERT INTO public.tichete_comentarii (tichet_id, autor, text) VALUES (t.id, NULL, v_txt) RETURNING id INTO v_com;
     INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
-    VALUES (t.deschis_de, 'info', 'Tichete', 'ℹ️ Clarificări încheiate la tichetul ' || coalesce(t.numar_tichet, '#' || t.id),
+    VALUES (v_autor, 'info', 'Tichete', 'ℹ️ Clarificări încheiate la tichetul ' || coalesce(t.numar_tichet, '#' || t.id),
             'Tichetul rămâne deschis și ajunge la conducere împreună cu discuția.', '/tichete?id=' || t.id)
     RETURNING id INTO v_not;
     INSERT INTO public.tichete_clarificari (tichet_id, fel, runda, motiv, comentariu_id, notificare_id, autor_tichet, instantaneu_autor, versiune_context)
-    VALUES (t.id, 'incheiere', (s ->> 'runda')::integer, p_motiv, v_com, v_not, t.deschis_de, v_inst, p_versiune_context);
+    VALUES (t.id, 'incheiere', (s ->> 'runda')::integer, p_motiv, v_com, v_not, v_autor, v_inst, p_versiune_context);
   END IF;
   RETURN jsonb_build_object('rezultat', 'incheiat', 'tichet_id', t.id, 'motiv_incheiere', p_motiv, 'comentariu_id', v_com, 'notificare_id', v_not);
 END $f$;
@@ -767,6 +944,9 @@ REVOKE ALL ON FUNCTION public.fn_tichet_clarificare_stare_tichet(bigint) FROM PU
 REVOKE ALL ON FUNCTION public.fn_tichet_clarificare_trimite(bigint, integer, text[], text) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fn_tichet_clarificare_incheie(bigint, text, text) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fn_tichet_clarificare_stare() FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_tichet_clarificare_eligibil_motiv(text, text, jsonb, text) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_tichet_clarificare_ancora() FROM PUBLIC, anon, authenticated, service_role;
+COMMENT ON FUNCTION public.fn_tichet_clarificare_ancora() IS 'Clarificări automate: trigger-ul ancorei (proveniența la crearea tichetului, ieșirea definitivă din protocol). Nu schimbă tichetul. 20261223a.';
 COMMENT ON FUNCTION public.fn_tichet_clarificare_trimite(bigint, integer, text[], text) IS 'Clarificări automate pe tichetele din butonul de raportare: runda 1 / 2 (comentariu „Echipa ERP” fără autor + notificare + rând în tichete_clarificari), idempotentă pe (tichet, rundă), cu versiunea contextului. Doar sesiunile postgres ale serverului (fără SET ROLE). 20261223a.';
 COMMENT ON FUNCTION public.fn_tichet_clarificare_incheie(bigint, text, text) IS 'Clarificări automate: încheierea (tacere / neclar = mesaj + notificare; clarificat = doar evidența), deduplicată, cu versiunea contextului. Tichetul nu se modifică. 20261223a.';
 COMMENT ON FUNCTION public.fn_tichet_clarificare_stare() IS 'Clarificări automate: starea tichetelor eligibile pentru rutina zilnică (doar citire; prag tăcere 3 zile lucrătoare; versiune_context). 20261223a.';
@@ -785,7 +965,9 @@ BEGIN
       ('public.fn_tichet_clarificare_stare_tichet(bigint)', 'plpgsql', false, 's', 'jsonb'),
       ('public.fn_tichet_clarificare_trimite(bigint, integer, text[], text)', 'plpgsql', true, 'v', 'jsonb'),
       ('public.fn_tichet_clarificare_incheie(bigint, text, text)', 'plpgsql', true, 'v', 'jsonb'),
-      ('public.fn_tichet_clarificare_stare()', 'plpgsql', true, 's', 'record')
+      ('public.fn_tichet_clarificare_stare()', 'plpgsql', true, 's', 'record'),
+      ('public.fn_tichet_clarificare_eligibil_motiv(text, text, jsonb, text)', 'sql', false, 'i', 'text'),
+      ('public.fn_tichet_clarificare_ancora()', 'plpgsql', true, 'v', 'trigger')
     ) v(fn, limbaj, definer, volatil, intoarce) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
                     WHERE p.oid = to_regprocedure(r.fn) AND l.lanname = r.limbaj AND p.prosecdef = r.definer AND p.provolatile::text = r.volatil
@@ -801,19 +983,48 @@ BEGIN
       END IF;
     END LOOP;
   END LOOP;
-  -- L15: funcțiile NOI cheamă (aceeași regulă de nume ca închiderea) DOAR una pe alta, și nimic dinamic; exact 8
+  -- L15: funcțiile NOI cheamă (aceeași regulă de nume ca închiderea) DOAR una pe alta, și nimic dinamic; exact 10. Singura excepție:
+  -- auth.uid() în funcția trigger-ului ancorei (identitatea creatorului tichetului)
   SELECT string_agg(DISTINCT p2.oid::regprocedure::text, ', ') INTO v_alt
     FROM pg_proc p CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*\(', 'g') w
     JOIN pg_proc p2 ON lower(p2.proname) = lower(w[1]) AND p2.oid <> p.oid
    WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_tichet\_clarificare\_%'
      AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
-     AND NOT (p2.pronamespace = 'public'::regnamespace AND p2.proname LIKE 'fn\_tichet\_clarificare\_%');
+     AND NOT (p2.pronamespace = 'public'::regnamespace AND p2.proname LIKE 'fn\_tichet\_clarificare\_%')
+     AND NOT (p.proname = 'fn_tichet_clarificare_ancora' AND p2.oid = 'auth.uid()'::regprocedure);
   IF v_alt IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_tichet\_clarificare\_%'
                   AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '\mexecute\M')
-     OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_tichet\_clarificare\_%') <> 8 THEN
+     OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_tichet\_clarificare\_%') <> 10 THEN
     RAISE EXCEPTION '20261223a post: functiile noi cheama in afara lor: %', coalesce(v_alt, 'EXECUTE dinamic / numar de functii');
   END IF;
+  -- trigger-ul ancorei, EXACT: un singur trigger cu funcția lui, pe tichete, AFTER INSERT OR UPDATE, FOR EACH ROW (tgtype 1 + 4 + 16 = 21),
+  -- fără WHEN, fără argumente, fără listă de coloane, activ (O), nu de constrângere
+  IF (SELECT count(*) FROM pg_trigger tg WHERE tg.tgfoid = 'public.fn_tichet_clarificare_ancora()'::regprocedure) <> 1
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger tg
+                     WHERE tg.tgfoid = 'public.fn_tichet_clarificare_ancora()'::regprocedure AND tg.tgrelid = 'public.tichete'::regclass
+                       AND tg.tgname = 'trg_tichet_clarificare_ancora' AND tg.tgtype = 21 AND tg.tgenabled = 'O' AND NOT tg.tgisinternal
+                       AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND cardinality(tg.tgattr::int2[]) = 0 AND tg.tgconstraint = 0) THEN
+    RAISE EXCEPTION '20261223a post: trigger-ul ancorei pe tichete (nume / moment / evenimente / WHEN / argumente / coloane / stare)';
+  END IF;
+  -- tabelul ancorelor: proprietar postgres, RLS activ fără FORCE, gol, fără triggere, FĂRĂ politici, fără drepturi pe coloane, fără PUBLIC;
+  -- niciun drept pentru niciun rol din API (fiecare drept separat)
+  IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = 'public.tichete_clarificari_ancore'::regclass AND c.relkind = 'r'
+                   AND pg_get_userbyid(c.relowner) = 'postgres' AND c.relrowsecurity AND NOT c.relforcerowsecurity)
+     OR EXISTS (SELECT 1 FROM public.tichete_clarificari_ancore)
+     OR EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.tichete_clarificari_ancore'::regclass AND NOT tg.tgisinternal)
+     OR EXISTS (SELECT 1 FROM pg_policy pol WHERE pol.polrelid = 'public.tichete_clarificari_ancore'::regclass)
+     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.tichete_clarificari_ancore'::regclass AND a.attnum > 0 AND a.attacl IS NOT NULL)
+     OR EXISTS (SELECT 1 FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) e WHERE c.oid = 'public.tichete_clarificari_ancore'::regclass AND e.grantee = 0) THEN
+    RAISE EXCEPTION '20261223a post: tabelul tichete_clarificari_ancore (proprietar / RLS / gol / triggere / politici / drepturi)';
+  END IF;
+  FOREACH v_rol IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
+    FOREACH v_drept IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'] LOOP
+      IF has_table_privilege(v_rol, 'public.tichete_clarificari_ancore'::regclass, v_drept) THEN
+        RAISE EXCEPTION '20261223a post: drept % pe tichete_clarificari_ancore pentru %', v_drept, v_rol;
+      END IF;
+    END LOOP;
+  END LOOP;
   -- tabelul de evidență: proprietar postgres, RLS activ fără FORCE, gol, fără triggere, o singură politică (SELECT, authenticated,
   -- auth.uid() IS NOT NULL, PERMISSIVE), fără drepturi pe coloane, fără PUBLIC
   IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = 'public.tichete_clarificari'::regclass AND c.relkind = 'r'

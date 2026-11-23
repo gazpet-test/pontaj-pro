@@ -73,28 +73,47 @@ const revino = (db, text = REV, o) => caRunner(db, '20261223a_tichete_clarificar
 const U = { OWNER: '00000000-0000-4000-8000-0000000000a1', AUTOR: '00000000-0000-4000-8000-0000000000a2', ALT: '00000000-0000-4000-8000-0000000000a3',
   AUTOR2: '00000000-0000-4000-8000-0000000000a4' }
 const META = (sursa) => `'{"sursa": "${sursa}", "tip": "${sursa === 'bug_report' ? 'bug' : 'feature'}", "pagina": "/test", "viewport": "1280x720", "raportat_la": "2026-11-01T08:00:00Z"}'::jsonb`
-// id-urile (identity de la 1, în ordinea inserării); T9 și T10 au aceeași dată de creare (ordinea = id)
-const T = Object.fromEntries(Array.from({ length: 15 }, (_, i) => [`T${i + 1}`, i + 1]))
+// Tichetele: (a) 15 tichete create ÎNAINTE de migrare (de postgres, id-urile 1..15: P.T1..P.T15) — r3: fără ancoră, deci în afara
+// protocolului; (b) după migrare, ACELEAȘI 15 + 10 noi create CA DIN APLICAȚIE (authenticated, JWT-ul autorului, politica reală de INSERT):
+// id-urile 16..40 = T.T1..T.T25 (identity în ordinea inserării); T9 și T10 au aceeași dată de creare (ordinea = id)
+const P = Object.fromEntries(Array.from({ length: 15 }, (_, i) => [`T${i + 1}`, i + 1]))
+const T = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`T${i + 1}`, i + 16]))
+const DEF_TICHETE = [
+  ['it', 'eroare_erp', 'Bug inventat 1', 'Descriere inventata 1', 'atribuit', U.AUTOR, META('bug_report'), '2026-11-01 10:00+02'],
+  ['it', 'cerere_functie', 'Cerere inventata 2', null, 'deschis', U.AUTOR2, META('feature_request'), '2026-11-02 10:00+02'],
+  ['logistica', 'eroare_erp', 'Alt departament 3', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-03 10:00+02'],
+  ['it', 'acces_cont', 'Alta subcategorie 4', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-04 10:00+02'],
+  ['it', 'eroare_erp', 'Status final 5', null, 'rezolvat', U.AUTOR, META('bug_report'), '2026-11-05 10:00+02'],
+  ['it', 'eroare_erp', 'Fara sursa 6', null, 'deschis', U.AUTOR, `'{"modul": "magazie"}'::jsonb`, '2026-11-06 10:00+02'],
+  ['it', 'eroare_erp', 'Tacere 7', null, 'in_lucru', U.AUTOR, META('bug_report'), '2026-11-07 10:00+02'],
+  ['it', 'cerere_functie', 'Clar de la inceput 8', null, 'deschis', U.AUTOR2, META('feature_request'), '2026-11-08 10:00+02'],
+  ['it', 'eroare_erp', 'Comentariu automat sters 9', null, 'in_analiza', U.AUTOR, META('bug_report'), '2026-11-09 10:00+02'],
+  ['it', 'eroare_erp', 'Metadata falsificata 10', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-09 10:00+02'],
+  ['it', 'eroare_erp', 'Date alese 11', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-10 10:00+02'],
+  ['it', 'eroare_erp', 'Id-uri alese 12', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-11 10:00+02'],
+  ['it', 'eroare_erp', 'Autor schimbat 13', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-12 10:00+02'],
+  ['it', 'cerere_functie', 'Context schimbat 14', null, 'deschis', U.AUTOR, META('feature_request'), '2026-11-13 10:00+02'],
+  ['it', 'eroare_erp', 'Comentariu automat nelistat 15', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-13 11:00+02'],
+  // r3 (P1 / P2 din verdictul r2)
+  ['it', 'eroare_erp', 'Substituire autor 16', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-14 10:00+02'],
+  ['it', 'eroare_erp', 'Redeschis 17', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-14 11:00+02'],
+  ['it', 'eroare_erp', 'Redeschis in protocol 18', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-14 12:00+02'],
+  ['it', 'eroare_erp', 'Id refolosit 19', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-14 13:00+02'],
+  ['it', 'eroare_erp', 'Id refolosit cu evidenta 20', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-14 14:00+02'],
+  ['it', 'eroare_erp', 'Id mutat 21', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-14 15:00+02'],
+  ['it', 'eroare_erp', 'Tichetul lui ALT 22', null, 'deschis', U.ALT, META('bug_report'), '2026-11-14 16:00+02'],
+  ['it', 'eroare_erp', 'Fereastra runda 23', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-15 10:00+02'],
+  ['it', 'eroare_erp', 'Fereastra tacere 24', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-15 11:00+02'],
+  ['it', 'eroare_erp', 'Trigger oprit 25', null, 'deschis', U.AUTOR, META('bug_report'), '2026-11-15 12:00+02'],
+]
+const valoriTichet = ([dep, sub, titlu, desc, st, autor, meta, la]) =>
+  `('${dep}', '${sub}', '${titlu}', ${desc === null ? 'NULL' : `'${desc}'`}, '${st}', '${autor}', ${meta}, '${la}')`
 const DATE = `
 INSERT INTO auth.users (id) VALUES ('${U.OWNER}'), ('${U.AUTOR}'), ('${U.ALT}'), ('${U.AUTOR2}');
 INSERT INTO public.profiles (id, name, is_owner) VALUES ('${U.OWNER}', 'SINTETIC OWNER', true), ('${U.AUTOR}', 'SINTETIC AUTOR', false),
   ('${U.ALT}', 'SINTETIC ALT', false), ('${U.AUTOR2}', 'SINTETIC AUTOR DOI', false);
 INSERT INTO public.tichete (departament, subcategorie, titlu, descriere, status, deschis_de, metadata, created_at) VALUES
-  ('it', 'eroare_erp', 'Bug inventat 1', 'Descriere inventata 1', 'atribuit', '${U.AUTOR}', ${META('bug_report')}, '2026-11-01 10:00+02'),
-  ('it', 'cerere_functie', 'Cerere inventata 2', NULL, 'deschis', '${U.AUTOR2}', ${META('feature_request')}, '2026-11-02 10:00+02'),
-  ('logistica', 'eroare_erp', 'Alt departament 3', NULL, 'deschis', '${U.AUTOR}', ${META('bug_report')}, '2026-11-03 10:00+02'),
-  ('it', 'acces_cont', 'Alta subcategorie 4', NULL, 'deschis', '${U.AUTOR}', ${META('bug_report')}, '2026-11-04 10:00+02'),
-  ('it', 'eroare_erp', 'Status final 5', NULL, 'rezolvat', '${U.AUTOR}', ${META('bug_report')}, '2026-11-05 10:00+02'),
-  ('it', 'eroare_erp', 'Fara sursa 6', NULL, 'deschis', '${U.AUTOR}', '{"modul": "magazie"}'::jsonb, '2026-11-06 10:00+02'),
-  ('it', 'eroare_erp', 'Tacere 7', NULL, 'in_lucru', '${U.AUTOR}', ${META('bug_report')}, '2026-11-07 10:00+02'),
-  ('it', 'cerere_functie', 'Clar de la inceput 8', NULL, 'deschis', '${U.AUTOR2}', ${META('feature_request')}, '2026-11-08 10:00+02'),
-  ('it', 'eroare_erp', 'Comentariu automat sters 9', NULL, 'in_analiza', '${U.AUTOR}', ${META('bug_report')}, '2026-11-09 10:00+02'),
-  ('it', 'eroare_erp', 'Metadata falsificata 10', NULL, 'deschis', '${U.AUTOR}', ${META('bug_report')}, '2026-11-09 10:00+02'),
-  ('it', 'eroare_erp', 'Date alese 11', NULL, 'deschis', '${U.AUTOR}', ${META('bug_report')}, '2026-11-10 10:00+02'),
-  ('it', 'eroare_erp', 'Id-uri alese 12', NULL, 'deschis', '${U.AUTOR}', ${META('bug_report')}, '2026-11-11 10:00+02'),
-  ('it', 'eroare_erp', 'Autor schimbat 13', NULL, 'deschis', '${U.AUTOR}', ${META('bug_report')}, '2026-11-12 10:00+02'),
-  ('it', 'cerere_functie', 'Context schimbat 14', NULL, 'deschis', '${U.AUTOR}', ${META('feature_request')}, '2026-11-13 10:00+02'),
-  ('it', 'eroare_erp', 'Comentariu automat nelistat 15', NULL, 'deschis', '${U.AUTOR}', ${META('bug_report')}, '2026-11-13 11:00+02');`
+  ${DEF_TICHETE.slice(0, 15).map(valoriTichet).join(',\n  ')};`
 
 async function bazaNoua() {
   const db = new PGlite()
@@ -181,6 +200,41 @@ async function comenteaza(db, t, uid, text, { id, la } = {}) {
 }
 // un cont din aplicație modifică tichetul, ca printr-un PATCH PostgREST (politica tichete_update_auth)
 const patch = (db, uid, t, set) => ca(db, 'authenticated', uid, `UPDATE public.tichete SET ${set} WHERE id = ${t}`, { pastreaza: true })
+// r3: tichetele create DUPĂ migrare, ca din aplicație (butonul de raportare): authenticated cu JWT-ul autorului; id-urile trebuie să fie
+// exact T.T1..T.T25 (16..40)
+async function tichetePostMig(db) {
+  for (let i = 0; i < DEF_TICHETE.length; i++) {
+    const d = DEF_TICHETE[i]
+    const r = await ca(db, 'authenticated', d[5], `INSERT INTO public.tichete (departament, subcategorie, titlu, descriere, status, deschis_de, metadata, created_at)
+      VALUES ${valoriTichet(d)} RETURNING id`, { pastreaza: true })
+    if (r.code || Number(r.rows[0].id) !== T[`T${i + 1}`]) throw new Error(`tichetul T${i + 1} nu s-a creat ca în aplicație: ${r.message || JSON.stringify(r.rows)}`)
+  }
+}
+const ancora = async (db, t) => (await db.query(`SELECT * FROM public.tichete_clarificari_ancore WHERE tichet_id = ${t}`)).rows[0] || null
+// P2 (r3): injecția în FEREASTRA dintre verificare și scriere — funcția zilelor lucrătoare (chemată din starea tichetului, după citirea
+// răspunsurilor) e înlocuită pe baza de probă cu una care, o singură dată, scrie un comentariu al autorului (ca o altă sesiune care confirmă
+// exact atunci); apoi originalul e pus la loc, octet cu octet, din migrare
+const ZILE_ORIGINAL = (() => {
+  const i = MIG.indexOf('CREATE FUNCTION public.fn_tichet_clarificare_zile_lucratoare(')
+  return MIG.slice(i, MIG.indexOf('$f$;', MIG.indexOf('AS $f$', i) + 6) + 4).replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION')
+})()
+const ZILE_INJECTIE = (t, uid, text) => `CREATE OR REPLACE FUNCTION public.fn_tichet_clarificare_zile_lucratoare(p_de timestamptz, p_la timestamptz) RETURNS integer
+LANGUAGE plpgsql VOLATILE SET search_path = public, pg_temp AS $inj$
+BEGIN
+  IF current_setting('proba.injecteaza', true) = '${t}' THEN
+    PERFORM set_config('proba.injecteaza', '', false);
+    INSERT INTO public.tichete_comentarii (tichet_id, autor, text) VALUES (${t}, '${uid}', '${text}');
+  END IF;
+  RETURN (SELECT count(*)::integer FROM generate_series(((p_de AT TIME ZONE 'Europe/Bucharest')::date + 1)::timestamp,
+          ((p_la AT TIME ZONE 'Europe/Bucharest')::date)::timestamp, interval '1 day') AS zile(zi) WHERE extract(isodow FROM zile.zi) < 6);
+END $inj$;
+SELECT set_config('proba.injecteaza', '${t}', false);`
+async function cuInjectie(db, t, uid, text, fn) {
+  await db.exec(ZILE_INJECTIE(t, uid, text))
+  try { return await fn() } finally {
+    await db.exec(`SELECT set_config('proba.injecteaza', '', false);\n${ZILE_ORIGINAL}`)
+  }
+}
 
 // textele așteptate, scrise de mână din cerere (NU din codul migrării)
 const ANTET = 'Mesaj automat pentru clarificare. Nu reprezintă o aprobare de acces, modificare sau termen de realizare.'
@@ -210,6 +264,21 @@ async function verifica(db) {
     }
   }
   const pas = async (ce, fn) => { try { await fn() } catch (e) { ab.push(`${ce}: EXCEPȚIE ${e.code || ''} ${e.message}`) } }
+  // r3: tichetele protocolului se creează DUPĂ migrare, ca din aplicație; cele de dinainte (P.*) nu au ancoră
+  try { await tichetePostMig(db) } catch (e) { ab.push('V0 crearea tichetelor ca din aplicație: ' + e.message); return ab }
+  await pas('V0', async () => {
+    const fara = [3, 4, 5, 6].map(i => T[`T${i}`])   // neeligibile la creare (departament / subcategorie / status / sursă) => fără ancoră
+    for (let i = 1; i <= 25; i++) {
+      const a = await ancora(db, T[`T${i}`])
+      const asteptat = !fara.includes(T[`T${i}`])
+      if (!!a !== asteptat || (a && (a.autor !== DEF_TICHETE[i - 1][5] || a.iesit_la !== null || a.iesit_motiv !== null))) ab.push(`V0 ancora lui T${i}: ${JSON.stringify(a)} (așteptat ${asteptat ? 'ancorat, autorul de la creare' : 'fără ancoră'})`)
+    }
+    if (Number((await db.query(`SELECT count(*) AS n FROM public.tichete_clarificari_ancore WHERE tichet_id <= 15`)).rows[0].n) !== 0) ab.push('V0 tichetele de dinainte de aplicare au ancoră')
+    const s = await stare(db, P.T1)
+    if (s.eligibil !== false || s.motiv !== 'fara_ancora') ab.push('V0 tichetul de dinainte de aplicare: ' + JSON.stringify(s))
+    astept(await trimite(db, P.T1, 1, Q1), 'refuz', 'neeligibil', 'V0 runda 1 pe un tichet de dinainte de aplicare', 'fara_ancora')
+    if ((await comentarii(db, P.T1)).length !== 0) ab.push('V0 s-a scris pe un tichet de dinainte de aplicare')
+  })
 
   // V1–V5: runda 1 pe T1: comentariul, notificarea, rândul de evidență; tichetul (inclusiv metadata) NEATINS
   let com1 = null
@@ -220,6 +289,7 @@ async function verifica(db) {
     if ((await stare(db, T.T1)).versiune_context !== v) ab.push('V1 starea dă altă versiune a contextului decât funcția de context')
     const r = await trimite(db, T.T1, 1, Q1, v)
     astept(r, 'trimis', undefined, 'V1 runda 1')
+    if (r?.intrebari_trimise !== true) ab.push('V1 trimis fără intrebari_trimise = true: ' + JSON.stringify(r))
     const c = await comentarii(db, T.T1)
     if (c.length !== 1 || c[0].autor !== null || c[0].text !== textRunda(1, Q1) || Number(c[0].id) !== Number(r?.comentariu_id)) ab.push('V2 comentariul rundei 1: ' + JSON.stringify(c))
     com1 = c[0] && Number(c[0].id)
@@ -242,6 +312,8 @@ async function verifica(db) {
     const r = await trimite(db, T.T1, 1, Q1, vVeche)
     astept(r, 'deja_trimis', undefined, 'V6 runda 1 repetată (contextul de dinaintea mesajului)')
     if (Number(r?.comentariu_id) !== com1) ab.push('V6 deja_trimis fără id-ul comentariului: ' + JSON.stringify(r))
+    // deja_trimis confirmă mesajul EXISTENT, nu întrebările apelului de acum (rutina nu le raportează drept trimise)
+    if (r?.intrebari_trimise !== false) ab.push('V6 deja_trimis fără intrebari_trimise = false: ' + JSON.stringify(r))
     astept(await trimite(db, T.T1, 1, ['Altă întrebare?']), 'deja_trimis', undefined, 'V7 runda 1 cu alte întrebări')
     if ((await comentarii(db, T.T1)).length !== 1 || await nrNotif(db) !== n0 || await nrEvid(db) !== e0) ab.push('V6 dublură: comentariu / notificare / evidență în plus')
     astept(await trimite(db, T.T1, 2, Q2, null), 'refuz', 'versiune_context_lipsa', 'V7 fără versiunea contextului')
@@ -296,8 +368,11 @@ async function verifica(db) {
     const nc = c.length, nt = await nrNotif(db)
     const r2 = await incheie(db, T.T1, 'neclar')
     astept(r2, 'deja_incheiat', undefined, 'V14 încheiere repetată')
-    if (r2?.motiv_incheiere !== 'neclar') ab.push('V14 deja_incheiat fără motivul primului: ' + JSON.stringify(r2))
-    astept(await incheie(db, T.T1, 'tacere', vInainte), 'deja_incheiat', undefined, 'V14 încheiere cu alt motiv și contextul vechi')
+    if (r2?.motiv_incheiere !== 'neclar' || r2?.motiv_cerut !== 'neclar' || r2?.acelasi_motiv !== true) ab.push('V14 deja_incheiat fără motivul primului: ' + JSON.stringify(r2))
+    const r3 = await incheie(db, T.T1, 'tacere', vInainte)
+    astept(r3, 'deja_incheiat', undefined, 'V14 încheiere cu alt motiv și contextul vechi')
+    // motivul SALVAT rămâne cel întors; motivul cerut acum e raportat separat (acelasi_motiv = false: intenția nouă NU s-a executat)
+    if (r3?.motiv_incheiere !== 'neclar' || r3?.motiv_cerut !== 'tacere' || r3?.acelasi_motiv !== false) ab.push('V14 deja_incheiat cu alt motiv: ' + JSON.stringify(r3))
     if ((await comentarii(db, T.T1)).length !== nc || await nrNotif(db) !== nt) ab.push('V14 dublură la încheiere')
     await comenteaza(db, T.T1, U.AUTOR, 'Am mai gasit ceva.')
     const s = await stare(db, T.T1)
@@ -375,10 +450,21 @@ async function verifica(db) {
       [['Suni la 072(123)4567?'], 'sir_cifre'], [['Suni la +40 (722) 123-456?'], 'sir_cifre'], [['IP 192.168.100.10?'], 'sir_cifre'],
       [['Cifre late ' + LAT('0722123456') + '?'], 'sir_cifre'],
       [['Scrie la ion@exemplu.ro?'], 'adresa_email'], [['Contul ion' + String.fromCharCode(65312) + 'exemplu?'], 'adresa_email'], [['Ce e @?'], 'adresa_email'],
+      // tabelul recenzentului r2 (refuzate): data + ora lipite, cod cu 9 cifre, „nr.” + 9 cifre
+      [['Ce s-a întâmplat pe 13.11.2026 10:30?'], 'sir_cifre'], [['Codul AB-123456789?'], 'sir_cifre'], [['Ai nr. 123456789?'], 'sir_cifre'],
     ]) {
       astept(await trimite(db, T.T2, 1, intr), 'refuz', 'intrebari_invalide', `V19 ${JSON.stringify(intr)?.slice(0, 40)}`, motiv)
     }
     if ((await comentarii(db, T.T2)).length !== 0 || (await evid(db, T.T2)).length !== 0) ab.push('V19 s-a scris ceva la o întrebare refuzată')
+    // comportamentul ALES la refuz (r3, aliniat cu promptul, pasul 14): refuzul nu schimbă nimic, tichetul rămâne de evaluat; rutina NU
+    // reîncearcă în aceeași rulare cu alt text, trece refuzul în recap (owner-ul decide)
+    const sRefuz = await stare(db, T.T2)
+    if (sRefuz.actiune !== 'de_evaluat_initial' || sRefuz.runda !== 0) ab.push('V19 starea după refuzuri: ' + JSON.stringify(sRefuz))
+    // tabelul recenzentului r2 (acceptate) + reformularea sigură: validatorul întoarce NULL (verificat direct, fără să consume runda)
+    for (const bun of ['Tichetul TKT-2026-0360 e cel corect?', 'Apare la ora 10:30?', 'Suma era 1.234,56 lei?', 'Ce dată și ce oră?']) {
+      const m = (await db.query(`SELECT public.fn_tichet_clarificare_intrebari_motiv(ARRAY[${q(bun)}]) AS m`)).rows[0].m
+      if (m !== null) ab.push(`V19 întrebarea acceptabilă „${bun}” refuzată: ${m}`)
+    }
     const lung = 'D'.repeat(299) + '?'
     const bune = [lung, 'Ce s-a întâmplat pe 13.11.2026, apoi pe 14.11.2026?', 'Apare în versiunea 2.5 a raportului.xlsx?']
     const r = await trimite(db, T.T2, 1, bune)
@@ -397,7 +483,11 @@ async function verifica(db) {
         "SELECT public.fn_tichet_clarificare_zile_lucratoare(now(), now())", "SELECT public.fn_tichet_clarificare_intrebari_motiv(ARRAY['x'])",
         'SELECT public.fn_tichet_clarificare_apelant_ok()',
         `INSERT INTO public.tichete_clarificari (tichet_id, fel, runda, autor_tichet, instantaneu_autor, versiune_context) VALUES (${T.T10}, 'clarificat', 0, '${U.AUTOR}', '{}', ${V})`,
-        `UPDATE public.tichete_clarificari SET creat_la = now() - interval '30 days'`, 'DELETE FROM public.tichete_clarificari', 'TRUNCATE public.tichete_clarificari']) {
+        `UPDATE public.tichete_clarificari SET creat_la = now() - interval '30 days'`, 'DELETE FROM public.tichete_clarificari', 'TRUNCATE public.tichete_clarificari',
+        // r3: ancorele — nimic pentru niciun rol din API (nici citire), funcția eligibilității nechemabilă
+        'SELECT * FROM public.tichete_clarificari_ancore', `INSERT INTO public.tichete_clarificari_ancore (tichet_id, autor) VALUES (${P.T2}, '${U.AUTOR}')`,
+        `UPDATE public.tichete_clarificari_ancore SET iesit_la = NULL, iesit_motiv = NULL`, 'DELETE FROM public.tichete_clarificari_ancore',
+        'TRUNCATE public.tichete_clarificari_ancore', `SELECT public.fn_tichet_clarificare_eligibil_motiv('it', 'eroare_erp', '{}'::jsonb, 'deschis')`]) {
         const r = await ca(db, rol, uid, sql, { pastreaza: true })
         if (r.code !== '42501') ab.push(`V20 ${rol}${uid ? ' (' + uid.slice(-2) + ')' : ''}: ${sql.slice(0, 70)} -> ${r.code || 'A TRECUT'} ${r.message || ''}`)
       }
@@ -461,15 +551,33 @@ async function verifica(db) {
     await patch(db, U.ALT, T.T1, `metadata = metadata || ${META_FALS}`)
     if (!egal(await stare(db, T.T1), s1)) ab.push('V23 PATCH pe metadata a schimbat starea lui T1')
   })
-  // V24: autorul tichetului schimbat (PATCH pe deschis_de, permis de politica reală) după o rundă => „incoerent”
+  // V24: autorul tichetului schimbat (PATCH pe deschis_de, permis de politica reală) după o rundă => ancora iese => „incoerent”
   await pas('V24', async () => {
     astept(await trimite(db, T.T13, 1, Q1), 'trimis', undefined, 'V24 runda 1 pe T13')
     const r = await patch(db, U.ALT, T.T13, `deschis_de = '${U.AUTOR2}'`)
     if (r.code) ab.push('V24 pregătirea (PATCH deschis_de) a eșuat: ' + r.message)
     await comenteaza(db, T.T13, U.AUTOR2, 'Raspund eu.')
     const s = await stare(db, T.T13)
-    if (s.actiune !== 'incoerent' || s.detaliu !== 'autor_schimbat') ab.push('V24 starea după schimbarea autorului: ' + JSON.stringify(s))
+    if (s.actiune !== 'incoerent' || s.detaliu !== 'iesit_din_protocol:autor_schimbat') ab.push('V24 starea după schimbarea autorului: ' + JSON.stringify(s))
     astept(await trimite(db, T.T13, 2, Q2), 'refuz', 'stare_incoerenta', 'V24 runda 2 după schimbarea autorului')
+    // înapoi la autorul inițial: ieșirea e DEFINITIVĂ
+    await patch(db, U.ALT, T.T13, `deschis_de = '${U.AUTOR}'`)
+    const s2 = await stare(db, T.T13)
+    if (s2.actiune !== 'incoerent' || s2.detaliu !== 'iesit_din_protocol:autor_schimbat') ab.push('V24 autorul pus la loc a readus tichetul în protocol: ' + JSON.stringify(s2))
+  })
+  // V24b: plasa din starea tichetului: cu trigger-ul ancorei OPRIT de un administrator (doar postgres poate), autorul schimbat după o rundă
+  //       tot dă „incoerent” (ancora are alt autor decât tichetul), nimic trimis
+  await pas('V24b', async () => {
+    astept(await trimite(db, T.T25, 1, Q1), 'trimis', undefined, 'V24b runda 1 pe T25')
+    await db.exec('ALTER TABLE public.tichete DISABLE TRIGGER trg_tichet_clarificare_ancora')
+    try { await patch(db, U.ALT, T.T25, `deschis_de = '${U.ALT}'`) } finally { await db.exec('ALTER TABLE public.tichete ENABLE TRIGGER trg_tichet_clarificare_ancora') }
+    if ((await ancora(db, T.T25))?.iesit_la !== null) ab.push('V24b pregătirea: ancora a ieșit deși trigger-ul era oprit')
+    await comenteaza(db, T.T25, U.ALT, 'Raspund eu, noul autor.')
+    const s = await stare(db, T.T25)
+    if (s.actiune !== 'incoerent' || s.detaliu !== 'autor_schimbat') ab.push('V24b starea cu trigger-ul oprit: ' + JSON.stringify(s))
+    const n0 = await maxNotif(db)
+    astept(await trimite(db, T.T25, 2, Q2), 'refuz', 'stare_incoerenta', 'V24b runda 2 cu trigger-ul oprit')
+    if ((await notifNoi(db, n0)).length) ab.push('V24b notificare trimisă')
   })
   // V25: un comentariu automat NELISTAT (fără rând de evidență) => „incoerent”
   await pas('V25', async () => {
@@ -529,12 +637,159 @@ async function verifica(db) {
     if (!nn.some(n => n.profile_id === U.AUTOR2 && n.title === `🎫 Tichetul tău ${nrT(T.T2)} — rezolvat`)) ab.push('V28 trigger-ul real de status nu a notificat creatorul (proba e nefuncțională): ' + JSON.stringify(nn))
     astept(await trimite(db, T.T2, 2, Q2), 'refuz', 'neeligibil', 'V28 runda 2 pe tichet rezolvat', 'status')
   })
+  // ── r3, P1: proveniența ancorată la creare (contraexemplele recenzentului) ──
+  // V30: contul ALT își pune deschis_de pe tichetul lui AUTOR ÎNAINTEA primei runde: nici versiunea veche, nici cea nouă nu trimit nimic
+  //      (nicio notificare către ALT), comentariul lui ALT nu e „răspunsul autorului”; înapoi la AUTOR = tot în afară (definitiv)
+  await pas('V30', async () => {
+    const vVeche = await ctx(db, T.T16)
+    const r = await patch(db, U.ALT, T.T16, `deschis_de = '${U.ALT}'`)
+    if (r.code) ab.push('V30 pregătirea (PATCH deschis_de, permis de politica reală) a eșuat: ' + r.message)
+    const a = await ancora(db, T.T16)
+    if (a?.iesit_motiv !== 'autor_schimbat' || !a?.iesit_la || a?.autor !== U.AUTOR) ab.push('V30 ancora după PATCH: ' + JSON.stringify(a))
+    let s = await stare(db, T.T16)
+    if (s.eligibil !== false || s.motiv !== 'iesit_din_protocol:autor_schimbat') ab.push('V30 starea după substituirea autorului: ' + JSON.stringify(s))
+    if (vVeche === await ctx(db, T.T16)) ab.push('V30 autorul nu intră în versiunea contextului')
+    const n0 = await maxNotif(db)
+    for (const v of [vVeche, await ctx(db, T.T16)]) {
+      astept(await trimite(db, T.T16, 1, Q1, v), 'refuz', 'neeligibil', 'V30 runda 1 după substituire', 'iesit_din_protocol:autor_schimbat')
+      astept(await incheie(db, T.T16, 'clarificat', v), 'refuz', 'neeligibil', 'V30 încheiere după substituire', 'iesit_din_protocol:autor_schimbat')
+    }
+    await comenteaza(db, T.T16, U.ALT, 'Raspund eu ca autor.')
+    if ((await notifNoi(db, n0)).length || (await evid(db, T.T16)).length || (await comentarii(db, T.T16)).some(c => c.autor === null)) ab.push('V30 s-a scris ceva după substituire')
+    if ((await lista(db)).some(x => Number(x.tichet_id) === T.T16)) ab.push('V30 tichetul cu autorul substituit e în lista rutinei')
+    await patch(db, U.ALT, T.T16, `deschis_de = '${U.AUTOR}'`)
+    s = await stare(db, T.T16)
+    if (s.eligibil !== false || s.motiv !== 'iesit_din_protocol:autor_schimbat') ab.push('V30 autorul pus la loc a readus tichetul: ' + JSON.stringify(s))
+  })
+  // V31: promovarea prin metadata.sursa: tichet creat FĂRĂ sursa butonului (T6), ALT pune sursa = bug_report => tot în afară (fără ancoră)
+  await pas('V31', async () => {
+    const r = await patch(db, U.ALT, T.T6, `metadata = metadata || '{"sursa": "bug_report"}'::jsonb`)
+    if (r.code) ab.push('V31 pregătirea (PATCH metadata) a eșuat: ' + r.message)
+    const s = await stare(db, T.T6)
+    if (s.eligibil !== false || s.motiv !== 'fara_ancora') ab.push('V31 tichetul promovat prin metadata: ' + JSON.stringify(s))
+    astept(await trimite(db, T.T6, 1, Q1), 'refuz', 'neeligibil', 'V31 runda 1 pe tichetul promovat', 'fara_ancora')
+    // la fel subcategoria: T4 (acces_cont) mutat pe eroare_erp
+    await patch(db, U.ALT, T.T4, `subcategorie = 'eroare_erp'`)
+    astept(await trimite(db, T.T4, 1, Q1), 'refuz', 'neeligibil', 'V31 runda 1 pe tichetul mutat pe subcategoria butonului', 'fara_ancora')
+    if ((await comentarii(db, T.T6)).length || (await comentarii(db, T.T4)).length) ab.push('V31 s-a scris ceva')
+  })
+  // V32: redeschiderea: închis de owner, redeschis de ALT => în afară definitiv (fără runde: neeligibil; cu runde: incoerent, la owner)
+  await pas('V32', async () => {
+    await patch(db, U.OWNER, T.T17, `status = 'inchis'`)
+    await patch(db, U.ALT, T.T17, `status = 'deschis'`)
+    let s = await stare(db, T.T17)
+    if (s.eligibil !== false || s.motiv !== 'iesit_din_protocol:status') ab.push('V32 tichetul redeschis (fără runde): ' + JSON.stringify(s))
+    astept(await trimite(db, T.T17, 1, Q1), 'refuz', 'neeligibil', 'V32 runda 1 pe tichetul redeschis', 'iesit_din_protocol:status')
+    astept(await trimite(db, T.T18, 1, Q1), 'trimis', undefined, 'V32 runda 1 pe T18')
+    await patch(db, U.OWNER, T.T18, `status = 'rezolvat'`)
+    await patch(db, U.ALT, T.T18, `status = 'in_lucru'`)
+    await comenteaza(db, T.T18, U.AUTOR, 'Raspuns dupa redeschidere.')
+    s = await stare(db, T.T18)
+    if (s.actiune !== 'incoerent' || s.detaliu !== 'iesit_din_protocol:status') ab.push('V32 tichetul redeschis în protocol: ' + JSON.stringify(s))
+    astept(await trimite(db, T.T18, 2, Q2), 'refuz', 'stare_incoerenta', 'V32 runda 2 pe tichetul redeschis')
+    if ((await comentarii(db, T.T17)).length !== 0 || (await evid(db, T.T18)).length !== 1) ab.push('V32 s-a scris ceva după redeschidere')
+  })
+  // V33: un tichet creat FĂRĂ JWT-ul autorului (service_role, ca o cale de server) cu deschis_de = AUTOR => fără ancoră; un cont nu poate
+  //      crea un tichet pe numele altuia (politica reală de INSERT)
+  await pas('V33', async () => {
+    const r = await ca(db, 'service_role', null, `INSERT INTO public.tichete (departament, subcategorie, titlu, status, deschis_de, metadata, created_at)
+      VALUES ('it', 'eroare_erp', 'Creat de server 33', 'deschis', '${U.AUTOR}', ${META('bug_report')}, '2026-11-16 10:00+02') RETURNING id`, { pastreaza: true })
+    if (r.code) { ab.push('V33 pregătirea (INSERT service_role) a eșuat: ' + r.message); return }
+    const id = Number(r.rows[0].id)
+    const s = await stare(db, id)
+    if (s.eligibil !== false || s.motiv !== 'fara_ancora' || await ancora(db, id)) ab.push('V33 tichetul creat fără JWT-ul autorului: ' + JSON.stringify(s))
+    astept(await trimite(db, id, 1, Q1), 'refuz', 'neeligibil', 'V33 runda 1 pe tichetul creat de server', 'fara_ancora')
+    const r2 = await ca(db, 'authenticated', U.ALT, `INSERT INTO public.tichete (departament, subcategorie, titlu, status, deschis_de, metadata)
+      VALUES ('it', 'eroare_erp', 'Pe numele altuia 33', 'deschis', '${U.AUTOR}', ${META('bug_report')}) RETURNING id`, { pastreaza: true })
+    if (r2.code !== '42501') ab.push('V33 un cont a creat un tichet pe numele altuia: ' + (r2.code || 'A TRECUT'))
+    if ((await comentarii(db, id)).length) ab.push('V33 s-a scris ceva')
+  })
+  // V34: id refolosit: owner-ul șterge T19 (ancorat); un INSERT de server cu ACELAȘI id și deschis_de = AUTOR => ancora veche iese, tichetul
+  //      nou NU intră; T20 (cu o rundă): șters, recreat de ALT cu același id => incoerent (evidența veche rămâne), nimic trimis
+  await pas('V34', async () => {
+    let r = await ca(db, 'authenticated', U.OWNER, `DELETE FROM public.tichete WHERE id = ${T.T19} RETURNING id`, { pastreaza: true })
+    if (r.code || r.rows.length !== 1) ab.push('V34 pregătirea (ștergerea de către owner): ' + JSON.stringify(r))
+    r = await ca(db, 'service_role', null, `INSERT INTO public.tichete (id, departament, subcategorie, titlu, status, deschis_de, metadata, created_at)
+      VALUES (${T.T19}, 'it', 'eroare_erp', 'Recreat cu id-ul vechi 19', 'deschis', '${U.AUTOR}', ${META('bug_report')}, '2026-11-20 09:00+02') RETURNING id`, { pastreaza: true })
+    if (r.code) ab.push('V34 pregătirea (recrearea) a eșuat: ' + r.message)
+    const a = await ancora(db, T.T19)
+    if (a?.iesit_motiv !== 'id_refolosit') ab.push('V34 ancora id-ului refolosit: ' + JSON.stringify(a))
+    let s = await stare(db, T.T19)
+    if (s.eligibil !== false || s.motiv !== 'iesit_din_protocol:id_refolosit') ab.push('V34 tichetul recreat cu id-ul vechi: ' + JSON.stringify(s))
+    astept(await trimite(db, T.T19, 1, Q1), 'refuz', 'neeligibil', 'V34 runda 1 pe tichetul recreat', 'iesit_din_protocol:id_refolosit')
+    astept(await trimite(db, T.T20, 1, Q1), 'trimis', undefined, 'V34 runda 1 pe T20')
+    r = await ca(db, 'authenticated', U.OWNER, `DELETE FROM public.tichete WHERE id = ${T.T20} RETURNING id`, { pastreaza: true })
+    r = await ca(db, 'authenticated', U.ALT, `INSERT INTO public.tichete (id, departament, subcategorie, titlu, status, deschis_de, metadata, created_at)
+      VALUES (${T.T20}, 'it', 'eroare_erp', 'Recreat de ALT 20', 'deschis', '${U.ALT}', ${META('bug_report')}, '2026-11-20 10:00+02') RETURNING id`, { pastreaza: true })
+    if (r.code) ab.push('V34 pregătirea (recrearea de către ALT) a eșuat: ' + r.message)
+    s = await stare(db, T.T20)
+    if (s.actiune !== 'incoerent' || s.detaliu !== 'iesit_din_protocol:id_refolosit') ab.push('V34 tichetul recreat peste o evidență veche: ' + JSON.stringify(s))
+    const n0 = await maxNotif(db)
+    astept(await trimite(db, T.T20, 2, Q2), 'refuz', 'stare_incoerenta', 'V34 runda 2 pe tichetul recreat')
+    astept(await incheie(db, T.T20, 'clarificat'), 'refuz', 'stare_incoerenta', 'V34 încheiere pe tichetul recreat')
+    if ((await notifNoi(db, n0)).length) ab.push('V34 notificare către ALT')
+  })
+  // V35: id mutat: owner-ul șterge T21 (ancorat, AUTOR); ALT își mută propriul tichet (T22) pe id-ul lui T21 și pune deschis_de = AUTOR
+  //      (politica reală de UPDATE o permite) => ancora veche iese (id_schimbat), nimic trimis
+  await pas('V35', async () => {
+    await ca(db, 'authenticated', U.OWNER, `DELETE FROM public.tichete WHERE id = ${T.T21}`, { pastreaza: true })
+    const r = await patch(db, U.ALT, T.T22, `id = ${T.T21}, deschis_de = '${U.AUTOR}'`)
+    if (r.code) ab.push('V35 pregătirea (UPDATE id) a eșuat: ' + r.message)
+    const a = await ancora(db, T.T21)
+    if (a?.iesit_motiv !== 'id_schimbat' || (await ancora(db, T.T22))?.iesit_motiv !== 'id_schimbat') ab.push('V35 ancorele după mutarea id-ului: ' + JSON.stringify([a, await ancora(db, T.T22)]))
+    const s = await stare(db, T.T21)
+    if (s.eligibil !== false || s.motiv !== 'iesit_din_protocol:id_schimbat') ab.push('V35 tichetul mutat pe id-ul vechi: ' + JSON.stringify(s))
+    astept(await trimite(db, T.T21, 1, Q1), 'refuz', 'neeligibil', 'V35 runda 1 pe tichetul mutat', 'iesit_din_protocol:id_schimbat')
+  })
+  // V36: versiunea contextului conține autorul și statusul (r3): o schimbare între citire și apel = context_schimbat
+  await pas('V36', async () => {
+    const v0 = await ctx(db, T.T24)
+    await patch(db, U.OWNER, T.T24, `status = 'atribuit'`)
+    const v1 = await ctx(db, T.T24)
+    if (v1 === v0) ab.push('V36 statusul nu intră în versiunea contextului')
+    astept(await trimite(db, T.T24, 1, Q1, v0), 'refuz', 'context_schimbat', 'V36 runda 1 cu contextul de dinaintea schimbării de status')
+    if ((await comentarii(db, T.T24)).length || (await evid(db, T.T24)).length) ab.push('V36 context_schimbat a scris ceva')
+  })
+  // ── r3, P2: FOTOGRAFIA unică (verificare + context + instantaneu); un comentariu confirmat exact în fereastră rămâne detectabil ──
+  // V37: runda 2 pe T23 (după răspunsul R1); în fereastra de după verificarea răspunsurilor, autorul confirmă X => runda 2 pleacă (contextul
+  //      citit de rutină nu-l conținea), instantaneul rundei 2 = [R1] (FĂRĂ X), iar după ea X e „răspuns” (de_evaluat_raspuns)
+  await pas('V37', async () => {
+    astept(await trimite(db, T.T23, 1, Q1), 'trimis', undefined, 'V37 runda 1 pe T23')
+    const r1 = await comenteaza(db, T.T23, U.AUTOR, 'Raspunsul la runda 1.')
+    const v = await ctx(db, T.T23)
+    const r = await cuInjectie(db, T.T23, U.AUTOR, 'Scris in fereastra rundei 2', () => trimite(db, T.T23, 2, Q2, v))
+    astept(r, 'trimis', undefined, 'V37 runda 2 cu un comentariu scris în fereastră')
+    const x = (await comentarii(db, T.T23)).find(c => c.text === 'Scris in fereastra rundei 2')
+    if (!x) { ab.push('V37 PROBA NEFUNCȚIONALĂ: injecția nu a scris comentariul'); return }
+    const e2 = (await evid(db, T.T23)).find(e => e.fel === 'runda' && e.runda === 2)
+    if (!egal(ids(e2?.instantaneu_autor), [r1])) ab.push(`V37 instantaneul rundei 2 (aștepta [${r1}], fără comentariul din fereastră ${x.id}): ${JSON.stringify(e2?.instantaneu_autor)}`)
+    const s = await stare(db, T.T23)
+    if (s.actiune !== 'de_evaluat_raspuns' || s.raspuns_autor !== true) ab.push('V37 comentariul din fereastră a fost „consumat” (nu mai e răspuns): ' + JSON.stringify(s))
+  })
+  // V38: tăcerea pe T24: în fereastra încheierii, autorul confirmă X => încheierea pleacă, dar X rămâne semnalat (raspuns_dupa_incheiere)
+  await pas('V38', async () => {
+    astept(await trimite(db, T.T24, 1, Q1), 'trimis', undefined, 'V38 runda 1 pe T24')
+    await db.query(`UPDATE public.tichete_clarificari SET creat_la = now() - interval '10 days' WHERE tichet_id = ${T.T24}`)
+    if ((await stare(db, T.T24)).actiune !== 'de_escaladat_tacere') { ab.push('V38 PROBA NEFUNCȚIONALĂ: pregătirea tăcerii'); return }
+    const v = await ctx(db, T.T24)
+    const r = await cuInjectie(db, T.T24, U.AUTOR, 'Scris in fereastra incheierii', () => incheie(db, T.T24, 'tacere', v))
+    astept(r, 'incheiat', undefined, 'V38 încheierea (tăcere) cu un comentariu scris în fereastră')
+    const x = (await comentarii(db, T.T24)).find(c => c.text === 'Scris in fereastra incheierii')
+    if (!x) { ab.push('V38 PROBA NEFUNCȚIONALĂ: injecția nu a scris comentariul'); return }
+    const ef = (await evid(db, T.T24)).find(e => e.fel === 'incheiere')
+    if (ids(ef?.instantaneu_autor).includes(Number(x.id))) ab.push('V38 instantaneul încheierii conține comentariul din fereastră: ' + JSON.stringify(ef?.instantaneu_autor))
+    const s = await stare(db, T.T24)
+    if (s.actiune !== 'incheiat' || s.raspuns_dupa_incheiere !== true) ab.push('V38 comentariul din fereastră a dispărut din semnale: ' + JSON.stringify(s))
+  })
   // V29: lista rutinei: DOAR tichetele eligibile, ordine (created_at, id), acțiunile (scrise de mână din pașii de mai sus), versiunea contextului
   await pas('V29', async () => {
     const l = await lista(db)
     const am = l.map(x => [Number(x.tichet_id), x.actiune, x.raspuns_dupa_incheiere])
+    // r3: tichetele de dinainte de aplicare (P.*) nu apar; T16 / T17 / T19 (refolosit, fără evidență) / T21 (mutat) / T22 ies tăcut; T18,
+    // T20 (cu evidență) și T25 = incoerent; id-ul refolosit al lui T20 are data de creare a tichetului nou
     const astepta = [[T.T1, 'incheiat', true], [T.T7, 'incheiat', false], [T.T8, 'incheiat', true], [T.T9, 'incoerent', false], [T.T10, 'asteapta_autor', false],
-      [T.T11, 'asteapta_autor', false], [T.T12, 'de_evaluat_raspuns', false], [T.T13, 'incoerent', false], [T.T14, 'incheiat', false], [T.T15, 'incoerent', false]]
+      [T.T11, 'asteapta_autor', false], [T.T12, 'de_evaluat_raspuns', false], [T.T13, 'incoerent', false], [T.T14, 'incheiat', false], [T.T15, 'incoerent', false],
+      [T.T18, 'incoerent', false], [T.T23, 'de_evaluat_raspuns', false], [T.T24, 'incheiat', true], [T.T25, 'incoerent', false], [T.T20, 'incoerent', false]]
     if (!egal(am, astepta)) ab.push('V29 lista rutinei: ' + JSON.stringify(am) + ' (aștepta ' + JSON.stringify(astepta) + ')')
     for (const x of l) if (x.versiune_context !== await ctx(db, Number(x.tichet_id))) ab.push(`V29 versiune_context pentru T${x.tichet_id}`)
   })
@@ -571,6 +826,7 @@ async function probaCod(mutanti = []) {
   const db = await bazaNoua()
   try {
     await aplicaMig(db, aplica(MIG_B, [...FARA_POST_DREPT, ...GRANT_GRESIT, ...mutanti]))
+    await tichetePostMig(db)
     await db.exec(`CREATE FUNCTION public.fn_expus_test(p bigint, v text) RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
       SELECT public.fn_tichet_clarificare_trimite(p, 1, ARRAY['Ce?'], v) $f$; GRANT EXECUTE ON FUNCTION public.fn_expus_test(bigint, text) TO authenticated;`)
     const v = await ctx(db, T.T1)
@@ -636,6 +892,19 @@ for (const [nume, fn, re] of [
     /tabelul tichete_clarificari \(proprietar/],
   ['EXECUTE rămas pentru PUBLIC pe o funcție internă', (db) => aplicaMig(db, aplica(MIG_B, [['-- ── postcondiții ──', 'GRANT EXECUTE ON FUNCTION public.fn_tichet_clarificare_context(bigint) TO PUBLIC;\n-- ── postcondiții ──']])),
     /functia public\.fn_tichet_clarificare_context\(bigint\)/],
+  // r3: obiectele noi (ancora)
+  ['un tabel tichete_clarificari_ancore existent', async (db) => {
+    await db.exec(`CREATE TABLE public.tichete_clarificari_ancore (x int);`)
+    return aplicaMig(db, MIG_B)
+  }, /reaplicare/],
+  ['un drept de citire pe tabelul ancorelor', (db) => aplicaMig(db, aplica(MIG_B, [['-- ── postcondiții ──', 'GRANT SELECT ON public.tichete_clarificari_ancore TO authenticated;\n-- ── postcondiții ──']])),
+    /drept SELECT pe tichete_clarificari_ancore pentru authenticated/],
+  ['o politică pe tabelul ancorelor', (db) => aplicaMig(db, aplica(MIG_B, [['-- ── postcondiții ──', 'CREATE POLICY ta_citire ON public.tichete_clarificari_ancore FOR SELECT TO authenticated USING (true);\n-- ── postcondiții ──']])),
+    /tabelul tichete_clarificari_ancore \(proprietar/],
+  ['trigger-ul ancorei cu WHEN', (db) => aplicaMig(db, aplica(MIG_B, [['FOR EACH ROW EXECUTE FUNCTION public.fn_tichet_clarificare_ancora();', "FOR EACH ROW WHEN (NEW.status <> 'inchis') EXECUTE FUNCTION public.fn_tichet_clarificare_ancora();"]])),
+    /trigger-ul ancorei pe tichete/],
+  ['trigger-ul ancorei doar la INSERT', (db) => aplicaMig(db, aplica(MIG_B, [['AFTER INSERT OR UPDATE ON public.tichete FOR EACH ROW EXECUTE FUNCTION public.fn_tichet_clarificare_ancora();', 'AFTER INSERT ON public.tichete FOR EACH ROW EXECUTE FUNCTION public.fn_tichet_clarificare_ancora();']])),
+    /trigger-ul ancorei pe tichete|L15 dupa/],
 ]) {
   const db = await bazaNoua()
   let m = null
@@ -669,6 +938,9 @@ const SCEN = {
   definerFaraPath: { inainte: ACTIUNE_FARA_PATH },
   intreVerificari: { mig: INTRE_VERIFICARI(ACTIUNE_SCHIMBATA) },
   apelStrain: { mig: MIG_APEL_STRAIN },
+  // r3: un trigger în plus pe tichete, apărut între „înainte” și blocare, cu o funcție DEJA din baseline (singura diferență = liniile
+  // triggerelor lui tichete, eticheta exceptată din comparația „după”)
+  triggerInPlus: { mig: INTRE_VERIFICARI('CREATE TRIGGER trg_dublura_test AFTER UPDATE ON public.tichete FOR EACH ROW EXECUTE FUNCTION public.fn_tichete_istoric_upd();') },
 }
 async function ruleazaScen(s, migMutanti = []) {
   const db = await bazaNoua()
@@ -689,6 +961,7 @@ for (const [nume, sc, re] of [
   ['DEFINER fără search_path pe lanț: REFUZ', SCEN.definerFaraPath, /SECURITY DEFINER din lantul scrierilor nu are search_path/],
   ['funcție din lanț schimbată după „înainte”, înainte de blocare', SCEN.intreVerificari, /starea tabelelor \/ triggerelor \(dupa\) difera/],
   ['o funcție nouă cheamă ceva din afara ei', SCEN.apelStrain, /functiile noi cheama in afara lor: auth\.uid\(\)/],
+  ['un trigger în plus pe tichete între „înainte” și blocare (funcție din baseline)', SCEN.triggerInPlus, /L15 dupa: triggerele lui tichete nu sunt cele de dinainte \+ trigger-ul ancorei \(noi: .*trg_dublura_test/],
 ]) {
   const m = await ruleazaScen(sc)
   ok(re.test(m || ''), `${nume}: ${(m || 'NU a refuzat').slice(0, 200)}`)
@@ -705,6 +978,7 @@ for (const [nume, sc, mut] of [
   ['L4 fără verificarea „după”', SCEN.intreVerificari, [["  PERFORM pg_temp.amp_verifica_20261223a('dupa');\n", '']]],
   ['L5 fără postcondiția apelurilor', SCEN.apelStrain, [['  IF v_alt IS NOT NULL\n', '  IF false AND v_alt IS NOT NULL\n']]],
   ['L6 DEFINER fără search_path doar semnalat', SCEN.definerFaraPath, [["              WHERE c.in_lant AND c.detaliu LIKE '%definer=true%'", "              WHERE false AND c.detaliu LIKE '%definer=true%'"]]],
+  ['L7 „după” fără verificarea liniilor triggerelor lui tichete', SCEN.triggerInPlus, [["      RAISE EXCEPTION '20261223a: L15 dupa: triggerele lui tichete nu sunt", "      RAISE NOTICE '20261223a: L15 dupa: triggerele lui tichete nu sunt"]]],
 ]) {
   const mOrig = await ruleazaScen(sc)
   const mMut = await ruleazaScen(sc, mut)
@@ -729,6 +1003,24 @@ console.log('3. revenirea')
   ok(ab.length === 0, `re-aplicarea după revenire + verificările (${ab.length} abateri)`)
   await db.close()
 }
+// r3: ancorele SINGURE (tichete create după aplicare, nicio clarificare) nu blochează revenirea; după ea tichetele se creează și se modifică
+// la fel ca înainte (trigger-ul a plecat), iar la re-aplicare tichetele de dinainte rămân fără ancoră
+{
+  const db = await bazaNoua()
+  await aplicaMig(db, MIG_B)
+  await tichetePostMig(db)
+  const nAnc = Number((await db.query('SELECT count(*) AS n FROM public.tichete_clarificari_ancore')).rows[0].n)
+  let m = null; try { await revino(db) } catch (e) { m = e.message }
+  const gol = (await db.query(`SELECT to_regclass('public.tichete_clarificari_ancore') IS NULL AND to_regclass('public.tichete_clarificari') IS NULL
+    AND NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_tichet_clarificare_ancora') AS g`)).rows[0].g
+  const ins = await ca(db, 'authenticated', U.AUTOR, `INSERT INTO public.tichete (departament, subcategorie, titlu, status, deschis_de, metadata)
+    VALUES ('it', 'eroare_erp', 'Dupa revenire', 'deschis', '${U.AUTOR}', ${META('bug_report')}) RETURNING id`, { pastreaza: true })
+  const upd = ins.code ? ins : await patch(db, U.OWNER, Number(ins.rows[0].id), `status = 'rezolvat'`)
+  ok(nAnc === 21 && m == null && gol && !ins.code && !upd.code, `revenirea cu ${nAnc} ancore (21 așteptate) și fără clarificări: ${m || 'trecută'}; tichetele merg după ea: ${ins.code || upd.code || 'da'}`)
+  await aplicaMig(db, MIG_B)
+  ok(Number((await db.query('SELECT count(*) AS n FROM public.tichete_clarificari_ancore')).rows[0].n) === 0, 're-aplicarea nu ancorează tichetele existente')
+  await db.close()
+}
 for (const [nume, pregatire, re] of [
   ['o funcție schimbată', (db) => db.exec(`CREATE OR REPLACE FUNCTION public.fn_tichet_clarificare_apelant_ok() RETURNS boolean LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$ SELECT true $f$;`),
     /starea nu e cea din 20261223a \(pasul 1, fn_tichet_clarificare_apelant_ok/],
@@ -738,8 +1030,16 @@ for (const [nume, pregatire, re] of [
   ['un trigger adăugat pe tabelul de evidență', (db) => db.exec(`CREATE FUNCTION public.fn_t_test() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$ BEGIN RETURN NEW; END $f$;
     CREATE TRIGGER trg_t_test BEFORE INSERT ON public.tichete_clarificari FOR EACH ROW EXECUTE FUNCTION public.fn_t_test();`), /tabelul tichete_clarificari/],
   // un comentariu automat rămas fără evidență blochează și el revenirea
-  ['un comentariu automat fără evidență', (db) => db.query(`INSERT INTO public.tichete_comentarii (tichet_id, autor, text) VALUES (${T.T9}, NULL, ${q('Clarificare 1/2\nx')})`),
+  ['un comentariu automat fără evidență', (db) => db.query(`INSERT INTO public.tichete_comentarii (tichet_id, autor, text) VALUES (${P.T9}, NULL, ${q('Clarificare 1/2\nx')})`),
     /exista comentarii automate de clarificare/],
+  // r3: trigger-ul ancorei schimbat (alt WHEN) / un trigger pus pe tabelul ancorelor => refuz
+  ['trigger-ul ancorei schimbat', (db) => db.exec(`DROP TRIGGER trg_tichet_clarificare_ancora ON public.tichete;
+    CREATE TRIGGER trg_tichet_clarificare_ancora AFTER INSERT OR UPDATE ON public.tichete FOR EACH ROW WHEN (false) EXECUTE FUNCTION public.fn_tichet_clarificare_ancora();`),
+    /trigger-ul trg_tichet_clarificare_ancora/],
+  ['un al doilea trigger pe funcția ancorei', (db) => db.exec(`CREATE TRIGGER trg_dublura_test AFTER DELETE ON public.tichete FOR EACH ROW EXECUTE FUNCTION public.fn_tichet_clarificare_ancora();`),
+    /alte obiecte depind de functia fn_tichet_clarificare_ancora|trigger-ul trg_tichet_clarificare_ancora/],
+  ['un trigger adăugat pe tabelul ancorelor', (db) => db.exec(`CREATE FUNCTION public.fn_t_test() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$ BEGIN RETURN NEW; END $f$;
+    CREATE TRIGGER trg_t_test BEFORE INSERT ON public.tichete_clarificari_ancore FOR EACH ROW EXECUTE FUNCTION public.fn_t_test();`), /tabelul tichete_clarificari_ancore/],
 ]) {
   const db = await bazaNoua()
   await aplicaMig(db, MIG_B)
@@ -753,8 +1053,10 @@ for (const [nume, pregatire, re] of [
 // ── 4. mutanții migrării: fiecare TREBUIE să pice (la aplicare sau la verificări) ──
 console.log('4. mutanții migrării')
 const CTX_TRIMITE = "  IF (s ->> 'versiune_context') IS DISTINCT FROM p_versiune_context THEN\n    RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'context_schimbat', 'tichet_id', p_tichet_id);\n  END IF;\n  v_motiv :="
-const CTX_INCHEIE = "  IF (s ->> 'versiune_context') IS DISTINCT FROM p_versiune_context THEN\n    RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'context_schimbat', 'tichet_id', p_tichet_id);\n  END IF;\n  SELECT coalesce(array_agg"
-const RASP = "WHERE c.tichet_id = t.id AND c.autor = t.deschis_de AND NOT (c.id = ANY (ru.instantaneu_autor));"
+const CTX_INCHEIE = "  IF (s ->> 'versiune_context') IS DISTINCT FROM p_versiune_context THEN\n    RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'context_schimbat', 'tichet_id', p_tichet_id);\n  END IF;\n  -- instantaneul din FOTOGRAFIA"
+const RASP = "WHERE c.tichet_id = t.id AND c.autor = v_autor AND NOT (c.id = ANY (ru.instantaneu_autor));"
+const INST_FOTO = "  v_inst := ARRAY(SELECT j.v::bigint FROM jsonb_array_elements_text(s -> 'instantaneu_autor') WITH ORDINALITY AS j(v, n) ORDER BY j.n);\n"
+const INST_SEPARAT = "  SELECT coalesce(array_agg(c.id ORDER BY c.id), '{}') INTO v_inst FROM public.tichete_comentarii c WHERE c.tichet_id = t.id AND c.autor = t.deschis_de;\n"
 const MUTANTI = [
   ['M1 fără deduplicare', [["  IF p_runda <= (s ->> 'runda')::integer THEN", '  IF false THEN']]],
   ['M2 limita de runde 3', [['IF p_runda IS NULL OR p_runda NOT IN (1, 2) THEN', 'IF p_runda IS NULL OR p_runda NOT IN (1, 2, 3) THEN']]],
@@ -762,7 +1064,7 @@ const MUTANTI = [
   ['M4 răspunsul oricui contează', [[RASP, 'WHERE c.tichet_id = t.id AND c.autor IS NOT NULL AND NOT (c.id = ANY (ru.instantaneu_autor));']]],
   ['M5 răspunsul după DATA comentariului (fără instantaneu)', [[RASP, 'WHERE c.tichet_id = t.id AND c.autor = t.deschis_de AND c.created_at > ru.creat_la;']]],
   ['M5b răspunsul după ORDINEA id-urilor', [[RASP, 'WHERE c.tichet_id = t.id AND c.autor = t.deschis_de AND c.id > ru.comentariu_id;']]],
-  ['M5c instantaneu gol la trimitere', [["VALUES (t.id, 'runda', p_runda, v_com, v_not, cardinality(p_intrebari), t.deschis_de, v_inst, p_versiune_context);", "VALUES (t.id, 'runda', p_runda, v_com, v_not, cardinality(p_intrebari), t.deschis_de, '{}', p_versiune_context);"]]],
+  ['M5c instantaneu gol la trimitere', [["VALUES (t.id, 'runda', p_runda, v_com, v_not, cardinality(p_intrebari), v_autor, v_inst, p_versiune_context);", "VALUES (t.id, 'runda', p_runda, v_com, v_not, cardinality(p_intrebari), v_autor, '{}', p_versiune_context);"]]],
   ['M6 fără verificarea URL (schemă / www)', [["                  WHERE q.t ~* '(https?|ftps?|file)[[:space:]]*:|www[[:space:]]*\\.'\n                     OR", "                  WHERE false\n                     OR"]]],
   ['M6b fără terminațiile de domeniu', [["                     OR q.t ~* '[[:alnum:]_-]\\.(ro|com|", "                     OR false AND q.t ~* '[[:alnum:]_-]\\.(ro|com|"]]],
   ['M6c fără regula „litere.litere/”', [["                     OR q.t ~ '[[:alpha:]]\\.[[:alpha:]]+/') THEN 'url'", "                     OR false) THEN 'url'"]]],
@@ -773,26 +1075,43 @@ const MUTANTI = [
   ['M9 4 întrebări permise', [['cardinality(p_intrebari) NOT BETWEEN 1 AND 3', 'cardinality(p_intrebari) NOT BETWEEN 1 AND 4']]],
   ['M10 fără verificarea comentariilor automate nelistate', [["  ELSIF EXISTS (SELECT 1 FROM public.tichete_comentarii c\n                 WHERE c.tichet_id = t.id AND c.autor IS NULL\n", "  ELSIF false AND EXISTS (SELECT 1 FROM public.tichete_comentarii c\n                 WHERE c.tichet_id = t.id AND c.autor IS NULL\n"]]],
   ['M10b fără verificarea comentariului automat șters', [["    v_inc := 'comentariu_automat_lipsa';", '    NULL;']]],
-  ['M10c fără verificarea autorului schimbat', [["    v_inc := 'autor_schimbat';", '    NULL;']]],
+  ['M10c fără plasa „autorul ancorat = autorul tichetului”', [['  IF NOT FOUND OR an.iesit_la IS NOT NULL OR an.autor IS DISTINCT FROM t.deschis_de THEN', '  IF NOT FOUND OR an.iesit_la IS NOT NULL THEN']]],
   ['M11 încheiere nededuplicată', [["  IF s ->> 'faza' IN ('incheiat', 'clarificat') THEN\n    SELECT x.* INTO e FROM public.tichete_clarificari x WHERE x.tichet_id = t.id AND x.fel IN ('incheiere', 'clarificat');", "  IF false THEN\n    SELECT x.* INTO e FROM public.tichete_clarificari x WHERE x.tichet_id = t.id AND x.fel IN ('incheiere', 'clarificat');"]]],
   ['M12 pragul de tăcere 0', [['c_prag_tacere constant integer := 3;', 'c_prag_tacere constant integer := 0;']]],
   ['M12b tăcerea de la data comentariului automat', [['    v_zile := public.fn_tichet_clarificare_zile_lucratoare(ru.creat_la, now());', '    v_zile := public.fn_tichet_clarificare_zile_lucratoare((SELECT c.created_at FROM public.tichete_comentarii c WHERE c.id = ru.comentariu_id), now());']]],
-  ['M13 status final eligibil', [["    WHEN (t.status IN ('deschis', 'atribuit', 'in_analiza', 'in_lucru')) IS NOT TRUE THEN 'status'\n", '']]],
+  ['M13 status final eligibil', [["    WHEN (p_status IN ('deschis', 'atribuit', 'in_analiza', 'in_lucru')) IS NOT TRUE THEN 'status'\n", '']]],
   ['M14 zilele în UTC', [["generate_series(((p_de AT TIME ZONE 'Europe/Bucharest')::date + 1)::timestamp, ((p_la AT TIME ZONE 'Europe/Bucharest')::date)::timestamp,", "generate_series(((p_de AT TIME ZONE 'UTC')::date + 1)::timestamp, ((p_la AT TIME ZONE 'UTC')::date)::timestamp,"]]],
   ['M15 notificarea cu întrebările', [["'Echipa ERP are nevoie de câteva detalii ca să poată continua. Răspunde direct pe tichet.'", "'Echipa ERP are nevoie de câteva detalii: ' || array_to_string(p_intrebari, ' ')"]]],
   ['M16 EXECUTE pentru anon', [['-- ── postcondiții ──', 'GRANT EXECUTE ON FUNCTION public.fn_tichet_clarificare_trimite(bigint, integer, text[], text) TO anon;\n-- ── postcondiții ──']]],
   ['M17 comentariul cu autor (contul owner-ului)', [["INSERT INTO public.tichete_comentarii (tichet_id, autor, text) VALUES (t.id, NULL, v_txt) RETURNING id INTO v_com;\n  -- notificarea", "INSERT INTO public.tichete_comentarii (tichet_id, autor, text) VALUES (t.id, (SELECT p.id FROM public.profiles p WHERE p.is_owner LIMIT 1), v_txt) RETURNING id INTO v_com;\n  -- notificarea"]]],
   ['M18 fără verificarea eligibilității la încheiere', [["  s := public.fn_tichet_clarificare_stare_tichet(p_tichet_id);\n  IF (s ->> 'eligibil')::boolean IS NOT TRUE THEN\n    RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'neeligibil', 'detaliu', s ->> 'motiv', 'tichet_id', p_tichet_id);\n  END IF;\n  IF s ->> 'actiune' = 'incoerent' THEN\n    RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'stare_incoerenta', 'detaliu', s ->> 'detaliu', 'tichet_id', p_tichet_id);\n  END IF;\n  -- deduplicarea, înaintea", "  s := public.fn_tichet_clarificare_stare_tichet(p_tichet_id);\n  -- deduplicarea, înaintea"]]],
   ['M19 fără versiunea contextului la trimitere', [[CTX_TRIMITE, '  v_motiv :=']]],
-  ['M19b fără versiunea contextului la încheiere', [[CTX_INCHEIE, '  SELECT coalesce(array_agg']]],
+  ['M19b fără versiunea contextului la încheiere', [[CTX_INCHEIE, '  -- instantaneul din FOTOGRAFIA']]],
   ['M19c contextul comparat ÎNAINTEA deduplicării', [[CTX_TRIMITE, '  v_motiv :='], ["  -- deduplicarea: runda cerută e deja trimisă", "  IF (s ->> 'versiune_context') IS DISTINCT FROM p_versiune_context THEN\n    RETURN jsonb_build_object('rezultat', 'refuz', 'motiv', 'context_schimbat', 'tichet_id', p_tichet_id);\n  END IF;\n  -- deduplicarea: runda cerută e deja trimisă"]]],
   ['M19d contextul fără comentarii', [["           'comentarii', coalesce((SELECT jsonb_agg(jsonb_build_array(c.id, c.autor, c.text) ORDER BY c.id)\n                                     FROM public.tichete_comentarii c WHERE c.tichet_id = x.id), '[]'::jsonb))::text)", "           'comentarii', '[]'::jsonb)::text)"]]],
   ['M20 drept de scriere în tabelul protejat (postcondiția scoasă)', [["      IF has_table_privilege(v_rol, 'public.tichete_clarificari'::regclass, v_drept) IS DISTINCT FROM", "      IF false AND has_table_privilege(v_rol, 'public.tichete_clarificari'::regclass, v_drept) IS DISTINCT FROM"],
     ['-- ── postcondiții ──', 'GRANT INSERT, UPDATE, DELETE ON public.tichete_clarificari TO authenticated;\nCREATE POLICY tc_scriere ON public.tichete_clarificari FOR ALL TO authenticated USING (true) WITH CHECK (true);\n-- ── postcondiții ──'],
     ["     OR (SELECT count(*) FROM pg_policy pol WHERE pol.polrelid = 'public.tichete_clarificari'::regclass) <> 1\n", '']]],
   ['M21 fără RLS pe tabelul protejat (postcondiția scoasă) + SELECT pentru anon', [['ALTER TABLE public.tichete_clarificari ENABLE ROW LEVEL SECURITY;\n', 'GRANT SELECT ON public.tichete_clarificari TO anon;\n'],
-    ["                   AND pg_get_userbyid(c.relowner) = 'postgres' AND c.relrowsecurity AND NOT c.relforcerowsecurity)", "                   AND pg_get_userbyid(c.relowner) = 'postgres')"],
+    ["  IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = 'public.tichete_clarificari'::regclass AND c.relkind = 'r'\n                   AND pg_get_userbyid(c.relowner) = 'postgres' AND c.relrowsecurity AND NOT c.relforcerowsecurity)",
+     "  IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = 'public.tichete_clarificari'::regclass AND c.relkind = 'r'\n                   AND pg_get_userbyid(c.relowner) = 'postgres')"],
     ["IS DISTINCT FROM (v_rol = 'authenticated' AND v_drept = 'SELECT') THEN", "IS DISTINCT FROM (v_rol IN ('authenticated', 'anon') AND v_drept = 'SELECT') THEN"]]],
+  // r3, P2: fotografia unică
+  ['M22 instantaneul rundei citit SEPARAT (r2: altă fotografie decât verificarea)', [[INST_FOTO + '  -- textul: DOAR', INST_SEPARAT + '  -- textul: DOAR']]],
+  ['M22b instantaneul încheierii citit SEPARAT', [[INST_FOTO + "  IF p_motiv = 'clarificat' THEN", INST_SEPARAT + "  IF p_motiv = 'clarificat' THEN"]]],
+  // r3, P1: ancora (trigger-ul) și starea
+  ['M23 ancora fără verificarea creatorului (auth.uid() = deschis_de)', [['    IF v_uid IS NOT NULL AND NEW.deschis_de IS NOT DISTINCT FROM v_uid\n', '    IF true\n']]],
+  ['M24 ancora fără eligibilitatea la creare', [['       AND public.fn_tichet_clarificare_eligibil_motiv(NEW.departament, NEW.subcategorie, NEW.metadata, NEW.status) IS NULL THEN\n      INSERT', '       AND true THEN\n      INSERT']]],
+  ['M25 fără ieșire la autorul schimbat', [['AND (a.autor IS DISTINCT FROM NEW.deschis_de OR v_motiv IS NOT NULL);', 'AND (v_motiv IS NOT NULL);']]],
+  ['M26 fără ieșire la status / sursă / subcategorie', [['  v_motiv := public.fn_tichet_clarificare_eligibil_motiv(NEW.departament, NEW.subcategorie, NEW.metadata, NEW.status);\n  UPDATE', '  v_motiv := NULL;\n  UPDATE']]],
+  ['M27 fără ieșire la id refolosit', [["    UPDATE public.tichete_clarificari_ancore a SET iesit_la = now(), iesit_motiv = 'id_refolosit'\n     WHERE a.tichet_id = NEW.id AND a.iesit_la IS NULL;\n", '']]],
+  ['M28 fără ieșire la id mutat', [['     WHERE a.tichet_id IN (OLD.id, NEW.id) AND a.iesit_la IS NULL;', '     WHERE false;']]],
+  ['M29 starea fără ancoră', [['  IF NOT FOUND OR an.iesit_la IS NOT NULL OR an.autor IS DISTINCT FROM t.deschis_de THEN\n    v_inc := CASE', '  IF false THEN\n    v_inc := CASE']]],
+  ['M30 contextul fără autor', [["'autor', x.deschis_de, ", '']]],
+  ['M31 contextul fără status', [[" END, 'status', x.status,", ' END,']]],
+  ['M32 starea ignoră ieșirea din protocol', [['  IF NOT FOUND OR an.iesit_la IS NOT NULL OR an.autor IS DISTINCT FROM t.deschis_de THEN', '  IF NOT FOUND OR an.autor IS DISTINCT FROM t.deschis_de THEN']]],
+  ['M33 deja_trimis raportat ca trimis', [["'rezultat', 'deja_trimis', 'tichet_id', p_tichet_id, 'runda', p_runda, 'intrebari_trimise', false,", "'rezultat', 'deja_trimis', 'tichet_id', p_tichet_id, 'runda', p_runda, 'intrebari_trimise', true,"]]],
+  ['M34 deja_incheiat fără motivul cerut', [["'acelasi_motiv', v_salvat IS NOT DISTINCT FROM p_motiv,", "'acelasi_motiv', true,"]]],
 ]
 for (const [nume, inl] of MUTANTI) {
   const text = aplica(MIG_B, inl)   // în afara try: un mutant care nu-și găsește textul = eroare a probei, nu „pică”
@@ -809,7 +1128,11 @@ for (const [nume, inl] of MUTANTI) {
 console.log('   mutanții revenirii')
 for (const [nume, inl, pregatire, re] of [
   ['R1 fără verificarea „nefolosit” (tabelul cu rânduri)', [["  IF EXISTS (SELECT 1 FROM public.tichete_clarificari) THEN\n    RAISE EXCEPTION '20261223a revenire: exista clarificari trimise", "  IF false THEN\n    RAISE EXCEPTION '20261223a revenire: exista clarificari trimise"]],
-    async (db) => { await incheie(db, T.T8, 'clarificat') }, /exista clarificari trimise/],
+    async (db) => { await tichetePostMig(db); await incheie(db, T.T8, 'clarificat') }, /exista clarificari trimise/],
+  ['R4 fără verificarea trigger-ului ancorei', [["    IF (SELECT count(*) FROM pg_trigger tg WHERE tg.tgfoid = to_regprocedure('public.fn_tichet_clarificare_ancora()')) <> 1\n       OR NOT EXISTS", "    IF false AND NOT EXISTS"]],
+    async (db) => { await db.exec(`DROP TRIGGER trg_tichet_clarificare_ancora ON public.tichete;
+      CREATE TRIGGER trg_tichet_clarificare_ancora AFTER INSERT OR UPDATE ON public.tichete FOR EACH ROW WHEN (false) EXECUTE FUNCTION public.fn_tichet_clarificare_ancora();`) },
+    /trigger-ul trg_tichet_clarificare_ancora/],
   ['R2 fără detaliul funcțiilor', [['      IF v_det IS DISTINCT FROM r.det\n', '      IF false\n']],
     async (db) => { await db.exec(`CREATE OR REPLACE FUNCTION public.fn_tichet_clarificare_apelant_ok() RETURNS boolean LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$ SELECT true $f$;`) }, /starea nu e cea din 20261223a/],
   ['R3 fără verificarea triggerelor tabelului', [["       OR EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = to_regclass('public.tichete_clarificari') AND NOT tg.tgisinternal) THEN", '       OR false THEN']],

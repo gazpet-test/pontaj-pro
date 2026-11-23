@@ -4,7 +4,7 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
-import { AUTOR_AUTOMAT, ETICHETA_AUTOMAT, idsComentariiAutomate, autorComentariu, asteaptaRaspunsulTau, incarcaEvidenta, idsTichetePentruEvidenta } from './ticheteClarificari.js'
+import { AUTOR_AUTOMAT, ETICHETA_AUTOMAT, idsComentariiAutomate, autorComentariu, asteaptaRaspunsulTau, incarcaEvidenta, idsTichetePentruEvidenta, creeazaGeneratie } from './ticheteClarificari.js'
 
 const G = { bg:'#0D1117',surface:'#161B22',border:'#21262D',border2:'#30363D',text:'#E6EDF3',muted:'#8B949E',dim:'#6E7681',blue:'#58A6FF',green:'#3FB950',red:'#F85149',yellow:'#D29922',purple:'#BC8CFF',orange:'#F0883E',pink:'#F778BA',greenDim:'#1A3A1A',redDim:'#3A1A1A',yellowDim:'#3A2A0A',purpleDim:'#2A1F3A',blueDim:'#1A2A3A' }
 
@@ -135,6 +135,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
   const [tichete,setTichete]=useState([])
   const [asignatiMap,setAsignatiMap]=useState({}) // { tichet_id: [profile_id,...] } — echipă ad-hoc
   const [evidentaClar,setEvidentaClar]=useState([]) // clarificări automate: rândurile din tichete_clarificari (gol fără migrare)
+  const genEvidentaClar = useRef(creeazaGeneratie()) // L24: doar ultima încărcare a listei scrie evidența
   const [summary,setSummary]=useState({})
   const [subcategorii,setSubcategorii]=useState([])
   const [profiles,setProfiles]=useState([])
@@ -156,6 +157,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
 
   const loadAll = useCallback(async()=>{
     setLoading(true)
+    const jetonClar = genEvidentaClar.current.incepe('lista')
     try {
       const [tk, sm, sc, pf, ac, em, sp] = await Promise.all([
         supabase.from('tichete').select('*').order('created_at',{ascending:false}).limit(500),
@@ -182,7 +184,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
       // altă eroare = doar fără semnul „așteaptă răspunsul tău” (lista tichetelor rămâne)
       const ev = await incarcaEvidenta(supabase, idsTichetePentruEvidenta(tk.data))
       if (ev.eroare) console.warn('Clarificări: evidența nu s-a putut citi', ev.eroare)
-      setEvidentaClar(ev.randuri)
+      if (genEvidentaClar.current.eCurent(jetonClar)) setEvidentaClar(ev.randuri)
       const sMap = {}; (sm.data || []).forEach(s=>{ sMap[s.departament] = s })
       setSummary(sMap)
       setSubcategorii(sc.data || [])
@@ -1238,8 +1240,12 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
   const [evidentaT, setEvidentaT] = useState([])
   const [evidentaEroare, setEvidentaEroare] = useState(false)
   const idsAutomate = useMemo(()=>idsComentariiAutomate(evidentaT, t.id), [evidentaT, t.id])
+  // L24: evidența se aplică doar din ultima încărcare pentru tichetul curent; la schimbarea tichetului se golește și se invalidează
+  const genEvidentaT = useRef(creeazaGeneratie())
+  useEffect(()=>{ genEvidentaT.current.incepe(t.id); setEvidentaT([]); setEvidentaEroare(false) }, [t.id])
 
   const reload = useCallback(async()=>{
+    const jetonEv = genEvidentaT.current.incepe(t.id)
     const [tkRes, comRes, istRes, asgRes, evRes] = await Promise.all([
       supabase.from('tichete').select('*').eq('id', t.id).maybeSingle(),
       supabase.from('tichete_comentarii').select('*').eq('tichet_id', t.id).order('created_at'),
@@ -1249,8 +1255,7 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
       incarcaEvidenta(supabase, idsTichetePentruEvidenta([t]))
     ])
     if(tkRes.data) setT(tkRes.data)
-    setEvidentaT(evRes.randuri)
-    setEvidentaEroare(!!evRes.eroare)
+    if (genEvidentaT.current.eCurent(jetonEv)) { setEvidentaT(evRes.randuri); setEvidentaEroare(!!evRes.eroare) }
     setComentarii(comRes.data || [])
     setIstoric(istRes.data || [])
     setEchipaIds((asgRes.data || []).map(a => a.profile_id))

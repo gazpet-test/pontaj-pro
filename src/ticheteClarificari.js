@@ -79,6 +79,18 @@ export function fazaClarificari(randuri, tichetId) {
   return null
 }
 
+// L24: generația încărcărilor async ale evidenței. incepe(cheie) dă un jeton (numărul încărcării + entitatea: 'lista' sau id-ul
+// tichetului); eCurent(jeton) = e ultima încărcare pornită ȘI pentru aceeași entitate. O încărcare mai veche care se termină după una nouă
+// (sau după schimbarea tichetului) nu mai scrie starea; incepe(...) la schimbarea entității le invalidează pe cele în curs.
+export function creeazaGeneratie() {
+  let numar = 0
+  let cheie = null
+  return {
+    incepe(k) { numar += 1; cheie = k; return { numar, cheie: k } },
+    eCurent(jeton) { return !!jeton && jeton.numar === numar && jeton.cheie === cheie },
+  }
+}
+
 // semnul „așteaptă răspunsul tău”: doar autorului tichetului, cât timp evidența spune că se așteaptă răspunsul lui și tichetul e deschis
 export function asteaptaRaspunsulTau(tichet, profileId, randuri) {
   if (!profileId || !tichet || tichet.deschis_de !== profileId) return false

@@ -35,8 +35,10 @@ const corp = (fn) => {
 }
 const FUNCTII = ['fn_tichet_clarificare_zile_lucratoare', 'fn_tichet_clarificare_intrebari_motiv', 'fn_tichet_clarificare_apelant_ok',
   'fn_tichet_clarificare_context', 'fn_tichet_clarificare_stare_tichet', 'fn_tichet_clarificare_trimite', 'fn_tichet_clarificare_incheie',
-  'fn_tichet_clarificare_stare']
-const DEFINER = ['fn_tichet_clarificare_trimite', 'fn_tichet_clarificare_incheie', 'fn_tichet_clarificare_stare']
+  'fn_tichet_clarificare_stare', 'fn_tichet_clarificare_eligibil_motiv', 'fn_tichet_clarificare_ancora']
+// funcțiile chemate de rutină (DEFINER, cu verificarea apelantului) + funcția trigger-ului ancorei (DEFINER, rulează în sesiunea creatorului)
+const RUTINA = ['fn_tichet_clarificare_trimite', 'fn_tichet_clarificare_incheie', 'fn_tichet_clarificare_stare']
+const DEFINER = [...RUTINA, 'fn_tichet_clarificare_ancora']
 const faraComentarii = (t) => t.replace(/--[^\n]*/g, '')
 
 describe('20261223a — AMPRENTA_L15: o singură definiție', () => {
@@ -86,13 +88,23 @@ describe('20261223a — AMPRENTA_L15: o singură definiție', () => {
     expect(MIG).toContain(`PERFORM pg_temp.amp_verifica_${X}('dupa');`)
     expect(MIG).toContain("b.amprenta !~ '^[0-9a-f]{32}$'")
   })
-  it('pe lanț: EXECUTE dinamic / limbaj neanalizabil / DEFINER fără search_path = REFUZ; funcțiile noi cheamă doar una pe alta (8)', () => {
+  it('pe lanț: EXECUTE dinamic / limbaj neanalizabil / DEFINER fără search_path = REFUZ; funcțiile noi cheamă doar una pe alta (10; excepția auth.uid() doar în trigger)', () => {
     expect(MIG).toContain("RAISE EXCEPTION '20261223a: lantul scrierilor are EXECUTE dinamic / limbaj neanalizabil (amprenta statica imposibila): %', v_exec;")
     expect(MIG).toContain("RAISE EXCEPTION '20261223a: o functie SECURITY DEFINER din lantul scrierilor nu are search_path propriu';")
     expect(MIG).toContain("RAISE EXCEPTION '20261223a post: functiile noi cheama in afara lor: %'")
-    expect(MIG).toContain("AND p.proname LIKE 'fn\\_tichet\\_clarificare\\_%') <> 8 THEN")
+    expect(MIG).toContain("AND p.proname LIKE 'fn\\_tichet\\_clarificare\\_%') <> 10 THEN")
+    expect(MIG).toContain("AND NOT (p.proname = 'fn_tichet_clarificare_ancora' AND p2.oid = 'auth.uid()'::regprocedure);")
     expect(SCRIPT).toContain("'EXECUTE pe lant (migrarea refuza)'")
     for (const f of FUNCTII) expect(corp(f), f).not.toMatch(/\bexecute\b/i)
+  })
+  it('„după” (r3): exact baseline-ul, cu diferențele DECLARATE (liniile triggerelor lui tichete + exact linia trigger-ului ancorei, cele două funcții noi din lanț)', () => {
+    expect(MIG).toContain("CREATE TEMP TABLE amp_inainte_20261223a ON COMMIT DROP AS SELECT * FROM amp_rez_20261223a;")
+    expect(MIG).toContain("AND NOT coalesce(p_moment = 'dupa' AND c.eticheta = 'tabel tichete | triggere' AND b.eticheta = 'tabel tichete | triggere', false)")
+    expect(MIG).toContain("c.eticheta IN ('functie fn_tichet_clarificare_ancora()', 'functie fn_tichet_clarificare_eligibil_motiv(text,text,jsonb,text)'), false);")
+    expect(MIG).toContain('OR NOT (v_inainte <@ v_dupa) OR cardinality(v_dupa) <> cardinality(v_inainte) + 1')
+    expect(MIG).toContain("RAISE EXCEPTION '20261223a: L15 dupa: triggerele lui tichete nu sunt cele de dinainte + trigger-ul ancorei (noi: %)'")
+    // în „înainte” nimic nu e exceptat (comparația cu baseline-ul e întreagă)
+    expect(nr(MIG, "p_moment = 'dupa'")).toBe(3)
   })
 })
 
@@ -101,17 +113,27 @@ describe('20261223a — migrarea: garda, plafonul, obiectele noi, drepturile, ap
     expect(MIG.startsWith('-- Version 20261223120000. NEAPLICAT.')).toBe(true)
     expect(nr(MIG, `'${X}_tichete_clarificari:' || txid_current()`)).toBe(2)
     expect(MIG).toContain("IS DISTINCT FROM '2000/session'")
-    expect(MIG).toContain('LOCK TABLE public.notifications, public.tichete, public.tichete_comentarii IN SHARE UPDATE EXCLUSIVE MODE NOWAIT;')
+    // ordinea fixă (L06); tichete direct la nivelul cerut de CREATE TRIGGER (fără urcare de nivel)
+    const iN = MIG.indexOf('LOCK TABLE public.notifications IN SHARE UPDATE EXCLUSIVE MODE NOWAIT;')
+    const iT = MIG.indexOf('LOCK TABLE public.tichete IN SHARE ROW EXCLUSIVE MODE NOWAIT;')
+    const iC = MIG.indexOf('LOCK TABLE public.tichete_comentarii IN SHARE UPDATE EXCLUSIVE MODE NOWAIT;')
+    expect(iN).toBeGreaterThan(0)
+    expect(iT).toBeGreaterThan(iN)
+    expect(iC).toBeGreaterThan(iT)
+    expect(faraComentarii(MIG).match(/LOCK TABLE/g).length).toBe(3)
+    expect(MIG.indexOf('CREATE TRIGGER trg_tichet_clarificare_ancora')).toBeGreaterThan(iC)
     expect(MIG).not.toMatch(/^\s*(BEGIN|COMMIT)\s*;/m)
   })
-  it('obiectele noi: UN tabel (tichete_clarificari), un index unic, RLS, O politică SELECT; nimic pe tabelele existente', () => {
+  it('obiectele noi: DOUĂ tabele (evidența, ancorele), un index unic, RLS pe ambele, O politică SELECT (doar pe evidență), UN trigger (ancora, pe tichete)', () => {
     const cod = faraComentarii(MIG)
-    expect(cod.match(/CREATE TABLE [^\s(]+/g)).toEqual(['CREATE TABLE public.tichete_clarificari'])
+    expect(cod.match(/CREATE TABLE [^\s(]+/g)).toEqual(['CREATE TABLE public.tichete_clarificari', 'CREATE TABLE public.tichete_clarificari_ancore'])
     expect(cod.match(/CREATE UNIQUE INDEX \S+ ON \S+/g)).toEqual(['CREATE UNIQUE INDEX tichete_clarificari_o_incheiere ON public.tichete_clarificari'])
-    expect(cod.match(/ALTER TABLE [^\n;]+/g)).toEqual(['ALTER TABLE public.tichete_clarificari ENABLE ROW LEVEL SECURITY'])
+    expect(cod.match(/ALTER TABLE [^\n;]+/g)).toEqual(['ALTER TABLE public.tichete_clarificari ENABLE ROW LEVEL SECURITY', 'ALTER TABLE public.tichete_clarificari_ancore ENABLE ROW LEVEL SECURITY'])
     expect(cod.match(/CREATE POLICY [^\n;]+/g)).toEqual(['CREATE POLICY tichete_clarificari_select ON public.tichete_clarificari FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL)'])
-    // fără triggere / vederi / înlocuiri și fără cheie străină (migrarea nu ia lock de scriere pe tichete)
-    expect(cod).not.toMatch(/CREATE (TRIGGER|VIEW|OR REPLACE)|FORCE ROW LEVEL|\bREFERENCES\s+\w+\.\w+\s*\(/)
+    expect(cod.match(/^CREATE TRIGGER [^\n;]+/gm)).toEqual(['CREATE TRIGGER trg_tichet_clarificare_ancora AFTER INSERT OR UPDATE ON public.tichete FOR EACH ROW EXECUTE FUNCTION public.fn_tichet_clarificare_ancora()'])
+    expect(MIG).toContain('REVOKE ALL ON TABLE public.tichete_clarificari_ancore FROM PUBLIC, anon, authenticated, service_role;')
+    // fără vederi / înlocuiri, fără FORCE și fără cheie străină
+    expect(cod).not.toMatch(/CREATE (VIEW|OR REPLACE)|FORCE ROW LEVEL|\bREFERENCES\s+\w+\.\w+\s*\(/)
     // cheia de deduplicare (L16) și o singură încheiere pe tichet
     expect(MIG).toContain('CONSTRAINT tichete_clarificari_cheie PRIMARY KEY (tichet_id, fel, runda),')
     expect(MIG).toContain("CREATE UNIQUE INDEX tichete_clarificari_o_incheiere ON public.tichete_clarificari (tichet_id) WHERE fel IN ('incheiere', 'clarificat');")
@@ -127,23 +149,26 @@ describe('20261223a — migrarea: garda, plafonul, obiectele noi, drepturile, ap
     expect(MIG).toContain("FOREACH v_drept IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'] LOOP")
     expect(MIG).toContain("a.privilege_type, ', ')\n                             FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a) = 'postgres:EXECUTE') THEN")
   })
-  it('exact 3 funcții SECURITY DEFINER (cele apelate de rutină); restul INVOKER', () => {
+  it('exact 4 funcții SECURITY DEFINER (cele 3 apelate de rutină + trigger-ul ancorei); restul INVOKER', () => {
     for (const f of FUNCTII) {
       const i = MIG.indexOf(`CREATE FUNCTION public.${f}(`)
       const antet = MIG.slice(i, MIG.indexOf('AS $f$', i))
       expect(antet.includes('SECURITY DEFINER'), f).toBe(DEFINER.includes(f))
       expect(antet, f).toContain('SET search_path = public, pg_temp')
     }
-    expect(MIG).toContain('8 funcții, dintre care 3 SECURITY DEFINER')
+    expect(MIG).toContain('10 funcții, dintre care 4 SECURITY DEFINER')
   })
-  it('verificarea apelantului ÎN COD, la începutul fiecărei funcții DEFINER; identitatea nu vine din parametri / auth.uid(); limita scrisă în antet', () => {
+  it('verificarea apelantului ÎN COD, la începutul fiecărei funcții a rutinei; identitatea nu vine din parametri; auth.uid() DOAR în trigger-ul ancorei; limita scrisă în antet', () => {
     expect(corp('fn_tichet_clarificare_apelant_ok').trim()).toBe("SELECT session_user = 'postgres' AND current_setting('role') = 'none'")
-    for (const f of DEFINER) {
+    for (const f of RUTINA) {
       const c = corp(f)
       const i = c.indexOf('BEGIN\n')
       expect(c.slice(i, i + 80), f).toContain('IF public.fn_tichet_clarificare_apelant_ok() IS NOT TRUE THEN')
     }
-    for (const f of FUNCTII) expect(corp(f), f).not.toMatch(/auth\.uid\(\)|request\.jwt|set_config/)
+    for (const f of FUNCTII.filter(x => x !== 'fn_tichet_clarificare_ancora')) expect(corp(f), f).not.toMatch(/auth\.uid\(\)|request\.jwt|set_config/)
+    const anc = faraComentarii(corp('fn_tichet_clarificare_ancora'))
+    expect(nr(anc, 'auth.uid()')).toBe(1)
+    expect(anc).not.toMatch(/request\.jwt|set_config|current_user|session_user/)
     expect(MIG).toContain('LIMITA EXACTĂ: verificarea')
     expect(MIG).toMatch(/identifică SESIUNILE postgres de pe server \(conectorul rutinei, psql-ul coordonatorului, joburile pg_cron/)
     expect(MIG).toContain('NU rutina anume')
@@ -172,17 +197,50 @@ describe('20261223a — migrarea: garda, plafonul, obiectele noi, drepturile, ap
     for (const f of FUNCTII) expect(faraComentarii(corp(f)), f).not.toMatch(/UPDATE\s+public\.tichete\b|clarificari_erp/)
     expect(MIG).not.toContain('clarificari_erp')
     const s = corp('fn_tichet_clarificare_stare_tichet')
-    expect(s).toContain('WHERE c.tichet_id = t.id AND c.autor = t.deschis_de AND NOT (c.id = ANY (ru.instantaneu_autor));')
+    expect(s).toContain('WHERE c.tichet_id = t.id AND c.autor = v_autor AND NOT (c.id = ANY (ru.instantaneu_autor));')
     expect(s).toContain('AND NOT (c.id = ANY (rf.instantaneu_autor))')
     expect(faraComentarii(s)).not.toMatch(/c\.created_at\s*[<>]|c\.id\s*[<>]/)
     expect(s).toContain('v_zile := public.fn_tichet_clarificare_zile_lucratoare(ru.creat_la, now());')
+    // r3: instantaneul se citește O DATĂ, în starea (STABLE: aceeași fotografie cu verificarea și contextul), și se întoarce în jsonb;
+    // trimite / incheie îl iau de acolo, fără o citire nouă a comentariilor
+    expect(s).toContain("SELECT coalesce(array_agg(c.id ORDER BY c.id), '{}') INTO v_inst FROM public.tichete_comentarii c WHERE c.tichet_id = t.id AND c.autor = v_autor;")
+    expect(s).toContain("'instantaneu_autor', to_jsonb(v_inst)")
+    expect(MIG).toMatch(/CREATE FUNCTION public\.fn_tichet_clarificare_stare_tichet\(p_tichet_id bigint\) RETURNS jsonb\r?\nLANGUAGE plpgsql STABLE /)
     for (const f of ['fn_tichet_clarificare_trimite', 'fn_tichet_clarificare_incheie']) {
-      expect(corp(f), f).toContain("SELECT coalesce(array_agg(c.id ORDER BY c.id), '{}') INTO v_inst FROM public.tichete_comentarii c WHERE c.tichet_id = t.id AND c.autor = t.deschis_de;")
+      const c = faraComentarii(corp(f))
+      expect(c, f).toContain("v_inst := ARRAY(SELECT j.v::bigint FROM jsonb_array_elements_text(s -> 'instantaneu_autor') WITH ORDINALITY AS j(v, n) ORDER BY j.n);")
+      expect(c, f).not.toMatch(/FROM public\.tichete_comentarii/)
+      expect(nr(c, 'public.fn_tichet_clarificare_stare_tichet(')).toBe(1)
     }
-    // contextul: titlu, descriere și TOATE comentariile (id, autor, text) ordonate după id
+    // contextul: titlu, descriere, autor, câmpurile eligibilității și TOATE comentariile (id, autor, text) ordonate după id
     const ctx = corp('fn_tichet_clarificare_context')
-    expect(ctx).toContain("'titlu', x.titlu, 'descriere', x.descriere,")
+    expect(ctx).toContain("'titlu', x.titlu, 'descriere', x.descriere, 'autor', x.deschis_de, 'departament', x.departament, 'subcategorie', x.subcategorie,")
+    expect(ctx).toContain("'status', x.status,")
     expect(ctx).toContain('jsonb_agg(jsonb_build_array(c.id, c.autor, c.text) ORDER BY c.id)')
+  })
+  it('r3 — proveniența: ancora la creare (autorul = auth.uid() = deschis_de, eligibil atunci), ieșirea definitivă la UPDATE, lista albă într-un singur loc', () => {
+    const a = faraComentarii(corp('fn_tichet_clarificare_ancora'))
+    expect(a).toContain('IF v_uid IS NOT NULL AND NEW.deschis_de IS NOT DISTINCT FROM v_uid')
+    expect(a).toContain('AND public.fn_tichet_clarificare_eligibil_motiv(NEW.departament, NEW.subcategorie, NEW.metadata, NEW.status) IS NULL THEN')
+    expect(a).toContain("iesit_motiv = 'id_refolosit'")
+    expect(a).toContain("iesit_motiv = 'id_schimbat'")
+    expect(a).toContain("CASE WHEN a.autor IS DISTINCT FROM NEW.deschis_de THEN 'autor_schimbat' ELSE v_motiv END")
+    // ieșirea doar se SETEAZĂ (iesit_la IS NULL în condiție); nimic nu o anulează
+    expect(nr(a, 'a.iesit_la IS NULL')).toBe(3)
+    expect(a).not.toMatch(/iesit_la\s*=\s*NULL|DELETE FROM/)
+    expect(a).toMatch(/RETURN NULL;\s*END\s*$/)
+    // lista albă a eligibilității: O SINGURĂ definiție (L19), folosită de trigger și de stare
+    expect(nr(MIG, "IN ('bug_report', 'feature_request')")).toBe(1)
+    expect(nr(MIG, "IN ('deschis', 'atribuit', 'in_analiza', 'in_lucru')")).toBe(1)
+    expect(corp('fn_tichet_clarificare_stare_tichet')).toContain('v_motiv := public.fn_tichet_clarificare_eligibil_motiv(t.departament, t.subcategorie, t.metadata, t.status);')
+    // starea: fără ancoră / ancora ieșită / alt autor = în afara protocolului (sau incoerent cu evidență)
+    expect(corp('fn_tichet_clarificare_stare_tichet')).toContain('IF NOT FOUND OR an.iesit_la IS NOT NULL OR an.autor IS DISTINCT FROM t.deschis_de THEN')
+    // notificarea și evidența merg la autorul ANCORAT (din fotografia stării)
+    for (const f of ['fn_tichet_clarificare_trimite', 'fn_tichet_clarificare_incheie']) {
+      const c = faraComentarii(corp(f))
+      expect(c, f).toContain("v_autor := (s ->> 'autor')::uuid;")
+      expect(c, f).not.toMatch(/VALUES \(t\.deschis_de/)
+    }
   })
   it('filtrul întrebărilor: „@”, domenii fără schemă, regula „litere.litere/”, cifre cu paranteze / plus și cifre late', () => {
     const q = corp('fn_tichet_clarificare_intrebari_motiv')
@@ -233,7 +291,8 @@ describe('20261223a — revenirea', () => {
     for (const [et, fn, definer, volatil] of [['zile', 'fn_tichet_clarificare_zile_lucratoare', false, 's'], ['intrebari', 'fn_tichet_clarificare_intrebari_motiv', false, 'i'],
       ['apelant', 'fn_tichet_clarificare_apelant_ok', false, 's'], ['context', 'fn_tichet_clarificare_context', false, 's'],
       ['stare_tichet', 'fn_tichet_clarificare_stare_tichet', false, 's'], ['trimite', 'fn_tichet_clarificare_trimite', true, 'v'],
-      ['incheie', 'fn_tichet_clarificare_incheie', true, 'v'], ['stare', 'fn_tichet_clarificare_stare', true, 's']]) {
+      ['incheie', 'fn_tichet_clarificare_incheie', true, 'v'], ['stare', 'fn_tichet_clarificare_stare', true, 's'],
+      ['eligibil', 'fn_tichet_clarificare_eligibil_motiv', false, 'i'], ['ancora', 'fn_tichet_clarificare_ancora', true, 'v']]) {
       const m = REV.match(new RegExp(`-- DETALIU-START ${et}\\n\\s*'([^\\n]*)'\\n\\s*-- DETALIU-END ${et}`))
       expect(m, et).toBeTruthy()
       const det = m[1]
@@ -242,12 +301,24 @@ describe('20261223a — revenirea', () => {
     }
   })
   it('refuză după folosire (rânduri în evidență / comentarii automate), sub lock luat ÎNAINTE; gardă + plafon; scoate funcțiile și tabelul, fără ștergeri de date', () => {
+    // lock-urile în ordinea căilor de scriere (L06): tichete -> comentarii -> evidență -> ancore
+    const iT = REV.indexOf('LOCK TABLE public.tichete IN ACCESS EXCLUSIVE MODE NOWAIT;')
+    const iCom = REV.indexOf('LOCK TABLE public.tichete_comentarii IN SHARE MODE NOWAIT;')
     const iLock = REV.indexOf('LOCK TABLE public.tichete_clarificari IN ACCESS EXCLUSIVE MODE NOWAIT;')
+    const iAnc = REV.indexOf('LOCK TABLE public.tichete_clarificari_ancore IN ACCESS EXCLUSIVE MODE NOWAIT;')
     const iDate = REV.indexOf('IF EXISTS (SELECT 1 FROM public.tichete_clarificari) THEN')
-    expect(iLock).toBeGreaterThan(0)
-    expect(REV.indexOf('LOCK TABLE public.tichete_comentarii IN SHARE MODE NOWAIT;')).toBeGreaterThan(iLock)
-    expect(iDate).toBeGreaterThan(iLock)
+    expect(iT).toBeGreaterThan(0)
+    expect(iCom).toBeGreaterThan(iT)
+    expect(iLock).toBeGreaterThan(iCom)
+    expect(iAnc).toBeGreaterThan(iLock)
+    expect(iDate).toBeGreaterThan(iAnc)
+    expect(REV.indexOf('DROP TRIGGER trg_tichet_clarificare_ancora ON public.tichete;')).toBeGreaterThan(iDate)
     expect(REV.indexOf('DROP TABLE public.tichete_clarificari;')).toBeGreaterThan(iDate)
+    expect(REV.indexOf('DROP TABLE public.tichete_clarificari_ancore;')).toBeGreaterThan(iDate)
+    // trigger-ul verificat EXACT înainte de DROP; ancorele singure NU blochează (nicio verificare de rânduri pe ele)
+    expect(REV).toContain("AND tg.tgname = 'trg_tichet_clarificare_ancora' AND tg.tgtype = 21 AND tg.tgenabled = 'O' AND NOT tg.tgisinternal")
+    expect(REV).toContain('AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND cardinality(tg.tgattr::int2[]) = 0 AND tg.tgconstraint = 0) THEN')
+    expect(faraComentarii(REV)).not.toMatch(/FROM public\.tichete_clarificari_ancore/)
     expect(REV).toContain(`'${X}_tichete_clarificari_ROLLBACK:' || txid_current()`)
     expect(REV).toContain("IS DISTINCT FROM '2000/session'")
     for (const f of FUNCTII) expect(REV).toMatch(new RegExp(`DROP FUNCTION public\\.${f}\\(`))
@@ -273,5 +344,14 @@ describe('docs/TICHETE_CLARIFICARI.md — textul pentru promptul rutinei', () =>
     expect(t).toContain('length(text)')
     expect(t).toMatch(/nu trimiți nimic/)
     expect(t).toMatch(/incert[^\n]*owner/i)
+  })
+  it('r3 — refuzul (inclusiv al filtrului) = recap, FĂRĂ reformulare / reîncercare în aceeași rulare; deja_trimis / deja_incheiat nu sunt raportate drept executate', () => {
+    const p14 = bloc.find(l => l.startsWith('14. '))
+    expect(p14).toMatch(/refuz \+ motiv \(inclusiv intrebari_invalide\) = nu reformulezi și nu reîncerci în rularea asta, treci motivul în recap/)
+    expect(p14).toMatch(/deja_trimis \(intrebari_trimise = false\)/)
+    expect(p14).toMatch(/acelasi_motiv/)
+    // nicăieri în document sau migrare promisiunea „rutina reformulează” (r2)
+    expect(DOC + MIG).not.toMatch(/rutina reformuleaz|deci rutina reformul/i)
+    expect(bloc.find(l => l.startsWith('10. '))).toContain('„Ce dată și ce oră?”')
   })
 })

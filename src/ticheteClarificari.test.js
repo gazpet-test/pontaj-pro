@@ -138,3 +138,47 @@ describe('Tichete.jsx folosește afișarea (fără funcțiile din migrare, făr�
     expect(SURSA).not.toMatch(/clarificari_erp/)
   })
 })
+
+// L24 (r3): generația încărcărilor; mutanții = sursa modulului cu o condiție scoasă, încărcată ca modul separat (data: URL)
+describe('L24 — doar ultima încărcare, pentru entitatea curentă, scrie evidența', () => {
+  const SURSA_MOD = readFileSync(new URL('./ticheteClarificari.js', import.meta.url), 'utf8')
+  const incarcaMod = (text) => import('data:text/javascript;base64,' + Buffer.from(text, 'utf8').toString('base64'))
+  const pauza = (ms) => new Promise(r => setTimeout(r, ms))
+  async function scenariu(creeaza) {
+    const g = creeaza()
+    let stare = null
+    const incarca = async (cheie, valoare, ms) => { const j = g.incepe(cheie); await pauza(ms); if (g.eCurent(j)) stare = valoare }
+    // (1) încărcarea veche (pornită prima) se termină DUPĂ cea nouă => rămâne cea nouă
+    await Promise.all([incarca(7, 'veche', 40), (async () => { await pauza(5); await incarca(7, 'noua', 1) })()])
+    const r1 = stare
+    // (2) tichetul s-a schimbat (incepe(8)) cât încărcarea lui 7 era în curs => rezultatul lui 7 nu se aplică
+    stare = null
+    const p = incarca(7, 'tichetul vechi', 30)
+    await pauza(5)
+    g.incepe(8)
+    await p
+    return [r1, stare]
+  }
+  it('originalul: [noua, nimic]', async () => {
+    const { creeazaGeneratie: cg } = await incarcaMod(SURSA_MOD)
+    expect(await scenariu(cg)).toEqual(['noua', null])
+  })
+  it('mutantul „fără numărul încărcării” pică; „fără entitate” e acoperit de număr (incepe la schimbarea entității schimbă și numărul)', async () => {
+    const m1 = SURSA_MOD.replace('jeton.numar === numar && ', '')
+    const m2 = SURSA_MOD.replace(' && jeton.cheie === cheie', '')
+    expect(m1).not.toBe(SURSA_MOD)
+    expect(m2).not.toBe(SURSA_MOD)
+    expect(await scenariu((await incarcaMod(m1)).creeazaGeneratie)).not.toEqual(['noua', null])
+    expect(await scenariu((await incarcaMod(m2)).creeazaGeneratie)).toEqual(['noua', null])
+  })
+  it('Tichete.jsx: jetonul luat înaintea încărcării, aplicat doar dacă e curent; golire + invalidare la schimbarea tichetului', () => {
+    const S = readFileSync(new URL('./Tichete.jsx', import.meta.url), 'utf8').replace(/\r/g, '')
+    expect(S).toContain("const jetonClar = genEvidentaClar.current.incepe('lista')")
+    expect(S).toContain('if (genEvidentaClar.current.eCurent(jetonClar)) setEvidentaClar(ev.randuri)')
+    expect(S).toContain('const jetonEv = genEvidentaT.current.incepe(t.id)')
+    expect(S).toContain('if (genEvidentaT.current.eCurent(jetonEv)) { setEvidentaT(evRes.randuri); setEvidentaEroare(!!evRes.eroare) }')
+    expect(S).toContain('useEffect(()=>{ genEvidentaT.current.incepe(t.id); setEvidentaT([]); setEvidentaEroare(false) }, [t.id])')
+    expect(S.split('setEvidentaClar(').length - 1).toBe(1)
+    expect(S.split('setEvidentaT(').length - 1).toBe(2)
+  })
+})
