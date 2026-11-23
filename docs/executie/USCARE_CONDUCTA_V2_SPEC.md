@@ -310,7 +310,7 @@ schimba textul de confirmare, numele / funcția din listă sau imaginea semnătu
 - **Probele cerute la implementarea S2** (regresie + mutant, PGlite și cu două sesiuni pe clonă): previzualizare → redeschidere → modificare
   → reînchidere → semnare cu amprenta veche = `continut_schimbat`, nimic scris; aceeași probă cu versiunea neschimbată dar alt text de
   confirmare / alt nume în listă / altă imagine (versiunea raportului singură nu ajunge); semnare reușită ⇒ conținutul canonic final fără cele
-  trei câmpuri are exact amprenta previzualizată. Mutanții: RPC-ul care nu compară amprenta, cel care compară doar versiunea și cel care
+  trei câmpuri și fără câmpul amprentei previzualizate are exact amprenta previzualizată. Mutanții: RPC-ul care nu compară amprenta, cel care compară doar versiunea și cel care
   construiește conținutul semnat cu altă funcție decât previzualizarea trebuie să pice probele.
 
 ### 5.3 Imaginea semnăturii (opțională)
@@ -422,7 +422,7 @@ aplicată pe producție. Fiecare felie: migrare proprie + revenire, PR propriu, 
 | `executie_uscari` + coloane | ALTER | `doua_etape`, `etapa1_la` / `etapa1_de` (server), `etapa1_ora_declarata`, `cantar_intrare` / `cantar_iesire` (jsonb cu formă verificată), `corectie_intrare_motiv`, `plauzibilitate_confirmata`, `campanie`, `prag_aplicat` + `criteriu_rezultat` (server, la închidere), `motiv_nepotrivire` | S1 |
 | `executie_uscare_praguri` | nou | istoricul pragului pe proiect, doar adăugare (§3.5) | S1 |
 | `fn_executie_uscare_prag_curent` | nou | pragul în vigoare (implicit 100 g/km) | S1 |
-| `fn_executie_uscare_criteriu` | nou | calculul pe ultimul burete (§3.1–3.4), paritate cu `criteriuUscare` | S1 |
+| `fn_executie_uscare_criteriu` | nou | calculul pe ultimul burete (§3.1–3.4), paritate cu `verdictPropus` (§3.4) | S1 |
 | `fn_executie_uscare_etapa` | nou (RPC) | într-o tranzacție: câmpurile etapei 1 (CAS) + `lipsaEtapa1` + `etapa1_la` / `etapa1_de` + reținerea intrării (§2.1, §2.5) | S1 |
 | `fn_executie_uscare_prag` | nou (RPC) | scrie o versiune a pragului; dreptul = cel decis la R1 (§3.5) | S1 |
 | `fn_executie_uscare_salveaza`, `_lipsa` / `lipsaDinRand`, `_garda` | schimbat | cheile noi, ordinea etapelor (câmpurile `CHEI_ETAPA2` înaintea etapei 1 = refuz întreg, §2.1), corecția, regula de închidere | S1 |
