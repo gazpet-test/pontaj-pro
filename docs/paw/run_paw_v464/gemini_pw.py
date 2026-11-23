@@ -216,6 +216,13 @@
 #   `ng-pristine` pe rich-textarea (doar starea gol: campul Angular inca neatins; dupa scriere devine `ng-dirty`, deja vazut). Token-urile
 #   `enterprise` / `simplified-input` din aceeasi linie erau deja pe lista (c23). Lista alba primeste EXACT atat: style doar GOL si doar pe
 #   cele doua taguri, ng-pristine doar pe rich-textarea. Niciun element, text, descriere sau alt atribut nou.
+# v4.6.4f (23.11.2026 seara, refuz fals la testul de canal pe v4.6.4e instalat, 4132781B): dupa F5 repetat (6 reincarcari) `stare` a dat
+#   ALEATOR `atribut_necunoscut:<tag>{style}` pe auto-suggest / back-to-bottom-fab / hallucination-disclaimer, toate cu `style=""` (GOL):
+#   Angular lasa atributul gol dupa animatii, pe orice element animat, deci lista pe taguri nu se inchide. Regula generala (_style_gol):
+#   `style` cu valoarea EXACT sirul vid e permis pe ORICE element care e deja acceptat (aceleasi liste albe de taguri / controale /
+#   structura / neutre, aceleasi semnale inainte). Nu acopera: style cu spatii sau cu orice continut (ramane pe formele exacte de pe tag,
+#   altfel refuz ca inainte), un element neacceptat (refuzat inainte de atribute), <p> / <br> din editor (FARA niciun atribut, neschimbat),
+#   div.ql-clipboard (atributele EXACT CLIPBOARD_ATRIBUTE, neschimbat). Nicio alta relaxare.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata, base64, json
@@ -1164,16 +1171,25 @@ def _intrari_atribut(tag, k):
     return [forma for taguri, nume, forma in ATRIBUTE_PERMISE if nume == k and (tag in taguri or "*" in taguri)]
 
 
+def _style_gol(k, v):
+    # v4.6.4f: atributul cu numele EXACT `style` si valoarea BRUTA EXACT sirul vid (nu spatii, nu NBSP) - permis pe orice element care
+    # ajunge la _atribut_strain (adica deja acceptat de _motiv_element: semnalele, tagul / controlul / structura sunt verificate inainte)
+    return k == "style" and v == ""
+
+
 def _atribut_strain(n):
     # r14: primul atribut al elementului n care NU e in lista alba -> (fel, nume, valoare ASCII afisata), fel = "atribut_necunoscut" (numele
     # nu e permis pe tagul lui) / "atribut_valoare" (numele e permis, valoarea nu se potriveste integral cu nicio forma); altfel None.
     # Generatele Angular (ATR_GENERAT, nume EXACT de forma lor) doar cu valoarea bruta goala. r15: valoarea se compara BRUTA (Unicode exact,
-    # fara _ascii); _ascii ramane doar la afisare (linia `sursa`).
+    # fara _ascii); _ascii ramane doar la afisare (linia `sursa`). v4.6.4f: `style=""` (EXACT gol) trece pe orice tag (_style_gol); style
+    # cu orice continut se clasifica neschimbat (formele exacte de pe tag din ATRIBUTE_PERMISE).
     for k, v in n.attrs.items():
         if ATR_GENERAT.fullmatch(k):
             if v == "":
                 continue
             return "atribut_valoare", k, _ascii(v)
+        if _style_gol(k, v):
+            continue
         intrari = _intrari_atribut(n.tag, k)
         if not intrari:
             return "atribut_necunoscut", k, _ascii(v)

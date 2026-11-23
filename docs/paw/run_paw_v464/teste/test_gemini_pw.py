@@ -4796,6 +4796,203 @@ CAPTURA_F5 = {
     ),
 }
 DESCRIERI_F5 = {'gol': {'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)'}, 'mediu': {'cdk-describedby-message-ng-1-14': 'Ecran complet', 'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-13': 'Trimite'}, 'lung': {'cdk-describedby-message-ng-1-14': 'Ecran complet', 'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-13': 'Trimite'}}
+# v4.6.4f (f5b): aceeasi varianta de pagina dupa F5 REPETAT (23.11.2026 seara, 6 reincarcari, testul de canal pe v4.6.4e instalat,
+# `stare` = 3 necunoscute aleatoare, toate `style=""`). Literalul e GENERAT din captura reala (chat, doar citire, ciorna golita:
+# paw-data\out\paw_v464_calibrare\stare_completa_23_11_varianta_f5b.json, lista PLATA ca f5; generator
+# claude-tasks\paw_v464f\genereaza_fixture_f5b.py): adancimile = cele din CAPTURA_F5, verificate pe secventa EXACTA de taguri;
+# atributele, valorile si textele = cele din captura. Nimic completat, nimic dedus.
+CAPTURA_F5B = {
+    'gol': (
+        (0, 'div', (('_ngcontent-ng-c3765021202', ''), ('uireadyparent', ''), ('data-node-type', 'input-area'), ('class', 'input-area is-zero-state children-ready')), ''),
+        (1, 'auto-suggest', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('_nghost-ng-c549525650', ''), ('class', 'ng-tns-c549525650-5 ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (1, 'fieldset', (('_ngcontent-ng-c3765021202', ''), ('role', 'none'), ('class', 'input-area-fieldset')), ''),
+        (2, 'div', (('_ngcontent-ng-c3765021202', ''), ('xapfileselectordropzone', ''), ('class', 'text-input-field simplified-input-area'), ('jslog', '303810;track:impression')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'leading-actions-wrapper ng-tns-c3765021202-4 has-model-picker ng-star-inserted'), ('style', '')), ''),
+        (4, 'simplified-input-menu', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('class', 'simplified-input-menu ng-tns-c3765021202-4 ng-star-inserted'), ('_nghost-ng-c2721433901', ''), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c2721433901', ''), ('class', 'simplified-input-menu-container')), ''),
+        (6, 'span', (('_ngcontent-ng-c2721433901', ''), ('cdk-overlay-origin', '')), ''),
+        (6, 'gem-icon-button', (('_ngcontent-ng-c2721433901', ''), ('theme', 'lm'), ('type', 'onSurface'), ('ariahaspopup', 'menu'), ('arialabel', '\xcenc\u0103rcare \u0219i instrumente'), ('class', 'menu-button gem-menu-button open gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled ng-star-inserted'), ('_nghost-ng-c4110661558', '')), ''),
+        (7, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-expanded', 'false'), ('aria-haspopup', 'menu'), ('aria-label', '\xcenc\u0103rcare \u0219i instrumente'), ('jslog', '300142;track:generic_click,impression'), ('aria-disabled', 'false')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (8, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (9, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'plus'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'plus')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (4, 'toolbox-drawer', (('_ngcontent-ng-c2721433901', ''), ('trace', ''), ('_nghost-ng-c2631217100', ''), ('class', 'ng-tns-c2631217100-8 ng-star-inserted'), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c2631217100', ''), ('class', 'ng-tns-c2631217100-8 toolbox-drawer-container ng-trigger ng-trigger-toolboxDrawerEnter'), ('jslog', '251251;track:impression')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'ng-tns-c3765021202-4 single-line-format ng-star-inserted'), ('style', '--chat-container-height: 718;')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'text-input-field-main-area ng-tns-c3765021202-4')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'textarea-inner'), ('class', 'text-input-field_textarea-inner ng-tns-c3765021202-4')), ''),
+        (6, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'textarea-wrapper'), ('class', 'ng-tns-c3765021202-4 textarea-wrapper')), ''),
+        (7, 'rich-textarea', (('_ngcontent-ng-c3765021202', ''), ('atmentions', ''), ('class', 'text-input-field_textarea ql-container ql-bubble ng-tns-c3765021202-4 enterprise simplified-input ng-untouched ng-pristine ng-valid ng-star-inserted'), ('_nghost-ng-c2300172701', ''), ('enterkeyhint', 'send'), ('jslog', '356556;track:generic_click,impression'), ('aria-haspopup', 'menu'), ('dir', 'ltr'), ('style', '--textarea-max-rows: 7; --chat-container-height: 718px;')), ''),
+        (8, 'div', (('class', 'ql-editor ql-blank textarea new-input-ui rich-query-formatting-enabled input-url-linkification-enabled inline-chips-enabled'), ('data-gramm', 'false'), ('contenteditable', 'true'), ('dir', 'ltr'), ('role', 'textbox'), ('aria-multiline', 'true'), ('aria-label', 'Introdu o solicitare pentru Gemini'), ('data-placeholder', '\xcentreab\u0103 Gemini')), ''),
+        (8, 'div', (('class', 'ql-clipboard'), ('contenteditable', 'true'), ('tabindex', '-1')), ''),
+        (5, 'at-mentions-menu-v2', (('_nghost-ng-c2127727967', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'trailing-actions-wrapper with-model-picker')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'model-picker-container ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (5, 'bard-mode-switcher', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c2910039102', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (6, 'div', (('_ngcontent-ng-c2910039102', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
+        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a64432-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-13'), ('cdk-describedby-host', 'ng-1')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
+        (8, 'span', (('class', 'mdc-button__label'),), ''),
+        (9, 'div', (('_ngcontent-ng-c2910039102', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
+        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (9, 'gem-icon', (('_ngcontent-ng-c2910039102', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
+        (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (7, 'gem-popover', (('_ngcontent-ng-c2910039102', ''), ('glassmenutheme', ''), ('_nghost-ng-c4185230055', '')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'input-buttons-wrapper-bottom persistent-mic')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('tooltipanchorposition', 'above-end'), ('class', 'mic-button-container persistent-mic ng-tns-c3765021202-4 ng-trigger ng-trigger-slide ng-star-inserted'), ('style', '')), ''),
+        (6, 'speech-dictation-mic-button', (('_ngcontent-ng-c3765021202', ''), ('class', 'speech-dictation-mic-button ng-tns-c3765021202-4 ng-star-inserted'), ('_nghost-ng-c3809799694', ''), ('style', '')), ''),
+        (7, 'div', (('_ngcontent-ng-c3809799694', ''), ('data-node-type', 'speech_dictation_mic_button'), ('class', 'gem-mic-button-wrapper lm-enabled ng-star-inserted')), ''),
+        (8, 'gem-icon-button', (('_ngcontent-ng-c3809799694', ''), ('type', 'onSurface'), ('class', 'mat-mdc-tooltip-trigger speech_dictation_mic_button gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled'), ('_nghost-ng-c4110661558', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-2'), ('cdk-describedby-host', 'ng-1')), ''),
+        (9, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Dicteaz\u0103 (^\u21e7D)'), ('aria-pressed', 'false'), ('jslog', '175863;track:generic_click,impression'), ('aria-disabled', 'false')), ''),
+        (10, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (10, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (11, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'mic'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'mic')), ''),
+        (10, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (10, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (8, 'div', (('_ngcontent-ng-c3809799694', ''), ('class', 'circle-overlay')), ''),
+    ),
+    'mediu': (
+        (0, 'div', (('_ngcontent-ng-c3765021202', ''), ('uireadyparent', ''), ('data-node-type', 'input-area'), ('class', 'input-area is-zero-state children-ready with-toolbox-drawer')), ''),
+        (1, 'auto-suggest', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('_nghost-ng-c549525650', ''), ('class', 'ng-tns-c549525650-5 ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (1, 'fieldset', (('_ngcontent-ng-c3765021202', ''), ('role', 'none'), ('class', 'input-area-fieldset')), ''),
+        (2, 'div', (('_ngcontent-ng-c3765021202', ''), ('xapfileselectordropzone', ''), ('class', 'text-input-field height-expanded-past-single-line pre-fullscreen with-toolbox-drawer'), ('jslog', '303810;track:impression')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'leading-actions-wrapper ng-tns-c3765021202-4 has-model-picker ng-star-inserted'), ('style', '')), ''),
+        (4, 'simplified-input-menu', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('class', 'simplified-input-menu ng-tns-c3765021202-4 ng-star-inserted'), ('_nghost-ng-c2721433901', ''), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c2721433901', ''), ('class', 'simplified-input-menu-container')), ''),
+        (6, 'span', (('_ngcontent-ng-c2721433901', ''), ('cdk-overlay-origin', '')), ''),
+        (6, 'gem-icon-button', (('_ngcontent-ng-c2721433901', ''), ('theme', 'lm'), ('type', 'onSurface'), ('ariahaspopup', 'menu'), ('arialabel', '\xcenc\u0103rcare \u0219i instrumente'), ('class', 'menu-button gem-menu-button open gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled ng-star-inserted'), ('_nghost-ng-c4110661558', '')), ''),
+        (7, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-expanded', 'false'), ('aria-haspopup', 'menu'), ('aria-label', '\xcenc\u0103rcare \u0219i instrumente'), ('jslog', '300142;track:generic_click,impression'), ('aria-disabled', 'false')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (8, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (9, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'plus'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'plus')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (4, 'toolbox-drawer', (('_ngcontent-ng-c2721433901', ''), ('trace', ''), ('_nghost-ng-c2631217100', ''), ('class', 'ng-tns-c2631217100-8 ng-star-inserted'), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c2631217100', ''), ('class', 'ng-tns-c2631217100-8 toolbox-drawer-container ng-trigger ng-trigger-toolboxDrawerEnter'), ('jslog', '251251;track:impression')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted pre-fullscreen text-input-field_textarea-wrapper'), ('style', '--chat-container-height: 718;')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'text-input-field-main-area ng-tns-c3765021202-4')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'textarea-inner'), ('class', 'text-input-field_textarea-inner ng-tns-c3765021202-4')), ''),
+        (6, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'textarea-wrapper'), ('class', 'ng-tns-c3765021202-4 textarea-wrapper')), ''),
+        (7, 'rich-textarea', (('_ngcontent-ng-c3765021202', ''), ('atmentions', ''), ('class', 'text-input-field_textarea ql-container ql-bubble ng-tns-c3765021202-4 enterprise simplified-input ng-untouched ng-valid ng-star-inserted ng-dirty'), ('_nghost-ng-c2300172701', ''), ('enterkeyhint', 'send'), ('jslog', '356556;track:generic_click,impression'), ('aria-haspopup', 'menu'), ('dir', 'ltr'), ('style', '--textarea-max-rows: 7; --chat-container-height: 718px;')), ''),
+        (8, 'div', (('class', 'ql-editor textarea new-input-ui rich-query-formatting-enabled input-url-linkification-enabled inline-chips-enabled'), ('data-gramm', 'false'), ('contenteditable', 'true'), ('dir', 'ltr'), ('role', 'textbox'), ('aria-multiline', 'true'), ('aria-label', 'Introdu o solicitare pentru Gemini'), ('data-placeholder', '\xcentreab\u0103 Gemini'), ('style', '')), ''),
+        (8, 'div', (('class', 'ql-clipboard'), ('contenteditable', 'true'), ('tabindex', '-1')), ''),
+        (5, 'at-mentions-menu-v2', (('_nghost-ng-c2127727967', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'input-buttons-wrapper-top ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'fullscreen-button-container ng-tns-c3765021202-4 visible ng-star-inserted')), ''),
+        (5, 'button', (('_ngcontent-ng-c3765021202', ''), ('mat-icon-button', ''), ('color', 'primary'), ('aria-label', 'Extinde intrarea la ecran complet'), ('gemtooltip', 'Ecran complet'), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger fullscreen-button ng-tns-c3765021202-4 mat-primary'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-16'), ('cdk-describedby-host', 'ng-1')), ''),
+        (6, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (6, 'mat-icon', (('_ngcontent-ng-c3765021202', ''), ('role', 'img'), ('class', 'mat-icon notranslate gds-icon-l google-symbols mat-ligature-font mat-icon-no-color'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'expand_content'), ('fonticon', 'expand_content')), ''),
+        (6, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (6, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'trailing-actions-wrapper with-model-picker')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'model-picker-container ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (5, 'bard-mode-switcher', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c2910039102', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (6, 'div', (('_ngcontent-ng-c2910039102', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
+        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a64432-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-13'), ('cdk-describedby-host', 'ng-1')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
+        (8, 'span', (('class', 'mdc-button__label'),), ''),
+        (9, 'div', (('_ngcontent-ng-c2910039102', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
+        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (9, 'gem-icon', (('_ngcontent-ng-c2910039102', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
+        (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (7, 'gem-popover', (('_ngcontent-ng-c2910039102', ''), ('glassmenutheme', ''), ('_nghost-ng-c4185230055', '')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'input-buttons-wrapper-bottom persistent-mic')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('tooltipanchorposition', 'above-end'), ('class', 'mic-button-container persistent-mic ng-tns-c3765021202-4 ng-trigger ng-trigger-slide ng-star-inserted'), ('style', '')), ''),
+        (6, 'speech-dictation-mic-button', (('_ngcontent-ng-c3765021202', ''), ('class', 'speech-dictation-mic-button ng-tns-c3765021202-4 ng-star-inserted'), ('_nghost-ng-c3809799694', ''), ('style', '')), ''),
+        (7, 'div', (('_ngcontent-ng-c3809799694', ''), ('data-node-type', 'speech_dictation_mic_button'), ('class', 'gem-mic-button-wrapper lm-enabled ng-star-inserted')), ''),
+        (8, 'gem-icon-button', (('_ngcontent-ng-c3809799694', ''), ('type', 'onSurface'), ('class', 'mat-mdc-tooltip-trigger speech_dictation_mic_button gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled'), ('_nghost-ng-c4110661558', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-2'), ('cdk-describedby-host', 'ng-1')), ''),
+        (9, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Dicteaz\u0103 (^\u21e7D)'), ('aria-pressed', 'false'), ('jslog', '175863;track:generic_click,impression'), ('aria-disabled', 'false')), ''),
+        (10, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (10, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (11, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'mic'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'mic')), ''),
+        (10, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (10, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (8, 'div', (('_ngcontent-ng-c3809799694', ''), ('class', 'circle-overlay')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'send-button-container'), ('class', 'mat-mdc-tooltip-trigger send-button-container visible persistent-mic ng-tns-c3765021202-4 inner lm-enabled ng-trigger ng-trigger-sendButtonVisibility ng-star-inserted'), ('aria-describedby', 'cdk-describedby-message-ng-1-15'), ('cdk-describedby-host', 'ng-1'), ('style', '')), ''),
+        (6, 'gem-icon-button', (('_ngcontent-ng-c3765021202', ''), ('theme', 'lm'), ('type', 'onSurface'), ('class', 'send-button ng-tns-c3765021202-4 has-input submit gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled ng-star-inserted'), ('_nghost-ng-c4110661558', ''), ('aria-disabled', 'false'), ('style', '')), ''),
+        (7, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Trimite mesajul'), ('jslog', '173899;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxbMCwicm8iLDAsIiJdLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il0sbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLFswXV0=;mutable:true'), ('aria-disabled', 'false')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (8, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (9, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'arrow_upward'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'arrow_upward')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+    ),
+    'lung': (
+        (0, 'div', (('_ngcontent-ng-c3765021202', ''), ('uireadyparent', ''), ('data-node-type', 'input-area'), ('class', 'input-area is-zero-state children-ready with-toolbox-drawer')), ''),
+        (1, 'auto-suggest', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('_nghost-ng-c549525650', ''), ('class', 'ng-tns-c549525650-5 ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (1, 'fieldset', (('_ngcontent-ng-c3765021202', ''), ('role', 'none'), ('class', 'input-area-fieldset')), ''),
+        (2, 'div', (('_ngcontent-ng-c3765021202', ''), ('xapfileselectordropzone', ''), ('class', 'text-input-field height-expanded-past-single-line pre-fullscreen with-toolbox-drawer'), ('jslog', '303810;track:impression')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'leading-actions-wrapper ng-tns-c3765021202-4 has-model-picker ng-star-inserted'), ('style', '')), ''),
+        (4, 'simplified-input-menu', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('class', 'simplified-input-menu ng-tns-c3765021202-4 ng-star-inserted'), ('_nghost-ng-c2721433901', ''), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c2721433901', ''), ('class', 'simplified-input-menu-container')), ''),
+        (6, 'span', (('_ngcontent-ng-c2721433901', ''), ('cdk-overlay-origin', '')), ''),
+        (6, 'gem-icon-button', (('_ngcontent-ng-c2721433901', ''), ('theme', 'lm'), ('type', 'onSurface'), ('ariahaspopup', 'menu'), ('arialabel', '\xcenc\u0103rcare \u0219i instrumente'), ('class', 'menu-button gem-menu-button open gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled ng-star-inserted'), ('_nghost-ng-c4110661558', '')), ''),
+        (7, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-expanded', 'false'), ('aria-haspopup', 'menu'), ('aria-label', '\xcenc\u0103rcare \u0219i instrumente'), ('jslog', '300142;track:generic_click,impression'), ('aria-disabled', 'false')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (8, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (9, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'plus'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'plus')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (4, 'toolbox-drawer', (('_ngcontent-ng-c2721433901', ''), ('trace', ''), ('_nghost-ng-c2631217100', ''), ('class', 'ng-tns-c2631217100-8 ng-star-inserted'), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c2631217100', ''), ('class', 'ng-tns-c2631217100-8 toolbox-drawer-container ng-trigger ng-trigger-toolboxDrawerEnter'), ('jslog', '251251;track:impression')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted pre-fullscreen text-input-field_textarea-wrapper'), ('style', '--chat-container-height: 718;')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'text-input-field-main-area ng-tns-c3765021202-4')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'textarea-inner'), ('class', 'text-input-field_textarea-inner ng-tns-c3765021202-4')), ''),
+        (6, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'textarea-wrapper'), ('class', 'ng-tns-c3765021202-4 textarea-wrapper')), ''),
+        (7, 'rich-textarea', (('_ngcontent-ng-c3765021202', ''), ('atmentions', ''), ('class', 'text-input-field_textarea ql-container ql-bubble ng-tns-c3765021202-4 enterprise simplified-input ng-untouched ng-valid ng-star-inserted ng-dirty'), ('_nghost-ng-c2300172701', ''), ('enterkeyhint', 'send'), ('jslog', '356556;track:generic_click,impression'), ('aria-haspopup', 'menu'), ('dir', 'ltr'), ('style', '--textarea-max-rows: 7; --chat-container-height: 718px;')), ''),
+        (8, 'div', (('class', 'ql-editor textarea new-input-ui rich-query-formatting-enabled input-url-linkification-enabled inline-chips-enabled'), ('data-gramm', 'false'), ('contenteditable', 'true'), ('dir', 'ltr'), ('role', 'textbox'), ('aria-multiline', 'true'), ('aria-label', 'Introdu o solicitare pentru Gemini'), ('data-placeholder', '\xcentreab\u0103 Gemini'), ('style', '')), ''),
+        (8, 'div', (('class', 'ql-clipboard'), ('contenteditable', 'true'), ('tabindex', '-1')), ''),
+        (5, 'at-mentions-menu-v2', (('_nghost-ng-c2127727967', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'input-buttons-wrapper-top ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'fullscreen-button-container ng-tns-c3765021202-4 visible ng-star-inserted')), ''),
+        (5, 'button', (('_ngcontent-ng-c3765021202', ''), ('mat-icon-button', ''), ('color', 'primary'), ('aria-label', 'Extinde intrarea la ecran complet'), ('gemtooltip', 'Ecran complet'), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger fullscreen-button ng-tns-c3765021202-4 mat-primary'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-16'), ('cdk-describedby-host', 'ng-1')), ''),
+        (6, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (6, 'mat-icon', (('_ngcontent-ng-c3765021202', ''), ('role', 'img'), ('class', 'mat-icon notranslate gds-icon-l google-symbols mat-ligature-font mat-icon-no-color'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'expand_content'), ('fonticon', 'expand_content')), ''),
+        (6, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (6, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'trailing-actions-wrapper with-model-picker')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'model-picker-container ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (5, 'bard-mode-switcher', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c2910039102', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (6, 'div', (('_ngcontent-ng-c2910039102', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
+        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a64432-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-13'), ('cdk-describedby-host', 'ng-1')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
+        (8, 'span', (('class', 'mdc-button__label'),), ''),
+        (9, 'div', (('_ngcontent-ng-c2910039102', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
+        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (9, 'gem-icon', (('_ngcontent-ng-c2910039102', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
+        (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (7, 'gem-popover', (('_ngcontent-ng-c2910039102', ''), ('glassmenutheme', ''), ('_nghost-ng-c4185230055', '')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'input-buttons-wrapper-bottom persistent-mic')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('tooltipanchorposition', 'above-end'), ('class', 'mic-button-container persistent-mic ng-tns-c3765021202-4 ng-trigger ng-trigger-slide ng-star-inserted'), ('style', '')), ''),
+        (6, 'speech-dictation-mic-button', (('_ngcontent-ng-c3765021202', ''), ('class', 'speech-dictation-mic-button ng-tns-c3765021202-4 ng-star-inserted'), ('_nghost-ng-c3809799694', ''), ('style', '')), ''),
+        (7, 'div', (('_ngcontent-ng-c3809799694', ''), ('data-node-type', 'speech_dictation_mic_button'), ('class', 'gem-mic-button-wrapper lm-enabled ng-star-inserted')), ''),
+        (8, 'gem-icon-button', (('_ngcontent-ng-c3809799694', ''), ('type', 'onSurface'), ('class', 'mat-mdc-tooltip-trigger speech_dictation_mic_button gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled'), ('_nghost-ng-c4110661558', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-2'), ('cdk-describedby-host', 'ng-1')), ''),
+        (9, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Dicteaz\u0103 (^\u21e7D)'), ('aria-pressed', 'false'), ('jslog', '175863;track:generic_click,impression'), ('aria-disabled', 'false')), ''),
+        (10, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (10, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (11, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'mic'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'mic')), ''),
+        (10, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (10, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (8, 'div', (('_ngcontent-ng-c3809799694', ''), ('class', 'circle-overlay')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'send-button-container'), ('class', 'mat-mdc-tooltip-trigger send-button-container visible persistent-mic ng-tns-c3765021202-4 inner lm-enabled ng-trigger ng-trigger-sendButtonVisibility ng-star-inserted'), ('aria-describedby', 'cdk-describedby-message-ng-1-15'), ('cdk-describedby-host', 'ng-1'), ('style', '')), ''),
+        (6, 'gem-icon-button', (('_ngcontent-ng-c3765021202', ''), ('theme', 'lm'), ('type', 'onSurface'), ('class', 'send-button ng-tns-c3765021202-4 has-input submit gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled ng-star-inserted'), ('_nghost-ng-c4110661558', ''), ('aria-disabled', 'false'), ('style', '')), ''),
+        (7, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Trimite mesajul'), ('jslog', '173899;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxbMCwicm8iLDAsIiJdLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il0sbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLFswXV0=;mutable:true'), ('aria-disabled', 'false')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (8, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (9, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'arrow_upward'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'arrow_upward')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+    ),
+}
+DESCRIERI_F5B = {'gol': {'cdk-describedby-message-ng-1-13': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)'}, 'mediu': {'cdk-describedby-message-ng-1-16': 'Ecran complet', 'cdk-describedby-message-ng-1-13': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-15': 'Trimite'}, 'lung': {'cdk-describedby-message-ng-1-16': 'Ecran complet', 'cdk-describedby-message-ng-1-13': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-15': 'Trimite'}}
 # triplete (tag, atribut, valoare bruta) REALE: toate cele din CAPTURA_2311 + cele vazute in celelalte capturi (scrise de mana)
 REALE_ALTE_CAPTURI = (
     ("input-area-v2", "trace", ""),                                          # z21 + t23
@@ -4810,6 +5007,7 @@ REALE_ALTE_CAPTURI = (
     ("file-drop-indicator", "style", ""),                                    # g22
 )
 REALE = tuple(sorted(set((t, k, v) for st in list(CAPTURA_2311.values()) + list(CAPTURA_Z23S.values()) + list(CAPTURA_F5.values())
+                         + list(CAPTURA_F5B.values())
                          for _, t, a, _ in st for k, v in a
                          if not re.fullmatch(r"_ng(content|host)-ng-c[0-9]+", k)) | set(REALE_ALTE_CAPTURI)))
 # nume INVENTATE (nu apar in nicio captura) - fiecare, pe fiecare loc acceptat, = `atribut_necunoscut:` (nu schimba semnatura)
@@ -4974,10 +5172,13 @@ class TestListaAlbaAtribute(unittest.TestCase):
         for tag, k, v in REALE:
             self.assertIsNone(gp._atribut_strain(gp._Nod(tag, {k: v}, None)), msg=(tag, k, v))
             # r15: si clasele, si etichetele (r14 le sarea / le compara dupa _ascii): orice alta forma bruta = valoare necunoscuta
+            # v4.6.4f: style="" acceptat doar de regula generala (f5b: auto-suggest, fara intrare `style` pe tag) -> alta valoare = nume
+            # necunoscut pe tag (ca pe v4.6.4e), nu valoare necunoscuta
+            fel = "atribut_necunoscut" if gp._style_gol(k, v) and not gp._intrari_atribut(tag, k) else "atribut_valoare"
             for alt in (v + " x", "x " + v, v + ".pdf", v.upper() if v.upper() != v else v + "Z", v.lower() if v.lower() != v else v + "z"):
                 if (tag, k, alt) in REALE:
                     continue
-                self.assertEqual(gp._atribut_strain(gp._Nod(tag, {k: alt}, None)), ("atribut_valoare", k, gp._ascii(alt)), msg=(tag, k, alt))
+                self.assertEqual(gp._atribut_strain(gp._Nod(tag, {k: alt}, None)), (fel, k, gp._ascii(alt)), msg=(tag, k, alt))
         for taguri, nume, forma in gp.ATRIBUTE_PERMISE:
             for t in taguri:
                 if t == "*":
@@ -7278,15 +7479,18 @@ R21_ADAOSURI = (tuple(("nume",) + x for x in R21_NUME_NOI) + tuple(("valoare",) 
                 + tuple(("clasa", t, c) for t, cs in sorted(R21_CLASE.items()) for c in cs))
 
 
-def html_z23s(stare, editor=None):
+def html_z23s(stare, editor=None, inlocuiri=()):
     # pagina reala de azi (CAPTURA_Z23S: zona exterioara input-container, aceleasi adancimi / atribute / texte) + tintele descrierilor
     # (DESCRIERI_Z23S, `<div id=... role="tooltip">`, in afara zonei, ca in pagina). Editorul: textul de calibrare in forma Quill
+    # v4.6.4f: inlocuiri = (index, atribute noi) pe un element (ca la html_captura)
     if editor is None:
         editor = quill_html(TEXTE_Z23S[stare]) if TEXTE_Z23S[stare] else "<p><br></p>"
+    noi = dict(inlocuiri)
     parti, stiva = [], []
-    for ad, tag, atr, text in CAPTURA_Z23S[stare]:
+    for i, (ad, tag, atr, text) in enumerate(CAPTURA_Z23S[stare]):
         while len(stiva) > ad:
             parti.append("</%s>" % stiva.pop())
+        atr = noi.get(i, atr)
         parti.append("<%s%s>" % (tag, "".join(' %s="%s"' % (k, _esc(v)) for k, v in atr)))
         if text:
             parti.append(_esc(text))
@@ -7329,7 +7533,19 @@ def fara_r21(mod, doar=None, adaosuri=None):
         if k == "class" and tok:
             out = [_Fara(f, lambda v, c=tok: any(t in c for t in mod.SPATII_HTML.split(v))) for f in out]
         return out
-    with mock.patch.object(mod, "_intrari_atribut", intrari):
+    # v4.6.4f: toate listele simulate aici (r20, v4.6.4d, v4.6.4e minus un adaos) sunt dinaintea regulii generale `style=""` -> oprita
+    with mock.patch.object(mod, "_intrari_atribut", intrari), fara_style_gol(mod):
+        yield
+
+
+@contextlib.contextmanager
+def fara_style_gol(mod):
+    # v4.6.4f: regula generala `style=""` (_style_gol) oprita = comportamentul v4.6.4e si al versiunilor dinainte. Pe un modul fara
+    # regula (copia veche, teste pe codul vechi) nu schimba nimic.
+    if not hasattr(mod, "_style_gol"):
+        yield
+        return
+    with mock.patch.object(mod, "_style_gol", lambda k, v: False):
         yield
 
 
@@ -7704,16 +7920,19 @@ class TestVariantaF5(unittest.TestCase):
             # alt atribut gol pe aceleasi taguri (nevazut) ramane necunoscut; style pe trace-ul lor nu schimba nimic
             for k in ("hidden", "title", "data-x", "aria-label"):
                 self.assertEqual(gp._atribut_strain(gp._Nod(t, {k: ""}, None))[0], "atribut_necunoscut", msg=(t, k))
-        # style GOL pe taguri fara intrare `style` = tot necunoscut; pe mat-icon (doar STYLE_ICONITA) = valoare necunoscuta
-        for t in ("gem-icon", "fieldset", "auto-suggest", "bard-mode-switcher", "gem-popover", "button", "span", "input-area-v2",
-                  "simplified-input-menux", "speech-dictation-mic-buttons"):
-            self.assertEqual(gp._atribut_strain(gp._Nod(t, {"style": ""}, None)), ("atribut_necunoscut", "style", ""), msg=t)
-        self.assertEqual(gp._atribut_strain(gp._Nod("mat-icon", {"style": ""}, None)), ("atribut_valoare", "style", ""))
-        # in pagina reala f5: style="" pe un gem-icon (fara intrare) -> refuz
+        # PE v4.6.4e (regula generala v4.6.4f oprita): style GOL pe taguri fara intrare `style` = tot necunoscut; pe mat-icon (doar
+        # STYLE_ICONITA) = valoare necunoscuta. De la v4.6.4f style="" trece pe orice element acceptat (TestStyleGolV464f).
         st = "gol"
         i = index_f5(st, "gem-icon", **{"_ngcontent-ng-c2910039102": ""})
         h = html_f5(st, inlocuiri=((i, tuple(CAPTURA_F5[st][i][2]) + (("style", ""),)),))
-        self.assertEqual(gp.analizeaza_ciorna(h)["necunoscute_detalii"], ["atribut_necunoscut:gem-icon{style}"])
+        with fara_style_gol(gp):
+            for t in ("gem-icon", "fieldset", "auto-suggest", "bard-mode-switcher", "gem-popover", "button", "span", "input-area-v2",
+                      "simplified-input-menux", "speech-dictation-mic-buttons"):
+                self.assertEqual(gp._atribut_strain(gp._Nod(t, {"style": ""}, None)), ("atribut_necunoscut", "style", ""), msg=t)
+            self.assertEqual(gp._atribut_strain(gp._Nod("mat-icon", {"style": ""}, None)), ("atribut_valoare", "style", ""))
+            # in pagina reala f5: style="" pe un gem-icon (fara intrare) -> refuz
+            self.assertEqual(gp.analizeaza_ciorna(h)["necunoscute_detalii"], ["atribut_necunoscut:gem-icon{style}"])
+        self.assertEqual(gp.analizeaza_ciorna(h)["necunoscute_detalii"], [])           # v4.6.4f
 
     def test_ng_pristine_doar_pe_rich_textarea(self):
         self.assertIsNone(gp._atribut_strain(gp._Nod("rich-textarea", {"class": CLASA_RICH_F5_GOL}, None)))
@@ -7754,6 +7973,283 @@ class TestVariantaF5(unittest.TestCase):
         self.assertEqual(set(gp.CLASE_PERMISE["rich-textarea"]),
                          {"enterprise", "ng-dirty", "ng-pristine", "ng-untouched", "ng-valid", "ql-bubble", "ql-container",
                           "simplified-input", "text-input-field_textarea"})
+
+
+VARIANTA_F5B = (CAPTURA_F5B, DESCRIERI_F5B)
+# `stare` pe v4.6.4e instalat (4132781B) dupa F5 repetat - paw_v464_calibrare\stare_f5b_necunoscute.txt, scris de mana (ordinea DOM)
+V464E_F5B_STARE = (
+    "necunoscute in zona: 3",
+    "  necunoscut atribut_necunoscut:back-to-bottom-fab{style}",
+    "    sursa atribut_necunoscut:style=",
+    "  necunoscut atribut_necunoscut:auto-suggest{style}",
+    "    sursa atribut_necunoscut:style=",
+    "  necunoscut atribut_necunoscut:hallucination-disclaimer{style}",
+    "    sursa atribut_necunoscut:style=",
+    "paza ciorna: REFUZ ciorna_necunoscuta stare: 3 element(e) nerecunoscute in zona ciornei - nu trimit "
+    "(atribut_necunoscut:back-to-bottom-fab{style}; atribut_necunoscut:auto-suggest{style}; atribut_necunoscut:hallucination-disclaimer{style})",
+)
+TAGURI_F5B = ("back-to-bottom-fab", "auto-suggest", "hallucination-disclaimer")      # cele trei taguri din `stare` (style="" aleator)
+# style care NU e sirul vid: spatii albe HTML, spatii Unicode / invizibile, punct si virgula, CSS, comentariu CSS, ghilimele
+STYLE_NEGOALE = (" ", "  ", "\t", "\n", "\r\n", "\f", "\u00a0", "\u200b", "\ufeff", ";", "/**/", '""', "x", "display:none",
+                 "display: none;", "visibility:hidden", "--chat-container-height: 718;", "background: url(/resource/1234)")
+# elemente NEacceptate (niciun loc in listele albe de taguri / controale / structura / neutre) cu `style=""`
+NEACCEPTATE_STYLE_GOL = ('<section style=""></section>', '<custom-x style=""></custom-x>', '<button style="" type="button"></button>',
+                         '<span style="" aria-label="x"></span>', '<div style="" contenteditable="true"></div>', '<img style="">',
+                         '<a style="" href="https://example.com/x"></a>', '<template style=""></template>', '<style style=""></style>')
+# data-placeholder vazut o data in `stare` (forma ASCII); valoarea reala (cu diacritice) NU e in nicio captura -> nu se adauga (refuz sigur)
+PLACEHOLDER_NECAPTURAT = ("introdu @ pentru conectori, abilitati si altele",
+                          "Introdu @ pentru conectori, abilit\u0103\u021bi \u0219i altele")
+
+
+def html_f5b(stare, **kw):
+    return html_captura(stare, captura=VARIANTA_F5B, **kw)
+
+
+def index_z23s(stare, tag, **atr):
+    g = [i for i, (_, t, a, _) in enumerate(CAPTURA_Z23S[stare]) if t == tag and all(dict(a).get(k) == v for k, v in atr.items())]
+    assert len(g) == 1, (stare, tag, atr, g)
+    return g[0]
+
+
+def cu_style(elemente, i, v):
+    # (index, atributele elementului i cu style=v - inlocuit pe loc daca exista, altfel adaugat la final)
+    a = list(elemente[i][2])
+    j = [n for n, (x, _) in enumerate(a) if x == "style"]
+    if j:
+        a[j[0]] = ("style", v)
+    else:
+        a.append(("style", v))
+    return (i, tuple(a))
+
+
+def z23s_f5b(stare, v="", **kw):
+    # pagina de azi (z23s) cu style=v pe cele trei taguri din `stare` (varianta vazuta dupa F5 repetat pe v4.6.4e)
+    return html_z23s(stare, inlocuiri=tuple(cu_style(CAPTURA_Z23S[stare], index_z23s(stare, t), v) for t in TAGURI_F5B), **kw)
+
+
+# familiile de pagini reale: (nume, elemente pe stare, constructor(stare, inlocuiri)); c23n / f5 / f5b = input-area-v2, z23s = zona exterioara
+FAMILII = (
+    ("c23n", CAPTURA_2311, lambda st, inl: html_captura(st, inlocuiri=inl)),
+    ("f5", CAPTURA_F5, lambda st, inl: html_f5(st, inlocuiri=inl)),
+    ("f5b", CAPTURA_F5B, lambda st, inl: html_f5b(st, inlocuiri=inl)),
+    ("z23s", CAPTURA_Z23S, lambda st, inl: html_z23s(st, inlocuiri=inl)),
+)
+# comparatiile cu v4.6.4e (regula oprita) se fac pe paginile care trec si pe v4.6.4e: f5b insasi e refuzata acolo (auto-suggest{style}),
+# iar f5b = f5 + doar acel style="" (test_captura_f5b_e_f5_plus_style_gol_pe_auto_suggest), deci f5 acopera aceleasi elemente
+FAMILII_V464E = tuple(x for x in FAMILII if x[0] != "f5b")
+
+
+def _e_clipboard_captura(atr):
+    return dict(atr) == gp.CLIPBOARD_ATRIBUTE
+
+
+class TestStyleGolV464f(unittest.TestCase):
+    """v4.6.4f: `style` cu valoarea EXACT goala e permis pe orice element deja acceptat (Angular il lasa dupa animatii, aleator dupa F5).
+    Pe v4.6.4e (regula oprita) varianta f5b da exact liniile din `stare`; pe v4.6.4f toate starile reale + style="" pe fiecare element
+    acceptat dau 0 necunoscute; style cu orice continut, un element neacceptat, p / br din editor si ql-clipboard = exact ca pe v4.6.4e."""
+
+    def test_captura_f5b_e_f5_plus_style_gol_pe_auto_suggest(self):
+        # f5b (generat din captura reala) = f5 + style="" pe auto-suggest (toate starile); restul diferentelor = doar identificatorii
+        # generati (atributele Angular, aria-describedby CDK, aria-controls meniu), nicio valoare cu text
+        variabile = ("aria-describedby", "aria-controls")
+        for st in STARI_F5:
+            self.assertEqual([(a, t, x) for a, t, _, x in CAPTURA_F5B[st]], [(a, t, x) for a, t, _, x in CAPTURA_F5[st]], msg=st)
+            for (_, t, ab, _), (_, _, a5, _) in zip(CAPTURA_F5B[st], CAPTURA_F5[st]):
+                db = dict((k, v) for k, v in ab if not gp._generat(k))
+                d5 = dict((k, v) for k, v in a5 if not gp._generat(k))
+                if t == "auto-suggest":
+                    self.assertEqual(db.pop("style"), "", msg=st)
+                self.assertEqual(sorted(db), sorted(d5), msg=(st, t))
+                for k in db:
+                    if db[k] != d5[k]:
+                        self.assertIn(k, variabile, msg=(st, t, k))
+                        self.assertTrue(gp.FORMA_DESCRIERE_CDK.fullmatch(db[k]) or gp.FORMA_MENIU.fullmatch(db[k]), msg=(st, t, k))
+            self.assertEqual(sorted(DESCRIERI_F5B[st].values()), sorted(DESCRIERI_F5[st].values()), msg=st)
+            goale = lambda cap: [t for _, t, a, _ in cap[st] if dict(a).get("style") == ""]
+            self.assertEqual(sorted(set(goale(CAPTURA_F5B)) - set(goale(CAPTURA_F5))), ["auto-suggest"], msg=st)
+            self.assertEqual(len(goale(CAPTURA_F5B)), len(goale(CAPTURA_F5)) + 1, msg=st)
+
+    def test_pe_v464e_liniile_din_stare(self):
+        # reproducerea refuzului fals: regula oprita (= v4.6.4e instalat) -> exact liniile din stare_f5b_necunoscute.txt, nicio actiune
+        with fara_style_gol(gp):
+            for st in STARI_Z23S:
+                h = z23s_f5b(st)
+                d = tuple(gp.analizeaza_ciorna(h)["necunoscute_detalii"])
+                self.assertEqual(d, tuple(x[len("  necunoscut "):] for x in V464E_F5B_STARE if x.startswith("  necunoscut ")), msg=st)
+                l = stare_linii(gp, FakePg(h))
+                i = l.index("necunoscute in zona: 3")
+                self.assertEqual(tuple(l[i:i + len(V464E_F5B_STARE)]), V464E_F5B_STARE, msg=st)
+                self.assertEqual(trimite_brief(gp, FakePg(h, dupa_goto=h), BRIEF_TEST)[::2], ("ciorna_necunoscuta", []), msg=st)
+            for st in STARI_F5:
+                h = html_f5b(st)
+                self.assertEqual(gp.analizeaza_ciorna(h)["necunoscute_detalii"], ["atribut_necunoscut:auto-suggest{style}"], msg=st)
+                self.assertEqual(trimite_brief(gp, FakePg(h, dupa_goto=h), BRIEF_TEST)[::2], ("ciorna_necunoscuta", []), msg=st)
+            # fiecare din cele trei, singur
+            for t in TAGURI_F5B:
+                h = html_z23s("gol", inlocuiri=(cu_style(CAPTURA_Z23S["gol"], index_z23s("gol", t), ""),))
+                self.assertEqual(gp.analizeaza_ciorna(h)["necunoscute_detalii"], ["atribut_necunoscut:%s{style}" % t], msg=t)
+            # trimite pe v4.6.4e: tab-ul curent in varianta c23n, chatul nou in varianta f5b -> refuz dupa goto (Enter niciodata)
+            cod, det, act = trimite_brief(gp, FakePg(html_captura("gol"), dupa_goto=html_f5b("gol")), BRIEF_TEST)
+            self.assertEqual(cod, "ciorna_necunoscuta")
+            self.assertNotIn("press Enter", act)
+
+    def test_v464f_starile_reale_trec(self):
+        # f5b (gol / mediu / lung) + z23s cu style="" pe cele trei taguri (4 stari) + variantele vechi -> 0 necunoscute, `stare` OK
+        pagini = ([("f5b_" + s, html_f5b(s)) for s in STARI_F5] + [("z23s_f5b_" + s, z23s_f5b(s)) for s in STARI_Z23S]
+                  + [("f5_" + s, html_f5(s)) for s in STARI_F5] + [("c23n_" + s, html_captura(s)) for s in STARI_F5]
+                  + [("z23s_" + s, html_z23s(s)) for s in STARI_Z23S])
+        for nume, h in pagini:
+            i = gp.analizeaza_ciorna(h)
+            self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"], i["necunoscute"]), (1, 1, 0, 0, 0),
+                             msg=(nume, i["necunoscute_detalii"]))
+            rad, umbre, trunchiate = gp._arbore_cdp(html_in_cdp(h))
+            self.assertEqual(gp.analizeaza_arbore(rad, trunchiate), i, msg=nume)                   # arborele CDP = cel HTML
+            l = stare_linii(gp, FakePg(h))
+            self.assertIn("necunoscute in zona: 0", l)
+            self.assertEqual([x for x in l if x.startswith("paza ciorna:")], ["paza ciorna: OK (trimite ar continua)"], msg=nume)
+        # trimite pana la Enter: chat nou gol (f5b gol / z23s cu style gol) -> scriere -> caseta starii -> Enter, ultimul instantaneu curat
+        for gol, dupa in ((html_f5b("gol"), lambda st: html_f5b(st, editor="<p><br></p>")),
+                          (z23s_f5b("gol"), lambda st: z23s_f5b(st, editor="<p><br></p>"))):
+            for st in STARI_F5:
+                pg = FakePg(gol, dupa_goto=gol, dupa_scriere=dupa(st))
+                self.assertEqual(trimite_brief(gp, pg, BRIEF_TEST), (None, "", ACTIUNI_TRIMITERE), msg=st)
+                i2 = gp.analizeaza_ciorna(pg.citite[-1])
+                self.assertEqual((gp.normalizeaza(i2["text_editor"]), i2["necunoscute"], i2["atasamente"]),
+                                 (gp.normalizeaza(BRIEF_TEST), 0, 0), msg=st)
+                self.assertEqual(_invariant_instantaneu(pg), (True, ""))
+        # amestecat: tab-ul curent fara style, chatul nou cu style gol (si invers)
+        for a, b in ((html_captura("gol"), html_f5b("gol")), (html_f5b("gol"), html_f5("gol")), (html_z23s("gol"), z23s_f5b("gol"))):
+            self.assertEqual(trimite_brief(gp, FakePg(a, dupa_goto=b), BRIEF_TEST), (None, "", ACTIUNI_TRIMITERE))
+            self.assertEqual(trimite_brief(gp, FakePg(b, dupa_goto=a), BRIEF_TEST), (None, "", ACTIUNI_TRIMITERE))
+
+    def test_style_gol_pe_fiecare_element_acceptat(self):
+        # pe fiecare pagina reala (4 familii, toate starile), style="" pus pe FIECARE element (inlocuit sau adaugat) -> 0 necunoscute;
+        # singura exceptie = div.ql-clipboard (atributele EXACT CLIPBOARD_ATRIBUTE, neschimbat) -> refuz pe stratul de semnale
+        n = 0
+        for fam, cap, html in FAMILII:
+            for st in sorted(cap):
+                for i, (_, t, a, _) in enumerate(cap[st]):
+                    h = html(st, (cu_style(cap[st], i, ""),))
+                    d = gp.analizeaza_ciorna(h)["necunoscute_detalii"]
+                    if _e_clipboard_captura(a):
+                        self.assertEqual(len(d), 1, msg=(fam, st, i, d))
+                        self.assertTrue(d[0].startswith("editabil:div"), msg=(fam, st, i, d))
+                        if fam != "f5b":
+                            with fara_style_gol(gp):
+                                self.assertEqual(gp.analizeaza_ciorna(h)["necunoscute_detalii"], d)      # identic cu v4.6.4e
+                        continue
+                    self.assertEqual(d, [], msg=(fam, st, i, t))
+                    n += 1
+        self.assertGreater(n, 700)
+        # toate elementele deodata (fara clipboard), pe fiecare familie si stare
+        for fam, cap, html in FAMILII:
+            for st in sorted(cap):
+                inl = tuple(cu_style(cap[st], i, "") for i, (_, _, a, _) in enumerate(cap[st]) if not _e_clipboard_captura(a))
+                self.assertEqual(gp.analizeaza_ciorna(html(st, inl))["necunoscute_detalii"], [], msg=(fam, st))
+
+    def test_style_cu_continut_ramane_ca_pe_v464e(self):
+        # orice valoare care NU e sirul vid: analiza pe v4.6.4f = analiza pe v4.6.4e (regula oprita), pe fiecare element real
+        for fam, cap, html in FAMILII_V464E:
+            for st in ("gol", "lung"):
+                for i, (_, t, a, _) in enumerate(cap[st]):
+                    for v in (" ", "\u00a0", "display:none"):
+                        h = html(st, (cu_style(cap[st], i, v),))
+                        d = gp.analizeaza_ciorna(h)["necunoscute_detalii"]
+                        with fara_style_gol(gp):
+                            self.assertEqual(gp.analizeaza_ciorna(h)["necunoscute_detalii"], d, msg=(fam, st, i, t, v))
+                        if not (t == "file-drop-indicator" and v == " "):          # g22: gol sau doar spatii albe HTML (r10, neschimbat)
+                            self.assertEqual(len(d), 1, msg=(fam, st, i, t, v, d))
+        # pe cele trei taguri din `stare`: fiecare valoare negoala = exact un refuz pe {style}, nicio actiune
+        for t in TAGURI_F5B:
+            for v in STYLE_NEGOALE:
+                self.assertEqual(gp._atribut_strain(gp._Nod(t, {"style": v}, None)), ("atribut_necunoscut", "style", gp._ascii(v)), msg=(t, v))
+                h = html_z23s("gol", inlocuiri=(cu_style(CAPTURA_Z23S["gol"], index_z23s("gol", t), v),))
+                m = "fundal:" + t if "url(" in v else "atribut_necunoscut:%s{style}" % t
+                self.assertEqual(gp.analizeaza_ciorna(h)["necunoscute_detalii"], [m], msg=(t, v))
+                self.assertEqual(trimite_brief(gp, FakePg(h, dupa_goto=h), BRIEF_TEST)[::2], ("ciorna_necunoscuta", []), msg=(t, v))
+        # pe tagurile cu forme exacte, valorile negoale raman clasificate ca inainte (atribut_valoare, numele e permis acolo)
+        for t in ("simplified-input-menu", "speech-dictation-mic-button", "gem-icon-button", "toolbox-drawer", "mat-icon", "rich-textarea"):
+            for v in STYLE_NEGOALE:
+                if "url(" in v:
+                    continue
+                self.assertEqual(gp._atribut_strain(gp._Nod(t, {"style": v}, None)), ("atribut_valoare", "style", gp._ascii(v)), msg=(t, v))
+
+    def test_unitar_style_gol(self):
+        # regula: numele EXACT `style`, valoarea EXACT sirul vid; pe orice tag (tagul e decis inainte, de _motiv_element)
+        for t in TAGURI_F5B + ("span", "p", "button", "gem-icon", "fieldset", "input-area-v2", "input-container", "custom-x", "section"):
+            self.assertIsNone(gp._atribut_strain(gp._Nod(t, {"style": ""}, None)), msg=t)
+            with fara_style_gol(gp):                                   # pe v4.6.4e: niciunul din aceste taguri nu avea style gol
+                self.assertEqual(gp._atribut_strain(gp._Nod(t, {"style": ""}, None)), ("atribut_necunoscut", "style", ""), msg=t)
+        self.assertTrue(gp._style_gol("style", ""))
+        for k, v in (("style", " "), ("style", "\u00a0"), ("style", "\u200b"), ("style", ";"), ("Style", ""), ("STYLE", ""), ("styles", ""),
+                     ("style ", ""), ("data-style", ""), ("class", ""), ("trace", "x"), ("style", None)):
+            self.assertFalse(gp._style_gol(k, v), msg=(k, v))
+        # alt atribut gol pe aceleasi taguri ramane necunoscut (nicio alta relaxare)
+        for t in TAGURI_F5B:
+            for k in ("hidden", "title", "data-x", "aria-label", "Style", "styles"):
+                self.assertEqual(gp._atribut_strain(gp._Nod(t, {k: ""}, None))[0], "atribut_necunoscut", msg=(t, k))
+            # style gol + un atribut strain: refuzul vine pe atributul strain
+            self.assertEqual(gp._atribut_strain(gp._Nod(t, {"style": "", "title": ""}, None)), ("atribut_necunoscut", "title", ""), msg=t)
+
+    def test_neacceptat_cu_style_gol_ramane_refuz(self):
+        # un element fara loc in listele albe, cu style="", in zona (f5b, gol / lung) = acelasi refuz ca fara style si ca pe v4.6.4e
+        cheie = lambda i: (i["necunoscute_detalii"], i["atasamente"], i["semne"])
+        for pagina in (html_f5b, html_f5):
+            for st in ("gol", "lung"):
+                for x in NEACCEPTATE_STYLE_GOL:
+                    h = pagina(st, extra_zona=x)
+                    i = gp.analizeaza_ciorna(h)
+                    self.assertTrue(i["necunoscute"] or i["atasamente"] or i["semne"], msg=(st, x))
+                    fara = pagina(st, extra_zona=x.replace(' style=""', ""))
+                    self.assertNotEqual(fara, h)
+                    # acelasi refuz si fara style (felul motivului + numarul; semnalul `editabil:` afiseaza si numele atributelor)
+                    fel = lambda c: ([m.split(":")[0] for m in c[0]], c[1], c[2])
+                    self.assertEqual(fel(cheie(gp.analizeaza_ciorna(fara))), fel(cheie(i)), msg=(st, x))
+                    if pagina is html_f5:                            # f5 trece pe v4.6.4e: refuzul e acelasi si acolo
+                        with fara_style_gol(gp):
+                            self.assertEqual(cheie(gp.analizeaza_ciorna(h)), cheie(i), msg=(st, x))
+                    cod, _, act = trimite_brief(gp, FakePg(h, dupa_goto=h), BRIEF_TEST)
+                    self.assertIsNotNone(cod, msg=(st, x))
+                    self.assertEqual(act, [], msg=(st, x))
+        # in editor: <p> / <br> cu style="" = atribut in editor (FARA niciun atribut, neschimbat)
+        for ed in ('<p style=""><br></p>', '<p><br style=""></p>', '<p style="">text</p>'):
+            d = gp.analizeaza_ciorna(html_f5b("gol", editor=ed))["necunoscute_detalii"]
+            self.assertEqual(len(d), 1, msg=(ed, d))
+            self.assertTrue(d[0].startswith("semnal_in_editor:atribut_in_editor:"), msg=(ed, d))
+            self.assertTrue(d[0].endswith("{style}"), msg=(ed, d))
+        # un al doilea editor / un element editabil cu style="" langa editor = refuz (semnalul editabil, inaintea atributelor)
+        for x in ('<div style="" role="textbox" contenteditable="true"><p>continut strain arbitrar</p></div>',
+                  '<div style="" contenteditable="true">continut strain arbitrar</div>'):
+            d = gp.analizeaza_ciorna(html_f5b("gol", extra_zona=x))["necunoscute_detalii"]
+            self.assertTrue(d, msg=x)
+
+    def test_placeholder_necapturat_ramane_refuz(self):
+        # data-placeholder vazut o data in `stare` doar in forma ASCII: valoarea reala nu e in nicio captura -> NU se adauga; editorul
+        # cu oricare forma (ASCII sau cu diacritice ghicite) = refuz pe {data-placeholder}, si pe v4.6.4f
+        self.assertEqual([v for t, k, f in gp.ATRIBUTE_PERMISE if k == "data-placeholder" for v in PLACEHOLDER_NECAPTURAT if f.fullmatch(v)], [])
+        for v in PLACEHOLDER_NECAPTURAT:
+            for st in STARI_F5:
+                i = index_captura(st, "div", captura=VARIANTA_F5B, role="textbox")
+                a = tuple((k, v if k == "data-placeholder" else x) for k, x in CAPTURA_F5B[st][i][2])
+                self.assertIn(("data-placeholder", v), a)
+                d = gp.analizeaza_ciorna(html_f5b(st, inlocuiri=((i, a),)))["necunoscute_detalii"]
+                self.assertEqual(len(d), 1, msg=(v, st, d))
+                self.assertTrue(d[0].startswith("semnal_in_editor:atribut_valoare:div") and d[0].endswith("{data-placeholder}"), msg=(v, st, d))
+
+    def test_structural_v464f(self):
+        # regula e o singura functie, chemata o data, in _atribut_strain; listele albe raman cele din v4.6.4e
+        import inspect
+        src = inspect.getsource(gp._atribut_strain)
+        self.assertEqual(src.count("_style_gol("), 1)
+        self.assertLess(src.index("ATR_GENERAT.fullmatch"), src.index("_style_gol("))
+        self.assertLess(src.index("_style_gol("), src.index("_intrari_atribut("))
+        f = inspect.getsource(gp._style_gol)
+        self.assertIn('return k == "style" and v == ""', f)
+        intr = [(t, f) for t, k, f in gp.ATRIBUTE_PERMISE if k == "style"]
+        self.assertEqual(len(intr), 7)
+        self.assertEqual(sorted(x for t, _ in intr for x in t),
+                         sorted(["mat-icon", "div", "div", "rich-textarea", "gem-icon-button", "toolbox-drawer", "at-mentions-menu-v2",
+                                 "simplified-input-menu", "speech-dictation-mic-button", "file-drop-indicator"]))
 
 
 def _nod_text(t):
