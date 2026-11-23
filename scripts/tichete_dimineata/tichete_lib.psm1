@@ -397,26 +397,22 @@ function New-BriefReview {
 # ── Rezultatul agentului și verdictele ──────────────────────────────────────────────────────────────────────
 
 function Get-RezultatAgent {
-  # Din câmpul „result” al rdr_<slug>.json. Contează DOAR ULTIMA linie nevidă (F11: un exemplu citat mai sus nu contează),
+  # Din câmpul „result” al agent_<slug>.json. Contează DOAR ULTIMA linie nevidă (F11: un exemplu citat mai sus nu contează),
   # eventual între backtick-uri:
-  #   REZULTAT_TICHET: L PR <url github .../pull/<n>>   => tip PR
+  #   REZULTAT_TICHET: L GATA <rezumat pe o linie>        => tip GATA (r6: commit-urile sunt LOCALE; push + PR le face orchestratorul)
   #   REZULTAT_TICHET: L ESUAT <motiv>                    => tip ESUAT
   #   REZULTAT_TICHET: B|D|F|? <ce trebuie decis>         => tip DECIZIE
-  # Orice altceva => NECUNOSCUT. Întoarce @{ tip; clasa; detaliu; pr }.
+  # Orice altceva (inclusiv vechiul „L PR <url>”: agentul nu mai poate deschide PR-uri) => NECUNOSCUT. Întoarce @{ tip; clasa; detaliu; pr }.
   param([AllowNull()][string]$Iesire)
   $nec = @{ tip = 'NECUNOSCUT'; clasa = ''; detaliu = ''; pr = 0 }
   if ([string]::IsNullOrEmpty($Iesire)) { $nec.detaliu = 'iesire goala'; return $nec }
   $l = @(($Iesire -split "\r?\n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
   if ($l.Count -eq 0) { $nec.detaliu = 'iesire goala'; return $nec }
-  $m = [regex]::Match($l[$l.Count - 1], '\A`?REZULTAT_TICHET:[ \t]+(?:(L)[ \t]+(PR|ESUAT)|(B|D|F|\?))[ \t]+([^`]*[^`\s])`?\z')
+  $m = [regex]::Match($l[$l.Count - 1], '\A`?REZULTAT_TICHET:[ \t]+(?:(L)[ \t]+(GATA|ESUAT)|(B|D|F|\?))[ \t]+([^`]*[^`\s])`?\z')
   if (-not $m.Success) { $nec.detaliu = 'ultima linie nu e REZULTAT_TICHET in formatul cerut'; return $nec }
   $det = $m.Groups[4].Value
   if ($m.Groups[1].Success) {
-    if ($m.Groups[2].Value -ceq 'PR') {
-      $u = [regex]::Match($det, '\Ahttps://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/([0-9]{1,7})\z')
-      if (-not $u.Success) { $nec.detaliu = 'PR fara URL valid'; return $nec }
-      return @{ tip = 'PR'; clasa = 'L'; detaliu = (Get-TextSigurLinie $det 200); pr = [int]$u.Groups[1].Value }
-    }
+    if ($m.Groups[2].Value -ceq 'GATA') { return @{ tip = 'GATA'; clasa = 'L'; detaliu = (Get-TextSigurLinie $det 300); pr = 0 } }
     return @{ tip = 'ESUAT'; clasa = 'L'; detaliu = (Get-TextSigurLinie $det 200); pr = 0 }
   }
   return @{ tip = 'DECIZIE'; clasa = $m.Groups[3].Value; detaliu = (Get-TextSigurLinie $det 300); pr = 0 }
@@ -767,10 +763,124 @@ function Test-ComandaGhPermisa {
 
 function Test-ComandaGitPermisa {
   # Doar citiri git în clona orchestratorului: fetch, ls-remote, diff, rev-parse, show; fără opțiuni care execută programe.
+  # r6: + rev-list și `bundle verify` / `bundle list-heads` (importul rezultatului agentului); `bundle create` / unbundle refuzate.
   param([string[]]$Argv = @())
   $a = @($Argv)
   if ($a.Count -lt 1 -or $script:GitPermise -cnotcontains $a[0]) { return $false }
+  if ($a[0] -ceq 'bundle' -and ($a.Count -lt 3 -or @($script:Reguli.git_bundle_permise) -cnotcontains $a[1])) { return $false }
   foreach ($x in $a) { if ($x -cmatch '\A--(upload-pack|receive-pack|exec|ext-diff)\b' -or $x -ceq '-c') { return $false } }
+  return $true
+}
+
+# ── r6 (P1 r5): publicarea rezultatului agentului — DOAR de orchestrator, cu tokenul agentului în mediul procesului ────────
+# Agentul (și codul pe care îl rulează testele lui) nu mai are niciun token GitHub. El face commit local; lansatorul scrie un
+# bundle git; orchestratorul îl verifică, îl importă și face push + PR DRAFT. Funcțiile de mai jos sunt pure (testate JS + PS).
+
+function Test-MediuFaraSecrete {
+  # Mediul unui proces din zona agentului (lansator sau claude): nicio variabilă din variabile_secret_agent și nicio valoare cu
+  # forma unui token (re_valoare_secret: GitHub, Supabase, Anthropic). Întoarce motivele (listă goală = curat).
+  param([AllowNull()][hashtable]$Mediu)
+  $mot = New-Object System.Collections.ArrayList
+  if ($null -eq $Mediu) { return @('mediu lipsa') }
+  $interzise = @($script:Reguli.variabile_secret_agent | ForEach-Object { [string]$_ })
+  foreach ($k in @($Mediu.Keys)) {
+    foreach ($i in $interzise) { if ([string]$k -ieq $i) { [void]$mot.Add('variabila secreta in mediul agentului: ' + $i) } }
+    if ([string]$Mediu[$k] -cmatch [string]$script:Reguli.re_valoare_secret) { [void]$mot.Add('valoare cu forma unui token in mediul agentului: ' + (Get-TextSigurLinie ([string]$k) 40)) }
+  }
+  return @($mot)
+}
+
+function Get-HeadBundle {
+  # Ieșirea `git bundle list-heads <f>` (date neîncrezute): EXACT o linie „<sha40> refs/heads/<branch-ul exact>”. Altceva => eroare.
+  param([AllowNull()][string]$Iesire, [string]$Branch)
+  $l = @(([string]$Iesire -split "\r?\n") | Where-Object { $_ -ne '' })
+  if ($l.Count -ne 1) { return @{ sha = ''; eroare = 'bundle-ul trebuie sa aiba exact un head (are ' + $l.Count + ')' } }
+  $m = [regex]::Match($l[0], '\A([0-9a-f]{40}) refs/heads/(\S+)\z')
+  if (-not $m.Success) { return @{ sha = ''; eroare = 'head-ul bundle-ului are forma neasteptata' } }
+  if ($m.Groups[2].Value -cne $Branch -or -not (Test-NumeBranch $Branch)) { return @{ sha = ''; eroare = 'head-ul bundle-ului nu e branch-ul rularii' } }
+  return @{ sha = $m.Groups[1].Value; eroare = '' }
+}
+
+function Test-CaiPublicare {
+  # Căile pe care orchestratorul NU le publică deloc (nici ca PR draft): .github/ (un workflow nou / modificat ar rula pe GitHub
+  # cu secretele repo-ului). Comparație fără deosebire de majuscule, pe calea normalizată. Întoarce căile atinse.
+  param([string[]]$Fisiere = @())
+  $rez = New-Object System.Collections.ArrayList
+  foreach ($f in @($Fisiere)) {
+    $n = Get-CaleNormalizata $f
+    foreach ($p in @($script:Reguli.publicare.cai_interzise)) { if ($n.StartsWith([string]$p, [StringComparison]::Ordinal) -or $n -ceq ([string]$p).TrimEnd('/')) { [void]$rez.Add([string]$f); break } }
+  }
+  return @($rez)
+}
+
+function Test-NumarCommitBundle {
+  # rev-list --count origin/main..<sha> (total) și --merges (merge-uri): 1..max_commituri, zero merge-uri (agentul face doar commit).
+  param([AllowNull()][string]$Total, [AllowNull()][string]$Merges)
+  $t = ([string]$Total).Trim(); $m = ([string]$Merges).Trim()
+  if ($t -cnotmatch '\A[0-9]{1,6}\z' -or $m -cnotmatch '\A[0-9]{1,6}\z') { return 'numarul de commit-uri necitit' }
+  if ([int]$t -lt 1) { return 'niciun commit peste origin/main' }
+  if ([int]$t -gt [int]$script:Reguli.publicare.max_commituri) { return ('prea multe commit-uri (' + $t + ')') }
+  if ([int]$m -ne 0) { return 'bundle-ul contine merge-uri' }
+  return ''
+}
+
+function Get-MediuPublicare {
+  # Mediul procesului `git push` al ORCHESTRATORULUI: tokenul agentului doar ca antet HTTP din config-ul de mediu
+  # (GIT_CONFIG_COUNT, nu în argumente: liniile de comandă sunt vizibile altor utilizatori), fără helper de credențiale, fără
+  # config global / de sistem, fără hook-uri, fără prompt. $null = variabilă scoasă.
+  param([AllowNull()][string]$Token)
+  if (-not (Test-FormaTokenAgent $Token)) { throw 'token agent invalid' }
+  $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes('x-access-token:' + $Token))
+  return @{ GIT_CONFIG_NOSYSTEM = '1'; GIT_CONFIG_GLOBAL = 'NUL'; GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'never'
+            GIT_CONFIG_COUNT = '3'; GIT_CONFIG_KEY_0 = 'credential.helper'; GIT_CONFIG_VALUE_0 = ''
+            GIT_CONFIG_KEY_1 = 'http.https://github.com/.extraheader'; GIT_CONFIG_VALUE_1 = ('AUTHORIZATION: basic ' + $b64)
+            GIT_CONFIG_KEY_2 = 'core.hooksPath'; GIT_CONFIG_VALUE_2 = 'NUL'
+            GIT_ASKPASS = $null; SSH_ASKPASS = $null; GIT_CONFIG_PARAMETERS = $null; GH_TOKEN = $null; GITHUB_TOKEN = $null }
+}
+
+function Get-ArgvPublicare {
+  # git push (orchestrator): commit-ul verificat -> branch-ul exact al rulării, fără --force, fără hook-uri, URL fix al repo-ului.
+  param([string]$Repo, [string]$Sha, [string]$Branch)
+  if ($Repo -cnotmatch '\A[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}\z') { throw 'repo invalid' }
+  if ($Sha -cnotmatch '\A[0-9a-f]{40}\z') { throw 'sha invalid' }
+  if (-not (Test-NumeBranch $Branch) -or -not $Branch.StartsWith($script:PrefixBranch, [StringComparison]::Ordinal)) { throw 'branch invalid' }
+  return @('push', '--no-verify', '--porcelain', ('https://github.com/' + $Repo + '.git'), ($Sha + ':refs/heads/' + $Branch))
+}
+
+function New-TextPr {
+  # Titlul și corpul PR-ului DRAFT (orchestratorul). Rezumatul agentului = date: o linie, fără control / bidi, „@” scos (fără
+  # mențiuni = fără notificări), tăiat. Titlul conține numărul tichetului.
+  param([string]$Numar, [int]$Incercare, [AllowNull()][string]$Rezumat)
+  if (-not (Test-NumarTichet $Numar)) { throw 'numar tichet invalid' }
+  if ($Incercare -lt 1 -or $Incercare -gt 9) { throw 'incercare invalida' }
+  $p = $script:Reguli.publicare
+  $rez = (Get-TextSigurLinie ([string]$Rezumat) ([int]$p.max_rezumat)).Replace('@', ' ').Trim()
+  if (-not $rez) { $rez = 'fara rezumat' }
+  $t = ('Tichet ' + $Numar + ' (incercarea ' + $Incercare + '): ' + $rez)
+  if ($t.Length -gt [int]$p.max_titlu) { $t = $t.Substring(0, [int]$p.max_titlu).TrimEnd() }
+  $corp = ('PR DRAFT deschis de rularea automata Tichete dimineata pentru tichetul ' + $Numar + ', incercarea ' + $Incercare + ".`n`n" +
+           'Rezumat: ' + $rez + "`n`nCe s-a schimbat: commit-urile din acest PR. Merge-ul il face coordonarea, dupa review si CI.`n")
+  return @{ titlu = $t; corp = $corp }
+}
+
+function Get-ArgvPrPublicare {
+  # gh pr create (orchestrator, tokenul agentului în mediu): DRAFT, baza main, head = branch-ul exact, repo fix, corp din fișier.
+  param([string]$Repo, [string]$Branch, [string]$Titlu, [string]$FisCorp)
+  if ($Repo -cnotmatch '\A[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}\z') { throw 'repo invalid' }
+  if (-not (Test-NumeBranch $Branch) -or -not $Branch.StartsWith($script:PrefixBranch, [StringComparison]::Ordinal)) { throw 'branch invalid' }
+  if ([string]::IsNullOrEmpty($Titlu) -or $Titlu.Length -gt [int]$script:Reguli.publicare.max_titlu -or $Titlu -cmatch '[\r\n]' -or $Titlu.StartsWith('-')) { throw 'titlu invalid' }
+  if (-not (Test-CaleSimpla $FisCorp) -or -not $FisCorp.EndsWith('.md', [StringComparison]::OrdinalIgnoreCase)) { throw 'fisier corp invalid' }
+  return @('pr', 'create', '--draft', '--base', 'main', '--head', $Branch, '--repo', $Repo, '--title', $Titlu, '--body-file', $FisCorp)
+}
+
+function Test-ComandaGhPublicare {
+  # Singura scriere gh a orchestratorului: exact forma din Get-ArgvPrPublicare (DRAFT; fără --web / --fill / alte steaguri),
+  # pe repo-ul AȘTEPTAT (cel din agent.json) — nu pe cel scris în argumente.
+  param([string[]]$Argv = @(), [string]$Repo)
+  $a = @($Argv)
+  if ($a.Count -ne 13 -or [string]::IsNullOrEmpty($Repo)) { return $false }
+  try { $ast = @(Get-ArgvPrPublicare -Repo $Repo -Branch $a[6] -Titlu $a[10] -FisCorp $a[12]) } catch { return $false }
+  for ($i = 0; $i -lt 13; $i++) { if ([string]$a[$i] -cne [string]$ast[$i]) { return $false } }
   return $true
 }
 
@@ -798,8 +908,10 @@ function Get-CaiAgent {
   param([string]$Profil)
   if ([string]::IsNullOrEmpty($Profil)) { throw 'profil gol' }
   $d = Join-Path $Profil ([string]$script:Agent.dir_config)
+  # r6: + gh = director gh gol, doar al orchestratorului, pentru apelurile gh cu tokenul agentului (fără hosts.yml al serverului);
+  #     import = bundle-urile copiate din ieșirea agentului + corpul PR-urilor.
   return @{ dir = $d; config = (Join-Path $d 'agent.json'); token = (Join-Path $d 'token_agent.txt')
-            cont = (Join-Path $d 'cont_agent.xml'); amprenta = (Join-Path $d 'amprenta_rulesets.json') }
+            cont = (Join-Path $d 'cont_agent.xml'); amprenta = (Join-Path $d 'amprenta_rulesets.json'); gh = (Join-Path $d 'gh'); import = (Join-Path $d 'import') }
 }
 
 function Test-CaleSimpla {
@@ -1002,10 +1114,11 @@ function Test-FormaTokenAgent {
 function Get-MediuAgent {
   # Mediul procesului CLAUDE (pornit de lansator, sub contul agentului), pe LISTĂ ALBĂ (mediu_pastrat) + valorile fixe de mai jos.
   # NU trec: PGPASSWORD / PG*, SUPABASE_*, GITHUB_TOKEN, ANTHROPIC_*, CLAUDE_CODE_*, GIT_ASKPASS, GIT_CONFIG_*, NODE_OPTIONS etc.
-  # git: fără config de sistem, config global = gitconfig-ul agentului; gh: tokenul agentului + director propriu;
+  # git: fără config de sistem, config global = gitconfig-ul agentului (FĂRĂ helper de credențiale); gh: director propriu gol;
   # Postgres: PGPASSFILE / PGSERVICEFILE = NUL; fără MCP claude.ai; TICHETE_WT = worktree-ul tichetului (pentru gardă).
-  param([hashtable]$Baza = @{}, [AllowNull()][string]$Token, [hashtable]$Cfg, [string]$Worktree)
-  if (-not (Test-FormaTokenAgent $Token)) { throw 'token agent invalid' }
+  # r6 (P1 r5): FĂRĂ niciun token GitHub — testele / build-ul rulate de agent moștenesc acest mediu. Push-ul și PR-ul le face
+  # orchestratorul (Get-MediuPublicare). Verificat la ieșire cu Test-MediuFaraSecrete (orice secret => aruncă).
+  param([hashtable]$Baza = @{}, [hashtable]$Cfg, [string]$Worktree)
   if ($null -eq $Cfg -or -not (Test-CaleSimpla $Worktree)) { throw 'cai lipsa' }
   $ra = Get-CaiRadacinaAgent ([string]$Cfg.radacina_agent)
   if (-not (Test-CaleSub $Worktree $ra.wt) -or $Worktree -ieq $ra.wt) { throw 'worktree in afara radacinii agentului' }
@@ -1013,22 +1126,24 @@ function Get-MediuAgent {
   $past = @($script:Agent.mediu_pastrat | ForEach-Object { [string]$_ })
   foreach ($k in @($Baza.Keys)) { foreach ($p in $past) { if ([string]$k -ieq $p) { $rez[$p] = [string]$Baza[$k] } } }
   $fix = [ordered]@{
-    CLAUDE_CONFIG_DIR = [string]$Cfg.config_claude; GH_TOKEN = $Token; GH_CONFIG_DIR = $ra.gh; GH_PROMPT_DISABLED = '1'; GH_NO_UPDATE_NOTIFIER = '1'
+    CLAUDE_CONFIG_DIR = [string]$Cfg.config_claude; GH_CONFIG_DIR = $ra.gh; GH_PROMPT_DISABLED = '1'; GH_NO_UPDATE_NOTIFIER = '1'
     GIT_CONFIG_NOSYSTEM = '1'; GIT_CONFIG_GLOBAL = $ra.gitconfig; GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'never'
     PGPASSFILE = 'NUL'; PGSERVICEFILE = 'NUL'; ENABLE_CLAUDEAI_MCP_SERVERS = 'false'; DISABLE_AUTOUPDATER = '1'; NO_COLOR = '1'
     TICHETE_WT = $Worktree
   }
   foreach ($k in $fix.Keys) { $rez[$k] = $fix[$k] }
+  $sec = @(Test-MediuFaraSecrete $rez)
+  if ($sec.Count -gt 0) { throw ('mediul agentului contine secrete: ' + $sec[0]) }
   return $rez
 }
 
 function Get-MediuLansator {
   # r5 (P1): mediul lansatorului pornit de orchestrator SUB CONTUL AGENTULUI (Process.Start cu credențiale + profil încărcat).
   # Blocul de mediu se dă explicit (altfel ar fi al coordonatorului): variabilele de sistem din mediu_sistem_lansator, un Path
-  # FIX de sistem (fără directoarele din profilul coordonatorului), profilul / AppData / Temp ale AGENTULUI, tokenul GitHub al
-  # agentului în TICHETE_GH_TOKEN. Nimic altceva din mediul coordonatorului (PG*, gh, chei).
-  param([hashtable]$Baza = @{}, [hashtable]$Cfg, [AllowNull()][string]$Token)
-  if (-not (Test-FormaTokenAgent $Token)) { throw 'token agent invalid' }
+  # FIX de sistem (fără directoarele din profilul coordonatorului), profilul / AppData / Temp ale AGENTULUI. Nimic altceva din
+  # mediul coordonatorului (PG*, gh, chei). r6 (P1 r5): FĂRĂ tokenul GitHub al agentului (înainte: TICHETE_GH_TOKEN) — nimic din
+  # contul agentului nu mai primește vreun token; verificat cu Test-MediuFaraSecrete (orice secret => aruncă).
+  param([hashtable]$Baza = @{}, [hashtable]$Cfg)
   if ($null -eq $Cfg -or -not (Test-CaleSimpla ([string]$Cfg.profil_agent))) { throw 'profil agent invalid' }
   $rez = @{}
   foreach ($k in @($Baza.Keys)) { foreach ($p in @($script:Agent.mediu_sistem_lansator)) { if ([string]$k -ieq [string]$p) { $rez[[string]$p] = [string]$Baza[$k] } } }
@@ -1040,7 +1155,8 @@ function Get-MediuLansator {
   $rez['TEMP'] = $pr + '\AppData\Local\Temp'; $rez['TMP'] = $rez['TEMP']
   $rez['USERNAME'] = [string]$Cfg.cont_windows
   $rez['GIT_TERMINAL_PROMPT'] = '0'; $rez['GH_PROMPT_DISABLED'] = '1'; $rez['NO_COLOR'] = '1'
-  $rez['TICHETE_GH_TOKEN'] = $Token
+  $sec = @(Test-MediuFaraSecrete $rez)
+  if ($sec.Count -gt 0) { throw ('mediul lansatorului contine secrete: ' + $sec[0]) }
   return $rez
 }
 
@@ -1120,12 +1236,12 @@ function Get-TextLansare {
 }
 
 function Get-TextGitconfigAgent {
-  # gitconfig-ul agentului (GIT_CONFIG_GLOBAL), rescris la fiecare pornire: identitatea commit-urilor + DOAR helper-ul gh,
-  # care folosește GH_TOKEN-ul agentului (helper-ul gol de pe primul rând golește lista moștenită).
+  # gitconfig-ul agentului (GIT_CONFIG_GLOBAL), rescris la fiecare pornire: identitatea commit-urilor + helper-ul de credențiale
+  # GOL (golește lista moștenită). r6 (P1 r5): agentul nu mai face push — nicio sursă de credențiale (nici helper-ul gh).
   param([hashtable]$Cfg)
   if ($null -eq $Cfg -or [string]$Cfg.login_agent -cnotmatch '\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\z' -or [string]$Cfg.email_commit -cnotmatch '\A[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,190}\z') { throw 'config agent invalid' }
   return ("# generat de lanseaza_agent.ps1 la fiecare pornire - nu se editeaza`n[user]`n`tname = " + $Cfg.login_agent + "`n`temail = " + $Cfg.email_commit +
-          "`n[credential]`n`thelper =`n`thelper = !gh auth git-credential`n")
+          "`n[credential]`n`thelper =`n")
 }
 
 function Test-ConfigGitAgent {
@@ -1152,6 +1268,8 @@ function Test-ConfigGitAgent {
     $ce = Get-TextSigurLinie $k 80
     if ($orig.StartsWith('command line:', [StringComparison]::Ordinal)) { [void]$mot.Add('config git din linia de comanda / mediu: ' + $ce) }
     if ($k.StartsWith('credential.', [StringComparison]::Ordinal) -and -not $dinAgent) { [void]$mot.Add('credential din alta sursa decat gitconfig-ul agentului: ' + $ce) }
+    # r6: nicio sursă de credențiale nici în gitconfig-ul agentului (doar helper-ul gol care golește lista)
+    if ($k.StartsWith('credential.', [StringComparison]::Ordinal) -and ($k -cne 'credential.helper' -or $val.Trim() -ne '')) { [void]$mot.Add('credentiale in config git (agentul nu face push): ' + $ce) }
     if ($k -ceq 'include.path' -or $k.StartsWith('includeif.', [StringComparison]::Ordinal)) { [void]$mot.Add('include in config git: ' + $ce) }
     if ($k -cmatch '\Ahttp\..*(extraheader|cookiefile)\z' -or $k -cmatch '\Aurl\..*\.(insteadof|pushinsteadof)\z' -or $k -ceq 'core.askpass' -or $k -ceq 'core.sshcommand' -or $k -ceq 'remote.origin.pushurl') {
       [void]$mot.Add('cheie git nepermisa: ' + $ce)
@@ -1463,4 +1581,6 @@ Export-ModuleMember -Function Get-CampLista, Test-ListaExacta, Test-ObiectJson, 
   Test-DiffAtingeRegiune, Get-RegiuniInterziseAtinse, Test-ReviewTrece, Test-ChecksVerzi, Get-StareChecks,
   Get-RecomandareMerge, Get-RezumatVerdict, Test-ComandaGhPermisa, Test-ComandaGitPermisa, Join-ArgvWindows, Get-CaiAgent,
   Split-ComandaPermisiune, Test-ListaAgent, Get-ArgvAgent, Test-FormaTokenAgent, Get-MediuAgent, Test-ConfigAgent,
-  Get-TextGitconfigAgent, Test-ConfigGitAgent, Get-RepoDinUrl, Test-BarieraGitHub, Get-VerdicteSalvate, Get-StareNoua, Get-StareRulare
+  Get-TextGitconfigAgent, Test-ConfigGitAgent, Get-RepoDinUrl, Test-BarieraGitHub, Get-VerdicteSalvate, Get-StareNoua, Get-StareRulare,
+  Test-MediuFaraSecrete, Get-HeadBundle, Test-CaiPublicare, Test-NumarCommitBundle, Get-MediuPublicare, Get-ArgvPublicare, New-TextPr,
+  Get-ArgvPrPublicare, Test-ComandaGhPublicare

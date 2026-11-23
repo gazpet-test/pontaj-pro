@@ -52,6 +52,10 @@ export const MAPARE_PS = {
   'Test-CaleSub': 'testCaleSub', 'Get-CaiRadacinaAgent': 'getCaiRadacinaAgent', 'Test-SeparareCai': 'testSeparareCai', 'Get-MediuLansator': 'getMediuLansator',
   'Get-TextLansare': 'getTextLansare', 'Test-RegulaPr': 'testRegulaPr', 'Test-RulesetCanonic': 'testRulesetCanonic', 'Get-AmprentaRulesets': 'getAmprentaRulesets',
   'Test-BarieraInstalare': 'testBarieraInstalare', 'Get-TextAmprenta': 'getTextAmprenta', 'Test-Amprenta': 'testAmprenta', 'Get-StareDupaCi': 'getStareDupaCi',
+  // r6
+  'Test-MediuFaraSecrete': 'testMediuFaraSecrete', 'Get-HeadBundle': 'getHeadBundle', 'Test-CaiPublicare': 'testCaiPublicare',
+  'Test-NumarCommitBundle': 'testNumarCommitBundle', 'Get-MediuPublicare': 'getMediuPublicare', 'Get-ArgvPublicare': 'getArgvPublicare',
+  'New-TextPr': 'newTextPr', 'Get-ArgvPrPublicare': 'getArgvPrPublicare', 'Test-ComandaGhPublicare': 'testComandaGhPublicare',
 }
 
 const str = v => (v === null || v === undefined ? '' : String(v))
@@ -298,15 +302,12 @@ export function getRezultatAgent(iesire) {
   if (!iesire) return nec('iesire goala')
   const l = String(iesire).split(/\r?\n/).map(x => x.trim()).filter(x => x !== '')
   if (l.length === 0) return nec('iesire goala')
-  const m = l[l.length - 1].match(/^`?REZULTAT_TICHET:[ \t]+(?:(L)[ \t]+(PR|ESUAT)|(B|D|F|\?))[ \t]+([^`]*[^`\s])`?$/)
+  // r6: „L GATA <rezumat>” (commit-uri locale; push + PR le face orchestratorul); vechiul „L PR <url>” = NECUNOSCUT
+  const m = l[l.length - 1].match(/^`?REZULTAT_TICHET:[ \t]+(?:(L)[ \t]+(GATA|ESUAT)|(B|D|F|\?))[ \t]+([^`]*[^`\s])`?$/)
   if (!m) return nec('ultima linie nu e REZULTAT_TICHET in formatul cerut')
   const det = m[4]
   if (m[1]) {
-    if (m[2] === 'PR') {
-      const u = det.match(/^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/([0-9]{1,7})$/)
-      if (!u) return nec('PR fara URL valid')
-      return { tip: 'PR', clasa: 'L', detaliu: getTextSigurLinie(det, 200), pr: parseInt(u[1], 10) }
-    }
+    if (m[2] === 'GATA') return { tip: 'GATA', clasa: 'L', detaliu: getTextSigurLinie(det, 300), pr: 0 }
     return { tip: 'ESUAT', clasa: 'L', detaliu: getTextSigurLinie(det, 200), pr: 0 }
   }
   return { tip: 'DECIZIE', clasa: m[3], detaliu: getTextSigurLinie(det, 300), pr: 0 }
@@ -554,7 +555,96 @@ export function testComandaGhPermisa(argv = []) {
 
 export function testComandaGitPermisa(argv = []) {
   if (argv.length < 1 || !REGULI.git_permise.includes(argv[0])) return false
+  if (argv[0] === 'bundle' && (argv.length < 3 || !REGULI.git_bundle_permise.includes(argv[1]))) return false
   return !argv.some(x => /^--(upload-pack|receive-pack|exec|ext-diff)\b/.test(x) || x === '-c')
+}
+
+// ── r6 (P1 r5): publicarea rezultatului agentului — DOAR de orchestrator ──────────────────────────────────────
+
+export function testMediuFaraSecrete(mediu) {
+  if (!mediu || typeof mediu !== 'object') return ['mediu lipsa']
+  const mot = [], re = new RegExp(REGULI.re_valoare_secret)
+  for (const k of Object.keys(mediu)) {
+    for (const i of REGULI.variabile_secret_agent) if (k.toLowerCase() === String(i).toLowerCase()) mot.push('variabila secreta in mediul agentului: ' + i)
+    if (re.test(str(mediu[k]))) mot.push('valoare cu forma unui token in mediul agentului: ' + getTextSigurLinie(k, 40))
+  }
+  return mot
+}
+
+export function getHeadBundle(iesire, branch) {
+  const l = str(iesire).split(/\r?\n/).filter(x => x !== '')
+  if (l.length !== 1) return { sha: '', eroare: 'bundle-ul trebuie sa aiba exact un head (are ' + l.length + ')' }
+  const m = /^([0-9a-f]{40}) refs\/heads\/(\S+)$/.exec(l[0])
+  if (!m) return { sha: '', eroare: 'head-ul bundle-ului are forma neasteptata' }
+  if (m[2] !== branch || !testNumeBranch(branch)) return { sha: '', eroare: 'head-ul bundle-ului nu e branch-ul rularii' }
+  return { sha: m[1], eroare: '' }
+}
+
+export function testCaiPublicare(fisiere = []) {
+  const rez = []
+  for (const f of fisiere) {
+    const n = getCaleNormalizata(f)
+    for (const p of REGULI.publicare.cai_interzise) if (n.startsWith(p) || n === p.replace(/\/+$/, '')) { rez.push(f); break }
+  }
+  return rez
+}
+
+export function testNumarCommitBundle(total, merges) {
+  const t = str(total).trim(), m = str(merges).trim()
+  if (!/^[0-9]{1,6}$/.test(t) || !/^[0-9]{1,6}$/.test(m)) return 'numarul de commit-uri necitit'
+  if (parseInt(t, 10) < 1) return 'niciun commit peste origin/main'
+  if (parseInt(t, 10) > REGULI.publicare.max_commituri) return 'prea multe commit-uri (' + t + ')'
+  if (parseInt(m, 10) !== 0) return 'bundle-ul contine merge-uri'
+  return ''
+}
+
+export function getMediuPublicare(token) {
+  if (!testFormaTokenAgent(token)) throw new Error('token agent invalid')
+  const b64 = Buffer.from('x-access-token:' + token, 'ascii').toString('base64')
+  return { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: 'NUL', GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never',
+    GIT_CONFIG_COUNT: '3', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '',
+    GIT_CONFIG_KEY_1: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_1: 'AUTHORIZATION: basic ' + b64,
+    GIT_CONFIG_KEY_2: 'core.hooksPath', GIT_CONFIG_VALUE_2: 'NUL',
+    GIT_ASKPASS: null, SSH_ASKPASS: null, GIT_CONFIG_PARAMETERS: null, GH_TOKEN: null, GITHUB_TOKEN: null }
+}
+
+const testBranchRulare = b => testNumeBranch(b) && b.startsWith(REGULI.prefix_branch)
+const RE_REPO = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/
+
+export function getArgvPublicare(repo, sha, branch) {
+  if (!RE_REPO.test(str(repo))) throw new Error('repo invalid')
+  if (!/^[0-9a-f]{40}$/.test(str(sha))) throw new Error('sha invalid')
+  if (!testBranchRulare(str(branch))) throw new Error('branch invalid')
+  return ['push', '--no-verify', '--porcelain', 'https://github.com/' + repo + '.git', sha + ':refs/heads/' + branch]
+}
+
+export function newTextPr(numar, incercare, rezumat) {
+  if (!testNumarTichet(numar)) throw new Error('numar tichet invalid')
+  if (!(incercare >= 1 && incercare <= 9)) throw new Error('incercare invalida')
+  const p = REGULI.publicare
+  let rez = getTextSigurLinie(str(rezumat), p.max_rezumat).split('@').join(' ').trim()
+  if (!rez) rez = 'fara rezumat'
+  let t = 'Tichet ' + numar + ' (incercarea ' + incercare + '): ' + rez
+  if (t.length > p.max_titlu) t = t.slice(0, p.max_titlu).trimEnd()
+  const corp = 'PR DRAFT deschis de rularea automata Tichete dimineata pentru tichetul ' + numar + ', incercarea ' + incercare + '.\n\n' +
+    'Rezumat: ' + rez + '\n\nCe s-a schimbat: commit-urile din acest PR. Merge-ul il face coordonarea, dupa review si CI.\n'
+  return { titlu: t, corp }
+}
+
+export function getArgvPrPublicare(repo, branch, titlu, fisCorp) {
+  if (!RE_REPO.test(str(repo))) throw new Error('repo invalid')
+  if (!testBranchRulare(str(branch))) throw new Error('branch invalid')
+  const t = str(titlu)
+  if (!t || t.length > REGULI.publicare.max_titlu || /[\r\n]/.test(t) || t.startsWith('-')) throw new Error('titlu invalid')
+  if (!testCaleSimpla(fisCorp) || !/\.md$/i.test(fisCorp)) throw new Error('fisier corp invalid')
+  return ['pr', 'create', '--draft', '--base', 'main', '--head', branch, '--repo', repo, '--title', t, '--body-file', fisCorp]
+}
+
+export function testComandaGhPublicare(argv = [], repo) {
+  if (argv.length !== 13 || !repo) return false
+  let ast
+  try { ast = getArgvPrPublicare(repo, argv[6], argv[10], argv[12]) } catch { return false }
+  return ast.every((x, i) => str(argv[i]) === x)
 }
 
 // ── Lansatorul PROPRIU al agentului (J1, r4): lanseaza_agent.ps1 ───────────────────────────────────────────
@@ -572,7 +662,7 @@ export function getCaiAgent(profil) {
   if (!profil) throw new Error('profil gol')
   const d = path.win32.join(profil, AGENT.dir_config)
   return { dir: d, config: path.win32.join(d, 'agent.json'), token: path.win32.join(d, 'token_agent.txt'),
-    cont: path.win32.join(d, 'cont_agent.xml'), amprenta: path.win32.join(d, 'amprenta_rulesets.json') }
+    cont: path.win32.join(d, 'cont_agent.xml'), amprenta: path.win32.join(d, 'amprenta_rulesets.json'), gh: path.win32.join(d, 'gh'), import: path.win32.join(d, 'import') }
 }
 
 export function testCaleSimpla(cale) {
@@ -692,23 +782,23 @@ export function testFormaTokenAgent(token) {
   return typeof token === 'string' && /^(?:github_pat_[A-Za-z0-9_]{22,255}|ghp_[A-Za-z0-9]{36,255})$/.test(token)
 }
 
-export function getMediuAgent(baza = {}, token, cfg, worktree) {
-  if (!testFormaTokenAgent(token)) throw new Error('token agent invalid')
+export function getMediuAgent(baza = {}, cfg, worktree) {
   if (!cfg || !testCaleSimpla(worktree)) throw new Error('cai lipsa')
   const ra = getCaiRadacinaAgent(str(cfg.radacina_agent))
   if (!testCaleSub(worktree, ra.wt) || worktree.toLowerCase() === ra.wt.toLowerCase()) throw new Error('worktree in afara radacinii agentului')
   const r = {}
   for (const k of Object.keys(baza)) for (const p of AGENT.mediu_pastrat) if (k.toLowerCase() === p.toLowerCase()) r[p] = String(baza[k])
   Object.assign(r, {
-    CLAUDE_CONFIG_DIR: str(cfg.config_claude), GH_TOKEN: token, GH_CONFIG_DIR: ra.gh, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1',
+    CLAUDE_CONFIG_DIR: str(cfg.config_claude), GH_CONFIG_DIR: ra.gh, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1',
     GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: ra.gitconfig, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never',
     PGPASSFILE: 'NUL', PGSERVICEFILE: 'NUL', ENABLE_CLAUDEAI_MCP_SERVERS: 'false', DISABLE_AUTOUPDATER: '1', NO_COLOR: '1', TICHETE_WT: worktree,
   })
+  const sec = testMediuFaraSecrete(r)
+  if (sec.length) throw new Error('mediul agentului contine secrete: ' + sec[0])
   return r
 }
 
-export function getMediuLansator(baza = {}, cfg, token) {
-  if (!testFormaTokenAgent(token)) throw new Error('token agent invalid')
+export function getMediuLansator(baza = {}, cfg) {
   if (!cfg || !testCaleSimpla(str(cfg.profil_agent))) throw new Error('profil agent invalid')
   const r = {}
   for (const k of Object.keys(baza)) for (const p of AGENT.mediu_sistem_lansator) if (k.toLowerCase() === p.toLowerCase()) r[p] = String(baza[k])
@@ -717,7 +807,9 @@ export function getMediuLansator(baza = {}, cfg, token) {
   const pr = str(cfg.profil_agent)
   Object.assign(r, { USERPROFILE: pr, HOMEDRIVE: pr.slice(0, 2), HOMEPATH: pr.slice(2), APPDATA: pr + '\\AppData\\Roaming', LOCALAPPDATA: pr + '\\AppData\\Local',
     TEMP: pr + '\\AppData\\Local\\Temp', TMP: pr + '\\AppData\\Local\\Temp', USERNAME: str(cfg.cont_windows),
-    GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1', NO_COLOR: '1', TICHETE_GH_TOKEN: token })
+    GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1', NO_COLOR: '1' })
+  const sec = testMediuFaraSecrete(r)
+  if (sec.length) throw new Error('mediul lansatorului contine secrete: ' + sec[0])
   return r
 }
 
@@ -777,7 +869,7 @@ export function getTextLansare(cfg, sidCoordonator, interziseCitire = [], interz
 export function getTextGitconfigAgent(cfg) {
   if (!cfg || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(str(cfg.login_agent)) || !/^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,190}$/.test(str(cfg.email_commit))) throw new Error('config agent invalid')
   return '# generat de lanseaza_agent.ps1 la fiecare pornire - nu se editeaza\n[user]\n\tname = ' + cfg.login_agent + '\n\temail = ' + cfg.email_commit +
-    '\n[credential]\n\thelper =\n\thelper = !gh auth git-credential\n'
+    '\n[credential]\n\thelper =\n'
 }
 
 export function testConfigGitAgent(iesire, fisierAgent, repo) {
@@ -795,6 +887,7 @@ export function testConfigGitAgent(iesire, fisierAgent, repo) {
     const ce = getTextSigurLinie(k, 80)
     if (orig.startsWith('command line:')) mot.push('config git din linia de comanda / mediu: ' + ce)
     if (k.startsWith('credential.') && !dinAgent) mot.push('credential din alta sursa decat gitconfig-ul agentului: ' + ce)
+    if (k.startsWith('credential.') && (k !== 'credential.helper' || val.trim() !== '')) mot.push('credentiale in config git (agentul nu face push): ' + ce)
     if (k === 'include.path' || k.startsWith('includeif.')) mot.push('include in config git: ' + ce)
     if (/^http\..*(extraheader|cookiefile)$/.test(k) || /^url\..*\.(insteadof|pushinsteadof)$/.test(k) || k === 'core.askpass' || k === 'core.sshcommand' || k === 'remote.origin.pushurl') mot.push('cheie git nepermisa: ' + ce)
     if (k === 'remote.origin.url') urls.push(val)

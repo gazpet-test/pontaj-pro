@@ -14,7 +14,10 @@
 # al agentului (r5: alt cont local, standard, fără acces la profilul coordonatorului — probe făcute SUB contul agentului);
 # verificare picată / imposibilă => EROARE, nu pornește nimic.
 # r5: împărțirea în două procese — ACEST script rulează ca coordonator (tichete din BD prin pgpass, gh pentru review-uri,
-# raport); agentul rulează în lanseaza_agent.ps1 SUB CONTUL AGENTULUI (PornesteLansator), cu brief-ul pe stdin și doar tokenul lui.
+# raport); agentul rulează în lanseaza_agent.ps1 SUB CONTUL AGENTULUI (PornesteLansator), cu brief-ul pe stdin.
+# r6 (P1 r5): tokenul GitHub al agentului NU mai ajunge în contul agentului (nici la testele / build-ul rulate de el). Agentul
+# face commit local; după ce job-ul lui e oprit, ACEST script copiază bundle-ul, îl verifică și face push + PR DRAFT cu tokenul
+# agentului, ținut doar în mediul proceselor git / gh pornite de aici (PublicaRezultat).
 # Fișa de securitate: README.md. Nimic din tichet nu ajunge în SQL / nume de fișier / linie de comandă.
 [CmdletBinding()]
 param(
@@ -41,6 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 Import-Module (Join-Path $PSScriptRoot 'tichete_lib.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'tichete_win.psm1') -Force
 
 $Reguli = Get-ReguliTichete
 if ($MaxLiniiDiff -le 0) { $MaxLiniiDiff = [int]$Reguli.max_linii_diff }
@@ -120,14 +124,39 @@ function GhAgent([string[]]$argv) {
   if (-not $GhExe) { throw 'gh.exe nu e in PATH' }
   if (-not (Test-ComandaGhPermisa $argv)) { throw ('comanda gh nepermisa: ' + ((@($argv) | Select-Object -First 2) -join ' ')) }
   if (-not (Test-FormaTokenAgent $TokenAgent)) { throw 'tokenul agentului lipseste' }
-  $r = Exec $GhExe $argv 60 $RepoDir @{ GH_TOKEN = $TokenAgent; GH_CONFIG_DIR = $CaiAgent.gh; GITHUB_TOKEN = $null; GH_ENTERPRISE_TOKEN = $null; GITHUB_ENTERPRISE_TOKEN = $null; GH_HOST = $null }
+  if (-not (Test-Path -LiteralPath $CaiAgent.gh)) { New-Item -ItemType Directory -Path $CaiAgent.gh | Out-Null }
+  $r = Exec $GhExe $argv 60 $RepoDir (MediuGhAgent)
   $r.out = ([string]$r.out).Replace($TokenAgent, '[token]'); $r.err = ([string]$r.err).Replace($TokenAgent, '[token]')
   return $r
 }
-function Git([string[]]$argv, [int]$t = 300) {
+function MediuGhAgent {
+  # mediul proceselor gh cu identitatea agentului (DOAR procese ale orchestratorului): tokenul + director gh propriu, gol
+  return @{ GH_TOKEN = $TokenAgent; GH_CONFIG_DIR = $CaiAgent.gh; GITHUB_TOKEN = $null; GH_ENTERPRISE_TOKEN = $null; GITHUB_ENTERPRISE_TOKEN = $null; GH_HOST = $null; GH_REPO = $null }
+}
+function Git([string[]]$argv, [int]$t = 300, [hashtable]$mediu = $null) {
   if (-not $GitExe) { throw 'git.exe nu e in PATH' }
   if (-not (Test-ComandaGitPermisa $argv)) { throw ('comanda git nepermisa: ' + $argv[0]) }
-  return Exec $GitExe (@('-C', $RepoDir) + $argv) $t
+  return Exec $GitExe (@('-C', $RepoDir) + $argv) $t $RepoDir $mediu
+}
+function GitPublica([string]$sha, [string]$branch) {
+  # r6: SINGURUL push al rulării — din clona orchestratorului, commit-ul verificat -> branch-ul exact, tokenul agentului doar în
+  # mediul acestui proces git (Get-MediuPublicare: antet HTTP din config de mediu, fără helper / hook-uri / config global).
+  if (-not $GitExe) { throw 'git.exe nu e in PATH' }
+  if (-not (Test-FormaTokenAgent $TokenAgent)) { throw 'tokenul agentului lipseste' }
+  $med = Get-MediuPublicare $TokenAgent
+  $r = Exec $GitExe (@('-C', $RepoDir) + @(Get-ArgvPublicare -Repo $CfgAgent.repo -Sha $sha -Branch $branch)) 300 $RepoDir $med
+  foreach ($s in @($TokenAgent, [string]$med.GIT_CONFIG_VALUE_1)) { $r.out = ([string]$r.out).Replace($s, '[token]'); $r.err = ([string]$r.err).Replace($s, '[token]') }
+  return $r
+}
+function GhPublica([string[]]$argv) {
+  # r6: SINGURA scriere gh a rulării — `gh pr create --draft` în forma exactă (Test-ComandaGhPublicare), cu tokenul agentului
+  if (-not $GhExe) { throw 'gh.exe nu e in PATH' }
+  if (-not (Test-ComandaGhPublicare -Argv $argv -Repo $CfgAgent.repo)) { throw 'comanda gh de publicare nepermisa' }
+  if (-not (Test-FormaTokenAgent $TokenAgent)) { throw 'tokenul agentului lipseste' }
+  if (-not (Test-Path -LiteralPath $CaiAgent.gh)) { New-Item -ItemType Directory -Path $CaiAgent.gh | Out-Null }
+  $r = Exec $GhExe $argv 120 $RepoDir (MediuGhAgent)
+  $r.out = ([string]$r.out).Replace($TokenAgent, '[token]'); $r.err = ([string]$r.err).Replace($TokenAgent, '[token]')
+  return $r
 }
 function JsonGh($r, [string]$ce) {
   # răspunsul unei citiri gh api: exit 0 + JSON; altfel aruncă (verificare imposibilă = EROARE, nu „trece”)
@@ -263,6 +292,8 @@ function PornesteLansator([string[]]$Argumente, [AllowNull()][string]$Stdin) {
   # lanseaza_agent.ps1 SUB CONTUL AGENTULUI: Process.Start cu UserName / Password (CreateProcessWithLogonW, serviciul
   # „Secondary Logon”) + profil încărcat; mediul = Get-MediuLansator (nimic din mediul coordonatorului); stdin = brief-ul;
   # procesul intră imediat într-un job object (oprire pe tot arborele, chiar dacă procesele sunt ale altui cont).
+  # r6: mediul FĂRĂ tokenul agentului (Get-MediuLansator aruncă la orice secret); stdin-ul (poarta lansatorului) se scrie și se
+  # închide DOAR după ce Add-ProcesJob a confirmat (IsProcessInJob) că procesul e în job — până atunci lansatorul nu pornește copii.
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $PsExe
   $psi.Arguments = Join-ArgvWindows (@('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $Lansator, '-Config', $RaAgent.fisLansare) + @($Argumente))
@@ -270,12 +301,12 @@ function PornesteLansator([string[]]$Argumente, [AllowNull()][string]$Stdin) {
   $psi.UserName = $CfgAgent.cont_windows; $psi.Domain = $env:COMPUTERNAME; $psi.Password = $CredAgent.Password
   $psi.WorkingDirectory = $RaAgent.radacina
   $psi.RedirectStandardInput = $true
-  $mediu = Get-MediuLansator -Baza ([Environment]::GetEnvironmentVariables()) -Cfg $CfgAgent -Token $TokenAgent
+  $mediu = Get-MediuLansator -Baza ([Environment]::GetEnvironmentVariables()) -Cfg $CfgAgent
   $psi.EnvironmentVariables.Clear()
   foreach ($k in $mediu.Keys) { $psi.EnvironmentVariables[$k] = [string]$mediu[$k] }
+  $job = New-JobAgent
   $proc = [System.Diagnostics.Process]::Start($psi)
-  $job = [JobAgent]::Creeaza()
-  if (-not [JobAgent]::Adauga($job, $proc.Handle)) { try { $proc.Kill() } catch {}; [JobAgent]::Inchide($job); throw 'job object: procesul agentului nu a putut fi atasat' }
+  if (-not (Add-ProcesJob -Job $job -Proces $proc)) { try { $proc.Kill() } catch {}; Close-JobAgent $job; throw 'job object: procesul agentului nu a putut fi atasat' }
   $oct = $UTF8.GetBytes([string]$Stdin)
   if ($oct.Length -gt 0) { $proc.StandardInput.BaseStream.Write($oct, 0, $oct.Length) }
   $proc.StandardInput.Close()
@@ -284,8 +315,8 @@ function PornesteLansator([string[]]$Argumente, [AllowNull()][string]$Stdin) {
 function OpresteJob($pj) {
   # oprește TOT arborele lansatorului (job object) și eliberează job-ul
   if ($null -eq $pj -or $null -eq $pj.job) { return }
-  try { [void][JobAgent]::Termina($pj.job) } catch {}
-  try { [JobAgent]::Inchide($pj.job) } catch {}
+  try { [void](Stop-JobAgent $pj.job) } catch {}
+  try { Close-JobAgent $pj.job } catch {}
   $pj.job = $null
 }
 function CitesteIesireAgent([string]$fis, [int]$max = 5242880) {
@@ -297,31 +328,53 @@ function CitesteIesireAgent([string]$fis, [int]$max = 5242880) {
   if ((Get-Item -LiteralPath $fis -Force).Length -gt $max) { throw 'iesirea agentului e prea mare' }
   return [IO.File]::ReadAllText($fis, $UTF8)
 }
-if (-not ('JobAgent' -as [type])) {
-  Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class JobAgent {
-  [StructLayout(LayoutKind.Sequential)] public struct BASIC { public long a; public long b; public uint LimitFlags; public UIntPtr c; public UIntPtr d; public uint e; public UIntPtr f; public uint g; public uint h; }
-  [StructLayout(LayoutKind.Sequential)] public struct IOC { public ulong a, b, c, d, e, f; }
-  [StructLayout(LayoutKind.Sequential)] public struct EXT { public BASIC Basic; public IOC Io; public UIntPtr a; public UIntPtr b; public UIntPtr c; public UIntPtr d; }
-  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr CreateJobObject(IntPtr attr, string name);
-  [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetInformationJobObject(IntPtr job, int cls, ref EXT info, uint len);
-  [DllImport("kernel32.dll", SetLastError = true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr proc);
-  [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateJobObject(IntPtr job, uint code);
-  [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr h);
-  public static IntPtr Creeaza() {
-    IntPtr j = CreateJobObject(IntPtr.Zero, null);
-    if (j == IntPtr.Zero) throw new InvalidOperationException("CreateJobObject");
-    EXT x = new EXT(); x.Basic.LimitFlags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-    if (!SetInformationJobObject(j, 9, ref x, (uint)Marshal.SizeOf(typeof(EXT)))) { CloseHandle(j); throw new InvalidOperationException("SetInformationJobObject"); }
-    return j;
-  }
-  public static bool Adauga(IntPtr job, IntPtr proc) { return AssignProcessToJobObject(job, proc); }
-  public static bool Termina(IntPtr job) { return TerminateJobObject(job, 1); }
-  public static void Inchide(IntPtr job) { CloseHandle(job); }
-}
-'@
+function PublicaRezultat($x) {
+  # r6 (P1 r5): commit-urile LOCALE ale agentului (rezultat.bundle = date neîncrezute) -> verificate -> push + PR DRAFT, DOAR de
+  # aici (contul coordonatorului, tokenul agentului doar în mediul proceselor git / gh de aici). Apelat DUPĂ OpresteJob: niciun
+  # proces al agentului nu mai rulează când tokenul e folosit. Pașii: copie ca octeți (fără legături, plafon) -> fetch origin ->
+  # bundle verify (cerințele = istoria lui main) -> exact un head = branch-ul exact -> import cu fsck, fără hook-uri ->
+  # 1..max commit-uri peste origin/main, fără merge-uri -> nicio cale .github/ -> push fără --force -> gh pr create --draft.
+  # Întoarce @{ stare = '' (publicat) | 'BLOCAT' | 'EROARE' | 'NECUNOSCUT'; motiv }.
+  $src = Join-Path (Join-Path $RaAgent.iesire $x.slug) 'rezultat.bundle'
+  if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { return @{ stare = 'NECUNOSCUT'; motiv = 'agentul a raportat GATA, dar nu a lasat niciun commit (rezultat.bundle lipseste)' } }
+  if (-not (Test-Path -LiteralPath $CaiAgent.import)) { New-Item -ItemType Directory -Path $CaiAgent.import | Out-Null }
+  $fb = Join-Path $CaiAgent.import ($x.slug + '-i' + $x.incercare + '.bundle')
+  try { Copy-IesireAgent -Sursa $src -Destinatie $fb -Max ([long]$Reguli.publicare.max_octeti_bundle) } catch { return @{ stare = 'BLOCAT'; motiv = 'rezultat.bundle: ' + (Get-TextSigurLinie $_.Exception.Message 120) } }
+  $r = Git @('fetch', '--prune', 'origin')
+  if ($r.exit -ne 0) { return @{ stare = 'EROARE'; motiv = 'git fetch esuat inaintea importului' } }
+  $r = Git @('bundle', 'verify', '--quiet', $fb)
+  if ($r.exit -ne 0) { return @{ stare = 'BLOCAT'; motiv = 'bundle-ul agentului nu trece git bundle verify' } }
+  $r = Git @('bundle', 'list-heads', $fb)
+  if ($r.exit -ne 0) { return @{ stare = 'BLOCAT'; motiv = 'bundle-ul agentului nu se citeste' } }
+  $hb = Get-HeadBundle -Iesire $r.out -Branch $x.branch
+  if ($hb.eroare) { return @{ stare = 'BLOCAT'; motiv = $hb.eroare } }
+  $ref = [string]$Reguli.publicare.prefix_ref_import + $x.slug + '-i' + $x.incercare
+  # import cu verificarea obiectelor (fsck) și fără hook-uri, din config de mediu (garda git refuză „-c” în argumente)
+  $medImp = @{ GIT_CONFIG_COUNT = '3'; GIT_CONFIG_KEY_0 = 'fetch.fsckObjects'; GIT_CONFIG_VALUE_0 = 'true'; GIT_CONFIG_KEY_1 = 'transfer.fsckObjects'
+               GIT_CONFIG_VALUE_1 = 'true'; GIT_CONFIG_KEY_2 = 'core.hooksPath'; GIT_CONFIG_VALUE_2 = 'NUL'; GIT_CONFIG_PARAMETERS = $null }
+  $r = Git @('fetch', '--no-tags', '--no-write-fetch-head', $fb, ('+refs/heads/' + $x.branch + ':' + $ref)) 300 $medImp
+  if ($r.exit -ne 0) { return @{ stare = 'BLOCAT'; motiv = 'importul bundle-ului a esuat (fsck / format)' } }
+  $r = Git @('rev-parse', '--verify', $ref)
+  if ($r.exit -ne 0 -or $r.out.Trim() -cne $hb.sha) { return @{ stare = 'BLOCAT'; motiv = 'commit-ul importat nu e head-ul bundle-ului' } }
+  $rt = Git @('rev-list', '--count', ('origin/main..' + $hb.sha))
+  $rm = Git @('rev-list', '--count', '--merges', ('origin/main..' + $hb.sha))
+  if ($rt.exit -ne 0 -or $rm.exit -ne 0) { return @{ stare = 'EROARE'; motiv = 'git rev-list esuat' } }
+  $mc = Test-NumarCommitBundle -Total $rt.out -Merges $rm.out
+  if ($mc) { return @{ stare = 'BLOCAT'; motiv = $mc } }
+  $rn = Git @('diff', '--no-renames', '--name-status', '-z', ('origin/main...' + $hb.sha))
+  if ($rn.exit -ne 0) { return @{ stare = 'EROARE'; motiv = 'inventarul cailor bundle-ului necitit' } }
+  try { $cai = @(Get-CaiNameStatusZ $rn.out) } catch { return @{ stare = 'BLOCAT'; motiv = 'inventarul cailor: ' + $_.Exception.Message } }
+  $interz = @(Test-CaiPublicare $cai)
+  if ($interz.Count -gt 0) { return @{ stare = 'BLOCAT'; motiv = 'nu public: atinge ' + (Get-TextSigurLinie ([string]$interz[0]) 120) + ' (cale interzisa la publicare)' } }
+  $txt = New-TextPr -Numar $x.numar -Incercare ([int]$x.incercare) -Rezumat $x.agent.detaliu
+  $fc = Join-Path $CaiAgent.import ($x.slug + '-i' + $x.incercare + '_corp.md')
+  [IO.File]::WriteAllText($fc, $txt.corp, $UTF8)
+  $r = GitPublica $hb.sha $x.branch
+  if ($r.exit -ne 0) { return @{ stare = 'EROARE'; motiv = 'push esuat: ' + (Get-TextSigurLinie $r.err 160) } }
+  $x.sha = $hb.sha
+  $r = GhPublica @(Get-ArgvPrPublicare -Repo $CfgAgent.repo -Branch $x.branch -Titlu $txt.titlu -FisCorp $fc)
+  if ($r.exit -ne 0) { return @{ stare = 'EROARE'; motiv = 'branch-ul e pe GitHub, dar gh pr create a esuat: ' + (Get-TextSigurLinie $r.err 160) } }
+  return @{ stare = ''; motiv = '' }
 }
 function JsonLista([string]$s) {
   # PS 5.1: „'[...]' | ConvertFrom-Json” emite array-ul ca UN obiect; aici îl întoarcem ca listă reală (apelantul NU pune @())
@@ -581,6 +634,15 @@ ROLLBACK;
       if ($null -eq $rezTxt) { $x.agent = @{ tip = 'NECUNOSCUT'; clasa = ''; detaliu = ('lipseste / nu se citeste agent_' + $x.slug + '.json (exit ' + $codAg + ': ' + (Get-TextSigurLinie (UltimaLinie $logOut) 160) + ')'); pr = 0 } }
       else { $x.agent = Get-RezultatAgent $rezTxt }
       Jurnal ('agent gata ' + $x.numar + ' (exit ' + $codAg + '): ' + $x.agent.tip + ' ' + $x.agent.clasa)
+      # r6 (P1 r5): publicarea o face ORCHESTRATORUL, după ce job-ul agentului a fost oprit (OpresteJob mai sus)
+      if ($x.agent.tip -ceq 'GATA') {
+        try { $pub = PublicaRezultat $x } catch { $pub = @{ stare = 'EROARE'; motiv = 'publicarea: ' + (Get-TextSigurLinie $_.Exception.Message 160) } }
+        if ($pub.stare) {
+          if ($pub.stare -ceq 'EROARE') { [void]$x.erori.Add($pub.motiv) }
+          Termina $x $pub.stare $pub.motiv; continue
+        }
+        Jurnal ('publicat ' + $x.numar + ' branch=' + $x.branch + ' ' + $x.sha.Substring(0, 8))
+      }
       $x.etapa = 'pr_cauta'
     }
 
@@ -604,7 +666,7 @@ ROLLBACK;
         foreach ($d in @($RaAgent.iesire, $dirAg)) {
           if ((Test-Path -LiteralPath $d) -and (((Get-Item -LiteralPath $d -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { throw ('directorul de iesire al agentului e o legatura: ' + $d) }
         }
-        foreach ($f in @('stare.txt', 'agent.json', 'agent.err.log', 'garda.log')) {
+        foreach ($f in @('stare.txt', 'agent.json', 'agent.err.log', 'garda.log', 'rezultat.bundle')) {
           $fa = Join-Path $dirAg $f
           if (Test-Path -LiteralPath $fa -PathType Leaf) { Remove-Item -LiteralPath $fa -Force }
         }
@@ -629,14 +691,17 @@ ROLLBACK;
         switch -CaseSensitive ($tip) {
           'DECIZIE' { Termina $x 'DECIZIE' '' }
           'ESUAT'   { Termina $x 'ESUAT' $ag.detaliu }
-          'PR'      { Termina $x 'NECUNOSCUT' ('agentul a raportat PR, dar pe branch-ul ' + $x.branch + ' nu e niciun PR') }
+          'GATA'    { Termina $x 'NECUNOSCUT' ('publicat, dar pe branch-ul ' + $x.branch + ' nu se vede niciun PR') }
           default   { Termina $x 'NECUNOSCUT' $(if ($null -ne $ag) { $ag.detaliu } else { 'fara rezultat' }) }
         }
         continue
       }
+      $shaPublicat = [string]$x.sha
       $x.pr = [int]$sp.pr.number; $x.sha = [string]$sp.pr.headRefOid
-      if ($tip -ceq 'PR' -and $ag.pr -ne $x.pr) { $x.nota = 'agentul a raportat PR #' + $ag.pr + ', pe branch e #' + $x.pr }
-      elseif ($tip -ceq 'DECIZIE' -or $tip -ceq 'ESUAT') { $x.nota = 'agentul a raportat ' + $tip + ', dar a deschis PR' }
+      # r6: PR-ul îl deschide orchestratorul; un PR pe branch-ul rulării după DECIZIE / ESUAT sau cu alt head decât cel publicat
+      # nu vine de la această rulare => de verificat de om
+      if ($x.mod -ceq 'nou' -and $tip -cne 'GATA') { Termina $x 'BLOCAT' ('agentul a raportat ' + $tip + ', dar pe branch-ul rularii exista PR #' + $x.pr); continue }
+      if ($x.mod -ceq 'nou' -and $shaPublicat -and $x.sha -cne $shaPublicat) { Termina $x 'BLOCAT' ('head-ul PR-ului #' + $x.pr + ' nu e commit-ul publicat'); continue }
       if ($x.mod -ceq 'ci' -and $null -ne $x.verdicte -and [string]$x.verdicte.sha -ceq $x.sha) {
         # J7 (r4): review-urile de pe ACEST commit sunt deja citite; se reia doar pasul CI
         $x.jak = $x.verdicte.jak; $x.fable = $x.verdicte.fable; $x.etapa = 'ci_prep'
