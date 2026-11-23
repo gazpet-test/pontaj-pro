@@ -548,8 +548,16 @@ def cu_text_scris(html, interior_nou):
     return html[:i] + interior_nou + interior + html[j:]
 
 
+UMBRE_ZERO = {"shadow_pagina": 0, "shadow_zona": 0, "custom_pagina": 0, "custom_zona": 0}     # r19: pagina reala (citire CDP 23.11)
+
+
 class FakePg:
-    def __init__(self, html, semn=0, dupa_goto=None, dupa_scriere=None, n_editor=1, randare=None, html_editor=None, la_citire=None):
+    def __init__(self, html, semn=0, dupa_goto=None, dupa_scriere=None, n_editor=1, randare=None, html_editor=None, la_citire=None,
+                 umbre=None, rezultat_evaluate=None):
+        # r19: evaluate(JS_INSTANTANEU) = aceeasi citire ca content() (acelasi HTML, aceleasi la_citire / citite / n_dupa) + umbre:
+        # dict (fix) sau umbre(pg) -> dict (schimbat intre citiri); implicit UMBRE_ZERO. rezultat_evaluate(pg, r) -> ce intoarce de fapt
+        # evaluate (forme gresite). Jurnalul inregistreaza "evaluate" (instantaneul) si "content" (doar mutantii mai vechi il mai folosesc)
+        self.umbre, self.rezultat_evaluate, self.js_evaluate = umbre, rezultat_evaluate, []
         # r17: n_editor = numarul de editoare principale vazute de locator; randare = cum arata inner_text() textul scris (None = identic)
         # r18: dupa scriere, content() pune in editor textul scris ca HTML Quill: html_editor(ciorna) daca e dat, altfel
         # quill_html(randare(ciorna) / ciorna); la_citire(pg, html) -> html = ce intoarce citirea curenta content() (editorul schimbat
@@ -566,6 +574,18 @@ class FakePg:
 
     def content(self):
         self.jurnal.append("content")
+        return self._citire()
+
+    def evaluate(self, js):
+        self.jurnal.append("evaluate")
+        self.js_evaluate.append(js)
+        u = self.umbre(self) if callable(self.umbre) else self.umbre     # inaintea citirii: n_dupa = citirile anterioare
+        r = dict(UMBRE_ZERO if u is None else u)
+        self.ultimele_umbre = dict(r)
+        r["html"] = self._citire()
+        return self.rezultat_evaluate(self, r) if self.rezultat_evaluate else r
+
+    def _citire(self):
         h = self.html
         if self.scris:
             if self.html_editor is not None:
@@ -5722,7 +5742,8 @@ LINIA_VERIFICA_R18 = '    verifica_ciorna(info["text_editor"], text, info["atasa
 # (M100) textul din inner_text() (textul VIZIBIL, ca in r17), restul din instantaneu
 REGULI_M100_INNER_TEXT = [(LINIA_VERIFICA_R18, '    verifica_ciorna(_editor_unic(pg).inner_text(), text, info["atasamente"])')]
 # (M101) doua citiri: textul dintr-o citire content() ANTERIOARA, atasamentele / necunoscutele din a doua
-REGULI_M101_DOUA_CITIRI = [("    _editor_unic(pg)\r\n", '    text_citit = analizeaza_ciorna(pg.content())["text_editor"]\r\n    _editor_unic(pg)\r\n'),
+REGULI_M101_DOUA_CITIRI = [("    _editor_unic(pg)\r\n    semn = _semn_locator(pg)\r\n",
+                            '    text_citit = _instantaneu(pg)[0]["text_editor"]\r\n    _editor_unic(pg)\r\n    semn = _semn_locator(pg)\r\n'),
                            (LINIA_VERIFICA_R18, '    verifica_ciorna(text_citit, text, info["atasamente"])')]
 # (M102) o asteptare intre instantaneu si Enter
 REGULI_M102_ASTEPTARE = [('    _ultima_paza(pg, text)\r\n    pg.keyboard.press("Enter")',
@@ -5739,13 +5760,17 @@ def _invariant_instantaneu(pg):
     # r18: dupa scriere exact O citire content(); daca s-a apasat Enter, apelul imediat dinainte e acea citire, iar ea arata editorul
     # cu EXACT brief-ul, fara necunoscute / atasamente (ce s-a trimis = ce s-a verificat) -> (ok, motiv)
     j = pg.jurnal
+    # r19: citirea = UN evaluate (HTML + umbre din acelasi apel); orice content() / al doilea evaluate dupa scriere rupe invariantul
     dupa = j[len(j) - 1 - j[::-1].index("insert") + 1:] if "insert" in j else []
-    if dupa.count("content") != 1:
-        return False, "citiri content dupa scriere: %d" % dupa.count("content")
+    n = dupa.count("content") + dupa.count("evaluate")
+    if n != 1 or dupa.count("evaluate") != 1:
+        return False, "citiri dupa scriere: %d (evaluate %d)" % (n, dupa.count("evaluate"))
     if "press Enter" in dupa:
         k = dupa.index("press Enter")
-        if dupa[k - 1] != "content":
+        if dupa[k - 1] != "evaluate":
             return False, "intre instantaneu si Enter: " + dupa[k - 1]
+        if any(pg.ultimele_umbre[k] for k in ("shadow_pagina", "shadow_zona", "custom_zona")):
+            return False, "Enter dupa un instantaneu cu shadow DOM"
         i = gp.analizeaza_ciorna(pg.citite[-1])
         if gp.normalizeaza(i["text_editor"]) != gp.normalizeaza(BRIEF_TEST) or i["necunoscute"] or i["atasamente"]:
             return False, "Enter dupa un instantaneu care nu e brief-ul curat"
@@ -5890,7 +5915,9 @@ class TestUltimaPazaR18(unittest.TestCase):
             i1 = next(k for k in range(i0 + 1, len(linii)) if linii[k].startswith("def "))
             return [l for l in linii[i0 + 1:i1] if l.strip() and not l.lstrip().startswith("#")]
         c = corp("def _ultima_paza(pg, text):")
-        self.assertEqual(c, ["    _editor_unic(pg)", "    semn = _semn_locator(pg)", "    info = analizeaza_ciorna(pg.content())",
+        # r19: instantaneul = _instantaneu (un evaluate), umbrele refuzate inaintea atasamentelor
+        self.assertEqual(c, ["    _editor_unic(pg)", "    semn = _semn_locator(pg)", "    info, umbre = _instantaneu(pg)",
+                             '    verifica_fara_umbre(umbre, "inainte_de_enter")',
                              '    verifica_fara_atasamente(info, semn, "inainte_de_enter")', LINIA_VERIFICA_R18])
         self.assertEqual(sum(l.count("_ultima_paza(") for l in cod), 2)               # definitia + singurul apel (in trimite)
         self.assertFalse(any("_atasamente(pg)" in l for l in cod))                    # vechea paza separata a disparut
@@ -5986,6 +6013,160 @@ class TestUltimaPazaR18(unittest.TestCase):
             self.assertEqual(_invariant_instantaneu(pg), (True, ""))
         # ciorna goala reala (<p><br></p>) = text gol, nicio abatere de forma
         self.assertEqual(self.an(html_captura("gol"))["text_editor"], "")
+
+
+# --- r19 (Jakarinos NO-GO r8 pe 426e2436): shadow DOM nevazut de page.content() -> un singur evaluate cu HTML + numaratorile shadow ---
+# reproducerea din verdict (in simulare, ca la Jakarinos): HTML-ul serializat = captura reala NESCHIMBATA (gazda = un div permis, gol in
+# HTML), iar shadow root-ul ei (cu <div contenteditable="true"><p>continut strain arbitrar</p></div>) se vede DOAR in numaratori
+UMBRA_ZONA = dict(UMBRE_ZERO, shadow_pagina=1, shadow_zona=1)          # gazda in zona: shadow root-ul e si in pagina
+UMBRA_PAGINA = dict(UMBRE_ZERO, shadow_pagina=1)                       # shadow root in pagina, in afara zonei (pagina reala: 0)
+CUSTOM_ZONA = dict(UMBRE_ZERO, custom_pagina=1, custom_zona=1)         # element custom inregistrat in zona (poate avea shadow inchis)
+CUSTOM_PAGINA = dict(UMBRE_ZERO, custom_pagina=1)                      # doar afisat in `stare`, nu decide
+LINIA_UMBRE = '    if umbre["shadow_pagina"] or umbre["shadow_zona"] or umbre["custom_zona"]:'
+REGULI_M106_FARA_UMBRE = [(LINIA_UMBRE, "    if False:")]
+REGULI_M107_DOAR_ZONA = [(LINIA_UMBRE, '    if umbre["shadow_zona"] or umbre["custom_zona"]:')]
+REGULI_M108_FARA_CUSTOM = [(LINIA_UMBRE, '    if umbre["shadow_pagina"] or umbre["shadow_zona"]:')]
+# (M109) instantaneul r18: HTML din page.content(), numaratorile shadow absente (= 0)
+REGULI_M109_CONTENT_R18 = [("    r = pg.evaluate(JS_INSTANTANEU)\r\n",
+                            '    r = {"html": pg.content(), "shadow_pagina": 0, "shadow_zona": 0, "custom_pagina": 0, "custom_zona": 0}\r\n')]
+# (M110) doua apeluri in ultima paza: umbrele dintr-un evaluate, HTML-ul din altul
+REGULI_M110_DOUA_EVALUATE = [("    semn = _semn_locator(pg)\r\n    info, umbre = _instantaneu(pg)\r\n",
+                              "    semn = _semn_locator(pg)\r\n    umbre = _instantaneu(pg)[1]\r\n    info = _instantaneu(pg)[0]\r\n")]
+MUTANTI_R19 = (("M106", REGULI_M106_FARA_UMBRE), ("M107", REGULI_M107_DOAR_ZONA), ("M108", REGULI_M108_FARA_CUSTOM),
+               ("M109", REGULI_M109_CONTENT_R18), ("M110", REGULI_M110_DOUA_EVALUATE))
+
+
+def umbre_dupa_scriere(u):
+    # shadow DOM aparut DOAR la ultima paza (dupa scriere); paza dinainte de chatul nou si cea de pe chatul nou il vad curat
+    return lambda pg: u if pg.scris else UMBRE_ZERO
+
+
+class TestUmbreR19(unittest.TestCase):
+    """r19: (1) orice shadow root deschis (in zona, pe stramosii editorului SAU oriunde in pagina) si orice element custom inregistrat in
+    zona = refuz, din ACELASI pg.evaluate care intoarce HTML-ul analizat (nicio citire page.content() in cod). (2) Forma rezultatului
+    verificata strict. (3) Starile reale (0) trec. Asteptarile sunt scrise de mana; reproducerea e cea din verdict."""
+
+    def scrie(self, mod, umbre, s="mediu", **kw):
+        g = html_captura(s)
+        pg = FakePg(g, dupa_goto=g, umbre=umbre, **kw)
+        cod, det, act = trimite_brief(mod, pg, BRIEF_TEST)
+        return cod, act, pg, det
+
+    def test_reproducerea_verdict_r8(self):
+        for s in ("gol", "mediu", "lung"):
+            h = html_captura(s)
+            i = gp.analizeaza_ciorna(h)
+            # HTML-ul singur: exact ce a masurat Jakarinos (editoare=1, atasamente=0, semne=0, necunoscute=0)
+            self.assertEqual((i["editoare"], i["atasamente"], i["semne"], i["necunoscute"]), (1, 0, 0, 0), msg=s)
+            # shadow root prezent de la inceput: refuz la prima paza, nicio actiune
+            self.assertEqual(ruleaza_trimite(gp, FakePg(h, umbre=UMBRA_ZONA)), ("ciorna_necunoscuta", []), msg=s)
+            # aparut doar la ultima paza: refuz inainte de Enter
+            cod, act, pg, det = self.scrie(gp, umbre_dupa_scriere(UMBRA_ZONA), s)
+            self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=s)
+            self.assertEqual(det, "inainte_de_enter: shadow DOM nevazut de analiza (shadow root: pagina 1, zona 1; custom inregistrate"
+                                  " in zona 0) - nu trimit")
+            self.assertEqual(_invariant_instantaneu(pg), (True, ""))
+            # pe instantaneul r18 (mutant M109: HTML din content(), fara numaratori): Enter (= ocolirea din verdict)
+            cod, act, pg, det = self.scrie(mutant(REGULI_M109_CONTENT_R18), umbre_dupa_scriere(UMBRA_ZONA), s)
+            self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE), msg=s)
+
+    def test_shadow_in_pagina_in_afara_zonei_refuz(self):
+        # pagina reala are 0 shadow root-uri -> si unul in afara zonei = refuz sigur
+        for s in ("gol", "mediu", "lung"):
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html_captura(s), umbre=UMBRA_PAGINA)), ("ciorna_necunoscuta", []), msg=s)
+            self.assertEqual(self.scrie(gp, umbre_dupa_scriere(UMBRA_PAGINA), s)[:2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=s)
+        # pe chatul nou (dupa navigare): refuz inainte de click
+        cod, act, pg, det = self.scrie(gp, lambda pg: UMBRA_PAGINA if "goto" in pg.act else UMBRE_ZERO)
+        self.assertEqual((cod, act), ("ciorna_necunoscuta", ["goto"]))
+        self.assertTrue(det.startswith("pe_chatul_nou: shadow DOM"), det)
+
+    def test_custom_inregistrat_in_zona_refuz_in_pagina_afisat(self):
+        for s in ("mediu", "lung"):
+            self.assertEqual(self.scrie(gp, umbre_dupa_scriere(CUSTOM_ZONA), s)[:2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=s)
+            self.assertEqual(self.scrie(gp, CUSTOM_PAGINA, s)[:2], (None, ACTIUNI_TRIMITERE), msg=s)
+
+    def test_starile_reale_trec_r19(self):
+        # starile reale (0 shadow, 0 custom): Enter; evaluate primeste EXACT JS_INSTANTANEU
+        for s in ("mediu", "lung"):
+            cod, act, pg, det = self.scrie(gp, None, s)
+            self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE), msg=s)
+            self.assertEqual(_invariant_instantaneu(pg), (True, ""))
+            self.assertEqual(pg.js_evaluate, [gp.JS_INSTANTANEU] * 3)             # inainte de chat nou, pe chatul nou, ultima paza
+            self.assertNotIn("content", pg.jurnal)
+        for html in [pagina_calibrare(x) for x in ("i", "ii", "iii")] + [pagina_22_11_completa(x) for x in ("i", "ii", "iii")] + \
+                [pagina_23_11(), chat_nou_gol_23_11()]:
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html, dupa_goto=html, umbre=UMBRE_ZERO)), (None, ACTIUNI_TRIMITERE))
+        # `stare`: numaratorile pe linia lor; 0 -> paza OK, shadow -> REFUZ
+        for u, linie, paza in ((UMBRE_ZERO, "shadow root: pagina 0 / zona 0 | custom inregistrate: pagina 0 / zona 0", "paza ciorna: OK"),
+                               (UMBRA_ZONA, "shadow root: pagina 1 / zona 1 | custom inregistrate: pagina 0 / zona 0", "paza ciorna: REFUZ"),
+                               (CUSTOM_PAGINA, "shadow root: pagina 0 / zona 0 | custom inregistrate: pagina 1 / zona 0", "paza ciorna: OK")):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                gp.stare(FakePg(html_captura("lung"), umbre=u))
+            l = out.getvalue().splitlines()
+            self.assertIn(linie, l)
+            self.assertTrue(any(x.startswith(paza) for x in l), msg=l[-1])
+
+    def test_forma_rezultatului_evaluate(self):
+        # orice abatere a rezultatului = ciorna_necitibila, nimic trimis (la prima paza: nicio actiune; la ultima: fara Enter)
+        forme = (lambda r: None, lambda r: [r["html"]], lambda r: r["html"], lambda r: {k: v for k, v in r.items() if k != "shadow_zona"},
+                 lambda r: dict(r, extra=0), lambda r: dict(r, shadow_pagina=0.0), lambda r: dict(r, shadow_zona=False),
+                 lambda r: dict(r, custom_zona=-1), lambda r: dict(r, shadow_pagina="0"), lambda r: dict(r, html=None),
+                 lambda r: dict(r, html=b"<html></html>"))
+        for f in forme:
+            pg = FakePg(html_captura("mediu"), rezultat_evaluate=lambda pg, r, f=f: f(r))
+            self.assertEqual(ruleaza_trimite(gp, pg), ("ciorna_necitibila", []))
+            g = html_captura("mediu")
+            pg = FakePg(g, dupa_goto=g, rezultat_evaluate=lambda pg, r, f=f: f(r) if pg.scris else r)
+            self.assertEqual(trimite_brief(gp, pg, BRIEF_TEST)[::2], ("ciorna_necitibila", ACTIUNI_FARA_ENTER))
+
+    def test_un_singur_evaluate_pe_tipare_de_umbre(self):
+        # umbrele se schimba intre citiri (citirea k dupa scriere: curat / shadow in zona / shadow in pagina / custom in zona): decizia =
+        # starea din SINGURA citire; invariantul tine pe cod si se rupe pe M110 (doua evaluate)
+        import itertools
+        stari = {"curat": UMBRE_ZERO, "zona": UMBRA_ZONA, "pagina": UMBRA_PAGINA, "custom": CUSTOM_ZONA}
+
+        def tipar(t):
+            return lambda pg: UMBRE_ZERO if not pg.scris or pg.n_dupa >= len(t) else stari[t[pg.n_dupa]]
+        for t in itertools.product(stari, repeat=2):
+            cod, act, pg, det = self.scrie(gp, tipar(t))
+            self.assertEqual(_invariant_instantaneu(pg), (True, ""), msg=t)
+            self.assertEqual(cod, None if t[0] == "curat" else "ciorna_necunoscuta", msg=t)
+        # M110: umbrele din prima citire (curata), HTML-ul din a doua (cu shadow) -> Enter, invariantul rupt
+        cod, act, pg, det = self.scrie(mutant(REGULI_M110_DOUA_EVALUATE), tipar(("curat", "zona")))
+        self.assertEqual((cod, act), (None, ACTIUNI_TRIMITERE))
+        self.assertFalse(_invariant_instantaneu(pg)[0])
+
+    def test_mutanti_r19_lasa_brief_ul_sa_plece(self):
+        # fiecare mutant rupe scenariul lui (Enter), codul refuza; starile reale trec pe fiecare mutant
+        cazuri = {"M106": UMBRA_ZONA, "M107": UMBRA_PAGINA, "M108": CUSTOM_ZONA, "M109": UMBRA_ZONA}
+        for nume, inl in MUTANTI_R19:
+            mut = mutant(inl)
+            if nume in cazuri:
+                u = umbre_dupa_scriere(cazuri[nume])
+                self.assertEqual(self.scrie(gp, u)[:2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=nume)
+                self.assertEqual(self.scrie(mut, u)[:2], (None, ACTIUNI_TRIMITERE), msg=nume)
+            for s in ("mediu", "lung"):
+                self.assertEqual(self.scrie(mut, UMBRE_ZERO, s)[:2], (None, ACTIUNI_TRIMITERE), msg=(nume, s))
+
+    def test_structural_r19(self):
+        with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
+            src = f.read().decode("ascii")
+        cod = [l for l in (x.rstrip("\r") for x in src.split("\n")) if not l.lstrip().startswith("#")]
+        self.assertFalse([l for l in cod if ".content(" in l])                       # nicio citire page.content() in cod
+        self.assertEqual(sum(l.count(".evaluate(") for l in cod), 1)                   # singurul evaluate: in _instantaneu
+        self.assertIn("    r = pg.evaluate(JS_INSTANTANEU)", cod)
+        self.assertEqual(sum(l.count("_instantaneu(") for l in cod), 3)               # definitia + _citeste_ciorna + _ultima_paza
+        self.assertEqual(sum(l.count("verifica_fara_umbre(") for l in cod), 4)        # definitia + _paza_ciorna + _ultima_paza + stare
+        self.assertEqual(gp.CHEI_UMBRE, ("shadow_pagina", "shadow_zona", "custom_pagina", "custom_zona"))
+        js = gp.JS_INSTANTANEU
+        for parte in ("const Z = " + json.dumps(gp.ZONA), "E = " + json.dumps(gp.EDITOR), "document.documentElement.outerHTML",
+                      "if (el.shadowRoot) { sp++; if (z) sz++; parcurge(el.shadowRoot, z); }", "parcurge(document, false);",
+                      "ce.getName(el.constructor)", "ce.get(el.localName)", "ce.get(el.getAttribute('is'))",
+                      "stramosi.has(el) || zone.some((z) => z.contains(el))",
+                      "{ html: document.documentElement.outerHTML, shadow_pagina: sp, shadow_zona: sz, custom_pagina: cp, custom_zona: cz }"):
+            self.assertIn(parte, js)
+        js.encode("ascii")
 
 
 def _nod_text(t):

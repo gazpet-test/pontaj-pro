@@ -189,6 +189,11 @@
 #   citea textul cu ed.inner_text() INAINTE de page.content() si excludea din HTML tot ce era in editor -> un text adaugat intre cele
 #   doua citiri pleca. Acum _ultima_paza: UN SINGUR page.content(), din care se deriva textul comparat, editorul unic, atasamentele si
 #   necunoscutele (inainte doar doua citiri prin locator care pot doar refuza); Enter imediat dupa.
+# v4.6.4d / r19 (23.11.2026, Jakarinos NO-GO r8): page.content() nu serializeaza shadow DOM-ul -> un shadow root dintr-un div permis al
+#   zonei putea purta <div contenteditable="true"><p>continut strain arbitrar</p></div> nevazut de analiza (0 editoare in plus, 0
+#   necunoscute, Enter). Acum instantaneul (_instantaneu) = UN SINGUR pg.evaluate care intoarce HTML-ul SI numarul de shadow root-uri
+#   deschise (pagina / zona) si de elemente custom inregistrate (zona); orice shadow root sau custom in zona = refuz (verifica_fara_umbre),
+#   in ultima paza, in paza dinaintea chatului nou / pe chatul nou si in `stare`. Nicio citire page.content() nu mai exista in cod.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata, base64, json
@@ -1449,13 +1454,70 @@ def _semn_locator(pg):
     return pg.locator(ZONA).locator(ATAS).count() + pg.locator(CHIP).count() + pg.locator(ZONA).locator(SEMN_EXTRA).count()
 
 
+# r19 (Jakarinos NO-GO r8 P1): page.content() NU serializeaza subarborii shadow, deci un shadow root din zona poate purta continut
+# (ex. un al doilea contenteditable cu text strain) pe care analiza HTML nu il vede. Instantaneul = UN SINGUR pg.evaluate care intoarce,
+# din ACELASI moment: HTML-ul paginii (documentElement.outerHTML = ce analizeaza Python, ca page.content() fara doctype) SI numaratorile:
+#   shadow_pagina = shadow root-uri DESCHISE in toata pagina (recursiv, si in shadow root-urile gasite);
+#   shadow_zona   = dintre ele, cele cu gazda in zona (elementele ZONA si descendentii lor) sau pe stramosii editorului (EDITOR);
+#   custom_zona   = elemente custom INREGISTRATE (customElements.getName pe constructorul elementului - prinde si built-in-urile
+#                   personalizate create cu createElement(tag, {is}), care NU au atributul is in DOM - plus customElements.get pe
+#                   eticheta cu cratima / pe atributul is) in zona / pe stramosii
+#                   editorului: singurele, in afara etichetelor standard, care pot purta un shadow root INCHIS (nevazut din pagina);
+#   custom_pagina = la fel, in toata pagina (doar afisat in `stare`, nu decide).
+# Pagina reala: 0 shadow root-uri deschise (citire CDP a chat-ului, 23.11.2026) -> orice shadow root deschis (in zona SAU oriunde in
+# pagina) sau orice element custom inregistrat in zona = refuz (verifica_fara_umbre). Limita: un shadow root INCHIS pe o eticheta standard
+# (div, span, p...) nu se vede din JavaScript-ul paginii (RUNBOOK, "Stare r19").
+CHEI_UMBRE = ("shadow_pagina", "shadow_zona", "custom_pagina", "custom_zona")
+JS_INSTANTANEU = (
+    "() => {\n"
+    "  const Z = " + json.dumps(ZONA) + ", E = " + json.dumps(EDITOR) + ";\n"
+    "  const zone = Array.from(document.querySelectorAll(Z)), stramosi = new Set();\n"
+    "  for (const e of document.querySelectorAll(E)) { for (let p = e; p; p = p.parentElement) stramosi.add(p); }\n"
+    "  const inZona = (el) => stramosi.has(el) || zone.some((z) => z.contains(el));\n"
+    "  const ce = window.customElements;\n"
+    "  const custom = (el) => !!ce && ((typeof ce.getName === 'function' && !!ce.getName(el.constructor))\n"
+    "                                  || (el.localName.indexOf('-') > 0 && !!ce.get(el.localName))\n"
+    "                                  || (el.hasAttribute('is') && !!ce.get(el.getAttribute('is'))));\n"
+    "  let sp = 0, sz = 0, cp = 0, cz = 0;\n"
+    "  const parcurge = (rad, subZona) => {\n"
+    "    for (const el of rad.querySelectorAll('*')) {\n"
+    "      const z = subZona || inZona(el);\n"
+    "      if (custom(el)) { cp++; if (z) cz++; }\n"
+    "      if (el.shadowRoot) { sp++; if (z) sz++; parcurge(el.shadowRoot, z); }\n"
+    "    }\n"
+    "  };\n"
+    "  parcurge(document, false);\n"
+    "  return { html: document.documentElement.outerHTML, shadow_pagina: sp, shadow_zona: sz, custom_pagina: cp, custom_zona: cz };\n"
+    "}")
+
+
+def _instantaneu(pg):
+    # r19: SINGURA citire a paginii pentru analiza ciornei: un pg.evaluate -> (info din HTML, umbre), ambele din acelasi apel.
+    # Forma rezultatului se verifica strict (orice abatere = nu stiu ce e in pagina -> refuz)
+    r = pg.evaluate(JS_INSTANTANEU)
+    if not isinstance(r, dict) or set(r) != set(("html",) + CHEI_UMBRE) or not isinstance(r["html"], str) or \
+            any(type(r[k]) is not int or r[k] < 0 for k in CHEI_UMBRE):
+        raise GemEroare("ciorna_necitibila", "instantaneul paginii nu are forma asteptata - nu trimit")
+    return analizeaza_ciorna(r["html"]), {k: r[k] for k in CHEI_UMBRE}
+
+
+def verifica_fara_umbre(umbre, moment):
+    # r19: shadow DOM = continut pe care analiza HTML nu il vede -> refuz (pagina reala: 0); custom_pagina doar afisat
+    if umbre["shadow_pagina"] or umbre["shadow_zona"] or umbre["custom_zona"]:
+        raise GemEroare("ciorna_necunoscuta", "%s: shadow DOM nevazut de analiza (shadow root: pagina %d, zona %d; custom inregistrate in zona %d)"
+                        " - nu trimit" % (moment, umbre["shadow_pagina"], umbre["shadow_zona"], umbre["custom_zona"]))
+    return 0
+
+
 def _citeste_ciorna(pg):
-    return analizeaza_ciorna(pg.content()), _semn_locator(pg)
+    info, umbre = _instantaneu(pg)
+    return info, _semn_locator(pg), umbre
 
 
 def _paza_ciorna(pg, moment):
-    # doar citire (content + count); ridica GemEroare daca ciorna are atasamente sau nu poate fi citita
-    info, semn = _citeste_ciorna(pg)
+    # doar citire (evaluate + count); ridica GemEroare daca ciorna are atasamente / shadow DOM sau nu poate fi citita
+    info, semn, umbre = _citeste_ciorna(pg)
+    verifica_fara_umbre(umbre, moment)
     return verifica_fara_atasamente(info, semn, moment)
 
 
@@ -1478,9 +1540,13 @@ def _ultima_paza(pg, text):
     # textul in plus vazut de content() era exclus ca "editor") nu intra in decizie. Inainte de instantaneu, doar doua citiri prin locator
     # care pot DOAR refuza (vad si shadow DOM-ul, pe care page.content() nu il serializeaza): editorul unic si semnele de atasament.
     # Apelantul apasa Enter imediat dupa (fara alte asteptari sau citiri).
+    # r19 (Jakarinos NO-GO r8 P1): instantaneul = UN pg.evaluate (_instantaneu) cu HTML-ul SI numaratorile shadow DOM din acelasi apel;
+    # decizia foloseste doar rezultatul lui. Instantaneul si Enter raman doua operatii distincte (fereastra de milisecunde; Playwright nu
+    # are o operatie "citeste si apasa" atomica) - limita documentata in RUNBOOK.
     _editor_unic(pg)
     semn = _semn_locator(pg)
-    info = analizeaza_ciorna(pg.content())
+    info, umbre = _instantaneu(pg)
+    verifica_fara_umbre(umbre, "inainte_de_enter")
     verifica_fara_atasamente(info, semn, "inainte_de_enter")
     verifica_ciorna(info["text_editor"], text, info["atasamente"])
 
@@ -1488,11 +1554,14 @@ def _ultima_paza(pg, text):
 def stare(pg):
     spune("URL:", pg.url)
     spune("model:", _model_afisat(pg).strip().encode("ascii", "replace").decode("ascii"))
-    info, semn = _citeste_ciorna(pg)
+    info, semn, umbre = _citeste_ciorna(pg)
     spune("genereaza:", _genereaza(pg), "| editor:", pg.locator(EDITOR).count(), "| raspunsuri:", pg.locator(RASPUNS).count(),
           "| atasamente in ciorna:", info["atasamente"] if info["zone"] else "?")
     spune("zone compunere:", info["zone"], "| semne atasament: zona", info["semne"], "/ locator", semn,
           "| detalii:", ", ".join(info["detalii"]) or "-")
+    # r19: shadow DOM din acelasi instantaneu (pagina reala: 0 / 0; custom inregistrate: zona 0)
+    spune("shadow root: pagina", umbre["shadow_pagina"], "/ zona", umbre["shadow_zona"], "| custom inregistrate: pagina",
+          umbre["custom_pagina"], "/ zona", umbre["custom_zona"])
     # r2: calibrarea listelor albe (RUNBOOK pasul 0) copiaza EXACT aceste semnaturi, cate una pe linie
     # r8: sub un necunoscut cu semnal (token_... / atribut_fisier: / eticheta: / fundal: / media:), locul exact al cuvantului / numelui
     spune("necunoscute in zona:", info["necunoscute"])
@@ -1501,6 +1570,7 @@ def stare(pg):
         if s:
             spune("    sursa", s)
     try:
+        verifica_fara_umbre(umbre, "stare")
         verifica_fara_atasamente(info, semn, "stare")
         spune("paza ciorna: OK (trimite ar continua)")
     except GemEroare as e:

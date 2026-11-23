@@ -62,7 +62,8 @@ Gemini extinde caseta de compunere: div-ul zonei de drop isi schimba clasele (`h
 `paw-data\out\paw_v464_calibrare\stare_text_lung_23_11.json`, citite de chat cu textul in ciorna, netrimis). **v4.6.4d** (acest pachet,
 r11) schimba din nou DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE v4.6.4c cu aceeasi procedura: hash-ul vechi =
 `09E78891...`, zona protejata noua `operator-v464d`, copiile de siguranta cu sufixul `.v464c`, fisierele noi cu `.v464d` (pasul 1).
-Ce aduce (detaliile la pasul 0, "Stare r11" ... "Stare r18"; r14: LISTA ALBA de atribute + textele exacte ale descrierilor; r15: clasele si
+Ce aduce (detaliile la pasul 0, "Stare r11" ... "Stare r19"; r19: orice shadow root deschis in pagina sau element custom inregistrat
+in zona = refuz, din acelasi instantaneu cu HTML-ul (un singur `pg.evaluate`); r14: LISTA ALBA de atribute + textele exacte ale descrierilor; r15: clasele si
 `jslog` doar valorile vazute, textele pe Unicode exact; r16: si NODURILE TEXT pe lista alba, pe locul lor; r17: un singur editor principal,
 exact cel comparat cu brief-ul, `ql-clipboard` doar gol, orice alt `contenteditable` = refuz, comparatia cu brief-ul fara stergerea
 caracterelor invizibile; r18: nicio eticheta sarita (si `script` / `style` / `template` / `noscript` = refuz), in editor doar `<p>` /
@@ -505,6 +506,44 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
   permise pe `<p>` din editor, textul din `inner_text()`, doua citiri, o asteptare inainte de Enter. Pe codul r17 testele noi pica (18 FAIL
   + 6 ERROR din 212).
 
+**Stare (r19 = v4.6.4d runda 9, 23.11.2026, dupa NO-GO Jakarinos pe r18 `426e2436`):**
+- **Ce era gresit in r18.** `page.content()` NU serializeaza subarborii shadow. Un `<div>` permis din zona putea gazdui un shadow root cu
+  `<div contenteditable="true"><p>continut strain arbitrar</p></div>`: HTML-ul analizat arata doar gazda goala (editoare 1, atasamente 0,
+  semne 0, necunoscute 0), iar locatorii (editorul principal, semnele de atasament) nu se potriveau pe acel continut -> Enter.
+- **Ce face r19.** Instantaneul = UN SINGUR `pg.evaluate(JS_INSTANTANEU)` (`_instantaneu`), care intoarce din ACELASI apel: HTML-ul paginii
+  (`documentElement.outerHTML`, analizat ca pana acum) si numaratorile `shadow_pagina` (shadow root-uri DESCHISE in toata pagina, recursiv),
+  `shadow_zona` (cele cu gazda in zona sau pe stramosii editorului), `custom_zona` (elemente custom INREGISTRATE in zona / pe stramosii
+  editorului - autonome sau built-in personalizate, prin `customElements.getName(el.constructor)` / `customElements.get`), `custom_pagina`
+  (doar afisat). Refuz (`ciorna_necunoscuta`, `verifica_fara_umbre`) daca `shadow_pagina`, `shadow_zona` sau `custom_zona` != 0: pagina
+  reala are 0 shadow root-uri (citire CDP a chat-ului, 23.11), deci si unul in afara zonei = refuz sigur. Se aplica la toate trei pazele
+  (inainte de chatul nou, pe chatul nou, ultima paza) si in `stare`; decizia ultimei paze foloseste doar rezultatul acelui apel. Forma
+  rezultatului se verifica strict (exact cheile, numere intregi >= 0, HTML text), altfel `ciorna_necitibila`. Nicio citire
+  `page.content()` nu mai exista in cod (testat). `stare` scrie o linie noua:
+  `shadow root: pagina 0 / zona 0 | custom inregistrate: pagina 0 / zona 0` (asteptat la pasul 0; altfel STOP si captura la Rocky).
+- **Limite acceptate (documentate, nu rezolvate):**
+  (a) **Instantaneul si Enter raman doua operatii distincte** (fereastra de milisecunde intre `pg.evaluate` si `pg.keyboard.press("Enter")`,
+  fara nicio asteptare sau alta citire intre ele). Ce le-ar face atomice: o singura operatie "citeste si, daca e curat, apasa" executata
+  in browser fara intoarcere la Python - Playwright NU are asa ceva (`evaluate` nu poate apasa o tasta de incredere; un `dispatchEvent`
+  din pagina e "untrusted" si Gemini il poate ignora), deci nimic disponibil. Orice paza dinainte de o actiune are aceasta fereastra.
+  (b) **Un shadow root INCHIS pe o eticheta standard** (`div`, `span`, `p`...) nu se vede din JavaScript-ul paginii (verificat in Edge real:
+  numaratorile raman 0). Il vede doar protocolul CDP (`DOM.getDocument` cu `pierce`, verificat in Edge real: `closed` + `open`), intr-un
+  apel SEPARAT de `pg.evaluate` (nu acelasi instantaneu). Daca se vrea si acesta, e o decizie noua (commit + review): fie o citire CDP
+  inaintea instantaneului care poate doar refuza (ca locatorii), fie instantaneul intreg din CDP. Elementele custom INREGISTRATE (singurele,
+  in afara etichetelor standard, care pot purta un shadow root inchis creat de clasa lor) sunt deja refuzate in zona.
+  (c) Raman cele din r18 (forma Quill dedusa, URL-uri / chip-uri in editor = refuz fals) si r17 / r16.
+- **Dovezi (teste 220, `python -I`):** reproducerea din verdict (in simulare, ca la Jakarinos: HTML-ul = captura reala neschimbata, shadow
+  root-ul doar in numaratori) pe codul vechi REAL `426e2436` si pe r19 (unealta separata, aceleasi fixture-uri): **12 scenarii (shadow in
+  zona de la inceput / doar la ultima paza, shadow in pagina in afara zonei, custom in zona) x 3 capturi: pe r18 toate 12 Enter, pe r19
+  toate 12 refuz**; starile reale (0) = Enter pe ambele. In Edge REAL (headless local, retea blocata, fara Gemini, captura "mediu"):
+  10 scenarii - curat 0/0/0/0 si `stare` OK; cazul din verdict (open shadow pe un div din zona cu `contenteditable` strain) = 1/1 -> refuz,
+  cu 0 necunoscute in HTML (= ocolirea, acum prinsa); open shadow in afara zonei, pe `rich-textarea`, imbricat pe 2 niveluri; custom
+  inregistrat cu shadow inchis, built-in personalizat (cu si fara atributul `is` in DOM) in zona = refuz; custom in afara zonei = doar
+  afisat; shadow INCHIS pe div standard = 0 (limita b). Playwright intoarce numerele ca `int`. In suita (clasa `TestUmbreR19`, 8 teste):
+  reproducerea, shadow in pagina in afara zonei (si pe chatul nou), custom, starile reale (si `stare`), 11 forme gresite ale rezultatului,
+  tipare de umbre intre citiri (decizia = singura citire), structural (niciun `.content(`, un singur `.evaluate(`, JS-ul cu partile lui).
+  Mutanti r19 (5): umbrele ignorate, doar zona, fara custom, instantaneul r18 (`content()`), doua `evaluate` in ultima paza - fiecare lasa
+  scenariul lui la Enter, starile reale trec pe toti. Pe codul r18 testele noi / aliniate pica (11 FAIL + 1 ERROR din 220).
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -571,7 +610,7 @@ if ((Get-FileHash -LiteralPath "$Source\diag\captura_caseta.py").Hash -ine $Diag
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel asteptat (vezi $GemHashVechi)' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 738 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 80) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 816 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 84) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -581,7 +620,17 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + $SufVechi) -Force }
 ```
 
-Asteptat (pachetul v4.6.4d = r18, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **738 linii diferite (80 vechi `<=`, 658 noi `=>`)**.
+Asteptat (pachetul v4.6.4d = r19, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **816 linii diferite (84 vechi `<=`, 732 noi `=>`)**.
+Cele 84 de linii vechi = cele 80 din r18 (mai jos) + 4 noi, toate din v4.6.4c, schimbate de r19 (instantaneul dintr-un `pg.evaluate`, cu
+shadow DOM): din `_citeste_ciorna` linia `return analizeaza_ciorna(pg.content()), _semn_locator(pg)`, din `_paza_ciorna` comentariul
+`# doar citire (content + count); ridica GemEroare daca ciorna are atasamente sau nu poate fi citita` si linia
+`info, semn = _citeste_ciorna(pg)`, plus aceeasi linie `info, semn = _citeste_ciorna(pg)` din `stare` (acum `info, semn, umbre = ...`).
+Liniile noi r19: nota r19 din antet, comentariul + `CHEI_UMBRE` + `JS_INSTANTANEU`, `_instantaneu`, `verifica_fara_umbre`,
+`_citeste_ciorna` / `_paza_ciorna` noi, in `_ultima_paza` comentariul r19 + `info, umbre = _instantaneu(pg)` + `verifica_fara_umbre(...)`,
+in `stare` linia `shadow root: ...` si `verifica_fara_umbre(umbre, "stare")`. Testele: `Ran 220 tests ... OK`. Informativ: fata de v4.6.3
+(`BE3B867B...`) 1452 / 26 / 1426; fata de r18 (`C534E953...`, head-ul anterior al PR-ului, neinstalat) 80 / 5 / 75.
+
+Istoric (r18, fata de acelasi v4.6.4c instalat): 738 linii diferite (80 vechi `<=`, 658 noi `=>`).
 Cele 80 de linii vechi = cele 64 din r17 (mai jos) + 16 noi, toate din v4.6.4c, schimbate de r18 (nicio eticheta sarita, editorul doar
 p / br in forma Quill, textul din HTML, ultima paza dintr-un instantaneu): `NEVIZIBILE = ("script", "style", "template", "noscript")`
 (scoasa), comentariul `# in editor (contenteditable) intra doar textul brief-ului: ...` si cele doua linii ale `EDITOR_TAGURI` (acum
@@ -591,7 +640,7 @@ linia `if n.tag in NEVIZIBILE or n.tag == CHIP or _e_semn(n):` (acum fara `NEVIZ
 `analizeaza_ciorna` (acum + `text_editor`), cele trei linii ale vechii `_atasamente` si `verifica_ciorna(ed.inner_text(), text,
 _atasamente(pg))` din `trimite` (acum `_ultima_paza(pg, text)`). Liniile noi r18: nota r18 din antet, comentariile noi ale
 `STRUCTURA_TAGURI` / `EDITOR_TAGURI`, comentariul din `normalizeaza`, ramura editorului din `_motiv_element` (editorul insusi / p si br fara
-niciun atribut), `_text_editor`, `text_editor` din `analizeaza_ciorna`, `_ultima_paza` si apelul ei din `trimite`. Testele: `Ran 212 tests
+niciun atribut), `_text_editor`, `text_editor` din `analizeaza_ciorna`, `_ultima_paza` si apelul ei din `trimite`. Testele de atunci: `Ran 212 tests
 ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 1382 / 26 / 1356 (2 linii v4.6.3 in plus atinse: `def _atasamente(pg):` si apelul cu
 `ed.inner_text()` din `trimite`); fata de r17 (`FD99AA72...`, head-ul anterior al PR-ului, neinstalat) 106 / 22 / 84.
 
@@ -687,7 +736,7 @@ rezultatul `(motiv, sursa)`, `necunoscute_surse` si liniile `    sursa` din `sta
 Informativ (r9), fata de v4.6.3 (`BE3B867B...`, nu mai e in `bin`): 760 / 11 / 749 - aceleasi 11 linii vechi ca in r2-r8 (antetul, lista de
 coduri, `import`, comentariul `ATAS`, titlul partii cu browserul, cele doua linii din vechea `_atasamente`, linia `atasamente in ciorna`
 din `stare`, cele trei linii ale vechii verificari din `trimite`); fata de r8 (`C7609E9E...`, head-ul anterior al PR-ului, neinstalat):
-115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r18 1382 / 26 / 1356, r17 1316 / 24 / 1292, r16 1230 / 11 / 1219, r15 1196 / 11 / 1185, r14 1047 / 11 / 1036, r13 960 / 11 / 949, r12 840 / 11 / 829, r11 807 / 11 / 796, r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
+115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r19 1452 / 26 / 1426, r18 1382 / 26 / 1356, r17 1316 / 24 / 1292, r16 1230 / 11 / 1219, r15 1196 / 11 / 1185, r14 1047 / 11 / 1036, r13 960 / 11 / 949, r12 840 / 11 / 829, r11 807 / 11 / 796, r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
 r4 536 / 11 / 525, r3 477 / 11 / 466, r2 411 / 11 / 400. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
 raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 78 / 6 din blocul de mai sus). Istoric r11 (fata de v4.6.4c):
 43 / 5 / 38, `Ran 153 tests`.
