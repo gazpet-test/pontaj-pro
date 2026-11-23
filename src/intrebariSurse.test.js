@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { DOMENII_OFICIALE, STOP, GENERICE, analizeaza, curataRaspuns, verdict, urlOficial, surseAfisabile, imparteRaspuns, eDeclaratieLipsa,
   ancore, interogariAfisabile, termeniCheie, normalizeaza, tokeniNumerici, polaritati, propozitii, eAfirmatieNormativa,
-  lipsesteMigrarea, actiuniIntrebare, restrictii, prezentareRaspuns } from './intrebariSurse.js'
+  lipsesteMigrarea, actiuniIntrebare, restrictii, prezentareRaspuns, mesajEroareIntrebare } from './intrebariSurse.js'
 
 const CAZURI = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_validare.json', 'utf8'))
 const NORMATIVE = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_normative.json', 'utf8'))
@@ -203,5 +203,43 @@ describe('domenii oficiale', () => {
       { id: 'X', tip: 'web', url: 'https://anre.ro/' },
     ]).map(s => s.id)).toEqual(['W1', 'C1'])
     expect(surseAfisabile(null)).toEqual([])
+  })
+})
+
+describe('mesajEroareIntrebare (fără punct / îndemn dublat)', () => {
+  const P = 'Nu s-a putut răspunde: '
+  const D = ' Poți pune întrebarea din nou.'
+  it('eroare fără punct → se adaugă punctul și îndemnul', () => {
+    expect(mesajEroareIntrebare('Limita lunară a contului API a fost atinsă')).toBe(P + 'Limita lunară a contului API a fost atinsă.' + D)
+    expect(mesajEroareIntrebare('Răspunsul AI a eșuat (HTTP 500)')).toBe(P + 'Răspunsul AI a eșuat (HTTP 500).' + D)
+  })
+  it('eroare cu punct (fără îndemn) → nu se dublează punctul', () => {
+    expect(mesajEroareIntrebare('Răspunsul AI a fost gol sau prea lung.')).toBe(P + 'Răspunsul AI a fost gol sau prea lung.' + D)
+    expect(mesajEroareIntrebare('Ceva nu a mers!')).toBe(P + 'Ceva nu a mers!' + D)
+  })
+  it('eroare cu îndemnul inclus → nici punct, nici îndemn în plus', () => {
+    for (const t of [
+      'Procesarea a fost întreruptă. Pune întrebarea din nou.',
+      'Serviciul AI a fost ocupat de 3 ori. Pune întrebarea din nou mai târziu.',
+      'Serviciul AI nu a răspuns la timp. Pune întrebarea din nou.',
+      'Eroare internă la ascunderea numelor: procesarea s-a oprit, nu se mai trimite nicio cerere, iar răspunsul nu se publică. Pune întrebarea din nou mai târziu.',
+      'Cercetarea a fost refuzată de serviciul AI. Reformulează întrebarea.',
+      'Răspunsul AI a fost refuzat sau a ieșit incomplet. Reformulează sau împarte întrebarea.',
+      'Limita zilnică atinsă (5 întrebări pe zi). Mâine poți pune din nou.',
+    ]) expect(mesajEroareIntrebare(t)).toBe(P + t)
+    // fără diacritice / cu majuscule tot îndemn; fără punct final → se pune doar punctul
+    expect(mesajEroareIntrebare('PUNE INTREBAREA DIN NOU')).toBe(P + 'PUNE INTREBAREA DIN NOU.')
+  })
+  it('„din nou” fără îndemn nu ascunde propoziția', () => {
+    expect(mesajEroareIntrebare('Serviciul a căzut din nou.')).toBe(P + 'Serviciul a căzut din nou.' + D)
+    expect(mesajEroareIntrebare('Pune mâna pe telefon. Eroarea a apărut din nou.')).toBe(P + 'Pune mâna pe telefon. Eroarea a apărut din nou.' + D)
+  })
+  it('eroare goală / lipsă → „eroare”', () => {
+    for (const x of [null, undefined, '', '   ']) expect(mesajEroareIntrebare(x)).toBe('Nu s-a putut răspunde: eroare. Poți pune întrebarea din nou.')
+  })
+  it('spații la capăt → tăiate înainte de verificarea punctului', () => {
+    expect(mesajEroareIntrebare('  Răspunsul AI a fost gol sau prea lung.  \n')).toBe(P + 'Răspunsul AI a fost gol sau prea lung.' + D)
+    expect(mesajEroareIntrebare('Procesarea a fost întreruptă. Pune întrebarea din nou. ')).toBe(P + 'Procesarea a fost întreruptă. Pune întrebarea din nou.')
+    expect(mesajEroareIntrebare('Eroare internă \t')).toBe(P + 'Eroare internă.' + D)
   })
 })

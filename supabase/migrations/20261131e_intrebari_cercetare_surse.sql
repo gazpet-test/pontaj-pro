@@ -47,6 +47,10 @@
 --     ACL, tip, start, pas, min, max, cache, ciclic (NU valoarea curentă, care se schimbă la fiecare inserare).
 --     Etichetele runda 5 sunt NOI: valorile celor 21 lipite pe 12.11.2026 rămân valabile (interogarea lor nu s-a schimbat), iar cele
 --     4 noi stau ca „de completat” → migrarea refuză până le completează coordonatorul (pașii 1-5, aceeași rulare a scriptului).
+--     Runda 6 (14.11.2026, recitire pe producție înaintea aplicării): 24 de etichete au ieșit identice cu cele din bloc; s-a
+--     schimbat DOAR „secvente:public.notifications” — din ACL-ul secvenței `notifications_id_seq` a dispărut rolul `anon` (migrările
+--     de închidere a drepturilor rolului anon, aplicate pe 13.11.2026); proprietarul, tipul și parametrii secvenței sunt aceiași.
+--     Valoarea din bloc e cea de acum, aceeași pe producție și pe clonă (ieșirile scriptului de amprente sunt identice).
 -- Postcondiția verifică în plus (runda 5) ACL-ul EXACT și volatilitatea fiecărei funcții create / înlocuite (constanta c_acl, aceeași
 -- în revenire) și valorile implicite ale coloanelor noi.
 -- LOCK-UL ȘI DURATA (runda 5, review r4 — notă, fără schimbare de cod): `LOCK … ACCESS EXCLUSIVE` din $start$ se ține până la
@@ -128,7 +132,7 @@ AS $asteptat$
     "pol:public.notifications.notifications_select_own_or_owner": "e7282ed3a8454882ca4d8fac50dee5e2",
     "pol:public.notifications.notifications_update_own_or_owner": "050b30dec24e3d72dad3810caa5085ef",
     "secvente:public.intrebari_tehnice": "1fc2145ab91b69c5e9ef8b10de7ecb43",
-    "secvente:public.notifications": "8eab82c3208072583af4b7849313a6e9",
+    "secvente:public.notifications": "92e5c74c17ab9c1a9d5e3af857e15e2e",
     "tabel:public.intrebari_tehnice": "540b4fdd884738723bd4c1ab391c6beb",
     "tabel:public.notifications": "7aa97656582563bb7db3312d64c9d045",
     "trg:public.intrebari_tehnice.intrebari_tehnice_inainte_insert": "d3a5868cad12d2761d3846e33ff9f4bc",

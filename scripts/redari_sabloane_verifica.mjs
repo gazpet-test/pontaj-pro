@@ -119,7 +119,8 @@ for (const f of fisiere) {
   // relații externe: hyperlink-urile (deschise doar la clic) se acceptă; orice altceva (imagine/OLE/etc. externă) e problemă
   const externeRele = r.externe.filter(x => x.tip !== 'hyperlink')
   // Final_v2 (03.11.2026) scosese antetul din Model_4; excepția (9) (04.11, DE CONFIRMAT) îl repune din convocator → 43 de chei
-  const adresaCorecta = f !== 'adresa_uat.docx' || (nume.length === 43 && ['contract_nr', 'contract_data', 'proiect_denumire'].every(k => nume.includes(k)) && !nume.includes('link_afisare') && r.externe.length === 0)
+  // excepția (12), 19.11.2026: Anexa 2 = trimiterea la anunțul de afișare → fără rândul-șablon al parcelelor și fără {{program_text}}: 36 de chei
+  const adresaCorecta = f !== 'adresa_uat.docx' || (nume.length === 36 && rand.length === 0 && !nume.includes('program_text') &&['contract_nr', 'contract_data', 'proiect_denumire'].every(k => nume.includes(k)) && !nume.includes('link_afisare') && r.externe.length === 0)
   const paginaCorecta = r.pagina.a4 && r.pagina.corp >= 9.5
   const ok = r.rupte.length === 0 && eroriResturi.length === 0 && r.qrSingur !== false && externeRele.length === 0 && adresaCorecta && paginaCorecta
   if (!ok) probleme += 1

@@ -1,0 +1,5 @@
+# 20261226a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.red_proiecte.text_declaratie	schimbat
+functie	functie public.fn_red_optiune_retrasa(text)	creat
+functie	functie public.fn_red_raspuns_public(text,text,date,text,boolean,text)	schimbat
+functie	functie public.fn_red_raspunsuri_valideaza()	schimbat

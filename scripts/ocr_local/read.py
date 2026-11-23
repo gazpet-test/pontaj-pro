@@ -4,6 +4,7 @@ garda v3, raw-ul nu se repara. Noi: verificarea SHA-256 a greutatilor la pornire
 reluare idempotenta (banda cu result.json se sare; banda inceputa si neterminata NU se reincearca automat)."""
 import base64, contextlib, hashlib, http.client, ipaddress, json, os, pathlib, socket, threading, time, urllib.parse
 from .guard import Guard
+from .gpu_cedare import cerere_activa
 from .plan import load_plan, save
 
 PACKAGE = pathlib.Path(__file__).parent
@@ -248,6 +249,10 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
                 state.update(status='interrupted_needs_review', band=band['id'], motiv='rezultat existent incompatibil'); break
             if (out / 'request_started.json').exists():
                 state.update(status='interrupted_needs_review', band=band['id']); break
+            if lock and cerere_activa(proto['gpu_lock']):
+                # E3 (Izometrie) cere GPU-ul (gpu_cedare.py, decizia 19.11.2026): banda anterioara e scrisa complet, nu incepem alta;
+                # gpu.lock se elibereaza la iesire. Reluarea (`citeste` din nou) sare benzile gata. Serverul vLLM il opreste cine l-a pornit.
+                state.update(status='cedat_e3', band=band['id']); break
             data = (plan_dir / band['image']).read_bytes()
             holder['keep'] = True  # GPU-ul e 'ocupat' din momentul cererii pana cand rezultatul complet e scris pe disc
             raw, result = FUNCS[reader](data, out, cfg, proto['deadline_seconds'])

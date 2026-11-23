@@ -202,12 +202,15 @@ echo 'NET_REL 18a: lista DE_COMPLETAT => refuz atomic PORTAL_NET_REL_LIST_NECOMP
 fixture v_ok --erp 00000000-0000-0000-0000-000000000001
 MIG="$TMP/v_ok/20261118a_portal_teren_identitate.sql"
 # r12: runnerul fara --plafon-tranzactie-ms (ca unul vechi) => 18a refuza in $pre$, atomic, nimic ramas.
+# Runda 17 a runnerului (verdictul PR #1115, P1-2): refuzul vine acum MAI DEVREME, local — validatorul cu --fara-plafon vede ca 18a
+# cere plafon (PLAFON_LIPSA, cod 3, inainte de conexiune). Garda din $pre$ (0/default) ramane si e probata de plafon_refuz (psql direct).
 rc=0; runner_fara_plafon 20261118120000 "$MIG" >"$TMP/fara_plafon_18a.log" 2>&1 || rc=$?
-[[ "$rc" == 10 ]] && grep -q 'PORTAL_PLAFON_TRANZACTIE_REQUIRED: 0/default' "$TMP/fara_plafon_18a.log" \
-  || { cat "$TMP/fara_plafon_18a.log"; fail "runner fara plafon: asteptat refuz PORTAL_PLAFON_TRANZACTIE_REQUIRED cu cod 10, primit $rc"; }
+[[ "$rc" == 3 ]] && grep -q 'PLAFON_LIPSA: fișierul cere plafonul tranzacției' "$TMP/fara_plafon_18a.log" \
+  && grep -q 'neaplicat, fără conexiune' "$TMP/fara_plafon_18a.log" \
+  || { cat "$TMP/fara_plafon_18a.log"; fail "runner fara plafon: asteptat refuz local PLAFON_LIPSA cu cod 3, primit $rc"; }
 [[ "$(q "SELECT count(*) FROM pg_roles WHERE rolname='teren'") $(q "SELECT to_regclass('public.conturi_tip') IS NULL")" == '0 t' ]] \
   || fail 'runner fara plafon: au ramas obiecte'
-echo 'PLAFON_RUNNER 18a: runner fara --plafon-tranzactie-ms => refuz in $pre$ (0/default), NEAPLICAT (10), nimic ramas'
+echo 'PLAFON_RUNNER 18a: runner fara --plafon-tranzactie-ms => refuz LOCAL (PLAFON_LIPSA, cod 3, fara conexiune), nimic ramas'
 # r9 (P2-03): drepturile lipsa = refuz cu mesaj clar inainte de orice schimbare (CREATEROLE, REFERENCES pe auth.users).
 "${ADMIN[@]}" -d "$DB" -c 'ALTER ROLE postgres NOCREATEROLE' >/dev/null
 hold_18a "$MIG" 'PORTAL_PRIVILEGES_MISSING: CREATEROLE' priv_createrole

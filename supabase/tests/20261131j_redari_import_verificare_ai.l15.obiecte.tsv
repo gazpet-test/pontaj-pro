@@ -1,0 +1,105 @@
+# 20261131j: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.red_import_ai_jurnal.bucata	creat
+coloana	coloana public.red_import_ai_jurnal.bucati	creat
+coloana	coloana public.red_import_ai_jurnal.cheie	creat
+coloana	coloana public.red_import_ai_jurnal.continut_sha256	creat
+coloana	coloana public.red_import_ai_jurnal.cost_rezervat_usd	creat
+coloana	coloana public.red_import_ai_jurnal.cost_usd	creat
+coloana	coloana public.red_import_ai_jurnal.created_at	creat
+coloana	coloana public.red_import_ai_jurnal.eroare_cod	creat
+coloana	coloana public.red_import_ai_jurnal.fisier_sha256	creat
+coloana	coloana public.red_import_ai_jurnal.id	creat
+coloana	coloana public.red_import_ai_jurnal.inchis_la	creat
+coloana	coloana public.red_import_ai_jurnal.lease_token	creat
+coloana	coloana public.red_import_ai_jurnal.max_iesire	creat
+coloana	coloana public.red_import_ai_jurnal.model	creat
+coloana	coloana public.red_import_ai_jurnal.octeti_intrare	creat
+coloana	coloana public.red_import_ai_jurnal.proiect_id	creat
+coloana	coloana public.red_import_ai_jurnal.randuri	creat
+coloana	coloana public.red_import_ai_jurnal.respinse	creat
+coloana	coloana public.red_import_ai_jurnal.semnale	creat
+coloana	coloana public.red_import_ai_jurnal.stare	creat
+coloana	coloana public.red_import_ai_jurnal.tokeni_in	creat
+coloana	coloana public.red_import_ai_jurnal.tokeni_out	creat
+coloana	coloana public.red_import_ai_jurnal.user_id	creat
+coloana	coloana public.red_import_ai_jurnal.ziua	creat
+coloana	coloana public.red_proiect_drepturi.created_at	creat
+coloana	coloana public.red_proiect_drepturi.drept	creat
+coloana	coloana public.red_proiect_drepturi.id	creat
+coloana	coloana public.red_proiect_drepturi.nota	creat
+coloana	coloana public.red_proiect_drepturi.profile_id	creat
+coloana	coloana public.red_proiect_drepturi.proiect_id	creat
+coloana	coloana public.red_proiect_drepturi_istoric.actiune	creat
+coloana	coloana public.red_proiect_drepturi_istoric.autor_id	creat
+coloana	coloana public.red_proiect_drepturi_istoric.created_at	creat
+coloana	coloana public.red_proiect_drepturi_istoric.drept	creat
+coloana	coloana public.red_proiect_drepturi_istoric.drept_id	creat
+coloana	coloana public.red_proiect_drepturi_istoric.id	creat
+coloana	coloana public.red_proiect_drepturi_istoric.nota	creat
+coloana	coloana public.red_proiect_drepturi_istoric.profile_id	creat
+coloana	coloana public.red_proiect_drepturi_istoric.proiect_id	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_bucata_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_cheie_unic	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_continut_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_cost_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_eroare_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_fisier_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_iesire_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_inchidere_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_model_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_octeti_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_pkey	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_proiect_id_fkey	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_randuri_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_respinse_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_rezervat_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_semnale_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_stare_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_tin_ck	creat
+constrangere	constrangere tabel public.red_import_ai_jurnal.red_import_ai_jurnal_tout_ck	creat
+constrangere	constrangere tabel public.red_proiect_drepturi.red_proiect_drepturi_drept_ck	creat
+constrangere	constrangere tabel public.red_proiect_drepturi.red_proiect_drepturi_nota_ck	creat
+constrangere	constrangere tabel public.red_proiect_drepturi.red_proiect_drepturi_pkey	creat
+constrangere	constrangere tabel public.red_proiect_drepturi.red_proiect_drepturi_profile_id_fkey	creat
+constrangere	constrangere tabel public.red_proiect_drepturi.red_proiect_drepturi_proiect_id_fkey	creat
+constrangere	constrangere tabel public.red_proiect_drepturi.red_proiect_drepturi_unic	creat
+constrangere	constrangere tabel public.red_proiect_drepturi_istoric.red_proiect_drepturi_istoric_actiune_ck	creat
+constrangere	constrangere tabel public.red_proiect_drepturi_istoric.red_proiect_drepturi_istoric_pkey	creat
+functie	functie public.fn_red_import_ai_inchide(uuid,uuid,text,integer,integer,integer,integer,text)	creat
+functie	functie public.fn_red_import_ai_poate(uuid)	creat
+functie	functie public.fn_red_import_ai_rezerva(uuid,uuid,text,text,integer,integer,integer,integer,integer)	creat
+functie	functie public.fn_red_proiect_drepturi_istoric()	creat
+politica	politica public.red_import_ai_jurnal.red_import_ai_jurnal_sel	creat
+politica	politica public.red_proiect_drepturi.red_proiect_drepturi_sel	creat
+politica	politica public.red_proiect_drepturi_istoric.red_proiect_drepturi_istoric_sel	creat
+relatie	relatie public.red_import_ai_jurnal	creat
+relatie	relatie public.red_import_ai_jurnal_cheie_unic	creat
+relatie	relatie public.red_import_ai_jurnal_continut_idx	creat
+relatie	relatie public.red_import_ai_jurnal_pkey	creat
+relatie	relatie public.red_import_ai_jurnal_zi_idx	creat
+relatie	relatie public.red_proiect_drepturi	creat
+relatie	relatie public.red_proiect_drepturi_istoric	creat
+relatie	relatie public.red_proiect_drepturi_istoric_pkey	creat
+relatie	relatie public.red_proiect_drepturi_pkey	creat
+relatie	relatie public.red_proiect_drepturi_unic	creat
+tip	tip public.red_import_ai_jurnal	creat
+tip	tip public.red_import_ai_jurnal[]	creat
+tip	tip public.red_proiect_drepturi	creat
+tip	tip public.red_proiect_drepturi[]	creat
+tip	tip public.red_proiect_drepturi_istoric	creat
+tip	tip public.red_proiect_drepturi_istoric[]	creat
+trigger	trigger public.profiles intern red_proiect_drepturi_profile_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.profiles intern red_proiect_drepturi_profile_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.red_import_ai_jurnal intern red_import_ai_jurnal_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_import_ai_jurnal intern red_import_ai_jurnal_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_proiect_drepturi intern red_proiect_drepturi_profile_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_proiect_drepturi intern red_proiect_drepturi_profile_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_proiect_drepturi intern red_proiect_drepturi_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_proiect_drepturi intern red_proiect_drepturi_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.red_proiect_drepturi.trg_red_proiect_drepturi_fara_update	creat
+trigger	trigger public.red_proiect_drepturi.trg_red_proiect_drepturi_istoric	creat
+trigger	trigger public.red_proiect_drepturi_istoric.trg_red_proiect_drepturi_istoric_imuabil	creat
+trigger	trigger public.red_proiecte intern red_import_ai_jurnal_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_proiecte intern red_import_ai_jurnal_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.red_proiecte intern red_proiect_drepturi_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_proiecte intern red_proiect_drepturi_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat

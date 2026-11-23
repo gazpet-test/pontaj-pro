@@ -22,6 +22,10 @@ import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
 import { blocNou, blocuriDinLinii, liniiDinBlocuri, activitatiBloc, tintaPe, fmtNr, citesteTinte, cantitateLinie } from './devizTinte.js'
 // Rezumatul scurt salvat pe raport (20261216a): îl scrie serverul la salvare; aici se vede, se copiază, se corectează
 import RubricaRezumat from './RubricaRezumat.jsx'
+// Uscare conductă (20261225a) pe telefon: butonul apare după dreptul pe modulul Execuție (owner / editor / admin, o citire ușoară);
+// proiectele și dreptul pe fiecare (fn_executie_nod_drept) se verifică abia la apăsare, în UscareMobil
+import UscareMobil from './UscareMobil.jsx'
+import { arataButonUscare } from './uscareMobilLogica.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -64,6 +68,8 @@ export default function AppMobilManageri() {
   const [sites, setSites] = useState([])
   const [loading, setLoading] = useState(true)
   const [probeWrite, setProbeWrite] = useState(false)
+  // butonul „Uscare conductă”: doar condiția de modul (fără enumerare de proiecte la deschidere); dreptul real îl dă serverul la apăsare
+  const [areUscare, setAreUscare] = useState(false)
 
   useEffect(() => {
     (async () => {
@@ -71,8 +77,15 @@ export default function AppMobilManageri() {
       if (!user) { setLoading(false); return }
       const { data: prof } = await supabase.from('profiles').select('id, name, role, is_owner').eq('id', user.id).maybeSingle()
       setProfile(prof || null)
-      const { data: probeDrept, error: probeErr } = await supabase.rpc('probe_teren_drept', { p_scriere: true })
+      // o singură citire ușoară (rândul propriu din user_module_access, ca la Logistica / Marketing), în paralel cu dreptul probelor;
+      // owner-ul nu are nevoie de ea; o eroare = „necunoscut” -> butonul se arată, verificarea de la apăsare decide (L18)
+      const [{ data: probeDrept, error: probeErr }, accesExecutie] = await Promise.all([
+        supabase.rpc('probe_teren_drept', { p_scriere: true }),
+        prof?.is_owner === true ? null : Promise.resolve(supabase.from('user_module_access').select('access_level').eq('profile_id', user.id).eq('module', 'executie'))
+          .catch(e => ({ data: null, error: e || { message: 'eroare' } })),
+      ])
       setProbeWrite(!probeErr && probeDrept === true)
+      setAreUscare(arataButonUscare(prof, accesExecutie))
       let siteList = []
       if (prof?.is_owner) {
         const { data } = await supabase.from('sites').select('id, name').eq('active', true).order('name')
@@ -90,6 +103,7 @@ export default function AppMobilManageri() {
 
   if (view === 'raport') return <RaportZilnic profile={profile} sites={sites} onBack={() => setView('launcher')} />
   if (view === 'probe' && probeWrite) return <ProbeTerenMobil profile={profile} onBack={() => setView('launcher')} />
+  if (view === 'uscare' && areUscare) return <UscareMobil client={supabase} onBack={() => setView('launcher')} />
 
   // ── Launcher ──
   const butoane = [
@@ -97,6 +111,7 @@ export default function AppMobilManageri() {
     { icon: '⏱️', label: 'Pontaj\nechipă', color: G.blue, onClick: () => nav('/pontaj') },
     { icon: '🎫', label: 'Raportare\nproblemă', color: G.orange, onClick: () => nav('/tichete?action=new') },
     { icon: '🚛', label: 'Cerere\ntransport', color: G.green, onClick: () => nav('/logistica') },
+    ...(areUscare ? [{ icon: '💨', label: 'Uscare\nconductă', color: G.purple, onClick: () => setView('uscare'), tot: true }] : []),
   ]
   return (
     <Shell>
@@ -107,6 +122,7 @@ export default function AppMobilManageri() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         {butoane.map((b, i) => (
           <button key={i} onClick={b.onClick} style={{
+            ...(b.tot ? { gridColumn: '1 / -1' } : {}),
             background: G.surface, border: `1px solid ${G.border}`, borderLeft: `4px solid ${b.color}`,
             borderRadius: 16, padding: '26px 14px', cursor: 'pointer', minHeight: 130,
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12,

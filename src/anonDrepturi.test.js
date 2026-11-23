@@ -168,25 +168,94 @@ describe('r2 — revenirea pe coloane (review #1081 P1)', () => {
 
 describe('r2 — citirea: SIMULARE pe valori, CONTROL pentru RAMANE', () => {
   const t = citeste(CIT)
-  it('SIMULARE citește valorile (nu EXISTS) și separă cele patru clase; așteptarea = 0 cu date citibile', () => {
-    expect(t).not.toContain('SELECT EXISTS (SELECT 1 FROM')
-    for (const s of ['GOL', 'AGREGAT_FARA_DATE', 'DATE_CITIBILE', 'EROARE', 'to_jsonb(anon_sim_q.*)', 'has_column_privilege(r.oid, a.attnum, \'SELECT\')',
-      'relatii cu date citibile', 'Concluzia „zero date citibile” cere 0 DATE_CITIBILE, 0 AMBIGUU neconfirmate și 0 erori necunoscute']) expect(t, s).toContain(s)
+  it('SIMULARE citește valorile (nu EXISTS) și separă clasele; așteptarea = 0 cu date citibile', () => {
+    // relația însăși se citește pe valori; EXISTS doar pe tabelele de bază din închidere (r5)
+    expect(t).not.toContain("'SELECT EXISTS (SELECT 1 FROM ' || r.nume")
+    expect(t.split("EXISTS (SELECT 1 FROM ' ||").length - 1).toBe(1)
+    for (const s of ['GOL', 'FARA_DATE_LA_SURSA', 'CONSTANTA (fara surse in catalog)', 'DATE_CITIBILE', 'NEEXECUTATA', 'EROARE', 'to_jsonb(anon_sim_q.*)',
+      'has_column_privilege(r.oid, a.attnum, \'SELECT\')', 'relatii cu date citibile',
+      'cere 0 DATE_CITIBILE, 0 AMBIGUU,\n--    0 NEEXECUTATE și 0 erori necunoscute']) expect(t, s).toContain(s)
   })
-  it('r4 (review r3 P2): „un rând, doar zero / NULL” = AMBIGUU, confirmat din definiția vederii; concluzia cere 0 date + 0 ambigue', () => {
-    const i = t.indexOf("v_clasa := 'DATE_CITIBILE';")
+  it('r6 (review #1090): întâi ANALIZA (închidere + listă albă, fără execuție), apoi execuția; ieșirea = probă, nu „dovedit”', () => {
+    const i = t.indexOf('DO $simulare$'), j = t.indexOf('END $simulare$;'), corp = t.slice(i, j)
     expect(i).toBeGreaterThan(0)
-    for (const s of ["IF r.tip = 'v' THEN", "rw.rulename = '_RETURN'", "v_clasa := 'AMBIGUU';", "v_clasa := 'AGREGAT_FARA_DATE';", "position(' :hasAggs true ' IN v_sus) > 0",
-      "position(' :groupClause <> ' IN v_sus) > 0", "position(' :groupingSets <> ' IN v_sus) > 0", "position(' :havingQual <> ' IN v_sus) > 0",
-      "position(' :setOperations <> ' IN v_sus) > 0", "position(' :hasTargetSRFs false ' IN v_sus) > 0", 'chr(92)'])
-      expect(t.indexOf(s, i), s).toBeGreaterThan(i)
-    expect(t).toContain("WHEN v_date = 0 AND v_ambiguu = 0 AND v_err_necunoscut = 0 THEN 'ZERO date citibile")
-    // fără deparsare și fără backslash literal în citire
-    expect(t.slice(i, t.indexOf('END $simulare$;'))).not.toMatch(/pg_get_viewdef|pg_get_ruledef/)
+    expect(t).not.toContain('AGREGAT_FARA_DATE')
+    expect(corp).not.toContain(':hasAggs')
+    expect(t).not.toMatch(/\(dovedit/)
+    for (const s of ['WITH RECURSIVE /* anon_drepturi_citire */ inchidere(fel, cls, obj, cale, cititor)', "rw.ev_action::text AS arbore",
+      "coalesce(pol.polqual::text, ''), 'pg_catalog.pg_policy'::regclass::oid, pol.oid, 'politica', i.cititor",
+      "v_re_noduri text := ':(relid|funcid|opfuncid|hashfuncid|negfuncid|aggfnoid|winfnoid|tsmhandler|startInRangeFunc|endInRangeFunc|opno|eqop|sortop) ([0-9]+)';",
+      "v_re_liste text := ':opnos [(]o([ 0-9]*)[)]';", 'IF d.invoker IS NOT TRUE THEN',
+      "EXECUTE 'SELECT /* anon_drepturi_citire */ EXISTS (SELECT 1 FROM ' || v_b || ')' INTO v_ex;", 'WHEN insufficient_privilege THEN v_fara_drept := v_fara_drept + 1;',
+      "ELSIF d.pro_schema = 'pg_catalog' AND d.sistem AND NOT d.prosecdef AND d.fara_config AND (d.volatil = 'i' OR d.proname = ANY (v_stabile)) THEN",
+      "ELSIF d.pro_schema = 'auth' AND d.proname IN ('uid', 'role') AND d.pronargs = 0 AND NOT d.prosecdef AND d.fara_config",
+      'p.oid < 16384 AS sistem', "v_scheme text[] := ARRAY['public']",
+      "v_modelate text[] := ARRAY['request.method', 'request.path', 'request.jwt.claim.sub', 'request.jwt.claim.role'];",
+      "set_config('request.jwt.claims', '{\"iss\":\"supabase\",\"role\":\"anon\"}', true)", "set_config('request.method', 'GET', true)",
+      "set_config('request.path', '/' || r.relname, true)"])
+      expect(corp, s).toContain(s)
+    // lista albă nu admite funcțiile care execută SQL / citesc fișiere, obiecte mari, statistici sau setări (nici prin v_stabile)
+    const stabile = /v_stabile text\[\] := ARRAY\[([^\]]*)\]/.exec(corp)[1]
+    expect(stabile).not.toMatch(/xml|current_setting|pg_|has_|lo_|dblink|txid|to_reg|version|inet_/)
+    // poarta: o relație cu funcții în afara listei NU se execută; nicio citire de date înaintea porții
+    const poarta = corp.indexOf('      IF v_neadmise IS NOT NULL THEN'), primaCitire = corp.indexOf("EXECUTE 'SELECT /* anon_drepturi_citire */ coalesce(jsonb_agg")
+    expect(poarta).toBeGreaterThan(0)
+    expect(corp.slice(poarta, poarta + 220)).toContain('CONTINUE;')
+    expect(corp.indexOf('EXECUTE ')).toBe(primaCitire)
+    expect(poarta).toBeLessThan(primaCitire)
+    expect(corp.indexOf("set_config('request.path'")).toBeGreaterThan(poarta)
+    expect(t).toContain("WHEN v_date = 0 AND v_ambiguu = 0 AND v_neexec = 0 AND v_err_necunoscut = 0\n    THEN 'ZERO date citibile ca anon (proba pe aceasta baza, in limitele din document)'")
+    // contextul: search_path al cererii, rolul anon; fără deparsare în simulare; fără backslash literal în citire
+    expect(t).toMatch(/\nSET LOCAL search_path = public, extensions;\nSET LOCAL ROLE anon;\nDO \$simulare\$/)
+    expect(t).toContain('RESET /* anon_drepturi_citire */ ROLE;')
+    expect(corp).not.toMatch(/pg_get_viewdef|pg_get_ruledef|pg_get_expr/)
     expect(t).not.toContain('\\')
+  })
+  it('r7 (review r2 #1090 P1): politicile analizate = cele ale CITITORULUI EFECTIV (proprietarul unei vederi obișnuite), înaintea execuției', () => {
+    const corp = t.slice(t.indexOf('DO $simulare$'), t.indexOf('END $simulare$;'))
+    // vedere security_invoker => anon; altfel proprietarul vederii; politicile: aceeași ocolire RLS ca PostgreSQL și rolurile moștenite
+    for (const s of ["THEN v_anon\n                                ELSE vc.relowner END AS cititor",
+      "AND NOT coalesce((SELECT (cr.rolsuper OR cr.rolbypassrls OR (pg_has_role(i.cititor, tc.relowner, 'USAGE') AND NOT tc.relforcerowsecurity))",
+      "OR EXISTS (SELECT 1 FROM unnest(pol.polroles) pr(o) WHERE pr.o <> 0 AND pg_has_role(i.cititor, pr.o, 'USAGE'))",
+      "SELECT pol.polqual::text FROM pg_policy pol WHERE pol.oid = ANY (v_politici) AND pol.polqual IS NOT NULL",
+      "IF v_anon = ANY (d.cititori) THEN v_baze := v_baze || d.rel_nume;", '        ELSIF v_m_date IS NULL THEN',
+      "RAISE NOTICE 'SIMULARE cititori pentru %: %', r.nume, v_cititori;"])
+      expect(corp, s).toContain(s)
+    // politicile nu se mai aleg după anon într-un loc separat (o singură regulă: cea din închidere)
+    expect(corp).not.toContain('v_anon = ANY (pol.polroles)')
+    expect(corp.indexOf("RAISE NOTICE 'SIMULARE cititori")).toBeLessThan(corp.indexOf("EXECUTE 'SELECT /* anon_drepturi_citire */ coalesce(jsonb_agg"))
+  })
+  it('r7 (review r2 #1090 P2): intrările imbricate (toplevel = false) nu pot fi directa / rpc', () => {
+    expect(t).toContain("CASE WHEN v_top THEN 'WHEN s.toplevel IS NOT TRUE THEN ''alta'' ' ELSE '' END")
+    // toplevel se verifică înaintea formelor directa / rpc
+    const c = t.indexOf("v_clasa := format('CASE WHEN s.query IS NULL")
+    expect(c).toBeGreaterThan(0)
+    expect(t.slice(c, c + 400)).toMatch(/THEN %L %s'\s+'WHEN s\.query ~ %L/)
+  })
+  it('r6: fiecare instrucțiune SQL rulată ca anon în simulare poartă eticheta scriptului (STATISTICI o numără ca „proprie”)', () => {
+    const corp = t.slice(t.indexOf('DO $simulare$'), t.indexOf('END $simulare$;'))
+    // începuturile de instrucțiune: FOR … IN SELECT / WITH, PERFORM, EXECUTE, SELECT … INTO, WITH (inclusiv cel de după „FOR d IN”), subinterogarea din IF
+    const deschideri = corp.split('\n').filter(l => /^\s*(FOR \w+ IN (SELECT|WITH)|PERFORM |EXECUTE '|SELECT\b.*\bINTO\b|WITH \/\*|WITH RECURSIVE|AND NOT EXISTS \(SELECT)/.test(l))
+    expect(deschideri.length).toBeGreaterThanOrEqual(10)
+    for (const l of deschideri) expect(l, l).toContain('anon_drepturi_citire')
   })
   it('r4: STATISTICI sărită = LIPSĂ DE DOVADĂ, nu zero apeluri', () => {
     expect(t.split('LIPSA DE DOVADA (nu inseamna zero apeluri ca anon)').length - 1).toBe(2)
+  })
+  it('r6: STATISTICI pe clase (forma PostgREST), queryid + stats_since, track, martor, linia-rezumat', () => {
+    expect(t).toContain("RAISE NOTICE 'STATISTICI anon %: queryid % | % apeluri | stats_since % | % | %'")
+    expect(t).toContain("'STATISTICI rezumat anon | directe: % interogari, % apeluri | rpc: % interogari, % apeluri | alte: % interogari, % apeluri | proprii: % | resetare: % | evacuari: % | ascunse: % | track: % | stats_since: % | martor: % | dovada: %'")
+    expect(t).toContain("'^WITH pgrst_[a-z]+ AS', 'pgrst_call', 'rpc', '^WITH pgrst_[a-z]+ AS', '\"public\".\"', 'directa', 'alta'")
+    expect(t).toContain("v_track := coalesce(current_setting('pg_stat_statements.track', true), 'necunoscut');")
+    expect(t).toContain("WHEN v_track NOT IN ('top', 'all') THEN 'LIPSA DE DOVADA")
+    expect(t).toContain("WHEN NOT v_since THEN 'LIPSA DE DOVADA")
+    expect(t).toContain("WHEN v_martor IS NULL THEN 'LIPSA DE DOVADA")
+    expect(t).toContain("'<insufficient privilege>'")
+  })
+  it('r5: CONTROL POLITICI_ANON = politicile pentru anon / PUBLIC pe relații fără niciun drept pentru anon', () => {
+    expect(t).toContain("SELECT 'CONTROL', 2, 5, 'POLITICI_ANON'")
+    expect(t).toContain("AND NOT has_table_privilege(a.oid, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')")
+    expect(t).toContain("AND NOT has_any_column_privilege(a.oid, c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')) p")
   })
   it('CONTROL = amprenta RAMANE; BASELINE doar T1 / T2 / T3', () => {
     expect(t).toContain("SELECT 'CONTROL', 2, 4, a.treapta")
@@ -304,5 +373,14 @@ describe('documentul pentru owner', () => {
   })
   it('fără căi de pe server sau din rețea', () => {
     expect(d).not.toMatch(/[A-Za-z]:\\|\\\\|paw-data|Users\\|Users\//)
+  })
+  it('review r3: șablonul notei amprentează definiția COMPLETĂ a funcției (corpul BEGIN ATOMIC stă în prosqlbody, nu în prosrc)', () => {
+    const inceput = d.indexOf('Nota NEEXECUTATA <n>')
+    const sablon = d.slice(inceput, d.indexOf('**Dovada 2', inceput))
+    expect(inceput).toBeGreaterThan(0)
+    expect(sablon).toContain("md5(replace(pg_get_functiondef(oid), chr(13), ''))")
+    expect(sablon).not.toMatch(/amprenta corpului: md5\(replace\(prosrc/)
+    expect(sablon).toMatch(/proprietarul și drepturile de EXECUTE[^\n]*SEPARAT/)
+    expect(sablon).toMatch(/altă amprentă a definiției complete, alt proprietar/)
   })
 })

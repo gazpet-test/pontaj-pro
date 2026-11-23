@@ -1,10 +1,12 @@
 import { employeeFieldRead, EMPLOYEES_PUBLIC_COLUMNS, withEmployeePersonal, employeePersonalWrite } from './employeesPersonal.js'
-import { useState, useEffect, useCallback, createContext, useContext, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useCallback, createContext, useContext, useRef, useSyncExternalStore, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { tintaRedirectHostPublic } from './redari/domeniuPublic.js'
 import { supabase } from './lib/supabase.js'
 import { pornestePolling, eEroareSesiune } from './lib/sesiuneCereri.js'
 import { logoutProtejat } from './lib/izoLogoutBrowser.js'
+import { poateCreaSantier, mesajRefuzSantier, creeazaSantier, mesajSantier } from './lib/santiereDrept.js'
+import { creeazaDependentePontaj, creeazaControlorZi, randulZilei, propuneSantier, treceFiltrulSantier, nealocati, arataSpinner, valoriAfisate, stareRand } from './pontajSantierImplicit.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
 import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
@@ -60,12 +62,14 @@ import { MeteoSediu } from './Meteo.jsx'
 import Integrari from './Integrari.jsx'
 import Cladire from './Cladire.jsx'
 import { oreLucratoareAngajat, oreNormaPeZi, oreSuplimentare } from './pontajOreSuplimentare.js'
+import { NORME_TOTAL_EXPORT, coloaneBrut, coloaneNet, antetTotaluriBrut, antetTotaluriNet, numaraNorme, totaluriBrutIntrare, totaluriNetIntrare } from './pontajExportColoane.js'
 
 const AdministratorAlerte = lazy(() => import('./AdministratorAlerte.jsx'))
 const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner (docs/MONITOR_EGRESS.md)
 const IntrebariTehnice = lazy(() => import('./IntrebariTehnice.jsx'))   // ❓ Întreabă echipa — spețe tehnice → răspuns AI informativ (20261105a); modulul 'intrebari_tehnice'
 const MesajVocal = lazy(() => import('./MesajVocal.jsx'))   // 🎙 text → voce (Google TTS, vocea Aoede); owner sau modulul mesaj_vocal
 const Redari = lazy(() => import('./Redari.jsx'))   // 🌾 Redări teren (Lot 1 Transgaz) — docs/redari/CONTRACT_SCHEMA.md; modulul 'redari'
+const RedariMailOauthRetur = lazy(() => import('./redari/ui/MailOauthRetur.jsx'))   // întoarcerea de la Google (OAuth trimitere redari@), doar owner logat; F2b
 const RedariRaspunsPublic = lazy(() => import('./RedariRaspunsPublic.jsx'))   // formular public de răspuns cu token, fără login
 const RedariInformarePublic = lazy(() => import('./RedariInformarePublic.jsx'))   // informarea GDPR completă (țintă QR/link din convocator), fără login
 // 📱 SMS (20261130b): ruta proprie /sms pentru owner și modulul 'sms' (utilizator / test); nivelul real îl dă BD-ul (fn_sms_nivel)
@@ -1691,47 +1695,28 @@ function defaultOreFromNorma(h) {
 }
 
 // ─── Pontaj Row ───────────────────────────────────────────────────────────────
-function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture, showToast, onDirty }) {
+function PontajRow({ emp, rec, valori, stareR, santierImpl, sites, selectedDate, onSave, onAllocate, onEdit, onRenunta, onReincearca, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture, showToast }) {
   // Norma angajatului (pentru auto-fill ore) — vine din v_employee_work_hours
   const normaH = emp.work_hours_per_day || 8
   const oreDefault = defaultOreFromNorma(normaH)
-  
-  // State init: dacă rec are check_in folosesc valorile lui; altfel auto-fill cu defaults bazat pe normă
-  const [ci,setCi]=useState(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):(rec ? '' : oreDefault.intrare))
-  const [co,setCo]=useState(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):(rec ? '' : oreDefault.iesire))
-  const [norma,setNorma]=useState(rec?.norma||'')
-  const [diurna,setDiurna]=useState(rec?.diurna||false)
-  const [supl,setSupl]=useState(rec?.meal_supplement||false)
-  const [mode,setMode]=useState(rec?.norma?'norma':'ore')
+  // TKT-2026-0360 r4: valorile din câmpuri NU mai sunt stare locală resetată la fiecare `rec` nou (un refresh de fundal ștergea ce tastai):
+  // editarea în curs (ciorna) e a controlorului zilei; rândul afișează `valori` (ciorna sau rândul salvat) și trimite modificările (onEdit).
+  const { ci, co, norma, diurna, supl, mode } = valori
+  const saving = stareR.salveaza
   const [exp,setExp]=useState(false)
 
   // Enforce regulă: supliment hrană DOAR dacă e bifată diurna
   const handleSuplToggle = (val) => {
     if (val && !diurna) { showToast?.('Bifează întâi diurna înainte de supliment','warn'); return }
-    setSupl(val)
+    onEdit(emp,{supl:val})
   }
   const handleDiurnaToggle = (val) => {
-    if (!val && supl) { setSupl(false); showToast?.('Suplimentul a fost debifat automat (necesită diurnă)','info') }
-    setDiurna(val)
+    if (!val && supl) { onEdit(emp,{diurna:false,supl:false}); showToast?.('Suplimentul a fost debifat automat (necesită diurnă)','info'); return }
+    onEdit(emp,{diurna:val})
   }
-  useEffect(()=>{
-    setCi(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):(rec ? '' : oreDefault.intrare))
-    setCo(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):(rec ? '' : oreDefault.iesire))
-    setNorma(rec?.norma||''); setDiurna(rec?.diurna||false); setSupl(rec?.meal_supplement||false); setMode(rec?.norma?'norma':'ore')
-  },[rec])
-  // TKT-2026-0064: anunț planșa când rândul are modificări nesalvate, ca refresh-ul
-  // automat (poll/focus) să nu-mi șteargă ce am tastat. Baza de comparație e exact
-  // ce ar pune sync-ul de mai sus din rec (inclusiv auto-fill-ul pe rând gol).
-  const baseCi=rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):(rec ? '' : oreDefault.intrare)
-  const baseCo=rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):(rec ? '' : oreDefault.iesire)
   // TKT-2026-0136: concediul aprobat se scrie in pontaj in avans. O planificare arata identic cu o
   // constatare, deci cine face pontajul n-are cum sa stie ce merita verificat. Marcam.
   const planificata = esteAbsentaPlanificata(rec, selectedDate)
-  const isDirty=ci!==baseCi||co!==baseCo||norma!==(rec?.norma||'')||diurna!==(rec?.diurna||false)||supl!==(rec?.meal_supplement||false)
-  useEffect(()=>{
-    onDirty?.(emp.id,isDirty)
-    return ()=>onDirty?.(emp.id,false)
-  },[isDirty,emp.id,onDirty])
   const previewNet = () => { if(!ci) return null; const a=dateToISO(selectedDate,ci),b=co?dateToISO(selectedDate,co):null; return b?netMins(a,b,true):null }
   const pNet=previewNet()
   const recNet=netMins(rec?.check_in,rec?.check_out,rec?.lunch_break!==false)
@@ -1771,13 +1756,18 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
           </div>
         </div>
 
-        {/* Santier */}
+        {/* Santier — TKT-2026-0360: rândul zilei > ultima zi lucrată > fișa (src/pontajSantierImplicit.js); „se încarcă” cât ziua nu e citită */}
         <div style={{minWidth:130}}>
-          {(rec?.site_id||emp.site_id)?<span className="badge bs" style={{fontSize:10,display:'block',marginBottom:3}}>{sites.find(s=>s.id===(rec?.site_id||emp.site_id))?.name||emp.sites?.name||'Șantier'}</span>
+          {santierImpl.sursa==='incarc'?(santierImpl.eroare
+            ?<span style={{fontSize:10,color:G.red,fontWeight:700,display:'block',marginBottom:3}} title="Pontajul zilei nu s-a putut citi — vezi „Reîncearcă” sus">⚠ necitit</span>
+            :<span style={{fontSize:10,color:G.muted,display:'block',marginBottom:3}} title="Se citesc pontajul zilei și ultimul șantier pontat">⏳ se încarcă…</span>)
+          :santierImpl.site_id!=null?<span className="badge bs" title={santierImpl.sursa==='precedent'?`Ultimul șantier pontat (${String(santierImpl.data).split('-').reverse().join('.')}); se salvează așa dacă nu alegi altul`:santierImpl.sursa==='fisa'?(santierImpl.istoricEroare?'Șantierul din fișă — ultimul șantier pontat nu s-a putut citi; verifică-l':'Șantierul din fișa angajatului (fără pontaj anterior)'):undefined} style={{fontSize:10,display:'block',marginBottom:3}}>{santierImpl.sursa==='precedent'?'↺ ':''}{sites.find(s=>s.id===santierImpl.site_id)?.name||(santierImpl.site_id===emp.site_id?emp.sites?.name:null)||'Șantier'}</span>
           :<span style={{fontSize:10,color:G.red,fontWeight:700,display:'block',marginBottom:3}}>⚠ Nealocate</span>}
-          {isAdmin&&<select value={rec?.site_id??emp.site_id??''} onChange={e=>onAllocate(emp,e.target.value?Number(e.target.value):null)} style={{padding:'2px 5px',fontSize:10,width:'100%'}}>
+          {/* r4: cât o alocare e în curs / așteaptă pe rândul ăsta, selectul arată ultima alegere cerută; scrierile pe rând se fac pe rând (controlorul) */}
+          {isAdmin&&santierImpl.sursa!=='incarc'&&<select value={(stareR.siteTinta!==undefined?stareR.siteTinta:santierImpl.site_id)??''} onChange={e=>onAllocate(emp,e.target.value?Number(e.target.value):null)} style={{padding:'2px 5px',fontSize:10,width:'100%'}}>
             <option value="">— fără —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
           </select>}
+          {saving&&<span style={{fontSize:9,color:G.muted,display:'block',marginTop:2}}>⏳ se salvează…</span>}
         </div>
 
         {/* Status actual */}
@@ -1814,6 +1804,21 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
         <button onClick={save} disabled={saving} style={{...S.btnP,padding:'6px 13px',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{saving?<div className="sp"/>:'💾'}</button>
       </div>
 
+      {/* TKT-2026-0360 r4: starea rândului, din controlor — rezultat necunoscut, rând modificat sub editare, conflict de versiune */}
+      {(stareR.necunoscut||stareR.schimbat||stareR.conflict||stareR.mesaj)&&<div style={{marginTop:6,fontSize:11,color:G.orange,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <span style={{flex:1,minWidth:200}}>
+          {stareR.necunoscut?(stareR.recitireEsuata
+            ?`⚠ Rezultatul ultimei salvări nu e cunoscut, iar recitirea rândului din bază a eșuat (${stareR.recitireEsuata}) — apasă „Reîncearcă”; până atunci nu salvez nimic pe rând.`
+            :'⚠ Rezultatul ultimei salvări nu e cunoscut — recitesc rândul din bază; verifică-l înainte să salvezi din nou.')
+            :stareR.conflict?`⚠ ${stareR.conflict}`
+            :stareR.schimbat?'⚠ Rândul a fost modificat între timp (de altcineva sau de o salvare anterioară) — valorile tale au rămas în câmpuri; verifică pontajul salvat și apasă din nou 💾.'
+            :`⚠ ${stareR.mesaj}`}
+        </span>
+        {(stareR.schimbat||stareR.conflict||stareR.mesaj)&&!stareR.necunoscut&&<button onClick={()=>onRenunta(emp)} style={{...S.btnS,fontSize:10,padding:'3px 9px'}}>↺ Ia valorile salvate</button>}
+        {/* r5: rândul cu rezultat necunoscut are mereu ieșirea lui (recitirea poate eșua în fundal fără banner de zi) */}
+        {stareR.necunoscut&&<button onClick={onReincearca} disabled={stareR.reincerc} style={{...S.btnS,fontSize:10,padding:'3px 9px'}}>{stareR.reincerc?'⏳ Reîncerc…':'↻ Reîncearcă'}</button>}
+      </div>}
+
       {exp&&<div style={{marginTop:11,padding:13,background:'#0D1117',borderRadius:8,border:`1px solid ${G.border}`}}>
         <div style={{display:'flex',gap:14,alignItems:'flex-start',flexWrap:'wrap'}}>
           <div>
@@ -1821,21 +1826,19 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
             <div style={{display:'flex',gap:12}}>
               <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,cursor:'pointer'}}>
                 <input type="radio" name={`m${emp.id}`} checked={mode==='ore'} onChange={()=>{
-                  setMode('ore')
-                  setNorma('')
                   // Auto-fill ore default bazat pe norma angajatului (dacă nu sunt deja completate)
-                  if (!ci && !co) { setCi(oreDefault.intrare); setCo(oreDefault.iesire) }
+                  onEdit(emp,{mode:'ore',norma:'',...((!ci&&!co)?{ci:oreDefault.intrare,co:oreDefault.iesire}:{})})
                 }} style={{accentColor:G.blue}}/> Ore lucrate
               </label>
               <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,cursor:'pointer'}}>
-                <input type="radio" name={`m${emp.id}`} checked={mode==='norma'} onChange={()=>{setMode('norma');setCi('');setCo('')}} style={{accentColor:G.yellow}}/> Normă specială
+                <input type="radio" name={`m${emp.id}`} checked={mode==='norma'} onChange={()=>onEdit(emp,{mode:'norma',ci:'',co:''})} style={{accentColor:G.yellow}}/> Normă specială
               </label>
             </div>
           </div>
           {mode==='ore'?(
             <>
-              <div><Lbl>Intrare</Lbl><input type="time" value={ci} onChange={e=>setCi(e.target.value)} style={{...S.input,width:140}}/></div>
-              <div><Lbl>Ieșire</Lbl><input type="time" value={co} onChange={e=>setCo(e.target.value)} style={{...S.input,width:140}}/></div>
+              <div><Lbl>Intrare</Lbl><input type="time" value={ci} onChange={e=>onEdit(emp,{ci:e.target.value})} style={{...S.input,width:140}}/></div>
+              <div><Lbl>Ieșire</Lbl><input type="time" value={co} onChange={e=>onEdit(emp,{co:e.target.value})} style={{...S.input,width:140}}/></div>
               {pNet!==null&&<div style={{paddingTop:18,fontSize:12,color:G.yellow,fontWeight:700}}>{minsToHM(pNet)} net</div>}
               {emp.work_hours_per_day && (
                 <div style={{paddingTop:18,fontSize:11,color:G.muted}}>
@@ -1845,7 +1848,7 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
             </>
           ):(
             <div><Lbl>Normă</Lbl>
-              <select value={norma} onChange={e=>setNorma(e.target.value)} style={{width:230}}>
+              <select value={norma} onChange={e=>onEdit(emp,{norma:e.target.value})} style={{width:230}}>
                 <option value="">— Selectează —</option>
                 {NORME.map(n=><option key={n} value={n}>{n} — {NORME_LABELS[n]}</option>)}
               </select>
@@ -1870,64 +1873,65 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
 // ─── Pontaj Page ──────────────────────────────────────────────────────────────
 function PontajPage() {
   const { profile } = useAuth()
-  const [emps,setEmps]=useState([]); const [recs,setRecs]=useState({}); const [sites,setSites]=useState([])
+  const [sites,setSites]=useState([])
+  // TKT-2026-0360 r3: ziua afișată, lista de angajați, rândurile zilei și istoricul (ultimul șantier pontat) — și TOATE citirile / scrierile
+  // lor — stau în controlorul zilei (src/pontajSantierImplicit.js, creeazaControlorZi), fără React. Pagina doar redă instantaneul (snap)
+  // și cheamă metodele; generațiile, invalidarea la schimbarea zilei / listei și „scrierea bate citirea” sunt ale controlorului (L24).
+  // r4: și starea „zi exportată / plătită”, poarta de parolă (ca dependență), editările în curs, coada scrierilor pe rând și termenele
+  // sunt în controlor; pagina nu mai decide nimic asincron despre ziua afișată.
+  const poartaRef=useRef(null)   // poarta de parolă / tichet a paginii (modalul), chemată DE controlor cu starea lui „zi plătită”
+  const ctrlRef=useRef(null)
+  // r5: cererile către bază (rânduri, istoric, „zi plătită”, salvare, alocare, identitate, nota pe tichet, fișa) le construiește
+  // creeazaDependentePontaj (src/pontajSantierImplicit.js), testată cu biblioteca Supabase reală; pagina dă doar clientul și ajutoarele ei.
+  if(!ctrlRef.current) ctrlRef.current=creeazaControlorZi({ zi:todayStr(), ...creeazaDependentePontaj(supabase, {
+    poarta:(a)=>poartaRef.current(a),
+    oreImplicite:(emp)=>defaultOreFromNorma(emp.work_hours_per_day||8),
+    termenCorectura:(zi)=>fmtZiPontaj(stareLuna(zi).termen) }) })
+  const ctrl=ctrlRef.current
+  const snap=useSyncExternalStore(ctrl.aboneaza,ctrl.getStare)
+  const date=snap.zi; const recs=snap.randuri.recs; const emps=snap.emps||[]
+  const setDate=(d)=>ctrl.seteazaZi(d)
   const [search,setSearch]=useState(''); const [deptF,setDeptF]=useState('Toate'); const [siteF,setSiteF]=useState('Toate')
   const [onlyDiurna,setOnlyDiurna]=useState(false)
-  const [date,setDate]=useState(todayStr()); const [load,setLoad]=useState(true); const [saving,setSaving]=useState(null)
   const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15); const [toast,showToast]=useToast()
-  // Password gate pe zile deja exportate ca diurna_payments (Razvan 22.05.2026)
-  const [isDateExported,setIsDateExported]=useState(false)
-  const [exportPeriodInfo,setExportPeriodInfo]=useState(null) // {period_from, period_to, payment_date, total_amount}
-  const [passwordPrompt,setPasswordPrompt]=useState(null) // {onConfirm, onCancel, employeeName}
+  // Password gate pe zile deja exportate ca diurna_payments (Razvan 22.05.2026) — r4: starea vine din controlor, legată de ziua afișată
+  const stExp=snap.exportZi
+  const isDateExported=stExp.stare==='gata'&&stExp.exportat===true
+  const exportPeriodInfo=isDateExported?stExp.info:null // {period_from, period_to, payment_date, total_amount}
+  const [passwordPrompt,setPasswordPrompt]=useState(null) // {onConfirm, onCancel, employeeName, zi, info, cereTichet, termen}
   const [pwdInput,setPwdInput]=useState('')
   const [tichetInput,setTichetInput]=useState('')   // nr. tichet HR pentru corecturi după termenul de 12
   const [pwdErr,setPwdErr]=useState('')
   const [pwdVerifying,setPwdVerifying]=useState(false)
   const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate' || profile?.can_access_pontaj_brut === true
   useEffect(()=>{ loadSites(); loadSettings() },[])
-  useEffect(()=>{ loadEmps() },[profile,sites,date.slice(0,7)])
-  useEffect(()=>{ if(emps.length>0) loadRecs() },[emps,date])
+  // lista de angajați: doar răspunsul ultimei cereri (luna / profilul / șantierele schimbate între timp) ajunge în controlor (L24)
+  useEffect(()=>{ let curent=true; loadEmps(()=>curent); return ()=>{ curent=false } },[profile,sites,date.slice(0,7)])
   // TKT-2026-0054: sincronizare pontaj între utilizatori — modificarea unui user
   // nu apărea în plansa altuia până la refresh. Reîncarc înregistrările la revenirea
-  // în tab (focus/visibilitychange) + poll ușor la 35s cât ești pe pagină, dar NU în
-  // timpul unei salvări (ca să nu suprascriu editarea în curs).
+  // în tab (focus/visibilitychange) + poll ușor la 35s cât ești pe pagină.
   // TKT-2026-0064: refresh-ul e SILENT (fără spinner) — altfel lista se demontează la
-  // fiecare focus/poll și pierzi orele tastate. Sar și peste refresh cât un rând e în
-  // curs de editare (dirtyRef), ca să nu-i sufle valorile de sub degete.
-  const dirtyRef=useRef(new Set())
-  const markDirty=useCallback((empId,isDirty)=>{ if(isDirty) dirtyRef.current.add(empId); else dirtyRef.current.delete(empId) },[])
+  // fiecare focus/poll și pierzi orele tastate. (Până la r4 sărea peste refresh cât un rând
+  // era în editare; acum editările sunt protejate pe rând, în controlor — vezi mai jos.)
+  // TKT-2026-0360 r3/r4: refresh-ul îl face controlorul (ctrl.reimprospateaza) — pagina doar îl declanșează. O salvare reușită aruncă orice
+  // citire plecată înaintea ei; în eroare reîncearcă (fără spinner); editările în curs sunt ale controlorului și nu sunt suprascrise de
+  // răspunsul de fundal (rândul schimbat sub o editare e marcat pe rând), deci refresh-ul nu mai sare peste rândurile în lucru.
   useEffect(()=>{
-    if(emps.length===0) return
-    const refresh=()=>{ if(document.visibilityState==='visible' && !saving && !load && dirtyRef.current.size===0) loadRecs(true) }
+    const refresh=()=>{ if(document.visibilityState==='visible') ctrl.reimprospateaza() }
     window.addEventListener('focus',refresh)
     document.addEventListener('visibilitychange',refresh)
     const iv=setInterval(refresh,35000)
     return ()=>{ window.removeEventListener('focus',refresh); document.removeEventListener('visibilitychange',refresh); clearInterval(iv) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[emps,date,saving,load])
-  // Verific dacă data afișată e în interiorul unei perioade exportate ca plată
-  // Folosesc RPC SECURITY DEFINER ca să funcționeze pentru orice user authenticated (RLS bypass controlat)
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase
-        .rpc('fn_get_export_period_for_date', { p_date: date })
-      if (data && data.length > 0) {
-        setIsDateExported(true)
-        setExportPeriodInfo(data[0])
-      } else {
-        setIsDateExported(false)
-        setExportPeriodInfo(null)
-      }
-    })()
-  }, [date])
+  },[ctrl])
+  const reincearca=async()=>{ const r=await ctrl.reincearca(); if(r.randuri==='eroare'||r.istoric==='eroare'||r.export==='eroare'||r.fundalEroare) showToast('Tot nu se poate citi — încearcă din nou peste puțin','error') }
   const loadSettings=async()=>{ const {data}=await supabase.from('settings').select('*'); const d=data?.find(s=>s.key==='diurna_amount'); if(d) setDiurnaAmt(Number(d.value)); const s=data?.find(x=>x.key==='meal_supplement_amount'); if(s) setSuplAmt(Number(s.value)) }
   const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
-  const loadEmps=async()=>{
+  const loadEmps=async(eCurent=()=>true)=>{
     const monthStart=date.slice(0,7)+'-01'
     let q=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').or(`active.eq.true,and(active.eq.false,termination_date.gte.${monthStart})`).order('name')
     if(!isAdmin){
       const siteIds=profile?.site_ids||[]
-      if(siteIds.length===0){setEmps([]);setLoad(false);return}
+      if(siteIds.length===0){ if(eCurent()) ctrl.seteazaAngajati([]); return }
       q=q.in('site_id',siteIds)
     }
     // Fetch employees + work_hours separat (employee_salaries are RLS strict pe can_access_salarii, view v_employee_work_hours e public)
@@ -1937,12 +1941,12 @@ function PontajPage() {
     ])
     const whMap = new Map((whRes.data||[]).map(w => [w.employee_id, w.work_hours_per_day]))
     const enriched = (empsRes.data||[]).map(e => ({...e, work_hours_per_day: whMap.get(e.id) || null}))
-    setEmps(enriched)
+    if(eCurent()) ctrl.seteazaAngajati(enriched) // altă listă → controlorul recitește rândurile și istoricul; aceeași listă → doar fișele
   }
-  // silent=true → refresh în fundal (poll/focus): NU aprind spinnerul, altfel lista se
-  // demontează și pierzi ce ai tastat. Păstrez și identitatea obiectelor nemodificate,
-  // ca PontajRow să nu-și reseteze state-ul local pe rândurile neatinse de alții.
-  const loadRecs=async(silent=false)=>{ if(!silent) setLoad(true); const ids=emps.map(e=>e.id); if(!ids.length){setLoad(false);return}; const {data}=await supabase.from('pontaj_records').select('*').eq('date',date).in('employee_id',ids); setRecs(prev=>{ const m={}; (data||[]).forEach(r=>{ const old=prev[r.employee_id]; m[r.employee_id]=(old&&JSON.stringify(old)===JSON.stringify(r))?old:r }); return m }); setLoad(false) }
+  // TKT-2026-0360: regula unică (afișare, select, filtru, „Nealocate”, salvare): rândul zilei > ultima zi lucrată > fișa; „se încarcă” cât
+  // nu se știe. Citirea istoricului e exactă și paginată (incarcaUltimulSantier); eroare ≠ „fără pontaj anterior” (L18).
+  const santierPentru=(emp)=>propuneSantier(snap,emp)
+  const load=arataSpinner(snap)
 
   // Helper: cere parolă pentru zile exportate (Razvan 22.05.2026 - parolă per modificare)
   // Gate de permisiune: doar Razvan + Marilena (is_owner) + Natalia Udrea (can_modify_employees)
@@ -1954,38 +1958,32 @@ function PontajPage() {
   // Poarta întoarce {ok, tichet} pentru operația CONCRETĂ — tichetul nu stă într-un ref comun,
   // ca două salvări simultane să nu se noteze una pe tichetul alteia (Copilot P1-1).
   const promptActivRef = useRef(false)   // o singură poartă parolă/tichet activă (Copilot P2-1)
-  const requestPasswordIfExported = (empName) => new Promise((resolve) => {
-    if (!isDateExported && !lunaSt.cereTichet) { resolve({ ok: true, tichet: null }); return }
+  // TKT-2026-0360 r4: poarta e chemată DE controlor, cu ziua intenției și starea ei „zi plătită” (cunoscută — altfel controlorul refuză
+  // înainte). Cine are voie și ce i se cere rămân exact ca înainte; doar momentul deciziei e cel corect (nu starea zilei precedente).
+  poartaRef.current = ({ zi, exportat, info, numeAngajat }) => new Promise((resolve) => {
+    const lunaZ = stareLuna(zi)
+    if (!exportat && !lunaZ.cereTichet) { resolve({ ok: true, tichet: null }); return }
     if (promptActivRef.current) {
       showToast('Termină întâi confirmarea deschisă (parolă / tichet), apoi reia modificarea.', 'warn')
       resolve({ ok: false, tichet: null })
       return
     }
     if (!canEditRetroactivePontaj) {
-      showToast(lunaSt.cereTichet
-        ? `🚫 Luna e închisă și termenul de corecturi (${fmtZiPontaj(lunaSt.termen)}) a trecut — corectura se face doar prin tichet HR deschis de Natalia și aprobat de Marilena.`
+      showToast(lunaZ.cereTichet
+        ? `🚫 Luna e închisă și termenul de corecturi (${fmtZiPontaj(lunaZ.termen)}) a trecut — corectura se face doar prin tichet HR deschis de Natalia și aprobat de Marilena.`
         : '🚫 Modificare retroactivă blocată — doar Trusu Razvan, Marilena și Natalia pot modifica zile exportate. Contactează unul dintre ei.', 'error')
       resolve({ ok: false, tichet: null })
       return
     }
     promptActivRef.current = true
     setPasswordPrompt({
-      employeeName: empName,
-      cereTichet: lunaSt.cereTichet,
+      employeeName: numeAngajat,
+      zi, info: exportat ? info : null, termen: lunaZ.termen,
+      cereTichet: lunaZ.cereTichet,
       onConfirm: (tichet) => { promptActivRef.current = false; resolve({ ok: true, tichet: tichet || null }) },
       onCancel: () => { promptActivRef.current = false; resolve({ ok: false, tichet: null }) },
     })
   })
-  // După o corectură pe lună închisă (după termen): notăm în istoricul tichetului cine, ce angajat, ce zi, ce câmpuri.
-  const noteazaCorectura = async (emp, campuri, t) => {
-    if (!t) return
-    const uid = (await supabase.auth.getUser()).data.user?.id
-    const { error } = await supabase.from('tichete_istoric').insert({
-      tichet_id: t.id, actiune: 'corectura_pontaj', autor: uid || null,
-      detalii: { employee_id: emp.id, angajat: emp.name, data: date, campuri, termen: fmtZiPontaj(lunaSt.termen) },
-    })
-    if (error) showToast(`Corectura e salvată, dar nu s-a putut nota în ${t.numar_tichet}: ${error.message}`, 'warn')
-  }
 
   const handlePwdConfirm = async () => {
     if (!profile?.email) { setPwdErr('Lipsește email contul'); return }
@@ -2016,41 +2014,23 @@ function PontajPage() {
     setPasswordPrompt(null)
   }
 
+  // TKT-2026-0360 r3/r4 (ctrl.salveaza / ctrl.aloca): TOATĂ decizia e a controlorului — contextul de la apăsare (ctx), „zi plătită”
+  // cunoscută pentru ziua afișată, poarta de parolă / tichet (chemată de el), coada pe rând, versiunea rândului, termenul, nota pe tichet
+  // și fișa angajatului. Pagina doar spune rezultatul.
   const saveRecord = async (emp, fields) => {
-    // Gate parolă dacă data afișată e în perioadă deja exportată
-    const { ok: okAuth, tichet } = await requestPasswordIfExported(emp.name)
-    if (!okAuth) {
-      showToast('Modificare anulată — parolă necesară pentru zi plătită', 'warn')
-      return
-    }
-    setSaving(emp.id)
-    // site_id: use per-day record site if exists, else employee default
-    const recSiteId = recs[emp.id]?.site_id ?? emp.site_id ?? null
-    if (!fields.norma && !recSiteId) { showToast('Șantierul este obligatoriu pentru ore!','error'); setSaving(null); return }
-    const uid=(await supabase.auth.getUser()).data.user?.id
-    const {data,error}=await supabase.from('pontaj_records').upsert({employee_id:emp.id,date,site_id:recSiteId,created_by:uid,updated_by:uid,updated_at:new Date().toISOString(),...fields},{onConflict:'employee_id,date'}).select().single()
-    if(!error){setRecs(prev=>({...prev,[emp.id]:data}));showToast(`✓ Salvat: ${emp.name}`); await noteazaCorectura(emp, Object.keys(fields), tichet)} else showToast('Eroare la salvare','error')
-    setSaving(null)
+    const r = await ctrl.salveaza(emp, fields, { ctx: snap.ctx })
+    if(!r.ok){ showToast(r.motiv, r.nivel); return }
+    showToast(r.altaZi?`✓ Salvat pe ${String(r.zi).split('-').reverse().join('.')}: ${emp.name} (ziua afișată s-a schimbat între timp)`:`✓ Salvat: ${emp.name}`, r.altaZi?'warn':undefined)
+    if(r.notaEroare) showToast(r.notaEroare,'warn')
   }
+  // Salvam site_id in pontaj_records pentru ziua selectata (nu global pe angajat)
   const allocate = async (emp, siteId) => {
-    // Gate parolă dacă data afișată e în perioadă deja exportată
-    const { ok: okAuth, tichet } = await requestPasswordIfExported(emp.name)
-    if (!okAuth) {
-      showToast('Realocare anulată — parolă necesară pentru zi plătită', 'warn')
-      return
-    }
-    // Salvam site_id in pontaj_records pentru ziua selectata (nu global pe angajat)
-    const uid=(await supabase.auth.getUser()).data.user?.id
-    const {data:rec}=await supabase.from('pontaj_records')
-      .upsert({employee_id:emp.id,date,site_id:siteId||null,updated_by:uid,updated_at:new Date().toISOString()},{onConflict:'employee_id,date'})
-      .select().single()
-    if(rec){ setRecs(prev=>({...prev,[emp.id]:rec})); await noteazaCorectura(emp, ['site_id'], tichet) }
-    // Daca angajatul nu are niciun santier default, setam si pe employee (scoate din "nealocati")
-    if(!emp.site_id&&siteId){
-      await supabase.from('employees').update({site_id:siteId}).eq('id',emp.id)
-      setEmps(prev=>prev.map(e=>e.id===emp.id?{...e,site_id:siteId,sites:sites.find(s=>s.id===siteId)||null}:e))
-    }
-    showToast(siteId?`✓ ${emp.name} → ${sites.find(s=>s.id===siteId)?.name} (doar ${date})`:'Dezalocat zi','warn')
+    const r = await ctrl.aloca(emp, siteId, { ctx: snap.ctx })
+    if(!r.ok){ showToast(r.anulat||r.conflict||r.inlocuita||r.necunoscut?r.motiv:`Eroare la alocare: ${r.motiv}`, r.nivel||'error'); return }
+    const alta=r.altaZi?' — ziua afișată s-a schimbat între timp':''
+    showToast(siteId?`✓ ${emp.name} → ${sites.find(s=>s.id===siteId)?.name} (doar ${r.zi})${alta}`:`Dezalocat zi (${r.zi})${alta}`,'warn')
+    if(r.notaEroare) showToast(r.notaEroare,'warn')
+    if(r.fisaEroare) showToast(`Alocarea pe zi e salvată, dar fișa angajatului nu s-a actualizat: ${r.fisaEroare}`,'warn')
   }
   const filtered=emps.filter(e=>{
     if(e.hire_date&&e.hire_date>date) return false
@@ -2058,12 +2038,16 @@ function PontajPage() {
     if(!e.active&&e.termination_date&&e.termination_date<monthStart) return false
     const ms=e.name.toLowerCase().includes(search.toLowerCase())
     const md=deptF==='Toate'||e.department===deptF
-    const ms2=siteF==='Toate'||String(e.site_id)===String(siteF)
+    const ms2=treceFiltrulSantier(santierPentru(e),siteF)
     const md2=!onlyDiurna||recs[e.id]?.diurna
     return ms&&md&&ms2&&md2
   })
   const nrPlanificate = numaraPlanificate(recs, date)
-  const unalloc=emps.filter(e=>!e.site_id)
+  // TKT-2026-0360: „Nealocate” = aceeași regulă ca rândul (fără rând cu șantier pe zi, fără zi lucrată anterioară, fără fișă);
+  // cât rândurile / istoricul zilei se citesc, lista nu se arată (nu se știe încă)
+  const nealoc=nealocati(snap)
+  const unalloc=nealoc.inAsteptare>0?[]:nealoc.lista
+  const stRand=snap.randuri, stIst=snap.istoric
   return (
     <Layout>
       <Toast toast={toast}/>
@@ -2127,14 +2111,38 @@ function PontajPage() {
         </div>
       </div>}
       {unalloc.length>0&&<div style={{background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red}}>
-        <div style={{fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ {unalloc.length} angajați nealocați pe niciun șantier:</div>
+        <div style={{fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ {unalloc.length} angajați nealocați pe niciun șantier (nici în ziua asta, nici în pontajul anterior, nici în fișă):</div>
         <div style={{fontSize:11,lineHeight:1.7,flexWrap:'wrap',display:'flex',gap:'4px 10px'}}>
           {unalloc.map(e=><span key={e.id} style={{whiteSpace:'nowrap'}}>• {e.name}</span>)}
         </div>
       </div>}
+      {/* TKT-2026-0360: dacă ziua precedentă nu s-a putut citi, se spune — implicitul devine (temporar) fișa */}
+      {stIst.stare==='eroare'&&<div style={{background:G.redDim,border:`1px solid ${G.red}44`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+        <div style={{flex:1,minWidth:220}}>
+          <div style={{fontSize:11,fontWeight:700}}>⚠️ Nu am putut citi ultimul șantier pontat al angajaților ({stIst.err})</div>
+          <div style={{fontSize:11,color:G.text,marginTop:3}}>Până la o citire reușită, șantierul propus e cel din fișă — verifică-l înainte de salvare.</div>
+        </div>
+        <button onClick={reincearca} disabled={stIst.reincerc} style={{...S.btnS,fontSize:11,padding:'5px 12px'}}>{stIst.reincerc?'⏳ Reîncerc…':'↻ Reîncearcă'}</button>
+      </div>}
+      {/* TKT-2026-0360 r4: dacă nu se știe dacă ziua e plătită, nu se salvează (eroarea NU înseamnă „neexportată”) */}
+      {stExp.stare==='eroare'&&<div style={{background:G.redDim,border:`1px solid ${G.red}44`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+        <div style={{flex:1,minWidth:220}}>
+          <div style={{fontSize:11,fontWeight:700}}>⚠️ Nu am putut verifica dacă ziua e plătită (exportată) ({stExp.err})</div>
+          <div style={{fontSize:11,color:G.text,marginTop:3}}>Salvările sunt oprite până la o verificare reușită. Ce ai completat rămâne pe ecran.</div>
+        </div>
+        <button onClick={reincearca} disabled={stExp.reincerc} style={{...S.btnS,fontSize:11,padding:'5px 12px'}}>{stExp.reincerc?'⏳ Reîncerc…':'↻ Reîncearcă'}</button>
+      </div>}
+      {/* TKT-2026-0360 r3: rândurile zilei nu s-au putut citi — nu le arătăm ca „fără pontaj”, nu salvăm peste ele; „Reîncearcă” păstrează completările */}
+      {stRand.stare==='eroare'&&<div style={{background:G.redDim,border:`1px solid ${G.red}44`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+        <div style={{flex:1,minWidth:220}}>
+          <div style={{fontSize:11,fontWeight:700}}>⚠️ Nu am putut citi pontajul zilei ({stRand.err})</div>
+          <div style={{fontSize:11,color:G.text,marginTop:3}}>Nu se știe ce e deja pontat: salvările sunt oprite până la o citire reușită. Ce ai completat rămâne pe ecran.</div>
+        </div>
+        <button onClick={reincearca} disabled={stRand.reincerc} style={{...S.btnS,fontSize:11,padding:'5px 12px'}}>{stRand.reincerc?'⏳ Reîncerc…':'↻ Reîncearcă'}</button>
+      </div>}
       {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
       :<div style={{display:'flex',flexDirection:'column',gap:5}}>
-        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast} isDateExported={isDateExported} onDirty={markDirty}/>)}
+        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={randulZilei(snap,emp.id)} valori={valoriAfisate(snap,emp,defaultOreFromNorma(emp.work_hours_per_day||8))} stareR={stareRand(snap,emp.id)} santierImpl={santierPentru(emp)} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} onEdit={ctrl.editeaza} onRenunta={ctrl.renuntaEditare} onReincearca={reincearca} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast}/>)}
         {!filtered.length&&<div style={{textAlign:'center',color:G.muted,padding:'50px 0',fontSize:12}}>Niciun angajat găsit</div>}
       </div>}
       {passwordPrompt && (
@@ -2149,16 +2157,16 @@ function PontajPage() {
             </div>
             <div style={{background:G.bg,border:`1px solid ${G.border}`,borderRadius:8,padding:'10px 14px',marginBottom:14,fontSize:12,lineHeight:1.5}}>
               <div><strong>Angajat:</strong> {passwordPrompt.employeeName}</div>
-              <div><strong>Data:</strong> {new Date(date).toLocaleDateString('ro-RO')}</div>
-              {exportPeriodInfo && (
+              <div><strong>Data:</strong> {new Date(passwordPrompt.zi).toLocaleDateString('ro-RO')}</div>
+              {passwordPrompt.info && (
                 <div style={{color:G.orange,marginTop:4}}>
-                  ⚠ Plătit deja în export {new Date(exportPeriodInfo.period_from).toLocaleDateString('ro-RO')} — {new Date(exportPeriodInfo.period_to).toLocaleDateString('ro-RO')}
+                  ⚠ Plătit deja în export {new Date(passwordPrompt.info.period_from).toLocaleDateString('ro-RO')} — {new Date(passwordPrompt.info.period_to).toLocaleDateString('ro-RO')}
                 </div>
               )}
             </div>
             {passwordPrompt.cereTichet && <>
               <div style={{fontSize:12,color:G.red,marginBottom:8,lineHeight:1.5}}>
-                Luna e închisă și termenul de corecturi ({fmtZiPontaj(lunaSt.termen)}) a trecut. Corectura se face doar pe baza tichetului HR deschis de Natalia și aprobat de Marilena; se notează în istoricul tichetului.
+                Luna e închisă și termenul de corecturi ({fmtZiPontaj(passwordPrompt.termen)}) a trecut. Corectura se face doar pe baza tichetului HR deschis de Natalia și aprobat de Marilena; se notează în istoricul tichetului.
                 <div style={{color:G.muted,marginTop:4}}>ERP-ul verifică doar că tichetul e de HR și nerespins — <strong>aprobarea Marilenei o confirmi tu în tichet</strong> înainte de corectură.</div>
               </div>
               <input value={tichetInput} onChange={e=>{setTichetInput(e.target.value); setPwdErr('')}} placeholder="Nr. tichet HR, ex. TKT-2026-0287" disabled={pwdVerifying}
@@ -2574,14 +2582,11 @@ function ReportsPage() {
       const mName = new Date(y, m-1).toLocaleString('ro-RO', { month: 'long', year: 'numeric' })
       
       // Coloane finale: A=Nume, B=Funcție, C=Program, D..AG/AH/AI(zile), Total Zile, Total Ore (FĂRĂ ORE SUPL)
-      // Plus etichetă AK4/AL4 (Razvan a zis să le păstrăm ca info informativă)
-      const TOTAL_ZILE_C = FIXED + days       // col index al „Total Zile"
-      const TOTAL_ORE_C  = FIXED + days + 1   // col index al „Total Ore"
-      // TKT-2026-0311: totalul zilelor de CO / CM / CFP / O per angajat (formule COUNTIF pe rândul Ora Intrare)
-      const NORME_TOTAL  = ['CO','CM','CFP','O']
-      const NORME_C0     = FIXED + days + 2
-      const WD_LABEL_C   = NORME_C0 + NORME_TOTAL.length   // col index al etichetei „Zile lucr. lună:"
-      const WD_VALUE_C   = WD_LABEL_C + 1                  // col index al valorii
+      // Plus etichetă „Zile lucr. lună:” + valoare pe rândul 4, după ultima coloană ZILE <normă> (Razvan a zis să le păstrăm ca info informativă)
+      // TKT-2026-0311 / 0368: totalul zilelor de CO / CM / BO / CFP / O per angajat (formule COUNTIF pe rândul Ora Intrare).
+      // Pozițiile coloanelor vin din pontajExportColoane.js (aceeași socoteală ca în teste).
+      const NORME_TOTAL  = NORME_TOTAL_EXPORT
+      const { WD_LABEL_C, WD_VALUE_C } = coloaneNet(days)   // etichetă + valoare „Zile lucr. lună:"
       
       const R = []
       R.push(['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
@@ -2595,10 +2600,11 @@ function ReportsPage() {
       R.push(titleRow)
       R.push([])
       // Header rând 6
-      const HDR = ['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU', ...dayNums, 'TOTAL ZILE','TOTAL ORE', ...NORME_TOTAL.map(n=>`ZILE ${n}`)]
+      const antetNet = antetTotaluriNet(NORME_LABELS)
+      const HDR = ['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU', ...dayNums, ...antetNet.hdr]
       R.push(HDR)
       // Day abbr rând 7
-      const DNR = ['','','', ...dayNums.map(d => dayAbbr[new Date(y, m-1, d).getDay()]), '', '', ...NORME_TOTAL.map(n=>NORME_LABELS[n]||n)]
+      const DNR = ['','','', ...dayNums.map(d => dayAbbr[new Date(y, m-1, d).getDay()]), ...antetNet.dnr]
       R.push(DNR)
       
       // Salariați
@@ -2616,10 +2622,8 @@ function ReportsPage() {
         }
         // Total Zile + Total Ore = FORMULE (nu valori), pe rândul Ora Intrare (r)
         // COUNTIF / SUM pe rândul Ore Lucrate (r+3)
-        rCI.push({ f: `COUNTIF(D${excelRow+3}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow+3},">0")`, t: 'n' })
-        rCI.push({ f: `SUM(D${excelRow+3}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow+3})`, t: 'n' })
-        // Zile CO/CM/CFP/O (TKT-2026-0311): COUNTIF pe codurile de normă de pe rândul Ora Intrare (r)
-        NORME_TOTAL.forEach(n => rCI.push({ f: `COUNTIF(D${excelRow}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow},"${n}")`, t: 'n' }))
+        // Zile CO/CM/BO/CFP/O (TKT-2026-0311 / 0368): COUNTIF pe codurile de normă de pe rândul Ora Intrare (r)
+        rCI.push(...totaluriNetIntrare({ days, excelRow }))
         const gol = ['', '', ...NORME_TOTAL.map(() => '')]
         rCO.push(...gol)
         rPM.push(...gol)
@@ -2632,7 +2636,7 @@ function ReportsPage() {
         {wch:26},{wch:16},{wch:22},
         ...dayNums.map(()=>({wch:5.5})),
         {wch:11}, {wch:11},
-        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / CFP / O
+        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / BO / CFP / O
         {wch:18}, {wch:11}
       ]
       
@@ -2668,7 +2672,7 @@ function ReportsPage() {
       let ri = 7  // 0-indexed (Excel rând 8)
       employees.forEach(emp => {
         for (let ro = 0; ro < 4; ro++) {
-          const TOTAL_C = FIXED + days + 2 + NORME_TOTAL.length  // FĂRĂ ORE SUPL, cu zile CO/CM/CFP/O
+          const TOTAL_C = WD_LABEL_C  // FĂRĂ ORE SUPL, cu zile CO/CM/BO/CFP/O (ultima coloană de norme = WD_LABEL_C − 1)
           for (let c = 0; c < TOTAL_C; c++) {
             let s = {}
             if (c === 0) {
@@ -4635,26 +4639,16 @@ function ReportsPage() {
       const isOff=(d)=>{ const dt=new Date(y,m-1,d); return {we:dt.getDay()===0||dt.getDay()===6, leg:legalSet.has(`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`)} }
 
       // Coloane dinamice (lățimea depinde de numărul de zile ale lunii)
-      const TOTAL_ZILE_C = FIXED + days        // ex Apr(30): col 33=AH; Mai(31): col 34=AI
-      const TOTAL_ORE_C  = FIXED + days + 1    // ex Apr: col 34=AI; Mai: col 35=AJ
-      const ORE_SUPL_C   = FIXED + days + 2    // ex Apr: col 35=AJ; Mai: col 36=AK
-      // TKT-2026-0311: totalul zilelor de CO / CM / CFP / O per angajat, după ORE SUPL (4 coloane)
-      const NORME_TOTAL  = ['CO','CM','CFP','O']
-      const NORME_C0     = FIXED + days + 3    // prima coloană de norme
+      // TOTAL ZILE (Apr: col 33=AH) | TOTAL ORE | ORE SUPL | ZILE CO/CM/BO/CFP/O | ORE NORME | TOTAL ORE LUNĂ | ORE LUCRĂTOARE | „Zile lucr. lună:”
+      // TKT-2026-0311 / 0368: totalul zilelor pe norme, după ORE SUPL; pozițiile vin din pontajExportColoane.js (aceeași socoteală ca în teste)
+      const NORME_TOTAL  = NORME_TOTAL_EXPORT
+      const { ORE_SUPL_C, NORME_C0, ORE_NORME_C, TOTAL_LUNA_C, ORE_LUCR_C, WD_LABEL_C, WD_VALUE_C } = coloaneBrut(days)
       // TKT-2026-0314 (var. A): orele de normă plătite (h normă/zi pe CO, CM, BO, BP, AM, M, O — CFP, N, LL = 0 ore)
       // și totalul lunii = TOTAL ORE (lucrate) + ORE NORME.
       // TKT-2026-0316: ORE SUPLIMENTARE = TOTAL ORE LUNĂ − ORE LUCRĂTOARE ale angajatului (normă redusă din procent_ocupare,
       // lună incompletă din hire_date / termination_date) — vezi pontajOreSuplimentare.js. Ziua de normă = 8h × procent.
       const NORME_ORE    = ['CO','CM','BO','BP','AM','M','O']
-      const ORE_NORME_C  = NORME_C0 + NORME_TOTAL.length           // ORE NORME (h normă/zi)
-      const TOTAL_LUNA_C = ORE_NORME_C + 1                          // TOTAL ORE LUNĂ
-      const ORE_LUCR_C   = TOTAL_LUNA_C + 1                         // ORE LUCRĂTOARE (normă × zile lucr. în contract)
-      const WD_LABEL_C   = ORE_LUCR_C + 1                           // etichetă „Zile lucr. lună:"
-      const WD_VALUE_C   = WD_LABEL_C + 1                            // valoarea numerică (informativ — ORE SUPL folosește ORE LUCRĂTOARE pe angajat)
-      const totalOreColLetter = XLSX.utils.encode_col(TOTAL_ORE_C)
-      const oreNormeColLetter = XLSX.utils.encode_col(ORE_NORME_C)
-      const totalLunaColLetter = XLSX.utils.encode_col(TOTAL_LUNA_C)
-      const oreLucrColLetter  = XLSX.utils.encode_col(ORE_LUCR_C)
+      // „Zile lucr. lună:” (WD_VALUE_C) e informativ — ORE SUPL folosește ORE LUCRĂTOARE pe angajat
 
       // ── Build rows ──
       const R=[]
@@ -4670,10 +4664,11 @@ function ReportsPage() {
       R.push(titleRow)
       R.push([])
       // Header row (idx 5)
-      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE','ORE SUPLIMENTARE',...NORME_TOTAL.map(n=>`ZILE ${n}`),'ORE NORME (h normă/zi)','TOTAL ORE LUNĂ','ORE LUCRĂTOARE']
+      const antetBrut=antetTotaluriBrut(NORME_LABELS, NORME_ORE)
+      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,...antetBrut.hdr]
       R.push(HDR)
       // Day names row (idx 6)
-      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','','',...NORME_TOTAL.map(n=>NORME_LABELS[n]||n),`h normă × zile ${NORME_ORE.join('/')}`,'ORE + ORE NORME','normă × zile în contract']
+      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),...antetBrut.dnr]
       R.push(DNR)
 
       // Tracking metadata pentru istoric BD
@@ -4691,16 +4686,14 @@ function ReportsPage() {
         const rPM=['','','Pauza de Masă (ore)']
         const rOL=['','','Ore Lucrate']
         let tz=0, to=0
-        const normeCnt=Object.fromEntries(NORME_TOTAL.map(n=>[n,0]))
-        let zileNormeOre=0   // zile cu normă plătită 8h (NORME_ORE)
+        const normeZile=[]   // codurile de normă ale lunii → numaraNorme (zile pe normă + zile cu normă plătită NORME_ORE)
 
         for(let d=1;d<=days;d++){
           const ds=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
           const {we,leg}=isOff(d)
           const rec=emp.records?.find(r=>r.date===ds)
           if(rec?.norma){
-            if(normeCnt[rec.norma]!==undefined) normeCnt[rec.norma]++
-            if(NORME_ORE.includes(rec.norma)) zileNormeOre++
+            normeZile.push(rec.norma)
             rCI.push(rec.norma); rCO.push(''); rPM.push(''); rOL.push('')
           } else if(rec?.check_in){
             const hp=spansLunch(rec.check_in,rec.check_out)&&rec.lunch_break!==false
@@ -4714,6 +4707,7 @@ function ReportsPage() {
             rCI.push(''); rCO.push(''); rPM.push(''); rOL.push('')
           }
         }
+        const { normeCnt, zileNormeOre } = numaraNorme(normeZile, NORME_ORE)
         const empOreLunar = +(to/60).toFixed(1)
         const empOreNorme = +(zileNormeOre*oreNormaPeZi(emp.procent_ocupare)).toFixed(2)
         const empOreLucr  = oreLucratoareAngajat({ y, m, days, legalSet, emp })
@@ -4721,16 +4715,9 @@ function ReportsPage() {
         totalOreLunarSum += empOreLunar
         totalOreSuplSum  += empOreSupl
 
-        rCI.push(tz, empOreLunar)
-        // ORE SUPLIMENTARE (TKT-2026-0316) — formula Excel pe primul rând (Ora Intrare)
-        // = MAX(0, TOTAL ORE LUNĂ{row} - ORE LUCRĂTOARE{row})
-        rCI.push({ f: `MAX(0, ${totalLunaColLetter}${excelRow} - ${oreLucrColLetter}${excelRow})`, t: 'n' })
-        // Zile CO / CM / CFP / O (TKT-2026-0311) — 0 explicit când nu există, ca să se poată însuma
-        NORME_TOTAL.forEach(n=>rCI.push(normeCnt[n]))
-        // ORE NORME (h normă/zi) + TOTAL ORE LUNĂ (formula = TOTAL ORE + ORE NORME, pe același rând) + ORE LUCRĂTOARE
-        rCI.push(empOreNorme)
-        rCI.push({ f: `${totalOreColLetter}${excelRow}+${oreNormeColLetter}${excelRow}`, t: 'n' })
-        rCI.push(empOreLucr)
+        // TOTAL ZILE, TOTAL ORE, ORE SUPL (formulă MAX(0, TOTAL ORE LUNĂ − ORE LUCRĂTOARE)), ZILE CO/CM/BO/CFP/O,
+        // ORE NORME, TOTAL ORE LUNĂ (formulă TOTAL ORE + ORE NORME), ORE LUCRĂTOARE — toate pe rândul Ora Intrare
+        rCI.push(...totaluriBrutIntrare({ days, excelRow, totalZile: tz, totalOre: empOreLunar, normeCnt, oreNorme: empOreNorme, oreLucratoare: empOreLucr }))
 
         const gol=['','','',...NORME_TOTAL.map(()=>''),'','','']
         rCO.push(...gol); rPM.push(...gol); rOL.push(...gol)
@@ -4745,7 +4732,7 @@ function ReportsPage() {
         {wch:11},                  // TOTAL ZILE
         {wch:11},                  // TOTAL ORE
         {wch:30},                  // ORE SUPLIMENTARE (216px ≈ 30 char)
-        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / CFP / O
+        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / BO / CFP / O
         {wch:16},                  // ORE NORME (h normă/zi)
         {wch:15},                  // TOTAL ORE LUNĂ
         {wch:15},                  // ORE LUCRĂTOARE
@@ -4781,7 +4768,7 @@ function ReportsPage() {
       let ri=7
       data.forEach(emp=>{
         for(let ro=0;ro<4;ro++){
-          const TOTAL_C = ORE_LUCR_C + 1  // include ORE SUPL + zile CO/CM/CFP/O + ORE NORME + TOTAL ORE LUNĂ + ORE LUCRĂTOARE
+          const TOTAL_C = ORE_LUCR_C + 1  // include ORE SUPL + zile CO/CM/BO/CFP/O + ORE NORME + TOTAL ORE LUNĂ + ORE LUCRĂTOARE
           for(let c=0;c<TOTAL_C;c++){
             let s={}
             if(c===0){
@@ -4811,7 +4798,7 @@ function ReportsPage() {
                 ? {fill:{fgColor:{rgb:'D9E1F2'}}, font:{bold:true,sz:11,color:{rgb:'1F497D'}}, border:bd, alignment:alC}
                 : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
             } else if(c>=NORME_C0 && c<NORME_C0+NORME_TOTAL.length) {
-              // ZILE CO/CM/CFP/O — galben pal pe rândul principal (aceeași culoare ca zilele cu normă)
+              // ZILE CO/CM/BO/CFP/O — galben pal pe rândul principal (aceeași culoare ca zilele cu normă)
               s = ro===0
                 ? {fill:{fgColor:{rgb:'FFF2CC'}}, font:{bold:true,sz:10}, border:bd, alignment:alC}
                 : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
@@ -6735,7 +6722,12 @@ function AdminPage() {
     loadAll()
   }
 
-  const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true); const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast('Eroare','error'); setAddingSite(false) }
+  // 20261222a: owner = INSERT direct, ca azi (politica lui); contul cu dreptul „Creare șantiere” = RPC fn_sites_creeaza (fără INSERT direct);
+  // refuzul / funcția lipsă / rezultatul necunoscut se arată cu motivul (L18), iar lista se reîncarcă oricum (fără reîncercare automată)
+  const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true)
+    if (isSuperAdmin) { const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast(mesajRefuzSantier(error),'error') }
+    else { const m=mesajSantier(await creeazaSantier(supabase,{nume:siteName.trim()}),{cuProiect:false}); showToast(m.ok?`✓ ${siteName}`:m.text,m.ok?undefined:'error'); if(m.ok) setSiteName(''); loadAll() }
+    setAddingSite(false) }
   const toggleSite=async(s)=>{ await supabase.from('sites').update({active:!s.active}).eq('id',s.id); setSites(prev=>prev.map(x=>x.id===s.id?{...x,active:!x.active}:x)) }
   const saveSiteName=async()=>{ if(!editSiteItem||!editSiteName.trim()) return; const {error}=await supabase.from('sites').update({name:editSiteName.trim()}).eq('id',editSiteItem.id); if(!error){showToast(`✓ Redenumit: ${editSiteName}`);setEditSiteItem(null);loadAll()} else showToast('Eroare','error') }
   const deleteSite=async(s)=>{
@@ -7077,15 +7069,18 @@ function AdminPage() {
     ['semnaturi', '🖋️ Semnături'],
     ['settings',  '⚙️ Setări'],  // restricted is_owner only
   ]
+  // 20261222a: tab-ul Șantiere și pentru contul cu dreptul „Creare șantiere” — doar lista + formularul de adăugare
+  // (redenumirea, dezactivarea, ștergerea și depozitele rămân ale owner-ului; baza le refuză oricum)
+  const tabsNonOwner = poateCreaSantier(profile) ? ['employees','semnaturi','sites'] : ['employees','semnaturi']
   const tabs = allTabs.filter(([v]) => {
-    if (!isSuperAdmin && !['employees','semnaturi'].includes(v)) return false
+    if (!isSuperAdmin && !tabsNonOwner.includes(v)) return false
     return true
   })
-  
+
   // non-owner (ex. Natalia cu can_modify_employees): redirect orice tab restricționat → 'employees'
   useEffect(() => {
-    if (!isSuperAdmin && !['employees','semnaturi'].includes(tab)) setTab('employees')
-  }, [isSuperAdmin, tab])
+    if (!isSuperAdmin && !tabsNonOwner.includes(tab)) setTab('employees')
+  }, [isSuperAdmin, tab, tabsNonOwner.length])
 
   // 29.09.2026: link-uri directe din alerte — /admin?tab=managers&cont=<profile_id> deschide contul,
   // /admin?tab=employees&angajat=<id> deschide „Editează Angajat”. Se citesc după loadAll, apoi se șterg din URL.
@@ -7760,21 +7755,26 @@ function AdminPage() {
                 <tr key={s.id}><td style={{fontWeight:600}}>{s.name}</td>
                 <td><span style={{padding:'2px 8px',borderRadius:20,fontSize:11,fontWeight:700,background:s.active?G.greenDim:G.redDim,color:s.active?G.green:G.red,border:`1px solid ${s.active?G.green:G.red}44`}}>{s.active?'● Activ':'○ Inactiv'}</span></td>
                 <td style={{display:'flex',gap:6}}>
+                  {isSuperAdmin ? <>
                   <button onClick={()=>{setEditSiteItem(s);setEditSiteName(s.name)}} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️</button>
                   <button onClick={()=>toggleSite(s)} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>{s.active?'Dezact.':'Activ.'}</button>
                   <button onClick={()=>setDeletingSite(s)} style={{...S.btnS,padding:'3px 9px',fontSize:11,color:G.red,borderColor:G.red+'44'}}>🗑️</button>
+                  </> : <span style={{fontSize:11,color:G.muted}}>—</span>}
                 </td></tr>
               ))}{!sites.length&&<tr><td colSpan={3} style={{textAlign:'center',color:G.muted,padding:28,fontSize:12}}>Niciun șantier</td></tr>}</tbody></table>
             )}
           </div>
+          {poateCreaSantier(profile) ? (
           <div style={{...S.card,padding:20}}>
             <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>Adaugă Șantier</div>
             <div style={{marginBottom:14}}><Lbl>Nume</Lbl><input style={S.input} placeholder="ex: Șantier Ploiești" value={siteName} onChange={e=>setSiteName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addSite()}/></div>
             <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={addSite} disabled={addingSite}>{addingSite?<><div className="sp"/>...</>:'+ Adaugă'}</button>
           </div>
+          ) : <div/>}
         </div>
 
-        {/* ═══════════ DEPOZITE MATERIALE ═══════════ */}
+        {/* ═══════════ DEPOZITE MATERIALE (doar owner) ═══════════ */}
+        {isSuperAdmin && (
         <div style={{marginTop:22}}>
           <div style={{fontSize:14,fontWeight:800,color:G.text,marginBottom:12,display:'flex',alignItems:'center',gap:8}}>
             🏭 Depozite materiale
@@ -7843,6 +7843,7 @@ function AdminPage() {
             </div>
           </div>
         </div>
+        )}
         </>
       )}
 
@@ -9033,6 +9034,7 @@ export default function App() {
         <Route path="/achizitii" element={<ProtectedRoute requireModule="achizitii"><Layout><AchizitiiPage/></Layout></ProtectedRoute>}/>
         <Route path="/ofertare" element={<ProtectedRoute requireModule="ofertare"><Layout><OfertarePage/></Layout></ProtectedRoute>}/>
         <Route path="/redari" element={<ProtectedRoute requireModule="redari"><Layout><Suspense fallback={<LoadingScreen/>}><Redari/></Suspense></Layout></ProtectedRoute>}/>
+        <Route path="/redari/mail-oauth" element={<ProtectedRoute requireModule="redari"><Layout><Suspense fallback={<LoadingScreen/>}><RedariMailOauthRetur/></Suspense></Layout></ProtectedRoute>}/>
         <Route path="/ctc" element={<ProtectedRoute requireModule="ctc"><Layout><CTCPage/></Layout></ProtectedRoute>}/>
         <Route path="/magazie" element={<ProtectedRoute requireModule="magazie"><Layout><MagaziePage/></Layout></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute requireModule="pontajpro"><ReportsPage/></ProtectedRoute>}/>

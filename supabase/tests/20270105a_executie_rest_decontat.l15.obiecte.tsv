@@ -1,0 +1,277 @@
+# 20270105a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.executie_note_modificare.act_aditional_id	creat
+coloana	coloana public.executie_note_modificare.activ	creat
+coloana	coloana public.executie_note_modificare.creat_de	creat
+coloana	coloana public.executie_note_modificare.creat_la	creat
+coloana	coloana public.executie_note_modificare.data_aprobare	creat
+coloana	coloana public.executie_note_modificare.descriere	creat
+coloana	coloana public.executie_note_modificare.fisier_path	creat
+coloana	coloana public.executie_note_modificare.id	creat
+coloana	coloana public.executie_note_modificare.numar	creat
+coloana	coloana public.executie_note_modificare.proiect_id	creat
+coloana	coloana public.executie_note_modificare.tip	creat
+coloana	coloana public.executie_proiecte.configurare_completa_la	creat
+coloana	coloana public.executie_proiecte.configurare_exceptie_motiv	creat
+coloana	coloana public.executie_sl_detaliu.activ	creat
+coloana	coloana public.executie_sl_detaliu.amprenta	creat
+coloana	coloana public.executie_sl_detaliu.an	creat
+coloana	coloana public.executie_sl_detaliu.confirmat_de	creat
+coloana	coloana public.executie_sl_detaliu.confirmat_la	creat
+coloana	coloana public.executie_sl_detaliu.fisier_path	creat
+coloana	coloana public.executie_sl_detaliu.id	creat
+coloana	coloana public.executie_sl_detaliu.inlocuieste_id	creat
+coloana	coloana public.executie_sl_detaliu.luna	creat
+coloana	coloana public.executie_sl_detaliu.nr_situatie	creat
+coloana	coloana public.executie_sl_detaliu.proiect_id	creat
+coloana	coloana public.executie_sl_detaliu.sl_id	creat
+coloana	coloana public.executie_sl_detaliu.total_citit	creat
+coloana	coloana public.executie_sl_detaliu.total_referinta	creat
+coloana	coloana public.executie_sl_detaliu.versiune	creat
+coloana	coloana public.executie_sl_detaliu_linii.cantitate_cumulat_doc	creat
+coloana	coloana public.executie_sl_detaliu_linii.cantitate_perioada	creat
+coloana	coloana public.executie_sl_detaliu_linii.cheie	creat
+coloana	coloana public.executie_sl_detaliu_linii.cod	creat
+coloana	coloana public.executie_sl_detaliu_linii.denumire	creat
+coloana	coloana public.executie_sl_detaliu_linii.detaliu_id	creat
+coloana	coloana public.executie_sl_detaliu_linii.deviz_cod	creat
+coloana	coloana public.executie_sl_detaliu_linii.id	creat
+coloana	coloana public.executie_sl_detaliu_linii.nr	creat
+coloana	coloana public.executie_sl_detaliu_linii.obiect_cod	creat
+coloana	coloana public.executie_sl_detaliu_linii.potrivire	creat
+coloana	coloana public.executie_sl_detaliu_linii.pret_unitar	creat
+coloana	coloana public.executie_sl_detaliu_linii.tip_rand	creat
+coloana	coloana public.executie_sl_detaliu_linii.um	creat
+coloana	coloana public.executie_sl_detaliu_linii.valoare	creat
+coloana	coloana public.proiect_articole.act_aditional_id	creat
+coloana	coloana public.proiect_articole.activ	creat
+coloana	coloana public.proiect_articole.cheie	creat
+coloana	coloana public.proiect_articole.confirmat_de	creat
+coloana	coloana public.proiect_articole.confirmat_la	creat
+coloana	coloana public.proiect_articole.fisier_amprenta	creat
+coloana	coloana public.proiect_articole.mod_import	creat
+coloana	coloana public.proiect_articole.nota_id	creat
+coloana	coloana public.proiect_articole.tip_rand	creat
+coloana	coloana public.proiect_articole_istoric.confirmat_la	creat
+coloana	coloana public.proiect_articole_istoric.id	creat
+coloana	coloana public.proiect_articole_istoric.inlocuit_cu_amprenta	creat
+coloana	coloana public.proiect_articole_istoric.motiv	creat
+coloana	coloana public.proiect_articole_istoric.obiect_k	creat
+coloana	coloana public.proiect_articole_istoric.proiect_id	creat
+coloana	coloana public.proiect_articole_istoric.rand	creat
+coloana	coloana public.proiect_articole_istoric.rand_id	creat
+coloana	coloana public.proiect_articole_istoric.retras_de	creat
+coloana	coloana public.proiect_articole_istoric.retras_la	creat
+coloana	coloana public.proiect_articole_istoric.sursa	creat
+coloana	coloana public.v_executie_rest_decontat.baza_cantitate	creat
+coloana	coloana public.v_executie_rest_decontat.baza_valoare	creat
+coloana	coloana public.v_executie_rest_decontat.cheie	creat
+coloana	coloana public.v_executie_rest_decontat.cod	creat
+coloana	coloana public.v_executie_rest_decontat.decontat_cantitate	creat
+coloana	coloana public.v_executie_rest_decontat.decontat_valoare	creat
+coloana	coloana public.v_executie_rest_decontat.denumire	creat
+coloana	coloana public.v_executie_rest_decontat.deviz_cod	creat
+coloana	coloana public.v_executie_rest_decontat.deviz_nume	creat
+coloana	coloana public.v_executie_rest_decontat.nedecontat	creat
+coloana	coloana public.v_executie_rest_decontat.nr	creat
+coloana	coloana public.v_executie_rest_decontat.obiect_cod	creat
+coloana	coloana public.v_executie_rest_decontat.obiect_nume	creat
+coloana	coloana public.v_executie_rest_decontat.pct_decontat	creat
+coloana	coloana public.v_executie_rest_decontat.peste_oferta	creat
+coloana	coloana public.v_executie_rest_decontat.pret_unitar	creat
+coloana	coloana public.v_executie_rest_decontat.proiect_id	creat
+coloana	coloana public.v_executie_rest_decontat.rand_id	creat
+coloana	coloana public.v_executie_rest_decontat.rest_cantitate	creat
+coloana	coloana public.v_executie_rest_decontat.rest_valoare	creat
+coloana	coloana public.v_executie_rest_decontat.situatii	creat
+coloana	coloana public.v_executie_rest_decontat.tip_rand	creat
+coloana	coloana public.v_executie_rest_decontat.ultima_situatie	creat
+coloana	coloana public.v_executie_rest_decontat.um	creat
+coloana	coloana public.v_executie_rest_decontat.um_incert	creat
+coloana	coloana public.v_executie_rest_decontat_baza.cantitate	creat
+coloana	coloana public.v_executie_rest_decontat_baza.cheie	creat
+coloana	coloana public.v_executie_rest_decontat_baza.cod	creat
+coloana	coloana public.v_executie_rest_decontat_baza.denumire	creat
+coloana	coloana public.v_executie_rest_decontat_baza.deviz_cod	creat
+coloana	coloana public.v_executie_rest_decontat_baza.deviz_nume	creat
+coloana	coloana public.v_executie_rest_decontat_baza.nr	creat
+coloana	coloana public.v_executie_rest_decontat_baza.obiect_cod	creat
+coloana	coloana public.v_executie_rest_decontat_baza.obiect_nume	creat
+coloana	coloana public.v_executie_rest_decontat_baza.pret_unitar	creat
+coloana	coloana public.v_executie_rest_decontat_baza.proiect_id	creat
+coloana	coloana public.v_executie_rest_decontat_baza.randuri	creat
+coloana	coloana public.v_executie_rest_decontat_baza.surse	creat
+coloana	coloana public.v_executie_rest_decontat_baza.tip_rand	creat
+coloana	coloana public.v_executie_rest_decontat_baza.um	creat
+coloana	coloana public.v_executie_rest_decontat_baza.um_incert	creat
+coloana	coloana public.v_executie_rest_decontat_baza.valoare	creat
+coloana	coloana public.v_executie_rest_decontat_lipsuri.proiect_id	creat
+coloana	coloana public.v_executie_rest_decontat_lipsuri.referinta	creat
+coloana	coloana public.v_executie_rest_decontat_lipsuri.tip	creat
+coloana	coloana public.v_executie_rest_decontat_obiect.articole	creat
+coloana	coloana public.v_executie_rest_decontat_obiect.articole_nedecontate	creat
+coloana	coloana public.v_executie_rest_decontat_obiect.articole_noi	creat
+coloana	coloana public.v_executie_rest_decontat_obiect.articole_peste	creat
+coloana	coloana public.v_executie_rest_decontat_obiect.baza_valoare	creat
+coloana	coloana public.v_executie_rest_decontat_obiect.decontat_valoare	creat
+coloana	coloana public.v_executie_rest_decontat_obiect.nivel	creat
+coloana	coloana public.v_executie_rest_decontat_obiect.obiect_cod	creat
+coloana	coloana public.v_executie_rest_decontat_obiect.obiect_nume	creat
+coloana	coloana public.v_executie_rest_decontat_obiect.pct_decontat	creat
+coloana	coloana public.v_executie_rest_decontat_obiect.proiect_id	creat
+coloana	coloana public.v_executie_rest_decontat_obiect.rest_valoare	creat
+constrangere	constrangere tabel public.executie_note_modificare.executie_note_modificare_act_aditional_id_fkey	creat
+constrangere	constrangere tabel public.executie_note_modificare.executie_note_modificare_data_ck	creat
+constrangere	constrangere tabel public.executie_note_modificare.executie_note_modificare_fisier_ck	creat
+constrangere	constrangere tabel public.executie_note_modificare.executie_note_modificare_numar_ck	creat
+constrangere	constrangere tabel public.executie_note_modificare.executie_note_modificare_pkey	creat
+constrangere	constrangere tabel public.executie_note_modificare.executie_note_modificare_proiect_id_fkey	creat
+constrangere	constrangere tabel public.executie_note_modificare.executie_note_modificare_tip_ck	creat
+constrangere	constrangere tabel public.executie_proiecte.executie_proiecte_configurare_motiv_ck	creat
+constrangere	constrangere tabel public.executie_sl_detaliu.executie_sl_detaliu_amprenta_ck	creat
+constrangere	constrangere tabel public.executie_sl_detaliu.executie_sl_detaliu_amprenta_uq	creat
+constrangere	constrangere tabel public.executie_sl_detaliu.executie_sl_detaliu_an_ck	creat
+constrangere	constrangere tabel public.executie_sl_detaliu.executie_sl_detaliu_fisier_ck	creat
+constrangere	constrangere tabel public.executie_sl_detaliu.executie_sl_detaliu_inlocuieste_id_fkey	creat
+constrangere	constrangere tabel public.executie_sl_detaliu.executie_sl_detaliu_luna_ck	creat
+constrangere	constrangere tabel public.executie_sl_detaliu.executie_sl_detaliu_nr_ck	creat
+constrangere	constrangere tabel public.executie_sl_detaliu.executie_sl_detaliu_pkey	creat
+constrangere	constrangere tabel public.executie_sl_detaliu.executie_sl_detaliu_proiect_id_fkey	creat
+constrangere	constrangere tabel public.executie_sl_detaliu.executie_sl_detaliu_sl_id_fkey	creat
+constrangere	constrangere tabel public.executie_sl_detaliu.executie_sl_detaliu_versiune_ck	creat
+constrangere	constrangere tabel public.executie_sl_detaliu.executie_sl_detaliu_versiune_uq	creat
+constrangere	constrangere tabel public.executie_sl_detaliu_linii.executie_sl_detaliu_linii_cheie_ck	creat
+constrangere	constrangere tabel public.executie_sl_detaliu_linii.executie_sl_detaliu_linii_detaliu_id_fkey	creat
+constrangere	constrangere tabel public.executie_sl_detaliu_linii.executie_sl_detaliu_linii_nou_ck	creat
+constrangere	constrangere tabel public.executie_sl_detaliu_linii.executie_sl_detaliu_linii_pkey	creat
+constrangere	constrangere tabel public.executie_sl_detaliu_linii.executie_sl_detaliu_linii_potrivire_ck	creat
+constrangere	constrangere tabel public.executie_sl_detaliu_linii.executie_sl_detaliu_linii_tip_ck	creat
+constrangere	constrangere tabel public.proiect_articole.proiect_articole_act_aditional_id_fkey	creat
+constrangere	constrangere tabel public.proiect_articole.proiect_articole_nota_id_fkey	creat
+constrangere	constrangere tabel public.proiect_articole.proiect_articole_rd_amprenta_ck	creat
+constrangere	constrangere tabel public.proiect_articole.proiect_articole_rd_confirmat_ck	creat
+constrangere	constrangere tabel public.proiect_articole.proiect_articole_rd_legaturi_ck	creat
+constrangere	constrangere tabel public.proiect_articole.proiect_articole_rd_mod_import_ck	creat
+constrangere	constrangere tabel public.proiect_articole.proiect_articole_rd_tip_rand_ck	creat
+constrangere	constrangere tabel public.proiect_articole_istoric.proiect_articole_istoric_amprenta_ck	creat
+constrangere	constrangere tabel public.proiect_articole_istoric.proiect_articole_istoric_motiv_ck	creat
+constrangere	constrangere tabel public.proiect_articole_istoric.proiect_articole_istoric_pkey	creat
+constrangere	constrangere tabel public.proiect_articole_istoric.proiect_articole_istoric_proiect_id_fkey	creat
+constrangere	constrangere tabel public.proiect_articole_istoric.proiect_articole_istoric_rand_ck	creat
+functie	functie public.fn_rest_decontat_aa_al_proiectului(bigint,bigint)	creat
+functie	functie public.fn_rest_decontat_are_oferta(bigint)	creat
+functie	functie public.fn_rest_decontat_articole_garda()	creat
+functie	functie public.fn_rest_decontat_baza_calcul()	creat
+functie	functie public.fn_rest_decontat_baza_proiect(bigint)	creat
+functie	functie public.fn_rest_decontat_calcul()	creat
+functie	functie public.fn_rest_decontat_chei_referite(bigint)	creat
+functie	functie public.fn_rest_decontat_cheie(text,text,text,text)	creat
+functie	functie public.fn_rest_decontat_cheie_document(bigint,text,text,text)	creat
+functie	functie public.fn_rest_decontat_cheie_situatii(bigint,text)	creat
+functie	functie public.fn_rest_decontat_confirma_baza(bigint,text,bigint,bigint,text,text,text,jsonb,boolean)	creat
+functie	functie public.fn_rest_decontat_confirma_situatie(bigint,text,bigint,text,text,jsonb,boolean,numeric)	creat
+functie	functie public.fn_rest_decontat_drept(bigint,text)	creat
+functie	functie public.fn_rest_decontat_istoric_garda()	creat
+functie	functie public.fn_rest_decontat_lipsuri_calcul()	creat
+functie	functie public.fn_rest_decontat_nota_garda()	creat
+functie	functie public.fn_rest_decontat_obiect_calcul()	creat
+functie	functie public.fn_rest_decontat_obiect_confirmat(bigint,text)	creat
+functie	functie public.fn_rest_decontat_server()	creat
+functie	functie public.fn_rest_decontat_sl_garda()	creat
+functie	functie public.fn_rest_decontat_sursa_autorizata(text,bigint,bigint,timestamp with time zone)	creat
+functie	functie public.fn_rest_decontat_um(text)	creat
+functie	functie public.fn_rest_decontat_um_decontat_diferit(bigint,text,text)	creat
+politica	politica public.executie_note_modificare.executie_note_modificare_adauga	creat
+politica	politica public.executie_note_modificare.executie_note_modificare_citire	creat
+politica	politica public.executie_note_modificare.executie_note_modificare_modifica	creat
+politica	politica public.executie_sl_detaliu.executie_sl_detaliu_citire	creat
+politica	politica public.executie_sl_detaliu_linii.executie_sl_detaliu_linii_citire	creat
+politica	politica public.proiect_articole_istoric.proiect_articole_istoric_citire	creat
+regula	regula public.v_executie_rest_decontat."_RETURN"	creat
+regula	regula public.v_executie_rest_decontat_baza."_RETURN"	creat
+regula	regula public.v_executie_rest_decontat_lipsuri."_RETURN"	creat
+regula	regula public.v_executie_rest_decontat_obiect."_RETURN"	creat
+relatie	relatie public.executie_note_modificare	creat
+relatie	relatie public.executie_note_modificare_aa_ix	creat
+relatie	relatie public.executie_note_modificare_id_seq	creat
+relatie	relatie public.executie_note_modificare_numar_uq	creat
+relatie	relatie public.executie_note_modificare_pkey	creat
+relatie	relatie public.executie_sl_detaliu	creat
+relatie	relatie public.executie_sl_detaliu_activ_uq	creat
+relatie	relatie public.executie_sl_detaliu_amprenta_uq	creat
+relatie	relatie public.executie_sl_detaliu_id_seq	creat
+relatie	relatie public.executie_sl_detaliu_linii	creat
+relatie	relatie public.executie_sl_detaliu_linii_detaliu_ix	creat
+relatie	relatie public.executie_sl_detaliu_linii_id_seq	creat
+relatie	relatie public.executie_sl_detaliu_linii_pkey	creat
+relatie	relatie public.executie_sl_detaliu_pkey	creat
+relatie	relatie public.executie_sl_detaliu_sl_ix	creat
+relatie	relatie public.executie_sl_detaliu_versiune_uq	creat
+relatie	relatie public.proiect_articole_istoric	creat
+relatie	relatie public.proiect_articole_istoric_amprenta_ix	creat
+relatie	relatie public.proiect_articole_istoric_id_seq	creat
+relatie	relatie public.proiect_articole_istoric_obiect_ix	creat
+relatie	relatie public.proiect_articole_istoric_pkey	creat
+relatie	relatie public.proiect_articole_rd_aa_ix	creat
+relatie	relatie public.proiect_articole_rd_cheie_ix	creat
+relatie	relatie public.proiect_articole_rd_nota_ix	creat
+relatie	relatie public.v_executie_rest_decontat	creat
+relatie	relatie public.v_executie_rest_decontat_baza	creat
+relatie	relatie public.v_executie_rest_decontat_lipsuri	creat
+relatie	relatie public.v_executie_rest_decontat_obiect	creat
+tip	tip public.executie_note_modificare	creat
+tip	tip public.executie_note_modificare[]	creat
+tip	tip public.executie_sl_detaliu	creat
+tip	tip public.executie_sl_detaliu[]	creat
+tip	tip public.executie_sl_detaliu_linii	creat
+tip	tip public.executie_sl_detaliu_linii[]	creat
+tip	tip public.proiect_articole_istoric	creat
+tip	tip public.proiect_articole_istoric[]	creat
+tip	tip public.v_executie_rest_decontat	creat
+tip	tip public.v_executie_rest_decontat[]	creat
+tip	tip public.v_executie_rest_decontat_baza	creat
+tip	tip public.v_executie_rest_decontat_baza[]	creat
+tip	tip public.v_executie_rest_decontat_lipsuri	creat
+tip	tip public.v_executie_rest_decontat_lipsuri[]	creat
+tip	tip public.v_executie_rest_decontat_obiect	creat
+tip	tip public.v_executie_rest_decontat_obiect[]	creat
+trigger	trigger public.executie_acte_aditionale intern executie_note_modificare_act_aditional_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_acte_aditionale intern executie_note_modificare_act_aditional_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_acte_aditionale intern proiect_articole_act_aditional_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_acte_aditionale intern proiect_articole_act_aditional_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_note_modificare intern executie_note_modificare_act_aditional_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_note_modificare intern executie_note_modificare_act_aditional_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_note_modificare intern executie_note_modificare_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_note_modificare intern executie_note_modificare_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_note_modificare intern proiect_articole_nota_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_note_modificare intern proiect_articole_nota_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_note_modificare.trg_rest_decontat_nota_garda	creat
+trigger	trigger public.executie_proiecte intern executie_note_modificare_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_proiecte intern executie_note_modificare_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_proiecte intern executie_sl_detaliu_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_proiecte intern executie_sl_detaliu_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_proiecte intern proiect_articole_istoric_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_proiecte intern proiect_articole_istoric_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_situatii_plata intern executie_sl_detaliu_sl_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_situatii_plata intern executie_sl_detaliu_sl_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_sl_detaliu intern executie_sl_detaliu_inlocuieste_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_sl_detaliu intern executie_sl_detaliu_inlocuieste_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_sl_detaliu intern executie_sl_detaliu_inlocuieste_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_sl_detaliu intern executie_sl_detaliu_inlocuieste_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_sl_detaliu intern executie_sl_detaliu_linii_detaliu_id_fkey "RI_FKey_cascade_del"() 9	creat
+trigger	trigger public.executie_sl_detaliu intern executie_sl_detaliu_linii_detaliu_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_sl_detaliu intern executie_sl_detaliu_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_sl_detaliu intern executie_sl_detaliu_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_sl_detaliu intern executie_sl_detaliu_sl_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_sl_detaliu intern executie_sl_detaliu_sl_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_sl_detaliu.trg_rest_decontat_sl_garda	creat
+trigger	trigger public.executie_sl_detaliu_linii intern executie_sl_detaliu_linii_detaliu_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_sl_detaliu_linii intern executie_sl_detaliu_linii_detaliu_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_sl_detaliu_linii.trg_rest_decontat_sl_linii_garda	creat
+trigger	trigger public.proiect_articole intern proiect_articole_act_aditional_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.proiect_articole intern proiect_articole_act_aditional_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.proiect_articole intern proiect_articole_nota_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.proiect_articole intern proiect_articole_nota_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.proiect_articole.trg_rest_decontat_articole_garda	creat
+trigger	trigger public.proiect_articole_istoric intern proiect_articole_istoric_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.proiect_articole_istoric intern proiect_articole_istoric_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.proiect_articole_istoric.trg_rest_decontat_istoric_garda	creat
