@@ -2,6 +2,8 @@
 # r13: + `elemente` (atributele fiecarui element din caseta, fara continutul editorului) si `descrieri` (textul tintelor aria-describedby).
 # r14: + `descrieri[].tinte` (atributele tintei + numarul de elemente din ea), `zona_analiza` (zona exacta a analizei, poate fi mai mare
 #   decat input-area-v2) si `editor_atribute` (DOAR atributele elementelor din editor, fara text): calibrarea listei albe a atributelor.
+# r15: valorile `jslog` se citesc NETAIATE (celelalte atribute raman taiate la 300): r15 decodeaza cheia BardVeMetadataKey si o verifica
+#   pe structura vazuta; capturile 23.11 o aveau taiata la 300 de caractere (JSON neterminat).
 # Nu face nicio actiune pe pagina: fara click / tastatura / scriere in ciorna / navigare. Operatorul lipeste de mana textul in
 # ciorna (fara Enter), ruleaza scriptul, apoi goleste ciorna de mana. Iesirea (JSON ASCII pe stdout) arata clasele div-ului zonei de
 # drop si atributele + continutul (innerHTML, taiat) fiecarui buton din zona - adica starea pe care paza o vede la `inainte_de_enter`.
@@ -13,7 +15,8 @@ from playwright.sync_api import sync_playwright
 
 JS = r"""() => {
   const zone = Array.from(document.querySelectorAll('input-area-v2'));
-  const atr = el => { const a = {}; for (const x of el.attributes) a[x.name] = x.value.slice(0, 300); return a; };
+  // r15: `jslog` NETAIAT (pana la 20000 de caractere): cheia BardVeMetadataKey se verifica decodata, deci trebuie citita intreaga
+  const atr = el => { const a = {}; for (const x of el.attributes) a[x.name] = x.value.slice(0, x.name === 'jslog' ? 20000 : 300); return a; };
   const ed = document.querySelector('div[role=textbox][contenteditable]');
   return {
     zone: zone.length,
