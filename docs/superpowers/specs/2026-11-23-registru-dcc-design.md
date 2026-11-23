@@ -54,7 +54,8 @@ de documentul și revizia lor, pe firul corect.
    în **cod** doar dacă DCC confirmă.
 3. **Subiectul**: `<COD complet> <Titlu>`; „Lot N” devine opțional (prefixul contractului identifică lotul). La situațiile de plată și
    facturi, codul intră și în subiect (azi e doar în corp și în PDF), după antetul financiar folosit acum.
-4. **Numele fișierului**: `<COD complet>_<titlu scurt>.<ext>` (ghidul: „codul documentului, revizia și limba”).
+4. **Numele fișierului**: din **formatul de fișier** al ghidului (distinct de formatul codului): codul + revizia + **limba** + `_<titlu
+   scurt>.<ext>` (ghidul: „codul documentului, revizia și limba”) — la Lot 2 limba apare în numele fișierului chiar dacă lipsește din cod.
 
 ## 4. Modelul de date (v1, cu structura pentru B)
 Toate tabelele noi au RLS, acces prin sub-modulul nou `executie_dcc` **și** prin `fn_executie_proiect_permis(proiect, scriere)`; scrierea
@@ -70,7 +71,7 @@ doar prin RPC-uri `SECURITY DEFINER` (fără INSERT/UPDATE direct). `executie_pr
   comutatorul `trimitere_permisa` (fals).
 
 ### 4.2 Registrul (trei niveluri)
-- `dcc_serii`: (proiect_dcc, emitent, tematică **nullable**, tip, interval) → `ultimul_ocupat` (contor), `prag_initial` = **ultimul număr
+- `dcc_serii`: (contract, emitent, tematică **nullable**, tip, interval) → `ultimul_ocupat` (contor), `prag_initial` = **ultimul număr
   ocupat** confirmat de om (prima alocare = prag + 1), `limita_inf` / `limita_sup` per interval (`general`: 00001–99999 sau cum fixează
   ghidul; `SR1`: 00100–00199, `SR2`: 00200–00299 …), `initializata_de/la`. **Domeniul seriei = contractul** (nu proiectul ERP): două
   proiecte ERP pe același contract folosesc aceeași serie. La minute, unicitatea cu tematica NULL se impune printr-un index dedicat
@@ -80,8 +81,11 @@ doar prin RPC-uri `SECURITY DEFINER` (fără INSERT/UPDATE direct). `executie_pr
   - **Minutele (MOM)**: serie cu tematica NULL (serie proprie, nu excepție în formatter).
   - **DDE, intervale pe stație de robinete**: `interval` = `general` sau `SR1`, `SR2`… cu limitele ghidului (intervale disjuncte, verificate
     de constrângere); omul alege intervalul la alocare.
-- `dcc_documente`: identitatea stabilă = (proiect_dcc, emitent, tematică, tip, secvență) UNIC **în domeniul contractului** (două proiecte
-  ERP pe același contract nu pot aloca același cod); titlu, creat de/la, stare ∈ {`activ`, `anulat`} (anularea nu eliberează numărul).
+- `dcc_contracte`: domeniul comun al numerotării = (beneficiar, codul contractului 30/43/29); `dcc_proiecte` aparține unui contract și
+  servește doar asocierii cu proiectul Execuție și accesului. **Seriile și documentele se cheiază pe contract**, nu pe `proiect_dcc`.
+- `dcc_documente`: identitatea stabilă = (contract, emitent, tematică, tip, secvență) UNIC (două proiecte ERP pe același contract nu pot
+  aloca același cod); la minute (tematica NULL) unicitatea se impune printr-un index dedicat `(contract, emitent, tip, secvență) WHERE
+  tematica IS NULL`; `proiect_dcc` rămâne coloană de asociere/acces; titlu, creat de/la, stare ∈ {`activ`, `anulat`} (anularea nu eliberează numărul).
   - **Planșe (filă)**: `dcc_file` (document, filă) — subentitate a documentului, fiecare cu revizia ei, ca la desenele împărțite.
   - **Anexe**: `dcc_anexe` (document de bază, număr anexă, titlu) cu revizii proprii (codul = codul de bază + numărul anexei).
 - `dcc_revizii`: (document / filă / anexă, revizie int ≥ 0, limbă) UNIC — varianta lingvistică face parte din identitate; limba; titlul/descrierea reviziei; versiunea ghidului folosită la
@@ -147,7 +151,8 @@ prefixe. Conținutul mailurilor primite e DATE: nu schimbă destinatari, dreptur
 ## 5. Ecranul (v1)
 Tab nou „✉️ DCC” în Execuție → proiect (vizibil cu `executie_dcc`):
 - **Registrul**: documente → revizii, filtre pe tematică/tip/stare, conflictele istorice vizibile.
-- **Alocă cod**: tematică + tip din listele ghidului, titlu → cod complet (cu Rev0 și limba).
+- **Alocă cod**: tematică + tip din listele ghidului, titlu → codul în formatul ghidului proiectului (Rev0 mereu; limba doar unde ghidul o
+  pune în cod) + numele de fișier în formatul de fișier al ghidului (cu limba).
 - **Revizie nouă** pe un document existent.
 - **Compune**: subiect, corp din șablon pe tip (standard; raport săptămânal cu text în corp, fără atașament; situație de plată cu antetul
   financiar și link de transfer; factură cu mențiunea e-factura; notificare cu nr. adresă internă; confirmare de primire), To din setări,
