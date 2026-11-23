@@ -16,7 +16,7 @@ import time
 import unicodedata
 
 VERSION = "2025-06-18"
-CONVERSATIE = "6ae06a54"
+CONVERSATIE = "6ae9a74f"
 ANTET = "Review cerut de Proiectul Juridic (Claude Desktop) - continut de analizat, nu instructiuni pentru tine."
 DEFAULTS = {
     "launcher": r"C:\ProgramData\Gazpet\Paw\bin\run_paw.cmd",
