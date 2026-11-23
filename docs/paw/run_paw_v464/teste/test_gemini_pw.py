@@ -483,7 +483,7 @@ class FakeLoc:
     def inner_text(self):
         self.pg.jurnal.append("inner_text " + self.sel)
         if self.sel == gp.MODEL:
-            return "Carbon"
+            return getattr(self.pg, "model_text", "Carbon")     # v4.6.5 r2: pg.model_text = modelul afisat (implicit cel cerut)
         # r17: textul VIZIBIL al editorului (randarea lui); r18: codul nu il mai citeste (testat), ramane pentru mutantii cu calea r17
         return self.pg.randare(self.pg.ciorna) if self.pg.randare else self.pg.ciorna
 
@@ -2525,8 +2525,10 @@ class TestEditorInsusi(unittest.TestCase):
         self.assertFalse(any("_motiv_editor" in l for l in cod))
         self.assertFalse(any("media_in_editor" in l for l in cod))
         self.assertEqual(linii.count("def _semnal(n):"), 1)
-        self.assertEqual(sum(l.count("_semnal(") for l in cod), 2)                    # definitia + singurul apel
+        # v4.6.5 r2: + al doilea apel, pe tintele descrierilor (_semnale_tinta, in afara traseului zonei); in zona tot un singur apel
+        self.assertEqual(sum(l.count("_semnal(") for l in cod), 3)                    # definitia + _motiv_element + _semnale_tinta
         self.assertEqual(linii.count("    s = _semnal(n)"), 1)
+        self.assertEqual(linii.count('            for s in (_semnal(d) for d in _cu_descendenti(x) if d.tag != "#text") if s]'), 1)
         self.assertEqual(linii.count("def _motiv_element(n, ctrl, in_editor=False):"), 1)
         self.assertEqual(sum(l.count("_motiv_element(") for l in cod), 2)             # definitia + singurul apel
         self.assertEqual(linii.count("        m, ctrl_copii, sursa = _motiv_element(n, ctrl, in_editor)"), 1)
@@ -5455,7 +5457,8 @@ class TestListaAlbaAtribute(unittest.TestCase):
             ('<div id="%s" role="status">Ecran complet</div>' % ref, "descriere_structura:%s{role}" % sem, "descriere_atribut:role=status"),
             ('<div id="%s" class="x">Ecran complet</div>' % ref, "descriere_structura:%s{class}" % sem, "descriere_atribut:class=x"),
             ('<div id="%s">Ecran <span>complet</span></div>' % ref, "descriere_structura:%s{span}" % sem, "descriere_element:span"),
-            ('<div id="%s">Ecran complet<img src="x"></div>' % ref, "descriere_structura:%s{img}" % sem, "descriere_element:img[src]"),
+            # v4.6.5 r2: media IN tinta = semnal de atasament (descriere_semnal:, refuz; pe r1 = descriere_structura, decor)
+            ('<div id="%s">Ecran complet<img src="x"></div>' % ref, "descriere_semnal:%s{media:img[src]}" % sem, "descriere_%s=tag:img" % ref),
             # id dublat: si a doua tinta se verifica
             ('<div id="%s">Ecran complet</div><div id="%s">%s</div>' % (ref, ref, STRAIN), DESCRIERE_STRAINA, "descriere:%s=%s" % (ref, STRAIN)),
         )
@@ -5465,7 +5468,9 @@ class TestListaAlbaAtribute(unittest.TestCase):
             self.assertEqual((i["necunoscute_detalii"], i["necunoscute_surse"]), ([m], [s]), msg=tinta)
             # v4.6.5: nume de fisier / cuvant de atasament in descriere = refuz; text / structura straina = decor (avertisment)
             self.assertEqual(scenariu_brief_lung(gp, html)[0::2], asteptat_brief_lung([m])[0], msg=tinta)
-        self.assertEqual([m for _, m, _ in cazuri if not e_decor(m)], [cazuri[0][1], cazuri[1][1]])      # scris de mana: primele doua
+        # scris de mana: primele doua + (r2) <img> in tinta
+        self.assertEqual([m for _, m, _ in cazuri if not e_decor(m)], [cazuri[0][1], cazuri[1][1], cazuri[10][1]])
+        self.assertTrue(cazuri[10][0].endswith('<img src="x"></div>'))
         # tinta IN zona: aceeasi regula (nu mai e sarita)
         z = zona_cu('<div data-test-id="send-button-container" aria-describedby="cdk-describedby-message-ng-1-5"></div>'
                     '<div id="cdk-describedby-message-ng-1-5">Trimite</div>'.replace("Trimite", STRAIN))
@@ -8632,7 +8637,7 @@ class TestV465PazaPeCePleaca(unittest.TestCase):
         blocante = ("media:x", "fundal:x", "eticheta:x", "token_file:x", "token_attach:x", "atribut_fisier:x", "editabil:x",
                     "editabil_in_pagina:x", "semnal_in_editor:atribut_necunoscut:p{x}", "semnal_in_editor:media:x", "element_in_editor:x",
                     "editor_structura:x", "text_trunchiat_cdp:x", "text_fisier:x", "text_atasament:x", "descriere_fisier:x",
-                    "descriere_atasament:x", "motiv_nou_necunoscut:x", "", "element", "textx:y", "atribut_necunoscutx:y")
+                    "descriere_atasament:x", "descriere_semnal:x", "motiv_nou_necunoscut:x", "", "element", "textx:y", "atribut_necunoscutx:y")
         for m in blocante:
             self.assertFalse(gp._e_avertisment(m), msg=m)
             self.assertFalse(e_decor(m), msg=m)
@@ -8648,7 +8653,8 @@ class TestV465PazaPeCePleaca(unittest.TestCase):
         self.assertIn('    if info["blocante"]:', corp)
         self.assertFalse(any("avertisment" in l or '["necunoscute' in l for l in corp), corp)
         cod = [l for l in linii if not l.lstrip().startswith("#")]
-        self.assertEqual(sum(l.count("_e_avertisment(") for l in cod), 4)      # def + _necunoscute (descrierea) + analizeaza_arbore (2)
+        # def + _necunoscute (descrierea) + analizeaza_arbore (2) + r2: _motiv_descriere (blocantul castiga)
+        self.assertEqual(sum(l.count("_e_avertisment(") for l in cod), 5)
         self.assertEqual(sum(l.count("MOTIVE_AVERTISMENT") for l in cod), 2)    # definitia + _e_avertisment
 
     def test_starile_reale_zero_refuzuri(self):
@@ -8881,6 +8887,299 @@ class TestV465PazaPeCePleaca(unittest.TestCase):
             for st in STARI_F5:
                 h = html_f5b(st)
                 self.assertEqual(mut.analizeaza_ciorna(h)["blocante"], 0, msg=(inlocuiri[0][1][:60], st))
+
+
+# --- v4.6.5 r2 (23.11.2026 noaptea): (1) Jakarinos NO-GO P1 pe #1176 - un avertisment din descrieri masca un semn de atasament, in functie
+# de ordinea id-urilor din aria-describedby; (2) testul de canal REAL pe v4.6.4f (strict): refuzuri pe decor dupa focus pe editor
+# (data-placeholder schimbat) si dupa schimbarea modelului (clase de animatie, eticheta / textul butonului de model). Fixture-uri scrise de
+# mana sau derivate din capturile reale (f5b = varianta instalata acum, v4.6.4f).
+R2_DECOR = "continut strain arbitrar"
+# tintele descrierilor, scrise de mana: (id, html, blocant?). Id-urile sunt neutre: un cuvant de atasament in id ar fi refuzat oricum pe
+# elementul care il refera (valoarea lui aria-describedby trece prin _semnal), deci n-ar mai testa descrierea
+R2_TINTE = (
+    ("r2a", '<div id="r2a">%s</div>' % R2_DECOR, False),                                   # descriere_text (decor)
+    ("r2b", '<div id="r2b" aria-label="%s">Trimite</div>' % R2_DECOR, False),              # descriere_structura (decor)
+    ("r2c", '<div id="r2c">Ecran <span>complet</span></div>', False),                       # descriere_structura (decor)
+    ("r2d", '<div id="r2d">oferta.pdf</div>', True),                                        # descriere_fisier
+    ("r2e", '<div id="r2e">Fisier atasat</div>', True),                                     # descriere_atasament
+    ("r2f", '<div id="r2f">Trimite<img src="x"></div>', True),                              # descriere_semnal (media)
+    ("r2g", '<div id="r2g">Trimite<span data-x="blob:null/1234"></span></div>', True),      # descriere_semnal (URL local)
+)
+# r1 = return la PRIMUL motiv (ordinea id-urilor decide): mutantul reproduce exact comportamentul raportat de Jakarinos pe 0393f985
+R2_MUT_PRIMUL = [("    return (blocante or motive or [None])[0]", "    return (motive or [None])[0]")]
+R2_MUT_FARA_LABELLEDBY = [('ATRIBUTE_REFERINTA = ("aria-describedby", "aria-labelledby")', 'ATRIBUTE_REFERINTA = ("aria-describedby",)')]
+R2_MUT_FARA_SEMNALE_TINTA = [("            motive.extend(_semnale_tinta(n, tok, x))", "            pass")]
+# v4.6.4f (instalat acum, EDEFA1AE): decizia de atunci + atributele editorului insusi cu prefixul editorului (semnal_in_editor:)
+R2_V464F = DECIZIE_V464F + [(ACC_EDITOR, "            return _acceptat(n, ctrl, True)")]
+SEM_EDITOR_REAL = "div[role=textbox][aria-label=introdu o solicitare pentru gemini][contenteditable]"     # semnatura editorului real
+# semnatura butonului de model real dupa schimbarea modelului (atributele cu valoare in ordinea din pagina, apoi cheile)
+SEM_MODEL_HYDROGEN = ("button[aria-label=deschide selectorul de moduri, momentan hydrogen][data-test-id=bard-mode-menu-button][type=button]"
+                      "[tabindex][aria-describedby]")
+
+
+def r2_pagina_ecran(atr_ref, tinte):
+    # pagina 23.11 (text lung), butonul "Ecran complet" cu `atr_ref` in locul referintei CDK reale, tintele `tinte` in afara zonei
+    e = ecran(ECRAN_ATR.replace('aria-describedby="cdk-describedby-message-ng-1-16"', atr_ref))
+    return cu_tinta(pagina_23_11(ecran_html=e), "".join(tinte))
+
+
+def r2_pagina_f5b(atr_ref, tinte):
+    # varianta instalata (f5b, chat nou gol) + un span in zona cu `atr_ref`, tintele in afara zonei
+    return cu_tinta(html_f5b("gol", extra_zona="<span %s></span>" % atr_ref), "".join(tinte))
+
+
+def r2_editor_f5b(stare, **noi):
+    # (index, atributele editorului real din f5b cu valorile `noi` inlocuite - data_placeholder -> data-placeholder, aria_label -> aria-label)
+    i = index_captura(stare, "div", captura=VARIANTA_F5B, role="textbox")
+    noi = dict((k.replace("_", "-"), v) for k, v in noi.items())
+    a = tuple((k, noi.get(k, x)) for k, x in CAPTURA_F5B[stare][i][2])
+    assert all((k, v) in a for k, v in noi.items())
+    return (i, a)
+
+
+def r2_model_schimbat(stare="gol", text="4 Hydrogen", eticheta="Hydrogen", clasa_eticheta="mdc-button__label animate-in", **kw):
+    # f5b cu butonul de model dupa schimbarea modelului: aria-label cu alt model, textul afisat, clasa de animatie pe eticheta (span)
+    cap = CAPTURA_F5B[stare]
+    i = index_captura(stare, "button", captura=VARIANTA_F5B, **{"data-test-id": "bard-mode-menu-button"})
+    j = index_captura(stare, "span", captura=VARIANTA_F5B, **{"class": "mdc-button__label"})
+    a = tuple((k, v.replace("momentan Carbon", "momentan " + eticheta) if k == "aria-label" else v) for k, v in cap[i][2])
+    assert ("aria-label", "Deschide selectorul de moduri, momentan " + eticheta) in a
+    inl = ((i, a), (j, (("class", clasa_eticheta),)))
+    h = html_f5b(stare, inlocuiri=inl, **kw)
+    assert h.count(">Carbon<") == 1
+    return h.replace(">Carbon<", ">" + text + "<")
+
+
+class TestV465R2(unittest.TestCase):
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    # (1) P1 Jakarinos: blocantul castiga in ORICE ordine
+
+    def test_p1_reproducerea_jakarinos_ambele_ordini(self):
+        # `aria-describedby="d1 d2"`, d1 = text decorativ necunoscut, d2 = oferta.pdf, ambele in afara zonei: pe r1 `d1 d2` ajungea la
+        # Enter si `d2 d1` era refuzat inainte de navigare; pe r2 AMBELE ordini = refuz inainte de navigare, cu acelasi motiv
+        t1, t2 = '<div id="d1">%s</div>' % R2_DECOR, '<div id="d2">oferta.pdf</div>'
+        m_fisier = "descriere_fisier:button[aria-label=extinde intrarea la ecran complet][aria-describedby]{oferta.pdf}"
+        r1 = mutant(R2_MUT_PRIMUL)
+        for ordine in ("d1 d2", "d2 d1"):
+            for tinte in ((t1, t2), (t2, t1)):                          # si ordinea tintelor in DOM
+                h = r2_pagina_ecran('aria-describedby="%s"' % ordine, tinte)
+                i = self.an(h)
+                self.assertIn(m_fisier, i["blocante_detalii"], msg=(ordine, tinte))
+                self.assertEqual(i["blocante"], 1, msg=(ordine, i["blocante_detalii"]))
+                self.assertEqual(ruleaza_trimite(gp, FakePg(h, dupa_goto=h)), ("ciorna_necunoscuta", []), msg=ordine)
+                # r1 (mutant = codul de pe 0393f985 la acest punct): exact ce a raportat Jakarinos
+                cod_r1 = ruleaza_trimite(r1, FakePg(h, dupa_goto=h))
+                if ordine == "d1 d2":
+                    self.assertEqual(cod_r1, (None, ACTIUNI_TRIMITERE), msg=tinte)
+                else:
+                    self.assertEqual(cod_r1, ("ciorna_necunoscuta", []), msg=tinte)
+        # direct pe functie: acelasi motiv in ambele ordini
+        n = gp._Nod("button", {"aria-describedby": "d1 d2"}, None)
+        ids = {}
+        for k, text in (("d1", R2_DECOR), ("d2", "oferta.pdf")):
+            x = gp._Nod("div", {"id": k}, None)
+            x.copii.append(gp._Nod("#text", {}, x, text))
+            ids[k] = [x]
+        a = gp._motiv_descriere(n, ids)
+        n.attrs["aria-describedby"] = "d2 d1"
+        self.assertEqual(gp._motiv_descriere(n, ids), a)
+        self.assertEqual(a, ("descriere_fisier:button[aria-describedby]{oferta.pdf}", "descriere:d2=oferta.pdf"))
+        # pe r1 (mutant): ordinea decidea - `d1 d2` dadea avertismentul (decor), `d2 d1` blocantul
+        n.attrs["aria-describedby"] = "d1 d2"
+        self.assertEqual(r1._motiv_descriere(n, ids)[0], "descriere_text:button[aria-describedby]{%s}" % R2_DECOR)
+
+    def test_p1_toate_permutarile_tintelor(self):
+        # proprietate: pentru ORICE permutare a id-urilor (decor + un blocant), pe ambele pagini (23.11 si f5b) si pe ambele atribute
+        # (describedby / labelledby): refuz inainte de navigare, motivul blocantului prezent; doar decor -> Enter cu avertismente
+        import itertools
+        decor = [t for t in R2_TINTE if not t[2]]
+        for b in [t for t in R2_TINTE if t[2]]:
+            for perm in itertools.permutations(decor + [b]):
+                ref = " ".join(t[0] for t in perm)
+                for atr in ("aria-describedby", "aria-labelledby"):
+                    for fab in (r2_pagina_ecran, r2_pagina_f5b):
+                        h = fab('%s="%s"' % (atr, ref), [t[1] for t in reversed(perm)])
+                        i = self.an(h)
+                        self.assertEqual(i["blocante"], 1, msg=(b[0], ref, atr, fab.__name__, i["blocante_detalii"]))
+                        self.assertTrue(i["blocante_detalii"][0].startswith(("descriere_fisier:", "descriere_atasament:", "descriere_semnal:")))
+                        if perm[0] is b or perm[-1] is b:          # (proba trimite pe capete; clasificarea pe toate)
+                            self.assertEqual(ruleaza_trimite(gp, FakePg(h, dupa_goto=h)), ("ciorna_necunoscuta", []), msg=(ref, atr))
+        # doar decor: Enter, avertismentele in log (risc acceptat de owner), pe ambele atribute
+        for atr in ("aria-describedby", "aria-labelledby"):
+            h = r2_pagina_f5b('%s="%s"' % (atr, " ".join(t[0] for t in decor)), [t[1] for t in decor])
+            i = self.an(h)
+            self.assertEqual(i["blocante"], 0, msg=(atr, i["blocante_detalii"]))
+            self.assertTrue(i["avertismente"] >= 2)
+            pg = FakePg(h, dupa_goto=h)
+            self.assertEqual(ruleaza_trimite(gp, pg), (None, ACTIUNI_TRIMITERE), msg=atr)
+            self.assertTrue(any(l.startswith("  avertisment necunoscut descriere_") for l in pg.iesire), msg=pg.iesire)
+
+    def test_p1_doua_atribute_si_id_dublat(self):
+        # describedby = decor, labelledby = blocant (si invers); acelasi id pe doua tinte (decor + blocant, in ambele ordini)
+        td, tb = '<div id="a1">%s</div>' % R2_DECOR, '<div id="a2">oferta.pdf</div>'
+        for atr in ('aria-describedby="a1" aria-labelledby="a2"', 'aria-describedby="a2" aria-labelledby="a1"',
+                    'aria-labelledby="a2" aria-describedby="a1"'):
+            h = r2_pagina_f5b(atr, [td, tb])
+            self.assertEqual(self.an(h)["blocante"], 1, msg=atr)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(h, dupa_goto=h)), ("ciorna_necunoscuta", []), msg=atr)
+        for tinte in (('<div id="z">%s</div>' % R2_DECOR, '<div id="z">oferta.pdf</div>'),
+                      ('<div id="z">oferta.pdf</div>', '<div id="z">%s</div>' % R2_DECOR)):
+            h = r2_pagina_f5b('aria-describedby="z"', tinte)
+            self.assertEqual(self.an(h)["blocante"], 1, msg=tinte)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(h, dupa_goto=h)), ("ciorna_necunoscuta", []), msg=tinte)
+
+    def test_p1_semnale_in_tinta(self):
+        # semnale de atasament PE tinta sau IN ea (pe r1: descriere_structura = decor -> Enter): acum descriere_semnal: (refuz)
+        sem = "span[aria-describedby]"
+        cazuri = (
+            ('<div id="s">Trimite<img src="x"></div>', "descriere_semnal:%s{media:img[src]}" % sem),
+            ('<div id="s">Trimite<span data-x="blob:null/1234"></span></div>', "descriere_semnal:%s{atribut_fisier:span{data-x}}" % sem),
+            ('<div id="s" data-src="oferta.docx">Trimite</div>', "descriere_semnal:%s{atribut_fisier:div{#s data-src}}" % sem),
+            ('<div id="s" class="file-chip">Trimite</div>', "descriere_semnal:%s{token_file:div{file-chip #s}}" % sem),
+            ('<div id="s"><b style="background: url(/r/1)">Trimite</b></div>', "descriere_semnal:%s{fundal:b}" % sem),
+        )
+        r1_fara = mutant(R2_MUT_FARA_SEMNALE_TINTA)
+        for tinta, m in cazuri:
+            h = r2_pagina_f5b('aria-describedby="s"', [tinta])
+            i = self.an(h)
+            self.assertEqual(i["blocante_detalii"], [m], msg=tinta)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(h, dupa_goto=h)), ("ciorna_necunoscuta", []), msg=tinta)
+            # mutantul fara semnalele tintei = comportamentul r1: doar decor -> Enter
+            self.assertEqual(ruleaza_trimite(r1_fara, FakePg(h, dupa_goto=h)), (None, ACTIUNI_TRIMITERE), msg=tinta)
+
+    def test_mutantii_r2(self):
+        # fiecare mutant slabeste o regula r2; scenariul lui pleaca pe mutant (Enter), refuz pe cod; starile reale trec pe fiecare mutant
+        t1, t2 = '<div id="d1">%s</div>' % R2_DECOR, '<div id="d2">oferta.pdf</div>'
+        cazuri = (
+            (R2_MUT_PRIMUL, r2_pagina_f5b('aria-describedby="d1 d2"', [t1, t2])),
+            (R2_MUT_FARA_LABELLEDBY, r2_pagina_f5b('aria-labelledby="d2"', [t2])),
+            (R2_MUT_FARA_SEMNALE_TINTA, r2_pagina_f5b('aria-describedby="d1"', ['<div id="d1">Trimite<img src="x"></div>'])),
+        )
+        for inl, h in cazuri:
+            mut = mutant(inl)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(h, dupa_goto=h)), ("ciorna_necunoscuta", []), msg=inl[0][0])
+            self.assertEqual(ruleaza_trimite(mut, FakePg(h, dupa_goto=h)), (None, ACTIUNI_TRIMITERE), msg=inl[0][0])
+            for st in STARI_F5:
+                self.assertEqual(mut.analizeaza_ciorna(html_f5b(st))["blocante"], 0, msg=(inl[0][0], st))
+
+    def test_celelalte_functii_cu_avertismente_nu_mascheaza(self):
+        # audit (cererea din brief): pe un ELEMENT, un atribut decor inaintea unui atribut cu semn de atasament (si invers) = acelasi refuz
+        # (_semnal parcurge toate atributele inaintea listelor; _atribut_strain da doar avertismente); un text decor si un text cu fisier
+        # in acelasi control (ambele ordini) = refuz; motivele se aduna toate (_necunoscute), decizia pe lista completa (peste 60)
+        for a, b, m in (('matbadge="x"', 'data-x="blob:null/1"', "atribut_fisier:toolbox-drawer{data-x matbadge}"),
+                        ('matbadge="x"', 'data-y="oferta.docx"', "atribut_fisier:toolbox-drawer{data-y matbadge}"),
+                        ('matbadge="x"', 'data-file="1"', "token_file:toolbox-drawer{data-file matbadge}")):
+            for atr in ("%s %s" % (a, b), "%s %s" % (b, a)):
+                h = html_f5b("gol", extra_zona="<toolbox-drawer %s></toolbox-drawer>" % atr)
+                self.assertEqual(self.an(h)["blocante_detalii"], [m], msg=atr)
+                self.assertEqual(ruleaza_trimite(gp, FakePg(h, dupa_goto=h)), ("ciorna_necunoscuta", []), msg=atr)
+        for spanuri in (("<span>%s</span>" % R2_DECOR, "<span>oferta.pdf</span>"), ("<span>oferta.pdf</span>", "<span>%s</span>" % R2_DECOR)):
+            h = html_f5b("gol", extra_zona="<foo-bar>%s%s</foo-bar>" % spanuri)
+            i = self.an(h)
+            self.assertEqual(i["blocante_detalii"], ["text_fisier:oferta.pdf"], msg=spanuri)
+            self.assertEqual(ruleaza_trimite(gp, FakePg(h, dupa_goto=h)), ("ciorna_necunoscuta", []), msg=spanuri)
+        # 70 de elemente decor INAINTEA blocantului: detaliile sunt taiate la 60, decizia nu
+        h = html_f5b("gol", extra_zona="<foo-bar></foo-bar>" * 70 + "<foo-bar><span>oferta.pdf</span></foo-bar>")
+        i = self.an(h)
+        self.assertEqual((i["blocante"], i["blocante_detalii"]), (1, ["text_fisier:oferta.pdf"]))
+        self.assertEqual(i["avertismente"], 71)
+        self.assertEqual(ruleaza_trimite(gp, FakePg(h, dupa_goto=h)), ("ciorna_necunoscuta", []))
+        # structural: _motiv_descriere are un singur return (la final, dupa ce a adunat tot)
+        import inspect
+        corp = [l for l in inspect.getsource(gp._motiv_descriere).split("\n") if not l.lstrip().startswith("#")]
+        self.assertEqual([l.strip() for l in corp if l.strip().startswith("return")], ["return (blocante or motive or [None])[0]"])
+
+    # (2) testul de canal real pe v4.6.4f
+
+    def test_canal_placeholder_dupa_focus(self):
+        # dupa focus + scriere, editorul isi schimba data-placeholder (forma ASCII vazuta in teren + forma cu diacritice): pe v4.6.4f (mutant)
+        # = refuzul din teren `semnal_in_editor:atribut_valoare:...{data-placeholder}` inainte de Enter; pe v4.6.5 = avertisment + Enter
+        v464f = mutant(R2_V464F)
+        for v in PLACEHOLDER_NECAPTURAT:
+            gol = html_f5b("gol")
+            dupa = html_f5b("gol", inlocuiri=(r2_editor_f5b("gol", data_placeholder=v),))
+            m = "atribut_valoare:%s{data-placeholder}" % SEM_EDITOR_REAL
+            pg = FakePg(gol, dupa_goto=gol, dupa_scriere=dupa)
+            self.assertEqual(ruleaza_trimite(gp, pg), (None, ACTIUNI_TRIMITERE), msg=v)
+            self.assertTrue(avertizat(pg, m), msg=(v, pg.iesire))
+            i = self.an(pg.citite[-1])                       # ultimul instantaneu (cel de dinaintea lui Enter)
+            self.assertEqual((i["blocante"], i["avertismente_detalii"]), (0, [m]), msg=v)
+            self.assertEqual(gp.normalizeaza(i["text_editor"]), gp.normalizeaza(BRIEF_TEST))
+            # v4.6.4f: refuz pe decor, exact forma din teren
+            cod, det, act = trimite_brief(v464f, FakePg(gol, dupa_goto=gol, dupa_scriere=dupa), BRIEF_TEST)
+            self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=v)
+            self.assertEqual(det, "inainte_de_enter: 1 element(e) nerecunoscute in zona ciornei - nu trimit (semnal_in_editor:" + m + ")")
+
+    def test_canal_atributele_editorului_insusi_decor_continutul_strict(self):
+        # placeholder, aria-label, clasele EDITORULUI = avertisment; continutul (copii, text) ramane strict
+        gol = html_f5b("gol")
+        clase = dict(CAPTURA_F5B["gol"][r2_editor_f5b("gol")[0]][2])["class"] + " focused-input"
+        variante = (
+            (dict(data_placeholder=PLACEHOLDER_NECAPTURAT[1]), ["atribut_valoare:%s{data-placeholder}" % SEM_EDITOR_REAL]),
+            (dict(aria_label="Scrie mesajul"),
+             ["atribut_valoare:div[role=textbox][aria-label=scrie mesajul][contenteditable]{aria-label}"]),
+            (dict(**{"class": clase}), ["atribut_valoare:%s{class}" % SEM_EDITOR_REAL]),
+            (dict(data_placeholder=PLACEHOLDER_NECAPTURAT[0], **{"class": clase}),
+             ["atribut_valoare:%s{class}" % SEM_EDITOR_REAL]),          # (_atribut_strain: primul atribut strain al elementului)
+        )
+        for noi, motive in variante:
+            dupa = html_f5b("gol", inlocuiri=(r2_editor_f5b("gol", **noi),))
+            pg = FakePg(gol, dupa_goto=gol, dupa_scriere=dupa)
+            self.assertEqual(ruleaza_trimite(gp, pg), (None, ACTIUNI_TRIMITERE), msg=noi)
+            self.assertEqual(self.an(pg.citite[-1])["avertismente_detalii"], motive, msg=noi)
+            # acelasi editor cu continut in plus / alt text = refuz, nimic trimis
+            for html_editor in (lambda c: quill_html(c) + "<span>x</span>", lambda c: quill_html(c + " si altceva"),
+                                lambda c: quill_html(c).replace("<p>", '<p dir="ltr">', 1)):
+                cod, act = ruleaza_trimite(gp, FakePg(gol, dupa_goto=gol, dupa_scriere=dupa, html_editor=html_editor))
+                self.assertIsNotNone(cod, msg=noi)
+                self.assertNotIn("press Enter", act, msg=noi)
+
+    def test_canal_model_schimbat_decor_si_model_gresit(self):
+        # dupa schimbarea modelului: eticheta butonului de model, textul afisat ("4 Hydrogen") si clasa de animatie (span) = decor;
+        # modelul GRESIT ramane refuzat de verifica_model (`model_gresit`, dupa navigare, inaintea oricarei scrieri), nu de paza ciornei
+        h = r2_model_schimbat()
+        i = self.an(h)
+        self.assertEqual(i["blocante"], 0, msg=i["blocante_detalii"])
+        self.assertEqual(i["avertismente_detalii"], ["atribut_valoare:%s{aria-label}" % SEM_MODEL_HYDROGEN, "atribut_valoare:span{class}",
+                                                     "text_in_control:4 hydrogen"])
+        # (a) tab curent si chat nou pe Hydrogen -> model_gresit (dupa navigare, fara click / scriere), avertismentele in log
+        pg = FakePg(h, dupa_goto=h)
+        pg.model_text = "4 Hydrogen"
+        self.assertEqual(ruleaza_trimite(gp, pg), ("model_gresit", ["goto"]))
+        self.assertTrue(avertizat(pg, "text_in_control:4 hydrogen"), msg=pg.iesire)
+        # pe v4.6.4f (mutant): refuzul din teren pe decor (`ciorna_necunoscuta`, inainte de navigare), nu model_gresit
+        v464f = mutant(R2_V464F)
+        pg = FakePg(h, dupa_goto=h)
+        pg.model_text = "4 Hydrogen"
+        self.assertEqual(ruleaza_trimite(v464f, pg), ("ciorna_necunoscuta", []))
+        # (b) chatul nou revine pe modelul cerut -> Enter (decorul tab-ului vechi doar in log)
+        pg = FakePg(h, dupa_goto=html_f5b("gol"))
+        self.assertEqual(ruleaza_trimite(gp, pg), (None, ACTIUNI_TRIMITERE))
+        # (c) doar animatia pe Carbon (eticheta si textul corecte) -> Enter cu avertismentul clasei, pe tot traseul
+        anim = r2_model_schimbat(text="Carbon", eticheta="Carbon")
+        self.assertEqual(self.an(anim)["avertismente_detalii"], ["atribut_valoare:span{class}"])
+        pg = FakePg(anim, dupa_goto=anim, dupa_scriere=r2_model_schimbat("mediu", text="Carbon", eticheta="Carbon"))
+        self.assertEqual(ruleaza_trimite(gp, pg), (None, ACTIUNI_TRIMITERE))
+        self.assertTrue(avertizat(pg, "atribut_valoare:span{class}"), msg=pg.iesire)
+        # (d) pagina chatului nou arata Carbon, dar modelul citit e altul -> model_gresit (regula modelului e independenta de paza)
+        for afisat in ("4 Hydrogen", "Hydrogen", "Gemini 4 Hydrogen", "Carbon Thinking", ""):
+            pg = FakePg(html_f5b("gol"), dupa_goto=html_f5b("gol"))
+            pg.model_text = afisat
+            self.assertEqual(ruleaza_trimite(gp, pg), ("model_gresit", ["goto"]), msg=afisat)
+        # (e) model schimbat + semn de atasament in decor -> refuz inainte de navigare (decorul nu acopera semnele)
+        for extra, cod in (("<foo-bar><span>oferta.pdf</span></foo-bar>", "ciorna_necunoscuta"),
+                           ('<div class="file-preview-x"></div>', "ciorna_cu_atasamente")):
+            hm = r2_model_schimbat(extra_zona=extra)
+            pg = FakePg(hm, dupa_goto=hm)
+            pg.model_text = "4 Hydrogen"
+            self.assertEqual(ruleaza_trimite(gp, pg), (cod, []), msg=extra)
+        # `stare` pe pagina cu modelul schimbat: 0 necunoscute, trei avertismente, paza OK
+        l = stare_linii(gp, FakePg(h))
+        self.assertIn("necunoscute in zona: 0", l)
+        self.assertEqual(sum(1 for x in l if x.startswith("  avertisment necunoscut ")), 3)
+        self.assertIn("paza ciorna: OK (trimite ar continua)", l)
 
 
 if __name__ == "__main__":

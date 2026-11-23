@@ -242,6 +242,17 @@
 #   editorul unic; celelalte atribute ale lui sunt decor. Listele albe raman, doar ca sa reduca zgomotul din avertismente. Descrierea
 #   (aria-describedby) se verifica si pe elementele cu avertisment (nume de fisier / cuvant de atasament in ea = refuz).
 #   Mesajul trimis = doar textul editorului (comparat cu brief-ul); textul decorului nu intra in el (teste).
+# v4.6.5 r2 (23.11.2026 noaptea, Jakarinos NO-GO P1 pe #1176 + testul de canal real pe v4.6.4f): (1) _motiv_descriere parcurge TOATE
+#   referintele (aria-describedby SI aria-labelledby, fiecare id, fiecare tinta) si toate motivele fiecarei tinte; un motiv BLOCANT castiga
+#   intotdeauna asupra unui avertisment, indiferent de ordinea id-urilor (`d1 d2` = `d2 d1`). Semnalele de atasament PE tinta si IN ea
+#   (_semnal: <img>, blob:, cuvinte in clase / atribute) = `descriere_semnal:` (refuz; pana la r1 = descriere_structura, decor). Celelalte
+#   functii care dau avertismente nu au acest tipar: _atribut_strain / _acceptat dau doar avertismente (semnalele tuturor atributelor sunt
+#   verificate inainte, de _semnal), _motiv_text cauta fisier / cuvant inaintea listei, _necunoscute si analizeaza_arbore aduna toate
+#   motivele, iar decizia citeste `blocante` din lista completa (nu din detaliile taiate la 60). (2) Testul de canal pe v4.6.4f (strict) a
+#   refuzat: `semnal_in_editor:atribut_valoare:...{data-placeholder}` dupa focus pe editor (placeholder schimbat) si, dupa schimbarea
+#   modelului, `atribut_valoare:span{class}` (clase de animatie) + eticheta / textul butonului de model ("4 Hydrogen"). Pe v4.6.5 toate
+#   sunt decor (avertisment): atributele editorului insusi (r1), atributele / textele butonului de model; modelul ramane verificat separat
+#   (verifica_model -> `model_gresit`, blocant, inaintea oricarei scrieri). Continutul editorului ramane strict. Nicio alta schimbare.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata, base64, json
@@ -287,7 +298,7 @@ EDITABILE_TAGURI = ("textarea", "input", "select")
 # v4.6.5 (varianta B): motivele care NU blocheaza (decorul) - lista INCHISA de prefixe EXACTE (cu ":"), comparate pe inceputul motivului.
 # Toate sunt motive fara semnal de atasament: _semnal (media, fundal, eticheta, token_*, atribut_fisier, editabil) e verificat inaintea
 # oricarei acceptari, iar motivele textelor cu nume de fisier / cuvinte de atasament au prefixe proprii (text_fisier:, text_atasament:,
-# descriere_fisier:, descriere_atasament:). Tot ce poarta prefixul editorului (semnal_in_editor:, element_in_editor:, editor_structura:)
+# descriere_fisier:, descriere_atasament:; r2: descriere_semnal:). Tot ce poarta prefixul editorului (semnal_in_editor:, element_in_editor:, editor_structura:)
 # si text_trunchiat_cdp: blocheaza. Orice motiv care nu incepe cu una din intrari = refuz (fail-closed).
 MOTIVE_AVERTISMENT = ("element:", "text:", "text_in_control:", "atribut_necunoscut:", "atribut_valoare:", "descriere_text:",
                       "descriere_structura:")
@@ -709,6 +720,9 @@ DESCRIERI_CUNOSCUTE = (
     "Trimite",                                                              # c23 mediu / lung - butonul de trimitere (ng-1-17)
 )
 ATRIBUTE_TINTA_DESCRIERE = (("role", _E("tooltip")),)                       # + `id` (egal cu referinta)
+# v4.6.5 r2: atributele cu LISTA de id-uri a caror tinta se verifica (_motiv_descriere). aria-labelledby nu e pe nicio pagina reala (capturi
+# 21.11 - 23.11): pe un element ramane `atribut_necunoscut:` (decor), dar tinta lui se verifica la fel (semn de atasament in ea = refuz).
+ATRIBUTE_REFERINTA = ("aria-describedby", "aria-labelledby")
 STRUCTURA_CUNOSCUTA = (
     "span[role=status]",                                             # i ii iii - regiune live pentru cititoare de ecran (goala)
     "back-to-bottom-fab",                                            # i ii iii - invelisul butonului "Deruleaza in jos"
@@ -1122,7 +1136,8 @@ def _semnal(n):
     """r4 (Jakarinos r3 P1): primul semn de atasament purtat de elementul INSUSI, ca motiv de refuz (sau None). Se verifica
     INAINTEA oricarei acceptari si pe ORICE element (neutru, din listele albe, zona / rich-textarea, butonul modelului, editorul).
     r7 (Jakarinos r6 P1): SINGURA functie de semnale - apelata dintr-un singur loc (_motiv_element) pentru toate nivelurile (zona,
-    invelisuri, editor, descendentii editorului, descendentii zonei); nicio cale separata nu mai verifica altceva. Ordinea:
+    invelisuri, editor, descendentii editorului, descendentii zonei); nicio cale separata nu mai verifica altceva. v4.6.5 r2: al doilea
+    apel, din _semnale_tinta = aceeasi functie pe tintele descrierilor (aria-describedby / aria-labelledby, de obicei in afara zonei). Ordinea:
     (0) r7: elementul e media (img, picture, video, audio, canvas, object, embed, iframe, image, source, track) -> "media:<semnatura>";
         style cu "url(" (miniatura pusa ca imagine de fundal) -> "fundal:<semnatura>";
     (1) eticheta (atributele cu valoare din semnatura): cuvant interzis sau nume.extensie -> "eticheta:<semnatura>";
@@ -1289,24 +1304,45 @@ def _motiv_descriere(n, ids):
     # cu alt atribut decat `id` / ATRIBUTE_TINTA_DESCRIERE sau cu un element in ea = `descriere_structura:`; textul ei BRUT (r15: Unicode
     # exact, fara _ascii) nevid si in afara listei inchise DESCRIERI_CUNOSCUTE = `descriere_text:` (refuz). Identificator lipsa = nicio
     # descriere afisata. Cautarea cuvintelor / numelor de fisier ramane pe textul ASCII (mai larga = mai multe refuzuri, nu mai putine).
-    for tok in (n.attrs.get("aria-describedby") or "").split():
+    # v4.6.5 r2 (Jakarinos NO-GO P1 pe #1176: `aria-describedby="d1 d2"` cu d1 decor si d2 = oferta.pdf trecea, iar `d2 d1` era refuzat):
+    # se parcurg TOATE referintele (_referinte: aria-describedby SI aria-labelledby; fiecare id; fiecare element cu acel id) si se ADUNA
+    # TOATE motivele fiecarei tinte (fara return la primul gasit). Un motiv BLOCANT castiga intotdeauna, oricare ar fi ordinea id-urilor sau
+    # a motivelor; altfel primul avertisment (decor), in ordinea de pana la r1; altfel None. Nou: semnalele de atasament PE tinta si IN ea
+    # (_semnale_tinta: <img>, blob:, cuvinte in clase / atribute) = `descriere_semnal:` (BLOCANT; pana la r1 = descriere_structura, decor).
+    motive = []
+    for tok in _referinte(n):
         for x in ids.get(tok, ()):
             a = _text_nod(x)
             sursa = "descriere:%s=%s" % (tok[:60], a[:SURSA_AFISATA])
             if _nume_fisier(a) is not None:
-                return "descriere_fisier:%s{%s}" % (_semnatura(n), a[:TEXT_AFISAT]), sursa
+                motive.append(("descriere_fisier:%s{%s}" % (_semnatura(n), a[:TEXT_AFISAT]), sursa))
             if _cuvant(a) is not None:
-                return "descriere_atasament:%s{%s}" % (_semnatura(n), a[:TEXT_AFISAT]), sursa
+                motive.append(("descriere_atasament:%s{%s}" % (_semnatura(n), a[:TEXT_AFISAT]), sursa))
+            motive.extend(_semnale_tinta(n, tok, x))
             for k, v in x.attrs.items():
                 if k != "id" and not any(k == nume and forma.fullmatch(v) for nume, forma in ATRIBUTE_TINTA_DESCRIERE):
-                    return "descriere_structura:%s{%s}" % (_semnatura(n), k), "descriere_atribut:%s=%s" % (k, _ascii(v)[:SURSA_AFISATA])
+                    motive.append(("descriere_structura:%s{%s}" % (_semnatura(n), k),
+                                   "descriere_atribut:%s=%s" % (k, _ascii(v)[:SURSA_AFISATA])))
             e = next((d for d in _descendenti(x) if d.tag != "#text"), None)
             if e is not None:
-                return "descriere_structura:%s{%s}" % (_semnatura(n), _ascii(e.tag)[:40]), "descriere_element:" + _semnatura(e)
+                motive.append(("descriere_structura:%s{%s}" % (_semnatura(n), _ascii(e.tag)[:40]), "descriere_element:" + _semnatura(e)))
             b = _text_brut(x)
             if b != "" and b not in DESCRIERI_CUNOSCUTE:          # r15: Unicode EXACT (fara _ascii / strip / spatii comprimate)
-                return "descriere_text:%s{%s}" % (_semnatura(n), a[:TEXT_AFISAT]), sursa
-    return None
+                motive.append(("descriere_text:%s{%s}" % (_semnatura(n), a[:TEXT_AFISAT]), sursa))
+    blocante = [m for m in motive if not _e_avertisment(m[0])]
+    return (blocante or motive or [None])[0]
+
+
+def _referinte(n):
+    # v4.6.5 r2: id-urile referite de n, din TOATE atributele ATRIBUTE_REFERINTA (aria-describedby, apoi aria-labelledby), in ordine
+    return [tok for atr in ATRIBUTE_REFERINTA for tok in (n.attrs.get(atr) or "").split()]
+
+
+def _semnale_tinta(n, tok, x):
+    # v4.6.5 r2: semnalele de atasament (_semnal, aceeasi functie ca in zona) pe tinta x insasi si pe FIECARE element din ea -> lista de
+    # (`descriere_semnal:<semnatura lui n>{<motivul semnalului>}`, `descriere_<sursa semnalului>`), toate BLOCANTE
+    return [("descriere_semnal:%s{%s}" % (_semnatura(n), s[0][:TEXT_AFISAT]), "descriere_%s=%s" % (tok[:60], s[1][:SURSA_AFISATA]))
+            for s in (_semnal(d) for d in _cu_descendenti(x) if d.tag != "#text") if s]
 
 
 def _motiv_text(nod, ctrl, zona=None):
