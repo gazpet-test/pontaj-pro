@@ -131,6 +131,12 @@
 #   nu poate fi inlocuit de un control / buton de model imbricat. Celelalte controale raman neschimbate. (b) CLASE_DIV_DROP = doar
 #   cele 4 multimi cu baza vazuta (varianta B): cele 3 "simplified-input-area + token de inaltime" sunt scoase (presupunere contrazisa
 #   de captura) si refuzate ca orice alta multime.
+# v4.6.4d / r13 (23.11.2026, Jakarinos NO-GO pe r12): r12 inchidea doar NODURILE text; atributele cu text (gemtooltip, aria-label pe
+#   butonul modelului, arialabel...) pe un element acceptat - sau pe un descendent neutru - treceau (3 reproduceri: 0 necunoscute, Enter).
+#   Acum TOATE acceptarile din _motiv_element trec prin _acceptat: un atribut cu text (ATRIBUTE_TEXT + fragmente de nume + ng-reflect-* +
+#   data-* cu text liber) e permis doar gol sau cu o valoare EXACTA din VALORI_TEXT_CUNOSCUTE (tag, atribut, forma), copiata din
+#   capturile 21.11 / 22.11 / 23.11; altfel `atribut_text:` (refuz). Textul descrierilor (aria-describedby -> containerul CDK, in afara
+#   zonei) se verifica dupa nume de fisier / cuvinte de atasament (`descriere_fisier:` / `descriere_atasament:`).
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata
@@ -294,6 +300,53 @@ CONTROALE_CUNOSCUTE = (
 # NU e in captura, deci nicio ligatura nu e permisa (iconita fara text - svg / gem-icon - trece). Celelalte controale: neschimbate.
 CONTROALE_TEXT_INCHIS = (
     ("button[aria-label=extinde intrarea la ecran complet][aria-describedby]", ("ecran complet",)),
+)
+# r13 (Jakarinos NO-GO r12): ATRIBUTELE care poarta text. Pe ORICE element ACCEPTAT (zona, invelisurile STRUCTURA_TAGURI, editorul si
+# descendentii lui, elementele neutre, controalele / structura din liste, butonul modelului) - deci si pe descendentii unui control
+# acceptat - un atribut cu text (vezi _atribut_cu_text) e permis doar GOL (dupa _ascii: spatii / latime zero) sau cu o valoare EXACTA
+# din VALORI_TEXT_CUNOSCUTE pentru tagul lui; orice alta valoare = `atribut_text:` (refuz), chiar fara cuvant de atasament.
+# Elementele refuzate deja (semnal, element:) isi pastreaza motivul. Lista numelor (justificare):
+#   - ARIA care se citeste ca text (eticheta, descriere, rol descris, valoare, placeholder, braille, scurtaturi) si referintele ARIA
+#     (aria-labelledby / aria-describedby / aria-details / aria-errormessage: textul lor e al elementului indicat);
+#   - title / placeholder / alt / label / value / abbr (afisate de browser sau de cititorul de ecran);
+#   - tooltip-urile Angular / Gemini (mattooltip, gemtooltip, tooltip, data-tooltip) si eticheta Angular FARA cratima (arialabel,
+#     ariadescription - pe <gem-icon-button>, vazuta 22.11);
+#   - data-placeholder / data-title / data-label (Quill / Gemini afiseaza data-placeholder prin CSS).
+# + orice nume care CONTINE un fragment din FRAGMENTE_NUME_TEXT (variante necunoscute: gemtooltipposition, cdk-describedby-host,
+#   x-tooltip...), + orice `ng-reflect-*` (valoarea unei intrari Angular), + orice data-* cu valoare care NU e un identificator (FORMA_IDENTIFICATOR: litere / cifre / - / _, max 64; un text
+#   liber, cu spatii sau punctuatie, poate fi afisat prin CSS attr()). Un data-* identificator (data-test-id, data-gramm=false,
+#   data-mat-icon-type=font) nu e text: nu are spatii / punct (un nume.extensie are punct, deci e text si se verifica).
+# Limita (scrisa): un atribut cu ALT nume (fara fragment, nu data-*) nu e citit ca text; valorile lui trec prin cautarea cuvintelor /
+# numelor de fisier din _semnal (pasul 4), ca pana acum.
+ATRIBUTE_TEXT = ("aria-label", "aria-description", "aria-roledescription", "aria-placeholder", "aria-valuetext", "aria-braillelabel",
+                 "aria-brailleroledescription", "aria-keyshortcuts", "aria-labelledby", "aria-describedby", "aria-details",
+                 "aria-errormessage", "title", "placeholder", "alt", "label", "value", "abbr", "arialabel", "ariadescription",
+                 "mattooltip", "gemtooltip", "tooltip", "data-tooltip", "data-placeholder", "data-title", "data-label")
+FRAGMENTE_NUME_TEXT = ("label", "tooltip", "title", "placeholder", "descri", "caption", "hint")
+FORMA_IDENTIFICATOR = re.compile(r"[A-Za-z0-9_-]{0,64}")
+# (tag sau "*", numele atributului, forma EXACTA a valorii dupa _ascii - fullmatch): DOAR valorile vazute pe pagina reala (sursa in
+# comentariu). Textele sunt literale (_TXT = re.escape). Singurele intrari pe orice tag ("*") sunt cele puse de mecanismul CDK de
+# descrieri (AriaDescriber) pe orice element cu tooltip: identificatorul descrierii `cdk-describedby-message-ng-1-<n>` (fara text; vazut
+# cu n = 2 / 11 / 16 pe <button> si <gem-icon-button>; pe div[data-test-id=send-button-container] cheia e in semnatura din 21.11, valoarea
+# NU e capturata - DEDUCTIE: acelasi mecanism; alta forma = refuz fals, sigur) si gazda lui `ng-1`. Textul descrierii (elementul indicat,
+# in containerul CDK din afara zonei) se verifica separat (_motiv_descriere). Numele modelului din eticheta butonului de model: doar
+# "carbon" (= MODEL_CERUT, lista inchisa de un element, test; alt model = refuz aici si oricum in verifica_model).
+_TXT = lambda s: re.compile(re.escape(s))
+FORMA_DESCRIERE_CDK = re.compile(r"cdk-describedby-message-ng-1-[0-9]{1,4}")
+VALORI_TEXT_CUNOSCUTE = (
+    ("button", "aria-label", _TXT("deruleaza in jos")),                         # 21.11 i ii iii (semnatura din calibrare)
+    ("button", "aria-label", _TXT("incarcare si instrumente")),                 # 21.11 i ii iii; 23.11 (atribute complete)
+    ("button", "aria-label", _TXT("dicteaza (^?d)")),                           # 21.11 i ii iii; 23.11 ("?" = caracterul non-ASCII)
+    ("button", "aria-label", _TXT("trimite mesajul")),                          # 21.11 ii; 23.11
+    ("button", "aria-label", _TXT("extinde intrarea la ecran complet")),        # 23.11 - butonul "Ecran complet"
+    ("button", "gemtooltip", _TXT("ecran complet")),                            # 23.11 - acelasi buton
+    ("button", "aria-label", _TXT("deschide selectorul de moduri, momentan carbon")),   # 23.11 - butonul modelului
+    ("button", "gemtooltipposition", _TXT("below")),                            # 23.11 - butonul modelului (pozitia tooltip-ului)
+    ("gem-icon-button", "arialabel", _TXT("incarcare si instrumente")),         # 22.11 + 23.11 - invelisul butonului "+"
+    ("div", "aria-label", _TXT("introdu o solicitare pentru gemini")),          # 22.11 + 23.11 - editorul
+    ("div", "data-placeholder", _TXT("intreaba gemini")),                       # 22.11 + 23.11 - editorul
+    ("*", "aria-describedby", FORMA_DESCRIERE_CDK),                             # 22.11 + 23.11 (CDK; vezi mai sus)
+    ("*", "cdk-describedby-host", _TXT("ng-1")),                                # 22.11 + 23.11 (CDK)
 )
 STRUCTURA_CUNOSCUTA = (
     "span[role=status]",                                             # i ii iii - regiune live pentru cititoare de ecran (goala)
@@ -736,6 +789,64 @@ def _texte_control_inchis(ctrl):
     return None
 
 
+def _atribut_cu_text(k, v):
+    # r13: atributul k (nume, litere mici - HTMLParser) cu valoarea bruta v poarta text? (vezi ATRIBUTE_TEXT mai sus). Si numele generate
+    # (`ng-reflect-*`) se verifica: un `_ngcontent-*=""` e gol, deci trece. `ng-reflect-*` (Angular in mod de dezvoltare: valoarea unei
+    # intrari legate, ex. mesajul unui tooltip) = text, oricare ar fi restul numelui; pe paginile reale nu apare (build de productie).
+    if k in ATRIBUTE_TEXT or k.startswith("ng-reflect-") or any(f in k for f in FRAGMENTE_NUME_TEXT):
+        return True
+    return k.startswith("data-") and not FORMA_IDENTIFICATOR.fullmatch(v)
+
+
+def _atribut_text_strain(n):
+    # r13: primul atribut cu text al elementului n cu valoare NEGOALA (dupa _ascii) care NU e EXACT una din VALORI_TEXT_CUNOSCUTE pentru
+    # tagul lui (sau "*") -> (nume, valoare ASCII); altfel None. Comparatie fullmatch pe valoarea intreaga (nu subsir / prefix).
+    for k, v in n.attrs.items():
+        if not _atribut_cu_text(k, v):
+            continue
+        a = _ascii(v)
+        if not a:
+            continue                                    # gol / doar spatii / latime zero: niciun text afisat
+        if any(t in (n.tag, "*") and nume == k and forma.fullmatch(a) for t, nume, forma in VALORI_TEXT_CUNOSCUTE):
+            continue
+        return k, a
+    return None
+
+
+def _acceptat(n, ctrl_copii, in_editor=False):
+    # r13: SINGURUL punct de acceptare din _motiv_element (toate caile care intorc "recunoscut"): elementul e acceptat doar daca
+    # atributele lui cu text au valori cunoscute; altfel `atribut_text:` (in editor cu prefixul semnal_in_editor:), copiii se verifica
+    # in continuare cu acelasi context
+    a = _atribut_text_strain(n)
+    if a is None:
+        return None, ctrl_copii, ""
+    m = "atribut_text:%s{%s}" % (_semnatura(n), a[0])
+    return ("semnal_in_editor:" + m if in_editor else m), ctrl_copii, "atribut_text:%s=%s" % (a[0], a[1][:SURSA_AFISATA])
+
+
+def _text_nod(x):
+    # textul afisat al unui element (toate nodurile text din el), ASCII
+    return _ascii(" ".join(d.date for d in _descendenti(x) if d.tag == "#text"))
+
+
+def _motiv_descriere(n, ids, zona):
+    # r13: textul DESCRIERII unui element acceptat (aria-describedby -> elementul indicat, cautat in toata pagina). In zona, textul e
+    # verificat de parcurgere (in contextul lui); in afara zonei (containerul CDK al descrierilor) un nume.extensie / cuvant de atasament
+    # = refuz `descriere_fisier:` / `descriere_atasament:`. Valorile EXACTE ale descrierilor nu sunt in capturi: captura 5g2-a le citeste
+    # (diag\captura_caseta.py, `descrieri`), lista inchisa vine dupa ele. Identificator lipsa din pagina = nicio descriere afisata.
+    for tok in (n.attrs.get("aria-describedby") or "").split():
+        for x in ids.get(tok, ()):
+            if x is zona or _sub(x, zona):
+                continue
+            a = _text_nod(x)
+            sursa = "descriere:%s=%s" % (tok[:60], a[:SURSA_AFISATA])
+            if _nume_fisier(a) is not None:
+                return "descriere_fisier:%s{%s}" % (_semnatura(n), a[:TEXT_AFISAT]), sursa
+            if _cuvant(a) is not None:
+                return "descriere_atasament:%s{%s}" % (_semnatura(n), a[:TEXT_AFISAT]), sursa
+    return None
+
+
 def _motiv_text(nod, ctrl):
     # ctrl = controlul recunoscut (din lista alba / butonul modelului) in care sta textul, sau None
     a = _ascii(nod.date)
@@ -776,22 +887,23 @@ def _motiv_element(n, ctrl, in_editor=False):
         # in editor (contenteditable) intra doar textul brief-ului (comparat separat, verifica_ciorna): Quill produce p / br, restul
         # etichetelor de text sunt tolerate; orice alt element = nerecunoscut (nicio lista alba nu se consulta in editor)
         if n.tag in EDITOR_TAGURI:
-            return None, ctrl, ""
+            return _acceptat(n, ctrl, True)
         return "element_in_editor:" + sem, ctrl, ""
+    # r13: fiecare acceptare de mai jos trece prin _acceptat (atributele cu text = valori EXACTE cunoscute)
     if n.tag in STRUCTURA_TAGURI:
-        return None, ctrl, ""                           # zona si invelisul editorului (aceleasi nume ca selectorii)
+        return _acceptat(n, ctrl)                       # zona si invelisul editorului (aceleasi nume ca selectorii)
     if n.attrs.get("data-test-id") == MODEL_DATA_TEST:
-        return None, n, ""                              # butonul modelului: verificat separat (verifica_model); textul lui = eticheta
+        return _acceptat(n, n)                          # butonul modelului: verificat separat (verifica_model); textul lui = eticheta
     if n.tag in NEUTRE and not _semnificativ(n):
-        return None, ctrl, ""                           # element neutru fara eticheta / rol / actiune (si fara semnal, mai sus)
+        return _acceptat(n, ctrl)                       # element neutru fara eticheta / rol / actiune (si fara semnal, mai sus)
     if sem in CONTROALE_CUNOSCUTE:
-        return None, n, ""                              # control vazut la calibrare; textele din el = eticheta lui (verificate mai sus)
+        return _acceptat(n, n)                          # control vazut la calibrare; textele din el = eticheta lui (verificate mai sus)
     if sem in STRUCTURA_CUNOSCUTA:
-        return None, ctrl, ""                           # invelis vazut la calibrare; continutul lui se verifica mai departe
+        return _acceptat(n, ctrl)                       # invelis vazut la calibrare; continutul lui se verifica mai departe
     return "element:" + sem, ctrl, ""
 
 
-def _necunoscute(zona, editoare):
+def _necunoscute(zona, editoare, ids=None):
     """Elementele / textele din zona (r6: SI ELEMENTUL ZONEI INSESI, primul verificat) care NU fac parte din structura recunoscuta
     a ciornei goale (lista de motive). Chip-urile si semnele (numarate separat, si pe zona) si ce nu se afiseaza (script / style /
     template) se sar. r7: UN SINGUR traseu pentru toate elementele - fiecare (zona, invelisuri, editor, descendenti) trece prin
@@ -812,6 +924,10 @@ def _necunoscute(zona, editoare):
         if any(n is e for e in editoare):
             in_editor = True                # r7: editorul = acelasi traseu, cu context (nu o cale separata)
         m, ctrl_copii, sursa = _motiv_element(n, ctrl, in_editor)
+        if not m and ids is not None:
+            d = _motiv_descriere(n, ids, zona)     # r13: textul descrierii unui element acceptat (in afara zonei)
+            if d:
+                m, sursa = d
         if m:
             out.append((m, sursa))
         if n is zona:
@@ -856,9 +972,13 @@ def analizeaza_ciorna(html):
                 c = _clase(n)
                 k = (n.tag + ("." + c[0] if c else ""))[:60].encode("ascii", "replace").decode("ascii")
                 detalii[k] = detalii.get(k, 0) + 1
+    ids = {}                                # r13: elementele paginii dupa id (tinta lui aria-describedby; id dublat = toate)
+    for n in _descendenti(a.radacina):
+        if n.attrs.get("id"):
+            ids.setdefault(n.attrs["id"], []).append(n)
     necunoscute = []                        # r2: verificarea pozitiva (tot ce nu e structura recunoscuta a ciornei goale)
     for z in zone:
-        necunoscute.extend(_necunoscute(z, editoare))
+        necunoscute.extend(_necunoscute(z, editoare, ids))
     return {"editoare": len(editoare), "zone": len(zone), "atasamente": atas, "semne": semne,
             "detalii": ["%s x%d" % (k, v) for k, v in sorted(detalii.items())][:12],
             "necunoscute": len(necunoscute), "necunoscute_detalii": [m[:DETALIU_AFISAT] for m, _ in necunoscute[:60]],

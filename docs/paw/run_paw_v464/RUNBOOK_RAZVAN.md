@@ -62,7 +62,7 @@ Gemini extinde caseta de compunere: div-ul zonei de drop isi schimba clasele (`h
 `paw-data\out\paw_v464_calibrare\stare_text_lung_23_11.json`, citite de chat cu textul in ciorna, netrimis). **v4.6.4d** (acest pachet,
 r11) schimba din nou DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE v4.6.4c cu aceeasi procedura: hash-ul vechi =
 `09E78891...`, zona protejata noua `operator-v464d`, copiile de siguranta cu sufixul `.v464c`, fisierele noi cu `.v464d` (pasul 1).
-Ce aduce (detaliile la pasul 0, "Stare r11" si "Stare r12"): div-ul zonei de drop e acceptat in starea extinsa DOAR cu una din cele 4
+Ce aduce (detaliile la pasul 0, "Stare r11", "Stare r12" si "Stare r13"; r13: atributele cu text = valori exacte): div-ul zonei de drop e acceptat in starea extinsa DOAR cu una din cele 4
 multimi de clase din lista inchisa (marcajul `xapfileselectordropzone` tot GOL), butonul "Ecran complet" e pe lista controalelor ca
 control cu text INCHIS (in el: doar gol sau exact tooltip-ul "Ecran complet"). Testul de canal are un pas nou, **5g2** (captura casetei,
 doar citire, la trei lungimi de text + trimiterea unui brief lung si a unuia mediu). Rollback-ul (mai jos) readuce v4.6.4c (cu markerul ei).
@@ -303,6 +303,32 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
   (sigur, nimic trimis); capturile de la 5g2 arata continutul butonului, iar numele exact intra intr-un commit nou, cu review.
 - **La 5a-5g (v4.6.4d) sunt asteptate aceleasi rezultate ca la v4.6.4c; 5g2 (nou) trebuie sa treaca.**
 
+**Stare (r13 = v4.6.4d runda 3, 23.11.2026, dupa NO-GO Jakarinos pe r12 `e2c93803`):**
+- **Ce era gresit in r12.** Regula textului inchis privea doar textele afisate (nodurile text), nu ATRIBUTELE care poarta text.
+  Jakarinos a pus `gemtooltip="continut strain arbitrar"` pe butonul "Ecran complet", acelasi atribut pe un `<span>` din el si un buton
+  de model cu `aria-label` strain in el: toate trei 0 necunoscute, `press Enter`.
+- **Ce face r13.** Pe ORICE element acceptat (zona, invelisuri, editor, elemente neutre, controalele si structura din liste, butonul
+  modelului - deci si pe toti descendentii unui control) atributele cu text au voie doar GOALE sau cu o valoare EXACTA vazuta pe pagina
+  reala (lista inchisa `VALORI_TEXT_CUNOSCUTE`: 13 intrari, fiecare cu sursa ei - eticheta fiecarui buton, tooltip-ul "Ecran complet",
+  eticheta butonului de model DOAR cu "Carbon", eticheta si placeholder-ul editorului, identificatorii CDK ai descrierilor). Orice
+  alta valoare = `atribut_text:<element>{<atribut>}` (refuz), chiar fara cuvinte de atasament. Atribute cu text = aria-label /
+  aria-description si celelalte ARIA citite ca text, title / placeholder / alt / label / value, tooltip-urile Angular / Gemini, eticheta
+  Angular `arialabel`, `data-placeholder` etc., orice nume cu label / tooltip / title / placeholder / descri / caption / hint,
+  orice `ng-reflect-*` si orice `data-*` cu text liber (cu spatii / punctuatie; un identificator ca `data-gramm="false"` nu e text).
+  Textul descrierilor (`aria-describedby` -> containerul CDK din afara casetei) se verifica dupa nume de fisier / cuvinte de atasament.
+- **Deductie scrisa:** identificatorul de descriere pe `div[data-test-id=send-button-container]` nu e in capturi (doar cheia, la
+  21.11); se presupune forma CDK reala `cdk-describedby-message-ng-1-<n>`, ca la celelalte. Alta forma = refuz fals (sigur) la 5g2-a,
+  vizibil in `captura_caseta_*` (acum cu atributele TUTUROR elementelor casetei si textele descrierilor).
+- **Dovezi (teste 161 -> 170, `python -I`):** cele 3 reproduceri copiate exact: refuz fara actiuni si refuz inainte de Enter in starea
+  reala cu brief lung; cu regula r13 oprita (= r12) aceleasi ajung la Enter. 18 atribute straine x 10 locuri (control, descendent
+  neutru / adanc / svg / gem-icon in control, alt control, butonul modelului, structura, invelis, div neutru) + zona / rich-textarea /
+  editor / paragraf din editor: refuz. Valorile reale trec; aceeasi valoare cu un cuvant in plus / pe alt tag / alt model = refuz. Toate
+  starile reale (21.11 i-iii, 22.11 i-iii si cu indicatorul 5g, 23.11 text lung si chat nou) trec si ajung la Enter. 14 mutanti
+  (fara verificare, cate una din cele 6 cai de acceptare ocolita, subsir, tag ignorat, fara fragmente, fara data-*, fara ng-reflect,
+  fara descriere, orice identificator de descriere) lasa fiecare scenariul lui sa plece si starile reale sa treaca; pe cod refuz.
+- **5g2-a (RUNBOOK, r13):** dupa `stare` se cer `$LASTEXITCODE -eq 0`, exact o linie `paza ciorna:` si aceea = `paza ciorna: OK
+  (trimite ar continua)`; captura cu cod 0 si `CAPTURA_GATA`. Altfel STOP.
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -369,7 +395,7 @@ if ((Get-FileHash -LiteralPath "$Source\diag\captura_caseta.py").Hash -ine $Diag
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel asteptat (vezi $GemHashVechi)' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 78 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 6) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 214 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 14) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -379,7 +405,17 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + $SufVechi) -Force }
 ```
 
-Asteptat (pachetul v4.6.4d = r12, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **78 linii diferite (6 vechi `<=`, 72 noi `=>`)**.
+Asteptat (pachetul v4.6.4d = r13, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **214 linii diferite (14 vechi `<=`, 200 noi `=>`)**.
+r13 adauga la cele 6 linii vechi de mai jos inca 8, toate din v4.6.4c: cele 6 `return None, ...` de acceptare din `_motiv_element` (acum
+`return _acceptat(...)`, editorul, zona / invelisurile, butonul modelului, neutrul, controlul, structura), antetul
+`def _necunoscute(zona, editoare):` (acum cu `ids=None`) si apelul `necunoscute.extend(_necunoscute(z, editoare))` (acum cu `ids`).
+Liniile noi r13: nota r13 din antet, `ATRIBUTE_TEXT` / `FRAGMENTE_NUME_TEXT` / `FORMA_IDENTIFICATOR` / `FORMA_DESCRIERE_CDK` /
+`VALORI_TEXT_CUNOSCUTE` cu comentariile lor, functiile `_atribut_cu_text`, `_atribut_text_strain`, `_acceptat`, `_text_nod`,
+`_motiv_descriere`, cele 6 acceptari, apelul descrierii din `_necunoscute` si indexul `ids` din `analizeaza_ciorna`. Testele:
+`Ran 170 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 960 / 11 / 949; fata de r12 (`CF6C642A...`, head-ul anterior al
+PR-ului, neinstalat) 136 / 8 / 128.
+
+Istoric (r12, fata de acelasi v4.6.4c instalat): 78 linii diferite (6 vechi `<=`, 72 noi `=>`).
 Cele 6 linii vechi sunt toate din v4.6.4c: comentariul `# (tag, clasele EXACTE fara cele generate, ..., goale): acceptat DOAR asa.`,
 cele doua intrari din `MARCAJE_PERMISE` (acum al doilea camp e lista multimilor de clase: `CLASE_DIV_DROP` pe div, `((),)` pe indicator),
 comentariul `# cu clasele (fara cele generate) EXACT cele din lista, ...` din `_marcaj_permis`, linia
@@ -388,7 +424,7 @@ linia `return None   # eticheta unui control recunoscut` din `_motiv_text` (r12:
 Liniile noi: notele v4.6.4d r11 + r12 din antet, comentariile si constanta `CLASE_DIV_DROP` (4 multimi), cele doua intrari, cele doua
 linii din `_marcaj_permis`, nota r11 de la listele albe, butonul "Ecran complet" (cu comentariul lui) in `CONTROALE_CUNOSCUTE`,
 `CONTROALE_TEXT_INCHIS` (cu comentariul ei), functia `_texte_control_inchis`, blocul controlului inchis din `_motiv_text` si cele doua
-linii din `_necunoscute` (contextul inchis nu se inlocuieste). Testele: `Ran 161 tests ... OK`. Informativ, fata de v4.6.3
+linii din `_necunoscute` (contextul inchis nu se inlocuieste). Testele de atunci: `Ran 161 tests ... OK`. Informativ, fata de v4.6.3
 (`BE3B867B...`): 840 / 11 / 829 (aceleasi 11 linii vechi); fata de r11 (`AFA20126...`, head-ul anterior al PR-ului, neinstalat): 51 / 9 / 42.
 
 Istoric (pachetul v4.6.4c = r10, fata de v4.6.4b instalat atunci, `5B0CCD48...`): 24 linii diferite (5 vechi `<=`, 19 noi `=>`).
@@ -411,7 +447,7 @@ rezultatul `(motiv, sursa)`, `necunoscute_surse` si liniile `    sursa` din `sta
 Informativ (r9), fata de v4.6.3 (`BE3B867B...`, nu mai e in `bin`): 760 / 11 / 749 - aceleasi 11 linii vechi ca in r2-r8 (antetul, lista de
 coduri, `import`, comentariul `ATAS`, titlul partii cu browserul, cele doua linii din vechea `_atasamente`, linia `atasamente in ciorna`
 din `stare`, cele trei linii ale vechii verificari din `trimite`); fata de r8 (`C7609E9E...`, head-ul anterior al PR-ului, neinstalat):
-115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r12 840 / 11 / 829, r11 807 / 11 / 796, r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
+115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r13 960 / 11 / 949, r12 840 / 11 / 829, r11 807 / 11 / 796, r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
 r4 536 / 11 / 525, r3 477 / 11 / 466, r2 411 / 11 / 400. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
 raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 78 / 6 din blocul de mai sus). Istoric r11 (fata de v4.6.4c):
 43 / 5 / 38, `Ran 153 tests`.
@@ -594,7 +630,10 @@ STOP, fara marker, copiaza linia `GEM_EROARE` + liniile `necunoscut ...` din `st
     `diag\captura_caseta.py` (din pachetul verificat la pasul 2; nicio actiune pe pagina: fara click, tastatura sau navigare - doar
     citeste clasele div-ului zonei de drop si atributele + continutul butoanelor din caseta) si `stare` (tot doar citire), le salveaza
     in `paw-data\out\captura_caseta_<lungime>_<GemId>.json` / `stare_caseta_<lungime>_<GemId>.txt`, apoi golesti ciorna de mana
-    (Ctrl+A, Delete). Capturile sunt pentru chat: arata ce multimi de clase si ce continut al butonului "Ecran complet" au aparut efectiv.
+    (Ctrl+A, Delete). Capturile sunt pentru chat: arata ce multimi de clase si ce continut al butonului "Ecran complet" au aparut efectiv
+    (r13: si atributele tuturor elementelor casetei + textele descrierilor). **Merge mai departe DOAR la succes explicit (r13):** captura cu
+    cod 0 si ultima linie `CAPTURA_GATA <lungime>`, `stare` cu cod 0, nicio linie `  necunoscut`, exact o linie `paza ciorna:` si aceea
+    = `paza ciorna: OK (trimite ar continua)`. O eroare, o iesire goala sau `paza ciorna: REFUZ ...` = STOP inainte de 5g2-b.
   - **5g2-b, trimiterea:** (1) brief-ul LUNG, (2) brief-ul MEDIU. Aceleasi verificari ca la 5g: cod 0, nicio linie `GEM_EROARE`, ultima
     linie `GEM_CHAT_URL ...`, raspunsul contine `PAW_GEM_TEST_OK`. Pe ecran: chat nou in ACELASI tab, brief-ul intreg in mesajul trimis,
     niciun fisier.
@@ -621,14 +660,22 @@ foreach ($k in $texte.Keys) {
     Read-Host "5g2-a ${k}: lipeste (Ctrl+V) in ciorna Gemini, FARA Enter, apoi Enter aici"
     $ErrorActionPreference = 'Continue'
     $cap = @(& $Python "$Source\diag\captura_caseta.py" $k)
+    $codCap = $LASTEXITCODE
     $st = @(& $Python "$Bin\gemini_pw.py" stare)
+    $codSt = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     $cap | Set-Content -LiteralPath "C:\Users\Public\paw-data\out\captura_caseta_${k}_$GemId.json" -Encoding ASCII
     $st | Set-Content -LiteralPath "C:\Users\Public\paw-data\out\stare_caseta_${k}_$GemId.txt" -Encoding ASCII
-    $st | Where-Object { $_ -match '^(necunoscute in zona|  necunoscut|    sursa|paza ciorna)' }
+    $st | Where-Object { $_ -match '^(necunoscute in zona|  necunoscut|    sursa|paza ciorna|GEM_EROARE)' }
     Read-Host "5g2-a ${k}: goleste ciorna de mana (Ctrl+A, Delete), apoi Enter aici"
-    if ($cap.Count -eq 0 -or $cap[-1] -ne "CAPTURA_GATA $k") { throw "5g2-a ${k}: captura nu s-a terminat (vezi fisierul)" }
+    # r13: succes EXPLICIT, nu doar lipsa erorilor: cod 0 la ambele, captura terminata, `stare` cu EXACT o linie `paza ciorna:` si
+    # aceea = linia de succes, scrisa exact (o iesire goala, o eroare sau `paza ciorna: REFUZ ...` = STOP)
+    if ($codCap -ne 0 -or $cap.Count -eq 0 -or $cap[-1] -cne "CAPTURA_GATA $k") { throw "5g2-a ${k}: captura nu s-a terminat (cod $codCap, vezi fisierul)" }
+    if ($codSt -ne 0) { throw "5g2-a ${k}: stare a iesit cu codul $codSt - STOP, fisierele la chat" }
     if (@($st | Where-Object { $_ -match '^  necunoscut ' }).Count) { throw "5g2-a ${k}: necunoscute in caseta - STOP, capturile la chat" }
+    if (@($st | Where-Object { $_ -clike 'paza ciorna:*' }).Count -ne 1) { throw "5g2-a ${k}: stare nu are exact o linie 'paza ciorna:' - STOP" }
+    if (@($st | Where-Object { $_ -ceq 'paza ciorna: OK (trimite ar continua)' }).Count -ne 1) { throw "5g2-a ${k}: lipseste linia 'paza ciorna: OK (trimite ar continua)' - STOP, capturile la chat" }
+    "5g2-a ${k}: OK"
 }
 Set-Clipboard -Value ' '
 # 5g2-b: trimiterea

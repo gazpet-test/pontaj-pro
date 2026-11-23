@@ -1,4 +1,5 @@
-# Paw v4.6.4d (r12) - captura casetei de compunere Gemini, DOAR CITIRE (RUNBOOK pasul 5g2).
+# Paw v4.6.4d (r12, r13) - captura casetei de compunere Gemini, DOAR CITIRE (RUNBOOK pasul 5g2).
+# r13: + `elemente` (atributele fiecarui element din caseta, fara continutul editorului) si `descrieri` (textul tintelor aria-describedby).
 # Nu face nicio actiune pe pagina: fara click / tastatura / scriere in ciorna / navigare. Operatorul lipeste de mana textul in
 # ciorna (fara Enter), ruleaza scriptul, apoi goleste ciorna de mana. Iesirea (JSON ASCII pe stdout) arata clasele div-ului zonei de
 # drop si atributele + continutul (innerHTML, taiat) fiecarui buton din zona - adica starea pe care paza o vede la `inainte_de_enter`.
@@ -19,6 +20,14 @@ JS = r"""() => {
     div_drop: Array.from(document.querySelectorAll('input-area-v2 [xapfileselectordropzone]')).map(el => ({tag: el.tagName.toLowerCase(), attrs: atr(el)})),
     butoane: Array.from(document.querySelectorAll('input-area-v2 button')).map(el => ({attrs: atr(el), interior: el.innerHTML.slice(0, 3000)})),
     chip_uri: document.querySelectorAll('input-area-v2 uploader-file-preview').length,
+    // r13: atributele TUTUROR elementelor din caseta (fara descendentii editorului = textul ciornei), ca listele inchise ale atributelor cu
+    // text sa se completeze din pagina reala; si textul descrierilor (aria-describedby -> elementul indicat, de obicei containerul CDK)
+    elemente: Array.from(document.querySelectorAll('input-area-v2, input-area-v2 *'))
+      .filter(el => !(ed && ed !== el && ed.contains(el))).map(el => ({tag: el.tagName.toLowerCase(), attrs: atr(el)})),
+    descrieri: Array.from(document.querySelectorAll('input-area-v2 [aria-describedby]')).map(el => ({
+      tag: el.tagName.toLowerCase(), ref: el.getAttribute('aria-describedby').slice(0, 300),
+      texte: el.getAttribute('aria-describedby').split(/\s+/).filter(Boolean).slice(0, 5).map(i => {
+        const t = document.getElementById(i); return t ? (t.textContent || '').slice(0, 300) : null; })})),
   };
 }"""
 
