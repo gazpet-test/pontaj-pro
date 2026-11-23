@@ -498,8 +498,8 @@ describe('runnerul — runda 18 (22.11.2026): plafonul EXTINS, doar cu --plafon-
     expect(VERIF).toContain('esec("--fereastra lipsa, dar mesajul are pasul DO $plafon_fereastra$')
     expect(VERIF).toContain("pg_catalog.transaction_timestamp() AT TIME ZONE 'Europe/Bucharest'")
   })
-  it('cele trei migrari NEAPLICATE cer 15000 + declara --plafon-extins pe prima linie; revenirile raman la 2000 fara declaratie', () => {
-    for (const m of ['20270105a_executie_rest_decontat', '20270105b_executie_proiect_configurare', '20270106a_executie_semnale']) {
+  it('migrarile NEAPLICATE cu plafonul extins (cele trei din runda 18 + 20261224a, PR #1106 r3) cer 15000 + declara --plafon-extins pe prima linie; revenirile raman la 2000 fara declaratie', () => {
+    for (const m of ['20270105a_executie_rest_decontat', '20270105b_executie_proiect_configurare', '20270106a_executie_semnale', '20261224a_executie_revendicari']) {
       const t = citeste(`supabase/migrations/${m}.sql`)
       expect(t.split('\n')[0], m).toContain('--plafon-tranzactie-ms 15000 --plafon-extins --amprenta-globala')
       expect((t.match(/'15000\/session'/g) || []).length, m).toBe(1)
@@ -511,7 +511,7 @@ describe('runnerul — runda 18 (22.11.2026): plafonul EXTINS, doar cu --plafon-
       expect(r, m + ' revenire').not.toContain('--plafon-extins')
     }
     // nicio alta migrare / revenire nu declara optiunea
-    const toate = readdirSync(new URL('../supabase/migrations', import.meta.url)).filter(f => f.endsWith('.sql') && !/^2027010(5a|5b|6a)_/.test(f))
+    const toate = readdirSync(new URL('../supabase/migrations', import.meta.url)).filter(f => f.endsWith('.sql') && !/^(2027010(5a|5b|6a)|20261224a)_/.test(f))
     for (const f of toate) expect(citeste('supabase/migrations/' + f), f).not.toContain('--plafon-extins')
   })
   it('testele: forma (runda 18), biblioteca cu mutanti, PGlite pe textul serverului, in lista locala; documentul descrie decizia si limitele', () => {

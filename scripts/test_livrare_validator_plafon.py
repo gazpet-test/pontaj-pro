@@ -523,8 +523,9 @@ def identitate_r19():
 # valorii. Cazuri minime scrise de mana + cele trei migrari reale care cer 15000 si declara optiunea + toate celelalte fisiere din repo
 # (cu --plafon-extins refuzate: niciunul nu declara optiunea; fara ea neschimbate). Valoarea 15000 nu e cunoscuta validatorului (o impune
 # runnerul); aici conteaza doar acordul declaratiei.
+# (+ 20261224a_executie_revendicari, PR #1106 runda 3: aliniata la plafonul extins, aceeasi forma)
 EXTINS_REALE = ("supabase/migrations/20270105a_executie_rest_decontat.sql", "supabase/migrations/20270105b_executie_proiect_configurare.sql",
-                "supabase/migrations/20270106a_executie_semnale.sql")
+                "supabase/migrations/20270106a_executie_semnale.sql", "supabase/migrations/20261224a_executie_revendicari.sql")
 
 
 def plafon_extins():

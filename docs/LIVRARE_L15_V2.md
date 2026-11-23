@@ -779,7 +779,11 @@ migrare, în aceeași seară cu proba).
   plafonul extins; dacă proba pe clonă arată că 20270105b / 20270106a încap în 5000, revenirea lor la 5000 e o schimbare de un literal + antet
   (PR separat, cu probele lui);
 - revenirile celor trei rămân la 2000, fără amprentă globală și fără declarație (validatorul le refuză cu `--plafon-extins`); migrările deja
-  aplicate și toate celelalte fișiere din repo nu declară opțiunea și sunt refuzate cu ea (testul de compatibilitate).
+  aplicate și toate celelalte fișiere din repo nu declară opțiunea și sunt refuzate cu ea (testul de compatibilitate);
+- a patra migrare neaplicată cu plafonul extins: `20261224a_executie_revendicari` (PR #1106, runda 3, aliniată după runda 19): aceeași formă
+  (`'15000/session'` + marcajul `'15000:'`, declarația pe prima linie, garda `AMPRENTA_GLOBALA_LIPSA`, blocul de lock din șablonul de mai jos
+  pe cele 6 tabele referite de cheile ei străine), lista revizuită `supabase/tests/20261224a_executie_revendicari.l15.obiecte.tsv`; revenirea
+  ei la 2000, fără declarație. Intră în aceleași teste (`EXTINS_REALE` din `scripts/test_livrare_validator_plafon.py`, testul static).
 
 **Ce NU se schimbă:** bugetul de lock (1 s de la prima încercare, `BUGET_LOCK`) și `LOCK_TINUT` (diagnostic, nu gardă) rămân exact ca în runda
 16 — plafonul extins nu dă voie la lock-uri obținute mai greu; dă doar timp calculelor fixe ale amprentei și corpului. **Consecința acceptată:**

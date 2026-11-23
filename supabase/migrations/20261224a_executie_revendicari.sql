@@ -1,10 +1,17 @@
--- Version 20261224120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 2000 (DOAR cu plafon; marcajul gazpet.livrare_migrare legat de txid;
---   amprenta globală L15 v2 a runnerului, --amprenta-globala + --diferente-globale).
--- CE NU E ÎNCĂ PROBAT (L15, runda 2): manifestul diferențelor supabase/migrations/20261224a_executie_revendicari.l15.tsv NU e în acest PR:
---   îl generează coordonatorul pe clonă (docs/LIVRARE_L15_V2.md §7, pașii 3–4), apoi proba cu ROLLBACK pe țintă (pasul 7). Până atunci
---   amprenta globală a livrării e NEPROBATĂ; ce probează migrarea singură sunt postcondițiile §9 pe DEFINIȚIA EXACTĂ a obiectelor ei
---   (expresia normalizată a fiecărei politici, amprenta md5 a corpului fiecărei funcții, funcția / evenimentul / condiția fiecărui trigger,
---   un index pe fiecare cheie străină spre alt tabel), nu și ce se schimbă în restul bazei.
+-- Version 20261224120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 15000 --plafon-extins --amprenta-globala <md5> --diferente-globale
+--   supabase/migrations/20261224a_executie_revendicari.l15.tsv (DOAR cu plafonul EXTINS — decizia proprietarului 22.11.2026, ca 20270105a /
+--   20270106a: pe producție cele două fotografii L15 singure iau ~3 s, iar migrarea creează 9 tabele + 43 de funcții; --plafon-extins cere
+--   fereastra orară 21:00–06:00, docs/LIVRARE_L15_V2.md §9 — ȘI cu amprenta globală L15 v2: fără pasul „înainte” al runnerului în aceeași
+--   tranzacție, migrarea refuză în $pre$ — AMPRENTA_GLOBALA_LIPSA; marcajul gazpet.livrare_migrare legat de txid).
+-- L15 v2 (runda 3): lista OBIECTELOR din manifest e în supabase/tests/20261224a_executie_revendicari.l15.obiecte.tsv, generată pe PGlite cu
+--   pașii reali ai runnerului (scripts/livrare_amprenta_gen.sh) și comparată la fiecare rulare a probei. Manifestul cu amprente
+--   (supabase/migrations/20261224a_executie_revendicari.l15.tsv) NU e în acest PR: îl generează coordonatorul pe clona PG17
+--   (docs/LIVRARE_L15_V2.md §7, pașii 3–4; rândurile = lista de mai sus), apoi proba cu ROLLBACK pe țintă (pasul 7). Pe lângă amprenta
+--   globală, migrarea probează singură postcondițiile §9 pe DEFINIȚIA EXACTĂ a obiectelor ei (expresia normalizată a fiecărei politici,
+--   amprenta md5 a corpului fiecărei funcții, funcția / evenimentul / condiția fiecărui trigger, un index pe fiecare cheie străină spre alt tabel).
+-- Regula porților Izometrie (docs/izometrie/PORTI_REGULA.md, runda 3): tot DDL-ul e scris STATIC, cu numele obiectelor (fără format('%I')
+--   în bucle), deci migrarea nu atinge perimetrul porților; singurul SQL dinamic rămas sunt cele trei CHECK-uri ale stărilor, pe tabele
+--   numite, cu listele construite din funcțiile tranzițiilor (§3).
 -- 20261224a_executie_revendicari — Execuție → dosarul de revendicare (pașii 1–2 din consultarea de arhitectură, 15.11.2026). Specificația:
 --   docs/executie/REVENDICARI_SPEC.md (fluxul, matricea de acces, declanșatorii, cazurile de calcul, alegerile owner-ului presupuse).
 --
@@ -61,13 +68,20 @@ BEGIN
   END IF;
   IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION '20261224a: cere PostgreSQL 17 (plafonul tranzactiei)'; END IF;
   SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
-  IF v_plafon IS DISTINCT FROM '2000/session'
-     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '2000:' || txid_current() THEN
-    RAISE EXCEPTION '20261224a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 2000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 2000)',
+  IF v_plafon IS DISTINCT FROM '15000/session'
+     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '15000:' || txid_current() THEN
+    RAISE EXCEPTION '20261224a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 15000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 15000 --plafon-extins)',
       coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa');
   END IF;
-  -- FK-urile noi iau SHARE ROW EXCLUSIVE pe 6 tabele existente (proiecte, repere, documente, ordine, rapoarte, profiles): ocupat = refuz rapid (se reia), nu coadă în spatele aplicației
-  PERFORM set_config('lock_timeout', '300ms', true);
+  -- L15 v2: pasul „înainte” al runnerului a rulat în ACEASTĂ tranzacție (tabela lui temporară, creată de tranzacția curentă și blocată de ea)
+  IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = pg_my_temp_schema() AND c.relkind = 'r' AND c.relname ~ '^ag_ina_[0-9a-f]{16}$'
+                    AND c.xmin::text = (txid_current() % 4294967296)::text
+                    AND (SELECT count(*) FROM pg_locks l WHERE l.relation = c.oid AND l.pid = pg_backend_pid() AND l.granted) > 0) THEN
+    RAISE EXCEPTION '20261224a: AMPRENTA_GLOBALA_LIPSA: livrarea cere amprenta globala L15 v2 a runnerului (--amprenta-globala + --diferente-globale); nimic schimbat';
+  END IF;
+  -- lock-urile IMPLICITE de după setul blocului $lock$ (FK-urile la CREATE TABLE pe aceleași 6 tabele, deja ținute; citiri de catalog):
+  -- fiecare așteptare limitată la 100 ms (apoi eroare, nimic comis), nu coadă în spatele aplicației
+  PERFORM set_config('lock_timeout', '100ms', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- reaplicare = refuz
   IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -118,6 +132,47 @@ BEGIN
     RAISE EXCEPTION '20261224a: restrictia pe proiect (20261209a) difera de cea revizuita';
   END IF;
 END $pre$;
+
+-- ── punctul UNIC de blocare la aplicare (L06; docs/LIVRARE_L15_V2.md §9, „Bugetul de lock”), după verificările de catalog. Setul = tabelele
+-- EXISTENTE referite de cheile străine noi, SHARE ROW EXCLUSIVE (modul pe care îl ia oricum CREATE TABLE … REFERENCES; oprește scrierile în
+-- ele, nu citirile), ordinea FIXĂ: executie_proiecte -> executie_contract_repere -> documente_proiect -> executie_ordine_sistare ->
+-- rapoarte_zilnice -> profiles. Bugetul = 1 s cu ceasul pornit IMEDIAT ÎNAINTEA PRIMEI ÎNCERCĂRI (v_t0), verificat ÎNAINTE de fiecare
+-- încercare și DUPĂ obținerea setului complet; fiecare încercare = subtranzacție (eșecul unui lock eliberează lock-urile luate deja în ea,
+-- înaintea pauzei). Inventarul lock-urilor IMPLICITE de după set: FK-urile la CREATE TABLE (aceleași 6 tabele, deja ținute la fel de tare),
+-- trigger-ele / politicile / indexurile / vederile pe tabelele NOI (create în tranzacție) și citirile de catalog din postcondiții; funcțiile
+-- create nu rulează la aplicare. Momentul obținerii (gazpet.lock_puternic_la, µs de la epoch) îl citește garda finală a runnerului (LOCK_TINUT).
+-- profiles și documente_proiect sunt folosite de toată aplicația: aplicarea se face în fereastra plafonului extins (21:00–06:00).
+DO $lock$
+DECLARE v_incercari integer := 0; v_t0 timestamptz := clock_timestamp(); v_buget constant interval := interval '1 second';
+BEGIN
+  LOOP
+    IF clock_timestamp() >= v_t0 + v_buget THEN
+      RAISE EXCEPTION '20261224a: BUGET_LOCK: % incercari, % ms de la prima incercare (bugetul lock-urilor e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
+        v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), round(extract(epoch FROM clock_timestamp() - now()) * 1000)
+        USING ERRCODE = '55P03';
+    END IF;
+    v_incercari := v_incercari + 1;
+    BEGIN
+      LOCK TABLE public.executie_proiecte IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.executie_contract_repere IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.documente_proiect IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.executie_ordine_sistare IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.rapoarte_zilnice IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.profiles IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      PERFORM pg_sleep(0.05);
+    END;
+  END LOOP;
+  IF clock_timestamp() >= v_t0 + v_buget THEN
+    RAISE EXCEPTION '20261224a: BUGET_LOCK: lock-urile obtinute abia la % ms de la prima incercare (% incercari; bugetul e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
+      round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000)
+      USING ERRCODE = '55P03';
+  END IF;
+  PERFORM set_config('gazpet.lock_puternic_la', round(extract(epoch FROM clock_timestamp()) * 1000000)::bigint::text, true);
+  RAISE NOTICE '20261224a: lock la % ms de la BEGIN (% incercari, % ms de la prima incercare)', round(extract(epoch FROM clock_timestamp() - now()) * 1000),
+    v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+END $lock$;
 
 -- ── 0. funcții fără tabele: ziua din România, numărul canonic, stările, tranzițiile ──────────────────────────────────────────────────────
 -- ziua calendaristică a unui moment, în Europe/Bucharest (cu ora de vară / iarnă); NULL = NULL. L17: nu CURRENT_DATE (UTC pe server).
@@ -929,15 +984,32 @@ BEGIN
   RAISE EXCEPTION 'revendicari: jurnalul nu se modifica si nu se sterge' USING ERRCODE = '42501';
 END $f$;
 
-DO $trg$
-DECLARE t text;
-BEGIN
-  FOREACH t IN ARRAY ARRAY['executie_revendicari', 'executie_revendicare_repere', 'executie_revendicare_acte', 'executie_revendicare_comunicari',
-                           'executie_revendicare_termene', 'executie_revendicare_dovezi'] LOOP
-    EXECUTE format('CREATE TRIGGER trg_a_executie_revendicare_prov BEFORE INSERT OR UPDATE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_prov()', t);
-    EXECUTE format('CREATE TRIGGER trg_z_executie_revendicare_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_jurnal_scrie()', t);
-  END LOOP;
-END $trg$;
+-- proveniența (BEFORE, „a” = primul) și jurnalul (AFTER, „z” = ultimul) pe cele 6 tabele scrise de RPC-uri; scrise STATIC, cu numele tabelului
+-- (regula porților Izometrie: fără ținte dinamice). Lista exactă o verifică postcondiția trigger-elor (§9).
+CREATE TRIGGER trg_a_executie_revendicare_prov BEFORE INSERT OR UPDATE ON public.executie_revendicari
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_prov();
+CREATE TRIGGER trg_z_executie_revendicare_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.executie_revendicari
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_jurnal_scrie();
+CREATE TRIGGER trg_a_executie_revendicare_prov BEFORE INSERT OR UPDATE ON public.executie_revendicare_repere
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_prov();
+CREATE TRIGGER trg_z_executie_revendicare_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.executie_revendicare_repere
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_jurnal_scrie();
+CREATE TRIGGER trg_a_executie_revendicare_prov BEFORE INSERT OR UPDATE ON public.executie_revendicare_acte
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_prov();
+CREATE TRIGGER trg_z_executie_revendicare_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.executie_revendicare_acte
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_jurnal_scrie();
+CREATE TRIGGER trg_a_executie_revendicare_prov BEFORE INSERT OR UPDATE ON public.executie_revendicare_comunicari
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_prov();
+CREATE TRIGGER trg_z_executie_revendicare_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.executie_revendicare_comunicari
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_jurnal_scrie();
+CREATE TRIGGER trg_a_executie_revendicare_prov BEFORE INSERT OR UPDATE ON public.executie_revendicare_termene
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_prov();
+CREATE TRIGGER trg_z_executie_revendicare_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.executie_revendicare_termene
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_jurnal_scrie();
+CREATE TRIGGER trg_a_executie_revendicare_prov BEFORE INSERT OR UPDATE ON public.executie_revendicare_dovezi
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_prov();
+CREATE TRIGGER trg_z_executie_revendicare_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.executie_revendicare_dovezi
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_jurnal_scrie();
 CREATE TRIGGER trg_b_executie_revendicare_termen_calc BEFORE INSERT OR UPDATE ON public.executie_revendicare_termene
   FOR EACH ROW EXECUTE FUNCTION public.fn_executie_revendicare_termen_calc();
 CREATE TRIGGER trg_executie_revendicare_jurnal_imuabil BEFORE UPDATE OR DELETE ON public.executie_revendicare_jurnal
@@ -1577,38 +1649,74 @@ SELECT a.*, public.fn_executie_revendicare_act_transmis_la(a.id) AS transmis_la,
   FROM public.executie_revendicare_acte a;
 
 -- ── 8. RLS + privilegii (L07): doar citire pentru aplicație, prin predicatul unic; scrierea DOAR prin RPC-uri ──────────────────────────────
-DO $rls$
-DECLARE t text;
-BEGIN
-  FOREACH t IN ARRAY ARRAY['executie_revendicari', 'executie_revendicare_repere', 'executie_revendicare_acte', 'executie_revendicare_comunicari',
-                           'executie_revendicare_termene', 'executie_revendicare_dovezi', 'executie_revendicare_jurnal', 'executie_revendicare_alerte',
-                           'executie_revendicare_chei'] LOOP
-    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
-    EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC, anon, authenticated, service_role', t);
-    IF t <> 'executie_revendicare_chei' THEN
-      EXECUTE format('GRANT SELECT ON public.%I TO authenticated, service_role', t);
-      EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM PUBLIC, anon, authenticated, service_role', t || '_id_seq');
-    END IF;
-    IF t NOT IN ('executie_revendicare_chei', 'executie_revendicare_alerte') THEN
-      EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (public.fn_executie_revendicare_drept(proiect_id, ''citire''))', t || '_citire', t);
-    END IF;
-  END LOOP;
-END $rls$;
+-- Scris STATIC, cu numele fiecărui obiect (regula porților Izometrie: fără ținte dinamice). Postcondițiile §9 verifică exact rezultatul.
+ALTER TABLE public.executie_revendicari ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.executie_revendicare_repere ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.executie_revendicare_acte ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.executie_revendicare_comunicari ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.executie_revendicare_termene ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.executie_revendicare_dovezi ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.executie_revendicare_jurnal ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.executie_revendicare_alerte ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.executie_revendicare_chei ENABLE ROW LEVEL SECURITY;
+-- totul revocat (Supabase dă implicit drepturi depline rolurilor aplicației), apoi DOAR citirea; cheile: nimic pentru nimeni
+REVOKE ALL ON TABLE public.executie_revendicari, public.executie_revendicare_repere, public.executie_revendicare_acte,
+  public.executie_revendicare_comunicari, public.executie_revendicare_termene, public.executie_revendicare_dovezi, public.executie_revendicare_jurnal,
+  public.executie_revendicare_alerte, public.executie_revendicare_chei FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON TABLE public.executie_revendicari, public.executie_revendicare_repere, public.executie_revendicare_acte,
+  public.executie_revendicare_comunicari, public.executie_revendicare_termene, public.executie_revendicare_dovezi, public.executie_revendicare_jurnal,
+  public.executie_revendicare_alerte TO authenticated, service_role;
+REVOKE ALL ON SEQUENCE public.executie_revendicari_id_seq, public.executie_revendicare_repere_id_seq, public.executie_revendicare_acte_id_seq,
+  public.executie_revendicare_comunicari_id_seq, public.executie_revendicare_termene_id_seq, public.executie_revendicare_dovezi_id_seq,
+  public.executie_revendicare_jurnal_id_seq, public.executie_revendicare_alerte_id_seq FROM PUBLIC, anon, authenticated, service_role;
+-- citirea: predicatul unic (L19), pe 7 tabele; cheile fără politică (fără drepturi), alertele cu politica lor (mai jos)
+CREATE POLICY executie_revendicari_citire ON public.executie_revendicari FOR SELECT TO authenticated
+  USING (public.fn_executie_revendicare_drept(proiect_id, 'citire'));
+CREATE POLICY executie_revendicare_repere_citire ON public.executie_revendicare_repere FOR SELECT TO authenticated
+  USING (public.fn_executie_revendicare_drept(proiect_id, 'citire'));
+CREATE POLICY executie_revendicare_acte_citire ON public.executie_revendicare_acte FOR SELECT TO authenticated
+  USING (public.fn_executie_revendicare_drept(proiect_id, 'citire'));
+CREATE POLICY executie_revendicare_comunicari_citire ON public.executie_revendicare_comunicari FOR SELECT TO authenticated
+  USING (public.fn_executie_revendicare_drept(proiect_id, 'citire'));
+CREATE POLICY executie_revendicare_termene_citire ON public.executie_revendicare_termene FOR SELECT TO authenticated
+  USING (public.fn_executie_revendicare_drept(proiect_id, 'citire'));
+CREATE POLICY executie_revendicare_dovezi_citire ON public.executie_revendicare_dovezi FOR SELECT TO authenticated
+  USING (public.fn_executie_revendicare_drept(proiect_id, 'citire'));
+CREATE POLICY executie_revendicare_jurnal_citire ON public.executie_revendicare_jurnal FOR SELECT TO authenticated
+  USING (public.fn_executie_revendicare_drept(proiect_id, 'citire'));
 -- alertele: doar destinatarul (cât mai are acces la proiect) sau administrarea proiectului
 CREATE POLICY executie_revendicare_alerte_citire ON public.executie_revendicare_alerte FOR SELECT TO authenticated
   USING (public.fn_executie_revendicare_drept(proiect_id, 'citire')
          AND (destinatar = auth.uid() OR public.fn_executie_revendicare_drept(proiect_id, 'administrare')));
 REVOKE ALL ON public.v_executie_revendicare_termene, public.v_executie_revendicare_acte FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON public.v_executie_revendicare_termene, public.v_executie_revendicare_acte TO authenticated, service_role;
--- funcțiile: totul revocat (Supabase dă implicit EXECUTE la anon / authenticated / service_role), apoi DOAR ce cheamă clientul / RLS / vederile
-DO $fn$
-DECLARE r record;
-BEGIN
-  FOR r IN SELECT p.oid::regprocedure AS sem FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-            WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_revendicare\_%' LOOP
-    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated, service_role', r.sem);
-  END LOOP;
-END $fn$;
+-- funcțiile: totul revocat (Supabase dă implicit EXECUTE la anon / authenticated / service_role), apoi DOAR ce cheamă clientul / RLS / vederile.
+-- Lista STATICĂ a celor 43 de funcții (regula porților Izometrie); o funcție omisă de aici păstrează EXECUTE implicit și e refuzată de
+-- postcondiția funcțiilor (§9: nimic pentru anon / service_role, authenticated doar pe clasele definer / client).
+REVOKE ALL ON FUNCTION
+  public.fn_executie_revendicare_zi(timestamptz), public.fn_executie_revendicare_azi(), public.fn_executie_revendicare_nr_canonic(text),
+  public.fn_executie_revendicare_termen_stare(text, text, boolean, date, date, date, date),
+  public.fn_executie_revendicare_tranzitii(), public.fn_executie_revendicare_act_tranzitii(), public.fn_executie_revendicare_obligatie_acte(),
+  public.fn_executie_revendicare_drept(bigint, text),
+  public.fn_executie_revendicare_act_amprenta(public.executie_revendicare_acte),
+  public.fn_executie_revendicare_act_transmis_la(bigint), public.fn_executie_revendicare_act_primit_la(bigint),
+  public.fn_executie_revendicare_indeplinire_la(text, bigint, bigint), public.fn_executie_revendicare_reper_amprenta(bigint),
+  public.fn_executie_revendicare_legatura_valida(bigint), public.fn_executie_revendicare_surse_amprenta(bigint),
+  public.fn_executie_revendicare_surse_valide(bigint), public.fn_executie_revendicare_act_aprobare_valida(public.executie_revendicare_acte),
+  public.fn_executie_revendicare_declansator_data(bigint), public.fn_executie_revendicare_termen_intrari_locale(bigint),
+  public.fn_executie_revendicare_termen_lant_valid(bigint), public.fn_executie_revendicare_termen_intrari_valide(bigint),
+  public.fn_executie_revendicare_valideaza(jsonb, jsonb), public.fn_executie_revendicare_txt(jsonb, text),
+  public.fn_executie_revendicare_cheie_blocheaza(uuid), public.fn_executie_revendicare_rand(text, bigint),
+  public.fn_executie_revendicare_cheie_citeste(uuid, text, text), public.fn_executie_revendicare_cheie_scrie(uuid, text, text, bigint, text, bigint),
+  public.fn_executie_revendicare_dosar_blocheaza(bigint, text), public.fn_executie_revendicare_tinta(text, bigint, bigint),
+  public.fn_executie_revendicare_prov(), public.fn_executie_revendicare_termen_calc(), public.fn_executie_revendicare_jurnal_scrie(),
+  public.fn_executie_revendicare_jurnal_imuabil(),
+  public.fn_executie_revendicare_salveaza_dosar(bigint, bigint, integer, jsonb, uuid), public.fn_executie_revendicare_etapa(bigint, integer, text, text, uuid),
+  public.fn_executie_revendicare_risc(bigint, integer, text, text, uuid), public.fn_executie_revendicare_reper(bigint, text, bigint, integer, jsonb, uuid),
+  public.fn_executie_revendicare_act(bigint, bigint, integer, jsonb, uuid), public.fn_executie_revendicare_act_stare(bigint, integer, text, jsonb, uuid),
+  public.fn_executie_revendicare_comunicare(bigint, bigint, integer, jsonb, uuid), public.fn_executie_revendicare_termen(bigint, bigint, integer, jsonb, uuid),
+  public.fn_executie_revendicare_termen_confirma(bigint, integer, text, jsonb, uuid), public.fn_executie_revendicare_dovada(bigint, bigint, integer, jsonb, uuid)
+  FROM PUBLIC, anon, authenticated, service_role;
 -- DEFINER, chemate de client / de RLS
 GRANT EXECUTE ON FUNCTION public.fn_executie_revendicare_drept(bigint, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_executie_revendicare_salveaza_dosar(bigint, bigint, integer, jsonb, uuid) TO authenticated;
@@ -1814,4 +1922,7 @@ BEGIN
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261224a_executie_revendicari:' || txid_current() THEN
     RAISE EXCEPTION '20261224a: garda final invalida';
   END IF;
+  RAISE NOTICE '20261224a: sfarsit la % ms de la BEGIN; lock-uri puternice tinute de % ms (pana la COMMIT se adauga pasul dupa al runnerului si garda: LOCK_TINUT)',
+    round(extract(epoch FROM clock_timestamp() - now()) * 1000),
+    round(extract(epoch FROM clock_timestamp()) * 1000 - current_setting('gazpet.lock_puternic_la')::numeric / 1000);
 END $post$;

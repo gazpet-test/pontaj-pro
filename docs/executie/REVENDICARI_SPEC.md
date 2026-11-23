@@ -253,7 +253,8 @@ nu șterge depășirea: termenul apare „indeplinit_tardiv”.
 - **Jurnal** (`executie_revendicare_jurnal`): un rând pentru fiecare INSERT / UPDATE / DELETE pe tabelele dosarului (trigger AFTER, în
   aceeași tranzacție, pe orice cale), cu rândul înainte / după, autorul (`auth.uid()`) și tranzacția. UPDATE / DELETE / TRUNCATE pe jurnal
   = refuz, inclusiv pentru proprietarul tabelelor. **Limită:** nu e imuabilitate față de administratorul bazei — el poate dezactiva
-  trigger-ele (scriptul de concurență chiar face asta, în tranzacția de curățenie a datelor sintetice de pe clonă).
+  trigger-ele (scriptul de concurență din runda 2 chiar făcea asta, la curățenia de pe clonă; cel din runda 3 lucrează pe o bază de unică
+  folosință, ștearsă întreagă la final, deci nu mai atinge trigger-ele).
 - **Confidențialitatea fișierelor:** RLS-ul dosarului protejează rândurile dosarului, nu fișierele legate. Documentele (`documente_proiect`
   și bucketurile lor) rămân protejate DOAR de politicile modulului lor; cine le vede acolo le vede și fără dosar. Exemplarul semnat în
   Storage cu politica dosarului vine la pasul 5.
@@ -264,7 +265,7 @@ nu șterge depășirea: termenul apare „indeplinit_tardiv”.
   nu consumă cheia. Cheile stau durabil în `executie_revendicare_chei` (fără drepturi pentru aplicație).
 - **Ordinea lock-urilor** (L06), aceeași în toate RPC-urile: (1) lock consultativ pe cheie → (2) dosarul `FOR UPDATE` (dreptul verificat
   înainte ȘI reverificat după lock, L01: o desemnare / permisiune retrasă cât apelul aștepta = refuz 42501; proba: K4 din
-  `scripts/executie_revendicari_concurenta.sh`, pe clonă) → (3) rândul-copil
+  `supabase/tests/20261224a_executie_revendicari_concurenta.sh`, pe un cluster PG17 dispensabil, cu mutantul `fara_reverificare`) → (3) rândul-copil
   `FOR UPDATE` (act, apoi comunicare / termen / legătură / dovadă) → (4) la final, rândurile ALTOR module (reper, document, ordin, raport,
   șantier) `FOR SHARE NOWAIT` (ocupat = 55P03, nimic scris) → (5) scrierea + jurnalul + cheia. Revenirea: aceleași tabele, în aceeași
   ordine, `ACCESS EXCLUSIVE NOWAIT`.
@@ -294,8 +295,14 @@ nu șterge depășirea: termenul apare „indeplinit_tardiv”.
 - Legătura FK spre `documente_proiect`, `executie_ordine_sistare`, `rapoarte_zilnice`: un rând folosit O DATĂ ca dovadă / exemplar semnat
   / dovadă a comunicării nu mai poate fi șters NICIODATĂ din modulul lui (alegerea 7, §5). Efect asupra altor module, de aprobat; mesajul
   de eroare din tabul Documente va fi cel brut al cheii străine până la ecran.
-- Livrarea: manifestul L15 v2 (`20261224a_executie_revendicari.l15.tsv`) îl generează coordonatorul pe clonă; până atunci amprenta
-  globală e neprobată (antetul migrării spune ce probează postcondițiile și ce nu).
+- Livrarea (runda 3): cu plafonul EXTINS (`--plafon-tranzactie-ms 15000 --plafon-extins`, fereastra 21:00–06:00, docs/LIVRARE_L15_V2.md
+  §7 / §9) și amprenta globală L15 v2; blocul unic de lock (6 tabele referite, SHARE ROW EXCLUSIVE NOWAIT, bugetul de 1 s de la prima
+  încercare). Lista obiectelor din manifest e în repo (`supabase/tests/20261224a_executie_revendicari.l15.obiecte.tsv`, 646 de obiecte:
+  cele noi + câte 2 trigger-e interne pe tabelele referite pentru fiecare din cele 15 chei străine spre ele), generată pe PGlite cu pașii
+  reali ai runnerului; manifestul cu amprente (`20261224a_executie_revendicari.l15.tsv`) îl generează coordonatorul pe clona PG17, apoi
+  proba cu ROLLBACK pe țintă. Revenirea: plafonul 2000, fără amprentă globală (varianta A din §9 a documentului de livrare).
+- Regula porților Izometrie (docs/izometrie/PORTI_REGULA.md): migrarea și revenirea scriu tot DDL-ul static (cu numele obiectelor), deci
+  nu ating perimetrul porților și trec verificarea CI fără ritualul PRE / ștampile / POST.
 
 ## 8. Necunoscute
 

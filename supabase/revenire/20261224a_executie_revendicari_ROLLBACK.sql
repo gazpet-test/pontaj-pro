@@ -3,8 +3,10 @@
 -- v_executie_revendicare_* și cele 43 de funcții fn_executie_revendicare_* (runda 2: +7, lanțul termenelor, îndeplinirea, sursele aprobate).
 -- REFUZĂ dacă oricare tabel are rânduri (dosare, jurnal, chei, alerte...): nimic din dosarele de revendicare nu se șterge de aici. Golirea e o
 -- decizie separată (preview -> „da” owner -> apply, cu export înainte).
--- Gestionarul tranzacției e runnerul (livrare_migrare.sh --plafon-tranzactie-ms 2000, același ca la migrare) sau operatorul. Un singur string:
---   SET transaction_timeout = 2000; BEGIN ISOLATION LEVEL READ COMMITTED;
+-- Gestionarul tranzacției e runnerul (livrare_migrare.sh --plafon-tranzactie-ms 2000, FĂRĂ amprentă globală și fără plafonul extins: varianta A
+-- din docs/LIVRARE_L15_V2.md §9 pentru reveniri; migrarea se livrează cu plafonul extins 15000 + L15 v2) sau operatorul. Un singur string
+-- (plafonul de 2000 ms al tranzacției îl pune runnerul pe sesiune, ÎNAINTE de BEGIN):
+--   BEGIN ISOLATION LEVEL READ COMMITTED;
 --   SELECT set_config('gazpet.livrare_migrare', '20261224a_executie_revendicari_ROLLBACK:' || txid_current(), true);
 --   SELECT set_config('gazpet.plafon_tranzactie', '2000:' || txid_current(), true);
 --   <conținutul exact al fișierului>
@@ -13,12 +15,14 @@
 -- verificării „gol” (un RPC concurent nu poate scrie un rând numărat 0 și apoi pierdut la DROP; un tabel ocupat = refuz imediat, fără
 -- așteptare, deci fără ciclu). Nu se ia niciun advisory.
 -- Un SINGUR bloc DO: un refuz e singura instrucțiune care eșuează (nimic nu rulează după el).
+-- Regula porților Izometrie (docs/izometrie/PORTI_REGULA.md, runda 3): fără SQL dinamic — lock-urile, verificarea „gol” și scoaterea sunt
+-- scrise STATIC, cu numele fiecărui obiect (lista funcțiilor = cele 43 ale migrării, numărate mai jos înainte de orice schimbare).
 DO $revenire$
 DECLARE
   v_tab constant text[] := ARRAY['executie_revendicari', 'executie_revendicare_repere', 'executie_revendicare_acte', 'executie_revendicare_comunicari',
                                  'executie_revendicare_termene', 'executie_revendicare_dovezi', 'executie_revendicare_alerte', 'executie_revendicare_jurnal',
                                  'executie_revendicare_chei'];
-  t text; r record; v_plafon text;
+  t text; v_plafon text;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
      OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261224a_executie_revendicari_ROLLBACK:' || txid_current() THEN
@@ -63,13 +67,20 @@ BEGIN
                  AND coalesce(qual, '') || coalesce(with_check, '') LIKE '%fn\_executie\_revendicare\_%') THEN
     RAISE EXCEPTION '20261224a revenire: alte obiecte depind de tabele / vederi / functii';
   END IF;
-  FOREACH t IN ARRAY v_tab LOOP
-    EXECUTE format('LOCK TABLE public.%I IN ACCESS EXCLUSIVE MODE NOWAIT', t);
-  END LOOP;
-  FOREACH t IN ARRAY v_tab LOOP
-    EXECUTE format('SELECT EXISTS (SELECT 1 FROM public.%I)', t) INTO r;
-    IF (r.exists) THEN RAISE EXCEPTION '20261224a revenire: tabelul % are randuri — decizie separata inainte', t; END IF;
-  END LOOP;
+  -- ordinea = v_tab (dosarele, copiii, alertele, jurnalul, cheile), un singur LOCK: tabelele se blochează în ordinea listei
+  LOCK TABLE public.executie_revendicari, public.executie_revendicare_repere, public.executie_revendicare_acte, public.executie_revendicare_comunicari,
+    public.executie_revendicare_termene, public.executie_revendicare_dovezi, public.executie_revendicare_alerte, public.executie_revendicare_jurnal,
+    public.executie_revendicare_chei IN ACCESS EXCLUSIVE MODE NOWAIT;
+  SELECT CASE WHEN EXISTS (SELECT 1 FROM public.executie_revendicari) THEN 'executie_revendicari'
+              WHEN EXISTS (SELECT 1 FROM public.executie_revendicare_repere) THEN 'executie_revendicare_repere'
+              WHEN EXISTS (SELECT 1 FROM public.executie_revendicare_acte) THEN 'executie_revendicare_acte'
+              WHEN EXISTS (SELECT 1 FROM public.executie_revendicare_comunicari) THEN 'executie_revendicare_comunicari'
+              WHEN EXISTS (SELECT 1 FROM public.executie_revendicare_termene) THEN 'executie_revendicare_termene'
+              WHEN EXISTS (SELECT 1 FROM public.executie_revendicare_dovezi) THEN 'executie_revendicare_dovezi'
+              WHEN EXISTS (SELECT 1 FROM public.executie_revendicare_alerte) THEN 'executie_revendicare_alerte'
+              WHEN EXISTS (SELECT 1 FROM public.executie_revendicare_jurnal) THEN 'executie_revendicare_jurnal'
+              WHEN EXISTS (SELECT 1 FROM public.executie_revendicare_chei) THEN 'executie_revendicare_chei' END INTO t;
+  IF t IS NOT NULL THEN RAISE EXCEPTION '20261224a revenire: tabelul % are randuri — decizie separata inainte', t; END IF;
   -- scoaterea (fără CASCADE): vederile, funcțiile care au în semnătură tipul unui rând (argument / rezultat), tabelele (copiii întâi),
   -- apoi restul funcțiilor
   DROP VIEW public.v_executie_revendicare_termene;
@@ -86,10 +97,28 @@ BEGIN
   DROP TABLE public.executie_revendicare_acte;
   DROP TABLE public.executie_revendicare_repere;
   DROP TABLE public.executie_revendicari;
-  FOR r IN SELECT p.oid::regprocedure AS sem FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-            WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_revendicare\_%' ORDER BY p.proname LOOP
-    EXECUTE format('DROP FUNCTION %s', r.sem);
-  END LOOP;
+  -- restul celor 43 (40), cu semnătura exactă; o funcție în plus cu același prefix a refuzat deja numărătoarea de mai sus
+  DROP FUNCTION public.fn_executie_revendicare_zi(timestamptz), public.fn_executie_revendicare_azi(), public.fn_executie_revendicare_nr_canonic(text),
+    public.fn_executie_revendicare_termen_stare(text, text, boolean, date, date, date, date),
+    public.fn_executie_revendicare_tranzitii(), public.fn_executie_revendicare_act_tranzitii(), public.fn_executie_revendicare_obligatie_acte(),
+    public.fn_executie_revendicare_drept(bigint, text),
+    public.fn_executie_revendicare_act_transmis_la(bigint), public.fn_executie_revendicare_act_primit_la(bigint),
+    public.fn_executie_revendicare_indeplinire_la(text, bigint, bigint), public.fn_executie_revendicare_reper_amprenta(bigint),
+    public.fn_executie_revendicare_legatura_valida(bigint), public.fn_executie_revendicare_surse_amprenta(bigint),
+    public.fn_executie_revendicare_surse_valide(bigint),
+    public.fn_executie_revendicare_declansator_data(bigint), public.fn_executie_revendicare_termen_intrari_locale(bigint),
+    public.fn_executie_revendicare_termen_lant_valid(bigint), public.fn_executie_revendicare_termen_intrari_valide(bigint),
+    public.fn_executie_revendicare_valideaza(jsonb, jsonb), public.fn_executie_revendicare_txt(jsonb, text),
+    public.fn_executie_revendicare_cheie_blocheaza(uuid), public.fn_executie_revendicare_rand(text, bigint),
+    public.fn_executie_revendicare_cheie_citeste(uuid, text, text), public.fn_executie_revendicare_cheie_scrie(uuid, text, text, bigint, text, bigint),
+    public.fn_executie_revendicare_tinta(text, bigint, bigint),
+    public.fn_executie_revendicare_prov(), public.fn_executie_revendicare_termen_calc(), public.fn_executie_revendicare_jurnal_scrie(),
+    public.fn_executie_revendicare_jurnal_imuabil(),
+    public.fn_executie_revendicare_salveaza_dosar(bigint, bigint, integer, jsonb, uuid), public.fn_executie_revendicare_etapa(bigint, integer, text, text, uuid),
+    public.fn_executie_revendicare_risc(bigint, integer, text, text, uuid), public.fn_executie_revendicare_reper(bigint, text, bigint, integer, jsonb, uuid),
+    public.fn_executie_revendicare_act(bigint, bigint, integer, jsonb, uuid), public.fn_executie_revendicare_act_stare(bigint, integer, text, jsonb, uuid),
+    public.fn_executie_revendicare_comunicare(bigint, bigint, integer, jsonb, uuid), public.fn_executie_revendicare_termen(bigint, bigint, integer, jsonb, uuid),
+    public.fn_executie_revendicare_termen_confirma(bigint, integer, text, jsonb, uuid), public.fn_executie_revendicare_dovada(bigint, bigint, integer, jsonb, uuid);
   -- postcondiție
   IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
               WHERE n.nspname = 'public' AND (c.relname ~ '^executie_revendicar' OR c.relname ~ '^v_executie_revendicar'))
