@@ -44,6 +44,8 @@ vi.mock('./ExecutieGrafic.jsx', marcaj('grafic'))
 vi.mock('./DevizVsExecutatTab.jsx', marcaj('deviz'))
 vi.mock('./ContractProiectTab.jsx', marcaj('contract'))
 vi.mock('./ExecutieSemnale.jsx', marcaj('semnale', { SemnaleOwnerPanel: () => null }))
+// tab-ul „Rest de decontat” e marcaj; dreptul (src/restDecontat/dreptRestDecontat.js) rămâne REAL: fila apare doar după răspunsul RPC-ului
+vi.mock('./restDecontat/RestDecontatTab.jsx', marcaj('rest_decontat'))
 vi.mock('./TabSituatiiPlata.jsx', marcaj('situatii_plata'))
 vi.mock('./TabDocumenteNAS.jsx', marcaj('documente'))
 vi.mock('./CereriInterneProiect.jsx', marcaj('cereri'))
@@ -103,8 +105,9 @@ function SondaUrl() { const l = useLocation(); return <div id="url">{l.pathname 
 let curata = []
 afterEach(() => { [...curata].reverse().forEach(f => f()); curata = []; vi.restoreAllMocks() })
 
-async function monteaza(adresa) {
+async function monteaza(adresa, { rpc = null } = {}) {
   fals.cur = clientFals()
+  if (rpc) fals.cur.rpc = rpc
   const j = new JSDOM('<!doctype html><div id="r"></div>', { pretendToBeVisual: true })
   const vechi = { window: globalThis.window, document: globalThis.document }
   Object.assign(globalThis, { window: j.window, document: j.window.document })
@@ -170,5 +173,32 @@ dom(numeDom('Execuție — navigarea între file și sub-file (jsdom + react-dom
     const w = await monteaza('/executie?proiect=1&tab=nod')                   // link direct de pe telefon
     expect(w.ecrane()).toEqual(['nod'])
     expect(w.subFilaActiva()).toBe('🔩 Nod cuplare')
+  })
+
+  it('„💰 Rest de decontat”: fila apare DOAR când fn_rest_decontat_drept(proiect, citire) e adevărat (RPC, nu rolul); eroarea RPC-ului nu devine „fără drept”', async () => {
+    const TITLU = 'Ofertă + acte − situații confirmate · pe articol, obiect, proiect · Excel (owner, MP, acces „Rest de decontat”)'
+    const are = u => u.d.querySelectorAll('button').length > 0 && [...u.d.querySelectorAll('button')].some(b => b.getAttribute('title') === TITLU)
+    const cereri = []
+    const drept = citire => async (fn, a) => { cereri.push([fn, a]); return fn === 'fn_rest_decontat_drept' ? { data: a.p_nivel === 'citire' ? citire : false, error: null } : { data: null, error: null } }
+    // owner în profil, dar RPC-ul spune „nu” → fila nu apare (nu se deduce din rol)
+    const u = await monteaza('/executie?proiect=1&tab=proiect', { rpc: drept(false) })
+    expect(are(u)).toBe(false)
+    expect(cereri.filter(([fn]) => fn === 'fn_rest_decontat_drept').map(([, a]) => a)).toEqual([
+      { p_proiect: 1, p_nivel: 'citire' }, { p_proiect: 1, p_nivel: 'confirmare' }, { p_proiect: 1, p_nivel: 'documente_baza' }])
+    curata.pop()()
+    const v = await monteaza('/executie?proiect=1&tab=proiect', { rpc: drept(true) })
+    expect(are(v)).toBe(true)
+    // fila stă imediat după „Situații plată”
+    const titluri = [...v.d.querySelectorAll('button[title]')].map(b => b.getAttribute('title'))
+    expect(titluri[titluri.indexOf('SL1–SL6 · NCS · Facturare') + 1]).toBe(TITLU)
+    await v.apasa(v.filaPrincipala(TITLU))
+    expect(v.url()).toBe('/executie?proiect=1&tab=rest_decontat')
+    expect(v.ecrane()).toEqual(['rest_decontat'])
+    curata.pop()()
+    const w = await monteaza('/executie?proiect=1&tab=proiect', { rpc: async () => ({ data: null, error: { message: 'function fn_rest_decontat_drept does not exist' } }) })
+    expect(are(w)).toBe(true)                                                 // eroarea: fila apare, tab-ul arată eroarea
+    curata.pop()()
+    const z = await monteaza('/executie', { rpc: drept(true) })               // fără proiect deschis: nicio întrebare, nicio filă
+    expect(are(z)).toBe(false)
   })
 })
