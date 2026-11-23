@@ -1,0 +1,94 @@
+# 20270102a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase); baza = 20261212a + 20261227a + 20261228a aplicate
+coloana	coloana public.red_fan_contradictii.actor	creat
+coloana	coloana public.red_fan_contradictii.ales	creat
+coloana	coloana public.red_fan_contradictii.awb	creat
+coloana	coloana public.red_fan_contradictii.cheie	creat
+coloana	coloana public.red_fan_contradictii.fan_awb_id	creat
+coloana	coloana public.red_fan_contradictii.id	creat
+coloana	coloana public.red_fan_contradictii.lot_id	creat
+coloana	coloana public.red_fan_contradictii.observari	creat
+coloana	coloana public.red_fan_contradictii.prima_la	creat
+coloana	coloana public.red_fan_contradictii.regula	creat
+coloana	coloana public.red_fan_contradictii.rulare_id	creat
+coloana	coloana public.red_fan_contradictii.sursa	creat
+coloana	coloana public.red_fan_contradictii.tip	creat
+coloana	coloana public.red_fan_contradictii.ultima_la	creat
+coloana	coloana public.red_fan_contradictii.ultima_rulare_id	creat
+coloana	coloana public.red_fan_contradictii.valori	creat
+coloana	coloana public.red_fan_contradictii.versiune_regula	creat
+coloana	coloana public.red_fan_rulari.apeluri	creat
+coloana	coloana public.red_fan_rulari.contradictii	creat
+coloana	coloana public.red_fan_rulari.depasite	creat
+coloana	coloana public.red_fan_rulari.eroare_cod	creat
+coloana	coloana public.red_fan_rulari.id	creat
+coloana	coloana public.red_fan_rulari.incheiata_la	creat
+coloana	coloana public.red_fan_rulari.loturi	creat
+coloana	coloana public.red_fan_rulari.loturi_sarite	creat
+coloana	coloana public.red_fan_rulari.pastrate	creat
+coloana	coloana public.red_fan_rulari.plafon_apeluri	creat
+coloana	coloana public.red_fan_rulari.pornita_de	creat
+coloana	coloana public.red_fan_rulari.pornita_la	creat
+coloana	coloana public.red_fan_rulari.randuri	creat
+coloana	coloana public.red_fan_rulari.ridicari	creat
+coloana	coloana public.red_fan_rulari.scrise	creat
+coloana	coloana public.red_fan_rulari.slot	creat
+coloana	coloana public.red_fan_rulari.stare	creat
+coloana	coloana public.red_fan_rulari.sursa	creat
+coloana	coloana public.red_fan_rulari.zi_ro	creat
+constrangere	constrangere tabel public.red_fan_contradictii.red_fan_contradictii_ales_check	creat
+constrangere	constrangere tabel public.red_fan_contradictii.red_fan_contradictii_awb_check	creat
+constrangere	constrangere tabel public.red_fan_contradictii.red_fan_contradictii_cheie_check	creat
+constrangere	constrangere tabel public.red_fan_contradictii.red_fan_contradictii_cheie_uq	creat
+constrangere	constrangere tabel public.red_fan_contradictii.red_fan_contradictii_fan_awb_id_fkey	creat
+constrangere	constrangere tabel public.red_fan_contradictii.red_fan_contradictii_observari_check	creat
+constrangere	constrangere tabel public.red_fan_contradictii.red_fan_contradictii_pkey	creat
+constrangere	constrangere tabel public.red_fan_contradictii.red_fan_contradictii_regula	creat
+constrangere	constrangere tabel public.red_fan_contradictii.red_fan_contradictii_sursa_check	creat
+constrangere	constrangere tabel public.red_fan_contradictii.red_fan_contradictii_valori_check	creat
+constrangere	constrangere tabel public.red_fan_contradictii.red_fan_contradictii_versiune_regula_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_apeluri_plafon	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_contradictii_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_depasite_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_eroare_cod_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_inchiderea	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_loturi_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_loturi_sarite_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_motiv	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_pastrate_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_pkey	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_plafon_apeluri_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_pornire	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_randuri_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_ridicari_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_scrise_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_slot_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_stare_check	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_suma	creat
+constrangere	constrangere tabel public.red_fan_rulari.red_fan_rulari_sursa_check	creat
+functie	functie public.fn_red_fan_moment_posibil(timestamp without time zone,date,timestamp without time zone)	creat
+functie	functie public.fn_red_fan_srv_de_urmarit(uuid)	creat
+functie	functie public.fn_red_fan_srv_rulare_apel(uuid)	creat
+functie	functie public.fn_red_fan_srv_rulare_incepe(text,uuid)	creat
+functie	functie public.fn_red_fan_srv_rulare_incheie(uuid,text,text,integer,integer)	creat
+functie	functie public.fn_red_fan_srv_urmarire(uuid,uuid,uuid,jsonb)	schimbat
+functie	functie public.fn_red_fan_urmarire(uuid,jsonb)	schimbat
+functie	functie public.fn_red_fan_urmarire_intern(uuid,jsonb)	schimbat
+functie	functie public.fn_red_fan_urmarire_scrie(uuid,jsonb,uuid,uuid)	creat
+politica	politica public.red_fan_contradictii.red_fan_contradictii_citire	creat
+politica	politica public.red_fan_rulari.red_fan_rulari_citire	creat
+relatie	relatie public.red_fan_contradictii	creat
+relatie	relatie public.red_fan_contradictii_cheie_uq	creat
+relatie	relatie public.red_fan_contradictii_lot_ix	creat
+relatie	relatie public.red_fan_contradictii_pkey	creat
+relatie	relatie public.red_fan_rulari	creat
+relatie	relatie public.red_fan_rulari_in_curs_uq	creat
+relatie	relatie public.red_fan_rulari_pkey	creat
+relatie	relatie public.red_fan_rulari_slot_uq	creat
+tip	tip public.red_fan_contradictii	creat
+tip	tip public.red_fan_contradictii[]	creat
+tip	tip public.red_fan_rulari	creat
+tip	tip public.red_fan_rulari[]	creat
+trigger	trigger public.red_fan_awb intern red_fan_contradictii_fan_awb_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.red_fan_awb intern red_fan_contradictii_fan_awb_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.red_fan_contradictii intern red_fan_contradictii_fan_awb_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.red_fan_contradictii intern red_fan_contradictii_fan_awb_id_fkey "RI_FKey_check_upd"() 17	creat

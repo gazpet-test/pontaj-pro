@@ -95,10 +95,10 @@ describe('șabloanele Final_v2', () => {
     expect(paragrafe).toContain('În lipsa participării sau a unui răspuns, reprezentanții Beneficiarului, ai Antreprenorului și ai Primăriei pot efectua o constatare tehnică documentată a stării terenului.')
   })
 
-  it('adresa UAT: termenul din text = TERMEN_CONVOCARE_ZILE, un singur rând-șablon, antetul firmei din convocator și fără „online”', async () => {
+  it('adresa UAT: termenul din text = TERMEN_CONVOCARE_ZILE, fără rând-șablon de parcele (Anexa 2 = anunțul, 19.11.2026), antetul firmei din convocator și fără „online”', async () => {
     const { xml, text, paragrafe } = await citeste('adresa_uat')
     expect(text).toContain(`(cu cel puțin ${TERMEN_CONVOCARE_ZILE} zile înainte de prima sesiune)`)
-    expect(xml.match(/\{\{rand\.nr\}\}/g)).toHaveLength(1)
+    expect(xml).not.toMatch(/\{\{rand\./)   // excepția (12): lista parcelelor publică e doar în anunțul de afișare
     expect(text).not.toMatch(/online la/)
     // excepția (9), DE CONFIRMAT (claude#026 întrebarea 1): antetul = exact primul paragraf din convocator, la începutul documentului
     const { paragrafe: conv } = await citeste('convocator')

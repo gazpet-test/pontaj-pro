@@ -1,0 +1,150 @@
+# 20270106a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.executie_semnale.actiune_ref	creat
+coloana	coloana public.executie_semnale.constatare	creat
+coloana	coloana public.executie_semnale.detalii	creat
+coloana	coloana public.executie_semnale.detectat_la	creat
+coloana	coloana public.executie_semnale.dovada_amprenta	creat
+coloana	coloana public.executie_semnale.dovada_data	creat
+coloana	coloana public.executie_semnale.dovada_fragment	creat
+coloana	coloana public.executie_semnale.dovada_ref	creat
+coloana	coloana public.executie_semnale.dovada_sursa	creat
+coloana	coloana public.executie_semnale.flux	creat
+coloana	coloana public.executie_semnale.gravitate	creat
+coloana	coloana public.executie_semnale.id	creat
+coloana	coloana public.executie_semnale.incertitudine	creat
+coloana	coloana public.executie_semnale.obiect	creat
+coloana	coloana public.executie_semnale.proiect_id	creat
+coloana	coloana public.executie_semnale.propunere	creat
+coloana	coloana public.executie_semnale.regula_versiune	creat
+coloana	coloana public.executie_semnale.responsabil_employee_id	creat
+coloana	coloana public.executie_semnale.responsabil_sursa	creat
+coloana	coloana public.executie_semnale.stare	creat
+coloana	coloana public.executie_semnale.stare_de	creat
+coloana	coloana public.executie_semnale.stare_dovada	creat
+coloana	coloana public.executie_semnale.stare_la	creat
+coloana	coloana public.executie_semnale.stare_motiv	creat
+coloana	coloana public.executie_semnale.surse_consultate	creat
+coloana	coloana public.executie_semnale.termen	creat
+coloana	coloana public.executie_semnale.termen_baza	creat
+coloana	coloana public.executie_semnale.termen_confirmat	creat
+coloana	coloana public.executie_semnale.tip	creat
+coloana	coloana public.executie_semnale.titlu	creat
+coloana	coloana public.executie_semnale.ultima_verificare	creat
+coloana	coloana public.executie_semnale.versiune	creat
+coloana	coloana public.executie_semnale_jurnal.actiune	creat
+coloana	coloana public.executie_semnale_jurnal.actor	creat
+coloana	coloana public.executie_semnale_jurnal.actor_profile	creat
+coloana	coloana public.executie_semnale_jurnal.creat_la	creat
+coloana	coloana public.executie_semnale_jurnal.dovada	creat
+coloana	coloana public.executie_semnale_jurnal.id	creat
+coloana	coloana public.executie_semnale_jurnal.motiv	creat
+coloana	coloana public.executie_semnale_jurnal.proiect_id	creat
+coloana	coloana public.executie_semnale_jurnal.regula_versiune	creat
+coloana	coloana public.executie_semnale_jurnal.semnal_id	creat
+coloana	coloana public.executie_semnale_jurnal.stare_noua	creat
+coloana	coloana public.executie_semnale_jurnal.stare_veche	creat
+coloana	coloana public.executie_semnale_jurnal.valori	creat
+coloana	coloana public.v_executie_semnale.actiune_ref	creat
+coloana	coloana public.v_executie_semnale.constatare	creat
+coloana	coloana public.v_executie_semnale.detalii	creat
+coloana	coloana public.v_executie_semnale.detectat_la	creat
+coloana	coloana public.v_executie_semnale.dovada_amprenta	creat
+coloana	coloana public.v_executie_semnale.dovada_data	creat
+coloana	coloana public.v_executie_semnale.dovada_fragment	creat
+coloana	coloana public.v_executie_semnale.dovada_ref	creat
+coloana	coloana public.v_executie_semnale.dovada_sursa	creat
+coloana	coloana public.v_executie_semnale.flux	creat
+coloana	coloana public.v_executie_semnale.gravitate	creat
+coloana	coloana public.v_executie_semnale.id	creat
+coloana	coloana public.v_executie_semnale.incertitudine	creat
+coloana	coloana public.v_executie_semnale.obiect	creat
+coloana	coloana public.v_executie_semnale.proiect_cod	creat
+coloana	coloana public.v_executie_semnale.proiect_id	creat
+coloana	coloana public.v_executie_semnale.proiect_nume	creat
+coloana	coloana public.v_executie_semnale.propunere	creat
+coloana	coloana public.v_executie_semnale.regula_versiune	creat
+coloana	coloana public.v_executie_semnale.responsabil_employee_id	creat
+coloana	coloana public.v_executie_semnale.responsabil_sursa	creat
+coloana	coloana public.v_executie_semnale.stare	creat
+coloana	coloana public.v_executie_semnale.stare_de	creat
+coloana	coloana public.v_executie_semnale.stare_dovada	creat
+coloana	coloana public.v_executie_semnale.stare_la	creat
+coloana	coloana public.v_executie_semnale.stare_motiv	creat
+coloana	coloana public.v_executie_semnale.surse_consultate	creat
+coloana	coloana public.v_executie_semnale.termen	creat
+coloana	coloana public.v_executie_semnale.termen_baza	creat
+coloana	coloana public.v_executie_semnale.termen_confirmat	creat
+coloana	coloana public.v_executie_semnale.tip	creat
+coloana	coloana public.v_executie_semnale.titlu	creat
+coloana	coloana public.v_executie_semnale.ultima_verificare	creat
+coloana	coloana public.v_executie_semnale.versiune	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_amprenta_ck	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_cheie_uq	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_constatare_ck	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_flux_ck	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_gravitate_ck	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_obiect_ck	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_pkey	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_proiect_id_fkey	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_regula_ck	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_responsabil_ck	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_responsabil_employee_id_fkey	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_stare_ck	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_termen_ck	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_texte_ck	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_timp_ck	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_tip_ck	creat
+constrangere	constrangere tabel public.executie_semnale.executie_semnale_titlu_ck	creat
+constrangere	constrangere tabel public.executie_semnale_jurnal.executie_semnale_jurnal_actiune_ck	creat
+constrangere	constrangere tabel public.executie_semnale_jurnal.executie_semnale_jurnal_actor_ck	creat
+constrangere	constrangere tabel public.executie_semnale_jurnal.executie_semnale_jurnal_pkey	creat
+constrangere	constrangere tabel public.executie_semnale_jurnal.executie_semnale_jurnal_semnal_id_fkey	creat
+constrangere	constrangere tabel public.executie_semnale_jurnal.executie_semnale_jurnal_valori_ck	creat
+functie	functie public.fn_executie_semnal_amprenta(text,text[],text,date,text,text)	creat
+functie	functie public.fn_executie_semnal_canonic(text)	creat
+functie	functie public.fn_executie_semnal_dif(jsonb,jsonb)	creat
+functie	functie public.fn_executie_semnal_drept(bigint,integer)	creat
+functie	functie public.fn_executie_semnal_drept_id(bigint)	creat
+functie	functie public.fn_executie_semnal_fara_golire()	creat
+functie	functie public.fn_executie_semnal_garda()	creat
+functie	functie public.fn_executie_semnal_jurnal_garda()	creat
+functie	functie public.fn_executie_semnal_scrie(jsonb)	creat
+functie	functie public.fn_executie_semnal_spatii(text)	creat
+functie	functie public.fn_executie_semnal_stare(bigint,integer,text,text,text,text,integer,boolean)	creat
+functie	functie public.fn_executie_semnal_tranzitie(text,text,text)	creat
+politica	politica public.executie_semnale.executie_semnale_citire	creat
+politica	politica public.executie_semnale_jurnal.executie_semnale_jurnal_citire	creat
+regula	regula public.v_executie_semnale."_RETURN"	creat
+relatie	relatie public.executie_semnale	creat
+relatie	relatie public.executie_semnale_cheie_uq	creat
+relatie	relatie public.executie_semnale_id_seq	creat
+relatie	relatie public.executie_semnale_jurnal	creat
+relatie	relatie public.executie_semnale_jurnal_id_seq	creat
+relatie	relatie public.executie_semnale_jurnal_pkey	creat
+relatie	relatie public.executie_semnale_jurnal_semnal_idx	creat
+relatie	relatie public.executie_semnale_pkey	creat
+relatie	relatie public.executie_semnale_proiect_stare_idx	creat
+relatie	relatie public.executie_semnale_responsabil_idx	creat
+relatie	relatie public.v_executie_semnale	creat
+tip	tip public.executie_semnale	creat
+tip	tip public.executie_semnale[]	creat
+tip	tip public.executie_semnale_jurnal	creat
+tip	tip public.executie_semnale_jurnal[]	creat
+tip	tip public.v_executie_semnale	creat
+tip	tip public.v_executie_semnale[]	creat
+trigger	trigger public.employees intern executie_semnale_responsabil_employee_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.employees intern executie_semnale_responsabil_employee_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_proiecte intern executie_semnale_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_proiecte intern executie_semnale_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_semnale intern executie_semnale_jurnal_semnal_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_semnale intern executie_semnale_jurnal_semnal_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.executie_semnale intern executie_semnale_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_semnale intern executie_semnale_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_semnale intern executie_semnale_responsabil_employee_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_semnale intern executie_semnale_responsabil_employee_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_semnale.trg_executie_semnal_garda	creat
+trigger	trigger public.executie_semnale.trg_executie_semnale_fara_golire	creat
+trigger	trigger public.executie_semnale_jurnal intern executie_semnale_jurnal_semnal_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.executie_semnale_jurnal intern executie_semnale_jurnal_semnal_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.executie_semnale_jurnal.trg_executie_semnal_jurnal_garda	creat
+trigger	trigger public.executie_semnale_jurnal.trg_executie_semnale_jurnal_fara_golire	creat

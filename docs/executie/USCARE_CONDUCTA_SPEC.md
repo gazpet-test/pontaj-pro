@@ -46,8 +46,11 @@ medie, cântărirea bureților 2 și 3; observații; concluzie CONFORM / NECONFO
 - **NECONFORM** se poate închide cu rezultatul negativ consemnat („umed”), fără fotografia pistonului.
 - **Punctul de rouă și locul măsurării sunt OPȚIONALE**: rămân rubricile modelului (se trec dacă s-au măsurat) și apar în PDF; nu decid
   concluzia, nu sunt cerute la închidere.
-- **Niciun prag numeric** pentru rouă sau pentru diferența de greutate: concluzia o pune omul. Diferența de greutate se afișează doar în
-  aplicație (decizia D), PDF-ul păstrează rubricile beneficiarului.
+- **Niciun prag numeric** pentru rouă. Pentru diferența de greutate, ecranul pe pași (§3a) arată un **prag de lucru PROPUS** (100 g pe km ×
+  lungimea tronsonului, decizia proprietarului din 17.11.2026, constantă în cod în această felie) și **propune** „uscat” / „umed” din
+  diferența ultimului piston; **concluzia o pune tot omul**, iar dacă o pune contra calculului scrie motivul în observații. Pragul NU e
+  impus de server și NU apare în PDF (decizia D rămâne: PDF-ul păstrează rubricile beneficiarului); impunerea lui (CONFORM refuzat contra
+  calculului) și tipărirea lui vin în felia cu schema (`docs/executie/USCARE_CONDUCTA_V2_SPEC.md` §3).
 - PDF-ul are, sub observații, rândul „Ultimul piston vehiculat iese uscat (criteriul din caietul de sarcini): ☐ DA ☐ NU”.
 
 ## 3. Fluxul
@@ -67,6 +70,79 @@ medie, cântărirea bureților 2 și 3; observații; concluzie CONFORM / NECONFO
 6. **Concluzia** — omul alege CONFORM / NECONFORM (§2).
 7. **Închiderea** — doar completă (§5). **Raportul semnat** — PDF-ul (tabelul + anexa foto cu legendă) se tipărește și se semnează; un
    raport neînchis iese marcat „CIORNĂ”.
+
+## 3a. Ecranul de telefon pe pași (17.11.2026, fără schemă nouă)
+
+Cerința proprietarului: formularul pe secțiuni are prea multe informații pentru șantier; pe telefon trebuie „înainte / înainte / gata”, cu
+oprire între etape (între introducerea și ieșirea pistoanelor pot trece și 60 de minute). Ecranul implicit e acum cel pe pași
+(`src/UscarePasi.jsx`, logica în `src/uscarePasi.js`); formularul pe secțiuni de mai sus rămâne, ca **„Vezi / corectează toate datele”**
+(birou, corecturi), pe ACELAȘI formular, cu aceleași RPC-uri, ciornă și reguli de conflict (§6). Nicio migrare, niciun RPC nou.
+
+| Pas | Ce cere | Butonul mare |
+|---|---|---|
+| **Lista** | sus, rapoartele **în lucru** ca niște carduri mari („Tronson … · Etapa 1 înregistrată · pistoanele introduse la HH:MM · Continuă cu etapa 2”), reluarea la o atingere; jos, rapoartele generate | **＋ Uscare nouă** |
+| **0. Tronsonul** | tronsonul de probă (km și lungimea se completează singure) sau „alt interval” (lungimea propusă din km) | **Începe · etapa 1** — creează raportul (pozele cer raportul salvat); constructorul, utilajele, configurația și semnatarii vin din ultimul raport neanulat al proiectului, data = azi, 2 pistoane-burete |
+| **1. Introducerea** | ora introducerii (goală = ora apăsării; „⟳ Acum” o fixează), câte pistoane-burete (− / +), pentru fiecare greutatea pe cântar (kg, tastatură numerică, „= N g” alături) + poza cântarului, poza ansamblului | **✓ Înregistrează etapa 1** — activ doar cu tot ce cere etapa; altfel lista exactă a lipsurilor deasupra; după salvare: „Etapa 1 înregistrată la HH:MM. Poți închide telefonul …” + „Continuă acum cu etapa 2” |
+| **2. Ieșirea** | ora ieșirii (la fel), pentru fiecare piston greutatea la ieșire + poza, diferența față de intrare în grame, presiunea + poza manometrului (nu blochează), pragul cu calculul, verdictul PROPUS pentru ultimul piston, confirmat de om (USCAT / UMED; contra calculului = motiv în observații), poza ultimului piston | **✓ Termină etapa 2** — pune și timpul de deplasare (din ore, dacă e gol) și concluzia din verdict (uscat → CONFORM, umed → NECONFORM) |
+| **3. Rezumat** | greutățile și diferențele, verdictul, durata, viteza medie, tronsonul, vremea; „Detalii cerute de beneficiar”: constructor, utilaje, PIG / poliuretan, notificarea + referința (cu verificarea celor 24 h), temperatura (cu „Din meteo”) + vremea, punctul de rouă, presiunea, timpul de deplasare, observații, semnatarii, justificarea pozelor lipsă; bifa „Am verificat detaliile” | **📄 Generează raportul** = închiderea (§5, aceeași regulă `lipsaDinRand` = `fn_executie_uscare_lipsa`, nici dublată, nici relaxată) + PDF-ul raportului închis; inactiv cu motivele scrise (detalii nesalvate, ce lipsește, bifa) |
+
+- **Pasul se deduce din date** (`pasCurent`, nimic stocat): anulat / închis → final; **dacă regula comună a închiderii (`lipsaDinRand` =
+  `fn_executie_uscare_lipsa`) nu mai cere nimic → rezumatul, pe orice drum ar fi fost completat raportul** (formularul complet, birou,
+  redeschidere) — o singură regulă decide dacă raportul se poate genera (runda 3, 17.11.2026); altfel prima etapă incompletă pe rândul
+  SALVAT + pozele înregistrate, apoi rezumatul. Etapa 1 e completă cu: ora introducerii, numărul de pistoane (0 e o configurație permisă,
+  ca în regula comună), rândurile de cântărire, greutatea la intrare și poza cântarului pe fiecare piston cântărit, poza ansamblului.
+  Etapa 2: ora ieșirii, greutatea la ieșire + poza pe fiecare, verdictul, motivul la verdict contrar calculului, poza ultimului piston
+  **doar dacă iese USCAT** (dovada, ca `dovada_conform`; NECONFORM n-o cere) și **concluzia din verdict** (uscat → conform, umed →
+  neconform, `concluzieDinVerdict`), pe care o pune DOAR „Termină etapa 2”: datele etapei salvate pe parcurs / de pe alt telefon nu
+  înseamnă etapa terminată (proba de pe mediul publicat, 17.11.2026: rezumatul cerea concluzia, pe care pașii n-o au ca câmp → blocaj).
+  Pe ecran, lipsurile etapei 2 se judecă pe exact formularul pe care l-ar trimite butonul (`formularTerminaEtapa2`), o singură definiție.
+  Etapele nu cer nimic peste regula comună: **pozele lipsă
+  JUSTIFICATE** (`poze_justificare`, „Nu poți face o poză? Scrie de ce” — aceeași ieșire ca în formularul complet, salvată cu raportul)
+  nu mai sunt cerute de etape; dovada USCAT nu se justifică. Un piston marcat „nu se aplică” (din formularul complet) nu cere greutăți
+  și poze. Cardurile listei citesc pozele rapoartelor deschise (keyset, pe bucăți de 100 de id-uri); o eroare de citire NU e „etapa 1”:
+  cardul spune că pasul nu s-a putut determina (L18).
+- **Pasul AFIȘAT nu avansează sub mâna omului** (`pasTinut`, 17.11.2026): o scriere pe parcurs („💾 Salvează pe parcurs”, o poză) reține
+  pasul pe care lucrează omul; ecranul trece înainte doar prin butonul etapei („Înregistrează etapa 1” → confirmarea, „Termină etapa 2” →
+  rezumatul). Dacă datele rămân în urmă (poză scoasă, conflict), ecranul le urmează. Deschiderea din listă ia pasul dedus din date.
+- **Motivul verdictului contrar calculului** e un câmp DISTINCT pe ecranul etapei 2, scris explicit de om, și intră în observații la
+  „Termină etapa 2” cu eticheta „Verdictul diferit de calcul, motivul: …” (fără schemă nouă). Contează ca motiv DOAR textul de sub această
+  etichetă (și la un raport vechi care o are deja); textul liber al observațiilor (note, „TEST …”, textul automat al „trecerii noi”
+  „Trecerea N pe acest tronson …”) NU contează (proba din 17.11.2026, defectul 2).
+- **Oprirea între etape**: „Înregistrează etapa 1” salvează pe server (raportul rămâne deschis). În interiorul unei etape: ciorna locală
+  (§3) + „💾 Salvează pe parcurs”. Etapa 2 o poate continua oricine are scriere pe proiect (alt telefon, alt om), cu regulile §6.
+  Ciorna unui raport NOU se scrie / se oferă doar dacă omul a schimbat ceva față de formularul propus („Uscare nouă” neatinsă nu lasă
+  ciornă). „Trecerea N” numără doar trecerile NECONFORME (neanulate) de pe același tronson / interval, nu și rapoartele conforme.
+- **Calculul propus** (doar pe ecran): diferențele în **grame întregi**; pragul P = 100 × L / 1000 g (L = `lungime_m`); ultimul piston =
+  numărul cel mai mare (buretele 1 = primul introdus); Δ ≤ P „în prag” (egalitatea trece), comparat în întregi ca în V2 §3.1
+  (`100.000·Δ ≤ (10·v)·(10·L)`); Δ negativ cel mult 1% din intrare (în întregi: `100 × pierdere_g ≤ intrare_g`, fără toleranță minimă
+  de 1 g) = fără acumulare (trece), mai mult = „de verificat” (fără propunere);
+  ultimul piston fără cântărire / greutate lipsă / lungime lipsă = „nu se poate calcula”. Avertismente (nu blochează): valoare ≥ 100 kg
+  („pare scris în grame”), peste 50 kg, sub 0,1 kg, ieșirea peste 3 × intrarea, Δ peste 20 × prag.
+- **Mai multe treceri pe același raport: NU, fără schemă.** Modelul de date ține o singură trecere pe raport: `cantariri` are cheile EXACTE
+  `nr / intrare_kg / iesire_kg / motiv` (CHECK `fn_executie_uscare_cantariri_ok`), o singură `ora_inceput` / `ora_final` /
+  `piston_final_rezultat`. De aceea, la un ultim piston UMED, ecranul oferă **„Trecere nouă pe același tronson”** = raport NOU (tronsonul,
+  km-ii, lungimea, configurația, utilajele, semnatarii copiate; greutățile NU), cu „Trecerea N pe acest tronson …” în observații; raportul
+  trecerii nereușite se generează NECONFORM. Ce ar trebui pentru treceri în același raport (sau legate): V2 §2.3 (numărul trecerii derivat,
+  PV-ul care menționează trecerile anterioare) — felia S1.
+- **Constructorul** (decizia C): la crearea din pași nu mai e bifa de la creare; confirmarea se mută la rezumat („Am verificat detaliile”),
+  obligatorie înainte de „Generează raportul” (ține pentru raportul deschis, nu se moștenește). Formularul complet păstrează bifa la creare.
+- **Ce NU face această felie** (rămâne pentru feliile cu schemă, V2): pragul ca parametru de proiect cu istoric și impunerea lui la închidere
+  (S1), momentul etapei 1 pus de server + înghețarea intrărilor (S1), cântarul și diviziunea (S1), procesul-verbal semnat din ERP de
+  persoana desemnată a Antreprenorului (S2), exemplarul olograf urcat și tronsonul confirmat uscat (S3).
+
+### Accesul de pe telefon
+
+Ecranul de uscare se deschide pe două drumuri, cu aceeași componentă (`UscareConducta`, aceleași RPC-uri și aceeași logică):
+(1) **din aplicația completă** — Execuție → proiect → Izometrie → „💨 Uscare conductă” (adresa directă `/executie?proiect=<id>&tab=uscare`);
+(2) **din lansatorul de telefon `/m`** — butonul „💨 Uscare conductă”. La deschiderea lansatorului **nu se enumeră nimic**: butonul apare
+după partea de modul a dreptului (owner, din profilul încărcat oricum, sau rândul propriu `executie` din `user_module_access` cu nivel
+editor / admin — o singură citire ușoară); dacă citirea eșuează, butonul se arată și decide verificarea de la apăsare. Abia **la apăsare**
+se citesc proiectele **active** (arhiva nu se oferă pe telefon) și se verifică pe fiecare dreptul de **scriere** cu aceeași funcție pe care
+o cere ecranul (`fn_executie_nod_drept(proiect, true)`: owner sau modulul `executie` editor / admin, plus accesul pe proiect), cu „Se verifică
+proiectele…”; dacă nu iese niciunul: „Nu ai drept de scriere pe niciun proiect activ de Execuție”. Un singur proiect = direct ecranul de
+uscare al lui; mai multe = o listă scurtă (întâi cele cu rapoarte deschise), apoi ecranul. „← Înapoi” duce la listă / la lansator; cât e
+deschis un raport, ieșirea e „← Lista” din ecran (întreabă la modificări nesalvate). O verificare de drept eșuată se arată cu „Reîncearcă”
+(nu devine „fără drept”). La ieșire, citirile în curs se opresc (nicio pagină sau verificare în plus). Poarta reală rămâne în BD (RLS + RPC-uri).
 
 ## 4. Stările
 
@@ -284,6 +360,18 @@ aceeași amprentă (altfel 22023); fără cotă (§6).
   din fiecare categorie, căi cu uscarea 0, metadate fixe. Poate rata politici condiționate de **alte conturi**, de **alte metadate** sau de
   **rapoarte / rezervări existente**. Nu înlocuiește baseline-ul revizuit al politicilor de producție și nici probele cu structura reală pe
   clonă; amprenta unui baseline permisiv nu demonstrează siguranța lui.
+- **Prima probă cu ROLLBACK pe țintă (17.11.2026): sonda a căzut, nimic comis.** Eroarea: `missing FROM-clause entry for table "objects"`.
+  Cauza: pe țintă, `storage.objects` are 139 de politici; câteva au subinterogări care se referă la rândul exterior, iar `pg_get_expr` le
+  tipărește calificate cu numele tabelei (`… WHERE i.cale = objects.name`, `objects.owner_id`). Recreate pe copia sondei, care avea alt nume,
+  referirea nu mai avea la ce se lega. Clona de probă nu a prins pentru că acolo `storage.objects` nu are nicio politică. **Reparația**
+  (doar în blocul sondei; funcțiile, tabelele, politicile modulului, lock-urile și garda neschimbate; lista obiectelor tot 252): copia se
+  numește chiar `objects`, în schema temporară a sesiunii (`pg_temp.objects`), deci expresiile se recreează neschimbate (fără înlocuiri de
+  text); tabela reală e numită peste tot `storage.objects`, copia `pg_temp.objects`; un `pg_temp.objects` deja existent în sesiune = refuz
+  `SONDA_CONDITII`; o politică pe care copia n-o poate purta (ex. o funcție pe rândul întreg tipat `storage.objects`) = `SONDA_CONDITII` cu
+  numele politicii, nu eroare brută. Proba PGlite (secțiunea 2b) reproduce forma țintei cu nume sintetice: codul vechi pică exact cu eroarea de
+  pe țintă, codul nou trece cu aceleași verdicte, iar o politică preexistentă cu subinterogare care deschide bucket-ul e prinsă în continuare.
+  Costul: ~210 ms cu 139 de politici față de ~155 ms fără (PGlite), departe de plafonul de 5000 ms. **Regula:** înaintea probelor unei
+  migrări care citește politicile de pe `storage.objects`, clona de probă trebuie să poarte politicile țintei pe `storage.objects`.
 - **Drepturile pe tabelele noi** (runda 3): migrarea retrage drepturile rămase ALTOR roluri (privilegiile implicite ale platformei) pe
   tabelele și secvențele ei; postcondiția și revenirea cer ACL-ul exact: proprietarul + `SELECT` (fără GRANT OPTION) pentru `authenticated` /
   `service_role`; pe secvențe doar proprietarul.
@@ -372,4 +460,5 @@ sesiunile aplicației care au așteptat; plus de câte ori apare `BUGET_LOCK` la
 - **B. Pozele lipsă**: BLOCARE pentru dovada ultimului piston uscat la CONFORM; pentru celelalte, avertisment cu justificarea lipsei
   consemnată (obligatorie la închidere).
 - **C. Constructorul implicit**: propus din proiect (ultimul raport; firma, la primul), **confirmat la creare**, editabil, păstrat în raport.
-- **D. Diferența de greutate**: doar în aplicație; PDF-ul păstrează rubricile beneficiarului; fără prag.
+- **D. Diferența de greutate**: doar în aplicație; PDF-ul păstrează rubricile beneficiarului. Din 17.11.2026 ecranul pe pași arată pragul
+  de lucru de 100 g/km ca PROPUNERE (§3a); concluzia rămâne a omului.

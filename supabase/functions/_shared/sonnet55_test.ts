@@ -19,7 +19,7 @@ const FARA_GANDIRE = ['ofertare-ingest-doc/index.ts', 'ofertare-ocr-arbitreaza/a
 // (1) nu trimiteau thinking (adaptive implicit pe Sonnet 5 ȘI pe Sonnet 5.5)
 const ADAPTIV_IMPLICIT = ['citeste-orice/index.ts', 'detect-ordine/index.ts', 'meta-publish/index.ts', 'ofertare-clarificare-aplica/index.ts',
   'ofertare-document-nou-citeste/index.ts', 'ofertare-e0-autofill/index.ts', 'ofertare-organigrama-spec/index.ts', 'ofertare-raspuns-set/index.ts',
-  'ofertare-rfq-import/index.ts', 'ofertare-verificare-finala/index.ts', 'parse-certificat-plata/index.ts', 'ofertare-cerinte/core.ts']
+  'ofertare-rfq-import/index.ts', 'ofertare-verificare-finala/handler.ts', 'parse-certificat-plata/index.ts', 'ofertare-cerinte/core.ts']
 // (3) adaptive explicit
 const ADAPTIV_EXPLICIT = ['ofertare-clarificari-propune/core.ts']
 // (4) fără gândire, scris literal: `between_tools` (pe Sonnet 5.5 `disabled` dă 400) — schimbare deliberată din #1030

@@ -81,6 +81,7 @@ metadatele răspunsurilor, `valoare_lei` și nu scrie nimic. Migrarea NU acordă
 | `src/redari/sentryScrub.js` | tokenul din `/redari/raspuns/<token>` nu ajunge în Sentry (`beforeSend` / `beforeSendTransaction` în `src/main.jsx`): URL-uri, variante `%2F`, `p_token` în payload-uri codificate URL (decodare repetată), chei la orice adâncime; dacă scrub-ul însuși aruncă, evenimentul e eliminat, nu trimis brut |
 | `src/RedariRaspunsPublic.jsx` | formularul public `/redari/raspuns/:token`, fără login, mobile-first, 4 opțiuni, fără date personale |
 | `public/redari/sabloane/*.docx` | șabloanele reale Model_1..5 Final_v2 (03.11.2026) cu placeholder-e (`convocator`, `pv_a`, `pv_b`, `adresa_uat`, `pv_c`), refăcute cu `scripts/redari_sabloane_din_modele.mjs`; originalele în `docs/redari/referinta/` |
+| `public/redari/sabloane/anunt_afisare.docx` | anunțul de afișare la primărie (convocarea pe UAT + lista parcelelor, fără date personale; plan rev. 1 pct. 4.3), construit din `docs/redari/TEXT_ANUNT_AFISARE.md` cu `scripts/redari_sablon_anunt_afisare.mjs` (`--verifica` compară octet cu octet); generator `genereazaAnuntAfisare` în `docx.js` (identificatorii parcelelor validați pe formă în `identificatoriPublici.js`; satul doar dintre satele declarate la sesiuni), buton în 🏛️ UAT-uri (SABLOANE.md §2.7) |
 | `scripts/redari_sabloane_verifica.mjs` | verifică placeholder-ele șabloanelor (0 rupte între run-uri) |
 
 `src/App.jsx` primește doar ruta lazy `/redari`, ruta publică `/redari/raspuns/:token` și intrarea în meniu (🌾 Redări teren). Teste vitest
@@ -146,7 +147,9 @@ adresele UAT pe seria `AU-0001`.
   CHECK HTTPS/300, amprenta politicilor în pre/post; revenire armată cu lock înaintea gărzii de date; DRY owner/editor/viewer,
   proiecte fictive, montaj existent numai citit, SQLSTATE-uri exacte, CAS/versiune, ROLLBACK final. **Nu a fost rulată aici.**
 - Model 4: `repetaRand`, verificări separate pentru adresă (împuternicire obligatorie), 43 de chei comparate cu șablonul real,
-  zero parcele acceptat, active ordonate; `link_afisare` scos prin script, fără alte modificări de text.
+  zero parcele acceptat, active ordonate; `link_afisare` scos prin script, fără alte modificări de text. Din 19.11.2026 (decizia
+  Răzvan, `SABLOANE.md` §1 excepția (12)): Anexa 2 = trimiterea la anunțul de afișare, fără lista parcelelor → 36 de chei, din
+  parcele doar numărul lor; în 🏛️ UAT-uri un indiciu spre butonul „Anunț de afișare (DOCX)”.
 - Modal UAT, admin: generează AU → upload versionat imutabil → UPDATE cu CAS → descărcare; regenerarea confirmată păstrează AU;
   descărcarea existentului folosește URL semnat și versiunea maximă. Conflictul lasă fișierul în bucket. Numărul rezervat poate rămâne consumat.
 - Setări: legătură montaj și preluare contract doar în formular, cu salvare explicită; link GDPR opțional HTTPS.

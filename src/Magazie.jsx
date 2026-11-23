@@ -13,6 +13,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { dataAziBucuresti, eroareTotalEchipament, eroareCantitatePredare, eroareDataPredare } from './magazieEipLogica.js'
+import { aplicaIntrare, cheieIntentie, citesteEchipamente, eroareCantitateIntrare, fmtCantitate, inserareNecunoscuta, intentieRand, judecaRandFactura, MESAJ_CONFLICT, MESAJ_INSERARE_NECUNOSCUTA, MESAJ_REF_ALT, motivFaraIntrare, potrivireExistente, pregatesteIntrare, randuriDupaSalvare, refNou, salveazaFactura, sumaStoc, tintaRand, validareIntrare } from './magazieIntrareStoc.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
 import EipIntrareActiune from './EipIntrareModal.jsx'
 import ProductieTab from './MagazieProductie.jsx'
@@ -499,23 +500,33 @@ function EchipamenteTab() {
   const [busy, setBusy] = useState(false)
   const [furnMap, setFurnMap] = useState({})          // {echipament_id: furnizor}
   const [bulkOpen, setBulkOpen] = useState(false)     // TKT-0279: adăugare în bloc din factură
+  const [intrareModal, setIntrareModal] = useState(null) // TKT-0353: intrare nouă peste stocul existent
+  const [catalogIds, setCatalogIds] = useState(null)  // id-urile EIP din catalog (v_eip_stoc); null = necunoscut
+  const [listaError, setListaError] = useState('')
 
   const loadAll = useCallback(async () => {
     const generation = ++loadGeneration.current
     setMarimiError('')
     setPoateScrieMarimi(false)
+    setCatalogIds(null)
     setLoading(true)
     try {
-      const [rEch, rAsig, rEmp, rUser, rFurn] = await Promise.all([
-        supabase.from('v_magazie_echipamente').select('*').order('denumire'),
+      const [rEch, rAsig, rEmp, rUser, rFurn, rCat] = await Promise.all([
+        // r2 P1 (L23): toată lista, keyset pe id (fără trunchiere tăcută la plafonul de 1000 al serverului)
+        citesteEchipamente(supabase).then(data => ({ data, error: null }), error => ({ data: null, error })),
         supabase.from('v_magazie_inventar_activ').select('*').is('data_retur', null),
         withEmployeeMarimi(supabase.from('employees').select('id, name, functie').order('name'), message => {
           if (generation === loadGeneration.current) setMarimiError(message)
         }),
         supabase.auth.getUser(),
         supabase.from('v_echipament_furnizor').select('*'),
+        supabase.from('v_eip_stoc').select('echipament_id').range(0, 999),
       ])
       if (generation !== loadGeneration.current) return
+      // TKT-0353: rândurile EIP din catalog nu primesc „+ Intrare” directă (totalul lor e legat de jurnalul EIP).
+      // Catalog neinstalat = mulțime goală; altă eroare sau listă posibil trunchiată = necunoscut (EIP blocat).
+      if (rCat.error) setCatalogIds(['42P01', 'PGRST205'].includes(rCat.error.code) ? new Set() : null)
+      else setCatalogIds((rCat.data || []).length >= 1000 ? null : new Set((rCat.data || []).map(r => r.echipament_id)))
       const caller = rUser.data?.user?.id
       if (rUser.error) throw rUser.error
       if (caller) {
@@ -527,6 +538,7 @@ function EchipamenteTab() {
         if (rp.error || ra.error) setMarimiError('Dreptul de scriere a marimilor nu poate fi verificat. Reincarca.')
         else setPoateScrieMarimi(employeeMarimiCanWrite(rp.data, ra.data))
       }
+      setListaError(rEch.error ? 'Lista de echipamente nu s-a putut încărca: ' + (rEch.error.message || 'eroare necunoscută') + '. Reîncarcă.' : '')
       setEchipamente(rEch.data || [])
       setAsignari(rAsig.data || [])
       setEmployees(rEmp.data || [])
@@ -534,7 +546,11 @@ function EchipamenteTab() {
       const fm = {}
       for (const r of (rFurn.data || [])) fm[r.echipament_id] = r.furnizor
       setFurnMap(fm)
-    } catch (e) { console.error(e) } finally { if (generation === loadGeneration.current) setLoading(false) }
+    } catch (e) {
+      console.error(e)
+      // r2 P1 (L18): încărcare eșuată ≠ listă goală — fără listă sigură, „Adaugă din factură” nu poate verifica dublurile
+      if (generation === loadGeneration.current) setListaError('Lista de echipamente nu s-a putut încărca: ' + (e?.message || 'eroare necunoscută') + '. Reîncarcă.')
+    } finally { if (generation === loadGeneration.current) setLoading(false) }
   }, [])
   useEffect(() => { loadAll(); return () => { ++loadGeneration.current } }, [loadAll])
 
@@ -592,34 +608,50 @@ function EchipamenteTab() {
     } catch (e) { alert('Eroare salvare: ' + e.message) } finally { setBusy(false) }
   }
 
+  // TKT-0353: intrare nouă PESTE stocul existent (total = vechi + primit), cu urma în observații.
+  // Scrierea e condiționată pe totalul văzut (aplicaIntrare); conflict = mesaj + reîncărcare, fără reîncercare oarbă.
+  // r2 P4: `aziFixat` = ziua primei încercări, la reîncercarea după un rezultat necunoscut (linia trimisă rămâne identică).
+  const saveIntrare = async (echip, form, ref, aziFixat) => {
+    setBusy(true)
+    const azi = aziFixat || dataAziBucuresti(new Date())
+    try {
+      const p = pregatesteIntrare({ um:echip.um, form, azi, ref })
+      if (!p.ok) return { stare:'eroare', mesaj:p.eroare }
+      const r = await aplicaIntrare(supabase, { id:echip.id, totalVazut:echip.cantitate_total, primit:p.cantitate, linie:p.linie, ref })
+      if (r.stare === 'ok' || r.stare === 'deja' || r.stare === 'conflict') {
+        setIntrareModal(null)
+        await loadAll()
+        if (r.stare === 'conflict') alert(MESAJ_CONFLICT)
+        else alert(`✓ Intrare ${r.stare === 'deja' ? 'deja înregistrată' : 'înregistrată'}: „${echip.denumire}” are acum ${fmtNr(r.total)} ${echip.um} în evidență.`)
+      }
+      return { ...r, azi }
+    } catch (e) {
+      return { stare:'necunoscut', azi, mesaj:`Rezultat necunoscut (${e.message}). Reîncearcă aceeași intrare sau reîncarcă și verifică în observații „ref ${ref}”.` }
+    } finally { setBusy(false) }
+  }
+
   // TKT-0279: aceeași inserare ca saveEchip (nou), dar pe mai multe rânduri odată.
   // Factura/furnizor/preț nu au coloane proprii → intră în observatii (fără schimbare de schemă).
+  // TKT-0353: rândurile cu țintă existentă (r.tinta = id) se adună la stocul acelui echipament, una câte una,
+  // cu aceeași scriere condiționată ca „+ Intrare”; rândurile 'nou' se inserează ca înainte, la final.
+  // Întoarce cheile rândurilor aplicate, ca modalul să le scoată și o reluare să nu le mai trimită.
+  // r2: (P1) rândurile „nou” se reverifică pe lista completă recitită din BD înaintea oricărei scrieri;
+  // (P2) mai multe rânduri pe același echipament se înlănțuie (aplicaLot); (P4) rândul cu rezultat necunoscut se
+  // întoarce ca „fixat” (formularul și ziua primei încercări), ca reîncercarea să trimită exact aceeași intrare.
+  // r3: toată logica stă în salveazaFactura (magazieIntrareStoc.js, testată): rândul nou deja creat se recunoaște după
+  // ref + CONȚINUT (alt conținut = refuz, nu „deja salvat”); inserarea cu rezultat necunoscut (rețea / 5xx) blochează rândurile.
   const saveBulk = async (rows, fact) => {
     setBusy(true)
+    let res = { aplicate: [], necunoscute: [], eroare: null }
     try {
-      const antet = [fact.nr.trim() && `Factura ${fact.nr.trim()}`, fact.data && `din ${fact.data}`, fact.furnizor.trim() && `furnizor ${fact.furnizor.trim()}`].filter(Boolean).join(' ')
-      const payload = rows.map(r => {
-        const pv = String(r.pret || '').replace(',', '.').trim()
-        const pret = pv !== '' && !isNaN(Number(pv)) ? Number(pv) : null
-        const obs = [antet, pret != null && `preț unitar ${pret} lei`].filter(Boolean).join(' · ')
-        return {
-          denumire: r.denumire.trim(),
-          categorie: fact.categorie,
-          este_eip: fact.categorie === 'eip',
-          um: (r.um || '').trim() || 'buc',
-          serie: r.serie?.trim() || null,
-          cantitate_total: Number(String(r.cantitate).replace(',', '.')) || 0,
-          stare: 'functional',
-          observatii: obs || null,
-          created_by: uid,
-        }
-      })
-      const { error } = await supabase.from('magazie_echipamente').insert(payload)
-      if (error) throw error
-      setBulkOpen(false)
+      res = await salveazaFactura(supabase, { rows, fact, uid, azi: dataAziBucuresti(new Date()), echipamente, catalogIds })
+      if (!res.eroare) setBulkOpen(false)
       await loadAll()
-      alert(`✓ ${payload.length} echipamente adăugate.`)
+      if (!res.eroare) alert(`✓ ${res.laStoc} adăugate la stocul existent, ${res.noi} echipamente noi.`)
+      // r4: inserarea necunoscută NU se retrimite automat (lista e reîncărcată mai sus; omul verifică și confirmă la rând)
+      else alert(`Eroare salvare: ${res.eroare}${res.aplicate.length ? `\n${res.aplicate.length} rânduri au fost deja salvate și au fost scoase din listă.` : ''}${res.necunoscute.some(x => x.fixat?.inserare === 'necunoscuta') ? `\nRândurile noi cu rezultat necunoscut au rămas blocate. ${MESAJ_INSERARE_NECUNOSCUTA}` : res.necunoscute.length ? '\nRândurile cu rezultat necunoscut au rămas blocate: reîncercarea le trimite identic (nu se adună de două ori).' : ''}`)
     } catch (e) { alert('Eroare salvare: ' + e.message) } finally { setBusy(false) }
+    return res
   }
 
   const stergeEchip = async (e) => {
@@ -691,6 +723,7 @@ function EchipamenteTab() {
       </div>
 
       {marimiError && <div role="status" style={{ ...S.card, padding:12, color:G.orange }}>{marimiError}</div>}
+      {listaError && <div role="alert" style={{ ...S.card, padding:12, color:G.red }}>{listaError}</div>}
 
       {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă echipamentele...</div>}
 
@@ -704,7 +737,7 @@ function EchipamenteTab() {
 
       {!loading && filtered.length > 0 && (
         <div style={{ ...S.card, overflow:'hidden' }}>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 130px 80px 80px 80px 150px', gap:10, padding:'10px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 130px 80px 80px 80px 230px', gap:10, padding:'10px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
             <div>Echipament</div><div>Categorie</div><div style={{ textAlign:'center' }}>Total</div><div style={{ textAlign:'center' }}>Disp.</div><div style={{ textAlign:'center' }}>Asig.</div><div style={{ textAlign:'right' }}>Acțiuni</div>
           </div>
           {filtered.map(e => {
@@ -713,7 +746,7 @@ function EchipamenteTab() {
             const expanded = expandId === e.id
             return (
               <div key={e.id} style={{ borderBottom:`1px solid ${G.border}` }}>
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 130px 80px 80px 80px 150px', gap:10, alignItems:'center', padding:'10px 16px', fontSize:13.5 }}>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 130px 80px 80px 80px 230px', gap:10, alignItems:'center', padding:'10px 16px', fontSize:13.5 }}>
                   <div>
                     <div style={{ fontWeight:600, display:'flex', alignItems:'center', gap:8 }}>
                       {e.denumire}
@@ -728,6 +761,11 @@ function EchipamenteTab() {
                   <div style={{ textAlign:'center', fontWeight:800, color: Number(e.cantitate_disponibila) > 0 ? G.green : G.dim }}>{fmtNr(e.cantitate_disponibila)}</div>
                   <div style={{ textAlign:'center', fontWeight:700, color: Number(e.cantitate_asignata) > 0 ? G.purple : G.dim }}>{fmtNr(e.cantitate_asignata)}</div>
                   <div style={{ display:'flex', gap:6, justifyContent:'flex-end' }}>
+                    {(() => {
+                      const motiv = motivFaraIntrare(e, catalogIds)
+                      return <button onClick={() => setIntrareModal(e)} disabled={!!motiv || busy} title={motiv || 'Intrare nouă peste stocul existent (se adună la total)'}
+                        style={{ ...S.btnS, padding:'5px 10px', fontSize:12, opacity: motiv ? .4 : 1, color:G.blue, borderColor:G.blue + '66' }}>+ Intrare</button>
+                    })()}
                     <button onClick={() => setPredaModal(e)} disabled={Number(e.cantitate_disponibila) <= 0} title="Predă către angajat"
                       style={{ ...S.btnS, padding:'5px 10px', fontSize:12, opacity: Number(e.cantitate_disponibila) <= 0 ? .4 : 1, color:G.green, borderColor:G.green + '66' }}>👤 Predă</button>
                     <button onClick={() => setExpandId(expanded ? null : e.id)} style={{ ...S.btnS, padding:'5px 10px', fontSize:12 }}>{expanded ? '▲' : `▾ ${asigList.length}`}</button>
@@ -760,7 +798,9 @@ function EchipamenteTab() {
         legătură HR-Inventar (oglindă per angajat) + notificare Natalia la angajare fără EIP asignat. Granița cu flota: ce are regim service/QR/ITP stă în Logistică, nu aici.
       </div>
 
-      {bulkOpen && <BulkEchipModal busy={busy} onSave={saveBulk} onClose={() => setBulkOpen(false)} />}
+      {bulkOpen && <BulkEchipModal busy={busy} onSave={saveBulk} onClose={() => setBulkOpen(false)}
+        echipamente={echipamente} catalogIds={catalogIds} listaError={listaError} />}
+      {intrareModal && <IntrareModal echip={intrareModal} busy={busy} onSave={saveIntrare} onClose={() => setIntrareModal(null)} />}
       {editModal && <EchipModal initial={editModal} busy={busy} onSave={saveEchip} onClose={() => setEditModal(null)} />}
       {predaModal && <PredaModal poateScrieMarimi={poateScrieMarimi} echip={predaModal} employees={employees} busy={busy} onPreda={predaCatre} onClose={() => setPredaModal(null)}
         onMasuraSalvata={(id, camp, val) => setEmployees(prev => prev.map(e => e.id === id ? { ...e, [camp]: val } : e))} />}
@@ -805,7 +845,8 @@ function EchipModal({ initial, busy, onSave, onClose }) {
               <option value="functional">✅ Funcțional</option><option value="defect">⚠️ Defect</option><option value="casat">❌ Casat</option>
             </select>
           </div>
-          <div><label style={{ fontSize:12, color:G.muted }}>Observații</label><input style={S.input} value={f.observatii || ''} onChange={e => setF({ ...f, observatii:e.target.value })} /></div>
+          {/* TKT-0353: textarea, ca liniile „Intrare +N …” să rămână pe rânduri separate la editare */}
+          <div><label style={{ fontSize:12, color:G.muted }}>Observații</label><textarea rows={3} style={{ ...S.input, resize:'vertical' }} value={f.observatii || ''} onChange={e => setF({ ...f, observatii:e.target.value })} /></div>
         </div>
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:18 }}>
           <button onClick={onClose} style={S.btnS}>Anulează</button>
@@ -816,27 +857,122 @@ function EchipModal({ initial, busy, onSave, onClose }) {
   )
 }
 
+// ── TKT-0353: Modal „+ Intrare” (cantitate primită peste stocul existent) ──
+// Referința intenției se creează o dată la deschidere și se refolosește la reîncercare (nu se adună de două ori).
+const refAleator = () => refNou(globalThis.crypto.getRandomValues(new Uint8Array(4)))
+function IntrareModal({ echip, busy, onSave, onClose }) {
+  const [ref] = useState(refAleator)
+  const [f, setF] = useState({ cantitate:'', facturaNr:'', facturaData:'', furnizor:'', pret:'' })
+  const [mesaj, setMesaj] = useState('')
+  // r2 P4 (L05): după un rezultat NECUNOSCUT formularul se blochează pe valorile trimise (și ziua primei încercări):
+  // reîncercarea retrimite identic aceeași intrare; pentru alte valori se închide și se deschide un formular nou (ref nou).
+  const [fixat, setFixat] = useState(null)
+  const suma = sumaStoc(echip.cantitate_total, f.cantitate)
+  const eroareCant = String(f.cantitate).trim() ? eroareCantitateIntrare(f.cantitate) : ''
+  const trimite = async () => {
+    setMesaj('')
+    const r = await onSave(echip, fixat ? fixat.f : f, ref, fixat?.azi)
+    if (r?.stare === 'necunoscut' && !fixat) setFixat({ f:{ ...f }, azi:r.azi })
+    if (r && r.stare !== 'ok' && r.stare !== 'deja' && r.stare !== 'conflict') setMesaj(r.mesaj || 'Eroare necunoscută.')
+  }
+  const set = (k, v) => { if (!fixat) setF(prev => ({ ...prev, [k]: v })) }
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:20 }} onClick={busy ? undefined : onClose}>
+      <div style={{ ...S.card, padding:22, maxWidth:480, width:'100%' }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:4 }}>+ Intrare nouă</div>
+        <div style={{ fontSize:13, color:G.muted, marginBottom:14 }}>{echip.denumire} · în evidență acum: <b style={{ color:G.text }}>{fmtNr(echip.cantitate_total)} {echip.um}</b></div>
+        <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+          <div>
+            <label style={{ fontSize:12, color:G.muted }}>Cantitate primită * ({echip.um})</label>
+            <input autoFocus inputMode="decimal" style={S.input} value={f.cantitate} readOnly={!!fixat} onChange={e => set('cantitate', e.target.value)} placeholder="ex: 10 sau 2,5" />
+            {eroareCant && <div role="alert" style={{ fontSize:11.5, color:G.red, marginTop:5 }}>{eroareCant}</div>}
+            {suma.ok && <div style={{ fontSize:12.5, color:G.green, marginTop:5, fontWeight:700 }}>Total după intrare: {fmtCantitate(suma.total)} {echip.um}</div>}
+          </div>
+          <div style={{ display:'flex', gap:10 }}>
+            <div style={{ flex:1 }}><label style={{ fontSize:12, color:G.muted }}>Nr. factură</label><input style={S.input} value={f.facturaNr} readOnly={!!fixat} onChange={e => set('facturaNr', e.target.value)} placeholder="opțional" /></div>
+            <div style={{ width:150 }}><label style={{ fontSize:12, color:G.muted }}>Data facturii</label><input type="date" style={S.input} value={f.facturaData} readOnly={!!fixat} onChange={e => set('facturaData', e.target.value)} /></div>
+          </div>
+          <div style={{ display:'flex', gap:10 }}>
+            <div style={{ flex:2 }}><label style={{ fontSize:12, color:G.muted }}>Furnizor</label><input style={S.input} value={f.furnizor} readOnly={!!fixat} onChange={e => set('furnizor', e.target.value)} placeholder="opțional" /></div>
+            <div style={{ flex:1 }}><label style={{ fontSize:12, color:G.muted }}>Preț unitar (lei)</label><input inputMode="decimal" style={S.input} value={f.pret} readOnly={!!fixat} onChange={e => set('pret', e.target.value)} placeholder="opțional" /></div>
+          </div>
+          <div style={{ fontSize:11, color:G.dim }}>Se adaugă la totalul existent; factura, furnizorul și prețul rămân ca rând nou în „Observații” (cele vechi nu se șterg).</div>
+          {fixat && <div role="status" style={{ fontSize:12, color:G.orange }}>Rezultatul încercării anterioare nu e confirmat. Reîncercarea trimite exact aceeași intrare (nu se adună de două ori); câmpurile nu se mai pot modifica. Pentru alte valori închide și deschide din nou „+ Intrare”.</div>}
+          {mesaj && <div role="alert" style={{ fontSize:12.5, color:G.red }}>{mesaj}</div>}
+        </div>
+        <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:18 }}>
+          <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
+          <button onClick={trimite} disabled={!suma.ok || busy} style={{ ...S.btnP, opacity: (!suma.ok || busy) ? .5 : 1 }}>{busy ? 'Se salvează...' : fixat ? '↻ Reîncearcă aceeași intrare' : '✓ Adaugă la stoc'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── TKT-0279: Modal adăugare în bloc (din factură) ──
 // Lipire din Excel: coloane separate prin TAB sau ; → denumire, cantitate, UM, preț, serie
-const RAND_GOL = () => ({ denumire:'', cantitate:'1', um:'buc', pret:'', serie:'' })
-function BulkEchipModal({ busy, onSave, onClose }) {
-  const [fact, setFact] = useState({ nr:'', data:new Date().toISOString().slice(0, 10), furnizor:'', categorie:'echipament' })
-  const [rows, setRows] = useState([RAND_GOL(), RAND_GOL(), RAND_GOL()])
+// TKT-0353: fiecare rând are o cheie (k) și o referință de intrare (ref); alegere = undefined (implicit) | 'nou' | id existent.
+// r5: cheie = referința intenției „rând nou” (UUID, unică în BD: aceeași intrare nu se salvează de două ori); ref = primele 8 cifre ale ei.
+let cheieRand = 0
+const cheiRand = () => { const cheie = cheieIntentie(globalThis.crypto.getRandomValues(new Uint8Array(16))); return { cheie, ref: cheie.slice(0, 8) } }
+const RAND_GOL = (v = {}) => ({ denumire:'', cantitate:'1', um:'buc', pret:'', serie:'', ...v, k: ++cheieRand, ...cheiRand(), alegere: undefined })
+function BulkEchipModal({ busy, onSave, onClose, echipamente, catalogIds, listaError }) {
+  const [fact, setFact] = useState({ nr:'', data:dataAziBucuresti(new Date()), furnizor:'', categorie:'echipament' })
+  const [rows, setRows] = useState(() => [RAND_GOL(), RAND_GOL(), RAND_GOL()])
   const [paste, setPaste] = useState('')
-  const setRow = (i, k, v) => setRows(prev => prev.map((r, j) => j === i ? { ...r, [k]: v } : r))
+  // r2 P4: rândul cu rezultat necunoscut (r.fixat) nu se mai modifică: reîncercarea îl trimite identic.
+  const setRow = (i, k, v) => setRows(prev => prev.map((r, j) => j === i && !r.fixat ? { ...r, [k]: v } : r))
   const importPaste = () => {
     const noi = paste.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(l => {
       const c = l.split(l.includes('\t') ? '\t' : ';').map(x => x.trim())
-      return { denumire:c[0] || '', cantitate:c[1] || '1', um:c[2] || 'buc', pret:c[3] || '', serie:c[4] || '' }
+      return RAND_GOL({ denumire:c[0] || '', cantitate:c[1] || '1', um:c[2] || 'buc', pret:c[3] || '', serie:c[4] || '' })
     }).filter(r => r.denumire)
     if (!noi.length) return
     setRows(prev => [...prev.filter(r => r.denumire.trim()), ...noi])
     setPaste('')
   }
-  const valide = rows.filter(r => r.denumire.trim() && Number(String(r.cantitate).replace(',', '.')) >= 0)
+  // TKT-0353: denumire existentă (fără diacritice/majuscule, aceeași categorie și UM) → implicit se adună la stocul ei.
+  const azi = dataAziBucuresti(new Date())
+  const analiza = rows.map(r => {
+    // r2/r3: rândul deja salvat la o încercare cu rezultat necunoscut nu se mai trimite — DOAR dacă rândul găsit după ref are
+    // exact conținutul acestei intenții (judecaRandFactura, aceeași funcție ca la salvare); alt conținut = eroare, nu „deja salvat”.
+    if (!r.denumire.trim()) return { potriviri: [], tinta: 'nou', eroare: '' }
+    const j0 = judecaRandFactura({ ref:r.ref, tinta:'nou' }, intentieRand(r, fact), echipamente)
+    if (j0.stare === 'creat') return { potriviri: [], tinta: 'nou', eroare: '', creat: j0.echip }
+    const potriviri = potrivireExistente(r, (r.fixat?.fact || fact).categorie, echipamente, catalogIds)
+    const tinta = r.fixat ? r.fixat.tinta : tintaRand(r.alegere, potriviri)
+    const j = j0.stare === 'absent' ? j0 : judecaRandFactura({ ref:r.ref, tinta }, intentieRand(r, fact), echipamente)
+    const v = tinta !== 'nou' && tinta !== null
+      ? validareIntrare(r.fixat?.form ? r.fixat.form : { cantitate:r.cantitate, facturaNr:fact.nr, facturaData:fact.data, furnizor:fact.furnizor, pret:r.pret }, r.fixat?.azi || azi) : null
+    const eroare = j.stare === 'alta' ? MESAJ_REF_ALT
+      : tinta === null ? 'Există mai multe rânduri cu această denumire: alege unde se adaugă.'
+      : v ? (v.ok ? '' : v.eroare)
+      : Number(String(r.cantitate).replace(',', '.')) >= 0 ? '' : 'Cantitate invalidă.'
+    // r4: inserare cu rezultat necunoscut, ref-ul negăsit în lista reîncărcată → se trimite doar cu confirmarea omului
+    return { potriviri, tinta, eroare, nesigur: inserareNecunoscuta(r) }
+  })
+  const deConfirmat = (r, i) => analiza[i].nesigur && r.retrimitereConfirmata !== true
+  // vazute = rândurile existente arătate omului pentru acest rând (r2 P1: la salvare se compară cu lista completă recitită)
+  const valide = rows.map((r, i) => ({ ...r, tinta: analiza[i].tinta, vazute: analiza[i].potriviri.map(p => p.id) })).filter((r, i) => r.denumire.trim() && !analiza[i].eroare && !analiza[i].creat && !deConfirmat(r, i))
+  const invalide = rows.filter((r, i) => r.denumire.trim() && analiza[i].eroare).length
+  const neconfirmate = rows.filter((r, i) => r.denumire.trim() && !analiza[i].eroare && !analiza[i].creat && deConfirmat(r, i)).length
+  const laStoc = valide.filter(r => r.tinta !== 'nou').length
+  // bifa de confirmare: doar pe rândurile cu inserare necunoscută; orice rezultat necunoscut nou o șterge (randuriDupaSalvare)
+  const setConfirmare = (i, v) => setRows(prev => prev.map((r, j) => j === i && inserareNecunoscuta(r) ? { ...r, retrimitereConfirmata: v } : r))
+  const salveaza = async () => {
+    const res = await onSave(valide, fact)
+    if (res?.aplicate?.length || res?.necunoscute?.length) setRows(prev => randuriDupaSalvare(prev, res, RAND_GOL))
+  }
+  // închiderea / ștergerea unui rând cu inserare necunoscută nerezolvată se confirmă (rândul poate exista deja în evidență)
+  const ramaseNesigure = rows.some((r, i) => analiza[i].nesigur && !analiza[i].creat)
+  const inchide = () => { if (busy) return; if (!ramaseNesigure || window.confirm(`${MESAJ_INSERARE_NECUNOSCUTA}\nÎnchizi formularul?`)) onClose() }
+  const stergeRand = i => {
+    if (analiza[i].nesigur && !analiza[i].creat && !window.confirm(`${MESAJ_INSERARE_NECUNOSCUTA}\nȘtergi rândul din formular?`)) return
+    setRows(prev => prev.length > 1 ? prev.filter((_, j) => j !== i) : [RAND_GOL()])
+  }
   const col = '1fr 80px 70px 90px 130px 30px'
   return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:20 }} onClick={onClose}>
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:20 }} onClick={inchide}>
       <div style={{ ...S.card, padding:22, maxWidth:900, width:'100%', maxHeight:'90vh', overflowY:'auto' }} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize:17, fontWeight:800, marginBottom:14 }}>📄 Adaugă echipamente din factură</div>
         <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
@@ -859,21 +995,56 @@ function BulkEchipModal({ busy, onSave, onClose }) {
         <div style={{ display:'grid', gridTemplateColumns:col, gap:6, fontSize:11, color:G.dim, fontWeight:700, marginBottom:4 }}>
           <div>Denumire *</div><div>Cant.</div><div>UM</div><div>Preț unit.</div><div>Serie / nr. inv.</div><div />
         </div>
-        {rows.map((r, i) => (
-          <div key={i} style={{ display:'grid', gridTemplateColumns:col, gap:6, marginBottom:6 }}>
-            <input style={S.input} value={r.denumire} onChange={e => setRow(i, 'denumire', e.target.value)} />
-            <input style={S.input} value={r.cantitate} onChange={e => setRow(i, 'cantitate', e.target.value)} />
-            <input style={S.input} value={r.um} onChange={e => setRow(i, 'um', e.target.value)} />
-            <input style={S.input} value={r.pret} onChange={e => setRow(i, 'pret', e.target.value)} placeholder="lei" />
-            <input style={S.input} value={r.serie} onChange={e => setRow(i, 'serie', e.target.value)} placeholder="opțional" />
-            <button onClick={() => setRows(prev => prev.length > 1 ? prev.filter((_, j) => j !== i) : [RAND_GOL()])} style={{ ...S.btnS, padding:'4px 6px' }} title="Șterge rândul">✕</button>
-          </div>
-        ))}
+        {rows.map((r, i) => {
+          const { potriviri, tinta, eroare, creat, nesigur } = analiza[i]
+          return (
+            <div key={r.k} style={{ marginBottom:6 }}>
+              <div style={{ display:'grid', gridTemplateColumns:col, gap:6 }}>
+                <input style={S.input} readOnly={!!r.fixat} value={r.denumire} onChange={e => setRow(i, 'denumire', e.target.value)} />
+                <input style={S.input} readOnly={!!r.fixat} value={r.cantitate} onChange={e => setRow(i, 'cantitate', e.target.value)} />
+                <input style={S.input} readOnly={!!r.fixat} value={r.um} onChange={e => setRow(i, 'um', e.target.value)} />
+                <input style={S.input} readOnly={!!r.fixat} value={r.pret} onChange={e => setRow(i, 'pret', e.target.value)} placeholder="lei" />
+                <input style={S.input} readOnly={!!r.fixat} value={r.serie} onChange={e => setRow(i, 'serie', e.target.value)} placeholder="opțional" />
+                <button onClick={() => stergeRand(i)} disabled={busy} style={{ ...S.btnS, padding:'4px 6px' }} title="Șterge rândul">✕</button>
+              </div>
+              {potriviri.length > 0 && (
+                <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:12, color:G.orange, margin:'4px 0 0 2px' }}>
+                  <span>⚠️ Există deja în evidență:</span>
+                  <select disabled={!!r.fixat} style={{ ...S.input, width:'auto', maxWidth:460, padding:'4px 8px', fontSize:12 }} value={tinta === null ? '' : String(tinta)}
+                    onChange={e => setRow(i, 'alegere', e.target.value === 'nou' ? 'nou' : potriviri.find(p => String(p.id) === e.target.value)?.id)}>
+                    {tinta === null && <option value="">— alege —</option>}
+                    {potriviri.map(p => <option key={p.id} value={String(p.id)} disabled={!!p.motivBlocat}>
+                      ➕ adaugă la stocul existent: {p.denumire} (acum {fmtNr(p.cantitate_total)} {p.um}){p.motivBlocat ? ` — ${p.motivBlocat}` : ''}</option>)}
+                    <option value="nou">rând nou separat</option>
+                  </select>
+                </div>
+              )}
+              {creat && <div role="status" style={{ fontSize:11.5, color:G.green, margin:'3px 0 0 2px' }}>✓ Deja salvat la încercarea anterioară („{creat.denumire}”, acum {fmtNr(creat.cantitate_total)} {creat.um}): rândul nu se mai trimite. Îl poți șterge din listă.</div>}
+              {r.fixat && !nesigur && <div role="status" style={{ fontSize:11.5, color:G.orange, margin:'3px 0 0 2px' }}>Rezultat neconfirmat la încercarea anterioară: rândul se retrimite identic (aceeași factură și dată), nu se adună de două ori. Nu se mai poate modifica; dacă vrei altceva, șterge-l și verifică întâi stocul.</div>}
+              {/* r4: inserarea necunoscută nu se retrimite automat; omul verifică lista reîncărcată și confirmă explicit */}
+              {nesigur && !creat && !eroare && (
+                <div role="status" style={{ fontSize:11.5, color:G.orange, margin:'3px 0 0 2px' }}>
+                  <div style={{ fontWeight:700 }}>{MESAJ_INSERARE_NECUNOSCUTA}</div>
+                  <div>Rândul nu apare acum în lista reîncărcată. Caută „{r.denumire}” în lista de echipamente; dacă nu e acolo, bifează și salvează din nou (aceeași intrare nu poate fi salvată de două ori, chiar dacă cererea anterioară ajunge mai târziu).</div>
+                  <label style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, color:G.text, cursor: (busy || listaError) ? 'default' : 'pointer' }}>
+                    <input type="checkbox" checked={r.retrimitereConfirmata === true} disabled={busy || !!listaError} onChange={e => setConfirmare(i, e.target.checked)} />
+                    Am verificat lista reîncărcată: rândul nu există, trimite-l din nou
+                  </label>
+                </div>
+              )}
+              {eroare && <div role="alert" style={{ fontSize:11.5, color:G.red, margin:'3px 0 0 2px' }}>{eroare}</div>}
+            </div>
+          )
+        })}
         <button onClick={() => setRows(prev => [...prev, RAND_GOL()])} style={{ ...S.btnS, marginTop:4 }}>+ Rând</button>
-        <div style={{ fontSize:11, color:G.dim, marginTop:10 }}>Factura, furnizorul și prețul se salvează în „Observații" la fiecare echipament. Rândurile fără denumire se ignoră.</div>
+        <div style={{ fontSize:11, color:G.dim, marginTop:10 }}>Factura, furnizorul și prețul se salvează în „Observații" la fiecare echipament. Rândurile fără denumire se ignoră. Dacă denumirea există deja (aceeași categorie și UM), cantitatea se adună implicit la stocul existent.</div>
+        {listaError && <div role="alert" style={{ fontSize:12, color:G.red, marginTop:8 }}>Lista de echipamente nu s-a încărcat, deci nu pot verifica dublurile. Închide și reîncarcă înainte de a salva.</div>}
+        {invalide > 0 && <div role="alert" style={{ fontSize:12, color:G.red, marginTop:8 }}>{invalide} {invalide === 1 ? 'rând are' : 'rânduri au'} probleme (vezi mesajele roșii). Corectează-le sau șterge-le înainte de a salva.</div>}
+        {neconfirmate > 0 && <div role="alert" style={{ fontSize:12, color:G.orange, marginTop:8 }}>{neconfirmate} {neconfirmate === 1 ? 'rând nou are' : 'rânduri noi au'} rezultat necunoscut: verifică lista și bifează confirmarea (sau șterge rândul) înainte de a salva.</div>}
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:14 }}>
-          <button onClick={onClose} style={S.btnS}>Anulează</button>
-          <button onClick={() => onSave(valide, fact)} disabled={!valide.length || busy} style={{ ...S.btnP, opacity: (!valide.length || busy) ? .5 : 1 }}>{busy ? 'Se salvează...' : `✓ Salvează ${valide.length} echipamente`}</button>
+          <button onClick={inchide} disabled={busy} style={S.btnS}>Anulează</button>
+          <button onClick={salveaza} disabled={!valide.length || invalide > 0 || neconfirmate > 0 || !!listaError || busy} style={{ ...S.btnP, opacity: (!valide.length || invalide > 0 || neconfirmate > 0 || listaError || busy) ? .5 : 1 }}>
+            {busy ? 'Se salvează...' : `✓ Salvează ${valide.length} rânduri${laStoc ? ` (${laStoc} la stoc existent)` : ''}`}</button>
         </div>
       </div>
     </div>

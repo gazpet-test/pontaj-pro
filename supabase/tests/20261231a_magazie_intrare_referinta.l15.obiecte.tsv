@@ -1,0 +1,6 @@
+# 20261231a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.magazie_echipamente.referinta_intentie	creat
+constrangere	constrangere tabel public.magazie_echipamente.magazie_echipamente_referinta_intentie_key	creat
+functie	functie public.fn_magazie_referinta_intentie_imuabila()	creat
+relatie	relatie public.magazie_echipamente_referinta_intentie_key	creat
+trigger	trigger public.magazie_echipamente.trg_magazie_referinta_intentie	creat

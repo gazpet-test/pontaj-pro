@@ -11,6 +11,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { supabase } from './supabase.js'
+import { citesteToate } from './citireCompleta.js'
 
 // Câmpurile urmărite, grupate ca în modalul de proiect (Execuție).
 // `cheie` e stabilă — pe ea se face deduplicarea între ședințe.
@@ -60,20 +61,23 @@ async function termenEfectiv(proiect) {
 
 // ── Stadiul fizic: cât s-a raportat față de cantitățile de contract ──
 // Timpul singur nu spune nimic; „70% din timp consumat, 20% executat" spune tot.
+// Citirile sunt COMPLETE, pe chei (citesteToate: keyset pe id, L23). Review #1158 r8: plafonul PostgREST de 1000 de rânduri făcea citirea veche
+// (fără ordine, fără paginare) să vadă un subset dependent de ordinea fizică → stadiul se schimba după confirmarea ofertei în „Rest de decontat” pe
+// proiectele cu peste 1000 de articole / raportări. O eroare de citire se aruncă (L18): apelanții o arată (SedintePage), nu devine „stadiu necunoscut”.
 async function stadiuFizic(proiectId) {
-  const [{ data: acts }, { data: rl }, { data: art }] = await Promise.all([
-    supabase.from('proiect_activitati').select('id, coduri_deviz').eq('proiect_id', proiectId).eq('activ', true),
-    supabase.from('raport_lucrari').select('activitate_id, cantitate').eq('proiect_id', proiectId),
-    supabase.from('proiect_articole').select('cod, cantitate, sursa').eq('proiect_id', proiectId).neq('sursa', 'extras_materiale'),
+  const [acts, rl, art] = await Promise.all([
+    citesteToate(() => supabase.from('proiect_activitati').select('id, coduri_deviz').eq('proiect_id', proiectId).eq('activ', true)),
+    citesteToate(() => supabase.from('raport_lucrari').select('id, activitate_id, cantitate').eq('proiect_id', proiectId)),
+    citesteToate(() => supabase.from('proiect_articole').select('id, cod, cantitate, sursa').eq('proiect_id', proiectId).neq('sursa', 'extras_materiale')),
   ])
-  if (!acts?.length) return null
+  if (!acts.length) return null
   const realizat = {}
-  for (const r of (rl || [])) if (r.activitate_id) realizat[r.activitate_id] = (realizat[r.activitate_id] || 0) + (Number(r.cantitate) || 0)
+  for (const r of rl) if (r.activitate_id) realizat[r.activitate_id] = (realizat[r.activitate_id] || 0) + (Number(r.cantitate) || 0)
   let cuContract = 0, sumaPct = 0
   for (const a of acts) {
     const prefixe = (a.coduri_deviz || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
     if (!prefixe.length) continue
-    const q = (art || []).filter(x => prefixe.some(p => (x.cod || '').toUpperCase().startsWith(p)))
+    const q = art.filter(x => prefixe.some(p => (x.cod || '').toUpperCase().startsWith(p)))
       .reduce((s, x) => s + (Number(x.cantitate) || 0), 0)
     if (q <= 0) continue
     cuContract++

@@ -7,7 +7,7 @@ import {
   CAMPURI, OBLIGATORII, TRANZITII, CATEGORII, POZE_CERUTE, RPC_USCARE, stareDupa, actiuniPermise, ORA_AMBIGUA, alegereDinIso, momenteLocale,
   oraLocalaDinIso, isoDinOraLocala, ziBucuresti, durataOre, vitezaMedie, diferentaBurete, verificare24h, fmtMoment,
   lipsaDinRand, pozeLipsa, incarcariDeschise, cantaririPentru, formularNou, formularDinRand, payloadDinFormular, areModificari, imbinare, aleg,
-  propunereMeteo, invalidareMeteo, pozitieDinGps, pozitieDinTraseu, numeFisierRaport, prefixRegistru,
+  formulareDiferite, formulareDiferiteBrut, propunereMeteo, invalidareMeteo, pozitieDinGps, pozitieDinTraseu, numeFisierRaport, prefixRegistru,
 } from './uscareLogica.js'
 
 const SQL = readFileSync(fileURLToPath(new URL('../supabase/migrations/20261225a_executie_uscare.sql', import.meta.url)), 'utf8').replace(/\r/g, '')
@@ -219,6 +219,49 @@ describe('formularul', () => {
   it('numele fișierului', () => {
     expect(numeFisierRaport({ tronson: 'Tr. 2 – Lot A', data_operatie: '2026-12-08', revizie: 0 })).toBe('Raport_uscare_Tr_2_Lot_A_2026-12-08.pdf')
     expect(numeFisierRaport({ tronson: 'Țară', data_operatie: null, revizie: 2 })).toBe('Raport_uscare_Tara_fara_data_rev2.pdf')
+  })
+})
+
+// review #1129 pct. 4: ciorna se păstrează și cu valorile tastate încă INVALIDE / incomplete (nu intră în payload, dar sunt date de pe șantier)
+describe('ciorna: formulareDiferiteBrut ține cont de ce a tastat omul', () => {
+  const propus = () => formularNou({ constructor: 'Constructor SRL' })   // propunerea goală a unui raport nou
+  const tastat = [
+    ['lungimea cu 2 zecimale (500.12)', { lungime_m: '500.12' }],
+    ['utilaj numit, cu bucățile încă goale', { utilaje: [{ denumire: 'Compresor', buc: '' }] }],
+    ['utilaj fără denumire, doar cu bucăți', { utilaje: [{ denumire: '', buc: '3' }] }],
+    ['text într-un câmp numeric', { presiune_bar: 'abc' }],
+    ['ora începerii pe jumătate', { ora_inceput: '2026-11-18T1' }],
+    ['ora de la trecerea la ora de iarnă, cu apariția nealeasă', { ora_inceput: '2026-10-25T03:30' }],
+    // propunerea pașilor are deja bureții și rândurile lor goale: doar greutatea tastată (cu unitatea lipită, deci nenumerică) diferă
+    ['greutate de cântărire cu text („1,25kg”)', { cantariri: [{ nr: 1, intrare_kg: '1,25kg', iesire_kg: '', motiv: null }] },
+      { bureti_buc: '1', cantariri: [{ nr: 1, intrare_kg: '', iesire_kg: '', motiv: null }] }],
+  ]
+  for (const [ce, patch, bazaP = {}] of tastat) {
+    it(`${ce}: nu trece de validare, dar ciorna se păstrează`, () => {
+      const g = { ...propus(), ...bazaP }, f = { ...g, ...patch }
+      expect(payloadDinFormular(f).erori.length, 'valoarea e într-adevăr invalidă / incompletă').toBeGreaterThan(0)
+      expect(formulareDiferite(f, g), 'comparația pe payload (cea din #1129) nu o vede: reproducere reală').toBe(false)
+      expect(formulareDiferiteBrut(f, g)).toBe(true)
+      expect(formulareDiferiteBrut(g, f)).toBe(true)
+    })
+  }
+  it('reproducerea review-ului: comparația pe payload (rămasă pentru areModificari) nu le vede', () => {
+    expect(formulareDiferite({ ...propus(), lungime_m: '500.12' }, propus())).toBe(false)
+    expect(formulareDiferite({ ...propus(), utilaje: [{ denumire: 'Compresor', buc: '' }] }, propus())).toBe(false)
+  })
+  it('ciorna cu adevărat goală (sau doar spații) = nicio diferență → se aruncă în continuare', () => {
+    expect(formulareDiferiteBrut(propus(), propus())).toBe(false)
+    expect(formulareDiferiteBrut({ ...propus(), tronson: '   ', observatii: ' ' }, propus())).toBe(false)
+    expect(formulareDiferiteBrut(null, propus())).toBe(false)
+  })
+  it('o valoare VALIDĂ tastată e tot diferență (ca în #1129)', () => {
+    expect(formulareDiferiteBrut({ ...propus(), lungime_m: '500,1' }, propus())).toBe(true)
+  })
+  it('raportul salvat: formularul lui = fără diferență; o valoare invalidă tastată pe el = diferență; areModificari neschimbat', () => {
+    const f = formularDinRand(RAND)
+    expect(formulareDiferiteBrut(f, formularDinRand(RAND))).toBe(false)
+    expect(formulareDiferiteBrut({ ...f, presiune_bar: '1,555' }, formularDinRand(RAND))).toBe(true)
+    expect(areModificari({ ...f, presiune_bar: '1,555' }, { ...RAND, presiune_bar: null })).toBe(false)   // payload-ul: null ca rândul (neschimbat)
   })
 })
 
