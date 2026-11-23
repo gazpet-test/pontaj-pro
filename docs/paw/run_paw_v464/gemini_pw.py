@@ -203,6 +203,12 @@
 #   documentele iframe-urilor) = refuz; user-agent (input / img / video...) doar in afara zonei (pagina reala: unul, pe un img din
 #   istoric); un text trunchiat de CDP (> 10000 de caractere) in zona = refuz. CDP indisponibil / forma neasteptata = refuz (nu exista o
 #   cale mai slaba). Verificarea r19 din evaluate ramane, ca citire anterioara care poate DOAR refuza (fara HTML).
+# v4.6.4d / r21 (23.11.2026, Jakarinos NO-GO r10 + recalibrarea pe pagina de azi): (1) trunchierea CDP si limita liniilor brief-ului se
+#   masoara in UNITATI UTF-16, ca Chromium (_u16 / _taiat_cdp): un emoji = 2 unitati, deci un text real de peste 10000 de unitati putea
+#   veni ca 10000 de puncte de cod + U+2026 = exact brief-ul (len() din r20 nu-l vedea). (2) Pagina Gemini s-a schimbat: pe chatul nou de
+#   azi `stare` dadea 10 necunoscute (refuz fals). Listele albe primesc EXACT atributele / valorile / clasele vazute in capturile de azi
+#   (z23s: gol / scurt / mediu / lung, Edge 9333, doar citire + textele 5g2-a scrise fara Enter si golite imediat): zona exterioara
+#   input-container, back-to-bottom-fab, span[role=status], div.input-area-container, hallucination-disclaimer. Niciun element / text nou.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata, base64, json
@@ -391,6 +397,11 @@ CONTROALE_CUNOSCUTE = (
 # matbadge, ariavaluetext, data-text, aria-labelledby...) = necunoscut. Elementele vazute doar prin semnatura la 21.11 (back-to-bottom-fab,
 # butonul "Deruleaza in jos", span[role=status], linkul de confidentialitate, hallucination-disclaimer, prompt-flow-bar) au doar atributele
 # din semnatura: orice alt atribut al lor = refuz FALS dar sigur (recalibrare: `stare` arata numele si valoarea in linia `sursa`).
+#   r21: z23s = capturile pagini de AZI (23.11 seara, Edge 9333, chat nou /app, Carbon, nimic atasat; rocky_r21_calibrare: gol / scurt /
+#   mediu / lung = textele 5g2-a scrise cu insert_text, fara Enter, golite imediat): atributele COMPLETE ale zonei exterioare
+#   input-container, back-to-bottom-fab + butonul + iconita, span[role=status], div.input-area-container, hallucination-disclaimer +
+#   div.capabilities-disclaimer + p[data-test-id=empty-disclaimer] (gol, doar un <br>). Toate valorile adaugate sunt EXACT cele vazute
+#   (aceleasi in cele 4 stari); niciun element si niciun text nou.
 ATR_GENERAT = re.compile(r"_ng(?:content|host)-ng-c[0-9]{1,12}")
 _E = lambda *v: re.compile("|".join(re.escape(x) for x in v))              # una din valorile EXACTE (fullmatch, Unicode brut)
 GOL = _E("")
@@ -400,38 +411,48 @@ BOOL = _E("true", "false")                                                   # s
 # CLASE_PERMISE[tag] (token-urile vazute in capturi pe acel tag, c23 / t23 / a22 / g22) sau (b) un token generat de Angular din
 # CLASE_GENERATE (doar cele vazute: `ng-tns-c<cifre>-<cifre>`, `ng-star-inserted`, `ng-animating`; pe orice tag, le pune Angular).
 # Restul token-urilor `ng-*` vazute (ng-trigger-*, ng-dirty, ng-untouched, ng-valid) sunt exacte pe tagul lor, nu tipare. Tag fara clase
-# vazute (a, p, svg, back-to-bottom-fab, hallucination-disclaimer, prompt-flow-bar, gem-popover, toolbox-drawer...) = doar CLASE_GENERATE.
+# vazute (a, svg, prompt-flow-bar, gem-popover, toolbox-drawer...) = doar CLASE_GENERATE. r21: p, back-to-bottom-fab, hallucination-disclaimer
+# si input-container au acum clasele vazute pe pagina de azi (z23s).
 CLASE_GENERATE = re.compile(r"ng-tns-c[0-9]{1,12}-[0-9]{1,4}|ng-star-inserted|ng-animating")   # c23 t23 g22 (fullmatch)
 SPATII_HTML = re.compile(r"[ \t\n\r\f]+")
+# r21 z23s (pagina de azi, chat nou, gol / scurt / mediu / lung): + token-urile vazute pe zona exterioara input-container, pe
+# back-to-bottom-fab si butonul lui, pe span[role=status], pe div.input-area-container, pe hallucination-disclaimer si continutul lui.
 CLASE_PERMISE = {
-    "button": ("fullscreen-button", "input-area-switch", "lm-enabled", "mat-badge", "mat-badge-above", "mat-badge-after",
-               "mat-badge-hidden", "mat-badge-overlap", "mat-badge-small", "mat-mdc-button", "mat-mdc-button-base", "mat-mdc-icon-button",
-               "mat-mdc-tooltip-trigger", "mat-primary", "mat-unthemed", "mdc-button", "mdc-icon-button"),                      # c23 t23
-    "div": ("children-ready", "circle-overlay", "fullscreen-button-container", "gem-menu-redesign", "gem-mic-button-wrapper",
-            "has-model-picker", "height-expanded-past-single-line", "inline-chips-enabled", "inner", "input-area",
-            "input-area-switch-label", "input-buttons-wrapper-bottom", "input-buttons-wrapper-top", "input-url-linkification-enabled",
-            "is-zero-state", "leading-actions-wrapper", "lm-enabled", "logo-pill-label-container", "mat-mdc-tooltip-trigger",
-            "mic-button-container", "model-picker-container", "new-input-ui", "ng-trigger", "ng-trigger-sendButtonVisibility",
-            "ng-trigger-slide", "ng-trigger-toolboxDrawerEnter", "persistent-mic", "pill-ui-logo-container", "pre-fullscreen", "ql-blank",
-            "ql-clipboard", "ql-editor", "rich-query-formatting-enabled", "send-button-container", "simplified-input-area",
-            "simplified-input-menu-container", "single-line-format", "text-input-field", "text-input-field-main-area",
-            "text-input-field_textarea-inner", "text-input-field_textarea-wrapper", "textarea", "textarea-wrapper",
-            "toolbox-drawer-container", "trailing-actions-wrapper", "under-input", "visible", "with-model-picker",
-            "with-toolbox-drawer"),                                                                                            # c23 t23 a22
+    "back-to-bottom-fab": ("back-to-bottom-fab",),                                                                             # r21 z23s
+    "button": ("back-to-bottom-fab", "fullscreen-button", "input-area-switch", "lm-enabled", "mat-badge", "mat-badge-above",
+               "mat-badge-after", "mat-badge-hidden", "mat-badge-overlap", "mat-badge-small", "mat-mdc-button", "mat-mdc-button-base",
+               "mat-mdc-icon-button", "mat-mdc-tooltip-trigger", "mat-primary", "mat-unthemed", "mdc-button",
+               "mdc-icon-button"),                                                                                     # c23 t23 (r21 z23s)
+    "div": ("capabilities-disclaimer", "children-ready", "circle-overlay", "fullscreen-button-container", "gem-menu-redesign",
+            "gem-mic-button-wrapper", "has-model-picker", "height-expanded-past-single-line", "inline-chips-enabled", "inner", "input-area",
+            "input-area-container", "input-area-switch-label", "input-buttons-wrapper-bottom", "input-buttons-wrapper-top",
+            "input-url-linkification-enabled", "is-zero-state", "leading-actions-wrapper", "lm-enabled", "logo-pill-label-container",
+            "mat-mdc-tooltip-trigger", "mic-button-container", "model-picker-container", "new-input-ui", "ng-trigger",
+            "ng-trigger-inputAreaAnimation", "ng-trigger-sendButtonVisibility", "ng-trigger-slide", "ng-trigger-toolboxDrawerEnter",
+            "persistent-mic", "pill-ui-logo-container", "pre-fullscreen", "ql-blank", "ql-clipboard", "ql-editor",
+            "rich-query-formatting-enabled", "send-button-container", "simplified-input-area", "simplified-input-menu-container",
+            "single-line-format", "text-input-field", "text-input-field-main-area", "text-input-field_textarea-inner",
+            "text-input-field_textarea-wrapper", "textarea", "textarea-wrapper", "toolbox-drawer-container", "trailing-actions-wrapper",
+            "under-input", "visible", "with-model-picker", "with-toolbox-drawer"),                                    # c23 t23 a22 (r21 z23s)
     "fieldset": ("input-area-fieldset",),                                                                                      # c23
     "gem-icon": ("dropdown-icon",),                                                                                            # c23
     "gem-icon-button": ("gem-button", "gem-button-badge-size-small", "gem-button-size-small", "gem-button-type-on-surface",
                         "gem-menu-button", "has-input", "lm-enabled", "mat-mdc-tooltip-trigger", "menu-button", "open", "send-button",
                         "speech_dictation_mic_button", "submit"),                                                              # c23 t23 a22
+    "hallucination-disclaimer": ("enable-luminous-disclaimer-updates", "hallucination-disclaimer"),                            # r21 z23s
     "input-area-v2": ("discovery-feed-theme", "input-box-shadow", "lm-input-redesign", "single-line-input", "ui-improvements-phase-1",
                       "with-toolbox-drawer"),                                                                                  # t23 (z21 taiat)
-    "mat-icon": ("gds-icon-l", "google-symbols", "lm-icon-l", "lumi-symbols", "mat-icon", "mat-icon-no-color", "mat-ligature-font",
-                 "notranslate"),                                                                                               # c23
+    "input-container": ("edge-to-edge", "grow-input-downwards", "hide-on-print", "input-gradient-overlay",
+                        "lm-input-redesign"),                                                                                  # r21 z23s
+    "mat-icon": ("gds-icon-l", "google-symbols", "lm-icon-l", "lm-icon-m", "lumi-symbols", "mat-icon", "mat-icon-no-color",
+                 "mat-ligature-font", "notranslate"),                                                                          # c23 (r21 z23s: lm-icon-m)
+    "p": ("desktop-spacing", "empty-disclaimer", "gds-body-s"),                                                                # r21 z23s
     "rich-textarea": ("enterprise", "ng-dirty", "ng-untouched", "ng-valid", "ql-bubble", "ql-container", "simplified-input",
                       "text-input-field_textarea"),                                                                            # c23
     "simplified-input-menu": ("simplified-input-menu",),                                                                       # c23
-    "span": ("gds-body-m", "mat-focus-indicator", "mat-mdc-button-persistent-ripple", "mat-mdc-button-touch-target", "mdc-button__label",
-             "mdc-button__ripple", "mdc-icon-button__ripple", "picker-primary-text"),                                          # c23
+    "span": ("cdk-visually-hidden", "gds-body-m", "inline-upgrade-banner-live-region", "mat-focus-indicator",
+             "mat-mdc-button-persistent-ripple", "mat-mdc-button-touch-target", "mdc-button__label", "mdc-button__ripple",
+             "mdc-icon-button__ripple", "picker-primary-text"),                                                        # c23 (r21 z23s)
     "speech-dictation-mic-button": ("speech-dictation-mic-button",),                                                           # c23
 }
 
@@ -460,6 +481,7 @@ JSLOG_VAZUTE = (
     (("button", "rich-textarea"), "{N};track:generic_click,impression"),                 # c23 t23 (175863, 300142; 356556)
     (("button",), "{N};track:generic_click,impression;BardVeMetadataKey:{B}"),           # c23 t23 (173899, 206752)
     (("button",), "{N};track:generic_click,impression;BardVeMetadataKey:{B};mutable:true"),   # t23 (206752)
+    (("button",), "{N};track:generic_click"),                                            # r21 z23s - "Deruleaza in jos" (353361)
 )
 META_LUNGIME = 35                       # r16 (c23n, netaiat): cea mai lunga lista vazuta = 35 (trimite); modelul = 23 (r15: 64, dedus)
 META_LIMBA = (8, "ro")                  # c23 t23: pozitia si limba interfetei din [<cifre>,"ro",<cifre>,""]
@@ -533,7 +555,12 @@ FORMA_STYLE_DIV = re.compile(r"(?:--chat-container-height: [0-9]{1,5};)?")      
 FORMA_STYLE_RICH = re.compile(r"--textarea-max-rows: [0-9]{1,3}; --chat-container-height: [0-9]{1,5}px;")   # c23 (rich-textarea)
 FORMA_DESCRIERE_CDK = re.compile(r"cdk-describedby-message-ng-1-[0-9]{1,4}")       # c23 / t23 / a22: n = 2 / 11 / 16 / 17 / 18; UN singur id
 FORMA_MENIU = re.compile(r"ng-menu-a[0-9]{1,8}-[0-9]{1,4}")                      # c23 / t23: ng-menu-a26090-1 (numarul e generat)
-ICOANE = _E("plus", "keyboard_arrow_down", "mic", "expand_content", "arrow_upward")      # c23: numele iconitelor (font), toate starile
+ICOANE = _E("plus", "keyboard_arrow_down", "mic", "expand_content", "arrow_upward", "arrow_downward")   # c23 (+ r21 z23s): numele iconitelor (font)
+# r21 z23s: valorile `style` vazute pe pagina de azi (chat nou, toate cele 4 stari: aceeasi valoare), EXACTE (fara forma cu numere)
+STYLE_ICONITA = 'font-family: "Google Symbols";'                                         # mat-icon "arrow_downward"
+STYLE_ZERO_STATE = ("--initial-input-half-height: 32px; position: absolute; bottom: 50vh; transform: "
+                    "translateY(var(--input-area-transform-y, calc(100% - var(--initial-input-half-height))));")   # div.input-area-container
+STYLE_DISCLAIMER = "--align-text: center;"                                               # div.capabilities-disclaimer
 HREF_CONFIDENTIALITATE = "https://support.google.com/gemini/answer/14620100"             # z21 (chat existent)
 # r15: textele = sirurile Unicode EXACTE din capturi (comparate brut, fara _ascii / litere mici / spatii comprimate; escape-uri in sursa)
 DEDUS_DERULEAZA = "Deruleaz\u0103 \u00een jos"                              # s21: DOAR semnatura ASCII "deruleaza in jos" (DEDUCTIE)
@@ -548,6 +575,13 @@ ETICHETE_BUTOANE = (                                                        # ar
 )
 ATRIBUTE_PERMISE = (
     (("input-area-v2", "auto-suggest", "simplified-input-menu", "toolbox-drawer", "bard-mode-switcher"), "trace", GOL),   # z21 c23 t23
+    (("input-container",), "trace", GOL),                            # r21 z23s (zona exterioara)
+    (("span",), "aria-atomic", _E("true")),                          # r21 z23s - span[role=status] (regiune live)
+    (("span",), "aria-live", _E("polite")),                          # r21 z23s - span[role=status]
+    (("button",), "aria-hidden", _E("true")),                        # r21 z23s - butonul "Deruleaza in jos"
+    (("mat-icon",), "style", _E(STYLE_ICONITA)),                     # r21 z23s - iconita "arrow_downward"
+    (("div",), "style", _E(STYLE_ZERO_STATE, STYLE_DISCLAIMER)),     # r21 z23s - div.input-area-container / div.capabilities-disclaimer
+    (("hallucination-disclaimer",), "aligntext", _E("center")),      # r21 z23s
     (("div",), "uireadyparent", GOL),                                # c23
     (("div",), "data-node-type", _E("input-area", "speech_dictation_mic_button")),     # c23
     (("div",), "xapfileselectordropzone", GOL),                      # c23 t23 (si marcajul r5 din MARCAJE_PERMISE)
@@ -567,7 +601,7 @@ ATRIBUTE_PERMISE = (
     (("mat-icon",), "role", _E("img")),                              # c23
     (("span",), "role", _E("status")),                               # s21
     (("div",), "tabindex", _E("-1")),                                # c23 (ql-clipboard)
-    (("button",), "tabindex", _E("0")),                              # c23 t23 (s21: doar cheia)
+    (("button",), "tabindex", _E("0", "-1")),                        # c23 t23 (s21: doar cheia); r21 z23s: "-1" pe "Deruleaza in jos"
     (("button",), "type", _E("button")),                             # c23 t23 s21
     (("gem-icon-button",), "type", _E("onSurface")),                 # c23 a22
     (("div", "bard-mode-switcher"), "tooltipanchorposition", _E("above-end")),        # c23
@@ -602,13 +636,13 @@ ATRIBUTE_PERMISE = (
     (("button",), "cdkoverlayorigin", GOL),                          # c23 t23
     (("button",), "gemmenutrigger", GOL),                            # c23 t23
     (("button",), "periodictabletrigger", GOL),                      # c23 t23
-    (("gem-icon",), "fonticonname", _E("keyboard_arrow_down")),      # c23
-    (("gem-icon",), "size", _E("large")),                            # c23
+    (("gem-icon",), "fonticonname", _E("keyboard_arrow_down", "arrow_downward")),     # c23; r21 z23s (in back-to-bottom-fab)
+    (("gem-icon",), "size", _E("large", "medium")),                  # c23; r21 z23s
     (("mat-icon",), "aria-hidden", BOOL),                            # c23
-    (("mat-icon",), "fonticon", ICOANE),                             # c23
-    (("mat-icon",), "data-mat-icon-name", ICOANE),                   # c23
+    (("mat-icon",), "fonticon", ICOANE),                             # c23 (r21: + arrow_downward)
+    (("mat-icon",), "data-mat-icon-name", ICOANE),                   # c23 (r21: + arrow_downward)
     (("mat-icon",), "data-mat-icon-type", _E("font")),               # c23
-    (("mat-icon",), "data-mat-icon-namespace", _E("lumi-symbols")),  # c23
+    (("mat-icon",), "data-mat-icon-namespace", _E("lumi-symbols", "")),               # c23; r21 z23s: gol pe iconita "arrow_downward"
     (("rich-textarea",), "atmentions", GOL),                         # c23
     (("rich-textarea",), "enterkeyhint", _E("send")),                # c23
     (("gem-popover",), "glassmenutheme", GOL),                       # c23
@@ -1368,7 +1402,7 @@ def analizeaza_arbore(radacina, trunchiate=()):
         necunoscute.extend(_necunoscute(z, editoare, ids))
     for x in trunchiate:                    # r20: text taiat de CDP in zona (si in editor) = nu stiu ce scrie -> refuz
         if any(_sub(x, z) for z in zone):
-            necunoscute.append(("text_trunchiat_cdp:%d caractere citite" % len(x.date), ""))
+            necunoscute.append(("text_trunchiat_cdp:%d unitati UTF-16 citite" % _u16(x.date), ""))
     # r18: textul editorului UNIC, din ACELASI arbore (acelasi instantaneu) ca atasamentele si necunoscutele; forma lui = regulile Quill
     text_editor = None
     if len(editoare) == 1:
@@ -1529,7 +1563,27 @@ def verifica_fara_umbre(umbre, moment):
 # (iframe-urile din acelasi proces) si `templateContent`. Fara DOM.enable({includeWhitespace: "all"}) Chromium SARE nodurile text din
 # doar spatii albe (verificat in Edge 157: `<div>  </div>` apare fara copil), deci DOM.enable cu acest parametru e obligatoriu. Textele
 # mai lungi de 10000 de caractere vin TAIATE (primele 10000 + U+2026): LIMITA_TEXT_CDP.
+# r21 (Jakarinos NO-GO r10 P1): Chromium masoara in UNITATI UTF-16 (inspector_dom_agent.cc: node_value.length() > 10000 -> Left(10000) +
+# U+2026), nu in puncte de cod ca len() din Python: un caracter din afara BMP (emoji) = 2 unitati. Deci un text real de peste 10000 de
+# unitati poate veni ca 10000 de PUNCTE DE COD terminate cu U+2026 (len() = 10000, nedetectat in r20). Masura = _u16; trunchiat =
+# _taiat_cdp: peste LIMITA unitati (forma normala: LIMITA + U+2026 = LIMITA + 1) SAU exact LIMITA unitati terminate cu U+2026 (cazul in
+# care Left() a taiat o pereche surogat si jumatatea ramasa s-a pierdut pe drum) - un text real de exact LIMITA unitati terminat cu
+# U+2026 e refuzat fals (sigur). Aceeasi regula pe liniile brief-ului (inceputul lui `trimite`). Verificat in Edge 157.0.4341.60
+# (headless, local): emoji + 9998 a + text -> 10000 de puncte de cod / 10001 unitati terminate cu U+2026; perechea taiata vine ca
+# U+FFFD (tot 10001 unitati); pierderea ei (a doua ramura) e o aparare, nevazuta.
 LIMITA_TEXT_CDP = 10000
+ELIPSA_CDP = chr(0x2026)                       # r21: sufixul pus de Chromium la taiere (U+2026)
+
+
+def _u16(s):
+    # r21: lungimea in unitati UTF-16 (ca String.length din Chromium / JavaScript); un surogat singur (pereche taiata) = 1 unitate
+    return len(s.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def _taiat_cdp(s):
+    # r21: textul (nodeValue din CDP sau o linie a brief-ului) e / ar fi TAIAT de CDP (vezi LIMITA_TEXT_CDP)
+    u = _u16(s)
+    return u > LIMITA_TEXT_CDP or (u == LIMITA_TEXT_CDP and s.endswith(ELIPSA_CDP))
 CHEI_UMBRE_CDP = ("deschise", "inchise", "alt_tip", "ua_pagina", "ua_zona", "documente_iframe")
 TIPURI_UMBRE = {"open": "deschise", "closed": "inchise"}     # orice alt tip in afara de "user-agent" = "alt_tip" (refuz, ca open / closed)
 
@@ -1582,7 +1636,7 @@ def _arbore_cdp(doc):
             if p is not None:
                 x = _Nod("#text", {}, p, v)
                 p.copii.append(x)
-                if len(v) > LIMITA_TEXT_CDP:
+                if _taiat_cdp(v):           # r21: in unitati UTF-16, ca Chromium (nu len())
                     trunchiate.append(x)
             continue
         if t in (7, 8, 10):
@@ -1741,8 +1795,9 @@ def trimite(pg, text, maxs, target="https://gemini.google.com/app"):
     if target != "https://gemini.google.com/app" and not re.fullmatch(r"https://gemini\.google\.com/app/[0-9a-fA-F]+", target):
         raise GemEroare("url_invalid", "tinta refuzata")
     # r20: o linie mai lunga decat LIMITA_TEXT_CDP ar ajunge TAIATA in instantaneul CDP (refuz la ultima paza): refuz inainte de orice actiune
-    if any(len(l.rstrip("\r")) > LIMITA_TEXT_CDP for l in text.split("\n")):
-        raise GemEroare("brief_invalid", "o linie are peste %d caractere (instantaneul CDP o taie) - nu trimit" % LIMITA_TEXT_CDP)
+    # r21: aceeasi regula ca la ultima paza (_taiat_cdp, unitati UTF-16), ca nimic refuzat acolo sa nu ajunga scris in ciorna
+    if any(_taiat_cdp(l.rstrip("\r")) for l in text.split("\n")):
+        raise GemEroare("brief_invalid", "o linie are peste %d unitati UTF-16 (instantaneul CDP o taie) - nu trimit" % LIMITA_TEXT_CDP)
     # v4.6.4: PRIMA operatie pe pagina = paza ciornei din tab-ul curent (doar citire). Chatul nou goleste ciorna, deci
     # o verificare facuta dupa navigare nu mai vede atasamentele puse de operator (cauza testului de canal picat 19.11.2026).
     _paza_ciorna(pg, "inainte_de_chat_nou")

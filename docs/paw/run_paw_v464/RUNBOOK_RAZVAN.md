@@ -62,7 +62,8 @@ Gemini extinde caseta de compunere: div-ul zonei de drop isi schimba clasele (`h
 `paw-data\out\paw_v464_calibrare\stare_text_lung_23_11.json`, citite de chat cu textul in ciorna, netrimis). **v4.6.4d** (acest pachet,
 r11) schimba din nou DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE v4.6.4c cu aceeasi procedura: hash-ul vechi =
 `09E78891...`, zona protejata noua `operator-v464d`, copiile de siguranta cu sufixul `.v464c`, fisierele noi cu `.v464d` (pasul 1).
-Ce aduce (detaliile la pasul 0, "Stare r11" ... "Stare r20"; r20: instantaneul ultimei paze = UN apel CDP `DOM.getDocument(pierce)`, din
+Ce aduce (detaliile la pasul 0, "Stare r11" ... "Stare r21"; r21: lungimile textelor CDP si ale liniilor brief-ului in unitati UTF-16,
+ca Chromium, si listele albe recalibrate pe pagina Gemini de azi - chat nou, gol / scurt / mediu / lung; r20: instantaneul ultimei paze = UN apel CDP `DOM.getDocument(pierce)`, din
 care vin si arborele analizat si shadow root-urile, si cele INCHISE: orice shadow root open / closed / alt tip oriunde in pagina = refuz,
 user-agent doar in afara zonei, CDP indisponibil = refuz; r19: orice shadow root deschis in pagina sau element custom inregistrat
 in zona = refuz (citirea din `pg.evaluate` ramane, poate doar refuza); r14: LISTA ALBA de atribute + textele exacte ale descrierilor; r15: clasele si
@@ -596,6 +597,46 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
   zonei, deschis in zona, inchis in deschis, inchis in iframe srcdoc = refuz; `input` in afara zonei = OK, in zona = refuz; clipboard cu
   spatiu = refuz; text de 12000 in zona = refuz, in afara = OK); `stare` pe captura = OK, 0 cereri de retea.
 
+**Stare (r21 = v4.6.4d runda 11, 23.11.2026, dupa NO-GO Jakarinos pe r20 `fa6fac8e` + recalibrarea pe pagina de azi):**
+- **Ce era gresit in r20 (P1).** Trunchierea CDP se detecta cu `len(v) > 10000` (puncte de cod), iar Chromium taie dupa 10000 de UNITATI
+  UTF-16 (un emoji = 2). Reproducerea din verdict: brief = emoji + 9998 `a` + U+2026 (`len` 10000, trecea validarea), textul real din
+  editor = emoji + 9998 `a` + `CONTINUT STRAIN`; CDP il arata EXACT ca brief-ul (10000 de puncte de cod), paza nu vedea taietura -> Enter.
+- **Ce face r21.** `_u16` = lungimea in unitati UTF-16; `_taiat_cdp` = peste 10000 de unitati SAU exact 10000 terminate cu U+2026 (aparare:
+  jumatatea unei perechi taiate pierduta pe drum). Aceeasi regula pe textele CDP din zona (`text_trunchiat_cdp:<n> unitati UTF-16 citite`,
+  refuz) si pe liniile brief-ului la inceputul lui `trimite` (`brief_invalid`, nicio actiune). Verificat in Edge 157.0.4341.60 (headless,
+  local, `edge_real_r21.py`): cazul din verdict vine ca 10000 de puncte de cod / 10001 unitati terminate cu U+2026; o pereche taiata vine
+  ca U+FFFD + U+2026 (10001 unitati); simulatorul din teste taie identic in toate cele 8 cazuri masurate.
+- **Recalibrarea (pagina de AZI, Edge 9333, un tab, chat nou `/app`, Carbon, nimic atasat).** Rocky a citit (doar citire) zona si a scris
+  in ciorna DOAR textele de calibrare 5g2-a (`scurt` / `mediu` / `lung`, cu `insert_text`, ca `trimite`, FARA Enter), golite imediat
+  (Ctrl+A, Delete; ciorna verificata goala dupa fiecare). Pe codul r20: aceleasi **10 necunoscute** in toate 4 starile (gol / scurt / mediu
+  / lung). Inventarul complet (toate atributele, nu doar primul motiv pe element): 33 de diferente, TOATE atribute / valori / clase pe
+  elemente deja cunoscute; niciun element nou, niciun text nou (paragraful avertismentului e gol pe chatul nou: doar un `<br>`). Adaugate
+  EXACT valorile vazute (aceleasi in cele 4 stari): `trace=""` pe `input-container` + clasele lui (`hide-on-print`,
+  `input-gradient-overlay`, `edge-to-edge`, `lm-input-redesign`, `grow-input-downwards`); pe `span[role=status]` `aria-atomic="true"`,
+  `aria-live="polite"`, clasele `cdk-visually-hidden`, `inline-upgrade-banner-live-region`; pe `back-to-bottom-fab` clasa lui; pe butonul
+  "Deruleaza in jos" clasa `back-to-bottom-fab`, `aria-hidden="true"`, `tabindex="-1"`, `jslog` `<N>;track:generic_click`; pe iconita lui
+  `gem-icon` `fonticonname="arrow_downward"`, `size="medium"` si `mat-icon` cu `lm-icon-m`, `arrow_downward`, `data-mat-icon-namespace=""`,
+  `style='font-family: "Google Symbols";'`; pe `div.input-area-container` clasele `input-area-container`,
+  `ng-trigger-inputAreaAnimation` si style-ul exact (`--initial-input-half-height: 32px; position: absolute; bottom: 50vh; ...`); pe
+  `hallucination-disclaimer` `aligntext="center"` + clasele lui; pe `div.capabilities-disclaimer` clasa si `style="--align-text: center;"`;
+  pe `p[data-test-id=empty-disclaimer]` clasele `gds-body-s`, `empty-disclaimer`, `desktop-spacing`. Cu codul r21, pe pagina reala:
+  **`necunoscute in zona: 0` si `paza ciorna: OK (trimite ar continua)` in toate 4 starile** (`rocky_r21_calibrare\v2_stare_*.txt`).
+  Vazute acum (erau deductii): eticheta `Deruleaza in jos` cu diacritice (`DEDUS_DERULEAZA`) si tintele descrierilor cu exact `id` +
+  `role="tooltip"`.
+- **NU s-a vazut azi:** (iii) chat EXISTENT (brief-ul interzicea deschiderea altui chat): pe el pot aparea alte clase / atribute (de ex.
+  `prompt-flow-bar`, avertismentul Workspace in noua structura a disclaimer-ului). La pasul 0 (iii) si la 5a-5g pe o conversatie existenta,
+  orice linie `necunoscut ...` = refuz FALS (sigur, nimic trimis): STOP, liniile la chat pentru o recalibrare.
+- **Dovezi (teste 246, `python -I`):** `TestUtf16R21` (7) - masura UTF-16 si pragurile; simulatorul = Chromium; reproducerea din verdict pe
+  7 pagini (capturile 23.11 gol / mediu / lung + pagina de azi in 4 stari): brief-ul refuzat la inceput fara actiuni, fara verificarea
+  liniilor (M118) textul real e vazut taiat si refuzat inainte de Enter, pe masurarea r20 = Enter; doua linii sub limita lipite intr-un
+  paragraf (M119 = Enter); perechea taiata ca U+FFFD / surogat singur / pierduta (M120 = Enter); limita liniilor (10000 / 10001 unitati,
+  emoji, U+2026); mutantii M118-M120 lasa starile reale sa treaca; structural. `TestPaginaAziR21` (6) - fixture GENERAT din capturile de
+  azi (`CAPTURA_Z23S`): cele 4 stari trec (analiza, CDP, `trimite` pana la Enter, `stare` OK); pe listele r20 exact cele 10 linii vazute;
+  FIECARE din cele 33 de adaosuri e necesar (fara el pagina e refuzata in toate starile); valorile vecine raman refuzate; descrierile;
+  token / text strain = refuz. Tripletele reale de azi intra in testele listei inchise (`REALE`). Pe codul r20 (`fa6fac8e`) testele noi /
+  aliniate pica: 18 FAIL + 3 ERROR din 246; reproducerea pe codul r20 real (`repro_vechi_r21.py`): brief-ul din verdict = Enter pe
+  capturile 23.11 (pe pagina de azi codul r20 refuza oricum tot, cele 10 necunoscute), pe r21 = `brief_invalid`.
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari + citirea CDP `DOM.getDocument`, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -662,7 +703,7 @@ if ((Get-FileHash -LiteralPath "$Source\diag\captura_caseta.py").Hash -ine $Diag
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel asteptat (vezi $GemHashVechi)' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 983 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 86) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 1038 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 86) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -672,14 +713,22 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + $SufVechi) -Force }
 ```
 
-Asteptat (pachetul v4.6.4d = r20, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **983 linii diferite (86 vechi `<=`, 897 noi `=>`)**.
+Asteptat (pachetul v4.6.4d = r21, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **1038 linii diferite (86 vechi `<=`, 952 noi `=>`)**.
+Cele 86 de linii vechi = EXACT cele 86 din r20 (mai jos; r21 nu schimba nicio linie venita din v4.6.4c - doar linii adaugate de r11-r20
+sau noi). Liniile noi r21: nota r21 din antet; `_u16` / `_taiat_cdp` / `ELIPSA_CDP` + comentariul lor; masurarea UTF-16 in `_arbore_cdp`,
+in mesajul `text_trunchiat_cdp:` si in verificarea liniilor brief-ului din `trimite`; adaosurile din listele albe (comentariul z23s,
+`CLASE_PERMISE` rescris cu token-urile noi, o intrare `jslog`, `ICOANE` + `STYLE_ICONITA` / `STYLE_ZERO_STATE` / `STYLE_DISCLAIMER`, 7
+intrari noi si 4 schimbate in `ATRIBUTE_PERMISE`). Testele: `Ran 246 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`)
+1670 / 26 / 1644; fata de r20 (`479E64CF...`, head-ul anterior al PR-ului, neinstalat) 115 / 30 / 85.
+
+Istoric (r20, fata de acelasi v4.6.4c instalat): 983 linii diferite (86 vechi `<=`, 897 noi `=>`).
 Cele 86 de linii vechi = cele 84 din r19 (mai jos) + 2 noi, din v4.6.4c, schimbate de r20: cele doua linii ale docstring-ului lui
 `analizeaza_ciorna` (`"""HTML-ul paginii -> dict: editoare, zone ...` si `atasamente (chip-uri CHIP ...) ... detalii."""`; acum
 `analizeaza_ciorna` doar parseaza HTML-ul pentru teste, iar analiza sta in `analizeaza_arbore`, cu docstring nou). Liniile noi r20: nota
 r20 din antet, `analizeaza_arbore` (corpul vechi + `text_trunchiat_cdp:`), comentariul r19 / r20 + `JS_UMBRE` (fara HTML) + `_umbre_js`,
 `LIMITA_TEXT_CDP` / `CHEI_UMBRE_CDP` / `TIPURI_UMBRE`, `_cdp_rau` / `_lista_cdp` / `_atribute_cdp` / `_arbore_cdp`, `_instantaneu` (CDP),
 `verifica_umbre_cdp`, `_citeste_ciorna` / `_paza_ciorna` / `_ultima_paza` / `stare` cu citirea evaluate inainte si instantaneul CDP ultimul,
-linia `shadow root CDP: ...` din `stare`, verificarea liniilor brief-ului (`brief_invalid`) la inceputul lui `trimite`. Testele:
+linia `shadow root CDP: ...` din `stare`, verificarea liniilor brief-ului (`brief_invalid`) la inceputul lui `trimite`. Testele de atunci:
 `Ran 232 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 1615 / 26 / 1589; fata de r19 (`111986CB...`, head-ul anterior al
 PR-ului, neinstalat) 251 / 44 / 207.
 
