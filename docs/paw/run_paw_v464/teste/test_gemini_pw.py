@@ -4244,17 +4244,19 @@ def _esc(v):
     return v.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
 
 
-def html_captura(stare, editor=None, descrieri=None, inlocuiri=(), extra_zona="", interior=()):
+def html_captura(stare, editor=None, descrieri=None, inlocuiri=(), extra_zona="", interior=(), captura=None):
     # pagina cu starea `stare` din captura: elementele imbricate dupa adancime, editorul cu continutul dat, containerul descrierilor
     # (DESCRIERI din captura, fiecare `<div id=... role="tooltip">text</div>`, in afara zonei). inlocuiri = (index, atribute noi) pe un element;
-    # interior = (index, html) pus imediat dupa eticheta de deschidere a elementului (un copil in plus)
+    # interior = (index, html) pus imediat dupa eticheta de deschidere a elementului (un copil in plus).
+    # v4.6.4e: captura = (elemente, descrieri) a altei variante de pagina (CAPTURA_F5, DESCRIERI_F5); implicit c23n
+    cap, desc = (CAPTURA_2311, DESCRIERI) if captura is None else captura
     if editor is None:
         editor = {"gol": "<p><br></p>", "mediu": TEXT_MEDIU, "lung": TEXT_LUNG}[stare]
     if descrieri is None:
-        descrieri = DESCRIERI[stare]
+        descrieri = desc[stare]
     noi, inauntru = dict(inlocuiri), dict(interior)
     parti, stiva = [], []
-    for i, (ad, tag, atr, text) in enumerate(CAPTURA_2311[stare]):
+    for i, (ad, tag, atr, text) in enumerate(cap[stare]):
         while len(stiva) > ad:
             parti.append("</%s>" % stiva.pop())
         atr = noi.get(i, atr)
@@ -4273,9 +4275,10 @@ def html_captura(stare, editor=None, descrieri=None, inlocuiri=(), extra_zona=""
             '<div class="cdk-visually-hidden cdk-describedby-message-container" style="visibility: hidden;">' + tinte + "</div></body></html>")
 
 
-def index_captura(stare, tag, **atr):
+def index_captura(stare, tag, captura=None, **atr):
     # indexul UNUI element din captura dupa tag + atribute exacte (testele modifica elementul real, nu o copie sintetica)
-    g = [i for i, (_, t, a, _) in enumerate(CAPTURA_2311[stare]) if t == tag and all(dict(a).get(k) == v for k, v in atr.items())]
+    cap = CAPTURA_2311 if captura is None else captura[0]
+    g = [i for i, (_, t, a, _) in enumerate(cap[stare]) if t == tag and all(dict(a).get(k) == v for k, v in atr.items())]
     assert len(g) == 1, (stare, tag, atr, g)
     return g[0]
 
@@ -4596,6 +4599,203 @@ CAPTURA_Z23S = {
     ),
 }
 DESCRIERI_Z23S = {'gol': {'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)'}, 'scurt': {'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-26': 'Trimite'}, 'mediu': {'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-27': 'Trimite', 'cdk-describedby-message-ng-1-28': 'Ecran complet'}, 'lung': {'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-29': 'Trimite', 'cdk-describedby-message-ng-1-30': 'Ecran complet'}}
+# v4.6.4e (f5): varianta de pagina de dupa F5 (23.11.2026 seara, Edge 9333, chat nou /app, Carbon, ciorna goala; testul de canal
+# pe v4.6.4d instalat, pasul 5e, `stare` = 3 necunoscute). Literalul e GENERAT din captura reala (chat, doar citire, ciorna golita:
+# paw-data\out\paw_v464_calibrare\stare_completa_23_11_varianta_f5.json, lista PLATA ca c23n; generator
+# claude-tasks\paw_v464e\genereaza_fixture_f5.py): adancimile = cele din CAPTURA_2311, verificate pe secventa EXACTA de taguri;
+# atributele, valorile si textele = cele din captura. Nimic completat, nimic dedus.
+CAPTURA_F5 = {
+    'gol': (
+        (0, 'div', (('_ngcontent-ng-c3765021202', ''), ('uireadyparent', ''), ('data-node-type', 'input-area'), ('class', 'input-area is-zero-state children-ready')), ''),
+        (1, 'auto-suggest', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('_nghost-ng-c549525650', ''), ('class', 'ng-tns-c549525650-5 ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (1, 'fieldset', (('_ngcontent-ng-c3765021202', ''), ('role', 'none'), ('class', 'input-area-fieldset')), ''),
+        (2, 'div', (('_ngcontent-ng-c3765021202', ''), ('xapfileselectordropzone', ''), ('class', 'text-input-field simplified-input-area'), ('jslog', '303810;track:impression')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'leading-actions-wrapper ng-tns-c3765021202-4 has-model-picker ng-star-inserted'), ('style', '')), ''),
+        (4, 'simplified-input-menu', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('class', 'simplified-input-menu ng-tns-c3765021202-4 ng-star-inserted'), ('_nghost-ng-c2721433901', ''), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c2721433901', ''), ('class', 'simplified-input-menu-container')), ''),
+        (6, 'span', (('_ngcontent-ng-c2721433901', ''), ('cdk-overlay-origin', '')), ''),
+        (6, 'gem-icon-button', (('_ngcontent-ng-c2721433901', ''), ('theme', 'lm'), ('type', 'onSurface'), ('ariahaspopup', 'menu'), ('arialabel', '\xcenc\u0103rcare \u0219i instrumente'), ('class', 'menu-button gem-menu-button open gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled ng-star-inserted'), ('_nghost-ng-c4110661558', '')), ''),
+        (7, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-expanded', 'false'), ('aria-haspopup', 'menu'), ('aria-label', '\xcenc\u0103rcare \u0219i instrumente'), ('jslog', '300142;track:generic_click,impression'), ('aria-disabled', 'false')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (8, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (9, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'plus'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'plus')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (4, 'toolbox-drawer', (('_ngcontent-ng-c2721433901', ''), ('trace', ''), ('_nghost-ng-c2631217100', ''), ('class', 'ng-tns-c2631217100-8 ng-star-inserted'), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c2631217100', ''), ('class', 'ng-tns-c2631217100-8 toolbox-drawer-container ng-trigger ng-trigger-toolboxDrawerEnter'), ('jslog', '251251;track:impression')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'ng-tns-c3765021202-4 single-line-format ng-star-inserted'), ('style', '--chat-container-height: 718;')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'text-input-field-main-area ng-tns-c3765021202-4')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'textarea-inner'), ('class', 'text-input-field_textarea-inner ng-tns-c3765021202-4')), ''),
+        (6, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'textarea-wrapper'), ('class', 'ng-tns-c3765021202-4 textarea-wrapper')), ''),
+        (7, 'rich-textarea', (('_ngcontent-ng-c3765021202', ''), ('atmentions', ''), ('class', 'text-input-field_textarea ql-container ql-bubble ng-tns-c3765021202-4 enterprise simplified-input ng-untouched ng-pristine ng-valid ng-star-inserted'), ('_nghost-ng-c2300172701', ''), ('enterkeyhint', 'send'), ('jslog', '356556;track:generic_click,impression'), ('aria-haspopup', 'menu'), ('dir', 'ltr'), ('style', '--textarea-max-rows: 7; --chat-container-height: 718px;')), ''),
+        (8, 'div', (('class', 'ql-editor ql-blank textarea new-input-ui rich-query-formatting-enabled input-url-linkification-enabled inline-chips-enabled'), ('data-gramm', 'false'), ('contenteditable', 'true'), ('dir', 'ltr'), ('role', 'textbox'), ('aria-multiline', 'true'), ('aria-label', 'Introdu o solicitare pentru Gemini'), ('data-placeholder', '\xcentreab\u0103 Gemini')), ''),
+        (8, 'div', (('class', 'ql-clipboard'), ('contenteditable', 'true'), ('tabindex', '-1')), ''),
+        (5, 'at-mentions-menu-v2', (('_nghost-ng-c2127727967', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'trailing-actions-wrapper with-model-picker')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'model-picker-container ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (5, 'bard-mode-switcher', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c2910039102', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (6, 'div', (('_ngcontent-ng-c2910039102', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
+        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a33453-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
+        (8, 'span', (('class', 'mdc-button__label'),), ''),
+        (9, 'div', (('_ngcontent-ng-c2910039102', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
+        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (9, 'gem-icon', (('_ngcontent-ng-c2910039102', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
+        (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (7, 'gem-popover', (('_ngcontent-ng-c2910039102', ''), ('glassmenutheme', ''), ('_nghost-ng-c4185230055', '')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'input-buttons-wrapper-bottom persistent-mic')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('tooltipanchorposition', 'above-end'), ('class', 'mic-button-container persistent-mic ng-tns-c3765021202-4 ng-trigger ng-trigger-slide ng-star-inserted'), ('style', '')), ''),
+        (6, 'speech-dictation-mic-button', (('_ngcontent-ng-c3765021202', ''), ('class', 'speech-dictation-mic-button ng-tns-c3765021202-4 ng-star-inserted'), ('_nghost-ng-c3809799694', ''), ('style', '')), ''),
+        (7, 'div', (('_ngcontent-ng-c3809799694', ''), ('data-node-type', 'speech_dictation_mic_button'), ('class', 'gem-mic-button-wrapper lm-enabled ng-star-inserted')), ''),
+        (8, 'gem-icon-button', (('_ngcontent-ng-c3809799694', ''), ('type', 'onSurface'), ('class', 'mat-mdc-tooltip-trigger speech_dictation_mic_button gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled'), ('_nghost-ng-c4110661558', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-2'), ('cdk-describedby-host', 'ng-1')), ''),
+        (9, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Dicteaz\u0103 (^\u21e7D)'), ('aria-pressed', 'false'), ('jslog', '175863;track:generic_click,impression'), ('aria-disabled', 'false')), ''),
+        (10, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (10, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (11, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'mic'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'mic')), ''),
+        (10, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (10, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (8, 'div', (('_ngcontent-ng-c3809799694', ''), ('class', 'circle-overlay')), ''),
+    ),
+    'mediu': (
+        (0, 'div', (('_ngcontent-ng-c3765021202', ''), ('uireadyparent', ''), ('data-node-type', 'input-area'), ('class', 'input-area is-zero-state children-ready with-toolbox-drawer')), ''),
+        (1, 'auto-suggest', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('_nghost-ng-c549525650', ''), ('class', 'ng-tns-c549525650-5 ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (1, 'fieldset', (('_ngcontent-ng-c3765021202', ''), ('role', 'none'), ('class', 'input-area-fieldset')), ''),
+        (2, 'div', (('_ngcontent-ng-c3765021202', ''), ('xapfileselectordropzone', ''), ('class', 'text-input-field height-expanded-past-single-line pre-fullscreen with-toolbox-drawer'), ('jslog', '303810;track:impression')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'leading-actions-wrapper ng-tns-c3765021202-4 has-model-picker ng-star-inserted'), ('style', '')), ''),
+        (4, 'simplified-input-menu', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('class', 'simplified-input-menu ng-tns-c3765021202-4 ng-star-inserted'), ('_nghost-ng-c2721433901', ''), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c2721433901', ''), ('class', 'simplified-input-menu-container')), ''),
+        (6, 'span', (('_ngcontent-ng-c2721433901', ''), ('cdk-overlay-origin', '')), ''),
+        (6, 'gem-icon-button', (('_ngcontent-ng-c2721433901', ''), ('theme', 'lm'), ('type', 'onSurface'), ('ariahaspopup', 'menu'), ('arialabel', '\xcenc\u0103rcare \u0219i instrumente'), ('class', 'menu-button gem-menu-button open gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled ng-star-inserted'), ('_nghost-ng-c4110661558', '')), ''),
+        (7, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-expanded', 'false'), ('aria-haspopup', 'menu'), ('aria-label', '\xcenc\u0103rcare \u0219i instrumente'), ('jslog', '300142;track:generic_click,impression'), ('aria-disabled', 'false')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (8, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (9, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'plus'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'plus')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (4, 'toolbox-drawer', (('_ngcontent-ng-c2721433901', ''), ('trace', ''), ('_nghost-ng-c2631217100', ''), ('class', 'ng-tns-c2631217100-8 ng-star-inserted'), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c2631217100', ''), ('class', 'ng-tns-c2631217100-8 toolbox-drawer-container ng-trigger ng-trigger-toolboxDrawerEnter'), ('jslog', '251251;track:impression')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted pre-fullscreen text-input-field_textarea-wrapper'), ('style', '--chat-container-height: 718;')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'text-input-field-main-area ng-tns-c3765021202-4')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'textarea-inner'), ('class', 'text-input-field_textarea-inner ng-tns-c3765021202-4')), ''),
+        (6, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'textarea-wrapper'), ('class', 'ng-tns-c3765021202-4 textarea-wrapper')), ''),
+        (7, 'rich-textarea', (('_ngcontent-ng-c3765021202', ''), ('atmentions', ''), ('class', 'text-input-field_textarea ql-container ql-bubble ng-tns-c3765021202-4 enterprise simplified-input ng-untouched ng-valid ng-star-inserted ng-dirty'), ('_nghost-ng-c2300172701', ''), ('enterkeyhint', 'send'), ('jslog', '356556;track:generic_click,impression'), ('aria-haspopup', 'menu'), ('dir', 'ltr'), ('style', '--textarea-max-rows: 7; --chat-container-height: 718px;')), ''),
+        (8, 'div', (('class', 'ql-editor textarea new-input-ui rich-query-formatting-enabled input-url-linkification-enabled inline-chips-enabled'), ('data-gramm', 'false'), ('contenteditable', 'true'), ('dir', 'ltr'), ('role', 'textbox'), ('aria-multiline', 'true'), ('aria-label', 'Introdu o solicitare pentru Gemini'), ('data-placeholder', '\xcentreab\u0103 Gemini'), ('style', '')), ''),
+        (8, 'div', (('class', 'ql-clipboard'), ('contenteditable', 'true'), ('tabindex', '-1')), ''),
+        (5, 'at-mentions-menu-v2', (('_nghost-ng-c2127727967', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'input-buttons-wrapper-top ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'fullscreen-button-container ng-tns-c3765021202-4 visible ng-star-inserted')), ''),
+        (5, 'button', (('_ngcontent-ng-c3765021202', ''), ('mat-icon-button', ''), ('color', 'primary'), ('aria-label', 'Extinde intrarea la ecran complet'), ('gemtooltip', 'Ecran complet'), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger fullscreen-button ng-tns-c3765021202-4 mat-primary'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-14'), ('cdk-describedby-host', 'ng-1')), ''),
+        (6, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (6, 'mat-icon', (('_ngcontent-ng-c3765021202', ''), ('role', 'img'), ('class', 'mat-icon notranslate gds-icon-l google-symbols mat-ligature-font mat-icon-no-color'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'expand_content'), ('fonticon', 'expand_content')), ''),
+        (6, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (6, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'trailing-actions-wrapper with-model-picker')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'model-picker-container ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (5, 'bard-mode-switcher', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c2910039102', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (6, 'div', (('_ngcontent-ng-c2910039102', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
+        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a33453-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
+        (8, 'span', (('class', 'mdc-button__label'),), ''),
+        (9, 'div', (('_ngcontent-ng-c2910039102', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
+        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (9, 'gem-icon', (('_ngcontent-ng-c2910039102', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
+        (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (7, 'gem-popover', (('_ngcontent-ng-c2910039102', ''), ('glassmenutheme', ''), ('_nghost-ng-c4185230055', '')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'input-buttons-wrapper-bottom persistent-mic')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('tooltipanchorposition', 'above-end'), ('class', 'mic-button-container persistent-mic ng-tns-c3765021202-4 ng-trigger ng-trigger-slide ng-star-inserted'), ('style', '')), ''),
+        (6, 'speech-dictation-mic-button', (('_ngcontent-ng-c3765021202', ''), ('class', 'speech-dictation-mic-button ng-tns-c3765021202-4 ng-star-inserted'), ('_nghost-ng-c3809799694', ''), ('style', '')), ''),
+        (7, 'div', (('_ngcontent-ng-c3809799694', ''), ('data-node-type', 'speech_dictation_mic_button'), ('class', 'gem-mic-button-wrapper lm-enabled ng-star-inserted')), ''),
+        (8, 'gem-icon-button', (('_ngcontent-ng-c3809799694', ''), ('type', 'onSurface'), ('class', 'mat-mdc-tooltip-trigger speech_dictation_mic_button gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled'), ('_nghost-ng-c4110661558', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-2'), ('cdk-describedby-host', 'ng-1')), ''),
+        (9, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Dicteaz\u0103 (^\u21e7D)'), ('aria-pressed', 'false'), ('jslog', '175863;track:generic_click,impression'), ('aria-disabled', 'false')), ''),
+        (10, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (10, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (11, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'mic'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'mic')), ''),
+        (10, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (10, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (8, 'div', (('_ngcontent-ng-c3809799694', ''), ('class', 'circle-overlay')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'send-button-container'), ('class', 'mat-mdc-tooltip-trigger send-button-container visible persistent-mic ng-tns-c3765021202-4 inner lm-enabled ng-trigger ng-trigger-sendButtonVisibility ng-star-inserted'), ('aria-describedby', 'cdk-describedby-message-ng-1-13'), ('cdk-describedby-host', 'ng-1'), ('style', '')), ''),
+        (6, 'gem-icon-button', (('_ngcontent-ng-c3765021202', ''), ('theme', 'lm'), ('type', 'onSurface'), ('class', 'send-button ng-tns-c3765021202-4 has-input submit gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled ng-star-inserted'), ('_nghost-ng-c4110661558', ''), ('aria-disabled', 'false'), ('style', '')), ''),
+        (7, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Trimite mesajul'), ('jslog', '173899;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxbMCwicm8iLDAsIiJdLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il0sbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLFswXV0=;mutable:true'), ('aria-disabled', 'false')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (8, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (9, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'arrow_upward'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'arrow_upward')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+    ),
+    'lung': (
+        (0, 'div', (('_ngcontent-ng-c3765021202', ''), ('uireadyparent', ''), ('data-node-type', 'input-area'), ('class', 'input-area is-zero-state children-ready with-toolbox-drawer')), ''),
+        (1, 'auto-suggest', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('_nghost-ng-c549525650', ''), ('class', 'ng-tns-c549525650-5 ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (1, 'fieldset', (('_ngcontent-ng-c3765021202', ''), ('role', 'none'), ('class', 'input-area-fieldset')), ''),
+        (2, 'div', (('_ngcontent-ng-c3765021202', ''), ('xapfileselectordropzone', ''), ('class', 'text-input-field height-expanded-past-single-line pre-fullscreen with-toolbox-drawer'), ('jslog', '303810;track:impression')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'leading-actions-wrapper ng-tns-c3765021202-4 has-model-picker ng-star-inserted'), ('style', '')), ''),
+        (4, 'simplified-input-menu', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('class', 'simplified-input-menu ng-tns-c3765021202-4 ng-star-inserted'), ('_nghost-ng-c2721433901', ''), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c2721433901', ''), ('class', 'simplified-input-menu-container')), ''),
+        (6, 'span', (('_ngcontent-ng-c2721433901', ''), ('cdk-overlay-origin', '')), ''),
+        (6, 'gem-icon-button', (('_ngcontent-ng-c2721433901', ''), ('theme', 'lm'), ('type', 'onSurface'), ('ariahaspopup', 'menu'), ('arialabel', '\xcenc\u0103rcare \u0219i instrumente'), ('class', 'menu-button gem-menu-button open gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled ng-star-inserted'), ('_nghost-ng-c4110661558', '')), ''),
+        (7, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-expanded', 'false'), ('aria-haspopup', 'menu'), ('aria-label', '\xcenc\u0103rcare \u0219i instrumente'), ('jslog', '300142;track:generic_click,impression'), ('aria-disabled', 'false')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (8, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (9, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'plus'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'plus')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (4, 'toolbox-drawer', (('_ngcontent-ng-c2721433901', ''), ('trace', ''), ('_nghost-ng-c2631217100', ''), ('class', 'ng-tns-c2631217100-8 ng-star-inserted'), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c2631217100', ''), ('class', 'ng-tns-c2631217100-8 toolbox-drawer-container ng-trigger ng-trigger-toolboxDrawerEnter'), ('jslog', '251251;track:impression')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted pre-fullscreen text-input-field_textarea-wrapper'), ('style', '--chat-container-height: 718;')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'text-input-field-main-area ng-tns-c3765021202-4')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'textarea-inner'), ('class', 'text-input-field_textarea-inner ng-tns-c3765021202-4')), ''),
+        (6, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'textarea-wrapper'), ('class', 'ng-tns-c3765021202-4 textarea-wrapper')), ''),
+        (7, 'rich-textarea', (('_ngcontent-ng-c3765021202', ''), ('atmentions', ''), ('class', 'text-input-field_textarea ql-container ql-bubble ng-tns-c3765021202-4 enterprise simplified-input ng-untouched ng-valid ng-star-inserted ng-dirty'), ('_nghost-ng-c2300172701', ''), ('enterkeyhint', 'send'), ('jslog', '356556;track:generic_click,impression'), ('aria-haspopup', 'menu'), ('dir', 'ltr'), ('style', '--textarea-max-rows: 7; --chat-container-height: 718px;')), ''),
+        (8, 'div', (('class', 'ql-editor textarea new-input-ui rich-query-formatting-enabled input-url-linkification-enabled inline-chips-enabled'), ('data-gramm', 'false'), ('contenteditable', 'true'), ('dir', 'ltr'), ('role', 'textbox'), ('aria-multiline', 'true'), ('aria-label', 'Introdu o solicitare pentru Gemini'), ('data-placeholder', '\xcentreab\u0103 Gemini'), ('style', '')), ''),
+        (8, 'div', (('class', 'ql-clipboard'), ('contenteditable', 'true'), ('tabindex', '-1')), ''),
+        (5, 'at-mentions-menu-v2', (('_nghost-ng-c2127727967', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'input-buttons-wrapper-top ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'fullscreen-button-container ng-tns-c3765021202-4 visible ng-star-inserted')), ''),
+        (5, 'button', (('_ngcontent-ng-c3765021202', ''), ('mat-icon-button', ''), ('color', 'primary'), ('aria-label', 'Extinde intrarea la ecran complet'), ('gemtooltip', 'Ecran complet'), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger fullscreen-button ng-tns-c3765021202-4 mat-primary'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-14'), ('cdk-describedby-host', 'ng-1')), ''),
+        (6, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (6, 'mat-icon', (('_ngcontent-ng-c3765021202', ''), ('role', 'img'), ('class', 'mat-icon notranslate gds-icon-l google-symbols mat-ligature-font mat-icon-no-color'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'expand_content'), ('fonticon', 'expand_content')), ''),
+        (6, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (6, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (3, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'trailing-actions-wrapper with-model-picker')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'model-picker-container ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
+        (5, 'bard-mode-switcher', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c2910039102', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted')), ''),
+        (6, 'div', (('_ngcontent-ng-c2910039102', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
+        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a33453-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
+        (8, 'span', (('class', 'mdc-button__label'),), ''),
+        (9, 'div', (('_ngcontent-ng-c2910039102', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
+        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (9, 'gem-icon', (('_ngcontent-ng-c2910039102', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
+        (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (7, 'gem-popover', (('_ngcontent-ng-c2910039102', ''), ('glassmenutheme', ''), ('_nghost-ng-c4185230055', '')), ''),
+        (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'input-buttons-wrapper-bottom persistent-mic')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('tooltipanchorposition', 'above-end'), ('class', 'mic-button-container persistent-mic ng-tns-c3765021202-4 ng-trigger ng-trigger-slide ng-star-inserted'), ('style', '')), ''),
+        (6, 'speech-dictation-mic-button', (('_ngcontent-ng-c3765021202', ''), ('class', 'speech-dictation-mic-button ng-tns-c3765021202-4 ng-star-inserted'), ('_nghost-ng-c3809799694', ''), ('style', '')), ''),
+        (7, 'div', (('_ngcontent-ng-c3809799694', ''), ('data-node-type', 'speech_dictation_mic_button'), ('class', 'gem-mic-button-wrapper lm-enabled ng-star-inserted')), ''),
+        (8, 'gem-icon-button', (('_ngcontent-ng-c3809799694', ''), ('type', 'onSurface'), ('class', 'mat-mdc-tooltip-trigger speech_dictation_mic_button gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled'), ('_nghost-ng-c4110661558', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-2'), ('cdk-describedby-host', 'ng-1')), ''),
+        (9, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Dicteaz\u0103 (^\u21e7D)'), ('aria-pressed', 'false'), ('jslog', '175863;track:generic_click,impression'), ('aria-disabled', 'false')), ''),
+        (10, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (10, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (11, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'mic'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'mic')), ''),
+        (10, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (10, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+        (8, 'div', (('_ngcontent-ng-c3809799694', ''), ('class', 'circle-overlay')), ''),
+        (5, 'div', (('_ngcontent-ng-c3765021202', ''), ('data-test-id', 'send-button-container'), ('class', 'mat-mdc-tooltip-trigger send-button-container visible persistent-mic ng-tns-c3765021202-4 inner lm-enabled ng-trigger ng-trigger-sendButtonVisibility ng-star-inserted'), ('aria-describedby', 'cdk-describedby-message-ng-1-13'), ('cdk-describedby-host', 'ng-1'), ('style', '')), ''),
+        (6, 'gem-icon-button', (('_ngcontent-ng-c3765021202', ''), ('theme', 'lm'), ('type', 'onSurface'), ('class', 'send-button ng-tns-c3765021202-4 has-input submit gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled ng-star-inserted'), ('_nghost-ng-c4110661558', ''), ('aria-disabled', 'false'), ('style', '')), ''),
+        (7, 'button', (('_ngcontent-ng-c4110661558', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Trimite mesajul'), ('jslog', '173899;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxbMCwicm8iLDAsIiJdLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il0sbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLFswXV0=;mutable:true'), ('aria-disabled', 'false')), ''),
+        (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
+        (8, 'gem-icon', (('_ngcontent-ng-c4110661558', ''), ('_nghost-ng-c4019194464', '')), ''),
+        (9, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'arrow_upward'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'arrow_upward')), ''),
+        (8, 'span', (('class', 'mat-focus-indicator'),), ''),
+        (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
+    ),
+}
+DESCRIERI_F5 = {'gol': {'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)'}, 'mediu': {'cdk-describedby-message-ng-1-14': 'Ecran complet', 'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-13': 'Trimite'}, 'lung': {'cdk-describedby-message-ng-1-14': 'Ecran complet', 'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-13': 'Trimite'}}
 # triplete (tag, atribut, valoare bruta) REALE: toate cele din CAPTURA_2311 + cele vazute in celelalte capturi (scrise de mana)
 REALE_ALTE_CAPTURI = (
     ("input-area-v2", "trace", ""),                                          # z21 + t23
@@ -4609,7 +4809,8 @@ REALE_ALTE_CAPTURI = (
     ("file-drop-indicator", "data-filedrop-id", "chat-window-input-container"),   # g22 + a21
     ("file-drop-indicator", "style", ""),                                    # g22
 )
-REALE = tuple(sorted(set((t, k, v) for st in list(CAPTURA_2311.values()) + list(CAPTURA_Z23S.values()) for _, t, a, _ in st for k, v in a
+REALE = tuple(sorted(set((t, k, v) for st in list(CAPTURA_2311.values()) + list(CAPTURA_Z23S.values()) + list(CAPTURA_F5.values())
+                         for _, t, a, _ in st for k, v in a
                          if not re.fullmatch(r"_ng(content|host)-ng-c[0-9]+", k)) | set(REALE_ALTE_CAPTURI)))
 # nume INVENTATE (nu apar in nicio captura) - fiecare, pe fiecare loc acceptat, = `atribut_necunoscut:` (nu schimba semnatura)
 NUME_INVENTATE = ("matbadge", "ariavaluetext", "data-text", "data-x", "x-y", "foo", "gemtooltipx", "value", "label", "tooltip",
@@ -4788,9 +4989,10 @@ class TestListaAlbaAtribute(unittest.TestCase):
         # numarate de mana pe lista din cod: 65 de intrari scrise + 12 de clase (11 taguri + "*") + 3 jslog (div, button, rich-textarea) =
         # 80 de intrari; 79 + 12 + 3 = 94 de perechi (tag, nume). r21 (z23s): + 7 intrari scrise (trace pe input-container, aria-atomic,
         # aria-live, aria-hidden pe button, style pe mat-icon, al doilea style pe div, aligntext) + 4 taguri cu clase (back-to-bottom-fab,
-        # hallucination-disclaimer, input-container, p) = 91 de intrari, 105 perechi
-        self.assertEqual(len(gp.ATRIBUTE_PERMISE), 91)
-        self.assertEqual(sum(len(t) for t, _, _ in gp.ATRIBUTE_PERMISE), 105)
+        # hallucination-disclaimer, input-container, p) = 91 de intrari, 105 perechi. v4.6.4e (f5): + 1 intrare scrisa (style GOL pe
+        # simplified-input-menu si speech-dictation-mic-button) = 92 de intrari, 107 perechi
+        self.assertEqual(len(gp.ATRIBUTE_PERMISE), 92)
+        self.assertEqual(sum(len(t) for t, _, _ in gp.ATRIBUTE_PERMISE), 107)
         # descrierile: exact cele 4 texte din captura (Unicode exact, r15)
         self.assertEqual(sorted(gp.DESCRIERI_CUNOSCUTE), sorted(set(v for d in DESCRIERI.values() for v in d.values())))
         # generatele Angular: doar numele EXACT de forma lor si doar goale
@@ -5217,7 +5419,8 @@ class TestR15ClaseJslogUnicode(unittest.TestCase):
                 self.assertTrue(any(c in v for v in gp.CLASE_PERMISE.values()), c)
         self.assertEqual(set(c for v in gp.CLASE_PERMISE.values() for c in v if c.startswith("ng-")),
                          {"ng-trigger", "ng-trigger-sendButtonVisibility", "ng-trigger-slide", "ng-trigger-toolboxDrawerEnter",
-                          "ng-trigger-inputAreaAnimation", "ng-dirty", "ng-untouched", "ng-valid"})      # r21 z23s: + inputAreaAnimation
+                          "ng-trigger-inputAreaAnimation", "ng-dirty", "ng-untouched", "ng-valid",
+                          "ng-pristine"})      # r21 z23s: + inputAreaAnimation; v4.6.4e f5: + ng-pristine (rich-textarea, gol)
 
     def test_clasele_pe_tag_sunt_exact_cele_vazute(self):
         # lista din cod = EXACT token-urile reale pe tag (sursa independenta: tripletele REALE), fara generate; nimic inventat, nimic lipsa
@@ -7108,10 +7311,11 @@ class _Fara(object):
 
 
 @contextlib.contextmanager
-def fara_r21(mod, doar=None):
+def fara_r21(mod, doar=None, adaosuri=None):
     # listele r20 (fara adaosurile r21, toate sau doar unul din R21_ADAOSURI): numele noi nu mai au intrare pe tagul lor, valorile noi si
-    # token-urile de clasa noi nu mai trec forma - ca in r20, prin _intrari_atribut (singurul loc care citeste ATRIBUTE_PERMISE)
-    ad = [x for x in R21_ADAOSURI if doar is None or x == doar]
+    # token-urile de clasa noi nu mai trec forma - ca in r20, prin _intrari_atribut (singurul loc care citeste ATRIBUTE_PERMISE).
+    # v4.6.4e: adaosuri = alta lista de aceeasi forma (V464E_ADAOSURI = listele v4.6.4d)
+    ad = [x for x in (R21_ADAOSURI if adaosuri is None else adaosuri) if doar is None or x == doar]
     orig = mod._intrari_atribut
 
     def intrari(tag, k):
@@ -7355,6 +7559,201 @@ class TestPaginaAziR21(unittest.TestCase):
         # un text in paragraful gol al avertismentului (azi: doar <br>) = refuz (TEXTE_CUNOSCUTE nu are niciun text acolo)
         h = html_z23s("gol").replace('<br _ngcontent', 'continut strain arbitrar<br _ngcontent', 1)
         self.assertEqual(gp.analizeaza_ciorna(h)["necunoscute_detalii"], ["text:continut strain arbitrar"])
+
+
+VARIANTA_F5 = (CAPTURA_F5, DESCRIERI_F5)
+STARI_F5 = ("gol", "mediu", "lung")
+# `stare` pe varianta F5 cu listele v4.6.4d instalate (testul de canal 23.11 seara, pasul 5e, starea gol) - scrise de mana, in ordinea DOM
+V464D_F5_GOL = (
+    "atribut_necunoscut:simplified-input-menu{style}",
+    "atribut_valoare:rich-textarea{class}",
+    "atribut_necunoscut:speech-dictation-mic-button{style}",
+)
+V464D_F5_SCRIS = (V464D_F5_GOL[0], V464D_F5_GOL[2])           # mediu / lung: rich-textarea e ng-dirty (deja permis)
+CLASA_RICH_F5_GOL = ("text-input-field_textarea ql-container ql-bubble ng-tns-c3765021202-4 enterprise simplified-input ng-untouched "
+                     "ng-pristine ng-valid ng-star-inserted")    # = linia din brief (scrisa de mana)
+# ce adauga v4.6.4e (scris de mana, din captura f5): doua nume pe tag (style, doar GOL) si un token de clasa pe rich-textarea
+V464E_ADAOSURI = (("nume", "simplified-input-menu", "style"), ("nume", "speech-dictation-mic-button", "style"),
+                  ("clasa", "rich-textarea", "ng-pristine"))
+STYLE_STRAINE = (" ", "x", "display:none", "display: none;", "--chat-container-height: 718;",
+                 "--textarea-max-rows: 7; --chat-container-height: 718px;", "background: url(/resource/1234)", "\u00a0", "\t")
+TOKENI_STRAINI_RICH = ("continut-strain-arbitrar", "Ng-Pristine", "ng-pristine-x", "ng-pristinex", "xng-pristine", "pristine",
+                       "ng-pristine\u00a0", "enterprise-x", "simplified-input-area", "ql-editor", "file-chip", "attachment")
+
+
+def html_f5(stare, **kw):
+    return html_captura(stare, captura=VARIANTA_F5, **kw)
+
+
+def index_f5(stare, tag, **atr):
+    return index_captura(stare, tag, captura=VARIANTA_F5, **atr)
+
+
+def f5_cu(stare, tag, k, v, **atr):
+    # (index, atributele elementului real din f5 cu k=v - inlocuit pe loc daca exista, altfel adaugat) pentru html_f5(inlocuiri=...)
+    i = index_f5(stare, tag, **atr)
+    a = list(CAPTURA_F5[stare][i][2])
+    j = [n for n, (x, _) in enumerate(a) if x == k]
+    if j:
+        a[j[0]] = (k, v)
+    else:
+        a.append((k, v))
+    return (i, tuple(a))
+
+
+class TestVariantaF5(unittest.TestCase):
+    """v4.6.4e: varianta de pagina de dupa F5 (chat nou, Carbon, ciorna goala; captura f5 gol / mediu / lung, chat, doar citire). Pe
+    listele v4.6.4d da cele 3 linii vazute in `stare` (refuz fals); cu adaosurile v4.6.4e (style GOL pe doua taguri, ng-pristine pe
+    rich-textarea) ambele variante (c23n si f5) + pagina z23s dau 0 necunoscute; orice alta valoare / alt tag / alt token = refuz."""
+
+    def test_captura_f5_e_aceeasi_structura(self):
+        # aceleasi taguri, adancimi si texte ca c23n; atributele negenerate difera EXACT prin `style` pe cele doua taguri (si pe div-uri,
+        # unde `style=""` era deja permis); descrierile = aceleasi 4 texte cunoscute
+        for st in STARI_F5:
+            self.assertEqual([(a, t, x) for a, t, _, x in CAPTURA_F5[st]], [(a, t, x) for a, t, _, x in CAPTURA_2311[st]], msg=st)
+            for (_, t, a5, _), (_, _, a23, _) in zip(CAPTURA_F5[st], CAPTURA_2311[st]):
+                n5 = set(k for k, _ in a5 if not gp._generat(k))
+                n23 = set(k for k, _ in a23 if not gp._generat(k))
+                if n5 != n23:
+                    self.assertEqual(n5 ^ n23, {"style"}, msg=(st, t))
+                    self.assertIn(t, ("div", "simplified-input-menu", "speech-dictation-mic-button"), msg=(st, t))
+            for t in ("simplified-input-menu", "speech-dictation-mic-button"):
+                self.assertEqual(dict(CAPTURA_F5[st][index_f5(st, t)][2]).get("style"), "", msg=(st, t))
+            self.assertTrue(set(DESCRIERI_F5[st].values()) <= set(gp.DESCRIERI_CUNOSCUTE), msg=st)
+        self.assertEqual(dict(CAPTURA_F5["gol"][index_f5("gol", "rich-textarea")][2])["class"], CLASA_RICH_F5_GOL)
+        for st in ("mediu", "lung"):
+            c = gp.SPATII_HTML.split(dict(CAPTURA_F5[st][index_f5(st, "rich-textarea")][2])["class"])
+            self.assertIn("ng-dirty", c)
+            self.assertNotIn("ng-pristine", c)
+
+    def test_ambele_variante_trec(self):
+        pagini = ([("f5_" + s, html_f5(s)) for s in STARI_F5] + [("c23n_" + s, html_captura(s)) for s in STARI_F5]
+                  + [("z23s_" + s, html_z23s(s)) for s in STARI_Z23S])
+        for nume, h in pagini:
+            i = gp.analizeaza_ciorna(h)
+            self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"], i["necunoscute"]), (1, 1, 0, 0, 0),
+                             msg=(nume, i["necunoscute_detalii"]))
+            rad, umbre, trunchiate = gp._arbore_cdp(html_in_cdp(h))
+            self.assertEqual(gp.analizeaza_arbore(rad, trunchiate), i, msg=nume)                   # arborele CDP = cel HTML
+            l = stare_linii(gp, FakePg(h))
+            self.assertIn("necunoscute in zona: 0", l)
+            self.assertEqual([x for x in l if x.startswith("paza ciorna:")], ["paza ciorna: OK (trimite ar continua)"], msg=nume)
+        # trimite pe varianta F5: chat nou gol (f5 gol) -> scriere -> caseta starii (f5) -> Enter; ultimul instantaneu = brief-ul, curat
+        gol = html_f5("gol")
+        for st in STARI_F5:
+            pg = FakePg(gol, dupa_goto=gol, dupa_scriere=html_f5(st, editor="<p><br></p>"))
+            self.assertEqual(trimite_brief(gp, pg, BRIEF_TEST), (None, "", ACTIUNI_TRIMITERE), msg=st)
+            i2 = gp.analizeaza_ciorna(pg.citite[-1])
+            self.assertEqual((gp.normalizeaza(i2["text_editor"]), i2["necunoscute"], i2["atasamente"]),
+                             (gp.normalizeaza(BRIEF_TEST), 0, 0), msg=st)
+            self.assertEqual(_invariant_instantaneu(pg), (True, ""))
+        # amestecat: tab-ul curent in varianta c23n, chatul nou in varianta f5 (si invers)
+        for a, b in ((html_captura("gol"), gol), (gol, html_captura("gol"))):
+            self.assertEqual(trimite_brief(gp, FakePg(a, dupa_goto=b), BRIEF_TEST), (None, "", ACTIUNI_TRIMITERE))
+
+    def test_pe_listele_v464d_liniile_din_stare(self):
+        # reproducerea refuzului fals: listele v4.6.4d (fara adaosuri) -> exact liniile din `stare`, refuz fara nicio actiune
+        for st in STARI_F5:
+            h = html_f5(st)
+            asteptat = V464D_F5_GOL if st == "gol" else V464D_F5_SCRIS
+            with fara_r21(gp, adaosuri=V464E_ADAOSURI):
+                i = gp.analizeaza_ciorna(h)
+                self.assertEqual(tuple(i["necunoscute_detalii"]), asteptat, msg=st)
+                self.assertEqual(trimite_brief(gp, FakePg(h, dupa_goto=h), BRIEF_TEST)[::2], ("ciorna_necunoscuta", []), msg=st)
+                l = stare_linii(gp, FakePg(h))
+                self.assertIn("necunoscute in zona: %d" % len(asteptat), l)
+                self.assertIn("    sursa atribut_necunoscut:style=", l)
+                if st == "gol":
+                    self.assertIn("    sursa atribut_valoare:class=" + CLASA_RICH_F5_GOL, l)
+                self.assertTrue([x for x in l if x.startswith("paza ciorna:")][0].startswith("paza ciorna: REFUZ ciorna_necunoscuta"))
+                # c23n si z23s nu au aceste atribute: trec si pe listele v4.6.4d
+                for g in [html_captura(s) for s in STARI_F5] + [html_z23s(s) for s in STARI_Z23S]:
+                    self.assertEqual(gp.analizeaza_ciorna(g)["necunoscute"], 0)
+            # trimite pe v4.6.4d: chatul nou in varianta F5 -> refuz dupa goto (Enter niciodata)
+            with fara_r21(gp, adaosuri=V464E_ADAOSURI):
+                cod, det, act = trimite_brief(gp, FakePg(html_captura("gol"), dupa_goto=html_f5("gol")), BRIEF_TEST)
+                self.assertEqual(cod, "ciorna_necunoscuta")
+                self.assertNotIn("press Enter", act)
+
+    def test_fiecare_adaos_v464e_e_necesar(self):
+        # fara oricare adaos (unul singur), varianta F5 e refuzata in starile in care apare, cu motivul exact pe acel atribut
+        self.assertEqual(len(V464E_ADAOSURI), 3)
+        for x in V464E_ADAOSURI:
+            k = "class" if x[0] == "clasa" else x[2]
+            for st in STARI_F5:
+                with fara_r21(gp, doar=x, adaosuri=V464E_ADAOSURI):
+                    d = gp.analizeaza_ciorna(html_f5(st))["necunoscute_detalii"]
+                if x[0] == "clasa" and st != "gol":
+                    self.assertEqual(d, [], msg=(x, st))                  # ng-pristine doar in starea gol (dupa scriere: ng-dirty)
+                    continue
+                fel = "atribut_valoare:" if x[0] == "clasa" else "atribut_necunoscut:"
+                self.assertEqual(d, [fel + x[1] + "{" + k + "}"], msg=(x, st, d))
+
+    def test_style_doar_gol_doar_pe_cele_doua_taguri(self):
+        for t in ("simplified-input-menu", "speech-dictation-mic-button"):
+            self.assertIsNone(gp._atribut_strain(gp._Nod(t, {"style": ""}, None)), msg=t)
+            for v in STYLE_STRAINE:
+                self.assertEqual(gp._atribut_strain(gp._Nod(t, {"style": v}, None)), ("atribut_valoare", "style", gp._ascii(v)), msg=(t, v))
+                # in pagina reala f5 (toate starile): style cu continut pe tagul real -> exact un refuz, nicio actiune
+                # (un fundal url(...) e refuzat mai devreme, de stratul de semnale: `fundal:<tag>`)
+                m = "fundal:" + t if "url(" in v else "atribut_valoare:%s{style}" % t
+                for st in STARI_F5:
+                    h = html_f5(st, inlocuiri=(f5_cu(st, t, "style", v),))
+                    self.assertEqual(gp.analizeaza_ciorna(h)["necunoscute_detalii"], [m], msg=(t, v, st))
+                    self.assertEqual(trimite_brief(gp, FakePg(h, dupa_goto=h), BRIEF_TEST)[::2], ("ciorna_necunoscuta", []), msg=(t, v, st))
+            # alt atribut gol pe aceleasi taguri (nevazut) ramane necunoscut; style pe trace-ul lor nu schimba nimic
+            for k in ("hidden", "title", "data-x", "aria-label"):
+                self.assertEqual(gp._atribut_strain(gp._Nod(t, {k: ""}, None))[0], "atribut_necunoscut", msg=(t, k))
+        # style GOL pe taguri fara intrare `style` = tot necunoscut; pe mat-icon (doar STYLE_ICONITA) = valoare necunoscuta
+        for t in ("gem-icon", "fieldset", "auto-suggest", "bard-mode-switcher", "gem-popover", "button", "span", "input-area-v2",
+                  "simplified-input-menux", "speech-dictation-mic-buttons"):
+            self.assertEqual(gp._atribut_strain(gp._Nod(t, {"style": ""}, None)), ("atribut_necunoscut", "style", ""), msg=t)
+        self.assertEqual(gp._atribut_strain(gp._Nod("mat-icon", {"style": ""}, None)), ("atribut_valoare", "style", ""))
+        # in pagina reala f5: style="" pe un gem-icon (fara intrare) -> refuz
+        st = "gol"
+        i = index_f5(st, "gem-icon", **{"_ngcontent-ng-c2910039102": ""})
+        h = html_f5(st, inlocuiri=((i, tuple(CAPTURA_F5[st][i][2]) + (("style", ""),)),))
+        self.assertEqual(gp.analizeaza_ciorna(h)["necunoscute_detalii"], ["atribut_necunoscut:gem-icon{style}"])
+
+    def test_ng_pristine_doar_pe_rich_textarea(self):
+        self.assertIsNone(gp._atribut_strain(gp._Nod("rich-textarea", {"class": CLASA_RICH_F5_GOL}, None)))
+        for t in ("div", "button", "span", "input-area-v2", "simplified-input-menu", "speech-dictation-mic-button", "gem-icon-button",
+                  "mat-icon", "fieldset", "toolbox-drawer", "p"):
+            self.assertEqual(gp._atribut_strain(gp._Nod(t, {"class": "ng-pristine"}, None)), ("atribut_valoare", "class", "ng-pristine"), msg=t)
+        # token strain pe rich-textarea (in clasa reala f5, gol / mediu / lung) -> exact un refuz pe {class}, nicio actiune
+        for tok in TOKENI_STRAINI_RICH:
+            v = CLASA_RICH_F5_GOL + " " + tok
+            self.assertEqual(gp._atribut_strain(gp._Nod("rich-textarea", {"class": v}, None)), ("atribut_valoare", "class", gp._ascii(v)), msg=tok)
+            for st in STARI_F5:
+                i = index_f5(st, "rich-textarea")
+                v = dict(CAPTURA_F5[st][i][2])["class"] + " " + tok
+                h = html_f5(st, inlocuiri=(f5_cu(st, "rich-textarea", "class", v),))
+                d = gp.analizeaza_ciorna(h)["necunoscute_detalii"]
+                if tok in ("file-chip", "attachment"):           # cuvant de atasament: refuzat mai devreme, de stratul de semnale
+                    self.assertEqual(len(d), 1, msg=(tok, st, d))
+                    self.assertTrue(d[0].startswith(("token_file:rich-textarea{", "token_attach:rich-textarea{")), msg=(tok, st, d))
+                else:
+                    self.assertEqual(d, ["atribut_valoare:rich-textarea{class}"], msg=(tok, st))
+                self.assertEqual(trimite_brief(gp, FakePg(h, dupa_goto=h), BRIEF_TEST)[::2], ("ciorna_necunoscuta", []), msg=(tok, st))
+        # ng-pristine in clasa altui element real din f5 (div-ul zonei, butonul "+", microfonul) -> refuz pe acel element
+        for tag, atr in (("simplified-input-menu", {}), ("speech-dictation-mic-button", {}), ("fieldset", {})):
+            for st in STARI_F5:
+                i = index_f5(st, tag, **atr)
+                v = dict(CAPTURA_F5[st][i][2])["class"] + " ng-pristine"
+                d = gp.analizeaza_ciorna(html_f5(st, inlocuiri=(f5_cu(st, tag, "class", v),)))["necunoscute_detalii"]
+                self.assertEqual(len(d), 1, msg=(tag, st, d))
+                self.assertTrue(d[0].startswith("atribut_valoare:" + tag) and d[0].endswith("{class}"), msg=(tag, st, d))
+
+    def test_structural_v464e(self):
+        # intrarea noua e una singura, exact pe cele doua taguri, doar GOL; ng-pristine e in lista unui singur tag
+        intr = [(t, f) for t, k, f in gp.ATRIBUTE_PERMISE if k == "style" and ("simplified-input-menu" in t or "speech-dictation-mic-button" in t)]
+        self.assertEqual(len(intr), 1)
+        self.assertEqual(intr[0][0], ("simplified-input-menu", "speech-dictation-mic-button"))
+        self.assertIs(intr[0][1], gp.GOL)
+        self.assertEqual([t for t, v in gp.CLASE_PERMISE.items() if "ng-pristine" in v], ["rich-textarea"])
+        self.assertEqual(set(gp.CLASE_PERMISE["rich-textarea"]),
+                         {"enterprise", "ng-dirty", "ng-pristine", "ng-untouched", "ng-valid", "ql-bubble", "ql-container",
+                          "simplified-input", "text-input-field_textarea"})
 
 
 def _nod_text(t):

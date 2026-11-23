@@ -209,6 +209,13 @@
 #   azi `stare` dadea 10 necunoscute (refuz fals). Listele albe primesc EXACT atributele / valorile / clasele vazute in capturile de azi
 #   (z23s: gol / scurt / mediu / lung, Edge 9333, doar citire + textele 5g2-a scrise fara Enter si golite imediat): zona exterioara
 #   input-container, back-to-bottom-fab, span[role=status], div.input-area-container, hallucination-disclaimer. Niciun element / text nou.
+# v4.6.4e (23.11.2026 seara, refuz fals la testul de canal pe v4.6.4d instalat, 50332B12): dupa F5, cu ciorna goala, pe chatul nou
+#   (Carbon) `stare` dadea 3 necunoscute. Captura acestei variante de pagina (f5 = paw_v464_calibrare\stare_completa_23_11_varianta_f5.json,
+#   chat, doar citire, gol / mediu / lung, ciorna golita) are fata de capturile 23.11 (c23 / c23n / t23 / z23s) EXACT trei diferente
+#   negenerate: `style=""` (GOL) pe simplified-input-menu si pe speech-dictation-mic-button (toate starile) si token-ul de clasa
+#   `ng-pristine` pe rich-textarea (doar starea gol: campul Angular inca neatins; dupa scriere devine `ng-dirty`, deja vazut). Token-urile
+#   `enterprise` / `simplified-input` din aceeasi linie erau deja pe lista (c23). Lista alba primeste EXACT atat: style doar GOL si doar pe
+#   cele doua taguri, ng-pristine doar pe rich-textarea. Niciun element, text, descriere sau alt atribut nou.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata, base64, json
@@ -447,8 +454,8 @@ CLASE_PERMISE = {
     "mat-icon": ("gds-icon-l", "google-symbols", "lm-icon-l", "lm-icon-m", "lumi-symbols", "mat-icon", "mat-icon-no-color",
                  "mat-ligature-font", "notranslate"),                                                                          # c23 (r21 z23s: lm-icon-m)
     "p": ("desktop-spacing", "empty-disclaimer", "gds-body-s"),                                                                # r21 z23s
-    "rich-textarea": ("enterprise", "ng-dirty", "ng-untouched", "ng-valid", "ql-bubble", "ql-container", "simplified-input",
-                      "text-input-field_textarea"),                                                                            # c23
+    "rich-textarea": ("enterprise", "ng-dirty", "ng-pristine", "ng-untouched", "ng-valid", "ql-bubble", "ql-container",
+                      "simplified-input", "text-input-field_textarea"),                                                        # c23 (v4.6.4e f5: ng-pristine)
     "simplified-input-menu": ("simplified-input-menu",),                                                                       # c23
     "span": ("cdk-visually-hidden", "gds-body-m", "inline-upgrade-banner-live-region", "mat-focus-indicator",
              "mat-mdc-button-persistent-ripple", "mat-mdc-button-touch-target", "mdc-button__label", "mdc-button__ripple",
@@ -588,6 +595,7 @@ ATRIBUTE_PERMISE = (
     (("div",), "style", FORMA_STYLE_DIV),                            # c23 a22
     (("rich-textarea",), "style", FORMA_STYLE_RICH),                 # c23
     (("gem-icon-button", "toolbox-drawer", "at-mentions-menu-v2"), "style", GOL),     # c23
+    (("simplified-input-menu", "speech-dictation-mic-button"), "style", GOL),        # v4.6.4e f5 (dupa F5, toate starile)
     (("file-drop-indicator",), "style", VALOARE_SPATII),             # g22 (r10: gol sau doar spatii albe HTML)
     (("file-drop-indicator",), "data-filedrop-id", VALOARE_FILEDROP),                 # g22
     (("div",), "data-test-id", _E("textarea-inner", "textarea-wrapper", "logo-pill-label-container", "send-button-container")),  # c23

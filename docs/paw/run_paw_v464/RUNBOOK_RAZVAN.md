@@ -1,4 +1,4 @@
-# Paw v4.6.4 / v4.6.4b / v4.6.4c / v4.6.4d - doar paza atasamentelor Gemini - procedura pentru Razvan
+# Paw v4.6.4 / v4.6.4b / v4.6.4c / v4.6.4d / v4.6.4e - doar paza atasamentelor Gemini - procedura pentru Razvan
 
 Numai operatorul executa pasii. Agentul nu a instalat nimic si nu a cerut elevare.
 A = PowerShell 5.1 admin Gazpet-Ai; N = acelasi cont NE-elevat. Orice eroare = STOP.
@@ -78,9 +78,25 @@ vazut pe acel loc ("Carbon" doar in butonul modelului, textele linkului de confi
 el). Testul de canal are un pas nou, **5g2** (captura casetei,
 doar citire, la trei lungimi de text + trimiterea unui brief lung si a unuia mediu). Rollback-ul (mai jos) readuce v4.6.4c (cu markerul ei).
 
+**Stare 23.11.2026 seara (v4.6.4d -> v4.6.4e):** v4.6.4d (`gemini_pw.py` `50332B12...`, main `b8e9f541`) a fost INSTALAT; la testul de
+canal, pasul **5e** (dupa F5, ciorna goala, chat nou, Carbon) `stare` a dat 3 necunoscute - refuz FALS, nimic trimis, markerul NU a fost
+scris (`paw-data\gem_canal_validat` e tot cel al lui v4.6.4c, legat de `09E78891...`, deci lansatorul refuza `gem` acum - sigur):
+`atribut_necunoscut:simplified-input-menu{style}` si `atribut_necunoscut:speech-dictation-mic-button{style}` (ambele cu `style=` GOL) si
+`atribut_valoare:rich-textarea{class}`. Captura completa a acestei variante de pagina (chat, doar citire, ciorna golita):
+`paw-data\out\paw_v464_calibrare\stare_completa_23_11_varianta_f5.json` (gol / mediu / lung). Fata de toate capturile anterioare are
+EXACT trei diferente negenerate: `style=""` pe cele doua taguri (in toate starile) si token-ul de clasa **`ng-pristine`** pe
+`rich-textarea` (doar in starea gol: campul Angular inca neatins dupa F5; dupa scriere devine `ng-dirty`, deja permis). Atentie: in
+linia clasei `enterprise` si `simplified-input` NU sunt noi (erau pe lista din c23); token-ul care lipsea e `ng-pristine`. **v4.6.4e**
+(acest pachet) schimba din nou DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE v4.6.4d cu aceeasi procedura:
+hash-ul vechi = `50332B12...`, zona protejata noua `operator-v464e`, copiile de siguranta cu sufixul `.v464d`, fisierele noi cu `.v464e`
+(pasul 1). Ce aduce: `style` DOAR cu valoarea goala si DOAR pe `simplified-input-menu` / `speech-dictation-mic-button` (orice continut =
+refuz, ca pana acum), `ng-pristine` DOAR pe `rich-textarea`. Nimic altceva (niciun element, text, descriere sau alt atribut). Pe varianta F5
+reconstituita din captura: 0 necunoscute in toate starile; pe capturile anterioare (c23n, z23s): tot 0. Rollback-ul (mai jos) readuce
+v4.6.4d (fara marker valid: `gem` ramane refuzat, ca acum).
+
 Hash-urile vin din raportul de review, nu din acest fisier. Livrare: folderul din commit-ul
 aprobat ajunge in `$Source` (`git archive` al commit-ului, dezarhivat in
-`C:\Users\Public\livrare\run_paw_v464d`); verificarea de mai jos decide.
+`C:\Users\Public\livrare\run_paw_v464e`); verificarea de mai jos decide.
 
 ## 0. Calibrare pe pagina reala (N, DOAR citire, INAINTE de review-ul final si de instalare)
 
@@ -637,6 +653,30 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
   aliniate pica: 18 FAIL + 3 ERROR din 246; reproducerea pe codul r20 real (`repro_vechi_r21.py`): brief-ul din verdict = Enter pe
   capturile 23.11 (pe pagina de azi codul r20 refuza oricum tot, cele 10 necunoscute), pe r21 = `brief_invalid`.
 
+**Stare v4.6.4e (23.11.2026 seara, varianta de pagina de dupa F5, pe v4.6.4d instalat `50332B12...`):**
+- **Vazut (5e, `stare`, ciorna goala dupa F5, chat nou, Carbon):** 3 necunoscute - `style=""` pe `simplified-input-menu` si pe
+  `speech-dictation-mic-button`, clasa lui `rich-textarea` cu `ng-pristine`. Captura chat-ului (doar citire, ciorna golita dupa):
+  `paw_v464_calibrare\stare_completa_23_11_varianta_f5.json`, starile gol / mediu / lung, aceeasi forma ca captura netaiata (lista plata).
+- **Comparatia (tripletele tag / atribut / valoare, fara atributele `_ng*` si token-urile generate `ng-tns-*` / `ng-star-inserted`):**
+  fata de c23 / c23n / t23 / z23s exact 3 diferente: `style=""` pe cele doua taguri (gol / mediu / lung) si `ng-pristine` pe
+  `rich-textarea` (doar gol; in mediu / lung clasa are `ng-dirty`, ca in c23n). Aceleasi taguri, adancimi si texte ca c23n; descrierile =
+  aceleasi 4 texte cunoscute (alte numere `ng-1-13` / `ng-1-14`, forma deja permisa). `enterprise` / `simplified-input` erau deja pe lista.
+- **Adaugate EXACT:** o intrare `ATRIBUTE_PERMISE` `(("simplified-input-menu", "speech-dictation-mic-button"), "style", GOL)` si
+  `ng-pristine` in `CLASE_PERMISE["rich-textarea"]`. Cu v4.6.4e: **`necunoscute in zona: 0`, `paza ciorna: OK`** pe varianta F5 (3 stari),
+  pe c23n (3 stari) si pe z23s (4 stari); `trimite` ajunge la Enter si cu tab-ul intr-o varianta si chatul nou in cealalta.
+- **Dovezi (teste 253, `python -I`):** `TestVariantaF5` (7) - fixture GENERAT din captura (`CAPTURA_F5`, adancimile din c23n verificate
+  pe secventa exacta de taguri); ambele variante trec (analiza, arborele CDP, `stare` OK, `trimite` pana la Enter); pe listele v4.6.4d
+  exact liniile din `stare` (3 in gol, 2 in mediu / lung) si refuz fara nicio actiune; FIECARE din cele 3 adaosuri e necesar; negative:
+  `style` cu continut (spatiu, NBSP, tab, `display:none`, style-urile altor taguri, `url(` = `fundal:`) pe cele doua taguri = refuz,
+  `style=""` pe alte taguri = refuz, token strain / variante ale lui `ng-pristine` pe `rich-textarea` = refuz, `ng-pristine` pe orice alt
+  tag = refuz; structural. Tripletele f5 intra in testele listei inchise (`REALE`). Pe v4.6.4d instalat real (`50332B12...`, copie in
+  afara repo-ului): testele noi / aliniate pica (8 FAIL + 1 ERROR din 253; ERROR = testul care citeste RUNBOOK-ul, absent din copie);
+  reproducerea (`repro_vechi.py`): varianta F5 = exact cele 3 linii din `stare`, iar `trimite` cu chatul nou in varianta F5 =
+  `ciorna_necunoscuta` dupa `goto`; pe v4.6.4e = Enter.
+- **NU s-a vazut:** combinatii de stari Angular nevazute (de ex. `ng-pristine` cu text in ciorna) sunt acceptate token cu token, ca toate
+  clasele (lista e pe token, nu pe multime); nu sunt semne de atasament. Chat EXISTENT dupa F5: nevazut - la 5a pe un chat existent,
+  orice `necunoscut ...` = STOP, liniile la chat.
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari + citirea CDP `DOM.getDocument`, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -661,28 +701,29 @@ scrie nimic si nu trimite nimic.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$Source = 'C:\Users\Public\livrare\run_paw_v464d\docs\paw\run_paw_v464'
+$Source = 'C:\Users\Public\livrare\run_paw_v464e\docs\paw\run_paw_v464'
 $PawRoot = 'C:\ProgramData\Gazpet\Paw'
 $Bin = Join-Path $PawRoot 'bin'
-$Audit = Join-Path $PawRoot 'operator-v464d'
-$SufVechi = '.v464c'     # sufixul copiilor de siguranta (ce e instalat acum: v4.6.4c)
-$SufNou = '.v464d'       # sufixul fisierelor noi din zona protejata
+$Audit = Join-Path $PawRoot 'operator-v464e'
+$SufVechi = '.v464d'     # sufixul copiilor de siguranta (ce e instalat acum: v4.6.4d)
+$SufNou = '.v464e'       # sufixul fisierelor noi din zona protejata
 $GemMarker = 'C:\Users\Public\paw-data\gem_canal_validat'
 $Python = 'C:\Program Files\Python313\python.exe'
 $ManifestHash = 'INLOCUIESTE_CU_HASH_MANIFEST_DIN_RAPORT'
 $GemHashNou = 'INLOCUIESTE_CU_HASH_GEMINI_PW_DIN_RAPORT'
 $DiagHash = 'INLOCUIESTE_CU_HASH_CAPTURA_CASETA_DIN_RAPORT'    # diag\captura_caseta.py (pasul 5g2; nu se instaleaza)
-$GemHashVechi = '09E78891CD4D73DA5B457D0397CC2CE6BD2A7E83EF3F7AD51C320AF0D69EA862'
+$GemHashVechi = '50332B129BEAC6C14992E4B42905146BC3FAC904AB8F02D61EA598DAE3FE1BD0'
 $Operator = "$env:COMPUTERNAME\Gazpet-Ai"
 $ReaderSid = (New-Object Security.Principal.NTAccount($Operator)).Translate([Security.Principal.SecurityIdentifier]).Value
 ```
 
-`$GemHashVechi` = `gemini_pw.py` din v4.6.4c (instalat acum in `bin`, recitit 23.11.2026, = main `16a9a9f7` / `ae5ca32d`). Istoric: la
-instalarea v4.6.4c peste v4.6.4b valorile au fost `$Audit = operator-v464c`, `$GemHashVechi = 5B0CCD4851A2B2A5BCCB0CF0B76A087F544051091827B998A156C35D082972CD`
+`$GemHashVechi` = `gemini_pw.py` din v4.6.4d (instalat acum in `bin`, recitit 23.11.2026 seara, = main `b8e9f541`). Istoric: la
+instalarea v4.6.4d peste v4.6.4c valorile au fost `$Audit = operator-v464d`, `$GemHashVechi = 09E78891CD4D73DA5B457D0397CC2CE6BD2A7E83EF3F7AD51C320AF0D69EA862`
+(v4.6.4c), sufixele `.v464c` / `.v464d`; la instalarea v4.6.4c peste v4.6.4b valorile au fost `$Audit = operator-v464c`, `$GemHashVechi = 5B0CCD4851A2B2A5BCCB0CF0B76A087F544051091827B998A156C35D082972CD`
 (v4.6.4b), sufixele `.v464b` / `.v464c`; la instalarea v4.6.4b peste v4.6.4 valorile au fost `$Audit = operator-v464b`, `$GemHashVechi = A03E2B5C5ABD5D80709E5E1FB87126F4986245389B4E0943796589E2156AF7B6`
 (v4.6.4), sufixele `.v464` / `.v464b`; la instalarea v4.6.4 peste v4.6.3: `operator-v464`, `BE3B867B0BD7FA2333D009B54258A146DF72F4D78C2706C321ABEB2D21AED9F5`
-(v4.6.3), `.v463` / `.v464`. Folderele `operator-v464`, `operator-v464b` si `operator-v464c` raman pe disc (copiile v4.6.3 / v4.6.4 /
-v4.6.4b), nu se ating.
+(v4.6.3), `.v463` / `.v464`. Folderele `operator-v464`, `operator-v464b`, `operator-v464c` si `operator-v464d` raman pe disc (copiile
+v4.6.3 / v4.6.4 / v4.6.4b / v4.6.4c), nu se ating.
 
 ## 2. Verificari inainte de inlocuire (N - NU in consola admin; o data, inainte de pasul 3)
 
@@ -703,7 +744,7 @@ if ((Get-FileHash -LiteralPath "$Source\diag\captura_caseta.py").Hash -ine $Diag
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel asteptat (vezi $GemHashVechi)' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 1038 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 86) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 12 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 2) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -713,7 +754,13 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + $SufVechi) -Force }
 ```
 
-Asteptat (pachetul v4.6.4d = r21, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **1038 linii diferite (86 vechi `<=`, 952 noi `=>`)**.
+Asteptat (pachetul v4.6.4e, fata de v4.6.4d INSTALAT in `bin`, `50332B12...`): **12 linii diferite (2 vechi `<=`, 10 noi `=>`)**.
+Cele 2 linii vechi = cele doua linii ale intrarii `"rich-textarea": (...)` din `CLASE_PERMISE` (rescrisa cu `ng-pristine`). Liniile noi:
+nota v4.6.4e din antet (7), cele doua linii noi ale intrarii `"rich-textarea"` si intrarea `style` GOL pe `simplified-input-menu` /
+`speech-dictation-mic-button` din `ATRIBUTE_PERMISE`. Testele: `Ran 253 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`)
+1678 / 26 / 1652; fata de origin/main (`b8e9f541`, = instalat) tot 12 / 2 / 10.
+
+Istoric (pachetul v4.6.4d = r21, fata de v4.6.4c instalat atunci, `09E78891...`): 1038 linii diferite (86 vechi `<=`, 952 noi `=>`).
 Cele 86 de linii vechi = EXACT cele 86 din r20 (mai jos; r21 nu schimba nicio linie venita din v4.6.4c - doar linii adaugate de r11-r20
 sau noi). Liniile noi r21: nota r21 din antet; `_u16` / `_taiat_cdp` / `ELIPSA_CDP` + comentariul lor; masurarea UTF-16 in `_arbore_cdp`,
 in mesajul `text_trunchiat_cdp:` si in verificarea liniilor brief-ului din `trimite`; adaosurile din listele albe (comentariul z23s,
@@ -993,7 +1040,9 @@ Orice rezultat diferit de cel cerut mai jos = **STOP**, fara marker; copiaza toa
   trimitere), apoi `stare`: `atasamente in ciorna: 0`, `necunoscute in zona: 0`, `paza ciorna: OK ...`. Fara F5, zona si
   editorul pastreaza `style="--uploader-height: 112px;"` si `stare` da `necunoscut token_upload:...` cu
   `    sursa valoare_atribut:style=--uploader-height: 112px;` = refuz fals, dar sigur (decizia din 22.11: ramane refuz, NU se
-  excepteaza); asta nu e STOP - fa F5 si repeta `stare`. Orice alta linie `necunoscut` dupa F5 = STOP.
+  excepteaza); asta nu e STOP - fa F5 si repeta `stare`. Orice alta linie `necunoscut` dupa F5 = STOP. (Pe v4.6.4d 5e picase aici:
+  dupa F5 pagina vine in varianta cu `style=""` pe `simplified-input-menu` / `speech-dictation-mic-button` si `ng-pristine` pe
+  `rich-textarea`; v4.6.4e le accepta exact asa - asteptat acum `necunoscute in zona: 0`.)
 - **5f.** Selecteaza de mana alt model (4 Hydrogen) si repeta `trimite`: ultima linie
   `GEM_EROARE model_gresit afisat: '...Hydrogen...', cerut: Carbon`; nu a plecat niciun mesaj.
 - **5g.** Revino de mana la Carbon si ruleaza blocul de mai jos: doua trimiteri, fiecare verificata
@@ -1107,7 +1156,7 @@ Numai dupa ce ai VAZUT rezultatele 5a-5g2, markerul - **ne-elevat (N)**, nu din 
 ```powershell
 $GemHash = (Get-FileHash -LiteralPath "$Bin\gemini_pw.py" -Algorithm SHA256).Hash
 if ($GemHash -ine $GemHashNou) { throw 'gemini_pw.py instalat nu e cel revizuit' }
-Set-Content -LiteralPath $GemMarker -Value ('CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v464d') -Encoding ASCII
+Set-Content -LiteralPath $GemMarker -Value ('CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v464e') -Encoding ASCII
 ```
 
 ## 6. Smoke prin lansator (N)
@@ -1128,7 +1177,7 @@ Dupa smoke: sesiunea de chat actualizeaza `registru_automatizari`, randul `run_p
 
 ## Rollback la versiunea dinainte (A, consola noua, dupa pasul 1; pasul 2 NU se ruleaza)
 
-Readuce in `bin` copiile de siguranta cu sufixul `$SufVechi` din `$Audit` (la v4.6.4d: v4.6.4c, `09E78891...`, din `operator-v464d`).
+Readuce in `bin` copiile de siguranta cu sufixul `$SufVechi` din `$Audit` (la v4.6.4e: v4.6.4d, `50332B12...`, din `operator-v464e`).
 
 ```powershell
 . "$Bin\cdx_security.ps1"
@@ -1156,8 +1205,12 @@ Apoi markerul, **ne-elevat (N)**, dupa pasul 1 (copia facuta la pasul 2, daca ex
 if (Test-Path -LiteralPath ($GemMarker + $SufVechi)) { Copy-Item -LiteralPath ($GemMarker + $SufVechi) -Destination $GemMarker -Force }
 ```
 
-Dupa rollback la v4.6.4c, markerul copiat la pasul 2 (`gem_canal_validat.v464c`, legat de `09E78891...`) e pus la loc, deci `gem` merge
-din nou cu v4.6.4c (cu refuzul fals la brief-urile lungi, sigur). Rollback mai departe (v4.6.4b sau mai vechi) = `gem` refuzat: nici
+Dupa rollback la v4.6.4d, markerul copiat la pasul 2 (`gem_canal_validat.v464d`) e pus la loc; acela e tot markerul lui v4.6.4c (legat
+de `09E78891...`: testul de canal al lui v4.6.4d a picat la 5e, markerul n-a fost scris), deci `gem` ramane REFUZAT cu v4.6.4d (sigur),
+ca inainte de v4.6.4e. Ca `gem` sa mearga din nou fara v4.6.4e: rollback inca un pas, la v4.6.4c, cu variabilele de la instalarea v4.6.4d
+(`$Audit = operator-v464d`, `$SufVechi = .v464c`, `$GemHashVechi = 09E78891...`) - markerul `.v464c` (legat de `09E78891...`) o
+valideaza (cu refuzul fals la brief-urile lungi, sigur). Istoric (rollback-ul v4.6.4d -> v4.6.4c): markerul copiat la pasul 2
+(`gem_canal_validat.v464c`) e pus la loc, deci `gem` merge din nou cu v4.6.4c. Rollback mai departe (v4.6.4b sau mai vechi) = `gem` refuzat: nici
 v4.6.3, nici v4.6.4, nici v4.6.4b nu au marker valid (testele lor de canal au picat). jak / cop / cdx neschimbate. Pasul 4 se poate rula ca verificare. Folderul de audit e redenumit,
 deci pasul 3 se poate relua de la capat dupa ce cauza e lamurita.
 
