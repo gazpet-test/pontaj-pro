@@ -1,6 +1,6 @@
 # Registru DCC + corespondența cu DCC din ERP — specificație v2 (PR0)
 
-Data: 23.11.2026 · Stare: PROPUNERE v2.1 (review v2: Jakarinos + Copilot „GO cu condiții”, condițiile integrate aici) · Modul: Execuție.
+Data: 23.11.2026 · Stare: PROPUNERE v2.3 (review v2: Jakarinos + Copilot „GO cu condiții”, condițiile integrate aici) · Modul: Execuție.
 Sursele de lucru (în afara repo-ului, private): propunerea v1, analiza corespondenței trimise (~700 de fire) și a răspunsurilor DCC
 (~180), registrul Excel ținut azi de mână (267 de rânduri, Lot 1), ghidurile de codificare ale beneficiarului (Lot 1 execuție, Lot 2
 execuție, Lot 1 proiectare/DDE) și verdictele de review pe v1 (Jakarinos, Copilot, Rocky — toate „GO cu condiții”). Repo-ul este public:
