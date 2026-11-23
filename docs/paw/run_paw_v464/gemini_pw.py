@@ -123,6 +123,14 @@
 #   (2) element:button[aria-label=extinde intrarea la ecran complet][aria-describedby] - butonul "Ecran complet" (`fullscreen-button`,
 #       gemtooltip "Ecran complet") apare cu textul lung: fara semnal, trecut EXACT in CONTROALE_CUNOSCUTE (ca la calibrarea din 21.11).
 #   Butonul de trimitere in starea `has-input submit` (cu `style=""`) era deja acceptat (structura + controlul calibrat) - testat.
+# v4.6.4d / r12 (23.11.2026, Jakarinos NO-GO pe r11): (a) un control din CONTROALE_CUNOSCUTE transmite contextul lui descendentilor, iar
+#   _motiv_text accepta in el orice text fara semnal (eticheta controlului) -> un <span>continut strain arbitrar</span> pus in butonul
+#   "Ecran complet" ajungea la Enter. Butonul nou e un control cu text INCHIS (CONTROALE_TEXT_INCHIS): in el si in toti descendentii lui
+#   e permis doar textul gol sau EXACT tooltip-ul vazut ("ecran complet", dupa _ascii); orice alt text = `text_in_control:` (refuz).
+#   Iconita nu are text permis: numele ei nu e in captura (stare_text_lung_23_11.json are doar atributele butonului). Contextul inchis
+#   nu poate fi inlocuit de un control / buton de model imbricat. Celelalte controale raman neschimbate. (b) CLASE_DIV_DROP = doar
+#   cele 4 multimi cu baza vazuta (varianta B): cele 3 "simplified-input-area + token de inaltime" sunt scoase (presupunere contrazisa
+#   de captura) si refuzate ca orice alta multime.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata
@@ -209,17 +217,15 @@ VALOARE_FILEDROP = re.compile(re.escape("chat-window-input-container"))     # r9
 VALOARE_SPATII = re.compile(r"[ \t\n\r\f]*")                  # r10: gol sau doar spatii albe HTML (L13: clasa explicita, nu \s)
 # r11: clasele div-ului zonei de drop (cel cu `xapfileselectordropzone=""`). Starea normala (21.11, token_file_atribute.txt) si starea
 # cu ~10 KB de text in ciorna (23.11, stare_text_lung_23_11.json: `simplified-input-area` dispare, apar cei doi token-i ai inaltimii si
-# `with-toolbox-drawer`) sunt VAZUTE pe pagina reala; celelalte sunt aceleasi baze cu doar unul / ambii token-i ai inaltimii (starile
-# intermediare, cerute de chat ca "si / sau"; nevazute inca - 5g2 din RUNBOOK le verifica). Nimic din afara listei (alt token, prefix,
-# sufix, litere mari, ambele baze odata) nu e acceptat.
+# `with-toolbox-drawer`) sunt VAZUTE pe pagina reala; celelalte doua sunt baza vazuta la 23.11 cu doar unul din cei doi token-i ai
+# inaltimii (starile intermediare - DEDUCTII, nevazute inca: 5g2 din RUNBOOK le captureaza, nu le dovedeste). r12 (varianta B, Jakarinos):
+# multimile "simplified-input-area + token de inaltime" din r11 sunt scoase (captura arata ca `simplified-input-area` dispare in starea
+# extinsa). Nimic din afara listei (alt token, prefix, sufix, litere mari, ambele baze odata) nu e acceptat.
 CLASE_DIV_DROP = (
     ("text-input-field", "simplified-input-area"),                                                        # r5 - normal (vazut 21.11)
     ("text-input-field", "height-expanded-past-single-line", "pre-fullscreen", "with-toolbox-drawer"),    # r11 - text lung (vazut 23.11)
-    ("text-input-field", "height-expanded-past-single-line", "with-toolbox-drawer"),                      # r11 - intermediar (cerut)
-    ("text-input-field", "pre-fullscreen", "with-toolbox-drawer"),                                        # r11 - intermediar (cerut)
-    ("text-input-field", "simplified-input-area", "height-expanded-past-single-line"),                    # r11 - normal + inaltime (cerut)
-    ("text-input-field", "simplified-input-area", "pre-fullscreen"),                                      # r11 - normal + inaltime (cerut)
-    ("text-input-field", "simplified-input-area", "height-expanded-past-single-line", "pre-fullscreen"),  # r11 - normal + inaltime (cerut)
+    ("text-input-field", "height-expanded-past-single-line", "with-toolbox-drawer"),                      # r11 - intermediar (dedus)
+    ("text-input-field", "pre-fullscreen", "with-toolbox-drawer"),                                        # r11 - intermediar (dedus)
 )
 MARCAJE_PERMISE = (
     ("div", CLASE_DIV_DROP, "xapfileselectordropzone", VALOARE_GOALA, False, ()),                         # r5 (21.11) + r11 (23.11)
@@ -280,6 +286,14 @@ CONTROALE_CUNOSCUTE = (
     # semnatura copiata EXACT din linia `element:` a jurnalului refuzului (juridic_43eb636364a95c9d.log); fara semnal (atributele complete
     # in stare_text_lung_23_11.json). Alta semnatura (ex. fara aria-describedby) = element necunoscut, refuz (fals, dar sigur).
     "button[aria-label=extinde intrarea la ecran complet][aria-describedby]",
+)
+# r12 (Jakarinos NO-GO r11): controale cu text INCHIS - (semnatura EXACTA din CONTROALE_CUNOSCUTE, textele permise EXACT dupa _ascii).
+# In controlul acesta si in TOTI descendentii lui (oricat de adanc) un nod text e permis doar gol sau egal cu unul din textele listei;
+# orice alt text = `text_in_control:` (refuz), chiar fara cuvant de atasament. Contextul nu se schimba sub el (un control / butonul
+# modelului imbricat nu-i elibereaza textele). Butonul "Ecran complet": tooltip-ul vazut `gemtooltip="Ecran complet"`; numele iconitei
+# NU e in captura, deci nicio ligatura nu e permisa (iconita fara text - svg / gem-icon - trece). Celelalte controale: neschimbate.
+CONTROALE_TEXT_INCHIS = (
+    ("button[aria-label=extinde intrarea la ecran complet][aria-describedby]", ("ecran complet",)),
 )
 STRUCTURA_CUNOSCUTA = (
     "span[role=status]",                                             # i ii iii - regiune live pentru cititoare de ecran (goala)
@@ -710,6 +724,18 @@ def _sursa_cuvant(n, t):
     return "?:" + t                                          # (nu se ajunge: t vine chiar din aceste texte)
 
 
+def _texte_control_inchis(ctrl):
+    # r12: ctrl (nodul controlului recunoscut sau None) -> textele permise in el daca e un control cu text INCHIS (semnatura EXACTA
+    # din CONTROALE_TEXT_INCHIS), altfel None (control obisnuit / fara control)
+    if ctrl is None:
+        return None
+    sem = _semnatura(ctrl)
+    for s, texte in CONTROALE_TEXT_INCHIS:
+        if sem == s:
+            return texte
+    return None
+
+
 def _motiv_text(nod, ctrl):
     # ctrl = controlul recunoscut (din lista alba / butonul modelului) in care sta textul, sau None
     a = _ascii(nod.date)
@@ -720,7 +746,12 @@ def _motiv_text(nod, ctrl):
     if _cuvant(a) is not None:
         return "text_atasament:" + a[:TEXT_AFISAT]      # r4: cuvant de atasament: refuz chiar si intr-un control / text din lista
     if ctrl is not None:
-        return None                                     # eticheta unui control recunoscut
+        permise = _texte_control_inchis(ctrl)
+        if permise is None:
+            return None                                 # eticheta unui control recunoscut
+        if a in permise:
+            return None                                 # r12: textul EXACT permis in controlul cu text inchis (tooltip-ul vazut)
+        return "text_in_control:" + a[:TEXT_AFISAT]     # r12: orice alt text intr-un control cu text inchis
     p = nod.parinte
     if p is not None and p.tag == "mat-icon" and RE_LIGATURA.fullmatch(a):
         return None                                     # ligatura unei iconite ("send", "mic", "add_2")
@@ -785,6 +816,8 @@ def _necunoscute(zona, editoare):
             out.append((m, sursa))
         if n is zona:
             ctrl_copii = None               # r6: zona e un invelis, niciodata un control (textele din ea nu sunt eticheta ei)
+        if _texte_control_inchis(ctrl) is not None:
+            ctrl_copii = ctrl               # r12: sub un control cu text inchis contextul ramane al lui (nimic imbricat nu-l inlocuieste)
         st.extend((c, ctrl_copii, in_editor) for c in reversed(n.copii))
     return out
 

@@ -1,0 +1,43 @@
+# Paw v4.6.4d (r12) - captura casetei de compunere Gemini, DOAR CITIRE (RUNBOOK pasul 5g2).
+# Nu face nicio actiune pe pagina: fara click / tastatura / scriere in ciorna / navigare. Operatorul lipeste de mana textul in
+# ciorna (fara Enter), ruleaza scriptul, apoi goleste ciorna de mana. Iesirea (JSON ASCII pe stdout) arata clasele div-ului zonei de
+# drop si atributele + continutul (innerHTML, taiat) fiecarui buton din zona - adica starea pe care paza o vede la `inainte_de_enter`.
+# Textul ciornei NU se afiseaza (doar lungimea lui). Se conecteaza la Edge 9333 pe loopback, ca gemini_pw.py.
+# Utilizare: python captura_caseta.py <eticheta>      (eticheta: [a-z0-9-]{1,32}, ex. gol / scurt / mediu / lung)
+# ASCII only.
+import json, re, sys
+from playwright.sync_api import sync_playwright
+
+JS = r"""() => {
+  const zone = Array.from(document.querySelectorAll('input-area-v2'));
+  const atr = el => { const a = {}; for (const x of el.attributes) a[x.name] = x.value.slice(0, 300); return a; };
+  const ed = document.querySelector('div[role=textbox][contenteditable]');
+  return {
+    zone: zone.length,
+    ciorna_lungime: ed ? (ed.innerText || '').trim().length : -1,
+    zona: zone.map(z => ({tag: z.tagName.toLowerCase(), attrs: atr(z)})),
+    div_drop: Array.from(document.querySelectorAll('input-area-v2 [xapfileselectordropzone]')).map(el => ({tag: el.tagName.toLowerCase(), attrs: atr(el)})),
+    butoane: Array.from(document.querySelectorAll('input-area-v2 button')).map(el => ({attrs: atr(el), interior: el.innerHTML.slice(0, 3000)})),
+    chip_uri: document.querySelectorAll('input-area-v2 uploader-file-preview').length,
+  };
+}"""
+
+
+def main():
+    if len(sys.argv) != 2 or not re.fullmatch(r"[a-z0-9-]{1,32}", sys.argv[1]):
+        print("CAPTURA_EROARE utilizare: captura_caseta.py <eticheta [a-z0-9-]{1,32}>")
+        return 2
+    with sync_playwright() as p:
+        b = p.chromium.connect_over_cdp("http://127.0.0.1:9333")
+        taburi = [x for c in b.contexts for x in c.pages if x.url.startswith("https://gemini.google.com/")]
+        if len(taburi) != 1:
+            print("CAPTURA_EROARE taburi Gemini: %d (trebuie exact 1)" % len(taburi))
+            return 3
+        rez = taburi[0].evaluate(JS)
+    print(json.dumps({"eticheta": sys.argv[1], "captura": rez}, ensure_ascii=True, indent=1))
+    print("CAPTURA_GATA " + sys.argv[1])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

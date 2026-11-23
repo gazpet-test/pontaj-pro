@@ -2992,12 +2992,16 @@ STARE_23_11 = (
 )
 EROARE_23_11 = "inainte_de_enter: 2 element(e) nerecunoscute in zona ciornei - nu trimit (" + "; ".join(STARE_23_11) + ")"
 SURSA_DIV_23_11 = "nume_atribut:xapfileselectordropzone="
-# multimile de clase acceptate pe div-ul zonei de drop (scrise de mana: normal 21.11, text lung 23.11, intermediarele cerute de chat)
+# multimile de clase acceptate pe div-ul zonei de drop (scrise de mana: normal 21.11, text lung 23.11, cele doua intermediare deduse pe
+# aceeasi baza). r12 (varianta B): doar aceste 4.
 CLASE_DIV_DROP_ASTEPTATE = (
     ("text-input-field", "simplified-input-area"),
     ("text-input-field", "height-expanded-past-single-line", "pre-fullscreen", "with-toolbox-drawer"),
     ("text-input-field", "height-expanded-past-single-line", "with-toolbox-drawer"),
     ("text-input-field", "pre-fullscreen", "with-toolbox-drawer"),
+)
+# r12: cele 3 multimi "normala + token de inaltime" din r11, scoase (captura 23.11 le contrazice) -> acum REFUZ ca orice alta multime
+CLASE_DIV_SCOASE_R12 = (
     ("text-input-field", "simplified-input-area", "height-expanded-past-single-line"),
     ("text-input-field", "simplified-input-area", "pre-fullscreen"),
     ("text-input-field", "simplified-input-area", "height-expanded-past-single-line", "pre-fullscreen"),
@@ -3235,15 +3239,21 @@ class TestTextLung2311(unittest.TestCase):
             ('<rich-textarea xapfileselectordropzone="" class="%s"></rich-textarea>' % ext, "token_file:rich-textarea{%s xapfileselectordropzone}" % ext,
              SURSA_DIV_23_11),
         )
+        # r12 (varianta B): cele 3 multimi scoase din r11, in orice ordine / cu token-urile generate = refuz ca orice alta multime
+        for clase in CLASE_DIV_SCOASE_R12:
+            cazuri += ((div_extins(" ".join(clase)), t(" ".join(clase)), SURSA_DIV_23_11),
+                       (div_extins("ng-tns-c282099457-4 " + " ".join(reversed(clase)) + " ng-star-inserted"),
+                        t(" ".join(reversed(clase))), SURSA_DIV_23_11))
         for html, m, s in cazuri:
             i = self.an(zona_cu(html))
             self.assertEqual((i["necunoscute_detalii"], i["necunoscute_surse"]), ([m], [s]), msg=html)
             self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(html))), ("ciorna_necunoscuta", []), msg=html)
             with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", gp.STRUCTURA_CUNOSCUTA + (m.split(":", 1)[1], "div", "span")):
                 self.assertEqual(self.an(zona_cu(html))["necunoscute_detalii"], [m], msg=html)
-        # in starea extinsa reala, dupa scriere: refuz inainte de Enter
+        # in starea extinsa reala, dupa scriere: refuz inainte de Enter (r12: si cu fiecare multime scoasa)
         for div_atr in (DIV_EXTINS_ATR.replace('xapfileselectordropzone=""', 'xapfileselectordropzone="1"'),
-                        DIV_EXTINS_ATR.replace("pre-fullscreen", "pre-fullscreen-file"), DIV_EXTINS_ATR.replace("pre-fullscreen", "pre-fullscreen-x")):
+                        DIV_EXTINS_ATR.replace("pre-fullscreen", "pre-fullscreen-file"), DIV_EXTINS_ATR.replace("pre-fullscreen", "pre-fullscreen-x")) + tuple(
+                            DIV_EXTINS_ATR.replace(CLASE_DIV_EXTINS, " ".join(c)) for c in CLASE_DIV_SCOASE_R12):
             cod, det, act = scenariu_brief_lung(gp, pagina_23_11(div_atr=div_atr))
             self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=div_atr)
             self.assertTrue(det.startswith("inainte_de_enter: 1 element(e) nerecunoscute"), det)
@@ -3341,6 +3351,195 @@ class TestTextLung2311(unittest.TestCase):
             self.assertEqual(scenariu_brief_lung(mut, pagina_23_11()), (None, "", ACTIUNI_TRIMITERE), msg=inlocuiri[0][1])
         # fara r11 (= v4.6.4c instalat): starea reala e refuzata, deci regula noua e cea care o lasa sa treaca
         self.assertEqual(scenariu_brief_lung(mutant(REGULI_V464C), pagina_23_11())[0], "ciorna_necunoscuta")
+
+
+# --- r12 (v4.6.4d runda 2, 23.11.2026, Jakarinos NO-GO pe r11 / c8b6534a): butonul "Ecran complet" = control cu text INCHIS.
+# Reproducerea din verdict (paw-data\out\jak_pr1173_verdict.md), copiata exact: pe r11 da necunoscute=0 si trimite ajunge la press Enter.
+REPRO_JAK_R11 = ('<button aria-label="Extinde intrarea la ecran complet" aria-describedby="x">\n'
+                 '  <span>continut strain arbitrar</span>\n'
+                 '</button>')
+SEM_ECRAN = "button[aria-label=extinde intrarea la ecran complet][aria-describedby]"
+INTRARE_TEXT_INCHIS = '    ("button[aria-label=extinde intrarea la ecran complet][aria-describedby]", ("ecran complet",)),'
+# r11 (c8b6534a) = fara controlul cu text inchis: o singura inlocuire (intrarea scoasa din CONTROALE_TEXT_INCHIS)
+REGULI_R11_TEXT = [(INTRARE_TEXT_INCHIS, "")]
+LINIA_INTERMEDIAR_2 = '    ("text-input-field", "pre-fullscreen", "with-toolbox-drawer"),'
+REGULI_R11_CLASE = [(LINIA_INTERMEDIAR_2, LINIA_INTERMEDIAR_2 + " " + " ".join(repr(c) + "," for c in CLASE_DIV_SCOASE_R12))]
+# celelalte controale din CONTROALE_CUNOSCUTE (cate un element cu semnatura exacta): neschimbate de r12
+CELELALTE_CONTROALE = (
+    ('<button aria-label="Deruleaza in jos" type="button" tabindex="0">', "</button>"),
+    ('<button aria-label="' + ARIALABEL_REAL + '">', "</button>"),
+    ('<button aria-label="' + ETICHETA_MIC + '">', "</button>"),
+    ('<button aria-label="Trimite mesajul">', "</button>"),
+    ('<a data-test-id="footer-privacy-notice-link" href="https://support.google.com/gemini/answer/14620100">', "</a>"),
+)
+
+
+class TestEcranCompletTextInchis(unittest.TestCase):
+    """r12: in butonul "Ecran complet" (si in toti descendentii lui) e permis doar textul gol sau EXACT tooltip-ul vazut ("Ecran complet").
+    Asteptarile sunt scrise de mana din verdict si din captura 23.11 (doar atributele butonului; iconita fara nume -> nicio ligatura)."""
+
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def nod(self, html):
+        a = gp._Arbore()
+        a.feed(html)
+        return a.radacina.copii[0]
+
+    def refuz_inainte_de_enter(self, html_buton, mod=gp):
+        # zona simpla: refuz fara nicio actiune; starea reala 23.11 (brief lung, butonul in caseta extinsa): refuz dupa scriere, fara Enter
+        self.assertEqual(ruleaza_trimite(mod, FakePg(zona_cu(html_buton))), ("ciorna_necunoscuta", []), msg=html_buton)
+        cod, det, act = scenariu_brief_lung(mod, pagina_23_11(ecran_html=html_buton))
+        self.assertEqual((cod, act), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=html_buton)
+        self.assertTrue(det.startswith("inainte_de_enter: 1 element(e) nerecunoscute"), det)
+
+    def test_reproducerea_din_verdict_refuzata_inainte_de_enter(self):
+        self.assertEqual(gp._semnatura(self.nod(REPRO_JAK_R11)), SEM_ECRAN)
+        i = self.an(zona_cu(REPRO_JAK_R11))
+        self.assertEqual((i["necunoscute_detalii"], i["necunoscute_surse"]), (["text_in_control:continut strain arbitrar"], [""]))
+        self.refuz_inainte_de_enter(REPRO_JAK_R11)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            gp.stare(FakePg(zona_cu(REPRO_JAK_R11)))
+        self.assertIn("  necunoscut text_in_control:continut strain arbitrar", out.getvalue().splitlines())
+        # pe regulile r11 (fara controlul cu text inchis) reproducerea ajunge la Enter, exact ca in verdict
+        r11 = mutant(REGULI_R11_TEXT)
+        self.assertEqual(self.an(zona_cu(REPRO_JAK_R11), mod=r11)["necunoscute"], 0)
+        cod, act = ruleaza_trimite(r11, FakePg(zona_cu(REPRO_JAK_R11)))
+        self.assertIsNone(cod)
+        self.assertIn("press Enter", act)
+        self.assertEqual(scenariu_brief_lung(r11, pagina_23_11(ecran_html=REPRO_JAK_R11)), (None, "", ACTIUNI_TRIMITERE))
+
+    def test_orice_text_strain_in_buton_e_refuzat(self):
+        # scris de mana: text arbitrar fara extensie / fara cuvant de atasament, oricat de adanc, si prin controale imbricate
+        cazuri = (
+            ("continut strain", "text_in_control:continut strain"),
+            ("<span>continut strain arbitrar</span>", "text_in_control:continut strain arbitrar"),
+            ("<span><span><div><span>abc</span></div></span></span>", "text_in_control:abc"),
+            (GI + "<span>Extinde intrarea la ecran complet</span>", "text_in_control:extinde intrarea la ecran complet"),
+            ("<span>Ecran complet x</span>", "text_in_control:ecran complet x"),
+            ("<span>x Ecran complet</span>", "text_in_control:x ecran complet"),
+            ("<span>Ecran</span>", "text_in_control:ecran"),
+            ("<span>Ecran-complet</span>", "text_in_control:ecran-complet"),
+            ("<mat-icon>fullscreen</mat-icon>", "text_in_control:fullscreen"),                 # ligatura: numele iconitei nu e in captura
+            ("<mat-icon>open_in_full</mat-icon>", "text_in_control:open_in_full"),
+            ('<mat-icon role="img">fullscreen</mat-icon>', "text_in_control:fullscreen"),
+            # un control / butonul modelului imbricat nu elibereaza textele
+            ('<button aria-label="Trimite mesajul">continut strain</button>', "text_in_control:continut strain"),
+            ('<button data-test-id="bard-mode-menu-button">continut strain</button>', "text_in_control:continut strain"),
+            ('<span>Ecran complet</span><span>continut strain</span>', "text_in_control:continut strain"),
+        )
+        for inauntru, m in cazuri:
+            html = ecran(inauntru=inauntru)
+            i = self.an(zona_cu(html))
+            self.assertEqual((i["necunoscute_detalii"], i["necunoscute_surse"]), ([m], [""]), msg=inauntru)
+            self.refuz_inainte_de_enter(html)
+        # si pe forma exacta din verdict (doar aria-label + aria-describedby)
+        self.refuz_inainte_de_enter(REPRO_JAK_R11.replace("continut strain arbitrar", "abc"))
+
+    def test_text_cu_cuvinte_de_atasament_refuzat(self):
+        cazuri = (
+            ("<span>fisier atasat</span>", "text_atasament:fisier atasat"),
+            ("<span>Trage aici documentul</span>", "text_atasament:trage aici documentul"),
+            ("<span>Ecran complet upload</span>", "text_atasament:ecran complet upload"),
+            ("<span>Ecran complet a.txt</span>", "text_fisier:ecran complet a.txt"),
+            ("<span>oferta.docx</span>", "text_fisier:oferta.docx"),
+        )
+        for inauntru, m in cazuri:
+            html = ecran(inauntru=inauntru)
+            self.assertEqual(self.an(zona_cu(html))["necunoscute_detalii"], [m], msg=inauntru)
+            self.refuz_inainte_de_enter(html)
+            self.refuz_inainte_de_enter(REPRO_JAK_R11.replace("<span>continut strain arbitrar</span>", inauntru))
+
+    def test_buton_gol_iconita_sau_tooltip_exact_trece(self):
+        for inauntru in ("", "\n  ", GI, "<span></span>", "<span> \n </span>", "<span>Ecran complet</span>", GI + "<span>Ecran complet</span>",
+                         "<div><span>  ECRAN   complet </span></div>", '<span class="mat-focus-indicator"></span>' + GI,
+                         "<mat-icon></mat-icon>"):
+            html = ecran(inauntru=inauntru)
+            self.assertEqual(self.an(zona_cu(html))["necunoscute"], 0, msg=inauntru)
+            self.assertEqual(scenariu_brief_lung(gp, pagina_23_11(ecran_html=html)), (None, "", ACTIUNI_TRIMITERE), msg=inauntru)
+        self.assertEqual(self.an(zona_cu(REPRO_JAK_R11.replace("<span>continut strain arbitrar</span>", "")))["necunoscute"], 0)
+        # starea reala 23.11 (fixture-ul implicit: butonul cu iconita svg) trece si ajunge la Enter
+        self.assertEqual(scenariu_brief_lung(gp, pagina_23_11()), (None, "", ACTIUNI_TRIMITERE))
+
+    def test_celelalte_controale_neschimbate(self):
+        # "nu slabi celelalte" si nici nu le schimba: pentru fiecare alt control, acelasi rezultat ca pe r11 (cu text strain / atasament)
+        r11 = mutant(REGULI_R11_TEXT)
+        for start, final in CELELALTE_CONTROALE:
+            n = self.nod(start + final)
+            self.assertIn(gp._semnatura(n), gp.CONTROALE_CUNOSCUTE)
+            self.assertIsNone(gp._texte_control_inchis(n), start)
+            for inauntru in ("continut strain", "<span>abc</span>", "<span>fisier atasat</span>", "<span>a.txt</span>", GI):
+                html = zona_cu(start + inauntru + final)
+                self.assertEqual(self.an(html)["necunoscute_detalii"], self.an(html, mod=r11)["necunoscute_detalii"], msg=(start, inauntru))
+        self.assertEqual(gp._texte_control_inchis(self.nod(ecran())), ("ecran complet",))
+        self.assertIsNone(gp._texte_control_inchis(None))
+
+    def test_regula_sta_intr_un_singur_loc(self):
+        # structural (L19): o singura intrare, semnatura ei e in CONTROALE_CUNOSCUTE, textele sunt deja in forma _ascii;
+        # CONTROALE_TEXT_INCHIS citita doar in _texte_control_inchis, motivul `text_in_control:` scris o singura data
+        self.assertEqual(gp.CONTROALE_TEXT_INCHIS, ((SEM_ECRAN, ("ecran complet",)),))
+        for sem, texte in gp.CONTROALE_TEXT_INCHIS:
+            self.assertIn(sem, gp.CONTROALE_CUNOSCUTE)
+            self.assertEqual(tuple(gp._ascii(t) for t in texte), texte)
+        with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
+            src = f.read().decode("ascii")
+        linii = [l.rstrip("\r") for l in src.split("\n")]
+        cod = [l for l in linii if not l.lstrip().startswith("#")]
+        i0 = linii.index("def _texte_control_inchis(ctrl):")
+        i1 = next(k for k in range(i0 + 1, len(linii)) if linii[k].startswith("def "))
+        self.assertEqual(sum(len(re.findall(r"(?<![A-Za-z_])CONTROALE_TEXT_INCHIS(?![A-Za-z_])", l)) for l in cod), 2)   # definitia + functia
+        self.assertTrue(any("in CONTROALE_TEXT_INCHIS" in l for l in linii[i0:i1] if not l.lstrip().startswith("#")))
+        self.assertEqual(sum(l.count('"text_in_control:"') for l in cod), 1)
+        self.assertEqual(sum(l.count("_texte_control_inchis(") for l in cod), 3)       # definitia + _motiv_text + _necunoscute
+        self.assertEqual(src.count(INTRARE_TEXT_INCHIS), 1)
+
+    def test_mutanti_r12_lasa_brief_ul_sa_plece(self):
+        # fiecare mutant slabeste regula noua; scenariul lui pleaca la Enter pe mutant, refuz pe cod; toti lasa starea reala 23.11 sa treaca
+        cazuri = (
+            # (M23) fara controlul cu text inchis (= r11): orice text trece
+            (REGULI_R11_TEXT, (REPRO_JAK_R11, ecran(inauntru="<mat-icon>fullscreen</mat-icon>"))),
+            # (M24) orice text acceptat in controlul inchis
+            ([("        if a in permise:", "        if True:")], (REPRO_JAK_R11, ecran(inauntru="<span>Ecran</span>"))),
+            # (M25) tooltip-ul comparat ca subsir, nu exact
+            ([("        if a in permise:", "        if any(p in a for p in permise):")],
+             (ecran(inauntru="<span>Ecran complet x</span>"), ecran(inauntru="<span>continut strain ecran complet</span>"))),
+            # (M26) contextul inchis inlocuit de un control imbricat
+            ([("            ctrl_copii = ctrl               # r12", "            pass               # r12")],
+             (ecran(inauntru='<button aria-label="Trimite mesajul">continut strain</button>'),)),
+            # (M27) ligaturile iconitelor acceptate in controlul inchis
+            ([("        if a in permise:", "        if a in permise or RE_LIGATURA.fullmatch(a):")],
+             (ecran(inauntru="<mat-icon>fullscreen</mat-icon>"), ecran(inauntru="<span>abc</span>"))),
+            # (M28) cele 3 multimi scoase din CLASE_DIV_DROP readuse (= r11)
+            (REGULI_R11_CLASE, tuple(div_extins(" ".join(c)) for c in CLASE_DIV_SCOASE_R12)),
+        )
+        for inlocuiri, htmluri in cazuri:
+            mut = mutant(inlocuiri)
+            for html in htmluri:
+                self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(html))), ("ciorna_necunoscuta", []), msg=html)
+                cod_m, act_m = ruleaza_trimite(mut, FakePg(zona_cu(html)))
+                self.assertIsNone(cod_m, msg=(inlocuiri[0][1], html, cod_m))
+                self.assertIn("press Enter", act_m, msg=html)
+            self.assertEqual(scenariu_brief_lung(mut, pagina_23_11()), (None, "", ACTIUNI_TRIMITERE), msg=inlocuiri[0][1])
+        # pe M23 butonul cu text strain in starea reala ajunge la Enter; pe cod refuz inainte de Enter
+        self.assertEqual(scenariu_brief_lung(mutant(REGULI_R11_TEXT), pagina_23_11(ecran_html=REPRO_JAK_R11))[0], None)
+        self.assertEqual(scenariu_brief_lung(gp, pagina_23_11(ecran_html=REPRO_JAK_R11))[0], "ciorna_necunoscuta")
+
+
+class TestCaptureCaseta(unittest.TestCase):
+    """r12: unealta de captura din RUNBOOK 5g2 (diag/captura_caseta.py) e DOAR citire: nicio actiune pe pagina, nicio scriere."""
+
+    def test_captura_doar_citire(self):
+        with open(os.path.join(AICI, "..", "diag", "captura_caseta.py"), "rb") as f:
+            src = f.read().decode("ascii")
+        cod = "\n".join(l for l in src.replace("\r", "").split("\n") if not l.lstrip().startswith("#"))
+        for interzis in (".click(", ".fill(", ".press(", ".type(", ".goto(", ".reload(", ".keyboard", ".mouse", ".tap(", "dispatch",
+                         ".check(", "set_input_files", ".close(", "open(", "write", "remove", "unlink", "subprocess", "os.system",
+                         "innerHTML =", ".focus(", "insertText", "execCommand"):
+            self.assertNotIn(interzis, cod, interzis)
+        self.assertEqual(cod.count("connect_over_cdp("), 1)
+        self.assertIn("http://127.0.0.1:9333", cod)
+        self.assertEqual(cod.count(".evaluate("), 1)
 
 
 if __name__ == "__main__":
