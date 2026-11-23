@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import {
   randuriInitiale, controlCumulat, optiuniArticol, efectiv, blocajeRanduri, liniiSituatie, pLiniiSituatie, totalLinii, verificaSituatie, verificaBaza,
   liniiBaza, clasificaEroare, sha256Hex, citesteToate, nrSituatieCanonic, POTRIVIRE_RPC, PRAG_DIFERENTA_LEI, stareDupaAmprenta, reconciliereDupaRefuz,
+  MESAJ_BAZA_NEVERIFICABIL, INDICIU_BAZA_NEVERIFICABIL,
 } from './incarcareLogica.js'
 import { potrivesteLinii } from './potrivire.js'
 import { clientFals } from './restDecontat.testutil.jsx'
@@ -244,14 +245,48 @@ describe('stareDupaAmprenta + reconciliereDupaRefuz (L05: după un rezultat necu
     const { client } = clientFals({ rpc: drept(DA), erori: { executie_sl_detaliu: { message: 'permission denied' } } })
     expect((await stareDupaAmprenta({ client, pid: 1, eSit: true, amprenta: AMP })).neverificabil).toMatch(/permission denied/)
   })
-  it('devizul de bază: rânduri în proiect_articole = scris; doar în istoric (rand->>fisier_amprenta) = retras; nimic + drept = absent', async () => {
+  it('devizul de bază: rânduri în proiect_articole = scris; doar în istoric (rand->>fisier_amprenta) = retras', async () => {
     const a = clientFals({ tabele: { proiect_articole: [{ id: 9, proiect_id: 1, fisier_amprenta: AMP }] }, rpc: drept(DA) })
     expect(await stareDupaAmprenta({ client: a.client, pid: 1, eSit: false, amprenta: AMP })).toMatchObject({ scris: true })
     const h = clientFals({ tabele: { proiect_articole_istoric: [{ id: 4, proiect_id: 1, rand: { fisier_amprenta: AMP } }] }, rpc: drept(DA) })
     expect(await stareDupaAmprenta({ client: h.client, pid: 1, eSit: false, amprenta: AMP })).toMatchObject({ retras: true })
     expect(h.st.cereri.at(-1)).toMatchObject({ tabel: 'proiect_articole_istoric', eq: [['proiect_id', 1], ['rand->>fisier_amprenta', AMP]] })
-    const g = clientFals({ rpc: drept(DA) })
-    expect(await stareDupaAmprenta({ client: g.client, pid: 1, eSit: false, amprenta: AMP })).toEqual({ absent: true })
+  })
+  // r3 (verdict #1178 r2, P1): dreptul „Rest de decontat” NU garantează vizibilitatea în proiect_articole → „negăsit” nu e niciodată absență dovedită
+  it('devizul de bază NEGĂSIT, chiar cu dreptul de citire adevărat înainte și după → neverificabil (nu absent) → rămâne necunoscut, cu „întrebați un administrator”', async () => {
+    for (const r of [drept(DA, DA), drept(NU), drept({ data: null, error: { message: 'timeout' } })]) {
+      const g = clientFals({ rpc: r })
+      const v = await stareDupaAmprenta({ client: g.client, pid: 1, eSit: false, amprenta: AMP })
+      expect(v.absent).toBeUndefined()
+      expect(v).toEqual({ neverificabil: MESAJ_BAZA_NEVERIFICABIL, indiciu: INDICIU_BAZA_NEVERIFICABIL })
+      const t = reconciliereDupaRefuz(v, REFUZ)
+      expect(t.stare).toBe('necunoscut')
+      expect(t.indiciu).toMatch(/întrebați un administrator sau verificați devizul în proiect/)
+      expect(JSON.stringify(t)).not.toMatch(/NU s-a scris|[Nn]imic nu s-a scris/)
+      expect(reconciliereDupaRefuz(v, null).stare).toBe('necunoscut')
+    }
+  })
+  it('scenariul din verdict: devizul COMIS (rândurile există), dar RLS-ul le ascunde contului care păstrează dreptul Restului → necunoscut, nu „NU s-a scris”', async () => {
+    const { client } = clientFals({ tabele: { proiect_articole: [{ id: 9, proiect_id: 1, fisier_amprenta: AMP }] }, ascunse: { proiect_articole: () => true }, rpc: drept(DA, DA) })
+    const v = await stareDupaAmprenta({ client, pid: 1, eSit: false, amprenta: AMP })
+    expect(v.neverificabil).toBe(MESAJ_BAZA_NEVERIFICABIL)
+    expect(reconciliereDupaRefuz(v, REFUZ)).toMatchObject({ stare: 'necunoscut', indiciu: INDICIU_BAZA_NEVERIFICABIL })
+  })
+  it('premisa din migrare (L19): amprenta situației e vizibilă EXACT prin dreptul Restului; proiect_articole nu primește politică de la Rest de decontat', () => {
+    expect(MIG).toContain("CREATE POLICY executie_sl_detaliu_citire ON public.executie_sl_detaliu FOR SELECT TO authenticated\n  USING (public.fn_rest_decontat_drept(proiect_id, 'citire'));")
+    expect(MIG.match(/CREATE POLICY \w+ ON public\.executie_sl_detaliu\b/g)).toHaveLength(1)
+    expect(MIG).not.toMatch(/CREATE POLICY \w+ ON public\.proiect_articole\s/)
+    // nicio vedere / funcție de calcul nu expune amprenta bazei (dacă apare una, reconcilierea bazei se poate muta pe ea)
+    for (const f of ['fn_rest_decontat_baza_calcul', 'fn_rest_decontat_calcul', 'fn_rest_decontat_obiect_calcul', 'fn_rest_decontat_lipsuri_calcul']) {
+      expect(corpFunctie(f).split('LANGUAGE')[0]).not.toMatch(/amprenta/)
+    }
+  })
+  it('devizul de bază: eroare la citirea bazei / a istoricului → necunoscut cu același indiciu', async () => {
+    for (const t of ['proiect_articole', 'proiect_articole_istoric']) {
+      const { client } = clientFals({ rpc: drept(DA), erori: { [t]: { message: 'permission denied for table ' + t } } })
+      const v = await stareDupaAmprenta({ client, pid: 1, eSit: false, amprenta: AMP })
+      expect(v).toEqual({ neverificabil: 'permission denied for table ' + t, indiciu: INDICIU_BAZA_NEVERIFICABIL })
+    }
   })
   it('fără refuz („Verifică starea” după rețea): absent nu produce o stare finală', () => {
     expect(reconciliereDupaRefuz({ absent: true }, null).stare).toBe('necunoscut')

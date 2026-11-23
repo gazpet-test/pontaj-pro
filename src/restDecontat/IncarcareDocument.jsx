@@ -8,7 +8,8 @@
 // dreptul „Rest de decontat” (livrare separată) → acum nu se urcă nicăieri, RPC-ul primește p_fisier = NULL (acceptat).
 // NIMIC nu se scrie înainte de „Confirm”. Erorile BD-ului se arată în clar (L18); rețea / 5xx = rezultat NECUNOSCUT (L05): se verifică după
 // amprentă sau se retrimite identic (amprenta = cheia de idempotență, UNIQUE în BD). După un rezultat necunoscut, un REFUZ la reîncercare nu
-// dovedește „nimic scris”: starea se reconciliază în BD după amprentă, iar câmpurile rămân blocate până atunci. L24: fiecare citire / trimitere
+// dovedește „nimic scris”: starea se reconciliază în BD după amprentă, iar câmpurile rămân blocate până atunci (la devizele de bază „negăsit”
+// nu dovedește absența → rămâne necunoscut, r3: stareDupaAmprenta). L24: fiecare citire / trimitere
 // poartă un token de generație, invalidat și la demontare; un răspuns vechi (alt fișier, alt proiect) nu se aplică. Drepturile le decide BD-ul.
 // ═══════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -259,7 +260,7 @@ export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: 
     setVerificare({ stare: 'citire' })
     const v = await stareDupaAmprenta({ client, pid, eSit, amprenta: fis.amprenta })
     if (g !== gen.current) return
-    if (v.neverificabil) { setVerificare({ stare: 'eroare', mesaj: v.neverificabil }); return }
+    if (v.neverificabil) { setVerificare({ stare: 'eroare', mesaj: v.neverificabil, indiciu: v.indiciu || null }); return }
     if (v.scris || v.retras) { setVerificare(null); aplica(reconciliereDupaRefuz(v, null)); return }
     setVerificare({ stare: 'absent', mesaj: 'Verificat în ERP: nimic scris cu acest fișier până acum. Apăsați din nou „Confirm” (se trimite exact același conținut).' })
   }
@@ -393,7 +394,8 @@ export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: 
           {trimitere.stare === 'necunoscut' && fis?.amprenta && <div style={{ marginTop: 6 }}><button style={S.btn} onClick={verificaStarea} disabled={verificare?.stare === 'citire'}>Verifică starea în ERP</button></div>}
         </div>
       )}
-      {verificare && verificare.stare !== 'citire' && <div style={verificare.stare === 'eroare' ? S.err : { fontSize: 12.5, color: G.muted, margin: '6px 0' }}>{verificare.stare === 'eroare' ? `Verificarea n-a reușit: ${verificare.mesaj}` : verificare.mesaj}</div>}
+      {verificare && verificare.stare !== 'citire' && <div style={verificare.stare === 'eroare' ? S.err : { fontSize: 12.5, color: G.muted, margin: '6px 0' }}>{verificare.stare === 'eroare' ? `Verificarea n-a reușit: ${verificare.mesaj}` : verificare.mesaj}
+        {verificare.indiciu && <div style={{ color: G.yellow, marginTop: 4 }} data-indiciu-verificare="1">{verificare.indiciu}</div>}</div>}
     </div>
   )
 }

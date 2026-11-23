@@ -222,44 +222,53 @@ export async function sha256Hex(buf) {
  *  fn_rest_decontat_drept (livrare separată), ecranul nu urcă nimic și trimite p_fisier = NULL (acceptat de ambele RPC-uri, 20270105a). */
 export const MESAJ_FARA_FISIER = 'Documentul în sine NU se păstrează în ERP deocamdată (doar liniile citite din el): păstrați fișierul în dosarul proiectului.'
 
+/** r3 (verdict #1178 r2): starea unui deviz de bază negăsit cu amprenta lui nu se poate dovedi din Rest de decontat → rămâne necunoscută */
+export const MESAJ_BAZA_NEVERIFICABIL = 'nu pot verifica de aici dacă devizul s-a scris (nimic găsit nu dovedește că lipsește)'
+export const INDICIU_BAZA_NEVERIFICABIL = 'Nu pot verifica: întrebați un administrator sau verificați devizul în proiect. Câmpurile rămân blocate; puteți retrimite identic (același fișier nu se scrie de două ori).'
+
 /**
  * stareDupaAmprenta({ client, pid, eSit, amprenta }) — ce știe BD-ul despre documentul cu această amprentă (L05: reconcilierea cu serverul):
- *   { scris, dovada }      — rândul ACTIV e în BD (situația detaliată activă / rândurile bazei în proiect_articole);
+ *   { scris, dovada }      — rândul ACTIV e în BD (situația detaliată activă / rândurile bazei în proiect_articole); un rând GĂSIT e dovadă
+ *                            oricare ar fi sursa (RLS-ul poate ascunde rânduri, nu le poate inventa);
  *   { retras, dovada }     — fișierul e în BD doar ca versiune înlocuită (situație inactivă / rânduri mutate în istoric): nu se mai poate scrie;
- *   { absent: true }       — nimic cu amprenta asta, ȘI contul poate citi (fn_rest_decontat_drept 'citire' adevărat înainte ȘI după citiri) —
- *                            altfel RLS-ul ar ascunde rândurile și „gol” n-ar dovedi nimic (L18);
- *   { neverificabil: motiv } — eroare de citire / fără drept de citire: starea rămâne necunoscută.
+ *   { absent: true }       — DOAR la situații: nimic în executie_sl_detaliu (singurul loc al amprentei situației; RLS-ul lui = exact
+ *                            fn_rest_decontat_drept 'citire', 20270105a §8), ȘI dreptul de citire adevărat înainte ȘI după citire (L18);
+ *   { neverificabil: motiv, indiciu? } — eroare de citire / fără drept de citire / deviz de bază negăsit: starea rămâne necunoscută.
+ * Devizul de bază (r3): amprenta lui stă în proiect_articole, a cărui vizibilitate NU o dă dreptul „Rest de decontat” (alt drept, al modulului),
+ * iar nicio vedere / RPC din 20270105a/b nu întoarce existența după amprentă → „negăsit” nu dovedește absența: rămâne necunoscut, fără citirea
+ * dreptului (n-ar schimba concluzia).
  */
 export async function stareDupaAmprenta({ client, pid, eSit, amprenta }) {
   const motiv = e => e?.message || String(e)
   try {
-    const drept = async () => { const r = await client.rpc('fn_rest_decontat_drept', { p_proiect: pid, p_nivel: 'citire' }); if (r?.error) throw r.error; return r?.data === true }
-    const inainte = await drept()
     if (eSit) {
+      const drept = async () => { const r = await client.rpc('fn_rest_decontat_drept', { p_proiect: pid, p_nivel: 'citire' }); if (r?.error) throw r.error; return r?.data === true }
+      const inainte = await drept()
       const { data, error } = await client.from('executie_sl_detaliu').select('id, nr_situatie, versiune, activ').eq('proiect_id', pid).eq('amprenta', amprenta).order('id').limit(50)
       if (error) return { neverificabil: motiv(error) }
       const activ = (data || []).find(x => x.activ === true)
       if (activ) return { scris: true, dovada: `Situația ${activ.nr_situatie} (versiunea ${activ.versiune}) e scrisă în ERP cu acest fișier.` }
       if ((data || []).length) return { retras: true, dovada: `Fișierul e în ERP doar ca versiune înlocuită (situația ${data[0].nr_situatie}, versiunea ${data[0].versiune}, inactivă); serverul nu-l mai primește a doua oară.` }
-    } else {
-      const a = await client.from('proiect_articole').select('id').eq('proiect_id', pid).eq('fisier_amprenta', amprenta).order('id').limit(1)
-      if (a.error) return { neverificabil: motiv(a.error) }
-      if ((a.data || []).length) return { scris: true, dovada: 'Devizul e scris în bază cu acest fișier.' }
-      const h = await client.from('proiect_articole_istoric').select('id').eq('proiect_id', pid).eq('rand->>fisier_amprenta', amprenta).order('id').limit(1)
-      if (h.error) return { neverificabil: motiv(h.error) }
-      if ((h.data || []).length) return { retras: true, dovada: 'Devizul cu acest fișier e în ERP doar în istoric (rânduri înlocuite); serverul nu-l mai primește a doua oară.' }
+      const dupa = await drept()
+      if (!inainte || !dupa) return { neverificabil: 'contul nu are (sau n-a avut tot timpul) drept de citire pe Rest de decontat, deci lipsa rândurilor nu dovedește nimic' }
+      return { absent: true }
     }
-    const dupa = await drept()
-    if (!inainte || !dupa) return { neverificabil: 'contul nu are (sau n-a avut tot timpul) drept de citire pe Rest de decontat, deci lipsa rândurilor nu dovedește nimic' }
-    return { absent: true }
-  } catch (e) { return { neverificabil: motiv(e) } }
+    const a = await client.from('proiect_articole').select('id').eq('proiect_id', pid).eq('fisier_amprenta', amprenta).order('id').limit(1)
+    if (a.error) return { neverificabil: motiv(a.error), indiciu: INDICIU_BAZA_NEVERIFICABIL }
+    if ((a.data || []).length) return { scris: true, dovada: 'Devizul e scris în bază cu acest fișier.' }
+    const h = await client.from('proiect_articole_istoric').select('id').eq('proiect_id', pid).eq('rand->>fisier_amprenta', amprenta).order('id').limit(1)
+    if (h.error) return { neverificabil: motiv(h.error), indiciu: INDICIU_BAZA_NEVERIFICABIL }
+    if ((h.data || []).length) return { retras: true, dovada: 'Devizul cu acest fișier e în ERP doar în istoric (rânduri înlocuite); serverul nu-l mai primește a doua oară.' }
+    return { neverificabil: MESAJ_BAZA_NEVERIFICABIL, indiciu: INDICIU_BAZA_NEVERIFICABIL }
+  } catch (e) { return { neverificabil: motiv(e), ...(eSit ? {} : { indiciu: INDICIU_BAZA_NEVERIFICABIL }) } }
 }
 
 /**
  * reconciliereDupaRefuz(v, refuz) → starea trimiterii după citirea BD-ului (v = stareDupaAmprenta), când o încercare anterioară avea rezultat
  * NECUNOSCUT (refuz = clasificaEroare al reîncercării sau null la „Verifică starea”):
  *   scris → 'ok' (cu dovada); retras → 'refuz' (stare cunoscută: nu se mai poate scrie); absent → 'refuz' DOAR dacă există refuzul reîncercării
- *   (altfel nu e nimic de declarat; apelantul arată „nimic scris”); neverificabil → rămâne 'necunoscut' (câmpurile blocate, fără „nimic scris”).
+ *   (altfel nu e nimic de declarat; apelantul arată „nimic scris”); neverificabil → rămâne 'necunoscut' (câmpurile blocate, fără „nimic scris”;
+ *   indiciul vine din verificare când îl dă — devizul de bază: „întrebați un administrator / verificați în proiect”).
  */
 export function reconciliereDupaRefuz(v, refuz) {
   if (v?.scris) return { stare: 'ok', rez: null, dovada: `Încercarea anterioară a fost scrisă. ${v.dovada}` }
@@ -268,7 +277,7 @@ export function reconciliereDupaRefuz(v, refuz) {
   return {
     stare: 'necunoscut',
     mesaj: refuz ? `reîncercarea a fost refuzată (${refuz.mesaj}), iar starea încercării anterioare nu s-a putut verifica: ${v?.neverificabil || 'fără răspuns'}` : `starea nu s-a putut verifica: ${v?.neverificabil || 'fără răspuns'}`,
-    indiciu: 'Nu se știe dacă încercarea anterioară s-a scris. Câmpurile rămân blocate: apăsați „Verifică starea în ERP” sau retrimiteți identic.',
+    indiciu: v?.indiciu || 'Nu se știe dacă încercarea anterioară s-a scris. Câmpurile rămân blocate: apăsați „Verifică starea în ERP” sau retrimiteți identic.',
   }
 }
 

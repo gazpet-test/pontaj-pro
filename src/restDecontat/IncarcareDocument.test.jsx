@@ -3,7 +3,8 @@
 // alegerea articolului se activează; la confirmare RPC-ul primește p_linii cu cheie NULL pentru articolul nou și p_inlocuieste = false; nicio
 // scriere înainte de „Confirm”; fișierul NU se urcă nicăieri (p_fisier NULL, Storage neatins — r2, verdict #1178 P1); nr. existent cere
 // „înlocuiește”; diferența față de situația de plată cere acceptare; L05 (r2, verdict #1178 P1-2): după un rezultat NECUNOSCUT, un refuz la
-// reîncercare nu declară „nimic scris” — starea se reconciliază în BD după amprentă, câmpurile rămân blocate până atunci; L24: răspunsul sosit
+// reîncercare nu declară „nimic scris” — starea se reconciliază în BD după amprentă, câmpurile rămân blocate până atunci (r3, verdict #1178 r2:
+// la devizele de bază „negăsit” — inclusiv rânduri ascunse de RLS — rămâne necunoscut, cu „întrebați un administrator”); L24: răspunsul sosit
 // după închiderea panoului nu se aplică. Fără jsdom suita PICĂ explicit (nu se sare).
 import { afterEach, it, expect, vi } from 'vitest'
 import { createHash } from 'node:crypto'
@@ -37,8 +38,8 @@ const rpcCu = (confirma, drept = DA) => (fn, a, st) => (fn === 'fn_rest_decontat
 const RETEA = { data: null, error: { message: 'TypeError: Failed to fetch' }, status: 0 }
 const REFUZ_403 = { data: null, error: { code: '42501', message: 'rest_decontat: proiectul nu exista sau nu ai drept sa confirmi situatii' }, status: 403 }
 
-async function deschide({ tabele = {}, rpc = rpcCu(OK_SIT), tip = 'situatie', props = {} } = {}) {
-  const { client, st } = clientFals({ tabele: { v_executie_rest_decontat_baza: BAZA, executie_situatii_plata: SL, executie_sl_detaliu: [], ...tabele }, rpc })
+async function deschide({ tabele = {}, rpc = rpcCu(OK_SIT), tip = 'situatie', props = {}, ascunse = {} } = {}) {
+  const { client, st } = clientFals({ tabele: { v_executie_rest_decontat_baza: BAZA, executie_situatii_plata: SL, executie_sl_detaliu: [], ...tabele }, rpc, ascunse })
   const onGata = vi.fn()
   const u = await monteaza(<IncarcareDocument proiectId={1} tip={tip} client={client} onGata={onGata} {...props} />)
   await u.pana(() => u.camp('fișierul documentului'))
@@ -327,11 +328,11 @@ domObligatoriu('IncarcareDocument (jsdom + react-dom)', () => {
     expect(st.rpc[0].args.p_linii.map(l => [l.cod, l.cantitate, l.valoare])).toEqual([['TSA01A1', -2, -20], ['TSB09', 3, 30]])
   })
 
-  it('devizul AA: rețea picată, apoi „actul are deja un deviz confirmat” → starea se recitește după amprentă; găsit = scris; negăsit (cu drept de citire) = refuz final, câmpurile deblocate', async () => {
+  it('devizul AA: rețea picată, apoi „actul are deja un deviz confirmat” → starea se recitește după amprentă; găsit = scris; negăsit = RĂMÂNE necunoscut (r3), câmpurile blocate', async () => {
     const f = await fisierF3('AA2.docx', devizF3({ articole: [{ nr: '001', cod: 'TSA01A1', um: 'M.C.', cant: 2, total: 20 }] }))
     const amprenta = await sha(f)
     const DEJA = { data: null, error: { code: '23505', message: 'rest_decontat: actul aditional are deja un deviz confirmat (inlocuirea e o decizie separata)' }, status: 409 }
-    for (const [scris, asteptat] of [[true, 'ok'], [false, 'refuz']]) {
+    for (const [scris, asteptat] of [[true, 'ok'], [false, 'necunoscut']]) {
       let n = 0
       const { u, st, onGata } = await deschide({ tip: 'baza', rpc: rpcCu(() => (++n === 1 ? { data: null, error: { message: 'gateway timeout' }, status: 504 } : DEJA)),
         tabele: { executie_acte_aditionale: [{ id: 4, proiect_id: 1, numar_act: '2', data_semnare: '2026-09-01', activ: true }], executie_note_modificare: [],
@@ -344,20 +345,64 @@ domObligatoriu('IncarcareDocument (jsdom + react-dom)', () => {
       await u.pana(() => u.d.querySelector('[data-rezultat="necunoscut"]'))
       expect(u.camp('actul adițional').disabled).toBe(true)
       await u.apasa(confirmBtn(u))
+      await u.pana(() => st.cereri.some(x => x.tabel === (scris ? 'proiect_articole' : 'proiect_articole_istoric')) && !u.text().includes('se verifică în ERP'))
       await u.pana(() => u.d.querySelector(`[data-rezultat="${asteptat}"]`))
       expect(confirmari(st).length).toBe(2)
       expect(confirmari(st)[1].args).toEqual(confirmari(st)[0].args)
       expect(st.cereri.find(x => x.tabel === 'proiect_articole').eq).toEqual([['proiect_id', 1], ['fisier_amprenta', amprenta]])
       if (scris) { expect(u.text()).toContain('Încercarea anterioară a fost scrisă'); expect(onGata).toHaveBeenCalledTimes(1) }
       else {
-        expect(u.text()).toContain('Refuzat de server: rest_decontat: actul aditional are deja un deviz confirmat')
         expect(st.cereri.filter(x => x.tabel === 'proiect_articole_istoric').at(-1).eq).toEqual([['proiect_id', 1], ['rand->>fisier_amprenta', amprenta]])
-        expect(u.d.querySelector('[data-reconciliat]')).not.toBe(null)
-        expect(u.camp('actul adițional').disabled).toBe(false)
+        expect(u.d.querySelector('[data-rezultat="refuz"]')).toBe(null)
+        expect(u.text()).not.toMatch(/NU s-a scris|Refuzat de server/)
+        expect(u.text()).toContain('întrebați un administrator sau verificați devizul în proiect')
+        expect(u.camp('actul adițional').disabled).toBe(true)
+        expect(u.camp('fișierul documentului').disabled).toBe(true)
         expect(onGata).not.toHaveBeenCalled()
       }
       curataTot()
     }
+  })
+
+  // r3 — scenariul EXACT din verdictul #1178 r2: devizul se COMITE (rândurile există în proiect_articole), răspunsul se pierde; contul păstrează
+  // dreptul de citire al Restului (adevărat înainte și după), dar RLS-ul bazei îi ascunde rândurile; reîncercarea e refuzată (42501).
+  it('verdict r2: deviz comis + răspuns pierdut + rânduri ascunse de RLS + reîncercare refuzată → NU „nu s-a scris”: rămâne necunoscut, totul blocat', async () => {
+    const pa = []
+    let n = 0
+    const NEDREPT = { data: null, error: { code: '42501', message: 'rest_decontat: nu ai drept sa confirmi devizele de baza pe acest proiect' }, status: 403 }
+    const rpc = (fn, a) => {
+      if (fn === 'fn_rest_decontat_drept') return { data: true, error: null }
+      if (fn !== 'fn_rest_decontat_confirma_baza') return { data: null, error: null }
+      if (++n === 1) { pa.push({ id: 501, proiect_id: 1, fisier_amprenta: a.p_amprenta, activ: true }); return { data: null, error: { message: 'Failed to fetch' }, status: 0 } }
+      return NEDREPT
+    }
+    const { u, st, onGata } = await deschide({ tip: 'baza', rpc, tabele: { executie_acte_aditionale: [{ id: 4, proiect_id: 1, numar_act: '2', data_semnare: '2026-09-01', activ: true }],
+      executie_note_modificare: [], proiect_articole: pa }, ascunse: { proiect_articole: () => true } })
+    await u.alegeFisier(u.camp('fișierul documentului'), await fisierF3('AA2.docx', devizF3({ articole: [{ nr: '001', cod: 'TSA01A1', um: 'M.C.', cant: 2, total: 20 }] })))
+    await u.pana(() => u.camp('sursa documentului'))
+    await u.scrie(u.camp('sursa documentului'), 'act_aditional')
+    await u.scrie(u.camp('actul adițional'), '4')
+    await u.apasa(confirmBtn(u))
+    await u.pana(() => u.d.querySelector('[data-rezultat="necunoscut"]'))
+    expect(pa).toHaveLength(1)                                            // scrierea a avut loc
+    await u.apasa(confirmBtn(u))
+    await u.pana(() => st.cereri.some(x => x.tabel === 'proiect_articole_istoric') && u.d.querySelector('[data-rezultat="necunoscut"]'))
+    expect(confirmari(st)).toHaveLength(2)
+    expect(st.cereri.find(x => x.tabel === 'proiect_articole')).toBeTruthy()  // s-a citit, dar a venit gol (RLS)
+    expect(u.d.querySelector('[data-rezultat="refuz"]')).toBe(null)
+    expect(u.d.querySelector('[data-rezultat="ok"]')).toBe(null)
+    expect(u.text()).not.toMatch(/NU s-a scris|[Nn]imic nu s-a scris|nimic scris/)
+    expect(u.text()).toContain('Rezultat necunoscut: reîncercarea a fost refuzată')
+    expect(u.text()).toContain('nu pot verifica de aici dacă devizul s-a scris')
+    expect(u.text()).toContain('întrebați un administrator sau verificați devizul în proiect')
+    for (const c of ['fișierul documentului', 'sursa documentului', 'actul adițional']) expect(u.camp(c).disabled).toBe(true)
+    // „Verifică starea în ERP” dă același răspuns (nu „nimic scris până acum”)
+    await u.apasa(u.buton('Verifică starea în ERP'))
+    await u.pana(() => u.d.querySelector('[data-indiciu-verificare]'))
+    expect(u.text()).toContain('Verificarea n-a reușit: nu pot verifica de aici dacă devizul s-a scris')
+    expect(u.text()).not.toMatch(/nimic scris cu acest fișier/)
+    expect(u.camp('actul adițional').disabled).toBe(true)
+    expect(onGata).not.toHaveBeenCalled()
   })
 
   it('oferta cu „listă completă” refuză cantitățile negative înainte de trimitere; sursele se limitează la cele permise', async () => {

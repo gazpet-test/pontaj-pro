@@ -77,8 +77,9 @@ const cmpVal = (a, b) => (typeof a === 'number' && typeof b === 'number' ? a - b
  *  rpc: (fn, args, st) => rezultat | Promise (implicit { data: null, error: null }); plafon: max-rows al serverului (răspunsul se taie la atâtea
  *  rânduri, oricât cere clientul — ca PostgREST). select(col, { count: 'exact' }) întoarce și `count` (rândurile după filtre, înainte de pagină).
  *  st.cereri = citirile (tabel + filtre), st.rpc = apelurile RPC, st.storage = orice atingere a Storage-ului (care și aruncă).
+ *  ascunse: { nume: rând => true } — RLS simulat (r3): rândurile există (un RPC fals le scrie / le găsește), dar citirea clientului nu le vede.
  */
-export function clientFals({ tabele = {}, erori = {}, rpc = null, plafon = null } = {}) {
+export function clientFals({ tabele = {}, erori = {}, rpc = null, plafon = null, ascunse = {} } = {}) {
   const st = { cereri: [], rpc: [], storage: [] }
   const client = {
     from: tabel => {
@@ -93,7 +94,7 @@ export function clientFals({ tabele = {}, erori = {}, rpc = null, plafon = null 
           if (erori[tabel]) return Promise.resolve({ data: null, error: erori[tabel] }).then(res, rej)
           // `col->>cheie` (calea JSON a PostgREST) se citește din obiectul coloanei
           const val = (x, c) => { const m = /^(\w+)->>(\w+)$/.exec(c); return m ? x[m[1]]?.[m[2]] : x[c] }
-          let r = (tabele[tabel] || []).filter(x => f.eq.every(([c, v]) => String(val(x, c)) === String(v)))
+          let r = (tabele[tabel] || []).filter(x => !ascunse[tabel]?.(x)).filter(x => f.eq.every(([c, v]) => String(val(x, c)) === String(v)))
           if (f.gt) r = r.filter(x => cmpVal(x[f.gt[0]], f.gt[1]) > 0)
           if (f.ord.length) r = [...r].sort((a, b) => { for (const c of f.ord) { const d = cmpVal(a[c], b[c]); if (d) return d } return 0 })
           const count = r.length
