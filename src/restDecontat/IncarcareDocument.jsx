@@ -15,6 +15,7 @@ import { potrivesteLinii } from './potrivire.js'
 import {
   randuriInitiale, controlCumulat, optiuniArticol, blocajeRanduri, verificaSituatie, pLiniiSituatie, verificaBaza, liniiBaza, totalLinii,
   clasificaEroare, sha256Hex, BUCKET_FISIERE, caleFisier, eDejaIncarcat, citesteToate, nrSituatieCanonic, SURSE_BAZA, PRAG_DIFERENTA_LEI,
+  INDICIU_NECUNOSCUT,
 } from './incarcareLogica.js'
 
 const G = { bg: '#0D1117', surface: '#161B22', card: '#1C2128', card2: '#21262D', text: '#E6EDF3', muted: '#8B949E', dim: '#6E7681',
@@ -225,41 +226,63 @@ export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: 
         return
       }
       const c = clasificaEroare(r)
-      // o încercare anterioară cu rezultat necunoscut + acum „același fișier deja confirmat” = scrierea anterioară A REUȘIT (amprenta e unică)
-      if (c.tip === 'refuz' && necunoscutAnterior.current && /amprenta_existenta|deja confirmat/.test(c.mesaj)) {
+      // o încercare anterioară cu rezultat NECUNOSCUT + acum un refuz: refuzul poate fi chiar urma scrierii anterioare („același fișier deja
+      // confirmat”; la devizul unui act / al unei note „are deja un deviz confirmat” vine înaintea verificării amprentei) → se recitește starea
+      // în BD după amprentă (L05), nu se declară eșec pe încredere
+      if (c.tip === 'refuz' && necunoscutAnterior.current) {
+        if (/amprenta_existenta|deja confirmat/.test(c.mesaj)) {
+          necunoscutAnterior.current = false
+          setTrimitere({ stare: 'ok', rez: null, dovada: 'Încercarea anterioară a fost scrisă (serverul refuză același fișier a doua oară).' })
+          onGata?.(null)
+          return
+        }
+        const v = await citesteStarea()
+        if (g !== gen.current) return
+        if (v.gasit) {
+          necunoscutAnterior.current = false
+          setTrimitere({ stare: 'ok', rez: null, dovada: `Încercarea anterioară a fost scrisă. ${v.dovada}` })
+          onGata?.(null)
+          return
+        }
+        if (v.eroare) { setTrimitere({ stare: 'necunoscut', mesaj: `${c.mesaj} — iar starea nu s-a putut verifica: ${v.eroare}`, indiciu: c.indiciu || INDICIU_NECUNOSCUT }); return }
         necunoscutAnterior.current = false
-        setTrimitere({ stare: 'ok', rez: null, dovada: 'Încercarea anterioară a fost scrisă (serverul refuză același fișier a doua oară).' })
-        onGata?.(null)
-        return
       }
       if (c.tip === 'necunoscut') necunoscutAnterior.current = true
       setTrimitere({ stare: c.tip, mesaj: c.mesaj, indiciu: c.indiciu })
     } finally { ocupat.current = false }
   }
 
-  // ── verificarea stării după un rezultat necunoscut (L05): există în BD un document cu această amprentă? ──
-  const verificaStarea = async () => {
-    const g = gen.current
-    setVerificare({ stare: 'citire' })
+  // ── starea în BD după amprentă (L05): există un document scris cu acest fișier? → { gasit, dovada } | { gasit: false } | { eroare } ──
+  const citesteStarea = async () => {
     try {
       const { data, error } = eSit
         ? await client.from('executie_sl_detaliu').select('id, nr_situatie, versiune, activ').eq('proiect_id', pid).eq('amprenta', fis.amprenta).limit(1)
         : await client.from('proiect_articole').select('id').eq('proiect_id', pid).eq('fisier_amprenta', fis.amprenta).limit(1)
-      if (g !== gen.current) return
-      if (error) { setVerificare({ stare: 'eroare', mesaj: error.message || String(error) }); return }
-      if (data?.length) {
-        necunoscutAnterior.current = false
-        setVerificare(null)
-        setTrimitere({ stare: 'ok', rez: null, dovada: eSit ? `Situația ${data[0].nr_situatie} (versiunea ${data[0].versiune}) e scrisă.` : 'Devizul e scris în bază.' })
-        onGata?.(null)
-      } else setVerificare({ stare: 'absent', mesaj: 'Nimic scris cu acest fișier. Puteți apăsa din nou „Confirm”.' })
-    } catch (e) { if (g === gen.current) setVerificare({ stare: 'eroare', mesaj: e?.message || String(e) }) }
+      if (error) return { eroare: error.message || String(error) }
+      if (data?.length) return { gasit: true, dovada: eSit ? `Situația ${data[0].nr_situatie} (versiunea ${data[0].versiune}) e scrisă.` : 'Devizul e scris în bază.' }
+      return { gasit: false }
+    } catch (e) { return { eroare: e?.message || String(e) } }
+  }
+  const verificaStarea = async () => {
+    const g = gen.current
+    setVerificare({ stare: 'citire' })
+    const v = await citesteStarea()
+    if (g !== gen.current) return
+    if (v.eroare) { setVerificare({ stare: 'eroare', mesaj: v.eroare }); return }
+    if (v.gasit) {
+      necunoscutAnterior.current = false
+      setVerificare(null)
+      setTrimitere({ stare: 'ok', rez: null, dovada: v.dovada })
+      onGata?.(null)
+    } else setVerificare({ stare: 'absent', mesaj: 'Nimic scris cu acest fișier până acum. Apăsați din nou „Confirm” (se trimite exact același conținut).' })
   }
 
   // ── afișarea ──
   const rez = fis?.rez
   const trimis = trimitere?.stare === 'ok'
-  const blocatUi = trimitere?.stare === 'trimite' || trimis
+  // cât rezultatul e NECUNOSCUT câmpurile și fișierul rămân înghețate: singura cale e retrimiterea identică sau verificarea (L05)
+  const blocatUi = trimitere?.stare === 'trimite' || trimis || trimitere?.stare === 'necunoscut'
+  const confirmBlocat = trimitere?.stare === 'trimite' || trimis
   const titlu = eSit ? '📥 Încarcă situația de plată (F3 .docx)' : '📥 Încarcă devizul: ofertă / act adițional / notă (F3 .docx)'
   const nrNecunoscut = eSit ? [...blocaje.keys()].length : 0
   return (
@@ -348,8 +371,8 @@ export default function IncarcareDocument({ proiectId, tip = 'situatie', sursa: 
             : <TabelBaza rez={rez} />}
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
-            <button style={{ ...S.btn, color: ver.ok && !blocatUi ? G.green : G.dim, borderColor: ver.ok && !blocatUi ? G.green : G.border, fontWeight: 700 }}
-              disabled={!ver.ok || blocatUi} onClick={confirma}>{trimitere?.stare === 'trimite' ? 'Se confirmă…' : '✓ Confirm'}</button>
+            <button style={{ ...S.btn, color: ver.ok && !confirmBlocat ? G.green : G.dim, borderColor: ver.ok && !confirmBlocat ? G.green : G.border, fontWeight: 700 }}
+              disabled={!ver.ok || confirmBlocat} onClick={confirma}>{trimitere?.stare === 'trimite' ? 'Se confirmă…' : '✓ Confirm'}</button>
             {!ver.ok && ver.motive.length > 0 && <div style={{ fontSize: 12, color: G.yellow }} data-motive="1">{ver.motive.join(' · ')}</div>}
             {eSit && nrNecunoscut > 0 && <span style={{ fontSize: 12, color: G.red }}>{nrNecunoscut} linii de rezolvat</span>}
           </div>

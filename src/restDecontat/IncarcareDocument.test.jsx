@@ -124,6 +124,11 @@ dom(numeDom('IncarcareDocument (jsdom + react-dom)'), () => {
     await u.pana(() => u.d.querySelector('[data-rezultat="necunoscut"]'))
     expect(u.text()).toContain('Rezultat necunoscut')
     expect(onGata).not.toHaveBeenCalled()
+    // cât rezultatul e necunoscut, nimic nu se mai poate schimba (fișier, număr, situație de plată): doar retrimiterea identică / verificarea
+    expect(u.camp('fișierul documentului').disabled).toBe(true)
+    expect(u.camp('numărul situației').disabled).toBe(true)
+    expect(u.camp('situația de plată').disabled).toBe(true)
+    expect(confirmBtn(u).disabled).toBe(false)
     await u.apasa(u.buton('Verifică starea'))
     const c = st.cereri.filter(x => x.tabel === 'executie_sl_detaliu').at(-1)
     expect(c.eq).toEqual([['proiect_id', 1], ['amprenta', st.rpc[0].args.p_amprenta]])
@@ -202,6 +207,33 @@ dom(numeDom('IncarcareDocument (jsdom + react-dom)'), () => {
     expect(st.rpc[0].fn).toBe('fn_rest_decontat_confirma_baza')
     expect(st.rpc[0].args).toMatchObject({ p_proiect: 1, p_sursa: 'act_aditional', p_act_aditional_id: 4, p_nota_id: null, p_mod: 'diferente', p_inlocuieste: false })
     expect(st.rpc[0].args.p_linii.map(l => [l.cod, l.cantitate, l.valoare])).toEqual([['TSA01A1', -2, -20], ['TSB09', 3, 30]])
+  })
+
+  it('devizul AA: rețea picată, apoi „actul are deja un deviz confirmat” → starea se recitește după amprentă; găsit = scris (nu refuz); negăsit = refuzul rămâne', async () => {
+    const f = await fisierF3('AA2.docx', devizF3({ articole: [{ nr: '001', cod: 'TSA01A1', um: 'M.C.', cant: 2, total: 20 }] }))
+    const amprenta = await sha(f)
+    const DEJA = { data: null, error: { code: '23505', message: 'rest_decontat: actul aditional are deja un deviz confirmat (inlocuirea e o decizie separata)' }, status: 409 }
+    for (const [scris, asteptat] of [[true, 'ok'], [false, 'refuz']]) {
+      let n = 0
+      const rpc = () => (++n === 1 ? { data: null, error: { message: 'gateway timeout' }, status: 504 } : DEJA)
+      const { u, st, onGata } = await deschide({ tip: 'baza', rpc, tabele: { executie_acte_aditionale: [{ id: 4, proiect_id: 1, numar_act: '2', data_semnare: '2026-09-01', activ: true }], executie_note_modificare: [],
+        proiect_articole: scris ? [{ id: 77, proiect_id: 1, fisier_amprenta: amprenta }] : [] } })
+      await u.alegeFisier(u.camp('fișierul documentului'), f)
+      await u.pana(() => u.camp('sursa documentului'))
+      await u.scrie(u.camp('sursa documentului'), 'act_aditional')
+      await u.scrie(u.camp('actul adițional'), '4')
+      await u.apasa(confirmBtn(u))
+      await u.pana(() => u.d.querySelector('[data-rezultat="necunoscut"]'))
+      await u.apasa(confirmBtn(u))
+      await u.pana(() => u.d.querySelector(`[data-rezultat="${asteptat}"]`))
+      expect(st.rpc.length).toBe(2)
+      expect(st.rpc[1].args).toEqual(st.rpc[0].args)
+      const c = st.cereri.filter(x => x.tabel === 'proiect_articole').at(-1)
+      expect(c.eq).toEqual([['proiect_id', 1], ['fisier_amprenta', amprenta]])
+      if (scris) { expect(u.text()).toContain('Încercarea anterioară a fost scrisă'); expect(onGata).toHaveBeenCalledTimes(1) }
+      else { expect(u.text()).toContain('Refuzat de server: rest_decontat: actul aditional are deja un deviz confirmat'); expect(onGata).not.toHaveBeenCalled() }
+      curataTot()
+    }
   })
 
   it('oferta cu „listă completă” refuză cantitățile negative înainte de trimitere; sursele se limitează la cele permise', async () => {
