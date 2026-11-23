@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import { pornestePolling, eEroareSesiune } from './lib/sesiuneCereri.js'
 // Bara de sus taie pe verticală (overflow-x:auto pt. swipe) — meniul se randează
 // prin portal, altfel se deschide invizibil. Vezi PopoverBara.jsx.
 import PopoverBara from './PopoverBara.jsx'
@@ -41,9 +42,11 @@ export default function DeAprobatButton({ profile }) {
     if (!profile?.id) return
     try {
       // 1. Comenzi furnizor — rândul MEU de aprobare în așteptare
-      const { data: apr } = await supabase.from('comenzi_furnizor_aprobari')
+      const { data: apr, error: eApr, status: sApr } = await supabase.from('comenzi_furnizor_aprobari')
         .select('id, comanda:comenzi_furnizor(id, numar_comanda, moneda, status, linii:comenzi_furnizor_linii(cantitate, pret_unitar))')
         .eq('profile_id', profile.id).eq('status', 'in_asteptare')
+      // fără sesiune (401 / 403): lista rămâne cum era, polling-ul se oprește (src/lib/sesiuneCereri.js)
+      if (eEroareSesiune(eApr, sApr)) return { error: eApr, status: sApr }
       setComenzi((apr || []).filter(a => a.comanda?.status === 'in_aprobare'))
 
       // 2. Comenzi transport — în funcție de pasul de aprobare al user-ului
@@ -51,19 +54,20 @@ export default function DeAprobatButton({ profile }) {
       if (eMitrache || isOwner) statusuri.push('submitata')
       if (ePuscasu || isOwner) statusuri.push('aprobata_mitrache')
       if (statusuri.length) {
-        const { data: tr } = await supabase.from('logistica_comenzi_transport')
+        const { data: tr, error: eTr, status: sTr } = await supabase.from('logistica_comenzi_transport')
           .select('id, numar_comanda, data_transport, tip_transport, status')
           .in('status', statusuri).order('data_transport')
+        if (eEroareSesiune(eTr, sTr)) return { error: eTr, status: sTr }
         setTransporturi(tr || [])
       } else setTransporturi([])
     } catch (e) { console.error('DeAprobat load:', e) }
+    return {}
   }, [profile?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    load()
-    const t = setInterval(load, 60000)
-    return () => clearInterval(t)
-  }, [load])
+    if (!profile?.id) return
+    return pornestePolling(load, 60000, { client: supabase })
+  }, [load, profile?.id])
 
   const total = comenzi.length + transporturi.length
   const totalComanda = (c) => (c?.linii || []).reduce((a, l) => a + (Number(l.cantitate) || 0) * (Number(l.pret_unitar) || 0), 0)

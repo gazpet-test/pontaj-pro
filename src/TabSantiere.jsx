@@ -17,10 +17,12 @@ import html2canvas from 'html2canvas'
 import { calcProbe, fmtH, fmtNr, etichetaDiametru } from './utils/probeCalc.js'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
+import { optiuniClient } from './lib/sesiuneCereri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  optiuniClient(import.meta.env.VITE_SUPABASE_ANON_KEY)
 ))
 
 // Lista unică de echipe (TKT-2026-0099: extinsă de la 3 la 6 echipe numerice).

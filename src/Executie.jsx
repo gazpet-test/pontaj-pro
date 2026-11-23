@@ -21,12 +21,15 @@ import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
 import NodCuplareSectiuni from './NodCuplareSectiuni.jsx'   // nodul de cuplare: sudurile pe schemă (20261201a) + construcțiile (20261207a)
 import ProbeTronsoane from './ProbeTronsoane.jsx'       // probele pe tronsoane: intervale de km + etape (20261202a)
+import UscareConducta from './UscareConducta.jsx'       // raportul de uscare a conductei, pe tronsoanele de probă (20261225a)
 import FibraOptica from './FibraOptica.jsx'             // fibra optică pe tronsoane: camerete + monotub / validat / suflat pe km (20261211a)
 import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
+import PvCuplareGenerator from './PvCuplareGenerator.jsx'   // „📄 PV predare conductă pentru cuplare” → Word, în tab-ul Documente (19.11.2026)
 import TabMeteoIstoric from './TabMeteoIstoric.jsx'        // 🌧️ Meteo: istoric zilnic + zile nelucrabile + Excel (20261206a)
 import ExecutieGrafic from './ExecutieGrafic.jsx'   // „📅 Grafic”: graficul de execuție importat din MS Project (20261204a)
 import DevizVsExecutatTab from './DevizVsExecutatTab.jsx'   // „📋 Deviz vs executat”: ținte din deviz, executat, rest, alerte, Excel (20261208a)
 import ContractProiectTab from './ContractProiectTab.jsx'   // fișa contractului: clauze, căi de prelungire, termene, registrul evenimentelor (20261203a)
+import ExecutieSemnale, { SemnaleOwnerPanel } from './ExecutieSemnale.jsx'   // „🔔 Semnale”: semnalele agentului verificator, pe proiect + lista owner-ului (20270106a)
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
@@ -40,6 +43,7 @@ import ActivitatiProiectPanel from './ActivitatiProiectPanel.jsx'
 import MaterialeProiectPanel from './MaterialeProiectPanel.jsx'
 import UnitatiProiectPanel from './UnitatiProiectPanel.jsx'
 import ProiectNouWizard from './ProiectNouWizard.jsx'
+import { poateCreaSantier } from './lib/santiereDrept.js'
 import OfertarePF, { useAccesPF } from './OfertarePF.jsx'
 import { useDeciziiProiect, EtichetaDecizie, EchipaExtinsa, GeneratorProiect } from './ExecutieDeciziiEchipa.jsx'   // registrul deciziilor HR (PR3)
 // TKT-2026-0333: nr_contract scris doar în Execuție (fără contract_id) → semn + legare / înregistrare în Administrativ
@@ -48,13 +52,16 @@ import { eContractNelegat, ETICHETA_CONTRACT_NELEGAT, TOOLTIP_CONTRACT_NELEGAT }
 import { createClient } from '@supabase/supabase-js'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
+import { optiuniClient } from './lib/sesiuneCereri.js'
 // acces pe proiect (20261209a): contul restrâns vede doar proiectele lui; poarta reală e în BD
 import { useAccesProiectExecutie, AccesProiecteOwnerModal, MesajAccesProiect } from './ExecutieAccesProiect.jsx'
 import { filtreazaProiecte, verdictLinkProiect } from './executieAccesProiect.js'
+import { TIP_TRASEU, ACCEPT_DOC_CONTRACT, mimeTraseu, tipPentruFisier, verificaInceputTraseu, clasificaEroareUpload, refuzDeterminist } from './executieDocTraseu.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  optiuniClient(import.meta.env.VITE_SUPABASE_ANON_KEY)
 ))
 
 const G = {
@@ -99,6 +106,7 @@ const CONTEXT_TABS = [
   { key: 'documente',      label: 'Documente',      icon: '📂', color: G.muted,  desc: 'Calitate materiale · Arhivă NAS' },
   { key: 'meteo',          label: 'Meteo',          icon: '🌧️', color: G.teal,   desc: 'Istoric zilnic · Zile nelucrabile · Excel' },
   { key: 'contract',       label: 'Contract',       icon: '📜', color: G.yellow, desc: 'Clauze · Căi de prelungire · Termene · Registrul evenimentelor' },
+  { key: 'semnale',        label: 'Semnale',        icon: '🔔', color: G.red,    desc: 'Semnalele agentului verificator · stare · responsabil (owner, MP, responsabil)' },
 ]
 
 // ===========================================================================
@@ -140,8 +148,10 @@ export default function ExecutiePage() {
     <div style={{ background: G.bg, minHeight: 'calc(100vh - 60px)', color: G.text }}>
 
       {/* ─── NAV BAR STICKY ─── */}
+      {/* Uscare conductă (proba pe telefon, 17.11.2026): cât ecranul de uscare e deschis, banda NU rămâne lipită sus (acoperea formularul
+          la derulare pe telefon); derulează odată cu pagina. Pe celelalte file rămâne ca înainte. */}
       <div style={{
-        position: 'sticky', top: 60, zIndex: 50,
+        position: tabStr === 'uscare' ? 'static' : 'sticky', top: 60, zIndex: 50,
         background: G.surface, borderBottom: `1px solid ${G.border}`,
         padding: '0 28px',
       }}>
@@ -190,7 +200,7 @@ export default function ExecutiePage() {
             <span style={{ color: G.border, fontSize: 20, marginInline: 2, flexShrink: 0 }}>›</span>
 
             {CONTEXT_TABS.map(t => {
-              const isActive = tabStr === t.key || (t.key === 'izometrie' && (tabStr === 'tronsoane' || tabStr === 'nod' || tabStr === 'probe' || tabStr === 'fibra'))
+              const isActive = tabStr === t.key || (t.key === 'izometrie' && SUB_FILE_IZOMETRIE.includes(tabStr))
               return (
                 <button
                   key={t.key}
@@ -250,6 +260,8 @@ export default function ExecutiePage() {
       {!proiectIdStr ? (
         <>
           {profile && <DocumenteDeRepartizat profile={profile} />}
+          {/* 20270106a: lista semnalelor pe toate proiectele, pentru owner (RLS-ul dă fiecăruia exact ce poate vedea; panoul e închis implicit) */}
+          {profile?.is_owner === true && <SemnaleOwnerPanel client={supabase} />}
           <DashboardProiectePage onSelectProiect={goToProiect} acces={acces} />
         </>
       ) : (
@@ -257,6 +269,7 @@ export default function ExecutiePage() {
           proiectId={proiectIdStr}
           tab={tabStr}
           onBack={goBack}
+          onSubTab={changeTab}
           canEdit={canEdit}
           acces={acces}
         />
@@ -275,14 +288,20 @@ export default function ExecutiePage() {
 // ===========================================================================
 // CONTEXT VIEW — banner proiect + renderează tab-ul cu proiectId prop
 // ===========================================================================
-function ProiectContextView({ proiectId, tab, onBack, canEdit, acces }) {
+// onSubTab: sub-fila aleasă se scrie în URL (tab=uscare etc.), ca banda de sus să știe ce ecran e deschis și ca reîncărcarea să revină pe ea
+const SUB_FILE_IZOMETRIE = ['izometrie', 'tronsoane', 'nod', 'probe', 'uscare', 'fibra']
+function ProiectContextView({ proiectId, tab, onBack, onSubTab, canEdit, acces }) {
   // undefined = se încarcă; null = serverul n-a întors proiectul (nu există sau nu e permis contului); obiect = găsit
   const [proiectRand, setProiectRand] = useState(undefined)
   const [eroareProiect, setEroareProiect] = useState(null)
   const proiect = proiectRand || null
-  // Sub-tab izometrie: 'izometrie' | 'tronsoane' | 'nod' | 'probe' | 'fibra'
-  // Dacă vine cu tab=tronsoane (link vechi), tab=nod, tab=probe sau tab=fibra (link direct de pe telefon), auto-selectăm sub-tab-ul
-  const [izSubTab, setIzSubTab] = useState(tab === 'tronsoane' || tab === 'nod' || tab === 'probe' || tab === 'fibra' ? tab : 'izometrie')
+  // Sub-fila Izometriei: 'izometrie' | 'tronsoane' | 'nod' | 'probe' | 'uscare' | 'fibra' — O SINGURĂ sursă: URL-ul (`tab`), nu o stare
+  // locală (17.11.2026, runda 3: starea locală nu urmărea schimbările lui `tab`, iar „Izometrie” din banda principală lăsa uscarea pe ecran
+  // cu URL-ul tab=izometrie). tab=tronsoane (link vechi), tab=nod / probe / fibra / uscare (link direct de pe telefon) = acea sub-filă.
+  const izSubTab = SUB_FILE_IZOMETRIE.includes(tab) ? tab : 'izometrie'
+  // proba pe telefon (17.11.2026): bara sub-filelor derulează lateral (6 file nu încap pe 360–412 px), iar sub-fila activă e adusă în vedere
+  const [baraSubFile, setBaraSubFile] = useState(null)
+  useEffect(() => { baraSubFile?.querySelector('[data-activ="1"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }) }, [baraSubFile, izSubTab])
 
   useEffect(() => {
     // la schimbarea proiectului: bannerul nu mai arată proiectul vechi, iar un răspuns întârziat al celui vechi nu se aplică
@@ -379,33 +398,35 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit, acces }) {
       {tab === 'situatii_plata' && <TabSituatiiPlata proiectId={proiectId} />}
       {tab === 'cereri'         && <CereriInterneProiect proiectId={proiectId} />}
       {tab === 'consumuri'      && <ConsumuriBonuriTab proiectId={proiectId} mode="executie" />}
-      {tab === 'documente'      && (<><CorespondentaEmailSection proiectId={proiectId} /><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
+      {tab === 'documente'      && (<><PvCuplareGenerator supabase={supabase} proiectId={proiectId} proiect={proiect} /><CorespondentaEmailSection proiectId={proiectId} /><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
       {tab === 'meteo'          && <TabMeteoIstoric proiectId={Number(proiectId)} codProiect={proiect?.cod_intern} client={supabase} />}
       {tab === 'contract'       && <ContractProiectTab proiectId={proiectId} />}
+      {tab === 'semnale'        && <ExecutieSemnale proiectId={Number(proiectId)} client={supabase} />}
 
       {/* ── Izometrie + Tronsoane (sub-tabs) ── */}
-      {(tab === 'izometrie' || tab === 'tronsoane' || tab === 'nod' || tab === 'probe' || tab === 'fibra') && (
+      {SUB_FILE_IZOMETRIE.includes(tab) && (
         <div>
           {/* Sub-tab bar */}
-          <div style={{
+          <div ref={setBaraSubFile} style={{
             display:'flex', gap:0, borderBottom:`1px solid ${G.border}`,
-            background:G.surface, paddingLeft:28,
+            background:G.surface, paddingLeft:28, overflowX:'auto',
           }}>
             {[
               {key:'izometrie', label:'📐 Izometrie',  desc:'Pachete · Lansare · Cumulat'},
               {key:'tronsoane', label:'📍 Tronsoane',   desc:'Program · Status · Suduri'},
               {key:'nod',       label:'🔩 Nod cuplare', desc:'Schema nodului · suduri pe stări · construcții (fundații) pe etape'},
               {key:'probe',     label:'🧪 Probe pe tronsoane', desc:'Tronsoane de probă pe km · pistonare, uscare, calibrare, presiune'},
+              {key:'uscare',    label:'💨 Uscare conductă', desc:'Raportul de uscare pe tronson: măsurători, poze, concluzie, PDF'},
               {key:'fibra',     label:'🧵 Fibră optică', desc:'Camerete · monotub montat · validat · fibră suflată, pe km, pe tronsoane'},
             ].map(st => {
               const active = izSubTab === st.key
               return (
-                <button key={st.key} onClick={()=>setIzSubTab(st.key)} title={st.desc} style={{
+                <button key={st.key} data-activ={active ? '1' : '0'} onClick={()=>onSubTab?.(st.key)} title={st.desc} style={{
                   padding:'10px 18px', background:'transparent', border:'none',
                   borderBottom:`2px solid ${active ? G.purple : 'transparent'}`,
                   color: active ? G.purple : G.muted,
                   cursor:'pointer', fontSize:12, fontWeight: active ? 700 : 500,
-                  transition:'all .15s',
+                  transition:'all .15s', whiteSpace:'nowrap', flexShrink:0,
                 }}>
                   {st.label}
                 </button>
@@ -417,6 +438,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit, acces }) {
           {izSubTab === 'tronsoane' && <TabTronsoane  proiectId={proiectId} />}
           {izSubTab === 'nod'       && <NodCuplareSectiuni proiectId={Number(proiectId)} />}
           {izSubTab === 'probe'     && <ProbeTronsoane proiectId={Number(proiectId)} />}
+          {izSubTab === 'uscare'    && <UscareConducta proiectId={Number(proiectId)} />}
           {izSubTab === 'fibra'     && <FibraOptica proiectId={Number(proiectId)} />}
         </div>
       )}
@@ -996,6 +1018,7 @@ function DashboardProiectePage({ onSelectProiect, acces }) {
           onClose={() => setShowWizard(false)}
           onCreated={(id) => { setShowWizard(false); loadAll(); onSelectProiect(id, 'proiect') }}
           showToast={showToast}
+          poateCreaSantier={poateCreaSantier(profile)}
         />
       )}
     </div>
@@ -1598,6 +1621,7 @@ const TIPURI_DOC_CONTRACT = [
   { value: 'aviz',               label: '📌 Aviz de amplasament' },
   { value: 'grafic',             label: '📅 Grafic de execuție' },
   { value: 'protocol_receptie',  label: '✅ Protocol recepție' },
+  { value: TIP_TRASEU,           label: '🗺️ Traseu (KML / KMZ)' },   // TKT-2026-0372
   { value: 'altele',             label: '📎 Altele' },
 ]
 const BUCKET_CONTRACTE = 'executie-contracte'
@@ -1924,23 +1948,45 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
   const handleUploadDoc = async (e) => {
     const file = e.target.files[0]
     if (!file) return
+    // TKT-2026-0372: KML / KMZ = „Traseu” (tipul se alege singur), cu tipul MIME corect; la „Traseu” intră doar KML / KMZ
+    const alegere = tipPentruFisier(uploadTip, file.name)
+    if (alegere.eroare) { showToast(alegere.eroare, 'error'); e.target.value = ''; return }
+    const tip = alegere.tip
+    const mime = mimeTraseu(file.name)
     setUploadingDoc(true)
     try {
+      if (mime) {
+        const neconform = verificaInceputTraseu(file.name, new Uint8Array(await file.slice(0, 1024).arrayBuffer()))
+        if (neconform) { showToast(neconform, 'error'); return }
+        if (alegere.schimbat) { setUploadTip(TIP_TRASEU); showToast('Fișierul KML / KMZ se salvează ca „Traseu (KML / KMZ)”.', 'info') }
+      }
       const safeName = file.name.replace(/\s+/g, '_')
-      const path = `${proiect.id}/${uploadTip}/${Date.now()}_${safeName}`
-      const { error: upErr } = await supabase.storage.from(BUCKET_CONTRACTE).upload(path, file)
-      if (upErr) throw upErr
+      const path = `${proiect.id}/${tip}/${Date.now()}_${safeName}`
+      const { error: upErr } = await supabase.storage.from(BUCKET_CONTRACTE).upload(path, file, mime ? { contentType: mime } : undefined)
+      if (upErr) {
+        const fel = clasificaEroareUpload(upErr)
+        if (fel === 'tip') throw new Error(mime ? 'Serverul de fișiere nu acceptă încă fișiere KML / KMZ pentru documentele lucrării — anunțați administratorul.' : 'Serverul de fișiere nu acceptă acest tip de fișier.')
+        if (fel === 'marime') throw new Error('Fișierul e prea mare pentru documentele lucrării.')
+        throw upErr
+      }
       const { data: { user } } = await supabase.auth.getUser()
       const { error: insErr } = await supabase.from('executie_documente_contract').insert({
         proiect_id:       proiect.id,
-        tip_document:     uploadTip,
+        tip_document:     tip,
         fisier_path:      path,
         fisier_nume:      file.name,
         fisier_size_bytes: file.size,
-        fisier_mime:      file.type || 'application/pdf',
+        fisier_mime:      mime || file.type || 'application/pdf',
         uploadat_de:      user?.id,
       })
-      if (insErr) throw insErr
+      if (insErr) {
+        // refuz determinist al rândului: fișierul abia urcat nu rămâne orfan (L05: la rețea / 5xx nu se șterge nimic)
+        if (refuzDeterminist(insErr)) {
+          await supabase.storage.from(BUCKET_CONTRACTE).remove([path])
+          if (tip === TIP_TRASEU && String(insErr.code) === '23514') throw new Error('Tipul „Traseu (KML / KMZ)” trebuie activat în baza de date — anunțați administratorul.')
+        }
+        throw insErr
+      }
       showToast('Document adăugat!', 'success')
       loadDocs()
     } catch(e) {
@@ -2600,7 +2646,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
                     {uploadingDoc ? '⏳ Upload...' : '📎 Adaugă'}
                     <input
                       type="file"
-                      accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.xls,.xlsx"
+                      accept={ACCEPT_DOC_CONTRACT}
                       onChange={handleUploadDoc}
                       disabled={uploadingDoc}
                       style={{ display: 'none' }}

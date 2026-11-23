@@ -1,0 +1,5 @@
+# 20261229b: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+constrangere	constrangere tabel public.upa_achizitii.upa_achizitii_numar_factura_nevid	creat
+functie	functie public.fn_upa_numar_factura_obligatoriu()	creat
+functie	functie public.fn_upa_numar_factura_ok(text)	creat
+trigger	trigger public.upa_achizitii.trg_upa_achizitii_numar_factura	creat

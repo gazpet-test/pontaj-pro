@@ -6,6 +6,7 @@
 // Carduri GAZPET1-21 = SKIP (atribuire ulterioară prin QR)
 // ===========================================================================
 import { identitateBonComun } from './lib/logisticaPrB.js'
+import { confirmaCitiriAlimentari } from './lib/citiriBord.js'
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
@@ -464,6 +465,21 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
       if (!window.confirm(`Asociere neconfirmată prin vehicul/card: ${q.sursa_linie}, ${q.data}, ${q.litri} L → bon ${q.cod_bon}. Potrivirea este doar pe litri și dată; stația exactă nu există în lista importată. Confirmi explicit că este același bon?`)) return
     }
     setImporting(true)
+    // TKT-2026-0380: km / ore citite la pompă pe alimentările legate de vehicul (plăcuță) trec prin
+    // aceeași verificare anti-typo ca fișele de service; o singură confirmare cu lista, înaintea oricărei scrieri.
+    // (Cardurile fără QR merg pe activul tehnic NEALOCAT: acolo nu există istoric cu care să compar.)
+    const deVerificat = matched.flatMap(m => m.alimentari_noi.map(a => ({
+      active_id: m.activ.id, data_alimentare: a.data_alimentare,
+      km_la_alimentare: a.km_la_alimentare, ore_la_alimentare: a.ore_la_alimentare,
+      eticheta: `${a.data_alimentare} · ${m.activ.nr_inmatriculare || m.activ.cod_intern || ''}`,
+    })))
+    const date = deVerificat.map(r => r.data_alimentare).filter(Boolean).sort()
+    const deLa = date.length ? new Date(Date.UTC(Number(date[0].slice(0, 4)) - 1, Number(date[0].slice(5, 7)) - 1, Number(date[0].slice(8, 10)))).toISOString().slice(0, 10) : null
+    if (!(await confirmaCitiriAlimentari(supabase, deVerificat, { deLa }))) {
+      setImporting(false)
+      showToast?.('Import anulat: nimic scris. Verifică citirile semnalate în raportul Rompetrol.', 'info')
+      return
+    }
     try {
       const azi = new Date().toLocaleDateString('ro-RO')
       let totalInsert = 0, totalQr = 0, totalFaraQr = 0

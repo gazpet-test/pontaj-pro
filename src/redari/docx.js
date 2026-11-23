@@ -22,9 +22,10 @@ import { esteUtilizator, motivConvocatorUtilizator } from './convocareUtilizator
 
 import JSZip from 'jszip'
 import QRCode from 'qrcode'
-import { COL_UAT, termenAfisare, mesajTermenAfisare } from './setari.js'
-import { TEXT_INFORMARE_LOT1, informarePublicataPeProiect, informareVerificareEsuata, informareGata, blocuri, segmenteInline, TRIMITERE_VERSO_GDPR } from './informareGdpr.js'
+import { COL_UAT, termenAfisare, mesajTermenAfisare, areZiCuProgram } from './setari.js'
+import { TEXT_INFORMARE_LOT1, informarePublicataPeProiect, informareVerificareEsuata, informareGata, blocuri, segmenteInline, TRIMITERE_VERSO_GDPR, MOTIV_INFORMARE_NEPUBLICATA } from './informareGdpr.js'
 import { ORIGINE_PUBLICA_REDARI } from './domeniuPublic.js'
+import { canonizeazaParcelePublicate, textProblemeIdentificatori, MESAJ_IDENTIFICATORI_REFUZATI } from './identificatoriPublici.js'
 
 // Denumirea Antreprenorului/liderului; se modifica in cod daca Asocierea este alta.
 export const ANTREPRENOR = 'GAZPET INSTAL S.R.L.'
@@ -566,6 +567,19 @@ export const ETICHETA_CAMP_PROIECT = {
 
 const contactDet = (detinator, contactDetinator) => contactDetinator ?? detinator?.contact ?? detinator?.red_detinatori_contact ?? null
 
+// ─── O singură definiție (L19) pentru câmpurile comune ale documentelor pe proiect / UAT: convocatorul (Model 1 / 1U), adresa UAT
+// (Model 4) și anunțul de afișare le iau de AICI; o schimbare de format (data, rezerva de contact) se face o singură dată. ───
+/** Antetul contractului + împuternicirea Transgaz, din red_proiecte (datele formatate RO, lipsă → ''). */
+export const campuriContractProiect = (pr = {}) => ({
+  contract_nr: pr?.contract_nr ?? '', contract_data: formatDataRo(pr?.contract_data), proiect_denumire: pr?.denumire ?? '',
+  imputernicire_nr: pr?.imputernicire_nr ?? '', imputernicire_data: formatDataRo(pr?.imputernicire_data),
+})
+/** Cele 3 zile de sesiune ale UAT-ului: zi1..3 (RO), program1..3, sate_zi1..3 (lipsă → ''). */
+export const campuriSesiuniUat = (u = {}) => Object.fromEntries([1, 2, 3].flatMap(i =>
+  [[`zi${i}`, formatDataRo(u?.[`sesiune_zi${i}`])], [`program${i}`, u?.[`program_zi${i}`] ?? ''], [`sate_zi${i}`, u?.[`sate_zi${i}`] ?? '']]))
+/** Contactul Gazpet tipărit (contact_nume / contact_telefon / contact_email): persoana dată (`contact`), altfel rezerva din proiect. */
+export const campuriContactGazpet = (pr = {}, c = {}) => Object.fromEntries(CAMPURI_CONTACT_CONVOCATOR.map(([k, cheie]) => [cheie, c?.[k] ?? pr?.[cheie] ?? '']))
+
 /**
  * Lipsurile care blochează generarea unui convocator de trimis (nu de previzualizat). Întoarce lista mesajelor (goală = OK).
  * `contactDetinator` = rândul din red_detinatori_contact (PII; doar admin/editor îl pot citi).
@@ -587,8 +601,7 @@ export function verificaDateConvocator({ nrDocument, token, uat, contact, proiec
     const cd = contactDet(detinator, contactDetinator)
     if (!cd || cd.adresa_cunoscuta === false || !adresaDetinator(cd)) lipsuri.push('deținător fără adresă — convocare prin afișare')
   }
-  const ziCuProgram = [1, 2, 3].some(i => plin(u[`sesiune_zi${i}`]) && plin(u[`program_zi${i}`]))
-  if (!ziCuProgram) lipsuri.push('cel puțin o zi de sesiune cu program pe UAT (sesiune_zi1..3 + program_zi1..3)')
+  if (!areZiCuProgram(u)) lipsuri.push('cel puțin o zi de sesiune cu program pe UAT (sesiune_zi1..3 + program_zi1..3)')
   // D3 (audit 04.11): șablonul tipărește FIECARE câmp de contact („la telefon {{contact_telefon}} sau…”, „Contact GAZPET INSTAL:
   // {{contact_nume}}, tel. {{contact_telefon}}, e-mail {{contact_email}}”, „Contact TRANSGAZ …: {{reprezentant_tgz}}, tel.
   // {{reprezentant_tgz_telefon}}”), deci se cer toate — exact valorile care ajung în document (aceeași regulă ca în `campuri`).
@@ -633,11 +646,7 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
   const semnatarTgz = [pr.reprezentant_tgz_nume, pr.reprezentant_tgz_functie].filter(plin).join(', ')
   const semnatarGazpet = [pr.reprezentant_gazpet_nume, pr.reprezentant_gazpet_functie].filter(plin).join(', ')
   const campuri = {
-    contract_nr: pr.contract_nr ?? '',
-    contract_data: formatDataRo(pr.contract_data),
-    proiect_denumire: pr.denumire ?? '',
-    imputernicire_nr: pr.imputernicire_nr ?? '',
-    imputernicire_data: formatDataRo(pr.imputernicire_data),
+    ...campuriContractProiect(pr),
     nr_document: nrDocument ?? '',
     data: formatDataRo(dataDocument || new Date()),
     nume: d.nume ?? '',
@@ -651,12 +660,8 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
     poz_hg: p.poz_hg ?? '',
     suprafata: formatNumarRo(p.suprafata_temporara_mp),
     tronson: p.tronson ?? '',
-    zi1: formatDataRo(u.sesiune_zi1), program1: u.program_zi1 ?? '', sate_zi1: u.sate_zi1 ?? '',
-    zi2: formatDataRo(u.sesiune_zi2), program2: u.program_zi2 ?? '', sate_zi2: u.sate_zi2 ?? '',
-    zi3: formatDataRo(u.sesiune_zi3), program3: u.program_zi3 ?? '', sate_zi3: u.sate_zi3 ?? '',
-    contact_nume: c.nume ?? pr.contact_nume ?? '',
-    contact_telefon: c.telefon ?? pr.contact_telefon ?? '',
-    contact_email: c.email ?? pr.contact_email ?? '',
+    ...campuriSesiuniUat(u),
+    ...campuriContactGazpet(pr, c),
     // fața nu tipărește linkul informării; trimiterea la verso doar cu VERSO_INFORMARE_INCLUS (PR #939)
     text_gdpr: textGdprFataConvocator(pr.text_gdpr, u.nume, pr.link_informare_gdpr),
     reprezentant_tgz: semnatarTgz,
@@ -829,16 +834,23 @@ export async function reincarcaConvocator(supabase, { convocareId, blob, hash, p
 // Final_v2 (03.11.2026) scosese antetul firmei; din 04.11 (excepția (9), DE CONFIRMAT, claude#026 întrebarea 1) antetul e
 // repus din convocator, deci contract_nr / contract_data / proiect_denumire sunt din nou în șablon (43 de chei).
 // verificaDateAdresaUat cere contractul (obligatoriu pe proiect).
+// Din 19.11.2026 (decizia Răzvan, excepția (12) din SABLOANE.md §1): Anexa 2 a adresei NU mai e convocarea scurtă + lista parcelelor,
+// ci trimiterea la anunțul de afișare (genereazaAnuntAfisare, mai jos) — o singură definiție a textului public; lista parcelelor
+// publică stă DOAR în anunț. Din parcele, adresa ia doar NUMĂRUL lor (PV-ul de afișare din Anexa 3): 36 de chei, fără `rand.*`
+// și fără `program_text` (era doar în convocarea scurtă).
 export const CHEI_ADRESA_UAT = [
   'contract_nr', 'contract_data', 'proiect_denumire', 'uat', 'judet', 'nr_document', 'data',
   'imputernicire_nr', 'imputernicire_data', 'zi1', 'zi2', 'zi3', 'program1', 'program2', 'program3',
   'sate_zi1', 'sate_zi2', 'sate_zi3', 'afisare_data_start', 'afisare_data_end', 'afisare_pv_nr',
   'termen_confirmare', 'contact_nume', 'contact_telefon', 'contact_email', 'reprezentant_tgz',
-  'reprezentant_tgz_telefon', 'reprezentant_gazpet', 'zile_sesiune_text', 'program_text',
-  'rand.nr', 'rand.sat', 'rand.tarla', 'rand.nr_cadastral', 'rand.poz_hg', 'rand.tronson',
+  'reprezentant_tgz_telefon', 'reprezentant_gazpet', 'zile_sesiune_text',
   'reprezentant_uat_nume', 'reprezentant_uat_functie', 'reprezentant_gazpet_nume', 'afisare_ora',
   'numar_parcele', 'semnatar_uat', 'semnatar_gazpet',
 ]
+/** Coloanele citite din red_v_parcele pentru adresa UAT: doar ce trebuie numărării (parcelele active), nicio valoare de parcelă. */
+export const COL_PARCELA_ADRESA = 'id_parcela, sters_la'
+/** Indiciul din 🏛️ UAT-uri (sub butoane și după salvarea adresei): Anexa 2 a adresei = anunțul de afișare, generat separat. */
+export const INDICIU_ANEXA2_ANUNT = 'Anexa 2 a adresei este anunțul de afișare: generează-l cu butonul „Anunț de afișare (DOCX)” și trimite-l împreună cu adresa.'
 
 export function verificaDateAdresaUat({ proiect = {}, uat = {}, nrDocument } = {}) {
   const lipsuri = []
@@ -848,7 +860,7 @@ export function verificaDateAdresaUat({ proiect = {}, uat = {}, nrDocument } = {
   cere(proiect.contract_data, 'Lipsește data contractului')
   cere(proiect.imputernicire_nr, 'Lipsește nr. împuternicirii Transgaz')
   cere(proiect.imputernicire_data, 'Lipsește data împuternicirii Transgaz')
-  if (![1, 2, 3].some(i => plin(uat[`sesiune_zi${i}`]) && plin(uat[`program_zi${i}`]))) lipsuri.push('Lipsește o zi de sesiune cu program')
+  if (!areZiCuProgram(uat)) lipsuri.push('Lipsește o zi de sesiune cu program')
   cere(uat.afisare_data_start, 'Lipsește data începerii afișării')
   cere(uat.afisare_data_end, 'Lipsește data încheierii afișării')
   cere(uat.termen_confirmare, 'Lipsește termenul de confirmare')
@@ -882,36 +894,21 @@ export function zileSesiuneText(uat) {
 export async function genereazaAdresaUat({ proiect = {}, uat = {}, parcele = [], nrDocument, templateArrayBuffer, strict = true, dataDocument = aziBucuresti() }) {
   const lipsuri = verificaDateAdresaUat({ proiect, uat, nrDocument })
   if (strict && lipsuri.length) throw new Error(lipsuri.join('; '))
-  const active = parcele.filter(p => p.sters_la == null).slice().sort((a, b) => a.id_parcela.localeCompare(b.id_parcela))
-  const campuri = Object.fromEntries(CHEI_ADRESA_UAT.filter(k => !k.startsWith('rand.')).map(k => [k, '']))
-  Object.assign(campuri, {
-    contract_nr: proiect.contract_nr ?? '', contract_data: formatDataRo(proiect.contract_data), proiect_denumire: proiect.denumire ?? '',
+  // doar numărul parcelelor active ajunge în adresă (Anexa 3); identificatorii lor (sat, tarla, nr. cadastral …) sunt DOAR în anunț
+  const numarActive = parcele.filter(p => p.sters_la == null).length
+  const campuri = Object.fromEntries(CHEI_ADRESA_UAT.map(k => [k, '']))
+  Object.assign(campuri, campuriContractProiect(proiect), campuriSesiuniUat(uat), campuriContactGazpet(proiect), {
     uat: uat.nume ?? '', judet: uat.judet ?? '', nr_document: nrDocument ?? '', data: formatDataRo(dataDocument),
-    imputernicire_nr: proiect.imputernicire_nr ?? '', imputernicire_data: formatDataRo(proiect.imputernicire_data),
     afisare_data_start: formatDataRo(uat.afisare_data_start), afisare_data_end: formatDataRo(uat.afisare_data_end), afisare_pv_nr: uat.afisare_pv_nr ?? '',
     termen_confirmare: formatDataRo(uat.termen_confirmare), afisare_ora: uat.afisare_ora ?? '',
     reprezentant_gazpet: [proiect.reprezentant_gazpet_nume, proiect.reprezentant_gazpet_functie].filter(Boolean).join(', '),
     reprezentant_gazpet_nume: proiect.reprezentant_gazpet_nume ?? '', reprezentant_tgz: proiect.reprezentant_tgz_nume ?? '',
     reprezentant_tgz_telefon: proiect.reprezentant_tgz_telefon ?? '', reprezentant_uat_nume: uat.reprezentant_uat_nume ?? '',
     reprezentant_uat_functie: uat.reprezentant_uat_functie ?? '', semnatar_uat: uat.reprezentant_uat_nume ?? '', semnatar_gazpet: proiect.reprezentant_gazpet_nume ?? '',
-    contact_nume: proiect.contact_nume ?? '', contact_telefon: proiect.contact_telefon ?? '', contact_email: proiect.contact_email ?? '',
-    numar_parcele: active.length, zile_sesiune_text: zileSesiuneText(uat),
+    numar_parcele: numarActive, zile_sesiune_text: zileSesiuneText(uat),
   })
-  const sesiuni = [1, 2, 3].filter(i => uat[`sesiune_zi${i}`])
-  const prima = sesiuni[0]
-  campuri.program_text = prima ? uat[`program_zi${prima}`] ?? '' : ''
-  for (const i of [1, 2, 3]) {
-    campuri[`zi${i}`] = formatDataRo(uat[`sesiune_zi${i}`])
-    campuri[`program${i}`] = uat[`program_zi${i}`] ?? ''
-    campuri[`sate_zi${i}`] = uat[`sate_zi${i}`] ?? ''
-    if (i !== prima && sesiuni.includes(i) && uat[`program_zi${i}`] && uat[`program_zi${i}`] !== uat[`program_zi${prima}`]) {
-      // Programul poate avea o descriere liberă; nu inventăm o oră dacă nu este un interval.
-      const final = /^[ \t]*\d{2}:\d{2}[ \t]*(?:–|—|-)[ \t]*(\d{2}:\d{2})[ \t]*$/.exec(uat[`program_zi${i}`])?.[1]   // Gemini f2b r1 P3: doar un interval simplu
-      campuri.program_text += final ? `, ziua ${i} până la ${final}` : `, ziua ${i}: ${uat[`program_zi${i}`]}`
-    }
-  }
-  const rand = active.map((p, index) => ({ nr: index + 1, sat: p.sat ?? '', tarla: p.tarla ?? '', nr_cadastral: p.nr_cadastral ?? '', poz_hg: p.poz_hg ?? '', tronson: p.tronson ?? '' }))
-  const blob = await completeazaDocx(templateArrayBuffer, campuri, { randuri: { rand }, strict })
+  // fără `randuri`: șablonul nu mai are rând-șablon de parcele (un `{{rand.*}}` reapărut ar fi refuzat de `strict`)
+  const blob = await completeazaDocx(templateArrayBuffer, campuri, { strict })
   return { blob, hash: await hashBlob(blob), campuri }
 }
 
@@ -940,4 +937,110 @@ export async function salveazaAdresaUat(supabase, { blob, proiectCod, uat, nrDoc
     if (!eExistaDeja(error) || i === MAX_INCERCARI_VERSIUNE - 1) throw new Error('Încărcarea adresei a eșuat; numărul rămâne pe UAT, reia cu „Regenerează”. ' + (error.message || 'Storage indisponibil'))
   }
   return { path, versiune }
+}
+
+// ─── Anunțul de afișare la primărie (convocarea pe UAT) — planul procedurii de predare rev. 1 (18.11.2026), pct. 4.3 + cap. 8 ───
+// Textul: docs/redari/TEXT_ANUNT_AFISARE.md → șablonul public/redari/sabloane/anunt_afisare.docx (scripts/redari_sablon_anunt_afisare.mjs).
+// Se lipește la intrarea în primărie, pentru TOȚI deținătorii (și cei neidentificați / fără adresă), deci NU conține date personale:
+// din parcele intră DOAR coloanele din CAMPURI_PARCELA_ANUNT, fiecare valoare în forma canonică validată (identificatoriPublici.js;
+// altfel generarea e blocată cu lista parcelelor de corectat); deținătorii nu sunt citiți deloc. Nu se numerotează și nu se salvează în
+// ERP (afișarea se consemnează prin PV-ul de afișare al primăriei: red_uat.afisare_*); documentul se descarcă din 🏛️ UAT-uri.
+export const SABLON_ANUNT_AFISARE = '/redari/sabloane/anunt_afisare.docx'
+/** Pagina publică a informării GDPR (aceeași pentru toți — fără link personal); tipărită pe anunț, cu QR-ul ei. */
+export const LINK_INFORMARE_PUBLIC = `${ORIGINE_PUBLICA_REDARI}/redari/informare`
+/** Coloanele citite din red_v_parcele pentru anunț (select explicit) și coloanele care AJUNG în document (lista albă).
+ *  `id` nu se publică: leagă parcela de rândul ei INSERT din red_jurnal (valorile de la import, valoriImport.js). */
+export const COL_PARCELA_ANUNT = 'id, id_parcela, sat, tarla, nr_cadastral, poz_hg, tronson, sters_la'
+export const CAMPURI_PARCELA_ANUNT = ['sat', 'tarla', 'nr_cadastral', 'poz_hg', 'tronson']
+export const CHEI_ANUNT_AFISARE = [
+  'contract_nr', 'contract_data', 'proiect_denumire', 'uat', 'judet', 'imputernicire_nr', 'imputernicire_data',
+  'zi1', 'program1', 'sate_zi1', 'zi2', 'program2', 'sate_zi2', 'zi3', 'program3', 'sate_zi3',
+  'contact_telefon', 'contact_email', 'qr', 'link_informare', 'contact_nume', 'reprezentant_tgz', 'reprezentant_tgz_telefon',
+  'data', 'semnatar_gazpet', 'numar_parcele', 'rand.nr', 'rand.sat', 'rand.tarla', 'rand.nr_cadastral', 'rand.poz_hg', 'rand.tronson',
+]
+export const MESAJ_ANUNT_INFORMARE_NEVERIFICATA = 'nu am putut verifica pe server dacă informarea GDPR e publicată (rețea / server) — reîncercați; anunțul tipărește adresa paginii de informare'
+export const MESAJ_ANUNT_FARA_PARCELE = 'UAT-ul nu are parcele active: anunțul de afișare nu are ce listă să conțină'
+
+/**
+ * Lipsurile care blochează anunțul de afișare (aceeași listă în buton și în 📬 Notificări — L19). Se cer exact câmpurile tipărite:
+ * antetul (contract + proiect), împuternicirea, UAT + județ, o zi de sesiune cu program, contactul Gazpet (toate trei, ca la
+ * convocator), reprezentantul Transgaz cu telefon, semnatarul Gazpet; informarea GDPR trebuie să fie publicată (anunțul tipărește
+ * adresa ei): `false` de la server = blocat, `null` = verificare eșuată = blocat (L18), lipsă = nu se știe aici (o decide generarea,
+ * pe proiectul recitit cu cuInformarePublicata).
+ */
+export function verificaDateAnuntAfisare({ proiect = {}, uat = {} } = {}) {
+  const pr = proiect || {}, u = uat || {}
+  const lipsuri = []
+  const cere = (v, mesaj) => { if (!plin(v)) lipsuri.push(mesaj) }
+  if (pr.informare_publicata === false) lipsuri.push(MOTIV_INFORMARE_NEPUBLICATA)
+  else if ('informare_publicata' in pr && pr.informare_publicata === null) lipsuri.push(MESAJ_ANUNT_INFORMARE_NEVERIFICATA)
+  cere(pr.contract_nr, 'Lipsește nr. contractului')
+  cere(pr.contract_data, 'Lipsește data contractului')
+  cere(pr.denumire, 'Lipsește denumirea proiectului')
+  cere(pr.imputernicire_nr, 'Lipsește nr. împuternicirii Transgaz')
+  cere(pr.imputernicire_data, 'Lipsește data împuternicirii Transgaz')
+  cere(u.nume, 'Lipsește numele UAT-ului')
+  cere(u.judet, 'Lipsește județul UAT-ului')
+  if (!areZiCuProgram(u)) lipsuri.push('Lipsește o zi de sesiune cu program')
+  for (const [, cheie] of CAMPURI_CONTACT_CONVOCATOR) cere(pr[cheie], `Lipsește ${ETICHETA_CAMP_PROIECT[cheie]}`)
+  cere(pr.reprezentant_tgz_nume, 'Lipsește reprezentantul Transgaz')
+  cere(pr.reprezentant_tgz_telefon, `Lipsește ${ETICHETA_CAMP_PROIECT.reprezentant_tgz_telefon}`)
+  cere(pr.reprezentant_gazpet_nume, 'Lipsește reprezentantul Gazpet (semnătura anunțului)')
+  return lipsuri
+}
+
+// ordinea listei: tarla, apoi nr. cadastral / parcelă (comparare naturală: „T2” înaintea lui „T10”), apoi id_parcela — stabilă
+const cmpNatural = (a, b) => String(a ?? '').localeCompare(String(b ?? ''), 'ro', { numeric: true, sensitivity: 'base' })
+/**
+ * Rândurile tabelului: { randuri, probleme }. Doar parcelele active, doar coloanele din CAMPURI_PARCELA_ANUNT, fiecare în FORMA CANONICĂ
+ * validată (identificatoriPublici.js; review #1137 r2: se publică exact valoarea validată, nu originalul), ordonate (tarla, nr. cadastral, id).
+ * `probleme` = [{ id_parcela, camp, motiv }] (fără valori); dacă nu e goală, `randuri` e [] — nu se construiește niciun rând dintr-o listă
+ * cu refuzuri. `uat` dă satele declarate la sesiuni (singurele acceptate în coloana „sat”). `valoriImport` (Map din valoriImportDinJurnal,
+ * cheia = id-ul parcelei): tarla / nr_cadastral / poz_hg IDENTICE cu importul se publică fără validatorul de formă (varianta A, 19.11.2026).
+ */
+export function randuriAnuntAfisare(parcele = [], uat = {}, valoriImport = null) {
+  if (!Array.isArray(parcele)) throw new Error('Lista de parcele trebuie să fie un tablou')
+  const { probleme, randuri } = canonizeazaParcelePublicate(parcele.filter(p => p && p.sters_la == null), CAMPURI_PARCELA_ANUNT, uat || {}, valoriImport)
+  return { probleme, randuri: randuri
+    .slice().sort((a, b) => cmpNatural(a.tarla, b.tarla) || cmpNatural(a.nr_cadastral, b.nr_cadastral) || cmpNatural(a.id_parcela, b.id_parcela))
+    .map((p, i) => ({ nr: i + 1, ...Object.fromEntries(CAMPURI_PARCELA_ANUNT.map(k => [k, p[k]])) })) }
+}
+
+/**
+ * Anunțul de afișare al unui UAT (DOCX). Strict implicit: lipsurile (verificaDateAnuntAfisare) și UAT-ul fără parcele active
+ * opresc generarea; `strict: false` DOAR pentru previzualizare. Nu primește și nu citește deținători.
+ * Identificatorii publicați (CAMPURI_PARCELA_ANUNT) trec prin `canonizeazaParcelePublicate` INDIFERENT de `strict` (review #1137 P1):
+ * o valoare fără forma așteptată a câmpului nu se publică niciodată — eroarea poartă `probleme` = [{ id_parcela, camp, motiv }] (fără
+ * valori); în document intră DOAR formele canonice întoarse de validare (r2). `valoriImport` = valorile de la import (valoriImport.js;
+ * lipsă = toate valorile pe calea strictă).
+ * @returns {Promise<{ blob: Blob, hash: string, campuri: Record<string,string>, randuri: number, lipsuri: string[] }>}
+ */
+export async function genereazaAnuntAfisare({ proiect = {}, uat = {}, parcele = [], valoriImport = null, templateArrayBuffer, strict = true, dataDocument = aziBucuresti() }) {
+  if (!templateArrayBuffer) throw new Error('Lipsește șablonul anunțului de afișare (templateArrayBuffer)')
+  const lipsuri = verificaDateAnuntAfisare({ proiect, uat })
+  if (strict && lipsuri.length) throw new Error(`Anunțul de afișare nu poate fi generat — lipsesc: ${lipsuri.join('; ')}`)
+  const pr = proiect || {}, u = uat || {}
+  const { probleme, randuri: rand } = randuriAnuntAfisare(parcele, u, valoriImport)
+  if (probleme.length) {
+    const err = new Error(`${MESAJ_IDENTIFICATORI_REFUZATI} — ${textProblemeIdentificatori(probleme)}`)
+    err.probleme = probleme
+    throw err
+  }
+  if (strict && !rand.length) throw new Error(MESAJ_ANUNT_FARA_PARCELE)
+  const campuri = {
+    ...campuriContractProiect(pr), ...campuriSesiuniUat(u), ...campuriContactGazpet(pr),
+    uat: u.nume ?? '', judet: u.judet ?? '', data: formatDataRo(dataDocument),
+    link_informare: LINK_INFORMARE_PUBLIC,
+    reprezentant_tgz: [pr.reprezentant_tgz_nume, pr.reprezentant_tgz_functie].filter(plin).join(', '),
+    reprezentant_tgz_telefon: pr.reprezentant_tgz_telefon ?? '',
+    semnatar_gazpet: [pr.reprezentant_gazpet_nume, pr.reprezentant_gazpet_functie].filter(plin).join(', '),
+    numar_parcele: String(rand.length),
+  }
+  // postcondiție: exact cheile șablonului (fără qr și rand.*), nimic în plus (o cheie în plus ar putea aduce un câmp personal)
+  const asteptate = CHEI_ANUNT_AFISARE.filter(k => k !== 'qr' && !k.startsWith('rand.')).sort()
+  const date = Object.keys(campuri).sort()
+  if (asteptate.length !== date.length || asteptate.some((k, i) => k !== date[i])) throw new Error('Anunțul de afișare: câmpurile nu coincid cu șablonul')
+  const qr = await genereazaQr(LINK_INFORMARE_PUBLIC)
+  const blob = await completeazaDocx(templateArrayBuffer, campuri, { imagini: { qr }, randuri: { rand }, strict })
+  return { blob, hash: await hashBlob(blob), campuri, randuri: rand.length, lipsuri }
 }

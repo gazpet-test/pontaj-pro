@@ -47,6 +47,37 @@
 -- PostgreSQL pe ceasul serverului, nu timp real strict (masurat: 2000-2003 ms). COMMIT-ul propriu-zis NU e plafonat (limita
 -- r11): pe productie, fara replicare sincrona (synchronous_standby_names gol), inseamna scrierea WAL a commit-ului.
 -- Asteptarea lock-urilor: NOWAIT + reincercare pana la 1 s de la BEGIN.
+-- r21 (12.11.2026, varianta c din E1_RAPORT.md r20; citirea read-only de pe productie, porti_citire.sql A-L):
+--  * obiectele pg_net la care ajunge teren prin PUBLIC (net._http_response, net.http_request_queue si secventa ei) sunt
+--    acceptate de poarta DOAR cu amprenta fixata din productie (lista unica: fn_portal_net_rel_aprobat, cu marcajul
+--    listei in corp; definitia amprentei: fn_portal_net_rel_amprenta = sectiunea G din porti_citire.sql, L19).
+--    Orice drept nou, coloana noua, alt proprietar sau orice alt obiect din net la care teren are acces = poarta rosie
+--    (un obiect nou din net fara niciun drept pentru teren nu e privit: verificarea e de acces). Mai putine drepturi
+--    (PUBLIC retras de platforma) = obiectul nu mai e accesibil, poarta ramane verde;
+--  * dreptul lui teren pe o relatie / secventa = o singura functie (fn_portal_teren_rel_drept), folosita de poarta si de
+--    preconditia $public_pre$;
+--  * poarta: schemele expuse de PostgREST, daca sunt setate in baza (rolul authenticator), nu au voie sa contina net;
+--  * postconditia (pasul 5 din $critic$) spune in mesaj CE porti lipsesc: numarul si lista lor.
+-- r22 (Jakarinos r21 P1): amprenta obiectelor pg_net include si triggerele (cu functia si starea), politicile,
+--    DEFAULT-urile / IDENTITY / GENERATED, regulile, constrangerile, indecsii, parametrii si coloana-proprietar a secventei
+--    si functiile de care depind acestea. Valorile de productie se recitesc (porti_citire.sql G): pana atunci lista e
+--    DE_COMPLETAT = refuz (PORTAL_NET_REL_LIST_NECOMPLETATA) si poarta rosie.
+-- r23 (varianta d, E1_RAPORT.md r23): suprafata lui teren in public se micsoreaza la cele doua functii ale portalului.
+--  * cele 21 de functii executabile prin PUBLIC (ale noastre, proprietar postgres) sunt clasificate in migrare din
+--    citirea de productie (porti_citire.sql M, coloana trigger_fn): 18 de TRIGGER (nu se pot apela direct, iar la
+--    declansare PostgreSQL nu verifica EXECUTE => niciun GRANT) + 3 apelabile (GRANT explicit catre authenticated si
+--    service_role, rolurile prin care le apeleaza azi aplicatia / API-ul). Clasificarea se verifica pe catalog
+--    (prorettype) inainte de orice schimbare: alta forma = refuz PORTAL_PUBLIC_CLASIFICARE_*;
+--    r25 (Jakarinos r24 P2): retragerea EXECUTE nu schimba DECLANSAREA triggerelor existente, dar schimba DDL-ul ulterior:
+--    CREATE TRIGGER (si CREATE OR REPLACE TRIGGER) cere EXECUTE pe functie => un rol care il avea doar prin PUBLIC
+--    primeste 42501 (si la o restaurare facuta ca acel rol). Proprietarul (postgres) ramane autorizat; migrarile noastre
+--    ruleaza ca postgres (runnerul cere current_user = postgres). Detaliile: E1_RAPORT.md r25.
+--  * $public_d$: REVOKE EXECUTE ... FROM PUBLIC pe toate 21; GRANT doar unde rolul nu are deja un drept explicit, iar ce
+--    s-a adaugat se inregistreaza in baseline (randul 'grant_d:'), ca revenirea sa retraga EXACT acele drepturi si sa
+--    redea PUBLIC (aceleasi drepturi ca inainte de 18a). Postconditia: niciuna din 21 cu PUBLIC, cele 3 apelabile
+--    executabile de rolurile lor, teren executa in public DOAR fn_teren_eligibil si fn_portal_uid;
+--  * poarta: in public, orice functie executabila de teren in afara celor doua = rosu (functie:<semnatura>), chiar daca
+--    e in baseline; amprenta celor 21 (corp, DEFINER, proprietar, configuratie, ACL dupa d) ramane in baseline (L15).
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
@@ -82,7 +113,8 @@ BEGIN
     OR to_regclass('public.conturi_tip_jurnal') IS NOT NULL
     OR EXISTS (SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='public' AND p.proname IN ('fn_auth_token_hook','fn_teren_eligibil',
-        'fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid')) THEN
+        'fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid',
+        'fn_portal_net_rel_aprobat','fn_portal_net_rel_amprenta','fn_portal_net_rel_acceptat','fn_portal_teren_rel_drept')) THEN
     RAISE EXCEPTION 'PORTAL_ALREADY_EXISTS';
   END IF;
 END $pre$;
@@ -201,6 +233,7 @@ GRANT EXECUTE ON FUNCTION public.fn_auth_token_hook(jsonb) TO supabase_auth_admi
 -- 20 INVOKER si un DEFINER trigger, conform inventarului furnizat. Nu deducem siguranta doar din INVOKER;
 -- corpurile sunt ancorate in md5-urile revizuite, iar orice drift al definitiei/configuratiei/ACL este refuzat.
 -- Orice schimbare a setului PUBLIC pe prod face apply-ul sa refuze (precondiția de mai jos) si poarta rosie.
+-- r23 (d): lista = setul de PUBLIC DINAINTEA lui 18a (preconditia); 18a ii retrage PUBLIC ($public_d$, mai jos).
 CREATE FUNCTION public.fn_portal_public_aprobat() RETURNS text[]
 LANGUAGE sql IMMUTABLE SET search_path TO 'public','pg_temp' AS $fn$
   SELECT ARRAY[
@@ -257,6 +290,177 @@ LANGUAGE sql STABLE SET search_path TO 'public','pg_temp' AS $fn$
  FROM pg_class c WHERE c.oid=p_oid;
 $fn$;
 REVOKE ALL ON FUNCTION public.fn_portal_catalog_amprenta(oid) FROM PUBLIC,anon,authenticated,service_role,teren;
+-- r21 (varianta c): dreptul lui teren pe o relatie / secventa (orice drept: tabel, coloane; MAINTAIN doar din PG17).
+-- Definitia unica (L19), folosita de poarta (bucla relatiilor) si de preconditia $public_pre$. plpgsql: functia
+-- has_sequence_privilege nu primeste niciodata altceva decat o secventa (pe productie un index a rupt o citire, r20).
+CREATE FUNCTION public.fn_portal_teren_rel_drept(p_oid oid) RETURNS boolean
+LANGUAGE plpgsql STABLE SET search_path TO 'public','pg_temp' AS $fn$
+DECLARE v_kind "char";
+BEGIN
+  SELECT c.relkind INTO v_kind FROM pg_catalog.pg_class c WHERE c.oid=p_oid;
+  IF v_kind = 'S' THEN RETURN has_sequence_privilege('teren',p_oid,'USAGE,SELECT,UPDATE'); END IF;
+  IF v_kind IN ('r','p','v','m','f') THEN
+    -- MAINTAIN exista doar din PG17 (prod).
+    RETURN has_table_privilege('teren',p_oid,CASE WHEN current_setting('server_version_num')::int >= 170000
+        THEN 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        ELSE 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER' END)
+      OR has_any_column_privilege('teren',p_oid,'SELECT,INSERT,UPDATE,REFERENCES');
+  END IF;
+  RETURN false;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_portal_teren_rel_drept(oid) FROM PUBLIC,anon,authenticated,service_role,teren;
+-- r21 (varianta c): amprenta de structura a unui obiect din net = EXACT expresia sectiunii G din
+-- scripts/portal/porti_citire.sql, cu acelasi search_path (pg_catalog, pg_temp: numele iesite din pg_get_* sunt calificate).
+-- r22 (Jakarinos r21 P1, L15): pe langa tip, proprietar, ACL, RLS, FORCE RLS si coloane (numar, nume, tip, NOT NULL, ACL),
+-- amprenta are tot ce schimba COMPORTAMENTUL unui INSERT / SELECT pe obiect: DEFAULT-ul, IDENTITY si GENERATED pe fiecare
+-- coloana; triggerele (definitia completa cu evenimente si WHEN, starea, corpul functiei); politicile (comanda, permisiva,
+-- roluri, USING, WITH CHECK); regulile; constrangerile (si FK-urile care trimit spre obiect); indecsii; pentru secventa
+-- parametrii (fara valoarea curenta) si coloana care o detine; plus corpul / DEFINER / proprietarul / configuratia oricarei
+-- functii de aplicatie de care depind acestea (pg_depend). Paritatea textului: scripts/portal/test_static_net_rel.py;
+-- pe PostgreSQL: scripts/portal/net_rel_pglite.mjs + harness-ul PG17. Fara randuri din tabele.
+-- r25 (Jakarinos r24 P1): + mostenirea / partitionarea (parintii, toti urmasii cu proprietar / drepturi / RLS) + INCHIDEREA
+-- TRANZITIVA a functiilor dependente (apelurile pe nume din corp, cu blocul REZOLVARE_APEL comun cu auditul N din
+-- porti_citire.sql, si corpurile BEGIN ATOMIC), fiecare cu definitie / DEFINER / proprietar / configuratie / drepturi.
+-- CE ESTE (afirmatia exacta): amprenta STRUCTURII si a DREPTURILOR obiectului si a codului SQL care ruleaza la o scriere /
+-- citire a lui, urmarit pe nume. NU este o amprenta "completa" a comportamentului: nu vede apelurile prin operatori,
+-- cast-uri sau functiile de I/O ale tipurilor, SQL-ul construit din bucati la rulare (EXECUTE fara numele in text),
+-- codul C al extensiilor (aceeasi definitie SQL, alta biblioteca), datele din tabelele citite de functii, setarile (GUC).
+CREATE FUNCTION public.fn_portal_net_rel_amprenta(p_oid oid) RETURNS text
+LANGUAGE sql STABLE SET search_path TO 'pg_catalog','pg_temp' AS $fn$
+ SELECT
+  -- AMPRENTA_NET_REL inceput
+  jsonb_build_array(c.relkind::text, pg_get_userbyid(c.relowner), c.relacl::text, c.relrowsecurity,
+    c.relforcerowsecurity,
+    (SELECT jsonb_agg(jsonb_build_array(at.attnum, at.attname::text, format_type(at.atttypid, at.atttypmod),
+                                        at.attnotnull, at.attacl::text, at.attidentity::text, at.attgenerated::text,
+                                        (SELECT pg_get_expr(ad.adbin, ad.adrelid) FROM pg_attrdef ad
+                                          WHERE ad.adrelid = at.attrelid AND ad.adnum = at.attnum)) ORDER BY at.attnum)
+       FROM pg_attribute at WHERE at.attrelid = c.oid AND at.attnum > 0 AND NOT at.attisdropped),
+    (SELECT jsonb_agg(jsonb_build_array(tg.tgname::text, tg.tgenabled::text, tg.tgisinternal, pg_get_triggerdef(tg.oid),
+                                        md5(pg_get_functiondef(tg.tgfoid))) ORDER BY tg.tgname::text COLLATE "C")
+       FROM pg_trigger tg WHERE tg.tgrelid = c.oid),
+    (SELECT jsonb_agg(jsonb_build_array(po.polname::text, po.polcmd::text, po.polpermissive,
+                                        (SELECT jsonb_agg(CASE WHEN pr.rol = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(pr.rol) END
+                                                          ORDER BY pr.poz)
+                                           FROM unnest(po.polroles) WITH ORDINALITY AS pr(rol, poz)),
+                                        pg_get_expr(po.polqual, po.polrelid), pg_get_expr(po.polwithcheck, po.polrelid))
+                      ORDER BY po.polname::text COLLATE "C")
+       FROM pg_policy po WHERE po.polrelid = c.oid),
+    (SELECT jsonb_agg(jsonb_build_array(ru.rulename::text, ru.ev_enabled::text, pg_get_ruledef(ru.oid))
+                      ORDER BY ru.rulename::text COLLATE "C")
+       FROM pg_rewrite ru WHERE ru.ev_class = c.oid),
+    (SELECT jsonb_agg(jsonb_build_array(co.conname::text, co.conrelid::regclass::text, co.contype::text, co.condeferrable,
+                                        co.condeferred, co.convalidated, pg_get_constraintdef(co.oid))
+                      ORDER BY co.conrelid::regclass::text COLLATE "C", co.conname::text COLLATE "C")
+       FROM pg_constraint co WHERE co.conrelid = c.oid OR co.confrelid = c.oid),
+    (SELECT jsonb_agg(pg_get_indexdef(ix.indexrelid) ORDER BY pg_get_indexdef(ix.indexrelid) COLLATE "C")
+       FROM pg_index ix WHERE ix.indrelid = c.oid),
+    (SELECT jsonb_build_array(format_type(sq.seqtypid, NULL), sq.seqstart, sq.seqincrement, sq.seqmax, sq.seqmin,
+                              sq.seqcache, sq.seqcycle)
+       FROM pg_sequence sq WHERE sq.seqrelid = c.oid),
+    (SELECT jsonb_agg(jsonb_build_array(dp.deptype::text, dp.refobjid::regclass::text, dp.refobjsubid)
+                      ORDER BY dp.refobjid::regclass::text COLLATE "C", dp.refobjsubid)
+       FROM pg_depend dp WHERE dp.classid = 'pg_class'::regclass AND dp.objid = c.oid
+         AND dp.refclassid = 'pg_class'::regclass AND dp.deptype IN ('a', 'i')),
+    -- r25 (Jakarinos r24 P1): mostenire / partitionare. Un copil atasat (INHERITS / ATTACH PARTITION) se citeste PRIN
+    -- obiect fara alt drept: forma partitionarii, parintii directi si TOTI urmasii (orice adancime) cu proprietarul,
+    -- drepturile si RLS-ul lor. relhassubclass ramane adevarat dupa stergerea copilului pana la primul ANALYZE (zgomot
+    -- trecator, spre rosu).
+    jsonb_build_array(c.relispartition, c.relhassubclass, pg_get_partkeydef(c.oid), pg_get_expr(c.relpartbound, c.oid)),
+    (SELECT jsonb_agg(jsonb_build_array(ih.inhparent::regclass::text, ih.inhseqno) ORDER BY ih.inhseqno)
+       FROM pg_inherits ih WHERE ih.inhrelid = c.oid),
+    (SELECT jsonb_agg(jsonb_build_array(uc.oid::regclass::text, uc.relkind::text, pg_get_userbyid(uc.relowner), uc.relacl::text,
+                                        uc.relispartition, uc.relrowsecurity, uc.relforcerowsecurity)
+                      ORDER BY uc.oid::regclass::text COLLATE "C")
+       FROM (WITH RECURSIVE urmas(oid) AS (SELECT ih.inhrelid FROM pg_inherits ih WHERE ih.inhparent = c.oid
+                                           UNION
+                                           SELECT ih.inhrelid FROM urmas u JOIN pg_inherits ih ON ih.inhparent = u.oid)
+             SELECT u.oid FROM urmas u) uu JOIN pg_class uc ON uc.oid = uu.oid),
+    -- functiile de care depind triggerele / politicile / DEFAULT-urile / constrangerile / regulile / indecsii obiectului
+    -- (pg_depend) + r25 INCHIDEREA TRANZITIVA: functiile apelate pe nume din corpul lor (REZOLVARE_APEL, aceeasi ca in
+    -- auditul N) si din corpurile BEGIN ATOMIC (pg_depend), pana la capat; fiecare cu definitia, DEFINER, proprietarul,
+    -- configuratia si drepturile. Functiile din nucleu (oid < 16384) nu se parcurg.
+    (SELECT jsonb_agg(DISTINCT jsonb_build_array(fp.oid::regprocedure::text, fp.prosecdef, pg_get_userbyid(fp.proowner),
+                                                 fp.proconfig::text, fp.proacl::text,
+                                                 CASE WHEN fp.prokind = 'a' THEN (SELECT md5(ag::text) FROM pg_aggregate ag
+                                                                                   WHERE ag.aggfnoid = fp.oid)
+                                                      ELSE md5(pg_get_functiondef(fp.oid)) END))
+       FROM (WITH RECURSIVE inchidere(oid) AS (
+               SELECT fd.refobjid FROM pg_depend fd
+                WHERE fd.refclassid = 'pg_proc'::regclass
+                  AND ((fd.classid = 'pg_trigger'::regclass AND fd.objid IN (SELECT tg.oid FROM pg_trigger tg WHERE tg.tgrelid = c.oid))
+                    OR (fd.classid = 'pg_policy'::regclass AND fd.objid IN (SELECT po.oid FROM pg_policy po WHERE po.polrelid = c.oid))
+                    OR (fd.classid = 'pg_attrdef'::regclass AND fd.objid IN (SELECT ad.oid FROM pg_attrdef ad WHERE ad.adrelid = c.oid))
+                    OR (fd.classid = 'pg_constraint'::regclass AND fd.objid IN (SELECT co.oid FROM pg_constraint co
+                                                                                 WHERE co.conrelid = c.oid))
+                    OR (fd.classid = 'pg_rewrite'::regclass AND fd.objid IN (SELECT ru.oid FROM pg_rewrite ru WHERE ru.ev_class = c.oid))
+                    OR (fd.classid = 'pg_class'::regclass AND fd.objid IN (SELECT ix.indexrelid FROM pg_index ix
+                                                                            WHERE ix.indrelid = c.oid)))
+               UNION
+               SELECT x.la FROM inchidere i JOIN pg_proc p ON p.oid = i.oid
+                      CROSS JOIN LATERAL (
+                        SELECT rz.la FROM (
+                          -- REZOLVARE_APEL inceput
+                          SELECT DISTINCT m.q, m.nume, g.oid AS la
+                            FROM (SELECT CASE WHEN r.t[1] IS NULL THEN NULL WHEN left(r.t[1], 1) = '"' THEN btrim(r.t[1], '"')
+                                              ELSE lower(r.t[1]) END AS q,
+                                         CASE WHEN left(r.t[2], 1) = '"' THEN btrim(r.t[2], '"') ELSE lower(r.t[2]) END AS nume
+                                    FROM regexp_matches(p.prosrc, '(?:([A-Za-z_][A-Za-z0-9_$]*|"[^"]+")[[:space:]]*[.][[:space:]]*)?([A-Za-z_][A-Za-z0-9_$]*|"[^"]+")[[:space:]]*[(]', 'g') AS r(t)) m
+                                 LEFT JOIN LATERAL (
+                                   SELECT pg.oid FROM pg_proc pg JOIN pg_namespace gn ON gn.oid = pg.pronamespace
+                                    WHERE pg.proname = m.nume
+                                      AND ((m.q IS NOT NULL AND gn.nspname = m.q)
+                                        OR (m.q IS NULL AND (gn.nspname = 'pg_catalog'
+                                              OR NOT EXISTS (SELECT FROM unnest(p.proconfig) AS sc(v) WHERE sc.v LIKE 'search_path=%')
+                                              OR EXISTS (SELECT FROM unnest(p.proconfig) AS sc(v)
+                                                           CROSS JOIN LATERAL unnest(string_to_array(replace(replace(substr(sc.v, 13), ' ', ''), '"', ''), ',')) AS ss(s)
+                                                          WHERE sc.v LIKE 'search_path=%'
+                                                            AND (ss.s = gn.nspname
+                                                              OR (ss.s = '$user' AND EXISTS (SELECT FROM pg_roles ro WHERE ro.rolname = gn.nspname)))))))) g
+                                   ON true
+                          -- REZOLVARE_APEL sfarsit
+                          ) rz
+                        UNION
+                        SELECT dd.refobjid FROM pg_depend dd
+                         WHERE dd.classid = 'pg_proc'::regclass AND dd.objid = p.oid AND dd.refclassid = 'pg_proc'::regclass
+                           AND dd.deptype = 'n') x
+                WHERE i.oid >= 16384 AND x.la IS NOT NULL)
+             SELECT i.oid FROM inchidere i) ii JOIN pg_proc fp ON fp.oid = ii.oid
+      WHERE fp.oid >= 16384))::text
+  -- AMPRENTA_NET_REL sfarsit
+   FROM pg_class c WHERE c.oid = p_oid;
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_portal_net_rel_amprenta(oid) FROM PUBLIC,anon,authenticated,service_role,teren;
+-- r21 (varianta c): LISTA UNICA a obiectelor pg_net acceptate de poarta, cu md5-ul amprentei citit read-only pe productie
+-- (porti_citire.sql sectiunea G; textul amprentei e in jurnalul citirii). Cheia = schema.nume (quote_ident).
+-- Se schimba DOAR prin review (SHA nou); nu se invata la apply.
+-- r22: amprenta s-a completat (triggere, politici, DEFAULT-uri ...), deci valorile din 12.11 nu mai sunt valabile.
+-- r25: amprenta are si mostenirea si inchiderea tranzitiva a functiilor => valorile r22 lipite pe 12.11 seara nu mai sunt
+-- valabile (refuzate de testul static); lista revine DE_COMPLETAT pana la recitirea G pe productie.
+-- DE_COMPLETAT = necitit inca pe productie => $public_pre$ refuza (PORTAL_NET_REL_LIST_NECOMPLETATA) si poarta e rosie.
+-- Coordonatorul reruleaza porti_citire.sql pe productie (doar citire) si lipeste cele trei valori din G cu
+-- scripts/portal/net_rel_completeaza.py (aceleasi valori ajung si in testul static).
+CREATE FUNCTION public.fn_portal_net_rel_aprobat() RETURNS jsonb
+LANGUAGE sql IMMUTABLE SET search_path TO 'public','pg_temp' AS $netrel$
+ -- PORTAL_NET_REL_APROBAT: net._http_response, net.http_request_queue, net.http_request_queue_id_seq (amprenta r22, de citit pe productie)
+ SELECT '{"net._http_response":"5c3136d9172c92eee8859786db345e61","net.http_request_queue":"4b9faa9e4423a4129820c63d86ec3c8b","net.http_request_queue_id_seq":"fbd6b1bc19db8407495087c9ceb8f18a"}'::jsonb;
+$netrel$;
+REVOKE ALL ON FUNCTION public.fn_portal_net_rel_aprobat() FROM PUBLIC,anon,authenticated,service_role,teren;
+-- r21 (varianta c): obiectul e in net, e in lista si amprenta lui de acum = md5-ul revizuit. Cheie lipsa / amprenta NULL =
+-- fals (fail-closed). Predicatul unic (L19) al poartei si al preconditiei.
+-- r26 (Jakarinos r25): orice parinte sau copil (INHERITS / partitie) pe obiect = REFUZ, indiferent de amprenta. Amprenta
+-- descrie descendentii, dar nu si triggerele / functiile lor; in loc sa le amprentam, mostenirea prezenta e rosie (pe
+-- productie nu exista). Amprenta nu se schimba => valorile lipite raman valabile.
+CREATE FUNCTION public.fn_portal_net_rel_acceptat(p_oid oid) RETURNS boolean
+LANGUAGE sql STABLE SET search_path TO 'public','pg_temp' AS $fn$
+ SELECT EXISTS (SELECT FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+   WHERE c.oid=p_oid AND n.nspname='net'
+     AND NOT c.relispartition
+     AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits ih WHERE ih.inhrelid=c.oid OR ih.inhparent=c.oid)
+     AND public.fn_portal_net_rel_aprobat()->>(quote_ident(n.nspname)||'.'||quote_ident(c.relname))
+       = md5(public.fn_portal_net_rel_amprenta(c.oid)));
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_portal_net_rel_acceptat(oid) FROM PUBLIC,anon,authenticated,service_role,teren;
 CREATE TABLE public.portal_public_baseline (semnatura text PRIMARY KEY, amprenta jsonb NOT NULL);
 ALTER TABLE public.portal_public_baseline ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.portal_public_baseline FROM PUBLIC,anon,authenticated,service_role,teren,supabase_auth_admin;
@@ -287,7 +491,8 @@ BEGIN
         AND has_schema_privilege('teren',oid,'USAGE'))
       IS DISTINCT FROM ARRAY['information_schema','net','public']::text[] THEN
     v:=array_append(v,'teren scheme USAGE'); END IF;
-  FOR r IN SELECT * FROM public.portal_public_baseline WHERE semnatura NOT LIKE 'rel:%' LOOP
+  -- r23 (d): randul 'grant_d:' (GRANT-urile adaugate de 18a, pentru revenire) nu e o functie.
+  FOR r IN SELECT * FROM public.portal_public_baseline WHERE semnatura NOT LIKE 'rel:%' AND semnatura <> 'grant_d:' LOOP
     IF r.amprenta IS DISTINCT FROM (SELECT jsonb_build_array(md5(pg_get_functiondef(p.oid)),
         p.prosecdef,p.proowner,p.proconfig,p.proacl) FROM pg_proc p WHERE p.oid=to_regprocedure(r.semnatura)) THEN
       v:=array_append(v,'amprenta:'||r.semnatura); END IF;
@@ -299,31 +504,42 @@ BEGIN
   FOR r IN SELECT c.oid,c.relkind,c.relname,n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname <> 'pg_catalog' AND n.nspname !~ '^pg_(toast|temp)_'
       AND has_schema_privilege('teren',n.oid,'USAGE') AND c.relkind IN ('r','p','v','m','f','S') ORDER BY c.oid LOOP
+    -- r21: orice drept al lui teren (tabel / coloane / secventa) = fn_portal_teren_rel_drept (aceeasi definitie in $public_pre$).
+    CONTINUE WHEN public.fn_portal_teren_rel_drept(r.oid) IS NOT TRUE;
+    -- r21 (varianta c): cele trei obiecte pg_net revizuite trec DOAR cu amprenta identica celei din productie; orice drept
+    -- nou, coloana noua, alt proprietar, trigger / politica / DEFAULT (r22) sau orice alt obiect din net la care teren are
+    -- acces ramane poarta rosie (relatie: / secventa:).
+    CONTINUE WHEN r.nspname='net' AND public.fn_portal_net_rel_acceptat(r.oid) IS TRUE;
     IF r.relkind='S' THEN
-      IF has_sequence_privilege('teren',r.oid,'USAGE,SELECT,UPDATE') THEN
-        v:=array_append(v,'secventa:'||r.relname); END IF;
-    -- MAINTAIN exista doar din PG17 (prod); harness-ul local PG16 il omite.
-    ELSIF has_table_privilege('teren',r.oid,CASE WHEN current_setting('server_version_num')::int >= 170000
-        THEN 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
-        ELSE 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER' END)
-      OR has_any_column_privilege('teren',r.oid,'SELECT,INSERT,UPDATE,REFERENCES') THEN
-      -- Catalogul standard permite doar SELECT-ul fixat la apply, fara DML/DDL sau granturi pe coloane noi.
-      IF r.nspname <> 'information_schema' OR r.oid >= 16384
-        OR has_table_privilege('teren',r.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
-        OR has_any_column_privilege('teren',r.oid,'INSERT,UPDATE,REFERENCES')
-        OR NOT EXISTS (SELECT FROM public.portal_public_baseline b
-          WHERE b.semnatura='rel:information_schema.'||quote_ident(r.relname)
-          AND b.amprenta=public.fn_portal_catalog_amprenta(r.oid)) THEN
-        v:=array_append(v,'relatie:'||r.relname); END IF;
+      v:=array_append(v,'secventa:'||r.relname);
+    -- Catalogul standard permite doar SELECT-ul fixat la apply, fara DML/DDL sau granturi pe coloane noi.
+    ELSIF r.nspname <> 'information_schema' OR r.oid >= 16384
+      OR has_table_privilege('teren',r.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+      OR has_any_column_privilege('teren',r.oid,'INSERT,UPDATE,REFERENCES')
+      OR NOT EXISTS (SELECT FROM public.portal_public_baseline b
+        WHERE b.semnatura='rel:information_schema.'||quote_ident(r.relname)
+        AND b.amprenta=public.fn_portal_catalog_amprenta(r.oid)) THEN
+      v:=array_append(v,'relatie:'||r.relname);
     END IF;
   END LOOP;
+  -- r21: teren ajunge la net doar daca un client poate rula SQL in net. Din baza se poate verifica doar configurarea
+  -- PostgREST scrisa IN baza (setarile rolului authenticator); cea din panoul proiectului se verifica separat
+  -- (scripts/portal/scheme_expuse.sh). net in schemele expuse / in search_path-ul suplimentar = poarta rosie.
+  IF EXISTS (SELECT FROM pg_catalog.pg_db_role_setting rs CROSS JOIN LATERAL unnest(rs.setconfig) AS s(cfg)
+      WHERE rs.setrole IN (SELECT oid FROM pg_roles WHERE rolname IN ('authenticator','teren'))
+        -- `_` din LIKE prinde orice caracter: potrivire mai larga = mai stricta (fara backslash, cerut de validatorul livrarii)
+        AND (s.cfg LIKE 'pgrst.db_schemas=%' OR s.cfg LIKE 'pgrst.db_extra_search_path=%')
+        AND 'net' = ANY (string_to_array(replace(replace(substr(s.cfg, strpos(s.cfg, '=') + 1), ' ', ''), '"', ''), ','))) THEN
+    v:=array_append(v,'teren PostgREST expune net'); END IF;
   FOR r IN SELECT p.oid,p.proname,p.proargtypes,n.nspname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
     WHERE n.nspname <> 'pg_catalog' AND n.nspname !~ '^pg_(toast|temp)_'
       AND has_schema_privilege('teren',n.oid,'USAGE') AND has_function_privilege('teren',p.oid,'EXECUTE') ORDER BY p.oid LOOP
     -- Semnatura canonica: schema + nume + tipuri (fara numele argumentelor).
     v_signature := quote_ident(r.nspname) || '.' || quote_ident(r.proname) || '(' || oidvectortypes(r.proargtypes) || ')';
+    -- r23 (d): in public teren executa DOAR cele doua functii ale portalului; baseline-ul nu mai acopera public
+    -- (cele 21 sunt in baseline doar pentru amprenta lor). In net / information_schema: lista din baseline, ca pana acum.
     IF v_signature NOT IN ('public.fn_teren_eligibil(uuid)','public.fn_portal_uid()')
-      AND NOT EXISTS (SELECT FROM public.portal_public_baseline WHERE semnatura=v_signature) THEN
+      AND (r.nspname = 'public' OR NOT EXISTS (SELECT FROM public.portal_public_baseline WHERE semnatura=v_signature)) THEN
       v:=array_append(v,'functie:'||v_signature);
     END IF;
   END LOOP;
@@ -370,7 +586,126 @@ BEGIN
       WHERE p.oid=to_regprocedure(r.key) AND pg_get_userbyid(p.proowner)=c_net_owner) THEN
       RAISE EXCEPTION 'PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED'; END IF;
   END LOOP;
+  -- r21 (varianta c): lista obiectelor pg_net acceptate are forma ceruta (cheie net.<nume>, md5), iar orice relatie /
+  -- secventa din net la care ajunge teren e in lista, cu amprenta identica (acelasi predicat ca poarta). Un obiect din
+  -- lista la care teren nu mai ajunge (drepturi retrase) nu e o abatere: e raportat, nu refuzat.
+  -- r22: lista necompletata (amprenta noua, necitita inca pe productie) = refuz explicit, inaintea formei.
+  IF jsonb_typeof(public.fn_portal_net_rel_aprobat()) = 'object'
+    AND EXISTS (SELECT FROM jsonb_each(public.fn_portal_net_rel_aprobat()) e WHERE e.value = '"DE_COMPLETAT"'::jsonb) THEN
+    RAISE EXCEPTION 'PORTAL_NET_REL_LIST_NECOMPLETATA: valorile din porti_citire.sql G (productie) nu sunt lipite in 18a';
+  END IF;
+  IF jsonb_typeof(public.fn_portal_net_rel_aprobat()) IS DISTINCT FROM 'object'
+    OR EXISTS (SELECT FROM jsonb_each(public.fn_portal_net_rel_aprobat()) e
+      WHERE e.key !~ '^net[.][a-z_][a-z0-9_]*$' OR jsonb_typeof(e.value) IS DISTINCT FROM 'string'
+        OR e.value #>> '{}' !~ '^[0-9a-f]{32}$') THEN
+    RAISE EXCEPTION 'PORTAL_NET_REL_LIST_INVALID'; END IF;
+  SELECT coalesce(array_agg(quote_ident(n.nspname)||'.'||quote_ident(c.relname) ORDER BY c.relname COLLATE "C"),'{}')
+    INTO v_live FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='net' AND c.relkind IN ('r','p','v','m','f','S')
+      AND public.fn_portal_teren_rel_drept(c.oid) IS TRUE AND public.fn_portal_net_rel_acceptat(c.oid) IS NOT TRUE;
+  IF cardinality(v_live) > 0 THEN
+    RAISE EXCEPTION 'PORTAL_NET_REL_UNREVIEWED_OR_CHANGED: %', array_to_string(v_live, ', '); END IF;
+  RAISE NOTICE 'PORTAL_NET_REL: % obiecte pg_net accesibile prin PUBLIC, toate cu amprenta revizuita (% in lista)',
+    (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='net' AND c.relkind IN ('r','p','v','m','f','S') AND public.fn_portal_teren_rel_drept(c.oid) IS TRUE),
+    (SELECT count(*) FROM jsonb_object_keys(public.fn_portal_net_rel_aprobat()));
 END $public_pre$;
+-- r23 (varianta d): clasificarea celor 21, revizuita din productie (porti_citire.sql M, 12.11.2026: trigger_fn).
+-- granturi = rolurile care primesc EXECUTE explicit (gol = functie de trigger: nu se apeleaza direct, fara GRANT).
+-- Cele 3 apelabile: get_istoric_importuri_evogps = RPC din UI (src/Logistica.jsx, rol authenticated); celelalte doua
+-- nu au apelant in repo / cron (sectiunea I) => aceleasi doua roluri ca API-ul de azi, ca nimic sa nu se strice;
+-- apelantii reali din baza se citesc inainte de apply cu scripts/portal/public21_apelanti.sql (E1_RAPORT.md r23).
+CREATE TEMP TABLE portal_public_clasificare ON COMMIT DROP AS
+SELECT v.semnatura, v.granturi::text[] AS granturi FROM (VALUES
+ -- PORTAL_PUBLIC_CLASIFICARE: 18 de trigger (granturi gol) + 3 apelabile
+ ('public.auto_cost_from_tichet()','{}'),
+ ('public.auto_flag_agabaritic()','{}'),
+ ('public.check_alerta_consum()','{}'),
+ ('public.fn_claude_context_cleanup()','{authenticated,service_role}'),
+ ('public.fn_contracte_linii_updated_at()','{}'),
+ ('public.fn_executie_touch_updated_at()','{}'),
+ ('public.fn_notif_lipsa_fisa_service(bigint)','{authenticated,service_role}'),
+ ('public.fn_trg_categorie_cantitate()','{}'),
+ ('public.gen_numar_transport()','{}'),
+ ('public.get_istoric_importuri_evogps()','{authenticated,service_role}'),
+ ('public.hr_recrutare_touch_updated_at()','{}'),
+ ('public.notify_tichet_opener_on_resolve()','{}'),
+ ('public.set_updated_at()','{}'),
+ ('public.tg_active_lipsa_fisa()','{}'),
+ ('public.tg_hr_employees_private_touch()','{}'),
+ ('public.tg_lsf_touch_updated()','{}'),
+ ('public.update_hr_semnaturi_modificat_la()','{}'),
+ ('public.update_modificat_la_hr_docp()','{}'),
+ ('public.update_modificat_la_ord_setari()','{}'),
+ ('public.update_stoc_achizitie()','{}'),
+ ('public.update_stoc_rezervor()','{}')
+) v(semnatura,granturi);
+CREATE TEMP TABLE portal_public_grant_d (semnatura text NOT NULL, rol text NOT NULL) ON COMMIT DROP;
+-- r23 (d): (1) forma clasificarii + verificarea pe catalog + ce GRANT-uri lipsesc (inregistrate pentru revenire), fara SQL
+-- dinamic (regula bugetului de lock: nimic neanalizabil inainte de $locks$); (2) GRANT / REVOKE statice, exact pe lista
+-- clasificarii (testul static compara listele); (3) postconditia pe catalog. Ating doar ACL-ul celor 21 (randurile lor
+-- din pg_proc), niciun tabel de aplicatie. Un apelant concurent al unei functii apelabile nu e blocat; vede ACL-ul nou la COMMIT.
+DO $public_d_pre$
+DECLARE r record; v text[] := '{}';
+BEGIN
+  IF (SELECT count(*) FROM pg_temp.portal_public_clasificare) <> 21
+    OR (SELECT array_agg(c.semnatura ORDER BY c.semnatura COLLATE "C") FROM pg_temp.portal_public_clasificare c)
+      IS DISTINCT FROM (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(public.fn_portal_public_aprobat()) x)
+    OR EXISTS (SELECT FROM pg_temp.portal_public_clasificare c WHERE c.granturi IS NULL
+      OR EXISTS (SELECT FROM unnest(c.granturi) gr WHERE gr IS NULL OR gr NOT IN ('authenticated','service_role')
+        OR to_regrole(gr) IS NULL)
+      OR cardinality(c.granturi) <> (SELECT count(DISTINCT gr) FROM unnest(c.granturi) gr)) THEN
+    RAISE EXCEPTION 'PORTAL_PUBLIC_CLASIFICARE_INVALIDA'; END IF;
+  -- de trigger (fara GRANT) <=> intoarce trigger, pe catalog; proprietar postgres (cerut si de $public_pre$)
+  FOR r IN SELECT c.semnatura, c.granturi, p.oid, p.prorettype, p.proowner FROM pg_temp.portal_public_clasificare c
+      LEFT JOIN pg_catalog.pg_proc p ON p.oid = to_regprocedure(c.semnatura) ORDER BY c.semnatura COLLATE "C" LOOP
+    IF r.oid IS NULL OR r.proowner IS DISTINCT FROM 'postgres'::regrole
+      OR (r.prorettype = 'trigger'::regtype) IS DISTINCT FROM (cardinality(r.granturi) = 0) THEN
+      v := array_append(v, r.semnatura); END IF;
+  END LOOP;
+  IF cardinality(v) > 0 THEN RAISE EXCEPTION 'PORTAL_PUBLIC_CLASIFICARE_SCHIMBATA: %', array_to_string(v, ', '); END IF;
+  -- GRANT-urile care lipsesc azi (rolul nu are EXECUTE explicit, de la nimeni): GRANT-ul static de mai jos le adauga,
+  -- revenirea le retrage exact pe ele. Celelalte exista deja si raman neatinse (GRANT pe un drept existent = fara efect).
+  INSERT INTO pg_temp.portal_public_grant_d(semnatura, rol)
+  SELECT c.semnatura, gr FROM pg_temp.portal_public_clasificare c CROSS JOIN LATERAL unnest(c.granturi) AS gr
+   WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_proc p
+                       CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                      WHERE p.oid = to_regprocedure(c.semnatura) AND a.grantee = to_regrole(gr) AND a.privilege_type = 'EXECUTE');
+END $public_d_pre$;
+-- PORTAL_PUBLIC_D_GRANT inceput (exact functiile cu granturi din clasificare, catre exact acele roluri)
+GRANT EXECUTE ON FUNCTION public.fn_claude_context_cleanup(), public.fn_notif_lipsa_fisa_service(bigint),
+  public.get_istoric_importuri_evogps() TO authenticated, service_role;
+-- PORTAL_PUBLIC_D_GRANT sfarsit
+-- PORTAL_PUBLIC_D_REVOKE inceput (exact cele 21 din clasificare)
+REVOKE EXECUTE ON FUNCTION public.auto_cost_from_tichet(), public.auto_flag_agabaritic(), public.check_alerta_consum(),
+  public.fn_claude_context_cleanup(), public.fn_contracte_linii_updated_at(), public.fn_executie_touch_updated_at(),
+  public.fn_notif_lipsa_fisa_service(bigint), public.fn_trg_categorie_cantitate(), public.gen_numar_transport(),
+  public.get_istoric_importuri_evogps(), public.hr_recrutare_touch_updated_at(), public.notify_tichet_opener_on_resolve(),
+  public.set_updated_at(), public.tg_active_lipsa_fisa(), public.tg_hr_employees_private_touch(), public.tg_lsf_touch_updated(),
+  public.update_hr_semnaturi_modificat_la(), public.update_modificat_la_hr_docp(), public.update_modificat_la_ord_setari(),
+  public.update_stoc_achizitie(), public.update_stoc_rezervor() FROM PUBLIC;
+-- PORTAL_PUBLIC_D_REVOKE sfarsit
+DO $public_d_post$
+DECLARE r record; v text[] := '{}';
+BEGIN
+  FOR r IN SELECT c.semnatura, c.granturi, to_regprocedure(c.semnatura) AS f FROM pg_temp.portal_public_clasificare c
+      ORDER BY c.semnatura COLLATE "C" LOOP
+    IF EXISTS (SELECT FROM pg_catalog.pg_proc p CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+        WHERE p.oid = r.f AND a.grantee = 0 AND a.privilege_type = 'EXECUTE')
+      OR has_function_privilege('teren', r.f, 'EXECUTE')
+      OR EXISTS (SELECT FROM unnest(r.granturi) gr WHERE NOT has_function_privilege(gr, r.f, 'EXECUTE')) THEN
+      v := array_append(v, r.semnatura); END IF;
+  END LOOP;
+  SELECT v || coalesce(array_agg('teren executa: ' || p.oid::regprocedure::text ORDER BY p.oid), '{}') INTO v
+    FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND has_function_privilege('teren', p.oid, 'EXECUTE')
+     AND p.oid NOT IN ('public.fn_teren_eligibil(uuid)'::regprocedure, 'public.fn_portal_uid()'::regprocedure);
+  IF cardinality(v) > 0 THEN RAISE EXCEPTION 'PORTAL_PUBLIC_D_POSTCONDITIE: %', array_to_string(v, ', '); END IF;
+  RAISE NOTICE 'PORTAL_PUBLIC_D: 21 functii fara PUBLIC (% de trigger, % apelabile); GRANT-uri adaugate: %',
+    (SELECT count(*) FROM pg_temp.portal_public_clasificare WHERE cardinality(granturi) = 0),
+    (SELECT count(*) FROM pg_temp.portal_public_clasificare WHERE cardinality(granturi) > 0),
+    (SELECT count(*) FROM pg_temp.portal_public_grant_d);
+END $public_d_post$;
 ALTER TABLE public.portal_public_baseline DISABLE TRIGGER portal_public_baseline_imuabil;
 INSERT INTO public.portal_public_baseline
 SELECT quote_ident(n.nspname)||'.'||quote_ident(p.proname)||'('||oidvectortypes(p.proargtypes)||')',
@@ -386,6 +721,10 @@ WHERE n.nspname='information_schema' AND c.oid<16384 AND c.relkind IN ('r','v')
  AND has_table_privilege('teren',c.oid,'SELECT')
  AND NOT has_table_privilege('teren',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
  AND NOT has_any_column_privilege('teren',c.oid,'INSERT,UPDATE,REFERENCES');
+-- r23 (d): GRANT-urile adaugate de $public_d$ (semnatura, rol), pentru revenire; '[]' = niciunul (rolurile aveau deja drept).
+INSERT INTO public.portal_public_baseline
+SELECT 'grant_d:', coalesce(jsonb_agg(jsonb_build_array(g.semnatura, g.rol) ORDER BY g.semnatura COLLATE "C", g.rol COLLATE "C"), '[]'::jsonb)
+FROM pg_temp.portal_public_grant_d g;
 ALTER TABLE public.portal_public_baseline ENABLE TRIGGER portal_public_baseline_imuabil;
 
 -- Tabelele portalului. r10: create INAINTEA lock-urilor, FARA FK (FK-urile spre auth.users / employees se adauga in
@@ -534,7 +873,7 @@ BEGIN
 END $locks$;
 -- r10: sectiunea critica = O SINGURA instructiune (un singur drum dus-intors client-server), toata sub plafon.
 DO $critic$
-DECLARE v text[]; v_count bigint; v_erp bigint; v_snapshot jsonb;
+DECLARE v text[]; v_count bigint; v_erp bigint; v_snapshot jsonb; v_porti text[];
 BEGIN
   -- 1. FK-urile tabelelor noi (goale): SHARE ROW EXCLUSIVE pe auth.users / employees, deja detinut.
   ALTER TABLE public.conturi_tip ADD CONSTRAINT conturi_tip_auth_user_id_fkey
@@ -585,7 +924,8 @@ SELECT id,CASE WHEN EXISTS (SELECT FROM pg_temp.portal_teren_aprobat t
   SELECT t.auth_user_id,p.employee_id,'activ' FROM public.conturi_tip t
     JOIN public.profiles p ON p.id=t.auth_user_id WHERE t.tip='teren';
   -- 5. postconditia (poarta completa) si amprenta pentru revenire
-  IF public.fn_portal_porti_lipsa() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED'; END IF;
+  v_porti := public.fn_portal_porti_lipsa();
+  IF v_porti IS DISTINCT FROM '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED: % porti: %', coalesce(cardinality(v_porti)::text, 'NECUNOSCUT'), coalesce(array_to_string(v_porti, '; '), 'NECUNOSCUT'); END IF;
   SELECT jsonb_build_object(
     'tip',(SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY auth_user_id),'[]') FROM public.conturi_tip t),
     'teren',(SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY auth_user_id),'[]') FROM public.conturi_teren t),
@@ -595,7 +935,8 @@ SELECT id,CASE WHEN EXISTS (SELECT FROM pg_temp.portal_teren_aprobat t
       SELECT 'f:'||p.oid AS cheie,jsonb_build_array('functie',p.oid,pg_get_functiondef(p.oid),p.proowner,p.proacl,p.proconfig) AS obj
       FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='public' AND p.proname IN ('fn_auth_token_hook','fn_teren_eligibil','fn_portal_porti_lipsa',
-        'fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid')
+        'fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid',
+        'fn_portal_net_rel_aprobat','fn_portal_net_rel_amprenta','fn_portal_net_rel_acceptat','fn_portal_teren_rel_drept')
       UNION ALL
       SELECT 'r:'||c.oid,jsonb_build_array('relatie',c.relname,c.relkind,c.relowner,c.relacl,c.relrowsecurity,c.relforcerowsecurity)
       FROM pg_class c WHERE c.oid IN ('public.conturi_tip'::regclass,'public.conturi_teren'::regclass,

@@ -14,11 +14,18 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import ProbeTerenMobil from './ProbeTerenMobil.jsx'
 import { MeteoBadge } from './Meteo.jsx'
+import MeteoZiXweather from './MeteoZiXweather.jsx'
 import { combinaUtilaje } from './raportUtilaje.js'
 import { DIAMETRE_PE, TIPURI_SUDURA, randNou, valideaza, pentruSalvare, dinBd, antetImplicit } from './raportDistributie.js'
 import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
 // Raportul legat de devize (20261208a): obiecte pe raport, ținte din v_executie_tinte, linii salvate atomic prin RPC
 import { blocNou, blocuriDinLinii, liniiDinBlocuri, activitatiBloc, tintaPe, fmtNr, citesteTinte, cantitateLinie } from './devizTinte.js'
+// Rezumatul scurt salvat pe raport (20261216a): îl scrie serverul la salvare; aici se vede, se copiază, se corectează
+import RubricaRezumat from './RubricaRezumat.jsx'
+// Uscare conductă (20261225a) pe telefon: butonul apare după dreptul pe modulul Execuție (owner / editor / admin, o citire ușoară);
+// proiectele și dreptul pe fiecare (fn_executie_nod_drept) se verifică abia la apăsare, în UscareMobil
+import UscareMobil from './UscareMobil.jsx'
+import { arataButonUscare } from './uscareMobilLogica.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -61,6 +68,8 @@ export default function AppMobilManageri() {
   const [sites, setSites] = useState([])
   const [loading, setLoading] = useState(true)
   const [probeWrite, setProbeWrite] = useState(false)
+  // butonul „Uscare conductă”: doar condiția de modul (fără enumerare de proiecte la deschidere); dreptul real îl dă serverul la apăsare
+  const [areUscare, setAreUscare] = useState(false)
 
   useEffect(() => {
     (async () => {
@@ -68,8 +77,15 @@ export default function AppMobilManageri() {
       if (!user) { setLoading(false); return }
       const { data: prof } = await supabase.from('profiles').select('id, name, role, is_owner').eq('id', user.id).maybeSingle()
       setProfile(prof || null)
-      const { data: probeDrept, error: probeErr } = await supabase.rpc('probe_teren_drept', { p_scriere: true })
+      // o singură citire ușoară (rândul propriu din user_module_access, ca la Logistica / Marketing), în paralel cu dreptul probelor;
+      // owner-ul nu are nevoie de ea; o eroare = „necunoscut” -> butonul se arată, verificarea de la apăsare decide (L18)
+      const [{ data: probeDrept, error: probeErr }, accesExecutie] = await Promise.all([
+        supabase.rpc('probe_teren_drept', { p_scriere: true }),
+        prof?.is_owner === true ? null : Promise.resolve(supabase.from('user_module_access').select('access_level').eq('profile_id', user.id).eq('module', 'executie'))
+          .catch(e => ({ data: null, error: e || { message: 'eroare' } })),
+      ])
       setProbeWrite(!probeErr && probeDrept === true)
+      setAreUscare(arataButonUscare(prof, accesExecutie))
       let siteList = []
       if (prof?.is_owner) {
         const { data } = await supabase.from('sites').select('id, name').eq('active', true).order('name')
@@ -87,6 +103,7 @@ export default function AppMobilManageri() {
 
   if (view === 'raport') return <RaportZilnic profile={profile} sites={sites} onBack={() => setView('launcher')} />
   if (view === 'probe' && probeWrite) return <ProbeTerenMobil profile={profile} onBack={() => setView('launcher')} />
+  if (view === 'uscare' && areUscare) return <UscareMobil client={supabase} onBack={() => setView('launcher')} />
 
   // ── Launcher ──
   const butoane = [
@@ -94,6 +111,7 @@ export default function AppMobilManageri() {
     { icon: '⏱️', label: 'Pontaj\nechipă', color: G.blue, onClick: () => nav('/pontaj') },
     { icon: '🎫', label: 'Raportare\nproblemă', color: G.orange, onClick: () => nav('/tichete?action=new') },
     { icon: '🚛', label: 'Cerere\ntransport', color: G.green, onClick: () => nav('/logistica') },
+    ...(areUscare ? [{ icon: '💨', label: 'Uscare\nconductă', color: G.purple, onClick: () => setView('uscare'), tot: true }] : []),
   ]
   return (
     <Shell>
@@ -104,6 +122,7 @@ export default function AppMobilManageri() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         {butoane.map((b, i) => (
           <button key={i} onClick={b.onClick} style={{
+            ...(b.tot ? { gridColumn: '1 / -1' } : {}),
             background: G.surface, border: `1px solid ${G.border}`, borderLeft: `4px solid ${b.color}`,
             borderRadius: 16, padding: '26px 14px', cursor: 'pointer', minHeight: 130,
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12,
@@ -161,6 +180,7 @@ function RaportZilnic({ profile, sites, onBack }) {
   const [poze, setPoze] = useState([])           // File[] noi (de urcat)
   const [pozeExistente, setPozeExistente] = useState([])  // [{path, url}] din raport salvat
   const [existingId, setExistingId] = useState(null)      // id raport azi dacă există → editare
+  const [raportSalvat, setRaportSalvat] = useState(null)  // rândul salvat (rezumatul lui), din același instantaneu cu versiunea
   const [loadingData, setLoadingData] = useState(false)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
@@ -175,6 +195,7 @@ function RaportZilnic({ profile, sites, onBack }) {
     setIncarcat(null)
     setLoadingData(true)
     setMsg(null)
+    setRaportSalvat(null)
     // ── Activitățile proiectului legat de lucrare (Faza 5 pas 3) ──
     const { data: siteRow } = await supabase.from('sites').select('proiect_id, name, adresa').eq('id', sid).maybeSingle()
     if (!viu()) return
@@ -249,6 +270,7 @@ function RaportZilnic({ profile, sites, onBack }) {
         if (existing.distributie_antet) setDAntet(existing.distributie_antet)
       }
       setExistingId(existing.id)
+      setRaportSalvat(existing)
       setLucrari(existing.lucrari_efectuate || '')
       setMasini(existing.masini || '')
       setProbleme(existing.probleme || '')
@@ -624,6 +646,8 @@ function RaportZilnic({ profile, sites, onBack }) {
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
         {siteId && <div style={{ marginTop: 8 }}><MeteoBadge siteId={siteId} /></div>}
+        {/* vremea ZILEI raportului (20261221a): rezumatul Vaisala Xweather, preluat automat după miezul nopții; nimic de completat */}
+        {siteId && <MeteoZiXweather siteId={siteId} data={dataRaport} compact />}
       </div>
 
       {siteId && (loadingData ? (
@@ -634,6 +658,17 @@ function RaportZilnic({ profile, sites, onBack }) {
             <div style={{ padding: '10px 14px', borderRadius: 10, marginBottom: 16, background: G.yellow + '22', color: G.yellow, fontSize: 13, fontWeight: 600, textAlign: 'center' }}>
               {`✏️ Există deja raport pe ${fmtDate(dataRaport)} pentru această lucrare — îl editezi (nu se creează duplicat).`}
             </div>
+          )}
+          {/* rezumatul raportului salvat (20261216a): de copiat pe WhatsApp; o corectură mărește versiunea, deci formularul o preia (CAS) */}
+          {raportSalvat && 'rezumat_sursa' in raportSalvat && (
+            <Section title="📝 Rezumat (pentru WhatsApp / director)" hint="al raportului salvat">
+              <RubricaRezumat raport={raportSalvat} poateEdita={!saving} compact
+                onActualizat={(row) => {
+                  if (row.id !== existingId) return
+                  setRaportSalvat(r => (r && r.id === row.id ? { ...r, ...row } : r))
+                  if (Number.isInteger(row.versiune_salvare)) setVersiune(row.versiune_salvare)
+                }} />
+            </Section>
           )}
           {/* Personal auto din pontaj */}
           <Section title="👷 Personal (din pontaj)" hint="completat automat — ajustează dacă e cazul">

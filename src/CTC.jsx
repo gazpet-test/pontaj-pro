@@ -13,6 +13,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import CtcCarti from './ctc/CtcCarti.jsx'
 import CtcTemplate from './ctc/CtcTemplate.jsx'
+import CtcAutorizatii from './ctc/CtcAutorizatii.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card2:'#1C2128', border:'#30363D',
@@ -202,7 +203,8 @@ function ArhivaComenzi() {
 }
 
 // ─── Pagina modulului: taburi ───────────────────────────────────
-const TABURI = [['carti', '📑 Cărți tehnice'], ['template', '🧩 Template-uri'], ['arhiva', '🗄 Arhivă comenzi']]
+// TKT-2026-0389: „🪪 Autorizații” — autorizațiile sudorilor pentru cartea tehnică, doar citire, fără acces HR (20261222b)
+const TABURI = [['carti', '📑 Cărți tehnice'], ['template', '🧩 Template-uri'], ['arhiva', '🗄 Arhivă comenzi'], ['autorizatii', '🪪 Autorizații']]
 
 export default function CTCPage() {
   const [tab, setTab] = useState(() => { try { return localStorage.getItem('ctc_tab') || 'carti' } catch (_) { return 'carti' } })
@@ -235,7 +237,7 @@ export default function CTCPage() {
           </div>
         </div>
       </div>
-      {tab === 'carti' ? <CtcCarti profile={profile} /> : tab === 'template' ? <CtcTemplate /> : <ArhivaComenzi />}
+      {tab === 'carti' ? <CtcCarti profile={profile} /> : tab === 'template' ? <CtcTemplate /> : tab === 'autorizatii' ? <CtcAutorizatii /> : <ArhivaComenzi />}
     </div>
   )
 }

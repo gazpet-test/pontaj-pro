@@ -1,0 +1,70 @@
+name: Întreabă echipa - matricea generativă completă
+
+# Produsul COMPLET al matricei generative (worker/intrebari-tehnice/generativ.mjs, criteriul L25): 32.954.280 de cazuri, rulate de
+# două ori (fire de lucru din vitest + procesul Node real cu flagurile din motor.py), cu aceeași amprentă sha256 pe fiecare lot.
+# Pe o singură mașină GitHub (4 nuclee) nu încape în timpul unui test, iar în `npm test` (jobul „verificare”) rulează eșantionul
+# acoperitor (familiile mici complet + toate tripletele de valori la cele mari). Aici: produsul complet, împărțit în 4 părți
+# paralele (loturile i % 4 = parte), pe:
+#   - orice PR care atinge un fișier de care depinde rezultatul (închiderea importurilor testului și a procesului — testul
+#     „jobul produsului complet există…” cere ca fiecare fișier din ea să fie în lista de mai jos), și pe draft-uri;
+#     plus configurația runnerului: fișierele de configurare pe care le caută vitest (vitest.config.*, vite.config.*,
+#     vitest.workspace.*, vitest.projects.* — lista se citește în test din vitest-ul instalat), cea existentă scrisă explicit,
+#     cu importurile ei și fișierele de setup / globalSetup declarate în ea;
+#   - în fiecare noapte (prinde și schimbările mediului: Node, imaginea mașinii);
+#   - la cerere (Actions → „Run workflow”, după ce fișierul e pe main).
+# Fără secrete. Rezultatul e determinist: un PR care nu atinge niciun fișier din listă nu poate schimba ieșirile.
+on:
+  pull_request:
+    paths:
+      - 'src/intrebariMascare.js'
+      - 'src/intrebariMascare.generativ.test.js'
+      - 'worker/intrebari-tehnice/generativ.mjs'
+      - 'worker/intrebari-tehnice/generativ_proces.mjs'
+      - 'worker/intrebari-tehnice/nemascate.json'
+      - 'worker/intrebari-tehnice/vocabular_web.json'
+      - 'worker/intrebari-tehnice/cuvinte_comune.json'
+      - 'docs/intrebari/MASCARE_SI_VERDICT.md'
+      - '.github/workflows/intrebari-generativ.yml'
+      - '.github/workflows/admin-alerte.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
+      - 'vite.config.*'
+      - 'vitest.config.*'
+      - 'vitest.workspace.*'
+      - 'vitest.projects.*'
+  schedule:
+    - cron: '40 1 * * *'   # 03:40 / 04:40 ora României
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        parte: [0, 1, 2, 3]
+    env:
+      TZ: UTC
+      INTREBARI_GENERATIV_COMPLET: '1'
+      INTREBARI_GENERATIV_PARTE: ${{ matrix.parte }}/4
+    steps:
+      # acțiunile fixate pe SHA complet, cu versiunea în comentariu
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Matricea generativă - produsul complet, partea ${{ matrix.parte }} din 4
+        run: npx vitest run src/intrebariMascare.generativ.test.js --reporter=verbose

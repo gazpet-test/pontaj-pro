@@ -10,7 +10,8 @@ const GAZ = '#FF7A1A', GAZ2 = '#FFB067', APA = '#2FB6C9'
 const T = { text:'#E8EEF5', muted:'#8395A7', dim:'#4E5E6E', line:'#1C2836' }
 
 // ─── Cifre live per modul (sursă verificată în BD; eroare → null → „—") ───
-const COUNT_DEFS = {
+// exportat pentru testul „fără sesiune = zero cereri” (src/lib/sesiuneCereri.test.js)
+export const COUNT_DEFS = {
   '/panou':        { sub:'angajați activi',   q: s => s.from('employees').select('id',{count:'exact',head:true}).eq('active',true) },
   '/financiar':    { sub:`facturi ${new Date().getFullYear()}`, q: s => s.from('facturi_emise').select('id',{count:'exact',head:true}).eq('an',new Date().getFullYear()) },
   // audit 02.11 #8: aceleași filtre ca antetele modulelor (Logistică exclude NEALOCAT, HR doar autorizațiile neînlocuite, CTC = documentele comenzilor, Ofertare = licitații în lucru)

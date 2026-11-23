@@ -40,11 +40,13 @@
 #      Gate-ul 0e rulează DOAR după APLICAT + ÎNREGISTRAT confirmat, pe aceeași țintă/conexiune (-h/-p/-U/-d), într-o
 #      tranzacție READ ONLY separată. Nu există opțiune de a-l sări (cerință Copilot PR #551 F2).
 #   2  refuz la argumente, 3 refuz la artefact/validator — ambele ÎNAINTE de orice conexiune (neaplicat).
+#   40 GENERAT (doar cu --genereaza-in): fișierele livrării scrise în dosarul cerut, NICIO conexiune, nimic trimis.
 #
 # Utilizare (parola NU pe linia de comandă și nici în chat: ~/.pgpass / PGPASSFILE):
 #   bash scripts/livrare_migrare.sh --migrare supabase/migrations/<nume>.sql --sha256 <hex64> \
 #        --versiune <AAAALLZZHHMMSS> --tinta-db <baza> --tinta-sistem <system_identifier> \
 #        --tinta-host <H> --tinta-port <P> [--tinta-proiect <marcaj>] [--user U] [--plafon-tranzactie-ms N]
+#        [--genereaza-in <dir_nou>]
 #   Runda 7: aprobarea țintei = db + system_identifier + ENDPOINTUL DE SCRIERE (host:port) [+ proiect]. Pre-verificarea,
 #   tranzacția principală și reconcilierea cer în plus pg_is_in_recovery() = false (o replică fizică are același
 #   system_identifier) ⇒ altfel 22 / refuz. (Runda 9: servicii libpq refuzate, vezi mai jos.)
@@ -55,7 +57,8 @@
 #   tranzacției de livrare, armat de PostgreSQL 17 la BEGIN (ceasul transaction_timeout).
 #   Runda 11 (11.11.2026, PR #892 r14 + Jakarinos r13 P2): pe producție conexiunea trece prin pooler-ul Supabase (session
 #   mode), care NU transmite opțiunile de conectare (PGOPTIONS / options=…: serverul vede 0/default) ⇒ plafonul NU mai e
-#   parametru de pornire. Cu opțiunea, livrarea rulează pe O conexiune, în ordinea:
+#   parametru de pornire. Cu opțiunea, livrarea rulează pe O conexiune, în ordinea (r11-r13; din runda 14 BEGIN … COMMIT
+#   sunt UN singur mesaj, vezi „Runda 14” mai jos — conținutul pașilor e același):
 #     00_sesiune: SET transaction_timeout = N (instrucțiune de SESIUNE, în afara tranzacției; trece prin pooler, sursa
 #                 'session', prioritară față de ALTER ROLE/DATABASE … SET) apoi BEGIN ⇒ ceasul pornește la BEGIN cu N;
 #     0_prolog:   (prima după BEGIN) cere N/session din pg_catalog.pg_settings (calificat: un pg_temp.pg_settings nu-l poate
@@ -134,9 +137,82 @@
 #   manual); (4) o ocolire deliberată a ceasului într-un artefact aprobat poate ȚINE tranzacția (și lock-urile) deschisă
 #   peste N până ajunge la gardă — nu comite, dar închiderea întârzie; (5) ceasul serverului e ceas de perete (un salt
 #   NTP mută măsurătoarea). Validatorul și garda sunt GĂRZI DE PROTOCOL, nu autorizație.
+#   Runda 14 (12.11.2026, portal r18, proba pe producție cu owner-ul): FORMA „UN MESAJ”. Pe traseul de producție (pooler
+#   Supabase, session mode, de pe serverul din Ploiești) un drum client↔server = ~41 ms (60 × „SELECT 1;” cu psql -f
+#   într-o tranzacție = 2476 ms). În forma r11-r13 psql trimitea artefactul instrucțiune cu instrucțiune și aștepta
+#   răspunsul fiecăreia: 18a (59 de instrucțiuni) + runnerul (prolog 4, 1_pre 3, 3_inreg 3, mesajul final 1) = 70 de
+#   mesaje după BEGIN ⇒ ~70 × 41 ≈ 2,9 s DOAR de rețea > 2000 ms; serverul a închis sesiunea („terminating connection due
+#   to transaction timeout”) pe la linia 373 din 627, încă în verificări, înaintea lock-urilor; nimic schimbat.
+#   CONCLUZIE (valabilă pentru ORICE livrare cu plafon de pe un traseu cu latență): plafonul măsoară și timpul rețelei,
+#   deci o livrare instrucțiune cu instrucțiune consumă din el ~(nr. de mesaje după BEGIN) × RTT, înainte de orice lucru
+#   al migrării. Acum, cu opțiunea, TOATĂ tranzacția (BEGIN … COMMIT) e UN SINGUR mesaj de interogare (scripts/
+#   livrare_mesaj.sh — mecanismul, sursele și diferențele de semantică sunt în antetul lui):
+#     00_sesiune.sql  SET transaction_timeout = N                    (mesaj de sesiune, în afara tranzacției)
+#     5_mesaj.sql     SELECT $lm_<aleator>$<M>$lm_<aleator>$ \gexec  (serverul întoarce M, psql îl trimite ca UN mesaj)
+#       M = BEGIN; 0_prolog; DO $mesaj_unic$ (verificarea, vezi mai jos); 1_pre; COPIA; „\n;\n”; 3_inreg;
+#           NOTICE LIVRARE_TIMP; SET CONSTRAINTS ALL IMMEDIATE; SET LOCAL search_path; garda finală (+ NOTICE PLAFON_TIMP);
+#           COMMIT;
+#     9_reset.sql     RESET transaction_timeout                      (mesaj separat, după COMMIT)
+#   DOVADA, în server, la fiecare livrare (DO $mesaj_unic$, a doua instrucțiune după BEGIN, înaintea lock-urilor):
+#   current_query() = textul întregului mesaj în curs; se cer lungimea lui exactă (octeți), sha256 al restului mesajului
+#   (1_pre … COMMIT) și sha256 al copiei la poziția ei = sha256 APROBAT. Mesaj despărțit sau octet schimbat ⇒ MESAJ_UNIC,
+#   refuz, nimic comis (reconcilierea dă 10). Prologul rămâne PRIMA instrucțiune după BEGIN (raționamentul „N/session ⇒
+#   ceas pornit la BEGIN cu N” e neschimbat: între BEGIN și prolog nu rulează nimic, iar SET-ul e mesajul dinainte).
+#   DRUMURI client↔server rămase pe conexiunea livrării: conectare (TCP / TLS / autentificare), SET (1), SELECT-ul care
+#   întoarce M (1 + transferul lui M, ~2 × mărimea artefactului: tranzacție implicită proprie, sub același N, fără
+#   lock-uri), încărcarea lui M (înaintea lui BEGIN: serverul citește mesajul întreg înainte să-l execute), RESET (1).
+#   ÎNTRE BEGIN ȘI COMMIT: 0 drumuri (în forma veche: ~70 pe 18a, ~58 pe 19a). BUGETUL la 41 ms / drum: 2000 − 0 × 41 =
+#   2000 ms pentru server (prolog, lock-uri, verificări, migrare, înregistrare, gardă); în forma veche ar fi rămas
+#   2000 − 70 × 41 < 0 pe 18a și 2000 − 58 × 41 ≈ −380 ms pe 19a. Rămâne un singur efect al rețelei în interiorul
+#   ceasului: dacă clientul nu citește răspunsurile (NOTICE / rezultate), serverul se poate bloca la trimitere când i se
+#   umple bufferul de socket — timpul e numărat de ceas și de gardă (fail-closed), nu e ocolire.
+#   Proba cu latență (proxy TCP cu ~21 ms pe fiecare sens): scripts/test_portal_e1.sh, secțiunea LATENTA.
+#   Proba pe producție cu ROLLBACK (coordonatorul, cu owner-ul): scripts/portal/dry_prod_e1.sh — același text (aceleași
+#   fișiere generate de runner cu --genereaza-in, aceeași bibliotecă), cu ROLLBACK în loc de COMMIT.
+#   --genereaza-in <dir_nou> (runda 14): runnerul face TOATE verificările locale (argumente, sha256, validator) și
+#   generează fișierele, le copiază în <dir_nou> și iese cu 40 = GENERAT, FĂRĂ nicio conexiune (folosit de dry_prod_e1.sh).
 #   Fără opțiune: comportamentul de dinainte, NESCHIMBAT (psql --single-transaction, aceleași fișiere, fără SET).
 #   Cu opțiune, pre-verificarea, reconcilierea și gate-ul 0e rulează cu SET transaction_timeout = 0 înainte de BEGIN (fără
 #   plafon; un backend refolosit de pooler nu le poate impune unul rămas).
+#   Runda 15 (13.11.2026, L15 v2, docs/LIVRARE_L15_V2.md): --amprenta-globala <md5> + --diferente-globale <NUME.l15.tsv>
+#   (ÎMPREUNĂ; una fără cealaltă = refuz 2). Pași generați de runner (scripts/livrare_amprenta.sh, blocul unic
+#   scripts/amprenta_globala_v2.sql), în aceeași tranzacție:
+#     2_ag_inainte.sql  după 1_pre (lock consultativ, țintă, istoric, marcaj), ÎNAINTEA copiei: setul AMPRENTA_GLOBALA v2
+#                       calculat O DATĂ, materializat; GLOBAL ≠ cel aprobat ⇒ refuz (md5 pe familii în mesaj), nimic schimbat;
+#     4_ag_dupa.sql     după 3_inreg, înaintea timpului și a gărzii finale: setul recalculat O DATĂ; diferența rând cu rând
+#                       trebuie să fie EXACT manifestul (familie, etichetă, creat / schimbat / sters, amprenta finală) ⇒
+#                       altfel refuz, nimic comis.
+#   Cu --plafon-tranzactie-ms ambii pași sunt în mesajul unic (verificat prin current_query()); fără plafon, fișiere -f în
+#   --single-transaction. Manifestul: copie protejată, format verificat local (refuz 3); cu --aprobare, fișierul de aprobare
+#   trebuie să aibă și rândul „<hex64>  <NUME>.l15.tsv” (refuz 3 altfel); sha256-ul lui e tipărit. PGTZ / PGDATESTYLE din
+#   mediu = refuz 2 (profilul sesiunii trebuie să fie al rolului, ca la citirea baseline-ului).
+#   Fără aceste opțiuni: NIMIC schimbat (biblioteca nici nu se încarcă).
+#   Runda 16 (17.11.2026, decizia proprietarului; docs/LIVRARE_L15_V2.md §9 „Plafonul livrărilor L15 v2” și „Bugetul de lock”):
+#     * cu --amprenta-globala, --plafon-tranzactie-ms (dacă e dat) trebuie să fie EXACT AG_PLAFON_MS = 5000 (o singură definiție, în
+#       scripts/livrare_amprenta.sh) ⇒ altfel refuz 2, înainte de orice conexiune;
+#     * validatorul primește --plafon-tranzactie-ms <N> (în loc de --plafon-tranzactie): pe lângă regulile de mai sus, fiecare
+#       plafon CERUT de artefact ('<D>/session', marcajul '<D>:' || txid_current(), antetul „--plafon-tranzactie-ms <D>”) trebuie
+#       să fie exact N ⇒ altfel refuz 3 (PLAFON_DIFERIT). Deci o migrare care cere 2000 nu pleacă cu runnerul la 5000 și invers;
+#     * pe calea cu amprenta globală garda finală tipărește și LOCK_TINUT (diagnostic: cât au fost ținute până la gardă lock-urile
+#       puternice ale migrării, din momentul declarat de ea în gazpet.lock_puternic_la). Fără amprenta globală garda e neschimbată.
+#   Runda 17 (verdictul Jakarinos pe PR #1115): validatorul verifică STRUCTURAL fiecare comparație a plafonului din codul artefactului
+#     (altă formă = PLAFON_FORMA, refuz 3); FĂRĂ --plafon-tranzactie-ms validatorul primește --fara-plafon, deci un artefact care CERE plafon
+#     e refuzat aici (PLAFON_LIPSA, refuz 3, înainte de conexiune), nu abia în $pre$. Artefactele fără cerere de plafon: neschimbat.
+#   Runda 18 (22.11.2026, decizia proprietarului, varianta A; docs/LIVRARE_L15_V2.md §9 „Plafonul extins”): --plafon-extins (fără valoare).
+#     Pe producție pasul „înainte” singur a durat ~1,5 s (28.562 rânduri), iar manifestul lui 20270105a (276 obiecte) a fost oprit de
+#     transaction_timeout = 5000 (nimic comis). Cu opțiunea, DOAR împreună cu --amprenta-globala + --diferente-globale, plafonul trebuie să fie
+#     EXACT AG_PLAFON_EXTINS_MS (15000, o singură definiție în scripts/livrare_amprenta.sh) ⇒ altfel refuz 2; fără opțiune, 15000 e refuzat ca
+#     azi (doar 5000). Fereastra orară (AG_FEREASTRA_DE–AG_FEREASTRA_PANA, Europe/Bucharest, în afara orelor de lucru) se verifică LOCAL,
+#     înainte de orice conexiune (regula UE a orei de vară, fără baza de fusuri a mașinii; refuz 2 în afara ei; sărită doar cu --genereaza-in,
+#     care nu se conectează) ȘI PE SERVER, în tranzacție: fișierul generat 1a_fereastra.sql (DO $plafon_fereastra$, pe
+#     transaction_timestamp() AT TIME ZONE 'Europe/Bucharest') stă primul în restul mesajului, după verificarea „un mesaj” și înaintea lock-ului
+#     consultativ ⇒ în afara ferestrei excepție, nimic comis. Validatorul primește și el --plafon-extins: artefactul trebuie să DECLARE opțiunea
+#     în antet (și invers, un artefact care o declară nu pleacă fără ea) ⇒ PLAFON_EXTINS_DIFERIT, refuz 3; acordul valorii rămâne PLAFON_DIFERIT.
+#     Bugetul de lock (1 s de la prima încercare) și LOCK_TINUT (diagnostic) NU se schimbă. Fără opțiune: NIMIC schimbat (paritate cu main).
+#   Runda 19 (verdictul Jakarinos pe PR #1169, r2 — fereastra ocolibilă prin generatorul de manifest): valoarea plafonului și fereastra trec
+#     printr-o SINGURĂ funcție din bibliotecă, ag_plafon_garda <plafon> <extins> <conectat>, apelată identic de runner și de generatorul de
+#     manifest în ORICE mod (--iesire și --compara-cu), înaintea oricărei conexiuni. Ținta (clonă sau producție) nu schimbă nimic: plafonul
+#     extins pe o cale conectată = doar în fereastră. Ora se sare DOAR fără conexiune (--genereaza-in aici, --doar-genereaza la generator).
 # Orice altă opțiune (-v, -f, -c, --set, -d URI, …) ⇒ refuz înainte de conexiune. Nu se acceptă URI-uri de conexiune.
 # Variabile respinse (pot schimba execuția/ținta pe ascuns): PGPASSWORD, PGOPTIONS, PGDATABASE, PSQLRC, PGHOSTADDR,
 # PGTARGETSESSIONATTRS, PGLOADBALANCEHOSTS, PGSERVICE, PGSERVICEFILE, PGSYSCONFDIR. PGHOST/PGPORT: eliminate explicit (unset)
@@ -151,8 +227,11 @@ umask 077
 
 refuz() { echo "REFUZ (neaplicat, fără conexiune): $2" >&2; exit "$1"; }
 
-MIG="" SHA="" APROBARE="" VERSIUNE="" TINTA_DB="" TINTA_SIS="" TINTA_PROI="" C_HOST="" C_PORT="" C_USER="" PLAFON_MS=""
+MIG="" SHA="" APROBARE="" VERSIUNE="" TINTA_DB="" TINTA_SIS="" TINTA_PROI="" C_HOST="" C_PORT="" C_USER="" PLAFON_MS="" GENEREAZA=""
+AG_MD5="" AG_MAN="" EXTINS=0
 while [ $# -gt 0 ]; do
+  # Runda 18: --plafon-extins e singura opțiune fără valoare (o singură dată)
+  if [ "$1" = --plafon-extins ]; then [ "$EXTINS" = 0 ] || refuz 2 "opțiunea --plafon-extins se dă o singură dată"; EXTINS=1; shift; continue; fi
   [ $# -ge 2 ] || refuz 2 "opțiunea $1 fără valoare"
   case "$1" in
     --migrare) MIG="$2" ;;          --sha256) SHA="$2" ;;          --aprobare) APROBARE="$2" ;;
@@ -160,8 +239,10 @@ while [ $# -gt 0 ]; do
     --tinta-proiect) TINTA_PROI="$2" ;;
     --tinta-host) C_HOST="$2" ;;    --tinta-port) C_PORT="$2" ;;   --user) C_USER="$2" ;;
     --plafon-tranzactie-ms) PLAFON_MS="$2" ;;
+    --genereaza-in) GENEREAZA="$2" ;;
+    --amprenta-globala) AG_MD5="$2" ;; --diferente-globale) AG_MAN="$2" ;;
     --service) refuz 2 "--service nu mai e acceptat (Runda 9: suport retras — endpoint explicit --tinta-host/--tinta-port + ~/.pgpass/PGPASSFILE)" ;;
-    *) refuz 2 "opțiune nepermisă: $1 (doar --migrare --sha256|--aprobare --versiune --tinta-db --tinta-sistem --tinta-host --tinta-port [--tinta-proiect --user --plafon-tranzactie-ms])" ;;
+    *) refuz 2 "opțiune nepermisă: $1 (doar --migrare --sha256|--aprobare --versiune --tinta-db --tinta-sistem --tinta-host --tinta-port [--tinta-proiect --user --plafon-tranzactie-ms --genereaza-in --amprenta-globala --diferente-globale --plafon-extins])" ;;
   esac
   shift 2
 done
@@ -186,6 +267,38 @@ if [ -n "$PLAFON_MS" ]; then
   [[ "$PLAFON_MS" =~ ^[1-9][0-9]{2,5}$ ]] && [ "$PLAFON_MS" -le 600000 ] \
     || refuz 2 "--plafon-tranzactie-ms invalid (milisecunde, 100..600000): '$PLAFON_MS'"
 fi
+# Runda 14: dosarul de generare trebuie să NU existe (nimic suprascris); părintele lui trebuie să existe.
+if [ -n "$GENEREAZA" ]; then
+  [ ! -e "$GENEREAZA" ] && [ -d "$(dirname "$GENEREAZA")" ] || refuz 2 "--genereaza-in: dosarul trebuie să fie NOU, într-un părinte existent: '$GENEREAZA'"
+fi
+# Runda 15 (L15 v2): amprenta globală aprobată + manifestul diferențelor, DOAR împreună.
+if [ -n "$AG_MD5$AG_MAN" ]; then
+  [ -n "$AG_MD5" ] && [ -n "$AG_MAN" ] || refuz 2 "--amprenta-globala și --diferente-globale se folosesc ÎMPREUNĂ (L15 v2)"
+  [[ "$AG_MD5" =~ ^[0-9a-f]{32}$ ]] || refuz 2 "--amprenta-globala: md5 (32 hex, litere mici): '$AG_MD5'"
+  [ -f "$AG_MAN" ] || refuz 2 "--diferente-globale: fișier inexistent: $AG_MAN"
+  [ "$(basename "$AG_MAN")" = "$NUME.l15.tsv" ] || refuz 2 "--diferente-globale: manifestul migrării $NUME se numește $NUME.l15.tsv (dat: $(basename "$AG_MAN"))"
+  for v in PGTZ PGDATESTYLE; do
+    [ -z "${!v+x}" ] || refuz 2 "variabila $v e setată (L15 v2: profilul sesiunii de livrare trebuie să fie al rolului, ca la citirea baseline-ului)"
+  done
+fi
+# Runda 16: cu amprenta globală plafonul (dacă e dat) este EXACT AG_PLAFON_MS din biblioteca L15 (o singură definiție), verificat
+# aici, cu argumentele (refuz 2, înainte de copie / validator / conexiune). Fără opțiunile L15 biblioteca nu se încarcă.
+# Runda 18: --plafon-extins DOAR cu amprenta globală; atunci plafonul este EXACT AG_PLAFON_EXTINS_MS, iar fereastra orară se verifică local
+# (în afara ei refuz 2, nimic trimis), în afară de --genereaza-in (nicio conexiune; fișierele poartă oricum verificarea serverului).
+# (excepție: --genereaza-in fără opțiunile L15 — generatorul de manifest, scripts/livrare_l15_manifest.sh, care adaugă singur pașii amprentei
+# în modul tipărire și cere runnerului doar fișierele; nicio conexiune)
+[ "$EXTINS" = 0 ] || [ -n "$AG_MD5" ] || [ -n "$GENEREAZA" ] || refuz 2 "--plafon-extins se folosește DOAR la livrările cu amprentă globală (--amprenta-globala + --diferente-globale, L15 v2)"
+if [ -n "$AG_MD5" ] || [ "$EXTINS" = 1 ]; then
+  LIB_AG="$(dirname "${BASH_SOURCE[0]}")/livrare_amprenta.sh"
+  [ -f "$LIB_AG" ] || refuz 3 "biblioteca L15 v2 lipsește: $LIB_AG"
+  # shellcheck source=livrare_amprenta.sh
+  . "$LIB_AG"
+  # Runda 19 (verdictul Jakarinos pe PR #1169, r2): garda UNICĂ din bibliotecă (aceeași în generatorul de manifest, în orice mod):
+  # valoarea plafonului + fereastra pe orice cale care se conectează; „neconectat” DOAR cu --genereaza-in (iese cu 40 înaintea oricărui psql).
+  CONECTAT=1; [ -z "$GENEREAZA" ] || CONECTAT=0
+  AG_PL_MSG="$(ag_plafon_garda "$PLAFON_MS" "$EXTINS" "$CONECTAT" 2>&1)" || refuz 2 "$AG_PL_MSG"
+  [ -z "$AG_PL_MSG" ] || echo "→ $AG_PL_MSG (verificată local; pe server o reverifică 1a_fereastra.sql, în tranzacție)"
+fi
 if [ -n "$APROBARE" ]; then
   [ -z "$SHA" ] || refuz 2 "--sha256 și --aprobare se exclud"
   [ -f "$APROBARE" ] || refuz 2 "fișier de aprobare lipsă: $APROBARE"
@@ -206,9 +319,28 @@ TAG="reg_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 CONTROL_0E="$(dirname "${BASH_SOURCE[0]}")/control_0e.sql"
 [ -f "$CONTROL_0E" ] || refuz 3 "gate-ul permanent 0e lipsește: $CONTROL_0E"
 # Runda 11: cu plafon, validatorul refuză în plus orice atingere a ceasului tranzacției (vezi antetul).
-VAL_PLAFON=(); [ -z "$PLAFON_MS" ] || VAL_PLAFON=(--plafon-tranzactie)
-VAL_OUT="$(python3 "$(dirname "${BASH_SOURCE[0]}")/livrare_validator.py" "$COPIE" "$TAG" ${VAL_PLAFON[@]+"${VAL_PLAFON[@]}"})" || refuz 3 "validatorul a refuzat $NUME (vezi mai sus)"
+# Runda 16: și ACORDUL plafonului — fiecare plafon cerut de artefact = exact cel dat runnerului (PLAFON_DIFERIT = refuz 3).
+# Runda 17 (verdictul PR #1115): fără plafon, validatorul primește --fara-plafon ⇒ un artefact care CERE plafon e refuzat aici
+# (PLAFON_LIPSA, refuz 3, înainte de conexiune), nu abia în $pre$; artefactele fără cerere de plafon trec ca înainte.
+# Runda 18: cu --plafon-extins validatorul cere ca artefactul să declare opțiunea în antet (și invers): PLAFON_EXTINS_DIFERIT = refuz 3.
+VAL_PLAFON=(--fara-plafon); [ -z "$PLAFON_MS" ] || VAL_PLAFON=(--plafon-tranzactie-ms "$PLAFON_MS")
+[ "$EXTINS" = 0 ] || VAL_PLAFON+=(--plafon-extins)
+VAL_OUT="$(python3 "$(dirname "${BASH_SOURCE[0]}")/livrare_validator.py" "$COPIE" "$TAG" "${VAL_PLAFON[@]}")" || refuz 3 "validatorul a refuzat $NUME (vezi mai sus)"
 echo "→ $NUME: sha256 $SHA_COPIE = aprobat; validator: $VAL_OUT"
+# Runda 15 (L15 v2): copia protejată a manifestului, formatul verificat local; cu --aprobare, și sha256-ul lui e aprobat.
+if [ -n "$AG_MD5" ]; then
+  # (biblioteca L15 v2 e deja încărcată la verificarea argumentelor, runda 16)
+  AG_COPIE="$DIR/$NUME.l15.tsv"
+  cp -- "$AG_MAN" "$AG_COPIE"; chmod 400 "$AG_COPIE"
+  AG_SHA="$(sha256sum "$AG_COPIE" | cut -d' ' -f1)"
+  ag_manifest_valid "$AG_COPIE" || refuz 3 "manifestul $NUME.l15.tsv are format invalid (vezi mai sus)"
+  if [ -n "$APROBARE" ]; then
+    AG_SHA_AP="$(awk -v f="$NUME.l15.tsv" '$2 == f || $2 == "*" f {print $1}' "$APROBARE")"
+    [ "$(printf '%s\n' "$AG_SHA_AP" | grep -c .)" = 1 ] && [ "$AG_SHA_AP" = "$AG_SHA" ] \
+      || refuz 3 "fișierul de aprobare nu are exact un rând pentru $NUME.l15.tsv cu sha256 $AG_SHA"
+  fi
+  echo "→ L15 v2: GLOBAL aprobat $AG_MD5; manifest $NUME.l15.tsv sha256 $AG_SHA ($(tr -d '\r' <"$AG_COPIE" | grep -cv '^#\|^$' || true) obiecte)$([ -n "$APROBARE" ] && echo ' = aprobat')"
+fi
 
 # --- fișierele runnerului (generate, nu provin din artefact) -----------------
 CHEIE="hashtext('gazpet.livrare_migrare')"
@@ -265,48 +397,41 @@ SQL
   printf "    RAISE EXCEPTION 'Înregistrare %s: statements ≠ artefactul aprobat'; END IF;\n" "$NUME"
   printf 'END $verif$;\n'
 } > "$DIR/3_inreg.sql"
+# Runda 15 (L15 v2): pașii „înainte” / „după” (tag aleator: artefactul, fixat înainte, nu le poate numi obiectele).
+if [ -n "$AG_MD5" ]; then
+  TAG_AG="$(ag_tag)"
+  ag_inainte "$TAG_AG" "$AG_MD5" > "$DIR/2_ag_inainte.sql" || refuz 3 "L15 v2: generarea pasului înainte a eșuat"
+  ag_dupa "$TAG_AG" "$AG_MD5" "$AG_COPIE" > "$DIR/4_ag_dupa.sql" || refuz 3 "L15 v2: generarea pasului după a eșuat"
+fi
+# Runda 18: fereastra orară verificată și pe server (primul pas din restul mesajului, înaintea lock-ului consultativ); și la --genereaza-in
+# fără opțiunile L15 (generatorul de manifest o pune în proba pe țintă)
+[ "$EXTINS" = 0 ] || ag_fereastra_sql "$NUME" > "$DIR/1a_fereastra.sql" || refuz 3 "L15 v2: generarea verificării ferestrei a eșuat"
 # Runda 11: cu plafon, începutul și sfârșitul tranzacției sunt fișiere ale runnerului (psql fără --single-transaction).
 # SESIUNE_0 = prefixul conexiunilor fără plafon (pre-verificare, reconciliere, gate 0e), doar cu opțiunea.
 SESIUNE_0=""
 if [ -n "$PLAFON_MS" ]; then
   SESIUNE_0="SET transaction_timeout = 0;"
-  printf 'SET transaction_timeout = %s;\nBEGIN;\n' "$PLAFON_MS" > "$DIR/00_sesiune.sql"
-  # Runda 12: garda finală și COMMIT = UN SINGUR mesaj de interogare („\;” în psql ⇒ psql nu trimite nimic până la „;”-ul
-  # de după COMMIT). Ordinea în mesaj: triggerele amânate rulează ACUM (cu search_path-ul migrării), apoi search_path fixat
-  # pe pg_catalog, apoi garda, apoi COMMIT. RESET-ul e mesaj separat, după COMMIT (nu mai ține de tranzacție).
-  # Runda 13 (r5, Jakarinos r16 P2): închiderea prin catalog (PLAFON_AMANABIL), după SET CONSTRAINTS ALL IMMEDIATE — vezi
-  # antetul. „Scris în tranzacția curentă” = age(xmin) <= 0, cu referința verificată (age(xid-ul de vârf) = 0).
-  cat > "$DIR/9_fin.sql" <<SQL
-SET CONSTRAINTS ALL IMMEDIATE \;
-SET LOCAL search_path = pg_catalog, pg_temp \;
-DO \$plafon_fin\$ DECLARE v_amanabile text; BEGIN
-  IF pg_catalog.age(pg_catalog.xid(pg_catalog.pg_current_xact_id())) IS DISTINCT FROM 0 THEN
-    RAISE EXCEPTION 'Livrare $NUME: PLAFON_AMANABIL: referinta tranzactiei curente (age = 0 pentru xid-ul de varf) nu se confirma - refuz, nimic comis'; END IF;
-  SELECT pg_catalog.string_agg(o, ', ' ORDER BY o) INTO v_amanabile FROM (
-    SELECT 'trigger ' || t.tgrelid::pg_catalog.regclass::pg_catalog.text || '.' || t.tgname AS o
-      FROM pg_catalog.pg_trigger t WHERE t.tgdeferrable AND pg_catalog.age(t.xmin) <= 0
-    UNION ALL
-    SELECT 'constrangere ' || c.conname::pg_catalog.text
-      FROM pg_catalog.pg_constraint c WHERE c.condeferrable AND pg_catalog.age(c.xmin) <= 0
-    UNION ALL
-    SELECT 'functia ' || p.oid::pg_catalog.regprocedure::pg_catalog.text || ' a triggerului ' || t.tgname::pg_catalog.text
-      FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
-     WHERE t.tgdeferrable AND pg_catalog.age(p.xmin) <= 0) s;
-  IF v_amanabile IS NOT NULL THEN
-    RAISE EXCEPTION 'Livrare $NUME: PLAFON_AMANABIL: obiecte amanabile create / modificate in tranzactie (%) - cod al artefactului ar putea rula in COMMIT, dupa garda; cu plafon se refuza (livrare fara optiune, cu review) - nimic comis', v_amanabile; END IF;
-  IF EXISTS (SELECT 1 FROM pg_catalog.pg_cursors WHERE is_holdable) THEN
-    RAISE EXCEPTION 'Livrare $NUME: PLAFON_CURSOR: cursor WITH HOLD deschis (s-ar executa in COMMIT, dupa garda) - refuz, nimic comis'; END IF;
-  IF $PLAFON_CITIRE IS DISTINCT FROM '$PLAFON_MS/session'
-     OR pg_catalog.current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '$PLAFON_MS:' || pg_catalog.txid_current() THEN
-    RAISE EXCEPTION 'Livrare $NUME: PLAFON_SCHIMBAT in tranzactie (% / marcaj %) - refuz, nimic comis',
-      coalesce($PLAFON_CITIRE, 'lipsa'), coalesce(pg_catalog.current_setting('gazpet.plafon_tranzactie', true), 'lipsa'); END IF;
-  IF pg_catalog.clock_timestamp() - pg_catalog.transaction_timestamp() > interval '$PLAFON_MS milliseconds' THEN
-    RAISE EXCEPTION 'Livrare $NUME: PLAFON_DEPASIT: % ms de la BEGIN > $PLAFON_MS ms fara inchiderea sesiunii (ceas oprit / repornit in tranzactie sau pauza inainte de garda) - refuz, nimic comis',
-      round(extract(epoch FROM pg_catalog.clock_timestamp() - pg_catalog.transaction_timestamp()) * 1000); END IF;
-END \$plafon_fin\$ \;
-COMMIT;
-RESET transaction_timeout;
-SQL
+  # Runda 14: forma „un mesaj” (scripts/livrare_mesaj.sh; doar aici se încarcă biblioteca — fără opțiune nimic nu se
+  # schimbă). Garda finală (runda 12-13: SET CONSTRAINTS ALL IMMEDIATE, search_path pe pg_catalog, PLAFON_AMANABIL /
+  # CURSOR / SCHIMBAT / DEPASIT) e aceeași, acum în același mesaj cu TOATĂ tranzacția, nu doar cu COMMIT-ul.
+  LIB_MESAJ="$(dirname "${BASH_SOURCE[0]}")/livrare_mesaj.sh"
+  [ -f "$LIB_MESAJ" ] || refuz 3 "biblioteca formei un mesaj lipsește: $LIB_MESAJ"
+  # shellcheck source=livrare_mesaj.sh
+  . "$LIB_MESAJ"
+  printf 'SET transaction_timeout = %s;\n' "$PLAFON_MS" > "$DIR/00_sesiune.sql"
+  # restul mesajului (după verificarea „un mesaj”): [1a_fereastra, runda 18, doar cu --plafon-extins], 1_pre, COPIA (poziția ei,
+  # pentru verificare), despărțitorul, 3_inreg, timpul, garda finală + COMMIT
+  { [ "$EXTINS" = 0 ] || cat "$DIR/1a_fereastra.sql"; cat "$DIR/1_pre.sql"; } > "$DIR/m_rest.sql"
+  [ -z "$AG_MD5" ] || cat "$DIR/2_ag_inainte.sql" >> "$DIR/m_rest.sql"   # runda 15: înaintea copiei
+  POZ_COPIE="$(lm_octeti "$DIR/m_rest.sql")"
+  # runda 16: cu amprenta globală garda finală raportează și cât au fost ținute lock-urile puternice ale migrării (LOCK_TINUT)
+  { cat "$COPIE"; lm_sep; cat "$DIR/3_inreg.sql"; [ -z "$AG_MD5" ] || cat "$DIR/4_ag_dupa.sql"; lm_timp "$NUME"; lm_fin "$NUME" "$PLAFON_MS" COMMIT ${AG_MD5:+lock}; } >> "$DIR/m_rest.sql" \
+    || refuz 3 "forma un mesaj: generarea restului a eșuat"
+  lm_mesaj "$DIR/0_prolog.sql" "$DIR/m_rest.sql" "$DIR/m_mesaj.sql" "$NUME" "$POZ_COPIE:$(lm_octeti "$COPIE"):$SHA" \
+    || refuz 3 "forma un mesaj: construirea mesajului a eșuat"
+  TAG_M="lm_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+  lm_trimite "$DIR/m_mesaj.sql" "$TAG_M" "$DIR/5_mesaj.sql" || refuz 3 "forma un mesaj: fișierul de trimitere a eșuat"
+  printf 'RESET transaction_timeout;\n' > "$DIR/9_reset.sql"
 fi
 # Reconcilierea (și pre-verificarea): read-only, READ COMMITTED explicit PRIMUL, lock-ul într-o instrucțiune separată
 # ÎNAINTEA SELECT-ului pe istoric ⇒ SELECT-ul primește un snapshot luat după eliberarea lock-ului.
@@ -343,7 +468,16 @@ END $p0e$;
 P0E
   cat "$CONTROL_0E"; printf '\nCOMMIT;\n'; } > "$DIR/control_0e.sql"
 chmod 400 "$DIR/0_prolog.sql" "$DIR/1_pre.sql" "$DIR/3_inreg.sql" "$DIR/reconc.sql" "$DIR/control_0e.sql"
-[ -z "$PLAFON_MS" ] || chmod 400 "$DIR/00_sesiune.sql" "$DIR/9_fin.sql"
+[ -z "$PLAFON_MS" ] || chmod 400 "$DIR/00_sesiune.sql" "$DIR/m_rest.sql" "$DIR/m_mesaj.sql" "$DIR/5_mesaj.sql" "$DIR/9_reset.sql"
+[ -z "$AG_MD5" ] || chmod 400 "$DIR/2_ag_inainte.sql" "$DIR/4_ag_dupa.sql"
+[ "$EXTINS" = 0 ] || chmod 400 "$DIR/1a_fereastra.sql"
+# Runda 14: --genereaza-in = doar fișierele (copia + cele generate), fără nicio conexiune; cod 40.
+if [ -n "$GENEREAZA" ]; then
+  mkdir -- "$GENEREAZA" && cp -p -- "$DIR"/*.sql "$GENEREAZA"/ || refuz 3 "--genereaza-in: copierea în $GENEREAZA a eșuat"
+  [ -z "$AG_MD5" ] || cp -p -- "$AG_COPIE" "$GENEREAZA"/ || refuz 3 "--genereaza-in: copierea manifestului a eșuat"
+  echo "✓ GENERAT (fără conexiune, nimic trimis): $NUME → $GENEREAZA ($(cd "$GENEREAZA" && ls | tr '\n' ' '))"
+  exit 40
+fi
 
 CONN=(-h "$C_HOST" -p "$C_PORT"); [ -n "$C_USER" ] && CONN+=(-U "$C_USER")   # explicite ⇒ au prioritate față de mediu
 CONN+=(-d "$TINTA_DB")   # validat [A-Za-z0-9_] ⇒ nu poate fi conninfo/URI
@@ -405,14 +539,19 @@ if [ "$R_REL" != 0 ]; then
 fi
 
 set +e
-if [ -z "$PLAFON_MS" ]; then
+if [ -z "$PLAFON_MS" ] && [ -z "$AG_MD5" ]; then
   echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS @ $C_HOST:$C_PORT: psql --single-transaction [prolog + lock + țintă + istoric + marcaj + copie + înregistrare]"
   "$PSQL" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$DIR/0_prolog.sql" -f "$DIR/1_pre.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" "${CONN[@]}"
   RC_PSQL=$?
+elif [ -z "$PLAFON_MS" ]; then
+  # Runda 15 (L15 v2) fără plafon: aceleași fișiere + amprenta globală înainte / după, în --single-transaction.
+  echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS @ $C_HOST:$C_PORT: psql --single-transaction [prolog + lock + țintă + istoric + marcaj + AMPRENTA_GLOBALA înainte + copie + înregistrare + AMPRENTA_GLOBALA după = manifest]"
+  "$PSQL" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$DIR/0_prolog.sql" -f "$DIR/1_pre.sql" -f "$DIR/2_ag_inainte.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" -f "$DIR/4_ag_dupa.sql" "${CONN[@]}"
+  RC_PSQL=$?
 else
-  # Runda 11: o singură conexiune; SET de sesiune + BEGIN, apoi aceleași fișiere, garda finală și COMMIT (vezi antetul).
-  echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS @ $C_HOST:$C_PORT: psql [SET transaction_timeout = $PLAFON_MS + BEGIN + prolog + lock + țintă + istoric + marcaj + copie + înregistrare + (gardă finală și COMMIT într-un singur mesaj)]; plafon ~$PLAFON_MS ms de la BEGIN până la intrarea în COMMIT (SET de sesiune înainte de BEGIN; COMMIT-ul propriu-zis neplafonat)"
-  "$PSQL" -X -q -v ON_ERROR_STOP=1 -f "$DIR/00_sesiune.sql" -f "$DIR/0_prolog.sql" -f "$DIR/1_pre.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" -f "$DIR/9_fin.sql" "${CONN[@]}"
+  # Runda 14: o singură conexiune; SET de sesiune, apoi TOATĂ tranzacția într-un singur mesaj (\gexec), apoi RESET.
+  echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS @ $C_HOST:$C_PORT: psql [SET transaction_timeout = $PLAFON_MS] + UN SINGUR mesaj [BEGIN + prolog + verificare mesaj unic$([ "$EXTINS" = 0 ] || echo ' + fereastra orară (server)') + lock + țintă + istoric + marcaj$([ -z "$AG_MD5" ] || echo ' + AMPRENTA_GLOBALA înainte') + copie + înregistrare$([ -z "$AG_MD5" ] || echo ' + AMPRENTA_GLOBALA după = manifest') + gardă finală + COMMIT] + [RESET]; plafon$([ "$EXTINS" = 0 ] || echo ' EXTINS') ~$PLAFON_MS ms de la BEGIN până la intrarea în COMMIT, 0 drumuri client-server între ele (SET de sesiune înainte de BEGIN; COMMIT-ul propriu-zis neplafonat)"
+  "$PSQL" -X -q -v ON_ERROR_STOP=1 -f "$DIR/00_sesiune.sql" -f "$DIR/5_mesaj.sql" -f "$DIR/9_reset.sql" "${CONN[@]}"
   RC_PSQL=$?
 fi
 set -e

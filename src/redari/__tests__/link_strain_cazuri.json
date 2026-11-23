@@ -1,0 +1,362 @@
+{
+ "tokeni": {
+  "A": "T1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "B": "T2bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+ },
+ "tokeni_existenti": [
+  "T1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "T2bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "T3ccccccccccccccccccccccccccccccccccccccccc",
+  "T5eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "T6fffffffffffffffffffffffffffffffffffffffff",
+  "T7ggggggggggggggggggggggggggggggggggggggggg",
+  "T8hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
+  "T9iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii",
+  "T0jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj"
+ ],
+ "cazuri": [
+  {
+   "id": "n01_pct54_rest_literal",
+   "text": "Formular: https://redari.gazpet.ro/redari/raspuns/%541aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa și {LINK_RASPUNS}",
+   "token": null,
+   "asteptat": true,
+   "nota": "%54 = T, restul literal (exemplul Jakarinos r2)"
+  },
+  {
+   "id": "n02_token_tot_codificat_in_cale",
+   "text": "Formular: https://redari.gazpet.ro/redari/raspuns/%54%31%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61%61",
+   "token": null,
+   "asteptat": true,
+   "nota": "tokenul întreg %XX, în cale"
+  },
+  {
+   "id": "n03_dublu_codificat",
+   "text": "Formular: https://redari.gazpet.ro/redari/raspuns/%25541aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "%2554 → %54 → T"
+  },
+  {
+   "id": "n04_token_codificat_fara_cale",
+   "text": "cod: %54%32%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62%62 {LINK_RASPUNS}",
+   "token": null,
+   "asteptat": true,
+   "nota": "tokenul existent codificat, fără adresă"
+  },
+  {
+   "id": "n05_token_rupt_spatiu",
+   "text": "cod: T1aaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaa {LINK_RASPUNS}",
+   "token": null,
+   "asteptat": true,
+   "nota": "token existent rupt de un spațiu"
+  },
+  {
+   "id": "n06_token_rupt_linie",
+   "text": "cod: T1aaaaaaaaaaaaa\naaaaaaaaaaaaaaa\r\naaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "token rupt de linii noi"
+  },
+  {
+   "id": "n07_token_rupt_zero_width",
+   "text": "cod: T1aaaaaaaa​aaaaaaaaaaaaaaa⁠aaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "token cu zero-width space / word joiner"
+  },
+  {
+   "id": "n08_entitate_zecimala",
+   "text": "Formular: https://redari.gazpet.ro/redari/raspuns/&#84;1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "&#84; = T"
+  },
+  {
+   "id": "n09_entitate_hexa_fara_cale",
+   "text": "cod: &#x54;1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "&#x54; = T, token existent fără cale"
+  },
+  {
+   "id": "p12_entitate_hexa_lunga",
+   "text": "cod: &#x541aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": false,
+   "nota": "&#x541aaa: cifrele hexa ale tokenului intră în entitate (ca în HTML) — tokenul nu mai e reconstructibil"
+  },
+  {
+   "id": "n10_entitate_amp_imbricata",
+   "text": "cod: &amp;#84;1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "&amp;#84; → &#84; → T"
+  },
+  {
+   "id": "n11_cale_majuscule",
+   "text": "Formular: HTTPS://REDARI.GAZPET.RO/REDARI/RASPUNS/Zzyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+   "token": null,
+   "asteptat": true,
+   "nota": "calea cu majuscule (routerul nu ține cont de caz)"
+  },
+  {
+   "id": "n12_cale_singura",
+   "text": "Formularul e la https://redari.gazpet.ro/redari/raspuns/ — completați acolo.",
+   "token": null,
+   "asteptat": true,
+   "nota": "calea fără token: singura formă permisă e {LINK_RASPUNS}"
+  },
+  {
+   "id": "n13_cale_codificata",
+   "text": "Formular: https://redari.gazpet.ro/%72edari%2F%72aspuns%2FQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+   "token": null,
+   "asteptat": true,
+   "nota": "calea %XX"
+  },
+  {
+   "id": "n14_cale_backslash",
+   "text": "Formular: redari.gazpet.ro\\redari\\raspuns\\QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+   "token": null,
+   "asteptat": true,
+   "nota": "„\\” = „/” în browser"
+  },
+  {
+   "id": "n15_cale_segmente_punct",
+   "text": "Formular: https://redari.gazpet.ro/redari/x/../raspuns/./QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+   "token": null,
+   "asteptat": true,
+   "nota": "segmentele „..” / „.” rezolvate"
+  },
+  {
+   "id": "n16_cale_rupta_spatii",
+   "text": "Formular: https://redari.gazpet.ro/redari/ raspuns/ (vezi codul)",
+   "token": null,
+   "asteptat": true,
+   "nota": "calea ruptă de spațiu"
+  },
+  {
+   "id": "n17_litera_lata_nfkc",
+   "text": "cod: Ｔ1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "„Ｔ” lat → T (NFKC)"
+  },
+  {
+   "id": "n18_token_lipit_de_text",
+   "text": "cod: xyzT1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaQ {LINK_RASPUNS}",
+   "token": null,
+   "asteptat": true,
+   "nota": "token existent lipit de alte litere (fereastra de 43)"
+  },
+  {
+   "id": "n19_soft_hyphen",
+   "text": "cod: T1aaaaaaaaaaaaaaaaaaa­aaaaaaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "soft hyphen în token"
+  },
+  {
+   "id": "n20_invizibil_codificat",
+   "text": "cod: T1aaaaaaaaaa%E2%80%8Baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "zero-width codificat %E2%80%8B (octeți non-ASCII eliminați)"
+  },
+  {
+   "id": "n21_percnt",
+   "text": "Formular: https://redari.gazpet.ro/redari/raspuns/&percnt;541aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "&percnt;54 → %54 → T"
+  },
+  {
+   "id": "n22_imbricare_peste_limita",
+   "text": "cod: %25252525252525252525252525541aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "13 niveluri de %25: nestabil după 12 treceri = străin"
+  },
+  {
+   "id": "n23_nbsp_in_token",
+   "text": "cod: T1aaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "spațiu neîntrerupt în token"
+  },
+  {
+   "id": "n24_tab_in_cale",
+   "text": "Formular: /redari/\traspuns/",
+   "token": null,
+   "asteptat": true,
+   "nota": "tab în cale"
+  },
+  {
+   "id": "n25_pct54_fara_cale",
+   "text": "cod: %541aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa {LINK_RASPUNS}",
+   "token": null,
+   "asteptat": true,
+   "nota": "%54 + rest literal, fără cale"
+  },
+  {
+   "id": "n26_dublu_fara_cale",
+   "text": "cod: %25541aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": true,
+   "nota": "%2554 fără cale"
+  },
+  {
+   "id": "n27_tot_dublu_codificat_fara_cale",
+   "text": "cod: %25%35%34%25%33%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32%25%36%32",
+   "token": null,
+   "asteptat": true,
+   "nota": "tokenul întreg dublu codificat, fără cale"
+  },
+  {
+   "id": "n28_majuscule_hexa",
+   "text": "cod: %5aQQQQQQQQQQ &#X54;2bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "token": null,
+   "asteptat": true,
+   "nota": "&#X54; cu X mare"
+  },
+  {
+   "id": "f01_link_propriu_literal",
+   "text": "Bună ziua, răspundeți aici: https://redari.gazpet.ro/redari/raspuns/T1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nCu stimă.",
+   "token": "A",
+   "asteptat": false,
+   "nota": "linkul exact al destinatarului"
+  },
+  {
+   "id": "f02_link_propriu_lipit",
+   "text": "Răspuns:https://redari.gazpet.ro/redari/raspuns/T1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabc",
+   "token": "A",
+   "asteptat": false,
+   "nota": "linkul propriu lipit de text (nu dezvăluie alt token)"
+  },
+  {
+   "id": "f03_propriu_plus_strain_codificat",
+   "text": "Răspuns: https://redari.gazpet.ro/redari/raspuns/T1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nSau: https://redari.gazpet.ro/redari/raspuns/%542bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "token": "A",
+   "asteptat": true,
+   "nota": "linkul lui B codificat lângă linkul propriu"
+  },
+  {
+   "id": "f04_propriu_plus_strain_rupt",
+   "text": "Răspuns: https://redari.gazpet.ro/redari/raspuns/T1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nCod: T2bbbbbbbbbbbbbbbbbbbb bbbbbbbbbbbbbbbbbbbbb",
+   "token": "A",
+   "asteptat": true,
+   "nota": "tokenul lui B rupt de spațiu"
+  },
+  {
+   "id": "f05_token_propriu_fara_link",
+   "text": "Cod: T1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": "A",
+   "asteptat": false,
+   "nota": "tokenul propriu fără adresă (nu e al altcuiva)"
+  },
+  {
+   "id": "f06_propriu_cale_majuscule",
+   "text": "Răspuns: HTTPS://REDARI.GAZPET.RO/REDARI/RASPUNS/T1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": "A",
+   "asteptat": true,
+   "nota": "altă formă decât linkul exact = de verificat (calea)"
+  },
+  {
+   "id": "f07_link_strain_literal",
+   "text": "Răspuns: https://redari.gazpet.ro/redari/raspuns/T2bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "token": "A",
+   "asteptat": true,
+   "nota": "linkul literal al lui B"
+  },
+  {
+   "id": "f08_propriu_codificat",
+   "text": "Răspuns: https://redari.gazpet.ro/redari/raspuns/%541aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": "A",
+   "asteptat": true,
+   "nota": "propriul link codificat: nu e forma exactă (calea rămâne)"
+  },
+  {
+   "id": "f09_token_strain_entitate",
+   "text": "Răspuns: https://redari.gazpet.ro/redari/raspuns/T1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nCod: &#84;2bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "token": "A",
+   "asteptat": true,
+   "nota": "tokenul lui B prin entitate"
+  },
+  {
+   "id": "p01_procent_text",
+   "text": "Reducere 20% la prețul lucrărilor, 100 % finalizat, 50%-75% rest.",
+   "token": null,
+   "asteptat": false,
+   "nota": "procente în text"
+  },
+  {
+   "id": "p02_url_strain_codificat",
+   "text": "Planul: https://exemplu.invalid/docs/Plan%20lucrari%20Bucov.pdf?x=1%2C2&y=%C8%9A",
+   "token": null,
+   "asteptat": false,
+   "nota": "URL străin cu %XX, fără token"
+  },
+  {
+   "id": "p03_harta",
+   "text": "Primăria: https://maps.google.com/?q=Prim%C4%83ria%20Bucov%2C%20Prahova",
+   "token": null,
+   "asteptat": false,
+   "nota": "link de hartă codificat"
+  },
+  {
+   "id": "p04_text_normal",
+   "text": "Bună ziua,\n\nLucrările din {COMUNA} s-au încheiat. Vă așteptăm în zilele {ZILE}, între orele {PROGRAM}, sau la telefon {TEL}.\nFormularul dumneavoastră: {LINK_RASPUNS}\n\nCu stimă,\nGAZPET INSTAL S.R.L.",
+   "token": null,
+   "asteptat": false,
+   "nota": "șablonul aprobat"
+  },
+  {
+   "id": "p05_amp",
+   "text": "Gazpet &amp; Asociații — întrebări &amp; răspunsuri; Tom &amp Jerry",
+   "token": null,
+   "asteptat": false,
+   "nota": "entități obișnuite"
+  },
+  {
+   "id": "p06_token_inexistent",
+   "text": "cod: ZxQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ (nu e al nimănui)",
+   "token": null,
+   "asteptat": false,
+   "nota": "șir de 43 de caractere care nu e token existent, fără cale"
+  },
+  {
+   "id": "p07_proza_ascii",
+   "text": "Stimate domnule va informam ca lucrarile de pe terenul dumneavoastra s-au incheiat si va asteptam la primarie pentru predare",
+   "token": null,
+   "asteptat": false,
+   "nota": "proză ASCII lungă (fără spații se lipește, dar nu e token)"
+  },
+  {
+   "id": "p08_raspuns_singur",
+   "text": "Vă rugăm să ne dați un răspuns / raspuns până vineri; redari la primărie.",
+   "token": null,
+   "asteptat": false,
+   "nota": "cuvintele „redari” / „raspuns” fără cale"
+  },
+  {
+   "id": "p09_sir_lung_fara_token",
+   "text": "cod: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "token": null,
+   "asteptat": false,
+   "nota": "șir lung care nu conține niciun token"
+  },
+  {
+   "id": "p10_imbricare_sub_limita",
+   "text": "Reducere %252525252520acum",
+   "token": null,
+   "asteptat": false,
+   "nota": "5 niveluri de %25 pe un spațiu: stabil, fără token"
+  },
+  {
+   "id": "p11_liniute",
+   "text": "Predarea terenului – Bucov — 24.11.2026‐25.11.2026",
+   "token": null,
+   "asteptat": false,
+   "nota": "liniuțe Unicode"
+  }
+ ]
+}

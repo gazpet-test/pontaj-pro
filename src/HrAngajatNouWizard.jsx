@@ -35,13 +35,15 @@ import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
+import { optiuniClient } from './lib/sesiuneCereri.js'
 import { STATUS_COADA, rezultatInserareHR, copieDeSters, rezultatProvenienta, docWizardHR, inchidereWizardHR,
   decizieWizardHR, citireNecesara, stareInchidere, mesajWizardInchidere, stergeStagingWizard,
   faraMetadateSursa, MESAJ_WIZ_FARA_METADATE } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  optiuniClient(import.meta.env.VITE_SUPABASE_ANON_KEY)
 ))
 // supabase-js întoarce { data, error }; o excepție (rețea) devine tot { error }
 async function interogheaza(q) {

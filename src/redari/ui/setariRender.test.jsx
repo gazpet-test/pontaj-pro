@@ -28,6 +28,7 @@ import UatEcran, { ModalUat, ModalUatNou, numarParcele } from './UatEcran.jsx'
 import SetariProiect from './SetariProiect.jsx'
 import FormularCampuri from './FormularCampuri.jsx'
 import LegaturaExecutie from './LegaturaExecutie.jsx'
+import { INDICIU_ANEXA2_ANUNT } from '../docx.js'
 import { CAMPURI_UAT } from '../setari.js'
 import { citestePaginat, motivBlocareConvocator } from './comune.jsx'
 
@@ -162,6 +163,32 @@ describe('ecranul UAT', () => {
       expect(h).not.toContain('Descarcă adresa')
       expect(h).not.toContain('Regenerează')
     }
+  })
+  it('19.11.2026: indiciul „Anexa 2 a adresei = anunțul de afișare” apare lângă butoanele adresei (admin; editorul când adresa există), nu la viewer', () => {
+    const randare = (admin, descarca, nr) => renderToString(<ModalUat proiect={proiect} uat={{ ...uats[0], adresa_nr: nr }} uats={uats} esteAdmin={admin} poateDescarca={descarca} show={show} onClose={() => {}} onGata={() => {}} />)
+    const indiciu = 'Anexa 2 a adresei este anunțul de afișare: generează-l cu butonul „Anunț de afișare (DOCX)” și trimite-l împreună cu adresa.'
+    expect(INDICIU_ANEXA2_ANUNT).toBe(indiciu)
+    for (const nr of [null, 'AU-0001']) expect(randare(true, true, nr)).toContain(indiciu)
+    expect(randare(false, true, 'AU-0001')).toContain(indiciu)
+    expect(randare(false, true, null)).not.toContain(indiciu)   // editorul fără adresă: nu are niciun buton de adresă lângă care să stea
+    for (const nr of [null, 'AU-0001']) expect(randare(false, false, nr)).not.toContain(indiciu)
+  })
+  it('anunțul de afișare: admin și editor îl văd (editor = fără generarea adresei), viewer nu; blocat cu lipsurile butonului, activ pe date complete', () => {
+    const randare = (admin, descarca, pr = proiect, u = uats[0]) => renderToString(<ModalUat proiect={pr} uat={u} uats={uats} esteAdmin={admin} poateDescarca={descarca} show={show} onClose={() => {}} onGata={() => {}} />)
+    const buton = h => /<button[^>]*>Anunț de afișare \(DOCX\)<\/button>/.exec(h)?.[0] ?? null
+    // proiectul de test nu are contract / împuternicire / contact → butonul există, dar e blocat, cu lipsurile sub el
+    expect(buton(randare(true, true))).toMatch(/disabled=""/)
+    expect(randare(true, true)).toMatch(/Anunț de afișare: (?:<!-- -->)?Lipsește nr\. contractului/)   // SSR pune <!-- --> între textele alăturate
+    const editor = randare(false, true)
+    expect(buton(editor)).toMatch(/disabled=""/)
+    expect(editor).not.toContain('Generează adresa UAT')
+    expect(buton(randare(false, false))).toBeNull()
+    // date complete (fictive) → activ; informarea nepublicată de server → blocat din nou
+    const complet = { ...proiect, contract_nr: 'TEST-30', contract_data: '2025-01-22', imputernicire_nr: 'IMP', imputernicire_data: '2026-11-01', contact_nume: 'C', contact_telefon: '0700000000',
+      reprezentant_tgz_nume: 'R', reprezentant_tgz_telefon: '0700000001', reprezentant_gazpet_nume: 'G', informare_publicata: true }
+    expect(buton(randare(false, true, complet))).not.toMatch(/disabled/)
+    expect(buton(randare(true, true, { ...complet, informare_publicata: false }))).toMatch(/disabled=""/)
+    expect(randare(true, true, { ...complet, informare_publicata: false })).toContain('informarea GDPR nepublicată')
   })
   it('admin: tabelul cu ambele UAT-uri și butonul de UAT nou', () => {
     const h = renderToString(<UatEcran proiect={proiect} uats={uats} nivel="admin" show={show} onSchimbat={() => {}} />)

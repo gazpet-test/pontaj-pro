@@ -25,9 +25,11 @@ import ImportExcelModal from './ImportExcelIzometrie.jsx'
 import { generateCentralizatorXlsx, buildCentralizatorFilename } from './exportCentralizatorXlsx.js'
 import IzoStocTeava from './IzoStocTeava.jsx'
 import { patchDinRegistru, indexFolosite, sugestiiRegistru, citesteTot, paznicCereri, reimprospateaza, salveazaAlegereRegistru, dezleagaDinRegistru } from './lib/izoRegistru.js'
+import { planMutare, ordineDinRanduri, lipsaRpcMutare, stareMutareDinSonda, mesajEroareMutare } from './izoMutaPozitie.js'
 const IzometrieTeren = lazy(() => import('./IzometrieTeren.jsx'))
 const IzometrieAprobare = lazy(() => import('./IzometrieAprobare.jsx'))
 const IzometrieGestionar = lazy(() => import('./IzometrieAprobare.jsx').then(m => ({ default: m.IzometrieGestionar })))
+const IzoBandaTronson = lazy(() => import('./IzoBandaTronson.jsx'))   // banda conductei pe km, doar citire (docs/izometrie/CONDUCTA_TRONSOANE_SPEC.md)
 
 // Theme — paletă G consistentă cu Logistica/HR/Admin
 const G = {
@@ -250,7 +252,7 @@ export default function IzometriePage({ initialProiectId } = {}) {
   // comutatorul Pachete ↔ Stoc țeavă (registrul izometrie, doar citire)
   const comutator = (
     <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:16 }}>
-      {[['pachete', '📐 Pachete lansare'], ['stoc', '🧱 Stoc țeavă (registru)'], ['teren', '👷 Teren (tabletă)'], ['aprobare', '✅ Aprobare teren (MP)'], ['depozit', '📦 Gestionar (depozit)']].map(([k, l]) => (
+      {[['pachete', '📐 Pachete lansare'], ['stoc', '🧱 Stoc țeavă (registru)'], ['teren', '👷 Teren (tabletă)'], ['aprobare', '✅ Aprobare teren (MP)'], ['depozit', '📦 Gestionar (depozit)'], ['banda', '📏 Bandă tronson (citire)']].map(([k, l]) => (
         <button key={k} onClick={() => setVedere(k)} style={{
           padding:'8px 16px', fontSize:13, fontWeight:700, cursor:'pointer', borderRadius:8, fontFamily:'inherit',
           background: vedere === k ? '#58A6FF22' : 'transparent', color: vedere === k ? '#58A6FF' : G.muted,
@@ -261,6 +263,8 @@ export default function IzometriePage({ initialProiectId } = {}) {
   )
 
   if (vedere === 'teren') return <div style={S.page}>{comutator}<Suspense fallback={<p>Se încarcă ecranul de teren…</p>}><IzometrieTeren proiectId={proiectId} proiecte={proiecte} onProiect={setProiectId} tronsoane={tronsoane} initialTronsonId={tronsonId} lockedMode={lockedMode} /></Suspense></div>
+
+  if (vedere === 'banda') return <div style={S.page}>{comutator}<Suspense fallback={<p>Se încarcă banda…</p>}><IzoBandaTronson key={proiectId} proiectId={proiectId} tronsoane={tronsoane} initialTronsonId={tronsonId} /></Suspense></div>
 
   if (vedere === 'aprobare' || vedere === 'depozit') {
     const Birou = vedere === 'aprobare' ? IzometrieAprobare : IzometrieGestionar
@@ -638,6 +642,14 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   // pachetul CURENT (refetch-urile pornite din closure-ul unei operații vechi reîncarcă acest pachet, nu pe cel vechi)
   const pachetIdRef = useRef(pachetId)
   pachetIdRef.current = pachetId
+  // TKT-2026-0388: e aplicată migrarea 20261215c (RPC-ul „mută la început”)? Sonda nu citește și nu scrie nimic.
+  const [mutaStare, setMutaStare] = useState(null)   // 'da' | 'nu' | 'eroare' | null (se verifică)
+  useEffect(() => {
+    let viu = true
+    supabase.rpc('fn_executie_tevi_muta_pozitie', { p_id: null, p_poz_noua: null })
+      .then(res => { if (viu) setMutaStare(stareMutareDinSonda(res)) }, () => { if (viu) setMutaStare('eroare') })
+    return () => { viu = false }
+  }, [])
 
   // proiectul PACHETULUI încărcat (nu prop-ul paginii, care în /izometrie?pachet=… poate fi alt proiect)
   const proiectPachet = pachet?.proiect_id ?? tronson?.proiect_id ?? null
@@ -1166,6 +1178,30 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
     await refetchTevi()
   }
 
+  // ───────── TKT-2026-0388: mută o piesă la început, dintr-o dată (RPC atomic, 20261215c) ─────────
+  // Serverul blochează pachetul și folosește același schimb ca ↑ / ↓ (gărzi, drept pe proiect, POZ KM), totul într-o tranzacție:
+  // o întrerupere nu lasă piesa „la jumătatea drumului”. Fără migrare: butonul ⤒ e dezactivat.
+  async function mutaLaInceput(rowId) {
+    if (swapping || mutaStare !== 'da') return
+    const plan = planMutare(ordineDinRanduri(tevi), rowId, 1)
+    if (!plan.ok) { onError('Nu se poate muta: ' + plan.motiv); return }
+    if (!plan.schimburi.length) return
+    if (plan.schimburi.length > 1 && !window.confirm(`Muți rândul #${plan.pozVeche} la început? Celelalte ${plan.schimburi.length} rânduri de deasupra coboară cu o poziție.`)) return
+    setSwapping(true)
+    const pachetLaStart = pachetIdRef.current
+    const { error } = await supabase.rpc('fn_executie_tevi_muta_pozitie', { p_id: rowId, p_poz_noua: 1 })
+    setSwapping(false)
+    if (pachetIdRef.current !== pachetLaStart) return   // L24: alt pachet deschis între timp
+    if (error) {
+      if (lipsaRpcMutare(error)) setMutaStare('nu')
+      onError(mesajEroareMutare(error))
+      await refetchTevi()
+      return
+    }
+    await refetchTevi()
+    onSuccess('Rândul a fost mutat la început')
+  }
+
   // ───────── Export Centralizator Transgaz (Sub-faza E) ─────────
   // Genereaza XLSX cu xlsx-js-style → upload Storage + INSERT log + download local
   async function handleExportCentralizator() {
@@ -1635,6 +1671,8 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
                     onTogglePending={() => togglePending(row.id)}
                     onSwapUp={() => swapPosition(row.id, 'up')}
                     onSwapDown={() => swapPosition(row.id, 'down')}
+                    onMutaInceput={() => mutaLaInceput(row.id)}
+                    mutaStare={mutaStare}
                     isFirst={idx === 0}
                     isLast={idx === teviWithPozKm.length - 1}
                     swapping={swapping}
@@ -2063,7 +2101,24 @@ function UploadAprobatModal({ pachet, tronson, uploading, history, onUpload, onC
 // EDITOR ROW — un rând din tabel cu render condițional per coloană
 // ===========================================================================
 
-function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, isFirst, isLast, swapping, dirty, registru, folosite, tronsonCod, onPick }) {
+// TKT-2026-0388: butonul ⤒ „mută la început” (dezactivat până se aplică 20261215c)
+function ButonMutaInceput({ onClick, isFirst, swapping, mutaStare, mare }) {
+  const activ = !isFirst && !swapping && mutaStare === 'da'
+  const titlu = mutaStare === 'nu' ? 'Mută la început — disponibil după actualizarea bazei de date'
+    : mutaStare === 'eroare' ? 'Mută la început — nu s-a putut verifica dacă e disponibil (reîncarcă pagina)'
+    : mutaStare == null ? 'Mută la început — se verifică…' : 'Mută rândul la începutul pachetului'
+  return (
+    <button onClick={onClick} disabled={!activ} title={titlu} aria-label="Mută rândul la început"
+      style={{
+        background:'transparent', border:`1px solid ${activ ? G.purple : G.border}`, color: activ ? G.purple : G.dim,
+        cursor: activ ? 'pointer' : 'not-allowed', borderRadius: mare ? 4 : 3, lineHeight: 1, opacity: activ ? 1 : 0.35,
+        ...(mare ? { fontSize: 16, padding:'4px 9px', minWidth: 28, fontWeight: 600 } : { fontSize: 11, padding:'1px 5px' }),
+      }}
+    >⤒</button>
+  )
+}
+
+function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, onMutaInceput, mutaStare, isFirst, isLast, swapping, dirty, registru, folosite, tronsonCod, onPick }) {
   const rowBg = row.sudura_sant_pending ? G.yellowDim+'44' :
                 row.pachet_sudura_sant_id ? G.purpleDim+'44' :
                 dirty ? G.yellowDim+'22' : 'transparent'
@@ -2099,6 +2154,7 @@ function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onC
         </td>
         <td style={{...tdStyle, padding:'6px 4px', textAlign:'center'}}>
           <div style={{ display:'flex', justifyContent:'center', gap: 2, alignItems:'center' }}>
+            <ButonMutaInceput onClick={onMutaInceput} isFirst={isFirst} swapping={swapping} mutaStare={mutaStare} />
             <button
               onClick={onSwapUp}
               disabled={isFirst || swapping}
@@ -2161,6 +2217,8 @@ function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onC
           onTogglePending={onTogglePending}
           onSwapUp={onSwapUp}
           onSwapDown={onSwapDown}
+          onMutaInceput={onMutaInceput}
+          mutaStare={mutaStare}
           isFirst={isFirst}
           isLast={isLast}
           swapping={swapping}
@@ -2174,7 +2232,7 @@ function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onC
 // CELL — celula individuală cu render condițional editare
 // ===========================================================================
 
-function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, isFirst, isLast, swapping, registru, folosite, tronsonCod, onPick }) {
+function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, onMutaInceput, mutaStare, isFirst, isLast, swapping, registru, folosite, tronsonCod, onPick }) {
   const vKey = `${row.id}:${col.key}`
   const vState = validation[vKey]
   const allowed = EDITABLE_FIELDS[row.tip_rand]
@@ -2236,6 +2294,7 @@ function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onC
     return (
       <td style={{...tdStyle, padding:'6px 4px', textAlign:'center', width: col.width}}>
         <div style={{ display:'flex', justifyContent:'center', gap: 5, alignItems:'center' }}>
+          <ButonMutaInceput onClick={onMutaInceput} isFirst={isFirst} swapping={swapping} mutaStare={mutaStare} mare />
           <button
             onClick={onSwapUp}
             disabled={isFirst || swapping}

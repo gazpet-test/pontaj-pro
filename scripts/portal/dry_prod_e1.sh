@@ -1,0 +1,343 @@
+#!/usr/bin/env bash
+# ============================================================================
+# PROBA PE PRODUCTIE (dry run, ROLLBACK) a livrarii E1: 20261118a apoi 20261119a, IN FORMA EXACTA DE LIVRARE CU PLAFON
+# 2000 (runda 14 a runnerului, forma „un mesaj”), intr-O tranzactie care se termina cu ROLLBACK. Pentru coordonator, cu
+# owner-ul pe manual. NU comite nimic; nu atinge drepturi / secrete; nu trimite nimic in afara bazei.
+#
+# Ce face:
+#   0. refuz local (fara conexiune): argumente pe lista alba, variabilele de mediu respinse ca la runner, parola DOAR din
+#      ~/.pgpass / PGPASSFILE;
+#   1. GENERARE cu runnerul oficial (scripts/livrare_migrare.sh --genereaza-in, cod 40, FARA conexiune): pentru fiecare
+#      migrare copia protejata + sha256 + validatorul cu plafon + fisierele runnerului (0_prolog, 1_pre, 3_inreg) — exact
+#      textul livrarii;
+#   2. MESAJUL: aceeasi biblioteca (scripts/livrare_mesaj.sh) ca livrarea: BEGIN; prolog; verificarea un mesaj (cu AMBELE
+#      copii); [1_pre 18a; copia 18a; ;; 3_inreg 18a; LIVRARE_TIMP]; [la fel 19a]; garda finala; ROLLBACK — verificat
+#      independent (scripts/test_livrare_mesaj_unic.py) inainte de conexiune. Singura diferenta fata de doua livrari:
+#      ambele migrari sunt in ACEEASI tranzactie (19a are nevoie de 18a), deci impart acelasi plafon de 2000 ms — mai
+#      strict decat livrarea reala (fiecare cu 2000 ms ai ei). Cu --doar-18a: doar 18a (exact livrarea 18a, cu ROLLBACK);
+#   3. INAINTE: conexiune read-only: db, system_identifier (REFUZ daca nu e cel dat), in_recovery = false, versiunea,
+#      drumul client-server (10 x „SELECT 1;”), AMPRENTA schemei (relatii, coloane, constrangeri, functii, triggere,
+#      politici, roluri, membri, istoricul migrarilor; fara date, fara valori de secvente);
+#   4. PROBA: aceeasi conexiune ca livrarea: SET transaction_timeout = 2000; mesajul (\gexec); RESET. Jurnalul (NOTICE)
+#      se pastreaza; se tiparesc timpii: lock-uri (PORTAL_LOCKS), sfarsitul fiecarei migrari (LIVRARE_TIMP), garda
+#      (PLAFON_TIMP), total;
+#   5. DUPA: aceeasi amprenta (TREBUIE identica) + istoricul fara 18a / 19a.
+# r21: postconditia 18a / 19a spune in mesaj ce porti lipsesc; la PROBA PICATA lista ajunge in porti_postconditie.txt
+# (o poarta pe linie) si in iesire; NOTICE-ul PORTAL_NET_REL (obiectele pg_net acceptate prin amprenta) apare la timpi.
+# Cod de iesire: 0 PROBA OK (garda trecuta, ROLLBACK, amprenta identica) | 1 PROBA PICATA (refuz / timeout / garda;
+#   amprenta identica, nimic schimbat) | 2 argumente | 3 generare / verificare locala | 22 tinta neconfirmata (inainte de
+#   proba, nimic trimis) | 23 (r22) API-ul expune net / raspuns necunoscut / API nelegat de tinta (inainte de orice
+#   conexiune la baza, nimic trimis) | 5 AMPRENTA DIFERITA dupa proba (se analizeaza manual; o alta sesiune poate fi
+#   schimbat schema intre timp) | 6 conexiunea de amprenta a esuat.
+# r22 (Jakarinos r21 P2): PRIMUL pas (dupa argumente) = scripts/portal/scheme_expuse.sh pe API-ul proiectului tintei
+#   (--api-url, legat de --user / --tinta-host; cheia publica in SUPABASE_ANON_KEY, niciodata tiparita): orice cod in afara
+#   de 0 = refuz 23. Nu exista optiune de a-l sari (doar --doar-genereaza, care nu se conecteaza nicaieri).
+#
+# Utilizare (Git Bash pe serverul de livrare; PSQL_BIN = psql-ul folosit la livrare):
+#   SUPABASE_ANON_KEY=<cheia publica> PSQL_BIN=<psql-ul folosit la livrare> bash scripts/portal/dry_prod_e1.sh \
+#     --tinta-host <endpointul de scriere aprobat> --tinta-port <portul lui> --tinta-db postgres \
+#     --tinta-sistem <system_identifier> --user <utilizatorul de livrare> --api-url https://<referinta>.supabase.co \
+#     [--versiune-18a AAAALLZZHHMMSS] [--versiune-19a AAAALLZZHHMMSS] [--doar-18a] [--jurnal <dosar_nou>] \
+#     [--diagnostic-porti] [--doar-genereaza <dosar_nou>]
+#   Versiunile implicite (20261118120000 / 20261119120000) trebuie sa fie LIBERE in istoric (1_pre refuza altfel).
+#
+# MODUL --diagnostic-porti (portal r19, 12.11.2026): proba pe productie a picat la postconditia 18a
+# (PORTAL_POSTCONDITION_FAILED), iar mesajul nu spune CE porti lipsesc. Diagnosticul ruleaza, cu ACELEASI garzi de tinta
+# (system_identifier, in_recovery, istoricul, parola doar din pgpass, plafonul 2000 ms, amprenta inainte = dupa), DOAR 18a
+# pana INAINTE de postconditie si tipareste lista completa a portilor lipsa (DIAG_PORTI_LIPSA), apoi garda finala si
+# ROLLBACK. NU e forma de livrare si nu poate fi confundat cu ea:
+#   * copia 18a = copia protejata a runnerului (sha256 aprobat verificat de runner) din care scripts/portal/diag_porti_taie.py
+#     scoate EXACT pasul 5 din $critic$ (postconditia + amprenta pentru revenire), pe marcajele existente (refuz daca
+#     vreunul nu apare exact o data); SQL-ul livrarii nu se schimba;
+#   * mesajul: BEGIN; prolog; verificarea un mesaj (eticheta DIAGNOSTIC_PORTI_18a, cu sha-ul copiei TAIATE); antetul de
+#     diagnostic; 1_pre 18a; copia taiata; ;; blocul scripts/portal/diag_porti.sql (doar citire); garda finala; ROLLBACK.
+#     FARA 3_inreg (nicio inregistrare in schema_migrations), FARA 19a, FARA COMMIT nicaieri; trimis cu aliasul
+#     diagnostic_porti_nu_e_livrare;
+#   * verificat local INAINTE de conexiune: scripts/portal/test_diag_porti_mesaj.py trebuie sa-l accepte, iar
+#     verificatorul livrarii (scripts/test_livrare_mesaj_unic.py) trebuie sa-l REFUZE;
+#   * jurnalul: DIAGNOSTIC_mesaj_tranzactie.sql, diagnostic.out, porti_lipsa.txt (o poarta pe linie); liniile tiparite au
+#     prefixul „DIAGNOSTIC PORTI”.
+#   Cod de iesire in acest mod: 0 DIAGNOSTIC RULAT (lista completa tiparita, chiar daca nu e goala; ROLLBACK; amprenta
+#   identica) | 1 diagnosticul nu s-a terminat (refuz / timeout / lista incompleta) | 2, 3, 5, 6, 22 ca mai sus.
+# --doar-genereaza <dosar_nou>: construieste si verifica local mesajul (oricare mod), il copiaza in dosar si iese cu 40,
+#   FARA nicio conexiune (pentru review-ul textului inainte de rulare; folosit de scripts/portal/test_diag_porti.sh).
+# L15 v2 (13.11.2026, docs/LIVRARE_L15_V2.md): --amprenta-globala-18a <md5> --diferente-globale-18a <20261118a_....l15.tsv>
+#   [--amprenta-globala-19a <md5> --diferente-globale-19a <20261119a_....l15.tsv>] = forma noua: runnerul genereaza si
+#   pasii AMPRENTA_GLOBALA (2_ag_inainte inaintea copiei, 4_ag_dupa dupa inregistrare) pentru fiecare migrare, iar mesajul
+#   ii include in aceeasi ordine ca livrarea. 19a vine dupa 18a in aceeasi tranzactie => GLOBAL-ul aprobat al lui 19a =
+#   GLOBAL-ul de DUPA 18a (tiparit de scripts/livrare_l15_manifest.sh pe clona). Perechile se dau impreuna (refuz 2 altfel);
+#   doar modul normal (nu --diagnostic-porti). Fara ele: mesajul de dinainte, neschimbat.
+#   Runda 16 a runnerului (17.11.2026): cu amprenta globala runnerul cere plafonul EXACT AG_PLAFON_MS (5000), iar 18a / 19a
+#   (APLICATE pe 13.11, nu se ating) cer 2000 => modul L15 al acestui script se opreste la generare (refuz 3, nimic trimis).
+#   Modul fara L15 (proba istorica a E1, plafon 2000) e neschimbat.
+# ============================================================================
+set -Eeuo pipefail
+umask 077
+refuz() { echo "REFUZ (nimic trimis): $2" >&2; exit "$1"; }
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PLAFON_MS=2000
+M18="$ROOT/supabase/migrations/20261118a_portal_teren_identitate.sql"
+M19="$ROOT/supabase/migrations/20261119a_portal_teren_provisioning.sql"
+H="" P="" D="" SIS="" U="" V18=20261118120000 V19=20261119120000 DOAR18=0 JURNAL="" DIAG=0 GEN="" API_URL=""
+AG18="" AGM18="" AG19="" AGM19=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --doar-18a) DOAR18=1; shift; continue ;;
+    --diagnostic-porti) DIAG=1; shift; continue ;;
+  esac
+  [ $# -ge 2 ] || refuz 2 "optiunea $1 fara valoare"
+  case "$1" in
+    --tinta-host) H="$2" ;; --tinta-port) P="$2" ;; --tinta-db) D="$2" ;; --tinta-sistem) SIS="$2" ;; --user) U="$2" ;;
+    --versiune-18a) V18="$2" ;; --versiune-19a) V19="$2" ;; --jurnal) JURNAL="$2" ;; --doar-genereaza) GEN="$2" ;;
+    --api-url) API_URL="$2" ;;
+    --amprenta-globala-18a) AG18="$2" ;; --diferente-globale-18a) AGM18="$2" ;;
+    --amprenta-globala-19a) AG19="$2" ;; --diferente-globale-19a) AGM19="$2" ;;
+    *) refuz 2 "optiune nepermisa: $1" ;;
+  esac
+  shift 2
+done
+# r19: diagnosticul porneste DOAR 18a (19a cere postconditia 18a trecuta).
+[ "$DIAG" = 0 ] || DOAR18=1
+# L15 v2: perechile amprenta + manifest se dau impreuna; doar in modul normal; 19a cere si forma noua pentru 18a.
+{ [ -z "$AG18$AGM18" ] || { [ -n "$AG18" ] && [ -n "$AGM18" ]; }; } && { [ -z "$AG19$AGM19" ] || { [ -n "$AG19" ] && [ -n "$AGM19" ] && [ -n "$AG18" ]; }; } \
+  || refuz 2 "L15 v2: --amprenta-globala-XXa si --diferente-globale-XXa se dau impreuna (19a doar impreuna cu 18a)"
+[ -z "$AG18" ] || [ "$DIAG" = 0 ] || refuz 2 "L15 v2: forma noua nu se combina cu --diagnostic-porti"
+[ -z "$AG19" ] || [ "$DOAR18" = 0 ] || refuz 2 "L15 v2: --amprenta-globala-19a fara 19a (--doar-18a)"
+[ -z "$AG18" ] || [ -n "$AG19" ] || [ "$DOAR18" = 1 ] || refuz 2 "L15 v2: cu 18a in forma noua, 19a o cere si ea (sau --doar-18a)"
+if [ -n "$GEN" ]; then
+  [ ! -e "$GEN" ] && [ -d "$(dirname "$GEN")" ] || refuz 2 "--doar-genereaza: dosarul trebuie sa fie NOU: $GEN"
+fi
+for v in PGPASSWORD PGOPTIONS PGDATABASE PSQLRC PGHOSTADDR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS PGSERVICE PGSERVICEFILE PGSYSCONFDIR; do
+  [ -z "${!v+x}" ] || refuz 2 "variabila $v e setata (parola: ~/.pgpass / PGPASSFILE)"
+done
+unset PGHOST PGPORT
+[[ "$H" =~ ^[A-Za-z0-9._-]{1,253}$ ]] || refuz 2 "--tinta-host obligatoriu"
+[[ "$P" =~ ^[0-9]{1,5}$ ]] || refuz 2 "--tinta-port obligatoriu"
+[[ "$D" =~ ^[A-Za-z0-9_]{1,63}$ ]] || refuz 2 "--tinta-db obligatoriu"
+[[ "$SIS" =~ ^[0-9]{1,20}$ ]] || refuz 2 "--tinta-sistem obligatoriu (system_identifier)"
+[[ "$U" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || refuz 2 "--user obligatoriu"
+[[ "$V18" =~ ^[0-9]{14}$ && "$V19" =~ ^[0-9]{14}$ && "$V18" != "$V19" ]] || refuz 2 "versiuni invalide"
+[ -f "$M18" ] && [ -f "$M19" ] || refuz 3 "migrarile lipsesc din $ROOT/supabase/migrations"
+# r22 (Jakarinos r21 P2): verificarea „net nu e expusa prin API” e BLOCANTA, inainte de orice conexiune la baza: API-ul
+# proiectului tintei (--api-url, legat de --user / --tinta-host in scheme_expuse.sh) + cheia publica din mediu
+# (SUPABASE_ANON_KEY; nu se tipareste). Cod 1 (net expusa) / 2 (necunoscut) / 3 (API nelegat / parametri) = refuz 23.
+# Doar --doar-genereaza (fara nicio conexiune, nimic trimis) nu o cere.
+if [ -z "$GEN" ]; then
+  [ -n "$API_URL" ] || refuz 2 "--api-url obligatoriu (API-ul REST al proiectului tintei; cheia publica in SUPABASE_ANON_KEY)"
+  [ -n "${SUPABASE_ANON_KEY:-}" ] || refuz 2 "SUPABASE_ANON_KEY lipsa din mediu (cheia publica a proiectului tintei)"
+  API_RC=0; API_OUT="$(mktemp)"
+  SUPABASE_URL="$API_URL" bash "$ROOT/scripts/portal/scheme_expuse.sh" --tinta-host "$H" --user "$U" >"$API_OUT" 2>&1 || API_RC=$?
+  sed 's/^/API: /' "$API_OUT"; rm -f -- "$API_OUT"
+  [ "$API_RC" = 0 ] || refuz 23 "verificarea schemelor expuse prin API: cod $API_RC (1 = net expusa, 2 = necunoscut, 3 = API nelegat de tinta / parametri) — proba NU porneste"
+  echo "✓ API: net nu e expusa prin API-ul proiectului tintei"
+fi
+PSQL="${PSQL_BIN:-psql}"
+export PGCLIENTENCODING=UTF8
+W="$(mktemp -d)"; trap 'chmod -R u+w "$W" 2>/dev/null; rm -rf "$W"' EXIT
+if [ -n "$JURNAL" ]; then
+  [ ! -e "$JURNAL" ] && [ -d "$(dirname "$JURNAL")" ] || refuz 2 "--jurnal: dosarul trebuie sa fie NOU: $JURNAL"
+  mkdir -- "$JURNAL"
+else
+  JURNAL="$W/jurnal"; mkdir -- "$JURNAL"
+fi
+SHA18="$(sha256sum "$M18" | cut -d' ' -f1)"; SHA19="$(sha256sum "$M19" | cut -d' ' -f1)"
+echo "→ artefacte: 20261118a sha256 $SHA18; 20261119a sha256 $SHA19 (compara-le cu cele aprobate)"
+
+# 1. Generare cu runnerul oficial, fara conexiune (cod 40).
+genereaza() { # $1 artefactul, $2 sha, $3 versiunea, $4 dosarul (nou) [, $5 GLOBAL aprobat, $6 manifestul — L15 v2]
+  local rc=0 ag=()
+  [ -z "${5:-}" ] || ag=(--amprenta-globala "$5" --diferente-globale "$6")
+  PSQL_BIN=/nu/se/foloseste bash "$ROOT/scripts/livrare_migrare.sh" --migrare "$1" --sha256 "$2" --versiune "$3" \
+    --tinta-db "$D" --tinta-sistem "$SIS" --tinta-host "$H" --tinta-port "$P" --user "$U" \
+    --plafon-tranzactie-ms "$PLAFON_MS" --genereaza-in "$4" ${ag[@]+"${ag[@]}"} >"$4.log" 2>&1 || rc=$?
+  [ "$rc" = 40 ] || { cat "$4.log" >&2; refuz 3 "generarea cu runnerul a esuat pentru $(basename "$1") (cod $rc, asteptat 40)"; }
+}
+genereaza "$M18" "$SHA18" "$V18" "$W/g18" "$AG18" "$AGM18"
+[ "$DOAR18" = 1 ] || genereaza "$M19" "$SHA19" "$V19" "$W/g19" "$AG19" "$AGM19"
+# L15 v2: argumentele verificatorului local al mesajului (pasii amprentei, md5 + manifest) pentru fiecare migrare
+L15_18=(); [ -z "$AG18" ] || L15_18=(--l15 "$AG18" "$AGM18")
+L15_19=(); [ -z "$AG19" ] || L15_19=(--l15 "$AG19" "$AGM19")
+N18="$(basename "$M18" .sql)"; N19="$(basename "$M19" .sql)"
+
+# 2. Mesajul: aceeasi biblioteca ca livrarea; ROLLBACK in loc de COMMIT.
+# shellcheck source=../livrare_mesaj.sh
+. "$ROOT/scripts/livrare_mesaj.sh"
+REST="$W/m_rest.sql"; FELII=()
+adauga() { # $1 dosarul generat, $2 numele migrarii, $3 sha
+  cat "$1/1_pre.sql" >>"$REST"
+  [ ! -f "$1/2_ag_inainte.sql" ] || cat "$1/2_ag_inainte.sql" >>"$REST"   # L15 v2: ca la livrare, inaintea copiei
+  FELII+=("$(lm_octeti "$REST"):$(lm_octeti "$1/$2.sql"):$3")
+  { cat "$1/$2.sql"; lm_sep; cat "$1/3_inreg.sql"; [ ! -f "$1/4_ag_dupa.sql" ] || cat "$1/4_ag_dupa.sql"; lm_timp "$2"; } >>"$REST"
+}
+: >"$REST"
+TAG_M="lm_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+if [ "$DIAG" = 0 ]; then
+  NUME_FIN=dry_prod_e1; MESAJ_J=mesaj_tranzactie.sql; OUT_J=proba.out; PFX=""
+  adauga "$W/g18" "$N18" "$SHA18"
+  [ "$DOAR18" = 1 ] || adauga "$W/g19" "$N19" "$SHA19"
+  lm_fin "$NUME_FIN" "$PLAFON_MS" ROLLBACK >>"$REST" || refuz 3 "garda finala"
+  lm_mesaj "$W/g18/0_prolog.sql" "$REST" "$W/m_mesaj.sql" "$NUME_FIN" "${FELII[@]}" || refuz 3 "construirea mesajului"
+  lm_trimite "$W/m_mesaj.sql" "$TAG_M" "$W/5_mesaj.sql" || refuz 3 "fisierul de trimitere"
+  python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$W/5_mesaj.sql" "$W/g18/$N18.sql" "$SHA18" "$PLAFON_MS" ROLLBACK ${L15_18[@]+"${L15_18[@]}"} \
+    || refuz 3 "verificarea locala a mesajului (18a)"
+  [ "$DOAR18" = 1 ] || python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$W/5_mesaj.sql" "$W/g19/$N19.sql" "$SHA19" "$PLAFON_MS" ROLLBACK ${L15_19[@]+"${L15_19[@]}"} \
+    || refuz 3 "verificarea locala a mesajului (19a)"
+else
+  # r19: mesajul de DIAGNOSTIC (vezi antetul): 18a fara postconditie + lista portilor, fara inregistrare, ROLLBACK.
+  NUME_FIN=DIAGNOSTIC_PORTI_18a; MESAJ_J=DIAGNOSTIC_mesaj_tranzactie.sql; OUT_J=diagnostic.out; PFX="DIAGNOSTIC PORTI: "
+  BLOC="$ROOT/scripts/portal/diag_porti.sql"
+  [ -f "$BLOC" ] || refuz 3 "blocul de diagnostic lipseste: $BLOC"
+  python3 "$ROOT/scripts/portal/diag_porti_taie.py" "$W/g18/$N18.sql" "$W/diag_18a.sql" \
+    || refuz 3 "taietura postconditiei 18a (marcajele nu se gasesc exact o data)"
+  printf '%s\n' "DO \$diag_antet\$ BEGIN RAISE NOTICE 'DIAG_PORTI: mesaj de DIAGNOSTIC, NU livrarea: 18a fara postconditie, apoi lista portilor lipsa; ROLLBACK la final, fara inregistrare in istoric, nimic comis'; END \$diag_antet\$;" >>"$REST"
+  cat "$W/g18/1_pre.sql" >>"$REST"
+  FELII+=("$(lm_octeti "$REST"):$(lm_octeti "$W/diag_18a.sql"):$(lm_sha "$W/diag_18a.sql")")
+  { cat "$W/diag_18a.sql"; lm_sep; cat "$BLOC"; } >>"$REST"
+  lm_fin "$NUME_FIN" "$PLAFON_MS" ROLLBACK >>"$REST" || refuz 3 "garda finala"
+  lm_mesaj "$W/g18/0_prolog.sql" "$REST" "$W/m_mesaj.sql" "$NUME_FIN" "${FELII[@]}" || refuz 3 "construirea mesajului"
+  # Trimiterea: aceeasi forma ca lm_trimite (un SELECT + \gexec), alt alias => verificatorul livrarii il refuza.
+  if grep -qF "\$$TAG_M\$" "$W/m_mesaj.sql"; then refuz 3 "tag-ul mesajului apare in text"; fi
+  { printf 'SELECT $%s$' "$TAG_M"; cat "$W/m_mesaj.sql"; printf '$%s$ AS diagnostic_porti_nu_e_livrare \\gexec\n' "$TAG_M"; } >"$W/5_mesaj.sql"
+  python3 "$ROOT/scripts/portal/test_diag_porti_mesaj.py" "$W/5_mesaj.sql" "$W/g18/$N18.sql" "$SHA18" "$PLAFON_MS" "$BLOC" \
+    || refuz 3 "verificarea locala a mesajului de diagnostic"
+  if python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$W/5_mesaj.sql" "$W/g18/$N18.sql" "$SHA18" "$PLAFON_MS" ROLLBACK >/dev/null 2>&1; then
+    refuz 3 "verificatorul LIVRARII a acceptat mesajul de diagnostic (s-ar putea confunda cu livrarea)"
+  fi
+  echo "${PFX}verificatorul livrarii REFUZA mesajul (corect: nu e forma de livrare)"
+fi
+cp -- "$W/g18/00_sesiune.sql" "$W/g18/9_reset.sql" "$W/"
+cp -- "$W/m_mesaj.sql" "$JURNAL/$MESAJ_J"
+echo "→ ${PFX}mesajul tranzactiei: $(lm_octeti "$W/m_mesaj.sql") octeti, un singur mesaj de la BEGIN la ROLLBACK ($( [ "$DIAG" = 1 ] && echo '18a fara postconditie + lista portilor' || { [ "$DOAR18" = 1 ] && echo 18a || echo '18a + 19a'; } ))"
+if [ -n "$GEN" ]; then
+  mkdir -- "$GEN" && cp -- "$W/00_sesiune.sql" "$W/5_mesaj.sql" "$W/9_reset.sql" "$W/m_mesaj.sql" "$GEN/" || refuz 3 "--doar-genereaza: copierea"
+  [ "$DIAG" = 0 ] || cp -- "$W/diag_18a.sql" "$GEN/"
+  echo "✓ ${PFX}GENERAT si verificat local (fara conexiune, nimic trimis): $GEN ($(cd "$GEN" && ls | tr '\n' ' '))"
+  exit 40
+fi
+
+CONN=(-h "$H" -p "$P" -U "$U" -d "$D")
+# 3. / 5. Amprenta (read-only, fara plafon) + tinta. Rezultat pe o linie: db|system_identifier|in_recovery|versiune|md5|istoric
+cat >"$W/amprenta.sql" <<'SQL'
+SET transaction_timeout = 0;
+BEGIN;
+SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;
+SET LOCAL search_path = pg_catalog, pg_temp;
+SELECT current_database() || '|' || (SELECT system_identifier::text FROM pg_control_system()) || '|' ||
+       pg_is_in_recovery()::text || '|' || current_setting('server_version_num') || '|' ||
+       md5(coalesce((SELECT string_agg(x, E'\n' ORDER BY x) FROM (
+         SELECT 'n|' || n.nspname || '|' || pg_get_userbyid(n.nspowner) || '|' || coalesce(n.nspacl::text, '') AS x
+           FROM pg_namespace n WHERE n.nspname !~ '^pg_(toast_)?temp_'
+         UNION ALL
+         SELECT 'c|' || c.oid::regclass::text || '|' || c.relkind::text || '|' || pg_get_userbyid(c.relowner) || '|' ||
+                coalesce(c.relacl::text, '') || '|' || c.relrowsecurity::text || c.relforcerowsecurity::text
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname !~ '^pg_(toast_)?temp_' AND n.nspname <> 'pg_toast'
+         UNION ALL
+         SELECT 'a|' || a.attrelid::regclass::text || '|' || a.attname || '|' || format_type(a.atttypid, a.atttypmod) || '|' ||
+                a.attnotnull::text || '|' || coalesce(a.attacl::text, '')
+           FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE a.attnum > 0 AND NOT a.attisdropped AND n.nspname !~ '^pg_(toast_)?temp_' AND n.nspname <> 'pg_toast'
+         UNION ALL
+         SELECT 'k|' || co.conrelid::regclass::text || '|' || co.conname || '|' || pg_get_constraintdef(co.oid)
+           FROM pg_constraint co JOIN pg_namespace n ON n.oid = co.connamespace WHERE n.nspname !~ '^pg_(toast_)?temp_'
+         UNION ALL
+         SELECT 'f|' || p.oid::regprocedure::text || '|' || md5(p.prosrc) || '|' || p.prosecdef::text || '|' ||
+                pg_get_userbyid(p.proowner) || '|' || coalesce(p.proacl::text, '') || '|' || coalesce(p.proconfig::text, '')
+           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname !~ '^pg_(toast_)?temp_'
+         UNION ALL
+         SELECT 't|' || t.tgrelid::regclass::text || '|' || t.tgname || '|' || t.tgenabled::text || '|' || t.tgfoid::regprocedure::text
+           FROM pg_trigger t
+         UNION ALL
+         SELECT 'p|' || pol.polrelid::regclass::text || '|' || pol.polname || '|' || pol.polcmd::text || '|' || pol.polroles::text || '|' ||
+                coalesce(pg_get_expr(pol.polqual, pol.polrelid), '') || '|' || coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '')
+           FROM pg_policy pol
+         UNION ALL
+         SELECT 'r|' || r.rolname || '|' || r.rolsuper::text || r.rolinherit::text || r.rolcreaterole::text || r.rolcreatedb::text ||
+                r.rolcanlogin::text || r.rolreplication::text || r.rolbypassrls::text
+           FROM pg_roles r
+         UNION ALL
+         SELECT 'm|' || m.roleid::regrole::text || '|' || m.member::regrole::text FROM pg_auth_members m
+         UNION ALL
+         SELECT 's|' || s.version || '|' || coalesce(s.name, '') FROM supabase_migrations.schema_migrations s) z), '')) || '|' ||
+       (SELECT count(*) FROM supabase_migrations.schema_migrations
+         WHERE name IN ('20261118a_portal_teren_identitate', '20261119a_portal_teren_provisioning'));
+COMMIT;
+SQL
+amprenta() { # $1 eticheta -> AMP (linia)
+  "$PSQL" -X -q -At -v ON_ERROR_STOP=1 -f "$W/amprenta.sql" "${CONN[@]}" >"$JURNAL/amprenta_$1.out" 2>&1 \
+    || { cat "$JURNAL/amprenta_$1.out" >&2; echo "✗ amprenta $1: conexiunea / interogarea a esuat" >&2; exit 6; }
+  # psql nativ pe Windows scrie CRLF: CR-ul se scoate inainte de comparare
+  AMP="$(tr -d '\r' <"$JURNAL/amprenta_$1.out" | grep -E '^[A-Za-z0-9_]+\|[0-9]+\|(true|false)\|[0-9]+\|[0-9a-f]{32}\|[0-9]+$' | tail -n 1)" || true
+  [ -n "$AMP" ] || { cat "$JURNAL/amprenta_$1.out" >&2; echo "✗ amprenta $1: rezultat nerecunoscut" >&2; exit 6; }
+}
+amprenta inainte
+IFS='|' read -r A_DB A_SIS A_REC A_VER A_MD5 A_IST <<<"$AMP"
+[ "$A_DB" = "$D" ] && [ "$A_SIS" = "$SIS" ] && [ "$A_REC" = false ] \
+  || { echo "✗ TINTA NECONFIRMATA: db=$A_DB system_identifier=$A_SIS in_recovery=$A_REC (cerut $D / $SIS / false) — proba NU s-a trimis" >&2; exit 22; }
+[ "$A_IST" = 0 ] || { echo "✗ 18a / 19a sunt deja in istoric ($A_IST randuri) — proba nu are sens, NU s-a trimis" >&2; exit 22; }
+(( A_VER >= 170000 )) || { echo "✗ serverul nu e PostgreSQL 17 ($A_VER)" >&2; exit 22; }
+for _ in 1 2 3 4 5 6 7 8 9 10; do echo 'SELECT 1;'; done >"$W/drum.sql"
+t0="$(date +%s%3N)"; "$PSQL" -X -q -At -f "$W/drum.sql" "${CONN[@]}" >/dev/null 2>&1 || true; t1="$(date +%s%3N)"
+echo "✓ tinta: db=$A_DB system_identifier=$A_SIS in_recovery=false PG $A_VER; amprenta inainte $A_MD5; 10 x SELECT 1 (cu conectarea) = $((t1 - t0)) ms"
+
+# 4. Proba: exact forma livrarii (SET de sesiune; mesajul; RESET), cu ROLLBACK.
+echo "→ ${PFX}proba: SET transaction_timeout = $PLAFON_MS; UN mesaj [BEGIN ... garda finala, ROLLBACK]; RESET"
+t0="$(date +%s%3N)"; rc=0
+"$PSQL" -X -q -v ON_ERROR_STOP=1 -f "$W/00_sesiune.sql" -f "$W/5_mesaj.sql" -f "$W/9_reset.sql" "${CONN[@]}" \
+  >"$JURNAL/$OUT_J" 2>&1 || rc=$?
+t1="$(date +%s%3N)"
+echo "--- ${PFX}timpi (din jurnalul probei, ms de la BEGIN) ---"
+grep -E 'PORTAL_LOCKS|LIVRARE_TIMP|PLAFON_TIMP|PORTAL_1B_RECONCILIATE|PORTAL_NET_REL:|AMPRENTA_GLOBALA' "$JURNAL/$OUT_J" | sed 's/^.*NOTICE: *//' || true
+echo "${PFX}total psql (conectare + SET + trimiterea mesajului + executie + RESET): $((t1 - t0)) ms; cod psql $rc"
+REZ=0
+if [ "$rc" != 0 ] || ! grep -q "PLAFON_TIMP $NUME_FIN: garda trecuta" "$JURNAL/$OUT_J"; then
+  REZ=1
+  echo "✗ ${PFX}PROBA PICATA (cod psql $rc). Motivul (ultimele linii ale jurnalului):" >&2
+  grep -E 'ERROR|FATAL|terminating|MESAJ_UNIC|PLAFON_|PORTAL_|DIAG_PORTI|AMPRENTA_GLOBALA' "$JURNAL/$OUT_J" | tail -n 8 >&2 || tail -n 8 "$JURNAL/$OUT_J" >&2
+  # r21: postconditia 18a / 19a numeste portile lipsa in mesaj => le scriem o poarta pe linie (porti_postconditie.txt).
+  tr -d '\r' <"$JURNAL/$OUT_J" | sed -nE 's/^.*PORTAL_(POSTCONDITION_FAILED|1B_POSTCONDITION): [0-9]+ porti: //p' | head -n 1 \
+    | awk -F'; ' '{ for (i = 1; i <= NF; i++) print $i }' >"$JURNAL/porti_postconditie.txt" || true
+  if [ -s "$JURNAL/porti_postconditie.txt" ]; then
+    echo "--- ${PFX}portile lipsa, din mesajul postconditiei ($(wc -l <"$JURNAL/porti_postconditie.txt" | tr -d ' ')) ---" >&2
+    sed "s/^/${PFX}/" "$JURNAL/porti_postconditie.txt" >&2
+  fi
+fi
+if [ "$DIAG" = 1 ]; then
+  # r19: lista portilor din NOTICE-uri (psql nativ pe Windows scrie CRLF). Completitudine (L12): numarul anuntat de
+  # server = numarul de linii DIAG_PORTI_LIPSA, numerotate 1..N in ordine; altfel diagnosticul e INCOMPLET (REZ=1).
+  tr -d '\r' <"$JURNAL/$OUT_J" | grep -E 'NOTICE: +DIAG_PORTI' | sed -E 's/^.*NOTICE: +//' >"$JURNAL/diagnostic_linii.txt" || true
+  N_ANUNT="$(sed -nE 's/^DIAG_PORTI 18a: ([0-9]+) porti lipsa$/\1/p' "$JURNAL/diagnostic_linii.txt")"
+  sed -nE 's/^DIAG_PORTI_LIPSA [0-9]+: //p' "$JURNAL/diagnostic_linii.txt" >"$JURNAL/porti_lipsa.txt"
+  N_LIN="$(wc -l <"$JURNAL/porti_lipsa.txt" | tr -d ' ')"
+  NUM_OK=1; i=0
+  while IFS= read -r l; do i=$((i + 1)); [[ "$l" == "DIAG_PORTI_LIPSA $i: "* ]] || NUM_OK=0; done \
+    < <(grep -E '^DIAG_PORTI_LIPSA ' "$JURNAL/diagnostic_linii.txt")
+  echo "--- ${PFX}lista portilor lipsa (din fn_portal_porti_lipsa, in tranzactia anulata) ---"
+  if [[ "$N_ANUNT" =~ ^[0-9]+$ ]] && [ "$N_ANUNT" = "$N_LIN" ] && [ "$NUM_OK" = 1 ]; then
+    echo "${PFX}$N_ANUNT porti lipsa:"
+    grep -E '^DIAG_PORTI_(LIPSA|DETALIU|CONTEXT)' "$JURNAL/diagnostic_linii.txt" | sed "s/^/${PFX}/" || true
+  else
+    REZ=1
+    echo "✗ ${PFX}lista INCOMPLETA sau lipsa (anuntat '${N_ANUNT:-nimic}', primite $N_LIN, numerotare ok=$NUM_OK)" >&2
+  fi
+fi
+
+# 5. Dupa: amprenta identica, istoricul fara 18a / 19a.
+amprenta dupa
+IFS='|' read -r B_DB B_SIS B_REC B_VER B_MD5 B_IST <<<"$AMP"
+if [ "$B_SIS" != "$SIS" ] || [ "$B_MD5" != "$A_MD5" ] || [ "$B_IST" != 0 ]; then
+  echo "✗ AMPRENTA DIFERITA dupa proba: inainte $A_MD5, dupa $B_MD5 (istoric 18a/19a: $B_IST) — analiza manuala (o alta sesiune poate fi schimbat schema intre timp); jurnal: $JURNAL" >&2
+  exit 5
+fi
+echo "✓ ${PFX}amprenta dupa = inainte ($B_MD5); istoricul fara 18a / 19a; nimic comis"
+if [ "$DIAG" = 1 ] && [ "$REZ" = 0 ]; then
+  echo "✓ DIAGNOSTIC PORTI RULAT: $N_ANUNT porti lipsa (lista in $JURNAL/porti_lipsa.txt), garda trecuta, ROLLBACK; NU e o proba de livrare; jurnal: $JURNAL"
+elif [ "$DIAG" = 1 ]; then
+  echo "✗ DIAGNOSTIC PORTI NETERMINAT, nimic schimbat; jurnal: $JURNAL" >&2
+elif [ "$REZ" = 0 ]; then
+  echo "✓ PROBA OK: forma de livrare cu plafon $PLAFON_MS incape (garda trecuta, ROLLBACK); jurnal: $JURNAL"
+else
+  echo "✗ PROBA PICATA, nimic schimbat; jurnal: $JURNAL" >&2
+fi
+[ "$JURNAL" != "$W/jurnal" ] || { echo "--- ${PFX}jurnalul probei ---"; cat "$JURNAL/$OUT_J"; }
+exit "$REZ"

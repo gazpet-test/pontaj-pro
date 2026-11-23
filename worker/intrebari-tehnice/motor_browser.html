@@ -1,0 +1,29 @@
+<!doctype html>
+<!-- Testul în BROWSER al motorului unic (r4, PR #1086): același motor (src/intrebariMascare.js, importat direct, fără bundler) și
+     același set de cazuri (teste_motor.json) ca vitest și ca procesul Node din test_motor.py. Nu face parte din aplicație.
+     Servire (din rădăcina repo-ului, doar pe calculatorul local):
+       python -m http.server 8765 --bind 127.0.0.1
+     apoi deschide http://127.0.0.1:8765/worker/intrebari-tehnice/motor_browser.html
+     Rezultatul: elementul #rezultat (text) și window.REZULTAT_MOTOR = {gata, ok, total_esecuri, esecuri, browser}. -->
+<html lang="ro">
+<head><meta charset="utf-8"><title>Motorul unic — testul în browser</title></head>
+<body style="font-family: sans-serif">
+<h1>Motorul unic — cazurile comune în browser</h1>
+<pre id="rezultat">se rulează…</pre>
+<script type="module">
+  const el = document.getElementById('rezultat')
+  window.REZULTAT_MOTOR = { gata: false }
+  try {
+    const E = await import('../../src/intrebariMascare.js')
+    const { ruleazaCazuri } = await import('./motor_cazuri.mjs')
+    const T = await (await fetch('./teste_motor.json', { cache: 'no-store' })).json()
+    const esecuri = ruleazaCazuri(E, T)
+    window.REZULTAT_MOTOR = { gata: true, ok: esecuri.length === 0, total_esecuri: esecuri.length, esecuri, browser: navigator.userAgent }
+    el.textContent = esecuri.length === 0 ? 'OK — toate cazurile trec în acest browser.' : `EȘEC — ${esecuri.length} verificări:\n` + JSON.stringify(esecuri, null, 1)
+  } catch (e) {
+    window.REZULTAT_MOTOR = { gata: true, ok: false, eroare: String(e && e.message || e) }
+    el.textContent = 'EROARE la încărcare: ' + (e && e.message || e)
+  }
+</script>
+</body>
+</html>

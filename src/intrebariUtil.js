@@ -36,6 +36,7 @@ export const ETICHETA_STARE = {
   in_lucru: { t: 'Se analizează…', c: '#1F6FEB' },
   raspuns: { t: 'Răspuns primit', c: '#2EA043' },
   eroare: { t: 'Fără răspuns', c: '#F85149' },
+  de_verificat: { t: 'De verificat', c: '#A371F7' },   // 20261131e: „Răspuns neclar — trimite la verificare”
 }
 
 // Markdown minimal → blocuri (fără HTML: textul se afișează ca text, React îl escapează). Suportă #/##/###, liste -, *, 1.,

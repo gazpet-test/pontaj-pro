@@ -12,10 +12,174 @@
 //   v_active_km_ore.activ_id        (FĂRĂ E)
 // ════════════════════════════════════════════════════════════════════════════
 
+import { PRAG_CITIRI, zi, zileIntre } from './citiriBord.js'
+import { citesteCompletDupaId } from './logisticaTransporturi.js'
+
+// TKT-2026-0380 (r3): lista fișelor din tabul Service (din ea se calculează KPI-ul și filtrul
+// „Scadențe”) se citește COMPLET: serverul taie orice răspuns la 1.000 de rânduri fără eroare, iar o
+// fișă veche cu scadența depășită, rămasă după tăietură, ar scoate utilajul din „depășite”. Aceeași
+// citire ca la Transporturi (#1069): keyset pe id, numărare la început și la final, reîncercare de la
+// zero la orice abatere, altfel EROARE (niciodată o listă parțială prezentată ca întreagă).
+export const SELECT_FISE_SERVICE = '*, logistica_active(id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, km_actuali, ore_functionare_actuale, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)), logistica_service_intrari(id)'
+export const NUME_FISE_SERVICE = { pl: 'fișe de service', plArt: 'fișele de service', unul: 'o fișă de service', art: 'fișa' }
+// Ordinea listei de până acum: data_fisei descrescător (fără dată la final), apoi id descrescător.
+export const ordineListaFise = (a, b) => {
+  const da = a.data_fisei || null, db = b.data_fisei || null
+  if (da !== db) { if (da == null) return 1; if (db == null) return -1; return da < db ? 1 : -1 }
+  return b.id - a.id
+}
+// tabel = () => client.from('logistica_service_fise'). Aruncă la orice eroare / citire incompletă.
+export async function incarcaFiseService(tabel, { pagina = 1000, incercari = 3 } = {}) {
+  const rows = await citesteCompletDupaId(o => tabel().select(o.head ? 'id' : SELECT_FISE_SERVICE, o),
+    { pagina, incercari, nume: NUME_FISE_SERVICE })
+  return rows.sort(ordineListaFise)
+}
+
+// TKT-2026-0380 (r4): TOATE citirile din care iese verdictul „depășit / la zi” (KPI, filtrul „Scadențe”,
+// exportul) se citesc complet, cu același helper ca fișele, și au O SINGURĂ stare de eroare:
+//  - fișele de service (scadențele);
+//  - activele (acoperirea flotei + fara_service_gazpet: comodat / închiriat ies din scadențe);
+//  - km / ore live din v_active_km_ore (fără ele o revizie depășită la km / ore nu mai apare deloc).
+// Eșecul ORICĂREIA = eroare (date goale + mesaj), niciodată „Toate la zi” din date parțiale.
+// Itemii preset (șablonul unei fișe noi) nu intră în verdict: eroarea lor are mesaj separat.
+export const SELECT_ACTIVE_SERVICE = 'id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, stare, fara_service_gazpet, km_actuali, ore_functionare_actuale, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)'
+export const NUME_ACTIVE_SERVICE = { pl: 'active', plArt: 'activele', unul: 'un activ', art: 'activul' }
+export const NUME_KM_ORE = { pl: 'citiri km / ore live', plArt: 'citirile km / ore live', unul: 'o citire km / ore live', art: 'citirea km / ore a activului' }
+export const NUME_PRESET = { pl: 'itemi preset', plArt: 'itemii preset', unul: 'un item preset', art: 'itemul preset' }
+// Ordinea de până acum a activelor: cod_intern crescător (fără cod la final), apoi id
+const ordineActive = (a, b) => {
+  const x = a.cod_intern ?? null, y = b.cod_intern ?? null
+  if (x !== y) { if (x == null) return 1; if (y == null) return -1; const c = String(x).localeCompare(String(y), 'ro'); if (c) return c }
+  return a.id - b.id
+}
+const ordinePreset = (a, b) => {
+  const ga = a.grupa ?? '', gb = b.grupa ?? ''
+  if (ga !== gb) return String(ga).localeCompare(String(gb), 'ro')
+  return (a.ordine ?? 0) - (b.ordine ?? 0) || a.id - b.id
+}
+const mesajEroare = e => e?.message || String(e)
+
+// client = supabase (sau un fals în teste). Întoarce
+// { fise, active, kmOre: { [activ_id]: { km_live, ore_live } }, preset, eroare, eroarePreset }.
+// eroare ≠ '' → fise / active / kmOre sunt GOALE (nu se publică nimic parțial).
+export async function incarcaDateService(client, { pagina = 1000, incercari = 3 } = {}) {
+  const citeste = (tabel, select, nume, { cheie = 'id', filtru = q => q } = {}) =>
+    citesteCompletDupaId(o => filtru(client.from(tabel).select(o.head ? cheie : select, o)), { pagina, incercari, nume, cheie })
+  const [fiseR, activeR, kmR, presetR] = await Promise.allSettled([
+    incarcaFiseService(() => client.from('logistica_service_fise'), { pagina, incercari }),
+    citeste('logistica_active', SELECT_ACTIVE_SERVICE, NUME_ACTIVE_SERVICE),
+    citeste('v_active_km_ore', 'activ_id, km_live, ore_live', NUME_KM_ORE, { cheie: 'activ_id' }),
+    citeste('logistica_service_itemi_preset', '*', NUME_PRESET, { filtru: q => q.eq('activ', true) }),
+  ])
+  const erori = []
+  if (fiseR.status === 'rejected') erori.push(`fișe de service: ${mesajEroare(fiseR.reason)}`)
+  if (activeR.status === 'rejected') erori.push(`active: ${mesajEroare(activeR.reason)}`)
+  if (kmR.status === 'rejected') erori.push(`km / ore live: ${mesajEroare(kmR.reason)}`)
+  const preset = presetR.status === 'fulfilled' ? presetR.value.sort(ordinePreset) : []
+  const eroarePreset = presetR.status === 'rejected' ? mesajEroare(presetR.reason) : ''
+  if (erori.length) return { fise: [], active: [], kmOre: {}, preset, eroare: erori.join(' · '), eroarePreset }
+  const kmOre = {}
+  for (const r of kmR.value) kmOre[r.activ_id] = r
+  const active = activeR.value.sort(ordineActive).map(a => ({
+    ...a,
+    categorie: a.logistica_categorii ? { tip: a.logistica_categorii.tip, subcategorie: a.logistica_categorii.subcategorie } : null,
+  }))
+  return { fise: fiseR.value, active, kmOre, preset, eroare: '', eroarePreset }
+}
+
+// Scadențele deschise pe activ (KPI + filtrul „Scadențe”) din rezultatul lui incarcaDateService.
+// null = date incomplete → nu există verdict (UI-ul arată „—”, filtrul și exportul refuză).
+export function scadenteDinDate({ fise, active, kmOre, eroare }, { azi = aziBucuresti(), acoperiri = null } = {}) {
+  if (eroare) return null
+  const faraService = new Set((active || []).filter(a => a.fara_service_gazpet).map(a => a.id))
+  return scadenteDeschisePeActiv(fise, kmOre, { azi, acoperiri, exclude: id => faraService.has(id) })
+}
+
 // Praguri pentru a marca o scadență drept „aproape" (galben)
 export const PRAG_ZILE = 30
 export const PRAG_KM   = 1000
 export const PRAG_ORE  = 100
+
+// Ziua de azi 'AAAA-LL-ZZ' în Europe/Bucharest.
+export const aziBucuresti = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+
+const numar = v => (v == null || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null))
+const are = v => v != null && v !== ''
+
+// Citirea de pe fișă (cea mai mare dintre intrare / ieșire) pentru 'km' sau 'ore'; null dacă lipsește.
+export function citireFisa(fisa, tip) {
+  const [a, b] = tip === 'km' ? ['km_intrare', 'km_iesire'] : ['ore_intrare', 'ore_iesire']
+  const v = [fisa?.[a], fisa?.[b]].map(numar).filter(x => x != null)
+  return v.length ? Math.max(...v) : null
+}
+
+// TKT-2026-0380 (r2): e plauzibilă CITIREA curentă (km / ore live)? Nu se judecă după cât de mare e
+// restanța (o revizie ratată de mult poate avea o restanță uriașă și reală), ci după ritmul de creștere
+// față de citiri datate: de la o citire `val` din ziua `data` până azi, contorul poate crește cel mult
+// (zile + 1) × maxPeZi (24 h/zi la ore, 1.000 km/zi la km — PRAG_CITIRI din citiriBord.js, aceleași
+// plafoane ca la validarea fișelor și alimentărilor). Plus plafonul absolut.
+// referinte = [{ val, data, sursa: 'fisa' | 'alimentare', id }]. Telemetria NU e referință (odometrul
+// GPS poate porni de la altă valoare decât bordul), valoarea manuală nu are dată.
+// Întoarce null (plauzibilă / nu se poate judeca) sau { motiv: 'plafon' | 'ritm', ref, zile, posibil, crestere }.
+// Limită cunoscută (r3): nu există o reconciliere a înlocuirii contorului / bordului. Dacă un contor
+// nou pornește de la altă valoare decât cel vechi, citirile de dinainte rămân referință și eticheta
+// „citire de verificat” poate apărea pe nedrept până la primele citiri datate de după înlocuire.
+// Eticheta doar cere verificarea; nivelul (depășit / aproape) nu se schimbă din cauza ei.
+export function citireNeverosimila(tip, live, referinte, azi = aziBucuresti()) {
+  const p = PRAG_CITIRI[tip], L = numar(live)
+  if (!p || L == null) return null
+  if (L > p.plafon) return { motiv: 'plafon', plafon: p.plafon }
+  const d1 = zi(azi)
+  if (!d1) return null
+  let rau = null
+  for (const r of referinte || []) {
+    if (!r || (r.sursa !== 'fisa' && r.sursa !== 'alimentare')) continue
+    const v = numar(r.val), d0 = zi(r.data)
+    if (v == null || v <= 0 || v > p.plafon || !d0 || d0 > d1) continue
+    const zile = zileIntre(d0, d1) + 1, posibil = zile * p.maxPeZi, exces = L - v - posibil
+    if (exces > 0 && (!rau || exces > rau.exces)) rau = { motiv: 'ritm', ref: { sursa: r.sursa, id: r.id ?? null, val: v, data: d0 }, zile, posibil, crestere: L - v, exces }
+  }
+  return rau
+}
+
+// ─── Ce scadențe vechi sunt închise de o fișă ulterioară (TKT-2026-0380 r2) ─────────────────
+// O scadență a fișei F (dată / km / ore) e ACOPERITĂ doar de o fișă G a aceluiași activ, ulterioară
+// (data_fisei, apoi id), care: e FINALIZATĂ (statusurile: programat / in_lucru / finalizat), e de tip
+// MENTENANȚĂ (tipurile: mentenanta / reparatie), are data_fisei ≤ azi și are ea însăși o scadență pe
+// ACEEAȘI dimensiune (ore cu ore, km cu km, dată cu dată) — adică revizia acelei obligații s-a făcut și
+// s-a stabilit următoarea. Orice alt caz (reparație, fișă programată / în lucru, altă dimensiune, fișă
+// fără dată) NU acoperă: restanța rămâne afișată.
+export const DIMENSIUNI = ['data', 'km', 'ore']
+const CAMP_SCADENTA = { data: 'urmatoarea_data', km: 'urmatoarea_km', ore: 'urmatoarea_ore' }
+const ordine = (a, b) => (a.data_fisei || '').localeCompare(b.data_fisei || '') || (Number(a.id) - Number(b.id))
+
+export function poateAcoperi(g, dim, azi = aziBucuresti()) {
+  const d = zi(g?.data_fisei), z = zi(azi)
+  return !!g && g.status === 'finalizat' && g.tip === 'mentenanta' && !!d && !!z && d <= z && are(g[CAMP_SCADENTA[dim]])
+}
+
+// { [fisa.id]: { data?: G, km?: G, ore?: G } } — pentru fiecare dimensiune acoperită, prima fișă care o
+// acoperă. Fișele fără nicio dimensiune acoperită lipsesc din rezultat.
+export function acopeririScadente(fise, azi = aziBucuresti()) {
+  const grupe = new Map()
+  for (const f of fise || []) {
+    if (!f || f.activ_id == null) continue
+    if (!grupe.has(f.activ_id)) grupe.set(f.activ_id, [])
+    grupe.get(f.activ_id).push(f)
+  }
+  const out = {}
+  for (const lista of grupe.values()) {
+    lista.sort(ordine)
+    lista.forEach((f, i) => {
+      for (const dim of DIMENSIUNI) {
+        if (!are(f[CAMP_SCADENTA[dim]])) continue
+        const g = lista.slice(i + 1).find(x => poateAcoperi(x, dim, azi))
+        if (g) { if (!out[f.id]) out[f.id] = {}; out[f.id][dim] = g }
+      }
+    })
+  }
+  return out
+}
 
 /**
  * Calculează cea mai apropiată scadență de service.
@@ -24,15 +188,19 @@ export const PRAG_ORE  = 100
  *                       cu urmatoarea_data / urmatoarea_km / urmatoarea_ore
  * @param {number|null} kmLive  - km curenți (din v_active_km_ore.km_live)
  * @param {number|null} oreLive - ore curente (din v_active_km_ore.ore_live)
- * @returns {{tip:'data'|'km'|'ore', ramas:number, label:string} | null}
+ * @param {Object} [opt] - TKT-2026-0380: { azi: 'AAAA-LL-ZZ', acoperite: { data?, km?, ore? } (din
+ *                         acopeririScadente — dimensiunile închise de o fișă ulterioară nu se mai
+ *                         compară), referinte: { km: [...], ore: [...] } (citiri datate din alte surse) }
+ * @returns {{tip:'data'|'km'|'ore', ramas:number, label:string, deVerificat?:true, verificare?:Object} | null}
  */
-export function calcUrmService(fisa, kmLive, oreLive) {
+export function calcUrmService(fisa, kmLive, oreLive, opt = {}) {
   if (!fisa) return null
+  const { azi = aziBucuresti(), acoperite = null, referinte = null } = opt || {}
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const items = []
 
-  if (fisa.urmatoarea_data) {
+  if (fisa.urmatoarea_data && !acoperite?.data) {
     const d = new Date(fisa.urmatoarea_data)
     const diffDays = Math.floor((d - today) / 86400000)
     items.push({
@@ -42,25 +210,35 @@ export function calcUrmService(fisa, kmLive, oreLive) {
       label: diffDays < 0 ? `${Math.abs(diffDays)} zile depășite` : `${diffDays} zile`,
     })
   }
-  if (fisa.urmatoarea_km != null && kmLive != null) {
+  // TKT-2026-0380 (r2): o depășire rămâne DEPĂȘIRE (nivel, urgență, etichetă — deci KPI și filtrul
+  // „Scadențe” o văd), oricât de mare. Dacă citirea curentă e neverosimilă (citireNeverosimila: ritm
+  // imposibil față de citirea de pe fișă sau de citirile din alte surse, ori peste plafon), scadența
+  // primește ÎN PLUS deVerificat + verificare (motivul și citirea de referință), fără să-și piardă nivelul.
+  const marcheaza = (item, tip, live) => {
+    if (item.ramas >= 0) return item
+    const refs = [{ val: citireFisa(fisa, tip), data: fisa.data_fisei, sursa: 'fisa', id: fisa.id ?? null }, ...(referinte?.[tip] || [])]
+    const v = citireNeverosimila(tip, live, refs, azi)
+    return v ? { ...item, deVerificat: true, verificare: v, live: Number(live), depasire: Math.abs(item.ramas) } : item
+  }
+  if (fisa.urmatoarea_km != null && kmLive != null && !acoperite?.km) {
     const diff = fisa.urmatoarea_km - kmLive
-    items.push({
+    items.push(marcheaza({
       tip: 'km',
       ramas: diff,
       urgenta: diff / PRAG_KM,
       label: diff < 0
         ? `${Math.abs(diff).toLocaleString('ro-RO')} km depășiți`
         : `${diff.toLocaleString('ro-RO')} km`,
-    })
+    }, 'km', kmLive))
   }
-  if (fisa.urmatoarea_ore != null && oreLive != null) {
+  if (fisa.urmatoarea_ore != null && oreLive != null && !acoperite?.ore) {
     const diff = fisa.urmatoarea_ore - oreLive
-    items.push({
+    items.push(marcheaza({
       tip: 'ore',
       ramas: diff,
       urgenta: diff / PRAG_ORE,
       label: diff < 0 ? `${Math.abs(diff)} h depășite` : `${diff} h`,
-    })
+    }, 'ore', oreLive))
   }
 
   if (!items.length) return null
@@ -77,9 +255,32 @@ export function calcUrmService(fisa, kmLive, oreLive) {
   return { ...items[0], toate: items }
 }
 
+// TKT-2026-0380: are vreo scadență a fișei o citire de verificat (oricare dimensiune, nu doar prima)?
+export const areCitireDeVerificat = u => (u?.toate || []).some(r => r.deVerificat)
+
+// TKT-2026-0380 (r2): cea mai urgentă scadență DESCHISĂ a fiecărui activ, din TOATE fișele lui (nu doar
+// din ultima): o fișă ulterioară care nu acoperă obligația (reparație, programare, altă dimensiune) nu
+// mai poate ascunde o restanță. Folosit de KPI-ul „Scadențe” și de filtrul lui, ca să numere la fel.
+// kmOre = { [activ_id]: { km_live, ore_live } }; exclude(activ_id) = true pentru activele fără service.
+// Întoarce { [activ_id]: { fisa, u } }.
+export function scadenteDeschisePeActiv(fise, kmOre, { azi = aziBucuresti(), acoperiri = null, exclude = null } = {}) {
+  const acop = acoperiri || acopeririScadente(fise, azi)
+  const out = {}
+  for (const f of fise || []) {
+    if (!f || f.activ_id == null || (exclude && exclude(f.activ_id))) continue
+    const km = kmOre?.[f.activ_id]
+    const u = calcUrmService(f, km?.km_live, km?.ore_live, { azi, acoperite: acop[f.id] })
+    if (!u) continue
+    const cur = out[f.activ_id]
+    if (!cur || u.urgenta < cur.u.urgenta || (u.urgenta === cur.u.urgenta && ordine(f, cur.fisa) > 0)) out[f.activ_id] = { fisa: f, u }
+  }
+  return out
+}
+
 /**
  * Returnează level-ul scadenței.
  * 'depasit' (roșu) | 'aproape' (galben) | 'ok' (verde) | null
+ * TKT-2026-0380 (r2): o „citire de verificat” NU schimbă nivelul — depășitul rămâne depășit.
  */
 export function urmServiceLevel(u) {
   if (!u) return null
@@ -109,5 +310,5 @@ export function urmServiceColor(u) {
 export function urmServiceBadgeText(u) {
   if (!u) return '—'
   const icon = u.tip === 'data' ? '📅' : u.tip === 'km' ? '🛣️' : '⏱️'
-  return `${icon} ${u.label}`
+  return `${icon} ${u.label}${areCitireDeVerificat(u) ? ' · 🔎 citire de verificat' : ''}`
 }

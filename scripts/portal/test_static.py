@@ -82,12 +82,20 @@ class StaticDelivery(unittest.TestCase):
             fp = amprente(folder)
             a, b = Path(folder) / "a.sql", Path(folder) / "b.sql"
             for path in (a, b):
-                result = run(GENERATOR, MIGRATION, path, "--amprente", fp, "--erp", OWNER)
+                result = run(GENERATOR, MIGRATION, path, "--amprente", fp, "--net-rel-necompletat", "--erp", OWNER)
                 self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(a.read_bytes(), b.read_bytes())
             sql = a.read_text(encoding="utf-8")
-            self.assertEqual(sql.count("'public.portal_fixture_public_"), 21)
+            # r23 (d): lista alba + clasificarea (21 + 21 cu ghilimele) + GRANT (3) / REVOKE (21) statice, toate sintetice
+            self.assertEqual(sql.count("'public.portal_fixture_public_"), 42)
             self.assertNotIn("public.update_stoc_rezervor()", sql)
+            self.assertNotIn("public.get_istoric_importuri_evogps()", sql)
+            self.assertEqual(len(re.findall(r"^ \('public\.portal_fixture_public_(?:0[1-9]|1[0-8])\(\)','\{\}'\),?$", sql, re.M)), 18)
+            self.assertEqual(len(re.findall(r"^ \('public\.portal_fixture_public_(?:19|20|21)\(\)','\{authenticated,service_role\}'\),?$", sql, re.M)), 3)
+            self.assertIn("GRANT EXECUTE ON FUNCTION public.portal_fixture_public_19(), public.portal_fixture_public_20(), "
+                          "public.portal_fixture_public_21() TO authenticated, service_role;", sql)
+            self.assertEqual(sql.split("-- PORTAL_PUBLIC_D_REVOKE inceput", 1)[1].split("-- PORTAL_PUBLIC_D_REVOKE sfarsit", 1)[0]
+                             .count("public.portal_fixture_public_"), 21)
             self.assertIn('"net.portal_fixture_net_12()"', sql)
             self.assertNotIn("'{}'::jsonb;\n$nethash$", sql)
             self.assertIn("'" + hashlib.sha256(OWNER.encode()).hexdigest() + "'", sql)
@@ -99,7 +107,7 @@ class StaticDelivery(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             # Fara --erp, lista ramane goala (testul negativ din harness).
             c = Path(folder) / "c.sql"
-            result = run(GENERATOR, MIGRATION, c, "--amprente", fp)
+            result = run(GENERATOR, MIGRATION, c, "--amprente", fp, "--net-rel-necompletat")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotRegex(c.read_text(encoding="utf-8").split("AS lista;", 1)[0].rsplit("SELECT ARRAY[", 1)[1], "[0-9a-f]{64}")
         self.assertEqual(MIGRATION.read_bytes(), before)
@@ -127,7 +135,7 @@ class StaticDelivery(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="portal_teren_", dir=scratch()) as folder:
             fp = amprente(folder)
             out = Path(folder) / "t.sql"
-            result = run(GENERATOR, MIGRATION, out, "--amprente", fp, "--erp", OWNER, "--teren", *fixture_ids)
+            result = run(GENERATOR, MIGRATION, out, "--amprente", fp, "--net-rel-necompletat", "--erp", OWNER, "--teren", *fixture_ids)
             self.assertEqual(result.returncode, 0, result.stderr)
             sql = out.read_text(encoding="utf-8")
             for value in fixture_ids:
@@ -137,10 +145,44 @@ class StaticDelivery(unittest.TestCase):
             self.assertEqual(run(VALIDATOR, out).returncode, 0)
             for bad in (fixture_ids[:2], fixture_ids + ["e1000000-0000-0000-0000-0000000000aa=1"], ["nu-e-uuid=1"] + fixture_ids[1:]):
                 out.unlink(missing_ok=True)
-                result = run(GENERATOR, MIGRATION, out, "--amprente", fp, "--teren", *bad)
+                result = run(GENERATOR, MIGRATION, out, "--amprente", fp, "--net-rel-necompletat", "--teren", *bad)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("HOLD", result.stderr)
                 self.assertFalse(out.exists())
+
+    def test_r24_reper_bucla_lock_unic(self):
+        # r24 (review #1072): proba lock_budget_refusal asteapta backendul livrarii in PgSleep = pauza din bucla $locks$
+        # (numai dupa o incercare NOWAIT ratata). Precondita: in 18a si 19a exact un pg_sleep, in bucla; runnerul fara
+        # pg_sleep; proba nu mai foloseste advisory lock-ul runnerului ca reper (luat inaintea intregii migrari).
+        def pozitii(text):
+            n = k = 0
+            f = False
+            for linie in text.split("\n"):
+                if linie.startswith("DO $locks$"):
+                    f = True
+                if linie.startswith("END $locks$;"):
+                    f = False
+                if "pg_sleep(" in linie:
+                    n += 1
+                    k += f
+            return n, k
+        m19 = ROOT / "supabase/migrations/20261119a_portal_teren_provisioning.sql"
+        for p in (MIGRATION, m19):
+            text = p.read_text(encoding="utf-8").replace("\r\n", "\n")
+            self.assertEqual(pozitii(text), (1, 1), p.name)
+            bucla = text.split("DO $locks$", 1)[1].split("END $locks$;", 1)[0]
+            self.assertLess(bucla.index("EXCEPTION WHEN lock_not_available THEN"), bucla.index("PERFORM pg_sleep(0.05);"), p.name)
+            # mutant: o pauza in prefix => reperul nu mai e unic
+            mut = text.replace("DO $locks$", "DO $m$ BEGIN PERFORM pg_sleep(0); END $m$;\nDO $locks$", 1)
+            self.assertNotEqual(pozitii(mut), (1, 1))
+        self.assertNotIn("pg_sleep", (ROOT / "scripts/livrare_migrare.sh").read_text(encoding="utf-8"))
+        conc = (ROOT / "scripts/portal/concurrency_lock.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
+        corp = conc.split("lock_budget_refusal() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("wait_event_type='Timeout' AND wait_event='PgSleep'", corp)
+        self.assertIn('wait_pid_query "portal_apply_$label" "$in_bucla" "$apply"', corp)
+        self.assertIn("xact_start='$xs'::timestamptz AND $in_bucla", corp)
+        self.assertNotIn("locktype = 'advisory'", corp)
+        self.assertIn("(( n_inc >= 2 ))", corp)
 
     def test_r9_lock_budget_contract(self):
         import importlib.util
@@ -233,17 +275,65 @@ class StaticDelivery(unittest.TestCase):
             source, target = Path(folder) / "source.sql", Path(folder) / "target.sql"
             for sql in ("SELECT 1;", MIGRATION.read_text(encoding="utf-8") * 2):
                 source.write_text(sql, encoding="utf-8")
-                result = run(GENERATOR, source, target, "--amprente", fp)
+                result = run(GENERATOR, source, target, "--amprente", fp, "--net-rel-necompletat")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("HOLD", result.stderr)
                 self.assertFalse(target.exists())
+
+    def test_r22_fixture_net_rel(self):
+        # r22: copia de harness primeste amprentele pg_net ale clusterului (--net-rel).
+        # r24: artefactul poate fi NECOMPLETAT (DE_COMPLETAT) sau COMPLETAT din productie (md5); generatorul trebuie sa
+        # mearga pe AMBELE stari (sursa = 18a din repo + copia lui in cealalta stare), iar --net-rel-necompletat pune
+        # explicit DE_COMPLETAT (testul negativ al harness-ului nu depinde de starea din repo).
+        chei = ["net._http_response", "net.http_request_queue", "net.http_request_queue_id_seq"]
+        gol = '{' + ','.join(f'"{k}":"DE_COMPLETAT"' for k in chei) + '}'
+        lista_re = re.compile(r"SELECT '(\{" + ",".join(f'"{re.escape(k)}":"[^"\']*"' for k in chei) + r"\})'::jsonb;")
+        before = MIGRATION.read_bytes()
+        text = before.replace(b"\r\n", b"\n").decode("utf-8")
+        curente = lista_re.findall(text)
+        self.assertEqual(len(curente), 1)
+        prod = '{' + ','.join(f'"{k}":"{v}"' for k, v in zip(chei, ["1" * 32, "2" * 32, "3" * 32])) + '}'
+        alta = text.replace(curente[0], prod if curente[0] == gol else gol, 1)
+        self.assertNotEqual(alta, text)
+        with tempfile.TemporaryDirectory(prefix="portal_net_rel_", dir=scratch()) as folder:
+            fp = amprente(folder)
+            ok_json, rau_json = Path(folder) / "ok.json", Path(folder) / "rau.json"
+            ok_json.write_text(json.dumps(dict(zip(chei, ["a" * 32, "b" * 32, "c" * 32]))), encoding="utf-8")
+            rau_json.write_text(json.dumps(dict(zip(chei[:2], ["a" * 32, "b" * 32]))), encoding="utf-8")
+            sursa_alta = Path(folder) / "alta.sql"
+            sursa_alta.write_text(alta, encoding="utf-8", newline="\n")
+            pe_jumatate = Path(folder) / "jumatate.sql"
+            pe_jumatate.write_text(text.replace(curente[0], gol.replace("DE_COMPLETAT", "a" * 32, 1), 1),
+                                   encoding="utf-8", newline="\n")
+            out = Path(folder) / "n.sql"
+            for sursa in (MIGRATION, sursa_alta):
+                out.unlink(missing_ok=True)
+                result = run(GENERATOR, sursa, out, "--amprente", fp, "--net-rel", ok_json, "--erp", OWNER)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                sql = out.read_text(encoding="utf-8")
+                self.assertEqual(lista_re.findall(sql), ['{' + ','.join(f'"{k}":"{c * 32}"' for k, c in zip(chei, "abc")) + '}'])
+                self.assertEqual(run(VALIDATOR, out).returncode, 0)
+                out.unlink()
+                result = run(GENERATOR, sursa, out, "--amprente", fp, "--net-rel-necompletat", "--erp", OWNER)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(lista_re.findall(out.read_text(encoding="utf-8")), [gol], sursa)
+                for extra in (["--net-rel", rau_json], ["--net-rel", ok_json, "--net-rel-necompletat"], []):
+                    out.unlink(missing_ok=True)
+                    result = run(GENERATOR, sursa, out, "--amprente", fp, *extra)
+                    self.assertNotEqual(result.returncode, 0, extra)
+                    self.assertFalse(out.exists())
+            out.unlink(missing_ok=True)
+            result = run(GENERATOR, pe_jumatate, out, "--amprente", fp, "--net-rel", ok_json, "--erp", OWNER)
+            self.assertNotEqual(result.returncode, 0, "lista completata pe jumatate trebuia refuzata")
+            self.assertFalse(out.exists())
+        self.assertEqual(MIGRATION.read_bytes(), before)
 
     def test_fixture_refuses_bad_fingerprints_or_uuid(self):
         with tempfile.TemporaryDirectory(prefix="portal_bad_fp_", dir=scratch()) as folder:
             target = Path(folder) / "target.sql"
             for fp, extra in ((amprente(folder, public=20), []), (amprente(folder, net=11), []),
                               (amprente(folder), ["--erp", "nu-e-uuid"])):
-                result = run(GENERATOR, MIGRATION, target, "--amprente", fp, *extra)
+                result = run(GENERATOR, MIGRATION, target, "--amprente", fp, "--net-rel-necompletat", *extra)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("HOLD", result.stderr)
                 self.assertFalse(target.exists())

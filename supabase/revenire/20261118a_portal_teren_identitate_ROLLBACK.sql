@@ -33,6 +33,10 @@
 --  la BEGIN (deci si de la primul lock) PANA LA INTRAREA IN COMMIT, altfel ROLLBACK la tot; timeout PostgreSQL, nu timp
 --  real strict; COMMIT-ul propriu-zis neplafonat (fara replicare sincrona = scrierea WAL). Reincercarea lock-urilor: pana
 --  la 1 s de la BEGIN. Dovedit in harness (lock_cap_refusal rev18a).
+-- r21 (varianta c, aceeasi forma ca 18a): amprenta DDL si stergerile includ cei 4 helperi noi ai portii
+--  (fn_portal_net_rel_aprobat / _amprenta / _acceptat, fn_portal_teren_rel_drept); refuzul spune ce s-a schimbat.
+-- r23 (varianta d): inaintea stergerii baseline-ului, drepturile celor 21 de functii revin la forma de dinainte de 18a:
+--  REVOKE pe GRANT-urile adaugate de 18a (randul 'grant_d:'), apoi GRANT EXECUTE ... TO PUBLIC. Nimic altceva.
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
@@ -103,7 +107,7 @@ BEGIN
 END $locks$;
 -- r10: sectiunea critica = o singura instructiune: verificarea „fara date noi” (L14, sub lock) si stergerile.
 DO $critic$
-DECLARE v_snapshot jsonb;
+DECLARE v_snapshot jsonb; v_porti text[]; r record;
 BEGIN
   -- [check] amprenta + poarta, refuz la orice rand / configuratie noua
   SELECT jsonb_build_object(
@@ -115,7 +119,8 @@ BEGIN
       SELECT 'f:'||p.oid AS cheie,jsonb_build_array('functie',p.oid,pg_get_functiondef(p.oid),p.proowner,p.proacl,p.proconfig) AS obj
       FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='public' AND p.proname IN ('fn_auth_token_hook','fn_teren_eligibil','fn_portal_porti_lipsa',
-        'fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid')
+        'fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid',
+        'fn_portal_net_rel_aprobat','fn_portal_net_rel_amprenta','fn_portal_net_rel_acceptat','fn_portal_teren_rel_drept')
       UNION ALL
       SELECT 'r:'||c.oid,jsonb_build_array('relatie',c.relname,c.relkind,c.relowner,c.relacl,c.relrowsecurity,c.relforcerowsecurity)
       FROM pg_class c WHERE c.oid IN ('public.conturi_tip'::regclass,'public.conturi_teren'::regclass,
@@ -143,9 +148,14 @@ BEGIN
       SELECT 's:'||s.seqrelid,to_jsonb(s) FROM pg_sequence s
       WHERE s.seqrelid='public.conturi_tip_jurnal_id_seq'::regclass
     ) x)) INTO v_snapshot;
+  -- r21: refuzul spune ce s-a schimbat (amprenta datelor / DDL fata de apply si lista portilor lipsa), fara date.
+  v_porti := public.fn_portal_porti_lipsa();
   IF v_snapshot IS DISTINCT FROM obj_description('public.conturi_tip'::regclass,'pg_class')::jsonb
-    OR public.fn_portal_porti_lipsa() <> '{}'::text[] THEN
-    RAISE EXCEPTION 'PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG'; END IF;
+    OR v_porti IS DISTINCT FROM '{}'::text[] THEN
+    RAISE EXCEPTION 'PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG: amprenta %; porti: %',
+      CASE WHEN v_snapshot IS DISTINCT FROM obj_description('public.conturi_tip'::regclass,'pg_class')::jsonb
+        THEN 'schimbata fata de apply' ELSE 'identica' END,
+      coalesce(nullif(array_to_string(v_porti, '; '), ''), CASE WHEN v_porti IS NULL THEN 'NECUNOSCUT' ELSE '0' END); END IF;
   -- [drop] tabelele cu FK (ACCESS EXCLUSIVE pe auth.users / employees, deja detinut), stub-ul hook-ului, restul
   DROP TABLE public.conturi_tip;
   DROP TABLE public.conturi_teren;
@@ -163,12 +173,28 @@ BEGIN
 END $fn$;
   REVOKE ALL ON FUNCTION public.fn_auth_token_hook(jsonb) FROM PUBLIC,anon,authenticated,service_role;
   GRANT EXECUTE ON FUNCTION public.fn_auth_token_hook(jsonb) TO supabase_auth_admin;
+  -- r23 (varianta d): drepturile celor 21 ca inainte de 18a: se retrag EXACT GRANT-urile adaugate de 18a (randul
+  -- 'grant_d:' din baseline, verificat mai sus prin amprenta = cea de la apply) si se reda EXECUTE lui PUBLIC. Poarta de
+  -- mai sus a confirmat ca cele 21 exista cu amprenta de la apply (altfel refuz, nimic schimbat).
+  FOR r IN SELECT x.e->>0 AS semnatura, x.e->>1 AS rol FROM public.portal_public_baseline b
+      CROSS JOIN LATERAL jsonb_array_elements(b.amprenta) AS x(e) WHERE b.semnatura = 'grant_d:' LOOP
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM %I', to_regprocedure(r.semnatura)::regprocedure, r.rol);
+  END LOOP;
+  FOR r IN SELECT x.s AS semnatura FROM unnest(public.fn_portal_public_aprobat()) AS x(s) ORDER BY x.s COLLATE "C" LOOP
+    IF to_regprocedure(r.semnatura) IS NULL THEN RAISE EXCEPTION 'PORTAL_ROLLBACK_PUBLIC_LIPSA: %', r.semnatura; END IF;
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO PUBLIC', to_regprocedure(r.semnatura)::regprocedure);
+  END LOOP;
   DROP TABLE public.portal_public_baseline;
   DROP FUNCTION public.fn_portal_public_md5();
   DROP FUNCTION public.fn_portal_net_md5();
   DROP FUNCTION public.fn_portal_catalog_amprenta(oid);
   DROP FUNCTION public.fn_teren_eligibil(uuid);
   DROP FUNCTION public.fn_portal_porti_lipsa();
+  -- r21: helperii portii (varianta c), dupa poarta care ii apeleaza; acceptat inaintea celor pe care ii apeleaza.
+  DROP FUNCTION public.fn_portal_net_rel_acceptat(oid);
+  DROP FUNCTION public.fn_portal_net_rel_aprobat();
+  DROP FUNCTION public.fn_portal_net_rel_amprenta(oid);
+  DROP FUNCTION public.fn_portal_teren_rel_drept(oid);
   DROP FUNCTION public.fn_portal_public_aprobat();
   DROP FUNCTION public.fn_conturi_tip_audit();
   DROP FUNCTION public.fn_conturi_jurnal_imuabil();

@@ -99,13 +99,18 @@ BEGIN
 END $locks$;
 -- r10: sectiunea critica = o singura instructiune: verificarea „fara date noi” (L14, sub lock), restaurarea, stergerile.
 DO $critic$
-DECLARE m jsonb; c jsonb; v_actual jsonb; p record; v_key text;
+DECLARE m jsonb; c jsonb; v_actual jsonb; p record; v_key text; v_porti text[];
 BEGIN
  -- [check]
+ -- r21: refuzul spune ce s-a schimbat (amprenta 1b fata de apply si lista portilor lipsa), fara date.
+ v_porti := public.fn_portal_porti_lipsa_1b();
  IF public.fn_portal_1b_snapshot() IS DISTINCT FROM
   (SELECT valoare FROM public.portal_e1_1b_manifest WHERE cheie='post_snapshot')
-  OR public.fn_portal_porti_lipsa_1b() <> '{}'::text[] THEN
-  RAISE EXCEPTION 'PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG'; END IF;
+  OR v_porti IS DISTINCT FROM '{}'::text[] THEN
+  RAISE EXCEPTION 'PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG: amprenta %; porti: %',
+   CASE WHEN public.fn_portal_1b_snapshot() IS DISTINCT FROM
+     (SELECT valoare FROM public.portal_e1_1b_manifest WHERE cheie='post_snapshot') THEN 'schimbata fata de apply' ELSE 'identica' END,
+   coalesce(nullif(array_to_string(v_porti, '; '), ''), CASE WHEN v_porti IS NULL THEN 'NECUNOSCUT' ELSE '0' END); END IF;
  -- [restore] handle_new_user / fn_teren_eligibil din manifest, apoi CHECK-ul vechi (un singur ALTER)
  FOREACH v_key IN ARRAY ARRAY['handle_live','eligibil_live'] LOOP
  SELECT valoare INTO STRICT m FROM public.portal_e1_1b_manifest WHERE cheie=v_key;
@@ -141,5 +146,6 @@ BEGIN
  -- [post]
  IF to_regclass('public.portal_provisioning') IS NOT NULL
   OR to_regprocedure('public.fn_portal_cont_finalizeaza(uuid)') IS NOT NULL
-  OR public.fn_portal_porti_lipsa() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_1B_ROLLBACK_POSTCONDITION'; END IF;
+  OR public.fn_portal_porti_lipsa() IS DISTINCT FROM '{}'::text[] THEN
+  RAISE EXCEPTION 'PORTAL_1B_ROLLBACK_POSTCONDITION: porti 18a: %', coalesce(array_to_string(public.fn_portal_porti_lipsa(), '; '), 'NECUNOSCUT'); END IF;
 END $critic$;

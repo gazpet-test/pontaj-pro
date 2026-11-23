@@ -1,0 +1,5 @@
+# L15 v2 - manifestul diferentelor pentru 20261230a_izometrie_porti_reconciliere (AMPRENTA_GLOBALA v2); familie TAB eticheta TAB operatie TAB amprenta
+# generat pe clona cu scripts/livrare_l15_manifest.sh (ROLLBACK, nimic comis); migrarea sha256 47439660c3a7a306a78f709eda55791fda3fe50981ac8f0cdbd4d91d6401a7c0
+# clona: server_version_num 170006, rol postgres
+# clona: GLOBAL inainte e300acd3b24b47fb379ba0b861b07c0c (28245 randuri), dupa 819548e9f6971a36f135b06424d4e6b7 (28245 randuri); 1 obiecte
+functie	functie public.fn_izo_porti_lipsa()	schimbat	ac8c2d7530fb29809a45b805958ce38e
