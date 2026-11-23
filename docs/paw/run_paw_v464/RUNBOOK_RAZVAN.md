@@ -62,10 +62,12 @@ Gemini extinde caseta de compunere: div-ul zonei de drop isi schimba clasele (`h
 `paw-data\out\paw_v464_calibrare\stare_text_lung_23_11.json`, citite de chat cu textul in ciorna, netrimis). **v4.6.4d** (acest pachet,
 r11) schimba din nou DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE v4.6.4c cu aceeasi procedura: hash-ul vechi =
 `09E78891...`, zona protejata noua `operator-v464d`, copiile de siguranta cu sufixul `.v464c`, fisierele noi cu `.v464d` (pasul 1).
-Ce aduce (detaliile la pasul 0, "Stare r11" ... "Stare r15"; r14: LISTA ALBA de atribute + textele exacte ale descrierilor; r15: clasele si
-`jslog` doar valorile vazute, textele pe Unicode exact): div-ul zonei de drop e acceptat in starea extinsa DOAR cu una din cele 4
-multimi de clase din lista inchisa (marcajul `xapfileselectordropzone` tot GOL), butonul "Ecran complet" e pe lista controalelor ca
-control cu text INCHIS (in el: doar gol sau exact tooltip-ul "Ecran complet"). Testul de canal are un pas nou, **5g2** (captura casetei,
+Ce aduce (detaliile la pasul 0, "Stare r11" ... "Stare r16"; r14: LISTA ALBA de atribute + textele exacte ale descrierilor; r15: clasele si
+`jslog` doar valorile vazute, textele pe Unicode exact; r16: si NODURILE TEXT pe lista alba, pe locul lor): div-ul zonei de drop e acceptat
+in starea extinsa DOAR cu una din cele 4 multimi de clase din lista inchisa (marcajul `xapfileselectordropzone` tot GOL), butonul "Ecran
+complet" e pe lista controalelor; r16: in ORICE control (si in afara lor) un text e permis doar gol (spatii albe HTML) sau exact textul
+vazut pe acel loc ("Carbon" doar in butonul modelului, textele linkului de confidentialitate doar in link, avertismentul Workspace doar sub
+el). Testul de canal are un pas nou, **5g2** (captura casetei,
 doar citire, la trei lungimi de text + trimiterea unui brief lung si a unuia mediu). Rollback-ul (mai jos) readuce v4.6.4c (cu markerul ei).
 
 Hash-urile vin din raportul de review, nu din acest fisier. Livrare: folderul din commit-ul
@@ -400,6 +402,41 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
   texte: refuz. 14 mutanti r15 lasa fiecare scenariul lui sa plece si starile reale sa treaca; pe cod refuz. Pe codul r14 (`dd872d09`)
   testele noi pica (27 FAIL + 8 ERROR din 184).
 
+**Stare (r16 = v4.6.4d runda 6, 23.11.2026, dupa NO-GO Jakarinos pe r15 `7b9aa4da`):**
+- **Ce era gresit in r15.** Listele albe acopereau atributele, dar NU si nodurile text: (1) un control fara lista de texte (toate, in afara
+  butonului "Ecran complet") accepta orice text fara semnal - `<span>continut strain arbitrar</span>` in "Incarcare si instrumente" sau in
+  "Trimite mesajul" dadea 0 necunoscute si `press Enter`, si in capturile reale mediu / lung; (2) ligaturile iconitelor treceau dupa un
+  regex larg (`[a-z0-9_]{1,40}`): `<mat-icon>continut_strain_arbitrar</mat-icon>` in zona = Enter; (3) golul se decidea dupa forma ASCII:
+  un nod doar cu U+0301 (accent combinat) sau U+200B (latime zero) era "gol" = Enter.
+- **Ce face r16.** Orice nod text din zona, in afara editorului, trece DOAR daca e gol pe textul BRUT (doar spatiile albe HTML: spatiu, tab,
+  linie noua, CR, form feed) sau daca perechea (loc, text) e EXACT in `TEXTE_CUNOSCUTE`. Locul = controlul in care sta textul (butonul
+  modelului = `buton_model`; primul control ramane locul si sub controalele imbricate), altfel cel mai apropiat invelis din
+  `STRUCTURA_CUNOSCUTA` (cautat doar pana la zona), altfel `zona`. Lista = 4 perechi, toate vazute: `Carbon` in butonul modelului
+  (singurul text propriu din captura NETAIATA 23.11, in toate cele 3 stari), cele doua texte ale linkului de confidentialitate in link si
+  avertismentul Workspace sub `hallucination-disclaimer` (chat existent, 21.11). `CONTROALE_TEXT_INCHIS` a disparut (toate controalele au
+  text inchis); butonul "Ecran complet" nu mai are niciun text permis (in captura netaiata nu are niciun nod text). Ligaturile: lista
+  inchisa `LIGATURI_VAZUTE` = GOALA (in captura netaiata toate iconitele au text gol, numele sta in `fonticon`). U+0301, U+200B, NBSP,
+  U+2060, U+FEFF, U+3000 etc. = text nevid = refuz, afisat in escape-uri (`text:\u0301` in linia `necunoscut`). Cheia `BardVeMetadataKey`
+  citita intreaga: butonul de trimitere are 35 de elemente, ultimul `[0]` (pozitia 34, nevazuta cat era taiata; r15 ar fi dat refuz FALS
+  pe pagina reala) -> pozitia 34 = `[<cifre>]`, plafonul listei = 35 (cel vazut; r15: 64, dedus). 5g2-a citeste acum si `text_propriu`
+  (nodurile text directe, brute) pe fiecare element.
+- **Deductii / riscuri ramase (refuz FALS, dar sigur):** (a) textele butonului "Deruleaza in jos", ale lui `span[role=status]` si ale
+  `prompt-flow-bar` nu sunt in captura netaiata (stau in afara `input-area-v2`); la 21.11 nu aratau niciun text, deci lista lor e goala -
+  un text sau o ligatura acolo = refuz pana la recalibrare. (b) Un alt nume de model / alta forma a etichetei din butonul modelului ("Gemini
+  4 Carbon" afisat ca text) = refuz (`verifica_model` ar accepta eticheta, lista textelor nu). (c) Raman cele din r15 (b)-(e).
+  **Pasul 0 + 5g2-a raman obligatorii inainte de instalare**; orice linie `text:` / `text_in_control:` cu ciorna fara fisiere = STOP, textul
+  (si captura 5g2-a, cu `text_propriu`) merg la chat pentru o pereche noua (commit nou, review).
+- **Dovezi (teste 192, `python -I`):** cele 3 reproduceri din verdict copiate exact (span in "Incarcare si instrumente" / "Trimite mesajul"
+  in capturile reale gol / mediu / lung si in starea cu brief lung, mat-icon cu ligatura inventata in zona capturii lungi, span cu U+0301 /
+  U+200B): refuz fara actiuni si refuz inainte de Enter; pe regulile r15 (mutant) pleaca la Enter (= ce a gasit Jakarinos). Variante: 11
+  texte x 3 forme in 7 locuri reale (fiecare control, butonul modelului, span-ul "Carbon", iconita de trimitere); "Carbon" in alt control /
+  in zona; 10 forme ale lui "Carbon"; textele cunoscute pe alt loc (11 cazuri); 12 ligaturi (numele reale ale iconitelor incluse) in zona
+  si in fiecare iconita reala; 14 caractere invizibile / spatii Unicode / entitati HTML in zona, sub avertisment, in controale, in butonul
+  modelului, in iconita, in link si lipite de un text cunoscut. Pozitive: cele 3 stari din captura NETAIATA (si: singurul text nevid =
+  "Carbon", perechile calculate din pagina = exact lista), 21.11 i-iii, 22.11 i-iii, 23.11 text lung. Testele pozitive folosesc acum
+  `jslog`-urile REALE netaiate (completarea dedusa din r15 a fost scoasa). Mutanti r16 (5) + mutantii r12 rescrisi (5): fiecare lasa
+  scenariul lui sa plece si starile reale sa treaca; pe cod refuz. Pe codul r15 (`7b9aa4da`) testele noi pica (45 FAIL + 4 ERROR din 192).
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -466,7 +503,7 @@ if ((Get-FileHash -LiteralPath "$Source\diag\captura_caseta.py").Hash -ine $Diag
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel asteptat (vezi $GemHashVechi)' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 470 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 24) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 534 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 39) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -476,7 +513,21 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + $SufVechi) -Force }
 ```
 
-Asteptat (pachetul v4.6.4d = r15, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **470 linii diferite (24 vechi `<=`, 446 noi `=>`)**.
+Asteptat (pachetul v4.6.4d = r16, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **534 linii diferite (39 vechi `<=`, 495 noi `=>`)**.
+Cele 39 de linii vechi = cele 24 din r15 (mai jos) + 15 noi, toate din v4.6.4c, schimbate de r16 (nodurile text pe lista alba):
+`RE_LIGATURA = re.compile(...)` (acum `LIGATURI_VAZUTE = ()`), cele doua linii de comentariu de deasupra listelor albe ("CONTROALE = butoane
+/ linkuri (textul si iconitele din ele sunt eticheta lor) ..." si "... TEXTE = texte afisate in zona, in afara controalelor."), doua linii
+de comentariu din `TEXTE_CUNOSCUTE` ("... trecut aici dupa normalizarea _ascii ..." si "(textele linkului = cele doua intrari de mai jos /
+eticheta controlului a[...]) ..."), si din `_motiv_text`: antetul `def _motiv_text(nod, ctrl):` (acum cu `zona`), comentariul `# ctrl =
+controlul recunoscut ...`, `if not a:` + `return None` (golul dupa forma ASCII), cele doua `return "text_fisier:" / "text_atasament:" +
+a[:TEXT_AFISAT]` (acum `+ v`), `return None   # ligatura unei iconite ...`, `return None` (dupa `TEXTE_CUNOSCUTE`), `return "text:" +
+a[:TEXT_AFISAT]` (acum `text_in_control:` / `text:`), plus apelul `m = _motiv_text(n, ctrl)` din `_necunoscute` (acum cu `zona`).
+Liniile noi r16: nota r16 din antet, `LIGATURI_VAZUTE`, comentariul fostei `CONTROALE_TEXT_INCHIS`, `LOC_MODEL` / `LOC_ZONA` / `LOC_LINK` si
+`TEXTE_CUNOSCUTE` pe perechi (loc, text), `META_LUNGIME = 35` / `META_NUMAR` si exceptia pozitiei 34 din `_meta_permisa`, `_loc_text`,
+`_vizibil`, `_motiv_text` rescrisa, contextul primului control in `_necunoscute`. Testele: `Ran 192 tests ... OK`. Informativ: fata de
+v4.6.3 (`BE3B867B...`) 1230 / 11 / 1219; fata de r15 (`CDA58F4F...`, head-ul anterior al PR-ului, neinstalat) 128 / 47 / 81.
+
+Istoric (r15, fata de acelasi v4.6.4c instalat): 470 linii diferite (24 vechi `<=`, 446 noi `=>`).
 Cele 24 de linii vechi = cele 14 din r13 / r14 (mai jos) + 10 noi, toate din v4.6.4c, schimbate de r15 (comparatiile pe Unicode exact /
 importurile): linia `import sys, time, os, re, unicodedata` (acum + `base64, json`), intrarea din `VALORI_PERMISE` (valoarea reala
 "Incarcare si instrumente" cu diacritice, in escape-uri), cele 4 linii ale `TEXTE_CUNOSCUTE` (sirurile reale), linia izolarii copiilor din
@@ -485,8 +536,8 @@ importurile): linia `import sys, time, os, re, unicodedata` (acum + `base64, jso
 Liniile noi r15: nota r15 din antet, `CLASE_GENERATE` / `SPATII_HTML` / `CLASE_PERMISE` / `_FormaClase`, `JSLOG_VAZUTE` / `META_*` /
 `_sablon_jslog` / `_meta_permisa` / `_FormaJslog` / `_intrari_clase_jslog`, `ATRIBUTE_PERMISE` cu 3 campuri si valorile reale,
 `ETICHETE_BUTOANE` / `DESCRIERI_CUNOSCUTE` / `TEXTE_CUNOSCUTE` reale, `_text_brut`, comparatiile brute din `_atribut_strain`,
-`_motiv_descriere`, `_motiv_text`, `_valoare_permisa`. Testele: `Ran 184 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`)
-1196 / 11 / 1185; fata de r14 (`275E6107...`, head-ul anterior al PR-ului, neinstalat) 367 / 109 / 258.
+`_motiv_descriere`, `_motiv_text`, `_valoare_permisa`. Testele de atunci: `Ran 184 tests ... OK`. Informativ (r15): fata de v4.6.3
+(`BE3B867B...`) 1196 / 11 / 1185; fata de r14 (`275E6107...`) 367 / 109 / 258.
 
 Istoric (r14, fata de acelasi v4.6.4c instalat): 301 linii diferite (14 vechi `<=`, 287 noi `=>`).
 Cele 14 linii vechi sunt EXACT cele din r13 (lista de mai jos); r14 schimba doar liniile NOI: lista neagra r13 (`ATRIBUTE_TEXT`,
@@ -537,7 +588,7 @@ rezultatul `(motiv, sursa)`, `necunoscute_surse` si liniile `    sursa` din `sta
 Informativ (r9), fata de v4.6.3 (`BE3B867B...`, nu mai e in `bin`): 760 / 11 / 749 - aceleasi 11 linii vechi ca in r2-r8 (antetul, lista de
 coduri, `import`, comentariul `ATAS`, titlul partii cu browserul, cele doua linii din vechea `_atasamente`, linia `atasamente in ciorna`
 din `stare`, cele trei linii ale vechii verificari din `trimite`); fata de r8 (`C7609E9E...`, head-ul anterior al PR-ului, neinstalat):
-115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r15 1196 / 11 / 1185, r14 1047 / 11 / 1036, r13 960 / 11 / 949, r12 840 / 11 / 829, r11 807 / 11 / 796, r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
+115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r16 1230 / 11 / 1219, r15 1196 / 11 / 1185, r14 1047 / 11 / 1036, r13 960 / 11 / 949, r12 840 / 11 / 829, r11 807 / 11 / 796, r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
 r4 536 / 11 / 525, r3 477 / 11 / 466, r2 411 / 11 / 400. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
 raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 78 / 6 din blocul de mai sus). Istoric r11 (fata de v4.6.4c):
 43 / 5 / 38, `Ran 153 tests`.
@@ -723,7 +774,8 @@ STOP, fara marker, copiaza linia `GEM_EROARE` + liniile `necunoscut ...` din `st
     (Ctrl+A, Delete). Capturile sunt pentru chat: arata ce multimi de clase si ce continut al butonului "Ecran complet" au aparut efectiv
     (r13: si atributele tuturor elementelor casetei + textele descrierilor; r14: + atributele tintelor descrierilor, zona exacta a analizei
     si DOAR atributele elementelor din editor, fara text; r15: valorile `jslog` NETAIATE, ca cheia `BardVeMetadataKey` sa se vada
-    intreaga). **Merge mai departe DOAR la succes explicit (r13):** captura cu
+    intreaga; r16: + `text_propriu` = nodurile text directe ale fiecarui element, BRUTE, fara textul ciornei - r16 accepta un text doar
+    pe locul pe care a fost vazut). **Merge mai departe DOAR la succes explicit (r13):** captura cu
     cod 0 si ultima linie `CAPTURA_GATA <lungime>`, `stare` cu cod 0, nicio linie `  necunoscut`, exact o linie `paza ciorna:` si aceea
     = `paza ciorna: OK (trimite ar continua)`. O eroare, o iesire goala sau `paza ciorna: REFUZ ...` = STOP inainte de 5g2-b.
   - **5g2-b, trimiterea:** (1) brief-ul LUNG, (2) brief-ul MEDIU. Aceleasi verificari ca la 5g: cod 0, nicio linie `GEM_EROARE`, ultima

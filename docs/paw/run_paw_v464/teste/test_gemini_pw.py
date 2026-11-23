@@ -581,11 +581,13 @@ class TestTrimiteOrdine(unittest.TestCase):
 # Structura reala nu e cunoscuta (fara Edge); fixture-urile sunt scrise de mana. Cazul din verdict, copiat exact:
 CARD_VERDICT = ('<attachment-card>\n  <span>a.txt</span>\n  <button aria-label="Remove attachment">x</button>\n'
                 '</attachment-card>')
-# ciorna goala cu elemente legitime: butonul modelului (selectorul MODEL), o iconita svg, o ligatura mat-icon, script/style
-GOALA_CU_CONTROALE = ('<div class="leading-actions-wrapper"><mat-icon role="img" aria-hidden="true">add_2</mat-icon></div>'
+# ciorna goala cu elemente legitime: butonul modelului (selectorul MODEL), o iconita svg, doua iconite mat-icon, script/style
+# r16: iconitele mat-icon FARA text (ca in captura netaiata 23.11: numele sta in fonticon, textul e gol); r2-r15 aveau aici ligaturi
+# inventate ("add_2", "keyboard_arrow_down" ca text), acceptate de RE_LIGATURA - nevazute pe pagina reala, deci refuzate acum
+GOALA_CU_CONTROALE = ('<div class="leading-actions-wrapper"><mat-icon role="img" aria-hidden="true" fonticon="plus"></mat-icon></div>'
                       '<div class="trailing-actions-wrapper"><button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Carbon">'
                       '<span class="picker-primary-text">Carbon</span><mat-icon role="img" aria-hidden="true" fonticon="keyboard_arrow_down">'
-                      'keyboard_arrow_down</mat-icon></button>'
+                      '</mat-icon></button>'
                       '<svg><path></path></svg></div>'
                       '<script>var file = "a.txt";</script><style>.file-preview{}</style><span></span>')
 # fiecare = ceva ce NU face parte din ciorna goala recunoscuta (asteptat: ciorna_necunoscuta), scris de mana
@@ -751,10 +753,12 @@ class TestStructuraCiorna(unittest.TestCase):
         a.feed('<button tabindex="0" type="button" aria-label="  \u0218terge   Fi\u0219ierul " jsaction="x"></button>')
         self.assertEqual(gp._semnatura(a.radacina.copii[0]), "button[aria-label=sterge fisierul][type=button][tabindex][jsaction]")
         self.assertEqual(gp._ascii("A\u00a0\u0103\u00ee\u021b\n b"), "a ait b")
-        # caracterele de latime zero nu devin text "?" (refuz fals); celelalte caractere necunoscute raman vizibile ("?")
+        # caracterele de latime zero nu devin text "?" in forma ASCII; celelalte caractere necunoscute raman vizibile ("?")
         zw = "".join(map(chr, (0x200B, 0x2060, 0xFEFF)))
         self.assertEqual(gp._ascii(zw + " " + zw), "")
-        self.assertEqual(self.an(zona_cu("<span>" + zw + "</span>"))["necunoscute"], 0)
+        # r16 (Jakarinos NO-GO r15 P3): forma ASCII goala NU mai inseamna text gol - golul se decide pe textul BRUT (doar spatii albe HTML),
+        # deci un nod doar cu caractere de latime zero e text nevid = refuz, afisat in escape-uri (r3-r15: 0 necunoscute)
+        self.assertEqual(self.an(zona_cu("<span>" + zw + "</span>"))["necunoscute_detalii"], ["text:\\u200b\\u2060\\ufeff"])
         self.assertEqual(self.an(zona_cu("<span>" + chr(0x2716) + "</span>"))["necunoscute_detalii"], ["text:?"])
 
     def test_regex_nume_de_fisier(self):
@@ -764,21 +768,32 @@ class TestStructuraCiorna(unittest.TestCase):
             self.assertIsNone(gp.RE_FISIER.search(t), t)
 
     def test_liste_albe_recunosc_doar_exact(self):
-        # o intrare de calibrare (forma afisata de `stare`) recunoaste exact acel control; textul / iconita din el = eticheta
+        # o intrare de calibrare (forma afisata de `stare`) recunoaste exact acel control; r16: textele / ligatura din el trec DOAR ca
+        # perechi (semnatura controlului, text EXACT) din TEXTE_CUNOSCUTE (r2-r15: orice text fara semnal = eticheta lui)
         trimite_btn = ('<button aria-label="Send message" type="button" jsaction="click:x">'
                        '<mat-icon>send</mat-icon><span>Trimite</span></button>')
         sem = "button[aria-label=send message][type=button][jsaction]"
-        self.assertEqual(self.an(zona_cu(trimite_btn))["necunoscute_detalii"], ["element:" + sem, "text:trimite"])
+        self.assertEqual(self.an(zona_cu(trimite_btn))["necunoscute_detalii"], ["element:" + sem, "text:send", "text:trimite"])
         with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", (sem,)), valori_in_plus(("button", "aria-label", "Send message"),
                                                                                    ("button", "jsaction", "click:x")):
-            self.assertEqual(self.an(zona_cu(trimite_btn))["necunoscute"], 0)
+            self.assertEqual(self.an(zona_cu(trimite_btn))["necunoscute_detalii"], ["text_in_control:send", "text_in_control:trimite"])
+            with mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + ((sem, "send"), (sem, "Trimite"))):
+                self.assertEqual(self.an(zona_cu(trimite_btn))["necunoscute"], 0)
+                # aceleasi texte in alt loc (in afara controlului / in butonul modelului) = refuz: perechea, nu textul
+                self.assertEqual(self.an(zona_cu("<span>Trimite</span>"))["necunoscute_detalii"], ["text:trimite"])
+                model = ('<button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Carbon">'
+                         '<span>Trimite</span></button>')
+                self.assertEqual(self.an(zona_cu(model))["necunoscute_detalii"], ["text_in_control:trimite"])
+        with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", (sem,)), valori_in_plus(("button", "aria-label", "Send message"),
+                                                                                   ("button", "jsaction", "click:x")), \
+                mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + ((sem, "send"), (sem, "Trimite"))):
             # r15: valoarea din lista alba e comparata pe Unicode EXACT: aceeasi semnatura ASCII, alt text brut = refuz
             for alt in ("send message", "Send  message", " Send message", "Send message\u200b", "SEND MESSAGE"):
                 self.assertEqual(self.an(zona_cu(trimite_btn.replace("Send message", alt)))["necunoscute_detalii"],
                                  ["atribut_valoare:" + gp._semnatura(self.nod_html(trimite_btn.replace("Send message", alt))) + "{aria-label}"], msg=alt)
-            # alt buton, alta eticheta / alt atribut = tot necunoscut
-            self.assertEqual(self.an(zona_cu(trimite_btn.replace("Send message", "Send")))["necunoscute"], 2)
-            self.assertEqual(self.an(zona_cu(trimite_btn.replace(' type="button"', "")))["necunoscute"], 2)
+            # alt buton, alta eticheta / alt atribut = tot necunoscut (r16: + textele lui, in afara oricarui control: 1 + 2)
+            self.assertEqual(self.an(zona_cu(trimite_btn.replace("Send message", "Send")))["necunoscute"], 3)
+            self.assertEqual(self.an(zona_cu(trimite_btn.replace(' type="button"', "")))["necunoscute"], 3)
             # un nume de fisier in controlul recunoscut = refuz; un element necunoscut in el = refuz
             self.assertEqual(self.an(zona_cu(trimite_btn.replace("Trimite", "a.txt")))["necunoscute_detalii"], ["text_fisier:a.txt"])
             self.assertEqual(self.an(zona_cu(trimite_btn.replace("<span>", "<attachment-card></attachment-card><span>")))
@@ -787,7 +802,7 @@ class TestStructuraCiorna(unittest.TestCase):
         with mock.patch.object(gp, "STRUCTURA_CUNOSCUTA", ("toolbox-drawer",)):
             self.assertEqual(self.an(zona_cu("<toolbox-drawer><div></div></toolbox-drawer>"))["necunoscute"], 0)
             self.assertEqual(self.an(zona_cu("<toolbox-drawer><span>a</span></toolbox-drawer>"))["necunoscute_detalii"], ["text:a"])
-        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", ("Gemini poate gre\u0219i",)):
+        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + ((gp.LOC_ZONA, "Gemini poate gre\u0219i"),)):   # r16: (loc, text)
             self.assertEqual(self.an(zona_cu("<div>Gemini poate gre\u0219i</div>"))["necunoscute"], 0)
             self.assertEqual(self.an(zona_cu("<div>\n  Gemini poate gre\u0219i \t</div>"))["necunoscute"], 0)   # r15: spatii HTML la capete
             # r15: textul comparat pe Unicode EXACT (r14: dupa _ascii): alta forma = text necunoscut
@@ -828,19 +843,20 @@ class TestStructuraCiorna(unittest.TestCase):
     def test_listele_livrate_si_locatorul(self):
         # listele albe livrate nu contin nimic ce seamana a fisier / scoatere (calibrarea le poate completa, nu cu astfel de intrari):
         # valorile din semnaturi (aria-label etc.) trec regula etichetei, tagurile n-au cuvinte de scoatere / previzualizare
-        for x in gp.CONTROALE_CUNOSCUTE + gp.STRUCTURA_CUNOSCUTA + gp.TEXTE_CUNOSCUTE:
+        texte_livrate = tuple(t for _, t in gp.TEXTE_CUNOSCUTE)          # r16: perechi (loc, text)
+        for x in gp.CONTROALE_CUNOSCUTE + gp.STRUCTURA_CUNOSCUTA + texte_livrate:
             self.assertIsNone(gp._nume_fisier(gp._ascii(x)), x)          # nume.extensie (domeniul firmei nu e fisier, r3)
             self.assertNotIn("{", x)                                      # r4: niciun element cu cuvant de atasament (token_) in liste
         for x in gp.CONTROALE_CUNOSCUTE + gp.STRUCTURA_CUNOSCUTA:
             self.assertEqual(x, gp._ascii(x), x)                          # semnaturile = forma afisata de `stare` (ASCII, litere mici)
-        for x in gp.TEXTE_CUNOSCUTE:                                      # r15: textele = sirurile Unicode EXACTE (nu forma ASCII)
+        for x in texte_livrate:                                           # r15: textele = sirurile Unicode EXACTE (nu forma ASCII)
             self.assertEqual(x, x.strip(" \t\n\r\f"), x)
             self.assertEqual(x, " ".join(x.split()), x)
         for x in gp.CONTROALE_CUNOSCUTE + gp.STRUCTURA_CUNOSCUTA:
             for v in re.findall(r"\[[^=\]]+=([^\]]*)\]", x):
                 self.assertIsNone(gp._cuvant(v, gp.TOKENI_ETICHETA_INTERZISA), x)
             self.assertIsNone(gp._cuvant(x.split("[", 1)[0], gp.TOKENI_ELIMINA + ("preview", "previz", "thumb", "miniatur")), x)
-        for x in gp.TEXTE_CUNOSCUTE:
+        for x in texte_livrate:
             self.assertIsNone(gp._cuvant(x), x)
         # r3: listele = EXACT reuniunea semnaturilor din calibrarea de pe 21.11.2026 (cele trei iesiri `stare`, copiate mai jos),
         # fara linia text_fisier (regula RUNBOOK: nu se trece niciodata) si - r4 - fara linia token_ (un element cu cuvant de
@@ -855,16 +871,20 @@ class TestStructuraCiorna(unittest.TestCase):
         self.assertEqual([l for l in STARE_23_11 if l.startswith("element:")], [STARE_23_11[1]])
         self.assertEqual(set(gp.CONTROALE_CUNOSCUTE) | set(gp.STRUCTURA_CUNOSCUTA), elemente | {STARE_23_11[1].split(":", 1)[1]})
         # r15: textele (Unicode exact) dau prin _ascii exact liniile `text:` din calibrare + avertismentul; avertismentul e EXACT sirul citit
-        self.assertEqual(set(gp._ascii(x) for x in gp.TEXTE_CUNOSCUTE), texte | {gp._ascii(AVERTISMENT_TEXT)})
-        self.assertIn(AVERTISMENT_TEXT, gp.TEXTE_CUNOSCUTE)
-        self.assertEqual(set(gp.TEXTE_CUNOSCUTE), {AVERTISMENT_TEXT, TEXT_LINK_REAL, TEXT_ASCUNS_REAL})
+        # r16: + "Carbon" (butonul modelului, captura netaiata 23.11 - in calibrarea 21.11 textele butonului de model nu se afisau)
+        self.assertEqual(set(gp._ascii(x) for x in texte_livrate), texte | {gp._ascii(AVERTISMENT_TEXT), "carbon"})
+        self.assertIn(AVERTISMENT_TEXT, texte_livrate)
+        # r16: perechile EXACTE (loc, text), scrise de mana: fiecare text doar pe locul pe care a fost vazut
+        self.assertEqual(set(gp.TEXTE_CUNOSCUTE), {("buton_model", "Carbon"), ("hallucination-disclaimer", AVERTISMENT_TEXT),
+                                                   ("a[data-test-id=footer-privacy-notice-link][href]", TEXT_LINK_REAL),
+                                                   ("a[data-test-id=footer-privacy-notice-link][href]", TEXT_ASCUNS_REAL)})
         self.assertEqual(set(gp.CONTROALE_CUNOSCUTE) & set(gp.STRUCTURA_CUNOSCUTA), set())
-        self.assertEqual(len(gp.CONTROALE_CUNOSCUTE) + len(gp.STRUCTURA_CUNOSCUTA) + len(gp.TEXTE_CUNOSCUTE), 6 + 23 + 3)
+        self.assertEqual(len(gp.CONTROALE_CUNOSCUTE) + len(gp.STRUCTURA_CUNOSCUTA) + len(gp.TEXTE_CUNOSCUTE), 6 + 23 + 4)
         # controalele = doar butoane si linkuri; tot ce e invelis sta in STRUCTURA (continutul lui se verifica mai departe)
         self.assertTrue(all(x.startswith(("button[", "a[")) for x in gp.CONTROALE_CUNOSCUTE), gp.CONTROALE_CUNOSCUTE)
         self.assertFalse(any(x.startswith(("button[", "a[")) for x in gp.STRUCTURA_CUNOSCUTA), gp.STRUCTURA_CUNOSCUTA)
         self.assertTrue(any(l.startswith("text_fisier:chaturile gazpet.ro") for l in CALIBRARE_III))
-        self.assertEqual([x for x in gp.TEXTE_CUNOSCUTE if "Chaturile" in x], [AVERTISMENT_TEXT])
+        self.assertEqual([x for x in texte_livrate if "Chaturile" in x], [AVERTISMENT_TEXT])
         # L19: semnul locator (vede si shadow DOM) = aceleasi media + aceleasi etichete de scoatere ca analiza HTML
         self.assertEqual(gp.SEMN_EXTRA, 'img, picture, video, audio, canvas, object, embed, iframe, image, source, track, '
                          '[aria-label*="remove" i], [aria-label*="elimin" i], [aria-label*="terge" i], [aria-label*="delete" i]')
@@ -943,11 +963,13 @@ class TestMutantiStructura(unittest.TestCase):
         self.verifica([('    if info["necunoscute"]:', "    if False:")], CARD_VERDICT)
 
     def test_fara_regula_de_element(self):
-        self.verifica([('return "element:" + sem, ctrl', "return None, ctrl")], NECUNOSCUTE["card_fara_text"])
+        # r16: cardul gol (fara ligatura "close", refuzata acum independent ca text - al doilea strat - si pe mutant)
+        self.verifica([('return "element:" + sem, ctrl', "return None, ctrl")], "<attachment-card></attachment-card>")
 
     def test_fara_regula_de_text(self):
         # (nume cu extensie fara cuvant de atasament: ".pdf" ar fi prins si de regula cuvintelor, ramasa in mutant)
-        self.verifica([('return "text_fisier:" + a[:TEXT_AFISAT]', "return None"), ('return "text:" + a[:TEXT_AFISAT]', "return None")],
+        self.verifica([('return "text_fisier:" + v', "return None"),
+                       ('    return ("text_in_control:" if ctrl is not None else "text:") + v', "    return None")],
                       "<div><span>raport final.docx</span></div>")
 
     def test_fara_regula_de_cuvinte(self):
@@ -1079,7 +1101,9 @@ def pagina_calibrare(stare, atribut_file=ATRIBUTE_DIV_REALE, zona_atr=ZONA_ATRIB
             "</div></input-area-v2></main></chat-app></body></html>")
 
 
-LISTE_GOALE = dict(CONTROALE_CUNOSCUTE=(), STRUCTURA_CUNOSCUTA=(), TEXTE_CUNOSCUTE=())
+# r16: TEXTE_CUNOSCUTE pastreaza in "listele goale" DOAR textul butonului modelului: la calibrarea din 21.11 textele din butonul modelului
+# (verificat separat, verifica_model) nu se afisau - orice text de acolo era eticheta lui; restul listelor = goale, ca la ae3e8947
+LISTE_GOALE = dict(CONTROALE_CUNOSCUTE=(), STRUCTURA_CUNOSCUTA=(), TEXTE_CUNOSCUTE=(("buton_model", "Carbon"),))   # = LOC_MODEL, scris de mana
 FARA_MARCAJ = dict(MARCAJE_PERMISE=())                        # r5: fara regula marcajului = comportamentul r4 pe div-ul real
 ACTIUNI_TRIMITERE = ["goto", "click", "press Control+A", "press Delete", "insert", "press Enter"]
 
@@ -1134,8 +1158,8 @@ class TestCalibrare(unittest.TestCase):
         # P2: textul intreg (copiat din pagina reala) e in TEXTE_CUNOSCUTE exact; fara el starea (iii) ar fi refuzata DOAR pe text:
         i = self.an(pagina_calibrare("iii"))
         self.assertEqual(i["necunoscute"], 0, msg=i["necunoscute_detalii"])
-        self.assertIn(AVERTISMENT_TEXT, gp.TEXTE_CUNOSCUTE)                   # r15: sirul Unicode EXACT (r14: forma ASCII)
-        self.assertNotIn(gp._ascii(AVERTISMENT_TEXT), gp.TEXTE_CUNOSCUTE)
+        self.assertIn(("hallucination-disclaimer", AVERTISMENT_TEXT), gp.TEXTE_CUNOSCUTE)       # r15: Unicode EXACT; r16: pe locul lui
+        self.assertNotIn(("hallucination-disclaimer", gp._ascii(AVERTISMENT_TEXT)), gp.TEXTE_CUNOSCUTE)
         self.assertEqual(gp._ascii(AVERTISMENT_TEXT), "chaturile gazpet.ro nu sunt folosite pentru a ne imbunatati modelele. gemini este un ai "
                          "si poate sa faca greseli, inclusiv in legatura cu persoane.")
         # r15: aceeasi forma ASCII, alt text brut (fara diacritice / litere mici / spatiu dublu / NBSP in interior) = text necunoscut
@@ -1143,7 +1167,11 @@ class TestCalibrare(unittest.TestCase):
                     AVERTISMENT_TEXT.replace("\u0219", "\u015f")):
             i = self.an(pagina_calibrare("iii").replace(AVERTISMENT_TEXT, alt))
             self.assertEqual(i["necunoscute_detalii"], ["text:" + gp._ascii(alt)], msg=alt)
-        fara = tuple(x for x in gp.TEXTE_CUNOSCUTE if x != AVERTISMENT_TEXT)
+        # r16: acelasi text EXACT in afara invelisului lui (in zona, direct) = refuz: perechea (loc, text), nu doar textul
+        i = self.an(pagina_calibrare("iii").replace("<hallucination-disclaimer>", "<hallucination-disclaimer></hallucination-disclaimer><div>")
+                    .replace("</hallucination-disclaimer></div></input-area-v2>", "</div></div></input-area-v2>"))
+        self.assertEqual(i["necunoscute_detalii"], ["text:" + gp._ascii(AVERTISMENT_TEXT)])
+        fara = tuple(x for x in gp.TEXTE_CUNOSCUTE if x[1] != AVERTISMENT_TEXT)
         with mock.patch.object(gp, "TEXTE_CUNOSCUTE", fara):
             i = self.an(pagina_calibrare("iii"))
             self.assertEqual(i["necunoscute_detalii"], ["text:" + gp._ascii(AVERTISMENT_TEXT)])
@@ -1154,7 +1182,7 @@ class TestCalibrare(unittest.TestCase):
             i = self.an(html)
             self.assertEqual(i["necunoscute"], 1, msg=plus)
             self.assertTrue(i["necunoscute_detalii"][0].startswith(m + "chaturile gazpet.ro"), msg=i["necunoscute_detalii"])
-            with mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + (AVERTISMENT_TEXT + plus,)):
+            with mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + (("hallucination-disclaimer", AVERTISMENT_TEXT + plus),)):
                 self.assertEqual(self.an(html)["necunoscute"], 1, msg=plus)
                 self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []), msg=plus)
         # textul tot ar fi "fisier" fara regula domeniului: mutantul refuza chiar si cu textul in lista (refuz fals permanent)
@@ -1162,7 +1190,7 @@ class TestCalibrare(unittest.TestCase):
         self.assertTrue(self.an(pagina_calibrare("iii"), mut)["necunoscute_detalii"][0].startswith("text_fisier:chaturile gazpet.ro"))
 
     def test_stare_afiseaza_textul_intreg(self):
-        fara = tuple(x for x in gp.TEXTE_CUNOSCUTE if x != AVERTISMENT_TEXT)
+        fara = tuple(x for x in gp.TEXTE_CUNOSCUTE if x[1] != AVERTISMENT_TEXT)
         self.assertEqual(len(fara), len(gp.TEXTE_CUNOSCUTE) - 1)
         with mock.patch.object(gp, "TEXTE_CUNOSCUTE", fara):
             pg = FakePg(pagina_calibrare("iii"))
@@ -1229,7 +1257,7 @@ class TestCalibrare(unittest.TestCase):
         # r4: textul cu cuvant de atasament in invelisul din lista = semnal (nu "text necunoscut" calibrabil): refuz si daca ar fi in TEXTE
         status = '<span role="status">Fi\u0219ier \u00eenc\u0103rcat</span>'
         self.assertEqual(self.an(zona_cu(status))["necunoscute_detalii"], ["text_atasament:fisier incarcat"])
-        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + ("fisier incarcat",)):
+        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + (("span[role=status]", "Fi\u0219ier \u00eenc\u0103rcat"),)):   # r16: (loc, text)
             self.assertEqual(self.an(zona_cu(status))["necunoscute_detalii"], ["text_atasament:fisier incarcat"])
             self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(status))), ("ciorna_necunoscuta", []))
 
@@ -1301,7 +1329,9 @@ class TestSemnaleInainteDeListe(unittest.TestCase):
         # span[role=status]; in plus se adauga EXACT semnaturile variantelor (tag + atribute din semnatura): tot refuz
         semnaturi = tuple(gp._semnatura(self.nod(extra)) for extra, _ in SEMNALE.values())
         with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", gp.CONTROALE_CUNOSCUTE + semnaturi), \
-                mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + ("fisier incarcat", "fisier atasat", "attach_file")):
+                mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + (("span[role=status]", "Fi\u0219ier \u00eenc\u0103rcat"),
+                                                                               ("button[aria-label=trimite mesajul]", "Fi\u0219ier ata\u0219at"),
+                                                                               ("button[aria-label=trimite mesajul]", "attach_file"))):
             for k, (extra, m) in sorted(SEMNALE.items()):
                 i = self.an(zona_cu(extra))
                 self.assertEqual(i["necunoscute_detalii"][:1], [m], msg=k)
@@ -1310,7 +1340,8 @@ class TestSemnaleInainteDeListe(unittest.TestCase):
         curate = ('<gem-icon class="ng-star-inserted"><svg><path d="M0"></path></svg></gem-icon>',
                   '<toolbox-drawer foo="bar"></toolbox-drawer>',
                   '<fieldset role="none" aria-live="polite"></fieldset>',
-                  '<button aria-label="Trimite mesajul" class="send-button"><span>Trimite</span><mat-icon>send</mat-icon></button>',
+                  # r16: butonul fara textele inventate "Trimite" / ligatura "send" (nevazute in captura netaiata -> text_in_control:)
+                  '<button aria-label="Trimite mesajul" class="send-button"><span></span><mat-icon></mat-icon></button>',
                   '<a data-test-id="footer-privacy-notice-link" href="https://support.google.com/gemini?p=privacy_notice">'
                   '<span data-test-id="content">Confiden\u021bialitatea ta \u0219i Gemini</span></a>',
                   '<span role="status" aria-live="polite"></span>')
@@ -1407,8 +1438,12 @@ class TestSemnaleInainteDeListe(unittest.TestCase):
     def test_mutant_fara_semnal_pe_text_in_control(self):
         # mutant: textul dintr-un control nu mai e verificat dupa cuvinte -> "Fisier atasat" in butonul de trimitere pleaca
         extra = SEMNALE["control_text_inauntru"][0]
-        mut = mutant([('        return "text_atasament:" + a[:TEXT_AFISAT]', "        pass")])
-        self.assertIsNone(ruleaza_trimite(mut, FakePg(zona_cu(extra)))[0])
+        mut = mutant([('        return "text_atasament:" + v', "        pass")])
+        # r16: textul nu e in TEXTE_CUNOSCUTE pe locul lui (lista alba a textelor, al doilea strat) -> mutantul se judeca pe regula LUI,
+        # cu perechea adaugata doar in el
+        with mock.patch.object(mut, "TEXTE_CUNOSCUTE", mut.TEXTE_CUNOSCUTE + (("button[aria-label=trimite mesajul]", "Fi\u0219ier ata\u0219at"),)):
+            self.assertIsNone(ruleaza_trimite(mut, FakePg(zona_cu(extra)))[0])
+        self.assertEqual(ruleaza_trimite(mut, FakePg(zona_cu(extra))), ("ciorna_necunoscuta", []))   # fara pereche: refuzat de lista
         self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra))), ("ciorna_necunoscuta", []))
 
     def test_mutant_fara_valorile_atributelor(self):
@@ -1451,7 +1486,7 @@ class TestDomeniulFirmei(unittest.TestCase):
             self.assertEqual(an(zona_cu('<button aria-label="gazpet.ro.pdf"></button>'))["necunoscute_detalii"],
                              ["eticheta:button[aria-label=gazpet.ro.pdf]"])
         # un text din lista alba care contine domeniul trece (exact), unul cu fisier nu trece niciodata
-        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", ("Vezi gazpet.ro", "Vezi gazpet.ro.pdf")):       # r15: textele brute, exacte
+        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + ((gp.LOC_ZONA, "Vezi gazpet.ro"), (gp.LOC_ZONA, "Vezi gazpet.ro.pdf"))):   # r16
             self.assertEqual(an(zona_cu("<div>Vezi gazpet.ro</div>"))["necunoscute"], 0)
             self.assertEqual(an(zona_cu("<div>Vezi gazpet.ro.pdf</div>"))["necunoscute_detalii"], ["text_fisier:vezi gazpet.ro.pdf"])
 
@@ -1463,15 +1498,16 @@ class TestDomeniulFirmei(unittest.TestCase):
         cod, act = ruleaza_trimite(gp, FakePg(zona_cu(extra)))
         self.assertEqual((cod, act), ("ciorna_necunoscuta", []))
         mut = mutant([("        if a[i:j] in DOMENII_FIRMA:", "        if any(d in a[i:j] for d in DOMENII_FIRMA):")])
-        with mock.patch.object(mut, "TEXTE_CUNOSCUTE", ("gazpet.ro.docx",)):
+        pereche = ((gp.LOC_ZONA, "gazpet.ro.docx"),)          # r16: (loc, text)
+        with mock.patch.object(mut, "TEXTE_CUNOSCUTE", mut.TEXTE_CUNOSCUTE + pereche):
             cod_m, act_m = ruleaza_trimite(mut, FakePg(zona_cu(extra)))
             self.assertIsNone(cod_m)
             self.assertIn("press Enter", act_m)
-        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", ("gazpet.ro.docx",)):
+        with mock.patch.object(gp, "TEXTE_CUNOSCUTE", gp.TEXTE_CUNOSCUTE + pereche):
             self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(extra)))[0], "ciorna_necunoscuta")
         # mutant: cuvantul nu se extinde peste punct (doar potrivirea regex) -> acelasi efect
         mut2 = mutant([("        while j < len(a) and a[j] in CARACTERE_NUME:", "        while False:")])
-        with mock.patch.object(mut2, "TEXTE_CUNOSCUTE", ("gazpet.ro.docx",)):
+        with mock.patch.object(mut2, "TEXTE_CUNOSCUTE", mut2.TEXTE_CUNOSCUTE + pereche):
             self.assertIsNone(ruleaza_trimite(mut2, FakePg(zona_cu(extra)))[0])
 
 
@@ -1874,16 +1910,19 @@ class TestZonaInsasi(unittest.TestCase):
 
     def test_zona_nu_devine_control(self):
         # o zona gasita prin clasa care poarta data-test-id-ul butonului de model NU face textele din ea "eticheta" (ar ascunde un text necunoscut)
+        # r16: textul de proba e "Carbon" = singurul text permis in butonul modelului (LOC_MODEL); in zona (LOC_ZONA) e text necunoscut
         ed = EDITOR_HTML.replace('class="input-area"', 'class="textarea-wrapper"')
-        html = '<html><body><div class="input-area" data-test-id="bard-mode-menu-button"><span>Deep Research</span>' + ed + "</div></body></html>"
+        html = '<html><body><div class="input-area" data-test-id="bard-mode-menu-button"><span>Carbon</span>' + ed + "</div></body></html>"
         i = self.an(html)
         # r14: + data-test-id-ul modelului pe un div = valoare in afara listei albe (al doilea motiv, pe zona insasi)
-        self.assertEqual(i["necunoscute_detalii"], ["atribut_valoare:div[data-test-id=bard-mode-menu-button]{data-test-id}", "text:deep research"])
+        self.assertEqual(i["necunoscute_detalii"], ["atribut_valoare:div[data-test-id=bard-mode-menu-button]{data-test-id}", "text:carbon"])
         self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []))
         with fara_r13(gp):
-            self.assertEqual(self.an(html)["necunoscute_detalii"], ["text:deep research"])
-        # (acelasi text intr-un buton de model descendent e eticheta lui - comportament r2, neschimbat)
-        self.assertEqual(self.an(zona_cu('<button data-test-id="bard-mode-menu-button"><span>Deep Research</span></button>'))["necunoscute"], 0)
+            self.assertEqual(self.an(html)["necunoscute_detalii"], ["text:carbon"])
+        # acelasi text intr-un buton de model descendent trece (LOC_MODEL); r16: orice alt text acolo = refuz (r2-r15: eticheta lui)
+        self.assertEqual(self.an(zona_cu('<button data-test-id="bard-mode-menu-button"><span>Carbon</span></button>'))["necunoscute"], 0)
+        self.assertEqual(self.an(zona_cu('<button data-test-id="bard-mode-menu-button"><span>Deep Research</span></button>'))["necunoscute_detalii"],
+                         ["text_in_control:deep research"])
 
     def test_stare_arata_zona(self):
         out = io.StringIO()
@@ -1909,9 +1948,9 @@ class TestZonaInsasi(unittest.TestCase):
              (pagina(zona_atr=' class="file-preview-x"'), pagina(zona_atr=' data-test-id="uploaded-file-1"'),
               '<html><body><uploader-file-preview class="input-area">' + EDITOR_HTML.replace('class="input-area"', 'class="textarea-wrapper"') + "</uploader-file-preview></body></html>"),
              "ciorna_cu_atasamente"),
-            # (C) zona lasata sa devina control: textul necunoscut din ea trece drept eticheta
+            # (C) zona lasata sa devina control: textul din ea trece drept textul butonului modelului (r16: "Carbon", LOC_MODEL)
             ([("        if n is zona:", "        if False:")],
-             ('<html><body><div class="input-area" data-test-id="bard-mode-menu-button"><span>Deep Research</span>'
+             ('<html><body><div class="input-area" data-test-id="bard-mode-menu-button"><span>Carbon</span>'
               + EDITOR_HTML.replace('class="input-area"', 'class="textarea-wrapper"') + "</div></body></html>",), "ciorna_necunoscuta"),
         )
         for inlocuiri, htmluri, cod in cazuri:
@@ -2686,9 +2725,9 @@ class TestAtributeComplete2211(unittest.TestCase):
         self.assertIn("paza ciorna: OK (trimite ar continua)", linii)
         self.assertIn("atasamente in ciorna: 0", " ".join(linii))
         self.assertFalse(any(l.startswith(("  necunoscut", "    sursa")) for l in linii), linii)
-        # listele albe raman cele de la 21.11 (5 + 23 + 3; r11: + butonul "Ecran complet" = 6 + 23 + 3): niciuna din cele trei exceptii
-        # r9 nu e o intrare in liste
-        self.assertEqual(len(gp.CONTROALE_CUNOSCUTE) + len(gp.STRUCTURA_CUNOSCUTA) + len(gp.TEXTE_CUNOSCUTE), 6 + 23 + 3)
+        # listele albe raman cele de la 21.11 (5 + 23 + 3; r11: + butonul "Ecran complet" = 6 + 23 + 3; r16: + textul "Carbon" al butonului
+        # modelului = 6 + 23 + 4): niciuna din cele trei exceptii r9 nu e o intrare in liste
+        self.assertEqual(len(gp.CONTROALE_CUNOSCUTE) + len(gp.STRUCTURA_CUNOSCUTA) + len(gp.TEXTE_CUNOSCUTE), 6 + 23 + 4)
         for x in gp.CONTROALE_CUNOSCUTE + gp.STRUCTURA_CUNOSCUTA + gp.TEXTE_CUNOSCUTE:
             self.assertNotIn("arialabel", x)
             self.assertNotIn("chips", x)
@@ -3167,31 +3206,8 @@ def ecran(atr=ECRAN_ATR, inauntru=GI):
     return "<button" + atr + ">" + inauntru + "</button>"
 
 
-def completeaza_jslog(v):
-    # r15: capturile 23.11 TAIE valorile atributelor la 300 de caractere (diag v14: `x.value.slice(0, 300)`), deci cheia BardVeMetadataKey
-    # a butoanelor 173899 / 206752 (c23) si 173899 (t23) e un JSON neterminat (doar 206752 de pe t23 e intreaga). Codul r15 refuza corect
-    # o cheie neterminata (test_jslog_taiat_refuzat); fixture-urile o COMPLETEAZA aici - DEDUCTIE, scrisa o singura data: lista decodata e
-    # inchisa dupa ultimul element intreg (la ultima virgula), apoi re-codata base64 canonic. Restul valorii (numarul, track, mutable)
-    # ramane neschimbat. O valoare care se decodeaza deja intreaga se intoarce neatinsa. 5g2-a (diag r15) citeste jslog netaiat.
-    m = re.fullmatch(r"([^;]*;track:[^;]*;BardVeMetadataKey:)([A-Za-z0-9+/=]*)((?:;mutable:true)?)", v)
-    if not m:
-        return v
-    b = m.group(2).rstrip("=")
-    b = b[:len(b) - len(b) % 4]
-    t = base64.b64decode(b).decode("ascii", "ignore")
-    try:
-        json.loads(t)
-        return v
-    except ValueError:
-        pass
-    while t:
-        t = t[:t.rindex(",")]
-        try:
-            json.loads(t + "]")
-            break
-        except ValueError:
-            continue
-    return m.group(1) + base64.b64encode((t + "]").encode("ascii")).decode("ascii") + m.group(3)
+# r16: completeaza_jslog (r15: cheia taiata COMPLETATA prin deductie - lista inchisa la ultima virgula) a fost scoasa. Fixture-urile folosesc
+# valorile INTREGI din captura netaiata (c23n); valorile taiate raman doar ca reproduceri ale refuzului (JSLOG_TAIATE_C23, JSLOG_TRIMITE_TAIAT).
 
 
 JSLOG_MODEL = ("206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGws"
@@ -3210,7 +3226,11 @@ MIC_2311_BTN = (' _ngcontent-ng-c738377845="" matbadgeposition="after" maticonbu
 JSLOG_TRIMITE_TAIAT = ("173899;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxbMCwicm8iLDAs"
                        "IiJdLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il0sbnVsbCxudWxs"
                        "LG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51")       # t23, exact cum a fost citit (taiat la 300 de caractere)
-JSLOG_TRIMITE = completeaza_jslog(JSLOG_TRIMITE_TAIAT)               # r15: completat (deductie, vezi completeaza_jslog)
+# r16: valoarea INTREAGA a butonului de trimitere din captura netaiata (c23n, mediu = lung; acelasi chat ca t23): JSLOG_TRIMITE_TAIAT e
+# prefixul ei (verificat in test). Cheia decodata are 35 de elemente, ultimul [0] - nevazut cat era taiata.
+JSLOG_TRIMITE = ("173899;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxbMCwicm8i"
+                 "LDAsIiJdLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0"
+                 "Il0sbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLFswXV0=;mutable:true")
 TRIMITE_2311_GIB = (' _ngcontent-ng-c282099457="" theme="lm" type="onSurface" class="send-button ng-tns-c282099457-4 has-input submit '
                     + CLASE_GEM_BTN + ' ng-star-inserted" _nghost-ng-c738377845="" aria-disabled="false" style=""')
 TRIMITE_2311_BTN = (' _ngcontent-ng-c738377845="" matbadgeposition="after" maticonbutton="" class="' + CLASE_MAT_BTN + ' ng-star-inserted"' + RIPPLE
@@ -3528,14 +3548,23 @@ REPRO_JAK_R11 = ('<button aria-label="Extinde intrarea la ecran complet" aria-de
 REPRO_R11 = REPRO_JAK_R11.replace('aria-describedby="x"', 'aria-describedby="cdk-describedby-message-ng-1-16"')
 assert REPRO_R11 != REPRO_JAK_R11
 SEM_ECRAN = "button[aria-label=extinde intrarea la ecran complet][aria-describedby]"
-INTRARE_TEXT_INCHIS = '    ("button[aria-label=extinde intrarea la ecran complet][aria-describedby]", ("Ecran complet",)),'   # r15: Unicode exact
-# r11 (c8b6534a) = fara controlul cu text inchis: o singura inlocuire (intrarea scoasa din CONTROALE_TEXT_INCHIS)
-REGULI_R11_TEXT = [(INTRARE_TEXT_INCHIS, "")]
+# r16: linia unica din _motiv_text care compara textul cu lista (loc, text); mutantii rundelor vechi o rescriu
+LINIA_TEXTE = "    if (_loc_text(nod, ctrl, zona), b) in TEXTE_CUNOSCUTE:"
+LINIA_LIGATURA = '    if p is not None and p.tag == "mat-icon" and b in LIGATURI_VAZUTE:'
+# r11 (c8b6534a) = fara text inchis in controale: in ORICE control orice text fara semnal trece (eticheta controlului)
+REGULI_R11_TEXT = [(LINIA_TEXTE, "    if ctrl is not None or (_loc_text(nod, ctrl, zona), b) in TEXTE_CUNOSCUTE:")]
+# r12-r15 (7b9aa4da) = doar butonul "Ecran complet" cu text inchis ("Ecran complet"); celelalte controale (si butonul modelului) = orice
+# text fara semnal; ligaturile mat-icon dupa regex (RE_LIGATURA) in afara controalelor; golul decis dupa _ascii (pe forma ASCII)
+REGULI_R15_TEXT = [
+    (LINIA_TEXTE, "    if (ctrl is not None and (_semnatura(ctrl) != %r or b == \"Ecran complet\")) or (_loc_text(nod, ctrl, zona), b) in TEXTE_CUNOSCUTE:" % SEM_ECRAN),
+    (LINIA_LIGATURA, '    if p is not None and p.tag == "mat-icon" and ctrl is None and re.fullmatch(r"[a-z0-9_]{1,40}", b):'),
+    ('    if b == "":', '    if b == "" or not _ascii(nod.date):'),
+]
 LINIA_INTERMEDIAR_2 = '    ("text-input-field", "pre-fullscreen", "with-toolbox-drawer"),'
 REGULI_R11_CLASE = [(LINIA_INTERMEDIAR_2, LINIA_INTERMEDIAR_2 + " " + " ".join(repr(c) + "," for c in CLASE_DIV_SCOASE_R12))]
 # celelalte controale din CONTROALE_CUNOSCUTE (cate un element cu semnatura exacta): neschimbate de r12
 CELELALTE_CONTROALE = (
-    ('<button aria-label="Deruleaza in jos" type="button" tabindex="0">', "</button>"),
+    ('<button aria-label="Deruleaz\u0103 \u00een jos" type="button" tabindex="0">', "</button>"),     # r16: eticheta din lista alba (r15)
     ('<button aria-label="' + ARIALABEL_REAL + '">', "</button>"),
     ('<button aria-label="' + ETICHETA_MIC + '">', "</button>"),
     ('<button aria-label="Trimite mesajul">', "</button>"),
@@ -3608,7 +3637,10 @@ class TestEcranCompletTextInchis(unittest.TestCase):
             # un control / butonul modelului imbricat nu elibereaza textele
             ('<button aria-label="Trimite mesajul">continut strain</button>', "text_in_control:continut strain"),
             ('<button data-test-id="bard-mode-menu-button">continut strain</button>', "text_in_control:continut strain"),
-            ('<span>Ecran complet</span><span>continut strain</span>', "text_in_control:continut strain"),
+            ('<span></span><span>continut strain</span>', "text_in_control:continut strain"),
+            # r16: nici textul tooltip-ului nu mai e permis in buton (nevazut ca nod text in captura netaiata), nici "Carbon" (alt loc)
+            ("<span>Ecran complet</span>", "text_in_control:ecran complet"),
+            ('<button data-test-id="bard-mode-menu-button"><span>Carbon</span></button>', "text_in_control:carbon"),
         )
         for inauntru, m in cazuri:
             html = ecran(inauntru=inauntru)
@@ -3632,15 +3664,22 @@ class TestEcranCompletTextInchis(unittest.TestCase):
             self.refuz_inainte_de_enter(html)
             self.refuz_inainte_de_enter(REPRO_R11.replace("<span>continut strain arbitrar</span>", inauntru))
 
-    def test_buton_gol_iconita_sau_tooltip_exact_trece(self):
-        for inauntru in ("", "\n  ", GI, "<span></span>", "<span> \n </span>", "<span>Ecran complet</span>", GI + "<span>Ecran complet</span>",
-                         "<div><span>\n  Ecran complet \t</span></div>", '<span class="mat-focus-indicator"></span>' + GI,
-                         "<mat-icon></mat-icon>"):
+    def test_buton_gol_sau_iconita_trece_textul_tooltip_ului_nu(self):
+        # r16: doar golul (pe textul BRUT: spatii albe HTML) si iconitele fara text trec; r12-r15 permiteau si textul "Ecran complet"
+        for inauntru in ("", "\n  ", " \t\r\n\f ", GI, "<span></span>", "<span> \n </span>", '<span class="mat-focus-indicator"></span>' + GI,
+                         "<mat-icon></mat-icon>", "<div><span>\n \t</span></div>"):
             html = ecran(inauntru=inauntru)
             self.assertEqual(self.an(zona_cu(html))["necunoscute"], 0, msg=inauntru)
             self.assertEqual(scenariu_brief_lung(gp, pagina_23_11(ecran_html=html)), (None, "", ACTIUNI_TRIMITERE), msg=inauntru)
-        # r15 (Jakarinos r4 P2): textul permis e comparat pe Unicode EXACT (r14: dupa _ascii, deci "  ECRAN   complet " trecea); la capete
-        # se scot doar spatiile albe HTML. Litere mari / mici, spatiu dublu, diacritice, NBSP / latime zero = alt text, refuz inainte de Enter
+        # textul tooltip-ului in buton (exact sau in orice forma) = text necunoscut pe acest loc, refuz inainte de Enter; pe regulile r15
+        # (mutant) forma exacta trecea
+        r15 = mutant(REGULI_R15_TEXT)
+        for inauntru in ("<span>Ecran complet</span>", GI + "<span>Ecran complet</span>", "<div><span>\n  Ecran complet \t</span></div>"):
+            html = ecran(inauntru=inauntru)
+            self.assertEqual(self.an(zona_cu(html))["necunoscute_detalii"], ["text_in_control:ecran complet"], msg=inauntru)
+            self.refuz_inainte_de_enter(html)
+            self.assertEqual(self.an(zona_cu(html), mod=r15)["necunoscute"], 0, msg=inauntru)
+        # r15 (Jakarinos r4 P2): Unicode EXACT; r16: oricare forma = refuz (lista e goala pe acest loc)
         for t in ("  ECRAN   complet ", "ecran complet", "Ecran  complet", "Ecr\u00e2n complet", "Ecran complet\u00a0", "\u200bEcran complet",
                   "Ecran\u00a0complet", "Ecran complet."):
             html = ecran(inauntru="<span>" + t + "</span>")
@@ -3650,54 +3689,61 @@ class TestEcranCompletTextInchis(unittest.TestCase):
         # starea reala 23.11 (fixture-ul implicit: butonul cu iconita svg) trece si ajunge la Enter
         self.assertEqual(scenariu_brief_lung(gp, pagina_23_11()), (None, "", ACTIUNI_TRIMITERE))
 
-    def test_celelalte_controale_neschimbate(self):
-        # "nu slabi celelalte" si nici nu le schimba: pentru fiecare alt control, acelasi rezultat ca pe r11 (cu text strain / atasament)
-        r11 = mutant(REGULI_R11_TEXT)
+    def test_celelalte_controale_au_si_ele_text_inchis(self):
+        # r16 (Jakarinos NO-GO r15 P1): r12-r15 lasau celelalte controale neschimbate (orice text fara semnal = eticheta) - exact calea
+        # gasita de Jakarinos. Acum fiecare control: text strain = `text_in_control:`; cu semnal = refuz ca inainte; iconita fara text trece.
+        # Pe regulile r11 / r15 (mutanti) textul strain trecea.
+        r11, r15 = mutant(REGULI_R11_TEXT), mutant(REGULI_R15_TEXT)
         for start, final in CELELALTE_CONTROALE:
             n = self.nod(start + final)
             self.assertIn(gp._semnatura(n), gp.CONTROALE_CUNOSCUTE)
-            self.assertIsNone(gp._texte_control_inchis(n), start)
-            for inauntru in ("continut strain", "<span>abc</span>", "<span>fisier atasat</span>", "<span>a.txt</span>", GI):
+            for inauntru, m in (("continut strain", "text_in_control:continut strain"), ("<span>abc</span>", "text_in_control:abc"),
+                                ("<span>fisier atasat</span>", "text_atasament:fisier atasat"), ("<span>a.txt</span>", "text_fisier:a.txt"),
+                                (GI, None), ("<span>\n \t</span>", None)):
                 html = zona_cu(start + inauntru + final)
-                self.assertEqual(self.an(html)["necunoscute_detalii"], self.an(html, mod=r11)["necunoscute_detalii"], msg=(start, inauntru))
-        self.assertEqual(gp._texte_control_inchis(self.nod(ecran())), ("Ecran complet",))
-        self.assertIsNone(gp._texte_control_inchis(None))
+                self.assertEqual(self.an(html)["necunoscute_detalii"], [m] if m else [], msg=(start, inauntru))
+                if m and m.startswith("text_in_control:"):
+                    for mod in (r11, r15):
+                        self.assertEqual(self.an(html, mod=mod)["necunoscute"], 0, msg=(start, inauntru))
 
     def test_regula_sta_intr_un_singur_loc(self):
-        # structural (L19): o singura intrare, semnatura ei e in CONTROALE_CUNOSCUTE; r15: textele = sirurile EXACTE vazute (gemtooltip
-        # din captura 23.11, "Ecran complet"), nu forma _ascii; CONTROALE_TEXT_INCHIS citita doar in _texte_control_inchis
-        self.assertEqual(gp.CONTROALE_TEXT_INCHIS, ((SEM_ECRAN, ("Ecran complet",)),))
-        for sem, texte in gp.CONTROALE_TEXT_INCHIS:
-            self.assertIn(sem, gp.CONTROALE_CUNOSCUTE)
-            self.assertTrue(all(("button", "gemtooltip", t) in REALE for t in texte), texte)
+        # structural (L19), r16: CONTROALE_TEXT_INCHIS / _texte_control_inchis / RE_LIGATURA au disparut; TEXTE_CUNOSCUTE e citita intr-un
+        # singur loc (_motiv_text, linia LINIA_TEXTE), _loc_text apelata o data, LIGATURI_VAZUTE = () citita o data
         with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
             src = f.read().decode("ascii")
         linii = [l.rstrip("\r") for l in src.split("\n")]
         cod = [l for l in linii if not l.lstrip().startswith("#")]
-        i0 = linii.index("def _texte_control_inchis(ctrl):")
-        i1 = next(k for k in range(i0 + 1, len(linii)) if linii[k].startswith("def "))
-        self.assertEqual(sum(len(re.findall(r"(?<![A-Za-z_])CONTROALE_TEXT_INCHIS(?![A-Za-z_])", l)) for l in cod), 2)   # definitia + functia
-        self.assertTrue(any("in CONTROALE_TEXT_INCHIS" in l for l in linii[i0:i1] if not l.lstrip().startswith("#")))
+        numar = lambda nume: sum(len(re.findall(r"(?<![A-Za-z_])%s(?![A-Za-z_])" % nume, l)) for l in cod)
+        for nume in ("CONTROALE_TEXT_INCHIS", "_texte_control_inchis", "RE_LIGATURA", "permise"):
+            self.assertEqual(numar(nume), 0, nume)
+        self.assertEqual(numar("TEXTE_CUNOSCUTE"), 2)              # definitia + _motiv_text
+        self.assertEqual(numar("LIGATURI_VAZUTE"), 2)              # definitia + _motiv_text
+        self.assertEqual(numar("_loc_text"), 2)                    # definitia + _motiv_text
+        self.assertEqual(sum(l.count("_motiv_text(") for l in cod), 2)   # definitia + _necunoscute (docstring-ul lui _semnal il numeste fara paranteza)
+        self.assertEqual(linii.count(LINIA_TEXTE), 1)
+        self.assertEqual(linii.count(LINIA_LIGATURA), 1)
+        self.assertEqual(gp.LIGATURI_VAZUTE, ())
         self.assertEqual(sum(l.count('"text_in_control:"') for l in cod), 1)
-        self.assertEqual(sum(l.count("_texte_control_inchis(") for l in cod), 3)       # definitia + _motiv_text + _necunoscute
-        self.assertEqual(src.count(INTRARE_TEXT_INCHIS), 1)
+        self.assertIn("            ctrl_copii = ctrl               # r12 / r16: sub ORICE control contextul ramane al lui (nimic imbricat nu-l inlocuieste)", linii)
 
     def test_mutanti_r12_lasa_brief_ul_sa_plece(self):
         # fiecare mutant slabeste regula noua; scenariul lui pleaca la Enter pe mutant, refuz pe cod; toti lasa starea reala 23.11 sa treaca
         cazuri = (
-            # (M23) fara controlul cu text inchis (= r11): orice text trece
+            # (M23) fara text inchis in controale (= r11): orice text trece
             (REGULI_R11_TEXT, (REPRO_R11, ecran(inauntru="<mat-icon>fullscreen</mat-icon>"))),
-            # (M24) orice text acceptat in controlul inchis
-            ([("        if b in permise:", "        if True:")], (REPRO_R11, ecran(inauntru="<span>Ecran</span>"))),
-            # (M25) tooltip-ul comparat ca subsir, nu exact (r15: pe textul brut `b`)
-            ([("        if b in permise:", "        if any(p in b for p in permise):")],
-             (ecran(inauntru="<span>Ecran complet x</span>"), ecran(inauntru="<span>continut strain Ecran complet</span>"))),
-            # (M26) contextul inchis inlocuit de un control imbricat
-            ([("            ctrl_copii = ctrl               # r12", "            pass               # r12")],
-             (ecran(inauntru='<button aria-label="Trimite mesajul">continut strain</button>'),)),
-            # (M27) ligaturile iconitelor acceptate in controlul inchis
-            ([("        if b in permise:", "        if b in permise or RE_LIGATURA.fullmatch(b):")],
-             (ecran(inauntru="<mat-icon>fullscreen</mat-icon>"), ecran(inauntru="<span>abc</span>"))),
+            # (M24) = r15: doar "Ecran complet" inchis, cu tooltip-ul permis
+            (REGULI_R15_TEXT, (ecran(inauntru="<span>Ecran complet</span>"),
+                               '<button aria-label="Trimite mesajul"><span>continut strain arbitrar</span></button>')),
+            # (M25) textul comparat ca subsir, nu exact (pe locul lui)
+            ([(LINIA_TEXTE, "    if any(l == _loc_text(nod, ctrl, zona) and t in b for l, t in TEXTE_CUNOSCUTE):")],
+             ('<button data-test-id="bard-mode-menu-button"><span>Carbon x</span></button>',
+              '<button data-test-id="bard-mode-menu-button"><span>continut strain Carbon</span></button>')),
+            # (M26) contextul primului control inlocuit de un control / butonul modelului imbricat
+            ([("            ctrl_copii = ctrl               # r12 / r16", "            pass               # r12 / r16")],
+             (ecran(inauntru='<button data-test-id="bard-mode-menu-button"><span>Carbon</span></button>'),)),
+            # (M27) ligaturile iconitelor dupa regex (r15 RE_LIGATURA), in orice loc
+            ([(LINIA_LIGATURA, '    if p is not None and p.tag == "mat-icon" and re.fullmatch(r"[a-z0-9_]{1,40}", b):')],
+             (ecran(inauntru="<mat-icon>fullscreen</mat-icon>"), "<div><mat-icon>continut_strain_arbitrar</mat-icon></div>")),
             # (M28) cele 3 multimi scoase din CLASE_DIV_DROP readuse (= r11)
             (REGULI_R11_CLASE, tuple(div_extins(" ".join(c)) for c in CLASE_DIV_SCOASE_R12)),
         )
@@ -3745,11 +3791,15 @@ def cu_tinta(html, tinta):
     return html.replace("</body>", tinta + "</body>")
 
 
-# r14: starile REALE din captura completa 23.11 (paw_v464_calibrare\stare_completa_23_11.json, gol / mediu / lung): toate elementele din
-# input-area-v2 cu TOATE atributele + textul propriu, copiate de un generator (claude-tasks\paw_v464_r14\genereaza_fixture.py) ca literal
-# ASCII. Captura e o lista PLATA (ordinea DOM): adancimea fiecarui element e RECONSTITUITA de mana (generatorul verifica secventa de
-# taguri si ca adancimea creste cu cel mult 1). Descendentii editorului NU sunt in captura (textul ciornei): editorul primeste aici
-# <p><br></p> / text de proba. Elementul input-area-v2 insusi are atributele din stare_text_lung_23_11.json (ZONA_2311_ATR).
+# r14: starile REALE din captura completa 23.11 (gol / mediu / lung): toate elementele din input-area-v2 cu TOATE atributele + textul
+# propriu, ca literal ASCII. Captura e o lista PLATA (ordinea DOM): adancimea fiecarui element e RECONSTITUITA de mana (generatorul
+# verifica secventa de taguri si ca adancimea creste cu cel mult 1). Descendentii editorului NU sunt in captura (textul ciornei):
+# editorul primeste aici <p><br></p> / text de proba. Elementul input-area-v2 insusi are atributele din stare_text_lung_23_11.json.
+# r16 (Jakarinos r5: "testele pozitive completeaza prin deductie jslog-urile trunchiate"): literalul e generat acum din captura NETAIATA
+# (paw_v464_calibrare\stare_completa_23_11_netaiat.json, chat, doar citire, ciorna golita dupa: jslog complet, text propriu pana la
+# 2000 de caractere; generator claude-tasks\paw_v464_r16\genereaza_fixture_netaiat.py, aceleasi adancimi). Fata de captura taiata:
+# aceleasi taguri / nume / valori, cu exceptia cheilor jslog (acum intregi), a identificatorilor descrierilor (ng-1-20 / ng-1-19 in loc
+# de ng-1-18 / ng-1-17: alta incarcare) si a clasei ng-animating de pe send-button-container (mediu). Nimic completat, nimic dedus.
 CAPTURA_2311 = {
     'gol': (
         (0, 'div', (('_ngcontent-ng-c282099457', ''), ('uireadyparent', ''), ('data-node-type', 'input-area'), ('class', 'input-area is-zero-state children-ready')), ''),
@@ -3781,7 +3831,7 @@ CAPTURA_2311 = {
         (4, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'model-picker-container ng-tns-c282099457-4 ng-star-inserted'), ('style', '')), ''),
         (5, 'bard-mode-switcher', (('_ngcontent-ng-c282099457', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c1653784781', ''), ('class', 'ng-tns-c282099457-4 ng-star-inserted')), ''),
         (6, 'div', (('_ngcontent-ng-c1653784781', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (7, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (7, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (8, 'span', (('class', 'mdc-button__label'),), ''),
         (9, 'div', (('_ngcontent-ng-c1653784781', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
@@ -3832,7 +3882,7 @@ CAPTURA_2311 = {
         (5, 'at-mentions-menu-v2', (('_nghost-ng-c4001200243', ''), ('class', 'ng-tns-c282099457-4 ng-star-inserted'), ('style', '')), ''),
         (3, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'input-buttons-wrapper-top ng-tns-c282099457-4 ng-star-inserted')), ''),
         (4, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'fullscreen-button-container ng-tns-c282099457-4 visible ng-star-inserted')), ''),
-        (5, 'button', (('_ngcontent-ng-c282099457', ''), ('mat-icon-button', ''), ('color', 'primary'), ('aria-label', 'Extinde intrarea la ecran complet'), ('gemtooltip', 'Ecran complet'), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger fullscreen-button ng-tns-c282099457-4 mat-primary'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-18'), ('cdk-describedby-host', 'ng-1')), ''),
+        (5, 'button', (('_ngcontent-ng-c282099457', ''), ('mat-icon-button', ''), ('color', 'primary'), ('aria-label', 'Extinde intrarea la ecran complet'), ('gemtooltip', 'Ecran complet'), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger fullscreen-button ng-tns-c282099457-4 mat-primary'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-20'), ('cdk-describedby-host', 'ng-1')), ''),
         (6, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
         (6, 'mat-icon', (('_ngcontent-ng-c282099457', ''), ('role', 'img'), ('class', 'mat-icon notranslate gds-icon-l google-symbols mat-ligature-font mat-icon-no-color'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'expand_content'), ('fonticon', 'expand_content')), ''),
         (6, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -3841,7 +3891,7 @@ CAPTURA_2311 = {
         (4, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'model-picker-container ng-tns-c282099457-4 ng-star-inserted'), ('style', '')), ''),
         (5, 'bard-mode-switcher', (('_ngcontent-ng-c282099457', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c1653784781', ''), ('class', 'ng-tns-c282099457-4 ng-star-inserted')), ''),
         (6, 'div', (('_ngcontent-ng-c1653784781', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (7, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (7, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (8, 'span', (('class', 'mdc-button__label'),), ''),
         (9, 'div', (('_ngcontent-ng-c1653784781', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
@@ -3863,9 +3913,9 @@ CAPTURA_2311 = {
         (10, 'span', (('class', 'mat-focus-indicator'),), ''),
         (10, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
         (8, 'div', (('_ngcontent-ng-c3904984110', ''), ('class', 'circle-overlay')), ''),
-        (5, 'div', (('_ngcontent-ng-c282099457', ''), ('data-test-id', 'send-button-container'), ('class', 'mat-mdc-tooltip-trigger send-button-container visible persistent-mic ng-tns-c282099457-4 inner lm-enabled ng-trigger ng-trigger-sendButtonVisibility ng-star-inserted'), ('aria-describedby', 'cdk-describedby-message-ng-1-17'), ('cdk-describedby-host', 'ng-1'), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c282099457', ''), ('data-test-id', 'send-button-container'), ('class', 'mat-mdc-tooltip-trigger send-button-container visible persistent-mic ng-tns-c282099457-4 inner lm-enabled ng-trigger ng-trigger-sendButtonVisibility ng-star-inserted ng-animating'), ('aria-describedby', 'cdk-describedby-message-ng-1-19'), ('cdk-describedby-host', 'ng-1'), ('style', '')), ''),
         (6, 'gem-icon-button', (('_ngcontent-ng-c282099457', ''), ('theme', 'lm'), ('type', 'onSurface'), ('class', 'send-button ng-tns-c282099457-4 has-input submit gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled ng-star-inserted'), ('_nghost-ng-c738377845', ''), ('aria-disabled', 'false'), ('style', '')), ''),
-        (7, 'button', (('_ngcontent-ng-c738377845', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Trimite mesajul'), ('jslog', '173899;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxbMCwicm8iLDAsIiJdLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVs'), ('aria-disabled', 'false')), ''),
+        (7, 'button', (('_ngcontent-ng-c738377845', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Trimite mesajul'), ('jslog', '173899;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxbMCwicm8iLDAsIiJdLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il0sbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLFswXV0=;mutable:true'), ('aria-disabled', 'false')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
         (8, 'gem-icon', (('_ngcontent-ng-c738377845', ''), ('_nghost-ng-c4019194464', '')), ''),
         (9, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'arrow_upward'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'arrow_upward')), ''),
@@ -3900,7 +3950,7 @@ CAPTURA_2311 = {
         (5, 'at-mentions-menu-v2', (('_nghost-ng-c4001200243', ''), ('class', 'ng-tns-c282099457-4 ng-star-inserted'), ('style', '')), ''),
         (3, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'input-buttons-wrapper-top ng-tns-c282099457-4 ng-star-inserted')), ''),
         (4, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'fullscreen-button-container ng-tns-c282099457-4 visible ng-star-inserted')), ''),
-        (5, 'button', (('_ngcontent-ng-c282099457', ''), ('mat-icon-button', ''), ('color', 'primary'), ('aria-label', 'Extinde intrarea la ecran complet'), ('gemtooltip', 'Ecran complet'), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger fullscreen-button ng-tns-c282099457-4 mat-primary'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-18'), ('cdk-describedby-host', 'ng-1')), ''),
+        (5, 'button', (('_ngcontent-ng-c282099457', ''), ('mat-icon-button', ''), ('color', 'primary'), ('aria-label', 'Extinde intrarea la ecran complet'), ('gemtooltip', 'Ecran complet'), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger fullscreen-button ng-tns-c282099457-4 mat-primary'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-describedby', 'cdk-describedby-message-ng-1-20'), ('cdk-describedby-host', 'ng-1')), ''),
         (6, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
         (6, 'mat-icon', (('_ngcontent-ng-c282099457', ''), ('role', 'img'), ('class', 'mat-icon notranslate gds-icon-l google-symbols mat-ligature-font mat-icon-no-color'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'expand_content'), ('fonticon', 'expand_content')), ''),
         (6, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -3909,7 +3959,7 @@ CAPTURA_2311 = {
         (4, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'model-picker-container ng-tns-c282099457-4 ng-star-inserted'), ('style', '')), ''),
         (5, 'bard-mode-switcher', (('_ngcontent-ng-c282099457', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c1653784781', ''), ('class', 'ng-tns-c282099457-4 ng-star-inserted')), ''),
         (6, 'div', (('_ngcontent-ng-c1653784781', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (7, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (7, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (8, 'span', (('class', 'mdc-button__label'),), ''),
         (9, 'div', (('_ngcontent-ng-c1653784781', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
@@ -3931,9 +3981,9 @@ CAPTURA_2311 = {
         (10, 'span', (('class', 'mat-focus-indicator'),), ''),
         (10, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
         (8, 'div', (('_ngcontent-ng-c3904984110', ''), ('class', 'circle-overlay')), ''),
-        (5, 'div', (('_ngcontent-ng-c282099457', ''), ('data-test-id', 'send-button-container'), ('class', 'mat-mdc-tooltip-trigger send-button-container visible persistent-mic ng-tns-c282099457-4 inner lm-enabled ng-trigger ng-trigger-sendButtonVisibility ng-star-inserted ng-animating'), ('aria-describedby', 'cdk-describedby-message-ng-1-17'), ('cdk-describedby-host', 'ng-1'), ('style', '')), ''),
+        (5, 'div', (('_ngcontent-ng-c282099457', ''), ('data-test-id', 'send-button-container'), ('class', 'mat-mdc-tooltip-trigger send-button-container visible persistent-mic ng-tns-c282099457-4 inner lm-enabled ng-trigger ng-trigger-sendButtonVisibility ng-star-inserted ng-animating'), ('aria-describedby', 'cdk-describedby-message-ng-1-19'), ('cdk-describedby-host', 'ng-1'), ('style', '')), ''),
         (6, 'gem-icon-button', (('_ngcontent-ng-c282099457', ''), ('theme', 'lm'), ('type', 'onSurface'), ('class', 'send-button ng-tns-c282099457-4 has-input submit gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled ng-star-inserted'), ('_nghost-ng-c738377845', ''), ('aria-disabled', 'false'), ('style', '')), ''),
-        (7, 'button', (('_ngcontent-ng-c738377845', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Trimite mesajul'), ('jslog', '173899;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxbMCwicm8iLDAsIiJdLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVs'), ('aria-disabled', 'false')), ''),
+        (7, 'button', (('_ngcontent-ng-c738377845', ''), ('matbadgeposition', 'after'), ('maticonbutton', ''), ('class', 'mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-badge mat-unthemed mat-badge-overlap mat-badge-above mat-badge-after mat-badge-small mat-badge-hidden ng-star-inserted'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('mat-ripple-loader-centered', ''), ('aria-label', 'Trimite mesajul'), ('jslog', '173899;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxbMCwicm8iLDAsIiJdLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il0sbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLFswXV0=;mutable:true'), ('aria-disabled', 'false')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-icon-button__ripple'),), ''),
         (8, 'gem-icon', (('_ngcontent-ng-c738377845', ''), ('_nghost-ng-c4019194464', '')), ''),
         (9, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'arrow_upward'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'arrow_upward')), ''),
@@ -3941,11 +3991,13 @@ CAPTURA_2311 = {
         (8, 'span', (('class', 'mat-mdc-button-touch-target'),), ''),
     ),
 }
-# r15: captura EXACT cum a fost citita (jslog taiat la 300 de caractere) si captura folosita de teste (jslog completat, completeaza_jslog)
-CAPTURA_2311_TAIATA = CAPTURA_2311
-CAPTURA_2311 = {st: tuple((ad, t, tuple((k, completeaza_jslog(v) if k == "jslog" else v) for k, v in a), tx) for ad, t, a, tx in el)
-                for st, el in CAPTURA_2311_TAIATA.items()}
-DESCRIERI = {'gol': {'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)'}, 'mediu': {'cdk-describedby-message-ng-1-18': 'Ecran complet', 'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-17': 'Trimite'}, 'lung': {'cdk-describedby-message-ng-1-18': 'Ecran complet', 'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-17': 'Trimite'}}
+DESCRIERI = {'gol': {'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)'}, 'mediu': {'cdk-describedby-message-ng-1-20': 'Ecran complet', 'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-19': 'Trimite'}, 'lung': {'cdk-describedby-message-ng-1-20': 'Ecran complet', 'cdk-describedby-message-ng-1-11': 'Schimb\u0103 modelul (^\u21e7M)', 'cdk-describedby-message-ng-1-2': 'Dicteaz\u0103 (^\u21e7D)', 'cdk-describedby-message-ng-1-19': 'Trimite'}}
+# r15 / r16: valorile jslog cu cheie EXACT cum au fost citite in captura TAIATA (c23, 200 de caractere) - refuzate (JSON neterminat);
+# fiecare e prefixul valorii intregi din captura netaiata (testul o verifica)
+JSLOG_TAIATE_C23 = (
+    ('button', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51'),
+    ('button', '173899;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxbMCwicm8iLDAsIiJdLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVs'),
+)
 TEXT_MEDIU = "".join("<p>Rindul %02d al unui brief mediu de proba.</p>" % k for k in range(12))
 
 
@@ -4067,8 +4119,8 @@ class TestListaAlbaAtribute(unittest.TestCase):
                          ([DESCRIERE_STRAINA], ["descriere:cdk-describedby-message-ng-1-16=" + STRAIN]))
         self.assertEqual(scenariu_brief_lung(gp, html)[0::2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER))
         self.assertIn("  necunoscut " + DESCRIERE_STRAINA, self.stare_linii(html))
-        # aceeasi in captura reala 23.11 (lunga): tinta reala ng-1-18 cu text strain
-        cap = html_captura("lung", descrieri=dict(DESCRIERI["lung"], **{"cdk-describedby-message-ng-1-18": STRAIN}))
+        # aceeasi in captura reala 23.11 (lunga): tinta reala a butonului "Ecran complet" (r16, captura netaiata: ng-1-20) cu text strain
+        cap = html_captura("lung", descrieri=dict(DESCRIERI["lung"], **{"cdk-describedby-message-ng-1-20": STRAIN}))
         self.assertEqual(self.an(cap)["necunoscute_detalii"], [DESCRIERE_STRAINA])
         # reproducerile r2 raman refuzate (acum de lista alba: valoare in afara listei / nume pe alt tag)
         sm = "button[aria-label=%s][data-test-id=bard-mode-menu-button]" % STRAIN
@@ -4397,6 +4449,12 @@ class TestCaptureCaseta(unittest.TestCase):
         # r15: jslog citit netaiat (cheia BardVeMetadataKey se verifica decodata), restul atributelor taiate la 300, ca in r12-r14
         self.assertIn("x.value.slice(0, x.name === 'jslog' ? 20000 : 300)", cod)
         self.assertEqual(cod.count("const atr = "), 1)
+        # r16: + textul propriu BRUT (noduri text directe, fara trim, 2000) pe `elemente` si `zona_analiza`; editorul insusi = gol, iar
+        # descendentii editorului raman exclusi (filtrul de mai sus) / fara text (editor_atribute)
+        self.assertIn("const tp = el => el === ed ? '' : Array.from(el.childNodes).filter(n => n.nodeType === 3).map(n => n.data).join('').slice(0, 2000);", cod)
+        self.assertEqual(cod.count("text_propriu: tp(el)"), 2)
+        self.assertNotIn("text_propriu", linie)
+        self.assertNotIn("trim", cod.replace("(ed.innerText || '').trim().length", ""))
 
     def test_runbook_5g2a_cere_succes_explicit(self):
         # r13 (Jakarinos r2): dupa `stare` se verifica $LASTEXITCODE SI linia EXACTA de succes, aceeasi pe care o scrie `stare` cand paza trece
@@ -4451,12 +4509,16 @@ REGULI_R14_CLASE_JSLOG = [(LINIA_CLASE_JSLOG, ') + ((("*",), "class", re.compile
 # gemtooltip / data-placeholder, ca `text=True` din r14)
 LINIA_DESCRIERE = '            if b != "" and b not in DESCRIERI_CUNOSCUTE:'
 REGULI_R14_DESCRIERE = [(LINIA_DESCRIERE, "            if a and a not in [_ascii(t) for t in DESCRIERI_CUNOSCUTE]:")]
-REGULI_R14_TEXT_INCHIS = [("        if b in permise:", "        if a in [_ascii(p) for p in permise]:")]
+# r16: textele controalelor si TEXTE_CUNOSCUTE au acum O singura comparatie (LINIA_TEXTE) -> mutantul r14 "dupa _ascii" e unul singur
+REGULI_R14_TEXT_INCHIS = [(LINIA_TEXTE, "    if (_loc_text(nod, ctrl, zona), a) in [(l, _ascii(t)) for l, t in TEXTE_CUNOSCUTE]:")]
 REGULI_R14_ETICHETE = [("        if not any(forma.fullmatch(v) for forma in intrari):",
                         "        if not any(forma.fullmatch(v) or (k in ('aria-label', 'arialabel', 'gemtooltip', 'data-placeholder') and "
                         "any(_ascii(v) == _ascii(p) for p in ETICHETE_BUTOANE + ('Ecran complet', 'Introdu o solicitare pentru Gemini', "
                         "'\\u00centreab\\u0103 Gemini'))) for forma in intrari):")]
-REGULI_R14_TEXTE = [("    if b in TEXTE_CUNOSCUTE:", "    if a in [_ascii(t) for t in TEXTE_CUNOSCUTE]:")]
+REGULI_R14_TEXTE = REGULI_R14_TEXT_INCHIS
+# r16: textul linkului de confidentialitate pus IN link (locul lui), pentru scenarii cu textul linkului
+def link_cu_text(t):
+    return '<a data-test-id="footer-privacy-notice-link" href="%s"><span data-test-id="content">%s</span></a>' % (HREF_REAL, t)
 
 
 def cheie_meta(text_json):
@@ -4689,14 +4751,21 @@ class TestR15ClaseJslogUnicode(unittest.TestCase):
         # pozitive: cele reale (D intreaga; A / B / C completate) si structura vazuta
         d = JSLOG_MODEL.split("BardVeMetadataKey:")[1].split(";")[0]
         self.assertEqual(base64.b64decode(d).decode("ascii"), lista_meta(23, p22='["95a4c0abcba24364"]'))   # 206752 t23, intreaga
-        for t in (lista_meta(0), lista_meta(1), lista_meta(64), lista_meta(9, p8='[0,"ro",0,""]'), lista_meta(23, p8='[0,"ro",0,""]', p22='["95a4c0abcba24364"]'),
-                  lista_meta(30, p8='[123456789,"ro",7,""]'), lista_meta(23, p22='["0123456789abcdef"]')):
+        for t in (lista_meta(0), lista_meta(1), lista_meta(35), lista_meta(9, p8='[0,"ro",0,""]'), lista_meta(23, p8='[0,"ro",0,""]', p22='["95a4c0abcba24364"]'),
+                  lista_meta(30, p8='[123456789,"ro",7,""]'), lista_meta(23, p22='["0123456789abcdef"]'),
+                  # r16: cheia INTREAGA a butonului de trimitere (c23n): 35 de elemente, [34] = [0]; variantele [34] = [<cifre>]
+                  lista_meta(35, p8='[0,"ro",0,""]', p22='["95a4c0abcba24364"]', p34="[0]"), lista_meta(35, p34="[7]"),
+                  lista_meta(35, p34="[999999999]")):
             self.assertTrue(m(cheie_meta(t)), t)
         for v in set(dict(a).get("jslog", "") for st in CAPTURA_2311.values() for _, _, a, _ in st) | {JSLOG_MODEL, JSLOG_TRIMITE}:
             if "BardVeMetadataKey:" in v:
                 self.assertTrue(m(v.split("BardVeMetadataKey:")[1].split(";")[0]), v)
         # negative scrise de mana: text, cheie, numar / bool / zecimal, alta pozitie, alta limba, hex gresit, JSON necanonic, prea lung
-        nu = (lista_meta(65), '[null,"x"]', "[1]", "[true]", "[0.0]", '{"a":1}', '"x"', "null", "[null, null]", "[ null]", "[null,null]\n",
+        nu = (lista_meta(36), lista_meta(64), lista_meta(65),           # r16: plafonul = cea mai lunga lista vazuta (35)
+              lista_meta(35, p34='["0"]'), lista_meta(35, p34="[0,0]"), lista_meta(35, p34="[]"), lista_meta(35, p34="0"),
+              lista_meta(35, p34="[-1]"), lista_meta(35, p34="[1000000000]"), lista_meta(35, p34="[0.0]"), lista_meta(35, p34="[true]"),
+              lista_meta(35, p34='["continut strain arbitrar"]'), lista_meta(35, p33="[0]"), lista_meta(36, p35="[0]"),
+              '[null,"x"]', "[1]", "[true]", "[0.0]", '{"a":1}', '"x"', "null", "[null, null]", "[ null]", "[null,null]\n",
               lista_meta(9, p8='[0,"en",0,""]'), lista_meta(9, p8='[0,"ro",0,"x"]'), lista_meta(9, p8='[0,"ro",0]'), lista_meta(9, p8='[0.0,"ro",0,""]'),
               lista_meta(9, p8='[-1,"ro",0,""]'), lista_meta(9, p8='[true,"ro",0,""]'), lista_meta(9, p8='["0","ro",0,""]'),
               lista_meta(9, p8='[1000000000,"ro",0,""]'), lista_meta(9, p8='[0,"ro",0,"",0]'), lista_meta(8, p7='[0,"ro",0,""]'),
@@ -4716,29 +4785,30 @@ class TestR15ClaseJslogUnicode(unittest.TestCase):
                   "W251bGwsbnVsbF", "", "====", base64.b64encode("[null,\"\u0103\"]".encode("utf-8")).decode("ascii")):
             self.assertFalse(m(x), x)
 
-    def test_jslog_taiat_refuzat_si_completarea_fixture(self):
-        # valorile EXACT cum au fost citite (taiate la 300) sunt refuzate (JSON neterminat): refuz fals, sigur - de aceea 5g2-a (r15) le
-        # citeste netaiate; completarea din fixture (completeaza_jslog) pastreaza tot ce s-a citit si inchide doar lista
-        taiate = set()
-        for st in CAPTURA_2311_TAIATA.values():
-            for _, tag, a, _ in st:
-                v = dict(a).get("jslog")
-                if v and completeaza_jslog(v) != v:
-                    taiate.add((tag, v))
-        taiate.add(("button", JSLOG_TRIMITE_TAIAT))
-        self.assertEqual(len(taiate), 3)                                  # 173899 / 206752 (c23) + 173899 (t23)
+    def test_jslog_taiat_refuzat_cel_intreg_trece(self):
+        # r16: valorile EXACT cum au fost citite in capturile taiate (c23: 200, t23: 300 de caractere) sunt refuzate (JSON neterminat); valorile
+        # INTREGI din captura netaiata (c23n) trec, iar fiecare valoare taiata e prefixul celei intregi (aceeasi citire, nimic completat)
+        intregi = sorted(set((t, dict(a)["jslog"]) for st in CAPTURA_2311.values() for _, t, a, _ in st
+                             if "BardVeMetadataKey:" in dict(a).get("jslog", "")))
+        self.assertEqual(intregi, sorted({("button", JSLOG_MODEL), ("button", JSLOG_TRIMITE)}))     # 206752 (modelul) + 173899 (trimite)
+        self.assertEqual([len(v) for _, v in sorted(intregi, key=lambda x: x[1])], [337, 245])
+        taiate = tuple(JSLOG_TAIATE_C23) + (("button", JSLOG_TRIMITE_TAIAT),)
+        self.assertEqual(len(taiate), 3)                                  # 206752 / 173899 (c23) + 173899 (t23)
         for tag, v in taiate:
             self.assertEqual(len(v), 200 if v != JSLOG_TRIMITE_TAIAT else 300, v)
             self.assertEqual(gp._atribut_strain(gp._Nod(tag, {"jslog": v}, None))[0:2], ("atribut_valoare", "jslog"), msg=v)
-            c = completeaza_jslog(v)
-            self.assertIsNone(gp._atribut_strain(gp._Nod(tag, {"jslog": c}, None)), msg=c)
-            p, q = v.split("BardVeMetadataKey:")[1], c.split("BardVeMetadataKey:")[1]
-            tv = base64.b64decode(p[:len(p) - len(p) % 4]).decode("ascii", "ignore")
-            tc = base64.b64decode(q).decode("ascii")
-            self.assertTrue(tc.endswith("]") and tv.startswith(tc[:-1]), (tv, tc))   # prefixul citit, inchis dupa ultimul element intreg
-            self.assertEqual(v.split("BardVeMetadataKey:")[0], c.split("BardVeMetadataKey:")[0])
-        self.assertEqual(completeaza_jslog(JSLOG_MODEL), JSLOG_MODEL)        # valoarea intreaga ramane neatinsa
-        self.assertEqual(completeaza_jslog("303810;track:impression"), "303810;track:impression")
+            self.assertEqual(sum(1 for t, w in intregi if t == tag and w.startswith(v) and w != v), 1, msg=v)
+        for tag, v in intregi:
+            self.assertIsNone(gp._atribut_strain(gp._Nod(tag, {"jslog": v}, None)), msg=v)
+        # cheile decodate, scrise de mana (structura vazuta intreaga)
+        d = lambda v: base64.b64decode(v.split("BardVeMetadataKey:")[1].split(";")[0]).decode("ascii")
+        self.assertEqual(d(JSLOG_MODEL), lista_meta(23, p22='["95a4c0abcba24364"]'))
+        self.assertEqual(d(JSLOG_TRIMITE), lista_meta(35, p8='[0,"ro",0,""]', p22='["95a4c0abcba24364"]', p34="[0]"))
+        # pe regulile r15 (plafon 64, fara pozitia 34) cheia intreaga a butonului de trimitere era refuzata: refuz fals pe pagina reala
+        r15 = mutant([("        if i == META_NUMAR and", "        if False and")])
+        self.assertEqual(r15._atribut_strain(r15._Nod("button", {"jslog": JSLOG_TRIMITE}, None))[0:2], ("atribut_valoare", "jslog"))
+        for s in ("mediu", "lung"):
+            self.assertEqual(self.an(html_captura(s), r15)["necunoscute"], 1, msg=s)
 
     # ---------- (2) Unicode exact ----------
 
@@ -4809,13 +4879,15 @@ class TestR15ClaseJslogUnicode(unittest.TestCase):
 
     def test_textele_din_zona_unicode_exact(self):
         # r15: TEXTE_CUNOSCUTE si textul controlului inchis: Unicode exact (spatiile albe HTML de la capetele nodului scoase)
+        # r16: textele linkului doar IN link (locul lor); in zona, direct = text necunoscut
         for t in (TEXT_LINK_REAL, TEXT_ASCUNS_REAL):
-            self.assertEqual(self.an(zona_cu("<div>%s</div>" % t))["necunoscute"], 0, msg=t)
-            self.assertEqual(self.an(zona_cu("<div>\n   %s  </div>" % t))["necunoscute"], 0, msg=t)
+            self.assertEqual(self.an(zona_cu(link_cu_text(t)))["necunoscute"], 0, msg=t)
+            self.assertEqual(self.an(zona_cu(link_cu_text("\n   %s  " % t)))["necunoscute"], 0, msg=t)
+            self.assertEqual(self.an(zona_cu("<div>%s</div>" % t))["necunoscute_detalii"], ["text:" + gp._ascii(t)], msg=t)
             for alt in (gp._ascii(t), t.replace(" ", "  ", 1), t.replace(" ", "\u00a0", 1), t + "\u00a0", t.upper()):
-                self.assertEqual(self.an(zona_cu("<div>%s</div>" % alt))["necunoscute_detalii"], ["text:" + gp._ascii(alt)], msg=repr(alt))
+                self.assertEqual(self.an(zona_cu(link_cu_text(alt)))["necunoscute_detalii"], ["text_in_control:" + gp._ascii(alt)], msg=repr(alt))
         r14 = mutant(REGULI_R14_TEXTE)
-        self.assertEqual(self.an(zona_cu("<div>%s</div>" % gp._ascii(TEXT_LINK_REAL)), r14)["necunoscute"], 0)
+        self.assertEqual(self.an(zona_cu(link_cu_text(gp._ascii(TEXT_LINK_REAL))), r14)["necunoscute"], 0)
 
     # ---------- mutantii r15 ----------
 
@@ -4856,10 +4928,9 @@ class TestR15ClaseJslogUnicode(unittest.TestCase):
             # (M71) etichetele din lista alba dupa _ascii (= r14)
             (REGULI_R14_ETICHETE, (ecr(atr=ECRAN_ATR.replace('gemtooltip="Ecran complet"', 'gemtooltip="Ecr\u00e2n complet"')),
                                    pagina_23_11().replace('aria-label="' + ETICHETA_MIC + '"', 'aria-label="Dicteaz\u0103 (^\u732bD)"'))),
-            # (M72) textul controlului inchis dupa _ascii (= r14)
-            (REGULI_R14_TEXT_INCHIS, (ecr("<span>  ECRAN   complet </span>"), ecr("<span>Ecr\u00e2n complet</span>"))),
-            # (M73) TEXTE_CUNOSCUTE dupa _ascii (= r14)
-            (REGULI_R14_TEXTE, (pagina_23_11(extra_zona="<div>%s</div>" % gp._ascii(TEXT_LINK_REAL)),)),
+            # (M72 + M73) textele dupa _ascii (= r14), r16: o singura comparatie - textul butonului modelului si al linkului, in forma ASCII
+            (REGULI_R14_TEXTE, (pagina_23_11().replace(">Carbon</span>", ">  CARBON </span>"), pagina_23_11().replace(">Carbon</span>", ">C\u00e2rbon</span>"),
+                                pagina_23_11(extra_zona=link_cu_text(gp._ascii(TEXT_LINK_REAL))))),
         )
         self.assertEqual(pagina_23_11().count('aria-label="' + ETICHETA_MIC + '"'), 1)
         for inlocuiri, htmluri in cazuri:
@@ -4905,6 +4976,315 @@ class TestR15ClaseJslogUnicode(unittest.TestCase):
         # fisierul ramane ASCII; caracterele reale stau in escape-uri
         self.assertTrue(all(ord(c) < 128 for c in src))
         self.assertIn("Dicteaz\\u0103 (^\\u21e7D)", src)
+
+
+# --- r16 (v4.6.4d runda 6, 23.11.2026, Jakarinos NO-GO r5 pe 7b9aa4da, paw-data\out\jak_pr1173_r5_verdict.md): si NODURILE TEXT pe lista
+# alba. Reproducerile din verdict, copiate exact: pe 7b9aa4da dau 0 necunoscute si `press Enter` (aici: mutantul REGULI_R15_TEXT; separat,
+# testele noi rulate pe 7b9aa4da - raportul r16).
+REPRO_R5_SPAN = "<span>continut strain arbitrar</span>"                       # (1) in "Incarcare si instrumente" / "Trimite mesajul"
+REPRO_R5_LIGATURA = "<mat-icon>continut_strain_arbitrar</mat-icon>"           # (2) in zona capturii lungi
+REPRO_R5_INVIZIBILE = ("<span>\u0301</span>", "<span>\u200b</span>")          # (3) golul decis dupa _ascii
+# variante scrise de mana: (text, forma afisata in motiv) - caractere invizibile / combinate / spatii Unicode care NU sunt spatii albe HTML
+INVIZIBILE = (("\u0301", "\\u0301"), ("\u200b", "\\u200b"), ("\u00a0", "\\xa0"), ("\u2060", "\\u2060"), ("\ufeff", "\\ufeff"),
+              ("\u3000", "\\u3000"), ("\u2028", "?"), ("\x0b", "\\x0b"), ("\u200c\u200d", "\\u200c\\u200d"), (" \u200b\n", "\\u200b"),
+              ("\t\u0301\r\n", "\\u0301"), ("&nbsp;", "\\xa0"), ("&#8203;", "\\u200b"), ("&#x301;", "\\u0301"))
+SPATII_HTML = ("", " ", "\t", "\n", "\r\n", "\f", " \t\r\n\f ")              # gol pe textul brut (doar spatii albe HTML)
+ICOANE_REALE = ("plus", "keyboard_arrow_down", "mic", "expand_content", "arrow_upward")   # c23n: numele din fonticon (text GOL in pagina)
+
+
+class TestTexteListaAlbaR16(unittest.TestCase):
+    """r16: orice nod text din zona, in afara editorului, = gol pe textul BRUT (spatii albe HTML) sau perechea (loc, text) EXACTA din
+    TEXTE_CUNOSCUTE; ligaturile mat-icon = LIGATURI_VAZUTE (goala). Asteptarile sunt scrise de mana din verdict si din captura netaiata."""
+
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def stare_linii(self, html, mod=gp):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            mod.stare(FakePg(html))
+        return out.getvalue().splitlines()
+
+    def scrie(self, mod, html_dupa_scriere):
+        # chatul nou gol din captura netaiata (gol) -> scrierea brief-ului -> paza de inainte de Enter pe html_dupa_scriere
+        g = html_captura("gol")
+        return ruleaza_trimite(mod, FakePg(g, dupa_goto=g, dupa_scriere=html_dupa_scriere))
+
+    def refuzat(self, html, m, mod=gp):
+        # in starea reala dupa scriere: exact motivul m, refuz inainte de Enter (fara `press Enter`)
+        self.assertEqual(self.an(html, mod)["necunoscute_detalii"], [m], msg=html[-400:])
+        self.assertEqual(self.scrie(mod, html), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=m)
+
+    def pleaca(self, mod, html):
+        self.assertEqual(self.an(html, mod)["necunoscute"], 0, msg=self.an(html, mod)["necunoscute_detalii"])
+        self.assertEqual(self.scrie(mod, html), (None, ACTIUNI_TRIMITERE))
+
+    # ---------- (1) text arbitrar in controalele cunoscute ----------
+
+    def test_reproducerea_1_span_in_incarcare_si_trimite(self):
+        r15 = mutant(REGULI_R15_TEXT)
+        m = "text_in_control:continut strain arbitrar"
+        for stare in ("gol", "mediu", "lung"):
+            butoane = [index_captura(stare, "button", **{"aria-label": ARIALABEL_REAL})]
+            if stare != "gol":
+                butoane.append(index_captura(stare, "button", **{"aria-label": "Trimite mesajul"}))
+            for b in butoane:
+                html = html_captura(stare, interior=((b, REPRO_R5_SPAN),))
+                self.refuzat(html, m)
+                self.pleaca(r15, html)                                       # = ce a gasit Jakarinos pe 7b9aa4da
+        # zona simpla: refuz fara nicio actiune; `stare` arata linia
+        for btn in ('<button aria-label="' + ARIALABEL_REAL + '">' + REPRO_R5_SPAN + "</button>",
+                    '<button aria-label="Trimite mesajul">' + REPRO_R5_SPAN + "</button>"):
+            self.assertEqual(self.an(zona_cu(btn))["necunoscute_detalii"], [m])
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(btn))), ("ciorna_necunoscuta", []))
+            self.assertIn("  necunoscut " + m, self.stare_linii(zona_cu(btn)))
+        # starea reala 23.11 cu brief lung (pagina_23_11): butonul "+" si butonul de trimitere
+        for vechi in ('<button' + PLUS_2311_BTN + '>', '<button' + TRIMITE_2311_BTN + '>'):
+            html = pagina_23_11()
+            self.assertEqual(html.count(vechi), 1)
+            html = html.replace(vechi, vechi + REPRO_R5_SPAN)
+            self.assertEqual(scenariu_brief_lung(gp, html)[0::2], ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER))
+            self.assertEqual(scenariu_brief_lung(r15, html), (None, "", ACTIUNI_TRIMITERE))
+
+    def test_text_strain_in_fiecare_control_si_descendent(self):
+        # variante scrise de mana, in captura reala lunga: fiecare control (+ butonul modelului), direct si adanc, text oarecare / text
+        # cunoscut din ALT loc / eticheta controlului ca text / descrierea lui ca text -> refuz inainte de Enter
+        locuri = (
+            ("button", {"aria-label": ARIALABEL_REAL}),
+            ("button", {"aria-label": "Trimite mesajul"}),
+            ("button", {"aria-label": ETICHETA_MIC}),
+            ("button", {"aria-label": "Extinde intrarea la ecran complet"}),
+            ("button", {"data-test-id": "bard-mode-menu-button"}),
+            ("span", {"class": "gds-body-m picker-primary-text ng-star-inserted"}),          # span-ul cu "Carbon" (in butonul modelului)
+            ("mat-icon", {"fonticon": "arrow_upward"}),                                         # iconita butonului de trimitere
+        )
+        texte = ("x", "abc", "continut strain", "Trimite", "Trimite mesajul", ARIALABEL_REAL, "Ecran complet", ETICHETA_MIC,
+                 "Confiden\u021bialitatea ta \u0219i Gemini", "Gemini", "Carbon Pro")
+        for tag, atr in locuri:
+            i = index_captura("lung", tag, **atr)
+            propriu = CAPTURA_2311["lung"][i][3]                      # textul propriu real al elementului ("Carbon" pe span, altfel gol)
+            for t in texte:
+                for inauntru, vazut in (("<span>%s</span>" % t, t), ("<div><span><span>%s</span></span></div>" % t, t), (t, propriu + t)):
+                    html = html_captura("lung", interior=((i, inauntru),))
+                    # (text direct langa textul propriu = UN nod text lipit; "Incarcare si instrumente" contine cuvantul de incarcare ->
+                    # semnal text_atasament, inaintea listei)
+                    a = gp._ascii(vazut)
+                    self.refuzat(html, ("text_atasament:" if gp._cuvant(a) else "text_in_control:") + a)
+        # "Carbon" e permis DOAR in butonul modelului: in orice alt control / in zona = refuz
+        for tag, atr in locuri[:4]:
+            self.refuzat(html_captura("lung", interior=((index_captura("lung", tag, **atr), "<span>Carbon</span>"),)), "text_in_control:carbon")
+        self.refuzat(html_captura("lung", extra_zona="<div>Carbon</div>"), "text:carbon")
+        # in butonul modelului: "Carbon" in plus (alt span) trece; orice alta forma = refuz
+        i = index_captura("lung", "button", **{"data-test-id": "bard-mode-menu-button"})
+        self.assertEqual(self.an(html_captura("lung", interior=((i, "<span>Carbon</span>"),)))["necunoscute"], 0)
+        for t in ("carbon", "CARBON", "Carbon ", "Carbon\u00a0", "\u200bCarbon", "Carbon\u0301", "C\u00e2rbon", "Carbon x", "4 Carbon", "Gemini Carbon"):
+            html = html_captura("lung", interior=((i, "<span>%s</span>" % t),))
+            if t == "Carbon ":
+                self.assertEqual(self.an(html)["necunoscute"], 0)            # spatiu alb HTML la capat = acelasi text
+                continue
+            self.refuzat(html, "text_in_control:" + (gp._ascii(t) or gp._vizibil(t)))
+
+    def test_textele_cunoscute_doar_pe_locul_lor(self):
+        # avertismentul doar sub hallucination-disclaimer, textele linkului doar in link, "Carbon" doar in butonul modelului
+        loc_link = "a[data-test-id=footer-privacy-notice-link][href]"
+        self.assertEqual(gp.LOC_LINK, loc_link)
+        cazuri = (
+            ("<hallucination-disclaimer><div>%s</div></hallucination-disclaimer>" % AVERTISMENT_TEXT, None),
+            ("<hallucination-disclaimer><p><span>%s</span></p></hallucination-disclaimer>" % AVERTISMENT_TEXT, None),
+            ("<div>%s</div>" % AVERTISMENT_TEXT, "text:" + gp._ascii(AVERTISMENT_TEXT)),
+            ("<toolbox-drawer>%s</toolbox-drawer>" % AVERTISMENT_TEXT, "text:" + gp._ascii(AVERTISMENT_TEXT)),
+            (link_cu_text(AVERTISMENT_TEXT), "text_in_control:" + gp._ascii(AVERTISMENT_TEXT)),
+            ('<button aria-label="Trimite mesajul">%s</button>' % TEXT_LINK_REAL, "text_in_control:" + gp._ascii(TEXT_LINK_REAL)),
+            ("<hallucination-disclaimer>%s</hallucination-disclaimer>" % TEXT_LINK_REAL, "text:" + gp._ascii(TEXT_LINK_REAL)),
+            ("<hallucination-disclaimer>%s</hallucination-disclaimer>" % link_cu_text(TEXT_ASCUNS_REAL), None),
+            ("<hallucination-disclaimer>Carbon</hallucination-disclaimer>", "text:carbon"),
+            (link_cu_text("Carbon"), "text_in_control:carbon"),
+            # un invelis din STRUCTURA mai apropiat decat hallucination-disclaimer schimba locul
+            ("<hallucination-disclaimer><toolbox-drawer>%s</toolbox-drawer></hallucination-disclaimer>" % AVERTISMENT_TEXT,
+             "text:" + gp._ascii(AVERTISMENT_TEXT)),
+        )
+        for html, m in cazuri:
+            i = self.an(zona_cu(html))
+            self.assertEqual(i["necunoscute_detalii"], [m] if m else [], msg=html[:120])
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(html)))[0], "ciorna_necunoscuta" if m else None, msg=html[:120])
+        # locul se cauta doar pana la zona: un hallucination-disclaimer IN AFARA zonei nu face textul din zona "avertisment"
+        html = ("<html><body><hallucination-disclaimer><input-area-v2><div>%s</div>" % AVERTISMENT_TEXT
+                + EDITOR_HTML + "</input-area-v2></hallucination-disclaimer></body></html>")
+        self.assertEqual(self.an(html)["necunoscute_detalii"], ["text:" + gp._ascii(AVERTISMENT_TEXT)])
+        # _loc_text, direct (scris de mana)
+        a = gp._Arbore()
+        a.feed('<input-area-v2><hallucination-disclaimer><p>t</p></hallucination-disclaimer><span>u</span>'
+               '<button data-test-id="bard-mode-menu-button"><span>v</span></button>' + link_cu_text("w") + "</input-area-v2>")
+        z = a.radacina.copii[0]
+        txt = {d.date: d for d in gp._descendenti(z) if d.tag == "#text"}
+        model = next(d for d in gp._descendenti(z) if d.attrs.get("data-test-id") == "bard-mode-menu-button")
+        link = next(d for d in gp._descendenti(z) if d.tag == "a")
+        self.assertEqual(gp._loc_text(txt["t"], None, z), "hallucination-disclaimer")
+        self.assertEqual(gp._loc_text(txt["u"], None, z), "zona")
+        self.assertEqual(gp._loc_text(txt["v"], model, z), "buton_model")
+        self.assertEqual(gp._loc_text(txt["w"], link, z), loc_link)
+        self.assertEqual(gp._loc_text(txt["u"], None, txt["u"].parinte), "zona")
+
+    # ---------- (2) ligaturile mat-icon ----------
+
+    def test_reproducerea_2_ligatura_inventata(self):
+        r15 = mutant(REGULI_R15_TEXT)
+        html = html_captura("lung", extra_zona=REPRO_R5_LIGATURA)
+        self.refuzat(html, "text:continut_strain_arbitrar")
+        self.pleaca(r15, html)                                               # = ce a gasit Jakarinos pe 7b9aa4da
+        self.assertIn("  necunoscut text:continut_strain_arbitrar", self.stare_linii(zona_cu(REPRO_R5_LIGATURA)))
+        # variante: numele reale ale iconitelor (care in pagina stau in fonticon, nu ca text), ligaturi "plauzibile", in zona, in iconitele
+        # reale ale controalelor (text_in_control) si in iconita butonului modelului; lista ligaturilor vazute e GOALA
+        self.assertEqual(gp.LIGATURI_VAZUTE, ())
+        for lig in ICOANE_REALE + ("send", "add_2", "close", "attach", "fullscreen", "x", "a1"):
+            m = "text:" + lig if gp._cuvant(lig) is None else "text_atasament:" + lig
+            self.refuzat(html_captura("lung", extra_zona="<mat-icon>%s</mat-icon>" % lig), m)
+            for fonticon in ICOANE_REALE:
+                i = index_captura("lung", "mat-icon", fonticon=fonticon)
+                mi = "text_in_control:" + lig if gp._cuvant(lig) is None else "text_atasament:" + lig
+                self.refuzat(html_captura("lung", interior=((i, lig),)), mi)
+            if gp._cuvant(lig) is None:
+                self.pleaca(r15, html_captura("lung", extra_zona="<mat-icon>%s</mat-icon>" % lig))      # r15: RE_LIGATURA o accepta
+        # pozitiv: iconitele reale (text gol, si cu spatii albe HTML) trec
+        for fonticon in ICOANE_REALE:
+            i = index_captura("lung", "mat-icon", fonticon=fonticon)
+            for sp in SPATII_HTML:
+                self.assertEqual(self.an(html_captura("lung", interior=((i, sp),)))["necunoscute"], 0, msg=(fonticon, repr(sp)))
+
+    # ---------- (3) golul pe textul brut ----------
+
+    def test_reproducerea_3_caractere_invizibile(self):
+        r15 = mutant(REGULI_R15_TEXT)
+        for span, vizibil in zip(REPRO_R5_INVIZIBILE, ("\\u0301", "\\u200b")):
+            self.assertEqual(gp._ascii(span[6:-7]), "")                    # forma ASCII goala (de aici refuzul lipsa pe r15)
+            html = html_captura("lung", extra_zona=span)
+            self.refuzat(html, "text:" + vizibil)
+            self.pleaca(r15, html)                                           # = ce a gasit Jakarinos pe 7b9aa4da
+            self.assertEqual(self.an(zona_cu(span))["necunoscute_detalii"], ["text:" + vizibil])
+            self.assertEqual(ruleaza_trimite(gp, FakePg(zona_cu(span))), ("ciorna_necunoscuta", []))
+            self.assertIn("  necunoscut text:" + vizibil, self.stare_linii(zona_cu(span)))
+
+    def test_invizibile_pe_fiecare_loc(self):
+        # fiecare varianta: in zona (text:), in controale si in butonul modelului (text_in_control:), in iconita, in link, sub avertisment
+        i_inc = index_captura("lung", "button", **{"aria-label": ARIALABEL_REAL})
+        i_mod = index_captura("lung", "span", **{"class": "gds-body-m picker-primary-text ng-star-inserted"})
+        i_ico = index_captura("lung", "mat-icon", fonticon="plus")
+        for t, vizibil in INVIZIBILE:
+            self.refuzat(html_captura("lung", extra_zona="<span>%s</span>" % t), "text:" + vizibil)
+            self.refuzat(html_captura("lung", extra_zona="<hallucination-disclaimer>%s</hallucination-disclaimer>" % t), "text:" + vizibil)
+            for i in (i_inc, i_mod, i_ico):
+                self.refuzat(html_captura("lung", interior=((i, "<span>%s</span>" % t),)), "text_in_control:" + vizibil)
+            self.assertEqual(self.an(zona_cu(link_cu_text(t)))["necunoscute_detalii"], ["text_in_control:" + vizibil], msg=repr(t))
+            # lipit de un text cunoscut: alt text (Unicode exact), refuz
+            for cunoscut, loc_html in (("Carbon", None), (TEXT_LINK_REAL, link_cu_text)):
+                if loc_html is None:
+                    html = html_captura("lung", interior=((i_mod, "<span>Carbon%s</span>" % t),))
+                    self.assertEqual(len(self.an(html)["necunoscute_detalii"]), 1, msg=repr(t))
+                    self.assertTrue(self.an(html)["necunoscute_detalii"][0].startswith("text_in_control:"))
+                else:
+                    self.assertEqual(self.an(zona_cu(loc_html(cunoscut + t)))["necunoscute"], 1, msg=repr(t))
+        # pozitiv: doar spatii albe HTML = gol, pe orice loc
+        for sp in SPATII_HTML:
+            for html in (html_captura("lung", extra_zona="<span>%s</span>" % sp), html_captura("lung", interior=((i_inc, sp),)),
+                         html_captura("lung", interior=((i_mod, "<span>%s</span>" % sp),)), zona_cu(link_cu_text(sp))):
+                self.assertEqual(self.an(html)["necunoscute"], 0, msg=repr(sp))
+        # _motiv_text direct: golul se decide pe textul BRUT
+        for t, vizibil in INVIZIBILE:
+            if "&" in t:
+                continue
+            self.assertEqual(gp._motiv_text(_nod_text(t), None), "text:" + vizibil, msg=repr(t))
+        for sp in SPATII_HTML:
+            self.assertIsNone(gp._motiv_text(_nod_text(sp), None), msg=repr(sp))
+
+    # ---------- starile reale (captura netaiata) ----------
+
+    def test_starile_reale_netaiate_trec_si_textele_lor_sunt_exact_lista(self):
+        # cele 3 stari din captura netaiata: 0 necunoscute, `stare` OK, chat nou gol -> scriere (mediu / lung) -> Enter; singurul nod text
+        # nevid in afara editorului = "Carbon" in butonul modelului (sursa independenta a listei, calculata din fixture)
+        for s in ("gol", "mediu", "lung"):
+            html = html_captura(s)
+            i = self.an(html)
+            self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"], i["necunoscute"]), (2, 1, 0, 0, 0), msg=(s, i["necunoscute_detalii"]))
+            self.assertIn("paza ciorna: OK (trimite ar continua)", self.stare_linii(html))
+            texte = [t for _, _, _, t in CAPTURA_2311[s] if t != ""]
+            self.assertEqual(texte, ["Carbon"], msg=s)
+        for s in ("mediu", "lung"):
+            self.assertEqual(self.scrie(gp, html_captura(s)), (None, ACTIUNI_TRIMITERE), msg=s)
+        # perechile (loc, text) din pagina reala, calculate cu _loc_text pe arborele analizat = EXACT perechea din lista
+        a = gp._Arbore()
+        a.feed(html_captura("lung"))
+        gp.HTMLParser.close(a)
+        zona = next(n for n in gp._descendenti(a.radacina) if n.tag == "input-area-v2")
+        editoare = [n for n in gp._descendenti(a.radacina) if gp._e_editor(n)]
+        perechi = set()
+        for n in gp._descendenti(zona):
+            if n.tag != "#text" or n.date.strip(" \t\n\r\f") == "" or any(gp._sub(n, e) for e in editoare):
+                continue
+            ctrl = next((p for p in _stramosi(n, zona) if p.attrs.get("data-test-id") == gp.MODEL_DATA_TEST
+                         or gp._semnatura(p) in gp.CONTROALE_CUNOSCUTE), None)
+            perechi.add((gp._loc_text(n, ctrl, zona), n.date.strip(" \t\n\r\f")))
+        self.assertEqual(perechi, {("buton_model", "Carbon")})
+        self.assertIn(("buton_model", "Carbon"), gp.TEXTE_CUNOSCUTE)
+        # si fixture-urile 21.11 / 22.11 / 23.11 (inclusiv chatul existent, cu avertismentul si linkul) trec pina la Enter
+        for html in [pagina_calibrare(s) for s in ("i", "ii", "iii")] + [pagina_22_11_completa(s, fdi=FDI_5G) for s in ("i", "ii", "iii")]:
+            self.assertEqual(ruleaza_trimite(gp, FakePg(html, dupa_goto=html)), (None, ACTIUNI_TRIMITERE))
+        self.assertEqual(scenariu_brief_lung(gp, pagina_23_11()), (None, "", ACTIUNI_TRIMITERE))
+
+    # ---------- mutantii r16 ----------
+
+    def test_mutanti_r16_lasa_brief_ul_sa_plece(self):
+        i_inc = index_captura("lung", "button", **{"aria-label": ARIALABEL_REAL})
+        i_trm = index_captura("lung", "button", **{"aria-label": "Trimite mesajul"})
+        i_mod = index_captura("lung", "span", **{"class": "gds-body-m picker-primary-text ng-star-inserted"})
+        cap = lambda **k: html_captura("lung", **k)
+        cazuri = (
+            # (M80) regulile r15 (7b9aa4da): cele 3 reproduceri din verdict
+            (REGULI_R15_TEXT, (cap(interior=((i_inc, REPRO_R5_SPAN),)), cap(interior=((i_trm, REPRO_R5_SPAN),)),
+                               cap(extra_zona=REPRO_R5_LIGATURA)) + tuple(cap(extra_zona=s) for s in REPRO_R5_INVIZIBILE)),
+            # (M81) golul decis dupa forma ASCII (= r15): caracterele invizibile trec
+            ([('    if b == "":', '    if b == "" or not _ascii(nod.date):')],
+             tuple(cap(extra_zona="<span>%s</span>" % t) for t, v in INVIZIBILE if v != "?")),     # (U+2028 are forma ASCII "?")
+            # (M82) capetele curatate de ORICE spatiu Unicode (str.strip), nu doar de spatiile albe HTML
+            ([('    b = nod.date.strip(" \\t\\n\\r\\f")', "    b = nod.date.strip()")],
+             (cap(extra_zona="<span>\u00a0</span>"), cap(extra_zona="<span>\u3000</span>"), cap(interior=((i_mod, "<span>Carbon\u00a0</span>"),)))),
+            # (M83) locul ignorat: orice text din lista, oriunde
+            ([(LINIA_TEXTE, "    if b in [t for _, t in TEXTE_CUNOSCUTE]:")],
+             (cap(interior=((i_inc, "<span>Carbon</span>"),)), cap(extra_zona="<div>%s</div>" % AVERTISMENT_TEXT),
+              cap(interior=((i_trm, TEXT_LINK_REAL),)))),
+            # (M84) locul in afara controalelor = orice stramos (nu doar pana la zona) / zona insasi
+            ([("    while p is not None and p is not zona:", "    while p is not None:")],
+             ("<html><body><hallucination-disclaimer><input-area-v2><div>%s</div>" % AVERTISMENT_TEXT + EDITOR_HTML
+              + "</input-area-v2></hallucination-disclaimer></body></html>",)),
+        )
+        for inlocuiri, htmluri in cazuri:
+            mut = mutant(inlocuiri)
+            for html in htmluri:
+                if "<hallucination-disclaimer><input-area-v2>" in html:
+                    self.assertEqual(ruleaza_trimite(gp, FakePg(html)), ("ciorna_necunoscuta", []))
+                    self.assertEqual(ruleaza_trimite(mut, FakePg(html, dupa_goto=html))[0], None, msg=inlocuiri[0][1][:80])
+                    continue
+                self.assertEqual(self.scrie(gp, html), ("ciorna_necunoscuta", ACTIUNI_FARA_ENTER), msg=(inlocuiri[0][1][:80], html[-200:]))
+                self.assertEqual(self.scrie(mut, html), (None, ACTIUNI_TRIMITERE), msg=(inlocuiri[0][1][:80], html[-200:]))
+            # starile reale trec pe fiecare mutant (mutantul slabeste, nu strica)
+            for s in ("mediu", "lung"):
+                self.assertEqual(self.scrie(mut, html_captura(s)), (None, ACTIUNI_TRIMITERE), msg=(inlocuiri[0][1][:80], s))
+            self.assertEqual(scenariu_brief_lung(mut, pagina_23_11()), (None, "", ACTIUNI_TRIMITERE))
+            h = pagina_calibrare("iii")
+            self.assertEqual(ruleaza_trimite(mut, FakePg(h, dupa_goto=h)), (None, ACTIUNI_TRIMITERE), msg=inlocuiri[0][1][:80])
+
+
+def _nod_text(t):
+    # un nod text izolat (copilul unui <span> fara parinte), ca _motiv_text sa fie apelat direct cu textul BRUT t
+    return gp._Nod("#text", {}, gp._Nod("span", {}, None), t)
+
+
+def _stramosi(n, zona):
+    p = n.parinte
+    out = []
+    while p is not None and p is not zona:
+        out.append(p)
+        p = p.parinte
+    return list(reversed(out))                    # de la cel mai exterior (primul control = cel care ramane, r12 / r16)
 
 
 if __name__ == "__main__":

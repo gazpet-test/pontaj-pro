@@ -156,6 +156,19 @@
 #   (valorile atributelor, textul descrierilor, textele permise, VALORI_PERMISE) se fac pe Unicode EXACT, fara _ascii: listele contin
 #   sirurile reale din capturi (cu diacritice si U+21E7), ca escape-uri. `Ecr\u00e2n complet`, `Dicteaz\u0103 (^\u732bD)` (unde _ascii dadea
 #   acelasi "?") si spatiile in plus / minus = refuz. _ascii ramane doar pentru cautarea cuvintelor / numelor de fisier si afisare.
+# v4.6.4d / r16 (23.11.2026, Jakarinos NO-GO r15): si NODURILE TEXT pe lista alba. (1) Un control fara lista de texte accepta orice text
+#   fara semnal (<span>continut strain arbitrar</span> in "Incarcare si instrumente" / "Trimite mesajul" ajungea la Enter). Acum ORICE nod
+#   text din zona, in afara editorului, e permis DOAR daca e gol pe textul BRUT (doar spatiile albe HTML: spatiu, \t, \n, \r, \f) sau daca
+#   perechea (loc, text) e EXACT in TEXTE_CUNOSCUTE: locul = controlul in care sta textul (semnatura lui, sau LOC_MODEL pentru butonul
+#   modelului; contextul primului control ramane si sub controalele / butoanele de model imbricate), altfel cel mai apropiat stramos din
+#   STRUCTURA_CUNOSCUTA din zona, altfel LOC_ZONA. Lista = textele vazute pe locul lor: "Carbon" in butonul modelului (singurul text propriu
+#   din captura NETAIATA 23.11, toate cele 3 stari), textele linkului de confidentialitate si avertismentul Workspace (chat existent, 21.11).
+#   Toate controalele au acum text inchis (CONTROALE_TEXT_INCHIS a disparut); butonul "Ecran complet" nu mai are niciun text permis (in
+#   captura netaiata nu are niciun nod text: tooltip-ul sta in atributul gemtooltip si in descrierea CDK, in afara zonei). (2) Ligaturile
+#   mat-icon: RE_LIGATURA (regex) scos; LIGATURI_VAZUTE = lista inchisa a ligaturilor vazute = GOALA (in captura netaiata toate iconitele
+#   au text gol, numele sta in fonticon / data-mat-icon-name). (3) Golul se decide pe textul BRUT: _ascii nu mai decide nimic in _motiv_text
+#   (U+0301, U+200B, NBSP, U+2060, U+FEFF = text nevid -> refuz; afisarea lor in escape-uri). Cheia BardVeMetadataKey citita intreaga:
+#   butonul de trimitere are 35 de elemente, cu [34] = [0] (nevazut cat era taiata) -> pozitia 34 = [<cifre>], META_LUNGIME = 35 (vazut).
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata, base64, json
@@ -283,12 +296,14 @@ DETALIU_AFISAT = 600                                          # o linie "necunos
 SEMNATURA_TOKEN_AFISATA = 400                                 # r8: {clase #id atribute} al unui element cu semnal (era 80: pe pagina reala taia
                                                               #     exact sursa cuvantului, vezi antetul v4.6.4b)
 SURSA_AFISATA = 160                                           # r8: valoarea aratata in linia "    sursa ..." a lui `stare`
-RE_LIGATURA = re.compile(r"[a-z0-9_]{1,40}")                 # textul unei iconite mat-icon (ex. "send", "add_2")
+# r16 (Jakarinos NO-GO r15): textul unei iconite mat-icon = doar ligaturile EXACTE vazute (lista inchisa, nu regex). In captura netaiata
+# 23.11 (gol / mediu / lung) toate cele 3 / 5 iconite au text GOL (numele: fonticon / data-mat-icon-name = ICOANE) -> lista e goala.
+LIGATURI_VAZUTE = ()
 MODEL_DATA_TEST = "bard-mode-menu-button"                     # butonul modelului (= MODEL), verificat separat
 # LISTE ALBE - completate DOAR din calibrarea pe pagina reala (RUNBOOK pasul 0): EXACT semnaturile afisate de `stare`
 # (liniile "necunoscut ..."), doar pentru elemente vazute de om pe ecran cu ciorna goala / doar text, niciodata pentru ceva ce
-# seamana a fisier. CONTROALE = butoane / linkuri (textul si iconitele din ele sunt eticheta lor); STRUCTURA = invelisuri
-# (continutul lor se verifica in continuare element cu element); TEXTE = texte afisate in zona, in afara controalelor.
+# seamana a fisier. CONTROALE = butoane / linkuri (r16: textele din ele doar cele din TEXTE_CUNOSCUTE pe locul lor); STRUCTURA = invelisuri
+# (continutul lor se verifica in continuare element cu element); TEXTE = (loc, text) vazute in zona (r16: si in controale).
 # Calibrarea din 21.11.2026 (chat-ul, copia neinstalata a lui ae3e8947, Edge 9333, un tab, Carbon, nimic atasat, niciun
 # instrument): (i) chat nou gol = 27 linii, (ii) acelasi chat cu un cuvant in ciorna, fara Enter = 31, (iii) chat existent
 # gol = 32. Mai jos reuniunea lor; in comentariu starea in care a aparut fiecare. NU e trecuta (r4) linia
@@ -317,9 +332,8 @@ CONTROALE_CUNOSCUTE = (
 # orice alt text = `text_in_control:` (refuz), chiar fara cuvant de atasament. Contextul nu se schimba sub el (un control / butonul
 # modelului imbricat nu-i elibereaza textele). Butonul "Ecran complet": tooltip-ul vazut `gemtooltip="Ecran complet"`; numele iconitei
 # NU e in captura, deci nicio ligatura nu e permisa (iconita fara text - svg / gem-icon - trece). Celelalte controale: neschimbate.
-CONTROALE_TEXT_INCHIS = (
-    ("button[aria-label=extinde intrarea la ecran complet][aria-describedby]", ("Ecran complet",)),     # r15: Unicode exact (gemtooltip)
-)
+# r16 (Jakarinos NO-GO r15): CONTROALE_TEXT_INCHIS scos - TOATE controalele au acum text inchis, prin TEXTE_CUNOSCUTE (loc, text); butonul
+# "Ecran complet" nu mai are niciun text (captura netaiata: niciun nod text in el; tooltip-ul nu e un nod text in buton).
 # r14 (Jakarinos NO-GO r13; inlocuieste lista neagra r13 ATRIBUTE_TEXT / FRAGMENTE_NUME_TEXT / FORMA_IDENTIFICATOR / VALORI_TEXT_CUNOSCUTE):
 # LISTA ALBA de atribute. Pe ORICE element ACCEPTAT (zona, invelisurile STRUCTURA_TAGURI, editorul si descendentii lui, elementele neutre,
 # controalele / structura din liste, butonul modelului - deci si pe descendentii unui control acceptat) FIECARE atribut trebuie sa se
@@ -400,15 +414,18 @@ class _FormaClase(object):
 # exceptii pe pozitiile vazute - [8] = [<cifre>,"ro",<cifre>,""] (c23 / t23, butonul de trimitere) si [22] = ["<16 cifre hexazecimale>"]
 # (t23, identificatorul conversatiei, aceeasi forma ca in URL-ul /app/<id>; singura parte variabila care nu e zecimala: un chat
 # existent are alt id). Orice text, cheie, numar zecimal, alta pozitie = refuz.
+# r16: cheile citite INTREGI (c23n = stare_completa_23_11_netaiat.json): modelul = 23 de elemente ([22] = id-ul conversatiei), trimite =
+# 35 de elemente ([8] limba, [22] id-ul, [34] = [0]) -> a treia exceptie, [34] = [<cifre>] (META_NUMAR), si META_LUNGIME = 35.
 JSLOG_VAZUTE = (
     (("div",), "{N};track:impression"),                                                  # c23 t23 (251251, 303810)
     (("button", "rich-textarea"), "{N};track:generic_click,impression"),                 # c23 t23 (175863, 300142; 356556)
     (("button",), "{N};track:generic_click,impression;BardVeMetadataKey:{B}"),           # c23 t23 (173899, 206752)
     (("button",), "{N};track:generic_click,impression;BardVeMetadataKey:{B};mutable:true"),   # t23 (206752)
 )
-META_LUNGIME = 64                       # DEDUCTIE: lungimea listei decodate (intreaga: 23 pe t23; celelalte taiate dupa >= 22 elemente)
+META_LUNGIME = 35                       # r16 (c23n, netaiat): cea mai lunga lista vazuta = 35 (trimite); modelul = 23 (r15: 64, dedus)
 META_LIMBA = (8, "ro")                  # c23 t23: pozitia si limba interfetei din [<cifre>,"ro",<cifre>,""]
 META_CONVERSATIE = (22, re.compile(r"[0-9a-f]{16}"))      # t23: ["95a4c0abcba24364"]
+META_NUMAR = 34                         # r16 (c23n): butonul de trimitere, ultima pozitie = [0] (nevazuta cat cheia era taiata) -> [<cifre>]
 
 
 def _sablon_jslog(s):
@@ -444,6 +461,8 @@ def _meta_permisa(b):
             continue
         if (i == META_CONVERSATIE[0] and isinstance(x, list) and len(x) == 1 and isinstance(x[0], str)
                 and META_CONVERSATIE[1].fullmatch(x[0])):
+            continue
+        if i == META_NUMAR and isinstance(x, list) and len(x) == 1 and type(x[0]) is int and 0 <= x[0] < 10 ** 9:
             continue
         return False
     return True
@@ -591,17 +610,27 @@ STRUCTURA_CUNOSCUTA = (
     "prompt-flow-bar",                                               # iii      - bara de deasupra ciornei pe un chat existent (goala)
     "span[data-test-id=content]",                                    # iii      - textul linkului de confidentialitate
 )
+# r16 (Jakarinos NO-GO r15): textele permise sunt perechi (LOC, TEXT) - textul e acceptat DOAR pe locul pe care a fost vazut (_loc_text):
+# LOC_MODEL = in butonul modelului; semnatura unui control din CONTROALE_CUNOSCUTE = in acel control (si in descendentii lui); semnatura
+# din STRUCTURA_CUNOSCUTA = sub acel invelis, in afara controalelor (cel mai apropiat stramos din zona); LOC_ZONA = altundeva in zona
+# (niciun text). TEXT = sirul Unicode EXACT, comparat cu textul BRUT al nodului din care se scot DOAR spatiile albe HTML de la capete.
+LOC_MODEL = "buton_model"                                        # butonul modelului (MODEL_DATA_TEST), verificat separat de verifica_model
+LOC_ZONA = "zona"                                                # in zona, in afara oricarui control / invelis din liste: niciun text
+LOC_LINK = "a[data-test-id=footer-privacy-notice-link][href]"    # = intrarea din CONTROALE_CUNOSCUTE
 TEXTE_CUNOSCUTE = (
+    # c23n (captura NETAIATA 23.11, gol / mediu / lung): singurul text propriu din input-area-v2 in afara editorului, in
+    # span.picker-primary-text din butonul modelului (21.11: acelasi text, in butonul modelului - pagina_calibrare)
+    (LOC_MODEL, "Carbon"),
     # iii (r4) - avertismentul Google Workspace de sub ciorna pe un chat existent (element hallucination-disclaimer), citit INTREG de
-    # chat pe 21.11.2026 (doar citire) si trecut aici dupa normalizarea _ascii: textul paragrafului, fara linkul care ii urmeaza
-    # (textele linkului = cele doua intrari de mai jos / eticheta controlului a[...]). Un text care contine in plus un nume.extensie
+    # chat pe 21.11.2026 (doar citire): textul paragrafului, fara linkul care ii urmeaza. Un text care contine in plus un nume.extensie
     # sau un cuvant de atasament NU trece niciodata (verificate inaintea listei).
     # r15: sirurile Unicode EXACTE din avertisment_workspace.txt (textContent citit de chat la 21.11), comparate brut (doar spatiile albe
-    # HTML de la capetele nodului scoase)
-    "Chaturile Gazpet.ro nu sunt folosite pentru a ne \u00eembun\u0103t\u0103\u021bi modelele. Gemini este un AI \u0219i poate "
-    "s\u0103 fac\u0103 gre\u0219eli, inclusiv \u00een leg\u0103tur\u0103 cu persoane.",
-    "Confiden\u021bialitatea ta \u0219i Gemini",                     # iii - textul linkului de confidentialitate
-    "Se deschide \u00eentr-o fereastr\u0103 nou\u0103",              # iii - textul ascuns al linkului (se deschide in alt tab)
+    # HTML de la capetele nodului scoase); r16: fiecare doar pe locul lui (avertismentul sub hallucination-disclaimer, textele linkului in link)
+    ("hallucination-disclaimer",
+     "Chaturile Gazpet.ro nu sunt folosite pentru a ne \u00eembun\u0103t\u0103\u021bi modelele. Gemini este un AI \u0219i poate "
+     "s\u0103 fac\u0103 gre\u0219eli, inclusiv \u00een leg\u0103tur\u0103 cu persoane."),
+    (LOC_LINK, "Confiden\u021bialitatea ta \u0219i Gemini"),         # iii - textul linkului de confidentialitate
+    (LOC_LINK, "Se deschide \u00eentr-o fereastr\u0103 nou\u0103"),  # iii - textul ascuns al linkului (se deschide in alt tab)
 )
 # acelasi lucru vazut de locator (strapunge shadow DOM-ul deschis, pe care page.content() nu il serializeaza): semn = refuz
 SEMN_EXTRA = ", ".join(list(MEDIA) + ['[aria-label*="%s" i]' % t for t in TOKENI_ELIMINA])
@@ -997,16 +1026,25 @@ def _sursa_cuvant(n, t):
     return "?:" + t                                          # (nu se ajunge: t vine chiar din aceste texte)
 
 
-def _texte_control_inchis(ctrl):
-    # r12: ctrl (nodul controlului recunoscut sau None) -> textele permise in el daca e un control cu text INCHIS (semnatura EXACTA
-    # din CONTROALE_TEXT_INCHIS), altfel None (control obisnuit / fara control)
-    if ctrl is None:
-        return None
-    sem = _semnatura(ctrl)
-    for s, texte in CONTROALE_TEXT_INCHIS:
-        if sem == s:
-            return texte
-    return None
+def _loc_text(nod, ctrl, zona):
+    # r16: LOCUL unui nod text (prima componenta a perechilor din TEXTE_CUNOSCUTE): in controlul ctrl -> LOC_MODEL (butonul modelului) /
+    # semnatura controlului; in afara controalelor -> semnatura celui mai apropiat stramos din STRUCTURA_CUNOSCUTA, cautat DOAR pana la
+    # zona (exclusiv); altfel LOC_ZONA
+    if ctrl is not None:
+        return LOC_MODEL if ctrl.attrs.get("data-test-id") == MODEL_DATA_TEST else _semnatura(ctrl)
+    p = nod.parinte
+    while p is not None and p is not zona:
+        s = _semnatura(p)
+        if s in STRUCTURA_CUNOSCUTA:
+            return s
+        p = p.parinte
+    return LOC_ZONA
+
+
+def _vizibil(b):
+    # r16: textul unui motiv cand forma ASCII e goala (doar caractere invizibile / combinate / de control): escape-uri Python (\u0301,
+    # \xa0, \x0b), ca operatorul sa vada ce e acolo
+    return b.encode("unicode_escape").decode("ascii")
 
 
 def _intrari_atribut(tag, k):
@@ -1079,32 +1117,28 @@ def _motiv_descriere(n, ids):
     return None
 
 
-def _motiv_text(nod, ctrl):
-    # ctrl = controlul recunoscut (din lista alba / butonul modelului) in care sta textul, sau None
-    # r15: `a` (ASCII) doar pentru cautarea cuvintelor / numelor de fisier si afisare; comparatiile cu listele (textele permise ale
-    # controlului inchis, ligatura, TEXTE_CUNOSCUTE) se fac pe `b` = textul BRUT, Unicode exact, din care se scot DOAR spatiile albe HTML
-    # de la capete (indentarea sablonului); in interior nimic nu se normalizeaza (spatiu dublu, NBSP, diacritice, litere mari = alt text)
-    a = _ascii(nod.date)
-    if not a:
-        return None
+def _motiv_text(nod, ctrl, zona=None):
+    # ctrl = controlul recunoscut (din lista alba / butonul modelului) in care sta textul, sau None; zona = zona analizata (limita lui _loc_text)
+    # r16 (Jakarinos NO-GO r15): LISTA ALBA si pentru nodurile text. `b` = textul BRUT din care se scot DOAR spatiile albe HTML de la capete
+    # (spatiu, \t, \n, \r, \f - indentarea sablonului); b == "" = gol, singurul text acceptat fara lista. ORICE alt text (si U+0301, U+200B,
+    # NBSP: _ascii le sterge, dar NU mai decide golul) e acceptat doar daca perechea (locul lui, b) e EXACT in TEXTE_CUNOSCUTE sau, intr-o
+    # iconita mat-icon, daca b e EXACT o ligatura vazuta (LIGATURI_VAZUTE, goala). Intr-un control (oricare) = `text_in_control:`, altfel
+    # `text:` (refuz). `a` (ASCII) doar pentru cautarea cuvintelor / numelor de fisier si afisare.
     b = nod.date.strip(" \t\n\r\f")
+    if b == "":
+        return None                                     # gol pe textul brut (doar spatii albe HTML)
+    a = _ascii(nod.date)
+    v = (a or _vizibil(b))[:TEXT_AFISAT]
     if _nume_fisier(a) is not None:
-        return "text_fisier:" + a[:TEXT_AFISAT]         # nume.extensie: refuz chiar si intr-un control cunoscut / text din lista
+        return "text_fisier:" + v                       # nume.extensie: refuz chiar si intr-un control cunoscut / text din lista
     if _cuvant(a) is not None:
-        return "text_atasament:" + a[:TEXT_AFISAT]      # r4: cuvant de atasament: refuz chiar si intr-un control / text din lista
-    if ctrl is not None:
-        permise = _texte_control_inchis(ctrl)
-        if permise is None:
-            return None                                 # eticheta unui control recunoscut
-        if b in permise:
-            return None                                 # r12: textul EXACT permis in controlul cu text inchis (tooltip-ul vazut)
-        return "text_in_control:" + a[:TEXT_AFISAT]     # r12: orice alt text intr-un control cu text inchis
+        return "text_atasament:" + v                    # r4: cuvant de atasament: refuz chiar si intr-un control / text din lista
+    if (_loc_text(nod, ctrl, zona), b) in TEXTE_CUNOSCUTE:
+        return None                                     # r16: textul EXACT vazut pe acest loc
     p = nod.parinte
-    if p is not None and p.tag == "mat-icon" and RE_LIGATURA.fullmatch(b):
-        return None                                     # ligatura unei iconite ("send", "mic", "add_2")
-    if b in TEXTE_CUNOSCUTE:
-        return None
-    return "text:" + a[:TEXT_AFISAT]
+    if p is not None and p.tag == "mat-icon" and b in LIGATURI_VAZUTE:
+        return None                                     # r16: ligatura EXACTA vazuta (lista inchisa, goala)
+    return ("text_in_control:" if ctrl is not None else "text:") + v
 
 
 def _motiv_element(n, ctrl, in_editor=False):
@@ -1151,7 +1185,7 @@ def _necunoscute(zona, editoare, ids=None):
         n, ctrl, in_editor = st.pop()
         if n.tag == "#text":
             if not in_editor:               # in editor sta textul brief-ului: se compara separat (verifica_ciorna), nu e "text necunoscut"
-                m = _motiv_text(n, ctrl)
+                m = _motiv_text(n, ctrl, zona)
                 if m:
                     out.append((m, ""))
             continue
@@ -1168,8 +1202,8 @@ def _necunoscute(zona, editoare, ids=None):
             out.append((m, sursa))
         if n is zona:
             ctrl_copii = None               # r6: zona e un invelis, niciodata un control (textele din ea nu sunt eticheta ei)
-        if _texte_control_inchis(ctrl) is not None:
-            ctrl_copii = ctrl               # r12: sub un control cu text inchis contextul ramane al lui (nimic imbricat nu-l inlocuieste)
+        if ctrl is not None:
+            ctrl_copii = ctrl               # r12 / r16: sub ORICE control contextul ramane al lui (nimic imbricat nu-l inlocuieste)
         st.extend((c, ctrl_copii, in_editor) for c in reversed(n.copii))
     return out
 
