@@ -1,5 +1,7 @@
 # Paw v4.6.4d (r12, r13) - captura casetei de compunere Gemini, DOAR CITIRE (RUNBOOK pasul 5g2).
 # r13: + `elemente` (atributele fiecarui element din caseta, fara continutul editorului) si `descrieri` (textul tintelor aria-describedby).
+# r14: + `descrieri[].tinte` (atributele tintei + numarul de elemente din ea), `zona_analiza` (zona exacta a analizei, poate fi mai mare
+#   decat input-area-v2) si `editor_atribute` (DOAR atributele elementelor din editor, fara text): calibrarea listei albe a atributelor.
 # Nu face nicio actiune pe pagina: fara click / tastatura / scriere in ciorna / navigare. Operatorul lipeste de mana textul in
 # ciorna (fara Enter), ruleaza scriptul, apoi goleste ciorna de mana. Iesirea (JSON ASCII pe stdout) arata clasele div-ului zonei de
 # drop si atributele + continutul (innerHTML, taiat) fiecarui buton din zona - adica starea pe care paza o vede la `inainte_de_enter`.
@@ -27,7 +29,17 @@ JS = r"""() => {
     descrieri: Array.from(document.querySelectorAll('input-area-v2 [aria-describedby]')).map(el => ({
       tag: el.tagName.toLowerCase(), ref: el.getAttribute('aria-describedby').slice(0, 300),
       texte: el.getAttribute('aria-describedby').split(/\s+/).filter(Boolean).slice(0, 5).map(i => {
-        const t = document.getElementById(i); return t ? (t.textContent || '').slice(0, 300) : null; })})),
+        const t = document.getElementById(i); return t ? (t.textContent || '').slice(0, 300) : null; }),
+      // r14: atributele tintei si cate elemente are in ea (lista alba a tintei: doar id + role=tooltip, fara elemente)
+      tinte: el.getAttribute('aria-describedby').split(/\s+/).filter(Boolean).slice(0, 5).map(i => {
+        const t = document.getElementById(i); return t ? {tag: t.tagName.toLowerCase(), attrs: atr(t), copii: t.children.length} : null; })})),
+    // r14: zona EXACTA a analizei (cel mai exterior stramos al editorului dintre selectorii ZONA din gemini_pw.py) si atributele ei + ale
+    // descendentilor (tot fara continutul editorului); separat DOAR atributele (fara text) elementelor din editor (Quill: p / br)
+    zona_analiza: (() => { let z = null; for (let p = ed && ed.parentElement; p; p = p.parentElement)
+        if (p.matches('input-area-v2, input-container, .input-area-container, .input-area')) z = p;
+      return z ? [z, ...z.querySelectorAll('*')].filter(el => !(ed && ed !== el && ed.contains(el)))
+        .map(el => ({tag: el.tagName.toLowerCase(), attrs: atr(el)})) : null; })(),
+    editor_atribute: ed ? Array.from(ed.querySelectorAll('*')).slice(0, 400).map(el => ({tag: el.tagName.toLowerCase(), attrs: atr(el)})) : null,
   };
 }"""
 

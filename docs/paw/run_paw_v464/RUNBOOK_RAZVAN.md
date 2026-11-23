@@ -62,7 +62,7 @@ Gemini extinde caseta de compunere: div-ul zonei de drop isi schimba clasele (`h
 `paw-data\out\paw_v464_calibrare\stare_text_lung_23_11.json`, citite de chat cu textul in ciorna, netrimis). **v4.6.4d** (acest pachet,
 r11) schimba din nou DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE v4.6.4c cu aceeasi procedura: hash-ul vechi =
 `09E78891...`, zona protejata noua `operator-v464d`, copiile de siguranta cu sufixul `.v464c`, fisierele noi cu `.v464d` (pasul 1).
-Ce aduce (detaliile la pasul 0, "Stare r11", "Stare r12" si "Stare r13"; r13: atributele cu text = valori exacte): div-ul zonei de drop e acceptat in starea extinsa DOAR cu una din cele 4
+Ce aduce (detaliile la pasul 0, "Stare r11" ... "Stare r14"; r14: LISTA ALBA de atribute + textele exacte ale descrierilor): div-ul zonei de drop e acceptat in starea extinsa DOAR cu una din cele 4
 multimi de clase din lista inchisa (marcajul `xapfileselectordropzone` tot GOL), butonul "Ecran complet" e pe lista controalelor ca
 control cu text INCHIS (in el: doar gol sau exact tooltip-ul "Ecran complet"). Testul de canal are un pas nou, **5g2** (captura casetei,
 doar citire, la trei lungimi de text + trimiterea unui brief lung si a unuia mediu). Rollback-ul (mai jos) readuce v4.6.4c (cu markerul ei).
@@ -329,6 +329,41 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
 - **5g2-a (RUNBOOK, r13):** dupa `stare` se cer `$LASTEXITCODE -eq 0`, exact o linie `paza ciorna:` si aceea = `paza ciorna: OK
   (trimite ar continua)`; captura cu cod 0 si `CAPTURA_GATA`. Altfel STOP.
 
+**Stare (r14 = v4.6.4d runda 4, 23.11.2026, dupa NO-GO Jakarinos pe r13 `9c790264`):**
+- **Ce era gresit in r13.** Lista NEAGRA (ce atribute "poarta text") nu poate fi completa: `matbadge`, `ariavaluetext` si `data-text`
+  (cu valoare de forma unui identificator) pe descendentii butonului "Ecran complet" treceau; descrierea (`aria-describedby` -> tinta din
+  afara casetei) accepta orice text fara fisier / cuvant de atasament. Toate patru: 0 necunoscute, `press Enter`. In plus (gasit acum, pe
+  captura completa din 23.11): r13 ar fi refuzat FALS chiar pagina reala (`enterkeyhint="send"` si `tooltipanchorposition="above-end"`
+  contin fragmentele "hint" / "tooltip").
+- **Ce face r14 (decizia chat-ului: lista ALBA).** Pe ORICE element acceptat din zona (zona insasi, controalele si toti descendentii lor,
+  structura, editorul si descendentii lui) FIECARE atribut trebuie sa fie in `ATRIBUTE_PERMISE` (67 de intrari): numele EXACT, pe tagul pe
+  care a fost vazut, cu valoarea EXACTA din capturi; pentru valorile tehnice care variaza (clasele, `jslog`, `style` cu inaltimea ferestrei,
+  identificatorii CDK / ai meniului) forma exacta vazuta. Atributele generate Angular `_ngcontent-ng-c<n>` / `_nghost-ng-c<n>` doar goale.
+  Nume necunoscut = `atribut_necunoscut:<element>{<atribut>}`, valoare necunoscuta = `atribut_valoare:<element>{<atribut>}` (refuz);
+  linia `    sursa` arata numele si valoarea (asta e calibrarea). Tinta descrierii: textul EXACT din `DESCRIERI_CUNOSCUTE` (cele 4 din
+  captura: "Schimba modelul (^?M)", "Dicteaza (^?D)", "Ecran complet", "Trimite"), elementul doar cu `id` (+ `role="tooltip"`) si fara
+  elemente in el; altfel `descriere_text:` / `descriere_structura:` (refuz). Sursele listei: `stare_completa_23_11.json` (gol / mediu / lung),
+  `stare_text_lung_23_11.json`, `atribute_complete_22_11.txt`, `atribute_5g_22_11.txt`, `link_si_zona.txt` si semnaturile din 21.11.
+- **Deductii scrise (refuz FALS, dar sigur, daca sunt gresite):** (a) `role="tooltip"` pe tinta descrierii: din sursa Angular CDK (mesajul
+  tooltip-ului), nevazut in capturi; o tinta cu alt atribut = `descriere_structura:`. (b) Descendentii editorului (Quill: `<p>`, `<br>`) nu
+  sunt in capturi: se presupun FARA atribute; orice atribut pe ei = `semnal_in_editor:atribut_...`. (c) Elementele vazute doar prin
+  semnatura la 21.11 (butonul "Deruleaza in jos", `back-to-bottom-fab`, `span[role=status]`, linkul de confidentialitate,
+  `hallucination-disclaimer`, `prompt-flow-bar`) au doar atributele din semnatura; pe pagina din 23.11 nu mai sunt in `input-area-v2`.
+  (d) Identificatorul meniului de model (`ng-menu-a26090-1`) e acceptat ca forma `ng-menu-a<cifre>-<cifre>`.
+  **De aceea pasul 0 e obligatoriu inainte de instalare:** `stare` din copia neinstalata r14 pe (i) chat nou gol si (iii) chat existent gol,
+  apoi 5g2-a (captura acum citeste si tintele descrierilor, zona exacta a analizei si DOAR atributele elementelor din editor, fara text).
+  O linie `atribut_necunoscut:` / `atribut_valoare:` / `descriere_structura:` cu ciorna fara fisiere pe ecran = STOP: numele + valoarea din
+  linia `    sursa` merg la chat, care decide intrarea noua (commit nou, review). Nu se trece nimic ce seamana a fisier.
+- **Dovezi (teste 170, `python -I`):** cele 4 reproduceri r3 copiate exact: refuz fara actiuni si refuz inainte de Enter (si in captura
+  reala); cu lista alba oprita trec (= ce a gasit Jakarinos). 16 nume inventate x 3 valori x 11 locuri + zona / rich-textarea / editor /
+  paragraf din editor + starile reale din captura: refuz. 26 de nume cunoscute cu alta valoare / pe alt tag: refuz. Fiecare triplet real
+  (tag, atribut, valoare) trece; fiecare intrare din lista are cel putin un triplet real pe fiecare tag al ei (nimic inventat). 12 tinte de
+  descriere straine (text, atribut, element, id dublat): refuz; textele reale (cu / fara `role`, gol, tinta lipsa): trec. Starile reale
+  (captura 23.11 gol / mediu / lung cu descrierile, 21.11 i-iii, 22.11 i-iii si cu 5g, 23.11 text lung + chat nou) trec si ajung la Enter.
+  15 mutanti (fara lista alba, cele 6 cai de acceptare ocolite, doar numele, tag ignorat, prefix, generate cu valoare / ca prefix, fara lista
+  descrierilor, tinta cu orice atribut / cu elemente) lasa fiecare scenariul lui sa plece si starile reale sa treaca; pe cod refuz. Pe
+  codul r13 (`9c790264`) testele noi pica (10 FAIL + 18 ERROR din 170).
+
 Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
@@ -395,7 +430,7 @@ if ((Get-FileHash -LiteralPath "$Source\diag\captura_caseta.py").Hash -ine $Diag
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel asteptat (vezi $GemHashVechi)' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 214 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 14) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 301 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 14) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -405,15 +440,22 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + $SufVechi) -Force }
 ```
 
-Asteptat (pachetul v4.6.4d = r13, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **214 linii diferite (14 vechi `<=`, 200 noi `=>`)**.
+Asteptat (pachetul v4.6.4d = r14, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **301 linii diferite (14 vechi `<=`, 287 noi `=>`)**.
+Cele 14 linii vechi sunt EXACT cele din r13 (lista de mai jos); r14 schimba doar liniile NOI: lista neagra r13 (`ATRIBUTE_TEXT`,
+`FRAGMENTE_NUME_TEXT`, `FORMA_IDENTIFICATOR`, `VALORI_TEXT_CUNOSCUTE`, `_atribut_cu_text`, `_atribut_text_strain`) e inlocuita de lista
+alba `ATRIBUTE_PERMISE` (67 de intrari) cu formele ei (`ATR_GENERAT`, `GOL`, `BOOL`, `FORMA_CLASE`, `FORMA_JSLOG`, `FORMA_STYLE_*`,
+`FORMA_MENIU`, `ICOANE`, `ETICHETE_BUTOANE`), `DESCRIERI_CUNOSCUTE`, `ATRIBUTE_TINTA_DESCRIERE`, functiile `_intrari_atribut` /
+`_atribut_strain`, `_acceptat` si `_motiv_descriere` rescrise, nota r14 din antet. Testele: `Ran 170 tests ... OK`. Informativ: fata de
+v4.6.3 (`BE3B867B...`) 1047 / 11 / 1036; fata de r13 (`E169AEE6...`, head-ul anterior al PR-ului, neinstalat) 239 / 76 / 163.
+
+Istoric (r13, fata de acelasi v4.6.4c instalat): 214 linii diferite (14 vechi `<=`, 200 noi `=>`).
 r13 adauga la cele 6 linii vechi de mai jos inca 8, toate din v4.6.4c: cele 6 `return None, ...` de acceptare din `_motiv_element` (acum
 `return _acceptat(...)`, editorul, zona / invelisurile, butonul modelului, neutrul, controlul, structura), antetul
 `def _necunoscute(zona, editoare):` (acum cu `ids=None`) si apelul `necunoscute.extend(_necunoscute(z, editoare))` (acum cu `ids`).
 Liniile noi r13: nota r13 din antet, `ATRIBUTE_TEXT` / `FRAGMENTE_NUME_TEXT` / `FORMA_IDENTIFICATOR` / `FORMA_DESCRIERE_CDK` /
 `VALORI_TEXT_CUNOSCUTE` cu comentariile lor, functiile `_atribut_cu_text`, `_atribut_text_strain`, `_acceptat`, `_text_nod`,
-`_motiv_descriere`, cele 6 acceptari, apelul descrierii din `_necunoscute` si indexul `ids` din `analizeaza_ciorna`. Testele:
-`Ran 170 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 960 / 11 / 949; fata de r12 (`CF6C642A...`, head-ul anterior al
-PR-ului, neinstalat) 136 / 8 / 128.
+`_motiv_descriere`, cele 6 acceptari, apelul descrierii din `_necunoscute` si indexul `ids` din `analizeaza_ciorna`. Testele de atunci:
+`Ran 170 tests ... OK`. Informativ (r13): fata de v4.6.3 (`BE3B867B...`) 960 / 11 / 949; fata de r12 (`CF6C642A...`) 136 / 8 / 128.
 
 Istoric (r12, fata de acelasi v4.6.4c instalat): 78 linii diferite (6 vechi `<=`, 72 noi `=>`).
 Cele 6 linii vechi sunt toate din v4.6.4c: comentariul `# (tag, clasele EXACTE fara cele generate, ..., goale): acceptat DOAR asa.`,
@@ -447,7 +489,7 @@ rezultatul `(motiv, sursa)`, `necunoscute_surse` si liniile `    sursa` din `sta
 Informativ (r9), fata de v4.6.3 (`BE3B867B...`, nu mai e in `bin`): 760 / 11 / 749 - aceleasi 11 linii vechi ca in r2-r8 (antetul, lista de
 coduri, `import`, comentariul `ATAS`, titlul partii cu browserul, cele doua linii din vechea `_atasamente`, linia `atasamente in ciorna`
 din `stare`, cele trei linii ale vechii verificari din `trimite`); fata de r8 (`C7609E9E...`, head-ul anterior al PR-ului, neinstalat):
-115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r13 960 / 11 / 949, r12 840 / 11 / 829, r11 807 / 11 / 796, r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
+115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r14 1047 / 11 / 1036, r13 960 / 11 / 949, r12 840 / 11 / 829, r11 807 / 11 / 796, r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
 r4 536 / 11 / 525, r3 477 / 11 / 466, r2 411 / 11 / 400. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
 raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 78 / 6 din blocul de mai sus). Istoric r11 (fata de v4.6.4c):
 43 / 5 / 38, `Ran 153 tests`.
@@ -631,7 +673,8 @@ STOP, fara marker, copiaza linia `GEM_EROARE` + liniile `necunoscut ...` din `st
     citeste clasele div-ului zonei de drop si atributele + continutul butoanelor din caseta) si `stare` (tot doar citire), le salveaza
     in `paw-data\out\captura_caseta_<lungime>_<GemId>.json` / `stare_caseta_<lungime>_<GemId>.txt`, apoi golesti ciorna de mana
     (Ctrl+A, Delete). Capturile sunt pentru chat: arata ce multimi de clase si ce continut al butonului "Ecran complet" au aparut efectiv
-    (r13: si atributele tuturor elementelor casetei + textele descrierilor). **Merge mai departe DOAR la succes explicit (r13):** captura cu
+    (r13: si atributele tuturor elementelor casetei + textele descrierilor; r14: + atributele tintelor descrierilor, zona exacta a analizei
+    si DOAR atributele elementelor din editor, fara text). **Merge mai departe DOAR la succes explicit (r13):** captura cu
     cod 0 si ultima linie `CAPTURA_GATA <lungime>`, `stare` cu cod 0, nicio linie `  necunoscut`, exact o linie `paza ciorna:` si aceea
     = `paza ciorna: OK (trimite ar continua)`. O eroare, o iesire goala sau `paza ciorna: REFUZ ...` = STOP inainte de 5g2-b.
   - **5g2-b, trimiterea:** (1) brief-ul LUNG, (2) brief-ul MEDIU. Aceleasi verificari ca la 5g: cod 0, nicio linie `GEM_EROARE`, ultima
