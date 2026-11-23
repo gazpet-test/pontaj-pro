@@ -1,4 +1,4 @@
-# Paw v4.6.4 / v4.6.4b / v4.6.4c - doar paza atasamentelor Gemini - procedura pentru Razvan
+# Paw v4.6.4 / v4.6.4b / v4.6.4c / v4.6.4d - doar paza atasamentelor Gemini - procedura pentru Razvan
 
 Numai operatorul executa pasii. Agentul nu a instalat nimic si nu a cerut elevare.
 A = PowerShell 5.1 admin Gazpet-Ai; N = acelasi cont NE-elevat. Orice eroare = STOP.
@@ -54,9 +54,33 @@ Ce aduce (detaliile la pasul 0, "Stare r10"): pe indicatorul izolat mai poate st
 (spatiu, tab, linie noua); orice `style` cu continut (url(, nume de fisier, `--uploader-height`, orice altceva) = refuz ca pana acum.
 Rollback-ul (mai jos) readuce v4.6.4b.
 
+**Stare 23.11.2026 (v4.6.4c -> v4.6.4d):** v4.6.4c (`gemini_pw.py` `09E78891...`, main `16a9a9f7`) a fost INSTALAT, testul de canal
+5a-5g a trecut si markerul e scris (`gem` merge prin lansator). Pe 23.11 un brief LUNG (~10 KB, sesiunea juridica) a fost refuzat
+FALS chiar inainte de Enter: `GEM_EROARE ciorna_necunoscuta inainte_de_enter: 2 element(e) ...` - nimic trimis (sigur). Cu text lung
+Gemini extinde caseta de compunere: div-ul zonei de drop isi schimba clasele (`height-expanded-past-single-line`, `pre-fullscreen`,
+`with-toolbox-drawer` in loc de `simplified-input-area`) si apare butonul "Ecran complet" (atributele complete:
+`paw-data\out\paw_v464_calibrare\stare_text_lung_23_11.json`, citite de chat cu textul in ciorna, netrimis). **v4.6.4d** (acest pachet,
+r11) schimba din nou DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE v4.6.4c cu aceeasi procedura: hash-ul vechi =
+`09E78891...`, zona protejata noua `operator-v464d`, copiile de siguranta cu sufixul `.v464c`, fisierele noi cu `.v464d` (pasul 1).
+Ce aduce (detaliile la pasul 0, "Stare r11" ... "Stare r21"; r21: lungimile textelor CDP si ale liniilor brief-ului in unitati UTF-16,
+ca Chromium, si listele albe recalibrate pe pagina Gemini de azi - chat nou, gol / scurt / mediu / lung; r20: instantaneul ultimei paze = UN apel CDP `DOM.getDocument(pierce)`, din
+care vin si arborele analizat si shadow root-urile, si cele INCHISE: orice shadow root open / closed / alt tip oriunde in pagina = refuz,
+user-agent doar in afara zonei, CDP indisponibil = refuz; r19: orice shadow root deschis in pagina sau element custom inregistrat
+in zona = refuz (citirea din `pg.evaluate` ramane, poate doar refuza); r14: LISTA ALBA de atribute + textele exacte ale descrierilor; r15: clasele si
+`jslog` doar valorile vazute, textele pe Unicode exact; r16: si NODURILE TEXT pe lista alba, pe locul lor; r17: un singur editor principal,
+exact cel comparat cu brief-ul, `ql-clipboard` doar gol, orice alt `contenteditable` = refuz, comparatia cu brief-ul fara stergerea
+caracterelor invizibile; r18: nicio eticheta sarita (si `script` / `style` / `template` / `noscript` = refuz), in editor doar `<p>` /
+`<br>` fara atribute, textul comparat citit din HTML (nu din textul vizibil), ultima paza dintr-o singura citire, Enter imediat dupa):
+div-ul zonei de drop e acceptat
+in starea extinsa DOAR cu una din cele 4 multimi de clase din lista inchisa (marcajul `xapfileselectordropzone` tot GOL), butonul "Ecran
+complet" e pe lista controalelor; r16: in ORICE control (si in afara lor) un text e permis doar gol (spatii albe HTML) sau exact textul
+vazut pe acel loc ("Carbon" doar in butonul modelului, textele linkului de confidentialitate doar in link, avertismentul Workspace doar sub
+el). Testul de canal are un pas nou, **5g2** (captura casetei,
+doar citire, la trei lungimi de text + trimiterea unui brief lung si a unuia mediu). Rollback-ul (mai jos) readuce v4.6.4c (cu markerul ei).
+
 Hash-urile vin din raportul de review, nu din acest fisier. Livrare: folderul din commit-ul
 aprobat ajunge in `$Source` (`git archive` al commit-ului, dezarhivat in
-`C:\Users\Public\livrare\run_paw_v464c`); verificarea de mai jos decide.
+`C:\Users\Public\livrare\run_paw_v464d`); verificarea de mai jos decide.
 
 ## 0. Calibrare pe pagina reala (N, DOAR citire, INAINTE de review-ul final si de instalare)
 
@@ -241,7 +265,379 @@ EXACT acele semnaturi (reuniunea), cu testul `test_listele_livrate_si_locatorul`
   `u\72l(` (url( cu escape CSS), oprit DOAR de regula izolarii.
 - **La 5a-5g (v4.6.4c) sunt asteptate aceleasi rezultate ca la v4.6.4b, plus 5g OK.**
 
-Se ruleaza `stare` (doar citire: continutul paginii + numarari, fara click / tastatura / navigare)
+**Stare (r11 = v4.6.4d, 23.11.2026, dupa refuzul FALS al unui brief lung pe v4.6.4c instalat):**
+- **Ce s-a vazut.** Jurnalul refuzului (`paw-data\out\juridic_43eb636364a95c9d.log`) are 2 linii, ambele lamurite din atributele complete
+  (`stare_text_lung_23_11.json`): (1) `token_file:div{text-input-field height-expanded-past-single-line pre-fullscreen with-toolbox-drawer
+  jslog xapfileselectordropzone}` - acelasi div al zonei de drop (marcajul `xapfileselectordropzone=""`, GOL), dar cu alte clase decat
+  cele calibrate la 21.11 (`text-input-field simplified-input-area`), deci regula marcajului nu se mai potrivea; (2)
+  `element:button[aria-label=extinde intrarea la ecran complet][aria-describedby]` - butonul "Ecran complet" (`fullscreen-button`,
+  tooltip "Ecran complet"), fara niciun semnal. Butonul de trimitere in starea `has-input submit` era deja acceptat.
+- **Atentie: clasele reale difera de ce presupunea cererea.** In starea extinsa NU raman clasele normale: `simplified-input-area` dispare,
+  iar `with-toolbox-drawer` apare. Lista inchisa `CLASE_DIV_DROP` (r12, varianta B) are 4 multimi EXACTE: normala (21.11), cea vazuta pe
+  23.11 si cele doua intermediare pe aceeasi baza (doar unul din cei doi token-i ai inaltimii). Doar doua sunt VAZUTE pe pagina; cele
+  doua intermediare sunt DEDUCTII (nedovedite) - 5g2 le cauta in capturi, dar nici capturile nici trimiterile nu le pot dovedi daca nu
+  apar. Daca o stare reala are alte clase, refuzul e fals dar sigur (STOP, copiezi linia). Orice alt token, prefix / sufix, litere mari,
+  token lipsa, ambele baze odata, alt tag, sau o valoare a marcajului = `token_file:...` ca inainte (sau `token_<cuvant>` daca o clasa
+  noua contine un cuvant de atasament, ex. `pre-fullscreen-file`).
+- **Butonul "Ecran complet"** e trecut EXACT cu semnatura din jurnal in lista controalelor (6 + 23 + 3); fara `aria-describedby` sau cu alta
+  eticheta = element necunoscut (refuz); cu un nume de fisier in eticheta / in text / intr-un atribut, cu o clasa de atasament sau cu o
+  imagine in el = refuz, oricare ar fi lista. Textul din el: vezi "Stare r12".
+- **Dovezi r11 (teste 144 -> 153, toate `python -I`):** pe regulile v4.6.4c pagina reconstituita da EXACT linia `GEM_EROARE` din jurnal
+  (la `inainte_de_enter`, dupa scriere, fara Enter); pe r11 aceeasi stare da 0 necunoscute, `paza ciorna: OK`, iar `trimite` ajunge la
+  Enter; cu 1 / 2 fisiere reale tot `ciorna_cu_atasamente` (si cand fisierul apare odata cu textul lung: refuz chiar inainte de Enter);
+  21 de abateri pe div refuzate cu motivul si sursa asteptate; 5 mutanti (supramultime, submultime, fara litere mari, forma valorii
+  ignorata, semnatura controlului ca prefix) lasa fiecare scenariul lui sa plece si starea reala sa treaca; pe cod toate refuza.
+  Testele noi pica pe v4.6.4c (main `ae5ca32d`).
+
+**Stare (r12 = v4.6.4d runda 2, 23.11.2026, dupa NO-GO Jakarinos pe r11 `c8b6534a`):**
+- **Ce era gresit in r11.** Un control din lista transmite contextul lui descendentilor, iar orice text fara cuvant de atasament / nume de
+  fisier din el trecea ca "eticheta controlului". Jakarinos a pus `<span>continut strain arbitrar</span>` in butonul "Ecran complet":
+  0 necunoscute, `trimite` ajungea la Enter. (Nu era o cale de ocolire a numararii fisierelor - chip-ul real e numarat oriunde -, dar
+  un text strain langa brief nu are voie sa treaca.)
+- **Ce face r12.** Butonul "Ecran complet" e un control cu text INCHIS (`CONTROALE_TEXT_INCHIS`): in el si in toti descendentii lui
+  (oricat de adanc) un text e permis doar gol / doar spatii sau EXACT tooltip-ul vazut "Ecran complet" (dupa scoaterea diacriticelor si
+  a literelor mari). Orice alt text = `text_in_control:<text>` (refuz inainte de Enter), chiar fara cuvinte de atasament; cu cuvinte de
+  atasament / nume de fisier = `text_atasament:` / `text_fisier:` ca inainte. Numele iconitei NU e in captura din 23.11 (doar atributele
+  butonului), deci nicio ligatura de iconita (`<mat-icon>fullscreen</mat-icon>`) nu e permisa: iconita fara text (svg / `gem-icon`)
+  trece. Un control sau butonul modelului pus in el nu ii elibereaza textele. Celelalte 5 controale raman EXACT ca in r11 (testat:
+  acelasi rezultat pe r11 si pe r12 pentru text strain / atasament / fisier / iconita in fiecare).
+- **Clasele div-ului: varianta B.** Cele 3 multimi "normala + token de inaltime" din r11 sunt scoase (captura le contrazice) si sunt
+  acum refuzate ca orice alta multime (in orice ordine, cu token-urile generate `ng-*`).
+- **Dovezi (teste 153 -> 161, toate `python -I`):** reproducerea din verdict, copiata exact: pe r12 `text_in_control:continut strain
+  arbitrar`, refuz fara nicio actiune pe o ciorna simpla si refuz inainte de Enter in starea reala cu brief lung; pe regulile r11 aceeasi
+  reproducere ajunge la Enter. 14 texte straine (direct, adanc, iconite cu ligatura, controale imbricate) si 5 cu cuvinte de atasament /
+  fisier: refuz inainte de Enter. Buton gol / cu iconita svg / cu tooltip-ul exact (si cu spatii / litere mari): trece si ajunge la Enter.
+  Structural: o singura intrare, citita dintr-un singur loc. 6 mutanti (fara regula = r11, orice text, tooltip ca subsir, contextul
+  inlocuit de un control imbricat, ligaturi acceptate, cele 3 multimi readuse) lasa fiecare scenariul lui sa plece si starea reala sa
+  treaca; pe cod toate refuza. Testele noi / schimbate pica pe r11 (`c8b6534a`: 7 FAIL + 2 ERROR din 161).
+- **Atentie la 5g2:** daca butonul real are in el o iconita cu text (ligatura), 5g2 da refuz fals `text_in_control:<nume iconita>`
+  (sigur, nimic trimis); capturile de la 5g2 arata continutul butonului, iar numele exact intra intr-un commit nou, cu review.
+- **La 5a-5g (v4.6.4d) sunt asteptate aceleasi rezultate ca la v4.6.4c; 5g2 (nou) trebuie sa treaca.**
+
+**Stare (r13 = v4.6.4d runda 3, 23.11.2026, dupa NO-GO Jakarinos pe r12 `e2c93803`):**
+- **Ce era gresit in r12.** Regula textului inchis privea doar textele afisate (nodurile text), nu ATRIBUTELE care poarta text.
+  Jakarinos a pus `gemtooltip="continut strain arbitrar"` pe butonul "Ecran complet", acelasi atribut pe un `<span>` din el si un buton
+  de model cu `aria-label` strain in el: toate trei 0 necunoscute, `press Enter`.
+- **Ce face r13.** Pe ORICE element acceptat (zona, invelisuri, editor, elemente neutre, controalele si structura din liste, butonul
+  modelului - deci si pe toti descendentii unui control) atributele cu text au voie doar GOALE sau cu o valoare EXACTA vazuta pe pagina
+  reala (lista inchisa `VALORI_TEXT_CUNOSCUTE`: 13 intrari, fiecare cu sursa ei - eticheta fiecarui buton, tooltip-ul "Ecran complet",
+  eticheta butonului de model DOAR cu "Carbon", eticheta si placeholder-ul editorului, identificatorii CDK ai descrierilor). Orice
+  alta valoare = `atribut_text:<element>{<atribut>}` (refuz), chiar fara cuvinte de atasament. Atribute cu text = aria-label /
+  aria-description si celelalte ARIA citite ca text, title / placeholder / alt / label / value, tooltip-urile Angular / Gemini, eticheta
+  Angular `arialabel`, `data-placeholder` etc., orice nume cu label / tooltip / title / placeholder / descri / caption / hint,
+  orice `ng-reflect-*` si orice `data-*` cu text liber (cu spatii / punctuatie; un identificator ca `data-gramm="false"` nu e text).
+  Textul descrierilor (`aria-describedby` -> containerul CDK din afara casetei) se verifica dupa nume de fisier / cuvinte de atasament.
+- **Deductie scrisa:** identificatorul de descriere pe `div[data-test-id=send-button-container]` nu e in capturi (doar cheia, la
+  21.11); se presupune forma CDK reala `cdk-describedby-message-ng-1-<n>`, ca la celelalte. Alta forma = refuz fals (sigur) la 5g2-a,
+  vizibil in `captura_caseta_*` (acum cu atributele TUTUROR elementelor casetei si textele descrierilor).
+- **Dovezi (teste 161 -> 170, `python -I`):** cele 3 reproduceri copiate exact: refuz fara actiuni si refuz inainte de Enter in starea
+  reala cu brief lung; cu regula r13 oprita (= r12) aceleasi ajung la Enter. 18 atribute straine x 10 locuri (control, descendent
+  neutru / adanc / svg / gem-icon in control, alt control, butonul modelului, structura, invelis, div neutru) + zona / rich-textarea /
+  editor / paragraf din editor: refuz. Valorile reale trec; aceeasi valoare cu un cuvant in plus / pe alt tag / alt model = refuz. Toate
+  starile reale (21.11 i-iii, 22.11 i-iii si cu indicatorul 5g, 23.11 text lung si chat nou) trec si ajung la Enter. 14 mutanti
+  (fara verificare, cate una din cele 6 cai de acceptare ocolita, subsir, tag ignorat, fara fragmente, fara data-*, fara ng-reflect,
+  fara descriere, orice identificator de descriere) lasa fiecare scenariul lui sa plece si starile reale sa treaca; pe cod refuz.
+- **5g2-a (RUNBOOK, r13):** dupa `stare` se cer `$LASTEXITCODE -eq 0`, exact o linie `paza ciorna:` si aceea = `paza ciorna: OK
+  (trimite ar continua)`; captura cu cod 0 si `CAPTURA_GATA`. Altfel STOP.
+
+**Stare (r14 = v4.6.4d runda 4, 23.11.2026, dupa NO-GO Jakarinos pe r13 `9c790264`):**
+- **Ce era gresit in r13.** Lista NEAGRA (ce atribute "poarta text") nu poate fi completa: `matbadge`, `ariavaluetext` si `data-text`
+  (cu valoare de forma unui identificator) pe descendentii butonului "Ecran complet" treceau; descrierea (`aria-describedby` -> tinta din
+  afara casetei) accepta orice text fara fisier / cuvant de atasament. Toate patru: 0 necunoscute, `press Enter`. In plus (gasit acum, pe
+  captura completa din 23.11): r13 ar fi refuzat FALS chiar pagina reala (`enterkeyhint="send"` si `tooltipanchorposition="above-end"`
+  contin fragmentele "hint" / "tooltip").
+- **Ce face r14 (decizia chat-ului: lista ALBA).** Pe ORICE element acceptat din zona (zona insasi, controalele si toti descendentii lor,
+  structura, editorul si descendentii lui) FIECARE atribut trebuie sa fie in `ATRIBUTE_PERMISE` (67 de intrari): numele EXACT, pe tagul pe
+  care a fost vazut, cu valoarea EXACTA din capturi; pentru valorile tehnice care variaza (clasele, `jslog`, `style` cu inaltimea ferestrei,
+  identificatorii CDK / ai meniului) forma exacta vazuta. Atributele generate Angular `_ngcontent-ng-c<n>` / `_nghost-ng-c<n>` doar goale.
+  Nume necunoscut = `atribut_necunoscut:<element>{<atribut>}`, valoare necunoscuta = `atribut_valoare:<element>{<atribut>}` (refuz);
+  linia `    sursa` arata numele si valoarea (asta e calibrarea). Tinta descrierii: textul EXACT din `DESCRIERI_CUNOSCUTE` (cele 4 din
+  captura: "Schimba modelul (^?M)", "Dicteaza (^?D)", "Ecran complet", "Trimite"), elementul doar cu `id` (+ `role="tooltip"`) si fara
+  elemente in el; altfel `descriere_text:` / `descriere_structura:` (refuz). Sursele listei: `stare_completa_23_11.json` (gol / mediu / lung),
+  `stare_text_lung_23_11.json`, `atribute_complete_22_11.txt`, `atribute_5g_22_11.txt`, `link_si_zona.txt` si semnaturile din 21.11.
+- **Deductii scrise (refuz FALS, dar sigur, daca sunt gresite):** (a) `role="tooltip"` pe tinta descrierii: din sursa Angular CDK (mesajul
+  tooltip-ului), nevazut in capturi; o tinta cu alt atribut = `descriere_structura:`. (b) Descendentii editorului (Quill: `<p>`, `<br>`) nu
+  sunt in capturi: se presupun FARA atribute; orice atribut pe ei = `semnal_in_editor:atribut_...`. (c) Elementele vazute doar prin
+  semnatura la 21.11 (butonul "Deruleaza in jos", `back-to-bottom-fab`, `span[role=status]`, linkul de confidentialitate,
+  `hallucination-disclaimer`, `prompt-flow-bar`) au doar atributele din semnatura; pe pagina din 23.11 nu mai sunt in `input-area-v2`.
+  (d) Identificatorul meniului de model (`ng-menu-a26090-1`) e acceptat ca forma `ng-menu-a<cifre>-<cifre>`.
+  **De aceea pasul 0 e obligatoriu inainte de instalare:** `stare` din copia neinstalata r14 pe (i) chat nou gol si (iii) chat existent gol,
+  apoi 5g2-a (captura acum citeste si tintele descrierilor, zona exacta a analizei si DOAR atributele elementelor din editor, fara text).
+  O linie `atribut_necunoscut:` / `atribut_valoare:` / `descriere_structura:` cu ciorna fara fisiere pe ecran = STOP: numele + valoarea din
+  linia `    sursa` merg la chat, care decide intrarea noua (commit nou, review). Nu se trece nimic ce seamana a fisier.
+- **Dovezi (teste 170, `python -I`):** cele 4 reproduceri r3 copiate exact: refuz fara actiuni si refuz inainte de Enter (si in captura
+  reala); cu lista alba oprita trec (= ce a gasit Jakarinos). 16 nume inventate x 3 valori x 11 locuri + zona / rich-textarea / editor /
+  paragraf din editor + starile reale din captura: refuz. 26 de nume cunoscute cu alta valoare / pe alt tag: refuz. Fiecare triplet real
+  (tag, atribut, valoare) trece; fiecare intrare din lista are cel putin un triplet real pe fiecare tag al ei (nimic inventat). 12 tinte de
+  descriere straine (text, atribut, element, id dublat): refuz; textele reale (cu / fara `role`, gol, tinta lipsa): trec. Starile reale
+  (captura 23.11 gol / mediu / lung cu descrierile, 21.11 i-iii, 22.11 i-iii si cu 5g, 23.11 text lung + chat nou) trec si ajung la Enter.
+  15 mutanti (fara lista alba, cele 6 cai de acceptare ocolite, doar numele, tag ignorat, prefix, generate cu valoare / ca prefix, fara lista
+  descrierilor, tinta cu orice atribut / cu elemente) lasa fiecare scenariul lui sa plece si starile reale sa treaca; pe cod refuz. Pe
+  codul r13 (`9c790264`) testele noi pica (10 FAIL + 18 ERROR din 170).
+
+**Stare (r15 = v4.6.4d runda 5, 23.11.2026, dupa NO-GO Jakarinos pe r14 `dd872d09`):**
+- **Ce era gresit in r14.** (1) `class` si `jslog` aveau forme largi: orice token de clasa si orice `track:...` treceau, deci
+  `<span class="continut-strain-arbitrar">` in butonul "Ecran complet" si `jslog="123;track:continut_strain_arbitrar"` pe buton dadeau
+  0 necunoscute si `press Enter`. (2) Descrierile si etichetele din lista alba se comparau dupa `_ascii` (fara diacritice, litere mici,
+  orice alt caracter -> "?"): cu referinta reala `cdk-describedby-message-ng-1-16`, "Ecran complet" cu un a-circumflex si "Dicteaza (^?D)"
+  cu un ideogram in locul sagetii Shift (U+21E7) treceau (acelasi "?").
+- **Ce face r15.** `class`: valoarea se imparte DOAR pe spatiile albe HTML si FIECARE token trebuie sa fie unul EXACT din
+  `CLASE_PERMISE[tag]` (token-urile vazute in capturi pe acel tag; un tag fara clase vazute = doar generatele) sau un generat Angular vazut
+  (`CLASE_GENERATE`: `ng-tns-c<cifre>-<cifre>`, `ng-star-inserted`, `ng-animating`). Celelalte `ng-*` vazute (`ng-trigger*`, `ng-dirty`,
+  `ng-untouched`, `ng-valid`) sunt exacte pe tagul lor. `jslog`: una din valorile vazute (`JSLOG_VAZUTE`, pe tag) cu DOAR numarul de la
+  inceput variabil; cheia `BardVeMetadataKey` e decodata (base64 canonic, JSON canonic) si trebuie sa fie lista vazuta: doar `null`, cu
+  `[<cifre>,"ro",<cifre>,""]` pe pozitia 8 si `["<16 cifre hexazecimale>"]` (identificatorul conversatiei) pe pozitia 22, cel mult 64 de
+  elemente. Textele (valorile atributelor din lista alba, textul descrierilor, textul permis in "Ecran complet", `TEXTE_CUNOSCUTE`,
+  exceptia `arialabel`) se compara pe Unicode EXACT, cu sirurile reale din capturi (diacritice, U+21E7); la textele din zona se scot doar
+  spatiile albe HTML de la capete. `_ascii` ramane doar pentru cautarea cuvintelor / numelor de fisier si pentru afisare.
+- **Deductii scrise (refuz FALS, dar sigur, daca sunt gresite):** (a) capturile din 23.11 TAIE valorile la 300 de caractere, deci cheia
+  `BardVeMetadataKey` a butoanelor 173899 / 206752 (c23) si 173899 (t23) e JSON neterminat (doar 206752 de pe t23 e intreaga): structura
+  de dupa taietura (lungimea listei, alte pozitii) nu e cunoscuta; o pozitie noua = `atribut_valoare:...{jslog}`. **5g2-a citeste acum
+  `jslog` netaiat** (`diag\captura_caseta.py`, r15). (b) Identificatorul conversatiei (16 hex) e singura parte variabila care nu e
+  zecimala (un chat existent are alt id; aceeasi forma ca in URL-ul `/app/<id>`). (c) Eticheta "Deruleaza in jos" e trecuta cu
+  diacriticele romanesti (a-breve, i-circumflex; `DEDUS_DERULEAZA`): la 21.11 s-a vazut doar semnatura ASCII. (d) Pe un chat proaspat `rich-textarea` poate avea
+  `ng-pristine` / `ng-touched` (capturile arata `ng-dirty ng-untouched ng-valid`): alta stare de formular = refuz pana la recalibrare.
+  (e) Clasele Quill pe paragrafele editorului (ex. `ql-align-*`) si clasele elementelor vazute doar prin semnatura la 21.11 nu sunt in
+  capturi: orice clasa pe ele = refuz. **Pasul 0 + 5g2-a raman obligatorii inainte de instalare** (ca la r14); orice linie
+  `atribut_valoare:...{class}` / `{jslog}` cu ciorna fara fisiere = STOP, token-ul / valoarea din linia `    sursa` merg la chat.
+- **Dovezi (teste 184, `python -I`):** cele 2 reproduceri de clase / jslog si cele 2 de descrieri din verdict copiate exact: refuz fara
+  actiuni si refuz inainte de Enter (si in captura reala); pe mutantul cu formele / comparatiile r14 trec (= ce a gasit Jakarinos). Clasa
+  straina pe control, descendent, structura, zona, rich-textarea, editor, paragraful editorului, butonul modelului si in starile reale:
+  refuz. Fiecare tipar generat: pozitive + 23 de negative. Clasele din cod = EXACT token-urile reale pe tag (sursa independenta: tripletele
+  capturilor); un token real al altui tag = refuz (proprietate pe toate perechile). `jslog`: numarul variaza, orice componenta textuala noua /
+  alta ordine / alt tag = refuz; cheia: 37 de structuri JSON + 10 codari base64 straine = refuz; valorile taiate exact cum au fost citite = refuz. Descrieri
+  (21 de variante: diacritice, caractere, spatii in plus / minus, NBSP, latime zero, litere mari, NFD), etichete (11, in captura reala) si
+  texte: refuz. 14 mutanti r15 lasa fiecare scenariul lui sa plece si starile reale sa treaca; pe cod refuz. Pe codul r14 (`dd872d09`)
+  testele noi pica (27 FAIL + 8 ERROR din 184).
+
+**Stare (r16 = v4.6.4d runda 6, 23.11.2026, dupa NO-GO Jakarinos pe r15 `7b9aa4da`):**
+- **Ce era gresit in r15.** Listele albe acopereau atributele, dar NU si nodurile text: (1) un control fara lista de texte (toate, in afara
+  butonului "Ecran complet") accepta orice text fara semnal - `<span>continut strain arbitrar</span>` in "Incarcare si instrumente" sau in
+  "Trimite mesajul" dadea 0 necunoscute si `press Enter`, si in capturile reale mediu / lung; (2) ligaturile iconitelor treceau dupa un
+  regex larg (`[a-z0-9_]{1,40}`): `<mat-icon>continut_strain_arbitrar</mat-icon>` in zona = Enter; (3) golul se decidea dupa forma ASCII:
+  un nod doar cu U+0301 (accent combinat) sau U+200B (latime zero) era "gol" = Enter.
+- **Ce face r16.** Orice nod text din zona, in afara editorului, trece DOAR daca e gol pe textul BRUT (doar spatiile albe HTML: spatiu, tab,
+  linie noua, CR, form feed) sau daca perechea (loc, text) e EXACT in `TEXTE_CUNOSCUTE`. Locul = controlul in care sta textul (butonul
+  modelului = `buton_model`; primul control ramane locul si sub controalele imbricate), altfel cel mai apropiat invelis din
+  `STRUCTURA_CUNOSCUTA` (cautat doar pana la zona), altfel `zona`. Lista = 4 perechi, toate vazute: `Carbon` in butonul modelului
+  (singurul text propriu din captura NETAIATA 23.11, in toate cele 3 stari), cele doua texte ale linkului de confidentialitate in link si
+  avertismentul Workspace sub `hallucination-disclaimer` (chat existent, 21.11). `CONTROALE_TEXT_INCHIS` a disparut (toate controalele au
+  text inchis); butonul "Ecran complet" nu mai are niciun text permis (in captura netaiata nu are niciun nod text). Ligaturile: lista
+  inchisa `LIGATURI_VAZUTE` = GOALA (in captura netaiata toate iconitele au text gol, numele sta in `fonticon`). U+0301, U+200B, NBSP,
+  U+2060, U+FEFF, U+3000 etc. = text nevid = refuz, afisat in escape-uri (`text:\u0301` in linia `necunoscut`). Cheia `BardVeMetadataKey`
+  citita intreaga: butonul de trimitere are 35 de elemente, ultimul `[0]` (pozitia 34, nevazuta cat era taiata; r15 ar fi dat refuz FALS
+  pe pagina reala) -> pozitia 34 = `[<cifre>]`, plafonul listei = 35 (cel vazut; r15: 64, dedus). 5g2-a citeste acum si `text_propriu`
+  (nodurile text directe, brute) pe fiecare element.
+- **Deductii / riscuri ramase (refuz FALS, dar sigur):** (a) textele butonului "Deruleaza in jos", ale lui `span[role=status]` si ale
+  `prompt-flow-bar` nu sunt in captura netaiata (stau in afara `input-area-v2`); la 21.11 nu aratau niciun text, deci lista lor e goala -
+  un text sau o ligatura acolo = refuz pana la recalibrare. (b) Un alt nume de model / alta forma a etichetei din butonul modelului ("Gemini
+  4 Carbon" afisat ca text) = refuz (`verifica_model` ar accepta eticheta, lista textelor nu). (c) Raman cele din r15 (b)-(e).
+  **Pasul 0 + 5g2-a raman obligatorii inainte de instalare**; orice linie `text:` / `text_in_control:` cu ciorna fara fisiere = STOP, textul
+  (si captura 5g2-a, cu `text_propriu`) merg la chat pentru o pereche noua (commit nou, review).
+- **Dovezi (teste 192, `python -I`):** cele 3 reproduceri din verdict copiate exact (span in "Incarcare si instrumente" / "Trimite mesajul"
+  in capturile reale gol / mediu / lung si in starea cu brief lung, mat-icon cu ligatura inventata in zona capturii lungi, span cu U+0301 /
+  U+200B): refuz fara actiuni si refuz inainte de Enter; pe regulile r15 (mutant) pleaca la Enter (= ce a gasit Jakarinos). Variante: 11
+  texte x 3 forme in 7 locuri reale (fiecare control, butonul modelului, span-ul "Carbon", iconita de trimitere); "Carbon" in alt control /
+  in zona; 10 forme ale lui "Carbon"; textele cunoscute pe alt loc (11 cazuri); 12 ligaturi (numele reale ale iconitelor incluse) in zona
+  si in fiecare iconita reala; 14 caractere invizibile / spatii Unicode / entitati HTML in zona, sub avertisment, in controale, in butonul
+  modelului, in iconita, in link si lipite de un text cunoscut. Pozitive: cele 3 stari din captura NETAIATA (si: singurul text nevid =
+  "Carbon", perechile calculate din pagina = exact lista), 21.11 i-iii, 22.11 i-iii, 23.11 text lung. Testele pozitive folosesc acum
+  `jslog`-urile REALE netaiate (completarea dedusa din r15 a fost scoasa). Mutanti r16 (5) + mutantii r12 rescrisi (5): fiecare lasa
+  scenariul lui sa plece si starile reale sa treaca; pe cod refuz. Pe codul r15 (`7b9aa4da`) testele noi pica (45 FAIL + 4 ERROR din 192).
+
+**Stare (r17 = v4.6.4d runda 7, 23.11.2026, dupa NO-GO Jakarinos pe r16 `ed293d49`):**
+- **Ce era gresit in r16.** "Editorul" (contextul in care textul NU e verificat ca text necunoscut, fiindca se compara cu brief-ul) era
+  ORICE element `contenteditable="true"` de sub `rich-textarea` - deci si `div.ql-clipboard` (prezent in toate capturile, gol). Comparatia
+  cu brief-ul citea insa doar PRIMUL editor. `<div class="ql-clipboard" contenteditable="true" tabindex="-1">continut strain arbitrar</div>`
+  (si `contract.pdf`, U+0301, U+200B) in capturile gol / mediu / lung dadea 2 editoare, 0 necunoscute si `press Enter`; la fel un element
+  editabil pus langa editor. In plus, comparatia stergea in tacere U+200B / U+200C / U+200D / U+2060 / U+FEFF si inlocuia NBSP cu spatiu.
+- **Ce face r17.** (1) EDITORUL PRINCIPAL = exact `rich-textarea > div[role="textbox"][contenteditable="true"]` (aceeasi regula in
+  selectorul `EDITOR` si in analiza HTML), UNIC: in HTML altfel de 1 = `ciorna_necitibila`; la locator (vede si shadow DOM) 0 =
+  `editor_lipsa`, 2+ = `editor_multiplu` (cod nou), verificat inainte de click SI chiar inainte de citirea textului. Doar el are exceptia de
+  text si doar textul lui se compara cu brief-ul. `div.ql-clipboard` e acceptat DOAR exact ca in capturi: atributele `class="ql-clipboard"`
+  `contenteditable="true"` `tabindex="-1"` si niciunul in plus, fara NICIUN copil (nici text, nici spatii, nici element), fiu al aceluiasi
+  `rich-textarea` cu editorul, unic acolo. Orice alt element cu atributul `contenteditable` (orice valoare: "", "false", "plaintext-only",
+  "TRUE"), oriunde in zona (in editor, langa el, pe `rich-textarea`, pe zona) = semnal `editabil:<semnatura>` -> refuz. (2) Comparatia cu
+  brief-ul comprima DOAR spatiile albe HTML (spatiu, tab, linie noua, CR, form feed) - necesar fiindca Quill pune fiecare linie intr-un
+  `<p>`, iar `inner_text()` intoarce mai multe linii noi decat brief-ul. Nimic altceva nu se sterge / inlocuieste: un caracter invizibil
+  (U+200B, U+2060, U+FEFF, U+200C, U+200D, U+0301) sau un NBSP / U+3000 / VT / U+2028 prezent in editor si absent din brief =
+  `text_neintrat`, fara Enter; mesajul arata punctul de cod de la prima diferenta (`editor U+200B, brief U+0052`).
+- **Deductii / riscuri ramase (refuz FALS, dar sigur):** (a) NBSP: Quill are `white-space: pre-wrap`, deci spatiile scrise raman spatii
+  obisnuite (presupunere, nevazuta pe pagina reala); daca la 5a / 5g `text_neintrat` arata `editor U+00A0`, e STOP si decizie noua
+  (commit + review), nu o exceptie tacuta. (b) Daca Gemini schimba editorul (alt rol, nu mai e fiu direct al lui `rich-textarea`) sau
+  clipboard-ul (alt atribut, text) = `ciorna_necitibila` / `editabil:` pana la recalibrare. (c) Raman cele din r16 (a)-(c).
+- **Dovezi (teste 202, `python -I`):** reproducerile din verdict copiate exact (continutul clipboard-ului = `continut strain arbitrar`,
+  `contract.pdf`, U+0301, U+200B, in capturile gol / mediu / lung; un `div contenteditable` cu text langa editor; un al doilea editor
+  principal, si in alt `rich-textarea` din pagina): refuz fara actiuni si refuz inainte de Enter; pe regulile r16 (mutant) 2 editoare,
+  0 necunoscute si Enter (= ce a masurat Jakarinos). Variante: `contenteditable` pe `span` / `div` cu 5 valori / zona / `rich-textarea` /
+  in editor; clipboard cu 5 feluri de copii, 6 variante de atribute, doua clipboard-uri; locatorul cu 0 / 2 editoare (si al doilea aparut
+  dupa scriere). Comparatia: 10 caractere x 4 pozitii in editor = `text_neintrat` fara Enter, cu punctul de cod; pe normalizarea r16
+  (mutant) U+200B / U+2060 / U+FEFF / U+200C / U+200D / NBSP pleaca la Enter. Pozitive: 3 randari de tip Quill ale unui brief cu mai multe
+  linii (linii noi in plus, CR) = Enter; acelasi invizibil si in brief si in editor = egal; starile reale (captura netaiata gol -> mediu /
+  lung, 21.11 i-iii, 22.11 i-iii si cu 5g, 23.11 text lung + chat nou) = Enter, cu 1 editor principal. Mutanti r17 (5): fara `editabil:`,
+  clipboard cu copii, clipboard dupa clasa, mai multe clipboard-uri, paza "cel putin un editor"; + locatorul fara `k != 1`. Pe codul r16
+  (`ed293d49`) testele noi pica (17 FAIL + 2 ERROR din 202).
+
+**Stare (r18 = v4.6.4d runda 8, 23.11.2026, dupa NO-GO Jakarinos pe r17 `50743b8f`):**
+- **Ce era gresit in r17.** (1) `script`, `style`, `template` si `noscript` erau sarite cu tot continutul ("nu se afiseaza"), si in
+  editor: `<style contenteditable="true">continut strain arbitrar</style>` (la fel cu celelalte trei) dadea 0 necunoscute si Enter in
+  capturile gol / mediu / lung; un `<style>rich-textarea span { display: none }</style>` in zona ascundea un `<span>` strain din editor,
+  iar `inner_text()` (textul VIZIBIL) ramanea egal cu brief-ul -> Enter. (2) Ultima paza citea textul cu `ed.inner_text()` INAINTE de
+  `page.content()`; textul aparut in editor intre cele doua citiri era vazut de a doua, dar exclus ca "editor" -> Enter cu text in plus.
+- **Ce face r18.** (1) NICIO eticheta nu mai e sarita (doar chip-urile / semnele, numarate si refuzate separat): cele patru sunt elemente
+  ca oricare, fara loc in liste -> `element:` / `editabil:` / `element_in_editor:` + textul lor `text:` = refuz. In editor sunt permise
+  DOAR `<p>` si `<br>`, FARA niciun atribut, in forma Quill: copiii editorului doar `<p>` (intre ele doar spatii albe HTML), un `<p>` = doar
+  text SAU exact un `<br>` (linia goala); orice alta forma = `editor_structura:...` (refuz). Textul comparat cu brief-ul se citeste din
+  HTML-ul BRUT (textul nodurilor, liniile lipite cu linie noua), nu din `inner_text()`: CSS-ul nu mai poate ascunde nimic din comparatie.
+  (2) Ultima paza = UN SINGUR `page.content()`: din el se deriva textul comparat, editorul unic, atasamentele si necunoscutele; inainte doar
+  doua citiri prin locator care pot DOAR refuza (editor unic si semne in shadow DOM); Enter imediat dupa, fara asteptari.
+- **Deductii / riscuri ramase (refuz FALS, dar sigur):** (a) continutul editorului NU e in capturi (`diag\captura_caseta.py` il exclude,
+  e ciorna): forma "un `<p>` pe linie, `<p><br></p>` = linie goala, fara atribute" e forma Quill standard, DEDUSA. Daca la 5a / 5g apare
+  `element_in_editor:` / `editor_structura:` / `semnal_in_editor:atribut_...` pe o ciorna scrisa de script = STOP, captura editorului (doar
+  etichete si atribute, fara text) si decizie noua (commit + review). Candidati plauzibili: Gemini transforma un URL in link (clasa
+  `input-url-linkification-enabled`) sau o mentiune in chip (`inline-chips-enabled`) -> un brief cu URL-uri poate fi refuzat. (b) Ramane
+  fereastra inerenta dintre instantaneu si Enter (orice verificare o are; acum fara nicio asteptare in ea). (c) Raman cele din r17.
+- **Dovezi (teste 212, `python -I`):** reproducerile din verdict copiate exact, pe codul vechi REAL `50743b8f` si pe r18 (unealta separata,
+  aceleasi fixture-uri): **33 de scenarii, pe r17 toate 33 Enter, pe r18 toate 33 refuz** (cele 4 etichete x 3 capturi in editor si in
+  zona, style + span strain in editor si in paragraf x 3, editorul schimbat la ultima paza x 3). In teste: aceleasi reproduceri (refuz pe
+  cod, Enter pe regulile r17 ca mutant); 11 forme ne-Quill (text direct in editor, `<br>` langa text, `<p>` gol, `<p>` in `<p>`, editor
+  fara paragraf, span / div / style, `<p>` cu atribut permis in afara editorului / necunoscut); instantaneul: 27 de tipare de schimbare a
+  ciornei intre citiri (curat / text strain / chip, pe 3 citiri) x 2 capturi - decizia = starea din SINGURA citire dupa scriere, Enter
+  doar dupa o citire curata si nimic intre ea si Enter. Pozitive: 5 randari Quill (si cu linie goala finala, separatori, CRLF, linii
+  dublate) x 5 brief-uri (si cu `& < > "`, diacritice, tab, NBSP) = Enter; starile reale (captura netaiata, 21.11 i-iii, 22.11 i-iii si cu
+  5g, 23.11) = Enter cu textul citit din HTML. Mutanti r18 (6): etichetele sarite repuse, editorul r17 + text fara forma Quill, atributele
+  permise pe `<p>` din editor, textul din `inner_text()`, doua citiri, o asteptare inainte de Enter. Pe codul r17 testele noi pica (18 FAIL
+  + 6 ERROR din 212).
+
+**Stare (r19 = v4.6.4d runda 9, 23.11.2026, dupa NO-GO Jakarinos pe r18 `426e2436`):**
+- **Ce era gresit in r18.** `page.content()` NU serializeaza subarborii shadow. Un `<div>` permis din zona putea gazdui un shadow root cu
+  `<div contenteditable="true"><p>continut strain arbitrar</p></div>`: HTML-ul analizat arata doar gazda goala (editoare 1, atasamente 0,
+  semne 0, necunoscute 0), iar locatorii (editorul principal, semnele de atasament) nu se potriveau pe acel continut -> Enter.
+- **Ce face r19.** Instantaneul = UN SINGUR `pg.evaluate(JS_INSTANTANEU)` (`_instantaneu`), care intoarce din ACELASI apel: HTML-ul paginii
+  (`documentElement.outerHTML`, analizat ca pana acum) si numaratorile `shadow_pagina` (shadow root-uri DESCHISE in toata pagina, recursiv),
+  `shadow_zona` (cele cu gazda in zona sau pe stramosii editorului), `custom_zona` (elemente custom INREGISTRATE in zona / pe stramosii
+  editorului - autonome sau built-in personalizate, prin `customElements.getName(el.constructor)` / `customElements.get`), `custom_pagina`
+  (doar afisat). Refuz (`ciorna_necunoscuta`, `verifica_fara_umbre`) daca `shadow_pagina`, `shadow_zona` sau `custom_zona` != 0: pagina
+  reala are 0 shadow root-uri (citire CDP a chat-ului, 23.11), deci si unul in afara zonei = refuz sigur. Se aplica la toate trei pazele
+  (inainte de chatul nou, pe chatul nou, ultima paza) si in `stare`; decizia ultimei paze foloseste doar rezultatul acelui apel. Forma
+  rezultatului se verifica strict (exact cheile, numere intregi >= 0, HTML text), altfel `ciorna_necitibila`. Nicio citire
+  `page.content()` nu mai exista in cod (testat). `stare` scrie o linie noua:
+  `shadow root: pagina 0 / zona 0 | custom inregistrate: pagina 0 / zona 0` (asteptat la pasul 0; altfel STOP si captura la Rocky).
+- **Limite acceptate (documentate, nu rezolvate):**
+  (a) **Instantaneul si Enter raman doua operatii distincte** (fereastra de milisecunde intre `pg.evaluate` si `pg.keyboard.press("Enter")`,
+  fara nicio asteptare sau alta citire intre ele). Ce le-ar face atomice: o singura operatie "citeste si, daca e curat, apasa" executata
+  in browser fara intoarcere la Python - Playwright NU are asa ceva (`evaluate` nu poate apasa o tasta de incredere; un `dispatchEvent`
+  din pagina e "untrusted" si Gemini il poate ignora), deci nimic disponibil. Orice paza dinainte de o actiune are aceasta fereastra.
+  (b) **Un shadow root INCHIS pe o eticheta standard** (`div`, `span`, `p`...) nu se vede din JavaScript-ul paginii (verificat in Edge real:
+  numaratorile raman 0). Il vede doar protocolul CDP (`DOM.getDocument` cu `pierce`, verificat in Edge real: `closed` + `open`), intr-un
+  apel SEPARAT de `pg.evaluate` (nu acelasi instantaneu). Daca se vrea si acesta, e o decizie noua (commit + review): fie o citire CDP
+  inaintea instantaneului care poate doar refuza (ca locatorii), fie instantaneul intreg din CDP. Elementele custom INREGISTRATE (singurele,
+  in afara etichetelor standard, care pot purta un shadow root inchis creat de clasa lor) sunt deja refuzate in zona.
+  **-> Jakarinos r9: NO-GO pe (b); rezolvat in r20 (instantaneul intreg din CDP, mai jos).**
+  (c) Raman cele din r18 (forma Quill dedusa, URL-uri / chip-uri in editor = refuz fals) si r17 / r16.
+- **Dovezi (teste 220, `python -I`):** reproducerea din verdict (in simulare, ca la Jakarinos: HTML-ul = captura reala neschimbata, shadow
+  root-ul doar in numaratori) pe codul vechi REAL `426e2436` si pe r19 (unealta separata, aceleasi fixture-uri): **12 scenarii (shadow in
+  zona de la inceput / doar la ultima paza, shadow in pagina in afara zonei, custom in zona) x 3 capturi: pe r18 toate 12 Enter, pe r19
+  toate 12 refuz**; starile reale (0) = Enter pe ambele. In Edge REAL (headless local, retea blocata, fara Gemini, captura "mediu"):
+  10 scenarii - curat 0/0/0/0 si `stare` OK; cazul din verdict (open shadow pe un div din zona cu `contenteditable` strain) = 1/1 -> refuz,
+  cu 0 necunoscute in HTML (= ocolirea, acum prinsa); open shadow in afara zonei, pe `rich-textarea`, imbricat pe 2 niveluri; custom
+  inregistrat cu shadow inchis, built-in personalizat (cu si fara atributul `is` in DOM) in zona = refuz; custom in afara zonei = doar
+  afisat; shadow INCHIS pe div standard = 0 (limita b). Playwright intoarce numerele ca `int`. In suita (clasa `TestUmbreR19`, 8 teste):
+  reproducerea, shadow in pagina in afara zonei (si pe chatul nou), custom, starile reale (si `stare`), 11 forme gresite ale rezultatului,
+  tipare de umbre intre citiri (decizia = singura citire), structural (niciun `.content(`, un singur `.evaluate(`, JS-ul cu partile lui).
+  Mutanti r19 (5): umbrele ignorate, doar zona, fara custom, instantaneul r18 (`content()`), doua `evaluate` in ultima paza - fiecare lasa
+  scenariul lui la Enter, starile reale trec pe toti. Pe codul r18 testele noi / aliniate pica (11 FAIL + 1 ERROR din 220).
+
+**Stare (r20 = v4.6.4d runda 10, 23.11.2026, dupa NO-GO Jakarinos pe r19 `5a1e2613`):**
+- **Ce era gresit in r19.** Un shadow root INCHIS (`attachShadow({mode: 'closed'})`) pe un `div` standard din zona, cu continut strain:
+  `el.shadowRoot` = null din JavaScript-ul paginii, deci numaratorile evaluate erau 0, HTML-ul nu avea subarborele, iar paza dadea
+  `editoare=1, atasamente=0, semne=0, necunoscute=0` -> Enter. Limita (b) din r19 nu era acceptata de brief.
+- **Ce face r20 (decizia chat-ului).** Instantaneul ultimei paze = UN SINGUR apel CDP: `pg.context.new_cdp_session(pg)`, apoi
+  `DOM.enable({includeWhitespace: "all"})` si `DOM.getDocument({depth: -1, pierce: true})`, apoi desprinderea sesiunii (nu decide nimic).
+  Din ACELASI raspuns se deriva TOT: arborele analizat (`_arbore_cdp` construieste aceleasi noduri ca parserul HTML de pana acum - tag si
+  nume de atribut in litere mici, noduri text cu textul brut, continutul unui `<template>` ca copii; comentariile / doctype ignorate),
+  textul editorului, atasamentele, necunoscutele si numararea shadow root-urilor. Cu `pierce`, CDP intoarce TOATE shadow root-urile
+  (`open`, `closed`, `user-agent`) si documentele iframe-urilor din acelasi proces. Reguli (`verifica_umbre_cdp`): orice shadow root `open`
+  / `closed` / de alt tip, oriunde (si imbricat in alt shadow root, si in documentul unui iframe) = `ciorna_necunoscuta`; `user-agent` (al
+  browserului: `input`, `img`, `video`...; continutul lui nu se parcurge) doar in afara zonei (zona = elementele ZONA si ce e sub ele, plus
+  stramosii editorului, ca in r19). CDP indisponibil, eroare CDP sau raspuns cu alta forma = `ciorna_necitibila` (nu exista cale de rezerva).
+  Citirea din `pg.evaluate` (r19, acum `JS_UMBRE`, fara HTML) ramane INAINTEA instantaneului si poate doar refuza (ca locatorii); la fel
+  in pazele dinaintea chatului nou / pe chatul nou si in `stare`. `stare` scrie o linie noua:
+  `shadow root CDP: deschise 0 / inchise 0 / alt tip 0 | user-agent: pagina N / zona 0 | documente iframe: N`.
+  Doua detalii ale CDP, verificate in Edge 157 (`sonda_cdp.py`): fara `includeWhitespace: "all"` Chromium SARE nodurile text din doar
+  spatii (`<div>  </div>` apare fara copil; de aceea parametrul e obligatoriu si testat), iar un text mai lung de 10000 de caractere vine
+  TAIAT (10000 + `...` U+2026): un astfel de text in zona = necunoscut `text_trunchiat_cdp:` (refuz), iar un brief cu o linie de peste 10000
+  de caractere e refuzat la inceput (`brief_invalid`, nicio actiune).
+- **Pagina reala (doar citire, Edge 9333, 23.11 seara, chat nou `/app`, ciorna goala, Carbon):** `DOM.getDocument(pierce)` = **0 shadow
+  root-uri open / closed / alt tip**, **1 user-agent** (pe un `img`, poza de profil din fereastra de chat, in afara zonei), 3 documente
+  iframe (fara shadow root-uri). Analiza din arborele CDP = analiza din `outerHTML` (identice, camp cu camp). ATENTIE: pe pagina de azi
+  analiza (si cea r19, si cea r20) da **10 necunoscute** pe chatul nou gol (zona exterioara e acum `input-container`, cu `trace`,
+  `back-to-bottom-fab`, `span[role=status][aria-atomic]`, disclaimer-ele de sub caseta...) -> `paza ciorna: REFUZ` (refuz FALS, sigur:
+  nimic trimis). E o schimbare a paginii, nu a r20: pasul 0 o arata; recalibrarea e runda separata (zona citita, doar citire:
+  `paw-data\out\rocky_r20_zona_reala.html`).
+- **Limite acceptate:** (a) din r19 ramane: instantaneul (`DOM.getDocument`) si Enter sunt doua operatii distincte (fereastra de ms, fara
+  asteptari sau alte citiri intre ele; desprinderea sesiunii CDP e singurul apel intre ele si nu citeste nimic). (b) iframe-urile din ALT
+  proces (alt site) nu au `contentDocument` in raspuns; un iframe in zona e oricum refuzat (`media:`). (c) Pseudo-elementele CSS
+  (`::before` / `::after`) nu intra in arbore (ca la HTML). (d) Shadow root-urile user-agent apar abia dupa layout (un `input` adaugat prin
+  JS e vazut ca element, iar umbra lui doar dupa randare); in zona orice astfel de element e refuzat oricum ca element necunoscut.
+- **Dovezi (teste 232, `python -I`):** clasa `TestUmbreCdpR20` (12 teste), cu pagina falsa CDP (forma verificata in Edge 157; spatiile
+  sarite fara `includeWhitespace`, textele taiate la 10000): reproducerea din verdict (shadow INCHIS pe un div din zona cu
+  `<div contenteditable="true"><p>continut strain arbitrar</p></div>`: evaluate 0, HTML 0 necunoscute, CDP `inchise 1` -> refuz de la
+  inceput fara actiuni / la ultima paza fara Enter; pe instantaneul fara umbre (M109 = ce vedea r19): Enter) x 3 capturi; inchis / deschis
+  / alt tip / fara tip in afara zonei si pe `rich-textarea`; imbricat (inchis in deschis / in inchis); inchis in documentul unui iframe;
+  user-agent pe un `img` in afara zonei = OK, in zona / pe zona / pe stramosii editorului = refuz; `ql-clipboard` cu un spatiu = refuz doar
+  cu `includeWhitespace`; text taiat in zona / in afara; linia de 10001 / 10000 de caractere; CDP indisponibil (de la inceput / doar la
+  ultima paza), 16 forme gresite ale raspunsului si erori la `DOM.enable` / `DOM.getDocument` = `ciorna_necitibila`; arborele CDP = cel
+  HTML pe toate capturile reale si pe reproducerile negative; 16 tipare de umbre CDP intre citiri (decizia = singurul instantaneu);
+  `stare`; structural. Mutanti r20 (9): umbrele CDP ignorate, doua instantanee, fara `includeWhitespace`, user-agent in zona acceptat,
+  `closed` acceptat, iframe-uri neparcurse, tipuri necunoscute acceptate, fara verificarea liniilor brief-ului - fiecare lasa scenariul lui
+  la Enter (sau refuza abia la ultima paza), starile reale trec pe toti; al noualea (umbrele imbricate neparcurse) schimba doar numararea
+  (umbra exterioara e refuzata oricum). In Edge REAL (headless local, retea blocata, fara Gemini; `edge_real_r20.py`): pe 14 capturi
+  reale analiza din `_instantaneu` = analiza HTML, 0 umbre; 11 scenarii OK (cazul din verdict = `inchise 1` -> refuz; inchis in afara
+  zonei, deschis in zona, inchis in deschis, inchis in iframe srcdoc = refuz; `input` in afara zonei = OK, in zona = refuz; clipboard cu
+  spatiu = refuz; text de 12000 in zona = refuz, in afara = OK); `stare` pe captura = OK, 0 cereri de retea.
+
+**Stare (r21 = v4.6.4d runda 11, 23.11.2026, dupa NO-GO Jakarinos pe r20 `fa6fac8e` + recalibrarea pe pagina de azi):**
+- **Ce era gresit in r20 (P1).** Trunchierea CDP se detecta cu `len(v) > 10000` (puncte de cod), iar Chromium taie dupa 10000 de UNITATI
+  UTF-16 (un emoji = 2). Reproducerea din verdict: brief = emoji + 9998 `a` + U+2026 (`len` 10000, trecea validarea), textul real din
+  editor = emoji + 9998 `a` + `CONTINUT STRAIN`; CDP il arata EXACT ca brief-ul (10000 de puncte de cod), paza nu vedea taietura -> Enter.
+- **Ce face r21.** `_u16` = lungimea in unitati UTF-16; `_taiat_cdp` = peste 10000 de unitati SAU exact 10000 terminate cu U+2026 (aparare:
+  jumatatea unei perechi taiate pierduta pe drum). Aceeasi regula pe textele CDP din zona (`text_trunchiat_cdp:<n> unitati UTF-16 citite`,
+  refuz) si pe liniile brief-ului la inceputul lui `trimite` (`brief_invalid`, nicio actiune). Verificat in Edge 157.0.4341.60 (headless,
+  local, `edge_real_r21.py`): cazul din verdict vine ca 10000 de puncte de cod / 10001 unitati terminate cu U+2026; o pereche taiata vine
+  ca U+FFFD + U+2026 (10001 unitati); simulatorul din teste taie identic in toate cele 8 cazuri masurate.
+- **Recalibrarea (pagina de AZI, Edge 9333, un tab, chat nou `/app`, Carbon, nimic atasat).** Rocky a citit (doar citire) zona si a scris
+  in ciorna DOAR textele de calibrare 5g2-a (`scurt` / `mediu` / `lung`, cu `insert_text`, ca `trimite`, FARA Enter), golite imediat
+  (Ctrl+A, Delete; ciorna verificata goala dupa fiecare). Pe codul r20: aceleasi **10 necunoscute** in toate 4 starile (gol / scurt / mediu
+  / lung). Inventarul complet (toate atributele, nu doar primul motiv pe element): 33 de diferente, TOATE atribute / valori / clase pe
+  elemente deja cunoscute; niciun element nou, niciun text nou (paragraful avertismentului e gol pe chatul nou: doar un `<br>`). Adaugate
+  EXACT valorile vazute (aceleasi in cele 4 stari): `trace=""` pe `input-container` + clasele lui (`hide-on-print`,
+  `input-gradient-overlay`, `edge-to-edge`, `lm-input-redesign`, `grow-input-downwards`); pe `span[role=status]` `aria-atomic="true"`,
+  `aria-live="polite"`, clasele `cdk-visually-hidden`, `inline-upgrade-banner-live-region`; pe `back-to-bottom-fab` clasa lui; pe butonul
+  "Deruleaza in jos" clasa `back-to-bottom-fab`, `aria-hidden="true"`, `tabindex="-1"`, `jslog` `<N>;track:generic_click`; pe iconita lui
+  `gem-icon` `fonticonname="arrow_downward"`, `size="medium"` si `mat-icon` cu `lm-icon-m`, `arrow_downward`, `data-mat-icon-namespace=""`,
+  `style='font-family: "Google Symbols";'`; pe `div.input-area-container` clasele `input-area-container`,
+  `ng-trigger-inputAreaAnimation` si style-ul exact (`--initial-input-half-height: 32px; position: absolute; bottom: 50vh; ...`); pe
+  `hallucination-disclaimer` `aligntext="center"` + clasele lui; pe `div.capabilities-disclaimer` clasa si `style="--align-text: center;"`;
+  pe `p[data-test-id=empty-disclaimer]` clasele `gds-body-s`, `empty-disclaimer`, `desktop-spacing`. Cu codul r21, pe pagina reala:
+  **`necunoscute in zona: 0` si `paza ciorna: OK (trimite ar continua)` in toate 4 starile** (`rocky_r21_calibrare\v2_stare_*.txt`).
+  Vazute acum (erau deductii): eticheta `Deruleaza in jos` cu diacritice (`DEDUS_DERULEAZA`) si tintele descrierilor cu exact `id` +
+  `role="tooltip"`.
+- **NU s-a vazut azi:** (iii) chat EXISTENT (brief-ul interzicea deschiderea altui chat): pe el pot aparea alte clase / atribute (de ex.
+  `prompt-flow-bar`, avertismentul Workspace in noua structura a disclaimer-ului). La pasul 0 (iii) si la 5a-5g pe o conversatie existenta,
+  orice linie `necunoscut ...` = refuz FALS (sigur, nimic trimis): STOP, liniile la chat pentru o recalibrare.
+- **Dovezi (teste 246, `python -I`):** `TestUtf16R21` (7) - masura UTF-16 si pragurile; simulatorul = Chromium; reproducerea din verdict pe
+  7 pagini (capturile 23.11 gol / mediu / lung + pagina de azi in 4 stari): brief-ul refuzat la inceput fara actiuni, fara verificarea
+  liniilor (M118) textul real e vazut taiat si refuzat inainte de Enter, pe masurarea r20 = Enter; doua linii sub limita lipite intr-un
+  paragraf (M119 = Enter); perechea taiata ca U+FFFD / surogat singur / pierduta (M120 = Enter); limita liniilor (10000 / 10001 unitati,
+  emoji, U+2026); mutantii M118-M120 lasa starile reale sa treaca; structural. `TestPaginaAziR21` (6) - fixture GENERAT din capturile de
+  azi (`CAPTURA_Z23S`): cele 4 stari trec (analiza, CDP, `trimite` pana la Enter, `stare` OK); pe listele r20 exact cele 10 linii vazute;
+  FIECARE din cele 33 de adaosuri e necesar (fara el pagina e refuzata in toate starile); valorile vecine raman refuzate; descrierile;
+  token / text strain = refuz. Tripletele reale de azi intra in testele listei inchise (`REALE`). Pe codul r20 (`fa6fac8e`) testele noi /
+  aliniate pica: 18 FAIL + 3 ERROR din 246; reproducerea pe codul r20 real (`repro_vechi_r21.py`): brief-ul din verdict = Enter pe
+  capturile 23.11 (pe pagina de azi codul r20 refuza oricum tot, cele 10 necunoscute), pe r21 = `brief_invalid`.
+
+Se ruleaza `stare` (doar citire: continutul paginii + numarari + citirea CDP `DOM.getDocument`, fara click / tastatura / navigare)
 din copia NEINSTALATA a commit-ului curent al PR-ului (`git archive` dezarhivat, de ex. in
 `C:\Users\Public\livrare\run_paw_v464_calibrare`), cu Edge 9333, un singur tab Gemini, Carbon
 selectat si niciun `gem` pornit prin lansator:
@@ -265,25 +661,28 @@ scrie nimic si nu trimite nimic.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$Source = 'C:\Users\Public\livrare\run_paw_v464c\docs\paw\run_paw_v464'
+$Source = 'C:\Users\Public\livrare\run_paw_v464d\docs\paw\run_paw_v464'
 $PawRoot = 'C:\ProgramData\Gazpet\Paw'
 $Bin = Join-Path $PawRoot 'bin'
-$Audit = Join-Path $PawRoot 'operator-v464c'
-$SufVechi = '.v464b'     # sufixul copiilor de siguranta (ce e instalat acum: v4.6.4b)
-$SufNou = '.v464c'       # sufixul fisierelor noi din zona protejata
+$Audit = Join-Path $PawRoot 'operator-v464d'
+$SufVechi = '.v464c'     # sufixul copiilor de siguranta (ce e instalat acum: v4.6.4c)
+$SufNou = '.v464d'       # sufixul fisierelor noi din zona protejata
 $GemMarker = 'C:\Users\Public\paw-data\gem_canal_validat'
 $Python = 'C:\Program Files\Python313\python.exe'
 $ManifestHash = 'INLOCUIESTE_CU_HASH_MANIFEST_DIN_RAPORT'
 $GemHashNou = 'INLOCUIESTE_CU_HASH_GEMINI_PW_DIN_RAPORT'
-$GemHashVechi = '5B0CCD4851A2B2A5BCCB0CF0B76A087F544051091827B998A156C35D082972CD'
+$DiagHash = 'INLOCUIESTE_CU_HASH_CAPTURA_CASETA_DIN_RAPORT'    # diag\captura_caseta.py (pasul 5g2; nu se instaleaza)
+$GemHashVechi = '09E78891CD4D73DA5B457D0397CC2CE6BD2A7E83EF3F7AD51C320AF0D69EA862'
 $Operator = "$env:COMPUTERNAME\Gazpet-Ai"
 $ReaderSid = (New-Object Security.Principal.NTAccount($Operator)).Translate([Security.Principal.SecurityIdentifier]).Value
 ```
 
-`$GemHashVechi` = `gemini_pw.py` din v4.6.4b (instalat acum in `bin`, 22.11.2026, main `c8138f0f`). Istoric: la instalarea v4.6.4b peste
-v4.6.4 valorile au fost `$Audit = operator-v464b`, `$GemHashVechi = A03E2B5C5ABD5D80709E5E1FB87126F4986245389B4E0943796589E2156AF7B6`
+`$GemHashVechi` = `gemini_pw.py` din v4.6.4c (instalat acum in `bin`, recitit 23.11.2026, = main `16a9a9f7` / `ae5ca32d`). Istoric: la
+instalarea v4.6.4c peste v4.6.4b valorile au fost `$Audit = operator-v464c`, `$GemHashVechi = 5B0CCD4851A2B2A5BCCB0CF0B76A087F544051091827B998A156C35D082972CD`
+(v4.6.4b), sufixele `.v464b` / `.v464c`; la instalarea v4.6.4b peste v4.6.4 valorile au fost `$Audit = operator-v464b`, `$GemHashVechi = A03E2B5C5ABD5D80709E5E1FB87126F4986245389B4E0943796589E2156AF7B6`
 (v4.6.4), sufixele `.v464` / `.v464b`; la instalarea v4.6.4 peste v4.6.3: `operator-v464`, `BE3B867B0BD7FA2333D009B54258A146DF72F4D78C2706C321ABEB2D21AED9F5`
-(v4.6.3), `.v463` / `.v464`. Folderele `operator-v464` si `operator-v464b` raman pe disc (copiile v4.6.3 / v4.6.4), nu se ating.
+(v4.6.3), `.v463` / `.v464`. Folderele `operator-v464`, `operator-v464b` si `operator-v464c` raman pe disc (copiile v4.6.3 / v4.6.4 /
+v4.6.4b), nu se ating.
 
 ## 2. Verificari inainte de inlocuire (N - NU in consola admin; o data, inainte de pasul 3)
 
@@ -299,10 +698,12 @@ foreach ($e in $manifest.PSObject.Properties) {
     if ($e.Name -ne 'gemini_pw.py' -and (Get-FileHash -LiteralPath (Join-Path $Bin $e.Name)).Hash -ine $e.Value) { throw "Difera de instalat: $($e.Name)" }
 }
 if ($manifest.'gemini_pw.py' -ine $GemHashNou) { throw 'gemini_pw.py din pachet nu e cel revizuit' }
+if ($DiagHash -notmatch '^[A-Fa-f0-9]{64}$') { throw 'Pune hash-ul lui diag\captura_caseta.py din raport' }
+if ((Get-FileHash -LiteralPath "$Source\diag\captura_caseta.py").Hash -ine $DiagHash) { throw 'diag\captura_caseta.py nu e cel revizuit' }
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel asteptat (vezi $GemHashVechi)' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 24 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 5) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
+if ($d.Count -ne 1038 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 86) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -312,13 +713,128 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + $SufVechi) -Force }
 ```
 
-Asteptat (pachetul v4.6.4c = r10, fata de v4.6.4b INSTALAT in `bin`, `5B0CCD48...`): **24 linii diferite (5 vechi `<=`, 19 noi `=>`)**.
-Cele 5 linii vechi sunt toate din v4.6.4b: comentariul `# (tag, clasele EXACTE ..., izolat): acceptat DOAR asa.`, cele doua intrari din
+Asteptat (pachetul v4.6.4d = r21, fata de v4.6.4c INSTALAT in `bin`, `09E78891...`): **1038 linii diferite (86 vechi `<=`, 952 noi `=>`)**.
+Cele 86 de linii vechi = EXACT cele 86 din r20 (mai jos; r21 nu schimba nicio linie venita din v4.6.4c - doar linii adaugate de r11-r20
+sau noi). Liniile noi r21: nota r21 din antet; `_u16` / `_taiat_cdp` / `ELIPSA_CDP` + comentariul lor; masurarea UTF-16 in `_arbore_cdp`,
+in mesajul `text_trunchiat_cdp:` si in verificarea liniilor brief-ului din `trimite`; adaosurile din listele albe (comentariul z23s,
+`CLASE_PERMISE` rescris cu token-urile noi, o intrare `jslog`, `ICOANE` + `STYLE_ICONITA` / `STYLE_ZERO_STATE` / `STYLE_DISCLAIMER`, 7
+intrari noi si 4 schimbate in `ATRIBUTE_PERMISE`). Testele: `Ran 246 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`)
+1670 / 26 / 1644; fata de r20 (`479E64CF...`, head-ul anterior al PR-ului, neinstalat) 115 / 30 / 85.
+
+Istoric (r20, fata de acelasi v4.6.4c instalat): 983 linii diferite (86 vechi `<=`, 897 noi `=>`).
+Cele 86 de linii vechi = cele 84 din r19 (mai jos) + 2 noi, din v4.6.4c, schimbate de r20: cele doua linii ale docstring-ului lui
+`analizeaza_ciorna` (`"""HTML-ul paginii -> dict: editoare, zone ...` si `atasamente (chip-uri CHIP ...) ... detalii."""`; acum
+`analizeaza_ciorna` doar parseaza HTML-ul pentru teste, iar analiza sta in `analizeaza_arbore`, cu docstring nou). Liniile noi r20: nota
+r20 din antet, `analizeaza_arbore` (corpul vechi + `text_trunchiat_cdp:`), comentariul r19 / r20 + `JS_UMBRE` (fara HTML) + `_umbre_js`,
+`LIMITA_TEXT_CDP` / `CHEI_UMBRE_CDP` / `TIPURI_UMBRE`, `_cdp_rau` / `_lista_cdp` / `_atribute_cdp` / `_arbore_cdp`, `_instantaneu` (CDP),
+`verifica_umbre_cdp`, `_citeste_ciorna` / `_paza_ciorna` / `_ultima_paza` / `stare` cu citirea evaluate inainte si instantaneul CDP ultimul,
+linia `shadow root CDP: ...` din `stare`, verificarea liniilor brief-ului (`brief_invalid`) la inceputul lui `trimite`. Testele de atunci:
+`Ran 232 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 1615 / 26 / 1589; fata de r19 (`111986CB...`, head-ul anterior al
+PR-ului, neinstalat) 251 / 44 / 207.
+
+Istoric (r19, fata de acelasi v4.6.4c instalat): 816 linii diferite (84 vechi `<=`, 732 noi `=>`).
+Cele 84 de linii vechi = cele 80 din r18 (mai jos) + 4 noi, toate din v4.6.4c, schimbate de r19 (instantaneul dintr-un `pg.evaluate`, cu
+shadow DOM): din `_citeste_ciorna` linia `return analizeaza_ciorna(pg.content()), _semn_locator(pg)`, din `_paza_ciorna` comentariul
+`# doar citire (content + count); ridica GemEroare daca ciorna are atasamente sau nu poate fi citita` si linia
+`info, semn = _citeste_ciorna(pg)`, plus aceeasi linie `info, semn = _citeste_ciorna(pg)` din `stare` (acum `info, semn, umbre = ...`).
+Liniile noi r19: nota r19 din antet, comentariul + `CHEI_UMBRE` + `JS_INSTANTANEU`, `_instantaneu`, `verifica_fara_umbre`,
+`_citeste_ciorna` / `_paza_ciorna` noi, in `_ultima_paza` comentariul r19 + `info, umbre = _instantaneu(pg)` + `verifica_fara_umbre(...)`,
+in `stare` linia `shadow root: ...` si `verifica_fara_umbre(umbre, "stare")`. Testele de atunci: `Ran 220 tests ... OK`. Informativ: fata de v4.6.3
+(`BE3B867B...`) 1452 / 26 / 1426; fata de r18 (`C534E953...`, head-ul anterior al PR-ului, neinstalat) 80 / 5 / 75.
+
+Istoric (r18, fata de acelasi v4.6.4c instalat): 738 linii diferite (80 vechi `<=`, 658 noi `=>`).
+Cele 80 de linii vechi = cele 64 din r17 (mai jos) + 16 noi, toate din v4.6.4c, schimbate de r18 (nicio eticheta sarita, editorul doar
+p / br in forma Quill, textul din HTML, ultima paza dintr-un instantaneu): `NEVIZIBILE = ("script", "style", "template", "noscript")`
+(scoasa), comentariul `# in editor (contenteditable) intra doar textul brief-ului: ...` si cele doua linii ale `EDITOR_TAGURI` (acum
+`("p", "br")`), din `_motiv_element` cele doua linii de comentariu ale ramurii editorului, `if n.tag in EDITOR_TAGURI:` si `return
+"element_in_editor:" + sem, ctrl, ""` (acum indentata in ramura noua), din docstring-ul `_necunoscute` cele doua linii despre ce se sare,
+linia `if n.tag in NEVIZIBILE or n.tag == CHIP or _e_semn(n):` (acum fara `NEVIZIBILE`), linia `return {"editoare": ...` din
+`analizeaza_ciorna` (acum + `text_editor`), cele trei linii ale vechii `_atasamente` si `verifica_ciorna(ed.inner_text(), text,
+_atasamente(pg))` din `trimite` (acum `_ultima_paza(pg, text)`). Liniile noi r18: nota r18 din antet, comentariile noi ale
+`STRUCTURA_TAGURI` / `EDITOR_TAGURI`, comentariul din `normalizeaza`, ramura editorului din `_motiv_element` (editorul insusi / p si br fara
+niciun atribut), `_text_editor`, `text_editor` din `analizeaza_ciorna`, `_ultima_paza` si apelul ei din `trimite`. Testele de atunci: `Ran 212 tests
+... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 1382 / 26 / 1356 (2 linii v4.6.3 in plus atinse: `def _atasamente(pg):` si apelul cu
+`ed.inner_text()` din `trimite`); fata de r17 (`FD99AA72...`, head-ul anterior al PR-ului, neinstalat) 106 / 22 / 84.
+
+Istoric (r17, fata de acelasi v4.6.4c instalat): 644 linii diferite (64 vechi `<=`, 580 noi `=>`).
+Cele 64 de linii vechi = cele 39 din r16 (mai jos) + 25 noi, toate din v4.6.4c, schimbate de r17 (editorul principal unic, comparatia):
+linia cu lista de coduri `# coduri: ... editor_lipsa, text_neintrat,` (acum + `editor_multiplu`), selectorul
+`EDITOR = 'rich-textarea [contenteditable="true"], div.ql-editor[contenteditable="true"]'` (acum `rich-textarea > div[role="textbox"]
+[contenteditable="true"]`), din `normalizeaza` cele 6 linii (cele doua comentarii r2, `t = (t or "").replace(...)`, bucla `for z in (...)`,
+`t = t.replace(z, "")`, `return " ".join(t.split())`), din `verifica_ciorna` comentariul `# inainte de Enter: ...` si `raise
+GemEroare("text_neintrat", ...)` (acum cu punctul de cod), din `_e_editor` comentariul `# = EDITOR: ...`, `if n.attrs.get("contenteditable")
+!= "true":`, `if n.tag == "div" and "ql-editor" in _clase(n):`, `while p is not None:`, `if p.tag == "rich-textarea":`, cele doua
+`return True` si `return False`, comentariul lui `_LATIME_ZERO` (`# aceleasi ca in normalizeaza()`), linia `editoare = [...]` din
+`analizeaza_ciorna` (acum cu comentariu), din `verifica_fara_atasamente` `if not info["editoare"] or not info["zone"]:` si mesajul
+`ciorna_necitibila`, iar din `trimite` `ed = pg.locator(EDITOR)`, `if ed.count() == 0:` si `ed = ed.first` (acum `_editor_unic`).
+Liniile noi r17: nota r17 din antet, `EDITOR` + `CLIPBOARD_ATRIBUTE`, `SPATII_COMPARATIE`, `normalizeaza` / `_cod_la` / `verifica_ciorna`,
+`_e_editor` / `_e_clipboard`, pasul 5 din `_semnal` (`editabil:`), acceptarea clipboard-ului din `_motiv_element`, paza "exact un editor",
+`_editor_unic` si cele doua apeluri din `trimite`. Testele de atunci: `Ran 202 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 1316 / 24 /
+1292 (13 linii v4.6.3 schimbate acum: lista de coduri, `EDITOR`, normalizarea, verificarea editorului din `trimite`); fata de r16
+(`5ACAED8D...`, head-ul anterior al PR-ului, neinstalat) 112 / 26 / 86.
+
+Istoric (r16, fata de acelasi v4.6.4c instalat): 534 linii diferite (39 vechi `<=`, 495 noi `=>`).
+Cele 39 de linii vechi = cele 24 din r15 (mai jos) + 15 noi, toate din v4.6.4c, schimbate de r16 (nodurile text pe lista alba):
+`RE_LIGATURA = re.compile(...)` (acum `LIGATURI_VAZUTE = ()`), cele doua linii de comentariu de deasupra listelor albe ("CONTROALE = butoane
+/ linkuri (textul si iconitele din ele sunt eticheta lor) ..." si "... TEXTE = texte afisate in zona, in afara controalelor."), doua linii
+de comentariu din `TEXTE_CUNOSCUTE` ("... trecut aici dupa normalizarea _ascii ..." si "(textele linkului = cele doua intrari de mai jos /
+eticheta controlului a[...]) ..."), si din `_motiv_text`: antetul `def _motiv_text(nod, ctrl):` (acum cu `zona`), comentariul `# ctrl =
+controlul recunoscut ...`, `if not a:` + `return None` (golul dupa forma ASCII), cele doua `return "text_fisier:" / "text_atasament:" +
+a[:TEXT_AFISAT]` (acum `+ v`), `return None   # ligatura unei iconite ...`, `return None` (dupa `TEXTE_CUNOSCUTE`), `return "text:" +
+a[:TEXT_AFISAT]` (acum `text_in_control:` / `text:`), plus apelul `m = _motiv_text(n, ctrl)` din `_necunoscute` (acum cu `zona`).
+Liniile noi r16: nota r16 din antet, `LIGATURI_VAZUTE`, comentariul fostei `CONTROALE_TEXT_INCHIS`, `LOC_MODEL` / `LOC_ZONA` / `LOC_LINK` si
+`TEXTE_CUNOSCUTE` pe perechi (loc, text), `META_LUNGIME = 35` / `META_NUMAR` si exceptia pozitiei 34 din `_meta_permisa`, `_loc_text`,
+`_vizibil`, `_motiv_text` rescrisa, contextul primului control in `_necunoscute`. Testele de atunci: `Ran 192 tests ... OK`. Informativ: fata de
+v4.6.3 (`BE3B867B...`) 1230 / 11 / 1219; fata de r15 (`CDA58F4F...`, head-ul anterior al PR-ului, neinstalat) 128 / 47 / 81.
+
+Istoric (r15, fata de acelasi v4.6.4c instalat): 470 linii diferite (24 vechi `<=`, 446 noi `=>`).
+Cele 24 de linii vechi = cele 14 din r13 / r14 (mai jos) + 10 noi, toate din v4.6.4c, schimbate de r15 (comparatiile pe Unicode exact /
+importurile): linia `import sys, time, os, re, unicodedata` (acum + `base64, json`), intrarea din `VALORI_PERMISE` (valoarea reala
+"Incarcare si instrumente" cu diacritice, in escape-uri), cele 4 linii ale `TEXTE_CUNOSCUTE` (sirurile reale), linia izolarii copiilor din
+`_marcaj_permis` (`... or _ascii(c.date) ...`, acum text brut doar din spatii HTML), linia `if _ascii(n.attrs.get(k)) != valoare:` din
+`_valoare_permisa`, ligatura `RE_LIGATURA.fullmatch(a)` si `if a in TEXTE_CUNOSCUTE:` din `_motiv_text` (acum pe textul brut `b`).
+Liniile noi r15: nota r15 din antet, `CLASE_GENERATE` / `SPATII_HTML` / `CLASE_PERMISE` / `_FormaClase`, `JSLOG_VAZUTE` / `META_*` /
+`_sablon_jslog` / `_meta_permisa` / `_FormaJslog` / `_intrari_clase_jslog`, `ATRIBUTE_PERMISE` cu 3 campuri si valorile reale,
+`ETICHETE_BUTOANE` / `DESCRIERI_CUNOSCUTE` / `TEXTE_CUNOSCUTE` reale, `_text_brut`, comparatiile brute din `_atribut_strain`,
+`_motiv_descriere`, `_motiv_text`, `_valoare_permisa`. Testele de atunci: `Ran 184 tests ... OK`. Informativ (r15): fata de v4.6.3
+(`BE3B867B...`) 1196 / 11 / 1185; fata de r14 (`275E6107...`) 367 / 109 / 258.
+
+Istoric (r14, fata de acelasi v4.6.4c instalat): 301 linii diferite (14 vechi `<=`, 287 noi `=>`).
+Cele 14 linii vechi sunt EXACT cele din r13 (lista de mai jos); r14 schimba doar liniile NOI: lista neagra r13 (`ATRIBUTE_TEXT`,
+`FRAGMENTE_NUME_TEXT`, `FORMA_IDENTIFICATOR`, `VALORI_TEXT_CUNOSCUTE`, `_atribut_cu_text`, `_atribut_text_strain`) e inlocuita de lista
+alba `ATRIBUTE_PERMISE` (67 de intrari) cu formele ei (`ATR_GENERAT`, `GOL`, `BOOL`, `FORMA_CLASE`, `FORMA_JSLOG`, `FORMA_STYLE_*`,
+`FORMA_MENIU`, `ICOANE`, `ETICHETE_BUTOANE`), `DESCRIERI_CUNOSCUTE`, `ATRIBUTE_TINTA_DESCRIERE`, functiile `_intrari_atribut` /
+`_atribut_strain`, `_acceptat` si `_motiv_descriere` rescrise, nota r14 din antet. Testele de atunci: `Ran 170 tests ... OK`. Informativ
+(r14): fata de v4.6.3 (`BE3B867B...`) 1047 / 11 / 1036; fata de r13 (`E169AEE6...`) 239 / 76 / 163.
+
+Istoric (r13, fata de acelasi v4.6.4c instalat): 214 linii diferite (14 vechi `<=`, 200 noi `=>`).
+r13 adauga la cele 6 linii vechi de mai jos inca 8, toate din v4.6.4c: cele 6 `return None, ...` de acceptare din `_motiv_element` (acum
+`return _acceptat(...)`, editorul, zona / invelisurile, butonul modelului, neutrul, controlul, structura), antetul
+`def _necunoscute(zona, editoare):` (acum cu `ids=None`) si apelul `necunoscute.extend(_necunoscute(z, editoare))` (acum cu `ids`).
+Liniile noi r13: nota r13 din antet, `ATRIBUTE_TEXT` / `FRAGMENTE_NUME_TEXT` / `FORMA_IDENTIFICATOR` / `FORMA_DESCRIERE_CDK` /
+`VALORI_TEXT_CUNOSCUTE` cu comentariile lor, functiile `_atribut_cu_text`, `_atribut_text_strain`, `_acceptat`, `_text_nod`,
+`_motiv_descriere`, cele 6 acceptari, apelul descrierii din `_necunoscute` si indexul `ids` din `analizeaza_ciorna`. Testele de atunci:
+`Ran 170 tests ... OK`. Informativ (r13): fata de v4.6.3 (`BE3B867B...`) 960 / 11 / 949; fata de r12 (`CF6C642A...`) 136 / 8 / 128.
+
+Istoric (r12, fata de acelasi v4.6.4c instalat): 78 linii diferite (6 vechi `<=`, 72 noi `=>`).
+Cele 6 linii vechi sunt toate din v4.6.4c: comentariul `# (tag, clasele EXACTE fara cele generate, ..., goale): acceptat DOAR asa.`,
+cele doua intrari din `MARCAJE_PERMISE` (acum al doilea camp e lista multimilor de clase: `CLASE_DIV_DROP` pe div, `((),)` pe indicator),
+comentariul `# cu clasele (fara cele generate) EXACT cele din lista, ...` din `_marcaj_permis`, linia
+`if n.tag != tag or set(c for c in _clase(n) if not _generat(c)) != set(clase):` (acum `not any(... == set(x) for x in clase)`) si
+linia `return None   # eticheta unui control recunoscut` din `_motiv_text` (r12: acum cu indentarea blocului controlului cu text inchis).
+Liniile noi: notele v4.6.4d r11 + r12 din antet, comentariile si constanta `CLASE_DIV_DROP` (4 multimi), cele doua intrari, cele doua
+linii din `_marcaj_permis`, nota r11 de la listele albe, butonul "Ecran complet" (cu comentariul lui) in `CONTROALE_CUNOSCUTE`,
+`CONTROALE_TEXT_INCHIS` (cu comentariul ei), functia `_texte_control_inchis`, blocul controlului inchis din `_motiv_text` si cele doua
+linii din `_necunoscute` (contextul inchis nu se inlocuieste). Testele de atunci: `Ran 161 tests ... OK`. Informativ, fata de v4.6.3
+(`BE3B867B...`): 840 / 11 / 829 (aceleasi 11 linii vechi); fata de r11 (`AFA20126...`, head-ul anterior al PR-ului, neinstalat): 51 / 9 / 42.
+
+Istoric (pachetul v4.6.4c = r10, fata de v4.6.4b instalat atunci, `5B0CCD48...`): 24 linii diferite (5 vechi `<=`, 19 noi `=>`).
+Cele 5 linii vechi erau toate din v4.6.4b: comentariul `# (tag, clasele EXACTE ..., izolat): acceptat DOAR asa.`, cele doua intrari din
 `MARCAJE_PERMISE` (acum cu al saselea camp: `()` pe div-ul r5, `("style",)` pe indicator), linia `for tag, clase, nume, forma, izolat in
 MARCAJE_PERMISE:` si linia izolarii `if izolat and any(... (_generat(a) and v == "") ...)` din `_marcaj_permis` (acum si cu
 `not (a in goale and VALOARE_SPATII.fullmatch(v))`). Liniile noi: nota v4.6.4c / r10 din antet, comentariile campului `goale`,
-`VALOARE_SPATII`, cele doua intrari, comentariul si cele doua linii din `_marcaj_permis`. Testele: `Ran 144 tests ... OK`.
-Informativ, fata de v4.6.3 (`BE3B867B...`): 774 / 11 / 763 (aceleasi 11 linii vechi).
+`VALOARE_SPATII`, cele doua intrari, comentariul si cele doua linii din `_marcaj_permis`. Testele de atunci: `Ran 144 tests ... OK`.
+Informativ (r10), fata de v4.6.3 (`BE3B867B...`): 774 / 11 / 763 (aceleasi 11 linii vechi).
 
 Istoric (pachetul v4.6.4b = r9, fata de v4.6.4 instalat atunci, `A03E2B5C...`): 230 linii diferite (47 vechi `<=`, 183 noi `=>`).
 Cele 47 de linii vechi erau toate din v4.6.4 (nu din v4.6.3): constanta `MARCAJE_GOALE_PERMISE` si comentariile ei, `DETALIU_AFISAT = 240`,
@@ -332,9 +848,10 @@ rezultatul `(motiv, sursa)`, `necunoscute_surse` si liniile `    sursa` din `sta
 Informativ (r9), fata de v4.6.3 (`BE3B867B...`, nu mai e in `bin`): 760 / 11 / 749 - aceleasi 11 linii vechi ca in r2-r8 (antetul, lista de
 coduri, `import`, comentariul `ATAS`, titlul partii cu browserul, cele doua linii din vechea `_atasamente`, linia `atasamente in ciorna`
 din `stare`, cele trei linii ale vechii verificari din `trimite`); fata de r8 (`C7609E9E...`, head-ul anterior al PR-ului, neinstalat):
-115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
+115 / 21 / 94. Istoricul cifrelor fata de v4.6.3: r20 1615 / 26 / 1589, r19 1452 / 26 / 1426, r18 1382 / 26 / 1356, r17 1316 / 24 / 1292, r16 1230 / 11 / 1219, r15 1196 / 11 / 1185, r14 1047 / 11 / 1036, r13 960 / 11 / 949, r12 840 / 11 / 829, r11 807 / 11 / 796, r10 774 / 11 / 763, r9 760 / 11 / 749, r8 687 / 11 / 676, r7 624 / 11 / 613, r6 622 / 11 / 611, r5 600 / 11 / 589,
 r4 536 / 11 / 525, r3 477 / 11 / 466, r2 411 / 11 / 400. Daca mai urmeaza un commit pe `gemini_pw.py`, numerele se schimba din nou: le da
-raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 24 / 5 din blocul de mai sus).
+raportul de review al commit-ului respectiv (cifrele din raport inlocuiesc 78 / 6 din blocul de mai sus). Istoric r11 (fata de v4.6.4c):
+43 / 5 / 38, `Ran 153 tests`.
 
 Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
 `C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi
@@ -507,12 +1024,90 @@ nu trimit (...)` cu ciorna goala (sau doar cu textul brief-ului): pagina are ele
 calibrarea nu le-a vazut (de ex. butonul de trimitere apare abia dupa scriere); nu a plecat nimic.
 STOP, fara marker, copiaza linia `GEM_EROARE` + liniile `necunoscut ...` din `stare` pentru chat.
 
-Numai dupa ce ai VAZUT rezultatele 5a-5g, markerul - **ne-elevat (N)**, nu din consola admin:
+- **5g2 (nou in v4.6.4d).** Tot cu Carbon, ciorna goala. Pe 23.11 un brief de ~10 KB a fost refuzat fals pe v4.6.4c, chiar inainte de
+  Enter: cu text lung caseta se EXTINDE. 5g2 are doua parti, in aceasta ordine:
+  - **5g2-a, captura (doar citire, r12).** La trei lungimi de text - `scurt` (o linie), `mediu` (5 linii), `lung` (~13 KB) - LIPESTI DE
+    MANA textul in ciorna (blocul il pune in clipboard; Ctrl+V in caseta, **fara Enter**), apesi Enter in CONSOLA, iar blocul ruleaza
+    `diag\captura_caseta.py` (din pachetul verificat la pasul 2; nicio actiune pe pagina: fara click, tastatura sau navigare - doar
+    citeste clasele div-ului zonei de drop si atributele + continutul butoanelor din caseta) si `stare` (tot doar citire), le salveaza
+    in `paw-data\out\captura_caseta_<lungime>_<GemId>.json` / `stare_caseta_<lungime>_<GemId>.txt`, apoi golesti ciorna de mana
+    (Ctrl+A, Delete). Capturile sunt pentru chat: arata ce multimi de clase si ce continut al butonului "Ecran complet" au aparut efectiv
+    (r13: si atributele tuturor elementelor casetei + textele descrierilor; r14: + atributele tintelor descrierilor, zona exacta a analizei
+    si DOAR atributele elementelor din editor, fara text; r15: valorile `jslog` NETAIATE, ca cheia `BardVeMetadataKey` sa se vada
+    intreaga; r16: + `text_propriu` = nodurile text directe ale fiecarui element, BRUTE, fara textul ciornei - r16 accepta un text doar
+    pe locul pe care a fost vazut). **Merge mai departe DOAR la succes explicit (r13):** captura cu
+    cod 0 si ultima linie `CAPTURA_GATA <lungime>`, `stare` cu cod 0, nicio linie `  necunoscut`, exact o linie `paza ciorna:` si aceea
+    = `paza ciorna: OK (trimite ar continua)`. O eroare, o iesire goala sau `paza ciorna: REFUZ ...` = STOP inainte de 5g2-b.
+  - **5g2-b, trimiterea:** (1) brief-ul LUNG, (2) brief-ul MEDIU. Aceleasi verificari ca la 5g: cod 0, nicio linie `GEM_EROARE`, ultima
+    linie `GEM_CHAT_URL ...`, raspunsul contine `PAW_GEM_TEST_OK`. Pe ecran: chat nou in ACELASI tab, brief-ul intreg in mesajul trimis,
+    niciun fisier.
+  - **Ce dovedeste si ce NU.** Trimiterile dovedesc doar ca scenariile lor (lung, mediu) trec; ele NU inregistreaza ce clase a avut
+    caseta si NU dovedesc multimile pe care nu le-au intalnit. Capturile arata clasele la trei lungimi; o multime din `CLASE_DIV_DROP`
+    care nu apare in nicio captura (de ex. una din cele doua intermediare) ramane DEDUCTIE, nedovedita - nu e o eroare si nu e STOP.
+    O multime aparuta intr-o captura care NU e in lista, sau `stare` cu `necunoscut ...` la o lungime, = refuz fals la acea lungime:
+    STOP inainte de 5g2-b, fara marker, capturile + `stare` merg la chat (regula exacta intr-un commit nou, cu review).
+
+```powershell
+$GemBriefLung = "C:\Users\Public\paw-data\brief\gem-canal-lung-$GemId.md"
+$GemBriefMediu = "C:\Users\Public\paw-data\brief\gem-canal-mediu-$GemId.md"
+$umplutura = @(1..160 | ForEach-Object { 'Linia {0:D3} a unui brief lung de proba, doar text simplu; nu raspunde la ea, citeste mai departe.' -f $_ })
+(@('Test de canal cu brief lung. Ignora liniile numerotate de mai jos.') + $umplutura + @('Raspunde exact: PAW_GEM_TEST_OK')) |
+    Set-Content -LiteralPath $GemBriefLung -Encoding ASCII
+@('Test de canal cu brief mediu.', 'Linia 1 de proba.', 'Linia 2 de proba.', 'Linia 3 de proba.', 'Raspunde exact: PAW_GEM_TEST_OK') |
+    Set-Content -LiteralPath $GemBriefMediu -Encoding ASCII
+if ((Get-Item -LiteralPath $GemBriefLung).Length -lt 10000) { throw 'Brief-ul lung are sub 10 KB' }
+# 5g2-a: captura, doar citire (operatorul lipeste si goleste ciorna de mana; scriptul nu atinge pagina)
+if ((Get-FileHash -LiteralPath "$Source\diag\captura_caseta.py").Hash -ine $DiagHash) { throw 'diag\captura_caseta.py nu e cel revizuit' }
+$texte = [ordered]@{ scurt = 'Test de captura, o linie, NU se trimite.'; mediu = (Get-Content -LiteralPath $GemBriefMediu -Raw); lung = (Get-Content -LiteralPath $GemBriefLung -Raw) }
+foreach ($k in $texte.Keys) {
+    Set-Clipboard -Value $texte[$k]
+    Read-Host "5g2-a ${k}: lipeste (Ctrl+V) in ciorna Gemini, FARA Enter, apoi Enter aici"
+    $ErrorActionPreference = 'Continue'
+    $cap = @(& $Python "$Source\diag\captura_caseta.py" $k)
+    $codCap = $LASTEXITCODE
+    $st = @(& $Python "$Bin\gemini_pw.py" stare)
+    $codSt = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    $cap | Set-Content -LiteralPath "C:\Users\Public\paw-data\out\captura_caseta_${k}_$GemId.json" -Encoding ASCII
+    $st | Set-Content -LiteralPath "C:\Users\Public\paw-data\out\stare_caseta_${k}_$GemId.txt" -Encoding ASCII
+    $st | Where-Object { $_ -match '^(necunoscute in zona|  necunoscut|    sursa|paza ciorna|GEM_EROARE)' }
+    Read-Host "5g2-a ${k}: goleste ciorna de mana (Ctrl+A, Delete), apoi Enter aici"
+    # r13: succes EXPLICIT, nu doar lipsa erorilor: cod 0 la ambele, captura terminata, `stare` cu EXACT o linie `paza ciorna:` si
+    # aceea = linia de succes, scrisa exact (o iesire goala, o eroare sau `paza ciorna: REFUZ ...` = STOP)
+    if ($codCap -ne 0 -or $cap.Count -eq 0 -or $cap[-1] -cne "CAPTURA_GATA $k") { throw "5g2-a ${k}: captura nu s-a terminat (cod $codCap, vezi fisierul)" }
+    if ($codSt -ne 0) { throw "5g2-a ${k}: stare a iesit cu codul $codSt - STOP, fisierele la chat" }
+    if (@($st | Where-Object { $_ -match '^  necunoscut ' }).Count) { throw "5g2-a ${k}: necunoscute in caseta - STOP, capturile la chat" }
+    if (@($st | Where-Object { $_ -clike 'paza ciorna:*' }).Count -ne 1) { throw "5g2-a ${k}: stare nu are exact o linie 'paza ciorna:' - STOP" }
+    if (@($st | Where-Object { $_ -ceq 'paza ciorna: OK (trimite ar continua)' }).Count -ne 1) { throw "5g2-a ${k}: lipseste linia 'paza ciorna: OK (trimite ar continua)' - STOP, capturile la chat" }
+    "5g2-a ${k}: OK"
+}
+Set-Clipboard -Value ' '
+# 5g2-b: trimiterea
+foreach ($b in $GemBriefLung, $GemBriefMediu) {
+    $ErrorActionPreference = 'Continue'
+    $out = @(& $Python "$Bin\gemini_pw.py" trimite $b 180)
+    $cod = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    $out
+    if ($cod -ne 0) { throw "5g2 ${b}: cod de iesire $cod" }
+    if (@($out | Where-Object { $_ -match '^GEM_EROARE' }).Count) { throw "5g2 ${b}: GEM_EROARE" }
+    if ($out.Count -eq 0 -or $out[-1] -notmatch '^GEM_CHAT_URL https://gemini\.google\.com/app/[0-9a-fA-F]+$') { throw "5g2 ${b}: lipseste linia finala GEM_CHAT_URL" }
+    if (@($out | Where-Object { $_ -match 'PAW_GEM_TEST_OK' }).Count -eq 0) { throw "5g2 ${b}: raspunsul nu contine PAW_GEM_TEST_OK" }
+    "5g2 ${b}: OK"
+}
+```
+
+Daca 5g2-b da `GEM_EROARE ciorna_necunoscuta inainte_de_enter: ...`: caseta extinsa are o forma pe care r12 nu o cunoaste (de ex. o stare
+intermediara cu alte clase, sau o iconita cu text in butonul "Ecran complet" = `text_in_control:...`); nu a plecat nimic. STOP, fara
+marker. Pentru chat: linia `GEM_EROARE` intreaga + fisierele `captura_caseta_*` / `stare_caseta_*` de la 5g2-a; daca lungimea
+respectiva nu e acolo, acelasi brief lipit de mana in ciorna (NU trimis), `stare` + `captura_caseta.py`, apoi golesti ciorna.
+
+Numai dupa ce ai VAZUT rezultatele 5a-5g2, markerul - **ne-elevat (N)**, nu din consola admin:
 
 ```powershell
 $GemHash = (Get-FileHash -LiteralPath "$Bin\gemini_pw.py" -Algorithm SHA256).Hash
 if ($GemHash -ine $GemHashNou) { throw 'gemini_pw.py instalat nu e cel revizuit' }
-Set-Content -LiteralPath $GemMarker -Value ('CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v464c') -Encoding ASCII
+Set-Content -LiteralPath $GemMarker -Value ('CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v464d') -Encoding ASCII
 ```
 
 ## 6. Smoke prin lansator (N)
@@ -533,7 +1128,7 @@ Dupa smoke: sesiunea de chat actualizeaza `registru_automatizari`, randul `run_p
 
 ## Rollback la versiunea dinainte (A, consola noua, dupa pasul 1; pasul 2 NU se ruleaza)
 
-Readuce in `bin` copiile de siguranta cu sufixul `$SufVechi` din `$Audit` (la v4.6.4c: v4.6.4b, `5B0CCD48...`, din `operator-v464c`).
+Readuce in `bin` copiile de siguranta cu sufixul `$SufVechi` din `$Audit` (la v4.6.4d: v4.6.4c, `09E78891...`, din `operator-v464d`).
 
 ```powershell
 . "$Bin\cdx_security.ps1"
@@ -561,8 +1156,9 @@ Apoi markerul, **ne-elevat (N)**, dupa pasul 1 (copia facuta la pasul 2, daca ex
 if (Test-Path -LiteralPath ($GemMarker + $SufVechi)) { Copy-Item -LiteralPath ($GemMarker + $SufVechi) -Destination $GemMarker -Force }
 ```
 
-Dupa rollback `gem` ramane refuzat (nici v4.6.3, nici v4.6.4, nici v4.6.4b nu au marker valid: testele lor de canal au picat);
-jak / cop / cdx neschimbate. Pasul 4 se poate rula ca verificare. Folderul de audit e redenumit,
+Dupa rollback la v4.6.4c, markerul copiat la pasul 2 (`gem_canal_validat.v464c`, legat de `09E78891...`) e pus la loc, deci `gem` merge
+din nou cu v4.6.4c (cu refuzul fals la brief-urile lungi, sigur). Rollback mai departe (v4.6.4b sau mai vechi) = `gem` refuzat: nici
+v4.6.3, nici v4.6.4, nici v4.6.4b nu au marker valid (testele lor de canal au picat). jak / cop / cdx neschimbate. Pasul 4 se poate rula ca verificare. Folderul de audit e redenumit,
 deci pasul 3 se poate relua de la capat dupa ce cauza e lamurita.
 
 ## Pachetele neinstalate v4.6.2 (mil) si v4.7 (cxw)
