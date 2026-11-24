@@ -9189,7 +9189,7 @@ function QrReconciliereTab({ profile, showToast }) {
     try {
       const { data, error } = await supabase
         .from('logistica_alimentari')
-        .select('id, data_alimentare, cantitate_litri, card_combustibil, pret_total, pret_per_litru, statie_combustibil, km_la_alimentare')
+        .select('id, data_alimentare, cantitate_litri, card_combustibil, pret_total, pret_per_litru, statie_combustibil, km_la_alimentare, site_id, sites(name)')
         .eq('qr_status', 'real_fara_qr')
         .order('data_alimentare', { ascending: false })
       if (error) throw error
@@ -9251,14 +9251,25 @@ function QrReconciliereTab({ profile, showToast }) {
     // aceeași verificare anti-typo ca la orice alimentare (confirmare explicită, nu blocare).
     if (!(await confirmaCitiriAlimentari(supabase, [{ active_id: Number(alocModal.activeId), data_alimentare: alocModal.alim.data_alimentare, km_la_alimentare: alocModal.alim.km_la_alimentare }]))) { setProcessingId(null); return }
     try {
-      const upd = {
-        active_id: alocModal.activeId,
-        qr_status: 'matched',
-        sursa_alocare_santier: alocModal.siteId ? 'manual' : null,
-      }
-      if (alocModal.siteId) upd.site_id = alocModal.siteId
-      const { error } = await supabase.from('logistica_alimentari').update(upd).eq('id', alocModal.alim.id)
+      // TKT-2026-0383/0387: șantierul deja pus (ex. din Bulk) vine precompletat; se scrie doar dacă s-a schimbat,
+      // cu CAS pe valoarea citită (și pe qr_status), ca să nu suprascrie o alocare făcută între timp.
+      const siteVechi = alocModal.alim.site_id || null
+      const siteNou = alocModal.siteId || null
+      const upd = { active_id: alocModal.activeId, qr_status: 'matched' }
+      if (siteNou !== siteVechi) {
+        upd.site_id = siteNou
+        upd.sursa_alocare_santier = siteNou ? 'manual' : null
+      } else if (!siteVechi) upd.sursa_alocare_santier = null
+      let q = supabase.from('logistica_alimentari').update(upd).eq('id', alocModal.alim.id).eq('qr_status', 'real_fara_qr')
+      q = siteVechi ? q.eq('site_id', siteVechi) : q.is('site_id', null)
+      const { data: scrise, error } = await q.select('id')
       if (error) throw error
+      if (!scrise || scrise.length === 0) {
+        showToast?.('Alimentarea a fost modificată între timp (alocată sau alt șantier) — lista s-a reîncărcat', 'warning')
+        setAlocModal(null)
+        loadFaraQr()
+        return
+      }
       showToast?.('✓ Alimentare alocată', 'success')
       setFaraQr(prev => prev.filter(f => f.id !== alocModal.alim.id))
       setAlocModal(null)
@@ -9514,6 +9525,7 @@ function QrReconciliereTab({ profile, showToast }) {
                 <tr style={{background: G.bg}}>
                   <th style={thStyleAlim}>Dată</th>
                   <th style={thStyleAlim}>Card</th>
+                  <th style={thStyleAlim}>Șantier</th>
                   <th style={{...thStyleAlim, textAlign: 'right'}}>Litri</th>
                   <th style={{...thStyleAlim, textAlign: 'right'}}>Preț</th>
                   <th style={{...thStyleAlim, textAlign: 'right'}}>Acțiuni</th>
@@ -9528,10 +9540,13 @@ function QrReconciliereTab({ profile, showToast }) {
                         {f.card_combustibil || '—'}
                       </span>
                     </td>
+                    <td style={{...tdStyleAlim, fontSize: 12, color: f.site_id ? G.green : G.muted}}>
+                      {f.site_id ? `🏗️ ${f.sites?.name || `#${f.site_id}`}` : '—'}
+                    </td>
                     <td style={{...tdStyleAlim, textAlign: 'right', fontWeight: 600}}>{Number(f.cantitate_litri).toFixed(2)} L</td>
                     <td style={{...tdStyleAlim, textAlign: 'right'}}>{f.pret_total ? `${Number(f.pret_total).toFixed(2)} lei` : '—'}</td>
                     <td style={{...tdStyleAlim, textAlign: 'right'}}>
-                      <button onClick={() => setAlocModal({ alim: f, activeId: null, siteId: null })} style={{
+                      <button onClick={() => setAlocModal({ alim: f, activeId: null, siteId: f.site_id || null })} style={{
                         padding: '5px 12px', background: '#2EA043', color: '#fff', border: 'none',
                         borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
                       }}>🚛 Alocă vehicul</button>
@@ -9706,10 +9721,18 @@ function QrReconciliereTab({ profile, showToast }) {
               style={{width: '100%', padding: '10px 12px', fontSize: 14, background: G.bg, color: G.text, border: `1px solid ${G.border}`, borderRadius: 8, marginBottom: 20, boxSizing: 'border-box'}}
             >
               <option value="">— Fără șantier —</option>
+              {alocModal.alim.site_id && !siteList.some(s => s.id === alocModal.alim.site_id) && (
+                <option value={alocModal.alim.site_id}>{alocModal.alim.sites?.name || `#${alocModal.alim.site_id}`} (actual)</option>
+              )}
               {siteList.map(s => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
+            {alocModal.alim.site_id && (
+              <div style={{fontSize: 11, color: G.muted, marginTop: -14, marginBottom: 16}}>
+                Șantierul pus deja pe alimentare vine precompletat; îl poți schimba.
+              </div>
+            )}
             
             <div style={{display: 'flex', gap: 10, justifyContent: 'flex-end'}}>
               <button onClick={() => setAlocModal(null)} disabled={processingId === alocModal.alim.id} style={{

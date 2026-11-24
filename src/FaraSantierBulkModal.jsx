@@ -15,6 +15,9 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
+import { FARA_CARD, carduriDisponibile, filtreazaAlimentari, selectieMasa, selectiiDeSalvat } from './alimentariFaraSantierFiltru.js'
+
+const LIMITA_INCARCARE = 500
 
 // Theme — paletă G identică cu Logistica.jsx
 const G = {
@@ -49,33 +52,37 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
   const [filterVehicul, setFilterVehicul] = useState('')    // text search
   const [filterStatie, setFilterStatie] = useState('toate') // 'toate' | nume stație
   const [filterWhatsApp, setFilterWhatsApp] = useState('toate') // 'toate' | 'cu_wa' | 'fara_wa'
-  
+  const [filterCard, setFilterCard] = useState('toate')       // 'toate' | FARA_CARD | card (TKT-2026-0383/0387)
+  const [totalServer, setTotalServer] = useState(null)        // câte sunt în BD (count), ca să se vadă trunchierea
+
   // Mass action
   const [massSantierId, setMassSantierId] = useState('')
   
   // Fetch alimentări fără șantier
   const loadAlim = useCallback(async () => {
     setLoading(true)
-    const { data, error } = await supabase
+    const { data, error, count } = await supabase
       .from('logistica_alimentari')
       .select(`
         id, data_alimentare, cantitate_litri, pret_total, pret_per_litru,
-        statie_combustibil, ore_la_alimentare, km_la_alimentare,
+        statie_combustibil, ore_la_alimentare, km_la_alimentare, card_combustibil,
         whatsapp_caption, whatsapp_autor, whatsapp_msg_dt,
         sursa_alocare_santier, observatii,
         logistica_active(id, cod_intern, nr_inmatriculare, marca, model)
-      `)
+      `, { count: 'exact' })
       .is('site_id', null)
       .order('data_alimentare', { ascending: false })
       .order('id', { ascending: false })
-      .limit(500)
+      .limit(LIMITA_INCARCARE)
     setLoading(false)
     if (error) {
       showToast('Eroare încărcare: ' + error.message, 'error')
       setAlimentari([])
+      setTotalServer(null)
       return
     }
     setAlimentari(data || [])
+    setTotalServer(Number.isFinite(count) ? count : null)
   }, [showToast])
   
   useEffect(() => { loadAlim() }, [loadAlim])
@@ -94,35 +101,17 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
     alimentari.forEach(a => { if (a.statie_combustibil) set.add(a.statie_combustibil) })
     return Array.from(set).sort()
   }, [alimentari])
-  
-  // Alimentări filtrate
-  const filtered = useMemo(() => {
-    let res = alimentari
-    if (filterLuna !== 'toate') res = res.filter(a => a.data_alimentare?.startsWith(filterLuna))
-    if (filterStatie !== 'toate') res = res.filter(a => a.statie_combustibil === filterStatie)
-    if (filterWhatsApp === 'cu_wa') res = res.filter(a => a.whatsapp_caption)
-    if (filterWhatsApp === 'fara_wa') res = res.filter(a => !a.whatsapp_caption)
-    if (filterVehicul.trim()) {
-      const q = filterVehicul.toLowerCase()
-      res = res.filter(a => {
-        const av = a.logistica_active || {}
-        return (
-          (av.cod_intern || '').toLowerCase().includes(q) ||
-          (av.nr_inmatriculare || '').toLowerCase().includes(q) ||
-          (av.marca || '').toLowerCase().includes(q) ||
-          (av.model || '').toLowerCase().includes(q)
-        )
-      })
-    }
-    return res
-  }, [alimentari, filterLuna, filterVehicul, filterStatie, filterWhatsApp])
-  
-  // Selecții active pentru save
-  const validSelections = useMemo(() => {
-    return Object.entries(selections)
-      .filter(([id, siteId]) => siteId && filtered.some(a => a.id === Number(id)))
-      .map(([id, siteId]) => ({ id: Number(id), site_id: Number(siteId) }))
-  }, [selections, filtered])
+
+  const carduri = useMemo(() => carduriDisponibile(alimentari), [alimentari])
+
+  // Alimentări filtrate (logica în alimentariFaraSantierFiltru.js, cu teste)
+  const filtered = useMemo(() => filtreazaAlimentari(alimentari, {
+    luna: filterLuna, statie: filterStatie, whatsapp: filterWhatsApp, card: filterCard, vehicul: filterVehicul,
+  }), [alimentari, filterLuna, filterVehicul, filterStatie, filterWhatsApp, filterCard])
+
+  // Selecții active pentru save: doar rândurile vizibile cu filtrele curente
+  const validSelections = useMemo(() => selectiiDeSalvat(selections, filtered), [selections, filtered])
+  const trunchiat = totalServer !== null && totalServer > alimentari.length
   
   // Stats
   const totalLitri = useMemo(() => filtered.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0), [filtered])
@@ -140,8 +129,7 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
       showToast('Selectează un șantier mai întâi', 'warn')
       return
     }
-    const updates = {}
-    filtered.forEach(a => { updates[a.id] = massSantierId })
+    const updates = selectieMasa(filtered, massSantierId)
     setSelections(prev => ({ ...prev, ...updates }))
     showToast(`✅ ${filtered.length} alocări preselectate. Verifică și apoi salvează.`, 'success')
   }
@@ -163,6 +151,7 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
     setSaving(true)
     const now = new Date().toISOString()
     let success = 0
+    let conflicte = 0   // rânduri care primiseră deja șantier între timp (CAS pe site_id IS NULL)
     const errors = []
     
     // Batch în grupuri de 30 ca să nu suprasolicite Supabase
@@ -179,22 +168,29 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
             aloc_santier_la: now,
           })
           .eq('id', id)
+          .is('site_id', null)
+          .select('id')
       ))
       results.forEach((r, idx) => {
         if (r.error) errors.push({ id: slice[idx].id, msg: r.error.message })
+        else if (!r.data || r.data.length === 0) conflicte++
         else success++
       })
     }
-    
+
     setSavedCount(success)
     setSaving(false)
-    
-    if (errors.length === 0) {
+
+    if (conflicte > 0 && errors.length === 0) {
+      showToast(`⚠️ ${success} salvate, ${conflicte} aveau deja șantier (alocate între timp) — lista s-a reîncărcat`, 'warn')
+      loadAlim()
+      setSelections({})
+    } else if (errors.length === 0) {
       showToast(`✅ ${success} alimentări alocate cu succes!`, 'success')
       // Auto-close după success complet (după 1 sec ca să se vadă toast-ul)
       setTimeout(() => { if (onSaved) onSaved() }, 1000)
     } else {
-      showToast(`⚠️ ${success} salvate, ${errors.length} erori (vezi console)`, 'warn')
+      showToast(`⚠️ ${success} salvate, ${errors.length} erori${conflicte ? `, ${conflicte} alocate între timp` : ''} (vezi console)`, 'warn')
       console.error('Erori save:', errors)
       // Refresh date ca să vadă ce s-a salvat
       loadAlim()
@@ -233,6 +229,11 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
             <div style={{fontSize:12, color:G.muted, marginTop:2}}>
               {loading ? 'Se încarcă...' : `${alimentari.length} alimentări fără șantier · ${filtered.length} afișate cu filtrele curente`}
             </div>
+            {!loading && trunchiat && (
+              <div style={{fontSize:12, color:G.yellow, marginTop:4, fontWeight:700}}>
+                ⚠️ În total sunt {totalServer} alimentări fără șantier; aici apar doar cele mai noi {alimentari.length}. Filtrele și „Aplică toate” văd doar aceste rânduri — după salvare, lista se reîncarcă cu următoarele.
+              </div>
+            )}
           </div>
           <button onClick={onClose} style={{
             background:'transparent', border:'none', color:G.muted,
@@ -275,7 +276,21 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
               <option value="toate">Toate stațiile</option>
               {statiiDisponibile.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            
+
+            {/* Filtru card combustibil (TKT-2026-0383/0387) */}
+            <select
+              value={filterCard}
+              onChange={e => setFilterCard(e.target.value)}
+              style={{
+                background:G.surface, border:`1px solid ${filterCard !== 'toate' ? G.purple : G.border2}`, color:G.text,
+                borderRadius:6, padding:'6px 10px', fontSize:12, minWidth:150
+              }}
+            >
+              <option value="toate">Toate cardurile</option>
+              {carduri.carduri.map(c => <option key={c.card} value={c.card}>💳 {c.card} ({c.nr})</option>)}
+              {carduri.faraCard > 0 && <option value={FARA_CARD}>Fără card ({carduri.faraCard})</option>}
+            </select>
+
             {/* Filtru WhatsApp */}
             <select 
               value={filterWhatsApp} 
@@ -386,6 +401,7 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
                 <tr style={{borderBottom:`2px solid ${G.border2}`}}>
                   <th style={thStyle}>Data</th>
                   <th style={thStyle}>Vehicul</th>
+                  <th style={thStyle}>Card</th>
                   <th style={{...thStyle, textAlign:'right'}}>Litri</th>
                   <th style={thStyle}>Stație</th>
                   <th style={{...thStyle, textAlign:'right'}}>Cost</th>
@@ -415,6 +431,13 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
                           {av.cod_intern && <span style={{color:G.logistica, fontFamily:'monospace'}}>{av.cod_intern}</span>}
                           {av.nr_inmatriculare && <span style={{color:G.blue, fontFamily:'monospace', marginLeft:6}}>{av.nr_inmatriculare}</span>}
                         </div>
+                      </td>
+                      <td style={{padding:'8px 10px', whiteSpace:'nowrap'}}>
+                        {a.card_combustibil?.trim() ? (
+                          <span style={{padding:'2px 7px', borderRadius:6, background:G.purple + '22', color:G.purple, fontWeight:700, fontSize:11, fontFamily:'monospace'}}>
+                            {a.card_combustibil.trim()}
+                          </span>
+                        ) : <span style={{color:G.muted}}>—</span>}
                       </td>
                       <td style={{padding:'8px 10px', textAlign:'right', color:G.orange, fontWeight:700, fontVariantNumeric:'tabular-nums'}}>
                         {Number(a.cantitate_litri).toFixed(1)} L
