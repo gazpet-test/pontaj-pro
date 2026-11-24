@@ -1,6 +1,6 @@
-# Achiziții: retur la furnizor pe reperele unei comenzi (TKT-2026-0347) — specificație v5
+# Achiziții: retur la furnizor pe reperele unei comenzi (TKT-2026-0347) — specificație v6
 
-Data: 24.11.2026 · Stare: v5 după a patra rundă de review NO-GO (24.11), de aprobat · Varianta aleasă de owner: **A** (retur pe linia de comandă, cu ieșire automată din stoc). Până la livrare se aplică **C**: ieșire manuală din Magazie (`ajustare_minus`) cu motivul „retur furnizor, comanda …”.
+Data: 24.11.2026 · Stare: v6 după a cincea rundă de review NO-GO (24.11), de aprobat · Varianta aleasă de owner: **A** (retur pe linia de comandă, cu ieșire automată din stoc). Până la livrare se aplică **C**: ieșire manuală din Magazie (`ajustare_minus`) cu motivul „retur furnizor, comanda …”.
 
 ## 1. De ce
 
@@ -115,7 +115,14 @@ Ordinea fixă a lock-urilor: linia comenzii (`FOR UPDATE`) → cheia de stoc →
   - **Atribuirea automată** se face doar unde e fără echivoc: în comandă există o singură linie cu acea denumire normalizată și UM. Atunci `intrata_stoc` = suma mișcărilor vechi de intrare pentru (comandă, denumire, UM), cu condiția să fie ≤ `primita` efectivă.
   - **Cazurile ambigue** (mai multe linii cu aceeași denumire și UM, sau sumă peste `primita`) se listează pentru reconcilierea manuală, făcută de un om, prin RPC-ul `fn_cf_reconciliaza_linie(cheie, linie, intrata_stoc, motiv)`, cu drept de owner.
   - Atribuirea automată e **DML pe date reale**: o aplic după preview și „da”, iar proba pe clonă arată numărul de linii atribuite și pe cele ambigue.
-  - Garda returului: returul și anularea sunt refuzate pe liniile cu `intrare_reconciliata = false` („recepție veche nereconciliată”). Garda **nu** compară intrările cu contorul net, deci un retur nu blochează retururile următoare.
+  - **Garda de reconciliere, pe TOATE operațiile cantitative ale liniei.** Pe o linie cu `intrare_reconciliata = false` sunt refuzate („recepție veche nereconciliată: reconciliați întâi”):
+    - returul și anularea lui;
+    - predarea în stoc (`fn_cf_intra_stoc`, inclusiv transportul direct);
+    - corectura negativă a recepției.
+    - Pe o linie nereconciliată, un contor `intrata_stoc` = 0 nu e o limită sigură: marfa poate fi deja în stoc prin mișcări vechi.
+  - Singura operație permisă pe o astfel de linie e o recepție pozitivă (`primita += N`), care nu atinge stocul.
+  - Interfața nu oferă butoanele „Predare în stoc” și „Retur” pentru aceste linii. În locul lor afișează „⚠️ de reconciliat”, iar pentru owner butonul de reconciliere.
+  - Garda **nu** compară intrările cu contorul net, deci un retur nu blochează retururile următoare.
 
 ### 3.3 RPC-uri (`SECURITY DEFINER`, `search_path` fix, dreptul reverificat DUPĂ lock-uri — L01)
 
@@ -190,7 +197,7 @@ Fiecare probă are și un mutant care trebuie să pice: se scoate lock-ul, rever
 4. **Idempotență:** aceeași cheie repetată nu are efect dublu, iar o cheie cu alt payload e refuzată.
 5. **Anulare:** o singură dată; refuzată după înlocuire; pune la loc exact `din_stoc`.
 6. **Înlocuire:** parțială, multiplă, peste mai multe retururi, în ordinea vechimii; închiderea fără înlocuire; corectura negativă după o înlocuire redeschide exact returul atins.
-11. **Ștergeri și moștenire:** `deleteStoc` concurent cu un retur se serializează; ștergerea mișcărilor de achiziție / retur e refuzată; o linie ambiguă (două linii cu aceeași denumire și UM) rămâne nereconciliată și refuză returul până la reconcilierea manuală; un retur după un alt retur pe o linie reconciliată merge.
+11. **Ștergeri și moștenire:** pe o linie ambiguă nereconciliată (30 + 70, mișcări 100, contori 0), predarea în stoc, transportul direct și corectura negativă sunt refuzate, iar stocul rămâne 100, nu 200; după reconcilierea manuală, toate merg. Apoi: `deleteStoc` concurent cu un retur se serializează; ștergerea mișcărilor de achiziție / retur e refuzată; o linie ambiguă (două linii cu aceeași denumire și UM) rămâne nereconciliată și refuză returul până la reconcilierea manuală; un retur după un alt retur pe o linie reconciliată merge.
 12. **Închideri:** retur 40, înlocuire 10, renunțare la 30, apoi corectura recepției de 10 la 0: „de înlocuit” = 10, nu 40.
 10. **Căi vechi:** un client vechi care scrie direct `cantitate_primita` e refuzat; recepția prin transport direct actualizează `intrata_stoc`; un retur pe o comandă emisă fără recepție e refuzat; un retur doar din marfă neintrată nu scrie mișcare.
 7. **Cererile interne:** statusul cererii legate e identic înainte și după fiecare operație.
