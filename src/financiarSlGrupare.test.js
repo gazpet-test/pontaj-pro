@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeazaNrFactura, grupeazaSlFaraFactura, sorteazaCronologic, decidePrecompletare } from './financiarSlGrupare.js'
+import { normalizeazaNrFactura, grupeazaSlFaraFactura, sorteazaCronologic, decidePrecompletare, citesteDateGenerareSL, citesteValoriSL, citesteContractBenef } from './financiarSlGrupare.js'
 
 describe('normalizeazaNrFactura', () => {
   it('formele scrise de mână ajung la SERIE-NR', () => {
@@ -123,5 +123,94 @@ describe('decidePrecompletare', () => {
   it('grup fără număr valid = nimic precompletat', () => {
     expect(decidePrecompletare(null, SERII, { stare: 'liber' })).toMatchObject({ serie: null, nr: null })
     expect(decidePrecompletare({ serie: 'GAZ', nr: 0 }, SERII, { stare: 'liber' })).toMatchObject({ serie: null, nr: null })
+  })
+})
+
+// Review #1188 P1: citirile pentru generarea liniilor. Client Supabase fals: fiecare cerere e (tabel, filtre, mod)
+// și răspunsul vine din `raspunde` (poate fi { data, error }, o excepție aruncată sau o promisiune respinsă).
+function clientFals(raspunde) {
+  const cereri = []
+  const client = {
+    from: tabel => {
+      const c = { tabel, filtre: {}, unul: false }
+      const q = {
+        select: () => q, order: () => q, limit: () => q,
+        eq: (k, v) => { c.filtre[k] = v; return q },
+        maybeSingle: () => { c.unul = true; return q },
+        single: () => { c.unul = true; c.single = true; return q },
+        then: (res, rej) => { cereri.push(c); return Promise.resolve().then(() => raspunde(c)).then(res, rej) },
+      }
+      return q
+    },
+  }
+  return { client, cereri }
+}
+const SL_RAND = { 11: { valoare_baza_lei: '1000.50', valoare_ajustare_lei: '0', valoare_ajustata_lei: '1000.50', coeficient_ajustare: null },
+  12: { valoare_baza_lei: '2000', valoare_ajustare_lei: '150.25', valoare_ajustata_lei: '2150.25', coeficient_ajustare: '1.0751' } }
+const serverBun = (peste = {}) => c => {
+  const k = `${c.tabel}:${c.filtre.id ?? c.filtre.sl_id}`
+  if (Object.prototype.hasOwnProperty.call(peste, k)) { const r = peste[k]; if (typeof r === 'function') return r(c); return r }
+  if (c.tabel === 'executie_proiecte') return { data: { contract_id: 3, nr_contract: 'NR-P' }, error: null }
+  if (c.tabel === 'contracte_terti') return { data: { numar_contract: '30', data_semnare: null, denumire: 'Lot 1', termen_plata_zile: 45, beneficiar_id: 5 }, error: null }
+  if (c.tabel === 'beneficiari') return { data: { id: 5, nume: 'BENEFICIAR SA', retine_gbe_pct: 0, retine_car_pct: 0 }, error: null }
+  if (c.tabel === 'executie_situatii_plata') return { data: SL_RAND[c.filtre.id] ?? null, error: null }
+  return { data: [], error: null }   // ajustări + linii pe obiect
+}
+const SL2 = [{ id: 11, nr_situatie: '3' }, { id: 12, nr_situatie: '4' }]
+
+describe('citesteDateGenerareSL (eroare ≠ zero)', () => {
+  it('toate citirile bune: valorile vin exact din BD, contractul o singură dată, ordinea SL păstrată', async () => {
+    const { client, cereri } = clientFals(serverBun())
+    const r = await citesteDateGenerareSL(client, 7, SL2)
+    expect(r.contractInfo).toMatchObject({ contractRef: '30', contractDenumire: 'Lot 1', termenPlata: 45, benef: { id: 5, nume: 'BENEFICIAR SA' } })
+    expect(r.perSL.map(x => x.sl.id)).toEqual([11, 12])
+    expect(r.perSL[0].slVals).toEqual({ valBaza: 1000.5, valAjust: 0, valTotal: 1000.5, coefAjust: 0, ajustariRetro: [] })
+    expect(r.perSL[1].slVals).toEqual({ valBaza: 2000, valAjust: 150.25, valTotal: 2150.25, coefAjust: 1.0751, ajustariRetro: [] })
+    expect(cereri.filter(c => c.tabel === 'contracte_terti')).toHaveLength(1)
+    // fără .single(): un rând lipsă nu e confundat cu o eroare de rețea (și invers)
+    expect(cereri.some(c => c.single)).toBe(false)
+  })
+
+  const cazuriEroare = [
+    ['valorile celei de-a doua SL întorc error', { 'executie_situatii_plata:12': { data: null, error: { message: 'canceling statement due to statement timeout' } } }, /valorile pentru SL 4: canceling statement/],
+    ['valorile celei de-a doua SL aruncă excepție', { 'executie_situatii_plata:12': () => { throw new TypeError('Failed to fetch') } }, /valorile pentru SL 4: Failed to fetch/],
+    ['a doua SL nu mai există (rând lipsă)', { 'executie_situatii_plata:12': { data: null, error: null } }, /Nu am găsit SL 4/],
+    ['ajustările retroactive ale celei de-a doua SL întorc error', { 'executie_sl_ajustari:12': { data: null, error: { message: 'permission denied' } } }, /ajustările retroactive pentru SL 4: permission denied/],
+    ['liniile pe obiect ale celei de-a doua SL întorc error', { 'executie_situatii_plata_linii:12': { data: null, error: { code: '57014' } } }, /liniile pe obiect pentru SL 4: 57014/],
+    ['liniile pe obiect ating plafonul de 1000 (posibil trunchiate)', { 'executie_situatii_plata_linii:12': { data: Array.from({ length: 1000 }, (_, i) => ({ id: i })), error: null } }, /Prea multe rânduri la liniile pe obiect pentru SL 4/],
+    ['valoare nenumerică pe SL', { 'executie_situatii_plata:12': { data: { valoare_baza_lei: 'abc' }, error: null } }, /Valoare nenumerică la valoarea de bază pentru SL 4/],
+    ['contractul proiectului întoarce error', { 'contracte_terti:3': { data: null, error: { message: 'JWT expired' } } }, /contractul proiectului: JWT expired/],
+    ['beneficiarul întoarce error', { 'beneficiari:5': { data: null, error: { message: 'boom' } } }, /beneficiarul contractului: boom/],
+    ['proiectul întoarce error', { 'executie_proiecte:7': { data: null, error: { message: 'x' } } }, /proiectul \(contractul legat\): x/],
+  ]
+  for (const [nume, peste, mesaj] of cazuriEroare) {
+    it(`oprește generarea: ${nume}`, async () => {
+      const { client } = clientFals(serverBun(peste))
+      const p = citesteDateGenerareSL(client, 7, SL2)
+      await expect(p).rejects.toMatchObject({ name: 'EroareCitireSL' })
+      await expect(citesteDateGenerareSL(clientFals(serverBun(peste)).client, 7, SL2)).rejects.toThrow(mesaj)
+    })
+  }
+
+  it('eroarea poartă SL-ul în cauză', async () => {
+    const { client } = clientFals(serverBun({ 'executie_situatii_plata:12': { data: null, error: { message: 'x' } } }))
+    const e = await citesteDateGenerareSL(client, 7, SL2).catch(x => x)
+    expect(e.sl).toEqual(SL2[1])
+  })
+
+  it('fără contract / fără beneficiar / proiect fără rând = „fără contract”, NU eroare (ca înainte)', async () => {
+    const fara = await citesteContractBenef(clientFals(serverBun({ 'executie_proiecte:7': { data: { contract_id: null, nr_contract: 'NR-P' }, error: null } })).client, 7)
+    expect(fara).toEqual({ contractRef: 'NR-P', contractDenumire: '', benef: null, termenPlata: null, contactContract: null })
+    const lipsa = await citesteContractBenef(clientFals(serverBun({ 'contracte_terti:3': { data: null, error: null } })).client, 7)
+    expect(lipsa.benef).toBeNull()
+    expect(lipsa.contractRef).toBe('NR-P')
+    const faraProiect = await citesteContractBenef(clientFals(() => { throw new Error('nu trebuia citit') }).client, null)
+    expect(faraProiect.benef).toBeNull()
+  })
+
+  it('ajustările retroactive se întorc în ordinea din BD', async () => {
+    const aj = [{ sl_ajustata_nr: '1', valoare_ajustare_lei: '10', coeficient: '1.01' }, { sl_ajustata_nr: '2', valoare_ajustare_lei: '-5', coeficient: null }]
+    const v = await citesteValoriSL(clientFals(serverBun({ 'executie_sl_ajustari:11': { data: aj, error: null } })).client, SL2[0])
+    expect(v.ajustariRetro).toEqual(aj)
   })
 })

@@ -18,7 +18,7 @@ import { GbeTabel } from './GbeEvidenta.jsx'
 import GarantiiRegistru from './GarantiiRegistru.jsx'
 import AtaseazaPdfFacturi from './AtaseazaPdfFacturi.jsx'
 import { norm } from './lib/diacritice.js'
-import { grupeazaSlFaraFactura, sorteazaCronologic, decidePrecompletare } from './financiarSlGrupare.js'
+import { grupeazaSlFaraFactura, sorteazaCronologic, decidePrecompletare, citesteDateGenerareSL } from './financiarSlGrupare.js'
 import * as XLSX from 'xlsx-js-style'
 
 const G = {
@@ -199,7 +199,7 @@ function buildInvoiceHTML(f) {
 // ===========================================================================
 // MODAL FACTURĂ — creare / editare
 // ===========================================================================
-function FacturaModal({ item, proiectDefault, slDefault, grupDefault, beneficiariLista, profileId, onClose, onSaved, showToast }) {
+export function FacturaModal({ item, proiectDefault, slDefault, grupDefault, beneficiariLista, profileId, onClose, onSaved, showToast }) {
   const isNew = !item?.id
   // TKT-2026-0363: grupDefault = { proiect_id, serie, nr, canonic, sl:[...] } — mai multe SL cu același nr. de factură
   // scris pe ele → o singură factură, cu toate SL-urile preselectate (ordine cronologică)
@@ -244,59 +244,15 @@ function FacturaModal({ item, proiectDefault, slDefault, grupDefault, beneficiar
   const [grupStare, setGrupStare] = useState(grupSL ? { gata: false, mesaj: '' } : null)  // TKT-2026-0363: precompletarea facturii grupate
   const montatRef                 = useRef(true)   // rezultatele async se aplică doar cât modalul e deschis
   useEffect(() => { montatRef.current = true; return () => { montatRef.current = false } }, [])
+  // Review #1188: generarea liniilor din SL. În curs = formularul e blocat (câmpuri + Regenerează), ca rezultatul
+  // să nu suprascrie editări făcute între timp (P2). Eroare = citire eșuată (≠ valoare zero): liniile NU se
+  // completează și salvarea rămâne blocată până la o regenerare reușită (P1).
+  const [generareInCurs, setGenerareInCurs] = useState(false)
+  const [genEroare, setGenEroare] = useState('')
+  const mesajEroareGen = e => e && e.name === 'EroareCitireSL' ? e.message : `Liniile nu au putut fi generate: ${(e && e.message) || 'eroare necunoscută'}`
 
-  // ─── HELPER: încarcă valorile unei SL (bază/ajustare/total + ajustări retro) ───
-  const loadSLValues = async (slId) => {
-    let valBaza = 0, valAjust = 0, valTotal = 0, coefAjust = 0, ajustariRetro = []
-    try {
-      const { data: slF } = await supabase.from('executie_situatii_plata')
-        .select('valoare_baza_lei, valoare_ajustare_lei, valoare_ajustata_lei, coeficient_ajustare').eq('id', slId).single()
-      if (slF) {
-        valBaza   = parseFloat(slF.valoare_baza_lei || 0)
-        valAjust  = parseFloat(slF.valoare_ajustare_lei || 0)
-        valTotal  = parseFloat(slF.valoare_ajustata_lei || slF.valoare_baza_lei || 0)
-        coefAjust = parseFloat(slF.coeficient_ajustare || 0)
-      }
-    } catch(e) { /* fallback 0 */ }
-    try {
-      const { data: ajs } = await supabase.from('executie_sl_ajustari')
-        .select('sl_ajustata_nr, valoare_ajustare_lei, coeficient')
-        .eq('sl_id', slId).order('id', { ascending: true })
-      ajustariRetro = ajs || []
-    } catch(e) { /* ignor */ }
-    return { valBaza, valAjust, valTotal, coefAjust, ajustariRetro }
-  }
-
-  // ─── HELPER: încarcă contract + beneficiar (o dată per proiect — toate SL = același proiect) ───
-  const loadContractBenef = async (proiect_id, contract_id_hint, nr_contract_hint) => {
-    let contractRef = nr_contract_hint || '', contractDenumire = '', benef = null, termenPlata = null, contactContract = null
-    try {
-      let cid = contract_id_hint
-      if (proiect_id) {
-        const { data: pr } = await supabase.from('executie_proiecte').select('contract_id, nr_contract').eq('id', proiect_id).single()
-        if (pr) { cid = cid || pr.contract_id; if (!contractRef) contractRef = pr.nr_contract || '' }
-      }
-      if (cid) {
-        const { data: ct } = await supabase.from('contracte_terti')
-          .select('numar_contract, data_semnare, denumire, termen_plata_zile, beneficiar_id, contact_factura_nume, contact_factura_email, contact_factura_telefon').eq('id', cid).single()
-        if (ct) {
-          if (ct.numar_contract) {
-            const dS = ct.data_semnare ? new Date(ct.data_semnare).toLocaleDateString('ro-RO') : ''
-            contractRef = dS ? `${ct.numar_contract}/${dS}` : ct.numar_contract
-          }
-          contractDenumire = ct.denumire || ''
-          termenPlata = ct.termen_plata_zile
-          contactContract = { nume: ct.contact_factura_nume || '', email: ct.contact_factura_email || '', telefon: ct.contact_factura_telefon || '' }
-          if (ct.beneficiar_id) {
-            const { data: b } = await supabase.from('beneficiari')
-              .select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon,contact_nume,retine_gbe_pct,retine_car_pct').eq('id', ct.beneficiar_id).single()
-            if (b) benef = b
-          }
-        }
-      }
-    } catch(e) { /* fallback */ }
-    return { contractRef, contractDenumire, benef, termenPlata, contactContract }
-  }
+  // Citirile (valori SL, ajustări, linii pe obiect, contract + beneficiar) sunt în citesteDateGenerareSL
+  // (financiarSlGrupare.js): orice eroare oprește generarea, nu se mai pune 0 în locul valorii necitite.
 
   // ─── HELPER: construiește liniile pentru O situație de lucrări (pură, sincronă) ───
   // Returnează { linii, nextNr }. Reținerile GBE/CAR vin din benef (per beneficiar).
@@ -356,21 +312,37 @@ function FacturaModal({ item, proiectDefault, slDefault, grupDefault, beneficiar
     // Ordonăm SL-urile cronologic (an, lună, id — aceeași ordine ca în alerta de facturare grupată)
     const proiectId = form.proiect_id ? Number(form.proiect_id) : null
     const ordered = sorteazaCronologic(slLista.filter(sl => ids.includes(sl.id)))
-    const { articole, patch } = await genereazaDinSL(proiectId, ordered)
-    setForm(f => ({ ...f, ...patch }))
-    lastGenRef.current = JSON.stringify(articole)
-    showToast(`✓ ${ordered.length} situații → ${articole.length} linii generate`)
+    setGenerareInCurs(true)
+    try {
+      // O SL selectată care nu e în lista proiectului nu dispare tacit din factură (L12)
+      if (ordered.length !== ids.length) {
+        const lipsa = ids.filter(id => !ordered.some(sl => sl.id === id))
+        throw new Error(`${lipsa.length} SL selectate nu sunt în lista SL a proiectului (${lipsa.map(id => '#' + id).join(', ')}): verifică proiectul și selecția, apoi reîncearcă.`)
+      }
+      const { articole, patch } = await genereazaDinSL(proiectId, ordered)
+      if (!montatRef.current) return
+      setForm(f => ({ ...f, ...patch }))
+      lastGenRef.current = JSON.stringify(articole)
+      setGenEroare('')
+      showToast(`✓ ${ordered.length} situații → ${articole.length} linii generate`)
+    } catch (e) {
+      if (!montatRef.current) return
+      const msg = mesajEroareGen(e)
+      setGenEroare(msg)
+      showToast(msg, 'err')
+    } finally {
+      if (montatRef.current) setGenerareInCurs(false)
+    }
   }
 
-  // Liniile + beneficiarul pentru o listă de SL deja ordonată (comun: „Regenerează” și factura grupată, TKT-2026-0363)
+  // Liniile + beneficiarul pentru o listă de SL deja ordonată (comun: „Regenerează” și factura grupată, TKT-2026-0363).
+  // Aruncă la orice citire eșuată (EroareCitireSL cu SL-ul în cauză): apelantul nu completează nimic.
   const genereazaDinSL = async (proiectId, ordered) => {
-    // Contract + beneficiar: o singură dată (toate SL din același proiect)
-    const contractInfo = await loadContractBenef(proiectId, null, '')
+    // Contract + beneficiar: o singură dată (toate SL din același proiect); apoi valorile + liniile fiecărei SL
+    const { contractInfo, perSL } = await citesteDateGenerareSL(supabase, proiectId, ordered)
     let articole = [], nr = 1
-    for (const sl of ordered) {
-      const slVals = await loadSLValues(sl.id)
-      const { data: objLinii } = await supabase.from('executie_situatii_plata_linii').select('*').eq('sl_id', sl.id).order('ord')
-      const { linii, nextNr } = buildLinesForSL({ nr_situatie: sl.nr_situatie, slVals, contractInfo, startNr: nr, objLinii: objLinii || [] })
+    for (const { sl, slVals, objLinii } of perSL) {
+      const { linii, nextNr } = buildLinesForSL({ nr_situatie: sl.nr_situatie, slVals, contractInfo, startNr: nr, objLinii })
       articole = articole.concat(linii)
       nr = nextNr
     }
@@ -405,9 +377,11 @@ function FacturaModal({ item, proiectDefault, slDefault, grupDefault, beneficiar
         } catch (e) { /* rămâne „eroare” */ }
       }
       const dec = decidePrecompletare(grupSL, SERII, verificare)
+      // Citire eșuată pe oricare SL = nicio linie completată (nici beneficiarul din aceeași generare), salvare blocată
       let gen = null, errGen = null
       try { gen = await genereazaDinSL(proiectId, ordered) } catch (e) { errGen = e }
       if (!montatRef.current) return
+      // Formularul a stat blocat cât s-a citit (fieldset disabled), deci nu există editări de pierdut
       setForm(f => ({
         ...f,
         ...(gen ? gen.patch : {}),
@@ -417,7 +391,8 @@ function FacturaModal({ item, proiectDefault, slDefault, grupDefault, beneficiar
         ...(dec.nr ? { nr: String(dec.nr) } : {}),
       }))
       if (gen) lastGenRef.current = JSON.stringify(gen.articole)
-      setGrupStare({ gata: true, mesaj: dec.mesaj, eroare: errGen ? 'Liniile nu au putut fi generate: apasă „Regenerează linii” sau completează-le manual.' : '' })
+      setGenEroare(errGen ? mesajEroareGen(errGen) : '')
+      setGrupStare({ gata: true, mesaj: dec.mesaj })
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -611,8 +586,11 @@ function FacturaModal({ item, proiectDefault, slDefault, grupDefault, beneficiar
   }
 
   const grupInLucru = !!(grupSL && grupStare && !grupStare.gata)   // TKT-2026-0363: nu se salvează înainte de precompletare
+  const formBlocat = grupInLucru || generareInCurs                 // review #1188 P2: câmpuri + Regenerează blocate
+  const salvareBlocata = formBlocat || !!genEroare                 // review #1188 P1: după o citire eșuată, doar regenerarea reușită deblochează
   const handleSave = async (andPDF = false) => {
-    if (grupInLucru) return
+    if (formBlocat) return
+    if (genEroare) { showToast(genEroare, 'err'); return }
     if (!form.beneficiar_nume.trim()) { showToast('Beneficiarul este obligatoriu', 'err'); return }
     if (form.articole.some(a => !a.denumire.trim())) { showToast('Completați denumirea articolelor', 'err'); return }
     setSaving(true)
@@ -799,7 +777,18 @@ function FacturaModal({ item, proiectDefault, slDefault, grupDefault, beneficiar
           <button onClick={onClose} style={{background:'transparent',border:'none',color:G.muted,fontSize:22,cursor:'pointer'}}>×</button>
         </div>
 
-        <div style={{padding:'18px 22px',display:'flex',flexDirection:'column',gap:14}}>
+        {/* Review #1188 P2: cât se generează liniile, tot formularul e blocat (fieldset disabled → câmpuri, liste, butoane) */}
+        <fieldset disabled={formBlocat} data-formular-factura="1"
+          style={{padding:'18px 22px',display:'flex',flexDirection:'column',gap:14,border:'none',margin:0,minWidth:0}}>
+
+          {genEroare && (
+            <div role="alert" style={{background:G.red+'14',border:`1px solid ${G.red}66`,borderRadius:8,padding:'10px 14px',fontSize:12,color:G.red,lineHeight:1.5}}>
+              <div style={{fontWeight:700,marginBottom:4}}>⛔ Liniile din SL nu au fost completate</div>
+              <div>{genEroare}</div>
+              <div style={{marginTop:4,color:G.muted}}>Salvarea e blocată până când „Regenerează linii” reușește.</div>
+            </div>
+          )}
+          {generareInCurs && <div style={{fontSize:12,color:G.muted}}>⏳ Generez liniile din SL…</div>}
 
           {/* TKT-2026-0363: factură grupată din alertă */}
           {grupSL && grupStare && (
@@ -812,7 +801,6 @@ function FacturaModal({ item, proiectDefault, slDefault, grupDefault, beneficiar
                 ? <div style={{marginTop:4,color:G.muted}}>⏳ Generez liniile și verific numărul…</div>
                 : <>
                     <div style={{marginTop:4,color:G.yellow}}>{grupStare.mesaj}</div>
-                    {grupStare.eroare && <div style={{marginTop:4,color:G.red}}>{grupStare.eroare}</div>}
                     <div style={{marginTop:4,color:G.dim}}>Nimic nu s-a salvat: verifică liniile, beneficiarul și numărul, apoi salvează.</div>
                   </>}
             </div>
@@ -1068,15 +1056,15 @@ function FacturaModal({ item, proiectDefault, slDefault, grupDefault, beneficiar
             </div>
           )}
 
-        </div>
+        </fieldset>
 
         {/* Footer butoane */}
         <div style={{padding:'14px 22px',borderTop:`1px solid ${G.border}`,display:'flex',gap:10,flexWrap:'wrap',justifyContent:'flex-end',background:G.bg,position:'sticky',bottom:0}}>
           <button onClick={onClose} style={S.btnS}>Anulează</button>
-          <button onClick={()=>handleSave(false)} disabled={saving||grupInLucru} style={{...S.btnS, opacity:(saving||grupInLucru)?0.6:1}}>
+          <button onClick={()=>handleSave(false)} disabled={saving||salvareBlocata} style={{...S.btnS, opacity:(saving||salvareBlocata)?0.6:1}}>
             {saving ? '⏳...' : '💾 Salvează'}
           </button>
-          <button onClick={()=>handleSave(true)} disabled={saving||genPDF||grupInLucru} style={{...S.btnP, background:G.purple, opacity:(saving||genPDF||grupInLucru)?0.6:1}}>
+          <button onClick={()=>handleSave(true)} disabled={saving||genPDF||salvareBlocata} style={{...S.btnP, background:G.purple, opacity:(saving||genPDF||salvareBlocata)?0.6:1}}>
             {genPDF ? '⏳ Generez PDF...' : '📄 Salvează + PDF'}
           </button>
           {!isNew && (
