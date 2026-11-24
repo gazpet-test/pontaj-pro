@@ -59,6 +59,32 @@ export async function scrieDefinitii() {
   return rows.length
 }
 
+// ── lista OBIECTELOR din manifestul L15 v2 (familie TAB eticheta TAB operatie): migrarea între pașii „înainte” și „după” ai amprentei globale
+// (GLOBAL aprobat „-”, manifest „-”), apoi ROLLBACK; diferențele (NOTICE L15_DIF) = obiectele create. PG18 adaugă constrângerile NOT NULL: scoase.
+export const CALE_OBIECTE = `supabase/tests/${NUME}.l15.obiecte.tsv`
+const listaObiecte = text => [...new Set(text.split('\n').filter(l => l && !l.startsWith('#')).map(l => l.split('\t').slice(0, 3).join('\t')))].sort()
+const faraPg18 = l => !/^constrangere\tconstrangere tabel [^\t]*_not_null\tcreat$/.test(l)
+export async function obiecteGenerate() {
+  const db = await bazaGoala()
+  const T = 'fedcba9876543210'
+  const jurnal = []
+  try {
+    await db.exec('SET transaction_timeout = 15000;')
+    await db.exec(`BEGIN ISOLATION LEVEL READ COMMITTED; SELECT set_config('gazpet.livrare_migrare', '${NUME}:' || txid_current(), true);
+      SELECT set_config('gazpet.plafon_tranzactie', '15000:' || txid_current(), true);`)
+    await db.exec(gen('inainte', T, '-') + '\n' + MIG() + '\n;\n' + gen('dupa', T, '-', '-'), { onNotice: n => jurnal.push(n.message) })
+  } catch { /* pasul „după” fără manifest refuză DUPĂ ce a tipărit diferențele */ }
+  try { await db.exec('ROLLBACK') } catch { /* deja */ }
+  await db.exec('SET transaction_timeout = 0;')
+  await db.close()
+  return listaObiecte(jurnal.filter(m => m.startsWith('L15_DIF ')).map(m => m.slice('L15_DIF '.length)).join('\n')).filter(faraPg18)
+}
+export async function scrieObiecte() {
+  const l = await obiecteGenerate()
+  writeFileSync(join(ROOT, CALE_OBIECTE), `# ${NUME}: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)\n` + l.join('\n') + '\n')
+  return l.length
+}
+
 // injecțiile în punctul unic de blocare (textele EXACTE, verificate că apar o dată): o coliziune simulată pe primele n încercări / o încercare lentă
 const LOCK_M = '      LOCK TABLE public.executie_proiecte IN SHARE ROW EXCLUSIVE MODE NOWAIT;\n      EXIT;\n'
 const coliziune = (t, n) => aplica(t, [[LOCK_M, `      IF v_incercari <= ${n} THEN RAISE EXCEPTION 'coliziune simulata' USING ERRCODE = '55P03'; END IF;\n` + LOCK_M]])
@@ -66,6 +92,44 @@ const lent = t => aplica(t, [[LOCK_M, '      LOCK TABLE public.executie_proiecte
 const LOCK_R = '          LOCK TABLE public.executie_proiecte IN ACCESS EXCLUSIVE MODE NOWAIT;\n          EXIT;\n'
 
 export const BLOCURI_T8 = [
+  {
+    nume: 'l15_obiecte', task: 8, cere: ['7'], fixtura: false, curat: true,
+    async fn(_db, A) {
+      const gener = await obiecteGenerate()
+      let scris = []
+      try { scris = listaObiecte(citeste(CALE_OBIECTE)) } catch { A.ab.push(`${CALE_OBIECTE} lipsește (rulează --scrie-obiecte)`); return }
+      const lipsa = scris.filter(x => !gener.includes(x)), plus = gener.filter(x => !scris.includes(x))
+      A.ok(gener.length > 150 && !lipsa.length && !plus.length, `manifestul generat (${gener.length} obiecte) = lista din repo (${scris.length}); lipsă [${lipsa.slice(0, 5).join(' | ')}] în plus [${plus.slice(0, 5).join(' | ')}]`)
+    },
+  },
+  {
+    // Task 9: scriptul de catalog (NU migrare, NERULAT pe producție) și revenirea lui, pe PGlite
+    nume: 'k_catalog_modul', task: 9, cere: ['7'], fixtura: false, curat: true,
+    async fn(_db, A) {
+      const CAT = citeste('scripts/executie_dcc_modul_catalog.sql'), CREV = citeste('scripts/executie_dcc_modul_catalog_revenire.sql')
+      const db = await bazaGoala()
+      await db.exec(`INSERT INTO public.app_modules (key, parent_key, name) VALUES ('executie', NULL, 'Executie')`)
+      const fara = await eroare(db.exec(CAT))
+      A.ok(fara && /migrarea 20270108a nu e aplicata/.test(fara.message), `catalogul înaintea migrării: ${fara?.message || 'a trecut'}`)
+      try { await db.exec('ROLLBACK') } catch { /* deja */ }
+      await aplicaMig(db)
+      const e1 = await eroare(db.exec(CAT))
+      const r = (await db.query(`SELECT key, parent_key, is_active, show_on_homepage FROM public.app_modules WHERE key = 'executie_dcc'`)).rows
+      A.ok(!e1 && r.length === 1 && r[0].parent_key === 'executie' && r[0].is_active && !r[0].show_on_homepage, `catalogul: ${e1?.message || JSON.stringify(r)}`)
+      A.ok((await db.query(`SELECT count(*)::int AS n FROM public.user_module_access WHERE module = 'executie_dcc'`)).rows[0].n === 0, 'catalogul nu acordă niciun drept')
+      const e2 = await eroare(db.exec(CAT)); try { await db.exec('ROLLBACK') } catch { /* deja */ }
+      A.ok(e2 && /cheia exista deja/.test(e2.message), `a doua rulare: ${e2?.message || 'a trecut'}`)
+      // revenirea refuză cât există un drept pe cheie; apoi, fără drepturi, șterge exact rândul
+      await db.exec(`INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('${U.FARA}', 'executie_dcc', 'viewer')`)
+      const e3 = await eroare(db.exec(CREV)); try { await db.exec('ROLLBACK') } catch { /* deja */ }
+      A.ok(e3 && /exista drepturi pe executie_dcc/.test(e3.message) && (await db.query(`SELECT count(*)::int AS n FROM public.app_modules WHERE key = 'executie_dcc'`)).rows[0].n === 1,
+        `revenirea cu un drept existent: ${e3?.message || 'a trecut'}`)
+      await db.exec(`DELETE FROM public.user_module_access WHERE module = 'executie_dcc'`)
+      const e4 = await eroare(db.exec(CREV))
+      A.ok(!e4 && (await db.query(`SELECT count(*)::int AS n FROM public.app_modules WHERE key = 'executie_dcc'`)).rows[0].n === 0, `revenirea: ${e4?.message || 'cheia scoasă'}`)
+      await db.close()
+    },
+  },
   {
     nume: 'm_refuzuri_migrare', task: 8, cere: ['7'], fixtura: false, curat: true,
     async fn(_db, A) {

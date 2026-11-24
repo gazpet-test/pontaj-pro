@@ -1,0 +1,710 @@
+# 20270108a_executie_dcc_registru: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.dcc_anexe.creat_de	creat
+coloana	coloana public.dcc_anexe.creat_la	creat
+coloana	coloana public.dcc_anexe.document_id	creat
+coloana	coloana public.dcc_anexe.id	creat
+coloana	coloana public.dcc_anexe.numar	creat
+coloana	coloana public.dcc_anexe.titlu	creat
+coloana	coloana public.dcc_casute.adresa	creat
+coloana	coloana public.dcc_casute.creat_de	creat
+coloana	coloana public.dcc_casute.creat_la	creat
+coloana	coloana public.dcc_casute.id	creat
+coloana	coloana public.dcc_casute.proprietar	creat
+coloana	coloana public.dcc_casute.stare_conectare	creat
+coloana	coloana public.dcc_casute.tip	creat
+coloana	coloana public.dcc_contracte.beneficiar	creat
+coloana	coloana public.dcc_contracte.cod_contract	creat
+coloana	coloana public.dcc_contracte.creat_de	creat
+coloana	coloana public.dcc_contracte.creat_la	creat
+coloana	coloana public.dcc_contracte.creat_prin	creat
+coloana	coloana public.dcc_contracte.descriere	creat
+coloana	coloana public.dcc_contracte.id	creat
+coloana	coloana public.dcc_contracte.mod_alocare	creat
+coloana	coloana public.dcc_documente."interval"	creat
+coloana	coloana public.dcc_documente.anulat_de	creat
+coloana	coloana public.dcc_documente.anulat_la	creat
+coloana	coloana public.dcc_documente.are_file	creat
+coloana	coloana public.dcc_documente.contract_id	creat
+coloana	coloana public.dcc_documente.creat_de	creat
+coloana	coloana public.dcc_documente.creat_la	creat
+coloana	coloana public.dcc_documente.emitent	creat
+coloana	coloana public.dcc_documente.id	creat
+coloana	coloana public.dcc_documente.mod	creat
+coloana	coloana public.dcc_documente.motiv_anulare	creat
+coloana	coloana public.dcc_documente.proiect_dcc_id	creat
+coloana	coloana public.dcc_documente.secventa	creat
+coloana	coloana public.dcc_documente.serie_id	creat
+coloana	coloana public.dcc_documente.stare	creat
+coloana	coloana public.dcc_documente.tematica	creat
+coloana	coloana public.dcc_documente.tip	creat
+coloana	coloana public.dcc_documente.titlu	creat
+coloana	coloana public.dcc_file.creat_de	creat
+coloana	coloana public.dcc_file.creat_la	creat
+coloana	coloana public.dcc_file.document_id	creat
+coloana	coloana public.dcc_file.fila	creat
+coloana	coloana public.dcc_file.id	creat
+coloana	coloana public.dcc_file.titlu	creat
+coloana	coloana public.dcc_ghid_intervale."interval"	creat
+coloana	coloana public.dcc_ghid_intervale.ghid_id	creat
+coloana	coloana public.dcc_ghid_intervale.id	creat
+coloana	coloana public.dcc_ghid_intervale.limita_inf	creat
+coloana	coloana public.dcc_ghid_intervale.limita_sup	creat
+coloana	coloana public.dcc_ghid_valori.activ	creat
+coloana	coloana public.dcc_ghid_valori.categorie	creat
+coloana	coloana public.dcc_ghid_valori.cod	creat
+coloana	coloana public.dcc_ghid_valori.descriere	creat
+coloana	coloana public.dcc_ghid_valori.fara_tematica	creat
+coloana	coloana public.dcc_ghid_valori.ghid_id	creat
+coloana	coloana public.dcc_ghid_valori.id	creat
+coloana	coloana public.dcc_ghiduri.cod	creat
+coloana	coloana public.dcc_ghiduri.creat_de	creat
+coloana	coloana public.dcc_ghiduri.creat_la	creat
+coloana	coloana public.dcc_ghiduri.format_cod	creat
+coloana	coloana public.dcc_ghiduri.format_fisier	creat
+coloana	coloana public.dcc_ghiduri.id	creat
+coloana	coloana public.dcc_ghiduri.sursa	creat
+coloana	coloana public.dcc_ghiduri.versiune	creat
+coloana	coloana public.dcc_intentii.actor	creat
+coloana	coloana public.dcc_intentii.autor	creat
+coloana	coloana public.dcc_intentii.cheie	creat
+coloana	coloana public.dcc_intentii.creat_la	creat
+coloana	coloana public.dcc_intentii.creat_tx	creat
+coloana	coloana public.dcc_intentii.operatie	creat
+coloana	coloana public.dcc_intentii.parametri_hash	creat
+coloana	coloana public.dcc_intentii.rezultat	creat
+coloana	coloana public.dcc_istoric_aparitii.anexa	creat
+coloana	coloana public.dcc_istoric_aparitii.cod_scris	creat
+coloana	coloana public.dcc_istoric_aparitii.continut_hash	creat
+coloana	coloana public.dcc_istoric_aparitii.contract_id	creat
+coloana	coloana public.dcc_istoric_aparitii.document_id	creat
+coloana	coloana public.dcc_istoric_aparitii.emitent	creat
+coloana	coloana public.dcc_istoric_aparitii.fila	creat
+coloana	coloana public.dcc_istoric_aparitii.id	creat
+coloana	coloana public.dcc_istoric_aparitii.importat_de	creat
+coloana	coloana public.dcc_istoric_aparitii.importat_la	creat
+coloana	coloana public.dcc_istoric_aparitii.importat_prin	creat
+coloana	coloana public.dcc_istoric_aparitii.legat_de	creat
+coloana	coloana public.dcc_istoric_aparitii.legat_la	creat
+coloana	coloana public.dcc_istoric_aparitii.limba	creat
+coloana	coloana public.dcc_istoric_aparitii.lot_import	creat
+coloana	coloana public.dcc_istoric_aparitii.pozitie	creat
+coloana	coloana public.dcc_istoric_aparitii.probleme	creat
+coloana	coloana public.dcc_istoric_aparitii.proiect_dcc_id	creat
+coloana	coloana public.dcc_istoric_aparitii.revizie	creat
+coloana	coloana public.dcc_istoric_aparitii.revizie_id	creat
+coloana	coloana public.dcc_istoric_aparitii.secventa	creat
+coloana	coloana public.dcc_istoric_aparitii.sursa	creat
+coloana	coloana public.dcc_istoric_aparitii.sursa_id	creat
+coloana	coloana public.dcc_istoric_aparitii.tematica	creat
+coloana	coloana public.dcc_istoric_aparitii.tip	creat
+coloana	coloana public.dcc_istoric_aparitii.valori_originale	creat
+coloana	coloana public.dcc_legaturi.autor	creat
+coloana	coloana public.dcc_legaturi.confirmat_de	creat
+coloana	coloana public.dcc_legaturi.confirmat_la	creat
+coloana	coloana public.dcc_legaturi.creat_la	creat
+coloana	coloana public.dcc_legaturi.dovada	creat
+coloana	coloana public.dcc_legaturi.id	creat
+coloana	coloana public.dcc_legaturi.mesaj_id	creat
+coloana	coloana public.dcc_legaturi.metoda	creat
+coloana	coloana public.dcc_legaturi.revizie_id	creat
+coloana	coloana public.dcc_legaturi.stare	creat
+coloana	coloana public.dcc_legaturi.verdict_propus	creat
+coloana	coloana public.dcc_mesaje.casuta_declarata	creat
+coloana	coloana public.dcc_mesaje.casuta_id	creat
+coloana	coloana public.dcc_mesaje.cc_lista	creat
+coloana	coloana public.dcc_mesaje.contract_id	creat
+coloana	coloana public.dcc_mesaje.creat_de	creat
+coloana	coloana public.dcc_mesaje.creat_la	creat
+coloana	coloana public.dcc_mesaje.data_mesaj	creat
+coloana	coloana public.dcc_mesaje.directie	creat
+coloana	coloana public.dcc_mesaje.dovezi_complete	creat
+coloana	coloana public.dcc_mesaje.from_adresa	creat
+coloana	coloana public.dcc_mesaje.gmail_message_id	creat
+coloana	coloana public.dcc_mesaje.gmail_thread_id	creat
+coloana	coloana public.dcc_mesaje.id	creat
+coloana	coloana public.dcc_mesaje.in_reply_to	creat
+coloana	coloana public.dcc_mesaje.manifest	creat
+coloana	coloana public.dcc_mesaje.proiect_dcc_id	creat
+coloana	coloana public.dcc_mesaje.references_lista	creat
+coloana	coloana public.dcc_mesaje.reply_to	creat
+coloana	coloana public.dcc_mesaje.rfc_message_id	creat
+coloana	coloana public.dcc_mesaje.sender	creat
+coloana	coloana public.dcc_mesaje.snapshot_id	creat
+coloana	coloana public.dcc_mesaje.subiect_normalizat	creat
+coloana	coloana public.dcc_mesaje.subiect_original	creat
+coloana	coloana public.dcc_mesaje.sursa	creat
+coloana	coloana public.dcc_mesaje.to_lista	creat
+coloana	coloana public.dcc_proiecte.actualizat_de	creat
+coloana	coloana public.dcc_proiecte.actualizat_la	creat
+coloana	coloana public.dcc_proiecte.adresa_dcc	creat
+coloana	coloana public.dcc_proiecte.antet_financiar	creat
+coloana	coloana public.dcc_proiecte.casuta_id	creat
+coloana	coloana public.dcc_proiecte.cc_implicit	creat
+coloana	coloana public.dcc_proiecte.cc_lista	creat
+coloana	coloana public.dcc_proiecte.contract_id	creat
+coloana	coloana public.dcc_proiecte.creat_de	creat
+coloana	coloana public.dcc_proiecte.creat_la	creat
+coloana	coloana public.dcc_proiecte.emitent	creat
+coloana	coloana public.dcc_proiecte.executie_proiect_id	creat
+coloana	coloana public.dcc_proiecte.ghid_id	creat
+coloana	coloana public.dcc_proiecte.id	creat
+coloana	coloana public.dcc_proiecte.limba_implicita	creat
+coloana	coloana public.dcc_proiecte.plafon_atasamente_mb	creat
+coloana	coloana public.dcc_proiecte.trimitere_permisa	creat
+coloana	coloana public.dcc_proiecte.versiune	creat
+coloana	coloana public.dcc_revizii.actualizat_la	creat
+coloana	coloana public.dcc_revizii.anexa_id	creat
+coloana	coloana public.dcc_revizii.anulata_de	creat
+coloana	coloana public.dcc_revizii.anulata_la	creat
+coloana	coloana public.dcc_revizii.anulata_prin	creat
+coloana	coloana public.dcc_revizii.cod_text	creat
+coloana	coloana public.dcc_revizii.contract_id	creat
+coloana	coloana public.dcc_revizii.creat_de	creat
+coloana	coloana public.dcc_revizii.creat_la	creat
+coloana	coloana public.dcc_revizii.document_id	creat
+coloana	coloana public.dcc_revizii.fila_id	creat
+coloana	coloana public.dcc_revizii.ghid_id	creat
+coloana	coloana public.dcc_revizii.id	creat
+coloana	coloana public.dcc_revizii.limba	creat
+coloana	coloana public.dcc_revizii.motiv_anulare	creat
+coloana	coloana public.dcc_revizii.nr_adresa_interna	creat
+coloana	coloana public.dcc_revizii.nume_fisier_baza	creat
+coloana	coloana public.dcc_revizii.revizie	creat
+coloana	coloana public.dcc_revizii.stare_transport	creat
+coloana	coloana public.dcc_revizii.titlu	creat
+coloana	coloana public.dcc_revizii.verdict	creat
+coloana	coloana public.dcc_revizii.verdict_confirmat_de	creat
+coloana	coloana public.dcc_revizii.verdict_confirmat_la	creat
+coloana	coloana public.dcc_revizii.verdict_mesaj_id	creat
+coloana	coloana public.dcc_serii."interval"	creat
+coloana	coloana public.dcc_serii.contract_id	creat
+coloana	coloana public.dcc_serii.emitent	creat
+coloana	coloana public.dcc_serii.ghid_id	creat
+coloana	coloana public.dcc_serii.id	creat
+coloana	coloana public.dcc_serii.initializata_de	creat
+coloana	coloana public.dcc_serii.initializata_la	creat
+coloana	coloana public.dcc_serii.initializata_prin	creat
+coloana	coloana public.dcc_serii.limita_inf	creat
+coloana	coloana public.dcc_serii.limita_sup	creat
+coloana	coloana public.dcc_serii.max_istoric_la_init	creat
+coloana	coloana public.dcc_serii.motiv_prag	creat
+coloana	coloana public.dcc_serii.prag_initial	creat
+coloana	coloana public.dcc_serii.tematica	creat
+coloana	coloana public.dcc_serii.tip	creat
+coloana	coloana public.dcc_serii.ultimul_ocupat	creat
+coloana	coloana public.dcc_snapshot_revizii.revizie_id	creat
+coloana	coloana public.dcc_snapshot_revizii.snapshot_id	creat
+coloana	coloana public.dcc_snapshoturi.aprobat_de	creat
+coloana	coloana public.dcc_snapshoturi.aprobat_la	creat
+coloana	coloana public.dcc_snapshoturi.cc_lista	creat
+coloana	coloana public.dcc_snapshoturi.contract_id	creat
+coloana	coloana public.dcc_snapshoturi.corp	creat
+coloana	coloana public.dcc_snapshoturi.from_adresa	creat
+coloana	coloana public.dcc_snapshoturi.hash	creat
+coloana	coloana public.dcc_snapshoturi.id	creat
+coloana	coloana public.dcc_snapshoturi.linkuri	creat
+coloana	coloana public.dcc_snapshoturi.manifest	creat
+coloana	coloana public.dcc_snapshoturi.proiect_dcc_id	creat
+coloana	coloana public.dcc_snapshoturi.subiect	creat
+coloana	coloana public.dcc_snapshoturi.tip	creat
+coloana	coloana public.dcc_snapshoturi.to_lista	creat
+coloana	coloana public.v_dcc_registru."interval"	creat
+coloana	coloana public.v_dcc_registru.anexa	creat
+coloana	coloana public.v_dcc_registru.aparitii_istorice	creat
+coloana	coloana public.v_dcc_registru.are_file	creat
+coloana	coloana public.v_dcc_registru.beneficiar	creat
+coloana	coloana public.v_dcc_registru.cod_contract	creat
+coloana	coloana public.v_dcc_registru.cod_text	creat
+coloana	coloana public.v_dcc_registru.contract_id	creat
+coloana	coloana public.v_dcc_registru.document_id	creat
+coloana	coloana public.v_dcc_registru.emitent	creat
+coloana	coloana public.v_dcc_registru.fila	creat
+coloana	coloana public.v_dcc_registru.limba	creat
+coloana	coloana public.v_dcc_registru.mod	creat
+coloana	coloana public.v_dcc_registru.nume_fisier_baza	creat
+coloana	coloana public.v_dcc_registru.proiect_dcc_id	creat
+coloana	coloana public.v_dcc_registru.revizie	creat
+coloana	coloana public.v_dcc_registru.revizie_id	creat
+coloana	coloana public.v_dcc_registru.secventa	creat
+coloana	coloana public.v_dcc_registru.stare	creat
+coloana	coloana public.v_dcc_registru.stare_transport	creat
+coloana	coloana public.v_dcc_registru.tematica	creat
+coloana	coloana public.v_dcc_registru.tinta	creat
+coloana	coloana public.v_dcc_registru.tip	creat
+coloana	coloana public.v_dcc_registru.titlu	creat
+coloana	coloana public.v_dcc_registru.verdict	creat
+constrangere	constrangere tabel public.dcc_anexe.dcc_anexe_document_id_fkey	creat
+constrangere	constrangere tabel public.dcc_anexe.dcc_anexe_numar_ck	creat
+constrangere	constrangere tabel public.dcc_anexe.dcc_anexe_pkey	creat
+constrangere	constrangere tabel public.dcc_anexe.dcc_anexe_titlu_ck	creat
+constrangere	constrangere tabel public.dcc_anexe.dcc_anexe_uq	creat
+constrangere	constrangere tabel public.dcc_casute.dcc_casute_adresa_ck	creat
+constrangere	constrangere tabel public.dcc_casute.dcc_casute_adresa_uq	creat
+constrangere	constrangere tabel public.dcc_casute.dcc_casute_pkey	creat
+constrangere	constrangere tabel public.dcc_casute.dcc_casute_proprietar_ck	creat
+constrangere	constrangere tabel public.dcc_casute.dcc_casute_stare_ck	creat
+constrangere	constrangere tabel public.dcc_casute.dcc_casute_tip_ck	creat
+constrangere	constrangere tabel public.dcc_contracte.dcc_contracte_beneficiar_ck	creat
+constrangere	constrangere tabel public.dcc_contracte.dcc_contracte_cod_ck	creat
+constrangere	constrangere tabel public.dcc_contracte.dcc_contracte_creat_ck	creat
+constrangere	constrangere tabel public.dcc_contracte.dcc_contracte_creat_prin_ck	creat
+constrangere	constrangere tabel public.dcc_contracte.dcc_contracte_mod_ck	creat
+constrangere	constrangere tabel public.dcc_contracte.dcc_contracte_pkey	creat
+constrangere	constrangere tabel public.dcc_contracte.dcc_contracte_uq	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_anulare_ck	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_automat_ck	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_cod_uq	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_id_contract_uq	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_id_proiect_uq	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_interval_ck	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_mod_ck	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_neanulat_ck	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_pkey	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_proiect_fk	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_secventa_ck	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_serie_id_fkey	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_stare_ck	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_stare_val_ck	creat
+constrangere	constrangere tabel public.dcc_documente.dcc_documente_titlu_ck	creat
+constrangere	constrangere tabel public.dcc_file.dcc_file_document_id_fkey	creat
+constrangere	constrangere tabel public.dcc_file.dcc_file_fila_ck	creat
+constrangere	constrangere tabel public.dcc_file.dcc_file_pkey	creat
+constrangere	constrangere tabel public.dcc_file.dcc_file_uq	creat
+constrangere	constrangere tabel public.dcc_ghid_intervale.dcc_ghid_intervale_ghid_id_fkey	creat
+constrangere	constrangere tabel public.dcc_ghid_intervale.dcc_ghid_intervale_interval_ck	creat
+constrangere	constrangere tabel public.dcc_ghid_intervale.dcc_ghid_intervale_limite_ck	creat
+constrangere	constrangere tabel public.dcc_ghid_intervale.dcc_ghid_intervale_pkey	creat
+constrangere	constrangere tabel public.dcc_ghid_intervale.dcc_ghid_intervale_uq	creat
+constrangere	constrangere tabel public.dcc_ghid_valori.dcc_ghid_valori_categorie_ck	creat
+constrangere	constrangere tabel public.dcc_ghid_valori.dcc_ghid_valori_fara_tematica_ck	creat
+constrangere	constrangere tabel public.dcc_ghid_valori.dcc_ghid_valori_forma_ck	creat
+constrangere	constrangere tabel public.dcc_ghid_valori.dcc_ghid_valori_ghid_id_fkey	creat
+constrangere	constrangere tabel public.dcc_ghid_valori.dcc_ghid_valori_pkey	creat
+constrangere	constrangere tabel public.dcc_ghid_valori.dcc_ghid_valori_uq	creat
+constrangere	constrangere tabel public.dcc_ghiduri.dcc_ghiduri_cod_ck	creat
+constrangere	constrangere tabel public.dcc_ghiduri.dcc_ghiduri_cod_versiune_uq	creat
+constrangere	constrangere tabel public.dcc_ghiduri.dcc_ghiduri_format_cod_ck	creat
+constrangere	constrangere tabel public.dcc_ghiduri.dcc_ghiduri_format_fisier_ck	creat
+constrangere	constrangere tabel public.dcc_ghiduri.dcc_ghiduri_limba_ck	creat
+constrangere	constrangere tabel public.dcc_ghiduri.dcc_ghiduri_pkey	creat
+constrangere	constrangere tabel public.dcc_ghiduri.dcc_ghiduri_sursa_ck	creat
+constrangere	constrangere tabel public.dcc_ghiduri.dcc_ghiduri_versiune_ck	creat
+constrangere	constrangere tabel public.dcc_intentii.dcc_intentii_actor_ck	creat
+constrangere	constrangere tabel public.dcc_intentii.dcc_intentii_autor_ck	creat
+constrangere	constrangere tabel public.dcc_intentii.dcc_intentii_hash_ck	creat
+constrangere	constrangere tabel public.dcc_intentii.dcc_intentii_operatie_ck	creat
+constrangere	constrangere tabel public.dcc_intentii.dcc_intentii_pkey	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_anexa_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_cod_scris_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_document_fk	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_fila_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_hash_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_importat_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_importat_prin_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_limba_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_lot_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_pkey	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_pozitie_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_probleme_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_proiect_fk	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_revizie_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_revizie_id_fkey	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_revizie_problema_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_secventa_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_sursa_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_sursa_id_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_aparitii_valori_ck	creat
+constrangere	constrangere tabel public.dcc_istoric_aparitii.dcc_istoric_sursa_uq	creat
+constrangere	constrangere tabel public.dcc_legaturi.dcc_legaturi_confirmare_ck	creat
+constrangere	constrangere tabel public.dcc_legaturi.dcc_legaturi_dovada_ck	creat
+constrangere	constrangere tabel public.dcc_legaturi.dcc_legaturi_mesaj_id_fkey	creat
+constrangere	constrangere tabel public.dcc_legaturi.dcc_legaturi_metoda_ck	creat
+constrangere	constrangere tabel public.dcc_legaturi.dcc_legaturi_pkey	creat
+constrangere	constrangere tabel public.dcc_legaturi.dcc_legaturi_revizie_id_fkey	creat
+constrangere	constrangere tabel public.dcc_legaturi.dcc_legaturi_stare_ck	creat
+constrangere	constrangere tabel public.dcc_legaturi.dcc_legaturi_uq	creat
+constrangere	constrangere tabel public.dcc_legaturi.dcc_legaturi_verdict_ck	creat
+constrangere	constrangere tabel public.dcc_mesaje.dcc_mesaje_casuta_id_fkey	creat
+constrangere	constrangere tabel public.dcc_mesaje.dcc_mesaje_directie_ck	creat
+constrangere	constrangere tabel public.dcc_mesaje.dcc_mesaje_gmail_uq	creat
+constrangere	constrangere tabel public.dcc_mesaje.dcc_mesaje_manual_ck	creat
+constrangere	constrangere tabel public.dcc_mesaje.dcc_mesaje_pkey	creat
+constrangere	constrangere tabel public.dcc_mesaje.dcc_mesaje_proiect_fk	creat
+constrangere	constrangere tabel public.dcc_mesaje.dcc_mesaje_rfc_uq	creat
+constrangere	constrangere tabel public.dcc_mesaje.dcc_mesaje_snapshot_fk	creat
+constrangere	constrangere tabel public.dcc_mesaje.dcc_mesaje_sursa_ck	creat
+constrangere	constrangere tabel public.dcc_mesaje.dcc_mesaje_thread_ck	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_adresa_ck	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_casuta_ck	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_casuta_id_fkey	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_cc_implicit_ck	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_contract_id_fkey	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_emitent_ck	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_executie_contract_uq	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_executie_proiect_id_fkey	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_ghid_id_fkey	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_id_contract_uq	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_limba_ck	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_pkey	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_plafon_ck	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_trimitere_ck	creat
+constrangere	constrangere tabel public.dcc_proiecte.dcc_proiecte_versiune_ck	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_anexa_id_fkey	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_anulare_ck	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_anulata_prin_val_ck	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_cod_uq	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_document_fk	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_fila_id_fkey	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_ghid_id_fkey	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_limba_ck	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_neanulata_ck	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_pkey	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_revizie_ck	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_stare_ck	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_stare_val_ck	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_tinta_ck	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_uq	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_verdict_ck	creat
+constrangere	constrangere tabel public.dcc_revizii.dcc_revizii_verdict_val_ck	creat
+constrangere	constrangere tabel public.dcc_serii.dcc_serii_cheie_uq	creat
+constrangere	constrangere tabel public.dcc_serii.dcc_serii_contract_id_fkey	creat
+constrangere	constrangere tabel public.dcc_serii.dcc_serii_ghid_id_fkey	creat
+constrangere	constrangere tabel public.dcc_serii.dcc_serii_initializata_ck	creat
+constrangere	constrangere tabel public.dcc_serii.dcc_serii_initializata_prin_ck	creat
+constrangere	constrangere tabel public.dcc_serii.dcc_serii_interval_ck	creat
+constrangere	constrangere tabel public.dcc_serii.dcc_serii_limite_ck	creat
+constrangere	constrangere tabel public.dcc_serii.dcc_serii_motiv_ck	creat
+constrangere	constrangere tabel public.dcc_serii.dcc_serii_pkey	creat
+constrangere	constrangere tabel public.dcc_serii.dcc_serii_prag_ck	creat
+constrangere	constrangere tabel public.dcc_serii.dcc_serii_ultimul_ck	creat
+constrangere	constrangere tabel public.dcc_snapshot_revizii.dcc_snapshot_revizii_pkey	creat
+constrangere	constrangere tabel public.dcc_snapshot_revizii.dcc_snapshot_revizii_revizie_id_fkey	creat
+constrangere	constrangere tabel public.dcc_snapshot_revizii.dcc_snapshot_revizii_snapshot_id_fkey	creat
+constrangere	constrangere tabel public.dcc_snapshoturi.dcc_snapshoturi_hash_ck	creat
+constrangere	constrangere tabel public.dcc_snapshoturi.dcc_snapshoturi_id_proiect_uq	creat
+constrangere	constrangere tabel public.dcc_snapshoturi.dcc_snapshoturi_manifest_ck	creat
+constrangere	constrangere tabel public.dcc_snapshoturi.dcc_snapshoturi_pkey	creat
+constrangere	constrangere tabel public.dcc_snapshoturi.dcc_snapshoturi_proiect_fk	creat
+constrangere	constrangere tabel public.dcc_snapshoturi.dcc_snapshoturi_subiect_ck	creat
+constrangere	constrangere tabel public.dcc_snapshoturi.dcc_snapshoturi_tip_ck	creat
+functie	functie public.fn_dcc_aloca(bigint,text,text,text,text,text,text,integer,uuid)	creat
+functie	functie public.fn_dcc_aloca_manual(bigint,text,text,text,integer,text,text,integer,uuid)	creat
+functie	functie public.fn_dcc_anexa_noua(bigint,text,text,uuid)	creat
+functie	functie public.fn_dcc_anexe_garda()	creat
+functie	functie public.fn_dcc_anuleaza(bigint,bigint,text,uuid)	creat
+functie	functie public.fn_dcc_are_modul()	creat
+functie	functie public.fn_dcc_cod_text(jsonb,text,text,text,text,integer,integer,integer,integer,text)	creat
+functie	functie public.fn_dcc_coduri_intern(bigint,text,text,text,text,integer,integer,integer,integer,text)	creat
+functie	functie public.fn_dcc_config_permisa_intern()	creat
+functie	functie public.fn_dcc_confirma_trimis_manual(bigint[],timestamp with time zone,text,text,bigint,uuid)	creat
+functie	functie public.fn_dcc_contract_creeaza(text,text,text,text,uuid)	creat
+functie	functie public.fn_dcc_contract_vizibil(bigint)	creat
+functie	functie public.fn_dcc_contracte_garda()	creat
+functie	functie public.fn_dcc_documente_garda()	creat
+functie	functie public.fn_dcc_drept(bigint,text)	creat
+functie	functie public.fn_dcc_e_owner()	creat
+functie	functie public.fn_dcc_fara_golire()	creat
+functie	functie public.fn_dcc_fara_stergere()	creat
+functie	functie public.fn_dcc_fila_noua(bigint,integer,text,text,uuid)	creat
+functie	functie public.fn_dcc_file_garda()	creat
+functie	functie public.fn_dcc_format_valid(jsonb)	creat
+functie	functie public.fn_dcc_ghid_compatibil_intern(bigint,bigint)	creat
+functie	functie public.fn_dcc_ghid_creeaza(jsonb,uuid)	creat
+functie	functie public.fn_dcc_ghid_garda()	creat
+functie	functie public.fn_dcc_ghid_intervale_disjuncte()	creat
+functie	functie public.fn_dcc_hash_parametri(text,jsonb)	creat
+functie	functie public.fn_dcc_initializeaza_serie(bigint,text,text,text,text,integer,text,boolean,uuid)	creat
+functie	functie public.fn_dcc_intentie_incheie(uuid,jsonb)	creat
+functie	functie public.fn_dcc_intentie_reia(uuid,text,text)	creat
+functie	functie public.fn_dcc_intentie_revendica(uuid,text,text)	creat
+functie	functie public.fn_dcc_intentii_garda()	creat
+functie	functie public.fn_dcc_interval_canonic(text)	creat
+functie	functie public.fn_dcc_interval_e_canonic(text)	creat
+functie	functie public.fn_dcc_istoric_garda()	creat
+functie	functie public.fn_dcc_istoric_hash(text,text,integer,jsonb,text,text,text,text,integer,integer,integer,integer,text,text[])	creat
+functie	functie public.fn_dcc_istoric_importa(bigint,text,jsonb,uuid)	creat
+functie	functie public.fn_dcc_legaturi_garda()	creat
+functie	functie public.fn_dcc_lista_drept_intern(bigint[])	creat
+functie	functie public.fn_dcc_lista_forma_intern(bigint[])	creat
+functie	functie public.fn_dcc_lock_cheie_serie(bigint,text,text,text,text)	creat
+functie	functie public.fn_dcc_lock_contract(bigint,boolean)	creat
+functie	functie public.fn_dcc_marcheaza_copiat(bigint[],jsonb,uuid)	creat
+functie	functie public.fn_dcc_mesaje_garda()	creat
+functie	functie public.fn_dcc_nume_fisier(jsonb,text,text,text,text,integer,integer,integer,integer,text,text,text)	creat
+functie	functie public.fn_dcc_proiect_seteaza(bigint,bigint,bigint,text,text,text,text[],jsonb,text,integer,integer,uuid)	creat
+functie	functie public.fn_dcc_proiecte_garda()	creat
+functie	functie public.fn_dcc_revizie_noua(bigint,bigint,bigint,text,text,uuid)	creat
+functie	functie public.fn_dcc_revizii_garda()	creat
+functie	functie public.fn_dcc_serii_garda()	creat
+functie	functie public.fn_dcc_serii_proiect(bigint)	creat
+functie	functie public.fn_dcc_server()	creat
+functie	functie public.fn_dcc_snapshot_hash(text,text,text[],text[],text,text,text[],jsonb)	creat
+functie	functie public.fn_dcc_snapshot_revizii_garda()	creat
+functie	functie public.fn_dcc_snapshoturi_garda()	creat
+functie	functie public.fn_dcc_titlu_scurt(text)	creat
+functie	functie public.fn_dcc_tranzitie_permisa(text,text)	creat
+functie	functie public.fn_dcc_valori_ghid_intern(bigint,text,text)	creat
+politica	politica public.dcc_anexe.dcc_anexe_citire	creat
+politica	politica public.dcc_contracte.dcc_contracte_citire	creat
+politica	politica public.dcc_documente.dcc_documente_citire	creat
+politica	politica public.dcc_file.dcc_file_citire	creat
+politica	politica public.dcc_ghid_intervale.dcc_ghid_intervale_citire	creat
+politica	politica public.dcc_ghid_valori.dcc_ghid_valori_citire	creat
+politica	politica public.dcc_ghiduri.dcc_ghiduri_citire	creat
+politica	politica public.dcc_istoric_aparitii.dcc_istoric_aparitii_citire	creat
+politica	politica public.dcc_legaturi.dcc_legaturi_citire	creat
+politica	politica public.dcc_mesaje.dcc_mesaje_citire	creat
+politica	politica public.dcc_proiecte.dcc_proiecte_citire	creat
+politica	politica public.dcc_revizii.dcc_revizii_citire	creat
+politica	politica public.dcc_snapshot_revizii.dcc_snapshot_revizii_citire	creat
+politica	politica public.dcc_snapshoturi.dcc_snapshoturi_citire	creat
+regula	regula public.v_dcc_registru."_RETURN"	creat
+relatie	relatie public.dcc_anexe	creat
+relatie	relatie public.dcc_anexe_id_seq	creat
+relatie	relatie public.dcc_anexe_pkey	creat
+relatie	relatie public.dcc_anexe_uq	creat
+relatie	relatie public.dcc_casute	creat
+relatie	relatie public.dcc_casute_adresa_uq	creat
+relatie	relatie public.dcc_casute_id_seq	creat
+relatie	relatie public.dcc_casute_pkey	creat
+relatie	relatie public.dcc_contracte	creat
+relatie	relatie public.dcc_contracte_id_seq	creat
+relatie	relatie public.dcc_contracte_pkey	creat
+relatie	relatie public.dcc_contracte_uq	creat
+relatie	relatie public.dcc_documente	creat
+relatie	relatie public.dcc_documente_cod_uq	creat
+relatie	relatie public.dcc_documente_id_contract_uq	creat
+relatie	relatie public.dcc_documente_id_proiect_uq	creat
+relatie	relatie public.dcc_documente_id_seq	creat
+relatie	relatie public.dcc_documente_pkey	creat
+relatie	relatie public.dcc_file	creat
+relatie	relatie public.dcc_file_id_seq	creat
+relatie	relatie public.dcc_file_pkey	creat
+relatie	relatie public.dcc_file_uq	creat
+relatie	relatie public.dcc_ghid_intervale	creat
+relatie	relatie public.dcc_ghid_intervale_id_seq	creat
+relatie	relatie public.dcc_ghid_intervale_pkey	creat
+relatie	relatie public.dcc_ghid_intervale_uq	creat
+relatie	relatie public.dcc_ghid_valori	creat
+relatie	relatie public.dcc_ghid_valori_id_seq	creat
+relatie	relatie public.dcc_ghid_valori_pkey	creat
+relatie	relatie public.dcc_ghid_valori_uq	creat
+relatie	relatie public.dcc_ghiduri	creat
+relatie	relatie public.dcc_ghiduri_cod_versiune_uq	creat
+relatie	relatie public.dcc_ghiduri_id_seq	creat
+relatie	relatie public.dcc_ghiduri_pkey	creat
+relatie	relatie public.dcc_intentii	creat
+relatie	relatie public.dcc_intentii_pkey	creat
+relatie	relatie public.dcc_istoric_aparitii	creat
+relatie	relatie public.dcc_istoric_aparitii_id_seq	creat
+relatie	relatie public.dcc_istoric_aparitii_pkey	creat
+relatie	relatie public.dcc_istoric_sursa_uq	creat
+relatie	relatie public.dcc_legaturi	creat
+relatie	relatie public.dcc_legaturi_id_seq	creat
+relatie	relatie public.dcc_legaturi_pkey	creat
+relatie	relatie public.dcc_legaturi_uq	creat
+relatie	relatie public.dcc_mesaje	creat
+relatie	relatie public.dcc_mesaje_gmail_uq	creat
+relatie	relatie public.dcc_mesaje_id_seq	creat
+relatie	relatie public.dcc_mesaje_pkey	creat
+relatie	relatie public.dcc_mesaje_rfc_uq	creat
+relatie	relatie public.dcc_proiecte	creat
+relatie	relatie public.dcc_proiecte_executie_contract_uq	creat
+relatie	relatie public.dcc_proiecte_id_contract_uq	creat
+relatie	relatie public.dcc_proiecte_id_seq	creat
+relatie	relatie public.dcc_proiecte_pkey	creat
+relatie	relatie public.dcc_revizii	creat
+relatie	relatie public.dcc_revizii_cod_uq	creat
+relatie	relatie public.dcc_revizii_id_seq	creat
+relatie	relatie public.dcc_revizii_pkey	creat
+relatie	relatie public.dcc_revizii_uq	creat
+relatie	relatie public.dcc_serii	creat
+relatie	relatie public.dcc_serii_cheie_uq	creat
+relatie	relatie public.dcc_serii_id_seq	creat
+relatie	relatie public.dcc_serii_pkey	creat
+relatie	relatie public.dcc_snapshot_revizii	creat
+relatie	relatie public.dcc_snapshot_revizii_pkey	creat
+relatie	relatie public.dcc_snapshoturi	creat
+relatie	relatie public.dcc_snapshoturi_id_proiect_uq	creat
+relatie	relatie public.dcc_snapshoturi_id_seq	creat
+relatie	relatie public.dcc_snapshoturi_pkey	creat
+relatie	relatie public.v_dcc_registru	creat
+tip	tip public.dcc_anexe	creat
+tip	tip public.dcc_anexe[]	creat
+tip	tip public.dcc_casute	creat
+tip	tip public.dcc_casute[]	creat
+tip	tip public.dcc_contracte	creat
+tip	tip public.dcc_contracte[]	creat
+tip	tip public.dcc_documente	creat
+tip	tip public.dcc_documente[]	creat
+tip	tip public.dcc_file	creat
+tip	tip public.dcc_file[]	creat
+tip	tip public.dcc_ghid_intervale	creat
+tip	tip public.dcc_ghid_intervale[]	creat
+tip	tip public.dcc_ghid_valori	creat
+tip	tip public.dcc_ghid_valori[]	creat
+tip	tip public.dcc_ghiduri	creat
+tip	tip public.dcc_ghiduri[]	creat
+tip	tip public.dcc_intentii	creat
+tip	tip public.dcc_intentii[]	creat
+tip	tip public.dcc_istoric_aparitii	creat
+tip	tip public.dcc_istoric_aparitii[]	creat
+tip	tip public.dcc_legaturi	creat
+tip	tip public.dcc_legaturi[]	creat
+tip	tip public.dcc_mesaje	creat
+tip	tip public.dcc_mesaje[]	creat
+tip	tip public.dcc_proiecte	creat
+tip	tip public.dcc_proiecte[]	creat
+tip	tip public.dcc_revizii	creat
+tip	tip public.dcc_revizii[]	creat
+tip	tip public.dcc_serii	creat
+tip	tip public.dcc_serii[]	creat
+tip	tip public.dcc_snapshot_revizii	creat
+tip	tip public.dcc_snapshot_revizii[]	creat
+tip	tip public.dcc_snapshoturi	creat
+tip	tip public.dcc_snapshoturi[]	creat
+tip	tip public.v_dcc_registru	creat
+tip	tip public.v_dcc_registru[]	creat
+trigger	trigger public.dcc_anexe intern dcc_anexe_document_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_anexe intern dcc_anexe_document_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_anexe intern dcc_revizii_anexa_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_anexe intern dcc_revizii_anexa_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_anexe.trg_dcc_anexe_fara_golire	creat
+trigger	trigger public.dcc_anexe.trg_dcc_anexe_garda	creat
+trigger	trigger public.dcc_casute intern dcc_mesaje_casuta_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_casute intern dcc_mesaje_casuta_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_casute intern dcc_proiecte_casuta_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_casute intern dcc_proiecte_casuta_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_casute.trg_dcc_casute_fara_golire	creat
+trigger	trigger public.dcc_casute.trg_dcc_casute_fara_stergere	creat
+trigger	trigger public.dcc_contracte intern dcc_proiecte_contract_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_contracte intern dcc_proiecte_contract_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_contracte intern dcc_serii_contract_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_contracte intern dcc_serii_contract_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_contracte.trg_dcc_contracte_fara_golire	creat
+trigger	trigger public.dcc_contracte.trg_dcc_contracte_imuabil	creat
+trigger	trigger public.dcc_documente intern dcc_anexe_document_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_documente intern dcc_anexe_document_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_documente intern dcc_documente_proiect_fk "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_documente intern dcc_documente_proiect_fk "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_documente intern dcc_documente_serie_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_documente intern dcc_documente_serie_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_documente intern dcc_file_document_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_documente intern dcc_file_document_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_documente intern dcc_istoric_aparitii_document_fk "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_documente intern dcc_istoric_aparitii_document_fk "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_documente intern dcc_revizii_document_fk "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_documente intern dcc_revizii_document_fk "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_documente.trg_dcc_documente_fara_golire	creat
+trigger	trigger public.dcc_documente.trg_dcc_documente_garda	creat
+trigger	trigger public.dcc_file intern dcc_file_document_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_file intern dcc_file_document_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_file intern dcc_revizii_fila_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_file intern dcc_revizii_fila_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_file.trg_dcc_file_fara_golire	creat
+trigger	trigger public.dcc_file.trg_dcc_file_garda	creat
+trigger	trigger public.dcc_ghid_intervale intern dcc_ghid_intervale_ghid_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_ghid_intervale intern dcc_ghid_intervale_ghid_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_ghid_intervale.trg_dcc_ghid_intervale_disjuncte	creat
+trigger	trigger public.dcc_ghid_intervale.trg_dcc_ghid_intervale_fara_golire	creat
+trigger	trigger public.dcc_ghid_intervale.trg_dcc_ghid_intervale_imuabil	creat
+trigger	trigger public.dcc_ghid_valori intern dcc_ghid_valori_ghid_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_ghid_valori intern dcc_ghid_valori_ghid_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_ghid_valori.trg_dcc_ghid_valori_fara_golire	creat
+trigger	trigger public.dcc_ghid_valori.trg_dcc_ghid_valori_imuabil	creat
+trigger	trigger public.dcc_ghiduri intern dcc_ghid_intervale_ghid_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_ghiduri intern dcc_ghid_intervale_ghid_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_ghiduri intern dcc_ghid_valori_ghid_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_ghiduri intern dcc_ghid_valori_ghid_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_ghiduri intern dcc_proiecte_ghid_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_ghiduri intern dcc_proiecte_ghid_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_ghiduri intern dcc_revizii_ghid_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_ghiduri intern dcc_revizii_ghid_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_ghiduri intern dcc_serii_ghid_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_ghiduri intern dcc_serii_ghid_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_ghiduri.trg_dcc_ghiduri_fara_golire	creat
+trigger	trigger public.dcc_ghiduri.trg_dcc_ghiduri_imuabil	creat
+trigger	trigger public.dcc_intentii.trg_dcc_intentii_fara_golire	creat
+trigger	trigger public.dcc_intentii.trg_dcc_intentii_garda	creat
+trigger	trigger public.dcc_istoric_aparitii intern dcc_istoric_aparitii_document_fk "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_istoric_aparitii intern dcc_istoric_aparitii_document_fk "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_istoric_aparitii intern dcc_istoric_aparitii_proiect_fk "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_istoric_aparitii intern dcc_istoric_aparitii_proiect_fk "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_istoric_aparitii intern dcc_istoric_aparitii_revizie_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_istoric_aparitii intern dcc_istoric_aparitii_revizie_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_istoric_aparitii.trg_dcc_istoric_aparitii_fara_golire	creat
+trigger	trigger public.dcc_istoric_aparitii.trg_dcc_istoric_garda	creat
+trigger	trigger public.dcc_legaturi intern dcc_legaturi_mesaj_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_legaturi intern dcc_legaturi_mesaj_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_legaturi intern dcc_legaturi_revizie_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_legaturi intern dcc_legaturi_revizie_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_legaturi.trg_dcc_legaturi_fara_golire	creat
+trigger	trigger public.dcc_legaturi.trg_dcc_legaturi_garda	creat
+trigger	trigger public.dcc_mesaje intern dcc_legaturi_mesaj_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_mesaje intern dcc_legaturi_mesaj_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_mesaje intern dcc_mesaje_casuta_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_mesaje intern dcc_mesaje_casuta_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_mesaje intern dcc_mesaje_proiect_fk "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_mesaje intern dcc_mesaje_proiect_fk "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_mesaje intern dcc_mesaje_snapshot_fk "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_mesaje intern dcc_mesaje_snapshot_fk "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_mesaje.trg_dcc_mesaje_fara_golire	creat
+trigger	trigger public.dcc_mesaje.trg_dcc_mesaje_garda	creat
+trigger	trigger public.dcc_proiecte intern dcc_documente_proiect_fk "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_proiecte intern dcc_documente_proiect_fk "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_proiecte intern dcc_istoric_aparitii_proiect_fk "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_proiecte intern dcc_istoric_aparitii_proiect_fk "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_proiecte intern dcc_mesaje_proiect_fk "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_proiecte intern dcc_mesaje_proiect_fk "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_proiecte intern dcc_proiecte_casuta_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_proiecte intern dcc_proiecte_casuta_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_proiecte intern dcc_proiecte_contract_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_proiecte intern dcc_proiecte_contract_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_proiecte intern dcc_proiecte_executie_proiect_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_proiecte intern dcc_proiecte_executie_proiect_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_proiecte intern dcc_proiecte_ghid_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_proiecte intern dcc_proiecte_ghid_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_proiecte intern dcc_snapshoturi_proiect_fk "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_proiecte intern dcc_snapshoturi_proiect_fk "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_proiecte.trg_dcc_proiecte_fara_golire	creat
+trigger	trigger public.dcc_proiecte.trg_dcc_proiecte_garda	creat
+trigger	trigger public.dcc_revizii intern dcc_istoric_aparitii_revizie_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_revizii intern dcc_istoric_aparitii_revizie_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_revizii intern dcc_legaturi_revizie_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_revizii intern dcc_legaturi_revizie_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_revizii intern dcc_revizii_anexa_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_revizii intern dcc_revizii_anexa_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_revizii intern dcc_revizii_document_fk "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_revizii intern dcc_revizii_document_fk "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_revizii intern dcc_revizii_fila_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_revizii intern dcc_revizii_fila_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_revizii intern dcc_revizii_ghid_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_revizii intern dcc_revizii_ghid_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_revizii intern dcc_snapshot_revizii_revizie_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_revizii intern dcc_snapshot_revizii_revizie_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_revizii.trg_dcc_revizii_fara_golire	creat
+trigger	trigger public.dcc_revizii.trg_dcc_revizii_garda	creat
+trigger	trigger public.dcc_serii intern dcc_documente_serie_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_serii intern dcc_documente_serie_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_serii intern dcc_serii_contract_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_serii intern dcc_serii_contract_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_serii intern dcc_serii_ghid_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_serii intern dcc_serii_ghid_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_serii.trg_dcc_serii_fara_golire	creat
+trigger	trigger public.dcc_serii.trg_dcc_serii_garda	creat
+trigger	trigger public.dcc_snapshot_revizii intern dcc_snapshot_revizii_revizie_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_snapshot_revizii intern dcc_snapshot_revizii_revizie_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_snapshot_revizii intern dcc_snapshot_revizii_snapshot_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_snapshot_revizii intern dcc_snapshot_revizii_snapshot_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_snapshot_revizii.trg_dcc_snapshot_revizii_fara_golire	creat
+trigger	trigger public.dcc_snapshot_revizii.trg_dcc_snapshot_revizii_garda	creat
+trigger	trigger public.dcc_snapshoturi intern dcc_mesaje_snapshot_fk "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_snapshoturi intern dcc_mesaje_snapshot_fk "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_snapshoturi intern dcc_snapshot_revizii_snapshot_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.dcc_snapshoturi intern dcc_snapshot_revizii_snapshot_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.dcc_snapshoturi intern dcc_snapshoturi_proiect_fk "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.dcc_snapshoturi intern dcc_snapshoturi_proiect_fk "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.dcc_snapshoturi.trg_dcc_snapshoturi_fara_golire	creat
+trigger	trigger public.dcc_snapshoturi.trg_dcc_snapshoturi_garda	creat
+trigger	trigger public.executie_proiecte intern dcc_proiecte_executie_proiect_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.executie_proiecte intern dcc_proiecte_executie_proiect_id_fkey "RI_FKey_noaction_upd"() 17	creat

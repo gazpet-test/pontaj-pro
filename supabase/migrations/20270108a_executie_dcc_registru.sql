@@ -1812,7 +1812,7 @@ BEGIN
   SELECT * INTO d FROM public.dcc_documente x WHERE x.id = p_document FOR UPDATE;
   -- reverificarea după lock: dreptul, starea documentului, ținta
   IF NOT public.fn_dcc_drept(v_proiect, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
-  IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: documentul e anulat' USING ERRCODE = 'P0001'; END IF;
+  IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: documentul e anulat (revizie noua)' USING ERRCODE = 'P0001'; END IF;
   IF p_fila IS NOT NULL THEN
     SELECT f.fila INTO v_nr_fila FROM public.dcc_file f WHERE f.id = p_fila AND f.document_id = d.id;
     IF NOT FOUND THEN RAISE EXCEPTION 'DCC_TINTA_STRAINA: fila nu e a documentului' USING ERRCODE = '22023'; END IF;
@@ -1866,7 +1866,7 @@ BEGIN
   SELECT * INTO p FROM public.dcc_proiecte x WHERE x.id = v_proiect FOR SHARE;
   SELECT * INTO d FROM public.dcc_documente x WHERE x.id = p_document FOR UPDATE;
   IF NOT public.fn_dcc_drept(v_proiect, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
-  IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: documentul e anulat' USING ERRCODE = 'P0001'; END IF;
+  IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: documentul e anulat (fila noua)' USING ERRCODE = 'P0001'; END IF;
   IF NOT d.are_file THEN RAISE EXCEPTION 'DCC_FARA_FILE: documentul nu a fost declarat cu file' USING ERRCODE = '22023'; END IF;
   IF EXISTS (SELECT 1 FROM public.dcc_file f WHERE f.document_id = d.id AND f.fila = p_fila) THEN
     RAISE EXCEPTION 'DCC_FILA_EXISTA: fila exista deja pe document' USING ERRCODE = '23505';
@@ -1905,7 +1905,7 @@ BEGIN
   SELECT * INTO p FROM public.dcc_proiecte x WHERE x.id = v_proiect FOR SHARE;
   SELECT * INTO d FROM public.dcc_documente x WHERE x.id = p_document FOR UPDATE;
   IF NOT public.fn_dcc_drept(v_proiect, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
-  IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: documentul e anulat' USING ERRCODE = 'P0001'; END IF;
+  IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: documentul e anulat (anexa noua)' USING ERRCODE = 'P0001'; END IF;
   SELECT coalesce(max(a.numar), 0) + 1 INTO v_nr FROM public.dcc_anexe a WHERE a.document_id = d.id;
   v_limba := coalesce(v_limba, p.limba_implicita);
   SELECT * INTO c FROM public.dcc_contracte x WHERE x.id = d.contract_id;
@@ -2197,7 +2197,7 @@ BEGIN
   FOR d IN SELECT x.id, x.stare FROM public.dcc_documente x WHERE x.id IN (SELECT r.document_id FROM public.dcc_revizii r WHERE r.id = ANY (v_lista))
             ORDER BY x.id FOR UPDATE LOOP
     -- reverificarea după lock: starea fiecărui document
-    IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: o revizie e a unui document anulat' USING ERRCODE = 'P0001'; END IF;
+    IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: o revizie e a unui document anulat (copiat)' USING ERRCODE = 'P0001'; END IF;
   END LOOP;
   -- reverificarea dreptului după lock, pe fiecare revizie
   IF public.fn_dcc_lista_drept_intern(v_lista) IS DISTINCT FROM v_proiect THEN
@@ -2263,7 +2263,7 @@ BEGIN
   SELECT * INTO p FROM public.dcc_proiecte x WHERE x.id = v_proiect FOR SHARE;
   FOR d IN SELECT x.id, x.stare FROM public.dcc_documente x WHERE x.id IN (SELECT r.document_id FROM public.dcc_revizii r WHERE r.id = ANY (v_lista))
             ORDER BY x.id FOR UPDATE LOOP
-    IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: o revizie e a unui document anulat' USING ERRCODE = 'P0001'; END IF;
+    IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: o revizie e a unui document anulat (confirmat)' USING ERRCODE = 'P0001'; END IF;
   END LOOP;
   -- reverificarea dreptului după lock, pe fiecare revizie
   IF public.fn_dcc_lista_drept_intern(v_lista) IS DISTINCT FROM v_proiect THEN
