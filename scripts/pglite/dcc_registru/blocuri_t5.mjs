@@ -1,11 +1,28 @@
 // Blocurile Task 5 (secțiunea 5: RPC-urile de configurare și ale registrului). Datele se creează PRIN RPC (baza fără fixtură); valorile
 // așteptate scrise de mână (codurile complete, secvențele, stările).
-import { U, ca, sonda } from './baza.mjs'
+import { U, ca, sonda, citeste, CALE_MIG } from './baza.mjs'
 import { F } from './fixtura.mjs'
 import { K, KN, rpc, trece, tab, GHIDURI, ghid, creeazaGhid, creeazaContract, creeazaProiect, seteazaProiect, configurare, initSerie, aloca, alocaManual,
   revizieNoua, filaNoua, anexaNoua, anuleaza, numar, numaraTot } from './rpc.mjs'
 
 const RE = cod => new RegExp('^' + cod + ':')
+
+// injecția „retragerea comisă cât RPC-ul a așteptat” (PGlite are o singură conexiune; proba cu două sesiuni reale e C7 / C9 din concurenta.sh):
+// funcția din migrare (textul EXACT, găsit o dată, până la primul `END $f$;`) e recreată cu O linie în plus înaintea ancorei (care trebuie să
+// apară EXACT o dată în corp și să fie pe drumul care continuă scrierea: după advisory / după claim-ul reușit), linie care retrage statutul de
+// owner al apelantului în tranzacția RPC-ului, DOAR când proba cere punctul respectiv (dcc_proba.retrage). Locul = punctul de așteptare real:
+// claim-ul (INSERT pe indexul unic al cheii) sau advisory-ul pe contract.
+export function cuRetragere(cap, punct, ancora) {
+  const MIG = citeste(CALE_MIG)
+  if (MIG.split(cap).length !== 2) throw new Error('INJECTIE: ' + cap + ' nu apare exact o data')
+  const i = MIG.indexOf(cap), j = MIG.indexOf('END $f$;', i) + 'END $f$;'.length
+  const corp = MIG.slice(i, j)
+  if (corp.split(ancora).length !== 2) throw new Error('INJECTIE: ancora ' + JSON.stringify(ancora) + ' nu apare exact o data in ' + cap)
+  return corp.replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION')
+    .replace(ancora, `  IF current_setting('dcc_proba.retrage', true) = '${punct}' THEN UPDATE public.profiles SET is_owner = false WHERE id = auth.uid(); END IF;\n` + ancora)
+}
+const argsProiect = (exec, contract, ghidId, versiune, k, adresa = 'dcc@exemplu.invalid') =>
+  [exec, contract, ghidId, 'AAA', 'RO', adresa, tab([]), '{}', null, 15, versiune, k]
 // comparația pe forma canonică (cheile obiectelor sortate: jsonb își ordonează cheile după lungime)
 export const can = x => JSON.stringify(x, (k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(q => [q, v[q]])) : v))
 export const egal = (A, a, b, ce) => A.ok(can(a) === can(b), `${ce}: ${can(a)} (aștepta ${can(b)})`)
@@ -483,6 +500,92 @@ export const BLOCURI_T5 = [
       egal(A, toate, [{ revizie: 0, cod_text: '30-AAA-TM1-COR-00045.Rev0.RO', ghid_id: c.g1 }, { revizie: 1, cod_text: '30-AAA-TM1-COR-00045-Rev1.RO', ghid_id: g2 }],
         'Rev0 își păstrează codul; Rev1 folosește v2')
       A.ok(r?.cod_text === '30-AAA-TM1-COR-00045-Rev1.RO', `rezultatul Rev1: ${r?.cod_text}`)
+    },
+  },
+  {
+    // L01 (Jakarinos #1182 r1, P1): dreptul de owner se reverifică după claim / lock-uri în FIECARE din cele 3 RPC-uri de configurare
+    // (C7 / C9 din concurenta.sh = aceleași căi cu două sesiuni reale)
+    nume: 'p_owner_retras_in_asteptare', task: 5, cere: ['5'], fixtura: false,
+    async fn(db, A) {
+      const g = await creeazaGhid(db, A, GHIDURI.G1)
+      const c = await creeazaContract(db, A, 'BEN', '30', 'automat')
+      const P1 = await creeazaProiect(db, A, 1, c, g)
+      // claim: după INSERT-ul reușit (ramura care continuă cu scrierile); lock: după advisory, la sfârșitul funcției
+      await db.exec(cuRetragere('CREATE FUNCTION public.fn_dcc_intentie_revendica(', 'claim', '  RETURN NULL;\nEND $f$;'))
+      await db.exec(cuRetragere('CREATE FUNCTION public.fn_dcc_lock_contract(', 'lock', 'END $f$;'))
+      const owner = async () => (await db.query(`SELECT is_owner FROM public.profiles WHERE id = '${U.OWNER}'`)).rows[0].is_owner
+      const cazuri = [
+        ['ghid', 'claim', k => rpc(db, U.OWNER, 'fn_dcc_ghid_creeaza', [JSON.stringify(ghid('GR', 1, F.lot1, [['general', 1, 99999]])), k])],
+        ['contract', 'claim', k => rpc(db, U.OWNER, 'fn_dcc_contract_creeaza', ['BEN', '31', 'automat', null, k])],
+        ['proiect nou', 'lock', k => rpc(db, U.OWNER, 'fn_dcc_proiect_seteaza', argsProiect(2, c, g, null, k))],
+        ['proiect CAS', 'lock', k => rpc(db, U.OWNER, 'fn_dcc_proiect_seteaza', argsProiect(1, c, g, 1, k, 'alt@exemplu.invalid'))],
+      ]
+      let n = 160
+      for (const [ce, punct, f] of cazuri) {
+        await db.exec(`UPDATE public.profiles SET is_owner = true WHERE id = '${U.OWNER}'`)
+        const inainte = await numaraTot(db)
+        await db.exec(`SELECT set_config('dcc_proba.retrage', '${punct}', false)`)
+        const k = K(n++)
+        const r = await f(k)
+        await db.exec(`SELECT set_config('dcc_proba.retrage', '', false)`)
+        A.cod(r, '42501', `${ce}: owner retras după ${punct}`, { re: RE('DCC_FARA_DREPT') })
+        egal(A, await numaraTot(db), inainte, `${ce}: nimic scris (nici cheia)`)
+        A.ok((await numar(db, 'dcc_intentii', `WHERE cheie = '${k}'`)) === 0, `${ce}: nicio intenție pentru cheie`)
+        A.ok((await owner()) === true, `${ce}: retragerea simulată s-a anulat odată cu tranzacția RPC-ului`)
+      }
+      const p1 = (await db.query(`SELECT versiune, adresa_dcc FROM public.dcc_proiecte WHERE id = ${P1}`)).rows[0]
+      egal(A, p1, { versiune: 1, adresa_dcc: 'dcc@exemplu.invalid' }, 'P1 neschimbat după CAS-ul refuzat')
+      // contra-proba: aceleași apeluri fără retragere trec (injecția nu strică drumul normal)
+      await db.exec(`UPDATE public.profiles SET is_owner = true WHERE id = '${U.OWNER}'`)
+      for (const [ce, , f] of cazuri) A.trece(await f(K(n++)), `${ce}: fără retragere (contra-proba)`)
+      // calea serverului (fără JWT) nu are statut de owner de pierdut: retragerea simulată nu o atinge
+      await db.exec(`SELECT set_config('dcc_proba.retrage', 'claim', false)`)
+      A.trece(await rpc(db, 'server', 'fn_dcc_contract_creeaza', ['BEN', '32', 'automat', null, K(n++)]), 'server: contract cu injecția activă')
+      await db.exec(`SELECT set_config('dcc_proba.retrage', '', false)`)
+    },
+  },
+  {
+    // Jakarinos #1182 r1, P2: la reluarea configurării se verifică IDENTITATEA autorului (nu dreptul): alt cont / calea serverului cu cheia
+    // owner-ului = alt autor; fără autentificare = refuz înaintea reluării (completează p_reluare_config_dupa_retragere)
+    nume: 'p_config_identitate_reluare', task: 5, cere: ['5'], fixtura: false,
+    async fn(db, A) {
+      const gj = JSON.stringify(GHIDURI.G1)
+      const a1 = await trece(A, rpc(db, U.OWNER, 'fn_dcc_ghid_creeaza', [gj, K(170)]), 'owner: ghidul cu K170')
+      const a2 = await trece(A, rpc(db, U.OWNER, 'fn_dcc_contract_creeaza', ['BEN', '30', 'automat', null, K(171)]), 'owner: contractul cu K171')
+      await trece(A, rpc(db, U.OWNER, 'fn_dcc_proiect_seteaza', argsProiect(1, a2?.contract_id, a1?.ghid_id, null, K(172))), 'owner: proiectul cu K172')
+      await db.exec(`UPDATE public.profiles SET is_owner = false WHERE id = '${U.OWNER}'`)
+      const inainte = await numaraTot(db)
+      A.cod(await rpc(db, U.ED, 'fn_dcc_ghid_creeaza', [gj, K(170)]), '22023', 'alt utilizator cu K170 (ghid)', { re: RE('DCC_CHEIE_ALTI_PARAMETRI') })
+      A.cod(await rpc(db, U.ED, 'fn_dcc_contract_creeaza', ['BEN', '30', 'automat', null, K(171)]), '22023', 'alt utilizator cu K171 (contract)', { re: RE('DCC_CHEIE_ALTI_PARAMETRI') })
+      A.cod(await rpc(db, U.ED, 'fn_dcc_proiect_seteaza', argsProiect(1, a2?.contract_id, a1?.ghid_id, null, K(172))), '22023', 'alt utilizator cu K172 (proiect)',
+        { re: RE('DCC_CHEIE_ALTI_PARAMETRI') })
+      A.cod(await rpc(db, 'server', 'fn_dcc_contract_creeaza', ['BEN', '30', 'automat', null, K(171)]), '22023', 'calea serverului cu K171 (autor NULL)',
+        { re: RE('DCC_CHEIE_ALTI_PARAMETRI') })
+      A.cod(await rpc(db, null, 'fn_dcc_contract_creeaza', ['BEN', '30', 'automat', null, K(171)], { sesiune: 'authenticator' }), '42501', 'fără sub cu K171',
+        { re: RE('DCC_NEAUTENTIFICAT') })
+      A.cod(await rpc(db, null, 'fn_dcc_ghid_creeaza', [gj, K(170)], { sesiune: 'authenticator' }), '42501', 'fără sub cu K170', { re: RE('DCC_NEAUTENTIFICAT') })
+      const b2 = await trece(A, rpc(db, U.OWNER, 'fn_dcc_contract_creeaza', [' ben', '30 ', 'automat', null, K(171)]), 'fostul owner reia K171 cu parametri netrimați')
+      A.ok(b2?.reluat === true && b2?.contract_id === a2?.contract_id, `reluarea normalizată: ${JSON.stringify(b2)}`)
+      egal(A, await numaraTot(db), inainte, '0 rânduri noi')
+      await db.exec(`UPDATE public.profiles SET is_owner = true WHERE id = '${U.OWNER}'`)
+    },
+  },
+  {
+    // Jakarinos #1182 r1, P2: regula 3 din fn_dcc_aloca NU e redundantă — triggerul proiectului compară ghidul cu seriile EXISTENTE la momentul
+    // setării; un proiect setat înaintea seriei poate avea un ghid cu alte limite, iar triggerul documentului verifică doar limitele SERIEI
+    nume: 'p_ghid_incompatibil_aloca', task: 5, cere: ['5'], fixtura: false,
+    async fn(db, A) {
+      const g1 = await creeazaGhid(db, A, GHIDURI.GA)   // SR1 100–199
+      const g2 = await creeazaGhid(db, A, GHIDURI.G3)   // SR1 100–150
+      const c = await creeazaContract(db, A, 'BEN', '30', 'automat')
+      const P1 = await creeazaProiect(db, A, 1, c, g1)
+      const P2 = await creeazaProiect(db, A, 2, c, g2)  // înaintea seriilor: triggerul proiectului nu are cu ce compara
+      await trece(A, initSerie(db, U.OWNER, P1, 'TS', 'DES', 'SR1', 150), 'SR1 (100–199) din P1, pragul 150')
+      const inainte = await numaraTot(db)
+      A.cod(await aloca(db, U.ED, P2, 'TS', 'DES', 'SR1'), 'P0001', 'alocarea din P2 (G2 SR1 100–150) după pragul 150', { re: RE('DCC_GHID_INCOMPATIBIL') })
+      egal(A, await numaraTot(db), inainte, 'nimic scris la refuz')
+      const a = await trece(A, aloca(db, U.ED, P1, 'TS', 'DES', 'SR1'), 'alocarea din P1 (contra-proba)')
+      A.ok(a?.secventa === 151, `alocarea din P1: ${a?.secventa} (aștepta 151)`)
     },
   },
 ]

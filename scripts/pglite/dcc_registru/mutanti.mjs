@@ -7,9 +7,9 @@
 // Rularea: post ≠ 'trece' -> (1) aplicarea COMPLETĂ trebuie să pice EXACT cu `post`; bloc ≠ '-' -> (2) aplicarea FĂRĂ secțiunea 7 (COPIA tăiată la
 //   „-- ─── 7.”, verificat o dată; $pre$ / $lock$ rămân) urmată de bloc, care trebuie să obțină `asteptat`. „Prins” = ambele exact; altfel NEPRINS.
 // Mutanții ECHIVALENȚI (nu pot schimba niciun rezultat observabil) NU sunt în registru: `IS TRUE` din CHECK-urile N4 / N6 când funcția / expresia
-//   nu întoarce NULL; o gardă `array_position(probleme, NULL) IS NULL` în plus (N5: <@ dă deja false); regula 3 de compatibilitate din fn_dcc_aloca
-//   (plasă: triggerul dcc_proiecte refuză deja orice ghid incompatibil, pe orice cale); verificarea filei în fn_dcc_revizie_noua (triggerul
-//   dcc_revizii dă același cod și același mesaj DCC_TINTA_STRAINA).
+//   nu întoarce NULL; o gardă `array_position(probleme, NULL) IS NULL` în plus (N5: <@ dă deja false); verificarea filei în fn_dcc_revizie_noua
+//   (triggerul dcc_revizii dă același cod și același mesaj DCC_TINTA_STRAINA). Regula 3 de compatibilitate din fn_dcc_aloca NU e echivalentă
+//   (Jakarinos #1182 r1): un proiect setat înaintea seriei poate avea alt interval cu același nume -> mutantul `fara_limite_ghid_aloca`.
 import { citeste, CALE_MIG, CALE_REV } from './baza.mjs'
 
 const UP = 'USING ERRCODE = \'P0001\';'
@@ -137,6 +137,32 @@ export const MUTANTI = [
       "  PERFORM public.fn_dcc_config_permisa_intern();\n  v_r := public.fn_dcc_intentie_reia(p_cheie, 'proiect_seteaza', v_hash);\n  IF v_r IS NOT NULL THEN RETURN v_r; END IF;\n"]],
     post: 'trece', bloc: 'p_reluare_config_dupa_retragere', asteptat: /proiect creat reluat după retragerea calității de proprietar: 42501/,
     drum: 'calitatea de proprietar retrasă e verificată înaintea reconcilierii cheii proiectului' },
+  // Jakarinos #1182 r1: reverificarea după claim / lock-uri (L01) și reluarea înaintea dreptului, pe FIECARE din cele 3 RPC-uri de configurare
+  { nume: 'fara_reverificare_ghid', inlocuiri: [['  PERFORM public.fn_dcc_config_permisa_intern(); -- reverificarea dupa scrierile ghidului (asteptarile pe indexuri / randul ghidului)\n', '']],
+    post: 'trece', bloc: 'p_owner_retras_in_asteptare', asteptat: /ghid: owner retras după claim: a trecut/,
+    drum: 'dreptul e verificat înaintea claim-ului; retragerea din claim nu mai e văzută, iar scrierile ghidului nu au altă gardă de drept' },
+  { nume: 'fara_reverificare_contract', inlocuiri: [['  PERFORM public.fn_dcc_config_permisa_intern(); -- reverificarea dupa scrierea contractului (asteptarea pe indexul unic)\n', '']],
+    post: 'trece', bloc: 'p_owner_retras_in_asteptare', asteptat: /contract: owner retras după claim: a trecut/,
+    drum: 'ca la ghid; triggerul dcc_contracte verifică imuabilitatea, nu dreptul' },
+  { nume: 'fara_reverificare_proiect', inlocuiri: [['  PERFORM public.fn_dcc_config_permisa_intern(); -- reverificarea proiectului dupa lock\n', '']],
+    post: 'trece', bloc: 'p_owner_retras_in_asteptare', asteptat: /proiect nou: owner retras după lock: a trecut[\s\S]*proiect CAS: owner retras după lock: a trecut/,
+    drum: 'triggerul dcc_proiecte verifică ghidul / emitentul, nu dreptul; ambele ramuri (INSERT și UPDATE CAS) trec' },
+  { nume: 'reia_dupa_drept_ghid', inlocuiri: [["  v_r := public.fn_dcc_intentie_reia(p_cheie, 'ghid_creeaza', v_hash);\n  IF v_r IS NOT NULL THEN RETURN v_r; END IF;\n  PERFORM public.fn_dcc_config_permisa_intern(); -- dreptul, dupa reluarea ghidului\n",
+      "  PERFORM public.fn_dcc_config_permisa_intern(); -- dreptul, dupa reluarea ghidului\n  v_r := public.fn_dcc_intentie_reia(p_cheie, 'ghid_creeaza', v_hash);\n  IF v_r IS NOT NULL THEN RETURN v_r; END IF;\n"]],
+    post: 'trece', bloc: 'p_reluare_config_dupa_retragere', asteptat: /ghid reluat după retragerea calității de proprietar: 42501/,
+    drum: 'calitatea de proprietar retrasă e verificată înaintea reconcilierii cheii ghidului' },
+  { nume: 'reia_dupa_drept_contract', inlocuiri: [["  v_r := public.fn_dcc_intentie_reia(p_cheie, 'contract_creeaza', v_hash);\n  IF v_r IS NOT NULL THEN RETURN v_r; END IF;\n  PERFORM public.fn_dcc_config_permisa_intern(); -- dreptul, dupa reluarea contractului\n",
+      "  PERFORM public.fn_dcc_config_permisa_intern(); -- dreptul, dupa reluarea contractului\n  v_r := public.fn_dcc_intentie_reia(p_cheie, 'contract_creeaza', v_hash);\n  IF v_r IS NOT NULL THEN RETURN v_r; END IF;\n"]],
+    post: 'trece', bloc: 'p_reluare_config_dupa_retragere', asteptat: /contract reluat după retragerea calității de proprietar: 42501/,
+    drum: 'calitatea de proprietar retrasă e verificată înaintea reconcilierii cheii contractului' },
+  { nume: 'identitate_cu_drept_config', inlocuiri: [["  IF v_uid IS NULL AND NOT public.fn_dcc_server() THEN RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501'; END IF;\n  IF p_cheie IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: cheia de intentie lipseste' USING ERRCODE = '22023'; END IF;\n  IF v_ben IS NULL",
+      "  PERFORM public.fn_dcc_config_permisa_intern();\n  IF p_cheie IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: cheia de intentie lipseste' USING ERRCODE = '22023'; END IF;\n  IF v_ben IS NULL"]],
+    post: 'trece', bloc: 'p_reluare_config_dupa_retragere', asteptat: /contract reluat după retragerea calității de proprietar: 42501/,
+    drum: 'forma r1 a pasului (1): identitatea și dreptul nedespărțite la intrare, deci reluarea nu mai ajunge la autor' },
+  { nume: 'identitate_fara_server_config', inlocuiri: [["  IF v_uid IS NULL AND NOT public.fn_dcc_server() THEN RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501'; END IF;\n  IF p_cheie IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: cheia de intentie lipseste' USING ERRCODE = '22023'; END IF;\n  IF v_ben IS NULL",
+      "  IF p_cheie IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: cheia de intentie lipseste' USING ERRCODE = '22023'; END IF;\n  IF v_ben IS NULL"]],
+    post: 'trece', bloc: 'p_config_identitate_reluare', asteptat: /fără sub cu K171: 22023/,
+    drum: 'fără pasul (1), apelul fără sub (autor NULL) ajunge la reluare și primește codul cheii altui autor, nu refuzul de autentificare' },
   // review r1 implementare (P1): forma citirii documentului în gărzi (comportamentul: C8 din concurenta.sh, mutantul garzi_fara_lock)
   { nume: 'garda_snapshot_fara_lock', inlocuiri: [['WHERE r.id = NEW.revizie_id FOR UPDATE OF x; -- garda snapshotului', 'WHERE r.id = NEW.revizie_id; -- garda snapshotului']],
     post: 'trece', bloc: 't4_garzi_lock_document', asteptat: /fn_dcc_snapshot_revizii_garda: citirea documentului = /,
@@ -156,6 +182,9 @@ export const MUTANTI = [
     post: 'trece', bloc: 'p_d5_identitati', asteptat: /authenticated fără sub: contract: a trecut/,
     drum: 'în RPC-ul DEFINER current_user = postgres; doar session_user (authenticator) deosebea apelul API' },
   // ── alocarea, seriile, importul, mesajele ──
+  { nume: 'fara_limite_ghid_aloca', inlocuiri: [['  IF gi.limita_inf <> s.limita_inf OR gi.limita_sup <> s.limita_sup THEN\n', '  IF false THEN\n']],
+    post: 'trece', bloc: 'p_ghid_incompatibil_aloca', asteptat: /alocarea din P2 \(G2 SR1 100–150\) după pragul 150: a trecut/,
+    drum: 'P2 a fost setat pe G2 înaintea seriei (triggerul proiectului nu avea serii de comparat); triggerul documentului verifică limitele SERIEI (100–199), deci 151 trece' },
   { nume: 'trece_peste_limita', inlocuiri: [["  IF v_urmator > s.limita_sup THEN RAISE EXCEPTION 'DCC_INTERVAL_EPUIZAT: intervalul % e epuizat', s.interval USING ERRCODE = 'P0001'; END IF;\n", '']],
     post: 'trece', bloc: 'p4_limite_interval', asteptat: /SR1 epuizat: 23514/, drum: 'fără refuzul explicit, UPDATE-ul contorului peste limită lovește dcc_serii_ultimul_ck' },
   { nume: 'serie_pornita_de_la_1', inlocuiri: [["  IF s.id IS NULL THEN RAISE EXCEPTION 'DCC_SERIE_ABSENTA: seria nu e initializata (nu porneste singura de la 00001)' USING ERRCODE = 'P0001'; END IF;",

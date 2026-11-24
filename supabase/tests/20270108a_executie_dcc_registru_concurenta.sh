@@ -67,6 +67,11 @@
 #   C8_anulare_vs_scriere_directa  BEN/41 (review r1 implementare, P1): A (OWNER) anulează documentul prin RPC, necomis; B = postgres, INSERT DIRECT
 #        (triggerele active, fără replica) — runda anexei (anexa 1), a filei (fila 3 pe un document cu 2 file), a reviziei (Rev1 copiată din Rev0)
 #        → Lock (rândul documentului, luat FOR UPDATE de garda tabelului); A COMMIT → B: P0001 DCC_GARDA_DOCUMENT_ANULAT; nimic nou pe document.
+#   C9_owner_retras_la_claim  (Jakarinos #1182 r1, P1, celelalte două RPC-uri de configurare): OWNER2 redevine owner înaintea fiecărei runde.
+#        (1) A (OWNER2) creează contractul BEN/42 (runda contract) / ghidul GC9 (runda ghid) cu cheia K, necomis; (2) B (OWNER2) aceeași cheie,
+#        aceiași parametri → Lock (indexul unic al dcc_intentii); (3) C retrage is_owner al lui OWNER2 și COMITE, observatorul vede retragerea
+#        și B ÎNCĂ în Lock; (4) A ROLLBACK (clientul a căzut) → B deține cheia, scrie, reverificarea vede retragerea → 42501 DCC_FARA_DREPT;
+#        niciun contract BEN/42 / ghid GC9, niciun rând dcc_intentii pentru K.
 #
 # MUTANȚII (DCC_MUTANT; fiecare `din` verificat că apare EXACT o dată în secțiunile extrase, altfel ieșire 2):
 #   | mutant                 | ce elimină                                                          | scenariu   | observator     | OPUSUL cerut                  |
@@ -80,6 +85,8 @@
 #   | fara_advisory_contract | fn_dcc_lock_contract nu mai ia niciun lock (NULL;)                   | C6b        | fara_asteptare | B succes; ghidul G3 incompatibil cu seria lui A |
 #   | fara_reverificare_config | reverificarea dreptului după lock-uri din fn_dcc_proiect_seteaza   | C7         | asteapta_lock  | B succes; proiectul la versiunea 2 |
 #   | garzi_fara_lock        | FOR UPDATE din citirea documentului în gărzile filei, anexei, reviziei | C8 (toate) | asteapta_lock | B succes (cheia străină așteaptă tot rândul, dar nu reverifică starea); rândul nou pe documentul anulat |
+#   | fara_reverificare_contract | reverificarea dreptului după scrierea din fn_dcc_contract_creeaza | C9_contract | asteapta_lock | B succes; contractul BEN/42 scris de fostul owner |
+#   | fara_reverificare_ghid | reverificarea dreptului după scrierile din fn_dcc_ghid_creeaza       | C9_ghid    | asteapta_lock  | B succes; ghidul GC9 scris de fostul owner |
 #   Mutantul fara_claim are nevoie de operație + hash la INSERT-ul din incheie: revendica le pune în setări LOCALE tranzacției (dcc_mutant.*).
 set -u
 set -o pipefail
@@ -88,7 +95,7 @@ if [ "${DCC_CLUSTER_DISPENSABIL:-}" != "da" ]; then
   echo "refuz: scriptul creeaza / sterge o baza si poate crea roluri la nivel de CLUSTER; ruleaza-l DOAR pe un cluster complet dispensabil, cu DCC_CLUSTER_DISPENSABIL=da" >&2
   exit 2
 fi
-MUTANTI_LISTA='fara_lock_serie fara_reverificare fara_claim fara_lock_document fara_stare_dupa_lock fara_garzi_anexa advisory_cu_interval fara_advisory_contract fara_reverificare_config garzi_fara_lock'
+MUTANTI_LISTA='fara_lock_serie fara_reverificare fara_claim fara_lock_document fara_stare_dupa_lock fara_garzi_anexa advisory_cu_interval fara_advisory_contract fara_reverificare_config garzi_fara_lock fara_reverificare_contract fara_reverificare_ghid'
 if [ $# -ne 1 ] || ! [[ "$1" =~ ^[a-z][a-z0-9_]{2,62}$ ]]; then
   echo "folosire: DCC_CLUSTER_DISPENSABIL=da [DCC_MUTANT=<$MUTANTI_LISTA>] $0 <nume_baza_noua (^[a-z][a-z0-9_]{2,62}\$)>" >&2; exit 2
 fi
@@ -106,8 +113,10 @@ export PGCLIENTENCODING=UTF8
 
 # scenariile rulate: toate fără mutant; altfel DOAR scenariul (scenariile) mutantului, din tabel
 case "$MUTANT" in
-  nu) RULEAZA=' C1 C1b C2i C2ii C2iii C3 C4 C4b_anexa C4b_fila C5a C5b C6 C6b C7 C8_anexa C8_fila C8_revizie ';;
+  nu) RULEAZA=' C1 C1b C2i C2ii C2iii C3 C4 C4b_anexa C4b_fila C5a C5b C6 C6b C7 C8_anexa C8_fila C8_revizie C9_contract C9_ghid ';;
   fara_reverificare_config) RULEAZA=' C7 ';;
+  fara_reverificare_contract) RULEAZA=' C9_contract ';;
+  fara_reverificare_ghid) RULEAZA=' C9_ghid ';;
   garzi_fara_lock) RULEAZA=' C8_anexa C8_fila C8_revizie ';;
   fara_lock_serie) RULEAZA=' C1 ';;
   fara_reverificare) RULEAZA=' C5a C5b ';;
@@ -201,6 +210,12 @@ sqlInit() {   # <proiect_dcc> <interval> <prag> <cheie>  → interval|reluat  (e
 }
 sqlSeteaza() {   # <executie_proiect> <contract> <ghid> <versiune> <cheie>  → versiune|creat|reluat
   printf "WITH s AS MATERIALIZED (SELECT public.fn_dcc_proiect_seteaza(%s, %s, %s, 'AAA', 'RO', 'dcc@exemplu.invalid', '{}'::text[], '{}'::jsonb, NULL, 15, %s, '%s') AS x) SELECT coalesce(x ->> 'versiune', '-') || '|' || coalesce(x ->> 'creat', '-') || '|' || coalesce(x ->> 'reluat', '-') AS r FROM s" "$@"
+}
+sqlContract() {   # <cod_contract> <cheie>  → cod_contract|reluat
+  printf "WITH s AS MATERIALIZED (SELECT public.fn_dcc_contract_creeaza('BEN', '%s', 'automat', NULL, '%s') AS x) SELECT coalesce(x ->> 'cod_contract', '-') || '|' || coalesce(x ->> 'reluat', '-') AS r FROM s" "$@"
+}
+sqlGhid() {   # <cheie>  → cod|reluat  (ghidul GC9 din $D/ghid_c9.json, apostrofurile deja dublate de extragere)
+  printf "WITH s AS MATERIALIZED (SELECT public.fn_dcc_ghid_creeaza('%s'::jsonb, '%s') AS x) SELECT coalesce(x ->> 'cod', '-') || '|' || coalesce(x ->> 'reluat', '-') AS r FROM s" "$(cat "$D/ghid_c9.json")" "$1"
 }
 # citirile observatorului / ale verificărilor (ca postgres)
 C() { q "SELECT id FROM public.dcc_contracte WHERE beneficiar = 'BEN' AND cod_contract = '$1'"; }
@@ -437,6 +452,10 @@ MUTANTI = {
         ("  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id FOR UPDATE; -- garda reviziei\n",
          "  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id; -- MUTANT garzi_fara_lock (revizie)\n"),
     ],
+    'fara_reverificare_contract': [("  PERFORM public.fn_dcc_config_permisa_intern(); -- reverificarea dupa scrierea contractului (asteptarea pe indexul unic)\n",
+                                    "  -- MUTANT fara_reverificare_contract\n")],
+    'fara_reverificare_ghid': [("  PERFORM public.fn_dcc_config_permisa_intern(); -- reverificarea dupa scrierile ghidului (asteptarile pe indexuri / randul ghidului)\n",
+                                "  -- MUTANT fara_reverificare_ghid\n")],
 }
 for din, in_ in MUTANTI[mutant]:
     c = ddl.count(din)
@@ -461,6 +480,8 @@ for i, (cod, fmt, iv) in enumerate(GH):
     linii.append("SELECT public.fn_dcc_ghid_creeaza('%s'::jsonb, '00000000-0000-4000-8000-%012d'::uuid);" % (js, 1001 + i))
 linii.append('COMMIT;')
 scrie('ghiduri.sql', '\n'.join(linii) + '\n')
+# ghidul rundei C9_ghid (scris de B în probă, nu în fixtură): JSON-ul ca literal SQL (apostrofurile dublate)
+scrie('ghid_c9.json', json.dumps(ghid('GC9', 'lot1', [('general', 1, 99999)])).replace("'", "''"))
 print('     extras: schelet (-4 CREATE ROLE), lant (5 functii, amprente verificate), sectiunile 1-6: %d caractere (%d tabele, %d functii, %d triggere), mutant %s (%d inlocuiri)'
       % ((len(ddl),) + nr + (mutant, len(MUTANTI[mutant]))))
 PY
@@ -787,6 +808,26 @@ c8() {   # <runda> <titlul documentului> <tabel numarat> <sql B (postgres, direc
 ruleaza C8_anexa && c8 anexa 'C8 anexa' dcc_anexe "WITH x AS (INSERT INTO public.dcc_anexe (document_id, numar, titlu) VALUES (@D@, 1, 'Anexa directa') RETURNING id) SELECT id::text AS r FROM x" 0
 ruleaza C8_fila && c8 fila 'C8 file' dcc_file "WITH x AS (INSERT INTO public.dcc_file (document_id, fila) VALUES (@D@, 3) RETURNING id) SELECT id::text AS r FROM x" 2
 ruleaza C8_revizie && c8 revizie 'C8 revizie' dcc_revizii "WITH x AS (INSERT INTO public.dcc_revizii (contract_id, document_id, revizie, limba, ghid_id, cod_text, nume_fisier_baza, creat_de) SELECT contract_id, document_id, 1, limba, ghid_id, cod_text || '-D', nume_fisier_baza || '-D', creat_de FROM public.dcc_revizii WHERE document_id = @D@ AND revizie = 0 RETURNING id) SELECT id::text AS r FROM x" 1
+
+# ── C9 ──
+c9() {   # <runda contract|ghid> <sql (A și B, aceeași cheie)> <tipar A> <numararea obiectului> <eticheta>
+  SCEN="C9_$1"
+  q "UPDATE public.profiles SET is_owner = true WHERE id = '$U_OWNER2'" > /dev/null; ok $? "OWNER2 owner din nou (pregatirea $SCEN)"
+  astept t "$(q "SELECT is_owner FROM public.profiles WHERE id = '$U_OWNER2'")" "OWNER2 owner inainte de $SCEN"
+  echo "C9_owner_retras_la_claim: runda $1, aceeasi cheie, A ROLLBACK (mutant: $MUTANT)"
+  if concurent "$SCEN" "$U_OWNER2" "$2" "$3" "$U_OWNER2" "$2" ROLLBACK retrage_owner_C7; then
+    if [ "$MUTANT" = "fara_reverificare_$1" ]; then
+      astept "00000 ${3#00000 }" "$B_STARE" "B (OPUS): fara reverificare, fostul owner scrie $5"
+      astept 1 "$(q "$4")" "$5"
+    else
+      astept '42501 DCC_FARA_DREPT' "$B_STARE" "B: reverificarea dupa claim / scrieri vede retragerea"
+      astept 0 "$(q "$4")" "$5"
+      astept 0 "$(nint "$6")" "niciun rand dcc_intentii pentru cheie"
+    fi
+  fi
+}
+ruleaza C9_contract && c9 contract "$(sqlContract 42 "$(k 2951)")" '00000 42|false' "SELECT count(*) FROM public.dcc_contracte WHERE beneficiar = 'BEN' AND cod_contract = '42'" "contractul BEN/42" "$(k 2951)"
+ruleaza C9_ghid && c9 ghid "$(sqlGhid "$(k 2952)")" '00000 GC9|false' "SELECT count(*) FROM public.dcc_ghiduri WHERE cod = 'GC9'" "ghidul GC9" "$(k 2952)"
 
 inchideA; ok $? "sesiunea A inchisa curat"
 if [ "$MUTANT" = nu ]; then
