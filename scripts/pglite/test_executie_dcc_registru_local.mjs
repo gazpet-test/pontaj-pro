@@ -15,6 +15,8 @@ import { BLOCURI_T3 } from './dcc_registru/blocuri_t3.mjs'
 import { BLOCURI_T4 } from './dcc_registru/blocuri_t4.mjs'
 import { BLOCURI_T5 } from './dcc_registru/blocuri_t5.mjs'
 import { BLOCURI_T6 } from './dcc_registru/blocuri_t6.mjs'
+import { BLOCURI_T7 } from './dcc_registru/blocuri_t7.mjs'
+import { curata } from './dcc_registru/runner.mjs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -34,7 +36,7 @@ for (const m of MIG.matchAll(/^-- ─── ([0-9])([a-d])?\. /gm)) {
   SECTIUNI.add(s); SECTIUNI.add(m[1])
 }
 
-const BLOCURI = [...BLOCURI_T2, ...BLOCURI_T3, ...BLOCURI_T4, ...BLOCURI_T5, ...BLOCURI_T6]
+const BLOCURI = [...BLOCURI_T2, ...BLOCURI_T3, ...BLOCURI_T4, ...BLOCURI_T5, ...BLOCURI_T6, ...BLOCURI_T7]
 // registrul ÎNCHIS al blocurilor de stare intermediară: {bloc: succesori cumulativi}
 const INTERMEDIARE = { t2_select_inainte_de_politici: ['t3_grant', 't3_rls_fixtura'] }
 // succesorii pot lipsi din lista blocurilor DOAR cât commit-ul nu are încă secțiunea care face blocul sărit (la Task 2 nu există t3_*)
@@ -81,7 +83,8 @@ async function main() {
   console.log(`PGLITE_PID: ${P.aparitii} apariții „${PID_REAL}” -> „${PID_PGLITE}” (doar în copia aplicată pe PGlite)`)
   ok(P.aparitii >= 1, 'predicatul pid-ului apare în migrare (substituția PGlite are ce înlocui)')
   const db0 = await bazaGoala()
-  try { await caRunner(db0, NUME, P.text) } catch (e) { console.log('APLICAREA MIGRARII A ESUAT: ' + e.message + '\n' + (e.jurnal || []).join('\n')); process.exit(1) }
+  let jurnalAplicare = []
+  try { jurnalAplicare = await caRunner(db0, NUME, P.text) } catch (e) { console.log('APLICAREA MIGRARII A ESUAT: ' + e.message + '\n' + (e.jurnal || []).join('\n')); process.exit(1) }
   const B0 = await db0.dumpDataDir('none')
   try { await db0.exec(FIX_BAZA) } catch (e) { console.log('FIXTURA fix_baza REFUZATA: ' + e.message); process.exit(1) }
   const B1 = await db0.dumpDataDir('none')
@@ -99,11 +102,12 @@ async function main() {
     const t = Date.now()
     const db = await dinInstantaneu(b.fixtura ? B1 : B0)
     const A = abateri()
-    try { await b.fn(db, A) } catch (e) { A.ab.push('EXCEPTIE ' + (e.stack || e.message)) }
+    try { await b.fn(db, A, { jurnalAplicare, B0, B1 }) } catch (e) { A.ab.push('EXCEPTIE ' + (e.stack || e.message)) }
     await db.close()
     rulate++
     ok(A.ab.length === 0, `${b.nume} (task ${b.task}, ${Date.now() - t} ms)${A.ab.length ? '\n        ' + A.ab.slice(0, 40).join('\n        ') + (A.ab.length > 40 ? `\n        … încă ${A.ab.length - 40}` : '') : ''}`)
   }
+  curata()
   if (DOAR && rulate === 0) { console.log('BLOC_NECUNOSCUT ' + DOAR); process.exit(1) }
   console.log(`\n${rulate} blocuri rulate, ${esec} eșecuri, ${Math.round((Date.now() - t0) / 1000)} s`)
   process.exit(esec ? 1 : 0)

@@ -123,12 +123,14 @@ export async function caRunner(db, nume, text, { plafon = PLAFON_LIVRARE, marcaj
 // o instrucțiune ca rolul dat, cu JWT-ul contului (COMMIT la succes, ca un apel PostgREST). sesiune = 'authenticator' simulează calea API.
 // sesiune = 'authenticator' simulează calea API (session_user = authenticator). PGlite NU revine singur din SET [LOCAL] SESSION AUTHORIZATION
 // (nici la COMMIT, nici la RESET): după apel sesiunea se readuce EXPLICIT la postgres (verificat de p_d5_identitati la fiecare pas).
-export async function ca(db, rol, uid, sql, { sesiune = null, params = [] } = {}) {
+// jwt: 'sub' = doar request.jwt.claim.sub; 'ambele' = și request.jwt.claims (cele două surse din care citește auth.uid())
+export async function ca(db, rol, uid, sql, { sesiune = null, params = [], jwt = 'sub' } = {}) {
   await db.exec('BEGIN')
   try {
     if (sesiune) await db.exec(`SET LOCAL SESSION AUTHORIZATION ${sesiune}`)
     if (rol) await db.exec(`SET LOCAL ROLE ${rol}`)
     if (uid) await db.exec(`SELECT set_config('request.jwt.claim.sub', '${uid}', true)`)
+    if (uid && jwt === 'ambele') await db.exec(`SELECT set_config('request.jwt.claims', '{"sub": "${uid}", "role": "authenticated"}', true)`)
     const r = await db.query(sql, params)
     await db.exec('COMMIT')
     return { rows: r.rows }

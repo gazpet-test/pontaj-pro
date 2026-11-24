@@ -122,7 +122,8 @@ BEGIN
       OR has_function_privilege('anon', p.oid, 'EXECUTE')
       OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM a.cu_auth;
   IF v_rau IS NOT NULL THEN
-    RAISE EXCEPTION '20270108a: lantul de drept (%) difera de amprenta revizuita: %', p_moment, v_rau;
+    RAISE EXCEPTION '%: lantul de drept (%) difera de amprenta revizuita: %', CASE WHEN p_moment = 'dupa' THEN 'L15_POST_AMPRENTA' ELSE '20270108a' END,
+      p_moment, v_rau;
   END IF;
 END $lant$;
 DO $l15_inainte$ BEGIN PERFORM pg_temp.lant_20270108a('inainte'); END $l15_inainte$;
@@ -2295,5 +2296,295 @@ REVOKE ALL ON FUNCTION public.fn_dcc_lista_forma_intern(bigint[]), public.fn_dcc
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_dcc_istoric_importa(bigint, text, jsonb, uuid), public.fn_dcc_marcheaza_copiat(bigint[], jsonb, uuid),
   public.fn_dcc_confirma_trimis_manual(bigint[], timestamptz, text, text, bigint, uuid) TO authenticated;
+
+-- ─── 7. postcondițiile: fiecare verificare cu codul ei stabil (L15_POST_CONSTRANGERI, L15_POST_POLITICA, L15_POST_GRANT, L15_POST_FUNCTIE,
+-- L15_POST_TRIGGER, L15_POST_NUMAR, L15_POST_DATE, L15_POST_AMPRENTA, L15_LOCK_LIPSA, L15_LOCK_NEDECLARAT). Postcondiția de lock-uri e ULTIMA, după
+-- toate citirile de aici. NU citește app_modules / user_module_access (o citire ar fi ea însăși un lock nedeclarat).
+DO $post$
+DECLARE v_rau text; v_n integer; v_rel oid[]; v_cls text; v_baza oid[]; v_dep oid[]; v_set text;
+  v_tab text[] := ARRAY['dcc_casute', 'dcc_ghiduri', 'dcc_ghid_valori', 'dcc_ghid_intervale', 'dcc_contracte', 'dcc_proiecte', 'dcc_intentii', 'dcc_serii',
+    'dcc_documente', 'dcc_file', 'dcc_anexe', 'dcc_revizii', 'dcc_istoric_aparitii', 'dcc_snapshoturi', 'dcc_snapshot_revizii', 'dcc_mesaje', 'dcc_legaturi'];
+  v_cit text[] := ARRAY['dcc_ghiduri', 'dcc_ghid_valori', 'dcc_ghid_intervale', 'dcc_contracte', 'dcc_proiecte', 'dcc_documente', 'dcc_file', 'dcc_anexe',
+    'dcc_revizii', 'dcc_istoric_aparitii', 'dcc_snapshoturi', 'dcc_snapshot_revizii', 'dcc_mesaje', 'dcc_legaturi', 'v_dcc_registru'];
+  v_b_m1 oid[]; v_b_m2 oid[]; v_b_r1 oid[]; v_b_r2 oid[]; v_b_c oid[]; v_b_e oid[]; v_m1 oid[]; v_m2 oid[]; v_r1 oid[]; v_r2 oid[]; v_c oid[]; v_e oid[];
+  -- CLASA-E-START (precondiția P-E: relațiile non-catalog atinse de declanșatoarele de evenimente ACTIVE ale platformei, „schemă.relație:Mod”;
+  -- goală până la citirea P-E pe clonă și pe producție — amendament revizuit dacă lista nu e goală)
+  v_e_moduri text[] := ARRAY[]::text[];
+  -- CLASA-E-END
+BEGIN
+  SELECT array_agg(('public.' || t)::regclass::oid ORDER BY t) INTO v_rel FROM unnest(v_tab) t;
+  -- (a) constrângerile NUMITE: CHECK și UNIQUE = EXACT inventarul (planul, A3), validate; cheile străine pe tabel = numărul declarat
+  -- INVENTAR-START
+  WITH ast(t, n, cls) AS (VALUES
+    ('dcc_casute', 'dcc_casute_adresa_ck', 'N1'), ('dcc_casute', 'dcc_casute_tip_ck', 'N1'), ('dcc_casute', 'dcc_casute_stare_ck', 'N1'),
+    ('dcc_casute', 'dcc_casute_proprietar_ck', 'N3'), ('dcc_ghiduri', 'dcc_ghiduri_cod_ck', 'N1'), ('dcc_ghiduri', 'dcc_ghiduri_versiune_ck', 'N1'),
+    ('dcc_ghiduri', 'dcc_ghiduri_sursa_ck', 'N1'), ('dcc_ghiduri', 'dcc_ghiduri_format_cod_ck', 'N4'),
+    ('dcc_ghiduri', 'dcc_ghiduri_format_fisier_ck', 'N4'), ('dcc_ghiduri', 'dcc_ghiduri_limba_ck', 'N1'),
+    ('dcc_ghid_valori', 'dcc_ghid_valori_categorie_ck', 'N1'), ('dcc_ghid_valori', 'dcc_ghid_valori_forma_ck', 'N1'),
+    ('dcc_ghid_valori', 'dcc_ghid_valori_fara_tematica_ck', 'N1'), ('dcc_ghid_intervale', 'dcc_ghid_intervale_interval_ck', 'N4'),
+    ('dcc_ghid_intervale', 'dcc_ghid_intervale_limite_ck', 'N1'), ('dcc_contracte', 'dcc_contracte_beneficiar_ck', 'N1'),
+    ('dcc_contracte', 'dcc_contracte_cod_ck', 'N1'), ('dcc_contracte', 'dcc_contracte_mod_ck', 'N1'),
+    ('dcc_contracte', 'dcc_contracte_creat_prin_ck', 'N1'), ('dcc_contracte', 'dcc_contracte_creat_ck', 'N3'),
+    ('dcc_proiecte', 'dcc_proiecte_emitent_ck', 'N1'), ('dcc_proiecte', 'dcc_proiecte_limba_ck', 'N2'),
+    ('dcc_proiecte', 'dcc_proiecte_adresa_ck', 'N2'), ('dcc_proiecte', 'dcc_proiecte_cc_implicit_ck', 'N1'),
+    ('dcc_proiecte', 'dcc_proiecte_plafon_ck', 'N1'), ('dcc_proiecte', 'dcc_proiecte_casuta_ck', 'N2'),
+    ('dcc_proiecte', 'dcc_proiecte_trimitere_ck', 'N1'), ('dcc_proiecte', 'dcc_proiecte_versiune_ck', 'N1'),
+    ('dcc_intentii', 'dcc_intentii_operatie_ck', 'N1'), ('dcc_intentii', 'dcc_intentii_hash_ck', 'N1'),
+    ('dcc_intentii', 'dcc_intentii_actor_ck', 'N1'), ('dcc_intentii', 'dcc_intentii_autor_ck', 'N3'), ('dcc_serii', 'dcc_serii_interval_ck', 'N4'),
+    ('dcc_serii', 'dcc_serii_motiv_ck', 'N1'), ('dcc_serii', 'dcc_serii_initializata_prin_ck', 'N1'),
+    ('dcc_serii', 'dcc_serii_initializata_ck', 'N3'), ('dcc_serii', 'dcc_serii_limite_ck', 'N1'), ('dcc_serii', 'dcc_serii_prag_ck', 'N1'),
+    ('dcc_serii', 'dcc_serii_ultimul_ck', 'N1'), ('dcc_documente', 'dcc_documente_secventa_ck', 'N1'),
+    ('dcc_documente', 'dcc_documente_interval_ck', 'N4'), ('dcc_documente', 'dcc_documente_mod_ck', 'N1'),
+    ('dcc_documente', 'dcc_documente_titlu_ck', 'N1'), ('dcc_documente', 'dcc_documente_stare_val_ck', 'N1'),
+    ('dcc_documente', 'dcc_documente_automat_ck', 'N3'), ('dcc_documente', 'dcc_documente_stare_ck', 'N3'),
+    ('dcc_documente', 'dcc_documente_anulare_ck', 'N3'), ('dcc_documente', 'dcc_documente_neanulat_ck', 'N3'),
+    ('dcc_file', 'dcc_file_fila_ck', 'N1'), ('dcc_anexe', 'dcc_anexe_numar_ck', 'N1'), ('dcc_anexe', 'dcc_anexe_titlu_ck', 'N1'),
+    ('dcc_revizii', 'dcc_revizii_revizie_ck', 'N1'), ('dcc_revizii', 'dcc_revizii_limba_ck', 'N2'),
+    ('dcc_revizii', 'dcc_revizii_stare_val_ck', 'N1'), ('dcc_revizii', 'dcc_revizii_anulata_prin_val_ck', 'N2'),
+    ('dcc_revizii', 'dcc_revizii_verdict_val_ck', 'N2'), ('dcc_revizii', 'dcc_revizii_tinta_ck', 'N1'),
+    ('dcc_revizii', 'dcc_revizii_stare_ck', 'N3'), ('dcc_revizii', 'dcc_revizii_anulare_ck', 'N3'),
+    ('dcc_revizii', 'dcc_revizii_neanulata_ck', 'N3'), ('dcc_revizii', 'dcc_revizii_verdict_ck', 'N3'),
+    ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_sursa_ck', 'N1'), ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_sursa_id_ck', 'N1'),
+    ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_pozitie_ck', 'N1'), ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_lot_ck', 'N1'),
+    ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_valori_ck', 'N1'), ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_cod_scris_ck', 'N2'),
+    ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_secventa_ck', 'N2'), ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_fila_ck', 'N2'),
+    ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_anexa_ck', 'N2'), ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_revizie_ck', 'N2'),
+    ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_limba_ck', 'N2'), ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_probleme_ck', 'N5'),
+    ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_hash_ck', 'N1'), ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_importat_prin_ck', 'N1'),
+    ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_importat_ck', 'N3'), ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_revizie_problema_ck', 'N6'),
+    ('dcc_snapshoturi', 'dcc_snapshoturi_tip_ck', 'N1'), ('dcc_snapshoturi', 'dcc_snapshoturi_subiect_ck', 'N1'),
+    ('dcc_snapshoturi', 'dcc_snapshoturi_manifest_ck', 'N1'), ('dcc_snapshoturi', 'dcc_snapshoturi_hash_ck', 'N1'),
+    ('dcc_mesaje', 'dcc_mesaje_directie_ck', 'N1'), ('dcc_mesaje', 'dcc_mesaje_sursa_ck', 'N1'), ('dcc_mesaje', 'dcc_mesaje_thread_ck', 'N3'),
+    ('dcc_mesaje', 'dcc_mesaje_manual_ck', 'N3'), ('dcc_legaturi', 'dcc_legaturi_metoda_ck', 'N1'), ('dcc_legaturi', 'dcc_legaturi_dovada_ck', 'N1'),
+    ('dcc_legaturi', 'dcc_legaturi_stare_ck', 'N1'), ('dcc_legaturi', 'dcc_legaturi_verdict_ck', 'N2'),
+    ('dcc_legaturi', 'dcc_legaturi_confirmare_ck', 'N3')
+  ), asu(t, n) AS (VALUES
+    ('dcc_casute', 'dcc_casute_adresa_uq'), ('dcc_ghiduri', 'dcc_ghiduri_cod_versiune_uq'), ('dcc_ghid_valori', 'dcc_ghid_valori_uq'),
+    ('dcc_ghid_intervale', 'dcc_ghid_intervale_uq'), ('dcc_contracte', 'dcc_contracte_uq'), ('dcc_proiecte', 'dcc_proiecte_executie_contract_uq'),
+    ('dcc_proiecte', 'dcc_proiecte_id_contract_uq'), ('dcc_serii', 'dcc_serii_cheie_uq'), ('dcc_documente', 'dcc_documente_cod_uq'),
+    ('dcc_documente', 'dcc_documente_id_contract_uq'), ('dcc_documente', 'dcc_documente_id_proiect_uq'), ('dcc_file', 'dcc_file_uq'),
+    ('dcc_anexe', 'dcc_anexe_uq'), ('dcc_revizii', 'dcc_revizii_uq'), ('dcc_revizii', 'dcc_revizii_cod_uq'),
+    ('dcc_istoric_aparitii', 'dcc_istoric_sursa_uq'), ('dcc_snapshoturi', 'dcc_snapshoturi_id_proiect_uq'), ('dcc_mesaje', 'dcc_mesaje_rfc_uq'),
+    ('dcc_mesaje', 'dcc_mesaje_gmail_uq'), ('dcc_legaturi', 'dcc_legaturi_uq')
+  -- INVENTAR-END
+  ), asf(t, n) AS (VALUES ('dcc_anexe', 1), ('dcc_documente', 2), ('dcc_file', 1), ('dcc_ghid_intervale', 1), ('dcc_ghid_valori', 1), ('dcc_istoric_aparitii', 3),
+    ('dcc_legaturi', 2), ('dcc_mesaje', 3), ('dcc_proiecte', 4), ('dcc_revizii', 4), ('dcc_serii', 2), ('dcc_snapshot_revizii', 2), ('dcc_snapshoturi', 1)
+  ), act AS (
+    SELECT c.conrelid::regclass::text AS t, c.conname AS n, c.contype AS tip, c.convalidated AS v FROM pg_catalog.pg_constraint c WHERE c.conrelid = ANY (v_rel))
+  SELECT string_agg(x, '; ' ORDER BY x) INTO v_rau FROM (
+    (SELECT 'lipsa ' || t || '.' || n AS x FROM (SELECT t, n FROM ast EXCEPT SELECT t, n FROM act WHERE tip = 'c' AND v) a)
+    UNION ALL (SELECT 'in plus ' || t || '.' || n FROM (SELECT t, n FROM act WHERE tip = 'c' EXCEPT SELECT t, n FROM ast) b)
+    UNION ALL (SELECT 'lipsa ' || t || '.' || n FROM (SELECT t, n FROM asu EXCEPT SELECT t, n FROM act WHERE tip = 'u') c)
+    UNION ALL (SELECT 'in plus ' || t || '.' || n FROM (SELECT t, n FROM act WHERE tip = 'u' EXCEPT SELECT t, n FROM asu) d)
+    UNION ALL (SELECT 'chei straine ' || x.t FROM (SELECT t, count(*) FILTER (WHERE tip = 'f' AND v) AS k FROM act GROUP BY t) x
+                LEFT JOIN asf ON asf.t = x.t WHERE x.k IS DISTINCT FROM coalesce(asf.n, 0))
+    UNION ALL (SELECT 'fara cheie primara ' || u.tt FROM unnest(v_tab) u(tt) WHERE NOT EXISTS (SELECT 1 FROM act WHERE act.t = u.tt AND act.tip = 'p'))) z;
+  IF v_rau IS NOT NULL THEN RAISE EXCEPTION 'L15_POST_CONSTRANGERI: %', v_rau; END IF;
+
+  -- (b) RLS activ pe toate cele 17 și EXACT politicile [D1] (numele + textul, fără spațiul alb al afișării); vederea security_invoker
+  WITH asp(t, p, q) AS (VALUES
+    ('dcc_anexe', 'dcc_anexe_citire', '(EXISTS ( SELECT 1 FROM dcc_documente d WHERE ((d.id = dcc_anexe.document_id) AND fn_dcc_drept(d.proiect_dcc_id, ''citire''::text))))'),
+    ('dcc_contracte', 'dcc_contracte_citire', 'fn_dcc_contract_vizibil(id)'),
+    ('dcc_documente', 'dcc_documente_citire', 'fn_dcc_drept(proiect_dcc_id, ''citire''::text)'),
+    ('dcc_file', 'dcc_file_citire', '(EXISTS ( SELECT 1 FROM dcc_documente d WHERE ((d.id = dcc_file.document_id) AND fn_dcc_drept(d.proiect_dcc_id, ''citire''::text))))'),
+    ('dcc_ghid_intervale', 'dcc_ghid_intervale_citire', 'fn_dcc_are_modul()'),
+    ('dcc_ghid_valori', 'dcc_ghid_valori_citire', 'fn_dcc_are_modul()'),
+    ('dcc_ghiduri', 'dcc_ghiduri_citire', 'fn_dcc_are_modul()'),
+    ('dcc_istoric_aparitii', 'dcc_istoric_aparitii_citire', 'fn_dcc_drept(proiect_dcc_id, ''citire''::text)'),
+    ('dcc_legaturi', 'dcc_legaturi_citire', '((EXISTS ( SELECT 1 FROM dcc_mesaje m WHERE ((m.id = dcc_legaturi.mesaj_id) AND fn_dcc_drept(m.proiect_dcc_id, ''citire''::text)))) AND (EXISTS ( SELECT 1 FROM (dcc_revizii r JOIN dcc_documente d ON ((d.id = r.document_id))) WHERE ((r.id = dcc_legaturi.revizie_id) AND fn_dcc_drept(d.proiect_dcc_id, ''citire''::text)))))'),
+    ('dcc_mesaje', 'dcc_mesaje_citire', 'fn_dcc_drept(proiect_dcc_id, ''citire''::text)'),
+    ('dcc_proiecte', 'dcc_proiecte_citire', 'fn_dcc_drept(id, ''citire''::text)'),
+    ('dcc_revizii', 'dcc_revizii_citire', '(EXISTS ( SELECT 1 FROM dcc_documente d WHERE ((d.id = dcc_revizii.document_id) AND fn_dcc_drept(d.proiect_dcc_id, ''citire''::text))))'),
+    ('dcc_snapshot_revizii', 'dcc_snapshot_revizii_citire', '((EXISTS ( SELECT 1 FROM dcc_snapshoturi s WHERE ((s.id = dcc_snapshot_revizii.snapshot_id) AND fn_dcc_drept(s.proiect_dcc_id, ''citire''::text)))) AND (EXISTS ( SELECT 1 FROM (dcc_revizii r JOIN dcc_documente d ON ((d.id = r.document_id))) WHERE ((r.id = dcc_snapshot_revizii.revizie_id) AND fn_dcc_drept(d.proiect_dcc_id, ''citire''::text)))))'),
+    ('dcc_snapshoturi', 'dcc_snapshoturi_citire', 'fn_dcc_drept(proiect_dcc_id, ''citire''::text)')
+  ), acp AS (
+    SELECT p.tablename::text AS t, p.policyname::text AS p, regexp_replace(replace(p.qual, 'public.', ''), '[[:space:]]+', ' ', 'g') AS q,
+           p.cmd = 'SELECT' AND p.roles = '{authenticated}'::name[] AND p.permissive = 'PERMISSIVE' AND p.with_check IS NULL AS forma
+      FROM pg_catalog.pg_policies p WHERE p.schemaname = 'public' AND p.tablename = ANY (v_tab))
+  SELECT string_agg(x, '; ' ORDER BY x) INTO v_rau FROM (
+    (SELECT 'lipsa ' || p AS x FROM (SELECT t, p, q FROM asp EXCEPT SELECT t, p, q FROM acp WHERE forma) a)
+    UNION ALL (SELECT 'in plus / alta forma ' || p FROM (SELECT t, p, q FROM acp EXCEPT SELECT t, p, q FROM asp) b)
+    UNION ALL (SELECT 'forma ' || p FROM acp WHERE NOT forma)
+    UNION ALL (SELECT 'RLS ' || c.relname FROM pg_catalog.pg_class c WHERE c.oid = ANY (v_rel) AND c.relrowsecurity IS NOT TRUE)
+    UNION ALL (SELECT 'security_invoker v_dcc_registru' WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.oid = 'public.v_dcc_registru'::regclass
+                                                                              AND 'security_invoker=on' = ANY (c.reloptions)))) z;
+  IF v_rau IS NOT NULL THEN RAISE EXCEPTION 'L15_POST_POLITICA: %', v_rau; END IF;
+
+  -- (c) drepturile pe tabele / vedere, fiecare PE RÂND: doar SELECT pentru authenticated pe cele 14 + vedere; nimic pentru anon / service_role /
+  -- PUBLIC, nimic pe coloane, nimic pe secvențe
+  SELECT string_agg(DISTINCT x.t || '/' || y.rol || '/' || z.d, ', ') INTO v_rau
+    FROM unnest(v_tab || ARRAY['v_dcc_registru']) x(t), unnest(ARRAY['anon', 'authenticated', 'service_role']) y(rol),
+         unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) z(d)
+   WHERE has_table_privilege(y.rol, ('public.' || x.t)::regclass, z.d) IS DISTINCT FROM (y.rol = 'authenticated' AND z.d = 'SELECT' AND x.t = ANY (v_cit));
+  IF v_rau IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) e
+                 WHERE (c.oid = ANY (v_rel) OR c.oid = 'public.v_dcc_registru'::regclass) AND e.grantee = 0)
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid = ANY (v_rel) AND a.attnum > 0 AND a.attacl IS NOT NULL)
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c, unnest(ARRAY['anon', 'authenticated', 'service_role']) r(rol), unnest(ARRAY['USAGE', 'SELECT', 'UPDATE']) d(dr)
+                 WHERE c.relkind = 'S' AND c.relnamespace = 'public'::regnamespace AND c.relname LIKE 'dcc\_%' AND has_sequence_privilege(r.rol, c.oid, d.dr)) THEN
+    RAISE EXCEPTION 'L15_POST_GRANT: %', coalesce(v_rau, 'PUBLIC / coloane / secvente');
+  END IF;
+
+  -- (d) funcțiile: lista EXACTĂ (nu prefix): DEFINER așteptat, limbajul (plpgsql pentru tot ce citește tabele), search_path fix, proprietar
+  -- postgres, EXECUTE exact (authenticated doar unde e declarat; anon / service_role / PUBLIC niciodată)
+  WITH asd(s, def, lang, auth) AS (VALUES
+    ('fn_dcc_interval_e_canonic(text)', false, 'sql', true), ('fn_dcc_interval_canonic(text)', false, 'plpgsql', true),
+    ('fn_dcc_format_valid(jsonb)', false, 'plpgsql', true),
+    ('fn_dcc_cod_text(jsonb, text, text, text, text, integer, integer, integer, integer, text)', false, 'plpgsql', true),
+    ('fn_dcc_titlu_scurt(text)', false, 'plpgsql', true),
+    ('fn_dcc_nume_fisier(jsonb, text, text, text, text, integer, integer, integer, integer, text, text, text)', false, 'plpgsql', true),
+    ('fn_dcc_hash_parametri(text, jsonb)', false, 'sql', true), ('fn_dcc_tranzitie_permisa(text, text)', false, 'sql', true),
+    ('fn_dcc_istoric_hash(text, text, integer, jsonb, text, text, text, text, integer, integer, integer, integer, text, text[])', false, 'sql', true),
+    ('fn_dcc_snapshot_hash(text, text, text[], text[], text, text, text[], jsonb)', false, 'sql', true),
+    ('fn_dcc_server()', false, 'plpgsql', true), ('fn_dcc_e_owner()', true, 'plpgsql', true), ('fn_dcc_drept(bigint, text)', true, 'plpgsql', true),
+    ('fn_dcc_contract_vizibil(bigint)', true, 'plpgsql', true), ('fn_dcc_are_modul()', true, 'plpgsql', true),
+    ('fn_dcc_intentie_reia(uuid, text, text)', false, 'plpgsql', false), ('fn_dcc_intentie_revendica(uuid, text, text)', false, 'plpgsql', false),
+    ('fn_dcc_intentie_incheie(uuid, jsonb)', false, 'plpgsql', false), ('fn_dcc_ghid_compatibil_intern(bigint, bigint)', false, 'plpgsql', false),
+    ('fn_dcc_lock_contract(bigint, boolean)', false, 'plpgsql', false), ('fn_dcc_lock_cheie_serie(bigint, text, text, text, text)', false, 'plpgsql', false),
+    ('fn_dcc_ghid_garda()', false, 'plpgsql', false), ('fn_dcc_ghid_intervale_disjuncte()', false, 'plpgsql', false),
+    ('fn_dcc_contracte_garda()', false, 'plpgsql', false), ('fn_dcc_proiecte_garda()', false, 'plpgsql', false),
+    ('fn_dcc_intentii_garda()', false, 'plpgsql', false), ('fn_dcc_serii_garda()', false, 'plpgsql', false),
+    ('fn_dcc_documente_garda()', false, 'plpgsql', false), ('fn_dcc_file_garda()', false, 'plpgsql', false), ('fn_dcc_anexe_garda()', false, 'plpgsql', false),
+    ('fn_dcc_revizii_garda()', false, 'plpgsql', false), ('fn_dcc_istoric_garda()', false, 'plpgsql', false),
+    ('fn_dcc_snapshoturi_garda()', false, 'plpgsql', false), ('fn_dcc_snapshot_revizii_garda()', false, 'plpgsql', false),
+    ('fn_dcc_mesaje_garda()', false, 'plpgsql', false), ('fn_dcc_legaturi_garda()', false, 'plpgsql', false),
+    ('fn_dcc_fara_stergere()', false, 'plpgsql', false), ('fn_dcc_fara_golire()', false, 'plpgsql', false),
+    ('fn_dcc_config_permisa_intern()', false, 'plpgsql', false), ('fn_dcc_valori_ghid_intern(bigint, text, text)', false, 'plpgsql', false),
+    ('fn_dcc_coduri_intern(bigint, text, text, text, text, integer, integer, integer, integer, text)', false, 'plpgsql', false),
+    ('fn_dcc_ghid_creeaza(jsonb, uuid)', true, 'plpgsql', true), ('fn_dcc_contract_creeaza(text, text, text, text, uuid)', true, 'plpgsql', true),
+    ('fn_dcc_proiect_seteaza(bigint, bigint, bigint, text, text, text, text[], jsonb, text, integer, integer, uuid)', true, 'plpgsql', true),
+    ('fn_dcc_initializeaza_serie(bigint, text, text, text, text, integer, text, boolean, uuid)', true, 'plpgsql', true),
+    ('fn_dcc_aloca(bigint, text, text, text, text, text, text, integer, uuid)', true, 'plpgsql', true),
+    ('fn_dcc_aloca_manual(bigint, text, text, text, integer, text, text, integer, uuid)', true, 'plpgsql', true),
+    ('fn_dcc_revizie_noua(bigint, bigint, bigint, text, text, uuid)', true, 'plpgsql', true),
+    ('fn_dcc_fila_noua(bigint, integer, text, text, uuid)', true, 'plpgsql', true), ('fn_dcc_anexa_noua(bigint, text, text, uuid)', true, 'plpgsql', true),
+    ('fn_dcc_anuleaza(bigint, bigint, text, uuid)', true, 'plpgsql', true), ('fn_dcc_serii_proiect(bigint)', true, 'plpgsql', true),
+    ('fn_dcc_lista_forma_intern(bigint[])', false, 'plpgsql', false), ('fn_dcc_lista_drept_intern(bigint[])', false, 'plpgsql', false),
+    ('fn_dcc_istoric_importa(bigint, text, jsonb, uuid)', true, 'plpgsql', true), ('fn_dcc_marcheaza_copiat(bigint[], jsonb, uuid)', true, 'plpgsql', true),
+    ('fn_dcc_confirma_trimis_manual(bigint[], timestamptz, text, text, bigint, uuid)', true, 'plpgsql', true)
+  )
+  SELECT string_agg(a.s, ', ' ORDER BY a.s), count(*) INTO v_rau, v_n
+    FROM asd a LEFT JOIN pg_catalog.pg_proc p ON p.oid = to_regprocedure('public.' || a.s)
+   WHERE p.oid IS NULL OR p.prosecdef IS DISTINCT FROM a.def
+      OR (SELECT l.lanname FROM pg_catalog.pg_language l WHERE l.oid = p.prolang) IS DISTINCT FROM a.lang
+      OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres'
+      OR has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('service_role', p.oid, 'EXECUTE')
+      OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM a.auth
+      OR EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e WHERE e.grantee = 0);
+  IF v_rau IS NOT NULL THEN RAISE EXCEPTION 'L15_POST_FUNCTIE: %', v_rau; END IF;
+  SELECT count(*) INTO v_n FROM pg_catalog.pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_dcc\_%';
+  IF v_n <> 57 THEN RAISE EXCEPTION 'L15_POST_NUMAR: % functii fn_dcc_ (asteptat 57)', v_n; END IF;
+
+  -- (e) triggerele: lista EXACTĂ (tabel, nume, funcție, tip), active, fără WHEN / argumente / coloane
+  WITH ast(t, n, f, tip) AS (VALUES
+    ('dcc_ghiduri', 'trg_dcc_ghiduri_imuabil', 'fn_dcc_ghid_garda()', 27), ('dcc_ghid_valori', 'trg_dcc_ghid_valori_imuabil', 'fn_dcc_ghid_garda()', 27),
+    ('dcc_ghid_intervale', 'trg_dcc_ghid_intervale_imuabil', 'fn_dcc_ghid_garda()', 27),
+    ('dcc_ghid_intervale', 'trg_dcc_ghid_intervale_disjuncte', 'fn_dcc_ghid_intervale_disjuncte()', 7),
+    ('dcc_contracte', 'trg_dcc_contracte_imuabil', 'fn_dcc_contracte_garda()', 27), ('dcc_proiecte', 'trg_dcc_proiecte_garda', 'fn_dcc_proiecte_garda()', 31),
+    ('dcc_intentii', 'trg_dcc_intentii_garda', 'fn_dcc_intentii_garda()', 31), ('dcc_serii', 'trg_dcc_serii_garda', 'fn_dcc_serii_garda()', 31),
+    ('dcc_documente', 'trg_dcc_documente_garda', 'fn_dcc_documente_garda()', 31), ('dcc_file', 'trg_dcc_file_garda', 'fn_dcc_file_garda()', 31),
+    ('dcc_anexe', 'trg_dcc_anexe_garda', 'fn_dcc_anexe_garda()', 31), ('dcc_revizii', 'trg_dcc_revizii_garda', 'fn_dcc_revizii_garda()', 31),
+    ('dcc_istoric_aparitii', 'trg_dcc_istoric_garda', 'fn_dcc_istoric_garda()', 31), ('dcc_snapshoturi', 'trg_dcc_snapshoturi_garda', 'fn_dcc_snapshoturi_garda()', 31),
+    ('dcc_snapshot_revizii', 'trg_dcc_snapshot_revizii_garda', 'fn_dcc_snapshot_revizii_garda()', 31),
+    ('dcc_mesaje', 'trg_dcc_mesaje_garda', 'fn_dcc_mesaje_garda()', 31), ('dcc_legaturi', 'trg_dcc_legaturi_garda', 'fn_dcc_legaturi_garda()', 31),
+    ('dcc_casute', 'trg_dcc_casute_fara_stergere', 'fn_dcc_fara_stergere()', 11)
+  ), toate AS (
+    SELECT * FROM ast UNION ALL SELECT t, 'trg_' || t || '_fara_golire', 'fn_dcc_fara_golire()', 34 FROM unnest(v_tab) t
+  )
+  SELECT string_agg(a.n, ', ' ORDER BY a.n) INTO v_rau FROM toate a
+   WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger tg WHERE tg.tgrelid = ('public.' || a.t)::regclass AND tg.tgname = a.n
+                        AND tg.tgfoid = to_regprocedure('public.' || a.f) AND tg.tgtype = a.tip::int2 AND tg.tgenabled = 'O' AND tg.tgqual IS NULL
+                        AND tg.tgnargs = 0 AND tg.tgattr::text = '');
+  IF v_rau IS NOT NULL THEN RAISE EXCEPTION 'L15_POST_TRIGGER: %', v_rau; END IF;
+  SELECT count(*) INTO v_n FROM pg_catalog.pg_trigger tg WHERE (tg.tgrelid = ANY (v_rel) AND NOT tg.tgisinternal) OR tg.tgname LIKE 'trg\_dcc\_%';
+  IF v_n <> 35 THEN RAISE EXCEPTION 'L15_POST_NUMAR: % triggere (asteptat 35)', v_n; END IF;
+
+  -- (f) migrarea nu scrie date
+  FOR v_cls IN SELECT t FROM unnest(v_tab) t LOOP
+    EXECUTE format('SELECT count(*) FROM public.%I', v_cls) INTO v_n;
+    IF v_n <> 0 THEN RAISE EXCEPTION 'L15_POST_DATE: % are % randuri', v_cls, v_n; END IF;
+  END LOOP;
+
+  -- (g) lanțul de drept neschimbat (amprentă după) și marcajul livrării
+  PERFORM pg_temp.lant_20270108a('dupa');
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270108a_executie_dcc_registru:' || txid_current() THEN
+    RAISE EXCEPTION '20270108a: garda final invalida';
+  END IF;
+
+  -- (h) POSTCONDIȚIA DE LOCK-URI (ultima): fiecare rând pg_locks al sesiunii (relație, acordat) intră într-o clasă declarată, altfel refuz cu
+  -- TOATE rândurile nedeclarate. Clasele, pe dependențele unei relații X = X + indecșii ei (pg_index, toți) + TOAST-ul ei + indecșii TOAST-ului:
+  --   M1 = cele 17 tabele + vederea + secvențele lor de identitate (orice mod);
+  --   M2 = executie_proiecte: tabela ShareRowExclusiveLock (OBLIGATORIU) / AccessShareLock / RowShareLock, dependențele DOAR AccessShareLock;
+  --   R1 = istoricul runnerului (supabase_migrations.schema_migrations), DOAR AccessShareLock;
+  --   R2 = tabelele temporare ag_ses_<T> / ag_ina_<T> ale amprentei globale (același T, create în tranzacția curentă), orice mod;
+  --   C  = relațiile schemei pg_catalog (definită pe SCHEMĂ, nu pe oid: vederile information_schema au și ele oid-uri mici), orice mod;
+  --   E  = relațiile platformei din precondiția P-E (CLASA-E), cu modurile listate.
+  v_b_m1 := v_rel || ARRAY['public.v_dcc_registru'::regclass::oid]
+            || coalesce((SELECT array_agg(d.objid) FROM pg_catalog.pg_depend d JOIN pg_catalog.pg_class s ON s.oid = d.objid
+                          WHERE d.classid = 'pg_catalog.pg_class'::regclass AND d.refclassid = 'pg_catalog.pg_class'::regclass AND d.refobjid = ANY (v_rel)
+                            AND d.deptype IN ('a', 'i') AND s.relkind = 'S'), '{}'::oid[]);
+  v_b_m2 := ARRAY['public.executie_proiecte'::regclass::oid];
+  v_b_r1 := CASE WHEN to_regclass('supabase_migrations.schema_migrations') IS NULL THEN '{}'::oid[]
+                 ELSE ARRAY[to_regclass('supabase_migrations.schema_migrations')::oid] END;
+  SELECT coalesce(array_agg(c.oid), '{}'::oid[]) INTO v_b_r2 FROM pg_catalog.pg_class c
+   WHERE c.relnamespace = pg_my_temp_schema() AND c.relkind = 'r' AND c.relname ~ '^ag_(ses|ina)_[0-9a-f]{16}$'
+     AND c.xmin::text = (txid_current() % 4294967296)::text
+     AND (SELECT count(*) FROM pg_catalog.pg_class c2 WHERE c2.relnamespace = c.relnamespace AND c2.relkind = 'r'
+             AND c2.xmin::text = (txid_current() % 4294967296)::text
+             AND c2.relname IN ('ag_ses_' || right(c.relname, 16), 'ag_ina_' || right(c.relname, 16))) = 2;
+  SELECT coalesce(array_agg(c.oid), '{}'::oid[]) INTO v_b_c FROM pg_catalog.pg_class c WHERE c.relnamespace = 'pg_catalog'::regnamespace;
+  SELECT coalesce(array_agg(DISTINCT to_regclass(split_part(x, ':', 1))::oid), '{}'::oid[]) INTO v_b_e FROM unnest(v_e_moduri) x;
+  FOR v_cls IN SELECT x FROM unnest(ARRAY['M1', 'M2', 'R1', 'R2', 'C', 'E']) x LOOP
+    v_baza := CASE v_cls WHEN 'M1' THEN v_b_m1 WHEN 'M2' THEN v_b_m2 WHEN 'R1' THEN v_b_r1 WHEN 'R2' THEN v_b_r2 WHEN 'C' THEN v_b_c ELSE v_b_e END;
+    SELECT coalesce(array_agg(DISTINCT z.o), '{}'::oid[]) INTO v_dep FROM (
+      SELECT b AS o FROM unnest(v_baza) b
+      UNION ALL SELECT i.indexrelid FROM pg_catalog.pg_index i WHERE i.indrelid = ANY (v_baza)
+      UNION ALL SELECT c.reltoastrelid FROM pg_catalog.pg_class c WHERE c.oid = ANY (v_baza) AND c.reltoastrelid <> 0
+      UNION ALL SELECT i.indexrelid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_index i ON i.indrelid = c.reltoastrelid WHERE c.oid = ANY (v_baza)) z;
+    CASE v_cls
+      WHEN 'M1' THEN v_m1 := v_dep;
+      WHEN 'M2' THEN v_m2 := v_dep;
+      WHEN 'R1' THEN v_r1 := v_dep;
+      WHEN 'R2' THEN v_r2 := v_dep;
+      WHEN 'C' THEN v_c := v_dep;
+      ELSE v_e := v_dep;
+    END CASE;
+  END LOOP;
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_locks l WHERE l.locktype = 'relation' AND l.relation = v_b_m2[1] AND l.pid = pg_backend_pid() AND l.granted
+                    AND l.mode = 'ShareRowExclusiveLock') THEN
+    RAISE EXCEPTION 'L15_LOCK_LIPSA: public.executie_proiecte ShareRowExclusiveLock (punctul unic de blocare) nu e tinut';
+  END IF;
+  WITH lk AS (
+    SELECT l.relation AS o, l.mode,
+           coalesce((SELECT n.nspname || '.' || c.relname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = l.relation),
+                    'oid ' || l.relation::text) AS nume,
+           EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.oid = l.relation) AS exista
+      FROM pg_catalog.pg_locks l
+     WHERE l.locktype = 'relation' AND l.pid = pg_backend_pid() AND l.granted
+       AND (l.database = (SELECT d.oid FROM pg_catalog.pg_database d WHERE d.datname = current_database()) OR l.database = 0)
+  ), cl AS (
+    SELECT lk.*, CASE
+        WHEN NOT lk.exista THEN NULL
+        WHEN lk.o = ANY (v_m1) THEN 'M1'
+        WHEN lk.o = v_b_m2[1] AND lk.mode IN ('ShareRowExclusiveLock', 'AccessShareLock', 'RowShareLock') THEN 'M2'
+        WHEN lk.o = ANY (v_m2) AND lk.o <> v_b_m2[1] AND lk.mode = 'AccessShareLock' THEN 'M2'
+        WHEN lk.o = ANY (v_r1) AND lk.mode = 'AccessShareLock' THEN 'R1'
+        WHEN lk.o = ANY (v_r2) THEN 'R2'
+        WHEN lk.o = ANY (v_c) THEN 'C'
+        WHEN lk.o = ANY (v_e) AND (lk.nume || ':' || lk.mode) = ANY (v_e_moduri) THEN 'E'
+      END AS clasa
+      FROM lk)
+  SELECT string_agg(nume || ' ' || mode, '; ' ORDER BY nume, mode) FILTER (WHERE clasa IS NULL),
+         format('M1=%s M2=%s R1=%s R2=%s C=%s E=%s', count(*) FILTER (WHERE clasa = 'M1'),
+                coalesce(string_agg(nume || ':' || mode, ',' ORDER BY nume, mode) FILTER (WHERE clasa = 'M2'), '-'),
+                coalesce(string_agg(nume || ':' || mode, ',' ORDER BY nume, mode) FILTER (WHERE clasa = 'R1'), '-'),
+                count(*) FILTER (WHERE clasa = 'R2'), count(*) FILTER (WHERE clasa = 'C'), count(*) FILTER (WHERE clasa = 'E'))
+    INTO v_rau, v_set FROM cl;
+  IF v_rau IS NOT NULL THEN RAISE EXCEPTION 'L15_LOCK_NEDECLARAT: %', v_rau; END IF;
+  RAISE NOTICE 'L15_LOCK_SET %', v_set;
+  RAISE NOTICE '20270108a: sfarsit la % ms de la BEGIN; lock-uri puternice tinute de % ms (pana la COMMIT se adauga pasul dupa al runnerului si garda: LOCK_TINUT)',
+    round(extract(epoch FROM clock_timestamp() - now()) * 1000),
+    round(extract(epoch FROM clock_timestamp()) * 1000 - current_setting('gazpet.lock_puternic_la')::numeric / 1000);
+END $post$;
 
 DROP FUNCTION pg_temp.lant_20270108a(text);
