@@ -327,6 +327,32 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   ) t(vechi, nou) WHERE t.vechi = p_vechi AND t.nou = p_nou)
 $f$;
 
+-- amprenta conținutului unui rând de istoric (L16: toate câmpurile admise, cu valorile implicite completate; problemele sortate), pusă de server
+-- (triggerul dcc_istoric_aparitii la INSERT) și folosită de import pentru a deosebi „identic” de „diferit”
+CREATE FUNCTION public.fn_dcc_istoric_hash(p_sursa text, p_sursa_id text, p_pozitie integer, p_valori jsonb, p_cod_scris text, p_emitent text,
+                                           p_tematica text, p_tip text, p_secventa integer, p_fila integer, p_anexa integer, p_revizie integer,
+                                           p_limba text, p_probleme text[]) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
+  SELECT encode(sha256(convert_to(jsonb_build_object('sursa', p_sursa, 'sursa_id', p_sursa_id, 'pozitie', p_pozitie, 'valori_originale', p_valori,
+    'cod_scris', p_cod_scris, 'emitent', p_emitent, 'tematica', p_tematica, 'tip', p_tip, 'secventa', p_secventa, 'fila', p_fila, 'anexa', p_anexa,
+    'revizie', p_revizie, 'limba', p_limba,
+    'probleme', coalesce((SELECT jsonb_agg(x ORDER BY x) FROM unnest(p_probleme) x), '[]'::jsonb))::text, 'UTF8')), 'hex')
+$f$;
+
+-- amprenta unui snapshot pe forma canonică documentată: sha256 pe textul jsonb al obiectului {tip, from, to, cc, subiect, corp, linkuri, manifest}
+-- (ordinea cheilor = cea a jsonb: după lungime, apoi octeți). Doar identifică snapshotul; copia e chiar rândul.
+CREATE FUNCTION public.fn_dcc_snapshot_hash(p_tip text, p_from text, p_to text[], p_cc text[], p_subiect text, p_corp text, p_linkuri text[],
+                                            p_manifest jsonb) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
+  SELECT encode(sha256(convert_to(jsonb_build_object('tip', p_tip, 'from', p_from, 'to', to_jsonb(coalesce(p_to, '{}'::text[])),
+    'cc', to_jsonb(coalesce(p_cc, '{}'::text[])), 'subiect', p_subiect, 'corp', p_corp, 'linkuri', to_jsonb(coalesce(p_linkuri, '{}'::text[])),
+    'manifest', coalesce(p_manifest, '[]'::jsonb))::text, 'UTF8')), 'hex')
+$f$;
+
+REVOKE ALL ON FUNCTION public.fn_dcc_istoric_hash(text, text, integer, jsonb, text, text, text, text, integer, integer, integer, integer, text, text[]),
+  public.fn_dcc_snapshot_hash(text, text, text[], text[], text, text, text[], jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_dcc_istoric_hash(text, text, integer, jsonb, text, text, text, text, integer, integer, integer, integer, text, text[]),
+  public.fn_dcc_snapshot_hash(text, text, text[], text[], text, text, text[], jsonb) TO authenticated;
 REVOKE ALL ON FUNCTION public.fn_dcc_interval_e_canonic(text), public.fn_dcc_interval_canonic(text), public.fn_dcc_format_valid(jsonb),
   public.fn_dcc_cod_text(jsonb, text, text, text, text, integer, integer, integer, integer, text), public.fn_dcc_titlu_scurt(text),
   public.fn_dcc_nume_fisier(jsonb, text, text, text, text, integer, integer, integer, integer, text, text, text),
@@ -967,5 +993,370 @@ CREATE VIEW public.v_dcc_registru WITH (security_invoker = on) AS
     LEFT JOIN public.dcc_anexe a ON a.id = r.anexa_id;
 REVOKE ALL ON public.v_dcc_registru FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON public.v_dcc_registru TO authenticated;
+
+-- ─── 4. triggerele: invariantele pe ORICE cale (L07), inclusiv pentru postgres — imuabilitatea configurației și a textului înghețat, disjuncția
+-- seriilor, contorul strict crescător, gărzile documentului anulat (codul PLASEI: DCC_GARDA_DOCUMENT_ANULAT, diferit de al RPC-ului), tranzițiile
+-- de transport, provenienţa pusă de server, interdicția de ștergere și de golire. Funcțiile de trigger: INVOKER, fără EXECUTE pentru nimeni.
+
+-- ghidul și listele lui sunt ÎNGHEȚATE; singura excepție: o valoare poate fi dezactivată (activ true -> false). O schimbare = versiune nouă.
+CREATE FUNCTION public.fn_dcc_ghid_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF TG_OP = 'UPDATE' AND TG_TABLE_NAME = 'dcc_ghid_valori' THEN
+    -- (IF separat: câmpul activ există doar în dcc_ghid_valori)
+    IF (to_jsonb(OLD) -> 'activ') = 'true'::jsonb AND (to_jsonb(NEW) -> 'activ') = 'false'::jsonb
+       AND (to_jsonb(NEW) - 'activ') = (to_jsonb(OLD) - 'activ') THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+  RAISE EXCEPTION 'DCC_GHID_IMUABIL: ghidul de codificare nu se modifica dupa creare (o schimbare = versiune noua)' USING ERRCODE = 'P0001';
+END $f$;
+CREATE TRIGGER trg_dcc_ghiduri_imuabil BEFORE UPDATE OR DELETE ON public.dcc_ghiduri FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_ghid_garda();
+CREATE TRIGGER trg_dcc_ghid_valori_imuabil BEFORE UPDATE OR DELETE ON public.dcc_ghid_valori FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_ghid_garda();
+CREATE TRIGGER trg_dcc_ghid_intervale_imuabil BEFORE UPDATE OR DELETE ON public.dcc_ghid_intervale FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_ghid_garda();
+
+-- intervalele ACELUIAȘI ghid sunt disjuncte: rândul ghidului FOR UPDATE (L01), apoi verificarea; 23P01 DCC_INTERVALE_SUPRAPUSE
+CREATE FUNCTION public.fn_dcc_ghid_intervale_disjuncte() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  PERFORM 1 FROM public.dcc_ghiduri g WHERE g.id = NEW.ghid_id FOR UPDATE;
+  IF EXISTS (SELECT 1 FROM public.dcc_ghid_intervale gi WHERE gi.ghid_id = NEW.ghid_id
+                AND gi.limita_inf <= NEW.limita_sup AND NEW.limita_inf <= gi.limita_sup) THEN
+    RAISE EXCEPTION 'DCC_INTERVALE_SUPRAPUSE: intervalul % se suprapune cu alt interval al ghidului', NEW.interval USING ERRCODE = '23P01';
+  END IF;
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_ghid_intervale_disjuncte BEFORE INSERT ON public.dcc_ghid_intervale FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_ghid_intervale_disjuncte();
+
+-- [D2] contractul: beneficiarul, codul și modul de alocare IMUABILE pe orice cale (și pentru postgres); doar descrierea se poate schimba
+CREATE FUNCTION public.fn_dcc_contracte_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'DCC_STERGERE_INTERZISA: contractele nu se sterg' USING ERRCODE = 'P0001'; END IF;
+  IF (to_jsonb(NEW) - 'descriere') IS DISTINCT FROM (to_jsonb(OLD) - 'descriere') THEN
+    RAISE EXCEPTION 'DCC_CONTRACT_IMUABIL: beneficiarul, codul si modul de alocare ale contractului nu se schimba' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_contracte_imuabil BEFORE UPDATE OR DELETE ON public.dcc_contracte FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_contracte_garda();
+
+-- proiectul DCC: advisory-ul EXCLUSIV al contractului (reintrant în fn_dcc_proiect_seteaza) înaintea verificării compatibilității ghidului cu
+-- seriile contractului (regula 2, aceeași funcție ca RPC-ul); emitentul = o valoare ACTIVĂ a ghidului; contractul / proiectul Execuție / emitentul
+-- imuabile după primul document; versiunea crește la ORICE scriere (CAS-ul RPC-ului). Ordinea lock-urilor: pasul 2 -> pasul 3 (rândul însuși).
+CREATE FUNCTION public.fn_dcc_proiecte_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE v_incomp text;
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'DCC_STERGERE_INTERZISA: proiectele DCC nu se sterg' USING ERRCODE = 'P0001'; END IF;
+  PERFORM public.fn_dcc_lock_contract(NEW.contract_id, true);
+  IF NOT EXISTS (SELECT 1 FROM public.dcc_ghid_valori v WHERE v.ghid_id = NEW.ghid_id AND v.categorie = 'emitent' AND v.cod = NEW.emitent AND v.activ) THEN
+    RAISE EXCEPTION 'DCC_EMITENT_STRAIN: emitentul nu e o valoare activa a ghidului' USING ERRCODE = '22023';
+  END IF;
+  IF TG_OP = 'INSERT' OR NEW.ghid_id IS DISTINCT FROM OLD.ghid_id OR NEW.contract_id IS DISTINCT FROM OLD.contract_id THEN
+    v_incomp := public.fn_dcc_ghid_compatibil_intern(NEW.contract_id, NEW.ghid_id);
+    IF v_incomp IS NOT NULL THEN
+      RAISE EXCEPTION 'DCC_GHID_INCOMPATIBIL: intervalul % al ghidului are alte limite decat seria contractului', v_incomp USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    NEW.versiune := 1;
+    RETURN NEW;
+  END IF;
+  IF (NEW.id, NEW.contract_id, NEW.executie_proiect_id, NEW.emitent, NEW.creat_de, NEW.creat_la)
+       IS DISTINCT FROM (OLD.id, OLD.contract_id, OLD.executie_proiect_id, OLD.emitent, OLD.creat_de, OLD.creat_la)
+     AND (NEW.id IS DISTINCT FROM OLD.id OR NEW.creat_de IS DISTINCT FROM OLD.creat_de OR NEW.creat_la IS DISTINCT FROM OLD.creat_la
+          OR EXISTS (SELECT 1 FROM public.dcc_documente d WHERE d.proiect_dcc_id = OLD.id)) THEN
+    RAISE EXCEPTION 'DCC_PROIECT_IMUABIL: contractul, proiectul Executie si emitentul nu se schimba dupa primul document' USING ERRCODE = 'P0001';
+  END IF;
+  NEW.versiune := OLD.versiune + 1;
+  NEW.actualizat_la := now();
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_proiecte_garda BEFORE INSERT OR UPDATE OR DELETE ON public.dcc_proiecte FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_proiecte_garda();
+
+-- cheile de intenție: tranzacția care revendică e pusă de server; rezultatul se scrie O DATĂ (NULL -> valoare), DOAR în tranzacția care a
+-- revendicat cheia; nimic altceva nu se schimbă; nicio ștergere
+CREATE FUNCTION public.fn_dcc_intentii_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'DCC_STERGERE_INTERZISA: cheile de intentie nu se sterg' USING ERRCODE = 'P0001'; END IF;
+  IF TG_OP = 'INSERT' THEN
+    NEW.creat_tx := pg_current_xact_id();
+    NEW.creat_la := now();
+    RETURN NEW;
+  END IF;
+  IF OLD.rezultat IS NOT NULL OR NEW.rezultat IS NULL OR OLD.creat_tx IS DISTINCT FROM pg_current_xact_id()
+     OR (to_jsonb(NEW) - 'rezultat') IS DISTINCT FROM (to_jsonb(OLD) - 'rezultat') THEN
+    RAISE EXCEPTION 'DCC_INTENTIE_IMUABILA: rezultatul unei intentii se scrie o data, in tranzactia care a revendicat cheia' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_intentii_garda BEFORE INSERT OR UPDATE OR DELETE ON public.dcc_intentii FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_intentii_garda();
+
+-- seriile: la INSERT, advisory-ul cheii FĂRĂ interval (pasul 4, reintrant în RPC) și disjuncția față de TOATE seriile cheii, din orice ghid —
+-- codul PLASEI (23P01 DCC_GARDA_INTERVALE_SUPRAPUSE), diferit de al RPC-ului. La UPDATE: doar contorul, STRICT crescător (egal = refuz).
+CREATE FUNCTION public.fn_dcc_serii_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'DCC_STERGERE_INTERZISA: seriile nu se sterg' USING ERRCODE = 'P0001'; END IF;
+  IF TG_OP = 'INSERT' THEN
+    PERFORM public.fn_dcc_lock_cheie_serie(NEW.contract_id, NEW.emitent, NEW.tematica, NEW.tip, NEW.interval);
+    IF EXISTS (SELECT 1 FROM public.dcc_serii s WHERE s.contract_id = NEW.contract_id AND s.emitent = NEW.emitent
+                  AND s.tematica IS NOT DISTINCT FROM NEW.tematica AND s.tip = NEW.tip
+                  AND s.limita_inf <= NEW.limita_sup AND NEW.limita_inf <= s.limita_sup) THEN
+      RAISE EXCEPTION 'DCC_GARDA_INTERVALE_SUPRAPUSE: intervalul % se suprapune cu o serie existenta a aceleiasi chei', NEW.interval USING ERRCODE = '23P01';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF (to_jsonb(NEW) - 'ultimul_ocupat') IS DISTINCT FROM (to_jsonb(OLD) - 'ultimul_ocupat')
+     OR (NEW.ultimul_ocupat > OLD.ultimul_ocupat) IS NOT TRUE THEN
+    RAISE EXCEPTION 'DCC_SERIE_IMUABILA: doar contorul seriei se schimba, strict crescator' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_serii_garda BEFORE INSERT OR UPDATE OR DELETE ON public.dcc_serii FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_serii_garda();
+
+-- documentele: la INSERT, seria (când există) are ACEEAȘI cheie și secvența e în limitele ei; la UPDATE, singura schimbare = anularea
+-- (activ -> anulat + câmpurile anulării); tot restul imuabil; nicio ștergere (numărul rămâne ocupat)
+CREATE FUNCTION public.fn_dcc_documente_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE s public.dcc_serii;
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'DCC_STERGERE_INTERZISA: documentele nu se sterg (numarul ramane ocupat)' USING ERRCODE = 'P0001'; END IF;
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.serie_id IS NOT NULL THEN
+      SELECT * INTO s FROM public.dcc_serii x WHERE x.id = NEW.serie_id;
+      IF NOT FOUND OR s.contract_id IS DISTINCT FROM NEW.contract_id OR s.emitent IS DISTINCT FROM NEW.emitent
+         OR s.tematica IS DISTINCT FROM NEW.tematica OR s.tip IS DISTINCT FROM NEW.tip OR s.interval IS DISTINCT FROM NEW.interval
+         OR (NEW.secventa BETWEEN s.limita_inf AND s.limita_sup) IS NOT TRUE THEN
+        RAISE EXCEPTION 'DCC_SERIE_NEPOTRIVITA: seria documentului are alta cheie sau secventa e in afara limitelor ei' USING ERRCODE = '22023';
+      END IF;
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF (to_jsonb(NEW) - ARRAY['stare', 'anulat_de', 'anulat_la', 'motiv_anulare']) IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['stare', 'anulat_de', 'anulat_la', 'motiv_anulare'])
+     OR NOT (OLD.stare = 'activ' AND NEW.stare = 'anulat') THEN
+    RAISE EXCEPTION 'DCC_DOCUMENT_IMUABIL: documentul nu se modifica; singura schimbare permisa e anularea' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_documente_garda BEFORE INSERT OR UPDATE OR DELETE ON public.dcc_documente FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_documente_garda();
+
+-- filele: plasa documentului anulat (orice cale) + doar pe un document declarat cu file; imuabile
+CREATE FUNCTION public.fn_dcc_file_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE d public.dcc_documente;
+BEGIN
+  IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'DCC_FILA_IMUABILA: filele nu se modifica si nu se sterg' USING ERRCODE = 'P0001'; END IF;
+  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id;
+  IF d.stare = 'anulat' THEN
+    RAISE EXCEPTION 'DCC_GARDA_DOCUMENT_ANULAT: documentul e anulat (fila)' USING ERRCODE = 'P0001';
+  END IF;
+  IF d.are_file IS NOT TRUE THEN
+    RAISE EXCEPTION 'DCC_FARA_FILE: documentul nu a fost declarat cu file' USING ERRCODE = '22023';
+  END IF;
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_file_garda BEFORE INSERT OR UPDATE OR DELETE ON public.dcc_file FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_file_garda();
+
+-- anexele: plasa documentului anulat (orice cale); imuabile
+CREATE FUNCTION public.fn_dcc_anexe_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE d public.dcc_documente;
+BEGIN
+  IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'DCC_ANEXA_IMUABILA: anexele nu se modifica si nu se sterg' USING ERRCODE = 'P0001'; END IF;
+  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id;
+  IF d.stare = 'anulat' THEN
+    RAISE EXCEPTION 'DCC_GARDA_DOCUMENT_ANULAT: documentul e anulat (anexa)' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_anexe_garda BEFORE INSERT OR UPDATE OR DELETE ON public.dcc_anexe FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_anexe_garda();
+
+-- reviziile: la INSERT, plasa documentului anulat + ținta (filă / anexă) e a documentului și compatibilă cu are_file; la UPDATE, identitatea și
+-- textul înghețat imuabile, starea de transport DOAR prin tabelul tranzițiilor (IS NOT TRUE -> refuz), plasa documentului anulat pe tranzițiile
+-- de emisie, neverificata -> confirmata doar cu dovadă (legătură confirmată a unui mesaj cu Message-ID / Gmail id), câmpurile anulării doar odată
+-- cu tranziția spre anulata, verdictul doar NULL -> valoare (B); nicio ștergere
+CREATE FUNCTION public.fn_dcc_revizii_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE d public.dcc_documente;
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'DCC_STERGERE_INTERZISA: reviziile nu se sterg' USING ERRCODE = 'P0001'; END IF;
+  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id;
+  IF TG_OP = 'INSERT' THEN
+    IF d.stare = 'anulat' THEN
+      RAISE EXCEPTION 'DCC_GARDA_DOCUMENT_ANULAT: documentul e anulat (revizie)' USING ERRCODE = 'P0001';
+    END IF;
+    IF NEW.fila_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.dcc_file f WHERE f.id = NEW.fila_id AND f.document_id = NEW.document_id) THEN
+      RAISE EXCEPTION 'DCC_TINTA_STRAINA: fila nu e a documentului' USING ERRCODE = '22023';
+    END IF;
+    IF NEW.anexa_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.dcc_anexe a WHERE a.id = NEW.anexa_id AND a.document_id = NEW.document_id) THEN
+      RAISE EXCEPTION 'DCC_TINTA_STRAINA: anexa nu e a documentului' USING ERRCODE = '22023';
+    END IF;
+    IF (d.are_file IS TRUE AND NEW.fila_id IS NULL AND NEW.anexa_id IS NULL) OR (d.are_file IS NOT TRUE AND NEW.fila_id IS NOT NULL) THEN
+      RAISE EXCEPTION 'DCC_TINTA_NEPOTRIVITA: revizia unui document cu file sta pe o fila sau anexa; fara file, nu are fila' USING ERRCODE = '22023';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF (NEW.id, NEW.contract_id, NEW.document_id, NEW.fila_id, NEW.anexa_id, NEW.revizie, NEW.limba, NEW.ghid_id, NEW.cod_text, NEW.nume_fisier_baza, NEW.titlu, NEW.creat_de, NEW.creat_la)
+     IS DISTINCT FROM
+     (OLD.id, OLD.contract_id, OLD.document_id, OLD.fila_id, OLD.anexa_id, OLD.revizie, OLD.limba, OLD.ghid_id, OLD.cod_text, OLD.nume_fisier_baza, OLD.titlu, OLD.creat_de, OLD.creat_la) THEN
+    RAISE EXCEPTION 'DCC_REVIZIE_IMUABILA: identitatea si codul inghetat al reviziei nu se schimba' USING ERRCODE = 'P0001';
+  END IF;
+  IF NEW.stare_transport IS DISTINCT FROM OLD.stare_transport THEN
+    IF public.fn_dcc_tranzitie_permisa(OLD.stare_transport, NEW.stare_transport) IS NOT TRUE THEN
+      RAISE EXCEPTION 'DCC_TRANZITIE_NEPERMISA: % -> %', OLD.stare_transport, NEW.stare_transport USING ERRCODE = 'P0001';
+    END IF;
+    IF NEW.stare_transport IN ('pregatita', 'copiata_pentru_gmail', 'trimisa_manual_neverificata') AND d.stare = 'anulat' THEN
+      RAISE EXCEPTION 'DCC_GARDA_DOCUMENT_ANULAT: documentul e anulat (emisie)' USING ERRCODE = 'P0001';
+    END IF;
+    IF NEW.stare_transport = 'trimisa_manual_confirmata'
+       AND NOT EXISTS (SELECT 1 FROM public.dcc_legaturi l JOIN public.dcc_mesaje m ON m.id = l.mesaj_id
+                        WHERE l.revizie_id = NEW.id AND l.stare = 'confirmata' AND (m.rfc_message_id IS NOT NULL OR m.gmail_message_id IS NOT NULL)) THEN
+      RAISE EXCEPTION 'DCC_TRANZITIE_NEPERMISA: confirmarea cere un mesaj gasit (Message-ID / Gmail id) legat de revizie' USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+  IF (NEW.anulata_de, NEW.anulata_la, NEW.anulata_prin, NEW.motiv_anulare) IS DISTINCT FROM (OLD.anulata_de, OLD.anulata_la, OLD.anulata_prin, OLD.motiv_anulare)
+     AND NOT (OLD.stare_transport <> 'anulata' AND NEW.stare_transport = 'anulata') THEN
+    RAISE EXCEPTION 'DCC_REVIZIE_IMUABILA: campurile anularii se scriu doar odata cu anularea' USING ERRCODE = 'P0001';
+  END IF;
+  IF OLD.verdict IS NOT NULL
+     AND (NEW.verdict, NEW.verdict_mesaj_id, NEW.verdict_confirmat_de, NEW.verdict_confirmat_la)
+         IS DISTINCT FROM (OLD.verdict, OLD.verdict_mesaj_id, OLD.verdict_confirmat_de, OLD.verdict_confirmat_la) THEN
+    RAISE EXCEPTION 'DCC_REVIZIE_IMUABILA: verdictul confirmat nu se rescrie' USING ERRCODE = 'P0001';
+  END IF;
+  NEW.actualizat_la := now();
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_revizii_garda BEFORE INSERT OR UPDATE OR DELETE ON public.dcc_revizii FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_revizii_garda();
+
+-- istoricul: la INSERT serverul pune proveniența și amprenta conținutului, iar legarea pornește goală; la UPDATE doar legarea (document /
+-- revizie / legat_*) din NULL — documentul aceluiași proiect îl impune cheia străină compusă, revizia trebuie să fie a documentului; nicio ștergere
+CREATE FUNCTION public.fn_dcc_istoric_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid();
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'DCC_STERGERE_INTERZISA: istoricul nu se sterge' USING ERRCODE = 'P0001'; END IF;
+  IF TG_OP = 'INSERT' THEN
+    NEW.importat_de := v_uid;
+    NEW.importat_prin := CASE WHEN v_uid IS NULL THEN 'server' ELSE 'om' END;
+    NEW.importat_la := now();
+    NEW.document_id := NULL; NEW.revizie_id := NULL; NEW.legat_de := NULL; NEW.legat_la := NULL;
+    NEW.continut_hash := public.fn_dcc_istoric_hash(NEW.sursa, NEW.sursa_id, NEW.pozitie, NEW.valori_originale, NEW.cod_scris, NEW.emitent, NEW.tematica,
+                                                    NEW.tip, NEW.secventa, NEW.fila, NEW.anexa, NEW.revizie, NEW.limba, NEW.probleme);
+    RETURN NEW;
+  END IF;
+  IF (to_jsonb(NEW) - ARRAY['document_id', 'revizie_id', 'legat_de', 'legat_la']) IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['document_id', 'revizie_id', 'legat_de', 'legat_la'])
+     OR OLD.document_id IS NOT NULL OR OLD.revizie_id IS NOT NULL OR OLD.legat_la IS NOT NULL
+     OR NEW.document_id IS NULL OR NEW.legat_la IS NULL
+     OR (NEW.revizie_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.dcc_revizii r WHERE r.id = NEW.revizie_id AND r.document_id = NEW.document_id)) THEN
+    RAISE EXCEPTION 'DCC_ISTORIC_IMUABIL: istoricul brut nu se modifica; doar legarea unei aparitii, o data' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_istoric_garda BEFORE INSERT OR UPDATE OR DELETE ON public.dcc_istoric_aparitii FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_istoric_garda();
+
+-- snapshoturile: amprenta o pune serverul la INSERT (forma canonică), autorul = apelantul când are JWT; imuabile
+CREATE FUNCTION public.fn_dcc_snapshoturi_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'DCC_SNAPSHOT_IMUABIL: snapshotul e copia imuabila a ce a aprobat omul' USING ERRCODE = 'P0001'; END IF;
+  IF auth.uid() IS NOT NULL THEN NEW.aprobat_de := auth.uid(); END IF;
+  NEW.aprobat_la := now();
+  NEW.hash := public.fn_dcc_snapshot_hash(NEW.tip, NEW.from_adresa, NEW.to_lista, NEW.cc_lista, NEW.subiect, NEW.corp, NEW.linkuri, NEW.manifest);
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_snapshoturi_garda BEFORE INSERT OR UPDATE OR DELETE ON public.dcc_snapshoturi FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_snapshoturi_garda();
+
+-- snapshot <-> revizie: revizia e a ACELUIAȘI proiect DCC ca snapshotul și documentul ei nu e anulat; imuabile
+CREATE FUNCTION public.fn_dcc_snapshot_revizii_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE d public.dcc_documente;
+BEGIN
+  IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'DCC_SNAPSHOT_IMUABIL: legatura snapshotului nu se modifica' USING ERRCODE = 'P0001'; END IF;
+  SELECT x.* INTO d FROM public.dcc_documente x JOIN public.dcc_revizii r ON r.document_id = x.id WHERE r.id = NEW.revizie_id;
+  IF NOT EXISTS (SELECT 1 FROM public.dcc_snapshoturi s WHERE s.id = NEW.snapshot_id AND s.proiect_dcc_id = d.proiect_dcc_id) THEN
+    RAISE EXCEPTION 'DCC_PROIECTE_AMESTECATE: revizia si snapshotul sunt din proiecte diferite' USING ERRCODE = '22023';
+  END IF;
+  IF d.stare = 'anulat' THEN
+    RAISE EXCEPTION 'DCC_GARDA_DOCUMENT_ANULAT: documentul e anulat (snapshot)' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_snapshot_revizii_garda BEFORE INSERT OR UPDATE OR DELETE ON public.dcc_snapshot_revizii FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_snapshot_revizii_garda();
+
+-- mesajele: imuabile în PR1 (B adaugă căile lui); autorul = apelantul când are JWT
+CREATE FUNCTION public.fn_dcc_mesaje_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'DCC_MESAJ_IMUABIL: mesajul nu se modifica si nu se sterge' USING ERRCODE = 'P0001'; END IF;
+  IF auth.uid() IS NOT NULL THEN NEW.creat_de := auth.uid(); END IF;
+  NEW.creat_la := now();
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_mesaje_garda BEFORE INSERT OR UPDATE OR DELETE ON public.dcc_mesaje FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_mesaje_garda();
+
+-- legăturile: mesajul și documentul reviziei sunt ale ACELUIAȘI proiect DCC; o legătură manuală nouă pe o revizie a unui document anulat =
+-- refuz; UPDATE doar starea propusa -> confirmata | respinsa + confirmat_* (B); nicio ștergere
+CREATE FUNCTION public.fn_dcc_legaturi_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE d public.dcc_documente;
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'DCC_STERGERE_INTERZISA: legaturile nu se sterg' USING ERRCODE = 'P0001'; END IF;
+  IF TG_OP = 'INSERT' THEN
+    SELECT x.* INTO d FROM public.dcc_documente x JOIN public.dcc_revizii r ON r.document_id = x.id WHERE r.id = NEW.revizie_id;
+    IF NOT EXISTS (SELECT 1 FROM public.dcc_mesaje m WHERE m.id = NEW.mesaj_id AND m.proiect_dcc_id = d.proiect_dcc_id) THEN
+      RAISE EXCEPTION 'DCC_PROIECTE_AMESTECATE: mesajul si revizia sunt din proiecte diferite' USING ERRCODE = '22023';
+    END IF;
+    IF NEW.metoda = 'manual' AND d.stare = 'anulat' THEN
+      RAISE EXCEPTION 'DCC_GARDA_DOCUMENT_ANULAT: documentul e anulat (legatura)' USING ERRCODE = 'P0001';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF (to_jsonb(NEW) - ARRAY['stare', 'confirmat_de', 'confirmat_la']) IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['stare', 'confirmat_de', 'confirmat_la'])
+     OR OLD.stare IS DISTINCT FROM 'propusa' OR NEW.stare NOT IN ('confirmata', 'respinsa') THEN
+    RAISE EXCEPTION 'DCC_LEGATURA_IMUABILA: legatura se confirma sau se respinge o data, din propusa' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER trg_dcc_legaturi_garda BEFORE INSERT OR UPDATE OR DELETE ON public.dcc_legaturi FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_legaturi_garda();
+
+-- căsuțele (goale în PR1): nicio ștergere
+CREATE FUNCTION public.fn_dcc_fara_stergere() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  RAISE EXCEPTION 'DCC_STERGERE_INTERZISA: % nu se sterge', TG_TABLE_NAME USING ERRCODE = 'P0001';
+END $f$;
+CREATE TRIGGER trg_dcc_casute_fara_stergere BEFORE DELETE ON public.dcc_casute FOR EACH ROW EXECUTE FUNCTION public.fn_dcc_fara_stergere();
+
+-- nicio golire, pe niciun tabel (și pentru postgres; revenirea folosește DROP, nu TRUNCATE)
+CREATE FUNCTION public.fn_dcc_fara_golire() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  RAISE EXCEPTION 'DCC_STERGERE_INTERZISA: % nu se goleste', TG_TABLE_NAME USING ERRCODE = 'P0001';
+END $f$;
+CREATE TRIGGER trg_dcc_casute_fara_golire BEFORE TRUNCATE ON public.dcc_casute FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_ghiduri_fara_golire BEFORE TRUNCATE ON public.dcc_ghiduri FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_ghid_valori_fara_golire BEFORE TRUNCATE ON public.dcc_ghid_valori FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_ghid_intervale_fara_golire BEFORE TRUNCATE ON public.dcc_ghid_intervale FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_contracte_fara_golire BEFORE TRUNCATE ON public.dcc_contracte FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_proiecte_fara_golire BEFORE TRUNCATE ON public.dcc_proiecte FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_intentii_fara_golire BEFORE TRUNCATE ON public.dcc_intentii FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_serii_fara_golire BEFORE TRUNCATE ON public.dcc_serii FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_documente_fara_golire BEFORE TRUNCATE ON public.dcc_documente FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_file_fara_golire BEFORE TRUNCATE ON public.dcc_file FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_anexe_fara_golire BEFORE TRUNCATE ON public.dcc_anexe FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_revizii_fara_golire BEFORE TRUNCATE ON public.dcc_revizii FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_istoric_aparitii_fara_golire BEFORE TRUNCATE ON public.dcc_istoric_aparitii FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_snapshoturi_fara_golire BEFORE TRUNCATE ON public.dcc_snapshoturi FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_snapshot_revizii_fara_golire BEFORE TRUNCATE ON public.dcc_snapshot_revizii FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_mesaje_fara_golire BEFORE TRUNCATE ON public.dcc_mesaje FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+CREATE TRIGGER trg_dcc_legaturi_fara_golire BEFORE TRUNCATE ON public.dcc_legaturi FOR EACH STATEMENT EXECUTE FUNCTION public.fn_dcc_fara_golire();
+
+REVOKE ALL ON FUNCTION public.fn_dcc_ghid_garda(), public.fn_dcc_ghid_intervale_disjuncte(), public.fn_dcc_contracte_garda(), public.fn_dcc_proiecte_garda(),
+  public.fn_dcc_intentii_garda(), public.fn_dcc_serii_garda(), public.fn_dcc_documente_garda(), public.fn_dcc_file_garda(), public.fn_dcc_anexe_garda(),
+  public.fn_dcc_revizii_garda(), public.fn_dcc_istoric_garda(), public.fn_dcc_snapshoturi_garda(), public.fn_dcc_snapshot_revizii_garda(),
+  public.fn_dcc_mesaje_garda(), public.fn_dcc_legaturi_garda(), public.fn_dcc_fara_stergere(), public.fn_dcc_fara_golire()
+  FROM PUBLIC, anon, authenticated, service_role;
 
 DROP FUNCTION pg_temp.lant_20270108a(text);
