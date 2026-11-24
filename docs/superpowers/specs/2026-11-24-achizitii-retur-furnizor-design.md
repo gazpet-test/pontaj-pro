@@ -31,7 +31,7 @@ Azi ERP-ul nu are retur nicăieri: nici în Achiziții, nici în Magazie, nici �
 
 ## 3. Ce se construiește
 
-### 3.0 Invarianții (toate cantitățile sunt cumulative, nu se scad niciodată)
+### 3.0 Invarianții (cantitățile sunt cumulative; scad doar prin anularea unui retur)
 
 Pe fiecare linie de comandă:
 
