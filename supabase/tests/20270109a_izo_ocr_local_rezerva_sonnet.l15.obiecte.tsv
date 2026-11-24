@@ -1,0 +1,3 @@
+# 20270109a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.ocr_local_config.rezerva_usd	schimbat
+constrangere	constrangere tabel public.ocr_local_config.ocr_local_config_rezerva_usd_check	schimbat

@@ -8,7 +8,8 @@
 --   bash scripts/livrare_migrare.sh --migrare supabase/revenire/20270109a_izo_ocr_local_rezerva_sonnet_ROLLBACK.sql --sha256 <sha256 al fișierului>
 --        --versiune 20270109120001 --tinta-db postgres --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P> --user postgres
 --        --plafon-tranzactie-ms 2000
--- Lock-uri: ACCESS EXCLUSIVE pe public.ocr_local_config, înaintea verificărilor (L14), lock_timeout 100 ms. Probe: scripts/pglite/test_izo_ocr_local_rezerva_sonnet_local.mjs.
+-- Lock-uri: ACCESS EXCLUSIVE NOWAIT pe public.ocr_local_config (ocupat = 55P03 imediat, nimic schimbat), înaintea verificărilor (L14);
+--   lock_timeout 100 ms pentru cele implicite. Probe: scripts/pglite/test_izo_ocr_local_rezerva_sonnet_local.mjs.
 DO $pre$
 DECLARE v_plafon text;
 BEGIN
@@ -34,7 +35,7 @@ BEGIN
   IF to_regclass('public.ocr_local_config') IS NULL THEN RAISE EXCEPTION '20270109a revenire: lipseste public.ocr_local_config'; END IF;
 END $pre$;
 
-LOCK TABLE public.ocr_local_config IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.ocr_local_config IN ACCESS EXCLUSIVE MODE NOWAIT;
 
 DO $stare$
 DECLARE v_rau text;

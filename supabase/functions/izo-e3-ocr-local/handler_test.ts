@@ -24,6 +24,8 @@ function fixture() {
   let admitted = 'admisa', admissionError = 'limita_active', owner = true, access = true, expired = false, jwt = true, goodSecret = true, tokenGood = true, uploadError = false, quota = false, rowState = 'preluata', paid = false
   // suma rezervată de B1 = ocr_local_config.rezerva_usd: 0,20 după migrarea 20270109a, 0,05 înainte (numeric(12,6) în BD → text în PostgREST)
   let rezervaBD: unknown = '0.200000'
+  // r2: cârlig pentru un RPC de fază întârziat (ceasul testului avansează ÎN RPC, nu doar la numărare)
+  let fazaIntarziere: (faza: string) => void = () => {}
   const q = (t: string) => {
     const data = t === 'profiles' ? { is_owner: owner } : t === 'user_module_access' ? access ? [{ access_level: 'editor' }] : [] : t === 'izo_atribuiri' ? [{ projet: 1, proiect_id: 1, depozit_id: 2, rol: 'gestionar', activ: true, valabil_de: null, valabil_pana: expired ? '2000-01-01' : null }] : t === 'ai_plafon_rezervari' ? { luna: '2026-10-01', suma_rezervata: rezervaBD } : { cheie: 'izo_e3_ocr:1', luna: '2026-10-01', plafon_usd: 10, consumat_usd: 0, rezervat_usd: .05 }
     const result = { data, error: null }
@@ -58,7 +60,13 @@ function fixture() {
         return ok([{ acordat: true, rezervare_id: 7, status: 'rezervat' }])
       }
       if (fn === 'fn_ocr_local_apel_faza') {
-        c.apel_faza = String(args.p_faza)
+        // Aceleași tranziții ca fn_ocr_local_apel_faza din 20261108a (r2: un salt nepermis, ex. trimis → esuat_inainte, pică aici)
+        const de = c.apel_faza, spre = String(args.p_faza)
+        if (!(de === 'rezervat' && spre === 'trimis' || de === 'trimis' && ['raspuns', 'esuat_dupa'].includes(spre) || de === 'raspuns' && spre === 'decontat' ||
+          ['acordat', 'rezervat'].includes(String(de)) && spre === 'esuat_inainte')) return fail('faza_invalida')
+        if (spre === 'decontat' && !(typeof args.p_cost === 'number' && args.p_cost >= 0)) return fail('cost_invalid')
+        fazaIntarziere(spre)
+        c.apel_faza = spre
         if (args.p_faza === 'raspuns') c.apel_raspuns = args.p_raspuns as Record<string, unknown>
         if (args.p_faza === 'esuat_inainte') c.cost_usd = 0
         if (args.p_faza === 'esuat_dupa') c.cost_usd = .05
@@ -88,6 +96,7 @@ function fixture() {
     owner = Boolean(v.owner ?? owner); access = Boolean(v.access ?? access); expired = Boolean(v.expired ?? expired); jwt = Boolean(v.jwt ?? jwt)
     goodSecret = Boolean(v.goodSecret ?? goodSecret); tokenGood = Boolean(v.tokenGood ?? tokenGood); uploadError = Boolean(v.uploadError ?? uploadError); quota = Boolean(v.quota ?? quota)
     if (Object.hasOwn(v, 'rezervaBD')) rezervaBD = v.rezervaBD
+    if (typeof v.fazaIntarziere === 'function') fazaIntarziere = v.fazaIntarziere as (faza: string) => void
   } }
 }
 const cere = () => ({ op: 'cere', proiect_id: 1, depozit_id: 2, sablon: 'aviz_teava', pdf_base64: btoa('%PDF-test') })
@@ -454,6 +463,71 @@ Deno.test('Sonnet: termenul apelului — sub minApel după numărare nu se trimi
   }
   assert.ok(TERMENE_PLATIT_E3.fallback.buget <= 120000 - 15000)   // B1: termen_fallback = drept + apel_s (120 s)
   assert.ok(TERMENE_PLATIT_E3.arbitraj.buget < 35000)              // workerul așteaptă arbitreaza 35 s
+})
+// r2 (Jakarinos #1183): ceasul avansează ÎN RPC-ul `trimis`, nu la numărare. Timpul se recalculează după ACK; sub minApel / buget expirat
+// apelul nu pleacă, iar faza `trimis` se închide pe tranzițiile BD: raspuns {invalid, apel_netrimis} → decontat 0.
+const raspunsAI = (ramura: 'fallback' | 'arbitraj') => Response.json({ usage: { input_tokens: 1000, output_tokens: 100 }, stop_reason: 'end_turn', content: [{ type: 'text', text: ramura === 'fallback' ? JSON.stringify(brut()) : JSON.stringify({ celule: [{ rand: 1, camp: 'lungime_doc', valoare: '12.50', sigur: true }] }) }] })
+async function cuTimeouturi<T>(fn: (t: number[]) => Promise<T>): Promise<T> {
+  const orig = AbortSignal.timeout, t: number[] = []
+  AbortSignal.timeout = (ms: number) => { t.push(ms); return orig.call(AbortSignal, ms) }
+  try { return await fn(t) } finally { AbortSignal.timeout = orig }
+}
+Deno.test('Sonnet r2: RPC-ul trimis întârziat — timpul se recalculează după ACK; sub minApel nu pleacă, decontat 0, rezerva eliberată', async () => {
+  for (const ramura of ['fallback', 'arbitraj'] as const) {
+    const T = TERMENE_PLATIT_E3[ramura]
+    // exemplul din verdict (arbitraj 8 s rămase, RPC 9 s) e cazul „buget + 9000”: bugetul e consumat integral în RPC
+    for (const [intarziere, pleaca] of [[T.buget - T.minApel, true], [T.buget - T.minApel + 1, false], [T.buget + 9000, false]] as const) {
+      let ceas = 1_000_000
+      const f = fixture(), sent: string[] = [], faze: string[] = []
+      f.set({ fazaIntarziere: (faza: string) => { faze.push(faza); if (faza === 'trimis') ceas += intarziere } })
+      const t = (async (url: string | URL | Request) => String(url).endsWith('count_tokens') ? Response.json({ input_tokens: 1000 }) : (sent.push('send'), raspunsAI(ramura))) as typeof fetch
+      const [a, timeouturi] = await cuTimeouturi(async tm => [await apelPlatitE3({ client: f.d.ledger, id: ID, ramura, token: ramura === 'arbitraj' ? TOKEN : null, user: ramura === 'fallback' ? USER : null,
+        apiKey: 'fake', maxTokens: 260, mesaj: async () => ({ messages: [] }), valida: async raw => JSON.parse(raw), transport: t, acum: () => ceas }), tm] as const)
+      const caz = `${ramura} ${intarziere}`
+      assert.equal(sent.length, pleaca ? 1 : 0, caz)
+      if (pleaca) {
+        assert.equal(a.tip, 'raspuns', caz); assert.deepEqual(faze, ['trimis', 'raspuns', 'decontat'], caz)
+        // messages primește timpul rămas DUPĂ ACK (= minApel aici), nu cel de dinaintea RPC-ului (= bugetul întreg)
+        assert.equal(timeouturi.at(-1), T.minApel, caz)
+        continue
+      }
+      assert.deepEqual(a, { tip: 'eroare', cod: 'termen_depasit' }, caz)
+      assert.deepEqual(faze, ['trimis', 'raspuns', 'decontat'], caz)
+      assert.deepEqual(f.c.apel_raspuns, { invalid: true, motiv: 'termen_depasit', apel_netrimis: true }, caz)
+      assert.equal(f.c.apel_faza, 'decontat', caz); assert.equal(f.c.cost_usd, 0, caz)   // decontare fără cost, nu esuat_dupa (rezerva întreagă)
+      assert.equal(f.calls.find(c => c.fn === 'fn_ocr_local_apel_faza' && c.args.p_faza === 'decontat')!.args.p_cost, 0, caz)
+      assert.equal(timeouturi.length, 1, caz)   // doar numărarea a primit semnal; messages nu a fost construit
+    }
+  }
+})
+Deno.test('Sonnet r2: prin handler — fallback cu RPC trimis întârziat → 422 termen_depasit, fără apel, inchide_fallback, cost 0; arbitraj → invalid', async () => {
+  let ceas = 5_000_000
+  const f = fixture(), sent: string[] = []
+  f.set({ fazaIntarziere: (faza: string) => { if (faza === 'trimis') ceas += 90000 } })   // fallback: 105 s − 90 s = 15 s < 20 s
+  Object.assign(f.d, { acum: () => ceas, transport: (async (url: string | URL | Request) => String(url).endsWith('count_tokens') ? Response.json({ input_tokens: 1000 }) : (sent.push('send'), raspunsAI('fallback'))) as typeof fetch })
+  const r = await f.call({ op: 'fallback', cerere_id: ID })
+  assert.equal(r.status, 422); assert.deepEqual(await r.json(), { success: false, eroare: 'termen_depasit' })
+  assert.equal(sent.length, 0); assert.equal(f.c.apel_faza, 'decontat'); assert.equal(f.c.cost_usd, 0)
+  assert.equal(f.calls.find(c => c.fn === 'fn_ocr_local_inchide_fallback')!.args.p_eroare, 'termen_depasit')
+  let ceas2 = 5_000_000
+  const g = fixture(), sent2: string[] = []
+  g.set({ fazaIntarziere: (faza: string) => { if (faza === 'trimis') ceas2 += 30000 } })   // arbitraj: 33 s − 30 s = 3 s < 8 s
+  Object.assign(g.d, { acum: () => ceas2, transport: (async (url: string | URL | Request) => String(url).endsWith('count_tokens') ? Response.json({ input_tokens: 1000 }) : (sent2.push('send'), raspunsAI('arbitraj'))) as typeof fetch })
+  assert.deepEqual(await (await g.call(arb(), true)).json(), { arbitraj: 'invalid' })
+  assert.equal(sent2.length, 0); assert.equal(g.c.apel_faza, 'decontat'); assert.equal(g.c.cost_usd, 0)
+})
+Deno.test('Sonnet r2: după ACK întârziat, dacă închiderea pică — tot fără apel; esuat_dupa / in_curs (conservator), niciodată fetch', async () => {
+  for (const pica of ['raspuns', 'decontat'] as const) {
+    let ceas = 1_000_000
+    const f = fixture(), sent: string[] = []
+    f.set({ fazaIntarziere: (faza: string) => { if (faza === 'trimis') ceas += 200000; if (faza === pica) throw new Error('retea') } })
+    const t = (async (url: string | URL | Request) => String(url).endsWith('count_tokens') ? Response.json({ input_tokens: 1000 }) : (sent.push('send'), raspunsAI('fallback'))) as typeof fetch
+    const a = await apelPlatitE3({ client: f.d.ledger, id: ID, ramura: 'fallback', token: null, user: USER, apiKey: 'fake', maxTokens: 260,
+      mesaj: async () => ({ messages: [] }), valida: async raw => JSON.parse(raw), transport: t, acum: () => ceas })
+    assert.equal(sent.length, 0, pica)
+    if (pica === 'raspuns') { assert.equal(f.c.apel_faza, 'esuat_dupa'); assert.equal(a.tip, 'eroare') }
+    else { assert.equal(f.c.apel_faza, 'raspuns'); assert.deepEqual(a, { tip: 'eroare', cod: 'in_curs' }) }   // recuperarea B1 decontează
+  }
 })
 Deno.test('Sonnet: fallback cu serie = șarjă → serie_repetata; serie dublă → structură incertă; fără propunere', async () => {
   // seria dublă o prinde deja validaStructuraE3 (structura_incerta); garda nouă e „serie = șarjă” (șarja pusă în locul seriei)

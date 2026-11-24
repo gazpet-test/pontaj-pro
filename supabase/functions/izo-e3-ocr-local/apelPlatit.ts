@@ -48,11 +48,22 @@ export async function apelPlatitE3(o: Opt): Promise<Apel> {
     if (!Number.isSafeInteger(n) || n <= 0) throw new EroareE3('numarare_indisponibila', 502)
     if (n > limitaInputE3(MODEL_LOCAL_E3)) throw new EroareE3('pdf_prea_multi_tokeni')
     // Nu mai e timp pentru apel + marja de închidere: apelul plătit nu pornește (cost 0, rezerva eliberată).
-    const timpApel = ramas()
-    if (timpApel < T.minApel) throw new EroareE3('termen_depasit', 504)
+    if (ramas() < T.minApel) throw new EroareE3('termen_depasit', 504)
     // Dacă ACK-ul se pierde nu trimitem fetch; nu încercăm avansul înapoi.
     trimis = true
     await faza('trimis')
+    // Timpul se recalculează DUPĂ ACK: RPC-ul `trimis` poate întârzia (Jakarinos #1183 r2). Sub minApel / buget expirat apelul NU
+    // pornește. Faza e deja `trimis`, iar BD (20261108a) permite de aici doar raspuns / esuat_dupa; esuat_dupa decontează
+    // conservator toată rezerva. Știm sigur că nimic n-a plecat, deci închidem pe tranzițiile existente: raspuns {invalid,
+    // apel_netrimis} → decontat cu cost 0 = rezerva eliberată integral, fără apel. Dacă un pas pică: catch → esuat_dupa / recuperarea B1
+    // (conservator, cost necunoscut), niciodată fetch.
+    const timpApel = ramas()
+    if (timpApel < T.minApel) {
+      await faza('raspuns', { invalid: true, motiv: 'termen_depasit', apel_netrimis: true })
+      raspunsSalvat = true
+      await faza('decontat', null, 0)
+      return { tip: 'eroare', cod: 'termen_depasit' }
+    }
     const response = await transport('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify({ ...payload, max_tokens: o.maxTokens }), signal: AbortSignal.timeout(timpApel) })
     if (!response.ok) throw new EroareE3('apel_ai_esuat', 502)
     const result = await response.json()

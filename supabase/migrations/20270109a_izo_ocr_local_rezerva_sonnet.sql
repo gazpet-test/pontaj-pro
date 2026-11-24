@@ -1,8 +1,10 @@
 -- Version 20270109120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 5000 --amprenta-globala <md5> --diferente-globale
 --   supabase/migrations/20270109a_izo_ocr_local_rezerva_sonnet.l15.tsv (DOAR cu plafon ȘI cu amprenta globală L15 v2: fără pasul „înainte” al
 --   runnerului în aceeași tranzacție, migrarea refuză în $pre$ — AMPRENTA_GLOBALA_LIPSA). Manifestul .l15.tsv îl generează coordonatorul pe clonă
---   (docs/LIVRARE_L15_V2.md §5); diferențele așteptate: familia `constrangere` (CHECK-ul rezerva_usd, schimbat) și `coloana`
---   (public.ocr_local_config.rezerva_usd: valoarea implicită, schimbată). Nicio funcție, drept, politică sau tabel nou.
+--   (scripts/livrare_l15_manifest.sh --iesire, docs/LIVRARE_L15_V2.md §5); lista OBIECTELOR revizuită (generată pe PGlite cu pașii reali ai
+--   runnerului): supabase/tests/20270109a_izo_ocr_local_rezerva_sonnet.l15.obiecte.tsv — 2 obiecte, `constrangere` (CHECK-ul rezerva_usd,
+--   schimbat) și `coloana` (public.ocr_local_config.rezerva_usd: valoarea implicită, schimbată). Nicio funcție, drept, politică sau tabel nou.
+--   Dry-run pe clonă după aplicare (ROLLBACK): supabase/tests/20270109a_izo_ocr_local_rezerva_sonnet_dryrun.sql.
 -- 20270109a_izo_ocr_local_rezerva_sonnet — Izometrie E3 / OCR local (E9): rezerva apelului plătit 0,05 → 0,20 USD.
 --   Decizia Răzvan 24.11.2026: avizele se citesc întâi local; dacă citirea locală nu reușește → Sonnet 5.5 (fallback + arbitrajul celulelor,
 --   edge-ul izo-e3-ocr-local); Haiku nu mai citește avize (pe Lot 2 a citit greșit seria la 2 din 11 avize).
@@ -17,9 +19,11 @@
 --   rezervată și refuză FĂRĂ apel (rezerva_insuficienta, cost 0) cât BD are 0,05. Edge-ul vechi (Haiku, cost maxim 0,05) cu BD nouă rezervă 0,20:
 --   supra-rezervare temporară, decontată la costul real.
 -- Rezervările deja deschise își păstrează suma (ai_plafon_rezervari.suma_rezervata); doar rezervările de după COMMIT folosesc 0,20.
--- Lock-uri (L06): un singur tabel, ACCESS EXCLUSIVE pe public.ocr_local_config, luat ÎNAINTEA verificărilor de stare (L14), cu lock_timeout 100 ms:
---   un RPC al cozii în curs (citește config-ul, ACCESS SHARE) = refuz curat, nimic schimbat; se reia. Niciun alt tabel blocat.
--- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), lock_timeout = 100 ms, garda finală.
+-- Lock-uri (L06): un singur tabel, ACCESS EXCLUSIVE NOWAIT pe public.ocr_local_config, luat ÎNAINTEA verificărilor de stare (L14), cu bugetul
+--   de 1 s de la prima încercare (blocul $lock$): un RPC al cozii în curs (citește config-ul, ACCESS SHARE) = reîncercare la 50 ms, apoi
+--   BUGET_LOCK, nimic schimbat; se reia. Niciun alt tabel blocat.
+-- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), bugetul de lock 1 s, lock_timeout = 100 ms
+--   (lock-urile implicite), garda finală a runnerului (PLAFON_TIMP + LOCK_TINUT).
 -- Revenire: supabase/revenire/20270109a_izo_ocr_local_rezerva_sonnet_ROLLBACK.sql (ÎNTÂI edge-ul înapoi, apoi revenirea).
 -- Probe: scripts/pglite/test_izo_ocr_local_rezerva_sonnet_local.mjs (aplicare pe 20261105a + 20261108a/b reale, rezervarea de 0,20,
 --   revenire, reaplicare, refuzuri, mutanți).
@@ -54,8 +58,34 @@ BEGIN
   IF to_regclass('public.ocr_local_config') IS NULL THEN RAISE EXCEPTION '20270109a: lipseste public.ocr_local_config (20261108a)'; END IF;
 END $pre$;
 
--- ─── 0. Lock-ul, ÎNAINTEA verificărilor de stare (L14). Ocupat = 55P03 după 100 ms, nimic schimbat. ───────────────────────────────────
-LOCK TABLE public.ocr_local_config IN ACCESS EXCLUSIVE MODE;
+-- ─── 0. Lock-ul, ÎNAINTEA verificărilor de stare (L14): punct unic, NOWAIT, bugetul 1 s de la PRIMA încercare (docs/LIVRARE_L15_V2.md,
+--     „Bugetul de lock”, șablonul r16); momentul în gazpet.lock_puternic_la pentru LOCK_TINUT. Ocupat peste buget = 55P03, nimic schimbat.
+--     Lock-urile IMPLICITE de după set: doar ROW EXCLUSIVE pe ocr_local_config (deja ținut mai tare) și citiri (ACCESS SHARE) pe
+--     ocr_local_cereri (NOTICE-ul din postcondiții) — limitate de lock_timeout 100 ms. ───────────────────────────────────────────────
+DO $lock$
+DECLARE v_incercari integer := 0; v_t0 timestamptz := clock_timestamp(); v_buget constant interval := interval '1 second';
+BEGIN
+  LOOP
+    IF clock_timestamp() >= v_t0 + v_buget THEN
+      RAISE EXCEPTION '20270109a: BUGET_LOCK: ocr_local_config ocupat; % incercari, % ms de la prima incercare (bugetul e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
+        v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
+    END IF;
+    v_incercari := v_incercari + 1;
+    BEGIN
+      LOCK TABLE public.ocr_local_config IN ACCESS EXCLUSIVE MODE NOWAIT;
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      PERFORM pg_sleep(0.05);
+    END;
+  END LOOP;
+  IF clock_timestamp() >= v_t0 + v_buget THEN
+    RAISE EXCEPTION '20270109a: BUGET_LOCK: lock-ul pe ocr_local_config obtinut abia la % ms de la prima incercare (% incercari; bugetul e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
+      round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
+  END IF;
+  PERFORM set_config('gazpet.lock_puternic_la', round(extract(epoch FROM clock_timestamp()) * 1000000)::bigint::text, true);
+  RAISE NOTICE '20270109a: lock la % ms de la BEGIN (% incercari, % ms de la prima incercare)',
+    round(extract(epoch FROM clock_timestamp() - now()) * 1000), v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+END $lock$;
 
 -- ─── 1. Starea EXACTĂ din 20261108a (sub lock): rândul unic, CHECK-urile, valoarea implicită, RPC-ul care citește rezerva ─────────────────
 DO $stare$
@@ -152,5 +182,6 @@ BEGIN
   -- rezervările E3 încă deschise (luate înainte, cu suma veche): doar numărate
   SELECT count(*) INTO v_n FROM public.ocr_local_cereri WHERE apel_faza IN ('acordat', 'rezervat', 'trimis', 'raspuns');
   RAISE NOTICE '20270109a: apeluri platite E3 in curs (pastreaza suma rezervata inainte): %', v_n;
-  RAISE NOTICE '20270109a: sfarsit la % ms de la BEGIN', round(extract(epoch FROM clock_timestamp() - now()) * 1000);
+  RAISE NOTICE '20270109a: sfarsit la % ms de la BEGIN, lock-uri puternice tinute de % ms', round(extract(epoch FROM clock_timestamp() - now()) * 1000),
+    round(extract(epoch FROM clock_timestamp()) * 1000 - current_setting('gazpet.lock_puternic_la')::numeric / 1000);
 END $post$;
