@@ -1,0 +1,10 @@
+# L15 v2 - manifestul diferentelor pentru 20270111a_ctc_autorizatii_ndt (AMPRENTA_GLOBALA v2); familie TAB eticheta TAB operatie TAB amprenta
+# generat pe clona cu scripts/livrare_l15_manifest.sh (ROLLBACK, nimic comis); migrarea sha256 9b7a894b5a04444a94255310957acef102de1a214518ffa7f56561ff056a7a38
+# clona: server_version_num 170006, rol postgres
+# clona: GLOBAL inainte b6fa8e2247a34cad5780e099497b5231 (27302 randuri), dupa 719cdb718baf1865e07fac53e4873024 (27307 randuri); 6 obiecte
+constrangere	constrangere tabel public.ofertare_parteneri_documente.ofertare_parteneri_documente_categorie_check	schimbat	b127d367afb64da211db896778c4ad94
+functie	functie public.fn_ctc_autorizatie_ndt_fisier(bigint)	creat	dfeab8c2ac6068111f7dd6993ce79c93
+functie	functie public.fn_ctc_autorizatii_ndt()	creat	d5a0ae3025383cba1f9b7d1cd1fdec7d
+functie	functie public.fn_ofertare_doc_cale_garda()	creat	b8d4c7645fb5a15d4f40beedc73006fc
+relatie	relatie public.ofertare_parteneri_documente_fisier_path_uq	creat	d37fb0127fb50e40673bf45d9f016f78
+trigger	trigger public.ofertare_parteneri_documente.trg_ofertare_doc_cale_garda	creat	ab258b718717bb862b59fc4f3ecd79e1
