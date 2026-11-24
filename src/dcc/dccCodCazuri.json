@@ -1,0 +1,116 @@
+{
+  "_nota": "Tabelul COMUN de cazuri al formatorului DCC (JS: src/dcc/dccCod.js; SQL: fn_dcc_* din 20270108a). Valorile asteptate sunt scrise de mana (L25), nu generate de cod. Date sintetice: emitent AAA, tematici TM1/TM2/TS, tipuri COR/DES/MOM.",
+  "formate": {
+    "lot1": [
+      {"camp": "contract", "prefix": ""}, {"camp": "emitent", "prefix": "-"}, {"camp": "tematica", "prefix": "-"}, {"camp": "tip", "prefix": "-"},
+      {"camp": "secventa", "prefix": "-", "cifre": 5}, {"camp": "fila", "prefix": "-", "cifre": 2}, {"camp": "anexa", "prefix": "-A", "cifre": 2},
+      {"camp": "revizie", "prefix": ".Rev"}, {"camp": "limba", "prefix": "."}
+    ],
+    "lot2_cod": [
+      {"camp": "contract", "prefix": ""}, {"camp": "emitent", "prefix": "-"}, {"camp": "tematica", "prefix": "-"}, {"camp": "tip", "prefix": "-"},
+      {"camp": "secventa", "prefix": "-", "cifre": 5}, {"camp": "fila", "prefix": "-", "cifre": 2}, {"camp": "anexa", "prefix": "-A", "cifre": 2},
+      {"camp": "revizie", "prefix": ".Rev"}
+    ],
+    "lot2_fisier": [
+      {"camp": "contract", "prefix": ""}, {"camp": "emitent", "prefix": "-"}, {"camp": "tematica", "prefix": "-"}, {"camp": "tip", "prefix": "-"},
+      {"camp": "secventa", "prefix": "-", "cifre": 5}, {"camp": "fila", "prefix": "-", "cifre": 2}, {"camp": "anexa", "prefix": "-A", "cifre": 2},
+      {"camp": "revizie", "prefix": ".Rev"}, {"camp": "limba", "prefix": "."}
+    ],
+    "dde": [
+      {"camp": "contract", "prefix": ""}, {"camp": "emitent", "prefix": "-"}, {"camp": "tematica", "prefix": "-"}, {"camp": "tip", "prefix": "-"},
+      {"camp": "secventa", "prefix": "-", "cifre": 5}, {"camp": "fila", "prefix": "-", "cifre": 3}, {"camp": "anexa", "prefix": "-AN", "cifre": 2},
+      {"camp": "limba", "prefix": "-"}, {"camp": "revizie", "prefix": ".Rev"}
+    ],
+    "g6_fila_f": [
+      {"camp": "contract", "prefix": ""}, {"camp": "emitent", "prefix": "-"}, {"camp": "tematica", "prefix": "-"}, {"camp": "tip", "prefix": "-"},
+      {"camp": "secventa", "prefix": "-", "cifre": 5}, {"camp": "fila", "prefix": "-F", "cifre": 2}, {"camp": "anexa", "prefix": "-", "cifre": 2},
+      {"camp": "revizie", "prefix": ".Rev"}, {"camp": "limba", "prefix": "."}
+    ],
+    "invalid_fila_egal_anexa": [
+      {"camp": "contract", "prefix": ""}, {"camp": "emitent", "prefix": "-"}, {"camp": "tematica", "prefix": "-"}, {"camp": "tip", "prefix": "-"},
+      {"camp": "secventa", "prefix": "-", "cifre": 5}, {"camp": "fila", "prefix": "-", "cifre": 2}, {"camp": "anexa", "prefix": "-", "cifre": 2},
+      {"camp": "revizie", "prefix": ".Rev"}, {"camp": "limba", "prefix": "."}
+    ]
+  },
+  "cazuri": [
+    {"id": "lot1_rev0", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "asteptat": "30-AAA-TM1-COR-00045.Rev0.RO"},
+    {"id": "lot1_rev1", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 1, "limba": "RO"}, "asteptat": "30-AAA-TM1-COR-00045.Rev1.RO"},
+    {"id": "lot1_rev12", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 12, "limba": "EN"}, "asteptat": "30-AAA-TM1-COR-00045.Rev12.EN"},
+    {"id": "lot1_mom", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": null, "tip": "MOM", "secventa": 1, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "asteptat": "30-AAA-MOM-00001.Rev0.RO"},
+    {"id": "lot1_fila1", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "DES", "secventa": 45, "fila": 1, "anexa": null, "revizie": 0, "limba": "RO"}, "asteptat": "30-AAA-TM1-DES-00045-01.Rev0.RO"},
+    {"id": "lot1_fila12_rev3", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "DES", "secventa": 45, "fila": 12, "anexa": null, "revizie": 3, "limba": "BI"}, "asteptat": "30-AAA-TM1-DES-00045-12.Rev3.BI"},
+    {"id": "lot1_anexa1", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": 1, "revizie": 0, "limba": "RO"}, "asteptat": "30-AAA-TM1-COR-00045-A01.Rev0.RO"},
+    {"id": "lot1_anexa3_rev2", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": 3, "revizie": 2, "limba": "RO"}, "asteptat": "30-AAA-TM1-COR-00045-A03.Rev2.RO"},
+    {"id": "lot1_fila_si_anexa", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "DES", "secventa": 45, "fila": 1, "anexa": 1, "revizie": 0, "limba": "RO"}, "eroare": "DCC_VALOARE_INVALIDA"},
+    {"id": "lot2_cod_limba_data", "format": "lot2_cod", "comp": {"contract": "43", "emitent": "AAA", "tematica": "TM2", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "asteptat": "43-AAA-TM2-COR-00045.Rev0"},
+    {"id": "lot2_cod_fara_limba", "format": "lot2_cod", "comp": {"contract": "43", "emitent": "AAA", "tematica": "TM2", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": null}, "asteptat": "43-AAA-TM2-COR-00045.Rev0"},
+    {"id": "lot2_fisier_cu_limba", "format": "lot2_fisier", "comp": {"contract": "43", "emitent": "AAA", "tematica": "TM2", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "titlu_scurt": "Raport lunar", "ext": "pdf", "asteptat": "43-AAA-TM2-COR-00045.Rev0.RO_Raport_lunar.pdf"},
+    {"id": "lot2_fisier_fara_limba", "format": "lot2_fisier", "comp": {"contract": "43", "emitent": "AAA", "tematica": "TM2", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": null}, "titlu_scurt": "Raport lunar", "ext": "pdf", "eroare": "DCC_LIMBA_LIPSA"},
+    {"id": "dde_limba_inaintea_reviziei", "format": "dde", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TS", "tip": "DES", "secventa": 100, "fila": 1, "anexa": null, "revizie": 0, "limba": "RO"}, "asteptat": "30-AAA-TS-DES-00100-001-RO.Rev0"},
+    {"id": "dde_secventa_199", "format": "dde", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TS", "tip": "DES", "secventa": 199, "fila": null, "anexa": null, "revizie": 4, "limba": "EN"}, "asteptat": "30-AAA-TS-DES-00199-EN.Rev4"},
+    {"id": "dde_anexa", "format": "dde", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TS", "tip": "DES", "secventa": 150, "fila": null, "anexa": 2, "revizie": 1, "limba": "RO"}, "asteptat": "30-AAA-TS-DES-00150-AN02-RO.Rev1"},
+    {"id": "g6_anexa_cu_prefixul_filei_din_g1", "format": "g6_fila_f", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "DES", "secventa": 45, "fila": null, "anexa": 1, "revizie": 0, "limba": "RO"}, "asteptat": "30-AAA-TM1-DES-00045-01.Rev0.RO"},
+    {"id": "secventa_1", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 1, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "asteptat": "30-AAA-TM1-COR-00001.Rev0.RO"},
+    {"id": "secventa_100", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TS", "tip": "DES", "secventa": 100, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "asteptat": "30-AAA-TS-DES-00100.Rev0.RO"},
+    {"id": "secventa_99999", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 99999, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "asteptat": "30-AAA-TM1-COR-99999.Rev0.RO"},
+    {"id": "secventa_0", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 0, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "eroare": "DCC_VALOARE_INVALIDA"},
+    {"id": "secventa_100000", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 100000, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "eroare": "DCC_VALOARE_INVALIDA"},
+    {"id": "revizie_negativa", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": -1, "limba": "RO"}, "eroare": "DCC_VALOARE_INVALIDA"},
+    {"id": "fila_peste_cifre", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "DES", "secventa": 45, "fila": 100, "anexa": null, "revizie": 0, "limba": "RO"}, "eroare": "DCC_VALOARE_INVALIDA"},
+    {"id": "fila_999_dde", "format": "dde", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TS", "tip": "DES", "secventa": 101, "fila": 999, "anexa": null, "revizie": 0, "limba": "RO"}, "asteptat": "30-AAA-TS-DES-00101-999-RO.Rev0"},
+    {"id": "anexa_0", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": 0, "revizie": 0, "limba": "RO"}, "eroare": "DCC_VALOARE_INVALIDA"},
+    {"id": "limba_lipsa_lot1", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": null}, "eroare": "DCC_LIMBA_LIPSA"},
+    {"id": "emitent_lipsa", "format": "lot1", "comp": {"contract": "30", "emitent": null, "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "eroare": "DCC_CAMP_LIPSA"},
+    {"id": "secventa_lipsa", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": null, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "eroare": "DCC_CAMP_LIPSA"},
+    {"id": "revizie_lipsa", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": null, "limba": "RO"}, "eroare": "DCC_CAMP_LIPSA"},
+    {"id": "contract_o_cifra", "format": "lot1", "comp": {"contract": "3", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "eroare": "DCC_VALOARE_INVALIDA"},
+    {"id": "limba_necunoscuta", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "FR"}, "eroare": "DCC_VALOARE_INVALIDA"},
+    {"id": "emitent_litere_mici", "format": "lot1", "comp": {"contract": "30", "emitent": "aaa", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "eroare": "DCC_VALOARE_INVALIDA"},
+    {"id": "format_invalid", "format": "invalid_fila_egal_anexa", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "eroare": "DCC_FORMAT_INVALID"},
+    {"id": "fisier_diacritice", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "titlu_scurt": "Ședință de coordonare — țeavă Ø 500", "ext": "pdf", "asteptat": "30-AAA-TM1-COR-00045.Rev0.RO_Sedinta_de_coordonare_teava_500.pdf"},
+    {"id": "fisier_sedila", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "titlu_scurt": "Raport ştampilă ŢEAVĂ Îmbinare", "ext": "docx", "asteptat": "30-AAA-TM1-COR-00045.Rev0.RO_Raport_stampila_TEAVA_Imbinare.docx"},
+    {"id": "fisier_titlu_80", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 46, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "titlu_scurt": "abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ", "ext": "pdf", "asteptat": "30-AAA-TM1-COR-00046.Rev0.RO_abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi.pdf"},
+    {"id": "fisier_capete", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 1, "limba": "RO"}, "titlu_scurt": "  __Titlu--final!!  ", "ext": "pdf", "asteptat": "30-AAA-TM1-COR-00045.Rev1.RO_Titlu_final.pdf"},
+    {"id": "fisier_titlu_gol", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "titlu_scurt": " — !? ", "ext": "pdf", "eroare": "DCC_TITLU_SCURT_GOL"},
+    {"id": "fisier_extensie_majuscule", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "DES", "secventa": 45, "fila": 2, "anexa": null, "revizie": 0, "limba": "RO"}, "titlu_scurt": "Plansa", "ext": "DWG", "asteptat": "30-AAA-TM1-DES-00045-02.Rev0.RO_Plansa.dwg"},
+    {"id": "fisier_extensie_cu_punct", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "titlu_scurt": "Arhiva", "ext": "tar.gz", "eroare": "DCC_EXTENSIE_INVALIDA"},
+    {"id": "fisier_extensie_goala", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "titlu_scurt": "Arhiva", "ext": "", "eroare": "DCC_EXTENSIE_INVALIDA"},
+    {"id": "fisier_extensie_9", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": "TM1", "tip": "COR", "secventa": 45, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "titlu_scurt": "Arhiva", "ext": "abcdefghi", "eroare": "DCC_EXTENSIE_INVALIDA"},
+    {"id": "fisier_mom", "format": "lot1", "comp": {"contract": "30", "emitent": "AAA", "tematica": null, "tip": "MOM", "secventa": 7, "fila": null, "anexa": null, "revizie": 0, "limba": "RO"}, "titlu_scurt": "Minuta ședinței 3", "ext": "pdf", "asteptat": "30-AAA-MOM-00007.Rev0.RO_Minuta_sedintei_3.pdf"}
+  ],
+  "intervale": [
+    {"in": "general", "asteptat": "general"},
+    {"in": "GENERAL", "asteptat": "general"},
+    {"in": " General ", "asteptat": "general"},
+    {"in": "sr1", "asteptat": "SR1"},
+    {"in": "SR1 ", "asteptat": "SR1"},
+    {"in": "Sr12", "asteptat": "SR12"},
+    {"in": "TAB_LF", "_nota": "inlocuit in test cu TAB + sr2 + LF", "asteptat": "SR2"},
+    {"in": "", "asteptat": null},
+    {"in": "  ", "asteptat": null},
+    {"in": null, "asteptat": null},
+    {"in": "SR1000", "eroare": "DCC_INTERVAL_INVALID"},
+    {"in": "general1", "eroare": "DCC_INTERVAL_INVALID"},
+    {"in": "S R1", "eroare": "DCC_INTERVAL_INVALID"},
+    {"in": "SR", "eroare": "DCC_INTERVAL_INVALID"},
+    {"in": "GEN", "eroare": "DCC_INTERVAL_INVALID"},
+    {"in": "1SR", "eroare": "DCC_INTERVAL_INVALID"},
+    {"in": "ß1", "eroare": "DCC_INTERVAL_INVALID"},
+    {"in": "SR1_NBSP", "_nota": "inlocuit in test cu SR1 + NBSP (U+00A0)", "eroare": "DCC_INTERVAL_INVALID"}
+  ],
+  "intervale_forma": [
+    {"in": "general", "asteptat": true},
+    {"in": "SR1", "asteptat": true},
+    {"in": "SR12", "asteptat": true},
+    {"in": "ABCD123", "asteptat": true},
+    {"in": null, "asteptat": false},
+    {"in": "", "asteptat": false},
+    {"in": " ", "asteptat": false},
+    {"in": "TAB", "_nota": "inlocuit in test cu un TAB", "asteptat": false},
+    {"in": "GENERAL", "asteptat": false},
+    {"in": "sr1", "asteptat": false},
+    {"in": " SR1", "asteptat": false},
+    {"in": "SR1_NBSP", "_nota": "inlocuit in test cu SR1 + NBSP (U+00A0)", "asteptat": false},
+    {"in": "SR1000", "asteptat": false}
+  ]
+}
