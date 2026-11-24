@@ -1,6 +1,6 @@
-# Achiziții: retur la furnizor pe reperele unei comenzi (TKT-2026-0347) — specificație v7
+# Achiziții: retur la furnizor pe reperele unei comenzi (TKT-2026-0347) — specificație v8
 
-Data: 24.11.2026 · Stare: v7 după a șasea rundă de review NO-GO (24.11), de aprobat · Varianta aleasă de owner: **A** (retur pe linia de comandă, cu ieșire automată din stoc). Până la livrare se aplică **C**: ieșire manuală din Magazie (`ajustare_minus`) cu motivul „retur furnizor, comanda …”.
+Data: 24.11.2026 · Stare: v8 după a șaptea rundă de review NO-GO (24.11), de aprobat · Varianta aleasă de owner: **A** (retur pe linia de comandă, cu ieșire automată din stoc). Până la livrare se aplică **C**: ieșire manuală din Magazie (`ajustare_minus`) cu motivul „retur furnizor, comanda …”.
 
 ## 1. De ce
 
@@ -145,6 +145,12 @@ Dreptul: achiziții cu drept de creare sau owner. Toate primesc `p_cheie uuid`:
    - „Recepție pe repere” trimite doar diferența. Când o valoare scade (corectură sau „reper anulat de furnizor = 0”), N e negativ, dar numai până la `intrata_stoc`; sub ea e refuz, iar pentru asta există returul.
    - **Jurnalul recepțiilor.** Fiecare recepție pozitivă scrie un rând în `comenzi_furnizor_receptii`: linia, cantitatea, momentul și partea alocată retururilor.
      - Alocările (recepție → retur, cantitate) stau în `comenzi_furnizor_retur_alocari`.
+     - **Soldul inițial.** La prima operație nouă pe o linie existentă (recepție, corectură sau retur), RPC-ul scrie întâi, sub lock-ul liniei, un rând `sold_initial`:
+       - cantitatea = `primita` efectivă de dinainte, inclusiv NULL transformat după regulile de la §3.0;
+       - momentul = cel al recepției vechi (`receptie_*_la` al comenzii, altfel momentul migrării);
+       - nu are alocări.
+       - Rândul e cel mai vechi din jurnal, deci participă la compensare ca orice recepție: o corectură care trece de toate recepțiile noi consumă din el.
+       - Cu soldul inițial, suma jurnalului (recepții − corecturi) = `primita` + suma retururilor nete, pe orice linie. Un CHECK la nivel de RPC verifică asta după fiecare operație.
      - Partea nealocată a unei recepții = cantitatea − alocările ei − ce s-a corectat deja din ea.
    - **Compensarea la N negativ** inversează recepțiile **cronologic, de la cea mai nouă**. Din fiecare recepție, corectura consumă întâi partea ei nealocată, apoi alocările ei, de la cea mai nouă.
      - Se inversează numai alocările recepțiilor atinse de corectură. O înlocuire făcută de o recepție mai veche, neatinsă, rămâne acoperită.
@@ -205,13 +211,14 @@ Fiecare probă are și un mutant care trebuie să pice: se scoate lock-ul, rever
 5. **Anulare:** o singură dată; refuzată după înlocuire; pune la loc exact `din_stoc`.
 6. **Înlocuire:** parțială, multiplă, peste mai multe retururi, în ordinea vechimii; închiderea fără înlocuire; corectura negativă după o înlocuire redeschide exact returul atins.
 11. **Ștergeri și moștenire:** pe o linie ambiguă nereconciliată (30 + 70, mișcări 100, contori 0), predarea în stoc, transportul direct și corectura negativă sunt refuzate, iar stocul rămâne 100, nu 200; după reconcilierea manuală, toate merg. Apoi: `deleteStoc` concurent cu un retur se serializează; ștergerea mișcărilor de achiziție / retur e refuzată; o linie ambiguă (două linii cu aceeași denumire și UM) rămâne nereconciliată și refuză returul până la reconcilierea manuală; un retur după un alt retur pe o linie reconciliată merge.
+14. **Sold inițial:** linie veche cu `primita = 40`, fără mișcări: corectura la 30 consumă 10 din soldul inițial; recepție nouă de 20, apoi corectura −30, consumă 20 din recepția nouă + 10 din sold; o linie NULL recepționată se transformă și primește sold. **Revenire:** după o singură recepție normală (fără retur), revenirea e refuzată.
 13. **Corectura cronologică:** recepție 40, retur 20, înlocuire 20, recepție greșită 60, corectura −60: returul rămâne acoperit și „de înlocuit” = 0; o corectură −70 consumă 60 nealocate + 10 din înlocuire și redeschide returul pentru 10.
 12. **Închideri:** retur 40, înlocuire 10, renunțare la 30, apoi corectura recepției de 10 la 0: „de înlocuit” = 10, nu 40.
 10. **Căi vechi:** un client vechi care scrie direct `cantitate_primita` e refuzat; recepția prin transport direct actualizează `intrata_stoc`; un retur pe o comandă emisă fără recepție e refuzat; un retur doar din marfă neintrată nu scrie mișcare.
 7. **Cererile interne:** statusul cererii legate e identic înainte și după fiecare operație.
 8. **Revenire:**
    - scriptul ia lock pe `comenzi_furnizor_linii` și `comenzi_furnizor_retururi` înaintea verificării;
-   - refuză dacă există retururi, alocări sau mișcări `retur_furnizor*`; elimină toate obiectele noi (tabele, trigger-e, RPC-uri, REVOKE-ul pe coloane) și restaurează CHECK-urile și tipurile de mișcare de dinainte;
+   - refuză dacă există retururi, alocări, mișcări `retur_furnizor*` sau orice rând în jurnalul recepțiilor, inclusiv corecturi și solduri inițiale. Verificarea se face după lock pe toate tabelele noi și pe `comenzi_furnizor_linii`, deci istoricul jurnalizat nu se poate pierde prin revenire; elimină toate obiectele noi (tabele, trigger-e, RPC-uri, REVOKE-ul pe coloane) și restaurează CHECK-urile și tipurile de mișcare de dinainte;
    - scoate trigger-ul de lock și restaurează varianta din client a `intraInStoc` și a recepției.
 9. **Non-owner:** toate căile rulate și cu un utilizator achiziții fără drept de owner, plus refuzul pentru un utilizator fără drept.
 
