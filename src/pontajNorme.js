@@ -3,7 +3,7 @@
 // TKT-2026-0368 partea B (decizie Răzvan, de la noiembrie 2026): concediul medical se notează BO (nu CM),
 // iar liberele speciale (căsătorie, deces) se notează IP „Învoiri Plătite”, ca în Mentor (nu O).
 // CM și O rămân coduri valide la afișare, import, validare și în totaluri, ca lunile vechi (septembrie,
-// octombrie) să iasă identic; doar nu se mai oferă în selector la introducerea pontajului.
+// octombrie) să iasă identic; la introducere se oferă doar pe zilele dinainte de 01.11.2026 (corecturi).
 
 export const NORME = ['BO', 'BP', 'AM', 'CO', 'CFP', 'CM', 'M', 'O', 'IP', 'N', 'PRM', 'PRB', 'LL']
 
@@ -28,8 +28,25 @@ export function codNorma(val) {
   return NORME.includes(c) ? c : null
 }
 
-// Opțiunile selectorului de normă: codurile active + codul deja salvat pe zi, dacă e unul retras
-// (editarea unei zile vechi cu CM / O nu pierde codul și nu-l afișează gol).
-export function optiuniSelectorNorma(curent) {
-  return NORME_RETRASE.includes(curent) ? [...NORME_SELECTOR, curent] : NORME_SELECTOR
+// Prima zi pontată cu codurile noi (BO / IP). Zilele de dinainte se corectează cu codurile de atunci (CM / O),
+// ca exporturile BRUT / NET ale lunilor vechi să rămână pe aceleași coloane (ZILE CM, ZILE O).
+export const DATA_CODURI_NOI = '2026-11-01'
+
+// Codurile oferite la introducere pentru zilele dinainte de DATA_CODURI_NOI (lista de dinainte de tichet, fără IP)
+export const NORME_SELECTOR_ISTORIC = NORME.filter(n => n !== 'IP')
+
+// Ziua pontată e dinainte de trecerea la BO / IP? Doar pe data exactă „AAAA-LL-ZZ” (comparație de text, fără
+// new Date / fus orar); o dată lipsă sau în alt format = zi nouă (lista curentă).
+export function ziCuCoduriIstorice(zi) {
+  return typeof zi === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(zi) && zi < DATA_CODURI_NOI
+}
+
+// Opțiunile selectorului de normă pentru ziua pontată `zi` („AAAA-LL-ZZ”):
+// - zi dinainte de 01.11.2026: codurile istorice (cu CM și O, fără IP);
+// - de la 01.11.2026: codurile noi (BO / IP, fără CM și O);
+// - codul deja salvat pe zi rămâne mereu în listă, chiar dacă nu e al perioadei (editarea nu-l pierde
+//   și nu-l afișează gol).
+export function optiuniSelectorNorma(curent, zi) {
+  const lista = ziCuCoduriIstorice(zi) ? NORME_SELECTOR_ISTORIC : NORME_SELECTOR
+  return curent && !lista.includes(curent) ? [...lista, curent] : lista
 }

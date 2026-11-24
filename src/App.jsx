@@ -1850,7 +1850,7 @@ function PontajRow({ emp, rec, valori, stareR, santierImpl, sites, selectedDate,
             <div><Lbl>Normă</Lbl>
               <select value={norma} onChange={e=>onEdit(emp,{norma:e.target.value})} style={{width:230}}>
                 <option value="">— Selectează —</option>
-                {optiuniSelectorNorma(norma).map(n=><option key={n} value={n}>{n} — {NORME_LABELS[n]}</option>)}
+                {optiuniSelectorNorma(norma,selectedDate).map(n=><option key={n} value={n}>{n} — {NORME_LABELS[n]||'cod necunoscut'}</option>)}
               </select>
             </div>
           )}
