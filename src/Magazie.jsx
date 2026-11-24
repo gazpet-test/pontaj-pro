@@ -1461,6 +1461,7 @@ function TransferNouModal({ stocuri, proiecteMap, onClose, onDone }) {
   const [deLa, setDeLa] = useState('')
   const [la, setLa] = useState('')
   const [cantMap, setCantMap] = useState({})   // material_denumire → string
+  const [cautMat, setCautMat] = useState('')   // TKT-2026-0395: căutare în lista de repere
   const [obs, setObs] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -1480,6 +1481,14 @@ function TransferNouModal({ stocuri, proiecteMap, onClose, onDone }) {
       .filter(s => s.locatie_tip === tip && (s.locatie_id ?? null) === (id ?? null) && Number(s.cantitate) > 0)
       .sort((a, b) => a.material_denumire.localeCompare(b.material_denumire))
   }, [deLa, stocuri])
+
+  // filtrul e doar de afișare — cantitățile deja completate rămân în liniiSel chiar dacă reperul e ascuns
+  const stocVizibil = useMemo(() => {
+    const q = normalize(cautMat.trim())
+    if (!q) return stocSursa
+    const tok = q.split(/\s+/)
+    return stocSursa.filter(s => { const n = normalize(s.material_denumire); return tok.every(t => n.includes(t)) })
+  }, [stocSursa, cautMat])
 
   const liniiSel = useMemo(() => stocSursa
     .map(s => ({ s, q: Math.abs(Number(cantMap[s.material_denumire]) || 0) }))
@@ -1517,7 +1526,7 @@ function TransferNouModal({ stocuri, proiecteMap, onClose, onDone }) {
         <div style={{ display:'flex', gap:12, marginBottom:14, flexWrap:'wrap' }}>
           <div style={{ flex:1, minWidth:220 }}>
             <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>De la (sursă) <span style={{ color:G.red }}>*</span></label>
-            <select style={S.input} value={deLa} onChange={e => { setDeLa(e.target.value); setCantMap({}) }}>
+            <select style={S.input} value={deLa} onChange={e => { setDeLa(e.target.value); setCantMap({}); setCautMat('') }}>
               <option value="">— alege sursa —</option>
               {locOptions.map(o => <option key={o.v} value={o.v} disabled={o.v === la}>{o.label}</option>)}
             </select>
@@ -1539,11 +1548,17 @@ function TransferNouModal({ stocuri, proiecteMap, onClose, onDone }) {
         )}
 
         {deLa && stocSursa.length > 0 && (
+          <input style={{ ...S.input, marginBottom:8 }} value={cautMat} onChange={e => setCautMat(e.target.value)}
+            placeholder={`🔍 Caută reper (${stocSursa.length} disponibile)…`} />
+        )}
+
+        {deLa && stocSursa.length > 0 && (
           <div style={{ ...S.card, background:G.bg, overflow:'hidden', marginBottom:14 }}>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 80px 110px 130px', gap:10, padding:'8px 14px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
               <div>Material</div><div>UM</div><div style={{ textAlign:'right' }}>Disponibil</div><div style={{ textAlign:'right' }}>Transferă</div>
             </div>
-            {stocSursa.map(s => {
+            {!stocVizibil.length && <div style={{ padding:'12px 14px', fontSize:13, color:G.muted }}>Niciun reper nu se potrivește cu „{cautMat}”.</div>}
+            {stocVizibil.map(s => {
               const q = Number(cantMap[s.material_denumire]) || 0
               const over = q > Number(s.cantitate)
               return (
