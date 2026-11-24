@@ -1,6 +1,6 @@
-# CTC: autorizațiile firmelor de control nedistructiv (NDT) la cartea tehnică — specificație v3
+# CTC: autorizațiile firmelor de control nedistructiv (NDT) la cartea tehnică — specificație v4
 
-Data: 25.11.2026 · Stare: v3 după a doua rundă de review NO-GO (25.11), de aprobat · Origine: TKT-2026-0389, varianta A aleasă de owner („le urcăm ca documente pe firma de control, fără modul nou”).
+Data: 25.11.2026 · Stare: v4 după a treia rundă de review NO-GO (25.11), de aprobat · Origine: TKT-2026-0389, varianta A aleasă de owner („le urcăm ca documente pe firma de control, fără modul nou”).
 
 ## 1. De ce
 
@@ -30,10 +30,12 @@ Cartea tehnică are nevoie de două seturi de autorizații:
    - Un trigger `BEFORE INSERT OR UPDATE OF fisier_path, partener_id, categorie` pe `ofertare_parteneri_documente` (funcția `fn_ofertare_doc_cale_garda()`, `RETURNS trigger`, `SECURITY INVOKER`, `search_path` fix, fără EXECUTE pentru clienți), pentru TOATE categoriile:
      - un rând `autorizatie_ndt` cu fișier trebuie să aibă calea `^parteneri/<partener_id>/ndt/[^/]+$`;
      - un rând din ORICE altă categorie NU poate avea o cale sub `/ndt/` (așa nimeni nu poate pune în subdosarul NDT un document de altă natură);
-     - nu sunt permise `..`, backslash, `%`, caractere de control sau o cale goală;
+     - nu sunt permise segmente `.` / `..` (un segment întreg egal cu `.` sau `..`), backslash, `%`, caractere de control sau o cale goală. Punctele din numele fișierului (`certificat..pdf`) sunt permise, iar regula privește doar segmentele de cale.
+     - Validatorul și generatorul de nume din ecran folosesc **aceeași** regulă: `sanitize` din `OfertareParteneri.jsx` produce numai nume care trec garda, iar ecranul verifică înainte de upload, ca să nu rămână fișiere urcate și respinse la salvare.
      - **unicitate:** nicio cale nu poate fi folosită de două rânduri (index unic parțial pe `fisier_path` unde nu e NULL). Un rând NDT nu poate astfel arăta fișierul altui document.
    - RPC-ul de deschidere (punctul 4) **reverifică** forma căii (subdosarul `ndt` al aceleiași firme), iar edge-ul la fel. Un rând vechi sau scris ocolind trigger-ul nu produce o semnătură pe altă cale.
    - Datele de azi: tabelul e gol, deci indexul unic și trigger-ul nu lovesc niciun rând existent (verificat în $pre$).
+   - **Schimbarea categoriei unui document cu fișier** (`alta` → `autorizatie_ndt` sau invers): calea veche nu mai e în subdosarul corect. Ecranul cere un fișier nou înainte de salvare și arată mesajul „Pentru categoria nouă, încărcați din nou fișierul (se mută în dosarul potrivit)”. Fișierul nou se urcă în subdosarul corect, iar cel vechi se șterge după salvarea reușită, ca azi la înlocuire. Fără fișier nou, salvarea e blocată în ecran; dacă trece totuși prin API, trigger-ul o refuză. Un document fără fișier își poate schimba liber categoria.
 
 3. **RPC-ul de listă `fn_ctc_autorizatii_ndt()`**, după tiparul `fn_ctc_autorizatii_sudori`:
    - `SECURITY DEFINER`, `search_path` fix, dreptul `fn_ctc_autorizatii_drept()` evaluat pe `auth.uid()` al apelantului;
@@ -68,7 +70,8 @@ Cartea tehnică are nevoie de două seturi de autorizații:
 
 ## 5. Riscuri și probe
 
-1. **Cale străină.** Un rând NDT care arată fișierul unui document `certificat_legal` al aceleiași firme → refuz (subdosar greșit + unicitate). Un document non-NDT pus sub `/ndt/` → refuz. Un utilizator Ofertare scrie direct `fisier_path` = un document de licitație pe un rând `autorizatie_ndt` → trigger-ul refuză. Un rând de test introdus ocolind trigger-ul (ca `postgres`) → RPC-ul de deschidere întoarce NULL, iar edge-ul răspunde 404. Mutanți: fără trigger, fără verificarea din RPC, fără verificarea din edge.
+1. **Editare și nume:** schimbarea `alta` → NDT și NDT → `alta`, cu și fără fișier nou (fără = blocat; cu = cale corectă); un fișier `certificat..pdf` se salvează atât la NDT, cât și la `certificat_legal`.
+1b. **Cale străină.** Un rând NDT care arată fișierul unui document `certificat_legal` al aceleiași firme → refuz (subdosar greșit + unicitate). Un document non-NDT pus sub `/ndt/` → refuz. Un utilizator Ofertare scrie direct `fisier_path` = un document de licitație pe un rând `autorizatie_ndt` → trigger-ul refuză. Un rând de test introdus ocolind trigger-ul (ca `postgres`) → RPC-ul de deschidere întoarce NULL, iar edge-ul răspunde 404. Mutanți: fără trigger, fără verificarea din RPC, fără verificarea din edge.
 2. **Filtrul listei:** documentele non-NDT nu apar niciodată în `fn_ctc_autorizatii_ndt()`; mutant fără filtru → pică. **Fără drept CTC** → lista 42501, deschiderea NULL / 403. Un utilizator CTC fără Ofertare vede lista și deschide doar căile NDT valide.
 3. **Document fără fișier:** butonul e ascuns; RPC-ul întoarce NULL, iar edge-ul răspunde 404, fără semnătură.
 4. **Expirarea:** cele 4 cazuri de la §3.6 (inclusiv ziua de azi, ca valabil, și miezul nopții în Europe/Bucharest).
