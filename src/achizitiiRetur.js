@@ -63,6 +63,12 @@ export function diferentaReceptie(linie, valoareNoua, comanda) {
   if (nou === null || nou < 0) return { eroare: `„${linie.denumire}”: cantitate invalidă (număr ≥ 0, cel mult 3 zecimale)` }
   const vechi = primitaEfectivaMii(linie, comanda)
   if (vechi === null) return { eroare: `„${linie.denumire}”: cantitatea primită din BD nu se poate citi exact — reîncărcați pagina` }
+  // „0” scris explicit pe un reper fără nicio recepție (primit NULL, fără dovadă): fn_cf_receptie_adauga refuză cantitatea 0
+  // (CF_CANTITATE_INVALIDA), deci nu există „recepție de zero” în BD. Tratat ca „nicio schimbare”, reperul ar rămâne NULL și la recepția
+  // comenzii ar conta drept primit integral (PV 2 = comandată) → refuz explicit, cu calea corectă (reperul se modifică / se șterge).
+  if (nou === 0 && (linie.cantitate_primita === null || linie.cantitate_primita === undefined) && !dovadaReceptie(linie, comanda)) {
+    return { eroare: `„${linie.denumire}”: reperul nu are nicio recepție, iar „0” nu se poate înregistra ca recepție. Lăsați câmpul gol dacă marfa nu a sosit încă; dacă furnizorul nu mai livrează reperul, folosiți „✏️ Modifică repere” (cantitate sau ștergere) înainte de recepție.` }
+  }
   const delta = nou - vechi
   if (delta === 0) return { schimbare: false }
   if (delta < 0) {
@@ -253,7 +259,7 @@ export async function executaPlan({ registru, rpcFn, id, construieste, pastreaza
   if (!plan) {
     const c = construieste()
     if (!c) return { stare: 'gol' }
-    if (c.eroare) return { stare: 'refuz', mesaj: c.eroare }
+    if (c.eroare) return { stare: 'refuz', faza: 'validare', mesaj: c.eroare }
     plan = planNou(c.pasi, c.info || {})
     if (!plan.pasi.length) return { stare: 'gol' }
     if (!registru.scrie(id, plan)) {
@@ -284,6 +290,51 @@ export function planReceptie(comanda, valori, gen = uuidNou) {
   }
   if (erori.length) return { eroare: erori.join('\n') }
   return pasi.length ? { pasi } : null
+}
+
+// Formularul „Recepție pe repere” (L01 / L24): valorile omului și diferențele trimise se raportează la ACELAȘI instantaneu — cel de la
+// deschiderea formularului — nu la comanda reîncărcată între timp. Altfel: deschis la 100, scris 110 (intenția +10), un retur concurent
+// coboară primit la 80 → salvarea ar trimite +30 cu CAS 80 și ar șterge efectul returului. Cu instantaneul, CAS-ul pleacă cu 100 și
+// serverul refuză (CF_VALOARE_SCHIMBATA); după refuz formularul se închide (rezultatSalvareReceptie) și se redeschide pe valorile noi.
+const CAMPURI_LINIE_RECEPTIE = ['denumire', 'cantitate', 'cantitate_primita', 'cantitate_intrata_stoc', 'intrare_reconciliata']
+const CAMPURI_COMANDA_RECEPTIE = ['status', 'este_servicii', 'receptie_mp_la', 'receptie_achizitii_la']
+export function instantaneuReceptie(comanda) {
+  return { ...comanda, linii: (comanda?.linii || []).map(l => ({ ...l })) }
+}
+// valorile afișate la deschidere = primit EFECTIV (o recepție fără repere = comandată); gol = reper fără nicio recepție
+export function valoriInitialeReceptie(baza) {
+  const init = {}
+  for (const l of baza?.linii || []) {
+    const ef = primitaEfectivaMii(l, baza)
+    init[l.id] = l.cantitate_primita != null || ef > 0 ? String((ef ?? 0) / 1000) : ''
+  }
+  return init
+}
+// true dacă datele comenzii din care s-a deschis formularul nu mai sunt cele de acum (alt tab, alt utilizator, un retur, o predare)
+export function instantaneuDepasit(baza, comanda) {
+  if (!baza || !comanda) return false
+  const v = (x) => (x === undefined ? null : x)
+  if (CAMPURI_COMANDA_RECEPTIE.some(k => String(v(baza[k])) !== String(v(comanda[k])))) return true
+  const a = baza.linii || [], b = comanda.linii || []
+  if (a.length !== b.length) return true
+  const dupaId = new Map(b.map(l => [String(l.id), l]))
+  return a.some(l => {
+    const n = dupaId.get(String(l.id))
+    return !n || CAMPURI_LINIE_RECEPTIE.some(k => String(v(l[k])) !== String(v(n[k])))
+  })
+}
+// ce face formularul după executaPlan: validare locală / necunoscut = rămâne deschis (la necunoscut se retrimite planul salvat, identic);
+// refuz de la server sau plan corupt = se ÎNCHIDE și se reîncarcă (o a doua salvare nu are voie să trimită diferențe din valorile vechi)
+export function rezultatSalvareReceptie(rez, numarComanda) {
+  if (rez.stare === 'gol') return { inchide: true, reincarca: false, mesaj: 'Nicio cantitate schimbată.', tip: 'warn' }
+  if (rez.stare === 'ok') {
+    return { inchide: true, reincarca: true, tip: 'success',
+      mesaj: `📦 Recepție pe repere actualizată pentru ${numarComanda}${rez.reluat ? ' (cererea anterioară, confirmată acum — verificați valorile)' : ''}.` }
+  }
+  if (rez.stare === 'necunoscut') return { inchide: false, reincarca: false, mesaj: rez.mesaj, tip: 'warn' }
+  if (rez.faza === 'validare') return { inchide: false, reincarca: false, mesaj: rez.mesaj, tip: 'error' }
+  return { inchide: true, reincarca: true, tip: 'error',
+    mesaj: `${rez.mesaj}\nFormularul s-a închis: redeschideți „📦 Recepție pe repere” — valorile s-au reîncărcat din baza de date.` }
 }
 
 // predarea în stoc: partial = doar liniile cu „Recepție pe repere” completată (ca azi); altfel (PV 2) toate, cu NULL = comandată
@@ -327,6 +378,26 @@ export function planTransportDirect(comanda, gen = uuidNou) {
   }
   if (blocate.length) return { eroare: `Repere care nu pot intra în stoc acum: ${blocate.join(', ')}.`, blocate }
   return pasi.length ? { pasi } : null
+}
+
+// ─── Cheile planurilor în registrul local + accesul la cererile neconfirmate (L05) ───────────────────────────────────────────────────
+export const ID_PLAN = {
+  receptie: (comandaId) => `receptie:${comandaId}`,
+  retur: (linieId) => `retur:${linieId}`,
+  reconciliere: (linieId) => `reconciliere:${linieId}`,
+  anulare: (returId) => `anulare:${returId}`,
+  inchidere: (returId) => `inchidere:${returId}`,
+  predare: (comandaId, partial) => `${partial ? 'predare_partiala' : 'predare_pv2'}:${comandaId}`,
+  transport: (comandaId) => `transport:${comandaId}`,
+}
+// O cerere neconfirmată rămâne accesibilă indiferent dacă operația ar mai fi permisă ACUM: un retur integral comis cu răspunsul pierdut
+// lasă primit efectiv 0, deci butonul „↩️ Retur” ar dispărea și planul n-ar mai putea fi retrimis / confirmat. Cât există planul în
+// registru, butonul apare; la retrimitere serverul întoarce rezultatul comis (sau refuză), iar planul iese din registru.
+export const STARI_RETUR = ['emisa', 'in_tranzit', 'ajunsa', ...STARI_RECEPTIONATE]
+export function poateDeschideRetur({ poateScrie, comanda, linie, retururiOk, areCerere }) {
+  if (!poateScrie || !comanda || !linie) return false
+  if (areCerere) return true
+  return !comanda.este_servicii && STARI_RETUR.includes(comanda.status) && !!retururiOk && !deReconciliat(linie) && (primitaEfectivaMii(linie, comanda) || 0) > 0
 }
 
 // ─── Ferestrele cu o singură operație (retur, anulare, închidere, reconciliere): cheia ferestrei, validări ca în RPC ───────────────────

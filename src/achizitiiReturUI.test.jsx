@@ -34,6 +34,17 @@ describe('ReturModal', () => {
     expect(t).toContain('Retrimite aceeași cerere')
     expect(t).not.toContain('Așteptăm înlocuire')
   })
+  it('r2 P2 #3: retur integral comis, răspuns pierdut, primit efectiv 0 după refresh → fereastra arată cererea și butonul de retrimitere e activ', () => {
+    const plan = { v: 1, creat_la: '2026-11-24T20:00:00Z', pasi: [{ rpc: 'fn_cf_retur_inregistreaza', args: { p_cantitate: 100, p_din_stoc: 40, p_motiv: 'neconform' } }] }
+    const html = renderToStaticMarkup(<ReturModal comanda={comanda} linie={{ ...linie, cantitate_primita: 0, cantitate_intrata_stoc: 0 }} G={G} S={S} bucket="b"
+      caleFisierPv={() => ''} actions={actiuni(plan)} onClose={() => {}} onDone={() => {}} />)
+    const t = scoateTaguri(html)
+    expect(t).toContain('primit efectiv 0 buc')
+    expect(t).toContain('Retur 100 buc, din stoc 40')
+    const buton = /<button[^>]*>[^<]*Retrimite aceeași cerere/.exec(html)
+    expect(buton).not.toBeNull()
+    expect(buton[0]).not.toMatch(/disabled/)
+  })
   it('fără proiect: doar sediul', () => {
     const t = scoateTaguri(renderToStaticMarkup(<ReturModal comanda={{ ...comanda, proiect_id: null }} linie={linie} G={G} S={S} bucket="b"
       caleFisierPv={() => ''} actions={actiuni()} onClose={() => {}} onDone={() => {}} />))
@@ -70,6 +81,16 @@ describe('ReturIstoric', () => {
   it('fără drept de scriere: fără butoane', () => {
     expect(randeaza(false)).not.toContain('Închide fără înlocuire')
   })
+  it('L05: anulare / închidere neconfirmată pe un retur deja închis → butonul de retrimitere rămâne', () => {
+    const plan = { v: 1, creat_la: '2026-11-24T20:00:00Z', pasi: [{ rpc: 'fn_cf_retur_anuleaza', args: { p_motiv: 'introdus greșit' } }] }
+    const doarCheia = (cheie) => ({ planNeconfirmat: (id) => (id === cheie ? plan : null), executaCF: async () => ({ stare: 'ok' }) })
+    const r = (actions, poateScrie = true) => scoateTaguri(renderToStaticMarkup(<ReturIstoric retururi={rows} poateScrie={poateScrie} profilesMap={{}}
+      fmtDataOra={() => 'DATA'} openStorageFile={() => {}} G={G} S={S} actions={actions} onDone={() => {}} />))
+    expect(r(doarCheia('anulare:2'))).toContain('Anulare neconfirmată — retrimite')
+    expect(r(doarCheia('inchidere:2'))).toContain('Închidere neconfirmată — retrimite')
+    expect(r(doarCheia('anulare:2'), false)).not.toContain('neconfirmată')
+    expect(r(actiuni())).not.toContain('neconfirmată')
+  })
   it('fără retururi: nimic', () => {
     expect(renderToStaticMarkup(<ReturIstoric retururi={[]} poateScrie G={G} S={S} actions={actiuni()} fmtDataOra={() => ''} />)).toBe('')
   })
@@ -82,7 +103,16 @@ describe('căile vechi nu mai scriu direct cantitățile / mișcările de achizi
     expect(achizitii).not.toMatch(/cantitate_primita\s*:/)
     expect(achizitii).not.toMatch(/cantitate_intrata_stoc\s*:/)
     expect(achizitii).not.toMatch(/from\('stocuri_miscari'\)/)
-    expect(achizitii).toContain("executaCF(`receptie:${c.id}`")
+    expect(achizitii).toContain('executaCF(ID_PLAN.receptie(baza.id), () => planReceptie(baza, cantitatiMap))')
+  })
+  it('r2: formularul de recepție trimite instantaneul de la deschidere; butoanele cu cereri neconfirmate rămân accesibile', () => {
+    expect(achizitii).toContain('actions.salveazaCantitatiPrimite(bazaPrimite, primiteLocal)')
+    expect(achizitii).not.toMatch(/salveazaCantitatiPrimite\(c,/)
+    expect(achizitii).toContain('const baza = instantaneuReceptie(c)')
+    expect(achizitii).toContain('disabled={busy || primiteDepasit}')
+    expect(achizitii).toContain('areCerere: returInAsteptare(l)')
+    expect(achizitii).toContain('redeschisa || receptieInAsteptare')
+    expect(achizitii).toContain('actions.planNeconfirmat(ID_PLAN.predare(c.id, true))')
   })
   it('Magazie.jsx: ștergerea poziției prin fn_stoc_sterge_pozitie, nu prin DELETE pe stocuri_miscari / stocuri', () => {
     expect(magazie).toContain("supabase.rpc('fn_stoc_sterge_pozitie', { p_stoc_id: s.id })")

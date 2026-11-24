@@ -21,7 +21,8 @@ import { NOTE_INTERNE_MAX, stareNoteDinSonda, normalizeazaNota, validareNota, no
 // TKT-2026-0347: retur la furnizor + recepția / predarea prin RPC-urile 20270110a
 import {
   laMii, registruPlanuri, executaPlan, planReceptie, planPredare, planTransportDirect, mesajEroareCF, primitaEfectivaMii, intrataMii, fmtMii,
-  rezumatLinie, receptieRedeschisa, deReconciliat, STARI_RECEPTIONATE,
+  rezumatLinie, receptieRedeschisa, deReconciliat, ID_PLAN, poateDeschideRetur, instantaneuReceptie, valoriInitialeReceptie, instantaneuDepasit,
+  rezultatSalvareReceptie,
 } from './achizitiiRetur.js'
 import ReturModal, { ReconciliereModal, BandaNeconfirmata } from './achizitii/ReturModal.jsx'
 import ReturIstoric from './achizitii/ReturIstoric.jsx'
@@ -1239,8 +1240,10 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
     await actions.dupaOperatieCF(txt)
     setReloadRetururi(k => k + 1)
   }
-  const stareRetur = ['emisa', 'in_tranzit', 'ajunsa', ...STARI_RECEPTIONATE].includes(c.status)
-  const poateReturna = (l) => ctx.canCreate && !c.este_servicii && stareRetur && retururiOk && !deReconciliat(l) && (primitaEfectivaMii(l, c) || 0) > 0
+  // L05: o cerere de retur / reconciliere neconfirmată (răspuns pierdut) rămâne accesibilă chiar dacă operația nu mai e permisă acum
+  const returInAsteptare = (l) => !!actions.planNeconfirmat(ID_PLAN.retur(l.id))
+  const poateReturna = (l) => poateDeschideRetur({ poateScrie: ctx.canCreate, comanda: c, linie: l, retururiOk, areCerere: returInAsteptare(l) })
+  const reconciliereInAsteptare = (l) => !!actions.planNeconfirmat(ID_PLAN.reconciliere(l.id))
   // spec §3.4: în receptionata / in_stoc recepția și predarea se redeschid cât timp e ceva de înlocuit sau marfă primită, neintrată
   const redeschisa = retururiOk && receptieRedeschisa(c, retururi.rows)
   const genCerereOferta = async () => {
@@ -1293,20 +1296,24 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
   }
   const [editPrimite, setEditPrimite] = useState(false)
   const [primiteLocal, setPrimiteLocal] = useState({})
+  // TKT-2026-0347 (L24): instantaneul comenzii de la deschidere — valorile afișate, diferențele și CAS-ul se calculează DOAR din el, nu din
+  // comanda reîncărcată între timp; după un refuz al serverului formularul se închide și se redeschide pe valorile noi
+  const [bazaPrimite, setBazaPrimite] = useState(null)
   const deschideEditPrimite = () => {
-    const init = {}
-    // TKT-2026-0347: valoarea afișată = primit EFECTIV (o recepție fără repere = comandată); se trimite doar diferența
-    ;(c.linii || []).forEach(l => {
-      const ef = primitaEfectivaMii(l, c)
-      init[l.id] = l.cantitate_primita != null || ef > 0 ? String((ef ?? 0) / 1000) : ''
-    })
-    setPrimiteLocal(init)
+    const baza = instantaneuReceptie(c)
+    setBazaPrimite(baza)
+    setPrimiteLocal(valoriInitialeReceptie(baza))
     setEditPrimite(true)
   }
+  const inchideEditPrimite = () => { setEditPrimite(false); setBazaPrimite(null) }
   const salveazaPrimiteLocal = async () => {
-    if (await actions.salveazaCantitatiPrimite(c, primiteLocal)) setEditPrimite(false)
+    if (!bazaPrimite) return
+    if (await actions.salveazaCantitatiPrimite(bazaPrimite, primiteLocal)) inchideEditPrimite()
   }
-  const receptieNeconfirmata = editPrimite ? actions.planNeconfirmat(`receptie:${c.id}`) : null
+  const receptieInAsteptare = !!actions.planNeconfirmat(ID_PLAN.receptie(c.id))
+  const receptieNeconfirmata = editPrimite ? actions.planNeconfirmat(ID_PLAN.receptie(c.id)) : null
+  // datele s-au schimbat de la deschidere: salvarea nouă se blochează (o cerere neconfirmată se poate retrimite — e planul salvat, nu formularul)
+  const primiteDepasit = editPrimite && !receptieNeconfirmata && instantaneuDepasit(bazaPrimite, c)
   const recapPrimite = (() => {
     const ls = c.linii || []
     let complet = 0, partial = 0, neinceput = 0
@@ -1393,9 +1400,15 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
                     {profile?.is_owner && <button onClick={() => setReconciliereLinie(l)} disabled={busy} style={{ ...S.btnS, fontSize:11, padding:'2px 8px', marginLeft:8, color:G.yellow, borderColor:G.yellow + '66' }}>Reconciliază</button>}
                   </div>
                 )}
+                {!deReconciliat(l) && !c.este_servicii && profile?.is_owner && reconciliereInAsteptare(l) && (
+                  <div style={{ fontSize:11, fontWeight:700, color:G.yellow }}>⏳ reconciliere trimisă fără rezultat confirmat
+                    <button onClick={() => setReconciliereLinie(l)} disabled={busy} style={{ ...S.btnS, fontSize:11, padding:'2px 8px', marginLeft:8, color:G.yellow, borderColor:G.yellow + '66' }}>🔁 Retrimite</button>
+                  </div>
+                )}
                 {poateReturna(l) && (
                   <button onClick={() => setReturLinie(l)} disabled={busy} title="Retur la furnizor (marfă neconformă)"
-                    style={{ ...S.btnS, fontSize:11, padding:'3px 9px', marginTop:4, color:G.red, borderColor:G.red + '55' }}>↩️ Retur</button>
+                    style={{ ...S.btnS, fontSize:11, padding:'3px 9px', marginTop:4, color: returInAsteptare(l) ? G.yellow : G.red, borderColor:(returInAsteptare(l) ? G.yellow : G.red) + '55' }}>
+                    {returInAsteptare(l) ? '⏳ Retur neconfirmat — retrimite' : '↩️ Retur'}</button>
                 )}
               </div>
               <div style={{ color:G.muted }}>{l.um || '—'}</div>
@@ -1491,7 +1504,13 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
             <div style={{ fontSize:13, fontWeight:800, color:G.green, marginBottom:4 }}>📦 Recepție pe repere</div>
             <div style={{ fontSize:11, color:G.muted, marginBottom:10 }}>Completează cât s-a primit (în total) din fiecare reper; se înregistrează doar diferența. Gol = neschimbat. „Tot" = primit integral. Înlocuirile primite pentru retururi se adaugă aici. Marfa deja intrată în stoc nu se scade aici — pentru ea folosiți „↩️ Retur".</div>
             <BandaNeconfirmata G={G} plan={receptieNeconfirmata} descriere="Valorile de mai jos nu se folosesc până la confirmarea cererii anterioare." />
-            {(c.linii || []).slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0)).map(l => {
+            {primiteDepasit && (
+              <div style={{ padding:10, borderRadius:8, border:`1px solid ${G.orange}66`, background:G.orange + '12', fontSize:12, marginBottom:12 }}>
+                <b style={{ color:G.orange }}>⚠️ Datele comenzii s-au schimbat de la deschiderea formularului</b> (recepție, retur sau predare făcută între timp).
+                <div style={{ color:G.muted, marginTop:4 }}>Valorile de mai jos s-au calculat pe datele vechi și nu se mai trimit. Apăsați „Anulează” și redeschideți „📦 Recepție pe repere”.</div>
+              </div>
+            )}
+            {(bazaPrimite?.linii || c.linii || []).slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0)).map(l => {
               const q = Number(l.cantitate) || 0
               const rz = retururiOk ? rezumatLinie(l.id, retururi.rows) : null
               return (
@@ -1504,8 +1523,8 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
               )
             })}
             <div style={{ display:'flex', gap:10, justifyContent:'flex-end', marginTop:12 }}>
-              <button onClick={() => setEditPrimite(false)} disabled={busy} style={{ ...S.btnS, fontSize:14 }}>Anulează</button>
-              <button onClick={salveazaPrimiteLocal} disabled={busy} style={{ ...S.btnP, background:G.green, color:'#0D1117', fontSize:14, opacity: busy ? .6 : 1 }}>{busy ? '⏳ Se salvează...' : receptieNeconfirmata ? '🔁 Retrimite aceeași cerere' : '💾 Salvează recepția'}</button>
+              <button onClick={inchideEditPrimite} disabled={busy} style={{ ...S.btnS, fontSize:14 }}>Anulează</button>
+              <button onClick={salveazaPrimiteLocal} disabled={busy || primiteDepasit} style={{ ...S.btnP, background:G.green, color:'#0D1117', fontSize:14, opacity: busy || primiteDepasit ? .6 : 1 }}>{busy ? '⏳ Se salvează...' : receptieNeconfirmata ? '🔁 Retrimite aceeași cerere' : '💾 Salvează recepția'}</button>
             </div>
           </div>
         )}
@@ -1603,7 +1622,7 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           {c.status === 'in_aprobare' && (profile?.is_owner || ctx.canCreate) && (
             <Btn color={G.red} onClick={() => actions.anuleaza(c)}>⛔ Anulează comanda</Btn>
           )}
-          {(c.status === 'emisa' || c.status === 'in_tranzit' || c.status === 'ajunsa' || redeschisa) && ctx.canCreate && !editPrimite && !c.este_servicii && <Btn color={G.green} onClick={deschideEditPrimite}>📦 Recepție pe repere</Btn>}
+          {(c.status === 'emisa' || c.status === 'in_tranzit' || c.status === 'ajunsa' || redeschisa || receptieInAsteptare) && ctx.canCreate && !editPrimite && !c.este_servicii && <Btn color={receptieInAsteptare ? G.yellow : G.green} onClick={deschideEditPrimite}>{receptieInAsteptare ? '⏳ Recepție neconfirmată — retrimite' : '📦 Recepție pe repere'}</Btn>}
           {/* TKT-2026-0176: repere anulate/modificate de furnizor înainte de recepție */}
           {(c.status === 'emisa' || c.status === 'in_tranzit' || c.status === 'ajunsa') && ctx.canCreate && !editRepere && !c.este_servicii && <Btn color={G.red} onClick={deschideEditRepere}>✏️ Modifică repere</Btn>}
           {(c.status === 'emisa' || c.status === 'in_tranzit') && ctx.canCreate && !editTermene && <Btn color={G.orange} onClick={deschideEditTermene}>📅 Modifică termene</Btn>}
@@ -1621,7 +1640,8 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           {['receptionata','in_stoc'].includes(c.status) && !c.este_servicii && <Btn color={G.blue} onClick={() => { if (!printeazaListaRepere(c, ctx)) window.alert('Browserul a blocat fereastra de print. Permite pop-up-urile pentru platformă și încearcă din nou.') }}>🖨 Listă repere primite (fără prețuri)</Btn>}
           {c.status === 'receptionata' && !c.este_servicii && <Btn color={G.green} onClick={() => actions.deschidePredare(c)}>🏬 Predare magazie (PV 2)</Btn>}
           {/* TKT-2026-0195 */}
-          {(['emisa','in_tranzit','ajunsa','receptionata'].includes(c.status) || (c.status === 'in_stoc' && redeschisa)) && ctx.canCreate && !c.este_servicii && (c.linii || []).some(l => l.cantitate_primita != null && !deReconciliat(l) && (primitaEfectivaMii(l, c) || 0) > (intrataMii(l) || 0)) && <Btn color={G.green} onClick={() => actions.predareParțiala(c)}>🏬 Predare parțială în stoc</Btn>}
+          {/* L05: o predare parțială neconfirmată (răspuns pierdut) rămâne accesibilă și după ce restul neintrat a devenit 0 */}
+          {(((['emisa','in_tranzit','ajunsa','receptionata'].includes(c.status) || (c.status === 'in_stoc' && redeschisa)) && (c.linii || []).some(l => l.cantitate_primita != null && !deReconciliat(l) && (primitaEfectivaMii(l, c) || 0) > (intrataMii(l) || 0))) || actions.planNeconfirmat(ID_PLAN.predare(c.id, true))) && ctx.canCreate && !c.este_servicii && <Btn color={G.green} onClick={() => actions.predareParțiala(c)}>🏬 Predare parțială în stoc</Btn>}
           {/* TKT-2026-0131 (Kostas): comandă în stoc → creezi transport cu toate materialele,
               avizul se generează prin fluxul normal din Logistică → Transporturi */}
           {(c.status === 'in_stoc' || c.status === 'receptionata') && ctx.canCreate && !c.este_servicii && <Btn color={G.blue} onClick={() => actions.deschideAvizTransport(c)}>🚚 Creează aviz (transport)</Btn>}
@@ -2111,19 +2131,15 @@ export default function AchizitiiPage() {
 
     // Recepție parțială — cantitate primită per reper. TKT-2026-0347: prin fn_cf_receptie_adauga, doar diferența, cu valoarea citită
     // (CAS: o recepție din formular nu mai poate suprascrie un retur). Întoarce true doar la succes (panoul rămâne deschis altfel).
-    salveazaCantitatiPrimite: async (c, cantitatiMap) => {
+    // `baza` = instantaneul de la deschiderea formularului (L24), nu comanda reîncărcată; după un refuz al serverului panoul se închide.
+    salveazaCantitatiPrimite: async (baza, cantitatiMap) => {
       setBusy(true)
       try {
-        const rez = await executaCF(`receptie:${c.id}`, () => planReceptie(c, cantitatiMap))
-        if (rez.stare === 'gol') { showToast('Nicio cantitate schimbată.', 'warn'); return true }
-        if (rez.stare !== 'ok') {
-          showToast(rez.mesaj, rez.stare === 'necunoscut' ? 'warn' : 'error')
-          if (rez.stare === 'refuz') await loadAll()
-          return false
-        }
-        showToast(`📦 Recepție pe repere actualizată pentru ${c.numar_comanda}${rez.reluat ? ' (cererea anterioară, confirmată acum — verificați valorile)' : ''}.`)
-        await loadAll()
-        return true
+        const rez = await executaCF(ID_PLAN.receptie(baza.id), () => planReceptie(baza, cantitatiMap))
+        const u = rezultatSalvareReceptie(rez, baza.numar_comanda)
+        showToast(u.mesaj, u.tip)
+        if (u.reincarca) await loadAll()
+        return u.inchide
       } catch (e) { showToast('Eroare: ' + mesajEroareCF(e), 'error'); return false } finally { setBusy(false) }
     },
     // TKT-2026-0176 (Kostas): furnizorul nu mai livrează un reper / schimbă cantitatea →
@@ -2204,7 +2220,7 @@ export default function AchizitiiPage() {
     if (!linii.length) { showToast('Comanda nu are linii cu cantitate primită.', 'error'); return }
     // TKT-2026-0347: stocul intră prin fn_cf_intra_stoc (intrare la sediu + transfer pe proiect + intrata_stoc, atomic pe linie).
     // Un plan neconfirmat (rețea căzută la o încercare anterioară) se retrimite identic, fără verificările de la prima încercare.
-    const idPlan = `transport:${c.id}`
+    const idPlan = ID_PLAN.transport(c.id)
     const reluare = !!planNeconfirmat(idPlan)
     if (!reluare) {
       // TKT-2026-0195: după o predare parțială, fluxul de transport direct ar dubla stocul
@@ -2310,7 +2326,7 @@ export default function AchizitiiPage() {
   // prin fn_cf_intra_stoc (mișcarea legată de LINIE + intrata_stoc += N, într-o tranzacție, sub lock; locația o alege serverul după
   // livrare_tip). parțial=true: doar liniile cu „Recepție pe repere" (cantitate_primita completată). Planul (cu cheile) se scrie în
   // registrul local înainte de primul apel; un plan neconfirmat se retrimite identic. Liniile nereconciliate blochează planul.
-  const idPredare = (c, partial) => `${partial ? 'predare_partiala' : 'predare_pv2'}:${c.id}`
+  const idPredare = (c, partial) => ID_PLAN.predare(c.id, partial)
   const intraInStoc = async (c, { partial = false } = {}) => {
     const rez = await executaCF(idPredare(c, partial), () => planPredare(c, { partial }))
     if (rez.stare === 'refuz' || rez.stare === 'necunoscut') throw new Error(rez.mesaj)

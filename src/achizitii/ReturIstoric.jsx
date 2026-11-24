@@ -1,12 +1,12 @@
 // Achiziții — retur la furnizor (TKT-2026-0347), PR2: istoricul retururilor pe comandă (retururi, anulări, înlocuiri, închideri — cine și
 // când) + acțiunile pe un retur deschis: „Anulează returul” și „Închide fără înlocuire”, cu motiv. Scrierea = DOAR RPC-urile 20270110a.
 import { useState, useRef } from 'react'
-import { laMii, fmtMii, deInlocuitMii, planAnulareRetur, planInchidereRetur, cheieFereastra, ETICHETE_INCHIDERE } from '../achizitiiRetur.js'
+import { laMii, fmtMii, deInlocuitMii, planAnulareRetur, planInchidereRetur, cheieFereastra, ETICHETE_INCHIDERE, ID_PLAN } from '../achizitiiRetur.js'
 import { BandaNeconfirmata } from './ReturModal.jsx'
 
 function MotivModal({ fel, retur, G, S, actions, onClose, onDone }) {
   const anulare = fel === 'anulare'
-  const idPlan = `${fel}:${retur.id}`
+  const idPlan = (anulare ? ID_PLAN.anulare : ID_PLAN.inchidere)(retur.id)
   const [pending, setPending] = useState(() => actions.planNeconfirmat(idPlan))
   const cheie = useRef(cheieFereastra()).current
   const [motiv, setMotiv] = useState('')
@@ -64,6 +64,11 @@ export default function ReturIstoric({ retururi, poateScrie, profilesMap, fmtDat
         const deInl = deInlocuitMii(r)
         const um = r.um || ''
         const deschis = !r.inchis_fel && !an
+        // L05: o anulare / închidere comisă cu răspunsul pierdut închide returul → butonul ar dispărea; cât există planul, rămâne „retrimite”
+        const anularePend = poateScrie && !!actions?.planNeconfirmat(ID_PLAN.anulare(r.id))
+        const inchiderePend = poateScrie && !!actions?.planNeconfirmat(ID_PLAN.inchidere(r.id))
+        const arataAnulare = anularePend || (deschis && !(Number(r.cantitate_inlocuita) > 0))
+        const arataInchidere = inchiderePend || (deschis && r.asteapta_inlocuire)
         return (
           <div key={r.id} style={{ padding:'8px 0', borderTop:`1px solid ${G.border}`, fontSize:13 }}>
             <div style={{ display:'flex', gap:10, alignItems:'baseline', flexWrap:'wrap' }}>
@@ -84,10 +89,10 @@ export default function ReturIstoric({ retururi, poateScrie, profilesMap, fmtDat
               {an && <> · anulat de {cine(an.creat_de)} la {fmtDataOra(an.creat_la)}: {an.motiv}</>}
               {r.pv_retur_path && <> · <button onClick={() => openStorageFile(r.pv_retur_path)} style={{ background:'none', border:'none', color:G.blue, cursor:'pointer', padding:0, fontSize:12 }}>📄 PV retur</button></>}
             </div>
-            {poateScrie && deschis && (
+            {poateScrie && (arataAnulare || arataInchidere) && (
               <div style={{ display:'flex', gap:8, marginTop:6 }}>
-                {!(Number(r.cantitate_inlocuita) > 0) && <button onClick={() => setActiune({ fel:'anulare', retur:r })} style={{ ...S.btnS, fontSize:12, padding:'5px 10px', color:G.red, borderColor:G.red + '66' }}>⛔ Anulează returul</button>}
-                {r.asteapta_inlocuire && <button onClick={() => setActiune({ fel:'inchidere', retur:r })} style={{ ...S.btnS, fontSize:12, padding:'5px 10px', color:G.orange, borderColor:G.orange + '66' }}>🚫 Închide fără înlocuire</button>}
+                {arataAnulare && <button onClick={() => setActiune({ fel:'anulare', retur:r })} style={{ ...S.btnS, fontSize:12, padding:'5px 10px', color: anularePend ? G.yellow : G.red, borderColor:(anularePend ? G.yellow : G.red) + '66' }}>{anularePend ? '⏳ Anulare neconfirmată — retrimite' : '⛔ Anulează returul'}</button>}
+                {arataInchidere && <button onClick={() => setActiune({ fel:'inchidere', retur:r })} style={{ ...S.btnS, fontSize:12, padding:'5px 10px', color: inchiderePend ? G.yellow : G.orange, borderColor:(inchiderePend ? G.yellow : G.orange) + '66' }}>{inchiderePend ? '⏳ Închidere neconfirmată — retrimite' : '🚫 Închide fără înlocuire'}</button>}
               </div>
             )}
           </div>

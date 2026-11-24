@@ -5,6 +5,7 @@ import {
   laMii, dinMii, dovadaReceptie, primitaEfectivaMii, diferentaReceptie, deInlocuit, rezumatLinie, poateRedeschideReceptia, receptieRedeschisa,
   limiteDinStoc, mesajEroareCF, clasificaRezultat, cheieFereastra, registruPlanuri, executaPlan, ruleazaPlan, planReceptie, planPredare,
   planTransportDirect, planRetur, planAnulareRetur, planInchidereRetur, planReconciliere, locatieImplicita, MISCARE_META_RETUR, MESAJ_NECUNOSCUT,
+  instantaneuReceptie, valoriInitialeReceptie, instantaneuDepasit, rezultatSalvareReceptie, poateDeschideRetur, ID_PLAN,
 } from './achizitiiRetur.js'
 
 const cmd = (extra = {}) => ({ id: 7, numar_comanda: 'CMD_T_001', status: 'emisa', proiect_id: 3, livrare_tip: 'santier',
@@ -84,6 +85,138 @@ describe('diferentaReceptie (Task 6)', () => {
   it('valori invalide = eroare', () => {
     expect(diferentaReceptie(lin(), '-1', cmd()).eroare).toBeTruthy()
     expect(diferentaReceptie(lin(), '1.2345', cmd()).eroare).toBeTruthy()
+  })
+})
+
+// Jakarinos r1 P1 #1: „0” scris explicit pe un reper fără nicio recepție nu se pierde ca „nicio schimbare”. RPC-ul refuză cantitatea 0
+// (CF_CANTITATE_INVALIDA, 20270110a §6.1), deci comportamentul ales e refuzul explicit, înaintea oricărui apel.
+describe('„0” explicit pe reper nerecepționat (r2 P1 #1)', () => {
+  it('NULL fără dovadă + „0” = refuz cu calea corectă (Modifică repere), nu „nicio schimbare”', () => {
+    for (const z of ['0', '0.000', ' 0 ']) {
+      const d = diferentaReceptie(lin(), z, cmd())
+      expect(d.schimbare).toBeUndefined()
+      expect(d.eroare).toMatch(/MAT_A.*nu are nicio recepție/)
+      expect(d.eroare).toContain('Modifică repere')
+    }
+  })
+  it('gol pe același reper rămâne „nicio schimbare” (diferența gol ≠ zero se păstrează)', () => {
+    expect(diferentaReceptie(lin(), '', cmd())).toEqual({ schimbare: false })
+    expect(diferentaReceptie(lin(), null, cmd())).toEqual({ schimbare: false })
+  })
+  it('NULL CU dovadă (comanda recepționată) + „0” = corectură −comandat, ca în RPC (NULL se materializează la comandat, apoi −100)', () => {
+    expect(diferentaReceptie(lin(), '0', cmd({ status: 'receptionata' }))).toEqual({ schimbare: true, delta: -100, primitaCitita: null })
+    expect(diferentaReceptie(lin(), '0', cmd({ status: 'ajunsa', receptie_mp_la: '2026-11-20T10:00:00Z' })).delta).toBe(-100)
+  })
+  it('primit deja 0 + „0” = nicio schimbare; primit 40 + „0” = −40', () => {
+    expect(diferentaReceptie(lin({ cantitate_primita: 0 }), '0', cmd())).toEqual({ schimbare: false })
+    expect(diferentaReceptie(lin({ cantitate_primita: 40 }), '0', cmd())).toEqual({ schimbare: true, delta: -40, primitaCitita: 40 })
+  })
+  it('planul de recepție se oprește (nimic trimis), iar refuzul e de VALIDARE (formularul rămâne deschis cu valorile omului)', async () => {
+    const c = cmd({ linii: [lin({ id: 11 }), lin({ id: 12, denumire: 'MAT_B', cantitate_primita: 10 })] })
+    expect(planReceptie(c, { 11: '0', 12: '20' }).eroare).toMatch(/MAT_A/)
+    const rpcFn = vi.fn()
+    const rez = await executaPlan({ registru: registruPlanuri(memorie()), rpcFn, id: ID_PLAN.receptie(7), construieste: () => planReceptie(c, { 11: '0', 12: '20' }) })
+    expect(rpcFn).not.toHaveBeenCalled()
+    expect(rez).toMatchObject({ stare: 'refuz', faza: 'validare' })
+    expect(rezultatSalvareReceptie(rez, 'CMD_T_001')).toMatchObject({ inchide: false, reincarca: false, tip: 'error' })
+  })
+})
+
+// Jakarinos r1 P1 #2: după un conflict CAS formularul nu mai poate trimite diferențe calculate din valorile vechi peste noua bază.
+describe('formularul de recepție: instantaneu + închidere după refuz (r2 P1 #2)', () => {
+  const deschisLa100 = cmd({ status: 'in_stoc', linii: [lin({ id: 11, cantitate_primita: 100, cantitate_intrata_stoc: 0 })] })
+  const dupaRetur80 = cmd({ status: 'in_stoc', linii: [lin({ id: 11, cantitate_primita: 80, cantitate_intrata_stoc: 0 })] })
+  it('scenariul din review: intenția +10 pleacă cu CAS 100 din instantaneu, nu +30 cu CAS 80 din comanda reîncărcată', () => {
+    const baza = instantaneuReceptie(deschisLa100)
+    expect(valoriInitialeReceptie(baza)).toEqual({ 11: '100' })
+    const p = planReceptie(baza, { 11: '110' }, genSecv())
+    expect(p.pasi.map(x => [x.args.p_cantitate, x.args.p_primita_citita])).toEqual([[10, 100]])
+    // contra-probă: calculul pe comanda proaspătă ar fi dat exact defectul raportat
+    expect(planReceptie(dupaRetur80, { 11: '110' }, genSecv()).pasi.map(x => [x.args.p_cantitate, x.args.p_primita_citita])).toEqual([[30, 80]])
+  })
+  it('instantaneul nu se schimbă când comanda din pagină se reîncarcă (copie a liniilor)', () => {
+    const c = cmd({ linii: [lin({ id: 11, cantitate_primita: 100 })] })
+    const baza = instantaneuReceptie(c)
+    c.linii[0].cantitate_primita = 80
+    expect(baza.linii[0].cantitate_primita).toBe(100)
+  })
+  it('instantaneuDepasit: vede primit / intrat / reconciliere / linii / status / semnături schimbate; nu vede câmpuri fără efect', () => {
+    const baza = instantaneuReceptie(deschisLa100)
+    expect(instantaneuDepasit(baza, instantaneuReceptie(deschisLa100))).toBe(false)
+    expect(instantaneuDepasit(baza, dupaRetur80)).toBe(true)
+    const cu = (l, c = {}) => cmd({ status: 'in_stoc', ...c, linii: [lin({ id: 11, cantitate_primita: 100, cantitate_intrata_stoc: 0, ...l })] })
+    expect(instantaneuDepasit(baza, cu({ cantitate_intrata_stoc: 5 }))).toBe(true)
+    expect(instantaneuDepasit(baza, cu({ intrare_reconciliata: false }))).toBe(true)
+    expect(instantaneuDepasit(baza, cu({ cantitate: 90 }))).toBe(true)
+    expect(instantaneuDepasit(baza, cu({}, { status: 'receptionata' }))).toBe(true)
+    expect(instantaneuDepasit(baza, cu({}, { receptie_mp_la: '2026-11-20T10:00:00Z' }))).toBe(true)
+    expect(instantaneuDepasit(baza, { ...cu({}), linii: [...cu({}).linii, lin({ id: 12 })] })).toBe(true)
+    expect(instantaneuDepasit(baza, cu({ observatii: 'altceva', termen_livrare: '2026-12-01' }))).toBe(false)
+  })
+  it('conflict CAS la salvare (CF_VALOARE_SCHIMBATA / CF_CLIENT_VECHI) → formularul se ÎNCHIDE și se reîncarcă; planul iese din registru', async () => {
+    for (const cod of ['CF_VALOARE_SCHIMBATA', 'CF_CLIENT_VECHI']) {
+      const registru = registruPlanuri(memorie())
+      const rpcFn = vi.fn().mockResolvedValue({ data: null, error: { code: 'P0001', message: `${cod}: s-a schimbat` }, status: 400 })
+      const baza = instantaneuReceptie(deschisLa100)
+      const rez = await executaPlan({ registru, rpcFn, id: ID_PLAN.receptie(7), construieste: () => planReceptie(baza, { 11: '110' }) })
+      expect(rpcFn.mock.calls[0][1]).toMatchObject({ p_cantitate: 10, p_primita_citita: 100 })
+      const u = rezultatSalvareReceptie(rez, 'CMD_T_001')
+      expect(u).toMatchObject({ inchide: true, reincarca: true, tip: 'error' })
+      expect(u.mesaj).toMatch(/Datele s-au schimbat/)
+      expect(u.mesaj).toMatch(/Formularul s-a închis/)
+      expect(registru.citeste(ID_PLAN.receptie(7))).toBeNull()
+    }
+  })
+  it('alte rezultate: necunoscut = rămâne deschis (se retrimite planul salvat); ok / gol = se închide; plan corupt = se închide', async () => {
+    expect(rezultatSalvareReceptie({ stare: 'necunoscut', mesaj: MESAJ_NECUNOSCUT }, 'X')).toMatchObject({ inchide: false, reincarca: false, tip: 'warn' })
+    expect(rezultatSalvareReceptie({ stare: 'ok', reluat: true }, 'CMD_T_001')).toMatchObject({ inchide: true, reincarca: true, tip: 'success' })
+    expect(rezultatSalvareReceptie({ stare: 'gol' }, 'X')).toMatchObject({ inchide: true, reincarca: false })
+    const st = memorie(); st.setItem('gazpet.achizitii.cf_plan.receptie:7', '{rupt')
+    const rez = await executaPlan({ registru: registruPlanuri(st), rpcFn: vi.fn(), id: ID_PLAN.receptie(7), construieste: () => null })
+    expect(rezultatSalvareReceptie(rez, 'X')).toMatchObject({ inchide: true, reincarca: true })
+  })
+})
+
+// Jakarinos r1 P2 #3: cererea neconfirmată rămâne accesibilă indiferent de eligibilitatea unei operații noi.
+describe('reluarea unui retur neconfirmat după refresh (r2 P2 #3)', () => {
+  const dupaReturIntegral = lin({ id: 11, cantitate_primita: 0, cantitate_intrata_stoc: 0 })
+  const c = cmd({ status: 'in_stoc' })
+  it('primit efectiv 0 după returul integral comis: fără plan butonul lipsește, cu plan în registru apare', () => {
+    expect(poateDeschideRetur({ poateScrie: true, comanda: c, linie: dupaReturIntegral, retururiOk: true, areCerere: false })).toBe(false)
+    expect(poateDeschideRetur({ poateScrie: true, comanda: c, linie: dupaReturIntegral, retururiOk: true, areCerere: true })).toBe(true)
+  })
+  it('cererea în așteptare trece și peste retururile necitite / linia de reconciliat / statusul schimbat (decide serverul la retrimitere)', () => {
+    expect(poateDeschideRetur({ poateScrie: true, comanda: cmd({ status: 'anulata' }), linie: lin({ intrare_reconciliata: false }), retururiOk: false, areCerere: true })).toBe(true)
+  })
+  it('fără drept de scriere: niciodată', () => {
+    expect(poateDeschideRetur({ poateScrie: false, comanda: c, linie: dupaReturIntegral, retururiOk: true, areCerere: true })).toBe(false)
+  })
+  it('eligibilitatea obișnuită rămâne neschimbată', () => {
+    const ok = { poateScrie: true, comanda: c, linie: lin({ cantitate_primita: 40 }), retururiOk: true, areCerere: false }
+    expect(poateDeschideRetur(ok)).toBe(true)
+    expect(poateDeschideRetur({ ...ok, retururiOk: false })).toBe(false)
+    expect(poateDeschideRetur({ ...ok, comanda: cmd({ status: 'in_stoc', este_servicii: true }) })).toBe(false)
+    expect(poateDeschideRetur({ ...ok, comanda: cmd({ status: 'ciorna' }) })).toBe(false)
+    expect(poateDeschideRetur({ ...ok, linie: lin({ cantitate_primita: 40, intrare_reconciliata: false }) })).toBe(false)
+  })
+  it('după refresh, planul salvat se retrimite IDENTIC (aceeași cheie, aceiași parametri) și iese din registru la rezultatul comis', async () => {
+    const st = memorie()
+    const plan = { v: 1, creat_la: '2026-11-24T20:00:00Z', pasi: [{ rpc: 'fn_cf_retur_inregistreaza', eticheta: 'MAT_A',
+      args: { p_cheie: '00000000-0000-4000-8000-000000000009', p_linie_id: 11, p_cantitate: 100, p_din_stoc: 0 } }] }
+    st.setItem('gazpet.achizitii.cf_plan.' + ID_PLAN.retur(11), JSON.stringify(plan))
+    const registru = registruPlanuri(st)  // registru nou = pagină reîncărcată
+    const rpcFn = vi.fn().mockResolvedValue({ data: { retur_id: 5, reluat: true }, error: null, status: 200 })
+    const construieste = vi.fn(() => ({ eroare: 'nu trebuie construit nimic nou' }))
+    const rez = await executaPlan({ registru, rpcFn, id: ID_PLAN.retur(11), construieste })
+    expect(construieste).not.toHaveBeenCalled()
+    expect(rpcFn).toHaveBeenCalledWith('fn_cf_retur_inregistreaza', plan.pasi[0].args)
+    expect(rez).toMatchObject({ stare: 'ok', reluat: true })
+    expect(registru.citeste(ID_PLAN.retur(11))).toBeNull()
+  })
+  it('cheile registrului sunt cele folosite până acum (compatibilitate cu planurile deja salvate)', () => {
+    expect([ID_PLAN.receptie(7), ID_PLAN.retur(11), ID_PLAN.reconciliere(11), ID_PLAN.anulare(5), ID_PLAN.inchidere(5),
+      ID_PLAN.predare(7, true), ID_PLAN.predare(7, false), ID_PLAN.transport(7)])
+      .toEqual(['receptie:7', 'retur:11', 'reconciliere:11', 'anulare:5', 'inchidere:5', 'predare_partiala:7', 'predare_pv2:7', 'transport:7'])
   })
 })
 

@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
 import {
-  laMii, fmtMii, primitaEfectivaMii, intrataMii, limiteDinStoc, locatiiRetur, locatieImplicita, planRetur, planReconciliere, cheieFereastra,
+  laMii, fmtMii, primitaEfectivaMii, intrataMii, limiteDinStoc, locatiiRetur, locatieImplicita, planRetur, planReconciliere, cheieFereastra, ID_PLAN,
 } from '../achizitiiRetur.js'
 
 // citirea stocului unei locații pe cheia EXACTĂ (locație + denumirea liniei, ca fn_stoc_blocheaza): null = necunoscut, 'ambiguu' = mai multe rânduri
@@ -44,7 +44,7 @@ export function BandaNeconfirmata({ G, plan, descriere }) {
 }
 
 export default function ReturModal({ comanda, linie, G, S, bucket, caleFisierPv, actions, onClose, onDone }) {
-  const idPlan = `retur:${linie.id}`
+  const idPlan = ID_PLAN.retur(linie.id)
   const [pending, setPending] = useState(() => actions.planNeconfirmat(idPlan))
   const cheie = useRef(cheieFereastra()).current
   const [cant, setCant] = useState('')
@@ -174,7 +174,7 @@ export default function ReturModal({ comanda, linie, G, S, bucket, caleFisierPv,
 
 // Reconcilierea manuală a unei linii vechi (owner): câte din marfa liniei a intrat deja în stoc prin mișcările vechi (legate doar de comandă)
 export function ReconciliereModal({ comanda, linie, G, S, actions, onClose, onDone }) {
-  const idPlan = `reconciliere:${linie.id}`
+  const idPlan = ID_PLAN.reconciliere(linie.id)
   const [pending, setPending] = useState(() => actions.planNeconfirmat(idPlan))
   const cheie = useRef(cheieFereastra()).current
   const [val, setVal] = useState('')
