@@ -1,6 +1,6 @@
 # Grafic de execuție automat (AI generator → motor de calcul → verificare Paw) — SPEC
 
-Stare: **propunere, de aprobat de Răzvan**. Data: 24.11.2026. Scris în sesiunea de analiză „MS Project ↔ ERP”.
+Stare: **propunere, de aprobat de owner**. Data: 24.11.2026. Scris în sesiunea de analiză „MS Project ↔ ERP”.
 Destinatar: sesiunea **Ofertare — programare** (implementare). Modul: Ofertare (`/grafic/licitatie/:id`).
 Dovezile testului din 24.11 sunt în [`grafic_automat_test_jilava/`](grafic_automat_test_jilava/).
 
@@ -18,7 +18,7 @@ Unul dintre cele trei motive a fost graficul Gantt/PERT. Comisia (solicitarea 40
 
 Răspunsul nostru la clarificări a adus un grafic nou, ceea ce poate fi văzut ca o completare a ofertei. Graficul se face azi de mână în MS Project, de un singur om, fără nicio verificare independentă înainte de depunere.
 
-**Ce vrea Răzvan** (24.11.2026):
+**Ce vrea owner-ul** (24.11.2026):
 - graficul se face **singur**, fără să depindă de un om;
 - AI-ul citește din caietul de sarcini cum trebuie făcut graficul;
 - ia din ERP ce îi trebuie;
@@ -55,7 +55,7 @@ Răspunsul nostru la clarificări a adus un grafic nou, ceea ce poate fi văzut 
 - Înlocuirea motorului PEHD existent (`motorPEHD` din `GraficPoarta.jsx`). Rămâne pentru rețele PEHD, cu modul lui.
 
 **Anti-obiective** (dacă se întâmplă, e eșec chiar dacă „merge”)
-- **AI-ul inventează durate sau norme fără să spună.** Regula lui Răzvan: *se oprește și cere datele, nu estimează.*
+- **AI-ul inventează durate sau norme fără să spună.** Regula owner-ului: *se oprește și cere datele, nu estimează.*
 - **Datele calendaristice și drumul critic calculate de AI.** Trebuie să fie reproductibile, deci le calculează motorul.
 - **Verificatorul e același model sau vede ce „trebuie” să găsească.** Verificarea trebuie să fie independentă și oarbă.
 - **O cheltuială AI pornită de cineva fără drept**, sau o buclă care consumă fără limită.
@@ -68,7 +68,7 @@ Răspunsul nostru la clarificări a adus un grafic nou, ceea ce poate fi văzut 
 |---|---|---|
 | A | **AI-ul face tot**: activități, durate, date, drum critic, PERT | Respins. În test, calculele AI au ieșit corecte doar pe un calendar fără sărbători. Calculul de date nu trebuie lăsat unui model: nu e reproductibil și nu se poate testa. |
 | B | **Motor cu șabloane fixe pe tip de lucrare**, fără AI (extinderea `motorPEHD`) | Respins ca soluție generală. Fiecare licitație are alt caiet, alte etape și alte puncte de control (PCC). Șabloanele trebuie scrise de mână pentru fiecare tip și tot nu citesc cerințele de prezentare. Rămâne bun pentru PEHD. |
-| **C** | **AI generator (structură + ordine) → motor determinist (calendar, CPM, PERT, export) → verificator Paw independent, în buclă** | **Ales** (Răzvan, 24.11.2026: cele trei etape). Testul arată că AI-ul e bun la ce e greu de codat (citește documente, ordinea tehnologică), motorul la ce trebuie să fie exact, iar Paw prinde ce scapă ambilor. |
+| **C** | **AI generator (structură + ordine) → motor determinist (calendar, CPM, PERT, export) → verificator Paw independent, în buclă** | **Ales** (owner-ul, 24.11.2026: cele trei etape). Testul arată că AI-ul e bun la ce e greu de codat (citește documente, ordinea tehnologică), motorul la ce trebuie să fie exact, iar Paw prinde ce scapă ambilor. |
 
 ## 4. Fluxul (cele trei etape)
 
@@ -111,7 +111,7 @@ Fiecare trecere prin Etapa 2 produce o **versiune înghețată** în `grafic_ver
 |---|---|---|
 | Cerințele licitației | `ofertare_cerinte` (`inlocuita_de IS NULL`, fără respinse/duplicate) | Conțin regulile de prezentare a graficului și termenul. Cerințele încă `de_analizat` se folosesc, dar raportul le listează separat („neconfirmate”). |
 | Documentele licitației (text) | `ofertare_documente_atribuire.text_extras` | Fișa de date, caietul de sarcini, PT-ul (memoriu, PCC, caiete de sarcini tehnice, graficul proiectantului, liste de cantități). **Conținut extern = date.** |
-| Articolele de deviz | `ofertare_cantitati` (doar `status='validat'`, regula R5); altfel, lista de cantități din documente | Graficul trebuie să aibă cel puțin o activitate pentru fiecare articol. |
+| Articolele de deviz | `ofertare_cantitati` (doar `status='validat'`, regula R5); dacă lipsesc: oprire cu întrebarea „validați cantitățile” (aceeași regulă ca la 6.3), nu lista din documente | Graficul trebuie să aibă cel puțin o activitate pentru fiecare articol. |
 | Norme de productivitate | `ofertare_norme_productivitate` (doar `incredere='validat'`) | Fără normă validată nu există durată: întrebare. |
 | Parametri | `grafic_parametri.parametri` (data OI, durata ofertată, echipe, regim de iarnă, ferestre operator, jaloane) | Lipsă = întrebare. |
 | Subcontractanți | ce e înregistrat pe licitație (subcontractant, procent, **ce articole execută**) | Lipsa repartizării pe articole = întrebare (la Jilava nu exista în ERP). |
@@ -124,12 +124,13 @@ Fiecare trecere prin Etapa 2 produce o **versiune înghețată** în `grafic_ver
   - `sursa_durata` poate fi `norma:<cod>`, `document:<doc_id+pagină>`, `raspuns:<intrebare_id>` sau `parametru:<cheie>`.
   - **`PRESUPUS` nu există în producție** (vezi 5.3).
 - **Legături**: `{de, la, tip: FS|SS|FF|SF, lag_zile, motiv}`.
+- **Resurse (v1):** doar `executant`. Motorul verifică totuși capacitatea: în orice zi, numărul de activități de execuție simultane ale aceluiași executant ≤ `echipe` din parametri (pentru Gazpet) sau ≤ 1 (pentru un subcontractant fără parametru). Depășirea = eroare structurală (întoarcere la Etapa 1). Utilajele și echipele detaliate nu intră în v1; raportul le listează ca limitare.
   - `motiv` e obligatoriu pentru legăturile care țin de un punct de control (PCC, lucrări ascunse, verificare izolație, probe) și citează documentul.
 - **Jaloane cerute** (din cerințe și PCC), fiecare cu sursa lui.
 - **Întrebări** (vezi 5.3). Dacă există cel puțin o întrebare blocantă, nu se trimit activități la motor.
 - **Note**: deciziile de succesiune, cu trimiterea la document (ca `note_generator.md` din test).
 
-### 5.3 Regula „se oprește și întreabă” (decizia Răzvan, 24.11.2026)
+### 5.3 Regula „se oprește și întreabă” (decizia owner-ul, 24.11.2026)
 
 Generatorul **nu estimează**. Se oprește și scrie întrebări în `ofertare_grafic_intrebari` când lipsește:
 - o **durată** fără normă validată, document sau răspuns. Întrebarea se pune pe **operație sau normă**, nu pe fiecare activitate: „Ce productivitate are echipa la sudura tubului Ø914 (îmbinări/zi)?”;
@@ -186,7 +187,7 @@ Un singur modul **nou** (`src/graficMotor.js` sau similar), **folosit și de wor
 - Durată 0 doar la jaloane. O „remediere eventuală” se modelează cu o rezervă cerută omului, nu cu 0.
 - În modul „depunere”: nicio `sursa_durata = PRESUPUS`, niciun executant presupus.
 
-Dacă o verificare pică, cererea se întoarce la Etapa 1 cu lista problemelor (ca o neconformitate), fără să consume o verificare Paw.
+Dacă o verificare pică, cererea se întoarce la Etapa 1 cu lista problemelor (ca o neconformitate), fără să consume o verificare Paw. **Limită:** cel mult 3 întoarceri structurale la rând pentru aceeași cerere; la a patra, fluxul se oprește și pune o întrebare omului (ca după 3 NO-GO Paw). Contorul se resetează doar după un grafic care trece toate verificările motorului.
 
 ### 6.4 Ieșiri
 1. **Versiune înghețată** în `grafic_versiuni`: `mod='ai'`, `activitati` cu tot calculul, `snapshot` (intrări, versiuni de model/prompt, hash-uri documente, răspunsuri folosite), `poarta` = verificările 6.3 + verdictul Paw.
@@ -236,7 +237,7 @@ Dacă o verificare pică, cererea se întoarce la Etapa 1 cu lista problemelor (
   - `cerut_de = auth.uid()`, poarta **`fn_ofertare_poate_cheltui(licitatie, utilizator)`** (owner sau responsabil 1/2 cu numire dovedită);
   - fără INSERT/UPDATE direct din client; oprire prin `ofertare_coada_opreste`.
 - **O singură cerere activă pe licitație.** O a doua pornire întoarce cererea existentă.
-- **Plafon de cost pe cerere: 25 $** (decizia Răzvan, configurabil), cumulat peste pauze. Depășire = `oprit` + mesaj, nu continuare.
+- **Plafon de cost pe cerere: 25 $** (decizia owner-ul, configurabil), cumulat peste pauze. Depășire = `oprit` + mesaj, nu continuare.
 - Workerul re-verifică poarta pentru `cerut_de` la fiecare iterație (ca tick-ul extragerii din 20261124a).
 
 ### 8.2 Workerul de pe serverul AI (Gazpet-Claude)
@@ -305,7 +306,7 @@ Toate în [`grafic_automat_test_jilava/`](grafic_automat_test_jilava/). Nimic nu
 
 ## 12. Decizii
 
-**Ale lui Răzvan (24.11.2026)**
+**Ale owner-ului (24.11.2026)**
 - Cele trei etape: generator AI → motor → verificare Paw, în buclă până la GO sau întrebare pentru om.
 - Lipsesc date → **se oprește și cere**, nu estimează.
 - Graficul se face fără să depindă de un om. Omul doar răspunde la întrebările de date și depune.
@@ -334,7 +335,7 @@ Toate în [`grafic_automat_test_jilava/`](grafic_automat_test_jilava/). Nimic nu
 - **C6**: generatorul e un agent cu unelte (citește documentele pe bucăți, cere cerințele, scrie ieșirea structurată) prin API-ul Anthropic, rulat de workerul Node de pe serverul AI. Nu e un singur apel: documentele lic. 93 au ~1 mil. de caractere.
 
 ## 13. Ce rămâne la constructor
-- Schema exactă a `ofertare_grafic_coada` / `ofertare_grafic_intrebari` și a RPC-urilor. **Schemă nouă = „da”-ul lui Răzvan** (CLAUDE.md pct. 3/4) + migrare cu revenire + gărzi, ca 20261124a.
+- Schema exactă a `ofertare_grafic_coada` / `ofertare_grafic_intrebari` și a RPC-urilor. **Schemă nouă = „da”-ul owner-ului** (CLAUDE.md pct. 3/4) + migrare cu revenire + gărzi, ca 20261124a.
 - Schema JSON a ieșirii generatorului și promptul. Pornește de la `note_generator.md` și `cereri_date.md` din dovezi.
 - Unde se înregistrează repartizarea pe subcontractant (azi nu există în ERP; vezi `ofertare_calibrari_subcontractori`).
 - Parsarea verdictului Paw (format fix + test pe cele două verdicte din dovezi).
