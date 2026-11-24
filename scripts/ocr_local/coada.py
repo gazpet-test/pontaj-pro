@@ -347,8 +347,10 @@ class Coada:
             return []
         out = []
         for p in self.cereri.iterdir():
+            # r3 (Jak r2 P2): orice intrare cu nume de cerere (fișier, director, legătură) intră în inventar;
+            # citeste() / izoleaza() decid ce e acceptabil, ca o intrare ciudată să nu dispară și să nu blocheze id-ul.
             m = ID_RE.match(p.stem) if p.suffix == '.json' else None
-            if m and p.is_file():
+            if m:
                 out.append(p.stem)
         return sorted(out, key=lambda s: int(s[1:]))
 
@@ -365,6 +367,8 @@ class Coada:
             c = json.loads(p.read_text(encoding='utf-8'))
         except UnicodeDecodeError:
             raise ValueError('JSON ilizibil (nu e UTF-8)') from None
+        except RecursionError:  # r3 (Jak r2 P2): JSON imbricat excesiv = cerere invalidă izolată, nu căderea cozii
+            raise ValueError('JSON ilizibil (imbricare excesiva)') from None
         except ValueError as e:
             raise ValueError('JSON ilizibil: %s' % str(e)[:120]) from None
         return valideaza_cerere(c, id)

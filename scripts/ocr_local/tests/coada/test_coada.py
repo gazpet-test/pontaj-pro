@@ -924,6 +924,33 @@ class CereriInvalideTests(unittest.TestCase):
         c = q.adauga([str(fa_plan(root, nume, n=1))], 'chat')
         return json.loads((q.cereri / (c['id'] + '.json')).read_text())
 
+    def test_json_imbricat_excesiv_izolat_coada_continua(self):
+        with temporar() as root:
+            q = Q.Coada(root / 'coada', radacini=(root,))
+            self.scrie_brut(q, 'c000001', '[' * 10000 + ']' * 10000)
+            ok = q.adauga([str(fa_plan(root, 'OK', n=1))], 'cowork')
+            self.assertEqual(ok['id'], 'c000002')
+            lot = q.preia_lot()
+            self.assertEqual([c['id'] for c in lot], ['c000002'])
+            c = q.citeste('c000001')
+            self.assertEqual(c['stare'], 'eroare')
+            self.assertIn('imbricare excesiva', c['motiv'])
+
+    def test_director_cu_nume_de_cerere_vizibil_si_izolat(self):
+        with temporar() as root:
+            q = Q.Coada(root / 'coada', radacini=(root,))
+            q.cereri.mkdir(parents=True, exist_ok=True)
+            (q.cereri / 'c000001.json').mkdir()
+            self.assertEqual(q.ids(), ['c000001'])
+            self.assertIn('c000001', {c['id'] for c in q.stare()['cereri']})
+            ok = q.adauga([str(fa_plan(root, 'OK', n=1))], 'cowork')  # nu reutilizează c000001
+            self.assertEqual(ok['id'], 'c000002')
+            lot = q.preia_lot()
+            self.assertEqual([c['id'] for c in lot], ['c000002'])
+            c = q.citeste('c000001')
+            self.assertEqual(c['stare'], 'eroare')
+            self.assertTrue((root / 'coada' / c['original']).is_dir())  # originalul mutat, neatins
+
     def test_preia_lot_izoleaza_invalidele(self):
         with temporar() as root:
             q = Q.Coada(root / 'coada', radacini=(root,))
