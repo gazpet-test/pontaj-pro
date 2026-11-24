@@ -1,4 +1,4 @@
-# Oferte probe de presiune: mai multe tronsoane cu setări diferite pe aceeași ofertă (TKT-2026-0349) — specificație v1
+# Oferte probe de presiune: mai multe tronsoane cu setări diferite pe aceeași ofertă (TKT-2026-0349) — specificație v2
 
 Data: 25.11.2026 · Stare: propunere, varianta B. **Owner-ul a amânat tichetul (24.11):** documentul se pregătește acum, iar implementarea pornește doar când reia subiectul.
 
@@ -16,25 +16,36 @@ O ofertă de probă poate acoperi mai multe tronsoane cu setări diferite, de ex
 
 ## 3. Ce se construiește (B)
 
-1. **Coloană nouă `probe_oferte.tronsoane jsonb NULL`:** listă ordonată de tronsoane `{dn_id, lungime_m, presiune_bar, config_id, tip_fluid, eticheta}`.
-   - NULL = oferta veche, cu un singur calcul. Rămâne **exact** cum e azi, citită și editată pe calea veche.
-   - O ofertă nouă cu ≥ 2 tronsoane folosește `tronsoane`, iar `calc_id` rămâne NULL.
-   - CHECK: dacă nu e NULL, e un array cu 2–20 de elemente, fiecare cu câmpurile obligatorii și valori pozitive. Validarea structurii e în BD; validarea valorilor față de catalog (DN, configurație) e în ecran și în RPC-ul de salvare (punctul 5).
-2. **Calculul pe tronson:** `calcProbe` pe fiecare tronson, iar pentru aer `pretPropusProba` pe fiecare (cu sporul configurației lui). Pistonarea, uscarea și calibrarea se calculează pe tronson, ca azi, și se adună.
-3. **Agregarea pe ofertă:**
-   - **Transportul se ia o singură dată**, după categoria de utilaj cea mai „grea” dintre tronsoane (ordinea categoriilor din `calcTransport`), pe distanța ofertei.
-   - **Podeaua minimă de preț** se aplică o singură dată, pe **totalul** probelor, nu pe fiecare tronson. Un tronson mic nu mai e ridicat separat la podea.
-   - Discountul se aplică pe totalul probelor, ca azi pe `proba_lei`.
-   - `proba_lei`, `pistonare_lei`, `uscare_lei` și `calibrare_lei` = sumele pe tronsoane, salvate în câmpurile existente. Așa, lista ofertelor, totalurile și rapoartele de azi funcționează fără schimbări.
-4. **Ecranul (`Ofertare.jsx`, fereastra ofertei de probă):**
-   - butonul „+ Tronson” transformă calculul din fereastră într-o listă: DN, lungime, presiune, configurație filtrată după presiune (ca azi), etichetă;
-   - sub listă apar totalurile și regula aplicată („transport o singură dată: categoria X”; „podea aplicată pe total: da / nu”);
-   - eliminarea până la un singur tronson revine la forma de azi.
-5. **Salvarea:**
-   - atomică, prin update-ul existent;
-   - validarea din ecran se repetă la salvare: fiecare `dn_id` și `config_id` există, iar configurația suportă presiunea tronsonului;
-   - o ofertă `trimisa` nu se mai poate edita, ca azi.
-6. **PDF și Excel:** tabelul tronsoanelor (etichetă, DN, lungime, presiune, fluid, volum, durată) înaintea totalurilor; ofertele vechi ies identic cu azi.
+1. **Coloana nouă `probe_oferte.tronsoane jsonb NULL`.**
+   - NULL = oferta veche, cu un singur calcul: rămâne **exact** ca azi.
+   - O ofertă care trece o dată la mai multe tronsoane rămâne în acest mod **chiar dacă ajunge la un singur tronson** (array cu 1 element). Nu se revine la `calc_id`, deci nu se pierde sursa calculului.
+   - CHECK: dacă nu e NULL, e un array cu 1–20 elemente, fiecare cu câmpurile obligatorii (vezi snapshotul de la punctul 2).
+2. **Snapshotul pe tronson**, salvat în JSON și **folosit la redeschidere și la export** (nu se recalculează din catalog):
+   - intrările: `dn_id`, `dn_label`, `diametru_extern_mm`, `lungime_m`, `presiune_bar`, `config_id`, `config_denumire`, `tip_fluid`, `categorie_transport`, `debit`, `tarif_lei_h` / `tarif_lei_mc`, `spor_pct`, `eticheta`;
+   - rezultatele: `v_conducta_mc`, `durata_proba_h`, `durata_pistonare_h`, `durata_total_h`, `consum_motorina_l`, `pret_proba_brut`, `pistonare_lei`, `uscare_lei`, `calibrare_lei`, `ramura_pret` (`referinta` | `durata_tarif` | `apa_mc`).
+   - O configurație sau un DN dezactivat ulterior nu schimbă oferta salvată. La **editarea** unui tronson, se recalculează din catalogul curent doar tronsonul editat, iar un articol dezactivat se poate păstra doar neschimbat.
+3. **Prețul pe tronson (funcția pură `pretTronson`):**
+   - **aer:** `pretPropusProba(..., prag_min = 0)` (fără podea pe tronson). Dacă rezultatul e neaplicabil, ramura de azi: `durata_proba_h × tarif_lei_h`. Pistonarea, uscarea și calibrarea = `durata_pistonare_h × tarif_lei_h` fiecare, ca azi;
+   - **apă:** `v_conducta_mc × tarif_lei_mc`, ca azi, fără pistonare, uscare sau calibrare.
+4. **Agregarea pe ofertă (funcția pură `agregaTronsoane`):**
+   - `proba_lei` = max(suma `pret_proba_brut`, **podeaua o singură dată**). Podeaua se aplică doar dacă există cel puțin un tronson pe aer cu `ramura_pret = referinta`, ca azi, unde podeaua ține de prețul propus pe referință. Dacă nu, nu se aplică.
+   - `pistonare_lei`, `uscare_lei`, `calibrare_lei` = sumele.
+   - Discountul se aplică pe `proba_lei`, ca azi.
+   - **Transportul o singură dată:** dintre categoriile de transport ale tronsoanelor se alege cea cu **cel mai mare cost pentru distanța ofertei**, calculat cu `calcTransport`. Nu se folosește o „ordine” presupusă. O categorie fără tarif → salvarea e refuzată, cu mesajul „lipsește tariful de transport pentru categoria X”, ca să nu apară un transport 0 tăcut.
+   - Rezultatele se scriu în câmpurile existente (`proba_lei` etc.), deci lista și totalurile de azi funcționează neschimbate.
+5. **Salvarea printr-un RPC nou `fn_probe_oferta_salveaza(p_oferta_id bigint, p_date jsonb) RETURNS jsonb`**, doar pentru ofertele în modul tronsoane:
+   - `SECURITY DEFINER`, `search_path` fix, același drept ca politicile de azi ale `probe_oferte`;
+   - **lock** pe rândul ofertei; refuz dacă `status = 'trimisa'` (regula nouă, aplicată pe server);
+   - validează fiecare tronson față de catalog (DN și configurație existente, presiune ≤ `presiune_max_bar`) și snapshotul (recalculat pe server prin aceeași formulă, port SQL al funcțiilor pure, cu toleranță 0,01 lei);
+   - scrie `tronsoane` + câmpurile agregate **atomic**;
+   - creează oferta nouă în același RPC, când `p_oferta_id` e NULL.
+   - Scrierea directă pe `tronsoane` e blocată: trigger care refuză orice UPDATE al coloanei în afara RPC-ului, prin marcaj de tranzacție.
+   - Ofertele vechi (NULL) se salvează pe calea de azi, neschimbată.
+6. **Ecranul:** „+ Tronson” transformă fereastra în lista de tronsoane, cu totalurile și regulile aplicate afișate („transport: categoria X, cel mai scump pentru Y km”; „podea aplicată: da / nu”).
+7. **PDF și Excel:**
+   - ofertele multi-tronson primesc un tabel al tronsoanelor din snapshot, cu **paginare**: PDF pe mai multe pagini A4, câte o captură pe pagină, cu antetul repetat; nu se comprimă totul pe o singură pagină;
+   - ofertele vechi ies identic.
+   - Probe cu 20 de tronsoane și etichete lungi.
 
 ## 4. Ce NU face
 
@@ -44,18 +55,23 @@ O ofertă de probă poate acoperi mai multe tronsoane cu setări diferite, de ex
 
 ## 5. Riscuri și probe
 
-1. **Exemplul din tichet** (10" la 36 bar + 12" la 48 bar):
-   - suma probelor = suma calculelor individuale;
-   - transportul o singură dată;
-   - podeaua aplicată doar dacă totalul e sub ea.
-2. **Regresie:** o ofertă veche (`tronsoane` NULL) are aceleași valori, același PDF și același Excel ca înainte (test pe ofertele existente, comparat cu `main`).
-3. **Configurația care nu suportă presiunea unui tronson:** salvarea e refuzată, cu tronsonul numit.
-4. **Un singur tronson în listă:** revine la forma veche (`tronsoane` NULL).
-5. **Apă și aer amestecate pe aceeași ofertă:** permis. Pistonarea, uscarea și calibrarea apar doar pentru aer, ca azi.
-6. **Migrarea:** L15 v2, doar coloana + CHECK. Revenirea refuză dacă există oferte cu `tronsoane` diferit de NULL.
+1. **Exemplul din tichet** (10" la 36 bar + 12" la 48 bar): suma = suma tronsoanelor; transportul o singură dată (cea mai scumpă categorie); podeaua o singură dată.
+2. **Podeaua:** două tronsoane cu câte 1.000 brut → `proba_lei` = podeaua o dată, nu de două ori. Un tronson pe ramura `durata_tarif` → fără podea.
+3. **Regresie:** ofertele vechi (`tronsoane` NULL) au aceleași valori, același PDF și același Excel ca pe `main`.
+4. **Server:**
+   - o configurație care nu suportă presiunea → refuz, cu tronsonul numit;
+   - oferta `trimisa` → refuz;
+   - un UPDATE direct pe `tronsoane` → refuz;
+   - un snapshot alterat (preț ≠ recalcul) → refuz.
+5. **Un singur tronson rămas:** oferta rămâne în modul tronsoane, cu calculul intact.
+6. **Catalog schimbat după salvare:** redeschiderea și exportul arată valorile din snapshot.
+7. **Tarif de transport lipsă** → refuz cu mesaj, nu transport 0.
+8. **Migrarea** (L15 v2): coloana + CHECK + trigger + RPC.
+   - Revenirea: lock `ACCESS EXCLUSIVE` pe `probe_oferte` înaintea verificării „există oferte cu `tronsoane` diferit de NULL” (refuz), apoi DROP, în aceeași tranzacție.
+   - Test concurent: o salvare pornită în timpul revenirii așteaptă și apoi e refuzată, sau revenirea e refuzată.
 
 ## 6. Livrare
 
-- Un PR: migrare (NEAPLICATĂ) + `probeCalc` (o funcție pură `agregaTronsoane`, testată) + ecran + PDF / Excel.
+- Un PR: migrare (coloană + CHECK + trigger + RPC, NEAPLICATĂ) + funcțiile pure `pretTronson` / `agregaTronsoane` (testate, cu paritate față de SQL-ul din RPC) + ecran + PDF / Excel paginat.
 - Review Jakarinos, probă pe clonă.
 - Aplicarea doar cu „da”, după ce owner-ul reia tichetul.
