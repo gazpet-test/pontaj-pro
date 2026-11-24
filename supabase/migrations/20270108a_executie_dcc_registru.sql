@@ -465,6 +465,9 @@ CREATE TABLE public.dcc_intentii (
   actor text NOT NULL,
   rezultat jsonb,
   creat_la timestamptz NOT NULL DEFAULT now(),
+  -- tranzacția (de nivel superior) care a revendicat cheia: rezultatul se scrie DOAR în ea (triggerul din secțiunea 4); xid8, nu xmin —
+  -- xmin ar fi id-ul unei sub-tranzacții dacă apelul rulează sub un SAVEPOINT al clientului
+  creat_tx xid8 NOT NULL DEFAULT pg_current_xact_id(),
   CONSTRAINT dcc_intentii_operatie_ck CHECK (operatie IN ('ghid_creeaza', 'contract_creeaza', 'proiect_seteaza', 'initializeaza_serie', 'aloca',
     'aloca_manual', 'revizie_noua', 'fila_noua', 'anexa_noua', 'anuleaza', 'marcheaza_copiat', 'confirma_trimis_manual', 'istoric_importa')),
   CONSTRAINT dcc_intentii_hash_ck CHECK (parametri_hash ~ '^[0-9a-f]{64}$'),
@@ -783,5 +786,186 @@ REVOKE ALL ON SEQUENCE public.dcc_casute_id_seq, public.dcc_ghiduri_id_seq, publ
   public.dcc_contracte_id_seq, public.dcc_proiecte_id_seq, public.dcc_serii_id_seq, public.dcc_documente_id_seq, public.dcc_file_id_seq,
   public.dcc_anexe_id_seq, public.dcc_revizii_id_seq, public.dcc_istoric_aparitii_id_seq, public.dcc_snapshoturi_id_seq, public.dcc_mesaje_id_seq,
   public.dcc_legaturi_id_seq FROM PUBLIC, anon, authenticated, service_role;
+
+-- ─── 3. dreptul, intențiile, ajutătoarele interne, politicile, GRANT SELECT, vederea (toate funcțiile plpgsql: corpul nu e analizat la creare,
+-- deci crearea nu ia lock-uri pe profiles / user_module_access / executie_proiecte)
+
+-- calea serverului ([D5]): sesiune postgres FĂRĂ JWT. Un apel API intră ca authenticator (session_user) și schimbă rolul; într-un RPC DEFINER
+-- current_user devine postgres, dar session_user rămâne authenticator -> NU e calea serverului. INVOKER (ca fn_rest_decontat_server).
+CREATE FUNCTION public.fn_dcc_server() RETURNS boolean
+LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $f$
+BEGIN
+  RETURN auth.uid() IS NULL AND session_user = 'postgres' AND current_user = 'postgres';
+END $f$;
+
+CREATE FUNCTION public.fn_dcc_e_owner() RETURNS boolean
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid();
+BEGIN
+  RETURN v_uid IS NOT NULL AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = v_uid AND p.is_owner IS TRUE);
+END $f$;
+
+-- SINGURA definiție a dreptului (L19): apelantul autentificat + proiectul DCC există + restricția pe proiect (20261209a; scrierea cere lista de
+-- scriere) + (owner SAU sub-modulul executie_dcc la nivelul cerut). Accesul general „executie” NU dă nimic. Niciodată NULL.
+CREATE FUNCTION public.fn_dcc_drept(p_proiect_dcc bigint, p_nivel text) RETURNS boolean
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_exec bigint; v_acces text;
+BEGIN
+  IF v_uid IS NULL OR p_proiect_dcc IS NULL OR p_nivel IS NULL OR p_nivel NOT IN ('citire', 'scriere', 'admin') THEN RETURN false; END IF;
+  SELECT d.executie_proiect_id INTO v_exec FROM public.dcc_proiecte d WHERE d.id = p_proiect_dcc;
+  IF NOT FOUND THEN RETURN false; END IF;
+  IF public.fn_executie_proiect_permis(v_exec, p_nivel <> 'citire') IS NOT TRUE THEN RETURN false; END IF;
+  IF EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = v_uid AND p.is_owner IS TRUE) THEN RETURN true; END IF;
+  SELECT u.access_level INTO v_acces FROM public.user_module_access u WHERE u.profile_id = v_uid AND u.module = 'executie_dcc';
+  RETURN coalesce(CASE p_nivel WHEN 'citire' THEN v_acces IN ('viewer', 'editor', 'admin')
+                               WHEN 'scriere' THEN v_acces IN ('editor', 'admin')
+                               WHEN 'admin' THEN v_acces = 'admin' END, false);
+END $f$;
+
+-- [D1] DOAR pentru politica dcc_contracte: contractul se vede dacă apelantul citește un proiect DCC al lui
+CREATE FUNCTION public.fn_dcc_contract_vizibil(p_contract bigint) RETURNS boolean
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+BEGIN
+  RETURN EXISTS (SELECT 1 FROM public.dcc_proiecte d WHERE d.contract_id = p_contract AND public.fn_dcc_drept(d.id, 'citire'));
+END $f$;
+
+-- configurația comună de codificare (ghiduri, valori, intervale): owner sau orice nivel pe executie_dcc
+CREATE FUNCTION public.fn_dcc_are_modul() RETURNS boolean
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid();
+BEGIN
+  RETURN v_uid IS NOT NULL
+    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = v_uid AND p.is_owner IS TRUE)
+         OR EXISTS (SELECT 1 FROM public.user_module_access u WHERE u.profile_id = v_uid AND u.module = 'executie_dcc'
+                       AND u.access_level IN ('viewer', 'editor', 'admin')));
+END $f$;
+
+-- ── cheile de intenție (interne, fără EXECUTE). Reluarea: aceeași operație + același hash + același autor (auth.uid(), NULL pe calea serverului)
+-- = rezultatul comis cu reluat: true; orice diferență = DCC_CHEIE_ALTI_PARAMETRI (același mesaj pentru operație / hash / autor). ──
+CREATE FUNCTION public.fn_dcc_intentie_reia(p_cheie uuid, p_operatie text, p_hash text) RETURNS jsonb
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE r public.dcc_intentii;
+BEGIN
+  SELECT * INTO r FROM public.dcc_intentii i WHERE i.cheie = p_cheie;
+  IF NOT FOUND THEN RETURN NULL; END IF;
+  IF r.operatie IS DISTINCT FROM p_operatie OR r.parametri_hash IS DISTINCT FROM p_hash OR r.autor IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'DCC_CHEIE_ALTI_PARAMETRI: cheia de intentie a fost folosita pentru alta cerere' USING ERRCODE = '22023';
+  END IF;
+  IF r.rezultat IS NULL THEN
+    RAISE EXCEPTION 'DCC_INTENTIE_NEINCHEIATA: cheia de intentie nu are rezultat' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN r.rezultat || '{"reluat": true}'::jsonb;
+END $f$;
+
+-- claim-ul: INSERT … ON CONFLICT DO NOTHING (L04). Dacă o cerere concurentă cu aceeași cheie a comis între timp (INSERT-ul a așteptat pe indexul
+-- unic), reluarea ei; dacă ea a fost anulată, cheia devine a apelului curent. NULL = apelul curent deține cheia.
+CREATE FUNCTION public.fn_dcc_intentie_revendica(p_cheie uuid, p_operatie text, p_hash text) RETURNS jsonb
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE v uuid; v_uid uuid := auth.uid();
+BEGIN
+  INSERT INTO public.dcc_intentii (cheie, operatie, parametri_hash, autor, actor)
+  VALUES (p_cheie, p_operatie, p_hash, v_uid, CASE WHEN v_uid IS NULL THEN 'server' ELSE 'om' END)
+  ON CONFLICT (cheie) DO NOTHING
+  RETURNING cheie INTO v;
+  IF v IS NULL THEN RETURN public.fn_dcc_intentie_reia(p_cheie, p_operatie, p_hash); END IF;
+  RETURN NULL;
+END $f$;
+
+CREATE FUNCTION public.fn_dcc_intentie_incheie(p_cheie uuid, p_rezultat jsonb) RETURNS void
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  UPDATE public.dcc_intentii i SET rezultat = p_rezultat WHERE i.cheie = p_cheie AND i.rezultat IS NULL;
+  IF NOT FOUND THEN RAISE EXCEPTION 'DCC_INTENTIE_NEINCHEIATA: cheia de intentie nu e a apelului curent' USING ERRCODE = 'P0001'; END IF;
+END $f$;
+
+-- regula 2 a seriilor efective (L19: aceeași funcție în triggerul dcc_proiecte și în RPC): ghidul e compatibil cu contractul dacă, pentru FIECARE
+-- serie a contractului, intervalul cu același nume din ghid lipsește sau are exact aceleași limite. NULL = compatibil; altfel numele intervalului.
+CREATE FUNCTION public.fn_dcc_ghid_compatibil_intern(p_contract bigint, p_ghid bigint) RETURNS text
+LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $f$
+DECLARE v text;
+BEGIN
+  SELECT s.interval INTO v
+    FROM public.dcc_serii s JOIN public.dcc_ghid_intervale gi ON gi.ghid_id = p_ghid AND gi.interval = s.interval
+   WHERE s.contract_id = p_contract AND (gi.limita_inf <> s.limita_inf OR gi.limita_sup <> s.limita_sup)
+   ORDER BY s.interval LIMIT 1;
+  RETURN v;
+END $f$;
+
+-- SINGURELE locuri care calculează cheile advisory ale pașilor 2 și 4 (L06, L19). fn_dcc_lock_cheie_serie primește identitatea COMPLETĂ a
+-- seriei, inclusiv intervalul canonic, și îl IGNORĂ DELIBERAT în cheie: disjuncția intervalelor e pe cheia fără interval (două inițializări
+-- concurente pe intervale diferite ale aceleiași chei se serializează).
+CREATE FUNCTION public.fn_dcc_lock_contract(p_contract bigint, p_exclusiv boolean) RETURNS void
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE v_k bigint;
+BEGIN
+  v_k := hashtextextended('dcc_contract:' || p_contract::text, 0);
+  IF p_exclusiv THEN PERFORM pg_advisory_xact_lock(v_k); ELSE PERFORM pg_advisory_xact_lock_shared(v_k); END IF;
+END $f$;
+CREATE FUNCTION public.fn_dcc_lock_cheie_serie(p_contract bigint, p_emitent text, p_tematica text, p_tip text, p_interval text) RETURNS void
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE v_k bigint;
+BEGIN
+  -- p_interval NU intră în cheie
+  v_k := hashtextextended('dcc_cheie:' || p_contract::text || '|' || p_emitent || '|' || coalesce(p_tematica, '-') || '|' || p_tip, 0);
+  PERFORM pg_advisory_xact_lock(v_k);
+END $f$;
+
+REVOKE ALL ON FUNCTION public.fn_dcc_server(), public.fn_dcc_e_owner(), public.fn_dcc_drept(bigint, text), public.fn_dcc_contract_vizibil(bigint),
+  public.fn_dcc_are_modul(), public.fn_dcc_intentie_reia(uuid, text, text), public.fn_dcc_intentie_revendica(uuid, text, text),
+  public.fn_dcc_intentie_incheie(uuid, jsonb), public.fn_dcc_ghid_compatibil_intern(bigint, bigint), public.fn_dcc_lock_contract(bigint, boolean),
+  public.fn_dcc_lock_cheie_serie(bigint, text, text, text, text) FROM PUBLIC, anon, authenticated, service_role;
+-- predicatele din politici se evaluează cu drepturile apelantului: EXECUTE pentru authenticated; internele fără niciun EXECUTE
+GRANT EXECUTE ON FUNCTION public.fn_dcc_server(), public.fn_dcc_e_owner(), public.fn_dcc_drept(bigint, text), public.fn_dcc_contract_vizibil(bigint),
+  public.fn_dcc_are_modul() TO authenticated;
+
+-- ── politicile [D1]: DOAR FOR SELECT TO authenticated. Conținutul se citește STRICT pe proiectul DCC al rândului; contractul doar prin
+-- fn_dcc_contract_vizibil; configurația comună prin fn_dcc_are_modul. Nicio politică de scriere (scrierile = RPC-urile DEFINER). ──
+CREATE POLICY dcc_ghiduri_citire ON public.dcc_ghiduri FOR SELECT TO authenticated USING (public.fn_dcc_are_modul());
+CREATE POLICY dcc_ghid_valori_citire ON public.dcc_ghid_valori FOR SELECT TO authenticated USING (public.fn_dcc_are_modul());
+CREATE POLICY dcc_ghid_intervale_citire ON public.dcc_ghid_intervale FOR SELECT TO authenticated USING (public.fn_dcc_are_modul());
+CREATE POLICY dcc_contracte_citire ON public.dcc_contracte FOR SELECT TO authenticated USING (public.fn_dcc_contract_vizibil(id));
+CREATE POLICY dcc_proiecte_citire ON public.dcc_proiecte FOR SELECT TO authenticated USING (public.fn_dcc_drept(id, 'citire'));
+CREATE POLICY dcc_documente_citire ON public.dcc_documente FOR SELECT TO authenticated USING (public.fn_dcc_drept(proiect_dcc_id, 'citire'));
+CREATE POLICY dcc_file_citire ON public.dcc_file FOR SELECT TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.dcc_documente d WHERE d.id = document_id AND public.fn_dcc_drept(d.proiect_dcc_id, 'citire')));
+CREATE POLICY dcc_anexe_citire ON public.dcc_anexe FOR SELECT TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.dcc_documente d WHERE d.id = document_id AND public.fn_dcc_drept(d.proiect_dcc_id, 'citire')));
+CREATE POLICY dcc_revizii_citire ON public.dcc_revizii FOR SELECT TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.dcc_documente d WHERE d.id = document_id AND public.fn_dcc_drept(d.proiect_dcc_id, 'citire')));
+CREATE POLICY dcc_istoric_aparitii_citire ON public.dcc_istoric_aparitii FOR SELECT TO authenticated USING (public.fn_dcc_drept(proiect_dcc_id, 'citire'));
+CREATE POLICY dcc_snapshoturi_citire ON public.dcc_snapshoturi FOR SELECT TO authenticated USING (public.fn_dcc_drept(proiect_dcc_id, 'citire'));
+-- legătura snapshot <-> revizie: drept pe proiectul snapshotului ȘI pe proiectul documentului reviziei (L09)
+CREATE POLICY dcc_snapshot_revizii_citire ON public.dcc_snapshot_revizii FOR SELECT TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.dcc_snapshoturi s WHERE s.id = snapshot_id AND public.fn_dcc_drept(s.proiect_dcc_id, 'citire'))
+         AND EXISTS (SELECT 1 FROM public.dcc_revizii r JOIN public.dcc_documente d ON d.id = r.document_id
+                      WHERE r.id = revizie_id AND public.fn_dcc_drept(d.proiect_dcc_id, 'citire')));
+CREATE POLICY dcc_mesaje_citire ON public.dcc_mesaje FOR SELECT TO authenticated USING (public.fn_dcc_drept(proiect_dcc_id, 'citire'));
+-- legătura mesaj <-> revizie: drept pe proiectul mesajului ȘI pe proiectul documentului reviziei (L09)
+CREATE POLICY dcc_legaturi_citire ON public.dcc_legaturi FOR SELECT TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.dcc_mesaje m WHERE m.id = mesaj_id AND public.fn_dcc_drept(m.proiect_dcc_id, 'citire'))
+         AND EXISTS (SELECT 1 FROM public.dcc_revizii r JOIN public.dcc_documente d ON d.id = r.document_id
+                      WHERE r.id = revizie_id AND public.fn_dcc_drept(d.proiect_dcc_id, 'citire')));
+-- SELECT pentru authenticated pe 14 tabele (NU pe dcc_intentii / dcc_casute / dcc_serii: seria se citește prin fn_dcc_serii_proiect)
+GRANT SELECT ON public.dcc_ghiduri, public.dcc_ghid_valori, public.dcc_ghid_intervale, public.dcc_contracte, public.dcc_proiecte, public.dcc_documente,
+  public.dcc_file, public.dcc_anexe, public.dcc_revizii, public.dcc_istoric_aparitii, public.dcc_snapshoturi, public.dcc_snapshot_revizii,
+  public.dcc_mesaje, public.dcc_legaturi TO authenticated;
+
+-- ── vederea registrului (security_invoker: RLS-ul tabelelor de bază o limitează la proiectele apelantului): documentul + contractul + ținta
+-- (document / filă / anexă) + ULTIMA revizie pe țintă și limbă + numărul aparițiilor istorice legate. Fără coloane din alte module. ──
+CREATE VIEW public.v_dcc_registru WITH (security_invoker = on) AS
+  SELECT d.id AS document_id, d.proiect_dcc_id, d.contract_id, c.beneficiar, c.cod_contract, d.emitent, d.tematica, d.tip, d.secventa, d.interval,
+         d.mod, d.titlu, d.are_file, d.stare,
+         CASE WHEN r.fila_id IS NOT NULL THEN 'fila' WHEN r.anexa_id IS NOT NULL THEN 'anexa' ELSE 'document' END AS tinta,
+         f.fila, a.numar AS anexa, r.id AS revizie_id, r.revizie, r.limba, r.cod_text, r.nume_fisier_baza, r.stare_transport, r.verdict,
+         (SELECT count(*) FROM public.dcc_istoric_aparitii h WHERE h.document_id = d.id) AS aparitii_istorice
+    FROM public.dcc_documente d
+    JOIN public.dcc_contracte c ON c.id = d.contract_id
+    JOIN LATERAL (SELECT DISTINCT ON (x.fila_id, x.anexa_id, x.limba) x.*
+                    FROM public.dcc_revizii x WHERE x.document_id = d.id
+                   ORDER BY x.fila_id, x.anexa_id, x.limba, x.revizie DESC, x.id DESC) r ON true
+    LEFT JOIN public.dcc_file f ON f.id = r.fila_id
+    LEFT JOIN public.dcc_anexe a ON a.id = r.anexa_id;
+REVOKE ALL ON public.v_dcc_registru FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON public.v_dcc_registru TO authenticated;
 
 DROP FUNCTION pg_temp.lant_20270108a(text);
