@@ -1,6 +1,6 @@
-# Achiziții: retur la furnizor pe reperele unei comenzi (TKT-2026-0347) — specificație v8
+# Achiziții: retur la furnizor pe reperele unei comenzi (TKT-2026-0347) — specificație v9
 
-Data: 24.11.2026 · Stare: v8 după a șaptea rundă de review NO-GO (24.11), de aprobat · Varianta aleasă de owner: **A** (retur pe linia de comandă, cu ieșire automată din stoc). Până la livrare se aplică **C**: ieșire manuală din Magazie (`ajustare_minus`) cu motivul „retur furnizor, comanda …”.
+Data: 24.11.2026 · Stare: v9 după a opta rundă de review NO-GO (24.11), de aprobat · Varianta aleasă de owner: **A** (retur pe linia de comandă, cu ieșire automată din stoc). Până la livrare se aplică **C**: ieșire manuală din Magazie (`ajustare_minus`) cu motivul „retur furnizor, comanda …”.
 
 ## 1. De ce
 
@@ -101,7 +101,10 @@ Ordinea fixă a lock-urilor: linia comenzii (`FOR UPDATE`) → cheia de stoc →
   - `REVOKE UPDATE (cantitate_primita, cantitate_intrata_stoc)` de la `authenticated` și `anon`;
   - plus un trigger `BEFORE UPDATE` care refuză orice schimbare a lor dacă nu vine dintr-un RPC al acestui modul (marcaj de tranzacție `set_config('app.cf_cantitati', '1', true)`, pus doar de RPC-uri).
 - Un client vechi, rămas deschis, care încearcă `update({ cantitate_primita })` primește eroare și mesajul „reîncărcați pagina”. Nu se poate suprascrie un retur.
-- Celelalte coloane ale liniei (denumire, preț, termen, observații) rămân editabile ca azi.
+- **Identitatea materialului se îngheață.** De la prima recepție (`cantitate_primita` diferit de NULL și > 0, sau rând în jurnal) ori prima intrare în stoc, trigger-ul refuză schimbarea lui `denumire` și `um` pe linie: „materialul a fost recepționat; corectați prin retur sau ajustare de stoc”.
+  - Reclasificarea unui material recepționat nu intră în această specificație.
+- Celelalte coloane ale liniei (preț, termen, observații) rămân editabile ca azi.
+- **Fiecare retur își păstrează cheia de stoc:** `denumire`, `um`, `locatie_tip` și `locatie_id` sunt copiate pe rândul de retur. Anularea folosește cheia salvată pe retur, nu pe cea curentă a liniei.
 
 ### 3.3b Recepția cu transport direct și locația returului
 
@@ -211,6 +214,7 @@ Fiecare probă are și un mutant care trebuie să pice: se scoate lock-ul, rever
 5. **Anulare:** o singură dată; refuzată după înlocuire; pune la loc exact `din_stoc`.
 6. **Înlocuire:** parțială, multiplă, peste mai multe retururi, în ordinea vechimii; închiderea fără înlocuire; corectura negativă după o înlocuire redeschide exact returul atins.
 11. **Ștergeri și moștenire:** pe o linie ambiguă nereconciliată (30 + 70, mișcări 100, contori 0), predarea în stoc, transportul direct și corectura negativă sunt refuzate, iar stocul rămâne 100, nu 200; după reconcilierea manuală, toate merg. Apoi: `deleteStoc` concurent cu un retur se serializează; ștergerea mișcărilor de achiziție / retur e refuzată; o linie ambiguă (două linii cu aceeași denumire și UM) rămâne nereconciliată și refuză returul până la reconcilierea manuală; un retur după un alt retur pe o linie reconciliată merge.
+15. **Identitate:** intrare „A” → încercare de redenumire în „B” refuzată; returul și anularea lui ating doar stocul lui A, chiar dacă în aceeași locație există B.
 14. **Sold inițial:** linie veche cu `primita = 40`, fără mișcări: corectura la 30 consumă 10 din soldul inițial; recepție nouă de 20, apoi corectura −30, consumă 20 din recepția nouă + 10 din sold; o linie NULL recepționată se transformă și primește sold. **Revenire:** după o singură recepție normală (fără retur), revenirea e refuzată.
 13. **Corectura cronologică:** recepție 40, retur 20, înlocuire 20, recepție greșită 60, corectura −60: returul rămâne acoperit și „de înlocuit” = 0; o corectură −70 consumă 60 nealocate + 10 din înlocuire și redeschide returul pentru 10.
 12. **Închideri:** retur 40, înlocuire 10, renunțare la 30, apoi corectura recepției de 10 la 0: „de înlocuit” = 10, nu 40.
