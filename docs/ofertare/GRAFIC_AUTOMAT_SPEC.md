@@ -8,7 +8,7 @@ Dovezile testului din 24.11 sunt în [`grafic_automat_test_jilava/`](grafic_auto
 
 ## 1. De ce
 
-**Licitația 93, Jilava** (protejare conductă DN700 Bobești–Jilava cu tub de protecție Ø914, VE ≈ 1 mil. lei) a fost **respinsă pe 19.11.2026**.
+**Licitația 93, Jilava** (protejare conductă DN700 Bobești–Jilava cu tub de protecție Ø914) a fost **respinsă pe 19.11.2026**.
 Unul dintre cele trei motive a fost graficul Gantt/PERT. Comisia (solicitarea 407) a constatat:
 - astuparea șanțului înaintea izolării și verificării tubului (drum principal);
 - verificarea izolației înaintea izolării (bretea);
@@ -124,7 +124,7 @@ Fiecare trecere prin Etapa 2 produce o **versiune înghețată** în `grafic_ver
   - `sursa_durata` poate fi `norma:<cod>`, `document:<doc_id+pagină>`, `raspuns:<intrebare_id>` sau `parametru:<cheie>`.
   - **`PRESUPUS` nu există în producție** (vezi 5.3).
 - **Legături**: `{de, la, tip: FS|SS|FF|SF, lag_zile, motiv}`.
-- **Resurse (v1):** doar `executant`. Motorul verifică totuși capacitatea: în orice zi, numărul de activități de execuție simultane ale aceluiași executant ≤ `echipe` din parametri (pentru Gazpet) sau ≤ 1 (pentru un subcontractant fără parametru). Depășirea = eroare structurală (întoarcere la Etapa 1). Utilajele și echipele detaliate nu intră în v1; raportul le listează ca limitare.
+- **Resurse (v1), pe tip de echipă:** fiecare activitate de execuție are `tip_echipa` (ex. `sudori`, `izolatori`, `terasamente`, `montaj`, `ndt`), iar parametrul `echipe` devine o hartă `{tip_echipa: număr}` pentru Gazpet. Pentru un subcontractant, capacitatea vine din `capacitate_subcontractanti` = `{executant: {tip_echipa: număr}}`, cerută omului când lipsește (întrebare, nu presupunere). Motorul verifică în fiecare zi: activitățile simultane ale aceluiași executant pe același `tip_echipa` ≤ capacitatea lui. Depășire = eroare structurală. Utilajele nu se modelează în v1; raportul o spune explicit, iar orice activitate care cere un utilaj unic (marcat de generator cu `utilaj_unic`) nu se poate suprapune cu alta care cere același utilaj (verificare de motor).
   - `motiv` e obligatoriu pentru legăturile care țin de un punct de control (PCC, lucrări ascunse, verificare izolație, probe) și citează documentul.
 - **Jaloane cerute** (din cerințe și PCC), fiecare cu sursa lui.
 - **Întrebări** (vezi 5.3). Dacă există cel puțin o întrebare blocantă, nu se trimit activități la motor.
