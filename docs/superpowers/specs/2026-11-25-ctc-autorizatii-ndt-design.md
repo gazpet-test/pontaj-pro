@@ -1,6 +1,6 @@
-# CTC: autorizațiile firmelor de control nedistructiv (NDT) la cartea tehnică — specificație v1
+# CTC: autorizațiile firmelor de control nedistructiv (NDT) la cartea tehnică — specificație v2
 
-Data: 25.11.2026 · Stare: propunere, de aprobat · Origine: TKT-2026-0389, varianta A aleasă de owner („le urcăm ca documente pe firma de control, fără modul nou”).
+Data: 25.11.2026 · Stare: v2 după review NO-GO (25.11), de aprobat · Origine: TKT-2026-0389, varianta A aleasă de owner („le urcăm ca documente pe firma de control, fără modul nou”).
 
 ## 1. De ce
 
@@ -23,19 +23,35 @@ Cartea tehnică are nevoie de două seturi de autorizații:
 
 1. **Categorie nouă `autorizatie_ndt`.**
    - Se adaugă în CHECK-ul `ofertare_parteneri_documente_categorie_check` (același nume de constrângere).
-   - `domeniu` primește metoda: RT, UT, PT, MT, VT, sau text liber dacă documentul acoperă mai multe metode.
-   - Introducerea rămâne în Ofertare → Parteneri: cine are acces la Ofertare urcă documentul pe firmă, ca orice alt document. Nu e nevoie de ecran nou.
-2. **RPC nou `fn_ctc_autorizatii_ndt()`**, după tiparul `fn_ctc_autorizatii_sudori`:
-   - `SECURITY DEFINER`, `search_path` fix, dreptul `fn_ctc_autorizatii_drept()`;
-   - întoarce doar rândurile `categorie = 'autorizatie_ndt'`, cu: firma (nume, CUI), număr, emitent, metodă (`domeniu`), date, valabil / expirat și dacă are fișier;
+   - `domeniu` primește metoda: RT, UT, PT, MT, VT, sau text liber.
+   - **Introducerea** rămâne în Ofertare → Parteneri. `src/OfertareParteneri.jsx` primește categoria în `CATEGORII_DOC` („Autorizație control nedistructiv (NDT)”), iar câmpul `domeniu` primește, pentru această categorie, eticheta „Metoda (RT/UT/PT/MT/VT)”. E singura schimbare în Ofertare.
+2. **Calea fișierului, legată de firmă.**
+   - Ecranul urcă azi la `parteneri/<partener_id>/<timp>_<nume>` în bucket-ul `ofertare`.
+   - Un trigger `BEFORE INSERT OR UPDATE OF fisier_path, partener_id, categorie` pe `ofertare_parteneri_documente` refuză, DOAR pentru `categorie = 'autorizatie_ndt'`, orice `fisier_path` care nu respectă `^parteneri/<partener_id>/[^/]+$`. Nu sunt permise `..`, `\`, `%`, controale sau o cale goală pe un document cu fișier. Celelalte categorii nu sunt atinse.
+   - RPC-ul de deschidere (punctul 4) **verifică din nou** aceeași regulă la citire. Un rând vechi sau modificat ocolind trigger-ul nu poate produce o semnătură pe altă cale.
+3. **RPC-ul de listă `fn_ctc_autorizatii_ndt()`**, după tiparul `fn_ctc_autorizatii_sudori`:
+   - `SECURITY DEFINER`, `search_path` fix, dreptul `fn_ctc_autorizatii_drept()` evaluat pe `auth.uid()` al apelantului;
+   - întoarce: id, firma (nume, CUI), număr, emitent, metodă, `data_emitere`, `data_valabilitate`, `fara_expirare`, `stare` și `are_fisier`;
    - **nu** întoarce `fisier_path`, observații sau contact;
    - EXECUTE doar `authenticated`.
-3. **Deschiderea scanului** se face prin edge-ul `ctc-autorizatie-fisier`, extins cu un tip de cerere `ndt`:
-   - BD-ul întoarce calea doar pentru un document `autorizatie_ndt`, iar edge-ul semnează DOAR acea cale, în bucket-ul `ofertare`, pe 10 minute, ca la sudori;
-   - nicio altă cale din `ofertare` nu se poate semna pe acest drum.
-4. **Ecranul CTC → „Autorizații”:**
-   - o a doua secțiune, „Firme de control nedistructiv”, sub sudori;
-   - același stil (doar citire, filtru text, valabile / expirate, buton „Deschide scanul”);
+4. **RPC-ul de deschidere `fn_ctc_autorizatie_ndt_fisier(p_document_id bigint) RETURNS text`**:
+   - `SECURITY DEFINER`, același drept CTC, evaluat pe JWT-ul apelantului;
+   - întoarce calea DOAR pentru un rând `autorizatie_ndt` care trece regula de la punctul 2; altfel NULL (edge-ul răspunde 404);
+   - nu deosebește „nu există” de „nu e NDT” (fără oracol);
+   - EXECUTE doar `authenticated`.
+   - `fn_ctc_autorizatie_fisier(bigint)` (sudorii, `hr_autorizatii`) rămâne neatinsă.
+5. **Edge-ul `ctc-autorizatie-fisier`** primește parametrul `tip: 'ndt'`:
+   - cheamă `fn_ctc_autorizatie_ndt_fisier` cu JWT-ul apelantului (nu cu service_role);
+   - verifică din nou forma căii;
+   - semnează cu service_role DOAR exact acea cale, în bucket-ul `ofertare`, pe 10 minute.
+   - Calea pentru sudori nu se schimbă.
+6. **Starea „valabil / expirat”**, aceeași regulă ca la sudori, calculată în RPC:
+   - `fara_expirare = true` → `valabil`;
+   - altfel, `data_valabilitate` lipsă → `necunoscut`;
+   - `data_valabilitate` < data curentă în `Europe/Bucharest` → `expirat`;
+   - altfel → `valabil`.
+7. **Ecranul CTC → „Autorizații”:**
+   - o a doua secțiune, „Firme de control nedistructiv”, sub sudori, în același stil (doar citire, filtru text, stare, buton „Deschide scanul” doar când `are_fisier`);
    - textul „nu sunt încă în platformă” dispare.
 
 ## 4. Ce NU face
@@ -46,18 +62,25 @@ Cartea tehnică are nevoie de două seturi de autorizații:
 
 ## 5. Riscuri și probe
 
-1. **Un utilizator CTC fără Ofertare:** vede lista NDT și deschide scanul NDT, dar nu poate obține prin RPC sau edge nicio altă cale din bucket-ul `ofertare` (de exemplu documentele unei licitații). Probă negativă cu o cale străină, plus un mutant fără filtrul de categorie.
-2. **Utilizator fără CTC:** 42501 / 403.
-3. **Document fără fișier:** butonul e ascuns, iar edge-ul răspunde 404, fără semnătură.
-4. **Expirarea:** `fara_expirare` sau `data_valabilitate` în trecut → eticheta „expirat”.
-5. **Migrarea:** L15 v2, doar CHECK-ul schimbat și funcția nouă. Revenirea refuză dacă există rânduri `autorizatie_ndt`.
+1. **Cale străină.** Un utilizator Ofertare scrie direct `fisier_path` = un document de licitație pe un rând `autorizatie_ndt` → trigger-ul refuză. Un rând de test introdus ocolind trigger-ul (ca `postgres`) → RPC-ul de deschidere întoarce NULL, iar edge-ul răspunde 404. Mutanți: fără trigger, fără verificarea din RPC, fără verificarea din edge.
+2. **Fără drept CTC** → lista 42501, deschiderea NULL / 403. Un utilizator CTC fără Ofertare vede lista și deschide doar căile NDT valide.
+3. **Document fără fișier:** butonul e ascuns; RPC-ul întoarce NULL, iar edge-ul răspunde 404, fără semnătură.
+4. **Expirarea:** cele 4 cazuri de la §3.6 (inclusiv ziua de azi, ca valabil, și miezul nopții în Europe/Bucharest).
+5. **Introducerea:** selectorul din Parteneri oferă categoria; salvarea cu un fișier urcat produce o cale validă.
+6. **Migrarea** (L15 v2): CHECK-ul schimbat, trigger-ul, cele două RPC-uri noi.
+7. **Revenirea:**
+   - într-o tranzacție, lock pe `ofertare_parteneri_documente` înaintea verificării;
+   - refuz dacă există rânduri `autorizatie_ndt`;
+   - restaurează CHECK-ul vechi, apoi scoate trigger-ul și cele două RPC-uri.
+   - Ordinea la revenire: întâi UI-ul, apoi edge-ul (ramura `ndt` scoasă), apoi BD-ul.
+   - Probe: apply → rollback → re-apply pe PGlite și pe clona 176; după rollback, Parteneri și sudorii din CTC merg ca înainte.
 
 ## 6. Livrare
 
 - Un PR, cu:
-  - migrarea (CHECK + RPC, NEAPLICATĂ);
+  - migrarea (CHECK + trigger + 2 RPC-uri, NEAPLICATĂ) și revenirea;
   - edge-ul extins (NEDEPLOYAT);
-  - ecranul CTC;
+  - ecranul CTC și selectorul din Ofertare → Parteneri;
   - probe PGlite cu mutanți și teste pentru edge.
 - Review Jakarinos.
 - Aplicarea migrării și deploy-ul edge-ului: doar cu „da”-ul owner-ului.
