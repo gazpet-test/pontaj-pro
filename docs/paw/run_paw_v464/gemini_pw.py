@@ -1,4 +1,4 @@
-# gemini_pw.py - canal Gemini ("gem") pentru run_paw v4.6 (27.10.2026, aprobat de Razvan); v4.6.3: modelul Carbon;
+# gemini_pw.py - canal Gemini ("gem") pentru run_paw v4.6 (27.10.2026, aprobat de Razvan); v4.6.3: modelul Carbon; v4.6.6: Automat;
 # v4.6.4: paza atasamentelor inainte de chatul nou.
 # Playwright atasat la Edge-ul existent de pe serverul AI (CDP 9333, doar loopback, profil separat in care Razvan
 # s-a logat o data pe gemini.google.com). Model: cgpt_pw.py. NU inchide Edge, NU da reload; navigare la /app sau URL de chat validat de lansator,
@@ -253,6 +253,11 @@
 #   modelului, `atribut_valoare:span{class}` (clase de animatie) + eticheta / textul butonului de model ("4 Hydrogen"). Pe v4.6.5 toate
 #   sunt decor (avertisment): atributele editorului insusi (r1), atributele / textele butonului de model; modelul ramane verificat separat
 #   (verifica_model -> `model_gresit`, blocant, inaintea oricarei scrieri). Continutul editorului ramane strict. Nicio alta schimbare.
+# v4.6.6 (24.11.2026, decizia lui Razvan: Carbon raspunde prea greu): modelul cerut = "Automat" (modul Auto; pe pagina reala butonul
+#   are aria-label "Deschide selectorul de moduri, momentan Automat" si textul propriu "Automat"). Forma acceptata: [Gemini ]Automat, fara
+#   versiune numerica; orice alt model ("Carbon", "4 Carbon", "4 Hydrogen") sau sufix = model_gresit, blocant, ca inainte. Listele albe
+#   de decor ale butonului de model (eticheta, textul pe LOC_MODEL) = valorile cu "Automat" (doar zgomot mai putin in avertismente).
+#   Paza pe ce pleaca (ciorna, atasamente, editor) neatinsa.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os, re, unicodedata, base64, json
@@ -632,7 +637,7 @@ ETICHETE_BUTOANE = (                                                        # ar
     "Dicteaz\u0103 (^\u21e7D)",                                             # c23 / t23 (U+21E7 = sageata Shift)
     "Trimite mesajul",                                                      # c23 lung / mediu
     "Extinde intrarea la ecran complet",                                    # c23 lung / mediu; t23 - butonul "Ecran complet"
-    "Deschide selectorul de moduri, momentan Carbon",                       # c23 / t23 - butonul modelului (doar Carbon = MODEL_CERUT)
+    "Deschide selectorul de moduri, momentan Automat",                      # v4.6.6 (24.11, pagina reala) - butonul modelului (= MODEL_CERUT)
 )
 ATRIBUTE_PERMISE = (
     (("input-area-v2", "auto-suggest", "simplified-input-menu", "toolbox-drawer", "bard-mode-switcher"), "trace", GOL),   # z21 c23 t23
@@ -758,7 +763,8 @@ LOC_LINK = "a[data-test-id=footer-privacy-notice-link][href]"    # = intrarea di
 TEXTE_CUNOSCUTE = (
     # c23n (captura NETAIATA 23.11, gol / mediu / lung): singurul text propriu din input-area-v2 in afara editorului, in
     # span.picker-primary-text din butonul modelului (21.11: acelasi text, in butonul modelului - pagina_calibrare)
-    (LOC_MODEL, "Carbon"),
+    # v4.6.6 (24.11.2026, pagina reala dupa alegerea modului Auto): textul propriu al butonului = "Automat" (inainte "Carbon")
+    (LOC_MODEL, "Automat"),
     # iii (r4) - avertismentul Google Workspace de sub ciorna pe un chat existent (element hallucination-disclaimer), citit INTREG de
     # chat pe 21.11.2026 (doar citire): textul paragrafului, fara linkul care ii urmeaza. Un text care contine in plus un nume.extensie
     # sau un cuvant de atasament NU trece niciodata (verificate inaintea listei).
@@ -772,9 +778,10 @@ TEXTE_CUNOSCUTE = (
 )
 # acelasi lucru vazut de locator (strapunge shadow DOM-ul deschis, pe care page.content() nu il serializeaza): semn = refuz
 SEMN_EXTRA = ", ".join(list(MEDIA) + ['[aria-label*="%s" i]' % t for t in TOKENI_ELIMINA])
-MODEL_CERUT = "Carbon"
-# forma acceptata a etichetei afisate (dupa normalizarea spatiilor): [Gemini ][<versiune> ]Carbon - nimic dupa numele modelului
-MODEL_FORMA = re.compile(r"(?:Gemini )?(?:[0-9]+(?:\.[0-9]+)? )?" + re.escape(MODEL_CERUT))
+MODEL_CERUT = "Automat"
+# v4.6.6: forma acceptata a etichetei afisate (dupa normalizarea spatiilor): [Gemini ]Automat - fara versiune numerica (modul
+# "Automat" nu are versiune pe pagina) si nimic dupa nume; orice alt model ("Carbon", "4 Hydrogen") sau sufix = model_gresit
+MODEL_FORMA = re.compile(r"(?:Gemini )?" + re.escape(MODEL_CERUT))
 BRIEF_ROOTS = [r"C:\Users\Public\paw-data\brief", r"C:\Users\Public\erp_review"]
 MAX_CAR = 200000          # brief-uri mai mari nu se trimit (editorul web devine nesigur)
 PAS_MS = 2000             # o citire la 2 s

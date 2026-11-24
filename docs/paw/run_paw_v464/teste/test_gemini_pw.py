@@ -1,5 +1,5 @@
 # Teste fara browser pentru gemini_pw.py (run_paw v4.6.4: paza atasamentelor inainte de chatul nou; v4.6.3: modelul
-# Carbon, potrivire exacta). Rulare:
+# Carbon, potrivire exacta; v4.6.6: modelul Automat, Carbon = model_gresit). Rulare:
 #   python -I docs\paw\run_paw_v464\teste\test_gemini_pw.py
 # Nu importa Playwright, nu se ataseaza la Edge, nu trimite nimic la Gemini: logica de selectie tab / model /
 # asteptare stabila / validare brief / numarare atasamente (HTML sintetic) / ordinea pazei in trimite() (pagina falsa) /
@@ -58,20 +58,26 @@ class TestTab(unittest.TestCase):
 
 
 class TestModel(unittest.TestCase):
-    # v4.6.3: valorile asteptate sunt scrise de mana din ce afiseaza Gemini la 13.11.2026 (butonul arata "Carbon"; lista de modele:
-    # "4 Hydrogen", "4 Hydrogen Thinking", "4 Carbon"), nu derivate din constanta testata.
-    def test_carbon_ok(self):
-        self.assertEqual(gp.verifica_model("Carbon"), "Carbon")
-        self.assertEqual(gp.verifica_model("  Carbon \n"), "Carbon")
-        self.assertEqual(gp.verifica_model("4 Carbon"), "4 Carbon")
-        self.assertEqual(gp.verifica_model("Gemini 4 Carbon"), "Gemini 4 Carbon")
-        self.assertEqual(gp.verifica_model("Gemini\n4\u00a0Carbon"), "Gemini 4 Carbon")     # linie noua / NBSP = spatiu
-        self.assertEqual(gp.verifica_model("4.5 Carbon"), "4.5 Carbon")
+    # v4.6.6: valorile asteptate sunt scrise de mana din ce afiseaza Gemini la 24.11.2026 dupa alegerea modului Auto (butonul arata
+    # "Automat", aria-label "Deschide selectorul de moduri, momentan Automat"; `stare` = "model: Automat"), nu derivate din constanta
+    # testata. v4.6.3 (13.11): butonul arata "Carbon"; lista de modele: "4 Hydrogen", "4 Hydrogen Thinking", "4 Carbon".
+    def test_automat_ok(self):
+        self.assertEqual(gp.verifica_model("Automat"), "Automat")
+        self.assertEqual(gp.verifica_model("  Automat \n"), "Automat")
+        self.assertEqual(gp.verifica_model("\u00a0Automat\u00a0"), "Automat")                  # NBSP = spatiu
+        self.assertEqual(gp.verifica_model("Gemini Automat"), "Gemini Automat")
+        self.assertEqual(gp.verifica_model("Gemini\nAutomat"), "Gemini Automat")             # linie noua = spatiu
 
     def test_alt_model(self):
         for t in ("Gemini 4 Argon", "Argon", "4 Hydrogen", "4 Hydrogen Thinking", "Hydrogen", "Gemini 4 Flash", "", None, "   ",
+                  # v4.6.6: Carbon (modelul cerut pana la v4.6.5) = alt model, in orice forma acceptata inainte
+                  "Carbon", "4 Carbon", "Gemini 4 Carbon", "Gemini\n4\u00a0Carbon", "4.5 Carbon", "Gemini Carbon",
                   "carbon", "CARBON", "Carbonate", "4Carbon", "Carbon Thinking", "4 Carbon Thinking", "Carbon Flash",
-                  "Carbon 4", "Hydrogen Carbon", "Carbon Carbon", "Gemini 4 Hydrogen (Carbon)", "Carbon\nThinking"):
+                  "Carbon 4", "Hydrogen Carbon", "Carbon Carbon", "Gemini 4 Hydrogen (Carbon)", "Carbon\nThinking",
+                  # v4.6.6: forme apropiate de "Automat" care NU sunt eticheta reala (fara versiune numerica, fara sufix, litere exacte)
+                  "automat", "AUTOMAT", "Automatic", "Automata", "Auto", "Automat Thinking", "Automat Pro", "Automat 4",
+                  "4 Automat", "4.5 Automat", "Gemini 4 Automat", "4Automat", "Automat Automat", "Automat (Carbon)",
+                  "Carbon Automat", "Automat Carbon", "Automat\nThinking", "Gemini", "GeminiAutomat", "Autom\u00e2t", "\u200bAutomat"):
             with self.assertRaises(gp.GemEroare, msg=repr(t)) as c:
                 gp.verifica_model(t)
             self.assertEqual(c.exception.cod, "model_gresit", msg=repr(t))
@@ -79,13 +85,17 @@ class TestModel(unittest.TestCase):
     def test_mesajul_spune_ce_s_a_afisat_si_ce_se_cere(self):
         with self.assertRaises(gp.GemEroare) as c:
             gp.verifica_model("4 Hydrogen Thinking")
-        self.assertEqual(c.exception.detaliu, "afisat: '4 Hydrogen Thinking', cerut: Carbon")
+        self.assertEqual(c.exception.detaliu, "afisat: '4 Hydrogen Thinking', cerut: Automat")
+        with self.assertRaises(gp.GemEroare) as c:
+            gp.verifica_model("4 Carbon")
+        self.assertEqual(c.exception.detaliu, "afisat: '4 Carbon', cerut: Automat")
 
-    def test_sursa_cere_carbon_cu_potrivire_exacta(self):
+    def test_sursa_cere_automat_cu_potrivire_exacta(self):
         # mutant: vechiul model repus sau potrivirea "contine" readusa => pica si testele de mai sus, si acesta
         with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
             sursa = f.read().decode("ascii")
-        self.assertIn('MODEL_CERUT = "Carbon"', sursa)
+        self.assertIn('MODEL_CERUT = "Automat"', sursa)
+        self.assertNotIn('MODEL_CERUT = "Carbon"', sursa)
         self.assertNotIn('MODEL_CERUT = "Argon"', sursa)
         self.assertNotIn("MODEL_CERUT not in t", sursa)
         self.assertIn("MODEL_FORMA.fullmatch(t)", sursa)
@@ -483,7 +493,7 @@ class FakeLoc:
     def inner_text(self):
         self.pg.jurnal.append("inner_text " + self.sel)
         if self.sel == gp.MODEL:
-            return getattr(self.pg, "model_text", "Carbon")     # v4.6.5 r2: pg.model_text = modelul afisat (implicit cel cerut)
+            return getattr(self.pg, "model_text", "Automat")     # v4.6.5 r2: pg.model_text = modelul afisat (implicit cel cerut)
         # r17: textul VIZIBIL al editorului (randarea lui); r18: codul nu il mai citeste (testat), ramane pentru mutantii cu calea r17
         return self.pg.randare(self.pg.ciorna) if self.pg.randare else self.pg.ciorna
 
@@ -846,8 +856,8 @@ CARD_VERDICT = ('<attachment-card>\n  <span>a.txt</span>\n  <button aria-label="
 # r18: r2-r17 aveau aici si <script> / <style> (presupuse "nevizibile", sarite) - nevazute in nicio captura reala a zonei (c23n gol / mediu
 # / lung, t23: 0 elemente script / style / template / noscript), deci scoase; acum sunt refuzate (NECUNOSCUTE, TestNevizibileR18)
 GOALA_CU_CONTROALE = ('<div class="leading-actions-wrapper"><mat-icon role="img" aria-hidden="true" fonticon="plus"></mat-icon></div>'
-                      '<div class="trailing-actions-wrapper"><button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Carbon">'
-                      '<span class="picker-primary-text">Carbon</span><mat-icon role="img" aria-hidden="true" fonticon="keyboard_arrow_down">'
+                      '<div class="trailing-actions-wrapper"><button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Automat">'
+                      '<span class="picker-primary-text">Automat</span><mat-icon role="img" aria-hidden="true" fonticon="keyboard_arrow_down">'
                       '</mat-icon></button>'
                       '<svg><path></path></svg></div>'
                       '<span></span>')
@@ -1067,7 +1077,7 @@ class TestStructuraCiorna(unittest.TestCase):
     def test_regex_nume_de_fisier(self):
         for t in ("a.txt", "raport final.pdf", "x.tar.gz", "vezi (poza_1.jpeg)", "google.com"):
             self.assertIsNotNone(gp.RE_FISIER.search(t), t)
-        for t in ("4.5 carbon", "gemini 2.5", "add_2", "ask gemini...", "carbon", "", "1.000", "v4.6.4"):
+        for t in ("4.5 automat", "gemini 2.5", "add_2", "ask gemini...", "automat", "", "1.000", "v4.6.4"):
             self.assertIsNone(gp.RE_FISIER.search(t), t)
 
     def test_liste_albe_recunosc_doar_exact(self):
@@ -1084,7 +1094,7 @@ class TestStructuraCiorna(unittest.TestCase):
                 self.assertEqual(self.an(zona_cu(trimite_btn))["necunoscute"], 0)
                 # aceleasi texte in alt loc (in afara controlului / in butonul modelului) = refuz: perechea, nu textul
                 self.assertEqual(self.an(zona_cu("<span>Trimite</span>"))["necunoscute_detalii"], ["text:trimite"])
-                model = ('<button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Carbon">'
+                model = ('<button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Automat">'
                          '<span>Trimite</span></button>')
                 self.assertEqual(self.an(zona_cu(model))["necunoscute_detalii"], ["text_in_control:trimite"])
         with mock.patch.object(gp, "CONTROALE_CUNOSCUTE", (sem,)), valori_in_plus(("button", "aria-label", "Send message"),
@@ -1177,10 +1187,10 @@ class TestStructuraCiorna(unittest.TestCase):
         self.assertEqual(set(gp.CONTROALE_CUNOSCUTE) | set(gp.STRUCTURA_CUNOSCUTA), elemente | {STARE_23_11[1].split(":", 1)[1]})
         # r15: textele (Unicode exact) dau prin _ascii exact liniile `text:` din calibrare + avertismentul; avertismentul e EXACT sirul citit
         # r16: + "Carbon" (butonul modelului, captura netaiata 23.11 - in calibrarea 21.11 textele butonului de model nu se afisau)
-        self.assertEqual(set(gp._ascii(x) for x in texte_livrate), texte | {gp._ascii(AVERTISMENT_TEXT), "carbon"})
+        self.assertEqual(set(gp._ascii(x) for x in texte_livrate), texte | {gp._ascii(AVERTISMENT_TEXT), "automat"})
         self.assertIn(AVERTISMENT_TEXT, texte_livrate)
         # r16: perechile EXACTE (loc, text), scrise de mana: fiecare text doar pe locul pe care a fost vazut
-        self.assertEqual(set(gp.TEXTE_CUNOSCUTE), {("buton_model", "Carbon"), ("hallucination-disclaimer", AVERTISMENT_TEXT),
+        self.assertEqual(set(gp.TEXTE_CUNOSCUTE), {("buton_model", "Automat"), ("hallucination-disclaimer", AVERTISMENT_TEXT),
                                                    ("a[data-test-id=footer-privacy-notice-link][href]", TEXT_LINK_REAL),
                                                    ("a[data-test-id=footer-privacy-notice-link][href]", TEXT_ASCUNS_REAL)})
         self.assertEqual(set(gp.CONTROALE_CUNOSCUTE) & set(gp.STRUCTURA_CUNOSCUTA), set())
@@ -1422,8 +1432,8 @@ def pagina_calibrare(stare, atribut_file=ATRIBUTE_DIV_REALE, zona_atr=ZONA_ATRIB
             + "</button></gem-icon-button></simplified-input-menu><toolbox-drawer></toolbox-drawer>"
             '<div data-test-id="textarea-inner"><div data-test-id="textarea-wrapper">' + editor + "</div></div>"
             "<at-mentions-menu-v2></at-mentions-menu-v2>"
-            '<bard-mode-switcher><div role="group"><button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Carbon">'
-            '<div data-test-id="logo-pill-label-container"><span class="ng-star-inserted">Carbon</span></div>' + gi
+            '<bard-mode-switcher><div role="group"><button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Automat">'
+            '<div data-test-id="logo-pill-label-container"><span class="ng-star-inserted">Automat</span></div>' + gi
             + "</button><gem-popover></gem-popover></div></bard-mode-switcher>"
             '<speech-dictation-mic-button><gem-icon-button type="onSurface" aria-describedby="cdk-describedby-message-ng-1-2">'
             '<button aria-label="Dicteaz\u0103 (^\u21e7D)">' + gi + "</button></gem-icon-button></speech-dictation-mic-button>"
@@ -1434,7 +1444,7 @@ def pagina_calibrare(stare, atribut_file=ATRIBUTE_DIV_REALE, zona_atr=ZONA_ATRIB
 
 # r16: TEXTE_CUNOSCUTE pastreaza in "listele goale" DOAR textul butonului modelului: la calibrarea din 21.11 textele din butonul modelului
 # (verificat separat, verifica_model) nu se afisau - orice text de acolo era eticheta lui; restul listelor = goale, ca la ae3e8947
-LISTE_GOALE = dict(CONTROALE_CUNOSCUTE=(), STRUCTURA_CUNOSCUTA=(), TEXTE_CUNOSCUTE=(("buton_model", "Carbon"),))   # = LOC_MODEL, scris de mana
+LISTE_GOALE = dict(CONTROALE_CUNOSCUTE=(), STRUCTURA_CUNOSCUTA=(), TEXTE_CUNOSCUTE=(("buton_model", "Automat"),))   # = LOC_MODEL, scris de mana
 FARA_MARCAJ = dict(MARCAJE_PERMISE=())                        # r5: fara regula marcajului = comportamentul r4 pe div-ul real
 ACTIUNI_TRIMITERE = ["goto", "click", "press Control+A", "press Delete", "insert", "press Enter"]
 
@@ -1638,8 +1648,8 @@ SEMNALE = {
                          "token_pdf:a[data-test-id=footer-privacy-notice-link][href]{}"),
     "status_text": ('<span role="status">Fi\u0219ier \u00eenc\u0103rcat</span>', "text_atasament:fisier incarcat"),
     "status_data": ('<span role="status" data-file-count="1"></span>', "token_file:span[role=status]{data-file-count}"),
-    "model_data_fisier": ('<button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Carbon" data-file-name="a.pdf"></button>',
-                          "token_file:button[aria-label=deschide selectorul de moduri, momentan carbon][data-test-id=bard-mode-menu-button]{data-file-name}"),
+    "model_data_fisier": ('<button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Automat" data-file-name="a.pdf"></button>',
+                          "token_file:button[aria-label=deschide selectorul de moduri, momentan automat][data-test-id=bard-mode-menu-button]{data-file-name}"),
     "rich_textarea_clasa": ('<rich-textarea class="attachment-host"></rich-textarea>', "token_attach:rich-textarea{attachment-host}"),
     "fundal_pe_structura": ('<gem-icon style="background-image: url(blob:x)"></gem-icon>', "fundal:gem-icon"),
 }
@@ -1804,7 +1814,7 @@ class TestDomeniulFirmei(unittest.TestCase):
                         ("google.com", "google.com"), ("gazpet.com", "gazpet.com")):
             self.assertEqual(gp._nume_fisier(t), nume, t)
         for t in ("gazpet.ro", "chaturile gazpet.ro nu sunt folosite pentru a imbunatati modelele noastre", "(gazpet.ro)",
-                  "gazpet.ro/", "carbon", "4.5 carbon", "add_2", "", "gazpet.ro gazpet.ro"):
+                  "gazpet.ro/", "automat", "4.5 automat", "add_2", "", "gazpet.ro gazpet.ro"):
             self.assertIsNone(gp._nume_fisier(t), t)
         self.assertEqual(gp.DOMENII_FIRMA, ("gazpet.ro",))
         self.assertEqual(sorted(set(gp.CARACTERE_NUME)), sorted(set("abcdefghijklmnopqrstuvwxyz0123456789_.-")))
@@ -2258,19 +2268,19 @@ class TestZonaInsasi(unittest.TestCase):
         # o zona gasita prin clasa care poarta data-test-id-ul butonului de model NU face textele din ea "eticheta" (ar ascunde un text necunoscut)
         # r16: textul de proba e "Carbon" = singurul text permis in butonul modelului (LOC_MODEL); in zona (LOC_ZONA) e text necunoscut
         ed = EDITOR_HTML.replace('class="input-area"', 'class="textarea-wrapper"')
-        html = '<html><body><div class="input-area" data-test-id="bard-mode-menu-button"><span>Carbon</span>' + ed + "</div></body></html>"
+        html = '<html><body><div class="input-area" data-test-id="bard-mode-menu-button"><span>Automat</span>' + ed + "</div></body></html>"
         i = self.an(html)
         # r14: + data-test-id-ul modelului pe un div = valoare in afara listei albe (al doilea motiv, pe zona insasi)
-        self.assertEqual(i["necunoscute_detalii"], ["atribut_valoare:div[data-test-id=bard-mode-menu-button]{data-test-id}", "text:carbon"])
+        self.assertEqual(i["necunoscute_detalii"], ["atribut_valoare:div[data-test-id=bard-mode-menu-button]{data-test-id}", "text:automat"])
         # v4.6.5: ambele motive sunt decor -> Enter, cu ambele avertismente; regula (zona nu devine control) se vede in clasificare:
         # textul ramane `text:carbon` (necunoscut), nu e acceptat drept eticheta butonului de model
         pg = FakePg(html)
         self.assertEqual(ruleaza_trimite(gp, pg), (None, ACTIUNI_TRIMITERE))
-        self.assertTrue(avertizat(pg, "text:carbon"), pg.iesire)
+        self.assertTrue(avertizat(pg, "text:automat"), pg.iesire)
         with fara_r13(gp):
-            self.assertEqual(self.an(html)["necunoscute_detalii"], ["text:carbon"])
+            self.assertEqual(self.an(html)["necunoscute_detalii"], ["text:automat"])
         # acelasi text intr-un buton de model descendent trece (LOC_MODEL); r16: orice alt text acolo = refuz (r2-r15: eticheta lui)
-        self.assertEqual(self.an(zona_cu('<button data-test-id="bard-mode-menu-button"><span>Carbon</span></button>'))["necunoscute"], 0)
+        self.assertEqual(self.an(zona_cu('<button data-test-id="bard-mode-menu-button"><span>Automat</span></button>'))["necunoscute"], 0)
         self.assertEqual(self.an(zona_cu('<button data-test-id="bard-mode-menu-button"><span>Deep Research</span></button>'))["necunoscute_detalii"],
                          ["text_in_control:deep research"])
 
@@ -2300,7 +2310,7 @@ class TestZonaInsasi(unittest.TestCase):
              "ciorna_cu_atasamente"),
             # (C) zona lasata sa devina control: textul din ea trece drept textul butonului modelului (r16: "Carbon", LOC_MODEL)
             ([("        if n is zona:", "        if False:")],
-             ('<html><body><div class="input-area" data-test-id="bard-mode-menu-button"><span>Carbon</span>'
+             ('<html><body><div class="input-area" data-test-id="bard-mode-menu-button"><span>Automat</span>'
               + EDITOR_HTML.replace('class="input-area"', 'class="textarea-wrapper"') + "</div></body></html>",), "ciorna_necunoscuta"),
         )
         decor = []
@@ -2314,8 +2324,8 @@ class TestZonaInsasi(unittest.TestCase):
                     decor.append(html)
                     self.assertEqual(ruleaza_trimite(gp, FakePg(html)), (None, ACTIUNI_TRIMITERE), msg=html[:120])
                     with fara_r13(mut):
-                        self.assertNotIn("text:carbon", mut.analizeaza_ciorna(html)["necunoscute_detalii"])
-                    self.assertIn("text:carbon", mot)
+                        self.assertNotIn("text:automat", mut.analizeaza_ciorna(html)["necunoscute_detalii"])
+                    self.assertIn("text:automat", mot)
                     continue
                 self.assertEqual(ruleaza_trimite(gp, FakePg(html)), (cod, []), msg=html[:120])
                 with fara_r13(mut):                 # r14: lista alba (al doilea strat) oprita doar in mutant
@@ -3611,7 +3621,7 @@ JSLOG_MODEL = ("206752;track:generic_click,impression;BardVeMetadataKey:W251bGws
 MODEL_2311_ATR = (' _ngcontent-ng-c1653784781="" cdkoverlayorigin="" gemmenutrigger="" mat-button="" periodictabletrigger=""'
                   ' gemtooltipposition="below" data-test-id="bard-mode-menu-button" class="mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger'
                   ' input-area-switch mat-mdc-button mat-unthemed lm-enabled" mat-ripple-loader-uninitialized=""'
-                  ' mat-ripple-loader-class-name="mat-mdc-button-ripple" type="button" aria-label="Deschide selectorul de moduri, momentan Carbon"'
+                  ' mat-ripple-loader-class-name="mat-mdc-button-ripple" type="button" aria-label="Deschide selectorul de moduri, momentan Automat"'
                   ' jslog="' + JSLOG_MODEL + '" tabindex="0" aria-disabled="false" aria-haspopup="true" aria-expanded="false"'
                   ' aria-controls="ng-menu-a26090-1" aria-describedby="cdk-describedby-message-ng-1-11" cdk-describedby-host="ng-1"')
 ETICHETA_MIC = "Dicteaz" + chr(0x103) + " (^" + chr(0x21E7) + "D)"
@@ -3648,7 +3658,7 @@ def pagina_23_11(div_atr=DIV_EXTINS_ATR, ecran_html=None, extra_zona="", trimite
         ('<div class="text-input-field ng-tns-c12-3 simplified-input-area ng-star-inserted"' + ATRIBUTE_DIV_REALE + ">", "<div" + div_atr + ">"),
         ("<toolbox-drawer></toolbox-drawer>", "<toolbox-drawer></toolbox-drawer>" + (ecran() if ecran_html is None else ecran_html)),
         ('<button aria-label="' + ARIALABEL_REAL + '">', "<button" + PLUS_2311_BTN + ">"),
-        ('<button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Carbon">', "<button" + MODEL_2311_ATR + ">"),
+        ('<button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Automat">', "<button" + MODEL_2311_ATR + ">"),
         ('<button aria-label="' + ETICHETA_MIC + '">', "<button" + MIC_2311_BTN + ">"),
         ('<gem-icon-button type="onSurface"><button aria-label="Trimite mesajul">', "<gem-icon-button" + trimite_gib + "><button" + TRIMITE_2311_BTN + ">"),
         ("<p>proba</p>", TEXT_LUNG),
@@ -4068,7 +4078,7 @@ class TestEcranCompletTextInchis(unittest.TestCase):
             ('<span></span><span>continut strain</span>', "text_in_control:continut strain"),
             # r16: nici textul tooltip-ului nu mai e permis in buton (nevazut ca nod text in captura netaiata), nici "Carbon" (alt loc)
             ("<span>Ecran complet</span>", "text_in_control:ecran complet"),
-            ('<button data-test-id="bard-mode-menu-button"><span>Carbon</span></button>', "text_in_control:carbon"),
+            ('<button data-test-id="bard-mode-menu-button"><span>Automat</span></button>', "text_in_control:automat"),
         )
         for inauntru, m in cazuri:
             html = ecran(inauntru=inauntru)
@@ -4165,11 +4175,11 @@ class TestEcranCompletTextInchis(unittest.TestCase):
                                '<button aria-label="Trimite mesajul"><span>continut strain arbitrar</span></button>')),
             # (M25) textul comparat ca subsir, nu exact (pe locul lui)
             ([(LINIA_TEXTE, "    if any(l == _loc_text(nod, ctrl, zona) and t in b for l, t in TEXTE_CUNOSCUTE):")],
-             ('<button data-test-id="bard-mode-menu-button"><span>Carbon x</span></button>',
-              '<button data-test-id="bard-mode-menu-button"><span>continut strain Carbon</span></button>')),
+             ('<button data-test-id="bard-mode-menu-button"><span>Automat x</span></button>',
+              '<button data-test-id="bard-mode-menu-button"><span>continut strain Automat</span></button>')),
             # (M26) contextul primului control inlocuit de un control / butonul modelului imbricat
             ([("            ctrl_copii = ctrl               # r12 / r16", "            pass               # r12 / r16")],
-             (ecran(inauntru='<button data-test-id="bard-mode-menu-button"><span>Carbon</span></button>'),)),
+             (ecran(inauntru='<button data-test-id="bard-mode-menu-button"><span>Automat</span></button>'),)),
             # (M27) ligaturile iconitelor dupa regex (r15 RE_LIGATURA), in orice loc
             ([(LINIA_LIGATURA, '    if p is not None and p.tag == "mat-icon" and re.fullmatch(r"[a-z0-9_]{1,40}", b):')],
              (ecran(inauntru="<mat-icon>fullscreen</mat-icon>"), "<div><mat-icon>continut_strain_arbitrar</mat-icon></div>")),
@@ -4265,11 +4275,11 @@ CAPTURA_2311 = {
         (4, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'model-picker-container ng-tns-c282099457-4 ng-star-inserted'), ('style', '')), ''),
         (5, 'bard-mode-switcher', (('_ngcontent-ng-c282099457', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c1653784781', ''), ('class', 'ng-tns-c282099457-4 ng-star-inserted')), ''),
         (6, 'div', (('_ngcontent-ng-c1653784781', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (7, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (7, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (8, 'span', (('class', 'mdc-button__label'),), ''),
         (9, 'div', (('_ngcontent-ng-c1653784781', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (10, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (10, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (9, 'gem-icon', (('_ngcontent-ng-c1653784781', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (8, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -4325,11 +4335,11 @@ CAPTURA_2311 = {
         (4, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'model-picker-container ng-tns-c282099457-4 ng-star-inserted'), ('style', '')), ''),
         (5, 'bard-mode-switcher', (('_ngcontent-ng-c282099457', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c1653784781', ''), ('class', 'ng-tns-c282099457-4 ng-star-inserted')), ''),
         (6, 'div', (('_ngcontent-ng-c1653784781', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (7, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (7, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (8, 'span', (('class', 'mdc-button__label'),), ''),
         (9, 'div', (('_ngcontent-ng-c1653784781', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (10, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (10, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (9, 'gem-icon', (('_ngcontent-ng-c1653784781', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (8, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -4393,11 +4403,11 @@ CAPTURA_2311 = {
         (4, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'model-picker-container ng-tns-c282099457-4 ng-star-inserted'), ('style', '')), ''),
         (5, 'bard-mode-switcher', (('_ngcontent-ng-c282099457', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c1653784781', ''), ('class', 'ng-tns-c282099457-4 ng-star-inserted')), ''),
         (6, 'div', (('_ngcontent-ng-c1653784781', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (7, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (7, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (8, 'span', (('class', 'mdc-button__label'),), ''),
         (9, 'div', (('_ngcontent-ng-c1653784781', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (10, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (10, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (9, 'gem-icon', (('_ngcontent-ng-c1653784781', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (8, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -4529,11 +4539,11 @@ CAPTURA_Z23S = {
         (7, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'model-picker-container ng-tns-c282099457-4 ng-star-inserted'), ('style', '')), ''),
         (8, 'bard-mode-switcher', (('_ngcontent-ng-c282099457', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c1653784781', ''), ('class', 'ng-tns-c282099457-4 ng-star-inserted')), ''),
         (9, 'div', (('_ngcontent-ng-c1653784781', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (10, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (10, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (11, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (11, 'span', (('class', 'mdc-button__label'),), ''),
         (12, 'div', (('_ngcontent-ng-c1653784781', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (13, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (13, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (13, 'gem-icon', (('_ngcontent-ng-c1653784781', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (14, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (11, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -4595,11 +4605,11 @@ CAPTURA_Z23S = {
         (7, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'model-picker-container ng-tns-c282099457-4 ng-star-inserted'), ('style', '')), ''),
         (8, 'bard-mode-switcher', (('_ngcontent-ng-c282099457', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c1653784781', ''), ('class', 'ng-tns-c282099457-4 ng-star-inserted')), ''),
         (9, 'div', (('_ngcontent-ng-c1653784781', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (10, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (10, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (11, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (11, 'span', (('class', 'mdc-button__label'),), ''),
         (12, 'div', (('_ngcontent-ng-c1653784781', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (13, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (13, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (13, 'gem-icon', (('_ngcontent-ng-c1653784781', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (14, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (11, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -4676,11 +4686,11 @@ CAPTURA_Z23S = {
         (7, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'model-picker-container ng-tns-c282099457-4 ng-star-inserted'), ('style', '')), ''),
         (8, 'bard-mode-switcher', (('_ngcontent-ng-c282099457', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c1653784781', ''), ('class', 'ng-tns-c282099457-4 ng-star-inserted')), ''),
         (9, 'div', (('_ngcontent-ng-c1653784781', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (10, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (10, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (11, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (11, 'span', (('class', 'mdc-button__label'),), ''),
         (12, 'div', (('_ngcontent-ng-c1653784781', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (13, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (13, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (13, 'gem-icon', (('_ngcontent-ng-c1653784781', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (14, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (11, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -4757,11 +4767,11 @@ CAPTURA_Z23S = {
         (7, 'div', (('_ngcontent-ng-c282099457', ''), ('class', 'model-picker-container ng-tns-c282099457-4 ng-star-inserted'), ('style', '')), ''),
         (8, 'bard-mode-switcher', (('_ngcontent-ng-c282099457', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c1653784781', ''), ('class', 'ng-tns-c282099457-4 ng-star-inserted')), ''),
         (9, 'div', (('_ngcontent-ng-c1653784781', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (10, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (10, 'button', (('_ngcontent-ng-c1653784781', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a26090-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (11, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (11, 'span', (('class', 'mdc-button__label'),), ''),
         (12, 'div', (('_ngcontent-ng-c1653784781', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (13, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (13, 'span', (('_ngcontent-ng-c1653784781', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (13, 'gem-icon', (('_ngcontent-ng-c1653784781', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (14, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (11, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -4830,11 +4840,11 @@ CAPTURA_F5 = {
         (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'model-picker-container ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
         (5, 'bard-mode-switcher', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c2910039102', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted')), ''),
         (6, 'div', (('_ngcontent-ng-c2910039102', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a33453-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a33453-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (8, 'span', (('class', 'mdc-button__label'),), ''),
         (9, 'div', (('_ngcontent-ng-c2910039102', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (9, 'gem-icon', (('_ngcontent-ng-c2910039102', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (8, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -4890,11 +4900,11 @@ CAPTURA_F5 = {
         (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'model-picker-container ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
         (5, 'bard-mode-switcher', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c2910039102', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted')), ''),
         (6, 'div', (('_ngcontent-ng-c2910039102', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a33453-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a33453-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (8, 'span', (('class', 'mdc-button__label'),), ''),
         (9, 'div', (('_ngcontent-ng-c2910039102', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (9, 'gem-icon', (('_ngcontent-ng-c2910039102', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (8, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -4958,11 +4968,11 @@ CAPTURA_F5 = {
         (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'model-picker-container ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
         (5, 'bard-mode-switcher', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c2910039102', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted')), ''),
         (6, 'div', (('_ngcontent-ng-c2910039102', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a33453-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
+        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a33453-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-11'), ('cdk-describedby-host', 'ng-1')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (8, 'span', (('class', 'mdc-button__label'),), ''),
         (9, 'div', (('_ngcontent-ng-c2910039102', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (9, 'gem-icon', (('_ngcontent-ng-c2910039102', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (8, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -5027,11 +5037,11 @@ CAPTURA_F5B = {
         (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'model-picker-container ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
         (5, 'bard-mode-switcher', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c2910039102', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted')), ''),
         (6, 'div', (('_ngcontent-ng-c2910039102', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a64432-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-13'), ('cdk-describedby-host', 'ng-1')), ''),
+        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a64432-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-13'), ('cdk-describedby-host', 'ng-1')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (8, 'span', (('class', 'mdc-button__label'),), ''),
         (9, 'div', (('_ngcontent-ng-c2910039102', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (9, 'gem-icon', (('_ngcontent-ng-c2910039102', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (8, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -5087,11 +5097,11 @@ CAPTURA_F5B = {
         (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'model-picker-container ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
         (5, 'bard-mode-switcher', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c2910039102', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted')), ''),
         (6, 'div', (('_ngcontent-ng-c2910039102', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a64432-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-13'), ('cdk-describedby-host', 'ng-1')), ''),
+        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a64432-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-13'), ('cdk-describedby-host', 'ng-1')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (8, 'span', (('class', 'mdc-button__label'),), ''),
         (9, 'div', (('_ngcontent-ng-c2910039102', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (9, 'gem-icon', (('_ngcontent-ng-c2910039102', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (8, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -5155,11 +5165,11 @@ CAPTURA_F5B = {
         (4, 'div', (('_ngcontent-ng-c3765021202', ''), ('class', 'model-picker-container ng-tns-c3765021202-4 ng-star-inserted'), ('style', '')), ''),
         (5, 'bard-mode-switcher', (('_ngcontent-ng-c3765021202', ''), ('trace', ''), ('tooltipanchorposition', 'above-end'), ('_nghost-ng-c2910039102', ''), ('class', 'ng-tns-c3765021202-4 ng-star-inserted')), ''),
         (6, 'div', (('_ngcontent-ng-c2910039102', ''), ('role', 'group'), ('class', 'pill-ui-logo-container gem-menu-redesign under-input ng-star-inserted')), ''),
-        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Carbon'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a64432-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-13'), ('cdk-describedby-host', 'ng-1')), ''),
+        (7, 'button', (('_ngcontent-ng-c2910039102', ''), ('cdkoverlayorigin', ''), ('gemmenutrigger', ''), ('mat-button', ''), ('periodictabletrigger', ''), ('gemtooltipposition', 'below'), ('data-test-id', 'bard-mode-menu-button'), ('class', 'mdc-button mat-mdc-button-base mat-mdc-tooltip-trigger input-area-switch mat-mdc-button mat-unthemed lm-enabled'), ('mat-ripple-loader-uninitialized', ''), ('mat-ripple-loader-class-name', 'mat-mdc-button-ripple'), ('type', 'button'), ('aria-label', 'Deschide selectorul de moduri, momentan Automat'), ('jslog', '206752;track:generic_click,impression;BardVeMetadataKey:W251bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsbnVsbCxudWxsLG51bGwsWyI5NWE0YzBhYmNiYTI0MzY0Il1d;mutable:true'), ('tabindex', '0'), ('aria-disabled', 'false'), ('aria-haspopup', 'true'), ('aria-expanded', 'false'), ('aria-controls', 'ng-menu-a64432-1'), ('aria-describedby', 'cdk-describedby-message-ng-1-13'), ('cdk-describedby-host', 'ng-1')), ''),
         (8, 'span', (('class', 'mat-mdc-button-persistent-ripple mdc-button__ripple'),), ''),
         (8, 'span', (('class', 'mdc-button__label'),), ''),
         (9, 'div', (('_ngcontent-ng-c2910039102', ''), ('data-test-id', 'logo-pill-label-container'), ('class', 'logo-pill-label-container input-area-switch-label ng-star-inserted')), ''),
-        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Carbon'),
+        (10, 'span', (('_ngcontent-ng-c2910039102', ''), ('class', 'gds-body-m picker-primary-text ng-star-inserted')), 'Automat'),
         (9, 'gem-icon', (('_ngcontent-ng-c2910039102', ''), ('fonticonname', 'keyboard_arrow_down'), ('size', 'large'), ('class', 'dropdown-icon ng-star-inserted'), ('_nghost-ng-c4019194464', '')), ''),
         (10, 'mat-icon', (('_ngcontent-ng-c4019194464', ''), ('role', 'img'), ('class', 'mat-icon notranslate lm-icon-l lumi-symbols mat-ligature-font mat-icon-no-color ng-star-inserted'), ('aria-hidden', 'true'), ('data-mat-icon-type', 'font'), ('data-mat-icon-name', 'keyboard_arrow_down'), ('data-mat-icon-namespace', 'lumi-symbols'), ('fonticon', 'keyboard_arrow_down')), ''),
         (8, 'span', (('class', 'mat-focus-indicator'),), ''),
@@ -5288,9 +5298,9 @@ class TestListaAlbaAtribute(unittest.TestCase):
             (lambda k, v: ecran(inauntru='<mat-icon role="img" aria-hidden="true" %s="%s"></mat-icon>' % (k, v)), True, "mat-icon[role=img]"),
             (lambda k, v: ecran(inauntru='<gem-icon %s="%s"></gem-icon>' % (k, v)), True, "gem-icon"),                     # structura in control
             (lambda k, v: '<button aria-label="Trimite mesajul" %s="%s"></button>' % (k, v), False, "button[aria-label=trimite mesajul]"),
-            (lambda k, v: '<button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Carbon" %s="%s">'
+            (lambda k, v: '<button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Automat" %s="%s">'
                           '</button>' % (k, v), False,
-             "button[aria-label=deschide selectorul de moduri, momentan carbon][data-test-id=bard-mode-menu-button]"),       # butonul modelului
+             "button[aria-label=deschide selectorul de moduri, momentan automat][data-test-id=bard-mode-menu-button]"),       # butonul modelului
             (lambda k, v: '<toolbox-drawer %s="%s"></toolbox-drawer>' % (k, v), False, "toolbox-drawer"),                  # structura
             (lambda k, v: '<gem-icon-button type="onSurface" %s="%s"></gem-icon-button>' % (k, v), False, "gem-icon-button[type=onsurface]"),
             (lambda k, v: '<div %s="%s"></div>' % (k, v), False, "div"),                                                   # neutru in zona
@@ -5365,9 +5375,9 @@ class TestListaAlbaAtribute(unittest.TestCase):
         for v in ("x", "x1", "cdk-describedby-message-ng-2-1", "cdk-describedby-message-ng-1-16 cdk-describedby-message-ng-1-2",
                   "cdk-describedby-message-ng-1-16x", "cdk-describedby-message-ng-1-", "cdk-describedby-message-ng-1-12345", STRAIN, ""):
             self.assertEqual(gp._atribut_strain(self.nod('<div aria-describedby="%s"></div>' % v)), ("atribut_valoare", "aria-describedby", gp._ascii(v)), msg=v)
-        # numele modelului: doar Carbon (lista inchisa); alt model / alta forma = refuz
-        for eticheta in ("Deschide selectorul de moduri, momentan Pro", "Deschide selectorul de moduri, momentan Gemini 3 Carbon",
-                         "Deschide selectorul de moduri, momentan Carbon x", "Deschide selectorul de moduri", ""):
+        # numele modelului: doar Automat (lista inchisa; pana la v4.6.5 Carbon); alt model / alta forma = refuz
+        for eticheta in ("Deschide selectorul de moduri, momentan Pro", "Deschide selectorul de moduri, momentan Gemini 3 Automat",
+                         "Deschide selectorul de moduri, momentan Automat x", "Deschide selectorul de moduri", ""):
             self.assertEqual(gp._atribut_strain(self.nod('<button aria-label="%s"></button>' % eticheta))[0:2], ("atribut_valoare", "aria-label"), msg=eticheta)
 
     def test_valorile_reale_trec_lista_e_inchisa(self):
@@ -5788,8 +5798,8 @@ class TestR15ClaseJslogUnicode(unittest.TestCase):
             ('<toolbox-drawer class="ng-star-inserted %s"></toolbox-drawer>' % t, "atribut_valoare:toolbox-drawer{class}"),   # structura
             ('<div data-test-id="textarea-wrapper" class="textarea-wrapper %s"></div>' % t, "atribut_valoare:div[data-test-id=textarea-wrapper]{class}"),
             ('<div class="%s"></div>' % t, "atribut_valoare:div{class}"),                                                # div neutru
-            ('<button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Carbon" class="%s"></button>' % t,
-             "atribut_valoare:button[aria-label=deschide selectorul de moduri, momentan carbon][data-test-id=bard-mode-menu-button]{class}"),
+            ('<button data-test-id="bard-mode-menu-button" aria-label="Deschide selectorul de moduri, momentan Automat" class="%s"></button>' % t,
+             "atribut_valoare:button[aria-label=deschide selectorul de moduri, momentan automat][data-test-id=bard-mode-menu-button]{class}"),
         )
         for html, m in locuri:
             self.refuz(html, m, "atribut_valoare:class=" + gp._ascii(re.search(r'class="([^"]*%s[^"]*)"' % t, html).group(1)))
@@ -6037,7 +6047,7 @@ class TestR15ClaseJslogUnicode(unittest.TestCase):
             ("lung", "button", "aria-label", " Extinde intrarea la ecran complet", {"aria-label": "Extinde intrarea la ecran complet"}),
             ("lung", "button", "gemtooltip", "Ecr\u00e2n complet", {"gemtooltip": "Ecran complet"}),
             ("lung", "button", "gemtooltip", "Ecran complet ", {"gemtooltip": "Ecran complet"}),
-            ("lung", "button", "aria-label", "Deschide selectorul de moduri, momentan carbon", {"data-test-id": "bard-mode-menu-button"}),
+            ("lung", "button", "aria-label", "Deschide selectorul de moduri, momentan automat", {"data-test-id": "bard-mode-menu-button"}),
             ("lung", "div", "data-placeholder", "Intreab\u0103 Gemini", {"role": "textbox"}),
             ("lung", "div", "data-placeholder", "\u00centreab\u0103\u00a0Gemini", {"role": "textbox"}),
             ("lung", "div", "aria-label", "Introdu o solicitare pentru gemini", {"role": "textbox"}),
@@ -6112,7 +6122,7 @@ class TestR15ClaseJslogUnicode(unittest.TestCase):
             (REGULI_R14_ETICHETE, (ecr(atr=ECRAN_ATR.replace('gemtooltip="Ecran complet"', 'gemtooltip="Ecr\u00e2n complet"')),
                                    pagina_23_11().replace('aria-label="' + ETICHETA_MIC + '"', 'aria-label="Dicteaz\u0103 (^\u732bD)"'))),
             # (M72 + M73) textele dupa _ascii (= r14), r16: o singura comparatie - textul butonului modelului si al linkului, in forma ASCII
-            (REGULI_R14_TEXTE, (pagina_23_11().replace(">Carbon</span>", ">  CARBON </span>"), pagina_23_11().replace(">Carbon</span>", ">C\u00e2rbon</span>"),
+            (REGULI_R14_TEXTE, (pagina_23_11().replace(">Automat</span>", ">  AUTOMAT </span>"), pagina_23_11().replace(">Automat</span>", ">Autom\u00e2t</span>"),
                                 pagina_23_11(extra_zona=link_cu_text(gp._ascii(TEXT_LINK_REAL))))),
         )
         self.assertEqual(pagina_23_11().count('aria-label="' + ETICHETA_MIC + '"'), 1)
@@ -6251,14 +6261,14 @@ class TestTexteListaAlbaR16(unittest.TestCase):
             ("button", {"aria-label": ETICHETA_MIC}),
             ("button", {"aria-label": "Extinde intrarea la ecran complet"}),
             ("button", {"data-test-id": "bard-mode-menu-button"}),
-            ("span", {"class": "gds-body-m picker-primary-text ng-star-inserted"}),          # span-ul cu "Carbon" (in butonul modelului)
+            ("span", {"class": "gds-body-m picker-primary-text ng-star-inserted"}),          # span-ul cu "Automat" (in butonul modelului)
             ("mat-icon", {"fonticon": "arrow_upward"}),                                         # iconita butonului de trimitere
         )
         texte = ("x", "abc", "continut strain", "Trimite", "Trimite mesajul", ARIALABEL_REAL, "Ecran complet", ETICHETA_MIC,
-                 "Confiden\u021bialitatea ta \u0219i Gemini", "Gemini", "Carbon Pro")
+                 "Confiden\u021bialitatea ta \u0219i Gemini", "Gemini", "Automat Pro")
         for tag, atr in locuri:
             i = index_captura("lung", tag, **atr)
-            propriu = CAPTURA_2311["lung"][i][3]                      # textul propriu real al elementului ("Carbon" pe span, altfel gol)
+            propriu = CAPTURA_2311["lung"][i][3]                      # textul propriu real al elementului ("Automat" pe span, altfel gol)
             for t in texte:
                 for inauntru, vazut in (("<span>%s</span>" % t, t), ("<div><span><span>%s</span></span></div>" % t, t), (t, propriu + t)):
                     html = html_captura("lung", interior=((i, inauntru),))
@@ -6266,22 +6276,22 @@ class TestTexteListaAlbaR16(unittest.TestCase):
                     # semnal text_atasament, inaintea listei)
                     a = gp._ascii(vazut)
                     self.refuzat(html, ("text_atasament:" if gp._cuvant(a) else "text_in_control:") + a)
-        # "Carbon" e permis DOAR in butonul modelului: in orice alt control / in zona = refuz
+        # "Automat" (v4.6.6; pana la v4.6.5 "Carbon") e permis DOAR in butonul modelului: in orice alt control / in zona = refuz
         for tag, atr in locuri[:4]:
-            self.refuzat(html_captura("lung", interior=((index_captura("lung", tag, **atr), "<span>Carbon</span>"),)), "text_in_control:carbon")
-        self.refuzat(html_captura("lung", extra_zona="<div>Carbon</div>"), "text:carbon")
-        # in butonul modelului: "Carbon" in plus (alt span) trece; orice alta forma = refuz
+            self.refuzat(html_captura("lung", interior=((index_captura("lung", tag, **atr), "<span>Automat</span>"),)), "text_in_control:automat")
+        self.refuzat(html_captura("lung", extra_zona="<div>Automat</div>"), "text:automat")
+        # in butonul modelului: "Automat" in plus (alt span) trece; orice alta forma = refuz
         i = index_captura("lung", "button", **{"data-test-id": "bard-mode-menu-button"})
-        self.assertEqual(self.an(html_captura("lung", interior=((i, "<span>Carbon</span>"),)))["necunoscute"], 0)
-        for t in ("carbon", "CARBON", "Carbon ", "Carbon\u00a0", "\u200bCarbon", "Carbon\u0301", "C\u00e2rbon", "Carbon x", "4 Carbon", "Gemini Carbon"):
+        self.assertEqual(self.an(html_captura("lung", interior=((i, "<span>Automat</span>"),)))["necunoscute"], 0)
+        for t in ("automat", "AUTOMAT", "Automat ", "Automat\u00a0", "\u200bAutomat", "Automat\u0301", "Autom\u00e2t", "Automat x", "4 Automat", "Gemini Automat"):
             html = html_captura("lung", interior=((i, "<span>%s</span>" % t),))
-            if t == "Carbon ":
+            if t == "Automat ":
                 self.assertEqual(self.an(html)["necunoscute"], 0)            # spatiu alb HTML la capat = acelasi text
                 continue
             self.refuzat(html, "text_in_control:" + (gp._ascii(t) or gp._vizibil(t)))
 
     def test_textele_cunoscute_doar_pe_locul_lor(self):
-        # avertismentul doar sub hallucination-disclaimer, textele linkului doar in link, "Carbon" doar in butonul modelului
+        # avertismentul doar sub hallucination-disclaimer, textele linkului doar in link, "Automat" doar in butonul modelului
         loc_link = "a[data-test-id=footer-privacy-notice-link][href]"
         self.assertEqual(gp.LOC_LINK, loc_link)
         cazuri = (
@@ -6293,8 +6303,8 @@ class TestTexteListaAlbaR16(unittest.TestCase):
             ('<button aria-label="Trimite mesajul">%s</button>' % TEXT_LINK_REAL, "text_in_control:" + gp._ascii(TEXT_LINK_REAL)),
             ("<hallucination-disclaimer>%s</hallucination-disclaimer>" % TEXT_LINK_REAL, "text:" + gp._ascii(TEXT_LINK_REAL)),
             ("<hallucination-disclaimer>%s</hallucination-disclaimer>" % link_cu_text(TEXT_ASCUNS_REAL), None),
-            ("<hallucination-disclaimer>Carbon</hallucination-disclaimer>", "text:carbon"),
-            (link_cu_text("Carbon"), "text_in_control:carbon"),
+            ("<hallucination-disclaimer>Automat</hallucination-disclaimer>", "text:automat"),
+            (link_cu_text("Automat"), "text_in_control:automat"),
             # un invelis din STRUCTURA mai apropiat decat hallucination-disclaimer schimba locul
             ("<hallucination-disclaimer><toolbox-drawer>%s</toolbox-drawer></hallucination-disclaimer>" % AVERTISMENT_TEXT,
              "text:" + gp._ascii(AVERTISMENT_TEXT)),
@@ -6373,9 +6383,9 @@ class TestTexteListaAlbaR16(unittest.TestCase):
                 self.refuzat(html_captura("lung", interior=((i, "<span>%s</span>" % t),)), "text_in_control:" + vizibil)
             self.assertEqual(self.an(zona_cu(link_cu_text(t)))["necunoscute_detalii"], ["text_in_control:" + vizibil], msg=repr(t))
             # lipit de un text cunoscut: alt text (Unicode exact), refuz
-            for cunoscut, loc_html in (("Carbon", None), (TEXT_LINK_REAL, link_cu_text)):
+            for cunoscut, loc_html in (("Automat", None), (TEXT_LINK_REAL, link_cu_text)):
                 if loc_html is None:
-                    html = html_captura("lung", interior=((i_mod, "<span>Carbon%s</span>" % t),))
+                    html = html_captura("lung", interior=((i_mod, "<span>Automat%s</span>" % t),))
                     self.assertEqual(len(self.an(html)["necunoscute_detalii"]), 1, msg=repr(t))
                     self.assertTrue(self.an(html)["necunoscute_detalii"][0].startswith("text_in_control:"))
                 else:
@@ -6397,14 +6407,14 @@ class TestTexteListaAlbaR16(unittest.TestCase):
 
     def test_starile_reale_netaiate_trec_si_textele_lor_sunt_exact_lista(self):
         # cele 3 stari din captura netaiata: 0 necunoscute, `stare` OK, chat nou gol -> scriere (mediu / lung) -> Enter; singurul nod text
-        # nevid in afara editorului = "Carbon" in butonul modelului (sursa independenta a listei, calculata din fixture)
+        # nevid in afara editorului = "Automat" (v4.6.6) in butonul modelului (sursa independenta a listei, calculata din fixture)
         for s in ("gol", "mediu", "lung"):
             html = html_captura(s)
             i = self.an(html)
             self.assertEqual((i["editoare"], i["zone"], i["atasamente"], i["semne"], i["necunoscute"]), (1, 1, 0, 0, 0), msg=(s, i["necunoscute_detalii"]))
             self.assertIn("paza ciorna: OK (trimite ar continua)", self.stare_linii(html))
             texte = [t for _, _, _, t in CAPTURA_2311[s] if t != ""]
-            self.assertEqual(texte, ["Carbon"], msg=s)
+            self.assertEqual(texte, ["Automat"], msg=s)
         for s in ("mediu", "lung"):
             self.assertEqual(self.scrie(gp, html_captura(s)), (None, ACTIUNI_TRIMITERE), msg=s)
         # perechile (loc, text) din pagina reala, calculate cu _loc_text pe arborele analizat = EXACT perechea din lista
@@ -6420,8 +6430,8 @@ class TestTexteListaAlbaR16(unittest.TestCase):
             ctrl = next((p for p in _stramosi(n, zona) if p.attrs.get("data-test-id") == gp.MODEL_DATA_TEST
                          or gp._semnatura(p) in gp.CONTROALE_CUNOSCUTE), None)
             perechi.add((gp._loc_text(n, ctrl, zona), n.date.strip(" \t\n\r\f")))
-        self.assertEqual(perechi, {("buton_model", "Carbon")})
-        self.assertIn(("buton_model", "Carbon"), gp.TEXTE_CUNOSCUTE)
+        self.assertEqual(perechi, {("buton_model", "Automat")})
+        self.assertIn(("buton_model", "Automat"), gp.TEXTE_CUNOSCUTE)
         # si fixture-urile 21.11 / 22.11 / 23.11 (inclusiv chatul existent, cu avertismentul si linkul) trec pina la Enter
         for html in [pagina_calibrare(s) for s in ("i", "ii", "iii")] + [pagina_22_11_completa(s, fdi=FDI_5G) for s in ("i", "ii", "iii")]:
             self.assertEqual(ruleaza_trimite(gp, FakePg(html, dupa_goto=html)), (None, ACTIUNI_TRIMITERE))
@@ -6443,10 +6453,10 @@ class TestTexteListaAlbaR16(unittest.TestCase):
              tuple(cap(extra_zona="<span>%s</span>" % t) for t, v in INVIZIBILE if v != "?")),     # (U+2028 are forma ASCII "?")
             # (M82) capetele curatate de ORICE spatiu Unicode (str.strip), nu doar de spatiile albe HTML
             ([('    b = nod.date.strip(" \\t\\n\\r\\f")', "    b = nod.date.strip()")],
-             (cap(extra_zona="<span>\u00a0</span>"), cap(extra_zona="<span>\u3000</span>"), cap(interior=((i_mod, "<span>Carbon\u00a0</span>"),)))),
+             (cap(extra_zona="<span>\u00a0</span>"), cap(extra_zona="<span>\u3000</span>"), cap(interior=((i_mod, "<span>Automat\u00a0</span>"),)))),
             # (M83) locul ignorat: orice text din lista, oriunde
             ([(LINIA_TEXTE, "    if b in [t for _, t in TEXTE_CUNOSCUTE]:")],
-             (cap(interior=((i_inc, "<span>Carbon</span>"),)), cap(extra_zona="<div>%s</div>" % AVERTISMENT_TEXT),
+             (cap(interior=((i_inc, "<span>Automat</span>"),)), cap(extra_zona="<div>%s</div>" % AVERTISMENT_TEXT),
               cap(interior=((i_trm, TEXT_LINK_REAL),)))),
             # (M84) locul in afara controalelor = orice stramos (nu doar pana la zona) / zona insasi
             ([("    while p is not None and p is not zona:", "    while p is not None:")],
@@ -8816,9 +8826,9 @@ class TestV465PazaPeCePleaca(unittest.TestCase):
         i = gp.analizeaza_arbore(*gp._arbore_cdp(html_in_cdp(lung))[0::2])
         self.assertTrue(any(m.startswith("text_trunchiat_cdp:") for m in i["blocante_detalii"]), i["necunoscute_detalii"])
         self.assertEqual(ruleaza_trimite(gp, FakePg(lung))[0], "ciorna_necunoscuta")
-        # modelul afisat si generarea: neschimbate
-        self.assertRaises(gp.GemEroare, gp.verifica_model, "Carbon Thinking")
-        self.assertEqual(gp.verifica_model("Gemini 4 Carbon"), "Gemini 4 Carbon")
+        # modelul afisat si generarea: neschimbate (v4.6.6: modelul cerut = Automat)
+        self.assertRaises(gp.GemEroare, gp.verifica_model, "Automat Thinking")
+        self.assertEqual(gp.verifica_model("Gemini Automat"), "Gemini Automat")
 
     def test_avertismentele_se_scriu_dupa_enter_si_in_stare(self):
         # structural: in trimite avertismentele ultimei paze se scriu DUPA Enter (nimic intre instantaneu si Enter); in _paza_ciorna DUPA
@@ -8942,12 +8952,12 @@ def r2_model_schimbat(stare="gol", text="4 Hydrogen", eticheta="Hydrogen", clasa
     cap = CAPTURA_F5B[stare]
     i = index_captura(stare, "button", captura=VARIANTA_F5B, **{"data-test-id": "bard-mode-menu-button"})
     j = index_captura(stare, "span", captura=VARIANTA_F5B, **{"class": "mdc-button__label"})
-    a = tuple((k, v.replace("momentan Carbon", "momentan " + eticheta) if k == "aria-label" else v) for k, v in cap[i][2])
+    a = tuple((k, v.replace("momentan Automat", "momentan " + eticheta) if k == "aria-label" else v) for k, v in cap[i][2])
     assert ("aria-label", "Deschide selectorul de moduri, momentan " + eticheta) in a
     inl = ((i, a), (j, (("class", clasa_eticheta),)))
     h = html_f5b(stare, inlocuiri=inl, **kw)
-    assert h.count(">Carbon<") == 1
-    return h.replace(">Carbon<", ">" + text + "<")
+    assert h.count(">Automat<") == 1
+    return h.replace(">Automat<", ">" + text + "<")
 
 
 class TestV465R2(unittest.TestCase):
@@ -9158,13 +9168,13 @@ class TestV465R2(unittest.TestCase):
         pg = FakePg(h, dupa_goto=html_f5b("gol"))
         self.assertEqual(ruleaza_trimite(gp, pg), (None, ACTIUNI_TRIMITERE))
         # (c) doar animatia pe Carbon (eticheta si textul corecte) -> Enter cu avertismentul clasei, pe tot traseul
-        anim = r2_model_schimbat(text="Carbon", eticheta="Carbon")
+        anim = r2_model_schimbat(text="Automat", eticheta="Automat")
         self.assertEqual(self.an(anim)["avertismente_detalii"], ["atribut_valoare:span{class}"])
-        pg = FakePg(anim, dupa_goto=anim, dupa_scriere=r2_model_schimbat("mediu", text="Carbon", eticheta="Carbon"))
+        pg = FakePg(anim, dupa_goto=anim, dupa_scriere=r2_model_schimbat("mediu", text="Automat", eticheta="Automat"))
         self.assertEqual(ruleaza_trimite(gp, pg), (None, ACTIUNI_TRIMITERE))
         self.assertTrue(avertizat(pg, "atribut_valoare:span{class}"), msg=pg.iesire)
         # (d) pagina chatului nou arata Carbon, dar modelul citit e altul -> model_gresit (regula modelului e independenta de paza)
-        for afisat in ("4 Hydrogen", "Hydrogen", "Gemini 4 Hydrogen", "Carbon Thinking", ""):
+        for afisat in ("4 Hydrogen", "Hydrogen", "Gemini 4 Hydrogen", "Automat Thinking", ""):
             pg = FakePg(html_f5b("gol"), dupa_goto=html_f5b("gol"))
             pg.model_text = afisat
             self.assertEqual(ruleaza_trimite(gp, pg), ("model_gresit", ["goto"]), msg=afisat)
@@ -9180,6 +9190,127 @@ class TestV465R2(unittest.TestCase):
         self.assertIn("necunoscute in zona: 0", l)
         self.assertEqual(sum(1 for x in l if x.startswith("  avertisment necunoscut ")), 3)
         self.assertIn("paza ciorna: OK (trimite ar continua)", l)
+
+
+# --- v4.6.6 (24.11.2026, decizia lui Razvan: Carbon raspunde prea greu): modelul cerut = "Automat" (modul Auto). Fixture-urile de mai
+# sus au valorile butonului de model (aria-label "... momentan <model>" si textul propriu) trecute mecanic de la Carbon la Automat = pagina
+# reala dupa alegerea modului Auto (raportata de chat: `stare` -> "model: Automat", aria-label "Deschide selectorul de moduri, momentan
+# Automat", text "Automat"); restul capturilor neschimbat. Aici: pagina cu Carbon / Hydrogen = model_gresit (blocant, dupa navigare,
+# inaintea oricarei scrieri), decorul cu Carbon = doar avertisment, listele de decor = valorile cu Automat, mutantii care repun regula veche.
+V466_MUT_CARBON = [('MODEL_CERUT = "Automat"', 'MODEL_CERUT = "Carbon"')]           # codul v4.6.5 la acest punct (modelul cerut)
+V466_MUT_VERSIUNE = [('MODEL_FORMA = re.compile(r"(?:Gemini )?" + re.escape(MODEL_CERUT))',
+                      'MODEL_FORMA = re.compile(r"(?:Gemini )?(?:[0-9]+(?:\\.[0-9]+)? )?" + re.escape(MODEL_CERUT))')]   # forma v4.6.5
+V466_MUT_CONTINE = [("    if not MODEL_FORMA.fullmatch(t):", "    if MODEL_CERUT not in t:")]                                 # "contine"
+SEM_MODEL_CARBON = SEM_MODEL_HYDROGEN.replace("momentan hydrogen", "momentan carbon")
+
+
+def v466_pagina_model(stare="gol", model="Carbon", **kw):
+    # varianta instalata (f5b) cu butonul de model aratand `model` (aria-label + textul propriu), restul neschimbat
+    h = html_f5b(stare, **kw)
+    assert h.count("momentan Automat") == 1 and h.count(">Automat<") == 1
+    return h.replace("momentan Automat", "momentan " + model).replace(">Automat<", ">" + model + "<")
+
+
+class TestV466Automat(unittest.TestCase):
+    def an(self, html, mod=gp):
+        return mod.analizeaza_ciorna(html)
+
+    def test_listele_de_decor_au_valorile_automat(self):
+        # scrise de mana din pagina reala (24.11): eticheta butonului si textul lui; Carbon nu mai e in nicio lista
+        self.assertEqual(gp.MODEL_CERUT, "Automat")
+        self.assertIn("Deschide selectorul de moduri, momentan Automat", gp.ETICHETE_BUTOANE)
+        self.assertNotIn("Deschide selectorul de moduri, momentan Carbon", gp.ETICHETE_BUTOANE)
+        self.assertIn(("buton_model", "Automat"), gp.TEXTE_CUNOSCUTE)
+        self.assertNotIn(("buton_model", "Carbon"), gp.TEXTE_CUNOSCUTE)
+        with open(os.path.join(AICI, "..", "gemini_pw.py"), "rb") as f:
+            cod = [l.rstrip("\r") for l in f.read().decode("ascii").split("\n") if not l.lstrip().startswith("#")]
+        self.assertEqual([l for l in cod if "Carbon" in l.split("#")[0]], [])          # pe liniile de cod: niciun "Carbon"
+        self.assertIn('MODEL_FORMA = re.compile(r"(?:Gemini )?" + re.escape(MODEL_CERUT))', cod)
+
+    def test_pagina_reala_automat_trece_fara_avertismente_de_model(self):
+        # starile reale f5b cu Automat: Enter, niciun avertisment pe butonul de model; `stare` arata modelul si paza OK
+        for st in STARI_F5:
+            h = html_f5b(st)
+            i = self.an(h)
+            self.assertEqual(i["blocante"], 0, msg=(st, i["blocante_detalii"]))
+            self.assertEqual([m for m in i["avertismente_detalii"] if "momentan" in m or "automat" in m], [], msg=st)
+        gol = html_f5b("gol")
+        pg = FakePg(gol, dupa_goto=gol, dupa_scriere=html_f5b("mediu"))
+        pg.model_text = "Automat"
+        self.assertEqual(ruleaza_trimite(gp, pg), (None, ACTIUNI_TRIMITERE))
+        pg = FakePg(gol)
+        pg.model_text = "Automat"
+        l = stare_linii(gp, pg)
+        self.assertIn("model: Automat", l)
+        self.assertIn("paza ciorna: OK (trimite ar continua)", l)
+
+    def test_carbon_si_hydrogen_dau_model_gresit(self):
+        # chatul nou ramas pe Carbon (modelul vechi) sau pe Hydrogen -> model_gresit dupa navigare, fara click / tastare / Enter
+        for afisat in ("Carbon", "4 Carbon", "Gemini 4 Carbon", "4 Hydrogen", "4 Hydrogen Thinking", "Hydrogen", "4 Automat",
+                       "Automat Thinking"):
+            vazut = afisat.split()[-1] if afisat.split()[-1] in ("Carbon", "Hydrogen") else "Carbon"
+            h = v466_pagina_model(model=vazut)
+            pg = FakePg(h, dupa_goto=h)
+            pg.model_text = afisat
+            cod, act = ruleaza_trimite(gp, pg)
+            self.assertEqual((cod, act), ("model_gresit", ["goto"]), msg=afisat)
+            # direct: mesajul spune ce s-a afisat si ce se cere
+            with self.assertRaises(gp.GemEroare) as c:
+                gp.verifica_model(afisat)
+            self.assertEqual(c.exception.detaliu, "afisat: '%s', cerut: Automat" % afisat, msg=afisat)
+        # pagina arata Automat, dar modelul citit e Carbon -> tot model_gresit (regula modelului e independenta de decor)
+        pg = FakePg(html_f5b("gol"), dupa_goto=html_f5b("gol"))
+        pg.model_text = "Carbon"
+        self.assertEqual(ruleaza_trimite(gp, pg), ("model_gresit", ["goto"]))
+
+    def test_decorul_cu_carbon_e_avertisment_nu_refuz(self):
+        # butonul de model cu Carbon (eticheta + text) = decor: avertismente, 0 blocante; `stare` le arata, paza OK, modelul afisat Carbon
+        h = v466_pagina_model()
+        i = self.an(h)
+        self.assertEqual(i["blocante"], 0, msg=i["blocante_detalii"])
+        self.assertEqual(i["avertismente_detalii"], ["atribut_valoare:%s{aria-label}" % SEM_MODEL_CARBON, "text_in_control:carbon"])
+        pg = FakePg(h)
+        pg.model_text = "Carbon"
+        l = stare_linii(gp, pg)
+        self.assertIn("model: Carbon", l)
+        self.assertIn("necunoscute in zona: 0", l)
+        self.assertEqual(sum(1 for x in l if x.startswith("  avertisment necunoscut ")), 2)
+        self.assertIn("paza ciorna: OK (trimite ar continua)", l)
+        # tab-ul curent pe Carbon, chatul nou pe Automat -> Enter (decorul tab-ului vechi doar in log)
+        pg = FakePg(h, dupa_goto=html_f5b("gol"))
+        self.assertEqual(ruleaza_trimite(gp, pg), (None, ACTIUNI_TRIMITERE))
+        self.assertTrue(avertizat(pg, "text_in_control:carbon"), msg=pg.iesire)
+        # semn de atasament langa decorul cu Carbon -> refuz inainte de navigare (decorul nu acopera semnele)
+        for extra, cod in (("<foo-bar><span>oferta.pdf</span></foo-bar>", "ciorna_necunoscuta"),
+                           ('<div class="file-preview-x"></div>', "ciorna_cu_atasamente")):
+            hm = v466_pagina_model(extra_zona=extra)
+            pg = FakePg(hm, dupa_goto=hm)
+            pg.model_text = "Carbon"
+            self.assertEqual(ruleaza_trimite(gp, pg), (cod, []), msg=extra)
+
+    def test_mutantii_v466(self):
+        # (a) modelul cerut readus la Carbon (= v4.6.5): pagina cu Carbon ajunge la Enter pe mutant, model_gresit pe cod
+        h = v466_pagina_model()
+        mut = mutant(V466_MUT_CARBON)
+        for mod, asteptat in ((gp, ("model_gresit", ["goto"])), (mut, (None, ACTIUNI_TRIMITERE))):
+            pg = FakePg(h, dupa_goto=h)
+            pg.model_text = "Carbon"
+            self.assertEqual(ruleaza_trimite(mod, pg), asteptat, msg=mod.__name__)
+        # (b) forma v4.6.5 (versiune numerica permisa): "4 Automat" / "4.5 Automat" trec pe mutant, model_gresit pe cod
+        mut = mutant(V466_MUT_VERSIUNE)
+        for t in ("4 Automat", "4.5 Automat", "Gemini 4 Automat"):
+            self.assertEqual(mut.verifica_model(t), t)
+            self.assertRaises(gp.GemEroare, gp.verifica_model, t)
+        # (c) potrivirea "contine": "Automat Thinking" / "Carbon Automat" trec pe mutant, model_gresit pe cod
+        mut = mutant(V466_MUT_CONTINE)
+        for t in ("Automat Thinking", "Carbon Automat", "4 Automat"):
+            self.assertEqual(mut.verifica_model(t), t)
+            self.assertRaises(gp.GemEroare, gp.verifica_model, t)
+        # pe fiecare mutant starile reale trec la fel (mutantul schimba doar regula modelului)
+        for inl in (V466_MUT_CARBON, V466_MUT_VERSIUNE, V466_MUT_CONTINE):
+            m = mutant(inl)
+            for st in STARI_F5:
+                self.assertEqual(m.analizeaza_ciorna(html_f5b(st))["blocante"], 0, msg=(inl[0][0], st))
 
 
 if __name__ == "__main__":

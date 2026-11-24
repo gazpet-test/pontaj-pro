@@ -1,4 +1,4 @@
-# Paw v4.6.4 / v4.6.4b / v4.6.4c / v4.6.4d / v4.6.4e / v4.6.4f / v4.6.5 - doar paza atasamentelor Gemini - procedura pentru Razvan
+# Paw v4.6.4 / v4.6.4b / v4.6.4c / v4.6.4d / v4.6.4e / v4.6.4f / v4.6.5 / v4.6.6 - doar paza atasamentelor Gemini (v4.6.6: modelul Automat) - procedura pentru Razvan
 
 Numai operatorul executa pasii. Agentul nu a instalat nimic si nu a cerut elevare.
 A = PowerShell 5.1 admin Gazpet-Ai; N = acelasi cont NE-elevat. Orice eroare = STOP.
@@ -113,7 +113,7 @@ ramane refuzat, ca acum).
 
 **v4.6.5 (23.11.2026 seara, decizia lui Razvan: varianta B, RISC ACCEPTAT DE OWNER):** lista alba STRICTA pe toata zona casetei
 (r2-r21, v4.6.4e / v4.6.4f) se rupea la fiecare schimbare cosmetica a paginii Gemini (clase, `style=""`, placeholder) -> refuz fals +
-runda noua. v4.6.5 schimba din nou DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE v4.6.4f, INSTALATA acum
+runda noua. v4.6.5 schimba din nou DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instala PESTE v4.6.4f, instalata atunci
 (`gemini_pw.py` `EDEFA1AE...`): hash-ul vechi = `EDEFA1AE...`, zona protejata noua `operator-v465`, copiile de siguranta cu sufixul
 `.v464f`, fisierele noi cu `.v465` (pasul 1). Testul de canal real pe v4.6.4f (strict) a refuzat FALS exact ce v4.6.5 trece in
 avertismente: `semnal_in_editor:atribut_valoare:...{data-placeholder}` dupa focus pe editor (placeholder-ul schimbat) si, dupa
@@ -136,11 +136,25 @@ castiga intotdeauna asupra unui avertisment (refuz), indiferent de ordinea id-ur
   DOAR textul editorului, verificat EXACT; decorul nu intra in el). Atributele editorului insusi (ex. `data-placeholder` nou) sunt decor.
 - Nou in `stare`: `contenteditable in pagina in afara zonei: N` (asteptat 0; un panou editabil deschis in pagina = refuz, inchide-l).
 - Atributele butonului de model (eticheta, clasele) si textul lui = decor; modelul se verifica separat (`model_gresit`, blocant).
-Rollback-ul (mai jos) readuce v4.6.4f (`EDEFA1AE...`).
+Rollback-ul v4.6.5 readucea v4.6.4f (`EDEFA1AE...`).
+
+**v4.6.6 (24.11.2026, decizia lui Razvan: Carbon raspunde prea greu):** modelul cerut devine **Automat** (modul Auto din selectorul
+Gemini). Pe pagina reala, dupa ce Razvan a ales Auto, `stare` arata `model: Automat`; butonul are eticheta `Deschide selectorul de moduri,
+momentan Automat` si textul `Automat`. v4.6.6 schimba din nou DOAR `gemini_pw.py` + linia lui din `SHA256.json` si se instaleaza PESTE
+v4.6.5, INSTALATA acum (`gemini_pw.py` `87230004...`): hash-ul vechi = `87230004...`, zona protejata noua `operator-v466`, copiile de
+siguranta cu sufixul `.v465`, fisierele noi cu `.v466` (pasul 1). Ce aduce:
+- `MODEL_CERUT = "Automat"`; eticheta afisata trebuie sa fie EXACT `Automat`, optional precedata de `Gemini` (fara numar de versiune:
+  modul Automat nu are versiune pe pagina). Orice alt model (`Carbon`, `4 Carbon`, `4 Hydrogen`, `4 Hydrogen Thinking`) sau orice sufix
+  (`Automat Thinking`) / numar (`4 Automat`) = `GEM_EROARE model_gresit ...`, blocant, dupa navigare, inaintea oricarei scrieri (ca acum).
+- Listele de decor ale butonului de model (eticheta lui si textul din el) = valorile cu `Automat` (inainte `Carbon`), ca butonul real sa
+  nu mai dea `avertisment necunoscut` (zgomot, nu blocant). Un buton care arata `Carbon` da acum 2 avertismente in `stare` (decor) si
+  `model_gresit` la `trimite`.
+- Nimic altceva: paza pe ce pleaca (editorul, atasamentele, editabilele, shadow, CDP) e neatinsa. Testul de canal (pasul 5) se face cu
+  **Automat** selectat. Rollback-ul (mai jos) readuce v4.6.5 (`87230004...`, cu Carbon).
 
 Hash-urile vin din raportul de review, nu din acest fisier. Livrare: folderul din commit-ul
 aprobat ajunge in `$Source` (`git archive` al commit-ului, dezarhivat in
-`C:\Users\Public\livrare\run_paw_v465`); verificarea de mai jos decide.
+`C:\Users\Public\livrare\run_paw_v466`); verificarea de mai jos decide.
 
 ## 0. Calibrare pe pagina reala (N, DOAR citire, INAINTE de review-ul final si de instalare)
 
@@ -772,23 +786,25 @@ scrie nimic si nu trimite nimic.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$Source = 'C:\Users\Public\livrare\run_paw_v465\docs\paw\run_paw_v464'
+$Source = 'C:\Users\Public\livrare\run_paw_v466\docs\paw\run_paw_v464'
 $PawRoot = 'C:\ProgramData\Gazpet\Paw'
 $Bin = Join-Path $PawRoot 'bin'
-$Audit = Join-Path $PawRoot 'operator-v465'
-$SufNou = '.v465'        # sufixul fisierelor noi din zona protejata
+$Audit = Join-Path $PawRoot 'operator-v466'
+$SufNou = '.v466'        # sufixul fisierelor noi din zona protejata
 $GemMarker = 'C:\Users\Public\paw-data\gem_canal_validat'
 $Python = 'C:\Program Files\Python313\python.exe'
 $ManifestHash = 'INLOCUIESTE_CU_HASH_MANIFEST_DIN_RAPORT'
 $GemHashNou = 'INLOCUIESTE_CU_HASH_GEMINI_PW_DIN_RAPORT'
 $DiagHash = 'INLOCUIESTE_CU_HASH_CAPTURA_CASETA_DIN_RAPORT'    # diag\captura_caseta.py (pasul 5g2; nu se instaleaza)
-$GemHashVechi = 'EDEFA1AE0F70645338A14BB5EB6BB5F4F266141E057BFC38526EC0B7753AC0CB'    # v4.6.4f, INSTALAT acum (gemini_pw.py din bin)
-$SufVechi = '.v464f'     # sufixul copiilor de siguranta (versiunea de dinainte)
+$GemHashVechi = '872300045CCE079304C658AFBF3FA1B007100834F026E1A1282667DD86B587AC'    # v4.6.5, INSTALAT acum (gemini_pw.py din bin)
+$SufVechi = '.v465'      # sufixul copiilor de siguranta (versiunea de dinainte)
 $Operator = "$env:COMPUTERNAME\Gazpet-Ai"
 $ReaderSid = (New-Object Security.Principal.NTAccount($Operator)).Translate([Security.Principal.SecurityIdentifier]).Value
 ```
 
-`$GemHashVechi` (v4.6.5) = `EDEFA1AE...` = v4.6.4f (instalata la 23.11.2026 seara, = main `a80ec20f`, PR #1175). Istoric: la instalarea
+`$GemHashVechi` (v4.6.6) = `87230004...` = v4.6.5 (instalata, = main `b5030972`, PR #1176). Istoric: la instalarea v4.6.5 peste v4.6.4f
+valorile au fost `$Audit = operator-v465`, `$GemHashVechi = EDEFA1AE0F70645338A14BB5EB6BB5F4F266141E057BFC38526EC0B7753AC0CB` (v4.6.4f, main
+`a80ec20f`, PR #1175), sufixele `.v464f` / `.v465`; la instalarea
 v4.6.4f peste v4.6.4e valorile au fost `$Audit = operator-v464f`, `$GemHashVechi = 4132781B0429681145C6DC73F3F409A8EC4CD7A69CD30CB902332B4FB4D851AC`
 (v4.6.4e), sufixele `.v464e` / `.v464f`; la
 instalarea v4.6.4e peste v4.6.4d valorile au fost `$Audit = operator-v464e`, `$GemHashVechi = 50332B129BEAC6C14992E4B42905146BC3FAC904AB8F02D61EA598DAE3FE1BD0`
@@ -797,7 +813,7 @@ instalarea v4.6.4e peste v4.6.4d valorile au fost `$Audit = operator-v464e`, `$G
 (v4.6.4b), sufixele `.v464b` / `.v464c`; la instalarea v4.6.4b peste v4.6.4 valorile au fost `$Audit = operator-v464b`, `$GemHashVechi = A03E2B5C5ABD5D80709E5E1FB87126F4986245389B4E0943796589E2156AF7B6`
 (v4.6.4), sufixele `.v464` / `.v464b`; la instalarea v4.6.4 peste v4.6.3: `operator-v464`, `BE3B867B0BD7FA2333D009B54258A146DF72F4D78C2706C321ABEB2D21AED9F5`
 (v4.6.3), `.v463` / `.v464`. Folderele `operator-v464`, `operator-v464b`, `operator-v464c`, `operator-v464d`, `operator-v464e`,
-`operator-v464f` raman pe disc (copiile v4.6.3 / v4.6.4 / v4.6.4b / v4.6.4c / v4.6.4d / v4.6.4e), nu se ating.
+`operator-v464f`, `operator-v465` raman pe disc (copiile v4.6.3 / v4.6.4 / v4.6.4b / v4.6.4c / v4.6.4d / v4.6.4e / v4.6.4f), nu se ating.
 
 ## 2. Verificari inainte de inlocuire (N - NU in consola admin; o data, inainte de pasul 3)
 
@@ -818,7 +834,7 @@ if ((Get-FileHash -LiteralPath "$Source\diag\captura_caseta.py").Hash -ine $Diag
 if ((Get-FileHash -LiteralPath "$Bin\gemini_pw.py").Hash -ine $GemHashVechi) { throw 'gemini_pw.py instalat nu e cel asteptat (vezi $GemHashVechi)' }
 $d = @(Compare-Object -CaseSensitive (Get-Content -LiteralPath "$Bin\gemini_pw.py") (Get-Content -LiteralPath "$Source\gemini_pw.py"))
 $d | Where-Object SideIndicator -eq '<=' | Format-List
-if ($d.Count -ne 189 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 23) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii (asteptat 189)" }
+if ($d.Count -ne 19 -or @($d | Where-Object SideIndicator -eq '<=').Count -ne 6) { throw "Diff gemini_pw.py neasteptat: $($d.Count) linii (asteptat 19)" }
 $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazde PowerShell 5.1 asta ar opri blocul
 & $Python -I "$Source\teste\test_gemini_pw.py"
 $cod = $LASTEXITCODE
@@ -828,7 +844,15 @@ if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
 if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + $SufVechi) -Force }
 ```
 
-Asteptat (pachetul v4.6.5 runda 2): fata de v4.6.4f in `bin` (`EDEFA1AE...`) **189 linii diferite (23 vechi `<=`, 166 noi `=>`)**.
+Asteptat (pachetul v4.6.6): fata de v4.6.5 in `bin` (`87230004...`) **19 linii diferite (6 vechi `<=`, 13 noi `=>`)**. Cele 6 linii
+vechi: prima linie a antetului (`... v4.6.3: modelul Carbon;`), eticheta `"Deschide selectorul de moduri, momentan Carbon"` din
+`ETICHETE_BUTOANE`, perechea `(LOC_MODEL, "Carbon")` din `TEXTE_CUNOSCUTE`, `MODEL_CERUT = "Carbon"`, comentariul formei si
+`MODEL_FORMA = re.compile(r"(?:Gemini )?(?:[0-9]+(?:\.[0-9]+)? )?" + re.escape(MODEL_CERUT))` (forma cu numar de versiune). Cele 13 noi:
+prima linie a antetului (`...; v4.6.6: Automat;`), nota v4.6.6 din antet (5 linii), eticheta `"... momentan Automat"`, comentariul si
+perechea `(LOC_MODEL, "Automat")`, `MODEL_CERUT = "Automat"`, comentariul formei (2 linii) si `MODEL_FORMA = re.compile(r"(?:Gemini )?" +
+re.escape(MODEL_CERUT))`. Testele: `Ran 286 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 1850 / 29 / 1821.
+
+Istoric (pachetul v4.6.5 runda 2): fata de v4.6.4f in `bin` atunci (`EDEFA1AE...`) 189 linii diferite (23 vechi `<=`, 166 noi `=>`).
 Liniile vechi (`<=`): cele doua linii ale lui `_e_clipboard` cu `CLIPBOARD_ATRIBUTE` (identitatea clipboard-ului = forma minima
 `_forma_clipboard`), doua linii din docstring-ul lui `_semnal` (taguri; r2: al doilea apel, pe tintele descrierilor), din
 `_motiv_descriere` linia `for tok in (n.attrs.get("aria-describedby") ...` (r2: `_referinte`, si aria-labelledby), cele 5 `return` din
@@ -841,7 +865,7 @@ din antet, constantele `EDITABILE_TAGURI` / `MOTIVE_AVERTISMENT` / `TAGURI_CU_CU
 comentariile lor, `_forma_clipboard`, `_tag_permis`, `_e_avertisment`, `spune_avertismente`, `_referinte`, `_semnale_tinta`, corpul
 nou al lui `_motiv_descriere` (aceleasi verificari, adunate in `motive`), cele doua detectoare noi din `_semnal` (tag / URL local) si
 `EDITABILE_TAGURI`, numararea `contenteditable` in pagina din `analizeaza_arbore`, liniile avertismentelor din `_paza_ciorna` / `stare` /
-`trimite`. Testele: `Ran 281 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 1837 / 26 / 1811.
+`trimite`. Testele (atunci): `Ran 281 tests ... OK`. Informativ: fata de v4.6.3 (`BE3B867B...`) 1837 / 26 / 1811.
 
 Istoric (pachetul v4.6.5 runda 1, `0393f985`, NO-GO Jakarinos P1 pe descrieri): fata de v4.6.4e 155 / 16 / 139, fata de v4.6.4f 137 / 15 /
 122; `Ran 272 tests ... OK`.
@@ -1097,10 +1121,11 @@ if (@($b.bin.Keys).Count -ne @($c.binding.bin.PSObject.Properties).Count) { thro
 'Legatura cdx identica cu certificatul (' + @($b.bin.Keys).Count + ' fisiere)'
 ```
 
-## 5. Testul de canal Gemini (N; cu "Carbon")
+## 5. Testul de canal Gemini (N; cu "Automat")
 
 Fara marker, lansatorul refuza `gem`, deci probele directe de mai jos nu se pot suprapune cu o
-rulare prin lansator. In Edge-ul 9333: un singur tab Gemini, modelul **Carbon** selectat, ciorna goala.
+rulare prin lansator. In Edge-ul 9333: un singur tab Gemini, modul **Automat** (Auto) selectat, ciorna goala.
+(v4.6.6: pana la v4.6.5 modelul cerut era Carbon; mentiunile "Carbon" din istoricul pasilor de mai jos sunt pentru versiunile vechi.)
 
 ```powershell
 $GemId = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -1119,7 +1144,7 @@ copiaza-le totusi pentru chat (reduc zgomotul la o calibrare viitoare). `content
 (altfel `paza ciorna: REFUZ`; inchide panoul editabil deschis in pagina - de ex. un document Canvas - si repeta `stare`). In jurnalul
 lui `trimite` aceleasi avertismente apar sub `avertismente in zona (<moment>, nu blocheaza): N`, cele de `inainte_de_enter` DUPA Enter.
 
-- **5a.** `stare` arata `model: Carbon`, `genereaza: False`, `atasamente in ciorna: 0`,
+- **5a.** `stare` arata `model: Automat`, `genereaza: False`, `atasamente in ciorna: 0`,
   `necunoscute in zona: 0`, `paza ciorna: OK (trimite ar continua)`. Cu ciorna goala pe ecran,
   `paza ciorna: REFUZ ciorna_necunoscuta ...` = calibrarea (pasul 0) nu acopera pagina: STOP,
   fara marker, copiaza liniile `necunoscut ...` SI liniile `    sursa ...` de sub ele (v4.6.4b) pentru chat.
@@ -1155,9 +1180,11 @@ lui `trimite` aceleasi avertismente apar sub `avertismente in zona (<moment>, nu
   `necunoscute in zona: 0` si `paza ciorna: OK`; `style` negol / `data-placeholder` nou / alte schimbari cosmetice apar acum doar ca
   `avertisment necunoscut ...` (nu STOP, liniile la chat). Ramane: fara F5, `necunoscut token_upload:...` din `style="--uploader-height:
   112px;"` (contine cuvantul `upload`) = refuz sigur - fa F5 si repeta `stare`; orice alta linie `  necunoscut` dupa F5 = STOP.
-- **5f.** Selecteaza de mana alt model (4 Hydrogen) si repeta `trimite`: ultima linie
-  `GEM_EROARE model_gresit afisat: '...Hydrogen...', cerut: Carbon`; nu a plecat niciun mesaj.
-- **5g.** Revino de mana la Carbon si ruleaza blocul de mai jos: doua trimiteri, fiecare verificata
+- **5f.** Selecteaza de mana alt model si repeta `trimite`, de doua ori: (1) **Carbon** (modelul vechi) - ultima linie
+  `GEM_EROARE model_gresit afisat: '...Carbon...', cerut: Automat`; (2) **4 Hydrogen** - ultima linie
+  `GEM_EROARE model_gresit afisat: '...Hydrogen...', cerut: Automat`; nu a plecat niciun mesaj. (v4.6.6: `stare` pe un buton cu Carbon /
+  Hydrogen arata 2 `avertisment necunoscut` pe butonul modelului - decor, nu STOP.)
+- **5g.** Revino de mana la Automat si ruleaza blocul de mai jos: doua trimiteri, fiecare verificata
   (cod de iesire 0, nicio linie `GEM_EROARE`, ultima linie `GEM_CHAT_URL ...`, raspunsul contine
   `PAW_GEM_TEST_OK` - un raspuns partial urmat de timeout NU trece). Pe ecran: chat nou in
   ACELASI tab de fiecare data, fara taburi create / inchise. (Pe v4.6.4b 5g picase aici: pe chatul nou indicatorul de drop avea
@@ -1185,7 +1212,7 @@ nu trimit (...)` cu ciorna goala (sau doar cu textul brief-ului): pagina are ele
 calibrarea nu le-a vazut (de ex. butonul de trimitere apare abia dupa scriere); nu a plecat nimic.
 STOP, fara marker, copiaza linia `GEM_EROARE` + liniile `necunoscut ...` din `stare` pentru chat.
 
-- **5g2 (nou in v4.6.4d).** Tot cu Carbon, ciorna goala. Pe 23.11 un brief de ~10 KB a fost refuzat fals pe v4.6.4c, chiar inainte de
+- **5g2 (nou in v4.6.4d).** Tot cu Automat, ciorna goala. Pe 23.11 un brief de ~10 KB a fost refuzat fals pe v4.6.4c, chiar inainte de
   Enter: cu text lung caseta se EXTINDE. 5g2 are doua parti, in aceasta ordine:
   - **5g2-a, captura (doar citire, r12).** La trei lungimi de text - `scurt` (o linie), `mediu` (5 linii), `lung` (~13 KB) - LIPESTI DE
     MANA textul in ciorna (blocul il pune in clipboard; Ctrl+V in caseta, **fara Enter**), apesi Enter in CONSOLA, iar blocul ruleaza
@@ -1268,7 +1295,7 @@ Numai dupa ce ai VAZUT rezultatele 5a-5g2, markerul - **ne-elevat (N)**, nu din 
 ```powershell
 $GemHash = (Get-FileHash -LiteralPath "$Bin\gemini_pw.py" -Algorithm SHA256).Hash
 if ($GemHash -ine $GemHashNou) { throw 'gemini_pw.py instalat nu e cel revizuit' }
-Set-Content -LiteralPath $GemMarker -Value ('CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v465') -Encoding ASCII
+Set-Content -LiteralPath $GemMarker -Value ('CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v466') -Encoding ASCII
 ```
 
 ## 6. Smoke prin lansator (N)
@@ -1282,15 +1309,15 @@ $B = "C:\Users\Public\paw-data\brief\smoke-v464-$Id.md"
 ```
 
 Asteptat (ultima linie din fiecare log): gem `PAW_GATA`; jak `PAW_GATA`. In logul gem apare
-`GEM_MODEL: Carbon`. cop si cdx nu se testeaza: fisierele lor nu s-au schimbat.
+`GEM_MODEL: Automat`. cop si cdx nu se testeaza: fisierele lor nu s-au schimbat.
 
 Dupa smoke: sesiunea de chat actualizeaza `registru_automatizari`, randul `run_paw` din
-`public.automatizari` si mentiunea "Gemini 4 Argon" din CLAUDE.md (model: Carbon).
+`public.automatizari` si mentiunea "Gemini 4 Argon" din CLAUDE.md (model: Automat; pana la v4.6.5: Carbon).
 
 ## Rollback la versiunea dinainte (A, consola noua, dupa pasul 1; pasul 2 NU se ruleaza)
 
-Readuce in `bin` copiile de siguranta cu sufixul `$SufVechi` din `$Audit` (la v4.6.5: v4.6.4f `EDEFA1AE...`, `.v464f`, din
-`operator-v465`).
+Readuce in `bin` copiile de siguranta cu sufixul `$SufVechi` din `$Audit` (la v4.6.6: v4.6.5 `87230004...`, `.v465`, din
+`operator-v466`; la v4.6.5 era v4.6.4f `EDEFA1AE...`, `.v464f`, din `operator-v465`).
 
 ```powershell
 . "$Bin\cdx_security.ps1"
@@ -1318,7 +1345,10 @@ Apoi markerul, **ne-elevat (N)**, dupa pasul 1 (copia facuta la pasul 2, daca ex
 if (Test-Path -LiteralPath ($GemMarker + $SufVechi)) { Copy-Item -LiteralPath ($GemMarker + $SufVechi) -Destination $GemMarker -Force }
 ```
 
-v4.6.5: dupa rollback la v4.6.4f, markerul copiat la pasul 2 (`gem_canal_validat.v464f`) e pus la loc; testul de canal al lui v4.6.4f
+v4.6.6: dupa rollback la v4.6.5, markerul copiat la pasul 2 (`gem_canal_validat.v465`) e pus la loc. Daca era markerul lui v4.6.5
+(legat de `87230004...`), `gem` merge din nou cu v4.6.5 - dar v4.6.5 cere **Carbon**: in Edge 9333 se selecteaza de mana Carbon, altfel
+orice `gem` da `model_gresit ... cerut: Carbon` (sigur, nimic trimis). Daca era alt marker (alt hash), `gem` ramane refuzat (sigur).
+Istoric (v4.6.5): dupa rollback la v4.6.4f, markerul copiat la pasul 2 (`gem_canal_validat.v464f`) e pus la loc; testul de canal al lui v4.6.4f
 a picat (refuzurile false de mai sus), deci e tot markerul lui v4.6.4c (legat de `09E78891...`) si `gem` ramane REFUZAT (sigur), ca
 inainte de v4.6.5. Istoric (v4.6.4f):
 Dupa rollback la v4.6.4e, markerul copiat la pasul 2 (`gem_canal_validat.v464e`) e pus la loc; acela e tot markerul lui v4.6.4c (legat
