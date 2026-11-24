@@ -1,6 +1,7 @@
 """python -m ocr_local <comanda> ... (PYTHONPATH=scripts, interpretorul env_mineru al lui Codex).
-Comenzi: plan | foaie-orientare | citeste | compara | reconciliaza | text-conv | erp <pas> (legatura cu ERP, client.py).
-Nicio comanda nu porneste un server sau un model."""
+Comenzi: plan | foaie-orientare | citeste | compara | reconciliaza | text-conv | erp <pas> (legatura cu ERP, client.py)
+| coada <adauga|stare|anuleaza|opreste|lucreaza> (coada.py) | e3 <...> (serviciul Izometrie).
+In afara de `coada lucreaza` si `e3 serveste` (procesele unice de pe server), nicio comanda nu porneste un server sau un model."""
 import argparse, json, pathlib, sys, uuid
 
 def pagini(spec):
@@ -18,6 +19,10 @@ def main(argv=None):
     if args and args[0] == 'e3':
         from .e3_serviciu import main as e3_main
         return e3_main(args[1:])
+    if args and args[0] == 'coada':
+        # coada de citire (24.11.2026): sesiunile cer (adauga / stare / anuleaza), un singur proces citeste (lucreaza)
+        from .coada import main as coada_main
+        return coada_main(args[1:])
     p = argparse.ArgumentParser(prog='ocr_local', description=__doc__)
     sub = p.add_subparsers(dest='cmd', required=True)
     a = sub.add_parser('plan', help='CPU: randare, rutare, orientare, deskew, benzi')
